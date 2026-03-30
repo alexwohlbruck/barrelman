@@ -1,6 +1,8 @@
 FROM pgvector/pgvector:pg16
 
-# Install PostGIS, osm2pgsql, and Python deps for osm2pgsql-replication
+# pgvector/pgvector:pg16 doesn't include PostGIS, and postgis/postgis doesn't
+# include pgvector — so we need a custom image that has both, plus osm2pgsql
+# for running imports and daily diffs, and Python for osm2pgsql-replication.
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
       postgresql-16-postgis-3 \
@@ -12,11 +14,4 @@ RUN apt-get update && \
       python3-requests && \
     rm -rf /var/lib/apt/lists/*
 
-# Bundle import scripts so the image is self-contained for imports and daily updates.
-# These are used by scripts/run-import.sh and scripts/update-osm.sh on the host.
-COPY import/ /app/import/
-COPY scripts/ /app/scripts/
-RUN chmod +x /app/scripts/*.sh
-
-# Default data directory — matches the ./data:/data volume mount in docker-compose.yml
 ENV BARRELMAN_DATA_DIR=/data

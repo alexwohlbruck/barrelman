@@ -23,6 +23,8 @@ services:
     volumes:
       - barrelman-data:/var/lib/postgresql/data
       - ./scripts/init-extensions.sh:/docker-entrypoint-initdb.d/init-extensions.sh
+      - ./import:/app/import
+      - ./scripts:/app/scripts
       - ./data:/data
     ports:
       - "5433:5432"
