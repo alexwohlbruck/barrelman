@@ -46,7 +46,6 @@ echo "Running osm2pgsql import..."
 osm2pgsql \
     --create \
     --slim \
-    --flat-nodes="$DATA_DIR/nodes.cache" \
     --output=flex \
     --style="$PROJECT_DIR/import/osm2pgsql-flex.lua" \
     -d "$DATABASE_URL" \
