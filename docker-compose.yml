@@ -6,7 +6,7 @@ networks:
     name: parchment-network
 
 volumes:
-  barrelman-pg-data:
+  barrelman-data:
   barrelman-osm-data:
   ollama-data:
   graphhopper-data:
@@ -22,7 +22,7 @@ services:
       POSTGRES_PASSWORD: ${BARRELMAN_DB_PASSWORD:-barrelman}
       BARRELMAN_DATA_DIR: /data
     volumes:
-      - barrelman-pg-data:/var/lib/postgresql/data
+      - barrelman-data:/var/lib/postgresql/data
       - barrelman-osm-data:/data
     ports:
       - "5433:5432"
