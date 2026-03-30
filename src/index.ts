@@ -9,7 +9,7 @@ import { childrenRoutes } from './routes/children'
 import { placeRoutes } from './routes/place'
 import { geocodeRoutes } from './routes/geocode'
 
-const port = Number(process.env.PORT) || 3001
+const port = Number(process.env.PORT) || 3002
 
 const app = new Elysia()
   .use(cors())
