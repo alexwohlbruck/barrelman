@@ -3,7 +3,7 @@
 # Triggers on every push to main:
 #   1. Runs tests
 #   2. Builds and pushes Docker images to Docker Hub (tagged :latest + :<sha>)
-#   3. SSHes into homelab and pulls new images, restarts affected containers
+#   3. SSHes into homelab, updates docker-compose.yml, pulls new images, restarts
 #
 # Required GitHub secrets:
 #   DOCKERHUB_USERNAME  - Docker Hub username (e.g. alexwohlbruck)
@@ -83,12 +83,49 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Build and push barrelman-martin
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile.martin
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            alexwohlbruck/barrelman-martin:${{ github.sha }}
+            alexwohlbruck/barrelman-martin:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and push barrelman-graphhopper
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile.graphhopper
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            alexwohlbruck/barrelman-graphhopper:${{ github.sha }}
+            alexwohlbruck/barrelman-graphhopper:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
   deploy:
     name: Deploy to homelab
     needs: [build-and-push]
     runs-on: ubuntu-latest
     steps:
-      - name: Deploy via SSH
+      - uses: actions/checkout@v4
+
+      - name: Copy docker-compose.yml to homelab
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          source: "docker-compose.yml"
+          target: "/opt/barrelman"
+
+      - name: Pull images and restart containers
         uses: appleboy/ssh-action@v1
         with:
           host: ${{ secrets.DEPLOY_HOST }}
@@ -97,7 +134,6 @@ jobs:
           script: |
             set -e
             cd /opt/barrelman
-            git pull --ff-only
-            docker compose pull barrelman barrelman-db
-            docker compose up -d barrelman barrelman-db
+            docker compose pull
+            docker compose up -d
             echo "Deploy complete: $(date)"

@@ -1,0 +1,4 @@
+FROM israelhikingmap/graphhopper:latest
+
+# Bake in the routing config so no repo clone is needed.
+COPY graphhopper-config.yml /graphhopper/config.yml

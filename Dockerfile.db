@@ -14,4 +14,9 @@ RUN apt-get update && \
       python3-requests && \
     rm -rf /var/lib/apt/lists/*
 
+# Bake in DB init script and OSM import assets so no repo clone is needed.
+COPY scripts/init-extensions.sh /docker-entrypoint-initdb.d/init-extensions.sh
+COPY import/ /app/import/
+COPY scripts/ /app/scripts/
+
 ENV BARRELMAN_DATA_DIR=/data

@@ -6,7 +6,8 @@ networks:
     name: parchment-network
 
 volumes:
-  barrelman-data:
+  barrelman-pg-data:
+  barrelman-osm-data:
   ollama-data:
   graphhopper-data:
 
@@ -21,11 +22,8 @@ services:
       POSTGRES_PASSWORD: ${BARRELMAN_DB_PASSWORD:-barrelman}
       BARRELMAN_DATA_DIR: /data
     volumes:
-      - barrelman-data:/var/lib/postgresql/data
-      - ./scripts/init-extensions.sh:/docker-entrypoint-initdb.d/init-extensions.sh
-      - ./import:/app/import
-      - ./scripts:/app/scripts
-      - ./data:/data
+      - barrelman-pg-data:/var/lib/postgresql/data
+      - barrelman-osm-data:/data
     ports:
       - "5433:5432"
 
@@ -48,28 +46,24 @@ services:
 
   martin:
     container_name: barrelman-martin
-    image: ghcr.io/maplibre/martin:v0.15.0
+    image: alexwohlbruck/barrelman-martin:latest
     restart: unless-stopped
     environment:
       DATABASE_URL: postgresql://barrelman:${BARRELMAN_DB_PASSWORD:-barrelman}@barrelman-db:5432/barrelman
-    volumes:
-      - ./martin-config.yaml:/config.yaml
     ports:
       - "3002:3000"
-    command: ["--config", "/config.yaml"]
     depends_on:
       - barrelman-db
 
   graphhopper:
     container_name: barrelman-graphhopper
-    image: israelhikingmap/graphhopper:latest
+    image: alexwohlbruck/barrelman-graphhopper:latest
     restart: unless-stopped
     environment:
       JAVA_OPTS: "-Xmx2g -Xms512m"
     volumes:
-      - ./data:/data
+      - barrelman-osm-data:/data
       - graphhopper-data:/graphhopper/graph-cache
-      - ./graphhopper-config.yml:/graphhopper/config.yml
     ports:
       - "8990:8989"
 
@@ -85,7 +79,7 @@ services:
     ports:
       - "3001:3001"
     volumes:
-      - ./data:/data
+      - barrelman-osm-data:/data
     depends_on:
       - barrelman-db
       - ollama
