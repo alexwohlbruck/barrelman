@@ -1,0 +1,37 @@
+{
+  "name": "barrelman",
+  "version": "0.1.0",
+  "description": "OSM geospatial engine — search, tiles, spatial queries, routing",
+  "type": "module",
+  "scripts": {
+    "dev": "bun run --hot src/index.ts",
+    "start": "bun run src/index.ts",
+    "build": "bun build src/index.ts --target=bun --outdir=dist",
+    "test": "bun test",
+    "test:services": "bun test src/services",
+    "test:routes": "bun test src/routes",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate",
+    "db:push": "drizzle-kit push",
+    "db:studio": "drizzle-kit studio",
+    "import:osm": "bash scripts/import-osm.sh",
+    "import:abbreviations": "bun run import/generate-abbreviations.ts",
+    "import:embed": "bun run import/embed-places.ts"
+  },
+  "dependencies": {
+    "elysia": "^1.2.0",
+    "@elysiajs/cors": "^1.2.0",
+    "@elysiajs/swagger": "^1.2.0",
+    "drizzle-orm": "^0.43.1",
+    "postgres": "^3.4.5",
+    "axios": "^1.7.9",
+    "lru-cache": "^11.0.0",
+    "csv-parse": "^5.6.0"
+  },
+  "devDependencies": {
+    "bun-types": "latest",
+    "drizzle-kit": "^0.30.6",
+    "typescript": "^5.7.0",
+    "@types/pg": "^8.11.11"
+  }
+}

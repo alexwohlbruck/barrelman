@@ -1,0 +1,95 @@
+name: barrelman
+
+networks:
+  default:
+    external: true
+    name: parchment-network
+
+volumes:
+  barrelman-data:
+  ollama-data:
+  graphhopper-data:
+
+services:
+  barrelman-db:
+    container_name: barrelman-db
+    build:
+      context: .
+      dockerfile: Dockerfile.db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: barrelman
+      POSTGRES_USER: barrelman
+      POSTGRES_PASSWORD: ${BARRELMAN_DB_PASSWORD:-barrelman}
+    volumes:
+      - barrelman-data:/var/lib/postgresql/data
+      - ./scripts/init-extensions.sh:/docker-entrypoint-initdb.d/init-extensions.sh
+      - ./data:/data
+    ports:
+      - "5433:5432"
+
+  ollama:
+    container_name: barrelman-ollama
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    volumes:
+      - ollama-data:/root/.ollama
+    ports:
+      - "11434:11434"
+    # Uncomment for GPU passthrough:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+
+  martin:
+    container_name: barrelman-martin
+    image: ghcr.io/maplibre/martin:v0.15.0
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://barrelman:${BARRELMAN_DB_PASSWORD:-barrelman}@barrelman-db:5432/barrelman
+    volumes:
+      - ./martin-config.yaml:/config.yaml
+    ports:
+      - "3002:3000"
+    command: ["--config", "/config.yaml"]
+    depends_on:
+      - barrelman-db
+
+  graphhopper:
+    container_name: barrelman-graphhopper
+    image: israelhikingmap/graphhopper:latest
+    restart: unless-stopped
+    environment:
+      JAVA_OPTS: "-Xmx2g -Xms512m"
+    volumes:
+      - ./data:/data
+      - graphhopper-data:/graphhopper/graph-cache
+      - ./graphhopper-config.yml:/graphhopper/config.yml
+    ports:
+      - "8989:8989"
+
+  barrelman:
+    container_name: barrelman
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://barrelman:${BARRELMAN_DB_PASSWORD:-barrelman}@barrelman-db:5432/barrelman
+      OLLAMA_HOST: http://ollama:11434
+      PORT: 3001
+      BARRELMAN_API_KEY: ${BARRELMAN_API_KEY:-brm_dev_changeme}
+    ports:
+      - "3001:3001"
+    volumes:
+      - ./src:/app/src
+      - ./import:/app/import
+      - ./data:/data
+      - /app/node_modules
+    depends_on:
+      - barrelman-db
+      - ollama

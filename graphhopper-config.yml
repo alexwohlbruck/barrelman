@@ -1,0 +1,35 @@
+# GraphHopper routing engine configuration
+graphhopper:
+  datareader.file: /data/region.osm.pbf
+
+  graph.location: /graphhopper/graph-cache
+
+  profiles:
+    - name: car
+      vehicle: car
+      weighting: fastest
+    - name: bike
+      vehicle: bike
+      weighting: fastest
+    - name: foot
+      vehicle: foot
+      weighting: shortest
+    - name: hike
+      vehicle: hike
+      weighting: fastest
+
+  profiles_ch:
+    - profile: car
+    - profile: bike
+    - profile: foot
+
+  graph.elevation.provider: srtm
+  graph.elevation.cache_dir: /graphhopper/elevation-cache
+
+  server:
+    application_connectors:
+      - type: http
+        port: 8989
+        bind_host: 0.0.0.0
+    request_log:
+      appenders: []

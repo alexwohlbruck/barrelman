@@ -1,0 +1,99 @@
+# Martin tile server configuration
+# Serves vector tiles from PostGIS geo_places table
+
+postgres:
+  connection_string: ${DATABASE_URL}
+
+  tables:
+    parchment_pois:
+      schema: public
+      table: geo_places
+      srid: 4326
+      geometry_column: centroid
+      geometry_type: POINT
+      id_column: id
+      minzoom: 10
+      maxzoom: 16
+      properties:
+        id: id
+        name: name
+        categories: categories
+        geom_type: geom_type
+      buffer: 64
+      clip_geom: true
+
+    parchment_boundaries:
+      schema: public
+      table: geo_places
+      srid: 4326
+      geometry_column: geom
+      id_column: id
+      minzoom: 4
+      maxzoom: 14
+      properties:
+        id: id
+        name: name
+        admin_level: admin_level
+        geom_type: geom_type
+      buffer: 64
+      clip_geom: true
+
+    parchment_roads:
+      schema: public
+      table: geo_places
+      srid: 4326
+      geometry_column: geom
+      id_column: id
+      minzoom: 6
+      maxzoom: 16
+      properties:
+        id: id
+        name: name
+        geom_type: geom_type
+      buffer: 64
+      clip_geom: true
+
+    parchment_buildings:
+      schema: public
+      table: geo_places
+      srid: 4326
+      geometry_column: geom
+      id_column: id
+      minzoom: 14
+      maxzoom: 16
+      properties:
+        id: id
+        name: name
+        geom_type: geom_type
+      buffer: 64
+      clip_geom: true
+
+    parchment_water:
+      schema: public
+      table: geo_places
+      srid: 4326
+      geometry_column: geom
+      id_column: id
+      minzoom: 8
+      maxzoom: 16
+      properties:
+        id: id
+        name: name
+        geom_type: geom_type
+      buffer: 64
+      clip_geom: true
+
+    parchment_landuse:
+      schema: public
+      table: geo_places
+      srid: 4326
+      geometry_column: geom
+      id_column: id
+      minzoom: 10
+      maxzoom: 16
+      properties:
+        id: id
+        name: name
+        geom_type: geom_type
+      buffer: 64
+      clip_geom: true
