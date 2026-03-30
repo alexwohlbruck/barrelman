@@ -1,0 +1,23 @@
+# Development overrides for docker-compose.yml
+# Usage: docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+#
+# Adds:
+#   - Build contexts so images are built locally instead of pulled from Docker Hub
+#   - Source volume mounts for hot-reload (barrelman API)
+#   - Import directory mount for quick iteration on import scripts
+
+services:
+  barrelman-db:
+    build:
+      context: .
+      dockerfile: Dockerfile.db
+
+  barrelman:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    volumes:
+      - ./src:/app/src
+      - ./import:/app/import
+      - ./data:/data
+      - /app/node_modules

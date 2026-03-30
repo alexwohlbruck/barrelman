@@ -13,14 +13,13 @@ volumes:
 services:
   barrelman-db:
     container_name: barrelman-db
-    build:
-      context: .
-      dockerfile: Dockerfile.db
+    image: alexwohlbruck/barrelman-db:latest
     restart: unless-stopped
     environment:
       POSTGRES_DB: barrelman
       POSTGRES_USER: barrelman
       POSTGRES_PASSWORD: ${BARRELMAN_DB_PASSWORD:-barrelman}
+      BARRELMAN_DATA_DIR: /data
     volumes:
       - barrelman-data:/var/lib/postgresql/data
       - ./scripts/init-extensions.sh:/docker-entrypoint-initdb.d/init-extensions.sh
@@ -70,26 +69,21 @@ services:
       - graphhopper-data:/graphhopper/graph-cache
       - ./graphhopper-config.yml:/graphhopper/config.yml
     ports:
-      - "8989:8989"
+      - "8990:8989"
 
   barrelman:
     container_name: barrelman
-    build:
-      context: .
-      dockerfile: Dockerfile.dev
+    image: alexwohlbruck/barrelman:latest
     restart: unless-stopped
     environment:
       DATABASE_URL: postgresql://barrelman:${BARRELMAN_DB_PASSWORD:-barrelman}@barrelman-db:5432/barrelman
-      OLLAMA_HOST: http://ollama:11434
+      OLLAMA_HOST: http://barrelman-ollama:11434
       PORT: 3001
       BARRELMAN_API_KEY: ${BARRELMAN_API_KEY:-brm_dev_changeme}
     ports:
       - "3001:3001"
     volumes:
-      - ./src:/app/src
-      - ./import:/app/import
       - ./data:/data
-      - /app/node_modules
     depends_on:
       - barrelman-db
       - ollama
