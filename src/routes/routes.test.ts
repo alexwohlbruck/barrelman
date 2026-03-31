@@ -17,7 +17,6 @@ import Elysia from 'elysia'
 import { authHandler } from '../middleware/auth'
 import { createHealthRoutes }   from './health'
 import { createSearchRoutes }   from './search'
-import { createNearbyRoutes }   from './nearby'
 import { createContainsRoutes } from './contains'
 import { createChildrenRoutes } from './children'
 import { createPlaceRoutes }    from './place'
@@ -27,7 +26,6 @@ import { createGeocodeRoutes }  from './geocode'
 
 const mockCheckHealth      = mock(async () => ({ status: 'ok' as const, database: 'connected' as const }))
 const mockSearchPlaces     = mock(async () => [] as any[])
-const mockFindNearby       = mock(async () => [] as any[])
 const mockFindContaining   = mock(async () => [] as any[])
 const mockFindChildren     = mock(async () => [] as any[])
 const mockGetPlace         = mock(async () => null as any)
@@ -39,7 +37,6 @@ function makeApp() {
   return new Elysia()
     .use(createHealthRoutes({ checkHealth: mockCheckHealth }))
     .use(createSearchRoutes({ searchPlaces: mockSearchPlaces }))
-    .use(createNearbyRoutes({ findNearby: mockFindNearby }))
     .use(createContainsRoutes({ findContainingAreas: mockFindContaining }))
     .use(createChildrenRoutes({ findChildren: mockFindChildren }))
     .use(createPlaceRoutes({ getPlace: mockGetPlace }))
@@ -77,7 +74,6 @@ beforeEach(() => {
 
   mockCheckHealth.mockReset()
   mockSearchPlaces.mockReset()
-  mockFindNearby.mockReset()
   mockFindContaining.mockReset()
   mockFindChildren.mockReset()
   mockGetPlace.mockReset()
@@ -85,7 +81,6 @@ beforeEach(() => {
 
   mockCheckHealth.mockImplementation(async () => ({ status: 'ok', database: 'connected' }))
   mockSearchPlaces.mockImplementation(async () => [])
-  mockFindNearby.mockImplementation(async () => [])
   mockFindContaining.mockImplementation(async () => [])
   mockFindChildren.mockImplementation(async () => [])
   mockGetPlace.mockImplementation(async () => null)
@@ -123,18 +118,12 @@ describe('GET /health', () => {
 })
 
 // ── Auth middleware ───────────────────────────────────────────────────────────
-//
-// Elysia named-plugin singletons can only be applied to one app instance — the
-// plugin's hooks are skipped for subsequent app instances. Auth tests therefore
-// build a minimal app using `authHandler` directly via `.onBeforeHandle()`,
-// which correctly re-runs the handler for every new app instance.
 
 describe('auth middleware', () => {
-  /** Minimal app that attaches authHandler without going through the plugin singleton. */
   function makeAuthApp() {
     return new Elysia()
       .onBeforeHandle(authHandler as any)
-      .post('/search', async () => mockSearchPlaces({ query: '' }))
+      .post('/search', async () => mockSearchPlaces({}))
   }
 
   test('returns 401 when Authorization header is missing and env key is set', async () => {
@@ -175,7 +164,6 @@ describe('auth middleware', () => {
   test('open access when BARRELMAN_API_KEY env var is absent', async () => {
     delete process.env.BARRELMAN_API_KEY
     const app = makeAuthApp()
-    // No Authorization header — should pass through
     const res = await app.handle(post('/search', { query: 'cafe' }))
     expect(res.status).toBe(200)
   })
@@ -184,7 +172,7 @@ describe('auth middleware', () => {
 // ── POST /search ──────────────────────────────────────────────────────────────
 
 describe('POST /search', () => {
-  test('returns 200 with results array', async () => {
+  test('returns 200 with results array (text search)', async () => {
     mockSearchPlaces.mockImplementation(async () => [{ id: 'node/1', name: 'Library' }])
     const app = makeApp()
     const res = await app.handle(post('/search', { query: 'library' }))
@@ -194,7 +182,7 @@ describe('POST /search', () => {
     expect(body[0].id).toBe('node/1')
   })
 
-  test('passes all params to searchPlaces service', async () => {
+  test('passes all text search params to searchPlaces service', async () => {
     let captured: any
     mockSearchPlaces.mockImplementation(async (params: any) => { captured = params; return [] })
     const app = makeApp()
@@ -210,36 +198,45 @@ describe('POST /search', () => {
     expect(captured.autocomplete).toBe(false)
   })
 
-  test('returns 422 when query field is missing', async () => {
+  test('returns 200 for browse mode (categories without query)', async () => {
+    mockSearchPlaces.mockImplementation(async () => [{ id: 'node/1', name: 'Cafe', distance_m: 50 }])
     const app = makeApp()
-    const res = await app.handle(post('/search', { lat: 36.2, lng: -81.6 }))
-    expect(res.status).toBe(422)
-  })
-})
-
-// ── POST /nearby ──────────────────────────────────────────────────────────────
-
-describe('POST /nearby', () => {
-  test('returns 200 with results array', async () => {
-    mockFindNearby.mockImplementation(async () => [{ id: 'node/1', name: 'Cafe', distance_m: 50 }])
-    const app = makeApp()
-    const res = await app.handle(post('/nearby', { lat: 36.2, lng: -81.6 }))
+    const res = await app.handle(post('/search', {
+      lat: 36.2, lng: -81.6, radius: 1000, categories: ['amenity/cafe'],
+    }))
     expect(res.status).toBe(200)
     const body = await json(res)
     expect(Array.isArray(body)).toBe(true)
-    expect(body[0].id).toBe('node/1')
   })
 
-  test('returns 422 when lat is missing', async () => {
+  test('passes route corridor params to searchPlaces service', async () => {
+    let captured: any
+    mockSearchPlaces.mockImplementation(async (params: any) => { captured = params; return [] })
     const app = makeApp()
-    const res = await app.handle(post('/nearby', { lng: -81.6 }))
-    expect(res.status).toBe(422)
+    const route = { type: 'LineString', coordinates: [[-81.6, 36.2], [-80.8, 35.2]] }
+    await app.handle(post('/search', {
+      query: 'gas station', route, buffer: 2000, limit: 10,
+    }))
+    expect(captured.query).toBe('gas station')
+    expect(captured.route).toEqual(route)
+    expect(captured.buffer).toBe(2000)
   })
 
-  test('returns 422 when lng is missing', async () => {
+  test('returns 200 for category browse along a route (no query)', async () => {
+    mockSearchPlaces.mockImplementation(async () => [])
     const app = makeApp()
-    const res = await app.handle(post('/nearby', { lat: 36.2 }))
-    expect(res.status).toBe(422)
+    const res = await app.handle(post('/search', {
+      route: { type: 'LineString', coordinates: [[-81.6, 36.2], [-80.8, 35.2]] },
+      categories: ['amenity/fuel'],
+      buffer: 2000,
+    }))
+    expect(res.status).toBe(200)
+  })
+
+  test('returns 200 with empty body (no query, no categories, no location)', async () => {
+    const app = makeApp()
+    const res = await app.handle(post('/search', {}))
+    expect(res.status).toBe(200)
   })
 })
 
@@ -313,8 +310,6 @@ describe('GET /place/:osmType/:osmId', () => {
   })
 
   test('REGRESSION: returns HTTP 404 (not 500) when place not found', async () => {
-    // Bug: `throw error(404, ...)` where error was undefined from context → 500
-    // Fix: `set.status = 404; return { error: ... }` → 404
     mockGetPlace.mockImplementation(async () => null)
     const app = makeApp()
     const res = await app.handle(get('/place/node/999999999999'))

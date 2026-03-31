@@ -2,7 +2,6 @@ import { Elysia } from 'elysia'
 import { cors } from '@elysiajs/cors'
 import { swagger } from '@elysiajs/swagger'
 import { healthRoutes } from './routes/health'
-import { nearbyRoutes } from './routes/nearby'
 import { searchRoutes } from './routes/search'
 import { containsRoutes } from './routes/contains'
 import { childrenRoutes } from './routes/children'
@@ -18,14 +17,13 @@ const app = new Elysia()
       documentation: {
         info: {
           title: 'Barrelman',
-          version: '0.2.0',
+          version: '0.3.0',
           description: 'OSM geospatial engine — search, tiles, spatial queries',
         },
       },
     }),
   )
   .use(healthRoutes)
-  .use(nearbyRoutes)
   .use(searchRoutes)
   .use(containsRoutes)
   .use(childrenRoutes)

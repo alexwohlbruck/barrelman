@@ -33,7 +33,7 @@ export function createContainsRoutes(deps = { findContainingAreas: _findContaini
 Typical use: reverse-geocode a coordinate to its administrative hierarchy (building → neighbourhood → city → county → state → country) or find which venue/campus a point is inside.
 
 Only areas with names are returned. \`building:part\` features are excluded. Both centroid and full GeoJSON geometry are included in the response.`,
-          tags: ['Spatial'],
+          tags: ['Search'],
         },
       },
     )

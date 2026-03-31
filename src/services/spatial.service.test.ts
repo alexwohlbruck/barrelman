@@ -17,7 +17,7 @@ mock.module('../lib/cache', () => ({
   embeddingCache: noop,
 }))
 
-const { findNearby, findContainingAreas, findChildren } = await import('./spatial.service')
+const { findContainingAreas, findChildren } = await import('./spatial.service')
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -34,69 +34,6 @@ beforeEach(() => {
   mockExecute.mockReset()
   mockExecute.mockImplementation(async () => [])
   spatialCacheStore.clear()
-})
-
-// ── findNearby ────────────────────────────────────────────────────────────────
-
-describe('findNearby', () => {
-  test('returns empty array when DB returns no results', async () => {
-    const results = await findNearby({ lat: 36.2, lng: -81.6 })
-    expect(results).toEqual([])
-  })
-
-  test('returns results from DB', async () => {
-    mockExecute.mockImplementation(async () => makePlaces(3))
-    const results = await findNearby({ lat: 36.2, lng: -81.6, radius: 500 })
-    expect(results).toHaveLength(3)
-    expect(results[0].id).toBe('node/1')
-  })
-
-  test('caches result and skips DB on repeat call with same params', async () => {
-    mockExecute.mockImplementation(async () => makePlaces(2))
-    await findNearby({ lat: 36.2, lng: -81.6 })
-    await findNearby({ lat: 36.2, lng: -81.6 })
-    expect(mockExecute).toHaveBeenCalledTimes(1)
-  })
-
-  test('different radius produces a separate cache entry', async () => {
-    mockExecute.mockImplementation(async () => [])
-    await findNearby({ lat: 36.2, lng: -81.6, radius: 500 })
-    await findNearby({ lat: 36.2, lng: -81.6, radius: 1000 })
-    expect(mockExecute).toHaveBeenCalledTimes(2)
-  })
-
-  test('uses default radius of 1000m when not specified', async () => {
-    await expect(findNearby({ lat: 36.2, lng: -81.6 })).resolves.toBeDefined()
-  })
-
-  test('skips category filter when categories array is empty', async () => {
-    await expect(findNearby({ lat: 36.2, lng: -81.6, categories: [] })).resolves.toBeDefined()
-  })
-
-  test('applies category filter when categories are provided', async () => {
-    mockExecute.mockImplementation(async () => [])
-    await expect(
-      findNearby({ lat: 36.2, lng: -81.6, categories: ['amenity/cafe'] }),
-    ).resolves.toBeDefined()
-    expect(mockExecute).toHaveBeenCalledTimes(1)
-  })
-
-  test('skips tags filter when tags object is empty', async () => {
-    await expect(findNearby({ lat: 36.2, lng: -81.6, tags: {} })).resolves.toBeDefined()
-  })
-
-  test('applies tags filter when tags are provided', async () => {
-    await expect(
-      findNearby({ lat: 36.2, lng: -81.6, tags: { cuisine: 'pizza' } }),
-    ).resolves.toBeDefined()
-    expect(mockExecute).toHaveBeenCalledTimes(1)
-  })
-
-  test('REGRESSION: lat=0 lng=0 is a valid coordinate (not falsy)', async () => {
-    mockExecute.mockImplementation(async () => [])
-    await expect(findNearby({ lat: 0, lng: 0 })).resolves.toBeDefined()
-    expect(mockExecute).toHaveBeenCalledTimes(1)
-  })
 })
 
 // ── findContainingAreas ───────────────────────────────────────────────────────

@@ -51,7 +51,7 @@ export function createChildrenRoutes(deps = { findChildren: _findChildren }) {
 **Category filtering** applies only to *unnamed* children — named places inside the area are always returned, allowing landmark buildings and venues to appear even when filtering for a specific type.
 
 \`building:part\` features are always excluded to avoid surfacing architectural sub-elements.`,
-          tags: ['Spatial'],
+          tags: ['Search'],
         },
       },
     )
