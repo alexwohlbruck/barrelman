@@ -6,17 +6,13 @@ graphhopper:
 
   profiles:
     - name: car
-      vehicle: car
       weighting: fastest
     - name: bike
-      vehicle: bike
       weighting: fastest
     - name: foot
-      vehicle: foot
       weighting: shortest
     - name: hike
-      vehicle: hike
-      weighting: fastest
+      weighting: shortest
 
   profiles_ch:
     - profile: car

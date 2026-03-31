@@ -1,14 +1,6 @@
-name: barrelman
-
-networks:
-  default:
-    external: true
-    name: parchment-network
-
 volumes:
   barrelman-data:
   barrelman-osm-data:
-  ollama-data:
   graphhopper-data:
 
 services:
@@ -27,23 +19,6 @@ services:
     ports:
       - "5433:5432"
 
-  ollama:
-    container_name: barrelman-ollama
-    image: ollama/ollama:latest
-    restart: unless-stopped
-    volumes:
-      - ollama-data:/root/.ollama
-    ports:
-      - "11434:11434"
-    # Uncomment for GPU passthrough:
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - driver: nvidia
-    #           count: 1
-    #           capabilities: [gpu]
-
   martin:
     container_name: barrelman-martin
     image: alexwohlbruck/barrelman-martin:latest
@@ -59,6 +34,9 @@ services:
     container_name: barrelman-graphhopper
     image: alexwohlbruck/barrelman-graphhopper:latest
     restart: unless-stopped
+    # graphhopper.sh defaults GRAPH=/data/default-gh and only sets datareader.file
+    # when -i is passed, so we override both here to match our volume mounts.
+    command: ["-i", "/data/region.osm.pbf", "-o", "/graphhopper/graph-cache"]
     environment:
       JAVA_OPTS: "-Xmx2g -Xms512m"
     volumes:
@@ -73,7 +51,7 @@ services:
     restart: unless-stopped
     environment:
       DATABASE_URL: postgresql://barrelman:${BARRELMAN_DB_PASSWORD:-barrelman}@barrelman-db:5432/barrelman
-      OLLAMA_HOST: http://barrelman-ollama:11434
+      OLLAMA_HOST: ${OLLAMA_HOST:-http://ollama:11434}
       PORT: 3001
       BARRELMAN_API_KEY: ${BARRELMAN_API_KEY:-brm_dev_changeme}
     ports:
@@ -82,4 +60,3 @@ services:
       - barrelman-osm-data:/data
     depends_on:
       - barrelman-db
-      - ollama
