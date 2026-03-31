@@ -15,7 +15,7 @@ OSM PBF extract (Geofabrik)
         ▼
   geo_places table   ←── import/post-import.sql (indexes, addr extraction)
   (PostGIS)          ←── import/generate-abbreviations.ts
-        │             ←── import/embed-places.ts (Ollama embeddings)
+        │             ←── import/embed-places.ts (Ollama embeddings, optional)
         ▼
   Barrelman API      ←── src/routes/
   (Elysia / Bun)
@@ -28,22 +28,83 @@ Martin  │  GraphHopper
   Parchment API
 ```
 
-| Service | Description | Port |
-|---------|-------------|------|
-| `barrelman` | Main API (Elysia/Bun) | 3001 |
-| `barrelman-db` | PostgreSQL + PostGIS | 5434 |
-| `ollama` | Embedding model server | 11434 |
-| `martin` | Vector tile server | 3002 |
-| `graphhopper` | Routing engine | 8989 |
+| Service | Image | Port | Description |
+|---------|-------|------|-------------|
+| `barrelman` | `alexwohlbruck/barrelman` | 3001 | REST API (Elysia/Bun) |
+| `barrelman-db` | `alexwohlbruck/barrelman-db` | 5433 | PostgreSQL + PostGIS + pgvector |
+| `martin` | `ghcr.io/maplibre/martin` | 3002 | Vector tile server |
+| `graphhopper` | `israelhikingmap/graphhopper` | 8990 | Routing engine |
 
-## Quick Start (Local Dev)
+---
+
+## Quick Start (Production)
+
+No clone or build required — all services pull pre-built images from Docker Hub / GHCR.
+
+### 1. Create a config directory
+
+```bash
+mkdir -p /opt/barrelman && cd /opt/barrelman
+```
+
+### 2. Download the compose file
+
+```bash
+curl -o docker-compose.yml \
+  https://raw.githubusercontent.com/alexwohlbruck/barrelman/main/docker-compose.yml
+```
+
+### 3. Create `.env`
+
+```dotenv
+BARRELMAN_API_KEY=brm_changeme_use_a_strong_key
+BARRELMAN_DB_PASSWORD=changeme
+OLLAMA_HOST=http://ollama:11434   # optional — skip if not using semantic search
+```
+
+### 4. Start
+
+```bash
+docker compose up -d
+curl http://localhost:3001/health
+# {"status":"ok","database":"connected"}
+```
+
+### 5. Import OSM data
+
+Download a PBF and run the import inside the DB container (all tools are baked in):
+
+```bash
+# Download region (example: North Carolina)
+docker exec barrelman-db bash -c '
+  wget -O /data/region.osm.pbf \
+    https://download.geofabrik.de/north-america/us/north-carolina-latest.osm.pbf
+'
+
+# Run the import detached (survives SSH disconnects)
+docker exec -d barrelman-db bash -c '
+  osm2pgsql --create --slim --output=flex \
+    --style=/app/import/osm2pgsql-flex.lua \
+    -d "$DATABASE_URL" /data/region.osm.pbf \
+  && psql "$DATABASE_URL" -f /app/import/post-import.sql \
+  && echo IMPORT_COMPLETE || echo IMPORT_FAILED
+'
+
+# Check progress
+docker exec barrelman-db psql -U barrelman -d barrelman \
+  -c "SELECT count(*) FROM geo_places;"
+```
+
+A US state (~400 MB PBF) takes roughly 20–40 minutes. See [Data Import](#data-import) for more detail.
+
+---
+
+## Local Development
 
 ### Prerequisites
 
 - [Bun](https://bun.sh) ≥ 1.1
-- [Docker](https://docker.com) + Docker Compose
-- [osm2pgsql](https://osm2pgsql.org) ≥ 1.10 (`brew install osm2pgsql` on macOS)
-- [DuckDB CLI](https://duckdb.org) (`brew install duckdb`) — used for parquet import steps
+- [Docker](https://docker.com) + Docker Compose v2
 
 ### 1. Clone and configure
 
@@ -56,16 +117,15 @@ cp .env.example .env
 Edit `.env` as needed (defaults work for local development):
 
 ```dotenv
-DATABASE_URL=postgresql://barrelman:barrelman@localhost:5434/barrelman
-BARRELMAN_API_KEY=brm_dev_changeme   # Change before exposing publicly
+DATABASE_URL=postgresql://barrelman:barrelman@localhost:5433/barrelman
+BARRELMAN_API_KEY=brm_dev_changeme
 OLLAMA_HOST=http://localhost:11434
-IMPORT_BBOX=-84.4,33.7,-75.4,36.6   # NC bounding box — change for other regions
 ```
 
-### 2. Start infrastructure
+### 2. Start the database
 
 ```bash
-docker compose up -d barrelman-db ollama
+docker compose up -d barrelman-db
 ```
 
 Wait ~15 seconds for PostGIS to initialise.
@@ -78,13 +138,15 @@ bun install
 
 ### 4. Import data
 
-See [Data Import](#data-import) for full details. For a quick North Carolina import:
-
 ```bash
-# Download NC OSM extract and import into PostGIS (~10-15 min)
+# Download NC OSM extract
+wget -O data/region.osm.pbf \
+  https://download.geofabrik.de/north-america/us/north-carolina-latest.osm.pbf
+
+# Import (~20-40 min)
 bun run import:osm
 
-# Generate semantic search embeddings (~30-90 min on CPU, faster on GPU)
+# Optional: generate semantic search embeddings (~30-90 min on CPU)
 bun run import:embed
 ```
 
@@ -101,133 +163,70 @@ Swagger UI: `http://localhost:3001/swagger`
 
 ## Data Import
 
-The import pipeline transforms an OSM PBF extract into a fully indexed PostGIS database. There are two approaches depending on coverage needed.
+The import pipeline transforms an OSM PBF extract into a fully indexed PostGIS database.
 
-### Regional import (recommended for development)
-
-Best for a single country, state, or metro area. Fast and low disk/RAM requirement.
-
-**1. Download a PBF extract from Geofabrik:**
+### Download a PBF extract
 
 ```bash
-# North Carolina (~200 MB)
-wget -O data/region.osm.pbf https://download.geofabrik.de/north-america/us/north-carolina-latest.osm.pbf
+# North Carolina (~400 MB)
+wget -O data/region.osm.pbf \
+  https://download.geofabrik.de/north-america/us/north-carolina-latest.osm.pbf
 
-# Other examples:
-# Germany:       https://download.geofabrik.de/europe/germany-latest.osm.pbf
-# France:        https://download.geofabrik.de/europe/france-latest.osm.pbf
-# United States: https://download.geofabrik.de/north-america/us-latest.osm.pbf
+# Germany
+wget -O data/region.osm.pbf \
+  https://download.geofabrik.de/europe/germany-latest.osm.pbf
+
+# Full United States
+wget -O data/region.osm.pbf \
+  https://download.geofabrik.de/north-america/us-latest.osm.pbf
 ```
 
-**2. Set the matching bounding box in `.env`:**
+Find all regions at [download.geofabrik.de](https://download.geofabrik.de).
 
-```dotenv
-# Format: west,south,east,north (decimal degrees)
-IMPORT_BBOX=-84.4,33.7,-75.4,36.6    # North Carolina
-# IMPORT_BBOX=-180,-90,180,90        # Global (no bbox filtering)
-```
+### Import pipeline
 
-**3. Run the full import pipeline:**
+| Step | Description |
+|------|-------------|
+| osm2pgsql | Imports all OSM objects via flex Lua style into `geo_places` |
+| post-import.sql | Extracts structured address/contact fields, builds GiST + GIN indexes, computes `area_m2` |
+| generate-abbreviations.ts | Pre-computes `name_abbrev` for autocomplete |
+| tsvector rebuild | Rebuilds full-text search vectors to include abbreviations |
+
+> **Note:** Do not use `--flat-nodes` for regional imports. It creates a ~31 GB sparse file that is only beneficial for full planet imports.
+
+### Embeddings (optional)
+
+Semantic search uses Ollama vector embeddings. All other search layers work without it.
 
 ```bash
-bun run import:osm
-```
+# Pull the model (one-time, ~270 MB)
+ollama pull nomic-embed-text
 
-This runs:
-1. `osm2pgsql` with the flex Lua style → writes raw `geo_places` rows
-2. `post-import.sql` → extracts structured address fields, builds GiST/GIN indexes, computes centroids
-3. `generate-abbreviations.ts` → pre-computes name abbreviations for faster autocomplete
-4. tsvector update → rebuilds full-text search vectors with abbreviations included
-
-Then generate embeddings for semantic search:
-
-```bash
-# Pull the embedding model first (one-time, ~270 MB)
-docker exec barrelman-ollama ollama pull nomic-embed-text
-
+# Generate embeddings
 bun run import:embed
 ```
-
-Embedding generation processes ~500 places/min on CPU. For 200k POIs (typical US state): ~7 hours. Skip this step if you don't need semantic search — all other search layers still work.
-
-### Global import
-
-A full planet import requires more resources but covers all of OSM.
-
-**Requirements:**
-- ~100 GB disk for the PBF + import scratch space
-- ~16 GB RAM recommended for osm2pgsql slim mode
-- SSD strongly recommended for PostGIS
-
-**Steps:**
-
-```bash
-# Download planet (updated weekly, ~80 GB)
-wget -O data/region.osm.pbf https://planet.openstreetmap.org/pbf/planet-latest.osm.pbf
-
-# Or use a regional mirror for faster download:
-# https://download.geofabrik.de/  (regional extracts, e.g. full Europe/Asia/etc.)
-
-# Set global bbox in .env (no filtering)
-# IMPORT_BBOX=-180,-90,180,90
-
-# Import (several hours for planet)
-bun run import:osm
-
-# Embeddings for full planet: run in batches or skip
-bun run import:embed
-```
-
-> **Tip:** For production global deployments, prefer continent-level Geofabrik extracts merged with `osmium merge` rather than the full planet file. This allows parallel imports and easier regional updates.
-
-### Updating data
-
-OSM data is static after import. To refresh:
-
-```bash
-# Download fresh PBF, then re-run the pipeline
-rm data/region.osm.pbf
-bun run import:osm
-bun run import:embed
-```
-
-For automated nightly/weekly updates, set up a cron job or use `osmium extract` + `osmupdate` for incremental diffs.
 
 ---
 
 ## API Reference
 
-All endpoints require a `Bearer` token in the `Authorization` header:
+All endpoints require a `Bearer` token:
 
 ```
-Authorization: Bearer brm_dev_changeme
+Authorization: Bearer <BARRELMAN_API_KEY>
 ```
 
-Interactive docs available at `http://localhost:3001/swagger` when the server is running.
+Interactive docs: `http://localhost:3001/swagger`
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `POST` | `/nearby` | Find places within a radius |
+| `GET` | `/health` | Health check |
 | `POST` | `/search` | Hybrid text + semantic search |
+| `POST` | `/nearby` | Find places within a radius |
+| `GET` | `/geocode` | Reverse geocode a coordinate to city/county/state |
 | `GET` | `/contains` | Find parent areas containing a point |
 | `GET` | `/children` | Find POIs inside an area |
 | `GET` | `/place/:osmType/:osmId` | Get a single place by OSM ID |
-| `GET` | `/health` | Health check |
-
-### POST `/nearby`
-
-Find places within a radius, sorted by distance.
-
-```json
-{
-  "lat": 35.2271,
-  "lng": -80.8431,
-  "radius": 1000,
-  "categories": ["bicycle_parking"],
-  "limit": 20,
-  "offset": 0
-}
-```
 
 ### POST `/search`
 
@@ -245,75 +244,87 @@ Hybrid four-layer search: full-text → abbreviation → trigram fuzzy → seman
 }
 ```
 
-Set `autocomplete: true` for typeahead (skips slow semantic layer). Set `semantic: true` to force vector search for concept queries like _"somewhere quiet to study"_.
+Set `autocomplete: true` for typeahead (skips the slow semantic layer). Set `semantic: true` to force vector search for concept queries like _"somewhere quiet to study"_.
+
+### POST `/nearby`
+
+Find places within a radius, sorted by distance.
+
+```json
+{
+  "lat": 35.2271,
+  "lng": -80.8431,
+  "radius": 1000,
+  "categories": ["amenity/cafe"],
+  "limit": 20
+}
+```
+
+### GET `/geocode?lat=&lng=`
+
+Reverse geocodes a coordinate — returns the city, county, and state containing the point.
 
 ### GET `/contains?lat=&lng=`
 
-Returns named areas (smallest first) containing the given point — useful for reverse geocoding a coordinate to its containing city, county, state, etc.
+Returns all named areas (smallest first) containing the given point.
 
 ### GET `/children?id=&categories=`
 
-Returns places whose centroids fall inside the given area's polygon. Useful for listing shops in a mall or POIs on a university campus.
+Returns places whose centroids fall inside the given area's polygon.
 
 ### GET `/place/:osmType/:osmId`
 
 Fetch full details for a single OSM element. `osmType` is `node`, `way`, or `relation`.
 
-```
-GET /place/node/5718230659
-GET /place/way/123456
-GET /place/relation/9876
-```
-
 ---
 
 ## Configuration
 
-All configuration is via environment variables. Copy `.env.example` to `.env`.
-
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `DATABASE_URL` | `postgresql://barrelman:barrelman@localhost:5434/barrelman` | PostGIS connection string |
+| `DATABASE_URL` | `postgresql://barrelman:barrelman@localhost:5433/barrelman` | PostGIS connection string |
 | `BARRELMAN_DB_PASSWORD` | `barrelman` | Used by `docker-compose.yml` for the DB container |
 | `PORT` | `3001` | HTTP port the API listens on |
 | `BARRELMAN_API_KEY` | `brm_dev_changeme` | Shared Bearer token for API auth. **Change before deploying.** |
 | `OLLAMA_HOST` | `http://localhost:11434` | Ollama endpoint for generating search embeddings |
-| `IMPORT_BBOX` | `-84.4,33.7,-75.4,36.6` | Bounding box filter for import (`west,south,east,north`). Set to `-180,-90,180,90` for global. |
-| `GEOFABRIK_URL` | NC extract URL | PBF download URL used by `import:osm` when no local file exists |
 
 ---
 
 ## Production Deployment
 
-### Docker Compose (recommended)
+### Reverse proxy (Caddy example)
 
-The included `docker-compose.yml` runs the full stack. For production, you'll want to:
-
-1. **Change secrets:** Set a strong `BARRELMAN_API_KEY` and `BARRELMAN_DB_PASSWORD`.
-2. **Mount a data volume** for the PostGIS database so data persists across container restarts.
-3. **Increase shared memory** for PostGIS: add `shm_size: '256mb'` to the db service.
-4. **Attach to your reverse proxy network** (e.g. Traefik, nginx-proxy) to expose the API via HTTPS.
-
-```bash
-# First-time setup
-cp .env.example .env
-# Edit .env with production values
-
-docker compose up -d
+```
+barrelman.example.com {
+  reverse_proxy barrelman:3001
+}
 ```
 
-The Parchment API container connects to Barrelman over the `parchment-network` Docker network. See the [Parchment docs](https://docs.parchment.app/docs/development/barrelman) for how to wire the two services together.
+Caddy auto-provisions TLS. Connect the `barrelman` container to Caddy's network:
+
+```bash
+docker network connect caddy_network barrelman
+```
+
+### Automatic updates with Watchtower
+
+[Watchtower](https://containrrr.dev/watchtower/) automatically pulls and restarts containers when new images are published:
+
+```bash
+docker run -d \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  containrrr/watchtower --interval 3600
+```
+
+New Barrelman releases are published to Docker Hub on every push to `main` via GitHub Actions.
 
 ### Resource recommendations
 
 | Scale | DB size | RAM | Disk |
 |-------|---------|-----|------|
-| Single US state (e.g. NC) | ~1 GB | 2 GB | 10 GB |
-| Full United States | ~15 GB | 8 GB | 80 GB |
-| Europe | ~25 GB | 16 GB | 150 GB |
-| Planet | ~80 GB | 32 GB | 500 GB |
-
-Embedding vectors add ~3 GB per 1M places (768-dim float32).
+| Single US state (e.g. NC) | ~10 GB | 2 GB | 20 GB |
+| Full United States | ~60 GB | 8 GB | 120 GB |
+| Europe | ~100 GB | 16 GB | 200 GB |
 
 ---
 
