@@ -21,7 +21,7 @@ services:
 
   martin:
     container_name: barrelman-martin
-    image: alexwohlbruck/barrelman-martin:latest
+    image: ghcr.io/maplibre/martin
     restart: unless-stopped
     environment:
       DATABASE_URL: postgresql://barrelman:${BARRELMAN_DB_PASSWORD:-barrelman}@barrelman-db:5432/barrelman
@@ -32,10 +32,10 @@ services:
 
   graphhopper:
     container_name: barrelman-graphhopper
-    image: alexwohlbruck/barrelman-graphhopper:latest
+    image: israelhikingmap/graphhopper:latest
     restart: unless-stopped
     # graphhopper.sh defaults GRAPH=/data/default-gh and only sets datareader.file
-    # when -i is passed, so we override both here to match our volume mounts.
+    # when -i is passed, so we explicitly pass both to match our volume mounts.
     command: ["-i", "/data/region.osm.pbf", "-o", "/graphhopper/graph-cache"]
     environment:
       JAVA_OPTS: "-Xmx2g -Xms512m"

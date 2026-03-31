@@ -75,28 +75,3 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Build and push barrelman-martin
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: ./Dockerfile.martin
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: |
-            alexwohlbruck/barrelman-martin:${{ github.sha }}
-            alexwohlbruck/barrelman-martin:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      - name: Build and push barrelman-graphhopper
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: ./Dockerfile.graphhopper
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: |
-            alexwohlbruck/barrelman-graphhopper:${{ github.sha }}
-            alexwohlbruck/barrelman-graphhopper:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max

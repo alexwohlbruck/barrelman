@@ -1,5 +1,0 @@
-FROM israelhikingmap/graphhopper:latest
-
-# The base image entrypoint uses: ./graphhopper.sh -c config-example.yml
-# Override that file with our baked-in config so no repo clone is needed.
-COPY graphhopper-config.yml /graphhopper/config-example.yml

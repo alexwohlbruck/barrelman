@@ -1,6 +1,0 @@
-FROM ghcr.io/maplibre/martin:v0.15.0
-
-# Bake in the tile server config so no repo clone is needed.
-COPY martin-config.yaml /config.yaml
-
-CMD ["--config", "/config.yaml"]
