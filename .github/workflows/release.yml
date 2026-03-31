@@ -3,23 +3,18 @@
 # Triggers on every push to main:
 #   1. Runs tests
 #   2. Builds and pushes Docker images to Docker Hub (tagged :latest + :<sha>)
-#   3. SSHes into homelab, updates docker-compose.yml, pulls new images, restarts
+#
+# Watchtower running on the homelab automatically picks up new :latest images.
 #
 # Required GitHub secrets:
 #   DOCKERHUB_USERNAME  - Docker Hub username (e.g. alexwohlbruck)
 #   DOCKERHUB_TOKEN     - Docker Hub access token (hub.docker.com → Account → Security → Access Tokens)
-#   DEPLOY_HOST         - Homelab hostname or IP (e.g. wohlbruck.dev)
-#   DEPLOY_USER         - SSH username on homelab (e.g. alex)
-#   DEPLOY_SSH_KEY      - Private key for SSH (contents of ~/.ssh/id_ed25519)
 
 name: Release
 
 on:
   push:
     branches: [main]
-
-env:
-  REGISTRY: docker.io
 
 jobs:
   test:
@@ -42,9 +37,6 @@ jobs:
     name: Build and push Docker images
     needs: [test]
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write
     steps:
       - uses: actions/checkout@v4
 
@@ -108,32 +100,3 @@ jobs:
             alexwohlbruck/barrelman-graphhopper:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
-
-  deploy:
-    name: Deploy to homelab
-    needs: [build-and-push]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Copy docker-compose.yml to homelab
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ secrets.DEPLOY_HOST }}
-          username: ${{ secrets.DEPLOY_USER }}
-          key: ${{ secrets.DEPLOY_SSH_KEY }}
-          source: "docker-compose.yml"
-          target: "/opt/barrelman"
-
-      - name: Pull images and restart containers
-        uses: appleboy/ssh-action@v1
-        with:
-          host: ${{ secrets.DEPLOY_HOST }}
-          username: ${{ secrets.DEPLOY_USER }}
-          key: ${{ secrets.DEPLOY_SSH_KEY }}
-          script: |
-            set -e
-            cd /opt/barrelman
-            docker compose pull
-            docker compose up -d
-            echo "Deploy complete: $(date)"
