@@ -75,8 +75,13 @@ UPDATE geo_places SET area_m2 = ST_Area(geom::geography)
 WHERE geom_type = 'area';
 
 -- Build full-text search tsvector (only for named objects)
+-- Includes name, abbreviation, and category labels so users can search by type
+-- e.g. "winnifred apartments" finds "The Winnifred" (building/apartments)
 UPDATE geo_places SET ts = to_tsvector('simple', unaccent(
-    coalesce(name, '') || ' ' || coalesce(name_abbrev, '')
+    coalesce(name, '') || ' ' || coalesce(name_abbrev, '') || ' ' ||
+    coalesce(array_to_string(
+        ARRAY(SELECT replace(replace(unnest(categories), '/', ' '), '_', ' ')),
+    ' '), '')
 ))
 WHERE name IS NOT NULL;
 

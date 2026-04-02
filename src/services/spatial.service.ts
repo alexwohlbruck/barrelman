@@ -64,11 +64,26 @@ export async function findChildren({
   const cached = spatialCache.get(cacheKey)
   if (cached) return cached
 
-  // Named places are always included; category filter only applies to unnamed places
-  const categoryFilter =
-    categoryList.length > 0
-      ? sql`AND (c.name IS NOT NULL OR c.categories && ARRAY[${sql.join(categoryList.map(cat => sql`${cat}`), sql`, `)}]::text[])`
-      : sql`AND c.name IS NOT NULL`
+  // Named places are always included; category filter only applies to unnamed places.
+  // Categories without a '/' are treated as prefixes (e.g. "office" matches "office/lawyer").
+  const exactCats = categoryList.filter(c => c.includes('/'))
+  const prefixCats = categoryList.filter(c => !c.includes('/'))
+
+  let categoryFilter: ReturnType<typeof sql>
+  if (categoryList.length > 0) {
+    const conditions: ReturnType<typeof sql>[] = [sql`c.name IS NOT NULL`]
+    if (exactCats.length > 0) {
+      conditions.push(
+        sql`c.categories && ARRAY[${sql.join(exactCats.map(cat => sql`${cat}`), sql`, `)}]::text[]`
+      )
+    }
+    for (const prefix of prefixCats) {
+      conditions.push(sql`EXISTS (SELECT 1 FROM unnest(c.categories) AS cat WHERE cat LIKE ${prefix + '/%'} OR cat = ${prefix})`)
+    }
+    categoryFilter = sql`AND (${sql.join(conditions, sql` OR `)})`
+  } else {
+    categoryFilter = sql`AND c.name IS NOT NULL`
+  }
 
   // Proximity sort: use provided lat/lng if available, otherwise fall back to parent centroid
   const hasLocation = lat != null && lng != null

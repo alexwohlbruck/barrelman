@@ -61,7 +61,10 @@ psql "$DATABASE_URL" -f "$PROJECT_DIR/import/post-import.sql"
 echo "Rebuilding tsvector..."
 psql "$DATABASE_URL" -c "
 UPDATE geo_places SET ts = to_tsvector('simple', unaccent(
-    coalesce(name, '') || ' ' || coalesce(name_abbrev, '')
+    coalesce(name, '') || ' ' || coalesce(name_abbrev, '') || ' ' ||
+    coalesce(array_to_string(
+        ARRAY(SELECT replace(replace(unnest(categories), '/', ' '), '_', ' ')),
+    ' '), '')
 ))
 WHERE name IS NOT NULL;"
 

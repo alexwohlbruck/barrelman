@@ -32,17 +32,25 @@ docker exec \
   ${IMPORT_PBF:+-e IMPORT_PBF="$IMPORT_PBF"} \
   barrelman-db bash /app/scripts/import-osm.sh
 
-echo "==> [2/3] Generating abbreviation index (barrelman container)..."
+echo "==> [2/4] Generating abbreviation index (barrelman container)..."
 docker exec \
   -e DATABASE_URL="postgresql://barrelman:${DB_PASS}@barrelman-db:5432/barrelman" \
   barrelman bun run import/generate-abbreviations.ts
 
-echo "==> [3/3] Rebuilding tsvector with abbreviations (barrelman-db container)..."
+echo "==> [3/4] Populating codes from OSM tags (barrelman container)..."
+docker exec \
+  -e DATABASE_URL="postgresql://barrelman:${DB_PASS}@barrelman-db:5432/barrelman" \
+  barrelman bun run import/generate-codes.ts
+
+echo "==> [4/4] Rebuilding tsvector with abbreviations + categories (barrelman-db container)..."
 docker exec barrelman-db psql "$DB_URL" -c "
 UPDATE geo_places SET ts = to_tsvector('simple', unaccent(
-    coalesce(name, '') || ' ' || coalesce(name_abbrev, '')
+    coalesce(name, '') || ' ' || coalesce(name_abbrev, '') || ' ' ||
+    coalesce(array_to_string(
+        ARRAY(SELECT replace(replace(unnest(categories), '/', ' '), '_', ' ')),
+    ' '), '')
 ))
-WHERE name IS NOT NULL AND name_abbrev IS NOT NULL AND name_abbrev != '';"
+WHERE name IS NOT NULL;"
 
 echo "==> Import complete!"
 echo "    Optional: generate semantic embeddings with:"

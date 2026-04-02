@@ -25,6 +25,7 @@ export const geoPlaces = pgTable(
     names: text('names').array(),
     tags: jsonb('tags').notNull(),            // ALL raw OSM tags
     categories: text('categories').array(),   // derived: ["amenity/restaurant"]
+    codes: text('codes').array(),             // extracted codes: IATA, ICAO, ref, short_name, abbreviation
 
     // Geometry — two columns
     centroid: spatialColumn('centroid', 'POINT'),   // always a Point
@@ -57,6 +58,7 @@ export const geoPlaces = pgTable(
     // Partial indexes for search (only named POIs)
     trigramIndex('geo_places_name_trgm_idx', table.name),
     ginIndex('geo_places_categories_idx', table.categories),
+    ginIndex('geo_places_codes_idx', table.codes),
   ],
 )
 

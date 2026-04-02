@@ -97,11 +97,19 @@ docker exec \
   -e DATABASE_URL="$DB_URL_DOCKER" \
   barrelman bun run import/generate-abbreviations.ts
 
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Populating codes from OSM tags..."
+docker exec \
+  -e DATABASE_URL="$DB_URL_DOCKER" \
+  barrelman bun run import/generate-codes.ts
+
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] Rebuilding tsvectors..."
 docker exec barrelman-db psql "$DB_URL_LOCAL" -c "
 UPDATE geo_places SET ts = to_tsvector('simple', unaccent(
-    coalesce(name, '') || ' ' || coalesce(name_abbrev, '')
+    coalesce(name, '') || ' ' || coalesce(name_abbrev, '') || ' ' ||
+    coalesce(array_to_string(
+        ARRAY(SELECT replace(replace(unnest(categories), '/', ' '), '_', ' ')),
+    ' '), '')
 ))
-WHERE name IS NOT NULL AND name_abbrev IS NOT NULL AND name_abbrev != '';"
+WHERE name IS NOT NULL;"
 
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] OSM update complete."

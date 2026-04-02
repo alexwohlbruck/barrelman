@@ -5,7 +5,7 @@
  *   - lat:0 falsy bug: `lat && lng` was false when lat=0, skipping location entirely
  *   - Abbrev layer silently skipped for queries > 20 chars
  *   - Semantic layer must be suppressed for autocomplete=true regardless of result count
- *   - Deduplication preserves FTS > abbrev > trigram priority
+ *   - Deduplication preserves abbrev/codes > FTS > trigram priority
  *   - Proximity re-ranking fires only when hasLocation is true
  */
 
@@ -89,10 +89,10 @@ describe('searchPlaces — basic', () => {
 // ── Layer execution ───────────────────────────────────────────────────────────
 
 describe('searchPlaces — layer execution', () => {
-  test('runs 3 parallel layers (FTS + trigram + abbrev) for short queries', async () => {
+  test('runs 4 parallel layers (FTS + trigram + codes + nameAbbrev) for short queries', async () => {
     // autocomplete=true suppresses semantic so count is predictable
     await searchPlaces({ query: 'cafe', autocomplete: true })
-    expect(mockExecute).toHaveBeenCalledTimes(3)
+    expect(mockExecute).toHaveBeenCalledTimes(4)
   })
 
   test('runs only 2 layers (FTS + trigram) for queries longer than 20 chars', async () => {
@@ -116,6 +116,20 @@ describe('searchPlaces — deduplication', () => {
     const ids = results.map((r: any) => r.id)
     expect(ids.filter((id: string) => id === 'node/1')).toHaveLength(1)
     expect(results.find((r: any) => r.id === 'node/1').text_rank).toBe(0.9)
+  })
+
+  test('abbreviation/code result takes priority over same place returned by FTS', async () => {
+    const ftsPlace = { id: 'node/1', name: 'University', text_rank: 0.7, distance_m: null }
+    const abbrevPlace = { id: 'node/1', name: 'University', text_rank: 0.95, distance_m: null }
+    mockExecute
+      .mockImplementationOnce(async () => [ftsPlace])    // FTS
+      .mockImplementationOnce(async () => [])             // trigram
+      .mockImplementationOnce(async () => [abbrevPlace])  // abbrev
+    const results = await searchPlaces({ query: 'uncc', autocomplete: true })
+    const ids = results.map((r: any) => r.id)
+    expect(ids.filter((id: string) => id === 'node/1')).toHaveLength(1)
+    // Abbrev result should win since merge order is abbrev > FTS > trigram
+    expect(results.find((r: any) => r.id === 'node/1').text_rank).toBe(0.95)
   })
 
   test('merges unique results from all three text layers', async () => {
@@ -149,8 +163,8 @@ describe('searchPlaces — caching', () => {
   test('different query strings produce separate cache entries', async () => {
     await searchPlaces({ query: 'cafe', autocomplete: true })
     await searchPlaces({ query: 'library', autocomplete: true })
-    // 3 layers per unique query = 6 total
-    expect(mockExecute.mock.calls.length).toBe(6)
+    // 4 layers per unique query = 8 total
+    expect(mockExecute.mock.calls.length).toBe(8)
   })
 })
 
@@ -220,7 +234,7 @@ describe('searchPlaces — location handling', () => {
     // Fix: `lat != null && lng != null` correctly handles lat=0 (Gulf of Guinea).
     await expect(searchPlaces({ query: 'cafe', lat: 0, lng: 0, autocomplete: true })).resolves.toBeDefined()
     // With the fix, the location point is built and radius filter is applied
-    expect(mockExecute).toHaveBeenCalledTimes(3)
+    expect(mockExecute).toHaveBeenCalledTimes(4)
   })
 
   test('proximity re-ranking elevates nearby result above higher-ranked distant one', async () => {

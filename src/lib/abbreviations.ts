@@ -23,3 +23,19 @@ export function generateAbbrev(name: string): string | null {
 
   return tokens.map((w) => w[0].toLowerCase()).join('')
 }
+
+const CODE_TAGS = ['iata', 'icao', 'ref', 'short_name', 'abbreviation']
+
+export function extractCodes(tags: Record<string, string>): string[] {
+  const codes: string[] = []
+  for (const key of CODE_TAGS) {
+    const val = tags[key]
+    if (val) {
+      codes.push(...val.split(';').map(v => v.trim().toLowerCase()).filter(Boolean))
+    }
+  }
+  if (tags.alt_name) {
+    codes.push(...tags.alt_name.split(';').map(v => v.trim().toLowerCase()).filter(Boolean))
+  }
+  return [...new Set(codes)]
+}
