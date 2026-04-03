@@ -7,6 +7,7 @@ import { containsRoutes } from './routes/contains'
 import { childrenRoutes } from './routes/children'
 import { placeRoutes } from './routes/place'
 import { geocodeRoutes } from './routes/geocode'
+import { adminRoutes } from './routes/admin'
 
 const port = Number(process.env.PORT) || 3002
 
@@ -29,6 +30,7 @@ const app = new Elysia()
   .use(childrenRoutes)
   .use(placeRoutes)
   .use(geocodeRoutes)
+  .use(adminRoutes)
   .listen(port)
 
 console.log(`Barrelman running at http://localhost:${port}`)
