@@ -42,6 +42,9 @@ export const geoPlaces = pgTable(
     phones: text('phones').array(),
     websites: text('websites').array(),
 
+    // Search context — denormalized parent boundary names + address for search enrichment
+    parentContext: text('parent_context'),
+
     // Search
     embedding: vectorColumn('embedding', 512),
     // ts column is managed via post-import SQL, not directly by Drizzle

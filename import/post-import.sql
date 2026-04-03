@@ -32,6 +32,9 @@ BEGIN
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'geo_places' AND column_name = 'updated_at') THEN
         ALTER TABLE geo_places ADD COLUMN updated_at TIMESTAMPTZ DEFAULT NOW();
     END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'geo_places' AND column_name = 'parent_context') THEN
+        ALTER TABLE geo_places ADD COLUMN parent_context TEXT;
+    END IF;
 END $$;
 
 -- Extract address from addr:* tags
@@ -75,13 +78,15 @@ UPDATE geo_places SET area_m2 = ST_Area(geom::geography)
 WHERE geom_type = 'area';
 
 -- Build full-text search tsvector (only for named objects)
--- Includes name, abbreviation, and category labels so users can search by type
+-- Includes name, abbreviation, category labels, and parent boundary context
 -- e.g. "winnifred apartments" finds "The Winnifred" (building/apartments)
+-- e.g. "starbucks pineville" finds Starbucks locations in Pineville boundary
 UPDATE geo_places SET ts = to_tsvector('simple', unaccent(
     coalesce(name, '') || ' ' || coalesce(name_abbrev, '') || ' ' ||
     coalesce(array_to_string(
         ARRAY(SELECT replace(replace(unnest(categories), '/', ' '), '_', ' ')),
-    ' '), '')
+    ' '), '') || ' ' ||
+    coalesce(parent_context, '')
 ))
 WHERE name IS NOT NULL;
 
@@ -100,6 +105,7 @@ CREATE INDEX IF NOT EXISTS geo_places_name_trgm_idx ON geo_places USING GIN(name
 CREATE INDEX IF NOT EXISTS geo_places_categories_idx ON geo_places USING GIN(categories) WHERE categories != '{}';
 CREATE INDEX IF NOT EXISTS geo_places_ts_idx ON geo_places USING GIN(ts) WHERE ts IS NOT NULL;
 CREATE INDEX IF NOT EXISTS geo_places_admin_level_idx ON geo_places(admin_level) WHERE admin_level IS NOT NULL;
+CREATE INDEX IF NOT EXISTS geo_places_admin_geom_idx ON geo_places USING GIST(geom) WHERE geom_type = 'area' AND (admin_level IS NOT NULL OR categories && ARRAY['place/neighbourhood', 'place/suburb', 'place/quarter', 'place/city_block']::text[]);
 
 -- Analyze table for query planner
 ANALYZE geo_places;

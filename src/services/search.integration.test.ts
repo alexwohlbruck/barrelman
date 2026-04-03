@@ -195,6 +195,32 @@ if (!canRun) {
     })
   })
 
+  // ── Location-qualified search (name + street/city/neighbourhood) ─────────
+
+  describe('location-qualified search', () => {
+    test('"bojangles tryon" → Bojangles on Tryon Street ranks first', async () => {
+      const results = await search('bojangles tryon', { lat: 35.2007, lng: -80.775 })
+      expect(results[0].name).toMatch(/bojangles/i)
+      // Should be a Tryon Street location, not just the nearest Bojangles
+      expect(results[0].address?.street).toMatch(/tryon/i)
+    })
+
+    test('"walmart independence" → Walmart on Independence Blvd ranks first', async () => {
+      const results = await search('walmart independence', { lat: 35.2007, lng: -80.775 })
+      expect(results[0].name).toMatch(/walmart/i)
+    })
+
+    test('"starbucks uptown" → Starbucks in Uptown neighbourhood ranks first', async () => {
+      const results = await search('starbucks uptown')
+      expect(results[0].name).toBe('Starbucks')
+    })
+
+    test('"sabor huntersville" → Sabor in Huntersville ranks first', async () => {
+      const results = await search('sabor huntersville')
+      expect(results[0].name).toMatch(/sabor/i)
+    })
+  })
+
   // ── Category demotion (roads/surveillance deprioritized) ─────────────────
 
   describe('category demotion', () => {

@@ -124,13 +124,37 @@ export async function searchPlaces({
     // ── Text search mode: 4-layer hybrid pipeline ─────────────────────────
 
     // Layer 1: Full-text search via tsvector GIN index
-    // ts_rank alone only checks word presence — "Carowinds" and "Days Inn Near
-    // Carowinds" get identical scores.  We add a name-similarity boost that only
-    // activates for close matches (similarity > 0.6) so exact/near-exact names
-    // rank higher.  Below 0.6 all results score identically, letting proximity
-    // decide — important for generic queries like "restaurant" where all matches
-    // have moderate similarity and users want nearby results.
-    const ftsRankExpr = sql`(ts_rank(ts, plainto_tsquery('simple', unaccent(${sanitizedQuery}))) * (1.0 + GREATEST(0, similarity(name, ${sanitizedQuery}) - 0.6)) * ${categoryDemotion})`
+    // FTS proves ALL query tokens are present in the tsvector (name + categories +
+    // parent_context).  For multi-word queries like "walmart independence", the name
+    // is "Walmart Supercenter" and "independence" matches via parent_context (street
+    // name).  We rank by how well the name matches the *best* query word, with a
+    // 1.5x boost reflecting FTS's higher confidence (all tokens matched) vs trigram
+    // (name similarity only).  For generic queries like "restaurant" where name
+    // similarity is low across the board, proximity dominates naturally.
+    const queryWords = sanitizedQuery.split(/\s+/).filter(Boolean)
+    const wordSims = queryWords.map((w) => sql`similarity(name, ${w})`)
+    const bestWordSim = wordSims.length > 1
+      ? sql`GREATEST(${sql.join(wordSims, sql`, `)})`
+      : wordSims[0]
+    // For multi-word queries, apply a floor of 0.5 before the 1.5x boost.
+    // This ensures FTS results (where ALL tokens matched) rank above trigram
+    // results that only match on a location qualifier word in the name
+    // (e.g. "Independence Woods" for query "walmart independence").
+    const simFloor = queryWords.length > 1 ? sql`0.5` : sql`0`
+    const ftsRankExpr = sql`(1.5 * GREATEST(similarity(name, ${sanitizedQuery}), ${bestWordSim}, ${simFloor}) * ${categoryDemotion})`
+
+    // Build tsquery: in autocomplete mode, treat the last word as a prefix
+    // so "walmart indep" matches "independence" in the tsvector.
+    // In non-autocomplete mode, use exact token matching.
+    const tsQueryExpr = autocomplete && queryWords.length > 0
+      ? (() => {
+          const prefixQuery = queryWords
+            .map((w, i) => i === queryWords.length - 1 ? `${w}:*` : w)
+            .join(' & ')
+          return sql`to_tsquery('simple', unaccent(${prefixQuery}))`
+        })()
+      : sql`plainto_tsquery('simple', unaccent(${sanitizedQuery}))`
+
     const ftsPromise = db.execute(sql`
       SELECT
         id, osm_type, osm_id, name, name_abbrev, categories, tags,
@@ -139,7 +163,7 @@ export async function searchPlaces({
         ${ftsRankExpr} AS text_rank
         ${distanceSelect}
       FROM geo_places
-      WHERE ts @@ plainto_tsquery('simple', unaccent(${sanitizedQuery}))
+      WHERE ts @@ ${tsQueryExpr}
       ${textSearchSpatialFilter}
       ${categoryFilter}
       ${tagsFilter}
@@ -148,19 +172,46 @@ export async function searchPlaces({
     `).catch(() => [] as any[])
 
     // Layer 2: Trigram fuzzy match via GIN (name gin_trgm_ops) index
+    // For multi-word queries, match name against individual words so that
+    // a misspelled name + location qualifier ("boajngles tryon") still finds
+    // results.  Context words (street, neighbourhood) boost ranking via
+    // substring match on parent_context.
+    let trigramRankExpr: ReturnType<typeof sql>
+    let trigramWhereExpr: ReturnType<typeof sql>
+
+    if (queryWords.length > 1) {
+      // Match name against any individual query word
+      const wordMatchConds = queryWords.map((w) => sql`name % ${w}`)
+      trigramWhereExpr = sql`(${sql.join(wordMatchConds, sql` OR `)})`
+
+      // Rank: best per-word name similarity, scaled by word coverage.
+      // Coverage = fraction of query words accounted for by name OR context.
+      // A result matching 2/2 words (name + context) ranks above one matching 1/2.
+      const perWordSims = queryWords.map((w) => sql`similarity(name, ${w})`)
+      const bestSim = sql`GREATEST(${sql.join(perWordSims, sql`, `)})`
+      const coverageChecks = queryWords.map((w) =>
+        sql`CASE WHEN similarity(name, ${w}) > 0.3 OR parent_context ILIKE '%' || ${w} || '%' THEN 1 ELSE 0 END`)
+      const coverageSum = sql`(${sql.join(coverageChecks, sql` + `)})`
+      const coverageFactor = sql`(0.3 + 0.7 * ${coverageSum}::float / ${queryWords.length}::float)`
+      trigramRankExpr = sql`(${bestSim} * ${coverageFactor} * ${categoryDemotion})`
+    } else {
+      trigramWhereExpr = sql`name % ${sanitizedQuery}`
+      trigramRankExpr = sql`(similarity(name, ${sanitizedQuery}) * ${categoryDemotion})`
+    }
+
     const trigramPromise = db.execute(sql`
       SELECT
         id, osm_type, osm_id, name, name_abbrev, categories, tags,
         address, hours, phones, websites, geom_type,
         ST_AsGeoJSON(centroid)::jsonb AS geometry,
-        similarity(name, ${sanitizedQuery}) * ${categoryDemotion} AS text_rank
+        ${trigramRankExpr} AS text_rank
         ${distanceSelect}
       FROM geo_places
-      WHERE name % ${sanitizedQuery}
+      WHERE ${trigramWhereExpr}
       ${textSearchSpatialFilter}
       ${categoryFilter}
       ${tagsFilter}
-      ${proximityDecay(sql`similarity(name, ${sanitizedQuery}) * ${categoryDemotion}`)}
+      ${proximityDecay(trigramRankExpr)}
       LIMIT ${limit}
     `).catch(() => [] as any[])
 
@@ -172,9 +223,13 @@ export async function searchPlaces({
     // place codes results first in the merge, guaranteeing they win dedup and
     // appear at the top regardless of distance.
     const lowerQuery = sanitizedQuery.toLowerCase()
+    // All abbreviation matches share the same base text_rank, so when a
+    // location is provided we simply sort by distance (nearest first).
+    // NOTE: PostgreSQL doesn't allow column aliases inside ORDER BY
+    // expressions, so we can't use `text_rank / (1 + distance_m/50000)`.
     const abbrevProximityOrder = hasPointLocation
-      ? sql`ORDER BY text_rank / (1.0 + (distance_m / 50000.0)) DESC`
-      : sql`ORDER BY text_rank DESC`
+      ? sql`ORDER BY centroid <-> ${locationPoint} ASC`
+      : sql`ORDER BY name ASC`
 
     const codesPromise = sanitizedQuery.length <= 20
       ? db.execute(sql`
@@ -214,12 +269,16 @@ export async function searchPlaces({
     const [ftsRows, trigramRows, codesRows, nameAbbrevRows] = await Promise.all([ftsPromise, trigramPromise, codesPromise, nameAbbrevPromise])
 
     // Merge, deduplicating in priority order: codes > abbreviation > FTS > trigram
+    // Tag codes results so they're exempt from proximity re-ranking — an exact
+    // IATA/ICAO code match is definitive regardless of distance.
+    const codesIds = new Set((codesRows as any[]).map((r: any) => r.id))
     const seen = new Set<string>()
     results = []
     for (const row of [...(codesRows as any[]), ...(nameAbbrevRows as any[]), ...(ftsRows as any[]), ...(trigramRows as any[])]) {
       const r = row as any
       if (!seen.has(r.id)) {
         seen.add(r.id)
+        if (codesIds.has(r.id)) r._codesMatch = true
         results.push(r)
       }
     }
@@ -283,27 +342,34 @@ export async function searchPlaces({
   }
 
   // ── Proximity re-rank ───────────────────────────────────────────────────
+  // Codes matches (IATA/ICAO) are pinned at the top — they're definitive and
+  // should never be displaced by proximity.  Remaining results are re-ranked.
   if (results.length > 1 && (hasRoute || hasPointLocation)) {
+    const pinned = results.filter((r: any) => r._codesMatch)
+    const rest = results.filter((r: any) => !r._codesMatch)
+
     if (hasRoute) {
-      // Exponential decay for route corridor — strongly biases toward the route
       const decayConstant = buffer / 3
-      results.sort((a: any, b: any) => {
+      rest.sort((a: any, b: any) => {
         const scoreA = (a.text_rank || 0) * Math.exp(-(a.distance_m || buffer) / decayConstant)
         const scoreB = (b.text_rank || 0) * Math.exp(-(b.distance_m || buffer) / decayConstant)
         return scoreB - scoreA
       })
     } else if (hasQuery) {
       // 50 km half-life decay — matches the SQL ORDER BY in text search layers.
-      // Specific name matches (high text_rank from similarity boost) surface from
-      // far away; generic queries cluster nearby.
-      results.sort((a: any, b: any) => {
+      rest.sort((a: any, b: any) => {
         const rankA = (a.text_rank || 0) * (1 / (1 + (a.distance_m || 100000) / 50000))
         const rankB = (b.text_rank || 0) * (1 / (1 + (b.distance_m || 100000) / 50000))
         return rankB - rankA
       })
     }
+
+    results = [...pinned, ...rest]
     // Browse mode with point: already sorted by distance_m ASC from the query
   }
+
+  // Clean up internal tags before returning
+  for (const r of results) delete (r as any)._codesMatch
 
   searchCache.set(cacheKey, results)
   return results

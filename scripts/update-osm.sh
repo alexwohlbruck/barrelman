@@ -102,13 +102,17 @@ docker exec \
   -e DATABASE_URL="$DB_URL_DOCKER" \
   barrelman bun run import/generate-codes.ts
 
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Resolving parent context for new/changed places..."
+docker exec barrelman-db psql "$DB_URL_LOCAL" -f /app/import/resolve-parent-context-incremental.sql
+
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] Rebuilding tsvectors..."
 docker exec barrelman-db psql "$DB_URL_LOCAL" -c "
 UPDATE geo_places SET ts = to_tsvector('simple', unaccent(
     coalesce(name, '') || ' ' || coalesce(name_abbrev, '') || ' ' ||
     coalesce(array_to_string(
         ARRAY(SELECT replace(replace(unnest(categories), '/', ' '), '_', ' ')),
-    ' '), '')
+    ' '), '') || ' ' ||
+    coalesce(parent_context, '')
 ))
 WHERE name IS NOT NULL;"
 

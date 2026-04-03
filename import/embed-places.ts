@@ -29,7 +29,7 @@ async function embedPlaces() {
   while (true) {
     // Fetch next batch
     const batch = await sql`
-      SELECT id, name, categories, address, tags
+      SELECT id, name, categories, address, tags, parent_context
       FROM geo_places
       WHERE name IS NOT NULL AND embedding IS NULL
       ORDER BY id
@@ -45,6 +45,7 @@ async function embedPlaces() {
         categories: row.categories as string[] | null,
         address: row.address as any,
         osmTags: row.tags as any,
+        parentContext: row.parent_context as string | null,
       }),
     )
 

@@ -34,7 +34,11 @@ export async function generateQueryEmbedding(query: string): Promise<number[]> {
 
 /**
  * Build the embedding input string for a place.
- * Format: "name · categories · description · cuisine · operator · city · country"
+ * Format: "name · categories · description · cuisine · operator · location context"
+ *
+ * Location context comes from parent_context (resolved admin boundary names +
+ * address fields) with a fallback to addr:city/country for places that haven't
+ * been through the parent context resolution step.
  */
 export function buildEmbeddingInput(place: {
   name?: string | null
@@ -42,16 +46,18 @@ export function buildEmbeddingInput(place: {
   address?: { city?: string; country?: string } | null
   osmTags?: Record<string, string> | null // legacy alias
   tags?: Record<string, string> | null
+  parentContext?: string | null
 }): string {
   const t = place.tags || place.osmTags
+  const locationContext = place.parentContext
+    || [(place.address as any)?.city, (place.address as any)?.country].filter(Boolean).join(' ')
   const parts = [
     place.name,
     place.categories?.join(', '),
     t?.description,
     t?.cuisine,
     t?.operator,
-    (place.address as any)?.city,
-    (place.address as any)?.country,
+    locationContext || null,
   ]
   return parts.filter(Boolean).join(' · ')
 }

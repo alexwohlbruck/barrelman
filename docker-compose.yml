@@ -17,7 +17,7 @@ services:
       - barrelman-data:/var/lib/postgresql/data
       - barrelman-osm-data:/data
     ports:
-      - "5433:5432"
+      - "5434:5432"
 
   martin:
     container_name: barrelman-martin
