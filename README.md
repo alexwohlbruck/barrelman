@@ -66,7 +66,7 @@ OLLAMA_HOST=http://ollama:11434   # optional — skip if not using semantic sear
 
 ```bash
 docker compose up -d
-curl http://localhost:3001/health
+curl http://localhost:5001/health
 # {"status":"ok","database":"connected"}
 ```
 
@@ -156,8 +156,8 @@ bun run import:embed
 bun run dev
 ```
 
-Server: `http://localhost:3001`
-Swagger UI: `http://localhost:3001/swagger`
+Server: `http://localhost:5001`
+Swagger UI: `http://localhost:5001/swagger`
 
 ---
 
@@ -216,7 +216,7 @@ All endpoints require a `Bearer` token:
 Authorization: Bearer <BARRELMAN_API_KEY>
 ```
 
-Interactive docs: `http://localhost:3001/swagger`
+Interactive docs: `http://localhost:5001/swagger`
 
 | Method | Path | Description |
 |--------|------|-------------|

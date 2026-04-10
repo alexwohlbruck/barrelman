@@ -62,15 +62,93 @@ export async function runRebuildTsvectors(): Promise<AdminTaskResult> {
   return { task: 'rebuild-tsvectors', steps: [{ file: 'inline', durationMs, notices: [] }], totalMs: durationMs }
 }
 
-/** Full migration: post-import → resolve parent context → rebuild tsvectors. */
+/** Generate codes from OSM tags (IATA, ICAO, ref, short_name, abbreviation, alt_name). */
+export async function runGenerateCodes(): Promise<AdminTaskResult> {
+  const start = performance.now()
+  await db.execute(sql.raw(`
+    UPDATE geo_places
+    SET codes = sub.codes
+    FROM (
+      SELECT id,
+        array_agg(DISTINCT lower(trim(code))) FILTER (WHERE trim(code) <> '') AS codes
+      FROM geo_places,
+      LATERAL unnest(
+        string_to_array(coalesce(tags->>'iata', ''), ';') ||
+        string_to_array(coalesce(tags->>'icao', ''), ';') ||
+        string_to_array(coalesce(tags->>'ref', ''), ';') ||
+        string_to_array(coalesce(tags->>'short_name', ''), ';') ||
+        string_to_array(coalesce(tags->>'abbreviation', ''), ';') ||
+        string_to_array(coalesce(tags->>'alt_name', ''), ';')
+      ) AS code
+      WHERE tags IS NOT NULL
+        AND (
+          tags->>'iata' IS NOT NULL OR
+          tags->>'icao' IS NOT NULL OR
+          tags->>'ref' IS NOT NULL OR
+          tags->>'short_name' IS NOT NULL OR
+          tags->>'abbreviation' IS NOT NULL OR
+          tags->>'alt_name' IS NOT NULL
+        )
+      GROUP BY id
+    ) sub
+    WHERE geo_places.id = sub.id
+      AND (geo_places.codes IS NULL OR geo_places.codes <> sub.codes);
+  `))
+  const durationMs = Math.round(performance.now() - start)
+  return { task: 'generate-codes', steps: [{ file: 'inline', durationMs, notices: [] }], totalMs: durationMs }
+}
+
+/** Generate abbreviations for multi-word Latin-script names. */
+export async function runGenerateAbbreviations(): Promise<AdminTaskResult> {
+  const start = performance.now()
+  await db.execute(sql.raw(`
+    UPDATE geo_places
+    SET name_abbrev = sub.abbrev
+    FROM (
+      SELECT id,
+        lower(string_agg(left(word, 1), '' ORDER BY ord)) AS abbrev
+      FROM (
+        SELECT id, word, ord
+        FROM geo_places,
+        LATERAL unnest(regexp_split_to_array(name, '\\s+')) WITH ORDINALITY AS t(word, ord)
+        WHERE name IS NOT NULL
+          AND name_abbrev IS NULL
+          AND name ~ '^[\\w\\s\\d\\-''\\.\&]+$'
+      ) words
+      WHERE lower(word) NOT IN (
+        'of','the','and','at','in','for','a','an',
+        'de','la','le','les','du','des','et','au',
+        'der','die','das','von','und','im','am',
+        'del','los','las','el','dos','e',
+        'di','della','dei','degli'
+      )
+      AND length(word) > 0
+      GROUP BY id
+      HAVING count(*) >= 2
+    ) sub
+    WHERE geo_places.id = sub.id;
+  `))
+  const durationMs = Math.round(performance.now() - start)
+  return { task: 'generate-abbreviations', steps: [{ file: 'inline', durationMs, notices: [] }], totalMs: durationMs }
+}
+
+/** Full migration: post-import → codes → abbreviations → parent context → tsvectors. */
 export async function runFullMigration(): Promise<AdminTaskResult> {
   const start = performance.now()
   const steps = []
 
   steps.push(await runSqlFile('post-import.sql'))
+
+  // Generate codes and abbreviations before tsvectors (tsvectors include abbreviations)
+  const codesResult = await runGenerateCodes()
+  steps.push(codesResult.steps[0])
+
+  const abbrevResult = await runGenerateAbbreviations()
+  steps.push(abbrevResult.steps[0])
+
   steps.push(await runSqlFile('resolve-parent-context.sql'))
 
-  // Rebuild tsvectors (now that parent_context is populated)
+  // Rebuild tsvectors (now that codes, abbreviations, and parent_context are populated)
   const tsStart = performance.now()
   await db.execute(sql`
     UPDATE geo_places SET ts = to_tsvector('simple', unaccent(

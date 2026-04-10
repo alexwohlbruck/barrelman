@@ -1,5 +1,9 @@
 # Martin tile server configuration
-# Serves vector tiles from PostGIS geo_places table
+# Serves vector tiles from PMTiles basemap + PostGIS geo_places table
+
+pmtiles:
+  sources:
+    basemap: /data/basemap.pmtiles
 
 postgres:
   connection_string: ${DATABASE_URL}
@@ -80,6 +84,48 @@ postgres:
         id: id
         name: name
         geom_type: geom_type
+      buffer: 64
+      clip_geom: true
+
+    bicycle_ways:
+      schema: public
+      table: bicycle_ways
+      srid: 4326
+      geometry_column: geom
+      geometry_type: LINESTRING
+      id_column: osm_id
+      minzoom: 9
+      maxzoom: 16
+      properties:
+        name: name
+        infra_type: infra_type
+        highway: highway
+        cycleway: cycleway
+        cycleway_left: cycleway_left
+        cycleway_right: cycleway_right
+        bicycle: bicycle
+        surface: surface
+        state: state
+        oneway: oneway
+        bridge: bridge
+        tunnel: tunnel
+      buffer: 64
+      clip_geom: true
+
+    bicycle_routes:
+      schema: public
+      table: bicycle_routes
+      srid: 4326
+      geometry_column: geom
+      geometry_type: MULTILINESTRING
+      id_column: osm_id
+      minzoom: 5
+      maxzoom: 14
+      properties:
+        name: name
+        ref: ref
+        network: network
+        route_type: route_type
       buffer: 64
       clip_geom: true
 

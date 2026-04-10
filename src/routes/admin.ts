@@ -5,6 +5,8 @@ import {
   runResolveParentContext as _runResolveParentContext,
   runResolveParentContextIncremental as _runResolveParentContextIncremental,
   runRebuildTsvectors as _runRebuildTsvectors,
+  runGenerateCodes as _runGenerateCodes,
+  runGenerateAbbreviations as _runGenerateAbbreviations,
   runFullMigration as _runFullMigration,
   getMigrationStatus as _getMigrationStatus,
 } from '../services/admin.service'
@@ -14,6 +16,8 @@ export function createAdminRoutes(deps = {
   runResolveParentContext: _runResolveParentContext,
   runResolveParentContextIncremental: _runResolveParentContextIncremental,
   runRebuildTsvectors: _runRebuildTsvectors,
+  runGenerateCodes: _runGenerateCodes,
+  runGenerateAbbreviations: _runGenerateAbbreviations,
   runFullMigration: _runFullMigration,
   getMigrationStatus: _getMigrationStatus,
 }) {
@@ -29,7 +33,7 @@ export function createAdminRoutes(deps = {
     .post('/migration/run', () => deps.runFullMigration(), {
       detail: {
         summary: 'Run full migration',
-        description: 'Run post-import → resolve parent context → rebuild tsvectors. This may take several minutes on large datasets.',
+        description: 'Run post-import → codes → abbreviations → parent context → tsvectors. This may take several minutes on large datasets.',
         tags: ['Admin'],
       },
     })
@@ -37,6 +41,20 @@ export function createAdminRoutes(deps = {
       detail: {
         summary: 'Run post-import SQL',
         description: 'Add columns, extract structured fields, build indexes.',
+        tags: ['Admin'],
+      },
+    })
+    .post('/migration/generate-codes', () => deps.runGenerateCodes(), {
+      detail: {
+        summary: 'Generate codes',
+        description: 'Extract IATA, ICAO, ref, short_name, abbreviation, alt_name codes from OSM tags.',
+        tags: ['Admin'],
+      },
+    })
+    .post('/migration/generate-abbreviations', () => deps.runGenerateAbbreviations(), {
+      detail: {
+        summary: 'Generate abbreviations',
+        description: 'Generate first-letter abbreviations for multi-word Latin-script names.',
         tags: ['Admin'],
       },
     })

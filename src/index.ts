@@ -8,8 +8,13 @@ import { childrenRoutes } from './routes/children'
 import { placeRoutes } from './routes/place'
 import { geocodeRoutes } from './routes/geocode'
 import { adminRoutes } from './routes/admin'
+import { tileRoutes } from './routes/tiles'
+import { ensureSchema } from './db'
 
-const port = Number(process.env.PORT) || 3002
+const port = Number(process.env.PORT) || 5001
+
+// Ensure post-import columns exist before accepting requests
+await ensureSchema()
 
 const app = new Elysia()
   .use(cors())
@@ -31,6 +36,7 @@ const app = new Elysia()
   .use(placeRoutes)
   .use(geocodeRoutes)
   .use(adminRoutes)
+  .use(tileRoutes)
   .listen(port)
 
 console.log(`Barrelman running at http://localhost:${port}`)

@@ -1,7 +1,7 @@
 volumes:
   barrelman-data:
   barrelman-osm-data:
-  graphhopper-data:
+  valhalla-data:
 
 services:
   barrelman-db:
@@ -23,27 +23,30 @@ services:
     container_name: barrelman-martin
     image: ghcr.io/maplibre/martin
     restart: unless-stopped
+    command: --config /config/martin-config.yaml --webui enable-for-all
     environment:
       DATABASE_URL: postgresql://barrelman:${BARRELMAN_DB_PASSWORD:-barrelman}@barrelman-db:5432/barrelman
+    volumes:
+      - barrelman-osm-data:/data
+      - ./martin-config.yaml:/config/martin-config.yaml:ro
     ports:
-      - "3002:3000"
+      - "5002:3000"
     depends_on:
       - barrelman-db
 
-  graphhopper:
-    container_name: barrelman-graphhopper
-    image: israelhikingmap/graphhopper:latest
+  valhalla:
+    container_name: barrelman-valhalla
+    image: ghcr.io/gis-ops/docker-valhalla/valhalla:latest
     restart: unless-stopped
-    # graphhopper.sh defaults GRAPH=/data/default-gh and only sets datareader.file
-    # when -i is passed, so we explicitly pass both to match our volume mounts.
-    command: ["-i", "/data/region.osm.pbf", "-o", "/graphhopper/graph-cache"]
     environment:
-      JAVA_OPTS: "-Xmx2g -Xms512m"
+      use_tiles_ignore_pbf: "True"
+      tileset_name: valhalla_tiles
+      server_threads: 2
     volumes:
-      - barrelman-osm-data:/data
-      - graphhopper-data:/graphhopper/graph-cache
+      - barrelman-osm-data:/data/osm
+      - valhalla-data:/custom_files
     ports:
-      - "8990:8989"
+      - "8990:8002"
 
   barrelman:
     container_name: barrelman
@@ -52,10 +55,12 @@ services:
     environment:
       DATABASE_URL: postgresql://barrelman:${BARRELMAN_DB_PASSWORD:-barrelman}@barrelman-db:5432/barrelman
       OLLAMA_HOST: ${OLLAMA_HOST:-http://ollama:11434}
-      PORT: 3001
+      PORT: 5001
       BARRELMAN_API_KEY: ${BARRELMAN_API_KEY:-brm_dev_changeme}
+      # BARRELMAN_TILE_KEY: Set in .env for production. When unset, tile access is open (dev mode).
+      BARRELMAN_TILE_KEY: ${BARRELMAN_TILE_KEY:-}
     ports:
-      - "3001:3001"
+      - "5001:5001"
     volumes:
       - barrelman-osm-data:/data
     depends_on:

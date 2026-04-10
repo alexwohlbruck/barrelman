@@ -74,8 +74,8 @@ $COMPOSE_CMD up $BUILD_FLAG -d
 
 echo ""
 echo "Barrelman started successfully!"
-echo "API: http://localhost:3001"
-echo "Martin tiles: http://localhost:3002"
-echo "GraphHopper: http://localhost:8990"
+echo "API: http://localhost:5001"
+echo "Martin tiles: internal only (proxied via API)"
+echo "Valhalla: http://localhost:8990"
 echo ""
 echo "To stop: $0 $MODE --down"

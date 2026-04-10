@@ -12,6 +12,11 @@ services:
       context: .
       dockerfile: Dockerfile.db
 
+  martin:
+    volumes:
+      - ./data:/data
+      - ./martin-config.yaml:/config/martin-config.yaml:ro
+
   barrelman:
     build:
       context: .
