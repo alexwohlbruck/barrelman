@@ -1,31 +1,62 @@
-# GraphHopper routing engine configuration
+# GraphHopper routing engine configuration for Barrelman
 graphhopper:
   datareader.file: /data/region.osm.pbf
+  graph.location: /data/graph-cache
 
-  graph.location: /graphhopper/graph-cache
-
+  # ── Profiles ──────────────────────────────────────────────────────
+  # LM (Landmark) preprocessing instead of CH (Contraction Hierarchies)
+  # so query-time custom_model works for wheelchair routing, etc.
   profiles:
-    - name: car
-      weighting: fastest
     - name: bike
-      weighting: fastest
+      custom_model_files: [bike.json]
+    - name: car
+      custom_model_files: [car.json]
+      turn_costs:
+        vehicle_types: [motorcar]
     - name: foot
-      weighting: shortest
-    - name: hike
-      weighting: shortest
+      custom_model_files: [foot.json]
 
-  profiles_ch:
-    - profile: car
+  profiles_ch: []
+  profiles_lm:
     - profile: bike
+    - profile: car
     - profile: foot
 
-  graph.elevation.provider: srtm
-  graph.elevation.cache_dir: /graphhopper/elevation-cache
+  # ── Encoded values ────────────────────────────────────────────────
+  # Profile values (bike_*, car_*, foot_*) must be listed explicitly
+  # when graph.encoded_values is set. The rest are extras for
+  # query-time custom_model rules and path detail responses.
+  graph.encoded_values: >
+    bike_access, bike_average_speed, bike_priority, bike_road_access,
+    car_access, car_average_speed,
+    foot_access, foot_average_speed, foot_priority, foot_road_access,
+    road_class, road_environment, road_access,
+    surface, smoothness, track_type,
+    bike_network, get_off_bike,
+    roundabout, country,
+    average_slope, max_slope,
+    hike_rating, mtb_rating,
+    toll, max_speed
 
-  server:
-    application_connectors:
-      - type: http
-        port: 8989
-        bind_host: 0.0.0.0
-    request_log:
-      appenders: []
+  # Required by this GH version. Empty = import all highway types
+  # (needed since we route bike + foot + car).
+  import.osm.ignored_highways: ""
+
+  # ── Elevation ─────────────────────────────────────────────────────
+  graph.elevation.provider: srtm
+  graph.elevation.cache_dir: /data/elevation-cache
+
+  # Allow long-distance routes (default is too restrictive)
+  routing.non_ch.max_waypoint_distance: 1000000
+
+server:
+  application_connectors:
+    - type: http
+      port: 8989
+      bind_host: 0.0.0.0
+  admin_connectors:
+    - type: http
+      port: 8990
+      bind_host: 0.0.0.0
+  request_log:
+    appenders: []

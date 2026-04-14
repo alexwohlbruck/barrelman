@@ -9,6 +9,8 @@ import { placeRoutes } from './routes/place'
 import { geocodeRoutes } from './routes/geocode'
 import { adminRoutes } from './routes/admin'
 import { tileRoutes } from './routes/tiles'
+import { graphhopperRoutes } from './routes/graphhopper'
+import { routeRoutes } from './routes/route'
 import { ensureSchema } from './db'
 
 const port = Number(process.env.PORT) || 5001
@@ -37,6 +39,8 @@ const app = new Elysia()
   .use(geocodeRoutes)
   .use(adminRoutes)
   .use(tileRoutes)
+  .use(graphhopperRoutes)
+  .use(routeRoutes)
   .listen(port)
 
 console.log(`Barrelman running at http://localhost:${port}`)
