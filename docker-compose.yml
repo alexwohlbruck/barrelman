@@ -45,6 +45,7 @@ services:
     volumes:
       - barrelman-osm-data:/data
       - ./graphhopper-config.yml:/graphhopper/config-example.yml:ro
+      - ./custom_models:/graphhopper/custom_models:ro
     ports:
       - "8989:8989"
     depends_on:

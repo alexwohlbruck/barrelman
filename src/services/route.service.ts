@@ -24,7 +24,8 @@ export interface RouteEdgeSegment {
   trackType?: string
   averageSlope?: number
   maxSlope?: number
-  averageSpeed?: number
+  averageSpeed?: number   // km/h — actual routing speed (from maxspeed tag or class default)
+  speedLimit?: number     // km/h — OSM max_speed tag (often undefined on US urban roads)
 }
 
 export interface ElevationStats {
@@ -183,6 +184,11 @@ function buildEdgeSegments(
             case 'average_slope': seg.averageSlope = value; break
             case 'max_slope': seg.maxSlope = value; break
             case 'average_speed': seg.averageSpeed = value; break
+            // max_speed can be null when OSM has no maxspeed tag — skip so
+            // downstream consumers see `speedLimit: undefined` rather than null.
+            case 'max_speed':
+              if (typeof value === 'number') seg.speedLimit = value
+              break
           }
           break
         }
@@ -204,6 +210,7 @@ function buildEdgeSegments(
         prev.smoothness === seg.smoothness &&
         prev.averageSlope === seg.averageSlope &&
         prev.averageSpeed === seg.averageSpeed &&
+        prev.speedLimit === seg.speedLimit &&
         prev.getOffBike === seg.getOffBike) {
       prev.endDistance = seg.endDistance
     } else {
@@ -233,6 +240,7 @@ const DETAIL_KEYS = [
   'average_slope',
   'max_slope',
   'average_speed',
+  'max_speed',
 ]
 
 export async function getEnrichedRoute(

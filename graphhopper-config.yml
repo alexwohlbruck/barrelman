@@ -6,15 +6,22 @@ graphhopper:
   # ── Profiles ──────────────────────────────────────────────────────
   # LM (Landmark) preprocessing instead of CH (Contraction Hierarchies)
   # so query-time custom_model works for wheelchair routing, etc.
+  # Directory for custom_model_files referenced below. Mounted by docker-compose
+  # from ./custom_models in the project root.
+  custom_models.directory: /graphhopper/custom_models
+
+  # custom_model_files must NOT use names that collide with GraphHopper's
+  # built-in profile resources (car.json, bike.json, foot.json), so we prefix
+  # ours with "barrelman_".
   profiles:
     - name: bike
-      custom_model_files: [bike.json]
+      custom_model_files: [barrelman_bike.json]
     - name: car
-      custom_model_files: [car.json]
+      custom_model_files: [barrelman_car.json]
       turn_costs:
         vehicle_types: [motorcar]
     - name: foot
-      custom_model_files: [foot.json]
+      custom_model_files: [barrelman_foot.json]
 
   profiles_ch: []
   profiles_lm:
@@ -41,6 +48,7 @@ graphhopper:
   # Required by this GH version. Empty = import all highway types
   # (needed since we route bike + foot + car).
   import.osm.ignored_highways: ""
+
 
   # ── Elevation ─────────────────────────────────────────────────────
   graph.elevation.provider: srtm
