@@ -26,6 +26,8 @@ export interface RouteEdgeSegment {
   maxSlope?: number
   averageSpeed?: number   // km/h — actual routing speed (from maxspeed tag or class default)
   speedLimit?: number     // km/h — OSM max_speed tag (often undefined on US urban roads)
+  bikePriority?: number   // 0–1 — GraphHopper's bike_priority encoded value (higher = friendlier for cycling)
+  crossing?: string       // GH Crossing EV: MISSING | TRAFFIC_SIGNALS | MARKED | UNMARKED | UNCONTROLLED | RAILWAY | RAILWAY_BARRIER
 }
 
 export interface ElevationStats {
@@ -189,6 +191,12 @@ function buildEdgeSegments(
             case 'max_speed':
               if (typeof value === 'number') seg.speedLimit = value
               break
+            case 'bike_priority':
+              if (typeof value === 'number') seg.bikePriority = value
+              break
+            case 'crossing':
+              if (typeof value === 'string') seg.crossing = value
+              break
           }
           break
         }
@@ -211,6 +219,8 @@ function buildEdgeSegments(
         prev.averageSlope === seg.averageSlope &&
         prev.averageSpeed === seg.averageSpeed &&
         prev.speedLimit === seg.speedLimit &&
+        prev.bikePriority === seg.bikePriority &&
+        prev.crossing === seg.crossing &&
         prev.getOffBike === seg.getOffBike) {
       prev.endDistance = seg.endDistance
     } else {
@@ -241,6 +251,8 @@ const DETAIL_KEYS = [
   'max_slope',
   'average_speed',
   'max_speed',
+  'bike_priority',
+  'crossing',
 ]
 
 export async function getEnrichedRoute(

@@ -43,7 +43,8 @@ graphhopper:
     roundabout, country,
     average_slope, max_slope,
     hike_rating, mtb_rating,
-    toll, max_speed
+    toll, max_speed,
+    crossing
 
   # Required by this GH version. Empty = import all highway types
   # (needed since we route bike + foot + car).
