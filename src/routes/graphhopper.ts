@@ -57,6 +57,7 @@ export function createGraphHopperRoutes(deps: { fetchGraphHopper?: GraphHopperFe
       const respCt = response.headers.get('content-type')
       if (respCt) set.headers['content-type'] = respCt
       set.headers['cache-control'] = 'no-store'
+      set.headers['access-control-allow-origin'] = '*'
       return response.body
     }, {
       detail: {
