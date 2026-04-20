@@ -57,6 +57,9 @@ if [ "$UPDATE_MODE" = "full" ]; then
     -e DATABASE_URL="$DB_URL" \
     barrelman-db bash /app/scripts/import-osm.sh
 
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] Triggering GraphHopper graph rebuild..."
+  "$SCRIPT_DIR/rebuild-graphhopper.sh"
+
   # Full import runs the complete pipeline — we're done
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] Full re-import complete."
   exit 0
@@ -171,5 +174,8 @@ WHERE name IS NOT NULL;
 # ── Step 7: ANALYZE ──────────────────────────────────────────────────────────
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] [7/7] Running ANALYZE..."
 docker exec barrelman-db psql "$DB_URL" -c "ANALYZE geo_places; ANALYZE bicycle_ways; ANALYZE bicycle_routes;"
+
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Triggering Valhalla tile rebuild..."
+"$SCRIPT_DIR/rebuild-graphhopper.sh"
 
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] OSM update complete."

@@ -1,0 +1,46 @@
+// Barrelman custom car model.
+//
+// Differs from the stock GraphHopper car.json in two ways:
+//
+//   1. distance_influence: 15 (vs. 90 upstream).
+//      The upstream value heavily penalizes longer routes, which causes the
+//      router to prefer a shorter slow surface-street route over a slightly
+//      longer highway route even when the highway is faster in time. 15 is
+//      close to a true "fastest" weighting and matches the behavior of the
+//      official GraphHopper demo.
+//
+//   2. road_class speed multipliers.
+//      Stock GraphHopper uses road-class defaults (primary=65 km/h,
+//      secondary=60 km/h, tertiary=50 km/h) when no OSM maxspeed tag is
+//      present. In US urban areas, primary/secondary arterials often have
+//      25-35 mph (40-55 km/h) posted limits despite their high
+//      classification (downtown Charlotte's Tryon St is primary but
+//      25 mph). We scale those classes down to approximate real-world
+//      urban speed limits. Motorways and trunks are never penalized.
+//
+//      (An urban_density-aware version of these rules would be more
+//      surgical, but enabling urban_density fails to import on our
+//      GraphHopper container; a flat road_class multiplier is the
+//      pragmatic fallback.)
+//
+// Note on statement order: the first statement in each block must be
+// unconditional (matches all edges). `limit_to: car_average_speed` applies
+// the road's encoded speed; subsequent conditional `multiply_by` rules
+// scale it down.
+//
+// NOTE: Changes here require a graph-cache rebuild to take effect, since
+// distance_influence is baked into the LM preprocessing.
+
+{
+  "distance_influence": 15,
+  "priority": [
+    { "if": "!car_access", "multiply_by": "0" }
+  ],
+  "speed": [
+    { "if": "true", "limit_to": "car_average_speed" },
+    { "if": "road_class == PRIMARY", "multiply_by": "0.75" },
+    { "if": "road_class == SECONDARY", "multiply_by": "0.7" },
+    { "if": "road_class == TERTIARY", "multiply_by": "0.7" },
+    { "if": "road_class == RESIDENTIAL || road_class == LIVING_STREET", "multiply_by": "0.8" }
+  ]
+}

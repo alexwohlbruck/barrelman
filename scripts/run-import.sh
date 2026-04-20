@@ -38,4 +38,8 @@ docker exec \
   barrelman-db bash /app/scripts/import-osm.sh
 
 echo ""
+echo "Triggering GraphHopper graph rebuild..."
+"$SCRIPT_DIR/rebuild-graphhopper.sh"
+
+echo ""
 echo "Full import pipeline complete!"

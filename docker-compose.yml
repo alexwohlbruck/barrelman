@@ -1,7 +1,6 @@
 volumes:
   barrelman-data:
   barrelman-osm-data:
-  valhalla-data:
 
 services:
   barrelman-db:
@@ -34,19 +33,23 @@ services:
     depends_on:
       - barrelman-db
 
-  valhalla:
-    container_name: barrelman-valhalla
-    image: ghcr.io/gis-ops/docker-valhalla/valhalla:latest
+  graphhopper:
+    container_name: barrelman-graphhopper
+    image: israelhikingmap/graphhopper:latest
     restart: unless-stopped
+    # -i and -o must be passed explicitly; the entrypoint script defaults
+    # graph.location to /data/default-gh otherwise, ignoring our config value.
+    command: ["-i", "/data/region.osm.pbf", "-o", "/data/graph-cache"]
     environment:
-      use_tiles_ignore_pbf: "True"
-      tileset_name: valhalla_tiles
-      server_threads: 2
+      JAVA_OPTS: "${GRAPHHOPPER_JAVA_OPTS:--Xmx4g -Xms2g}"
     volumes:
-      - barrelman-osm-data:/data/osm
-      - valhalla-data:/custom_files
+      - barrelman-osm-data:/data
+      - ./graphhopper-config.yml:/graphhopper/config-example.yml:ro
+      - ./custom_models:/graphhopper/custom_models:ro
     ports:
-      - "8990:8002"
+      - "8989:8989"
+    depends_on:
+      - barrelman-db
 
   barrelman:
     container_name: barrelman
@@ -59,6 +62,7 @@ services:
       BARRELMAN_API_KEY: ${BARRELMAN_API_KEY:-brm_dev_changeme}
       # BARRELMAN_TILE_KEY: Set in .env for production. When unset, tile access is open (dev mode).
       BARRELMAN_TILE_KEY: ${BARRELMAN_TILE_KEY:-}
+      GRAPHHOPPER_URL: http://barrelman-graphhopper:8989
     ports:
       - "5001:5001"
     volumes:
