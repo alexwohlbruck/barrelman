@@ -48,11 +48,11 @@ echo "[$(date '+%Y-%m-%d %H:%M:%S')] Starting OSM update (mode: $UPDATE_MODE)"
 # ── Step 1: Apply OSM changes ────────────────────────────────────────────────
 
 if [ "$UPDATE_MODE" = "full" ]; then
-  echo "[$(date '+%Y-%m-%d %H:%M:%S')] [1/7] Downloading latest extract..."
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] [1/8] Downloading latest extract..."
   docker exec barrelman-db \
     wget -q --show-progress -O /data/region.osm.pbf "$GEOFABRIK_URL"
 
-  echo "[$(date '+%Y-%m-%d %H:%M:%S')] [1/7] Running full re-import..."
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] [1/8] Running full re-import..."
   docker exec \
     -e DATABASE_URL="$DB_URL" \
     barrelman-db bash /app/scripts/import-osm.sh
@@ -80,7 +80,7 @@ if [ "$INIT_CHECK" = "0" ]; then
       --server "$GEOFABRIK_REPLICATION_URL"
 fi
 
-echo "[$(date '+%Y-%m-%d %H:%M:%S')] [1/7] Applying OSM diffs..."
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] [1/8] Applying OSM diffs..."
 docker exec barrelman-db \
   osm2pgsql-replication update \
     -d "$DB_URL" \
@@ -89,11 +89,11 @@ docker exec barrelman-db \
     --slim
 
 # ── Step 2: Post-import SQL (idempotent — ensures columns + extracts new data)
-echo "[$(date '+%Y-%m-%d %H:%M:%S')] [2/7] Running post-import SQL..."
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] [2/8] Running post-import SQL..."
 docker exec barrelman-db psql "$DB_URL" -f /app/import/post-import.sql
 
 # ── Step 3: Generate codes (incremental — only new/changed rows) ─────────────
-echo "[$(date '+%Y-%m-%d %H:%M:%S')] [3/7] Extracting codes..."
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] [3/8] Extracting codes..."
 docker exec barrelman-db psql "$DB_URL" -c "
 UPDATE geo_places
 SET codes = sub.codes
@@ -125,7 +125,7 @@ WHERE geo_places.id = sub.id
 "
 
 # ── Step 4: Generate abbreviations (incremental — only missing rows) ─────────
-echo "[$(date '+%Y-%m-%d %H:%M:%S')] [4/7] Generating abbreviations..."
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] [4/8] Generating abbreviations..."
 docker exec barrelman-db psql "$DB_URL" -c "
 UPDATE geo_places
 SET name_abbrev = sub.abbrev
@@ -154,15 +154,31 @@ FROM (
 WHERE geo_places.id = sub.id;
 "
 
-# ── Step 5: Resolve parent context (incremental — only NULL rows + cascade) ──
-echo "[$(date '+%Y-%m-%d %H:%M:%S')] [5/7] Resolving parent context (incremental)..."
+# ── Step 5: Generate road intersections ──────────────────────────────────────
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] [5/8] Generating road intersections..."
+docker exec barrelman-db psql "$DB_URL" -f /app/import/generate-intersections.sql
+
+# ── Step 6: Resolve parent context (incremental — only NULL rows + cascade) ──
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] [6/8] Resolving parent context (incremental)..."
 docker exec barrelman-db psql "$DB_URL" -f /app/import/resolve-parent-context-incremental.sql
 
-# ── Step 6: Rebuild tsvectors ────────────────────────────────────────────────
-echo "[$(date '+%Y-%m-%d %H:%M:%S')] [6/7] Rebuilding full-text search index..."
+# ── Step 7: Rebuild tsvectors ────────────────────────────────────────────────
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] [7/8] Rebuilding full-text search index..."
 docker exec barrelman-db psql "$DB_URL" -c "
 UPDATE geo_places SET ts = to_tsvector('simple', unaccent(
-    coalesce(name, '') || ' ' || coalesce(name_abbrev, '') || ' ' ||
+    CASE WHEN osm_type = 'X'
+        THEN replace(replace(replace(replace(replace(replace(replace(
+             replace(replace(replace(replace(replace(replace(
+               coalesce(name, ''), ' & ', ' and et und y e ')
+             , 'Street', 'Street St'), 'Avenue', 'Avenue Ave')
+             , 'Boulevard', 'Boulevard Blvd'), 'Drive', 'Drive Dr')
+             , 'Lane', 'Lane Ln'), 'Road', 'Road Rd')
+             , 'Court', 'Court Ct'), 'Place', 'Place Pl')
+             , 'Circle', 'Circle Cir'), 'Parkway', 'Parkway Pkwy')
+             , 'Highway', 'Highway Hwy'), 'Trail', 'Trail Trl')
+             || ' ' || coalesce(array_to_string(names, ' '), '')
+        ELSE coalesce(name, '')
+    END || ' ' || coalesce(name_abbrev, '') || ' ' ||
     coalesce(array_to_string(
         ARRAY(SELECT replace(replace(unnest(categories), '/', ' '), '_', ' ')),
     ' '), '') || ' ' ||
@@ -171,8 +187,8 @@ UPDATE geo_places SET ts = to_tsvector('simple', unaccent(
 WHERE name IS NOT NULL;
 "
 
-# ── Step 7: ANALYZE ──────────────────────────────────────────────────────────
-echo "[$(date '+%Y-%m-%d %H:%M:%S')] [7/7] Running ANALYZE..."
+# ── Step 8: ANALYZE ──────────────────────────────────────────────────────────
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] [8/8] Running ANALYZE..."
 docker exec barrelman-db psql "$DB_URL" -c "ANALYZE geo_places; ANALYZE bicycle_ways; ANALYZE bicycle_routes;"
 
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] Triggering Valhalla tile rebuild..."

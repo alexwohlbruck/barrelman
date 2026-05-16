@@ -33,15 +33,15 @@ mkdir -p "$DATA_DIR"
 
 # ── Step 1: Download PBF ─────────────────────────────────────────────────────
 if [ ! -f "$PBF_FILE" ]; then
-    echo "[$(date '+%H:%M:%S')] [1/7] Downloading PBF from $GEOFABRIK_URL..."
+    echo "[$(date '+%H:%M:%S')] [1/8] Downloading PBF from $GEOFABRIK_URL..."
     wget -q --show-progress -O "$PBF_FILE" "$GEOFABRIK_URL"
     echo "  Downloaded: $(du -h "$PBF_FILE" | cut -f1)"
 else
-    echo "[$(date '+%H:%M:%S')] [1/7] Using existing PBF: $PBF_FILE ($(du -h "$PBF_FILE" | cut -f1))"
+    echo "[$(date '+%H:%M:%S')] [1/8] Using existing PBF: $PBF_FILE ($(du -h "$PBF_FILE" | cut -f1))"
 fi
 
 # ── Step 2: osm2pgsql import ─────────────────────────────────────────────────
-echo "[$(date '+%H:%M:%S')] [2/7] Running osm2pgsql import..."
+echo "[$(date '+%H:%M:%S')] [2/8] Running osm2pgsql import..."
 osm2pgsql \
     --create \
     --slim \
@@ -52,11 +52,11 @@ osm2pgsql \
 echo "  osm2pgsql complete."
 
 # ── Step 3: Post-import SQL (columns, structured fields, indexes) ────────────
-echo "[$(date '+%H:%M:%S')] [3/7] Running post-import SQL..."
+echo "[$(date '+%H:%M:%S')] [3/8] Running post-import SQL..."
 psql "$DATABASE_URL" -f "$PROJECT_DIR/import/post-import.sql"
 
 # ── Step 4: Generate codes from OSM tags ─────────────────────────────────────
-echo "[$(date '+%H:%M:%S')] [4/7] Extracting codes (IATA, ICAO, ref, short_name, alt_name)..."
+echo "[$(date '+%H:%M:%S')] [4/8] Extracting codes (IATA, ICAO, ref, short_name, alt_name)..."
 psql "$DATABASE_URL" -c "
 UPDATE geo_places
 SET codes = sub.codes
@@ -88,7 +88,7 @@ WHERE geo_places.id = sub.id
 "
 
 # ── Step 5: Generate abbreviations ───────────────────────────────────────────
-echo "[$(date '+%H:%M:%S')] [5/7] Generating abbreviations for multi-word names..."
+echo "[$(date '+%H:%M:%S')] [5/8] Generating abbreviations for multi-word names..."
 psql "$DATABASE_URL" -c "
 UPDATE geo_places
 SET name_abbrev = sub.abbrev
@@ -116,15 +116,31 @@ FROM (
 WHERE geo_places.id = sub.id;
 "
 
-# ── Step 6: Resolve parent context (spatial join) ────────────────────────────
-echo "[$(date '+%H:%M:%S')] [6/7] Resolving parent boundary context (spatial join)..."
+# ── Step 6: Generate road intersections ──────────────────────────────────────
+echo "[$(date '+%H:%M:%S')] [6/8] Generating road intersections..."
+psql "$DATABASE_URL" -f "$PROJECT_DIR/import/generate-intersections.sql"
+
+# ── Step 7: Resolve parent context (spatial join) ────────────────────────────
+echo "[$(date '+%H:%M:%S')] [7/8] Resolving parent boundary context (spatial join)..."
 psql "$DATABASE_URL" -f "$PROJECT_DIR/import/resolve-parent-context.sql"
 
-# ── Step 7: Rebuild tsvectors (final, with all enriched data) ────────────────
-echo "[$(date '+%H:%M:%S')] [7/7] Building full-text search index..."
+# ── Step 8: Rebuild tsvectors (final, with all enriched data) ────────────────
+echo "[$(date '+%H:%M:%S')] [8/8] Building full-text search index..."
 psql "$DATABASE_URL" -c "
 UPDATE geo_places SET ts = to_tsvector('simple', unaccent(
-    coalesce(name, '') || ' ' || coalesce(name_abbrev, '') || ' ' ||
+    CASE WHEN osm_type = 'X'
+        THEN replace(replace(replace(replace(replace(replace(replace(
+             replace(replace(replace(replace(replace(replace(
+               coalesce(name, ''), ' & ', ' and et und y e ')
+             , 'Street', 'Street St'), 'Avenue', 'Avenue Ave')
+             , 'Boulevard', 'Boulevard Blvd'), 'Drive', 'Drive Dr')
+             , 'Lane', 'Lane Ln'), 'Road', 'Road Rd')
+             , 'Court', 'Court Ct'), 'Place', 'Place Pl')
+             , 'Circle', 'Circle Cir'), 'Parkway', 'Parkway Pkwy')
+             , 'Highway', 'Highway Hwy'), 'Trail', 'Trail Trl')
+             || ' ' || coalesce(array_to_string(names, ' '), '')
+        ELSE coalesce(name, '')
+    END || ' ' || coalesce(name_abbrev, '') || ' ' ||
     coalesce(array_to_string(
         ARRAY(SELECT replace(replace(unnest(categories), '/', ' '), '_', ' ')),
     ' '), '') || ' ' ||
