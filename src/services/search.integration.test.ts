@@ -275,11 +275,61 @@ if (!canRun) {
     })
   })
 
+  // ── Intersection search ──────────────────────────────────────────────────
+
+  describe('intersection search', () => {
+    test('"trade and tryon" → finds Trade St & Tryon St intersection', async () => {
+      const results = await search('trade and tryon')
+      const intersection = findResult(results, /trade.*&.*tryon/i)
+      expect(intersection).toBeDefined()
+      expect(intersection.categories).toContain('highway/intersection')
+    })
+
+    test('"trade tryon" → finds intersection without explicit "and"', async () => {
+      const results = await search('trade tryon')
+      const intersection = findResult(results, /trade.*&.*tryon/i)
+      expect(intersection).toBeDefined()
+    })
+
+    test('"hawthorne and 8th" → finds Hawthorne/8th intersection', async () => {
+      const results = await search('hawthorne and 8th')
+      const intersection = findResult(results, /hawthorne.*&.*8th|8th.*&.*hawthorne/i)
+      expect(intersection).toBeDefined()
+    })
+
+    test('"hawthorne ln and 8th st" → abbreviated suffixes match intersection', async () => {
+      const results = await search('hawthorne ln 8th st')
+      const intersection = findResult(results, /hawthorne.*&.*8th|8th.*&.*hawthorne/i)
+      expect(intersection).toBeDefined()
+    }, 15_000)
+
+    test('intersection category demotion ranks below exact POI match', async () => {
+      const results = await search('trade')
+      const firstIntersection = results.findIndex(
+        (r: any) => r.categories?.includes('highway/intersection'),
+      )
+      const firstNonIntersection = results.findIndex(
+        (r: any) => !r.categories?.includes('highway/intersection') && !r.categories?.[0]?.startsWith('highway/'),
+      )
+      if (firstIntersection >= 0 && firstNonIntersection >= 0) {
+        expect(firstNonIntersection).toBeLessThan(firstIntersection)
+      }
+    })
+
+    test('intersection id format is intersection/:number', async () => {
+      const results = await search('trade and tryon')
+      const intersection = findResult(results, /trade.*&.*tryon/i)
+      expect(intersection).toBeDefined()
+      expect(intersection.id).toMatch(/^intersection\/\d+$/)
+      expect(intersection.osm_type).toBe('X')
+    })
+  })
+
   // ── Performance sanity check ─────────────────────────────────────────────
 
   describe('performance', () => {
     test('autocomplete queries complete within 1 second', async () => {
-      const queries = ['restaurant', 'starbucks', 'CLT', 'uncc', 'carowinds']
+      const queries = ['restaurant', 'starbucks', 'CLT', 'uncc', 'carowinds', 'trade and tryon', 'hawthorne and 8th']
       for (const q of queries) {
         const start = performance.now()
         await search(q)

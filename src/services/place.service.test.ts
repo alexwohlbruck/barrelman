@@ -92,4 +92,31 @@ describe('getPlace', () => {
       expect(result.id).toBe(`${osmType}/1`)
     }
   })
+
+  test('returns intersection place (osm_type X) by intersection/:id', async () => {
+    const intersectionPlace = {
+      ...fullPlace,
+      id: 'intersection/42',
+      osm_type: 'X',
+      osm_id: '42',
+      name: 'Trade St & Tryon St',
+      names: ['Trade St', 'Tryon St'],
+      categories: ['highway/intersection'],
+      tags: {},
+      geom_type: 'point',
+    }
+    mockExecute.mockImplementation(async () => [intersectionPlace])
+    const result = await getPlace('intersection', '42')
+    expect(result).not.toBeNull()
+    expect(result.id).toBe('intersection/42')
+    expect(result.name).toBe('Trade St & Tryon St')
+    expect(result.osm_type).toBe('X')
+    expect(result.categories).toContain('highway/intersection')
+  })
+
+  test('returns null for nonexistent intersection', async () => {
+    mockExecute.mockImplementation(async () => [])
+    const result = await getPlace('intersection', '999999999')
+    expect(result).toBeNull()
+  })
 })

@@ -338,6 +338,28 @@ describe('GET /place/:osmType/:osmId', () => {
       expect(res.status).toBe(200)
     }
   })
+
+  test('returns 200 for intersection type place', async () => {
+    const intersectionPlace = {
+      id: 'intersection/42', name: 'Trade St & Tryon St',
+      osm_type: 'X', categories: ['highway/intersection'],
+      geom_type: 'point', full_geometry: null,
+    }
+    mockGetPlace.mockImplementation(async () => intersectionPlace)
+    const app = makeApp()
+    const res = await app.handle(get('/place/intersection/42'))
+    expect(res.status).toBe(200)
+    const body = await json(res)
+    expect(body.id).toBe('intersection/42')
+    expect(body.name).toBe('Trade St & Tryon St')
+  })
+
+  test('returns 404 for nonexistent intersection', async () => {
+    mockGetPlace.mockImplementation(async () => null)
+    const app = makeApp()
+    const res = await app.handle(get('/place/intersection/999999999'))
+    expect(res.status).toBe(404)
+  })
 })
 
 // ── GET /geocode ──────────────────────────────────────────────────────────────

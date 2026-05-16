@@ -261,6 +261,52 @@ describe('searchPlaces — location handling', () => {
   })
 })
 
+// ── Intersection search ──────────────────────────────────────────────────────
+
+describe('searchPlaces — intersections', () => {
+  test('intersection result (osm_type X) is returned alongside regular places', async () => {
+    const intersection = {
+      id: 'intersection/42', osm_type: 'X', name: 'Trade St & Tryon St',
+      categories: ['highway/intersection'], text_rank: 0.7, distance_m: 500,
+    }
+    const poi = {
+      id: 'node/1', osm_type: 'N', name: 'Starbucks',
+      categories: ['amenity/cafe'], text_rank: 0.9, distance_m: 200,
+    }
+    mockExecute
+      .mockImplementationOnce(async () => [poi, intersection]) // FTS
+      .mockImplementationOnce(async () => [])                  // trigram
+      .mockImplementationOnce(async () => [])                  // codes
+      .mockImplementationOnce(async () => [])                  // nameAbbrev
+    const results = await searchPlaces({ query: 'trade and tryon', lat: 35.22, lng: -80.84, autocomplete: true })
+    const ids = results.map((r: any) => r.id)
+    expect(ids).toContain('intersection/42')
+    expect(ids).toContain('node/1')
+  })
+
+  test('query with & is sanitized to spaces without throwing', async () => {
+    await expect(
+      searchPlaces({ query: 'trade & tryon', autocomplete: true }),
+    ).resolves.toBeDefined()
+  })
+
+  test('intersection deduplication works — same intersection from FTS and trigram appears once', async () => {
+    const intersection = {
+      id: 'intersection/42', name: 'Trade St & Tryon St',
+      categories: ['highway/intersection'], text_rank: 0.7, distance_m: 500,
+    }
+    mockExecute
+      .mockImplementationOnce(async () => [intersection])                        // FTS
+      .mockImplementationOnce(async () => [{ ...intersection, text_rank: 0.5 }]) // trigram
+      .mockImplementationOnce(async () => [])                                    // codes
+      .mockImplementationOnce(async () => [])                                    // nameAbbrev
+    const results = await searchPlaces({ query: 'trade tryon', autocomplete: true })
+    const matches = results.filter((r: any) => r.id === 'intersection/42')
+    expect(matches).toHaveLength(1)
+    expect(matches[0].text_rank).toBe(0.7)
+  })
+})
+
 // ── Resilience ────────────────────────────────────────────────────────────────
 
 describe('searchPlaces — resilience', () => {
