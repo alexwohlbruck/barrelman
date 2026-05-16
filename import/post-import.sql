@@ -101,6 +101,10 @@ CREATE INDEX IF NOT EXISTS geo_places_admin_geom_idx ON geo_places USING GIST(ge
 -- Search layer indexes (codes and abbreviation lookups)
 CREATE INDEX IF NOT EXISTS geo_places_codes_idx ON geo_places USING GIN(codes) WHERE codes IS NOT NULL;
 CREATE INDEX IF NOT EXISTS geo_places_name_abbrev_idx ON geo_places(name_abbrev) WHERE name_abbrev IS NOT NULL;
+CREATE INDEX IF NOT EXISTS geo_places_osm_type_idx ON geo_places(osm_type);
+
+-- Semantic search index (HNSW for fast approximate nearest-neighbor)
+CREATE INDEX IF NOT EXISTS geo_places_embedding_hnsw_idx ON geo_places USING hnsw (embedding vector_cosine_ops) WHERE embedding IS NOT NULL;
 
 -- ── Bicycle infrastructure indexes ──────────────────────────
 CREATE INDEX IF NOT EXISTS bicycle_ways_geom_idx ON bicycle_ways USING GIST(geom);

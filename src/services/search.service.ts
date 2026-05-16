@@ -33,7 +33,8 @@ export async function searchPlaces({
   autocomplete = false,
 }: SearchParams): Promise<any[]> {
   const routeGeoJSON = route ? JSON.stringify(route) : ''
-  const cacheKey = `search:${query || ''}:${lat}:${lng}:${radius}:${routeGeoJSON}:${buffer}:${categories?.join(',')}:${JSON.stringify(tags || {})}:${limit}:${offset}:${semantic}:${autocomplete}`
+  const tagsCacheKey = tags ? Object.keys(tags).sort().map(k => `${k}=${tags[k]}`).join('&') : ''
+  const cacheKey = `search:${query || ''}:${lat}:${lng}:${radius}:${routeGeoJSON}:${buffer}:${categories?.join(',')}:${tagsCacheKey}:${limit}:${offset}:${semantic}:${autocomplete}`
   const cached = searchCache.get(cacheKey)
   if (cached) return cached
 
@@ -191,7 +192,7 @@ export async function searchPlaces({
       const perWordSims = queryWords.map((w) => sql`similarity(name, ${w})`)
       const bestSim = sql`GREATEST(${sql.join(perWordSims, sql`, `)})`
       const coverageChecks = queryWords.map((w) =>
-        sql`CASE WHEN similarity(name, ${w}) > 0.3 OR parent_context ILIKE '%' || ${w} || '%' THEN 1 ELSE 0 END`)
+        sql`CASE WHEN similarity(name, ${w}) > 0.3 OR ts @@ plainto_tsquery('simple', ${w}) THEN 1 ELSE 0 END`)
       const coverageSum = sql`(${sql.join(coverageChecks, sql` + `)})`
       const coverageFactor = sql`(0.3 + 0.7 * ${coverageSum}::float / ${queryWords.length}::float)`
       trigramRankExpr = sql`(${bestSim} * ${coverageFactor} * ${categoryDemotion})`
@@ -298,7 +299,7 @@ export async function searchPlaces({
         const remaining = limit - results.length
         const existingIds = results.map((r: any) => r.id)
         const excludeClause = existingIds.length > 0
-          ? sql`AND id NOT IN (${sql.join(existingIds.map((id) => sql`${id}`), sql`, `)})`
+          ? sql`AND id != ALL(ARRAY[${sql.join(existingIds.map((id) => sql`${id}`), sql`, `)}])`
           : sql``
 
         const semanticResults = await db.execute(sql`
