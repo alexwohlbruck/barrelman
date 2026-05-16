@@ -162,30 +162,9 @@ docker exec barrelman-db psql "$DB_URL" -f /app/import/generate-intersections.sq
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] [6/8] Resolving parent context (incremental)..."
 docker exec barrelman-db psql "$DB_URL" -f /app/import/resolve-parent-context-incremental.sql
 
-# ── Step 7: Rebuild tsvectors ────────────────────────────────────────────────
-echo "[$(date '+%Y-%m-%d %H:%M:%S')] [7/8] Rebuilding full-text search index..."
-docker exec barrelman-db psql "$DB_URL" -c "
-UPDATE geo_places SET ts = to_tsvector('simple', unaccent(
-    CASE WHEN osm_type = 'X'
-        THEN replace(replace(replace(replace(replace(replace(replace(
-             replace(replace(replace(replace(replace(replace(
-               coalesce(name, ''), ' & ', ' and et und y e ')
-             , 'Street', 'Street St'), 'Avenue', 'Avenue Ave')
-             , 'Boulevard', 'Boulevard Blvd'), 'Drive', 'Drive Dr')
-             , 'Lane', 'Lane Ln'), 'Road', 'Road Rd')
-             , 'Court', 'Court Ct'), 'Place', 'Place Pl')
-             , 'Circle', 'Circle Cir'), 'Parkway', 'Parkway Pkwy')
-             , 'Highway', 'Highway Hwy'), 'Trail', 'Trail Trl')
-             || ' ' || coalesce(array_to_string(names, ' '), '')
-        ELSE coalesce(name, '')
-    END || ' ' || coalesce(name_abbrev, '') || ' ' ||
-    coalesce(array_to_string(
-        ARRAY(SELECT replace(replace(unnest(categories), '/', ' '), '_', ' ')),
-    ' '), '') || ' ' ||
-    coalesce(parent_context, '')
-))
-WHERE name IS NOT NULL;
-"
+# ── Step 7: Rebuild tsvectors (intersections + new/changed rows only) ────────
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] [7/8] Rebuilding tsvectors (intersections + new rows)..."
+docker exec barrelman-db psql "$DB_URL" -v scope='intersections' -f /app/import/rebuild-tsvectors.sql
 
 # ── Step 8: ANALYZE ──────────────────────────────────────────────────────────
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] [8/8] Running ANALYZE..."

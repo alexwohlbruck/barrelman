@@ -126,28 +126,7 @@ psql "$DATABASE_URL" -f "$PROJECT_DIR/import/resolve-parent-context.sql"
 
 # ── Step 8: Rebuild tsvectors (final, with all enriched data) ────────────────
 echo "[$(date '+%H:%M:%S')] [8/8] Building full-text search index..."
-psql "$DATABASE_URL" -c "
-UPDATE geo_places SET ts = to_tsvector('simple', unaccent(
-    CASE WHEN osm_type = 'X'
-        THEN replace(replace(replace(replace(replace(replace(replace(
-             replace(replace(replace(replace(replace(replace(
-               coalesce(name, ''), ' & ', ' and et und y e ')
-             , 'Street', 'Street St'), 'Avenue', 'Avenue Ave')
-             , 'Boulevard', 'Boulevard Blvd'), 'Drive', 'Drive Dr')
-             , 'Lane', 'Lane Ln'), 'Road', 'Road Rd')
-             , 'Court', 'Court Ct'), 'Place', 'Place Pl')
-             , 'Circle', 'Circle Cir'), 'Parkway', 'Parkway Pkwy')
-             , 'Highway', 'Highway Hwy'), 'Trail', 'Trail Trl')
-             || ' ' || coalesce(array_to_string(names, ' '), '')
-        ELSE coalesce(name, '')
-    END || ' ' || coalesce(name_abbrev, '') || ' ' ||
-    coalesce(array_to_string(
-        ARRAY(SELECT replace(replace(unnest(categories), '/', ' '), '_', ' ')),
-    ' '), '') || ' ' ||
-    coalesce(parent_context, '')
-))
-WHERE name IS NOT NULL;
-"
+psql "$DATABASE_URL" -v scope='all' -f "$PROJECT_DIR/import/rebuild-tsvectors.sql"
 
 # ── Final: ANALYZE ───────────────────────────────────────────────────────────
 echo "[$(date '+%H:%M:%S')] Running ANALYZE..."
