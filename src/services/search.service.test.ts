@@ -89,10 +89,15 @@ describe('searchPlaces — basic', () => {
 // ── Layer execution ───────────────────────────────────────────────────────────
 
 describe('searchPlaces — layer execution', () => {
-  test('runs 4 parallel layers (FTS + trigram + codes + nameAbbrev) for short queries', async () => {
+  test('runs 4 parallel layers (FTS + trigram + codes + nameAbbrev) for 5+ char queries', async () => {
     // autocomplete=true suppresses semantic so count is predictable
-    await searchPlaces({ query: 'cafe', autocomplete: true })
+    await searchPlaces({ query: 'coffee', autocomplete: true })
     expect(mockExecute).toHaveBeenCalledTimes(4)
+  })
+
+  test('skips trigram for short queries (≤4 chars) — 3 layers only', async () => {
+    await searchPlaces({ query: 'cafe', autocomplete: true })
+    expect(mockExecute).toHaveBeenCalledTimes(3)
   })
 
   test('runs only 2 layers (FTS + trigram) for queries longer than 20 chars', async () => {
@@ -161,7 +166,7 @@ describe('searchPlaces — caching', () => {
   })
 
   test('different query strings produce separate cache entries', async () => {
-    await searchPlaces({ query: 'cafe', autocomplete: true })
+    await searchPlaces({ query: 'coffee', autocomplete: true })
     await searchPlaces({ query: 'library', autocomplete: true })
     // 4 layers per unique query = 8 total
     expect(mockExecute.mock.calls.length).toBe(8)
@@ -232,7 +237,7 @@ describe('searchPlaces — location handling', () => {
   test('REGRESSION: lat=0 must not be treated as falsy — hasLocation should use != null', async () => {
     // Bug: `lat && lng` evaluates to false when lat=0, skipping proximity entirely.
     // Fix: `lat != null && lng != null` correctly handles lat=0 (Gulf of Guinea).
-    await expect(searchPlaces({ query: 'cafe', lat: 0, lng: 0, autocomplete: true })).resolves.toBeDefined()
+    await expect(searchPlaces({ query: 'coffee', lat: 0, lng: 0, autocomplete: true })).resolves.toBeDefined()
     // With the fix, the location point is built and radius filter is applied
     expect(mockExecute).toHaveBeenCalledTimes(4)
   })
@@ -258,6 +263,52 @@ describe('searchPlaces — location handling', () => {
     const results = await searchPlaces({ query: 'result', autocomplete: true })
     expect(results[0].id).toBe('node/1')
     expect(results[1].id).toBe('node/2')
+  })
+})
+
+// ── Intersection search ──────────────────────────────────────────────────────
+
+describe('searchPlaces — intersections', () => {
+  test('intersection result (osm_type X) is returned alongside regular places', async () => {
+    const intersection = {
+      id: 'intersection/42', osm_type: 'X', name: 'Trade St & Tryon St',
+      categories: ['highway/intersection'], text_rank: 0.7, distance_m: 500,
+    }
+    const poi = {
+      id: 'node/1', osm_type: 'N', name: 'Starbucks',
+      categories: ['amenity/cafe'], text_rank: 0.9, distance_m: 200,
+    }
+    mockExecute
+      .mockImplementationOnce(async () => [poi, intersection]) // FTS
+      .mockImplementationOnce(async () => [])                  // trigram
+      .mockImplementationOnce(async () => [])                  // codes
+      .mockImplementationOnce(async () => [])                  // nameAbbrev
+    const results = await searchPlaces({ query: 'trade and tryon', lat: 35.22, lng: -80.84, autocomplete: true })
+    const ids = results.map((r: any) => r.id)
+    expect(ids).toContain('intersection/42')
+    expect(ids).toContain('node/1')
+  })
+
+  test('query with & is sanitized to spaces without throwing', async () => {
+    await expect(
+      searchPlaces({ query: 'trade & tryon', autocomplete: true }),
+    ).resolves.toBeDefined()
+  })
+
+  test('intersection deduplication works — same intersection from FTS and trigram appears once', async () => {
+    const intersection = {
+      id: 'intersection/42', name: 'Trade St & Tryon St',
+      categories: ['highway/intersection'], text_rank: 0.7, distance_m: 500,
+    }
+    mockExecute
+      .mockImplementationOnce(async () => [intersection])                        // FTS
+      .mockImplementationOnce(async () => [{ ...intersection, text_rank: 0.5 }]) // trigram
+      .mockImplementationOnce(async () => [])                                    // codes
+      .mockImplementationOnce(async () => [])                                    // nameAbbrev
+    const results = await searchPlaces({ query: 'trade tryon', autocomplete: true })
+    const matches = results.filter((r: any) => r.id === 'intersection/42')
+    expect(matches).toHaveLength(1)
+    expect(matches[0].text_rank).toBe(0.7)
   })
 })
 

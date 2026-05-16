@@ -33,7 +33,8 @@ export async function searchPlaces({
   autocomplete = false,
 }: SearchParams): Promise<any[]> {
   const routeGeoJSON = route ? JSON.stringify(route) : ''
-  const cacheKey = `search:${query || ''}:${lat}:${lng}:${radius}:${routeGeoJSON}:${buffer}:${categories?.join(',')}:${JSON.stringify(tags || {})}:${limit}:${offset}:${semantic}:${autocomplete}`
+  const tagsCacheKey = tags ? Object.keys(tags).sort().map(k => `${k}=${tags[k]}`).join('&') : ''
+  const cacheKey = `search:${query || ''}:${lat}:${lng}:${radius}:${routeGeoJSON}:${buffer}:${categories?.join(',')}:${tagsCacheKey}:${limit}:${offset}:${semantic}:${autocomplete}`
   const cached = searchCache.get(cacheKey)
   if (cached) return cached
 
@@ -113,6 +114,7 @@ export async function searchPlaces({
   // they only surface when the name is a strong match or very nearby.
   // Applied as a multiplier on text_rank inside each search layer.
   const categoryDemotion = sql`CASE
+    WHEN categories[1] = 'highway/intersection' THEN 0.7
     WHEN categories[1] LIKE 'highway/%' THEN 0.3
     WHEN categories[1] LIKE 'man_made/surveillance%' THEN 0.2
     ELSE 1.0
@@ -171,49 +173,46 @@ export async function searchPlaces({
       LIMIT ${limit}
     `).catch(() => [] as any[])
 
-    // Layer 2: Trigram fuzzy match via GIN (name gin_trgm_ops) index
-    // For multi-word queries, match name against individual words so that
-    // a misspelled name + location qualifier ("boajngles tryon") still finds
-    // results.  Context words (street, neighbourhood) boost ranking via
-    // substring match on parent_context.
+    // Layer 2: Trigram fuzzy match via GiST KNN (name <-> query)
+    // Uses GiST index for ordered retrieval of the N closest matches — avoids
+    // the GIN bitmap scan that chokes on short/common trigrams (225K+ candidates).
+    // For multi-word queries, coverage scoring boosts results that match more
+    // query words across name + parent_context.
     let trigramRankExpr: ReturnType<typeof sql>
-    let trigramWhereExpr: ReturnType<typeof sql>
 
     if (queryWords.length > 1) {
-      // Match name against any individual query word
-      const wordMatchConds = queryWords.map((w) => sql`name % ${w}`)
-      trigramWhereExpr = sql`(${sql.join(wordMatchConds, sql` OR `)})`
-
-      // Rank: best per-word name similarity, scaled by word coverage.
-      // Coverage = fraction of query words accounted for by name OR context.
-      // A result matching 2/2 words (name + context) ranks above one matching 1/2.
       const perWordSims = queryWords.map((w) => sql`similarity(name, ${w})`)
       const bestSim = sql`GREATEST(${sql.join(perWordSims, sql`, `)})`
       const coverageChecks = queryWords.map((w) =>
-        sql`CASE WHEN similarity(name, ${w}) > 0.3 OR parent_context ILIKE '%' || ${w} || '%' THEN 1 ELSE 0 END`)
+        sql`CASE WHEN similarity(name, ${w}) > 0.3 OR ts @@ plainto_tsquery('simple', ${w}) THEN 1 ELSE 0 END`)
       const coverageSum = sql`(${sql.join(coverageChecks, sql` + `)})`
       const coverageFactor = sql`(0.3 + 0.7 * ${coverageSum}::float / ${queryWords.length}::float)`
       trigramRankExpr = sql`(${bestSim} * ${coverageFactor} * ${categoryDemotion})`
     } else {
-      trigramWhereExpr = sql`name % ${sanitizedQuery}`
       trigramRankExpr = sql`(similarity(name, ${sanitizedQuery}) * ${categoryDemotion})`
     }
 
-    const trigramPromise = db.execute(sql`
-      SELECT
-        id, osm_type, osm_id, name, name_abbrev, categories, tags,
-        address, hours, phones, websites, geom_type,
-        ST_AsGeoJSON(centroid)::jsonb AS geometry,
-        ${trigramRankExpr} AS text_rank
-        ${distanceSelect}
-      FROM geo_places
-      WHERE ${trigramWhereExpr}
-      ${textSearchSpatialFilter}
-      ${categoryFilter}
-      ${tagsFilter}
-      ${proximityDecay(trigramRankExpr)}
-      LIMIT ${limit}
-    `).catch(() => [] as any[])
+    // Skip trigram for short queries (≤4 chars) — GiST KNN degrades with few
+    // trigrams and these are covered by codes/abbreviation/FTS layers.
+    const trigramDistanceThreshold = 0.7
+    const trigramPromise = sanitizedQuery.length > 4
+      ? db.execute(sql`
+          SELECT
+            id, osm_type, osm_id, name, name_abbrev, categories, tags,
+            address, hours, phones, websites, geom_type,
+            ST_AsGeoJSON(centroid)::jsonb AS geometry,
+            ${trigramRankExpr} AS text_rank
+            ${distanceSelect}
+          FROM geo_places
+          WHERE name IS NOT NULL
+            AND (name <-> ${sanitizedQuery}) < ${trigramDistanceThreshold}
+          ${textSearchSpatialFilter}
+          ${categoryFilter}
+          ${tagsFilter}
+          ORDER BY name <-> ${sanitizedQuery}
+          LIMIT ${limit}
+        `).catch(() => [] as any[])
+      : Promise.resolve([] as any[])
 
     // Layer 3: Abbreviation + codes match
     // Split into two separate queries so codes matches (explicit identifiers like
@@ -297,7 +296,7 @@ export async function searchPlaces({
         const remaining = limit - results.length
         const existingIds = results.map((r: any) => r.id)
         const excludeClause = existingIds.length > 0
-          ? sql`AND id NOT IN (${sql.join(existingIds.map((id) => sql`${id}`), sql`, `)})`
+          ? sql`AND id != ALL(ARRAY[${sql.join(existingIds.map((id) => sql`${id}`), sql`, `)}])`
           : sql``
 
         const semanticResults = await db.execute(sql`

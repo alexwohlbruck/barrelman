@@ -14,9 +14,9 @@ import { spatialColumn, vectorColumn, spatialIndex, trigramIndex, ginIndex } fro
 export const geoPlaces = pgTable(
   'geo_places',
   {
-    // OSM identity — "node/123456", "way/789", "relation/42"
+    // Identity — "node/123456", "way/789", "relation/42", "intersection/1"
     id: text('id').primaryKey(),
-    osmType: text('osm_type').notNull(),     // 'node', 'way', 'relation'
+    osmType: text('osm_type').notNull(),     // 'N', 'W', 'R', 'X' (intersection)
     osmId: bigint('osm_id', { mode: 'number' }).notNull(),
 
     // Core attributes
