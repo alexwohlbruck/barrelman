@@ -92,7 +92,7 @@ CREATE INDEX IF NOT EXISTS geo_places_tags_idx ON geo_places USING GIN(tags json
 CREATE INDEX IF NOT EXISTS geo_places_geom_type_idx ON geo_places(geom_type);
 
 -- Partial indexes (only relevant rows)
-CREATE INDEX IF NOT EXISTS geo_places_name_trgm_idx ON geo_places USING GIN(name gin_trgm_ops) WHERE name IS NOT NULL;
+CREATE INDEX IF NOT EXISTS geo_places_name_trgm_gist_idx ON geo_places USING GIST(name gist_trgm_ops) WHERE name IS NOT NULL;
 CREATE INDEX IF NOT EXISTS geo_places_categories_idx ON geo_places USING GIN(categories) WHERE categories != '{}';
 CREATE INDEX IF NOT EXISTS geo_places_ts_idx ON geo_places USING GIN(ts) WHERE ts IS NOT NULL;
 CREATE INDEX IF NOT EXISTS geo_places_admin_level_idx ON geo_places(admin_level) WHERE admin_level IS NOT NULL;

@@ -89,10 +89,15 @@ describe('searchPlaces — basic', () => {
 // ── Layer execution ───────────────────────────────────────────────────────────
 
 describe('searchPlaces — layer execution', () => {
-  test('runs 4 parallel layers (FTS + trigram + codes + nameAbbrev) for short queries', async () => {
+  test('runs 4 parallel layers (FTS + trigram + codes + nameAbbrev) for 5+ char queries', async () => {
     // autocomplete=true suppresses semantic so count is predictable
-    await searchPlaces({ query: 'cafe', autocomplete: true })
+    await searchPlaces({ query: 'coffee', autocomplete: true })
     expect(mockExecute).toHaveBeenCalledTimes(4)
+  })
+
+  test('skips trigram for short queries (≤4 chars) — 3 layers only', async () => {
+    await searchPlaces({ query: 'cafe', autocomplete: true })
+    expect(mockExecute).toHaveBeenCalledTimes(3)
   })
 
   test('runs only 2 layers (FTS + trigram) for queries longer than 20 chars', async () => {
@@ -161,7 +166,7 @@ describe('searchPlaces — caching', () => {
   })
 
   test('different query strings produce separate cache entries', async () => {
-    await searchPlaces({ query: 'cafe', autocomplete: true })
+    await searchPlaces({ query: 'coffee', autocomplete: true })
     await searchPlaces({ query: 'library', autocomplete: true })
     // 4 layers per unique query = 8 total
     expect(mockExecute.mock.calls.length).toBe(8)
@@ -232,7 +237,7 @@ describe('searchPlaces — location handling', () => {
   test('REGRESSION: lat=0 must not be treated as falsy — hasLocation should use != null', async () => {
     // Bug: `lat && lng` evaluates to false when lat=0, skipping proximity entirely.
     // Fix: `lat != null && lng != null` correctly handles lat=0 (Gulf of Guinea).
-    await expect(searchPlaces({ query: 'cafe', lat: 0, lng: 0, autocomplete: true })).resolves.toBeDefined()
+    await expect(searchPlaces({ query: 'coffee', lat: 0, lng: 0, autocomplete: true })).resolves.toBeDefined()
     // With the fix, the location point is built and radius filter is applied
     expect(mockExecute).toHaveBeenCalledTimes(4)
   })
