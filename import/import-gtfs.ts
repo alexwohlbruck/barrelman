@@ -154,14 +154,17 @@ async function main() {
 
     console.log(`Computed ${transfers.length} transfer pairs`)
 
-    // Write transfers.txt into each feed ZIP
+    // Write feed-specific transfers.txt into each feed ZIP
+    // Only include transfers where BOTH stops belong to the target feed,
+    // preventing stop ID collisions across different transit agencies.
     if (transfers.length > 0) {
-      const transfersTxt = generateTransfersTxt(transfers)
-
       for (const filepath of feedFiles) {
+        const feedId = basename(filepath, '.zip')
+        const transfersTxt = generateTransfersTxt(transfers, feedId)
+        const transferCount = transfersTxt.trim().split('\n').length - 1 // minus header
         try {
           await injectTransfersTxt(filepath, transfersTxt)
-          console.log(`  ✓ Injected transfers.txt into ${basename(filepath)}`)
+          console.log(`  ✓ Injected ${transferCount} transfers into ${basename(filepath)}`)
         } catch (err) {
           console.error(`  ✗ Failed to inject into ${basename(filepath)}: ${err}`)
         }

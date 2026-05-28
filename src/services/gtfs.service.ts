@@ -51,6 +51,8 @@ export interface TransferPair {
 export interface ComputedTransfer {
   fromStopId: string
   toStopId: string
+  fromFeedId: string
+  toFeedId: string
   /** Walking time in seconds */
   walkTime: number
   /** Walking distance in meters */
@@ -303,7 +305,9 @@ export async function importStops(
   for (let i = 0; i < stops.length; i += BATCH_SIZE) {
     const batch = stops.slice(i, i + BATCH_SIZE)
 
-    const values = batch.map(s => {
+    const validBatch = batch.filter(s => s.stopId && s.feedId)
+    if (validBatch.length === 0) continue
+    const values = validBatch.map(s => {
       const name = s.stopName ? `'${s.stopName.replace(/'/g, "''")}'` : 'NULL'
       const code = s.stopCode ? `'${s.stopCode.replace(/'/g, "''")}'` : 'NULL'
       const parent = s.parentStation ? `'${s.parentStation.replace(/'/g, "''")}'` : 'NULL'
@@ -343,7 +347,7 @@ export async function importStops(
         geom = EXCLUDED.geom
     `))
 
-    imported += batch.length
+    imported += validBatch.length
   }
 
   return imported
@@ -577,12 +581,16 @@ export async function computeAllTransfers(
             {
               fromStopId: pair.fromStopId,
               toStopId: pair.toStopId,
+              fromFeedId: pair.fromFeedId,
+              toFeedId: pair.toFeedId,
               walkTime: result.walkTime,
               walkDistance: result.walkDistance,
             },
             {
               fromStopId: pair.toStopId,
               toStopId: pair.fromStopId,
+              fromFeedId: pair.toFeedId,
+              toFeedId: pair.fromFeedId,
               walkTime: result.walkTime,
               walkDistance: result.walkDistance,
             },
@@ -606,12 +614,22 @@ export async function computeAllTransfers(
 /**
  * Generate GTFS transfers.txt content from computed transfers.
  *
+ * When feedId is provided, only includes transfers where BOTH stops
+ * belong to that feed. This prevents stop ID collisions when injecting
+ * into per-feed ZIPs (e.g. stop "1234" in feed A ≠ stop "1234" in feed B).
+ *
  * Format: from_stop_id,to_stop_id,transfer_type,min_transfer_time
  * transfer_type=2 means timed transfer with min_transfer_time specified.
  */
-export function generateTransfersTxt(transfers: ComputedTransfer[]): string {
+export function generateTransfersTxt(
+  transfers: ComputedTransfer[],
+  feedId?: string,
+): string {
+  const filtered = feedId
+    ? transfers.filter(t => t.fromFeedId === feedId && t.toFeedId === feedId)
+    : transfers
   const header = 'from_stop_id,to_stop_id,transfer_type,min_transfer_time\n'
-  const rows = transfers
+  const rows = filtered
     .map(t => `${t.fromStopId},${t.toStopId},2,${t.walkTime}`)
     .join('\n')
   return header + rows
