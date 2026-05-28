@@ -57,9 +57,9 @@ services:
     image: ghcr.io/motis-project/motis:latest
     restart: unless-stopped
     working_dir: /data
+    command: ["/motis", "server", "/data"]
     volumes:
       - barrelman-gtfs-data:/data
-      - ./motis/config.yml:/data/config.yml:ro
     ports:
       - "8080:8080"
 

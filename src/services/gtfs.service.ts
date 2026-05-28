@@ -99,9 +99,9 @@ export async function fetchFeedList(
       if (!url) continue
 
       feeds.push({
-        feedId: feed.id || feed.onestop_id || `feed_${feeds.length}`,
-        onestopId: feed.onestop_id || '',
-        name: feed.name || feed.onestop_id || '',
+        feedId: String(feed.id || feed.onestop_id || `feed_${feeds.length}`),
+        onestopId: String(feed.onestop_id || ''),
+        name: String(feed.name || feed.onestop_id || ''),
         url,
         region,
       })

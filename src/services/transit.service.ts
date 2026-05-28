@@ -37,7 +37,7 @@ export interface TransitRouteRequest {
 export type TransitMode = 'BUS' | 'RAIL' | 'TRAM' | 'SUBWAY' | 'FERRY' | 'CABLE_CAR' | 'GONDOLA' | 'FUNICULAR'
 
 export const ALL_TRANSIT_MODES: TransitMode[] = [
-  'BUS', 'RAIL', 'TRAM', 'SUBWAY', 'FERRY', 'CABLE_CAR', 'GONDOLA', 'FUNICULAR',
+  'BUS', 'RAIL', 'TRAM', 'SUBWAY', 'FERRY',
 ]
 
 export interface TransitRouteResponse {
@@ -302,29 +302,102 @@ function adaptItinerary(itin: any): TransitItinerary {
 /**
  * Query MOTIS for transit routes between two points.
  *
- * Sends a request to MOTIS's OTPAPI-compatible /api/v1/plan endpoint
- * and adapts the response into Barrelman's transit format.
+ * Since MOTIS runs in transit-only mode (no street routing), it cannot
+ * match raw coordinates to stops. This function first finds the closest
+ * stops to origin and destination via PostGIS, then queries MOTIS with
+ * stop IDs for accurate routing.
+ *
+ * If the origin or destination is already within ~50m of a stop, we use
+ * that single stop. Otherwise, we try the closest stops and pick the
+ * best itineraries across all combinations.
  */
 export async function getTransitRoute(
   request: TransitRouteRequest,
   fetchFn: FetchFn = globalThis.fetch,
 ): Promise<TransitRouteResponse> {
+  // Find nearby stops for origin and destination
+  const maxWalkDistance = request.maxWalkDistance || 1000
+  const [originStops, destStops] = await Promise.all([
+    getNearbyStops({ lat: request.from.lat, lng: request.from.lng, radius: maxWalkDistance, limit: 3 }),
+    getNearbyStops({ lat: request.to.lat, lng: request.to.lng, radius: maxWalkDistance, limit: 3 }),
+  ])
+
+  if (originStops.length === 0 || destStops.length === 0) {
+    return { itineraries: [], metadata: { searchWindow: 0 } }
+  }
+
+  // Build stop ID pairs to try (closest origin × closest destination)
+  const pairs: Array<{ fromStopId: string; toStopId: string }> = []
+  for (const from of originStops) {
+    for (const to of destStops) {
+      if (`${from.feedId}_${from.stopId}` !== `${to.feedId}_${to.stopId}`) {
+        pairs.push({
+          fromStopId: `${from.feedId}_${from.stopId}`,
+          toStopId: `${to.feedId}_${to.stopId}`,
+        })
+      }
+    }
+  }
+
+  if (pairs.length === 0) {
+    return { itineraries: [], metadata: { searchWindow: 0 } }
+  }
+
+  // Query MOTIS for each pair in parallel, collect all itineraries
+  const results = await Promise.all(
+    pairs.slice(0, 4).map(pair =>
+      queryMotis({ ...request, fromStopId: pair.fromStopId, toStopId: pair.toStopId }, fetchFn)
+        .catch(() => null)
+    ),
+  )
+
+  // Merge and deduplicate itineraries, sort by duration
+  const allItineraries: TransitItinerary[] = []
+  let metadata: TransitRouteResponse['metadata'] = { searchWindow: 0 }
+
+  for (const result of results) {
+    if (!result) continue
+    allItineraries.push(...result.itineraries)
+    if (result.metadata) metadata = result.metadata
+  }
+
+  // Sort by duration and take the requested number
+  allItineraries.sort((a, b) => a.duration - b.duration)
+  const numItineraries = request.numItineraries ?? 5
+  const uniqueItineraries = deduplicateItineraries(allItineraries).slice(0, numItineraries)
+
+  return { itineraries: uniqueItineraries, metadata }
+}
+
+/** Deduplicate itineraries by start time + duration + number of legs */
+function deduplicateItineraries(itineraries: TransitItinerary[]): TransitItinerary[] {
+  const seen = new Set<string>()
+  return itineraries.filter(it => {
+    const key = `${it.startTime}|${it.duration}|${it.legs.length}`
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
+
+/**
+ * Low-level MOTIS query using stop IDs.
+ */
+async function queryMotis(
+  request: TransitRouteRequest & { fromStopId: string; toStopId: string },
+  fetchFn: FetchFn = globalThis.fetch,
+): Promise<TransitRouteResponse> {
   const motisUrl = getMotisUrl()
-  const modes = request.transitModes || ALL_TRANSIT_MODES
 
   // Parse time or default to now
   const departureDate = request.time ? new Date(request.time) : new Date()
 
   const params = new URLSearchParams({
-    fromPlace: `${request.from.lat},${request.from.lng}`,
-    toPlace: `${request.to.lat},${request.to.lng}`,
-    date: departureDate.toISOString().split('T')[0],
-    time: departureDate.toTimeString().slice(0, 5),
+    fromPlace: request.fromStopId,
+    toPlace: request.toStopId,
+    time: departureDate.toISOString(),
     arriveBy: String(request.arriveBy ?? false),
     numItineraries: String(request.numItineraries ?? 5),
-    transitModes: modes.join(','),
-    preTransitModes: 'WALK',
-    postTransitModes: 'WALK',
   })
 
   if (request.searchWindow != null) {
@@ -346,14 +419,16 @@ export async function getTransitRoute(
 
   const data = await response.json() as any
 
-  if (!data.plan?.itineraries) {
+  // MOTIS v2 returns itineraries at the top level, not nested under `plan`
+  const itineraries = data.itineraries || data.plan?.itineraries
+  if (!itineraries || itineraries.length === 0) {
     return { itineraries: [], metadata: { searchWindow: 0 } }
   }
 
   return {
-    itineraries: data.plan.itineraries.map(adaptItinerary),
+    itineraries: itineraries.map(adaptItinerary),
     metadata: {
-      searchWindow: data.plan.searchWindowUsed ?? 0,
+      searchWindow: data.searchWindowUsed ?? data.plan?.searchWindowUsed ?? 0,
       nextPageCursor: data.nextPageCursor || undefined,
       prevPageCursor: data.previousPageCursor || undefined,
     },
