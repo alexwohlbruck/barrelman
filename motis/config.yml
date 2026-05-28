@@ -1,0 +1,13 @@
+# MOTIS transit-only configuration
+#
+# Runs MOTIS without street routing — all pedestrian/cycling routing
+# is handled by GraphHopper. MOTIS only loads GTFS data and runs
+# RAPTOR for stop-to-stop transit routing.
+#
+# Walking transfers between nearby stops are pre-computed via
+# GraphHopper and injected into each feed's transfers.txt before
+# MOTIS ingests them.
+
+import:
+  paths:
+    - gtfs/
