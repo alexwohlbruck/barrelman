@@ -9,6 +9,36 @@
  */
 
 import { describe, test, expect, mock, beforeEach } from 'bun:test'
+
+// Track db.execute calls so we return different stops for origin vs
+// destination. Reset in beforeEach.
+let dbCallIndex = 0
+
+// Mock the database so getNearbyStops returns controlled stops without a
+// real PostgreSQL connection. Each call alternates between an origin stop
+// and a destination stop, producing exactly one stop pair per test.
+mock.module('../db', () => ({
+  db: {
+    execute: async () => {
+      dbCallIndex++
+      const isOrigin = dbCallIndex % 2 === 1
+      return [{
+        stop_id: isOrigin ? 'mock_stop_origin' : 'mock_stop_dest',
+        feed_id: 'mock_feed',
+        stop_name: isOrigin ? 'Mock Origin Stop' : 'Mock Dest Stop',
+        stop_code: null,
+        stop_lat: isOrigin ? 35.23 : 35.77,
+        stop_lon: isOrigin ? -80.84 : -78.64,
+        location_type: 0,
+        parent_station: null,
+        wheelchair_boarding: 0,
+        platform_code: null,
+        distance: 50,
+      }]
+    },
+  },
+}))
+
 import {
   getTransitRoute,
   MotisError,
@@ -107,6 +137,10 @@ function mockFetch(responseBody: any, status = 200): any {
 // ── Tests ───────────────────────────────────────────────────────────
 
 describe('getTransitRoute', () => {
+  beforeEach(() => {
+    dbCallIndex = 0
+  })
+
   const baseRequest: TransitRouteRequest = {
     from: { lat: 35.23, lng: -80.84 },
     to: { lat: 35.77, lng: -78.64 },
@@ -217,28 +251,25 @@ describe('getTransitRoute', () => {
     expect(result.itineraries).toHaveLength(0)
   })
 
-  test('throws MotisError on non-OK response', async () => {
+  test('returns empty itineraries when all MOTIS queries fail', async () => {
     const fetchFn = mockFetch({ error: 'Internal error' }, 500)
+    const result = await getTransitRoute(baseRequest, fetchFn)
 
-    await expect(getTransitRoute(baseRequest, fetchFn)).rejects.toThrow(MotisError)
+    // Per-pair errors are caught — returns empty results instead of throwing
+    expect(result.itineraries).toHaveLength(0)
   })
 
-  test('throws MotisError with status code and body', async () => {
+  test('gracefully handles MOTIS errors without throwing', async () => {
     const fetchFn = mockFetch({ error: 'Bad request' }, 400)
+    const result = await getTransitRoute(baseRequest, fetchFn)
 
-    try {
-      await getTransitRoute(baseRequest, fetchFn)
-      expect(true).toBe(false) // should not reach
-    } catch (err) {
-      expect(err).toBeInstanceOf(MotisError)
-      expect((err as MotisError).statusCode).toBe(400)
-    }
+    // All pairs failed — returns empty, does not throw
+    expect(result.itineraries).toHaveLength(0)
   })
 
   test('builds correct MOTIS URL with query parameters', async () => {
     const fetchFn = mockFetch(makeMotisResponse())
 
-    // Set MOTIS_URL for this test
     const oldUrl = process.env.MOTIS_URL
     process.env.MOTIS_URL = 'http://test-motis:9090'
 
@@ -247,17 +278,19 @@ describe('getTransitRoute', () => {
         ...baseRequest,
         arriveBy: true,
         numItineraries: 3,
-        transitModes: ['BUS', 'RAIL'],
         maxTransfers: 2,
         wheelchair: true,
       }, fetchFn)
 
+      // 1 origin stop × 1 dest stop = 1 pair = 1 MOTIS call
       expect(fetchFn).toHaveBeenCalledTimes(1)
       const calledUrl = (fetchFn as any).mock.calls[0][0] as string
       expect(calledUrl).toContain('http://test-motis:9090/api/v1/plan')
+      // Stop IDs from mocked getNearbyStops
+      expect(calledUrl).toContain('fromPlace=mock_feed_mock_stop_origin')
+      expect(calledUrl).toContain('toPlace=mock_feed_mock_stop_dest')
       expect(calledUrl).toContain('arriveBy=true')
       expect(calledUrl).toContain('numItineraries=3')
-      expect(calledUrl).toContain('transitModes=BUS%2CRAIL')
       expect(calledUrl).toContain('maxTransfers=2')
       expect(calledUrl).toContain('wheelchair=true')
     } finally {
@@ -266,17 +299,16 @@ describe('getTransitRoute', () => {
     }
   })
 
-  test('defaults to all transit modes when none specified', async () => {
+  test('queries MOTIS with stop IDs, not raw coordinates', async () => {
     const fetchFn = mockFetch(makeMotisResponse())
     await getTransitRoute(baseRequest, fetchFn)
 
     const calledUrl = (fetchFn as any).mock.calls[0][0] as string
-    // Should include all modes
-    expect(calledUrl).toContain('BUS')
-    expect(calledUrl).toContain('RAIL')
-    expect(calledUrl).toContain('TRAM')
-    expect(calledUrl).toContain('SUBWAY')
-    expect(calledUrl).toContain('FERRY')
+    // Uses stop IDs from getNearbyStops, not raw coordinates
+    expect(calledUrl).toContain('fromPlace=mock_feed_mock_stop_origin')
+    expect(calledUrl).toContain('toPlace=mock_feed_mock_stop_dest')
+    // Should NOT pass raw lat/lng as fromPlace/toPlace
+    expect(calledUrl).not.toContain('fromPlace=35.23')
   })
 
   test('handles legs with missing optional fields gracefully', async () => {
@@ -364,8 +396,9 @@ describe('getTransitRoute', () => {
     }, fetchFn)
 
     const calledUrl = (fetchFn as any).mock.calls[0][0] as string
-    // Should contain today's date
+    // queryMotis uses `time=` with ISO 8601 datetime, not `date=`
+    expect(calledUrl).toContain('time=')
     const todayStr = before.toISOString().split('T')[0]
-    expect(calledUrl).toContain(`date=${todayStr}`)
+    expect(calledUrl).toContain(todayStr)
   })
 })

@@ -68,6 +68,11 @@ export interface TransitItinerary {
   transfers: number
   /** Ordered legs of this itinerary */
   legs: TransitLeg[]
+  /** Total fare from GTFS fare data (via MOTIS). Undefined if no fare data available. */
+  fare?: {
+    currency: string
+    amount: number
+  }
 }
 
 export interface TransitLeg {
@@ -288,7 +293,7 @@ function adaptLeg(leg: any): TransitLeg {
 
 /** Adapt a MOTIS/OTPAPI itinerary into our format */
 function adaptItinerary(itin: any): TransitItinerary {
-  return {
+  const adapted: TransitItinerary = {
     duration: itin.duration,
     startTime: epochToIso(itin.startTime),
     endTime: epochToIso(itin.endTime),
@@ -299,6 +304,43 @@ function adaptItinerary(itin: any): TransitItinerary {
     transfers: itin.transfers ?? 0,
     legs: (itin.legs || []).map(adaptLeg),
   }
+
+  // Extract fare data from MOTIS response.
+  // MOTIS v2 OTPAPI may return fares in several formats:
+  //   1. fareProducts[]: OTP2 format with amount.amount + amount.currency.code
+  //   2. fare.fare.regular: older OTP2 format with cents + currency
+  const fare = extractFare(itin)
+  if (fare) adapted.fare = fare
+
+  return adapted
+}
+
+/**
+ * Extract fare from a MOTIS itinerary response.
+ * Handles multiple OTP2 fare response formats.
+ */
+function extractFare(itin: any): { currency: string; amount: number } | undefined {
+  // OTP2 fareProducts format (MOTIS v2)
+  if (Array.isArray(itin.fareProducts) && itin.fareProducts.length > 0) {
+    const product = itin.fareProducts[0]
+    const amount = product.amount ?? product.price
+    if (amount?.amount != null && amount?.currency?.code) {
+      return { currency: amount.currency.code, amount: amount.amount }
+    }
+  }
+
+  // Older OTP2 fare format
+  if (itin.fare?.fare) {
+    const regular = itin.fare.fare.regular
+    if (regular?.cents != null && regular?.currency?.currency) {
+      return {
+        currency: regular.currency.currency,
+        amount: regular.cents / 100,
+      }
+    }
+  }
+
+  return undefined
 }
 
 /**
