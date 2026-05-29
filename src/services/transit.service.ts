@@ -174,9 +174,11 @@ function getMotisUrl(): string {
 
 /**
  * Decode a Google Encoded Polyline into [lng, lat] coordinate pairs.
- * MOTIS returns geometry in the OTPAPI `legGeometry.points` format.
+ * MOTIS v2 returns geometry in the OTPAPI `legGeometry.points` format
+ * using precision 7 (1e7), not the Google Maps standard precision 5.
  */
-function decodePolyline(encoded: string): [number, number][] {
+function decodePolyline(encoded: string, precision = 7): [number, number][] {
+  const factor = 10 ** precision
   const coords: [number, number][] = []
   let index = 0
   let lat = 0
@@ -206,7 +208,7 @@ function decodePolyline(encoded: string): [number, number][] {
 
     lng += result & 1 ? ~(result >> 1) : result >> 1
 
-    coords.push([lng / 1e5, lat / 1e5])
+    coords.push([lng / factor, lat / factor])
   }
 
   return coords
