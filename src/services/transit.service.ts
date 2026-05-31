@@ -119,6 +119,14 @@ export interface TransitLeg {
   routeId?: string
   /** Intermediate stops (between boarding and alighting) */
   intermediateStops?: TransitLegPlace[]
+
+  // Realtime fields (present when MOTIS has GTFS-RT data)
+  /** True if this leg has realtime data */
+  realTime?: boolean
+  /** Departure delay in seconds (positive = late, negative = early) */
+  departureDelay?: number
+  /** Arrival delay in seconds */
+  arrivalDelay?: number
 }
 
 export interface TransitLegPlace {
@@ -286,6 +294,11 @@ function adaptLeg(leg: any): TransitLeg {
         platformCode: s.platformCode || undefined,
       }))
     }
+
+    // Pass through GTFS-RT realtime fields when available
+    if (leg.realTime != null) adapted.realTime = leg.realTime
+    if (leg.departureDelay != null) adapted.departureDelay = leg.departureDelay
+    if (leg.arrivalDelay != null) adapted.arrivalDelay = leg.arrivalDelay
   }
 
   return adapted
