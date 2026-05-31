@@ -754,7 +754,7 @@ export async function generateMotisConfig(options?: MotisConfigOptions): Promise
     ORDER BY feed_id
   `))
 
-  const feeds = result.rows as Array<{ feed_id: string; rt_urls: GtfsRtUrl[] | null }>
+  const feeds = (result as any[]) as Array<{ feed_id: string; rt_urls: GtfsRtUrl[] | null }>
 
   // Build YAML manually (no dependency needed for this simple structure)
   const lines: string[] = [
