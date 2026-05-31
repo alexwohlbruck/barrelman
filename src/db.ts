@@ -59,8 +59,12 @@ export async function ensureGtfsSchema() {
       region TEXT,
       stop_count INTEGER DEFAULT 0,
       route_count INTEGER DEFAULT 0,
+      rt_urls JSONB,
       imported_at TIMESTAMPTZ DEFAULT NOW()
     );
+
+    -- Add rt_urls column if it doesn't exist (for existing installs)
+    ALTER TABLE gtfs_feeds ADD COLUMN IF NOT EXISTS rt_urls JSONB;
 
     CREATE TABLE IF NOT EXISTS gtfs_stops (
       id SERIAL PRIMARY KEY,

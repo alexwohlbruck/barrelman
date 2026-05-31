@@ -22,12 +22,19 @@ import { type FetchFn } from './transit.service'
 
 // ── Types ───────────────────────────────────────────────────────────
 
+export interface GtfsRtUrl {
+  url: string
+  headers?: Record<string, string>
+}
+
 export interface GtfsFeedInfo {
   feedId: string
   onestopId: string
   name: string
   url: string
   region?: string
+  /** GTFS-RT feed URLs discovered from Transitland (trip updates + vehicle positions) */
+  rtUrls?: GtfsRtUrl[]
 }
 
 export interface ImportResult {
@@ -113,14 +120,98 @@ export async function fetchFeedList(
     nextUrl = data.meta?.next ? data.meta.next : null
   }
 
+  // Discover GTFS-RT feeds and associate them with static feeds
+  const rtMap = await fetchRtFeedMap(region, apiKey, fetchFn)
+  for (const feed of feeds) {
+    const rtUrls = rtMap.get(feed.onestopId) || rtMap.get(feed.feedId)
+    if (rtUrls?.length) {
+      feed.rtUrls = rtUrls
+    }
+  }
+
   return feeds
 }
 
-function buildFeedListUrl(region: string, apiKey: string): string {
+/**
+ * Fetch GTFS-RT feeds from Transitland and build a map from
+ * static feed onestop_id → RT URLs.
+ *
+ * Transitland stores GTFS-RT as separate feed entries with
+ * `spec: 'gtfs-rt'`. Each RT feed lists its associated static
+ * feeds via `associated_feeds`. We walk that link to build
+ * the mapping.
+ */
+async function fetchRtFeedMap(
+  region: string,
+  apiKey: string,
+  fetchFn: FetchFn = globalThis.fetch,
+): Promise<Map<string, GtfsRtUrl[]>> {
+  const rtMap = new Map<string, GtfsRtUrl[]>()
+  let nextUrl: string | null = buildFeedListUrl(region, apiKey, 'gtfs-rt')
+
+  while (nextUrl) {
+    const response = await fetchFn(nextUrl)
+    if (!response.ok) {
+      console.warn(`Transitland GTFS-RT query failed: ${response.status}`)
+      break
+    }
+
+    const data = await response.json() as any
+    for (const feed of data.feeds || []) {
+      const urls = feed.urls || {}
+      const rtUrls: GtfsRtUrl[] = []
+
+      // Collect all RT endpoint URLs from this feed
+      for (const key of ['realtime_trip_updates', 'realtime_vehicle_positions', 'realtime_alerts'] as const) {
+        const url = urls[key]
+        if (url) {
+          // Transitland may include authorization info
+          const headers: Record<string, string> = {}
+          if (feed.authorization?.param_name && feed.authorization?.info_url) {
+            // Some feeds use query params for auth — skip those, MOTIS uses headers
+          }
+          if (feed.authorization?.type === 'header' && feed.authorization?.param_name) {
+            // Header-based auth (rare in public feeds, but supported)
+            headers[feed.authorization.param_name] = feed.authorization.param_value || ''
+          }
+          rtUrls.push(Object.keys(headers).length ? { url, headers } : { url })
+        }
+      }
+
+      if (!rtUrls.length) continue
+
+      // Link RT feed → static feed(s) via associated_feeds
+      const associatedFeeds = feed.feed_state?.feed_version?.feed?.associated_feeds
+        || feed.associated_feeds
+        || []
+      for (const assoc of associatedFeeds) {
+        // associated_feeds entries reference static GTFS feeds
+        const staticOnestopId = assoc.feed_onestop_id || assoc.onestop_id
+        if (staticOnestopId) {
+          const existing = rtMap.get(staticOnestopId) || []
+          existing.push(...rtUrls)
+          rtMap.set(staticOnestopId, existing)
+        }
+      }
+
+      // Fallback: if no associated_feeds, try matching by operator
+      if (!associatedFeeds.length && feed.onestop_id) {
+        // Store under the RT feed's own onestop_id as fallback
+        rtMap.set(feed.onestop_id, rtUrls)
+      }
+    }
+
+    nextUrl = data.meta?.next ? data.meta.next : null
+  }
+
+  return rtMap
+}
+
+function buildFeedListUrl(region: string, apiKey: string, spec: string = 'gtfs'): string {
   const base = 'https://transit.land/api/v2/rest/feeds'
   const params = new URLSearchParams({
     apikey: apiKey,
-    spec: 'gtfs',
+    spec,
     limit: '100',
   })
 
@@ -437,15 +528,19 @@ export async function importStopRoutes(
  */
 export async function recordFeed(feed: GtfsFeedInfo, stopCount: number, routeCount: number): Promise<void> {
   const esc = (v: string | null | undefined) => v ? `'${v.replace(/'/g, "''")}'` : 'NULL'
+  const rtUrlsJson = feed.rtUrls?.length
+    ? `'${JSON.stringify(feed.rtUrls).replace(/'/g, "''")}'::jsonb`
+    : 'NULL'
   await db.execute(sql.raw(`
-    INSERT INTO gtfs_feeds (feed_id, onestop_id, name, url, region, stop_count, route_count, imported_at)
-    VALUES (${esc(feed.feedId)}, ${esc(feed.onestopId)}, ${esc(feed.name)}, ${esc(feed.url)}, ${esc(feed.region)}, ${stopCount}, ${routeCount}, NOW())
+    INSERT INTO gtfs_feeds (feed_id, onestop_id, name, url, region, stop_count, route_count, rt_urls, imported_at)
+    VALUES (${esc(feed.feedId)}, ${esc(feed.onestopId)}, ${esc(feed.name)}, ${esc(feed.url)}, ${esc(feed.region)}, ${stopCount}, ${routeCount}, ${rtUrlsJson}, NOW())
     ON CONFLICT (feed_id)
     DO UPDATE SET
       name = EXCLUDED.name,
       url = EXCLUDED.url,
       stop_count = EXCLUDED.stop_count,
       route_count = EXCLUDED.route_count,
+      rt_urls = EXCLUDED.rt_urls,
       imported_at = NOW()
   `))
 }
@@ -633,4 +728,78 @@ export function generateTransfersTxt(
     .map(t => `${t.fromStopId},${t.toStopId},2,${t.walkTime}`)
     .join('\n')
   return header + rows
+}
+
+// ── MOTIS config generation ────────────────────────────────────────
+
+interface MotisConfigOptions {
+  /** Directory containing GTFS zip files (relative to MOTIS data dir) */
+  gtfsDir?: string
+  /** Number of days to load */
+  numDays?: number
+  /** Max footpath length in minutes */
+  maxFootpathLength?: number
+}
+
+/**
+ * Generate MOTIS config.yml from the gtfs_feeds table.
+ *
+ * Reads all imported feeds, builds dataset entries with RT feed URLs,
+ * and returns the YAML string. Feeds with GTFS-RT URLs get `rt:` entries
+ * so MOTIS automatically polls for realtime updates.
+ */
+export async function generateMotisConfig(options?: MotisConfigOptions): Promise<string> {
+  const { gtfsDir = 'gtfs', numDays = 365, maxFootpathLength = 15 } = options || {}
+
+  const result = await db.execute(sql.raw(`
+    SELECT feed_id, rt_urls
+    FROM gtfs_feeds
+    ORDER BY feed_id
+  `))
+
+  const feeds = result.rows as Array<{ feed_id: string; rt_urls: GtfsRtUrl[] | null }>
+
+  // Build YAML manually (no dependency needed for this simple structure)
+  const lines: string[] = [
+    '# MOTIS config — auto-generated by Barrelman GTFS import',
+    '#',
+    `# ${feeds.length} feeds, generated ${new Date().toISOString()}`,
+    '',
+    'timetable:',
+    '  first_day: TODAY',
+    `  num_days: ${numDays}`,
+    '  with_shapes: true',
+    '  adjust_footpaths: true',
+    `  max_footpath_length: ${maxFootpathLength}`,
+    '  datasets:',
+  ]
+
+  for (const feed of feeds) {
+    lines.push(`    ${feed.feed_id}:`)
+    lines.push(`      path: ${gtfsDir}/${feed.feed_id}.zip`)
+
+    // Add RT feeds if available
+    const rtUrls = feed.rt_urls
+    if (rtUrls && Array.isArray(rtUrls) && rtUrls.length > 0) {
+      lines.push('      rt:')
+      for (const rt of rtUrls) {
+        lines.push(`        - url: ${rt.url}`)
+        if (rt.headers && Object.keys(rt.headers).length > 0) {
+          lines.push('          headers:')
+          for (const [key, value] of Object.entries(rt.headers)) {
+            lines.push(`            ${key}: ${value}`)
+          }
+        }
+      }
+    }
+  }
+
+  lines.push('')
+  lines.push('street_routing: false')
+  lines.push('osr_footpath: false')
+  lines.push('geocoding: false')
+  lines.push('reverse_geocoding: false')
+  lines.push('')
+
+  return lines.join('\n')
 }

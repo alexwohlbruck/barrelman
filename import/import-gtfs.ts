@@ -27,6 +27,7 @@ import {
   clearFeed,
   computeAllTransfers,
   generateTransfersTxt,
+  generateMotisConfig,
   type GtfsFeedInfo,
 } from '../src/services/gtfs.service'
 
@@ -37,6 +38,7 @@ const { values: args } = parseArgs({
     region: { type: 'string', default: 'nc' },
     'api-key': { type: 'string' },
     'output-dir': { type: 'string', default: './data/gtfs' },
+    'motis-config': { type: 'string', default: './motis/config.yml' },
     'skip-download': { type: 'boolean', default: false },
     'skip-transfers': { type: 'boolean', default: false },
     'max-feeds': { type: 'string' },
@@ -51,6 +53,7 @@ const outputDir = args['output-dir']!
 const skipDownload = args['skip-download']!
 const skipTransfers = args['skip-transfers']!
 const maxFeeds = args['max-feeds'] ? parseInt(args['max-feeds']) : undefined
+const motisConfigPath = args['motis-config']!
 const transferDistance = parseInt(args['transfer-distance']!)
 const transferConcurrency = parseInt(args['transfer-concurrency']!)
 
@@ -84,6 +87,9 @@ async function main() {
     let feeds = await fetchFeedList(region, apiKey)
     console.log(`Found ${feeds.length} GTFS feeds`)
 
+    const rtCount = feeds.filter(f => f.rtUrls?.length).length
+    console.log(`  ${rtCount} feeds have GTFS-RT URLs`)
+
     if (maxFeeds) {
       feeds = feeds.slice(0, maxFeeds)
       console.log(`Limited to ${maxFeeds} feeds`)
@@ -97,6 +103,9 @@ async function main() {
 
       console.log(`\n[${i + 1}/${feeds.length}] Downloading ${feed.name || feed.feedId}...`)
       console.log(`  URL: ${feed.url}`)
+      if (feed.rtUrls?.length) {
+        console.log(`  RT: ${feed.rtUrls.length} realtime feed(s)`)
+      }
 
       try {
         const response = await fetch(feed.url)
@@ -172,12 +181,32 @@ async function main() {
     }
   }
 
+  // Step 5: Generate MOTIS config with GTFS-RT feeds
+  console.log('\n=== Generating MOTIS Config ===')
+  try {
+    const configYaml = await generateMotisConfig()
+    mkdirSync(join(motisConfigPath, '..'), { recursive: true })
+    writeFileSync(motisConfigPath, configYaml)
+    console.log(`✓ Wrote MOTIS config to ${motisConfigPath}`)
+
+    // Count RT-enabled feeds
+    const rtLines = configYaml.split('\n').filter(l => l.trim().startsWith('- url:'))
+    if (rtLines.length > 0) {
+      console.log(`  ${rtLines.length} GTFS-RT feed URLs configured`)
+    } else {
+      console.log('  No GTFS-RT feeds found for this region')
+    }
+  } catch (err) {
+    console.error(`✗ Failed to generate MOTIS config: ${err instanceof Error ? err.message : err}`)
+  }
+
   console.log('\n=== Import Complete ===')
   console.log(`Processed ${feedFiles.length} feeds`)
   console.log(`Output directory: ${outputDir}`)
+  console.log(`MOTIS config: ${motisConfigPath}`)
   console.log('')
   console.log('Next steps:')
-  console.log('  1. Restart MOTIS to load updated GTFS data')
+  console.log('  1. Restart MOTIS to load updated GTFS data and RT feeds')
   console.log('     docker compose restart motis')
   console.log('')
 
