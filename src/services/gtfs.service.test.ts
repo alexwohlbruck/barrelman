@@ -5,6 +5,7 @@
  *   - GTFS CSV parsing (stops, routes, agencies, stop-route derivation)
  *   - transfers.txt generation format
  *   - Edge cases in CSV parsing (missing fields, Unicode, special chars)
+ *   - GTFS-RT feed discovery from Transitland
  */
 
 import { describe, test, expect } from 'bun:test'
@@ -14,6 +15,7 @@ import {
   parseAgencies,
   deriveStopRoutes,
   generateTransfersTxt,
+  fetchFeedList,
 } from './gtfs.service'
 
 // ── parseStops ──────────────────────────────────────────────────────
@@ -300,5 +302,384 @@ describe('generateTransfersTxt', () => {
 
     const txt = generateTransfersTxt(transfers)
     expect(txt).toContain(',2,') // transfer_type must be 2
+  })
+})
+
+// ── fetchFeedList + GTFS-RT discovery ──────────────────────────────
+
+/**
+ * Helper: build a mock fetchFn that routes requests to different handlers
+ * based on URL patterns. Simulates both Transitland feed-list responses
+ * and per-feed RT lookups.
+ */
+function buildMockFetch(handlers: {
+  feedList?: any
+  rtFeeds?: Record<string, any>  // keyed by RT onestop_id
+}) {
+  return async (url: string | URL | Request, _init?: RequestInit) => {
+    const urlStr = typeof url === 'string' ? url : url instanceof URL ? url.toString() : url.url
+
+    // RT feed lookup — matches spec=GTFS_RT&onestop_id=...
+    if (urlStr.includes('spec=GTFS_RT') && urlStr.includes('onestop_id=')) {
+      const parsed = new URL(urlStr)
+      const onestopId = parsed.searchParams.get('onestop_id') || ''
+      const rtFeed = handlers.rtFeeds?.[onestopId]
+      return new Response(JSON.stringify({ feeds: rtFeed ? [rtFeed] : [] }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }
+
+    // Static feed list
+    if (urlStr.includes('transit.land') && urlStr.includes('spec=gtfs')) {
+      return new Response(JSON.stringify(handlers.feedList || { feeds: [] }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }
+
+    return new Response('Not found', { status: 404 })
+  }
+}
+
+describe('fetchFeedList', () => {
+  test('returns static feeds from Transitland', async () => {
+    const mockFetch = buildMockFetch({
+      feedList: {
+        feeds: [
+          {
+            id: 100,
+            onestop_id: 'f-dnh-cats',
+            name: 'CATS',
+            spec: 'gtfs',
+            urls: { static_current: 'https://example.com/cats.zip' },
+          },
+        ],
+      },
+    })
+
+    const feeds = await fetchFeedList('nc', 'test-key', mockFetch)
+    expect(feeds).toHaveLength(1)
+    expect(feeds[0].feedId).toBe('100')
+    expect(feeds[0].onestopId).toBe('f-dnh-cats')
+    expect(feeds[0].name).toBe('CATS')
+    expect(feeds[0].url).toBe('https://example.com/cats.zip')
+  })
+
+  test('skips feeds without download URL', async () => {
+    const mockFetch = buildMockFetch({
+      feedList: {
+        feeds: [
+          {
+            id: 1,
+            onestop_id: 'f-abc',
+            spec: 'gtfs',
+            urls: { static_current: 'https://example.com/feed.zip' },
+          },
+          {
+            id: 2,
+            onestop_id: 'f-def',
+            spec: 'gtfs',
+            urls: {},  // no static_current
+          },
+        ],
+      },
+    })
+
+    const feeds = await fetchFeedList('nc', 'test-key', mockFetch)
+    expect(feeds).toHaveLength(1)
+    expect(feeds[0].feedId).toBe('1')
+  })
+
+  test('skips non-GTFS feeds (e.g. GTFS_RT entries in feed list)', async () => {
+    const mockFetch = buildMockFetch({
+      feedList: {
+        feeds: [
+          {
+            id: 1,
+            onestop_id: 'f-abc',
+            spec: 'gtfs',
+            urls: { static_current: 'https://example.com/feed.zip' },
+          },
+          {
+            id: 2,
+            onestop_id: 'f-abc~rt',
+            spec: 'GTFS_RT',
+            urls: { realtime_trip_updates: 'https://example.com/rt' },
+          },
+        ],
+      },
+    })
+
+    const feeds = await fetchFeedList('nc', 'test-key', mockFetch)
+    expect(feeds).toHaveLength(1)
+    expect(feeds[0].onestopId).toBe('f-abc')
+  })
+
+  test('discovers and attaches GTFS-RT URLs via ~rt onestop_id convention', async () => {
+    const mockFetch = buildMockFetch({
+      feedList: {
+        feeds: [
+          {
+            id: 886,
+            onestop_id: 'f-dnh-cats',
+            name: 'CATS',
+            spec: 'gtfs',
+            urls: { static_current: 'https://example.com/cats.zip' },
+          },
+        ],
+      },
+      rtFeeds: {
+        'f-dnh-cats~rt': {
+          onestop_id: 'f-dnh-cats~rt',
+          spec: 'GTFS_RT',
+          urls: {
+            realtime_trip_updates: 'https://rt.example.com/trip-updates.pb',
+            realtime_vehicle_positions: 'https://rt.example.com/vehicle-positions.pb',
+            realtime_alerts: 'https://rt.example.com/alerts.pb',
+          },
+        },
+      },
+    })
+
+    const feeds = await fetchFeedList('nc', 'test-key', mockFetch)
+    expect(feeds).toHaveLength(1)
+    expect(feeds[0].rtUrls).toBeDefined()
+    expect(feeds[0].rtUrls).toHaveLength(3)
+
+    const urls = feeds[0].rtUrls!.map(r => r.url)
+    expect(urls).toContain('https://rt.example.com/trip-updates.pb')
+    expect(urls).toContain('https://rt.example.com/vehicle-positions.pb')
+    expect(urls).toContain('https://rt.example.com/alerts.pb')
+  })
+
+  test('handles partial RT URLs (only trip updates available)', async () => {
+    const mockFetch = buildMockFetch({
+      feedList: {
+        feeds: [
+          {
+            id: 1,
+            onestop_id: 'f-abc-agency',
+            spec: 'gtfs',
+            urls: { static_current: 'https://example.com/feed.zip' },
+          },
+        ],
+      },
+      rtFeeds: {
+        'f-abc-agency~rt': {
+          onestop_id: 'f-abc-agency~rt',
+          spec: 'GTFS_RT',
+          urls: {
+            realtime_trip_updates: 'https://rt.example.com/updates.pb',
+            // no vehicle positions or alerts
+          },
+        },
+      },
+    })
+
+    const feeds = await fetchFeedList('nc', 'test-key', mockFetch)
+    expect(feeds[0].rtUrls).toHaveLength(1)
+    expect(feeds[0].rtUrls![0].url).toBe('https://rt.example.com/updates.pb')
+  })
+
+  test('includes authorization headers from RT feed metadata', async () => {
+    const mockFetch = buildMockFetch({
+      feedList: {
+        feeds: [
+          {
+            id: 1,
+            onestop_id: 'f-abc-agency',
+            spec: 'gtfs',
+            urls: { static_current: 'https://example.com/feed.zip' },
+          },
+        ],
+      },
+      rtFeeds: {
+        'f-abc-agency~rt': {
+          onestop_id: 'f-abc-agency~rt',
+          spec: 'GTFS_RT',
+          urls: {
+            realtime_trip_updates: 'https://rt.example.com/updates.pb',
+          },
+          authorization: {
+            type: 'header',
+            param_name: 'X-Api-Key',
+            param_value: 'secret-123',
+          },
+        },
+      },
+    })
+
+    const feeds = await fetchFeedList('nc', 'test-key', mockFetch)
+    expect(feeds[0].rtUrls).toHaveLength(1)
+    expect(feeds[0].rtUrls![0].headers).toEqual({ 'X-Api-Key': 'secret-123' })
+  })
+
+  test('omits headers object when no authorization is configured', async () => {
+    const mockFetch = buildMockFetch({
+      feedList: {
+        feeds: [
+          {
+            id: 1,
+            onestop_id: 'f-abc',
+            spec: 'gtfs',
+            urls: { static_current: 'https://example.com/feed.zip' },
+          },
+        ],
+      },
+      rtFeeds: {
+        'f-abc~rt': {
+          onestop_id: 'f-abc~rt',
+          spec: 'GTFS_RT',
+          urls: { realtime_trip_updates: 'https://rt.example.com/updates.pb' },
+          // no authorization field
+        },
+      },
+    })
+
+    const feeds = await fetchFeedList('nc', 'test-key', mockFetch)
+    expect(feeds[0].rtUrls![0].headers).toBeUndefined()
+  })
+
+  test('leaves rtUrls undefined when no RT feed exists', async () => {
+    const mockFetch = buildMockFetch({
+      feedList: {
+        feeds: [
+          {
+            id: 1,
+            onestop_id: 'f-abc-agency',
+            spec: 'gtfs',
+            urls: { static_current: 'https://example.com/feed.zip' },
+          },
+        ],
+      },
+      rtFeeds: {}, // no RT feeds
+    })
+
+    const feeds = await fetchFeedList('nc', 'test-key', mockFetch)
+    expect(feeds[0].rtUrls).toBeUndefined()
+  })
+
+  test('handles feeds without onestop_id (RT lookup skipped)', async () => {
+    const mockFetch = buildMockFetch({
+      feedList: {
+        feeds: [
+          {
+            id: 99,
+            // no onestop_id
+            spec: 'gtfs',
+            urls: { static_current: 'https://example.com/feed.zip' },
+          },
+        ],
+      },
+    })
+
+    const feeds = await fetchFeedList('nc', 'test-key', mockFetch)
+    expect(feeds).toHaveLength(1)
+    expect(feeds[0].onestopId).toBe('')
+    expect(feeds[0].rtUrls).toBeUndefined()
+  })
+
+  test('handles RT lookup API errors gracefully', async () => {
+    let callCount = 0
+    const mockFetch = async (url: string | URL | Request) => {
+      const urlStr = typeof url === 'string' ? url : url instanceof URL ? url.toString() : url.url
+
+      if (urlStr.includes('spec=GTFS_RT')) {
+        callCount++
+        // Simulate network error on RT lookup
+        throw new Error('Network timeout')
+      }
+
+      // Static feed list succeeds
+      return new Response(JSON.stringify({
+        feeds: [
+          {
+            id: 1,
+            onestop_id: 'f-abc',
+            spec: 'gtfs',
+            urls: { static_current: 'https://example.com/feed.zip' },
+          },
+        ],
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    }
+
+    // Should not throw — RT failures are handled gracefully via Promise.allSettled
+    const feeds = await fetchFeedList('nc', 'test-key', mockFetch)
+    expect(feeds).toHaveLength(1)
+    expect(feeds[0].rtUrls).toBeUndefined()
+    expect(callCount).toBe(1)
+  })
+
+  test('discovers RT feeds for multiple static feeds in batch', async () => {
+    const staticFeeds = Array.from({ length: 3 }, (_, i) => ({
+      id: i + 1,
+      onestop_id: `f-feed${i + 1}`,
+      spec: 'gtfs',
+      urls: { static_current: `https://example.com/feed${i + 1}.zip` },
+    }))
+
+    const rtFeeds: Record<string, any> = {
+      'f-feed1~rt': {
+        onestop_id: 'f-feed1~rt',
+        spec: 'GTFS_RT',
+        urls: { realtime_trip_updates: 'https://rt.example.com/feed1.pb' },
+      },
+      // feed2 has no RT
+      'f-feed3~rt': {
+        onestop_id: 'f-feed3~rt',
+        spec: 'GTFS_RT',
+        urls: {
+          realtime_trip_updates: 'https://rt.example.com/feed3-updates.pb',
+          realtime_vehicle_positions: 'https://rt.example.com/feed3-vehicles.pb',
+        },
+      },
+    }
+
+    const mockFetch = buildMockFetch({ feedList: { feeds: staticFeeds }, rtFeeds })
+
+    const feeds = await fetchFeedList('nc', 'test-key', mockFetch)
+    expect(feeds).toHaveLength(3)
+
+    // Feed 1: has 1 RT URL
+    expect(feeds[0].rtUrls).toHaveLength(1)
+    expect(feeds[0].rtUrls![0].url).toBe('https://rt.example.com/feed1.pb')
+
+    // Feed 2: no RT
+    expect(feeds[1].rtUrls).toBeUndefined()
+
+    // Feed 3: has 2 RT URLs
+    expect(feeds[2].rtUrls).toHaveLength(2)
+  })
+
+  test('ignores non-header authorization types', async () => {
+    const mockFetch = buildMockFetch({
+      feedList: {
+        feeds: [
+          {
+            id: 1,
+            onestop_id: 'f-abc',
+            spec: 'gtfs',
+            urls: { static_current: 'https://example.com/feed.zip' },
+          },
+        ],
+      },
+      rtFeeds: {
+        'f-abc~rt': {
+          onestop_id: 'f-abc~rt',
+          spec: 'GTFS_RT',
+          urls: { realtime_trip_updates: 'https://rt.example.com/updates.pb' },
+          authorization: {
+            type: 'query_param',  // not 'header'
+            param_name: 'api_key',
+            param_value: 'secret',
+          },
+        },
+      },
+    })
+
+    const feeds = await fetchFeedList('nc', 'test-key', mockFetch)
+    // Authorization not type=header → no headers attached
+    expect(feeds[0].rtUrls![0].headers).toBeUndefined()
   })
 })

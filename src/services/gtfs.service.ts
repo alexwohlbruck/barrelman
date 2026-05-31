@@ -772,19 +772,19 @@ export async function generateMotisConfig(options?: MotisConfigOptions): Promise
   ]
 
   for (const feed of feeds) {
-    lines.push(`    ${feed.feed_id}:`)
-    lines.push(`      path: ${gtfsDir}/${feed.feed_id}.zip`)
+    lines.push(`    "${feed.feed_id}":`)
+    lines.push(`      path: "${gtfsDir}/${feed.feed_id}.zip"`)
 
     // Add RT feeds if available
     const rtUrls = feed.rt_urls
     if (rtUrls && Array.isArray(rtUrls) && rtUrls.length > 0) {
       lines.push('      rt:')
       for (const rt of rtUrls) {
-        lines.push(`        - url: ${rt.url}`)
+        lines.push(`        - url: "${rt.url}"`)
         if (rt.headers && Object.keys(rt.headers).length > 0) {
           lines.push('          headers:')
           for (const [key, value] of Object.entries(rt.headers)) {
-            lines.push(`            ${key}: ${value}`)
+            lines.push(`            "${key}": "${value}"`)
           }
         }
       }
