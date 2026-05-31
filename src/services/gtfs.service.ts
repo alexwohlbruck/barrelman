@@ -121,7 +121,8 @@ export async function fetchFeedList(
   }
 
   // Discover GTFS-RT feeds and associate them with static feeds
-  const rtMap = await fetchRtFeedMap(region, apiKey, fetchFn)
+  console.log(`Discovering GTFS-RT feeds for ${feeds.length} static feeds...`)
+  const rtMap = await fetchRtFeedMap(feeds, apiKey, fetchFn)
   for (const feed of feeds) {
     const rtUrls = rtMap.get(feed.onestopId) || rtMap.get(feed.feedId)
     if (rtUrls?.length) {
@@ -137,81 +138,77 @@ export async function fetchFeedList(
  * static feed onestop_id → RT URLs.
  *
  * Transitland stores GTFS-RT as separate feed entries with
- * `spec: 'gtfs-rt'`. Each RT feed lists its associated static
- * feeds via `associated_feeds`. We walk that link to build
- * the mapping.
+ * `spec: 'GTFS_RT'`. They follow the naming convention
+ * `f-xxx-agency~rt` where the static feed is `f-xxx-agency`.
+ *
+ * We look up each static feed's expected RT onestop_id directly,
+ * avoiding a full global scan of all RT feeds.
  */
 async function fetchRtFeedMap(
-  region: string,
+  staticFeeds: GtfsFeedInfo[],
   apiKey: string,
   fetchFn: FetchFn = globalThis.fetch,
 ): Promise<Map<string, GtfsRtUrl[]>> {
   const rtMap = new Map<string, GtfsRtUrl[]>()
-  let nextUrl: string | null = buildFeedListUrl(region, apiKey, 'gtfs-rt')
 
-  while (nextUrl) {
-    const response = await fetchFn(nextUrl)
-    if (!response.ok) {
-      console.warn(`Transitland GTFS-RT query failed: ${response.status}`)
-      break
-    }
+  // Build candidate RT onestop_ids from static feeds
+  const candidates = staticFeeds
+    .filter(f => f.onestopId)
+    .map(f => ({ staticOnestopId: f.onestopId, rtOnestopId: `${f.onestopId}~rt` }))
 
-    const data = await response.json() as any
-    for (const feed of data.feeds || []) {
+  if (!candidates.length) return rtMap
+
+  // Batch lookup: query Transitland for each candidate RT feed.
+  // Use small batches to avoid too many parallel requests.
+  const BATCH_SIZE = 10
+  for (let i = 0; i < candidates.length; i += BATCH_SIZE) {
+    const batch = candidates.slice(i, i + BATCH_SIZE)
+    const results = await Promise.allSettled(
+      batch.map(async ({ staticOnestopId, rtOnestopId }) => {
+        const url = `https://transit.land/api/v2/rest/feeds?apikey=${apiKey}&spec=GTFS_RT&onestop_id=${encodeURIComponent(rtOnestopId)}&limit=1`
+        const response = await fetchFn(url)
+        if (!response.ok) return null
+
+        const data = await response.json() as any
+        const feed = data.feeds?.[0]
+        if (!feed) return null
+
+        return { staticOnestopId, feed }
+      }),
+    )
+
+    for (const result of results) {
+      if (result.status !== 'fulfilled' || !result.value) continue
+      const { staticOnestopId, feed } = result.value
+
       const urls = feed.urls || {}
       const rtUrls: GtfsRtUrl[] = []
 
-      // Collect all RT endpoint URLs from this feed
       for (const key of ['realtime_trip_updates', 'realtime_vehicle_positions', 'realtime_alerts'] as const) {
         const url = urls[key]
         if (url) {
-          // Transitland may include authorization info
           const headers: Record<string, string> = {}
-          if (feed.authorization?.param_name && feed.authorization?.info_url) {
-            // Some feeds use query params for auth — skip those, MOTIS uses headers
-          }
           if (feed.authorization?.type === 'header' && feed.authorization?.param_name) {
-            // Header-based auth (rare in public feeds, but supported)
             headers[feed.authorization.param_name] = feed.authorization.param_value || ''
           }
           rtUrls.push(Object.keys(headers).length ? { url, headers } : { url })
         }
       }
 
-      if (!rtUrls.length) continue
-
-      // Link RT feed → static feed(s) via associated_feeds
-      const associatedFeeds = feed.feed_state?.feed_version?.feed?.associated_feeds
-        || feed.associated_feeds
-        || []
-      for (const assoc of associatedFeeds) {
-        // associated_feeds entries reference static GTFS feeds
-        const staticOnestopId = assoc.feed_onestop_id || assoc.onestop_id
-        if (staticOnestopId) {
-          const existing = rtMap.get(staticOnestopId) || []
-          existing.push(...rtUrls)
-          rtMap.set(staticOnestopId, existing)
-        }
-      }
-
-      // Fallback: if no associated_feeds, try matching by operator
-      if (!associatedFeeds.length && feed.onestop_id) {
-        // Store under the RT feed's own onestop_id as fallback
-        rtMap.set(feed.onestop_id, rtUrls)
+      if (rtUrls.length) {
+        rtMap.set(staticOnestopId, rtUrls)
       }
     }
-
-    nextUrl = data.meta?.next ? data.meta.next : null
   }
 
   return rtMap
 }
 
-function buildFeedListUrl(region: string, apiKey: string, spec: string = 'gtfs'): string {
+function buildFeedListUrl(region: string, apiKey: string): string {
   const base = 'https://transit.land/api/v2/rest/feeds'
   const params = new URLSearchParams({
     apikey: apiKey,
-    spec,
+    spec: 'gtfs',
     limit: '100',
   })
 
