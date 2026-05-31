@@ -10,16 +10,22 @@ import {
   type TransitMode,
   type FetchFn,
 } from '../services/transit.service'
+import {
+  getDepartures as _getDepartures,
+  type DepartureRequest,
+} from '../services/departures.service'
 
 export function createTransitRoutes(deps: {
   getTransitRoute?: typeof _getTransitRoute
   getNearbyStops?: typeof _getNearbyStops
   getRoutesForStop?: typeof _getRoutesForStop
+  getDepartures?: typeof _getDepartures
   fetchFn?: FetchFn
 } = {}) {
   const getTransitRoute = deps.getTransitRoute || _getTransitRoute
   const getNearbyStops = deps.getNearbyStops || _getNearbyStops
   const getRoutesForStop = deps.getRoutesForStop || _getRoutesForStop
+  const getDepartures = deps.getDepartures || _getDepartures
   const fetchFn = deps.fetchFn || undefined
 
   return new Elysia({ prefix: '/transit' })
@@ -157,6 +163,59 @@ export function createTransitRoutes(deps: {
         description:
           'Returns all transit routes that pass through the specified stop, ' +
           'including route name, color, type, and agency information.',
+        tags: ['Transit'],
+      },
+    })
+
+    // ── GET /transit/departures ─────────────────────────────────────
+    .get('/departures', async ({ query, set }) => {
+      try {
+        const lat = Number(query.lat)
+        const lng = Number(query.lng)
+
+        if (isNaN(lat) || isNaN(lng)) {
+          // If no coordinates, feedId + stopId are required
+          if (!query.feedId || !query.stopId) {
+            set.status = 400
+            return { error: 'Either lat/lng or feedId/stopId are required' }
+          }
+        }
+
+        const request: DepartureRequest = {
+          lat: isNaN(lat) ? 0 : lat,
+          lng: isNaN(lng) ? 0 : lng,
+          radius: query.radius ? Number(query.radius) : undefined,
+          time: query.time || undefined,
+          n: query.n ? Number(query.n) : undefined,
+          feedId: query.feedId || undefined,
+          stopId: query.stopId || undefined,
+        }
+
+        return await getDepartures(request, fetchFn)
+      } catch (err) {
+        set.status = 500
+        return {
+          error: 'Failed to fetch departures',
+          detail: err instanceof Error ? err.message : String(err),
+        }
+      }
+    }, {
+      query: t.Object({
+        lat: t.Optional(t.String()),
+        lng: t.Optional(t.String()),
+        radius: t.Optional(t.String()),
+        time: t.Optional(t.String()),
+        n: t.Optional(t.String()),
+        feedId: t.Optional(t.String()),
+        stopId: t.Optional(t.String()),
+      }),
+      detail: {
+        summary: 'Get upcoming departures at nearby stops',
+        description:
+          'Returns upcoming departures from transit stops near the given ' +
+          'coordinates. Queries the MOTIS timetable and enriches results ' +
+          'with route colors from the GTFS database. Supports direct stop ' +
+          'queries via feedId/stopId, or spatial search via lat/lng/radius.',
         tags: ['Transit'],
       },
     })
