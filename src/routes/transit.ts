@@ -14,18 +14,24 @@ import {
   getDepartures as _getDepartures,
   type DepartureRequest,
 } from '../services/departures.service'
+import {
+  getVehiclePositions as _getVehiclePositions,
+  type VehiclePositionsRequest,
+} from '../services/vehicles.service'
 
 export function createTransitRoutes(deps: {
   getTransitRoute?: typeof _getTransitRoute
   getNearbyStops?: typeof _getNearbyStops
   getRoutesForStop?: typeof _getRoutesForStop
   getDepartures?: typeof _getDepartures
+  getVehiclePositions?: typeof _getVehiclePositions
   fetchFn?: FetchFn
 } = {}) {
   const getTransitRoute = deps.getTransitRoute || _getTransitRoute
   const getNearbyStops = deps.getNearbyStops || _getNearbyStops
   const getRoutesForStop = deps.getRoutesForStop || _getRoutesForStop
   const getDepartures = deps.getDepartures || _getDepartures
+  const getVehiclePositions = deps.getVehiclePositions || _getVehiclePositions
   const fetchFn = deps.fetchFn || undefined
 
   return new Elysia({ prefix: '/transit' })
@@ -216,6 +222,61 @@ export function createTransitRoutes(deps: {
           'coordinates. Queries the MOTIS timetable and enriches results ' +
           'with route colors from the GTFS database. Supports direct stop ' +
           'queries via feedId/stopId, or spatial search via lat/lng/radius.',
+        tags: ['Transit'],
+      },
+    })
+
+    // ── GET /transit/vehicles ──────────────────────────────────────────
+    .get('/vehicles', async ({ query, set }) => {
+      try {
+        const north = Number(query.north)
+        const south = Number(query.south)
+        const east = Number(query.east)
+        const west = Number(query.west)
+
+        if ([north, south, east, west].some(isNaN)) {
+          set.status = 400
+          return { error: 'north, south, east, west must be valid numbers' }
+        }
+
+        if (north < south) {
+          set.status = 400
+          return { error: 'north must be >= south' }
+        }
+
+        const request: VehiclePositionsRequest = {
+          north,
+          south,
+          east,
+          west,
+          feedId: query.feedId || undefined,
+          routeId: query.routeId || undefined,
+        }
+
+        return await getVehiclePositions(request, fetchFn)
+      } catch (err) {
+        set.status = 500
+        return {
+          error: 'Failed to fetch vehicle positions',
+          detail: err instanceof Error ? err.message : String(err),
+        }
+      }
+    }, {
+      query: t.Object({
+        north: t.String(),
+        south: t.String(),
+        east: t.String(),
+        west: t.String(),
+        feedId: t.Optional(t.String()),
+        routeId: t.Optional(t.String()),
+      }),
+      detail: {
+        summary: 'Get live vehicle positions within a bounding box',
+        description:
+          'Fetches GTFS-RT VehiclePosition data from all configured feeds ' +
+          'and returns vehicles within the specified bounding box. Results ' +
+          'are enriched with route colors and short names. Responses are ' +
+          'cached for 10 seconds per feed.',
         tags: ['Transit'],
       },
     })
