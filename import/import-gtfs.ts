@@ -32,6 +32,7 @@ import {
   computeAllTransfers,
   generateTransfersTxt,
   generateMotisConfig,
+  sanitizeGtfsZip,
   type GtfsFeedInfo,
 } from '../src/services/gtfs.service'
 
@@ -118,10 +119,16 @@ async function main() {
           continue
         }
 
-        const buffer = await response.arrayBuffer()
-        writeFileSync(filepath, Buffer.from(buffer))
-        console.log(`  ✓ Downloaded ${(buffer.byteLength / 1024 / 1024).toFixed(1)} MB`)
+        const rawBuffer = await response.arrayBuffer()
+        console.log(`  ✓ Downloaded ${(rawBuffer.byteLength / 1024 / 1024).toFixed(1)} MB`)
 
+        // Strip GTFS-Flex extension files that crash MOTIS
+        const { buffer, removedFiles } = await sanitizeGtfsZip(rawBuffer)
+        if (removedFiles.length > 0) {
+          console.log(`  ⚠ Stripped ${removedFiles.length} GTFS-Flex files: ${removedFiles.join(', ')}`)
+        }
+
+        writeFileSync(filepath, Buffer.from(buffer))
         feedFiles.push(filepath)
 
         // Step 3: Parse and import
@@ -139,6 +146,19 @@ async function main() {
 
     for (const filepath of feedFiles) {
       const feedId = basename(filepath, '.zip')
+
+      // Sanitize existing files too (they may pre-date the flex strip)
+      try {
+        const existingBuffer = await Bun.file(filepath).arrayBuffer()
+        const { buffer: cleanBuffer, removedFiles } = await sanitizeGtfsZip(existingBuffer)
+        if (removedFiles.length > 0) {
+          writeFileSync(filepath, Buffer.from(cleanBuffer))
+          console.log(`  ⚠ Stripped ${removedFiles.length} GTFS-Flex files from ${basename(filepath)}`)
+        }
+      } catch (err) {
+        console.error(`  ⚠ Flex sanitization failed for ${basename(filepath)}: ${err}`)
+      }
+
       await importFeedFile(filepath, {
         feedId,
         onestopId: feedId,

@@ -941,3 +941,55 @@ export async function generateMotisConfig(options?: MotisConfigOptions): Promise
 
   return lines.join('\n')
 }
+
+// ── GTFS-Flex sanitization ────────────────────────────────────────
+
+/**
+ * GTFS-Flex v2 extension files that crash MOTIS.
+ *
+ * These files define flex-route service areas, booking rules, and
+ * GeoJSON location boundaries (including MultiPolygon geometries)
+ * that MOTIS's GTFS parser cannot handle.
+ */
+export const FLEX_EXTENSION_FILES = [
+  'areas.txt',
+  'stop_areas.txt',
+  'booking_rules.txt',
+  'location_groups.txt',
+  'location_group_stops.txt',
+  'locations.geojson',
+] as const
+
+/**
+ * Strip GTFS-Flex extension files from a GTFS ZIP buffer.
+ *
+ * MOTIS v2 crashes when it encounters Flex v2 extension files
+ * (especially locations.geojson with MultiPolygon geometries).
+ * This function removes those files while preserving all standard
+ * GTFS data that MOTIS can process.
+ *
+ * Returns the sanitized buffer and a list of removed filenames.
+ * If no flex files are found, returns the original buffer unchanged.
+ */
+export async function sanitizeGtfsZip(
+  buffer: ArrayBuffer,
+): Promise<{ buffer: ArrayBuffer; removedFiles: string[] }> {
+  // Dynamic import to avoid requiring JSZip at module level in tests
+  const JSZip = (await import('jszip')).default
+  const zip = await JSZip.loadAsync(buffer)
+
+  const removedFiles: string[] = []
+  for (const flexFile of FLEX_EXTENSION_FILES) {
+    if (zip.file(flexFile)) {
+      zip.remove(flexFile)
+      removedFiles.push(flexFile)
+    }
+  }
+
+  if (removedFiles.length === 0) {
+    return { buffer, removedFiles: [] }
+  }
+
+  const sanitized = await zip.generateAsync({ type: 'arraybuffer' })
+  return { buffer: sanitized, removedFiles }
+}

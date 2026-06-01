@@ -18,7 +18,10 @@ import {
   deriveRouteShapes,
   generateTransfersTxt,
   fetchFeedList,
+  sanitizeGtfsZip,
+  FLEX_EXTENSION_FILES,
 } from './gtfs.service'
+import JSZip from 'jszip'
 
 // ── parseStops ──────────────────────────────────────────────────────
 
@@ -798,5 +801,107 @@ describe('deriveRouteShapes', () => {
 
     const result = deriveRouteShapes(csv)
     expect(result.size).toBe(0)
+  })
+})
+
+// ── sanitizeGtfsZip ─────────────────────────────────────────────────
+
+describe('sanitizeGtfsZip', () => {
+  async function createTestZip(files: Record<string, string>): Promise<ArrayBuffer> {
+    const zip = new JSZip()
+    for (const [name, content] of Object.entries(files)) {
+      zip.file(name, content)
+    }
+    return await zip.generateAsync({ type: 'arraybuffer' })
+  }
+
+  async function listZipFiles(buffer: ArrayBuffer): Promise<string[]> {
+    const zip = await JSZip.loadAsync(buffer)
+    return Object.keys(zip.files).filter(f => !zip.files[f].dir).sort()
+  }
+
+  test('strips GTFS-Flex extension files from ZIP', async () => {
+    const buffer = await createTestZip({
+      'stops.txt': 'stop_id,stop_name\nS1,Main St',
+      'routes.txt': 'route_id,route_short_name\nR1,Blue',
+      'areas.txt': 'area_id,area_name\nA1,Downtown',
+      'stop_areas.txt': 'area_id,stop_id\nA1,S1',
+      'locations.geojson': '{"type":"FeatureCollection","features":[]}',
+    })
+
+    const { buffer: sanitized, removedFiles } = await sanitizeGtfsZip(buffer)
+
+    expect(removedFiles).toContain('areas.txt')
+    expect(removedFiles).toContain('stop_areas.txt')
+    expect(removedFiles).toContain('locations.geojson')
+    expect(removedFiles).toHaveLength(3)
+
+    const remaining = await listZipFiles(sanitized)
+    expect(remaining).toContain('stops.txt')
+    expect(remaining).toContain('routes.txt')
+    expect(remaining).not.toContain('areas.txt')
+    expect(remaining).not.toContain('stop_areas.txt')
+    expect(remaining).not.toContain('locations.geojson')
+  })
+
+  test('returns original buffer when no flex files present', async () => {
+    const buffer = await createTestZip({
+      'stops.txt': 'stop_id,stop_name\nS1,Main St',
+      'routes.txt': 'route_id,route_short_name\nR1,Blue',
+      'trips.txt': 'route_id,trip_id\nR1,T1',
+    })
+
+    const { buffer: result, removedFiles } = await sanitizeGtfsZip(buffer)
+
+    expect(removedFiles).toHaveLength(0)
+    // Buffer should be the exact same reference (no re-zip)
+    expect(result).toBe(buffer)
+  })
+
+  test('preserves standard GTFS files while stripping all flex extensions', async () => {
+    const standardFiles: Record<string, string> = {
+      'agency.txt': 'agency_id,agency_name\nA1,Metro',
+      'stops.txt': 'stop_id,stop_name\nS1,Station',
+      'routes.txt': 'route_id\nR1',
+      'trips.txt': 'trip_id\nT1',
+      'stop_times.txt': 'trip_id,stop_id\nT1,S1',
+      'calendar.txt': 'service_id\nWKDY',
+      'shapes.txt': 'shape_id,shape_pt_lat\nSH1,35.0',
+      'transfers.txt': 'from_stop_id,to_stop_id\nS1,S2',
+    }
+    const flexFiles: Record<string, string> = {
+      'areas.txt': 'area_id\nA1',
+      'stop_areas.txt': 'area_id,stop_id\nA1,S1',
+      'booking_rules.txt': 'booking_rule_id\nBR1',
+      'location_groups.txt': 'location_group_id\nLG1',
+      'location_group_stops.txt': 'location_group_id,stop_id\nLG1,S1',
+      'locations.geojson': '{"type":"FeatureCollection","features":[]}',
+    }
+
+    const buffer = await createTestZip({ ...standardFiles, ...flexFiles })
+    const { buffer: sanitized, removedFiles } = await sanitizeGtfsZip(buffer)
+
+    expect(removedFiles.sort()).toEqual([...FLEX_EXTENSION_FILES].sort())
+
+    const remaining = await listZipFiles(sanitized)
+    for (const stdFile of Object.keys(standardFiles)) {
+      expect(remaining).toContain(stdFile)
+    }
+    for (const flexFile of Object.keys(flexFiles)) {
+      expect(remaining).not.toContain(flexFile)
+    }
+  })
+
+  test('preserves file contents after sanitization', async () => {
+    const stopsContent = 'stop_id,stop_name,stop_lat,stop_lon\nS1,Main,35.0,-80.0'
+    const buffer = await createTestZip({
+      'stops.txt': stopsContent,
+      'areas.txt': 'area_id\nA1',
+    })
+
+    const { buffer: sanitized } = await sanitizeGtfsZip(buffer)
+    const zip = await JSZip.loadAsync(sanitized)
+    const content = await zip.file('stops.txt')!.async('string')
+    expect(content).toBe(stopsContent)
   })
 })
