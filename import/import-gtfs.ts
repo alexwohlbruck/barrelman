@@ -19,10 +19,14 @@ import {
   parseStops,
   parseRoutes,
   parseAgencies,
+  parseShapes,
   deriveStopRoutes,
+  deriveRouteShapes,
   importStops,
   importRoutes,
   importStopRoutes,
+  importShapes,
+  updateRouteShapes,
   recordFeed,
   clearFeed,
   computeAllTransfers,
@@ -255,6 +259,21 @@ async function importFeedFile(filepath: string, feedInfo: GtfsFeedInfo) {
       const associations = deriveStopRoutes(tripsContent, stopTimesContent, feedInfo.feedId)
       stopRoutesImported = await importStopRoutes(associations)
       console.log(`  ✓ Imported ${stopRoutesImported} stop-route associations`)
+    }
+
+    // Parse and import shapes (for route-snapped vehicle interpolation)
+    const shapesContent = await readZipEntry(zip, 'shapes.txt')
+    if (shapesContent) {
+      const shapes = parseShapes(shapesContent)
+      const shapesImported = await importShapes(shapes, feedInfo.feedId)
+      console.log(`  ✓ Imported ${shapesImported} shapes`)
+
+      // Link routes to their canonical shape_id
+      if (tripsContent) {
+        const routeShapes = deriveRouteShapes(tripsContent)
+        await updateRouteShapes(routeShapes, feedInfo.feedId)
+        console.log(`  ✓ Linked ${routeShapes.size} routes to shapes`)
+      }
     }
 
     // Record feed in tracking table

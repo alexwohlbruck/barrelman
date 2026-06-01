@@ -375,6 +375,147 @@ export function deriveStopRoutes(
   return result
 }
 
+/**
+ * Parse shapes.txt from a GTFS feed into shape coordinate arrays.
+ *
+ * Returns a Map of shape_id → [[lng, lat], ...] ordered by
+ * shape_pt_sequence. The coordinates use [lng, lat] order to match
+ * GeoJSON convention and Mapbox/Leaflet expectations.
+ */
+export function parseShapes(
+  csvContent: string,
+): Map<string, [number, number][]> {
+  const records = parse(csvContent, {
+    columns: true,
+    skip_empty_lines: true,
+    trim: true,
+    relax_column_count: true,
+  })
+
+  // Group points by shape_id, then sort by sequence
+  const raw = new Map<string, Array<{ seq: number; lat: number; lng: number }>>()
+  for (const row of records) {
+    const id = row.shape_id
+    const lat = parseFloat(row.shape_pt_lat)
+    const lng = parseFloat(row.shape_pt_lon)
+    const seq = parseInt(row.shape_pt_sequence, 10)
+    if (!id || isNaN(lat) || isNaN(lng) || isNaN(seq)) continue
+
+    if (!raw.has(id)) raw.set(id, [])
+    raw.get(id)!.push({ seq, lat, lng })
+  }
+
+  const result = new Map<string, [number, number][]>()
+  for (const [id, points] of raw) {
+    points.sort((a, b) => a.seq - b.seq)
+    result.set(id, points.map(p => [p.lng, p.lat]))
+  }
+
+  return result
+}
+
+/**
+ * Derive route → shape_id mapping from trips.txt.
+ *
+ * For each route, picks the shape_id that appears on the most trips.
+ * This gives the "canonical" shape for display purposes.
+ */
+export function deriveRouteShapes(
+  tripsContent: string,
+): Map<string, string> {
+  const records = parse(tripsContent, {
+    columns: true,
+    skip_empty_lines: true,
+    trim: true,
+    relax_column_count: true,
+  })
+
+  // Count shape_id occurrences per route_id
+  const routeShapeCounts = new Map<string, Map<string, number>>()
+  for (const row of records) {
+    const routeId = row.route_id
+    const shapeId = row.shape_id
+    if (!routeId || !shapeId) continue
+
+    if (!routeShapeCounts.has(routeId)) {
+      routeShapeCounts.set(routeId, new Map())
+    }
+    const counts = routeShapeCounts.get(routeId)!
+    counts.set(shapeId, (counts.get(shapeId) || 0) + 1)
+  }
+
+  // Pick the most common shape per route
+  const result = new Map<string, string>()
+  for (const [routeId, counts] of routeShapeCounts) {
+    let bestShape = ''
+    let bestCount = 0
+    for (const [shapeId, count] of counts) {
+      if (count > bestCount) {
+        bestShape = shapeId
+        bestCount = count
+      }
+    }
+    if (bestShape) result.set(routeId, bestShape)
+  }
+
+  return result
+}
+
+/**
+ * Import shape coordinate arrays into gtfs_shapes table.
+ */
+export async function importShapes(
+  shapes: Map<string, [number, number][]>,
+  feedId: string,
+): Promise<number> {
+  if (shapes.size === 0) return 0
+
+  // Clear existing shapes for this feed
+  await db.execute(sql.raw(
+    `DELETE FROM gtfs_shapes WHERE feed_id = '${feedId.replace(/'/g, "''")}'`,
+  ))
+
+  // Batch insert in chunks of 100 (shapes can be large)
+  const entries = Array.from(shapes.entries())
+  const chunkSize = 100
+  let imported = 0
+
+  for (let i = 0; i < entries.length; i += chunkSize) {
+    const chunk = entries.slice(i, i + chunkSize)
+    const values = chunk
+      .map(([shapeId, coords]) => {
+        const coordsJson = JSON.stringify(coords)
+        return `('${feedId.replace(/'/g, "''")}', '${shapeId.replace(/'/g, "''")}', '${coordsJson.replace(/'/g, "''")}'::jsonb)`
+      })
+      .join(',\n')
+
+    await db.execute(sql.raw(`
+      INSERT INTO gtfs_shapes (feed_id, shape_id, coordinates)
+      VALUES ${values}
+      ON CONFLICT (feed_id, shape_id) DO UPDATE SET coordinates = EXCLUDED.coordinates
+    `))
+    imported += chunk.length
+  }
+
+  return imported
+}
+
+/**
+ * Update gtfs_routes with the canonical shape_id for each route.
+ */
+export async function updateRouteShapes(
+  routeShapes: Map<string, string>,
+  feedId: string,
+): Promise<void> {
+  for (const [routeId, shapeId] of routeShapes) {
+    await db.execute(sql.raw(`
+      UPDATE gtfs_routes
+      SET shape_id = '${shapeId.replace(/'/g, "''")}'
+      WHERE feed_id = '${feedId.replace(/'/g, "''")}' AND route_id = '${routeId.replace(/'/g, "''")}'
+    `))
+  }
+}
+
 // ── Database import ─────────────────────────────────────────────────
 
 /**

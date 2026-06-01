@@ -18,6 +18,9 @@ import {
   getVehiclePositions as _getVehiclePositions,
   type VehiclePositionsRequest,
 } from '../services/vehicles.service'
+import {
+  getRouteShape as _getRouteShape,
+} from '../services/shapes.service'
 
 export function createTransitRoutes(deps: {
   getTransitRoute?: typeof _getTransitRoute
@@ -25,6 +28,7 @@ export function createTransitRoutes(deps: {
   getRoutesForStop?: typeof _getRoutesForStop
   getDepartures?: typeof _getDepartures
   getVehiclePositions?: typeof _getVehiclePositions
+  getRouteShape?: typeof _getRouteShape
   fetchFn?: FetchFn
 } = {}) {
   const getTransitRoute = deps.getTransitRoute || _getTransitRoute
@@ -32,6 +36,7 @@ export function createTransitRoutes(deps: {
   const getRoutesForStop = deps.getRoutesForStop || _getRoutesForStop
   const getDepartures = deps.getDepartures || _getDepartures
   const getVehiclePositions = deps.getVehiclePositions || _getVehiclePositions
+  const getRouteShape = deps.getRouteShape || _getRouteShape
   const fetchFn = deps.fetchFn || undefined
 
   return new Elysia({ prefix: '/transit' })
@@ -277,6 +282,47 @@ export function createTransitRoutes(deps: {
           'and returns vehicles within the specified bounding box. Results ' +
           'are enriched with route colors and short names. Responses are ' +
           'cached for 10 seconds per feed.',
+        tags: ['Transit'],
+      },
+    })
+
+    // ── GET /transit/shapes ───────────────────────────────────────────
+    .get('/shapes', async ({ query, set }) => {
+      try {
+        if (!query.feedId || !query.routeId) {
+          set.status = 400
+          return { error: 'feedId and routeId are required' }
+        }
+
+        const result = await getRouteShape(query.feedId, query.routeId)
+        if (!result) {
+          set.status = 404
+          return { error: 'Shape not found for this route' }
+        }
+
+        // Shapes are static GTFS data — cache aggressively
+        set.headers['Cache-Control'] = 'public, max-age=86400'
+
+        return result
+      } catch (err) {
+        set.status = 500
+        return {
+          error: 'Failed to fetch route shape',
+          detail: err instanceof Error ? err.message : String(err),
+        }
+      }
+    }, {
+      query: t.Object({
+        feedId: t.String(),
+        routeId: t.String(),
+      }),
+      detail: {
+        summary: 'Get route shape geometry',
+        description:
+          'Returns the GTFS shape coordinates for a specific route, ' +
+          'used for snapping live vehicle positions to the actual route ' +
+          'geometry on the map. Coordinates are in [lng, lat] order. ' +
+          'Responses are cached for 24 hours (shapes are static GTFS data).',
         tags: ['Transit'],
       },
     })

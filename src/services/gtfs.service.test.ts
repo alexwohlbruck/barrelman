@@ -13,7 +13,9 @@ import {
   parseStops,
   parseRoutes,
   parseAgencies,
+  parseShapes,
   deriveStopRoutes,
+  deriveRouteShapes,
   generateTransfersTxt,
   fetchFeedList,
 } from './gtfs.service'
@@ -681,5 +683,120 @@ describe('fetchFeedList', () => {
     const feeds = await fetchFeedList('nc', 'test-key', mockFetch)
     // Authorization not type=header → no headers attached
     expect(feeds[0].rtUrls![0].headers).toBeUndefined()
+  })
+})
+
+// ── parseShapes ─────────────────────────────────────────────────────
+
+describe('parseShapes', () => {
+  test('parses standard shapes.txt content', () => {
+    const csv = [
+      'shape_id,shape_pt_lat,shape_pt_lon,shape_pt_sequence',
+      'shape-1,35.2271,-80.8431,1',
+      'shape-1,35.2350,-80.8500,2',
+      'shape-1,35.2400,-80.8550,3',
+    ].join('\n')
+
+    const result = parseShapes(csv)
+    expect(result.size).toBe(1)
+    expect(result.has('shape-1')).toBe(true)
+    const coords = result.get('shape-1')!
+    expect(coords).toHaveLength(3)
+    // [lng, lat] order
+    expect(coords[0]).toEqual([-80.8431, 35.2271])
+    expect(coords[1]).toEqual([-80.8500, 35.2350])
+    expect(coords[2]).toEqual([-80.8550, 35.2400])
+  })
+
+  test('handles multiple shape IDs', () => {
+    const csv = [
+      'shape_id,shape_pt_lat,shape_pt_lon,shape_pt_sequence',
+      'shape-a,35.0,-80.0,1',
+      'shape-a,35.1,-80.1,2',
+      'shape-b,36.0,-81.0,1',
+      'shape-b,36.1,-81.1,2',
+      'shape-b,36.2,-81.2,3',
+    ].join('\n')
+
+    const result = parseShapes(csv)
+    expect(result.size).toBe(2)
+    expect(result.get('shape-a')!).toHaveLength(2)
+    expect(result.get('shape-b')!).toHaveLength(3)
+  })
+
+  test('sorts points by sequence number', () => {
+    const csv = [
+      'shape_id,shape_pt_lat,shape_pt_lon,shape_pt_sequence',
+      'shape-1,35.3,-80.3,3',
+      'shape-1,35.1,-80.1,1',
+      'shape-1,35.2,-80.2,2',
+    ].join('\n')
+
+    const result = parseShapes(csv)
+    const coords = result.get('shape-1')!
+    // Should be sorted by sequence: 1, 2, 3
+    expect(coords[0]).toEqual([-80.1, 35.1])
+    expect(coords[1]).toEqual([-80.2, 35.2])
+    expect(coords[2]).toEqual([-80.3, 35.3])
+  })
+
+  test('skips rows with invalid data', () => {
+    const csv = [
+      'shape_id,shape_pt_lat,shape_pt_lon,shape_pt_sequence',
+      'shape-1,35.0,-80.0,1',
+      ',35.1,-80.1,2',        // missing shape_id
+      'shape-1,abc,-80.2,3',   // invalid lat
+      'shape-1,35.3,-80.3,4',
+    ].join('\n')
+
+    const result = parseShapes(csv)
+    const coords = result.get('shape-1')!
+    expect(coords).toHaveLength(2) // only valid rows
+  })
+
+  test('returns empty map for empty input', () => {
+    const csv = 'shape_id,shape_pt_lat,shape_pt_lon,shape_pt_sequence\n'
+    const result = parseShapes(csv)
+    expect(result.size).toBe(0)
+  })
+})
+
+// ── deriveRouteShapes ───────────────────────────────────────────────
+
+describe('deriveRouteShapes', () => {
+  test('picks the most common shape per route', () => {
+    const csv = [
+      'route_id,trip_id,shape_id,service_id,direction_id',
+      'route-1,trip-1,shape-a,weekday,0',
+      'route-1,trip-2,shape-a,weekday,0',
+      'route-1,trip-3,shape-b,weekday,1',
+      'route-2,trip-4,shape-c,weekday,0',
+    ].join('\n')
+
+    const result = deriveRouteShapes(csv)
+    expect(result.size).toBe(2)
+    expect(result.get('route-1')).toBe('shape-a') // 2 trips vs 1
+    expect(result.get('route-2')).toBe('shape-c')
+  })
+
+  test('skips trips without shape_id', () => {
+    const csv = [
+      'route_id,trip_id,shape_id,service_id',
+      'route-1,trip-1,,weekday',
+      'route-1,trip-2,shape-a,weekday',
+    ].join('\n')
+
+    const result = deriveRouteShapes(csv)
+    expect(result.get('route-1')).toBe('shape-a')
+  })
+
+  test('returns empty map when no shapes', () => {
+    const csv = [
+      'route_id,trip_id,shape_id,service_id',
+      'route-1,trip-1,,weekday',
+    ].join('\n')
+
+    const result = deriveRouteShapes(csv)
+    expect(result.size).toBe(0)
   })
 })

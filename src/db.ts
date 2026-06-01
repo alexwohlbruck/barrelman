@@ -124,5 +124,23 @@ export async function ensureGtfsSchema() {
       ON gtfs_stop_routes (feed_id, stop_id);
     CREATE INDEX IF NOT EXISTS gtfs_stop_routes_route_idx
       ON gtfs_stop_routes (feed_id, route_id);
+
+    -- Route shapes: stores GTFS shapes as ordered coordinate arrays.
+    -- shape_id from shapes.txt; coordinates stored as JSONB [[lng,lat], ...].
+    CREATE TABLE IF NOT EXISTS gtfs_shapes (
+      id SERIAL PRIMARY KEY,
+      feed_id TEXT NOT NULL,
+      shape_id TEXT NOT NULL,
+      coordinates JSONB NOT NULL
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS gtfs_shapes_feed_shape_idx
+      ON gtfs_shapes (feed_id, shape_id);
+    CREATE INDEX IF NOT EXISTS gtfs_shapes_feed_id_idx
+      ON gtfs_shapes (feed_id);
+
+    -- Add shape_id column to routes (most common shape for each route,
+    -- derived from trips.txt during import).
+    ALTER TABLE gtfs_routes ADD COLUMN IF NOT EXISTS shape_id TEXT;
   `))
 }
