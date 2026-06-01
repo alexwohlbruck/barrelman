@@ -1,6 +1,7 @@
 volumes:
   barrelman-data:
   barrelman-osm-data:
+  barrelman-gtfs-data:
 
 services:
   barrelman-db:
@@ -51,6 +52,17 @@ services:
     depends_on:
       - barrelman-db
 
+  motis:
+    container_name: barrelman-motis
+    image: ghcr.io/motis-project/motis:latest
+    restart: unless-stopped
+    working_dir: /data
+    command: ["/motis", "server", "/data"]
+    volumes:
+      - barrelman-gtfs-data:/data
+    ports:
+      - "8080:8080"
+
   barrelman:
     container_name: barrelman
     image: alexwohlbruck/barrelman:latest
@@ -63,9 +75,11 @@ services:
       # BARRELMAN_TILE_KEY: Set in .env for production. When unset, tile access is open (dev mode).
       BARRELMAN_TILE_KEY: ${BARRELMAN_TILE_KEY:-}
       GRAPHHOPPER_URL: http://barrelman-graphhopper:8989
+      MOTIS_URL: http://barrelman-motis:8080
     ports:
       - "5001:5001"
     volumes:
       - barrelman-osm-data:/data
+      - barrelman-gtfs-data:/gtfs-data
     depends_on:
       - barrelman-db

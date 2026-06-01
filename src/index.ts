@@ -11,12 +11,14 @@ import { adminRoutes } from './routes/admin'
 import { tileRoutes } from './routes/tiles'
 import { graphhopperRoutes } from './routes/graphhopper'
 import { routeRoutes } from './routes/route'
-import { ensureSchema } from './db'
+import { transitRoutes } from './routes/transit'
+import { ensureSchema, ensureGtfsSchema } from './db'
 
 const port = Number(process.env.PORT) || 5001
 
 // Ensure post-import columns exist before accepting requests
 await ensureSchema()
+await ensureGtfsSchema()
 
 const app = new Elysia()
   .use(cors())
@@ -41,6 +43,7 @@ const app = new Elysia()
   .use(tileRoutes)
   .use(graphhopperRoutes)
   .use(routeRoutes)
+  .use(transitRoutes)
   .listen(port)
 
 console.log(`Barrelman running at http://localhost:${port}`)
