@@ -148,3 +148,59 @@ export async function ensureGtfsSchema() {
     ALTER TABLE gtfs_routes ADD COLUMN IF NOT EXISTS bikes_allowed INTEGER DEFAULT 0;
   `))
 }
+
+/**
+ * Create GBFS shared-mobility tables for bikeshare/scootershare.
+ */
+export async function ensureGbfsSchema() {
+  await db.execute(sql.raw(`
+    -- ── GBFS system catalog ───────────────────────────────────────────
+    CREATE TABLE IF NOT EXISTS gbfs_systems (
+      id SERIAL PRIMARY KEY,
+      system_id TEXT NOT NULL UNIQUE,
+      name TEXT,
+      operator TEXT,
+      url TEXT NOT NULL,
+      country_code TEXT,
+      lat DOUBLE PRECISION,
+      lon DOUBLE PRECISION,
+      vehicle_types JSONB DEFAULT '[]'::jsonb,
+      has_stations BOOLEAN DEFAULT TRUE,
+      has_free_floating BOOLEAN DEFAULT FALSE,
+      feed_urls JSONB DEFAULT '{}'::jsonb,
+      ttl INTEGER DEFAULT 300,
+      last_polled_at TIMESTAMPTZ,
+      imported_at TIMESTAMPTZ DEFAULT NOW(),
+      enabled BOOLEAN DEFAULT TRUE
+    );
+
+    CREATE INDEX IF NOT EXISTS gbfs_systems_country_idx
+      ON gbfs_systems (country_code);
+
+    -- ── GBFS stations ─────────────────────────────────────────────────
+    CREATE TABLE IF NOT EXISTS gbfs_stations (
+      id SERIAL PRIMARY KEY,
+      system_id TEXT NOT NULL,
+      station_id TEXT NOT NULL,
+      name TEXT,
+      lat DOUBLE PRECISION NOT NULL,
+      lon DOUBLE PRECISION NOT NULL,
+      capacity INTEGER,
+      num_bikes_available INTEGER DEFAULT 0,
+      num_ebikes_available INTEGER DEFAULT 0,
+      num_scooters_available INTEGER DEFAULT 0,
+      num_docks_available INTEGER DEFAULT 0,
+      is_renting BOOLEAN DEFAULT TRUE,
+      is_returning BOOLEAN DEFAULT TRUE,
+      last_reported TIMESTAMPTZ,
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS gbfs_stations_system_station_idx
+      ON gbfs_stations (system_id, station_id);
+    CREATE INDEX IF NOT EXISTS gbfs_stations_system_idx
+      ON gbfs_stations (system_id);
+    CREATE INDEX IF NOT EXISTS gbfs_stations_lat_lon_idx
+      ON gbfs_stations (lat, lon);
+  `))
+}
