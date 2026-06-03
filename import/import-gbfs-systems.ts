@@ -73,15 +73,10 @@ if (countryFilter) {
   console.log(`  After country filter (${countryFilter}): ${filtered.length}`)
 }
 
+// Note: systems.csv doesn't have lat/lon columns, so bbox filtering
+// happens at the station level after import. Use --country to narrow.
 if (bbox) {
-  filtered = filtered.filter((r: any) => {
-    const lat = parseFloat(r.Latitude)
-    const lon = parseFloat(r.Longitude)
-    if (isNaN(lat) || isNaN(lon)) return false
-    return lat >= bbox.south && lat <= bbox.north &&
-           lon >= bbox.west && lon <= bbox.east
-  })
-  console.log(`  After bbox filter: ${filtered.length}`)
+  console.log(`  Note: bbox filtering will be applied to stations after import (catalog has no coordinates)`)
 }
 
 console.log(`\nImporting ${filtered.length} systems...\n`)
@@ -97,8 +92,9 @@ for (const row of filtered) {
   const name = row.Name || null
   const discoveryUrl = row['Auto-Discovery URL']
   const countryCode = row['Country Code'] || null
-  const lat = parseFloat(row.Latitude) || null
-  const lon = parseFloat(row.Longitude) || null
+  // Catalog doesn't have coordinates — we'll derive from first station later
+  let lat: number | null = null
+  let lon: number | null = null
 
   process.stdout.write(`  ${systemId}... `)
 
@@ -201,6 +197,15 @@ for (const row of filtered) {
             const stLon = s.lon ?? s.longitude
             if (!stLat || !stLon) continue
 
+            // Bbox filter at station level (catalog has no system-level coords)
+            if (bbox) {
+              if (stLat < bbox.south || stLat > bbox.north ||
+                  stLon < bbox.west || stLon > bbox.east) continue
+            }
+
+            // Derive system center from first station
+            if (lat === null) { lat = stLat; lon = stLon }
+
             await db.execute(sql.raw(`
               INSERT INTO gbfs_stations (system_id, station_id, name, lat, lon, capacity)
               VALUES ('${safeSysId}', '${safeStationId}', '${safeStationName}',
@@ -215,6 +220,14 @@ for (const row of filtered) {
             stationCount++
           }
           stationsImported += stationCount
+
+          // Update system coordinates (derived from first station)
+          if (lat !== null && lon !== null) {
+            await db.execute(sql.raw(`
+              UPDATE gbfs_systems SET lat = ${lat}, lon = ${lon}
+              WHERE system_id = '${safeSysId}'
+            `))
+          }
         }
       } catch { /* non-fatal */ }
     }
