@@ -22,11 +22,13 @@ import {
   parseShapes,
   deriveStopRoutes,
   deriveRouteShapes,
+  deriveBikesAllowed,
   importStops,
   importRoutes,
   importStopRoutes,
   importShapes,
   updateRouteShapes,
+  updateBikesAllowed,
   recordFeed,
   clearFeed,
   computeAllTransfers,
@@ -288,11 +290,18 @@ async function importFeedFile(filepath: string, feedInfo: GtfsFeedInfo) {
       const shapesImported = await importShapes(shapes, feedInfo.feedId)
       console.log(`  ✓ Imported ${shapesImported} shapes`)
 
-      // Link routes to their canonical shape_id
+      // Link routes to their canonical shape_id and bikes_allowed
       if (tripsContent) {
         const routeShapes = deriveRouteShapes(tripsContent)
         await updateRouteShapes(routeShapes, feedInfo.feedId)
         console.log(`  ✓ Linked ${routeShapes.size} routes to shapes`)
+
+        const bikesAllowed = deriveBikesAllowed(tripsContent)
+        const bikeRoutes = [...bikesAllowed.values()].filter(v => v > 0).length
+        if (bikeRoutes > 0) {
+          await updateBikesAllowed(bikesAllowed, feedInfo.feedId)
+          console.log(`  ✓ ${bikeRoutes} routes with bikes allowed`)
+        }
       }
     }
 

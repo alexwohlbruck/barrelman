@@ -142,5 +142,9 @@ export async function ensureGtfsSchema() {
     -- Add shape_id column to routes (most common shape for each route,
     -- derived from trips.txt during import).
     ALTER TABLE gtfs_routes ADD COLUMN IF NOT EXISTS shape_id TEXT;
+
+    -- bikes_allowed: 0=unknown, 1=at least one bike-allowed trip,
+    -- 2=all trips allow bikes. Derived from trips.txt bikes_allowed field.
+    ALTER TABLE gtfs_routes ADD COLUMN IF NOT EXISTS bikes_allowed INTEGER DEFAULT 0;
   `))
 }

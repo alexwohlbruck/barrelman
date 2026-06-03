@@ -74,6 +74,7 @@ export interface ComputedTransfer {
  */
 const REGION_BBOXES: Record<string, string> = {
   nc: '-84.5,33.8,-75.4,36.6',    // North Carolina
+  nyc: '-74.3,40.45,-73.7,40.95', // NYC metro area (NJ Transit, MTA, PATH)
   southeast: '-92,24,-75,37',       // SE United States
   us: '-125,24,-66,50',            // Continental US
 }
@@ -220,6 +221,139 @@ function buildFeedListUrl(region: string, apiKey: string): string {
   }
 
   return `${base}?${params}`
+}
+
+// ── RT URL discovery for existing feeds ─────────────────────────────
+
+/**
+ * Discover GTFS-RT URLs for feeds already in the database.
+ *
+ * The `gtfs_feeds` table stores Transitland's numeric feed ID as
+ * `onestop_id` (e.g. "886"), but RT feed lookups require the full
+ * `f-{geohash}-{agency}` onestop_id. This function:
+ *
+ *   1. Queries Transitland by numeric ID to resolve the real onestop_id
+ *   2. Queries for the corresponding `{onestop_id}~rt` RT feed
+ *   3. Extracts RT URLs and updates the database
+ *
+ * Returns a summary of how many feeds were checked / updated.
+ */
+export async function discoverRtUrls(
+  feedId?: string,
+  apiKey?: string,
+  fetchFn: FetchFn = globalThis.fetch,
+  onProgress?: (checked: number, total: number, feedId: string, found: boolean) => void,
+  dryRun: boolean = false,
+): Promise<{ checked: number; updated: number; errors: number }> {
+  const key = apiKey || process.env.TRANSITLAND_API_KEY
+  if (!key) throw new Error('TRANSITLAND_API_KEY is required')
+
+  // Get feeds that need RT URL discovery
+  const feedFilter = feedId
+    ? `AND feed_id = '${feedId.replace(/'/g, "''")}'`
+    : ''
+  const result = await db.execute(sql.raw(`
+    SELECT feed_id, onestop_id
+    FROM gtfs_feeds
+    WHERE onestop_id IS NOT NULL
+      AND (rt_urls IS NULL OR rt_urls = '[]'::jsonb)
+      ${feedFilter}
+    ORDER BY feed_id
+  `))
+
+  const feeds = result as unknown as Array<{ feed_id: string; onestop_id: string }>
+  let checked = 0
+  let updated = 0
+  let errors = 0
+
+  for (const feed of feeds) {
+    try {
+      const rtUrls = await resolveRtUrlsForFeed(feed.onestop_id, key, fetchFn)
+      checked++
+
+      if (rtUrls.length > 0) {
+        if (!dryRun) {
+          const rtUrlsJson = JSON.stringify(rtUrls).replace(/'/g, "''")
+          await db.execute(sql.raw(`
+            UPDATE gtfs_feeds
+            SET rt_urls = '${rtUrlsJson}'::jsonb
+            WHERE feed_id = '${feed.feed_id.replace(/'/g, "''")}'
+          `))
+        }
+        updated++
+      }
+
+      onProgress?.(checked, feeds.length, feed.feed_id, rtUrls.length > 0)
+
+      // Rate limiting: 200ms between Transitland API calls
+      if (checked < feeds.length) {
+        await new Promise(r => setTimeout(r, 200))
+      }
+    } catch (err) {
+      errors++
+      checked++
+      console.error(
+        `[RT Discovery] Error for feed ${feed.feed_id}:`,
+        err instanceof Error ? err.message : err,
+      )
+      onProgress?.(checked, feeds.length, feed.feed_id, false)
+    }
+  }
+
+  return { checked, updated, errors }
+}
+
+/**
+ * Resolve RT URLs for a single feed by its Transitland numeric ID.
+ *
+ * Steps:
+ *   1. GET /feeds?id={numericId} to get the real onestop_id
+ *   2. GET /feeds?spec=GTFS_RT&onestop_id={onestopId}~rt to find RT feed
+ *   3. Extract realtime_vehicle_positions, realtime_trip_updates,
+ *      realtime_alerts URLs from the response
+ */
+async function resolveRtUrlsForFeed(
+  numericId: string,
+  apiKey: string,
+  fetchFn: FetchFn = globalThis.fetch,
+): Promise<GtfsRtUrl[]> {
+  // Step 1: Resolve numeric ID to real onestop_id
+  const feedUrl = `https://transit.land/api/v2/rest/feeds?apikey=${apiKey}&id=${encodeURIComponent(numericId)}&limit=1`
+  const feedResponse = await fetchFn(feedUrl)
+  if (!feedResponse.ok) return []
+
+  const feedData = await feedResponse.json() as any
+  const staticFeed = feedData.feeds?.[0]
+  if (!staticFeed?.onestop_id) return []
+
+  const realOnestopId = staticFeed.onestop_id as string
+
+  // Step 2: Look up the RT feed using the {onestopId}~rt convention
+  const rtOnestopId = `${realOnestopId}~rt`
+  const rtUrl = `https://transit.land/api/v2/rest/feeds?apikey=${apiKey}&spec=GTFS_RT&onestop_id=${encodeURIComponent(rtOnestopId)}&limit=1`
+  const rtResponse = await fetchFn(rtUrl)
+  if (!rtResponse.ok) return []
+
+  const rtData = await rtResponse.json() as any
+  const rtFeed = rtData.feeds?.[0]
+  if (!rtFeed) return []
+
+  // Step 3: Extract RT URLs
+  const urls = rtFeed.urls || {}
+  const rtUrls: GtfsRtUrl[] = []
+
+  for (const key of ['realtime_trip_updates', 'realtime_vehicle_positions', 'realtime_alerts'] as const) {
+    const url = urls[key]
+    if (url) {
+      const headers: Record<string, string> = {}
+      if (rtFeed.authorization?.type === 'header' && rtFeed.authorization?.param_name) {
+        headers[rtFeed.authorization.param_name] = rtFeed.authorization.param_value || ''
+      }
+      rtUrls.push(Object.keys(headers).length ? { url, headers } : { url })
+    }
+  }
+
+  return rtUrls
 }
 
 // ── GTFS ZIP parsing ────────────────────────────────────────────────
@@ -462,6 +596,51 @@ export function deriveRouteShapes(
 }
 
 /**
+ * Derive route → bikes_allowed mapping from trips.txt.
+ *
+ * GTFS spec: bikes_allowed per trip: 0/empty=unknown, 1=allowed, 2=not allowed.
+ * We aggregate to per-route:
+ *   - If ANY trip on the route has bikes_allowed=1 → route gets 1
+ *   - If ALL trips have bikes_allowed=1 → route gets 2
+ *   - Otherwise → 0 (unknown/not allowed)
+ */
+export function deriveBikesAllowed(
+  tripsContent: string,
+): Map<string, number> {
+  const records = parse(tripsContent, {
+    columns: true,
+    skip_empty_lines: true,
+    trim: true,
+    relax_column_count: true,
+  })
+
+  // Track per-route: total trips, trips with bikes_allowed=1
+  const routeStats = new Map<string, { total: number; allowed: number }>()
+  for (const row of records) {
+    const routeId = row.route_id
+    if (!routeId) continue
+
+    const stats = routeStats.get(routeId) ?? { total: 0, allowed: 0 }
+    stats.total++
+    if (String(row.bikes_allowed) === '1') stats.allowed++
+    routeStats.set(routeId, stats)
+  }
+
+  const result = new Map<string, number>()
+  for (const [routeId, stats] of routeStats) {
+    if (stats.allowed === 0) {
+      result.set(routeId, 0) // unknown or not allowed
+    } else if (stats.allowed === stats.total) {
+      result.set(routeId, 2) // all trips allow bikes
+    } else {
+      result.set(routeId, 1) // some trips allow bikes
+    }
+  }
+
+  return result
+}
+
+/**
  * Import shape coordinate arrays into gtfs_shapes table.
  */
 export async function importShapes(
@@ -511,6 +690,22 @@ export async function updateRouteShapes(
     await db.execute(sql.raw(`
       UPDATE gtfs_routes
       SET shape_id = '${shapeId.replace(/'/g, "''")}'
+      WHERE feed_id = '${feedId.replace(/'/g, "''")}' AND route_id = '${routeId.replace(/'/g, "''")}'
+    `))
+  }
+}
+
+/**
+ * Update the bikes_allowed column on gtfs_routes for a given feed.
+ */
+export async function updateBikesAllowed(
+  bikesAllowed: Map<string, number>,
+  feedId: string,
+): Promise<void> {
+  for (const [routeId, value] of bikesAllowed) {
+    await db.execute(sql.raw(`
+      UPDATE gtfs_routes
+      SET bikes_allowed = ${value}
       WHERE feed_id = '${feedId.replace(/'/g, "''")}' AND route_id = '${routeId.replace(/'/g, "''")}'
     `))
   }

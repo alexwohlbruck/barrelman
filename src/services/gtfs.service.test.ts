@@ -16,6 +16,7 @@ import {
   parseShapes,
   deriveStopRoutes,
   deriveRouteShapes,
+  deriveBikesAllowed,
   generateTransfersTxt,
   fetchFeedList,
   sanitizeGtfsZip,
@@ -903,5 +904,85 @@ describe('sanitizeGtfsZip', () => {
     const zip = await JSZip.loadAsync(sanitized)
     const content = await zip.file('stops.txt')!.async('string')
     expect(content).toBe(stopsContent)
+  })
+})
+
+// ── deriveBikesAllowed ──────────────────────────────────────────────
+
+describe('deriveBikesAllowed', () => {
+  test('returns 2 when all trips on a route allow bikes', () => {
+    const csv = [
+      'route_id,trip_id,bikes_allowed',
+      'route-1,trip-1,1',
+      'route-1,trip-2,1',
+      'route-1,trip-3,1',
+    ].join('\n')
+
+    const result = deriveBikesAllowed(csv)
+    expect(result.get('route-1')).toBe(2) // all trips allow
+  })
+
+  test('returns 1 when some trips allow bikes', () => {
+    const csv = [
+      'route_id,trip_id,bikes_allowed',
+      'route-1,trip-1,1',
+      'route-1,trip-2,0',
+      'route-1,trip-3,1',
+    ].join('\n')
+
+    const result = deriveBikesAllowed(csv)
+    expect(result.get('route-1')).toBe(1) // some trips allow
+  })
+
+  test('returns 0 when no trips allow bikes', () => {
+    const csv = [
+      'route_id,trip_id,bikes_allowed',
+      'route-1,trip-1,0',
+      'route-1,trip-2,2', // 2 = not allowed in GTFS spec
+      'route-1,trip-3,',  // empty = unknown
+    ].join('\n')
+
+    const result = deriveBikesAllowed(csv)
+    expect(result.get('route-1')).toBe(0)
+  })
+
+  test('handles missing bikes_allowed column', () => {
+    const csv = [
+      'route_id,trip_id,shape_id',
+      'route-1,trip-1,shape-a',
+      'route-1,trip-2,shape-b',
+    ].join('\n')
+
+    const result = deriveBikesAllowed(csv)
+    expect(result.get('route-1')).toBe(0) // unknown
+  })
+
+  test('handles multiple routes independently', () => {
+    const csv = [
+      'route_id,trip_id,bikes_allowed',
+      'route-1,trip-1,1',
+      'route-1,trip-2,1',
+      'route-2,trip-3,0',
+      'route-2,trip-4,0',
+      'route-3,trip-5,1',
+      'route-3,trip-6,0',
+    ].join('\n')
+
+    const result = deriveBikesAllowed(csv)
+    expect(result.get('route-1')).toBe(2) // all allow
+    expect(result.get('route-2')).toBe(0) // none allow
+    expect(result.get('route-3')).toBe(1) // some allow
+  })
+
+  test('skips rows without route_id', () => {
+    const csv = [
+      'route_id,trip_id,bikes_allowed',
+      ',trip-1,1',
+      'route-1,trip-2,1',
+    ].join('\n')
+
+    const result = deriveBikesAllowed(csv)
+    expect(result.size).toBe(1)
+    expect(result.get('route-1')).toBe(2)
   })
 })
