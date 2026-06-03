@@ -16,11 +16,19 @@ import {
 } from '../services/departures.service'
 import {
   getVehiclePositions as _getVehiclePositions,
+  getVehiclesForRoute as _getVehiclesForRoute,
+  getTripStopTimes as _getTripStopTimes,
   type VehiclePositionsRequest,
 } from '../services/vehicles.service'
 import {
   getRouteShape as _getRouteShape,
 } from '../services/shapes.service'
+import {
+  discoverRtUrls as _discoverRtUrls,
+} from '../services/gtfs.service'
+import {
+  getRouteDetail as _getRouteDetail,
+} from '../services/route-detail.service'
 
 export function createTransitRoutes(deps: {
   getTransitRoute?: typeof _getTransitRoute
@@ -29,6 +37,10 @@ export function createTransitRoutes(deps: {
   getDepartures?: typeof _getDepartures
   getVehiclePositions?: typeof _getVehiclePositions
   getRouteShape?: typeof _getRouteShape
+  discoverRtUrls?: typeof _discoverRtUrls
+  getRouteDetail?: typeof _getRouteDetail
+  getVehiclesForRoute?: typeof _getVehiclesForRoute
+  getTripStopTimes?: typeof _getTripStopTimes
   fetchFn?: FetchFn
 } = {}) {
   const getTransitRoute = deps.getTransitRoute || _getTransitRoute
@@ -37,6 +49,10 @@ export function createTransitRoutes(deps: {
   const getDepartures = deps.getDepartures || _getDepartures
   const getVehiclePositions = deps.getVehiclePositions || _getVehiclePositions
   const getRouteShape = deps.getRouteShape || _getRouteShape
+  const discoverRtUrls = deps.discoverRtUrls || _discoverRtUrls
+  const getRouteDetail = deps.getRouteDetail || _getRouteDetail
+  const getVehiclesForRoute = deps.getVehiclesForRoute || _getVehiclesForRoute
+  const getTripStopTimes = deps.getTripStopTimes || _getTripStopTimes
   const fetchFn = deps.fetchFn || undefined
 
   return new Elysia({ prefix: '/transit' })
@@ -323,6 +339,160 @@ export function createTransitRoutes(deps: {
           'used for snapping live vehicle positions to the actual route ' +
           'geometry on the map. Coordinates are in [lng, lat] order. ' +
           'Responses are cached for 24 hours (shapes are static GTFS data).',
+        tags: ['Transit'],
+      },
+    })
+
+    // ── GET /transit/route-detail ─────────────────────────────────────
+    .get('/route-detail', async ({ query, set }) => {
+      try {
+        if (!query.feedId || !query.routeId) {
+          set.status = 400
+          return { error: 'feedId and routeId are required' }
+        }
+
+        const result = await getRouteDetail(query.feedId, query.routeId)
+        if (!result) {
+          set.status = 404
+          return { error: 'Route not found' }
+        }
+
+        set.headers['Cache-Control'] = 'public, max-age=3600'
+        return result
+      } catch (err) {
+        set.status = 500
+        return {
+          error: 'Failed to fetch route detail',
+          detail: err instanceof Error ? err.message : String(err),
+        }
+      }
+    }, {
+      query: t.Object({
+        feedId: t.String(),
+        routeId: t.String(),
+      }),
+      detail: {
+        summary: 'Get route detail with ordered stops and shape',
+        description:
+          'Returns route metadata, geographically ordered stops, shape ' +
+          'geometry, and related route IDs (same trunk line) for rendering ' +
+          'an isolated route detail view.',
+        tags: ['Transit'],
+      },
+    })
+
+    // ── GET /transit/route-vehicles ──────────────────────────────────
+    .get('/route-vehicles', async ({ query, set }) => {
+      try {
+        if (!query.routeIds) {
+          set.status = 400
+          return { error: 'routeIds is required (comma-separated)' }
+        }
+
+        const routeIds = query.routeIds.split(',').map(s => s.trim()).filter(Boolean)
+        if (routeIds.length === 0) {
+          set.status = 400
+          return { error: 'routeIds must contain at least one route ID' }
+        }
+
+        return await getVehiclesForRoute(routeIds, query.feedId || undefined, fetchFn)
+      } catch (err) {
+        set.status = 500
+        return {
+          error: 'Failed to fetch route vehicles',
+          detail: err instanceof Error ? err.message : String(err),
+        }
+      }
+    }, {
+      query: t.Object({
+        routeIds: t.String(),
+        feedId: t.Optional(t.String()),
+      }),
+      detail: {
+        summary: 'Get all vehicles on specific routes (no bounding box)',
+        tags: ['Transit'],
+      },
+    })
+
+    // ── GET /transit/trip-stops ──────────────────────────────────────
+    .get('/trip-stops', async ({ query, set }) => {
+      try {
+        if (!query.feedId || !query.tripId) {
+          set.status = 400
+          return { error: 'feedId and tripId are required' }
+        }
+        const stops = await getTripStopTimes(query.feedId, query.tripId, fetchFn)
+        return { stops }
+      } catch (err) {
+        set.status = 500
+        return { error: 'Failed to fetch trip stops', detail: err instanceof Error ? err.message : String(err) }
+      }
+    }, {
+      query: t.Object({ feedId: t.String(), tripId: t.String() }),
+      detail: { summary: 'Get real-time stop times for a specific trip', tags: ['Transit'] },
+    })
+
+    // ── GET /transit/bikes-allowed ────────────────────────────────────
+    .get('/bikes-allowed', async ({ query, set }) => {
+      try {
+        if (!query.routes) {
+          set.status = 400
+          return { error: 'routes is required (comma-separated feedId_routeId pairs)' }
+        }
+        const pairs = query.routes.split(',').map(s => s.trim()).filter(Boolean)
+        const routes = pairs.map(pair => {
+          const idx = pair.indexOf('_')
+          if (idx === -1) return null
+          return { feedId: pair.slice(0, idx), routeId: pair.slice(idx + 1) }
+        }).filter(Boolean) as Array<{ feedId: string; routeId: string }>
+
+        if (routes.length === 0) {
+          set.status = 400
+          return { error: 'No valid feedId_routeId pairs found' }
+        }
+
+        const { getBikesAllowed } = await import('../services/gtfs.service')
+        return await getBikesAllowed(routes)
+      } catch (err) {
+        set.status = 500
+        return { error: 'Failed to check bikes allowed', detail: err instanceof Error ? err.message : String(err) }
+      }
+    }, {
+      query: t.Object({ routes: t.String() }),
+      detail: { summary: 'Batch check bikes_allowed for routes', tags: ['Transit'] },
+    })
+
+    // ── POST /transit/discover-rt-urls ─────────────────────────────────
+    .post('/discover-rt-urls', async ({ body, set }) => {
+      try {
+        const result = await discoverRtUrls(
+          body.feedId || undefined,
+          undefined, // uses TRANSITLAND_API_KEY from env
+          fetchFn,
+        )
+
+        return {
+          checked: result.checked,
+          updated: result.updated,
+          errors: result.errors,
+        }
+      } catch (err) {
+        set.status = 500
+        return {
+          error: 'Failed to discover RT URLs',
+          detail: err instanceof Error ? err.message : String(err),
+        }
+      }
+    }, {
+      body: t.Object({
+        feedId: t.Optional(t.String()),
+      }),
+      detail: {
+        summary: 'Discover GTFS-RT feed URLs',
+        description:
+          'Queries Transitland to discover GTFS-RT feed URLs (vehicle positions, ' +
+          'trip updates, alerts) for existing feeds. If feedId is provided, only ' +
+          'discovers for that feed; otherwise discovers for all feeds missing RT URLs.',
         tags: ['Transit'],
       },
     })

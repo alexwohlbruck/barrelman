@@ -696,6 +696,39 @@ export async function updateRouteShapes(
 }
 
 /**
+ * Batch lookup bikes_allowed for a list of (feedId, routeId) pairs.
+ * Returns a map of "feedId_routeId" → bikes_allowed (0/1/2).
+ * Routes not found in the DB return 0 (unknown).
+ */
+export async function getBikesAllowed(
+  routes: Array<{ feedId: string; routeId: string }>,
+): Promise<Record<string, number>> {
+  if (routes.length === 0) return {}
+
+  const conditions = routes.map(({ feedId, routeId }) =>
+    `(feed_id = '${feedId.replace(/'/g, "''")}' AND route_id = '${routeId.replace(/'/g, "''")}')`
+  ).join(' OR ')
+
+  const rows = await db.execute(sql.raw(`
+    SELECT feed_id, route_id, bikes_allowed
+    FROM gtfs_routes
+    WHERE ${conditions}
+  `))
+
+  const result: Record<string, number> = {}
+  // Default all requested routes to 0
+  for (const { feedId, routeId } of routes) {
+    result[`${feedId}_${routeId}`] = 0
+  }
+  // Fill in from DB
+  for (const row of rows as any[]) {
+    result[`${row.feed_id}_${row.route_id}`] = parseInt(row.bikes_allowed, 10) || 0
+  }
+
+  return result
+}
+
+/**
  * Update the bikes_allowed column on gtfs_routes for a given feed.
  */
 export async function updateBikesAllowed(
