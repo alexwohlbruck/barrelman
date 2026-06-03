@@ -53,6 +53,20 @@ export interface GbfsStation {
   distance?: number // meters, populated by nearby queries
 }
 
+export interface GbfsFreeVehicle {
+  systemId: string
+  vehicleId: string
+  type: 'free_floating'
+  formFactor: string // bicycle, scooter, moped
+  name: string // operator + vehicle type
+  lat: number
+  lon: number
+  isReserved: boolean
+  isDisabled: boolean
+  batteryPercent: number | null
+  distance?: number
+}
+
 export interface NearbyStationsRequest {
   lat: number
   lng: number
@@ -61,8 +75,10 @@ export interface NearbyStationsRequest {
   limit?: number // default 5
 }
 
+export type NearbyResult = (GbfsStation & { type: 'station' }) | GbfsFreeVehicle
+
 export interface NearbyStationsResponse {
-  stations: GbfsStation[]
+  stations: NearbyResult[]
   systems: Array<{ systemId: string; name: string | null; operator: string | null }>
 }
 
@@ -83,6 +99,12 @@ interface StationStatusEntry {
   isReturning: boolean
   lastReported: string | null
 }
+
+/** Per-system free-floating vehicle positions (in-memory only). */
+const vehicleCache = new LRUCache<string, GbfsFreeVehicle[]>({
+  max: 200,
+  ttl: 30_000, // 30s default, overridden per-system
+})
 
 /** System metadata (discovery URLs, TTL). Rarely changes. */
 const systemCache = new LRUCache<string, GbfsSystem>({
@@ -135,55 +157,94 @@ export async function getNearbyStations(
     LIMIT ${limit * 3}
   `)) as any[]
 
-  if (rows.length === 0) {
-    return { stations: [], systems: [] }
-  }
+  // ── Station-based results ──────────────────────────────────────────
 
-  // Collect unique systems and refresh their availability
-  const systemIds = [...new Set(rows.map(r => r.system_id))]
-  await Promise.allSettled(
-    systemIds.map(id => refreshStationStatus(id)),
-  )
+  const results: NearbyResult[] = []
+  const allSystemIds = new Set<string>()
 
-  // Merge real-time availability
-  const stations: GbfsStation[] = []
-  for (const row of rows) {
-    const statusMap = stationStatusCache.get(row.system_id)
-    const status = statusMap?.get(row.station_id)
+  if (rows.length > 0) {
+    const stationSystemIds = [...new Set(rows.map(r => r.system_id))]
+    stationSystemIds.forEach(id => allSystemIds.add(id))
+    await Promise.allSettled(
+      stationSystemIds.map(id => refreshStationStatus(id)),
+    )
 
-    const station: GbfsStation = {
-      systemId: row.system_id,
-      stationId: row.station_id,
-      name: row.name || '',
-      lat: row.lat,
-      lon: row.lon,
-      capacity: row.capacity,
-      numBikesAvailable: status?.numBikesAvailable ?? row.num_bikes_available ?? 0,
-      numEbikesAvailable: status?.numEbikesAvailable ?? row.num_ebikes_available ?? 0,
-      numScootersAvailable: status?.numScootersAvailable ?? row.num_scooters_available ?? 0,
-      numDocksAvailable: status?.numDocksAvailable ?? row.num_docks_available ?? 0,
-      isRenting: status?.isRenting ?? row.is_renting ?? true,
-      isReturning: status?.isReturning ?? row.is_returning ?? true,
-      lastReported: status?.lastReported ?? row.last_reported,
-      distance: Math.round(row.distance),
+    for (const row of rows) {
+      const statusMap = stationStatusCache.get(row.system_id)
+      const status = statusMap?.get(row.station_id)
+
+      const station: GbfsStation & { type: 'station' } = {
+        type: 'station',
+        systemId: row.system_id,
+        stationId: row.station_id,
+        name: row.name || '',
+        lat: row.lat,
+        lon: row.lon,
+        capacity: row.capacity,
+        numBikesAvailable: status?.numBikesAvailable ?? row.num_bikes_available ?? 0,
+        numEbikesAvailable: status?.numEbikesAvailable ?? row.num_ebikes_available ?? 0,
+        numScootersAvailable: status?.numScootersAvailable ?? row.num_scooters_available ?? 0,
+        numDocksAvailable: status?.numDocksAvailable ?? row.num_docks_available ?? 0,
+        isRenting: status?.isRenting ?? row.is_renting ?? true,
+        isReturning: status?.isReturning ?? row.is_returning ?? true,
+        lastReported: status?.lastReported ?? row.last_reported,
+        distance: Math.round(row.distance),
+      }
+
+      if (vehicleType === 'bike' && station.numBikesAvailable + station.numEbikesAvailable <= 0) continue
+      if (vehicleType === 'ebike' && station.numEbikesAvailable <= 0) continue
+      if (vehicleType === 'scooter' && station.numScootersAvailable <= 0) continue
+      if (station.distance! > radius) continue
+
+      results.push(station)
     }
-
-    // Filter by vehicle type
-    if (vehicleType === 'bike' && station.numBikesAvailable + station.numEbikesAvailable <= 0) continue
-    if (vehicleType === 'ebike' && station.numEbikesAvailable <= 0) continue
-    if (vehicleType === 'scooter' && station.numScootersAvailable <= 0) continue
-
-    // Filter to actual radius (bounding box is an overestimate)
-    if (station.distance! > radius) continue
-
-    stations.push(station)
-    if (stations.length >= limit) break
   }
 
-  // Collect system metadata for the response
-  const systemMeta = await getSystemsMeta(systemIds)
+  // ── Free-floating vehicles ────────────────────────────────────────
 
-  return { stations, systems: systemMeta }
+  const freeFloatingSystems = await db.execute(sql.raw(`
+    SELECT system_id FROM gbfs_systems
+    WHERE enabled = TRUE AND has_free_floating = TRUE
+      AND lat IS NOT NULL
+      AND lat BETWEEN ${lat - 1} AND ${lat + 1}
+      AND lon BETWEEN ${lng - 1} AND ${lng + 1}
+  `)) as any[]
+
+  if (freeFloatingSystems.length > 0) {
+    const ffSystemIds = freeFloatingSystems.map((r: any) => r.system_id as string)
+    ffSystemIds.forEach(id => allSystemIds.add(id))
+
+    await Promise.allSettled(
+      ffSystemIds.map(id => refreshVehicleStatus(id)),
+    )
+
+    for (const sysId of ffSystemIds) {
+      const vehicles = vehicleCache.get(sysId)
+      if (!vehicles) continue
+
+      for (const v of vehicles) {
+        if (v.isReserved || v.isDisabled) continue
+
+        // Vehicle type filter
+        if (vehicleType === 'bike' && v.formFactor !== 'bicycle') continue
+        if (vehicleType === 'ebike' && v.formFactor !== 'bicycle') continue
+        if (vehicleType === 'scooter' && !v.formFactor.includes('scooter')) continue
+
+        // Haversine distance
+        const dist = haversineM(lat, lng, v.lat, v.lon)
+        if (dist > radius) continue
+
+        results.push({ ...v, distance: Math.round(dist) })
+      }
+    }
+  }
+
+  // Sort all results (stations + vehicles) by distance, apply limit
+  results.sort((a, b) => (a.distance ?? Infinity) - (b.distance ?? Infinity))
+  const limited = results.slice(0, limit)
+
+  const systemMeta = await getSystemsMeta([...allSystemIds])
+  return { stations: limited, systems: systemMeta }
 }
 
 /**
@@ -261,7 +322,85 @@ async function refreshStationStatus(systemId: string): Promise<void> {
   }
 }
 
+// ── Free-floating vehicle polling ────────────────────────────────────
+
+/**
+ * Fetch and cache vehicle_status.json (v3) or free_bike_status.json (v2)
+ * for a dockless system. Vehicles are kept in-memory only.
+ */
+async function refreshVehicleStatus(systemId: string): Promise<void> {
+  if (vehicleCache.has(systemId)) return
+
+  const system = await getSystem(systemId)
+  if (!system) return
+
+  const feedUrl = system.feedUrls.vehicle_status ?? system.feedUrls.free_bike_status
+  if (!feedUrl) return
+
+  try {
+    const response = await fetch(feedUrl, {
+      signal: AbortSignal.timeout(8000),
+    })
+    if (!response.ok) return
+
+    const data = await response.json() as any
+    // v3: data.vehicles, v2: data.bikes
+    const rawVehicles = data?.data?.vehicles ?? data?.data?.bikes ?? []
+
+    // Build a vehicle_type_id → form_factor map from the system's cached types
+    const typeMap = new Map<string, string>()
+    for (const vt of system.vehicleTypes) {
+      typeMap.set(vt.vehicleTypeId, vt.formFactor || 'bicycle')
+    }
+
+    const systemName = system.name || system.operator || systemId
+
+    const vehicles: GbfsFreeVehicle[] = []
+    for (const v of rawVehicles) {
+      if (v.is_reserved || v.is_disabled) continue
+      const vLat = v.lat ?? v.latitude
+      const vLon = v.lon ?? v.longitude
+      if (!vLat || !vLon) continue
+
+      const formFactor = typeMap.get(v.vehicle_type_id) || 'bicycle'
+      const label = formFactor.includes('scooter') ? 'Scooter' : 'Bike'
+
+      vehicles.push({
+        systemId,
+        vehicleId: v.vehicle_id || v.bike_id || '',
+        type: 'free_floating',
+        formFactor,
+        name: `${systemName} ${label}`,
+        lat: vLat,
+        lon: vLon,
+        isReserved: false,
+        isDisabled: false,
+        batteryPercent: v.current_fuel_percent != null
+          ? Math.round(v.current_fuel_percent * 100)
+          : null,
+      })
+    }
+
+    const ttlMs = Math.max((system.ttl || 30) * 1000, 10_000)
+    vehicleCache.set(systemId, vehicles, { ttl: ttlMs })
+  } catch (err) {
+    console.warn(`[GBFS] Failed to fetch vehicle_status for ${systemId}:`,
+      err instanceof Error ? err.message : err)
+  }
+}
+
 // ── Helpers ─────────────────────────────────────────────────────────
+
+/** Haversine distance in meters between two lat/lng points. */
+function haversineM(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const R = 6371000
+  const dLat = (lat2 - lat1) * Math.PI / 180
+  const dLon = (lon2 - lon1) * Math.PI / 180
+  const a = Math.sin(dLat / 2) ** 2 +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+    Math.sin(dLon / 2) ** 2
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+}
 
 async function getSystem(systemId: string): Promise<GbfsSystem | null> {
   const cached = systemCache.get(systemId)
