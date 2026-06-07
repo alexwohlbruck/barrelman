@@ -162,6 +162,12 @@ export interface TransitLeg {
   rentalFormFactor?: string
   /** GBFS station ID */
   rentalStationId?: string
+  /** Deep link URI for unlocking the rental vehicle */
+  rentalUri?: string
+  /** Propulsion type (HUMAN, ELECTRIC_ASSIST, ELECTRIC) */
+  rentalPropulsionType?: string
+  /** Destination station name (for docked returns) */
+  rentalToStationName?: string
 }
 
 export interface TransitLegPlace {
@@ -339,11 +345,14 @@ function adaptLeg(leg: any): TransitLeg {
   }
 
   // Rental/shared mobility fields (GBFS legs from intermodal routing)
-  if (leg.mode === 'RENTAL') {
-    adapted.rentalProvider = leg.rentalProvider || leg.from?.rentalProvider || undefined
-    adapted.rentalStationName = leg.from?.name || undefined
-    adapted.rentalFormFactor = leg.rentalFormFactor || leg.from?.rentalFormFactor || undefined
-    adapted.rentalStationId = leg.from?.rentalStationId || leg.from?.stopId || undefined
+  if (leg.mode === 'RENTAL' && leg.rental) {
+    adapted.rentalProvider = leg.rental.systemName || leg.rental.providerGroupId || undefined
+    adapted.rentalStationName = leg.rental.fromStationName || leg.from?.name || undefined
+    adapted.rentalFormFactor = leg.rental.formFactor || undefined
+    adapted.rentalStationId = leg.from?.stopId || undefined
+    adapted.rentalUri = leg.rental.rentalUriIOS || leg.rental.rentalUriAndroid || leg.rental.rentalUriWeb || undefined
+    adapted.rentalPropulsionType = leg.rental.propulsionType || undefined
+    adapted.rentalToStationName = leg.rental.toStationName || leg.to?.name || undefined
   }
 
   return adapted
