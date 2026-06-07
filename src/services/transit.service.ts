@@ -577,8 +577,12 @@ async function queryMotisIntermodal(
   if (request.postTransitModes?.length) {
     params.set('postTransitModes', request.postTransitModes.join(','))
   }
+  // Explicitly pass directModes — MOTIS defaults to WALK which triggers
+  // a slow direct walk computation. Pass empty to skip when not needed.
   if (request.directModes?.length) {
     params.set('directModes', request.directModes.join(','))
+  } else {
+    params.set('maxDirectTime', '0')
   }
   if (request.transitModes?.length) {
     params.set('transitModes', request.transitModes.join(','))
