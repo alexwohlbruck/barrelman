@@ -2,12 +2,16 @@ import Elysia, { t } from 'elysia'
 import { authHandler } from '../middleware/auth'
 import {
   getTransitRoute as _getTransitRoute,
+  getIntermodalRoute as _getIntermodalRoute,
   getNearbyStops as _getNearbyStops,
   getRoutesForStop as _getRoutesForStop,
   MotisError,
   ALL_TRANSIT_MODES,
   type TransitRouteRequest,
+  type IntermodalRouteRequest,
   type TransitMode,
+  type MotisStreetMode,
+  type RentalFormFactor,
   type FetchFn,
 } from '../services/transit.service'
 import {
@@ -32,6 +36,7 @@ import {
 
 export function createTransitRoutes(deps: {
   getTransitRoute?: typeof _getTransitRoute
+  getIntermodalRoute?: typeof _getIntermodalRoute
   getNearbyStops?: typeof _getNearbyStops
   getRoutesForStop?: typeof _getRoutesForStop
   getDepartures?: typeof _getDepartures
@@ -44,6 +49,7 @@ export function createTransitRoutes(deps: {
   fetchFn?: FetchFn
 } = {}) {
   const getTransitRoute = deps.getTransitRoute || _getTransitRoute
+  const getIntermodalRoute = deps.getIntermodalRoute || _getIntermodalRoute
   const getNearbyStops = deps.getNearbyStops || _getNearbyStops
   const getRoutesForStop = deps.getRoutesForStop || _getRoutesForStop
   const getDepartures = deps.getDepartures || _getDepartures
@@ -116,6 +122,82 @@ export function createTransitRoutes(deps: {
           'Returns transit legs with boarding/alighting stops, route info, and ' +
           'geometry. Walking legs are straight-line estimates — the Parchment ' +
           'server replaces them with actual GraphHopper walking routes.',
+        tags: ['Transit'],
+      },
+    })
+
+    // ── POST /transit/intermodal-route ───────────────────────────────
+    .post('/intermodal-route', async ({ body, set }) => {
+      try {
+        const request: IntermodalRouteRequest = {
+          from: { lat: body.from.lat, lng: body.from.lng },
+          to: { lat: body.to.lat, lng: body.to.lng },
+          time: body.time,
+          arriveBy: body.arriveBy,
+          numItineraries: body.numItineraries,
+          searchWindow: body.searchWindow,
+          transitModes: body.transitModes as TransitMode[] | undefined,
+          maxWalkDistance: body.maxWalkDistance,
+          maxTransfers: body.maxTransfers,
+          wheelchair: body.wheelchair,
+          preTransitModes: body.preTransitModes as MotisStreetMode[] | undefined,
+          postTransitModes: body.postTransitModes as MotisStreetMode[] | undefined,
+          directModes: body.directModes as MotisStreetMode[] | undefined,
+          maxPreTransitTime: body.maxPreTransitTime,
+          maxPostTransitTime: body.maxPostTransitTime,
+          preTransitRentalFormFactors: body.preTransitRentalFormFactors as RentalFormFactor[] | undefined,
+          postTransitRentalFormFactors: body.postTransitRentalFormFactors as RentalFormFactor[] | undefined,
+        }
+        return await getIntermodalRoute(request, fetchFn)
+      } catch (err) {
+        if (err instanceof MotisError) {
+          set.status = err.statusCode >= 500 ? 502 : err.statusCode
+          try {
+            return JSON.parse(err.body)
+          } catch {
+            return { error: err.body }
+          }
+        }
+
+        set.status = 502
+        return {
+          error: 'Intermodal routing service unavailable',
+          detail: err instanceof Error ? err.message : String(err),
+        }
+      }
+    }, {
+      body: t.Object({
+        from: t.Object({
+          lat: t.Number({ minimum: -90, maximum: 90 }),
+          lng: t.Number({ minimum: -180, maximum: 180 }),
+        }),
+        to: t.Object({
+          lat: t.Number({ minimum: -90, maximum: 90 }),
+          lng: t.Number({ minimum: -180, maximum: 180 }),
+        }),
+        time: t.Optional(t.String()),
+        arriveBy: t.Optional(t.Boolean()),
+        numItineraries: t.Optional(t.Number({ minimum: 1, maximum: 10 })),
+        searchWindow: t.Optional(t.Number({ minimum: 1 })),
+        transitModes: t.Optional(t.Array(t.String())),
+        maxWalkDistance: t.Optional(t.Number({ minimum: 0 })),
+        maxTransfers: t.Optional(t.Number({ minimum: 0 })),
+        wheelchair: t.Optional(t.Boolean()),
+        preTransitModes: t.Optional(t.Array(t.String())),
+        postTransitModes: t.Optional(t.Array(t.String())),
+        directModes: t.Optional(t.Array(t.String())),
+        maxPreTransitTime: t.Optional(t.Number({ minimum: 0 })),
+        maxPostTransitTime: t.Optional(t.Number({ minimum: 0 })),
+        preTransitRentalFormFactors: t.Optional(t.Array(t.String())),
+        postTransitRentalFormFactors: t.Optional(t.Array(t.String())),
+      }),
+      detail: {
+        summary: 'Intermodal routing with mode selection',
+        description:
+          'Coordinate-based intermodal routing via MOTIS. Supports pre/post-transit ' +
+          'mode selection (WALK, BIKE, CAR_PARKING, RENTAL) and direct non-transit ' +
+          'modes. Requires MOTIS to have OSM street data loaded. Returns legs with ' +
+          'real OSM geometry for walk/bike/car segments.',
         tags: ['Transit'],
       },
     })

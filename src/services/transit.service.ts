@@ -75,8 +75,33 @@ export interface TransitItinerary {
   }
 }
 
+/** MOTIS street modes for intermodal routing */
+export type MotisStreetMode = 'WALK' | 'BIKE' | 'CAR' | 'CAR_PARKING' | 'RENTAL'
+
+/** MOTIS transit modes */
+export type MotisTransitMode = 'TRANSIT' | 'BUS' | 'RAIL' | 'TRAM' | 'SUBWAY' | 'FERRY' | 'COACH' | 'REGIONAL_RAIL' | 'SUBURBAN' | 'HIGHSPEED_RAIL' | 'LONG_DISTANCE' | 'FUNICULAR' | 'AERIAL_LIFT'
+
+/** GBFS rental vehicle form factors */
+export type RentalFormFactor = 'BICYCLE' | 'CARGO_BICYCLE' | 'CAR' | 'MOPED' | 'SCOOTER_STANDING' | 'SCOOTER_SEATED' | 'OTHER'
+
+export interface IntermodalRouteRequest extends TransitRouteRequest {
+  /** Modes for first mile (coordinate → first transit stop). Default: ['WALK'] */
+  preTransitModes?: MotisStreetMode[]
+  /** Modes for last mile (last transit stop → coordinate). Default: ['WALK'] */
+  postTransitModes?: MotisStreetMode[]
+  /** Direct (non-transit) modes to also compute. Default: ['WALK'] */
+  directModes?: MotisStreetMode[]
+  /** Max first-mile time in seconds (default 900 = 15 min) */
+  maxPreTransitTime?: number
+  /** Max last-mile time in seconds (default 900 = 15 min) */
+  maxPostTransitTime?: number
+  /** Filter rental vehicles to specific form factors */
+  preTransitRentalFormFactors?: RentalFormFactor[]
+  postTransitRentalFormFactors?: RentalFormFactor[]
+}
+
 export interface TransitLeg {
-  /** WALK, BUS, RAIL, TRAM, SUBWAY, FERRY, etc. */
+  /** WALK, BIKE, CAR, CAR_PARKING, RENTAL, BUS, RAIL, TRAM, SUBWAY, FERRY, etc. */
   mode: string
   /** Start location */
   from: TransitLegPlace
@@ -95,7 +120,7 @@ export interface TransitLeg {
     type: 'LineString'
     coordinates: [number, number][]
   }
-  /** True for transit legs, false for walking/cycling */
+  /** True for transit legs, false for walking/cycling/rental/car */
   transitLeg: boolean
 
   // Transit-only fields (undefined for walking legs)
@@ -127,6 +152,16 @@ export interface TransitLeg {
   departureDelay?: number
   /** Arrival delay in seconds */
   arrivalDelay?: number
+
+  // Rental/shared mobility fields (present for RENTAL legs from GBFS)
+  /** GBFS rental provider name */
+  rentalProvider?: string
+  /** GBFS station name (for docked rentals) */
+  rentalStationName?: string
+  /** Vehicle form factor (BICYCLE, SCOOTER_STANDING, etc.) */
+  rentalFormFactor?: string
+  /** GBFS station ID */
+  rentalStationId?: string
 }
 
 export interface TransitLegPlace {
@@ -232,9 +267,11 @@ function epochToIso(epoch: number): string {
   return new Date(epoch).toISOString()
 }
 
+const STREET_MODES = new Set(['WALK', 'BIKE', 'BICYCLE', 'CAR', 'CAR_PARKING', 'CAR_DROPOFF', 'RENTAL'])
+
 /** Adapt a single MOTIS/OTPAPI leg into our format */
 function adaptLeg(leg: any): TransitLeg {
-  const isTransit = leg.mode !== 'WALK' && leg.mode !== 'BICYCLE'
+  const isTransit = !STREET_MODES.has(leg.mode)
 
   let geometry: TransitLeg['geometry'] | undefined
   if (leg.legGeometry?.points) {
@@ -299,6 +336,14 @@ function adaptLeg(leg: any): TransitLeg {
     if (leg.realTime != null) adapted.realTime = leg.realTime
     if (leg.departureDelay != null) adapted.departureDelay = leg.departureDelay
     if (leg.arrivalDelay != null) adapted.arrivalDelay = leg.arrivalDelay
+  }
+
+  // Rental/shared mobility fields (GBFS legs from intermodal routing)
+  if (leg.mode === 'RENTAL') {
+    adapted.rentalProvider = leg.rentalProvider || leg.from?.rentalProvider || undefined
+    adapted.rentalStationName = leg.from?.name || undefined
+    adapted.rentalFormFactor = leg.rentalFormFactor || leg.from?.rentalFormFactor || undefined
+    adapted.rentalStationId = leg.from?.rentalStationId || leg.from?.stopId || undefined
   }
 
   return adapted
@@ -490,6 +535,122 @@ async function queryMotis(
       prevPageCursor: data.previousPageCursor || undefined,
     },
   }
+}
+
+// ── Intermodal routing (coordinate-based) ─────────────────────────
+
+/**
+ * Query MOTIS with coordinate-based intermodal routing.
+ *
+ * Unlike queryMotis() which uses stop IDs, this uses lat,lng coordinates
+ * directly. Requires MOTIS to have OSM street data loaded (street_routing: true).
+ * Supports pre/post-transit mode selection (WALK, BIKE, CAR_PARKING, RENTAL).
+ */
+async function queryMotisIntermodal(
+  request: IntermodalRouteRequest,
+  fetchFn: FetchFn = globalThis.fetch,
+): Promise<TransitRouteResponse> {
+  const motisUrl = getMotisUrl()
+  const departureDate = request.time ? new Date(request.time) : new Date()
+
+  const params = new URLSearchParams({
+    fromPlace: `${request.from.lat},${request.from.lng}`,
+    toPlace: `${request.to.lat},${request.to.lng}`,
+    time: departureDate.toISOString(),
+    arriveBy: String(request.arriveBy ?? false),
+    numItineraries: String(request.numItineraries ?? 5),
+  })
+
+  // Intermodal mode parameters
+  if (request.preTransitModes?.length) {
+    params.set('preTransitModes', request.preTransitModes.join(','))
+  }
+  if (request.postTransitModes?.length) {
+    params.set('postTransitModes', request.postTransitModes.join(','))
+  }
+  if (request.directModes?.length) {
+    params.set('directModes', request.directModes.join(','))
+  }
+  if (request.transitModes?.length) {
+    params.set('transitModes', request.transitModes.join(','))
+  }
+
+  // Time limits for street legs
+  if (request.maxPreTransitTime != null) {
+    params.set('maxPreTransitTime', String(request.maxPreTransitTime))
+  }
+  if (request.maxPostTransitTime != null) {
+    params.set('maxPostTransitTime', String(request.maxPostTransitTime))
+  }
+
+  // Rental vehicle filters
+  if (request.preTransitRentalFormFactors?.length) {
+    params.set('preTransitRentalFormFactors', request.preTransitRentalFormFactors.join(','))
+  }
+  if (request.postTransitRentalFormFactors?.length) {
+    params.set('postTransitRentalFormFactors', request.postTransitRentalFormFactors.join(','))
+  }
+
+  if (request.searchWindow != null) {
+    params.set('searchWindow', String(request.searchWindow))
+  }
+  if (request.maxTransfers != null) {
+    params.set('maxTransfers', String(request.maxTransfers))
+  }
+  if (request.wheelchair) {
+    params.set('wheelchair', 'true')
+  }
+
+  const response = await fetchFn(`${motisUrl}/api/v1/plan?${params}`)
+
+  if (!response.ok) {
+    const errorText = await response.text()
+    throw new MotisError(response.status, errorText)
+  }
+
+  const data = await response.json() as any
+
+  const itineraries = data.itineraries || data.plan?.itineraries || []
+  const direct = data.direct || []
+
+  // Merge transit itineraries and direct connections
+  const allItineraries = [
+    ...itineraries.map(adaptItinerary),
+    ...direct.map(adaptItinerary),
+  ]
+
+  if (allItineraries.length === 0) {
+    return { itineraries: [], metadata: { searchWindow: 0 } }
+  }
+
+  return {
+    itineraries: allItineraries,
+    metadata: {
+      searchWindow: data.searchWindowUsed ?? data.plan?.searchWindowUsed ?? 0,
+      nextPageCursor: data.nextPageCursor || undefined,
+      prevPageCursor: data.previousPageCursor || undefined,
+    },
+  }
+}
+
+/**
+ * Intermodal routing using coordinates with mode selection.
+ *
+ * Simpler than getTransitRoute() — no stop ID cross-product needed.
+ * MOTIS handles coordinate snapping internally when OSM is loaded.
+ */
+export async function getIntermodalRoute(
+  request: IntermodalRouteRequest,
+  fetchFn: FetchFn = globalThis.fetch,
+): Promise<TransitRouteResponse> {
+  const result = await queryMotisIntermodal(request, fetchFn)
+
+  // Sort by duration and deduplicate
+  result.itineraries.sort((a, b) => a.duration - b.duration)
+  const numItineraries = request.numItineraries ?? 5
+  result.itineraries = deduplicateItineraries(result.itineraries).slice(0, numItineraries)
+
+  return result
 }
 
 // ── Spatial stop queries ────────────────────────────────────────────
