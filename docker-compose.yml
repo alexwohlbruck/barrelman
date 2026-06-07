@@ -42,7 +42,7 @@ services:
     # graph.location to /data/default-gh otherwise, ignoring our config value.
     command: ["-i", "/data/region.osm.pbf", "-o", "/data/graph-cache"]
     environment:
-      JAVA_OPTS: "${GRAPHHOPPER_JAVA_OPTS:--Xmx4g -Xms2g}"
+      JAVA_OPTS: "${GRAPHHOPPER_JAVA_OPTS:--Xmx6g -Xms3g}"
     volumes:
       - barrelman-osm-data:/data
       - ./graphhopper-config.yml:/graphhopper/config-example.yml:ro
@@ -60,6 +60,7 @@ services:
     command: ["/motis", "server", "/data"]
     volumes:
       - barrelman-gtfs-data:/data
+      - barrelman-osm-data:/osm-data:ro
     ports:
       - "8080:8080"
 
@@ -76,10 +77,12 @@ services:
       BARRELMAN_TILE_KEY: ${BARRELMAN_TILE_KEY:-}
       GRAPHHOPPER_URL: http://barrelman-graphhopper:8989
       MOTIS_URL: http://barrelman-motis:8080
+      GTFS_DATA_DIR: /gtfs-zips
     ports:
       - "5001:5001"
     volumes:
       - barrelman-osm-data:/data
       - barrelman-gtfs-data:/gtfs-data
+      - ./data/gtfs:/gtfs-zips:ro
     depends_on:
       - barrelman-db

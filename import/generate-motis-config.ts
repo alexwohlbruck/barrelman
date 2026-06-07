@@ -8,6 +8,7 @@
  *
  * Usage:
  *   bun run import/generate-motis-config.ts [--output ./motis/config.yml]
+ *   bun run import/generate-motis-config.ts --street-routing --osm-path /osm-data/region.osm.pbf
  */
 
 import { parseArgs } from 'util'
@@ -19,6 +20,9 @@ import { generateMotisConfig } from '../src/services/gtfs.service'
 const { values: args } = parseArgs({
   options: {
     output: { type: 'string', default: './motis/config.yml' },
+    'street-routing': { type: 'boolean', default: false },
+    'osm-path': { type: 'string', default: '/osm-data/region.osm.pbf' },
+    'include-gbfs': { type: 'boolean', default: undefined },
   },
 })
 
@@ -27,8 +31,23 @@ const outputPath = args.output!
 async function main() {
   await ensureGtfsSchema()
 
+  const enableStreetRouting = args['street-routing'] ?? false
+  const osmPath = args['osm-path']!
+  const includeGbfs = args['include-gbfs'] ?? enableStreetRouting
+
   console.log('Generating MOTIS config from database...')
-  const configYaml = await generateMotisConfig()
+  if (enableStreetRouting) {
+    console.log(`  Street routing enabled (OSM: ${osmPath})`)
+  }
+  if (includeGbfs) {
+    console.log('  GBFS feeds included')
+  }
+
+  const configYaml = await generateMotisConfig({
+    enableStreetRouting,
+    osmPath,
+    includeGbfs,
+  })
 
   mkdirSync(join(outputPath, '..'), { recursive: true })
   writeFileSync(outputPath, configYaml)
@@ -36,9 +55,13 @@ async function main() {
 
   // Summary
   const lines = configYaml.split('\n')
-  const datasetCount = lines.filter(l => l.match(/^\s{4}\d+:$/)).length
+  const datasetCount = lines.filter(l => l.match(/^\s{4}"/)).length
   const rtCount = lines.filter(l => l.trim().startsWith('- url:')).length
+  const gbfsCount = lines.filter(l => l.match(/^\s{4}"/) && lines.indexOf(l) > lines.indexOf('gbfs:')).length
   console.log(`  ${datasetCount} datasets, ${rtCount} GTFS-RT feed URLs`)
+  if (includeGbfs) {
+    console.log(`  ${gbfsCount} GBFS feeds`)
+  }
 
   process.exit(0)
 }
