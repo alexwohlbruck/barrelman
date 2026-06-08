@@ -42,7 +42,7 @@ services:
     # graph.location to /data/default-gh otherwise, ignoring our config value.
     command: ["-i", "/data/region.osm.pbf", "-o", "/data/graph-cache"]
     environment:
-      JAVA_OPTS: "${GRAPHHOPPER_JAVA_OPTS:--Xmx6g -Xms3g}"
+      JAVA_OPTS: "${GRAPHHOPPER_JAVA_OPTS:--Xmx6g -Xms1g}"
     volumes:
       - barrelman-osm-data:/data
       - ./graphhopper-config.yml:/graphhopper/config-example.yml:ro
