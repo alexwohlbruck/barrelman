@@ -114,18 +114,25 @@ export async function getStationDetail(
  *
  * Tier 1 — Explicit transit entrances (subway, commuter rail):
  *   railway=subway_entrance, railway=train_station_entrance
- *   These are purpose-mapped entrance nodes with names, wheelchair info, etc.
+ *   Purpose-mapped entrance nodes with names, wheelchair info, level.
  *
- * Tier 2 — Track crossings (at-grade tram/light rail):
- *   railway=crossing nodes where pedestrians cross tracks to reach a platform.
- *   Only used if no Tier 1 entrance is found within the search radius.
+ * Tier 2 — Generic entrances near transit platforms:
+ *   entrance=yes/main/secondary nodes within 100m of a platform.
+ *   Catches station building doors that aren't tagged as rail entrances.
  *
- * Tier 3 — Pedestrian crossings near platforms (any at-grade station):
- *   highway=crossing nodes within 100m of a public_transport=platform.
- *   Captures signalized crossings leading to median tram platforms.
+ * Tier 3 — Vertical access near platforms (elevated/underground):
+ *   highway=steps or highway=elevator within 150m of a platform.
+ *   The physical stairs/elevator connecting street level to platform level.
+ *   Uses the street-level end (centroid) of stairways as the access point.
  *
- * Each tier returns the access point nearest to the given coordinate.
- * The first tier with results wins — we don't mix tiers.
+ * Tier 4 — Track crossings (at-grade tram/light rail):
+ *   railway=crossing nodes. Pedestrian crossings across tracks to a platform.
+ *
+ * Tier 5 — Pedestrian crossings near platforms (fallback at-grade):
+ *   highway=crossing nodes within 80m of a platform.
+ *   Signalized crossings leading to median tram platforms.
+ *
+ * The first tier with results wins. Within a tier, nearest to coordinate wins.
  */
 export async function getNearestEntrance(
   lat: number,
@@ -134,73 +141,122 @@ export async function getNearestEntrance(
 ): Promise<PlatformAccessPoint | null> {
   const degRadius = maxDistanceM / 111000
   const point = `ST_SetSRID(ST_MakePoint(${lon}, ${lat}), 4326)`
+  // Tighter radius for proximity-to-platform checks (~ 100m in degrees)
+  const platformProximity = 0.001
 
-  // Single query with tiered UNION ALL — Postgres evaluates all branches
-  // but we pick the best result by tier priority then distance.
+  // First, check if there are any platforms in the search area.
+  // This lets us skip the expensive EXISTS subqueries for tiers 2/3/5
+  // when no platform is nearby (most places on earth).
+  const platformCheck = (await db.execute(sql.raw(`
+    SELECT 1 FROM geo_places
+    WHERE (tags->>'public_transport' = 'platform' OR tags->>'railway' = 'platform')
+      AND centroid && ST_Expand(${point}, ${degRadius})
+    LIMIT 1
+  `))) as any[]
+  const hasPlatformNearby = platformCheck.length > 0
+
   const rows = (await db.execute(sql.raw(`
     WITH candidates AS (
-      -- Tier 1: Explicit transit entrances
+      -- Tier 1: Explicit transit entrances (subway, train station)
       SELECT
-        id as osm_id,
-        name,
+        id as osm_id, name,
         COALESCE(tags->>'description', '') as description,
         COALESCE(tags->>'wheelchair', '') as wheelchair,
         COALESCE(tags->>'level', '') as level,
         COALESCE(tags->>'railway', 'entrance') as access_type,
-        ST_Y(centroid) as lat,
-        ST_X(centroid) as lon,
+        ST_Y(centroid) as lat, ST_X(centroid) as lon,
         ST_Distance(centroid::geography, ${point}::geography) as distance_m,
         1 as tier
       FROM geo_places
-      WHERE (tags->>'railway' IN ('subway_entrance', 'train_station_entrance')
-             OR (tags->>'entrance' IS NOT NULL AND tags->>'entrance' != 'no'
-                 AND (tags->>'building' = 'train_station' OR tags->>'public_transport' = 'station')))
+      WHERE tags->>'railway' IN ('subway_entrance', 'train_station_entrance')
         AND centroid && ST_Expand(${point}, ${degRadius})
+
+      ${hasPlatformNearby ? `
+      UNION ALL
+
+      -- Tier 2: Generic entrance nodes near a transit platform
+      SELECT
+        id as osm_id, name,
+        '' as description,
+        COALESCE(tags->>'wheelchair', '') as wheelchair,
+        COALESCE(tags->>'level', '0') as level,
+        'entrance' as access_type,
+        ST_Y(centroid) as lat, ST_X(centroid) as lon,
+        ST_Distance(centroid::geography, ${point}::geography) as distance_m,
+        2 as tier
+      FROM geo_places
+      WHERE tags->>'entrance' IS NOT NULL
+        AND tags->>'entrance' NOT IN ('no', 'service', 'emergency')
+        AND centroid && ST_Expand(${point}, ${degRadius})
+        AND EXISTS (
+          SELECT 1 FROM geo_places p
+          WHERE (p.tags->>'public_transport' = 'platform' OR p.tags->>'railway' = 'platform')
+            AND p.centroid && ST_Expand(geo_places.centroid, ${platformProximity})
+        )
 
       UNION ALL
 
-      -- Tier 2: Railway crossings (at-grade track crossings near platforms)
+      -- Tier 3: Stairs and elevators near a platform (elevated/underground)
       SELECT
-        id as osm_id,
-        name,
+        id as osm_id, name,
+        CASE WHEN tags->>'highway' = 'elevator' THEN 'elevator'
+             WHEN tags->>'conveying' IS NOT NULL THEN 'escalator'
+             ELSE 'stairs' END as description,
+        COALESCE(tags->>'wheelchair', '') as wheelchair,
+        COALESCE(tags->>'level', '') as level,
+        tags->>'highway' as access_type,
+        ST_Y(centroid) as lat, ST_X(centroid) as lon,
+        ST_Distance(centroid::geography, ${point}::geography) as distance_m,
+        3 as tier
+      FROM geo_places
+      WHERE tags->>'highway' IN ('steps', 'elevator')
+        AND centroid && ST_Expand(${point}, ${degRadius})
+        AND EXISTS (
+          SELECT 1 FROM geo_places p
+          WHERE (p.tags->>'public_transport' = 'platform' OR p.tags->>'railway' = 'platform')
+            AND p.centroid && ST_Expand(geo_places.centroid, ${platformProximity * 1.5})
+        )
+      ` : ''}
+
+      UNION ALL
+
+      -- Tier 4: Railway crossings (at-grade track crossings)
+      SELECT
+        id as osm_id, name,
         '' as description,
         COALESCE(tags->>'wheelchair', '') as wheelchair,
         '0' as level,
         'railway_crossing' as access_type,
-        ST_Y(centroid) as lat,
-        ST_X(centroid) as lon,
+        ST_Y(centroid) as lat, ST_X(centroid) as lon,
         ST_Distance(centroid::geography, ${point}::geography) as distance_m,
-        2 as tier
+        4 as tier
       FROM geo_places
       WHERE tags->>'railway' = 'crossing'
         AND centroid && ST_Expand(${point}, ${degRadius})
 
+      ${hasPlatformNearby ? `
       UNION ALL
 
-      -- Tier 3: Pedestrian crossings near platforms
+      -- Tier 5: Pedestrian crossings near platforms
       SELECT
-        id as osm_id,
-        name,
+        id as osm_id, name,
         '' as description,
         COALESCE(tags->>'wheelchair', '') as wheelchair,
         '0' as level,
         'highway_crossing' as access_type,
-        ST_Y(centroid) as lat,
-        ST_X(centroid) as lon,
+        ST_Y(centroid) as lat, ST_X(centroid) as lon,
         ST_Distance(centroid::geography, ${point}::geography) as distance_m,
-        3 as tier
+        5 as tier
       FROM geo_places
       WHERE tags->>'highway' = 'crossing'
-        AND centroid && ST_Expand(${point}, ${degRadius * 0.5})
-        -- Only include crossings that are near a platform
+        AND centroid && ST_Expand(${point}, ${degRadius * 0.4})
         AND EXISTS (
           SELECT 1 FROM geo_places p
-          WHERE (p.tags->>'public_transport' = 'platform'
-                 OR p.tags->>'railway' = 'platform')
-            AND ST_DWithin(p.centroid, geo_places.centroid, 0.001)
+          WHERE (p.tags->>'public_transport' = 'platform' OR p.tags->>'railway' = 'platform')
+            AND p.centroid && ST_Expand(geo_places.centroid, ${platformProximity})
         )
+      ` : ''}
     )
-    -- Pick the best tier that has results, then nearest within that tier
     SELECT * FROM candidates
     WHERE tier = (SELECT MIN(tier) FROM candidates)
     ORDER BY distance_m
