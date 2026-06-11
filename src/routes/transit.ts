@@ -33,6 +33,10 @@ import {
 import {
   getRouteDetail as _getRouteDetail,
 } from '../services/route-detail.service'
+import {
+  getStationDetail as _getStationDetail,
+  getNearestEntrance as _getNearestEntrance,
+} from '../services/station.service'
 
 export function createTransitRoutes(deps: {
   getTransitRoute?: typeof _getTransitRoute
@@ -47,6 +51,8 @@ export function createTransitRoutes(deps: {
   getVehiclesForRoute?: typeof _getVehiclesForRoute
   getTripStopTimes?: typeof _getTripStopTimes
   fetchFn?: FetchFn
+  getStationDetail?: typeof _getStationDetail
+  getNearestEntrance?: typeof _getNearestEntrance
 } = {}) {
   const getTransitRoute = deps.getTransitRoute || _getTransitRoute
   const getIntermodalRoute = deps.getIntermodalRoute || _getIntermodalRoute
@@ -60,6 +66,8 @@ export function createTransitRoutes(deps: {
   const getVehiclesForRoute = deps.getVehiclesForRoute || _getVehiclesForRoute
   const getTripStopTimes = deps.getTripStopTimes || _getTripStopTimes
   const fetchFn = deps.fetchFn || undefined
+  const getStationDetail = deps.getStationDetail || _getStationDetail
+  const getNearestEntrance = deps.getNearestEntrance || _getNearestEntrance
 
   return new Elysia({ prefix: '/transit' })
     .onBeforeHandle(authHandler)
@@ -575,6 +583,80 @@ export function createTransitRoutes(deps: {
           'Queries Transitland to discover GTFS-RT feed URLs (vehicle positions, ' +
           'trip updates, alerts) for existing feeds. If feedId is provided, only ' +
           'discovers for that feed; otherwise discovers for all feeds missing RT URLs.',
+        tags: ['Transit'],
+      },
+    })
+
+    // ── Station infrastructure ────────────────────────────────────
+
+    // Station detail: geometry, entrances, buildings
+    .get('/station/:feedId/:stopId', async ({ params, set }) => {
+      try {
+        const result = await getStationDetail(params.feedId, params.stopId)
+        if (!result) {
+          set.status = 404
+          return { error: 'Station not found' }
+        }
+        return result
+      } catch (err) {
+        set.status = 500
+        return {
+          error: 'Failed to get station detail',
+          detail: err instanceof Error ? err.message : String(err),
+        }
+      }
+    }, {
+      params: t.Object({
+        feedId: t.String(),
+        stopId: t.String(),
+      }),
+      detail: {
+        summary: 'Get station detail with entrances and building geometry',
+        description:
+          'Returns a GTFS station with its OSM-linked entrances (subway/train station ' +
+          'entrances within 200m) and building polygon geometry. Entrances include ' +
+          'descriptions, wheelchair accessibility, and level information.',
+        tags: ['Transit'],
+      },
+    })
+
+    // Nearest entrance to a coordinate
+    .get('/nearest-entrance', async ({ query, set }) => {
+      try {
+        const lat = parseFloat(query.lat)
+        const lon = parseFloat(query.lon)
+        const maxDistance = query.maxDistance ? parseFloat(query.maxDistance) : 500
+
+        if (isNaN(lat) || isNaN(lon)) {
+          set.status = 400
+          return { error: 'Invalid lat/lon' }
+        }
+
+        const result = await getNearestEntrance(lat, lon, maxDistance)
+        if (!result) {
+          set.status = 404
+          return { error: 'No entrance found nearby' }
+        }
+        return result
+      } catch (err) {
+        set.status = 500
+        return {
+          error: 'Failed to find nearest entrance',
+          detail: err instanceof Error ? err.message : String(err),
+        }
+      }
+    }, {
+      query: t.Object({
+        lat: t.String(),
+        lon: t.String(),
+        maxDistance: t.Optional(t.String()),
+      }),
+      detail: {
+        summary: 'Find nearest station entrance to a coordinate',
+        description:
+          'Returns the closest subway or train station entrance to the given ' +
+          'coordinate, within maxDistance meters (default 500m). Useful for ' +
+          'routing to the optimal station entrance.',
         tags: ['Transit'],
       },
     })
