@@ -1,17 +1,21 @@
 import { db } from '../db'
 import { sql } from 'drizzle-orm'
 
-export interface StationEntrance {
+export interface PlatformAccessPoint {
   osmId: string
   name: string | null
   description: string | null
   wheelchair: string | null
   level: string | null
-  railwayType: string
+  /** What kind of access point: subway_entrance, train_station_entrance, railway_crossing, highway_crossing, platform_edge */
+  accessType: string
   lat: number
   lon: number
   distanceM: number
 }
+
+/** @deprecated Use PlatformAccessPoint */
+export type StationEntrance = PlatformAccessPoint
 
 export interface StationBuilding {
   osmId: string
@@ -89,7 +93,7 @@ export async function getStationDetail(
       description: r.description || null,
       wheelchair: r.wheelchair || null,
       level: r.level || null,
-      railwayType: r.railway_type,
+      accessType: r.railway_type,
       lat: parseFloat(r.lat),
       lon: parseFloat(r.lon),
       distanceM: parseFloat(r.distance_m),
@@ -104,35 +108,102 @@ export async function getStationDetail(
 }
 
 /**
- * Get entrances near a coordinate (for routing — find the nearest entrance
- * to use as a walk target instead of the station centroid).
+ * Find the best platform access point near a coordinate.
+ *
+ * Uses a tiered search strategy to handle all station types:
+ *
+ * Tier 1 — Explicit transit entrances (subway, commuter rail):
+ *   railway=subway_entrance, railway=train_station_entrance
+ *   These are purpose-mapped entrance nodes with names, wheelchair info, etc.
+ *
+ * Tier 2 — Track crossings (at-grade tram/light rail):
+ *   railway=crossing nodes where pedestrians cross tracks to reach a platform.
+ *   Only used if no Tier 1 entrance is found within the search radius.
+ *
+ * Tier 3 — Pedestrian crossings near platforms (any at-grade station):
+ *   highway=crossing nodes within 100m of a public_transport=platform.
+ *   Captures signalized crossings leading to median tram platforms.
+ *
+ * Each tier returns the access point nearest to the given coordinate.
+ * The first tier with results wins — we don't mix tiers.
  */
 export async function getNearestEntrance(
   lat: number,
   lon: number,
   maxDistanceM: number = 500,
-): Promise<StationEntrance | null> {
+): Promise<PlatformAccessPoint | null> {
   const degRadius = maxDistanceM / 111000
+  const point = `ST_SetSRID(ST_MakePoint(${lon}, ${lat}), 4326)`
 
-  // Query geo_places directly to use the spatial index on centroid
+  // Single query with tiered UNION ALL — Postgres evaluates all branches
+  // but we pick the best result by tier priority then distance.
   const rows = (await db.execute(sql.raw(`
-    SELECT
-      id as osm_id,
-      name,
-      COALESCE(tags->>'description', '') as description,
-      COALESCE(tags->>'wheelchair', '') as wheelchair,
-      COALESCE(tags->>'level', '') as level,
-      tags->>'railway' as "railwayType",
-      ST_Y(centroid) as lat,
-      ST_X(centroid) as lon,
-      ST_Distance(
-        centroid::geography,
-        ST_SetSRID(ST_MakePoint(${lon}, ${lat}), 4326)::geography
-      ) as distance_m
-    FROM geo_places
-    WHERE tags->>'railway' IN ('subway_entrance', 'train_station_entrance')
-      AND centroid && ST_Expand(ST_SetSRID(ST_MakePoint(${lon}, ${lat}), 4326), ${degRadius})
-    ORDER BY centroid <-> ST_SetSRID(ST_MakePoint(${lon}, ${lat}), 4326)
+    WITH candidates AS (
+      -- Tier 1: Explicit transit entrances
+      SELECT
+        id as osm_id,
+        name,
+        COALESCE(tags->>'description', '') as description,
+        COALESCE(tags->>'wheelchair', '') as wheelchair,
+        COALESCE(tags->>'level', '') as level,
+        COALESCE(tags->>'railway', 'entrance') as access_type,
+        ST_Y(centroid) as lat,
+        ST_X(centroid) as lon,
+        ST_Distance(centroid::geography, ${point}::geography) as distance_m,
+        1 as tier
+      FROM geo_places
+      WHERE (tags->>'railway' IN ('subway_entrance', 'train_station_entrance')
+             OR (tags->>'entrance' IS NOT NULL AND tags->>'entrance' != 'no'
+                 AND (tags->>'building' = 'train_station' OR tags->>'public_transport' = 'station')))
+        AND centroid && ST_Expand(${point}, ${degRadius})
+
+      UNION ALL
+
+      -- Tier 2: Railway crossings (at-grade track crossings near platforms)
+      SELECT
+        id as osm_id,
+        name,
+        '' as description,
+        COALESCE(tags->>'wheelchair', '') as wheelchair,
+        '0' as level,
+        'railway_crossing' as access_type,
+        ST_Y(centroid) as lat,
+        ST_X(centroid) as lon,
+        ST_Distance(centroid::geography, ${point}::geography) as distance_m,
+        2 as tier
+      FROM geo_places
+      WHERE tags->>'railway' = 'crossing'
+        AND centroid && ST_Expand(${point}, ${degRadius})
+
+      UNION ALL
+
+      -- Tier 3: Pedestrian crossings near platforms
+      SELECT
+        id as osm_id,
+        name,
+        '' as description,
+        COALESCE(tags->>'wheelchair', '') as wheelchair,
+        '0' as level,
+        'highway_crossing' as access_type,
+        ST_Y(centroid) as lat,
+        ST_X(centroid) as lon,
+        ST_Distance(centroid::geography, ${point}::geography) as distance_m,
+        3 as tier
+      FROM geo_places
+      WHERE tags->>'highway' = 'crossing'
+        AND centroid && ST_Expand(${point}, ${degRadius * 0.5})
+        -- Only include crossings that are near a platform
+        AND EXISTS (
+          SELECT 1 FROM geo_places p
+          WHERE (p.tags->>'public_transport' = 'platform'
+                 OR p.tags->>'railway' = 'platform')
+            AND ST_DWithin(p.centroid, geo_places.centroid, 0.001)
+        )
+    )
+    -- Pick the best tier that has results, then nearest within that tier
+    SELECT * FROM candidates
+    WHERE tier = (SELECT MIN(tier) FROM candidates)
+    ORDER BY distance_m
     LIMIT 1
   `))) as any[]
 
@@ -144,7 +215,7 @@ export async function getNearestEntrance(
     description: r.description || null,
     wheelchair: r.wheelchair || null,
     level: r.level || null,
-    railwayType: r.railwayType,
+    accessType: r.access_type,
     lat: parseFloat(r.lat),
     lon: parseFloat(r.lon),
     distanceM: parseFloat(r.distance_m),
