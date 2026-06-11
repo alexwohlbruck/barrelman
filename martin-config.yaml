@@ -143,3 +143,72 @@ postgres:
         geom_type: geom_type
       buffer: 64
       clip_geom: true
+
+    transit_station_buildings:
+      schema: public
+      table: transit_station_buildings
+      srid: 4326
+      geometry_column: geom
+      geometry_type: GEOMETRY
+      id_column: fid
+      bounds: [-84.0, 33.0, -73.0, 42.0]
+      minzoom: 13
+      maxzoom: 16
+      properties:
+        id: id
+        name: name
+        geom_type: geom_type
+        railway: railway
+        public_transport: public_transport
+        building_type: building_type
+        station_type: station_type
+        network: network
+        operator: operator
+      buffer: 64
+      clip_geom: true
+
+    transit_platforms:
+      schema: public
+      table: transit_platforms
+      srid: 4326
+      geometry_column: geom
+      geometry_type: GEOMETRY
+      id_column: fid
+      bounds: [-84.0, 33.0, -73.0, 42.0]
+      minzoom: 14
+      maxzoom: 16
+      properties:
+        id: id
+        name: name
+        geom_type: geom_type
+        railway: railway
+        public_transport: public_transport
+        ref: ref
+        wheelchair: wheelchair
+        level: level
+      buffer: 64
+      clip_geom: true
+
+    transit_entrances:
+      schema: public
+      table: transit_entrances
+      srid: 4326
+      geometry_column: centroid
+      geometry_type: POINT
+      id_column: fid
+      bounds: [-84.0, 33.0, -73.0, 42.0]
+      minzoom: 14
+      maxzoom: 16
+      properties:
+        id: id
+        name: name
+        railway_type: railway_type
+        entrance_type: entrance_type
+        wheelchair: wheelchair
+        level: level
+        description: description
+        ref: ref
+        network: network
+        operator: operator
+      buffer: 64
+      clip_geom: true
