@@ -1,6 +1,10 @@
 import { db } from '../db'
 import { sql } from 'drizzle-orm'
 
+// Whether the stop_area_members table exists (loaded by
+// scripts/import-stop-areas.sh). Checked once and cached for the process.
+let stopAreasAvailable: boolean | null = null
+
 export interface PlatformAccessPoint {
   osmId: string
   name: string | null
@@ -138,8 +142,15 @@ export async function getNearestEntrance(
   lat: number,
   lon: number,
   maxDistanceM: number = 500,
+  wheelchair: boolean = false,
 ): Promise<PlatformAccessPoint | null> {
   const degRadius = maxDistanceM / 111000
+  // Accessible mode: drop anything explicitly wheelchair=no (unknown is
+  // allowed — most entrances are untagged), require elevators rather than
+  // stairs for vertical access, and prefer confirmed wheelchair=yes.
+  const accessFilter = wheelchair
+    ? "AND COALESCE(tags->>'wheelchair', '') <> 'no'"
+    : ''
   const point = `ST_SetSRID(ST_MakePoint(${lon}, ${lat}), 4326)`
   // Tighter radius for proximity-to-platform checks (~ 100m in degrees)
   const platformProximity = 0.001
@@ -155,8 +166,62 @@ export async function getNearestEntrance(
   `))) as any[]
   const hasPlatformNearby = platformCheck.length > 0
 
+  // stop_area relations are loaded by scripts/import-stop-areas.sh —
+  // skip Tier 0 gracefully on databases that haven't run it yet.
+  if (stopAreasAvailable === null) {
+    const reg = (await db.execute(
+      sql.raw(`SELECT to_regclass('stop_area_members') IS NOT NULL AS ok`),
+    )) as any[]
+    stopAreasAvailable = reg[0]?.ok === true
+  }
+
+  const accessFilterE = wheelchair
+    ? "AND COALESCE(e.tags->>'wheelchair', '') <> 'no'"
+    : ''
+
   const rows = (await db.execute(sql.raw(`
     WITH candidates AS (
+      ${stopAreasAvailable ? `
+      -- Tier 0: Relation-linked entrances — the mapper's authoritative
+      -- public_transport=stop_area grouping. An entrance (or elevator) that
+      -- shares a stop_area with the platform/stop near the query point wins
+      -- over any purely geometric candidate; proximity is the fallback.
+      SELECT
+        e.id as osm_id, e.name,
+        COALESCE(e.tags->>'description', '') as description,
+        COALESCE(e.tags->>'wheelchair', '') as wheelchair,
+        COALESCE(e.tags->>'level', '') as level,
+        COALESCE(e.tags->>'railway',
+          CASE WHEN e.tags->>'highway' = 'elevator' THEN 'elevator' ELSE 'entrance' END
+        ) as access_type,
+        ST_Y(e.centroid) as lat, ST_X(e.centroid) as lon,
+        ST_Distance(e.centroid::geography, ${point}::geography) as distance_m,
+        0 as tier
+      FROM geo_places near_member
+      JOIN stop_area_members mp
+        ON mp.member_type = near_member.osm_type AND mp.member_ref = near_member.osm_id
+      JOIN stop_area_members me ON me.relation_id = mp.relation_id
+      JOIN geo_places e
+        ON e.osm_type = me.member_type AND e.osm_id = me.member_ref
+      WHERE near_member.centroid && ST_Expand(${point}, ${platformProximity})
+        AND (
+          near_member.tags->>'public_transport' IN ('platform', 'stop_position', 'station')
+          OR near_member.tags->>'railway' IN ('platform', 'station', 'halt', 'stop')
+        )
+        AND (
+          e.tags->>'railway' IN ('subway_entrance', 'train_station_entrance')
+          OR e.tags->>'entrance' IS NOT NULL
+          OR e.tags->>'highway' = 'elevator'
+          OR me.member_role = 'entrance'
+        )
+        AND COALESCE(e.tags->>'entrance', '') NOT IN ('no', 'service', 'emergency')
+        ${wheelchair ? "AND e.tags->>'highway' IS DISTINCT FROM 'steps'" : ''}
+        ${accessFilterE}
+        AND e.centroid && ST_Expand(${point}, ${degRadius})
+
+      UNION ALL
+      ` : ''}
+
       -- Tier 1: Explicit transit entrances (subway, train station)
       SELECT
         id as osm_id, name,
@@ -169,6 +234,7 @@ export async function getNearestEntrance(
         1 as tier
       FROM geo_places
       WHERE tags->>'railway' IN ('subway_entrance', 'train_station_entrance')
+        ${accessFilter}
         AND centroid && ST_Expand(${point}, ${degRadius})
 
       ${hasPlatformNearby ? `
@@ -186,6 +252,7 @@ export async function getNearestEntrance(
         2 as tier
       FROM geo_places
       WHERE tags->>'entrance' IS NOT NULL
+        ${accessFilter}
         AND tags->>'entrance' NOT IN ('no', 'service', 'emergency')
         AND centroid && ST_Expand(${point}, ${degRadius})
         AND EXISTS (
@@ -209,7 +276,8 @@ export async function getNearestEntrance(
         ST_Distance(centroid::geography, ${point}::geography) as distance_m,
         3 as tier
       FROM geo_places
-      WHERE tags->>'highway' IN ('steps', 'elevator')
+      WHERE tags->>'highway' IN ${wheelchair ? "('elevator')" : "('steps', 'elevator')"}
+        ${accessFilter}
         AND centroid && ST_Expand(${point}, ${degRadius})
         AND EXISTS (
           SELECT 1 FROM geo_places p
@@ -232,6 +300,7 @@ export async function getNearestEntrance(
         4 as tier
       FROM geo_places
       WHERE tags->>'railway' = 'crossing'
+        ${accessFilter}
         AND centroid && ST_Expand(${point}, ${degRadius})
 
       ${hasPlatformNearby ? `
@@ -249,6 +318,7 @@ export async function getNearestEntrance(
         5 as tier
       FROM geo_places
       WHERE tags->>'highway' = 'crossing'
+        ${accessFilter}
         AND centroid && ST_Expand(${point}, ${degRadius * 0.4})
         AND EXISTS (
           SELECT 1 FROM geo_places p
@@ -259,7 +329,7 @@ export async function getNearestEntrance(
     )
     SELECT * FROM candidates
     WHERE tier = (SELECT MIN(tier) FROM candidates)
-    ORDER BY distance_m
+    ORDER BY ${wheelchair ? "(wheelchair = 'yes') DESC, " : ''}distance_m
     LIMIT 1
   `))) as any[]
 

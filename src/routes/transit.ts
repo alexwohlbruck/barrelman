@@ -634,7 +634,9 @@ export function createTransitRoutes(deps: {
           return { error: 'Invalid lat/lon' }
         }
 
-        const result = await getNearestEntrance(lat, lon, maxDistance)
+        const result = await getNearestEntrance(
+          lat, lon, maxDistance, query.wheelchair === 'true',
+        )
         if (!result) {
           set.status = 404
           return { error: 'No entrance found nearby' }
@@ -652,13 +654,17 @@ export function createTransitRoutes(deps: {
         lat: t.String(),
         lon: t.String(),
         maxDistance: t.Optional(t.String()),
+        wheelchair: t.Optional(t.String()),
       }),
       detail: {
         summary: 'Find nearest station entrance to a coordinate',
         description:
           'Returns the closest subway or train station entrance to the given ' +
-          'coordinate, within maxDistance meters (default 500m). Useful for ' +
-          'routing to the optimal station entrance.',
+          'coordinate, within maxDistance meters (default 500m). Pass ' +
+          'wheelchair=true for accessible access points only: entrances ' +
+          'tagged wheelchair=no are excluded, vertical access requires ' +
+          'elevators instead of stairs, and confirmed-accessible entrances ' +
+          'are preferred.',
         tags: ['Transit'],
       },
     })
