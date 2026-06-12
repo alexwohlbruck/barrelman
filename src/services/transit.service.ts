@@ -98,6 +98,13 @@ export interface IntermodalRouteRequest extends TransitRouteRequest {
   /** Filter rental vehicles to specific form factors */
   preTransitRentalFormFactors?: RentalFormFactor[]
   postTransitRentalFormFactors?: RentalFormFactor[]
+  /**
+   * Minutes reserved per interchange (MOTIS additionalTransferTime).
+   * Default 3 — discourages marginal-gain transfer chains. Callers can
+   * raise it (e.g. 15) to sweep for least-transfer itineraries that pure
+   * time-optimal search would Pareto-dominate away.
+   */
+  additionalTransferTime?: number
 }
 
 export interface TransitLeg {
@@ -587,12 +594,12 @@ async function queryMotisIntermodal(
     params.set('maxMatchingDistance', '250')
   }
 
-  // Pad each interchange by 3 minutes so RAPTOR stops surfacing
+  // Pad each interchange (default 3 min) so RAPTOR stops surfacing
   // marginal-gain transfer chains (a one-block bus hop that saves 90
   // seconds, three-vehicle relays, etc). Genuinely faster transfers
   // survive the padding; itineraries also become more robust to missed
   // connections. Other planners apply the same kind of penalty.
-  params.set('additionalTransferTime', '3')
+  params.set('additionalTransferTime', String(request.additionalTransferTime ?? 3))
 
   // Intermodal mode parameters
   if (request.preTransitModes?.length) {
