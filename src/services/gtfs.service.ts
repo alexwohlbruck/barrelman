@@ -890,6 +890,63 @@ export async function importStopRoutes(
 }
 
 /**
+ * Parse transfers.txt — the agency's authoritative statement of which
+ * stations connect inside one complex (e.g. Times Sq 1/2/3 ↔ N/Q/R/W)
+ * and the minimum connection times.
+ */
+export function parseTransfers(
+  csvContent: string,
+  feedId: string,
+): Array<{ feedId: string; fromStopId: string; toStopId: string; transferType: number; minTransferTime: number | null }> {
+  const records = parse(csvContent, {
+    columns: true,
+    skip_empty_lines: true,
+    trim: true,
+    relax_column_count: true,
+  })
+  const out: Array<{ feedId: string; fromStopId: string; toStopId: string; transferType: number; minTransferTime: number | null }> = []
+  for (const r of records) {
+    if (!r.from_stop_id || !r.to_stop_id) continue
+    out.push({
+      feedId,
+      fromStopId: r.from_stop_id,
+      toStopId: r.to_stop_id,
+      transferType: parseInt(r.transfer_type || '0', 10) || 0,
+      minTransferTime: r.min_transfer_time ? parseInt(r.min_transfer_time, 10) : null,
+    })
+  }
+  return out
+}
+
+/**
+ * Import agency transfers, replacing the feed's existing rows.
+ */
+export async function importTransfers(
+  transfers: ReturnType<typeof parseTransfers>,
+): Promise<number> {
+  if (transfers.length === 0) return 0
+  const feedEsc = transfers[0].feedId.replace(/'/g, "''")
+  await db.execute(sql.raw(`DELETE FROM gtfs_transfers WHERE feed_id = '${feedEsc}'`))
+
+  const BATCH_SIZE = 500
+  let imported = 0
+  for (let i = 0; i < transfers.length; i += BATCH_SIZE) {
+    const batch = transfers.slice(i, i + BATCH_SIZE)
+    const values = batch.map(t => {
+      const esc = (v: string) => `'${v.replace(/'/g, "''")}'`
+      return `(${esc(t.feedId)}, ${esc(t.fromStopId)}, ${esc(t.toStopId)}, ${t.transferType}, ${t.minTransferTime ?? 'NULL'})`
+    }).join(',\n')
+    await db.execute(sql.raw(`
+      INSERT INTO gtfs_transfers (feed_id, from_stop_id, to_stop_id, transfer_type, min_transfer_time)
+      VALUES ${values}
+      ON CONFLICT (feed_id, from_stop_id, to_stop_id) DO NOTHING
+    `))
+    imported += batch.length
+  }
+  return imported
+}
+
+/**
  * Record a feed import in the gtfs_feeds table.
  */
 export async function recordFeed(feed: GtfsFeedInfo, stopCount: number, routeCount: number): Promise<void> {
@@ -916,6 +973,7 @@ export async function recordFeed(feed: GtfsFeedInfo, stopCount: number, routeCou
  */
 export async function clearFeed(feedId: string): Promise<void> {
   const escaped = feedId.replace(/'/g, "''")
+  await db.execute(sql.raw(`DELETE FROM gtfs_transfers WHERE feed_id = '${escaped}'`))
   await db.execute(sql.raw(`DELETE FROM gtfs_stop_routes WHERE feed_id = '${escaped}'`))
   await db.execute(sql.raw(`DELETE FROM gtfs_routes WHERE feed_id = '${escaped}'`))
   await db.execute(sql.raw(`DELETE FROM gtfs_stops WHERE feed_id = '${escaped}'`))

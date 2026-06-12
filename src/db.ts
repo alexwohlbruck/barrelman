@@ -125,6 +125,26 @@ export async function ensureGtfsSchema() {
     CREATE INDEX IF NOT EXISTS gtfs_stop_routes_route_idx
       ON gtfs_stop_routes (feed_id, route_id);
 
+    -- Agency-declared transfers (transfers.txt): the authoritative
+    -- definition of which stations form one complex (e.g. Times Sq
+    -- 1/2/3 <-> N/Q/R/W) and the minimum connection times. Used to
+    -- aggregate the lines serving a station across its whole complex.
+    CREATE TABLE IF NOT EXISTS gtfs_transfers (
+      id SERIAL PRIMARY KEY,
+      feed_id TEXT NOT NULL,
+      from_stop_id TEXT NOT NULL,
+      to_stop_id TEXT NOT NULL,
+      transfer_type INTEGER DEFAULT 0,
+      min_transfer_time INTEGER
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS gtfs_transfers_uniq_idx
+      ON gtfs_transfers (feed_id, from_stop_id, to_stop_id);
+    CREATE INDEX IF NOT EXISTS gtfs_transfers_from_idx
+      ON gtfs_transfers (feed_id, from_stop_id);
+    CREATE INDEX IF NOT EXISTS gtfs_transfers_to_idx
+      ON gtfs_transfers (feed_id, to_stop_id);
+
     -- Route shapes: stores GTFS shapes as ordered coordinate arrays.
     -- shape_id from shapes.txt; coordinates stored as JSONB [[lng,lat], ...].
     CREATE TABLE IF NOT EXISTS gtfs_shapes (

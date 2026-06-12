@@ -1,5 +1,6 @@
 import { db } from '../db'
 import { sql } from 'drizzle-orm'
+import { getRoutesForStop, type StopRoutesResult } from './transit.service'
 
 // Whether the stop_area_members table exists (loaded by
 // scripts/import-stop-areas.sh). Checked once and cached for the process.
@@ -36,6 +37,8 @@ export interface StationDetail {
   lon: number
   entrances: StationEntrance[]
   buildings: StationBuilding[]
+  /** Lines serving the station, aggregated across its transfer complex. */
+  routes: StopRoutesResult[]
 }
 
 /**
@@ -108,6 +111,7 @@ export async function getStationDetail(
       stationType: r.station_type || null,
       geometry: r.geometry,
     })),
+    routes: await getRoutesForStop(feedId, stopId),
   }
 }
 

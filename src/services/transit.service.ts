@@ -832,17 +832,45 @@ export async function getNearbyStops(
 }
 
 /**
- * Get routes that serve a given stop.
+ * Get routes that serve a given stop — across its whole station complex.
  *
- * Joins gtfs_stop_routes with gtfs_routes to return route details
- * for all lines passing through the specified stop.
+ * "The trains at Times Sq" means N/Q/R/W/S/1/2/3/7 even though GTFS models
+ * the complex as four stations (127, R16, 725, 902). Membership comes from
+ * the agency's transfers.txt (one hop from the queried stop or its parent),
+ * and routes are collected from every member station's child platforms,
+ * since stop_times reference platform ids (127N/127S), not parents.
  */
 export async function getRoutesForStop(
   feedId: string,
   stopId: string,
 ): Promise<StopRoutesResult[]> {
+  const feed = feedId.replace(/'/g, "''")
+  const stop = stopId.replace(/'/g, "''")
   const result = await db.execute(sql.raw(`
-    SELECT
+    WITH seed AS (
+      -- the stop itself, plus its parent station when it's a platform
+      SELECT '${stop}'::text AS sid
+      UNION
+      SELECT parent_station FROM gtfs_stops
+      WHERE feed_id = '${feed}' AND stop_id = '${stop}'
+        AND parent_station IS NOT NULL AND parent_station <> ''
+    ),
+    complex AS (
+      SELECT sid FROM seed
+      UNION
+      SELECT t.to_stop_id FROM gtfs_transfers t JOIN seed ON t.from_stop_id = seed.sid
+      WHERE t.feed_id = '${feed}' AND t.to_stop_id <> t.from_stop_id
+      UNION
+      SELECT t.from_stop_id FROM gtfs_transfers t JOIN seed ON t.to_stop_id = seed.sid
+      WHERE t.feed_id = '${feed}' AND t.to_stop_id <> t.from_stop_id
+    ),
+    members AS (
+      SELECT sid FROM complex
+      UNION
+      SELECT s.stop_id FROM gtfs_stops s JOIN complex c ON s.parent_station = c.sid
+      WHERE s.feed_id = '${feed}'
+    )
+    SELECT DISTINCT
       r.route_id,
       r.feed_id,
       r.route_short_name,
@@ -852,9 +880,9 @@ export async function getRoutesForStop(
       r.route_text_color,
       r.agency_name
     FROM gtfs_stop_routes sr
+    JOIN members m ON sr.stop_id = m.sid
     JOIN gtfs_routes r ON r.feed_id = sr.feed_id AND r.route_id = sr.route_id
-    WHERE sr.feed_id = '${feedId.replace(/'/g, "''")}'
-      AND sr.stop_id = '${stopId.replace(/'/g, "''")}'
+    WHERE sr.feed_id = '${feed}'
     ORDER BY r.route_type, r.route_short_name
   `))
 

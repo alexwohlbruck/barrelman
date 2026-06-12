@@ -22,6 +22,8 @@ import {
   parseAgencies,
   parseShapes,
   deriveStopRoutes,
+  parseTransfers,
+  importTransfers,
   deriveRouteShapes,
   deriveBikesAllowed,
   importStops,
@@ -296,6 +298,16 @@ async function importFeedFile(filepath: string, feedInfo: GtfsFeedInfo) {
       const associations = deriveStopRoutes(tripsContent, stopTimesContent, feedInfo.feedId)
       stopRoutesImported = await importStopRoutes(associations)
       console.log(`  ✓ Imported ${stopRoutesImported} stop-route associations`)
+    }
+
+    // Agency transfers — station-complex membership + min connection times
+    const transfersContent = await readZipEntry(zip, 'transfers.txt')
+    if (transfersContent) {
+      const transfers = parseTransfers(transfersContent, feedInfo.feedId)
+      const transfersImported = await importTransfers(transfers)
+      if (transfersImported > 0) {
+        console.log(`  ✓ Imported ${transfersImported} agency transfers`)
+      }
     }
 
     // Parse and import shapes (for route-snapped vehicle interpolation)
