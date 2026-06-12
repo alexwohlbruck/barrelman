@@ -10,6 +10,11 @@
 
 import { db } from '../db'
 import { sql } from 'drizzle-orm'
+import {
+  ensurePricing,
+  pricingForLeg,
+  type RentalPricing,
+} from './rental-pricing.service'
 
 // ── Types ───────────────────────────────────────────────────────────
 
@@ -175,6 +180,10 @@ export interface TransitLeg {
   rentalPropulsionType?: string
   /** Destination station name (for docked returns) */
   rentalToStationName?: string
+  /** GBFS system_id (joins the leg to its operator's pricing). */
+  rentalSystemId?: string
+  /** Estimated fare from the operator's GBFS pricing feed, when published. */
+  rentalPricing?: RentalPricing
 }
 
 export interface TransitLegPlace {
@@ -360,6 +369,14 @@ function adaptLeg(leg: any): TransitLeg {
     adapted.rentalUri = leg.rental.rentalUriIOS || leg.rental.rentalUriAndroid || leg.rental.rentalUriWeb || undefined
     adapted.rentalPropulsionType = leg.rental.propulsionType || undefined
     adapted.rentalToStationName = leg.rental.toStationName || leg.to?.name || undefined
+    adapted.rentalSystemId = leg.rental.systemId || leg.rental.providerId || undefined
+    // Pricing is read from a cache pre-warmed by the caller (ensurePricing);
+    // absent until then, and absent for systems with no published fares.
+    adapted.rentalPricing = pricingForLeg(
+      adapted.rentalSystemId,
+      adapted.duration,
+      adapted.distance,
+    )
   }
 
   return adapted
@@ -656,6 +673,22 @@ async function queryMotisIntermodal(
 
   const itineraries = data.itineraries || data.plan?.itineraries || []
   const direct = data.direct || []
+
+  // Warm rental pricing for every system that appears on a rental leg, so the
+  // (synchronous) leg adapter can attach a fare estimate from cache.
+  const rentalSystemIds = [...itineraries, ...direct].flatMap((it: any) =>
+    (it.legs || [])
+      .filter((l: any) => l.mode === 'RENTAL' && l.rental)
+      .map((l: any) => l.rental.systemId || l.rental.providerId)
+      .filter(Boolean),
+  )
+  if (rentalSystemIds.length) {
+    try {
+      await ensurePricing(rentalSystemIds)
+    } catch (err) {
+      console.error('Rental pricing warm-up failed:', err)
+    }
+  }
 
   // Merge transit itineraries and direct connections
   const allItineraries = [
