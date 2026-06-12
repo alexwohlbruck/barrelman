@@ -410,7 +410,41 @@ function adaptItinerary(itin: any): TransitItinerary {
  * Extract fare from a MOTIS itinerary response.
  * Handles multiple OTP2 fare response formats.
  */
-function extractFare(itin: any): { currency: string; amount: number } | undefined {
+export function extractFare(itin: any): { currency: string; amount: number } | undefined {
+  // GTFS Fares v2 (MOTIS withFares=true): fareTransfers[] groups the
+  // itinerary's fare legs. Per fare leg, effectiveFareLegProducts lists
+  // alternatives (rider categories); each alternative is a product set to
+  // combine. Take the default rider category (else the first alternative)
+  // and sum across legs, plus any explicit transfer products. If ANY fare
+  // leg has no products (its agency publishes no fares — e.g. the MTA),
+  // the itinerary's true cost is unknown: report nothing rather than a
+  // misleading partial sum.
+  if (Array.isArray(itin.fareTransfers) && itin.fareTransfers.length > 0) {
+    let total = 0
+    let currency: string | undefined
+    let found = false
+    const addProduct = (p: any) => {
+      if (p?.amount == null) return
+      total += p.amount
+      currency ||= p.currency
+      found = true
+    }
+    for (const ft of itin.fareTransfers) {
+      for (const alternatives of ft.effectiveFareLegProducts ?? []) {
+        if (!alternatives?.length) return undefined // unpriced fare leg
+        const pick =
+          alternatives.find((products: any[]) =>
+            products?.some((p) => p?.riderCategory?.isDefaultFareCategory),
+          ) ?? alternatives[0]
+        for (const p of pick ?? []) addProduct(p)
+      }
+      for (const p of ft.transferProducts ?? []) addProduct(p)
+    }
+    if (found) {
+      return { currency: currency || 'USD', amount: Math.round(total * 100) / 100 }
+    }
+  }
+
   // OTP2 fareProducts format (MOTIS v2)
   if (Array.isArray(itin.fareProducts) && itin.fareProducts.length > 0) {
     const product = itin.fareProducts[0]
@@ -533,6 +567,9 @@ async function queryMotis(
     time: departureDate.toISOString(),
     arriveBy: String(request.arriveBy ?? false),
     numItineraries: String(request.numItineraries ?? 5),
+    // Fare computation from GTFS Fares v2 (native or synthesized from v1
+    // by import/inject-fares-v2.ts). Cheap when a feed has no fare data.
+    withFares: 'true',
   })
 
   if (request.searchWindow != null) {
@@ -592,6 +629,9 @@ async function queryMotisIntermodal(
     time: departureDate.toISOString(),
     arriveBy: String(request.arriveBy ?? false),
     numItineraries: String(request.numItineraries ?? 5),
+    // Fare computation from GTFS Fares v2 (native or synthesized from v1
+    // by import/inject-fares-v2.ts). Cheap when a feed has no fare data.
+    withFares: 'true',
   })
 
   // MOTIS defaults to 25m for matching coordinates/stops to the street

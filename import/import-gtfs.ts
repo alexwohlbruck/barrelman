@@ -13,6 +13,7 @@ import { parseArgs } from 'util'
 import { existsSync, mkdirSync, writeFileSync, readdirSync } from 'fs'
 import { join, basename } from 'path'
 import JSZip from 'jszip'
+import { injectFaresV2 } from './inject-fares-v2'
 import { ensureGtfsSchema } from '../src/db'
 import {
   fetchFeedList,
@@ -204,6 +205,20 @@ async function main() {
           console.error(`  ✗ Failed to inject into ${basename(filepath)}: ${err}`)
         }
       }
+    }
+  }
+
+  // Step 4b: Synthesize GTFS Fares v2 from v1 fare data so MOTIS (which
+  // reads v2 only) can price itineraries from the agency's own feed.
+  console.log('\n=== Converting Fares v1 → v2 ===')
+  for (const filepath of feedFiles) {
+    try {
+      const status = await injectFaresV2(filepath)
+      if (status.startsWith('converted')) {
+        console.log(`  ✓ ${basename(filepath)}: ${status}`)
+      }
+    } catch (err) {
+      console.error(`  ✗ ${basename(filepath)}: ${err}`)
     }
   }
 
