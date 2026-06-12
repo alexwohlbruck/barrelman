@@ -587,6 +587,13 @@ async function queryMotisIntermodal(
     params.set('maxMatchingDistance', '250')
   }
 
+  // Pad each interchange by 3 minutes so RAPTOR stops surfacing
+  // marginal-gain transfer chains (a one-block bus hop that saves 90
+  // seconds, three-vehicle relays, etc). Genuinely faster transfers
+  // survive the padding; itineraries also become more robust to missed
+  // connections. Other planners apply the same kind of penalty.
+  params.set('additionalTransferTime', '3')
+
   // Intermodal mode parameters
   if (request.preTransitModes?.length) {
     params.set('preTransitModes', request.preTransitModes.join(','))
