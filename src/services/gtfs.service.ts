@@ -1126,7 +1126,10 @@ export async function generateMotisConfig(options?: MotisConfigOptions): Promise
     numDays = 365,
     maxFootpathLength = 15,
     enableStreetRouting = false,
-    osmPath = '/osm-data/region.osm.pbf',
+    // MOTIS uses the platform-stripped extract (scripts/prepare-motis-osm.sh)
+    // so underground subway stops stay street-reachable. region.osm.pbf is
+    // untouched for GraphHopper / osm2pgsql / tiles.
+    osmPath = '/osm-data/region-transit.osm.pbf',
     includeGbfs = enableStreetRouting,
   } = options || {}
 
