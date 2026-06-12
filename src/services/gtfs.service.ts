@@ -1159,12 +1159,12 @@ export async function generateMotisConfig(options?: MotisConfigOptions): Promise
   lines.push('  with_shapes: true')
   lines.push('  adjust_footpaths: true')
   lines.push(`  max_footpath_length: ${maxFootpathLength}`)
-  // Stops farther than this (meters) from a walkable OSM way never get
-  // street-linked, making them unreachable by access/egress walks. The
-  // MOTIS default of 25m strands platforms under parks or mid-block
-  // (e.g. the Union Square express platforms — riders got bus-first
-  // detours to stations the L could walk to). osr_footpath still routes
-  // the real path, so a generous radius costs accuracy nothing.
+  // Import-time stop↔street matching radius used when generating
+  // stop-to-stop transfer footpaths (osr_footpath). The MOTIS default of
+  // 25m leaves off-street platforms (e.g. under Union Square Park) with
+  // crow-fly transfer estimates instead of street-routed ones. Note the
+  // QUERY-time equivalent (maxMatchingDistance on /api/v1/plan) is what
+  // governs access/egress walks — transit.service.ts passes that per query.
   lines.push('  max_matching_distance: 250')
   lines.push('  datasets:')
 

@@ -570,6 +570,23 @@ async function queryMotisIntermodal(
     numItineraries: String(request.numItineraries ?? 5),
   })
 
+  // MOTIS defaults to 25m for matching coordinates/stops to the street
+  // network, which strands off-street platforms (e.g. NYC subway stops
+  // under Union Square Park): they become unreachable for access/egress
+  // walks, so riders get absurd bus-first detours instead of boarding
+  // the subway directly. 250m keeps every platform walkable; the walk is
+  // still street-routed, so accuracy is unaffected. RENTAL queries keep
+  // the MOTIS default — the wider radius multiplies GBFS candidate links
+  // and blows those queries from ~2s to 20s+, and rental stations are
+  // curbside anyway.
+  const includesRental = [
+    ...(request.preTransitModes ?? []),
+    ...(request.postTransitModes ?? []),
+  ].includes('RENTAL')
+  if (!includesRental) {
+    params.set('maxMatchingDistance', '250')
+  }
+
   // Intermodal mode parameters
   if (request.preTransitModes?.length) {
     params.set('preTransitModes', request.preTransitModes.join(','))
