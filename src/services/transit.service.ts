@@ -96,6 +96,9 @@ export interface IntermodalRouteRequest extends TransitRouteRequest {
   postTransitModes?: MotisStreetMode[]
   /** Direct (non-transit) modes to also compute. Default: ['WALK'] */
   directModes?: MotisStreetMode[]
+  /** Max duration (s) for direct (non-transit) connections. MOTIS defaults
+   *  to 1800, which silently drops e.g. a 31-minute shared-bike ride. */
+  maxDirectTime?: number
   /** Max first-mile time in seconds (default 900 = 15 min) */
   maxPreTransitTime?: number
   /** Max last-mile time in seconds (default 900 = 15 min) */
@@ -669,6 +672,9 @@ async function queryMotisIntermodal(
   // a slow direct walk computation. Pass empty to skip when not needed.
   if (request.directModes?.length) {
     params.set('directModes', request.directModes.join(','))
+    // MOTIS's 1800s default truncates legitimate direct rides (a 31-minute
+    // shared bike across Brooklyn vanishes). Default to a more generous cap.
+    params.set('maxDirectTime', String(request.maxDirectTime ?? 3600))
   } else {
     params.set('maxDirectTime', '0')
   }
