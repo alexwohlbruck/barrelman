@@ -25,7 +25,10 @@ services:
     restart: unless-stopped
     command: --config /config/martin-config.yaml --webui enable-for-all
     environment:
-      DATABASE_URL: postgresql://barrelman:${BARRELMAN_DB_PASSWORD:-barrelman}@barrelman-db:5432/barrelman
+      # statement_timeout caps tile queries — an abandoned HTTP request must
+      # not keep grinding in Postgres for minutes (scoped to martin's
+      # connections only; imports use their own connections).
+      DATABASE_URL: postgresql://barrelman:${BARRELMAN_DB_PASSWORD:-barrelman}@barrelman-db:5432/barrelman?options=-c%20statement_timeout%3D10s
     volumes:
       - barrelman-osm-data:/data
       - ./martin-config.yaml:/config/martin-config.yaml:ro
