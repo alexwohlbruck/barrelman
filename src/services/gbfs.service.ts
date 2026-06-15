@@ -267,6 +267,96 @@ export async function getSystemsInBounds(
   return rows.map(rowToSystem)
 }
 
+/**
+ * Look up a single shared-mobility station with real-time availability.
+ *
+ * Primary path: exact (systemId, stationId) match — used when an OSM
+ * bikeshare node carries a `ref:gbfs` tag of the form `systemId:stationId`.
+ * Fallback: nearest station within `radius` of lat/lng (no is_renting
+ * filter, so a place detail can also surface a temporarily-closed dock).
+ */
+export async function getStation(request: {
+  systemId?: string
+  stationId?: string
+  lat?: number
+  lng?: number
+  radius?: number
+}): Promise<(GbfsStation & { systemName: string | null; operator: string | null }) | null> {
+  const { systemId, stationId, lat, lng, radius = 60 } = request
+
+  const SELECT_COLS = `
+    s.system_id, s.station_id, s.name, s.lat, s.lon, s.capacity,
+    s.num_bikes_available, s.num_ebikes_available,
+    s.num_scooters_available, s.num_docks_available,
+    s.is_renting, s.is_returning, s.last_reported,
+    sys.name AS system_name, sys.operator AS operator`
+
+  let row: any | undefined
+
+  if (systemId && stationId) {
+    const rows = await db.execute(sql.raw(`
+      SELECT ${SELECT_COLS}
+      FROM gbfs_stations s
+      JOIN gbfs_systems sys ON s.system_id = sys.system_id
+      WHERE s.system_id = '${systemId.replace(/'/g, "''")}'
+        AND s.station_id = '${stationId.replace(/'/g, "''")}'
+      LIMIT 1
+    `)) as any[]
+    row = rows[0]
+  }
+
+  // Fallback: nearest station to the coordinates (dock without a ref:gbfs tag)
+  if (!row && lat != null && lng != null) {
+    const dLat = radius / 111320
+    const dLng = radius / (111320 * Math.cos((lat * Math.PI) / 180))
+    const rows = await db.execute(sql.raw(`
+      SELECT ${SELECT_COLS},
+        (
+          6371000 * acos(
+            LEAST(1, GREATEST(-1,
+              cos(radians(${lat})) * cos(radians(s.lat)) *
+              cos(radians(s.lon) - radians(${lng})) +
+              sin(radians(${lat})) * sin(radians(s.lat))
+            ))
+          )
+        ) AS distance
+      FROM gbfs_stations s
+      JOIN gbfs_systems sys ON s.system_id = sys.system_id
+      WHERE sys.enabled = TRUE
+        AND s.lat BETWEEN ${lat - dLat} AND ${lat + dLat}
+        AND s.lon BETWEEN ${lng - dLng} AND ${lng + dLng}
+      ORDER BY distance
+      LIMIT 1
+    `)) as any[]
+    row = rows[0]
+    if (row && row.distance > radius) row = undefined
+  }
+
+  if (!row) return null
+
+  await refreshStationStatus(row.system_id)
+  const status = stationStatusCache.get(row.system_id)?.get(row.station_id)
+
+  return {
+    systemId: row.system_id,
+    stationId: row.station_id,
+    name: row.name || '',
+    lat: row.lat,
+    lon: row.lon,
+    capacity: row.capacity,
+    numBikesAvailable: status?.numBikesAvailable ?? row.num_bikes_available ?? 0,
+    numEbikesAvailable: status?.numEbikesAvailable ?? row.num_ebikes_available ?? 0,
+    numScootersAvailable: status?.numScootersAvailable ?? row.num_scooters_available ?? 0,
+    numDocksAvailable: status?.numDocksAvailable ?? row.num_docks_available ?? 0,
+    isRenting: status?.isRenting ?? row.is_renting ?? true,
+    isReturning: status?.isReturning ?? row.is_returning ?? true,
+    lastReported: status?.lastReported
+      ?? (row.last_reported ? new Date(row.last_reported).toISOString() : null),
+    systemName: row.system_name ?? null,
+    operator: row.operator ?? null,
+  }
+}
+
 // ── Station status polling ──────────────────────────────────────────
 
 /**
@@ -293,12 +383,19 @@ async function refreshStationStatus(systemId: string): Promise<void> {
     const statusMap = new Map<string, StationStatusEntry>()
     for (const s of stationsData) {
       const bikesAvail = s.num_bikes_available ?? 0
-      const ebikesAvail = s.vehicle_types_available
-        ?.find((vt: any) => vt.vehicle_type_id?.includes('electric'))
-        ?.count ?? 0
-      const scootersAvail = s.vehicle_types_available
-        ?.find((vt: any) => vt.vehicle_type_id?.includes('scooter'))
-        ?.count ?? 0
+      // Prefer the feed's explicit e-bike count. The vehicle_types_available
+      // heuristic only works when ids embed "electric" — Lyft/Citi Bike use
+      // numeric ids ("1", "2"), so that path would always report 0 e-bikes.
+      const ebikesAvail = typeof s.num_ebikes_available === 'number'
+        ? s.num_ebikes_available
+        : (s.vehicle_types_available
+            ?.find((vt: any) => vt.vehicle_type_id?.includes('electric'))
+            ?.count ?? 0)
+      const scootersAvail = typeof s.num_scooters_available === 'number'
+        ? s.num_scooters_available
+        : (s.vehicle_types_available
+            ?.find((vt: any) => vt.vehicle_type_id?.includes('scooter'))
+            ?.count ?? 0)
 
       statusMap.set(s.station_id, {
         numBikesAvailable: bikesAvail - ebikesAvail, // non-electric bikes

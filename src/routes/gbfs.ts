@@ -10,14 +10,17 @@ import { authHandler } from '../middleware/auth'
 import {
   getNearbyStations as _getNearbyStations,
   getSystemsInBounds as _getSystemsInBounds,
+  getStation as _getStation,
 } from '../services/gbfs.service'
 
 export function createGbfsRoutes(deps: {
   getNearbyStations?: typeof _getNearbyStations
   getSystemsInBounds?: typeof _getSystemsInBounds
+  getStation?: typeof _getStation
 } = {}) {
   const getNearbyStations = deps.getNearbyStations || _getNearbyStations
   const getSystemsInBounds = deps.getSystemsInBounds || _getSystemsInBounds
+  const getStation = deps.getStation || _getStation
 
   return new Elysia({ prefix: '/gbfs' })
     .onBeforeHandle(authHandler)
@@ -56,6 +59,54 @@ export function createGbfsRoutes(deps: {
       }),
       detail: {
         summary: 'Find nearby shared-mobility stations with real-time availability',
+        tags: ['GBFS'],
+      },
+    })
+
+    // ── GET /gbfs/station ──────────────────────────────────────────
+    // Single station with live availability. Looked up by exact
+    // (systemId, stationId) — from an OSM node's `ref:gbfs` tag — with a
+    // proximity fallback when only coordinates are known.
+    .get('/station', async ({ query, set }) => {
+      try {
+        const lat = query.lat ? parseFloat(query.lat) : undefined
+        const lng = query.lng ? parseFloat(query.lng) : undefined
+
+        if (!query.systemId && !query.stationId && (lat == null || lng == null)) {
+          set.status = 400
+          return { error: 'provide systemId+stationId or lat+lng' }
+        }
+
+        const station = await getStation({
+          systemId: query.systemId,
+          stationId: query.stationId,
+          lat,
+          lng,
+          radius: query.radius ? parseFloat(query.radius) : undefined,
+        })
+
+        if (!station) {
+          set.status = 404
+          return { error: 'station not found' }
+        }
+        return station
+      } catch (err) {
+        set.status = 500
+        return {
+          error: 'Failed to fetch station',
+          detail: err instanceof Error ? err.message : String(err),
+        }
+      }
+    }, {
+      query: t.Object({
+        systemId: t.Optional(t.String()),
+        stationId: t.Optional(t.String()),
+        lat: t.Optional(t.String()),
+        lng: t.Optional(t.String()),
+        radius: t.Optional(t.String()),
+      }),
+      detail: {
+        summary: 'Single shared-mobility station with real-time availability',
         tags: ['GBFS'],
       },
     })
