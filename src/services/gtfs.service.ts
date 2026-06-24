@@ -74,6 +74,7 @@ export interface ComputedTransfer {
  */
 const REGION_BBOXES: Record<string, string> = {
   nc: '-84.5,33.8,-75.4,36.6',    // North Carolina
+  nyc: '-74.3,40.45,-73.7,40.95', // NYC metro area (NJ Transit, MTA, PATH)
   southeast: '-92,24,-75,37',       // SE United States
   us: '-125,24,-66,50',            // Continental US
 }
@@ -220,6 +221,139 @@ function buildFeedListUrl(region: string, apiKey: string): string {
   }
 
   return `${base}?${params}`
+}
+
+// ── RT URL discovery for existing feeds ─────────────────────────────
+
+/**
+ * Discover GTFS-RT URLs for feeds already in the database.
+ *
+ * The `gtfs_feeds` table stores Transitland's numeric feed ID as
+ * `onestop_id` (e.g. "886"), but RT feed lookups require the full
+ * `f-{geohash}-{agency}` onestop_id. This function:
+ *
+ *   1. Queries Transitland by numeric ID to resolve the real onestop_id
+ *   2. Queries for the corresponding `{onestop_id}~rt` RT feed
+ *   3. Extracts RT URLs and updates the database
+ *
+ * Returns a summary of how many feeds were checked / updated.
+ */
+export async function discoverRtUrls(
+  feedId?: string,
+  apiKey?: string,
+  fetchFn: FetchFn = globalThis.fetch,
+  onProgress?: (checked: number, total: number, feedId: string, found: boolean) => void,
+  dryRun: boolean = false,
+): Promise<{ checked: number; updated: number; errors: number }> {
+  const key = apiKey || process.env.TRANSITLAND_API_KEY
+  if (!key) throw new Error('TRANSITLAND_API_KEY is required')
+
+  // Get feeds that need RT URL discovery
+  const feedFilter = feedId
+    ? `AND feed_id = '${feedId.replace(/'/g, "''")}'`
+    : ''
+  const result = await db.execute(sql.raw(`
+    SELECT feed_id, onestop_id
+    FROM gtfs_feeds
+    WHERE onestop_id IS NOT NULL
+      AND (rt_urls IS NULL OR rt_urls = '[]'::jsonb)
+      ${feedFilter}
+    ORDER BY feed_id
+  `))
+
+  const feeds = result as unknown as Array<{ feed_id: string; onestop_id: string }>
+  let checked = 0
+  let updated = 0
+  let errors = 0
+
+  for (const feed of feeds) {
+    try {
+      const rtUrls = await resolveRtUrlsForFeed(feed.onestop_id, key, fetchFn)
+      checked++
+
+      if (rtUrls.length > 0) {
+        if (!dryRun) {
+          const rtUrlsJson = JSON.stringify(rtUrls).replace(/'/g, "''")
+          await db.execute(sql.raw(`
+            UPDATE gtfs_feeds
+            SET rt_urls = '${rtUrlsJson}'::jsonb
+            WHERE feed_id = '${feed.feed_id.replace(/'/g, "''")}'
+          `))
+        }
+        updated++
+      }
+
+      onProgress?.(checked, feeds.length, feed.feed_id, rtUrls.length > 0)
+
+      // Rate limiting: 200ms between Transitland API calls
+      if (checked < feeds.length) {
+        await new Promise(r => setTimeout(r, 200))
+      }
+    } catch (err) {
+      errors++
+      checked++
+      console.error(
+        `[RT Discovery] Error for feed ${feed.feed_id}:`,
+        err instanceof Error ? err.message : err,
+      )
+      onProgress?.(checked, feeds.length, feed.feed_id, false)
+    }
+  }
+
+  return { checked, updated, errors }
+}
+
+/**
+ * Resolve RT URLs for a single feed by its Transitland numeric ID.
+ *
+ * Steps:
+ *   1. GET /feeds?id={numericId} to get the real onestop_id
+ *   2. GET /feeds?spec=GTFS_RT&onestop_id={onestopId}~rt to find RT feed
+ *   3. Extract realtime_vehicle_positions, realtime_trip_updates,
+ *      realtime_alerts URLs from the response
+ */
+async function resolveRtUrlsForFeed(
+  numericId: string,
+  apiKey: string,
+  fetchFn: FetchFn = globalThis.fetch,
+): Promise<GtfsRtUrl[]> {
+  // Step 1: Resolve numeric ID to real onestop_id
+  const feedUrl = `https://transit.land/api/v2/rest/feeds?apikey=${apiKey}&id=${encodeURIComponent(numericId)}&limit=1`
+  const feedResponse = await fetchFn(feedUrl)
+  if (!feedResponse.ok) return []
+
+  const feedData = await feedResponse.json() as any
+  const staticFeed = feedData.feeds?.[0]
+  if (!staticFeed?.onestop_id) return []
+
+  const realOnestopId = staticFeed.onestop_id as string
+
+  // Step 2: Look up the RT feed using the {onestopId}~rt convention
+  const rtOnestopId = `${realOnestopId}~rt`
+  const rtUrl = `https://transit.land/api/v2/rest/feeds?apikey=${apiKey}&spec=GTFS_RT&onestop_id=${encodeURIComponent(rtOnestopId)}&limit=1`
+  const rtResponse = await fetchFn(rtUrl)
+  if (!rtResponse.ok) return []
+
+  const rtData = await rtResponse.json() as any
+  const rtFeed = rtData.feeds?.[0]
+  if (!rtFeed) return []
+
+  // Step 3: Extract RT URLs
+  const urls = rtFeed.urls || {}
+  const rtUrls: GtfsRtUrl[] = []
+
+  for (const key of ['realtime_trip_updates', 'realtime_vehicle_positions', 'realtime_alerts'] as const) {
+    const url = urls[key]
+    if (url) {
+      const headers: Record<string, string> = {}
+      if (rtFeed.authorization?.type === 'header' && rtFeed.authorization?.param_name) {
+        headers[rtFeed.authorization.param_name] = rtFeed.authorization.param_value || ''
+      }
+      rtUrls.push(Object.keys(headers).length ? { url, headers } : { url })
+    }
+  }
+
+  return rtUrls
 }
 
 // ── GTFS ZIP parsing ────────────────────────────────────────────────
@@ -375,6 +509,241 @@ export function deriveStopRoutes(
   return result
 }
 
+/**
+ * Parse shapes.txt from a GTFS feed into shape coordinate arrays.
+ *
+ * Returns a Map of shape_id → [[lng, lat], ...] ordered by
+ * shape_pt_sequence. The coordinates use [lng, lat] order to match
+ * GeoJSON convention and Mapbox/Leaflet expectations.
+ */
+export function parseShapes(
+  csvContent: string,
+): Map<string, [number, number][]> {
+  const records = parse(csvContent, {
+    columns: true,
+    skip_empty_lines: true,
+    trim: true,
+    relax_column_count: true,
+  })
+
+  // Group points by shape_id, then sort by sequence
+  const raw = new Map<string, Array<{ seq: number; lat: number; lng: number }>>()
+  for (const row of records) {
+    const id = row.shape_id
+    const lat = parseFloat(row.shape_pt_lat)
+    const lng = parseFloat(row.shape_pt_lon)
+    const seq = parseInt(row.shape_pt_sequence, 10)
+    if (!id || isNaN(lat) || isNaN(lng) || isNaN(seq)) continue
+
+    if (!raw.has(id)) raw.set(id, [])
+    raw.get(id)!.push({ seq, lat, lng })
+  }
+
+  const result = new Map<string, [number, number][]>()
+  for (const [id, points] of raw) {
+    points.sort((a, b) => a.seq - b.seq)
+    result.set(id, points.map(p => [p.lng, p.lat]))
+  }
+
+  return result
+}
+
+/**
+ * Derive route → shape_id mapping from trips.txt.
+ *
+ * For each route, picks the shape_id that appears on the most trips.
+ * This gives the "canonical" shape for display purposes.
+ */
+export function deriveRouteShapes(
+  tripsContent: string,
+): Map<string, string> {
+  const records = parse(tripsContent, {
+    columns: true,
+    skip_empty_lines: true,
+    trim: true,
+    relax_column_count: true,
+  })
+
+  // Count shape_id occurrences per route_id
+  const routeShapeCounts = new Map<string, Map<string, number>>()
+  for (const row of records) {
+    const routeId = row.route_id
+    const shapeId = row.shape_id
+    if (!routeId || !shapeId) continue
+
+    if (!routeShapeCounts.has(routeId)) {
+      routeShapeCounts.set(routeId, new Map())
+    }
+    const counts = routeShapeCounts.get(routeId)!
+    counts.set(shapeId, (counts.get(shapeId) || 0) + 1)
+  }
+
+  // Pick the most common shape per route
+  const result = new Map<string, string>()
+  for (const [routeId, counts] of routeShapeCounts) {
+    let bestShape = ''
+    let bestCount = 0
+    for (const [shapeId, count] of counts) {
+      if (count > bestCount) {
+        bestShape = shapeId
+        bestCount = count
+      }
+    }
+    if (bestShape) result.set(routeId, bestShape)
+  }
+
+  return result
+}
+
+/**
+ * Derive route → bikes_allowed mapping from trips.txt.
+ *
+ * GTFS spec: bikes_allowed per trip: 0/empty=unknown, 1=allowed, 2=not allowed.
+ * We aggregate to per-route:
+ *   - If ANY trip on the route has bikes_allowed=1 → route gets 1
+ *   - If ALL trips have bikes_allowed=1 → route gets 2
+ *   - Otherwise → 0 (unknown/not allowed)
+ */
+export function deriveBikesAllowed(
+  tripsContent: string,
+): Map<string, number> {
+  const records = parse(tripsContent, {
+    columns: true,
+    skip_empty_lines: true,
+    trim: true,
+    relax_column_count: true,
+  })
+
+  // Track per-route: total trips, trips with bikes_allowed=1
+  const routeStats = new Map<string, { total: number; allowed: number }>()
+  for (const row of records) {
+    const routeId = row.route_id
+    if (!routeId) continue
+
+    const stats = routeStats.get(routeId) ?? { total: 0, allowed: 0 }
+    stats.total++
+    if (String(row.bikes_allowed) === '1') stats.allowed++
+    routeStats.set(routeId, stats)
+  }
+
+  const result = new Map<string, number>()
+  for (const [routeId, stats] of routeStats) {
+    if (stats.allowed === 0) {
+      result.set(routeId, 0) // unknown or not allowed
+    } else if (stats.allowed === stats.total) {
+      result.set(routeId, 2) // all trips allow bikes
+    } else {
+      result.set(routeId, 1) // some trips allow bikes
+    }
+  }
+
+  return result
+}
+
+/**
+ * Import shape coordinate arrays into gtfs_shapes table.
+ */
+export async function importShapes(
+  shapes: Map<string, [number, number][]>,
+  feedId: string,
+): Promise<number> {
+  if (shapes.size === 0) return 0
+
+  // Clear existing shapes for this feed
+  await db.execute(sql.raw(
+    `DELETE FROM gtfs_shapes WHERE feed_id = '${feedId.replace(/'/g, "''")}'`,
+  ))
+
+  // Batch insert in chunks of 100 (shapes can be large)
+  const entries = Array.from(shapes.entries())
+  const chunkSize = 100
+  let imported = 0
+
+  for (let i = 0; i < entries.length; i += chunkSize) {
+    const chunk = entries.slice(i, i + chunkSize)
+    const values = chunk
+      .map(([shapeId, coords]) => {
+        const coordsJson = JSON.stringify(coords)
+        return `('${feedId.replace(/'/g, "''")}', '${shapeId.replace(/'/g, "''")}', '${coordsJson.replace(/'/g, "''")}'::jsonb)`
+      })
+      .join(',\n')
+
+    await db.execute(sql.raw(`
+      INSERT INTO gtfs_shapes (feed_id, shape_id, coordinates)
+      VALUES ${values}
+      ON CONFLICT (feed_id, shape_id) DO UPDATE SET coordinates = EXCLUDED.coordinates
+    `))
+    imported += chunk.length
+  }
+
+  return imported
+}
+
+/**
+ * Update gtfs_routes with the canonical shape_id for each route.
+ */
+export async function updateRouteShapes(
+  routeShapes: Map<string, string>,
+  feedId: string,
+): Promise<void> {
+  for (const [routeId, shapeId] of routeShapes) {
+    await db.execute(sql.raw(`
+      UPDATE gtfs_routes
+      SET shape_id = '${shapeId.replace(/'/g, "''")}'
+      WHERE feed_id = '${feedId.replace(/'/g, "''")}' AND route_id = '${routeId.replace(/'/g, "''")}'
+    `))
+  }
+}
+
+/**
+ * Batch lookup bikes_allowed for a list of (feedId, routeId) pairs.
+ * Returns a map of "feedId_routeId" → bikes_allowed (0/1/2).
+ * Routes not found in the DB return 0 (unknown).
+ */
+export async function getBikesAllowed(
+  routes: Array<{ feedId: string; routeId: string }>,
+): Promise<Record<string, number>> {
+  if (routes.length === 0) return {}
+
+  const conditions = routes.map(({ feedId, routeId }) =>
+    `(feed_id = '${feedId.replace(/'/g, "''")}' AND route_id = '${routeId.replace(/'/g, "''")}')`
+  ).join(' OR ')
+
+  const rows = await db.execute(sql.raw(`
+    SELECT feed_id, route_id, bikes_allowed
+    FROM gtfs_routes
+    WHERE ${conditions}
+  `))
+
+  const result: Record<string, number> = {}
+  // Default all requested routes to 0
+  for (const { feedId, routeId } of routes) {
+    result[`${feedId}_${routeId}`] = 0
+  }
+  // Fill in from DB
+  for (const row of rows as any[]) {
+    result[`${row.feed_id}_${row.route_id}`] = parseInt(row.bikes_allowed, 10) || 0
+  }
+
+  return result
+}
+
+/**
+ * Update the bikes_allowed column on gtfs_routes for a given feed.
+ */
+export async function updateBikesAllowed(
+  bikesAllowed: Map<string, number>,
+  feedId: string,
+): Promise<void> {
+  for (const [routeId, value] of bikesAllowed) {
+    await db.execute(sql.raw(`
+      UPDATE gtfs_routes
+      SET bikes_allowed = ${value}
+      WHERE feed_id = '${feedId.replace(/'/g, "''")}' AND route_id = '${routeId.replace(/'/g, "''")}'
+    `))
+  }
+}
+
 // ── Database import ─────────────────────────────────────────────────
 
 /**
@@ -521,6 +890,63 @@ export async function importStopRoutes(
 }
 
 /**
+ * Parse transfers.txt — the agency's authoritative statement of which
+ * stations connect inside one complex (e.g. Times Sq 1/2/3 ↔ N/Q/R/W)
+ * and the minimum connection times.
+ */
+export function parseTransfers(
+  csvContent: string,
+  feedId: string,
+): Array<{ feedId: string; fromStopId: string; toStopId: string; transferType: number; minTransferTime: number | null }> {
+  const records = parse(csvContent, {
+    columns: true,
+    skip_empty_lines: true,
+    trim: true,
+    relax_column_count: true,
+  })
+  const out: Array<{ feedId: string; fromStopId: string; toStopId: string; transferType: number; minTransferTime: number | null }> = []
+  for (const r of records) {
+    if (!r.from_stop_id || !r.to_stop_id) continue
+    out.push({
+      feedId,
+      fromStopId: r.from_stop_id,
+      toStopId: r.to_stop_id,
+      transferType: parseInt(r.transfer_type || '0', 10) || 0,
+      minTransferTime: r.min_transfer_time ? parseInt(r.min_transfer_time, 10) : null,
+    })
+  }
+  return out
+}
+
+/**
+ * Import agency transfers, replacing the feed's existing rows.
+ */
+export async function importTransfers(
+  transfers: ReturnType<typeof parseTransfers>,
+): Promise<number> {
+  if (transfers.length === 0) return 0
+  const feedEsc = transfers[0].feedId.replace(/'/g, "''")
+  await db.execute(sql.raw(`DELETE FROM gtfs_transfers WHERE feed_id = '${feedEsc}'`))
+
+  const BATCH_SIZE = 500
+  let imported = 0
+  for (let i = 0; i < transfers.length; i += BATCH_SIZE) {
+    const batch = transfers.slice(i, i + BATCH_SIZE)
+    const values = batch.map(t => {
+      const esc = (v: string) => `'${v.replace(/'/g, "''")}'`
+      return `(${esc(t.feedId)}, ${esc(t.fromStopId)}, ${esc(t.toStopId)}, ${t.transferType}, ${t.minTransferTime ?? 'NULL'})`
+    }).join(',\n')
+    await db.execute(sql.raw(`
+      INSERT INTO gtfs_transfers (feed_id, from_stop_id, to_stop_id, transfer_type, min_transfer_time)
+      VALUES ${values}
+      ON CONFLICT (feed_id, from_stop_id, to_stop_id) DO NOTHING
+    `))
+    imported += batch.length
+  }
+  return imported
+}
+
+/**
  * Record a feed import in the gtfs_feeds table.
  */
 export async function recordFeed(feed: GtfsFeedInfo, stopCount: number, routeCount: number): Promise<void> {
@@ -547,6 +973,7 @@ export async function recordFeed(feed: GtfsFeedInfo, stopCount: number, routeCou
  */
 export async function clearFeed(feedId: string): Promise<void> {
   const escaped = feedId.replace(/'/g, "''")
+  await db.execute(sql.raw(`DELETE FROM gtfs_transfers WHERE feed_id = '${escaped}'`))
   await db.execute(sql.raw(`DELETE FROM gtfs_stop_routes WHERE feed_id = '${escaped}'`))
   await db.execute(sql.raw(`DELETE FROM gtfs_routes WHERE feed_id = '${escaped}'`))
   await db.execute(sql.raw(`DELETE FROM gtfs_stops WHERE feed_id = '${escaped}'`))
@@ -736,6 +1163,12 @@ interface MotisConfigOptions {
   numDays?: number
   /** Max footpath length in minutes */
   maxFootpathLength?: number
+  /** Enable OSM street routing for intermodal queries (default: false) */
+  enableStreetRouting?: boolean
+  /** Path to OSM PBF file (default: /osm-data/region.osm.pbf) */
+  osmPath?: string
+  /** Include GBFS feeds from gbfs_systems table (default: same as enableStreetRouting) */
+  includeGbfs?: boolean
 }
 
 /**
@@ -746,7 +1179,17 @@ interface MotisConfigOptions {
  * so MOTIS automatically polls for realtime updates.
  */
 export async function generateMotisConfig(options?: MotisConfigOptions): Promise<string> {
-  const { gtfsDir = 'gtfs', numDays = 365, maxFootpathLength = 15 } = options || {}
+  const {
+    gtfsDir = 'gtfs',
+    numDays = 365,
+    maxFootpathLength = 15,
+    enableStreetRouting = false,
+    // MOTIS uses the platform-stripped extract (scripts/prepare-motis-osm.sh)
+    // so underground subway stops stay street-reachable. region.osm.pbf is
+    // untouched for GraphHopper / osm2pgsql / tiles.
+    osmPath = '/osm-data/region-transit.osm.pbf',
+    includeGbfs = enableStreetRouting,
+  } = options || {}
 
   const result = await db.execute(sql.raw(`
     SELECT feed_id, rt_urls
@@ -761,15 +1204,30 @@ export async function generateMotisConfig(options?: MotisConfigOptions): Promise
     '# MOTIS config — auto-generated by Barrelman GTFS import',
     '#',
     `# ${feeds.length} feeds, generated ${new Date().toISOString()}`,
+    `# street_routing: ${enableStreetRouting}`,
     '',
-    'timetable:',
-    '  first_day: TODAY',
-    `  num_days: ${numDays}`,
-    '  with_shapes: true',
-    '  adjust_footpaths: true',
-    `  max_footpath_length: ${maxFootpathLength}`,
-    '  datasets:',
   ]
+
+  // OSM file (required for street routing, geocoding, shapes)
+  if (enableStreetRouting) {
+    lines.push(`osm: ${osmPath}`)
+    lines.push('')
+  }
+
+  lines.push('timetable:')
+  lines.push('  first_day: TODAY')
+  lines.push(`  num_days: ${numDays}`)
+  lines.push('  with_shapes: true')
+  lines.push('  adjust_footpaths: true')
+  lines.push(`  max_footpath_length: ${maxFootpathLength}`)
+  // Import-time stop↔street matching radius used when generating
+  // stop-to-stop transfer footpaths (osr_footpath). The MOTIS default of
+  // 25m leaves off-street platforms (e.g. under Union Square Park) with
+  // crow-fly transfer estimates instead of street-routed ones. Note the
+  // QUERY-time equivalent (maxMatchingDistance on /api/v1/plan) is what
+  // governs access/egress walks — transit.service.ts passes that per query.
+  lines.push('  max_matching_distance: 250')
+  lines.push('  datasets:')
 
   for (const feed of feeds) {
     lines.push(`    "${feed.feed_id}":`)
@@ -791,12 +1249,91 @@ export async function generateMotisConfig(options?: MotisConfigOptions): Promise
     }
   }
 
+  // GBFS feeds for shared mobility (bikeshare, scootershare)
+  if (includeGbfs) {
+    const gbfsSystems = await getGbfsFeedsForMotis()
+    if (gbfsSystems.length > 0) {
+      lines.push('')
+      lines.push('gbfs:')
+      lines.push('  feeds:')
+      for (const system of gbfsSystems) {
+        lines.push(`    "${system.systemId}":`)
+        lines.push(`      url: "${system.url}"`)
+      }
+    }
+  }
+
   lines.push('')
-  lines.push('street_routing: false')
-  lines.push('osr_footpath: false')
-  lines.push('geocoding: false')
+  lines.push(`street_routing: ${enableStreetRouting}`)
+  lines.push(`osr_footpath: ${enableStreetRouting}`)
+  lines.push(`geocoding: ${enableStreetRouting}`)
   lines.push('reverse_geocoding: false')
   lines.push('')
 
   return lines.join('\n')
+}
+
+async function getGbfsFeedsForMotis(): Promise<Array<{ systemId: string; url: string }>> {
+  const result = await db.execute(sql.raw(`
+    SELECT system_id, url
+    FROM gbfs_systems
+    WHERE enabled = TRUE
+    ORDER BY system_id
+  `))
+  return (result as any[]).map(row => ({
+    systemId: row.system_id,
+    url: row.url,
+  }))
+}
+
+// ── GTFS-Flex sanitization ────────────────────────────────────────
+
+/**
+ * GTFS-Flex v2 extension files that crash MOTIS.
+ *
+ * These files define flex-route service areas, booking rules, and
+ * GeoJSON location boundaries (including MultiPolygon geometries)
+ * that MOTIS's GTFS parser cannot handle.
+ */
+export const FLEX_EXTENSION_FILES = [
+  'areas.txt',
+  'stop_areas.txt',
+  'booking_rules.txt',
+  'location_groups.txt',
+  'location_group_stops.txt',
+  'locations.geojson',
+] as const
+
+/**
+ * Strip GTFS-Flex extension files from a GTFS ZIP buffer.
+ *
+ * MOTIS v2 crashes when it encounters Flex v2 extension files
+ * (especially locations.geojson with MultiPolygon geometries).
+ * This function removes those files while preserving all standard
+ * GTFS data that MOTIS can process.
+ *
+ * Returns the sanitized buffer and a list of removed filenames.
+ * If no flex files are found, returns the original buffer unchanged.
+ */
+export async function sanitizeGtfsZip(
+  buffer: ArrayBuffer,
+): Promise<{ buffer: ArrayBuffer; removedFiles: string[] }> {
+  // Dynamic import to avoid requiring JSZip at module level in tests
+  const JSZip = (await import('jszip')).default
+  const zip = await JSZip.loadAsync(buffer)
+
+  const removedFiles: string[] = []
+  for (const flexFile of FLEX_EXTENSION_FILES) {
+    if (zip.file(flexFile)) {
+      zip.remove(flexFile)
+      removedFiles.push(flexFile)
+    }
+  }
+
+  if (removedFiles.length === 0) {
+    return { buffer, removedFiles: [] }
+  }
+
+  const sanitized = await zip.generateAsync({ type: 'arraybuffer' })
+  return { buffer: sanitized, removedFiles }
 }

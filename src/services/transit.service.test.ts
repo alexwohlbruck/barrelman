@@ -41,6 +41,7 @@ mock.module('../db', () => ({
 
 import {
   getTransitRoute,
+  extractFare,
   MotisError,
   type TransitRouteRequest,
 } from './transit.service'
@@ -400,5 +401,62 @@ describe('getTransitRoute', () => {
     expect(calledUrl).toContain('time=')
     const todayStr = before.toISOString().split('T')[0]
     expect(calledUrl).toContain(todayStr)
+  })
+})
+
+// ── extractFare (GTFS Fares v2 via MOTIS withFares) ─────────────────────────
+
+describe('extractFare', () => {
+  const product = (amount: number, extra: any = {}) => ({
+    name: 'fare', amount, currency: 'USD', ...extra,
+  })
+
+  test('sums default-category products across fare legs', () => {
+    const fare = extractFare({
+      fareTransfers: [
+        { effectiveFareLegProducts: [[[product(2.5)]]] },
+        { effectiveFareLegProducts: [[[product(2.2)]]] },
+      ],
+    })
+    expect(fare).toEqual({ currency: 'USD', amount: 4.7 })
+  })
+
+  test('prefers the default rider category over the first alternative', () => {
+    const fare = extractFare({
+      fareTransfers: [
+        {
+          effectiveFareLegProducts: [
+            [
+              [product(1.25, { riderCategory: { riderCategoryName: 'reduced' } })],
+              [product(2.5, { riderCategory: { riderCategoryName: 'adult', isDefaultFareCategory: true } })],
+            ],
+          ],
+        },
+      ],
+    })
+    expect(fare).toEqual({ currency: 'USD', amount: 2.5 })
+  })
+
+  test('returns undefined when any fare leg is unpriced (partial data)', () => {
+    // Tram leg priced, MTA leg without fare data — total is unknown.
+    const fare = extractFare({
+      fareTransfers: [
+        { effectiveFareLegProducts: [[[product(2.5)]]] },
+        { effectiveFareLegProducts: [[]] },
+      ],
+    })
+    expect(fare).toBeUndefined()
+  })
+
+  test('free system reports an explicit zero fare', () => {
+    const fare = extractFare({
+      fareTransfers: [{ effectiveFareLegProducts: [[[product(0)]]] }],
+    })
+    expect(fare).toEqual({ currency: 'USD', amount: 0 })
+  })
+
+  test('returns undefined without fare data', () => {
+    expect(extractFare({})).toBeUndefined()
+    expect(extractFare({ fareTransfers: [] })).toBeUndefined()
   })
 })

@@ -124,5 +124,103 @@ export async function ensureGtfsSchema() {
       ON gtfs_stop_routes (feed_id, stop_id);
     CREATE INDEX IF NOT EXISTS gtfs_stop_routes_route_idx
       ON gtfs_stop_routes (feed_id, route_id);
+
+    -- Agency-declared transfers (transfers.txt): the authoritative
+    -- definition of which stations form one complex (e.g. Times Sq
+    -- 1/2/3 <-> N/Q/R/W) and the minimum connection times. Used to
+    -- aggregate the lines serving a station across its whole complex.
+    CREATE TABLE IF NOT EXISTS gtfs_transfers (
+      id SERIAL PRIMARY KEY,
+      feed_id TEXT NOT NULL,
+      from_stop_id TEXT NOT NULL,
+      to_stop_id TEXT NOT NULL,
+      transfer_type INTEGER DEFAULT 0,
+      min_transfer_time INTEGER
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS gtfs_transfers_uniq_idx
+      ON gtfs_transfers (feed_id, from_stop_id, to_stop_id);
+    CREATE INDEX IF NOT EXISTS gtfs_transfers_from_idx
+      ON gtfs_transfers (feed_id, from_stop_id);
+    CREATE INDEX IF NOT EXISTS gtfs_transfers_to_idx
+      ON gtfs_transfers (feed_id, to_stop_id);
+
+    -- Route shapes: stores GTFS shapes as ordered coordinate arrays.
+    -- shape_id from shapes.txt; coordinates stored as JSONB [[lng,lat], ...].
+    CREATE TABLE IF NOT EXISTS gtfs_shapes (
+      id SERIAL PRIMARY KEY,
+      feed_id TEXT NOT NULL,
+      shape_id TEXT NOT NULL,
+      coordinates JSONB NOT NULL
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS gtfs_shapes_feed_shape_idx
+      ON gtfs_shapes (feed_id, shape_id);
+    CREATE INDEX IF NOT EXISTS gtfs_shapes_feed_id_idx
+      ON gtfs_shapes (feed_id);
+
+    -- Add shape_id column to routes (most common shape for each route,
+    -- derived from trips.txt during import).
+    ALTER TABLE gtfs_routes ADD COLUMN IF NOT EXISTS shape_id TEXT;
+
+    -- bikes_allowed: 0=unknown, 1=at least one bike-allowed trip,
+    -- 2=all trips allow bikes. Derived from trips.txt bikes_allowed field.
+    ALTER TABLE gtfs_routes ADD COLUMN IF NOT EXISTS bikes_allowed INTEGER DEFAULT 0;
+  `))
+}
+
+/**
+ * Create GBFS shared-mobility tables for bikeshare/scootershare.
+ */
+export async function ensureGbfsSchema() {
+  await db.execute(sql.raw(`
+    -- ── GBFS system catalog ───────────────────────────────────────────
+    CREATE TABLE IF NOT EXISTS gbfs_systems (
+      id SERIAL PRIMARY KEY,
+      system_id TEXT NOT NULL UNIQUE,
+      name TEXT,
+      operator TEXT,
+      url TEXT NOT NULL,
+      country_code TEXT,
+      lat DOUBLE PRECISION,
+      lon DOUBLE PRECISION,
+      vehicle_types JSONB DEFAULT '[]'::jsonb,
+      has_stations BOOLEAN DEFAULT TRUE,
+      has_free_floating BOOLEAN DEFAULT FALSE,
+      feed_urls JSONB DEFAULT '{}'::jsonb,
+      ttl INTEGER DEFAULT 300,
+      last_polled_at TIMESTAMPTZ,
+      imported_at TIMESTAMPTZ DEFAULT NOW(),
+      enabled BOOLEAN DEFAULT TRUE
+    );
+
+    CREATE INDEX IF NOT EXISTS gbfs_systems_country_idx
+      ON gbfs_systems (country_code);
+
+    -- ── GBFS stations ─────────────────────────────────────────────────
+    CREATE TABLE IF NOT EXISTS gbfs_stations (
+      id SERIAL PRIMARY KEY,
+      system_id TEXT NOT NULL,
+      station_id TEXT NOT NULL,
+      name TEXT,
+      lat DOUBLE PRECISION NOT NULL,
+      lon DOUBLE PRECISION NOT NULL,
+      capacity INTEGER,
+      num_bikes_available INTEGER DEFAULT 0,
+      num_ebikes_available INTEGER DEFAULT 0,
+      num_scooters_available INTEGER DEFAULT 0,
+      num_docks_available INTEGER DEFAULT 0,
+      is_renting BOOLEAN DEFAULT TRUE,
+      is_returning BOOLEAN DEFAULT TRUE,
+      last_reported TIMESTAMPTZ,
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS gbfs_stations_system_station_idx
+      ON gbfs_stations (system_id, station_id);
+    CREATE INDEX IF NOT EXISTS gbfs_stations_system_idx
+      ON gbfs_stations (system_id);
+    CREATE INDEX IF NOT EXISTS gbfs_stations_lat_lon_idx
+      ON gbfs_stations (lat, lon);
   `))
 }

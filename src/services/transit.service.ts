@@ -10,6 +10,11 @@
 
 import { db } from '../db'
 import { sql } from 'drizzle-orm'
+import {
+  ensurePricing,
+  pricingForLeg,
+  type RentalPricing,
+} from './rental-pricing.service'
 
 // ── Types ───────────────────────────────────────────────────────────
 
@@ -75,8 +80,43 @@ export interface TransitItinerary {
   }
 }
 
+/** MOTIS street modes for intermodal routing */
+export type MotisStreetMode = 'WALK' | 'BIKE' | 'CAR' | 'CAR_PARKING' | 'RENTAL'
+
+/** MOTIS transit modes */
+export type MotisTransitMode = 'TRANSIT' | 'BUS' | 'RAIL' | 'TRAM' | 'SUBWAY' | 'FERRY' | 'COACH' | 'REGIONAL_RAIL' | 'SUBURBAN' | 'HIGHSPEED_RAIL' | 'LONG_DISTANCE' | 'FUNICULAR' | 'AERIAL_LIFT'
+
+/** GBFS rental vehicle form factors */
+export type RentalFormFactor = 'BICYCLE' | 'CARGO_BICYCLE' | 'CAR' | 'MOPED' | 'SCOOTER_STANDING' | 'SCOOTER_SEATED' | 'OTHER'
+
+export interface IntermodalRouteRequest extends TransitRouteRequest {
+  /** Modes for first mile (coordinate → first transit stop). Default: ['WALK'] */
+  preTransitModes?: MotisStreetMode[]
+  /** Modes for last mile (last transit stop → coordinate). Default: ['WALK'] */
+  postTransitModes?: MotisStreetMode[]
+  /** Direct (non-transit) modes to also compute. Default: ['WALK'] */
+  directModes?: MotisStreetMode[]
+  /** Max duration (s) for direct (non-transit) connections. MOTIS defaults
+   *  to 1800, which silently drops e.g. a 31-minute shared-bike ride. */
+  maxDirectTime?: number
+  /** Max first-mile time in seconds (default 900 = 15 min) */
+  maxPreTransitTime?: number
+  /** Max last-mile time in seconds (default 900 = 15 min) */
+  maxPostTransitTime?: number
+  /** Filter rental vehicles to specific form factors */
+  preTransitRentalFormFactors?: RentalFormFactor[]
+  postTransitRentalFormFactors?: RentalFormFactor[]
+  /**
+   * Minutes reserved per interchange (MOTIS additionalTransferTime).
+   * Default 3 — discourages marginal-gain transfer chains. Callers can
+   * raise it (e.g. 15) to sweep for least-transfer itineraries that pure
+   * time-optimal search would Pareto-dominate away.
+   */
+  additionalTransferTime?: number
+}
+
 export interface TransitLeg {
-  /** WALK, BUS, RAIL, TRAM, SUBWAY, FERRY, etc. */
+  /** WALK, BIKE, CAR, CAR_PARKING, RENTAL, BUS, RAIL, TRAM, SUBWAY, FERRY, etc. */
   mode: string
   /** Start location */
   from: TransitLegPlace
@@ -95,7 +135,7 @@ export interface TransitLeg {
     type: 'LineString'
     coordinates: [number, number][]
   }
-  /** True for transit legs, false for walking/cycling */
+  /** True for transit legs, false for walking/cycling/rental/car */
   transitLeg: boolean
 
   // Transit-only fields (undefined for walking legs)
@@ -127,6 +167,26 @@ export interface TransitLeg {
   departureDelay?: number
   /** Arrival delay in seconds */
   arrivalDelay?: number
+
+  // Rental/shared mobility fields (present for RENTAL legs from GBFS)
+  /** GBFS rental provider name */
+  rentalProvider?: string
+  /** GBFS station name (for docked rentals) */
+  rentalStationName?: string
+  /** Vehicle form factor (BICYCLE, SCOOTER_STANDING, etc.) */
+  rentalFormFactor?: string
+  /** GBFS station ID */
+  rentalStationId?: string
+  /** Deep link URI for unlocking the rental vehicle */
+  rentalUri?: string
+  /** Propulsion type (HUMAN, ELECTRIC_ASSIST, ELECTRIC) */
+  rentalPropulsionType?: string
+  /** Destination station name (for docked returns) */
+  rentalToStationName?: string
+  /** GBFS system_id (joins the leg to its operator's pricing). */
+  rentalSystemId?: string
+  /** Estimated fare from the operator's GBFS pricing feed, when published. */
+  rentalPricing?: RentalPricing
 }
 
 export interface TransitLegPlace {
@@ -232,9 +292,11 @@ function epochToIso(epoch: number): string {
   return new Date(epoch).toISOString()
 }
 
+const STREET_MODES = new Set(['WALK', 'BIKE', 'BICYCLE', 'CAR', 'CAR_PARKING', 'CAR_DROPOFF', 'RENTAL'])
+
 /** Adapt a single MOTIS/OTPAPI leg into our format */
 function adaptLeg(leg: any): TransitLeg {
-  const isTransit = leg.mode !== 'WALK' && leg.mode !== 'BICYCLE'
+  const isTransit = !STREET_MODES.has(leg.mode)
 
   let geometry: TransitLeg['geometry'] | undefined
   if (leg.legGeometry?.points) {
@@ -301,6 +363,25 @@ function adaptLeg(leg: any): TransitLeg {
     if (leg.arrivalDelay != null) adapted.arrivalDelay = leg.arrivalDelay
   }
 
+  // Rental/shared mobility fields (GBFS legs from intermodal routing)
+  if (leg.mode === 'RENTAL' && leg.rental) {
+    adapted.rentalProvider = leg.rental.systemName || leg.rental.providerGroupId || undefined
+    adapted.rentalStationName = leg.rental.fromStationName || leg.from?.name || undefined
+    adapted.rentalFormFactor = leg.rental.formFactor || undefined
+    adapted.rentalStationId = leg.from?.stopId || undefined
+    adapted.rentalUri = leg.rental.rentalUriIOS || leg.rental.rentalUriAndroid || leg.rental.rentalUriWeb || undefined
+    adapted.rentalPropulsionType = leg.rental.propulsionType || undefined
+    adapted.rentalToStationName = leg.rental.toStationName || leg.to?.name || undefined
+    adapted.rentalSystemId = leg.rental.systemId || leg.rental.providerId || undefined
+    // Pricing is read from a cache pre-warmed by the caller (ensurePricing);
+    // absent until then, and absent for systems with no published fares.
+    adapted.rentalPricing = pricingForLeg(
+      adapted.rentalSystemId,
+      adapted.duration,
+      adapted.distance,
+    )
+  }
+
   return adapted
 }
 
@@ -332,7 +413,41 @@ function adaptItinerary(itin: any): TransitItinerary {
  * Extract fare from a MOTIS itinerary response.
  * Handles multiple OTP2 fare response formats.
  */
-function extractFare(itin: any): { currency: string; amount: number } | undefined {
+export function extractFare(itin: any): { currency: string; amount: number } | undefined {
+  // GTFS Fares v2 (MOTIS withFares=true): fareTransfers[] groups the
+  // itinerary's fare legs. Per fare leg, effectiveFareLegProducts lists
+  // alternatives (rider categories); each alternative is a product set to
+  // combine. Take the default rider category (else the first alternative)
+  // and sum across legs, plus any explicit transfer products. If ANY fare
+  // leg has no products (its agency publishes no fares — e.g. the MTA),
+  // the itinerary's true cost is unknown: report nothing rather than a
+  // misleading partial sum.
+  if (Array.isArray(itin.fareTransfers) && itin.fareTransfers.length > 0) {
+    let total = 0
+    let currency: string | undefined
+    let found = false
+    const addProduct = (p: any) => {
+      if (p?.amount == null) return
+      total += p.amount
+      currency ||= p.currency
+      found = true
+    }
+    for (const ft of itin.fareTransfers) {
+      for (const alternatives of ft.effectiveFareLegProducts ?? []) {
+        if (!alternatives?.length) return undefined // unpriced fare leg
+        const pick =
+          alternatives.find((products: any[]) =>
+            products?.some((p) => p?.riderCategory?.isDefaultFareCategory),
+          ) ?? alternatives[0]
+        for (const p of pick ?? []) addProduct(p)
+      }
+      for (const p of ft.transferProducts ?? []) addProduct(p)
+    }
+    if (found) {
+      return { currency: currency || 'USD', amount: Math.round(total * 100) / 100 }
+    }
+  }
+
   // OTP2 fareProducts format (MOTIS v2)
   if (Array.isArray(itin.fareProducts) && itin.fareProducts.length > 0) {
     const product = itin.fareProducts[0]
@@ -455,6 +570,9 @@ async function queryMotis(
     time: departureDate.toISOString(),
     arriveBy: String(request.arriveBy ?? false),
     numItineraries: String(request.numItineraries ?? 5),
+    // Fare computation from GTFS Fares v2 (native or synthesized from v1
+    // by import/inject-fares-v2.ts). Cheap when a feed has no fare data.
+    withFares: 'true',
   })
 
   if (request.searchWindow != null) {
@@ -490,6 +608,172 @@ async function queryMotis(
       prevPageCursor: data.previousPageCursor || undefined,
     },
   }
+}
+
+// ── Intermodal routing (coordinate-based) ─────────────────────────
+
+/**
+ * Query MOTIS with coordinate-based intermodal routing.
+ *
+ * Unlike queryMotis() which uses stop IDs, this uses lat,lng coordinates
+ * directly. Requires MOTIS to have OSM street data loaded (street_routing: true).
+ * Supports pre/post-transit mode selection (WALK, BIKE, CAR_PARKING, RENTAL).
+ */
+async function queryMotisIntermodal(
+  request: IntermodalRouteRequest,
+  fetchFn: FetchFn = globalThis.fetch,
+): Promise<TransitRouteResponse> {
+  const motisUrl = getMotisUrl()
+  const departureDate = request.time ? new Date(request.time) : new Date()
+
+  const params = new URLSearchParams({
+    fromPlace: `${request.from.lat},${request.from.lng}`,
+    toPlace: `${request.to.lat},${request.to.lng}`,
+    time: departureDate.toISOString(),
+    arriveBy: String(request.arriveBy ?? false),
+    numItineraries: String(request.numItineraries ?? 5),
+    // Fare computation from GTFS Fares v2 (native or synthesized from v1
+    // by import/inject-fares-v2.ts). Cheap when a feed has no fare data.
+    withFares: 'true',
+  })
+
+  // MOTIS defaults to 25m for matching coordinates/stops to the street
+  // network, which strands off-street platforms (e.g. NYC subway stops
+  // under Union Square Park): they become unreachable for access/egress
+  // walks, so riders get absurd bus-first detours instead of boarding
+  // the subway directly. 250m keeps every platform walkable; the walk is
+  // still street-routed, so accuracy is unaffected. RENTAL queries keep
+  // the MOTIS default — the wider radius multiplies GBFS candidate links
+  // and blows those queries from ~2s to 20s+, and rental stations are
+  // curbside anyway.
+  const includesRental = [
+    ...(request.preTransitModes ?? []),
+    ...(request.postTransitModes ?? []),
+  ].includes('RENTAL')
+  if (!includesRental) {
+    params.set('maxMatchingDistance', '250')
+  }
+
+  // Pad each interchange (default 3 min) so RAPTOR stops surfacing
+  // marginal-gain transfer chains (a one-block bus hop that saves 90
+  // seconds, three-vehicle relays, etc). Genuinely faster transfers
+  // survive the padding; itineraries also become more robust to missed
+  // connections. Other planners apply the same kind of penalty.
+  params.set('additionalTransferTime', String(request.additionalTransferTime ?? 3))
+
+  // Intermodal mode parameters
+  if (request.preTransitModes?.length) {
+    params.set('preTransitModes', request.preTransitModes.join(','))
+  }
+  if (request.postTransitModes?.length) {
+    params.set('postTransitModes', request.postTransitModes.join(','))
+  }
+  // Explicitly pass directModes — MOTIS defaults to WALK which triggers
+  // a slow direct walk computation. Pass empty to skip when not needed.
+  if (request.directModes?.length) {
+    params.set('directModes', request.directModes.join(','))
+    // MOTIS's 1800s default truncates legitimate direct rides (a 31-minute
+    // shared bike across Brooklyn vanishes). Default to a more generous cap.
+    params.set('maxDirectTime', String(request.maxDirectTime ?? 3600))
+  } else {
+    params.set('maxDirectTime', '0')
+  }
+  if (request.transitModes?.length) {
+    params.set('transitModes', request.transitModes.join(','))
+  }
+
+  // Time limits for street legs
+  if (request.maxPreTransitTime != null) {
+    params.set('maxPreTransitTime', String(request.maxPreTransitTime))
+  }
+  if (request.maxPostTransitTime != null) {
+    params.set('maxPostTransitTime', String(request.maxPostTransitTime))
+  }
+
+  // Rental vehicle filters
+  if (request.preTransitRentalFormFactors?.length) {
+    params.set('preTransitRentalFormFactors', request.preTransitRentalFormFactors.join(','))
+  }
+  if (request.postTransitRentalFormFactors?.length) {
+    params.set('postTransitRentalFormFactors', request.postTransitRentalFormFactors.join(','))
+  }
+
+  if (request.searchWindow != null) {
+    params.set('searchWindow', String(request.searchWindow))
+  }
+  if (request.maxTransfers != null) {
+    params.set('maxTransfers', String(request.maxTransfers))
+  }
+  if (request.wheelchair) {
+    params.set('wheelchair', 'true')
+  }
+
+  const response = await fetchFn(`${motisUrl}/api/v1/plan?${params}`)
+
+  if (!response.ok) {
+    const errorText = await response.text()
+    throw new MotisError(response.status, errorText)
+  }
+
+  const data = await response.json() as any
+
+  const itineraries = data.itineraries || data.plan?.itineraries || []
+  const direct = data.direct || []
+
+  // Warm rental pricing for every system that appears on a rental leg, so the
+  // (synchronous) leg adapter can attach a fare estimate from cache.
+  const rentalSystemIds = [...itineraries, ...direct].flatMap((it: any) =>
+    (it.legs || [])
+      .filter((l: any) => l.mode === 'RENTAL' && l.rental)
+      .map((l: any) => l.rental.systemId || l.rental.providerId)
+      .filter(Boolean),
+  )
+  if (rentalSystemIds.length) {
+    try {
+      await ensurePricing(rentalSystemIds)
+    } catch (err) {
+      console.error('Rental pricing warm-up failed:', err)
+    }
+  }
+
+  // Merge transit itineraries and direct connections
+  const allItineraries = [
+    ...itineraries.map(adaptItinerary),
+    ...direct.map(adaptItinerary),
+  ]
+
+  if (allItineraries.length === 0) {
+    return { itineraries: [], metadata: { searchWindow: 0 } }
+  }
+
+  return {
+    itineraries: allItineraries,
+    metadata: {
+      searchWindow: data.searchWindowUsed ?? data.plan?.searchWindowUsed ?? 0,
+      nextPageCursor: data.nextPageCursor || undefined,
+      prevPageCursor: data.previousPageCursor || undefined,
+    },
+  }
+}
+
+/**
+ * Intermodal routing using coordinates with mode selection.
+ *
+ * Simpler than getTransitRoute() — no stop ID cross-product needed.
+ * MOTIS handles coordinate snapping internally when OSM is loaded.
+ */
+export async function getIntermodalRoute(
+  request: IntermodalRouteRequest,
+  fetchFn: FetchFn = globalThis.fetch,
+): Promise<TransitRouteResponse> {
+  const result = await queryMotisIntermodal(request, fetchFn)
+
+  // Sort by duration and deduplicate
+  result.itineraries.sort((a, b) => a.duration - b.duration)
+  const numItineraries = request.numItineraries ?? 5
+  result.itineraries = deduplicateItineraries(result.itineraries).slice(0, numItineraries)
+
+  return result
 }
 
 // ── Spatial stop queries ────────────────────────────────────────────
@@ -548,17 +832,45 @@ export async function getNearbyStops(
 }
 
 /**
- * Get routes that serve a given stop.
+ * Get routes that serve a given stop — across its whole station complex.
  *
- * Joins gtfs_stop_routes with gtfs_routes to return route details
- * for all lines passing through the specified stop.
+ * "The trains at Times Sq" means N/Q/R/W/S/1/2/3/7 even though GTFS models
+ * the complex as four stations (127, R16, 725, 902). Membership comes from
+ * the agency's transfers.txt (one hop from the queried stop or its parent),
+ * and routes are collected from every member station's child platforms,
+ * since stop_times reference platform ids (127N/127S), not parents.
  */
 export async function getRoutesForStop(
   feedId: string,
   stopId: string,
 ): Promise<StopRoutesResult[]> {
+  const feed = feedId.replace(/'/g, "''")
+  const stop = stopId.replace(/'/g, "''")
   const result = await db.execute(sql.raw(`
-    SELECT
+    WITH seed AS (
+      -- the stop itself, plus its parent station when it's a platform
+      SELECT '${stop}'::text AS sid
+      UNION
+      SELECT parent_station FROM gtfs_stops
+      WHERE feed_id = '${feed}' AND stop_id = '${stop}'
+        AND parent_station IS NOT NULL AND parent_station <> ''
+    ),
+    complex AS (
+      SELECT sid FROM seed
+      UNION
+      SELECT t.to_stop_id FROM gtfs_transfers t JOIN seed ON t.from_stop_id = seed.sid
+      WHERE t.feed_id = '${feed}' AND t.to_stop_id <> t.from_stop_id
+      UNION
+      SELECT t.from_stop_id FROM gtfs_transfers t JOIN seed ON t.to_stop_id = seed.sid
+      WHERE t.feed_id = '${feed}' AND t.to_stop_id <> t.from_stop_id
+    ),
+    members AS (
+      SELECT sid FROM complex
+      UNION
+      SELECT s.stop_id FROM gtfs_stops s JOIN complex c ON s.parent_station = c.sid
+      WHERE s.feed_id = '${feed}'
+    )
+    SELECT DISTINCT
       r.route_id,
       r.feed_id,
       r.route_short_name,
@@ -568,9 +880,9 @@ export async function getRoutesForStop(
       r.route_text_color,
       r.agency_name
     FROM gtfs_stop_routes sr
+    JOIN members m ON sr.stop_id = m.sid
     JOIN gtfs_routes r ON r.feed_id = sr.feed_id AND r.route_id = sr.route_id
-    WHERE sr.feed_id = '${feedId.replace(/'/g, "''")}'
-      AND sr.stop_id = '${stopId.replace(/'/g, "''")}'
+    WHERE sr.feed_id = '${feed}'
     ORDER BY r.route_type, r.route_short_name
   `))
 

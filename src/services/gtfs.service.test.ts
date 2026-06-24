@@ -13,10 +13,16 @@ import {
   parseStops,
   parseRoutes,
   parseAgencies,
+  parseShapes,
   deriveStopRoutes,
+  deriveRouteShapes,
+  deriveBikesAllowed,
   generateTransfersTxt,
   fetchFeedList,
+  sanitizeGtfsZip,
+  FLEX_EXTENSION_FILES,
 } from './gtfs.service'
+import JSZip from 'jszip'
 
 // ── parseStops ──────────────────────────────────────────────────────
 
@@ -681,5 +687,302 @@ describe('fetchFeedList', () => {
     const feeds = await fetchFeedList('nc', 'test-key', mockFetch)
     // Authorization not type=header → no headers attached
     expect(feeds[0].rtUrls![0].headers).toBeUndefined()
+  })
+})
+
+// ── parseShapes ─────────────────────────────────────────────────────
+
+describe('parseShapes', () => {
+  test('parses standard shapes.txt content', () => {
+    const csv = [
+      'shape_id,shape_pt_lat,shape_pt_lon,shape_pt_sequence',
+      'shape-1,35.2271,-80.8431,1',
+      'shape-1,35.2350,-80.8500,2',
+      'shape-1,35.2400,-80.8550,3',
+    ].join('\n')
+
+    const result = parseShapes(csv)
+    expect(result.size).toBe(1)
+    expect(result.has('shape-1')).toBe(true)
+    const coords = result.get('shape-1')!
+    expect(coords).toHaveLength(3)
+    // [lng, lat] order
+    expect(coords[0]).toEqual([-80.8431, 35.2271])
+    expect(coords[1]).toEqual([-80.8500, 35.2350])
+    expect(coords[2]).toEqual([-80.8550, 35.2400])
+  })
+
+  test('handles multiple shape IDs', () => {
+    const csv = [
+      'shape_id,shape_pt_lat,shape_pt_lon,shape_pt_sequence',
+      'shape-a,35.0,-80.0,1',
+      'shape-a,35.1,-80.1,2',
+      'shape-b,36.0,-81.0,1',
+      'shape-b,36.1,-81.1,2',
+      'shape-b,36.2,-81.2,3',
+    ].join('\n')
+
+    const result = parseShapes(csv)
+    expect(result.size).toBe(2)
+    expect(result.get('shape-a')!).toHaveLength(2)
+    expect(result.get('shape-b')!).toHaveLength(3)
+  })
+
+  test('sorts points by sequence number', () => {
+    const csv = [
+      'shape_id,shape_pt_lat,shape_pt_lon,shape_pt_sequence',
+      'shape-1,35.3,-80.3,3',
+      'shape-1,35.1,-80.1,1',
+      'shape-1,35.2,-80.2,2',
+    ].join('\n')
+
+    const result = parseShapes(csv)
+    const coords = result.get('shape-1')!
+    // Should be sorted by sequence: 1, 2, 3
+    expect(coords[0]).toEqual([-80.1, 35.1])
+    expect(coords[1]).toEqual([-80.2, 35.2])
+    expect(coords[2]).toEqual([-80.3, 35.3])
+  })
+
+  test('skips rows with invalid data', () => {
+    const csv = [
+      'shape_id,shape_pt_lat,shape_pt_lon,shape_pt_sequence',
+      'shape-1,35.0,-80.0,1',
+      ',35.1,-80.1,2',        // missing shape_id
+      'shape-1,abc,-80.2,3',   // invalid lat
+      'shape-1,35.3,-80.3,4',
+    ].join('\n')
+
+    const result = parseShapes(csv)
+    const coords = result.get('shape-1')!
+    expect(coords).toHaveLength(2) // only valid rows
+  })
+
+  test('returns empty map for empty input', () => {
+    const csv = 'shape_id,shape_pt_lat,shape_pt_lon,shape_pt_sequence\n'
+    const result = parseShapes(csv)
+    expect(result.size).toBe(0)
+  })
+})
+
+// ── deriveRouteShapes ───────────────────────────────────────────────
+
+describe('deriveRouteShapes', () => {
+  test('picks the most common shape per route', () => {
+    const csv = [
+      'route_id,trip_id,shape_id,service_id,direction_id',
+      'route-1,trip-1,shape-a,weekday,0',
+      'route-1,trip-2,shape-a,weekday,0',
+      'route-1,trip-3,shape-b,weekday,1',
+      'route-2,trip-4,shape-c,weekday,0',
+    ].join('\n')
+
+    const result = deriveRouteShapes(csv)
+    expect(result.size).toBe(2)
+    expect(result.get('route-1')).toBe('shape-a') // 2 trips vs 1
+    expect(result.get('route-2')).toBe('shape-c')
+  })
+
+  test('skips trips without shape_id', () => {
+    const csv = [
+      'route_id,trip_id,shape_id,service_id',
+      'route-1,trip-1,,weekday',
+      'route-1,trip-2,shape-a,weekday',
+    ].join('\n')
+
+    const result = deriveRouteShapes(csv)
+    expect(result.get('route-1')).toBe('shape-a')
+  })
+
+  test('returns empty map when no shapes', () => {
+    const csv = [
+      'route_id,trip_id,shape_id,service_id',
+      'route-1,trip-1,,weekday',
+    ].join('\n')
+
+    const result = deriveRouteShapes(csv)
+    expect(result.size).toBe(0)
+  })
+})
+
+// ── sanitizeGtfsZip ─────────────────────────────────────────────────
+
+describe('sanitizeGtfsZip', () => {
+  async function createTestZip(files: Record<string, string>): Promise<ArrayBuffer> {
+    const zip = new JSZip()
+    for (const [name, content] of Object.entries(files)) {
+      zip.file(name, content)
+    }
+    return await zip.generateAsync({ type: 'arraybuffer' })
+  }
+
+  async function listZipFiles(buffer: ArrayBuffer): Promise<string[]> {
+    const zip = await JSZip.loadAsync(buffer)
+    return Object.keys(zip.files).filter(f => !zip.files[f].dir).sort()
+  }
+
+  test('strips GTFS-Flex extension files from ZIP', async () => {
+    const buffer = await createTestZip({
+      'stops.txt': 'stop_id,stop_name\nS1,Main St',
+      'routes.txt': 'route_id,route_short_name\nR1,Blue',
+      'areas.txt': 'area_id,area_name\nA1,Downtown',
+      'stop_areas.txt': 'area_id,stop_id\nA1,S1',
+      'locations.geojson': '{"type":"FeatureCollection","features":[]}',
+    })
+
+    const { buffer: sanitized, removedFiles } = await sanitizeGtfsZip(buffer)
+
+    expect(removedFiles).toContain('areas.txt')
+    expect(removedFiles).toContain('stop_areas.txt')
+    expect(removedFiles).toContain('locations.geojson')
+    expect(removedFiles).toHaveLength(3)
+
+    const remaining = await listZipFiles(sanitized)
+    expect(remaining).toContain('stops.txt')
+    expect(remaining).toContain('routes.txt')
+    expect(remaining).not.toContain('areas.txt')
+    expect(remaining).not.toContain('stop_areas.txt')
+    expect(remaining).not.toContain('locations.geojson')
+  })
+
+  test('returns original buffer when no flex files present', async () => {
+    const buffer = await createTestZip({
+      'stops.txt': 'stop_id,stop_name\nS1,Main St',
+      'routes.txt': 'route_id,route_short_name\nR1,Blue',
+      'trips.txt': 'route_id,trip_id\nR1,T1',
+    })
+
+    const { buffer: result, removedFiles } = await sanitizeGtfsZip(buffer)
+
+    expect(removedFiles).toHaveLength(0)
+    // Buffer should be the exact same reference (no re-zip)
+    expect(result).toBe(buffer)
+  })
+
+  test('preserves standard GTFS files while stripping all flex extensions', async () => {
+    const standardFiles: Record<string, string> = {
+      'agency.txt': 'agency_id,agency_name\nA1,Metro',
+      'stops.txt': 'stop_id,stop_name\nS1,Station',
+      'routes.txt': 'route_id\nR1',
+      'trips.txt': 'trip_id\nT1',
+      'stop_times.txt': 'trip_id,stop_id\nT1,S1',
+      'calendar.txt': 'service_id\nWKDY',
+      'shapes.txt': 'shape_id,shape_pt_lat\nSH1,35.0',
+      'transfers.txt': 'from_stop_id,to_stop_id\nS1,S2',
+    }
+    const flexFiles: Record<string, string> = {
+      'areas.txt': 'area_id\nA1',
+      'stop_areas.txt': 'area_id,stop_id\nA1,S1',
+      'booking_rules.txt': 'booking_rule_id\nBR1',
+      'location_groups.txt': 'location_group_id\nLG1',
+      'location_group_stops.txt': 'location_group_id,stop_id\nLG1,S1',
+      'locations.geojson': '{"type":"FeatureCollection","features":[]}',
+    }
+
+    const buffer = await createTestZip({ ...standardFiles, ...flexFiles })
+    const { buffer: sanitized, removedFiles } = await sanitizeGtfsZip(buffer)
+
+    expect(removedFiles.sort()).toEqual([...FLEX_EXTENSION_FILES].sort())
+
+    const remaining = await listZipFiles(sanitized)
+    for (const stdFile of Object.keys(standardFiles)) {
+      expect(remaining).toContain(stdFile)
+    }
+    for (const flexFile of Object.keys(flexFiles)) {
+      expect(remaining).not.toContain(flexFile)
+    }
+  })
+
+  test('preserves file contents after sanitization', async () => {
+    const stopsContent = 'stop_id,stop_name,stop_lat,stop_lon\nS1,Main,35.0,-80.0'
+    const buffer = await createTestZip({
+      'stops.txt': stopsContent,
+      'areas.txt': 'area_id\nA1',
+    })
+
+    const { buffer: sanitized } = await sanitizeGtfsZip(buffer)
+    const zip = await JSZip.loadAsync(sanitized)
+    const content = await zip.file('stops.txt')!.async('string')
+    expect(content).toBe(stopsContent)
+  })
+})
+
+// ── deriveBikesAllowed ──────────────────────────────────────────────
+
+describe('deriveBikesAllowed', () => {
+  test('returns 2 when all trips on a route allow bikes', () => {
+    const csv = [
+      'route_id,trip_id,bikes_allowed',
+      'route-1,trip-1,1',
+      'route-1,trip-2,1',
+      'route-1,trip-3,1',
+    ].join('\n')
+
+    const result = deriveBikesAllowed(csv)
+    expect(result.get('route-1')).toBe(2) // all trips allow
+  })
+
+  test('returns 1 when some trips allow bikes', () => {
+    const csv = [
+      'route_id,trip_id,bikes_allowed',
+      'route-1,trip-1,1',
+      'route-1,trip-2,0',
+      'route-1,trip-3,1',
+    ].join('\n')
+
+    const result = deriveBikesAllowed(csv)
+    expect(result.get('route-1')).toBe(1) // some trips allow
+  })
+
+  test('returns 0 when no trips allow bikes', () => {
+    const csv = [
+      'route_id,trip_id,bikes_allowed',
+      'route-1,trip-1,0',
+      'route-1,trip-2,2', // 2 = not allowed in GTFS spec
+      'route-1,trip-3,',  // empty = unknown
+    ].join('\n')
+
+    const result = deriveBikesAllowed(csv)
+    expect(result.get('route-1')).toBe(0)
+  })
+
+  test('handles missing bikes_allowed column', () => {
+    const csv = [
+      'route_id,trip_id,shape_id',
+      'route-1,trip-1,shape-a',
+      'route-1,trip-2,shape-b',
+    ].join('\n')
+
+    const result = deriveBikesAllowed(csv)
+    expect(result.get('route-1')).toBe(0) // unknown
+  })
+
+  test('handles multiple routes independently', () => {
+    const csv = [
+      'route_id,trip_id,bikes_allowed',
+      'route-1,trip-1,1',
+      'route-1,trip-2,1',
+      'route-2,trip-3,0',
+      'route-2,trip-4,0',
+      'route-3,trip-5,1',
+      'route-3,trip-6,0',
+    ].join('\n')
+
+    const result = deriveBikesAllowed(csv)
+    expect(result.get('route-1')).toBe(2) // all allow
+    expect(result.get('route-2')).toBe(0) // none allow
+    expect(result.get('route-3')).toBe(1) // some allow
+  })
+
+  test('skips rows without route_id', () => {
+    const csv = [
+      'route_id,trip_id,bikes_allowed',
+      ',trip-1,1',
+      'route-1,trip-2,1',
+    ].join('\n')
+
+    const result = deriveBikesAllowed(csv)
+    expect(result.size).toBe(1)
+    expect(result.get('route-1')).toBe(2)
   })
 })

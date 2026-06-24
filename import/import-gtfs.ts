@@ -13,21 +13,31 @@ import { parseArgs } from 'util'
 import { existsSync, mkdirSync, writeFileSync, readdirSync } from 'fs'
 import { join, basename } from 'path'
 import JSZip from 'jszip'
+import { injectFaresV2 } from './inject-fares-v2'
 import { ensureGtfsSchema } from '../src/db'
 import {
   fetchFeedList,
   parseStops,
   parseRoutes,
   parseAgencies,
+  parseShapes,
   deriveStopRoutes,
+  parseTransfers,
+  importTransfers,
+  deriveRouteShapes,
+  deriveBikesAllowed,
   importStops,
   importRoutes,
   importStopRoutes,
+  importShapes,
+  updateRouteShapes,
+  updateBikesAllowed,
   recordFeed,
   clearFeed,
   computeAllTransfers,
   generateTransfersTxt,
   generateMotisConfig,
+  sanitizeGtfsZip,
   type GtfsFeedInfo,
 } from '../src/services/gtfs.service'
 
@@ -114,10 +124,16 @@ async function main() {
           continue
         }
 
-        const buffer = await response.arrayBuffer()
-        writeFileSync(filepath, Buffer.from(buffer))
-        console.log(`  ✓ Downloaded ${(buffer.byteLength / 1024 / 1024).toFixed(1)} MB`)
+        const rawBuffer = await response.arrayBuffer()
+        console.log(`  ✓ Downloaded ${(rawBuffer.byteLength / 1024 / 1024).toFixed(1)} MB`)
 
+        // Strip GTFS-Flex extension files that crash MOTIS
+        const { buffer, removedFiles } = await sanitizeGtfsZip(rawBuffer)
+        if (removedFiles.length > 0) {
+          console.log(`  ⚠ Stripped ${removedFiles.length} GTFS-Flex files: ${removedFiles.join(', ')}`)
+        }
+
+        writeFileSync(filepath, Buffer.from(buffer))
         feedFiles.push(filepath)
 
         // Step 3: Parse and import
@@ -135,6 +151,19 @@ async function main() {
 
     for (const filepath of feedFiles) {
       const feedId = basename(filepath, '.zip')
+
+      // Sanitize existing files too (they may pre-date the flex strip)
+      try {
+        const existingBuffer = await Bun.file(filepath).arrayBuffer()
+        const { buffer: cleanBuffer, removedFiles } = await sanitizeGtfsZip(existingBuffer)
+        if (removedFiles.length > 0) {
+          writeFileSync(filepath, Buffer.from(cleanBuffer))
+          console.log(`  ⚠ Stripped ${removedFiles.length} GTFS-Flex files from ${basename(filepath)}`)
+        }
+      } catch (err) {
+        console.error(`  ⚠ Flex sanitization failed for ${basename(filepath)}: ${err}`)
+      }
+
       await importFeedFile(filepath, {
         feedId,
         onestopId: feedId,
@@ -178,6 +207,20 @@ async function main() {
           console.error(`  ✗ Failed to inject into ${basename(filepath)}: ${err}`)
         }
       }
+    }
+  }
+
+  // Step 4b: Synthesize GTFS Fares v2 from v1 fare data so MOTIS (which
+  // reads v2 only) can price itineraries from the agency's own feed.
+  console.log('\n=== Converting Fares v1 → v2 ===')
+  for (const filepath of feedFiles) {
+    try {
+      const status = await injectFaresV2(filepath)
+      if (status.startsWith('converted')) {
+        console.log(`  ✓ ${basename(filepath)}: ${status}`)
+      }
+    } catch (err) {
+      console.error(`  ✗ ${basename(filepath)}: ${err}`)
     }
   }
 
@@ -255,6 +298,38 @@ async function importFeedFile(filepath: string, feedInfo: GtfsFeedInfo) {
       const associations = deriveStopRoutes(tripsContent, stopTimesContent, feedInfo.feedId)
       stopRoutesImported = await importStopRoutes(associations)
       console.log(`  ✓ Imported ${stopRoutesImported} stop-route associations`)
+    }
+
+    // Agency transfers — station-complex membership + min connection times
+    const transfersContent = await readZipEntry(zip, 'transfers.txt')
+    if (transfersContent) {
+      const transfers = parseTransfers(transfersContent, feedInfo.feedId)
+      const transfersImported = await importTransfers(transfers)
+      if (transfersImported > 0) {
+        console.log(`  ✓ Imported ${transfersImported} agency transfers`)
+      }
+    }
+
+    // Parse and import shapes (for route-snapped vehicle interpolation)
+    const shapesContent = await readZipEntry(zip, 'shapes.txt')
+    if (shapesContent) {
+      const shapes = parseShapes(shapesContent)
+      const shapesImported = await importShapes(shapes, feedInfo.feedId)
+      console.log(`  ✓ Imported ${shapesImported} shapes`)
+
+      // Link routes to their canonical shape_id and bikes_allowed
+      if (tripsContent) {
+        const routeShapes = deriveRouteShapes(tripsContent)
+        await updateRouteShapes(routeShapes, feedInfo.feedId)
+        console.log(`  ✓ Linked ${routeShapes.size} routes to shapes`)
+
+        const bikesAllowed = deriveBikesAllowed(tripsContent)
+        const bikeRoutes = [...bikesAllowed.values()].filter(v => v > 0).length
+        if (bikeRoutes > 0) {
+          await updateBikesAllowed(bikesAllowed, feedInfo.feedId)
+          console.log(`  ✓ ${bikeRoutes} routes with bikes allowed`)
+        }
+      }
     }
 
     // Record feed in tracking table

@@ -25,7 +25,10 @@ services:
     restart: unless-stopped
     command: --config /config/martin-config.yaml --webui enable-for-all
     environment:
-      DATABASE_URL: postgresql://barrelman:${BARRELMAN_DB_PASSWORD:-barrelman}@barrelman-db:5432/barrelman
+      # statement_timeout caps tile queries — an abandoned HTTP request must
+      # not keep grinding in Postgres for minutes (scoped to martin's
+      # connections only; imports use their own connections).
+      DATABASE_URL: postgresql://barrelman:${BARRELMAN_DB_PASSWORD:-barrelman}@barrelman-db:5432/barrelman?options=-c%20statement_timeout%3D10s
     volumes:
       - barrelman-osm-data:/data
       - ./martin-config.yaml:/config/martin-config.yaml:ro
@@ -42,7 +45,7 @@ services:
     # graph.location to /data/default-gh otherwise, ignoring our config value.
     command: ["-i", "/data/region.osm.pbf", "-o", "/data/graph-cache"]
     environment:
-      JAVA_OPTS: "${GRAPHHOPPER_JAVA_OPTS:--Xmx4g -Xms2g}"
+      JAVA_OPTS: "${GRAPHHOPPER_JAVA_OPTS:--Xmx6g -Xms1g}"
     volumes:
       - barrelman-osm-data:/data
       - ./graphhopper-config.yml:/graphhopper/config-example.yml:ro
@@ -60,6 +63,7 @@ services:
     command: ["/motis", "server", "/data"]
     volumes:
       - barrelman-gtfs-data:/data
+      - barrelman-osm-data:/osm-data:ro
     ports:
       - "8080:8080"
 
@@ -76,10 +80,12 @@ services:
       BARRELMAN_TILE_KEY: ${BARRELMAN_TILE_KEY:-}
       GRAPHHOPPER_URL: http://barrelman-graphhopper:8989
       MOTIS_URL: http://barrelman-motis:8080
+      GTFS_DATA_DIR: /gtfs-zips
     ports:
       - "5001:5001"
     volumes:
       - barrelman-osm-data:/data
       - barrelman-gtfs-data:/gtfs-data
+      - ./data/gtfs:/gtfs-zips:ro
     depends_on:
       - barrelman-db
