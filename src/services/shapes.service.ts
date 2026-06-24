@@ -48,33 +48,54 @@ export async function getRouteShape(
   if (cached !== undefined) return cached
 
   try {
-    // Look up the canonical shape_id from gtfs_routes
-    const routeResult = await db.execute(sql.raw(`
-      SELECT shape_id
+    // Look up the canonical shape_id from gtfs_routes.
+    // First try the exact feed, then fall back to any feed that has
+    // this route — needed when a unified RT feed (e.g. MTA Bus)
+    // returns vehicles tagged with one feed_id but shapes live
+    // under per-borough feed_ids.
+    const safeFeed = feedId.replace(/'/g, "''")
+    const safeRoute = routeId.replace(/'/g, "''")
+
+    let routeResult = await db.execute(sql.raw(`
+      SELECT feed_id, shape_id
       FROM gtfs_routes
-      WHERE feed_id = '${feedId.replace(/'/g, "''")}'
-        AND route_id = '${routeId.replace(/'/g, "''")}'
+      WHERE feed_id = '${safeFeed}'
+        AND route_id = '${safeRoute}'
+        AND shape_id IS NOT NULL AND shape_id != ''
       LIMIT 1
     `))
 
-    const route = (routeResult as any[])[0]
+    let route = (routeResult as any[])[0]
+
+    // Cross-feed fallback
     if (!route?.shape_id) {
-      shapeCache.set(cacheKey, null)
+      routeResult = await db.execute(sql.raw(`
+        SELECT feed_id, shape_id
+        FROM gtfs_routes
+        WHERE route_id = '${safeRoute}'
+          AND shape_id IS NOT NULL AND shape_id != ''
+        LIMIT 1
+      `))
+      route = (routeResult as any[])[0]
+    }
+
+    if (!route?.shape_id) {
       return null
     }
+
+    const shapeFeedId = route.feed_id || feedId
 
     // Fetch the shape coordinates
     const shapeResult = await db.execute(sql.raw(`
       SELECT coordinates
       FROM gtfs_shapes
-      WHERE feed_id = '${feedId.replace(/'/g, "''")}'
+      WHERE feed_id = '${shapeFeedId.replace(/'/g, "''")}'
         AND shape_id = '${route.shape_id.replace(/'/g, "''")}'
       LIMIT 1
     `))
 
     const shape = (shapeResult as any[])[0]
     if (!shape?.coordinates) {
-      shapeCache.set(cacheKey, null)
       return null
     }
 
