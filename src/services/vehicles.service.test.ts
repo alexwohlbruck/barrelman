@@ -50,6 +50,13 @@ mock.module('gtfs-realtime-bindings', () => ({
   },
 }))
 
+// Subway interpolation has its own path and keeps a module-level cache; stub it
+// so these vehicle-feed tests stay isolated from it regardless of run order
+// (another suite can otherwise leave the subway cache warm and skew counts).
+mock.module('./subway-interpolation.service', () => ({
+  getSubwayVehiclePositions: mock(async () => []),
+}))
+
 // ── Import under test ───────────────────────────────────────────────
 
 const { getVehiclePositions } = await import('./vehicles.service')
