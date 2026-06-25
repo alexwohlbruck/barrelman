@@ -22,7 +22,11 @@ import GtfsRealtimeBindings from 'gtfs-realtime-bindings'
 import { LRUCache } from 'lru-cache'
 import type { TransitVehicle } from './vehicles.service'
 
-const { transit_realtime } = GtfsRealtimeBindings
+// Decode through the live import binding at call time rather than destructuring
+// at load, so a test mock of `gtfs-realtime-bindings` applies even when this
+// module gets imported before the mock is registered.
+const decodeFeedMessage = (buf: Uint8Array) =>
+  GtfsRealtimeBindings.transit_realtime.FeedMessage.decode(buf)
 
 // ── Subway feed URLs ───────────────────────────────────────────
 
@@ -117,6 +121,7 @@ function bearing(lat1: number, lng1: number, lat2: number, lng2: number): number
  */
 export async function getSubwayVehiclePositions(
   bounds?: { north: number; south: number; east: number; west: number },
+  fetchFn: typeof fetch = globalThis.fetch,
 ): Promise<TransitVehicle[]> {
   const cacheKey = 'all'
   const cached = subwayCache.get(cacheKey)
@@ -130,7 +135,7 @@ export async function getSubwayVehiclePositions(
 
   // Fetch all subway feeds in parallel
   const results = await Promise.allSettled(
-    SUBWAY_FEEDS.map(feed => fetchAndInterpolate(feed, stops, now)),
+    SUBWAY_FEEDS.map(feed => fetchAndInterpolate(feed, stops, now, fetchFn)),
   )
 
   for (const result of results) {
@@ -161,17 +166,16 @@ async function fetchAndInterpolate(
   feed: { id: string; url: string },
   stops: Map<string, StopPosition>,
   nowSec: number,
+  fetchFn: typeof fetch = globalThis.fetch,
 ): Promise<TransitVehicle[]> {
   try {
-    const response = await fetch(feed.url, {
+    const response = await fetchFn(feed.url, {
       signal: AbortSignal.timeout(8000),
     })
     if (!response.ok) return []
 
     const buffer = await response.arrayBuffer()
-    const feedMessage = transit_realtime.FeedMessage.decode(
-      new Uint8Array(buffer),
-    )
+    const feedMessage = decodeFeedMessage(new Uint8Array(buffer))
 
     const vehicles: TransitVehicle[] = []
 

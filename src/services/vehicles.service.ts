@@ -17,7 +17,11 @@ import { existsSync, readFileSync } from 'fs'
 import { join } from 'path'
 import JSZip from 'jszip'
 
-const { transit_realtime } = GtfsRealtimeBindings
+// Decode through the live import binding at call time rather than destructuring
+// at load, so a test mock of `gtfs-realtime-bindings` applies even when this
+// module gets imported (transitively) before the mock is registered.
+const decodeFeedMessage = (buf: Uint8Array) =>
+  GtfsRealtimeBindings.transit_realtime.FeedMessage.decode(buf)
 
 export type FetchFn = (url: string, init?: RequestInit) => Promise<Response>
 
@@ -269,7 +273,7 @@ export async function getVehiclePositions(
   // Add interpolated subway positions from TripUpdate feeds
   try {
     const { getSubwayVehiclePositions } = await import('./subway-interpolation.service')
-    const subwayVehicles = await getSubwayVehiclePositions({ north, south, east, west })
+    const subwayVehicles = await getSubwayVehiclePositions({ north, south, east, west }, fetchFn)
     allVehicles.push(...subwayVehicles)
   } catch (err) {
     console.warn('[Vehicles] Subway interpolation failed:', err instanceof Error ? err.message : err)
@@ -316,7 +320,7 @@ export async function getVehiclesForRoute(
   // Add subway interpolated positions (no bounds filter)
   try {
     const { getSubwayVehiclePositions } = await import('./subway-interpolation.service')
-    const subwayVehicles = await getSubwayVehiclePositions()
+    const subwayVehicles = await getSubwayVehiclePositions(undefined, fetchFn)
     allVehicles.push(...subwayVehicles)
   } catch (err) {
     console.warn('[Vehicles] Subway interpolation failed:', err instanceof Error ? err.message : err)
@@ -433,7 +437,7 @@ async function fetchTripUpdates(
     if (!response.ok) return new Map()
 
     const buffer = await response.arrayBuffer()
-    const feedMessage = transit_realtime.FeedMessage.decode(new Uint8Array(buffer))
+    const feedMessage = decodeFeedMessage(new Uint8Array(buffer))
 
     const nowSec = Math.floor(Date.now() / 1000)
     const map = new Map<string, TripNextStop>()
@@ -492,7 +496,7 @@ export async function getTripStopTimes(
     if (!response.ok) return []
 
     const buffer = await response.arrayBuffer()
-    const feedMessage = transit_realtime.FeedMessage.decode(new Uint8Array(buffer))
+    const feedMessage = decodeFeedMessage(new Uint8Array(buffer))
 
     for (const entity of feedMessage.entity) {
       const tu = entity.tripUpdate
@@ -605,7 +609,7 @@ async function fetchFeedVehicles(
     }
 
     const buffer = await response.arrayBuffer()
-    const feedMessage = transit_realtime.FeedMessage.decode(
+    const feedMessage = decodeFeedMessage(
       new Uint8Array(buffer),
     )
 
