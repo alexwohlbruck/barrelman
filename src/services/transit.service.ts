@@ -585,7 +585,9 @@ async function queryMotis(
     params.set('wheelchair', 'true')
   }
 
-  const response = await fetchFn(`${motisUrl}/api/v1/plan?${params}`)
+  const response = await fetchFn(`${motisUrl}/api/v1/plan?${params}`, {
+    signal: AbortSignal.timeout(20_000),
+  })
 
   if (!response.ok) {
     const errorText = await response.text()
@@ -708,7 +710,9 @@ async function queryMotisIntermodal(
     params.set('wheelchair', 'true')
   }
 
-  const response = await fetchFn(`${motisUrl}/api/v1/plan?${params}`)
+  const response = await fetchFn(`${motisUrl}/api/v1/plan?${params}`, {
+    signal: AbortSignal.timeout(20_000),
+  })
 
   if (!response.ok) {
     const errorText = await response.text()
@@ -720,8 +724,8 @@ async function queryMotisIntermodal(
   const itineraries = data.itineraries || data.plan?.itineraries || []
   const direct = data.direct || []
 
-  // Warm rental pricing for every system that appears on a rental leg, so the
-  // (synchronous) leg adapter can attach a fare estimate from cache.
+  // Fire-and-forget rental pricing warm-up — don't block the response.
+  // rateFor() returns null on cache miss; the next request will have it.
   const rentalSystemIds = [...itineraries, ...direct].flatMap((it: any) =>
     (it.legs || [])
       .filter((l: any) => l.mode === 'RENTAL' && l.rental)
@@ -729,11 +733,7 @@ async function queryMotisIntermodal(
       .filter(Boolean),
   )
   if (rentalSystemIds.length) {
-    try {
-      await ensurePricing(rentalSystemIds)
-    } catch (err) {
-      console.error('Rental pricing warm-up failed:', err)
-    }
+    ensurePricing(rentalSystemIds).catch(() => {})
   }
 
   // Merge transit itineraries and direct connections

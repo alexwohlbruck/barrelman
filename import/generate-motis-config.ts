@@ -23,6 +23,7 @@ const { values: args } = parseArgs({
     'street-routing': { type: 'boolean', default: false },
     'osm-path': { type: 'string', default: '/osm-data/region.osm.pbf' },
     'include-gbfs': { type: 'boolean', default: undefined },
+    'no-gbfs': { type: 'boolean', default: false },
   },
 })
 
@@ -33,7 +34,7 @@ async function main() {
 
   const enableStreetRouting = args['street-routing'] ?? false
   const osmPath = args['osm-path']!
-  const includeGbfs = args['include-gbfs'] ?? enableStreetRouting
+  const includeGbfs = args['no-gbfs'] ? false : (args['include-gbfs'] ?? enableStreetRouting)
 
   console.log('Generating MOTIS config from database...')
   if (enableStreetRouting) {

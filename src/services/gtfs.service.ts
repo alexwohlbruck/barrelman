@@ -1255,6 +1255,8 @@ export async function generateMotisConfig(options?: MotisConfigOptions): Promise
     if (gbfsSystems.length > 0) {
       lines.push('')
       lines.push('gbfs:')
+      lines.push(`  update_interval: 300`)
+      lines.push(`  cache_size: ${Math.max(gbfsSystems.length, 256)}`)
       lines.push('  feeds:')
       for (const system of gbfsSystems) {
         lines.push(`    "${system.systemId}":`)
