@@ -1,0 +1,4 @@
+# Runtime data (Elasticsearch index, downloaded OSM/OA/WOF/TIGER, geonames) — large, not committed.
+/data
+# Machine-specific runtime env (absolute paths, user). Committed template is .env.example.
+/.env
