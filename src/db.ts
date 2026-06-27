@@ -39,6 +39,16 @@ export async function ensureSchema() {
       ON geo_places USING GIN (codes) WHERE codes IS NOT NULL;
     CREATE INDEX IF NOT EXISTS geo_places_name_abbrev_idx
       ON geo_places (name_abbrev) WHERE name_abbrev IS NOT NULL;
+
+    -- GiST trigram index for the Layer-2 fuzzy search (search.service.ts).
+    -- That layer uses the KNN distance operator (name <-> query) with
+    -- ORDER BY ... <-> ... LIMIT, which ONLY a GiST trigram index can serve.
+    -- The GIN trigram index (gin_trgm_ops) supports % / ILIKE but NOT <->,
+    -- so without this GiST index every fuzzy query degrades to a parallel
+    -- sequential scan over the full table (~45s on 21M rows) — which silently
+    -- blows past the API search timeout and returns no place results.
+    CREATE INDEX IF NOT EXISTS geo_places_name_gist_trgm_idx
+      ON geo_places USING gist (name gist_trgm_ops) WHERE name IS NOT NULL;
   `))
 }
 

@@ -174,8 +174,9 @@ export async function searchPlaces({
     `).catch(() => [] as any[])
 
     // Layer 2: Trigram fuzzy match via GiST KNN (name <-> query)
-    // Uses GiST index for ordered retrieval of the N closest matches — avoids
-    // the GIN bitmap scan that chokes on short/common trigrams (225K+ candidates).
+    // Uses the GiST trigram index (geo_places_name_gist_trgm_idx) for ordered
+    // retrieval of the N closest matches — avoids the GIN bitmap scan that
+    // chokes on short/common trigrams (225K+ candidates).
     // For multi-word queries, coverage scoring boosts results that match more
     // query words across name + parent_context.
     let trigramRankExpr: ReturnType<typeof sql>
@@ -194,7 +195,15 @@ export async function searchPlaces({
 
     // Skip trigram for short queries (≤4 chars) — GiST KNN degrades with few
     // trigrams and these are covered by codes/abbreviation/FTS layers.
-    const trigramDistanceThreshold = 0.7
+    //
+    // Filter with the `%` similarity operator (pg_trgm.similarity_threshold,
+    // default 0.3 ≡ the old `(name <-> q) < 0.7` distance bound) rather than a
+    // raw `<-> < threshold` predicate. `%` gives the planner a tight, accurate
+    // selectivity estimate so it commits to the GiST index for BOTH the filter
+    // and the KNN `ORDER BY`. The `<-> < threshold` form, by contrast, was
+    // mis-costed and degraded to a full parallel seq scan (~45s on 21M rows)
+    // for low-/no-match queries — exactly the partial words typed mid-search —
+    // which blew past the API timeout and returned no place results.
     const trigramPromise = sanitizedQuery.length > 4
       ? db.execute(sql`
           SELECT
@@ -205,7 +214,7 @@ export async function searchPlaces({
             ${distanceSelect}
           FROM geo_places
           WHERE name IS NOT NULL
-            AND (name <-> ${sanitizedQuery}) < ${trigramDistanceThreshold}
+            AND name % ${sanitizedQuery}
           ${textSearchSpatialFilter}
           ${categoryFilter}
           ${tagsFilter}
