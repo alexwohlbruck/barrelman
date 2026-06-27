@@ -1,0 +1,44 @@
+{
+  "_comment": "Single source of truth for which geographic regions the data pipeline imports. Selected via the REGIONS env var (comma-separated keys for dev, or 'global' for prod). Every importer — OSM, GTFS, GBFS, Pelias geocoder — resolves what to fetch from here. See src/config/regions.ts.",
+
+  "regions": {
+    "north-carolina": {
+      "label": "North Carolina",
+      "osmExtracts": [
+        "https://download.geofabrik.de/north-america/us/north-carolina-latest.osm.pbf"
+      ],
+      "osmReplication": [
+        "https://download.geofabrik.de/north-america/us/north-carolina-updates/"
+      ],
+      "bbox": [-84.33, 33.83, -75.40, 36.59],
+      "gtfsRegion": "nc",
+      "openaddresses": ["us/nc"]
+    },
+
+    "nyc-metro": {
+      "label": "NYC Metro (NY/NJ/CT)",
+      "osmExtracts": [
+        "https://download.geofabrik.de/north-america/us/new-york-latest.osm.pbf",
+        "https://download.geofabrik.de/north-america/us/new-jersey-latest.osm.pbf",
+        "https://download.geofabrik.de/north-america/us/connecticut-latest.osm.pbf"
+      ],
+      "osmReplication": [
+        "https://download.geofabrik.de/north-america/us/new-york-updates/",
+        "https://download.geofabrik.de/north-america/us/new-jersey-updates/",
+        "https://download.geofabrik.de/north-america/us/connecticut-updates/"
+      ],
+      "bbox": [-74.60, 40.30, -73.30, 41.40],
+      "gtfsRegion": "nyc",
+      "openaddresses": ["us/ny", "us/nj", "us/ct"]
+    }
+  },
+
+  "global": {
+    "label": "Global (planet)",
+    "osmExtracts": ["https://planet.openstreetmap.org/pbf/planet-latest.osm.pbf"],
+    "osmReplication": ["https://planet.openstreetmap.org/replication/minute/"],
+    "bbox": [-180, -90, 180, 90],
+    "gtfsRegion": "global",
+    "openaddresses": ["all"]
+  }
+}
