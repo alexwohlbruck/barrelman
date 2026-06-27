@@ -252,6 +252,11 @@ export async function searchPlaces({
           ${textSearchSpatialFilter}
           ${categoryFilter}
           ${tagsFilter}
+          -- Surface the real destination, not the road. A code like "jfk" is
+          -- carried by both the airport (one big area) and dozens of road
+          -- segments tagged ref=JFK (lines). Demote lines and prefer larger
+          -- features so "jfk" returns the airport, not "JFK Expressway" ×40.
+          ORDER BY (geom_type = 'line') ASC, area_m2 DESC NULLS LAST
           LIMIT ${limit}
         `).catch(() => [] as any[])
       : Promise.resolve([] as any[])
