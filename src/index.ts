@@ -14,6 +14,7 @@ import { routeRoutes } from './routes/route'
 import { transitRoutes } from './routes/transit'
 import { gbfsRoutes } from './routes/gbfs'
 import { ensureSchema, ensureGtfsSchema, ensureGbfsSchema } from './db'
+import { ensureSearchEnrichment } from './lib/search-enrichment'
 
 const port = Number(process.env.PORT) || 5001
 
@@ -21,6 +22,11 @@ const port = Number(process.env.PORT) || 5001
 await ensureSchema()
 await ensureGtfsSchema()
 await ensureGbfsSchema()
+
+// Backfill derived search columns (codes/name_abbrev/parent_context/ts) if a
+// prior import left them empty. Fire-and-forget so it never blocks startup —
+// it self-skips once the data is enriched.
+void ensureSearchEnrichment()
 
 const app = new Elysia()
   .use(cors())
