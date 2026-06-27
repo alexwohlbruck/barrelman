@@ -2,6 +2,7 @@ import { db } from '../db'
 import { sql } from 'drizzle-orm'
 import { searchCache, embeddingCache } from '../lib/cache'
 import { generateQueryEmbedding } from '../lib/embeddings'
+import { forwardGeocode } from './geocode.service'
 
 export interface SearchParams {
   query?: string
@@ -42,6 +43,14 @@ export async function searchPlaces({
   const hasQuery = sanitizedQuery.length > 0
   const hasPointLocation = lat != null && lng != null
   const hasRoute = route != null
+
+  // Address geocoding (Pelias) runs in parallel with the PostGIS layers so
+  // street addresses appear alongside POIs without adding latency. Text queries
+  // only — not browse/category or route corridor searches.
+  const wantAddresses = hasQuery && !hasRoute && !(categories && categories.length)
+  const peliasPromise: Promise<any[]> = wantAddresses
+    ? forwardGeocode(sanitizedQuery, { lat, lng, limit })
+    : Promise.resolve([])
 
   // ── Build spatial primitives ────────────────────────────────────────────
   const locationPoint = hasPointLocation
@@ -381,8 +390,27 @@ export async function searchPlaces({
     // Browse mode with point: already sorted by distance_m ASC from the query
   }
 
+  // ── Fold in address results from Pelias ─────────────────────────────────
+  // POIs come from PostGIS above; Pelias supplies street addresses. For an
+  // address-intent query ("350 5th ave" — starts with a number) addresses lead;
+  // otherwise they're appended so POIs still win. Dedup against POIs at the same
+  // spot so an OSM-addressed POI isn't shown twice.
+  const addressResults = await peliasPromise
+  if (addressResults.length > 0) {
+    // Dedup by id — Pelias OSM records carry the same node/way/relation id as
+    // barrelman's rows, so a place already returned from PostGIS isn't repeated.
+    const seenIds = new Set(results.map((r: any) => r.id))
+    const fresh = addressResults.filter((a) => !seenIds.has(a.id))
+    const addressLike = /^\s*\d/.test(sanitizedQuery)
+    results = addressLike ? [...fresh, ...results] : [...results, ...fresh]
+    results = results.slice(0, limit)
+  }
+
   // Clean up internal tags before returning
-  for (const r of results) delete (r as any)._codesMatch
+  for (const r of results) {
+    delete (r as any)._codesMatch
+    delete (r as any)._peliasLayer
+  }
 
   searchCache.set(cacheKey, results)
   return results
