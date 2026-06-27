@@ -52,7 +52,16 @@
     "openstreetmap": {
       "download": [
         {
-          "sourceURL": "http://download.geofabrik.de/north-america/us/north-carolina-latest.osm.pbf"
+          "sourceURL": "https://download.geofabrik.de/north-america/us/north-carolina-latest.osm.pbf"
+        },
+        {
+          "sourceURL": "https://download.geofabrik.de/north-america/us/new-york-latest.osm.pbf"
+        },
+        {
+          "sourceURL": "https://download.geofabrik.de/north-america/us/new-jersey-latest.osm.pbf"
+        },
+        {
+          "sourceURL": "https://download.geofabrik.de/north-america/us/connecticut-latest.osm.pbf"
         }
       ],
       "leveldbpath": "/tmp",
@@ -60,13 +69,32 @@
       "import": [
         {
           "filename": "north-carolina-latest.osm.pbf"
+        },
+        {
+          "filename": "new-york-latest.osm.pbf"
+        },
+        {
+          "filename": "new-jersey-latest.osm.pbf"
+        },
+        {
+          "filename": "connecticut-latest.osm.pbf"
         }
       ]
     },
     "openaddresses": {
       "datapath": "/data/openaddresses",
       "files": [
-        "us/nc/mecklenburg.csv"
+        "us/nc/mecklenburg.csv",
+        "us/nc/durham.csv",
+        "us/nc/forsyth.csv",
+        "us/nc/buncombe.csv",
+        "us/nc/gaston.csv",
+        "us/nc/cabarrus.csv",
+        "us/nc/cumberland.csv",
+        "us/ny/city_of_new_york.csv",
+        "us/ny/statewide.csv",
+        "us/nj/statewide.csv",
+        "us/ct/statewide.csv"
       ]
     },
     "polyline": {
@@ -79,7 +107,10 @@
       "datapath": "/data/whosonfirst",
       "countryCode": "US",
       "importPlace": [
-        "85688773"
+        "85688773",
+        "85688543",
+        "85688509",
+        "85688557"
       ]
     },
     "interpolation": {
@@ -89,6 +120,15 @@
           "states": [
             {
               "state_code": 37
+            },
+            {
+              "state_code": 36
+            },
+            {
+              "state_code": 34
+            },
+            {
+              "state_code": 9
             }
           ]
         }

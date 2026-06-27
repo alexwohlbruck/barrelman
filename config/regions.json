@@ -12,7 +12,19 @@
       ],
       "bbox": [-84.33, 33.83, -75.40, 36.59],
       "gtfsRegion": "nc",
-      "openaddresses": ["us/nc"]
+      "pelias": {
+        "openaddresses": [
+          "us/nc/mecklenburg.csv",
+          "us/nc/durham.csv",
+          "us/nc/forsyth.csv",
+          "us/nc/buncombe.csv",
+          "us/nc/gaston.csv",
+          "us/nc/cabarrus.csv",
+          "us/nc/cumberland.csv"
+        ],
+        "wofIds": ["85688773"],
+        "tigerStates": [37]
+      }
     },
 
     "nyc-metro": {
@@ -29,7 +41,16 @@
       ],
       "bbox": [-74.60, 40.30, -73.30, 41.40],
       "gtfsRegion": "nyc",
-      "openaddresses": ["us/ny", "us/nj", "us/ct"]
+      "pelias": {
+        "openaddresses": [
+          "us/ny/city_of_new_york.csv",
+          "us/ny/statewide.csv",
+          "us/nj/statewide.csv",
+          "us/ct/statewide.csv"
+        ],
+        "wofIds": ["85688543", "85688509", "85688557"],
+        "tigerStates": [36, 34, 9]
+      }
     }
   },
 
@@ -39,6 +60,11 @@
     "osmReplication": ["https://planet.openstreetmap.org/replication/minute/"],
     "bbox": [-180, -90, 180, 90],
     "gtfsRegion": "global",
-    "openaddresses": ["all"]
+    "pelias": {
+      "openaddresses": [],
+      "wofIds": [],
+      "tigerStates": [],
+      "countryCode": "ALL"
+    }
   }
 }

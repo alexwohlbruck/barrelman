@@ -20,13 +20,24 @@ import { dirname, resolve } from 'node:path'
 
 export type Bbox = [west: number, south: number, east: number, north: number]
 
+export interface PeliasRegionConfig {
+  /** OpenAddresses CSV paths (e.g. "us/ny/statewide.csv"). */
+  openaddresses: string[]
+  /** Who's-on-First place ids to import (admin hierarchy), usually US states. */
+  wofIds: string[]
+  /** TIGER state FIPS codes for address interpolation. */
+  tigerStates: number[]
+  /** Geonames country filter (global only). */
+  countryCode?: string
+}
+
 export interface RegionDef {
   label: string
   osmExtracts: string[]
   osmReplication?: string[]
   bbox: Bbox
   gtfsRegion: string
-  openaddresses: string[]
+  pelias: PeliasRegionConfig
 }
 
 interface RegionsFile {
@@ -56,8 +67,12 @@ export interface ResolvedRegions {
   osmReplication: string[]
   /** GTFS region tokens across the selected regions (deduped). */
   gtfsRegions: string[]
-  /** OpenAddresses source ids across the selected regions (deduped). */
-  openaddresses: string[]
+  /** Pelias OpenAddresses CSV paths across the selected regions (deduped). */
+  peliasOpenaddresses: string[]
+  /** Pelias Who's-on-First place ids across the selected regions (deduped). */
+  peliasWofIds: string[]
+  /** Pelias TIGER state FIPS codes across the selected regions (deduped). */
+  peliasTigerStates: number[]
   /** Union bbox [west, south, east, north] covering all selected regions. */
   bbox: Bbox
 }
@@ -81,7 +96,9 @@ export function resolveRegions(value = process.env.REGIONS): ResolvedRegions {
       osmExtracts: g.osmExtracts,
       osmReplication: g.osmReplication ?? [],
       gtfsRegions: [g.gtfsRegion],
-      openaddresses: g.openaddresses,
+      peliasOpenaddresses: g.pelias.openaddresses,
+      peliasWofIds: g.pelias.wofIds,
+      peliasTigerStates: g.pelias.tigerStates,
       bbox: g.bbox,
     }
   }
@@ -114,7 +131,9 @@ export function resolveRegions(value = process.env.REGIONS): ResolvedRegions {
     osmExtracts: uniq(regions.flatMap((r) => r.osmExtracts)),
     osmReplication: uniq(regions.flatMap((r) => r.osmReplication ?? [])),
     gtfsRegions: uniq(regions.map((r) => r.gtfsRegion)),
-    openaddresses: uniq(regions.flatMap((r) => r.openaddresses)),
+    peliasOpenaddresses: uniq(regions.flatMap((r) => r.pelias.openaddresses)),
+    peliasWofIds: uniq(regions.flatMap((r) => r.pelias.wofIds)),
+    peliasTigerStates: Array.from(new Set(regions.flatMap((r) => r.pelias.tigerStates))),
     bbox,
   }
 }
@@ -133,14 +152,16 @@ if (import.meta.main) {
     case 'osm-extracts': console.log(out(r.osmExtracts)); break
     case 'osm-replication': console.log(out(r.osmReplication)); break
     case 'gtfs-regions': console.log(out(r.gtfsRegions)); break
-    case 'openaddresses': console.log(out(r.openaddresses)); break
+    case 'openaddresses': console.log(out(r.peliasOpenaddresses)); break
+    case 'wof-ids': console.log(out(r.peliasWofIds)); break
+    case 'tiger-states': console.log(out(r.peliasTigerStates.map(String))); break
     case 'bbox': console.log(r.bbox.join(',')); break
     case 'is-global': console.log(String(r.isGlobal)); break
     case 'summary':
       console.log(`Regions: ${r.keys.join(', ')}`)
       console.log(`OSM extracts: ${r.osmExtracts.length}`)
       console.log(`GTFS regions: ${r.gtfsRegions.join(', ')}`)
-      console.log(`OpenAddresses: ${r.openaddresses.join(', ')}`)
+      console.log(`OpenAddresses: ${r.peliasOpenaddresses.join(', ')}`)
       console.log(`Bbox: ${r.bbox.join(',')}`)
       break
     default:
