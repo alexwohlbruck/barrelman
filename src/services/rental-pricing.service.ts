@@ -158,6 +158,27 @@ export async function ensurePricing(systemIds: string[]): Promise<void> {
   )
 }
 
+/**
+ * Warm pricing for every enabled GBFS system that advertises a pricing feed,
+ * so the first shared-mobility trip after a process start shows fares instead
+ * of a blank price (the per-query fire-and-forget warm-up in transit.service
+ * only covers systems that happen to appear in that query). Batched to avoid a
+ * fetch stampede; intended to be called fire-and-forget on startup.
+ */
+export async function warmAllPricing(): Promise<void> {
+  let urls: Map<string, string>
+  try {
+    urls = await loadUrlMap()
+  } catch {
+    return
+  }
+  const ids = [...urls.keys()]
+  const BATCH = 25
+  for (let i = 0; i < ids.length; i += BATCH) {
+    await ensurePricing(ids.slice(i, i + BATCH)).catch(() => {})
+  }
+}
+
 /** Synchronous rate-card lookup. Returns null until warmed by ensurePricing. */
 export function rateFor(systemId?: string): RentalRate | null {
   if (!systemId) return null

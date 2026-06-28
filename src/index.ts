@@ -15,6 +15,7 @@ import { transitRoutes } from './routes/transit'
 import { gbfsRoutes } from './routes/gbfs'
 import { ensureSchema, ensureGtfsSchema, ensureGbfsSchema } from './db'
 import { ensureSearchEnrichment } from './lib/search-enrichment'
+import { startTransitWarmup } from './lib/warmup'
 
 const port = Number(process.env.PORT) || 5001
 
@@ -54,6 +55,11 @@ const app = new Elysia()
   .use(transitRoutes)
   .use(gbfsRoutes)
   .listen(port)
+
+// Keep MOTIS (and rental pricing) hot so the first trip request after an idle
+// gap doesn't eat MOTIS's multi-second cold-start. Engine warming, not result
+// caching — every real request still runs a fresh search. Fire-and-forget.
+startTransitWarmup()
 
 console.log(`Barrelman running at http://localhost:${port}`)
 console.log(`Swagger docs at http://localhost:${port}/swagger`)

@@ -239,6 +239,26 @@ export interface StopRoutesResult {
 
 export type FetchFn = (url: string, init?: RequestInit) => Promise<Response>
 
+// ── Activity tracking (for warm-up idle-gating) ─────────────────────
+
+// When MOTIS last served a *real*, HTTP-driven transit query. The warm-up
+// loop reads this so it can stand down while live traffic is already keeping
+// MOTIS hot — warm-up only needs to fill genuine idle gaps, and firing it
+// alongside real requests would just add MOTIS contention. Set by the route
+// handlers (not by getIntermodalRoute itself, which the in-process warm-up
+// calls directly and must not count as activity).
+let lastTransitActivityAt = 0
+
+/** Record a real transit query — call from HTTP route handlers only. */
+export function markTransitActivity(): void {
+  lastTransitActivityAt = Date.now()
+}
+
+/** Milliseconds since the last real transit query (huge before the first). */
+export function transitIdleMs(): number {
+  return Date.now() - lastTransitActivityAt
+}
+
 // ── MOTIS client ────────────────────────────────────────────────────
 
 function getMotisUrl(): string {
@@ -756,16 +776,257 @@ async function queryMotisIntermodal(
   }
 }
 
+// ── Stop-to-stop composition (robust transit access) ───────────────────────
+//
+// MOTIS's coordinate-intermodal mode routes access/egress through its
+// level-aware OSR street graph. That depends on every underground platform
+// being wired to the sidewalk in OSM — which fails for a huge class of deep
+// stations whose mapped entrances aren't actually joined to the street (e.g.
+// the Lexington Av 4/5/6 platforms): MOTIS can't "reach" the closest station,
+// so it substitutes far ones or returns nothing.
+//
+// Instead we own access ourselves: find nearby boarding STATIONS by PostGIS
+// distance, route the transit stop-to-stop in MOTIS (which still handles
+// transfers internally), and emit straight-line WALK access/egress legs that
+// the caller (parchment) re-routes on the FULL street graph via GraphHopper.
+// MOTIS never touches a sidewalk, so the OSM-topology bug class is gone.
+
+/** Portal-to-portal walk speed (m/s) incl. detour — for access feasibility /
+ *  ranking only; real geometry + timing come from GraphHopper downstream. */
+const COMPOSE_WALK_MPS = 1.25
+
+interface BoardingStation {
+  feedId: string
+  stationId: string
+  name: string
+  lat: number
+  lng: number
+  distance: number
+  /** Lowest GTFS route_type served (0 tram,1 subway,2 rail,3 bus,4 ferry…). */
+  routeType: number | null
+}
+
+function haversineM(a: { lat: number; lng: number }, b: { lat: number; lng: number }): number {
+  const R = 6371000, toRad = Math.PI / 180
+  const dLat = (b.lat - a.lat) * toRad, dLng = (b.lng - a.lng) * toRad
+  const s =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(a.lat * toRad) * Math.cos(b.lat * toRad) * Math.sin(dLng / 2) ** 2
+  return 2 * R * Math.asin(Math.sqrt(s))
+}
+
+/** Distinct boarding stations near a point, nearest first, with the best
+ *  (lowest) route_type each serves so callers can prefer rail over bus. */
+async function getNearbyBoardingStations(
+  lat: number,
+  lng: number,
+  radiusM: number,
+  limit: number,
+): Promise<BoardingStation[]> {
+  const rows = (await db.execute(
+    sql.raw(`
+      SELECT feed_id, station_id, stop_name, stop_lat, stop_lon, distance, route_type
+      FROM (
+        SELECT DISTINCT ON (st.feed_id, COALESCE(NULLIF(st.parent_station,''), st.stop_id))
+          st.feed_id AS feed_id,
+          COALESCE(NULLIF(st.parent_station,''), st.stop_id) AS station_id,
+          st.stop_name AS stop_name,
+          st.stop_lat AS stop_lat,
+          st.stop_lon AS stop_lon,
+          ST_Distance(st.geom::geography, ST_SetSRID(ST_MakePoint(${lng}, ${lat}), 4326)::geography) AS distance,
+          (SELECT MIN(r.route_type) FROM gtfs_stop_routes sr
+             JOIN gtfs_routes r ON r.feed_id = sr.feed_id AND r.route_id = sr.route_id
+             WHERE sr.feed_id = st.feed_id AND sr.stop_id = st.stop_id) AS route_type
+        FROM gtfs_stops st
+        WHERE ST_DWithin(st.geom::geography, ST_SetSRID(ST_MakePoint(${lng}, ${lat}), 4326)::geography, ${radiusM})
+          AND (st.location_type = 0 OR st.location_type IS NULL)
+        ORDER BY st.feed_id, COALESCE(NULLIF(st.parent_station,''), st.stop_id), distance
+      ) s
+      -- Non-bus (rail/subway/tram/ferry) first so a dense cluster of nearby bus
+      -- stops can't crowd the subway out of the candidate set; nearest within tier.
+      ORDER BY (COALESCE(route_type, 3) = 3), distance
+      LIMIT ${limit}
+    `),
+  )) as any[]
+  return rows.map((r) => ({
+    feedId: r.feed_id,
+    stationId: r.station_id,
+    name: r.stop_name || '',
+    lat: r.stop_lat,
+    lng: r.stop_lon,
+    distance: Math.round(r.distance),
+    routeType: r.route_type == null ? null : Number(r.route_type),
+  }))
+}
+
+/** Rail/subway/tram/ferry rank ahead of bus (and unknown) for a given trip —
+ *  on a multi-km trip we must not let three nearby bus stops crowd out the
+ *  subway 600 m away. Within a tier, nearest wins. */
+function rankStations(stations: BoardingStation[], keep: number): BoardingStation[] {
+  const isBusish = (rt: number | null) => rt == null || rt === 3
+  return [...stations]
+    .sort((a, b) => {
+      const ab = isBusish(a.routeType) ? 1 : 0
+      const bb = isBusish(b.routeType) ? 1 : 0
+      return ab !== bb ? ab - bb : a.distance - b.distance
+    })
+    .slice(0, keep)
+}
+
+/** Prepend an access WALK leg (origin → boarding stop) and append an egress
+ *  WALK leg (alighting stop → destination), adjusting the itinerary totals.
+ *  Geometry is a straight line and durations are estimates — parchment
+ *  re-routes both via GraphHopper and re-times them against the schedule. */
+function withAccessEgressWalks(
+  it: TransitItinerary,
+  from: { lat: number; lng: number },
+  to: { lat: number; lng: number },
+  accessSec: number,
+  egressSec: number,
+): TransitItinerary {
+  const firstLeg = it.legs[0]
+  const lastLeg = it.legs[it.legs.length - 1]
+  if (!firstLeg || !lastLeg) return it
+
+  const boardAt = { lat: firstLeg.from.lat, lng: firstLeg.from.lng }
+  const alightAt = { lat: lastLeg.to.lat, lng: lastLeg.to.lng }
+  const accessDist = Math.round(haversineM(from, boardAt))
+  const egressDist = Math.round(haversineM(alightAt, to))
+
+  const accessEnd = new Date(firstLeg.startTime)
+  const accessStart = new Date(accessEnd.getTime() - accessSec * 1000)
+  const egressStart = new Date(lastLeg.endTime)
+  const egressEnd = new Date(egressStart.getTime() + egressSec * 1000)
+
+  const accessLeg: TransitLeg = {
+    mode: 'WALK',
+    transitLeg: false,
+    from: { name: 'Origin', lat: from.lat, lng: from.lng },
+    to: { name: firstLeg.from.name, lat: boardAt.lat, lng: boardAt.lng, stopId: firstLeg.from.stopId },
+    startTime: accessStart.toISOString(),
+    endTime: accessEnd.toISOString(),
+    duration: accessSec,
+    distance: accessDist,
+    geometry: { type: 'LineString', coordinates: [[from.lng, from.lat], [boardAt.lng, boardAt.lat]] },
+  }
+  const egressLeg: TransitLeg = {
+    mode: 'WALK',
+    transitLeg: false,
+    from: { name: lastLeg.to.name, lat: alightAt.lat, lng: alightAt.lng, stopId: lastLeg.to.stopId },
+    to: { name: 'Destination', lat: to.lat, lng: to.lng },
+    startTime: egressStart.toISOString(),
+    endTime: egressEnd.toISOString(),
+    duration: egressSec,
+    distance: egressDist,
+    geometry: { type: 'LineString', coordinates: [[alightAt.lng, alightAt.lat], [to.lng, to.lat]] },
+  }
+
+  return {
+    ...it,
+    legs: [accessLeg, ...it.legs, egressLeg],
+    startTime: accessStart.toISOString(),
+    endTime: egressEnd.toISOString(),
+    duration: it.duration + accessSec + egressSec,
+    walkTime: (it.walkTime || 0) + accessSec + egressSec,
+    walkDistance: (it.walkDistance || 0) + accessDist + egressDist,
+  }
+}
+
+/** Cap on MOTIS stop-to-stop queries fired per request (origin×dest pairs). */
+const COMPOSE_MAX_PAIRS = 12
+
+/**
+ * Plan transit by composing GraphHopper-owned access/egress walks around a
+ * MOTIS stop-to-stop search. Replaces MOTIS coordinate-intermodal for pure
+ * WALK access/egress (the path that was breaking on underground stations).
+ */
+async function composeTransitFromStops(
+  request: IntermodalRouteRequest,
+  fetchFn: FetchFn,
+): Promise<TransitRouteResponse> {
+  const numItineraries = request.numItineraries ?? 5
+  const accessRadius = Math.min(Math.max((request.maxPreTransitTime ?? 900) * COMPOSE_WALK_MPS, 500), 2500)
+  const egressRadius = Math.min(Math.max((request.maxPostTransitTime ?? 900) * COMPOSE_WALK_MPS, 500), 2500)
+
+  const [originAll, destAll] = await Promise.all([
+    getNearbyBoardingStations(request.from.lat, request.from.lng, accessRadius, 12),
+    getNearbyBoardingStations(request.to.lat, request.to.lng, egressRadius, 12),
+  ])
+  const origins = rankStations(originAll, 4)
+  const dests = rankStations(destAll, 4)
+  if (origins.length === 0 || dests.length === 0) {
+    return { itineraries: [], metadata: { searchWindow: 0 } }
+  }
+
+  const baseTime = request.time ? new Date(request.time) : new Date()
+  const arriveBy = request.arriveBy ?? false
+
+  const pairs: Array<{ o: BoardingStation; d: BoardingStation }> = []
+  for (const o of origins) {
+    for (const d of dests) {
+      if (o.feedId === d.feedId && o.stationId === d.stationId) continue
+      pairs.push({ o, d })
+    }
+  }
+
+  const results = await Promise.all(
+    pairs.slice(0, COMPOSE_MAX_PAIRS).map(async ({ o, d }) => {
+      const accessSec = Math.max(1, Math.round(haversineM(request.from, o) / COMPOSE_WALK_MPS))
+      const egressSec = Math.max(1, Math.round(haversineM(d, request.to) / COMPOSE_WALK_MPS))
+      // Shift the query so the schedule we get back is actually catchable:
+      // depart-by → be at the stop after the access walk; arrive-by → leave
+      // the egress stop early enough to finish the last walk by `time`.
+      const queryTime = arriveBy
+        ? new Date(baseTime.getTime() - egressSec * 1000)
+        : new Date(baseTime.getTime() + accessSec * 1000)
+      try {
+        const resp = await queryMotis(
+          {
+            ...request,
+            fromStopId: `${o.feedId}_${o.stationId}`,
+            toStopId: `${d.feedId}_${d.stationId}`,
+            time: queryTime.toISOString(),
+          },
+          fetchFn,
+        )
+        return resp.itineraries.map((it) => withAccessEgressWalks(it, request.from, request.to, accessSec, egressSec))
+      } catch {
+        return [] as TransitItinerary[]
+      }
+    }),
+  )
+
+  const all = results.flat()
+  all.sort((a, b) => a.duration - b.duration)
+  return {
+    itineraries: deduplicateItineraries(all).slice(0, numItineraries),
+    metadata: { searchWindow: 0 },
+  }
+}
+
 /**
  * Intermodal routing using coordinates with mode selection.
  *
- * Simpler than getTransitRoute() — no stop ID cross-product needed.
- * MOTIS handles coordinate snapping internally when OSM is loaded.
+ * For pure-WALK transit we compose around a stop-to-stop search (access/egress
+ * owned by us, not MOTIS's fragile OSR — see composeTransitFromStops). Street
+ * modes that genuinely need MOTIS's graph (RENTAL/BIKE/CAR access) keep the
+ * coordinate-intermodal path.
  */
 export async function getIntermodalRoute(
   request: IntermodalRouteRequest,
   fetchFn: FetchFn = globalThis.fetch,
 ): Promise<TransitRouteResponse> {
+  const pre = request.preTransitModes ?? ['WALK']
+  const post = request.postTransitModes ?? ['WALK']
+  const pureWalkTransit =
+    !request.directModes?.length &&
+    pre.every((m) => m === 'WALK') &&
+    post.every((m) => m === 'WALK')
+
+  if (pureWalkTransit) {
+    return composeTransitFromStops(request, fetchFn)
+  }
+
   const result = await queryMotisIntermodal(request, fetchFn)
 
   // Sort by duration and deduplicate

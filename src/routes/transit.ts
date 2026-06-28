@@ -5,6 +5,7 @@ import {
   getIntermodalRoute as _getIntermodalRoute,
   getNearbyStops as _getNearbyStops,
   getRoutesForStop as _getRoutesForStop,
+  markTransitActivity,
   MotisError,
   ALL_TRANSIT_MODES,
   type TransitRouteRequest,
@@ -74,6 +75,8 @@ export function createTransitRoutes(deps: {
 
     // ── POST /transit/route ─────────────────────────────────────────
     .post('/route', async ({ body, set }) => {
+      // Real traffic keeps MOTIS hot; tell the warm-up loop to stand down.
+      markTransitActivity()
       try {
         const request: TransitRouteRequest = {
           from: { lat: body.from.lat, lng: body.from.lng },
@@ -136,6 +139,8 @@ export function createTransitRoutes(deps: {
 
     // ── POST /transit/intermodal-route ───────────────────────────────
     .post('/intermodal-route', async ({ body, set }) => {
+      // Real traffic keeps MOTIS hot; tell the warm-up loop to stand down.
+      markTransitActivity()
       try {
         const request: IntermodalRouteRequest = {
           from: { lat: body.from.lat, lng: body.from.lng },
