@@ -24,6 +24,8 @@ const { values: args } = parseArgs({
     'osm-path': { type: 'string', default: '/osm-data/region.osm.pbf' },
     'include-gbfs': { type: 'boolean', default: undefined },
     'no-gbfs': { type: 'boolean', default: false },
+    // GTFS-RT poll interval (seconds). Omitted → MOTIS_RT_UPDATE_INTERVAL env, else 60.
+    'rt-update-interval': { type: 'string', default: undefined },
   },
 })
 
@@ -35,6 +37,9 @@ async function main() {
   const enableStreetRouting = args['street-routing'] ?? false
   const osmPath = args['osm-path']!
   const includeGbfs = args['no-gbfs'] ? false : (args['include-gbfs'] ?? enableStreetRouting)
+  const rtUpdateInterval = args['rt-update-interval'] != null
+    ? Number(args['rt-update-interval'])
+    : undefined
 
   console.log('Generating MOTIS config from database...')
   if (enableStreetRouting) {
@@ -48,6 +53,7 @@ async function main() {
     enableStreetRouting,
     osmPath,
     includeGbfs,
+    rtUpdateInterval,
   })
 
   mkdirSync(join(outputPath, '..'), { recursive: true })

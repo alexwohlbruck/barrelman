@@ -1163,6 +1163,14 @@ interface MotisConfigOptions {
   numDays?: number
   /** Max footpath length in minutes */
   maxFootpathLength?: number
+  /**
+   * Seconds between GTFS-RT poll cycles (MOTIS `timetable.update_interval`).
+   * MOTIS's default is 60s, which means continuously re-fetching every feed's
+   * realtime URLs — wasteful on a dev box that's only occasionally exercising
+   * transit. Raise it (e.g. 600) for dev to keep realtime working but poll far
+   * less often. Defaults to the MOTIS_RT_UPDATE_INTERVAL env var, else 60.
+   */
+  rtUpdateInterval?: number
   /** Enable OSM street routing for intermodal queries (default: false) */
   enableStreetRouting?: boolean
   /** Path to OSM PBF file (default: /osm-data/region.osm.pbf) */
@@ -1183,6 +1191,7 @@ export async function generateMotisConfig(options?: MotisConfigOptions): Promise
     gtfsDir = 'gtfs',
     numDays = 365,
     maxFootpathLength = 15,
+    rtUpdateInterval = Number(process.env.MOTIS_RT_UPDATE_INTERVAL) || 60,
     enableStreetRouting = false,
     // MOTIS uses the platform-stripped extract (scripts/prepare-motis-osm.sh)
     // so underground subway stops stay street-reachable. region.osm.pbf is
@@ -1219,6 +1228,10 @@ export async function generateMotisConfig(options?: MotisConfigOptions): Promise
   lines.push(`  num_days: ${numDays}`)
   lines.push('  with_shapes: true')
   lines.push('  adjust_footpaths: true')
+  // How often MOTIS re-polls every feed's GTFS-RT URLs. MOTIS default is 60s;
+  // dev can raise this (MOTIS_RT_UPDATE_INTERVAL) to cut continuous polling of
+  // agencies it isn't testing while keeping realtime data present.
+  lines.push(`  update_interval: ${rtUpdateInterval}`)
   lines.push(`  max_footpath_length: ${maxFootpathLength}`)
   // Import-time stop↔street matching radius used when generating
   // stop-to-stop transfer footpaths (osr_footpath). The MOTIS default of

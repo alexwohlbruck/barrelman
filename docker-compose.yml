@@ -80,6 +80,9 @@ services:
       BARRELMAN_TILE_KEY: ${BARRELMAN_TILE_KEY:-}
       GRAPHHOPPER_URL: http://barrelman-graphhopper:8989
       MOTIS_URL: http://barrelman-motis:8080
+      # GTFS-RT poll interval baked into motis/config.yml at import time. Unset →
+      # MOTIS default 60s. Set in .env (e.g. 600) to throttle dev polling.
+      MOTIS_RT_UPDATE_INTERVAL: ${MOTIS_RT_UPDATE_INTERVAL:-}
       GTFS_DATA_DIR: /gtfs-zips
     ports:
       - "5001:5001"
