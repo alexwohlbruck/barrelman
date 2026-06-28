@@ -1,0 +1,16 @@
+# Keep large runtime data and local cruft OUT of the Docker build context and
+# images. Without this, `COPY . .` bakes data/ (GBs of OSM/GTFS) and pelias/data
+# (tens of GB of Elasticsearch index + downloads) into every image — producing
+# 20GB+ images. The image only needs source, scripts, import assets, and config.
+node_modules
+.git
+.gitignore
+
+# Runtime data — never belongs in an image
+data/
+pelias/
+
+# Local env / logs / editor cruft
+.env
+*.log
+.DS_Store
