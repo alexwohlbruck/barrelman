@@ -287,7 +287,12 @@ export async function ensureSearchEnrichment(): Promise<void> {
         await fillTsvectors(sql, true)
       }
 
-      await sql`ANALYZE geo_places`
+      // The bulk UPDATEs above leave ~1.9M dead tuples and a bloated GIN
+      // full-text pending list that make uncached searches slow (multi-second)
+      // until cleaned. VACUUM reclaims the dead tuples, flushes the GIN pending
+      // list, and refreshes planner stats — a plain ANALYZE does none of that.
+      console.log('[search-enrichment] vacuum…')
+      await sql`VACUUM (ANALYZE) geo_places`
       await markEnriched(sql, estimate)
       console.log(`[search-enrichment] Done in ${Math.round((Date.now() - t0) / 1000)}s.`)
     } finally {
