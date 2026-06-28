@@ -466,18 +466,31 @@ export function parseAgencies(csvContent: string): Map<string, string> {
  * 2. For each stop_time, looking up the route_id via trip_id
  * 3. Collecting unique (stop_id, route_id) pairs
  */
-export function deriveStopRoutes(
-  tripsContent: string,
-  stopTimesContent: string,
-  feedId: string,
-): Array<{ feedId: string; stopId: string; routeId: string }> {
-  // Build trip → route map
-  const trips = parse(tripsContent, {
+type GtfsRecord = Record<string, string>
+
+/** Parse a GTFS CSV file into row records. */
+export function parseGtfsRecords(content: string): GtfsRecord[] {
+  return parse(content, {
     columns: true,
     skip_empty_lines: true,
     trim: true,
     relax_column_count: true,
   })
+}
+
+/** Accept either raw CSV text or already-parsed records, so the importer can
+ *  parse a large file (stop_times.txt) once and feed both derivers. */
+function asRecords(content: string | GtfsRecord[]): GtfsRecord[] {
+  return typeof content === 'string' ? parseGtfsRecords(content) : content
+}
+
+export function deriveStopRoutes(
+  tripsContent: string | GtfsRecord[],
+  stopTimesContent: string | GtfsRecord[],
+  feedId: string,
+): Array<{ feedId: string; stopId: string; routeId: string }> {
+  // Build trip → route map
+  const trips = asRecords(tripsContent)
 
   const tripToRoute = new Map<string, string>()
   for (const trip of trips) {
@@ -488,12 +501,7 @@ export function deriveStopRoutes(
   const seen = new Set<string>()
   const result: Array<{ feedId: string; stopId: string; routeId: string }> = []
 
-  const stopTimes = parse(stopTimesContent, {
-    columns: true,
-    skip_empty_lines: true,
-    trim: true,
-    relax_column_count: true,
-  })
+  const stopTimes = asRecords(stopTimesContent)
 
   for (const st of stopTimes) {
     const routeId = tripToRoute.get(st.trip_id)
@@ -507,6 +515,95 @@ export function deriveStopRoutes(
   }
 
   return result
+}
+
+/**
+ * Build a stop_id → normalised-station-id map from stops.txt.
+ *
+ * Normalised id = parent_station when the stop is a platform, else the stop
+ * itself. Collapses platform-vs-station granularity so a subway leg (which
+ * boards/alights a parent station) matches the platform ids in stop_times.
+ */
+export function parseStopParents(stopsContent: string): Map<string, string> {
+  const records = parse(stopsContent, {
+    columns: true,
+    skip_empty_lines: true,
+    trim: true,
+    relax_column_count: true,
+  })
+  const map = new Map<string, string>()
+  for (const r of records) {
+    if (!r.stop_id) continue
+    const parent = (r.parent_station || '').trim()
+    map.set(r.stop_id, parent || r.stop_id)
+  }
+  return map
+}
+
+/**
+ * Derive distinct trip patterns from trips.txt + stop_times.txt.
+ *
+ * One row per unique (route, direction, ordered station sequence). Stop ids are
+ * normalised to their parent station via `stopParent` and the sequence is
+ * stored comma-bounded (",a,b,c,") so a leg's board→alight run is a plain
+ * substring match — see db.ts. Many trips collapse to a handful of patterns per
+ * route, so the output is small even though stop_times is large.
+ */
+export function deriveTripPatterns(
+  tripsContent: string | GtfsRecord[],
+  stopTimesContent: string | GtfsRecord[],
+  stopParent: Map<string, string>,
+  feedId: string,
+): Array<{ feedId: string; routeId: string; directionId: number | null; stopSeq: string }> {
+  const trips = asRecords(tripsContent)
+  const tripMeta = new Map<string, { routeId: string; directionId: number | null }>()
+  for (const t of trips) {
+    if (!t.trip_id || !t.route_id) continue
+    const rawDir = t.direction_id
+    const dir = rawDir != null && rawDir !== '' ? parseInt(rawDir, 10) : NaN
+    tripMeta.set(t.trip_id, {
+      routeId: t.route_id,
+      directionId: Number.isNaN(dir) ? null : dir,
+    })
+  }
+
+  // Group stop_times by trip, preserving order via stop_sequence.
+  const stopTimes = asRecords(stopTimesContent)
+  const byTrip = new Map<string, Array<{ seq: number; stopId: string }>>()
+  for (const st of stopTimes) {
+    if (!st.trip_id || !st.stop_id) continue
+    let arr = byTrip.get(st.trip_id)
+    if (!arr) {
+      arr = []
+      byTrip.set(st.trip_id, arr)
+    }
+    const seq = parseInt(st.stop_sequence ?? '', 10)
+    arr.push({ seq: Number.isNaN(seq) ? arr.length : seq, stopId: st.stop_id })
+  }
+
+  // One normalised, comma-bounded sequence per trip; dedupe identical patterns.
+  const seen = new Set<string>()
+  const out: Array<{ feedId: string; routeId: string; directionId: number | null; stopSeq: string }> = []
+  for (const [tripId, stops] of byTrip) {
+    const meta = tripMeta.get(tripId)
+    if (!meta) continue
+    stops.sort((a, b) => a.seq - b.seq)
+    const norm: string[] = []
+    for (const s of stops) {
+      const n = stopParent.get(s.stopId) ?? s.stopId
+      if (norm[norm.length - 1] !== n) norm.push(n) // drop consecutive dups
+    }
+    // The comma-delimited scheme is ambiguous if a station id itself contains a
+    // comma; skip such (vanishingly rare) ids rather than emit a pattern that
+    // could false-match. The request side guards symmetrically.
+    if (norm.length < 2 || norm.some((n) => n.includes(','))) continue
+    const stopSeq = `,${norm.join(',')},`
+    const key = `${meta.routeId}|${meta.directionId ?? ''}|${stopSeq}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push({ feedId, routeId: meta.routeId, directionId: meta.directionId, stopSeq })
+  }
+  return out
 }
 
 /**
@@ -890,6 +987,40 @@ export async function importStopRoutes(
 }
 
 /**
+ * Import trip patterns for a feed, replacing its existing rows. The feed is
+ * cleared FIRST and unconditionally — so re-deriving to zero patterns (corrupt
+ * or degenerate feed) leaves no stale rows behind, making the backfill (which,
+ * unlike the full import, doesn't call clearFeed) truly idempotent.
+ */
+export async function importTripPatterns(
+  feedId: string,
+  patterns: ReturnType<typeof deriveTripPatterns>,
+): Promise<number> {
+  const feedEsc = feedId.replace(/'/g, "''")
+  await db.execute(sql.raw(`DELETE FROM gtfs_trip_patterns WHERE feed_id = '${feedEsc}'`))
+  if (patterns.length === 0) return 0
+
+  const BATCH_SIZE = 500
+  let imported = 0
+  for (let i = 0; i < patterns.length; i += BATCH_SIZE) {
+    const batch = patterns.slice(i, i + BATCH_SIZE)
+    const values = batch.map(p => {
+      const esc = (v: string) => `'${v.replace(/'/g, "''")}'`
+      return `(${esc(p.feedId)}, ${esc(p.routeId)}, ${p.directionId ?? 'NULL'}, ${esc(p.stopSeq)})`
+    }).join(',\n')
+
+    await db.execute(sql.raw(`
+      INSERT INTO gtfs_trip_patterns (feed_id, route_id, direction_id, stop_seq)
+      VALUES ${values}
+    `))
+
+    imported += batch.length
+  }
+
+  return imported
+}
+
+/**
  * Parse transfers.txt — the agency's authoritative statement of which
  * stations connect inside one complex (e.g. Times Sq 1/2/3 ↔ N/Q/R/W)
  * and the minimum connection times.
@@ -974,6 +1105,7 @@ export async function recordFeed(feed: GtfsFeedInfo, stopCount: number, routeCou
 export async function clearFeed(feedId: string): Promise<void> {
   const escaped = feedId.replace(/'/g, "''")
   await db.execute(sql.raw(`DELETE FROM gtfs_transfers WHERE feed_id = '${escaped}'`))
+  await db.execute(sql.raw(`DELETE FROM gtfs_trip_patterns WHERE feed_id = '${escaped}'`))
   await db.execute(sql.raw(`DELETE FROM gtfs_stop_routes WHERE feed_id = '${escaped}'`))
   await db.execute(sql.raw(`DELETE FROM gtfs_routes WHERE feed_id = '${escaped}'`))
   await db.execute(sql.raw(`DELETE FROM gtfs_stops WHERE feed_id = '${escaped}'`))

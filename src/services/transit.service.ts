@@ -162,6 +162,11 @@ export interface TransitLeg {
   directionId?: string
   /** Intermediate stops (between boarding and alighting) */
   intermediateStops?: TransitLegPlace[]
+  /** Every route that runs this exact board→…→alight station sequence directly
+   *  (interchangeable lines — the 4 and the 5, the N and the Q), derived from
+   *  GTFS trip patterns rather than from what MOTIS returned. Includes this
+   *  leg's own route. Present (length ≥ 2) only when a true alternate exists. */
+  interchangeableRoutes?: InterchangeableRoute[]
 
   // Realtime fields (present when MOTIS has GTFS-RT data)
   /** True if this leg has realtime data */
@@ -190,6 +195,16 @@ export interface TransitLeg {
   rentalSystemId?: string
   /** Estimated fare from the operator's GBFS pricing feed, when published. */
   rentalPricing?: RentalPricing
+}
+
+/** A route that serves a leg's exact station sequence directly. */
+export interface InterchangeableRoute {
+  routeId: string
+  shortName?: string
+  longName?: string
+  routeType?: number
+  color?: string
+  textColor?: string
 }
 
 export interface TransitLegPlace {
@@ -1027,16 +1042,21 @@ export async function getIntermodalRoute(
     pre.every((m) => m === 'WALK') &&
     post.every((m) => m === 'WALK')
 
+  let result: TransitRouteResponse
   if (pureWalkTransit) {
-    return composeTransitFromStops(request, fetchFn)
+    result = await composeTransitFromStops(request, fetchFn)
+  } else {
+    result = await queryMotisIntermodal(request, fetchFn)
+    // Sort by duration and deduplicate
+    result.itineraries.sort((a, b) => a.duration - b.duration)
+    const numItineraries = request.numItineraries ?? 5
+    result.itineraries = deduplicateItineraries(result.itineraries).slice(0, numItineraries)
   }
 
-  const result = await queryMotisIntermodal(request, fetchFn)
-
-  // Sort by duration and deduplicate
-  result.itineraries.sort((a, b) => a.duration - b.duration)
-  const numItineraries = request.numItineraries ?? 5
-  result.itineraries = deduplicateItineraries(result.itineraries).slice(0, numItineraries)
+  // Attach the full set of interchangeable lines to each transit leg, so the
+  // rider sees every train that runs the segment directly — independent of
+  // which ones MOTIS's time-optimal search happened to surface.
+  await enrichInterchangeableRoutes(result.itineraries)
 
   return result
 }
@@ -1161,6 +1181,138 @@ export async function getRoutesForStop(
     routeTextColor: row.route_text_color,
     agencyName: row.agency_name,
   }))
+}
+
+/** Split a MOTIS stop id ("feedId_stopId") into parts. The feed tag has no
+ *  underscore, so split on the first one and keep the rest (the raw GTFS
+ *  stop_id, which may itself contain underscores) intact. */
+function splitMotisStopId(motisId: string): { feedId: string; stopId: string } {
+  const sep = motisId.indexOf('_')
+  if (sep === -1) return { feedId: '', stopId: motisId }
+  return { feedId: motisId.slice(0, sep), stopId: motisId.slice(sep + 1) }
+}
+
+/**
+ * Every route that runs a given board→…→alight station sequence directly.
+ *
+ * `rawStopIds` is the leg's ordered GTFS stop ids (feed prefix stripped). They
+ * are normalised to parent stations (matching how patterns are stored), then
+ * any route whose stored pattern contains that contiguous normalised run is
+ * returned — the interchangeable lines (4/5, N/Q), including the leg's own
+ * route. The contiguous match is inherently direction-correct, and an express
+ * that skips either endpoint (or a route that branches away mid-segment) simply
+ * has no pattern containing the run, so it is excluded.
+ */
+export async function getRoutesForStopSequence(
+  feedId: string,
+  rawStopIds: string[],
+): Promise<InterchangeableRoute[]> {
+  if (rawStopIds.length < 2) return []
+  const feed = feedId.replace(/'/g, "''")
+
+  // Normalise each distinct leg stop to its parent station.
+  const uniq = [...new Set(rawStopIds)]
+  const inList = uniq.map((s) => `'${s.replace(/'/g, "''")}'`).join(',')
+  const normRows = await db.execute(sql.raw(`
+    SELECT stop_id, COALESCE(NULLIF(parent_station, ''), stop_id) AS norm
+    FROM gtfs_stops
+    WHERE feed_id = '${feed}' AND stop_id IN (${inList})
+  `))
+  const normMap = new Map<string, string>()
+  for (const r of normRows as any[]) normMap.set(r.stop_id, r.norm)
+
+  const seq: string[] = []
+  for (const id of rawStopIds) {
+    const n = normMap.get(id) ?? id
+    if (seq[seq.length - 1] !== n) seq.push(n) // drop consecutive dups
+  }
+  // A comma in an id would make the delimiter ambiguous (it can't, for sane
+  // GTFS, but guard symmetrically with the pattern derivation).
+  if (seq.length < 2 || seq.some((n) => n.includes(','))) return []
+  const needle = `,${seq.join(',')},`.replace(/'/g, "''")
+
+  const rows = await db.execute(sql.raw(`
+    SELECT DISTINCT
+      r.route_id, r.route_short_name, r.route_long_name,
+      r.route_type, r.route_color, r.route_text_color
+    FROM gtfs_trip_patterns p
+    JOIN gtfs_routes r ON r.feed_id = p.feed_id AND r.route_id = p.route_id
+    WHERE p.feed_id = '${feed}'
+      AND strpos(p.stop_seq, '${needle}') > 0
+    ORDER BY r.route_type, r.route_short_name
+  `))
+
+  return (rows as any[]).map((row) => ({
+    routeId: row.route_id,
+    shortName: row.route_short_name ?? undefined,
+    longName: row.route_long_name ?? undefined,
+    routeType: row.route_type ?? undefined,
+    color: row.route_color ?? undefined,
+    textColor: row.route_text_color ?? undefined,
+  }))
+}
+
+/** Ensure the leg's own (planned) route is in its interchangeable set. The GTFS
+ *  pattern query should already include it, but feed-version skew between MOTIS's
+ *  baked timetable and the patterns table could omit it — and the departure board
+ *  filters strictly to this set, so a missing planned line would hide the actual
+ *  planned departure. */
+function withSelfRoute(routes: InterchangeableRoute[], leg: TransitLeg): InterchangeableRoute[] {
+  // Match on shortName, not routeId: the GTFS set carries raw route ids ("4")
+  // while a MOTIS leg's routeId is feed-prefixed ("5_4"), and the board both
+  // filters and renders by shortName. Comparing ids would duplicate the line.
+  const sn = leg.routeShortName
+  if (!sn || routes.some((r) => r.shortName === sn)) return routes
+  return [
+    {
+      routeId: leg.routeId ?? sn,
+      shortName: sn,
+      longName: leg.routeLongName,
+      color: leg.routeColor,
+      textColor: leg.routeTextColor,
+    },
+    ...routes,
+  ]
+}
+
+/**
+ * Annotate each transit leg with the full set of interchangeable routes that
+ * run its board→…→alight sequence directly. Mutates the legs in place;
+ * memoised per call so repeated sequences across itineraries hit the DB once,
+ * and resilient — any failure leaves the leg unenriched (old behaviour).
+ */
+async function enrichInterchangeableRoutes(itineraries: TransitItinerary[]): Promise<void> {
+  const cache = new Map<string, Promise<InterchangeableRoute[]>>()
+  const tasks: Promise<void>[] = []
+
+  for (const it of itineraries) {
+    for (const leg of it.legs) {
+      if (!leg.transitLeg) continue
+      const ids = [leg.from, ...(leg.intermediateStops ?? []), leg.to]
+        .map((p) => p.stopId)
+        .filter((s): s is string => !!s)
+      if (ids.length < 2) continue
+      const parsed = ids.map(splitMotisStopId)
+      const feedId = parsed[0].feedId
+      // A transit leg shouldn't span feeds; skip if its stops disagree.
+      if (!feedId || parsed.some((p) => p.feedId !== feedId)) continue
+      const rawIds = parsed.map((p) => p.stopId)
+      const key = `${feedId}|${rawIds.join(',')}`
+      let pending = cache.get(key)
+      if (!pending) {
+        pending = getRoutesForStopSequence(feedId, rawIds).catch(() => [])
+        cache.set(key, pending)
+      }
+      tasks.push(
+        pending.then((routes) => {
+          const merged = withSelfRoute(routes, leg)
+          if (merged.length >= 2) leg.interchangeableRoutes = merged
+        }),
+      )
+    }
+  }
+
+  await Promise.all(tasks)
 }
 
 /**

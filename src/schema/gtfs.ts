@@ -105,3 +105,23 @@ export const gtfsStopRoutes = pgTable(
 
 export type GtfsStopRoute = typeof gtfsStopRoutes.$inferSelect
 export type NewGtfsStopRoute = typeof gtfsStopRoutes.$inferInsert
+
+// ── GTFS Trip patterns ──────────────────────────────────────────────
+// One row per distinct (route, direction, ordered station sequence). Stop ids
+// are normalised to the parent station and the sequence stored comma-bounded so
+// a leg's board→alight run matches as a substring (see db.ts for the rationale).
+
+export const gtfsTripPatterns = pgTable(
+  'gtfs_trip_patterns',
+  {
+    id: serial('id').primaryKey(),
+    feedId: text('feed_id').notNull(),
+    routeId: text('route_id').notNull(),
+    directionId: integer('direction_id'),
+    stopSeq: text('stop_seq').notNull(),
+  },
+  (table) => [index('gtfs_trip_patterns_feed_idx').on(table.feedId)],
+)
+
+export type GtfsTripPattern = typeof gtfsTripPatterns.$inferSelect
+export type NewGtfsTripPattern = typeof gtfsTripPatterns.$inferInsert

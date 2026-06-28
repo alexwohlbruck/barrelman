@@ -22,6 +22,10 @@ import {
   parseAgencies,
   parseShapes,
   deriveStopRoutes,
+  parseGtfsRecords,
+  parseStopParents,
+  deriveTripPatterns,
+  importTripPatterns,
   parseTransfers,
   importTransfers,
   deriveRouteShapes,
@@ -295,9 +299,21 @@ async function importFeedFile(filepath: string, feedInfo: GtfsFeedInfo) {
     const tripsContent = await readZipEntry(zip, 'trips.txt')
     const stopTimesContent = await readZipEntry(zip, 'stop_times.txt')
     if (tripsContent && stopTimesContent) {
-      const associations = deriveStopRoutes(tripsContent, stopTimesContent, feedInfo.feedId)
+      // Parse the (large) files once and share the records across both
+      // derivers, rather than re-parsing stop_times.txt per call.
+      const tripRecords = parseGtfsRecords(tripsContent)
+      const stopTimeRecords = parseGtfsRecords(stopTimesContent)
+
+      const associations = deriveStopRoutes(tripRecords, stopTimeRecords, feedInfo.feedId)
       stopRoutesImported = await importStopRoutes(associations)
       console.log(`  ✓ Imported ${stopRoutesImported} stop-route associations`)
+
+      // Trip patterns — the ordered station sequence each route runs, powering
+      // "every line that serves this board→alight directly" alternate lookups.
+      const stopParents = parseStopParents(stopsContent)
+      const patterns = deriveTripPatterns(tripRecords, stopTimeRecords, stopParents, feedInfo.feedId)
+      const patternsImported = await importTripPatterns(feedInfo.feedId, patterns)
+      console.log(`  ✓ Imported ${patternsImported} trip patterns`)
     }
 
     // Agency transfers — station-complex membership + min connection times

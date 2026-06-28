@@ -15,6 +15,8 @@ import {
   parseAgencies,
   parseShapes,
   deriveStopRoutes,
+  parseStopParents,
+  deriveTripPatterns,
   deriveRouteShapes,
   deriveBikesAllowed,
   generateTransfersTxt,
@@ -271,6 +273,79 @@ describe('deriveStopRoutes', () => {
 
     const assocs = deriveStopRoutes(trips, stopTimes, 'feed_1')
     expect(assocs).toHaveLength(0)
+  })
+})
+
+// ── parseStopParents ────────────────────────────────────────────────
+
+describe('parseStopParents', () => {
+  test('maps platforms to their parent station, stations to themselves', () => {
+    const stops = [
+      'stop_id,stop_name,stop_lat,stop_lon,location_type,parent_station',
+      'A,Station A,40.0,-73.0,1,',
+      'A_N,Station A - North,40.0,-73.0,0,A',
+      'A_S,Station A - South,40.0,-73.0,0,A',
+      'B,Bus Stop B,40.1,-73.1,0,', // no parent → itself
+    ].join('\n')
+
+    const map = parseStopParents(stops)
+    expect(map.get('A')).toBe('A')
+    expect(map.get('A_N')).toBe('A')
+    expect(map.get('A_S')).toBe('A')
+    expect(map.get('B')).toBe('B')
+  })
+})
+
+// ── deriveTripPatterns ──────────────────────────────────────────────
+
+describe('deriveTripPatterns', () => {
+  const stops = [
+    'stop_id,stop_name,stop_lat,stop_lon,location_type,parent_station',
+    'A,A,40.0,-73.0,1,',
+    'A_N,A north,40.0,-73.0,0,A',
+    'B,B,40.1,-73.0,1,',
+    'B_N,B north,40.1,-73.0,0,B',
+    'C,C,40.2,-73.0,1,',
+    'C_N,C north,40.2,-73.0,0,C',
+    'D,D,40.3,-73.0,1,',
+    'D_N,D north,40.3,-73.0,0,D',
+  ].join('\n')
+  const parents = parseStopParents(stops)
+
+  test('normalises platforms to stations and dedupes identical patterns', () => {
+    const trips = [
+      'trip_id,route_id,direction_id',
+      'X1,X,0',
+      'X2,X,0', // same sequence as X1 → one pattern
+      'Y1,Y,0',
+      'Z1,Z,0',
+    ].join('\n')
+    // X and Y run EXPRESS A→B→D (skip C); Z runs LOCAL A→B→C→D. Platform ids.
+    const stopTimes = [
+      'trip_id,stop_id,stop_sequence',
+      'X1,A_N,1', 'X1,B_N,2', 'X1,D_N,3',
+      'X2,A_N,1', 'X2,B_N,2', 'X2,D_N,3',
+      'Y1,A_N,1', 'Y1,B_N,2', 'Y1,D_N,3',
+      'Z1,A_N,1', 'Z1,B_N,2', 'Z1,C_N,3', 'Z1,D_N,4',
+    ].join('\n')
+
+    const patterns = deriveTripPatterns(trips, stopTimes, parents, 'feed_1')
+    const byRoute = new Map(patterns.map((p) => [p.routeId, p.stopSeq]))
+
+    // X1/X2 collapse to one pattern; X and Y share the express station sequence.
+    expect(patterns.filter((p) => p.routeId === 'X')).toHaveLength(1)
+    expect(byRoute.get('X')).toBe(',A,B,D,')
+    expect(byRoute.get('Y')).toBe(',A,B,D,')
+    // Z (local) carries the extra station C, so it won't match the express run.
+    expect(byRoute.get('Z')).toBe(',A,B,C,D,')
+
+    // The express run ",A,B,D," is a substring of X and Y but NOT of Z.
+    const expressNeedle = ',A,B,D,'
+    const directExpress = patterns
+      .filter((p) => p.stopSeq.includes(expressNeedle))
+      .map((p) => p.routeId)
+      .sort()
+    expect(directExpress).toEqual(['X', 'Y'])
   })
 })
 

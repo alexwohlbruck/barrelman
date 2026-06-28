@@ -135,6 +135,25 @@ export async function ensureGtfsSchema() {
     CREATE INDEX IF NOT EXISTS gtfs_stop_routes_route_idx
       ON gtfs_stop_routes (feed_id, route_id);
 
+    -- Distinct trip patterns: the ordered station sequence each route runs,
+    -- one row per (route, direction, sequence). Stop ids are normalised to the
+    -- parent station (COALESCE(parent_station, stop_id)) so platform-vs-station
+    -- granularity doesn't matter, and stored as a comma-delimited, comma-bounded
+    -- string so a leg's board→alight run is a plain substring (strpos) match —
+    -- which is inherently direction-correct (the opposite direction is the
+    -- reversed sequence). Powers "every line that runs this segment directly",
+    -- independent of which ones MOTIS happened to surface.
+    CREATE TABLE IF NOT EXISTS gtfs_trip_patterns (
+      id SERIAL PRIMARY KEY,
+      feed_id TEXT NOT NULL,
+      route_id TEXT NOT NULL,
+      direction_id INTEGER,
+      stop_seq TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS gtfs_trip_patterns_feed_idx
+      ON gtfs_trip_patterns (feed_id);
+
     -- Agency-declared transfers (transfers.txt): the authoritative
     -- definition of which stations form one complex (e.g. Times Sq
     -- 1/2/3 <-> N/Q/R/W) and the minimum connection times. Used to
