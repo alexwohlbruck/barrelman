@@ -30,6 +30,12 @@ export interface DepartureRequest {
   feedId?: string
   /** Specific stopId (skip spatial search) */
   stopId?: string
+  /** Keep only departures whose route short name is in this set. Powers the
+   *  merged "4 or 5" departure board — pass the interchangeable routes. */
+  routeShortNames?: string[]
+  /** Keep only departures in this GTFS direction ("0"/"1"). A platform stop
+   *  can return both directions, so the board filters to the rider's way. */
+  directionId?: string
 }
 
 export interface StopDepartures {
@@ -323,7 +329,14 @@ export async function getDepartures(
     n = 50,
     feedId,
     stopId,
+    routeShortNames,
+    directionId,
   } = request
+
+  const routeFilter =
+    routeShortNames && routeShortNames.length
+      ? new Set(routeShortNames)
+      : null
 
   // 1. Determine which stops to query
   let stops: Array<{ feedId: string; stopId: string; name: string; code?: string; lat: number; lng: number; distance?: number }>
@@ -381,7 +394,11 @@ export async function getDepartures(
         timezone,
         distance: stop.distance,
       },
-      departures: transformDepartures(result.stopTimes, colorMap),
+      departures: transformDepartures(result.stopTimes, colorMap).filter(
+        (d) =>
+          (!routeFilter || routeFilter.has(d.route.shortName ?? '')) &&
+          (directionId == null || d.directionId === directionId),
+      ),
       nextPageCursor: result.nextPageCursor,
       previousPageCursor: result.previousPageCursor,
     }

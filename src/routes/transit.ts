@@ -313,6 +313,10 @@ export function createTransitRoutes(deps: {
           n: query.n ? Number(query.n) : undefined,
           feedId: query.feedId || undefined,
           stopId: query.stopId || undefined,
+          routeShortNames: query.routeShortNames
+            ? query.routeShortNames.split(',').map((s) => s.trim()).filter(Boolean)
+            : undefined,
+          directionId: query.directionId || undefined,
         }
 
         return await getDepartures(request, fetchFn)
@@ -332,6 +336,8 @@ export function createTransitRoutes(deps: {
         n: t.Optional(t.String()),
         feedId: t.Optional(t.String()),
         stopId: t.Optional(t.String()),
+        routeShortNames: t.Optional(t.String()),
+        directionId: t.Optional(t.String()),
       }),
       detail: {
         summary: 'Get upcoming departures at nearby stops',

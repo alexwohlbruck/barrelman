@@ -157,6 +157,9 @@ export interface TransitLeg {
   headsign?: string
   /** GTFS route ID */
   routeId?: string
+  /** GTFS direction_id ("0"/"1") — which way the trip runs; used to filter the
+   *  merged departure board to the rider's direction. */
+  directionId?: string
   /** Intermediate stops (between boarding and alighting) */
   intermediateStops?: TransitLegPlace[]
 
@@ -364,6 +367,7 @@ function adaptLeg(leg: any): TransitLeg {
     adapted.tripId = leg.tripId || undefined
     adapted.headsign = leg.headsign || undefined
     adapted.routeId = leg.routeId || undefined
+    adapted.directionId = leg.directionId != null ? String(leg.directionId) : undefined
 
     if (Array.isArray(leg.intermediateStops)) {
       adapted.intermediateStops = leg.intermediateStops.map((s: any) => ({
