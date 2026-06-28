@@ -183,38 +183,64 @@ async function fillParentContext(sql: Sql): Promise<void> {
   `
 }
 
+/**
+ * The tsvector expression. Two language-agnostic normalizations make fuzzy word
+ * search lenient without English-only tricks (keep TS_NORMALIZATION_VERSION in sync):
+ *   - the whole string is apostrophe-stripped, so "Sal's" tokenizes as "sals"
+ *   - "&" expands to a multilingual "and" set (and/et/und/y/e) for ALL names,
+ *     so a query of "joe and sals" matches "Joe & Sal's Pizzeria"
+ * Intersections (osm_type 'X') additionally get road-suffix expansion.
+ */
+function tsExpr(sql: Sql) {
+  return sql`to_tsvector('simple', unaccent(replace(
+    (CASE WHEN osm_type = 'X'
+        THEN replace(replace(replace(replace(replace(replace(replace(
+             replace(replace(replace(replace(replace(replace(
+               coalesce(name, ''), ' & ', ' and et und y e ')
+             , 'Street', 'Street St'), 'Avenue', 'Avenue Ave')
+             , 'Boulevard', 'Boulevard Blvd'), 'Drive', 'Drive Dr')
+             , 'Lane', 'Lane Ln'), 'Road', 'Road Rd')
+             , 'Court', 'Court Ct'), 'Place', 'Place Pl')
+             , 'Circle', 'Circle Cir'), 'Parkway', 'Parkway Pkwy')
+             , 'Highway', 'Highway Hwy'), 'Trail', 'Trail Trl')
+             || ' ' || coalesce(array_to_string(names, ' '), '')
+        ELSE replace(coalesce(name, ''), ' & ', ' and et und y e ')
+    END) || ' ' || coalesce(name_abbrev, '') || ' ' ||
+    coalesce(array_to_string(
+        ARRAY(SELECT replace(replace(unnest(categories), '/', ' '), '_', ' ')),
+    ' '), '') || ' ' ||
+    coalesce(parent_context, '')
+  , chr(39), '')))`
+}
+
+const TS_BATCH = 20000
+
 async function fillTsvectors(sql: Sql, force = false): Promise<void> {
-  // Build the full-text tsvector from name, name_abbrev, categories and
-  // parent_context. Two language-agnostic normalizations make fuzzy word search
-  // lenient without English-only tricks (keep TS_NORMALIZATION_VERSION in sync):
-  //   - the whole string is apostrophe-stripped, so "Sal's" tokenizes as "sals"
-  //   - "&" expands to a multilingual "and" set (and/et/und/y/e) for ALL names,
-  //     so a query of "joe and sals" matches "Joe & Sal's Pizzeria"
-  // Intersections (osm_type 'X') additionally get road-suffix expansion.
-  // force=true rebuilds every named row (e.g. after a normalization change);
-  // otherwise only rows still missing a tsvector are filled.
-  await sql`
-    UPDATE geo_places SET ts = to_tsvector('simple', unaccent(replace(
-        (CASE WHEN osm_type = 'X'
-            THEN replace(replace(replace(replace(replace(replace(replace(
-                 replace(replace(replace(replace(replace(replace(
-                   coalesce(name, ''), ' & ', ' and et und y e ')
-                 , 'Street', 'Street St'), 'Avenue', 'Avenue Ave')
-                 , 'Boulevard', 'Boulevard Blvd'), 'Drive', 'Drive Dr')
-                 , 'Lane', 'Lane Ln'), 'Road', 'Road Rd')
-                 , 'Court', 'Court Ct'), 'Place', 'Place Pl')
-                 , 'Circle', 'Circle Cir'), 'Parkway', 'Parkway Pkwy')
-                 , 'Highway', 'Highway Hwy'), 'Trail', 'Trail Trl')
-                 || ' ' || coalesce(array_to_string(names, ' '), '')
-            ELSE replace(coalesce(name, ''), ' & ', ' and et und y e ')
-        END) || ' ' || coalesce(name_abbrev, '') || ' ' ||
-        coalesce(array_to_string(
-            ARRAY(SELECT replace(replace(unnest(categories), '/', ' '), '_', ' ')),
-        ' '), '') || ' ' ||
-        coalesce(parent_context, '')
-    , chr(39), '')))
-    WHERE name IS NOT NULL ${force ? sql`` : sql`AND ts IS NULL`}
-  `
+  const expr = tsExpr(sql)
+  if (!force) {
+    // Incremental: only rows still missing a tsvector (cheap on a fresh import).
+    await sql`UPDATE geo_places SET ts = ${expr} WHERE name IS NOT NULL AND ts IS NULL`
+    return
+  }
+  // Full rebuild (after a normalization change) — done in id-ordered batches with
+  // a commit per batch. A single giant UPDATE would hold one long transaction that
+  // contends with live search AND, via MVCC, hides the new tsvectors until it
+  // commits; batching keeps search fast and surfaces matches progressively.
+  let lastId = ''
+  for (;;) {
+    const rows = await sql<{ id: string }[]>`
+      WITH b AS (
+        SELECT id FROM geo_places
+        WHERE name IS NOT NULL AND id > ${lastId}
+        ORDER BY id LIMIT ${TS_BATCH}
+      )
+      UPDATE geo_places SET ts = ${expr}
+      FROM b WHERE geo_places.id = b.id
+      RETURNING geo_places.id
+    `
+    if (rows.length === 0) break
+    for (const r of rows) if (r.id > lastId) lastId = r.id
+  }
 }
 
 /**
