@@ -8,12 +8,16 @@
  *
  * Usage:
  *   bun run import/import-gbfs-systems.ts [--country US] [--bbox "-74.3,40.5,-73.7,40.9"]
+ *
+ * When --bbox is omitted it defaults to the unified REGIONS bbox (config/
+ * regions.json via the REGIONS env var); a global selection imports worldwide.
  */
 
 import { parse } from 'csv-parse/sync'
 import { db } from '../src/db'
 import { sql } from 'drizzle-orm'
 import { ensureGbfsSchema } from '../src/db'
+import { resolveRegions } from '../src/config/regions'
 
 // ── CLI args ────────────────────────────────────────────────────────
 
@@ -25,12 +29,18 @@ function getArg(name: string): string | undefined {
 
 const countryFilter = getArg('country')?.toUpperCase()
 const bboxArg = getArg('bbox')
-const bbox = bboxArg
-  ? (() => {
-      const [west, south, east, north] = bboxArg.split(',').map(Number)
-      return { north, south, east, west }
-    })()
-  : null
+let bbox: { north: number; south: number; east: number; west: number } | null = null
+if (bboxArg) {
+  const [west, south, east, north] = bboxArg.split(',').map(Number)
+  bbox = { north, south, east, west }
+} else {
+  // Default to the unified REGIONS bbox; a global selection means no bbox (all).
+  const r = resolveRegions()
+  if (!r.isGlobal) {
+    const [west, south, east, north] = r.bbox
+    bbox = { north, south, east, west }
+  }
+}
 
 console.log('GBFS Systems Importer')
 console.log(`  Country filter: ${countryFilter || 'none (all countries)'}`)

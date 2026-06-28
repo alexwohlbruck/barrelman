@@ -18,7 +18,8 @@ set -euo pipefail
 # =============================================================================
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-ENV_FILE="$(dirname "$SCRIPT_DIR")/.env"
+PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+ENV_FILE="$PROJECT_DIR/.env"
 
 # Load .env if present
 if [ -f "$ENV_FILE" ]; then
@@ -28,12 +29,20 @@ fi
 DB_PASS="${BARRELMAN_DB_PASSWORD:-barrelman}"
 DB_URL="postgresql://barrelman:${DB_PASS}@localhost:5432/barrelman"
 
+# Resolve which OSM extracts to import from the unified REGIONS config.
+# REGIONS selects the regions (default dev: north-carolina,nyc-metro; prod: global).
+# Falls back to the single GEOFABRIK_URL if the resolver is unavailable.
+OSM_EXTRACTS="$(cd "$PROJECT_DIR" && bun run src/config/regions.ts osm-extracts 2>/dev/null | tr '\n' ' ' || true)"
+
 echo "Starting full OSM import pipeline..."
+echo "  Regions: ${REGIONS:-north-carolina,nyc-metro}"
+echo "  OSM extracts: ${OSM_EXTRACTS:-$GEOFABRIK_URL}"
 echo ""
 
 docker exec \
   -e DATABASE_URL="$DB_URL" \
   -e GEOFABRIK_URL="${GEOFABRIK_URL:-https://download.geofabrik.de/north-america/us/north-carolina-latest.osm.pbf}" \
+  ${OSM_EXTRACTS:+-e OSM_EXTRACTS="$OSM_EXTRACTS"} \
   ${IMPORT_PBF:+-e IMPORT_PBF="$IMPORT_PBF"} \
   barrelman-db bash /app/scripts/import-osm.sh
 

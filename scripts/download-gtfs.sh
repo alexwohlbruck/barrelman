@@ -3,15 +3,20 @@
 # Download GTFS feeds from Transitland and import into Barrelman.
 #
 # Usage:
-#   GTFS_REGION=nc TRANSITLAND_API_KEY=tlk_xxx ./scripts/download-gtfs.sh
+#   TRANSITLAND_API_KEY=tlk_xxx ./scripts/download-gtfs.sh
+#   REGIONS=global TRANSITLAND_API_KEY=tlk_xxx ./scripts/download-gtfs.sh
 #
 # Environment:
-#   GTFS_REGION         - "nc" (dev) or "global" (prod). Default: nc
+#   REGIONS              - Region keys driving the whole pipeline (default dev:
+#                          north-carolina,nyc-metro; prod: global). The GTFS
+#                          region tokens are resolved from config/regions.json.
+#   GTFS_REGION          - Optional override of a single GTFS region token,
+#                          bypassing the REGIONS config.
 #   TRANSITLAND_API_KEY  - Required. Get one at https://transit.land/users/sign_up
-#   GTFS_DATA_DIR        - Output directory for GTFS ZIPs. Default: /data/gtfs (Docker) or ./data/gtfs (local)
+#   GTFS_DATA_DIR        - Output directory for GTFS ZIPs. Default: ./data/gtfs
 #   MOTIS_URL            - MOTIS base URL for reload. Default: http://localhost:8080
 #
-# The script:
+# The script (per resolved region):
 #   1. Fetches the feed list from Transitland API
 #   2. Downloads each GTFS ZIP
 #   3. Runs the Bun import script to parse and load stops/routes into PostGIS
@@ -20,7 +25,6 @@
 #
 set -euo pipefail
 
-REGION="${GTFS_REGION:-nc}"
 API_KEY="${TRANSITLAND_API_KEY:-}"
 DATA_DIR="${GTFS_DATA_DIR:-./data/gtfs}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -32,21 +36,29 @@ if [[ -z "$API_KEY" ]]; then
   exit 1
 fi
 
+cd "$PROJECT_DIR"
+
+# Resolve GTFS region tokens from the unified REGIONS config, unless a single
+# GTFS_REGION override is given.
+if [[ -n "${GTFS_REGION:-}" ]]; then
+  REGIONS_LIST=("$GTFS_REGION")
+else
+  read -ra REGIONS_LIST <<< "$(bun run src/config/regions.ts gtfs-regions | tr '\n' ' ')"
+fi
+
 echo "=== GTFS Download Pipeline ==="
-echo "Region: $REGION"
+echo "Regions: ${REGIONS_LIST[*]}"
 echo "Output: $DATA_DIR"
 echo ""
 
 mkdir -p "$DATA_DIR"
 
-# Run the Bun import script which handles:
-# - Fetching feed list from Transitland
-# - Downloading GTFS ZIPs
-# - Parsing and importing stops/routes into PostGIS
-# - Computing walking transfers
-# - Generating transfers.txt
-cd "$PROJECT_DIR"
-exec bun run src/import/import-gtfs.ts \
-  --region "$REGION" \
-  --api-key "$API_KEY" \
-  --output-dir "$DATA_DIR"
+# Run the Bun import script per region (fetch feed list, download ZIPs, import
+# stops/routes into PostGIS, compute walking transfers, generate transfers.txt).
+for region in "${REGIONS_LIST[@]}"; do
+  echo "── GTFS region: $region ──────────────────────────────"
+  bun run src/import/import-gtfs.ts \
+    --region "$region" \
+    --api-key "$API_KEY" \
+    --output-dir "$DATA_DIR"
+done

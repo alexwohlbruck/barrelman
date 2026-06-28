@@ -31,13 +31,33 @@ DATABASE_URL="${DATABASE_URL:?DATABASE_URL is required}"
 
 mkdir -p "$DATA_DIR"
 
-# ── Step 1: Download PBF ─────────────────────────────────────────────────────
-if [ ! -f "$PBF_FILE" ]; then
-    echo "[$(date '+%H:%M:%S')] [1/8] Downloading PBF from $GEOFABRIK_URL..."
-    wget -q --show-progress -O "$PBF_FILE" "$GEOFABRIK_URL"
+# ── Step 1: Download PBF(s) ──────────────────────────────────────────────────
+# OSM_EXTRACTS (space/newline-separated URLs, resolved from the unified REGIONS
+# config by run-import.sh) takes precedence over the single legacy GEOFABRIK_URL.
+# Multiple extracts are downloaded and merged (deduped by OSM id) with osmium
+# into one region.osm.pbf, so dev can combine e.g. NC + NY + NJ + CT.
+read -ra EXTRACTS <<< "${OSM_EXTRACTS:-$GEOFABRIK_URL}"
+
+if [ -f "$PBF_FILE" ] && [ "${FORCE_DOWNLOAD:-0}" != "1" ]; then
+    echo "[$(date '+%H:%M:%S')] [1/8] Using existing PBF: $PBF_FILE ($(du -h "$PBF_FILE" | cut -f1))"
+elif [ "${#EXTRACTS[@]}" -le 1 ]; then
+    echo "[$(date '+%H:%M:%S')] [1/8] Downloading PBF from ${EXTRACTS[0]}..."
+    wget -q --show-progress -O "$PBF_FILE" "${EXTRACTS[0]}"
     echo "  Downloaded: $(du -h "$PBF_FILE" | cut -f1)"
 else
-    echo "[$(date '+%H:%M:%S')] [1/8] Using existing PBF: $PBF_FILE ($(du -h "$PBF_FILE" | cut -f1))"
+    echo "[$(date '+%H:%M:%S')] [1/8] Downloading ${#EXTRACTS[@]} extracts and merging with osmium..."
+    PARTS=()
+    idx=0
+    for url in "${EXTRACTS[@]}"; do
+        part="$DATA_DIR/extract-$idx.osm.pbf"
+        echo "  - $url"
+        wget -q --show-progress -O "$part" "$url"
+        PARTS+=("$part")
+        idx=$((idx + 1))
+    done
+    osmium merge --overwrite -o "$PBF_FILE" "${PARTS[@]}"
+    rm -f "${PARTS[@]}"
+    echo "  Merged: $(du -h "$PBF_FILE" | cut -f1)"
 fi
 
 # ── Step 2: osm2pgsql import ─────────────────────────────────────────────────
