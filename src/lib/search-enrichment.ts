@@ -36,6 +36,12 @@ const ENRICHMENT_LOCK_KEY = 0x5ea2c4
 // Re-run enrichment if the live row count drifts from the marker by more than this
 // fraction (catches a fresh/raw re-import that left columns unfilled).
 const REIMPORT_DRIFT = 0.1
+// Bump when the tsvector normalization in fillTsvectors changes, so an already-
+// enriched database rebuilds its `ts` column on the next startup.
+//   v2: strip apostrophes ("Sal's"→"sals") + expand "&" to a multilingual "and"
+//       for ALL names (was intersections only), so "joe and sals" matches
+//       "Joe & Sal's Pizzeria".
+const TS_NORMALIZATION_VERSION = 2
 
 type Sql = ReturnType<typeof postgres>
 
@@ -46,29 +52,40 @@ async function rowEstimate(sql: Sql): Promise<number> {
   return Number(rows[0]?.n ?? 0)
 }
 
-/** Cheap gate: has enrichment already completed for the current dataset? */
-async function alreadyEnriched(sql: Sql, estimate: number): Promise<boolean> {
+interface Marker {
+  /** Whether a full enrichment pass has completed for the current dataset. */
+  fresh: boolean
+  /** ts normalization version baked into the current `ts` column. */
+  tsVersion: number
+}
+
+/** Read the enrichment marker: is the dataset enriched, and at what ts version? */
+async function readMarker(sql: Sql, estimate: number): Promise<Marker> {
   await sql`
     CREATE TABLE IF NOT EXISTS search_enrichment_state (
       id integer PRIMARY KEY DEFAULT 1 CHECK (id = 1),
       completed_at timestamptz,
-      row_estimate bigint
+      row_estimate bigint,
+      ts_version integer DEFAULT 0
     )
   `
-  const rows = await sql<{ completed_at: string | null; row_estimate: number | null }[]>`
-    SELECT completed_at, row_estimate FROM search_enrichment_state WHERE id = 1
+  await sql`ALTER TABLE search_enrichment_state ADD COLUMN IF NOT EXISTS ts_version integer DEFAULT 0`
+  const rows = await sql<{ completed_at: string | null; row_estimate: number | null; ts_version: number | null }[]>`
+    SELECT completed_at, row_estimate, ts_version FROM search_enrichment_state WHERE id = 1
   `
-  const marker = rows[0]
-  if (!marker?.completed_at || !marker.row_estimate) return false
-  const drift = Math.abs(estimate - Number(marker.row_estimate)) / Number(marker.row_estimate)
-  return drift <= REIMPORT_DRIFT
+  const m = rows[0]
+  const drift = m?.row_estimate ? Math.abs(estimate - Number(m.row_estimate)) / Number(m.row_estimate) : 1
+  return {
+    fresh: Boolean(m?.completed_at) && drift <= REIMPORT_DRIFT,
+    tsVersion: Number(m?.ts_version ?? 0),
+  }
 }
 
 async function markEnriched(sql: Sql, estimate: number): Promise<void> {
   await sql`
-    INSERT INTO search_enrichment_state (id, completed_at, row_estimate)
-    VALUES (1, NOW(), ${estimate})
-    ON CONFLICT (id) DO UPDATE SET completed_at = NOW(), row_estimate = ${estimate}
+    INSERT INTO search_enrichment_state (id, completed_at, row_estimate, ts_version)
+    VALUES (1, NOW(), ${estimate}, ${TS_NORMALIZATION_VERSION})
+    ON CONFLICT (id) DO UPDATE SET completed_at = NOW(), row_estimate = ${estimate}, ts_version = ${TS_NORMALIZATION_VERSION}
   `
 }
 
@@ -166,12 +183,19 @@ async function fillParentContext(sql: Sql): Promise<void> {
   `
 }
 
-async function fillTsvectors(sql: Sql): Promise<void> {
-  // Build the full-text tsvector from name (+ intersection suffix expansion),
-  // name_abbrev, categories and parent_context. Only fills rows missing it.
+async function fillTsvectors(sql: Sql, force = false): Promise<void> {
+  // Build the full-text tsvector from name, name_abbrev, categories and
+  // parent_context. Two language-agnostic normalizations make fuzzy word search
+  // lenient without English-only tricks (keep TS_NORMALIZATION_VERSION in sync):
+  //   - the whole string is apostrophe-stripped, so "Sal's" tokenizes as "sals"
+  //   - "&" expands to a multilingual "and" set (and/et/und/y/e) for ALL names,
+  //     so a query of "joe and sals" matches "Joe & Sal's Pizzeria"
+  // Intersections (osm_type 'X') additionally get road-suffix expansion.
+  // force=true rebuilds every named row (e.g. after a normalization change);
+  // otherwise only rows still missing a tsvector are filled.
   await sql`
-    UPDATE geo_places SET ts = to_tsvector('simple', unaccent(
-        CASE WHEN osm_type = 'X'
+    UPDATE geo_places SET ts = to_tsvector('simple', unaccent(replace(
+        (CASE WHEN osm_type = 'X'
             THEN replace(replace(replace(replace(replace(replace(replace(
                  replace(replace(replace(replace(replace(replace(
                    coalesce(name, ''), ' & ', ' and et und y e ')
@@ -182,14 +206,14 @@ async function fillTsvectors(sql: Sql): Promise<void> {
                  , 'Circle', 'Circle Cir'), 'Parkway', 'Parkway Pkwy')
                  , 'Highway', 'Highway Hwy'), 'Trail', 'Trail Trl')
                  || ' ' || coalesce(array_to_string(names, ' '), '')
-            ELSE coalesce(name, '')
-        END || ' ' || coalesce(name_abbrev, '') || ' ' ||
+            ELSE replace(coalesce(name, ''), ' & ', ' and et und y e ')
+        END) || ' ' || coalesce(name_abbrev, '') || ' ' ||
         coalesce(array_to_string(
             ARRAY(SELECT replace(replace(unnest(categories), '/', ' '), '_', ' ')),
         ' '), '') || ' ' ||
         coalesce(parent_context, '')
-    ))
-    WHERE name IS NOT NULL AND ts IS NULL
+    , chr(39), '')))
+    WHERE name IS NOT NULL ${force ? sql`` : sql`AND ts IS NULL`}
   `
 }
 
@@ -205,7 +229,9 @@ export async function ensureSearchEnrichment(): Promise<void> {
   try {
     const estimate = await rowEstimate(sql)
     if (estimate === 0) return // table empty / not imported yet
-    if (await alreadyEnriched(sql, estimate)) return
+    let marker = await readMarker(sql, estimate)
+    // Already fully enriched at the current ts normalization → nothing to do.
+    if (marker.fresh && marker.tsVersion >= TS_NORMALIZATION_VERSION) return
 
     const [{ locked }] = await sql<{ locked: boolean }[]>`
       SELECT pg_try_advisory_lock(${ENRICHMENT_LOCK_KEY}) AS locked
@@ -214,19 +240,26 @@ export async function ensureSearchEnrichment(): Promise<void> {
 
     try {
       // Re-check under the lock in case another instance just finished.
-      if (await alreadyEnriched(sql, estimate)) return
+      marker = await readMarker(sql, estimate)
+      if (marker.fresh && marker.tsVersion >= TS_NORMALIZATION_VERSION) return
 
-      console.log('[search-enrichment] Backfilling derived search columns (one-time)…')
       const t0 = Date.now()
-
-      console.log('[search-enrichment] codes…')
-      await fillCodes(sql)
-      console.log('[search-enrichment] name_abbrev…')
-      await fillNameAbbrev(sql)
-      console.log('[search-enrichment] parent_context…')
-      await fillParentContext(sql)
-      console.log('[search-enrichment] tsvectors…')
-      await fillTsvectors(sql)
+      if (!marker.fresh) {
+        // Full backfill (fresh / re-imported database).
+        console.log('[search-enrichment] Backfilling derived search columns (one-time)…')
+        console.log('[search-enrichment] codes…')
+        await fillCodes(sql)
+        console.log('[search-enrichment] name_abbrev…')
+        await fillNameAbbrev(sql)
+        console.log('[search-enrichment] parent_context…')
+        await fillParentContext(sql)
+        console.log('[search-enrichment] tsvectors…')
+        await fillTsvectors(sql)
+      } else {
+        // Data is enriched but the tsvector normalization changed — rebuild ts.
+        console.log(`[search-enrichment] Rebuilding tsvectors for normalization v${TS_NORMALIZATION_VERSION}…`)
+        await fillTsvectors(sql, true)
+      }
 
       await sql`ANALYZE geo_places`
       await markEnriched(sql, estimate)

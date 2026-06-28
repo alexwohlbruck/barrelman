@@ -39,7 +39,9 @@ export async function searchPlaces({
   const cached = searchCache.get(cacheKey)
   if (cached) return cached
 
-  const sanitizedQuery = query?.replace(/[^\w\s\-'\.]/g, ' ').trim() || ''
+  // Strip apostrophes ("sal's" → "sals") to mirror the tsvector normalization,
+  // then replace remaining punctuation with spaces.
+  const sanitizedQuery = query?.replace(/['’]/g, '').replace(/[^\w\s\-.]/g, ' ').trim() || ''
   const hasQuery = sanitizedQuery.length > 0
   const hasPointLocation = lat != null && lng != null
   const hasRoute = route != null
