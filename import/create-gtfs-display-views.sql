@@ -43,7 +43,9 @@ SELECT
   st.id                                 AS fid,
   st.feed_id,
   st.stop_id,
-  COALESCE(st.stop_name, '')            AS stop_name,
+  -- Prefer the conflated OSM name when matched, else the GTFS name (which
+  -- already carries any manual override applied by applyDisplayOverrides).
+  COALESCE(NULLIF(st.osm_name, ''), st.stop_name, '') AS stop_name,
   COALESCE(st.location_type, 0)         AS location_type,
   COALESCE(st.parent_station, '')       AS parent_station,
   COALESCE(st.wheelchair_boarding, 0)   AS wheelchair_boarding,

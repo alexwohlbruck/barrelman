@@ -203,6 +203,11 @@ export async function ensureGtfsSchema() {
     -- bikes_allowed: 0=unknown, 1=at least one bike-allowed trip,
     -- 2=all trips allow bikes. Derived from trips.txt bikes_allowed field.
     ALTER TABLE gtfs_routes ADD COLUMN IF NOT EXISTS bikes_allowed INTEGER DEFAULT 0;
+
+    -- osm_name: the name of the nearest matching OSM transit stop, used to
+    -- override ugly/abbreviated GTFS stop_name in the display layer. Populated
+    -- by import/backfill-osm-stop-names.sql (spatial join over geo_places).
+    ALTER TABLE gtfs_stops ADD COLUMN IF NOT EXISTS osm_name TEXT;
   `))
 }
 
