@@ -50,11 +50,15 @@ SELECT
   COALESCE(rc.route_count, 0)           AS route_count,
   COALESCE(rc.route_color, '')          AS route_color,
   COALESCE(rc.route_text_color, '')     AS route_text_color,
+  -- is_rail: served by any non-bus route (tram/subway/rail/ferry/etc). Lets the
+  -- client show rail stops prominently and bus-only stops faint + high-zoom.
+  COALESCE(rc.is_rail, false)           AS is_rail,
   st.geom
 FROM gtfs_stops st
 LEFT JOIN LATERAL (
   SELECT
     count(DISTINCT r.route_id) AS route_count,
+    bool_or(r.route_type NOT IN (3, 11)) AS is_rail,
     CASE WHEN count(DISTINCT r.route_id) = 1
          THEN max(COALESCE(r.route_color, '')) ELSE '' END AS route_color,
     CASE WHEN count(DISTINCT r.route_id) = 1
