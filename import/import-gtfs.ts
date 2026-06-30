@@ -10,11 +10,12 @@
  */
 
 import { parseArgs } from 'util'
-import { existsSync, mkdirSync, writeFileSync, readdirSync } from 'fs'
+import { existsSync, mkdirSync, writeFileSync, readdirSync, readFileSync } from 'fs'
 import { join, basename } from 'path'
 import JSZip from 'jszip'
+import { sql } from 'drizzle-orm'
 import { injectFaresV2 } from './inject-fares-v2'
-import { ensureGtfsSchema } from '../src/db'
+import { ensureGtfsSchema, db } from '../src/db'
 import {
   fetchFeedList,
   parseStops,
@@ -245,6 +246,21 @@ async function main() {
     }
   } catch (err) {
     console.error(`✗ Failed to generate MOTIS config: ${err instanceof Error ? err.message : err}`)
+  }
+
+  // Step 6: (Re)create GTFS display views so Martin can serve route/stop tiles
+  // from the freshly imported data (import/create-gtfs-display-views.sql).
+  console.log('\n=== Creating GTFS Display Views ===')
+  try {
+    const viewsSql = readFileSync(
+      join(import.meta.dir, 'create-gtfs-display-views.sql'),
+      'utf8',
+    )
+    await db.execute(sql.raw(viewsSql))
+    console.log('✓ transit_routes / transit_stops views ready')
+    console.log('  Restart Martin to pick up view changes: docker compose restart martin')
+  } catch (err) {
+    console.error(`✗ Failed to create display views: ${err instanceof Error ? err.message : err}`)
   }
 
   console.log('\n=== Import Complete ===')

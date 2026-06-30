@@ -212,3 +212,45 @@ postgres:
         operator: operator
       buffer: 64
       clip_geom: true
+
+    # GTFS display layer (self-hosted, replaces hosted Transitland tiles).
+    # Routes drawn along their canonical shape geometry; offsets/bundling come
+    # in Stage 4 (LOOM). Source view: import/create-gtfs-display-views.sql.
+    transit_routes:
+      schema: public
+      table: transit_routes
+      srid: 4326
+      geometry_column: geom
+      geometry_type: LINESTRING
+      id_column: fid
+      minzoom: 6
+      maxzoom: 16
+      properties:
+        feed_id: feed_id
+        route_id: route_id
+        route_type: route_type
+        route_color: route_color
+        route_text_color: route_text_color
+        route_short_name: route_short_name
+        route_long_name: route_long_name
+      buffer: 128
+      clip_geom: true
+
+    transit_stops:
+      schema: public
+      table: transit_stops
+      srid: 4326
+      geometry_column: geom
+      geometry_type: POINT
+      id_column: fid
+      minzoom: 11
+      maxzoom: 16
+      properties:
+        feed_id: feed_id
+        stop_id: stop_id
+        stop_name: stop_name
+        location_type: location_type
+        parent_station: parent_station
+        wheelchair_boarding: wheelchair_boarding
+      buffer: 64
+      clip_geom: true
