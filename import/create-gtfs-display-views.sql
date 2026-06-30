@@ -30,7 +30,13 @@ JOIN gtfs_shapes s
   ON s.feed_id = r.feed_id AND s.shape_id = r.shape_id
 WHERE s.geom IS NOT NULL;
 
--- Stops: boardable stops (location_type 0) and stations (location_type 1).
+-- Stops: boardable stops (location_type 0) and stations (location_type 1),
+-- enriched with the serving routes so the client can colour each stop:
+--   route_count = 1 ⇒ colour the dot by route_color
+--   route_count > 1 ⇒ interchange ⇒ white connecting bar (route_color empty)
+-- The hosted Transitland stop tiles never carried route colour; ours do.
+-- LATERAL (not a window function) keeps the per-tile envelope filter pushable
+-- into the gtfs_stops GiST scan.
 DROP VIEW IF EXISTS transit_stops CASCADE;
 CREATE VIEW transit_stops AS
 SELECT
@@ -41,7 +47,21 @@ SELECT
   COALESCE(st.location_type, 0)         AS location_type,
   COALESCE(st.parent_station, '')       AS parent_station,
   COALESCE(st.wheelchair_boarding, 0)   AS wheelchair_boarding,
+  COALESCE(rc.route_count, 0)           AS route_count,
+  COALESCE(rc.route_color, '')          AS route_color,
+  COALESCE(rc.route_text_color, '')     AS route_text_color,
   st.geom
 FROM gtfs_stops st
+LEFT JOIN LATERAL (
+  SELECT
+    count(DISTINCT r.route_id) AS route_count,
+    CASE WHEN count(DISTINCT r.route_id) = 1
+         THEN max(COALESCE(r.route_color, '')) ELSE '' END AS route_color,
+    CASE WHEN count(DISTINCT r.route_id) = 1
+         THEN max(COALESCE(r.route_text_color, '')) ELSE '' END AS route_text_color
+  FROM gtfs_stop_routes sr
+  JOIN gtfs_routes r ON r.feed_id = sr.feed_id AND r.route_id = sr.route_id
+  WHERE sr.feed_id = st.feed_id AND sr.stop_id = st.stop_id
+) rc ON TRUE
 WHERE st.geom IS NOT NULL
   AND COALESCE(st.location_type, 0) IN (0, 1);

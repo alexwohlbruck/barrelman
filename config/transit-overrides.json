@@ -1,0 +1,12 @@
+{
+  "_comment": "Manual per-feed overrides applied during GTFS import (and via import/apply-overrides.ts for already-imported feeds). Display overrides (route_color/route_text_color/route_long_name/route_short_name, stop_name) patch the DB after import and are display-only — they do NOT change the GTFS ZIP, so MOTIS routing is unaffected. Feeds are keyed by gtfs feed_id OR onestop_id. route_type overrides (which must also reach MOTIS/pfaedle) are handled separately by rewriting the ZIP, not here.",
+  "feeds": {
+    "886": {
+      "_name": "Charlotte Area Transit System (CATS)",
+      "routes": {
+        "501": { "_name": "LYNX Blue Line", "route_color": "0072CE", "route_text_color": "FFFFFF" },
+        "510": { "_name": "CityLYNX Gold Line", "route_color": "C8A227", "route_text_color": "FFFFFF" }
+      }
+    }
+  }
+}

@@ -18,6 +18,8 @@
 import { db } from '../db'
 import { sql } from 'drizzle-orm'
 import { parse } from 'csv-parse/sync'
+import { readFileSync } from 'fs'
+import { join } from 'path'
 import { type FetchFn } from './transit.service'
 
 // ── Types ───────────────────────────────────────────────────────────
@@ -1122,6 +1124,85 @@ export async function recordFeed(feed: GtfsFeedInfo, stopCount: number, routeCou
       rt_urls = EXCLUDED.rt_urls,
       imported_at = NOW()
   `))
+}
+
+// ── Display overrides ───────────────────────────────────────────────
+// Manual per-feed patches (config/transit-overrides.json) for data the agency
+// publishes badly or not at all — e.g. CATS doesn't provide route_color for its
+// Blue/Gold lines. Display-only: patches the DB rows, never the GTFS ZIP, so
+// MOTIS routing is untouched. route_type overrides (which MOTIS/pfaedle also
+// need) are handled separately by rewriting the ZIP.
+
+interface RouteOverride {
+  route_color?: string
+  route_text_color?: string
+  route_long_name?: string
+  route_short_name?: string
+}
+interface FeedOverride {
+  routes?: Record<string, RouteOverride>
+  stops?: Record<string, { stop_name?: string }>
+}
+
+let overridesCache: Record<string, FeedOverride> | null = null
+
+/** Load and cache config/transit-overrides.json (its `feeds` map). */
+function loadTransitOverrides(): Record<string, FeedOverride> {
+  if (overridesCache) return overridesCache
+  try {
+    const path = join(import.meta.dir, '../../config/transit-overrides.json')
+    const raw = JSON.parse(readFileSync(path, 'utf8'))
+    overridesCache = (raw.feeds ?? {}) as Record<string, FeedOverride>
+  } catch {
+    overridesCache = {}
+  }
+  return overridesCache
+}
+
+/** Override block for a feed, matched by feed_id or onestop_id. */
+function getFeedOverride(feed: GtfsFeedInfo): FeedOverride | undefined {
+  const all = loadTransitOverrides()
+  return all[feed.feedId] ?? all[feed.onestopId]
+}
+
+/**
+ * Apply DISPLAY overrides (route colours/names, stop names) for a feed by
+ * patching the DB rows. Idempotent; safe to re-run after every import. Returns
+ * the number of route/stop rows patched.
+ */
+export async function applyDisplayOverrides(feed: GtfsFeedInfo): Promise<number> {
+  const ov = getFeedOverride(feed)
+  if (!ov) return 0
+  const feedId = feed.feedId.replace(/'/g, "''")
+  const esc = (v: string) => v.replace(/'/g, "''")
+  let n = 0
+
+  for (const [routeId, r] of Object.entries(ov.routes ?? {})) {
+    const sets: string[] = []
+    if (r.route_color != null) sets.push(`route_color = '${esc(r.route_color)}'`)
+    if (r.route_text_color != null) sets.push(`route_text_color = '${esc(r.route_text_color)}'`)
+    if (r.route_long_name != null) sets.push(`route_long_name = '${esc(r.route_long_name)}'`)
+    if (r.route_short_name != null) sets.push(`route_short_name = '${esc(r.route_short_name)}'`)
+    if (!sets.length) continue
+    await db.execute(sql.raw(
+      `UPDATE gtfs_routes SET ${sets.join(', ')} WHERE feed_id = '${feedId}' AND route_id = '${esc(routeId)}'`,
+    ))
+    n++
+  }
+
+  for (const [stopId, s] of Object.entries(ov.stops ?? {})) {
+    if (s.stop_name == null) continue
+    await db.execute(sql.raw(
+      `UPDATE gtfs_stops SET stop_name = '${esc(s.stop_name)}' WHERE feed_id = '${feedId}' AND stop_id = '${esc(stopId)}'`,
+    ))
+    n++
+  }
+  return n
+}
+
+/** Feed ids that have a display-override block (for batch backfill). */
+export function getOverriddenFeedIds(): string[] {
+  return Object.keys(loadTransitOverrides())
 }
 
 /**

@@ -38,6 +38,7 @@ import {
   updateRouteShapes,
   updateBikesAllowed,
   recordFeed,
+  applyDisplayOverrides,
   clearFeed,
   computeAllTransfers,
   generateTransfersTxt,
@@ -366,6 +367,12 @@ async function importFeedFile(filepath: string, feedInfo: GtfsFeedInfo) {
 
     // Record feed in tracking table
     await recordFeed(feedInfo, stopsImported, routesImported)
+
+    // Apply manual display overrides (route colors/names, stop names)
+    const overridden = await applyDisplayOverrides(feedInfo)
+    if (overridden > 0) {
+      console.log(`  ✓ Applied ${overridden} display override(s)`)
+    }
   } catch (err) {
     console.error(`  ✗ Import error: ${err instanceof Error ? err.message : err}`)
   }

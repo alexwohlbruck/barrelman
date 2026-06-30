@@ -24,5 +24,6 @@ services:
     volumes:
       - ./src:/app/src
       - ./import:/app/import
+      - ./config:/app/config
       - ./data:/data
       - /app/node_modules
