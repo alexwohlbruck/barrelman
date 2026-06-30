@@ -188,6 +188,14 @@ export async function ensureGtfsSchema() {
     CREATE INDEX IF NOT EXISTS gtfs_shapes_feed_id_idx
       ON gtfs_shapes (feed_id);
 
+    -- Materialized LineString geometry derived from the coordinates JSONB
+    -- (populated in importShapes and the backfill-shape-geom script). Lets the
+    -- transit display layer run PostGIS spatial ops + ST_AsMVT tile generation
+    -- without parsing JSONB per query. Degenerate shapes (<2 points) stay NULL.
+    ALTER TABLE gtfs_shapes ADD COLUMN IF NOT EXISTS geom geometry(LineString, 4326);
+    CREATE INDEX IF NOT EXISTS gtfs_shapes_geom_idx
+      ON gtfs_shapes USING GIST (geom);
+
     -- Add shape_id column to routes (most common shape for each route,
     -- derived from trips.txt during import).
     ALTER TABLE gtfs_routes ADD COLUMN IF NOT EXISTS shape_id TEXT;

@@ -773,7 +773,32 @@ export async function importShapes(
     imported += chunk.length
   }
 
+  // Materialize LineString geometry from the coordinate arrays so PostGIS
+  // spatial ops + ST_AsMVT tiles don't have to parse JSONB per query.
+  // Degenerate shapes (<2 points) keep geom NULL.
+  await populateShapeGeom(feedId)
+
   return imported
+}
+
+/**
+ * (Re)compute the `geom` LineString column from the `coordinates` JSONB for a
+ * feed (or all feeds when feedId is omitted). Idempotent. Degenerate shapes
+ * (<2 points) are left NULL — a LineString needs at least two vertices.
+ */
+export async function populateShapeGeom(feedId?: string): Promise<void> {
+  const where = feedId
+    ? `feed_id = '${feedId.replace(/'/g, "''")}' AND `
+    : ''
+  await db.execute(sql.raw(`
+    UPDATE gtfs_shapes
+    SET geom = ST_SetSRID(
+      ST_GeomFromGeoJSON(
+        jsonb_build_object('type', 'LineString', 'coordinates', coordinates)::text
+      ), 4326)
+    WHERE ${where}jsonb_array_length(coordinates) >= 2
+      AND geom IS NULL
+  `))
 }
 
 /**
