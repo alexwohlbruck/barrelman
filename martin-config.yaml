@@ -242,7 +242,7 @@ postgres:
       table: transit_lines_offset
       srid: 4326
       geometry_column: geom
-      geometry_type: GEOMETRY
+      geometry_type: LINESTRING
       id_column: fid
       minzoom: 8
       maxzoom: 16
@@ -250,9 +250,9 @@ postgres:
         feed_id: feed_id
         route_id: route_id
         route_short_name: route_short_name
+        route_short_names: route_short_names
         route_type: route_type
         route_color: route_color
-        route_text_color: route_text_color
         slot: slot
         line_count: line_count
       buffer: 128
