@@ -213,6 +213,42 @@ postgres:
       buffer: 64
       clip_geom: true
 
+    transit_elevators:
+      schema: public
+      table: transit_elevators
+      srid: 4326
+      geometry_column: centroid
+      geometry_type: POINT
+      id_column: fid
+      bounds: [-84.0, 33.0, -73.0, 42.0]
+      minzoom: 15
+      maxzoom: 16
+      properties:
+        id: id
+        name: name
+        level: level
+        wheelchair: wheelchair
+      buffer: 64
+      clip_geom: true
+
+    transit_stairs:
+      schema: public
+      table: transit_stairs
+      srid: 4326
+      geometry_column: geom
+      geometry_type: GEOMETRY
+      id_column: fid
+      bounds: [-84.0, 33.0, -73.0, 42.0]
+      minzoom: 16
+      maxzoom: 16
+      properties:
+        id: id
+        name: name
+        geom_type: geom_type
+        incline: incline
+      buffer: 64
+      clip_geom: true
+
     # GTFS display layer (self-hosted, replaces hosted Transitland tiles).
     # Routes drawn along their canonical shape geometry; offsets/bundling come
     # in Stage 4 (LOOM). Source view: import/create-gtfs-display-views.sql.
