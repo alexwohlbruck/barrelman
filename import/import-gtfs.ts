@@ -336,7 +336,17 @@ async function importFeedFile(filepath: string, feedInfo: GtfsFeedInfo) {
       const tripRecords = parseGtfsRecords(tripsContent)
       const stopTimeRecords = parseGtfsRecords(stopTimesContent)
 
-      const associations = deriveStopRoutes(tripRecords, stopTimeRecords, feedInfo.feedId)
+      // calendar drives the weekday-daytime "regular service" trip counts that
+      // gate which routes a station actually shows (see deriveStopRoutes).
+      const calendarContent = await readZipEntry(zip, 'calendar.txt')
+      const calendarDatesContent = await readZipEntry(zip, 'calendar_dates.txt')
+      const associations = deriveStopRoutes(
+        tripRecords,
+        stopTimeRecords,
+        feedInfo.feedId,
+        calendarContent ?? undefined,
+        calendarDatesContent ?? undefined,
+      )
       stopRoutesImported = await importStopRoutes(associations)
       console.log(`  ✓ Imported ${stopRoutesImported} stop-route associations`)
 

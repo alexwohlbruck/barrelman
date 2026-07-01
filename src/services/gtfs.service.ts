@@ -530,23 +530,93 @@ function asRecords(content: string | GtfsRecord[]): GtfsRecord[] {
   return typeof content === 'string' ? parseGtfsRecords(content) : content
 }
 
+/** Parse a GTFS "HH:MM:SS" time (may exceed 24:00 for after-midnight) to
+ *  seconds-since-midnight. Returns NaN if unparseable. */
+function gtfsTimeToSeconds(t: string | undefined): number {
+  if (!t) return NaN
+  const parts = t.split(':')
+  if (parts.length < 3) return NaN
+  const h = parseInt(parts[0], 10)
+  const m = parseInt(parts[1], 10)
+  const s = parseInt(parts[2], 10)
+  if (Number.isNaN(h) || Number.isNaN(m) || Number.isNaN(s)) return NaN
+  return h * 3600 + m * 60 + s
+}
+
+/**
+ * The set of service_ids that represent a typical WEEKDAY, from calendar.txt
+ * (any of monday–friday = 1). If calendar.txt is absent, fall back to
+ * calendar_dates.txt: a service is "weekday" if any of its added dates
+ * (exception_type=1) falls on Mon–Fri. Returns null when there is no calendar
+ * information at all — callers should then treat every trip as eligible
+ * (fail-open) rather than hiding everything.
+ */
+function computeWeekdayServiceIds(
+  calendarContent?: string | GtfsRecord[],
+  calendarDatesContent?: string | GtfsRecord[],
+): Set<string> | null {
+  const cal = calendarContent ? asRecords(calendarContent) : []
+  const weekday = new Set<string>()
+  const DAYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday']
+  for (const r of cal) {
+    if (!r.service_id) continue
+    if (DAYS.some(d => r[d] === '1')) weekday.add(r.service_id)
+  }
+  if (weekday.size > 0) return weekday
+
+  // No calendar.txt weekday rows — derive from calendar_dates additions.
+  const cd = calendarDatesContent ? asRecords(calendarDatesContent) : []
+  for (const r of cd) {
+    if (!r.service_id || r.exception_type !== '1' || !r.date) continue
+    const y = parseInt(r.date.slice(0, 4), 10)
+    const mo = parseInt(r.date.slice(4, 6), 10)
+    const da = parseInt(r.date.slice(6, 8), 10)
+    if (Number.isNaN(y) || Number.isNaN(mo) || Number.isNaN(da)) continue
+    const dow = new Date(y, mo - 1, da).getDay() // 0=Sun … 6=Sat
+    if (dow >= 1 && dow <= 5) weekday.add(r.service_id)
+  }
+  return weekday.size > 0 ? weekday : null
+}
+
+// Daytime window for "regular service": 06:00–22:00. Trips departing outside
+// this (late night / pre-dawn, incl. GTFS 24:00+ after-midnight times) don't
+// count toward a route's presence at a station.
+const DAYTIME_START_SEC = 6 * 3600
+const DAYTIME_END_SEC = 22 * 3600
+
+/**
+ * Parse trips.txt + stop_times.txt (+ calendar) to derive stop→route
+ * associations, each annotated with `weekdayTrips`: how many of the route's
+ * trips stop here during regular weekday daytime service.
+ *
+ * Every (stop_id, route_id) pair that appears anywhere in stop_times is still
+ * returned (so the table stays complete for routing lookups); the count lets
+ * the display layer filter out routes that only touch a station off-peak or on
+ * a single "select" trip — the case the MTA diagrams / Apple omit (e.g. the
+ * late-night-only 2 at a 1-line local stop, or the lone AM-rush 5 at Kingston
+ * Av). When calendar info is missing, all trips are treated as eligible.
+ */
 export function deriveStopRoutes(
   tripsContent: string | GtfsRecord[],
   stopTimesContent: string | GtfsRecord[],
   feedId: string,
-): Array<{ feedId: string; stopId: string; routeId: string }> {
-  // Build trip → route map
-  const trips = asRecords(tripsContent)
+  calendarContent?: string | GtfsRecord[],
+  calendarDatesContent?: string | GtfsRecord[],
+): Array<{ feedId: string; stopId: string; routeId: string; weekdayTrips: number }> {
+  const weekdayServices = computeWeekdayServiceIds(calendarContent, calendarDatesContent)
 
+  // Build trip → route + service maps.
+  const trips = asRecords(tripsContent)
   const tripToRoute = new Map<string, string>()
+  const tripToService = new Map<string, string>()
   for (const trip of trips) {
     tripToRoute.set(trip.trip_id, trip.route_id)
+    if (trip.service_id) tripToService.set(trip.trip_id, trip.service_id)
   }
 
-  // Scan stop_times for unique (stop_id, route_id) pairs
-  const seen = new Set<string>()
-  const result: Array<{ feedId: string; stopId: string; routeId: string }> = []
-
+  // Scan stop_times once, accumulating per-(stop,route) weekday-daytime counts.
+  const counts = new Map<string, number>()
+  const order: string[] = [] // preserve first-seen order, one entry per pair
   const stopTimes = asRecords(stopTimesContent)
 
   for (const st of stopTimes) {
@@ -554,13 +624,30 @@ export function deriveStopRoutes(
     if (!routeId || !st.stop_id) continue
 
     const key = `${st.stop_id}|${routeId}`
-    if (seen.has(key)) continue
-    seen.add(key)
+    if (!counts.has(key)) {
+      counts.set(key, 0)
+      order.push(key)
+    }
 
-    result.push({ feedId, stopId: st.stop_id, routeId })
+    // Count only regular weekday daytime trips.
+    if (weekdayServices) {
+      const svc = tripToService.get(st.trip_id)
+      if (!svc || !weekdayServices.has(svc)) continue
+    }
+    const sec = gtfsTimeToSeconds(st.departure_time || st.arrival_time)
+    if (Number.isNaN(sec) || sec < DAYTIME_START_SEC || sec >= DAYTIME_END_SEC) continue
+    counts.set(key, counts.get(key)! + 1)
   }
 
-  return result
+  return order.map(key => {
+    const sep = key.lastIndexOf('|')
+    return {
+      feedId,
+      stopId: key.slice(0, sep),
+      routeId: key.slice(sep + 1),
+      weekdayTrips: counts.get(key)!,
+    }
+  })
 }
 
 /**
@@ -1042,13 +1129,15 @@ export async function importStopRoutes(
 
     const values = batch.map(a => {
       const esc = (v: string) => `'${v.replace(/'/g, "''")}'`
-      return `(${esc(a.feedId)}, ${esc(a.stopId)}, ${esc(a.routeId)})`
+      const wt = Number.isFinite(a.weekdayTrips) ? String(a.weekdayTrips) : 'NULL'
+      return `(${esc(a.feedId)}, ${esc(a.stopId)}, ${esc(a.routeId)}, ${wt})`
     }).join(',\n')
 
     await db.execute(sql.raw(`
-      INSERT INTO gtfs_stop_routes (feed_id, stop_id, route_id)
+      INSERT INTO gtfs_stop_routes (feed_id, stop_id, route_id, weekday_trips)
       VALUES ${values}
-      ON CONFLICT (feed_id, stop_id, route_id) DO NOTHING
+      ON CONFLICT (feed_id, stop_id, route_id)
+      DO UPDATE SET weekday_trips = EXCLUDED.weekday_trips
     `))
 
     imported += batch.length

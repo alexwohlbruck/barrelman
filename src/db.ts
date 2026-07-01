@@ -125,8 +125,15 @@ export async function ensureGtfsSchema() {
       id SERIAL PRIMARY KEY,
       feed_id TEXT NOT NULL,
       stop_id TEXT NOT NULL,
-      route_id TEXT NOT NULL
+      route_id TEXT NOT NULL,
+      -- Number of REGULAR-service trips of this route stopping here: weekday
+      -- service, departing in the daytime window (06:00–22:00). Drives the
+      -- display "does this route really serve this station" filter, excluding
+      -- late-night-only reroutes and single "select trip" service (which the
+      -- MTA diagrams / Apple omit). NULL = not yet derived (fail-open on show).
+      weekday_trips INT
     );
+    ALTER TABLE gtfs_stop_routes ADD COLUMN IF NOT EXISTS weekday_trips INT;
 
     CREATE UNIQUE INDEX IF NOT EXISTS gtfs_stop_routes_uniq_idx
       ON gtfs_stop_routes (feed_id, stop_id, route_id);

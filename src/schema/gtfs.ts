@@ -95,6 +95,8 @@ export const gtfsStopRoutes = pgTable(
     feedId: text('feed_id').notNull(),
     stopId: text('stop_id').notNull(),
     routeId: text('route_id').notNull(),
+    // Regular weekday-daytime trip count for this stop×route (see db.ts).
+    weekdayTrips: integer('weekday_trips'),
   },
   (table) => [
     uniqueIndex('gtfs_stop_routes_uniq_idx').on(table.feedId, table.stopId, table.routeId),
