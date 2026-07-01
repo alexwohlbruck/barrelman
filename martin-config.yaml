@@ -1,6 +1,11 @@
 # Martin tile server configuration
 # Serves vector tiles from PMTiles basemap + PostGIS geo_places table
 
+# Disable Martin's in-memory tile cache. Transit display matviews are rebuilt
+# frequently during development; a warm cache serves pre-rebuild tiles and makes
+# it look like changes "didn't take". Tiles are queried live from PostGIS.
+cache_size_mb: 0
+
 pmtiles:
   sources:
     basemap: /data/basemap.pmtiles
@@ -294,22 +299,21 @@ postgres:
       buffer: 128
       clip_geom: true
 
-    # Grouped station route bullets (one point per station x route, row-laid-out).
-    transit_station_bullets:
+    # Per-station data for the client's HTML station-label markers
+    # (name + routes JSON). Rendered as DOM markers, not baked symbols.
+    transit_stations:
       schema: public
-      table: transit_station_bullets
+      table: transit_stations
       srid: 4326
       geometry_column: geom
       geometry_type: POINT
       id_column: fid
-      minzoom: 13
+      minzoom: 11
       maxzoom: 16
       properties:
-        route_short_name: route_short_name
-        route_color: route_color
-        route_type: route_type
-        idx: idx
-        cnt: cnt
+        name: name
+        route_count: route_count
+        routes: routes
       buffer: 64
       clip_geom: true
 
