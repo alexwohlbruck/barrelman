@@ -37,6 +37,49 @@ export interface GtfsFeedInfo {
   region?: string
   /** GTFS-RT feed URLs discovered from Transitland (trip updates + vehicle positions) */
   rtUrls?: GtfsRtUrl[]
+  /** DMFR license block from the atlas-backed Transitland catalog. */
+  license?: {
+    redistribution_allowed?: string
+    use_without_attribution?: string
+    commercial_use_allowed?: string
+    [k: string]: unknown
+  }
+}
+
+/**
+ * Curated, license-aware feed selection (DMFR-style). Applied to the feed list
+ * from the atlas-backed Transitland catalog so we only import feeds we're
+ * allowed to redistribute and, optionally, an explicit allow/deny list.
+ *
+ *  - excludeUnredistributable: drop feeds whose DMFR license explicitly
+ *    disallows redistribution (license.redistribution_allowed === 'no').
+ *  - allow: if non-empty, keep ONLY these onestop_ids (or feed ids).
+ *  - deny: always drop these onestop_ids (or feed ids).
+ */
+export interface FeedSelection {
+  allow?: string[]
+  deny?: string[]
+  excludeUnredistributable?: boolean
+}
+
+export function selectFeeds(
+  feeds: GtfsFeedInfo[],
+  selection: FeedSelection = {},
+): GtfsFeedInfo[] {
+  const allow = new Set(selection.allow ?? [])
+  const deny = new Set(selection.deny ?? [])
+  return feeds.filter((f) => {
+    const ids = [f.onestopId, f.feedId]
+    if (deny.size && ids.some((id) => deny.has(id))) return false
+    if (allow.size && !ids.some((id) => allow.has(id))) return false
+    if (
+      selection.excludeUnredistributable &&
+      f.license?.redistribution_allowed === 'no'
+    ) {
+      return false
+    }
+    return true
+  })
 }
 
 export interface ImportResult {
@@ -116,6 +159,7 @@ export async function fetchFeedList(
         name: String(feed.name || feed.onestop_id || ''),
         url,
         region,
+        license: feed.license ?? undefined,
       })
     }
 

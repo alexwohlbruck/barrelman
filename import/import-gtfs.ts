@@ -39,6 +39,7 @@ import {
   updateBikesAllowed,
   recordFeed,
   applyDisplayOverrides,
+  selectFeeds,
   clearFeed,
   computeAllTransfers,
   generateTransfersTxt,
@@ -60,6 +61,8 @@ const { values: args } = parseArgs({
     'max-feeds': { type: 'string' },
     'transfer-distance': { type: 'string', default: '500' },
     'transfer-concurrency': { type: 'string', default: '8' },
+    'feed-allow': { type: 'string' },
+    'feed-deny': { type: 'string' },
   },
 })
 
@@ -102,6 +105,18 @@ async function main() {
     console.log(`\nFetching feed list from Transitland (region: ${region})...`)
     let feeds = await fetchFeedList(region, apiKey)
     console.log(`Found ${feeds.length} GTFS feeds`)
+
+    // DMFR-style curated, license-aware selection: drop feeds we can't
+    // redistribute, plus any explicit allow/deny list (comma-sep onestop ids).
+    const before = feeds.length
+    feeds = selectFeeds(feeds, {
+      excludeUnredistributable: true,
+      allow: args['feed-allow']?.split(',').map(s => s.trim()).filter(Boolean),
+      deny: args['feed-deny']?.split(',').map(s => s.trim()).filter(Boolean),
+    })
+    if (feeds.length !== before) {
+      console.log(`Selected ${feeds.length}/${before} feeds after license + allow/deny filter`)
+    }
 
     const rtCount = feeds.filter(f => f.rtUrls?.length).length
     console.log(`  ${rtCount} feeds have GTFS-RT URLs`)
