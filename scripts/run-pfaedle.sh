@@ -26,9 +26,13 @@ DATA_DIR="$(cd "$(dirname "$0")/.." && pwd)/data"
 
 mkdir -p "$DATA_DIR/pfaedle-out/$FEED"
 echo "pfaedle map-matching feed $FEED (mode: $MODE)…"
+# The image ENTRYPOINT is already `pfaedle`, so pass ONLY its args (a second
+# `pfaedle` here is parsed as a positional GTFS feed → "Multiple feeds" error).
+# -D drops the feed's existing shapes and recomputes them (map-match all trips);
+# without it, feeds that already have shapes (e.g. subway) are a no-op.
 docker run --rm -v "$DATA_DIR:/data" ghcr.io/ad-freiburg/pfaedle:latest \
-  pfaedle -x /data/region.osm.pbf -m "$MODE" \
-          -o "/data/pfaedle-out/$FEED" "/data/gtfs/$FEED.zip"
+  -D -x /data/region.osm.pbf -m "$MODE" \
+  -o "/data/pfaedle-out/$FEED" "/data/gtfs/$FEED.zip"
 
 echo "Done → data/pfaedle-out/$FEED/"
 echo "Next: inject its shapes.txt into data/gtfs/$FEED.zip, then re-run"

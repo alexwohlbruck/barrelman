@@ -6,11 +6,11 @@
 --      endpoints preserved so stations stay on the line) rounds the sharp kinks
 --      LOOM leaves where edges meet at nodes — baked, no custom GL layer needed.
 --   3. Per-zoom baked parallel offset: ST_OffsetCurve in Web Mercator by
---      (slot - (line_count-1)/2) * PX * (156543.03392 / 2^z). Because the 3857
---      resolution is 156543.03392/2^z metres/pixel at integer zoom z, this makes
---      each ribbon render at a CONSTANT PX-pixel gap at every integer zoom — the
---      constant-pixel feel of the old client-side line-offset, but with clean
---      geometric joins and smoothed junctions baked in.
+--      (slot - (line_count-1)/2) * PX * (78271.51696 / 2^z). MapLibre/Mapbox
+--      render vector tiles at 512px, so the on-screen resolution at integer zoom
+--      z is 78271.51696/2^z metres/pixel (NOT the 256px 156543/2^z — using that
+--      made ribbons 2x too far apart, "off by one zoom"). This makes each ribbon
+--      render at a CONSTANT PX-pixel gap at every integer zoom.
 --
 -- One row per (ribbon × integer zoom 10..18). Served by the Martin FUNCTION
 -- source transit_lines_zoom(z,x,y) below, which returns only the rows for the
@@ -63,7 +63,7 @@ CROSS JOIN LATERAL (
   SELECT COALESCE(
            ST_OffsetCurve(
              ST_ChaikinSmoothing((d).geom, 2, true),
-             (m.slot - (m.line_count - 1) / 2.0) * p.px * (156543.03392 / power(2, z))
+             (m.slot - (m.line_count - 1) / 2.0) * p.px * (78271.51696 / power(2, z))
            ),
            ST_ChaikinSmoothing((d).geom, 2, true)
          ) AS geom
