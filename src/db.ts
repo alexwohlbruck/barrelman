@@ -212,6 +212,69 @@ export async function ensureGtfsSchema() {
 }
 
 /**
+ * Ensure the transit line-graph schema (LOOM output) exists.
+ *
+ * LOOM (gtfs2graph | topo | loom) reduces a set of routes to a topological
+ * line graph: nodes (merged stations) and edges (shared centreline segments),
+ * where each edge carries an ORDERED list of the lines running on it. That
+ * order is LOOM's crossing-minimised line ordering — the offset slot order.
+ * The transit_lines_offset materialized view (import/create-transit-lines-
+ * offset.sql) turns each (edge x line, slot) into a parallel offset line via
+ * ST_OffsetCurve, which the display layer serves as bundled, non-overlapping
+ * ribbons. `build_key` scopes a graph (e.g. 'nyc:subway') so it can be rebuilt
+ * independently.
+ */
+export async function ensureTransitGraphSchema() {
+  await db.execute(sql.raw(`
+    CREATE TABLE IF NOT EXISTS transit_graph_nodes (
+      id SERIAL PRIMARY KEY,
+      build_key TEXT NOT NULL,
+      loom_id TEXT NOT NULL,
+      station_id TEXT,
+      station_label TEXT,
+      geom geometry(Point, 4326),
+      UNIQUE (build_key, loom_id)
+    );
+    CREATE INDEX IF NOT EXISTS transit_graph_nodes_geom_idx
+      ON transit_graph_nodes USING GIST (geom);
+
+    CREATE TABLE IF NOT EXISTS transit_graph_edges (
+      id SERIAL PRIMARY KEY,
+      build_key TEXT NOT NULL,
+      loom_id TEXT NOT NULL,
+      line_count INTEGER NOT NULL,
+      geom geometry(LineString, 4326),
+      UNIQUE (build_key, loom_id)
+    );
+    CREATE INDEX IF NOT EXISTS transit_graph_edges_geom_idx
+      ON transit_graph_edges USING GIST (geom);
+
+    -- One row per (edge x line). slot = position in LOOM's ordered line list.
+    CREATE TABLE IF NOT EXISTS transit_graph_edge_lines (
+      edge_id INTEGER NOT NULL REFERENCES transit_graph_edges(id) ON DELETE CASCADE,
+      slot INTEGER NOT NULL,
+      feed_id TEXT,
+      route_id TEXT,
+      route_short_name TEXT,
+      route_type INTEGER,
+      route_color TEXT,
+      route_text_color TEXT,
+      PRIMARY KEY (edge_id, slot)
+    );
+
+    -- Ledger of which (build_key) graphs are populated, so the plain
+    -- transit_routes view can exclude feeds/modes that have a bundled graph.
+    CREATE TABLE IF NOT EXISTS transit_graph_builds (
+      build_key TEXT PRIMARY KEY,
+      feed_id TEXT,
+      mode TEXT,
+      route_type INTEGER,
+      built_at TIMESTAMPTZ DEFAULT NOW()
+    );
+  `))
+}
+
+/**
  * Create GBFS shared-mobility tables for bikeshare/scootershare.
  */
 export async function ensureGbfsSchema() {

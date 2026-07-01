@@ -9,10 +9,21 @@
 -- every tile request into a full scan. The fid comes straight from the source
 -- table's unique serial PK (pushdown-safe and stable per feature).
 
--- Routes: each route drawn along its canonical shape geometry.
--- One row per route (gtfs_routes.id is unique; the canonical shape_id joins to
--- exactly one gtfs_shapes row). Stage 4 (LOOM) will replace this with bundled
--- offset geometry; for now routes overlap, matching the hosted-tile baseline.
+-- Ledger of LOOM-bundled graphs (also created by ensureTransitGraphSchema);
+-- declared here so transit_routes can exclude bundled feeds even on a fresh DB.
+CREATE TABLE IF NOT EXISTS transit_graph_builds (
+  build_key TEXT PRIMARY KEY,
+  feed_id TEXT,
+  mode TEXT,
+  route_type INTEGER,
+  built_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Routes: each route drawn along its canonical shape geometry. One row per
+-- route (gtfs_routes.id is unique; the canonical shape_id joins to exactly one
+-- gtfs_shapes row). Feeds/modes that have a LOOM-bundled graph are EXCLUDED
+-- here and served instead from transit_lines_offset (parallel offset ribbons),
+-- so they aren't drawn twice.
 DROP VIEW IF EXISTS transit_routes CASCADE;
 CREATE VIEW transit_routes AS
 SELECT
@@ -28,7 +39,11 @@ SELECT
 FROM gtfs_routes r
 JOIN gtfs_shapes s
   ON s.feed_id = r.feed_id AND s.shape_id = r.shape_id
-WHERE s.geom IS NOT NULL;
+WHERE s.geom IS NOT NULL
+  AND NOT EXISTS (
+    SELECT 1 FROM transit_graph_builds b
+    WHERE b.feed_id = r.feed_id AND b.route_type = r.route_type
+  );
 
 -- Stops: boardable stops (location_type 0) and stations (location_type 1),
 -- enriched with the serving routes so the client can colour each stop:
