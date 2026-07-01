@@ -13,6 +13,16 @@ pmtiles:
 postgres:
   connection_string: ${DATABASE_URL}
 
+  # Function sources. Martin does NOT auto-discover functions when a `tables:`
+  # block is present, so per-zoom baked transit ribbons are registered here.
+  functions:
+    transit_lines_zoom:
+      schema: public
+      function: transit_lines_zoom
+      minzoom: 8
+      maxzoom: 22
+      bounds: [-88.0, 33.0, -73.0, 42.0]
+
   tables:
     parchment_pois:
       schema: public
