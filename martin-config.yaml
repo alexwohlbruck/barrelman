@@ -22,6 +22,15 @@ postgres:
       minzoom: 8
       maxzoom: 22
       bounds: [-88.0, 33.0, -73.0, 42.0]
+    # Runtime-offset transit ribbons: one shared centreline per bundle run with
+    # slot/line_count + mapbox_clip_start/end, offset per-vertex at render time
+    # (constant-pixel gap on any engine; line-progress junction taper on MapLibre).
+    transit_lines_rt:
+      schema: public
+      function: transit_lines_rt
+      minzoom: 8
+      maxzoom: 22
+      bounds: [-88.0, 33.0, -73.0, 42.0]
 
   tables:
     parchment_pois:
