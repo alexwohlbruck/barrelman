@@ -51,6 +51,23 @@
         "wofIds": ["85688543", "85688509", "85688557"],
         "tigerStates": [36, 34, 9]
       }
+    },
+
+    "chicago": {
+      "label": "Chicago (CTA L)",
+      "osmExtracts": [
+        "https://download.geofabrik.de/north-america/us/illinois-latest.osm.pbf"
+      ],
+      "osmReplication": [
+        "https://download.geofabrik.de/north-america/us/illinois-updates/"
+      ],
+      "bbox": [-87.95, 41.64, -87.52, 42.07],
+      "gtfsRegion": "chicago",
+      "pelias": {
+        "openaddresses": ["us/il/cook.csv"],
+        "wofIds": ["85669141"],
+        "tigerStates": [17]
+      }
     }
   },
 
