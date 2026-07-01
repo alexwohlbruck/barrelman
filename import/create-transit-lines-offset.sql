@@ -1,22 +1,26 @@
--- Bundled transit lines from the LOOM line graph, grouped by COLOUR.
+-- Bundled transit lines from the LOOM line graph, grouped by COLOUR and merged
+-- into continuous geometry for smooth junctions.
 --
--- Apple-style bundling: routes that share a trunk AND a colour render as ONE
--- line (e.g. N/Q/R/W = one yellow Broadway line), while different colours run
--- as parallel ribbons. So we collapse each edge's ordered line list down to its
--- DISTINCT colours (keeping LOOM's ordering via first appearance), and emit one
--- row per (edge x colour) carrying the CENTRELINE geometry plus a slot index.
+-- Apple-style bundling: routes sharing a trunk AND a colour render as one line
+-- (N/Q/R/W = one yellow Broadway line); different colours run as parallel
+-- ribbons. We collapse each edge's ordered line list to its DISTINCT colours,
+-- assign a per-edge colour slot, then MERGE all edges of the same
+-- (colour, slot, line_count) into one continuous (multi)line via ST_LineMerge.
+-- Merging removes the per-edge feature boundaries that made client-side
+-- line-offset leave micro-gaps at every intermediate node — offset now renders
+-- continuously along each ribbon, with a break only where the bundle width
+-- actually changes (a route joins/leaves).
 --
--- The perpendicular offset is applied CLIENT-SIDE via MapLibre `line-offset`
--- (constant pixels, zoom-independent, mobile-safe) rather than baked into the
--- geometry — so ribbons keep a fixed on-screen separation at every zoom instead
--- of spreading apart. Window functions are fine here (materialized, not per-tile).
+-- Offset is applied CLIENT-SIDE via MapLibre line-offset (constant pixels,
+-- zoom-independent, mobile-safe), keyed on slot + line_count.
+--
+-- Run after import/load-transit-graph.ts. Window functions are fine (materialized).
 
 DROP MATERIALIZED VIEW IF EXISTS transit_lines_offset CASCADE;
 CREATE MATERIALIZED VIEW transit_lines_offset AS
 WITH edge_colors AS (
   SELECT
     edge_id,
-    -- group same-colour routes; keep uncoloured routes separate by route_id
     COALESCE(NULLIF(route_color, ''), 'rid:' || route_id) AS color_key,
     MIN(slot)                                    AS first_slot,
     MAX(route_color)                             AS route_color,
@@ -32,24 +36,26 @@ ranked AS (
   SELECT
     ec.*,
     (dense_rank() OVER (PARTITION BY edge_id ORDER BY first_slot, color_key) - 1) AS slot,
-    count(*)      OVER (PARTITION BY edge_id) AS line_count
+    count(*) OVER (PARTITION BY edge_id) AS line_count
   FROM edge_colors ec
 )
 SELECT
-  (e.id * 32 + r.slot)      AS fid,
-  r.edge_id,
+  row_number() OVER ()                    AS fid,
+  e.build_key,
+  r.color_key,
   r.slot,
   r.line_count,
-  r.feed_id,
-  r.route_id,
-  r.route_short_name,
-  r.route_short_names,
-  r.route_type,
-  r.route_color,
-  e.geom                    AS geom      -- centreline; offset applied client-side
+  MIN(r.feed_id)                          AS feed_id,
+  MIN(r.route_id)                          AS route_id,
+  MIN(r.route_short_name)                 AS route_short_name,
+  string_agg(DISTINCT r.route_short_names, ',') AS route_short_names,
+  MIN(r.route_type)                       AS route_type,
+  MAX(r.route_color)                      AS route_color,
+  ST_LineMerge(ST_Collect(e.geom))        AS geom
 FROM ranked r
 JOIN transit_graph_edges e ON e.id = r.edge_id
-WHERE e.geom IS NOT NULL;
+WHERE e.geom IS NOT NULL
+GROUP BY e.build_key, r.color_key, r.slot, r.line_count;
 
 CREATE INDEX transit_lines_offset_geom_idx
   ON transit_lines_offset USING GIST (geom);

@@ -278,7 +278,7 @@ postgres:
       table: transit_lines_offset
       srid: 4326
       geometry_column: geom
-      geometry_type: LINESTRING
+      geometry_type: GEOMETRY
       id_column: fid
       minzoom: 8
       maxzoom: 16
