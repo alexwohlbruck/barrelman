@@ -21,11 +21,14 @@ DROP MATERIALIZED VIEW IF EXISTS transit_station_bullets CASCADE;
 DROP MATERIALIZED VIEW IF EXISTS transit_stations CASCADE;
 CREATE MATERIALIZED VIEW transit_stations AS
 WITH node_routes AS (
-  SELECT DISTINCT ON (n.id, r.route_short_name)
+  -- Bullet label: prefer route_short_name, fall back to route_id for agencies
+  -- that leave short_name blank and name lines in route_long_name (e.g. CTA's
+  -- 'Red'/'Brn'/'Org' L lines).
+  SELECT DISTINCT ON (n.id, COALESCE(NULLIF(r.route_short_name, ''), r.route_id))
     n.id            AS node_id,
     n.geom          AS geom,
     n.station_label AS station_label,
-    r.route_short_name,
+    COALESCE(NULLIF(r.route_short_name, ''), r.route_id) AS route_short_name,
     r.route_color,
     r.route_type
   FROM transit_graph_nodes n
@@ -38,7 +41,7 @@ WITH node_routes AS (
     ON r.feed_id = sr.feed_id AND r.route_id = sr.route_id
   WHERE n.station_id IS NOT NULL
     AND COALESCE(n.station_label, '') <> ''
-    AND COALESCE(r.route_short_name, '') <> ''
+    AND COALESCE(NULLIF(r.route_short_name, ''), r.route_id) <> ''
     -- Regular-service filter: the route must make at least 2 weekday-daytime
     -- trips at some platform of this complex. Excludes late-night-only reroutes
     -- (e.g. the 2 at a 1-line local stop = 0 daytime trips) and single "select"
@@ -46,7 +49,7 @@ WITH node_routes AS (
     -- Apple. weekday_trips is populated by import/backfill-stop-route-service.ts;
     -- NULL (feed not yet backfilled) fails open so those stations still show.
     AND COALESCE(sr.weekday_trips, 999) >= 2
-  ORDER BY n.id, r.route_short_name, r.route_color
+  ORDER BY n.id, COALESCE(NULLIF(r.route_short_name, ''), r.route_id), r.route_color
 ),
 -- Cluster same-named nodes within ~330 m into one station complex.
 clustered AS (
