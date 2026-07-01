@@ -294,6 +294,25 @@ postgres:
       buffer: 128
       clip_geom: true
 
+    # Grouped station route bullets (one point per station x route, row-laid-out).
+    transit_station_bullets:
+      schema: public
+      table: transit_station_bullets
+      srid: 4326
+      geometry_column: geom
+      geometry_type: POINT
+      id_column: fid
+      minzoom: 13
+      maxzoom: 16
+      properties:
+        route_short_name: route_short_name
+        route_color: route_color
+        route_type: route_type
+        idx: idx
+        cnt: cnt
+      buffer: 64
+      clip_geom: true
+
     transit_stops:
       schema: public
       table: transit_stops
