@@ -29,13 +29,24 @@ function zipNameForFeed(feedId: string): string {
   return `${feedId.replace(/[^a-zA-Z0-9_-]/g, '_')}.zip`
 }
 
+const PROCESSED_DIR = './data/gtfs-processed'
+const RAW_DIR = './data/gtfs'
+
+/** Per-feed zip path: prefer the fully preprocessed copy (what MOTIS
+ *  ingests), fall back to the raw download. --dir pins a single directory. */
+function zipPathForFeed(feedId: string, dirOverride?: string): string {
+  const name = zipNameForFeed(feedId)
+  if (dirOverride) return join(dirOverride, name)
+  const processed = join(PROCESSED_DIR, name)
+  return existsSync(processed) ? processed : join(RAW_DIR, name)
+}
+
 async function main() {
   const argv = process.argv.slice(2)
-  // Prefer the fully preprocessed zips (what MOTIS ingests); fall back to raw.
-  let dir = existsSync('./data/gtfs-processed') ? './data/gtfs-processed' : './data/gtfs'
+  let dirOverride: string | undefined
   const feedArgs: string[] = []
   for (let i = 0; i < argv.length; i++) {
-    if (argv[i] === '--dir') dir = argv[++i]
+    if (argv[i] === '--dir') dirOverride = argv[++i]
     else feedArgs.push(argv[i])
   }
 
@@ -49,10 +60,11 @@ async function main() {
     feedIds = rows.map((r) => r.feed_id)
   }
 
-  console.log(`Backfilling trip patterns for ${feedIds.length} feed(s) from ${dir}`)
+  const from = dirOverride ?? `${PROCESSED_DIR} (raw fallback: ${RAW_DIR})`
+  console.log(`Backfilling trip patterns for ${feedIds.length} feed(s) from ${from}`)
   let totalPatterns = 0
   for (const feedId of feedIds) {
-    const path = join(dir, zipNameForFeed(feedId))
+    const path = zipPathForFeed(feedId, dirOverride)
     if (!existsSync(path)) {
       console.log(`  ⚠ ${feedId}: ${path} not found, skipping`)
       continue

@@ -84,6 +84,9 @@ services:
       # MOTIS default 60s. Set in .env (e.g. 600) to throttle dev polling.
       MOTIS_RT_UPDATE_INTERVAL: ${MOTIS_RT_UPDATE_INTERVAL:-}
       GTFS_DATA_DIR: /gtfs-zips
+      # Fully preprocessed zips (what MOTIS ingests), synced into the
+      # barrelman-gtfs-data volume by scripts/rebuild-motis.sh.
+      GTFS_PROCESSED_DIR: /gtfs-data/gtfs
     ports:
       - "5001:5001"
     volumes:

@@ -14,24 +14,30 @@ import { parseTransfers, importTransfers } from '../src/services/gtfs.service'
 
 const { values } = parseArgs({
   args: Bun.argv.slice(2),
-  // Default to the fully preprocessed zips (they carry the injected
-  // transfers.txt); fall back to raw for layouts predating the transform stage.
   options: {
-    dir: {
-      type: 'string',
-      default: existsSync('./data/gtfs-processed') ? './data/gtfs-processed' : './data/gtfs',
-    },
+    dir: { type: 'string' },
   },
 })
 
 await ensureGtfsSchema()
 
+// Resolve each feed's zip individually: prefer the fully preprocessed copy
+// (it carries the injected transfers.txt), fall back to the raw download for
+// feeds that haven't been through the transform stage. --dir pins one dir.
+const dirs = values.dir ? [values.dir] : ['./data/gtfs', './data/gtfs-processed']
+const zipPaths = new Map<string, string>()
+for (const dir of dirs) {
+  if (!existsSync(dir)) continue
+  for (const f of readdirSync(dir).filter((x) => x.endsWith('.zip'))) {
+    zipPaths.set(basename(f, '.zip'), join(dir, f)) // later (processed) dir wins
+  }
+}
+
 let feeds = 0
 let rows = 0
-for (const f of readdirSync(values.dir!).filter((x) => x.endsWith('.zip'))) {
-  const feedId = basename(f, '.zip')
+for (const [feedId, zipPath] of zipPaths) {
   try {
-    const zip = await JSZip.loadAsync(await Bun.file(join(values.dir!, f)).arrayBuffer())
+    const zip = await JSZip.loadAsync(await Bun.file(zipPath).arrayBuffer())
     const entry = zip.file('transfers.txt') ?? zip.file(/(^|\/)transfers\.txt$/)[0]
     if (!entry) continue
     const transfers = parseTransfers(await entry.async('string'), feedId)

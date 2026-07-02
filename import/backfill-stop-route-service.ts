@@ -7,7 +7,8 @@
  * import/create-transit-stations.sql) works without a full re-import.
  * Idempotent.
  *
- * Usage (inside the barrelman container, where the ZIPs are at /data/gtfs):
+ * Usage (inside the barrelman container, where processed ZIPs are at
+ * /gtfs-data/gtfs and raw ZIPs at /gtfs-zips — both resolved via env):
  *   docker exec barrelman bun run import/backfill-stop-route-service.ts 5
  *   docker exec barrelman bun run import/backfill-stop-route-service.ts     # all feeds with rows
  */
@@ -23,12 +24,27 @@ import {
 } from '../src/services/gtfs.service'
 
 // Prefer the fully preprocessed zips (what MOTIS ingests) so derived counts
-// match routing; fall back to the container path (/data/gtfs) and the raw
-// host dir for layouts predating the transform stage.
-const GTFS_DIR =
-  process.env.GTFS_DIR ||
-  ['./data/gtfs-processed', '/data/gtfs', './data/gtfs'].find(existsSync) ||
-  './data/gtfs'
+// match routing; fall back per feed to the raw downloads for feeds that
+// haven't been through the transform stage. GTFS_DIR pins a single directory.
+const CANDIDATE_DIRS: string[] = process.env.GTFS_DIR
+  ? [process.env.GTFS_DIR]
+  : [
+      process.env.GTFS_PROCESSED_DIR, // /gtfs-data/gtfs in the barrelman container
+      './data/gtfs-processed',
+      '/gtfs-data/gtfs',
+      process.env.GTFS_DATA_DIR, // /gtfs-zips in the barrelman container
+      './data/gtfs',
+      '/data/gtfs',
+    ].filter((d): d is string => !!d)
+
+/** Resolve a feed's zip, preferring processed dirs over raw ones. */
+function zipPathForFeed(feedId: string): string | undefined {
+  for (const dir of CANDIDATE_DIRS) {
+    const p = join(dir, `${feedId}.zip`)
+    if (existsSync(p)) return p
+  }
+  return undefined
+}
 
 async function readEntry(zip: JSZip, name: string): Promise<string | undefined> {
   const e = zip.file(name)
@@ -45,9 +61,9 @@ async function feedsToBackfill(): Promise<string[]> {
 }
 
 async function backfillFeed(feedId: string): Promise<void> {
-  const zipPath = join(GTFS_DIR, `${feedId}.zip`)
-  if (!existsSync(zipPath)) {
-    console.log(`  ⚠ ${feedId}: no ZIP at ${zipPath}, skipping`)
+  const zipPath = zipPathForFeed(feedId)
+  if (!zipPath) {
+    console.log(`  ⚠ ${feedId}: no ZIP in ${CANDIDATE_DIRS.join(', ')}, skipping`)
     return
   }
   const buffer = await Bun.file(zipPath).arrayBuffer()
