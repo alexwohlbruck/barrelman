@@ -240,6 +240,31 @@ def test_route_matcher_rules():
     assert not RouteMatcher("", "", "").matches_edge(3, edge_like)
 
 
+def test_route_matcher_strength_tiers():
+    """route_color is a FAMILY key on colour-collapsed networks (NYC:
+    1/2/3 share #D82233 and the OSM relations carry that exact colour) —
+    identity matches (ref/name) must outrank colour-only matches."""
+    local = type("E", (), {})()
+    local.route_refs = [
+        {"ref": "1", "name": "NYCS - 1 Train: ...", "colour": "#D82233"},
+        {"ref": "2", "name": "NYCS - 2 Train (late nights): ...", "colour": "#D82233"},
+    ]
+    express = type("E", (), {})()
+    express.route_refs = [
+        {"ref": "2", "name": "NYCS - 2 Train: ...", "colour": "#D82233"},
+        {"ref": "3", "name": "NYCS - 3 Train: ...", "colour": "#d82233"},
+    ]
+    rm = RouteMatcher("1", "Broadway - 7 Avenue Local", "D82233")
+    assert rm.match_strength(0, local) == 2      # ref match
+    assert rm.match_strength(1, express) == 1    # colour-only (family key)
+    # both still "match" for candidate admission
+    assert rm.matches_edge(0, local) and rm.matches_edge(1, express)
+    # colour stays a real signal when no identity data exists
+    colour_only = type("E", (), {})()
+    colour_only.route_refs = [{"ref": None, "name": None, "colour": "#D82233"}]
+    assert RouteMatcher("1", "", "D82233").match_strength(0, colour_only) == 1
+
+
 def test_name_similarity_and_ted():
     assert cheap_ted("kimball", "kimball") == 0
     assert cheap_ted("kimball", "kimbal") == 1

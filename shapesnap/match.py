@@ -629,13 +629,28 @@ def match_pattern(
 
     # candidate layers; route-relation-matched edges are always admitted
     # so junction fan-out can't crowd the decorated track out of the top-k
+    # (admission uses ANY match tier — the identity/colour threshold below
+    # is only known once every layer's candidates exist)
     rm = RouteMatcher(pattern.route_short_name, pattern.route_long_name, pattern.route_color)
     edges = mg.graph.edges
-    rel_match = lambda i: rm.matches_edge(i, edges[i])  # noqa: E731
     layers = [
-        mg.candidates(x, y, radius, cfg.k_candidates, include=rel_match)
+        mg.candidates(
+            x, y, radius, cfg.k_candidates,
+            include=lambda i: rm.matches_edge(i, edges[i]),
+        )
         for x, y in obs
     ]
+
+    # identity (ref/name) matches outrank colour-only matches: route_color
+    # is a FAMILY key on colour-collapsed networks (NYC N/Q/R/W, 1/2/3), so
+    # when any candidate identity-matches, colour-only relations are treated
+    # as non-matching — otherwise express/local disambiguation collapses.
+    best_strength = max(
+        (rm.match_strength(c.edge, edges[c.edge]) for layer in layers for c in layer),
+        default=0,
+    )
+    rel_threshold = 2 if best_strength >= 2 else 1
+    rel_match = lambda i: rm.match_strength(i, edges[i]) >= rel_threshold  # noqa: E731
     if not dense and station_idx is not None and station_idx.tree is not None:
         stop_names = pattern.stop_names if len(pattern.stop_names) == n else [""] * n
         stop_plats = pattern.stop_platforms if len(pattern.stop_platforms) == n else [""] * n
@@ -661,7 +676,7 @@ def match_pattern(
 
     def mult(e: int) -> float:
         m = base_mult[e]
-        if rm.matches_edge(e, mg.graph.edges[e]):
+        if rel_match(e):
             m *= cfg.route_bonus_mult
         return m
 
@@ -672,6 +687,7 @@ def match_pattern(
         "mean_candidates": round(sum(len(l) for l in layers) / max(1, n), 2),
         "radius_m": radius,
         "relation_prior_active": relation_prior_active,
+        "relation_match_tier": best_strength,  # 2=ref/name, 1=colour-only, 0=none
     }
 
     if all(not l for l in layers):

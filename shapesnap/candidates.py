@@ -215,12 +215,26 @@ class RouteMatcher:
     """Does an edge's OSM route relations match this GTFS route?
 
     Rules (docs/transit-pipeline-v3.md stage 3, all case/whitespace-
-    insensitive; empty GTFS values never match):
+    insensitive; empty GTFS values never match), in two strength tiers:
+
+    Identity (strength 2):
       1. relation ref == route_short_name
       2. relation name contains route_long_name, or contains
          route_short_name as a whole word (word-bounded so route "2"
          doesn't match "22 Clark")
+    Colour (strength 1):
       3. relation colour == route_color (leading '#' stripped)
+
+    The tiers exist because route_color is a FAMILY key, not a route
+    key, on colour-collapsed networks (NYC: N/Q/R/W all #F6BC26, 1/2/3
+    all #D82233 — and OSM relations carry those exact GTFS colours).
+    Colour equality alone would make every trunk-family relation match,
+    turning the relation prior into a constant and collapsing
+    express/local track disambiguation. Consumers (shapesnap.match)
+    honour identity matches and ignore colour-only matches whenever any
+    candidate identity match exists for the pattern; colour stays as
+    the fallback signal for networks whose relations carry no usable
+    ref/name.
     """
 
     def __init__(self, short_name: str | None, long_name: str | None, color: str | None):
@@ -232,27 +246,31 @@ class RouteMatcher:
             if self.short
             else None
         )
-        self._memo: dict[int, bool] = {}
+        self._memo: dict[int, int] = {}
 
-    def matches_edge(self, edge_idx: int, edge) -> bool:
+    def match_strength(self, edge_idx: int, edge) -> int:
+        """0 = no match, 1 = colour-only, 2 = identity (ref/name)."""
         hit = self._memo.get(edge_idx)
         if hit is None:
-            hit = any(self._match_ref(r) for r in edge.route_refs)
+            hit = max((self._match_ref(r) for r in edge.route_refs), default=0)
             self._memo[edge_idx] = hit
         return hit
 
-    def _match_ref(self, r: dict) -> bool:
+    def matches_edge(self, edge_idx: int, edge) -> bool:
+        return self.match_strength(edge_idx, edge) > 0
+
+    def _match_ref(self, r: dict) -> int:
         ref, name, colour = _norm(r.get("ref")), _norm(r.get("name")), _norm_color(r.get("colour"))
         if self.short and ref == self.short:
-            return True
+            return 2
         if name:
             if self.long and self.long in name:
-                return True
+                return 2
             if self._short_re is not None and self._short_re.search(name):
-                return True
+                return 2
         if self.color and colour and colour == self.color:
-            return True
-        return False
+            return 1
+        return 0
 
 
 # ── OSM stations (regime B bonuses) ──────────────────────────────────────────
