@@ -20,6 +20,18 @@ MERGE_WIDTH) locally displaces geometry further. Default radius
 skeleton genuinely does not represent. Unmatched fraction is reported
 per pattern and should be ~0.
 
+Converse deviation gate: snapping guarantees samples are near SOME
+edge, not that every claimed edge is near the pattern's shape — the
+adjacency bridge fill (and one-sample junction bleed the run filter
+misses) can pull in edges the route never rides, painting phantom
+ribbons hundreds of metres off the route's own track (NYC: R on the
+7's Queens Blvd elevated, B on the White Plains Rd corridor). After
+chaining, any edge whose densified geometry deviates more than
+DEVIATION_GATE_M from the pattern's shape ANYWHERE is excised from
+that pattern (an edge genuinely ridden stays within snap radius plus
+local junction displacement everywhere, so the gate never fires on
+it). Excisions are counted per pattern in the stats.
+
 Output: per skeleton edge, the merged-across-directions set of routes
 riding it, carrying (feed_id, route_id, route_short_name, route_type,
 route_color, route_text_color). route_text_color is not part of
@@ -44,6 +56,10 @@ from shapely import STRtree
 from shapely.geometry import LineString
 
 DEFAULT_SAMPLE_M = 15.0
+# max deviation of a claimed edge from the pattern's own shape; beyond
+# this the edge is excised from the pattern (see module docstring)
+DEVIATION_GATE_M = 50.0
+EDGE_SAMPLE_M = 25.0  # densification step for the gate's edge probes
 
 
 @dataclass(slots=True, frozen=True)
@@ -63,6 +79,7 @@ class PatternAttribution:
     n_samples: int
     n_unmatched: int
     n_edges: int
+    n_excised: int = 0  # chain edges dropped by the deviation gate
 
     @property
     def unmatched_fraction(self) -> float:
@@ -176,7 +193,8 @@ def _chain_edges(seq, lg, edge_nodes, node_edges):
 
 def attribute_patterns(lg, patterns, feed_id: str, routes_meta=None, *,
                        sample_m: float = DEFAULT_SAMPLE_M,
-                       snap_radius_m: float | None = None):
+                       snap_radius_m: float | None = None,
+                       deviation_gate_m: float = DEVIATION_GATE_M):
     """Attribute every pattern's shape to skeleton edges.
 
     Returns (edge_routes, stats):
@@ -192,6 +210,19 @@ def attribute_patterns(lg, patterns, feed_id: str, routes_meta=None, *,
     to_xy = Transformer.from_crs(4326, lg.epsg, always_xy=True)
     tree = STRtree([LineString(e.coords_xy) for e in lg.edges])
     edge_nodes, node_edges = _edge_adjacency(lg)
+
+    # densified edge probes for the converse deviation gate, built lazily
+    # (an edge is probed only once a chain claims it)
+    edge_probes: dict = {}
+
+    def probes_for(eid: int):
+        pts = edge_probes.get(eid)
+        if pts is None:
+            samples = sample_polyline_xy(lg.edges[eid].coords_xy,
+                                         EDGE_SAMPLE_M)
+            pts = shapely.points(samples[:, 0], samples[:, 1])
+            edge_probes[eid] = pts
+        return pts
 
     edge_routes: dict = {}
     stats: list = []
@@ -211,11 +242,24 @@ def attribute_patterns(lg, patterns, feed_id: str, routes_meta=None, *,
         chain = _chain_edges(
             [int(e) for e in nearest[nearest >= 0]], lg, edge_nodes, node_edges
         )
-        ridden = sorted(set(chain))
+        candidates = sorted(set(chain))
+
+        # converse gate: excise edges the pattern's own shape never comes
+        # near — max deviation over the DENSIFIED edge, not just vertices
+        shape_line = LineString(list(zip(xs, ys)))
+        shapely.prepare(shape_line)
+        ridden, n_excised = [], 0
+        for eid in candidates:
+            dmax = float(shapely.distance(probes_for(eid), shape_line).max())
+            if dmax <= deviation_gate_m:
+                ridden.append(eid)
+            else:
+                n_excised += 1
+
         n_unmatched = int((nearest < 0).sum())
         stats.append(
             PatternAttribution(p.key, p.route_id, len(points), n_unmatched,
-                               len(ridden))
+                               len(ridden), n_excised)
         )
 
         meta = routes_meta.get(p.route_id, {})
