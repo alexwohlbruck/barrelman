@@ -57,12 +57,16 @@ TITLES = {
 
 
 def fetch(cur, proj, build, envelope):
+    # the z15 receipts read the default band (60 m transitions)
+    from segments.segment import SegmentConfig
+    band = max(mz for mz, _ in SegmentConfig().bands)
     cur.execute(
         """SELECT seg_id, kind, route_color, offset_px, off_from_px,
                   off_to_px, ST_AsGeoJSON(geom)
            FROM transit_line_segments
-           WHERE build_key = %s AND geom && ST_MakeEnvelope(%s,%s,%s,%s,4326)
-           ORDER BY seg_id""", (build, *envelope))
+           WHERE build_key = %s AND band_minzoom = %s
+             AND geom && ST_MakeEnvelope(%s,%s,%s,%s,4326)
+           ORDER BY seg_id""", (build, band, *envelope))
     feats = []
     for seg_id, kind, color, off, offa, offb, gj in cur.fetchall():
         ll = json.loads(gj)["coordinates"]
