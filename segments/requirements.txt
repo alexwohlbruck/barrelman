@@ -1,0 +1,8 @@
+# segments python deps — run via uv (repo convention, see linegraph/requirements.txt):
+#   uv run --with-requirements segments/requirements.txt \
+#       python -m segments.build --build-key chicago:l-v3 --emit
+#   uv run --with-requirements segments/requirements.txt python -m pytest segments/tests -v
+shapely>=2.0           # metric geometry ops (substring, project, densify)
+pyproj>=3.6            # local aeqd projection (true ground metres)
+psycopg[binary]>=3.1   # PostGIS loader + emit + real-data tests
+pytest>=8              # tests
