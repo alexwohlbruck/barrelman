@@ -116,7 +116,13 @@ per-trip. Two regimes, one Viterbi core:
   (widened to the enclosing stop anchors) so the network path spans the degenerate
   stretch on the route's own track (MTA R drawn through the Lexington corridor at
   Canal St). Break on infeasible gaps and bridge with the original shape segment
-  (flagged), never force — empty-layer runs (no evidence at all) still break+bridge.
+  (flagged), never force — but a dense break's gap is first RETRIED once at
+  `gap_retry_radius_mult`× the candidate radius (emission σ widened by the same
+  factor, endpoints pinned to the already-decoded candidates), so a systematic
+  agency-vs-OSM offset just past the radius (4/5 Joralemon St Tunnel: 47–64 m for
+  ~420 m) reconnects on the route's own track; a gap that also fails the retry
+  (track genuinely absent) bridges as before, and a splice that would fail any
+  quality gate is reverted to the bridge.
 - **Regime B (no/degenerate shapes)**: pfaedle-style sparse stop-to-stop matching on the
   same core.
 - **Output**: `matched_shapes` table (method, confidence, stats jsonb) + rewritten

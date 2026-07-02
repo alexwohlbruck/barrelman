@@ -47,8 +47,20 @@ provably straying into another route's corridor (degenerate agency
 chords: the MTA R shape rides the Manhattan-Bridge approach and the
 Lexington corridor around Canal St) — those observations are excised
 before decoding so the network path spans the gap on the route's own
-track; runs with no evidence at all (empty layers, e.g. the Joralemon
-misalignment) still break and bridge.
+track.
+
+Gap retry (dense regime): before bridging, a break whose gap still has
+interior observations is RE-matched once with the candidate radius
+widened by cfg.gap_retry_radius_mult (and emission sigma widened by the
+same factor, keeping the max in-radius emission cost invariant), the
+gap's endpoints pinned to the candidates the main decode already chose.
+A systematic agency-vs-OSM offset just past the radius (the 4/5
+Joralemon St Tunnel: 47-64 m from the IRT Lexington tunnel way for
+~420 m) reconnects on the route's own track with no seam; a genuinely
+absent track (hole in OSM) still fails feasibility and bridges exactly
+as before. Every pattern-level quality gate is unchanged — and a
+spliced retry that would push the pattern below a gate is reverted, so
+a retry can never degrade a pattern below its bridged baseline.
 
 Output per pattern: ordered edge path → concatenated full-fidelity OSM
 geometry → topology-preserving ~1 m simplification in a local UTM →
@@ -85,7 +97,7 @@ import math
 import sys
 import time
 import zipfile
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from heapq import heappop, heappush
 from itertools import count
 from pathlib import Path
@@ -169,6 +181,15 @@ class MatchConfig:
     # same fabricated drawing, and stops are where service pins the
     # shape again (MTA R: Canal St → Prince St span, 967 m)
     foreign_excise_stop_span_max_m: float = 1500.0
+    # gap retry (dense): a break's gap is re-matched once with the
+    # candidate radius (and emission sigma, proportionally — so the max
+    # in-radius emission cost 0.5*(r/sigma)^2 is invariant and the
+    # foreign_identity_prior dominance rule above still holds) widened
+    # by this factor before falling back to the original-shape bridge.
+    # Covers systematic agency-vs-OSM offsets just past the radius (4/5
+    # Joralemon St Tunnel: 47-64 m off the tunnel way for ~420 m, rail
+    # radius 50 -> 100). <=1 disables and restores pure break+bridge.
+    gap_retry_radius_mult: float = 2.0
     # regime B extras
     station_search_radius_m: float = 120.0
     name_bonus_weight: float = 1.5
@@ -829,66 +850,141 @@ def match_pattern(
         matched_obs += end - i + 1
         i = end + 1
 
-    # assemble geometry (matched pieces + original-shape bridges)
-    edges_used: set = set()
-    out_xy: list = []
-    gaps: list = []
+    # gap retry (dense): a break whose gap still has interior observations
+    # is re-matched ONCE with the candidate radius and emission sigma both
+    # widened by cfg.gap_retry_radius_mult (proportional widening keeps the
+    # max in-radius emission cost 0.5*(r/sigma)^2 invariant), the endpoints
+    # pinned to the candidates the main decode already chose — so a
+    # successful splice is seamless by construction. Systematic agency
+    # offsets just past the radius (Joralemon: 47-64 m for ~420 m)
+    # reconnect on the route's own track; a genuinely absent track leaves
+    # an empty expanded layer or an infeasible chain and bridges as before.
+    retry_notes: list = []
+    pre_retry, pre_cost, pre_matched = None, 0.0, 0
+    if dense and len(segments) > 1 and cfg.gap_retry_radius_mult > 1.0:
+        pre_retry = [dict(s) for s in segments]
+        pre_cost, pre_matched = total_cost, matched_obs
+        retry_radius = radius * cfg.gap_retry_radius_mult
+        sigma_retry = cfg.sigma_dense * cfg.gap_retry_radius_mult
+        retry_cfg = replace(cfg, sigma_dense=sigma_retry)
+        merged = [segments[0]]
+        for nxt in segments[1:]:
+            cur = merged[-1]
+            a_end, b_start = cur["end"], nxt["start"]
+            interior = range(a_end + 1, b_start)
+            if not interior:
+                # adjacency break: both endpoints already have candidates,
+                # the transition itself was infeasible — a wider radius
+                # changes nothing, keep the bridge
+                merged.append(nxt)
+                continue
+            note = {
+                "from_obs": a_end, "to_obs": b_start, "n_obs": len(interior),
+                "radius_m": round(retry_radius, 1), "ok": False,
+            }
+            retry_notes.append(note)
+            exp_layers = [
+                mg.candidates(
+                    obs[t][0], obs[t][1], retry_radius, cfg.k_candidates,
+                    include=lambda i: rm.matches_edge(i, edges[i]),
+                )
+                for t in interior
+            ]
+            if any(not l for l in exp_layers):
+                merged.append(nxt)  # track absent even at 2x: bridge as before
+                continue
+            # same emission priors as the base layers (vertical stacks /
+            # foreign identity keep their meaning at the wider radius)
+            if relation_prior_active:
+                for layer in exp_layers:
+                    for c in layer:
+                        hit = cand_matches.get(c.edge)
+                        if hit is None:
+                            hit = cand_matches[c.edge] = rel_match(c.edge)
+                        if not hit:
+                            c.prior = (
+                                cfg.foreign_identity_prior
+                                if rel_threshold == 2 and rm.is_foreign(c.edge, edges[c.edge])
+                                else cfg.relation_prior
+                            )
+            c_a = layers[a_end][cur["cands"][-1]]
+            c_b = layers[b_start][nxt["cands"][0]]
+            sub_layers = [[c_a], *exp_layers, [c_b]]
+            end, cands, hops, cost = _decode_segment(
+                mg, retry_cfg, sub_layers, alongs[a_end:b_start], 0, mult, True, station_idx
+            )
+            if end != len(sub_layers) - 1:
+                merged.append(nxt)  # no feasible expanded chain: bridge as before
+                continue
+            # splice: register the chosen interior candidates on the base
+            # layers so the shared assembly below can address them
+            mid_idx = []
+            for off, t in enumerate(interior):
+                layers[t].append(exp_layers[off][cands[1 + off]])
+                mid_idx.append(len(layers[t]) - 1)
+            cur["end"] = nxt["end"]
+            cur["cands"] = cur["cands"] + mid_idx + nxt["cands"]
+            cur["hops"] = cur["hops"] + hops + nxt["hops"]
+            # the pinned anchors were already counted (and costed) by their
+            # own segments — subtract their retry-sigma emissions so the
+            # spliced cost covers only the gap's own observations
+            total_cost += max(
+                0.0, cost - _emission(c_a, sigma_retry) - _emission(c_b, sigma_retry)
+            )
+            matched_obs += len(interior)
+            note["ok"] = True
+        segments = merged
+    if retry_notes:
+        stats["gap_retries"] = retry_notes
 
-    def bridge(a_obs: int, b_obs: int):
-        """Original geometry between observation indices (exclusive gap)."""
-        if dense:
-            seg = substring(shape_line, obs_along[a_obs], obs_along[b_obs])
-            pts = list(seg.coords) if not seg.is_empty and seg.geom_type != "Point" else []
-        else:
-            pts = obs[a_obs : b_obs + 1]
-        if len(pts) >= 2:
-            gaps.append({
-                "from_obs": a_obs, "to_obs": b_obs,
-                "bridged_m": round(LineString(pts).length, 1),
-            })
-        return pts
+    # assemble geometry (matched pieces + original-shape bridges); a
+    # function because a reverted gap retry re-runs it on the pre-retry
+    # segments
+    def _assemble(segs):
+        edges_used: set = set()
+        out_xy: list = []
+        gaps: list = []
 
-    def extend(pts):
-        for p in pts:
-            if not out_xy or math.hypot(p[0] - out_xy[-1][0], p[1] - out_xy[-1][1]) > 1e-9:
-                out_xy.append(p)
+        def bridge(a_obs: int, b_obs: int):
+            """Original geometry between observation indices (exclusive gap)."""
+            if dense:
+                seg = substring(shape_line, obs_along[a_obs], obs_along[b_obs])
+                pts = list(seg.coords) if not seg.is_empty and seg.geom_type != "Point" else []
+            else:
+                pts = obs[a_obs : b_obs + 1]
+            if len(pts) >= 2:
+                gaps.append({
+                    "from_obs": a_obs, "to_obs": b_obs,
+                    "bridged_m": round(LineString(pts).length, 1),
+                })
+            return pts
 
-    prev_end = None
-    for seg in segments:
-        if prev_end is None:
-            if seg["start"] > 0:
-                extend(bridge(0, seg["start"]))
-        else:
-            extend(bridge(prev_end, seg["start"]))
-        layer = seg["start"]
-        cand = layers[layer][seg["cands"][0]]
-        extend([(cand.x, cand.y)])
-        edges_used.add(cand.edge)
-        for k, (path, _true) in enumerate(seg["hops"]):
-            a = layers[layer + k][seg["cands"][k]]
-            b = layers[layer + k + 1][seg["cands"][k + 1]]
-            extend(_hop_coords(mg, a, b, path))
-            edges_used.add(b.edge)
-            edges_used.update(e for e, _d in path)
-        prev_end = seg["end"]
-    if prev_end is not None and prev_end < n - 1:
-        extend(bridge(prev_end, n - 1))
+        def extend(pts):
+            for p in pts:
+                if not out_xy or math.hypot(p[0] - out_xy[-1][0], p[1] - out_xy[-1][1]) > 1e-9:
+                    out_xy.append(p)
 
-    breaks = max(0, len(segments) - 1)
-    stats.update(
-        breaks=breaks,
-        gaps=gaps,
-        bridged_m=round(sum(g["bridged_m"] for g in gaps), 1),
-        matched_obs=matched_obs,
-    )
-
-    if len(out_xy) < 2:
-        stats["runtime_s"] = round(time.perf_counter() - t0, 2)
-        return MatchResult("passthrough", 0.0, original_coords(), stats, None, [])
-
-    simplified = LineString(out_xy).simplify(cfg.simplify_m, preserve_topology=True)
-    stats["output_points"] = len(simplified.coords)
-    stats["output_len_m"] = round(simplified.length, 1)
+        prev_end = None
+        for seg in segs:
+            if prev_end is None:
+                if seg["start"] > 0:
+                    extend(bridge(0, seg["start"]))
+            else:
+                extend(bridge(prev_end, seg["start"]))
+            layer = seg["start"]
+            cand = layers[layer][seg["cands"][0]]
+            extend([(cand.x, cand.y)])
+            edges_used.add(cand.edge)
+            for k, (path, _true) in enumerate(seg["hops"]):
+                a = layers[layer + k][seg["cands"][k]]
+                b = layers[layer + k + 1][seg["cands"][k + 1]]
+                extend(_hop_coords(mg, a, b, path))
+                edges_used.add(b.edge)
+                edges_used.update(e for e, _d in path)
+            prev_end = seg["end"]
+        if prev_end is not None and prev_end < n - 1:
+            extend(bridge(prev_end, n - 1))
+        return out_xy, gaps, edges_used
 
     ref_line = LineString(obs) if dense else None
     ref_pieces = None
@@ -899,17 +995,56 @@ def match_pattern(
         ref_pieces = [
             LineString(obs[a:b]) for a, b in zip(bounds, bounds[1:]) if b - a >= 2
         ]
-    report = evaluate_gates(
-        simplified,
-        mode,
-        cfg.gates,
-        ref_line=ref_line,
-        ref_pieces=ref_pieces,
-        obs_points=obs if dense else None,
-        stops_xy=stops_xy,
-        stop_radius=radius,
-        dense=dense,
+
+    def _finish(segs):
+        """Assembly -> simplify -> gates (report None on degenerate output)."""
+        out_xy, gaps, edges_used = _assemble(segs)
+        if len(out_xy) < 2:
+            return out_xy, gaps, edges_used, None, None
+        simplified = LineString(out_xy).simplify(cfg.simplify_m, preserve_topology=True)
+        report = evaluate_gates(
+            simplified,
+            mode,
+            cfg.gates,
+            ref_line=ref_line,
+            ref_pieces=ref_pieces,
+            obs_points=obs if dense else None,
+            stops_xy=stops_xy,
+            stop_radius=radius,
+            dense=dense,
+        )
+        return out_xy, gaps, edges_used, simplified, report
+
+    out_xy, gaps, edges_used, simplified, report = _finish(segments)
+    if (
+        report is not None
+        and not report.passed
+        and any(nt["ok"] is True for nt in retry_notes)
+    ):
+        # quality gates are unchanged by design: a splice that pushes the
+        # pattern below any gate is reverted, so a retry can never degrade
+        # a pattern below its bridged baseline
+        for nt in retry_notes:
+            if nt["ok"] is True:
+                nt["ok"] = "reverted"
+        segments = pre_retry
+        total_cost, matched_obs = pre_cost, pre_matched
+        out_xy, gaps, edges_used, simplified, report = _finish(segments)
+
+    breaks = max(0, len(segments) - 1)
+    stats.update(
+        breaks=breaks,
+        gaps=gaps,
+        bridged_m=round(sum(g["bridged_m"] for g in gaps), 1),
+        matched_obs=matched_obs,
     )
+
+    if simplified is None:
+        stats["runtime_s"] = round(time.perf_counter() - t0, 2)
+        return MatchResult("passthrough", 0.0, original_coords(), stats, None, [])
+
+    stats["output_points"] = len(simplified.coords)
+    stats["output_len_m"] = round(simplified.length, 1)
 
     avg_cost = total_cost / max(1, matched_obs)
     confidence = round(math.exp(-avg_cost) / (1.0 + breaks), 4)

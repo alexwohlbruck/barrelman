@@ -18,7 +18,14 @@ approved design: `docs/transit-pipeline-v3.md`, stage 3).
 - **Matcher** (`shapesnap.match`): one Viterbi core, two regimes — dense HMM over the
   resampled feed shape (feeds with shapes), pfaedle-style sparse stop-to-stop (feeds
   without). OSM `route=*` relation bonuses disambiguate vertically stacked tracks.
-  Infeasible gaps break (never force) and are bridged with the original geometry.
+  Infeasible gaps break (never force); a dense break's gap is retried once with the
+  candidate radius and emission σ widened ×`gap_retry_radius_mult` (default 2 — rail
+  50→100 m) and its endpoints pinned to the already-decoded candidates, so a
+  systematic agency-vs-OSM offset just past the radius (the 4/5 Joralemon St Tunnel:
+  47–64 m off for ~420 m; CTA Blue at O'Hare) reconnects seamlessly on the route's
+  own track — a genuinely absent track still fails the retry and is bridged with the
+  original geometry, and a splice that would push any quality gate below threshold is
+  reverted (a retry never degrades a pattern below its bridged baseline).
 - **Gates** (`shapesnap.gates`): coverage ≥95 % within tolerance, discrete Fréchet
   ≤100 m, length ratio 0.95–1.15, every stop within the candidate radius. **Any failure
   → the pattern keeps its original shape** (`fallback`); good feeds are never degraded.
