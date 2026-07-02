@@ -356,5 +356,6 @@ postgres:
         route_color: route_color
         route_text_color: route_text_color
         is_rail: is_rail
+        route_count_all: route_count_all
       buffer: 64
       clip_geom: true

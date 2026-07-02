@@ -52,6 +52,15 @@ WHERE s.geom IS NOT NULL
 -- The hosted Transitland stop tiles never carried route colour; ours do.
 -- LATERAL (not a window function) keeps the per-tile envelope filter pushable
 -- into the gtfs_stops GiST scan.
+--
+-- route_count/route_color use the same tiered service preference as the
+-- station labels (import/create-transit-stations.sql): prefer routes with
+-- regular weekday service (trips_weekday_day >= 2, NULL = not yet backfilled
+-- fails open), else weekend service (trips_weekend_day >= 2), else everything
+-- — so the dot never disagrees with the label (e.g. Christopher St stays a
+-- single-route dot even though the late-night-only 2 has a stop record).
+-- route_count_all keeps the ungated total for anything relying on the old
+-- semantics. Implemented with FILTERed aggregates (no window functions).
 DROP VIEW IF EXISTS transit_stops CASCADE;
 CREATE VIEW transit_stops AS
 SELECT
@@ -67,22 +76,62 @@ SELECT
   COALESCE(rc.route_count, 0)           AS route_count,
   COALESCE(rc.route_color, '')          AS route_color,
   COALESCE(rc.route_text_color, '')     AS route_text_color,
-  -- is_rail: served by any non-bus route (tram/subway/rail/ferry/etc). Lets the
+  -- is_rail: served by any non-bus route (tram/subway/rail/ferry/etc), gate-
+  -- free on purpose — a night-only rail stop is still a rail stop. Lets the
   -- client show rail stops prominently and bus-only stops faint + high-zoom.
   COALESCE(rc.is_rail, false)           AS is_rail,
+  COALESCE(rc.route_count_all, 0)       AS route_count_all,
   st.geom
 FROM gtfs_stops st
 LEFT JOIN LATERAL (
   SELECT
-    count(DISTINCT r.route_id) AS route_count,
-    bool_or(r.route_type NOT IN (3, 11)) AS is_rail,
-    CASE WHEN count(DISTINCT r.route_id) = 1
-         THEN max(COALESCE(r.route_color, '')) ELSE '' END AS route_color,
-    CASE WHEN count(DISTINCT r.route_id) = 1
-         THEN max(COALESCE(r.route_text_color, '')) ELSE '' END AS route_text_color
-  FROM gtfs_stop_routes sr
-  JOIN gtfs_routes r ON r.feed_id = sr.feed_id AND r.route_id = sr.route_id
-  WHERE sr.feed_id = st.feed_id AND sr.stop_id = st.stop_id
+    CASE WHEN x.n_weekday > 0 THEN x.n_weekday
+         WHEN x.n_weekend > 0 THEN x.n_weekend
+         ELSE x.n_all END AS route_count,
+    CASE WHEN x.n_weekday > 0 THEN x.color_weekday
+         WHEN x.n_weekend > 0 THEN x.color_weekend
+         ELSE x.color_all END AS route_color,
+    CASE WHEN x.n_weekday > 0 THEN x.text_weekday
+         WHEN x.n_weekend > 0 THEN x.text_weekend
+         ELSE x.text_all END AS route_text_color,
+    x.n_all AS route_count_all,
+    x.is_rail
+  FROM (
+    SELECT
+      count(DISTINCT r.route_id) FILTER
+        (WHERE COALESCE(sr.trips_weekday_day, sr.weekday_trips, 999) >= 2) AS n_weekday,
+      count(DISTINCT r.route_id) FILTER
+        (WHERE COALESCE(sr.trips_weekend_day, 999) >= 2) AS n_weekend,
+      count(DISTINCT r.route_id) AS n_all,
+      bool_or(r.route_type NOT IN (3, 11)) AS is_rail,
+      CASE WHEN count(DISTINCT r.route_id) FILTER
+             (WHERE COALESCE(sr.trips_weekday_day, sr.weekday_trips, 999) >= 2) = 1
+           THEN max(COALESCE(r.route_color, '')) FILTER
+             (WHERE COALESCE(sr.trips_weekday_day, sr.weekday_trips, 999) >= 2)
+           ELSE '' END AS color_weekday,
+      CASE WHEN count(DISTINCT r.route_id) FILTER
+             (WHERE COALESCE(sr.trips_weekend_day, 999) >= 2) = 1
+           THEN max(COALESCE(r.route_color, '')) FILTER
+             (WHERE COALESCE(sr.trips_weekend_day, 999) >= 2)
+           ELSE '' END AS color_weekend,
+      CASE WHEN count(DISTINCT r.route_id) = 1
+           THEN max(COALESCE(r.route_color, '')) ELSE '' END AS color_all,
+      CASE WHEN count(DISTINCT r.route_id) FILTER
+             (WHERE COALESCE(sr.trips_weekday_day, sr.weekday_trips, 999) >= 2) = 1
+           THEN max(COALESCE(r.route_text_color, '')) FILTER
+             (WHERE COALESCE(sr.trips_weekday_day, sr.weekday_trips, 999) >= 2)
+           ELSE '' END AS text_weekday,
+      CASE WHEN count(DISTINCT r.route_id) FILTER
+             (WHERE COALESCE(sr.trips_weekend_day, 999) >= 2) = 1
+           THEN max(COALESCE(r.route_text_color, '')) FILTER
+             (WHERE COALESCE(sr.trips_weekend_day, 999) >= 2)
+           ELSE '' END AS text_weekend,
+      CASE WHEN count(DISTINCT r.route_id) = 1
+           THEN max(COALESCE(r.route_text_color, '')) ELSE '' END AS text_all
+    FROM gtfs_stop_routes sr
+    JOIN gtfs_routes r ON r.feed_id = sr.feed_id AND r.route_id = sr.route_id
+    WHERE sr.feed_id = st.feed_id AND sr.stop_id = st.stop_id
+  ) x
 ) rc ON TRUE
 WHERE st.geom IS NOT NULL
   AND COALESCE(st.location_type, 0) IN (0, 1);
