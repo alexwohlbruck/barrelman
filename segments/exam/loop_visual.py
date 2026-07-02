@@ -90,7 +90,10 @@ def offset_polyline(xy, offsets_m):
     """Per-vertex perpendicular offset with miter joins — what the fork's
     shader does with the per-vertex a_line_offset attribute. Positive
     offsets go RIGHT of travel. xy: [(x, y)] metres; offsets_m: per
-    vertex."""
+    vertex. Miter scale is capped at MapLibre's default miter-limit of
+    2 (joints sharper than ~120 deg turn bevel in the client — the
+    incoming segment's plain normal stands in for the bevel here), so
+    sharp joints never spike longer than the real render."""
     n = len(xy)
     dirs = []
     for a, b in zip(xy, xy[1:]):
@@ -115,9 +118,12 @@ def offset_polyline(xy, offsets_m):
                 normal, scale = (d1[1], -d1[0]), 1.0
             else:
                 m = (m[0] / ln, m[1] / ln)
-                normal = (m[1], -m[0])
                 cos_half = m[0] * d2[0] + m[1] * d2[1]
-                scale = 1.0 / max(cos_half, 0.05)  # miter, clamped
+                if cos_half < 0.5:  # miter scale > 2: MapLibre bevels
+                    normal, scale = (d1[1], -d1[0]), 1.0
+                else:
+                    normal = (m[1], -m[0])
+                    scale = 1.0 / cos_half
         out.append((xy[i][0] + normal[0] * offsets_m[i] * scale,
                     xy[i][1] + normal[1] * offsets_m[i] * scale))
     return out
