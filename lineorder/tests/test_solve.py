@@ -194,7 +194,7 @@ def test_chicago_end_to_end(chicago):
     for r in out.results:
         print(f"[solve] comp {r.index}: {r.method} ({r.status}), "
               f"{r.n_edges} edges, space {r.space:.3g}, "
-              f"{r.before:.1f} -> {r.after:.1f}, {r.wall:.2f}s")
+              f"{r.canonical:.1f} -> {r.after:.1f}, {r.wall:.2f}s")
     rep = crossing_report(chicago.graph, out.reduction.registry,
                           out.full_solution, out.reduction.weights)
     for nid, label, x, y, s in rep:

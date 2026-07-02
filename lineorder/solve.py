@@ -76,7 +76,9 @@ class ComponentResult:
     status: str      # optimal | heuristic
     n_edges: int
     space: int
-    before: float    # canonical-order score of the component
+    canonical: float  # score of the canonical (sorted-uid) order, NOT the
+                      # provisional DB slots (those don't map through the
+                      # reduction); the CLI summary line has provisional
     after: float
     wall: float
     solution: dict = field(default_factory=dict)
@@ -376,8 +378,8 @@ def solve_component(g, reg, w: Weights, comp_nodes, comp_edges,
     t0 = time.perf_counter()
     comp_edges = sorted(comp_edges)
     space = search_space(g, comp_edges)
-    before = score(g, reg, canonical_solution(g, comp_edges), w,
-                   comp_nodes).weighted
+    canonical = score(g, reg, canonical_solution(g, comp_edges), w,
+                      comp_nodes).weighted
     maxcard = max((len(g.edges[e].lines) for e in comp_edges), default=0)
 
     if maxcard <= 1:
@@ -409,7 +411,7 @@ def solve_component(g, reg, w: Weights, comp_nodes, comp_edges,
     after = score(g, reg, sol, w, comp_nodes).weighted
     return ComponentResult(index=index, method=method, status=status,
                            n_edges=len(comp_edges), space=space,
-                           before=before, after=after,
+                           canonical=canonical, after=after,
                            wall=time.perf_counter() - t0, solution=sol)
 
 
@@ -435,7 +437,7 @@ def solve_reduction(red: Reduction, cfg: SolveConfig | None = None):
             results.append(ComponentResult(
                 index=i, method="identity", status="optimal",
                 n_edges=len(c.edges), space=1,
-                before=score(g, reg, sol, w, c.nodes).weighted,
+                canonical=score(g, reg, sol, w, c.nodes).weighted,
                 after=score(g, reg, sol, w, c.nodes).weighted,
                 wall=0.0, solution=sol))
         else:
@@ -584,10 +586,10 @@ def main(argv=None):
           f"{len(out.results)} components "
           f"(rules {dict(red.stats)}, fixed cost {red.fixed_cost})")
     print(f"\n{'comp':>4} {'method':<14} {'edges':>5} {'space':>10} "
-          f"{'before':>9} {'after':>9} {'time':>8}")
+          f"{'canonical':>9} {'after':>9} {'time':>8}")
     for r in out.results:
         print(f"{r.index:>4} {r.method:<14} {r.n_edges:>5} "
-              f"{_fmt_space(r.space):>10} {r.before:>9.1f} "
+              f"{_fmt_space(r.space):>10} {r.canonical:>9.1f} "
               f"{r.after:>9.1f} {r.wall:>7.2f}s")
 
     b, a = out.before, out.after
