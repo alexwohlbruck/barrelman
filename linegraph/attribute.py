@@ -206,14 +206,18 @@ def _chain_edges(seq, lg, edge_nodes, node_edges):
     """Collapse a per-sample edge sequence into a connected chain.
 
     Consecutive duplicates collapse into runs. A short run (<=
-    BLEED_SUPPORT samples) whose surrounding runs are already mutually
-    adjacent is CROSSING BLEED — at a plan-view crossing the junction
-    node swallows ~MERGE_WIDTH of geometry, so one or two samples of a
-    route passing straight through can momentarily sit nearest to a
-    perpendicular arm it never rides (the subway picking up Loop
-    elevated edges). Redundant short runs are dropped; a genuinely
-    ridden short edge is never redundant (its neighbors only connect
-    THROUGH it), so it survives.
+    BLEED_SUPPORT samples) the chain does not NEED is CROSSING BLEED —
+    at a plan-view crossing the junction node swallows ~MERGE_WIDTH of
+    geometry, so one or two samples of a route passing straight through
+    can momentarily sit nearest to a perpendicular arm it never rides
+    (the subway picking up Loop elevated edges; post-refit, a collapsed
+    crossing packs several edges within a sample spacing and the
+    nearest edge for the zone's lone sample is a coin flip). "Not
+    needed" = the surrounding runs connect WITHOUT it: directly at a
+    shared node, or through a single OTHER bridge edge (the same hop
+    the gap fill below performs). A genuinely ridden short edge is
+    never redundant — its neighbors only connect THROUGH it — so it
+    survives.
 
     Then a single edge skipped between two samples (shorter than the
     sample spacing) is re-inserted when exactly reachable through one
@@ -224,14 +228,21 @@ def _chain_edges(seq, lg, edge_nodes, node_edges):
     if not runs:
         return []
 
-    def linked(i, j):
+    def redundant(i, j, skip):
+        """runs i, j connect without the edge `skip` between them."""
         a, b = runs[i][0], runs[j][0]
-        return a == b or bool(set(edge_nodes[a]) & set(edge_nodes[b]))
+        if a == b or set(edge_nodes[a]) & set(edge_nodes[b]):
+            return True
+        touching_a = (node_edges.get(edge_nodes[a][0], set())
+                      | node_edges.get(edge_nodes[a][1], set()))
+        touching_b = (node_edges.get(edge_nodes[b][0], set())
+                      | node_edges.get(edge_nodes[b][1], set()))
+        return bool((touching_a & touching_b) - {a, b, skip})
 
     chain = [
         e for i, (e, cnt) in enumerate(runs)
         if not (cnt <= BLEED_SUPPORT and 0 < i < len(runs) - 1
-                and linked(i - 1, i + 1))
+                and redundant(i - 1, i + 1, e))
     ]
     if not chain:
         return []
