@@ -39,6 +39,33 @@ from shapely.ops import substring
 from .corridors import GAP_PX, Corridor, Graph, walk_corridors
 
 
+# Zoom-banded transition lengths: (min_zoom, transition_len_m) — the tileset
+# half of the low-zoom density work (the client half squeezes the ribbon gap,
+# half spacing at z11 -> full at z14). A fixed 60 m transition is ~34 px at
+# z15 but ~4 px at z12 — junctions look mushy at city scale. Bands keep the
+# transition roughly constant SCREEN length: each band down doubles the
+# ground length as m/px doubles. The build emits the COMPLETE feature set
+# (steady + transitions, trims consistent) once per band; transit_lines_rt2
+# serves exactly one band per request zoom — the band whose min_zoom is the
+# highest <= z.
+DEFAULT_BANDS: tuple = ((15, 60.0), (14, 120.0), (13, 240.0), (0, 480.0))
+
+
+def band_ranges(bands=DEFAULT_BANDS) -> list:
+    """[(band_minzoom, band_maxzoom, transition_len_m)] with maxzoom
+    partners derived so the bands PARTITION the zoom axis: each band's
+    maxzoom = next band's minzoom - 1, top band capped at 99. Sorted by
+    minzoom descending (the z15 band — the pre-band default — first)."""
+    ordered = sorted(bands, key=lambda b: -b[0])
+    if len({mz for mz, _ in ordered}) != len(ordered):
+        raise ValueError(f"duplicate band min_zooms: {bands}")
+    out, hi = [], 99
+    for mz, length in ordered:
+        out.append((int(mz), hi, float(length)))
+        hi = int(mz) - 1
+    return out
+
+
 @dataclass(frozen=True)
 class SegmentConfig:
     transition_len_m: float = 60.0    # fixed ground length centred on the node
@@ -49,6 +76,7 @@ class SegmentConfig:
     offset_eps_px: float = 0.01       # offset delta below this => unchanged
     probe_dist_m: float = 40.0        # shape-evidence probe distance from node
     evidence_tol_m: float = 30.0      # shape-to-probe distance tolerance
+    bands: tuple = DEFAULT_BANDS      # ((min_zoom, transition_len_m), ...)
     cusp_turn_deg: float = 150.0      # vertex turn above this = reversal cusp
     cusp_window_m: float = 20.0       # max cusp cluster span worth excising
     cusp_pad_m: float = 7.5           # excision window padding past the cusp
@@ -81,6 +109,10 @@ class Segment:
     fillet_radius_m: float | None = None   # achieved min biarc radius
     fillet_clamped: bool = False           # target radius not reachable
     raw_min_radius_m: float | None = None  # pre-fillet floor, corner excl.
+    fillet_target_m: float | None = None   # min radius the corner was BUILT
+    # to (local bundle count x gap x factor at pair time; min across
+    # merged corners) — a merged chain's line_count is the bigger end's,
+    # so exams must not re-derive interior corners' targets from it
 
 
 # ------------------------------------------------------------ projection
@@ -801,7 +833,7 @@ def build_segments(g: Graph, cfg: SegmentConfig = SegmentConfig(),
                     sites=(nid,), in_end=(c1.cid, s1), out_end=(c2.cid, s2),
                     turn_deg=turn, fillet_radius_m=r_arc,
                     fillet_clamped=clamped, raw_min_radius_m=raw_min,
-                    **meta))
+                    fillet_target_m=radius, **meta))
                 n_t += 1
             for c, side, r in stubs:
                 cg = cgs[c.cid]
@@ -834,7 +866,8 @@ def build_segments(g: Graph, cfg: SegmentConfig = SegmentConfig(),
                 radii = [r for r in (t.fillet_radius_m, r_cusp)
                          if r is not None]
                 t.fillet_radius_m = min(radii)
-                target = (t.line_count * cfg.gap_px
+                target = (t.fillet_target_m if t.fillet_target_m
+                          is not None else t.line_count * cfg.gap_px
                           * cfg.fillet_radius_factor)
                 if r_cusp < target - 1e-6 and not t.fillet_clamped:
                     t.fillet_clamped = True
@@ -930,6 +963,8 @@ def _merge_consumed(transitions: list, cgs: dict, info: dict) -> list:
                          if r is not None]
                 raws = [r for r in (a.raw_min_radius_m, b.raw_min_radius_m)
                         if r is not None]
+                targets = [r for r in (a.fillet_target_m, b.fillet_target_m)
+                           if r is not None]
                 merged = replace(
                     a, off_to_px=b.off_to_px,
                     coords=_dedupe(a.coords + b.coords),
@@ -938,6 +973,7 @@ def _merge_consumed(transitions: list, cgs: dict, info: dict) -> list:
                     fillet_radius_m=min(radii) if radii else None,
                     fillet_clamped=a.fillet_clamped or b.fillet_clamped,
                     raw_min_radius_m=min(raws) if raws else None,
+                    fillet_target_m=min(targets) if targets else None,
                     route_ids=",".join(sorted(
                         set(a.route_ids.split(","))
                         | set(b.route_ids.split(",")))),

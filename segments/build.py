@@ -5,15 +5,23 @@
       [--transition-len 60]
 
 Report-only without --emit.
+
+Zoom bands: by default the build runs once per SegmentConfig.bands entry
+(z15/60 m, z14/120 m, z13/240 m, z0/480 m — roughly constant transition
+SCREEN length across zooms) and --emit writes the complete feature set of
+EVERY band (delete-and-replace per build_key covers all bands; row growth
+~4x). --transition-len X collapses to a single band covering all zooms —
+the pre-band debug knob.
 """
 
 from __future__ import annotations
 
 import argparse
 from collections import Counter
+from dataclasses import replace
 
 from .corridors import DEFAULT_DSN, load_graph
-from .segment import SegmentConfig, build_segments
+from .segment import SegmentConfig, band_ranges, build_segments
 
 
 def load_shapes(g, dsn: str) -> dict:
@@ -79,16 +87,20 @@ def main(argv=None) -> int:
         description="steady/transition segmentation -> transit_line_segments")
     ap.add_argument("--build-key", required=True)
     ap.add_argument("--dsn", default=DEFAULT_DSN)
-    ap.add_argument("--transition-len", type=float, default=60.0,
-                    help="fixed ground length of transition zones (m)")
+    ap.add_argument("--transition-len", type=float, default=None,
+                    help="single-band mode: fixed ground length (m) served "
+                         "at every zoom (default: the zoom bands)")
     ap.add_argument("--gap-px", type=float, default=4.4)
     ap.add_argument("--densify", type=float, default=7.5)
     ap.add_argument("--emit", action="store_true",
-                    help="write transit_line_segments (delete-and-replace)")
+                    help="write transit_line_segments (delete-and-replace, "
+                         "all bands)")
     args = ap.parse_args(argv)
 
-    cfg = SegmentConfig(transition_len_m=args.transition_len,
-                        gap_px=args.gap_px, densify_step_m=args.densify)
+    cfg = SegmentConfig(gap_px=args.gap_px, densify_step_m=args.densify)
+    if args.transition_len is not None:
+        cfg = replace(cfg, transition_len_m=args.transition_len,
+                      bands=((0, args.transition_len),))
     print(f"loading {args.build_key} ...")
     g = load_graph(args.build_key, args.dsn)
     print(f"  {len(g.nodes)} nodes, {len(g.edges)} edges")
@@ -100,14 +112,21 @@ def main(argv=None) -> int:
         print(f"  matched_shapes unavailable ({err}); greedy pairing")
         shapes = None
 
-    segments, info = build_segments(g, cfg, shapes=shapes)
-    print(summarize(segments, info))
+    band_segments = []
+    for band_minzoom, band_maxzoom, length in band_ranges(cfg.bands):
+        bcfg = replace(cfg, transition_len_m=length)
+        segments, info = build_segments(g, bcfg, shapes=shapes)
+        print(f"--- band z{band_minzoom}..{band_maxzoom} "
+              f"(transition {length:.0f} m)")
+        print(summarize(segments, info))
+        band_segments.append((band_minzoom, band_maxzoom, segments))
 
     if args.emit:
         from .emit import emit_segments
-        n = emit_segments(segments, build_key=args.build_key, dsn=args.dsn)
+        n = emit_segments(band_segments, build_key=args.build_key,
+                          dsn=args.dsn)
         print(f"emitted {n} rows to transit_line_segments "
-              f"(build_key {args.build_key})")
+              f"(build_key {args.build_key}, {len(band_segments)} band(s))")
     return 0
 
 
