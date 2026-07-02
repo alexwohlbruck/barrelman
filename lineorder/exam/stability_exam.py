@@ -30,6 +30,11 @@ Read-only. Exits non-zero if any check fails. Run:
 
   uv run --with-requirements lineorder/requirements.txt \
       python lineorder/exam/stability_exam.py
+
+`--build-key` (default chicago:l-v3) points the generic checks (1, 2, 3,
+5) at another build; the Chicago-specific assertions (check 2's Loop
+window inventory, check 4's LOOM baseline contrast) only run for the
+default build.
 """
 
 from __future__ import annotations
@@ -183,7 +188,7 @@ def check1_corridor_stability(inst):
     return cors
 
 
-def check2_transitions(inst):
+def check2_transitions(inst, chicago: bool = True):
     print("\nCHECK 2 — transitions only at junctions / composition changes")
     g, reg = inst.graph, inst.registry
     edges, _ = v3_state(inst)
@@ -219,14 +224,15 @@ def check2_transitions(inst):
     report("check2.slot-change-only-at-composition", not bad,
            f"{len(bad)} deg-2 slot changes without a composition change")
 
-    loop = [s for s in sites
-            if in_window(g.nodes[s[0]].x, g.nodes[s[0]].y)]
-    loop_bad = [s for s in loop if s[1] < 3]
-    report("check2.loop-junctions-only",
-           not loop_bad and len(loop) == EXPECTED_LOOP_JUNCTIONS,
-           f"Loop-window transition sites: {len(loop)} "
-           f"(expected {EXPECTED_LOOP_JUNCTIONS} junctions), "
-           f"{len(loop_bad)} at degree-2 nodes")
+    if chicago:
+        loop = [s for s in sites
+                if in_window(g.nodes[s[0]].x, g.nodes[s[0]].y)]
+        loop_bad = [s for s in loop if s[1] < 3]
+        report("check2.loop-junctions-only",
+               not loop_bad and len(loop) == EXPECTED_LOOP_JUNCTIONS,
+               f"Loop-window transition sites: {len(loop)} "
+               f"(expected {EXPECTED_LOOP_JUNCTIONS} junctions), "
+               f"{len(loop_bad)} at degree-2 nodes")
     return sites
 
 
@@ -319,7 +325,7 @@ def check4_loom_contrast(dsn):
            f"LOOM violations {len(viol)} (expected > 0) vs v3's 0")
 
 
-def check5_determinism(inst, dsn):
+def check5_determinism(inst, dsn, build: str = BUILD):
     print("\nCHECK 5 — determinism (solve twice + stored slots match)")
     cfg = SolveConfig()  # apply's defaults: seed 0, deterministic CP-SAT
 
@@ -331,7 +337,7 @@ def check5_determinism(inst, dsn):
                 for e in instance.graph.edges}
 
     out1 = solve_instance(inst, cfg)
-    inst2 = load_build(BUILD, dsn)
+    inst2 = load_build(build, dsn)
     out2 = solve_instance(inst2, cfg)
     s1 = perm_by_db_edge(inst, out1.full_solution)
     s2 = perm_by_db_edge(inst2, out2.full_solution)
@@ -349,19 +355,32 @@ def check5_determinism(inst, dsn):
 
 
 def main() -> int:
-    dsn = DEFAULT_DSN
-    print(f"lineorder stability exam — build {BUILD} vs baseline "
-          f"{BASELINE}\ndsn {dsn}")
-    inst = load_build(BUILD, dsn)
+    import argparse
+
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("--build-key", default=BUILD)
+    ap.add_argument("--dsn", default=DEFAULT_DSN)
+    args = ap.parse_args()
+    build, dsn = args.build_key, args.dsn
+    chicago = build == BUILD  # Loop window + LOOM baseline checks
+
+    print(f"lineorder stability exam — build {build}"
+          + (f" vs baseline {BASELINE}" if chicago else "")
+          + f"\ndsn {dsn}")
+    inst = load_build(build, dsn)
     print(f"loaded {len(inst.graph.nodes)} nodes, "
           f"{len(inst.graph.edges)} edges, "
           f"{sum(len(p) for p in inst.provisional.values())} edge-lines")
 
     check1_corridor_stability(inst)
-    check2_transitions(inst)
+    check2_transitions(inst, chicago)
     check3_crossings(inst)
-    check4_loom_contrast(dsn)
-    check5_determinism(inst, dsn)
+    if chicago:
+        check4_loom_contrast(dsn)
+    else:
+        print(f"\nCHECK 4 — skipped (LOOM baseline contrast is "
+              f"chicago-only; build {build})")
+    check5_determinism(inst, dsn, build)
 
     print("\n" + "=" * 64)
     if FAILURES:
