@@ -62,6 +62,7 @@ class Candidate:
     y: float
     dist: float        # observation -> snap point distance (m)
     bonus: float = 0.0  # emission cost subtraction (regime B name/ref bonuses)
+    prior: float = 0.0  # emission cost addition (route-relation mismatch prior)
 
 
 class MatchGraph:
@@ -150,8 +151,16 @@ class MatchGraph:
 
     # ── candidate lookup ─────────────────────────────────────────────────────
 
-    def candidates(self, x: float, y: float, radius: float, k: int) -> list[Candidate]:
-        """k-nearest edges within radius, expanded to directed candidates."""
+    def candidates(
+        self, x: float, y: float, radius: float, k: int, include=None
+    ) -> list[Candidate]:
+        """k-nearest edges within radius, expanded to directed candidates.
+
+        `include`: optional predicate(edge_idx) that forces an in-radius
+        edge into the set even when k closer edges exist — used to keep
+        route-relation-matched tracks alive where dense junction fan-out
+        (e.g. the Loop 'L') would otherwise crowd them out.
+        """
         pt = Point(x, y)
         idxs = self.tree.query(pt, predicate="dwithin", distance=radius)
         scored = []
@@ -164,8 +173,11 @@ class MatchGraph:
             if dist <= radius:
                 scored.append((dist, i, fwd, snap))
         scored.sort(key=lambda t: t[0])
+        keep = scored[:k]
+        if include is not None:
+            keep += [t for t in scored[k:] if include(t[1])]
         out: list[Candidate] = []
-        for dist, i, fwd, snap in scored[:k]:
+        for dist, i, fwd, snap in keep:
             edge = self.graph.edges[i]
             dirs = (1,) if edge.oneway == 1 else (-1,) if edge.oneway == -1 else (1, -1)
             for d in dirs:

@@ -97,7 +97,7 @@ class MatchConfig:
     # candidate search (meters)
     dense_radius: dict = field(default_factory=lambda: {"rail": 50.0, "bus": 35.0, "ferry": 100.0})
     sparse_radius: dict = field(default_factory=lambda: {"rail": 200.0, "bus": 100.0, "ferry": 500.0})
-    k_candidates: int = 8
+    k_candidates: int = 10
     # regime A resampling
     resample_m: float = 30.0
     max_obs: int = 2000
@@ -115,6 +115,14 @@ class MatchConfig:
     route_bonus_mult: float = 0.5
     uturn_penalty_m: float = 200.0
     uturn_cos: float = -0.866  # reversal = turn sharper than ~150°
+    # vertical disambiguation: where elevated and subway tracks stack
+    # (Lake St: the Lake 'L' runs directly ABOVE the Milwaukee-Dearborn
+    # subway) horizontal emissions tie, so candidates whose OSM route
+    # relations do NOT match the GTFS route pay this emission prior.
+    # Only active when the route has relation coverage among the
+    # pattern's candidates; layers without any match add a constant,
+    # which cannot change the decoded chain.
+    relation_prior: float = 0.35
     # regime B extras
     station_search_radius_m: float = 120.0
     name_bonus_weight: float = 1.5
@@ -463,7 +471,7 @@ def _hop_coords(mg: MatchGraph, a: Candidate, b: Candidate, path: list) -> list:
 
 
 def _emission(c: Candidate, sigma: float) -> float:
-    return max(0.0, 0.5 * (c.dist / sigma) ** 2 - c.bonus)
+    return max(0.0, 0.5 * (c.dist / sigma) ** 2 - c.bonus) + c.prior
 
 
 def _decode_segment(mg, cfg, layers, alongs, start, mult, dense, station_idx=None):
@@ -598,8 +606,15 @@ def match_pattern(
         for i in range(n - 1)
     ]
 
-    # candidate layers
-    layers = [mg.candidates(x, y, radius, cfg.k_candidates) for x, y in obs]
+    # candidate layers; route-relation-matched edges are always admitted
+    # so junction fan-out can't crowd the decorated track out of the top-k
+    rm = RouteMatcher(pattern.route_short_name, pattern.route_long_name, pattern.route_color)
+    edges = mg.graph.edges
+    rel_match = lambda i: rm.matches_edge(i, edges[i])  # noqa: E731
+    layers = [
+        mg.candidates(x, y, radius, cfg.k_candidates, include=rel_match)
+        for x, y in obs
+    ]
     if not dense and station_idx is not None and station_idx.tree is not None:
         stop_names = pattern.stop_names if len(pattern.stop_names) == n else [""] * n
         for i, layer in enumerate(layers):
@@ -608,8 +623,19 @@ def match_pattern(
                     c.x, c.y, stop_names[i], "", cfg.station_search_radius_m
                 )
 
-    rm = RouteMatcher(pattern.route_short_name, pattern.route_long_name, pattern.route_color)
     base_mult = [e.class_penalty for e in mg.graph.edges]
+
+    # route-relation emission prior (vertical stack disambiguation): only
+    # active when the route's relations decorate at least one candidate
+    cand_matches = {
+        c.edge: rel_match(c.edge) for layer in layers for c in layer
+    }
+    relation_prior_active = any(cand_matches.values())
+    if relation_prior_active:
+        for layer in layers:
+            for c in layer:
+                if not cand_matches[c.edge]:
+                    c.prior = cfg.relation_prior
 
     def mult(e: int) -> float:
         m = base_mult[e]
@@ -623,6 +649,7 @@ def match_pattern(
         "n_empty_layers": sum(1 for l in layers if not l),
         "mean_candidates": round(sum(len(l) for l in layers) / max(1, n), 2),
         "radius_m": radius,
+        "relation_prior_active": relation_prior_active,
     }
 
     if all(not l for l in layers):
