@@ -4,3 +4,7 @@ dist/
 *.log
 data/
 drizzle/meta/
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
