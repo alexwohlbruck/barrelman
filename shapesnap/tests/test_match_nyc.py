@@ -33,6 +33,18 @@ Known agency-data notes (investigated, not matcher faults):
     37–64 m from OSM's tunnel alignment for ~700 m, beyond the 50 m dense
     radius at its peak — the matcher breaks and bridges with the original
     shape segment (~390–420 m), by design.
+  - R/0/a5589774 (32 trips/day, shape R..N78R): between Canal St and
+    Prince St the shape is drawn through the Manhattan-Bridge approach
+    and the Lexington Av corridor (long stop-to-stop chords plus a
+    self-reversal just past Canal St) — 40+ m from the R's own Broadway
+    local track but <15 m from foreign tracks (N/Q bridge, 4/5/6), so
+    unpenalized emission would division-hop. The matcher excises the
+    foreign-identity observation run (widened to the enclosing stop
+    anchors) and spans the gap with a network path on the R's own track;
+    foreign-identity candidates in mixed layers pay the heavy emission
+    prior. Pinned in test_r_canal_degenerate_shape_excised; the residual
+    is a parallel-track wobble on the City Hall chord (Hausdorff ~15 m
+    to the top R/0 pattern, inside the stage-4 merge width).
 
 Run (auto-skips without a NYC pbf/graph or data/gtfs/5.zip):
   uv run --with-requirements shapesnap/requirements.txt \
@@ -43,6 +55,7 @@ import time
 from collections import Counter
 
 import pytest
+from shapely.geometry import LineString, box
 
 from shapesnap.candidates import MatchGraph
 from shapesnap.graph import REPO_ROOT, build_graph, is_stale, load_graph, save_graph
@@ -64,6 +77,9 @@ PBF = REPO_ROOT / "data" / "ny.osm.pbf"
 EXAM_ROUTES = {"1", "2", "3", "N", "Q", "R", "W"}
 # Q's top patterns hit the documented 96 St terminal fallback; asserted apart
 DENSE_ROUTES = EXAM_ROUTES - {"Q"}
+# non-top patterns matched IN ADDITION to the per-(route, direction) top
+# ones: the Canal St degenerate-shape excision pin (module docstring)
+PINNED_KEYS = {"R/0/a5589774"}
 
 
 def _rail_graph():
@@ -97,17 +113,20 @@ def exam():
     picked: dict = {}  # (route, direction) -> top pattern by trip count
     for p in patterns:  # already sorted by -trip_count
         picked.setdefault((p.route_id, p.direction_id), p)
+    todo = [p for _k, p in sorted(picked.items())]
+    todo += [p for p in patterns if p.key in PINNED_KEYS and p not in todo]
 
     cfg = MatchConfig()
-    results = {}
-    for key, p in sorted(picked.items()):
-        results[key] = (p, match_pattern(mg, p, cfg))
+    results = {}  # pattern key -> (Pattern, MatchResult)
+    for p in todo:
+        results[p.key] = (p, match_pattern(mg, p, cfg))
     print(f"\n[exam] {len(patterns)} patterns loaded in {t_load:.1f}s; matched {len(results)}")
-    for (rid, d), (p, r) in results.items():
+    for p, r in results.values():
         print(
             f"[exam] {p.key} trips={p.trip_count} method={r.method} "
             f"conf={r.confidence} breaks={r.stats['breaks']} "
             f"tier={r.stats.get('relation_match_tier')} "
+            f"dropped={r.stats.get('dropped_obs')} "
             f"gates={r.gates.as_dict() if r.gates else None}"
         )
     return graph, mg, results
@@ -150,14 +169,14 @@ def _window_ways(graph, r, bbox) -> dict:
 
 
 def _route(results, rid):
-    return [(p, r) for (route, _d), (p, r) in results.items() if route == rid]
+    return [(p, r) for (p, r) in results.values() if p.route_id == rid]
 
 
 def test_exam_patterns_match_dense(exam):
     _, _, results = exam
-    assert {rid for (rid, _d) in results} == EXAM_ROUTES
-    for (rid, d), (p, r) in results.items():
-        if rid not in DENSE_ROUTES:
+    assert {p.route_id for p, _r in results.values()} == EXAM_ROUTES
+    for p, r in results.values():
+        if p.route_id not in DENSE_ROUTES:
             continue
         assert r.method == "hmm_dense", (p.key, r.method, r.stats)
         assert r.gates is not None and r.gates.passed, (p.key, r.gates.as_dict())
@@ -254,3 +273,45 @@ def test_vertical_sanity(exam):
         for p, r in _route(results, rid):
             c = levels(r, ASTORIA_BBOX)
             assert c and set(c) == {"elevated"}, (p.key, "Astoria", dict(c))
+
+
+def test_r_canal_degenerate_shape_excised(exam):
+    """Third worst-pattern investigation (module docstring): the R shape
+    drawn through the Manhattan-Bridge approach / Lexington corridor must
+    be excised, never division-hopped. Asserts (1) the foreign-run
+    excision fired with a clean decode, (2) no foreign-identity way is
+    ridden anywhere, (3) the geometry agrees with the top R/0 pattern
+    through lower Manhattan within the stage-4 merge width."""
+    graph, mg, results = exam
+    assert "R/0/a5589774" in results, "feed 5 artifact changed under the pin"
+    p, r = results["R/0/a5589774"]
+    assert r.method == "hmm_dense", (r.method, r.stats)
+    assert r.stats["dropped_obs"] > 0 and r.stats["dropped_runs"] >= 1, r.stats
+    assert r.stats["breaks"] == 0, r.stats
+    for i in r.edges_used:
+        e = graph.edges[i]
+        refs = {rr["ref"] for rr in e.route_refs if rr["ref"]}
+        assert not refs or "R" in refs, (e.way_id, sorted(refs))
+    main = max(
+        (
+            pr for pr in results.values()
+            if pr[0].route_id == "R" and pr[0].direction_id == 0
+            and pr[0].key != p.key
+        ),
+        key=lambda pr: pr[0].trip_count,
+    )
+    # City Hall–Canal (the excursion + chord zone) and Canal–8 St: same
+    # trunk as the main decode; the residual parallel-track wobble on the
+    # City Hall chord measures ~15 m (merge width 15–20 m)
+    for bb in (
+        (-74.012, 40.710, -73.998, 40.7215),
+        (-74.002, 40.7185, -73.990, 40.7315),
+    ):
+        (x0, y0), (x1, y1) = mg.project_lonlat([(bb[0], bb[1]), (bb[2], bb[3])])
+        w = box(x0, y0, x1, y1)
+        a = LineString(mg.project_lonlat(r.coords)).intersection(w)
+        b = LineString(mg.project_lonlat(main[1].coords)).intersection(w)
+        assert not a.is_empty and not b.is_empty, bb
+        d = a.hausdorff_distance(b)
+        print(f"[exam] R pin window {bb}: hausdorff {d:.1f} m")
+        assert d < 20.0, (bb, d)
