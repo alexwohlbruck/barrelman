@@ -137,6 +137,29 @@ Per (mode-class, region cell), from *matched* shapes:
   band only.
 - Emits the existing `transit_graph_nodes/edges/edge_lines` contract + builds ledger.
 
+#### Loop exam (stage-4 acceptance)
+
+`linegraph/exam/loop_exam.py` compares `chicago:l-v3` against the LOOM baseline
+(`chicago:l`) and the `mm_edges` OSM QA table, entirely in PostGIS: elevated-only
+routes (Brn/P/Org/G/Pink) never ride a tunnel alignment — the same probe fails 9
+LOOM edges on the Dearborn/State subways (the Tower 18 over-merge receipt, 0 in
+v3); Blue/Red Loop-interior corridors stay single-route and hug tunnel ways;
+per-leg route bundles (Lake/Wabash/Van Buren/Wells) match ground truth derived
+from `matched_shapes`; every Loop-window station labels a node within 100 m;
+Tower 18 is a junction and mid-block Dearborn is not. Also writes a side-by-side
+PNG + per-build GeoJSON of the Loop window. Exits non-zero on any failure. Run:
+
+```
+uv run --with-requirements linegraph/requirements.txt \
+    python linegraph/exam/loop_exam.py --out data/exam
+```
+
+Known allowances: the Dearborn subway genuinely runs beneath the Lake St
+elevated, so Lake-leg edges bundle Blue with the elevated routes (plan-view
+fusion, by design) — the exam asserts that co-attribution appears *only* there;
+`mm_edges` has a small coverage gap on the Evanston-branch curve at Linden, so
+uncovered spans are accepted only when they hug the route's own matched shape.
+
 ### Stage 5 — ordering + slot stabilization (task #5)
 
 MLNCM-S per the LOOM TSAS 2019 paper; reductions first, solver second:
