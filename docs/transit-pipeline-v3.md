@@ -140,8 +140,9 @@ Per (mode-class, region cell), from *matched* shapes:
 #### Loop exam (stage-4 acceptance)
 
 `linegraph/exam/loop_exam.py` compares `chicago:l-v3` against the LOOM baseline
-(`chicago:l`) and the `mm_edges` OSM QA table, entirely in PostGIS: elevated-only
-routes (Brn/P/Org/G/Pink) never ride a tunnel alignment — the same probe fails 9
+(`chicago:l`) and the `mm_edges` OSM QA table, entirely in PostGIS: every sample
+point of every elevated-family (Brn/P/Org/G/Pink) edge lies within 25 m of a
+surface/elevated OSM rail way, no escape hatch — the same probe fails 9
 LOOM edges on the Dearborn/State subways (the Tower 18 over-merge receipt, 0 in
 v3); Blue/Red Loop-interior corridors stay single-route and hug tunnel ways;
 per-leg route bundles (Lake/Wabash/Van Buren/Wells) match ground truth derived
@@ -154,11 +155,22 @@ uv run --with-requirements linegraph/requirements.txt \
     python linegraph/exam/loop_exam.py --out data/exam
 ```
 
-Known allowances: the Dearborn subway genuinely runs beneath the Lake St
-elevated, so Lake-leg edges bundle Blue with the elevated routes (plan-view
-fusion, by design) — the exam asserts that co-attribution appears *only* there;
-`mm_edges` has a small coverage gap on the Evanston-branch curve at Linden, so
-uncovered spans are accepted only when they hug the route's own matched shape.
+Spec amendment — Lake-leg Blue bundling (needs spec-author sign-off): the
+Milwaukee–Dearborn Blue subway genuinely runs beneath the Lake St elevated, so
+Lake-leg edges bundle Blue with the elevated routes. This plan-view fusion is
+by design and matches the official CTA map treatment; it is also what lets
+stage 5 offset Blue beside G/Pink — a separate coincident Blue edge would leave
+two bundles stacked at offset 0 with no cross-edge ordering. The exam holds the
+allowance to physical proof per edge, not a lat threshold: co-attribution only
+on the Lake leg, a tunnel-tagged rail way within 25 m of every sample point,
+and Blue's own matched shape within one merge width (18 m) of the centerline.
+Red is never co-attributed anywhere in the window.
+
+The 25 m coverage check has no fallback reference: an earlier `mm_edges` hole
+at the Purple line's Linden terminal turned out to be a graph-crop bug (the
+chicago bbox north edge sat at 42.07; Linden is at 42.0734) — fixed by widening
+the bbox to 42.09 in `config/regions.json` / `config/shapesnap.json` and
+re-dumping `mm_edges` (`shapesnap.graph --postgis`), not by relaxing the exam.
 
 ### Stage 5 — ordering + slot stabilization (task #5)
 
