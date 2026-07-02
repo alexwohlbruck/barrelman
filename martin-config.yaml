@@ -33,8 +33,10 @@ postgres:
       bounds: [-88.0, 33.0, -73.0, 42.0]
     # v3 semantic segments (PAR-12): per-line steady/transition features from
     # transit_line_segments with offset_px / off_from_px+off_to_px and local
-    # clip fractions (import/create-transit-lines-rt2.sql). The function itself
-    # skips transition features below z11 (~60 m ground, sub-pixel there).
+    # clip fractions (import/create-transit-lines-rt2.sql). The function
+    # serves exactly ONE transition-length band per request zoom (z15/60 m,
+    # z14/120 m, z13/240 m, z<=12/480 m — roughly constant screen length)
+    # and skips transition features below z11.
     transit_lines_rt2:
       schema: public
       function: transit_lines_rt2

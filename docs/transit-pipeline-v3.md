@@ -308,14 +308,28 @@ steady/transition features → `transit_line_segments` → Martin function
   features with constant `offset_px` (colour-collapse mirrors the display SQL:
   `color_key = COALESCE(NULLIF(route_color,''),'rid:'||route_id)`;
   `offset_px = (ribbon_slot - (ribbon_count-1)/2) * 4.4`).
-- Transition segments (fixed 60 m ground length — tunable `--transition-len` —
-  centred on junction/composition nodes): per-ribbon features with
-  `off_from_px`/`off_to_px` in the feature's own travel frame, densified ≤7.5 m,
-  centerline biarc-filleted (G1 at the seams) with min radius ≥
-  `line_count * gap_px * fillet_radius_factor`; short corridors shrink their
-  halves, fully consumed corridors merge their two transitions; ribbons on ≥3
-  corridor ends pair by matched_shapes traversal evidence; terminating ribbons
-  keep a constant-offset steady stub into the node (terminus polish = client).
+- Transition segments (fixed ground length centred on junction/composition
+  nodes): per-ribbon features with `off_from_px`/`off_to_px` in the feature's
+  own travel frame, densified ≤7.5 m, centerline biarc-filleted (G1 at the
+  seams) with min radius ≥ `line_count * gap_px * fillet_radius_factor`; short
+  corridors shrink their halves, fully consumed corridors merge their two
+  transitions; ribbons on ≥3 corridor ends pair by matched_shapes traversal
+  evidence; terminating ribbons keep a constant-offset steady stub into the
+  node (terminus polish = client). Micro-hairpins where a through-transition
+  retraces a refit-collapsed crossing rung against travel are excised and
+  biarc-bridged (`excise_reversal_cusps`; NYC Borough Hall receipt).
+- **Zoom bands** (`SegmentConfig.bands`, default `[(15, 60), (14, 120),
+  (13, 240), (0, 480)]` as (min_zoom, transition_len_m)): a fixed 60 m
+  transition is ~34 px at z15 but ~4 px at z12 — junction curves need roughly
+  constant SCREEN length across zooms (the client half of the same work
+  squeezes the ribbon gap, half spacing at z11 → full at z14). The build emits
+  the COMPLETE feature set (steady + transitions, trims consistent) once per
+  band; `band_minzoom`/`band_maxzoom` partition the zoom axis (maxzoom = next
+  band's minzoom − 1, top band 99) and the tile function serves exactly ONE
+  band per request zoom — the band whose min_zoom is the highest ≤ z. Longer
+  bands consume short corridors and merge transitions far more often by
+  design; the exams hold the Chicago-verbatim bounds only on the z15 band.
+  `--transition-len X` collapses to a single all-zoom band (debug knob).
 - `transit_lines_rt2(z,x,y)` (`import/create-transit-lines-rt2.sql`) emits the
   segment features + local clip fractions (`ST_LineLocatePoint` against the full
   feature, direction-normalized, continuous across tile seams — the proven
