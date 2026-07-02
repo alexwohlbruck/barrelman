@@ -200,3 +200,21 @@ def test_cache_round_trip(rail, tmp_path):
 def test_default_cache_path():
     p = default_cache_path("/x/data/il.osm.pbf", "rail")
     assert str(p) == "/x/data/shapesnap/il.rail.graph.pkl.gz"
+
+
+def test_cli_cache_loads_from_other_entry_points(tmp_path):
+    """Regression: caches written by `python -m shapesnap.graph` must pickle
+    dataclasses as shapesnap.graph.*, not __main__.*."""
+    import subprocess
+    import sys
+
+    out = tmp_path / "cli.rail.graph.pkl.gz"
+    repo_root = Path(__file__).resolve().parents[2]
+    subprocess.run(
+        [sys.executable, "-m", "shapesnap.graph",
+         "--pbf", str(FIXTURE), "--mode", "rail", "--out", str(out)],
+        check=True, cwd=repo_root, capture_output=True,
+    )
+    loaded = load_graph(out, expect_pbf=FIXTURE)
+    assert type(loaded).__module__ == "shapesnap.graph"
+    assert {e.way_id for e in loaded.edges} == {101, 102, 103, 104, 107, 108}

@@ -650,4 +650,9 @@ def main(argv=None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # Re-import ourselves under the canonical module name so pickled
+    # dataclasses reference shapesnap.graph.* (not __main__.*) and caches
+    # written by the CLI stay loadable from any entry point.
+    from shapesnap.graph import main as _main
+
+    sys.exit(_main())
