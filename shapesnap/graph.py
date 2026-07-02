@@ -215,6 +215,8 @@ def classify_bus(tags) -> dict | None:
         oneway = 0
     elif override in ("yes", "true", "1"):
         oneway = 1
+    elif override == "-1":
+        oneway = -1  # reversed contraflow: buses ride against the way
     elif ow in ("yes", "true", "1"):
         oneway = 1
     elif ow == "-1":
@@ -391,6 +393,18 @@ def build_graph(pbf_path, mode: str, bbox=None) -> ModeGraph:
     """Build the per-mode matching graph from an OSM pbf (or .osm XML)."""
     if mode not in MODE_CLASSES:
         raise ValueError(f"mode must be one of {MODE_CLASSES}, got {mode!r}")
+    if bbox is not None:
+        # mirror the CLI's _parse_bbox: a degenerate/inverted bbox would
+        # silently drop every way and return an empty graph
+        try:
+            minlon, minlat, maxlon, maxlat = (float(v) for v in bbox)
+        except (TypeError, ValueError):
+            raise ValueError(
+                f"bbox must be 4 numbers (minlon, minlat, maxlon, maxlat), got {bbox!r}"
+            ) from None
+        if not (minlon < maxlon and minlat < maxlat):
+            raise ValueError(f"bbox min must be < max, got {bbox!r}")
+        bbox = (minlon, minlat, maxlon, maxlat)
     pbf_path = Path(pbf_path)
     if not pbf_path.exists():
         raise FileNotFoundError(pbf_path)
@@ -441,7 +455,9 @@ def build_graph(pbf_path, mode: str, bbox=None) -> ModeGraph:
                         oneway=meta["oneway"],
                         class_penalty=meta["penalty"],
                         tags=minimal,
-                        route_refs=route_refs,
+                        # own copy per edge: a consumer mutating one edge's
+                        # list must not mutate its way siblings'
+                        route_refs=list(route_refs),
                     )
                 )
                 edge_id += 1
@@ -511,12 +527,25 @@ def save_graph(graph: ModeGraph, out_path) -> None:
 
 
 def load_graph(cache_path, expect_pbf=None) -> ModeGraph:
-    """Load a cached graph. If expect_pbf is given, raise on staleness."""
-    with gzip.open(cache_path, "rb") as f:
-        graph = pickle.load(f)
-    if graph.format_version != FORMAT_VERSION:
+    """Load a cached graph. If expect_pbf is given, raise on staleness.
+
+    Unreadable caches (corrupt gzip, truncated pickle, dataclasses pickled
+    under __main__.* by the pre-f0933b8 CLI) raise ValueError, never an
+    opaque unpickling error — callers treat ValueError as "rebuild".
+    """
+    try:
+        with gzip.open(cache_path, "rb") as f:
+            graph = pickle.load(f)
+    except FileNotFoundError:
+        raise
+    except Exception as err:
         raise ValueError(
-            f"cache format {graph.format_version} != current {FORMAT_VERSION}; rebuild"
+            f"cache {cache_path} unreadable ({type(err).__name__}: {err}); rebuild"
+        ) from err
+    version = getattr(graph, "format_version", None)
+    if version != FORMAT_VERSION:
+        raise ValueError(
+            f"cache format {version} != current {FORMAT_VERSION}; rebuild"
         )
     if expect_pbf is not None and is_stale(graph, expect_pbf):
         raise ValueError(f"cache {cache_path} is stale relative to {expect_pbf}; rebuild")

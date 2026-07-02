@@ -15,6 +15,7 @@ import pytest
 
 from shapesnap.graph import (
     build_graph,
+    classify_bus,
     connected_components,
     default_cache_path,
     load_graph,
@@ -139,6 +140,26 @@ def test_bus_oneway_flags(bus):
     assert edges_of_way(bus, 209)[0].oneway == 0
 
 
+def test_classify_bus_reversed_contraflow():
+    """oneway:bus=-1 / oneway:psv=-1 must override plain oneway with -1,
+    not fall through to it."""
+    assert classify_bus({"highway": "residential", "oneway:bus": "-1"})["oneway"] == -1
+    assert (
+        classify_bus({"highway": "residential", "oneway": "yes", "oneway:bus": "-1"})["oneway"]
+        == -1
+    )
+    assert (
+        classify_bus({"highway": "primary", "oneway": "no", "oneway:psv": "-1"})["oneway"]
+        == -1
+    )
+    # the existing override semantics stay intact
+    assert (
+        classify_bus({"highway": "residential", "oneway": "-1", "oneway:bus": "no"})["oneway"]
+        == 0
+    )
+    assert classify_bus({"highway": "residential", "oneway": "-1"})["oneway"] == -1
+
+
 def test_bus_turn_restrictions(bus):
     rs = {(r.via_node, r.from_way, r.to_way): r for r in bus.restrictions}
     r1 = rs[(72, 201, 202)]
@@ -182,6 +203,62 @@ def test_bbox_crop():
     assert g.bbox == (-87.6305, 41.8790, -87.6280, 41.8815)
 
 
+@pytest.mark.parametrize(
+    "bad",
+    [
+        (-87.6280, 41.8790, -87.6305, 41.8815),  # inverted lon
+        (-87.6305, 41.8815, -87.6280, 41.8790),  # inverted lat
+        (-87.6305, 41.8790, -87.6305, 41.8815),  # degenerate (minlon == maxlon)
+        (-87.6305, 41.8790, -87.6280),           # wrong arity
+        ("-87.6", "oops", "-87.5", "41.9"),      # non-numeric
+    ],
+)
+def test_build_graph_rejects_bad_bbox(bad):
+    """A degenerate/inverted bbox must raise, never silently return an
+    empty graph (mirrors the CLI's _parse_bbox)."""
+    with pytest.raises(ValueError):
+        build_graph(FIXTURE, "rail", bbox=bad)
+
+
+def test_route_refs_not_shared_between_way_edges(tmp_path):
+    """Every edge of a split way must own its route_refs list: a consumer
+    mutating one edge's list must not mutate its siblings'."""
+    osm = tmp_path / "split_route.osm"
+    osm.write_text(
+        """<?xml version='1.0' encoding='UTF-8'?>
+<osm version="0.6" generator="shapesnap-test">
+  <node id="1" lat="41.0000" lon="-87.0000"/>
+  <node id="2" lat="41.0010" lon="-87.0000"/>
+  <node id="3" lat="41.0020" lon="-87.0000"/>
+  <node id="4" lat="41.0010" lon="-87.0010"/>
+  <way id="10">
+    <nd ref="1"/><nd ref="2"/><nd ref="3"/>
+    <tag k="highway" v="residential"/>
+  </way>
+  <way id="11">
+    <nd ref="2"/><nd ref="4"/>
+    <tag k="highway" v="residential"/>
+  </way>
+  <relation id="20">
+    <member type="way" ref="10" role=""/>
+    <tag k="type" v="route"/>
+    <tag k="route" v="bus"/>
+    <tag k="ref" v="X9"/>
+    <tag k="name" v="X9 Express"/>
+    <tag k="colour" v="#123456"/>
+  </relation>
+</osm>
+"""
+    )
+    g = build_graph(osm, "bus")
+    e1, e2 = [e for e in g.edges if e.way_id == 10]  # split at junction node 2
+    assert e1.route_refs == e2.route_refs
+    assert any(r["ref"] == "X9" for r in e1.route_refs)
+    assert e1.route_refs is not e2.route_refs
+    e1.route_refs.append({"ref": "MUT", "name": None, "colour": None})
+    assert all(r["ref"] != "MUT" for r in e2.route_refs)
+
+
 def test_cache_round_trip(rail, tmp_path):
     out = tmp_path / "fixture.rail.graph.pkl.gz"
     save_graph(rail, out)
@@ -200,6 +277,45 @@ def test_cache_round_trip(rail, tmp_path):
 def test_default_cache_path():
     p = default_cache_path("/x/data/il.osm.pbf", "rail")
     assert str(p) == "/x/data/shapesnap/il.rail.graph.pkl.gz"
+
+
+def test_load_graph_unreadable_cache_raises_value_error(tmp_path):
+    """Corrupt/garbage caches — and pre-f0933b8 caches pickled under
+    __main__.* — must raise ValueError('… rebuild'), never an opaque
+    unpickling error."""
+    import gzip
+
+    not_gzip = tmp_path / "notgzip.rail.graph.pkl.gz"
+    not_gzip.write_bytes(b"this is not a gzip stream")
+    with pytest.raises(ValueError, match="rebuild"):
+        load_graph(not_gzip)
+
+    not_pickle = tmp_path / "notpickle.rail.graph.pkl.gz"
+    with gzip.open(not_pickle, "wb") as f:
+        f.write(b"gzipped garbage, definitely not a pickle")
+    with pytest.raises(ValueError, match="rebuild"):
+        load_graph(not_pickle)
+
+    # pre-f0933b8 CLI caches: dataclasses pickled as __main__.* — the
+    # GLOBAL opcode below resolves against __main__, which has no such class
+    orphan = tmp_path / "orphan.rail.graph.pkl.gz"
+    with gzip.open(orphan, "wb") as f:
+        f.write(b"c__main__\nDefinitelyNotARealGraphClass\n.")
+    with pytest.raises(ValueError, match="rebuild"):
+        load_graph(orphan)
+
+    # a valid pickle of a non-graph object is also 'unreadable'
+    import pickle
+
+    wrong_obj = tmp_path / "wrongobj.rail.graph.pkl.gz"
+    with gzip.open(wrong_obj, "wb") as f:
+        pickle.dump({"not": "a ModeGraph"}, f)
+    with pytest.raises(ValueError, match="rebuild"):
+        load_graph(wrong_obj)
+
+    # missing file stays a FileNotFoundError, not ValueError
+    with pytest.raises(FileNotFoundError):
+        load_graph(tmp_path / "missing.rail.graph.pkl.gz")
 
 
 def test_cli_cache_loads_from_other_entry_points(tmp_path):
