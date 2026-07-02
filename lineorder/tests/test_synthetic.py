@@ -112,7 +112,26 @@ def test_u2_full_y():
 
 
 def test_u3_partial_y():
-    # D rides both minor legs through b but never enters the major leg
+    # b carries an unrelated leg E (disjoint from L(e)): U2 cannot fire
+    # (union of ALL minors != L(e)), U3 can — the used minors carry
+    # exactly their threads
+    inst, _, _ = build_graph(
+        {"t": (0, 0), "b": (10, 0), "ne": (20, 10), "se": (20, -10),
+         "x": (10, 10)},
+        [("t", "b", ["A", "B", "C"]),
+         ("b", "ne", ["A", "B"]),
+         ("b", "se", ["C"]),
+         ("b", "x", ["E"])],
+    )
+    red, _, _ = assert_optimal(inst)
+    assert red.stats["U3"] >= 1
+    assert red.stats["U2"] == 0
+
+
+def test_u3_minor_extra_lines_blocked():
+    # D rides both minor legs through b but never enters the major leg:
+    # U3 must NOT fire (extra lines on the used minors), yet the cascade
+    # still lands on the optimum via the remaining rules + brute force
     inst, _, _ = build_graph(
         {"t": (0, 0), "b": (10, 0), "ne": (20, 10), "se": (20, -10)},
         [("t", "b", ["A", "B", "C"]),
@@ -120,7 +139,27 @@ def test_u3_partial_y():
          ("b", "se", ["C", "D"])],
     )
     red, _, _ = assert_optimal(inst)
-    assert red.stats["U3"] >= 1
+    assert red.stats["U3"] == 0
+
+
+def test_u3_extra_line_interleave_regression():
+    # review finding: with extra line D on minor (b,q), the optimum
+    # sandwiches L4 INSIDE the {L1,L2} thread on (b,t) — paying a diff
+    # crossing at b to dodge the separation that D (pinned between L1
+    # and L2 at q by its far-end leg) would otherwise force. Block
+    # concatenation cannot represent that order, so U3 must not split.
+    inst, _, _ = build_graph(
+        {"t": (10, 0), "b": (0, 0), "q": (-10, -5), "s2": (-10, 5),
+         "a1": (-20, 5), "ad": (-20, -5), "a2": (-20, -15)},
+        [("b", "t", ["L1", "L2", "L4"]),
+         ("b", "q", ["L1", "L2", "D"]),
+         ("b", "s2", ["L4"]),
+         ("q", "a1", ["L1"]),
+         ("q", "ad", ["D"]),
+         ("q", "a2", ["L2"])],
+    )
+    red, _, _ = assert_optimal(inst)
+    assert red.stats["U3"] == 0
 
 
 def _double_y(cross: bool):

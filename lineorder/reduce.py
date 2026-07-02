@@ -7,9 +7,11 @@ Implements TSAS 2019 section 4 on the OptGraph model:
   P3 double-termini pruning
   C1 single-line cut         (stubs keep continuation info at the ends)
   C2 terminus detachment
-  U1 full X, U2 full Y, U3 partial Y, U4 full double Y (weight-aware
-  endpoint choice), U5 partial double Y (weight-aware crossing-side
-  choice), U6 stump (dummy mirror edges, then U4 fires on a later pass)
+  U1 full X, U2 full Y, U3 partial Y (unrelated legs at the branch node
+  allowed, but used minors must carry exactly their thread), U4 full
+  double Y (weight-aware endpoint choice), U5 partial double Y (weight-
+  aware crossing-side choice), U6 stump (dummy mirror edges, then U4
+  fires on a later pass)
 
 Loop order per the approved stage-5 design: P2 once, then rounds of
 untangle (U2 U3 U4 U5 U6 U1) -> inner fixpoint of contract/prune (P1 P3)
@@ -375,6 +377,14 @@ def _rule_u3(g: OptGraph, out: Reduction) -> int:
             minors = [m for m in g.clockwise_from(b, eid)
                       if set(g.edges[m].lines) & lines]
             if len(minors) < 2:
+                continue
+            # used minors must carry EXACTLY their thread: with extra
+            # lines riding a minor, the optimum may need to sandwich a
+            # foreign thread line inside a block (block concatenation
+            # cannot represent it — splitting then loses optimality).
+            # b may still have unrelated legs disjoint from L(e), which
+            # is what U2 cannot handle.
+            if any(set(g.edges[m].lines) - lines for m in minors):
                 continue
             first = {l for l in lines if cont[l][0] == minors[0]}
             rest = lines - first
