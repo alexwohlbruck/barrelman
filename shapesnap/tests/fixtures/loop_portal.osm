@@ -1,0 +1,187 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<osm version="0.6" generator="shapesnap-test">
+  <!-- Synthetic Loop: elevated way (1-2-3) and subway way (11-12-13) cross
+       geometrically at identical coordinates (node 2 == node 12 position)
+       but share NO node ids. Portal way 103 joins them at nodes 3 and 11. -->
+  <node id="1" lat="41.8800" lon="-87.6300"/>
+  <node id="2" lat="41.8805" lon="-87.6295"/>
+  <node id="3" lat="41.8810" lon="-87.6290"/>
+  <node id="11" lat="41.8810" lon="-87.6300"/>
+  <node id="12" lat="41.8805" lon="-87.6295"/>
+  <node id="13" lat="41.8800" lon="-87.6290"/>
+  <node id="21" lat="41.8811" lon="-87.6295"/>
+  <node id="31" lat="41.8795" lon="-87.6285"/>
+  <node id="41" lat="41.8800" lon="-87.6320"/>
+  <node id="42" lat="41.8805" lon="-87.6320"/>
+  <node id="43" lat="41.8800" lon="-87.6325"/>
+  <node id="44" lat="41.8805" lon="-87.6325"/>
+  <node id="51" lat="41.8800" lon="-87.6310"/>
+  <node id="52" lat="41.8805" lon="-87.6310"/>
+  <node id="61" lat="41.8800" lon="-87.6330"/>
+  <node id="62" lat="41.8805" lon="-87.6330"/>
+  <node id="71" lat="41.8800" lon="-87.6400"/>
+  <node id="72" lat="41.8805" lon="-87.6400"/>
+  <node id="73" lat="41.8810" lon="-87.6400"/>
+  <node id="74" lat="41.8815" lon="-87.6400"/>
+  <node id="75" lat="41.8820" lon="-87.6400"/>
+  <node id="76" lat="41.8825" lon="-87.6400"/>
+  <node id="77" lat="41.8830" lon="-87.6400"/>
+  <node id="78" lat="41.8835" lon="-87.6400"/>
+  <node id="79" lat="41.8840" lon="-87.6400"/>
+  <node id="80" lat="41.8810" lon="-87.6395"/>
+  <node id="81" lat="41.8800" lon="-87.6500"/>
+  <node id="82" lat="41.8810" lon="-87.6500"/>
+  <node id="83" lat="41.8820" lon="-87.6500"/>
+
+  <!-- rail: elevated -->
+  <way id="101">
+    <nd ref="1"/><nd ref="2"/><nd ref="3"/>
+    <tag k="railway" v="rail"/>
+    <tag k="bridge" v="yes"/>
+    <tag k="layer" v="1"/>
+  </way>
+  <!-- rail: subway, crosses 101 geometrically at node 12 (== node 2 coords) -->
+  <way id="102">
+    <nd ref="11"/><nd ref="12"/><nd ref="13"/>
+    <tag k="railway" v="subway"/>
+    <tag k="tunnel" v="yes"/>
+    <tag k="layer" v="-2"/>
+  </way>
+  <!-- rail: portal, the ONLY topological connection (nodes 3 and 11) -->
+  <way id="103">
+    <nd ref="3"/><nd ref="21"/><nd ref="11"/>
+    <tag k="railway" v="rail"/>
+  </way>
+  <!-- rail: yard track hanging off subway end -->
+  <way id="104">
+    <nd ref="13"/><nd ref="31"/>
+    <tag k="railway" v="rail"/>
+    <tag k="service" v="yard"/>
+  </way>
+  <!-- excluded: abandoned -->
+  <way id="105">
+    <nd ref="41"/><nd ref="42"/>
+    <tag k="railway" v="abandoned"/>
+  </way>
+  <!-- excluded: lifecycle prefix -->
+  <way id="106">
+    <nd ref="43"/><nd ref="44"/>
+    <tag k="railway" v="rail"/>
+    <tag k="razed:railway" v="rail"/>
+  </way>
+  <!-- embedded rails in a street: rail (penalty 1.0) AND bus -->
+  <way id="107">
+    <nd ref="51"/><nd ref="52"/>
+    <tag k="highway" v="residential"/>
+    <tag k="embedded_rails" v="tram"/>
+  </way>
+  <!-- rail with industrial usage penalty -->
+  <way id="108">
+    <nd ref="61"/><nd ref="62"/>
+    <tag k="railway" v="rail"/>
+    <tag k="usage" v="industrial"/>
+  </way>
+
+  <!-- bus fixtures -->
+  <way id="201">
+    <nd ref="71"/><nd ref="72"/>
+    <tag k="highway" v="residential"/>
+    <tag k="oneway" v="yes"/>
+  </way>
+  <way id="202">
+    <nd ref="72"/><nd ref="73"/>
+    <tag k="highway" v="residential"/>
+    <tag k="oneway" v="yes"/>
+    <tag k="oneway:bus" v="no"/>
+  </way>
+  <way id="203">
+    <nd ref="73"/><nd ref="74"/>
+    <tag k="highway" v="service"/>
+    <tag k="service" v="driveway"/>
+  </way>
+  <way id="204">
+    <nd ref="74"/><nd ref="75"/>
+    <tag k="highway" v="service"/>
+    <tag k="service" v="parking_aisle"/>
+    <tag k="psv" v="designated"/>
+  </way>
+  <way id="205">
+    <nd ref="75"/><nd ref="76"/>
+    <tag k="highway" v="residential"/>
+    <tag k="access" v="private"/>
+  </way>
+  <way id="206">
+    <nd ref="76"/><nd ref="77"/>
+    <tag k="highway" v="tertiary"/>
+    <tag k="access" v="no"/>
+    <tag k="bus" v="yes"/>
+  </way>
+  <way id="207">
+    <nd ref="77"/><nd ref="78"/>
+    <tag k="highway" v="footway"/>
+  </way>
+  <way id="208">
+    <nd ref="78"/><nd ref="79"/>
+    <tag k="highway" v="primary_link"/>
+    <tag k="oneway" v="-1"/>
+  </way>
+  <way id="209">
+    <nd ref="73"/><nd ref="80"/>
+    <tag k="highway" v="residential"/>
+  </way>
+
+  <!-- ferry fixtures: 301 tagged directly, 302 only via relation 505 -->
+  <way id="301">
+    <nd ref="81"/><nd ref="82"/>
+    <tag k="route" v="ferry"/>
+  </way>
+  <way id="302">
+    <nd ref="82"/><nd ref="83"/>
+  </way>
+
+  <!-- route relation: subway line; way 101 is only a platform member -->
+  <relation id="501">
+    <member type="way" ref="102" role=""/>
+    <member type="way" ref="101" role="platform"/>
+    <tag k="type" v="route"/>
+    <tag k="route" v="subway"/>
+    <tag k="ref" v="Red"/>
+    <tag k="name" v="Red Line"/>
+    <tag k="colour" v="#c60c30"/>
+  </relation>
+  <!-- turn restriction that applies to buses -->
+  <relation id="502">
+    <member type="way" ref="201" role="from"/>
+    <member type="node" ref="72" role="via"/>
+    <member type="way" ref="202" role="to"/>
+    <tag k="type" v="restriction"/>
+    <tag k="restriction" v="no_left_turn"/>
+  </relation>
+  <!-- turn restriction with a psv exception -->
+  <relation id="503">
+    <member type="way" ref="202" role="from"/>
+    <member type="node" ref="73" role="via"/>
+    <member type="way" ref="209" role="to"/>
+    <tag k="type" v="restriction"/>
+    <tag k="restriction" v="no_right_turn"/>
+    <tag k="except" v="psv"/>
+  </relation>
+  <!-- bus route relation -->
+  <relation id="504">
+    <member type="way" ref="201" role=""/>
+    <member type="way" ref="202" role=""/>
+    <tag k="type" v="route"/>
+    <tag k="route" v="bus"/>
+    <tag k="ref" v="22"/>
+    <tag k="name" v="22 Clark"/>
+    <tag k="colour" v="#0000ff"/>
+  </relation>
+  <!-- ferry route relation pulling in untagged way 302 -->
+  <relation id="505">
+    <member type="way" ref="302" role=""/>
+    <tag k="type" v="route"/>
+    <tag k="route" v="ferry"/>
+    <tag k="ref" v="F1"/>
+    <tag k="name" v="Test Ferry"/>
+  </relation>
+</osm>
