@@ -1,4 +1,4 @@
-"""lineorder — MLNCM-S line ordering (transit v3 stage 5, phase A).
+"""lineorder — MLNCM-S line ordering (transit v3 stage 5).
 
 Replaces LOOM's `loom` ordering stage. Implements the optimization-graph
 model and the optimality-preserving reductions of Bast/Brosi/Storandt,
@@ -13,8 +13,12 @@ Modules:
   score       — MLNCM-S objective (crossings, split crossings, separations)
   reduce      — reduction rules to fixpoint + connected components + CLI
   reconstruct — expand a reduced-component solution back to the original graph
+  solve       — per-component solver cascade (exhaustive / CP-SAT /
+                greedy-with-lookahead + annealing) + slot writeback CLI
 
 CLI:
   uv run --with-requirements lineorder/requirements.txt \
       python -m lineorder.reduce --build-key chicago:l-v3 --stats
+  uv run --with-requirements lineorder/requirements.txt \
+      python -m lineorder.solve --build-key chicago:l-v3 --dry-run
 """

@@ -4,3 +4,4 @@
 #   uv run --with-requirements lineorder/requirements.txt python -m pytest lineorder/tests -v
 psycopg[binary]>=3.1   # PostGIS loader (model.load_build) + real-data tests
 pytest>=8              # tests
+ortools>=9.10          # CP-SAT exact solver (solve.solve_cpsat)
