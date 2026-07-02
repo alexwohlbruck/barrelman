@@ -203,6 +203,16 @@ MLNCM-S per the LOOM TSAS 2019 paper, implemented in `lineorder/` (replaces the
   invariant: zero (color_key, slot, line_count) groups — the display SQL's
   grouping — split a corridor; slots change only at junctions (deg≥3) or
   composition-change nodes, which are exactly the stage-6 transition sites.
+- Optimality semantic: "optimal" (solve/apply output, `lineorder_runs` statuses)
+  means optimal over the *corridor-stable* subspace, not the unconstrained
+  MLNCM-S optimum. P1 contracts every original-degree-2 node unconditionally, so
+  at a non-station deg-2 node flanked by deg-3 station junctions the true
+  optimum can be cheaper (w_same = 4·2 = 8 mid-corridor vs w_diff = 3·3 = 9 at
+  the junction) — deliberately excluded because a mid-corridor crossing violates
+  the corridor-stability invariant above (pinned by
+  `lineorder/tests/test_synthetic.py::test_p1_station_flanked_corridor_stability`;
+  chicago:l-v3 is unaffected — a direct unreduced CP-SAT solve matches the
+  cascade at 116.0 with zero deg-2 cost).
 
 #### Stability exam (stage-5 acceptance)
 

@@ -24,6 +24,21 @@ accumulate in `Reduction.fixed_cost` so that for ANY reduced solution
     score(original, reconstruct(sol)) ==
         sum(component scores) + fixed_cost.
 
+Optimality semantics: the reductions preserve the optimum over the
+CORRIDOR-STABLE solution subspace — solutions whose slots are constant
+along every maximal degree-2 chain with a constant line set (the phase-C
+invariant asserted by exam/stability_exam.py checks 1-3). P1 contracts
+every original-degree-2 node unconditionally (the v*-weight dominance
+caveat below applies only when the ORIGINAL degree != 2), which
+deliberately discards solutions that cross mid-corridor. In one corner
+that matters: a non-station deg-2 node flanked by deg-3 STATION
+junctions has w_same = 4*2 = 8 < w_diff = 3*3 = 9, so the unconstrained
+optimum crosses mid-corridor and is cheaper by 1 — but it changes a
+line's slot inside a corridor, so it is excluded by design (pinned by
+tests/test_synthetic.py::test_p1_station_flanked_corridor_stability).
+Every "optimal" status reported by solve/apply and recorded in the
+lineorder_runs ledger is relative to this subspace.
+
 CLI:
   uv run --with-requirements lineorder/requirements.txt \
       python -m lineorder.reduce --build-key chicago:l-v3 --stats
@@ -175,6 +190,12 @@ def _rule_p1(g: OptGraph, w: Weights, out: Reduction) -> int:
             # happened here must be movable to a neighbor at <= cost
             if not (w.dominates(g, nid, u) or w.dominates(g, nid, v)):
                 continue
+        # original-degree-2 nodes contract UNCONDITIONALLY even when a
+        # crossing here would be cheaper than at the flanking junctions
+        # (non-station deg-2 w_same=8 vs deg-3 station w_diff=9): a
+        # mid-corridor crossing violates the corridor-stability
+        # invariant, so that solution is excluded by design (see module
+        # docstring, "Optimality semantics")
         merged = g.add_edge(u, v, e.lines,
                             dummy=e.dummy and f.dummy,
                             stub=e.stub and f.stub)

@@ -6,7 +6,10 @@ model and the optimality-preserving reductions of Bast/Brosi/Storandt,
 2019, extended version): pruning rules P1-P3 (section 4.1), cutting
 rules C1-C2 (section 4.2), untangling rules U1-U6 (section 4.3), scored
 with the section-6 weights (station vs non-station, degree-scaled, all
-evaluated on the ORIGINAL node v*).
+evaluated on the ORIGINAL node v*). "Optimal" means optimal over the
+corridor-stable subspace — mid-corridor crossings are excluded by
+design even when nominally cheaper (see reduce.py, "Optimality
+semantics").
 
 Modules:
   model       — line/graph dataclasses + PostGIS loader (transit_graph_*)

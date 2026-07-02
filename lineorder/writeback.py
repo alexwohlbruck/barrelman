@@ -102,6 +102,9 @@ def run_detail(out: SolveOutcome, cfg: SolveConfig) -> dict:
             red.weights)]
     return {
         "config": asdict(cfg),
+        # "optimal" statuses below are relative to the corridor-stable
+        # subspace (see lineorder.reduce, "Optimality semantics")
+        "objective": "MLNCM-S over the corridor-stable subspace",
         "graph": {"nodes": len(out.instance.graph.nodes),
                   "edges": len(out.instance.graph.edges),
                   "search_space": _fmt_space(

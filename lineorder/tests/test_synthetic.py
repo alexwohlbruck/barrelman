@@ -1,7 +1,10 @@
 """Per-rule synthetic instances: each rule fires on a tiny hand-built
 graph and the reconstruction round-trips with exact score accounting and
 a globally optimal result (verified against exhaustive search on the
-ORIGINAL graph)."""
+ORIGINAL graph). One deliberate exception is pinned by
+test_p1_station_flanked_corridor_stability: the reductions optimize over
+the corridor-stable subspace, not the unconstrained optimum (see
+lineorder/reduce.py, "Optimality semantics")."""
 
 import itertools
 import math
@@ -38,6 +41,46 @@ def test_p1_contraction_chain():
     red, _, _ = assert_optimal(inst, rules=rules)
     assert red.stats["P1"] >= 2
     assert red.stats["P3"] >= 1  # the merged corridor is double-terminus
+
+
+def test_p1_station_flanked_corridor_stability():
+    """Pinned trade-off: the cascade optimizes over the CORRIDOR-STABLE
+    subspace, not the unconstrained optimum (reduce.py "Optimality
+    semantics"). Lines A,B share corridor t1-m-t2 (m deg-2 non-station,
+    w_same = 4*2 = 8) and diverge at BOTH ends, deg-3 stations
+    (w_diff = 3*3 = 9); geometry forces opposite orders at the two ends,
+    so exactly one crossing is unavoidable. The unconstrained optimum
+    crosses mid-corridor at m for 8.0, but that changes a slot inside a
+    corridor — P1 contracts m unconditionally and the reductions take
+    the corridor-stable 9.0 junction crossing instead, by design."""
+    inst, _, node_ids = build_graph(
+        {"t1": (0, 0), "m": (10, 0), "t2": (20, 0),
+         "p1": (-10, 5), "q1": (-10, -5),   # A exits NW, B exits SW at t1
+         "p2": (30, -5), "q2": (30, 5)},    # A exits SE, B exits NE at t2
+        [("t1", "m", ["A", "B"]),
+         ("m", "t2", ["A", "B"]),
+         ("t1", "p1", ["A"]), ("t1", "q1", ["B"]),
+         ("t2", "p2", ["A"]), ("t2", "q2", ["B"])],
+        stations=("t1", "t2"),
+    )
+    g, reg = inst.graph, inst.registry
+    w = Weights.for_graph(g)
+    assert w.w_same(g, node_ids["m"]) == 8.0
+    assert w.w_diff(g, node_ids["t1"]) == 9.0
+
+    # unconstrained optimum: one same-seg crossing at the deg-2 node
+    _, best = brute_force(g, reg, w)
+    assert best.weighted == 8.0
+    assert (best.crossings_same, best.crossings_diff) == (1, 0)
+
+    # cascade: corridor-stable, one junction crossing, cost 9.0
+    red, _, orig_score, _ = roundtrip(inst)
+    assert red.stats["P1"] >= 1
+    assert abs(orig_score.weighted - 9.0) < 1e-9, (
+        "corridor-stable semantic changed: expected the deliberate 9.0 "
+        f"junction crossing over the unstable 8.0, got "
+        f"{orig_score.weighted}")
+    assert (orig_score.crossings_same, orig_score.crossings_diff) == (0, 1)
 
 
 def test_p3_double_terminus():

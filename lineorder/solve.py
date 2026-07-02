@@ -524,6 +524,9 @@ def print_outcome(out: SolveOutcome, tag: str = "solve"):
               f"{_fmt_space(r.space):>10} {r.canonical:>9.1f} "
               f"{r.after:>9.1f} {r.wall:>7.2f}s")
 
+    print("('optimal' = optimal over the corridor-stable subspace; "
+          "see lineorder.reduce)")
+
     b, a = out.before, out.after
     print(f"\nscore (original graph, weighted): provisional "
           f"{b.weighted:.1f} -> optimized {a.weighted:.1f}")

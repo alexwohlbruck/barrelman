@@ -6,6 +6,12 @@
              == sum(component scores) + reduction.fixed_cost
   2. optimality preservation:
          score(original, reconstructed) == brute-force optimum(original)
+
+Property 2 (assert_optimal) only holds where the corridor-stable optimum
+equals the unconstrained one — true for these instances by construction;
+the deliberate divergence is pinned separately by
+test_synthetic.test_p1_station_flanked_corridor_stability (see
+lineorder/reduce.py, "Optimality semantics").
 """
 
 from __future__ import annotations
