@@ -174,19 +174,53 @@ re-dumping `mm_edges` (`shapesnap.graph --postgis`), not by relaxing the exam.
 
 ### Stage 5 — ordering + slot stabilization (task #5)
 
-MLNCM-S per the LOOM TSAS 2019 paper; reductions first, solver second:
+MLNCM-S per the LOOM TSAS 2019 paper, implemented in `lineorder/` (replaces the
+`loom` binary); reductions first, solver second:
 
 - Reductions in value order: P2 partner collapse → P1 deg-2 contraction → C1
   single-route edge cut → C2 terminus detach → U2/U3 (Y) → U4/U5 (double-Y) → U6
   (stump) → U1 (X). Cut everything, then solve *connected components* independently —
-  a line leaving and rejoining a bundle stays one component by construction.
+  a line leaving and rejoining a bundle stays one component by construction
+  (chicago:l-v3: 167 edges → 23 in 2 components).
 - Per-component cascade: |search space|=1 → done; <500 → exhaustive; else CP-SAT
-  (OR-Tools; permutation vars + reified crossing/separation booleans); fallback
-  greedy-lookahead + simulated annealing. Node-local weights per the paper (stations
-  penalized ~3–4× over junction nodes).
-- Then slot stabilization: propagate slots along corridors; changes only at
-  composition-change nodes. Machine invariant: zero (color_key, line_count) groups with
-  >1 slot on a steady corridor.
+  (OR-Tools; permutation vars + reified crossing/separation booleans, interleaved so
+  parallel search is deterministic); fallback greedy-with-lookahead + simulated
+  annealing (T0=1000, Ti=T0/i), everything seeded. Weights per the paper's
+  section-6 scheme, always evaluated on the ORIGINAL node v*: non-station
+  (same, diff, sep) = (4, 1, 3)×deg(v*); station deg>2 = (12, 3, 9)×deg(v*);
+  station deg 2 = (4, 4, 3)×maxdeg (any crossing dominates).
+- Slot writeback: `python -m lineorder.apply --build-key chicago:l-v3` solves and
+  writes `transit_graph_edge_lines.slot` (left-to-right position in the edge's
+  storage direction) in ONE transaction scoped to that build_key, refuses to
+  regress the stored score, and records the run in `lineorder_runs`
+  (scores before/after, crossing counts, per-method component histogram, jsonb
+  detail, timestamps; table created idempotently). `python -m lineorder.solve`
+  is the report-only diagnostic — it never writes.
+- Slot stabilization is structural, not a fixup pass: after P1 contraction a
+  steady corridor is a single reduced edge and linegraph emits corridor edges
+  head-to-tail, so the reconstructed optimum keeps each line's slot constant
+  along every maximal degree-2 chain with a constant line set. Machine
+  invariant: zero (color_key, slot, line_count) groups — the display SQL's
+  grouping — split a corridor; slots change only at junctions (deg≥3) or
+  composition-change nodes, which are exactly the stage-6 transition sites.
+
+#### Stability exam (stage-5 acceptance)
+
+`lineorder/exam/stability_exam.py` validates the STORED slots of `chicago:l-v3`
+(run after apply; read-only) and exits non-zero on any failure: (1) corridor
+stability — raw slot constancy and the equivalent display grouping, zero
+violations; (2) transitions only at junctions/composition changes, each site
+listed with routes — Loop window holds exactly the stage-4 exam's 6 junction
+nodes; (3) crossing audit — totals + locations, no crossing at a degree-2
+non-station node; (4) LOOM contrast — the same corridor walk over `chicago:l`
+shows the baseline instability v2 inherited (20 corridor/line slot violations,
+Pink/P up to 3 slots in one corridor) vs v3's zero; (5) determinism — two fresh
+solves and the stored slots are identical, so rerunning solve+apply is a no-op.
+
+```
+uv run --with-requirements lineorder/requirements.txt \
+    python lineorder/exam/stability_exam.py
+```
 
 ### Stage 6 — segmentation + tiles (task #6)
 
