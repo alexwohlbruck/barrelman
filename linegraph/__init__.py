@@ -9,9 +9,12 @@ tracks meet at a junction node without exchanging geometry (the Chicago
 Tower 18 exam).
 
 Modules:
-  raster   — UTM projection + deterministic grid + stroke rasterization
-  skeleton — 1-px skeletonization wrapper
-  vector   — skeleton pixels -> planar graph (nodes, edges, cleanup)
-  model    — dataclasses + gzip-pickle cache (format_version + digest)
-  build    — CLI: python -m linegraph.build --feed 29 --mode rail ...
+  raster    — UTM projection + deterministic grid + stroke rasterization
+  skeleton  — 1-px skeletonization wrapper
+  vector    — skeleton pixels -> planar graph (nodes, edges, cleanup)
+  model     — dataclasses + gzip-pickle cache (format_version + digest)
+  stations  — station complexes -> labeled graph nodes (edge splitting)
+  attribute — pattern shapes -> per-edge route sets
+  emit      — transit_graph_* contract writer (delete-and-replace)
+  build     — CLI: python -m linegraph.build --feed 29 --mode rail ...
 """

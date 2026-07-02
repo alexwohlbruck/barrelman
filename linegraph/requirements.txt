@@ -7,5 +7,5 @@ scikit-image>=0.22     # draw (stroke stamping) + morphology.skeletonize
 shapely>=2.0           # Douglas-Peucker simplify, union length QA
 pyproj>=3.6            # local UTM projection
 osmium>=4.0            # transitively: shapesnap.match imports shapesnap.graph
-psycopg[binary]>=3.1   # only needed for the --postgis-qa dump
+psycopg[binary]>=3.1   # only needed for --postgis-qa / --emit DB writes
 pytest>=8              # tests

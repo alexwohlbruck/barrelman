@@ -19,6 +19,11 @@ the skeleton will fuse on agency geometry instead of snapped track).
 --postgis-qa dumps the edges into the additive linegraph_edges QA table,
 idempotently per build_key (delete-and-replace). Phase A writes ONLY this
 QA table — transit_graph_* stays untouched.
+
+--emit runs phase B after the skeleton: station snapping (linegraph.
+stations — splits edges into station-to-station segments), route
+attribution (linegraph.attribute), then the transit_graph_* contract
+write (linegraph.emit, delete-and-replace per build_key).
 """
 
 from __future__ import annotations
@@ -73,14 +78,13 @@ def resolve_feed_zip(feed_id: str, explicit=None) -> Path:
     raise FileNotFoundError(f"neither {processed} nor {raw} exists")
 
 
-def collect_shapes(zip_path, mode: str, route_ids=None):
+def dedup_shapes(patterns):
     """Deduped representative shapes (one per pattern geometry).
 
-    Returns (shapes [[(lon, lat), ...]], n_patterns, n_skipped_no_shape).
+    Returns (shapes [[(lon, lat), ...]], n_skipped_no_shape).
     load_patterns sorts by descending trip_count, so the dedup keeps a
     deterministic representative and the digest is stable.
     """
-    patterns = load_patterns(zip_path, route_ids=route_ids, modes={mode})
     shapes, seen, skipped = [], set(), 0
     for p in patterns:
         if not p.shape or len(p.shape) < 2:
@@ -91,6 +95,13 @@ def collect_shapes(zip_path, mode: str, route_ids=None):
             continue
         seen.add(h)
         shapes.append(list(p.shape))
+    return shapes, skipped
+
+
+def collect_shapes(zip_path, mode: str, route_ids=None):
+    """load_patterns + dedup_shapes: (shapes, n_patterns, n_skipped)."""
+    patterns = load_patterns(zip_path, route_ids=route_ids, modes={mode})
+    shapes, skipped = dedup_shapes(patterns)
     return shapes, len(patterns), skipped
 
 
@@ -186,6 +197,52 @@ def dump_postgis(lg: LineGraph, dsn: str, table: str = "linegraph_edges") -> int
     return len(lg.edges)
 
 
+# ── phase B: stations + attribution + transit_graph emit ────────────────────
+
+
+def enrich_graph(lg, patterns, zip_path, feed_id: str, *, verbose: bool = True):
+    """Stations first (edges split station-to-station), then attribution.
+
+    Returns (lg, snap: StationSnapResult, edge_routes, stats). Mutates lg
+    (never the on-disk cache — the cache holds the raw skeleton only).
+    """
+    from linegraph.attribute import attribute_patterns, load_routes_meta
+    from linegraph.stations import load_station_complexes, snap_stations
+
+    def log(msg):
+        if verbose:
+            print(f"[linegraph] {msg}", flush=True)
+
+    stop_ids = {sid for p in patterns for sid in p.stop_ids}
+    complexes = load_station_complexes(zip_path, stop_ids)
+    lg, snap = snap_stations(lg, complexes)
+    log(
+        f"stations: {len(snap.labeled)}/{len(complexes)} complexes labeled "
+        f"({snap.n_split_nodes} split nodes, "
+        f"{len(complexes) - len(snap.labeled)} unlabeled) -> "
+        f"{len(lg.nodes)} nodes, {len(lg.edges)} edges"
+    )
+    for comp, reason, dist in snap.unlabeled:
+        log(f"  unlabeled: {comp.station_id} '{comp.label}' ({reason}"
+            f"{'' if dist is None else f', {dist:.0f} m'})")
+
+    routes_meta = load_routes_meta(zip_path)
+    edge_routes, stats = attribute_patterns(lg, patterns, feed_id, routes_meta)
+    attributed = [s for s in stats if s.n_samples]
+    worst = max(attributed, key=lambda s: s.unmatched_fraction, default=None)
+    log(
+        f"attribution: {len(attributed)}/{len(stats)} patterns with shapes, "
+        f"{len(edge_routes)}/{len(lg.edges)} edges carry routes"
+        + (f", worst unmatched {worst.unmatched_fraction:.2%} ({worst.pattern_key})"
+           if worst else "")
+    )
+    for s in attributed:
+        if s.unmatched_fraction >= 0.02:
+            log(f"  HIGH unmatched {s.unmatched_fraction:.2%}: {s.pattern_key} "
+                f"({s.n_unmatched}/{s.n_samples} samples)")
+    return lg, snap, edge_routes, stats
+
+
 # ── cli ──────────────────────────────────────────────────────────────────────
 
 
@@ -208,13 +265,21 @@ def main(argv=None) -> int:
         help="dump edges into the linegraph_edges QA table (default DSN from "
              "DATABASE_URL or the barrelman dev DB)",
     )
+    ap.add_argument(
+        "--emit", nargs="?", const=DEFAULT_DSN, default=None, metavar="DSN",
+        help="phase B: snap stations + attribute routes, then delete-and-"
+             "replace the build_key's transit_graph_* rows (default DSN as "
+             "for --postgis-qa)",
+    )
     args = ap.parse_args(argv)
 
     zip_path = resolve_feed_zip(args.feed, args.zip)
     print(f"[linegraph] loading patterns from {zip_path} (mode={args.mode})", flush=True)
     t0 = time.perf_counter()
     route_ids = set(args.routes.split(",")) if args.routes else None
-    shapes, n_patterns, n_skipped = collect_shapes(zip_path, args.mode, route_ids)
+    patterns = load_patterns(zip_path, route_ids=route_ids, modes={args.mode})
+    shapes, n_skipped = dedup_shapes(patterns)
+    n_patterns = len(patterns)
     print(
         f"[linegraph] {n_patterns} patterns -> {len(shapes)} unique shapes "
         f"({n_skipped} without shapes skipped) in {time.perf_counter() - t0:.1f}s"
@@ -259,6 +324,28 @@ def main(argv=None) -> int:
         n = dump_postgis(lg, args.postgis_qa)
         print(f"[linegraph] postgis: {n} rows into linegraph_edges "
               f"(build_key={lg.build_key})")
+
+    if args.emit:
+        from linegraph.emit import emit_build
+
+        if args.routes:
+            print(
+                "[linegraph] WARNING: --emit with --routes writes a DEBUG "
+                "SUBGRAPH under this build_key", file=sys.stderr,
+            )
+        lg, snap, edge_routes, _stats = enrich_graph(
+            lg, patterns, zip_path, args.feed
+        )
+        counts = emit_build(
+            lg, edge_routes, snap.labels, build_key=args.build_key,
+            feed_id=args.feed, mode=args.mode, dsn=args.emit,
+        )
+        print(
+            f"[linegraph] emitted build_key={args.build_key}: "
+            f"{counts['nodes']} nodes ({counts['labeled_nodes']} labeled), "
+            f"{counts['edges']} edges, {counts['edge_lines']} edge_lines, "
+            f"route_type={counts['route_type']}"
+        )
     return 0
 
 
