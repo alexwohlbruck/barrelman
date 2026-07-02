@@ -1,10 +1,11 @@
 /**
- * Backfill gtfs_stop_routes.weekday_trips for already-imported feeds.
+ * Backfill gtfs_stop_routes service counts for already-imported feeds.
  *
- * Re-derives the regular weekday-daytime trip count per (stop, route) from each
- * feed's retained GTFS ZIP and upserts it, so the station-label display filter
- * (routes that actually serve a station in regular service — see
- * import/create-transit-stations.sql) works without a full re-import.
+ * Re-derives the representative-day service counts per (stop, route)
+ * (trips_weekday_day/_any, trips_weekend_day, trips_any + the weekday_trips
+ * back-compat alias — see resolveServiceCalendar) from each feed's retained
+ * GTFS ZIP and upserts them, so the station-label display filter
+ * (import/create-transit-stations.sql) works without a full re-import.
  * Idempotent.
  *
  * Usage (inside the barrelman container, where processed ZIPs are at
@@ -21,6 +22,7 @@ import {
   parseGtfsRecords,
   deriveStopRoutes,
   importStopRoutes,
+  resolveServiceCalendar,
 } from '../src/services/gtfs.service'
 
 // Prefer the fully preprocessed zips (what MOTIS ingests) so derived counts
@@ -63,7 +65,7 @@ async function feedsToBackfill(): Promise<string[]> {
 async function backfillFeed(feedId: string): Promise<void> {
   const zipPath = zipPathForFeed(feedId)
   if (!zipPath) {
-    console.log(`  ⚠ ${feedId}: no ZIP in ${CANDIDATE_DIRS.join(', ')}, skipping`)
+    console.warn(`  ⚠ ${feedId}: no ZIP in ${CANDIDATE_DIRS.join(', ')}, skipping`)
     return
   }
   const buffer = await Bun.file(zipPath).arrayBuffer()
@@ -72,31 +74,44 @@ async function backfillFeed(feedId: string): Promise<void> {
   const trips = await readEntry(zip, 'trips.txt')
   const stopTimes = await readEntry(zip, 'stop_times.txt')
   if (!trips || !stopTimes) {
-    console.log(`  ⚠ ${feedId}: missing trips/stop_times, skipping`)
+    console.warn(`  ⚠ ${feedId}: missing trips/stop_times, skipping`)
     return
   }
   const calendar = await readEntry(zip, 'calendar.txt')
   const calendarDates = await readEntry(zip, 'calendar_dates.txt')
+  const frequencies = await readEntry(zip, 'frequencies.txt')
 
   const tripRecords = parseGtfsRecords(trips)
   const stopTimeRecords = parseGtfsRecords(stopTimes)
+
+  const resolution = resolveServiceCalendar(calendar, calendarDates, tripRecords)
+  console.log(
+    `  ${feedId}: service regime ${resolution.regime}` +
+      (resolution.regime === 'fail-open'
+        ? ' (no calendar info — every trip eligible)'
+        : `; horizon ${resolution.horizonStart}..${resolution.horizonEnd}; rep dates ` +
+          `weekday=${resolution.repWeekday} sat=${resolution.repSaturday} sun=${resolution.repSunday}`),
+  )
+
   const associations = deriveStopRoutes(
     tripRecords,
     stopTimeRecords,
     feedId,
     calendar,
     calendarDates,
+    frequencies,
+    resolution,
   )
   const n = await importStopRoutes(associations)
-  const withService = associations.filter(a => a.weekdayTrips >= 2).length
+  const withService = associations.filter(a => a.tripsWeekdayDay >= 2).length
   console.log(
-    `  ✓ ${feedId}: ${n} pairs upserted (${withService} with ≥2 weekday-daytime trips)`,
+    `  ✓ ${feedId}: ${n} pairs upserted (${withService} with ≥2 rep-weekday-day trips)`,
   )
 }
 
 async function main() {
   const feeds = await feedsToBackfill()
-  console.log(`Backfilling weekday_trips for ${feeds.length} feed(s): ${feeds.join(', ')}`)
+  console.log(`Backfilling service counts for ${feeds.length} feed(s): ${feeds.join(', ')}`)
   for (const feedId of feeds) {
     try {
       await backfillFeed(feedId)

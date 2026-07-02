@@ -28,6 +28,7 @@ import {
   parseAgencies,
   parseShapes,
   deriveStopRoutes,
+  resolveServiceCalendar,
   parseGtfsRecords,
   parseStopParents,
   deriveTripPatterns,
@@ -417,16 +418,31 @@ async function importFeedFile(filepath: string, feedInfo: GtfsFeedInfo) {
       const tripRecords = parseGtfsRecords(tripsContent)
       const stopTimeRecords = parseGtfsRecords(stopTimesContent)
 
-      // calendar drives the weekday-daytime "regular service" trip counts that
-      // gate which routes a station actually shows (see deriveStopRoutes).
+      // calendar + frequencies drive the representative-day service counts
+      // that gate which routes a station actually shows (see deriveStopRoutes
+      // / resolveServiceCalendar).
       const calendarContent = await readZipEntry(zip, 'calendar.txt')
       const calendarDatesContent = await readZipEntry(zip, 'calendar_dates.txt')
+      const frequenciesContent = await readZipEntry(zip, 'frequencies.txt')
+      const resolution = resolveServiceCalendar(
+        calendarContent ?? undefined,
+        calendarDatesContent ?? undefined,
+        tripRecords,
+      )
+      console.log(
+        `  service regime: ${resolution.regime}` +
+          (resolution.regime === 'fail-open'
+            ? ''
+            : `; rep dates weekday=${resolution.repWeekday} sat=${resolution.repSaturday} sun=${resolution.repSunday}`),
+      )
       const associations = deriveStopRoutes(
         tripRecords,
         stopTimeRecords,
         feedInfo.feedId,
         calendarContent ?? undefined,
         calendarDatesContent ?? undefined,
+        frequenciesContent ?? undefined,
+        resolution,
       )
       stopRoutesImported = await importStopRoutes(associations)
       console.log(`  ✓ Imported ${stopRoutesImported} stop-route associations`)

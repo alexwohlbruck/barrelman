@@ -1,110 +1,135 @@
 /**
  * STREAMING stop->route derivation for feeds whose stop_times is too large to
  * parse in memory (e.g. CTA: 362MB, buses + trains — OOMs the in-memory
- * backfill). Streams stop_times.txt line-by-line from disk, filters to the
- * given route_types (default 1 = rail/metro), and upserts gtfs_stop_routes with
- * weekday-daytime trip counts (same "regular service" semantics as
- * deriveStopRoutes). Only the small files (routes/trips/calendar) are loaded
- * whole; stop_times never is.
+ * backfill). Reads the feed ZIP directly (processed dirs preferred, raw
+ * data/gtfs fallback — same resolution as backfill-stop-route-service.ts),
+ * streams stop_times.txt through a proper quote-aware CSV parser, filters to
+ * the given route_types (default 1 = rail/metro), and upserts gtfs_stop_routes
+ * with representative-day service counts (same semantics as deriveStopRoutes:
+ * resolveServiceCalendar + frequencies.txt expansion). Only the small files
+ * (routes/trips/calendar/frequencies) are loaded whole; stop_times never is.
  *
- * Usage (feed already imported; extract the txt files to a mounted dir first —
- * from the PROCESSED zip, so derived data matches what MOTIS ingests):
- *   unzip -o data/gtfs-processed/29.zip routes.txt trips.txt calendar.txt \
- *     calendar_dates.txt stop_times.txt -d data/29-gtfs
- *   docker exec barrelman bun run import/derive-rail-stop-routes.ts 29 /data/29-gtfs 1
+ * Usage (feed already imported):
+ *   docker exec barrelman bun run import/derive-rail-stop-routes.ts 29 [routeTypes=1]
+ *   DRY_RUN=1 bun run import/derive-rail-stop-routes.ts 29     # derive + log, no upsert
  */
-import { createReadStream, readFileSync, existsSync } from 'fs'
-import { createInterface } from 'readline'
+import { existsSync } from 'fs'
 import { join } from 'path'
-import { parseGtfsRecords, importStopRoutes } from '../src/services/gtfs.service'
+import JSZip from 'jszip'
+import { parse as parseCsvStream } from 'csv-parse'
+import {
+  parseGtfsRecords,
+  parseFrequencies,
+  resolveServiceCalendar,
+  repServiceSets,
+  createStopRouteAccumulator,
+  gtfsTimeToSeconds,
+  importStopRoutes,
+} from '../src/services/gtfs.service'
 
 const feedId = process.argv[2]
-const dir = process.argv[3]
-const routeTypes = new Set((process.argv[4] || '1').split(',').map(s => s.trim()))
+const routeTypes = new Set((process.argv[3] || '1').split(',').map(s => s.trim()))
 
-if (!feedId || !dir) {
-  console.error('Usage: derive-rail-stop-routes.ts <feedId> <extractedDir> [routeTypes=1]')
+if (!feedId) {
+  console.error('Usage: derive-rail-stop-routes.ts <feedId> [routeTypes=1]')
   process.exit(1)
 }
 
-const read = (f: string) => (existsSync(join(dir, f)) ? readFileSync(join(dir, f), 'utf8') : '')
+// Prefer the fully preprocessed zips (what MOTIS ingests) so derived counts
+// match routing; fall back to the raw downloads. GTFS_DIR pins one directory.
+const CANDIDATE_DIRS: string[] = process.env.GTFS_DIR
+  ? [process.env.GTFS_DIR]
+  : [
+      process.env.GTFS_PROCESSED_DIR, // /gtfs-data/gtfs in the barrelman container
+      './data/gtfs-processed',
+      '/gtfs-data/gtfs',
+      process.env.GTFS_DATA_DIR, // /gtfs-zips in the barrelman container
+      './data/gtfs',
+      '/data/gtfs',
+    ].filter((d): d is string => !!d)
 
-// Weekday service ids (calendar Mon-Fri, else calendar_dates weekday additions).
-function weekdayServiceIds(): Set<string> | null {
-  const cal = parseGtfsRecords(read('calendar.txt'))
-  const wd = new Set<string>()
-  const DAYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday']
-  for (const r of cal) if (r.service_id && DAYS.some(d => r[d] === '1')) wd.add(r.service_id)
-  if (wd.size) return wd
-  for (const r of parseGtfsRecords(read('calendar_dates.txt'))) {
-    if (!r.service_id || r.exception_type !== '1' || !r.date) continue
-    const dow = new Date(+r.date.slice(0, 4), +r.date.slice(4, 6) - 1, +r.date.slice(6, 8)).getDay()
-    if (dow >= 1 && dow <= 5) wd.add(r.service_id)
+function zipPathForFeed(id: string): string | undefined {
+  for (const dir of CANDIDATE_DIRS) {
+    const p = join(dir, `${id}.zip`)
+    if (existsSync(p)) return p
   }
-  return wd.size ? wd : null
+  return undefined
 }
-function toSec(t: string): number {
-  const p = t?.split(':')
-  if (!p || p.length < 3) return NaN
-  return +p[0] * 3600 + +p[1] * 60 + +p[2]
+
+async function readEntry(zip: JSZip, name: string): Promise<string> {
+  const e = zip.file(name)
+  return e ? await e.async('string') : ''
 }
-const DAY_LO = 6 * 3600, DAY_HI = 22 * 3600
 
 async function main() {
-  // Small files: rail route ids, trip -> route/service.
+  const zipPath = zipPathForFeed(feedId)
+  if (!zipPath) {
+    console.warn(`⚠ ${feedId}: no ZIP found in ${CANDIDATE_DIRS.join(', ')}`)
+    process.exit(1)
+  }
+  console.log(`Feed ${feedId}: ${zipPath}`)
+  const zip = await JSZip.loadAsync(await Bun.file(zipPath).arrayBuffer())
+  const stopTimesEntry = zip.file('stop_times.txt')
+  if (!stopTimesEntry) {
+    console.warn(`⚠ ${feedId}: no stop_times.txt in ${zipPath}`)
+    process.exit(1)
+  }
+
+  // Small files: rail route ids, trip -> route/service, calendar, frequencies.
   const railRoutes = new Set(
-    parseGtfsRecords(read('routes.txt'))
+    parseGtfsRecords(await readEntry(zip, 'routes.txt'))
       .filter(r => routeTypes.has(r.route_type))
       .map(r => r.route_id),
   )
-  const tripRoute = new Map<string, string>()
-  const tripSvc = new Map<string, string>()
-  for (const t of parseGtfsRecords(read('trips.txt'))) {
+  const trips = parseGtfsRecords(await readEntry(zip, 'trips.txt'))
+  const tripToRoute = new Map<string, string>()
+  const tripToService = new Map<string, string>()
+  for (const t of trips) {
     if (!railRoutes.has(t.route_id)) continue
-    tripRoute.set(t.trip_id, t.route_id)
-    if (t.service_id) tripSvc.set(t.trip_id, t.service_id)
-  }
-  const weekday = weekdayServiceIds()
-  console.log(`${railRoutes.size} rail routes, ${tripRoute.size} rail trips; streaming stop_times...`)
-
-  // Stream stop_times.txt; count weekday-daytime trips per (stop, route).
-  const counts = new Map<string, number>()
-  const rl = createInterface({ input: createReadStream(join(dir, 'stop_times.txt')), crlfDelay: Infinity })
-  let header: Record<string, number> | null = null
-  let iTrip = 0, iStop = 0, iDep = 0, iArr = 0, n = 0
-  for await (const line of rl) {
-    if (!header) {
-      const cols = line.replace(/^﻿/, '').split(',')
-      header = {}
-      cols.forEach((c, i) => (header![c.trim()] = i))
-      iTrip = header['trip_id']; iStop = header['stop_id']
-      iDep = header['departure_time']; iArr = header['arrival_time']
-      continue
-    }
-    const f = line.split(',')
-    const routeId = tripRoute.get(f[iTrip])
-    if (!routeId) continue
-    const stopId = f[iStop]
-    if (!stopId) continue
-    const key = `${stopId}|${routeId}`
-    if (!counts.has(key)) counts.set(key, 0)
-    if (weekday) {
-      const svc = tripSvc.get(f[iTrip])
-      if (!svc || !weekday.has(svc)) continue
-    }
-    const sec = toSec(f[iDep] || f[iArr])
-    if (Number.isNaN(sec) || sec < DAY_LO || sec >= DAY_HI) continue
-    counts.set(key, counts.get(key)! + 1)
-    if (++n % 2_000_000 === 0) console.log(`  …${n} rail stop_times`)
+    tripToRoute.set(t.trip_id, t.route_id)
+    if (t.service_id) tripToService.set(t.trip_id, t.service_id)
   }
 
-  const associations = [...counts.entries()].map(([k, v]) => {
-    const i = k.lastIndexOf('|')
-    return { feedId, stopId: k.slice(0, i), routeId: k.slice(i + 1), weekdayTrips: v }
+  const res = resolveServiceCalendar(
+    await readEntry(zip, 'calendar.txt'),
+    await readEntry(zip, 'calendar_dates.txt'),
+    trips,
+  )
+  console.log(
+    `  service regime: ${res.regime}` +
+      (res.regime === 'fail-open'
+        ? ' (no calendar info — every trip eligible)'
+        : `; horizon ${res.horizonStart}..${res.horizonEnd}; rep dates ` +
+          `weekday=${res.repWeekday} sat=${res.repSaturday} sun=${res.repSunday}`),
+  )
+
+  const acc = createStopRouteAccumulator({
+    tripToRoute,
+    tripToService,
+    frequencies: parseFrequencies(await readEntry(zip, 'frequencies.txt')),
+    services: repServiceSets(res),
   })
+  console.log(`${railRoutes.size} rail routes, ${tripToRoute.size} rail trips; streaming stop_times...`)
+
+  // Stream stop_times.txt through a real CSV parser (quoted fields with
+  // embedded commas — e.g. stop_headsign — would break a naive line.split(',')).
+  const parser = stopTimesEntry.nodeStream().pipe(
+    parseCsvStream({ columns: true, bom: true, trim: true, relax_column_count: true, skip_empty_lines: true }),
+  )
+  let n = 0
+  for await (const st of parser as AsyncIterable<Record<string, string>>) {
+    acc.add(st.trip_id, st.stop_id, gtfsTimeToSeconds(st.departure_time || st.arrival_time))
+    if (++n % 2_000_000 === 0) console.log(`  …${n} stop_times rows`)
+  }
+
+  const associations = acc.finalize(feedId)
+  const withSvc = associations.filter(a => a.tripsWeekdayDay >= 2).length
+  if (process.env.DRY_RUN) {
+    console.log(`DRY_RUN: ${associations.length} rail (stop,route) pairs (${withSvc} with >=2 rep-weekday-day trips); not upserting.`)
+    process.exit(0)
+  }
   const imported = await importStopRoutes(associations)
-  const withSvc = associations.filter(a => a.weekdayTrips >= 2).length
-  console.log(`Done: ${imported} rail (stop,route) pairs upserted (${withSvc} with >=2 weekday-daytime trips).`)
+  console.log(`Done: ${imported} rail (stop,route) pairs upserted (${withSvc} with >=2 rep-weekday-day trips).`)
   process.exit(0)
 }
 main()
