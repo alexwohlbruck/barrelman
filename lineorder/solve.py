@@ -610,6 +610,13 @@ def main(argv=None):
     if args.dry_run:
         print(f"\n[solve] dry run — slots NOT written "
               f"({time.perf_counter() - t0:.2f}s total)")
+    elif a.weighted > b.weighted + 1e-9:
+        # heuristic/timeout path came out worse than what is already
+        # stored: keep the provisional slots rather than regress
+        print(f"\n[solve] optimized score {a.weighted:.1f} is WORSE than "
+              f"the provisional slots ({b.weighted:.1f}) — slots NOT "
+              f"written; rerun with a higher --time-limit "
+              f"({time.perf_counter() - t0:.2f}s total)")
     else:
         n = write_slots(inst, out.full_solution, args.dsn)
         print(f"\n[solve] wrote {n} slots for {args.build_key} "
