@@ -1,8 +1,10 @@
 """Real-data phase B exam: CTA feed 29 rail, attributed + emitted to the DB.
 
-Runs the FULL phase B path — station snapping (edge splitting), route
-attribution, and the transit_graph_* emit under build_key
-'chicago:l-v3' in the dev DB — and checks:
+Runs the FULL phase B path via build.enrich_graph — the same path the
+CLI --emit takes: shape-evidence geometry refit (linegraph.refit),
+station snapping (edge splitting on the refit centerline), route
+attribution, line-less pruning — then the transit_graph_* emit under
+build_key 'chicago:l-v3' in the dev DB, and checks:
 
   - every pattern with a shape attributes with <2% unmatched samples,
   - Loop-window edges carry plausible multi-route sets (the elevated
@@ -30,10 +32,10 @@ from collections import Counter
 import pytest
 from shapesnap.match import load_patterns
 
-from linegraph.attribute import attribute_patterns, load_routes_meta
-from linegraph.build import REPO_ROOT, build_linegraph, dedup_shapes
+from linegraph.build import (REPO_ROOT, build_linegraph, dedup_shapes,
+                             enrich_graph)
 from linegraph.emit import emit_build
-from linegraph.stations import load_station_complexes, snap_stations
+from linegraph.stations import load_station_complexes
 
 FEED_PROCESSED = REPO_ROOT / "data" / "gtfs-processed" / "29.zip"
 FEED_RAW = REPO_ROOT / "data" / "gtfs" / "29.zip"
@@ -105,11 +107,11 @@ def emitted():
         build_key=BUILD_KEY, feed_id="29", mode="rail", verbose=False,
     )
 
+    # the same phase-B path the CLI --emit takes (refit ON by default)
     stop_ids = {sid for p in patterns for sid in p.stop_ids}
     complexes = load_station_complexes(zip_path, stop_ids)
-    lg, snap = snap_stations(lg, complexes)
-    edge_routes, stats = attribute_patterns(
-        lg, patterns, "29", load_routes_meta(zip_path)
+    lg, snap, edge_routes, stats = enrich_graph(
+        lg, patterns, zip_path, "29", verbose=False
     )
     counts = emit_build(
         lg, edge_routes, snap.labels, build_key=BUILD_KEY,
