@@ -140,6 +140,30 @@ Per (mode-class, region cell), from *matched* shapes:
   (scikit-image); vectorize (nodes at degree≠2 pixels); attribute routes back to edges;
   snap/group stations. Junctions fall out of skeleton topology — crossing-not-parallel
   tracks never merge (Tower 18 exam).
+- Enclosed background holes THINNER than the stroke fill before skeletonizing
+  (`raster.fill_sliver_holes`): centerlines MERGE_WIDTH..2× MERGE_WIDTH apart leave a
+  sliver every point of which lies within MERGE_WIDTH/2 of ink — below the merge
+  criterion — and skeletonizing around it yields parallel duplicate centerlines plus
+  line-less ladder rungs (NYC receipts: the two F alignments 22 m apart east of
+  Broadway-Lafayette drew F twice 5 m apart with two line-less ~200 m rungs; the
+  Bowling Green turnback zigzags skeletonized into 3 parallel edges between one node
+  pair + a deg-6 node). Holes with genuine clearance — the Chicago Loop interior,
+  flying-junction eyes — are untouched; per-hole decision, never a partial fill.
+- Attribution carries a CONVERSE deviation gate (`attribute.DEVIATION_GATE_M`, 50 m):
+  snapping guarantees every sample is near SOME edge, not that every claimed edge is
+  near the pattern — adjacency bridge-fill can paint phantom ribbons onto edges the
+  route never rides (NYC receipts: R on the 7's Queens Blvd elevated 700 m from any R
+  shape, B on the White Plains Rd 2/5 corridor, R/W on the West End line). A chained
+  edge whose densified geometry strays beyond the gate from the pattern's own shape
+  anywhere is excised from that pattern; a genuinely ridden edge stays within snap
+  radius plus junction displacement everywhere, so the gate never fires on it.
+- Station complexes with the SAME name conflicting over one snap target merge into
+  the winning node instead of one failing (MTA lists Queensboro Plaza per division).
+- Edges NO pattern rides after gating are pruned before emit, and the deg-2 nodes
+  they leave behind re-join into single head-to-tail edges (crossing rungs a shade
+  over the contraction bound — the 21 m 4/5×N/R/W rung at Fulton St): stage 5's
+  raw-slot corridor stability relies on corridors arriving as single aligned edges,
+  and line-less rows only inflate `transit_graph_edges` for consumers that skip them.
 - Length acceptance: total skeleton km within 0.75–1.25× of the **merge-width-fused
   network** — `area(union(shapes buffered at MERGE_WIDTH/2))) / MERGE_WIDTH`, computed
   independently of the raster path. The raw union of used ways is NOT the contract
