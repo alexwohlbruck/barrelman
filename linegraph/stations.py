@@ -22,8 +22,12 @@ Each complex snaps to the graph within MAX_SNAP_M (150 m):
     LOOM emitted one node per station.)
 
 Conflicts (two complexes wanting the same node / split point): nearest
-wins, the loser stays unlabeled. Complexes farther than MAX_SNAP_M from
-the skeleton label nothing.
+wins. A loser carrying the SAME station name merges into the winner's
+node instead of failing — feeds list one physical station as several
+complexes (MTA's Queensboro Plaza appears once per division), and the
+duplicates all want the same snap target. Losers with a different name
+stay unlabeled. Complexes farther than MAX_SNAP_M from the skeleton
+label nothing.
 
 Run stations BEFORE attribute: splitting first gives attribution
 station-to-station granularity, so a route terminating mid-corridor of a
@@ -204,26 +208,41 @@ def snap_stations(lg, complexes, *, max_snap_m: float = MAX_SNAP_M,
             target = ("split", pos, t)
         plans.append((dist, comp.station_id, comp, target))
 
-    # nearest wins on conflict; ties broken by station_id for determinism
+    # nearest wins on conflict; ties broken by station_id for determinism.
+    # A same-name loser MERGES into the winner's node (duplicate complex
+    # records of one physical station), recorded as labeled.
+    def same_name(a, b) -> bool:
+        return a.label.strip().casefold() == b.label.strip().casefold()
+
     plans.sort(key=lambda p: (p[0], p[1]))
     claimed_nodes: dict = {}
     splits: dict = {}
+    split_claims: dict = {}  # (pos, t) -> winning complex
     accepted = []  # (complex, target, dist)
     for dist, _, comp, target in plans:
         if target[0] == "node":
             nid = target[1]
             if nid in claimed_nodes:
-                res.unlabeled.append((comp, "conflict", dist))
+                if same_name(comp, claimed_nodes[nid]):
+                    accepted.append((comp, target, dist))
+                else:
+                    res.unlabeled.append((comp, "conflict", dist))
                 continue
             claimed_nodes[nid] = comp
             accepted.append((comp, target, dist))
         else:
             _, pos, t = target
             taken = splits.setdefault(pos, [])
-            if any(abs(t - t2) < sliver_m for t2 in taken):
-                res.unlabeled.append((comp, "conflict", dist))
+            near = [t2 for t2 in taken if abs(t - t2) < sliver_m]
+            if near:
+                winner = split_claims[(pos, near[0])]
+                if same_name(comp, winner):
+                    accepted.append((comp, ("split", pos, near[0]), dist))
+                else:
+                    res.unlabeled.append((comp, "conflict", dist))
                 continue
             taken.append(t)
+            split_claims[(pos, t)] = comp
             accepted.append((comp, target, dist))
 
     for pos in splits:
@@ -233,6 +252,8 @@ def snap_stations(lg, complexes, *, max_snap_m: float = MAX_SNAP_M,
 
     for comp, target, dist in accepted:
         nid = target[1] if target[0] == "node" else node_at[(target[1], target[2])]
-        res.labels[nid] = (comp.station_id, comp.label)
+        # setdefault: a same-name merged duplicate never overwrites the
+        # winning complex's station_id
+        res.labels.setdefault(nid, (comp.station_id, comp.label))
         res.labeled.append((comp, nid, dist))
     return lg, res
