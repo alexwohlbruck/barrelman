@@ -17,14 +17,22 @@ the v2 attempt, plus the receipts:
      aware sign), so the only offset changes anywhere are the
      off_from_px -> off_to_px ramps INSIDE transition features, every
      one anchored to a listed site; head-on steady meets at a site with
-     unequal offsets are allowed only for deliberately unpaired stubs
-     (same-colour termini, no through service)
+     unequal offsets are allowed only for VERIFIED unpaired stubs (two
+     steady features whose shared endpoint is a listed site node in
+     both .sites and whose corridors both terminate there — no through
+     pairing); every feature end is then ACCOUNTED for: shared with
+     another same-ribbon end, or sitting on one of the ribbon's genuine
+     termini (degree-1 nodes of its corridor subgraph), every terminus
+     occupied — a dropped or mislocated transition orphans an end
+     mid-ribbon and fails, closing the gap pairwise matching alone
+     would miss
   2  C3 — every transition's ground length within [0.4, 1.1] x
      transition_len_m (short-corridor shrink allowed at the low end,
      nothing longer); vertex spacing <= densify_step_m on transitions
   3  fillet — every transition's min discrete curvature radius (aeqd
-     metres, circumradius over vertex triples) meets the configured
-     floor: min radius target = line_count * gap_px *
+     metres, circumradius over vertex triples, measured on the EMITTED
+     DB geometry so quantization kinks cannot hide) meets the
+     configured floor: min radius target = line_count * gap_px *
      fillet_radius_factor, relaxed only by a recorded clamp (short
      halves) or sharper INHERITED track curvature (recorded pre-fillet,
      corner excluded); worst case reported; no self-intersections
@@ -179,7 +187,7 @@ def lineorder_site_coords():
     return out
 
 
-def check1_c1_contract(g, segments):
+def check1_c1_contract(g, proj, segments):
     print("\nCHECK 1 — C1: offsets transition only at the known sites")
     sites = transition_sites(g)
     site_coords = {(round(g.nodes[nid].lon, 7), round(g.nodes[nid].lat, 7)):
@@ -231,11 +239,55 @@ def check1_c1_contract(g, segments):
     for s in segments:
         by_ck[s.color_key].append(s)
 
+    # ribbon termini + corridor ends, for (a) the unpaired-stub escape
+    # (verified no-through pairing, not just non-empty .sites) and
+    # (b) end-to-end accounting: pairwise endpoint matching alone would
+    # stay silent if a whole transition were dropped or mislocated (the
+    # v2 failure class), because a gap has NO shared endpoints
+    corridors = walk_corridors(g, CFG.gap_px)
+    cor_by_id = {c.cid: c for c in corridors}
+    node_xy = {nid: proj.to_xy([(n.lon, n.lat)])[0]
+               for nid, n in g.nodes.items()}
+    deg = defaultdict(lambda: defaultdict(int))
+    for c in corridors:
+        for r in c.ribbons:
+            deg[r.color_key][c.node_a] += 1
+            deg[r.color_key][c.node_b] += 1
+    expected_term = {ck: {nid for nid, d in degs.items() if d == 1}
+                     for ck, degs in deg.items()}
+
+    def stub_meet(a, b, pa) -> bool:
+        """True only for the deliberately-unpaired case: two steady
+        stubs whose shared endpoint IS a transition-site node listed in
+        both features' .sites, and both features' corridors terminate
+        at that node (no through pairing exists there by construction —
+        the builder emits a transition feature otherwise)."""
+        if a.kind != "steady" or b.kind != "steady":
+            return False
+        shared = set(a.sites) & set(b.sites)
+        for nid in shared:
+            if nid not in sites:
+                continue
+            if math.dist(pa, node_xy[nid]) > ENDPOINT_TOL_M:
+                continue
+            ends_ok = True
+            for f in (a, b):
+                cor = cor_by_id.get(f.corridor_id)
+                if cor is None or nid not in (cor.node_a, cor.node_b):
+                    ends_ok = False
+            if ends_ok:
+                return True
+        return False
+
     n_adj = n_mismatch = n_termini = 0
     mismatches = []
+    matched: set = set()
     for ck in sorted(by_ck):
         feats = by_ck[ck]
         for i, a in enumerate(feats):
+            if math.dist(a.xy[0], a.xy[-1]) <= ENDPOINT_TOL_M:
+                matched.add((a.seg_id, True))   # closed ring feature
+                matched.add((a.seg_id, False))
             for b in feats[i + 1:]:
                 for a_start in (True, False):
                     pa = a.xy[0] if a_start else a.xy[-1]
@@ -243,6 +295,8 @@ def check1_c1_contract(g, segments):
                         pb = b.xy[0] if b_start else b.xy[-1]
                         if math.dist(pa, pb) > ENDPOINT_TOL_M:
                             continue
+                        matched.add((a.seg_id, a_start))
+                        matched.add((b.seg_id, b_start))
                         # a's offset at the joint is signed in a's travel
                         # frame. The frames agree when the end tangents
                         # are co-directional (flow-through AND the
@@ -261,8 +315,7 @@ def check1_c1_contract(g, segments):
                         want = -ob if head_on else ob
                         n_adj += 1
                         if abs(oa - want) > OFFSET_TOL_PX:
-                            if (a.kind == "steady" and b.kind == "steady"
-                                    and a.sites and b.sites):
+                            if head_on and stub_meet(a, b, pa):
                                 n_termini += 1  # unpaired stubs, allowed
                             else:
                                 n_mismatch += 1
@@ -274,6 +327,41 @@ def check1_c1_contract(g, segments):
           f"{n_termini} unpaired same-colour termini allowed")
     report("check1.boundary-offsets-equal", n_mismatch == 0,
            f"{n_mismatch} offset discontinuities outside transitions")
+
+    # end-to-end accounting: every feature end is either shared with
+    # another same-ribbon feature end or sits at one of the ribbon's
+    # genuine termini (degree-1 nodes of its corridor subgraph), and
+    # every expected terminus is occupied — a dropped or mislocated
+    # feature leaves an orphan end mid-ribbon and fails here
+    n_unmatched = 0
+    bad_ends = []
+    seen_term: dict = defaultdict(set)
+    for ck in sorted(by_ck):
+        for s in by_ck[ck]:
+            for at_start in (True, False):
+                if (s.seg_id, at_start) in matched:
+                    continue
+                n_unmatched += 1
+                pt = s.xy[0] if at_start else s.xy[-1]
+                hits = [nid for nid in expected_term.get(ck, ())
+                        if math.dist(pt, node_xy[nid]) <= ENDPOINT_TOL_M]
+                if hits:
+                    seen_term[ck].update(hits)
+                else:
+                    bad_ends.append((ck, s.seg_id,
+                                     "start" if at_start else "end"))
+    n_expected = sum(len(v) for v in expected_term.values())
+    vacant = [(ck, sorted(g.nodes[n].label or str(n) for n in miss))
+              for ck in sorted(expected_term)
+              if (miss := expected_term[ck] - seen_term[ck])]
+    term_labels = sorted(g.nodes[n].label or str(n)
+                         for ck in expected_term for n in expected_term[ck])
+    print(f"  {n_unmatched} unshared feature ends over {n_expected} "
+          f"expected ribbon termini: {term_labels}")
+    report("check1.ends-accounted",
+           not bad_ends and not vacant and n_unmatched == n_expected,
+           f"{len(bad_ends)} orphan ends off-terminus {bad_ends[:6]}; "
+           f"vacant termini {vacant}")
 
 
 # ----------------------------------------------------------- C3: lengths
@@ -307,19 +395,40 @@ def check2_c3_contract(segments):
 
 # ------------------------------------------------------------- fillets
 
-def check3_fillets(segments):
+def check3_fillets(segments, proj):
     print("\nCHECK 3 — fillet curvature + self-intersections")
+    import json
+
+    import psycopg
+
+    # measure the SERVED geometry, not the in-memory rebuild: the rows
+    # transit_lines_rt2 serves are what the fork's per-vertex normals
+    # see, and emit-time quantization coarser than the fillet vertex
+    # spacing (8-22 cm) would put micro-kinks on them that the rebuild
+    # never had (check0 compares endpoints/NPoints only)
+    with psycopg.connect(DEFAULT_DSN) as conn, conn.cursor() as cur:
+        cur.execute(
+            """SELECT seg_id, ST_AsGeoJSON(geom, 15)
+               FROM transit_line_segments WHERE build_key = %s""", (BUILD,))
+        db_xy = {r[0]: proj.to_xy(json.loads(r[1])["coordinates"])
+                 for r in cur.fetchall()}
+
     inf = float("inf")
     n_target = n_clamped = 0
     bad = []
+    missing = []
     worst = (inf, None)  # (measured / target ratio, detail)
     trs = [s for s in segments if s.kind == "transition"]
     for t in trs:
         target = t.line_count * CFG.gap_px * CFG.fillet_radius_factor
         raw = t.raw_min_radius_m if t.raw_min_radius_m is not None else inf
         ach = t.fillet_radius_m if t.fillet_radius_m is not None else inf
+        xy = db_xy.get(t.seg_id)
+        if xy is None:
+            missing.append(t.seg_id)
+            continue
         measured = min((_circumradius(a, b, c) for a, b, c in
-                        zip(t.xy, t.xy[1:], t.xy[2:])), default=inf)
+                        zip(xy, xy[1:], xy[2:])), default=inf)
         if t.fillet_clamped:
             n_clamped += 1
         if measured >= 0.9 * target:
@@ -334,17 +443,17 @@ def check3_fillets(segments):
             bad.append((t.seg_id, t.route_short_names,
                         round(measured, 1), round(floor, 1)))
     print(f"  {len(trs)} transitions: {n_target} meet 0.9x the full "
-          f"min-radius target, {n_clamped} clamped by short halves")
+          f"min-radius target, {n_clamped} clamped by short halves "
+          f"(curvature measured on the emitted DB rows)")
     print(f"  worst: seg {worst[1]} at {worst[0]:.2f}x its target")
-    report("check3.min-radius", not bad,
+    report("check3.min-radius", not bad and not missing,
            f"{len(bad)} transitions under their curvature floor: "
-           f"{bad[:6]}")
+           f"{bad[:6]}; {len(missing)} missing from DB")
     report("check3.clamping-is-exceptional",
            n_clamped <= 10 and n_target >= 0.75 * len(trs),
            f"{n_clamped} clamped (<=10), {n_target}/{len(trs)} at full "
            f"target (>=75%)")
 
-    import psycopg
     with psycopg.connect(DEFAULT_DSN) as conn, conn.cursor() as cur:
         cur.execute(
             """SELECT seg_id FROM transit_line_segments
@@ -481,9 +590,9 @@ def main() -> int:
           f"transition) from {len(g.edges)} edges")
 
     check0_db_matches_rebuild(segments)
-    check1_c1_contract(g, segments)
+    check1_c1_contract(g, proj, segments)
     check2_c3_contract(segments)
-    check3_fillets(segments)
+    check3_fillets(segments, proj)
     check4_coverage(g, proj, segments)
     check5_loop_receipt(segments)
 
