@@ -15,7 +15,7 @@
  */
 
 import { parseArgs } from 'util'
-import { existsSync, mkdirSync, writeFileSync, readdirSync, readFileSync, copyFileSync } from 'fs'
+import { existsSync, mkdirSync, writeFileSync, readdirSync, readFileSync, copyFileSync, rmSync } from 'fs'
 import { join, basename } from 'path'
 import JSZip from 'jszip'
 import { sql } from 'drizzle-orm'
@@ -343,7 +343,7 @@ async function transformFeed(rawPath: string, feed: GtfsFeedInfo): Promise<strin
   // a. Start from the sanitized raw zip
   copyFileSync(rawPath, processedPath)
 
-  // b. OSM shape rewrite (shapesnap) — future stage, no-op until wired
+  // b. OSM shape rewrite (shapesnap) — per-feed opt-in via config/shapesnap.json
   const rewritten = await applyShapeRewrite(feed.feedId, processedPath)
   if (rewritten) {
     console.log(`  ✓ Rewrote shapes in ${basename(processedPath)}`)
@@ -360,18 +360,85 @@ async function transformFeed(rawPath: string, feed: GtfsFeedInfo): Promise<strin
 }
 
 /**
- * Placeholder for the shapesnap OSM shape rewrite.
+ * shapesnap OSM shape rewrite (docs/shapesnap.md).
  *
- * When shapesnap lands, it will map-match each trip onto OSM ways and replace
- * shapes.txt inside the processed zip IN PLACE. It must run here — before the
- * DB parse and before MOTIS ingestion — so importShapes and display read the
- * exact geometry MOTIS routes on. Plugging it in is a one-function change:
- * implement the rewrite and return true.
+ * Map-matches every pattern of the feed's configured modes onto OSM ways and
+ * replaces shapes.txt inside the processed zip IN PLACE (python -m
+ * shapesnap.run via uv). It must run here — before the DB parse and before
+ * MOTIS ingestion — so importShapes and display read the exact geometry MOTIS
+ * routes on.
  *
- * @returns true if shapes were rewritten, false while not configured.
+ * Per-feed opt-in: config/shapesnap.json {enabled, modes}; default disabled.
+ * The import NEVER hard-fails on shapesnap: a non-zero exit, a missing
+ * summary, or a gate-summary anomaly (zero matched patterns) logs loudly and
+ * restores the unrewritten zip.
+ *
+ * @returns true if shapes were rewritten, false when skipped or failed.
  */
-async function applyShapeRewrite(_feedId: string, _zipPath: string): Promise<boolean> {
-  return false // shapesnap not yet implemented
+async function applyShapeRewrite(feedId: string, zipPath: string): Promise<boolean> {
+  const repoRoot = join(import.meta.dir, '..')
+  const configPath = join(repoRoot, 'config', 'shapesnap.json')
+
+  let feedCfg: { enabled?: boolean; modes?: string[] } | undefined
+  try {
+    const cfg = JSON.parse(readFileSync(configPath, 'utf8'))
+    feedCfg = cfg.feeds?.[feedId]
+  } catch (err) {
+    console.error(`  ⚠ shapesnap: cannot read ${configPath} (${err}) — skipping rewrite`)
+    return false
+  }
+  if (!feedCfg?.enabled) return false
+
+  // Keep a pristine copy: any failure below continues with the unrewritten zip
+  const backupPath = `${zipPath}.preshapesnap`
+  copyFileSync(zipPath, backupPath)
+  const bail = (why: string): false => {
+    console.error(`  ✗✗✗ shapesnap(${feedId}) FAILED: ${why}`)
+    console.error(`  ✗✗✗ continuing with the UNREWRITTEN zip — MOTIS/display will use the feed's own shapes`)
+    copyFileSync(backupPath, zipPath)
+    return false
+  }
+
+  try {
+    const cmd = [
+      'uv', 'run', '--with-requirements', 'shapesnap/requirements.txt',
+      'python', '-m', 'shapesnap.run', '--feed', feedId, '--zip', zipPath,
+    ]
+    if (feedCfg.modes?.length) cmd.push('--modes', feedCfg.modes.join(','))
+    console.log(`  shapesnap: ${cmd.join(' ')}`)
+
+    const proc = Bun.spawn(cmd, { cwd: repoRoot, stdout: 'pipe', stderr: 'pipe' })
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ])
+    if (stdout.trim()) console.log(stdout.trimEnd().split('\n').map(l => `    ${l}`).join('\n'))
+    if (stderr.trim()) console.error(stderr.trimEnd().split('\n').map(l => `    ${l}`).join('\n'))
+    if (exitCode !== 0) return bail(`exit code ${exitCode}`)
+
+    // Gate-summary anomaly check — the CLI's last line is machine-readable:
+    //   [shapesnap] SUMMARY {json}
+    const marker = '[shapesnap] SUMMARY '
+    const line = stdout.split('\n').reverse().find(l => l.includes(marker))
+    if (!line) return bail('no SUMMARY line in output')
+    let summary: { patterns?: number; matched?: number }
+    try {
+      summary = JSON.parse(line.slice(line.indexOf(marker) + marker.length))
+    } catch {
+      return bail('unparseable SUMMARY line')
+    }
+    if ((summary.patterns ?? 0) > 0 && (summary.matched ?? 0) === 0) {
+      return bail(`gate anomaly: 0/${summary.patterns} patterns matched (all fallback/passthrough)`)
+    }
+    // matched === 0 with 0 patterns (e.g. no routes of the configured modes)
+    // is a clean no-op: the CLI left the zip untouched
+    return (summary.matched ?? 0) > 0
+  } catch (err) {
+    return bail(err instanceof Error ? err.message : String(err))
+  } finally {
+    rmSync(backupPath, { force: true })
+  }
 }
 
 // ── Feed import ─────────────────────────────────────────────────────
