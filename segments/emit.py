@@ -4,6 +4,13 @@ Idempotent DDL + delete-and-replace per build_key in ONE transaction,
 same conventions as linegraph.emit. NULL semantics by kind:
   steady      -> offset_px set, off_from_px/off_to_px NULL
   transition  -> offset_px NULL, off_from_px/off_to_px set
+
+offset_px / off_from_px / off_to_px are AUTHORITATIVE, expressed in each
+feature's own travel frame (geometry direction). slot / line_count are
+informational: slot is mirrored into the same frame, so on steady rows
+offset_px == (slot - (line_count-1)/2) * gap_px holds, but consumers
+(Phase-B tile functions included) must not re-derive offsets from slot —
+merged transitions can carry an interior bundle's slot.
 """
 
 from __future__ import annotations

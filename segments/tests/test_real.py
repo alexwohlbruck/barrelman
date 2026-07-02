@@ -189,6 +189,21 @@ def test_transition_curvature_meets_min_radius(built):
         "clamping must stay the flagged exception, not the rule"
 
 
+def test_steady_offset_slot_consistency(built):
+    """offset_px is authoritative, but slot/line_count must agree with it
+    in the emitted travel frame on every steady row — a consumer that
+    re-derives offsets from slot must not place ribbons on the wrong side
+    (PAR-12 v3 review: 5/92 rows sign-flipped). Skip-converted connectors
+    may differ by up to offset_eps_px (the from/to grids)."""
+    g, segments, info, _ = built
+    for s in segments:
+        if s.kind != "steady":
+            continue
+        expect = (s.slot - (s.line_count - 1) / 2.0) * CFG.gap_px
+        assert abs(s.offset_px - expect) <= CFG.offset_eps_px + 1e-9, \
+            (s.seg_id, s.route_short_names, s.offset_px, s.slot, s.line_count)
+
+
 def test_length_conserved_per_ribbon(built):
     g, segments, info, _ = built
     corridors = walk_corridors(g, CFG.gap_px)

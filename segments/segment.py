@@ -62,10 +62,10 @@ class Segment:
     route_type: int | None
     route_color: str
     route_text_color: str
-    slot: int
-    line_count: int
-    offset_px: float | None
-    off_from_px: float | None
+    slot: int                      # bundle position in the FEATURE's
+    line_count: int                # travel frame (matches the offsets)
+    offset_px: float | None        # authoritative (steady)
+    off_from_px: float | None      # authoritative (transition)
     off_to_px: float | None
     len_m: float
     coords: list                   # [(lon, lat)]
@@ -645,15 +645,23 @@ def build_segments(g: Graph, cfg: SegmentConfig = SegmentConfig(),
                 coords, turn, r_arc, clamped = fillet_corner(
                     joined, corner, radius, cfg)
                 coords = densify(coords, cfg.densify_step_m)
-                off_from = cg1.frame_sign(s1, toward=True) * r1.offset_px
-                off_to = cg2.frame_sign(s2, toward=False) * r2.offset_px
+                sign1 = cg1.frame_sign(s1, toward=True)
+                sign2 = cg2.frame_sign(s2, toward=False)
+                off_from = sign1 * r1.offset_px
+                off_to = sign2 * r2.offset_px
                 meta = _merge_ribbon_meta(r1, r2)
-                big = r1 if r1.count >= r2.count else r2
+                big, big_sign = ((r1, sign1) if r1.count >= r2.count
+                                 else (r2, sign2))
+                # slot lives in the feature's travel frame, like the
+                # offsets — mirror it when the source corridor is stored
+                # against the direction of travel
+                slot = (big.slot if big_sign > 0
+                        else big.count - 1 - big.slot)
                 if clamped:
                     info["fillet_clamped"] += 1
                 transitions.append(Segment(
                     seg_id=-1, kind="transition", color_key=ck,
-                    slot=big.slot, line_count=big.count, offset_px=None,
+                    slot=slot, line_count=big.count, offset_px=None,
                     off_from_px=off_from, off_to_px=off_to,
                     len_m=_length(coords), coords=coords,  # xy for now
                     sites=(nid,), in_end=(c1.cid, s1), out_end=(c2.cid, s2),
@@ -664,13 +672,15 @@ def build_segments(g: Graph, cfg: SegmentConfig = SegmentConfig(),
             for c, side, r in stubs:
                 cg = cgs[c.cid]
                 coords = densify(cg.tail_xy(side), cfg.densify_step_m)
-                off = cg.frame_sign(side, toward=True) * r.offset_px
+                sign = cg.frame_sign(side, toward=True)
+                off = sign * r.offset_px
+                slot = r.slot if sign > 0 else r.count - 1 - r.slot
                 segments.append(Segment(
                     seg_id=-1, kind="steady", color_key=ck,
                     route_short_names=r.route_short_names,
                     route_ids=r.route_ids, feed_id=r.feed_id,
                     route_type=r.route_type, route_color=r.route_color,
-                    route_text_color=r.route_text_color, slot=r.slot,
+                    route_text_color=r.route_text_color, slot=slot,
                     line_count=r.count, offset_px=off, off_from_px=None,
                     off_to_px=None, len_m=_length(coords),
                     coords=proj.to_ll(coords), corridor_id=c.cid,
@@ -700,9 +710,11 @@ def build_segments(g: Graph, cfg: SegmentConfig = SegmentConfig(),
 
 def _reverse_transition(t: Segment) -> Segment:
     """Reverse a transition's travel frame in place: geometry flips, the
-    offsets swap AND negate (right-of-travel becomes left-of-travel)."""
+    offsets swap AND negate (right-of-travel becomes left-of-travel),
+    and slot mirrors to stay in the emitted frame."""
     t.coords = list(reversed(t.coords))
     t.off_from_px, t.off_to_px = -t.off_to_px, -t.off_from_px
+    t.slot = t.line_count - 1 - t.slot
     t.in_end, t.out_end = t.out_end, t.in_end
     return t
 

@@ -194,6 +194,34 @@ def test_terminating_ribbon_keeps_offset_to_node():
     assert info["stubs"] >= 1
 
 
+# ------------------------------------ slot lives in the emitted frame
+
+def test_emitted_frame_slot_consistency():
+    """Frame-reversed stubs and skipped connectors emit offset_px in the
+    feature's travel frame; slot must live in the SAME frame, so
+    offset_px == (slot - (line_count-1)/2) * gap_px holds on every steady
+    row (PAR-12 v3 review: 5/92 chicago rows had slot on the wrong side).
+    Both corridors here are stored AGAINST the travel direction at N."""
+    T, T2 = ("T", "888888"), ("T2", "444444")
+    g, ids, segs, info = build(
+        {"W": (-500, 0), "N": (0, 0), "E": (500, 0)},
+        [("N", "W", [R, T]), ("E", "N", [R, T2])])
+    # R runs straight through at +2.2 px in both frames -> skip connector
+    assert info["skipped"] == 1
+    conn = [s for s in find(segs, kind="steady", color_key="ff0000")
+            if s.sites]
+    assert len(conn) == 1 and conn[0].offset_px == pytest.approx(2.2)
+    assert conn[0].slot == 1  # mirrored from storage slot 0
+    # T's corridor is stored N->W: its stub at N is frame-reversed
+    (t_stub,) = [s for s in find(segs, kind="steady", color_key="888888")
+                 if s.sites]
+    assert t_stub.offset_px == pytest.approx(-2.2)
+    assert t_stub.slot == 0  # mirrored from storage slot 1
+    for s in find(segs, kind="steady"):
+        expect = (s.slot - (s.line_count - 1) / 2.0) * CFG.gap_px
+        assert s.offset_px == pytest.approx(expect, abs=1e-9)
+
+
 # --------------------------------------- two-end pairing needs evidence
 
 def test_two_end_pairing_requires_shape_evidence():
