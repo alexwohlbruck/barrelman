@@ -72,6 +72,12 @@ def test_every_site_produces_transitions(built):
     assert "merge_offset_mismatch" not in info
     assert not info.get("greedy_paired_sites"), \
         "all >=3-way ribbons pair from matched_shapes evidence"
+    assert not info.get("two_end_unsupported_sites"), \
+        "every two-end pairing is supported by a matched_shapes pass"
+    composition = {nid for nid, k in info["sites"].items()
+                   if k == "composition"}
+    assert set(info.get("two_end_shape_gap_sites", [])) <= composition, \
+        "shared-route shape gaps only at Howard (Red terminal tail)"
 
 
 def test_transitions_meet_steady_with_exact_offsets(built):

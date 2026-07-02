@@ -487,8 +487,6 @@ def pair_entries(nid: int, entries: list, cgs: dict, shapes_xy: dict,
     Returns (pairs, stubs)."""
     if len(entries) == 1:
         return [], list(entries)
-    if len(entries) == 2:
-        return [(entries[0], entries[1])], []
 
     node_pt = Point(node_xy)
     member_keys = set()
@@ -499,6 +497,25 @@ def pair_entries(nid: int, entries: list, cgs: dict, shapes_xy: dict,
     passes = _shape_passes(shapes, (node_pt.x, node_pt.y), window)
     probes = [Point(cgs[c.cid].probe_xy(s, cfg.probe_dist_m))
               for c, s, _r in entries]
+
+    if len(entries) == 2:
+        # two corridor ends still need matched_shapes support: two same-
+        # colour routes terminating opposite each other at one node must
+        # NOT fuse into a fictitious through-transition (they become two
+        # steady stubs). A shared member ROUTE keeps the pairing even
+        # when its shape stops short — GTFS shapes often end at the
+        # terminal platform while the graph's track continues (CTA Red
+        # tail north of Howard) — recorded as a shape gap. Without
+        # shapes, pair as before.
+        if passes and not _shape_evidence(passes, node_pt, probes[0],
+                                          probes[1], cfg.evidence_tol_m):
+            (_c1, _s1, r1), (_c2, _s2, r2) = entries
+            if r1.member_keys & r2.member_keys:
+                info.setdefault("two_end_shape_gap_sites", []).append(nid)
+            else:
+                info.setdefault("two_end_unsupported_sites", []).append(nid)
+                return [], list(entries)
+        return [(entries[0], entries[1])], []
 
     pairs, used = [], set()
     if passes:

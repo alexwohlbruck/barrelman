@@ -10,7 +10,7 @@ import pytest
 
 from segments.corridors import graph_from_spec, walk_corridors
 from segments.segment import SegmentConfig, build_segments, transition_sites
-from segments.tests.helpers import (endpoints, find, max_spacing_m,
+from segments.tests.helpers import (MX, MY, endpoints, find, max_spacing_m,
                                     min_radius_near, offset_at_shared_endpoint,
                                     seg_len_m, to_m)
 
@@ -193,6 +193,54 @@ def test_terminating_ribbon_keeps_offset_to_node():
     ends = endpoints(stub)
     assert min(math.dist(ends[0], n_m), math.dist(ends[1], n_m)) < 0.01
     assert info["stubs"] >= 1
+
+
+# --------------------------------------- two-end pairing needs evidence
+
+def test_two_end_pairing_requires_shape_evidence():
+    """Same colour, different routes, terminating opposite each other at
+    one node: matched_shapes contradict a through-transition, so the pair
+    demotes to two steady stubs (with a diagnostic). A through pass
+    restores the pairing; no shapes at all keeps the old behaviour."""
+    def ll(x, y):
+        return (x / MX, y / MY)
+    A, B2 = ("A", "ff0000"), ("B", "ff0000")
+    g, ids = graph_from_spec(
+        {"W": (-500, 0), "N": (0, 0), "E": (500, 100)},
+        [("W", "N", [A]), ("N", "E", [B2])])
+    term_shapes = {("t", "A"): [[ll(-500, 0), ll(0, 0)]],
+                   ("t", "B"): [[ll(0, 0), ll(500, 100)]]}
+    segs, info = build_segments(g, CFG, shapes=term_shapes)
+    assert info.get("two_end_unsupported_sites") == [ids["N"]]
+    assert find(segs, kind="transition") == []
+    assert info["stubs"] == 2
+
+    thru_shapes = {("t", "A"): [[ll(-500, 0), ll(0, 0), ll(500, 100)]]}
+    segs, info = build_segments(g, CFG, shapes=thru_shapes)
+    assert not info.get("two_end_unsupported_sites")
+    assert len(find(segs, kind="transition")) == 1
+
+    segs, info = build_segments(g, CFG)  # no shapes: evidence not required
+    assert not info.get("two_end_unsupported_sites")
+    assert len(find(segs, kind="transition")) == 1
+
+
+def test_two_end_shared_route_pairs_despite_shape_gap():
+    """The SAME route on both corridor ends stays paired even when its
+    shape stops at the node (GTFS shapes end at the terminal platform
+    while the graph's track continues — CTA Red tail at Howard), with a
+    shape-gap diagnostic instead of a demotion."""
+    def ll(x, y):
+        return (x / MX, y / MY)
+    A, C = ("A", "ff0000"), ("C", "0000ff")
+    g, ids = graph_from_spec(
+        {"W": (-500, 0), "N": (0, 0), "E": (500, 100), "S": (0, -500)},
+        [("W", "N", [A]), ("N", "E", [A, C]), ("S", "N", [C])])
+    shapes = {("t", "A"): [[ll(-500, 0), ll(0, 0)]]}  # stops at the node
+    segs, info = build_segments(g, CFG, shapes=shapes)
+    assert info.get("two_end_shape_gap_sites") == [ids["N"]]
+    assert not info.get("two_end_unsupported_sites")
+    assert len(find(segs, kind="transition", color_key="ff0000")) == 1
 
 
 # ------------------------------------------------- corridor walk basics

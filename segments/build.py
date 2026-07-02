@@ -62,6 +62,12 @@ def summarize(segments, info) -> str:
     if info.get("greedy_paired_sites"):
         lines.append(f"greedy-paired sites (no shape evidence): "
                      f"{sorted(set(info['greedy_paired_sites']))}")
+    if info.get("two_end_shape_gap_sites"):
+        lines.append(f"two-end pairs kept on shared route despite shape gap: "
+                     f"{sorted(set(info['two_end_shape_gap_sites']))}")
+    if info.get("two_end_unsupported_sites"):
+        lines.append(f"two-end pairs demoted to stubs (shape evidence "
+                     f"contradicts): {sorted(set(info['two_end_unsupported_sites']))}")
     if info.get("merge_offset_mismatch"):
         lines.append(f"MERGE OFFSET MISMATCH corridors: "
                      f"{info['merge_offset_mismatch']}")
