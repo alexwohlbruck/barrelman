@@ -59,6 +59,9 @@ def summarize(segments, info) -> str:
         f"merged (fully consumed corridors): {info['merged']}",
         f"fillets clamped by short halves: {info['fillet_clamped']}",
     ]
+    if info.get("cusp_excised"):
+        lines.append(f"reversal cusps excised (collapsed crossing rungs): "
+                     f"{info['cusp_excised']}")
     if info.get("greedy_paired_sites"):
         lines.append(f"greedy-paired sites (no shape evidence): "
                      f"{sorted(set(info['greedy_paired_sites']))}")

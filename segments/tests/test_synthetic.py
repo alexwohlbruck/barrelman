@@ -270,6 +270,53 @@ def test_two_end_shared_route_pairs_despite_shape_gap():
     assert len(find(segs, kind="transition", color_key="ff0000")) == 1
 
 
+# ------------------------------- collapsed crossing rung: cusp excision
+
+def test_collapsed_rung_reversal_cusp_excised():
+    """A refit-collapsed plan-view X leaves a ~4 m rung between two
+    junction nodes; when the node placement overshoots along the through
+    direction, the rung points AGAINST travel and the merged through-
+    transition retraces it — a self-intersecting micro-hairpin
+    (nyc:subway-v3 Borough Hall, segs 521-523). The cusp window must be
+    excised and biarc-bridged: the emitted feature is simple, keeps its
+    endpoints, and carries no near-reversal turns."""
+    from shapely.geometry import LineString
+
+    Q, T = ("Q", "888888"), ("T", "444444")
+    # west arm ends at N1(4, 0); the rung runs BACK west to N2(0, 0.4);
+    # east arm leaves N2 heading east: traversing W->N1->N2->E reverses
+    # direction twice within 4 m. Q/T arms make both nodes junctions.
+    g, ids = graph_from_spec(
+        {"W": (-496, 0), "N1": (4, 0), "N2": (0, 0.4), "E": (500, 0.4),
+         "SA": (44, -300), "SB": (-40, 300)},
+        [("W", "N1", [R]), ("N1", "N2", [R]), ("N2", "E", [R]),
+         ("N1", "SA", [Q]), ("N2", "SB", [T])])
+    segs, info = build_segments(g, CFG)
+    assert info["merged"] == 1, "the consumed rung merges the R pair"
+    assert info.get("cusp_excised", 0) >= 1
+    (tr,) = [s for s in find(segs, kind="transition", color_key="ff0000")
+             if len(s.sites) == 2]
+    xy = to_m(tr.coords)
+    assert LineString(xy).is_simple
+    # no near-reversal vertex survives
+    for a, b, c in zip(xy, xy[1:], xy[2:]):
+        u = (b[0] - a[0], b[1] - a[1])
+        v = (c[0] - b[0], c[1] - b[1])
+        nu, nv = math.hypot(*u), math.hypot(*v)
+        if nu < 1e-9 or nv < 1e-9:
+            continue
+        dot = max(-1.0, min(1.0, (u[0] * v[0] + u[1] * v[1]) / (nu * nv)))
+        assert math.degrees(math.acos(dot)) <= CFG.cusp_turn_deg
+    # endpoints preserved at the trim cuts (offset handoff to steadies)
+    assert max_spacing_m(tr) <= CFG.densify_step_m * 1.01
+    steadies = find(segs, kind="steady", color_key="ff0000")
+    matches = [m for s in steadies
+               if (m := offset_at_shared_endpoint(tr, s)) is not None]
+    assert len(matches) == 2
+    for got, expected in matches:
+        assert got == pytest.approx(expected, abs=1e-9)
+
+
 # ------------------------------------------------- corridor walk basics
 
 def test_corridor_walk_joins_deg2_same_set():

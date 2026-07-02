@@ -49,6 +49,9 @@ class SegmentConfig:
     offset_eps_px: float = 0.01       # offset delta below this => unchanged
     probe_dist_m: float = 40.0        # shape-evidence probe distance from node
     evidence_tol_m: float = 30.0      # shape-to-probe distance tolerance
+    cusp_turn_deg: float = 150.0      # vertex turn above this = reversal cusp
+    cusp_window_m: float = 20.0       # max cusp cluster span worth excising
+    cusp_pad_m: float = 7.5           # excision window padding past the cusp
 
 
 @dataclass
@@ -377,6 +380,86 @@ def fillet_corner(coords, corner_idx: int, radius: float, cfg: SegmentConfig):
     r_min, cand = best
     clamped = r_min < radius - 1e-6
     return cand, turn, r_min, clamped
+
+
+def excise_reversal_cusps(coords, cfg: SegmentConfig):
+    """Remove micro-hairpins from a transition centerline.
+
+    A refit-collapsed plan-view X leaves a crossing rung a few metres
+    long between two junction nodes; when the node placement overshoots
+    along the through-direction, a through-transition must traverse the
+    rung AGAINST travel — near-180-degree turns bounded within a couple
+    of metres that self-intersect once densified (nyc:subway-v3 Borough
+    Hall, segs 521-523: a ~1 m loop + vertex cluster at the rung). The
+    corner fillet cannot absorb them: the biarc rejects near-reversal
+    arcs by design.
+
+    Each cluster of vertices whose turn exceeds cusp_turn_deg, spanning
+    at most cusp_window_m of arc, is cut out (padded by cusp_pad_m,
+    never touching the feature endpoints — they carry the offset handoff
+    to the adjacent steady features) and re-joined with a biarc taking
+    its tangents from the surviving polyline; a degenerate biarc falls
+    back to the straight chord. Returns (coords, min_biarc_radius|None,
+    n_excised) — coords are unchanged when no cusp exists.
+    """
+    def _reversal_window(coords, cum):
+        """First (s_from, s_to) arc window where the path's heading
+        reverses (>= cusp_turn_deg vs an upstream segment) within
+        cusp_window_m — catches both a raw near-180 corner vertex AND
+        the same reversal smeared over several vertices by a small
+        fillet arc. None when the path never doubles back."""
+        dirs = []
+        for a, b in zip(coords, coords[1:]):
+            d = (b[0] - a[0], b[1] - a[1])
+            n = math.hypot(*d)
+            dirs.append((d[0] / n, d[1] / n) if n > 1e-12 else (0.0, 0.0))
+        thresh = math.cos(math.radians(cfg.cusp_turn_deg))
+        for i in range(len(dirs)):
+            last_rev = None
+            j = i + 1
+            while j < len(dirs) and cum[j] - cum[i + 1] <= cfg.cusp_window_m:
+                if dirs[i][0] * dirs[j][0] + dirs[i][1] * dirs[j][1] < thresh:
+                    last_rev = j
+                j += 1
+            if last_rev is not None:
+                return cum[i + 1], cum[last_rev + 1]
+        return None
+
+    n_excised = 0
+    min_r = None
+    guard = 0
+    while guard < 4:  # nested/adjacent clusters: re-scan after each fix
+        guard += 1
+        cum = _cum_lengths(coords)
+        win = _reversal_window(coords, cum)
+        if win is None:
+            break
+        s_lo = max(0.5, win[0] - cfg.cusp_pad_m)
+        s_hi = min(cum[-1] - 0.5, win[1] + cfg.cusp_pad_m)
+        if s_hi - s_lo < 1e-6 or s_hi - s_lo > 2 * cfg.cusp_window_m + 2 * cfg.cusp_pad_m:
+            break  # not a rung-scale artifact: leave it alone
+        p1 = _point_at(coords, cum, s_lo)
+        p2 = _point_at(coords, cum, s_hi)
+        t1 = _tangent_at(coords, cum, s_lo, before=True)
+        t2 = _tangent_at(coords, cum, s_hi, before=False)
+        head = [p for p, s in zip(coords, cum) if s < s_lo - 1e-9]
+        tail = [p for p, s in zip(coords, cum) if s > s_hi + 1e-9]
+        ba = _best_biarc(p1, t1, p2, t2, cfg.densify_step_m)
+        if ba is not None:
+            mid, r = ba
+        else:
+            mid, r = [p1, p2], None
+        cand = _dedupe(head + mid + tail)
+        if len(cand) < 2 or not LineString(cand).is_simple:
+            cand = _dedupe(head + [p1, p2] + tail)  # chord fallback
+            r = None
+            if len(cand) < 2 or not LineString(cand).is_simple:
+                break  # give up rather than emit something worse
+        coords = cand
+        n_excised += 1
+        if r is not None:
+            min_r = r if min_r is None else min(min_r, r)
+    return coords, min_r, n_excised
 
 
 # ------------------------------------------------------------ sites/ends
@@ -740,6 +823,22 @@ def build_segments(g: Graph, cfg: SegmentConfig = SegmentConfig(),
         info["site_transitions"][nid] = n_t
 
     transitions = _merge_consumed(transitions, cgs, info)
+
+    for t in transitions:  # excise collapsed-rung reversal hairpins
+        coords, r_cusp, n_x = excise_reversal_cusps(t.coords, cfg)
+        if n_x:
+            t.coords = densify(coords, cfg.densify_step_m)
+            t.len_m = _length(t.coords)
+            info["cusp_excised"] = info.get("cusp_excised", 0) + n_x
+            if r_cusp is not None:
+                radii = [r for r in (t.fillet_radius_m, r_cusp)
+                         if r is not None]
+                t.fillet_radius_m = min(radii)
+                target = (t.line_count * cfg.gap_px
+                          * cfg.fillet_radius_factor)
+                if r_cusp < target - 1e-6 and not t.fillet_clamped:
+                    t.fillet_clamped = True
+                    info["fillet_clamped"] += 1
 
     for t in transitions:  # classify skips, convert coords to lon/lat
         if (abs(t.off_from_px - t.off_to_px) < cfg.offset_eps_px
