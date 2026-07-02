@@ -508,8 +508,18 @@ CREATE TABLE IF NOT EXISTS shapesnap_runs (
 )"""
 
 
-def write_db(dsn: str, feed_id: str, results: list, summary: dict, dry_run: bool):
-    """Upsert per-pattern metadata + insert the run summary row."""
+def write_db(
+    dsn: str, feed_id: str, results: list, summary: dict, dry_run: bool,
+    prune: bool = False,
+):
+    """Upsert per-pattern metadata + insert the run summary row.
+
+    With prune=True (full, unfiltered runs only) also delete the feed's
+    rows — for the modes this run covered — whose pattern no longer
+    exists, so stale geometry never lingers after a feed update. Partial
+    runs (--routes / --limit) must pass prune=False: their pattern list
+    is incomplete by construction.
+    """
     import psycopg
     from psycopg.types.json import Jsonb
 
@@ -554,6 +564,16 @@ def write_db(dsn: str, feed_id: str, results: list, summary: dict, dry_run: bool
                     r.method, r.confidence, Jsonb(stats), geom,
                 ),
             )
+        if prune:
+            cur.execute(
+                """DELETE FROM matched_shapes
+                     WHERE feed_id = %s
+                       AND stats->>'mode' = ANY(%s::text[])
+                       AND NOT (pattern_id = ANY(%s::text[]))""",
+                (feed_id, summary["modes"], [p.key for _, p, _, _ in results]),
+            )
+            if cur.rowcount:
+                summary["stale_shapes_deleted"] = cur.rowcount
         cur.execute(
             "INSERT INTO shapesnap_runs (feed_id, modes, dry_run, summary) "
             "VALUES (%s,%s,%s,%s)",
@@ -714,8 +734,11 @@ def main(argv=None) -> int:
 
     if not args.dry_run and args.db != "skip":
         dsn = args.db or DEFAULT_DSN
+        # only a full run may prune stale matched_shapes rows: --routes /
+        # --limit runs see a subset of the feed's patterns by construction
+        full_run = route_ids is None and args.limit is None
         try:
-            write_db(dsn, args.feed, results, summary, args.dry_run)
+            write_db(dsn, args.feed, results, summary, args.dry_run, prune=full_run)
             summary["db"] = "ok"
             print(f"[shapesnap.run] metadata: {len(results)} matched_shapes rows + 1 run row")
         except Exception as err:  # metadata is QA — never fail the rewrite over it
