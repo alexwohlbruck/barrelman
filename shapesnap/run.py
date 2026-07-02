@@ -191,15 +191,17 @@ def level_breakdown(graph: ModeGraph, edge_idxs) -> dict:
 
 
 def scan_shapes(zf: zipfile.ZipFile) -> dict:
-    """One streaming pass over shapes.txt.
+    """One pass over shapes.txt.
 
     Returns {present, rows, has_dist_col, has_dist_values, unit, factor,
     integral}. Unit inference compares each shape's recorded total
     shape_dist_traveled against its geometric length (equirectangular
-    meters, rows in file order — GTFS shapes are sequence-ordered in
-    practice) and snaps the median ratio to m/ft/km/mi; an off-scale
-    ratio keeps the feed's own median so rewritten values stay
-    proportionally consistent with untouched ones.
+    meters, points sorted by shape_pt_sequence — GTFS does not require
+    file order to follow sequence order, and accumulating unordered rows
+    as-read inflates the length and skews the ratio) and snaps the median
+    ratio to m/ft/km/mi; an off-scale ratio keeps the feed's own median
+    so rewritten values stay proportionally consistent with untouched
+    ones.
     """
     info = {
         "present": False,
@@ -214,7 +216,9 @@ def scan_shapes(zf: zipfile.ZipFile) -> dict:
         return info
     info["present"] = True
 
-    per: dict = {}  # shape_id -> [prev_lon, prev_lat, len_m, max_dist]
+    # buffer points per shape so they can be sequence-sorted before the
+    # length accumulation (file order is not guaranteed to be seq order)
+    per: dict = {}  # shape_id -> [[(seq, lon, lat), ...], max_dist]
     with zf.open("shapes.txt") as f:
         rdr = csv.DictReader(io.TextIOWrapper(f, encoding="utf-8-sig"))
         info["has_dist_col"] = "shape_dist_traveled" in (rdr.fieldnames or [])
@@ -226,13 +230,12 @@ def scan_shapes(zf: zipfile.ZipFile) -> dict:
                 continue
             s = per.get(r.get("shape_id"))
             if s is None:
-                per[r.get("shape_id")] = [lon, lat, 0.0, 0.0]
-            else:
-                lat0 = math.radians(s[1])
-                s[2] += math.hypot(
-                    (lon - s[0]) * 111320.0 * math.cos(lat0), (lat - s[1]) * 110574.0
-                )
-                s[0], s[1] = lon, lat
+                s = per[r.get("shape_id")] = [[], 0.0]
+            try:
+                seq = int(r.get("shape_pt_sequence") or "")
+            except ValueError:
+                seq = len(s[0])  # unparsable sequence: keep file order
+            s[0].append((seq, lon, lat))
             if info["has_dist_col"]:
                 v = (r.get("shape_dist_traveled") or "").strip()
                 if v:
@@ -243,12 +246,26 @@ def scan_shapes(zf: zipfile.ZipFile) -> dict:
                     info["has_dist_values"] = True
                     if d != int(d):
                         info["integral"] = False
-                    st = per[r.get("shape_id")]
-                    st[3] = max(st[3], d)
+                    if d > s[1]:
+                        s[1] = d
 
     if not info["has_dist_values"]:
         return info
-    ratios = [s[3] / s[2] for s in per.values() if s[2] > 200.0 and s[3] > 0]
+    ratios = []
+    for pts, max_dist in per.values():
+        if max_dist <= 0 or len(pts) < 2:
+            continue
+        pts.sort(key=lambda p: p[0])  # stable: equal seqs keep file order
+        length = 0.0
+        p_lon, p_lat = pts[0][1], pts[0][2]
+        for _, lon, lat in pts[1:]:
+            lat0 = math.radians(p_lat)
+            length += math.hypot(
+                (lon - p_lon) * 111320.0 * math.cos(lat0), (lat - p_lat) * 110574.0
+            )
+            p_lon, p_lat = lon, lat
+        if length > 200.0:
+            ratios.append(max_dist / length)
     if not ratios:
         return info
     med = statistics.median(ratios)

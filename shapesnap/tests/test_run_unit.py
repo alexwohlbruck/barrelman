@@ -86,6 +86,36 @@ def test_scan_shapes_infers_feet(tmp_path):
     assert info["rows"] == len(SHAPE_A) + len(SHAPE_B)
 
 
+def test_scan_shapes_unordered_rows_still_infer_feet(tmp_path):
+    """shapes.txt need not be sequence-sorted: unordered-but-legal rows
+    must be sorted by shape_pt_sequence before the geometric length is
+    accumulated, or the length inflates and skews the unit ratio."""
+    dist_a = _feet_dist(SHAPE_A)
+    dist_b = _feet_dist(SHAPE_B)
+    shapes = ["shape_id,shape_pt_lat,shape_pt_lon,shape_pt_sequence,shape_dist_traveled"]
+    # shpA rows in stride order (evens then odds): file-order accumulation
+    # would zigzag along the line and roughly double the geometric length
+    order = [0, 2, 4, 1, 3, 5]
+    for i in order[:3]:
+        lon, lat = SHAPE_A[i]
+        shapes.append(f"shpA,{lat},{lon},{i + 1},{round(dist_a[i])}")
+    # interleave another shape mid-stream: buffering must be per shape_id
+    for i, (lon, lat) in enumerate(SHAPE_B):
+        shapes.append(f"shpB,{lat},{lon},{i + 1},{round(dist_b[i])}")
+    for i in order[3:]:
+        lon, lat = SHAPE_A[i]
+        shapes.append(f"shpA,{lat},{lon},{i + 1},{round(dist_a[i])}")
+
+    path = tmp_path / "unordered.zip"
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("shapes.txt", "\n".join(shapes) + "\n")
+    with zipfile.ZipFile(path) as zf:
+        info = scan_shapes(zf)
+    assert info["rows"] == len(SHAPE_A) + len(SHAPE_B)
+    assert info["unit"] == "ft"
+    assert info["factor"] == FT
+
+
 def test_project_stops_monotonic_never_backtracks():
     line = LineString([(0, 0), (100, 0), (100, 100), (0, 100)])  # U shape
     # second stop is nearest to the FIRST leg but must land after the first
