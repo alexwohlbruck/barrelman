@@ -13,20 +13,25 @@
 #   GTFS_REGION          - Optional override of a single GTFS region token,
 #                          bypassing the REGIONS config.
 #   TRANSITLAND_API_KEY  - Required. Get one at https://transit.land/users/sign_up
-#   GTFS_DATA_DIR        - Output directory for GTFS ZIPs. Default: ./data/gtfs
-#   MOTIS_URL            - MOTIS base URL for reload. Default: http://localhost:8080
+#   GTFS_DATA_DIR        - Output directory for raw GTFS ZIPs. Default: ./data/gtfs
+#   GTFS_PROCESSED_DIR   - Output directory for the fully preprocessed ZIPs
+#                          MOTIS ingests. Default: ./data/gtfs-processed
 #
 # The script (per resolved region):
 #   1. Fetches the feed list from Transitland API
-#   2. Downloads each GTFS ZIP
-#   3. Runs the Bun import script to parse and load stops/routes into PostGIS
-#   4. Computes walking transfers via GraphHopper
-#   5. Injects transfers.txt into each feed
+#   2. Downloads each GTFS ZIP (raw + sanitized) into GTFS_DATA_DIR
+#   3. Transforms each into GTFS_PROCESSED_DIR (shape rewrite hook, overrides)
+#   4. Parses the processed ZIPs into PostGIS
+#   5. Computes walking transfers via GraphHopper, injects transfers.txt +
+#      Fares v2 into the processed ZIPs, writes motis/config.yml
+#
+# Afterwards, load MOTIS from the processed feeds: scripts/rebuild-motis.sh
 #
 set -euo pipefail
 
 API_KEY="${TRANSITLAND_API_KEY:-}"
 DATA_DIR="${GTFS_DATA_DIR:-./data/gtfs}"
+PROCESSED_DIR="${GTFS_PROCESSED_DIR:-./data/gtfs-processed}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 
@@ -48,17 +53,19 @@ fi
 
 echo "=== GTFS Download Pipeline ==="
 echo "Regions: ${REGIONS_LIST[*]}"
-echo "Output: $DATA_DIR"
+echo "Output: $DATA_DIR (raw) → $PROCESSED_DIR (processed)"
 echo ""
 
-mkdir -p "$DATA_DIR"
+mkdir -p "$DATA_DIR" "$PROCESSED_DIR"
 
-# Run the Bun import script per region (fetch feed list, download ZIPs, import
-# stops/routes into PostGIS, compute walking transfers, generate transfers.txt).
+# Run the Bun import script per region (fetch feed list, download ZIPs,
+# transform into processed ZIPs, import stops/routes into PostGIS, compute
+# walking transfers, inject transfers.txt + fares into the processed ZIPs).
 for region in "${REGIONS_LIST[@]}"; do
   echo "── GTFS region: $region ──────────────────────────────"
-  bun run src/import/import-gtfs.ts \
+  bun run import/import-gtfs.ts \
     --region "$region" \
     --api-key "$API_KEY" \
-    --output-dir "$DATA_DIR"
+    --output-dir "$DATA_DIR" \
+    --processed-dir "$PROCESSED_DIR"
 done
