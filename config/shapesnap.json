@@ -1,0 +1,12 @@
+{
+  "_comment": "Per-feed opt-in for shapesnap, the GTFS->OSM shape rewrite (docs/shapesnap.md). `enabled` gates the import pipeline's transform hook (applyShapeRewrite in import/import-gtfs.ts) — feeds absent or disabled here pass through untouched. `modes`: which route classes to match (rail | bus | ferry). `pbf` (default data/region.osm.pbf), optional `bbox` [minlon,minlat,maxlon,maxlat] and `graphStem` pick the OSM extract and the graph cache name data/shapesnap/<graphStem>.<mode>.graph.pkl.gz; caches rebuild automatically when missing or stale. Standalone runs: scripts/run-shapesnap.sh <feedId>.",
+  "feeds": {
+    "29": {
+      "enabled": true,
+      "modes": ["rail"],
+      "pbf": "data/il.osm.pbf",
+      "bbox": [-87.95, 41.64, -87.52, 42.07],
+      "graphStem": "il-chicago"
+    }
+  }
+}
