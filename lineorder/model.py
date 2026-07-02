@@ -331,7 +331,7 @@ def load_build(build_key: str, dsn: str = DEFAULT_DSN) -> Instance:
         cur.execute(
             """SELECT id, loom_id, station_id, station_label,
                       ST_X(geom), ST_Y(geom)
-               FROM transit_graph_nodes WHERE build_key = %s""",
+               FROM transit_graph_nodes WHERE build_key = %s ORDER BY id""",
             (build_key,))
         node_rows = cur.fetchall()
         cur.execute(
