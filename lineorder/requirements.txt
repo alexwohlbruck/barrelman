@@ -1,0 +1,6 @@
+# lineorder python deps — run via uv (repo convention, see linegraph/requirements.txt):
+#   uv run --with-requirements lineorder/requirements.txt \
+#       python -m lineorder.reduce --build-key chicago:l-v3 --stats
+#   uv run --with-requirements lineorder/requirements.txt python -m pytest lineorder/tests -v
+psycopg[binary]>=3.1   # PostGIS loader (model.load_build) + real-data tests
+pytest>=8              # tests
