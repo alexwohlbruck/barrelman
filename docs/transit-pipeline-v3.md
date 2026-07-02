@@ -235,16 +235,70 @@ uv run --with-requirements lineorder/requirements.txt \
 
 ### Stage 6 — segmentation + tiles (task #6)
 
-- Steady segments (junction→junction, constant composition+slot): per-line features
-  with constant `offset_px`.
-- Transition segments (fixed ground length ~60 m straddling composition-change nodes):
-  per-line features with `off_from_px`/`off_to_px`, densified ~5–10 m, centerline
-  arc-filleted with min radius ≥ total bundle width.
-- `transit_lines_rt(z,x,y)` emits per-line features + local clip fractions
-  (`ST_LineLocatePoint` against the feature, direction-normalized) — reuse the proven
-  machinery in `create-transit-lines-runtime.sql`, repointed at semantic segments.
+Implemented in `segments/` (corridor walk + colour-collapsed ribbons →
+steady/transition features → `transit_line_segments` → Martin function
+`transit_lines_rt2`):
+
+- Steady segments (junction→junction, constant composition+slot): per-ribbon
+  features with constant `offset_px` (colour-collapse mirrors the display SQL:
+  `color_key = COALESCE(NULLIF(route_color,''),'rid:'||route_id)`;
+  `offset_px = (ribbon_slot - (ribbon_count-1)/2) * 4.4`).
+- Transition segments (fixed 60 m ground length — tunable `--transition-len` —
+  centred on junction/composition nodes): per-ribbon features with
+  `off_from_px`/`off_to_px` in the feature's own travel frame, densified ≤7.5 m,
+  centerline biarc-filleted (G1 at the seams) with min radius ≥
+  `line_count * gap_px * fillet_radius_factor`; short corridors shrink their
+  halves, fully consumed corridors merge their two transitions; ribbons on ≥3
+  corridor ends pair by matched_shapes traversal evidence; terminating ribbons
+  keep a constant-offset steady stub into the node (terminus polish = client).
+- `transit_lines_rt2(z,x,y)` (`import/create-transit-lines-rt2.sql`) emits the
+  segment features + local clip fractions (`ST_LineLocatePoint` against the full
+  feature, direction-normalized, continuous across tile seams — the proven
+  machinery of `create-transit-lines-runtime.sql` repointed at semantic
+  segments), plus legacy slot/line_count for stock-Mapbox degradation;
+  transitions gated to z ≥ 11. Registered in `martin-config.yaml`.
 - No baked line fallback (decision 6). Baked source retained only if needed as the
-  bullet carrier. Retire the v1 fixed-18 m matview.
+  bullet carrier. `transit_lines_rt`/`transit_lines_centerline` (v2) untouched.
+
+Build + emit (delete-and-replace per build_key), then apply the tile function:
+
+```
+uv run --with-requirements segments/requirements.txt \
+    python -m segments.build --build-key chicago:l-v3 --emit
+docker exec -i barrelman-db psql -U barrelman -d barrelman \
+    < import/create-transit-lines-rt2.sql
+```
+
+#### Segments exam (stage-6 acceptance)
+
+`segments/exam/segments_exam.py` validates the EMITTED rows (read-only, exits
+non-zero on failure): (0) DB rows equal a fresh deterministic rebuild; (1) C1 —
+the transition-site inventory is exactly stage 5's list (18 sites: 17 junctions
++ Howard, cross-checked coordinate-for-coordinate against lineorder's loader)
+and a full ribbon walk finds ZERO offset discontinuities at feature boundaries —
+offsets change only inside transition features anchored to listed sites; (2)
+C3 — every transition length within [0.4, 1.1]× the configured 60 m, vertex
+spacing ≤ 7.5 m; (3) fillet — every transition meets its min-radius floor
+(clamps and inherited track curvature recorded), no self-intersections; (4)
+coverage — per-ribbon feature length covers the corridors within 1%, no
+overlaps > 1 m beyond the branch-divergence tails two same-ribbon transitions
+legitimately share at a Loop corner; (5) per-Loop-leg receipt (Lake / Wabash /
+Van Buren / Wells / interior subways with slots + offsets, all Loop
+transitions with their ramps).
+
+`segments/exam/loop_visual.py` renders the before/after receipt: the Loop
+window at simulated z15 (m/px = 78271.51696/2¹⁵·cos lat) drawn with the exact
+per-vertex machinery the MapLibre fork uses — miter-joined perpendicular
+offsets, transitions eased cubic-bezier(.4,0,.6,1) along line-progress —
+side by side with the rejected v2 model (`transit_lines_centerline` merged
+runs × 0/0.15/0.85/1 linear taper).
+
+```
+uv run --with-requirements segments/requirements.txt \
+    python segments/exam/segments_exam.py
+uv run --with-requirements segments/requirements.txt \
+    python segments/exam/loop_visual.py --out data/exam/loop-v3-vs-v2.png
+```
 
 ### Stage 7 — client (task #7–8, parchment repo)
 
