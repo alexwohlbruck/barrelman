@@ -45,8 +45,12 @@ CREATE INDEX IF NOT EXISTS transit_line_segments_build_key_idx
 
 
 def _ewkt_line(coords) -> str:
+    # 15 dp (~0.1 um ground) round-trips the builder's float64 coords:
+    # coarser quantization (7 dp ~ 1 cm) put micro-kinks on fillet
+    # vertices spaced 8-22 cm apart, breaking the served rows' curvature
+    # floor even though the in-memory geometry met it.
     return ("SRID=4326;LINESTRING("
-            + ",".join(f"{lon:.7f} {lat:.7f}" for lon, lat in coords)
+            + ",".join(f"{lon:.15f} {lat:.15f}" for lon, lat in coords)
             + ")")
 
 
