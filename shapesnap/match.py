@@ -10,12 +10,18 @@ regimes:
     transition   = exp(-|along-shape − network|/beta_dense); the network
                    path comes from a bounded Dijkstra whose EDGE WEIGHTS
                    carry class_penalty × route-relation bonus (×0.5 on
-                   edges whose OSM route relations match the GTFS route),
-                   turn-restriction forbidden pairs and a 180°-reversal
+                   edges whose OSM route relations match the GTFS route;
+                   matching is tiered — identity ref/name outranks
+                   colour-only, see candidates.RouteMatcher), turn-
+                   restriction forbidden pairs and a 180°-reversal
                    penalty (free at genuine stubs) — but the |along −
                    network| comparison uses the path's TRUE geometric
                    length, so penalties steer path CHOICE without
-                   distorting the probability model.
+                   distorting the probability model. On identity-tier
+                   patterns, foreign-identity candidates (edges decorated
+                   only with OTHER routes' ref/name relations) pay a
+                   heavy emission prior so a mixed layer never trades the
+                   route's own track for a foreign one hugging the shape.
 
   Regime B (sparse; no/degenerate shape)
     observations = the pattern's stop coordinates in sequence; transition
@@ -34,7 +40,15 @@ feasible transition reaches, ends the current sub-trace; matching
 restarts at the next matchable observation and the gap is bridged with
 the ORIGINAL shape segment clipped between the matched endpoints (stop
 chord for regime B) and recorded in stats. A wrong-level match is never
-forced.
+forced. One exception cuts the other way: on identity-tier patterns a
+contiguous run of dense observations whose layers hold no identity-
+matched candidate but DO hold foreign-identity ones is the shape
+provably straying into another route's corridor (degenerate agency
+chords: the MTA R shape rides the Manhattan-Bridge approach and the
+Lexington corridor around Canal St) — those observations are excised
+before decoding so the network path spans the gap on the route's own
+track; runs with no evidence at all (empty layers, e.g. the Joralemon
+misalignment) still break and bridge.
 
 Output per pattern: ordered edge path → concatenated full-fidelity OSM
 geometry → topology-preserving ~1 m simplification in a local UTM →
@@ -136,6 +150,25 @@ class MatchConfig:
     # pattern's candidates; layers without any match add a constant,
     # which cannot change the decoded chain.
     relation_prior: float = 0.35
+    # identity-tier hard prior: on patterns that identity-match (tier 2)
+    # somewhere, an edge decorated ONLY with other routes' identity
+    # relations (RouteMatcher.is_foreign) is near-impossible to ride.
+    # 6.0 > 0.5*(50/15)^2 ≈ 5.6 (the max in-radius dense emission), so
+    # in a mixed layer an identity-matched track anywhere inside the
+    # radius always outranks a foreign-identity track hugging the shape
+    # (MTA R at Canal St: degenerate chords < 3 m from N/Q bridge
+    # tracks, 40+ m from the R's own Broadway local).
+    foreign_identity_prior: float = 6.0
+    # an excised foreign run swallows adjacent observations whose nearest
+    # identity-matched candidate is farther than this — the shape is
+    # still describing the foreign corridor there (2×sigma_dense)
+    foreign_excise_ext_m: float = 30.0
+    # ...and widens to the ENCLOSING STOPS (the trusted anchors) when
+    # they bracket the run within this span: the excursion's on-corridor
+    # tails (a walk-back after a self-reversal, the chord home) are the
+    # same fabricated drawing, and stops are where service pins the
+    # shape again (MTA R: Canal St → Prince St span, 967 m)
+    foreign_excise_stop_span_max_m: float = 1500.0
     # regime B extras
     station_search_radius_m: float = 120.0
     name_bonus_weight: float = 1.5
@@ -620,13 +653,6 @@ def match_pattern(
         obs = _dedup_close(stops_xy, cfg.min_step_m)
         obs_along = None
         radius = cfg.sparse_radius.get(mode, 200.0)
-    n = len(obs)
-    alongs = [
-        (obs_along[i + 1] - obs_along[i]) if dense
-        else math.hypot(obs[i + 1][0] - obs[i][0], obs[i + 1][1] - obs[i][1])
-        for i in range(n - 1)
-    ]
-
     # candidate layers; route-relation-matched edges are always admitted
     # so junction fan-out can't crowd the decorated track out of the top-k
     # (admission uses ANY match tier — the identity/colour threshold below
@@ -651,6 +677,91 @@ def match_pattern(
     )
     rel_threshold = 2 if best_strength >= 2 else 1
     rel_match = lambda i: rm.match_strength(i, edges[i]) >= rel_threshold  # noqa: E731
+
+    # foreign-run excision (dense, identity tier): a contiguous run of
+    # observations whose layers hold NO identity-matched candidate but DO
+    # hold foreign-identity ones is the shape provably straying into
+    # another route's corridor (degenerate agency chords — MTA R at Canal
+    # St rides the Manhattan-Bridge approach and the Lexington corridor).
+    # Those observations are fabricated: drop them and let the bounded
+    # network search span the gap on the route's own track. Runs with no
+    # evidence at all (empty layers, e.g. Joralemon) still break+bridge.
+    dropped_obs = dropped_runs = 0
+    gap_starts: set = set()  # kept-obs indices right after an excised run
+    if dense and rel_threshold == 2:
+        has_id = [
+            any(rm.match_strength(c.edge, edges[c.edge]) >= 2 for c in layer)
+            for layer in layers
+        ]
+
+        def id_dist(t: int) -> float:
+            return min(
+                (c.dist for c in layers[t]
+                 if rm.match_strength(c.edge, edges[c.edge]) >= 2),
+                default=_INF,
+            )
+
+        id_idx = [i for i, h in enumerate(has_id) if h]
+        keep = [True] * len(obs)
+        stop_alongs = None
+        if id_idx:
+            i = id_idx[0] + 1
+            while i < id_idx[-1]:
+                if has_id[i]:
+                    i += 1
+                    continue
+                j = i
+                while not has_id[j]:  # ends before id_idx[-1] by construction
+                    j += 1
+                if any(
+                    rm.is_foreign(c.edge, edges[c.edge])
+                    for t in range(i, j) for c in layers[t]
+                ):
+                    # swallow adjacent obs still glued to the excursion:
+                    # identity track far while the foreign corridor is near
+                    a, b = i, j
+                    while a > id_idx[0] + 1 and id_dist(a - 1) > cfg.foreign_excise_ext_m:
+                        a -= 1
+                    while b < id_idx[-1] and id_dist(b) > cfg.foreign_excise_ext_m:
+                        b += 1
+                    # widen to the enclosing stop anchors (capped): the
+                    # excursion's on-corridor tails are the same drawing
+                    if stop_alongs is None:
+                        stop_alongs = sorted(
+                            shape_line.project(Point(xy)) for xy in stops_xy
+                        )
+                    s_prev = max(
+                        (s for s in stop_alongs if s < obs_along[a]), default=None
+                    )
+                    s_next = min(
+                        (s for s in stop_alongs if s > obs_along[b - 1]), default=None
+                    )
+                    if (
+                        s_prev is not None and s_next is not None
+                        and s_next - s_prev <= cfg.foreign_excise_stop_span_max_m
+                    ):
+                        while a > id_idx[0] + 1 and obs_along[a - 1] > s_prev:
+                            a -= 1
+                        while b < id_idx[-1] and obs_along[b] < s_next:
+                            b += 1
+                    keep[a:b] = [False] * (b - a)
+                    dropped_runs += 1
+                i = j
+        dropped_obs = keep.count(False)
+        if dropped_obs:
+            kept = [t for t, k in enumerate(keep) if k]
+            gap_starts = {i for i in range(1, len(kept)) if kept[i] - kept[i - 1] > 1}
+            obs = [o for o, k in zip(obs, keep) if k]
+            obs_along = [a for a, k in zip(obs_along, keep) if k]
+            layers = [l for l, k in zip(layers, keep) if k]
+
+    n = len(obs)
+    alongs = [
+        (obs_along[i + 1] - obs_along[i]) if dense
+        else math.hypot(obs[i + 1][0] - obs[i][0], obs[i + 1][1] - obs[i][1])
+        for i in range(n - 1)
+    ]
+
     if not dense and station_idx is not None and station_idx.tree is not None:
         stop_names = pattern.stop_names if len(pattern.stop_names) == n else [""] * n
         stop_plats = pattern.stop_platforms if len(pattern.stop_platforms) == n else [""] * n
@@ -663,7 +774,9 @@ def match_pattern(
     base_mult = [e.class_penalty for e in mg.graph.edges]
 
     # route-relation emission prior (vertical stack disambiguation): only
-    # active when the route's relations decorate at least one candidate
+    # active when the route's relations decorate at least one candidate.
+    # On identity-tier patterns, foreign-identity edges (another route's
+    # decorated track) pay the heavy prior instead of the mild one.
     cand_matches = {
         c.edge: rel_match(c.edge) for layer in layers for c in layer
     }
@@ -672,7 +785,11 @@ def match_pattern(
         for layer in layers:
             for c in layer:
                 if not cand_matches[c.edge]:
-                    c.prior = cfg.relation_prior
+                    c.prior = (
+                        cfg.foreign_identity_prior
+                        if rel_threshold == 2 and rm.is_foreign(c.edge, edges[c.edge])
+                        else cfg.relation_prior
+                    )
 
     def mult(e: int) -> float:
         m = base_mult[e]
@@ -688,6 +805,8 @@ def match_pattern(
         "radius_m": radius,
         "relation_prior_active": relation_prior_active,
         "relation_match_tier": best_strength,  # 2=ref/name, 1=colour-only, 0=none
+        "dropped_obs": dropped_obs,    # foreign-run excision (identity tier)
+        "dropped_runs": dropped_runs,
     }
 
     if all(not l for l in layers):
@@ -772,11 +891,20 @@ def match_pattern(
     stats["output_len_m"] = round(simplified.length, 1)
 
     ref_line = LineString(obs) if dense else None
+    ref_pieces = None
+    if dense and gap_starts:
+        # trusted contiguous stretches only: the straight jump across an
+        # excised foreign run is fabricated and must not fail the Fréchet
+        bounds = [0, *sorted(gap_starts), n]
+        ref_pieces = [
+            LineString(obs[a:b]) for a, b in zip(bounds, bounds[1:]) if b - a >= 2
+        ]
     report = evaluate_gates(
         simplified,
         mode,
         cfg.gates,
         ref_line=ref_line,
+        ref_pieces=ref_pieces,
         obs_points=obs if dense else None,
         stops_xy=stops_xy,
         stop_radius=radius,

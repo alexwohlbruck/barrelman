@@ -265,6 +265,34 @@ def test_route_matcher_strength_tiers():
     assert RouteMatcher("1", "", "D82233").match_strength(0, colour_only) == 1
 
 
+def test_route_matcher_is_foreign():
+    """Foreign = identity-decorated with OTHER routes' relations only.
+    Undecorated (yard) and colour-only-decorated edges are merely
+    uninformative, never foreign; a same-colour-family edge carrying
+    another route's ref IS foreign (NYC R vs the N/Q bridge tracks)."""
+    rm = RouteMatcher("R", "Broadway Local", "F6BC26")
+    own = type("E", (), {})()
+    own.route_refs = [{"ref": "R", "name": "NYCS - R Train: ...", "colour": "#F6BC26"}]
+    other_division = type("E", (), {})()
+    other_division.route_refs = [
+        {"ref": "4", "name": "NYCS - 4 Train: ...", "colour": "#00933C"},
+        {"ref": "6", "name": "NYCS - 6 Train: ...", "colour": "#00933C"},
+    ]
+    same_family = type("E", (), {})()
+    same_family.route_refs = [
+        {"ref": "N", "name": "NYCS - N Train: ...", "colour": "#F6BC26"}
+    ]
+    yard = type("E", (), {})()
+    yard.route_refs = []
+    colour_only = type("E", (), {})()
+    colour_only.route_refs = [{"ref": None, "name": None, "colour": "#F6BC26"}]
+    assert not rm.is_foreign(0, own)
+    assert rm.is_foreign(1, other_division)
+    assert rm.is_foreign(2, same_family)
+    assert not rm.is_foreign(3, yard)
+    assert not rm.is_foreign(4, colour_only)
+
+
 def test_name_similarity_and_ted():
     assert cheap_ted("kimball", "kimball") == 0
     assert cheap_ted("kimball", "kimbal") == 1

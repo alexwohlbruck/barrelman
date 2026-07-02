@@ -235,6 +235,15 @@ class RouteMatcher:
     candidate identity match exists for the pattern; colour stays as
     the fallback signal for networks whose relations carry no usable
     ref/name.
+
+    is_foreign flags the strongest negative signal: an edge decorated
+    with identity relations (some ref/name present) NONE of which
+    identity-match this route. On identity-tier patterns such edges are
+    near-impossible to ride (another route's track); shapesnap.match
+    charges them a heavy emission prior and excises observation runs
+    that see nothing else (degenerate agency chords drawn over a foreign
+    corridor). Undecorated edges are merely uninformative — never
+    foreign.
     """
 
     def __init__(self, short_name: str | None, long_name: str | None, color: str | None):
@@ -258,6 +267,15 @@ class RouteMatcher:
 
     def matches_edge(self, edge_idx: int, edge) -> bool:
         return self.match_strength(edge_idx, edge) > 0
+
+    def is_foreign(self, edge_idx: int, edge) -> bool:
+        """Identity-decorated (some relation carries a ref/name) but no
+        identity match for this route — positively another route's track."""
+        if self.match_strength(edge_idx, edge) >= 2:
+            return False
+        return any(
+            _norm(r.get("ref")) or _norm(r.get("name")) for r in edge.route_refs
+        )
 
     def _match_ref(self, r: dict) -> int:
         ref, name, colour = _norm(r.get("ref")), _norm(r.get("name")), _norm_color(r.get("colour"))

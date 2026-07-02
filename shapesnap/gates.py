@@ -8,7 +8,13 @@ geometry so every threshold is honest meters:
                   coverage_tol_m[mode] of the output line >= min_coverage
   2. deviation  — discrete Fréchet (shapely.frechet_distance, densified)
                   between the input reference line and the output
-                  <= max_frechet_m
+                  <= max_frechet_m. When the matcher excised foreign-run
+                  observations (shapesnap.match), the reference arrives
+                  as PIECES (ref_pieces): each trusted contiguous stretch
+                  is compared against the output substring between its
+                  endpoint projections and the max is reported — the
+                  fabricated straight jump across an excised run is not
+                  agency geometry and must not fail the pattern.
   3. length     — output length / input length within length_ratio
   4. stops      — every pattern stop within stop_radius of the output
                   (stop_radius = the regime's candidate radius)
@@ -30,6 +36,7 @@ from dataclasses import dataclass, field
 
 import shapely
 from shapely.geometry import LineString, Point
+from shapely.ops import substring
 
 __all__ = ["GateConfig", "GateReport", "evaluate_gates"]
 
@@ -77,12 +84,37 @@ class GateReport:
         }
 
 
+def _piecewise_frechet(ref_pieces: list, output_line: LineString, step: float) -> float:
+    """Max densified Fréchet over trusted reference pieces, each compared
+    against the output substring between its endpoint projections. Falls
+    back to piece-vs-whole when the projections misorder (self-overlap)."""
+    worst = 0.0
+    for piece in ref_pieces:
+        if piece.is_empty or piece.length == 0:
+            continue
+        a = output_line.project(Point(piece.coords[0]))
+        b = output_line.project(Point(piece.coords[-1]))
+        out = substring(output_line, a, b) if a < b else output_line
+        if out.is_empty or out.geom_type == "Point" or out.length == 0:
+            out = output_line
+        worst = max(
+            worst,
+            float(
+                shapely.frechet_distance(
+                    shapely.segmentize(piece, step), shapely.segmentize(out, step)
+                )
+            ),
+        )
+    return worst
+
+
 def evaluate_gates(
     output_line: LineString,
     mode: str,
     cfg: GateConfig,
     *,
     ref_line: LineString | None = None,
+    ref_pieces: list | None = None,
     obs_points: list | None = None,
     stops_xy: list | None = None,
     stop_radius: float = 50.0,
@@ -91,7 +123,10 @@ def evaluate_gates(
     """Run every gate; collect ALL failures (diagnostics, not fail-fast).
 
     output_line / ref_line are projected LineStrings; obs_points and
-    stops_xy are lists of projected (x, y).
+    stops_xy are lists of projected (x, y). ref_pieces (optional) are the
+    trusted contiguous reference stretches left after foreign-run
+    excision — when given (and more than one), the Fréchet gate runs
+    piecewise; ref_line still anchors the length-ratio gate.
     """
     report = GateReport(passed=True)
     if (
@@ -119,12 +154,15 @@ def evaluate_gates(
     # zero-length ref (all-identical coords) would crash segmentize; skip 2–3
     if dense and ref_line is not None and not ref_line.is_empty and ref_line.length > 0:
         step = cfg.frechet_segmentize_m
-        report.frechet_m = float(
-            shapely.frechet_distance(
-                shapely.segmentize(ref_line, step),
-                shapely.segmentize(output_line, step),
+        if ref_pieces and len(ref_pieces) > 1:
+            report.frechet_m = _piecewise_frechet(ref_pieces, output_line, step)
+        else:
+            report.frechet_m = float(
+                shapely.frechet_distance(
+                    shapely.segmentize(ref_line, step),
+                    shapely.segmentize(output_line, step),
+                )
             )
-        )
         if report.frechet_m > cfg.max_frechet_m:
             report.failures.append(
                 f"frechet {report.frechet_m:.0f} m > {cfg.max_frechet_m} m"
