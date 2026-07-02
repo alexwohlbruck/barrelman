@@ -5,11 +5,14 @@ Compares the raster-skeleton build (build_key chicago:l-v3) against the
 LOOM baseline (chicago:l) that it replaces, entirely in PostGIS, plus the
 mm_edges QA table (Chicago OSM rail ways with tunnel/bridge tags):
 
-  1  no fabricated geometry — elevated-only routes (Brn/P/Org/G/Pink)
-     never ride a subway alignment; same probe run on LOOM as the
+  1  no fabricated geometry — every sample point of every elevated-family
+     (Brn/P/Org/G/Pink) edge lies within 25 m of a surface/elevated OSM
+     rail way (literal, no escape hatch); same probe run on LOOM as the
      before/after receipt (LOOM's Tower 18 over-merge fails it)
   2  subway integrity — Blue/Red Loop-interior corridors hug tunnel
-     ways, stay single-route, and never share an edge
+     ways and stay single-route; Red never shares an edge with an
+     elevated route; Blue does so only on the Lake leg, where each
+     co-attributed edge must prove the Dearborn subway runs beneath it
   3  bundle sanity per Loop leg (Lake/Wabash/Van Buren/Wells) — edge
      route sets match ground truth derived from matched_shapes
   4  station coverage — every Loop-window GTFS parent station labels a
@@ -56,7 +59,9 @@ ELEVATED_COLORS = tuple(c for c, r in COLOR_TO_ROUTE.items() if r in ELEVATED)
 
 TOL_M = 25.0          # spec tolerance: every point within 25 m of a way
 SAMPLE_M = 10.0       # edge sampling step for point probes
-GAP_VERIFY_M = 10.0   # uncovered points must hug the route's matched shape
+GAP_VERIFY_M = 10.0   # failure diagnostic: QA-table hole vs true fabrication
+MERGE_WIDTH_M = 18.0  # build default (--merge-width); fused centerline sits
+                      # within one merge width of every source track
 
 # Loop legs, trimmed clear of the corners; a route is "on" a leg when its
 # clipped length >= 0.5 x the leg's long dimension (perpendicular subway
@@ -170,9 +175,14 @@ def check1_no_fabricated_geometry(cur) -> None:
            f"{len(v3_riders)} v3 elevated edges ride a subway alignment"
            if v3_riders else "0 v3 elevated edges ride a subway alignment")
 
-    # v3 uncovered spans must be mm_edges QA gaps, not invented geometry:
-    # every uncovered point hugs that route's OWN matched shape (<= GAP_VERIFY_M)
-    for eid, routes, _, _, n_unc, _ in results[BUILD][2]:
+    # literal spec assertion: zero uncovered points — mm_edges holes are
+    # graph-crop bugs (the Linden terminal sat north of the old 42.07 bbox
+    # edge), fixed by widening config/regions.json + re-dumping mm_edges
+    # (shapesnap.graph --postgis), never by relaxing the exam. On failure,
+    # measure the span against the route's OWN matched shape to tell a
+    # reference-data hole (hugs it) from true fabrication (doesn't).
+    v3_uncovered = results[BUILD][2]
+    for eid, routes, _, _, n_unc, _ in v3_uncovered:
         cur.execute(f"""
           WITH pts AS (
             SELECT (ST_DumpPoints(ST_Segmentize(ST_Transform(e.geom, 32616), {SAMPLE_M}))).geom AS p
@@ -190,10 +200,13 @@ def check1_no_fabricated_geometry(cur) -> None:
                       WHERE ms.feed_id = '29' AND ms.route_id = ANY(%s)))
           FROM unc""", (eid, routes.split(",")))
         worst = cur.fetchone()[0]
-        report("check1.v3-uncovered-verified",
-               worst is not None and worst <= GAP_VERIFY_M,
-               f"edge {eid} [{routes}] uncovered span sits {worst:.1f} m from its "
-               f"matched shape (mm_edges QA gap{'' if worst <= GAP_VERIFY_M else '?!'})")
+        print(f"    edge {eid} [{routes}] uncovered span sits "
+              f"{'?' if worst is None else f'{worst:.1f} m'} from its own matched "
+              f"shape ({'reference-data hole — fix the graph bbox' if worst is not None and worst <= GAP_VERIFY_M else 'FABRICATED GEOMETRY'})")
+    report("check1.v3-coverage", not v3_uncovered,
+           f"{len(v3_uncovered)} v3 elevated edges have points >{TOL_M:.0f} m from "
+           "every surface rail way" if v3_uncovered else
+           "every v3 elevated sample point within tol of a surface rail way")
 
     # the receipt: LOOM's over-merge fails the same probe
     loom_riders = results[BASELINE][1]
@@ -247,9 +260,11 @@ def check2_subway_integrity(cur) -> None:
            f"{n_bluered} edges carry both Blue and Red (build-wide)")
 
     # subway/elevated co-attribution in the Loop window: Red never; Blue only
-    # on the Lake leg, where the Dearborn subway genuinely runs beneath the
-    # Lake elevated (plan-view parallel within MERGE_WIDTH fuses, by design —
-    # see tests/test_real_emit.py). Never on the Dearborn/State interior.
+    # on the Lake leg, where the Milwaukee–Dearborn Blue subway genuinely runs
+    # beneath the Lake elevated (plan-view parallel within MERGE_WIDTH fuses,
+    # by design — see tests/test_real_emit.py; spec amendment in
+    # docs/transit-pipeline-v3.md). Never on the Dearborn/State interior, and
+    # each allowed edge must PROVE the subway is beneath it (below).
     cur.execute(f"""
       SELECT e.id,
         (SELECT string_agg(DISTINCT el.route_id, ',' ORDER BY el.route_id)
@@ -275,6 +290,36 @@ def check2_subway_integrity(cur) -> None:
            f"{len(co) - len(red_co)} Blue+elevated edges, all on the Lake leg "
            f"(subway under the elevated)" if not off_lake else
            f"{len(off_lake)} Blue+elevated edges stray off the Lake leg")
+
+    # the allowance is physical, not geographic: each Blue+elevated edge must
+    # sit over the Blue subway — a tunnel-tagged rail way within TOL_M of
+    # every sample point, and Blue's OWN matched shape within one merge width
+    # of the centerline (Blue is inside the fused stroke, not crossing bleed)
+    for eid, routes, _, is_red in co:
+        if is_red:
+            continue
+        cur.execute(f"""
+          WITH pts AS (
+            SELECT (ST_DumpPoints(ST_Segmentize(ST_Transform(e.geom, 32616), {SAMPLE_M}))).geom AS p
+            FROM transit_graph_edges e WHERE e.id = %s
+          )
+          SELECT
+            max((SELECT min(ST_Distance(ST_Transform(m.geom, 32616), pts.p))
+                 FROM mm_edges m
+                 WHERE m.mode = 'rail' AND {IS_TUNNEL}
+                   AND ST_DWithin(m.geom, ST_Transform(pts.p, 4326), 0.004))),
+            max((SELECT min(ST_Distance(ST_Transform(ms.geom, 32616), pts.p))
+                 FROM matched_shapes ms
+                 WHERE ms.feed_id = '29' AND ms.route_id = 'Blue'))
+          FROM pts""", (eid,))
+        worst_tunnel, worst_blue = cur.fetchone()
+        ok = (worst_tunnel is not None and worst_tunnel <= TOL_M
+              and worst_blue is not None and worst_blue <= MERGE_WIDTH_M)
+        fmt = lambda v: "no way found" if v is None else f"{v:.1f} m"
+        report("check2.blue-subway-beneath", ok,
+               f"edge {eid} [{routes}]: tunnel way within {fmt(worst_tunnel)} of "
+               f"every point (tol {TOL_M:.0f}), Blue's matched shape within "
+               f"{fmt(worst_blue)} (tol {MERGE_WIDTH_M:.0f})")
 
 
 def check3_leg_bundles(cur) -> None:
