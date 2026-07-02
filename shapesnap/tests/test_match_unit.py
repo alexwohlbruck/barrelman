@@ -8,6 +8,10 @@ Scenarios (fixtures/match_scenarios.osm):
   C. a shape offset ~40 m from the only way: candidates exist but the
      coverage gate fails -> method=fallback, original returned unchanged.
 
+Plus regime-B station emission features (StationIndex wired through
+match_pattern): name bonus, platform-ref bonus via Pattern.stop_platforms,
+stations-passed-without-stopping penalty; and degenerate-input gates.
+
 Run (repo convention):
   uv run --with-requirements shapesnap/requirements.txt \
       python -m pytest shapesnap/tests/test_match_unit.py -v
@@ -21,6 +25,8 @@ from shapely.geometry import LineString
 from shapesnap.candidates import (
     MatchGraph,
     RouteMatcher,
+    Station,
+    StationIndex,
     cheap_ted,
     name_similarity,
 )
@@ -46,7 +52,8 @@ def edges_of_way(mg, way_id):
     return {i for i, e in enumerate(mg.graph.edges) if e.way_id == way_id}
 
 
-def mk_pattern(shape, stops, names=None, short="T1", long="Test Line", color="123456"):
+def mk_pattern(shape, stops, names=None, platforms=None,
+               short="T1", long="Test Line", color="123456"):
     return Pattern(
         route_id="T1",
         direction_id=0,
@@ -60,6 +67,7 @@ def mk_pattern(shape, stops, names=None, short="T1", long="Test Line", color="12
         route_long_name=long,
         route_color=color,
         route_type=1,
+        stop_platforms=platforms or [],
     )
 
 
@@ -103,6 +111,55 @@ def test_parallel_ways_sparse_regime(mg):
     assert set(r.edges_used) <= edges_of_way(mg, 401)
     assert r.gates is not None and r.gates.passed
     assert r.stats["breaks"] == 0
+
+
+# ── regime B station emission features (StationIndex through match_pattern) ──
+
+# stops ~20 m SOUTH of way 401 (nonzero snap distance -> nonzero emission
+# cost that the station bonuses can then erase)
+OFFSET_STOPS = [(-87.6398, 41.87982), (-87.6370, 41.87982),
+                (-87.6330, 41.87982), (-87.6302, 41.87982)]
+
+
+def test_station_name_bonus_raises_sparse_confidence(mg):
+    names = ["Alpha", "Bravo", "Charlie", "Delta"]
+    base = match_pattern(mg, mk_pattern(None, OFFSET_STOPS, names=names))
+    # matching-named OSM stations sit ON way 401 next to each stop
+    idx = StationIndex(
+        [Station(lon, 41.8800, name, "") for (lon, _), name in zip(OFFSET_STOPS, names)],
+        mg,
+    )
+    boosted = match_pattern(mg, mk_pattern(None, OFFSET_STOPS, names=names), station_idx=idx)
+    assert base.method == boosted.method == "hmm_sparse"
+    assert set(boosted.edges_used) <= edges_of_way(mg, 401)
+    assert boosted.confidence > base.confidence, (base.confidence, boosted.confidence)
+
+
+def test_platform_ref_bonus_via_stop_platforms(mg):
+    """platform_code carried on the Pattern must reach best_name_bonus."""
+    blank = [""] * len(OFFSET_STOPS)  # no name signal: only the ref can match
+    plats = ["A", "B", "C", "D"]
+    base = match_pattern(mg, mk_pattern(None, OFFSET_STOPS, names=blank, platforms=blank))
+    idx = StationIndex(
+        [Station(lon, 41.8800, "", ref) for (lon, _), ref in zip(OFFSET_STOPS, plats)],
+        mg,
+    )
+    boosted = match_pattern(
+        mg, mk_pattern(None, OFFSET_STOPS, names=blank, platforms=plats), station_idx=idx
+    )
+    assert base.method == boosted.method == "hmm_sparse"
+    assert boosted.confidence > base.confidence, (base.confidence, boosted.confidence)
+
+
+def test_station_passed_without_stopping_penalty(mg):
+    stops = [(-87.6398, 41.8800), (-87.6302, 41.8800)]  # on way 401, ends only
+    base = match_pattern(mg, mk_pattern(None, stops))
+    # a station mid-way along 401, far (>2x pass radius) from both stops
+    idx = StationIndex([Station(-87.6350, 41.8800, "Middleton", "")], mg)
+    penalized = match_pattern(mg, mk_pattern(None, stops), station_idx=idx)
+    assert base.method == penalized.method == "hmm_sparse"
+    assert set(penalized.edges_used) <= edges_of_way(mg, 401)
+    assert penalized.confidence < base.confidence, (base.confidence, penalized.confidence)
 
 
 # ── B: break + bridge, never force ───────────────────────────────────────────

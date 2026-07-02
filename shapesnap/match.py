@@ -53,6 +53,8 @@ CLI (repo convention — uv, never system python):
   uv run --with-requirements shapesnap/requirements.txt \
       python -m shapesnap.match --graph data/shapesnap/il-chicago.rail.graph.pkl.gz \
       --feed data/gtfs/29.zip --routes Brn,Blue
+  # --pbf data/il.osm.pbf overrides the station-index source (regime B
+  # bonuses); by default the graph's recorded source pbf is used.
 """
 
 from __future__ import annotations
@@ -73,7 +75,13 @@ from pathlib import Path
 from shapely.geometry import LineString, Point
 from shapely.ops import substring
 
-from shapesnap.candidates import Candidate, MatchGraph, RouteMatcher, StationIndex
+from shapesnap.candidates import (
+    Candidate,
+    MatchGraph,
+    RouteMatcher,
+    StationIndex,
+    load_stations,
+)
 from shapesnap.gates import GateConfig, GateReport, evaluate_gates
 from shapesnap.graph import load_graph
 
@@ -164,6 +172,7 @@ class Pattern:
     route_long_name: str
     route_color: str
     route_type: int
+    stop_platforms: list = field(default_factory=list)  # GTFS platform_code, "" when absent
 
     @property
     def key(self) -> str:
@@ -256,6 +265,7 @@ def load_patterns(zip_path, route_ids=None, modes=None) -> list:
                     float(s["stop_lon"]),
                     float(s["stop_lat"]),
                     (s.get("stop_name") or "").strip(),
+                    (s.get("platform_code") or "").strip(),
                 )
 
         needed_shapes = {sh for (_, _, sh) in trips.values() if sh}
@@ -299,6 +309,7 @@ def load_patterns(zip_path, route_ids=None, modes=None) -> list:
                 stop_ids=sids,
                 stop_coords=[stops[s][:2] for s in sids],
                 stop_names=[stops[s][2] for s in sids],
+                stop_platforms=[stops[s][3] for s in sids],
                 trip_count=len(shape_ids),
                 shape_id=best_shape,
                 shape=shape_coords.get(best_shape),
@@ -621,10 +632,11 @@ def match_pattern(
     ]
     if not dense and station_idx is not None and station_idx.tree is not None:
         stop_names = pattern.stop_names if len(pattern.stop_names) == n else [""] * n
+        stop_plats = pattern.stop_platforms if len(pattern.stop_platforms) == n else [""] * n
         for i, layer in enumerate(layers):
             for c in layer:
                 c.bonus = cfg.name_bonus_weight * station_idx.best_name_bonus(
-                    c.x, c.y, stop_names[i], "", cfg.station_search_radius_m
+                    c.x, c.y, stop_names[i], stop_plats[i], cfg.station_search_radius_m
                 )
 
     base_mult = [e.class_penalty for e in mg.graph.edges]
@@ -776,18 +788,38 @@ def main(argv=None) -> int:
     ap.add_argument("--feed", type=Path, required=True, help="GTFS zip")
     ap.add_argument("--routes", default=None, help="comma-separated route_ids")
     ap.add_argument("--limit", type=int, default=None, help="max patterns")
+    ap.add_argument(
+        "--pbf", type=Path, default=None,
+        help="OSM extract for the regime-B station index "
+             "(default: the graph's source pbf when it still exists)",
+    )
     args = ap.parse_args(argv)
+
+    if args.pbf is not None and not args.pbf.exists():
+        ap.error(f"pbf not found: {args.pbf}")
 
     graph = load_graph(args.graph)
     mg = MatchGraph(graph)
+
+    # regime B station index (name / platform-ref bonuses, pass penalties)
+    station_idx = None
+    pbf = args.pbf or Path(graph.source_path)
+    if pbf.exists():
+        stations = load_stations(pbf, graph.mode)
+        station_idx = StationIndex(stations, mg)
+        print(f"[shapesnap.match] station index: {len(stations)} stations ({pbf.name})")
+    else:
+        print("[shapesnap.match] no station index (graph source pbf missing; pass --pbf)")
+
     route_ids = set(args.routes.split(",")) if args.routes else None
     patterns = load_patterns(args.feed, route_ids=route_ids, modes={graph.mode})
     if args.limit:
         patterns = patterns[: args.limit]
     print(f"[shapesnap.match] {len(patterns)} patterns, graph {graph.mode} "
           f"({len(graph.edges)} edges)")
+    cfg = MatchConfig()
     for p in patterns:
-        r = match_pattern(mg, p, MatchConfig())
+        r = match_pattern(mg, p, cfg, station_idx=station_idx)
         g = r.gates.as_dict() if r.gates else {}
         print(
             f"  {p.key} trips={p.trip_count} stops={len(p.stop_ids)} "
