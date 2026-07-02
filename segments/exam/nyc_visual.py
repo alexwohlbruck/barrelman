@@ -43,11 +43,16 @@ WINDOWS = {
     # w, s, e, n
     "broadway": (-74.008, 40.7165, -73.980, 40.757),
     "dekalb":   (-73.992, 40.6825, -73.9735, 40.6975),
+    # PAR-12 refit receipts: through-tracks must not bend at crossings
+    "west14":   (-74.010, 40.7295, -73.988, 40.7455),
+    "nevins":   (-73.993, 40.680, -73.971, 40.696),
 }
 TITLES = {
     "broadway": "Broadway yellow trunk, Times Sq -> Canal St — "
                 "N/Q/R/W one ribbon",
     "dekalb":   "DeKalb Av / Flatbush Av junction complex",
+    "west14":   "14 St crossings — L under the 6/7/8th Av trunks",
+    "nevins":   "Nevins St — 2/3 + 4/5 convergence toward Atlantic Av",
 }
 
 
