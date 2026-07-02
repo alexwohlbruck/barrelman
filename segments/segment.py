@@ -3,8 +3,10 @@
 Per transition site (junction node deg>=3, or deg-2 composition change):
 adjacent corridors are cut back transition_len_m/2 along the centerline;
 each ribbon's connecting piece = incoming tail + node + outgoing head,
-arc-filleted at the corner (min radius >= ribbon_count_max * gap_px *
-fillet_radius_factor metres, clamped to the available halves) and
+biarc-filleted at the corner (min radius >= ribbon_count_max * gap_px *
+fillet_radius_factor metres, clamped to the available halves; both cut
+seams take their tangent from the ACTUAL polyline, so the fillet is G1
+at the seams and at the biarc junction — no single-vertex kinks) and
 densified to <= densify_step_m vertex spacing. Steady pieces keep the
 (trimmed) corridor geometry — long features, few boundaries.
 
@@ -27,6 +29,7 @@ Rules (docs/transit-pipeline-v3.md stage 6 + PAR-12 v3 handoff §4):
 
 from __future__ import annotations
 
+import bisect
 import math
 from dataclasses import dataclass, field, replace
 
@@ -72,8 +75,9 @@ class Segment:
     in_end: tuple | None = None    # (cid, side)
     out_end: tuple | None = None
     turn_deg: float = 0.0
-    fillet_radius_m: float | None = None
-    fillet_clamped: bool = False
+    fillet_radius_m: float | None = None   # achieved min biarc radius
+    fillet_clamped: bool = False           # target radius not reachable
+    raw_min_radius_m: float | None = None  # pre-fillet floor, corner excl.
 
 
 # ------------------------------------------------------------ projection
@@ -149,17 +153,161 @@ def _point_at(coords, cum, s: float):
     return coords[-1]
 
 
+def _circumradius(a, b, c) -> float:
+    la, lb, lc = math.dist(b, c), math.dist(a, c), math.dist(a, b)
+    area2 = abs((b[0] - a[0]) * (c[1] - a[1])
+                - (c[0] - a[0]) * (b[1] - a[1]))
+    if area2 < 1e-9:
+        return float("inf")
+    return la * lb * lc / (2.0 * area2)
+
+
+def raw_min_radius(coords, corner_idx: int, step: float) -> float:
+    """Min circumradius of the DENSIFIED raw piece, excluding the triple
+    centred on the corner vertex itself (that kink is the fillet's job).
+    Inherited track curvature sharper than the fillet target cannot be
+    fixed by a corner fillet — it is recorded so the curvature exam can
+    tell it apart from fillet-introduced kinks."""
+    corner = coords[corner_idx]
+    dense = densify(coords, step)
+    best = float("inf")
+    for a, b, c in zip(dense, dense[1:], dense[2:]):
+        if b == corner:
+            continue
+        best = min(best, _circumradius(a, b, c))
+    return best
+
+
+def _tangent_at(coords, cum, s: float, *, before: bool):
+    """Unit direction of the polyline segment containing arc-length s
+    (the segment arriving at s when before=True, leaving it otherwise)."""
+    s = max(0.0, min(s, cum[-1]))
+    if before:
+        i = bisect.bisect_left(cum, s - 1e-9)
+    else:
+        i = bisect.bisect_right(cum, s + 1e-9)
+    i = max(1, min(i, len(cum) - 1))
+    a, b = coords[i - 1], coords[i]
+    d = (b[0] - a[0], b[1] - a[1])
+    n = math.hypot(*d) or 1.0
+    return (d[0] / n, d[1] / n)
+
+
+def _arc_points(p, tan, q, step: float):
+    """Sample the circular arc from p (unit tangent `tan`) to q.
+    Returns (points incl. endpoints, |radius|); straight chord (radius
+    inf) when collinear or degenerate."""
+    chord = (q[0] - p[0], q[1] - p[1])
+    cross = tan[0] * chord[1] - tan[1] * chord[0]
+    if abs(cross) < 1e-9:
+        return [p, q], float("inf")
+    normal = (-tan[1], tan[0]) if cross > 0 else (tan[1], -tan[0])
+    denom = 2.0 * (chord[0] * normal[0] + chord[1] * normal[1])
+    if abs(denom) < 1e-12:
+        return [p, q], float("inf")
+    r = (chord[0] ** 2 + chord[1] ** 2) / denom
+    if r <= 0:
+        return [p, q], float("inf")
+    center = (p[0] + normal[0] * r, p[1] + normal[1] * r)
+    a1 = math.atan2(p[1] - center[1], p[0] - center[0])
+    a2 = math.atan2(q[1] - center[1], q[0] - center[0])
+    sweep = a2 - a1
+    while sweep > math.pi:
+        sweep -= 2 * math.pi
+    while sweep < -math.pi:
+        sweep += 2 * math.pi
+    n_pts = max(2, int(math.ceil(abs(sweep) * r / (step / 2.0))))
+    pts = [(center[0] + r * math.cos(a1 + sweep * k / n_pts),
+            center[1] + r * math.sin(a1 + sweep * k / n_pts))
+           for k in range(n_pts + 1)]
+    return pts, r
+
+
+def _biarc_radii(p1, t1, p2, t2, d1: float):
+    """Tangent-polygon biarc P1 -> J -> P2 with tangent length d1 at P1:
+    C1 = P1 + d1*t1, C2 = P2 - d2*t2 with |C1C2| = d1 + d2, J splitting
+    C1C2 at ratio d1:d2 — both arcs are tangent to C1C2 at J, so the pair
+    is G1 throughout. Returns (J, r1, r2) or None when invalid."""
+    v = (p2[0] - p1[0], p2[1] - p1[1])
+    w = (v[0] - d1 * t1[0], v[1] - d1 * t1[1])  # C1 -> P2
+    den = 2.0 * (t2[0] * w[0] + t2[1] * w[1] + d1)
+    if den <= 1e-9:
+        return None
+    d2 = (w[0] * w[0] + w[1] * w[1] - d1 * d1) / den
+    if d2 <= 1e-9:
+        return None
+    c1 = (p1[0] + d1 * t1[0], p1[1] + d1 * t1[1])
+    c2 = (p2[0] - d2 * t2[0], p2[1] - d2 * t2[1])
+    f = d1 / (d1 + d2)
+    j = (c1[0] + (c2[0] - c1[0]) * f, c1[1] + (c2[1] - c1[1]) * f)
+
+    def _turn(u, wv):
+        dot = max(-1.0, min(1.0, u[0] * wv[0] + u[1] * wv[1]))
+        return math.acos(dot)
+
+    u1 = ((j[0] - c1[0]) / d1, (j[1] - c1[1]) / d1)
+    th1 = _turn(t1, u1)
+    u2 = ((c2[0] - j[0]) / d2, (c2[1] - j[1]) / d2)
+    th2 = _turn(u2, t2)
+    if th1 > 2.8 or th2 > 2.8:  # near-reversal arcs: reject
+        return None
+    r1 = float("inf") if th1 < 1e-6 else d1 / math.tan(th1 / 2.0)
+    r2 = float("inf") if th2 < 1e-6 else d2 / math.tan(th2 / 2.0)
+    return j, r1, r2
+
+
+def _best_biarc(p1, t1, p2, t2, step: float):
+    """Maximise the biarc's min radius over the tangent length d1
+    (coarse grid + one refinement pass; deterministic). Returns
+    (points, min_radius) or None."""
+    span = math.dist(p1, p2)
+    if span < 1e-6:
+        return None
+
+    def _eval(d1):
+        ba = _biarc_radii(p1, t1, p2, t2, d1)
+        if ba is None:
+            return None
+        return min(ba[1], ba[2]), ba[0]
+
+    best = None  # (score, d1, J)
+    grid = [span * k / 20.0 for k in range(1, 41)]
+    for d1 in grid:
+        ev = _eval(d1)
+        if ev and (best is None or ev[0] > best[0]):
+            best = (ev[0], d1, ev[1])
+    if best is None:
+        return None
+    lo, hi = best[1] / 1.5, best[1] * 1.5
+    for k in range(21):
+        d1 = lo + (hi - lo) * k / 20.0
+        ev = _eval(d1)
+        if ev and ev[0] > best[0]:
+            best = (ev[0], d1, ev[1])
+    _score, _d1, j = best
+    arc1, r1 = _arc_points(p1, t1, j, step)
+    arc2, r2 = _arc_points(p2, (-t2[0], -t2[1]), j, step)
+    return _dedupe(arc1 + list(reversed(arc2))[1:]), min(r1, r2)
+
+
 def fillet_corner(coords, corner_idx: int, radius: float, cfg: SegmentConfig):
-    """Replace the corner at coords[corner_idx] with a circular arc of
-    target radius (clamped to 90% of each side's available length).
-    Returns (coords, turn_deg, radius_m|None, clamped)."""
+    """Replace the corner at coords[corner_idx] with a tangent-continuous
+    biarc of min radius >= target (setback grows until the target is met,
+    capped at 90% of each side's available length). Seam tangents come
+    from the ACTUAL polyline at the cut points — the accumulated turn of
+    the removed lead-in/lead-out vertices is absorbed by the biarc, never
+    concentrated into single-vertex seam kinks. Candidates are scored by
+    the min circumradius of the densified RESULT inside the transition
+    window, so the setback also grows to swallow raw track kinks sitting
+    just outside the cut. Returns (coords, turn_deg, radius_m|None,
+    clamped) — radius_m is the achieved window minimum."""
     cum = _cum_lengths(coords)
     s_c = cum[corner_idx]
     avail_in, avail_out = s_c, cum[-1] - s_c
     if avail_in <= 0 or avail_out <= 0:
         return coords, 0.0, None, False
 
-    # immediate directions at the corner
+    # corner turn (straight-skip rule + diagnostics)
     p_in = coords[corner_idx - 1]
     p_out = coords[corner_idx + 1]
     c = coords[corner_idx]
@@ -175,47 +323,50 @@ def fillet_corner(coords, corner_idx: int, radius: float, cfg: SegmentConfig):
         return coords, turn, None, False
 
     phi = math.pi - math.radians(turn)  # interior angle between the legs
-    t_target = radius / math.tan(phi / 2) if phi > 1e-6 else avail_in
-    t = min(t_target, 0.9 * avail_in, 0.9 * avail_out)
-    clamped = t < t_target - 1e-9
-    if t < 1e-6:
-        return coords, turn, None, clamped
+    t0 = radius / math.tan(phi / 2) if phi > 1e-6 else avail_in
+    t_max = 0.9 * min(avail_in, avail_out)
+    if t_max < 1e-6:
+        return coords, turn, None, True
+    ts, t = [], min(t0, t_max)
+    while True:  # straight-leg estimate, grown geometrically to the cap
+        ts.append(t)
+        if t >= t_max - 1e-9:
+            break
+        t = min(t * 1.3, t_max)
 
-    t1 = _point_at(coords, cum, s_c - t)
-    t2 = _point_at(coords, cum, s_c + t)
-    # tangent direction at t1 (polyline direction there ~ u toward corner)
-    tan1 = (c[0] - t1[0], c[1] - t1[1])
-    nt = math.hypot(*tan1) or 1.0
-    tan1 = (tan1[0] / nt, tan1[1] / nt)
-    chord = (t2[0] - t1[0], t2[1] - t1[1])
-    cross = tan1[0] * chord[1] - tan1[1] * chord[0]
-    if abs(cross) < 1e-9:
-        return coords, turn, None, clamped  # collinear — nothing to bend
-    normal = (-tan1[1], tan1[0]) if cross > 0 else (tan1[1], -tan1[0])
-    denom = 2.0 * (chord[0] * normal[0] + chord[1] * normal[1])
-    if abs(denom) < 1e-9:
-        return coords, turn, None, clamped
-    r_arc = (chord[0] ** 2 + chord[1] ** 2) / denom
-    if r_arc <= 0:
-        return coords, turn, None, clamped
-    center = (t1[0] + normal[0] * r_arc, t1[1] + normal[1] * r_arc)
+    t_win = t_max + cfg.densify_step_m  # same window for every candidate
 
-    a1 = math.atan2(t1[1] - center[1], t1[0] - center[0])
-    a2 = math.atan2(t2[1] - center[1], t2[0] - center[0])
-    sweep = a2 - a1
-    while sweep > math.pi:
-        sweep -= 2 * math.pi
-    while sweep < -math.pi:
-        sweep += 2 * math.pi
-    n_pts = max(2, int(math.ceil(abs(sweep) * r_arc /
-                                 (cfg.densify_step_m / 2.0))))
-    arc = [(center[0] + r_arc * math.cos(a1 + sweep * k / n_pts),
-            center[1] + r_arc * math.sin(a1 + sweep * k / n_pts))
-           for k in range(n_pts + 1)]
+    def _window_min_radius(cand):
+        dense = densify(cand, cfg.densify_step_m)
+        best = float("inf")
+        for a, b, cc in zip(dense, dense[1:], dense[2:]):
+            if math.dist(b, c) <= t_win:
+                best = min(best, _circumradius(a, b, cc))
+        return best
 
-    head = [p for p, s in zip(coords, cum) if s < s_c - t - 1e-9]
-    tail = [p for p, s in zip(coords, cum) if s > s_c + t + 1e-9]
-    return _dedupe(head + arc + tail), turn, r_arc, clamped
+    best = None  # (window_min_radius, points)
+    for t in ts:
+        p1 = _point_at(coords, cum, s_c - t)
+        p2 = _point_at(coords, cum, s_c + t)
+        tan1 = _tangent_at(coords, cum, s_c - t, before=True)
+        tan2 = _tangent_at(coords, cum, s_c + t, before=False)
+        ba = _best_biarc(p1, tan1, p2, tan2, cfg.densify_step_m)
+        if ba is None:
+            continue
+        pts, _r_arc = ba
+        head = [p for p, s in zip(coords, cum) if s < s_c - t - 1e-9]
+        tail = [p for p, s in zip(coords, cum) if s > s_c + t + 1e-9]
+        cand = _dedupe(head + pts + tail)
+        r_min = _window_min_radius(cand)
+        if best is None or r_min > best[0]:
+            best = (r_min, cand)
+        if r_min >= radius - 1e-6:  # smallest setback meeting the target
+            break
+    if best is None:
+        return coords, turn, None, True
+    r_min, cand = best
+    clamped = r_min < radius - 1e-6
+    return cand, turn, r_min, clamped
 
 
 # ------------------------------------------------------------ sites/ends
@@ -473,6 +624,7 @@ def build_segments(g: Graph, cfg: SegmentConfig = SegmentConfig(),
                 corner = len(tail) - 1
                 radius = (max(r1.count, r2.count) * cfg.gap_px
                           * cfg.fillet_radius_factor)
+                raw_min = raw_min_radius(joined, corner, cfg.densify_step_m)
                 coords, turn, r_arc, clamped = fillet_corner(
                     joined, corner, radius, cfg)
                 coords = densify(coords, cfg.densify_step_m)
@@ -489,7 +641,8 @@ def build_segments(g: Graph, cfg: SegmentConfig = SegmentConfig(),
                     len_m=_length(coords), coords=coords,  # xy for now
                     sites=(nid,), in_end=(c1.cid, s1), out_end=(c2.cid, s2),
                     turn_deg=turn, fillet_radius_m=r_arc,
-                    fillet_clamped=clamped, **meta))
+                    fillet_clamped=clamped, raw_min_radius_m=raw_min,
+                    **meta))
                 n_t += 1
             for c, side, r in stubs:
                 cg = cgs[c.cid]
@@ -588,11 +741,18 @@ def _merge_consumed(transitions: list, cgs: dict, info: dict) -> list:
                     break
             if merged_pair:
                 a, b = merged_pair
+                radii = [r for r in (a.fillet_radius_m, b.fillet_radius_m)
+                         if r is not None]
+                raws = [r for r in (a.raw_min_radius_m, b.raw_min_radius_m)
+                        if r is not None]
                 merged = replace(
                     a, off_to_px=b.off_to_px,
                     coords=_dedupe(a.coords + b.coords),
                     len_m=a.len_m + b.len_m, sites=a.sites + b.sites,
                     out_end=b.out_end, turn_deg=max(a.turn_deg, b.turn_deg),
+                    fillet_radius_m=min(radii) if radii else None,
+                    fillet_clamped=a.fillet_clamped or b.fillet_clamped,
+                    raw_min_radius_m=min(raws) if raws else None,
                     route_ids=",".join(sorted(
                         set(a.route_ids.split(","))
                         | set(b.route_ids.split(",")))),

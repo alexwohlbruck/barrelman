@@ -28,7 +28,8 @@ from collections import Counter, defaultdict
 import pytest
 
 from segments.corridors import load_graph, walk_corridors
-from segments.segment import LocalProj, SegmentConfig, build_segments
+from segments.segment import (LocalProj, SegmentConfig, _circumradius,
+                              build_segments)
 from segments.tests.helpers import offset_at_shared_endpoint
 
 BUILD_KEY = "chicago:l-v3"
@@ -140,6 +141,47 @@ def test_steady_composition_constant_query(built):
           f"{len(bad)} with mixed composition")
     assert n_long > 50
     assert bad == []
+
+
+def test_transition_curvature_meets_min_radius(built):
+    """C3/stage-6 curvature: every transition's discrete min radius
+    (circumradius over consecutive vertex triples, aeqd metres) must meet
+    the configured minimum (line_count * gap_px * fillet_radius_factor)
+    unless (a) the fillet was clamped by short halves — flagged, achieved
+    window radius recorded — or (b) the raw track inside the piece is
+    itself sharper (recorded pre-fillet, corner vertex excluded; a corner
+    fillet cannot fix inherited curvature). Guards against fillet-
+    introduced seam kinks: the v3 review measured 30/44 sub-radius
+    transitions, 18 of them unflagged, on the chord-tangent fillet."""
+    g, segments, info, _ = built
+    lon0 = sum(n.lon for n in g.nodes.values()) / len(g.nodes)
+    lat0 = sum(n.lat for n in g.nodes.values()) / len(g.nodes)
+    proj = LocalProj(lon0, lat0)
+    inf = float("inf")
+    n_tr = n_target = 0
+    bad = []
+    for t in segments:
+        if t.kind != "transition":
+            continue
+        n_tr += 1
+        target = t.line_count * CFG.gap_px * CFG.fillet_radius_factor
+        raw = t.raw_min_radius_m if t.raw_min_radius_m is not None else inf
+        ach = t.fillet_radius_m if t.fillet_radius_m is not None else inf
+        xy = proj.to_xy(t.coords)
+        measured = min((_circumradius(a, b, c)
+                        for a, b, c in zip(xy, xy[1:], xy[2:])), default=inf)
+        if measured >= 0.9 * target:
+            n_target += 1
+        floor = min(ach, raw) if t.fillet_clamped else min(target, raw)
+        if measured < 0.9 * floor:
+            bad.append((t.seg_id, t.route_short_names, round(measured, 1),
+                        round(floor, 1), t.fillet_clamped))
+    print(f"\n[real] {n_tr} transitions, {n_target} meet 0.9x min radius, "
+          f"{info['fillet_clamped']} clamped by short halves")
+    assert bad == [], f"sub-floor transition curvature: {bad}"
+    assert n_target >= 34, "most transitions meet the full min radius"
+    assert info["fillet_clamped"] <= 10, \
+        "clamping must stay the flagged exception, not the rule"
 
 
 def test_length_conserved_per_ribbon(built):

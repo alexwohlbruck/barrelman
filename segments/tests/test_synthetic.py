@@ -146,6 +146,31 @@ def test_fillet_min_radius_and_stub():
     assert max_spacing_m(tr) <= CFG.densify_step_m * 1.01
 
 
+def test_fillet_curved_legs_no_seam_kinks():
+    """Curved lead-in (raw radius 100 m) into a 90 deg junction turn: the
+    accumulated lead-in turn used to be concentrated into single-vertex
+    kinks at the fillet seams (PAR-12 v3 review). Seams must be tangent-
+    continuous and the whole transition window must meet the min radius."""
+    T = ("T", "888888")
+    r_lead = 100.0
+    nodes = {}
+    for k in range(10, 0, -1):  # approach along the arc, heading east at N
+        th = -0.075 * k        # 7.5 m steps on r=100
+        nodes[f"W{k}"] = (r_lead * math.sin(th), r_lead * (1 - math.cos(th)))
+    nodes.update({"N": (0, 0), "S": (0, -500), "E": (500, 0)})
+    chain = [f"W{k}" for k in range(10, 0, -1)] + ["N"]
+    edges = [(a, b, [R, T]) for a, b in zip(chain, chain[1:])]
+    edges += [("N", "S", [R]), ("N", "E", [T])]
+    g, ids, segs, info = build(nodes, edges)
+    (tr,) = find(segs, kind="transition", color_key="ff0000")
+    assert not tr.fillet_clamped
+    assert tr.fillet_radius_m >= 22.0 * 0.99
+    n_m = to_m([(g.nodes[ids["N"]].lon, g.nodes[ids["N"]].lat)])[0]
+    measured = min_radius_near(tr, n_m, within_m=35.0)
+    assert measured >= 22.0 * 0.9
+    assert max_spacing_m(tr) <= CFG.densify_step_m * 1.01
+
+
 def test_terminating_ribbon_keeps_offset_to_node():
     # T exists only on W-N and E-N: it terminates at the junction on the
     # W side pairing E<->? no — T is on W-N and N-E, so instead terminate
