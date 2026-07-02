@@ -18,7 +18,7 @@
 import { db } from '../db'
 import { sql } from 'drizzle-orm'
 import { parse } from 'csv-parse/sync'
-import { readFileSync } from 'fs'
+import { readFileSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { type FetchFn } from './transit.service'
 
@@ -1263,9 +1263,12 @@ export async function recordFeed(feed: GtfsFeedInfo, stopCount: number, routeCou
 // ── Display overrides ───────────────────────────────────────────────
 // Manual per-feed patches (config/transit-overrides.json) for data the agency
 // publishes badly or not at all — e.g. CATS doesn't provide route_color for its
-// Blue/Gold lines. Display-only: patches the DB rows, never the GTFS ZIP, so
-// MOTIS routing is untouched. route_type overrides (which MOTIS/pfaedle also
-// need) are handled separately by rewriting the ZIP.
+// Blue/Gold lines. Applied twice, once per consumer:
+//   1. bakeDisplayOverridesIntoZip — rewrites routes.txt/stops.txt in the
+//      PROCESSED zip (data/gtfs-processed) so MOTIS itineraries carry the
+//      same colours/names as our display views. Raw zips stay pristine.
+//   2. applyDisplayOverrides — patches the DB rows after import (idempotent;
+//      also backfills feeds imported before the bake existed).
 
 interface RouteOverride {
   route_color?: string
@@ -1337,6 +1340,101 @@ export async function applyDisplayOverrides(feed: GtfsFeedInfo): Promise<number>
 /** Feed ids that have a display-override block (for batch backfill). */
 export function getOverriddenFeedIds(): string[] {
   return Object.keys(loadTransitOverrides())
+}
+
+/** Quote a CSV field if it contains commas, quotes, or newlines. */
+function csvField(value: string): string {
+  return /[",\r\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value
+}
+
+/** Serialize GTFS records back to CSV with the given column order. */
+function serializeGtfsRecords(records: GtfsRecord[], columns: string[]): string {
+  const lines = [columns.map(csvField).join(',')]
+  for (const r of records) {
+    lines.push(columns.map(c => csvField(r[c] ?? '')).join(','))
+  }
+  return lines.join('\n') + '\n'
+}
+
+/**
+ * Patch rows of a CSV file inside a GTFS zip. `patches` maps a key-column
+ * value (e.g. route_id) to the fields to overwrite on matching rows; columns
+ * missing from the file are appended to the header. Returns rows patched
+ * (0 = file untouched).
+ */
+async function patchZipCsv(
+  zip: import('jszip'),
+  filename: string,
+  keyColumn: string,
+  patches: Map<string, Record<string, string>>,
+): Promise<number> {
+  const entry = zip.file(filename)
+  if (!entry || patches.size === 0) return 0
+
+  const content = (await entry.async('string')).replace(/^﻿/, '')
+  const records = parseGtfsRecords(content)
+  if (records.length === 0) return 0
+
+  const columns = Object.keys(records[0])
+  if (!columns.includes(keyColumn)) return 0
+
+  let patched = 0
+  for (const record of records) {
+    const patch = patches.get(record[keyColumn])
+    if (!patch) continue
+    for (const [field, value] of Object.entries(patch)) {
+      if (!columns.includes(field)) columns.push(field)
+      record[field] = value
+    }
+    patched++
+  }
+
+  if (patched > 0) {
+    zip.file(filename, serializeGtfsRecords(records, columns))
+  }
+  return patched
+}
+
+/**
+ * Bake DISPLAY overrides (route colours/names, stop names) into a GTFS zip's
+ * routes.txt / stops.txt — the processed copy MOTIS ingests — so routing
+ * responses carry the same colours/names as the DB display views. Patches the
+ * exact fields applyDisplayOverrides patches in the DB. Rewrites the zip in
+ * place; returns the number of route/stop rows patched (0 = zip untouched).
+ */
+export async function bakeDisplayOverridesIntoZip(
+  feed: GtfsFeedInfo,
+  zipPath: string,
+): Promise<number> {
+  const ov = getFeedOverride(feed)
+  if (!ov) return 0
+
+  const JSZip = (await import('jszip')).default
+  const zip = await JSZip.loadAsync(readFileSync(zipPath))
+
+  const routePatches = new Map<string, Record<string, string>>()
+  for (const [routeId, r] of Object.entries(ov.routes ?? {})) {
+    const patch: Record<string, string> = {}
+    if (r.route_color != null) patch.route_color = r.route_color
+    if (r.route_text_color != null) patch.route_text_color = r.route_text_color
+    if (r.route_long_name != null) patch.route_long_name = r.route_long_name
+    if (r.route_short_name != null) patch.route_short_name = r.route_short_name
+    if (Object.keys(patch).length > 0) routePatches.set(routeId, patch)
+  }
+
+  const stopPatches = new Map<string, Record<string, string>>()
+  for (const [stopId, s] of Object.entries(ov.stops ?? {})) {
+    if (s.stop_name != null) stopPatches.set(stopId, { stop_name: s.stop_name })
+  }
+
+  const patched =
+    (await patchZipCsv(zip, 'routes.txt', 'route_id', routePatches)) +
+    (await patchZipCsv(zip, 'stops.txt', 'stop_id', stopPatches))
+
+  if (patched > 0) {
+    writeFileSync(zipPath, await zip.generateAsync({ type: 'nodebuffer' }))
+  }
+  return patched
 }
 
 /**
@@ -1557,6 +1655,11 @@ interface MotisConfigOptions {
  * Reads all imported feeds, builds dataset entries with RT feed URLs,
  * and returns the YAML string. Feeds with GTFS-RT URLs get `rt:` entries
  * so MOTIS automatically polls for realtime updates.
+ *
+ * Dataset paths ("gtfs/<feed_id>.zip") are relative to MOTIS's /data dir
+ * (the barrelman-gtfs-data volume). scripts/rebuild-motis.sh populates that
+ * gtfs/ dir from data/gtfs-processed — the fully preprocessed zips — so the
+ * config must only ever be paired with those, never the raw downloads.
  */
 export async function generateMotisConfig(options?: MotisConfigOptions): Promise<string> {
   const {
