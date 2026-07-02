@@ -228,6 +228,11 @@ def solve_cpsat(g, reg, w: Weights, edges=None, nodes=None,
     solver.parameters.max_time_in_seconds = cfg.cpsat_time_limit
     solver.parameters.num_workers = cfg.cpsat_workers
     solver.parameters.random_seed = cfg.seed
+    # deterministic parallel search: free-for-all worker portfolios return
+    # whichever optimum lands first (same score, different slots run to
+    # run) — interleaving makes the search reproducible so apply/exam can
+    # assert identical slots across reruns
+    solver.parameters.interleave_search = True
     status = solver.Solve(model)
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
         return None, "unknown"
