@@ -510,7 +510,10 @@ def _fmt_space(n: int) -> str:
 
 def write_slots(inst: Instance, full: dict, dsn: str) -> int:
     """Write the optimized order back to transit_graph_edge_lines.slot
-    (slot = left-to-right position along the edge storage direction)."""
+    (slot = left-to-right position along the edge storage direction).
+    The primary key is (edge_id, slot), so permuting in place collides
+    row-by-row: shift the build's slots out of range first, then set
+    the final values — one transaction."""
     import psycopg
 
     rows = []
@@ -522,6 +525,16 @@ def write_slots(inst: Instance, full: dict, dsn: str) -> int:
             ln = inst.registry.get(uid)
             rows.append((i, db_eid, ln.feed_id, ln.route_id))
     with psycopg.connect(dsn) as conn, conn.cursor() as cur:
+        cur.execute(
+            """UPDATE transit_graph_edge_lines l SET slot = l.slot + 1000
+               FROM transit_graph_edges e
+               WHERE e.id = l.edge_id AND e.build_key = %s""",
+            (inst.build_key,))
+        shifted = cur.rowcount
+        if shifted != len(rows):
+            raise RuntimeError(
+                f"slot writeback mismatch: {shifted} rows in build "
+                f"{inst.build_key!r}, solution covers {len(rows)}")
         cur.executemany(
             """UPDATE transit_graph_edge_lines
                SET slot = %s
