@@ -223,8 +223,9 @@ violations; (2) transitions only at junctions/composition changes, each site
 listed with routes — Loop window holds exactly the stage-4 exam's 6 junction
 nodes; (3) crossing audit — totals + locations, no crossing at a degree-2
 non-station node; (4) LOOM contrast — the same corridor walk over `chicago:l`
-shows the baseline instability v2 inherited (20 corridor/line slot violations,
-Pink/P up to 3 slots in one corridor) vs v3's zero; (5) determinism — two fresh
+shows the baseline instability v2 inherited (20 corridor/line slot violations
+across Brn/G/Org/P/Pink; P and Org up to 3 distinct slots in one corridor) vs
+v3's zero; (5) determinism — two fresh
 solves and the stored slots are identical, so rerunning solve+apply is a no-op.
 
 ```
