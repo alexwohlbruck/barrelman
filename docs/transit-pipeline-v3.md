@@ -64,8 +64,9 @@ zip transforms run *after* the DB parse.
   `barrelman-gtfs-data` volume, `docker exec barrelman-motis /motis import` (hash-gated,
   cheap when unchanged), restart server. Called/printed as the import's final step.
 - Keep `applyDisplayOverrides` (DB) as the fast idempotent path; zip becomes source of
-  truth. Retire `run-pfaedle.sh` + `import-shapes-886.ts` when shapesnap lands. Fix
-  `download-gtfs.sh` path bug (`src/import/…` → `import/…`).
+  truth. `run-pfaedle.sh` + `import-shapes-886.ts` retired (shapesnap landed — see
+  `docs/shapesnap.md`, `scripts/run-shapesnap.sh`). Fix `download-gtfs.sh` path bug
+  (`src/import/…` → `import/…`).
 
 ### Stage 2 — service-level derivation, globally correct (task #2)
 
