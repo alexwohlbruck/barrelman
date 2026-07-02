@@ -31,13 +31,9 @@ CP-SAT model (mirrors score.py term for term):
   * objective = weighted sum with score.py's node weights evaluated on
     v*, scaled to integers.
 
-CLI:
+CLI (report-only diagnostics; writing slots is lineorder.apply's job):
   uv run --with-requirements lineorder/requirements.txt \
-      python -m lineorder.solve --build-key chicago:l-v3 [--dry-run]
-
-Without --dry-run the optimized order is written back to
-transit_graph_edge_lines.slot (slot = left-to-right position in the
-edge's storage direction).
+      python -m lineorder.solve --build-key chicago:l-v3
 """
 
 from __future__ import annotations
@@ -515,40 +511,36 @@ def _fmt_space(n: int) -> str:
     return str(n) if n < 10_000_000 else f"{float(n):.3g}"
 
 
-def write_slots(inst: Instance, full: dict, dsn: str) -> int:
-    """Write the optimized order back to transit_graph_edge_lines.slot
-    (slot = left-to-right position along the edge storage direction).
-    The primary key is (edge_id, slot), so permuting in place collides
-    row-by-row: shift the build's slots out of range first, then set
-    the final values — one transaction."""
-    import psycopg
+def print_outcome(out: SolveOutcome, tag: str = "solve"):
+    """Human report for a SolveOutcome (shared by solve + apply CLIs)."""
+    red = out.reduction
+    print(f"[{tag}] reduced to {len(red.graph.edges)} edges in "
+          f"{len(out.results)} components "
+          f"(rules {dict(red.stats)}, fixed cost {red.fixed_cost})")
+    print(f"\n{'comp':>4} {'method':<14} {'edges':>5} {'space':>10} "
+          f"{'canonical':>9} {'after':>9} {'time':>8}")
+    for r in out.results:
+        print(f"{r.index:>4} {r.method:<14} {r.n_edges:>5} "
+              f"{_fmt_space(r.space):>10} {r.canonical:>9.1f} "
+              f"{r.after:>9.1f} {r.wall:>7.2f}s")
 
-    rows = []
-    for eid, perm in full.items():
-        db_eid = inst.edge_db_id.get(eid)
-        if db_eid is None:
-            continue
-        for i, uid in enumerate(perm):
-            ln = inst.registry.get(uid)
-            rows.append((i, db_eid, ln.feed_id, ln.route_id))
-    with psycopg.connect(dsn) as conn, conn.cursor() as cur:
-        cur.execute(
-            """UPDATE transit_graph_edge_lines l SET slot = l.slot + 1000
-               FROM transit_graph_edges e
-               WHERE e.id = l.edge_id AND e.build_key = %s""",
-            (inst.build_key,))
-        shifted = cur.rowcount
-        if shifted != len(rows):
-            raise RuntimeError(
-                f"slot writeback mismatch: {shifted} rows in build "
-                f"{inst.build_key!r}, solution covers {len(rows)}")
-        cur.executemany(
-            """UPDATE transit_graph_edge_lines
-               SET slot = %s
-               WHERE edge_id = %s AND feed_id = %s AND route_id = %s""",
-            rows)
-        conn.commit()
-    return len(rows)
+    b, a = out.before, out.after
+    print(f"\nscore (original graph, weighted): provisional "
+          f"{b.weighted:.1f} -> optimized {a.weighted:.1f}")
+    print(f"crossings same-seg {b.crossings_same} -> {a.crossings_same}, "
+          f"diff-seg {b.crossings_diff} -> {a.crossings_diff}, "
+          f"separations {b.separations} -> {a.separations}")
+
+    rep = crossing_report(out.instance.graph, red.registry,
+                          out.full_solution, red.weights)
+    if rep:
+        print("\nresidual cost locations:")
+        for nid, label, x, y, s in rep:
+            print(f"  {label or '(unnamed)'} ({x:.6f}, {y:.6f}): "
+                  f"same={s.crossings_same} diff={s.crossings_diff} "
+                  f"sep={s.separations} weighted={s.weighted:.1f}")
+    else:
+        print("\nno residual crossings or separations")
 
 
 # ------------------------------------------------------------------ CLI
@@ -560,11 +552,10 @@ def main(argv=None):
 
     ap = argparse.ArgumentParser(
         prog="python -m lineorder.solve",
-        description="Order the lines of a transit_graph build (MLNCM-S).")
+        description="Order the lines of a transit_graph build (MLNCM-S) "
+                    "and report — never writes; see python -m lineorder.apply.")
     ap.add_argument("--build-key", required=True)
     ap.add_argument("--dsn", default=DEFAULT_DSN)
-    ap.add_argument("--dry-run", action="store_true",
-                    help="solve and report, do not write slots")
     ap.add_argument("--time-limit", type=float, default=30.0,
                     help="CP-SAT seconds per component (default 30)")
     ap.add_argument("--anneal-iters", type=int, default=30_000)
@@ -585,49 +576,10 @@ def main(argv=None):
           f"{_fmt_space(search_space(g))}")
 
     out = solve_instance(inst, cfg)
-    red = out.reduction
-
-    print(f"[solve] reduced to {len(red.graph.edges)} edges in "
-          f"{len(out.results)} components "
-          f"(rules {dict(red.stats)}, fixed cost {red.fixed_cost})")
-    print(f"\n{'comp':>4} {'method':<14} {'edges':>5} {'space':>10} "
-          f"{'canonical':>9} {'after':>9} {'time':>8}")
-    for r in out.results:
-        print(f"{r.index:>4} {r.method:<14} {r.n_edges:>5} "
-              f"{_fmt_space(r.space):>10} {r.canonical:>9.1f} "
-              f"{r.after:>9.1f} {r.wall:>7.2f}s")
-
-    b, a = out.before, out.after
-    print(f"\nscore (original graph, weighted): provisional "
-          f"{b.weighted:.1f} -> optimized {a.weighted:.1f}")
-    print(f"crossings same-seg {b.crossings_same} -> {a.crossings_same}, "
-          f"diff-seg {b.crossings_diff} -> {a.crossings_diff}, "
-          f"separations {b.separations} -> {a.separations}")
-
-    rep = crossing_report(g, red.registry, out.full_solution, red.weights)
-    if rep:
-        print("\nresidual cost locations:")
-        for nid, label, x, y, s in rep:
-            print(f"  {label or '(unnamed)'} ({x:.6f}, {y:.6f}): "
-                  f"same={s.crossings_same} diff={s.crossings_diff} "
-                  f"sep={s.separations} weighted={s.weighted:.1f}")
-    else:
-        print("\nno residual crossings or separations")
-
-    if args.dry_run:
-        print(f"\n[solve] dry run — slots NOT written "
-              f"({time.perf_counter() - t0:.2f}s total)")
-    elif a.weighted > b.weighted + 1e-9:
-        # heuristic/timeout path came out worse than what is already
-        # stored: keep the provisional slots rather than regress
-        print(f"\n[solve] optimized score {a.weighted:.1f} is WORSE than "
-              f"the provisional slots ({b.weighted:.1f}) — slots NOT "
-              f"written; rerun with a higher --time-limit "
-              f"({time.perf_counter() - t0:.2f}s total)")
-    else:
-        n = write_slots(inst, out.full_solution, args.dsn)
-        print(f"\n[solve] wrote {n} slots for {args.build_key} "
-              f"({time.perf_counter() - t0:.2f}s total)")
+    print_outcome(out, tag="solve")
+    print(f"\n[solve] report only — write slots with "
+          f"python -m lineorder.apply --build-key {args.build_key} "
+          f"({time.perf_counter() - t0:.2f}s total)")
 
 
 if __name__ == "__main__":

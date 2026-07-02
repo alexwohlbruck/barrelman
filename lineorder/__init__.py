@@ -14,11 +14,19 @@ Modules:
   reduce      — reduction rules to fixpoint + connected components + CLI
   reconstruct — expand a reduced-component solution back to the original graph
   solve       — per-component solver cascade (exhaustive / CP-SAT /
-                greedy-with-lookahead + annealing) + slot writeback CLI
+                greedy-with-lookahead + annealing) + report-only CLI
+  writeback   — slot writeback + lineorder_runs ledger (the only writer)
+  apply       — CLI alias for writeback (python -m lineorder.apply)
+  exam/       — stability_exam.py: corridor-stability / transition /
+                crossing / determinism acceptance vs the LOOM baseline
 
 CLI:
   uv run --with-requirements lineorder/requirements.txt \
       python -m lineorder.reduce --build-key chicago:l-v3 --stats
   uv run --with-requirements lineorder/requirements.txt \
-      python -m lineorder.solve --build-key chicago:l-v3 --dry-run
+      python -m lineorder.solve --build-key chicago:l-v3
+  uv run --with-requirements lineorder/requirements.txt \
+      python -m lineorder.apply --build-key chicago:l-v3
+  uv run --with-requirements lineorder/requirements.txt \
+      python lineorder/exam/stability_exam.py
 """
