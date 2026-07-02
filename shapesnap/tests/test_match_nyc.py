@@ -1,0 +1,256 @@
+"""Real-data exam: MTA subway feed 5 on the NYC rail graph (v3 milestone 5).
+
+What NYC tests that Chicago (test_match_real.py) cannot:
+
+  COLOUR COLLAPSE — N/Q/R/W all share route_color #F6BC26 and 1/2/3 share
+  #D82233, and the OSM NYCS route relations carry those exact colours. A
+  colour-equality relation match therefore decorates the WHOLE trunk
+  family, turning the relation prior into a constant — and, because the
+  MTA publishes one identical trunk centerline per family (route 1's and
+  route 3's shapes are the same polyline on the 66–72 St corridor),
+  emission alone cannot tell a local track from an express track 5 m
+  away. The tiered RouteMatcher (identity ref/name > colour-only) is
+  what keeps express/local separation alive; this exam pins it.
+
+  4-TRACK EXPRESS/LOCAL — OSM maps each track as its own way ~3–6 m
+  apart. Local-route matches must ride different ways than express-route
+  matches:
+    - IRT Broadway–7th Av, 66–72 St: 1 local ('1','2'-decorated ways) vs
+      2/3 express ('2','3' ways),
+    - BMT Broadway, Prince St–8 St: N/Q express ('N','Q' ways) vs R/W
+      local ('R','W' ways).
+
+  VERTICAL SANITY — the Broadway/7th Av trunks are tunnel through these
+  Manhattan windows (no elevated way within them may be ridden); the
+  Astoria line is elevated (no tunnel way may be ridden).
+
+Known agency-data notes (investigated, not matcher faults):
+  - 96 St (2nd Av) terminal: the MTA shape for Q (and the N/R trips that
+    terminate there) ends 103 m short of the stop coordinate, while the
+    OSM track passes within ~2 m of it. The stop-snap gate correctly
+    refuses (fallback) — the feed keeps its own geometry, never degraded.
+  - Joralemon St Tunnel (4/5 under the East River): the MTA shape runs
+    37–64 m from OSM's tunnel alignment for ~700 m, beyond the 50 m dense
+    radius at its peak — the matcher breaks and bridges with the original
+    shape segment (~390–420 m), by design.
+
+Run (auto-skips without a NYC pbf/graph or data/gtfs/5.zip):
+  uv run --with-requirements shapesnap/requirements.txt \
+      python -m pytest shapesnap/tests/test_match_nyc.py -v -s
+"""
+
+import time
+from collections import Counter
+
+import pytest
+
+from shapesnap.candidates import MatchGraph
+from shapesnap.graph import REPO_ROOT, build_graph, is_stale, load_graph, save_graph
+from shapesnap.match import MatchConfig, load_patterns, match_pattern
+
+# NYC crop (config/shapesnap.json feed 5: feed-5 shape bounds + ~10 km)
+NYC_BBOX = (-74.37, 40.42, -73.64, 41.0)
+# IRT Broadway–7th Av, 66 St–72 St (4-track tunnel: 1 local, 2/3 express)
+SEVENTH_AVE_BBOX = (-73.985, 40.772, -73.978, 40.780)
+# BMT Broadway, Prince St–8 St (4-track tunnel: N/Q express, R/W local)
+BROADWAY_BBOX = (-73.9995, 40.722, -73.992, 40.731)
+# BMT Astoria line along 31st St, Queens (elevated: N/W)
+ASTORIA_BBOX = (-73.928, 40.760, -73.912, 40.772)
+
+FEED_ZIP = REPO_ROOT / "data" / "gtfs" / "5.zip"
+GRAPH_CACHE = REPO_ROOT / "data" / "shapesnap" / "ny-nyc.rail.graph.pkl.gz"
+PBF = REPO_ROOT / "data" / "ny.osm.pbf"
+
+EXAM_ROUTES = {"1", "2", "3", "N", "Q", "R", "W"}
+# Q's top patterns hit the documented 96 St terminal fallback; asserted apart
+DENSE_ROUTES = EXAM_ROUTES - {"Q"}
+
+
+def _rail_graph():
+    if GRAPH_CACHE.exists():
+        try:
+            g = load_graph(GRAPH_CACHE)
+            if not is_stale(g):
+                return g
+        except Exception:
+            pass
+    if PBF.exists():
+        g = build_graph(PBF, "rail", bbox=NYC_BBOX)
+        save_graph(g, GRAPH_CACHE)
+        return g
+    return None
+
+
+@pytest.fixture(scope="module")
+def exam():
+    if not FEED_ZIP.exists():
+        pytest.skip("no data/gtfs/5.zip")
+    graph = _rail_graph()
+    if graph is None:
+        pytest.skip("no NYC pbf / rail graph cache")
+    mg = MatchGraph(graph)
+
+    t0 = time.perf_counter()
+    patterns = load_patterns(FEED_ZIP, route_ids=EXAM_ROUTES)
+    t_load = time.perf_counter() - t0
+
+    picked: dict = {}  # (route, direction) -> top pattern by trip count
+    for p in patterns:  # already sorted by -trip_count
+        picked.setdefault((p.route_id, p.direction_id), p)
+
+    cfg = MatchConfig()
+    results = {}
+    for key, p in sorted(picked.items()):
+        results[key] = (p, match_pattern(mg, p, cfg))
+    print(f"\n[exam] {len(patterns)} patterns loaded in {t_load:.1f}s; matched {len(results)}")
+    for (rid, d), (p, r) in results.items():
+        print(
+            f"[exam] {p.key} trips={p.trip_count} method={r.method} "
+            f"conf={r.confidence} breaks={r.stats['breaks']} "
+            f"tier={r.stats.get('relation_match_tier')} "
+            f"gates={r.gates.as_dict() if r.gates else None}"
+        )
+    return graph, mg, results
+
+
+def _layer(tags) -> int:
+    try:
+        return int(tags.get("layer", "0"))
+    except ValueError:
+        return 0
+
+
+def _is_subway(tags) -> bool:
+    return tags.get("tunnel") in ("yes", "building_passage") or _layer(tags) < 0
+
+
+def _is_elevated(tags) -> bool:
+    if _is_subway(tags):
+        return False
+    bridge = tags.get("bridge")
+    return (bridge is not None and bridge != "no") or _layer(tags) >= 1
+
+
+def _in_bbox(edge, bbox) -> bool:
+    minlon, minlat, maxlon, maxlat = bbox
+    return any(
+        minlon <= lon <= maxlon and minlat <= lat <= maxlat
+        for lon, lat in edge.geometry
+    )
+
+
+def _window_ways(graph, r, bbox) -> dict:
+    """way_id -> sorted relation refs, over edges the decode used in bbox."""
+    out: dict = {}
+    for i in r.edges_used:
+        e = graph.edges[i]
+        if _in_bbox(e, bbox):
+            out[e.way_id] = sorted({rr["ref"] for rr in e.route_refs if rr["ref"]})
+    return out
+
+
+def _route(results, rid):
+    return [(p, r) for (route, _d), (p, r) in results.items() if route == rid]
+
+
+def test_exam_patterns_match_dense(exam):
+    _, _, results = exam
+    assert {rid for (rid, _d) in results} == EXAM_ROUTES
+    for (rid, d), (p, r) in results.items():
+        if rid not in DENSE_ROUTES:
+            continue
+        assert r.method == "hmm_dense", (p.key, r.method, r.stats)
+        assert r.gates is not None and r.gates.passed, (p.key, r.gates.as_dict())
+        assert r.confidence > 0.3, (p.key, r.confidence)
+        # colour collapse pin: identity relation matching must be active
+        assert r.stats.get("relation_match_tier") == 2, (p.key, r.stats)
+
+
+def test_q_96st_terminal_fallback_is_the_documented_quirk(exam):
+    """Q's shape ends 103 m short of the 96 St stop (agency data); the
+    stop-snap gate must refuse — and nothing else may be wrong."""
+    _, _, results = exam
+    for p, r in _route(results, "Q"):
+        assert r.method == "fallback", (p.key, r.method)
+        g = r.gates.as_dict()
+        assert g["coverage"] > 0.99, (p.key, g)
+        assert g["frechet_m"] < 50, (p.key, g)
+        assert 100 < g["max_stop_dist_m"] < 110, (p.key, g)
+        assert len(g["failures"]) == 1 and "stop" in g["failures"][0], (p.key, g)
+
+
+def test_seventh_ave_express_local_separation(exam):
+    """66–72 St: 1 (local) and 3 (express) must ride disjoint ways; the
+    1 may only ride ways whose relations include the 1."""
+    graph, _, results = exam
+    local_ways: set = set()
+    express_ways: set = set()
+    for p, r in _route(results, "1"):
+        w = _window_ways(graph, r, SEVENTH_AVE_BBOX)
+        assert w, f"{p.key} must traverse the 66-72 St window"
+        print(f"[exam] 1 {p.key} 7th-Av ways: {w}")
+        for way, refs in w.items():
+            assert "1" in refs, (p.key, way, refs)
+        local_ways.update(w)
+    for rid in ("2", "3"):
+        for p, r in _route(results, rid):
+            w = _window_ways(graph, r, SEVENTH_AVE_BBOX)
+            assert w, f"{p.key} must traverse the 66-72 St window"
+            print(f"[exam] {rid} {p.key} 7th-Av ways: {w}")
+            for way, refs in w.items():
+                assert "1" not in refs, (p.key, way, refs)
+            express_ways.update(w)
+    assert not (local_ways & express_ways), (local_ways, express_ways)
+
+
+def test_broadway_express_local_separation(exam):
+    """Prince St–8 St: N (express; Q asserted via its decode too) rides
+    'N','Q' ways; R/W ride the local ways — disjoint sets."""
+    graph, _, results = exam
+    express_ways: set = set()
+    local_ways: set = set()
+    for rid in ("N", "Q"):
+        for p, r in _route(results, rid):
+            w = _window_ways(graph, r, BROADWAY_BBOX)
+            assert w, f"{p.key} must traverse the Broadway window"
+            print(f"[exam] {rid} {p.key} Broadway ways: {w}")
+            for way, refs in w.items():
+                assert "R" not in refs and "W" not in refs, (p.key, way, refs)
+            express_ways.update(w)
+    for rid in ("R", "W"):
+        for p, r in _route(results, rid):
+            w = _window_ways(graph, r, BROADWAY_BBOX)
+            assert w, f"{p.key} must traverse the Broadway window"
+            print(f"[exam] {rid} {p.key} Broadway ways: {w}")
+            for way, refs in w.items():
+                assert "R" in refs or "W" in refs, (p.key, way, refs)
+            local_ways.update(w)
+    assert not (express_ways & local_ways), (express_ways, local_ways)
+
+
+def test_vertical_sanity(exam):
+    """Manhattan trunk windows are tunnel-only; Astoria is elevated-only."""
+    graph, _, results = exam
+
+    def levels(r, bbox) -> Counter:
+        c: Counter = Counter()
+        for i in r.edges_used:
+            e = graph.edges[i]
+            if _in_bbox(e, bbox):
+                c["subway" if _is_subway(e.tags) else
+                  "elevated" if _is_elevated(e.tags) else "surface"] += 1
+        return c
+
+    for rid, bbox, label in (
+        ("1", SEVENTH_AVE_BBOX, "7th Av"), ("2", SEVENTH_AVE_BBOX, "7th Av"),
+        ("3", SEVENTH_AVE_BBOX, "7th Av"), ("N", BROADWAY_BBOX, "Broadway"),
+        ("Q", BROADWAY_BBOX, "Broadway"), ("R", BROADWAY_BBOX, "Broadway"),
+        ("W", BROADWAY_BBOX, "Broadway"),
+    ):
+        for p, r in _route(results, rid):
+            c = levels(r, bbox)
+            assert c and set(c) == {"subway"}, (p.key, label, dict(c))
+    for rid in ("N", "W"):
+        for p, r in _route(results, rid):
+            c = levels(r, ASTORIA_BBOX)
+            assert c and set(c) == {"elevated"}, (p.key, "Astoria", dict(c))
