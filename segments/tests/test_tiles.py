@@ -14,12 +14,17 @@ segments:
     render transitions as a constant continuation of the from-side ribbon),
   - clip fractions are in [0,1] with start < end,
   - the z11 transition zoom guard holds,
+  - ZOOM BANDS: every tile serves exactly ONE transition-length band — the
+    band whose min_zoom is the highest <= z (z15 -> the 60 m band, z14 ->
+    120 m, z13 -> 240 m, z12 and below -> the 480 m band); the served
+    transition lengths carry the band's signature ground length,
   - tile-seam continuity (the clip-fraction machinery's raison d'etre): a
     feature crossing a tile boundary maps the shared boundary point to the
     SAME feature fraction from both tiles (|delta| < 1e-4), so line-progress
     interpolation is continuous across the seam. Adjacent tiles quantise to
     the same global 4096 lattice, so both km-scale steady features and ~60 m
-    transitions hold the bound.
+    transitions hold the bound. Checked at z15 (60 m band) AND z12 (480 m
+    band) — the seam contract holds for every band a zoom can serve.
   - the Martin HTTP endpoint serves the same function (200, decodes, same
     feature ids as the direct call).
 
@@ -52,6 +57,9 @@ GAP_PX = 4.4
 WORLD = 2 * 20037508.342789244          # 3857 world width, metres
 LOOP_LON, LOOP_LAT = -87.6305, 41.8845  # Chicago Loop
 Z = 15
+TOP_BAND = 15                            # 60 m band (the default look)
+LOW_BAND, LOW_BAND_LEN = 0, 480.0        # served at z <= 12
+Z_LOW = 12
 
 STR_PROPS = ("kind", "feed_id", "route_ids", "route_short_names",
              "route_color", "route_text_color", "color_key")
@@ -158,10 +166,18 @@ def loop_features(loop_tiles):
 @pytest.fixture(scope="module")
 def db_rows(db):
     rows = db.execute(
-        "SELECT id, kind, color_key, offset_px, off_from_px, off_to_px, len_m"
-        " FROM transit_line_segments"
+        "SELECT id, kind, color_key, offset_px, off_from_px, off_to_px,"
+        " len_m, band_minzoom FROM transit_line_segments"
     ).fetchall()
     return {r[0]: r for r in rows}
+
+
+def bands_of(db, ids):
+    if not ids:
+        return set()
+    return {r[0] for r in db.execute(
+        "SELECT DISTINCT band_minzoom FROM transit_line_segments"
+        " WHERE id = ANY(%s)", (list(ids),)).fetchall()}
 
 
 # ---------------------------------------------------------------- contract
@@ -195,7 +211,7 @@ def test_offsets_match_db(loop_features, db_rows):
     for f in loop_features:
         p = f["properties"]
         row = db_rows[f["id"]]
-        _, kind, color_key, offset_px, off_from_px, off_to_px, _ = row
+        _, kind, color_key, offset_px, off_from_px, off_to_px, _, _ = row
         assert p["kind"] == kind and p["color_key"] == color_key
         if kind == "steady":
             assert p["offset_px"] == pytest.approx(offset_px, abs=1e-9)
@@ -230,6 +246,45 @@ def test_zoom_guard_no_transitions_below_z11(db):
     x11, y11 = tile_at(LOOP_LON, LOOP_LAT, 11)
     feats11 = tile_features(fetch_tile(db, 11, x11, y11))
     assert any(f["properties"]["kind"] == "transition" for f in feats11)
+    # both zooms sit in the low band's z-range
+    assert bands_of(db, [f["id"] for f in feats]) == {LOW_BAND}
+    assert bands_of(db, [f["id"] for f in feats11]) == {LOW_BAND}
+
+
+# ---------------------------------------------------------------- bands
+
+@pytest.mark.parametrize("z,want_band", [(12, 0), (13, 13), (14, 14),
+                                         (15, 15)])
+def test_exactly_one_band_per_tile(db, z, want_band):
+    """The band whose min_zoom is the highest <= z, and no other."""
+    x, y = tile_at(LOOP_LON, LOOP_LAT, z)
+    feats = tile_features(fetch_tile(db, z, x, y))
+    assert feats, f"empty tile at z{z}"
+    got = bands_of(db, [f["id"] for f in feats])
+    print(f"z{z} tile {x}/{y}: {len(feats)} features, band_minzoom {got}")
+    assert got == {want_band}, (z, got)
+
+
+def test_band_transition_lengths_match_band(db, db_rows):
+    """A z12 tile serves 480 m-band transitions (>= 0.4 x 480 m by the
+    C3 shrink floor), a z15 tile serves 60 m-band transitions (<= 1.1 x
+    60 m per site) — the served features really are the band's."""
+    x12, y12 = tile_at(LOOP_LON, LOOP_LAT, Z_LOW)
+    trs12 = [f for f in tile_features(fetch_tile(db, Z_LOW, x12, y12))
+             if f["properties"]["kind"] == "transition"]
+    assert trs12, "z12 Loop tile must carry transitions (480 m band)"
+    for f in trs12:
+        assert db_rows[f["id"]][7] == LOW_BAND
+        assert db_rows[f["id"]][6] >= 0.4 * LOW_BAND_LEN - 1e-6
+    x15, y15 = tile_at(LOOP_LON, LOOP_LAT, Z)
+    trs15 = [f for f in tile_features(fetch_tile(db, Z, x15, y15))
+             if f["properties"]["kind"] == "transition"]
+    assert trs15
+    for f in trs15:
+        assert db_rows[f["id"]][7] == TOP_BAND
+    print(f"z{Z_LOW}: {len(trs12)} transitions "
+          f"(min len {min(db_rows[f['id']][6] for f in trs12):.0f} m); "
+          f"z{Z}: {len(trs15)} transitions")
 
 
 # ---------------------------------------------------------------- seams
@@ -299,57 +354,76 @@ def _seam_progress_pair(db, fid, z):
     return progresses[0], progresses[1], axis, cval, tiles
 
 
-def _seam_candidates(db, kind):
+def _seam_candidates(db, kind, band):
     return [r[0] for r in db.execute(
         "SELECT id FROM transit_line_segments WHERE kind = %s"
-        " ORDER BY len_m DESC", (kind,)).fetchall()]
+        " AND band_minzoom = %s ORDER BY len_m DESC", (kind, band)).fetchall()]
 
 
-def test_seam_continuity_steady(db, db_rows):
-    """A steady feature crossing a z15 tile boundary: same fraction from both
-    sides within 1e-4."""
+@pytest.mark.parametrize("z,band", [(Z, TOP_BAND), (Z_LOW, LOW_BAND)])
+def test_seam_continuity_steady(db, db_rows, z, band):
+    """A steady feature crossing a tile boundary: same fraction from both
+    sides within 1e-4 — checked at z15 against the 60 m band AND at z12
+    against the 480 m band it actually serves. The fraction bound is
+    lattice-relative, so it carries across zooms: the measured deltas
+    stay orders of magnitude under it (crossing interpolation cancels
+    the shared-lattice quantisation)."""
     checked = 0
-    for fid in _seam_candidates(db, "steady"):
-        pair = _seam_progress_pair(db, fid, Z)
+    for fid in _seam_candidates(db, "steady", band):
+        pair = _seam_progress_pair(db, fid, z)
         if pair is None:
             continue
         pa, pb, axis, cval, tiles = pair
         delta = abs(pa - pb)
-        print(f"steady seam z{Z} id={fid} len={db_rows[fid][6]:.0f}m "
+        print(f"steady seam z{z} id={fid} len={db_rows[fid][6]:.0f}m "
               f"tiles={tiles} axis={'xy'[axis]} "
               f"pA={pa:.8f} pB={pb:.8f} |delta|={delta:.2e}")
         assert delta < 1e-4, (fid, pa, pb)
         checked += 1
         if checked >= 3:
             break
-    assert checked, "no steady feature crossing a z15 tile boundary found"
+    assert checked, f"no steady feature crossing a z{z} tile boundary found"
 
 
-def test_seam_continuity_transition(db, db_rows):
-    """A transition feature crossing a z15 tile boundary: same fraction from
-    both sides, asserted in GROUND metres (|delta| x len_m < 5 cm — the
-    physically meaningful seam error; a z15 pixel is ~3.6 m). Adjacent
-    tiles quantise to the SAME global 4096 lattice: Chicago's ~50-60 m
-    transitions measure exactly 0; NYC's dense-junction features measure
-    up to ~4.3 cm (fraction deltas up to 7.1e-4 on 60 m features) — 86%
-    of the bound, so watch the printout when adding cities. 5 cm is a
-    hard physical contract, not per-city calibration: it stays sub-pixel
-    at every zoom the client can serve (a z22 pixel is ~3.7 cm at NYC
-    latitude), so a city exceeding it has a quantisation defect to fix,
-    never a bound to loosen."""
+@pytest.mark.parametrize("z,band,ground_cap_m", [
+    (Z, TOP_BAND, 0.05),
+    # the 480 m band serves z <= 12 only; the tightest pixel it can
+    # ever render at is ~28.6 m (z12), so the sub-pixel seam contract
+    # scales: 1.0 m is 3.5% of that pixel. Measured NYC deltas on the
+    # km-scale merged chains reach ~47 cm (5e-4 fractions on the 8x
+    # coarser z12 lattice) — half the bound; watch the printout when
+    # adding cities.
+    (Z_LOW, LOW_BAND, 1.00),
+])
+def test_seam_continuity_transition(db, db_rows, z, band, ground_cap_m):
+    """A transition feature crossing a tile boundary: same fraction from
+    both sides, asserted in GROUND metres (|delta| x len_m — the
+    physically meaningful seam error). Adjacent tiles quantise to the
+    SAME global 4096 lattice: Chicago's ~50-60 m transitions measure
+    exactly 0 at z15; NYC's dense-junction features measure up to
+    ~4.3 cm (fraction deltas up to 7.1e-4 on 60 m features) — 86% of
+    the top band's 5 cm bound, so watch the printout when adding
+    cities. 5 cm is a hard physical contract for the z15 band (it
+    stays sub-pixel at every zoom that band serves, up to z22 where a
+    pixel is ~3.7 cm at NYC latitude); the 480 m band's bound scales
+    with its own coarsest lattice (z12) while staying far sub-pixel."""
     checked = 0
-    for fid in _seam_candidates(db, "transition"):
-        pair = _seam_progress_pair(db, fid, Z)
+    for fid in _seam_candidates(db, "transition", band):
+        pair = _seam_progress_pair(db, fid, z)
         if pair is None:
             continue
         pa, pb, axis, cval, tiles = pair
         delta = abs(pa - pb)
-        print(f"transition seam z{Z} id={fid} len={db_rows[fid][6]:.0f}m "
+        print(f"transition seam z{z} id={fid} len={db_rows[fid][6]:.0f}m "
               f"tiles={tiles} axis={'xy'[axis]} "
-              f"pA={pa:.8f} pB={pb:.8f} |delta|={delta:.2e}")
-        assert delta * db_rows[fid][6] < 0.05, (fid, pa, pb)
+              f"pA={pa:.8f} pB={pb:.8f} |delta|={delta:.2e} "
+              f"ground={delta * db_rows[fid][6] * 100:.2f}cm")
+        assert delta * db_rows[fid][6] < ground_cap_m, (fid, pa, pb)
         checked += 1
-    assert checked, "no transition feature crossing a z15 tile boundary found"
+        if checked >= 40:
+            break
+    assert checked, \
+        f"no transition feature crossing a z{z} tile boundary found"
 
 
 # ---------------------------------------------------------------- martin

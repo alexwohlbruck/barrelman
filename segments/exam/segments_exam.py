@@ -21,11 +21,14 @@ the v2 attempt, plus the receipts:
      steady features whose shared endpoint is a listed site node in
      both .sites and whose corridors both terminate there — no through
      pairing); every feature end is then ACCOUNTED for: shared with
-     another same-ribbon end, or sitting on one of the ribbon's genuine
-     termini (degree-1 nodes of its corridor subgraph), every terminus
-     occupied — a dropped or mislocated transition orphans an end
-     mid-ribbon and fails, closing the gap pairwise matching alone
-     would miss
+     another same-ribbon end, sitting on one of the ribbon's genuine
+     termini (degree-1 nodes of its corridor subgraph, every terminus
+     occupied), or — long bands only in practice — resting ON a
+     same-ribbon feature's interior (a branch-divergence twin whose
+     shared endpoint a consumed-corridor merge swallowed into the
+     through-chain); a dropped or mislocated transition orphans an end
+     mid-ribbon over NOTHING and fails, closing the gap pairwise
+     matching alone would miss
   2  C3 — every transition's ground length within [0.4, 1.1] x
      transition_len_m (short-corridor shrink allowed at the low end,
      nothing longer); vertex spacing <= densify_step_m on transitions
@@ -38,12 +41,13 @@ the v2 attempt, plus the receipts:
      corner excluded); worst case reported; no self-intersections
      (ST_IsSimple over every emitted row)
   4  coverage — per ribbon (colour), steady+transition lengths cover
-     the ribbon's corridors within 1%; no geometric overlap > 1 m
-     between features of a ribbon except the branch-divergence tail
-     shared by two site-anchored features pairing the SAME corridor
-     end at the same site (kind-agnostic — a straight equal-offset
-     twin skip-classifies to steady; reported, capped at
-     transition_len_m / 2)
+     the ribbon's corridors within 1% NET of legitimately shared
+     divergence tails; no geometric overlap > 1 m between features of
+     a ribbon except the branch-divergence tail shared by two
+     site-anchored features at the same site (kind-agnostic — a
+     straight equal-offset twin skip-classifies to steady; reported,
+     capped at transition_len_m / 2; the shared typed end is not
+     required — long-band merges relocate it into a chain interior)
   5  receipt — per-Loop-leg feature table (kind, routes, slot/count,
      offsets) for Lake / Wabash / Van Buren / Wells + the interior
      subways, plus every Loop-window transition with its ramp
@@ -59,6 +63,16 @@ another build; the Chicago-specific assertions (check 1's 18-site
 inventory, check 3's absolute clamp cap, check 5's Loop receipt) only
 run for the default build (check 3 uses a proportional 30% clamp cap on
 other builds — refit-collapsed crossing rungs clamp by design).
+
+Zoom bands: checks 0-4 run once per SegmentConfig.bands entry (each band
+is a complete feature set with its own transition length; the emitted
+rows are validated band by band against a fresh rebuild at that length).
+`--band <minzoom>` restricts to one band. The Chicago-verbatim bounds
+(check 2's single-site length bound, check 3's absolute clamp cap) apply
+only to the DEFAULT band (z15 / 60 m) — longer bands consume short
+corridors and merge transitions far more often BY DESIGN, so they use
+the site-count length bound and the proportional clamp cap everywhere.
+Check 5's receipt reads the default band.
 """
 
 from __future__ import annotations
@@ -66,17 +80,20 @@ from __future__ import annotations
 import math
 import sys
 from collections import defaultdict
+from dataclasses import replace
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from segments.corridors import DEFAULT_DSN, load_graph, walk_corridors  # noqa: E402
 from segments.segment import (LocalProj, SegmentConfig, _circumradius,  # noqa: E402
-                              build_segments, transition_sites)
+                              band_ranges, build_segments,
+                              transition_sites)
 
 BUILD = "chicago:l-v3"      # default; overridden by --build-key in main()
 CHICAGO_BUILD = "chicago:l-v3"
 CFG = SegmentConfig()
+DEFAULT_BAND = max(mz for mz, _ in CFG.bands)   # the z15 / 60 m band
 
 # same Loop window as the stage-4/5 exams
 LOOP_WINDOW = (-87.6355, 41.8755, -87.6245, 41.8875)
@@ -94,12 +111,13 @@ ENDPOINT_TOL_M = 0.5
 OFFSET_TOL_PX = 1e-9
 
 FAILURES: list[str] = []
+BAND_TAG = ""       # set by main()'s band loop for failure attribution
 
 
 def report(check: str, ok: bool, detail: str = "") -> None:
     print(f"  -> {'PASS' if ok else 'FAIL'}{': ' + detail if detail else ''}")
     if not ok:
-        FAILURES.append(f"{check}: {detail}")
+        FAILURES.append(f"{BAND_TAG}{check}: {detail}")
 
 
 def in_window(lon: float, lat: float, box=LOOP_WINDOW) -> bool:
@@ -109,20 +127,23 @@ def in_window(lon: float, lat: float, box=LOOP_WINDOW) -> bool:
 
 # ------------------------------------------------------------- rebuild
 
-def rebuild():
+def load_inputs():
     from segments.build import load_shapes
     g = load_graph(BUILD, DEFAULT_DSN)
     shapes = load_shapes(g, DEFAULT_DSN)
-    segments, info = build_segments(g, CFG, shapes=shapes)
     lon0 = sum(n.lon for n in g.nodes.values()) / len(g.nodes)
     lat0 = sum(n.lat for n in g.nodes.values()) / len(g.nodes)
-    proj = LocalProj(lon0, lat0)
+    return g, shapes, LocalProj(lon0, lat0)
+
+
+def rebuild_band(g, shapes, proj, cfg):
+    segments, info = build_segments(g, cfg, shapes=shapes)
     for s in segments:
         s.xy = proj.to_xy(s.coords)
-    return g, proj, segments, info
+    return segments, info
 
 
-def check0_db_matches_rebuild(segments):
+def check0_db_matches_rebuild(segments, band_minzoom):
     print("\nCHECK 0 — emitted rows equal a fresh deterministic rebuild")
     import psycopg
 
@@ -132,8 +153,9 @@ def check0_db_matches_rebuild(segments):
                       off_from_px, off_to_px, len_m, ST_NPoints(geom),
                       ST_X(ST_StartPoint(geom)), ST_Y(ST_StartPoint(geom)),
                       ST_X(ST_EndPoint(geom)), ST_Y(ST_EndPoint(geom))
-               FROM transit_line_segments WHERE build_key = %s
-               ORDER BY seg_id""", (BUILD,))
+               FROM transit_line_segments
+               WHERE build_key = %s AND band_minzoom = %s
+               ORDER BY seg_id""", (BUILD, band_minzoom))
         db = {r[0]: r[1:] for r in cur.fetchall()}
 
     mism = []
@@ -196,7 +218,8 @@ def lineorder_site_coords():
     return out
 
 
-def check1_c1_contract(g, proj, segments, chicago: bool = True):
+def check1_c1_contract(g, proj, segments, chicago: bool = True,
+                       cfg: SegmentConfig = CFG, site_checks: bool = True):
     print("\nCHECK 1 — C1: offsets transition only at the known sites")
     sites = transition_sites(g)
     site_coords = {(round(g.nodes[nid].lon, 7), round(g.nodes[nid].lat, 7)):
@@ -207,23 +230,24 @@ def check1_c1_contract(g, proj, segments, chicago: bool = True):
               if k == "composition"]
     print(f"  {len(sites)} transition sites: {n_junc} junctions, "
           f"{n_comp} deg-2 composition changes {howard}")
-    if chicago:
+    if chicago and site_checks:
         report("check1.site-inventory",
                len(sites) == 18 and n_junc == 17 and howard == ["Howard"],
                f"expected 18 sites (17 junctions + Howard), got {len(sites)} "
                f"({n_junc} junctions, composition at {howard})")
 
-    lo_sites = lineorder_site_coords()
-    only_seg = sorted(set(site_coords) - set(lo_sites))
-    only_lo = sorted(set(lo_sites) - set(site_coords))
-    kind_diff = [c for c in site_coords
-                 if c in lo_sites and lo_sites[c] != site_coords[c]]
-    report("check1.lineorder-cross-check",
-           not only_seg and not only_lo and not kind_diff,
-           f"site lists agree coordinate-for-coordinate "
-           f"({len(lo_sites)} lineorder vs {len(site_coords)} segments; "
-           f"{len(only_seg)}/{len(only_lo)} one-sided, "
-           f"{len(kind_diff)} kind mismatches)")
+    if site_checks:  # band-independent (graph-derived): run once
+        lo_sites = lineorder_site_coords()
+        only_seg = sorted(set(site_coords) - set(lo_sites))
+        only_lo = sorted(set(lo_sites) - set(site_coords))
+        kind_diff = [c for c in site_coords
+                     if c in lo_sites and lo_sites[c] != site_coords[c]]
+        report("check1.lineorder-cross-check",
+               not only_seg and not only_lo and not kind_diff,
+               f"site lists agree coordinate-for-coordinate "
+               f"({len(lo_sites)} lineorder vs {len(site_coords)} segments; "
+               f"{len(only_seg)}/{len(only_lo)} one-sided, "
+               f"{len(kind_diff)} kind mismatches)")
 
     # every transition feature is anchored to listed sites only
     bad_anchor = [s.seg_id for s in segments if s.kind == "transition"
@@ -254,7 +278,7 @@ def check1_c1_contract(g, proj, segments, chicago: bool = True):
     # (b) end-to-end accounting: pairwise endpoint matching alone would
     # stay silent if a whole transition were dropped or mislocated (the
     # v2 failure class), because a gap has NO shared endpoints
-    corridors = walk_corridors(g, CFG.gap_px)
+    corridors = walk_corridors(g, cfg.gap_px)
     cor_by_id = {c.cid: c for c in corridors}
     node_xy = {nid: proj.to_xy([(n.lon, n.lat)])[0]
                for nid, n in g.nodes.items()}
@@ -342,8 +366,20 @@ def check1_c1_contract(g, proj, segments, chicago: bool = True):
     # another same-ribbon feature end or sits at one of the ribbon's
     # genuine termini (degree-1 nodes of its corridor subgraph), and
     # every expected terminus is occupied — a dropped or mislocated
-    # feature leaves an orphan end mid-ribbon and fails here
-    n_unmatched = 0
+    # feature leaves an orphan end mid-ribbon and fails here.
+    # Long bands add one legitimate case: a branch-divergence twin's
+    # shared endpoint can be swallowed INTO the other chain's interior
+    # by a consumed-corridor merge (Tower 18 at 480 m: Pink's enter and
+    # exit movements share the branch tail; the through-chain merges
+    # over the split point the twin still starts at). Such an end lies
+    # ON a same-ribbon feature's interior (<= tol) — a genuinely
+    # dropped transition instead leaves a coverage gap with NO feature
+    # under the orphan end (and fails check4's coverage too).
+    from shapely.geometry import LineString as _LS
+    from shapely.geometry import Point as _Pt
+    geoms_by_ck = {ck: [(s.seg_id, _LS(s.xy)) for s in by_ck[ck]]
+                   for ck in by_ck}
+    n_unmatched = n_interior = 0
     bad_ends = []
     seen_term: dict = defaultdict(set)
     for ck in sorted(by_ck):
@@ -357,6 +393,10 @@ def check1_c1_contract(g, proj, segments, chicago: bool = True):
                         if math.dist(pt, node_xy[nid]) <= ENDPOINT_TOL_M]
                 if hits:
                     seen_term[ck].update(hits)
+                elif any(sid != s.seg_id
+                         and ls.distance(_Pt(pt)) <= ENDPOINT_TOL_M
+                         for sid, ls in geoms_by_ck[ck]):
+                    n_interior += 1  # merge-relocated divergence tail
                 else:
                     bad_ends.append((ck, s.seg_id,
                                      "start" if at_start else "end"))
@@ -367,29 +407,35 @@ def check1_c1_contract(g, proj, segments, chicago: bool = True):
     term_labels = sorted(g.nodes[n].label or str(n)
                          for ck in expected_term for n in expected_term[ck])
     print(f"  {n_unmatched} unshared feature ends over {n_expected} "
-          f"expected ribbon termini: {term_labels}")
+          f"expected ribbon termini ({n_interior} merge-relocated "
+          f"divergence tails on same-ribbon interiors): {term_labels}")
     report("check1.ends-accounted",
-           not bad_ends and not vacant and n_unmatched == n_expected,
+           not bad_ends and not vacant
+           and n_unmatched == n_expected + n_interior,
            f"{len(bad_ends)} orphan ends off-terminus {bad_ends[:6]}; "
            f"vacant termini {vacant}")
 
 
 # ----------------------------------------------------------- C3: lengths
 
-def check2_c3_contract(segments, chicago: bool = True):
+def check2_c3_contract(segments, chicago: bool = True,
+                       cfg: SegmentConfig = CFG,
+                       default_band: bool = True):
     print("\nCHECK 2 — C3: fixed ground length + densification")
     # short-corridor shrink is allowed by the contract; 0.4x is the
     # calibrated floor for every build (the NYC Bowling Green cluster
     # that briefly needed 0.3 was a skeleton artifact, since fixed at
     # the raster by sliver-hole filling — NYC now bottoms out at 0.61x)
-    lo = 0.4 * CFG.transition_len_m
-    hi = 1.1 * CFG.transition_len_m
+    lo = 0.4 * cfg.transition_len_m
+    hi = 1.1 * cfg.transition_len_m
 
     def hi_for(t):
         # a consumed-corridor merge chains k transition sites into one
         # feature (len ~= k x transition_len); the single-site bound is
-        # kept verbatim for the chicago build (no long merges there)
-        if chicago:
+        # kept verbatim only for chicago's DEFAULT band (no long merges
+        # there) — longer bands consume short corridors and merge far
+        # more often by design, on every build
+        if chicago and default_band:
             return hi
         return hi * max(1, len(set(t.sites)))
 
@@ -402,23 +448,25 @@ def check2_c3_contract(segments, chicago: bool = True):
           f"(bounds [{lo:.0f}, {hi:.0f}] x distinct sites)")
     report("check2.fixed-ground-length", not bad_len,
            f"{len(bad_len)} transitions outside [0.4, 1.1] x "
-           f"{CFG.transition_len_m:.0f} m (x site count): {bad_len[:6]}")
+           f"{cfg.transition_len_m:.0f} m (x site count): {bad_len[:6]}")
 
     worst = 0.0
     bad_sp = []
     for t in trs:
         sp = max(math.dist(a, b) for a, b in zip(t.xy, t.xy[1:]))
         worst = max(worst, sp)
-        if sp > CFG.densify_step_m + 1e-6:
+        if sp > cfg.densify_step_m + 1e-6:
             bad_sp.append((t.seg_id, round(sp, 2)))
     report("check2.vertex-spacing", not bad_sp,
            f"max transition vertex spacing {worst:.2f} m "
-           f"(limit {CFG.densify_step_m} m); {len(bad_sp)} over")
+           f"(limit {cfg.densify_step_m} m); {len(bad_sp)} over")
 
 
 # ------------------------------------------------------------- fillets
 
-def check3_fillets(segments, proj, chicago: bool = True):
+def check3_fillets(segments, proj, chicago: bool = True,
+                   cfg: SegmentConfig = CFG, band_minzoom: int = DEFAULT_BAND,
+                   default_band: bool = True):
     print("\nCHECK 3 — fillet curvature + self-intersections")
     import json
 
@@ -432,7 +480,9 @@ def check3_fillets(segments, proj, chicago: bool = True):
     with psycopg.connect(DEFAULT_DSN) as conn, conn.cursor() as cur:
         cur.execute(
             """SELECT seg_id, ST_AsGeoJSON(geom, 15)
-               FROM transit_line_segments WHERE build_key = %s""", (BUILD,))
+               FROM transit_line_segments
+               WHERE build_key = %s AND band_minzoom = %s""",
+            (BUILD, band_minzoom))
         db_xy = {r[0]: proj.to_xy(json.loads(r[1])["coordinates"])
                  for r in cur.fetchall()}
 
@@ -443,7 +493,14 @@ def check3_fillets(segments, proj, chicago: bool = True):
     worst = (inf, None)  # (measured / target ratio, detail)
     trs = [s for s in segments if s.kind == "transition"]
     for t in trs:
-        target = t.line_count * CFG.gap_px * CFG.fillet_radius_factor
+        # the target each corner was BUILT to (recorded at pair time,
+        # min across merged corners): a merged chain's line_count is
+        # the bigger end's bundle, but an interior corner in a
+        # 1-ribbon stretch was legitimately filleted at the smaller
+        # local target (NYC z14 seg 564: 11 m corner inside an
+        # line_count-2 chain)
+        target = (t.fillet_target_m if t.fillet_target_m is not None
+                  else t.line_count * cfg.gap_px * cfg.fillet_radius_factor)
         raw = t.raw_min_radius_m if t.raw_min_radius_m is not None else inf
         ach = t.fillet_radius_m if t.fillet_radius_m is not None else inf
         xy = db_xy.get(t.seg_id)
@@ -472,21 +529,30 @@ def check3_fillets(segments, proj, chicago: bool = True):
     report("check3.min-radius", not bad and not missing,
            f"{len(bad)} transitions under their curvature floor: "
            f"{bad[:6]}; {len(missing)} missing from DB")
-    # non-chicago cap 0.3: the linegraph refit collapses plan-view X
-    # crossings to near-point rungs (true crossing geometry), and every
-    # such consumed corridor's transitions clamp by design — the safety
-    # contract stays check3.min-radius, which measures the emitted
-    # curvature floor unconditionally
-    clamp_cap = 10 if chicago else math.ceil(0.3 * len(trs))
+    # non-chicago / non-default-band cap 0.3: the linegraph refit
+    # collapses plan-view X crossings to near-point rungs (true crossing
+    # geometry), and every such consumed corridor's transitions clamp by
+    # design; longer bands additionally consume/merge short corridors far
+    # more often — the safety contract stays check3.min-radius, which
+    # measures the emitted curvature floor unconditionally.
+    # Full-target aggregate: 75% on the default band; 60% on longer
+    # bands — a 240/480 m window sweeps far more inherited track
+    # curvature (recorded raw floors, each still floor-checked above),
+    # so fewer chains can meet the FULL fillet target (chicago z0:
+    # 21/29 = 72% purely from Loop-leg track curvature, 0 clamps).
+    clamp_cap = (10 if chicago and default_band
+                 else math.ceil(0.3 * len(trs)))
+    target_frac = 0.75 if default_band else 0.6
     report("check3.clamping-is-exceptional",
-           n_clamped <= clamp_cap and n_target >= 0.75 * len(trs),
+           n_clamped <= clamp_cap and n_target >= target_frac * len(trs),
            f"{n_clamped} clamped (<={clamp_cap}), {n_target}/{len(trs)} "
-           f"at full target (>=75%)")
+           f"at full target (>={target_frac:.0%})")
 
     with psycopg.connect(DEFAULT_DSN) as conn, conn.cursor() as cur:
         cur.execute(
             """SELECT seg_id FROM transit_line_segments
-               WHERE build_key = %s AND NOT ST_IsSimple(geom)""", (BUILD,))
+               WHERE build_key = %s AND band_minzoom = %s
+                 AND NOT ST_IsSimple(geom)""", (BUILD, band_minzoom))
         not_simple = [r[0] for r in cur.fetchall()]
     report("check3.st-issimple", not not_simple,
            f"{len(not_simple)} self-intersecting features: "
@@ -495,33 +561,16 @@ def check3_fillets(segments, proj, chicago: bool = True):
 
 # ------------------------------------------------------------- coverage
 
-def check4_coverage(g, proj, segments):
+def check4_coverage(g, proj, segments, cfg: SegmentConfig = CFG):
     print("\nCHECK 4 — per-ribbon coverage + overlaps")
-    corridors = walk_corridors(g, CFG.gap_px)
-    cor_sum: dict = defaultdict(float)
-    for c in corridors:
-        xy = proj.to_xy(c.coords)
-        length = sum(math.dist(a, b) for a, b in zip(xy, xy[1:]))
-        for r in c.ribbons:
-            cor_sum[r.color_key] += length
-    seg_sum: dict = defaultdict(float)
-    for s in segments:
-        seg_sum[s.color_key] += s.len_m
-    bad_cov = []
-    for ck in sorted(cor_sum):
-        ratio = seg_sum[ck] / cor_sum[ck]
-        print(f"  {ck}: corridors {cor_sum[ck] / 1000:7.2f} km, "
-              f"features {seg_sum[ck] / 1000:7.2f} km, ratio {ratio:.4f}")
-        if not (0.99 <= ratio <= 1.01):
-            bad_cov.append((ck, round(ratio, 4)))
-    report("check4.coverage-within-1pct", not bad_cov,
-           f"{len(bad_cov)} ribbons outside [0.99, 1.01]: {bad_cov}")
-
     from shapely.geometry import LineString
+
     by_ck = defaultdict(list)
     for s in segments:
         by_ck[s.color_key].append(s)
+    BUF_M = 3.0  # fillets separate the twins' geometries by a few metres
     n_allowed = 0
+    allowed_ov: dict = defaultdict(float)
     bad_ov = []
     for ck in sorted(by_ck):
         feats = by_ck[ck]
@@ -533,28 +582,74 @@ def check4_coverage(g, proj, segments):
                 ov = getattr(inter, "length", 0.0)
                 if ov <= 1.0:
                     continue
-                shared_end = ({a.in_end, a.out_end}
-                              & {b.in_end, b.out_end}) - {None}
+                shared_site = set(a.sites or ()) & set(b.sites or ())
                 # kind-agnostic on purpose: a divergence twin whose
                 # offsets are equal and whose (refit-straightened)
                 # geometry is straight gets skip-classified to steady,
                 # but it still shares the trunk tail legitimately —
-                # site anchoring + a shared typed end + the half-
-                # transition bound identify the divergence structure
-                # either way (corridor steadies carry neither)
-                branch = (set(a.sites or ()) & set(b.sites or ())
-                          and shared_end
-                          and ov <= CFG.transition_len_m / 2 + 1e-6)
+                # site anchoring + the half-transition bound identify
+                # the divergence structure (corridor steadies carry no
+                # sites). A shared typed (cid, side) end is NOT
+                # required: consumed-corridor merges swallow the twins'
+                # shared endpoint into a chain interior on long bands
+                # (Tower 18 at 480 m), leaving the shared site as the
+                # divergence witness.
+                branch = (shared_site
+                          and ov <= cfg.transition_len_m / 2 + 1e-6)
                 if branch:
+                    # the genuinely double-drawn length is measured by
+                    # BUF_M proximity, not vertex-exact intersection —
+                    # corner fillets pull the twins a few metres apart
+                    # over most of the shared tail (Pink at 480 m:
+                    # 21.6 m exact vs 208.3 m within 3 m; the ribbon's
+                    # gross length excess was 201 m); the coverage
+                    # bound below subtracts it
+                    ov_buf = min(geoms[i].intersection(
+                        geoms[j].buffer(BUF_M)).length,
+                        cfg.transition_len_m / 2 + 2 * BUF_M)
                     n_allowed += 1
+                    allowed_ov[ck] += ov_buf
                     print(f"  branch tail reuse: {ck} segs "
-                          f"{a.seg_id}/{b.seg_id} share {ov:.1f} m at "
-                          f"site {set(a.sites) & set(b.sites)}")
+                          f"{a.seg_id}/{b.seg_id} share {ov_buf:.1f} m "
+                          f"(exact {ov:.1f}) at site "
+                          f"{set(a.sites) & set(b.sites)}")
                 else:
                     bad_ov.append((ck, a.seg_id, b.seg_id, round(ov, 1)))
     report("check4.no-unexplained-overlaps", not bad_ov,
            f"{len(bad_ov)} overlaps > 1 m outside branch-divergence "
            f"tails ({n_allowed} allowed): {bad_ov[:6]}")
+
+    # coverage, net of the legitimately double-covered divergence
+    # tails: those stretches are REAL drawn geometry on two features of
+    # the ribbon, so gross feature length exceeds corridor length by
+    # exactly the allowed overlap (60 m band: ~30 m on 28 km, invisible
+    # in the 1% slack; 480 m band: up to 240 m per divergence site —
+    # subtract it so the bound keeps catching genuine over/under
+    # coverage at every band)
+    corridors = walk_corridors(g, cfg.gap_px)
+    cor_sum: dict = defaultdict(float)
+    for c in corridors:
+        xy = proj.to_xy(c.coords)
+        length = sum(math.dist(a, b) for a, b in zip(xy, xy[1:]))
+        for r in c.ribbons:
+            cor_sum[r.color_key] += length
+    seg_sum: dict = defaultdict(float)
+    for s in segments:
+        seg_sum[s.color_key] += s.len_m
+    bad_cov = []
+    for ck in sorted(cor_sum):
+        ratio = (seg_sum[ck] - allowed_ov[ck]) / cor_sum[ck]
+        note = (f" (gross {seg_sum[ck] / cor_sum[ck]:.4f} - "
+                f"{allowed_ov[ck]:.0f} m shared tails)"
+                if allowed_ov[ck] > 0 else "")
+        print(f"  {ck}: corridors {cor_sum[ck] / 1000:7.2f} km, "
+              f"features {seg_sum[ck] / 1000:7.2f} km, "
+              f"ratio {ratio:.4f}{note}")
+        if not (0.99 <= ratio <= 1.01):
+            bad_cov.append((ck, round(ratio, 4)))
+    report("check4.coverage-within-1pct", not bad_cov,
+           f"{len(bad_cov)} ribbons outside [0.99, 1.01] net of allowed "
+           f"tails: {bad_cov}")
 
 
 # -------------------------------------------------------------- receipt
@@ -623,24 +718,53 @@ def main() -> int:
     global BUILD
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--build-key", default=CHICAGO_BUILD)
+    ap.add_argument("--band", type=int, default=None, metavar="MINZOOM",
+                    help="validate only the band with this min_zoom "
+                         "(default: every band)")
     args = ap.parse_args()
     BUILD = args.build_key
     chicago = BUILD == CHICAGO_BUILD
 
-    print(f"segments acceptance exam — build {BUILD}\ndsn {DEFAULT_DSN}")
-    g, proj, segments, info = rebuild()
-    print(f"rebuilt {len(segments)} features "
-          f"({sum(1 for s in segments if s.kind == 'steady')} steady, "
-          f"{sum(1 for s in segments if s.kind == 'transition')} "
-          f"transition) from {len(g.edges)} edges")
+    bands = band_ranges(CFG.bands)
+    if args.band is not None:
+        bands = [b for b in bands if b[0] == args.band]
+        if not bands:
+            ap.error(f"no band with min_zoom {args.band} in {CFG.bands}")
 
-    check0_db_matches_rebuild(segments)
-    check1_c1_contract(g, proj, segments, chicago)
-    check2_c3_contract(segments, chicago)
-    check3_fillets(segments, proj, chicago)
-    check4_coverage(g, proj, segments)
-    if chicago:
-        check5_loop_receipt(segments)
+    print(f"segments acceptance exam — build {BUILD}\ndsn {DEFAULT_DSN}")
+    g, shapes, proj = load_inputs()
+    site_checks = True
+    default_segments = None
+    global BAND_TAG
+    for band_minzoom, band_maxzoom, length in bands:
+        bcfg = replace(CFG, transition_len_m=length)
+        default_band = band_minzoom == DEFAULT_BAND
+        BAND_TAG = f"band z{band_minzoom}: "
+        print(f"\n{'#' * 64}\nBAND z{band_minzoom}..{band_maxzoom} — "
+              f"transition {length:.0f} m"
+              + (" (default band)" if default_band else ""))
+        segments, info = rebuild_band(g, shapes, proj, bcfg)
+        print(f"rebuilt {len(segments)} features "
+              f"({sum(1 for s in segments if s.kind == 'steady')} steady, "
+              f"{sum(1 for s in segments if s.kind == 'transition')} "
+              f"transition) from {len(g.edges)} edges")
+        if default_band:
+            default_segments = segments
+
+        check0_db_matches_rebuild(segments, band_minzoom)
+        check1_c1_contract(g, proj, segments, chicago, bcfg, site_checks)
+        site_checks = False
+        check2_c3_contract(segments, chicago, bcfg, default_band)
+        check3_fillets(segments, proj, chicago, bcfg, band_minzoom,
+                       default_band)
+        check4_coverage(g, proj, segments, bcfg)
+
+    BAND_TAG = f"band z{DEFAULT_BAND}: "
+    if chicago and default_segments is not None:
+        check5_loop_receipt(default_segments)
+    elif chicago:
+        print(f"\nCHECK 5 — skipped (default band z{DEFAULT_BAND} not in "
+              f"the selected band set)")
     else:
         print(f"\nCHECK 5 — skipped (Loop receipt is chicago-only; "
               f"build {BUILD})")

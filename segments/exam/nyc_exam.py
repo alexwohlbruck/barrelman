@@ -56,6 +56,10 @@ from segments.segment import (LocalProj, SegmentConfig,    # noqa: E402
 
 BUILD = "nyc:subway-v3"
 CFG = SegmentConfig()
+# receipts run against the z15 band (the default transition length);
+# the in-memory rebuild below uses CFG.transition_len_m which IS that
+# band's length, and the emitted-row queries filter band_minzoom to it
+DEFAULT_BAND = max(mz for mz, _ in CFG.bands)
 
 # Broadway trunk window, Times Sq (-73.987, 40.755) -> Canal St
 # (-74.001, 40.719), padded to hold the full corridor
@@ -305,9 +309,9 @@ def check3_dekalb(g, proj, segments):
         cur.execute(
             """SELECT seg_id, ST_AsGeoJSON(geom, 15), ST_IsSimple(geom)
                FROM transit_line_segments
-               WHERE build_key = %s
+               WHERE build_key = %s AND band_minzoom = %s
                  AND geom && ST_MakeEnvelope(%s,%s,%s,%s,4326)""",
-            (BUILD, w, s_, e, n))
+            (BUILD, DEFAULT_BAND, w, s_, e, n))
         rows = {r[0]: (r[1], r[2]) for r in cur.fetchall()}
     not_simple = [sid for sid, (_, simple) in rows.items() if not simple]
     report("check3.no-self-intersections", not not_simple,
@@ -325,7 +329,8 @@ def check3_dekalb(g, proj, segments):
         measured = min((_circumradius(a, b, c)
                         for a, b, c in zip(xy, xy[1:], xy[2:])),
                        default=inf)
-        target = t.line_count * CFG.gap_px * CFG.fillet_radius_factor
+        target = (t.fillet_target_m if t.fillet_target_m is not None
+                  else t.line_count * CFG.gap_px * CFG.fillet_radius_factor)
         raw = t.raw_min_radius_m if t.raw_min_radius_m is not None else inf
         ach = t.fillet_radius_m if t.fillet_radius_m is not None else inf
         floor = min(ach, raw) if t.fillet_clamped else min(target, raw)

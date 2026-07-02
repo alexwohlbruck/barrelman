@@ -41,17 +41,32 @@ CFG = SegmentConfig()
 
 @pytest.fixture(scope="module")
 def built():
+    """Build every zoom band and emit them all (the CLI's exact rows);
+    the in-memory assertions run on the DEFAULT (z15 / 60 m) band."""
     psycopg = pytest.importorskip("psycopg")
+    from dataclasses import replace
+
     from segments.build import load_shapes
     from segments.emit import emit_segments
+    from segments.segment import band_ranges
     try:
         g = load_graph(BUILD_KEY, DSN)
     except psycopg.OperationalError as err:
         pytest.skip(f"dev DB unreachable: {err}")
     shapes = load_shapes(g, DSN)
-    segments, info = build_segments(g, CFG, shapes=shapes)
-    n = emit_segments(segments, build_key=BUILD_KEY, dsn=DSN)
-    return g, segments, info, n
+    band_segments = []
+    segments = info = None
+    for mz, mxz, length in band_ranges(CFG.bands):
+        segs, binfo = build_segments(
+            g, replace(CFG, transition_len_m=length), shapes=shapes)
+        band_segments.append((mz, mxz, segs))
+        if length == CFG.transition_len_m:
+            segments, info = segs, binfo
+    assert segments is not None, "default transition length must be a band"
+    n = emit_segments(band_segments, build_key=BUILD_KEY, dsn=DSN)
+    n_default = len(band_segments[0][2])
+    assert n == sum(len(s) for _, _, s in band_segments)
+    return g, segments, info, n_default
 
 
 def test_transition_sites(built):
@@ -104,9 +119,16 @@ def test_transitions_meet_steady_with_exact_offsets(built):
 
 def test_steady_composition_constant_query(built):
     """Sample every long steady feature in PostGIS; each sampled point's
-    nearest graph edge must carry ONE line-set signature."""
+    nearest graph edge must carry ONE line-set signature. Top band only:
+    its len > 61 m steadies are exactly the corridor pieces (the longer
+    bands' steady pieces are shorter subsets of the SAME corridors, and
+    their skip-converted CONNECTORS legitimately span composition-change
+    sites — a 480 m straight-through connector crosses the site by
+    design, so sampling it would flag the contract it deliberately
+    relaxes)."""
     import psycopg
     g, segments, info, _ = built
+    top_band = max(mz for mz, _ in CFG.bands)
     with psycopg.connect(DSN) as conn, conn.cursor() as cur:
         cur.execute(
             """WITH pts AS (
@@ -116,6 +138,7 @@ def test_steady_composition_constant_query(built):
                  CROSS JOIN LATERAL
                    generate_series(0.025, 0.975, 0.025) AS gs(f)
                  WHERE s.build_key = %(b)s AND s.kind = 'steady'
+                   AND s.band_minzoom = %(band)s
                    AND s.len_m > 61
                ),
                sig AS (
@@ -135,12 +158,13 @@ def test_steady_composition_constant_query(built):
                SELECT seg_id, count(DISTINCT lineset)
                FROM sig GROUP BY seg_id
                HAVING count(DISTINCT lineset) > 1""",
-            {"b": BUILD_KEY})
+            {"b": BUILD_KEY, "band": top_band})
         bad = cur.fetchall()
         cur.execute(
             """SELECT count(*) FROM transit_line_segments
-               WHERE build_key = %s AND kind = 'steady' AND len_m > 61""",
-            (BUILD_KEY,))
+               WHERE build_key = %s AND band_minzoom = %s
+                 AND kind = 'steady' AND len_m > 61""",
+            (BUILD_KEY, top_band))
         (n_long,) = cur.fetchone()
     print(f"\n[real] {n_long} long steady features sampled, "
           f"{len(bad)} with mixed composition")
@@ -169,7 +193,8 @@ def test_transition_curvature_meets_min_radius(built):
         if t.kind != "transition":
             continue
         n_tr += 1
-        target = t.line_count * CFG.gap_px * CFG.fillet_radius_factor
+        target = (t.fillet_target_m if t.fillet_target_m is not None
+                  else t.line_count * CFG.gap_px * CFG.fillet_radius_factor)
         raw = t.raw_min_radius_m if t.raw_min_radius_m is not None else inf
         ach = t.fillet_radius_m if t.fillet_radius_m is not None else inf
         xy = proj.to_xy(t.coords)
@@ -238,11 +263,13 @@ def test_emit_roundtrip(built):
     import psycopg
     g, segments, info, n = built
     assert n == len(segments), "no degenerate geometries dropped on emit"
+    top_band = max(mz for mz, _ in CFG.bands)
     with psycopg.connect(DSN) as conn, conn.cursor() as cur:
         cur.execute(
             """SELECT kind, count(*), sum(len_m)
-               FROM transit_line_segments WHERE build_key = %s
-               GROUP BY kind ORDER BY kind""", (BUILD_KEY,))
+               FROM transit_line_segments
+               WHERE build_key = %s AND band_minzoom = %s
+               GROUP BY kind ORDER BY kind""", (BUILD_KEY, top_band))
         db = {k: (c, s) for k, c, s in cur.fetchall()}
         cur.execute(
             """SELECT count(*) FROM transit_line_segments
@@ -254,6 +281,16 @@ def test_emit_roundtrip(built):
                  OR ST_NPoints(geom) < 2
                  OR NOT ST_IsValid(geom))""", (BUILD_KEY,))
         (n_bad,) = cur.fetchone()
+        # every band present, zoom axis partitioned without overlap
+        cur.execute(
+            """SELECT band_minzoom, band_maxzoom, count(*)
+               FROM transit_line_segments WHERE build_key = %s
+               GROUP BY 1, 2 ORDER BY 1 DESC""", (BUILD_KEY,))
+        bands_db = cur.fetchall()
+    from segments.segment import band_ranges
+    assert [(mz, mxz) for mz, mxz, _ in bands_db] == \
+        [(mz, mxz) for mz, mxz, _ in band_ranges(CFG.bands)]
+    assert all(c > 0 for _, _, c in bands_db)
     mem = Counter(s.kind for s in segments)
     mem_len = defaultdict(float)
     for s in segments:
@@ -262,6 +299,6 @@ def test_emit_roundtrip(built):
         assert db[kind][0] == mem[kind]
         assert db[kind][1] == pytest.approx(mem_len[kind], rel=1e-6)
     assert n_bad == 0, "NULL-by-kind contract and geometry validity"
-    print(f"\n[real] emitted: "
+    print(f"\n[real] emitted (band z{top_band}): "
           + ", ".join(f"{k}: {c} rows / {s / 1000:.2f} km"
                       for k, (c, s) in sorted(db.items())))
