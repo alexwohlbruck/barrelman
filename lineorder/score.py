@@ -19,8 +19,10 @@ paper's section-6 scheme:
   station deg  > 2: same 12*deg(v*), diff 3*deg(v*), sep 9*deg(v*)
 
 Pseudo-lines (P2) count crossings with their multiplicity product;
-separations count 1 per partner pair using expanded block adjacency
-(only the block-boundary member changes adjacency, see reduce.py notes).
+separations count per expanded partner pair using block-boundary
+adjacency: a line adjacent to a block on both edges but at opposite
+block ends fully crosses it — both boundary-member pairs separate (2);
+same end separates none; adjacency on exactly one edge separates one.
 
 U6 dummy edges are transparent: any crossing/separation term that would
 involve a dummy edge is skipped — in the original graph the stump lines
@@ -126,6 +128,25 @@ def _adjacent(pos: dict, a: int, b: int) -> bool:
     return a1 + 1 == b0 or b1 + 1 == a0
 
 
+def _sep_count(reg: LineRegistry, pos_e: dict, pos_f: dict,
+               a: int, b: int) -> int:
+    """Expanded separation count for partners a, b given block spans in
+    a consistent traveler frame (arrive at e vs leave at f). For real
+    lines this is the paper's 0/1 adjacency-differs test. When either is
+    a P2 pseudo-line, adjacency on both edges but at OPPOSITE block ends
+    means the partner fully crosses the block: BOTH boundary-member
+    pairs separate in the expansion (2); same-end adjacency separates
+    none (0)."""
+    adj_e, adj_f = _adjacent(pos_e, a, b), _adjacent(pos_f, a, b)
+    if adj_e != adj_f:
+        return 1
+    if not adj_e:
+        return 0
+    if _before(pos_e, a, b) == _before(pos_f, a, b):
+        return 0
+    return 2 if reg.mult(a) > 1 or reg.mult(b) > 1 else 0
+
+
 def score_node(g: OptGraph, reg: LineRegistry, sol: dict, nid: int,
                w: Weights) -> Score:
     s = Score()
@@ -152,10 +173,11 @@ def score_node(g: OptGraph, reg: LineRegistry, sol: dict, nid: int,
                 n = reg.mult(a) * reg.mult(b)
                 s.crossings_same += n
                 s.weighted += ws * n
-            # separation: adjacency differs between the two edges
-            if _adjacent(arrive[e], a, b) != _adjacent(arrive[f], a, b):
-                s.separations += 1
-                s.weighted += wp
+            # separation: expanded block-boundary adjacency (0, 1 or 2)
+            nsep = _sep_count(reg, arrive[e], leave[f], a, b)
+            if nsep:
+                s.separations += nsep
+                s.weighted += wp * nsep
 
     for e in inc:
         ee = g.edges[e]

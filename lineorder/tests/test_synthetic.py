@@ -7,6 +7,7 @@ import itertools
 import math
 
 from lineorder.model import build_graph
+from lineorder.reconstruct import reconstruct
 from lineorder.reduce import reduce_graph
 from lineorder.score import Weights, brute_force, score, search_space
 
@@ -319,6 +320,36 @@ def test_separation_matters():
     )
     _, _, sc = assert_optimal(inst)
     assert sc.separations == 0
+
+
+def test_p2_any_reduced_solution_accounting():
+    # review finding: a line fully crossing a collapsed block at a node
+    # incurs TWO expanded separations (one per boundary member). The
+    # accounting identity must hold for ANY reduced solution — including
+    # the block-crossing ones a phase-B solver will evaluate — not just
+    # for brute-forced optima.
+    inst, _, _ = build_graph(
+        {"a": (0, 0), "b": (10, 0), "d": (20, 0), "x": (10, -10)},
+        [("a", "b", ["m1", "m2", "c"]),
+         ("b", "d", ["m1", "m2", "c"]),
+         ("b", "x", ["c"])],  # c-only leg at b keeps c out of the block
+    )
+    w = Weights.for_graph(inst.graph)
+    red = reduce_graph(inst, w)
+    assert red.stats["P2"] >= 1
+    g = red.graph
+    free = [eid for eid in g.edges if len(g.edges[eid].lines) > 1]
+    for combo in itertools.product(
+            *(itertools.permutations(g.edges[eid].lines) for eid in free)):
+        sol = {eid: g.edges[eid].lines for eid in g.edges}
+        sol.update(zip(free, combo))
+        full = reconstruct(red, sol)
+        orig = score(inst.graph, red.registry, full, w)
+        comp = score(g, red.registry, sol, w)
+        assert abs(orig.weighted
+                   - (comp.weighted + red.fixed_cost)) < 1e-9, (
+            f"accounting broken for reduced sol {sol}: original "
+            f"{orig.weighted} != {comp.weighted} + {red.fixed_cost}")
 
 
 def test_score_brute_force_agreement_random():
