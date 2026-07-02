@@ -7,3 +7,4 @@ pyproj>=3.6            # local aeqd projection (true ground metres)
 psycopg[binary]>=3.1   # PostGIS loader + emit + real-data tests
 pytest>=8              # tests
 mapbox-vector-tile>=2  # decode transit_lines_rt2 MVT output (test_tiles.py)
+matplotlib>=3.8        # exam/loop_visual.py render only
