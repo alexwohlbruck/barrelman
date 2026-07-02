@@ -40,8 +40,10 @@ the v2 attempt, plus the receipts:
   4  coverage — per ribbon (colour), steady+transition lengths cover
      the ribbon's corridors within 1%; no geometric overlap > 1 m
      between features of a ribbon except the branch-divergence tail
-     shared by two transitions pairing the SAME corridor end at the
-     same site (reported, capped at transition_len_m / 2)
+     shared by two site-anchored features pairing the SAME corridor
+     end at the same site (kind-agnostic — a straight equal-offset
+     twin skip-classifies to steady; reported, capped at
+     transition_len_m / 2)
   5  receipt — per-Loop-leg feature table (kind, routes, slot/count,
      offsets) for Lake / Wabash / Van Buren / Wells + the interior
      subways, plus every Loop-window transition with its ramp
@@ -55,8 +57,8 @@ any check fails. Run:
 `--build-key` (default chicago:l-v3) points the generic checks (0-4) at
 another build; the Chicago-specific assertions (check 1's 18-site
 inventory, check 3's absolute clamp cap, check 5's Loop receipt) only
-run for the default build (check 3 uses a proportional 20% clamp cap on
-other builds).
+run for the default build (check 3 uses a proportional 30% clamp cap on
+other builds — refit-collapsed crossing rungs clamp by design).
 """
 
 from __future__ import annotations
@@ -470,7 +472,12 @@ def check3_fillets(segments, proj, chicago: bool = True):
     report("check3.min-radius", not bad and not missing,
            f"{len(bad)} transitions under their curvature floor: "
            f"{bad[:6]}; {len(missing)} missing from DB")
-    clamp_cap = 10 if chicago else math.ceil(0.2 * len(trs))
+    # non-chicago cap 0.3: the linegraph refit collapses plan-view X
+    # crossings to near-point rungs (true crossing geometry), and every
+    # such consumed corridor's transitions clamp by design — the safety
+    # contract stays check3.min-radius, which measures the emitted
+    # curvature floor unconditionally
+    clamp_cap = 10 if chicago else math.ceil(0.3 * len(trs))
     report("check3.clamping-is-exceptional",
            n_clamped <= clamp_cap and n_target >= 0.75 * len(trs),
            f"{n_clamped} clamped (<={clamp_cap}), {n_target}/{len(trs)} "
@@ -528,8 +535,15 @@ def check4_coverage(g, proj, segments):
                     continue
                 shared_end = ({a.in_end, a.out_end}
                               & {b.in_end, b.out_end}) - {None}
-                branch = (a.kind == "transition" and b.kind == "transition"
-                          and set(a.sites) & set(b.sites) and shared_end
+                # kind-agnostic on purpose: a divergence twin whose
+                # offsets are equal and whose (refit-straightened)
+                # geometry is straight gets skip-classified to steady,
+                # but it still shares the trunk tail legitimately —
+                # site anchoring + a shared typed end + the half-
+                # transition bound identify the divergence structure
+                # either way (corridor steadies carry neither)
+                branch = (set(a.sites or ()) & set(b.sites or ())
+                          and shared_end
                           and ov <= CFG.transition_len_m / 2 + 1e-6)
                 if branch:
                     n_allowed += 1
