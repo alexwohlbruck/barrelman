@@ -38,6 +38,7 @@ from shapesnap.match import geometry_hash, load_patterns
 
 from linegraph.model import (
     FORMAT_VERSION,
+    LGEdge,
     LineGraph,
     default_cache_path,
     input_digest,
@@ -200,6 +201,82 @@ def dump_postgis(lg: LineGraph, dsn: str, table: str = "linegraph_edges") -> int
 # ── phase B: stations + attribution + transit_graph emit ────────────────────
 
 
+def _join_edges(a: LGEdge, b: LGEdge, nid: int) -> LGEdge:
+    """One edge from a + b, oriented THROUGH their shared node nid."""
+    a_fwd = a.to_node == nid
+    ac = a.coords if a_fwd else list(reversed(a.coords))
+    ac_xy = a.coords_xy if a_fwd else list(reversed(a.coords_xy))
+    u = a.from_node if a_fwd else a.to_node
+    b_fwd = b.from_node == nid
+    bc = b.coords if b_fwd else list(reversed(b.coords))
+    bc_xy = b.coords_xy if b_fwd else list(reversed(b.coords_xy))
+    v = b.to_node if b_fwd else b.from_node
+    drop_dup = 1 if ac_xy[-1] == bc_xy[0] else 0
+    return LGEdge(
+        edge_id=-1, from_node=u, to_node=v,
+        px_len=a.px_len + b.px_len, length_m=a.length_m + b.length_m,
+        coords=ac + bc[drop_dup:], coords_xy=ac_xy + bc_xy[drop_dup:],
+    )
+
+
+def prune_lineless_edges(lg, edge_routes: dict, labels: dict):
+    """Drop edges no pattern rides, then re-join the corridors they cut.
+
+    A line-less strand is a skeletonization artifact (crossing rungs a
+    shade over the contraction bound), not track. Dropping one leaves
+    its endpoints degree-2; when the two surviving edges there carry
+    IDENTICAL route sets the node is corridor-interior, so the edges are
+    joined into one, oriented head-to-tail — stage 5's raw-slot corridor
+    stability relies on corridors being emitted as single aligned edges,
+    and two independently-oriented halves meeting head-to-head at an
+    artifact node would break it. Station-labeled nodes are never
+    joined away; orphaned unlabeled nodes are dropped.
+
+    Mutates lg; returns (edge_routes, n_dropped, n_joined) with
+    edge_routes re-keyed to the new edge positions.
+    """
+    edges = list(lg.edges)
+    routes = [dict(edge_routes.get(i, {})) for i in range(len(edges))]
+    keep = [i for i in range(len(edges)) if routes[i]]
+    n_dropped = len(edges) - len(keep)
+    if n_dropped == 0:
+        return edge_routes, 0, 0
+    edges = [edges[i] for i in keep]
+    routes = [routes[i] for i in keep]
+
+    n_joined = 0
+    changed = True
+    while changed:
+        changed = False
+        inc: dict = {}
+        for i, e in enumerate(edges):
+            inc.setdefault(e.from_node, []).append(i)
+            inc.setdefault(e.to_node, []).append(i)
+        for nid in sorted(inc):
+            eids = inc[nid]
+            if len(eids) != 2 or eids[0] == eids[1] or nid in labels:
+                continue
+            i, j = eids
+            if set(routes[i]) != set(routes[j]):
+                continue
+            joined = _join_edges(edges[i], edges[j], nid)
+            if joined.from_node == joined.to_node:
+                continue  # would form a self-loop; leave the pair
+            edges[i] = joined
+            routes[i] = {**routes[j], **routes[i]}
+            del edges[j], routes[j]
+            n_joined += 1
+            changed = True
+            break  # incidence is stale; recompute
+    for k, e in enumerate(edges):
+        e.edge_id = k
+    lg.edges = edges
+    used = {e.from_node for e in edges} | {e.to_node for e in edges}
+    lg.nodes = [n for n in lg.nodes
+                if n.node_id in used or n.node_id in labels]
+    return {i: r for i, r in enumerate(routes)}, n_dropped, n_joined
+
+
 def enrich_graph(lg, patterns, zip_path, feed_id: str, *, verbose: bool = True):
     """Stations first (edges split station-to-station), then attribution.
 
@@ -230,9 +307,11 @@ def enrich_graph(lg, patterns, zip_path, feed_id: str, *, verbose: bool = True):
     edge_routes, stats = attribute_patterns(lg, patterns, feed_id, routes_meta)
     attributed = [s for s in stats if s.n_samples]
     worst = max(attributed, key=lambda s: s.unmatched_fraction, default=None)
+    n_excised = sum(s.n_excised for s in attributed)
     log(
         f"attribution: {len(attributed)}/{len(stats)} patterns with shapes, "
-        f"{len(edge_routes)}/{len(lg.edges)} edges carry routes"
+        f"{len(edge_routes)}/{len(lg.edges)} edges carry routes, "
+        f"{n_excised} deviation-gate excisions"
         + (f", worst unmatched {worst.unmatched_fraction:.2%} ({worst.pattern_key})"
            if worst else "")
     )
@@ -240,6 +319,13 @@ def enrich_graph(lg, patterns, zip_path, feed_id: str, *, verbose: bool = True):
         if s.unmatched_fraction >= 0.02:
             log(f"  HIGH unmatched {s.unmatched_fraction:.2%}: {s.pattern_key} "
                 f"({s.n_unmatched}/{s.n_samples} samples)")
+
+    edge_routes, n_dropped, n_joined = prune_lineless_edges(
+        lg, edge_routes, snap.labels)
+    if n_dropped:
+        log(f"pruned {n_dropped} line-less artifact edge(s), re-joined "
+            f"{n_joined} corridor node(s) -> {len(lg.nodes)} nodes, "
+            f"{len(lg.edges)} edges")
     return lg, snap, edge_routes, stats
 
 
@@ -343,7 +429,9 @@ def main(argv=None) -> int:
         print(
             f"[linegraph] emitted build_key={args.build_key}: "
             f"{counts['nodes']} nodes ({counts['labeled_nodes']} labeled), "
-            f"{counts['edges']} edges, {counts['edge_lines']} edge_lines, "
+            f"{counts['edges']} edges "
+            f"({counts['edges_dropped_lineless']} line-less dropped), "
+            f"{counts['edge_lines']} edge_lines, "
             f"route_type={counts['route_type']}"
         )
     return 0

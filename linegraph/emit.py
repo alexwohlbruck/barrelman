@@ -11,6 +11,13 @@ build_key, in ONE transaction:
 loom_id carries the linegraph node/edge index (stringified), keeping the
 column contract without LOOM.
 
+Edges NO pattern rides (empty edge_routes entry) are not emitted: the
+skeleton is built from ridden shapes, so a line-less strand is a
+skeletonization artifact (crossing rungs slightly over the contraction
+bound), not track — every downstream consumer (lineorder, segments,
+display SQL) already skips line-less rows, emitting them only inflates
+transit_graph_edges. Dropped count is returned in the summary.
+
 edge_lines.slot is a PROVISIONAL deterministic order: routes sorted by
 route_id per edge. Stage 5 (crossing-minimizing ordering + slot
 stabilization) will overwrite the slots; nothing downstream may treat
@@ -119,13 +126,17 @@ def emit_build(lg, edge_routes: dict, labels: dict, *, build_key: str,
                 copy.write_row((build_key, str(n.node_id), station_id,
                                 station_label, _ewkt_point(n.lon, n.lat)))
 
+        n_dropped = 0
         with cur.copy(
             "COPY transit_graph_edges"
             " (build_key, loom_id, line_count, geom) FROM STDIN"
         ) as copy:
             for pos, e in enumerate(lg.edges):
-                copy.write_row((build_key, str(e.edge_id),
-                                len(edge_routes.get(pos, {})),
+                n_routes = len(edge_routes.get(pos, {}))
+                if n_routes == 0:
+                    n_dropped += 1  # artifact strand no pattern rides
+                    continue
+                copy.write_row((build_key, str(e.edge_id), n_routes,
                                 _ewkt_line(e.coords)))
 
         cur.execute(
@@ -170,7 +181,8 @@ def emit_build(lg, edge_routes: dict, labels: dict, *, build_key: str,
 
     return {
         "nodes": len(lg.nodes),
-        "edges": len(lg.edges),
+        "edges": len(lg.edges) - n_dropped,
+        "edges_dropped_lineless": n_dropped,
         "edge_lines": n_lines,
         "labeled_nodes": len(labels),
         "route_type": route_type,
