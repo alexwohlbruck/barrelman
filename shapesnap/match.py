@@ -37,10 +37,17 @@ All component costs are ≥ 0 so Dijkstra optimality holds.
 
 Break, don't force: an observation with no candidates, or a layer no
 feasible transition reaches, ends the current sub-trace; matching
-restarts at the next matchable observation and the gap is bridged with
-the ORIGINAL shape segment clipped between the matched endpoints (stop
-chord for regime B) and recorded in stats. A wrong-level match is never
-forced. One exception cuts the other way: on identity-tier patterns a
+restarts at the next matchable observation. A wrong-level match is never
+forced. The gap between two matched sub-traces is first ROUTED through
+the OSM graph between the pinned anchor candidates (same weighted cost
+model as decoding: class penalties, route-relation bonus, turn
+restrictions; generous cutoff — bridge_route_cutoff_factor x the gap's
+along-reference length) and spliced when feasible
+(stats.gaps[].bridge_kind="graph", still on OSM); only when OSM is
+genuinely disconnected within the budget is the gap bridged with the
+ORIGINAL shape segment clipped between the matched endpoints (stop
+chord for regime B; bridge_kind="agency") and recorded in stats. One
+exception cuts the other way: on identity-tier patterns a
 contiguous run of dense observations whose layers hold no identity-
 matched candidate but DO hold foreign-identity ones is the shape
 provably straying into another route's corridor (degenerate agency
@@ -57,18 +64,29 @@ gap's endpoints pinned to the candidates the main decode already chose.
 A systematic agency-vs-OSM offset just past the radius (the 4/5
 Joralemon St Tunnel: 47-64 m from the IRT Lexington tunnel way for
 ~420 m) reconnects on the route's own track with no seam; a genuinely
-absent track (hole in OSM) still fails feasibility and bridges exactly
-as before. Every pattern-level quality gate is unchanged — and a
-spliced retry that would push the pattern below a gate is reverted, so
-a retry can never degrade a pattern below its bridged baseline.
+absent track (hole in OSM) still fails feasibility and falls through to
+the graph-routed bridge, then the agency bridge. Every pattern-level
+quality gate is unchanged — and a retry splice or graph bridge that
+would push the pattern below a gate is reverted (revert ladder from
+most to least on-OSM), so neither can degrade a pattern below its
+agency-bridged baseline.
 
 Output per pattern: ordered edge path → concatenated full-fidelity OSM
 geometry → topology-preserving ~1 m simplification in a local UTM →
-quality gates (shapesnap.gates). ANY gate failure returns the original
-geometry unchanged (method="fallback"). Methods: hmm_dense | hmm_sparse
-| fallback | passthrough (passthrough = nothing matchable at all).
-Confidence = exp(−mean trellis cost per matched observation) / (1 +
-breaks) ∈ (0, 1].
+quality gates (shapesnap.gates). Gate failure triggers the ON-OSM
+FALLBACK CHAIN: the pattern is re-matched once in the sparse regime
+(stop sequence on the same graph) and that rescue is accepted on its
+own gates — stop-snap, length-vs-stop-chord within the rescue bounds,
+no empty stop layers; never Fréchet-vs-agency, because the agency shape
+is exactly what failed (method="hmm_sparse_rescue"). Only when the
+rescue also fails does the pattern keep its agency geometry
+(method="passthrough_agency", logged loudly on stderr). Methods:
+hmm_dense | hmm_sparse | hmm_sparse_rescue | passthrough_agency |
+passthrough (passthrough = nothing matchable at all). Every result
+carries stats.on_osm_m / stats.agency_m — meters of output geometry on
+OSM edges vs spliced agency geometry — the per-feed on-OSM acceptance
+metric (shapesnap.run aggregates them). Confidence = exp(−mean trellis
+cost per matched observation) / (1 + breaks) ∈ (0, 1].
 
 Patterns are read from a GTFS zip (load_patterns). For feed 29 the DB
 tables gtfs_trip_patterns / gtfs_shapes are empty on this host, so the
@@ -190,6 +208,43 @@ class MatchConfig:
     # Joralemon St Tunnel: 47-64 m off the tunnel way for ~420 m, rail
     # radius 50 -> 100). <=1 disables and restores pure break+bridge.
     gap_retry_radius_mult: float = 2.0
+    # graph-routed gap bridges (on-OSM policy): a break that survives the
+    # gap retry is routed through the OSM graph between the pinned anchor
+    # candidates before falling back to the original-geometry bridge —
+    # same weighted cost model as decoding (class penalties, route-
+    # relation bonus on edge weights, turn restrictions + reversal
+    # penalties). The weighted-cost cutoff is cutoff_factor x the gap's
+    # along-reference length, floored at min_cutoff_m so junction-
+    # adjacent micro-gaps still get about an urban block of routing
+    # budget. Feasible -> splice (stats.gaps[].bridge_kind="graph");
+    # infeasible (OSM genuinely disconnected there) -> agency bridge
+    # exactly as before ("agency"). cutoff_factor <= 0 disables routing
+    # and restores pure agency bridging.
+    bridge_route_cutoff_factor: float = 4.0
+    bridge_route_min_cutoff_m: float = 300.0
+    # sparse rescue (on-OSM policy): a dense pattern whose quality gates
+    # fail is re-matched once in the SPARSE regime (stop-sequence
+    # matching on the same graph) instead of returning agency geometry.
+    # The rescue is NOT gated on Fréchet-vs-agency — the agency shape is
+    # exactly what failed (96 St: the MTA shape ends 103 m short of the
+    # stop while the OSM track passes 1.5 m from it) — but on:
+    #   - stop-snap: every stop within the sparse candidate radius of
+    #     the output (evaluate_gates' stop gate),
+    #   - length plausibility vs the stop-chain chord, bounds below,
+    #   - no empty layers: every stop must hold >=1 candidate. A stop
+    #     beyond radius of any way would be chord-bridged straight
+    #     THROUGH its own coordinate, faking the stop-snap gate — an
+    #     empty layer is direct evidence OSM lacks the track there.
+    # Bounds: the chord is a lower bound on any real path (network >=
+    # straight line) but the OUTPUT can measure slightly under it when
+    # off-track stop coordinates project inward onto the track at
+    # terminals (96 St again) or zigzag stop placement inflates the
+    # chord, hence min 0.90 (vs the dense regime's 0.95); max 1.60 is
+    # the battle-tested sparse bound — real detours (rivers, one-way
+    # loops) fit, while >1.6x chord signals wrong-corridor wandering.
+    sparse_rescue: bool = True
+    rescue_length_ratio_min: float = 0.90
+    rescue_length_ratio_max: float = 1.60
     # regime B extras
     station_search_radius_m: float = 120.0
     name_bonus_weight: float = 1.5
@@ -205,7 +260,8 @@ class MatchConfig:
 
 @dataclass
 class MatchResult:
-    method: str            # hmm_dense | hmm_sparse | fallback | passthrough
+    # hmm_dense | hmm_sparse | hmm_sparse_rescue | passthrough_agency | passthrough
+    method: str
     confidence: float
     coords: list           # [(lon, lat), ...]
     stats: dict
@@ -643,6 +699,8 @@ def match_pattern(
     pattern: Pattern,
     cfg: MatchConfig | None = None,
     station_idx: StationIndex | None = None,
+    *,
+    _is_rescue: bool = False,
 ) -> MatchResult:
     cfg = cfg or MatchConfig()
     t0 = time.perf_counter()
@@ -830,9 +888,69 @@ def match_pattern(
         "dropped_runs": dropped_runs,
     }
 
-    if all(not l for l in layers):
+    def _off_osm_result(method: str, confidence: float, report, edges_used) -> MatchResult:
+        """End state whose OUTPUT is agency geometry (not on OSM).
+
+        Before conceding, a dense pattern is re-matched once in the sparse
+        regime (stop-sequence matching on the same graph — the on-OSM
+        policy's fallback chain). The rescue is accepted on its own gates
+        (stop-snap, length-vs-chord within the rescue bounds, no empty
+        stop layers — see MatchConfig.sparse_rescue) and NEVER on
+        Fréchet-vs-agency: the agency shape is exactly what failed.
+        """
+        orig = original_coords()
+        stats["on_osm_m"] = 0.0
+        stats["agency_m"] = (
+            round(LineString(mg.project_lonlat(orig)).length, 1)
+            if len(orig) >= 2 else 0.0
+        )
+        rescue_note = ""
+        if dense and cfg.sparse_rescue and not _is_rescue:
+            rr = match_pattern(
+                mg,
+                replace(pattern, shape=None, shape_id=None),
+                replace(
+                    cfg,
+                    gates=replace(
+                        cfg.gates,
+                        sparse_length_ratio_min=cfg.rescue_length_ratio_min,
+                        sparse_length_ratio_max=cfg.rescue_length_ratio_max,
+                    ),
+                ),
+                station_idx=station_idx,
+                _is_rescue=True,
+            )
+            if rr.method == "hmm_sparse" and rr.stats.get("n_empty_layers") == 0:
+                rr.method = "hmm_sparse_rescue"
+                rr.stats["dense_attempt"] = {
+                    "method": method,
+                    "gates": report.as_dict() if report else None,
+                    "breaks": stats.get("breaks"),
+                    "bridged_m": stats.get("bridged_m"),
+                    "confidence": confidence,
+                }
+                return rr
+            why = (
+                f"{rr.stats.get('n_empty_layers')} stops beyond the sparse radius"
+                if rr.stats.get("n_empty_layers")
+                else f"rescue gates failed ({'; '.join(rr.gates.failures) if rr.gates else 'no output'})"
+            )
+            rescue_note = f"; sparse rescue failed ({why})"
+        elif dense and not _is_rescue:
+            rescue_note = "; sparse rescue disabled"
         stats["runtime_s"] = round(time.perf_counter() - t0, 2)
-        return MatchResult("passthrough", 0.0, original_coords(), stats, None, [])
+        if method == "passthrough_agency" and not _is_rescue:
+            print(
+                f"[shapesnap.match] PASSTHROUGH_AGENCY {pattern.key} "
+                f"route={pattern.route_short_name or pattern.route_id}: "
+                f"gates failed ({'; '.join(report.failures) if report else 'degenerate output'})"
+                f"{rescue_note} — output keeps agency geometry (NOT on OSM)",
+                file=sys.stderr,
+            )
+        return MatchResult(method, confidence, orig, stats, report, sorted(edges_used))
+
+    if all(not l for l in layers):
+        return _off_osm_result("passthrough", 0.0, None, [])
 
     # decode sub-traces, breaking (never forcing) at infeasible spots
     segments = []
@@ -937,54 +1055,107 @@ def match_pattern(
     if retry_notes:
         stats["gap_retries"] = retry_notes
 
-    # assemble geometry (matched pieces + original-shape bridges); a
-    # function because a reverted gap retry re-runs it on the pre-retry
-    # segments
-    def _assemble(segs):
+    # assemble geometry (matched pieces + bridges); a function because a
+    # reverted gap retry / reverted graph bridge re-runs it on different
+    # segments or with graph routing off. Interior gaps (both flanks hold
+    # pinned anchor candidates) are routed through the OSM graph first
+    # (bridge_kind="graph"); only an infeasible route — OSM genuinely
+    # disconnected within the budget — falls back to the original
+    # geometry (bridge_kind="agency"). agency_m is the exact meters of
+    # output that came from agency geometry, connector seams onto the
+    # anchors included, so on_osm_m + agency_m == assembled length.
+    def _assemble(segs, graph_bridges: bool):
         edges_used: set = set()
         out_xy: list = []
         gaps: list = []
+        agency_m = 0.0
 
-        def bridge(a_obs: int, b_obs: int):
+        def extend(pts) -> float:
+            added = 0.0
+            for p in pts:
+                if out_xy:
+                    d = math.hypot(p[0] - out_xy[-1][0], p[1] - out_xy[-1][1])
+                    if d <= 1e-9:
+                        continue
+                    added += d
+                out_xy.append(p)
+            return added
+
+        def original_pts(a_obs: int, b_obs: int) -> list:
             """Original geometry between observation indices (exclusive gap)."""
             if dense:
                 seg = substring(shape_line, obs_along[a_obs], obs_along[b_obs])
-                pts = list(seg.coords) if not seg.is_empty and seg.geom_type != "Point" else []
-            else:
-                pts = obs[a_obs : b_obs + 1]
-            if len(pts) >= 2:
+                return (
+                    list(seg.coords)
+                    if not seg.is_empty and seg.geom_type != "Point"
+                    else []
+                )
+            return list(obs[a_obs : b_obs + 1])
+
+        def agency_bridge(a_obs: int, b_obs: int, next_cand):
+            nonlocal agency_m
+            added = extend(original_pts(a_obs, b_obs))
+            if next_cand is not None and out_xy:
+                # the connector seam onto the next matched anchor is part
+                # of the un-evidenced span (appended by the segment loop)
+                added += math.hypot(
+                    next_cand.x - out_xy[-1][0], next_cand.y - out_xy[-1][1]
+                )
+            if added > 0:
+                agency_m += added
                 gaps.append({
                     "from_obs": a_obs, "to_obs": b_obs,
-                    "bridged_m": round(LineString(pts).length, 1),
+                    "bridge_kind": "agency", "bridged_m": round(added, 1),
                 })
-            return pts
 
-        def extend(pts):
-            for p in pts:
-                if not out_xy or math.hypot(p[0] - out_xy[-1][0], p[1] - out_xy[-1][1]) > 1e-9:
-                    out_xy.append(p)
+        def graph_bridge(a_obs: int, b_obs: int, c_a, c_b) -> bool:
+            """Bounded route between the pinned anchors; False = infeasible."""
+            if not graph_bridges or cfg.bridge_route_cutoff_factor <= 0:
+                return False
+            gap_along = (
+                obs_along[b_obs] - obs_along[a_obs] if dense
+                else sum(alongs[a_obs:b_obs])
+            )
+            cutoff = max(
+                cfg.bridge_route_cutoff_factor * gap_along,
+                cfg.bridge_route_min_cutoff_m,
+            )
+            hit = _route_multi(mg, cfg, mult, c_a, [c_b], cutoff).get(0)
+            if hit is None:
+                return False
+            _w, true_len, path = hit
+            extend(_hop_coords(mg, c_a, c_b, path))
+            edges_used.update(e for e, _d in path)
+            gaps.append({
+                "from_obs": a_obs, "to_obs": b_obs,
+                "bridge_kind": "graph", "routed_m": round(true_len, 1),
+            })
+            return True
 
-        prev_end = None
+        prev_seg = None
         for seg in segs:
-            if prev_end is None:
-                if seg["start"] > 0:
-                    extend(bridge(0, seg["start"]))
-            else:
-                extend(bridge(prev_end, seg["start"]))
             layer = seg["start"]
-            cand = layers[layer][seg["cands"][0]]
-            extend([(cand.x, cand.y)])
-            edges_used.add(cand.edge)
+            first = layers[layer][seg["cands"][0]]
+            if prev_seg is None:
+                if layer > 0:
+                    agency_bridge(0, layer, first)
+            else:
+                a_obs = prev_seg["end"]
+                c_a = layers[a_obs][prev_seg["cands"][-1]]
+                if not graph_bridge(a_obs, layer, c_a, first):
+                    agency_bridge(a_obs, layer, first)
+            extend([(first.x, first.y)])
+            edges_used.add(first.edge)
             for k, (path, _true) in enumerate(seg["hops"]):
                 a = layers[layer + k][seg["cands"][k]]
                 b = layers[layer + k + 1][seg["cands"][k + 1]]
                 extend(_hop_coords(mg, a, b, path))
                 edges_used.add(b.edge)
                 edges_used.update(e for e, _d in path)
-            prev_end = seg["end"]
-        if prev_end is not None and prev_end < n - 1:
-            extend(bridge(prev_end, n - 1))
-        return out_xy, gaps, edges_used
+            prev_seg = seg
+        if prev_seg is not None and prev_seg["end"] < n - 1:
+            agency_bridge(prev_seg["end"], n - 1, None)
+        return out_xy, gaps, edges_used, agency_m
 
     ref_line = LineString(obs) if dense else None
     ref_pieces = None
@@ -996,11 +1167,12 @@ def match_pattern(
             LineString(obs[a:b]) for a, b in zip(bounds, bounds[1:]) if b - a >= 2
         ]
 
-    def _finish(segs):
+    def _finish(segs, graph_bridges: bool):
         """Assembly -> simplify -> gates (report None on degenerate output)."""
-        out_xy, gaps, edges_used = _assemble(segs)
+        out_xy, gaps, edges_used, agency_m = _assemble(segs, graph_bridges)
         if len(out_xy) < 2:
-            return out_xy, gaps, edges_used, None, None
+            return out_xy, gaps, edges_used, agency_m, 0.0, None, None
+        total_m = LineString(out_xy).length
         simplified = LineString(out_xy).simplify(cfg.simplify_m, preserve_topology=True)
         report = evaluate_gates(
             simplified,
@@ -1013,35 +1185,64 @@ def match_pattern(
             stop_radius=radius,
             dense=dense,
         )
-        return out_xy, gaps, edges_used, simplified, report
+        return out_xy, gaps, edges_used, agency_m, total_m, simplified, report
 
-    out_xy, gaps, edges_used, simplified, report = _finish(segments)
-    if (
-        report is not None
-        and not report.passed
-        and any(nt["ok"] is True for nt in retry_notes)
-    ):
-        # quality gates are unchanged by design: a splice that pushes the
-        # pattern below any gate is reverted, so a retry can never degrade
-        # a pattern below its bridged baseline
-        for nt in retry_notes:
-            if nt["ok"] is True:
-                nt["ok"] = "reverted"
-        segments = pre_retry
-        total_cost, matched_obs = pre_cost, pre_matched
-        out_xy, gaps, edges_used, simplified, report = _finish(segments)
+    def _passes(fin) -> bool:
+        return fin[6] is not None and fin[6].passed
+
+    def _used_graph(fin) -> bool:
+        return any(g["bridge_kind"] == "graph" for g in fin[1])
+
+    # quality gates are unchanged by design: neither a retry splice nor a
+    # graph-routed bridge may degrade a pattern below its agency-bridged
+    # baseline. On gate failure, walk a revert ladder from most to least
+    # on-OSM: (retries, graph bridges) -> (no retries, graph) -> (retries,
+    # agency) -> (no retries, agency); use the first assembly that passes.
+    # Note reverting a retry re-opens its gap, which then gets its own
+    # graph-bridge attempt in the reverted assembly.
+    fin = _finish(segments, True)
+    if not _passes(fin):
+        spliced = any(nt["ok"] is True for nt in retry_notes)
+        trials = []
+        if spliced:
+            trials.append((pre_retry, True))
+        if _used_graph(fin):
+            trials.append((segments, False))
+        if spliced:
+            trials.append((pre_retry, False))
+        computed = {(id(segments), True): fin}
+        final_segs = segments
+        for segs2, gb in trials:
+            if not gb:
+                # identical to the graph-enabled sibling when that sibling
+                # routed no bridges — skip the duplicate evaluation
+                sib = computed.get((id(segs2), True))
+                if sib is not None and not _used_graph(sib):
+                    continue
+            trial = _finish(segs2, gb)
+            computed[(id(segs2), gb)] = trial
+            fin, final_segs = trial, segs2
+            if _passes(trial):
+                break
+        segments = final_segs
+        if segments is pre_retry:
+            for nt in retry_notes:
+                if nt["ok"] is True:
+                    nt["ok"] = "reverted"
+            total_cost, matched_obs = pre_cost, pre_matched
+    out_xy, gaps, edges_used, agency_m, total_m, simplified, report = fin
 
     breaks = max(0, len(segments) - 1)
     stats.update(
         breaks=breaks,
         gaps=gaps,
-        bridged_m=round(sum(g["bridged_m"] for g in gaps), 1),
+        bridged_m=round(sum(g.get("bridged_m", 0.0) for g in gaps), 1),
+        graph_bridged_m=round(sum(g.get("routed_m", 0.0) for g in gaps), 1),
         matched_obs=matched_obs,
     )
 
     if simplified is None:
-        stats["runtime_s"] = round(time.perf_counter() - t0, 2)
-        return MatchResult("passthrough", 0.0, original_coords(), stats, None, [])
+        return _off_osm_result("passthrough", 0.0, None, [])
 
     stats["output_points"] = len(simplified.coords)
     stats["output_len_m"] = round(simplified.length, 1)
@@ -1052,9 +1253,17 @@ def match_pattern(
     stats["runtime_s"] = round(time.perf_counter() - t0, 2)
 
     if not report.passed:
-        return MatchResult(
-            "fallback", confidence, original_coords(), stats, report, sorted(edges_used)
+        # on-OSM policy fallback chain: sparse rescue, else keep agency
+        # geometry as passthrough_agency (logged loudly inside)
+        return _off_osm_result(
+            "passthrough_agency", confidence, report, sorted(edges_used)
         )
+    # the on-OSM metric: agency_m = meters of output spliced from agency
+    # geometry (bridges + connector seams), on_osm_m = everything else —
+    # measured on the assembled line before ~1 m simplification, so the
+    # two always sum to the assembled length exactly
+    stats["agency_m"] = round(agency_m, 1)
+    stats["on_osm_m"] = round(max(0.0, total_m - agency_m), 1)
     method = "hmm_dense" if dense else "hmm_sparse"
     return MatchResult(
         method, confidence, mg.unproject(simplified.coords), stats, report, sorted(edges_used)

@@ -19,13 +19,23 @@ geometry so every threshold is honest meters:
   4. stops      — every pattern stop within stop_radius of the output
                   (stop_radius = the regime's candidate radius)
 
-ANY failed gate -> the caller must return the ORIGINAL geometry unchanged
-(method="fallback"); good feeds are never degraded.
+ANY failed gate -> the caller (shapesnap.match) walks the on-OSM
+fallback chain: revert retry splices / graph bridges back to the
+agency-bridged baseline, then re-match the pattern in the SPARSE regime
+(the rescue is gated on the sparse gates below with the rescue length
+bounds — never on Fréchet-vs-agency, since the agency shape is exactly
+what failed), and only when that also fails return the ORIGINAL
+geometry unchanged (method="passthrough_agency") — a match below the
+bar is never emitted.
 
 The sparse regime (regime B: no input shape) has no reference line, so
 gates 1–2 are skipped and gate 3 compares against the stop-chain chord
 length with wider bounds (network paths are always >= the chord) —
-documented deviation from the dense thresholds.
+documented deviation from the dense thresholds. The sparse rescue runs
+these same gates with MatchConfig.rescue_length_ratio_min/max
+substituted, plus a no-empty-stop-layers check enforced by the caller
+(a chord bridge passes straight through a missing stop's coordinate and
+would fake gate 4).
 
 All thresholds live in the single GateConfig dataclass.
 """
