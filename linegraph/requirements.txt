@@ -1,0 +1,11 @@
+# linegraph python deps — run via uv (repo convention, see shapesnap/requirements.txt):
+#   uv run --with-requirements linegraph/requirements.txt \
+#       python -m linegraph.build --feed 29 --mode rail --build-key chicago:l-v3
+#   uv run --with-requirements linegraph/requirements.txt python -m pytest linegraph/tests -v
+numpy>=1.26            # raster grid
+scikit-image>=0.22     # draw (stroke stamping) + morphology.skeletonize
+shapely>=2.0           # Douglas-Peucker simplify, union length QA
+pyproj>=3.6            # local UTM projection
+osmium>=4.0            # transitively: shapesnap.match imports shapesnap.graph
+psycopg[binary]>=3.1   # only needed for the --postgis-qa dump
+pytest>=8              # tests
