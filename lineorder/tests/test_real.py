@@ -1,5 +1,7 @@
-"""Real-data exam: chicago:l-v3 (CTA rail, 167 edges / 253 edge_lines /
-8 routes) loads from PostGIS, reduces, and round-trips.
+"""Real-data exam: chicago:l-v3 (CTA rail, 167 edges / 252 edge_lines /
+8 routes — one crossing-bleed claim fewer since the linegraph refit +
+generalized bleed suppression) loads from PostGIS, reduces, and
+round-trips.
 
 Requires the dev DB (postgresql://barrelman:barrelman@localhost:5434);
 skips if unreachable. Run:
@@ -35,7 +37,7 @@ def inst():
 def test_load_dimensions(inst):
     g = inst.graph
     assert len(g.edges) == 167
-    assert sum(len(e.lines) for e in g.edges.values()) == 253
+    assert sum(len(e.lines) for e in g.edges.values()) == 252
     assert g.max_cardinality() == 6  # Loop legs
     routes = {(l.feed_id, l.route_id) for l in inst.registry
               if hasattr(l, "feed_id")}
@@ -87,7 +89,7 @@ def test_reduce_and_roundtrip(inst):
 
     full = reconstruct(red, reduced_sol)
     assert set(full) == set(g.edges)
-    assert sum(len(p) for p in full.values()) == 253
+    assert sum(len(p) for p in full.values()) == 252
 
     orig = score(g, red.registry, full, w)
     print(f"[real] original-graph score: {orig}")
