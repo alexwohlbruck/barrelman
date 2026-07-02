@@ -30,9 +30,21 @@
 -- we derive a synthetic (slot, line_count) pair from off_from_px instead of
 -- trusting the stored columns.
 --
--- Zoom guard: transition features are ~60 m of ground — sub-pixel below z11 —
--- so the function emits them only at z >= 11 (steady only below). Tune here;
--- martin-config.yaml registers the source for z8-22 either way.
+-- Zoom bands: the build emits the complete feature set once per transition-
+-- length band (segments/segment.py DEFAULT_BANDS: z15/60 m, z14/120 m,
+-- z13/240 m, z0/480 m — roughly constant transition SCREEN length across
+-- zooms, so junction curves keep room at city scale). band_minzoom/
+-- band_maxzoom partition the zoom axis (maxzoom = next band's minzoom - 1,
+-- top band 99), so `z BETWEEN band_minzoom AND band_maxzoom` selects exactly
+-- ONE band per request zoom — the band whose min_zoom is the highest <= z.
+--
+-- Zoom guard: transition features are sub-pixel below z11 in the pre-band
+-- 60 m world, so the function emits them only at z >= 11 (steady only
+-- below) — kept as-is by design. NOTE the consequence with bands: z8-10
+-- serve the 480 m band's steady features (240 m junction trims) without
+-- transitions, so junction holes reach ~8 px at z10; if that reads broken
+-- once the client renders those zooms, lower this gate for the 0-band.
+-- Tune here; martin-config.yaml registers the source for z8-22 either way.
 --
 -- Apply: docker exec -i barrelman-db psql -U barrelman -d barrelman \
 --          < import/create-transit-lines-rt2.sql
@@ -94,6 +106,7 @@ BEGIN
       ) lc
     ) lg
     WHERE s.geom && envb4326
+      AND z BETWEEN s.band_minzoom AND s.band_maxzoom  -- one band per zoom
       AND (s.kind = 'steady' OR z >= 11)   -- zoom guard, see header
       AND ST_GeometryType(part.g) = 'ST_LineString'
       AND ST_NPoints(part.g) >= 2
