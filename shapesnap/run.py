@@ -10,10 +10,10 @@ consume identical OSM-aligned geometry:
                  (ids ``snap_<hash12>``), plus every original shape still
                  referenced by untouched trips. Original rows for shapes
                  nothing references anymore are dropped.
-  trips.txt    — trips of MATCHED patterns (hmm_dense / hmm_sparse) are
-                 remapped to the deduped snap shape ids. Trips of
-                 fallback / passthrough patterns keep their original
-                 shape_id untouched — good feeds are never degraded.
+  trips.txt    — trips of MATCHED patterns (hmm_dense / hmm_sparse /
+                 hmm_sparse_rescue) are remapped to the deduped snap
+                 shape ids. Trips of passthrough_agency / passthrough
+                 patterns keep their original shape_id untouched.
   shape_dist_traveled — recomputed along the new geometry in the SAME
                  unit the feed used (inferred from the original
                  shapes.txt: meters / feet / km / miles), and the
@@ -85,7 +85,7 @@ CONFIG_PATH = REPO_ROOT / "config" / "shapesnap.json"
 DEFAULT_DSN = os.environ.get(
     "DATABASE_URL", "postgresql://barrelman:barrelman@localhost:5434/barrelman"
 )
-MATCHED_METHODS = ("hmm_dense", "hmm_sparse")
+MATCHED_METHODS = ("hmm_dense", "hmm_sparse", "hmm_sparse_rescue")
 
 # shape_dist_traveled unit inference: recorded total / geometric meters
 UNIT_FACTORS = {"m": 1.0, "ft": 3.280839895, "km": 0.001, "mi": 0.000621371}
@@ -674,20 +674,22 @@ def main(argv=None) -> int:
                 for tid in p.trip_ids:
                     remap[tid] = shape_id
                     trip_dists[tid] = dists
-            elif r.method == "fallback":
+            elif r.method == "passthrough_agency":
                 shape_id = p.shape_id  # kept as-is in the zip
             g = r.gates.as_dict() if r.gates else {}
+            agency_m = r.stats.get("agency_m") or 0.0
             print(
                 f"  {p.key} trips={p.trip_count} stops={len(p.stop_ids)} "
                 f"method={r.method} conf={r.confidence} "
                 f"pts={r.stats.get('output_points')} breaks={r.stats.get('breaks')} "
                 f"gates={g.get('failures') or 'ok'} t={r.stats.get('runtime_s')}s"
+                + (f" agency_m={round(agency_m, 1)}" if agency_m > 0.05 else "")
                 + (f" -> {shape_id}" if r.method in MATCHED_METHODS else "")
             )
             results.append((mode, p, r, shape_id))
 
     methods = Counter(r.method for _, _, r, _ in results)
-    matched_n = methods.get("hmm_dense", 0) + methods.get("hmm_sparse", 0)
+    matched_n = sum(methods.get(m, 0) for m in MATCHED_METHODS)
     worst_frechet = max(
         (
             r.gates.frechet_m
@@ -696,13 +698,32 @@ def main(argv=None) -> int:
         ),
         default=None,
     )
+    # the on-OSM acceptance metric: meters of OUTPUT geometry on OSM edges
+    # vs spliced agency geometry, aggregated from the per-pattern stats;
+    # every pattern below 100% is listed with why (its method + meters)
+    on_osm_total = sum(r.stats.get("on_osm_m") or 0.0 for _, _, r, _ in results)
+    agency_total = sum(r.stats.get("agency_m") or 0.0 for _, _, r, _ in results)
+    off_osm = sorted(
+        (
+            {
+                "pattern": p.key,
+                "route": p.route_short_name or p.route_id,
+                "method": r.method,
+                "agency_m": round(r.stats.get("agency_m") or 0.0, 1),
+                "on_osm_m": round(r.stats.get("on_osm_m") or 0.0, 1),
+            }
+            for _, p, r, _ in results
+            if (r.stats.get("agency_m") or 0.0) > 0.05
+        ),
+        key=lambda e: -e["agency_m"],
+    )
     summary: dict = {
         "feed_id": args.feed,
         "modes": modes,
         "dry_run": args.dry_run,
         "patterns": len(results),
         "matched": matched_n,
-        "fallback": methods.get("fallback", 0),
+        "passthrough_agency": methods.get("passthrough_agency", 0),
         "passthrough": methods.get("passthrough", 0),
         "methods": dict(methods),
         "unique_matched_shapes": len(snap_shapes),
@@ -710,6 +731,14 @@ def main(argv=None) -> int:
         "trips_remapped": len(remap),
         "worst_frechet_m": None if worst_frechet is None else round(worst_frechet, 1),
         "matched_points": sum(len(c) for c, _ in snap_shapes.values()),
+        "on_osm_m": round(on_osm_total, 1),
+        "agency_m": round(agency_total, 1),
+        "on_osm_pct": (
+            round(100.0 * on_osm_total / (on_osm_total + agency_total), 3)
+            if on_osm_total + agency_total > 0
+            else None
+        ),
+        "patterns_off_osm": off_osm,
     }
 
     if args.dry_run:
@@ -748,12 +777,28 @@ def main(argv=None) -> int:
     print(
         f"[shapesnap.run] feed {args.feed} ({','.join(modes)}): "
         f"{summary['patterns']} patterns — {summary['matched']} matched, "
-        f"{summary['fallback']} fallback, {summary['passthrough']} passthrough; "
+        f"{summary['passthrough_agency']} passthrough_agency, "
+        f"{summary['passthrough']} passthrough; "
         f"{summary['unique_matched_shapes']} unique shapes "
         f"({summary['duplicate_geometries']} dups); "
         f"worst Fréchet {summary['worst_frechet_m']} m; "
         f"{summary['runtime_s']}s"
     )
+    pct = summary["on_osm_pct"]
+    print(
+        f"[shapesnap.run] on-OSM: "
+        f"{'n/a' if pct is None else f'{pct}%'} of "
+        f"{round(on_osm_total + agency_total, 1)} m output "
+        f"({summary['agency_m']} m agency); "
+        f"{len(off_osm)} patterns below 100%"
+    )
+    for e in off_osm[:20]:
+        print(
+            f"  off-OSM {e['pattern']} route={e['route']} method={e['method']} "
+            f"agency_m={e['agency_m']} on_osm_m={e['on_osm_m']}"
+        )
+    if len(off_osm) > 20:
+        print(f"  ... and {len(off_osm) - 20} more (full list in the run summary)")
     print(f"[shapesnap] SUMMARY {json.dumps(summary)}")
     return 0
 
