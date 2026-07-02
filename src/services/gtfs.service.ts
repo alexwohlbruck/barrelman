@@ -1375,7 +1375,16 @@ async function patchZipCsv(
   const records = parseGtfsRecords(content)
   if (records.length === 0) return 0
 
-  const columns = Object.keys(records[0])
+  // Derive columns from the header row, NOT Object.keys(records[0]):
+  // relax_column_count means a ragged (short) first data row would yield a
+  // record with only its own fields, silently dropping columns on rewrite.
+  const headerRows = parse(content, { to_line: 1, trim: true }) as string[][]
+  const columns = headerRows[0] ?? []
+  for (const record of records) {
+    for (const key of Object.keys(record)) {
+      if (!columns.includes(key)) columns.push(key)
+    }
+  }
   if (!columns.includes(keyColumn)) return 0
 
   let patched = 0
