@@ -376,11 +376,11 @@ def check1_c1_contract(g, proj, segments, chicago: bool = True):
 
 def check2_c3_contract(segments, chicago: bool = True):
     print("\nCHECK 2 — C3: fixed ground length + densification")
-    # the shrink floor is calibration, not contract (the contract allows
-    # short-corridor shrink); NYC's Bowling Green junction cluster packs
-    # sites so close that both halves shrink to 0.39x — keep Chicago's
-    # 0.4 verbatim, use 0.3 elsewhere (still catches degenerate ramps)
-    lo = (0.4 if chicago else 0.3) * CFG.transition_len_m
+    # short-corridor shrink is allowed by the contract; 0.4x is the
+    # calibrated floor for every build (the NYC Bowling Green cluster
+    # that briefly needed 0.3 was a skeleton artifact, since fixed at
+    # the raster by sliver-hole filling — NYC now bottoms out at 0.61x)
+    lo = 0.4 * CFG.transition_len_m
     hi = 1.1 * CFG.transition_len_m
 
     def hi_for(t):

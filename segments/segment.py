@@ -167,9 +167,19 @@ def raw_min_radius(coords, corner_idx: int, step: float) -> float:
     centred on the corner vertex itself (that kink is the fillet's job).
     Inherited track curvature sharper than the fillet target cannot be
     fixed by a corner fillet — it is recorded so the curvature exam can
-    tell it apart from fillet-introduced kinks."""
+    tell it apart from fillet-introduced kinks.
+
+    Densified at step/2 — the FINEST vertex grid the emitted feature can
+    contain (biarc arcs sample at step/2; densify halves any segment
+    just over step): discrete circumradius at a fixed bend shrinks with
+    its neighbouring segment lengths, so a floor probed on a coarser
+    grid than the emitted rows overstates the inherited radius and fails
+    the exam on a measurement artifact (GC 7/7X: the same 20-degree raw
+    bend read 12.7 m on the 7.5 m grid vs 10.7 m on the emitted 5.7 m
+    split). step/2 makes the recorded floor a true lower bound for any
+    per-triple measurement of the served geometry."""
     corner = coords[corner_idx]
-    dense = densify(coords, step)
+    dense = densify(coords, step / 2.0)
     best = float("inf")
     for a, b, c in zip(dense, dense[1:], dense[2:]):
         if b == corner:
