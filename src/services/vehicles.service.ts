@@ -125,13 +125,23 @@ const tripRouteCache = new LRUCache<string, Map<string, string>>({
 })
 
 const GTFS_DATA_DIR = process.env.GTFS_DATA_DIR || './data/gtfs'
+// Fully preprocessed zips (what MOTIS ingests) — preferred over the raw
+// downloads so runtime reads agree with routing; raw is the fallback for
+// feeds that haven't been through the transform stage.
+const GTFS_PROCESSED_DIR = process.env.GTFS_PROCESSED_DIR || './data/gtfs-processed'
+
+/** Path to a feed's zip, preferring the processed copy over the raw one. */
+function gtfsZipPath(feedId: string): string {
+  const processed = join(GTFS_PROCESSED_DIR, `${feedId}.zip`)
+  return existsSync(processed) ? processed : join(GTFS_DATA_DIR, `${feedId}.zip`)
+}
 
 async function getTripRouteMap(feedId: string): Promise<Map<string, string>> {
   const cached = tripRouteCache.get(feedId)
   if (cached) return cached
 
   const map = new Map<string, string>()
-  const zipPath = join(GTFS_DATA_DIR, `${feedId}.zip`)
+  const zipPath = gtfsZipPath(feedId)
 
   if (!existsSync(zipPath)) {
     tripRouteCache.set(feedId, map)

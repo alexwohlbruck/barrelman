@@ -20,9 +20,9 @@
  * Zone-based feeds (origin_id/destination_id/contains_id) are skipped —
  * v1 zone semantics don't map mechanically onto v2 areas.
  *
- * Usage: bun run import/inject-fares-v2.ts [--dir ./data/gtfs] [--dry-run]
+ * Usage: bun run import/inject-fares-v2.ts [--dir ./data/gtfs-processed] [--dry-run]
  */
-import { readdirSync, writeFileSync } from 'fs'
+import { readdirSync, writeFileSync, existsSync } from 'fs'
 import { join, basename } from 'path'
 import JSZip from 'jszip'
 import { parseArgs } from 'util'
@@ -219,8 +219,14 @@ export async function injectFaresV2(zipPath: string, dryRun = false): Promise<st
 if (import.meta.main) {
   const { values } = parseArgs({
     args: Bun.argv.slice(2),
+    // Default to the fully preprocessed zips — fares must land in what MOTIS
+    // ingests, and the raw downloads stay pristine. Raw is the fallback for
+    // layouts predating the transform stage.
     options: {
-      dir: { type: 'string', default: './data/gtfs' },
+      dir: {
+        type: 'string',
+        default: existsSync('./data/gtfs-processed') ? './data/gtfs-processed' : './data/gtfs',
+      },
       'dry-run': { type: 'boolean', default: false },
     },
   })

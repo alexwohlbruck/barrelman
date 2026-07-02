@@ -7,8 +7,9 @@
  * deriveStopRoutes). Only the small files (routes/trips/calendar) are loaded
  * whole; stop_times never is.
  *
- * Usage (feed already imported; extract the txt files to a mounted dir first):
- *   unzip -o data/gtfs/29.zip routes.txt trips.txt calendar.txt \
+ * Usage (feed already imported; extract the txt files to a mounted dir first —
+ * from the PROCESSED zip, so derived data matches what MOTIS ingests):
+ *   unzip -o data/gtfs-processed/29.zip routes.txt trips.txt calendar.txt \
  *     calendar_dates.txt stop_times.txt -d data/29-gtfs
  *   docker exec barrelman bun run import/derive-rail-stop-routes.ts 29 /data/29-gtfs 1
  */

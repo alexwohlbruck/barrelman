@@ -8,7 +8,9 @@
 # display matviews.
 #
 # Requires the local loom:latest docker image and the feed already imported
-# (data/gtfs/<feedId>.zip present).
+# (data/gtfs-processed/<feedId>.zip present — the fully preprocessed copy the
+# import pipeline builds, so LOOM sees the same shapes/overrides MOTIS does;
+# falls back to the raw data/gtfs zip for feeds predating the transform stage).
 #
 # Usage:
 #   scripts/build-transit-graph.sh <feedId> <buildKey> [mode] [routeType]
@@ -29,11 +31,17 @@ AGGR="${5:-20}"
 DATA="$(cd "$(dirname "$0")/.." && pwd)/data"
 OUT="${KEY//:/-}-loom.json"
 
-[ -f "$DATA/gtfs/$FEED.zip" ] || { echo "Missing $DATA/gtfs/$FEED.zip — import the feed first"; exit 1; }
+# Prefer the fully preprocessed zip; fall back to raw with a warning.
+ZIP="gtfs-processed/$FEED.zip"
+if [ ! -f "$DATA/$ZIP" ]; then
+  echo "⚠ No processed zip at data/$ZIP — falling back to raw data/gtfs/$FEED.zip"
+  ZIP="gtfs/$FEED.zip"
+fi
+[ -f "$DATA/$ZIP" ] || { echo "Missing $DATA/$ZIP — import the feed first"; exit 1; }
 
 echo "Building LOOM graph for feed $FEED (mode: $MODE, aggr-dist ${AGGR}m) → data/$OUT"
 docker run --rm -v "$DATA:/data" loom:latest \
-  sh -c "gtfs2graph -m $MODE /data/gtfs/$FEED.zip | topo -d $AGGR | loom > /data/$OUT"
+  sh -c "gtfs2graph -m $MODE /data/$ZIP | topo -d $AGGR | loom > /data/$OUT"
 
 echo "Loading into transit_graph_* (build_key $KEY)…"
 docker exec -w /app barrelman bun run import/load-transit-graph.ts \

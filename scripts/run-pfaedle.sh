@@ -1,4 +1,10 @@
 #!/usr/bin/env bash
+# DEPRECATED — pending replacement by shapesnap, the custom OSM map-matcher.
+# Shape rewrites will run inside the import pipeline's transform stage (see
+# applyShapeRewrite in import/import-gtfs.ts) so the processed zip carries the
+# matched geometry before the DB parse and MOTIS ingestion. Kept until
+# shapesnap lands; avoid hand-injecting its output into zips.
+#
 # Opt-in GTFS shape cleaning via pfaedle (OSM map-matching).
 #
 # Map-matches a feed's trips onto OSM ways to produce an accurate shapes.txt.

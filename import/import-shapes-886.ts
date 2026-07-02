@@ -1,12 +1,15 @@
 import JSZip from 'jszip'
-import { readFileSync } from 'fs'
+import { readFileSync, existsSync } from 'fs'
 import { ensureGtfsSchema } from '../src/db'
 import { parseShapes, importShapes, deriveRouteShapes, updateRouteShapes } from '../src/services/gtfs.service'
 
 async function main() {
   await ensureGtfsSchema()
 
-  const zipPath = './data/gtfs/886.zip'
+  // Prefer the fully preprocessed zip (what MOTIS ingests); fall back to raw.
+  const zipPath = existsSync('./data/gtfs-processed/886.zip')
+    ? './data/gtfs-processed/886.zip'
+    : './data/gtfs/886.zip'
   const buffer = readFileSync(zipPath)
   const zip = await JSZip.loadAsync(buffer)
 

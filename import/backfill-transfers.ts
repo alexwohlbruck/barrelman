@@ -3,9 +3,9 @@
  * zips — for databases imported before agency transfers were captured.
  * New imports get this automatically (import-gtfs.ts).
  *
- * Usage: bun run import/backfill-transfers.ts [--dir ./data/gtfs]
+ * Usage: bun run import/backfill-transfers.ts [--dir ./data/gtfs-processed]
  */
-import { readdirSync } from 'fs'
+import { readdirSync, existsSync } from 'fs'
 import { join, basename } from 'path'
 import JSZip from 'jszip'
 import { parseArgs } from 'util'
@@ -14,7 +14,14 @@ import { parseTransfers, importTransfers } from '../src/services/gtfs.service'
 
 const { values } = parseArgs({
   args: Bun.argv.slice(2),
-  options: { dir: { type: 'string', default: './data/gtfs' } },
+  // Default to the fully preprocessed zips (they carry the injected
+  // transfers.txt); fall back to raw for layouts predating the transform stage.
+  options: {
+    dir: {
+      type: 'string',
+      default: existsSync('./data/gtfs-processed') ? './data/gtfs-processed' : './data/gtfs',
+    },
+  },
 })
 
 await ensureGtfsSchema()

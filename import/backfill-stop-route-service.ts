@@ -22,11 +22,13 @@ import {
   importStopRoutes,
 } from '../src/services/gtfs.service'
 
-// ZIPs live at /data/gtfs in the container (./data mounted at /data); fall back
-// to the repo-relative path when run on the host.
+// Prefer the fully preprocessed zips (what MOTIS ingests) so derived counts
+// match routing; fall back to the container path (/data/gtfs) and the raw
+// host dir for layouts predating the transform stage.
 const GTFS_DIR =
   process.env.GTFS_DIR ||
-  (existsSync('/data/gtfs') ? '/data/gtfs' : './data/gtfs')
+  ['./data/gtfs-processed', '/data/gtfs', './data/gtfs'].find(existsSync) ||
+  './data/gtfs'
 
 async function readEntry(zip: JSZip, name: string): Promise<string | undefined> {
   const e = zip.file(name)

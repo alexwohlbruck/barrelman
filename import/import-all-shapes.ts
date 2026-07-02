@@ -7,14 +7,19 @@ async function main() {
   await ensureGtfsSchema()
 
   const feedIds = process.argv.slice(2)
-  const dir = './data/gtfs'
+  // Prefer the fully preprocessed zips (shape rewrite + overrides baked in by
+  // import-gtfs.ts) so DB geometry matches what MOTIS ingests; fall back to
+  // the raw downloads for feeds predating the transform stage.
+  const processedDir = './data/gtfs-processed'
+  const rawDir = './data/gtfs'
 
   let zips: string[]
   if (feedIds.length > 0) {
     zips = feedIds.map(id => `${id}.zip`)
   } else {
     const { readdirSync } = await import('fs')
-    zips = readdirSync(dir).filter(f => f.endsWith('.zip'))
+    const listDir = existsSync(processedDir) ? processedDir : rawDir
+    zips = readdirSync(listDir).filter(f => f.endsWith('.zip'))
   }
 
   let total = 0
@@ -23,7 +28,8 @@ async function main() {
 
   for (const zip of zips) {
     const feedId = zip.replace('.zip', '')
-    const zipPath = `${dir}/${zip}`
+    const processedPath = `${processedDir}/${zip}`
+    const zipPath = existsSync(processedPath) ? processedPath : `${rawDir}/${zip}`
     total++
 
     if (!existsSync(zipPath)) {

@@ -6,7 +6,7 @@
  * Usage:
  *   bun run import/backfill-trip-patterns.ts                # all imported feeds
  *   bun run import/backfill-trip-patterns.ts 5 10 34        # specific feed ids
- *   bun run import/backfill-trip-patterns.ts --dir ./data/gtfs 5
+ *   bun run import/backfill-trip-patterns.ts --dir ./data/gtfs-processed 5
  */
 import { join } from 'path'
 import { existsSync } from 'fs'
@@ -31,7 +31,8 @@ function zipNameForFeed(feedId: string): string {
 
 async function main() {
   const argv = process.argv.slice(2)
-  let dir = './data/gtfs'
+  // Prefer the fully preprocessed zips (what MOTIS ingests); fall back to raw.
+  let dir = existsSync('./data/gtfs-processed') ? './data/gtfs-processed' : './data/gtfs'
   const feedArgs: string[] = []
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--dir') dir = argv[++i]
