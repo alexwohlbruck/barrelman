@@ -11,8 +11,7 @@ import random
 import pytest
 
 from lineorder.model import build_graph
-from lineorder.score import (Weights, brute_force, canonical_solution,
-                             score, search_space)
+from lineorder.score import Weights, brute_force, score, search_space
 from lineorder.solve import (SolveConfig, anneal, greedy_order,
                              solve_cpsat, solve_instance)
 
@@ -159,8 +158,6 @@ def test_heuristic_never_worse_than_start():
         sol, sc = anneal(g, reg, w, start, cfg=CFG, rng=rng)
         assert sc.weighted <= start_sc.weighted + 1e-9
         assert sc.weighted >= best.weighted - 1e-9
-        canon_sc = score(g, reg, canonical_solution(g), w)
-        assert sc.weighted <= canon_sc.weighted + 1e-9 or True  # informational
 
 
 # ------------------------------------------------------ chicago:l-v3
