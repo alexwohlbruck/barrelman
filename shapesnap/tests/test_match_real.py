@@ -12,10 +12,12 @@ Asserted here:
 
 Known data note (investigated, not a matcher fault): near the O'Hare
 terminal the CTA shape sits 50-120 m from OSM's tunnel alignment for
-~500 m, so Blue legitimately records one break there, bridged with the
-original shape segment. OSM has the track (O'Hare Branch, ways 12254162
-/ 680270914 / ...); the geometries just disagree beyond the candidate
-radius.
+~500 m — beyond the 50 m dense radius. Historically Blue recorded one
+break there, bridged with the original shape segment; since the gap
+retry (MatchConfig.gap_retry_radius_mult) the gap re-matches at 2x
+radius and reconnects on OSM's own track (O'Hare Branch, ways 12254162
+/ 680270914 / ...), so breaks is now 0. The assertion below allows
+either (<= 1): the retry is opportunistic, the bridge is the floor.
 
 Run (slow-ish — parses the 360 MB stop_times.txt once; auto-skips
 without a Chicago pbf/graph or data/gtfs/29.zip):

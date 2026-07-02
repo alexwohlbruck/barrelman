@@ -30,9 +30,14 @@ Known agency-data notes (investigated, not matcher faults):
     OSM track passes within ~2 m of it. The stop-snap gate correctly
     refuses (fallback) — the feed keeps its own geometry, never degraded.
   - Joralemon St Tunnel (4/5 under the East River): the MTA shape runs
-    37–64 m from OSM's tunnel alignment for ~700 m, beyond the 50 m dense
-    radius at its peak — the matcher breaks and bridges with the original
-    shape segment (~390–420 m), by design.
+    37–64 m from OSM's tunnel alignment (way 797157484 + partners) for
+    ~700 m, beyond the 50 m dense radius at its peak. Historically the
+    matcher broke and bridged ~390–420 m of original shape there — the
+    braid of ~30 per-pattern bridges wobbled the rendered 4/5 ribbon
+    under the river. Since the gap retry
+    (MatchConfig.gap_retry_radius_mult) the gap re-matches at 2x radius
+    and reconnects on the IRT Lexington tunnel way seamlessly (breaks 0,
+    bridged 0, recorded under stats.gap_retries).
   - R/0/a5589774 (32 trips/day, shape R..N78R): between Canal St and
     Prince St the shape is drawn through the Manhattan-Bridge approach
     and the Lexington Av corridor (long stop-to-stop chords plus a

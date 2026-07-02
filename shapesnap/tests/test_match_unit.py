@@ -4,9 +4,15 @@ Scenarios (fixtures/match_scenarios.osm):
   A. parallel ways with NO shared nodes; a shape hugging way 401 must
      match way 401 end-to-end (never its 40 m-away twin 402),
   B. a hole mid-route: the matcher must break, match the sub-traces and
-     bridge the hole with the ORIGINAL shape segment (gap recorded),
+     bridge the hole with the ORIGINAL shape segment (gap recorded) —
+     the gap RETRY at 2x radius must attempt and fail (no topological
+     connection exists), never fabricate a crossing,
   C. a shape offset ~40 m from the only way: candidates exist but the
-     coverage gate fails -> method=fallback, original returned unchanged.
+     coverage gate fails -> method=fallback, original returned unchanged,
+  D. a long continuous way with the shape bulging ~70 m off it for a
+     stretch (past the 50 m dense radius, inside the 2x retry radius):
+     the gap retry must reconnect on the way's own track with no break
+     recorded (the 4/5 Joralemon St Tunnel offset in miniature).
 
 Plus regime-B station emission features (StationIndex wired through
 match_pattern): name bonus, platform-ref bonus via Pattern.stop_platforms,
@@ -182,6 +188,81 @@ def test_gap_breaks_and_bridges_with_original(mg):
     assert r.gates is not None and r.gates.passed
     # break halves the confidence
     assert r.confidence < 0.6
+
+
+# ── D: gap retry — offset track recovered, absent track still bridges ────────
+
+
+def scenario_d_shape():
+    """Hug way 406 except a ~70 m southward bulge (-87.6560..-87.6540)."""
+    return [
+        (x, 41.88937 if -87.6560 <= x <= -87.6540 else 41.8900)
+        for x in lons(-87.6900, -87.5900, 0.0005)
+    ]
+
+
+def test_gap_retry_recovers_offset_track(mg):
+    """(a) The true track sits ~70 m from the shape for a stretch: past
+    the 50 m dense radius (break today) but inside the 2x retry radius.
+    The retry must splice a continuous path on way 406 — no break, no
+    bridge, the gap recorded as a successful retry."""
+    shape = scenario_d_shape()
+    stops = [(-87.6900, 41.8900), (-87.5900, 41.8900)]
+    r = match_pattern(mg, mk_pattern(shape, stops))
+
+    assert r.method == "hmm_dense", (r.method, r.stats)
+    assert r.gates is not None and r.gates.passed, r.gates.as_dict()
+    assert r.stats["breaks"] == 0, r.stats
+    assert r.stats["gaps"] == [] and r.stats["bridged_m"] == 0, r.stats
+    retries = r.stats.get("gap_retries")
+    assert retries and len(retries) == 1, r.stats
+    assert retries[0]["ok"] is True and retries[0]["radius_m"] == 100.0, retries
+    # the whole decode rides way 406 — bulge included
+    assert set(r.edges_used) <= edges_of_way(mg, 406), r.edges_used
+    # ...and the output geometry stays ON the track through the bulge
+    # (never the agency bulge): worst vertex-to-track distance ~0
+    track = LineString(
+        mg.project_lonlat(mg.graph.edges[next(iter(edges_of_way(mg, 406)))].geometry)
+    )
+    out = mg.project_lonlat(r.coords)
+    from shapely.geometry import Point
+    worst = max(track.distance(Point(xy)) for xy in out)
+    assert worst < 1.0, f"output strays {worst:.1f} m off the retried track"
+    # no break -> confidence not halved
+    assert r.confidence > 0.5, r.confidence
+
+
+def test_gap_retry_absent_track_still_bridges(mg):
+    """(b) Scenario B's hole has no topological crossing at ANY radius:
+    the retry must attempt (interior observations exist, expanded layers
+    are non-empty on both flanks) and fail feasibility — bridged with the
+    original segment exactly as without the retry."""
+    shape = [(x, 41.8830) for x in lons(-87.6400, -87.6300, 0.0005)]
+    stops = [(-87.6400, 41.8830), (-87.6300, 41.8830)]
+    r = match_pattern(mg, mk_pattern(shape, stops))
+
+    assert r.method == "hmm_dense"
+    assert r.stats["breaks"] == 1, r.stats
+    assert len(r.stats["gaps"]) == 1 and r.stats["bridged_m"] > 50, r.stats
+    retries = r.stats.get("gap_retries")
+    assert retries and len(retries) == 1, r.stats
+    assert retries[0]["ok"] is False, retries
+    assert {mg.graph.edges[i].way_id for i in r.edges_used} == {403, 404}
+    assert r.gates is not None and r.gates.passed
+
+
+def test_gap_retry_disabled_reproduces_break(mg):
+    """Config-driven: gap_retry_radius_mult <= 1 restores pure
+    break+bridge on the scenario-D bulge."""
+    shape = scenario_d_shape()
+    stops = [(-87.6900, 41.8900), (-87.5900, 41.8900)]
+    cfg = MatchConfig(gap_retry_radius_mult=1.0)
+    r = match_pattern(mg, mk_pattern(shape, stops), cfg)
+
+    assert r.method == "hmm_dense", (r.method, r.stats)
+    assert r.stats["breaks"] == 1, r.stats
+    assert r.stats["bridged_m"] > 100, r.stats
+    assert "gap_retries" not in r.stats, r.stats
 
 
 # ── C: gate failure -> fallback, original unchanged ──────────────────────────

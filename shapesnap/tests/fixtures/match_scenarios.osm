@@ -10,6 +10,13 @@
        C. way 405: lone rail; a shape offset ~40 m (inside the 50 m
           candidate radius, outside the 25 m coverage tolerance) must
           match but then fail the coverage gate -> fallback.
+       D. way 406: one long (~8.3 km) continuous rail at lat 41.8900;
+          a shape that hugs it except for a short ~70 m southward bulge
+          (past the 50 m dense radius, inside the 2x gap-retry radius)
+          must RETRY the gap and reconnect on 406 with no break — the
+          Joralemon shape-vs-track offset in miniature. Long so the
+          bulge observations stay under the 5% coverage budget; far
+          from every other scenario (405 is ~410 m south of the bulge).
   -->
 
   <!-- A: way 401 (south track) -->
@@ -49,6 +56,19 @@
   <node id="1054" lat="41.8830" lon="-87.6310"/>
   <node id="1055" lat="41.8830" lon="-87.6300"/>
 
+  <!-- D: way 406 (long lone rail for the gap-retry scenario) -->
+  <node id="1081" lat="41.8900" lon="-87.6900"/>
+  <node id="1082" lat="41.8900" lon="-87.6800"/>
+  <node id="1083" lat="41.8900" lon="-87.6700"/>
+  <node id="1084" lat="41.8900" lon="-87.6600"/>
+  <node id="1085" lat="41.8900" lon="-87.6500"/>
+  <node id="1086" lat="41.8900" lon="-87.6400"/>
+  <node id="1087" lat="41.8900" lon="-87.6300"/>
+  <node id="1088" lat="41.8900" lon="-87.6200"/>
+  <node id="1089" lat="41.8900" lon="-87.6100"/>
+  <node id="1090" lat="41.8900" lon="-87.6000"/>
+  <node id="1091" lat="41.8900" lon="-87.5900"/>
+
   <!-- C: way 405 -->
   <node id="1061" lat="41.8860" lon="-87.6400"/>
   <node id="1062" lat="41.8860" lon="-87.6390"/>
@@ -86,6 +106,12 @@
     <nd ref="1061"/><nd ref="1062"/><nd ref="1063"/><nd ref="1064"/>
     <nd ref="1065"/><nd ref="1066"/><nd ref="1067"/><nd ref="1068"/>
     <nd ref="1069"/><nd ref="1070"/><nd ref="1071"/>
+    <tag k="railway" v="rail"/>
+  </way>
+  <way id="406">
+    <nd ref="1081"/><nd ref="1082"/><nd ref="1083"/><nd ref="1084"/>
+    <nd ref="1085"/><nd ref="1086"/><nd ref="1087"/><nd ref="1088"/>
+    <nd ref="1089"/><nd ref="1090"/><nd ref="1091"/>
     <tag k="railway" v="rail"/>
   </way>
 
