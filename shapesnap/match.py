@@ -177,6 +177,7 @@ class Pattern:
     route_color: str
     route_type: int
     stop_platforms: list = field(default_factory=list)  # GTFS platform_code, "" when absent
+    trip_ids: tuple = ()   # every trip that runs this pattern (trips.txt remap)
 
     @property
     def key(self) -> str:
@@ -294,15 +295,15 @@ def load_patterns(zip_path, route_ids=None, modes=None) -> list:
         if len(seq) < 2:
             continue
         sids = tuple(sid for _, sid in sorted(seq))
-        groups.setdefault((rid, direction, sids), []).append(sh)
+        groups.setdefault((rid, direction, sids), []).append((tid, sh))
 
     patterns = []
-    for (rid, direction, sids), shape_ids in groups.items():
+    for (rid, direction, sids), members in groups.items():
         if any(sid not in stops for sid in sids):
             continue
         meta = routes[rid]
         best_shape = max(
-            (sh for sh in shape_ids if sh in shape_coords),
+            (sh for _tid, sh in members if sh in shape_coords),
             key=lambda sh: shape_len[sh],
             default=None,
         )
@@ -314,7 +315,8 @@ def load_patterns(zip_path, route_ids=None, modes=None) -> list:
                 stop_coords=[stops[s][:2] for s in sids],
                 stop_names=[stops[s][2] for s in sids],
                 stop_platforms=[stops[s][3] for s in sids],
-                trip_count=len(shape_ids),
+                trip_count=len(members),
+                trip_ids=tuple(tid for tid, _sh in members),
                 shape_id=best_shape,
                 shape=shape_coords.get(best_shape),
                 route_short_name=meta["short"],
