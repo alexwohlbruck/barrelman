@@ -7,6 +7,13 @@
       "pbf": "data/il.osm.pbf",
       "bbox": [-87.95, 41.64, -87.52, 42.09],
       "graphStem": "il-chicago"
+    },
+    "5": {
+      "enabled": true,
+      "modes": ["rail"],
+      "pbf": "data/ny.osm.pbf",
+      "bbox": [-74.37, 40.42, -73.64, 41.0],
+      "graphStem": "ny-nyc"
     }
   }
 }
