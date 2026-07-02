@@ -127,6 +127,14 @@ Per (mode-class, region cell), from *matched* shapes:
   (scikit-image); vectorize (nodes at degree≠2 pixels); attribute routes back to edges;
   snap/group stations. Junctions fall out of skeleton topology — crossing-not-parallel
   tracks never merge (Tower 18 exam).
+- Length acceptance: total skeleton km within 0.75–1.25× of the **merge-width-fused
+  network** — `area(union(shapes buffered at MERGE_WIDTH/2))) / MERGE_WIDTH`, computed
+  independently of the raster path. The raw union of used ways is NOT the contract
+  reference: OSM-matched directional track pairs run ~4–10 m apart, so the raw union
+  double-counts every double-tracked corridor and fusing those pairs is this stage's
+  whole job (CTA: union 288 km vs fused 172 km vs published ~165 km route length —
+  skeleton/union sits near 0.55 structurally). The raw union keeps a 0.40–1.00 sanity
+  band only.
 - Emits the existing `transit_graph_nodes/edges/edge_lines` contract + builds ledger.
 
 ### Stage 5 — ordering + slot stabilization (task #5)
