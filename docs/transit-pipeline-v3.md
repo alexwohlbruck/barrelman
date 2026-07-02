@@ -358,5 +358,42 @@ transitland provider); rail/bus/ferry mode filter; wire hover.
   only where lines enter/leave the Loop; bullets/labels legible.
 - **NYC regression**: Broadway trunk one yellow ribbon set; DeKalb junction sane;
   Christopher St / Kingston Av attribution anchors hold.
+
+### NYC (feed 5, `nyc:subway-v3`) — milestone 5
+
+What NYC exercises that Chicago cannot: colour collapse (N/Q/R/W share
+route_color `F6BC26` in feed 5 — the family must render as ONE ribbon on the
+Broadway trunk; same for 1/2/3, A/C/E, 4/5/6, B/D/F/M), 4-track express/local
+corridors whose parallel OSM ways must fuse to one centerline, and ~10x
+Chicago's graph (623 nodes / 708 edges / 1802 edge-lines; 144 corridors,
+164 transition sites; solves in seconds after the reductions shatter it).
+
+`segments/exam/nyc_exam.py` (read-only, exits non-zero on failure): (1)
+Broadway yellow trunk — perpendicular cross-sections between Times Sq and
+Canal St each hit exactly one yellow feature with a co-running subset of
+{N,Q,R,W}, and a window sweep asserts no two distinct yellow steady features
+run side-by-side (parallel within 20 m for >100 m — the duplicate-centerline
+failure the raster's MERGE_WIDTH fusion prevents); (2) trunk family table —
+Broadway N/Q/R/W, 7th Av 1/2/3, 8th Av A/C/E, Lexington 4/5/6/6X each one
+ribbon, Queens Blvd exactly the E + F/FX/M + R three-ribbon bundle; (3)
+DeKalb Av / Flatbush Av — the full transition inventory (48 features), every
+one anchored to graph junction / composition-change sites, fillet floors
+measured on the emitted rows, no self-intersections.
+
+The generic exams run against the build directly and must also pass:
+`lineorder/exam/stability_exam.py --build-key nyc:subway-v3` (zero corridor
+violations, deterministic re-solve) and `segments/exam/segments_exam.py
+--build-key nyc:subway-v3` (checks 0–4; consumed-corridor merges make
+multi-site transitions, hence the per-site length bound).
+
+`segments/exam/nyc_visual.py --window broadway|dekalb` renders the two
+receipt windows at simulated z15 with the loop_visual machinery.
+
+```
+uv run --with-requirements segments/requirements.txt \
+    python segments/exam/nyc_exam.py
+uv run --with-requirements segments/requirements.txt \
+    python segments/exam/nyc_visual.py --window broadway --out data/exam/nyc-broadway.png
+```
 - **Global soundness**: a frequencies-based feed and a calendar_dates-only feed
   attribute correctly; a weekend-only station shows its weekend routes.
