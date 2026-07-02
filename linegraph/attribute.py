@@ -133,6 +133,72 @@ def _edge_adjacency(lg):
     return edge_nodes, node_edges
 
 
+class EdgeSnapIndex:
+    """STRtree + adjacency + densified edge probes over lg.edges.
+
+    Shared by every consumer of the per-shape attribution core
+    (attribute_patterns and linegraph.refit's coarse pass) so the
+    sample-snap-chain-gate logic exists exactly once. Holds positional
+    references into lg.edges — build one per graph STATE and discard it
+    whenever edges are split, pruned, or re-geometried.
+    """
+
+    def __init__(self, lg):
+        self.lg = lg
+        self.tree = STRtree([LineString(e.coords_xy) for e in lg.edges])
+        self.edge_nodes, self.node_edges = _edge_adjacency(lg)
+        # densified edge probes for the converse deviation gate, built
+        # lazily (an edge is probed only once a chain claims it)
+        self._probes: dict = {}
+
+    def probes_for(self, eid: int):
+        pts = self._probes.get(eid)
+        if pts is None:
+            samples = sample_polyline_xy(self.lg.edges[eid].coords_xy,
+                                         EDGE_SAMPLE_M)
+            pts = shapely.points(samples[:, 0], samples[:, 1])
+            self._probes[eid] = pts
+        return pts
+
+
+def attribute_shape_xy(index: EdgeSnapIndex, shape_xy, *,
+                       sample_m: float = DEFAULT_SAMPLE_M,
+                       snap_radius_m: float | None = None,
+                       deviation_gate_m: float = DEVIATION_GATE_M):
+    """One projected shape through the full sample-snap-chain-gate core.
+
+    Returns (ridden edge positions, n_samples, n_unmatched, n_excised).
+    """
+    lg = index.lg
+    if snap_radius_m is None:
+        snap_radius_m = 2.0 * lg.merge_width_m
+    samples = sample_polyline_xy(shape_xy, sample_m)
+    points = shapely.points(samples[:, 0], samples[:, 1])
+    nearest = np.full(len(points), -1, dtype=np.int64)
+    pairs = index.tree.query_nearest(
+        points, max_distance=snap_radius_m, all_matches=False
+    )
+    nearest[pairs[0]] = pairs[1]
+
+    chain = _chain_edges(
+        [int(e) for e in nearest[nearest >= 0]], lg,
+        index.edge_nodes, index.node_edges,
+    )
+
+    # converse gate: excise edges the shape never comes near — max
+    # deviation over the DENSIFIED edge, not just vertices
+    shape_line = LineString(shape_xy)
+    shapely.prepare(shape_line)
+    ridden, n_excised = [], 0
+    for eid in sorted(set(chain)):
+        dmax = float(shapely.distance(index.probes_for(eid), shape_line).max())
+        if dmax <= deviation_gate_m:
+            ridden.append(eid)
+        else:
+            n_excised += 1
+    return ridden, len(points), int((nearest < 0).sum()), n_excised
+
+
 BLEED_SUPPORT = 2  # runs this short at a junction are crossing artifacts
 
 
@@ -204,25 +270,8 @@ def attribute_patterns(lg, patterns, feed_id: str, routes_meta=None, *,
                    (shapeless patterns get n_samples=0, fraction 1.0).
     """
     routes_meta = routes_meta or {}
-    if snap_radius_m is None:
-        snap_radius_m = 2.0 * lg.merge_width_m
-
     to_xy = Transformer.from_crs(4326, lg.epsg, always_xy=True)
-    tree = STRtree([LineString(e.coords_xy) for e in lg.edges])
-    edge_nodes, node_edges = _edge_adjacency(lg)
-
-    # densified edge probes for the converse deviation gate, built lazily
-    # (an edge is probed only once a chain claims it)
-    edge_probes: dict = {}
-
-    def probes_for(eid: int):
-        pts = edge_probes.get(eid)
-        if pts is None:
-            samples = sample_polyline_xy(lg.edges[eid].coords_xy,
-                                         EDGE_SAMPLE_M)
-            pts = shapely.points(samples[:, 0], samples[:, 1])
-            edge_probes[eid] = pts
-        return pts
+    index = EdgeSnapIndex(lg)
 
     edge_routes: dict = {}
     stats: list = []
@@ -231,34 +280,12 @@ def attribute_patterns(lg, patterns, feed_id: str, routes_meta=None, *,
             stats.append(PatternAttribution(p.key, p.route_id, 0, 0, 0))
             continue
         xs, ys = to_xy.transform([c[0] for c in p.shape], [c[1] for c in p.shape])
-        samples = sample_polyline_xy(list(zip(xs, ys)), sample_m)
-        points = shapely.points(samples[:, 0], samples[:, 1])
-        nearest = np.full(len(points), -1, dtype=np.int64)
-        pairs = tree.query_nearest(
-            points, max_distance=snap_radius_m, all_matches=False
+        ridden, n_samples, n_unmatched, n_excised = attribute_shape_xy(
+            index, list(zip(xs, ys)), sample_m=sample_m,
+            snap_radius_m=snap_radius_m, deviation_gate_m=deviation_gate_m,
         )
-        nearest[pairs[0]] = pairs[1]
-
-        chain = _chain_edges(
-            [int(e) for e in nearest[nearest >= 0]], lg, edge_nodes, node_edges
-        )
-        candidates = sorted(set(chain))
-
-        # converse gate: excise edges the pattern's own shape never comes
-        # near — max deviation over the DENSIFIED edge, not just vertices
-        shape_line = LineString(list(zip(xs, ys)))
-        shapely.prepare(shape_line)
-        ridden, n_excised = [], 0
-        for eid in candidates:
-            dmax = float(shapely.distance(probes_for(eid), shape_line).max())
-            if dmax <= deviation_gate_m:
-                ridden.append(eid)
-            else:
-                n_excised += 1
-
-        n_unmatched = int((nearest < 0).sum())
         stats.append(
-            PatternAttribution(p.key, p.route_id, len(points), n_unmatched,
+            PatternAttribution(p.key, p.route_id, n_samples, n_unmatched,
                                len(ridden), n_excised)
         )
 
