@@ -274,24 +274,29 @@ docker exec -i barrelman-db psql -U barrelman -d barrelman \
 `segments/exam/segments_exam.py` validates the EMITTED rows (read-only, exits
 non-zero on failure): (0) DB rows equal a fresh deterministic rebuild; (1) C1 —
 the transition-site inventory is exactly stage 5's list (18 sites: 17 junctions
-+ Howard, cross-checked coordinate-for-coordinate against lineorder's loader)
-and a full ribbon walk finds ZERO offset discontinuities at feature boundaries —
-offsets change only inside transition features anchored to listed sites; (2)
-C3 — every transition length within [0.4, 1.1]× the configured 60 m, vertex
-spacing ≤ 7.5 m; (3) fillet — every transition meets its min-radius floor
-(clamps and inherited track curvature recorded), no self-intersections; (4)
-coverage — per-ribbon feature length covers the corridors within 1%, no
-overlaps > 1 m beyond the branch-divergence tails two same-ribbon transitions
-legitimately share at a Loop corner; (5) per-Loop-leg receipt (Lake / Wabash /
-Van Buren / Wells / interior subways with slots + offsets, all Loop
++ Howard, cross-checked coordinate-for-coordinate against lineorder's loader),
+a full ribbon walk finds ZERO offset discontinuities at feature boundaries —
+offsets change only inside transition features anchored to listed sites — and
+every feature end is accounted for: shared with another same-ribbon end or
+sitting on one of the ribbon's genuine termini (degree-1 nodes of its corridor
+subgraph, each occupied), so a dropped or mislocated transition orphans an end
+and fails; (2) C3 — every transition length within [0.4, 1.1]× the configured
+60 m, vertex spacing ≤ 7.5 m; (3) fillet — every transition meets its
+min-radius floor, measured on the emitted DB geometry (clamps and inherited
+track curvature recorded), no self-intersections; (4) coverage — per-ribbon
+feature length covers the corridors within 1%, no overlaps > 1 m beyond the
+tail two same-ribbon transitions legitimately share at a branch-divergence
+site (currently the Green Line 63rd St split); (5) per-Loop-leg receipt (Lake /
+Wabash / Van Buren / Wells / interior subways with slots + offsets, all Loop
 transitions with their ramps).
 
 `segments/exam/loop_visual.py` renders the before/after receipt: the Loop
-window at simulated z15 (m/px = 78271.51696/2¹⁵·cos lat) drawn with the exact
+window at simulated z15 (m/px = 78271.51696/2¹⁵·cos lat) drawn with the same
 per-vertex machinery the MapLibre fork uses — miter-joined perpendicular
-offsets, transitions eased cubic-bezier(.4,0,.6,1) along line-progress —
-side by side with the rejected v2 model (`transit_lines_centerline` merged
-runs × 0/0.15/0.85/1 linear taper).
+offsets, bevelled past the client's miter-limit of 2, transitions eased
+cubic-bezier(.4,0,.6,1) along line-progress — side by side with the rejected
+v2 model (`transit_lines_centerline` merged runs × 0/0.15/0.85/1 linear
+taper).
 
 ```
 uv run --with-requirements segments/requirements.txt \
