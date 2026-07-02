@@ -61,7 +61,7 @@
       "osmReplication": [
         "https://download.geofabrik.de/north-america/us/illinois-updates/"
       ],
-      "bbox": [-87.95, 41.64, -87.52, 42.07],
+      "bbox": [-87.95, 41.64, -87.52, 42.09],
       "gtfsRegion": "chicago",
       "pelias": {
         "openaddresses": ["us/il/cook.csv"],

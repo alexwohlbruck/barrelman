@@ -20,8 +20,9 @@ import pytest
 
 from shapesnap.graph import REPO_ROOT, build_graph
 
-# Chicago region crop (config/regions.json chicago bbox)
-CHI_BBOX = (-87.95, 41.64, -87.52, 42.07)
+# Chicago region crop (config/regions.json chicago bbox; north edge must
+# clear the Purple line's Linden terminal at 42.0734)
+CHI_BBOX = (-87.95, 41.64, -87.52, 42.09)
 # The Loop exam window
 LOOP_BBOX = (-87.64, 41.87, -87.62, 41.89)
 

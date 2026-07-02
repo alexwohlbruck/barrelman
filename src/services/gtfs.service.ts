@@ -120,7 +120,7 @@ export interface ComputedTransfer {
 const REGION_BBOXES: Record<string, string> = {
   nc: '-84.5,33.8,-75.4,36.6',    // North Carolina
   nyc: '-74.3,40.45,-73.7,40.95', // NYC metro area (NJ Transit, MTA, PATH)
-  chicago: '-87.95,41.64,-87.52,42.07', // Chicago metro (CTA L + Metra; downtown Loop)
+  chicago: '-87.95,41.64,-87.52,42.09', // Chicago metro (CTA L + Metra; north edge clears Linden)
   southeast: '-92,24,-75,37',       // SE United States
   us: '-125,24,-66,50',            // Continental US
 }
