@@ -67,6 +67,7 @@ import time
 import zipfile
 from dataclasses import dataclass, field
 from heapq import heappop, heappush
+from itertools import count
 from pathlib import Path
 
 from shapely.geometry import LineString, Point
@@ -407,6 +408,9 @@ def _route_multi(mg, cfg, mult, src: Candidate, targets: list, cutoff_w: float) 
     heap: list = []
     parents: dict = {}
     settled: dict = {}
+    # monotonic tiebreaker: on exact (w, true) ties heapq must never fall
+    # through to comparing parent (None vs tuple raises TypeError)
+    tick = count()
 
     e0, d0 = src.edge, src.dir
     rem = max(0.0, mg.lengths[e0] - src.offset)
@@ -418,10 +422,10 @@ def _route_multi(mg, cfg, mult, src: Candidate, targets: list, cutoff_w: float) 
                 continue
             w = exit_w + _turn_penalty(mg, cfg, e0, d0, e1, d1, v0)
             if w <= cutoff_w:
-                heappush(heap, (w, exit_true, (e1, d1), None))
+                heappush(heap, (w, exit_true, next(tick), (e1, d1), None))
 
     while heap and unresolved:
-        w, true, state, parent = heappop(heap)
+        w, true, _, state, parent = heappop(heap)
         if state in settled:
             continue
         settled[state] = True
@@ -450,7 +454,7 @@ def _route_multi(mg, cfg, mult, src: Candidate, targets: list, cutoff_w: float) 
                 continue
             w2 = exit_w + _turn_penalty(mg, cfg, e, d, e2, d2, v)
             if w2 <= cutoff_w:
-                heappush(heap, (w2, exit_true, (e2, d2), state))
+                heappush(heap, (w2, exit_true, next(tick), (e2, d2), state))
     return results
 
 
