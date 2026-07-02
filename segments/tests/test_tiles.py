@@ -331,7 +331,12 @@ def test_seam_continuity_transition(db, db_rows):
     physically meaningful seam error; a z15 pixel is ~3.6 m). Adjacent
     tiles quantise to the SAME global 4096 lattice: Chicago's ~50-60 m
     transitions measure exactly 0; NYC's dense-junction features measure
-    up to ~1.6 cm (fraction deltas up to 2.7e-4), still invisible."""
+    up to ~4.3 cm (fraction deltas up to 7.1e-4 on 60 m features) — 86%
+    of the bound, so watch the printout when adding cities. 5 cm is a
+    hard physical contract, not per-city calibration: it stays sub-pixel
+    at every zoom the client can serve (a z22 pixel is ~3.7 cm at NYC
+    latitude), so a city exceeding it has a quantisation defect to fix,
+    never a bound to loosen."""
     checked = 0
     for fid in _seam_candidates(db, "transition"):
         pair = _seam_progress_pair(db, fid, Z)
