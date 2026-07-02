@@ -391,15 +391,20 @@ async function applyShapeRewrite(feedId: string, zipPath: string): Promise<boole
 
   // Keep a pristine copy: any failure below continues with the unrewritten zip
   const backupPath = `${zipPath}.preshapesnap`
-  copyFileSync(zipPath, backupPath)
+  let backedUp = false
   const bail = (why: string): false => {
     console.error(`  ✗✗✗ shapesnap(${feedId}) FAILED: ${why}`)
     console.error(`  ✗✗✗ continuing with the UNREWRITTEN zip — MOTIS/display will use the feed's own shapes`)
-    copyFileSync(backupPath, zipPath)
+    if (backedUp) copyFileSync(backupPath, zipPath)
     return false
   }
 
   try {
+    // Inside the try so a copy failure (e.g. ENOSPC on a large zip) bails to
+    // the unrewritten zip instead of dropping the feed from the import
+    copyFileSync(zipPath, backupPath)
+    backedUp = true
+
     const cmd = [
       'uv', 'run', '--with-requirements', 'shapesnap/requirements.txt',
       'python', '-m', 'shapesnap.run', '--feed', feedId, '--zip', zipPath,
