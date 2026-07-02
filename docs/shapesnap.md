@@ -53,6 +53,18 @@ uv run --with-requirements shapesnap/requirements.txt \
     python -m shapesnap.run --feed 29 --zip data/gtfs-processed/29.zip
 ```
 
+**Reference reseed (reruns).** The rewrite is in place, so on a rerun the
+dense-regime reference would be the *previous run's snapped output*, not the
+feed's own shapes — and the reference drifts (verified: the same pattern got a
+different snap id, Fréchet 29.5 m vs 49.7 m). `run-shapesnap.sh` therefore
+restores `shapes.txt` / `trips.txt` / `stop_times.txt` into the processed zip
+from the pristine raw zip (`data/gtfs/<feedId>.zip`) before matching — exactly
+what the import pipeline hands shapesnap, since the shape rewrite is the first
+transform step; members baked in afterwards (display overrides, transfers.txt,
+fares) are preserved. `SHAPESNAP_RESEED=0` skips it; `--dry-run` never touches
+the zip. The raw CLI invocation above does **not** reseed — prefer the script
+for reruns, or reseed manually first.
+
 Tests: `uv run --with-requirements shapesnap/requirements.txt python -m pytest shapesnap/tests -v`
 (the real-data exams auto-skip without `data/il.osm.pbf` + `data/gtfs/29.zip`).
 
