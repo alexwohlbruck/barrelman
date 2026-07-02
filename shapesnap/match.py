@@ -49,6 +49,10 @@ tables gtfs_trip_patterns / gtfs_shapes are empty on this host, so the
 zip is the documented source of truth here (it is also the artifact the
 import pipeline rewrites).
 
+Per-feed output dedup (spec item 5): the CLI driver hashes every result's
+coordinates (geometry_hash) and flags repeats as dup_of=<first pattern>;
+the pipeline write stage keeps one geometry per hash.
+
 CLI (repo convention — uv, never system python):
   uv run --with-requirements shapesnap/requirements.txt \
       python -m shapesnap.match --graph data/shapesnap/il-chicago.rail.graph.pkl.gz \
@@ -818,15 +822,22 @@ def main(argv=None) -> int:
     print(f"[shapesnap.match] {len(patterns)} patterns, graph {graph.mode} "
           f"({len(graph.edges)} edges)")
     cfg = MatchConfig()
+    seen: dict = {}  # per-feed output dedup: geometry_hash -> first pattern key
+    n_dup = 0
     for p in patterns:
         r = match_pattern(mg, p, cfg, station_idx=station_idx)
+        dup_of = seen.setdefault(geometry_hash(r.coords), p.key)
+        if dup_of != p.key:
+            n_dup += 1
         g = r.gates.as_dict() if r.gates else {}
         print(
             f"  {p.key} trips={p.trip_count} stops={len(p.stop_ids)} "
             f"method={r.method} conf={r.confidence} pts={r.stats.get('output_points')} "
             f"breaks={r.stats.get('breaks')} gates={g.get('failures') or 'ok'} "
             f"t={r.stats.get('runtime_s')}s"
+            + (f" dup_of={dup_of}" if dup_of != p.key else "")
         )
+    print(f"[shapesnap.match] {len(seen)} unique geometries, {n_dup} duplicates")
     return 0
 
 
