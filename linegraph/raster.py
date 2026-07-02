@@ -12,6 +12,15 @@ Memory guard: rasters are dense numpy bool (1 byte/px). The grid is
 cropped to the shape-collection bbox + padding; if it would still exceed
 MAX_GRID_BYTES (~1.5 GB) the build aborts with a clear error instead of
 swapping the machine to death.
+
+After stamping, enclosed background holes THINNER than the stroke are
+filled (fill_sliver_holes): two centerlines MERGE_WIDTH..2x MERGE_WIDTH
+apart leave a sliver of background between their strokes that is
+everywhere within MERGE_WIDTH/2 of ink — below the merge criterion — and
+skeletonizing around it yields parallel duplicate centerlines plus
+line-less ladder rungs (NYC: the 6th Ave/Houston St trench, the Bowling
+Green turnback tangle). Holes with genuine clearance (the Chicago Loop
+interior, real flying-junction eyes) are untouched.
 """
 
 from __future__ import annotations
@@ -21,6 +30,7 @@ from dataclasses import dataclass
 
 import numpy as np
 from pyproj import Transformer
+from scipy import ndimage
 from skimage.draw import disk as draw_disk
 from skimage.draw import polygon as draw_polygon
 
@@ -111,6 +121,33 @@ def plan_grid(shapes_xy, merge_width: float, res: float,
     return (x0, y0), rows, cols
 
 
+def fill_sliver_holes(grid: np.ndarray, half_px: float) -> int:
+    """Fill enclosed background holes with max clearance < half_px.
+
+    A hole every point of which lies within MERGE_WIDTH/2 of ink means
+    the surrounding strokes' centerlines run closer than 2x MERGE_WIDTH —
+    a sliver below the merge criterion, not a genuine separation. Holes
+    containing at least one pixel >= half_px clear of all ink survive
+    whole (per-hole decision, never partial fills). Bool morphology
+    only — no labeling pass, no distance transform. Mutates grid,
+    returns the pixel count filled.
+    """
+    ink_filled = ndimage.binary_fill_holes(grid)
+    holes = ink_filled & ~grid
+    if not holes.any():
+        return 0
+    n = int(math.ceil(half_px))
+    yy, xx = np.mgrid[-n:n + 1, -n:n + 1]
+    footprint = (yy * yy + xx * xx) <= half_px * half_px
+    # pixels >= half_px from every ink pixel = outside the ink dilation
+    clear = ~ndimage.binary_dilation(grid, structure=footprint)
+    cores = holes & clear
+    keep = ndimage.binary_propagation(cores, mask=holes)
+    fill = holes & ~keep
+    grid |= fill
+    return int(fill.sum())
+
+
 def rasterize(shapes_xy, merge_width: float, res: float,
               epsg: int = 0, max_bytes: int = MAX_GRID_BYTES) -> RasterGrid:
     """Stroke every shape at merge_width meters onto one boolean grid."""
@@ -140,4 +177,5 @@ def rasterize(shapes_xy, merge_width: float, res: float,
                 shape=grid.shape,
             )
             grid[rr, cc] = True
+    fill_sliver_holes(grid, half_px)
     return rg

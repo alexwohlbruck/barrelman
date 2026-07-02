@@ -3,6 +3,7 @@
 #       python -m linegraph.build --feed 29 --mode rail --build-key chicago:l-v3
 #   uv run --with-requirements linegraph/requirements.txt python -m pytest linegraph/tests -v
 numpy>=1.26            # raster grid
+scipy>=1.11            # ndimage bool morphology (sliver-hole filling)
 scikit-image>=0.22     # draw (stroke stamping) + morphology.skeletonize
 shapely>=2.0           # Douglas-Peucker simplify, union length QA
 pyproj>=3.6            # local UTM projection
