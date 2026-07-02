@@ -491,8 +491,43 @@ def _shape_evidence(passes, node_pt: Point, pi: Point, pj: Point,
     return False
 
 
+def _probe_through_xy(cg: CorridorGeom, side: str, dist: float, ck: str,
+                      cgs: dict, ends_by_site: dict):
+    """Probe point ~dist m beyond the node at `side` along the ribbon,
+    walking THROUGH decisively-short corridors while the same-colour
+    continuation is unambiguous.
+
+    A probe inside a fully consumed crossing rung (a collapsed
+    plan-view X — ~4 m after the linegraph refit pulls both junction
+    nodes onto the true crossing point) sits practically ON the node,
+    so the traversal-evidence order test (the pass projections of the
+    two probes must straddle the node) becomes a coin flip and one end
+    can pair twice (the 74 St / Roosevelt Av E double-pair). Extending
+    the probe through the rung into the ribbon's continuation restores
+    a real margin. Falls back to the plain capped probe on ambiguity."""
+    remaining = dist
+    seen = {cg.corridor.cid}
+    for _ in range(8):
+        if cg.corridor.ring or cg.length >= 0.5 * dist:
+            break
+        far_node = cg.node("a" if side == "b" else "b")
+        conts = [
+            (c2, s2) for c2, s2 in ends_by_site.get(far_node, ())
+            if c2.cid not in seen
+            and any(r.color_key == ck for r in c2.ribbons)
+        ]
+        if len(conts) != 1:
+            break
+        remaining = max(remaining - cg.length, 2.0)
+        c2, side = conts[0]
+        cg = cgs[c2.cid]
+        seen.add(c2.cid)
+    return cg.probe_xy(side, remaining)
+
+
 def pair_entries(nid: int, entries: list, cgs: dict, shapes_xy: dict,
-                 node_xy, cfg: SegmentConfig, info: dict):
+                 node_xy, cfg: SegmentConfig, info: dict,
+                 ends_by_site: dict | None = None):
     """entries: [(corridor, side, ribbon)] for ONE color_key at ONE site.
     Returns (pairs, stubs)."""
     if len(entries) == 1:
@@ -505,8 +540,14 @@ def pair_entries(nid: int, entries: list, cgs: dict, shapes_xy: dict,
     shapes = [ls for k in sorted(member_keys) for ls in shapes_xy.get(k, [])]
     window = 2 * cfg.probe_dist_m + cfg.evidence_tol_m
     passes = _shape_passes(shapes, (node_pt.x, node_pt.y), window)
-    probes = [Point(cgs[c.cid].probe_xy(s, cfg.probe_dist_m))
-              for c, s, _r in entries]
+    ck = entries[0][2].color_key
+    if ends_by_site is None:
+        probes = [Point(cgs[c.cid].probe_xy(s, cfg.probe_dist_m))
+                  for c, s, _r in entries]
+    else:
+        probes = [Point(_probe_through_xy(cgs[c.cid], s, cfg.probe_dist_m,
+                                          ck, cgs, ends_by_site))
+                  for c, s, _r in entries]
 
     if len(entries) == 2:
         # two corridor ends still need matched_shapes support: two same-
@@ -642,7 +683,7 @@ def build_segments(g: Graph, cfg: SegmentConfig = SegmentConfig(),
         n_t = 0
         for ck in sorted(by_ck):
             pairs, stubs = pair_entries(nid, by_ck[ck], cgs, shapes_xy,
-                                        node_xy, cfg, info)
+                                        node_xy, cfg, info, ends_by_site)
             for (c1, s1, r1), (c2, s2, r2) in pairs:
                 cg1, cg2 = cgs[c1.cid], cgs[c2.cid]
                 tail = cg1.tail_xy(s1)   # deduped, ends at the node
