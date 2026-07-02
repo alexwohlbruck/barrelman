@@ -16,6 +16,7 @@ Run (repo convention):
 from pathlib import Path
 
 import pytest
+from shapely.geometry import LineString
 
 from shapesnap.candidates import (
     MatchGraph,
@@ -23,6 +24,7 @@ from shapesnap.candidates import (
     cheap_ted,
     name_similarity,
 )
+from shapesnap.gates import GateConfig, evaluate_gates
 from shapesnap.graph import build_graph
 from shapesnap.match import (
     MatchConfig,
@@ -195,3 +197,21 @@ def test_geometry_hash_dedup():
     c = [(-87.641, 41.88), (-87.63, 41.88)]
     assert geometry_hash(a) == geometry_hash(b)
     assert geometry_hash(a) != geometry_hash(c)
+
+
+# ── gates: degenerate inputs must fail cleanly, never raise ──────────────────
+
+
+def test_gates_zero_length_output_fails_cleanly():
+    r = evaluate_gates(LineString([(0, 0), (0, 0)]), "rail", GateConfig())
+    assert not r.passed
+    assert r.failures == ["empty_output"]
+
+
+def test_gates_zero_length_ref_line_no_crash():
+    out = LineString([(0, 0), (100, 0)])
+    r = evaluate_gates(
+        out, "rail", GateConfig(), ref_line=LineString([(5, 5), (5, 5)]), dense=True
+    )
+    # degenerate ref: frechet / length-ratio gates skipped, no exception
+    assert r.frechet_m is None and r.length_ratio is None

@@ -94,7 +94,14 @@ def evaluate_gates(
     stops_xy are lists of projected (x, y).
     """
     report = GateReport(passed=True)
-    if output_line is None or output_line.is_empty or len(output_line.coords) < 2:
+    if (
+        output_line is None
+        or output_line.is_empty
+        or len(output_line.coords) < 2
+        or output_line.length == 0
+    ):
+        # includes all-identical coordinates (zero length): segmentize would
+        # raise a GEOSException on such degenerate input
         report.passed = False
         report.failures.append("empty_output")
         return report
@@ -109,7 +116,8 @@ def evaluate_gates(
                 f"coverage {report.coverage:.3f} < {cfg.min_coverage} (tol {tol} m)"
             )
 
-    if dense and ref_line is not None and not ref_line.is_empty:
+    # zero-length ref (all-identical coords) would crash segmentize; skip 2–3
+    if dense and ref_line is not None and not ref_line.is_empty and ref_line.length > 0:
         step = cfg.frechet_segmentize_m
         report.frechet_m = float(
             shapely.frechet_distance(
@@ -121,13 +129,12 @@ def evaluate_gates(
             report.failures.append(
                 f"frechet {report.frechet_m:.0f} m > {cfg.max_frechet_m} m"
             )
-        if ref_line.length > 0:
-            report.length_ratio = output_line.length / ref_line.length
-            if not (cfg.length_ratio_min <= report.length_ratio <= cfg.length_ratio_max):
-                report.failures.append(
-                    f"length_ratio {report.length_ratio:.3f} outside "
-                    f"[{cfg.length_ratio_min}, {cfg.length_ratio_max}]"
-                )
+        report.length_ratio = output_line.length / ref_line.length
+        if not (cfg.length_ratio_min <= report.length_ratio <= cfg.length_ratio_max):
+            report.failures.append(
+                f"length_ratio {report.length_ratio:.3f} outside "
+                f"[{cfg.length_ratio_min}, {cfg.length_ratio_max}]"
+            )
 
     if not dense and stops_xy and len(stops_xy) >= 2:
         chord = LineString(stops_xy).length
