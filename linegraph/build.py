@@ -20,10 +20,12 @@ the skeleton will fuse on agency geometry instead of snapped track).
 idempotently per build_key (delete-and-replace). Phase A writes ONLY this
 QA table — transit_graph_* stays untouched.
 
---emit runs phase B after the skeleton: station snapping (linegraph.
-stations — splits edges into station-to-station segments), route
-attribution (linegraph.attribute), then the transit_graph_* contract
-write (linegraph.emit, delete-and-replace per build_key).
+--emit runs phase B after the skeleton: shape-evidence geometry refit
+(linegraph.refit — default ON, --no-refit to skip), station snapping
+(linegraph.stations — splits the refit centerline into station-to-
+station segments), route attribution (linegraph.attribute), then the
+transit_graph_* contract write (linegraph.emit, delete-and-replace per
+build_key).
 """
 
 from __future__ import annotations
@@ -277,11 +279,17 @@ def prune_lineless_edges(lg, edge_routes: dict, labels: dict):
     return {i: r for i, r in enumerate(routes)}, n_dropped, n_joined
 
 
-def enrich_graph(lg, patterns, zip_path, feed_id: str, *, verbose: bool = True):
-    """Stations first (edges split station-to-station), then attribution.
+def enrich_graph(lg, patterns, zip_path, feed_id: str, *, refit: bool = True,
+                 verbose: bool = True):
+    """Refit geometry from shape evidence, then stations, then attribution.
 
-    Returns (lg, snap: StationSnapResult, edge_routes, stats). Mutates lg
-    (never the on-disk cache — the cache holds the raw skeleton only).
+    Phase order: coarse attribution + geometry refit (linegraph.refit —
+    the skeleton is authoritative topology but lossy geometry near
+    junctions, config-gated, default ON) -> station snapping, splitting
+    on the REFIT centerline -> the final attribution emit consumes ->
+    line-less pruning. Returns (lg, snap: StationSnapResult,
+    edge_routes, stats). Mutates lg (never the on-disk cache — the
+    cache holds the raw skeleton only).
     """
     from linegraph.attribute import attribute_patterns, load_routes_meta
     from linegraph.stations import load_station_complexes, snap_stations
@@ -289,6 +297,27 @@ def enrich_graph(lg, patterns, zip_path, feed_id: str, *, verbose: bool = True):
     def log(msg):
         if verbose:
             print(f"[linegraph] {msg}", flush=True)
+
+    if refit:
+        from linegraph.refit import refit_geometry
+
+        shapes, _ = dedup_shapes(patterns)
+        rs = refit_geometry(lg, shapes)
+        log(
+            f"refit: {rs.n_refit}/{rs.n_edges} edges rebuilt from "
+            f"{rs.n_contributions} shape sub-polylines "
+            f"({rs.n_no_evidence} no-evidence, {rs.n_capped} capped -> kept "
+            f"skeleton), max point move {rs.max_point_move_m:.1f} m, "
+            f"max node move {rs.max_node_move_m:.1f} m"
+            + (f", {rs.n_node_fallback} node LSQ fallback(s)"
+               if rs.n_node_fallback else "")
+            + (f", {rs.n_floor_pairs} node-pair floor(s)"
+               if rs.n_floor_pairs else "")
+        )
+        for eid, stray in rs.capped_edges:
+            log(f"  capped: edge {eid} refit strayed {stray} m > merge width")
+        for eid, before, after in rs.length_outliers:
+            log(f"  length outlier: edge {eid} {before} -> {after} m")
 
     stop_ids = {sid for p in patterns for sid in p.stop_ids}
     complexes = load_station_complexes(zip_path, stop_ids)
@@ -353,9 +382,14 @@ def main(argv=None) -> int:
     )
     ap.add_argument(
         "--emit", nargs="?", const=DEFAULT_DSN, default=None, metavar="DSN",
-        help="phase B: snap stations + attribute routes, then delete-and-"
-             "replace the build_key's transit_graph_* rows (default DSN as "
-             "for --postgis-qa)",
+        help="phase B: refit geometry + snap stations + attribute routes, "
+             "then delete-and-replace the build_key's transit_graph_* rows "
+             "(default DSN as for --postgis-qa)",
+    )
+    ap.add_argument(
+        "--no-refit", action="store_true",
+        help="skip the shape-evidence geometry refit (linegraph.refit) and "
+             "emit raw skeleton geometry — debugging/comparison only",
     )
     args = ap.parse_args(argv)
 
@@ -420,7 +454,7 @@ def main(argv=None) -> int:
                 "SUBGRAPH under this build_key", file=sys.stderr,
             )
         lg, snap, edge_routes, _stats = enrich_graph(
-            lg, patterns, zip_path, args.feed
+            lg, patterns, zip_path, args.feed, refit=not args.no_refit
         )
         counts = emit_build(
             lg, edge_routes, snap.labels, build_key=args.build_key,

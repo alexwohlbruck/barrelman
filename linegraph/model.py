@@ -17,7 +17,10 @@ import pickle
 from dataclasses import dataclass, field
 from pathlib import Path
 
-FORMAT_VERSION = 1
+# 2: shape-evidence refit era (linegraph.refit). The cache still holds
+#    the RAW skeleton only, but phase-B geometry semantics changed, so
+#    pre-refit caches must never masquerade as current v3 artifacts.
+FORMAT_VERSION = 2
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CACHE_DIR = REPO_ROOT / "data" / "linegraph"
