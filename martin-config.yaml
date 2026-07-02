@@ -31,6 +31,16 @@ postgres:
       minzoom: 8
       maxzoom: 22
       bounds: [-88.0, 33.0, -73.0, 42.0]
+    # v3 semantic segments (PAR-12): per-line steady/transition features from
+    # transit_line_segments with offset_px / off_from_px+off_to_px and local
+    # clip fractions (import/create-transit-lines-rt2.sql). The function itself
+    # skips transition features below z11 (~60 m ground, sub-pixel there).
+    transit_lines_rt2:
+      schema: public
+      function: transit_lines_rt2
+      minzoom: 8
+      maxzoom: 22
+      bounds: [-88.0, 33.0, -73.0, 42.0]
 
   tables:
     parchment_pois:
