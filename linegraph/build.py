@@ -225,8 +225,11 @@ def main(argv=None) -> int:
 
     digest = input_digest(shapes, args.merge_width, args.res)
     cache = default_cache_path(args.feed, args.mode)
+    # --routes builds a debug subgraph — never read or replace the canonical
+    # full-network cache with it.
+    use_cache = args.routes is None
     lg = None
-    if not args.force:
+    if use_cache and not args.force:
         try:
             lg = load_linegraph(cache, expect_digest=digest)
             lg.build_key = args.build_key
@@ -238,8 +241,11 @@ def main(argv=None) -> int:
             shapes, args.merge_width, args.res,
             build_key=args.build_key, feed_id=args.feed, mode=args.mode,
         )
-        save_linegraph(lg, cache)
-        print(f"[linegraph] cache: {cache} ({cache.stat().st_size / 1e6:.1f} MB)")
+        if use_cache:
+            save_linegraph(lg, cache)
+            print(f"[linegraph] cache: {cache} ({cache.stat().st_size / 1e6:.1f} MB)")
+        else:
+            print("[linegraph] --routes debug build — cache untouched")
 
     comps = lg.components()
     print(
