@@ -28,7 +28,11 @@ Known agency-data notes (investigated, not matcher faults):
   - 96 St (2nd Av) terminal: the MTA shape for Q (and the N/R trips that
     terminate there) ends 103 m short of the stop coordinate, while the
     OSM track passes within ~2 m of it. The stop-snap gate correctly
-    refuses (fallback) — the feed keeps its own geometry, never degraded.
+    refuses the dense match; under the on-OSM policy the fallback chain
+    then re-matches the pattern in the sparse regime and the rescue
+    lands on the Second Av tunnel track (hmm_sparse_rescue, 0 agency
+    meters) — the agency shape is no longer the arbiter of a pattern it
+    itself mis-draws.
   - Joralemon St Tunnel (4/5 under the East River): the MTA shape runs
     37–64 m from OSM's tunnel alignment (way 797157484 + partners) for
     ~700 m, beyond the 50 m dense radius at its peak. Historically the
@@ -80,7 +84,8 @@ GRAPH_CACHE = REPO_ROOT / "data" / "shapesnap" / "ny-nyc.rail.graph.pkl.gz"
 PBF = REPO_ROOT / "data" / "ny.osm.pbf"
 
 EXAM_ROUTES = {"1", "2", "3", "N", "Q", "R", "W"}
-# Q's top patterns hit the documented 96 St terminal fallback; asserted apart
+# Q's top patterns hit the documented 96 St terminal quirk and are
+# sparse-RESCUED under the on-OSM policy; asserted apart
 DENSE_ROUTES = EXAM_ROUTES - {"Q"}
 # non-top patterns matched IN ADDITION to the per-(route, direction) top
 # ones: the Canal St degenerate-shape excision pin (module docstring)
@@ -190,17 +195,28 @@ def test_exam_patterns_match_dense(exam):
         assert r.stats.get("relation_match_tier") == 2, (p.key, r.stats)
 
 
-def test_q_96st_terminal_fallback_is_the_documented_quirk(exam):
+def test_q_96st_terminal_rescued_on_osm(exam):
     """Q's shape ends 103 m short of the 96 St stop (agency data); the
-    stop-snap gate must refuse — and nothing else may be wrong."""
+    stop-snap gate must refuse the dense match — and nothing else may be
+    wrong with it. The on-OSM fallback chain must then rescue the
+    pattern in the sparse regime (the OSM track passes ~1.5 m from the
+    stop), keeping the output 100% on OSM instead of agency geometry."""
     _, _, results = exam
     for p, r in _route(results, "Q"):
-        assert r.method == "fallback", (p.key, r.method)
+        assert r.method == "hmm_sparse_rescue", (p.key, r.method)
+        # the dense attempt failed ONLY the stop gate, exactly as documented
+        da = r.stats["dense_attempt"]["gates"]
+        assert da["coverage"] > 0.99, (p.key, da)
+        assert da["frechet_m"] < 50, (p.key, da)
+        assert 100 < da["max_stop_dist_m"] < 110, (p.key, da)
+        assert len(da["failures"]) == 1 and "stop" in da["failures"][0], (p.key, da)
+        # the rescue passes its own gates: every stop snapped, plausible
+        # length vs the stop chord, no empty layers, zero agency meters
         g = r.gates.as_dict()
-        assert g["coverage"] > 0.99, (p.key, g)
-        assert g["frechet_m"] < 50, (p.key, g)
-        assert 100 < g["max_stop_dist_m"] < 110, (p.key, g)
-        assert len(g["failures"]) == 1 and "stop" in g["failures"][0], (p.key, g)
+        assert g["passed"] and g["max_stop_dist_m"] < 50, (p.key, g)
+        assert r.stats["n_empty_layers"] == 0, (p.key, r.stats)
+        assert r.stats["agency_m"] == 0.0, (p.key, r.stats)
+        assert r.stats["on_osm_m"] > 20_000, (p.key, r.stats)
 
 
 def test_seventh_ave_express_local_separation(exam):

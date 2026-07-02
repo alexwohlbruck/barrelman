@@ -3,16 +3,26 @@
 Scenarios (fixtures/match_scenarios.osm):
   A. parallel ways with NO shared nodes; a shape hugging way 401 must
      match way 401 end-to-end (never its 40 m-away twin 402),
-  B. a hole mid-route: the matcher must break, match the sub-traces and
-     bridge the hole with the ORIGINAL shape segment (gap recorded) —
-     the gap RETRY at 2x radius must attempt and fail (no topological
-     connection exists), never fabricate a crossing,
+  B. a hole mid-route: the matcher must break, match the sub-traces —
+     the gap RETRY at 2x radius must attempt and fail, the GRAPH BRIDGE
+     must find no route (no topological connection exists) — and bridge
+     the hole with the ORIGINAL shape segment (bridge_kind="agency",
+     counted in stats.agency_m), never fabricate a crossing,
   C. a shape offset ~40 m from the only way: candidates exist but the
-     coverage gate fails -> method=fallback, original returned unchanged,
+     coverage gate fails -> the on-OSM fallback chain re-matches the
+     pattern in the SPARSE regime (stops sit on the mapped track) ->
+     method=hmm_sparse_rescue, output 100% on OSM. With the stops moved
+     beyond the sparse radius the rescue is infeasible ->
+     method=passthrough_agency, original returned unchanged, loud log,
   D. a long continuous way with the shape bulging ~70 m off it for a
      stretch (past the 50 m dense radius, inside the 2x retry radius):
      the gap retry must reconnect on the way's own track with no break
-     recorded (the 4/5 Joralemon St Tunnel offset in miniature).
+     recorded (the 4/5 Joralemon St Tunnel offset in miniature),
+  E. two approach rails joined ONLY through a yard-penalized U-detour:
+     the shape crosses the gap straight, the retry fails (no feasible
+     expanded chain through the yard arms within the per-hop cutoff),
+     and the bounded GRAPH BRIDGE between the pinned anchors must
+     splice the U (bridge_kind="graph") — output 100% on OSM.
 
 Plus regime-B station emission features (StationIndex wired through
 match_pattern): name bonus, platform-ref bonus via Pattern.stop_platforms,
@@ -180,12 +190,22 @@ def test_gap_breaks_and_bridges_with_original(mg):
     assert r.stats["breaks"] == 1, r.stats
     assert len(r.stats["gaps"]) == 1
     gap = r.stats["gaps"][0]
+    # no topological connection at any budget: the graph bridge must find
+    # nothing and the gap falls back to the original geometry
+    assert gap["bridge_kind"] == "agency", gap
     assert 50 < gap["bridged_m"] < 300, gap
     # both sides matched, nothing forced across the hole
     used_ways = {mg.graph.edges[i].way_id for i in r.edges_used}
     assert used_ways == {403, 404}
     # the bridge keeps the output continuous across the hole (gates pass)
     assert r.gates is not None and r.gates.passed
+    # on-OSM accounting: the agency meters are exactly the bridged span
+    assert r.stats["agency_m"] == gap["bridged_m"], r.stats
+    assert r.stats["graph_bridged_m"] == 0.0, r.stats
+    assert r.stats["on_osm_m"] > 0
+    assert (
+        abs(r.stats["on_osm_m"] + r.stats["agency_m"] - r.stats["output_len_m"]) < 5.0
+    ), r.stats
     # break halves the confidence
     assert r.confidence < 0.6
 
@@ -235,8 +255,9 @@ def test_gap_retry_recovers_offset_track(mg):
 def test_gap_retry_absent_track_still_bridges(mg):
     """(b) Scenario B's hole has no topological crossing at ANY radius:
     the retry must attempt (interior observations exist, expanded layers
-    are non-empty on both flanks) and fail feasibility — bridged with the
-    original segment exactly as without the retry."""
+    are non-empty on both flanks) and fail feasibility, the graph bridge
+    must find no route — bridged with the original segment exactly as
+    without the retry, and the agency meters equal the gap length."""
     shape = [(x, 41.8830) for x in lons(-87.6400, -87.6300, 0.0005)]
     stops = [(-87.6400, 41.8830), (-87.6300, 41.8830)]
     r = match_pattern(mg, mk_pattern(shape, stops))
@@ -247,13 +268,17 @@ def test_gap_retry_absent_track_still_bridges(mg):
     retries = r.stats.get("gap_retries")
     assert retries and len(retries) == 1, r.stats
     assert retries[0]["ok"] is False, retries
+    assert r.stats["gaps"][0]["bridge_kind"] == "agency", r.stats["gaps"]
+    assert r.stats["agency_m"] == r.stats["gaps"][0]["bridged_m"], r.stats
     assert {mg.graph.edges[i].way_id for i in r.edges_used} == {403, 404}
     assert r.gates is not None and r.gates.passed
 
 
-def test_gap_retry_disabled_reproduces_break(mg):
-    """Config-driven: gap_retry_radius_mult <= 1 restores pure
-    break+bridge on the scenario-D bulge."""
+def test_gap_retry_disabled_graph_bridge_takes_over(mg):
+    """Config-driven: gap_retry_radius_mult <= 1 disables the retry, so
+    the scenario-D bulge BREAKS — but the on-OSM policy then routes the
+    gap through the graph (both anchors sit on continuous way 406), so
+    the bridge is a graph splice, not agency geometry."""
     shape = scenario_d_shape()
     stops = [(-87.6900, 41.8900), (-87.5900, 41.8900)]
     cfg = MatchConfig(gap_retry_radius_mult=1.0)
@@ -261,22 +286,157 @@ def test_gap_retry_disabled_reproduces_break(mg):
 
     assert r.method == "hmm_dense", (r.method, r.stats)
     assert r.stats["breaks"] == 1, r.stats
+    assert "gap_retries" not in r.stats, r.stats
+    assert len(r.stats["gaps"]) == 1, r.stats
+    assert r.stats["gaps"][0]["bridge_kind"] == "graph", r.stats["gaps"]
+    assert r.stats["bridged_m"] == 0.0 and r.stats["agency_m"] == 0.0, r.stats
+    assert r.stats["graph_bridged_m"] > 100, r.stats
+    assert set(r.edges_used) <= edges_of_way(mg, 406), r.edges_used
+
+
+def test_gap_retry_and_graph_bridge_both_disabled_reproduce_break(mg):
+    """Config-driven: with the retry AND the graph bridge disabled the
+    pre-policy break+agency-bridge behavior is fully restored."""
+    shape = scenario_d_shape()
+    stops = [(-87.6900, 41.8900), (-87.5900, 41.8900)]
+    cfg = MatchConfig(gap_retry_radius_mult=1.0, bridge_route_cutoff_factor=0.0)
+    r = match_pattern(mg, mk_pattern(shape, stops), cfg)
+
+    assert r.method == "hmm_dense", (r.method, r.stats)
+    assert r.stats["breaks"] == 1, r.stats
+    assert r.stats["gaps"][0]["bridge_kind"] == "agency", r.stats["gaps"]
     assert r.stats["bridged_m"] > 100, r.stats
+    assert r.stats["agency_m"] == r.stats["bridged_m"], r.stats
     assert "gap_retries" not in r.stats, r.stats
 
 
-# ── C: gate failure -> fallback, original unchanged ──────────────────────────
+# ── E: failed retry gap, graph-routed bridge ─────────────────────────────────
 
 
-def test_bad_match_fails_gates_and_falls_back(mg):
+E_WAYS = (410, 411, 412, 413, 414)
+
+
+def scenario_e_pattern():
+    """Straight shape across the ways-410/411 gap (the only connection is
+    the yard-arm U 412/413/414, ~66 m south — past the 50 m radius,
+    inside the 100 m retry radius but infeasible per hop)."""
+    shape = [(x, 41.8960) for x in lons(-87.7100, -87.5850, 0.0005)]
+    stops = [(-87.7100, 41.8960), (-87.5850, 41.8960)]
+    return mk_pattern(shape, stops)
+
+
+def test_failed_retry_gap_graph_bridge(mg):
+    """The retry attempts and fails (no feasible expanded chain through
+    the yard arms), then the bounded graph route between the pinned
+    anchors splices the U: bridge_kind="graph", zero agency meters, the
+    whole output rides fixture ways."""
+    r = match_pattern(mg, scenario_e_pattern())
+
+    assert r.method == "hmm_dense", (r.method, r.stats)
+    assert r.gates is not None and r.gates.passed, r.gates.as_dict()
+    assert r.stats["breaks"] == 1, r.stats
+    retries = r.stats.get("gap_retries")
+    assert retries and len(retries) == 1 and retries[0]["ok"] is False, r.stats
+    assert len(r.stats["gaps"]) == 1, r.stats
+    gap = r.stats["gaps"][0]
+    assert gap["bridge_kind"] == "graph", gap
+    assert 500 < gap["routed_m"] < 1200, gap
+    # on-OSM accounting: everything is OSM geometry
+    assert r.stats["agency_m"] == 0.0 and r.stats["bridged_m"] == 0.0, r.stats
+    assert r.stats["graph_bridged_m"] == gap["routed_m"], r.stats
+    assert (
+        abs(r.stats["on_osm_m"] - r.stats["output_len_m"]) < 5.0
+    ), r.stats
+    # the splice rides the fixture ways — U included — and nothing else
+    used_ways = {mg.graph.edges[i].way_id for i in r.edges_used}
+    assert used_ways == set(E_WAYS), used_ways
+    from shapely.ops import unary_union
+    track = unary_union([
+        LineString(mg.project_lonlat(mg.graph.edges[i].geometry))
+        for i in range(len(mg.graph.edges))
+        if mg.graph.edges[i].way_id in E_WAYS
+    ])
+    from shapely.geometry import Point
+    worst = max(track.distance(Point(xy)) for xy in mg.project_lonlat(r.coords))
+    assert worst < 1.0, f"output strays {worst:.1f} m off OSM ways"
+
+
+def test_graph_bridge_disabled_restores_agency_bridge(mg):
+    """Config-driven: bridge_route_cutoff_factor <= 0 disables routing;
+    the scenario-E gap falls back to the original geometry and the
+    agency meters are accounted."""
+    cfg = MatchConfig(bridge_route_cutoff_factor=0.0)
+    r = match_pattern(mg, scenario_e_pattern(), cfg)
+
+    assert r.method == "hmm_dense", (r.method, r.stats)
+    assert r.stats["breaks"] == 1, r.stats
+    gap = r.stats["gaps"][0]
+    assert gap["bridge_kind"] == "agency", gap
+    assert r.stats["agency_m"] == gap["bridged_m"] > 300, r.stats
+    assert r.stats["graph_bridged_m"] == 0.0, r.stats
+    # without the route the U's bottom is never ridden (the anchors may
+    # legitimately snap onto an arm top — it shares the approach node)
+    used_ways = {mg.graph.edges[i].way_id for i in r.edges_used}
+    assert {410, 411} <= used_ways <= {410, 411, 412, 414}, used_ways
+    assert 413 not in used_ways, used_ways
+
+
+# ── C: gate failure -> on-OSM fallback chain ─────────────────────────────────
+
+
+def test_gates_fail_sparse_rescue_recovers_on_osm(mg):
+    """The shape sits ~40 m off way 405 (coverage gate fails) but the
+    stops are within the sparse radius of the mapped track: the fallback
+    chain must re-match in the sparse regime and return the OSM path —
+    never the agency geometry."""
     shape = [(x, 41.88564) for x in lons(-87.6400, -87.6300, 0.0005)]
     stops = [shape[0], shape[-1]]
     r = match_pattern(mg, mk_pattern(shape, stops))
 
-    assert r.method == "fallback"
+    assert r.method == "hmm_sparse_rescue", (r.method, r.stats)
+    assert r.stats["regime"] == "sparse"
+    assert r.gates is not None and r.gates.passed, r.gates.as_dict()
+    # the dense attempt (and why it failed) is recorded on the rescue
+    dense = r.stats.get("dense_attempt")
+    assert dense and dense["method"] == "passthrough_agency", r.stats
+    assert any("coverage" in f for f in dense["gates"]["failures"]), dense
+    # the output is way 405, fully on OSM
+    assert set(r.edges_used) <= edges_of_way(mg, 405), r.edges_used
+    assert r.stats["agency_m"] == 0.0, r.stats
+    assert abs(r.stats["on_osm_m"] - r.stats["output_len_m"]) < 5.0, r.stats
+    assert r.coords != shape
+
+
+def test_sparse_rescue_infeasible_keeps_agency_passthrough(mg, capfd):
+    """Same failing shape, but the stops sit ~220 m from every way —
+    beyond the sparse radius, so the rescue sees empty stop layers and
+    must refuse (a chord bridge through the stop coordinate would fake
+    the stop-snap gate): method=passthrough_agency, original geometry
+    byte-identical, loud stderr log, agency_m == the whole output."""
+    shape = [(x, 41.88564) for x in lons(-87.6400, -87.6300, 0.0005)]
+    stops = [(-87.6400, 41.8880), (-87.6300, 41.8880)]
+    r = match_pattern(mg, mk_pattern(shape, stops))
+
+    assert r.method == "passthrough_agency", (r.method, r.stats)
     assert r.gates is not None and not r.gates.passed
-    assert any("coverage" in f for f in r.gates.failures), r.gates.failures
-    assert r.coords == shape, "fallback must return the ORIGINAL geometry unchanged"
+    assert r.coords == shape, "passthrough_agency must return the ORIGINAL geometry"
+    assert r.stats["on_osm_m"] == 0.0 and r.stats["agency_m"] > 700, r.stats
+    err = capfd.readouterr().err
+    assert "PASSTHROUGH_AGENCY" in err, err
+    assert "sparse rescue failed" in err, err
+
+
+def test_sparse_rescue_disabled_keeps_agency_passthrough(mg, capfd):
+    """Config-driven: sparse_rescue=False restores the pre-policy
+    gates-fail behavior (original geometry back, no rescue attempt)."""
+    shape = [(x, 41.88564) for x in lons(-87.6400, -87.6300, 0.0005)]
+    stops = [shape[0], shape[-1]]
+    cfg = MatchConfig(sparse_rescue=False)
+    r = match_pattern(mg, mk_pattern(shape, stops), cfg)
+
+    assert r.method == "passthrough_agency", (r.method, r.stats)
+    assert r.coords == shape
+    assert "sparse rescue disabled" in capfd.readouterr().err
 
 
 def test_off_network_shape_is_passthrough(mg):
@@ -284,6 +444,7 @@ def test_off_network_shape_is_passthrough(mg):
     r = match_pattern(mg, mk_pattern(shape, [shape[0], shape[-1]]))
     assert r.method == "passthrough"
     assert r.coords == shape
+    assert r.stats["on_osm_m"] == 0.0 and r.stats["agency_m"] > 0, r.stats
 
 
 # ── candidates / helpers ─────────────────────────────────────────────────────

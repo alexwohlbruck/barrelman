@@ -17,6 +17,21 @@
           Joralemon shape-vs-track offset in miniature. Long so the
           bulge observations stay under the 5% coverage budget; far
           from every other scenario (405 is ~410 m south of the bulge).
+       E. ways 410/411 at lat 41.8960: two long (~5 km) approach rails
+          with a ~414 m gap between them, connected ONLY through a
+          U-shaped detour: yard-penalized arms (ways 412/414,
+          service=yard, class penalty 4.0) dropping ~66 m south to a
+          plain-rail bottom (way 413). A straight shape across the gap
+          BREAKS (bottom is 66 m away, past the 50 m radius); the 2x
+          gap retry sees the bottom candidates but NO feasible chain
+          reaches them (entering the U costs ~265 m weighted through a
+          yard arm, over the per-hop transition cutoff) — the retry
+          must fail; the bounded GRAPH BRIDGE between the pinned
+          anchors (generous cutoff: 4x the gap's along-shape length)
+          must then splice the U (bridge_kind="graph"), keeping the
+          output 100% on OSM. Long approaches keep the ~13 uncovered
+          gap observations under the 5% coverage budget, and the 66 m
+          dip inside the 100 m Fréchet gate.
   -->
 
   <!-- A: way 401 (south track) -->
@@ -69,6 +84,25 @@
   <node id="1090" lat="41.8900" lon="-87.6000"/>
   <node id="1091" lat="41.8900" lon="-87.5900"/>
 
+  <!-- E: ways 410 (west approach) / 411 (east approach), joined only by
+       the yard-arm U 412/413/414 -->
+  <node id="1101" lat="41.8960" lon="-87.7100"/>
+  <node id="1102" lat="41.8960" lon="-87.7000"/>
+  <node id="1103" lat="41.8960" lon="-87.6900"/>
+  <node id="1104" lat="41.8960" lon="-87.6800"/>
+  <node id="1105" lat="41.8960" lon="-87.6700"/>
+  <node id="1106" lat="41.8960" lon="-87.6600"/>
+  <node id="1107" lat="41.8960" lon="-87.6500"/>
+  <node id="1111" lat="41.8960" lon="-87.6450"/>
+  <node id="1112" lat="41.8960" lon="-87.6350"/>
+  <node id="1113" lat="41.8960" lon="-87.6250"/>
+  <node id="1114" lat="41.8960" lon="-87.6150"/>
+  <node id="1115" lat="41.8960" lon="-87.6050"/>
+  <node id="1116" lat="41.8960" lon="-87.5950"/>
+  <node id="1117" lat="41.8960" lon="-87.5850"/>
+  <node id="1121" lat="41.8954" lon="-87.6500"/>
+  <node id="1122" lat="41.8954" lon="-87.6450"/>
+
   <!-- C: way 405 -->
   <node id="1061" lat="41.8860" lon="-87.6400"/>
   <node id="1062" lat="41.8860" lon="-87.6390"/>
@@ -112,6 +146,29 @@
     <nd ref="1081"/><nd ref="1082"/><nd ref="1083"/><nd ref="1084"/>
     <nd ref="1085"/><nd ref="1086"/><nd ref="1087"/><nd ref="1088"/>
     <nd ref="1089"/><nd ref="1090"/><nd ref="1091"/>
+    <tag k="railway" v="rail"/>
+  </way>
+  <way id="410">
+    <nd ref="1101"/><nd ref="1102"/><nd ref="1103"/><nd ref="1104"/>
+    <nd ref="1105"/><nd ref="1106"/><nd ref="1107"/>
+    <tag k="railway" v="rail"/>
+  </way>
+  <way id="411">
+    <nd ref="1111"/><nd ref="1112"/><nd ref="1113"/><nd ref="1114"/>
+    <nd ref="1115"/><nd ref="1116"/><nd ref="1117"/>
+    <tag k="railway" v="rail"/>
+  </way>
+  <way id="412">
+    <nd ref="1107"/><nd ref="1121"/>
+    <tag k="railway" v="rail"/>
+    <tag k="service" v="yard"/>
+  </way>
+  <way id="413">
+    <nd ref="1121"/><nd ref="1122"/>
+    <tag k="railway" v="rail"/>
+  </way>
+  <way id="414">
+    <nd ref="1122"/><nd ref="1111"/>
     <tag k="railway" v="rail"/>
   </way>
 
