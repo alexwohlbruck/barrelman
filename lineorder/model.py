@@ -248,6 +248,9 @@ class Instance:
     node_loom: dict[int, str] = field(default_factory=dict)
     edge_loom: dict[int, str] = field(default_factory=dict)
     edge_db_id: dict[int, int] = field(default_factory=dict)
+    # provisional per-edge line order as stored in the DB slot column
+    # (route_id order after linegraph emit) — the "before" baseline
+    provisional: dict[int, tuple[int, ...]] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------- builders
@@ -415,6 +418,7 @@ def load_build(build_key: str, dsn: str = DEFAULT_DSN) -> Instance:
         eid = g.add_edge(u, v, lines)
         inst.edge_loom[eid] = loom
         inst.edge_db_id[eid] = db_eid
+        inst.provisional[eid] = tuple(lines)  # slot order (rows sorted)
         bearings.setdefault(u, {})[eid] = _bearing(coords, True)
         bearings.setdefault(v, {})[eid] = _bearing(coords, False)
 
