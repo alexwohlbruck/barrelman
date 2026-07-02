@@ -1,0 +1,101 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<osm version="0.6" generator="shapesnap-test">
+  <!-- Matching scenarios at lat ~41.88 (lon ~82.9 km/deg, lat ~111 km/deg).
+
+       A. ways 401/402: parallel rails ~40 m apart, NO shared nodes.
+          A shape hugging 401 must match 401 end-to-end.
+       B. ways 403/404: collinear rails with a ~166 m hole between them
+          (no topological connection). A shape across the hole must
+          break + bridge with the original segment.
+       C. way 405: lone rail; a shape offset ~40 m (inside the 50 m
+          candidate radius, outside the 25 m coverage tolerance) must
+          match but then fail the coverage gate -> fallback.
+  -->
+
+  <!-- A: way 401 (south track) -->
+  <node id="1001" lat="41.8800" lon="-87.6400"/>
+  <node id="1002" lat="41.8800" lon="-87.6390"/>
+  <node id="1003" lat="41.8800" lon="-87.6380"/>
+  <node id="1004" lat="41.8800" lon="-87.6370"/>
+  <node id="1005" lat="41.8800" lon="-87.6360"/>
+  <node id="1006" lat="41.8800" lon="-87.6350"/>
+  <node id="1007" lat="41.8800" lon="-87.6340"/>
+  <node id="1008" lat="41.8800" lon="-87.6330"/>
+  <node id="1009" lat="41.8800" lon="-87.6320"/>
+  <node id="1010" lat="41.8800" lon="-87.6310"/>
+  <node id="1011" lat="41.8800" lon="-87.6300"/>
+  <!-- A: way 402 (north track, ~40 m away, disjoint node ids) -->
+  <node id="1021" lat="41.88036" lon="-87.6400"/>
+  <node id="1022" lat="41.88036" lon="-87.6390"/>
+  <node id="1023" lat="41.88036" lon="-87.6380"/>
+  <node id="1024" lat="41.88036" lon="-87.6370"/>
+  <node id="1025" lat="41.88036" lon="-87.6360"/>
+  <node id="1026" lat="41.88036" lon="-87.6350"/>
+  <node id="1027" lat="41.88036" lon="-87.6340"/>
+  <node id="1028" lat="41.88036" lon="-87.6330"/>
+  <node id="1029" lat="41.88036" lon="-87.6320"/>
+  <node id="1030" lat="41.88036" lon="-87.6310"/>
+  <node id="1031" lat="41.88036" lon="-87.6300"/>
+
+  <!-- B: way 403 then a hole then way 404 -->
+  <node id="1041" lat="41.8830" lon="-87.6400"/>
+  <node id="1042" lat="41.8830" lon="-87.6390"/>
+  <node id="1043" lat="41.8830" lon="-87.6380"/>
+  <node id="1044" lat="41.8830" lon="-87.6370"/>
+  <node id="1045" lat="41.8830" lon="-87.6360"/>
+  <node id="1051" lat="41.8830" lon="-87.6340"/>
+  <node id="1052" lat="41.8830" lon="-87.6330"/>
+  <node id="1053" lat="41.8830" lon="-87.6320"/>
+  <node id="1054" lat="41.8830" lon="-87.6310"/>
+  <node id="1055" lat="41.8830" lon="-87.6300"/>
+
+  <!-- C: way 405 -->
+  <node id="1061" lat="41.8860" lon="-87.6400"/>
+  <node id="1062" lat="41.8860" lon="-87.6390"/>
+  <node id="1063" lat="41.8860" lon="-87.6380"/>
+  <node id="1064" lat="41.8860" lon="-87.6370"/>
+  <node id="1065" lat="41.8860" lon="-87.6360"/>
+  <node id="1066" lat="41.8860" lon="-87.6350"/>
+  <node id="1067" lat="41.8860" lon="-87.6340"/>
+  <node id="1068" lat="41.8860" lon="-87.6330"/>
+  <node id="1069" lat="41.8860" lon="-87.6320"/>
+  <node id="1070" lat="41.8860" lon="-87.6310"/>
+  <node id="1071" lat="41.8860" lon="-87.6300"/>
+
+  <way id="401">
+    <nd ref="1001"/><nd ref="1002"/><nd ref="1003"/><nd ref="1004"/>
+    <nd ref="1005"/><nd ref="1006"/><nd ref="1007"/><nd ref="1008"/>
+    <nd ref="1009"/><nd ref="1010"/><nd ref="1011"/>
+    <tag k="railway" v="rail"/>
+  </way>
+  <way id="402">
+    <nd ref="1021"/><nd ref="1022"/><nd ref="1023"/><nd ref="1024"/>
+    <nd ref="1025"/><nd ref="1026"/><nd ref="1027"/><nd ref="1028"/>
+    <nd ref="1029"/><nd ref="1030"/><nd ref="1031"/>
+    <tag k="railway" v="rail"/>
+  </way>
+  <way id="403">
+    <nd ref="1041"/><nd ref="1042"/><nd ref="1043"/><nd ref="1044"/><nd ref="1045"/>
+    <tag k="railway" v="rail"/>
+  </way>
+  <way id="404">
+    <nd ref="1051"/><nd ref="1052"/><nd ref="1053"/><nd ref="1054"/><nd ref="1055"/>
+    <tag k="railway" v="rail"/>
+  </way>
+  <way id="405">
+    <nd ref="1061"/><nd ref="1062"/><nd ref="1063"/><nd ref="1064"/>
+    <nd ref="1065"/><nd ref="1066"/><nd ref="1067"/><nd ref="1068"/>
+    <nd ref="1069"/><nd ref="1070"/><nd ref="1071"/>
+    <tag k="railway" v="rail"/>
+  </way>
+
+  <!-- route relation on the south track: exercises the ×0.5 bonus -->
+  <relation id="601">
+    <member type="way" ref="401" role=""/>
+    <tag k="type" v="route"/>
+    <tag k="route" v="subway"/>
+    <tag k="ref" v="T1"/>
+    <tag k="name" v="Test Line"/>
+    <tag k="colour" v="#123456"/>
+  </relation>
+</osm>
