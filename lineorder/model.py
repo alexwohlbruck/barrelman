@@ -352,17 +352,27 @@ def load_build(build_key: str, dsn: str = DEFAULT_DSN) -> Instance:
     if not edge_rows:
         raise ValueError(f"no transit_graph rows for build_key {build_key!r}")
 
-    # lines: identity is (feed_id, route_id)
+    # lines: identity is (feed_id, route_id). uids are assigned in sorted
+    # identity order, NOT first-seen (edge_id, slot) row order: slot is
+    # what apply rewrites, and uid order is the solver's tie-break among
+    # equal-cost optima (canonical_solution / CP-SAT variable order), so
+    # slot-dependent uids let apply -> load -> solve chase its own tail
+    # across equal-cost optima on degenerate instances (NYC) instead of
+    # reaching the fixed point check5 of the stability exam asserts.
+    meta: dict[tuple, tuple] = {}
+    for _eid, _slot, feed_id, route_id, short, rtype, color, tcolor in line_rows:
+        meta.setdefault((feed_id, route_id), (short, rtype, color, tcolor))
     by_key: dict[tuple, int] = {}
+    for key in sorted(meta):
+        feed_id, route_id = key
+        short, rtype, color, tcolor = meta[key]
+        by_key[key] = reg.add_line(
+            feed_id=feed_id, route_id=route_id, short_name=short or route_id,
+            color=color or "", text_color=tcolor or "", route_type=rtype,
+        ).uid
     edge_lines: dict[int, list[int]] = {}
-    for db_eid, _slot, feed_id, route_id, short, rtype, color, tcolor in line_rows:
-        key = (feed_id, route_id)
-        if key not in by_key:
-            by_key[key] = reg.add_line(
-                feed_id=feed_id, route_id=route_id, short_name=short or route_id,
-                color=color or "", text_color=tcolor or "", route_type=rtype,
-            ).uid
-        edge_lines.setdefault(db_eid, []).append(by_key[key])
+    for db_eid, _slot, feed_id, route_id, *_ in line_rows:
+        edge_lines.setdefault(db_eid, []).append(by_key[(feed_id, route_id)])
 
     # nodes keyed by exact rounded coordinate (emit writes %.7f)
     def ckey(lon, lat):

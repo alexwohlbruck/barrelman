@@ -770,7 +770,14 @@ def reduce_graph(inst: Instance, weights: Weights | None = None,
 # ------------------------------------------------------------------ CLI
 
 def _fmt_space(n: int) -> str:
-    return str(n) if n < 10_000_000 else f"{float(n):.3g}"
+    if n < 10_000_000:
+        return str(n)
+    try:
+        return f"{float(n):.3g}"
+    except OverflowError:  # beyond float range (~1e308) — huge unreduced graphs
+        d = len(str(n)) - 1
+        lead = str(n)[:4]
+        return f"{lead[0]}.{lead[1:]}e+{d}"
 
 def main(argv=None):
     import argparse

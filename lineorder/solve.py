@@ -47,7 +47,7 @@ from dataclasses import dataclass, field
 
 from .model import DEFAULT_DSN, Instance
 from .reconstruct import reconstruct
-from .reduce import Reduction, reduce_graph
+from .reduce import Reduction, _fmt_space, reduce_graph
 from .score import (Score, Weights, brute_force, canonical_solution, score,
                     score_node, search_space)
 
@@ -489,6 +489,13 @@ def solve_instance(inst: Instance, cfg: SolveConfig | None = None,
     assert abs(after.weighted - (comp_total + red.fixed_cost)) < 1e-6, (
         f"accounting broken: original {after.weighted} != components "
         f"{comp_total} + fixed {red.fixed_cost}")
+    if before.weighted <= after.weighted + 1e-9:
+        # the stored slots already tie (or beat) the solved optimum:
+        # keep them. Degenerate instances have many equal-cost optima
+        # and the solver's pick among them is an arbitrary tie-break;
+        # swapping one optimum for another would make apply -> solve
+        # oscillate instead of being a no-op (stability exam check 5).
+        full, after = provisional, before
     return SolveOutcome(inst, red, results, full, before, after)
 
 
@@ -505,10 +512,6 @@ def crossing_report(g, reg, sol: dict, w: Weights):
             n = g.nodes[nid]
             out.append((nid, o.label, n.x, n.y, s))
     return sorted(out, key=lambda r: -r[4].weighted)
-
-
-def _fmt_space(n: int) -> str:
-    return str(n) if n < 10_000_000 else f"{float(n):.3g}"
 
 
 def print_outcome(out: SolveOutcome, tag: str = "solve"):
