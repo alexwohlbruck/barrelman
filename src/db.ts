@@ -131,9 +131,24 @@ export async function ensureGtfsSchema() {
       -- display "does this route really serve this station" filter, excluding
       -- late-night-only reroutes and single "select trip" service (which the
       -- MTA diagrams / Apple omit). NULL = not yet derived (fail-open on show).
-      weekday_trips INT
+      -- Kept = trips_weekday_day for back-compat readers.
+      weekday_trips INT,
+      -- Representative-day service counts (see resolveServiceCalendar in
+      -- gtfs.service.ts): departures of this route at this stop on the busiest
+      -- in-horizon Mon–Fri / weekend day, within the 06:00–22:00 clock window
+      -- (_day) or across all hours (_any). trips_any = max over the three
+      -- representative days. Frequencies.txt headway service is expanded into
+      -- individual departures. NULL = not yet derived (fail-open on show).
+      trips_weekday_day INT,
+      trips_weekday_any INT,
+      trips_weekend_day INT,
+      trips_any INT
     );
     ALTER TABLE gtfs_stop_routes ADD COLUMN IF NOT EXISTS weekday_trips INT;
+    ALTER TABLE gtfs_stop_routes ADD COLUMN IF NOT EXISTS trips_weekday_day INT;
+    ALTER TABLE gtfs_stop_routes ADD COLUMN IF NOT EXISTS trips_weekday_any INT;
+    ALTER TABLE gtfs_stop_routes ADD COLUMN IF NOT EXISTS trips_weekend_day INT;
+    ALTER TABLE gtfs_stop_routes ADD COLUMN IF NOT EXISTS trips_any INT;
 
     CREATE UNIQUE INDEX IF NOT EXISTS gtfs_stop_routes_uniq_idx
       ON gtfs_stop_routes (feed_id, stop_id, route_id);

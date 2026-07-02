@@ -533,7 +533,7 @@ function asRecords(content: string | GtfsRecord[]): GtfsRecord[] {
 
 /** Parse a GTFS "HH:MM:SS" time (may exceed 24:00 for after-midnight) to
  *  seconds-since-midnight. Returns NaN if unparseable. */
-function gtfsTimeToSeconds(t: string | undefined): number {
+export function gtfsTimeToSeconds(t: string | undefined): number {
   if (!t) return NaN
   const parts = t.split(':')
   if (parts.length < 3) return NaN
@@ -544,58 +544,415 @@ function gtfsTimeToSeconds(t: string | undefined): number {
   return h * 3600 + m * 60 + s
 }
 
-/**
- * The set of service_ids that represent a typical WEEKDAY, from calendar.txt
- * (any of monday–friday = 1). If calendar.txt is absent, fall back to
- * calendar_dates.txt: a service is "weekday" if any of its added dates
- * (exception_type=1) falls on Mon–Fri. Returns null when there is no calendar
- * information at all — callers should then treat every trip as eligible
- * (fail-open) rather than hiding everything.
- */
-function computeWeekdayServiceIds(
-  calendarContent?: string | GtfsRecord[],
-  calendarDatesContent?: string | GtfsRecord[],
-): Set<string> | null {
-  const cal = calendarContent ? asRecords(calendarContent) : []
-  const weekday = new Set<string>()
-  const DAYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday']
-  for (const r of cal) {
-    if (!r.service_id) continue
-    if (DAYS.some(d => r[d] === '1')) weekday.add(r.service_id)
-  }
-  if (weekday.size > 0) return weekday
+// ── Service-calendar resolution (representative-day counting) ───────
+//
+// GTFS service levels vary by concrete date: weekday vs weekend patterns,
+// seasonal ranges, holiday exceptions, and headway-based (frequencies.txt)
+// operation. Naively counting every trip of every weekday-flagged service_id
+// breaks globally: calendar_dates-only services are invisible in mixed feeds,
+// expired/seasonal services count forever, weekend-only stations vanish, and
+// frequency-based feeds count 0–1 trips. Instead we expand, per feed, which
+// service_ids run on which concrete dates over a bounded horizon, then pick
+// three REPRESENTATIVE dates — the busiest Mon–Fri, Saturday and Sunday by
+// total scheduled trips — and count service as it runs on those dates.
 
-  // No calendar.txt weekday rows — derive from calendar_dates additions.
-  const cd = calendarDatesContent ? asRecords(calendarDatesContent) : []
-  for (const r of cd) {
-    if (!r.service_id || r.exception_type !== '1' || !r.date) continue
-    const y = parseInt(r.date.slice(0, 4), 10)
-    const mo = parseInt(r.date.slice(4, 6), 10)
-    const da = parseInt(r.date.slice(6, 8), 10)
-    if (Number.isNaN(y) || Number.isNaN(mo) || Number.isNaN(da)) continue
-    const dow = new Date(y, mo - 1, da).getDay() // 0=Sun … 6=Sat
-    if (dow >= 1 && dow <= 5) weekday.add(r.service_id)
-  }
-  return weekday.size > 0 ? weekday : null
+const DAY_MS = 86_400_000
+const HORIZON_PAST_DAYS = 7
+const HORIZON_FUTURE_DAYS = 60
+/** Cap on the fallback horizon when the feed's validity doesn't cover today
+ *  (expired or future feed) and we scan the feed's own window instead. */
+const FALLBACK_HORIZON_DAYS = 90
+
+const DOW_FIELDS = [
+  'sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday',
+] as const
+
+/** GTFS YYYYMMDD → UTC ms at midnight, NaN if unparseable. */
+function ymdToUtcMs(ymd: string | undefined): number {
+  if (!ymd || ymd.length < 8) return NaN
+  const y = parseInt(ymd.slice(0, 4), 10)
+  const mo = parseInt(ymd.slice(4, 6), 10)
+  const d = parseInt(ymd.slice(6, 8), 10)
+  if (Number.isNaN(y) || Number.isNaN(mo) || Number.isNaN(d)) return NaN
+  return Date.UTC(y, mo - 1, d)
 }
 
-// Daytime window for "regular service": 06:00–22:00. Trips departing outside
-// this (late night / pre-dawn, incl. GTFS 24:00+ after-midnight times) don't
-// count toward a route's presence at a station.
+const isoOf = (ms: number) => new Date(ms).toISOString().slice(0, 10)
+
+export interface ServiceCalendarResolution {
+  /** service_id → set of ISO dates (YYYY-MM-DD) it runs, within the horizon. */
+  serviceDates: Map<string, Set<string>>
+  /** Which inputs resolved service levels for this feed. */
+  regime: 'calendar' | 'calendar_dates' | 'fail-open'
+  /** Representative dates: busiest in-horizon Mon–Fri / Saturday / Sunday. */
+  repWeekday: string | null
+  repSaturday: string | null
+  repSunday: string | null
+  /** The horizon actually expanded (ISO), null when fail-open. */
+  horizonStart: string | null
+  horizonEnd: string | null
+}
+
+/**
+ * Expand calendar.txt (weekday bits AND start_date/end_date) plus
+ * calendar_dates.txt exceptions (1 = add, 2 = remove) into concrete
+ * service dates over horizon = feed validity ∩ [today−7d, today+60d],
+ * falling back to the feed's own validity window (capped) when it doesn't
+ * overlap today. Then pick the representative Mon–Fri / Sat / Sun dates by
+ * maximum total scheduled trips (trip totals per service_id from trips.txt).
+ *
+ * Returns the fail-open resolution (regime 'fail-open', no dates) when the
+ * feed carries no calendar information at all — callers then treat every
+ * trip as eligible rather than hiding everything.
+ */
+export function resolveServiceCalendar(
+  calendarContent?: string | GtfsRecord[],
+  calendarDatesContent?: string | GtfsRecord[],
+  tripsContent?: string | GtfsRecord[],
+  today: Date = new Date(),
+): ServiceCalendarResolution {
+  const cal = (calendarContent ? asRecords(calendarContent) : []).filter(r => r.service_id)
+  const cd = (calendarDatesContent ? asRecords(calendarDatesContent) : [])
+    .filter(r => r.service_id && r.date)
+
+  const failOpen: ServiceCalendarResolution = {
+    serviceDates: new Map(),
+    regime: 'fail-open',
+    repWeekday: null,
+    repSaturday: null,
+    repSunday: null,
+    horizonStart: null,
+    horizonEnd: null,
+  }
+  if (cal.length === 0 && cd.length === 0) return failOpen
+
+  // Feed validity = union of calendar date ranges and calendar_dates dates.
+  let feedMin = Infinity
+  let feedMax = -Infinity
+  for (const r of cal) {
+    const s = ymdToUtcMs(r.start_date)
+    const e = ymdToUtcMs(r.end_date)
+    if (!Number.isNaN(s)) feedMin = Math.min(feedMin, s)
+    if (!Number.isNaN(e)) feedMax = Math.max(feedMax, e)
+  }
+  for (const r of cd) {
+    const d = ymdToUtcMs(r.date)
+    if (Number.isNaN(d)) continue
+    feedMin = Math.min(feedMin, d)
+    feedMax = Math.max(feedMax, d)
+  }
+  const todayMs = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate())
+  if (!Number.isFinite(feedMin) || !Number.isFinite(feedMax) || feedMin > feedMax) {
+    // Calendar rows exist but carry no parseable dates: assume currently valid.
+    feedMin = todayMs - HORIZON_PAST_DAYS * DAY_MS
+    feedMax = todayMs + HORIZON_FUTURE_DAYS * DAY_MS
+  }
+
+  let hStart = Math.max(feedMin, todayMs - HORIZON_PAST_DAYS * DAY_MS)
+  let hEnd = Math.min(feedMax, todayMs + HORIZON_FUTURE_DAYS * DAY_MS)
+  if (hStart > hEnd) {
+    // Feed doesn't cover today (expired or not yet started): scan the feed's
+    // own validity window instead so its service levels still resolve.
+    hStart = feedMin
+    hEnd = Math.min(feedMax, feedMin + (FALLBACK_HORIZON_DAYS - 1) * DAY_MS)
+  }
+
+  const serviceDates = new Map<string, Set<string>>()
+  const addDate = (svc: string, iso: string) => {
+    let s = serviceDates.get(svc)
+    if (!s) {
+      s = new Set()
+      serviceDates.set(svc, s)
+    }
+    s.add(iso)
+  }
+
+  for (const r of cal) {
+    const s = ymdToUtcMs(r.start_date)
+    const e = ymdToUtcMs(r.end_date)
+    const from = Math.max(hStart, Number.isNaN(s) ? hStart : s)
+    const to = Math.min(hEnd, Number.isNaN(e) ? hEnd : e)
+    for (let t = from; t <= to; t += DAY_MS) {
+      if (r[DOW_FIELDS[new Date(t).getUTCDay()]] === '1') addDate(r.service_id, isoOf(t))
+    }
+  }
+  for (const r of cd) {
+    const d = ymdToUtcMs(r.date)
+    if (Number.isNaN(d) || d < hStart || d > hEnd) continue
+    if (r.exception_type === '1') addDate(r.service_id, isoOf(d))
+    else if (r.exception_type === '2') serviceDates.get(r.service_id)?.delete(isoOf(d))
+  }
+
+  // Representative dates: per day class, the date with the most scheduled
+  // trips (weighted by each active service's trip count from trips.txt).
+  const tripTotals = new Map<string, number>()
+  if (tripsContent) {
+    for (const t of asRecords(tripsContent)) {
+      if (!t.service_id) continue
+      tripTotals.set(t.service_id, (tripTotals.get(t.service_id) ?? 0) + 1)
+    }
+  }
+  const weight = (svc: string) => (tripsContent ? tripTotals.get(svc) ?? 0 : 1)
+
+  const dateTotals = new Map<string, number>()
+  for (const [svc, dates] of serviceDates) {
+    const w = weight(svc)
+    for (const iso of dates) dateTotals.set(iso, (dateTotals.get(iso) ?? 0) + w)
+  }
+
+  let repWeekday: string | null = null
+  let repSaturday: string | null = null
+  let repSunday: string | null = null
+  let bestWk = -1
+  let bestSat = -1
+  let bestSun = -1
+  for (const [iso, total] of [...dateTotals.entries()].sort()) {
+    const dow = new Date(`${iso}T00:00:00Z`).getUTCDay()
+    if (dow === 0) {
+      if (total > bestSun) { bestSun = total; repSunday = iso }
+    } else if (dow === 6) {
+      if (total > bestSat) { bestSat = total; repSaturday = iso }
+    } else if (total > bestWk) { bestWk = total; repWeekday = iso }
+  }
+
+  return {
+    serviceDates,
+    regime: cal.length > 0 ? 'calendar' : 'calendar_dates',
+    repWeekday,
+    repSaturday,
+    repSunday,
+    horizonStart: isoOf(hStart),
+    horizonEnd: isoOf(hEnd),
+  }
+}
+
+export interface RepresentativeServiceSets {
+  /** service_ids active on the representative date; null = every trip is
+   *  eligible (fail-open, feed has no calendar info at all). */
+  weekday: Set<string> | null
+  saturday: Set<string> | null
+  sunday: Set<string> | null
+}
+
+/** service_ids active on each representative date. */
+export function repServiceSets(res: ServiceCalendarResolution): RepresentativeServiceSets {
+  if (res.regime === 'fail-open') return { weekday: null, saturday: null, sunday: null }
+  const activeOn = (iso: string | null): Set<string> => {
+    const s = new Set<string>()
+    if (!iso) return s
+    for (const [svc, dates] of res.serviceDates) if (dates.has(iso)) s.add(svc)
+    return s
+  }
+  return {
+    weekday: activeOn(res.repWeekday),
+    saturday: activeOn(res.repSaturday),
+    sunday: activeOn(res.repSunday),
+  }
+}
+
+// ── Frequency-based (headway) service ────────────────────────────────
+
+export interface FrequencyRow {
+  startSec: number
+  endSec: number
+  headwaySecs: number
+}
+
+/** Parse frequencies.txt into trip_id → headway rows (invalid rows dropped). */
+export function parseFrequencies(content: string | GtfsRecord[]): Map<string, FrequencyRow[]> {
+  const map = new Map<string, FrequencyRow[]>()
+  for (const r of asRecords(content)) {
+    if (!r.trip_id) continue
+    const startSec = gtfsTimeToSeconds(r.start_time)
+    const endSec = gtfsTimeToSeconds(r.end_time)
+    const headwaySecs = parseInt(r.headway_secs, 10)
+    if (
+      !Number.isFinite(startSec) || !Number.isFinite(endSec) ||
+      !Number.isFinite(headwaySecs) || headwaySecs <= 0 || endSec <= startSec
+    ) continue
+    let rows = map.get(r.trip_id)
+    if (!rows) {
+      rows = []
+      map.set(r.trip_id, rows)
+    }
+    rows.push({ startSec, endSec, headwaySecs })
+  }
+  return map
+}
+
+/** Sanity cap on departures expanded from one frequency row (a full service
+ *  day at a 30 s headway is 2 880; anything far past that is bad data). */
+const MAX_FREQ_DEPARTURES_PER_ROW = 5000
+
+// Daytime window for "regular service": 06:00–22:00, tested on CLOCK seconds
+// (raw % 86400) so GTFS 24:00+ after-midnight times classify by wall clock.
 const DAYTIME_START_SEC = 6 * 3600
 const DAYTIME_END_SEC = 22 * 3600
 
+interface PairCounters {
+  wkDay: number
+  wkAny: number
+  satDay: number
+  satAny: number
+  sunDay: number
+  sunAny: number
+}
+
+export interface StopRouteServiceCounts {
+  feedId: string
+  stopId: string
+  routeId: string
+  /** Back-compat alias: identical to tripsWeekdayDay. */
+  weekdayTrips: number
+  /** Departures on the representative weekday, 06:00–22:00 clock window. */
+  tripsWeekdayDay: number
+  /** Departures on the representative weekday, all hours. */
+  tripsWeekdayAny: number
+  /** GREATEST of the representative Sat / Sun day-window departures. */
+  tripsWeekendDay: number
+  /** Max departures across the three representative days, all hours. */
+  tripsAny: number
+}
+
 /**
- * Parse trips.txt + stop_times.txt (+ calendar) to derive stop→route
- * associations, each annotated with `weekdayTrips`: how many of the route's
- * trips stop here during regular weekday daytime service.
+ * Streaming-friendly per-(stop,route) service counter shared by the in-memory
+ * deriver (deriveStopRoutes) and the streaming variant
+ * (import/derive-rail-stop-routes.ts). Feed it one stop_times row at a time;
+ * frequency-defined trips are buffered and expanded at finalize (departures =
+ * headway multiples shifted by the stop's offset from the trip's first
+ * departure). Every pair ever seen is emitted, 0 counts allowed — the table
+ * must stay complete for routing lookups.
+ */
+export function createStopRouteAccumulator(opts: {
+  tripToRoute: Map<string, string>
+  tripToService: Map<string, string>
+  frequencies?: Map<string, FrequencyRow[]>
+  services: RepresentativeServiceSets
+}) {
+  const counters = new Map<string, PairCounters>()
+  const order: string[] = [] // first-seen order, one entry per pair
+  // Buffered stop events for frequency-defined trips, expanded at finalize
+  // once the trip's first departure (= offset base) is known.
+  const freqEvents = new Map<string, Array<{ key: string; depSec: number }>>()
+
+  const eligibility = (tripId: string) => {
+    const svc = opts.tripToService.get(tripId)
+    const on = (s: Set<string> | null) => (s === null ? true : !!svc && s.has(svc))
+    return {
+      wk: on(opts.services.weekday),
+      sat: on(opts.services.saturday),
+      sun: on(opts.services.sunday),
+    }
+  }
+
+  const bump = (
+    c: PairCounters,
+    el: { wk: boolean; sat: boolean; sun: boolean },
+    rawSec: number,
+    n = 1,
+  ) => {
+    const clock = ((rawSec % 86400) + 86400) % 86400
+    const day = clock >= DAYTIME_START_SEC && clock < DAYTIME_END_SEC
+    if (el.wk) {
+      c.wkAny += n
+      if (day) c.wkDay += n
+    }
+    if (el.sat) {
+      c.satAny += n
+      if (day) c.satDay += n
+    }
+    if (el.sun) {
+      c.sunAny += n
+      if (day) c.sunDay += n
+    }
+  }
+
+  const entry = (key: string): PairCounters => {
+    let c = counters.get(key)
+    if (!c) {
+      c = { wkDay: 0, wkAny: 0, satDay: 0, satAny: 0, sunDay: 0, sunAny: 0 }
+      counters.set(key, c)
+      order.push(key)
+    }
+    return c
+  }
+
+  return {
+    /** One stop_times row: rawDepSec = gtfsTimeToSeconds(departure || arrival). */
+    add(tripId: string, stopId: string, rawDepSec: number): void {
+      const routeId = opts.tripToRoute.get(tripId)
+      if (!routeId || !stopId) return
+      const key = `${stopId}|${routeId}`
+      const c = entry(key)
+      const freq = opts.frequencies?.get(tripId)
+      if (freq && freq.length > 0) {
+        let evs = freqEvents.get(tripId)
+        if (!evs) {
+          evs = []
+          freqEvents.set(tripId, evs)
+        }
+        if (Number.isFinite(rawDepSec)) evs.push({ key, depSec: rawDepSec })
+        return
+      }
+      if (!Number.isFinite(rawDepSec)) return
+      bump(c, eligibility(tripId), rawDepSec)
+    },
+
+    finalize(feedId: string): StopRouteServiceCounts[] {
+      // Expand frequency-defined trips: each row yields
+      // floor((end − start) / headway) departures at the trip's first stop;
+      // a later stop sees them shifted by its scheduled offset from the
+      // trip's first departure.
+      for (const [tripId, evs] of freqEvents) {
+        if (evs.length === 0) continue
+        const el = eligibility(tripId)
+        if (!el.wk && !el.sat && !el.sun) continue
+        const first = Math.min(...evs.map(e => e.depSec))
+        for (const row of opts.frequencies!.get(tripId)!) {
+          const total = Math.min(
+            Math.floor((row.endSec - row.startSec) / row.headwaySecs),
+            MAX_FREQ_DEPARTURES_PER_ROW,
+          )
+          for (const ev of evs) {
+            const c = counters.get(ev.key)!
+            const offset = ev.depSec - first
+            for (let k = 0; k < total; k++) {
+              bump(c, el, row.startSec + k * row.headwaySecs + offset)
+            }
+          }
+        }
+      }
+
+      return order.map(key => {
+        const sep = key.lastIndexOf('|')
+        const c = counters.get(key)!
+        return {
+          feedId,
+          stopId: key.slice(0, sep),
+          routeId: key.slice(sep + 1),
+          weekdayTrips: c.wkDay,
+          tripsWeekdayDay: c.wkDay,
+          tripsWeekdayAny: c.wkAny,
+          tripsWeekendDay: Math.max(c.satDay, c.sunDay),
+          tripsAny: Math.max(c.wkAny, c.satAny, c.sunAny),
+        }
+      })
+    },
+  }
+}
+
+/**
+ * Parse trips.txt + stop_times.txt (+ calendar + frequencies) to derive
+ * stop→route associations annotated with representative-day service counts
+ * (see resolveServiceCalendar / createStopRouteAccumulator).
  *
  * Every (stop_id, route_id) pair that appears anywhere in stop_times is still
- * returned (so the table stays complete for routing lookups); the count lets
+ * returned (so the table stays complete for routing lookups); the counts let
  * the display layer filter out routes that only touch a station off-peak or on
  * a single "select" trip — the case the MTA diagrams / Apple omit (e.g. the
  * late-night-only 2 at a 1-line local stop, or the lone AM-rush 5 at Kingston
- * Av). When calendar info is missing, all trips are treated as eligible.
+ * Av) — without erasing weekend-only or night-only stations. When calendar
+ * info is missing entirely, all trips are treated as eligible (fail-open).
  */
 export function deriveStopRoutes(
   tripsContent: string | GtfsRecord[],
@@ -603,11 +960,12 @@ export function deriveStopRoutes(
   feedId: string,
   calendarContent?: string | GtfsRecord[],
   calendarDatesContent?: string | GtfsRecord[],
-): Array<{ feedId: string; stopId: string; routeId: string; weekdayTrips: number }> {
-  const weekdayServices = computeWeekdayServiceIds(calendarContent, calendarDatesContent)
-
-  // Build trip → route + service maps.
+  frequenciesContent?: string | GtfsRecord[],
+  resolution?: ServiceCalendarResolution,
+): StopRouteServiceCounts[] {
   const trips = asRecords(tripsContent)
+  const res = resolution ?? resolveServiceCalendar(calendarContent, calendarDatesContent, trips)
+
   const tripToRoute = new Map<string, string>()
   const tripToService = new Map<string, string>()
   for (const trip of trips) {
@@ -615,40 +973,16 @@ export function deriveStopRoutes(
     if (trip.service_id) tripToService.set(trip.trip_id, trip.service_id)
   }
 
-  // Scan stop_times once, accumulating per-(stop,route) weekday-daytime counts.
-  const counts = new Map<string, number>()
-  const order: string[] = [] // preserve first-seen order, one entry per pair
-  const stopTimes = asRecords(stopTimesContent)
-
-  for (const st of stopTimes) {
-    const routeId = tripToRoute.get(st.trip_id)
-    if (!routeId || !st.stop_id) continue
-
-    const key = `${st.stop_id}|${routeId}`
-    if (!counts.has(key)) {
-      counts.set(key, 0)
-      order.push(key)
-    }
-
-    // Count only regular weekday daytime trips.
-    if (weekdayServices) {
-      const svc = tripToService.get(st.trip_id)
-      if (!svc || !weekdayServices.has(svc)) continue
-    }
-    const sec = gtfsTimeToSeconds(st.departure_time || st.arrival_time)
-    if (Number.isNaN(sec) || sec < DAYTIME_START_SEC || sec >= DAYTIME_END_SEC) continue
-    counts.set(key, counts.get(key)! + 1)
-  }
-
-  return order.map(key => {
-    const sep = key.lastIndexOf('|')
-    return {
-      feedId,
-      stopId: key.slice(0, sep),
-      routeId: key.slice(sep + 1),
-      weekdayTrips: counts.get(key)!,
-    }
+  const acc = createStopRouteAccumulator({
+    tripToRoute,
+    tripToService,
+    frequencies: frequenciesContent ? parseFrequencies(frequenciesContent) : undefined,
+    services: repServiceSets(res),
   })
+  for (const st of asRecords(stopTimesContent)) {
+    acc.add(st.trip_id, st.stop_id, gtfsTimeToSeconds(st.departure_time || st.arrival_time))
+  }
+  return acc.finalize(feedId)
 }
 
 /**
@@ -1130,15 +1464,26 @@ export async function importStopRoutes(
 
     const values = batch.map(a => {
       const esc = (v: string) => `'${v.replace(/'/g, "''")}'`
-      const wt = Number.isFinite(a.weekdayTrips) ? String(a.weekdayTrips) : 'NULL'
-      return `(${esc(a.feedId)}, ${esc(a.stopId)}, ${esc(a.routeId)}, ${wt})`
+      const num = (v: number | null | undefined) =>
+        typeof v === 'number' && Number.isFinite(v) ? String(v) : 'NULL'
+      // weekday_trips kept = trips_weekday_day for back-compat readers.
+      return `(${esc(a.feedId)}, ${esc(a.stopId)}, ${esc(a.routeId)}, ` +
+        `${num(a.tripsWeekdayDay)}, ${num(a.tripsWeekdayDay)}, ` +
+        `${num(a.tripsWeekdayAny)}, ${num(a.tripsWeekendDay)}, ${num(a.tripsAny)})`
     }).join(',\n')
 
     await db.execute(sql.raw(`
-      INSERT INTO gtfs_stop_routes (feed_id, stop_id, route_id, weekday_trips)
+      INSERT INTO gtfs_stop_routes
+        (feed_id, stop_id, route_id, weekday_trips,
+         trips_weekday_day, trips_weekday_any, trips_weekend_day, trips_any)
       VALUES ${values}
       ON CONFLICT (feed_id, stop_id, route_id)
-      DO UPDATE SET weekday_trips = EXCLUDED.weekday_trips
+      DO UPDATE SET
+        weekday_trips = EXCLUDED.weekday_trips,
+        trips_weekday_day = EXCLUDED.trips_weekday_day,
+        trips_weekday_any = EXCLUDED.trips_weekday_any,
+        trips_weekend_day = EXCLUDED.trips_weekend_day,
+        trips_any = EXCLUDED.trips_any
     `))
 
     imported += batch.length

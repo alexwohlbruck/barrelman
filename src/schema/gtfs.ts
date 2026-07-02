@@ -96,7 +96,14 @@ export const gtfsStopRoutes = pgTable(
     stopId: text('stop_id').notNull(),
     routeId: text('route_id').notNull(),
     // Regular weekday-daytime trip count for this stop×route (see db.ts).
+    // Back-compat alias of tripsWeekdayDay.
     weekdayTrips: integer('weekday_trips'),
+    // Representative-day service counts (see resolveServiceCalendar in
+    // gtfs.service.ts and the column comments in db.ts).
+    tripsWeekdayDay: integer('trips_weekday_day'),
+    tripsWeekdayAny: integer('trips_weekday_any'),
+    tripsWeekendDay: integer('trips_weekend_day'),
+    tripsAny: integer('trips_any'),
   },
   (table) => [
     uniqueIndex('gtfs_stop_routes_uniq_idx').on(table.feedId, table.stopId, table.routeId),
