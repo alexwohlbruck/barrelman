@@ -3,6 +3,7 @@ graph and the reconstruction round-trips with exact score accounting and
 a globally optimal result (verified against exhaustive search on the
 ORIGINAL graph)."""
 
+import itertools
 import math
 
 from lineorder.model import build_graph
@@ -192,6 +193,65 @@ def test_u5_partial_double_y():
     )
     red, _, _ = assert_optimal(inst)
     assert red.stats["U5"] >= 1
+
+
+def _az_xy(cx, cy, az_deg, r=10.0):
+    a = math.radians(az_deg)
+    return (cx + r * math.sin(a), cy + r * math.cos(a))
+
+
+def _dy4_instance(perm_u, perm_v, extra_d=False, stations=()):
+    """Degree-4 double Y: trunk u-v carries three single-line threads;
+    the leg azimuths put the trunk INTERIOR in both nodes' absolute
+    azimuth-sorted orders, so the residual split node's cyclic order
+    differs from the absolute list (the U4/U5 rotation trap).
+    perm_u/perm_v assign the threads to the fixed leg azimuths;
+    extra_d adds a private-line leg at v, making v a partial side."""
+    node_xy = {"u": (0.0, 0.0), "v": (10.0, 0.0)}
+    edges = [("u", "v", ["A", "B", "C"])]
+    for ln, az in zip(perm_u, (30, 150, 210)):
+        node_xy[f"u{az}"] = _az_xy(0.0, 0.0, az)
+        edges.append((f"u{az}", "u", [ln]))
+    for ln, az in zip(perm_v, (30, 150, 330)):
+        node_xy[f"v{az}"] = _az_xy(10.0, 0.0, az)
+        edges.append(("v", f"v{az}", [ln]))
+    if extra_d:
+        node_xy["vd"] = _az_xy(10.0, 0.0, 250)
+        edges.append(("v", "vd", ["D"]))
+    return build_graph(node_xy, edges, stations=stations)
+
+
+def test_u4_degree4_azimuth_sweep():
+    # all thread-to-azimuth assignments at both ends: every configuration
+    # must reconstruct to the exhaustive optimum with exact accounting;
+    # station variants exercise the weight-aware side choice with 3
+    # threads (unequal w_diff at the two ends)
+    perms = list(itertools.permutations(["A", "B", "C"]))
+    for stations in ((), ("u",), ("v",)):
+        fired = 0
+        for pu in perms:
+            for pv in perms:
+                inst, _, _ = _dy4_instance(pu, pv, stations=stations)
+                red, _, _ = assert_optimal(inst)
+                fired += red.stats["U4"]
+        assert fired >= len(perms) ** 2  # fires again on the residual DY
+
+
+def test_u5_degree4_azimuth_sweep():
+    # partial double Y (extra private leg at v): U5 must realize the
+    # unavoidable thread crossings on the CHEAPER side — plain gives
+    # w_diff(u)=4 < w_diff(v)=5 (crossings belong at u), station u
+    # inverts the preference (crossings belong at v)
+    perms = list(itertools.permutations(["A", "B", "C"]))
+    for stations in ((), ("u",), ("v",)):
+        fired = 0
+        for pu in perms:
+            for pv in perms:
+                inst, _, _ = _dy4_instance(pu, pv, extra_d=True,
+                                           stations=stations)
+                red, _, _ = assert_optimal(inst)
+                fired += red.stats["U5"]
+        assert fired >= len(perms) ** 2
 
 
 def test_u6_stump():

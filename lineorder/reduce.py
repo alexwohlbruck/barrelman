@@ -8,8 +8,8 @@ Implements TSAS 2019 section 4 on the OptGraph model:
   C1 single-line cut         (stubs keep continuation info at the ends)
   C2 terminus detachment
   U1 full X, U2 full Y, U3 partial Y, U4 full double Y (weight-aware
-  endpoint choice), U5 partial double Y, U6 stump (dummy mirror edges,
-  then U4 fires on a later pass)
+  endpoint choice), U5 partial double Y (weight-aware crossing-side
+  choice), U6 stump (dummy mirror edges, then U4 fires on a later pass)
 
 Loop order per the approved stage-5 design: P2 once, then rounds of
 untangle (U2 U3 U4 U5 U6 U1) -> inner fixpoint of contract/prune (P1 P3)
@@ -494,7 +494,12 @@ def _rule_u4(g: OptGraph, reg, w: Weights, out: Reduction) -> int:
         cost_v = _dy_fixed_cost(
             g, reg, w, u, rank[u], blk_v[legs_v[0]], inv[legs_v[0]],
             [(inv[l], blk_v[l]) for l in legs_v[1:]])
-        if cost_u <= cost_v:
+        # every same-direction thread pair crosses at exactly one end, so
+        # align with the pricier node and realize them all at the cheaper
+        # one (see U5); on equal weights either side is optimal in total,
+        # take the smaller constant
+        wu, wv = w.w_diff(g, u), w.w_diff(g, v)
+        if wv < wu or (wv == wu and cost_u <= cost_v):
             ref, refl, refblk, cost = u, legs_u, blk_u, cost_u
         else:
             ref, refl, refblk, cost = v, legs_v, blk_v, cost_v
@@ -507,7 +512,10 @@ def _rule_u4(g: OptGraph, reg, w: Weights, out: Reduction) -> int:
             leg0 = next(l for l in legs
                         if set(g.edges[l].lines) == first)
             nn = g.add_node(g.nodes[nid].orig)
-            keep = [m for m in g.order[nid] if m not in (eid, leg0)]
+            # residual node inherits the CYCLIC rotation starting after
+            # the trunk edge, not the absolute azimuth-sorted order —
+            # e2 takes eid's angular slot
+            keep = [m for m in g.clockwise_from(nid, eid) if m != leg0]
             g.order[nid] = [e1, leg0]
             g.order[nn] = [e2] + keep
             for m in keep:
@@ -564,18 +572,36 @@ def _rule_u5(g: OptGraph, reg, w: Weights, out: Reduction) -> int:
                     g.degree(s) == g.degree(r):
                 continue  # full double Y — let U4 take it (weight choice)
 
+            # weight-aware crossing-side choice (mirror of U4): every
+            # same-direction thread pair must cross at exactly one of
+            # r, s, and the choice is free — so the optimum realizes ALL
+            # of them at the cheaper-w_diff node, i.e. the block order
+            # aligns with the EXPENSIVE node's clockwise geometry. That
+            # fixes which thread gets extracted: the reference side's
+            # clockwise-first one (an r-first extraction cannot even
+            # represent s-aligned orders, and vice versa).
+            r_rank = {f: k for k, f in enumerate(g.clockwise_from(r, eid))}
             s_rank = {f: k for k, f in enumerate(g.clockwise_from(s, eid))}
-            cost = _dy_fixed_cost(
-                g, reg, w, s, s_rank, blk_r[legs_r[0]], match[legs_r[0]],
-                [(match[l], blk_r[l]) for l in legs_r[1:]])
+            if w.w_diff(g, s) <= w.w_diff(g, r):
+                ref, lead = r, legs_r[0]
+                cost = _dy_fixed_cost(
+                    g, reg, w, s, s_rank, blk_r[lead], match[lead],
+                    [(match[l], blk_r[l]) for l in legs_r if l != lead])
+            else:
+                ref = s
+                lead = min(legs_r, key=lambda l: s_rank[match[l]])
+                cost = _dy_fixed_cost(
+                    g, reg, w, r, r_rank, blk_r[lead], lead,
+                    [(l, blk_r[l]) for l in legs_r if l != lead])
 
-            first = blk_r[legs_r[0]]
+            first = blk_r[lead]
             rest = set(e.lines) - first
             e1, e2 = _split_edge(g, eid, first, rest)
             # split r only
-            leg0 = legs_r[0]
+            leg0 = lead
             nn = g.add_node(g.nodes[r].orig)
-            keep = [m for m in g.order[r] if m not in (eid, leg0)]
+            # cyclic rotation from the trunk slot (see U4)
+            keep = [m for m in g.clockwise_from(r, eid) if m != leg0]
             g.order[r] = [e1, leg0]
             g.order[nn] = [e2] + keep
             for m in keep:
@@ -592,7 +618,7 @@ def _rule_u5(g: OptGraph, reg, w: Weights, out: Reduction) -> int:
                     ed.v = tgt
             # s keeps both pieces in the old angular slot
             g.replace_slot(s, eid, [e1, e2])
-            out.transforms.append(TSplit(eid, e1, e2, ref_at_v=(e.v == r)))
+            out.transforms.append(TSplit(eid, e1, e2, ref_at_v=(e.v == ref)))
             out.fixed_cost += cost
             out.stats["U5"] += 1
             n += 1
