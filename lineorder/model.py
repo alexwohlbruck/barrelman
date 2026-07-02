@@ -372,14 +372,15 @@ def load_build(build_key: str, dsn: str = DEFAULT_DSN) -> Instance:
         coords = json.loads(gj)["coordinates"]
         geo[db_eid] = coords
 
-    pending = []  # (db_node_id, loom, station_id, label, lon, lat)
-    for db_nid, loom, sid, label, lon, lat in node_rows:
-        pending.append((db_nid, loom, sid, label, lon, lat))
-
-    node_of_coord: dict[tuple, tuple] = {
-        ckey(lon, lat): (db_nid, loom, sid, label, lon, lat)
-        for db_nid, loom, sid, label, lon, lat in pending
-    }
+    node_of_coord: dict[tuple, tuple] = {}
+    for row in node_rows:
+        db_nid, _loom, _sid, _label, lon, lat = row
+        k = ckey(lon, lat)
+        if k in node_of_coord:
+            raise ValueError(
+                f"nodes {node_of_coord[k][0]} and {db_nid} share rounded "
+                f"coordinate {k} (build {build_key})")
+        node_of_coord[k] = row
     for db_eid, coords in geo.items():
         for end in (coords[0], coords[-1]):
             k = ckey(*end)
@@ -401,6 +402,13 @@ def load_build(build_key: str, dsn: str = DEFAULT_DSN) -> Instance:
         coords = geo[db_eid]
         u = coord_node[ckey(*coords[0])]
         v = coord_node[ckey(*coords[-1])]
+        if u == v:
+            # a self-loop would need TWO angular slots at the node for
+            # ord_arrive/ord_leave frames to stay well-defined; reject
+            # loudly instead of silently undercounting the degree
+            raise ValueError(
+                f"edge {db_eid} is a self-loop at node "
+                f"{node_of_coord[ckey(*coords[0])][0]} (build {build_key})")
         lines = edge_lines.get(db_eid, [])
         if not lines:
             continue  # line-less edge carries no ordering information
