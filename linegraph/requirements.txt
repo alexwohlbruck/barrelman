@@ -9,3 +9,4 @@ pyproj>=3.6            # local UTM projection
 osmium>=4.0            # transitively: shapesnap.match imports shapesnap.graph
 psycopg[binary]>=3.1   # only needed for --postgis-qa / --emit DB writes
 pytest>=8              # tests
+matplotlib>=3.8        # exam/loop_exam.py render only
