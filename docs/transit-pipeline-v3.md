@@ -104,16 +104,29 @@ per-trip. Two regimes, one Viterbi core:
 - **Regime A (feed has shapes)**: dense HMM à la Newson-Krumm/Meili — resample shape
   ~30 m, Gaussian emission σ≈15 m, transition `exp(−|along−network|/β)` via bounded A*,
   per-route OSM `route=*` relation bonus (×0.5 on matching-relation edges), station-name
-  TED + platform-ref bonuses at stop observations. Break on infeasible gaps and bridge
-  with the original shape segment (flagged), never force.
+  TED + platform-ref bonuses at stop observations. Relation matching is TIERED
+  (`candidates.RouteMatcher`): identity (relation `ref` == `route_short_name`, or the
+  relation name contains the long/short name) outranks colour-only equality — on
+  colour-collapsed networks `route_color` is a FAMILY key (NYC N/Q/R/W share #F6BC26),
+  so whenever any candidate identity-matches the pattern, colour-only relations count
+  as non-matching; colour stays the fallback signal for networks whose relations carry
+  no usable ref/name. On identity-tier patterns, foreign-identity edges (decorated only
+  with OTHER routes' ref/name relations) pay a heavy emission prior, and a contiguous
+  observation run whose layers hold only foreign-identity candidates is EXCISED
+  (widened to the enclosing stop anchors) so the network path spans the degenerate
+  stretch on the route's own track (MTA R drawn through the Lexington corridor at
+  Canal St). Break on infeasible gaps and bridge with the original shape segment
+  (flagged), never force — empty-layer runs (no evidence at all) still break+bridge.
 - **Regime B (no/degenerate shapes)**: pfaedle-style sparse stop-to-stop matching on the
   same core.
 - **Output**: `matched_shapes` table (method, confidence, stats jsonb) + rewritten
   `shapes.txt` in the processed zip + `gtfs_shapes` upsert — MOTIS and display consume
   identical geometry. Simplify (~1 m topology-preserving), dedup shapes across patterns.
-- **Quality gates per pattern**: coverage % within tolerance, discrete Fréchet ≤100 m,
-  length ratio 0.95–1.15, every stop snaps. Any fail → keep original shape
-  (`fallback`) — good feeds are never degraded. Per-feed summary logged.
+- **Quality gates per pattern**: coverage % within tolerance, discrete Fréchet ≤100 m
+  (evaluated piecewise across excised foreign runs — the fabricated straight jump over
+  an excision is not agency geometry), length ratio 0.95–1.15, every stop snaps. Any
+  fail → keep original shape (`fallback`) — good feeds are never degraded. Per-feed
+  summary logged.
 
 ### Stage 4 — centerline pipeline (custom, raster skeleton; task #4)
 
