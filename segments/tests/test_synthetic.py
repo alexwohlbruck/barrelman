@@ -106,8 +106,7 @@ def test_short_corridor_merges_transitions():
          "S1": (0, -300), "S2": (40, 300)},
         [("P", "N1", [R]), ("N1", "N2", [R, X]), ("N2", "Q", [R]),
          ("S1", "N1", [X]), ("N2", "S2", [X])])
-    assert info["merged"] == 2
-    assert "merge_offset_mismatch" not in info
+    assert info["merged"] == 2  # a seam offset mismatch would have raised
     # the 40 m corridor is fully consumed: no CORRIDOR steady piece
     # survives on it (the merged connectors legitimately span it)
     for s in find(segs, kind="steady"):

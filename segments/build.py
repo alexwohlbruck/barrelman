@@ -68,9 +68,6 @@ def summarize(segments, info) -> str:
     if info.get("two_end_unsupported_sites"):
         lines.append(f"two-end pairs demoted to stubs (shape evidence "
                      f"contradicts): {sorted(set(info['two_end_unsupported_sites']))}")
-    if info.get("merge_offset_mismatch"):
-        lines.append(f"MERGE OFFSET MISMATCH corridors: "
-                     f"{info['merge_offset_mismatch']}")
     return "\n".join(lines)
 
 

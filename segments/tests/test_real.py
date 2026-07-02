@@ -69,7 +69,6 @@ def test_every_site_produces_transitions(built):
     g, segments, info, _ = built
     assert set(info["site_transitions"]) == set(info["sites"])
     assert all(n >= 1 for n in info["site_transitions"].values())
-    assert "merge_offset_mismatch" not in info
     assert not info.get("greedy_paired_sites"), \
         "all >=3-way ribbons pair from matched_shapes evidence"
     assert not info.get("two_end_unsupported_sites"), \

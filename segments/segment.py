@@ -746,8 +746,14 @@ def _merge_consumed(transitions: list, cgs: dict, info: dict) -> list:
                     if b.out_end and b.out_end[0] == cid:
                         _reverse_transition(b)  # q becomes b's in end
                     if abs(a.off_to_px - b.off_from_px) > 1e-6:
-                        info.setdefault("merge_offset_mismatch",
-                                        []).append(cid)
+                        # both offsets derive from the SAME corridor
+                        # ribbon (frame-signed) — a mismatch means the
+                        # merged feature would hide an offset step in its
+                        # interior, violating C1. Fail loudly.
+                        raise ValueError(
+                            f"consumed-corridor merge offset mismatch at "
+                            f"corridor {cid} ({a.color_key}): "
+                            f"{a.off_to_px} != {b.off_from_px}")
                     gap = math.dist(a.coords[-1], b.coords[0])
                     if gap > 0.5:
                         info.setdefault("merge_gap", []).append((cid, gap))
