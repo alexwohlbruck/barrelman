@@ -74,6 +74,9 @@ complex_stop_routes AS (
 -- (b) SUM service across all matched platform stops of the complex, per
 --     bullet label. NULL counts (feed not yet backfilled) count as passing —
 --     fail-open, those stations still show everything.
+--     Grouping by route_short_name (not route_id) is deliberate: the rendered
+--     unit is one bullet per label, so same-named route_id variants (peak
+--     branches, feed splits) pool their counts toward that bullet's gate.
 complex_routes AS (
   SELECT
     station_label,
