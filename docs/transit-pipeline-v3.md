@@ -170,6 +170,28 @@ Per (mode-class, region cell), from *matched* shapes:
   over the contraction bound — the 21 m 4/5×N/R/W rung at Fulton St): stage 5's
   raw-slot corridor stability relies on corridors arriving as single aligned edges,
   and line-less rows only inflate `transit_graph_edges` for consumers that skip them.
+- **Shape-evidence geometry refit** (`linegraph.refit`, default ON, `--no-refit`):
+  the skeleton is authoritative TOPOLOGY but lossy GEOMETRY — at X/T junctions the
+  crossing track's ink bulges the blob and the medial axis bows the through-corridor
+  (NYC: the 7th Av 1/2/3 trunk bowed ~7 m where the L crosses under it at 14 St).
+  After a coarse attribution, every edge's geometry is rebuilt from the shapes riding
+  it: per (edge, shape) the sub-polyline between the edge-endpoint projections on a
+  SINGLE PASS (loop-shape guard; a crossing route projects both endpoints to ~one
+  point and is cover-ratio-rejected), resampled to a common arc-length frame and
+  averaged (directional pairs → corridor centerline). Nodes move to the Tikhonov-
+  regularized least-squares intersection of incident terminal tangent lines (the
+  plain endpoint mean cannot fix shallow crossings: they skeletonize into an "H"
+  whose nodes sit between the tracks; the tangent intersection slides nodes along
+  the through-tracks to the true crossing — collapsed rung pairs keep a 4 m floor).
+  Terminals snap exactly to nodes, blended over the last 25 m. Robustness: no
+  evidence → keep skeleton; any refit point beyond MERGE_WIDTH from the skeleton →
+  mis-attribution, keep skeleton (logged). Phase order: coarse attribution → refit →
+  stations (split on the REFIT centerline) → final attribution → prune → emit.
+  Acceptance: `linegraph/exam/junction_exam.py` — for every junction through-ribbon
+  (traversal-evidence pairs), max deviation of the centerline from the ±100 m
+  corridor chord, before/after distributions + per-pair truth allowance from the
+  supporting shapes' own windows (NYC straight-through subset mean 6.6 → 2.8 m,
+  p50 5.9 → 1.1 m; genuine corners keep their curvature).
 - Length acceptance: total skeleton km within 0.75–1.25× of the **merge-width-fused
   network** — `area(union(shapes buffered at MERGE_WIDTH/2))) / MERGE_WIDTH`, computed
   independently of the raster path. The raw union of used ways is NOT the contract
