@@ -447,3 +447,127 @@ def test_corridor_composition_change_breaks():
     cors = walk_corridors(g)
     assert len(cors) == 2
     assert transition_sites(g) == {ids["B"]: "composition"}
+
+
+# --------------------- off-track corridor reconciliation (15 St / FX bug)
+
+def _s_curve_xy(x0, x1, amp=60.0, n=40):
+    """A bowed track from (x0, 0) to (x1, 0): a real curve that departs
+    the straight chord between its endpoints by up to `amp` metres,
+    peaking at the middle (a single hump) so a straight chord strays from
+    it maximally right where the STEADY piece is cut, not only at the
+    trimmed ends. Endpoints coincide with the chord (the node handoff)."""
+    pts = []
+    for k in range(n + 1):
+        t = k / n
+        x = x0 + (x1 - x0) * t
+        y = amp * math.sin(math.pi * t)        # single hump, 0 at ends
+        pts.append((x, y))
+    return pts
+
+
+def test_reconcile_offtrack_corridor_snaps_to_curved_way():
+    """The 15 St-Prospect Park regression, synthetic: two routes ride the
+    SAME physical S-curved track between one node pair. `FX` carries an
+    off-graph agency-bridged STRAIGHT chord (63 m off the real curve);
+    the on-graph `F` sibling follows the curve. build_segments with the
+    real way must reconcile FX onto F's curve — the steady FX segment
+    stops being a chord and hugs the track, while F is untouched. No
+    ways => no reconciliation (the chord survives), proving the guard is
+    opt-in and the pure-geometry path is unchanged."""
+    from shapely.geometry import LineString, Point
+
+    F, FX = ("F", "EB6800"), ("FX", "EB6800")
+    curve_m = _s_curve_xy(0.0, 800.0)                 # the real track (m)
+    curve_ll = [(x / MX, y / MY) for x, y in curve_m]
+    a_ll, b_ll = curve_ll[0], curve_ll[-1]
+
+    # graph_from_spec gives every edge a straight 2-vertex chord; we then
+    # replace F's geometry with the real curve, leaving FX the chord — the
+    # exact linegraph situation (FX = off-run agency bridge, F = on-graph).
+    g, ids = graph_from_spec(
+        {"A": (0, 0), "B": (800, 0)},
+        [("A", "B", [F]), ("A", "B", [FX])])
+    f_eid = next(e for e, ed in g.edges.items()
+                 if ed.lines[0].route_id == "F")
+    g.edges[f_eid].coords = curve_ll                  # F follows the curve
+
+    ways = [curve_ll]                                 # the real OSM way
+    _curve_line = LineString(to_m(curve_ll))
+
+    def _max_off_curve(seg):
+        # sample the emitted polyline itself (not only its vertices — a
+        # 2-vertex chord's midpoint is the farthest point, mirroring the
+        # exam's along-line sampling)
+        sl = LineString(to_m(seg.coords))
+        n = max(2, int(sl.length / 10.0))
+        return max(_curve_line.distance(sl.interpolate(k / n, normalized=True))
+                   for k in range(n + 1))
+
+    # WITHOUT ways: FX stays a straight chord far off the curve
+    segs0, info0 = build_segments(g, CFG)
+    fx0 = next(s for s in find(segs0, kind="steady", color_key="EB6800")
+               if s.route_short_names == "FX")
+    assert not info0.get("track_reconciled")
+    assert _max_off_curve(fx0) > 40.0                 # the 63 m chord
+
+    # WITH ways: FX reconciles onto F's curve (sibling adoption)
+    segs, info = build_segments(g, CFG, ways=ways)
+    assert ids  # graph built
+    rec = info.get("track_reconciled")
+    assert rec, "the off-track FX corridor was reconciled"
+    (method, before_m, after_m), = [v for v in rec.values()]
+    assert method == "sibling"
+    assert before_m > 40.0 and after_m < CFG.track_snap_tol_m
+    fx = next(s for s in find(segs, kind="steady", color_key="EB6800")
+              if s.route_short_names == "FX")
+    assert _max_off_curve(fx) <= CFG.track_snap_tol_m, "FX now hugs track"
+    # F was already on-track: untouched, still the curve
+    f = next(s for s in find(segs, kind="steady", color_key="EB6800")
+             if s.route_short_names == "F")
+    assert _max_off_curve(f) <= 1.0
+    # the reconciled FX steady endpoints sit ON the real track (its ends
+    # are trimmed back from the node by the transition half, but must lie
+    # on the curve, not float on the old chord)
+    fx_xy = to_m(fx.coords)
+    for end in (fx_xy[0], fx_xy[-1]):
+        assert _curve_line.distance(Point(end)) < 1.0
+
+
+def test_reconcile_waysnap_without_sibling():
+    """No faithful co-endpoint sibling (a solo off-run at a wye): the
+    reconciler falls back to projecting the off-track vertices onto the
+    nearest real way. A single solo corridor whose stored geometry bows
+    off the real curve snaps back onto it."""
+    from shapely.geometry import LineString, Point
+
+    S = ("5", "00933C")
+    curve_ll = [(x / MX, y / MY) for x, y in _s_curve_xy(0.0, 600.0, amp=45.0)]
+    g, ids = graph_from_spec(
+        {"A": (0, 0), "B": (600, 0)}, [("A", "B", [S])])
+    # store a straight chord (the off-run) as the corridor; the way curves
+    ways = [curve_ll]
+    segs, info = build_segments(g, CFG, ways=ways)
+    rec = info.get("track_reconciled")
+    assert rec and list(rec.values())[0][0] == "waysnap"
+    seg = next(s for s in find(segs, kind="steady") if s.route_short_names == "5")
+    line = LineString(to_m(curve_ll))
+    sl = LineString(to_m(seg.coords))
+    n = max(2, int(sl.length / 10.0))
+    worst = max(line.distance(sl.interpolate(k / n, normalized=True))
+                for k in range(n + 1))
+    assert worst < CFG.track_snap_tol_m
+
+
+def test_reconcile_leaves_ontrack_bundle_untouched():
+    """A legitimate directional-pair midline sits a few metres off each
+    constituent track BY DESIGN — it must never trip the reconciler. A
+    straight corridor whose way runs straight right along it is left
+    byte-identical (no spurious snap)."""
+    F = ("F", "EB6800")
+    straight_ll = [(x / MX, 0.0) for x in range(0, 801, 20)]
+    g, ids = graph_from_spec({"A": (0, 0), "B": (800, 0)}, [("A", "B", [F])])
+    before = list(g.edges[next(iter(g.edges))].coords)
+    segs, info = build_segments(g, CFG, ways=[straight_ll])
+    assert not info.get("track_reconciled")
+    assert list(g.edges[next(iter(g.edges))].coords) == before
