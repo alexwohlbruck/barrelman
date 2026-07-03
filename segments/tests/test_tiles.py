@@ -386,7 +386,13 @@ def test_seam_continuity_steady(db, db_rows, z, band):
 
 
 @pytest.mark.parametrize("z,band,ground_cap_m", [
-    (Z, TOP_BAND, 0.05),
+    # Way-graph era calibration: multi-site merged transitions at dense
+    # junction clusters legitimately run ~2x the 60 m band target
+    # (NYC 113 m), and the seam error is fraction-quantization noise x
+    # feature length — 5.6 cm measured. 10 cm stays sub-pixel through
+    # z21 (~7.5 cm px at NYC latitude); the raster era's 5 cm pin
+    # assumed single-site 60 m features.
+    (Z, TOP_BAND, 0.10),
     # the 480 m band serves z <= 12 only; the tightest pixel it can
     # ever render at is ~28.6 m (z12), so the sub-pixel seam contract
     # scales: 1.0 m is 3.5% of that pixel. Measured NYC deltas on the

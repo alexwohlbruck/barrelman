@@ -145,8 +145,19 @@ def cross_section(proj, segments, pt_ll, colors=None, half=XSECT_HALF_M):
     pt = Point(proj.to_xy([pt_ll])[0])
     pool = [s for s in segments
             if colors is None or s.color_key in colors]
+
+    def bbox_dist(xy):
+        # way-graph corridors span whole boroughs, so a first-vertex
+        # prefilter would drop the very trunk under the probe — use the
+        # feature's bounding box instead
+        xs = [p[0] for p in xy]
+        ys = [p[1] for p in xy]
+        dx = max(min(xs) - pt.x, 0.0, pt.x - max(xs))
+        dy = max(min(ys) - pt.y, 0.0, pt.y - max(ys))
+        return math.hypot(dx, dy)
+
     lines = [(s, LineString(s.xy)) for s in pool
-             if Point(s.xy[0]).distance(pt) < 5000]  # cheap prefilter
+             if bbox_dist(s.xy) < 5000]  # cheap prefilter
     near = [(ls.distance(pt), s, ls) for s, ls in lines
             if ls.distance(pt) <= 100.0]
     if not near:

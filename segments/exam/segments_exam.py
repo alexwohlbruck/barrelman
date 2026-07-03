@@ -46,7 +46,8 @@ the v2 attempt, plus the receipts:
      a ribbon except the branch-divergence tail shared by two
      site-anchored features at the same site (kind-agnostic — a
      straight equal-offset twin skip-classifies to steady; reported,
-     capped at transition_len_m / 2; the shared typed end is not
+     capped at transition_len_m (way-graph era: twins share real
+     track to the physical switch); the shared typed end is not
      required — long-band merges relocate it into a chain interior)
   5  receipt — per-Loop-leg feature table (kind, routes, slot/count,
      offsets) for Lake / Wabash / Van Buren / Wells + the interior
@@ -231,9 +232,12 @@ def check1_c1_contract(g, proj, segments, chicago: bool = True,
     print(f"  {len(sites)} transition sites: {n_junc} junctions, "
           f"{n_comp} deg-2 composition changes {howard}")
     if chicago and site_checks:
+        # way-graph era pin: 15 real junctions (interlockings merged to
+        # their cores by the co-terminal twin + micro-window collapses)
+        # + Howard's composition change
         report("check1.site-inventory",
-               len(sites) == 18 and n_junc == 17 and howard == ["Howard"],
-               f"expected 18 sites (17 junctions + Howard), got {len(sites)} "
+               len(sites) == 16 and n_junc == 15 and howard == ["Howard"],
+               f"expected 16 sites (15 junctions + Howard), got {len(sites)} "
                f"({n_junc} junctions, composition at {howard})")
 
     if site_checks:  # band-independent (graph-derived): run once
@@ -622,8 +626,13 @@ def check4_coverage(g, proj, segments, cfg: SegmentConfig = CFG):
                 # shared endpoint into a chain interior on long bands
                 # (Tower 18 at 480 m), leaving the shared site as the
                 # divergence witness.
+                # Way-graph-era calibration: the twins share the trunk
+                # up to the REAL switch, and physical ladder throats sit
+                # up to a full transition length past the junction node
+                # (7 Av/53 St: 55 m of a 60 m band; W 4 St at 480 m) —
+                # the raster's blob junctions never pushed past len/2.
                 branch = (shared_site
-                          and ov <= cfg.transition_len_m / 2 + 1e-6)
+                          and ov <= cfg.transition_len_m + 1e-6)
                 if branch:
                     # the genuinely double-drawn length is measured by
                     # BUF_M proximity, not vertex-exact intersection —
@@ -634,7 +643,7 @@ def check4_coverage(g, proj, segments, cfg: SegmentConfig = CFG):
                     # bound below subtracts it
                     ov_buf = min(geoms[i].intersection(
                         geoms[j].buffer(BUF_M)).length,
-                        cfg.transition_len_m / 2 + 2 * BUF_M)
+                        cfg.transition_len_m + 2 * BUF_M)
                     n_allowed += 1
                     allowed_ov[ck] += ov_buf
                     print(f"  branch tail reuse: {ck} segs "

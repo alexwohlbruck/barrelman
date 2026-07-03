@@ -60,7 +60,7 @@ LOOP_WINDOW = (-87.6355, 41.8755, -87.6245, 41.8875)
 # corner junctions where the leg bundles change composition. The pin
 # holds the inventory so a smeared junction or a phantom mid-corridor
 # slot change still fails.
-EXPECTED_LOOP_SITES = 7         # transition sites in the Loop window
+EXPECTED_LOOP_SITES = 5         # transition sites in the Loop window
 EXPECTED_LOOP_COMPOSITION = 0   # ...of which deg-2 composition changes
 
 # LOOM edge_lines carry only route_color — CTA hex -> route name
