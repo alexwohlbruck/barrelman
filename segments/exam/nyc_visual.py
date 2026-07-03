@@ -46,6 +46,11 @@ WINDOWS = {
     # PAR-12 refit receipts: through-tracks must not bend at crossings
     "west14":   (-74.010, 40.7295, -73.988, 40.7455),
     "nevins":   (-73.993, 40.680, -73.971, 40.696),
+    # PAR-12 v3 fused-corridor receipts (unfuse + refit fixes)
+    "brooklyn-bridge": (-74.012, 40.708, -73.998, 40.7185),
+    "bowling-green":   (-74.019, 40.7005, -74.009, 40.708),
+    "whitehall":       (-74.019, 40.698, -74.006, 40.7065),
+    "lafayette-av":    (-73.982, 40.6825, -73.9665, 40.6905),
 }
 TITLES = {
     "broadway": "Broadway yellow trunk, Times Sq -> Canal St — "
@@ -53,6 +58,14 @@ TITLES = {
     "dekalb":   "DeKalb Av / Flatbush Av junction complex",
     "west14":   "14 St crossings — L under the 6/7/8th Av trunks",
     "nevins":   "Nevins St — 2/3 + 4/5 convergence toward Atlantic Av",
+    "brooklyn-bridge": "Brooklyn Bridge-City Hall — 4/5/6 beside J/Z "
+                       "(Chambers St), platform-separated corridors",
+    "bowling-green":   "Bowling Green — 4/5 ribbon on the island "
+                       "platform centerline",
+    "whitehall":       "Whitehall/South Ferry — 4/5 x N/R/W x 1 tube "
+                       "crossings",
+    "lafayette-av":    "Lafayette Av — G merges the A/C Fulton corridor "
+                       "(straight through-path)",
 }
 
 
@@ -73,6 +86,23 @@ def fetch(cur, proj, build, envelope):
         feats.append((seg_id, kind, color, off, offa, offb,
                       proj.to_xy(ll)))
     return feats
+
+
+def fetch_platforms(cur, proj, envelope):
+    """OSM platform polygons (context underlay for the receipt windows)."""
+    cur.execute(
+        """SELECT ST_AsGeoJSON(geom) FROM transit_platforms
+           WHERE geom_type = 'area'
+             AND geom && ST_MakeEnvelope(%s,%s,%s,%s,4326)""", envelope)
+    polys = []
+    for (gj,) in cur.fetchall():
+        g = json.loads(gj)
+        rings = ([g["coordinates"]] if g["type"] == "Polygon"
+                 else g["coordinates"])
+        for ring in rings:
+            if ring and len(ring[0]) >= 3:
+                polys.append(proj.to_xy(ring[0]))
+    return polys
 
 
 def main(argv=None) -> int:
@@ -99,8 +129,9 @@ def main(argv=None) -> int:
 
     with psycopg.connect(args.dsn) as conn, conn.cursor() as cur:
         feats = fetch(cur, proj, args.build_key, envelope)
-    print(f"{len(feats)} features in the {args.window} window; "
-          f"m/px @ z{Z} = {mpp:.4f}")
+        platforms = fetch_platforms(cur, proj, envelope)
+    print(f"{len(feats)} features, {len(platforms)} platform polygons in "
+          f"the {args.window} window; m/px @ z{Z} = {mpp:.4f}")
 
     (x0, y0), (x1, y1) = proj.to_xy([(w, s)])[0], proj.to_xy([(e, n)])[0]
     win_w, win_h = x1 - x0, y1 - y0
@@ -116,6 +147,10 @@ def main(argv=None) -> int:
     lw_pt = LINE_WIDTH_PX * mpp * panel_px_per_m * 72.0 / dpi
 
     ax.set_facecolor("#f7f6f2")
+    for ring in platforms:
+        ax.fill([p[0] for p in ring], [p[1] for p in ring],
+                facecolor="#d9d3c8", edgecolor="#c4bcae",
+                linewidth=0.6, zorder=1)
     for seg_id, kind, color, off, offa, offb, xy in feats:
         if kind == "steady":
             offs = [off * mpp] * len(xy)
