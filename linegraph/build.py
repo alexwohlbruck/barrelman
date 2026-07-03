@@ -261,6 +261,13 @@ def prune_lineless_edges(lg, edge_routes: dict, labels: dict):
             i, j = eids
             if set(routes[i]) != set(routes[j]):
                 continue
+            # join in CHAIN order — the piece flowing INTO nid first —
+            # so the joined edge keeps the surrounding corridor's
+            # storage direction (stage 5 reads slots in it; an
+            # arbitrary-order join between two protected station nodes
+            # would mirror every slot on the joined edge)
+            if edges[i].to_node != nid and edges[j].to_node == nid:
+                i, j = j, i
             joined = _join_edges(edges[i], edges[j], nid)
             if joined.from_node == joined.to_node:
                 continue  # would form a self-loop; leave the pair
@@ -300,11 +307,14 @@ def enrich_graph(lg, patterns, zip_path, feed_id: str, *, refit: bool = True,
         if verbose:
             print(f"[linegraph] {msg}", flush=True)
 
-    if unfuse:
-        from linegraph.unfuse import shape_families, unfuse_corridors
+    from linegraph.unfuse import shape_families
 
-        shapes, _ = dedup_shapes(patterns)
-        families = shape_families(patterns, shapes)
+    shapes, _ = dedup_shapes(patterns)
+    families = shape_families(patterns, shapes)
+
+    if unfuse:
+        from linegraph.unfuse import unfuse_corridors
+
         us = unfuse_corridors(lg, shapes, families, verbose=verbose)
         log(
             f"unfuse: {us.n_zones} multi-family zones -> {us.n_split} split "
@@ -315,8 +325,7 @@ def enrich_graph(lg, patterns, zip_path, feed_id: str, *, refit: bool = True,
     if refit:
         from linegraph.refit import refit_geometry
 
-        shapes, _ = dedup_shapes(patterns)
-        rs = refit_geometry(lg, shapes)
+        rs = refit_geometry(lg, shapes, shape_families=families)
         log(
             f"refit: {rs.n_refit}/{rs.n_edges} edges rebuilt from "
             f"{rs.n_contributions} shape sub-polylines "
