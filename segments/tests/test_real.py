@@ -4,8 +4,9 @@ Builds the full segmentation in memory, emits transit_line_segments for
 build_key chicago:l-v3 (delete-and-replace, same rows the CLI writes),
 and checks the v3 contract:
 
-  - exactly the stage-5 exam's 18 transition sites (17 junctions +
-    Howard's deg-2 composition change), every site producing transitions,
+  - exactly the stage-5 exam's 16 transition sites (15 junctions +
+    Howard's deg-2 composition change; way-graph era — interlockings
+    merged to their cores), every site producing transitions,
   - every long steady feature's underlying edge composition is constant
     (PostGIS sampling query against transit_graph_edge_lines),
   - transition endpoints coincide with adjacent steady endpoints within
@@ -73,8 +74,10 @@ def test_transition_sites(built):
     g, segments, info, _ = built
     sites = info["sites"]
     kinds = Counter(sites.values())
-    assert len(sites) == 18
-    assert kinds["junction"] == 17
+    # way-graph era pin (matches segments_exam check1): 15 real junctions
+    # + Howard's composition change
+    assert len(sites) == 16
+    assert kinds["junction"] == 15
     assert kinds["composition"] == 1
     howard = [nid for nid, k in sites.items() if k == "composition"]
     assert g.nodes[howard[0]].label == "Howard"
@@ -95,23 +98,64 @@ def test_every_site_produces_transitions(built):
 
 
 def test_transitions_meet_steady_with_exact_offsets(built):
+    """Every transition endpoint hands its offset to an adjacent
+    same-ribbon feature EXACTLY (direction-aware sign). Way-graph era:
+    the adjacent feature is usually a steady, but a branch-divergence
+    twin legitimately shares its branch-point end with the OTHER twin
+    TRANSITION (Tower 18's enter/exit movements share the branch tail),
+    so the walk matches against every same-ribbon feature — the same
+    kind-agnostic rule as the exam's check1 boundary walk, including its
+    merge-relocated divergence tail escape: a consumed-corridor merge can
+    swallow the twins' shared endpoint into the through-chain's INTERIOR
+    (Pink at Tower 18), leaving the twin's end resting ON the chain."""
+    from shapely.geometry import LineString, Point
+
+    from segments.tests.helpers import to_m
     g, segments, info, _ = built
-    steadies_by_ck = defaultdict(list)
+    feats_by_ck = defaultdict(list)
     for s in segments:
-        if s.kind == "steady":
-            steadies_by_ck[s.color_key].append(s)
+        feats_by_ck[s.color_key].append(s)
+
+    def end_seg(xy, at_start):
+        return ((xy[1][0] - xy[0][0], xy[1][1] - xy[0][1]) if at_start
+                else (xy[-1][0] - xy[-2][0], xy[-1][1] - xy[-2][1]))
+
     n_checked = 0
     for tr in segments:
         if tr.kind != "transition":
             continue
-        matches = [m for s in steadies_by_ck[tr.color_key]
-                   if (m := offset_at_shared_endpoint(tr, s)) is not None]
-        assert len(matches) >= 2, \
-            f"transition {tr.seg_id} ({tr.route_short_names}) endpoints " \
-            f"must touch steady features"
-        for got, expected in matches:
-            assert got == pytest.approx(expected, abs=1e-9)
-            n_checked += 1
+        t_xy = to_m(tr.coords)
+        for at_start, off in ((True, tr.off_from_px),
+                              (False, tr.off_to_px)):
+            tp = t_xy[0] if at_start else t_xy[-1]
+            td = end_seg(t_xy, at_start)
+            matched = False
+            for s in feats_by_ck[tr.color_key]:
+                if s is tr:
+                    continue
+                s_xy = to_m(s.coords)
+                for s_start in (True, False):
+                    sp = s_xy[0] if s_start else s_xy[-1]
+                    if math.dist(tp, sp) > 0.5:
+                        continue
+                    sd = end_seg(s_xy, s_start)
+                    dot = td[0] * sd[0] + td[1] * sd[1]
+                    s_off = (s.offset_px if s.kind == "steady"
+                             else (s.off_from_px if s_start
+                                   else s.off_to_px))
+                    want = s_off if dot > 0 else -s_off
+                    assert off == pytest.approx(want, abs=1e-9), \
+                        (tr.seg_id, s.seg_id)
+                    matched = True
+                    n_checked += 1
+            if not matched:  # merge-relocated divergence tail: the end
+                # must rest ON a same-ribbon feature's interior
+                matched = any(
+                    LineString(to_m(s.coords)).distance(Point(tp)) <= 0.5
+                    for s in feats_by_ck[tr.color_key] if s is not tr)
+            assert matched, \
+                f"transition {tr.seg_id} ({tr.route_short_names}) end " \
+                f"touches no same-ribbon feature"
     print(f"\n[real] {n_checked} transition-endpoint offsets matched exactly")
     assert n_checked >= 2 * sum(1 for s in segments
                                 if s.kind == "transition")
@@ -168,7 +212,9 @@ def test_steady_composition_constant_query(built):
         (n_long,) = cur.fetchone()
     print(f"\n[real] {n_long} long steady features sampled, "
           f"{len(bad)} with mixed composition")
-    assert n_long > 50
+    # way-graph era: 30 corridors (interlockings merged to their cores)
+    # leave 43 steadies over 61 m at z15, down from the raster's 50+
+    assert n_long > 40
     assert bad == []
 
 
