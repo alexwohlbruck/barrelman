@@ -80,6 +80,12 @@ class SegmentConfig:
     cusp_turn_deg: float = 150.0      # vertex turn above this = reversal cusp
     cusp_window_m: float = 20.0       # max cusp cluster span worth excising
     cusp_pad_m: float = 7.5           # excision window padding past the cusp
+    loop_window_m: float = 100.0      # max corridor self-intersection loop
+    #                                   arc worth excising (micro-artifacts
+    #                                   only; genuine balloon loops stay)
+    fillet_len_budget: float = 1.1    # max emitted transition length as a
+    #                                   factor of the site's transition
+    #                                   length (mirrors the exam's C3 cap)
 
 
 @dataclass
@@ -335,7 +341,8 @@ def _best_biarc(p1, t1, p2, t2, step: float):
     return _dedupe(arc1 + list(reversed(arc2))[1:]), min(r1, r2)
 
 
-def fillet_corner(coords, corner_idx: int, radius: float, cfg: SegmentConfig):
+def fillet_corner(coords, corner_idx: int, radius: float, cfg: SegmentConfig,
+                  budget: float | None = None):
     """Replace the corner at coords[corner_idx] with a tangent-continuous
     biarc of min radius >= target (setback grows until the target is met,
     capped at 90% of each side's available length). Seam tangents come
@@ -344,8 +351,13 @@ def fillet_corner(coords, corner_idx: int, radius: float, cfg: SegmentConfig):
     concentrated into single-vertex seam kinks. Candidates are scored by
     the min circumradius of the densified RESULT inside the transition
     window, so the setback also grows to swallow raw track kinks sitting
-    just outside the cut. Returns (coords, turn_deg, radius_m|None,
-    clamped) — radius_m is the achieved window minimum."""
+    just outside the cut. `budget` caps the RESULT's length (C3: the
+    emitted feature must stay within fillet_len_budget x the site's
+    transition length) — a candidate over it only wins when nothing fits
+    (Mott Haven wye: a bulging biarc bought +13 m of length for a sub-
+    target +1 m of radius on 1.5 m inherited switch curvature). Returns
+    (coords, turn_deg, radius_m|None, clamped) — radius_m is the
+    achieved window minimum."""
     cum = _cum_lengths(coords)
     s_c = cum[corner_idx]
     avail_in, avail_out = s_c, cum[-1] - s_c
@@ -389,7 +401,8 @@ def fillet_corner(coords, corner_idx: int, radius: float, cfg: SegmentConfig):
                 best = min(best, _circumradius(a, b, cc))
         return best
 
-    best = None  # (window_min_radius, points)
+    best = None      # (window_min_radius, points) within the length budget
+    best_any = None  # unconstrained fallback when nothing fits the budget
     for t in ts:
         p1 = _point_at(coords, cum, s_c - t)
         p2 = _point_at(coords, cum, s_c + t)
@@ -403,10 +416,15 @@ def fillet_corner(coords, corner_idx: int, radius: float, cfg: SegmentConfig):
         tail = [p for p, s in zip(coords, cum) if s > s_c + t + 1e-9]
         cand = _dedupe(head + pts + tail)
         r_min = _window_min_radius(cand)
-        if best is None or r_min > best[0]:
+        fits = budget is None or _length(cand) <= budget
+        if best_any is None or r_min > best_any[0]:
+            best_any = (r_min, cand)
+        if fits and (best is None or r_min > best[0]):
             best = (r_min, cand)
-        if r_min >= radius - 1e-6:  # smallest setback meeting the target
-            break
+        if fits and r_min >= radius - 1e-6:
+            break  # smallest setback meeting target within budget
+    if best is None:
+        best = best_any
     if best is None:
         return coords, turn, None, True
     r_min, cand = best
@@ -492,6 +510,77 @@ def excise_reversal_cusps(coords, cfg: SegmentConfig):
         if r is not None:
             min_r = r if min_r is None else min(min_r, r)
     return coords, min_r, n_excised
+
+
+def excise_corridor_loops(coords, cfg: SegmentConfig):
+    """Remove micro self-intersection loops from a corridor centerline.
+
+    The way-graph corridor walk can hand segments a centerline that
+    crosses ITSELF at track-artifact scale: at the Mott Haven / E 149 St
+    wye (nyc:subway-v3) the 5's merged corridor carries a ~55 m
+    out-and-back excursion of the triangle's west leg, so every steady
+    trim or transition tail long enough to contain it fails ST_IsSimple
+    — at every band, before any transition machinery runs. The corridor
+    is the authoritative geometry for ALL features cut from it, so the
+    cleanup happens here, once, not per-feature.
+
+    Walking the polyline, the first pair of non-adjacent segments that
+    cross bounds a loop [s_i, s_j] (arc positions of the crossing point
+    X on each branch). A loop no longer than loop_window_m is excised by
+    rejoining the path THROUGH X — geometry outside the loop is
+    untouched, the path stays continuous, and an out-and-back excursion
+    (two crossings chained) resolves over the re-scan iterations.
+    Anything larger is genuine topology (balloon loops) and is left
+    alone — a non-simple corridor that survives here still fails the
+    exam loudly rather than being silently rewritten. Closed rings skip
+    the first/last segment adjacency. Returns (coords, n_excised,
+    removed_m)."""
+    if len(coords) < 4 or LineString(coords).is_simple:
+        return coords, 0, 0.0
+
+    def _first_crossing(coords, cum, closed):
+        n = len(coords)
+        for i in range(n - 2):
+            seg_i = LineString(coords[i:i + 2])
+            for j in range(i + 2, n - 1):
+                if closed and i == 0 and j == n - 2:
+                    continue
+                seg_j = LineString(coords[j:j + 2])
+                if not seg_i.intersects(seg_j):
+                    continue
+                inter = seg_i.intersection(seg_j)
+                # transversal crossing -> Point; collinear overlap ->
+                # LineString: take a representative point on both
+                x = (inter.x, inter.y) if inter.geom_type == "Point" \
+                    else (inter.representative_point().x,
+                          inter.representative_point().y)
+                s_i = cum[i] + math.dist(coords[i], x)
+                s_j = cum[j] + math.dist(coords[j], x)
+                return i, j, x, s_j - s_i
+        return None
+
+    n_excised = 0
+    removed = 0.0
+    guard = 0
+    while guard < 8:
+        guard += 1
+        ls = LineString(coords)
+        if ls.is_simple:
+            break
+        cum = _cum_lengths(coords)
+        closed = math.dist(coords[0], coords[-1]) < 1e-9
+        hit = _first_crossing(coords, cum, closed)
+        if hit is None:
+            break
+        i, j, x, loop_len = hit
+        if loop_len > cfg.loop_window_m:
+            break  # not a micro artifact: leave it (and fail loudly)
+        coords = _dedupe(coords[:i + 1] + [x] + coords[j + 1:])
+        if len(coords) < 2:
+            break
+        n_excised += 1
+        removed += loop_len
+    return coords, n_excised, removed
 
 
 # ------------------------------------------------------------ sites/ends
@@ -746,14 +835,58 @@ def build_segments(g: Graph, cfg: SegmentConfig = SegmentConfig(),
     cgs: dict[int, CorridorGeom] = {}
     segments: list[Segment] = []
 
+    lines: dict[int, LineString] = {}
     for c in corridors:
-        line = LineString(proj.to_xy(c.coords))
+        xy, n_loops, removed = excise_corridor_loops(
+            proj.to_xy(c.coords), cfg)
+        if n_loops:
+            info.setdefault("corridor_loops_excised", {})[c.cid] = (
+                n_loops, round(removed, 1))
+        lines[c.cid] = LineString(xy)
+
+    # Per-site transition-length clamp (PAR-12 Mott Haven wye): a
+    # corridor whose far end is a FREE end (a ribbon terminus, not a
+    # site) can donate no more than its own length to a transition — an
+    # over-long band otherwise consumes the stub whole, folds the
+    # transition back through the wye, and swallows the terminus into
+    # a transition interior (two branch twins then share the terminus
+    # point as a "matched" endpoint and the ribbon's end goes vacant).
+    # The effective transition length at such a site clamps to the
+    # shortest free-end corridor's available length (its full length —
+    # the free end trims nothing), floored at the base band's length so
+    # the top band is byte-identical everywhere. Corridors BETWEEN two
+    # sites are not clamped on: they keep the existing shrink-to-fit /
+    # consumed-corridor merge paths (Tower 18-class interlockings and
+    # the Loop's long-band corner chains are that design working).
+    base_len = min([cfg.transition_len_m]
+                   + [float(ln) for _, ln in cfg.bands])
+    site_half: dict[int, float] = {}
+    for c in corridors:
+        if c.ring:
+            continue
+        length = lines[c.cid].length
+        for nid, oth in ((c.node_a, c.node_b), (c.node_b, c.node_a)):
+            if nid not in sites or oth in sites:
+                continue
+            sup = max(length, base_len) / 2.0
+            site_half[nid] = min(site_half.get(nid, half), sup)
+    clamped = {nid: round(2 * h, 1) for nid, h in site_half.items()
+               if h < half - 1e-9}
+    if clamped:
+        info["site_len_clamped"] = clamped
+
+    for c in corridors:
+        line = lines[c.cid]
         length = line.length
-        t_a = half if (not c.ring and c.node_a in sites) else 0.0
-        t_b = half if (not c.ring and c.node_b in sites) else 0.0
-        if t_a + t_b > length:  # short corridor: shrink halves to fit
+        t_a = (site_half.get(c.node_a, half)
+               if (not c.ring and c.node_a in sites) else 0.0)
+        t_b = (site_half.get(c.node_b, half)
+               if (not c.ring and c.node_b in sites) else 0.0)
+        if t_a + t_b > length:  # short corridor: shrink halves to fit,
+            # never inflating a clamped side past its own request
             if t_a > 0 and t_b > 0:
-                t_a = t_b = length / 2.0
+                t_a = min(t_a, max(length / 2.0, length - t_b))
+                t_b = min(t_b, length - t_a)
             elif t_a > 0:
                 t_a = length
             else:
@@ -808,8 +941,10 @@ def build_segments(g: Graph, cfg: SegmentConfig = SegmentConfig(),
                 radius = (max(r1.count, r2.count) * cfg.gap_px
                           * cfg.fillet_radius_factor)
                 raw_min = raw_min_radius(joined, corner, cfg.densify_step_m)
+                budget = (cfg.fillet_len_budget * 2.0
+                          * site_half.get(nid, half))
                 coords, turn, r_arc, clamped = fillet_corner(
-                    joined, corner, radius, cfg)
+                    joined, corner, radius, cfg, budget=budget)
                 coords = densify(coords, cfg.densify_step_m)
                 sign1 = cg1.frame_sign(s1, toward=True)
                 sign2 = cg2.frame_sign(s2, toward=False)

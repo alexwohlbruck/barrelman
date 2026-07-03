@@ -424,24 +424,23 @@ def check1_c1_contract(g, proj, segments, chicago: bool = True,
 
 def check2_c3_contract(segments, chicago: bool = True,
                        cfg: SegmentConfig = CFG,
-                       default_band: bool = True):
+                       default_band: bool = True,
+                       site_len: dict | None = None):
     print("\nCHECK 2 — C3: fixed ground length + densification")
-    # short-corridor shrink is allowed by the contract; 0.4x is the
-    # calibrated floor for every build (the NYC Bowling Green cluster
-    # that briefly needed 0.3 was a skeleton artifact, since fixed at
-    # the raster by sliver-hole filling — NYC now bottoms out at 0.61x)
-    lo = 0.4 * cfg.transition_len_m
-    # NEAR-REVERSAL allowance: at a shallow fork whose node sits past
-    # the branch divergence, the branch's transition legs retrace the
-    # trunk and the fillet+cusp machinery collapses the feature's NET
-    # path — the geometry class always sat at the floor (Grand Army
-    # Plaza fork, pre-refit 24.7 m at a 176-degree turn) and the
-    # cluster-weighted refit's truer trunk centerline shaves it to
-    # ~21 m at 170 degrees. The feature is present, anchored and
-    # cusp-cleaned; only its net length shrinks, so entry/exit tangents
-    # opposing beyond ~150 degrees earn a 0.3x floor.
-    lo_reversal = 0.3 * cfg.transition_len_m
-    hi = 1.1 * cfg.transition_len_m
+    # Per-site clamped transition lengths (Mott Haven wye): a site whose
+    # local corridors cannot support the band's length is clamped by the
+    # builder (info["site_len_clamped"]) — its features are legitimately
+    # SHORT for the band, so the relative bounds run against each
+    # feature's EFFECTIVE length (min/sum of its sites' lengths).
+    # Unclamped sites keep the band length: bounds identical to the
+    # pre-clamp exam everywhere the clamp never fires.
+    site_len = site_len or {}
+    L = cfg.transition_len_m
+
+    def eff_len(t):
+        return min((site_len.get(nid, L) for nid in set(t.sites)),
+                   default=L)
+
     # Way-graph-era calibration: an interlocking (Tower 18) is a cluster
     # of REAL switch nodes a few tens of meters apart, so a transition
     # squeezed between two of them is corridor-limited — the same ~21 m
@@ -451,18 +450,33 @@ def check2_c3_contract(segments, chicago: bool = True,
     lo_interlock = 20.0
 
     def lo_for(t):
-        # turn_deg carries the pre-fillet corner turn of the freshly
-        # rebuilt feature (check0 pins DB rows == this rebuild)
-        return min(lo_reversal if t.turn_deg > cfg.cusp_turn_deg else lo,
-                   lo_interlock)
+        # short-corridor shrink is allowed by the contract; 0.4x is the
+        # calibrated floor for every build (the NYC Bowling Green
+        # cluster that briefly needed 0.3 was a skeleton artifact, since
+        # fixed at the raster by sliver-hole filling).
+        # NEAR-REVERSAL allowance: at a shallow fork whose node sits
+        # past the branch divergence, the branch's transition legs
+        # retrace the trunk and the fillet+cusp machinery collapses the
+        # feature's NET path — the geometry class always sat at the
+        # floor (Grand Army Plaza fork, pre-refit 24.7 m at a
+        # 176-degree turn; ~21 m at 170 degrees under the cluster-
+        # weighted refit), so entry/exit tangents opposing beyond ~150
+        # degrees earn a 0.3x floor. turn_deg carries the pre-fillet
+        # corner turn of the freshly rebuilt feature (check0 pins DB
+        # rows == this rebuild).
+        frac = 0.3 if t.turn_deg > cfg.cusp_turn_deg else 0.4
+        return min(frac * eff_len(t), lo_interlock)
 
     def hi_for(t):
         # a consumed-corridor merge chains k transition sites into one
-        # feature (len ~= k x transition_len). Way-graph-era: interlocking
-        # switch clusters make multi-site merges routine on EVERY band
-        # (the raster era pinned chicago's default band to single sites —
-        # its blob junctions never sat closer than a transition length)
-        return hi * max(1, len(set(t.sites)))
+        # feature (len ~= sum of the sites' effective lengths).
+        # Way-graph-era: interlocking switch clusters make multi-site
+        # merges routine on EVERY band (the raster era pinned chicago's
+        # default band to single sites — its blob junctions never sat
+        # closer than a transition length)
+        if not t.sites:
+            return 1.1 * L
+        return 1.1 * sum(site_len.get(nid, L) for nid in set(t.sites))
 
     trs = [s for s in segments if s.kind == "transition"]
     bad_len = [(t.seg_id, round(t.len_m, 1)) for t in trs
@@ -470,10 +484,12 @@ def check2_c3_contract(segments, chicago: bool = True,
     lens = sorted(t.len_m for t in trs)
     print(f"  {len(trs)} transitions, len_m min {lens[0]:.1f} / "
           f"median {lens[len(lens) // 2]:.1f} / max {lens[-1]:.1f} "
-          f"(bounds [{lo:.0f}, {hi:.0f}] x distinct sites)")
+          f"(bounds [0.4, 1.1] x {L:.0f} m x per-site clamps, "
+          f"{len(site_len)} clamped sites)")
     report("check2.fixed-ground-length", not bad_len,
            f"{len(bad_len)} transitions outside [0.4, 1.1] x "
-           f"{cfg.transition_len_m:.0f} m (x site count): {bad_len[:6]}")
+           f"{cfg.transition_len_m:.0f} m (x site count, site-clamp "
+           f"adjusted): {bad_len[:6]}")
 
     worst = 0.0
     bad_sp = []
@@ -797,7 +813,8 @@ def main() -> int:
         check0_db_matches_rebuild(segments, band_minzoom)
         check1_c1_contract(g, proj, segments, chicago, bcfg, site_checks)
         site_checks = False
-        check2_c3_contract(segments, chicago, bcfg, default_band)
+        check2_c3_contract(segments, chicago, bcfg, default_band,
+                           info.get("site_len_clamped"))
         check3_fillets(segments, proj, chicago, bcfg, band_minzoom,
                        default_band)
         check4_coverage(g, proj, segments, bcfg)

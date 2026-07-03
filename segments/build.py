@@ -70,6 +70,12 @@ def summarize(segments, info) -> str:
     if info.get("cusp_excised"):
         lines.append(f"reversal cusps excised (collapsed crossing rungs): "
                      f"{info['cusp_excised']}")
+    if info.get("corridor_loops_excised"):
+        lines.append(f"corridor micro-loops excised (cid: (n, m)): "
+                     f"{info['corridor_loops_excised']}")
+    if info.get("site_len_clamped"):
+        lines.append(f"site transition lengths clamped to corridor support "
+                     f"(node: m): {info['site_len_clamped']}")
     if info.get("greedy_paired_sites"):
         lines.append(f"greedy-paired sites (no shape evidence): "
                      f"{sorted(set(info['greedy_paired_sites']))}")

@@ -8,7 +8,7 @@ import math
 
 import pytest
 
-from segments.corridors import graph_from_spec, walk_corridors
+from segments.corridors import LineAttr, graph_from_spec, walk_corridors
 from segments.segment import SegmentConfig, build_segments, transition_sites
 from segments.tests.helpers import (MX, MY, endpoints, find, max_spacing_m,
                                     min_radius_near, offset_at_shared_endpoint,
@@ -315,6 +315,116 @@ def test_collapsed_rung_reversal_cusp_excised():
     assert len(matches) == 2
     for got, expected in matches:
         assert got == pytest.approx(expected, abs=1e-9)
+
+
+# ------------------------- wye stub: site clamp + corridor loop excision
+
+def test_wye_stub_clamps_long_band_transitions():
+    """Mott Haven / E 149 St wye regression (PAR-12): a junction whose
+    corridors include a ~100 m free-end stub and a ~100 m triangle leg
+    must NOT let a long band's 480 m transition consume the stub whole —
+    the transition length clamps to what the local corridor geometry
+    supports, the stub keeps a steady remnant occupying the ribbon's
+    terminus, and every emitted feature stays simple. The leg between
+    the two sites still flows through the existing shrink-to-fit /
+    consumed-corridor merge path."""
+    from dataclasses import replace
+
+    from shapely.geometry import LineString
+
+    H = ("H", "884400")
+    nodes = {
+        "T": (30, 95),        # stub terminus (free end)
+        "J": (0, 0),          # the wye corner junction
+        "K": (-60, -80),      # triangle leg's far junction
+        "E": (600, 5),        # east trunk junction
+        "S": (-60, -580),     # south trunk
+        "HK": (-560, -80),    # H branch making K a junction
+        "HE": (600, 505),     # H branch making E a junction
+    }
+    edges = [
+        ("J", "T", [G]),          # ~100 m free-end stub
+        ("J", "K", [G]),          # ~100 m triangle leg (site to site)
+        ("J", "E", [G]),          # 600 m trunk
+        ("K", "S", [G]),
+        ("HK", "K", [H]),
+        ("E", "HE", [H]),
+    ]
+    cfg = replace(CFG, transition_len_m=480.0)  # z0 band, default bands
+    g, ids, segs, info = build(nodes, edges, cfg)
+    assert set(info["sites"]) == {ids["J"], ids["K"], ids["E"]}
+
+    # the stub's site clamps to the stub's own length (~100 m >= the
+    # 60 m base-band floor), not the band's 480 m
+    clamped = info.get("site_len_clamped", {})
+    assert ids["J"] in clamped
+    assert clamped[ids["J"]] == pytest.approx(99.6, abs=1.0)
+
+    # the stub keeps a steady remnant whose far end occupies the
+    # terminus (the vacant-terminus failure class)
+    cors = walk_corridors(g)
+    (stub_cid,) = [c.cid for c in cors
+                   if {c.node_a, c.node_b} == {ids["J"], ids["T"]}]
+    stubs = [s for s in find(segs, kind="steady")
+             if s.corridor_id == stub_cid]
+    assert len(stubs) == 1
+    t_m = to_m([(g.nodes[ids["T"]].lon, g.nodes[ids["T"]].lat)])[0]
+    ends = endpoints(stubs[0])
+    assert min(math.dist(ends[0], t_m), math.dist(ends[1], t_m)) < 0.01
+    assert seg_len_m(stubs[0]) == pytest.approx(clamped[ids["J"]] / 2,
+                                                rel=0.05)
+
+    # the site-to-site leg is consumed by the unclamped far site and
+    # merges (existing design), and every feature is simple with its
+    # length within the site-clamp-adjusted C3 bound
+    assert info["merged"] >= 1
+    site_len = {**{nid: cfg.transition_len_m for nid in info["sites"]},
+                **clamped}
+    for s in segs:
+        assert LineString(to_m(s.coords)).is_simple, \
+            f"seg {s.seg_id} ({s.kind}) self-intersects"
+        if s.kind == "transition":
+            assert s.len_m <= 1.1 * sum(site_len[nid]
+                                        for nid in set(s.sites))
+
+    # the top band (60 m) is untouched by the clamp machinery
+    segs60, info60 = build_segments(g, CFG)
+    assert not info60.get("site_len_clamped")
+
+
+def test_corridor_micro_loop_excised():
+    """A corridor centerline that crosses ITSELF at artifact scale (the
+    Mott Haven corridor carried a ~55 m out-and-back excursion of the
+    wye's west leg) is cleaned before segmentation: the loop is excised
+    through the crossing point, the steady feature is simple, and the
+    geometry outside the loop is untouched."""
+    from shapely.geometry import LineString
+
+    from segments.corridors import GEdge, GNode, Graph
+    from segments.tests.helpers import MX, MY
+
+    # west along y=0, a loop-de-loop at x~110-130, then east: segment
+    # (110,20)->(110,-1) crosses (100,0)->(130,0) at (110,0); loop arc
+    # ~80 m < loop_window_m
+    path_m = [(0, 0), (100, 0), (130, 0), (130, 20), (110, 20),
+              (110, -1), (300, -1)]
+    coords = [(x / MX, y / MY) for x, y in path_m]
+    nodes = {0: GNode(0, *coords[0], label="A"),
+             1: GNode(1, *coords[-1], label="B")}
+    edges = {0: GEdge(0, 0, 1, coords,
+                      [LineAttr(feed_id="t", route_id="R", short_name="R",
+                                color="ff0000")])}
+    g = Graph(nodes, edges, {0: [0], 1: [0]})
+    segs, info = build_segments(g, CFG)
+    assert info.get("corridor_loops_excised"), "loop must be detected"
+    (steady,) = segs
+    xy = to_m(steady.coords)
+    assert LineString(xy).is_simple
+    # raw path is 381 m; the excised loop removes its 80 m arc
+    assert seg_len_m(steady) == pytest.approx(301, abs=3)
+    # geometry outside the loop untouched
+    assert xy[0] == pytest.approx((0, 0), abs=0.01)
+    assert xy[-1] == pytest.approx((300, -1), abs=0.01)
 
 
 # ------------------------------------------------- corridor walk basics

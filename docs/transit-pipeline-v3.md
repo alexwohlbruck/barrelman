@@ -406,6 +406,21 @@ steady/transition features → `transit_line_segments` → Martin function
   bands consume short corridors and merge transitions far more often by
   design; the exams hold the Chicago-verbatim bounds only on the z15 band.
   `--transition-len X` collapses to a single all-zoom band (debug knob).
+- **Wye robustness** (Mott Haven / E 149 St, nyc:subway-v3): (a) corridor
+  centerlines are cleaned of micro self-intersection loops (≤
+  `loop_window_m`) before segmentation — the way-graph walk handed the 5's
+  merged corridor a ~47 m out-and-back excursion of the wye's west leg that
+  failed ST_IsSimple at every band; (b) a site with a FREE-END stub corridor
+  (the 5's ramp dead-ending where it merges the 2's tracks) clamps its
+  transition length to the stub's own length (floored at the base band's
+  60 m), so a long band cannot consume the stub whole, fold the transition
+  back through the triangle, or swallow the ribbon's terminus — corridors
+  between two sites keep the consume-and-merge design, and chicago:l-v3 is
+  byte-identical on every band; (c) the corner fillet caps the emitted
+  length at `fillet_len_budget` (1.1×) of the site's transition length —
+  it no longer buys sub-target radius with over-budget arc length. The
+  exam's check2 bounds run against each feature's effective (clamped) site
+  lengths.
 - `transit_lines_rt2(z,x,y)` (`import/create-transit-lines-rt2.sql`) emits the
   segment features + local clip fractions (`ST_LineLocatePoint` against the full
   feature, direction-normalized, continuous across tile seams — the proven
