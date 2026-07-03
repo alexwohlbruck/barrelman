@@ -79,8 +79,6 @@ class WaygraphConfig:
     #                                kisses/crossings stay far below this
     cross_family_gap_m: float = 10.0   # merge 3: cross-family proximity bundle
     cross_family_min_len_m: float = 450.0  # ...sustained at least this long
-    cross_family_excursion_gap_mult: float = 2.0  # brief excursions allowed...
-    cross_family_excursion_max_m: float = 50.0    # ...up to 2x gap for <= 50 m
     cross_family_max_bearing_deg: float = 20.0    # parallel, not crossing
     merge_min_len_m: float = 40.0  # merges 1-2: minimum sustained window
     merge_end_slack_m: float = 40.0  # window may stop this short of a corridor end
@@ -92,7 +90,33 @@ class WaygraphConfig:
     #                                and forks must stay within ~5 m of the
     #                                real switch nodes)
     midline_step_m: float = 5.0    # merged midline resample step
-    blend_m: float = 25.0          # terminal blend when an endpoint moves
+    # window flap guard (Schmitt trigger): real 4-track spacing breathes
+    # across the gap threshold (the Sea Beach pair tiled into 5 windows);
+    # qualifying windows separated by a short dip coalesce, and a formed
+    # bundle only releases where the gap CLEARLY lets go — beyond
+    # release_gap_mult x gap sustained for release_sustain_m
+    window_dip_coalesce_m: float = 200.0  # dips shorter than this never split
+    release_gap_mult: float = 1.5
+    release_sustain_m: float = 150.0
+    # C1 merge-boundary easing: where a merged midline hands off to a
+    # continuing constituent track the centerline used to step sideways
+    # by half the pair gap; the midline now eases into the through track
+    # over this length (clamped to the window) with a smoothstep — zero
+    # step, tangent-continuous. Applies to the midline and to cut tails
+    # of corridors CONTINUING past the boundary; diverging switch legs
+    # keep the short blend below (dragging a real diverging track
+    # 100 m sideways parallels it with the bundle — the Culver portal
+    # lesson from the junction exam).
+    ease_len_m: float = 100.0
+    blend_m: float = 25.0          # endpoint retarget / diverging-leg blend
+    cov_cut_margin_m: float = 30.0  # partial mid-edge coverage: a route
+    #                                entering/leaving a long way edge
+    #                                partway (the FX express rejoining the
+    #                                Culver local mid-way) cuts the edge at
+    #                                its coverage boundary instead of
+    #                                claiming track it never rides; cuts
+    #                                closer than this to an edge end are
+    #                                snap noise
     ladder_contract_m: float = 16.0  # junction-to-junction micro corridors
     #                                (switch-ladder fragments) contract to a
     #                                single node — under half a merge gap,
@@ -104,8 +128,10 @@ class WaygraphConfig:
 # participates in the corridor cache digest — bump on builder semantics
 # changes (2: series-safe absorption + collapse-safe retargets; 3: cross
 # co-extensive-twin rule + ladder contraction; 4: gap-scaled coverage-
-# biased connectivity repair + phantom-component pruning)
-CONFIG_FORMAT_VERSION = 11
+# biased connectivity repair + phantom-component pruning; 12: window
+# coalescing/hysteresis + boundary snap + C1 seam easing + partial-
+# coverage edge cuts)
+CONFIG_FORMAT_VERSION = 12
 
 
 def config_digest_token(cfg: WaygraphConfig) -> str:
@@ -224,11 +250,16 @@ class OffRun:
 class PatternCover:
     pattern_key: str
     route_id: str
-    edges: dict              # edge_id -> (cov_lo_m, cov_hi_m) interval union
+    edges: dict              # edge_id -> (cov_lo_m, cov_hi_m) coverage bounds
     member_edges: set        # edges the pattern RIDES (threshold applied)
     runs: list               # [OffRun]
     n_samples: int = 0
     n_unsnapped: int = 0
+    edge_ivals: dict = field(default_factory=dict)
+    # edge_id -> ((lo, hi), ...) the FULL coverage interval union — the
+    # (lo, hi) bounds above lie when a pattern only TOUCHES an edge at
+    # both ends (the FX express grazing the Culver local at the two
+    # bypass portals spans the bounds but rides ~6% of the edge)
 
 
 def _interval_union(ivals):
@@ -263,9 +294,11 @@ def reconstruct_pattern(index: WayIndex, key: str, route_id: str, shape_xy,
         cover.setdefault(int(eid), []).append(
             (max(0.0, t - half), min(line.length, t + half)))
     edges = {}
+    edge_ivals = {}
     for eid, ivals in cover.items():
         u = _interval_union(ivals)
         edges[eid] = (u[0][0], u[-1][1], sum(hi - lo for lo, hi in u))
+        edge_ivals[eid] = tuple(u)
 
     # off-graph runs: contiguous unsnapped sample spans
     runs = []
@@ -328,6 +361,7 @@ def reconstruct_pattern(index: WayIndex, key: str, route_id: str, shape_xy,
         edges={eid: (lo, hi) for eid, (lo, hi, _c) in edges.items()},
         member_edges=member, runs=runs,
         n_samples=n, n_unsnapped=int((nearest < 0).sum()),
+        edge_ivals=edge_ivals,
     )
 
 
@@ -503,6 +537,12 @@ class Usage:
     covers: list             # [PatternCover] in pattern order
     route_color: dict        # route_id -> color_key (display SQL semantics)
     n_offgraph_m: float = 0.0
+    edge_route_cov: dict = field(default_factory=dict)
+    # edge_id -> {route_id: [(lo_m, hi_m), ...] | None}: the route's
+    # coverage interval union on the edge (None = full-edge claim, e.g.
+    # repair-added). A route whose coverage ends mid-edge entered/left
+    # partway — the corridor builder cuts the edge there instead of
+    # painting the route over track it never rides (cov_cut_margin_m).
 
 
 def color_key_of(route_color: str, route_id: str) -> str:
@@ -516,6 +556,7 @@ def build_usage(index: WayIndex, patterns, cfg: WaygraphConfig,
     to_xy = Transformer.from_crs(4326, index.epsg, always_xy=True)
     edge_routes: dict = {}
     edge_cover: dict = {}
+    edge_route_cov: dict = {}
     covers: list = []
     route_color: dict = {}
     runs_by_hash: dict = {}
@@ -539,6 +580,17 @@ def build_usage(index: WayIndex, patterns, cfg: WaygraphConfig,
             cur = edge_cover.get(eid)
             edge_cover[eid] = (min(lo, cur[0]), max(hi, cur[1])) if cur \
                 else (lo, hi)
+            # per-route coverage interval union (None = full-edge claim)
+            rc = edge_route_cov.setdefault(eid, {})
+            if eid not in pc.edge_ivals:
+                rc[p.route_id] = None
+            elif p.route_id in rc:
+                old = rc[p.route_id]
+                if old is not None:
+                    rc[p.route_id] = _interval_union(
+                        list(old) + list(pc.edge_ivals[eid]))
+            else:
+                rc[p.route_id] = list(pc.edge_ivals[eid])
         for run in pc.runs:
             h = tuple(np.round(np.asarray(run.coords_xy)[[0, -1]].ravel(), 0)) \
                 + (round(LineString(run.coords_xy).length, 0),)
@@ -557,6 +609,7 @@ def build_usage(index: WayIndex, patterns, cfg: WaygraphConfig,
         covers=covers,
         route_color=route_color,
         n_offgraph_m=off_m,
+        edge_route_cov=edge_route_cov,
     )
     if verbose:
         n_un = sum(c.n_unsnapped for c in covers)
