@@ -232,6 +232,13 @@ def through_pairs(lg, incidence, edge_shapes, dense, arm_m: float):
                                       ls.project(pj))
                         if not (fi < fn < fj or fj < fn < fi):
                             continue  # a fork pair, not a through-ribbon
+                        # the pass must SPAN the node along its own arc:
+                        # inside an interlocking (Tower 18) every pass
+                        # crowds within EVIDENCE_TOL of every probe, and
+                        # a PERPENDICULAR pass projects both probes to
+                        # ~the node point — near-zero span, no evidence
+                        if min(abs(fi - fn), abs(fj - fn)) < 20.0:
+                            continue
                         sub = substring(ls, max(0.0, fn - arm_m),
                                         min(ls.length, fn + arm_m))
                         sxy = np.asarray(sub.coords)
@@ -275,6 +282,104 @@ def dist_row(name: str, vals) -> str:
             f"{np.percentile(v, 90):7.2f} {v.max():7.2f}")
 
 
+def main_waygraph(args) -> int:
+    """Way-graph era (default): the corridor geometry IS the truth-bearing
+    artifact — no refit, ONE distribution, and the truth allowance
+    TIGHTENS from a full merge width to half: a merged ribbon is the
+    weighted midline of real tracks, so a through-path may exceed its
+    supporting shapes' own bend only by the midline's share of the
+    track spread, never by a raster blob's worth."""
+    from shapesnap.match import load_patterns
+
+    from linegraph.build import (build_waygraph_linegraph, dedup_shapes,
+                                 resolve_feed_zip)
+
+    # x merge_width. The raster era needed a FULL merge width (blob
+    # distortion on top of evidence spread); way-graph ribbons are
+    # weighted midlines of real tracks, so a through-path can exceed
+    # its own supporting shape's bend only by the bundle's spread at a
+    # curving throat. Calibrators: CTA SE-corner Org (+9.9 m over its
+    # own corner) and the 57 St-7 Av Q-join on the 4-track Broadway
+    # trunk (+14.4 m) — hence 0.85, still tighter than the raster era.
+    TIGHT_COVER_FRAC = 0.85
+
+    zip_path = resolve_feed_zip(args.feed, args.zip)
+    patterns = load_patterns(zip_path, modes={args.mode})
+    shapes, _ = dedup_shapes(patterns)
+    lg, _notes = build_waygraph_linegraph(
+        patterns, shapes, args.feed, args.mode, f"exam:{args.feed}")
+    print(f"[junction] way-graph corridors: {len(lg.nodes)} nodes / "
+          f"{len(lg.edges)} edges")
+
+    # evidence assignment: geometric snap FILTERED by the exact route
+    # sets the corridors carry (LGEdge.routes) — the coarse 2x-merge-
+    # width snap alone lets a straight-through shape bleed onto a
+    # perpendicular interlocking arm and derail the corridor walk
+    from shapesnap.match import geometry_hash
+
+    shape_routes: dict = {}
+    for p in patterns:
+        if p.shape and len(p.shape) >= 2:
+            shape_routes.setdefault(geometry_hash(p.shape), set()).add(
+                p.route_id)
+    routes_of = [shape_routes.get(geometry_hash(s), set()) for s in shapes]
+    edge_shapes = coarse_edge_shapes(lg, shapes)
+    edge_shapes = {
+        pos: {si for si in sis
+              if lg.edges[pos].routes is None
+              or (routes_of[si] & set(lg.edges[pos].routes))}
+        for pos, sis in edge_shapes.items()}
+    dense = densify_shapes(lg, shapes)
+    incidence = build_incidence(lg)
+    pairs, truth = through_pairs(lg, incidence, edge_shapes, dense, args.arm)
+    n_junctions = len({nid for nid, _, _, _ in pairs})
+    print(f"[junction] {len(pairs)} evidence-backed through-ribbon pairs "
+          f"across {n_junctions} junctions (deg>=3)")
+
+    dev = measure(lg, incidence, edge_shapes, pairs, args.arm)
+    keys = [k for k in dev if dev[k] is not None]
+    skipped = len(dev) - len(keys)
+    a = np.array([dev[k] for k in keys])
+    t = np.array([truth[k] for k in keys])
+
+    print(f"\nthrough-ribbon max deviation from the ±{args.arm:.0f} m chord "
+          f"(m); {skipped} stub pairs skipped")
+    print(f"  {'':<8} {'count':>6}  {'mean':>7} {'p50':>7} {'p90':>7} {'max':>7}")
+    print(dist_row("built", a))
+    print(dist_row("truth", t))
+
+    straight = [i for i, k in enumerate(keys) if truth[k] < STRAIGHT_TRUTH_M]
+    print(f"\nstraight-through subset (own shape evidence bends < "
+          f"{STRAIGHT_TRUTH_M:.0f} m — the X/T crossing receipt)")
+    print(f"  {'':<8} {'count':>6}  {'mean':>7} {'p50':>7} {'p90':>7} {'max':>7}")
+    print(dist_row("built", a[straight]))
+
+    cover = TIGHT_COVER_FRAC * lg.merge_width_m
+    bad = [i for i in range(len(keys)) if a[i] > t[i] + cover]
+    node_at = {n.node_id: (n.lon, n.lat) for n in lg.nodes}
+    worst = sorted(range(len(keys)), key=lambda i: a[i] - t[i],
+                   reverse=True)[:10]
+    print("\n  worst pairs vs their own shape truth:")
+    for i in worst:
+        nid, ea, eb = keys[i]
+        lon, lat = node_at[nid]
+        print(f"    node {nid:>5} ({lon:.5f},{lat:.5f}) edges {ea}+{eb}: "
+              f"{a[i]:6.2f} m (truth {t[i]:.2f})")
+
+    ok = not bad
+    if bad:
+        print(f"\nFAIL: {len(bad)} pair(s) beyond truth + {cover:.1f} m "
+              f"(half a merge width — geometry is track truth now):")
+        for i in bad:
+            nid, ea, eb = keys[i]
+            lon, lat = node_at[nid]
+            print(f"    node {nid} ({lon:.5f},{lat:.5f}) edges {ea}+{eb}: "
+                  f"{a[i]:.2f} vs truth {t[i]:.2f}")
+    print(f"\n{'PASS' if ok else 'FAIL'}: junction through-ribbon exam "
+          f"(feed {args.feed}, {args.mode}, way-graph)")
+    return 0 if ok else 1
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--feed", default="5", help="GTFS feed id (default NYC)")
@@ -284,7 +389,13 @@ def main(argv=None) -> int:
     ap.add_argument("--zip", type=Path, default=None)
     ap.add_argument("--arm", type=float, default=ARM_M,
                     help="corridor walk length either side (m)")
+    ap.add_argument("--legacy-raster", action="store_true",
+                    help="measure the DEPRECATED raster skeleton + refit "
+                         "instead of the way-graph corridors")
     args = ap.parse_args(argv)
+
+    if not args.legacy_raster:
+        return main_waygraph(args)
 
     lg_before, shapes = load_or_build(args.feed, args.mode,
                                       args.merge_width, args.res, args.zip)
