@@ -41,7 +41,7 @@ regions.json → download raw zips → sanitize
   → data/gtfs-processed/<feedId>.zip        ← the ONLY artifact consumers read
   → DB import (gtfs_*)   + service derivation (rep-day counts)   [stages 1–2]
   → rebuild-motis.sh (volume sync + `motis import` + restart)    [stage 1]
-  → centerline pipeline per (mode, region): raster skeleton      [stage 4]
+  → centerline pipeline per (mode, region): way-graph corridors  [stage 4]
   → ordering + slot stabilization                                [stage 5]
   → steady/transition segmentation → PostGIS                     [stage 6]
   → Martin tile functions → client                               [stage 6–7]
@@ -134,7 +134,61 @@ per-trip. Two regimes, one Viterbi core:
   fail → keep original shape (`fallback`) — good feeds are never degraded. Per-feed
   summary logged.
 
-### Stage 4 — centerline pipeline (custom, raster skeleton; task #4)
+### Stage 4 — centerline pipeline (way-graph corridors; task #4)
+
+REBUILT (PAR-12 v3 way-graph era): corridors are built directly on the
+shapesnap way graph — the raster/skeleton/vector/refit/unfuse chain below
+is DEPRECATED (kept only behind `--legacy-raster` for comparison; the
+subsections after "Legacy raster engine" describe it).
+
+- **Usage graph** (`linegraph.waygraph`): every pattern's matched shape is
+  snapped back onto the way-edge id space at identity tolerance (2.5 m —
+  matched_shapes.stats never persisted `edges_used`, so it is
+  reconstructed and VERIFIED against the one digest stats kept,
+  `levels_m`; both feeds reconstruct within tolerance, Chicago exactly).
+  Robustness: shortest-path connectivity repair hugging the shape
+  (coincident switch-fragment twins, the plan-coincident stacked ramp
+  under the CTA North Side elevated), micro-dangle + phantom-island
+  pruning, per-edge coverage intervals (terminal trims), off-graph
+  agency/graph-bridged spans as explicit geometry runs anchored by edge
+  splits.
+- **Raw corridors** (`linegraph.corridors`): maximal constant-route-set
+  runs through degree-2 connectivity; geometry = concatenated OSM way
+  polylines VERBATIM (R1). Junctions are the real switch nodes; ridden
+  turnback crossovers between a bundle's own tracks are absorbed without
+  bending the through geometry.
+- **Three principled merges** (R2; every knob on `WaygraphConfig`):
+  1. *directional pair* (identical route sets, pair_gap 15 m, equal
+     track weights — the Bowling Green lesson), incl. co-terminal twins
+     around obstacles (Mott Haven wye);
+  2. *same family* (equal colour-family sets, different route sets,
+     family_gap 25 m, union set) — the single yellow Broadway ribbon and
+     the 4-track trunk collapses; a >=450 m sustained co-run merges even
+     when both corridors continue past a real fork (7th Av 1 vs 2/3);
+  3. *cross-family proximity bundle* (different families, gap 10 m,
+     sustained >= 450 m with brief <=2x-gap excursions, low relative
+     bearing; or co-extensive junction-to-junction twins) — the Chicago
+     Loop legs' one-way track pairs, the Lake-leg Blue under the
+     elevated, Flatbush B/Q beside 2/3/4/5. Merges 1-2 additionally
+     demand no divergence beyond the window (at each window end a
+     corridor must END within slack) so kisses/crossings never merge
+     (Rector 1 x R/W, Brooklyn Bridge J/Z x Lexington).
+  Merged geometry = track-count-weighted midline; merge-boundary nodes
+  are the only synthetic nodes (seams on the midline); sub-16 m windows
+  collapse to single nodes (interlocking ladders).
+- Stations snap exactly as before (`linegraph.stations`); attribution is
+  exact by construction (`LGEdge.routes`); same `transit_graph_*`
+  contract (delete-and-replace per build_key); lineorder + segments +
+  rt2 run unchanged downstream. Corridor cache per (feed, mode) at
+  `data/linegraph/<feed>.<mode>.waygraph.pkl.gz`, digest = shapes +
+  config + graph-cache era (`CONFIG_FORMAT_VERSION`).
+- Acceptance: loop_exam, junction_exam (both feeds; truth allowance
+  tightened to 0.85x merge width from the raster's 1.0x),
+  `linegraph/exam/sites_exam.py` (the five pinned NYC sites: Chambers
+  brown-on-Nassau < 3 m, Rector no-kiss, Joralemon smoothness, W4 +
+  Grand St junctions on track evidence, Christopher/Chrystie centering).
+
+#### Legacy raster engine (deprecated)
 
 Per (mode-class, region cell), from *matched* shapes:
 
@@ -243,16 +297,15 @@ uv run --with-requirements linegraph/requirements.txt \
     python linegraph/exam/loop_exam.py --out data/exam
 ```
 
-Spec amendment — Lake-leg Blue bundling (needs spec-author sign-off): the
-Milwaukee–Dearborn Blue subway genuinely runs beneath the Lake St elevated, so
-Lake-leg edges bundle Blue with the elevated routes. This plan-view fusion is
-by design and matches the official CTA map treatment; it is also what lets
-stage 5 offset Blue beside G/Pink — a separate coincident Blue edge would leave
-two bundles stacked at offset 0 with no cross-edge ordering. The exam holds the
-allowance to physical proof per edge, not a lat threshold: co-attribution only
-on the Lake leg, a tunnel-tagged rail way within 25 m of every sample point,
-and Blue's own matched shape within one merge width (18 m) of the centerline.
-Red is never co-attributed anywhere in the window.
+Spec amendment — Lake-leg Blue bundling (user-approved): the
+Milwaukee–Dearborn Blue subway genuinely runs beneath the Lake St elevated;
+in the way-graph era the CROSS-FAMILY PROXIMITY BUNDLE forms it explicitly
+(measured: 485 m window, 5.9 m mean / 9.0 m max gap, 0.9° bearing). This
+matches the official CTA map treatment and is what lets stage 5 offset Blue
+beside G/Pink. The exam holds the allowance to physical proof per edge:
+co-attribution only on the Lake leg, a tunnel-tagged rail way within 25 m of
+every sample point, and Blue's own matched shape within one merge width
+(18 m) of the centerline. Red is never co-attributed anywhere in the window.
 
 The 25 m coverage check has no fallback reference: an earlier `mm_edges` hole
 at the Purple line's Linden terminal turned out to be a graph-crop bug (the
