@@ -115,6 +115,11 @@ CLUSTER_GAP_M = 3.0       # lateral gap that separates contribution
                           # below real track spacing (~3.7 m+)
 THROUGH_MARGIN_DEG = 5.0  # a deg-3 dominant through-pair must be this
                           # much straighter than the runner-up pair
+RUNG_MAX_MULT = 2.0       # x merge_width: a deg-3 diverging arm longer
+                          # than this is a genuine branch (fork), not a
+                          # collapsed-crossing rung
+Y_THROUGH_TERMINAL_BLEND = True  # debug kill-switch for the dominant-
+                                 # pair terminal through-blend
 
 
 @dataclass(slots=True)
@@ -128,6 +133,8 @@ class RefitStats:
     n_floor_pairs: int = 0        # adjacent-node separations enforced
     n_y_through: int = 0          # deg-3 nodes placed on a dominant
                                   # through-pair's tangents only
+    n_fork_pullback: int = 0      # fork nodes pulled back to the
+                                  # branch's divergence point
     max_point_move_m: float = 0.0  # refit vs skeleton, accepted edges
     max_node_move_m: float = 0.0
     length_outliers: list = field(default_factory=list)  # (edge_id, before, after)
@@ -301,6 +308,42 @@ def _edge_contributions(edge, shape_ids, dense, dense_geoms,
     return contribs
 
 
+def _fork_divergence_point(x, pair_ends, div_pts, merge_width_m,
+                           search_m: float = 120.0, step_m: float = 5.0):
+    """Pull an overshot fork node back to the branch's divergence point.
+
+    The tangent-line intersection overshoots a shallow fork: the node
+    lands tens of meters past the point where the branch's evidence
+    leaves the corridor, and the branch then doubles back to reach it
+    (a ~170-degree through-transition downstream). Walk the two through
+    arms outward from the node; if the diverging evidence is beyond
+    half a merge width AT the node but hugs the through line within
+    reach, the node belongs at the hug point. Returns the new point or
+    None (keep the current placement).
+    """
+    gap = merge_width_m / 2.0
+    d0 = float(np.min(np.hypot(*(div_pts - x).T)))
+    if d0 <= gap:
+        return None  # no overshoot: the branch still hugs the node
+    best = None
+    for pos_xy, terminal in pair_ends:
+        pts = pos_xy if terminal == "a" else pos_xy[::-1]
+        seg = np.hypot(*(pts[1:] - pts[:-1]).T)
+        cum = np.concatenate([[0.0], np.cumsum(seg)])
+        n = int(min(search_m, cum[-1]) // step_m)
+        for k in range(1, n + 1):
+            s = k * step_m
+            i = int(np.searchsorted(cum, s))
+            i = min(max(i, 1), len(pts) - 1)
+            t = (s - cum[i - 1]) / max(cum[i] - cum[i - 1], 1e-9)
+            p = pts[i - 1] + t * (pts[i] - pts[i - 1])
+            if float(np.min(np.hypot(*(div_pts - p).T))) <= gap:
+                if best is None or s < best[0]:
+                    best = (s, p)
+                break
+    return None if best is None else best[1]
+
+
 def _dominant_through_pair(ends, edge_shapes):
     """Dominant through-pair among a deg-3 node's arms, or None.
 
@@ -335,13 +378,16 @@ def refit_geometry(lg, shapes_lonlat, *,
                    snap_radius_m: float | None = None,
                    deviation_gate_m: float = DEVIATION_GATE_M,
                    pass_radius_m: float | None = None,
-                   blend_m: float = BLEND_M) -> RefitStats:
+                   blend_m: float = BLEND_M,
+                   shape_families=None) -> RefitStats:
     """Rebuild every edge's geometry from the shapes attributed to it.
 
     Mutates lg in place (edge coords/coords_xy/length_m and node
     positions). Topology is untouched; px_len keeps the skeleton trace
     count. shapes_lonlat is the deduped input shape list the raster was
-    stamped from (build.dedup_shapes output).
+    stamped from (build.dedup_shapes output). shape_families (optional,
+    frozenset of color_keys per shape) honors the unfuse family locks:
+    a locked edge only collects evidence from its own families.
     """
     stats = RefitStats(n_edges=len(lg.edges))
     if not lg.edges or not shapes_lonlat:
@@ -366,6 +412,10 @@ def refit_geometry(lg, shapes_lonlat, *,
             deviation_gate_m=deviation_gate_m,
         )
         for eid in ridden:
+            lock = lg.edges[eid].families
+            if (lock is not None and shape_families is not None
+                    and not (shape_families[si] & lock)):
+                continue  # unfused corridor: foreign evidence never votes
             edge_shapes.setdefault(eid, []).append(si)
 
     used = sorted({si for lst in edge_shapes.values() for si in lst})
@@ -433,36 +483,72 @@ def refit_geometry(lg, shapes_lonlat, *,
         if len(ends) == 1:
             x = ends[0][1]  # endpoint node: exactly its refit terminal
         else:
-            lines = [(p, t) for _, p, t, _, _ in ends]
+            def solve(lines):
+                pbar = np.mean([p for p, _ in lines], axis=0)
+                # Tikhonov-regularized LSQ intersection of tangent lines
+                a_mat = NODE_MU * np.eye(2)
+                b_vec = NODE_MU * pbar
+                for p, t in lines:
+                    proj = np.eye(2) - np.outer(t, t)
+                    a_mat += proj
+                    b_vec += proj @ p
+                return np.linalg.solve(a_mat, b_vec), pbar
+
+            x, pbar = solve([(p, t) for _, p, t, _, _ in ends])
             if len(ends) == 3:
-                # Y fork: a dominant through-pair pins the node to ITS
-                # tangent lines only — the diverging arm cannot tug the
-                # node off the through line. Tangents re-read beyond
-                # the terminal blend zone, where the fork's diverging
-                # evidence contaminates the averaged geometry.
+                # Y fork: a dominant through-pair pins the node's
+                # CROSS-track position to the pair's tangent lines
+                # only — the diverging arm cannot tug the node off the
+                # through line — while the ALONG-track position keeps
+                # the all-arms solution (a collapsed crossing's rung
+                # line is what slides the node to the true crossing
+                # point). Pair tangents re-read beyond the terminal
+                # blend zone, where the fork's diverging evidence
+                # contaminates the averaged geometry.
                 pair = _dominant_through_pair(ends, edge_shapes)
                 if pair is not None:
-                    lines = [
+                    pair_lines = [
                         _terminal_tangent(ends[k][3], ends[k][4],
                                           skip_m=blend_m)
                         for k in pair
                     ]
+                    x_pair, pbar = solve(pair_lines)
                     pa, pb = ends[pair[0]][0], ends[pair[1]][0]
+                    # cross-track from the pair, along-track from the
+                    # all-arms solution: the diverging arm's tangent
+                    # line is what slides a collapsed crossing's node
+                    # to the true crossing point, and along a straight
+                    # through the position is free anyway
+                    t1, t2 = pair_lines[0][1], pair_lines[1][1]
+                    t2 = t2 if float(t1 @ t2) > 0.0 else -t2
+                    d = t1 + t2
+                    n = float(np.hypot(*d))
+                    d = d / n if n > 1e-9 else t1
+                    x = x_pair + d * float((x - x_pair) @ d)
+                    # a genuine BRANCH (long diverging arm) must not
+                    # leave an overshot node behind it — pull the node
+                    # back to the branch's divergence point
+                    div_pos = ends[next(k for k in range(3)
+                                        if k not in pair)][0]
+                    sis = sorted(set(edge_shapes.get(div_pos, ())))
+                    if (lg.edges[div_pos].length_m
+                            > RUNG_MAX_MULT * lg.merge_width_m and sis):
+                        pts = np.vstack([dense[si] for si in sis])
+                        pts = pts[np.hypot(*(pts - x).T) < 250.0]
+                        if len(pts):
+                            p_new = _fork_divergence_point(
+                                x, [(ends[k][3], ends[k][4])
+                                    for k in pair],
+                                pts, lg.merge_width_m)
+                            if p_new is not None:
+                                x = p_new
+                                stats.n_fork_pullback += 1
                     y_through.append((
                         nid, (pa, pb),
                         set(edge_shapes.get(pa, ()))
                         & set(edge_shapes.get(pb, ())),
                     ))
                     stats.n_y_through += 1
-            pbar = np.mean([p for p, _ in lines], axis=0)
-            # Tikhonov-regularized LSQ intersection of the tangent lines
-            a_mat = NODE_MU * np.eye(2)
-            b_vec = NODE_MU * pbar
-            for p, t in lines:
-                proj = np.eye(2) - np.outer(t, t)
-                a_mat += proj
-                b_vec += proj @ p
-            x = np.linalg.solve(a_mat, b_vec)
             if float(np.hypot(*(x - pbar))) > NODE_SANITY_MULT * lg.merge_width_m:
                 x = pbar
                 stats.n_node_fallback += 1
@@ -477,6 +563,8 @@ def refit_geometry(lg, shapes_lonlat, *,
     # zone takes the through average's SHAPE plus a fading offset read
     # at the zone boundary — the corridor's lateral offset eases to
     # zero at the node while the contaminated tail is discarded whole.
+    if not Y_THROUGH_TERMINAL_BLEND:
+        y_through = []
     for nid, (pa, pb), shared in y_through:
         for pos in (pa, pb):
             xy = refit_xy.get(pos)
