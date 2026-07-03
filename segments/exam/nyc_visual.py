@@ -51,6 +51,11 @@ WINDOWS = {
     "bowling-green":   (-74.019, 40.7005, -74.009, 40.708),
     "whitehall":       (-74.019, 40.698, -74.006, 40.7065),
     "lafayette-av":    (-73.982, 40.6825, -73.9665, 40.6905),
+    # PAR-12 way-graph corridor receipts (the five user sites)
+    "rector":          (-74.018, 40.702, -74.009, 40.709),
+    "joralemon":       (-74.008, 40.690, -73.987, 40.705),
+    "west4":           (-74.008, 40.727, -73.996, 40.736),
+    "grand-st":        (-74.001, 40.7135, -73.989, 40.7225),
 }
 TITLES = {
     "broadway": "Broadway yellow trunk, Times Sq -> Canal St — "
@@ -66,6 +71,14 @@ TITLES = {
                        "crossings",
     "lafayette-av":    "Lafayette Av — G merges the A/C Fulton corridor "
                        "(straight through-path)",
+    "rector":          "Rector St -> South Ferry — 1 beside R/W, no "
+                       "kissing outside shared track",
+    "joralemon":       "Joralemon St tube — 4/5 smooth under the East "
+                       "River",
+    "west4":           "W 4 St — blue/orange stack + Christopher St 1 "
+                       "platform centering",
+    "grand-st":        "Grand St / Bowery — B/D on the Chrystie St "
+                       "connector",
 }
 
 
