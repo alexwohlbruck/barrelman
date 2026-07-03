@@ -280,11 +280,13 @@ def prune_lineless_edges(lg, edge_routes: dict, labels: dict):
 
 
 def enrich_graph(lg, patterns, zip_path, feed_id: str, *, refit: bool = True,
-                 verbose: bool = True):
+                 unfuse: bool = True, verbose: bool = True):
     """Refit geometry from shape evidence, then stations, then attribution.
 
-    Phase order: coarse attribution + geometry refit (linegraph.refit —
-    the skeleton is authoritative topology but lossy geometry near
+    Phase order: corridor unfuse (linegraph.unfuse — splits raster-fused
+    corridors of physically distinct line families, config-gated,
+    default ON) -> coarse attribution + geometry refit (linegraph.refit
+    — the skeleton is authoritative topology but lossy geometry near
     junctions, config-gated, default ON) -> station snapping, splitting
     on the REFIT centerline -> the final attribution emit consumes ->
     line-less pruning. Returns (lg, snap: StationSnapResult,
@@ -297,6 +299,18 @@ def enrich_graph(lg, patterns, zip_path, feed_id: str, *, refit: bool = True,
     def log(msg):
         if verbose:
             print(f"[linegraph] {msg}", flush=True)
+
+    if unfuse:
+        from linegraph.unfuse import shape_families, unfuse_corridors
+
+        shapes, _ = dedup_shapes(patterns)
+        families = shape_families(patterns, shapes)
+        us = unfuse_corridors(lg, shapes, families, verbose=verbose)
+        log(
+            f"unfuse: {us.n_zones} multi-family zones -> {us.n_split} split "
+            f"({us.n_edges_removed} fused edges -> {us.n_edges_added} "
+            f"corridor edges), {us.n_kept} kept fused, {us.n_skipped} skipped"
+        )
 
     if refit:
         from linegraph.refit import refit_geometry
@@ -391,6 +405,12 @@ def main(argv=None) -> int:
         help="skip the shape-evidence geometry refit (linegraph.refit) and "
              "emit raw skeleton geometry — debugging/comparison only",
     )
+    ap.add_argument(
+        "--no-unfuse", action="store_true",
+        help="skip the corridor unfuse (linegraph.unfuse) that splits "
+             "raster-fused corridors of physically distinct line families — "
+             "debugging/comparison only",
+    )
     args = ap.parse_args(argv)
 
     zip_path = resolve_feed_zip(args.feed, args.zip)
@@ -454,7 +474,8 @@ def main(argv=None) -> int:
                 "SUBGRAPH under this build_key", file=sys.stderr,
             )
         lg, snap, edge_routes, _stats = enrich_graph(
-            lg, patterns, zip_path, args.feed, refit=not args.no_refit
+            lg, patterns, zip_path, args.feed, refit=not args.no_refit,
+            unfuse=not args.no_unfuse,
         )
         counts = emit_build(
             lg, edge_routes, snap.labels, build_key=args.build_key,
