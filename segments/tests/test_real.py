@@ -4,7 +4,7 @@ Builds the full segmentation in memory, emits transit_line_segments for
 build_key chicago:l-v3 (delete-and-replace, same rows the CLI writes),
 and checks the v3 contract:
 
-  - exactly the stage-5 exam's 16 transition sites (15 junctions +
+  - exactly the stage-5 exam's 11 transition sites (10 junctions +
     Howard's deg-2 composition change; way-graph era — interlockings
     merged to their cores), every site producing transitions,
   - every long steady feature's underlying edge composition is constant
@@ -74,10 +74,11 @@ def test_transition_sites(built):
     g, segments, info, _ = built
     sites = info["sites"]
     kinds = Counter(sites.values())
-    # way-graph era pin (matches segments_exam check1): 15 real junctions
-    # + Howard's composition change
-    assert len(sites) == 16
-    assert kinds["junction"] == 15
+    # way-graph era pin (matches segments_exam check1): 10 real junctions
+    # + Howard's composition change (flap-guard era: the North Side
+    # P/Red co-run coalesced into one window, dropping its seam sites)
+    assert len(sites) == 11
+    assert kinds["junction"] == 10
     assert kinds["composition"] == 1
     howard = [nid for nid, k in sites.items() if k == "composition"]
     assert g.nodes[howard[0]].label == "Howard"
@@ -212,9 +213,10 @@ def test_steady_composition_constant_query(built):
         (n_long,) = cur.fetchone()
     print(f"\n[real] {n_long} long steady features sampled, "
           f"{len(bad)} with mixed composition")
-    # way-graph era: 30 corridors (interlockings merged to their cores)
-    # leave 43 steadies over 61 m at z15, down from the raster's 50+
-    assert n_long > 40
+    # flap-guard era: 24 corridors (the North Side P/Red co-run coalesced
+    # into one window) leave 32 steadies over 61 m at z15, down from the
+    # pre-coalescing 43 and the raster's 50+
+    assert n_long > 28
     assert bad == []
 
 
