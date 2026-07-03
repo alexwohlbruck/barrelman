@@ -46,6 +46,48 @@ def load_shapes(g, dsn: str) -> dict:
     return out
 
 
+# GTFS route_type -> the OSM railway tags whose ways are that mode's real
+# track (ground truth for off-track corridor reconciliation). Rail modes
+# share the rail family (subway trains run on rail/light_rail links at
+# portals); bus/ferry have no railway ground truth here and reconcile off.
+RAIL_ROUTE_TYPES = {0, 1, 2, 5, 7, 12}  # tram, subway, rail, cable, funi, monorail
+RAIL_WAY_TAGS = ("subway", "rail", "light_rail", "tram",
+                 "narrow_gauge", "monorail", "funicular")
+
+
+def load_ways(g, dsn: str) -> list:
+    """Real OSM track polylines (geo_places railway ways) inside the
+    build's bounding box, for reconcile_offtrack_corridors. Only loaded
+    for rail-mode builds; returns [] otherwise (no reconciliation).
+    Each way is [[lon, lat], ...]."""
+    import json
+
+    import psycopg
+
+    rtypes = {ln.route_type for e in g.edges.values() for ln in e.lines
+              if ln.route_type is not None}
+    if not rtypes or not (rtypes & RAIL_ROUTE_TYPES):
+        return []
+    lons = [n.lon for n in g.nodes.values()]
+    lats = [n.lat for n in g.nodes.values()]
+    pad = 0.01  # ~1 km — off-run bridges never wander farther than this
+    bbox = (min(lons) - pad, min(lats) - pad,
+            max(lons) + pad, max(lats) + pad)
+    out: list = []
+    with psycopg.connect(dsn) as conn, conn.cursor() as cur:
+        cur.execute(
+            """SELECT ST_AsGeoJSON(geom) FROM geo_places
+               WHERE tags->>'railway' = ANY(%s)
+                 AND ST_GeometryType(geom) = 'ST_LineString'
+                 AND geom && ST_MakeEnvelope(%s, %s, %s, %s, 4326)""",
+            (list(RAIL_WAY_TAGS), *bbox))
+        for (gj,) in cur.fetchall():
+            coords = json.loads(gj)["coordinates"]
+            if len(coords) >= 2:
+                out.append(coords)
+    return out
+
+
 def summarize(segments, info) -> str:
     by_kind = Counter(s.kind for s in segments)
     km = Counter()
@@ -73,6 +115,10 @@ def summarize(segments, info) -> str:
     if info.get("corridor_loops_excised"):
         lines.append(f"corridor micro-loops excised (cid: (n, m)): "
                      f"{info['corridor_loops_excised']}")
+    if info.get("track_reconciled"):
+        lines.append(f"off-track corridors reconciled to real track "
+                     f"(cid: (method, before_m, after_m)): "
+                     f"{info['track_reconciled']}")
     if info.get("site_len_clamped"):
         lines.append(f"site transition lengths clamped to corridor support "
                      f"(node: m): {info['site_len_clamped']}")
@@ -118,10 +164,17 @@ def main(argv=None) -> int:
         print(f"  matched_shapes unavailable ({err}); greedy pairing")
         shapes = None
 
+    try:
+        ways = load_ways(g, args.dsn)
+        print(f"  {len(ways)} OSM track ways for off-track reconciliation")
+    except Exception as err:  # ways are corrective only, never required
+        print(f"  OSM ways unavailable ({err}); no track reconciliation")
+        ways = None
+
     band_segments = []
     for band_minzoom, band_maxzoom, length in band_ranges(cfg.bands):
         bcfg = replace(cfg, transition_len_m=length)
-        segments, info = build_segments(g, bcfg, shapes=shapes)
+        segments, info = build_segments(g, bcfg, shapes=shapes, ways=ways)
         print(f"--- band z{band_minzoom}..{band_maxzoom} "
               f"(transition {length:.0f} m)")
         print(summarize(segments, info))

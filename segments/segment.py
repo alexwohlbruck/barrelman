@@ -33,6 +33,7 @@ import bisect
 import math
 from dataclasses import dataclass, field, replace
 
+from shapely import STRtree
 from shapely.geometry import LineString, Point
 from shapely.ops import substring
 
@@ -86,6 +87,21 @@ class SegmentConfig:
     fillet_len_budget: float = 1.1    # max emitted transition length as a
     #                                   factor of the site's transition
     #                                   length (mirrors the exam's C3 cap)
+    track_snap_tol_m: float = 18.0    # a steady corridor whose centerline
+    #                                   strays past this from the real OSM
+    #                                   track is reconciled back onto it
+    #                                   (off-graph agency-bridged runs) —
+    #                                   well above any legit bundle-midline
+    #                                   offset (NYC 4-track trunks measure
+    #                                   <= ~12 m), so on-track geometry and
+    #                                   chicago:l-v3 are never touched
+    track_snap_vertex_m: float = 8.0  # per-vertex off-track threshold in the
+    #                                   way-snap fallback (project only the
+    #                                   vertices genuinely off the track)
+    track_snap_max_dist_m: float = 120.0  # never snap onto a way farther
+    #                                   than this (a corridor with no nearby
+    #                                   track — off-map, ferry — is left as
+    #                                   is rather than yanked onto a stranger)
 
 
 @dataclass
@@ -583,6 +599,156 @@ def excise_corridor_loops(coords, cfg: SegmentConfig):
     return coords, n_excised, removed
 
 
+# ------------------------------------------------ off-track reconciliation
+
+def _nearest_way_indices(tree, geom) -> list:
+    """STRtree.query_nearest result normalized to a plain int list (it
+    returns a numpy array, occasionally with more than one equidistant
+    hit)."""
+    res = tree.query_nearest(geom)
+    try:
+        return [int(k) for k in res]
+    except TypeError:
+        return [int(res)]
+
+
+def _max_stray_xy(line, tree, ways, step: float = 15.0):
+    """(max stray, nearest-way distance sampled at the max) of an xy
+    LineString from the real OSM track (STRtree of way LineStrings).
+    Returns (None, None) when NO way lies near the line — an unmeasurable
+    corridor (off-map / wrong mode) must never be snapped."""
+    if line.length < 1e-6:
+        return 0.0, 0.0
+    n = max(2, int(line.length / step))
+    best = 0.0
+    any_near = False
+    for i in range(n + 1):
+        p = line.interpolate(i / n, normalized=True)
+        ks = _nearest_way_indices(tree, p)
+        ds = [ways[k].distance(p) for k in ks]
+        if not ds:
+            continue
+        any_near = True
+        best = max(best, min(ds))
+    return (best, None) if any_near else (None, None)
+
+
+def _snap_vertices_to_ways(coords_xy, tree, ways, cfg: SegmentConfig):
+    """Project every vertex farther than track_snap_vertex_m from the real
+    track onto the nearest way; keep on-track vertices verbatim; pin the
+    endpoints (they carry the corridor's node handoff). Vertices whose
+    nearest way is beyond track_snap_max_dist_m are left untouched (no
+    stranger-track yanks). The polyline is densified first so a sparse
+    off-run chord has interior vertices to pull down onto the curve."""
+    coords_xy = densify(coords_xy, cfg.densify_step_m)
+    out = []
+    for p in coords_xy:
+        pt = Point(p)
+        ks = _nearest_way_indices(tree, pt)
+        if not ks:
+            out.append(p)
+            continue
+        k = min(ks, key=lambda k: ways[k].distance(pt))
+        d = ways[k].distance(pt)
+        if cfg.track_snap_vertex_m < d <= cfg.track_snap_max_dist_m:
+            cp = ways[k].interpolate(ways[k].project(pt))
+            out.append((cp.x, cp.y))
+        else:
+            out.append(p)
+    out[0] = coords_xy[0]
+    out[-1] = coords_xy[-1]
+    return _dedupe(out)
+
+
+def reconcile_offtrack_corridors(corridors, ways_xy, proj, cfg: SegmentConfig,
+                                 info: dict):
+    """Reconcile steady corridors whose centerline strays from the real
+    OSM track back ONTO it, IN PLACE (rewrites corridor.coords).
+
+    The way-graph corridor is normally real OSM way polyline verbatim
+    (R1), but a route whose shapesnap match failed over a stretch carries
+    an OFF-GRAPH agency-bridged run: a straight GTFS-shape chord the
+    linegraph rides literally (the F-express `FX` cutting a 63 m chord
+    across the Culver S-curve at 15 St-Prospect Park; the `5`'s off-run
+    stub at the Nevins wye). The steady segments cut from such a corridor
+    inherit the chord — a STEADY centerline must never leave its real
+    track by more than a track's width.
+
+    Two remedies, preferred first, both gated by track_snap_tol_m (well
+    above any legitimate bundle-midline offset, so on-track corridors and
+    chicago:l-v3 are byte-identical):
+
+      (a) sibling adoption — a co-endpoint sibling corridor (the SAME node
+          pair) that DOES follow the track donates its polyline (oriented
+          to node_a -> node_b, endpoints pinned). This is the right fix
+          for a route sharing physical track with a well-matched
+          neighbour (`FX` adopts the on-graph `F` local's curve); the
+          client offsets the two ribbons apart by slot as before.
+      (b) way-snap — no faithful sibling (a solo off-run at a wye):
+          project the off-track vertices onto the nearest real way,
+          keeping the on-track vertices and the endpoints verbatim.
+          Accepted ONLY when the projection stays simple (after a
+          micro-loop cleanup) — a wye/turnback fold that projects onto
+          itself is left as the honest off-track chord rather than a
+          tangled snap.
+
+    Corridors with no nearby track of the mode are never touched. Records
+    `track_reconciled` {cid: (method, before_m, after_m)} on info."""
+    if not ways_xy:
+        return
+    tree = STRtree(ways_xy)
+    lines_xy = {c.cid: LineString(proj.to_xy(c.coords)) for c in corridors}
+    by_pair: dict = {}
+    for c in corridors:
+        by_pair.setdefault(frozenset((c.node_a, c.node_b)), []).append(c)
+
+    strays = {c.cid: _max_stray_xy(lines_xy[c.cid], tree, ways_xy)[0]
+              for c in corridors}
+    reconciled: dict = {}
+    for c in corridors:
+        s = strays[c.cid]
+        if s is None or s <= cfg.track_snap_tol_m:
+            continue
+        # (a) co-endpoint sibling that follows the track
+        adopted = None
+        if not c.ring:
+            for sib in by_pair.get(frozenset((c.node_a, c.node_b)), ()):
+                if sib.cid == c.cid or sib.ring:
+                    continue
+                ss = strays.get(sib.cid)
+                if ss is None or ss > cfg.track_snap_tol_m:
+                    continue
+                sxy = list(lines_xy[sib.cid].coords)
+                if sib.node_a != c.node_a:  # orient to c's node_a -> node_b
+                    sxy = list(reversed(sxy))
+                cxy = list(lines_xy[c.cid].coords)
+                sxy[0], sxy[-1] = cxy[0], cxy[-1]   # pin c's own endpoints
+                adopted = _dedupe(sxy)
+                method = "sibling"
+                break
+        if adopted is None:
+            adopted = _snap_vertices_to_ways(
+                list(lines_xy[c.cid].coords), tree, ways_xy, cfg)
+            # projecting onto a curved way can fold a wye leg back on
+            # itself — clean micro self-crossings, then require the
+            # result be simple (a snap that stays tangled is worse than
+            # the honest off-track chord: keep the original)
+            adopted, _n, _rm = excise_corridor_loops(adopted, cfg)
+            method = "waysnap"
+            if len(adopted) < 2 or not LineString(adopted).is_simple:
+                continue
+        if len(adopted) < 2:
+            continue
+        after = _max_stray_xy(LineString(adopted), tree, ways_xy)[0]
+        # never accept a change that fails to improve the stray materially
+        if after is None or after >= s - 1e-6:
+            continue
+        c.coords = proj.to_ll(adopted)
+        reconciled[c.cid] = (method, round(s, 1), round(after, 1))
+    if reconciled:
+        info["track_reconciled"] = reconciled
+
+
 # ------------------------------------------------------------ sites/ends
 
 def transition_sites(g: Graph) -> dict:
@@ -818,10 +984,13 @@ def _merge_ribbon_meta(r1, r2):
 
 
 def build_segments(g: Graph, cfg: SegmentConfig = SegmentConfig(),
-                   shapes: dict | None = None):
+                   shapes: dict | None = None,
+                   ways: list | None = None):
     """Segment the graph. shapes: {(feed_id, route_id): [[(lon, lat)...]]}
     (matched_shapes geometries) for junction pairing evidence; optional.
-    Returns (segments, info)."""
+    ways: [[(lon, lat)...]] real OSM track polylines of the build's mode
+    (geo_places railway ways) for the off-track corridor reconciliation;
+    optional (no reconciliation without them). Returns (segments, info)."""
     corridors = walk_corridors(g, cfg.gap_px)
     sites = transition_sites(g)
     lon0 = sum(n.lon for n in g.nodes.values()) / len(g.nodes)
@@ -830,6 +999,13 @@ def build_segments(g: Graph, cfg: SegmentConfig = SegmentConfig(),
     info: dict = {"sites": sites, "corridors": len(corridors),
                   "site_transitions": {}, "merged": 0, "skipped": 0,
                   "stubs": 0, "fillet_clamped": 0}
+
+    # Reconcile off-track corridors (off-graph agency-bridged runs) back
+    # onto the real OSM track BEFORE any geometry is cut from them — every
+    # steady/transition feature then inherits the corrected centerline.
+    if ways:
+        ways_xy = [LineString(proj.to_xy(w)) for w in ways if len(w) >= 2]
+        reconcile_offtrack_corridors(corridors, ways_xy, proj, cfg, info)
 
     half = cfg.transition_len_m / 2.0
     cgs: dict[int, CorridorGeom] = {}
