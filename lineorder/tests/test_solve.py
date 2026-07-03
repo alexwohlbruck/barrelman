@@ -208,7 +208,10 @@ def test_chicago_end_to_end(chicago):
     # Belmont) — all non-station junction nodes. The diff-seg count is
     # pair-enumeration over continuations (Loop corners carry lines on
     # 3 incident edges), not distinct drawing locations.
-    assert a.weighted == pytest.approx(116.0)
+    # Re-pinned 116.0 -> 110.0 for the cluster-weighted refit era: the
+    # truer junction-mouth geometry rotates a couple of clockwise
+    # incident-edge orders, and CP-SAT proves the cheaper optimum.
+    assert a.weighted == pytest.approx(110.0)
     assert a.crossings_same <= 1 and a.separations <= 1
     assert len(rep) <= 4
     g = chicago.graph
