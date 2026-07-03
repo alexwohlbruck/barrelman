@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""linegraph.vector — skeleton pixels -> planar graph.
+"""[DEPRECATED (way-graph era)] linegraph.vector — skeleton pixels -> planar graph.
 
 Pipeline:
   1. pixel graph: skeleton pixels with 8-connected neighbor count != 2

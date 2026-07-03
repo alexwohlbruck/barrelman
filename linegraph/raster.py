@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""linegraph.raster — project shapes to a local UTM grid and stroke them.
+"""[DEPRECATED (way-graph era)] linegraph.raster — project shapes to a local UTM grid and stroke them.
 
 The grid is deterministic: its origin is snapped DOWN to a whole multiple
 of the resolution, so the same inputs always land on the same pixels.

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""linegraph.skeleton — 1-px skeletonization of the stroked raster.
+"""[DEPRECATED (way-graph era)] linegraph.skeleton — 1-px skeletonization of the stroked raster.
 
 Thin wrapper over skimage.morphology.skeletonize (Zhang-Suen): topology-
 preserving thinning of the boolean stroke grid down to 1-px centerlines.

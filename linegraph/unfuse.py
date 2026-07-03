@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""linegraph.unfuse — split raster-fused corridors of physically distinct
+"""[DEPRECATED (way-graph era)] linegraph.unfuse — split raster-fused corridors of physically distinct
 line families (phase B.0, between the skeleton and the refit).
 
 The raster merges ANY strokes closer than the merge width, including

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""linegraph.refit — shape-evidence geometry refit (phase B.1).
+"""[DEPRECATED (way-graph era)] linegraph.refit — shape-evidence geometry refit (phase B.1).
 
 The raster skeleton is the right source of TOPOLOGY but a lossy source
 of GEOMETRY: at X and T junctions the crossing/forking track's ink
