@@ -1,31 +1,37 @@
 #!/usr/bin/env python3
-"""linegraph.build — CLI driver: GTFS patterns -> raster -> skeleton -> graph.
+"""linegraph.build — CLI driver: GTFS patterns -> corridor graph.
 
-Input = route x direction pattern shapes via shapesnap.match.load_patterns
-(representative shape per pattern, deduped by geometry hash — OSM-matched
-routes sharing track have IDENTICAL geometry, so shared corridors stamp
-once and genuinely-parallel tracks are what the raster fuses).
+DEFAULT ENGINE (way-graph era): corridors are built directly on the OSM
+way graph the shapes were matched against (linegraph.waygraph +
+linegraph.corridors) — the centerline is real track geometry, junctions
+are the real switches, attribution is exact by construction. Stations
+are snapped exactly as before and the same transit_graph_* contract is
+emitted.
+
+LEGACY ENGINE (--legacy-raster, comparison only): the deprecated
+raster -> skeleton -> vectorize chain with unfuse/refit/attribute
+(linegraph.raster/skeleton/vector/unfuse/refit — kept as dead code for
+A/B comparisons, scheduled for deletion).
+
+Input = route x direction pattern shapes via shapesnap.match.load_patterns.
 
 CLI (repo convention — uv, never system python):
   uv run --with-requirements linegraph/requirements.txt \
       python -m linegraph.build --feed 29 --mode rail --build-key chicago:l-v3 \
-      [--zip data/gtfs-processed/29.zip] [--merge-width 18] [--res 2.0] \
-      [--postgis-qa [DSN]]
+      [--zip data/gtfs-processed/29.zip] [--emit [DSN]] [--legacy-raster]
 
 Reads data/gtfs-processed/<feed>.zip by default and falls back to
 data/gtfs/<feed>.zip with a loud warning (raw shapes are NOT OSM-matched;
-the skeleton will fuse on agency geometry instead of snapped track).
+the way-graph engine REQUIRES matched shapes).
 
 --postgis-qa dumps the edges into the additive linegraph_edges QA table,
-idempotently per build_key (delete-and-replace). Phase A writes ONLY this
-QA table — transit_graph_* stays untouched.
+idempotently per build_key (delete-and-replace).
 
---emit runs phase B after the skeleton: shape-evidence geometry refit
-(linegraph.refit — default ON, --no-refit to skip), station snapping
-(linegraph.stations — splits the refit centerline into station-to-
-station segments), route attribution (linegraph.attribute), then the
-transit_graph_* contract write (linegraph.emit, delete-and-replace per
-build_key).
+--emit snaps stations (linegraph.stations — splits the corridor
+centerlines into station-to-station segments), resolves route
+attribution (exact from the usage graph; legacy: linegraph.attribute),
+then writes the transit_graph_* contract (linegraph.emit,
+delete-and-replace per build_key).
 """
 
 from __future__ import annotations
@@ -381,6 +387,79 @@ def enrich_graph(lg, patterns, zip_path, feed_id: str, *, refit: bool = True,
     return lg, snap, edge_routes, stats
 
 
+# ── way-graph engine (default) ───────────────────────────────────────────────
+
+
+def build_waygraph_linegraph(patterns, shapes, feed_id: str, mode: str,
+                             build_key: str, cfg=None, *,
+                             emit_dsn: str | None = None,
+                             force: bool = False, use_cache: bool = True,
+                             verbose: bool = True):
+    """Patterns -> usage graph -> merged corridors -> LineGraph.
+
+    Returns (lg, notes) — notes is None on a cache hit. The cache stores
+    the corridor graph BEFORE station snapping (mirrors the raster
+    cache holding the raw skeleton only).
+    """
+    from linegraph.corridors import build_corridor_linegraph
+    from linegraph.waygraph import (WaygraphConfig, WayIndex, build_usage,
+                                    load_way_graph, verify_levels,
+                                    waygraph_digest)
+    from linegraph.raster import pick_epsg
+
+    cfg = cfg or WaygraphConfig()
+    graph = load_way_graph(feed_id, mode)
+    digest = waygraph_digest(shapes, cfg, graph)
+    cache = default_cache_path(feed_id, mode).with_name(
+        f"{feed_id}.{mode}.waygraph.pkl.gz")
+    if use_cache and not force:
+        try:
+            lg = load_linegraph(cache, expect_digest=digest)
+            lg.build_key = build_key
+            print(f"[linegraph] waygraph cache hit: {cache}")
+            return lg, None
+        except (FileNotFoundError, ValueError):
+            pass
+
+    epsg = pick_epsg(shapes)
+    index = WayIndex(graph, epsg)
+    usage = build_usage(index, patterns, cfg, verbose=verbose)
+    if emit_dsn:
+        n_checked, mismatches = verify_levels(
+            graph, usage.covers, emit_dsn, feed_id, verbose=verbose)
+        if n_checked and len(mismatches) > 0.10 * n_checked:
+            raise RuntimeError(
+                f"waygraph reconstruction disagrees with matched_shapes "
+                f"stats on {len(mismatches)}/{n_checked} patterns — the "
+                "graph cache likely does not match the matched-shapes era")
+    lg, notes = build_corridor_linegraph(
+        index, usage, cfg, build_key=build_key, feed_id=feed_id, mode=mode,
+        input_digest=digest, n_input_shapes=len(shapes), verbose=verbose)
+    if use_cache:
+        save_linegraph(lg, cache)
+        print(f"[linegraph] cache: {cache} ({cache.stat().st_size / 1e6:.1f} MB)")
+    return lg, notes
+
+
+def waygraph_edge_routes(lg, zip_path, feed_id: str):
+    """Exact edge_routes ({pos: {(feed, route): RouteInfo}}) from LGEdge.routes."""
+    from linegraph.attribute import RouteInfo, load_routes_meta
+
+    meta = load_routes_meta(zip_path)
+    edge_routes: dict = {}
+    for pos, e in enumerate(lg.edges):
+        for rid in sorted(e.routes or ()):
+            m = meta.get(rid, {})
+            edge_routes.setdefault(pos, {})[(feed_id, rid)] = RouteInfo(
+                feed_id=feed_id, route_id=rid,
+                route_short_name=m.get("short", ""),
+                route_type=int(m.get("type", 1)),
+                route_color=m.get("color", ""),
+                route_text_color=m.get("text_color", ""),
+            )
+    return edge_routes
+
+
 # ── cli ──────────────────────────────────────────────────────────────────────
 
 
@@ -420,6 +499,11 @@ def main(argv=None) -> int:
              "raster-fused corridors of physically distinct line families — "
              "debugging/comparison only",
     )
+    ap.add_argument(
+        "--legacy-raster", action="store_true",
+        help="run the DEPRECATED raster-skeleton engine instead of the "
+             "way-graph corridor builder — comparison only",
+    )
     args = ap.parse_args(argv)
 
     zip_path = resolve_feed_zip(args.feed, args.zip)
@@ -437,35 +521,42 @@ def main(argv=None) -> int:
         print("[linegraph] nothing to build", file=sys.stderr)
         return 1
 
-    digest = input_digest(shapes, args.merge_width, args.res)
-    cache = default_cache_path(args.feed, args.mode)
     # --routes builds a debug subgraph — never read or replace the canonical
     # full-network cache with it.
     use_cache = args.routes is None
-    lg = None
-    if use_cache and not args.force:
-        try:
-            lg = load_linegraph(cache, expect_digest=digest)
-            lg.build_key = args.build_key
-            print(f"[linegraph] cache hit: {cache}")
-        except (FileNotFoundError, ValueError):
-            lg = None
-    if lg is None:
-        lg = build_linegraph(
-            shapes, args.merge_width, args.res,
-            build_key=args.build_key, feed_id=args.feed, mode=args.mode,
+
+    if args.legacy_raster:
+        digest = input_digest(shapes, args.merge_width, args.res)
+        cache = default_cache_path(args.feed, args.mode)
+        lg = None
+        if use_cache and not args.force:
+            try:
+                lg = load_linegraph(cache, expect_digest=digest)
+                lg.build_key = args.build_key
+                print(f"[linegraph] cache hit: {cache}")
+            except (FileNotFoundError, ValueError):
+                lg = None
+        if lg is None:
+            lg = build_linegraph(
+                shapes, args.merge_width, args.res,
+                build_key=args.build_key, feed_id=args.feed, mode=args.mode,
+            )
+            if use_cache:
+                save_linegraph(lg, cache)
+                print(f"[linegraph] cache: {cache} "
+                      f"({cache.stat().st_size / 1e6:.1f} MB)")
+            else:
+                print("[linegraph] --routes debug build — cache untouched")
+    else:
+        lg, _notes = build_waygraph_linegraph(
+            patterns, shapes, args.feed, args.mode, args.build_key,
+            emit_dsn=args.emit, force=args.force, use_cache=use_cache,
         )
-        if use_cache:
-            save_linegraph(lg, cache)
-            print(f"[linegraph] cache: {cache} ({cache.stat().st_size / 1e6:.1f} MB)")
-        else:
-            print("[linegraph] --routes debug build — cache untouched")
 
     comps = lg.components()
     print(
         f"[linegraph] {len(lg.nodes)} nodes, {len(lg.edges)} edges, "
         f"{lg.total_length_m() / 1000:.1f} km, {len(comps)} component(s), "
-        f"grid {lg.grid_shape[0]}x{lg.grid_shape[1]} ({lg.grid_bytes / 1e6:.0f} MB), "
         f"built in {lg.build_seconds:.1f}s"
     )
 
@@ -482,10 +573,29 @@ def main(argv=None) -> int:
                 "[linegraph] WARNING: --emit with --routes writes a DEBUG "
                 "SUBGRAPH under this build_key", file=sys.stderr,
             )
-        lg, snap, edge_routes, _stats = enrich_graph(
-            lg, patterns, zip_path, args.feed, refit=not args.no_refit,
-            unfuse=not args.no_unfuse,
-        )
+        if args.legacy_raster:
+            lg, snap, edge_routes, _stats = enrich_graph(
+                lg, patterns, zip_path, args.feed, refit=not args.no_refit,
+                unfuse=not args.no_unfuse,
+            )
+        else:
+            from linegraph.stations import (load_station_complexes,
+                                            snap_stations)
+
+            stop_ids = {sid for p in patterns for sid in p.stop_ids}
+            complexes = load_station_complexes(zip_path, stop_ids)
+            lg, snap = snap_stations(lg, complexes)
+            print(
+                f"[linegraph] stations: {len(snap.labeled)}/{len(complexes)} "
+                f"complexes labeled ({snap.n_split_nodes} split nodes, "
+                f"{len(complexes) - len(snap.labeled)} unlabeled) -> "
+                f"{len(lg.nodes)} nodes, {len(lg.edges)} edges"
+            )
+            for comp, reason, dist in snap.unlabeled:
+                print(f"  unlabeled: {comp.station_id} '{comp.label}' "
+                      f"({reason}"
+                      f"{'' if dist is None else f', {dist:.0f} m'})")
+            edge_routes = waygraph_edge_routes(lg, zip_path, args.feed)
         counts = emit_build(
             lg, edge_routes, snap.labels, build_key=args.build_key,
             feed_id=args.feed, mode=args.mode, dsn=args.emit,

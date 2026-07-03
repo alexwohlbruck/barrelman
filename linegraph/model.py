@@ -22,7 +22,10 @@ from pathlib import Path
 #    pre-refit caches must never masquerade as current v3 artifacts.
 # 3: corridor-unfuse era (linegraph.unfuse). LGEdge grew the `families`
 #    lock slot; caches pickled without it would raise on access.
-FORMAT_VERSION = 3
+# 4: way-graph corridor era (linegraph.waygraph/corridors). LGEdge grew
+#    the `routes` slot (exact attribution by construction); raster-era
+#    caches lack it and must rebuild.
+FORMAT_VERSION = 4
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CACHE_DIR = REPO_ROOT / "data" / "linegraph"
@@ -51,6 +54,9 @@ class LGEdge:
     families: frozenset | None = None  # unfuse family lock: only these
     #                       color_keys may attribute/refit onto the edge
     #                       (None = unrestricted; survives station splits)
+    routes: frozenset | None = None  # way-graph era: the exact route_id
+    #                       set riding this corridor (attribution by
+    #                       construction; None on legacy raster builds)
 
 
 @dataclass(slots=True)

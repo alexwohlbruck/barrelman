@@ -1,0 +1,792 @@
+#!/usr/bin/env python3
+"""linegraph.corridors — track-exact corridors on the OSM way graph.
+
+Stage 4, way-graph era (replaces raster/skeleton/vector/refit/unfuse —
+those modules remain only behind --legacy-raster). Guarantees:
+
+  R1  the rendered centerline follows REAL track geometry: raw corridors
+      are concatenated OSM way polylines VERBATIM (dedup of coincident
+      vertices only); merged ribbons are weighted midlines of real
+      tracks; forks happen at the real switch nodes.
+  R2  routes bundle only when they share track, with exactly three
+      principled merges:
+        1. directional-pair merge  — corridors with IDENTICAL route sets
+           sustained-parallel within pair_gap_m collapse to their
+           equal-weight midline (this is what centers a ribbon between
+           an island platform's flanking tracks — the Bowling Green
+           lesson: tracks weigh equally, never per-route);
+        2. same-family merge      — corridors whose colour-family sets
+           are EQUAL but route sets differ (N/Q vs R/W) merge within
+           family_gap_m into one ribbon carrying the union set (the
+           approved single yellow Broadway ribbon; 4-track trunks);
+        3. cross-family proximity bundle — corridors of DIFFERENT
+           families merge only where they run tightly parallel
+           (cross_family_gap_m) for a sustained stretch
+           (cross_family_min_len_m; brief excursions up to
+           2x gap for <= 50 m don't flap the window) with low relative
+           bearing (parallel, not crossing); the merged stretch covers
+           exactly the qualifying window and its boundaries are
+           composition-change junctions (Chicago's Lake-leg Blue under
+           the elevated; the Loop legs' two one-way tracks).
+
+Sustained-parallel for merges 1-2 = gap under threshold for the full
+overlap with no divergence beyond it: at each window end at least one
+corridor must END within merge_end_slack_m — two corridors that both
+continue while the gap grows are crossing/brushing and NEVER merge.
+
+Ridden crossovers (a turnback diagonal lying between the tracks of the
+bundle it connects — its routes a strict subset of a neighboring
+corridor's) are ABSORBED: dropped without bending the through geometry,
+their break nodes re-chained away.
+
+Junctions are way-graph nodes where corridor route sets change — the
+real switches. Merge-boundary nodes are the only synthetic nodes, placed
+on the weighted midline within half a track gap of the physical switch.
+"""
+
+from __future__ import annotations
+
+import math
+import time
+from dataclasses import dataclass, field
+
+import numpy as np
+import shapely
+from pyproj import Transformer
+from shapely import STRtree
+from shapely.geometry import LineString
+from shapely.ops import substring
+
+from linegraph.model import FORMAT_VERSION, LGEdge, LGNode, LineGraph
+from linegraph.waygraph import Usage, WaygraphConfig, WayIndex
+
+SYNTH_BASE = 10 ** 15  # synthetic node ids start here (above OSM ids)
+
+
+@dataclass(slots=True)
+class Corr:
+    cid: int
+    routes: frozenset        # route_id strings
+    families: frozenset      # color_key strings
+    u: int
+    v: int
+    pts: np.ndarray          # (n, 2) projected meters, oriented u -> v
+    tracks: int = 1          # physical tracks represented (midline weight)
+
+    @property
+    def length(self) -> float:
+        d = np.hypot(*(self.pts[1:] - self.pts[:-1]).T)
+        return float(d.sum())
+
+    def line(self) -> LineString:
+        return LineString(self.pts)
+
+
+@dataclass(slots=True)
+class MergeRecord:
+    kind: str                # pair | family | cross
+    routes_a: tuple
+    routes_b: tuple
+    window_len_m: float
+    gap_mean_m: float
+    gap_max_m: float
+    bearing_mean_deg: float
+    at_lonlat: tuple
+
+
+@dataclass(slots=True)
+class BuildNotes:
+    merges: list = field(default_factory=list)      # [MergeRecord]
+    rejects: list = field(default_factory=list)     # near-miss cross bundles
+    n_absorbed: int = 0
+    n_contracted: int = 0
+    n_offgraph: int = 0
+    n_raw_corridors: int = 0
+
+
+# ── small geometry helpers ───────────────────────────────────────────────────
+
+
+def _dedup(pts: np.ndarray) -> np.ndarray:
+    if len(pts) < 2:
+        return pts
+    keep = np.ones(len(pts), dtype=bool)
+    keep[1:] = np.hypot(*(pts[1:] - pts[:-1]).T) > 1e-6
+    return pts[keep]
+
+
+def _cum(pts: np.ndarray) -> np.ndarray:
+    return np.concatenate([[0.0], np.cumsum(np.hypot(*(pts[1:] - pts[:-1]).T))])
+
+
+def _interp(pts: np.ndarray, cum: np.ndarray, t: float) -> np.ndarray:
+    return np.array([np.interp(t, cum, pts[:, 0]),
+                     np.interp(t, cum, pts[:, 1])])
+
+
+def _bearing(pts: np.ndarray, cum: np.ndarray, t: float, h: float = 8.0):
+    a = _interp(pts, cum, max(0.0, t - h))
+    b = _interp(pts, cum, min(cum[-1], t + h))
+    d = b - a
+    return math.atan2(d[1], d[0])
+
+
+def _bearing_diff_deg(b1: float, b2: float) -> float:
+    """Undirected: 0 = parallel or antiparallel, 90 = perpendicular."""
+    return math.degrees(abs((b1 - b2 + math.pi / 2) % math.pi - math.pi / 2))
+
+
+def _blend_to(pts: np.ndarray, at_start: bool, target: np.ndarray,
+              blend_m: float) -> np.ndarray:
+    """Move one endpoint onto `target`, decaying the shift over blend_m."""
+    pts = np.asarray(pts, dtype=float).copy()
+    if len(pts) < 2:
+        return np.array([target, target], dtype=float)
+    cum = _cum(pts)
+    total = cum[-1]
+    if total <= 0:
+        return np.array([target, target], dtype=float)
+    d = cum if at_start else (total - cum)
+    delta = np.asarray(target, dtype=float) - (pts[0] if at_start else pts[-1])
+    w = np.clip(1.0 - d / max(min(blend_m, total), 1e-9), 0.0, 1.0)
+    return _dedup(pts + w[:, None] * delta[None, :])
+
+
+# ── corridor graph state ─────────────────────────────────────────────────────
+
+
+class _State:
+    def __init__(self, cfg: WaygraphConfig, verbose: bool):
+        self.cfg = cfg
+        self.verbose = verbose
+        self.nodes: dict = {}          # nid -> np.array([x, y])
+        self.corrs: dict = {}          # cid -> Corr
+        self._next_cid = 0
+        self._next_nid = SYNTH_BASE
+        self.notes = BuildNotes()
+
+    def log(self, msg: str):
+        if self.verbose:
+            print(f"[corridors] {msg}", flush=True)
+
+    def new_node(self, xy) -> int:
+        nid = self._next_nid
+        self._next_nid += 1
+        self.nodes[nid] = np.asarray(xy, dtype=float)
+        return nid
+
+    def add_corr(self, routes, families, u, v, pts, tracks=1) -> int:
+        cid = self._next_cid
+        self._next_cid += 1
+        pts = _dedup(np.asarray(pts, dtype=float))
+        if len(pts) < 2:
+            pts = np.array([self.nodes[u], self.nodes[v]])
+        self.corrs[cid] = Corr(cid, frozenset(routes), frozenset(families),
+                               u, v, pts, tracks)
+        return cid
+
+    def incidence(self) -> dict:
+        inc: dict = {}
+        for c in self.corrs.values():
+            inc.setdefault(c.u, []).append(c.cid)
+            inc.setdefault(c.v, []).append(c.cid)
+        return inc
+
+    def retarget_node(self, old: int, new: int):
+        """Every corridor endpoint at `old` moves to `new` (blended)."""
+        if old == new:
+            return
+        tgt = self.nodes[new]
+        doomed = []
+        for c in self.corrs.values():
+            if c.u == old:
+                c.pts = _blend_to(c.pts, True, tgt, self.cfg.blend_m)
+                c.u = new
+            if c.v == old:
+                c.pts = _blend_to(c.pts, False, tgt, self.cfg.blend_m)
+                c.v = new
+            if c.u == new or c.v == new:
+                if c.u == c.v and c.length < 1.0:
+                    doomed.append(c.cid)  # fully collapsed into the node
+                elif len(c.pts) < 2:
+                    c.pts = np.array([self.nodes.get(c.u, tgt),
+                                      self.nodes.get(c.v, tgt)], dtype=float)
+        for cid in doomed:
+            self.corrs.pop(cid, None)
+        self.nodes.pop(old, None)
+
+    def rechain(self):
+        """Join corridor pairs at degree-2 equal-route-set nodes,
+        keeping head-to-tail orientation (stage-5 slot frames)."""
+        changed = True
+        while changed:
+            changed = False
+            inc = self.incidence()
+            for nid in sorted(inc):
+                cids = inc[nid]
+                if len(cids) != 2 or cids[0] == cids[1]:
+                    continue
+                a, b = self.corrs[cids[0]], self.corrs[cids[1]]
+                if a.routes != b.routes:
+                    continue
+                ap = a.pts if a.v == nid else a.pts[::-1]
+                au = a.u if a.v == nid else a.v
+                bp = b.pts if b.u == nid else b.pts[::-1]
+                bv = b.v if b.u == nid else b.u
+                if au == bv and len(inc.get(au, ())) <= 2:
+                    continue  # floating loop; leave as two edges
+                merged = _dedup(np.vstack([ap, bp]))
+                self.corrs.pop(a.cid)
+                self.corrs.pop(b.cid)
+                self.add_corr(a.routes, a.families | b.families,
+                              au, bv, merged, max(a.tracks, b.tracks))
+                self.nodes.pop(nid, None)
+                changed = True
+                break
+
+    def drop_orphan_nodes(self):
+        used = set()
+        for c in self.corrs.values():
+            used.add(c.u)
+            used.add(c.v)
+        for nid in [n for n in self.nodes if n not in used]:
+            self.nodes.pop(nid)
+
+
+# ── phase 1: raw corridors from the used way subgraph ───────────────────────
+
+
+def _split_edges_for_runs(index: WayIndex, usage: Usage, st: _State):
+    """Work edges from used way edges, split at off-run anchors.
+
+    Returns [(u, v, pts, routes, cov_lo, cov_hi)] with cov_* relative to
+    the piece; registers anchor nodes and adds off-run corridors.
+    """
+    anchors: dict = {}
+    run_specs: list = []
+    for routes, run in usage.off_runs:
+        ends = []
+        for anchor, end_xy in ((run.start_anchor, run.coords_xy[0]),
+                               (run.end_anchor, run.coords_xy[-1])):
+            if anchor is not None and anchor[0] in usage.edge_routes:
+                eid, pos = anchor
+                nid = st.new_node(
+                    np.asarray(index.lines[eid].interpolate(pos).coords[0]))
+                anchors.setdefault(eid, []).append((pos, nid))
+            else:
+                nid = st.new_node(end_xy)
+            ends.append(nid)
+        run_specs.append((routes, run, ends[0], ends[1]))
+
+    work = []
+    for eid in sorted(usage.edge_routes):
+        routes = usage.edge_routes[eid]
+        e = index.graph.edges[eid]
+        line = index.lines[eid]
+        cov = usage.edge_cover.get(eid, (0.0, line.length))
+        cuts = sorted(anchors.get(eid, []))
+        bounds = [0.0] + [p for p, _ in cuts] + [line.length]
+        hops = [e.from_node] + [nid for _, nid in cuts] + [e.to_node]
+        for a, b, hu, hv in zip(bounds, bounds[1:], hops, hops[1:]):
+            if b - a < 0.5:
+                continue
+            piece = np.asarray(substring(line, a, b).coords)
+            work.append((hu, hv, piece, routes,
+                         max(cov[0] - a, 0.0), min(cov[1] - a, b - a)))
+    for u, v, pts, *_rest in work:
+        for nid, xy in ((u, pts[0]), (v, pts[-1])):
+            if nid not in st.nodes:
+                st.nodes[nid] = np.asarray(xy, dtype=float)
+    for routes, run, nu, nv in run_specs:
+        st.add_corr(routes, {usage.route_color[r] for r in routes},
+                    nu, nv, np.asarray(run.coords_xy))
+    st.notes.n_offgraph = len(run_specs)
+    return work
+
+
+def _build_chains(work, usage: Usage, st: _State):
+    """Maximal constant-route-set runs through degree-2 connectivity."""
+    cfg = st.cfg
+    inc: dict = {}
+    for i, (u, v, *_rest) in enumerate(work):
+        inc.setdefault(u, []).append(i)
+        inc.setdefault(v, []).append(i)
+
+    def is_break(nid) -> bool:
+        es = inc[nid]
+        if len(es) != 2:
+            return True
+        return work[es[0]][3] != work[es[1]][3]
+
+    visited = [False] * len(work)
+
+    def walk(start_edge, from_node):
+        chain = []
+        i, nid = start_edge, from_node
+        while True:
+            visited[i] = True
+            u, v, *_rest = work[i]
+            fwd = (u == nid)
+            chain.append((i, fwd))
+            nid = v if fwd else u
+            if is_break(nid):
+                return chain, nid
+            nxt = [j for j in inc[nid] if j != i]
+            if not nxt or visited[nxt[0]]:
+                return chain, nid
+            i = nxt[0]
+
+    def emit(chain, u_node, v_node):
+        routes = work[chain[0][0]][3]
+        parts = [work[i][2] if fwd else work[i][2][::-1] for i, fwd in chain]
+        pts = _dedup(np.vstack(parts))
+        # terminal trim: a chain end at a degree-1 node is a pattern
+        # terminus — cut track beyond the covered extent (+ pad)
+        if len(inc.get(u_node, ())) == 1:
+            i, fwd = chain[0]
+            elen = _cum(work[i][2])[-1]
+            start = work[i][4] if fwd else (elen - work[i][5])
+            start = max(0.0, start - cfg.terminal_trim_pad_m)
+            line = LineString(pts)
+            if 1.0 < start < line.length - 1.0:
+                pts = np.asarray(substring(line, start, line.length).coords)
+                st.nodes[u_node] = pts[0].copy()
+        if len(inc.get(v_node, ())) == 1:
+            i, fwd = chain[-1]
+            elen = _cum(work[i][2])[-1]
+            tail = (elen - work[i][5]) if fwd else work[i][4]
+            tail = max(0.0, tail - cfg.terminal_trim_pad_m)
+            line = LineString(pts)
+            if 1.0 < tail < line.length - 1.0:
+                pts = np.asarray(substring(line, 0.0, line.length - tail).coords)
+                st.nodes[v_node] = pts[-1].copy()
+        st.add_corr(routes, {usage.route_color[r] for r in routes},
+                    u_node, v_node, pts)
+
+    for nid in sorted(inc):
+        if not is_break(nid):
+            continue
+        for i in sorted(inc[nid]):
+            if not visited[i]:
+                chain, end = walk(i, nid)
+                emit(chain, nid, end)
+    for i in range(len(work)):  # pure cycles
+        if not visited[i]:
+            chain, end = walk(i, work[i][0])
+            emit(chain, work[i][0], end)
+    st.notes.n_raw_corridors = len(st.corrs)
+
+
+# ── phase 2: absorption of ridden crossovers ─────────────────────────────────
+
+
+def _absorb_crossovers(st: _State):
+    cfg = st.cfg
+    changed = True
+    while changed:
+        changed = False
+        cids = sorted(st.corrs)
+        lines = {cid: st.corrs[cid].line() for cid in cids}
+        tree = STRtree([lines[cid] for cid in cids])
+        for cid in cids:
+            c = st.corrs.get(cid)
+            if c is None or c.length > cfg.absorb_max_len_m or c.u == c.v:
+                continue
+            probe = shapely.points(c.pts[:, 0], c.pts[:, 1])
+            for j in tree.query(lines[cid], predicate="dwithin",
+                                distance=cfg.pair_gap_m):
+                p = st.corrs.get(cids[int(j)])
+                if p is None or p.cid == cid:
+                    continue
+                if not (c.routes < p.routes):
+                    continue
+                # a true crossover runs BETWEEN the partner's tracks:
+                # it never shares an endpoint node with the partner (a
+                # shared node means c is SERIES track — its removal
+                # would strand its routes) and both its endpoints
+                # project strictly inside the partner's arc
+                if {c.u, c.v} & {p.u, p.v}:
+                    continue
+                if float(shapely.distance(probe, lines[p.cid]).max()) \
+                        > cfg.pair_gap_m:
+                    continue
+                pl = lines[p.cid]
+                s_u = float(shapely.line_locate_point(
+                    pl, shapely.points(*c.pts[0])))
+                s_v = float(shapely.line_locate_point(
+                    pl, shapely.points(*c.pts[-1])))
+                if min(s_u, s_v) < 5.0 or max(s_u, s_v) > pl.length - 5.0:
+                    continue
+                st.corrs.pop(cid)
+                st.notes.n_absorbed += 1
+                changed = True
+                break
+            if changed:
+                break
+        if changed:
+            st.rechain()
+    st.drop_orphan_nodes()
+
+
+# ── phase 3: the three merges ────────────────────────────────────────────────
+
+
+def _windows(c1: Corr, c2: Corr, gap: float, step: float,
+             exc_gap: float = 0.0, exc_len: float = 0.0):
+    """Maximal arc windows along c1 where dist(c1, c2) <= gap.
+
+    exc_gap/exc_len: a between-window excursion whose gap stays <=
+    exc_gap over <= exc_len of arc joins its neighbors (flap guard).
+    """
+    pts, cum = c1.pts, _cum(c1.pts)
+    total = cum[-1]
+    n = max(2, int(total / step) + 1)
+    ts = np.linspace(0.0, total, n)
+    probe = shapely.points(np.interp(ts, cum, pts[:, 0]),
+                           np.interp(ts, cum, pts[:, 1]))
+    d = shapely.distance(probe, c2.line())
+    inside = d <= gap
+    runs = []
+    i = 0
+    while i < n:
+        if not inside[i]:
+            i += 1
+            continue
+        j = i
+        while j + 1 < n and inside[j + 1]:
+            j += 1
+        runs.append([i, j])
+        i = j + 1
+    if exc_len > 0 and len(runs) > 1:
+        merged = [runs[0]]
+        for r in runs[1:]:
+            lo, hi = merged[-1][1] + 1, r[0] - 1
+            if (ts[r[0]] - ts[merged[-1][1]]) <= exc_len \
+                    and np.all(d[lo:hi + 1] <= exc_gap):
+                merged[-1][1] = r[1]
+            else:
+                merged.append(r)
+        runs = merged
+    return [(float(ts[i]), float(ts[j])) for i, j in runs], cum
+
+
+def _window_metrics(c1: Corr, c2: Corr, a: float, b: float, step: float):
+    """(gap_mean, gap_max, bearing_mean, s_a, s_b, monotonic) for [a, b]."""
+    pts, cum = c1.pts, _cum(c1.pts)
+    n = max(3, int((b - a) / step) + 1)
+    ts = np.linspace(a, b, n)
+    p = np.column_stack([np.interp(ts, cum, pts[:, 0]),
+                         np.interp(ts, cum, pts[:, 1])])
+    line2 = c2.line()
+    probe = shapely.points(p[:, 0], p[:, 1])
+    d = shapely.distance(probe, line2)
+    s = shapely.line_locate_point(line2, probe)
+    mono = bool(np.all(np.diff(s) > -10.0) or np.all(np.diff(s) < 10.0))
+    pts2, cum2 = c2.pts, _cum(c2.pts)
+    bdiffs = [_bearing_diff_deg(_bearing(pts, cum, float(t)),
+                                _bearing(pts2, cum2, float(si)))
+              for t, si in zip(ts, s)]
+    return (float(d.mean()), float(d.max()), float(np.mean(bdiffs)),
+            float(s[0]), float(s[-1]), mono)
+
+
+def _lonlat_of(xy, epsg: int):
+    inv = Transformer.from_crs(epsg, 4326, always_xy=True)
+    lon, lat = inv.transform(xy[0], xy[1])
+    return (round(lon, 5), round(lat, 5))
+
+
+def _try_merge(st: _State, kind: str, c1: Corr, c2: Corr, epsg: int):
+    """Qualifying window between c1 and c2, or None.
+
+    Returns (kind, cid_short, cid_long, a, b, wlen, gap_mean, gap_max,
+    bearing) with [a, b] in the SHORTER corridor's arc space.
+    """
+    cfg = st.cfg
+    if c1.u == c1.v or c2.u == c2.v:
+        return None
+    if c2.length < c1.length:
+        c1, c2 = c2, c1
+    if kind == "pair":
+        gap, max_bear = cfg.pair_gap_m, cfg.merge_max_bearing_deg
+        exc_gap = exc_len = 0.0
+    elif kind == "family":
+        gap, max_bear = cfg.family_gap_m, cfg.merge_max_bearing_deg
+        exc_gap = exc_len = 0.0
+    else:
+        gap, max_bear = cfg.cross_family_gap_m, cfg.cross_family_max_bearing_deg
+        exc_gap = cfg.cross_family_excursion_gap_mult * gap
+        exc_len = cfg.cross_family_excursion_max_m
+
+    wins, cum = _windows(c1, c2, gap, cfg.midline_step_m, exc_gap, exc_len)
+    if not wins:
+        return None
+    a, b = max(wins, key=lambda w: w[1] - w[0])
+    wlen = b - a
+    len1, len2 = cum[-1], c2.length
+    base_min = min(cfg.merge_min_len_m, 0.8 * min(len1, len2))
+    if wlen < max(base_min, 1.0):
+        return None
+    gm, gx, bear, s_a, s_b, mono = _window_metrics(c1, c2, a, b,
+                                                   cfg.midline_step_m)
+    if not mono:
+        return None
+    if bear > max_bear:
+        if kind == "cross" and wlen >= cfg.cross_family_min_len_m:
+            st.notes.rejects.append(
+                ("cross_bearing", tuple(sorted(c1.routes)),
+                 tuple(sorted(c2.routes)), round(wlen, 1), round(bear, 1)))
+        return None
+    # no divergence beyond the window: at each window end at least one
+    # corridor ENDS within slack — two corridors that both continue
+    # while the gap grows are crossing/brushing, never a merge
+    slack = cfg.merge_end_slack_m
+    fwd = s_a <= s_b
+    head2 = s_a if fwd else (len2 - s_a)
+    tail2 = (len2 - s_b) if fwd else s_b
+    ends_ok = ((a <= slack or head2 <= slack)
+               and ((len1 - b) <= slack or tail2 <= slack))
+    if kind != "cross" and not ends_ok:
+        return None
+    if kind == "cross" and wlen < cfg.cross_family_min_len_m:
+        # under the sustained-bundle floor, a cross-family merge is
+        # allowed only for CO-EXTENSIVE TWINS: the window is the full
+        # mutual overlap and ends where a corridor ends (the Loop legs'
+        # two junction-to-junction one-way tracks) — a mid-corridor
+        # brush that diverges past the window (Brooklyn Bridge J/Z vs
+        # the Lexington locals) keeps failing here
+        if not ends_ok:
+            if wlen >= 150.0:
+                st.notes.rejects.append(
+                    ("cross_too_short", tuple(sorted(c1.routes)),
+                     tuple(sorted(c2.routes)), round(wlen, 1),
+                     _lonlat_of(_interp(c1.pts, cum, (a + b) / 2), epsg)))
+            return None
+    return (kind, c1.cid, c2.cid, a, b, wlen, gm, gx, bear)
+
+
+def _apply_merge(st: _State, cand, epsg: int):
+    cfg = st.cfg
+    kind, cid1, cid2, a, b, wlen, gm, gx, bear = cand
+    c1, c2 = st.corrs[cid1], st.corrs[cid2]
+    pts1, cum1 = c1.pts, _cum(c1.pts)
+    line2 = c2.line()
+
+    n = max(3, int(wlen / cfg.midline_step_m) + 1)
+    ts = np.linspace(a, b, n)
+    p1 = np.column_stack([np.interp(ts, cum1, pts1[:, 0]),
+                          np.interp(ts, cum1, pts1[:, 1])])
+    s = shapely.line_locate_point(line2, shapely.points(p1[:, 0], p1[:, 1]))
+    p2 = shapely.get_coordinates(shapely.line_interpolate_point(line2, s))
+    w1, w2 = c1.tracks, c2.tracks
+    mid = _dedup((w1 * p1 + w2 * p2) / (w1 + w2))
+    if len(mid) < 2:
+        return
+
+    routes = c1.routes if kind == "pair" else (c1.routes | c2.routes)
+    families = c1.families | c2.families
+    fwd2 = s[0] <= s[-1]
+    s_lo, s_hi = (float(min(s[0], s[-1])), float(max(s[0], s[-1])))
+
+    if wlen < 2 * cfg.tail_collapse_m:
+        # degenerate window (switch-ladder fragments): a micro midline
+        # corridor would only smear the interlocking — collapse the
+        # whole window into ONE node instead
+        n_c = st.new_node(mid[len(mid) // 2])
+        sides = [
+            (c1, a, c1.length - b, n_c, n_c),
+            (c2, s_lo, c2.length - s_hi, n_c, n_c),
+        ]
+    else:
+        n_a = st.new_node(mid[0])
+        n_b = st.new_node(mid[-1])
+        st.add_corr(routes, families, n_a, n_b, mid, c1.tracks + c2.tracks)
+        # (corridor, head_len, tail_len, node at window start, node at end)
+        sides = [
+            (c1, a, c1.length - b, n_a, n_b),
+            (c2, s_lo, c2.length - s_hi, n_a if fwd2 else n_b,
+             n_b if fwd2 else n_a),
+        ]
+    n_a, n_b = sides[0][3], sides[0][4]
+    st.corrs.pop(cid1)
+    st.corrs.pop(cid2)
+    for c, head_len, tail_len, n_head, n_tail in sides:
+        cl = c.line()
+        if head_len >= cfg.tail_collapse_m:
+            piece = np.asarray(substring(cl, 0.0, head_len).coords)
+            piece = _blend_to(piece, False, st.nodes[n_head], cfg.blend_m)
+            st.add_corr(c.routes, c.families, c.u, n_head, piece, c.tracks)
+        elif c.u not in (n_a, n_b) and c.u in st.nodes:
+            st.retarget_node(c.u, n_head)
+        if tail_len >= cfg.tail_collapse_m:
+            piece = np.asarray(substring(cl, cl.length - tail_len,
+                                         cl.length).coords)
+            piece = _blend_to(piece, True, st.nodes[n_tail], cfg.blend_m)
+            st.add_corr(c.routes, c.families, n_tail, c.v, piece, c.tracks)
+        elif c.v not in (n_a, n_b) and c.v in st.nodes:
+            st.retarget_node(c.v, n_tail)
+
+    rec = MergeRecord(
+        kind, tuple(sorted(c1.routes)), tuple(sorted(c2.routes)),
+        round(wlen, 1), round(gm, 2), round(gx, 2), round(bear, 1),
+        _lonlat_of(mid[len(mid) // 2], epsg))
+    st.notes.merges.append(rec)
+    st.log(f"merge[{kind}] {list(rec.routes_a)} + {list(rec.routes_b)} "
+           f"len={wlen:.0f}m gap={gm:.1f}/{gx:.1f}m bear={bear:.1f}deg "
+           f"@ {rec.at_lonlat}")
+
+
+def _merge_pass(st: _State, kind: str, epsg: int):
+    cfg = st.cfg
+    gap = {"pair": cfg.pair_gap_m, "family": cfg.family_gap_m,
+           "cross": cfg.cross_family_gap_m}[kind]
+    guard = 0
+    max_iter = 4 * max(len(st.corrs), 8)
+    while guard < max_iter:
+        guard += 1
+        cids = sorted(st.corrs)
+        lines = [st.corrs[cid].line() for cid in cids]
+        tree = STRtree(lines)
+        best = None
+        seen = set()
+        for ii, cid in enumerate(cids):
+            c1 = st.corrs[cid]
+            if c1.u == c1.v:
+                continue
+            for j in tree.query(lines[ii], predicate="dwithin", distance=gap):
+                cid2 = cids[int(j)]
+                pair_key = frozenset((cid, cid2))
+                if cid2 == cid or pair_key in seen:
+                    continue
+                seen.add(pair_key)
+                c2 = st.corrs[cid2]
+                if kind == "pair" and c1.routes != c2.routes:
+                    continue
+                if kind == "family" and not (c1.families == c2.families
+                                             and c1.routes != c2.routes):
+                    continue
+                if kind == "cross" and c1.families == c2.families:
+                    continue
+                cand = _try_merge(st, kind, c1, c2, epsg)
+                if cand is None:
+                    continue
+                key = (cand[5], -min(cand[1], cand[2]))
+                if best is None or key > best[0]:
+                    best = (key, cand)
+        if best is None:
+            return
+        _apply_merge(st, best[1], epsg)
+        st.rechain()
+        st.drop_orphan_nodes()
+    raise RuntimeError(f"merge pass '{kind}' exceeded {max_iter} iterations")
+
+
+# ── phase 4: switch-ladder contraction ──────────────────────────────────────
+
+
+def _contract_ladders(st: _State):
+    """Contract junction-to-junction micro corridors into single nodes.
+
+    An interlocking (Tower 18) survives the merges as a cluster of
+    junction nodes connected by switch-ladder fragments a few meters
+    long; each fragment would anchor its own stage-6 transition site and
+    the consumed-corridor merges balloon past the exam's ground-length
+    bounds. A fragment under ladder_contract_m between two junctions
+    collapses to one node at its midpoint (moving either junction by
+    less than half a merge gap — forks stay on their switches).
+    Terminal stubs and chainable deg-2 pieces are never contracted.
+    """
+    cfg = st.cfg
+    changed = True
+    while changed:
+        changed = False
+        inc = st.incidence()
+        for cid in sorted(st.corrs):
+            c = st.corrs[cid]
+            if c.u == c.v or c.length >= cfg.ladder_contract_m:
+                continue
+            if len(inc.get(c.u, ())) < 3 or len(inc.get(c.v, ())) < 3:
+                continue
+            mid = c.pts[len(c.pts) // 2]
+            n_c = st.new_node(mid)
+            u, v = c.u, c.v
+            st.corrs.pop(cid)
+            st.retarget_node(u, n_c)
+            st.retarget_node(v, n_c)
+            st.notes.n_contracted += 1
+            changed = True
+            break
+        if changed:
+            st.rechain()
+    st.drop_orphan_nodes()
+
+
+# ── assembly ─────────────────────────────────────────────────────────────────
+
+
+def build_corridor_linegraph(index: WayIndex, usage: Usage,
+                             cfg: WaygraphConfig, *, build_key: str,
+                             feed_id: str, mode: str, input_digest: str,
+                             n_input_shapes: int,
+                             verbose: bool = True) -> tuple:
+    """Usage graph -> merged corridor LineGraph. Returns (lg, notes)."""
+    t0 = time.perf_counter()
+    st = _State(cfg, verbose)
+
+    work = _split_edges_for_runs(index, usage, st)
+    _build_chains(work, usage, st)
+    st.log(f"raw: {len(st.corrs)} corridors ({st.notes.n_offgraph} off-graph "
+           f"runs) over {len(work)} used way edges")
+    st.rechain()
+    _absorb_crossovers(st)
+    st.log(f"absorbed {st.notes.n_absorbed} ridden crossovers -> "
+           f"{len(st.corrs)} corridors")
+
+    for kind in ("pair", "family", "cross"):
+        n0 = len(st.corrs)
+        _merge_pass(st, kind, index.epsg)
+        _absorb_crossovers(st)
+        st.rechain()
+        st.drop_orphan_nodes()
+        st.log(f"pass {kind}: {n0} -> {len(st.corrs)} corridors "
+               f"({sum(1 for m in st.notes.merges if m.kind == kind)} merges)")
+
+    _contract_ladders(st)
+    st.log(f"ladder contraction: {st.notes.n_contracted} micro corridors "
+           f"-> {len(st.corrs)} corridors")
+
+    inv = Transformer.from_crs(index.epsg, 4326, always_xy=True)
+    inc = st.incidence()
+    nid_order = sorted(st.nodes)
+    nid_map = {nid: i for i, nid in enumerate(nid_order)}
+    nodes = []
+    for nid in nid_order:
+        x, y = st.nodes[nid]
+        lon, lat = inv.transform(x, y)
+        deg = len(inc.get(nid, ()))
+        nodes.append(LGNode(node_id=nid_map[nid], lon=float(lon),
+                            lat=float(lat), x=float(x), y=float(y),
+                            degree=deg,
+                            kind="endpoint" if deg <= 1 else "junction"))
+    edges = []
+    for cid in sorted(st.corrs):
+        c = st.corrs[cid]
+        lons, lats = inv.transform(c.pts[:, 0], c.pts[:, 1])
+        edges.append(LGEdge(
+            edge_id=len(edges), from_node=nid_map[c.u], to_node=nid_map[c.v],
+            px_len=max(2, int(round(c.length / 2.0))), length_m=c.length,
+            coords=list(zip(map(float, lons), map(float, lats))),
+            coords_xy=[(float(x), float(y)) for x, y in c.pts],
+            families=c.families, routes=c.routes,
+        ))
+
+    lg = LineGraph(
+        format_version=FORMAT_VERSION, build_key=build_key, feed_id=feed_id,
+        mode=mode, merge_width_m=cfg.station_sliver_m, resolution_m=0.0,
+        epsg=index.epsg, origin=(0.0, 0.0), grid_shape=(0, 0), grid_bytes=0,
+        input_digest=input_digest, n_input_shapes=n_input_shapes,
+        build_seconds=time.perf_counter() - t0, nodes=nodes, edges=edges,
+    )
+    st.log(f"assembled {len(nodes)} nodes, {len(edges)} edges, "
+           f"{lg.total_length_m() / 1000:.1f} km in {lg.build_seconds:.1f}s")
+    return lg, st.notes

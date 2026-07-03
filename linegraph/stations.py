@@ -159,6 +159,7 @@ def _apply_splits(lg, splits: dict) -> dict:
                     coords=list(zip(lons, lats)),
                     coords_xy=sxy,
                     families=e.families,  # unfuse lock survives splits
+                    routes=e.routes,      # exact attribution survives too
                 )
             )
 
