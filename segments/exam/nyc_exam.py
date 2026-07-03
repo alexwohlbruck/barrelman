@@ -105,9 +105,11 @@ def report(check: str, ok: bool, detail: str = "") -> None:
 
 
 def rebuild():
+    from segments.build import load_ways
     g = load_graph(BUILD, DEFAULT_DSN)
     shapes = load_shapes(g, DEFAULT_DSN)
-    segments, info = build_segments(g, CFG, shapes=shapes)
+    ways = load_ways(g, DEFAULT_DSN)   # off-track reconciliation ground truth
+    segments, info = build_segments(g, CFG, shapes=shapes, ways=ways)
     lon0 = sum(n.lon for n in g.nodes.values()) / len(g.nodes)
     lat0 = sum(n.lat for n in g.nodes.values()) / len(g.nodes)
     proj = LocalProj(lon0, lat0)

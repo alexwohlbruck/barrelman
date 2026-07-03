@@ -129,16 +129,17 @@ def in_window(lon: float, lat: float, box=LOOP_WINDOW) -> bool:
 # ------------------------------------------------------------- rebuild
 
 def load_inputs():
-    from segments.build import load_shapes
+    from segments.build import load_shapes, load_ways
     g = load_graph(BUILD, DEFAULT_DSN)
     shapes = load_shapes(g, DEFAULT_DSN)
+    ways = load_ways(g, DEFAULT_DSN)   # off-track reconciliation ground truth
     lon0 = sum(n.lon for n in g.nodes.values()) / len(g.nodes)
     lat0 = sum(n.lat for n in g.nodes.values()) / len(g.nodes)
-    return g, shapes, LocalProj(lon0, lat0)
+    return g, shapes, ways, LocalProj(lon0, lat0)
 
 
-def rebuild_band(g, shapes, proj, cfg):
-    segments, info = build_segments(g, cfg, shapes=shapes)
+def rebuild_band(g, shapes, ways, proj, cfg):
+    segments, info = build_segments(g, cfg, shapes=shapes, ways=ways)
     for s in segments:
         s.xy = proj.to_xy(s.coords)
     return segments, info
@@ -644,9 +645,37 @@ def check3_fillets(segments, proj, chicago: bool = True,
 
 # ------------------------------------------------------------- coverage
 
-def check4_coverage(g, proj, segments, cfg: SegmentConfig = CFG):
+def _coincident_overlap(a, b, tol_m: float = 1.0) -> bool:
+    """True when lines a and b lie ON TOP of each other over their shared
+    extent — a co-track reconciliation (same-colour routes sharing one
+    physical track) renders as a single line, unlike a divergence twin
+    that runs a few metres off down a shared tail (fillets). Measured as
+    the Hausdorff distance of the part of a within 2 m of b to b: ~0 for
+    coincident lines, metres for offset twins. Metres are aeqd-projected
+    (a, b are xy already)."""
+    stretch = a.intersection(b.buffer(2.0))
+    if getattr(stretch, "length", 0.0) <= 1.0:
+        return False
+    return stretch.hausdorff_distance(b) <= tol_m
+
+
+def check4_coverage(g, proj, segments, cfg: SegmentConfig = CFG, ways=None):
     print("\nCHECK 4 — per-ribbon coverage + overlaps")
     from shapely.geometry import LineString
+
+    # reconcile corridors the SAME way build_segments did (an off-track
+    # corridor adopting a curved sibling changes length) and note the
+    # sibling-reconciled cids: their steady features COINCIDE with the
+    # adopted sibling and are redundant (drop from both coverage sums).
+    rec_info: dict = {}
+    corridors = walk_corridors(g, cfg.gap_px)
+    if ways:
+        from segments.segment import reconcile_offtrack_corridors
+        ways_xy = [LineString(proj.to_xy(w)) for w in ways if len(w) >= 2]
+        reconcile_offtrack_corridors(corridors, ways_xy, proj, cfg, rec_info)
+    sibling_cids = {cid for cid, (m, *_r)
+                    in rec_info.get("track_reconciled", {}).items()
+                    if m == "sibling"}
 
     by_ck = defaultdict(list)
     for s in segments:
@@ -684,7 +713,32 @@ def check4_coverage(g, proj, segments, cfg: SegmentConfig = CFG):
                 # the raster's blob junctions never pushed past len/2.
                 branch = (shared_site
                           and ov <= cfg.transition_len_m + 1e-6)
-                if branch:
+                # Co-track reconciliation (PAR-12 15 St-Prospect Park): a
+                # route riding the SAME physical track as a same-colour
+                # sibling whose off-graph agency-bridged geometry was
+                # reconciled onto that track (FX adopting the F local's
+                # curve) becomes COINCIDENT with it — Hausdorff ~ 0 over
+                # the whole overlap. Same colour_key => the display
+                # collapses them to ONE ribbon (they render as a single
+                # line at one offset), so a coincident overlap is not the
+                # parallel duplicate-centerline bug check4 guards against
+                # (offset twins DON'T geometrically intersect; nyc_exam's
+                # window sweep polices the parallel case separately). A
+                # true divergence twin runs a few metres apart down the
+                # shared tail (fillets) — its Hausdorff over the overlap
+                # is metres, not ~0 — so this exception is disjoint from
+                # the branch-tail allowance above.
+                coincident = (not branch and ov > 1.0
+                              and _coincident_overlap(geoms[i], geoms[j]))
+                if coincident:
+                    # a co-track pair renders as one line; the redundant
+                    # (sibling-reconciled) feature is dropped from the
+                    # coverage sums below, so this overlap is legitimate
+                    n_allowed += 1
+                    print(f"  co-track reconciliation: {ck} segs "
+                          f"{a.seg_id}/{b.seg_id} coincident {ov:.1f} m "
+                          f"(shared track, renders as one ribbon)")
+                elif branch:
                     # the genuinely double-drawn length is measured by
                     # BUF_M proximity, not vertex-exact intersection —
                     # corner fillets pull the twins a few metres apart
@@ -714,15 +768,30 @@ def check4_coverage(g, proj, segments, cfg: SegmentConfig = CFG):
     # in the 1% slack; 480 m band: up to 240 m per divergence site —
     # subtract it so the bound keeps catching genuine over/under
     # coverage at every band)
-    corridors = walk_corridors(g, cfg.gap_px)
+    # walk corridors and reconcile them onto the real track the SAME way
+    # build_segments did, so the corridor lengths match the emitted
+    # features' source geometry (an off-track corridor reconciled onto a
+    # curved sibling changes length — a straight FX chord becomes the F
+    # local's longer curve; measuring against the un-reconciled chord
+    # would spuriously fail coverage)
+    # A co-track reconciliation (FX adopting the F local's curve) makes
+    # two same-colour corridors COINCIDENT — one physical line drawn
+    # twice. It renders as one ribbon, so it must count ONCE: drop the
+    # reconciled (redundant) corridor from cor_sum and its features from
+    # seg_sum, together, so the pair nets to a single line's coverage
+    # instead of reading as 2x over- or under-covered.
     cor_sum: dict = defaultdict(float)
     for c in corridors:
+        if c.cid in sibling_cids:
+            continue  # redundant: coincides with its adopted sibling
         xy = proj.to_xy(c.coords)
         length = sum(math.dist(a, b) for a, b in zip(xy, xy[1:]))
         for r in c.ribbons:
             cor_sum[r.color_key] += length
     seg_sum: dict = defaultdict(float)
     for s in segments:
+        if s.corridor_id in sibling_cids:
+            continue  # the co-track twin's redundant feature(s)
         seg_sum[s.color_key] += s.len_m
     bad_cov = []
     for ck in sorted(cor_sum):
@@ -826,7 +895,7 @@ def main() -> int:
             ap.error(f"no band with min_zoom {args.band} in {CFG.bands}")
 
     print(f"segments acceptance exam — build {BUILD}\ndsn {DEFAULT_DSN}")
-    g, shapes, proj = load_inputs()
+    g, shapes, ways, proj = load_inputs()
     site_checks = True
     default_segments = None
     global BAND_TAG
@@ -837,7 +906,7 @@ def main() -> int:
         print(f"\n{'#' * 64}\nBAND z{band_minzoom}..{band_maxzoom} — "
               f"transition {length:.0f} m"
               + (" (default band)" if default_band else ""))
-        segments, info = rebuild_band(g, shapes, proj, bcfg)
+        segments, info = rebuild_band(g, shapes, ways, proj, bcfg)
         print(f"rebuilt {len(segments)} features "
               f"({sum(1 for s in segments if s.kind == 'steady')} steady, "
               f"{sum(1 for s in segments if s.kind == 'transition')} "
@@ -852,7 +921,7 @@ def main() -> int:
                            info.get("site_len_clamped"))
         check3_fillets(segments, proj, chicago, bcfg, band_minzoom,
                        default_band)
-        check4_coverage(g, proj, segments, bcfg)
+        check4_coverage(g, proj, segments, bcfg, ways=ways)
 
     BAND_TAG = f"band z{DEFAULT_BAND}: "
     if chicago and default_segments is not None:
