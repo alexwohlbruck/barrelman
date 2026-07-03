@@ -170,6 +170,29 @@ Per (mode-class, region cell), from *matched* shapes:
   over the contraction bound — the 21 m 4/5×N/R/W rung at Fulton St): stage 5's
   raw-slot corridor stability relies on corridors arriving as single aligned edges,
   and line-less rows only inflate `transit_graph_edges` for consumers that skip them.
+- **Corridor unfuse** (`linegraph.unfuse`, default ON, `--no-unfuse`): the raster
+  also fuses corridors of physically SEPARATE systems whenever their strokes touch
+  (J/Z passing 7-8 m from the Lexington locals at Brooklyn Bridge-City Hall; the
+  4/5 Joralemon tube plan-crossing the N/R/W Montague tube at Whitehall). Between
+  the skeleton and the refit, fused runs carrying ≥2 color families are tested with
+  the BOTH-SIDES ESCAPE rule measured on the families' own matched-shape evidence:
+  split only when the gap exceeds the merge width within 250 m of closest approach
+  on both sides, from both families' perspectives. Crossings and tangent kisses
+  escape; forks, shared track, same-trench bundles (Queens Blvd), stacked
+  structures (Queensboro Plaza) and side-by-side tunnels under one street
+  (B/Q beside 2/3/4/5 under Flatbush; the Lake-leg Blue bundling the loop exam
+  pins) stay close on at least one side forever and keep their fusion. Split
+  zones are rebuilt as one edge per family group from the group's own evidence
+  (cluster-weighted), boundary nodes duplicated per group, external edges
+  rewired, chains re-oriented head-to-tail, and the new edges carry a FAMILY
+  LOCK that the refit's evidence collection and the final attribution honor —
+  through the erstwhile blob the corridors run within a merge width and
+  sample-level attribution cannot tell them apart (the Q grazing the 6th Av
+  corridor through Herald Sq). Platform carving (erasing `railway=platform`
+  polygons from the ink grid) was evaluated for Brooklyn Bridge and REJECTED on
+  data: the platforms there measure 3.7-4.5 m inscribed width, none lies in the
+  J/Z-to-local gap (a wall does), and carving the polygons that do exist would
+  split the green local/express groups around their island platforms instead.
 - **Shape-evidence geometry refit** (`linegraph.refit`, default ON, `--no-refit`):
   the skeleton is authoritative TOPOLOGY but lossy GEOMETRY — at X/T junctions the
   crossing track's ink bulges the blob and the medial axis bows the through-corridor
@@ -277,7 +300,7 @@ MLNCM-S per the LOOM TSAS 2019 paper, implemented in `lineorder/` (replaces the
   the corridor-stability invariant above (pinned by
   `lineorder/tests/test_synthetic.py::test_p1_station_flanked_corridor_stability`;
   chicago:l-v3 is unaffected — a direct unreduced CP-SAT solve matches the
-  cascade at 116.0 with zero deg-2 cost).
+  cascade, 110.0 in the cluster-weighted-refit era, with zero deg-2 cost).
 
 #### Stability exam (stage-5 acceptance)
 
