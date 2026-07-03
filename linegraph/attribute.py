@@ -60,6 +60,18 @@ DEFAULT_SAMPLE_M = 15.0
 # this the edge is excised from the pattern (see module docstring)
 DEVIATION_GATE_M = 50.0
 EDGE_SAMPLE_M = 25.0  # densification step for the gate's edge probes
+# coverage gate (final attribution only): a genuinely ridden edge has
+# the pattern's shape within ~a merge width along its WHOLE length
+# (corridor half-width + junction displacement), while a GRAZED
+# crossing edge is near the shape only around the crossing point — a
+# shallow crossing long enough to beat the bleed filter but angled
+# enough that its far ends stay under DEVIATION_GATE_M slips the
+# max-deviation gate (the Q claiming the unfused 6th Av corridor edge
+# through Herald Sq: 3-4 samples, max deviation ~33 m — inside the
+# 36 m snap radius too, which is why coverage probes at merge width).
+# Runs on the station-split graph, where patterns end at station
+# nodes, so genuine edges probe near-100%.
+COVERAGE_GATE_MIN = 0.7
 
 
 @dataclass(slots=True, frozen=True)
@@ -164,8 +176,16 @@ class EdgeSnapIndex:
 def attribute_shape_xy(index: EdgeSnapIndex, shape_xy, *,
                        sample_m: float = DEFAULT_SAMPLE_M,
                        snap_radius_m: float | None = None,
-                       deviation_gate_m: float = DEVIATION_GATE_M):
+                       deviation_gate_m: float = DEVIATION_GATE_M,
+                       coverage_gate: bool = False):
     """One projected shape through the full sample-snap-chain-gate core.
+
+    coverage_gate additionally excises chained edges whose densified
+    probes sit within snap radius of the shape for less than
+    COVERAGE_GATE_MIN of their length (grazed shallow crossings — see
+    the constant's comment). Enabled for the FINAL attribution only:
+    the coarse passes run pre-station-split, where patterns routinely
+    end mid-edge and would under-cover their terminal edges.
 
     Returns (ridden edge positions, n_samples, n_unmatched, n_excised).
     """
@@ -191,11 +211,15 @@ def attribute_shape_xy(index: EdgeSnapIndex, shape_xy, *,
     shapely.prepare(shape_line)
     ridden, n_excised = [], 0
     for eid in sorted(set(chain)):
-        dmax = float(shapely.distance(index.probes_for(eid), shape_line).max())
-        if dmax <= deviation_gate_m:
-            ridden.append(eid)
-        else:
+        dists = shapely.distance(index.probes_for(eid), shape_line)
+        if float(dists.max()) > deviation_gate_m:
             n_excised += 1
+            continue
+        if coverage_gate and float(
+                (dists <= lg.merge_width_m).mean()) < COVERAGE_GATE_MIN:
+            n_excised += 1
+            continue
+        ridden.append(eid)
     return ridden, len(points), int((nearest < 0).sum()), n_excised
 
 
@@ -271,7 +295,8 @@ def _chain_edges(seq, lg, edge_nodes, node_edges):
 def attribute_patterns(lg, patterns, feed_id: str, routes_meta=None, *,
                        sample_m: float = DEFAULT_SAMPLE_M,
                        snap_radius_m: float | None = None,
-                       deviation_gate_m: float = DEVIATION_GATE_M):
+                       deviation_gate_m: float = DEVIATION_GATE_M,
+                       coverage_gate: bool = True):
     """Attribute every pattern's shape to skeleton edges.
 
     Returns (edge_routes, stats):
@@ -294,6 +319,7 @@ def attribute_patterns(lg, patterns, feed_id: str, routes_meta=None, *,
         ridden, n_samples, n_unmatched, n_excised = attribute_shape_xy(
             index, list(zip(xs, ys)), sample_m=sample_m,
             snap_radius_m=snap_radius_m, deviation_gate_m=deviation_gate_m,
+            coverage_gate=coverage_gate,
         )
         stats.append(
             PatternAttribution(p.key, p.route_id, n_samples, n_unmatched,
@@ -309,7 +335,11 @@ def attribute_patterns(lg, patterns, feed_id: str, routes_meta=None, *,
             route_color=meta.get("color", p.route_color),
             route_text_color=meta.get("text_color", ""),
         )
+        color_key = info.route_color.strip() or f"rid:{p.route_id}"
         for eid in ridden:
+            lock = lg.edges[eid].families
+            if lock is not None and color_key not in lock:
+                continue  # unfused corridor: foreign family never lands
             edge_routes.setdefault(eid, {}).setdefault(
                 (feed_id, p.route_id), info
             )
