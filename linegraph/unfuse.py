@@ -246,6 +246,66 @@ def _zone_path(zone, edge_nodes, lg, start, goal):
     return coords
 
 
+def _normalize_chain_orientation(lg) -> int:
+    """Orient every maximal degree-2 chain head-to-tail.
+
+    Stage 5's raw-slot corridor stability reads slots in the storage
+    direction, so a head-to-head edge pair mid-corridor mirrors slots.
+    Pre-station graphs have no degree-2 nodes except the attachment
+    nodes the surgery just created (vector.cleanup merges the rest), so
+    flips here cannot disturb any other chain. Returns edges flipped.
+    """
+    inc: dict = {}
+    for pos, e in enumerate(lg.edges):
+        inc.setdefault(e.from_node, []).append(pos)
+        if e.to_node != e.from_node:
+            inc.setdefault(e.to_node, []).append(pos)
+    deg2 = {nid for nid, lst in inc.items()
+            if len(lst) == 2 and lst[0] != lst[1]}
+
+    def flip(e):
+        e.from_node, e.to_node = e.to_node, e.from_node
+        e.coords = list(reversed(e.coords))
+        e.coords_xy = list(reversed(e.coords_xy))
+
+    visited: set = set()
+    n_flipped = 0
+    for seed in range(len(lg.edges)):
+        if seed in visited:
+            continue
+        e0 = lg.edges[seed]
+        if e0.from_node == e0.to_node:
+            visited.add(seed)
+            continue
+        # walk to the chain head (or back to the seed on a pure cycle)
+        pos, nid = seed, e0.from_node
+        seen = {seed}
+        while nid in deg2:
+            prev = [p for p in inc[nid] if p != pos]
+            if not prev or prev[0] in seen:
+                break
+            pos = prev[0]
+            seen.add(pos)
+            e = lg.edges[pos]
+            nid = e.from_node if e.to_node == nid else e.to_node
+        # orient the chain from the head onward
+        cur_pos, cur_node = pos, nid
+        while True:
+            e = lg.edges[cur_pos]
+            if e.from_node != cur_node:
+                flip(e)
+                n_flipped += 1
+            visited.add(cur_pos)
+            cur_node = e.to_node
+            if cur_node not in deg2:
+                break
+            nxt = [p for p in inc[cur_node] if p != cur_pos]
+            if not nxt or nxt[0] in visited:
+                break
+            cur_pos = nxt[0]
+    return n_flipped
+
+
 def unfuse_corridors(lg, shapes_lonlat, families, *, verbose=True):
     """Detect and split separable fused corridors. Mutates lg in place.
 
@@ -275,6 +335,10 @@ def unfuse_corridors(lg, shapes_lonlat, families, *, verbose=True):
             fam_uf.union(fams[0], f)
     fam_of_shape = [fam_uf.find(sorted(f)[0]) if f else None
                     for f in families]
+    fam_members: dict = {}  # root family -> every color_key united in it
+    for fams in families:
+        for f in fams:
+            fam_members.setdefault(fam_uf.find(f), set()).add(f)
 
     # coarse attribution on the raw skeleton
     index = EdgeSnapIndex(lg)
@@ -417,6 +481,23 @@ def unfuse_corridors(lg, shapes_lonlat, families, *, verbose=True):
                 reason = f"group {fams} evidence produced no contributions"
                 break
             geom = _cluster_weighted_mean(contribs)
+            # store the edge HEAD-TO-TAIL with its corridor neighbors —
+            # stage 5's raw-slot corridor stability reads slots in the
+            # storage direction, so a head-to-head edge mid-corridor
+            # would mirror every slot (lineorder stability exam)
+            gext = {
+                nid: [p for p in boundary[nid]
+                      if group_of_fam.get(
+                          edge_fams.get(p, [None])[0]) == gi]
+                for nid, _ in attach[gi]
+            }
+            fwd = (sum(1 for p in gext[na] if lg.edges[p].to_node == na)
+                   + sum(1 for p in gext[nb] if lg.edges[p].from_node == nb))
+            rev = (sum(1 for p in gext[na] if lg.edges[p].from_node == na)
+                   + sum(1 for p in gext[nb] if lg.edges[p].to_node == nb))
+            if rev > fwd:
+                na, nb = nb, na
+                geom = geom[::-1]
             group_edges.append((gi, fams, na, nb, geom))
         if reason is not None:
             stats.n_skipped += 1
@@ -450,7 +531,7 @@ def unfuse_corridors(lg, shapes_lonlat, families, *, verbose=True):
         remove |= zone_set
         for gi, fams, na, nb, geom in group_edges:
             ends = {}
-            for (nid, _), pt in zip(attach[gi], (geom[0], geom[-1])):
+            for nid, pt in ((na, geom[0]), (nb, geom[-1])):
                 if gi == 0:
                     node_moves[nid] = pt
                     ends[nid] = nid
@@ -473,6 +554,13 @@ def unfuse_corridors(lg, shapes_lonlat, families, *, verbose=True):
                 px_len=max(2, int(LineString(sxy).length / lg.resolution_m)),
                 length_m=float(LineString(sxy).length),
                 coords=list(zip(lons, lats)), coords_xy=sxy,
+                # family lock: through the erstwhile blob both corridors
+                # run within a merge width, so sample-level attribution
+                # cannot tell them apart (the Q claiming the 6th Av
+                # corridor through Herald Sq) — the surgery KNOWS whose
+                # corridor this is
+                families=frozenset().union(
+                    *(fam_members[f] for f in fams)),
             ))
 
     lg.nodes = sorted(lg.nodes + new_nodes, key=lambda n: n.node_id)
@@ -522,6 +610,11 @@ def unfuse_corridors(lg, shapes_lonlat, families, *, verbose=True):
     lg.nodes = [n for n in lg.nodes if deg.get(n.node_id)]
     for n in lg.nodes:
         n.degree = deg[n.node_id]
+
+    n_flipped = _normalize_chain_orientation(lg)
+    if n_flipped:
+        log(f"re-oriented {n_flipped} edge(s) head-to-tail along the new "
+            f"corridors")
     return stats
 
 

@@ -20,7 +20,9 @@ from pathlib import Path
 # 2: shape-evidence refit era (linegraph.refit). The cache still holds
 #    the RAW skeleton only, but phase-B geometry semantics changed, so
 #    pre-refit caches must never masquerade as current v3 artifacts.
-FORMAT_VERSION = 2
+# 3: corridor-unfuse era (linegraph.unfuse). LGEdge grew the `families`
+#    lock slot; caches pickled without it would raise on access.
+FORMAT_VERSION = 3
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CACHE_DIR = REPO_ROOT / "data" / "linegraph"
@@ -46,6 +48,9 @@ class LGEdge:
     length_m: float         # simplified geometry length (meters)
     coords: list            # [(lon, lat), ...] simplified + smoothed
     coords_xy: list = field(default_factory=list)  # projected twin of coords
+    families: frozenset | None = None  # unfuse family lock: only these
+    #                       color_keys may attribute/refit onto the edge
+    #                       (None = unrestricted; survives station splits)
 
 
 @dataclass(slots=True)

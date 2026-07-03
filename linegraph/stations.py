@@ -158,6 +158,7 @@ def _apply_splits(lg, splits: dict) -> dict:
                     length_m=piece.length,
                     coords=list(zip(lons, lats)),
                     coords_xy=sxy,
+                    families=e.families,  # unfuse lock survives splits
                 )
             )
 
