@@ -72,6 +72,11 @@ class WaygraphConfig:
     # ── corridor merges ──
     pair_gap_m: float = 15.0       # merge 1: directional pair (identical route sets)
     family_gap_m: float = 25.0     # merge 2: same colour family, different sets
+    family_sustained_min_m: float = 450.0  # a family co-run this long merges
+    #                                even when both corridors continue past
+    #                                the window (local/express diverging at
+    #                                a real fork — the 7th Av 1 vs 2/3);
+    #                                kisses/crossings stay far below this
     cross_family_gap_m: float = 10.0   # merge 3: cross-family proximity bundle
     cross_family_min_len_m: float = 450.0  # ...sustained at least this long
     cross_family_excursion_gap_mult: float = 2.0  # brief excursions allowed...
@@ -100,7 +105,7 @@ class WaygraphConfig:
 # changes (2: series-safe absorption + collapse-safe retargets; 3: cross
 # co-extensive-twin rule + ladder contraction; 4: gap-scaled coverage-
 # biased connectivity repair + phantom-component pruning)
-CONFIG_FORMAT_VERSION = 5
+CONFIG_FORMAT_VERSION = 11
 
 
 def config_digest_token(cfg: WaygraphConfig) -> str:
@@ -262,18 +267,6 @@ def reconstruct_pattern(index: WayIndex, key: str, route_id: str, shape_xy,
         u = _interval_union(ivals)
         edges[eid] = (u[0][0], u[-1][1], sum(hi - lo for lo, hi in u))
 
-    member = set()
-    for eid, (lo, hi, cov_len) in edges.items():
-        elen = index.lines[eid].length
-        if cov_len >= min(cfg.edge_member_min_m, 0.9 * elen) \
-                or cov_len >= cfg.edge_member_frac * elen:
-            member.add(eid)
-
-    shape_line = LineString(shape_xy)
-    shapely.prepare(shape_line)
-    _repair_connectivity(index, member, set(edges), nearest, shape_line, cfg)
-    _prune_dangles(index, member, nearest, cfg)
-
     # off-graph runs: contiguous unsnapped sample spans
     runs = []
     cum = np.concatenate([[0.0], np.cumsum(
@@ -300,6 +293,36 @@ def reconstruct_pattern(index: WayIndex, key: str, route_id: str, shape_xy,
                 end_anchor=_anchor(hi) if nearest[hi] >= 0 else None,
             ))
         i = j
+
+    # membership: a mid-route edge is ridden end-to-end, so it must be
+    # covered for >= edge_member_frac of its length (a long foreign edge
+    # sharing only its first 25 m of alignment must NOT ride — the G
+    # once claimed 3.4 km of Culver express that way). Only edges a
+    # pattern legitimately enters PARTWAY get the lenient absolute
+    # floor: the first/last edges (pattern termini) and off-run anchor
+    # edges (the bridge leaves mid-edge; the anchor splits them later).
+    snapped = nearest[nearest >= 0]
+    lenient = set()
+    if len(snapped):
+        lenient.update((int(snapped[0]), int(snapped[-1])))
+    for run in runs:
+        for anchor in (run.start_anchor, run.end_anchor):
+            if anchor is not None:
+                lenient.add(anchor[0])
+    member = set()
+    for eid, (lo, hi, cov_len) in edges.items():
+        elen = index.lines[eid].length
+        if cov_len >= cfg.edge_member_frac * elen:
+            member.add(eid)
+        elif eid in lenient and cov_len >= min(cfg.edge_member_min_m,
+                                               0.9 * elen):
+            member.add(eid)
+
+    shape_line = LineString(shape_xy)
+    shapely.prepare(shape_line)
+    _repair_connectivity(index, member, set(edges), nearest, samples,
+                         shape_line, cfg)
+    _prune_dangles(index, member, nearest, cfg)
     return PatternCover(
         pattern_key=key, route_id=route_id,
         edges={eid: (lo, hi) for eid, (lo, hi, _c) in edges.items()},
@@ -309,7 +332,7 @@ def reconstruct_pattern(index: WayIndex, key: str, route_id: str, shape_xy,
 
 
 def _repair_connectivity(index: WayIndex, member: set, covered: set, nearest,
-                         shape_line, cfg: WaygraphConfig):
+                         samples, shape_line, cfg: WaygraphConfig):
     """Reconnect consecutive ridden edges that share no node.
 
     Dijkstra over way edges restricted to edges hugging the shape
@@ -325,12 +348,16 @@ def _repair_connectivity(index: WayIndex, member: set, covered: set, nearest,
     """
     import heapq
 
-    seq = []
-    for eid in nearest:
-        if eid >= 0 and int(eid) in member and (not seq or seq[-1] != int(eid)):
-            seq.append(int(eid))
+    seq = []  # (edge_id, first sample idx, last sample idx) per run
+    for i, eid in enumerate(nearest):
+        if eid < 0 or int(eid) not in member:
+            continue
+        if seq and seq[-1][0] == int(eid):
+            seq[-1][2] = i
+        else:
+            seq.append([int(eid), i, i])
     seen_pairs = set()
-    for e1, e2 in zip(seq, seq[1:]):
+    for (e1, _f1, l1), (e2, f2, _l2) in zip(seq, seq[1:]):
         a = index.graph.edges[e1]
         b = index.graph.edges[e2]
         n1 = {a.from_node, a.to_node}
@@ -338,6 +365,26 @@ def _repair_connectivity(index: WayIndex, member: set, covered: set, nearest,
         if n1 & n2 or (e1, e2) in seen_pairs:
             continue
         seen_pairs.add((e1, e2))
+        # the gap's LOCAL stretch of the shape: candidate edges must hug
+        # it everywhere — a whole-edge min-distance test would admit a
+        # kilometers-long foreign edge that merely grazes the shape at
+        # one junction (the G claiming Culver express track 310 m out)
+        lo = max(0, l1 - 12)
+        hi = min(len(samples) - 1, f2 + 12)
+        local = LineString(samples[lo:hi + 1]) if hi - lo >= 1 else shape_line
+        shapely.prepare(local)
+        hug_cache: dict = {}
+
+        def hugs(ei) -> bool:
+            v = hug_cache.get(ei)
+            if v is None:
+                pts = shapely.points(densify_xy(
+                    np.asarray(index.lines[ei].coords), 25.0))
+                v = float(shapely.distance(pts, local).max()) \
+                    <= cfg.repair_shape_tol_m
+                hug_cache[ei] = v
+            return v
+
         gap_m = min(
             math.hypot(index.node_xy[x][0] - index.node_xy[y][0],
                        index.node_xy[x][1] - index.node_xy[y][1])
@@ -364,7 +411,7 @@ def _repair_connectivity(index: WayIndex, member: set, covered: set, nearest,
                                   else 4.0)
                 if true_len[n] + e.length_m > cap:
                     continue
-                if shape_line.distance(index.lines[ei]) > cfg.repair_shape_tol_m:
+                if not hugs(ei):
                     continue
                 m = e.to_node if e.from_node == n else e.from_node
                 nd = d + w

@@ -486,8 +486,16 @@ def _window_metrics(c1: Corr, c2: Corr, a: float, b: float, step: float):
     bdiffs = [_bearing_diff_deg(_bearing(pts, cum, float(t)),
                                 _bearing(pts2, cum2, float(si)))
               for t, si in zip(ts, s)]
+    # projected SPAN on c2 from the extreme s values, not the endpoint
+    # samples: a window overhanging c2's end clamps its end projections
+    # to c2's terminus, and treating those as the span corrupted the
+    # tail bookkeeping (the 7 km straight N/R/W edge across the East
+    # River). fwd = the projection TREND (half-mean comparison — robust
+    # to endpoint clamping).
+    half = max(1, len(s) // 2)
+    fwd = bool(np.mean(s[half:]) >= np.mean(s[:half]))
     return (float(d.mean()), float(d.max()), float(np.mean(bdiffs)),
-            float(s[0]), float(s[-1]), mono)
+            float(s.min()), float(s.max()), fwd, mono)
 
 
 def _lonlat_of(xy, epsg: int):
@@ -518,6 +526,27 @@ def _try_merge(st: _State, kind: str, c1: Corr, c2: Corr, epsg: int):
         exc_gap = cfg.cross_family_excursion_gap_mult * gap
         exc_len = cfg.cross_family_excursion_max_m
 
+    # co-terminal twins: two tracks of ONE service between the same two
+    # junction areas (the 5's directional tracks around the Mott Haven
+    # wye) are a closed two-track loop and must render as one line even
+    # where they bow apart beyond pair_gap mid-span — otherwise the
+    # ribbon becomes a theta graph and stage 6's walk shears offsets.
+    # Endpoints need not be the same node (each track has its own
+    # switch); they must correspond within a switch-ladder's reach.
+    if kind == "pair" and c1.u != c1.v and c2.u != c2.v:
+        if max(c1.length, c2.length) <= 1.35 * min(c1.length, c2.length):
+            e1a, e1b = c1.pts[0], c1.pts[-1]
+            e2a, e2b = c2.pts[0], c2.pts[-1]
+            straight = min(
+                max(np.hypot(*(e1a - e2a)), np.hypot(*(e1b - e2b))),
+                max(np.hypot(*(e1a - e2b)), np.hypot(*(e1b - e2a))))
+            if straight <= 35.0:
+                gm, gx, bear, s_lo, s_hi, fwd, mono = _window_metrics(
+                    c1, c2, 0.0, c1.length, cfg.midline_step_m)
+                if mono and gx <= 4.0 * gap:
+                    return (kind, c1.cid, c2.cid, 0.0, c1.length, c1.length,
+                            gm, gx, bear)
+
     wins, cum = _windows(c1, c2, gap, cfg.midline_step_m, exc_gap, exc_len)
     if not wins:
         return None
@@ -527,9 +556,14 @@ def _try_merge(st: _State, kind: str, c1: Corr, c2: Corr, epsg: int):
     base_min = min(cfg.merge_min_len_m, 0.8 * min(len1, len2))
     if wlen < max(base_min, 1.0):
         return None
-    gm, gx, bear, s_a, s_b, mono = _window_metrics(c1, c2, a, b,
-                                                   cfg.midline_step_m)
+    gm, gx, bear, s_lo, s_hi, fwd, mono = _window_metrics(c1, c2, a, b,
+                                                          cfg.midline_step_m)
     if not mono:
+        return None
+    # the window must map onto a comparable arc of c2 — a projected span
+    # much shorter than the window means c1 merely brushes past c2's
+    # terminus (projections clamp there), not that they co-run
+    if (s_hi - s_lo) < 0.5 * wlen:
         return None
     if bear > max_bear:
         if kind == "cross" and wlen >= cfg.cross_family_min_len_m:
@@ -541,12 +575,18 @@ def _try_merge(st: _State, kind: str, c1: Corr, c2: Corr, epsg: int):
     # corridor ENDS within slack — two corridors that both continue
     # while the gap grows are crossing/brushing, never a merge
     slack = cfg.merge_end_slack_m
-    fwd = s_a <= s_b
-    head2 = s_a if fwd else (len2 - s_a)
-    tail2 = (len2 - s_b) if fwd else s_b
+    head2 = s_lo if fwd else (len2 - s_hi)
+    tail2 = (len2 - s_hi) if fwd else s_lo
     ends_ok = ((a <= slack or head2 <= slack)
                and ((len1 - b) <= slack or tail2 <= slack))
-    if kind != "cross" and not ends_ok:
+    if kind == "pair" and not ends_ok:
+        return None
+    if kind == "family" and not ends_ok \
+            and wlen < cfg.family_sustained_min_m:
+        # local/express of one family genuinely co-run for kilometers
+        # and then BOTH continue past a real fork (7th Av: the 1 to
+        # South Ferry, the 2/3 to Brooklyn) — a sustained window merges
+        # anyway; kisses and crossings never last this long
         return None
     if kind == "cross" and wlen < cfg.cross_family_min_len_m:
         # under the sustained-bundle floor, a cross-family merge is
@@ -585,8 +625,11 @@ def _apply_merge(st: _State, cand, epsg: int):
 
     routes = c1.routes if kind == "pair" else (c1.routes | c2.routes)
     families = c1.families | c2.families
-    fwd2 = s[0] <= s[-1]
-    s_lo, s_hi = (float(min(s[0], s[-1])), float(max(s[0], s[-1])))
+    # extreme projections + trend, NOT endpoint samples (see
+    # _window_metrics: endpoint projections clamp at c2's termini)
+    half = max(1, len(s) // 2)
+    fwd2 = bool(np.mean(s[half:]) >= np.mean(s[:half]))
+    s_lo, s_hi = float(s.min()), float(s.max())
 
     if wlen < 2 * cfg.tail_collapse_m:
         # degenerate window (switch-ladder fragments): a micro midline
@@ -612,15 +655,21 @@ def _apply_merge(st: _State, cand, epsg: int):
     st.corrs.pop(cid2)
     for c, head_len, tail_len, n_head, n_tail in sides:
         cl = c.line()
+        head_len = min(max(head_len, 0.0), cl.length)
+        tail_len = min(max(tail_len, 0.0), cl.length)
+        piece = None
         if head_len >= cfg.tail_collapse_m:
             piece = np.asarray(substring(cl, 0.0, head_len).coords)
+        if piece is not None and len(_dedup(piece)) >= 2:
             piece = _blend_to(piece, False, st.nodes[n_head], cfg.blend_m)
             st.add_corr(c.routes, c.families, c.u, n_head, piece, c.tracks)
         elif c.u not in (n_a, n_b) and c.u in st.nodes:
             st.retarget_node(c.u, n_head)
+        piece = None
         if tail_len >= cfg.tail_collapse_m:
             piece = np.asarray(substring(cl, cl.length - tail_len,
                                          cl.length).coords)
+        if piece is not None and len(_dedup(piece)) >= 2:
             piece = _blend_to(piece, True, st.nodes[n_tail], cfg.blend_m)
             st.add_corr(c.routes, c.families, n_tail, c.v, piece, c.tracks)
         elif c.v not in (n_a, n_b) and c.v in st.nodes:
@@ -742,7 +791,10 @@ def build_corridor_linegraph(index: WayIndex, usage: Usage,
     st.log(f"absorbed {st.notes.n_absorbed} ridden crossovers -> "
            f"{len(st.corrs)} corridors")
 
-    for kind in ("pair", "family", "cross"):
+    # the trailing second "pair" sweep catches directional twins that
+    # only exist as TAILS of family/cross merges (the Mott Haven wye
+    # legs materialize when the 4/5 trunk merge splits its tails)
+    for kind in ("pair", "family", "cross", "pair"):
         n0 = len(st.corrs)
         _merge_pass(st, kind, index.epsg)
         _absorb_crossovers(st)
