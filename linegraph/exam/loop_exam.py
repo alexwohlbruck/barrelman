@@ -420,11 +420,20 @@ def check5_junction_inventory(cur) -> None:
         print(f"  node {loom_id} deg={degree} ({lon:.5f}, {lat:.5f})"
               f"{' [' + label + ']' if label else ''} routes {{{routes}}}")
 
+    # Way-graph-era calibration (PAR-12 v3 stage-4 rebuild): junctions are
+    # the REAL switch nodes, and Tower 18 is a grand-union interlocking —
+    # a ladder of switches spread over ~60 m, not one point. The raster
+    # skeleton collapsed it to a single blob node (the old `== 1` pin);
+    # the exact build must show the interlocking CORE (a degree>=4 node
+    # where the Lake and Wells bundles meet) plus a small switch cluster,
+    # and nothing more — a smeared/duplicated junction would inflate the
+    # cluster beyond any physical ladder.
     t18 = [r for r in rows
            if abs(r[2] - TOWER18[0]) < 0.0005 and abs(r[3] - TOWER18[1]) < 0.0005]
-    report("check5.tower18", len(t18) == 1,
-           f"Tower 18 (Lake/Wells) junction present: node "
-           f"{t18[0][0] if t18 else '—'} deg={t18[0][4] if t18 else 0}")
+    core = [r for r in t18 if r[4] >= 4]
+    report("check5.tower18", 1 <= len(t18) <= 6 and len(core) >= 1,
+           f"Tower 18 (Lake/Wells) interlocking: {len(t18)} switch node(s), "
+           f"core {core[0][0] if core else '—'} deg={core[0][4] if core else 0}")
 
     lat_lo, lat_hi = DEARBORN_MIDBLOCK_LAT
     midblock = [r for r in rows

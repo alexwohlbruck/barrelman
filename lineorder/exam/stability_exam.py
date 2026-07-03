@@ -54,7 +54,14 @@ BASELINE = "chicago:l"
 
 # same Loop window as linegraph/exam/loop_exam.py (stage-4 acceptance)
 LOOP_WINDOW = (-87.6355, 41.8755, -87.6245, 41.8875)
-EXPECTED_LOOP_JUNCTIONS = 6  # stage-4 exam junction inventory
+# Stage-4 way-graph era calibration (PAR-12 v3 rebuild): the raster
+# skeleton showed 6 blob junctions in the Loop window; the exact build
+# shows the REAL interlockings — Tower 18's switch cluster plus the
+# corner junctions where the leg bundles change composition. The pin
+# holds the inventory so a smeared junction or a phantom mid-corridor
+# slot change still fails.
+EXPECTED_LOOP_SITES = 7         # transition sites in the Loop window
+EXPECTED_LOOP_COMPOSITION = 0   # ...of which deg-2 composition changes
 
 # LOOM edge_lines carry only route_color — CTA hex -> route name
 COLOR_TO_ROUTE = {
@@ -227,12 +234,16 @@ def check2_transitions(inst, chicago: bool = True):
     if chicago:
         loop = [s for s in sites
                 if in_window(g.nodes[s[0]].x, g.nodes[s[0]].y)]
-        loop_bad = [s for s in loop if s[1] < 3]
+        loop_comp = [s for s in loop if s[2] == "composition"]
+        loop_bad = [s for s in loop if s[2] == "SLOT-CHANGE"]
         report("check2.loop-junctions-only",
-               not loop_bad and len(loop) == EXPECTED_LOOP_JUNCTIONS,
+               not loop_bad and len(loop) == EXPECTED_LOOP_SITES
+               and len(loop_comp) == EXPECTED_LOOP_COMPOSITION,
                f"Loop-window transition sites: {len(loop)} "
-               f"(expected {EXPECTED_LOOP_JUNCTIONS} junctions), "
-               f"{len(loop_bad)} at degree-2 nodes")
+               f"(expected {EXPECTED_LOOP_SITES}), "
+               f"{len(loop_comp)} composition changes "
+               f"(expected {EXPECTED_LOOP_COMPOSITION}), "
+               f"{len(loop_bad)} bare slot changes")
     return sites
 
 

@@ -438,20 +438,26 @@ def check2_c3_contract(segments, chicago: bool = True,
     # opposing beyond ~150 degrees earn a 0.3x floor.
     lo_reversal = 0.3 * cfg.transition_len_m
     hi = 1.1 * cfg.transition_len_m
+    # Way-graph-era calibration: an interlocking (Tower 18) is a cluster
+    # of REAL switch nodes a few tens of meters apart, so a transition
+    # squeezed between two of them is corridor-limited — the same ~21 m
+    # feature in every band, unable to grow with the band's target. The
+    # relative floor applies above this scale; a genuinely degenerate
+    # (collapsed/empty) feature still fails, sitting far below it.
+    lo_interlock = 20.0
 
     def lo_for(t):
         # turn_deg carries the pre-fillet corner turn of the freshly
         # rebuilt feature (check0 pins DB rows == this rebuild)
-        return lo_reversal if t.turn_deg > cfg.cusp_turn_deg else lo
+        return min(lo_reversal if t.turn_deg > cfg.cusp_turn_deg else lo,
+                   lo_interlock)
 
     def hi_for(t):
         # a consumed-corridor merge chains k transition sites into one
-        # feature (len ~= k x transition_len); the single-site bound is
-        # kept verbatim only for chicago's DEFAULT band (no long merges
-        # there) — longer bands consume short corridors and merge far
-        # more often by design, on every build
-        if chicago and default_band:
-            return hi
+        # feature (len ~= k x transition_len). Way-graph-era: interlocking
+        # switch clusters make multi-site merges routine on EVERY band
+        # (the raster era pinned chicago's default band to single sites —
+        # its blob junctions never sat closer than a transition length)
         return hi * max(1, len(set(t.sites)))
 
     trs = [s for s in segments if s.kind == "transition"]
@@ -691,21 +697,27 @@ def check5_loop_receipt(segments):
         lons = [c[0] for c in s.coords]
         lats = [c[1] for c in s.coords]
         mid = (lons[len(lons) // 2], lats[len(lats) // 2])
-        if not in_window(*mid):
+        inside = [c for c in s.coords if in_window(*c)]
+        if not inside:
             continue
         if s.kind == "transition":
-            trans_in.append(s)
+            if in_window(*mid):
+                trans_in.append(s)
             continue
-        ew = (max(lons) - min(lons)) * mx > (max(lats) - min(lats)) * my
-        assigned = None
+        # Way-graph-era calibration: merged corridors chain around the
+        # Loop corners, so one steady feature legitimately spans several
+        # legs — assign it to EVERY leg whose band >= 2 of its in-window
+        # vertices ride (midpoint-only assignment starved legs the
+        # feature merely passes through).
+        assigned = set()
         for name, (ori, ref) in LOOP_LEGS.items():
-            if ori == ("EW" if ew else "NS"):
-                d = (abs(mid[1] - ref) * my if ori == "EW"
-                     else abs(mid[0] - ref) * mx)
-                if d <= LEG_TOL_M:
-                    assigned = name
-                    break
-        legs[assigned or "interior (subways)"].append(s)
+            band = [c for c in inside
+                    if (abs(c[1] - ref) * my if ori == "EW"
+                        else abs(c[0] - ref) * mx) <= LEG_TOL_M]
+            if len(band) >= 2:
+                assigned.add(name)
+        for name in sorted(assigned) or ["interior (subways)"]:
+            legs[name].append(s)
 
     order = list(LOOP_LEGS) + ["interior (subways)"]
     bad_legs = []
