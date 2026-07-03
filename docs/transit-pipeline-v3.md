@@ -166,16 +166,47 @@ subsections after "Legacy raster engine" describe it).
      the 4-track trunk collapses; a >=450 m sustained co-run merges even
      when both corridors continue past a real fork (7th Av 1 vs 2/3);
   3. *cross-family proximity bundle* (different families, gap 10 m,
-     sustained >= 450 m with brief <=2x-gap excursions, low relative
-     bearing; or co-extensive junction-to-junction twins) — the Chicago
-     Loop legs' one-way track pairs, the Lake-leg Blue under the
-     elevated, Flatbush B/Q beside 2/3/4/5. Merges 1-2 additionally
+     sustained >= 450 m, low relative bearing; or co-extensive
+     junction-to-junction twins, bearing-guarded <= 45 deg) — the
+     Chicago Loop legs' one-way track pairs, the Lake-leg Blue under
+     the elevated, Flatbush B/Q beside 2/3/4/5. Merges 1-2 additionally
      demand no divergence beyond the window (at each window end a
      corridor must END within slack) so kisses/crossings never merge
      (Rector 1 x R/W, Brooklyn Bridge J/Z x Lexington).
+  Window FLAP GUARD (Schmitt trigger, all kinds): real 4-track spacing
+  breathes across the gap threshold, so windows separated by a dip
+  shorter than window_dip_coalesce_m (200 m) coalesce, and a formed
+  window only releases where the gap exceeds release_gap_mult x gap
+  (1.5x) sustained release_sustain_m (150 m) — the West End R/W+D
+  co-run used to tile into four windows, the Chicago North Side P/Red
+  into three; both now form as ONE bundle. Window boundaries SNAP to a
+  corridor end within merge_end_slack_m when that end lies within the
+  merge gap of the partner (the seam lands on the real convergence
+  junction); clamp zones at c2's termini and projection plateaus are
+  trimmed off window ends. A CONNECTING RAMP (joins the partner at one
+  end, diverges beyond gap at the other — the 63 St FX ramp onto
+  Queens Blvd) never merges: it keeps its approach geometry and
+  attaches at the junction.
   Merged geometry = track-count-weighted midline; merge-boundary nodes
   are the only synthetic nodes (seams on the midline); sub-16 m windows
-  collapse to single nodes (interlocking ladders).
+  collapse to single nodes (interlocking ladders). Boundaries are
+  C1-CONTINUOUS: a directional pair handing off to its single
+  continuing track eases the midline into it over ease_len_m (100 m,
+  smoothstep, clamped to the window) — zero step, tangent handoff;
+  bundle-onset tails and endpoint retargets use the same smoothstep
+  blend (densified so 2-vertex segments can bend), with a straight
+  fan-in connector instead of a retarget when a node sits more than a
+  merge gap from the seam. Dangling merge residue (the Mott Haven wye
+  fragments) is healed post-contraction: a deg-1 node sharing a route
+  with a node nearby coalesces within 16 m or bridges up to slack.
+- **Partial mid-edge coverage cuts**: a route whose coverage interval
+  union enters/leaves a long OSM way partway (the FX express touching
+  the Culver local only at the bypass portals yet claiming the full
+  2.6 km edge, painting a phantom express through 15 St-Prospect Park)
+  CUTS the edge at its coverage boundary (cov_cut_margin_m) — route
+  sets change mid-edge at the covered extent, not at way nodes.
+  Interval unions bridge sample flip-flop holes (2x margin) and drop
+  sub-25 m junction-graze touches first.
 - Stations snap exactly as before (`linegraph.stations`); attribution is
   exact by construction (`LGEdge.routes`); same `transit_graph_*`
   contract (delete-and-replace per build_key); lineorder + segments +

@@ -56,6 +56,12 @@ WINDOWS = {
     "joralemon":       (-74.008, 40.690, -73.987, 40.705),
     "west4":           (-74.008, 40.727, -73.996, 40.736),
     "grand-st":        (-74.001, 40.7135, -73.989, 40.7225),
+    # PAR-12 merge-boundary receipts (second live review)
+    "dekalb-merge":    (-73.9935, 40.684, -73.976, 40.7005),
+    "borough-hall":    (-73.999, 40.687, -73.983, 40.699),
+    "9av":             (-74.014, 40.6255, -73.996, 40.641),
+    "15st-prospect":   (-73.988, 40.654, -73.972, 40.666),
+    "fork-seams":      (-74.021, 40.636, -74.003, 40.651),
 }
 TITLES = {
     "broadway": "Broadway yellow trunk, Times Sq -> Canal St — "
@@ -79,6 +85,16 @@ TITLES = {
                        "platform centering",
     "grand-st":        "Grand St / Bowery — B/D on the Chrystie St "
                        "connector",
+    "dekalb-merge":    "DeKalb Av interlocking — orange/yellow merge "
+                       "boundaries vs the real interweave",
+    "borough-hall":    "Borough Hall — R (Montague) passes around the "
+                       "2/3, never captured",
+    "9av":             "9 Av / Sea Beach cut — D/W + N bundles hold "
+                       "through breathing track spacing",
+    "15st-prospect":   "15 St-Prospect Park — F/G pair through the "
+                       "station throat",
+    "fork-seams":      "4th Av 59 St — bundle-to-track handoffs stay "
+                       "tangent (no half-gap step)",
 }
 
 
