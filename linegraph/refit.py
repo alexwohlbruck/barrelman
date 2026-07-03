@@ -29,7 +29,14 @@ attributed to it:
   2. qualifying sub-polylines are resampled to a common arc-length
      parameterization and averaged pointwise: directional track pairs
      ~5-10 m apart average to the true corridor centerline; identical
-     shapes average to themselves.
+     shapes average to themselves. The average is CLUSTER-WEIGHTED
+     (_cluster_weighted_mean): contributions group into lateral
+     clusters (tracks) and each cluster gets equal weight, so a
+     corridor ridden by 18 pattern variants on one directional track
+     and 5 on the other still centers between the TRACKS, not at the
+     variant-count-weighted mean (Bowling Green receipt: the plain
+     mean sat +2.2 m off the skeleton toward the busier track, hugging
+     the island platform's east edge instead of the corridor center).
   3. node placement: a degree-1 node moves to its single refit
      endpoint; every other node moves to the Tikhonov-regularized
      least-squares intersection of its incident edges' terminal
@@ -43,6 +50,16 @@ attributed to it:
      Adjacent nodes that would collapse onto each other (the perfect-X
      limit of that "H") keep a NODE_FLOOR_M separation along their
      original axis so no edge degenerates to zero length.
+     Y-fork exception (deg-3): when traversal evidence identifies a
+     DOMINANT through-pair — the straightest arm pair some shape rides
+     through, clearly straighter than any other evidenced pair — the
+     node solves the LSQ over THAT PAIR's tangent lines only, so the
+     diverging arm cannot tug the node off the through line (Lafayette
+     Av receipt: the G merging into the A/C corridor bent both
+     throughs ~5 m past their own evidence). The diverging arm then
+     terminal-snaps to the result like any other arm. Deg-3 nodes with
+     no evidenced pair or without a clearly straightest one (and all
+     multi-through X nodes) keep the all-arms LSQ.
   4. every incident edge's terminal vertex then snaps EXACTLY to its
      node, the correction blended linearly over the terminal BLEND_M
      (whole-edge lerp when the edge is shorter than twice that) so no
@@ -92,6 +109,12 @@ NODE_SANITY_MULT = 2.5    # LSQ farther than this x merge_width from the
 NODE_FLOOR_M = 4.0        # min separation of adjacent nodes after refit
 SIMPLIFY_M = 0.5          # post-refit Douglas-Peucker tolerance
 LENGTH_OUTLIER_FRAC = 0.10
+CLUSTER_GAP_M = 3.0       # lateral gap that separates contribution
+                          # clusters (tracks) in the weighted average —
+                          # above directional-pair jitter (~0.5 m),
+                          # below real track spacing (~3.7 m+)
+THROUGH_MARGIN_DEG = 5.0  # a deg-3 dominant through-pair must be this
+                          # much straighter than the runner-up pair
 
 
 @dataclass(slots=True)
@@ -103,6 +126,8 @@ class RefitStats:
     n_contributions: int = 0      # accepted sub-polylines across all edges
     n_node_fallback: int = 0      # LSQ sanity fallbacks to the mean
     n_floor_pairs: int = 0        # adjacent-node separations enforced
+    n_y_through: int = 0          # deg-3 nodes placed on a dominant
+                                  # through-pair's tangents only
     max_point_move_m: float = 0.0  # refit vs skeleton, accepted edges
     max_node_move_m: float = 0.0
     length_outliers: list = field(default_factory=list)  # (edge_id, before, after)
@@ -130,6 +155,33 @@ def _resample(coords, n: int) -> np.ndarray:
     )
 
 
+def _cluster_weighted_mean(contribs) -> np.ndarray:
+    """Pointwise average with equal weight per lateral CLUSTER.
+
+    Contributions (same-shape arrays, oriented alike) cluster by their
+    mean signed offset from the plain pointwise mean, split at gaps >
+    CLUSTER_GAP_M; each cluster (track) weighs the same regardless of
+    how many pattern variants ride it. One cluster == the plain mean.
+    """
+    stack = np.asarray(contribs, dtype=float)
+    if len(stack) < 3:
+        return stack.mean(axis=0)
+    ref = stack.mean(axis=0)
+    d = np.gradient(ref, axis=0)
+    norm = np.hypot(d[:, 0], d[:, 1])
+    norm[norm < 1e-9] = 1.0
+    nrm = np.column_stack([-d[:, 1] / norm, d[:, 0] / norm])
+    offs = np.einsum("cij,ij->c", stack - ref[None, :, :], nrm) / len(ref)
+    order = np.argsort(offs, kind="stable")
+    weights = np.empty(len(stack))
+    start = 0
+    for k in range(1, len(order) + 1):
+        if k == len(order) or offs[order[k]] - offs[order[k - 1]] > CLUSTER_GAP_M:
+            weights[order[start:k]] = 1.0 / (k - start)
+            start = k
+    return np.average(stack, axis=0, weights=weights)
+
+
 def _pass_coords(shape_pts: np.ndarray, within: np.ndarray) -> list:
     """Contiguous within-radius runs of a densified shape.
 
@@ -151,18 +203,27 @@ def _pass_coords(shape_pts: np.ndarray, within: np.ndarray) -> list:
     return [shape_pts[r] for r in runs]
 
 
-def _terminal_tangent(xy: np.ndarray, terminal: str):
-    """(endpoint, unit direction) over the terminal TANGENT_WINDOW_M.
+def _terminal_tangent(xy: np.ndarray, terminal: str, skip_m: float = 0.0):
+    """(anchor point, unit direction) over the terminal TANGENT_WINDOW_M.
 
     Sign is irrelevant to the caller (line projection is symmetric in
-    +-t), so the direction simply points into the edge.
+    +-t), so the direction simply points into the edge. skip_m anchors
+    the window that far INTO the edge — the dominant through-pair node
+    placement skips the terminal blend zone, where a fork's diverging
+    evidence contaminates the averaged geometry, and reads the clean
+    corridor line beyond it.
     """
     pts = xy if terminal == "a" else xy[::-1]
-    p0 = pts[0]
     seg = np.hypot(*(pts[1:] - pts[:-1]).T)
     cum = np.concatenate([[0.0], np.cumsum(seg)])
-    k = int(np.searchsorted(cum, TANGENT_WINDOW_M))
-    k = min(max(k, 1), len(pts) - 1)
+    if skip_m > 0.0 and cum[-1] > 2.0 * skip_m:
+        i0 = int(np.searchsorted(cum, skip_m))
+        i0 = min(max(i0, 0), len(pts) - 2)
+    else:
+        i0 = 0
+    p0 = pts[i0]
+    k = int(np.searchsorted(cum, cum[i0] + TANGENT_WINDOW_M))
+    k = min(max(k, i0 + 1), len(pts) - 1)
     d = pts[k] - p0
     n = float(np.hypot(*d))
     if n < 1e-9:
@@ -240,6 +301,35 @@ def _edge_contributions(edge, shape_ids, dense, dense_geoms,
     return contribs
 
 
+def _dominant_through_pair(ends, edge_shapes):
+    """Dominant through-pair among a deg-3 node's arms, or None.
+
+    ends: [(edge pos, endpoint, unit tangent into the edge), ...].
+    Evidenced pair = some shape rides both arms (coarse attribution).
+    Dominant = the straightest evidenced pair (tangents most nearly
+    collinear), by THROUGH_MARGIN_DEG over the runner-up when several
+    pairs are evidenced (a genuine multi-through node keeps the
+    all-arms LSQ). Returns (i, j) indices into ends.
+    """
+    cands = []
+    for i in range(len(ends)):
+        for j in range(i + 1, len(ends)):
+            pi, pj = ends[i][0], ends[j][0]
+            if pi == pj:
+                continue  # both terminals of a self-loop
+            if not (set(edge_shapes.get(pi, ()))
+                    & set(edge_shapes.get(pj, ()))):
+                continue
+            cos = abs(float(np.dot(ends[i][2], ends[j][2])))
+            cands.append((math.degrees(math.acos(min(1.0, cos))), i, j))
+    if not cands:
+        return None
+    cands.sort()
+    if len(cands) > 1 and cands[1][0] - cands[0][0] < THROUGH_MARGIN_DEG:
+        return None
+    return cands[0][1], cands[0][2]
+
+
 def refit_geometry(lg, shapes_lonlat, *,
                    sample_m: float = DEFAULT_SAMPLE_M,
                    snap_radius_m: float | None = None,
@@ -286,19 +376,25 @@ def refit_geometry(lg, shapes_lonlat, *,
 
     # ── per-edge averaged refit (dense; snapping + simplify follow) ─────
     refit_xy: dict = {}
+    contribs_of: dict = {}  # pos -> {shape idx: [contribution arrays]}
     for pos, e in enumerate(lg.edges):
         shape_ids = edge_shapes.get(pos, [])
         if not shape_ids:
             stats.n_no_evidence += 1
             stats.no_evidence_edges.append(e.edge_id)
             continue
-        contribs = _edge_contributions(
-            e, shape_ids, dense, dense_geoms, pass_radius_m)
+        by_shape = {
+            si: _edge_contributions(e, [si], dense, dense_geoms,
+                                    pass_radius_m)
+            for si in shape_ids
+        }
+        contribs = [arr for arrs in by_shape.values() for arr in arrs]
         if not contribs:
             stats.n_no_evidence += 1
             stats.no_evidence_edges.append(e.edge_id)
             continue
-        avg = np.mean(contribs, axis=0)
+        contribs_of[pos] = by_shape
+        avg = _cluster_weighted_mean(contribs)
         edge_line = LineString(e.coords_xy)
         shapely.prepare(edge_line)
         dmax = float(
@@ -324,22 +420,45 @@ def refit_geometry(lg, shapes_lonlat, *,
         if len(xy) < 2:
             continue
         for nid, terminal in ((e.from_node, "a"), (e.to_node, "b")):
-            incident.setdefault(nid, []).append(_terminal_tangent(xy, terminal))
+            incident.setdefault(nid, []).append(
+                (pos, *_terminal_tangent(xy, terminal), xy, terminal))
 
     new_pos = {}
+    y_through: list = []  # (node id, (edge pos, edge pos), shared shapes)
     for nid in sorted(old_pos):
         ends = incident.get(nid)
         if not ends:
             new_pos[nid] = old_pos[nid]
             continue
-        pbar = np.mean([p for p, _ in ends], axis=0)
         if len(ends) == 1:
-            x = ends[0][0]  # endpoint node: exactly its refit terminal
+            x = ends[0][1]  # endpoint node: exactly its refit terminal
         else:
+            lines = [(p, t) for _, p, t, _, _ in ends]
+            if len(ends) == 3:
+                # Y fork: a dominant through-pair pins the node to ITS
+                # tangent lines only — the diverging arm cannot tug the
+                # node off the through line. Tangents re-read beyond
+                # the terminal blend zone, where the fork's diverging
+                # evidence contaminates the averaged geometry.
+                pair = _dominant_through_pair(ends, edge_shapes)
+                if pair is not None:
+                    lines = [
+                        _terminal_tangent(ends[k][3], ends[k][4],
+                                          skip_m=blend_m)
+                        for k in pair
+                    ]
+                    pa, pb = ends[pair[0]][0], ends[pair[1]][0]
+                    y_through.append((
+                        nid, (pa, pb),
+                        set(edge_shapes.get(pa, ()))
+                        & set(edge_shapes.get(pb, ())),
+                    ))
+                    stats.n_y_through += 1
+            pbar = np.mean([p for p, _ in lines], axis=0)
             # Tikhonov-regularized LSQ intersection of the tangent lines
             a_mat = NODE_MU * np.eye(2)
             b_vec = NODE_MU * pbar
-            for p, t in ends:
+            for p, t in lines:
                 proj = np.eye(2) - np.outer(t, t)
                 a_mat += proj
                 b_vec += proj @ p
@@ -351,6 +470,37 @@ def refit_geometry(lg, shapes_lonlat, *,
         stats.max_node_move_m = max(
             stats.max_node_move_m, float(np.hypot(*(x - old_pos[nid])))
         )
+
+    # dominant-pair arms follow the THROUGH shapes' own average over the
+    # terminal blend zone: the diverging arm's evidence rides the trunk
+    # too and its rising tail would otherwise bend the through-bar. The
+    # zone takes the through average's SHAPE plus a fading offset read
+    # at the zone boundary — the corridor's lateral offset eases to
+    # zero at the node while the contaminated tail is discarded whole.
+    for nid, (pa, pb), shared in y_through:
+        for pos in (pa, pb):
+            xy = refit_xy.get(pos)
+            by_shape = contribs_of.get(pos)
+            if xy is None or not by_shape or not shared:
+                continue
+            thru = [arr for si in sorted(shared) for arr in by_shape.get(si, ())]
+            if not thru or len(thru) == len(
+                    [a for arrs in by_shape.values() for a in arrs]):
+                continue  # no through subset, or nothing to exclude
+            thru_avg = _cluster_weighted_mean(thru)
+            e = lg.edges[pos]
+            seg = np.hypot(*(xy[1:] - xy[:-1]).T)
+            cum = np.concatenate([[0.0], np.cumsum(seg)])
+            s = cum if e.from_node == nid else cum[-1] - cum
+            w = np.clip(1.0 - s / blend_m, 0.0, 1.0)  # 1 at the node end
+            inside = w > 0.0
+            outside = np.flatnonzero(~inside)
+            i_b = (int(outside[0]) if e.from_node == nid and outside.size
+                   else int(outside[-1]) if outside.size
+                   else int(np.argmin(w)))
+            delta_b = xy[i_b] - thru_avg[i_b]
+            blended = thru_avg + (1.0 - w)[:, None] * delta_b[None, :]
+            refit_xy[pos] = np.where(inside[:, None], blended, xy)
 
     # adjacent nodes may not collapse onto each other (perfect-X limit):
     # push violating pairs apart along their ORIGINAL axis

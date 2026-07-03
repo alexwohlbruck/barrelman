@@ -184,6 +184,40 @@ def test_y_split_trunk_is_branch_average():
         assert abs(p.y) <= 1.0, (p.x, p.y)
 
 
+def test_y_fork_through_bar_straight():
+    # 30-degree Y fork: a straight through-track plus a branch that
+    # shares it then diverges. The dominant through-pair (traversal
+    # evidence + straightest arms) must pin the fork node to the
+    # through line: the through-bar keeps < 0.5 m of bow, instead of
+    # being tugged toward the diverging arm by the all-arms LSQ
+    # (Lafayette Av receipt).
+    a = math.radians(30.0)
+    through = [(-500.0, 0.0), (500.0, 0.0)]
+    branch = [(-500.0, 0.0), (0.0, 0.0),
+              (500.0 * math.cos(a), 500.0 * math.sin(a))]
+    lg = build([through, branch])
+    stats = refit_geometry(lg, [lonlat(through), lonlat(branch)])
+    assert stats.n_y_through >= 1, stats
+    # the through-bar: walk the two edges that hug y = 0
+    bar_edges = [e for e in lg.edges
+                 if all(abs(y) < 20.0 for _, y in local_xy(e))]
+    assert len(bar_edges) >= 2, [local_xy(e)[:2] for e in lg.edges]
+    for e in bar_edges:
+        assert chord_dev(e.coords_xy) < 0.5, (e.edge_id, chord_dev(e.coords_xy))
+        for _, y in local_xy(e):
+            assert abs(y) < 0.5, (e.edge_id, y)
+    # the combined through-path across the fork node stays straight too
+    by_node: dict = {}
+    for e in bar_edges:
+        by_node.setdefault(e.from_node, []).append(e)
+        by_node.setdefault(e.to_node, []).append(e)
+    shared = [nid for nid, es in by_node.items() if len(es) == 2]
+    assert shared, by_node
+    ea, eb = by_node[shared[0]]
+    path = list(ea.coords_xy) + list(eb.coords_xy)
+    assert chord_dev(path) < 0.5, chord_dev(path)
+
+
 # ── d. endpoint continuity: exact node coincidence, no terminal kink ─────────
 
 
