@@ -233,16 +233,16 @@ def check1_c1_contract(g, proj, segments, chicago: bool = True,
     print(f"  {len(sites)} transition sites: {n_junc} junctions, "
           f"{n_comp} deg-2 composition changes {howard}")
     if chicago and site_checks:
-        # way-graph era pin: 10 real junctions + Howard's composition
-        # change. Re-pinned 15 -> 10 after the window flap guard: the
-        # North Side P/Red co-run used to tile into three cross windows
-        # (6.3 km + 2.9 km + 115 m twins) whose flap seams each minted a
-        # junction; the Schmitt-trigger coalescing forms it as ONE
-        # 12.3 km bundle (loop exam pins Tower 18 + the leg bundles
-        # unchanged).
+        # way-graph era pin: real junctions + Howard's composition change.
+        # Re-pinned 15 -> 10 after the window flap guard coalesced the North
+        # Side P/Red co-run into one bundle; re-pinned 10 -> 12 in round 19
+        # (cross-family gap 10->22 + anti-kiss gates) — the wider gap splits
+        # the Tower 18 multi-family interlocking two switch nodes finer (all
+        # genuine junctions; loop exam pins Tower 18 + the leg bundles
+        # unchanged, Howard still the sole composition site).
         report("check1.site-inventory",
-               len(sites) == 11 and n_junc == 10 and howard == ["Howard"],
-               f"expected 11 sites (10 junctions + Howard), got {len(sites)} "
+               len(sites) == 13 and n_junc == 12 and howard == ["Howard"],
+               f"expected 13 sites (12 junctions + Howard), got {len(sites)} "
                f"({n_junc} junctions, composition at {howard})")
 
     if site_checks:  # band-independent (graph-derived): run once
@@ -624,9 +624,18 @@ def check3_fillets(segments, proj, chicago: bool = True,
     # were mostly full-target straightaways, so the remaining population
     # concentrates at real interlocking mouths (21/33 = 64% full target,
     # 12 clamps, every one floor-checked above).
+    # Round 19 (cross-family gap 10->22): two extra Tower 18 switch
+    # junctions add short-half transitions that clamp by design — the
+    # clamp cap rises to 0.34 x trs (non-default bands: 10/30) and the
+    # chicago full-target floor to 0.55 (z15: 21/36 = 58%), the safety
+    # contract staying check3.min-radius (every emitted transition meets
+    # its curvature floor unconditionally, verified above).
     clamp_cap = (15 if chicago and default_band
-                 else math.ceil(0.3 * len(trs)))
-    target_frac = (0.6 if chicago else 0.65) if default_band else 0.6
+                 else math.ceil((0.34 if chicago else 0.3) * len(trs)))
+    if default_band:
+        target_frac = 0.55 if chicago else 0.65
+    else:
+        target_frac = 0.55 if chicago else 0.6
     report("check3.clamping-is-exceptional",
            n_clamped <= clamp_cap and n_target >= target_frac * len(trs),
            f"{n_clamped} clamped (<={clamp_cap}), {n_target}/{len(trs)} "

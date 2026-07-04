@@ -60,7 +60,12 @@ LOOP_WINDOW = (-87.6355, 41.8755, -87.6245, 41.8875)
 # corner junctions where the leg bundles change composition. The pin
 # holds the inventory so a smeared junction or a phantom mid-corridor
 # slot change still fails.
-EXPECTED_LOOP_SITES = 5         # transition sites in the Loop window
+# Round 19 (cross-family gap 10->22 + anti-kiss gates): the wider gap
+# decomposes the Tower 18 multi-family interlocking one node finer (all
+# genuine switch junctions, still 0 composition changes / 0 bare slot
+# changes — the Loop bundles and per-leg composition are unchanged, only
+# the switch cluster is split more granularly), 5 -> 7 sites.
+EXPECTED_LOOP_SITES = 7         # transition sites in the Loop window
 EXPECTED_LOOP_COMPOSITION = 0   # ...of which deg-2 composition changes
 
 # LOOM edge_lines carry only route_color — CTA hex -> route name
