@@ -31,6 +31,49 @@ Stages: **shapesnap** (GTFS→OSM matching) · **linegraph/waygraph** (corridors
 | 17 | Merge-boundary easing | C1 seam easing; window coalescing + hysteresis | `ease_len_m` 100; `window_dip_coalesce_m` 200; `release_gap_mult` 1.5; `release_sustain_m` 150; `cov_cut_margin_m` 30 |
 | 18 | Corridor-shortcut + guard | Reconcile off-track steadies onto real track; track-fidelity exam | `track_snap_tol_m` 18; exam tol 22 m + bundle margin |
 | 19 | Bundle tolerance + non-service | Kissing redesign (profile not gap min); regular-service display filter; measurement tooling | `cross_family_gap_m` 10→18; `cross_family_min_frac_below` 0.60; `cross_family_max_gap_ratio` 6.0; `cross_family_cross_slack_m` 40; `NON_REGULAR_SERVICE_VALUES`/`NON_REGULAR_USAGE_VALUES` |
+| 20 | Visual verification sandbox | `tools/sandbox/` — renders emitted geometry WITH the client's exact zoom-scaled line-offset applied, measures the ON-SCREEN px gap per site, per-site PASS/FAIL verdict; fast per-site rebuild for dial iteration | (no dial change — tooling; confirmed the DeKalb bundle is 4.4 px tight in data+render) |
+
+### Round 20 detail — visual verification sandbox
+
+`tools/sandbox/` is a committed, rerunnable harness that closes the gap
+between "the DB rows are bundled" and "what the map actually paints". It
+renders the emitted `transit_line_segments` WITH the client's exact offset
+expression (`server/src/constants/default-layers/transit.ts`:
+`zoomScaledOffset(offset_px)` = `offset_px * gapScale(zoom)`,
+`gapScale` = interpolate linear zoom 11→0.5, 14→1.0 clamped; transitions
+eased cubic-bezier(.4,0,.6,1) along line-progress) at each site's zoom, then
+measures the on-screen px gap between family ribbons.
+
+- `tools/sandbox/sites.py` — the site registry (build_key, bbox, zoom,
+  families, EXPECTED behaviour: bundle / separate / centered / straight).
+- `tools/sandbox/render.py` — the client render reproduced (m/px =
+  78271.51696/2^z·cos lat; per-vertex miter offset from
+  `segments.exam.loop_visual`).
+- `tools/sandbox/verify.py` — reads the CURRENT DB, renders one panel per
+  site, measures per-site (bundle: on-screen px gap + PRE-offset centerline
+  coincidence; separate: longest contiguous in-window parallel co-run;
+  centered: ribbon→platform; straight: through-route stray from real OSM
+  track), writes per-site PNGs + a contact-sheet + `verdicts.json`.
+- `tools/sandbox/rebuild.py` — fast per-site rebuild: only the patterns
+  intersecting the buffered bbox → waygraph → lineorder → segments to a
+  scratch `sandbox:<site>` build_key, with `--set dial=value` overrides, then
+  re-verify + before/after render. Truncation-limited (generous buffer; the
+  full build stays authoritative).
+
+**The DeKalb reconciliation.** Measured verdict: the B/D (orange `EB6800`)
+and N/Q/R/W (yellow `F6BC26`) features over the Manhattan-Bridge approach
+share ONE centerline (PRE-offset coincidence **0.00 m** — byte-identical
+geometry) and render at exactly **4.4 px** apart at the site zoom (offsets
+±2.2 px, `line_count=2`). The data IS a tight Apple-style bundle and the
+render confirms it. Any perceived "gap" is the correct 4.4 px slot spacing —
+not two separated ropes. To make bundles read TIGHTER the dial to move is the
+CLIENT `GAP_PX`/`zoomScaledOffset` (segments' `gap_px` bakes 4.4 into
+`offset_px`), not the corridor merge tolerance — the merge already fired.
+
+  uv run --with-requirements tools/sandbox/requirements.txt \
+      python -m tools.sandbox.verify
+  uv run --with-requirements tools/sandbox/requirements.txt \
+      python -m tools.sandbox.rebuild --site dekalb --set cross_family_gap_m=22
 
 ### Round 19 detail
 

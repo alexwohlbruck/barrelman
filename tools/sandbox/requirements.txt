@@ -1,0 +1,19 @@
+# tools.sandbox deps. verify.py needs only the segments set; rebuild.py runs
+# the real linegraph + lineorder + segments pipeline, so it needs their union
+# (linegraph.build imports linegraph.raster at module scope -> scipy/skimage).
+#
+#   uv run --with-requirements tools/sandbox/requirements.txt \
+#       python -m tools.sandbox.verify
+#   uv run --with-requirements tools/sandbox/requirements.txt \
+#       python -m tools.sandbox.rebuild --site dekalb --set cross_family_gap_m=22
+numpy>=1.26
+scipy>=1.11             # linegraph.raster (imported at module scope)
+scikit-image>=0.22      # linegraph.raster/skeleton
+shapely>=2.0
+pyproj>=3.6
+osmium>=4.0             # shapesnap.graph
+psycopg[binary]>=3.1
+ortools>=9.10           # lineorder CP-SAT solver
+matplotlib>=3.8         # panel render
+mapbox-vector-tile>=2   # segments test parity (harmless)
+pytest>=8
