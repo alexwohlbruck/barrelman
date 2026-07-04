@@ -38,9 +38,9 @@ ORANGE = "EB6800"   # B D F M  (6th Av / Chrystie / Culver)
 BLUE = "0062CF"     # A C E    (8th Av)
 GREEN = "009952"    # 4 5 6    (Lexington)
 RED = "D82233"      # 1 2 3    (7th Av)
-PURPLE = "A626AA"   # 7        (Flushing)
-GREY = "808183"     # J Z / shuttles (feed-5 stores J/Z as 996633 brown-ish)
-JZ = "996633"       # J Z      (Nassau / Jamaica) — brown
+PURPLE = "9A38A1"   # 7 / 7X   (Flushing) — feed-5 route_color
+GREY = "808183"     # shuttles
+JZ = "8E5C33"       # J Z      (Nassau / Jamaica) — feed-5 brown route_color
 G_COLOR = "799534"  # G        (Crosstown)
 L_COLOR = "7C858C"  # L        (Canarsie)
 
@@ -183,10 +183,13 @@ SITES: list[Site] = [
         name="Queensboro Plaza — 7 vs N/W (borderline separate)",
         build_key="nyc:subway-v3",
         center=(-73.9403, 40.7500), bbox=(-73.9480, 40.7455, -73.9330, 40.7545),
-        zoom=15.5, families=(PURPLE, YELLOW),
-        expected="separate", pairs=((PURPLE, YELLOW),),
-        note="7 stacked over N/W at Queensboro Plaza — structurally stacked, "
-             "borderline; judged as separate ribbons",
+        zoom=15.5, families=(PURPLE, YELLOW), through_color=PURPLE,
+        expected="straight", pairs=(),
+        note="7 stacked OVER N/W at Queensboro Plaza — structurally stacked "
+             "(they run parallel ~435 m in plan, per the docs' 'stacked "
+             "structures stay fused'), so a clean separate/bundle tag "
+             "doesn't apply; judged on whether the 7's through-path stays "
+             "on its own track (not captured/bent by N/W)",
     ),
 
     # ── NYC centered sites ──────────────────────────────────────────────
