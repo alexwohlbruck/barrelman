@@ -58,6 +58,9 @@ WINDOWS = {
     "grand-st":        (-74.001, 40.7135, -73.989, 40.7225),
     # PAR-12 merge-boundary receipts (second live review)
     "dekalb-merge":    (-73.9935, 40.684, -73.976, 40.7005),
+    # round-19 bundle-tolerance receipts
+    "dekalb-bundle":   (-73.997, 40.688, -73.980, 40.720),
+    "coney-yard":      (-73.990, 40.573, -73.973, 40.585),
     "borough-hall":    (-73.999, 40.687, -73.983, 40.699),
     "9av":             (-74.014, 40.6255, -73.996, 40.641),
     "15st-prospect":   (-73.988, 40.654, -73.972, 40.666),
@@ -87,6 +90,10 @@ TITLES = {
                        "connector",
     "dekalb-merge":    "DeKalb Av interlocking — orange/yellow merge "
                        "boundaries vs the real interweave",
+    "dekalb-bundle":   "DeKalb / Manhattan Bridge — orange B/D beside "
+                       "yellow N/Q/R/W (one bundle, not two ropes)",
+    "coney-yard":      "Coney Island-Stillwell Av — mainline centered, "
+                       "no bend toward the yard tracks",
     "borough-hall":    "Borough Hall — R (Montague) passes around the "
                        "2/3, never captured",
     "9av":             "9 Av / Sea Beach cut — D/W + N bundles hold "
