@@ -79,8 +79,14 @@ def test_transition_sites(built):
     # the wider gap splits the Tower 18 multi-family interlocking two
     # switch nodes finer, 10 -> 12 junctions (loop exam pins the Loop
     # bundles + Tower 18 unchanged; Howard stays the sole composition).
-    assert len(sites) == 13
-    assert kinds["junction"] == 12
+    # Round 21 (transitive cross-family bundling): the North Side P/Red now
+    # bundles onto the Brown's shared centerline (the sweep's largest
+    # Chicago miss, ~2.5 km), so those lines share one ribbon and every
+    # station/junction where a line joins or leaves the bundle becomes a
+    # composition-change JUNCTION node, 12 -> 17 junctions (Howard still the
+    # sole deg-2 composition change).
+    assert len(sites) == 18
+    assert kinds["junction"] == 17
     assert kinds["composition"] == 1
     howard = [nid for nid, k in sites.items() if k == "composition"]
     assert g.nodes[howard[0]].label == "Howard"

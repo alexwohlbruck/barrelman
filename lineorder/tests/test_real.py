@@ -39,8 +39,13 @@ def test_load_dimensions(inst):
     # round 19 (cross-family gap 10->22): the wider gap splits the Tower 18
     # multi-family interlocking finer, 154 -> 157 edges / 220 -> 229
     # edge_lines (loop exam holds the Loop bundles + Tower 18 unchanged).
-    assert len(g.edges) == 157
-    assert sum(len(e.lines) for e in g.edges.values()) == 229
+    # round 21 (transitive cross-family bundling): the North Side P/Red now
+    # bundles onto the Brown's shared centerline (the sweep's largest Chicago
+    # miss, ~2.5 km); those lines share one ribbon, so each station/junction
+    # where a line joins or leaves the bundle splits the corridor, 157 -> 167
+    # edges / 229 -> 252 edge_lines.
+    assert len(g.edges) == 167
+    assert sum(len(e.lines) for e in g.edges.values()) == 252
     assert g.max_cardinality() == 6  # Loop legs
     routes = {(l.feed_id, l.route_id) for l in inst.registry
               if hasattr(l, "feed_id")}
@@ -92,7 +97,7 @@ def test_reduce_and_roundtrip(inst):
 
     full = reconstruct(red, reduced_sol)
     assert set(full) == set(g.edges)
-    assert sum(len(p) for p in full.values()) == 229  # round 19: 220 -> 229
+    assert sum(len(p) for p in full.values()) == 252  # r19: 220->229; r21: 229->252
 
     orig = score(g, red.registry, full, w)
     print(f"[real] original-graph score: {orig}")

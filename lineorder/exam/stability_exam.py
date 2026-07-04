@@ -65,7 +65,15 @@ LOOP_WINDOW = (-87.6355, 41.8755, -87.6245, 41.8875)
 # genuine switch junctions, still 0 composition changes / 0 bare slot
 # changes — the Loop bundles and per-leg composition are unchanged, only
 # the switch cluster is split more granularly), 5 -> 7 sites.
-EXPECTED_LOOP_SITES = 7         # transition sites in the Loop window
+# Round 21 (transitive cross-family bundling — min_len 450->200, sustained
+# co-run + weave-crossing exemption): the North Side P/Red now bundles onto
+# the Brown's shared centerline (the sweep's largest Chicago miss, ~2.5 km),
+# so those lines share one ribbon and the Loop-window junctions where a line
+# joins/leaves the bundle re-form as genuine switch junctions — 7 -> 6 sites.
+# The invariants are unchanged and STILL hold: every remaining Loop site is
+# a genuine switch junction, 0 deg-2 composition changes, 0 bare slot
+# changes (the pin still fails a smeared junction or phantom slot change).
+EXPECTED_LOOP_SITES = 6         # transition sites in the Loop window
 EXPECTED_LOOP_COMPOSITION = 0   # ...of which deg-2 composition changes
 
 # LOOM edge_lines carry only route_color — CTA hex -> route name

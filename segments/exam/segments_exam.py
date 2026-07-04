@@ -239,10 +239,18 @@ def check1_c1_contract(g, proj, segments, chicago: bool = True,
         # (cross-family gap 10->22 + anti-kiss gates) — the wider gap splits
         # the Tower 18 multi-family interlocking two switch nodes finer (all
         # genuine junctions; loop exam pins Tower 18 + the leg bundles
-        # unchanged, Howard still the sole composition site).
+        # unchanged, Howard still the sole composition site). Re-pinned
+        # 13 -> 18 in round 21 (transitive cross-family bundling): the
+        # North Side P/Red now bundles onto the Brown's shared centerline
+        # (the round-21 sweep's largest Chicago miss, ~2.5 km), so those
+        # lines share one ribbon and every station/junction where a line
+        # enters or leaves the bundle becomes a composition-change JUNCTION
+        # node — more genuine junction sites, not fewer. All remaining sites
+        # are genuine junctions; Howard is still the ONLY deg-2 composition
+        # change.
         report("check1.site-inventory",
-               len(sites) == 13 and n_junc == 12 and howard == ["Howard"],
-               f"expected 13 sites (12 junctions + Howard), got {len(sites)} "
+               len(sites) == 18 and n_junc == 17 and howard == ["Howard"],
+               f"expected 18 sites (17 junctions + Howard), got {len(sites)} "
                f"({n_junc} junctions, composition at {howard})")
 
     if site_checks:  # band-independent (graph-derived): run once

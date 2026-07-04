@@ -32,6 +32,59 @@ Stages: **shapesnap** (GTFS→OSM matching) · **linegraph/waygraph** (corridors
 | 18 | Corridor-shortcut + guard | Reconcile off-track steadies onto real track; track-fidelity exam | `track_snap_tol_m` 18; exam tol 22 m + bundle margin |
 | 19 | Bundle tolerance + non-service | Kissing redesign (profile not gap min); regular-service display filter; measurement tooling | `cross_family_gap_m` 10→18; `cross_family_min_frac_below` 0.60; `cross_family_max_gap_ratio` 6.0; `cross_family_cross_slack_m` 40; `NON_REGULAR_SERVICE_VALUES`/`NON_REGULAR_USAGE_VALUES` |
 | 20 | Visual verification sandbox | `tools/sandbox/` — renders emitted geometry WITH the client's exact zoom-scaled line-offset applied, measures the ON-SCREEN px gap per site, per-site PASS/FAIL verdict; fast per-site rebuild for dial iteration | (no dial change — tooling; confirmed the DeKalb bundle is 4.4 px tight in data+render) |
+| 21 | **Transitive cross-family bundling** | **Genuine parallel corridors of different families collapse onto ONE multi-slot bundle** (Queens Blvd E/F/M/R; the 4/5 beside 2/3; Jay St A/C+F; Chicago North Side P/Red onto the Brown). A network sweep (`tools/sandbox/bundle_audit.py`) found 16 pairs of close-parallel-but-UNMERGED corridors (~9 km); after the fix the missed-bundle count → ~0 (NYC 12→1, CHI 6→0, both residuals real terminal divergences). | `cross_family_min_len_m` 450→200; new `cross_family_sustained_min_m` 450 (both-continue parallels merge); weave-crossing exemption (a 4-track trunk that interleaves at interlockings is not a kiss); near-coincident gap-ratio exemption; ramp gate scoped off cross |
+
+### Round 21 detail — transitive cross-family bundling
+
+The round-19 cross-family merge was **pairwise and length-gated**, so genuine
+parallel corridors that should read as one clean bundle were left as separate
+crowded lines. A network sweep of `nyc:subway-v3` (`tools/sandbox/bundle_audit.py`)
+quantified it: **16 pairs** of different-family steady corridors running < 12 m
+apart and parallel for > 150 m but NOT sharing a centerline (~9 km total) —
+Queens Blvd F/FX↔E, the 4/5↔2/3 toward Nevins, Jay St A/C↔F, Chicago's North
+Side P/Red↔Brown, etc.
+
+Two root causes, both confirmed with data and fixed:
+
+1. **Length threshold too strict.** `cross_family_min_len_m=450` dropped genuine
+   ~200–450 m parallels (Jay St A/C+F, J/Z+M). **Lowered 450 → 200**; the
+   anti-kiss PROFILE gates (non-crossing, gap-stability frac/ratio, bearing) keep
+   the kisses out at the shorter length — a real kiss crosses or is a transient
+   valley regardless of the floor (Rector / Brooklyn Bridge / Whitehall stay
+   rejected by `crosses` / `frac_below`, verified).
+
+2. **No multi-way (transitive) bundling.** Merging both-continue parallels needed
+   a cross-family analogue of `family_sustained_min_m`: new
+   **`cross_family_sustained_min_m=450`** merges a sustained cross-family co-run
+   even when BOTH corridors continue past the window (the 4/5 beside the 2/3 for
+   1.25 km, F beside N/Q/R for 567 m), so a corridor parallel to an existing
+   BUNDLE joins it and a whole physical corridor collapses into one multi-slot
+   bundle (Queens Blvd E/F/M/R). Three supporting fixes let the real trunks
+   through without re-admitting kisses:
+   - **weave-crossing exemption** — a 4-track express/local trunk physically
+     crosses at every bypass/interlocking but stays near-coincident there; the
+     non-crossing gate now ignores a crossing where the pair is hugged around it
+     (it diverges away from a true kiss X), so Queens Blvd E↔F/FX (2.5 km, frac
+     1.0) and DeKalb N/Q↔B/D (2.6 km) bundle;
+   - **near-coincident ratio exemption** — two corridors within a couple of
+     meters are the same physical track; their gap dips to ~0 so `gap_max/gap_mean`
+     explodes for a purely numerical reason — exempt a ~0 m mean gap from the
+     ratio valve;
+   - **ramp gate scoped off cross** — the endpoint ramp test (one end converges,
+     the other diverges) also fires on a genuine sustained parallel that shares one
+     junction; the anti-kiss profile gates already discriminate a ramp for cross
+     merges, so the endpoint test is kept only for pair/family.
+
+**Result** (`tools/sandbox/bundle_audit.py`, before → after): NYC missed bundles
+**12 → 1** (3057 m → 321 m; the residual is the N/D West End↔Sea Beach terminal
+divergence at Coney Island, a real split), Chicago **6 → 0** (2678 m → 0 m). No
+labeled kiss flipped into a bundle (all 17 sandbox sites PASS, including the four
+separate/kiss sites). The re-pinned Chicago exam counts (Loop transition sites
+7→6, segment sites 13→18, opt edges 157→167, edge_lines 229→252, CP-SAT optimum
+98→110) all reflect the P/Red-onto-Brown bundle adding genuine composition-change
+junctions where a line joins/leaves the shared ribbon — the invariants (0 deg-2
+composition changes but Howard, exact CP-SAT optimum, residual only at real
+interlockings) are unchanged.
 
 ### Round 20 detail — visual verification sandbox
 

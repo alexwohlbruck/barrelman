@@ -215,7 +215,14 @@ def test_chicago_end_to_end(chicago):
     # refit era: the
     # truer junction-mouth geometry rotates a couple of clockwise
     # incident-edge orders, and CP-SAT proves the cheaper optimum.
-    assert a.weighted == pytest.approx(98.0)
+    # Re-pinned 98.0 -> 110.0 for the transitive cross-family bundling era
+    # (round 21): consolidating the adjacent parallel Loop legs onto shared
+    # centerlines folds a switch junction back into the Tower-18 cluster,
+    # which restores a pair-enumeration continuation at the corner and the
+    # proven optimum rises to 110.0. The optimum is still exact (CP-SAT
+    # OPTIMAL), the residual still sits at the real interlockings only
+    # (<=4 non-station junction nodes, same<=1, sep<=1).
+    assert a.weighted == pytest.approx(110.0)
     assert a.crossings_same <= 1 and a.separations <= 1
     assert len(rep) <= 4
     g = chicago.graph

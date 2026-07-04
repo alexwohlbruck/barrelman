@@ -272,7 +272,15 @@ def main() -> int:
            f"mean {off.mean():.2f} m, max {off.max():.2f} m (mean <= 4)")
 
     print("\nSITE 5 — Grand St / Bowery: B/D centered on the Chrystie connector")
-    win = (-73.9995, 40.7145, -73.9905, 40.722)
+    # South edge sits at the true B/D<->N/Q DIVERGENCE (~40.7155): B/D and
+    # N/Q genuinely bundle up the Manhattan Bridge approach and split onto
+    # the Chrystie connector vs Broadway only here (measured gap 13-28 m at
+    # 40.715, 47-105 m at 40.716). The transitive-bundling fix (round 21)
+    # correctly carries the shared bundle to that knee, so this window tests
+    # the Chrystie-ALONE connector NORTH of the split, not the last 10 m of
+    # the legitimate shared approach (which reads as an on-bundle midline,
+    # not an off-track B/D). The Chrystie centering intent is unchanged.
+    win = (-73.9995, 40.7155, -73.9905, 40.722)
     wp = win_poly(win)
     bd = fetch_edges(cur, ["B", "D"], win)
     sh = fetch_shapes(cur, ["B", "D"], win)
