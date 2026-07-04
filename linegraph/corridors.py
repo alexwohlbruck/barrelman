@@ -825,10 +825,20 @@ def _try_merge(st: _State, kind: str, c1: Corr, c2: Corr, epsg: int):
     # must keep its own approach geometry and attach at the real
     # junction, never be midlined into the mainline. Switch-ladder
     # fragments (Tower 18) stay below the length floor and still merge.
+    # A ramp genuinely CONVERGES onto its partner at one end (its foot
+    # physically joins the mainline at a switch, gap -> ~0), so the
+    # "joined" threshold is a FIXED small distance — half a directional
+    # pair gap — NOT a fraction of the round-19 raised merge gap. At
+    # 0.5 x 22 m an 8 m-parallel bundle ONSET (both tracks side-by-side,
+    # never touching, then one curves away at a fork) was misread as a
+    # ramp foot and rejected; half a pair gap (7.5 m, below the pair
+    # spacing) keeps the real ramp foot caught while the parallel onset
+    # merges.
+    joined_tol = min(0.5 * gap, 0.5 * cfg.pair_gap_m)
     if wlen > 3.0 * cfg.merge_end_slack_m:
         d_u = float(line2.distance(shapely.points(*c1.pts[0])))
         d_v = float(line2.distance(shapely.points(*c1.pts[-1])))
-        if min(d_u, d_v) <= 0.5 * gap and max(d_u, d_v) > gap:
+        if min(d_u, d_v) <= joined_tol and max(d_u, d_v) > gap:
             return None
     # the window must map onto a comparable arc of c2 — a projected span
     # much shorter than the window means c1 merely brushes past c2's
