@@ -351,3 +351,62 @@ export async function ensureGbfsSchema() {
       ON gbfs_stations (lat, lon);
   `))
 }
+
+// Advisory-lock key that serialises schema setup across concurrent instances
+// (e.g. a `bun --hot` reload overlapping the previous instance). Arbitrary
+// constant — just has to be stable and unique to this concern.
+const SCHEMA_LOCK_KEY = 4927001
+
+/** Retry a schema-setup step through transient Postgres lock/deadlock errors. */
+async function withDeadlockRetry<T>(
+  fn: () => Promise<T>,
+  label: string,
+): Promise<T> {
+  const MAX_ATTEMPTS = 5
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await fn()
+    } catch (err) {
+      const code = (err as { code?: string })?.code
+      // 40P01 deadlock_detected · 55P03 lock_not_available · 40001 serialization_failure
+      const transient =
+        code === '40P01' || code === '55P03' || code === '40001'
+      if (!transient || attempt >= MAX_ATTEMPTS) throw err
+      const backoff = Math.min(250 * 2 ** (attempt - 1), 4000)
+      console.warn(
+        `[schema] ${label} hit ${code} (attempt ${attempt}/${MAX_ATTEMPTS}); retrying in ${backoff}ms`,
+      )
+      await new Promise((r) => setTimeout(r, backoff))
+    }
+  }
+}
+
+/**
+ * Run all idempotent schema-setup steps once at startup, serialised across
+ * concurrent instances with a session advisory lock so two processes (e.g. a
+ * `bun --hot` reload overlapping the previous instance) can't run the same DDL
+ * at once and deadlock. Each step also retries through transient lock errors.
+ *
+ * Critically, a *transient* failure here must not bubble up: a deadlock used to
+ * throw before `index.ts` reached `.listen()`, leaving `bun --hot` holding the
+ * port with no app mounted — HTTP wedged (empty replies) until a manual restart.
+ */
+export async function ensureAllSchemas(): Promise<void> {
+  const reserved = await connection.reserve()
+  try {
+    // Gate: a second instance blocks here until the first finishes its DDL,
+    // rather than racing it into a deadlock. The lock only needs to gate
+    // entry — the DDL itself runs on pooled connections.
+    await reserved`SELECT pg_advisory_lock(${SCHEMA_LOCK_KEY})`
+    await withDeadlockRetry(ensureSchema, 'geo_places')
+    await withDeadlockRetry(ensureGtfsSchema, 'gtfs')
+    await withDeadlockRetry(ensureGbfsSchema, 'gbfs')
+  } finally {
+    try {
+      await reserved`SELECT pg_advisory_unlock(${SCHEMA_LOCK_KEY})`
+    } catch {
+      // Best-effort: a session advisory lock is released on connection close.
+    }
+    reserved.release()
+  }
+}

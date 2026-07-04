@@ -13,16 +13,16 @@ import { graphhopperRoutes } from './routes/graphhopper'
 import { routeRoutes } from './routes/route'
 import { transitRoutes } from './routes/transit'
 import { gbfsRoutes } from './routes/gbfs'
-import { ensureSchema, ensureGtfsSchema, ensureGbfsSchema } from './db'
+import { ensureAllSchemas } from './db'
 import { ensureSearchEnrichment } from './lib/search-enrichment'
 import { startTransitWarmup } from './lib/warmup'
 
 const port = Number(process.env.PORT) || 5001
 
-// Ensure post-import columns exist before accepting requests
-await ensureSchema()
-await ensureGtfsSchema()
-await ensureGbfsSchema()
+// Ensure post-import columns exist before accepting requests. Serialised +
+// deadlock-retrying so a transient DDL deadlock (e.g. a hot-reload race) can't
+// wedge startup before `.listen()`.
+await ensureAllSchemas()
 
 // Backfill derived search columns (codes/name_abbrev/parent_context/ts) if a
 // prior import left them empty. Fire-and-forget so it never blocks startup —
