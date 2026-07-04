@@ -156,6 +156,19 @@ def _load_regular_track(cur, build_key, bbox):
              list(NON_REGULAR_USAGE), *bbox))
         cur.execute("CREATE INDEX ON gt USING gist(geom)")
         cur.execute("ANALYZE gt")
+        # gt_all = the same ways WITHOUT the regular-service filter, so a
+        # steady row hugging a service track (a terminal crossover reverse,
+        # a mis-tagged mainline) reads as on-service, not a stray — matching
+        # track_fidelity_exam's advisory rule.
+        cur.execute("DROP TABLE IF EXISTS gt_all")
+        cur.execute(
+            f"""CREATE TEMP TABLE gt_all AS SELECT geom FROM geo_places
+                WHERE tags->>'railway' = ANY(%s)
+                  AND ST_GeometryType(geom) = 'ST_LineString'
+                  AND geom && {env}""",
+            (list(RAIL_WAY_TAGS), *bbox))
+        cur.execute("CREATE INDEX ON gt_all USING gist(geom)")
+        cur.execute("ANALYZE gt_all")
         return "geo_places(regular)", n_gp
     cur.execute(f"SELECT COUNT(*) FROM mm_edges WHERE geom && {env}", bbox)
     n_mm = cur.fetchone()[0]
@@ -169,6 +182,12 @@ def _load_regular_track(cur, build_key, bbox):
             bbox)
         cur.execute("CREATE INDEX ON gt USING gist(geom)")
         cur.execute("ANALYZE gt")
+        cur.execute("DROP TABLE IF EXISTS gt_all")
+        cur.execute(
+            f"""CREATE TEMP TABLE gt_all AS SELECT geom FROM mm_edges
+                WHERE mode = 'rail' AND geom && {env}""", bbox)
+        cur.execute("CREATE INDEX ON gt_all USING gist(geom)")
+        cur.execute("ANALYZE gt_all")
         return "mm_edges(regular)", n_mm
     return None, 0
 
@@ -215,9 +234,26 @@ def _track_fidelity(cur, build_key):
         strays.append(float(mx))
         closed = (end_gap or 0.0) <= 15.0
         if float(mx) > _threshold(lc) and not closed:
-            over += 1
-            if float(mx) > worst[0]:
-                worst = (float(mx), wlon, wlat)
+            # on-service exemption (matches track_fidelity_exam): a worst
+            # point hugging ANY track (gt_all) within BASE_TOL_M but beyond
+            # the regular-track threshold is riding a service track the
+            # train uses, not straying across open ground.
+            on_service = False
+            if wlon is not None:
+                cur.execute(
+                    """SELECT MIN(ST_Distance(
+                           ST_SetSRID(ST_MakePoint(%s,%s),4326)::geography,
+                           geom::geography))
+                       FROM gt_all
+                       WHERE ST_DWithin(ST_SetSRID(ST_MakePoint(%s,%s),4326),
+                                        geom, %s)""",
+                    (wlon, wlat, wlon, wlat, buf_deg))
+                d_all = cur.fetchone()[0]
+                on_service = d_all is not None and float(d_all) <= BASE_TOL_M
+            if not on_service:
+                over += 1
+                if float(mx) > worst[0]:
+                    worst = (float(mx), wlon, wlat)
     if not strays:
         return {"skipped": "no regular-service track coverage in bbox"}
     strays.sort()
