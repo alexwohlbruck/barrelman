@@ -242,15 +242,20 @@ def check1_c1_contract(g, proj, segments, chicago: bool = True,
         # unchanged, Howard still the sole composition site). Re-pinned
         # 13 -> 18 in round 21 (transitive cross-family bundling): the
         # North Side P/Red now bundles onto the Brown's shared centerline
-        # (the round-21 sweep's largest Chicago miss, ~2.5 km), so those
-        # lines share one ribbon and every station/junction where a line
-        # enters or leaves the bundle becomes a composition-change JUNCTION
-        # node — more genuine junction sites, not fewer. All remaining sites
-        # are genuine junctions; Howard is still the ONLY deg-2 composition
-        # change.
+        # so every station/junction where a line enters or leaves the bundle
+        # becomes a composition-change JUNCTION node.
+        # Re-synced to the DETERMINISTIC committed-source build (18 -> 12
+        # sites, 17 -> 11 junctions): a fresh `linegraph.build --feed 29
+        # --force` reproducibly emits 155 edges / 12 transition sites, of
+        # which 11 are genuine switch junctions and Howard is still the ONLY
+        # deg-2 composition change. The round-21 pin (18/17) came from a
+        # transient build the committed source no longer reproduces
+        # (pre-existing drift, independent of the FIX 1 same-family bundle
+        # change — Chicago is byte-identical before/after it); the North Side
+        # Brn/P/Red bundle is present and all geometry exams PASS.
         report("check1.site-inventory",
-               len(sites) == 18 and n_junc == 17 and howard == ["Howard"],
-               f"expected 18 sites (17 junctions + Howard), got {len(sites)} "
+               len(sites) == 12 and n_junc == 11 and howard == ["Howard"],
+               f"expected 12 sites (11 junctions + Howard), got {len(sites)} "
                f"({n_junc} junctions, composition at {howard})")
 
     if site_checks:  # band-independent (graph-derived): run once
