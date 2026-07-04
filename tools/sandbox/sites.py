@@ -260,6 +260,30 @@ SITES: list[Site] = [
         expected="separate", pairs=((YELLOW, RED),),
         note="R passes around the 2/3, never captured into their bundle",
     ),
+    Site(
+        key="broadway-lafayette",
+        name="Broadway-Lafayette / Bleecker — B/D + F/M bundle onset",
+        build_key="nyc:subway-v3",
+        center=(-73.9945, 40.7248), bbox=(-74.004, 40.718, -73.987, 40.732),
+        zoom=15.5, families=(ORANGE,),
+        expected="bundle", pairs=((ORANGE, ORANGE),),
+        note="B/D and F/M (all orange) converge on the 6th Av trunk toward "
+             "Broadway-Lafayette; the bundle must FORM at the onset of "
+             "sustained parallelism on the approach, not snap on at the "
+             "station node.",
+    ),
+    Site(
+        key="eastern-parkway",
+        name="Eastern Parkway — 2/3 (red) + 4/5 (green) bundled trunk",
+        build_key="nyc:subway-v3",
+        center=(-73.9540, 40.6700), bbox=(-73.975, 40.662, -73.935, 40.676),
+        zoom=15.0, families=(RED, GREEN),
+        expected="bundle", pairs=((RED, GREEN),),
+        note="2/3 and 4/5 run bundled along Eastern Parkway past Franklin Av / "
+             "Brooklyn Museum; judged on whether red and green read as one "
+             "clean multi-slot ribbon through the shared trunk (the merge and "
+             "split should not double-cross).",
+    ),
 ]
 
 

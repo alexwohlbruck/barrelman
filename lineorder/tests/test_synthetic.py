@@ -408,3 +408,40 @@ def test_score_brute_force_agreement_random():
          ("c", "n2", ["B"])],
     )
     assert_optimal(inst)
+
+
+def test_merge_then_split_coordinates_zero_crossings():
+    """A merge-then-split of two rigid 2-line blocks with CONSISTENT exit
+    geometry must order the shared bundle so the pair joins without crossing
+    AND splits without crossing (the split's required exit order propagates
+    back through the corridor to the merge). This is the Eastern Parkway
+    2/3 x 4/5 shape idealized: when red and green ARE rigid blocks end to
+    end, ZERO crossings is achievable and the solver must find it. (Real
+    Eastern Parkway is NOT this — the Nostrand split pairs 2/5 and 3/4, so
+    the blocks are not rigid and the crossing is a genuine objective
+    tradeoff; see tools/sandbox/crossing_audit.py.)"""
+    # A={a1,a2} from the west, B={b1,b2} from the southwest, merge at M, run
+    # bundled east to S, split into A (northeast) and B (east) — exit sides
+    # consistent with entry sides, so no crossing is forced anywhere.
+    inst, lids, _ = build_graph(
+        {"Wa": (-2, 1), "Wb": (-2, -1), "M": (0, 0), "S": (3, 0),
+         "Ea": (5, 1), "Eb": (5, -1)},
+        [("Wa", "M", ["a1", "a2"]),
+         ("Wb", "M", ["b1", "b2"]),
+         ("M", "S", ["a1", "a2", "b1", "b2"]),
+         ("S", "Ea", ["a1", "a2"]),
+         ("S", "Eb", ["b1", "b2"])],
+    )
+    from lineorder.solve import SolveConfig, solve_instance
+    out = solve_instance(inst, SolveConfig(seed=0, jobs=1))
+    assert out.after.crossings_same == 0
+    assert out.after.crossings_diff == 0
+    assert out.after.weighted == 0.0
+
+    # sanity: the crossed bundle order (interleaved a1 b1 a2 b2) is strictly
+    # worse, so 0 is not vacuous — the solver actively coordinated the ends.
+    g, reg, w = inst.graph, out.reduction.registry, out.reduction.weights
+    mid = next(eid for eid, e in g.edges.items() if len(e.lines) == 4)
+    crossed = dict(out.full_solution)
+    crossed[mid] = (lids["a1"], lids["b1"], lids["a2"], lids["b2"])
+    assert score(g, reg, crossed, w).weighted > 0.0
