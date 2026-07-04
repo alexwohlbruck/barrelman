@@ -34,7 +34,7 @@ CONFIG_TARGETS: list[tuple[str, str, str]] = [
 # filters + penalty tables) — not a dataclass, but they move matching.
 GRAPH_TABLE_NAMES = (
     "RAIL_INCLUDE", "RAIL_EXCLUDE", "RAIL_SERVICE_PENALTY",
-    "RAIL_SERVICE_DEFAULT", "RAIL_USAGE_PENALTY", "REGULAR_SERVICE_VALUES",
+    "RAIL_SERVICE_DEFAULT", "RAIL_USAGE_PENALTY", "NON_REGULAR_SERVICE_VALUES",
     "NON_REGULAR_USAGE_VALUES",
 )
 
