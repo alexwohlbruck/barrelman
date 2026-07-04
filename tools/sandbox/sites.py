@@ -97,8 +97,13 @@ SITES: list[Site] = [
         center=(-87.6470, 41.8855), bbox=(-87.6560, 41.8835, -87.6360, 41.8875),
         zoom=15.0,
         families=(CTA_BLUE, CTA_GREEN, CTA_PINK),
-        expected="bundle", pairs=((CTA_BLUE, CTA_GREEN), (CTA_BLUE, CTA_PINK)),
-        note="Lake-leg Blue subway runs under Lake St elevated (one bundle)",
+        expected="bundle", pairs=((CTA_BLUE, CTA_GREEN),),
+        note="Lake-leg Blue subway runs under Lake St elevated (one bundle). "
+             "Green and Pink share ONE elevated ribbon here (always the "
+             "G/Pink lc-2 pair), so Blue x Green is the representative "
+             "cross-family bundle pair; the redundant Blue x Pink pair picks "
+             "the far Pink slot of the 3-line bundle (Blue|Green|Pink), which "
+             "renders 2 slots wide by design, not a loose bundle.",
     ),
 
     # ── NYC bundle sites ────────────────────────────────────────────────
