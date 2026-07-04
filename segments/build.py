@@ -53,11 +53,18 @@ def load_shapes(g, dsn: str) -> dict:
 RAIL_ROUTE_TYPES = {0, 1, 2, 5, 7, 12}  # tram, subway, rail, cable, funi, monorail
 RAIL_WAY_TAGS = ("subway", "rail", "light_rail", "tram",
                  "narrow_gauge", "monorail", "funicular")
+# non-running service/usage values excluded from the DISPLAY ground truth
+# (canonical predicate: shapesnap.graph.is_regular_service_track) — a yard's
+# fan of parallel tracks must not pull a reconciliation snap toward track no
+# service rides. Matching still sees these (penalized); this is display only.
+from shapesnap.graph import (NON_REGULAR_SERVICE_VALUES,  # noqa: E402
+                             NON_REGULAR_USAGE_VALUES)
 
 
 def load_ways(g, dsn: str) -> list:
-    """Real OSM track polylines (geo_places railway ways) inside the
-    build's bounding box, for reconcile_offtrack_corridors. Only loaded
+    """REGULAR-SERVICE OSM track polylines (geo_places railway ways, yard/
+    siding/spur/crossover and industrial/military/tourism EXCLUDED) inside
+    the build's bounding box, for reconcile_offtrack_corridors. Only loaded
     for rail-mode builds; returns [] otherwise (no reconciliation).
     Each way is [[lon, lat], ...]."""
     import json
@@ -79,8 +86,13 @@ def load_ways(g, dsn: str) -> list:
             """SELECT ST_AsGeoJSON(geom) FROM geo_places
                WHERE tags->>'railway' = ANY(%s)
                  AND ST_GeometryType(geom) = 'ST_LineString'
+                 AND (tags->>'service' IS NULL
+                      OR NOT tags->>'service' = ANY(%s))
+                 AND (tags->>'usage' IS NULL
+                      OR NOT tags->>'usage' = ANY(%s))
                  AND geom && ST_MakeEnvelope(%s, %s, %s, %s, 4326)""",
-            (list(RAIL_WAY_TAGS), *bbox))
+            (list(RAIL_WAY_TAGS), list(NON_REGULAR_SERVICE_VALUES),
+             list(NON_REGULAR_USAGE_VALUES), *bbox))
         for (gj,) in cur.fetchall():
             coords = json.loads(gj)["coordinates"]
             if len(coords) >= 2:

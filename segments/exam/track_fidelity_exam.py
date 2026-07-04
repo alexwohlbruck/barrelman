@@ -9,12 +9,19 @@ does — never a chord across open ground. This exam is what converts
 
 For every rail steady row of each build (z15 band — the verbatim band the
 other exams pin), sample every ~20 m and measure the distance to the
-nearest real OSM way of the matching mode. Ground truth per build:
+nearest REGULAR-SERVICE OSM way of the matching mode (a steady centerline
+is a display midline of the mainline, so the ground truth is the mainline —
+yard/siding/spur/crossover and industrial/military/tourism ways are
+excluded via shapesnap.graph.is_regular_service_track; a yard's parallel
+tracks otherwise flatter a stray reading against track no train rides).
+Ground truth per build:
 
-  * geo_places `tags->>'railway' IN (subway,rail,light_rail,tram,...)`
-    where the build's bbox is covered by the OSM place import (NYC);
+  * geo_places `tags->>'railway' IN (subway,rail,light_rail,tram,...)`,
+    regular-service filtered, where the build's bbox is covered by the OSM
+    place import (NYC);
   * else the `mm_edges` rail QA table (the same ground truth loop_exam
-    holds Chicago to), when it covers the bbox.
+    holds Chicago to), regular-service filtered by class_penalty, when it
+    covers the bbox.
 
 A sample with NO way within COVERAGE_BUFFER_M is a ground-truth gap, not
 a stray (an off-map tail, a mode the table doesn't carry) and is not
@@ -55,6 +62,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from segments.corridors import DEFAULT_DSN  # noqa: E402
+from shapesnap.graph import (NON_REGULAR_SERVICE_VALUES,  # noqa: E402
+                             NON_REGULAR_USAGE_VALUES)
 
 SAMPLE_STEP_M = 20.0        # sample every ~20 m along each steady row
 COVERAGE_BUFFER_M = 60.0    # a sample with no way this near is a gap, skip
@@ -97,8 +106,11 @@ def _pick_ground_truth(cur, build_key):
         f"""SELECT COUNT(*) FROM geo_places
             WHERE tags->>'railway' = ANY(%s)
               AND ST_GeometryType(geom) = 'ST_LineString'
+              AND (tags->>'service' IS NULL OR NOT tags->>'service' = ANY(%s))
+              AND (tags->>'usage' IS NULL OR NOT tags->>'usage' = ANY(%s))
               AND geom && {env}""",
-        (list(RAIL_WAY_TAGS), *bbox))
+        (list(RAIL_WAY_TAGS), list(NON_REGULAR_SERVICE_VALUES),
+         list(NON_REGULAR_USAGE_VALUES), *bbox))
     n_gp = cur.fetchone()[0]
     if n_gp > 0:
         return "geo_places", n_gp, bbox
@@ -120,21 +132,65 @@ def _load_ground_truth(cur, source, bbox):
             f"""CREATE TEMP TABLE gt AS SELECT geom FROM geo_places
                 WHERE tags->>'railway' = ANY(%s)
                   AND ST_GeometryType(geom) = 'ST_LineString'
+                  AND (tags->>'service' IS NULL
+                       OR NOT tags->>'service' = ANY(%s))
+                  AND (tags->>'usage' IS NULL
+                       OR NOT tags->>'usage' = ANY(%s))
+                  AND geom && {env}""",
+            (list(RAIL_WAY_TAGS), list(NON_REGULAR_SERVICE_VALUES),
+             list(NON_REGULAR_USAGE_VALUES), *bbox))
+    else:
+        # mm_edges carries the matcher's class_penalty in tags — regular
+        # service is ~1.0 (yard 4.0, service 1.75-2.0, usage x2.0)
+        cur.execute(
+            f"""CREATE TEMP TABLE gt AS SELECT geom FROM mm_edges
+                WHERE mode = 'rail' AND geom && {env}
+                  AND COALESCE((tags->>'class_penalty')::float, 1.0) < 1.5""",
+            bbox)
+    cur.execute("CREATE INDEX ON gt USING gist(geom)")
+    cur.execute("ANALYZE gt")
+    # gt_all = the SAME ways WITHOUT the regular-service filter (service +
+    # usage included). A steady row far from regular track but hugging a
+    # SERVICE track is riding track the train genuinely uses (a crossover
+    # reverse at a terminal, an OSM segment mis-tagged service=yard on the
+    # SIR mainline) — that is a "display should follow the service track"
+    # case, not a stray across open ground, so it is advisory, never a
+    # hard fail (the same unmeasurable->skip spirit the coverage buffer
+    # already applies). gt_all lets _measure tell the two apart.
+    cur.execute("DROP TABLE IF EXISTS gt_all")
+    if source == "geo_places":
+        cur.execute(
+            f"""CREATE TEMP TABLE gt_all AS SELECT geom FROM geo_places
+                WHERE tags->>'railway' = ANY(%s)
+                  AND ST_GeometryType(geom) = 'ST_LineString'
                   AND geom && {env}""",
             (list(RAIL_WAY_TAGS), *bbox))
     else:
         cur.execute(
-            f"""CREATE TEMP TABLE gt AS SELECT geom FROM mm_edges
+            f"""CREATE TEMP TABLE gt_all AS SELECT geom FROM mm_edges
                 WHERE mode = 'rail' AND geom && {env}""", bbox)
-    cur.execute("CREATE INDEX ON gt USING gist(geom)")
-    cur.execute("ANALYZE gt")
+    cur.execute("CREATE INDEX ON gt_all USING gist(geom)")
+    cur.execute("ANALYZE gt_all")
+
+
+# a steady sample whose worst point sits within this of SOME track (gt_all,
+# service included) but beyond threshold from REGULAR track is riding a
+# service track the train uses — advisory, not a stray across open ground.
+# Set to BASE_TOL_M: a display midline threading a fan of service tracks
+# (the 5's E 180 St / Dyre Av connector over the yard throat, 19 m off the
+# nearest service way but 75 m from any mainline) reads within tolerance of
+# SOME track; a genuine chord across open ground is beyond tolerance of ALL
+# track and still fails.
+ON_SERVICE_TRACK_M = BASE_TOL_M
 
 
 def _measure(cur, build_key):
     """Per steady row: (seg_id, routes, line_count, len_m, max_stray,
-    n_samples, worst_lon, worst_lat, closed). max_stray None when no
-    sample had a way within COVERAGE_BUFFER_M; `closed` True when the row
-    is a turnback ring (start ~= end)."""
+    n_samples, worst_lon, worst_lat, closed, on_service). max_stray None
+    when no sample had a REGULAR way within COVERAGE_BUFFER_M; `closed` True
+    when the row is a turnback ring (start ~= end); `on_service` True when
+    the worst point hugs a SERVICE track (near gt_all, far from gt) — the
+    display legitimately follows track the train uses, advisory."""
     buf_deg = COVERAGE_BUFFER_M / 111000.0
     cur.execute(
         """SELECT seg_id, route_short_names, line_count,
@@ -164,10 +220,26 @@ def _measure(cur, build_key):
                FROM d""",
             (wkt, n, n, buf_deg))
         mx, nnear, wlon, wlat = cur.fetchone()
+        # is the worst point riding a SERVICE track (near ANY track)?
+        # geography distance (metres), matching how `mx` above is measured —
+        # a planar degree radius is anisotropic at this latitude and would
+        # miss a service track just past the lon-scaled radius.
+        on_service = False
+        if mx is not None and mx > BASE_TOL_M and wlon is not None:
+            cur.execute(
+                """SELECT MIN(ST_Distance(
+                       ST_SetSRID(ST_MakePoint(%s,%s),4326)::geography,
+                       geom::geography))
+                   FROM gt_all
+                   WHERE ST_DWithin(ST_SetSRID(ST_MakePoint(%s,%s),4326),
+                                    geom, %s)""",
+                (wlon, wlat, wlon, wlat, buf_deg))
+            d_all = cur.fetchone()[0]
+            on_service = d_all is not None and float(d_all) <= ON_SERVICE_TRACK_M
         out.append((seg_id, routes or "", lc, float(len_m or 0),
                     None if mx is None else float(mx),
                     int(nnear or 0), wlon, wlat,
-                    (end_gap or 0.0) <= CLOSED_LOOP_TOL_M))
+                    (end_gap or 0.0) <= CLOSED_LOOP_TOL_M, on_service))
     return out
 
 
@@ -192,24 +264,36 @@ def _report(build_key, source, n_ways, measured, authoritative):
     def pct(p):
         return strays[min(len(strays) - 1, int(p * len(strays)))]
 
-    # a closed turnback ring (start ~= end) is a pocket/loop track that
-    # departs and rejoins the main line, not a corridor traversing open
-    # ground — its distance-to-nearest-way is not a chord-stray, so it is
-    # reported but never hard-fails (the 5's Nevins St turnback loop).
-    over = [m for m in have if m[4] > _threshold(m[2]) and not m[8]]
+    # Two advisory exemptions (reported but never hard-fail):
+    #  * a closed turnback RING (start ~= end) is a pocket/loop track that
+    #    departs and rejoins the main line, not a chord across open ground
+    #    (the 5's Nevins St turnback loop);
+    #  * an ON-SERVICE row hugs a service track the train genuinely uses —
+    #    a crossover reverse at a terminal, an OSM segment mis-tagged
+    #    service=yard on the SIR mainline. Excluding service track from the
+    #    regular-service ground truth would else invent a failure where the
+    #    display correctly follows the track in use.
+    over = [m for m in have
+            if m[4] > _threshold(m[2]) and not m[8] and not m[9]]
     rings = [m for m in have if m[4] > _threshold(m[2]) and m[8]]
+    on_svc = [m for m in have
+              if m[4] > _threshold(m[2]) and not m[8] and m[9]]
     print(f"  steady rows: {len(measured)} "
           f"(measured {len(have)}, gap-skipped {skipped})")
     print(f"  stray m: mean {sum(strays)/len(strays):.1f}  "
           f"p90 {pct(0.9):.1f}  p99 {pct(0.99):.1f}  max {max(strays):.1f}")
     print(f"  over threshold (base {BASE_TOL_M:.0f} m + bundle margin): "
-          f"{len(over)}  (+{len(rings)} turnback ring(s), advisory)")
+          f"{len(over)}  (+{len(rings)} turnback ring(s), "
+          f"+{len(on_svc)} on-service-track, advisory)")
     worst = sorted(have, key=lambda m: -m[4])[:10]
     print("  worst 10 (seg_id, routes, line_count, len_m, max_stray, "
           "thresh, worst_coord):")
-    for seg_id, routes, lc, len_m, mx, nnear, wlon, wlat, closed in worst:
-        flag = ("  <-- ring (advisory)" if closed and mx > _threshold(lc)
-                else "  <-- OVER" if mx > _threshold(lc) else "")
+    for seg_id, routes, lc, len_m, mx, nnear, wlon, wlat, closed, onsvc \
+            in worst:
+        over_thr = mx > _threshold(lc)
+        flag = ("  <-- ring (advisory)" if closed and over_thr
+                else "  <-- on-service (advisory)" if onsvc and over_thr
+                else "  <-- OVER" if over_thr else "")
         print(f"    seg {seg_id:4d}  {routes:14.14s} lc={lc} "
               f"{len_m:7.0f}m  max={mx:6.1f}m  thr={_threshold(lc):4.1f}m  "
               f"({wlon:.5f},{wlat:.5f}){flag}")
@@ -241,7 +325,8 @@ def main(argv=None) -> int:
             measured = _measure(cur, bk)
             over = _report(bk, source, n_ways, measured,
                            bk in AUTHORITATIVE)
-            for seg_id, routes, lc, len_m, mx, nnear, wlon, wlat, _cl in over:
+            for (seg_id, routes, lc, len_m, mx, nnear, wlon, wlat,
+                 _cl, _os) in over:
                 failures.append(
                     f"{bk} seg {seg_id} [{routes}] strays {mx:.1f} m "
                     f"(> {_threshold(lc):.1f} m) at ({wlon:.5f},{wlat:.5f})")

@@ -57,7 +57,11 @@ from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 
-import osmium
+# osmium is imported lazily inside the graph-BUILDING functions
+# (scan_relations / _way_processor) so that lightweight consumers — the
+# display-geometry regular-service predicate (is_regular_service_track) and
+# the tag-policy constants — can import this module without the heavy osmium
+# dependency (segments/lineorder requirements omit it).
 
 FORMAT_VERSION = 1
 MODE_CLASSES = ("rail", "bus", "ferry")
@@ -76,6 +80,21 @@ RAIL_LIFECYCLE_KEYS = ("razed:railway", "construction:railway", "proposed:railwa
 RAIL_SERVICE_PENALTY = {"crossover": 1.75, "siding": 1.75, "spur": 1.75, "yard": 4.0}
 RAIL_SERVICE_DEFAULT = 2.0  # unknown service=* values: conservative
 RAIL_USAGE_PENALTY = {"industrial": 2.0, "military": 2.0, "tourism": 2.0}
+
+# DISPLAY-GEOMETRY track set (regular-service predicate). A "regular-service"
+# track is one a train in revenue service actually runs on for through
+# travel — the mainline. Non-running tracks (yards, sidings, spurs,
+# crossovers; industrial/military/tourism usage) are PENALIZED-BUT-AVAILABLE
+# in matching (trains do use crossovers to reverse at terminals — see
+# RAIL_SERVICE_PENALTY), but they must NOT be ground truth for DISPLAY
+# geometry: a yard's fan of parallel tracks pulls a pair/family midline and
+# a reconciliation snap toward track no service rides, and real transit
+# diagrams ignore them. is_regular_service_track() is the single predicate
+# for that filter (reconcile_offtrack_corridors, the pair/platform midline,
+# and the track-fidelity ground truth). This is a display filter, NOT a
+# matching change — the classify_rail penalties above are untouched.
+NON_REGULAR_SERVICE_VALUES = ("yard", "siding", "spur", "crossover")
+NON_REGULAR_USAGE_VALUES = ("industrial", "military", "tourism")
 
 BUS_HIGHWAY = {
     "motorway", "trunk", "primary", "secondary", "tertiary", "unclassified",
@@ -190,6 +209,24 @@ def classify_rail(tags) -> dict | None:
     return {"penalty": penalty, "oneway": 0}
 
 
+def is_regular_service_track(tags) -> bool:
+    """True when a rail way is REGULAR-SERVICE track (mainline a train runs
+    on in revenue service) rather than a yard/siding/spur/crossover or an
+    industrial/military/tourism way.
+
+    Display-geometry predicate ONLY (reconciliation snap target, pair/platform
+    midline, track-fidelity ground truth) — matching still SEES service tracks
+    (penalized). `tags` is any dict-like with OSM keys (an Edge.tags subset,
+    a geo_places tags jsonb, an mm_edges row): a missing key means the way
+    carries no such qualifier, i.e. it is regular service.
+    """
+    if tags.get("service") in NON_REGULAR_SERVICE_VALUES:
+        return False
+    if tags.get("usage") in NON_REGULAR_USAGE_VALUES:
+        return False
+    return True
+
+
 def _bus_open(tags) -> bool:
     return (
         tags.get("bus") in OPEN_ACCESS
@@ -252,6 +289,8 @@ def scan_relations(pbf_path: str, mode: str):
       ferry_member_ways: way ids belonging to type=route+route=ferry relations
       raw_restrictions:  [(via_node, from_way, to_way, kind, applies_to_psv)]
     """
+    import osmium
+
     route_values = ROUTE_RELATION_MODES[mode]
     way_routes: dict = {}
     ferry_member_ways: set = set()
@@ -315,6 +354,8 @@ _MODE_KEY_FILTER = {
 
 
 def _way_processor(pbf_path: str, keys=None, ids=None):
+    import osmium
+
     # NODE must be in the entity mask for the location cache; the cache handler
     # runs BEFORE the filter chain (see pyosmium FileProcessor.__iter__), so an
     # EntityFilter then drops nodes at C++ speed and python only sees ways.
