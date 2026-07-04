@@ -18,6 +18,7 @@ from shapesnap.graph import (
     classify_bus,
     connected_components,
     default_cache_path,
+    is_regular_service_track,
     load_graph,
     save_graph,
 )
@@ -68,6 +69,34 @@ def test_rail_penalties(rail):
     assert edges_of_way(rail, 108)[0].class_penalty == pytest.approx(2.0)   # industrial
     assert edges_of_way(rail, 107)[0].class_penalty == pytest.approx(1.0)   # embedded
     assert edges_of_way(rail, 101)[0].class_penalty == pytest.approx(1.0)
+
+
+def test_regular_service_predicate():
+    """Display-geometry predicate: yard/siding/spur/crossover service and
+    industrial/military/tourism usage are NON-regular (excluded from the
+    pair/platform midline + reconciliation ground truth); a plain running
+    track is regular. A missing key means the qualifier is absent."""
+    assert is_regular_service_track({"railway": "subway"})
+    assert is_regular_service_track({"railway": "rail", "service": "main"})
+    for svc in ("yard", "siding", "spur", "crossover"):
+        assert not is_regular_service_track({"railway": "rail",
+                                             "service": svc}), svc
+    for use in ("industrial", "military", "tourism"):
+        assert not is_regular_service_track({"railway": "rail",
+                                             "usage": use}), use
+
+
+def test_yard_track_matchable_but_display_excluded(rail):
+    """A yard track stays PENALIZED-BUT-AVAILABLE in matching (trains reverse
+    over crossovers at terminals — its edges exist with penalty 4.0) yet is
+    EXCLUDED from the display ground truth by the regular-service predicate.
+    The two concerns are independent: filtering display geometry never
+    removes a yard from the matching graph."""
+    yard_edges = edges_of_way(rail, 104)
+    assert yard_edges, "the yard way must still be in the matching graph"
+    assert yard_edges[0].class_penalty == pytest.approx(4.0)  # penalized
+    # ...but the same tags fail the display-geometry predicate
+    assert not is_regular_service_track(dict(yard_edges[0].tags))
 
 
 # ── rail: the structural-separation property ─────────────────────────────────

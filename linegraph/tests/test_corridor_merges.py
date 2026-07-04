@@ -125,18 +125,20 @@ def test_cross_bundle_onset_tails_ease_onto_seam():
 
 
 def _breathing_pair(cfg):
-    gap = cfg.cross_family_gap_m  # 10 m threshold
+    gap = cfg.cross_family_gap_m  # 22 m threshold (round 19)
+    release = cfg.release_gap_mult * gap  # 33 m
 
     def y2(x):
-        # 8 m gap, breathing to 12 m (above threshold, below the 15 m
-        # release gap) for 150 m twice, and one short 120 m dip to 18 m
-        # (beyond release gap but shorter than window_dip_coalesce_m)
+        # 8 m gap, breathing just ABOVE the threshold but BELOW the
+        # release gap (a bundle that widens gently, never lets go) for
+        # 150 m twice, and one short 120 m dip beyond the release gap
+        # (shorter than window_dip_coalesce_m, so it still coalesces)
         if 400 <= x < 550:
-            return 12.0
+            return gap + 4.0            # 26 m: above 22, below 33
         if 900 <= x < 1020:
-            return 18.0
+            return release + 5.0        # 38 m: beyond release, short dip
         if 1400 <= x < 1550:
-            return 12.0
+            return gap + 4.0
         return 8.0
 
     c1 = Corr(0, frozenset({"A"}), frozenset({"red"}), 0, 1,
@@ -157,11 +159,13 @@ def test_breathing_corridor_forms_exactly_one_window():
 
 def test_sustained_release_still_splits_the_window():
     cfg = WaygraphConfig()
+    release = cfg.release_gap_mult * cfg.cross_family_gap_m  # 33 m
 
     def y2(x):
-        # a genuine release: 400 m beyond the release gap mid-corridor
+        # a genuine release: 400 m clearly beyond the release gap
+        # (round 19: > 1.5 x 22 m) mid-corridor
         if 800 <= x < 1200:
-            return 25.0
+            return release + 15.0       # 48 m
         return 8.0
 
     c1 = Corr(0, frozenset({"A"}), frozenset({"red"}), 0, 1,
@@ -171,3 +175,55 @@ def test_sustained_release_still_splits_the_window():
     wins, _cum = _windows(c1, c2, cfg.cross_family_gap_m,
                           cfg.midline_step_m, cfg)
     assert len(wins) == 2, f"genuine divergence must split: {wins}"
+
+
+# ── E: round-19 bundle tolerance + anti-kiss gates ───────────────────────────
+
+
+def test_wide_parallel_cross_family_bundles_at_raised_gap():
+    """A genuine cross-family parallel a bit farther apart than the old
+    10 m gap (DeKalb's orange B/D beside yellow N/Q down the Manhattan
+    Bridge approach: a stable ~16 m gap, dead parallel, no crossing) must
+    BUNDLE at the raised 22 m gap — the under-bundling this round fixes."""
+    cfg = WaygraphConfig()
+    assert cfg.cross_family_gap_m >= 16.0, "gap must clear a 16 m parallel"
+    st = _State(cfg, verbose=False)
+    # two straight tracks 16 m apart for 1.5 km (comfortably past
+    # cross_family_min_len_m), different families
+    c1 = _add(st, {"B", "D"}, {"orange"}, _line(0.0, 0.0, 1500.0))
+    c2 = _add(st, {"N", "Q"}, {"yellow"}, _line(16.0, 0.0, 1500.0))
+    cand = _try_merge(st, "cross", c1, c2, EPSG)
+    assert cand is not None, "a stable 16 m parallel must bundle at gap 22"
+    assert cand[5] > cfg.cross_family_min_len_m, "the bundle spans the co-run"
+
+
+def test_synthetic_kiss_stays_unbundled_at_raised_gap():
+    """A KISS — a transient V-shaped convergence where two different
+    families cross (Rector 1 x R/W, Whitehall crossing tubes) — must NOT
+    bundle even at the raised 22 m gap: it dips under the gap only briefly
+    and its geometries CROSS. Distinguished by PROFILE, not gap minimum."""
+    cfg = WaygraphConfig()
+    st = _State(cfg, verbose=False)
+
+    # c1 straight; c2 dives from far, touches near mid-span, diverges again
+    # — a symmetric V that also CROSSES c1 at the closest approach
+    def y2(x):
+        return (x - 750.0) * 0.20        # crosses y=0 at x=750, slope ~11 deg
+
+    c1 = _add(st, {"1"}, {"red"}, _line(0.0, 0.0, 1500.0))
+    c2 = _add(st, {"R", "W"}, {"yellow"}, _line(None, 0.0, 1500.0, y=y2))
+    cand = _try_merge(st, "cross", c1, c2, EPSG)
+    assert cand is None, "a crossing V-kiss must never bundle"
+
+    # and a NON-crossing but transient near-approach (dips under only
+    # briefly within a wide neighbourhood) also stays unbundled
+    st2 = _State(cfg, verbose=False)
+
+    def y3(x):
+        # 60 m apart, dipping to 12 m only over a 120 m valley near mid
+        return 12.0 if 690 <= x <= 810 else 60.0
+
+    d1 = _add(st2, {"1"}, {"red"}, _line(0.0, 0.0, 1500.0))
+    d2 = _add(st2, {"R", "W"}, {"yellow"}, _line(None, 0.0, 1500.0, y=y3))
+    assert _try_merge(st2, "cross", d1, d2, EPSG) is None, \
+        "a brief sub-threshold valley in a wide neighbourhood is a kiss"

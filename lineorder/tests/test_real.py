@@ -1,6 +1,6 @@
-"""Real-data exam: chicago:l-v3 (CTA rail, 154 edges / 220 edge_lines /
-8 routes — one crossing-bleed claim fewer since the linegraph refit +
-generalized bleed suppression) loads from PostGIS, reduces, and
+"""Real-data exam: chicago:l-v3 (CTA rail, 157 edges / 229 edge_lines /
+8 routes — round 19 raised the cross-family gap 10->22, splitting the
+Tower 18 interlocking finer) loads from PostGIS, reduces, and
 round-trips.
 
 Requires the dev DB (postgresql://barrelman:barrelman@localhost:5434);
@@ -36,8 +36,11 @@ def inst():
 
 def test_load_dimensions(inst):
     g = inst.graph
-    assert len(g.edges) == 154
-    assert sum(len(e.lines) for e in g.edges.values()) == 220
+    # round 19 (cross-family gap 10->22): the wider gap splits the Tower 18
+    # multi-family interlocking finer, 154 -> 157 edges / 220 -> 229
+    # edge_lines (loop exam holds the Loop bundles + Tower 18 unchanged).
+    assert len(g.edges) == 157
+    assert sum(len(e.lines) for e in g.edges.values()) == 229
     assert g.max_cardinality() == 6  # Loop legs
     routes = {(l.feed_id, l.route_id) for l in inst.registry
               if hasattr(l, "feed_id")}
@@ -89,7 +92,7 @@ def test_reduce_and_roundtrip(inst):
 
     full = reconstruct(red, reduced_sol)
     assert set(full) == set(g.edges)
-    assert sum(len(p) for p in full.values()) == 220
+    assert sum(len(p) for p in full.values()) == 229  # round 19: 220 -> 229
 
     orig = score(g, red.registry, full, w)
     print(f"[real] original-graph score: {orig}")
