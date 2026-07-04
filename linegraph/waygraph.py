@@ -77,8 +77,8 @@ class WaygraphConfig:
     #                                the window (local/express diverging at
     #                                a real fork — the 7th Av 1 vs 2/3);
     #                                kisses/crossings stay far below this
-    cross_family_gap_m: float = 22.0   # merge 3: cross-family proximity
-    #                                bundle. RAISED 10 -> 22 (round 19): a
+    cross_family_gap_m: float = 18.0   # merge 3: cross-family proximity
+    #                                bundle. RAISED 10 -> 18 (round 19): a
     #                                KISS is a transient V-shaped convergence,
     #                                a BUNDLE is a STABLE parallel co-run —
     #                                the two are told apart by PROFILE (the
@@ -87,12 +87,17 @@ class WaygraphConfig:
     #                                apart under-bundled into two messy ropes
     #                                (DeKalb: the orange B/D beside yellow
     #                                N/Q/R/W down the Manhattan Bridge
-    #                                approach measure a stable 9-17 m gap,
-    #                                83-100% of the run within 22 m, 0.9 deg
-    #                                relative bearing, no mid-span crossing —
-    #                                a textbook bundle that 10 m rejected).
-    #                                22 comfortably includes such parallels;
-    #                                the profile gates keep kisses out.
+    #                                approach measure a stable ~13/17 m
+    #                                mean/max gap, sustained, 0.9 deg relative
+    #                                bearing, no mid-span crossing — a textbook
+    #                                bundle that 10 m rejected). 18 clears
+    #                                DeKalb's 17.4 m max with margin; going to
+    #                                22 additionally fused stacked express/
+    #                                local track at the Queens Blvd
+    #                                interlocking (E,F over E,R) whose midline
+    #                                bowed the through-ribbon (junction exam),
+    #                                so 18 is the sweet spot. The profile gates
+    #                                keep kisses out at either value.
     cross_family_min_len_m: float = 450.0  # ...sustained at least this long
     cross_family_max_bearing_deg: float = 20.0    # parallel, not crossing
     # ── anti-kiss profile gates (round 19) — so RAISING the cross gap does
@@ -178,7 +183,7 @@ class WaygraphConfig:
 # co-extensive-twin rule + ladder contraction; 4: gap-scaled coverage-
 # biased connectivity repair + phantom-component pruning; 12: window
 # coalescing/hysteresis + boundary snap + C1 seam easing + partial-
-# coverage edge cuts; 13: cross-family gap raised 10->22 + anti-kiss
+# coverage edge cuts; 13: cross-family gap raised 10->18 + anti-kiss
 # profile gates — non-crossing, gap-stability frac/ratio)
 CONFIG_FORMAT_VERSION = 13
 

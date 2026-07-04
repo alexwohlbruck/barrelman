@@ -829,7 +829,7 @@ def _try_merge(st: _State, kind: str, c1: Corr, c2: Corr, epsg: int):
     # physically joins the mainline at a switch, gap -> ~0), so the
     # "joined" threshold is a FIXED small distance — half a directional
     # pair gap — NOT a fraction of the round-19 raised merge gap. At
-    # 0.5 x 22 m an 8 m-parallel bundle ONSET (both tracks side-by-side,
+    # 0.5 x 18 m an 8 m-parallel bundle ONSET (both tracks side-by-side,
     # never touching, then one curves away at a fork) was misread as a
     # ramp foot and rejected; half a pair gap (7.5 m, below the pair
     # spacing) keeps the real ramp foot caught while the parallel onset
@@ -852,7 +852,7 @@ def _try_merge(st: _State, kind: str, c1: Corr, c2: Corr, epsg: int):
                  tuple(sorted(c2.routes)), round(wlen, 1), round(bear, 1)))
         return None
     # ANTI-KISS PROFILE GATES (cross-family only): raising cross_family_gap
-    # to 22 m would re-admit transient convergences on gap alone, so a
+    # to 18 m would re-admit transient convergences on gap alone, so a
     # cross-family window must also look like a BUNDLE, not a KISS —
     # sustained (frac_below), flat (gap_ratio) and non-crossing. A window
     # that dips under the gap only briefly, spikes, or crosses mid-span
