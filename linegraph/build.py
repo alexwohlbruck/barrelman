@@ -438,7 +438,32 @@ def build_waygraph_linegraph(patterns, shapes, feed_id: str, mode: str,
     if use_cache:
         save_linegraph(lg, cache)
         print(f"[linegraph] cache: {cache} ({cache.stat().st_size / 1e6:.1f} MB)")
+        _save_notes_sidecar(cache, notes, digest)
     return lg, notes
+
+
+def _save_notes_sidecar(cache, notes, digest: str) -> None:
+    """Persist the corridor BuildNotes (merge/reject/count summary) as JSON
+    next to the pkl cache so tools.scorecard can read bundle/kissing counts
+    without re-running the ~minute-long usage reconstruction. Keyed by the
+    same digest, so a stale sidecar is ignored."""
+    import json as _json
+    from dataclasses import asdict
+
+    try:
+        sidecar = Path(str(cache) + ".notes.json")
+        payload = {
+            "digest": digest,
+            "merges": [asdict(m) for m in notes.merges],
+            "rejects": notes.rejects,
+            "n_absorbed": notes.n_absorbed,
+            "n_contracted": notes.n_contracted,
+            "n_offgraph": notes.n_offgraph,
+            "n_raw_corridors": notes.n_raw_corridors,
+        }
+        sidecar.write_text(_json.dumps(payload))
+    except Exception as err:  # a sidecar is a convenience, never load-bearing
+        print(f"[linegraph] warning: could not write notes sidecar ({err})")
 
 
 def waygraph_edge_routes(lg, zip_path, feed_id: str):
