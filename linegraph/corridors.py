@@ -674,6 +674,75 @@ def _window_metrics(c1: Corr, c2: Corr, a: float, b: float, step: float):
             float(s.min()), float(s.max()), fwd, mono)
 
 
+def _kiss_gates(c1: Corr, c2: Corr, a: float, b: float, gap: float,
+                step: float, cfg: WaygraphConfig):
+    """Distinguish a BUNDLE (stable parallel co-run) from a KISS (transient
+    convergence) by PROFILE, for the cross-family merge with its raised gap.
+
+    Returns (ok, frac_below, gap_ratio, crosses):
+      * frac_below — the fraction of a CONTEXT window (the merge window grown
+                     by cross_family_min_len_m/2 on each side, clipped to c1)
+                     that sits within `gap` of c2. The merge window itself is
+                     below-threshold by construction, so it never discriminates
+                     — a KISS is a below-threshold VALLEY inside a wider
+                     above-threshold neighbourhood (Rector, Whitehall dip under
+                     only near closest approach), a BUNDLE stays under across
+                     the whole context (DeKalb, the Chicago Lake leg).
+      * gap_ratio  — below-threshold gap_max / gap_mean. A loose safety valve
+                     only: genuine bundles breathe a lot (Chicago P+Red 4.1,
+                     the Lake leg 3.2 as their gap dips to 0 at shared switches
+                     and rises to ~14 m between), so this must not reject them.
+      * crosses    — the two geometries INTERSECT in the merge-window interior
+                     (endpoint convergence at a shared switch is excluded by
+                     trimming cross_family_cross_slack_m off each end). A
+                     mid-span crossing is the definitive kiss signal.
+
+    ok = sustained (frac_below high) AND flat-enough (gap_ratio) AND
+    non-crossing.
+    """
+    pts, cum = c1.pts, _cum(c1.pts)
+    total = cum[-1]
+
+    # gap-stability + frac_below over the CONTEXT window (grown either side)
+    ctx = cfg.cross_family_min_len_m / 2.0
+    ca, cb = max(0.0, a - ctx), min(total, b + ctx)
+    nc = max(3, int((cb - ca) / step) + 1)
+    tc = np.linspace(ca, cb, nc)
+    pc = np.column_stack([np.interp(tc, cum, pts[:, 0]),
+                          np.interp(tc, cum, pts[:, 1])])
+    line2 = c2.line()
+    dc = shapely.distance(shapely.points(pc[:, 0], pc[:, 1]), line2)
+    below = dc <= gap
+    frac_below = float(below.mean())
+    gb = dc[below]
+    gap_ratio = float(gb.max() / max(gb.mean(), 1e-9)) if len(gb) else 999.0
+
+    # NON-CROSSING: a mid-span crossing is the definitive kiss signal, but a
+    # co-terminal parallel CONVERGES onto its partner at the shared switches
+    # (gap -> 0 near the window ends) — that endpoint convergence is not a
+    # crossing. So we ignore intersections in the endpoint zones (the greater
+    # of an absolute slack and the outer 10% of the window — a switch ladder
+    # can reach a good fraction of a block: Chicago P+Brn touch at 99% of a
+    # 3.2 km window) AND intersections where the pair gap is ~0 there anyway.
+    slack = max(cfg.cross_family_cross_slack_m, 0.10 * (b - a))
+    lo, hi = a + slack, b - slack
+    crosses = False
+    if hi > lo:
+        nw = max(2, int((b - a) / step) + 1)
+        tw = np.linspace(a, b, nw)
+        pw = np.column_stack([np.interp(tw, cum, pts[:, 0]),
+                              np.interp(tw, cum, pts[:, 1])])
+        mask = (tw >= lo) & (tw <= hi)
+        if mask.sum() >= 2:
+            inter = LineString(pw[mask]).intersection(line2)
+            crosses = (not inter.is_empty) and inter.geom_type in (
+                "Point", "MultiPoint", "GeometryCollection")
+    ok = (frac_below >= cfg.cross_family_min_frac_below
+          and gap_ratio <= cfg.cross_family_max_gap_ratio
+          and not crosses)
+    return ok, frac_below, gap_ratio, crosses
+
+
 def _lonlat_of(xy, epsg: int):
     inv = Transformer.from_crs(epsg, 4326, always_xy=True)
     lon, lat = inv.transform(xy[0], xy[1])
@@ -772,6 +841,25 @@ def _try_merge(st: _State, kind: str, c1: Corr, c2: Corr, epsg: int):
                 ("cross_bearing", tuple(sorted(c1.routes)),
                  tuple(sorted(c2.routes)), round(wlen, 1), round(bear, 1)))
         return None
+    # ANTI-KISS PROFILE GATES (cross-family only): raising cross_family_gap
+    # to 22 m would re-admit transient convergences on gap alone, so a
+    # cross-family window must also look like a BUNDLE, not a KISS —
+    # sustained (frac_below), flat (gap_ratio) and non-crossing. A window
+    # that dips under the gap only briefly, spikes, or crosses mid-span
+    # fails here even though its minimum gap qualified (Rector 1 x R/W,
+    # Whitehall crossing tubes). Genuine parallels pass (DeKalb).
+    if kind == "cross":
+        ok, frac_below, gap_ratio, crosses = _kiss_gates(
+            c1, c2, a, b, gap, cfg.midline_step_m, cfg)
+        if not ok:
+            if wlen >= 150.0:
+                reason = ("cross_crosses" if crosses
+                          else "cross_unstable_gap")
+                st.notes.rejects.append(
+                    (reason, tuple(sorted(c1.routes)),
+                     tuple(sorted(c2.routes)), round(wlen, 1),
+                     _lonlat_of(_interp(c1.pts, cum, (a + b) / 2), epsg)))
+            return None
     # no divergence beyond the window: at each window end at least one
     # corridor ENDS within slack — two corridors that both continue
     # while the gap grows are crossing/brushing, never a merge

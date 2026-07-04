@@ -77,9 +77,57 @@ class WaygraphConfig:
     #                                the window (local/express diverging at
     #                                a real fork — the 7th Av 1 vs 2/3);
     #                                kisses/crossings stay far below this
-    cross_family_gap_m: float = 10.0   # merge 3: cross-family proximity bundle
+    cross_family_gap_m: float = 22.0   # merge 3: cross-family proximity
+    #                                bundle. RAISED 10 -> 22 (round 19): a
+    #                                KISS is a transient V-shaped convergence,
+    #                                a BUNDLE is a STABLE parallel co-run —
+    #                                the two are told apart by PROFILE (the
+    #                                gates below), not by a low gap minimum.
+    #                                At 10 m genuine parallels a bit farther
+    #                                apart under-bundled into two messy ropes
+    #                                (DeKalb: the orange B/D beside yellow
+    #                                N/Q/R/W down the Manhattan Bridge
+    #                                approach measure a stable 9-17 m gap,
+    #                                83-100% of the run within 22 m, 0.9 deg
+    #                                relative bearing, no mid-span crossing —
+    #                                a textbook bundle that 10 m rejected).
+    #                                22 comfortably includes such parallels;
+    #                                the profile gates keep kisses out.
     cross_family_min_len_m: float = 450.0  # ...sustained at least this long
     cross_family_max_bearing_deg: float = 20.0    # parallel, not crossing
+    # ── anti-kiss profile gates (round 19) — so RAISING the cross gap does
+    #    not re-admit kisses. A kiss FAILS at least one: it crosses, its
+    #    below-threshold span is a narrow valley, or its gap spikes.
+    cross_family_min_frac_below: float = 0.60  # the co-run must be
+    #                                SUSTAINED over its NEIGHBOURHOOD: at
+    #                                least this fraction of a context window
+    #                                (the merge window grown by
+    #                                cross_family_min_len_m/2 each side) sits
+    #                                below the gap threshold. The merge window
+    #                                itself is all-below by construction, so
+    #                                the context is what discriminates — a
+    #                                kiss is a below-threshold VALLEY inside
+    #                                an above-threshold neighbourhood (Rector,
+    #                                Whitehall dip under only near closest
+    #                                approach); a bundle stays under across
+    #                                the whole context (DeKalb, Chicago's
+    #                                Lake leg -> ~1.0).
+    cross_family_max_gap_ratio: float = 6.0  # loose safety valve on the
+    #                                below-threshold gap_max/gap_mean: genuine
+    #                                bundles breathe a LOT (Chicago P+Red 4.1,
+    #                                the Lake leg 3.2 — the gap dips to 0 at
+    #                                shared switches and rises to ~14 m
+    #                                between), so this only catches a
+    #                                pathological spike, never a real co-run.
+    cross_family_cross_slack_m: float = 40.0  # NON-CROSSING gate: the two
+    #                                corridor geometries must not INTERSECT
+    #                                in the window INTERIOR (endpoint
+    #                                convergence at a shared switch is fine —
+    #                                intersections within this slack of a
+    #                                window end are ignored). A mid-span
+    #                                crossing (Rector 1 x R/W, Whitehall
+    #                                crossing tubes) is a kiss and never
+    #                                merges, however low its gap dips.
     merge_min_len_m: float = 40.0  # merges 1-2: minimum sustained window
     merge_end_slack_m: float = 40.0  # window may stop this short of a corridor end
     merge_max_bearing_deg: float = 35.0  # merges 1-2 sanity (switch ladders bend)
@@ -130,8 +178,9 @@ class WaygraphConfig:
 # co-extensive-twin rule + ladder contraction; 4: gap-scaled coverage-
 # biased connectivity repair + phantom-component pruning; 12: window
 # coalescing/hysteresis + boundary snap + C1 seam easing + partial-
-# coverage edge cuts)
-CONFIG_FORMAT_VERSION = 12
+# coverage edge cuts; 13: cross-family gap raised 10->22 + anti-kiss
+# profile gates — non-crossing, gap-stability frac/ratio)
+CONFIG_FORMAT_VERSION = 13
 
 
 def config_digest_token(cfg: WaygraphConfig) -> str:
