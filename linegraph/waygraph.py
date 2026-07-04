@@ -98,7 +98,39 @@ class WaygraphConfig:
     #                                bowed the through-ribbon (junction exam),
     #                                so 18 is the sweet spot. The profile gates
     #                                keep kisses out at either value.
-    cross_family_min_len_m: float = 450.0  # ...sustained at least this long
+    cross_family_min_len_m: float = 200.0  # ...sustained at least this long.
+    #                                LOWERED 450 -> 200 (round 21): the 450 m
+    #                                floor dropped genuine ~200-450 m parallels
+    #                                that render as two crowded independent
+    #                                lines (Jay St A/C+F, J/Z+M on the
+    #                                Williamsburg approach, the ~330 m
+    #                                near-coincident A/C beside B/D). The
+    #                                anti-kiss PROFILE gates (non-crossing,
+    #                                gap-stability frac/ratio, bearing) keep the
+    #                                kisses out at the shorter length — a real
+    #                                kiss crosses or is a transient valley
+    #                                regardless of how short the floor is, so
+    #                                lowering the floor admits bundles, not
+    #                                kisses (Rector/Brooklyn-Bridge/Whitehall
+    #                                stay rejected by crosses/frac).
+    cross_family_sustained_min_m: float = 450.0  # a cross-family co-run this
+    #                                long BUNDLES even when BOTH corridors
+    #                                continue past the window (they are not
+    #                                co-terminal — the window is mid-corridor
+    #                                and both diverge only at a real fork
+    #                                downstream: the 4/5 beside 2/3 for 1.25 km
+    #                                toward Nevins/Atlantic, A/C beside B/D
+    #                                ~945 m, F beside N/Q/R ~567 m). This is the
+    #                                cross-family analogue of
+    #                                family_sustained_min_m and the transitive-
+    #                                bundling mechanism: once E has merged into
+    #                                a trunk, F sustains parallel to that BUNDLE
+    #                                centerline and joins it here, collapsing a
+    #                                whole physical corridor into ONE multi-slot
+    #                                bundle. The full profile gates still apply,
+    #                                so a long non-crossing KISS (a wide
+    #                                neighbourhood with a brief valley) fails
+    #                                frac_below; a crossing fails non-crossing.
     cross_family_max_bearing_deg: float = 20.0    # parallel, not crossing
     # ── anti-kiss profile gates (round 19) — so RAISING the cross gap does
     #    not re-admit kisses. A kiss FAILS at least one: it crosses, its
@@ -184,8 +216,11 @@ class WaygraphConfig:
 # biased connectivity repair + phantom-component pruning; 12: window
 # coalescing/hysteresis + boundary snap + C1 seam easing + partial-
 # coverage edge cuts; 13: cross-family gap raised 10->18 + anti-kiss
-# profile gates — non-crossing, gap-stability frac/ratio)
-CONFIG_FORMAT_VERSION = 13
+# profile gates — non-crossing, gap-stability frac/ratio; 14: transitive
+# cross-family bundling — min_len 450->200, sustained_min for both-continue
+# parallels, weave-crossing exemption (trunk interleaving is not a kiss),
+# near-coincident ratio exemption, ramp gate scoped off cross)
+CONFIG_FORMAT_VERSION = 14
 
 
 def config_digest_token(cfg: WaygraphConfig) -> str:

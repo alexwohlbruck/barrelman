@@ -72,7 +72,7 @@ import numpy as np
 import shapely
 from pyproj import Transformer
 from shapely import STRtree
-from shapely.geometry import LineString
+from shapely.geometry import LineString, Point
 from shapely.ops import substring
 
 from linegraph.model import FORMAT_VERSION, LGEdge, LGNode, LineGraph
@@ -703,8 +703,12 @@ def _kiss_gates(c1: Corr, c2: Corr, a: float, b: float, gap: float,
     pts, cum = c1.pts, _cum(c1.pts)
     total = cum[-1]
 
-    # gap-stability + frac_below over the CONTEXT window (grown either side)
-    ctx = cfg.cross_family_min_len_m / 2.0
+    # gap-stability + frac_below over the CONTEXT window (grown either side).
+    # The neighbourhood must be WIDE — a kiss is a below-threshold valley
+    # inside a wider above-threshold context — so grow by the SUSTAINED
+    # length, not the (now short) min length, or the context shrinks with
+    # the floor and a brief valley reads as sustained.
+    ctx = cfg.cross_family_sustained_min_m / 2.0
     ca, cb = max(0.0, a - ctx), min(total, b + ctx)
     nc = max(3, int((cb - ca) / step) + 1)
     tc = np.linspace(ca, cb, nc)
@@ -735,10 +739,51 @@ def _kiss_gates(c1: Corr, c2: Corr, a: float, b: float, gap: float,
         mask = (tw >= lo) & (tw <= hi)
         if mask.sum() >= 2:
             inter = LineString(pw[mask]).intersection(line2)
-            crosses = (not inter.is_empty) and inter.geom_type in (
-                "Point", "MultiPoint", "GeometryCollection")
+            if (not inter.is_empty) and inter.geom_type in (
+                    "Point", "MultiPoint", "GeometryCollection"):
+                # A shared 4-track trunk WEAVES: express and local tracks
+                # physically cross at every bypass/interlocking, but the pair
+                # stays near-coincident there (gap -> 0 at the shared switch) —
+                # that is not a KISS. A true kiss X DIVERGES away from the
+                # crossing (the gap grows on both sides), so around the
+                # crossing the corridors are genuinely SEPARATED. Count a
+                # crossing only where the two geometries are meaningfully apart
+                # in the crossing's neighbourhood; ignore weave-crossings where
+                # they hug a shared centerline (Queens Blvd E x F/FX, DeKalb
+                # N/Q x B/D, the near-coincident M x J/Z), which the sustained
+                # frac_below already vouches for as a bundle.
+                ipts = []
+                for g in getattr(inter, "geoms", [inter]):
+                    if g.geom_type == "Point":
+                        ipts.append((g.x, g.y))
+                # A kiss X DIVERGES: a short distance either side of the
+                # crossing the corridors are far apart. A weave stays hugged.
+                # Sample the pair gap a fixed offset (a bit over a track gap)
+                # to each side of every crossing; a crossing is a real kiss
+                # only where BOTH sides have pulled meaningfully apart.
+                pwl = LineString(pw)
+                off = max(cfg.pair_gap_m, 20.0)
+                weave_tol = max(cfg.pair_gap_m, gap / 2.0)
+                for ix, iy in ipts:
+                    s_c = pwl.project(Point(ix, iy))
+                    apart = []
+                    for ds in (-off, off):
+                        sp = min(max(s_c + ds, 0.0), pwl.length)
+                        q = pwl.interpolate(sp)
+                        apart.append(line2.distance(q))
+                    if apart and min(apart) > weave_tol:
+                        crosses = True
+                        break
+    # NEAR-COINCIDENT exemption: two corridors within a couple of meters are
+    # the SAME physical track (a duplicate centerline the merges must fold
+    # into one) — their gap dips to ~0, so gap_max/gap_mean explodes past the
+    # ratio valve for a purely numerical reason (0.1 m mean vs 2 m max = 20x).
+    # A ~0 m mean gap is the strongest possible bundle signal, never a kiss,
+    # so the ratio valve does not apply there.
+    near_coincident = len(gb) > 0 and float(gb.mean()) <= cfg.pair_gap_m / 3.0
+    ratio_ok = near_coincident or gap_ratio <= cfg.cross_family_max_gap_ratio
     ok = (frac_below >= cfg.cross_family_min_frac_below
-          and gap_ratio <= cfg.cross_family_max_gap_ratio
+          and ratio_ok
           and not crosses)
     return ok, frac_below, gap_ratio, crosses
 
@@ -834,8 +879,20 @@ def _try_merge(st: _State, kind: str, c1: Corr, c2: Corr, epsg: int):
     # ramp foot and rejected; half a pair gap (7.5 m, below the pair
     # spacing) keeps the real ramp foot caught while the parallel onset
     # merges.
+    # A ramp foot converges onto the mainline at a switch (one end ~0 m off)
+    # and angles away at the other (far off). A SUSTAINED parallel co-run
+    # that converges at one junction and diverges at a real fork downstream
+    # (E onto the F/FX trunk for 2.5 km, the 4/5 beside the 2/3 for 1.25 km,
+    # F onto the N/Q/R 60th-St tunnel for 567 m, A/C onto F at Jay St for
+    # ~400 m) has the SAME endpoint profile but is the transitive BUNDLE we
+    # want, not a ramp. For pair/family merges (no profile gates) the endpoint
+    # test is the only ramp discriminator, so it stands. For CROSS merges the
+    # anti-kiss profile gates below already separate a ramp (which angles in —
+    # a brief valley failing frac_below, or a mid-window crossing) from a
+    # low-bearing sustained co-run, so the endpoint test is redundant and must
+    # NOT veto a genuine parallel bundle that merely shares one junction.
     joined_tol = min(0.5 * gap, 0.5 * cfg.pair_gap_m)
-    if wlen > 3.0 * cfg.merge_end_slack_m:
+    if kind != "cross" and wlen > 3.0 * cfg.merge_end_slack_m:
         d_u = float(line2.distance(shapely.points(*c1.pts[0])))
         d_v = float(line2.distance(shapely.points(*c1.pts[-1])))
         if min(d_u, d_v) <= joined_tol and max(d_u, d_v) > gap:
