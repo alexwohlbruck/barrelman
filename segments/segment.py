@@ -938,12 +938,26 @@ def pair_entries(nid: int, entries: list, cgs: dict, shapes_xy: dict,
                 return [], list(entries)
         return [(entries[0], entries[1])], []
 
+    def folds(i, j) -> bool:
+        """The two ends double back on each other — a through-transition
+        would fold (post-round-19 bundle mouths at multi-family Queens Blvd
+        interlockings). Their end tangents at the node are anti-parallel,
+        which is a stub-meet, not a flow-through: pairing them fabricates a
+        self-intersecting connector. Demote to stubs instead."""
+        ci, si, _ = entries[i]
+        cj, sj, _ = entries[j]
+        d_in = _end_dir_at_node(cgs[ci.cid], si, toward=True)
+        d_out = _end_dir_at_node(cgs[cj.cid], sj, toward=False)
+        dot = d_in[0] * d_out[0] + d_in[1] * d_out[1]
+        return dot < -0.5  # > 120 deg turn: the arms run back on themselves
+
     pairs, used = [], set()
     if passes:
         for i in range(len(entries)):
             for j in range(i + 1, len(entries)):
-                if _shape_evidence(passes, node_pt, probes[i], probes[j],
-                                   cfg.evidence_tol_m):
+                if (_shape_evidence(passes, node_pt, probes[i], probes[j],
+                                    cfg.evidence_tol_m)
+                        and not folds(i, j)):
                     pairs.append((entries[i], entries[j]))
                     used.update((i, j))
     if not pairs:
@@ -959,7 +973,7 @@ def pair_entries(nid: int, entries: list, cgs: dict, shapes_xy: dict,
                                     d_in[0] * d_out[0] + d_in[1] * d_out[1]))
                 cand.append((math.degrees(math.acos(dot)), i, j))
         for _turn, i, j in sorted(cand):
-            if i not in used and j not in used:
+            if i not in used and j not in used and not folds(i, j):
                 pairs.append((entries[i], entries[j]))
                 used.update((i, j))
     stubs = [entries[k] for k in range(len(entries)) if k not in used]
@@ -1114,6 +1128,25 @@ def build_segments(g: Graph, cfg: SegmentConfig = SegmentConfig(),
                 head = cg2.head_xy(s2)   # deduped, starts at the node
                 joined = tail + head[1:]
                 corner = len(tail) - 1
+                # a paired tail+head that DOUBLES BACK on itself (the two
+                # ends run anti-parallel near the node — a post-round-19
+                # bundle mouth at Queens Blvd where the F/FX/M arms fold)
+                # self-intersects before any fillet, so the corner index no
+                # longer marks the real bend and the emitted feature would
+                # be non-simple. Excise the doubled-back loop first (a
+                # transition is a synthetic connector, so any-scale excision
+                # is valid), then relocate the corner to the join point.
+                if len(joined) >= 4 and not LineString(joined).is_simple:
+                    node_pt = tail[-1]
+                    tcfg = replace(cfg, loop_window_m=_length(joined) + 1.0)
+                    healed, n_x, _rm = excise_corridor_loops(joined, tcfg)
+                    if n_x and LineString(healed).is_simple:
+                        joined = healed
+                        corner = min(range(len(joined)),
+                                     key=lambda i: math.dist(joined[i],
+                                                             node_pt))
+                        info["transition_fold_excised"] = \
+                            info.get("transition_fold_excised", 0) + n_x
                 radius = (max(r1.count, r2.count) * cfg.gap_px
                           * cfg.fillet_radius_factor)
                 raw_min = raw_min_radius(joined, corner, cfg.densify_step_m)
@@ -1183,6 +1216,47 @@ def build_segments(g: Graph, cfg: SegmentConfig = SegmentConfig(),
                 if r_cusp < target - 1e-6 and not t.fillet_clamped:
                     t.fillet_clamped = True
                     info["fillet_clamped"] += 1
+
+    for t in transitions:  # heal any transition centerline that still folds
+        # After the round-19 cross-family re-bundling, a wider bundle whose
+        # arms approach a junction at a shallow angle can leave a fillet
+        # centerline that crosses ITSELF (not a near-180 reversal cusp, so
+        # excise_reversal_cusps misses it — an F/FX/M Queens Blvd merge
+        # mouth). A folded centerline emits a self-intersecting feature and
+        # fails ST_IsSimple. Clean micro self-crossing loops the same way a
+        # corridor is cleaned; if still not simple, the fillet arc is the
+        # culprit — fall back to the un-filleted joined polyline (straight
+        # tail+head through the node), which is simple by construction.
+        if len(t.coords) >= 4 and not LineString(t.coords).is_simple:
+            # a transition is a synthetic connector, not real track, so its
+            # fold may be excised at any scale up to its own length (unlike a
+            # corridor, where a large loop is genuine topology) — use a loop
+            # window that spans the whole feature.
+            tcfg = replace(cfg, loop_window_m=max(cfg.loop_window_m,
+                                                  _length(t.coords) + 1.0))
+            healed, n_loops, _rm = excise_corridor_loops(t.coords, tcfg)
+            if n_loops and LineString(healed).is_simple:
+                t.coords = densify(healed, cfg.densify_step_m)
+                t.len_m = _length(t.coords)
+                info["transition_loops_excised"] = \
+                    info.get("transition_loops_excised", 0) + n_loops
+            elif t.in_end and t.out_end:
+                # rebuild the plain joined centerline (no fillet) from the
+                # corridor tails — geometry the fillet was smoothing
+                ci, si = t.in_end
+                cj, sj = t.out_end
+                if ci in cgs and cj in cgs:
+                    tail = cgs[ci].tail_xy(si)
+                    head = cgs[cj].head_xy(sj)
+                    plain = densify(_dedupe(tail + head[1:]),
+                                    cfg.densify_step_m)
+                    if len(plain) >= 2 and LineString(plain).is_simple:
+                        t.coords = plain
+                        t.len_m = _length(plain)
+                        t.fillet_radius_m = None
+                        t.fillet_clamped = True
+                        info["transition_unfilleted"] = \
+                            info.get("transition_unfilleted", 0) + 1
 
     for t in transitions:  # classify skips, convert coords to lon/lat
         if (abs(t.off_from_px - t.off_to_px) < cfg.offset_eps_px
