@@ -72,11 +72,25 @@ class WaygraphConfig:
     # ── corridor merges ──
     pair_gap_m: float = 15.0       # merge 1: directional pair (identical route sets)
     family_gap_m: float = 25.0     # merge 2: same colour family, different sets
-    family_sustained_min_m: float = 450.0  # a family co-run this long merges
+    family_sustained_min_m: float = 300.0  # a family co-run this long merges
     #                                even when both corridors continue past
     #                                the window (local/express diverging at
     #                                a real fork — the 7th Av 1 vs 2/3);
-    #                                kisses/crossings stay far below this
+    #                                kisses/crossings stay far below this.
+    #                                LOWERED 450 -> 300 (FIX 1): the 450 m
+    #                                floor left genuine same-family express/
+    #                                local bundles that share ONE junction and
+    #                                fork within ~330 m rendered as two crowded
+    #                                orange ropes (6th Av B/D express beside the
+    #                                F/M local into Broadway-Lafayette: ~330 m
+    #                                parallel within a track gap at ~1 deg, then
+    #                                M forks at Grand St). 300 catches that
+    #                                bundle while a kiss/crossing stays far
+    #                                shorter; this length also arms the family
+    #                                ramp-gate exemption (_try_merge) so the
+    #                                shared-junction fork is not misread as a
+    #                                ramp foot. Same-colour merges carry no
+    #                                kiss risk (one ribbon regardless).
     cross_family_gap_m: float = 18.0   # merge 3: cross-family proximity
     #                                bundle. RAISED 10 -> 18 (round 19): a
     #                                KISS is a transient V-shaped convergence,

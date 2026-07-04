@@ -885,14 +885,30 @@ def _try_merge(st: _State, kind: str, c1: Corr, c2: Corr, epsg: int):
     # (E onto the F/FX trunk for 2.5 km, the 4/5 beside the 2/3 for 1.25 km,
     # F onto the N/Q/R 60th-St tunnel for 567 m, A/C onto F at Jay St for
     # ~400 m) has the SAME endpoint profile but is the transitive BUNDLE we
-    # want, not a ramp. For pair/family merges (no profile gates) the endpoint
-    # test is the only ramp discriminator, so it stands. For CROSS merges the
-    # anti-kiss profile gates below already separate a ramp (which angles in —
-    # a brief valley failing frac_below, or a mid-window crossing) from a
-    # low-bearing sustained co-run, so the endpoint test is redundant and must
-    # NOT veto a genuine parallel bundle that merely shares one junction.
+    # want, not a ramp. For CROSS merges the anti-kiss profile gates below
+    # already separate a ramp (which angles in — a brief valley failing
+    # frac_below, or a mid-window crossing) from a low-bearing sustained
+    # co-run, so the endpoint test is scoped off cross.
+    #
+    # For a FAMILY merge the two corridors are the SAME colour, so the merge
+    # can never mis-render a kiss between different-coloured lines; the only
+    # risk is fusing express/local that genuinely part ways. The ramp
+    # endpoint test used to be family's sole ramp discriminator, but it also
+    # vetoes a genuine express/local BUNDLE that shares one junction and
+    # forks downstream (the 6th Av B/D express beside the F/M local into
+    # Broadway-Lafayette: converges at the station, ~330 m parallel within a
+    # track gap at ~1 deg bearing, then M forks off at Grand St — a textbook
+    # same-family bundle the round-19 cross-family fix would have caught by
+    # profile). A SUSTAINED (>= family_sustained_min_m) LOW-BEARING window
+    # is that bundle, not a ramp foot, so scope the endpoint test off it too
+    # — the sustained-length + bearing gates below are the real discriminator
+    # (a ramp foot stays short and angles in, failing both).
     joined_tol = min(0.5 * gap, 0.5 * cfg.pair_gap_m)
-    if kind != "cross" and wlen > 3.0 * cfg.merge_end_slack_m:
+    ramp_exempt = (kind == "family"
+                   and wlen >= cfg.family_sustained_min_m
+                   and bear <= max_bear)
+    if kind != "cross" and not ramp_exempt \
+            and wlen > 3.0 * cfg.merge_end_slack_m:
         d_u = float(line2.distance(shapely.points(*c1.pts[0])))
         d_v = float(line2.distance(shapely.points(*c1.pts[-1])))
         if min(d_u, d_v) <= joined_tol and max(d_u, d_v) > gap:
