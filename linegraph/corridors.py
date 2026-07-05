@@ -675,9 +675,20 @@ def _window_metrics(c1: Corr, c2: Corr, a: float, b: float, step: float):
 
 
 def _kiss_gates(c1: Corr, c2: Corr, a: float, b: float, gap: float,
-                step: float, cfg: WaygraphConfig):
+                step: float, cfg: WaygraphConfig, junction_anchored: bool = False):
     """Distinguish a BUNDLE (stable parallel co-run) from a KISS (transient
     convergence) by PROFILE, for the cross-family merge with its raised gap.
+
+    junction_anchored — one window end sits on a shared junction where the
+    joining corridor terminates/branches. The grown CONTEXT is then one-sided:
+    there is nothing to co-run with beyond the junction (the corridor ended),
+    and a genuine FORK past the far end (the joining line dives away, e.g. the
+    Chicago Blue leaving the Loop elevated at Clark/Lake) is a real divergence,
+    not a kiss valley. So the far-side context legitimately runs above gap and
+    must not dilute frac_below — a junction-anchored co-run is vouched for by
+    the WINDOW being solidly coincident, not by a symmetric neighbourhood. A
+    KISS is never junction-anchored (neither line ends on the other at the
+    touch), so this does not re-admit Rector / Whitehall / Brooklyn Bridge.
 
     Returns (ok, frac_below, gap_ratio, crosses):
       * frac_below — the fraction of a CONTEXT window (the merge window grown
@@ -720,6 +731,19 @@ def _kiss_gates(c1: Corr, c2: Corr, a: float, b: float, gap: float,
     frac_below = float(below.mean())
     gb = dc[below]
     gap_ratio = float(gb.max() / max(gb.mean(), 1e-9)) if len(gb) else 999.0
+
+    # window-interior coincidence (the merge window itself, not the grown
+    # context): for a JUNCTION-ANCHORED co-run this is the real signal — the
+    # window is solidly below gap while the far-side context diverges at a
+    # genuine fork. A KISS never has BOTH a shared junction end AND a solid
+    # window (its window is the transient valley itself).
+    nw = max(3, int((b - a) / step) + 1)
+    tw2 = np.linspace(a, b, nw)
+    pw2 = np.column_stack([np.interp(tw2, cum, pts[:, 0]),
+                           np.interp(tw2, cum, pts[:, 1])])
+    frac_window = float(
+        (shapely.distance(shapely.points(pw2[:, 0], pw2[:, 1]), line2)
+         <= gap).mean())
 
     # NON-CROSSING: a mid-span crossing is the definitive kiss signal, but a
     # co-terminal parallel CONVERGES onto its partner at the shared switches
@@ -782,9 +806,15 @@ def _kiss_gates(c1: Corr, c2: Corr, a: float, b: float, gap: float,
     # so the ratio valve does not apply there.
     near_coincident = len(gb) > 0 and float(gb.mean()) <= cfg.pair_gap_m / 3.0
     ratio_ok = near_coincident or gap_ratio <= cfg.cross_family_max_gap_ratio
-    ok = (frac_below >= cfg.cross_family_min_frac_below
-          and ratio_ok
-          and not crosses)
+    # A junction-anchored co-run is vouched for by a SOLIDLY coincident window
+    # (the joining line rides the partner right up to the shared node) rather
+    # than a symmetric neighbourhood — the far-side fork legitimately dilutes
+    # the grown-context frac_below (Chicago Blue leaves the Loop elevated at
+    # Clark/Lake). Require the window itself near-fully below gap so a kiss's
+    # transient valley (which is never junction-anchored anyway) cannot slip in.
+    sustained_ok = frac_below >= cfg.cross_family_min_frac_below or (
+        junction_anchored and frac_window >= cfg.cross_family_junction_frac)
+    ok = sustained_ok and ratio_ok and not crosses
     return ok, frac_below, gap_ratio, crosses
 
 
@@ -851,12 +881,23 @@ def _try_merge(st: _State, kind: str, c1: Corr, c2: Corr, epsg: int):
     # own approach geometry, not get swallowed into the midline.
     slack = cfg.merge_end_slack_m
     line2 = c2.line()
-    if a <= slack and line2.distance(
-            shapely.points(*c1.pts[0])) <= gap:
+    d_u0 = float(line2.distance(shapely.points(*c1.pts[0])))
+    d_v0 = float(line2.distance(shapely.points(*c1.pts[-1])))
+    if a <= slack and d_u0 <= gap:
         a = 0.0
-    if len1 - b <= slack and line2.distance(
-            shapely.points(*c1.pts[-1])) <= gap:
+    if len1 - b <= slack and d_v0 <= gap:
         b = len1
+    # JUNCTION-ANCHORED: an end of the joining corridor c1 sits ON the partner
+    # c2 (its endpoint is within gap of c2 — c1 physically terminates/branches
+    # at that shared node) AND the window reaches that end. The line JOINS c2
+    # right there, so the bundle must begin AT the junction, not a block past
+    # it. This distinguishes a genuine junction join (one end coincident, the
+    # line then either forks or dives away downstream) from a mid-corridor
+    # brush that touches neither corridor's end. Used below to admit a short
+    # junction-anchored PARALLEL co-run that the fixed sustained-length floors
+    # (built for mid-corridor bundles) would otherwise reject a block late.
+    junction_anchored = (a <= 1.0 and d_u0 <= gap) or (
+        (len1 - b) <= 1.0 and d_v0 <= gap)
     wlen = b - a
     base_min = min(cfg.merge_min_len_m, 0.8 * min(len1, len2))
     if wlen < max(base_min, 1.0):
@@ -904,9 +945,18 @@ def _try_merge(st: _State, kind: str, c1: Corr, c2: Corr, epsg: int):
     # — the sustained-length + bearing gates below are the real discriminator
     # (a ramp foot stays short and angles in, failing both).
     joined_tol = min(0.5 * gap, 0.5 * cfg.pair_gap_m)
-    ramp_exempt = (kind == "family"
-                   and wlen >= cfg.family_sustained_min_m
-                   and bear <= max_bear)
+    # A ramp foot ANGLES into the mainline (its parallel span is a fraction of
+    # its window — the far end swings wide) whereas a genuine junction JOIN
+    # runs coincident-parallel right up to the shared node (low bearing over a
+    # span that maps onto a comparable arc of c2, gated at s_hi-s_lo below).
+    # So a JUNCTION-ANCHORED LOW-BEARING window is that join even below the
+    # sustained-length floor: the 6th Av F/M local beside the B/D express folds
+    # into Broadway-Lafayette over ~250 m (< family_sustained_min_m) at ~1 deg,
+    # ending exactly on the station junction — a bundle that must onset where
+    # the lines physically share the node, not a block short of it. The
+    # bearing gate (a ramp swings wide) keeps the 63 St FX ramp foot rejected.
+    ramp_exempt = (kind == "family" and bear <= max_bear
+                   and (wlen >= cfg.family_sustained_min_m or junction_anchored))
     if kind != "cross" and not ramp_exempt \
             and wlen > 3.0 * cfg.merge_end_slack_m:
         d_u = float(line2.distance(shapely.points(*c1.pts[0])))
@@ -933,7 +983,7 @@ def _try_merge(st: _State, kind: str, c1: Corr, c2: Corr, epsg: int):
     # Whitehall crossing tubes). Genuine parallels pass (DeKalb).
     if kind == "cross":
         ok, frac_below, gap_ratio, crosses = _kiss_gates(
-            c1, c2, a, b, gap, cfg.midline_step_m, cfg)
+            c1, c2, a, b, gap, cfg.midline_step_m, cfg, junction_anchored)
         if not ok:
             if wlen >= 150.0:
                 reason = ("cross_crosses" if crosses
@@ -953,11 +1003,18 @@ def _try_merge(st: _State, kind: str, c1: Corr, c2: Corr, epsg: int):
     if kind == "pair" and not ends_ok:
         return None
     if kind == "family" and not ends_ok \
-            and wlen < cfg.family_sustained_min_m:
+            and wlen < cfg.family_sustained_min_m \
+            and not junction_anchored:
         # local/express of one family genuinely co-run for kilometers
         # and then BOTH continue past a real fork (7th Av: the 1 to
         # South Ferry, the 2/3 to Brooklyn) — a sustained window merges
-        # anyway; kisses and crossings never last this long
+        # anyway; kisses and crossings never last this long. A shorter
+        # JUNCTION-ANCHORED window (the joining line terminates on the
+        # partner at the shared node) is also a genuine join even though
+        # only ONE end is a corridor end and the other forks downstream
+        # (Broadway-Lafayette F/M onto the B/D at the station); same
+        # colour, so a mis-fused kiss cannot mis-render, and the low
+        # bearing above already discriminates it from a swinging ramp.
         return None
     if kind == "cross" and wlen < cfg.cross_family_min_len_m:
         # under the sustained-bundle floor, a cross-family merge is

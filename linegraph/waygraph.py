@@ -163,6 +163,18 @@ class WaygraphConfig:
     #                                approach); a bundle stays under across
     #                                the whole context (DeKalb, Chicago's
     #                                Lake leg -> ~1.0).
+    cross_family_junction_frac: float = 0.90  # JUNCTION-ANCHORED co-run: when
+    #                                one window end is a shared junction where
+    #                                the joining corridor terminates/branches,
+    #                                frac_below is judged on the WINDOW itself
+    #                                (this fraction below gap) not the grown
+    #                                neighbourhood — the far-side fork (Chicago
+    #                                Blue diving off the Loop elevated at
+    #                                Clark/Lake) legitimately dilutes the
+    #                                symmetric context. A near-fully coincident
+    #                                window plus a genuine junction end is a
+    #                                BUNDLE onset, not a kiss (a kiss is never
+    #                                junction-anchored).
     cross_family_max_gap_ratio: float = 6.0  # loose safety valve on the
     #                                below-threshold gap_max/gap_mean: genuine
     #                                bundles breathe a LOT (Chicago P+Red 4.1,
@@ -236,8 +248,14 @@ class WaygraphConfig:
 # near-coincident ratio exemption, ramp gate scoped off cross; 15: self-loop
 # corridors of any length popped when their routes are covered by another
 # corridor at the node — a route's redundant doubled-back excursion the
-# re-matched shape left, which lineorder rejects as a self-loop)
-CONFIG_FORMAT_VERSION = 15
+# re-matched shape left, which lineorder rejects as a self-loop; 16:
+# junction-anchored merge-window start — a joining corridor that terminates
+# on the partner at a shared junction bundles FROM that junction (family
+# ramp/length gates + cross frac_below judged on the window not the
+# neighbourhood), so the bundle onsets where the lines physically share the
+# node instead of a block past it (Broadway-Lafayette F/M, Chicago Blue at
+# Clark/Lake))
+CONFIG_FORMAT_VERSION = 16
 
 
 def config_digest_token(cfg: WaygraphConfig) -> str:
