@@ -73,16 +73,16 @@ LOOP_WINDOW = (-87.6355, 41.8755, -87.6245, 41.8875)
 # Re-synced to the DETERMINISTIC committed-source build (6 -> 5 sites): a
 # fresh `linegraph.build --feed 29 --force` from committed corridors.py
 # reproducibly assembles the Loop as 24 corridors -> 155 edges / 230
-# edge_lines / CP-SAT optimum 104, with 5 Loop-window transition sites. The
-# round-21 pins (6 sites / 167 edges / 252 edge_lines / 110 optimum) were
-# taken against a transient build the committed source no longer reproduces
-# (pre-existing drift, independent of the FIX 1 same-family bundle change,
-# which is Chicago-byte-identical). All GEOMETRY exams still PASS on this
-# build (loop_exam, junction, track_fidelity, chicago-loop + chicago-lake-blue
-# sandbox bundle sites), the North Side Brn/P/Red bundle is present, and the
-# INVARIANTS are unchanged — every Loop site is a genuine switch junction,
-# 0 deg-2 composition changes, 0 bare slot changes.
-EXPECTED_LOOP_SITES = 5         # transition sites in the Loop window
+# edge_lines / CP-SAT optimum 104, with 5 Loop-window transition sites.
+# Re-pinned 5 -> 6 sites in round 24 (junction-anchored merge-window start):
+# the Blue subway now bundles with the Lake St / Loop elevated FROM the
+# Clark/Lake junction, so the node where Blue JOINS the multi-family Loop
+# bundle (deg-3 {Blue,Brn,G,Org,P,Pink} at -87.6300, 41.8858) re-forms as a
+# genuine Loop-window switch junction — a 6th composition-change JUNCTION,
+# still 0 deg-2 composition changes and 0 bare slot changes (every Loop site
+# is a real switch, the INVARIANT the pin protects). loop_exam pins Tower 18
+# + the leg bundles unchanged; the Dearborn subway has no mid-block junction.
+EXPECTED_LOOP_SITES = 6         # transition sites in the Loop window
 EXPECTED_LOOP_COMPOSITION = 0   # ...of which deg-2 composition changes
 
 # LOOM edge_lines carry only route_color — CTA hex -> route name

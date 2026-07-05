@@ -106,6 +106,21 @@ SITES: list[Site] = [
              "renders 2 slots wide by design, not a loose bundle.",
     ),
 
+    Site(
+        key="chicago-clark-lake",
+        name="Chicago Clark/Lake — Blue joins the Lake St bundle AT the junction",
+        build_key="chicago:l-v3",
+        center=(-87.6335, 41.8857), bbox=(-87.6420, 41.8845, -87.6285, 41.8868),
+        zoom=15.5,
+        families=(CTA_BLUE, CTA_GREEN, CTA_PINK),
+        expected="bundle", pairs=((CTA_BLUE, CTA_GREEN),),
+        note="The Blue subway meets the Lake St elevated (G/Pink) at the "
+             "Clark/Lake junction throat (~-87.6305). The Blue x G/Pink bundle "
+             "must begin AT that junction, not a block west; the residual "
+             "coincident-but-separate Blue stub between the junction and the "
+             "bundle onset is the late-start bug.",
+    ),
+
     # ── NYC bundle sites ────────────────────────────────────────────────
     Site(
         key="broadway", name="Broadway trunk — N/Q/R/W one yellow ribbon",

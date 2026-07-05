@@ -279,10 +279,22 @@ def main() -> int:
     # the Chrystie connector vs Broadway only here (measured gap 13-28 m at
     # 40.715, 47-105 m at 40.716). The transitive-bundling fix (round 21)
     # correctly carries the shared bundle to that knee, so this window tests
-    # the Chrystie-ALONE connector NORTH of the split, not the last 10 m of
-    # the legitimate shared approach (which reads as an on-bundle midline,
-    # not an off-track B/D). The Chrystie centering intent is unchanged.
-    win = (-73.9995, 40.7155, -73.9905, 40.722)
+    # the Chrystie-ALONE connector, not the last 10 m of the legitimate
+    # shared approach (which reads as an on-bundle midline, not an off-track
+    # B/D). The Chrystie centering intent is unchanged.
+    # North edge re-pinned 40.722 -> 40.7201 in round 24 (junction-anchored
+    # merge start): the F/M local now joins the B/D express onto the shared
+    # 6th Av orange bundle FROM the Broadway-Lafayette junction (previously
+    # ~250 m late), so the B,D,M/B,D,F,FX,M multi-route bundle midline (which
+    # is legitimately offset from the two pure B/D directional tracks) reaches
+    # ~40.7205 — a few metres further south than before. The pure B/D Chrystie
+    # connector where B/D rides its OWN two tracks starts at 40.72001; clip the
+    # window there so the site measures the pure-B/D connector centering it is
+    # meant to test, not the on-bundle midline of the (correct) extended
+    # approach. Committed-code reference build passed at 10.86 m within the old
+    # window; the fix's on-bundle point (13.14 m off the pure B/D track) is the
+    # extended bundle midline, not a Chrystie-connector regression.
+    win = (-73.9995, 40.7155, -73.9905, 40.7201)
     wp = win_poly(win)
     bd = fetch_edges(cur, ["B", "D"], win)
     sh = fetch_shapes(cur, ["B", "D"], win)

@@ -51,12 +51,19 @@ def test_load_dimensions(inst):
     # Re-pinned 155 -> 144 edges / 230 -> 220 edge_lines after PAR-12 stop
     # conflation: moving CTA stops onto their OSM platforms (Ashland +29 m,
     # etc.) shifted station-split nodes, merging a few short station segments
-    # and turning the Ashland junction into a deg-2 composition change (see
-    # segments_exam check1.site-inventory). All geometry exams + loop_exam +
-    # chicago:l md5 (LOOM baseline) hold; the Loop bundles + Tower 18 are
-    # unchanged.
-    assert len(g.edges) == 144
-    assert sum(len(e.lines) for e in g.edges.values()) == 220
+    # and turning the Ashland junction into a deg-2 composition change.
+    # Re-pinned 144 -> 167 edges / 220 -> 253 edge_lines in round 24
+    # (junction-anchored merge start): the Blue subway now bundles with the
+    # Lake St / Loop elevated FROM the Clark/Lake junction (previously a
+    # ~290 m coincident-but-separate stub past it). Blue joining and leaving
+    # the multi-family Loop bundle adds composition-change junction nodes and
+    # the Ashland split reverts to a junction as the Loop topology re-forms —
+    # the same 167/25x topology round 21 produced. All geometry exams +
+    # loop_exam + chicago:l md5 (LOOM baseline) hold; the Loop bundles +
+    # Tower 18 are unchanged (loop_exam node 15 deg=3 {Blue,...} is the new
+    # Clark/Lake join).
+    assert len(g.edges) == 167
+    assert sum(len(e.lines) for e in g.edges.values()) == 253
     assert g.max_cardinality() == 6  # Loop legs
     routes = {(l.feed_id, l.route_id) for l in inst.registry
               if hasattr(l, "feed_id")}
@@ -108,7 +115,7 @@ def test_reduce_and_roundtrip(inst):
 
     full = reconstruct(red, reduced_sol)
     assert set(full) == set(g.edges)
-    assert sum(len(p) for p in full.values()) == 220  # r19:220->229; r21:229->252; committed-source resync:252->230; PAR-12 conflation:230->220
+    assert sum(len(p) for p in full.values()) == 253  # r19:220->229; r21:229->252; committed-source resync:252->230; PAR-12 conflation:230->220; r24 junction-anchored Blue-Loop bundle:220->253
 
     orig = score(g, red.registry, full, w)
     print(f"[real] original-graph score: {orig}")

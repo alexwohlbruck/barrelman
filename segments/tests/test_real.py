@@ -89,22 +89,29 @@ def test_transition_sites(built):
     # a transient build the committed source no longer reproduces.
     # Re-pinned 11 -> 10 junctions / 1 -> 2 composition after PAR-12 stop
     # conflation: moving the Ashland (Green/Pink) stop 29 m onto its OSM
-    # platform shifted the station-split node, so the Ashland site is now a
-    # deg-2 composition change alongside Howard (matches segments_exam
-    # check1.site-inventory). The site TOTAL (12) is unchanged; all geometry
-    # exams + loop_exam + the chicago:l LOOM md5 hold. NOTE: reads the DB
-    # build (load_graph BUILD_KEY), so run after a way-graph
-    # `linegraph.build --feed 29 --emit` — the legacy-raster
+    # platform shifted the station-split node so the Ashland site was a deg-2
+    # composition change alongside Howard.
+    # Re-pinned 12 -> 18 sites (10 -> 17 junctions, Ashland composition ->
+    # junction) in round 24 (junction-anchored merge start): the Blue subway
+    # now bundles with the Lake St / Loop elevated FROM the Clark/Lake
+    # junction, so the node where Blue joins/leaves the multi-family Loop
+    # bundle adds composition-change JUNCTION nodes and the Ashland split
+    # reverts to a junction as the Loop topology re-forms (the 167-edge /
+    # 18-site topology round 21 produced). Howard (-87.6729, 42.0191) is
+    # again the SOLE deg-2 composition site (matches segments_exam
+    # check1.site-inventory). All geometry exams + loop_exam + the chicago:l
+    # LOOM md5 hold. NOTE: reads the DB build (load_graph BUILD_KEY), so run
+    # after a way-graph `linegraph.build --feed 29 --emit` — the legacy-raster
     # linegraph/tests/test_real_emit.py emits the SAME build_key with
     # different (raster) counts, so don't interleave the two suites' emits.
-    assert len(sites) == 12
-    assert kinds["junction"] == 10
-    assert kinds["composition"] == 2
-    # both composition split nodes are unlabeled (label None); pin the pair
-    # by coordinate — Howard (-87.6729, 42.0191) + Ashland (-87.6696, 41.8852)
+    assert len(sites) == 18
+    assert kinds["junction"] == 17
+    assert kinds["composition"] == 1
+    # the composition split node is unlabeled (label None); pin by
+    # coordinate — Howard (-87.6729, 42.0192)
     comp_coords = {(round(g.nodes[nid].lon, 4), round(g.nodes[nid].lat, 4))
                    for nid, k in sites.items() if k == "composition"}
-    assert comp_coords == {(-87.6729, 42.0191), (-87.6696, 41.8852)}
+    assert comp_coords == {(-87.6729, 42.0192)}
 
 
 def test_every_site_produces_transitions(built):

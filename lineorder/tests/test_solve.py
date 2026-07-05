@@ -229,7 +229,14 @@ def test_chicago_end_to_end(chicago):
     # only (<=5 non-station junction nodes, same<=1, sep<=1). The
     # committed-source resync (167->155 edges) surfaces one more real
     # interlocking residual than the transient 167-edge build (4 -> 5).
-    assert a.weighted == pytest.approx(104.0)
+    # Re-pinned 104.0 -> 116.0 in round 24 (junction-anchored merge start):
+    # the Blue subway now bundles with the Lake St / Loop elevated FROM the
+    # Clark/Lake junction, consolidating the Loop legs and re-forming the
+    # 167-edge topology (same as round 21). The Clark/Lake Blue-join junction
+    # (-87.6300, 41.8857) is a new residual interlocking node in the report;
+    # CP-SAT still proves the exact optimum (OPTIMAL), residual at the real
+    # junctions only (same<=1, sep<=1, <=4 non-station junction nodes).
+    assert a.weighted == pytest.approx(116.0)
     assert a.crossings_same <= 1 and a.separations <= 1
     assert len(rep) <= 5
     g = chicago.graph
