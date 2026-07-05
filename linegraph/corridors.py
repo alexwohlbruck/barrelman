@@ -1219,6 +1219,38 @@ def _merge_pass(st: _State, kind: str, epsg: int):
 # ── phase 4: switch-ladder contraction ──────────────────────────────────────
 
 
+def _pop_self_loops(st: _State) -> int:
+    """Pop self-loop corridors (both ends on ONE node) whose routes are all
+    carried by another corridor at that node.
+
+    A self-loop is always residue — a sub-ladder loop at a junction, or a
+    short doubled-back excursion the re-matched shape left (A at 23 St, 1 at
+    34 St, F/R at Roosevelt Av: 36-68 m). It must never survive to emit:
+    lineorder.model rejects a self-loop (a node needs two angular slots for
+    ord_arrive/ord_leave) and a degenerate loop edge draws a visible
+    artifact; dropping it at emit instead orphans the ordering chain (a
+    mid-corridor slot-change at that node — the stability exam catches it).
+    GUARD: only pop a loop whose routes are ALL carried by another corridor
+    at the node, so a loop that is a route's sole carrier is never silently
+    dropped (would lose the route). Length-unbounded — a genuine balloon
+    loop (none in these networks) would fail the guard and survive. Called
+    both in _contract_ladders and after _heal_tears (a tear-heal connector
+    can form a fresh self-loop)."""
+    popped = 0
+    inc = st.incidence()
+    for cid in [cid for cid, c in st.corrs.items() if c.u == c.v]:
+        c = st.corrs[cid]
+        others = [st.corrs[o] for o in inc.get(c.u, ()) if o != cid and o in st.corrs]
+        covered = set().union(*(set(o.routes) for o in others)) if others else set()
+        if set(c.routes) <= covered:
+            st.corrs.pop(cid)
+            st.notes.n_contracted += 1
+            popped += 1
+    if popped:
+        st.rechain()
+    return popped
+
+
 def _contract_ladders(st: _State):
     """Contract junction-to-junction micro corridors into single nodes.
 
@@ -1232,13 +1264,7 @@ def _contract_ladders(st: _State):
     Terminal stubs and chainable deg-2 pieces are never contracted.
     """
     cfg = st.cfg
-    # micro self-loops first: a sub-ladder loop at a junction is switch
-    # residue (a coverage-cut or merge tail whose both ends retargeted
-    # onto the same node) — it would emit as a degenerate edge
-    for cid in [cid for cid, c in st.corrs.items()
-                if c.u == c.v and c.length < cfg.ladder_contract_m]:
-        st.corrs.pop(cid)
-        st.notes.n_contracted += 1
+    _pop_self_loops(st)
     changed = True
     while changed:
         changed = False
@@ -1352,6 +1378,9 @@ def build_corridor_linegraph(index: WayIndex, usage: Usage,
     st.log(f"ladder contraction: {st.notes.n_contracted} micro corridors "
            f"-> {len(st.corrs)} corridors")
     _heal_tears(st)
+    # a tear-heal connector can re-form a self-loop: sweep once more so no
+    # self-loop reaches emit (lineorder rejects them)
+    _pop_self_loops(st)
 
     inv = Transformer.from_crs(index.epsg, 4326, always_xy=True)
     inc = st.incidence()

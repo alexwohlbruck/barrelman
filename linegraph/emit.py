@@ -127,6 +127,7 @@ def emit_build(lg, edge_routes: dict, labels: dict, *, build_key: str,
                                 station_label, _ewkt_point(n.lon, n.lat)))
 
         n_dropped = 0
+        n_selfloop = 0
         with cur.copy(
             "COPY transit_graph_edges"
             " (build_key, loom_id, line_count, geom) FROM STDIN"

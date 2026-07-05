@@ -233,8 +233,11 @@ class WaygraphConfig:
 # profile gates — non-crossing, gap-stability frac/ratio; 14: transitive
 # cross-family bundling — min_len 450->200, sustained_min for both-continue
 # parallels, weave-crossing exemption (trunk interleaving is not a kiss),
-# near-coincident ratio exemption, ramp gate scoped off cross)
-CONFIG_FORMAT_VERSION = 14
+# near-coincident ratio exemption, ramp gate scoped off cross; 15: self-loop
+# corridors of any length popped when their routes are covered by another
+# corridor at the node — a route's redundant doubled-back excursion the
+# re-matched shape left, which lineorder rejects as a self-loop)
+CONFIG_FORMAT_VERSION = 15
 
 
 def config_digest_token(cfg: WaygraphConfig) -> str:
