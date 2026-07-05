@@ -1,7 +1,6 @@
-"""Real-data exam: chicago:l-v3 (CTA rail, 157 edges / 229 edge_lines /
-8 routes — round 19 raised the cross-family gap 10->22, splitting the
-Tower 18 interlocking finer) loads from PostGIS, reduces, and
-round-trips.
+"""Real-data exam: chicago:l-v3 (CTA rail, 145 edges / 223 edge_lines /
+8 routes — the DETERMINISTIC committed-source build; see the pin history in
+test_load_dimensions) loads from PostGIS, reduces, and round-trips.
 
 Requires the dev DB (postgresql://barrelman:barrelman@localhost:5434);
 skips if unreachable. Run:
@@ -53,17 +52,24 @@ def test_load_dimensions(inst):
     # etc.) shifted station-split nodes, merging a few short station segments
     # and turning the Ashland junction into a deg-2 composition change.
     # Re-pinned 144 -> 167 edges / 220 -> 253 edge_lines in round 24
-    # (junction-anchored merge start): the Blue subway now bundles with the
-    # Lake St / Loop elevated FROM the Clark/Lake junction (previously a
-    # ~290 m coincident-but-separate stub past it). Blue joining and leaving
-    # the multi-family Loop bundle adds composition-change junction nodes and
-    # the Ashland split reverts to a junction as the Loop topology re-forms —
-    # the same 167/25x topology round 21 produced. All geometry exams +
-    # loop_exam + chicago:l md5 (LOOM baseline) hold; the Loop bundles +
-    # Tower 18 are unchanged (loop_exam node 15 deg=3 {Blue,...} is the new
-    # Clark/Lake join).
-    assert len(g.edges) == 167
-    assert sum(len(e.lines) for e in g.edges.values()) == 253
+    # (junction-anchored merge start).
+    # Re-pinned 167 -> 145 edges / 253 -> 223 edge_lines — PAR-12 CACHE-DIGEST
+    # FIX. The round-24 pin of 167/253 was taken against a STALE corridor
+    # cache: the old waygraph_digest hashed only the route SHAPES, so a cache
+    # built before the round-22/23 conflation + anti-hop re-match was reused
+    # (the round-21 "transient" 167 topology, ~22 spurious corridor fragments,
+    # never rebuilt clean). The DETERMINISTIC committed-source build — clean
+    # cache, waygraph_digest v17 which also hashes route COLOUR + the
+    # pattern->route mapping + STOP positions — reproducibly emits 145 edges /
+    # 223 edge_lines. Two consecutive clean-cache rebuilds are byte-identical
+    # and reproduce these DB rows (linegraph/tests/test_determinism.py). All
+    # user fixes survive the clean rebuild: the Clark/Lake Blue join into the
+    # 6-line Lake St bundle (loop_exam node 14 deg=3 {Blue,Brn,G,Org,P,Pink}),
+    # O'Hare Blue on the OSM platform, anti-hop CTA 0 switches; chicago:l LOOM
+    # baseline md5-identical. These are the deterministic committed-source
+    # values.
+    assert len(g.edges) == 145
+    assert sum(len(e.lines) for e in g.edges.values()) == 223
     assert g.max_cardinality() == 6  # Loop legs
     routes = {(l.feed_id, l.route_id) for l in inst.registry
               if hasattr(l, "feed_id")}
@@ -115,7 +121,7 @@ def test_reduce_and_roundtrip(inst):
 
     full = reconstruct(red, reduced_sol)
     assert set(full) == set(g.edges)
-    assert sum(len(p) for p in full.values()) == 253  # r19:220->229; r21:229->252; committed-source resync:252->230; PAR-12 conflation:230->220; r24 junction-anchored Blue-Loop bundle:220->253
+    assert sum(len(p) for p in full.values()) == 223  # r19:220->229; r21:229->252; committed-source resync:252->230; PAR-12 conflation:230->220; r24 junction-anchored Blue-Loop bundle:220->253; PAR-12 cache-digest fix (clean deterministic rebuild, v17 digest):253->223
 
     orig = score(g, red.registry, full, w)
     print(f"[real] original-graph score: {orig}")

@@ -4,9 +4,10 @@ Builds the full segmentation in memory, emits transit_line_segments for
 build_key chicago:l-v3 (delete-and-replace, same rows the CLI writes),
 and checks the v3 contract:
 
-  - exactly the stage-5 exam's 11 transition sites (10 junctions +
-    Howard's deg-2 composition change; way-graph era — interlockings
-    merged to their cores), every site producing transitions,
+  - exactly the stage-5 exam's 13 transition sites (11 junctions +
+    Howard's and Ashland's deg-2 composition changes; the DETERMINISTIC
+    committed-source build — see the pin history in test_transition_sites),
+    every site producing transitions,
   - every long steady feature's underlying edge composition is constant
     (PostGIS sampling query against transit_graph_edge_lines),
   - transition endpoints coincide with adjacent steady endpoints within
@@ -92,26 +93,33 @@ def test_transition_sites(built):
     # platform shifted the station-split node so the Ashland site was a deg-2
     # composition change alongside Howard.
     # Re-pinned 12 -> 18 sites (10 -> 17 junctions, Ashland composition ->
-    # junction) in round 24 (junction-anchored merge start): the Blue subway
-    # now bundles with the Lake St / Loop elevated FROM the Clark/Lake
-    # junction, so the node where Blue joins/leaves the multi-family Loop
-    # bundle adds composition-change JUNCTION nodes and the Ashland split
-    # reverts to a junction as the Loop topology re-forms (the 167-edge /
-    # 18-site topology round 21 produced). Howard (-87.6729, 42.0191) is
-    # again the SOLE deg-2 composition site (matches segments_exam
-    # check1.site-inventory). All geometry exams + loop_exam + the chicago:l
-    # LOOM md5 hold. NOTE: reads the DB build (load_graph BUILD_KEY), so run
-    # after a way-graph `linegraph.build --feed 29 --emit` — the legacy-raster
-    # linegraph/tests/test_real_emit.py emits the SAME build_key with
-    # different (raster) counts, so don't interleave the two suites' emits.
-    assert len(sites) == 18
-    assert kinds["junction"] == 17
-    assert kinds["composition"] == 1
-    # the composition split node is unlabeled (label None); pin by
-    # coordinate — Howard (-87.6729, 42.0192)
+    # junction) in round 24 (junction-anchored merge start).
+    # Re-pinned 18 -> 13 sites (17 -> 11 junctions; Ashland composition
+    # RESTORED alongside Howard) — PAR-12 CACHE-DIGEST FIX. The round-24 pin
+    # (18/17, Howard sole composition) came from a STALE corridor cache: the
+    # old shapes-only waygraph_digest reused a cache built before the
+    # round-22/23 conflation + anti-hop re-match (the round-21 "transient"
+    # 167-edge topology). The DETERMINISTIC committed-source build (clean
+    # cache, waygraph_digest v17 which also hashes colour + route + STOP
+    # positions) reproducibly emits 145 edges / 13 transition sites: 11 genuine
+    # switch junctions + TWO deg-2 composition changes — Howard
+    # (-87.6729, 42.0192, Red<->Y) and Ashland (-87.6696, 41.8852, Pink
+    # terminates off the Green), the Ashland split being exactly the round-22
+    # stop-conflation effect the stale cache had lost. The Clark/Lake Blue
+    # bundle join survives (loop_exam / stability_exam node 14 deg-3
+    # {Blue,Brn,G,Org,P,Pink}); chicago:l LOOM md5-identical. Two clean
+    # rebuilds are byte-identical (linegraph/tests/test_determinism.py).
+    # NOTE: reads the DB build (load_graph BUILD_KEY), so run after a way-graph
+    # `linegraph.build --feed 29 --emit`; test_real_emit is now hermetic (its
+    # own throwaway key) so the two suites no longer collide.
+    assert len(sites) == 13
+    assert kinds["junction"] == 11
+    assert kinds["composition"] == 2
+    # the composition split nodes are unlabeled (label None); pin by
+    # coordinate — Howard (-87.673, 42.0191) + Ashland (-87.6696, 41.8852)
     comp_coords = {(round(g.nodes[nid].lon, 4), round(g.nodes[nid].lat, 4))
                    for nid, k in sites.items() if k == "composition"}
-    assert comp_coords == {(-87.6729, 42.0192)}
+    assert comp_coords == {(-87.673, 42.0191), (-87.6696, 41.8852)}
 
 
 def test_every_site_produces_transitions(built):

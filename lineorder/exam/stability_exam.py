@@ -78,11 +78,25 @@ LOOP_WINDOW = (-87.6355, 41.8755, -87.6245, 41.8875)
 # the Blue subway now bundles with the Lake St / Loop elevated FROM the
 # Clark/Lake junction, so the node where Blue JOINS the multi-family Loop
 # bundle (deg-3 {Blue,Brn,G,Org,P,Pink} at -87.6300, 41.8858) re-forms as a
-# genuine Loop-window switch junction — a 6th composition-change JUNCTION,
-# still 0 deg-2 composition changes and 0 bare slot changes (every Loop site
-# is a real switch, the INVARIANT the pin protects). loop_exam pins Tower 18
-# + the leg bundles unchanged; the Dearborn subway has no mid-block junction.
-EXPECTED_LOOP_SITES = 6         # transition sites in the Loop window
+# genuine Loop-window switch junction — still 0 deg-2 composition changes and
+# 0 bare slot changes (every Loop site is a real switch, the INVARIANT the pin
+# protects). loop_exam pins Tower 18 + the leg bundles unchanged; the Dearborn
+# subway has no mid-block junction.
+# Re-pinned 6 -> 5 sites (PAR-12 CACHE-DIGEST FIX): the round-24 pin of 6 was
+# taken against a STALE corridor cache (the shapes-only digest reused a cache
+# built before round-22/23, so chicago:l-v3 carried 167 edges with ~22
+# spurious corridor fragments — an extra Loop-window switch among them). The
+# DETERMINISTIC committed-source build (clean cache, waygraph_digest v17 which
+# hashes colour + route + stop positions) reproducibly assembles 145 edges /
+# 223 edge_lines / CP-SAT optimum 116 and 5 Loop-window transition sites:
+# node 14 deg-3 {Blue,Brn,G,Org,P,Pink} (the Clark/Lake Blue JOIN — the
+# junction-anchored merge fix SURVIVES the clean rebuild), node 20 deg-4
+# (Tower 18 core), and nodes 19/21/22 (the SE-corner Wabash/Van Buren
+# switches) — all genuine switches, still 0 composition / 0 slot changes. The
+# 6th site the stale pin counted was the phantom edge, now gone. These are the
+# deterministic committed-source values; a rebuild reproduces them exactly
+# (linegraph/tests/test_determinism.py).
+EXPECTED_LOOP_SITES = 5         # transition sites in the Loop window
 EXPECTED_LOOP_COMPOSITION = 0   # ...of which deg-2 composition changes
 
 # LOOM edge_lines carry only route_color — CTA hex -> route name
