@@ -29,6 +29,22 @@ export interface StationBuilding {
   geometry: GeoJSON.Geometry
 }
 
+/**
+ * A nearby station the rider can transfer to on foot. Now that same-name,
+ * close-but-distinct parent_stations render as SEPARATE map markers (Jackson
+ * Blue vs Jackson Red), the detail page cross-references them here — the
+ * Apple-Maps "Connections" list. Sourced from GTFS transfers.txt links and
+ * from parent_station proximity (~200 m parent-to-parent).
+ */
+export interface StationConnection {
+  feedId: string
+  stopId: string
+  name: string
+  distanceM: number
+  /** Lines serving the connected station (its route-bullet row). */
+  routes: StopRoutesResult[]
+}
+
 export interface StationDetail {
   stopId: string
   feedId: string
@@ -39,7 +55,12 @@ export interface StationDetail {
   buildings: StationBuilding[]
   /** Lines serving the station, aggregated across its transfer complex. */
   routes: StopRoutesResult[]
+  /** Nearby parent_stations reachable on foot (walk-transfer / transfers.txt). */
+  connections: StationConnection[]
 }
+
+/** Max parent-to-parent walking distance for a proximity connection (metres). */
+const CONNECTION_RADIUS_M = 200
 
 /**
  * Get detailed station info including OSM-linked entrances and building geometry.
@@ -88,12 +109,81 @@ export async function getStationDetail(
     WHERE feed_id = '${feedId}' AND stop_id = '${stopId}'
   `))) as any[]
 
+  // Connections: other parent_stations reachable on foot. Union of GTFS
+  // transfers.txt links (agency-declared) and parent_station proximity
+  // (~200 m parent-to-parent). Each row is a distinct connected parent; we
+  // keep the shortest distance when a station shows up via both sources.
+  const feedEsc = feedId.replace(/'/g, "''")
+  const stopEsc = stopId.replace(/'/g, "''")
+  const connectionRows = (await db.execute(sql.raw(`
+    WITH me AS (
+      SELECT stop_id, geom, parent_station
+      FROM gtfs_stops
+      WHERE feed_id = '${feedEsc}' AND stop_id = '${stopEsc}' AND location_type = 1
+      LIMIT 1
+    ),
+    -- transfers.txt: to/from links from this parent (or its child platforms)
+    -- resolved up to the connected station's parent.
+    seed AS (
+      SELECT stop_id AS sid FROM me
+      UNION
+      SELECT stop_id FROM gtfs_stops
+      WHERE feed_id = '${feedEsc}' AND parent_station = '${stopEsc}'
+    ),
+    transfer_targets AS (
+      SELECT t.to_stop_id AS sid FROM gtfs_transfers t JOIN seed ON t.from_stop_id = seed.sid
+      WHERE t.feed_id = '${feedEsc}' AND t.to_stop_id <> t.from_stop_id
+      UNION
+      SELECT t.from_stop_id AS sid FROM gtfs_transfers t JOIN seed ON t.to_stop_id = seed.sid
+      WHERE t.feed_id = '${feedEsc}' AND t.to_stop_id <> t.from_stop_id
+    ),
+    transfer_parents AS (
+      SELECT DISTINCT COALESCE(NULLIF(g.parent_station, ''), g.stop_id) AS parent_id
+      FROM transfer_targets tt
+      JOIN gtfs_stops g ON g.feed_id = '${feedEsc}' AND g.stop_id = tt.sid
+    ),
+    candidates AS (
+      -- Proximity: other parent stations within CONNECTION_RADIUS_M.
+      SELECT s.stop_id AS parent_id, s.stop_name,
+             ST_Distance(s.geom::geography, me.geom::geography) AS distance_m
+      FROM gtfs_stops s, me
+      WHERE s.feed_id = '${feedEsc}' AND s.location_type = 1
+        AND s.stop_id <> '${stopEsc}'
+        AND ST_DWithin(s.geom::geography, me.geom::geography, ${CONNECTION_RADIUS_M})
+      UNION
+      -- transfers.txt parents (any distance — the agency declared the link).
+      SELECT s.stop_id AS parent_id, s.stop_name,
+             ST_Distance(s.geom::geography, me.geom::geography) AS distance_m
+      FROM transfer_parents tp
+      JOIN gtfs_stops s ON s.feed_id = '${feedEsc}' AND s.stop_id = tp.parent_id
+                       AND s.location_type = 1
+      CROSS JOIN me
+      WHERE s.stop_id <> '${stopEsc}'
+    )
+    SELECT parent_id AS stop_id, stop_name, min(distance_m) AS distance_m
+    FROM candidates
+    GROUP BY parent_id, stop_name
+    ORDER BY min(distance_m)
+  `))) as any[]
+
+  // Attach each connection's route bullets. Bounded (typically 0–3 rows).
+  const connections: StationConnection[] = await Promise.all(
+    connectionRows.map(async (r: any) => ({
+      feedId,
+      stopId: r.stop_id,
+      name: r.stop_name,
+      distanceM: Math.round(parseFloat(r.distance_m)),
+      routes: await getRoutesForStop(feedId, r.stop_id),
+    })),
+  )
+
   return {
     stopId: station.stop_id,
     feedId: station.feed_id,
     stopName: station.stop_name,
     lat: station.stop_lat,
     lon: station.stop_lon,
+    connections,
     entrances: entrances.map((r: any) => ({
       osmId: r.osm_id,
       name: r.name || null,

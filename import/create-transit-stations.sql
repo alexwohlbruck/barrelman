@@ -20,23 +20,26 @@
 -- Clark/Lake (Subway) from chicago:l = two markers). Scoping to the rendered
 -- builds is what a marker source must do to agree with the lines it labels.
 --
--- CLUSTERING (two levels). LOOM often splits a big interchange into several
--- nodes:
---   (1) same-name nodes within ~330 m fuse (Times Sq-42 St = one row, all
---       ~10 routes) — but same-name nodes KILOMETRES apart stay separate
---       (`86 St` appears on several unrelated lines), so this pass is
---       per-station_label.
---   (2) a proximity post-merge fuses adjacent complexes with DIFFERENT platform
---       names that are one physical transfer (74 St-Broadway / Jackson
---       Heights-Roosevelt Av; 59 St / Lexington Av-59 St; Brooklyn
---       Bridge-City Hall / Chambers St): preliminary complexes whose centroids
---       lie within STATION_MERGE_M of each other collapse to one marker whose
---       routes are the UNION of both. The threshold is tuned to catch real
---       transfer complexes (≤~80 m) without over-merging genuinely distinct
---       neighbours (8 St-NYU vs Astor Place at ~109 m stay two markers).
--- The merged complex takes a single canonical name (cleanest label: no
--- parenthetical qualifier such as "(Subway)"/"(Blue Line)", no directional
--- suffix, then shortest, then alphabetical for determinism).
+-- CLUSTERING — by GTFS parent_station (NOT proximity). One marker per
+-- parent_station. The v3 LOOM build already stamped each station node with the
+-- GTFS parent_station id it matched (transit_graph_nodes.station_id resolves to
+-- a location_type=1 parent in both rendered feeds), so grouping nodes by
+-- (feed, station_id) reproduces the agency's own station-complex grouping:
+--   • Clark/Lake  → parent 40380 with four child platform stops → ONE marker.
+--   • Jackson (Chicago) → TWO parents, 40070 (Blue) and 40560 (Red), ~130 m
+--     apart → TWO markers. Same physical street name, genuinely different
+--     stations; the cross-reference between them is the /transit/station
+--     "connections" list, not a merge.
+--   • Monroe (Chicago) → likewise two parents (Blue 40790, Red 41090).
+--   • Fulton Street (NYC) → five distinct "Fulton Street" parents (plus the
+--     separately-named Fulton St & X stops) → the real per-parent marker count.
+-- The previous 80 m PROXIMITY post-merge is REMOVED: it fused same-name but
+-- DIFFERENT parent_stations (both Jacksons, both Monroes) into one marker.
+-- parent_station is the agency's authoritative complex key; proximity is not.
+--
+-- FALLBACK for feeds without parent_station metadata (station_id unresolved):
+-- per-station_label DBSCAN (same-name nodes within ~330 m fuse, same-name nodes
+-- kilometres apart stay separate). Never proximity across different names.
 --
 -- Service gating happens PER COMPLEX, after clustering: counts are summed
 -- across every matched platform stop of the complex (per-platform gating
@@ -45,14 +48,23 @@
 -- weekend routes, else anything with real service — so weekend-only and
 -- night-only stations never vanish from the map.
 --
--- SNAP: the marker sits on the rendered track ribbon. Conflation moved rail
--- stops onto OSM platform positions, which sit a few metres off the line
--- centreline (O'Hare: the Blue line ends and the dot floats beside it). Each
--- complex geom is snapped to the nearest point on its serving build's edge
--- centreline (transit_graph_edges — the geometry the ribbons are drawn from),
--- capped at STATION_SNAP_MAX_M; a complex further than the cap keeps its
--- conflated position (a mis-clustered or genuinely-off node is not dragged
--- across the map onto an unrelated line).
+-- CENTERING — the marker sits at the CENTRE of the platform, on the rendered
+-- track ribbon. Conflation moved rail stops onto OSM platform positions; the
+-- old code snapped the node centroid to the nearest point on the line, which
+-- lands the dot at whatever bit of platform is closest, not its middle. Instead
+-- we project the station's OSM platform extent (transit_platforms —
+-- railway=platform geometry within STATION_PLATFORM_M of the complex) onto the
+-- serving build's edge centreline and put the marker at the MIDPOINT of that
+-- projected span.
+--   • TERMINAL exception: if a line endpoint falls inside the projected span
+--     (end-of-line, e.g. O'Hare), the natural marker position is the platform
+--     end, not a forced mid-span point that would sit off the platform — so we
+--     clamp the midpoint toward the in-span endpoint.
+--   • FALLBACK: complexes with no matching platform (all of Chicago today has
+--     no OSM railway=platform geometry) keep the round-9 nearest-point snap,
+--     capped at STATION_SNAP_MAX_M.
+--   • Drift cap: STATION_CENTER_MAX_M — never drag a marker across the map onto
+--     an unrelated line; beyond the cap keep the conflated centroid.
 --
 -- Run after import/load-transit-graph.ts (and after gtfs_stop_routes is imported).
 
@@ -60,55 +72,52 @@ DROP MATERIALIZED VIEW IF EXISTS transit_station_bullets CASCADE;
 DROP MATERIALIZED VIEW IF EXISTS transit_stations CASCADE;
 CREATE MATERIALIZED VIEW transit_stations AS
 -- Tunables (inlined as literals below; documented here):
---   RENDERED_BUILDS   = ('chicago:l-v3','nyc:subway-v3') — the build_keys
---                       transit_line_segments actually draws.
---   STATION_MERGE_M   = 80  — proximity post-merge radius (level-2 clustering).
---   STATION_SNAP_MAX_M= 60  — max distance a marker is dragged onto its line.
+--   RENDERED_BUILDS     = ('chicago:l-v3','nyc:subway-v3') — the build_keys
+--                         transit_line_segments actually draws.
+--   STATION_PLATFORM_M  = 90  — max distance from the complex centroid to an
+--                         OSM platform that centres the marker.
+--   STATION_CENTER_MAX_M= 90  — max distance the platform-centre may sit from
+--                         the conflated centroid (drift cap).
+--   STATION_SNAP_MAX_M  = 60  — max distance the nearest-point-snap fallback
+--                         may drag a marker onto its line.
 --
--- (a1) Cluster same-named nodes within ~330 m into preliminary complexes.
+-- (a) Every rendered station node, tagged with its GTFS parent id (station_id).
 WITH station_nodes AS (
   SELECT
     n.id,
     n.geom,
+    n.station_id,
     n.station_label,
-    ST_ClusterDBSCAN(n.geom, eps := 0.003, minpoints := 1)
-      OVER (PARTITION BY n.station_label) AS lcid
+    CASE WHEN n.build_key LIKE 'chicago:%' THEN '29' ELSE '5' END AS feed_id
   FROM transit_graph_nodes n
   WHERE n.build_key IN ('chicago:l-v3', 'nyc:subway-v3')
     AND n.station_id IS NOT NULL
     AND COALESCE(n.station_label, '') <> ''
 ),
--- (a2) Preliminary complex = one (station_label, lcid) with its centroid.
-prelim AS (
+-- (a2) FALLBACK clustering for nodes whose station_id does not resolve to a
+--      GTFS parent (feeds without parent_station metadata). Per-label DBSCAN so
+--      same-name nodes within ~330 m fuse but kilometres-apart same-name nodes
+--      stay separate. minpoints:=1 so isolated nodes keep a cluster.
+node_parent AS (
   SELECT
-    station_label,
-    lcid,
-    ST_Centroid(ST_Collect(geom)) AS geom
-  FROM station_nodes
-  GROUP BY station_label, lcid
-),
--- (a3) Proximity post-merge: fuse preliminary complexes whose centroids lie
---      within STATION_MERGE_M (80 m). Clustered in Web-Mercator with the
---      per-latitude scale factor so the metre threshold is honest. minpoints:=1
---      so isolated complexes keep their own gid. gid is the final complex key.
-merged AS (
-  SELECT
-    station_label,
-    lcid,
-    geom,
-    ST_ClusterDBSCAN(
-      ST_Transform(geom, 3857),
-      eps := 80.0 / cos(radians(41)),
-      minpoints := 1
-    ) OVER () AS gid
-  FROM prelim
-),
--- Map every source node to its final complex gid (for stop matching + geom).
-node_gid AS (
-  SELECT sn.id, sn.geom, m.gid
+    sn.id, sn.geom, sn.station_label, sn.feed_id,
+    CASE WHEN gp.stop_id IS NOT NULL THEN true ELSE false END AS has_parent,
+    -- Final complex key. Parents keyed by (feed, parent_id); fallback nodes
+    -- keyed by (feed, label, dbscan-cluster) with a marker prefix so the two
+    -- keyspaces never collide.
+    CASE
+      WHEN gp.stop_id IS NOT NULL
+        THEN 'p:' || sn.feed_id || ':' || sn.station_id
+      ELSE 'l:' || sn.feed_id || ':' || sn.station_label || ':' ||
+           ST_ClusterDBSCAN(sn.geom, eps := 0.003, minpoints := 1)
+             OVER (PARTITION BY sn.feed_id, sn.station_label)
+    END AS gid,
+    COALESCE(gp.stop_name, sn.station_label) AS parent_name
   FROM station_nodes sn
-  JOIN merged m
-    ON m.station_label = sn.station_label AND m.lcid = sn.lcid
+  LEFT JOIN gtfs_stops gp
+    ON gp.feed_id = sn.feed_id
+   AND gp.stop_id = sn.station_id
+   AND gp.location_type = 1
 ),
 -- Every (complex, platform stop, route) with its service counts. DISTINCT on
 -- the underlying gtfs_stop_routes row so a platform matched by several nodes
@@ -130,7 +139,7 @@ complex_stop_routes AS (
     COALESCE(sr.trips_weekday_day, sr.weekday_trips) AS trips_weekday_day,
     sr.trips_weekend_day,
     sr.trips_any
-  FROM node_gid ng
+  FROM node_parent ng
   JOIN transit_stops ts
     ON ts.is_rail
    AND ST_DWithin(ts.geom::geography, ng.geom::geography, 150)
@@ -193,13 +202,15 @@ gated_routes AS (
      OR (NOT ct.has_weekday AND ct.has_weekend AND cr.pass_weekend)
      OR (NOT ct.has_weekday AND NOT ct.has_weekend AND cr.pass_any)
 ),
--- Canonical name per complex: prefer the cleanest platform label. Score each
--- distinct label of the complex and keep the best. Lower score = cleaner:
+-- Canonical name per complex. For a resolved parent every node carries the
+-- parent's stop_name, so parent_name is already canonical; the scoring only
+-- matters for the fallback keyspace where several platform labels share a gid.
+-- Lower score = cleaner:
 --   +100 has a parenthetical qualifier   "(Subway)" / "(Blue Line)"
 --   + 40 has a directional / qualifier token (N/S/E/W-bound, Uptown, etc.)
 --   then shorter label wins, then alphabetical (deterministic).
 complex_labels AS (
-  SELECT DISTINCT gid, station_label FROM merged
+  SELECT DISTINCT gid, parent_name AS station_label FROM node_parent
 ),
 canonical_name AS (
   SELECT DISTINCT ON (gid)
@@ -214,24 +225,83 @@ canonical_name AS (
     length(station_label),
     station_label
 ),
--- Raw complex centroid (pre-snap).
+-- Raw complex centroid (pre-centering) + the build the complex belongs to.
 complex_geom AS (
-  SELECT gid, ST_Centroid(ST_Collect(geom)) AS geom
-  FROM node_gid
+  SELECT
+    gid,
+    min(feed_id) AS feed_id,
+    ST_Centroid(ST_Collect(geom)) AS geom
+  FROM node_parent
   GROUP BY gid
 ),
--- (d) Snap each complex onto its serving build's edge centreline (the geometry
---     the ribbons are drawn from). Cap at STATION_SNAP_MAX_M (60 m): beyond the
---     cap keep the conflated position (never drag a marker across the map).
+-- (d1) PLATFORM CENTERING. For each complex, collect OSM platform geometry
+--      within STATION_PLATFORM_M of the centroid, and the single nearest
+--      serving edge (the rendered ribbon centreline). Project the platform
+--      extent's boundary points onto the edge, take the min/max line fraction
+--      (the projected span), and place the marker at its MIDPOINT.
+--      TERMINAL: if the edge endpoint (fraction 0 or 1) lies inside the span,
+--      clamp the midpoint toward that endpoint so the dot stays on the platform
+--      end (natural end-of-line position) rather than a forced centre off it.
+platform_center AS (
+  SELECT
+    cg.gid,
+    ST_LineInterpolatePoint(nb.eg, gc.f_marker) AS geom,
+    ST_Distance(
+      ST_LineInterpolatePoint(nb.eg, gc.f_marker)::geography,
+      cg.geom::geography
+    ) AS drift_m
+  FROM complex_geom cg
+  -- serving edge (nearest ribbon centreline of the build)
+  JOIN LATERAL (
+    SELECT e.geom AS eg
+    FROM transit_graph_edges e
+    WHERE e.build_key IN ('chicago:l-v3', 'nyc:subway-v3')
+    ORDER BY e.geom <-> cg.geom
+    LIMIT 1
+  ) nb ON true
+  -- merged nearby platform geometry
+  JOIN LATERAL (
+    SELECT ST_Collect(p.geom) AS pg
+    FROM transit_platforms p
+    WHERE (p.public_transport = 'platform' OR p.railway = 'platform')
+      AND ST_DWithin(p.geom::geography, cg.geom::geography, 90)
+  ) pl ON pl.pg IS NOT NULL
+  -- projected span of the platform onto the edge, then the (possibly clamped)
+  -- marker fraction
+  JOIN LATERAL (
+    SELECT
+      f_lo, f_hi,
+      -- terminal clamp: if an edge endpoint sits within the span, snap the
+      -- marker to that end; else use the span midpoint.
+      CASE
+        WHEN f_lo <= 0.0001 THEN f_lo         -- start-of-line within span
+        WHEN f_hi >= 0.9999 THEN f_hi         -- end-of-line within span
+        ELSE (f_lo + f_hi) / 2.0
+      END AS f_marker
+    FROM (
+      SELECT
+        min(ST_LineLocatePoint(nb.eg, dp.geom)) AS f_lo,
+        max(ST_LineLocatePoint(nb.eg, dp.geom)) AS f_hi
+      FROM ST_DumpPoints(ST_Boundary(pl.pg)) dp
+    ) span
+  ) gc ON true
+),
+-- (d2) Fallback nearest-point snap (round-9) for complexes with no platform
+--      match. Cap at STATION_SNAP_MAX_M (60 m): beyond the cap keep the
+--      conflated position (never drag a marker across the map).
 snapped_geom AS (
   SELECT
     cg.gid,
     CASE
+      -- platform centre wins when found and within the drift cap (90 m)
+      WHEN pc.geom IS NOT NULL AND pc.drift_m <= 90 THEN pc.geom
+      -- else nearest-point snap within cap
       WHEN nb.snap IS NULL THEN cg.geom
       WHEN ST_Distance(cg.geom::geography, nb.snap::geography) <= 60 THEN nb.snap
       ELSE cg.geom
     END AS geom
   FROM complex_geom cg
+  LEFT JOIN platform_center pc ON pc.gid = cg.gid
   LEFT JOIN LATERAL (
     SELECT ST_ClosestPoint(e.geom, cg.geom) AS snap
     FROM transit_graph_edges e
