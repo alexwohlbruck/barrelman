@@ -48,21 +48,20 @@
 -- weekend routes, else anything with real service — so weekend-only and
 -- night-only stations never vanish from the map.
 --
--- CENTERING — the marker sits at the CENTRE of the platform, on the rendered
--- track ribbon. Conflation moved rail stops onto OSM platform positions; the
--- old code snapped the node centroid to the nearest point on the line, which
--- lands the dot at whatever bit of platform is closest, not its middle. Instead
--- we project the station's OSM platform extent (transit_platforms —
--- railway=platform geometry within STATION_PLATFORM_M of the complex) onto the
--- serving build's edge centreline and put the marker at the MIDPOINT of that
--- projected span.
---   • TERMINAL exception: if a line endpoint falls inside the projected span
---     (end-of-line, e.g. O'Hare), the natural marker position is the platform
---     end, not a forced mid-span point that would sit off the platform — so we
---     clamp the midpoint toward the in-span endpoint.
+-- CENTERING — the marker sits at the CENTROID of the station's OSM platform
+-- geometry (as OSM-Carto places the station name), snapped onto the rendered
+-- ribbon. We collect this complex's own platform ways (transit_platforms —
+-- railway=platform geometry within STATION_PLATFORM_M of the complex), take
+-- ST_Centroid, then snap that centroid perpendicular onto the nearest edge so
+-- the dot rides the drawn line. For island/side platform pairs the centroid
+-- lands in the track centre between them, then on the ribbon.
+--   • TERMINAL: at a route end the terminal platform's projection lands near a
+--     degree-1 line end (an edge endpoint touched by only one edge), so we clamp
+--     the marker to that tip — the last stop sits at the very end of the line.
+--     Junctions (degree >= 2) are excluded so transfers never jump to a vertex.
 --   • FALLBACK: complexes with no matching platform (all of Chicago today has
---     no OSM railway=platform geometry) keep the round-9 nearest-point snap,
---     capped at STATION_SNAP_MAX_M.
+--     no OSM railway=platform geometry in geo_places) keep the round-9
+--     nearest-point snap, capped at STATION_SNAP_MAX_M.
 --   • Drift cap: STATION_CENTER_MAX_M — never drag a marker across the map onto
 --     an unrelated line; beyond the cap keep the conflated centroid.
 --
@@ -81,8 +80,17 @@ CREATE MATERIALIZED VIEW transit_stations AS
 --   STATION_SNAP_MAX_M  = 60  — max distance the nearest-point-snap fallback
 --                         may drag a marker onto its line.
 --
+-- Materialize the ~2.2k rail platforms ONCE. transit_platforms is a VIEW over
+-- geo_places (21.7M rows); a correlated LATERAL over the view re-scans geo_places
+-- per station (600×) — that is the platform-centering matview-build runaway. One
+-- materialized pass + a tiny per-station distance scan over 2.2k rows is the fix.
+WITH platforms AS MATERIALIZED (
+  SELECT geom
+  FROM transit_platforms
+  WHERE public_transport = 'platform' OR railway = 'platform'
+),
 -- (a) Every rendered station node, tagged with its GTFS parent id (station_id).
-WITH station_nodes AS (
+station_nodes AS (
   SELECT
     n.id,
     n.geom,
@@ -100,7 +108,7 @@ WITH station_nodes AS (
 --      stay separate. minpoints:=1 so isolated nodes keep a cluster.
 node_parent AS (
   SELECT
-    sn.id, sn.geom, sn.station_label, sn.feed_id,
+    sn.id, sn.geom, sn.station_label, sn.feed_id, sn.station_id,
     CASE WHEN gp.stop_id IS NOT NULL THEN true ELSE false END AS has_parent,
     -- Final complex key. Parents keyed by (feed, parent_id); fallback nodes
     -- keyed by (feed, label, dbscan-cluster) with a marker prefix so the two
@@ -119,14 +127,20 @@ node_parent AS (
    AND gp.stop_id = sn.station_id
    AND gp.location_type = 1
 ),
--- Every (complex, platform stop, route) with its service counts. DISTINCT on
--- the underlying gtfs_stop_routes row so a platform matched by several nodes
--- of the same complex is counted once. Bullet label: prefer route_short_name,
--- fall back to route_id for agencies that leave short_name blank and name
--- lines in route_long_name (e.g. CTA's 'Red'/'Brn'/'Org' L lines).
+-- Every (complex, platform stop, route) with its service counts. Bullets show
+-- ONLY the lines that stop AT this station — the routes of the parent_station's
+-- OWN child platform stops (gtfs_stops.parent_station = the parent's stop_id),
+-- NOT a spatial match that would sweep in adjacent stations' routes (the 4
+-- separate Fulton St stations sit within 150 m of each other, so a radius match
+-- oversampled every one with all of A/C + 2/3 + 4/5 + J/Z). Connections to
+-- nearby stations belong on the station detail card, not the label bullets.
+-- Fallback (feeds with no parent hierarchy): the node's own matched stop.
+-- DISTINCT so a stop reached by several nodes of the same complex counts once.
+-- Bullet label: prefer route_short_name, fall back to route_id for agencies
+-- that leave short_name blank (e.g. CTA's 'Red'/'Brn'/'Org' L lines).
 complex_stop_routes AS (
   SELECT DISTINCT
-    ng.gid,
+    m.gid,
     COALESCE(NULLIF(r.route_short_name, ''), r.route_id) AS route_short_name,
     r.route_color,
     r.route_type,
@@ -139,12 +153,25 @@ complex_stop_routes AS (
     COALESCE(sr.trips_weekday_day, sr.weekday_trips) AS trips_weekday_day,
     sr.trips_weekend_day,
     sr.trips_any
-  FROM node_parent ng
-  JOIN transit_stops ts
-    ON ts.is_rail
-   AND ST_DWithin(ts.geom::geography, ng.geom::geography, 150)
+  FROM (
+    -- Member platform stops of each complex. Split into two index-friendly
+    -- branches (an OR across parent_station/stop_id can't use an index and
+    -- seq-scanned all of gtfs_stops per node):
+    --   parent-keyed → the parent_station's child platforms
+    --     (gtfs_stops_feed_parent_idx);
+    --   fallback (no parent metadata) → the node's own matched stop.
+    SELECT ng.gid, ng.feed_id, cs.stop_id
+    FROM node_parent ng
+    JOIN gtfs_stops cs
+      ON cs.feed_id = ng.feed_id AND cs.parent_station = ng.station_id
+    WHERE ng.has_parent
+    UNION
+    SELECT ng.gid, ng.feed_id, ng.station_id
+    FROM node_parent ng
+    WHERE NOT ng.has_parent
+  ) m
   JOIN gtfs_stop_routes sr
-    ON sr.feed_id = ts.feed_id AND sr.stop_id = ts.stop_id
+    ON sr.feed_id = m.feed_id AND sr.stop_id = m.stop_id
   JOIN gtfs_routes r
     ON r.feed_id = sr.feed_id AND r.route_id = sr.route_id
   WHERE COALESCE(NULLIF(r.route_short_name, ''), r.route_id) <> ''
@@ -234,57 +261,63 @@ complex_geom AS (
   FROM node_parent
   GROUP BY gid
 ),
--- (d1) PLATFORM CENTERING. For each complex, collect OSM platform geometry
---      within STATION_PLATFORM_M of the centroid, and the single nearest
---      serving edge (the rendered ribbon centreline). Project the platform
---      extent's boundary points onto the edge, take the min/max line fraction
---      (the projected span), and place the marker at its MIDPOINT.
---      TERMINAL: if the edge endpoint (fraction 0 or 1) lies inside the span,
---      clamp the midpoint toward that endpoint so the dot stays on the platform
---      end (natural end-of-line position) rather than a forced centre off it.
+-- (d0) TRUE LINE TERMINI — edge endpoints touched by exactly one edge end
+--      (graph degree 1). A terminal station's marker snaps to one of these so it
+--      sits at the very tip of the ribbon; junctions (degree >= 2) are excluded
+--      so a transfer station never jumps to an interior corridor vertex.
+line_ends AS (
+  SELECT (array_agg(pt))[1] AS pt
+  FROM (
+    SELECT ST_StartPoint(geom) AS pt FROM transit_graph_edges
+      WHERE build_key IN ('chicago:l-v3', 'nyc:subway-v3')
+    UNION ALL
+    SELECT ST_EndPoint(geom)   AS pt FROM transit_graph_edges
+      WHERE build_key IN ('chicago:l-v3', 'nyc:subway-v3')
+  ) ep
+  GROUP BY ST_SnapToGrid(pt, 0.00001)
+  HAVING count(*) = 1
+),
+-- (d1) PLATFORM CENTERING (OSM-Carto style, snapped to the ribbon). Take the
+--      centroid of this complex's own OSM platform ways, then snap it
+--      perpendicular onto the nearest rendered edge so the dot rides the drawn
+--      line. At a route end the terminal platform's projection lands near a
+--      degree-1 line end, so clamp to that tip (last stop sits at the very end).
 platform_center AS (
   SELECT
     cg.gid,
-    ST_LineInterpolatePoint(nb.eg, gc.f_marker) AS geom,
-    ST_Distance(
-      ST_LineInterpolatePoint(nb.eg, gc.f_marker)::geography,
-      cg.geom::geography
-    ) AS drift_m
+    sp.snapped AS geom,
+    ST_Distance(sp.snapped::geography, cg.geom::geography) AS drift_m
   FROM complex_geom cg
-  -- serving edge (nearest ribbon centreline of the build)
+  -- (1) centroid of this complex's own platform ways. Tight planar radius
+  --     (~0.0007 deg ≈ 60-75 m); the conflated stop already sits on its platform
+  --     so this grabs just this station without pulling an adjacent complex.
+  --     Planar (no ::geography) keeps the scan over materialized `platforms`
+  --     cheap; drift_m below is the only ellipsoidal measure, once per complex.
+  JOIN LATERAL (
+    SELECT ST_Centroid(ST_Collect(p.geom)) AS c
+    FROM platforms p
+    WHERE ST_DWithin(p.geom, cg.geom, 0.0007)
+  ) pc ON pc.c IS NOT NULL
+  -- (2) nearest rendered ribbon centreline to that centroid (gist KNN).
   JOIN LATERAL (
     SELECT e.geom AS eg
     FROM transit_graph_edges e
     WHERE e.build_key IN ('chicago:l-v3', 'nyc:subway-v3')
-    ORDER BY e.geom <-> cg.geom
+    ORDER BY e.geom <-> pc.c
     LIMIT 1
   ) nb ON true
-  -- merged nearby platform geometry
+  -- (3) perpendicular snap onto that edge; if the projection lands within
+  --     ~0.001 deg (~85-110 m) of a true line terminus, clamp to the tip.
   JOIN LATERAL (
-    SELECT ST_Collect(p.geom) AS pg
-    FROM transit_platforms p
-    WHERE (p.public_transport = 'platform' OR p.railway = 'platform')
-      AND ST_DWithin(p.geom::geography, cg.geom::geography, 90)
-  ) pl ON pl.pg IS NOT NULL
-  -- projected span of the platform onto the edge, then the (possibly clamped)
-  -- marker fraction
-  JOIN LATERAL (
-    SELECT
-      f_lo, f_hi,
-      -- terminal clamp: if an edge endpoint sits within the span, snap the
-      -- marker to that end; else use the span midpoint.
-      CASE
-        WHEN f_lo <= 0.0001 THEN f_lo         -- start-of-line within span
-        WHEN f_hi >= 0.9999 THEN f_hi         -- end-of-line within span
-        ELSE (f_lo + f_hi) / 2.0
-      END AS f_marker
-    FROM (
-      SELECT
-        min(ST_LineLocatePoint(nb.eg, dp.geom)) AS f_lo,
-        max(ST_LineLocatePoint(nb.eg, dp.geom)) AS f_hi
-      FROM ST_DumpPoints(ST_Boundary(pl.pg)) dp
-    ) span
-  ) gc ON true
+    SELECT COALESCE(le.pt, q.proj) AS snapped
+    FROM (SELECT ST_ClosestPoint(nb.eg, pc.c) AS proj) q
+    LEFT JOIN LATERAL (
+      SELECT pt FROM line_ends le
+      WHERE ST_DWithin(le.pt, q.proj, 0.001)
+      ORDER BY le.pt <-> q.proj
+      LIMIT 1
+    ) le ON true
+  ) sp ON true
 ),
 -- (d2) Fallback nearest-point snap (round-9) for complexes with no platform
 --      match. Cap at STATION_SNAP_MAX_M (60 m): beyond the cap keep the
