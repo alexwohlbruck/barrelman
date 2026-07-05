@@ -37,27 +37,36 @@ def test_y_sites_and_counts(y_junction):
     g, ids, segs, info = y_junction
     assert set(info["sites"]) == {ids["N"]}
     assert info["sites"][ids["N"]] == "junction"
-    assert len(find(segs, kind="steady")) == 6      # 2 + 3 + 1 ribbons
-    assert len(find(segs, kind="transition")) == 3  # R, B, G all move
-    assert info["stubs"] == 0 and info["skipped"] == 0
+    # Stable-offset re-anchoring: R and B run STRAIGHT through the junction
+    # (their bundle merely gains G), so the W-N bundle is shifted to hold both
+    # at their N-E offsets and both through-transitions skip to steady — only
+    # the JOINING line G eases in. Each through-ribbon is then two steady
+    # pieces (W-N, N-E) plus G's two (N-E, S-N): 8 steady, 1 transition.
+    assert len(find(segs, kind="steady")) == 8
+    assert len(find(segs, kind="transition")) == 1  # only G (the joiner) moves
+    assert info["stubs"] == 0 and info["skipped"] == 2
 
 
 def test_y_continuing_ribbon_offsets(y_junction):
     g, ids, segs, info = y_junction
-    (tr,) = find(segs, kind="transition", color_key="ff0000")
-    # R: slot 0 of 2 (-2.2 px) -> slot 0 of 3 (-4.4 px), sign per travel frame
-    assert {abs(tr.off_from_px), abs(tr.off_to_px)} == {2.2, 4.4}
-    (tb,) = find(segs, kind="transition", color_key="0000ff")
-    assert {abs(tb.off_from_px), abs(tb.off_to_px)} == {2.2, 0.0}
+    # R and B hold constant across the junction (dead straight): every R/B
+    # steady carries R's N-E offset (-4.4) and B's (0.0).
+    for s in find(segs, kind="steady", color_key="ff0000"):
+        assert s.offset_px == pytest.approx(-4.4)
+    for s in find(segs, kind="steady", color_key="0000ff"):
+        assert s.offset_px == pytest.approx(0.0)
+    # only G transitions — easing from the centreline (0.0, its S-N stub) to
+    # its outer slot in the N-E bundle (4.4).
     (tg,) = find(segs, kind="transition", color_key="00ff00")
     assert {abs(tg.off_from_px), abs(tg.off_to_px)} == {0.0, 4.4}
 
 
 def test_y_fixed_ground_length(y_junction):
     g, ids, segs, info = y_junction
-    (tr,) = find(segs, kind="transition", color_key="ff0000")
-    # straight through: two 30 m halves, no fillet shortening
-    assert seg_len_m(tr) == pytest.approx(CFG.transition_len_m, rel=0.02)
+    (tg,) = find(segs, kind="transition", color_key="00ff00")
+    # G is the joining line and genuinely turns (S -> E), so its transition is
+    # fillet-shortened within the C3 band [0.4, 1.1] x transition_len_m.
+    assert 0.4 * CFG.transition_len_m <= seg_len_m(tg) <= 1.1 * CFG.transition_len_m
 
 
 def test_y_endpoints_meet_steady_and_offsets_match(y_junction):
@@ -76,6 +85,75 @@ def test_y_densify_spacing(y_junction):
     g, ids, segs, info = y_junction
     for tr in find(segs, kind="transition"):
         assert max_spacing_m(tr) <= CFG.densify_step_m * 1.01
+
+
+def test_stable_offset_holds_through_line_straight():
+    """A line branching off the OUTSIDE of a bundle leaves the through-lines
+    dead straight (constant offset), not re-centered. B/D run W->E; F joins at
+    the outer edge (slot 2). Under symmetric centering B,D would each shift half
+    a gap when F joins; the stable re-anchor holds them constant, so only F
+    transitions and no through-line curves."""
+    D, F = ("D", "111111"), ("F", "222222")
+    g, ids, segs, info = build(
+        {"W": (-800, 0), "N": (0, 0), "E": (800, 0), "S": (0, -600)},
+        [("W", "N", [B, D]), ("N", "E", [B, D, F]), ("S", "N", [F])])
+    # B and D each hold ONE constant offset across the junction (no transition)
+    for ck in ("0000ff", "111111"):
+        offs = {round(s.offset_px, 3)
+                for s in find(segs, kind="steady", color_key=ck)}
+        assert len(offs) == 1, (ck, offs)
+        assert find(segs, kind="transition", color_key=ck) == []
+    # only F (the joiner) transitions
+    assert {t.color_key for t in find(segs, kind="transition")} == {"222222"}
+
+
+def test_stable_offset_encoding_reproduces_offset():
+    """Every steady row's emitted (slot, line_count) reproduces its authoritative
+    offset_px via the v2 formula (legacy / stock-Mapbox degradation), even after
+    the offset is re-anchored off the symmetric grid."""
+    D, F = ("D", "111111"), ("F", "222222")
+    g, ids, segs, info = build(
+        {"W": (-800, 0), "N": (0, 0), "E": (800, 0), "S": (0, -600)},
+        [("W", "N", [B, D]), ("N", "E", [B, D, F]), ("S", "N", [F])])
+    for s in find(segs, kind="steady"):
+        legacy = (s.slot - (s.line_count - 1) / 2.0) * CFG.gap_px
+        assert legacy == pytest.approx(s.offset_px, abs=1e-6)
+        assert s.slot >= 0 and s.line_count >= 1
+
+
+def test_stable_offset_never_worsens_straight_joint():
+    """The re-anchor's monotone guarantee: no continuing colour's offset delta
+    at a STRAIGHT junction exceeds its symmetric baseline."""
+    from segments.corridors import (STRAIGHT_JOINT_DEG, _bearing_diff_deg,
+                                     _end_bearing)
+    D, F, H = ("D", "111111"), ("F", "222222"), ("H", "333333")
+    g, ids, corrs = None, None, None
+    g, ids = graph_from_spec(
+        {"W": (-900, 0), "N": (0, 0), "E": (900, 0),
+         "S": (0, -600), "SE": (600, -600)},
+        [("W", "N", [B, D]), ("N", "E", [B, D, F]),
+         ("S", "N", [F]), ("E", "SE", [B, D, H])])
+    corrs = walk_corridors(g)
+    base = {c.cid: {r.color_key: r.base_offset_px for r in c.ribbons}
+            for c in corrs}
+    off = {c.cid: {r.color_key: r.offset_px for r in c.ribbons}
+           for c in corrs}
+    ends = {}
+    for c in corrs:
+        ends.setdefault(c.node_a, []).append((c.cid, "a"))
+        ends.setdefault(c.node_b, []).append((c.cid, "b"))
+    bear = {(c.cid, s): _end_bearing(c.coords, s == "a")
+            for c in corrs for s in ("a", "b")}
+    for lst in ends.values():
+        for i in range(len(lst)):
+            for j in range(i + 1, len(lst)):
+                (a, sa), (b, sb) = lst[i], lst[j]
+                if a == b:
+                    continue
+                for ck in set(base[a]) & set(base[b]):
+                    dnew = abs(off[a][ck] - off[b][ck])
+                    dbase = abs(base[a][ck] - base[b][ck])
+                    assert dnew <= dbase + 1e-6, (a, b, ck, dnew, dbase)
 
 
 # ------------------------------------------- unchanged-offset skip case

@@ -156,6 +156,25 @@ class LocalProj:
         return [self._inv.transform(x, y) for x, y in coords]
 
 
+# ---------------------------------------------------- legacy slot encoding
+
+def legacy_slot_count(offset_px: float, gap_px: float) -> tuple:
+    """A (slot, line_count) pair whose v2 constant-offset formula
+    ``(slot - (line_count-1)/2) * gap_px`` reproduces ``offset_px`` exactly,
+    with slot >= 0 — the same half-gap k/h scheme the tile function already
+    derives for transitions (import/create-transit-lines-rt2.sql). Stable
+    re-anchoring decouples ``offset_px`` from the bundle's symmetric centering,
+    so a steady row's emitted (slot, line_count) must be re-derived from the
+    authoritative offset for stock-Mapbox degradation to keep matching it.
+    (line_count here is a rendering encoding, NOT the true bundle size — the
+    true count lives on the Ribbon and drives fillet radius / pairing.)"""
+    half = gap_px / 2.0
+    k = round(offset_px / half)          # offset in half-gap units
+    h0 = max(-k / 2.0, 0.0)
+    h = math.ceil(h0) if k % 2 == 0 else math.ceil(h0 - 0.5) + 0.5
+    return int(round(k / 2.0 + h)), int(round(2 * h + 1))
+
+
 # ------------------------------------------------------- geometry helpers
 
 def _dedupe(coords, eps=1e-9):
@@ -1088,13 +1107,14 @@ def build_segments(g: Graph, cfg: SegmentConfig = SegmentConfig(),
                 _substring_coords(line, t_a, length - t_b))
             seg_len = length - t_a - t_b
             for r in c.ribbons:
+                lslot, lcount = legacy_slot_count(r.offset_px, cfg.gap_px)
                 segments.append(Segment(
                     seg_id=-1, kind="steady", color_key=r.color_key,
                     route_short_names=r.route_short_names,
                     route_ids=r.route_ids, feed_id=r.feed_id,
                     route_type=r.route_type, route_color=r.route_color,
-                    route_text_color=r.route_text_color, slot=r.slot,
-                    line_count=r.count, offset_px=r.offset_px,
+                    route_text_color=r.route_text_color, slot=lslot,
+                    line_count=lcount, offset_px=r.offset_px,
                     off_from_px=None, off_to_px=None, len_m=seg_len,
                     coords=coords_ll, corridor_id=c.cid))
 
@@ -1184,14 +1204,14 @@ def build_segments(g: Graph, cfg: SegmentConfig = SegmentConfig(),
                 coords = densify(cg.tail_xy(side), cfg.densify_step_m)
                 sign = cg.frame_sign(side, toward=True)
                 off = sign * r.offset_px
-                slot = r.slot if sign > 0 else r.count - 1 - r.slot
+                slot, lcount = legacy_slot_count(off, cfg.gap_px)
                 segments.append(Segment(
                     seg_id=-1, kind="steady", color_key=ck,
                     route_short_names=r.route_short_names,
                     route_ids=r.route_ids, feed_id=r.feed_id,
                     route_type=r.route_type, route_color=r.route_color,
                     route_text_color=r.route_text_color, slot=slot,
-                    line_count=r.count, offset_px=off, off_from_px=None,
+                    line_count=lcount, offset_px=off, off_from_px=None,
                     off_to_px=None, len_m=_length(coords),
                     coords=proj.to_ll(coords), corridor_id=c.cid,
                     sites=(nid,)))
