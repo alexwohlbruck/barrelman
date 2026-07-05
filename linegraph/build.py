@@ -409,7 +409,7 @@ def build_waygraph_linegraph(patterns, shapes, feed_id: str, mode: str,
 
     cfg = cfg or WaygraphConfig()
     graph = load_way_graph(feed_id, mode)
-    digest = waygraph_digest(shapes, cfg, graph)
+    digest = waygraph_digest(patterns, cfg, graph)
     cache = default_cache_path(feed_id, mode).with_name(
         f"{feed_id}.{mode}.waygraph.pkl.gz")
     if use_cache and not force:

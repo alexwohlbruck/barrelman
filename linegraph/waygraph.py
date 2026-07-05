@@ -254,8 +254,20 @@ class WaygraphConfig:
 # ramp/length gates + cross frac_below judged on the window not the
 # neighbourhood), so the bundle onsets where the lines physically share the
 # node instead of a block past it (Broadway-Lafayette F/M, Chicago Blue at
-# Clark/Lake))
-CONFIG_FORMAT_VERSION = 16
+# Clark/Lake); 17: DIGEST COMPLETENESS — waygraph_digest now hashes EVERY
+# input that changes the emitted graph, not just the route shapes' lon/lat.
+# The old shapes-only digest missed (a) route COLOUR (color_key) and the
+# per-pattern route_id, which drive the round-9/21 family + cross-family
+# corridor merges, and (b) the GTFS STOP positions/names, which round-22
+# conflation moves (O'Hare onto the OSM platform; MTA bus names) and which
+# stations.py consumes to place station nodes. A conflation / colour /
+# route change therefore left the digest unchanged and a STALE corridor
+# cache was reused, so the live DB diverged from a clean rebuild
+# (chicago:l-v3 live 167 edges vs deterministic 145). waygraph_digest now
+# folds in, per pattern in load order: route_id, color_key, shape coords;
+# plus the sorted (stop_id, lon, lat, name) set station placement consumes.
+# Any input change that changes the output now changes the digest.
+CONFIG_FORMAT_VERSION = 17
 
 
 def config_digest_token(cfg: WaygraphConfig) -> str:
@@ -263,17 +275,57 @@ def config_digest_token(cfg: WaygraphConfig) -> str:
     return f"waygraph-v{CONFIG_FORMAT_VERSION};{vals}"
 
 
-def waygraph_digest(shapes, cfg: WaygraphConfig, graph) -> str:
-    """Cache digest: input shapes + every config knob + the graph cache era."""
+def _stop_digest_rows(patterns) -> list[str]:
+    """The (stop_id, lon, lat, name) set station placement consumes.
+
+    stations.load_station_complexes reads the same stops.txt load_patterns
+    read, so every stop a pattern serves is carried on the Pattern object
+    (stop_ids / stop_coords / stop_names, index-aligned). We deduplicate by
+    stop_id and sort so the digest is order-independent — a moved or renamed
+    stop (round-22 conflation: O'Hare onto the OSM platform, MTA bus names)
+    changes exactly one row and therefore the digest. Coordinates are rounded
+    to 1e-6 deg to match the shape-coord rounding.
+    """
+    seen: dict = {}
+    for p in patterns:
+        coords = getattr(p, "stop_coords", None) or []
+        names = getattr(p, "stop_names", None) or []
+        for i, sid in enumerate(getattr(p, "stop_ids", ()) or ()):
+            if sid in seen:
+                continue
+            lon, lat = (coords[i] if i < len(coords) else (0.0, 0.0))
+            name = names[i] if i < len(names) else ""
+            seen[sid] = f"{sid}={lon:.6f},{lat:.6f},{name}"
+    return sorted(seen.values())
+
+
+def waygraph_digest(patterns, cfg: WaygraphConfig, graph) -> str:
+    """Cache digest over EVERY input that changes the emitted corridor graph.
+
+    Config knobs + the graph cache era + per-pattern (route_id, color_key,
+    shape coords) + the stop-position/name set station placement consumes.
+    Hashing colour and the pattern->route mapping (they drive the family and
+    cross-family corridor merges) and the stops (they drive station-node
+    placement) is what makes a conflation / colour / route change bust the
+    cache — the shapes-only predecessor did not, so stale corridor caches
+    survived those changes and the DB diverged from a clean rebuild.
+    """
     import hashlib
 
     h = hashlib.md5()
     h.update(config_digest_token(cfg).encode())
     h.update(graph_signature(graph).encode())
-    for coords in shapes:
-        for lon, lat in coords:
+    for p in patterns:
+        rid = getattr(p, "route_id", "")
+        ck = color_key_of(getattr(p, "route_color", ""), rid)
+        h.update(f"r={rid};c={ck};".encode())
+        for lon, lat in (p.shape or ()):
             h.update(f"{lon:.6f},{lat:.6f};".encode())
         h.update(b"|")
+    h.update(b"##stops##")
+    for row in _stop_digest_rows(patterns):
+        h.update(row.encode())
+        h.update(b";")
     return h.hexdigest()
 
 
