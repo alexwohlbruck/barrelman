@@ -195,23 +195,19 @@ def test_exam_patterns_match_dense(exam):
         assert r.stats.get("relation_match_tier") == 2, (p.key, r.stats)
 
 
-def test_q_96st_terminal_rescued_on_osm(exam):
-    """Q's shape ends 103 m short of the 96 St stop (agency data); the
-    stop-snap gate must refuse the dense match — and nothing else may be
-    wrong with it. The on-OSM fallback chain must then rescue the
-    pattern in the sparse regime (the OSM track passes ~1.5 m from the
-    stop), keeping the output 100% on OSM instead of agency geometry."""
+def test_q_96st_terminal_reanchored_on_osm(exam):
+    """Q's shape ends 103 m short of the 96 St stop (agency data). Terminal
+    re-anchoring (MatchConfig.reanchor_max_m — the O'Hare fix) extends the
+    shape end to the stop, which sits ~1.5 m from the OSM track, so the
+    resample reaches the platform and the pattern DENSE-matches 100% on OSM
+    (agency_m = 0) — strictly better than the prior sparse rescue. The
+    pattern's output must stay fully on OSM with every stop snapped."""
     _, _, results = exam
     for p, r in _route(results, "Q"):
-        assert r.method == "hmm_sparse_rescue", (p.key, r.method)
-        # the dense attempt failed ONLY the stop gate, exactly as documented
-        da = r.stats["dense_attempt"]["gates"]
-        assert da["coverage"] > 0.99, (p.key, da)
-        assert da["frechet_m"] < 50, (p.key, da)
-        assert 100 < da["max_stop_dist_m"] < 110, (p.key, da)
-        assert len(da["failures"]) == 1 and "stop" in da["failures"][0], (p.key, da)
-        # the rescue passes its own gates: every stop snapped, plausible
-        # length vs the stop chord, no empty layers, zero agency meters
+        assert r.method == "hmm_dense", (p.key, r.method)
+        # the terminal was re-anchored (shape end extended to the short
+        # terminal stop) — this is what put the tail back on the OSM track
+        assert r.stats.get("reanchored"), (p.key, r.stats.get("reanchored"))
         g = r.gates.as_dict()
         assert g["passed"] and g["max_stop_dist_m"] < 50, (p.key, g)
         assert r.stats["n_empty_layers"] == 0, (p.key, r.stats)

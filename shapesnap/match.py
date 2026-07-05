@@ -172,6 +172,28 @@ class MatchConfig:
     route_bonus_mult: float = 0.5
     uturn_penalty_m: float = 200.0
     uturn_cos: float = -0.866  # reversal = turn sharper than ~150°
+    # anti-hop track-switch penalty (user rule 11): a matched route must not
+    # hop between adjacent parallel OSM tracks via crossovers just because the
+    # raw geometry aligns marginally closer — pick the most-aligned track and
+    # STAY. Leaving the current OSM way for a DIFFERENT way at a node where the
+    # current way ALSO continues (a crossover / ladder) costs this many
+    # weighted meters (_way_change_penalty). Same-way continuations and forced
+    # divergences (current way dead-ends: genuine forks, terminal crossovers)
+    # are free, so real branches still switch. Weighted-cost only — it steers
+    # path CHOICE without distorting the probability model, so continuity beats
+    # local closeness (the 15 St FX and Nevins parallel-track wander clean up).
+    # 180 m of weighted budget: enough to hold an aligned track through a
+    # crossover ladder, small next to a genuine divergence's emission savings.
+    # Tuned on feed 5 — across the 20 trunk routes' top patterns it cuts the
+    # parallel-hop count 41→16 with ZERO patterns pushed off OSM (agency_m
+    # unchanged everywhere); 120 was too weak (A/C/D stayed hopping), 250+
+    # started trading Fréchet on the F. <=0 disables (pure closest-track).
+    track_switch_penalty_m: float = 180.0
+    # a way-change is a CROSSOVER HOP (penalized) only when the chosen track
+    # heads near-parallel to the current way's own continuation — cos of the
+    # angle between them >= this (cos 35° ≈ 0.819). A genuine branch peels off
+    # at a sharper angle and pays nothing, so real divergences/forks are kept.
+    switch_parallel_cos: float = 0.819
     # vertical disambiguation: where elevated and subway tracks stack
     # (Lake St: the Lake 'L' runs directly ABOVE the Milwaukee-Dearborn
     # subway) horizontal emissions tie, so candidates whose OSM route
@@ -250,6 +272,16 @@ class MatchConfig:
     name_bonus_weight: float = 1.5
     station_pass_radius_m: float = 25.0
     station_pass_penalty: float = 1.0
+    # terminal shape re-anchoring (O'Hare): stop conflation can move a
+    # terminal stop onto the true OSM platform while the agency shape still
+    # ends short at the old terminal (CTA Blue O'Hare: shape ends ~98 m from
+    # the moved stop, past the 50 m dense radius). When a shape endpoint lies
+    # between the dense radius and reanchor_max_m from its terminal stop, the
+    # shape end is extended to the stop so the resample reaches the platform
+    # and the tail terminates on the OSM track instead of bridging (the
+    # end-of-line kink). A larger gap (OSM genuinely lacks the track) is left
+    # to bridge. 0 disables.
+    reanchor_max_m: float = 300.0
     # degenerate-shape detection (regime A -> B demotion)
     degenerate_min_points: int = 4
     degenerate_min_len_ratio: float = 0.5  # shape length vs stop-chain chord
@@ -507,6 +539,63 @@ def _turn_penalty(mg: MatchGraph, cfg: MatchConfig, pe: int, pd: int, ne: int, n
     return 0.0
 
 
+def _way_change_penalty(mg: MatchGraph, cfg: MatchConfig, pe: int, ne: int, via: int) -> float:
+    """Anti-hop track-switch penalty (user rule 11): staying on the current
+    OSM way is preferred; hopping onto an adjacent PARALLEL track (a
+    crossover / interlocking ladder) that the shape doesn't genuinely diverge
+    onto costs cfg.track_switch_penalty_m.
+
+    Two discriminators keep GENUINE forks free (switch only where the shape
+    truly diverges):
+
+      1. The current way must ALSO continue past `via` on a different
+         departing edge — the route could have stayed on it and chose not to
+         (a real crossover). When the current way dead-ends at `via`, leaving
+         it is FORCED (way-boundary continuation, terminal reversal, genuine
+         fork the way itself ends into) → free.
+      2. The chosen different-way edge must be near-PARALLEL to the current
+         way's own continuation (small bearing between them): a crossover
+         hands off to a track running the same direction, so staying vs
+         switching is a marginal lateral choice — exactly the hop we suppress.
+         A genuine branch peels away at a real angle (> switch_max_bearing)
+         → free, so the route still takes divergences it should.
+
+    Weighted-cost only (like the u-turn penalty): it steers path CHOICE
+    without distorting the |along − network| probability model. A shape that
+    genuinely diverges still switches (its emission/transition savings dwarf
+    one penalty); two marginally-close parallel tracks keep the aligned one —
+    continuity beats local closeness (the 15 St FX / Nevins wander cleans up).
+    """
+    if cfg.track_switch_penalty_m <= 0:
+        return 0.0
+    prev_way = mg.graph.edges[pe].way_id
+    next_way = mg.graph.edges[ne].way_id
+    if next_way == prev_way:
+        return 0.0  # same physical way continues across the node: free
+    # the current way's OWN continuation past `via` (a different departing
+    # edge on prev_way) — its bearing is the "stay" alternative
+    same_way_cont = None
+    for e2, d2 in mg.out_edges.get(via, []):
+        if e2 != ne and mg.graph.edges[e2].way_id == prev_way:
+            same_way_cont = (e2, d2)
+            break
+    if same_way_cont is None:
+        return 0.0  # current way dead-ends here: leaving it is forced, not a hop
+    # near-parallel crossover vs genuine branch: compare the chosen edge's
+    # heading to the stay-continuation's heading
+    sx, sy = mg.entry_vec(*same_way_cont)
+    nx, ny = mg.entry_vec(ne, nd_from_via(mg, ne, via))
+    cos = sx * nx + sy * ny
+    if cos >= cfg.switch_parallel_cos:  # near-parallel → crossover hop
+        return cfg.track_switch_penalty_m
+    return 0.0  # diverges at a real angle → genuine branch, free
+
+
+def nd_from_via(mg: MatchGraph, e: int, via: int) -> int:
+    """Direction of edge e that DEPARTS node `via` (for entry_vec)."""
+    return 1 if mg.graph.edges[e].from_node == via else -1
+
+
 def _route_multi(mg, cfg, mult, src: Candidate, targets: list, cutoff_w: float) -> dict:
     """Bounded Dijkstra from a directed-edge position to many others.
 
@@ -548,6 +637,7 @@ def _route_multi(mg, cfg, mult, src: Candidate, targets: list, cutoff_w: float) 
             if not _turn_ok(mg, e0, e1, v0):
                 continue
             w = exit_w + _turn_penalty(mg, cfg, e0, d0, e1, d1, v0)
+            w += _way_change_penalty(mg, cfg, e0, e1, v0)
             if w <= cutoff_w:
                 heappush(heap, (w, exit_true, next(tick), (e1, d1), None))
 
@@ -580,6 +670,7 @@ def _route_multi(mg, cfg, mult, src: Candidate, targets: list, cutoff_w: float) 
             if (e2, d2) in settled or not _turn_ok(mg, e, e2, v):
                 continue
             w2 = exit_w + _turn_penalty(mg, cfg, e, d, e2, d2, v)
+            w2 += _way_change_penalty(mg, cfg, e, e2, v)
             if w2 <= cutoff_w:
                 heappush(heap, (w2, exit_true, next(tick), (e2, d2), state))
     return results
@@ -596,6 +687,33 @@ def _hop_coords(mg: MatchGraph, a: Candidate, b: Candidate, path: list) -> list:
     tail = mg.dir_substring(b.edge, b.dir, 0.0, b.offset)
     out += tail[1:] if out and tail and out[-1] == tail[0] else tail
     return out
+
+
+def _count_track_switches(mg: MatchGraph, layers, segments) -> int:
+    """Per-pattern track-switch metric (anti-hop; user rule 11).
+
+    Reconstructs the ordered directed-edge sequence the decode rode and
+    counts UNJUSTIFIED way-changes — a hop off the current OSM way at a node
+    where the current way ALSO continued (the same signal
+    _way_change_penalty charges). Same-way continuations and forced
+    divergences (way dead-ends) don't count, so genuine forks are excluded.
+    Breaks reset the walk (a bridged gap is not a ridden switch)."""
+    switches = 0
+    for seg in segments:
+        layer = seg["start"]
+        seq = [(layers[layer][seg["cands"][0]].edge, layers[layer][seg["cands"][0]].dir)]
+        for k, (path, _true) in enumerate(seg["hops"]):
+            b = layers[layer + k + 1][seg["cands"][k + 1]]
+            seq.extend(path)
+            if not path or path[-1] != (b.edge, b.dir):
+                seq.append((b.edge, b.dir))
+        for (pe, _pd), (ne, nd) in zip(seq, seq[1:]):
+            if pe == ne:
+                continue
+            via = mg.start_node(ne, nd)
+            if _way_change_penalty(mg, MatchConfig(), pe, ne, via) > 0:
+                switches += 1
+    return switches
 
 
 # ── trellis decode (Viterbi as Dijkstra, lazy expansion) ─────────────────────
@@ -710,9 +828,34 @@ def match_pattern(
     chord = LineString(stops_xy).length if len(stops_xy) >= 2 else 0.0
 
     shape_xy = None
+    reanchored = []
     if pattern.shape and len(pattern.shape) >= 2:
         cleaned = _dedup_close(mg.project_lonlat(pattern.shape), cfg.min_step_m)
         if len(cleaned) >= 2:
+            # TERMINAL RE-ANCHORING (O'Hare): stop conflation may move a
+            # terminal stop onto the true OSM platform while the agency SHAPE
+            # still ends short at the old (mis-placed) terminal — the CTA Blue
+            # O'Hare shape ends ~98 m from the moved O'Hare stop, well outside
+            # the 50 m dense radius, so the last resampled observation cannot
+            # snap to the Blue track and the tail bridges as agency geometry
+            # (the end-of-line kink). Extend the shape end to the moved
+            # terminal stop so the resample reaches the platform and the
+            # matcher terminates on the real OSM track. Guarded: only when the
+            # shape endpoint is beyond the dense radius from its terminal stop
+            # AND within a bounded extension (reanchor_max_m) — a genuinely
+            # long shape/stop gap (OSM lacks the track) is left to bridge.
+            if len(stops_xy) >= 2:
+                r = cfg.dense_radius.get(mode, 50.0)
+                for which in (0, -1):
+                    stop = stops_xy[which]
+                    end = cleaned[which]
+                    gap = math.hypot(stop[0] - end[0], stop[1] - end[1])
+                    if r < gap <= cfg.reanchor_max_m:
+                        if which == 0:
+                            cleaned.insert(0, stop)
+                        else:
+                            cleaned.append(stop)
+                        reanchored.append("start" if which == 0 else "end")
             shape_xy = cleaned
     shape_line = LineString(shape_xy) if shape_xy else None
     dense = bool(
@@ -886,6 +1029,7 @@ def match_pattern(
         "relation_match_tier": best_strength,  # 2=ref/name, 1=colour-only, 0=none
         "dropped_obs": dropped_obs,    # foreign-run excision (identity tier)
         "dropped_runs": dropped_runs,
+        "reanchored": reanchored,      # terminal shape re-anchoring (O'Hare)
     }
 
     def _off_osm_result(method: str, confidence: float, report, edges_used) -> MatchResult:
@@ -1240,6 +1384,7 @@ def match_pattern(
         graph_bridged_m=round(sum(g.get("routed_m", 0.0) for g in gaps), 1),
         matched_obs=matched_obs,
     )
+    stats["track_switches"] = _count_track_switches(mg, layers, segments)
 
     if simplified is None:
         return _off_osm_result("passthrough", 0.0, None, [])
