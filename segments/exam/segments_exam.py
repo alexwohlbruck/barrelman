@@ -253,10 +253,23 @@ def check1_c1_contract(g, proj, segments, chicago: bool = True,
         # (pre-existing drift, independent of the FIX 1 same-family bundle
         # change — Chicago is byte-identical before/after it); the North Side
         # Brn/P/Red bundle is present and all geometry exams PASS.
+        # Re-pinned 11 -> 10 junctions after PAR-12 stop conflation: moving
+        # the Ashland (Green/Pink) stop 29.1 m onto its OSM platform shifted
+        # the station-split node so the Ashland site is now a deg-2
+        # Green/Pink COMPOSITION change rather than a switch junction. The
+        # site TOTAL (12) and coordinate agreement with lineorder are
+        # unchanged (check1.lineorder-cross-check PASSES), so this is a
+        # legitimate topology shift onto a corrected stop, not a regression.
+        # the two composition sites are Howard (-87.6729, 42.0191) and the
+        # newly-shifted Ashland (-87.6696, 41.8852); station_label is None on
+        # both split nodes, so pin by COORDINATE rather than label.
+        comp_coords = {c for c, k in site_coords.items() if k == "composition"}
+        expect_comp = {(-87.6728924, 42.0191259), (-87.6695905, 41.8852301)}
         report("check1.site-inventory",
-               len(sites) == 12 and n_junc == 11 and howard == ["Howard"],
-               f"expected 12 sites (11 junctions + Howard), got {len(sites)} "
-               f"({n_junc} junctions, composition at {howard})")
+               len(sites) == 12 and n_junc == 10 and comp_coords == expect_comp,
+               f"expected 12 sites (10 junctions + Howard + Ashland "
+               f"composition), got {len(sites)} "
+               f"({n_junc} junctions, composition at {sorted(comp_coords)})")
 
     if site_checks:  # band-independent (graph-derived): run once
         lo_sites = lineorder_site_coords()

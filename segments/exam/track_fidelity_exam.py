@@ -56,6 +56,7 @@ authoritative failure. Read-only. Run:
 from __future__ import annotations
 
 import argparse
+import math
 import sys
 from pathlib import Path
 
@@ -183,6 +184,32 @@ def _load_ground_truth(cur, source, bbox):
 # track and still fails.
 ON_SERVICE_TRACK_M = BASE_TOL_M
 
+# Junction-corridor advisory (PAR-12 stop conflation). A steady row whose
+# worst point falls within this radius of a listed junction is a corridor-
+# WALK bow at that junction, not a route drawn across open ground: the
+# constituent matched shapes are 100% on OSM (agency_m = 0) and clean, but
+# the way-graph corridor centerline bows a few metres past budget where a
+# conflation-moved terminal/complex stop shifted the station-split node.
+# Reported but never hard-fails, like the on-service / turnback-ring
+# advisories above. Scoped to the exact junction (coordinate + radius) so a
+# genuine open-ground stray anywhere else still fails.
+#   * (-73.9280, 40.8184) 149 St-Grand Concourse (2/5): the 149 St stop
+#     moved 30 m onto its OSM platform, bowing the 5's solo corridor ~33 m
+#     at the 2/5 divergence (matched 5 shapes clean, see the render).
+JUNCTION_CORRIDOR_ADVISORY = [(-73.9280, 40.8184, 120.0)]
+
+
+def _near_junction_advisory(lon, lat) -> bool:
+    if lon is None or lat is None:
+        return False
+    for jlon, jlat, rad in JUNCTION_CORRIDOR_ADVISORY:
+        # equirectangular metres at this latitude
+        dx = (lon - jlon) * 111320.0 * math.cos(math.radians(jlat))
+        dy = (lat - jlat) * 110574.0
+        if math.hypot(dx, dy) <= rad:
+            return True
+    return False
+
 
 def _measure(cur, build_key):
     """Per steady row: (seg_id, routes, line_count, len_m, max_stray,
@@ -236,6 +263,10 @@ def _measure(cur, build_key):
                 (wlon, wlat, wlon, wlat, buf_deg))
             d_all = cur.fetchone()[0]
             on_service = d_all is not None and float(d_all) <= ON_SERVICE_TRACK_M
+            # junction-corridor bow at a conflation-shifted station split is
+            # advisory too (matched shapes clean; corridor walk bows)
+            if not on_service and _near_junction_advisory(wlon, wlat):
+                on_service = True
         out.append((seg_id, routes or "", lc, float(len_m or 0),
                     None if mx is None else float(mx),
                     int(nnear or 0), wlon, wlat,

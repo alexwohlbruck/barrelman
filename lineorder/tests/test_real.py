@@ -48,8 +48,15 @@ def test_load_dimensions(inst):
     # committed source no longer reproduces — pre-existing drift, independent
     # of the FIX 1 same-family bundle change which is Chicago-byte-identical;
     # the North Side Brn/P/Red bundle is present and all geometry exams PASS).
-    assert len(g.edges) == 155
-    assert sum(len(e.lines) for e in g.edges.values()) == 230
+    # Re-pinned 155 -> 144 edges / 230 -> 220 edge_lines after PAR-12 stop
+    # conflation: moving CTA stops onto their OSM platforms (Ashland +29 m,
+    # etc.) shifted station-split nodes, merging a few short station segments
+    # and turning the Ashland junction into a deg-2 composition change (see
+    # segments_exam check1.site-inventory). All geometry exams + loop_exam +
+    # chicago:l md5 (LOOM baseline) hold; the Loop bundles + Tower 18 are
+    # unchanged.
+    assert len(g.edges) == 144
+    assert sum(len(e.lines) for e in g.edges.values()) == 220
     assert g.max_cardinality() == 6  # Loop legs
     routes = {(l.feed_id, l.route_id) for l in inst.registry
               if hasattr(l, "feed_id")}
@@ -101,7 +108,7 @@ def test_reduce_and_roundtrip(inst):
 
     full = reconstruct(red, reduced_sol)
     assert set(full) == set(g.edges)
-    assert sum(len(p) for p in full.values()) == 230  # r19:220->229; r21:229->252; committed-source resync:252->230
+    assert sum(len(p) for p in full.values()) == 220  # r19:220->229; r21:229->252; committed-source resync:252->230; PAR-12 conflation:230->220
 
     orig = score(g, red.registry, full, w)
     print(f"[real] original-graph score: {orig}")

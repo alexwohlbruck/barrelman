@@ -84,17 +84,27 @@ def test_transition_sites(built):
     # ribbon and every station/junction where a line joins or leaves the
     # bundle becomes a composition-change JUNCTION node.
     # Re-synced to the DETERMINISTIC committed-source build (18 -> 12 sites,
-    # 17 -> 11 junctions): a fresh `linegraph.build --feed 29 --force`
-    # reproducibly emits 155 edges / 12 transition sites (11 junctions +
-    # Howard). The round-21 pin (18/17) was from a transient build the
-    # committed source no longer reproduces (pre-existing drift, independent
-    # of the FIX 1 same-family bundle change — Chicago is byte-identical
-    # before/after it; the Brn/P/Red bundle is present, geometry exams PASS).
+    # 17 -> 11 junctions): a fresh `linegraph.build --feed 29` reproducibly
+    # emits 144 edges / 12 transition sites. The round-21 pin (18/17) was from
+    # a transient build the committed source no longer reproduces.
+    # Re-pinned 11 -> 10 junctions / 1 -> 2 composition after PAR-12 stop
+    # conflation: moving the Ashland (Green/Pink) stop 29 m onto its OSM
+    # platform shifted the station-split node, so the Ashland site is now a
+    # deg-2 composition change alongside Howard (matches segments_exam
+    # check1.site-inventory). The site TOTAL (12) is unchanged; all geometry
+    # exams + loop_exam + the chicago:l LOOM md5 hold. NOTE: reads the DB
+    # build (load_graph BUILD_KEY), so run after a way-graph
+    # `linegraph.build --feed 29 --emit` — the legacy-raster
+    # linegraph/tests/test_real_emit.py emits the SAME build_key with
+    # different (raster) counts, so don't interleave the two suites' emits.
     assert len(sites) == 12
-    assert kinds["junction"] == 11
-    assert kinds["composition"] == 1
-    howard = [nid for nid, k in sites.items() if k == "composition"]
-    assert g.nodes[howard[0]].label == "Howard"
+    assert kinds["junction"] == 10
+    assert kinds["composition"] == 2
+    # both composition split nodes are unlabeled (label None); pin the pair
+    # by coordinate — Howard (-87.6729, 42.0191) + Ashland (-87.6696, 41.8852)
+    comp_coords = {(round(g.nodes[nid].lon, 4), round(g.nodes[nid].lat, 4))
+                   for nid, k in sites.items() if k == "composition"}
+    assert comp_coords == {(-87.6729, 42.0191), (-87.6696, 41.8852)}
 
 
 def test_every_site_produces_transitions(built):
