@@ -3,8 +3,9 @@
 Runs the FULL phase B path via build.enrich_graph — the same path the
 CLI --emit takes: shape-evidence geometry refit (linegraph.refit),
 station snapping (edge splitting on the refit centerline), route
-attribution, line-less pruning — then the transit_graph_* emit under
-build_key 'chicago:l-v3' in the dev DB, and checks:
+attribution, line-less pruning — then the transit_graph_* emit under a
+THROWAWAY build_key 'chicago:l-v3-test' (deleted on teardown so the suite
+never touches the live chicago:l-v3) in the dev DB, and checks:
 
   - every pattern with a shape attributes with <2% unmatched samples,
   - Loop-window edges carry plausible multi-route sets (the elevated
@@ -42,7 +43,13 @@ FEED_RAW = REPO_ROOT / "data" / "gtfs" / "29.zip"
 
 MERGE_WIDTH = 18.0
 RES = 2.0
-BUILD_KEY = "chicago:l-v3"
+# HERMETIC (task 16): this exam runs the LEGACY raster phase-B path
+# (build_linegraph + enrich_graph), which is NOT how the live chicago:l-v3
+# is built (that is the way-graph corridor engine). Emitting under the live
+# key clobbered the authoritative build every time pytest ran. Emit under a
+# throwaway key instead and delete-and-replace it on teardown, so running
+# the suite never corrupts the live chicago:l-v3 (or the LOOM chicago:l).
+BUILD_KEY = "chicago:l-v3-test"
 BASELINE_KEY = "chicago:l"
 DSN = os.environ.get(
     "DATABASE_URL", "postgresql://barrelman:barrelman@localhost:5434/barrelman"
@@ -127,7 +134,19 @@ def emitted():
         "edge_routes": edge_routes, "counts": counts, "conn": conn,
         "baseline_before": baseline_before,
     }
-    conn.close()
+    # teardown: drop the throwaway build so the suite leaves no trace in the
+    # DB (edge_lines cascade off transit_graph_edges).
+    try:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM transit_graph_nodes WHERE build_key = %s",
+                        (BUILD_KEY,))
+            cur.execute("DELETE FROM transit_graph_edges WHERE build_key = %s",
+                        (BUILD_KEY,))
+            cur.execute("DELETE FROM transit_graph_builds WHERE build_key = %s",
+                        (BUILD_KEY,))
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def test_every_pattern_attributes_under_2pct_unmatched(emitted):
