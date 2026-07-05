@@ -91,6 +91,18 @@ class WaygraphConfig:
     #                                shared-junction fork is not misread as a
     #                                ramp foot. Same-colour merges carry no
     #                                kiss risk (one ribbon regardless).
+    twin_throat_max_len_m: float = 220.0  # max length of a SHORT co-terminal
+    #                                family twin folded at a junction throat
+    #                                (the ~162 m J/M vs Z/M fragments fanning
+    #                                around the Delancey St wye toward the
+    #                                Williamsburg Bridge: same {orange,brown}
+    #                                families, union {J,M,Z}, bowing ~61 m apart
+    #                                — too wide for family_gap but a closed
+    #                                two-track throat that must render as ONE
+    #                                ribbon). Above this a genuine long parallel
+    #                                is left to the window-based family merge
+    #                                with its own gates, so a real divergence is
+    #                                never twin-folded.
     cross_family_gap_m: float = 18.0   # merge 3: cross-family proximity
     #                                bundle. RAISED 10 -> 18 (round 19): a
     #                                KISS is a transient V-shaped convergence,
@@ -267,7 +279,11 @@ class WaygraphConfig:
 # folds in, per pattern in load order: route_id, color_key, shape coords;
 # plus the sorted (stop_id, lon, lat, name) set station placement consumes.
 # Any input change that changes the output now changes the digest.
-CONFIG_FORMAT_VERSION = 17
+# 18: co-terminal FAMILY twin-fold — two SHORT co-terminal corridors of equal
+# colour families but different route sets, bowing apart at a junction throat
+# past family_gap, fold into one union-set ribbon (the J/M vs Z/M fragments at
+# the Delancey St wye toward the Williamsburg Bridge; twin_throat_max_len_m).
+CONFIG_FORMAT_VERSION = 18
 
 
 def config_digest_token(cfg: WaygraphConfig) -> str:

@@ -842,14 +842,24 @@ def _try_merge(st: _State, kind: str, c1: Corr, c2: Corr, epsg: int):
     else:
         gap, max_bear = cfg.cross_family_gap_m, cfg.cross_family_max_bearing_deg
 
-    # co-terminal twins: two tracks of ONE service between the same two
-    # junction areas (the 5's directional tracks around the Mott Haven
-    # wye) are a closed two-track loop and must render as one line even
-    # where they bow apart beyond pair_gap mid-span — otherwise the
-    # ribbon becomes a theta graph and stage 6's walk shears offsets.
-    # Endpoints need not be the same node (each track has its own
-    # switch); they must correspond within a switch-ladder's reach.
-    if kind == "pair" and c1.u != c1.v and c2.u != c2.v:
+    # co-terminal twins: two tracks between the same two junction areas
+    # (the 5's directional tracks around the Mott Haven wye; the J/M vs Z/M
+    # throat fragments that fan around the Delancey St wye toward the
+    # Williamsburg Bridge) are a closed two-track loop and must render as one
+    # line even where they bow apart beyond the merge gap mid-span — otherwise
+    # the ribbon becomes a theta graph and stage 6's walk shears offsets.
+    # PAIR (identical routes): the directional-pair midline. FAMILY (equal
+    # colour families, different route sets — J/M orange+brown vs Z/M
+    # orange+brown): the union-set ribbon, but only for a SHORT throat
+    # fragment (a junction wye, not a long parallel — a sustained family
+    # parallel already merges through the window path with its own gates), so
+    # a real long divergence is never twin-folded. Endpoints need not be the
+    # same node (each track has its own switch); they must correspond within a
+    # switch-ladder's reach.
+    twin_ok = (kind == "pair"
+               or (kind == "family" and c1.families == c2.families
+                   and max(c1.length, c2.length) <= cfg.twin_throat_max_len_m))
+    if twin_ok and c1.u != c1.v and c2.u != c2.v:
         if max(c1.length, c2.length) <= 1.35 * min(c1.length, c2.length):
             e1a, e1b = c1.pts[0], c1.pts[-1]
             e2a, e2b = c2.pts[0], c2.pts[-1]
@@ -1224,6 +1234,72 @@ def _apply_merge(st: _State, cand, epsg: int):
     return True
 
 
+def _fold_throat_twins(st: _State, epsg: int):
+    """Fold short co-terminal FAMILY twins that only materialise as separate
+    corridors AFTER the merge passes (ladder contraction and tear healing
+    unify the wye's junction nodes late). Two corridors sharing BOTH endpoint
+    nodes, equal colour families, different route sets, short enough to be a
+    junction throat, fold into one union-set ribbon — the J/M vs Z/M fragments
+    fanning around the Delancey St wye toward the Williamsburg Bridge that the
+    proximity-gated family pass never paired (they bow apart past family_gap).
+
+    Targeted so a genuine co-terminal FORK is never folded: the twin pair must
+    sit INSIDE a bundle that already carries their UNION route set on a corridor
+    at EACH shared node (the throat is a local track split within a continuing
+    bundle, not a divergence). Uses the co-terminal-twin gate + midline of
+    _try_merge (short, length-similar, low-bearing, monotone)."""
+    def _union_continues(nid, union, exclude):
+        for cid2, cc in st.corrs.items():
+            if cid2 in exclude:
+                continue
+            if (cc.u == nid or cc.v == nid) and union <= cc.routes:
+                return True
+        return False
+
+    changed = True
+    guard = 0
+    while changed and guard < 4 * max(len(st.corrs), 8):
+        changed = False
+        guard += 1
+        by_ends: dict = {}
+        for cid in sorted(st.corrs):
+            c = st.corrs[cid]
+            if c.u != c.v:
+                by_ends.setdefault(frozenset((c.u, c.v)), []).append(cid)
+        for ends, group in by_ends.items():
+            if len(group) < 2:
+                continue
+            done = False
+            for x in range(len(group)):
+                for y in range(x + 1, len(group)):
+                    c1 = st.corrs.get(group[x])
+                    c2 = st.corrs.get(group[y])
+                    if c1 is None or c2 is None:
+                        continue
+                    if c1.families != c2.families or c1.routes == c2.routes:
+                        continue
+                    union = c1.routes | c2.routes
+                    nu, nv = c1.u, c1.v
+                    excl = {c1.cid, c2.cid}
+                    # the throat must sit inside a bundle carrying the union at
+                    # BOTH shared nodes — else it is a real fork, left alone
+                    if not (_union_continues(nu, union, excl)
+                            and _union_continues(nv, union, excl)):
+                        continue
+                    cand = _try_merge(st, "family", c1, c2, epsg)
+                    if cand is None or not cand[9]:   # twin-fold only
+                        continue
+                    if _apply_merge(st, cand, epsg):
+                        st.rechain()
+                        st.drop_orphan_nodes()
+                        changed = done = True
+                        break
+                if done:
+                    break
+            if done:
+                break
+
+
 def _merge_pass(st: _State, kind: str, epsg: int):
     cfg = st.cfg
     gap = {"pair": cfg.pair_gap_m, "family": cfg.family_gap_m,
@@ -1435,6 +1511,10 @@ def build_corridor_linegraph(index: WayIndex, usage: Usage,
     st.log(f"ladder contraction: {st.notes.n_contracted} micro corridors "
            f"-> {len(st.corrs)} corridors")
     _heal_tears(st)
+    # co-terminal family throat twins only become co-terminal now (the wye's
+    # junction nodes unified during contraction/healing) — fold them here
+    _fold_throat_twins(st, index.epsg)
+    st.log(f"throat-twin fold -> {len(st.corrs)} corridors")
     # a tear-heal connector can re-form a self-loop: sweep once more so no
     # self-loop reaches emit (lineorder rejects them)
     _pop_self_loops(st)
