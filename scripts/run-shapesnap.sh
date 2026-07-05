@@ -74,7 +74,12 @@ import os, sys, zipfile
 
 raw_path, zip_path = sys.argv[1], sys.argv[2]
 tmp_path = zip_path + ".reseed.tmp"
-MEMBERS = ("shapes.txt", "trips.txt", "stop_times.txt")
+# stops.txt is reseeded too: shapesnap's stop-conflation step (shapesnap.
+# conflate) rewrites stops.txt in place, so a rerun would otherwise conflate
+# ALREADY-conflated coordinates (stops already sitting on the OSM stop -> 0
+# moved). Restoring stops.txt from the pristine raw zip makes conflation
+# always start from the agency's own coordinates, like the import pipeline.
+MEMBERS = ("shapes.txt", "trips.txt", "stop_times.txt", "stops.txt")
 with zipfile.ZipFile(raw_path) as zraw, zipfile.ZipFile(zip_path) as zin, \
      zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_DEFLATED) as zout:
     raw_names = set(zraw.namelist())

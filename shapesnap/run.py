@@ -64,6 +64,7 @@ from shapely.geometry import LineString, Point
 from shapely.ops import substring
 
 from shapesnap.candidates import MatchGraph, StationIndex, load_stations
+from shapesnap.conflate import conflate_stops
 from shapesnap.graph import (
     MODE_CLASSES,
     REPO_ROOT,
@@ -594,6 +595,8 @@ def main(argv=None) -> int:
     ap.add_argument("--zip", type=Path, required=True, help="processed GTFS zip (rewritten in place)")
     ap.add_argument("--modes", default=None, help="comma list of rail,bus,ferry (default: config)")
     ap.add_argument("--dry-run", action="store_true", help="match + report; no zip/DB writes")
+    ap.add_argument("--no-conflate", action="store_true",
+                    help="skip the GTFS↔OSM stop conflation pre-step")
     ap.add_argument("--routes", default=None, help="comma-separated route_ids (debugging)")
     ap.add_argument("--limit", type=int, default=None, help="max patterns per mode (debugging)")
     ap.add_argument("--pbf", type=Path, default=None, help="override the configured OSM extract")
@@ -634,6 +637,13 @@ def main(argv=None) -> int:
 
     t0 = time.perf_counter()
     cfg = MatchConfig()
+    # env override for the anti-hop dial so a before/after track-switch
+    # comparison is reproducible (SHAPESNAP_TRACK_SWITCH_PENALTY_M=0 restores
+    # pure closest-track decoding for the "before" baseline)
+    _tsp = os.environ.get("SHAPESNAP_TRACK_SWITCH_PENALTY_M")
+    if _tsp is not None:
+        cfg.track_switch_penalty_m = float(_tsp)
+        print(f"[shapesnap.run] track_switch_penalty_m override: {cfg.track_switch_penalty_m}")
     results: list = []       # (mode, Pattern, MatchResult, shape_id|None)
     snap_shapes: dict = {}   # snap id -> (coords lonlat, cumulative m)
     snap_by_hash: dict = {}
@@ -641,12 +651,43 @@ def main(argv=None) -> int:
     trip_dists: dict = {}    # trip_id -> stop along-positions (m)
     n_dup = 0
 
+    # OSM stations per mode: load ONCE (a full pbf node pass), reused by both
+    # stop conflation (below) and each mode's regime-B station index.
+    station_cache: dict = {}
+    for mode in modes:
+        station_cache[mode] = load_stations(pbf, mode)
+        print(f"[shapesnap.run] {mode}: station index {len(station_cache[mode])} stations")
+
+    # ── stop conflation (GTFS↔OSM), decision 1: BEFORE matching so the
+    # matcher, MOTIS, and display all consume the corrected stops. Rewrites
+    # stops.txt in the processed zip + gtfs_stops in PostGIS (shapesnap.
+    # conflate). Skipped on --dry-run / --no-conflate; a partial run
+    # (--routes/--limit) still conflates the full stop set (positions are
+    # per-stop, harmless to correct even for un-matched routes).
+    conflate_summary = None
+    if not args.dry_run and not args.no_conflate:
+        conf_dsn = None if args.db == "skip" else (args.db or DEFAULT_DSN)
+        conflate_summary = conflate_stops(
+            zip_path, args.feed, modes, pbf,
+            write_zip=True, dsn=conf_dsn, station_cache=station_cache,
+        )
+        pm = conflate_summary["per_mode"]
+        print(
+            f"[shapesnap.run] conflation: {conflate_summary['overrides']} stops "
+            f"overridden ({conflate_summary['zip_rows_changed']} zip rows, "
+            f"{conflate_summary['db_rows_updated']} db rows); "
+            + ", ".join(
+                f"{m}: {d['matched']}/{d['considered']} matched, "
+                f"{d['moved_over_m']} moved >25 m (max {d['max_move_m']} m)"
+                for m, d in pm.items()
+            )
+        )
+
     for mode in modes:
         graph = ensure_graph(pbf, mode, stem, bbox)
         mg = MatchGraph(graph)
-        stations = load_stations(pbf, mode)
+        stations = station_cache[mode]
         station_idx = StationIndex(stations, mg)
-        print(f"[shapesnap.run] {mode}: station index {len(stations)} stations")
 
         patterns = load_patterns(zip_path, route_ids=route_ids, modes={mode})
         if args.limit:
@@ -739,6 +780,7 @@ def main(argv=None) -> int:
             else None
         ),
         "patterns_off_osm": off_osm,
+        "conflation": conflate_summary,
     }
 
     if args.dry_run:
