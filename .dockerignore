@@ -10,6 +10,11 @@ node_modules
 data/
 pelias/
 
+# Admin console — deps and build output are produced by the web-builder stage,
+# not copied from the host. (The stage builds web/dist and it's copied in.)
+web/node_modules
+web/dist
+
 # Local env / logs / editor cruft
 .env
 *.log
