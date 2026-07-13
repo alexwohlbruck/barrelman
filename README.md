@@ -161,6 +161,73 @@ Swagger UI: `http://localhost:5001/swagger`
 
 ---
 
+## Admin Console
+
+An internal operator UI for running every data task, watching live job logs, and
+monitoring service/data health. It lives in `web/` (Vue 3 + Reka UI + Tailwind)
+and is served by the API at `/console`.
+
+### What it does
+
+- **Scripts** — run any of the ~28 catalogued tasks (OSM/GTFS/GBFS imports,
+  search enrichment, migrations, routing-graph rebuilds, config generation) from
+  a form UI, with parameter inputs, a live command preview, and a confirmation
+  gate for destructive operations.
+- **Jobs** — every run is a tracked job with streamed stdout/stderr (SSE), status,
+  exit code, duration, and cancellation for process jobs.
+- **Dashboard / Data** — downstream service health (Postgres, MOTIS, GraphHopper,
+  Martin) and data metrics (table sizes, coverage, freshness).
+- **API Tester** — send requests to the running API with server-side key injection.
+
+### Auth
+
+The console and all `/admin/*` script/job routes are gated by `BARRELMAN_ADMIN_KEY`
+(falls back to `BARRELMAN_API_KEY` when unset; open in dev when neither is set).
+Set a strong, separate secret in production — these routes can trigger full
+re-imports and `DROP`/`TRUNCATE`.
+
+```dotenv
+BARRELMAN_ADMIN_KEY=brm_admin_use_a_strong_key
+```
+
+### Execution model
+
+Jobs run as child processes of the **API process** (or in-process for SQL/migration
+tasks). Host-oriented scripts (`run-import.sh`, `update-osm.sh`, graph rebuilds that
+`docker exec` into sibling containers) therefore expect the API to run on the host
+(`bun run dev`) where the repo layout and `docker` CLI are available. DB/migration
+tasks work anywhere the API can reach Postgres.
+
+### Development
+
+The console dev server (Vite + hot-reload) starts automatically with the dev
+stack — no separate command:
+
+```bash
+./start.sh dev        # brings up the API + the console at http://localhost:5199/console
+```
+
+It runs as the `barrelman-console` service in `docker-compose.dev.yml` and proxies
+`/admin` to the API over the compose network. It's dev-only.
+
+To run it standalone on the host instead (e.g. without Docker):
+
+```bash
+cd web && bun install && bun run dev     # http://localhost:5199/console (proxies /admin → :5001)
+```
+
+For a production-style check, build it and let the API serve it directly:
+
+```bash
+cd web && bun run build     # emits web/dist
+# then open http://localhost:5001/console
+```
+
+The production Docker image builds the console automatically (multi-stage) and
+serves it at `/console` — no dev server in prod.
+
+---
+
 ## Data Import
 
 The import pipeline transforms an OSM PBF extract into a fully indexed PostGIS database.

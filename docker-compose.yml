@@ -76,6 +76,9 @@ services:
       OLLAMA_HOST: ${OLLAMA_HOST:-http://ollama:11434}
       PORT: 5001
       BARRELMAN_API_KEY: ${BARRELMAN_API_KEY:-brm_dev_changeme}
+      # Admin console auth (gates /console + script/job routes). Falls back to
+      # BARRELMAN_API_KEY when unset. Set a strong, separate secret in prod.
+      BARRELMAN_ADMIN_KEY: ${BARRELMAN_ADMIN_KEY:-}
       # BARRELMAN_TILE_KEY: Set in .env for production. When unset, tile access is open (dev mode).
       BARRELMAN_TILE_KEY: ${BARRELMAN_TILE_KEY:-}
       GRAPHHOPPER_URL: http://barrelman-graphhopper:8989

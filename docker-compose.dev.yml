@@ -5,6 +5,7 @@
 #   - Build contexts so images are built locally instead of pulled from Docker Hub
 #   - Source volume mounts for hot-reload (barrelman API)
 #   - Import directory mount for quick iteration on import scripts
+#   - The admin console Vite dev server (hot-reload UI) at :5199
 
 services:
   barrelman-db:
@@ -26,3 +27,21 @@ services:
       - ./import:/app/import
       - ./data:/data
       - /app/node_modules
+
+  # Admin console dev server (Vite + HMR). Dev-only — in production the API
+  # serves the pre-built console at /console. Proxies /admin to the barrelman
+  # service over the compose network. Open http://localhost:5199/console.
+  barrelman-console:
+    container_name: barrelman-console
+    image: oven/bun:1
+    working_dir: /web
+    command: sh -c "bun install --frozen-lockfile 2>/dev/null || bun install; exec bun run dev"
+    environment:
+      BARRELMAN_API_URL: http://barrelman:5001
+    volumes:
+      - ./web:/web
+      - /web/node_modules
+    ports:
+      - "5199:5199"
+    depends_on:
+      - barrelman

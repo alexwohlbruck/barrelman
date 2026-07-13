@@ -8,6 +8,8 @@ import { childrenRoutes } from './routes/children'
 import { placeRoutes } from './routes/place'
 import { geocodeRoutes } from './routes/geocode'
 import { adminRoutes } from './routes/admin'
+import { adminConsoleRoutes, adminConsoleConfigRoutes } from './routes/admin-console'
+import { consoleUiRoutes } from './lib/console-ui'
 import { tileRoutes } from './routes/tiles'
 import { graphhopperRoutes } from './routes/graphhopper'
 import { routeRoutes } from './routes/route'
@@ -49,6 +51,9 @@ const app = new Elysia()
   .use(placeRoutes)
   .use(geocodeRoutes)
   .use(adminRoutes)
+  .use(adminConsoleConfigRoutes)
+  .use(adminConsoleRoutes)
+  .use(consoleUiRoutes)
   .use(tileRoutes)
   .use(graphhopperRoutes)
   .use(routeRoutes)
@@ -63,3 +68,4 @@ startTransitWarmup()
 
 console.log(`Barrelman running at http://localhost:${port}`)
 console.log(`Swagger docs at http://localhost:${port}/swagger`)
+console.log(`Admin console at http://localhost:${port}/console`)
