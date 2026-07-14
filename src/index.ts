@@ -21,6 +21,18 @@ import { startTransitWarmup } from './lib/warmup'
 
 const port = Number(process.env.PORT) || 5001
 
+// Safety net: a stray unhandled rejection (a fire-and-forget task that forgot to
+// .catch, a background poll hitting a transient upstream error) must not take the
+// whole server down — that would drop search/geocoding/tiles for every client.
+// Log loudly and keep serving; individual request handlers still surface their
+// own errors normally.
+process.on('unhandledRejection', (reason) => {
+  console.error('[unhandledRejection]', reason)
+})
+process.on('uncaughtException', (err) => {
+  console.error('[uncaughtException]', err)
+})
+
 // Ensure post-import columns exist before accepting requests
 await ensureSchema()
 await ensureGtfsSchema()
