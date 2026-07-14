@@ -47,8 +47,14 @@ export async function ensureSchema() {
     -- so without this GiST index every fuzzy query degrades to a parallel
     -- sequential scan over the full table (~45s on 21M rows) — which silently
     -- blows past the API search timeout and returns no place results.
-    CREATE INDEX IF NOT EXISTS geo_places_name_gist_trgm_idx
-      ON geo_places USING gist (name gist_trgm_ops) WHERE name IS NOT NULL;
+    --
+    -- siglen=128: the default 12-byte signatures are too lossy at ~2M named
+    -- rows — the KNN scan visits far too many pages and recomputes distances
+    -- (measured 335ms-1.3s per query). 128-byte signatures cut that to
+    -- tens of ms at the cost of a larger index. (Replaces the old
+    -- default-siglen geo_places_name_gist_trgm_idx.)
+    CREATE INDEX IF NOT EXISTS geo_places_name_gist_trgm_sig128_idx
+      ON geo_places USING gist (name gist_trgm_ops(siglen=128)) WHERE name IS NOT NULL;
   `))
 }
 
