@@ -19,20 +19,23 @@ export interface SearchParams {
   autocomplete?: boolean
 }
 
-export async function searchPlaces({
-  query,
-  lat,
-  lng,
-  radius,
-  route,
-  buffer = 1000,
-  categories,
-  tags,
-  limit = 20,
-  offset = 0,
-  semantic = false,
-  autocomplete = false,
-}: SearchParams): Promise<any[]> {
+export async function searchPlaces(
+  {
+    query,
+    lat,
+    lng,
+    radius,
+    route,
+    buffer = 1000,
+    categories,
+    tags,
+    limit = 20,
+    offset = 0,
+    semantic = false,
+    autocomplete = false,
+  }: SearchParams,
+  signal?: AbortSignal,
+): Promise<any[]> {
   const routeGeoJSON = route ? JSON.stringify(route) : ''
   const tagsCacheKey = tags ? Object.keys(tags).sort().map(k => `${k}=${tags[k]}`).join('&') : ''
   const cacheKey = `search:${query || ''}:${lat}:${lng}:${radius}:${routeGeoJSON}:${buffer}:${categories?.join(',')}:${tagsCacheKey}:${limit}:${offset}:${semantic}:${autocomplete}`
@@ -48,10 +51,12 @@ export async function searchPlaces({
 
   // Address geocoding (Pelias) runs in parallel with the PostGIS layers so
   // street addresses appear alongside POIs without adding latency. Text queries
-  // only — not browse/category or route corridor searches.
-  const wantAddresses = hasQuery && !hasRoute && !(categories && categories.length)
+  // only — not browse/category or route corridor searches. Skipped under 3
+  // chars: no address is identifiable from 1-2 chars, and such prefixes make
+  // Elasticsearch grind through 10k+ candidates for nothing.
+  const wantAddresses = hasQuery && sanitizedQuery.length >= 3 && !hasRoute && !(categories && categories.length)
   const peliasPromise: Promise<any[]> = wantAddresses
-    ? forwardGeocode(sanitizedQuery, { lat, lng, limit })
+    ? forwardGeocode(sanitizedQuery, { lat, lng, limit, signal })
     : Promise.resolve([])
 
   // ── Build spatial primitives ────────────────────────────────────────────

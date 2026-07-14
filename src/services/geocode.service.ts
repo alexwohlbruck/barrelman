@@ -1,6 +1,7 @@
 import { db } from '../db'
 import { sql } from 'drizzle-orm'
 import { spatialCache } from '../lib/cache'
+import { findOsmByAddress } from './place.service'
 
 export interface ReverseGeocodeResult {
   address: Record<string, string>
@@ -15,6 +16,14 @@ export interface ReverseGeocodeResult {
 // returns POIs *and* addresses.
 
 const PELIAS_URL = process.env.PELIAS_URL || 'http://pelias_api:4000'
+
+// Backstop only — guards against a hung Pelias, not a slow-but-alive one.
+// Cancellation is driven by the caller's request signal (a new keystroke
+// supersedes the previous request); this ceiling merely prevents a request
+// from hanging forever if Pelias never responds. Kept well above Pelias's
+// real p95 (~2.6s) so genuine slow responses still complete and return
+// addresses rather than being dropped. See PELIAS_URL geocode notes above.
+const PELIAS_HANG_BACKSTOP_MS = 10_000
 
 /**
  * Adapt a Pelias GeoJSON feature into the geo_places result shape that
@@ -78,9 +87,9 @@ function adaptPeliasFeature(f: any): any {
  */
 export async function forwardGeocode(
   text: string,
-  opts: { lat?: number; lng?: number; limit?: number; layers?: string } = {},
+  opts: { lat?: number; lng?: number; limit?: number; layers?: string; signal?: AbortSignal } = {},
 ): Promise<any[]> {
-  const { lat, lng, limit = 10, layers = 'address,street' } = opts
+  const { lat, lng, limit = 10, layers = 'address,street', signal } = opts
   if (!text?.trim()) return []
 
   const params = new URLSearchParams({ text, size: String(limit) })
@@ -90,15 +99,76 @@ export async function forwardGeocode(
   }
   if (layers) params.set('layers', layers)
 
+  // Cancel when the originating request is aborted (a superseding keystroke),
+  // OR when the hang backstop fires — whichever comes first. Honoring the
+  // caller's signal is what lets a slow-but-valid Pelias response finish
+  // instead of being cut at a fixed clock and dropped.
+  const backstop = AbortSignal.timeout(PELIAS_HANG_BACKSTOP_MS)
+  const fetchSignal = signal ? AbortSignal.any([signal, backstop]) : backstop
+
   try {
     const res = await fetch(`${PELIAS_URL}/v1/autocomplete?${params}`, {
-      signal: AbortSignal.timeout(2500),
+      signal: fetchSignal,
     })
     if (!res.ok) return []
     const data = (await res.json()) as { features?: any[] }
     return (data.features ?? []).map(adaptPeliasFeature)
   } catch {
-    return [] // Pelias unavailable — POI search still works.
+    return [] // Pelias unavailable/aborted — POI search still works.
+  }
+}
+
+/**
+ * Fetch a single Pelias record by its global id (gid), e.g.
+ * "openaddresses:address:us/ny/city_of_new_york:7e5b…". Used to resolve an
+ * address place-detail view: Pelias geocoder results have no row in geo_places,
+ * so `/place/:osmType/:osmId` can't serve them — this hits Pelias `/v1/place`
+ * instead. Returns the geo_places-shaped record (via adaptPeliasFeature) or null.
+ */
+export async function fetchPeliasPlaceByGid(
+  gid: string,
+  opts: { signal?: AbortSignal } = {},
+): Promise<any | null> {
+  if (!gid?.trim()) return null
+  const params = new URLSearchParams({ ids: gid })
+  const backstop = AbortSignal.timeout(PELIAS_HANG_BACKSTOP_MS)
+  const fetchSignal = opts.signal ? AbortSignal.any([opts.signal, backstop]) : backstop
+  try {
+    const res = await fetch(`${PELIAS_URL}/v1/place?${params}`, { signal: fetchSignal })
+    if (!res.ok) return null
+    const data = (await res.json()) as { features?: any[] }
+    const feature = data.features?.[0]
+    if (!feature) return null
+    const place = adaptPeliasFeature(feature)
+
+    // Associate with the OSM feature at the same address, if one exists, so the
+    // detail view can outline the building perimeter and link to OSM instead of
+    // showing a bare geocoder point. We return the OSM object (polygon + tags +
+    // osm id), backfilling name/address from the geocoded record when the
+    // building itself is unnamed/unaddressed.
+    const hn = place.address?.housenumber
+    const street = place.address?.street
+    const coords = place.geometry?.coordinates
+    if (hn && street && Array.isArray(coords)) {
+      try {
+        const osm = await findOsmByAddress(hn, street, coords[1], coords[0])
+        if (osm) {
+          // Backfill only the address from the geocoded record when the OSM
+          // feature lacks one; the display name is derived from the street
+          // address downstream (parchment adaptPlace), so both the address-view
+          // and the direct-OSM-view resolve to identical data.
+          const emptyAddr = !osm.address || Object.values(osm.address).every((v) => v == null)
+          if (emptyAddr) osm.address = place.address
+          return osm
+        }
+      } catch {
+        // Association is best-effort — fall back to the bare geocoder point.
+      }
+    }
+
+    return place
+  } catch {
+    return null
   }
 }
 

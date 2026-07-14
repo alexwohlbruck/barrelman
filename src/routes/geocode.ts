@@ -1,10 +1,40 @@
 import Elysia, { t } from 'elysia'
 import { authMiddleware } from '../middleware/auth'
-import { reverseGeocode as _reverseGeocode } from '../services/geocode.service'
+import {
+  reverseGeocode as _reverseGeocode,
+  fetchPeliasPlaceByGid as _fetchPeliasPlaceByGid,
+} from '../services/geocode.service'
 
-export function createGeocodeRoutes(deps = { reverseGeocode: _reverseGeocode }) {
+export function createGeocodeRoutes(deps = {
+  reverseGeocode: _reverseGeocode,
+  fetchPeliasPlaceByGid: _fetchPeliasPlaceByGid,
+}) {
   return new Elysia()
     .use(authMiddleware)
+    .get(
+      '/geocode/place',
+      async ({ query, request, set }) => {
+        const place = await deps.fetchPeliasPlaceByGid(query.id, { signal: request.signal })
+        if (!place) {
+          set.status = 404
+          return { error: 'Place not found' }
+        }
+        return place
+      },
+      {
+        query: t.Object({
+          id: t.String({
+            description: 'Pelias global id (gid), e.g. "openaddresses:address:us/ny/city_of_new_york:7e5b…".',
+            examples: ['openaddresses:address:us/ny/city_of_new_york:7e5bd55eb1baa131'],
+          }),
+        }),
+        detail: {
+          summary: 'Fetch a geocoder (Pelias) place by gid',
+          description: 'Resolves a single address/street record from the Pelias geocoder by its global id. These records have no geo_places row, so they cannot be fetched via `/place/:osmType/:osmId`.',
+          tags: ['Geocoding'],
+        },
+      },
+    )
     .get(
       '/geocode',
       async ({ query }) => {
