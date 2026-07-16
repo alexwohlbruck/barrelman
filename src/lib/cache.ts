@@ -17,3 +17,10 @@ export const embeddingCache = new LRUCache<string, number[]>({
   max: 1000,
   ttl: 60 * 60 * 1000,
 })
+
+// Brand catalog lookups (autocomplete + single-brand): 1h TTL. The catalog only
+// changes on import/refresh, so a long TTL is safe.
+export const brandCache = new LRUCache<string, any>({
+  max: 2000,
+  ttl: 60 * 60 * 1000,
+})
