@@ -3,6 +3,7 @@ import { cors } from '@elysiajs/cors'
 import { swagger } from '@elysiajs/swagger'
 import { healthRoutes } from './routes/health'
 import { searchRoutes } from './routes/search'
+import { brandsRoutes } from './routes/brands'
 import { containsRoutes } from './routes/contains'
 import { childrenRoutes } from './routes/children'
 import { placeRoutes } from './routes/place'
@@ -17,9 +18,22 @@ import { transitRoutes } from './routes/transit'
 import { gbfsRoutes } from './routes/gbfs'
 import { ensureSchema, ensureGtfsSchema, ensureGbfsSchema } from './db'
 import { ensureSearchEnrichment } from './lib/search-enrichment'
+import { ensureBrandLogos } from './lib/brand-logos'
 import { startTransitWarmup } from './lib/warmup'
 
 const port = Number(process.env.PORT) || 5001
+
+// Safety net: a stray unhandled rejection (a fire-and-forget task that forgot to
+// .catch, a background poll hitting a transient upstream error) must not take the
+// whole server down — that would drop search/geocoding/tiles for every client.
+// Log loudly and keep serving; individual request handlers still surface their
+// own errors normally.
+process.on('unhandledRejection', (reason) => {
+  console.error('[unhandledRejection]', reason)
+})
+process.on('uncaughtException', (err) => {
+  console.error('[uncaughtException]', err)
+})
 
 // Ensure post-import columns exist before accepting requests
 await ensureSchema()
@@ -28,8 +42,9 @@ await ensureGbfsSchema()
 
 // Backfill derived search columns (codes/name_abbrev/parent_context/ts) if a
 // prior import left them empty. Fire-and-forget so it never blocks startup —
-// it self-skips once the data is enriched.
-void ensureSearchEnrichment()
+// it self-skips once the data is enriched. Then resolve brand logos from
+// Wikidata (needs the geo_brands catalog to exist first).
+void ensureSearchEnrichment().then(() => ensureBrandLogos())
 
 const app = new Elysia()
   .use(cors())
@@ -46,6 +61,7 @@ const app = new Elysia()
   )
   .use(healthRoutes)
   .use(searchRoutes)
+  .use(brandsRoutes)
   .use(containsRoutes)
   .use(childrenRoutes)
   .use(placeRoutes)

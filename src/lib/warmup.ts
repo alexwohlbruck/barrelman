@@ -112,18 +112,23 @@ async function warmOnce(): Promise<number> {
  */
 export function startTransitWarmup(): void {
   const t0 = Date.now()
-  void warmOnce().then((n) => {
-    console.log(
-      `MOTIS warmup: first pass warmed ${n} feed(s) in ${Date.now() - t0}ms`,
-    )
-  })
+  // Warm-up is best-effort: a warmOnce() rejection (e.g. MOTIS returns 404 for a
+  // stale sample stop) must never surface as an unhandled rejection — that kills
+  // the whole bun process and takes search/geocoding down with it. Always .catch.
+  void warmOnce()
+    .then((n) => {
+      console.log(
+        `MOTIS warmup: first pass warmed ${n} feed(s) in ${Date.now() - t0}ms`,
+      )
+    })
+    .catch((e) => console.warn('MOTIS warmup (first pass) failed:', e?.message ?? e))
   // Pricing changes a few times a year (12h cache TTL), so warm it once.
   void warmAllPricing().catch(() => {})
   const timer = setInterval(() => {
     // Stand down while live traffic is already keeping MOTIS hot — warm-up is
     // only here to fill genuine idle gaps, not to compete with real requests.
     if (transitIdleMs() < WARMUP_INTERVAL_MS) return
-    void warmOnce()
+    void warmOnce().catch((e) => console.warn('MOTIS warmup failed:', e?.message ?? e))
   }, WARMUP_INTERVAL_MS)
   timer.unref?.()
   console.log(

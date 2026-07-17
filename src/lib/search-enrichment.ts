@@ -42,6 +42,10 @@ const REIMPORT_DRIFT = 0.1
 //       for ALL names (was intersections only), so "joe and sals" matches
 //       "Joe & Sal's Pizzeria".
 const TS_NORMALIZATION_VERSION = 2
+// Bump when the geo_brands materialized view definition changes (see
+// ensureBrandCatalogSchema in db.ts), so an already-enriched database rebuilds
+// its brand catalog on the next startup.
+const BRAND_CATALOG_VERSION = 1
 
 type Sql = ReturnType<typeof postgres>
 
@@ -57,36 +61,59 @@ interface Marker {
   fresh: boolean
   /** ts normalization version baked into the current `ts` column. */
   tsVersion: number
+  /** brand-catalog version baked into the current geo_brands matview. */
+  brandsVersion: number
 }
 
-/** Read the enrichment marker: is the dataset enriched, and at what ts version? */
+/** Read the enrichment marker: is the dataset enriched, and at what versions? */
 async function readMarker(sql: Sql, estimate: number): Promise<Marker> {
   await sql`
     CREATE TABLE IF NOT EXISTS search_enrichment_state (
       id integer PRIMARY KEY DEFAULT 1 CHECK (id = 1),
       completed_at timestamptz,
       row_estimate bigint,
-      ts_version integer DEFAULT 0
+      ts_version integer DEFAULT 0,
+      brands_version integer DEFAULT 0
     )
   `
   await sql`ALTER TABLE search_enrichment_state ADD COLUMN IF NOT EXISTS ts_version integer DEFAULT 0`
-  const rows = await sql<{ completed_at: string | null; row_estimate: number | null; ts_version: number | null }[]>`
-    SELECT completed_at, row_estimate, ts_version FROM search_enrichment_state WHERE id = 1
+  await sql`ALTER TABLE search_enrichment_state ADD COLUMN IF NOT EXISTS brands_version integer DEFAULT 0`
+  const rows = await sql<{ completed_at: string | null; row_estimate: number | null; ts_version: number | null; brands_version: number | null }[]>`
+    SELECT completed_at, row_estimate, ts_version, brands_version FROM search_enrichment_state WHERE id = 1
   `
   const m = rows[0]
   const drift = m?.row_estimate ? Math.abs(estimate - Number(m.row_estimate)) / Number(m.row_estimate) : 1
   return {
     fresh: Boolean(m?.completed_at) && drift <= REIMPORT_DRIFT,
     tsVersion: Number(m?.ts_version ?? 0),
+    brandsVersion: Number(m?.brands_version ?? 0),
   }
 }
 
 async function markEnriched(sql: Sql, estimate: number): Promise<void> {
   await sql`
-    INSERT INTO search_enrichment_state (id, completed_at, row_estimate, ts_version)
-    VALUES (1, NOW(), ${estimate}, ${TS_NORMALIZATION_VERSION})
-    ON CONFLICT (id) DO UPDATE SET completed_at = NOW(), row_estimate = ${estimate}, ts_version = ${TS_NORMALIZATION_VERSION}
+    INSERT INTO search_enrichment_state (id, completed_at, row_estimate, ts_version, brands_version)
+    VALUES (1, NOW(), ${estimate}, ${TS_NORMALIZATION_VERSION}, ${BRAND_CATALOG_VERSION})
+    ON CONFLICT (id) DO UPDATE SET completed_at = NOW(), row_estimate = ${estimate}, ts_version = ${TS_NORMALIZATION_VERSION}, brands_version = ${BRAND_CATALOG_VERSION}
   `
+}
+
+/**
+ * Populate / refresh the geo_brands materialized view (created empty in
+ * ensureBrandCatalogSchema). The first refresh on an unpopulated matview must be
+ * non-concurrent; once it holds data, use CONCURRENTLY so brand reads never
+ * block. No-op if the matview doesn't exist yet.
+ */
+async function refreshBrandCatalog(sql: Sql): Promise<void> {
+  const rows = await sql<{ populated: boolean }[]>`
+    SELECT relispopulated AS populated FROM pg_class WHERE relname = 'geo_brands'
+  `
+  if (rows.length === 0) return // matview not created yet
+  if (rows[0].populated) {
+    await sql`REFRESH MATERIALIZED VIEW CONCURRENTLY geo_brands`
+  } else {
+    await sql`REFRESH MATERIALIZED VIEW geo_brands`
+  }
 }
 
 // ── Enrichment steps (incremental — only fill rows still missing the value) ──
@@ -256,8 +283,8 @@ export async function ensureSearchEnrichment(): Promise<void> {
     const estimate = await rowEstimate(sql)
     if (estimate === 0) return // table empty / not imported yet
     let marker = await readMarker(sql, estimate)
-    // Already fully enriched at the current ts normalization → nothing to do.
-    if (marker.fresh && marker.tsVersion >= TS_NORMALIZATION_VERSION) return
+    // Already fully enriched at the current ts + brand-catalog versions → nothing to do.
+    if (marker.fresh && marker.tsVersion >= TS_NORMALIZATION_VERSION && marker.brandsVersion >= BRAND_CATALOG_VERSION) return
 
     const [{ locked }] = await sql<{ locked: boolean }[]>`
       SELECT pg_try_advisory_lock(${ENRICHMENT_LOCK_KEY}) AS locked
@@ -267,9 +294,11 @@ export async function ensureSearchEnrichment(): Promise<void> {
     try {
       // Re-check under the lock in case another instance just finished.
       marker = await readMarker(sql, estimate)
-      if (marker.fresh && marker.tsVersion >= TS_NORMALIZATION_VERSION) return
+      if (marker.fresh && marker.tsVersion >= TS_NORMALIZATION_VERSION && marker.brandsVersion >= BRAND_CATALOG_VERSION) return
 
       const t0 = Date.now()
+      const tsStale = marker.tsVersion < TS_NORMALIZATION_VERSION
+      const didColumnBackfill = !marker.fresh || tsStale
       if (!marker.fresh) {
         // Full backfill (fresh / re-imported database).
         console.log('[search-enrichment] Backfilling derived search columns (one-time)…')
@@ -281,18 +310,28 @@ export async function ensureSearchEnrichment(): Promise<void> {
         await fillParentContext(sql)
         console.log('[search-enrichment] tsvectors…')
         await fillTsvectors(sql)
-      } else {
+      } else if (tsStale) {
         // Data is enriched but the tsvector normalization changed — rebuild ts.
         console.log(`[search-enrichment] Rebuilding tsvectors for normalization v${TS_NORMALIZATION_VERSION}…`)
         await fillTsvectors(sql, true)
       }
 
-      // The bulk UPDATEs above leave ~1.9M dead tuples and a bloated GIN
-      // full-text pending list that make uncached searches slow (multi-second)
-      // until cleaned. VACUUM reclaims the dead tuples, flushes the GIN pending
-      // list, and refreshes planner stats — a plain ANALYZE does none of that.
-      console.log('[search-enrichment] vacuum…')
-      await sql`VACUUM (ANALYZE) geo_places`
+      if (didColumnBackfill) {
+        // The bulk UPDATEs above leave ~1.9M dead tuples and a bloated GIN
+        // full-text pending list that make uncached searches slow (multi-second)
+        // until cleaned. VACUUM reclaims the dead tuples, flushes the GIN pending
+        // list, and refreshes planner stats — a plain ANALYZE does none of that.
+        console.log('[search-enrichment] vacuum…')
+        await sql`VACUUM (ANALYZE) geo_places`
+      }
+
+      // Refresh the brand catalog after a data backfill, or when its definition
+      // version bumped. Runs off-startup on the dedicated connection.
+      if (didColumnBackfill || marker.brandsVersion < BRAND_CATALOG_VERSION) {
+        console.log('[search-enrichment] brand catalog…')
+        await refreshBrandCatalog(sql)
+      }
+
       await markEnriched(sql, estimate)
       console.log(`[search-enrichment] Done in ${Math.round((Date.now() - t0) / 1000)}s.`)
     } finally {

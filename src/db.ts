@@ -47,8 +47,80 @@ export async function ensureSchema() {
     -- so without this GiST index every fuzzy query degrades to a parallel
     -- sequential scan over the full table (~45s on 21M rows) — which silently
     -- blows past the API search timeout and returns no place results.
-    CREATE INDEX IF NOT EXISTS geo_places_name_gist_trgm_idx
-      ON geo_places USING gist (name gist_trgm_ops) WHERE name IS NOT NULL;
+    --
+    -- siglen=128: the default 12-byte signatures are too lossy at ~2M named
+    -- rows — the KNN scan visits far too many pages and recomputes distances
+    -- (measured 335ms-1.3s per query). 128-byte signatures cut that to
+    -- tens of ms at the cost of a larger index. (Replaces the old
+    -- default-siglen geo_places_name_gist_trgm_idx.)
+    CREATE INDEX IF NOT EXISTS geo_places_name_gist_trgm_sig128_idx
+      ON geo_places USING gist (name gist_trgm_ops(siglen=128)) WHERE name IS NOT NULL;
+  `))
+
+  await ensureBrandCatalogSchema()
+}
+
+/**
+ * Create the brand catalog materialized view (geo_brands) and its indexes.
+ *
+ * One row per distinct brand — keyed by the brand:wikidata QID when present,
+ * otherwise the normalized `brand` name ("name:<lower>"). It powers brand
+ * autocomplete ("McDonald's" → a brand suggestion) and the "see all locations
+ * of this brand" browse.
+ *
+ * Created empty here (WITH NO DATA) so startup stays cheap; population and
+ * subsequent refreshes happen in the background via ensureSearchEnrichment().
+ * The unique index on brand_key is required for REFRESH ... CONCURRENTLY.
+ */
+export async function ensureBrandCatalogSchema() {
+  await db.execute(sql.raw(`
+    CREATE MATERIALIZED VIEW IF NOT EXISTS geo_brands AS
+    WITH branded AS (
+      SELECT
+        COALESCE(
+          NULLIF(tags->>'brand:wikidata', ''),
+          'name:' || lower(regexp_replace(trim(tags->>'brand'), '\\s+', ' ', 'g'))
+        )                                        AS brand_key,
+        NULLIF(tags->>'brand:wikidata', '')      AS wikidata,
+        tags->>'brand'                           AS brand_name,
+        categories[1]                            AS category,
+        centroid
+      FROM geo_places
+      WHERE tags ? 'brand' AND name IS NOT NULL
+    )
+    SELECT
+      brand_key,
+      mode() WITHIN GROUP (ORDER BY brand_name)  AS name,
+      max(wikidata)                              AS wikidata,
+      count(*)::int                              AS location_count,
+      mode() WITHIN GROUP (ORDER BY category)    AS category,
+      ST_Y(ST_Centroid(ST_Collect(centroid)))    AS rep_lat,
+      ST_X(ST_Centroid(ST_Collect(centroid)))    AS rep_lng
+    FROM branded
+    GROUP BY brand_key
+    HAVING count(*) >= 2
+    WITH NO DATA;
+
+    -- Unique key REQUIRED for REFRESH MATERIALIZED VIEW CONCURRENTLY.
+    CREATE UNIQUE INDEX IF NOT EXISTS geo_brands_key_idx
+      ON geo_brands (brand_key);
+    -- Trigram index over the display name for prefix + fuzzy autocomplete.
+    CREATE INDEX IF NOT EXISTS geo_brands_name_trgm_idx
+      ON geo_brands USING gin (name gin_trgm_ops);
+    -- Popular-first ordering / tie-break.
+    CREATE INDEX IF NOT EXISTS geo_brands_count_idx
+      ON geo_brands (location_count DESC);
+
+    -- Brand logos + descriptions resolved from Wikidata (P154 + descriptions),
+    -- keyed by the brand:wikidata QID. A plain TABLE (not part of the matview)
+    -- so it persists across REFRESH MATERIALIZED VIEW; populated in the
+    -- background by lib/brand-logos.ts and LEFT JOINed by the /brands queries.
+    CREATE TABLE IF NOT EXISTS brand_logos (
+      wikidata TEXT PRIMARY KEY,
+      logo_url TEXT,
+      description TEXT,
+      fetched_at TIMESTAMPTZ DEFAULT NOW()
+    );
   `))
 }
 
