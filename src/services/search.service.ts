@@ -48,6 +48,14 @@ export async function searchPlaces(
   const hasQuery = sanitizedQuery.length > 0
   const hasPointLocation = lat != null && lng != null
   const hasRoute = route != null
+  const hasCategory = !!(categories && categories.length > 0)
+  // "Widen" mode: a category browse with a point but NO radius. Drive the scan
+  // from the category GIN index and take the nearest N (bounded to a wide bbox),
+  // instead of the KNN walk — which is fast for a dense category but crawls
+  // through millions of rows for a sparse one like fuel. This is what lets a
+  // zoomed-in search still surface far matches (e.g. gas stations) in ~1s.
+  const isWiden = hasPointLocation && !radius && hasCategory
+  const WIDEN_BBOX_DEG = 1.35 // ~150 km — caps how far a dense category scans
 
   // Address geocoding (Pelias) runs in parallel with the PostGIS layers so
   // street addresses appear alongside POIs without adding latency. Text queries
@@ -84,6 +92,10 @@ export async function searchPlaces(
   } else if (hasPointLocation && radius) {
     const degExpand = radius / 111320
     spatialFilter = sql`AND centroid && ST_Expand(${locationPoint}::geometry, ${degExpand}) AND ST_DWithin(centroid::geography, ${locationPoint}::geography, ${radius})`
+  } else if (isWiden) {
+    // Bound the widen to a wide bbox so a dense category (e.g. 134k parking rows)
+    // doesn't sort the whole planet; the category index does the heavy lifting.
+    spatialFilter = sql`AND centroid && ST_Expand(${locationPoint}::geometry, ${WIDEN_BBOX_DEG})`
   } else {
     spatialFilter = sql``
   }
@@ -116,7 +128,11 @@ export async function searchPlaces(
   const categoryArray = categories && categories.length > 0
     ? `{${categories.join(',')}}` : null
   const categoryFilter = categoryArray
-    ? sql`AND categories && ${categoryArray}::text[]`
+    ? isWiden
+      // The categories GIN index is partial (WHERE categories <> '{}'); state that
+      // predicate explicitly so the planner can actually use it for the widen scan.
+      ? sql`AND categories && ${categoryArray}::text[] AND categories <> '{}'::text[]`
+      : sql`AND categories && ${categoryArray}::text[]`
     : sql``
 
   const tagsFilterJson = tags && Object.keys(tags).length > 0
@@ -352,6 +368,24 @@ export async function searchPlaces(
     }
   } else {
     // ── Browse mode: spatial + category/tag filter, no text query ──────────
+    // Order nearest-first via the GiST KNN operator (centroid <-> point) rather
+    // than `ORDER BY distance_m` (ST_Distance::geography). The latter computes an
+    // exact geodesic distance for EVERY row inside the radius before sorting —
+    // fine for a tight viewport, but catastrophic once the radius is widened over
+    // a dense category (e.g. ~18s for cafes within 10km of midtown). The KNN
+    // operator is index-driven: it walks the centroid index nearest-first and
+    // stops at `limit`, so cost scales with the result size, not the radius.
+    // `<->` is planar-degree distance (geography KNN can't use the index); the
+    // ordering is indistinguishable from geodesic at POI scale, and matches the
+    // proximity ranking the text-search layers already use. `distance_m` is still
+    // selected (exact geodesic metres) for display/consumers.
+    const browseOrder = isWiden
+      // Widen: sort the category-index rows by a cheap planar distance (a scalar,
+      // so it does NOT force the centroid KNN index — the category GIN drives).
+      ? sql`ORDER BY ST_Distance(centroid, ${locationPoint}) ASC`
+      : hasPointLocation
+        ? sql`ORDER BY centroid <-> ${locationPoint} ASC`
+        : sql`ORDER BY distance_m ASC NULLS LAST`
     results = Array.from(await db.execute(sql`
       SELECT
         id, osm_type, osm_id, name, name_abbrev, categories, tags,
@@ -364,7 +398,7 @@ export async function searchPlaces(
       ${spatialFilter}
       ${categoryFilter}
       ${tagsFilter}
-      ORDER BY distance_m ASC NULLS LAST
+      ${browseOrder}
       LIMIT ${limit}
       OFFSET ${offset}
     `) as any[])
