@@ -167,6 +167,13 @@ export async function ensureGtfsSchema() {
       ON gtfs_stops (feed_id, stop_id);
     CREATE INDEX IF NOT EXISTS gtfs_stops_geom_idx
       ON gtfs_stops USING GIST (geom);
+    -- The walking-transfer join uses ST_DWithin(geom::geography, …); without a
+    -- GiST index on the geography cast the planner falls back to a full
+    -- cartesian nested loop (77k² pairs → hangs for tens of minutes). This
+    -- functional index makes that join an index nested loop (~seconds).
+    CREATE INDEX IF NOT EXISTS gtfs_stops_geog_idx
+      ON gtfs_stops USING GIST ((geom::geography))
+      WHERE (location_type = 0 OR location_type IS NULL);
     CREATE INDEX IF NOT EXISTS gtfs_stops_feed_id_idx
       ON gtfs_stops (feed_id);
     CREATE INDEX IF NOT EXISTS gtfs_stops_parent_idx
