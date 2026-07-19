@@ -12,6 +12,7 @@ import { EventEmitter } from 'node:events'
 import { resolve } from 'node:path'
 import { getScript, type ScriptDef, type DangerLevel, type ScriptCategory } from '../admin/scripts-manifest'
 import { INTERNAL_HANDLERS } from './admin-internal-handlers'
+import { getEtaMs, recordRun, parseProgress } from './job-history.service'
 
 const REPO_ROOT = resolve(import.meta.dir, '../..')
 const MAX_LOG_LINES = 8000
@@ -42,6 +43,12 @@ export interface Job {
   exitCode?: number | null
   error?: string
   logCount: number
+  /** Median successful runtime (ms) for this script, for ETA estimation. */
+  etaMs?: number
+  /** True progress fraction 0–1, parsed from the script's own log markers. */
+  progress?: number
+  /** Short label for the current progress marker, e.g. "3/8" or "42%". */
+  progressLabel?: string
 }
 
 interface JobRuntime {
@@ -79,6 +86,18 @@ function addLog(rt: JobRuntime, stream: LogStream, text: string) {
   }
   rt.job.logCount = rt.seq
   rt.emitter.emit('log', line)
+
+  // Derive a true progress fraction from the script's own markers ([N/M],
+  // percentages, counts). Monotonic — only ever advances — so a small sub-step
+  // count never drags a later stage backwards.
+  if (rt.job.status === 'running' && stream !== 'system') {
+    const p = parseProgress(text)
+    if (p && p.fraction > (rt.job.progress ?? -1)) {
+      rt.job.progress = p.fraction
+      rt.job.progressLabel = p.label
+      rt.emitter.emit('status', { ...rt.job })
+    }
+  }
 }
 
 function setStatus(rt: JobRuntime, status: JobStatus, exitCode?: number | null, error?: string) {
@@ -88,6 +107,17 @@ function setStatus(rt: JobRuntime, status: JobStatus, exitCode?: number | null, 
     rt.job.durationMs = rt.job.endedAt - rt.job.startedAt
     rt.job.exitCode = exitCode ?? rt.job.exitCode
     if (error) rt.job.error = error
+    if (status === 'succeeded') rt.job.progress = 1
+    // Persist to history for future ETA estimates (best-effort, non-blocking).
+    void recordRun({
+      id: rt.job.id,
+      scriptId: rt.job.scriptId,
+      status,
+      startedAt: rt.job.startedAt,
+      endedAt: rt.job.endedAt,
+      durationMs: rt.job.durationMs,
+      exitCode: rt.job.exitCode,
+    })
   }
   rt.emitter.emit('status', { ...rt.job })
 }
@@ -199,6 +229,7 @@ export function startJob(scriptId: string, params: Record<string, unknown> = {})
     displayCommand: inv.display,
     startedAt: Date.now(),
     logCount: 0,
+    etaMs: getEtaMs(script.id),
   }
   const rt: JobRuntime = { job, logs: [], emitter: new EventEmitter(), seq: 0 }
   rt.emitter.setMaxListeners(0)

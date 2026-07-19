@@ -8,10 +8,12 @@ import JobStatusBadge from '@/components/JobStatusBadge.vue'
 import DangerBadge from '@/components/DangerBadge.vue'
 import Button from '@/components/ui/Button.vue'
 import Card from '@/components/ui/Card.vue'
+import Progress from '@/components/ui/Progress.vue'
 import { getJob, streamJob, cancelJob } from '@/lib/api'
 import { refreshJobs } from '@/lib/store'
 import { toast } from '@/lib/toast'
 import { formatDuration, formatClock, timeAgo } from '@/lib/utils'
+import { useJobProgress } from '@/lib/job-progress'
 import type { Job, LogLine } from '@/lib/types'
 
 const route = useRoute()
@@ -25,6 +27,7 @@ const canceling = ref(false)
 let controller: AbortController | null = null
 
 const isRunning = computed(() => job.value?.status === 'running')
+const progress = useJobProgress(job)
 
 async function start() {
   controller?.abort()
@@ -133,6 +136,26 @@ onBeforeUnmount(() => controller?.abort())
             <Button v-if="!isRunning" variant="ghost" size="sm" @click="start"><RotateCcw class="size-3.5" /> Reload</Button>
           </div>
         </div>
+        <div v-if="progress" class="mt-3">
+          <div class="mb-1.5 flex items-center justify-between text-xs text-muted-foreground">
+            <span>
+              <template v-if="progress.indeterminate">Working…</template>
+              <template v-else>
+                {{ progress.percent }}%
+                <span v-if="progress.label" class="font-mono">· step {{ progress.label }}</span>
+                <span v-if="progress.source === 'estimate'"> · estimated</span>
+              </template>
+            </span>
+            <span v-if="progress.etaLabel">{{ progress.etaLabel }}</span>
+          </div>
+          <Progress
+            size="md"
+            :value="progress.percent"
+            :indeterminate="progress.indeterminate"
+            :variant="job.danger === 'destructive' ? 'destructive' : 'default'"
+          />
+        </div>
+
         <div class="mt-3 rounded-lg border border-border bg-background/60 p-2.5">
           <code class="block whitespace-pre-wrap break-all font-mono text-xs text-muted-foreground">$ {{ job.displayCommand }}</code>
         </div>

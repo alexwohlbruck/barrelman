@@ -8,6 +8,27 @@ export const connection = postgres(dbUrl)
 export const db = drizzle(connection)
 
 /**
+ * Ensure the script_runs history table exists. Records one row per completed
+ * console job so we can estimate runtime (ETA / progress bar) for future runs.
+ * Best-effort operator metadata — safe to truncate, never load-bearing.
+ */
+export async function ensureScriptRunsSchema() {
+  await db.execute(sql.raw(`
+    CREATE TABLE IF NOT EXISTS script_runs (
+      id UUID PRIMARY KEY,
+      script_id TEXT NOT NULL,
+      status TEXT NOT NULL,
+      started_at TIMESTAMPTZ NOT NULL,
+      ended_at TIMESTAMPTZ,
+      duration_ms INTEGER,
+      exit_code INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS script_runs_script_idx
+      ON script_runs (script_id, started_at DESC);
+  `))
+}
+
+/**
  * Ensure post-import columns exist on the geo_places table.
  *
  * osm2pgsql creates the base columns (id, osm_type, osm_id, name, names,

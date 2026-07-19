@@ -17,6 +17,7 @@ import { routeRoutes } from './routes/route'
 import { transitRoutes } from './routes/transit'
 import { gbfsRoutes } from './routes/gbfs'
 import { ensureSchema, ensureGtfsSchema, ensureGbfsSchema } from './db'
+import { initJobHistory } from './services/job-history.service'
 import { ensureSearchEnrichment } from './lib/search-enrichment'
 import { ensureBrandLogos } from './lib/brand-logos'
 import { startTransitWarmup } from './lib/warmup'
@@ -39,6 +40,7 @@ process.on('uncaughtException', (err) => {
 await ensureSchema()
 await ensureGtfsSchema()
 await ensureGbfsSchema()
+await initJobHistory()
 
 // Backfill derived search columns (codes/name_abbrev/parent_context/ts) if a
 // prior import left them empty. Fire-and-forget so it never blocks startup —
