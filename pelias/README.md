@@ -49,6 +49,15 @@ pelias import all
 pelias compose up
 ```
 
+### Re-importing into an already-running API
+
+The steps above assume a fresh box (the API starts *after* the import). If you
+import a new layer into an **already-running** `pelias_api` (e.g. adding
+polylines later), the API won't see it until it's recreated — and
+`pelias compose up api` is a no-op when the container is already running. Force
+it: `docker restart pelias_api`. Verify with
+`curl 'localhost:4000/v1/autocomplete?text=providence&layers=street'`.
+
 ## Regions
 
 Coverage is defined entirely in [`pelias.json`](./pelias.json):
