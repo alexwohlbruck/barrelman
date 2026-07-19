@@ -25,6 +25,7 @@ async function main() {
     const feedId = zip.replace('.zip', '')
     const zipPath = `${dir}/${zip}`
     total++
+    console.log(`[${zips.indexOf(zip) + 1}/${zips.length}] ${feedId}`)
 
     if (!existsSync(zipPath)) {
       console.log(`  skip ${feedId} — zip not found`)

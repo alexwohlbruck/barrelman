@@ -37,7 +37,7 @@ if ! docker ps -a --format '{{.Names}}' | grep -q "^${CONTAINER}\$"; then
   exit 0
 fi
 
-echo "[$(date '+%H:%M:%S')] [valhalla] Wiping old tile artifacts..."
+echo "[$(date '+%H:%M:%S')] [1/3] [valhalla] Wiping old tile artifacts..."
 # Run as root because the gis-ops image's runtime user (uid 59999) cannot
 # delete files written by the build (owned by root). The PBF and any host-
 # placed files are intentionally preserved so the rebuild has input data.
@@ -57,7 +57,7 @@ docker exec -u root "$CONTAINER" bash -c '
 #
 # Instead, we generate the config now, patch it, and place it so the
 # entrypoint finds an existing config and uses it directly for the build.
-echo "[$(date '+%H:%M:%S')] [valhalla] Generating and patching valhalla.json before build..."
+echo "[$(date '+%H:%M:%S')] [2/3] [valhalla] Generating and patching valhalla.json before build..."
 docker exec -u root "$CONTAINER" bash -c '
   valhalla_build_config \
     --mjolnir-tile-dir /custom_files/valhalla_tiles \
@@ -74,7 +74,7 @@ docker exec -u root "$CONTAINER" bash -c '
   jq ".mjolnir.data_processing.apply_country_overrides = false" "$CONFIG" | sponge "$CONFIG"
 '
 
-echo "[$(date '+%H:%M:%S')] [valhalla] Config ready. Restarting to build tiles..."
+echo "[$(date '+%H:%M:%S')] [3/3] [valhalla] Config ready. Restarting to build tiles..."
 docker restart "$CONTAINER" >/dev/null
 
 echo "[$(date '+%H:%M:%S')] [valhalla] Rebuild started in background. Tail logs with:"
