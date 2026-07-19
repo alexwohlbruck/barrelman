@@ -78,6 +78,8 @@ export interface Job {
   progress?: number
   /** Short label for the current progress marker, e.g. "3/8" or "42%". */
   progressLabel?: string
+  /** Named stage breakdown from `[N/M] Stage name` markers. `index` is 1-based. */
+  stages?: { total: number; index: number; labels: string[] }
 }
 
 export interface JobStats {

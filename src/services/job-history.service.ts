@@ -83,35 +83,38 @@ export async function recordRun(run: RecordedRun): Promise<void> {
 }
 
 /**
- * Parse a log line for a progress signal. Returns a fraction in (0, 1] plus a
- * short label, or null. Recognizes, in priority order:
- *   - bracketed step markers `[3/8]` (import-osm.sh, update-osm.sh, gtfs, …)
- *   - explicit percentages `42%` / `42.5 %`
- *   - running counts `1000 / 5000` (embed, gtfs pairs, backfill, …)
- * Callers should treat progress as monotonic (only ever advance it) so that a
- * small sub-step count never drags a later stage backwards.
+ * Parse a `[N/M] Stage name` marker — the house convention that scripts print
+ * at each stage boundary (e.g. `[3/8] Running post-import SQL`). A leading
+ * `[HH:MM:SS]` timestamp is ignored because it has colons, not a slash.
+ * Returns the 1-based stage index, total, and (trimmed) name, or null.
  */
-export function parseProgress(text: string): { fraction: number; label: string } | null {
-  const bracket = text.match(/\[(\d+)\s*\/\s*(\d+)\]/)
-  if (bracket) {
-    const n = Number(bracket[1])
-    const m = Number(bracket[2])
-    if (m > 0 && n >= 0 && n <= m) return { fraction: clamp01(n / m), label: `${n}/${m}` }
-  }
+export function parseStage(text: string): { index: number; total: number; name: string } | null {
+  const m = text.match(/\[(\d+)\s*\/\s*(\d+)\]\s*(.*)$/)
+  if (!m) return null
+  const index = Number(m[1])
+  const total = Number(m[2])
+  if (!(total > 0 && index >= 1 && index <= total)) return null
+  const name = m[3].trim().replace(/[.…:]+$/, '').trim()
+  return { index, total, name }
+}
 
+/**
+ * Parse a within-stage progress fraction from a running count (`1000 / 5000`)
+ * or a percentage (`42%`), ignoring bracketed `[N/M]` stage markers. Returns a
+ * fraction in [0, 1] or null.
+ */
+export function parseCount(text: string): number | null {
   const pct = text.match(/(\d+(?:\.\d+)?)\s*%/)
   if (pct) {
     const v = Number(pct[1])
-    if (v >= 0 && v <= 100) return { fraction: clamp01(v / 100), label: `${pct[1]}%` }
+    if (v >= 0 && v <= 100) return clamp01(v / 100)
   }
-
-  const count = text.match(/(\d{1,3}(?:[,\d]*))\s*\/\s*(\d{1,3}(?:[,\d]*))(?!\s*\])/)
+  const count = text.match(/(?<!\[)\b(\d{1,3}(?:[,\d]*))\s*\/\s*(\d{1,3}(?:[,\d]*))\b(?!\s*\])/)
   if (count) {
     const n = Number(count[1].replace(/,/g, ''))
     const m = Number(count[2].replace(/,/g, ''))
-    if (m > 0 && n >= 0 && n <= m) return { fraction: clamp01(n / m), label: `${n}/${m}` }
+    if (m > 0 && n >= 0 && n <= m) return clamp01(n / m)
   }
-
   return null
 }
 

@@ -5,6 +5,7 @@ import { ArrowLeft, Ban, RotateCcw, Copy, Clock } from 'lucide-vue-next'
 import PageHeader from '@/components/PageHeader.vue'
 import LogViewer from '@/components/jobs/LogViewer.vue'
 import JobStatusBadge from '@/components/JobStatusBadge.vue'
+import JobStages from '@/components/jobs/JobStages.vue'
 import DangerBadge from '@/components/DangerBadge.vue'
 import Button from '@/components/ui/Button.vue'
 import Card from '@/components/ui/Card.vue'
@@ -155,6 +156,8 @@ onBeforeUnmount(() => controller?.abort())
             :variant="job.danger === 'destructive' ? 'destructive' : 'default'"
           />
         </div>
+
+        <JobStages v-if="job.stages" :job="job" class="mt-4" />
 
         <div class="mt-3 rounded-lg border border-border bg-background/60 p-2.5">
           <code class="block whitespace-pre-wrap break-all font-mono text-xs text-muted-foreground">$ {{ job.displayCommand }}</code>

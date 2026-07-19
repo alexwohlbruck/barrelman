@@ -12,7 +12,7 @@ import { EventEmitter } from 'node:events'
 import { resolve } from 'node:path'
 import { getScript, type ScriptDef, type DangerLevel, type ScriptCategory } from '../admin/scripts-manifest'
 import { INTERNAL_HANDLERS } from './admin-internal-handlers'
-import { getEtaMs, recordRun, parseProgress } from './job-history.service'
+import { getEtaMs, recordRun, parseStage, parseCount } from './job-history.service'
 
 const REPO_ROOT = resolve(import.meta.dir, '../..')
 const MAX_LOG_LINES = 8000
@@ -49,6 +49,11 @@ export interface Job {
   progress?: number
   /** Short label for the current progress marker, e.g. "3/8" or "42%". */
   progressLabel?: string
+  /**
+   * Named stage breakdown, parsed from `[N/M] Stage name` log markers. `index`
+   * is 1-based; `labels[i]` is the name of stage i (empty until first seen).
+   */
+  stages?: { total: number; index: number; labels: string[] }
 }
 
 interface JobRuntime {
@@ -57,6 +62,8 @@ interface JobRuntime {
   emitter: EventEmitter
   proc?: ReturnType<typeof Bun.spawn>
   seq: number
+  /** Within-current-stage fraction (0–1) from running counts; resets per stage. */
+  subFraction: number
 }
 
 const runtimes = new Map<string, JobRuntime>()
@@ -87,17 +94,46 @@ function addLog(rt: JobRuntime, stream: LogStream, text: string) {
   rt.job.logCount = rt.seq
   rt.emitter.emit('log', line)
 
-  // Derive a true progress fraction from the script's own markers ([N/M],
-  // percentages, counts). Monotonic — only ever advances — so a small sub-step
-  // count never drags a later stage backwards.
+  // Derive named stages + progress from the script's own markers.
   if (rt.job.status === 'running' && stream !== 'system') {
-    const p = parseProgress(text)
-    if (p && p.fraction > (rt.job.progress ?? -1)) {
-      rt.job.progress = p.fraction
-      rt.job.progressLabel = p.label
-      rt.emitter.emit('status', { ...rt.job })
-    }
+    trackProgress(rt, text)
   }
+}
+
+/**
+ * Update a job's stage/progress model from a log line. `[N/M] Name` advances the
+ * stage (and always emits, so the stepper updates); running counts advance the
+ * within-stage fraction. Overall progress is monotonic.
+ */
+function trackProgress(rt: JobRuntime, text: string) {
+  const stage = parseStage(text)
+  if (stage) {
+    const labels = new Array<string>(stage.total).fill('')
+    const prev = rt.job.stages?.labels ?? []
+    for (let i = 0; i < Math.min(prev.length, stage.total); i++) labels[i] = prev[i]
+    if (stage.name) labels[stage.index - 1] = stage.name
+    rt.job.stages = { total: stage.total, index: stage.index, labels }
+    rt.subFraction = 0
+    applyProgress(rt, true)
+    return
+  }
+  const c = parseCount(text)
+  if (c != null && c > rt.subFraction) {
+    rt.subFraction = c
+    applyProgress(rt, false)
+  }
+}
+
+function applyProgress(rt: JobRuntime, forceEmit: boolean) {
+  const s = rt.job.stages
+  let frac = s && s.total > 0 ? (s.index - 1 + rt.subFraction) / s.total : rt.subFraction
+  frac = frac < 0 ? 0 : frac > 1 ? 1 : frac
+  const advanced = frac > (rt.job.progress ?? -1)
+  if (advanced) {
+    rt.job.progress = frac
+    rt.job.progressLabel = s ? `${s.index}/${s.total}` : `${Math.round(frac * 100)}%`
+  }
+  if (advanced || forceEmit) rt.emitter.emit('status', { ...rt.job })
 }
 
 function setStatus(rt: JobRuntime, status: JobStatus, exitCode?: number | null, error?: string) {
@@ -231,7 +267,7 @@ export function startJob(scriptId: string, params: Record<string, unknown> = {})
     logCount: 0,
     etaMs: getEtaMs(script.id),
   }
-  const rt: JobRuntime = { job, logs: [], emitter: new EventEmitter(), seq: 0 }
+  const rt: JobRuntime = { job, logs: [], emitter: new EventEmitter(), seq: 0, subFraction: 0 }
   rt.emitter.setMaxListeners(0)
   runtimes.set(id, rt)
   order.push(id)
