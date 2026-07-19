@@ -16,9 +16,38 @@ import {
   JobConflictError,
 } from '../services/job-runner.service'
 import { getDataMetrics, getServiceStatuses } from '../services/admin-metrics.service'
+import {
+  listRegions,
+  getRegion,
+  createRegion,
+  updateRegion,
+  deleteRegion,
+  type RegionInput,
+} from '../services/region-store.service'
+import { GLOBAL_KEY } from '../config/regions'
 
 const selfPort = Number(process.env.PORT) || 5001
 const SELF_BASE = `http://127.0.0.1:${selfPort}`
+
+// Validation for the region CRUD body. bbox is [west, south, east, north].
+const peliasSchema = t.Object({
+  openaddresses: t.Optional(t.Array(t.String())),
+  wofIds: t.Optional(t.Array(t.String())),
+  tigerStates: t.Optional(t.Array(t.Number())),
+  countryCode: t.Optional(t.String()),
+})
+const regionFields = {
+  label: t.String({ minLength: 1 }),
+  osmExtracts: t.Optional(t.Array(t.String())),
+  osmReplication: t.Optional(t.Array(t.String())),
+  bbox: t.Tuple([t.Number(), t.Number(), t.Number(), t.Number()]),
+  gtfsRegion: t.Optional(t.String()),
+  pelias: t.Optional(peliasSchema),
+  enabled: t.Optional(t.Boolean()),
+}
+const createRegionBody = t.Object({ key: t.String({ minLength: 1 }), ...regionFields })
+const updateRegionBody = t.Object(regionFields)
+const KEY_RE = /^[a-z0-9][a-z0-9-]*$/
 
 /**
  * Public (unauthenticated) endpoint so the console's login screen can discover
@@ -49,6 +78,76 @@ export const adminConsoleRoutes = new Elysia({ prefix: '/admin' })
 
   // Lightweight probe used by the login screen to validate a supplied key.
   .get('/verify', () => ({ ok: true }), { detail: { summary: 'Verify admin key', tags: ['Admin'] } })
+
+  // ── Import regions ──────────────────────────────────────────────────
+  // The DB-backed region store (seeded from config/regions.json) that drives
+  // which geographies the OSM/GTFS/GBFS/Pelias importers fetch. Editing here
+  // changes what a subsequent import (run with REGIONS=<key>) pulls in.
+  .get('/regions', async () => ({ regions: await listRegions() }), {
+    detail: { summary: 'List import regions', tags: ['Admin'] },
+  })
+  .get(
+    '/regions/:key',
+    async ({ params, set }) => {
+      const region = await getRegion(params.key)
+      if (!region) {
+        set.status = 404
+        return { error: 'Region not found' }
+      }
+      return { region }
+    },
+    { detail: { summary: 'Get an import region', tags: ['Admin'] } },
+  )
+  .post(
+    '/regions',
+    async ({ body, set }) => {
+      const b = body as RegionInput
+      if (!KEY_RE.test(b.key)) {
+        set.status = 400
+        return { error: 'Key must be lowercase letters, numbers and dashes (e.g. "north-carolina")' }
+      }
+      if (b.key === GLOBAL_KEY) {
+        set.status = 400
+        return { error: `"${GLOBAL_KEY}" is a reserved region key` }
+      }
+      if (await getRegion(b.key)) {
+        set.status = 409
+        return { error: `Region "${b.key}" already exists` }
+      }
+      const region = await createRegion(b)
+      set.status = 201
+      return { region }
+    },
+    { body: createRegionBody, detail: { summary: 'Create an import region', tags: ['Admin'] } },
+  )
+  .put(
+    '/regions/:key',
+    async ({ params, body, set }) => {
+      const region = await updateRegion(params.key, { key: params.key, ...(body as Omit<RegionInput, 'key'>) })
+      if (!region) {
+        set.status = 404
+        return { error: 'Region not found' }
+      }
+      return { region }
+    },
+    { body: updateRegionBody, detail: { summary: 'Update an import region', tags: ['Admin'] } },
+  )
+  .delete(
+    '/regions/:key',
+    async ({ params, set }) => {
+      if (params.key === GLOBAL_KEY) {
+        set.status = 400
+        return { error: 'The global (planet) region cannot be deleted' }
+      }
+      const ok = await deleteRegion(params.key)
+      if (!ok) {
+        set.status = 404
+        return { error: 'Region not found' }
+      }
+      return { ok: true }
+    },
+    { detail: { summary: 'Delete an import region', tags: ['Admin'] } },
+  )
 
   // ── Scripts manifest ────────────────────────────────────────────────
   .get(
