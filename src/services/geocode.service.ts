@@ -92,13 +92,6 @@ export async function forwardGeocode(
   const { lat, lng, limit = 10, layers = 'address,street', signal } = opts
   if (!text?.trim()) return []
 
-  const params = new URLSearchParams({ text, size: String(limit) })
-  if (lat != null && lng != null) {
-    params.set('focus.point.lat', String(lat))
-    params.set('focus.point.lon', String(lng))
-  }
-  if (layers) params.set('layers', layers)
-
   // Cancel when the originating request is aborted (a superseding keystroke),
   // OR when the hang backstop fires — whichever comes first. Honoring the
   // caller's signal is what lets a slow-but-valid Pelias response finish
@@ -106,13 +99,32 @@ export async function forwardGeocode(
   const backstop = AbortSignal.timeout(PELIAS_HANG_BACKSTOP_MS)
   const fetchSignal = signal ? AbortSignal.any([signal, backstop]) : backstop
 
-  try {
+  const query = async (withLayers: string): Promise<any[] | null> => {
+    const params = new URLSearchParams({ text, size: String(limit) })
+    if (lat != null && lng != null) {
+      params.set('focus.point.lat', String(lat))
+      params.set('focus.point.lon', String(lng))
+    }
+    if (withLayers) params.set('layers', withLayers)
     const res = await fetch(`${PELIAS_URL}/v1/autocomplete?${params}`, {
       signal: fetchSignal,
     })
-    if (!res.ok) return []
+    if (!res.ok) return null
     const data = (await res.json()) as { features?: any[] }
-    return (data.features ?? []).map(adaptPeliasFeature)
+    return data.features ?? []
+  }
+
+  try {
+    let features = await query(layers)
+    // A requested layer with zero docs in the index (e.g. `street` when
+    // polylines were never imported) makes Pelias return nothing for the whole
+    // request rather than falling back to the layers that DO have data. When a
+    // filtered call comes back empty, retry unfiltered so addresses still
+    // surface. Skip if there was no filter to begin with.
+    if (layers && (features == null || features.length === 0)) {
+      features = await query('')
+    }
+    return (features ?? []).map(adaptPeliasFeature)
   } catch {
     return [] // Pelias unavailable/aborted — POI search still works.
   }
