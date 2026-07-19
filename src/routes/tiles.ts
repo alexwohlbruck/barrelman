@@ -77,6 +77,12 @@ export function createTileRoutes(deps: { fetchTile?: TileFetcher } = {}) {
           x: t.String({ description: 'Tile X coordinate' }),
           y: t.String({ description: 'Tile Y coordinate' }),
         }),
+        detail: {
+          tags: ['Tiles'],
+          summary: 'Vector tile (Martin proxy)',
+          description:
+            'Proxies Mapbox Vector Tiles from the Martin tile server. Optionally gated by BARRELMAN_TILE_KEY via Bearer header or `?token=`.',
+        },
       },
     )
 }

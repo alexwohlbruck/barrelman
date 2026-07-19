@@ -1,6 +1,7 @@
 import { Elysia } from 'elysia'
 import { cors } from '@elysiajs/cors'
 import { swagger } from '@elysiajs/swagger'
+import swaggerConfig from './config/swagger'
 import { healthRoutes } from './routes/health'
 import { searchRoutes } from './routes/search'
 import { brandsRoutes } from './routes/brands'
@@ -54,17 +55,7 @@ void ensureSearchEnrichment().then(() => ensureBrandLogos())
 
 const app = new Elysia()
   .use(cors())
-  .use(
-    swagger({
-      documentation: {
-        info: {
-          title: 'Barrelman',
-          version: '0.3.0',
-          description: 'OSM geospatial engine — search, tiles, spatial queries',
-        },
-      },
-    }),
-  )
+  .use(swagger(swaggerConfig))
   .use(healthRoutes)
   .use(searchRoutes)
   .use(brandsRoutes)
@@ -89,5 +80,5 @@ const app = new Elysia()
 startTransitWarmup()
 
 console.log(`Barrelman running at http://localhost:${port}`)
-console.log(`Swagger docs at http://localhost:${port}/swagger`)
+console.log(`API docs at http://localhost:${port}/docs`)
 console.log(`Admin console at http://localhost:${port}/console`)
