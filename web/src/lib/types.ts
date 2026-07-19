@@ -108,6 +108,28 @@ export interface DataMetrics {
   transit: { stopAreaMembers: number | null }
 }
 
+// ── Import regions (DB-backed region store) ───────────────────────────
+export type Bbox = [west: number, south: number, east: number, north: number]
+
+export interface RegionPelias {
+  openaddresses: string[]
+  wofIds: string[]
+  tigerStates: number[]
+  countryCode?: string
+}
+
+export interface ImportRegion {
+  key: string
+  label: string
+  osmExtracts: string[]
+  osmReplication: string[]
+  bbox: Bbox
+  gtfsRegion: string
+  pelias: RegionPelias
+  isGlobal: boolean
+  enabled: boolean
+}
+
 export interface ServiceStatus {
   name: string
   key: string

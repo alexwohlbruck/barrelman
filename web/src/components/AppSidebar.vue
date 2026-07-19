@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { RouterLink, useRoute } from 'vue-router'
-import { LayoutDashboard, TerminalSquare, ListChecks, Database, FlaskConical, LogOut, Compass } from 'lucide-vue-next'
+import { LayoutDashboard, TerminalSquare, ListChecks, Database, FlaskConical, LogOut, Compass, MapPin } from 'lucide-vue-next'
 import { jobStats } from '@/lib/store'
 import { authRequired, clearKey } from '@/lib/auth'
 import Badge from '@/components/ui/Badge.vue'
@@ -9,6 +9,7 @@ const route = useRoute()
 
 const nav = [
   { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
+  { to: '/regions', label: 'Regions', icon: MapPin },
   { to: '/scripts', label: 'Scripts', icon: TerminalSquare },
   { to: '/jobs', label: 'Jobs', icon: ListChecks, badge: 'jobs' as const },
   { to: '/data', label: 'Data', icon: Database },
