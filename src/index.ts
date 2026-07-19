@@ -18,6 +18,7 @@ import { transitRoutes } from './routes/transit'
 import { gbfsRoutes } from './routes/gbfs'
 import { ensureSchema, ensureGtfsSchema, ensureGbfsSchema } from './db'
 import { ensureOpsJobsSchema } from './services/ops-job-store'
+import { ensureRegionsSchema } from './services/region-store.service'
 import { ensureSearchEnrichment } from './lib/search-enrichment'
 import { ensureBrandLogos } from './lib/brand-logos'
 import { startTransitWarmup } from './lib/warmup'
@@ -42,6 +43,8 @@ await ensureGtfsSchema()
 await ensureGbfsSchema()
 // Console job queue (shared with the barrelman-ops worker).
 await ensureOpsJobsSchema()
+// Import-region store (seeded from config/regions.json; editable in the console).
+await ensureRegionsSchema()
 
 // Backfill derived search columns (codes/name_abbrev/parent_context/ts) if a
 // prior import left them empty. Fire-and-forget so it never blocks startup —

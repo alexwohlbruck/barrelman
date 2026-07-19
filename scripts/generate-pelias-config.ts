@@ -16,7 +16,7 @@ import { resolveRegions } from '../src/config/regions'
 const here = dirname(fileURLToPath(import.meta.url))
 const configPath = resolve(here, '../pelias/pelias.json')
 
-const r = resolveRegions()
+const r = await resolveRegions()
 const base = JSON.parse(readFileSync(configPath, 'utf8'))
 
 const osmFilename = (url: string) => url.split('/').pop()!
@@ -59,3 +59,7 @@ console.log(`  regions: ${r.keys.join(', ')}`)
 console.log(`  osm extracts: ${r.osmExtracts.length}`)
 console.log(`  openaddresses files: ${r.peliasOpenaddresses.length}`)
 console.log(`  wof places: ${r.peliasWofIds.length}, tiger states: ${r.peliasTigerStates.join(',')}`)
+
+// resolveRegions may have opened a DB handle (region store); exit so this
+// generator doesn't hang on an idle connection.
+process.exit(0)
