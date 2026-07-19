@@ -340,3 +340,13 @@ New Barrelman releases are published to Docker Hub on every push to `main` via G
 | Embeddings | [Ollama](https://ollama.com) (`nomic-embed-text`) |
 | Tile server | [Martin](https://martin.maplibre.org) |
 | Routing | [GraphHopper](https://graphhopper.com) |
+
+---
+
+## License
+
+Barrelman is source-available under the **Apache License 2.0 with the Commons Clause** — see [LICENSE](LICENSE).
+
+In short: **free to self-host and use, including inside your business — but you may not sell it.** You can run it for yourself or your company's internal use (for example, an on-prem GIS API for your own business), fork it, and contribute back. You may not resell it, or host it as a paid service, where the value comes substantially from Barrelman. See [LICENSING.md](LICENSING.md) for a plain-language explanation with examples.
+
+Commercial and enterprise licensing — including a managed, enterprise-grade GIS REST API, dedicated support, and SLAs — is available. Reach out to Alex Wohlbruck to discuss.
