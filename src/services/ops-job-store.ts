@@ -99,7 +99,7 @@ export async function createJob(scriptId: string, params: Record<string, unknown
                           params, display_command, exclusive, advisory_key, created_at,
                           started_at, log_count, cancel_requested)
     VALUES (${id}, ${script.id}, ${script.name}, ${script.category}, ${script.danger}, ${inv.kind},
-            ${status}, ${sql.json(params as never)}, ${inv.display}, ${exclusive}, ${advisoryKey},
+            ${status}, ${JSON.stringify(params)}::jsonb, ${inv.display}, ${exclusive}, ${advisoryKey},
             ${now}, ${status === 'running' ? now : null}, 0, false)
     RETURNING *`
   await appendLogs(id, [
