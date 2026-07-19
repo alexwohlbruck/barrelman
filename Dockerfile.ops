@@ -1,0 +1,30 @@
+# barrelman-ops worker image.
+#
+# The privileged operator worker: it runs the manifest's `process` scripts
+# (OSM/GTFS/stop-areas/routing) which drive sibling containers. It needs the
+# docker CLI (talks to the host daemon via the mounted socket), osmium/python
+# for stop-area extraction, and the barrelman source + bun. Heavy tools like
+# osm2pgsql live in barrelman-db and are invoked via `docker exec`, so they are
+# NOT baked here.
+
+# docker CLI only (no daemon/containerd) — multi-arch.
+FROM docker:27-cli AS dockercli
+
+FROM oven/bun:1
+WORKDIR /app
+
+# Client-only docker CLI for driving sibling containers via /var/run/docker.sock.
+COPY --from=dockercli /usr/local/bin/docker /usr/local/bin/docker
+
+# osmium (merge) + python + uv (for import-stop-areas.sh's `uv run --with osmium`).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      osmium-tool python3 wget curl ca-certificates \
+  && curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh \
+  && rm -rf /var/lib/apt/lists/*
+
+COPY package.json bun.lock* ./
+RUN bun install --frozen-lockfile 2>/dev/null || bun install
+
+COPY . .
+
+CMD ["bun", "run", "src/worker/index.ts"]
