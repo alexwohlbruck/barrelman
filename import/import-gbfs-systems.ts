@@ -35,7 +35,7 @@ if (bboxArg) {
   bbox = { north, south, east, west }
 } else {
   // Default to the unified REGIONS bbox; a global selection means no bbox (all).
-  const r = resolveRegions()
+  const r = await resolveRegions()
   if (!r.isGlobal) {
     const [west, south, east, north] = r.bbox
     bbox = { north, south, east, west }

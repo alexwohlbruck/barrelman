@@ -7,6 +7,7 @@ import type {
   DataMetrics,
   ServiceStatus,
   TestResult,
+  ImportRegion,
 } from './types'
 
 export class ApiError extends Error {
@@ -78,6 +79,33 @@ export function getJob(id: string): Promise<{ job: Job; logs: LogLine[] }> {
 
 export function cancelJob(id: string): Promise<{ ok: boolean; message: string }> {
   return request<{ ok: boolean; message: string }>(`/admin/jobs/${id}/cancel`, { method: 'POST' })
+}
+
+// ── Import regions ────────────────────────────────────────────────────
+export type RegionPayload = Omit<ImportRegion, 'isGlobal'>
+
+export function getRegions(): Promise<{ regions: ImportRegion[] }> {
+  return request<{ regions: ImportRegion[] }>('/admin/regions')
+}
+
+export function createRegion(region: RegionPayload): Promise<{ region: ImportRegion }> {
+  return request<{ region: ImportRegion }>('/admin/regions', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(region),
+  })
+}
+
+export function updateRegion(key: string, region: Omit<RegionPayload, 'key'>): Promise<{ region: ImportRegion }> {
+  return request<{ region: ImportRegion }>(`/admin/regions/${encodeURIComponent(key)}`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(region),
+  })
+}
+
+export function deleteRegion(key: string): Promise<{ ok: boolean }> {
+  return request<{ ok: boolean }>(`/admin/regions/${encodeURIComponent(key)}`, { method: 'DELETE' })
 }
 
 // ── Metrics & services ────────────────────────────────────────────────
