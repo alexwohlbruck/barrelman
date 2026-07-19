@@ -95,3 +95,33 @@ services:
       - ./data/gtfs:/gtfs-zips:ro
     depends_on:
       - barrelman-db
+
+  # Privileged operator worker: executes the console's `process` script-jobs
+  # (OSM/GTFS/stop-areas/routing) which drive sibling containers. The lean
+  # barrelman API only enqueues; this claims + runs them (single-flight, with
+  # live logs streamed to the DB job queue). Mounts the docker socket so its
+  # scripts can `docker exec`/`restart` barrelman-db, graphhopper, motis, etc.
+  barrelman-ops:
+    container_name: barrelman-ops
+    image: alexwohlbruck/barrelman-ops:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.ops
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://barrelman:${BARRELMAN_DB_PASSWORD:-barrelman}@barrelman-db:5432/barrelman
+      BARRELMAN_DB_PASSWORD: ${BARRELMAN_DB_PASSWORD:-barrelman}
+      GRAPHHOPPER_URL: http://barrelman-graphhopper:8989
+      MOTIS_URL: http://barrelman-motis:8080
+      TRANSITLAND_API_KEY: ${TRANSITLAND_API_KEY:-}
+      REGIONS: ${REGIONS:-}
+      GTFS_DATA_DIR: /gtfs-zips
+      # scripts/*.sh docker-exec into these sibling containers by name.
+      DB_CONTAINER: barrelman-db
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - barrelman-osm-data:/data
+      - barrelman-gtfs-data:/gtfs-data
+      - ./data/gtfs:/gtfs-zips:ro
+    depends_on:
+      - barrelman-db

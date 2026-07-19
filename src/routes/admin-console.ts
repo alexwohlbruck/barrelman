@@ -11,7 +11,7 @@ import {
   listJobs,
   getJob,
   cancelJob,
-  subscribeJob,
+  readLogsSince,
   jobStats,
   JobConflictError,
 } from '../services/job-runner.service'
@@ -67,14 +67,14 @@ export const adminConsoleRoutes = new Elysia({ prefix: '/admin' })
   // ── Run a script ────────────────────────────────────────────────────
   .post(
     '/scripts/:id/run',
-    ({ params, body, set }) => {
+    async ({ params, body, set }) => {
       const script = getScript(params.id)
       if (!script) {
         set.status = 404
         return { error: `Unknown script: ${params.id}` }
       }
       try {
-        const job = startJob(params.id, (body as any)?.params ?? {})
+        const job = await startJob(params.id, (body as any)?.params ?? {})
         set.status = 201
         return { job }
       } catch (err) {
@@ -93,14 +93,14 @@ export const adminConsoleRoutes = new Elysia({ prefix: '/admin' })
   )
 
   // ── Jobs ────────────────────────────────────────────────────────────
-  .get('/jobs', () => ({ jobs: listJobs(), stats: jobStats() }), {
+  .get('/jobs', async () => ({ jobs: await listJobs(), stats: await jobStats() }), {
     detail: { summary: 'List jobs', tags: ['Admin'] },
   })
 
   .get(
     '/jobs/:id',
-    ({ params, set }) => {
-      const found = getJob(params.id)
+    async ({ params, set }) => {
+      const found = await getJob(params.id)
       if (!found) {
         set.status = 404
         return { error: 'Job not found' }
@@ -112,26 +112,29 @@ export const adminConsoleRoutes = new Elysia({ prefix: '/admin' })
 
   .post(
     '/jobs/:id/cancel',
-    ({ params, set }) => {
-      const result = cancelJob(params.id)
+    async ({ params, set }) => {
+      const result = await cancelJob(params.id)
       if (!result.ok) set.status = 409
       return result
     },
     { detail: { summary: 'Cancel a running job', tags: ['Admin'] } },
   )
 
-  // ── Live log stream (SSE over fetch; consumed with a streaming reader) ──
+  // ── Live log stream (SSE) ───────────────────────────────────────────
+  // Jobs may run in a different process (the ops worker), so we can't use an
+  // in-memory event emitter — poll the DB job store for new log rows + status.
   .get(
     '/jobs/:id/stream',
-    ({ params, set }) => {
-      const existing = getJob(params.id)
+    async ({ params, set }) => {
+      const existing = await getJob(params.id)
       if (!existing) {
         set.status = 404
         return { error: 'Job not found' }
       }
 
-      let unsub: (() => void) | undefined
+      const id = params.id
       const encoder = new TextEncoder()
+      let closed = false
 
       const stream = new ReadableStream<Uint8Array>({
         start(controller) {
@@ -139,37 +142,48 @@ export const adminConsoleRoutes = new Elysia({ prefix: '/admin' })
             try {
               controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`))
             } catch {
-              /* controller closed */
+              closed = true
             }
           }
+          const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+          const terminal = (s: string) => s !== 'running' && s !== 'queued'
 
-          // Replay backlog, then stream live.
-          for (const line of existing.logs) send('log', line)
-          send('status', existing.job)
-
-          if (existing.job.status !== 'running') {
-            controller.close()
-            return
-          }
-
-          unsub = subscribeJob(params.id, (evt) => {
-            if (evt.type === 'log') {
-              send('log', evt.line)
-            } else {
-              send('status', evt.job)
-              if (evt.job.status !== 'running') {
-                unsub?.()
-                try {
-                  controller.close()
-                } catch {
-                  /* already closed */
-                }
+          ;(async () => {
+            let nextSeq = 0
+            for (const line of existing.logs) {
+              send('log', line)
+              nextSeq = line.seq + 1
+            }
+            let lastStatus = existing.job.status
+            send('status', existing.job)
+            if (terminal(existing.job.status)) {
+              controller.close()
+              return
+            }
+            while (!closed) {
+              await sleep(1000)
+              const newLogs = await readLogsSince(id, nextSeq)
+              for (const line of newLogs) {
+                send('log', line)
+                nextSeq = line.seq + 1
               }
+              const cur = await getJob(id)
+              if (!cur) break
+              if (cur.job.status !== lastStatus) {
+                lastStatus = cur.job.status
+                send('status', cur.job)
+              }
+              if (terminal(cur.job.status)) break
             }
-          })
+            try {
+              controller.close()
+            } catch {
+              /* already closed */
+            }
+          })()
         },
         cancel() {
-          unsub?.()
+          closed = true
         },
       })
 
