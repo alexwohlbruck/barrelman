@@ -1,0 +1,29 @@
+---
+title: Introduction
+description: What Barrelman is and what it can do.
+---
+
+Barrelman is a **self-hostable geospatial engine** built on OpenStreetMap and PostGIS. Named after the sailor who watches the horizon from the crow's nest, it provides place search, spatial queries, vector tiles, routing, and transit — all from a single OSM extract, with no dependency on commercial map data APIs.
+
+Barrelman is the engine that powers [Parchment](https://github.com/alexwohlbruck/parchment), a privacy-first maps and navigation app. Parchment is the product; Barrelman is the data and query layer beneath it. You can run Barrelman on its own and build directly against its REST API.
+
+## Capabilities
+
+- **Search** — Fuzzy place search over an OSM extract using a hybrid pipeline (full-text, trigram, abbreviation, and optional semantic vector matching), with point-radius and route-corridor spatial modes.
+- **Geocoding** — Forward geocoding (address → coordinates) and reverse geocoding (coordinates → address).
+- **Brand search** — Autocomplete over a brand catalog to resolve chains and franchises (e.g. "Starbucks").
+- **Places** — Place details by OSM ID, plus spatial relationship queries: which areas *contain* a point, and the *children* of an area.
+- **Tiles** — Mapbox Vector Tiles served via [Martin](https://github.com/maplibre/martin) for map rendering.
+- **Routing** — Turn-by-turn routing for car, bike, and foot via [GraphHopper](https://www.graphhopper.com/), enriched with elevation and path detail.
+- **Transit** — Trip planning via [MOTIS](https://github.com/motis-project/motis) plus live GTFS-RT vehicle positions, departures, stops, and route detail.
+- **GBFS** — Shared-mobility (bikeshare and scooter) systems and real-time station availability from GBFS feeds.
+- **Admin** — A console and API for running data imports, migrations, and inspecting downstream service health.
+
+## Architecture
+
+Barrelman ingests an OSM PBF extract with `osm2pgsql`, stores it in PostGIS (with pgvector for optional semantic search), and serves it through an [Elysia](https://elysiajs.com/) API running on [Bun](https://bun.sh/). Tiles come from Martin and routing from GraphHopper, all sourced from the same extract.
+
+## Next steps
+
+- **Getting started** — See [Usage](/docs/usage) for the base URL, authentication, and example requests.
+- **API reference** — See the [API Reference](/docs/api) for every endpoint, grouped by capability.
