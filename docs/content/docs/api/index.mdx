@@ -1,0 +1,20 @@
+---
+title: API Reference
+description: Reference for the Barrelman REST API, grouped by capability.
+---
+
+This section documents the Barrelman REST API. Endpoints are grouped by capability — Health, Search, Places, Geocoding, Routing, Transit, GBFS, Brands, and Admin.
+
+Every request (except the public `GET /health/`) requires a bearer token; see [Getting Started](/docs/usage) for the base URL and authentication.
+
+## Regenerating these pages
+
+The reference is rendered from the OpenAPI spec committed at `docs/openapi.json`, so Netlify builds are reproducible without a live server. To refresh it from the source of truth:
+
+```bash
+cd docs
+curl -sSf https://barrelman.parchment.app/swagger/json -o openapi.json
+bun run generate:api
+```
+
+`generate:api` reads the local `./openapi.json` and regenerates one page per tag under `content/docs/api/`.
