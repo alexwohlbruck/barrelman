@@ -227,6 +227,8 @@ Interactive docs: `http://localhost:5001/swagger`
 | `GET` | `/contains` | Find parent areas containing a point |
 | `GET` | `/children` | Find POIs inside an area |
 | `GET` | `/place/:osmType/:osmId` | Get a single place by OSM ID |
+| `GET` `POST` | `/isochrone` | Reachability polygons for any travel mode |
+| `GET` | `/isochrone/modes` | Supported isochrone modes and their limits |
 
 ### POST `/search`
 
@@ -276,6 +278,48 @@ Returns places whose centroids fall inside the given area's polygon.
 
 Fetch full details for a single OSM element. `osmType` is `node`, `way`, or `relation`.
 
+### GET / POST `/isochrone`
+
+Where can you get in _N_ minutes? Returns one polygon per requested duration as a GeoJSON `FeatureCollection`.
+
+```bash
+curl -H "Authorization: Bearer $BARRELMAN_API_KEY" \
+  "http://localhost:5001/isochrone?lat=35.7796&lng=-78.6382&mode=walk&durations=300,600,900"
+```
+
+The same request as JSON:
+
+```json
+{
+  "lat": 35.7796,
+  "lng": -78.6382,
+  "mode": "transit",
+  "durations": [900, 1800, 2700],
+  "time": "2026-07-30T13:00:00Z",
+  "simplify": 20
+}
+```
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `lat`, `lng` | — | Origin (required) |
+| `mode` | `walk` | `walk`, `bike`, `car`, `transit` (aliases: `foot`, `bicycle`, `drive`, `pt`, …) |
+| `durations` | `900` | Contour budgets in **seconds** — any values, up to 8 per request. Query-string form is comma-separated |
+| `arriveBy` | `false` | Reverse isochrone: the area that can *reach* the point |
+| `time` | now | ISO 8601 departure (or arrival) time. Transit only |
+| `simplify` | `0` | Douglas–Peucker tolerance in meters. `30` typically cuts payload ~5× |
+| `maxTransfers` | — | Transit only |
+| `transitModes` | all | Transit only — `BUS`, `RAIL`, `SUBWAY`, `TRAM`, `FERRY`, … |
+| `maxEgressTime` | `600` | Transit only — cap (s) on the walk away from each reachable stop |
+| `wheelchair` | `false` | Transit only — accessible stops and vehicles |
+| `maxStopIsochrones` | `250` | Transit only — per-contour walk-isochrone budget (see below) |
+
+Features come back smallest contour first (`bucket: 0`), so renderers should draw them back to front. Contours nest — each one is folded into the next, so a 30-minute polygon is always fully inside the 45-minute one. Geometry is a valid `Polygon` or `MultiPolygon`, never a `GeometryCollection`. Ceilings are 3 h for street modes, 2 h for transit.
+
+**How each mode is computed.** `walk`/`bike`/`car` are GraphHopper `/isochrone` searches (evenly spaced durations like `300,600,900` are served by a single bucketed search). `transit` is composed here: MOTIS `one-to-all` reports every stop reachable within the budget, each stop gets a GraphHopper walking isochrone sized to its leftover time, and those are unioned in PostGIS with the direct walk from the origin.
+
+**Cost.** Street isochrones are sub-second to a few seconds depending on area. A transit isochrone fans out to hundreds of walk isochrones — a 45-minute, 3-contour Manhattan query takes ~14 s cold and under a second once the polygon cache is warm. When more stops are reachable than `maxStopIsochrones`, the stop set is thinned by coarsening its dedupe grid (evenly, so the contour's outer edge survives) rather than by dropping the farthest stops; `meta.stopGridMeters` reports the resolution actually used.
+
 ---
 
 ## Configuration
@@ -287,6 +331,7 @@ Fetch full details for a single OSM element. `osmType` is `node`, `way`, or `rel
 | `PORT` | `3001` | HTTP port the API listens on |
 | `BARRELMAN_API_KEY` | `brm_dev_changeme` | Shared Bearer token for API auth. **Change before deploying.** |
 | `OLLAMA_HOST` | `http://localhost:11434` | Ollama endpoint for generating search embeddings |
+| `ISOCHRONE_CONCURRENCY` | `8` | Parallel GraphHopper isochrone requests. Raise it only when GraphHopper isn't also serving interactive routing |
 
 ---
 
