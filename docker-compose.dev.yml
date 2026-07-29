@@ -25,6 +25,12 @@ services:
     volumes:
       - ./src:/app/src
       - ./import:/app/import
+      # config/regions.json is the seed + fallback for the import-region store,
+      # read at startup by src/config/regions.ts. The production Dockerfile bakes
+      # it in via `COPY . .`, but Dockerfile.dev copies only package.json and
+      # relies on these mounts — without this the API dies on boot with an
+      # uncaughtException from loadFile().
+      - ./config:/app/config
       - ./data:/data
       - /app/node_modules
 
