@@ -9,7 +9,7 @@ import {
   index,
 } from 'drizzle-orm/pg-core'
 import { sql } from 'drizzle-orm'
-import { spatialColumn, vectorColumn, spatialIndex, trigramIndex, ginIndex } from './spatial-helpers'
+import { spatialColumn, vectorColumn, spatialIndex, ginIndex } from './spatial-helpers'
 
 export const geoPlaces = pgTable(
   'geo_places',
@@ -58,8 +58,12 @@ export const geoPlaces = pgTable(
     spatialIndex('geo_places_geom_idx', table.geom),
     ginIndex('geo_places_tags_idx', sql`${table.tags} jsonb_path_ops`),
     index('geo_places_geom_type_idx').on(table.geomType),
-    // Partial indexes for search (only named POIs)
-    trigramIndex('geo_places_name_trgm_idx', table.name),
+    // Partial indexes for search (only named POIs).
+    // NOTE: fuzzy name search is served by the GiST trigram index
+    // geo_places_name_gist_trgm_sig128_idx created in db.ts ensureSchema()
+    // (drizzle can't express gist_trgm_ops(siglen=128)). The old GIN trigram
+    // index was removed — it couldn't serve the KNN `<->` ordering and only
+    // added write overhead + planner risk.
     ginIndex('geo_places_categories_idx', table.categories),
     ginIndex('geo_places_codes_idx', table.codes),
   ],

@@ -57,7 +57,7 @@ mkdir -p "$DATA_DIR"
 # stops/routes into PostGIS, compute walking transfers, generate transfers.txt).
 for region in "${REGIONS_LIST[@]}"; do
   echo "── GTFS region: $region ──────────────────────────────"
-  bun run src/import/import-gtfs.ts \
+  bun run import/import-gtfs.ts \
     --region "$region" \
     --api-key "$API_KEY" \
     --output-dir "$DATA_DIR"

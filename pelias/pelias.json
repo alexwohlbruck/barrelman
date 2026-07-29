@@ -27,9 +27,6 @@
   },
   "api": {
     "services": {
-      "placeholder": {
-        "url": "http://placeholder:4100"
-      },
       "pip": {
         "url": "http://pip:4200"
       },

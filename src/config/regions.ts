@@ -40,14 +40,15 @@ export interface RegionDef {
   pelias: PeliasRegionConfig
 }
 
-interface RegionsFile {
+export interface RegionsFile {
   regions: Record<string, RegionDef>
   global: RegionDef
 }
 
-const GLOBAL_KEY = 'global'
+export const GLOBAL_KEY = 'global'
 
-function loadFile(): RegionsFile {
+/** Read the baked config/regions.json — the seed + fallback for the DB store. */
+export function loadFile(): RegionsFile {
   const here = dirname(fileURLToPath(import.meta.url))
   // src/config/regions.ts → ../../config/regions.json
   const path = resolve(here, '../../config/regions.json')
@@ -80,11 +81,27 @@ export interface ResolvedRegions {
 const uniq = (xs: string[]) => Array.from(new Set(xs))
 
 /**
- * Resolve the REGIONS env var (or an explicit value) into concrete data sources.
- * Defaults to 'north-carolina,nyc-metro' when unset (the standard dev regions).
+ * Load the region definitions, preferring the DB store (editable from the admin
+ * console) and falling back to the baked JSON when the table is empty or the DB
+ * is unreachable. The DB module is imported lazily so file-only / no-DB contexts
+ * (and the fallback path itself) never require a database connection.
  */
-export function resolveRegions(value = process.env.REGIONS): ResolvedRegions {
-  const file = loadFile()
+async function loadRegions(): Promise<RegionsFile> {
+  try {
+    const { loadRegionsFromDb } = await import('../services/region-store.service')
+    const fromDb = await loadRegionsFromDb()
+    if (fromDb) return fromDb
+  } catch {
+    // DB unavailable / table missing — use the shipped defaults.
+  }
+  return loadFile()
+}
+
+/**
+ * Resolve region definitions + an explicit/env REGIONS selection into concrete
+ * data sources. Pure: no I/O — see {@link resolveRegions} for the loading wrapper.
+ */
+export function resolveFromFile(file: RegionsFile, value = process.env.REGIONS): ResolvedRegions {
   const raw = (value ?? 'north-carolina,nyc-metro').trim()
 
   if (raw === GLOBAL_KEY || raw === '') {
@@ -138,6 +155,15 @@ export function resolveRegions(value = process.env.REGIONS): ResolvedRegions {
   }
 }
 
+/**
+ * Resolve the REGIONS env var (or an explicit value) into concrete data sources.
+ * Defaults to 'north-carolina,nyc-metro' when unset (the standard dev regions).
+ * Reads the DB region store (console-editable) with the baked JSON as fallback.
+ */
+export async function resolveRegions(value = process.env.REGIONS): Promise<ResolvedRegions> {
+  return resolveFromFile(await loadRegions(), value)
+}
+
 // ── CLI ──────────────────────────────────────────────────────────────────────
 // Lets bash scripts read resolved values without duplicating the registry, e.g.:
 //   for url in $(bun run src/config/regions.ts osm-extracts); do …; done
@@ -145,7 +171,7 @@ export function resolveRegions(value = process.env.REGIONS): ResolvedRegions {
 //   if [ "$(bun run src/config/regions.ts is-global)" = "true" ]; then …; fi
 if (import.meta.main) {
   const cmd = process.argv[2]
-  const r = resolveRegions()
+  const r = await resolveRegions()
   const out = (xs: string[]) => xs.join('\n')
   switch (cmd) {
     case 'keys': console.log(out(r.keys)); break
@@ -168,4 +194,7 @@ if (import.meta.main) {
       console.error('Usage: bun run src/config/regions.ts <keys|osm-extracts|osm-replication|gtfs-regions|openaddresses|bbox|is-global|summary>')
       process.exit(1)
   }
+  // resolveRegions may have opened a DB handle (region store); exit so the CLI
+  // doesn't hang waiting on an idle connection.
+  process.exit(0)
 }

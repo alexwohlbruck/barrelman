@@ -75,6 +75,11 @@ $COMPOSE_CMD up $BUILD_FLAG -d
 echo ""
 echo "Barrelman started successfully!"
 echo "API: http://localhost:5001"
+if [ "$MODE" = "dev" ]; then
+    echo "Admin console (dev, HMR): http://localhost:5199/console"
+else
+    echo "Admin console: http://localhost:5001/console"
+fi
 echo "Martin tiles: internal only (proxied via API)"
 echo "GraphHopper: http://localhost:5001/graphhopper/* (proxied)  |  http://localhost:8989 (direct, debug)"
 echo ""

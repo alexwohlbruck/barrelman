@@ -2,6 +2,11 @@
 graphhopper:
   datareader.file: /data/region.osm.pbf
   graph.location: /data/graph-cache
+  # MMAP instead of the default RAM_STORE: the 2.5GB graph is served from OS
+  # page cache rather than JVM heap. Keeps heap small (see
+  # GRAPHHOPPER_JAVA_OPTS in .env) and lets the kernel reclaim graph pages
+  # under memory pressure instead of OOM-ing or ballooning into swap.
+  graph.dataaccess.default_type: MMAP
 
   # ── Profiles ──────────────────────────────────────────────────────
   # LM (Landmark) preprocessing instead of CH (Contraction Hierarchies)

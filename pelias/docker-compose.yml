@@ -8,11 +8,17 @@ networks:
     name: barrelman_default
 
 services:
+  # Barrelman only calls /v1/autocomplete, which needs just api + elasticsearch.
+  # libpostal/placeholder/interpolation/pip serve /v1/search & /v1/reverse and
+  # together held ~4GB (mostly swap) — gated behind the "full" profile so a
+  # plain `docker compose up -d` doesn't start them. Use `--profile full` to
+  # bring the complete geocoder back.
   libpostal:
     image: pelias/libpostal-service
     container_name: pelias_libpostal
     user: '${DOCKER_USER}'
     restart: always
+    profiles: ['full']
     ports: ['127.0.0.1:4400:4400']
 
   schema:
@@ -40,6 +46,7 @@ services:
     container_name: pelias_placeholder
     user: '${DOCKER_USER}'
     restart: always
+    profiles: ['full']
     environment: ['PORT=4100']
     ports: ['127.0.0.1:4100:4100']
     volumes:
@@ -104,6 +111,7 @@ services:
     container_name: pelias_interpolation
     user: '${DOCKER_USER}'
     restart: always
+    profiles: ['full']
     environment: ['PORT=4300']
     ports: ['127.0.0.1:4300:4300']
     volumes:
@@ -115,6 +123,7 @@ services:
     container_name: pelias_pip-service
     user: '${DOCKER_USER}'
     restart: always
+    profiles: ['full']
     environment: ['PORT=4200']
     ports: ['127.0.0.1:4200:4200']
     volumes:
@@ -126,6 +135,11 @@ services:
     container_name: pelias_elasticsearch
     user: '${DOCKER_USER}'
     restart: always
+    # Default 512m heap GC-thrashed on autocomplete queries. 1g is enough —
+    # Lucene serves the index from OS page cache, not heap, and the Docker VM
+    # is memory-tight (going higher just adds swap pressure, which is what
+    # actually caused the observed multi-second es_took outliers).
+    environment: ['ES_JAVA_OPTS=-Xms1g -Xmx1g']
     ports: ['127.0.0.1:9200:9200', '127.0.0.1:9300:9300']
     volumes:
       - '${DATA_DIR}/elasticsearch:/usr/share/elasticsearch/data'

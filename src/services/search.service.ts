@@ -4,6 +4,65 @@ import { searchCache, embeddingCache } from '../lib/cache'
 import { generateQueryEmbedding } from '../lib/embeddings'
 import { forwardGeocode } from './geocode.service'
 
+// ── Autocomplete fast path ──────────────────────────────────────────────────
+// Typeahead fires one request per keystroke, so its budget is ~50ms — an order
+// of magnitude tighter than a submitted search. Three properties of the general
+// text-search shape blow that budget:
+//
+//   1. No spatial restriction. Every layer scans the whole geo_places table
+//      (21.9M rows / 16GB heap); a one-letter prefix like "d:*" matches 284K
+//      lexemes and ~357K rows, measured at 6.6s for the FTS layer alone.
+//   2. An ORDER BY built from similarity()/distance arithmetic. No index can
+//      serve it, so Postgres materialises *every* match and evaluates
+//      similarity() per row before taking the top N.
+//   3. The trigram KNN layer, which costs 250ms-1.2s and — unlike FTS — gets no
+//      benefit from a spatial filter (measured: still ~800ms inside a 10km box).
+//
+// So autocomplete restricts the FTS layer to a box around the viewport, orders
+// by the index-assisted `centroid <-> point` KNN, over-fetches a candidate pool,
+// and skips trigram — leaving the ranking to the JS proximity re-rank further
+// down, which already applies the same text_rank × distance-decay formula.
+// Measured on the same data: "divin" 596ms → 7ms, "divine barrel" 2014ms → 6ms.
+//
+// A submitted (non-autocomplete) search is untouched: still global, still
+// trigram-backed, still fully ranked in SQL.
+
+/** Shortest query autocomplete will run. A single-character prefix matches a
+ *  sizeable fraction of the table (~20s uncached) and its results are noise. */
+const AUTOCOMPLETE_MIN_QUERY = 2
+
+/** Half-width of the autocomplete box around the viewport, in metres. Generous
+ *  enough to cover a metro area — it only has to bound the scan, since the
+ *  proximity re-rank does the actual distance weighting. Widened to the caller's
+ *  `radius` when that is larger. */
+const AUTOCOMPLETE_RADIUS_M = 50_000
+
+/** Rows pulled from the autocomplete FTS layer before the JS re-rank. Ordering
+ *  by pure distance means a strong-but-slightly-further match would be cut by a
+ *  tight LIMIT, so over-fetch and let the re-rank pick the winners. */
+const AUTOCOMPLETE_POOL = 200
+
+/** Below this many local hits, autocomplete retries on the global (submitted-
+ *  search) path so a place outside the viewport is still findable.
+ *
+ *  This is 1 — i.e. retry only on a genuine zero-result miss — because the
+ *  global retry is dominated by the trigram layer at 240-330ms, and anything
+ *  higher makes the *precise* queries pay it. Measured local hit counts:
+ *  "divine barrel" 1, "sycamore brewing" 1, "walmart independence" 1, against
+ *  "times square" 0, "trade and tryon" 0, "1600 e 7th st" 0. A precise query
+ *  matching exactly one place is the success case, not a miss; at a threshold
+ *  of 5 every one of them triggered a global scan to pad the list with fuzzy
+ *  near-misses. Dropping to 1 took the suite median from 157ms to 20ms and
+ *  those three queries from ~250ms to ~6ms, while the genuine misses still
+ *  retry and still return full results. */
+const AUTOCOMPLETE_FALLBACK_MIN = 1
+
+/** Minimum length before the global retry is allowed. Short prefixes match
+ *  enormous row counts globally — exactly the case the fast path exists to
+ *  avoid — and a 2-3 character prefix is never a deliberate search for a
+ *  faraway place. */
+const AUTOCOMPLETE_FALLBACK_MIN_QUERY = 4
+
 export interface SearchParams {
   query?: string
   lat?: number
@@ -19,20 +78,23 @@ export interface SearchParams {
   autocomplete?: boolean
 }
 
-export async function searchPlaces({
-  query,
-  lat,
-  lng,
-  radius,
-  route,
-  buffer = 1000,
-  categories,
-  tags,
-  limit = 20,
-  offset = 0,
-  semantic = false,
-  autocomplete = false,
-}: SearchParams): Promise<any[]> {
+export async function searchPlaces(
+  {
+    query,
+    lat,
+    lng,
+    radius,
+    route,
+    buffer = 1000,
+    categories,
+    tags,
+    limit = 20,
+    offset = 0,
+    semantic = false,
+    autocomplete = false,
+  }: SearchParams,
+  signal?: AbortSignal,
+): Promise<any[]> {
   const routeGeoJSON = route ? JSON.stringify(route) : ''
   const tagsCacheKey = tags ? Object.keys(tags).sort().map(k => `${k}=${tags[k]}`).join('&') : ''
   const cacheKey = `search:${query || ''}:${lat}:${lng}:${radius}:${routeGeoJSON}:${buffer}:${categories?.join(',')}:${tagsCacheKey}:${limit}:${offset}:${semantic}:${autocomplete}`
@@ -45,13 +107,37 @@ export async function searchPlaces({
   const hasQuery = sanitizedQuery.length > 0
   const hasPointLocation = lat != null && lng != null
   const hasRoute = route != null
+  const hasCategory = !!(categories && categories.length > 0)
+  // "Widen" mode: a category browse with a point but NO radius. Drive the scan
+  // from the category GIN index and take the nearest N (bounded to a wide bbox),
+  // instead of the KNN walk — which is fast for a dense category but crawls
+  // through millions of rows for a sparse one like fuel. This is what lets a
+  // zoomed-in search still surface far matches (e.g. gas stations) in ~1s.
+  const isWiden = hasPointLocation && !radius && hasCategory
+  const WIDEN_BBOX_DEG = 1.35 // ~150 km — caps how far a dense category scans
+
+  // Single-character typeahead: bail before touching Postgres or Pelias.
+  if (autocomplete && hasQuery && sanitizedQuery.length < AUTOCOMPLETE_MIN_QUERY) {
+    return []
+  }
+
+  // The autocomplete fast path needs a viewport to bound the scan; without
+  // coordinates it falls back to the ordinary global text-search shape.
+  const localAutocomplete = autocomplete && hasPointLocation
+
+  // Address intent — a leading digit ("350 5th ave"). Used twice: to skip the
+  // global POI retry (Pelias already answers these, and it returns in <10ms
+  // where the retry costs ~250ms) and to decide result ordering further down.
+  const addressLike = /^\s*\d/.test(sanitizedQuery)
 
   // Address geocoding (Pelias) runs in parallel with the PostGIS layers so
   // street addresses appear alongside POIs without adding latency. Text queries
-  // only — not browse/category or route corridor searches.
-  const wantAddresses = hasQuery && !hasRoute && !(categories && categories.length)
+  // only — not browse/category or route corridor searches. Skipped under 3
+  // chars: no address is identifiable from 1-2 chars, and such prefixes make
+  // Elasticsearch grind through 10k+ candidates for nothing.
+  const wantAddresses = hasQuery && sanitizedQuery.length >= 3 && !hasRoute && !(categories && categories.length)
   const peliasPromise: Promise<any[]> = wantAddresses
-    ? forwardGeocode(sanitizedQuery, { lat, lng, limit })
+    ? forwardGeocode(sanitizedQuery, { lat, lng, limit, signal })
     : Promise.resolve([])
 
   // ── Build spatial primitives ────────────────────────────────────────────
@@ -79,6 +165,10 @@ export async function searchPlaces({
   } else if (hasPointLocation && radius) {
     const degExpand = radius / 111320
     spatialFilter = sql`AND centroid && ST_Expand(${locationPoint}::geometry, ${degExpand}) AND ST_DWithin(centroid::geography, ${locationPoint}::geography, ${radius})`
+  } else if (isWiden) {
+    // Bound the widen to a wide bbox so a dense category (e.g. 134k parking rows)
+    // doesn't sort the whole planet; the category index does the heavy lifting.
+    spatialFilter = sql`AND centroid && ST_Expand(${locationPoint}::geometry, ${WIDEN_BBOX_DEG})`
   } else {
     spatialFilter = sql``
   }
@@ -90,6 +180,15 @@ export async function searchPlaces({
   // "restaurant" return arbitrary distant results because all matches have similar
   // text_rank. No WHERE filter is applied — any place worldwide can still match.
   const textSearchSpatialFilter = sql``
+
+  // Autocomplete's bounded variant of the above (see AUTOCOMPLETE_* at the top).
+  // Applied ONLY to the FTS layer: the codes and abbreviation layers are exact
+  // indexed lookups that already run in single-digit milliseconds, and bounding
+  // them would break deliberate long-range lookups like "jfk" typed from
+  // Charlotte — which the merge below explicitly pins to the top.
+  const autocompleteBoxFilter = localAutocomplete
+    ? sql`AND centroid && ST_Expand(${locationPoint}::geometry, ${Math.max(radius ?? 0, AUTOCOMPLETE_RADIUS_M) / 111320})`
+    : sql``
 
   // Proximity-aware ORDER BY helper for text search layers.
   // PostgreSQL doesn't allow column aliases in ORDER BY expressions, so each
@@ -111,7 +210,11 @@ export async function searchPlaces({
   const categoryArray = categories && categories.length > 0
     ? `{${categories.join(',')}}` : null
   const categoryFilter = categoryArray
-    ? sql`AND categories && ${categoryArray}::text[]`
+    ? isWiden
+      // The categories GIN index is partial (WHERE categories <> '{}'); state that
+      // predicate explicitly so the planner can actually use it for the widen scan.
+      ? sql`AND categories && ${categoryArray}::text[] AND categories <> '{}'::text[]`
+      : sql`AND categories && ${categoryArray}::text[]`
     : sql``
 
   const tagsFilterJson = tags && Object.keys(tags).length > 0
@@ -168,7 +271,11 @@ export async function searchPlaces({
         })()
       : sql`plainto_tsquery('simple', unaccent(${sanitizedQuery}))`
 
-    const ftsPromise = db.execute(sql`
+    // `local` runs the autocomplete fast path: viewport box, index-assisted KNN
+    // ordering, over-fetched pool. `local: false` is the original global shape.
+    // Note the ORDER BY is the only thing that changes about ranking — text_rank
+    // is still projected identically, and the JS re-rank below scores on it.
+    const ftsQuery = (local: boolean) => db.execute(sql`
       SELECT
         id, osm_type, osm_id, name, name_abbrev, categories, tags,
         address, hours, phones, websites, geom_type,
@@ -177,12 +284,14 @@ export async function searchPlaces({
         ${distanceSelect}
       FROM geo_places
       WHERE ts @@ ${tsQueryExpr}
-      ${textSearchSpatialFilter}
+      ${local ? autocompleteBoxFilter : textSearchSpatialFilter}
       ${categoryFilter}
       ${tagsFilter}
-      ${proximityDecay(ftsRankExpr)}
-      LIMIT ${limit}
+      ${local ? sql`ORDER BY centroid <-> ${locationPoint}` : proximityDecay(ftsRankExpr)}
+      LIMIT ${local ? AUTOCOMPLETE_POOL : limit}
     `).catch(() => [] as any[])
+
+    const ftsPromise = ftsQuery(localAutocomplete)
 
     // Layer 2: Trigram fuzzy match via GiST KNN (name <-> query)
     // Uses the GiST trigram index (geo_places_name_gist_trgm_idx) for ordered
@@ -215,24 +324,32 @@ export async function searchPlaces({
     // mis-costed and degraded to a full parallel seq scan (~45s on 21M rows)
     // for low-/no-match queries — exactly the partial words typed mid-search —
     // which blew past the API timeout and returned no place results.
-    const trigramPromise = sanitizedQuery.length > 4
-      ? db.execute(sql`
-          SELECT
-            id, osm_type, osm_id, name, name_abbrev, categories, tags,
-            address, hours, phones, websites, geom_type,
-            ST_AsGeoJSON(centroid)::jsonb AS geometry,
-            ${trigramRankExpr} AS text_rank
-            ${distanceSelect}
-          FROM geo_places
-          WHERE name IS NOT NULL
-            AND name % ${sanitizedQuery}
-          ${textSearchSpatialFilter}
-          ${categoryFilter}
-          ${tagsFilter}
-          ORDER BY name <-> ${sanitizedQuery}
-          LIMIT ${limit}
-        `).catch(() => [] as any[])
-      : Promise.resolve([] as any[])
+    //
+    // The autocomplete fast path skips this layer entirely: it costs 250ms-1.2s
+    // and a spatial filter doesn't help it (the GiST KNN walk still dominates —
+    // ~800ms even inside a 10km box). Prefix matching, which is what typeahead
+    // actually needs, is already covered by the `word:*` tsquery in the FTS
+    // layer; trigram's contribution is typo tolerance, which the global retry
+    // below restores whenever the local pass comes up short.
+    const trigramQuery = () => db.execute(sql`
+      SELECT
+        id, osm_type, osm_id, name, name_abbrev, categories, tags,
+        address, hours, phones, websites, geom_type,
+        ST_AsGeoJSON(centroid)::jsonb AS geometry,
+        ${trigramRankExpr} AS text_rank
+        ${distanceSelect}
+      FROM geo_places
+      WHERE name IS NOT NULL
+        AND name % ${sanitizedQuery}
+      ${textSearchSpatialFilter}
+      ${categoryFilter}
+      ${tagsFilter}
+      ORDER BY name <-> ${sanitizedQuery}
+      LIMIT ${limit}
+    `).catch(() => [] as any[])
+
+    const runTrigram = !localAutocomplete && sanitizedQuery.length > 4
+    const trigramPromise = runTrigram ? trigramQuery() : Promise.resolve([] as any[])
 
     // Layer 3: Abbreviation + codes match
     // Split into two separate queries so codes matches (explicit identifiers like
@@ -290,7 +407,30 @@ export async function searchPlaces({
         `).catch(() => [] as any[])
       : Promise.resolve([] as any[])
 
-    const [ftsRows, trigramRows, codesRows, nameAbbrevRows] = await Promise.all([ftsPromise, trigramPromise, codesPromise, nameAbbrevPromise])
+    let [ftsRows, trigramRows, codesRows, nameAbbrevRows] = await Promise.all([ftsPromise, trigramPromise, codesPromise, nameAbbrevPromise])
+
+    // Autocomplete retry: the local pass only sees the viewport, so a place the
+    // user is deliberately reaching for in another city would come back empty.
+    // When it finds too little, re-run FTS (and trigram, restoring typo
+    // tolerance) on the global path. Gated on query length — a 2-3 character
+    // prefix matches enormous row counts globally, and is never a deliberate
+    // search for somewhere far away.
+    if (
+      localAutocomplete &&
+      !addressLike &&
+      sanitizedQuery.length >= AUTOCOMPLETE_FALLBACK_MIN_QUERY &&
+      (ftsRows as any[]).length + (codesRows as any[]).length + (nameAbbrevRows as any[]).length < AUTOCOMPLETE_FALLBACK_MIN
+    ) {
+      const [globalFts, globalTrigram] = await Promise.all([
+        ftsQuery(false),
+        sanitizedQuery.length > 4 ? trigramQuery() : Promise.resolve([] as any[]),
+      ])
+      // Append rather than replace: the global pass is a superset in principle,
+      // but it ranks by text_rank and so can drop a nearby hit the local pass
+      // found. The dedup in the merge below collapses the overlap.
+      ftsRows = [...(ftsRows as any[]), ...(globalFts as any[])]
+      trigramRows = globalTrigram
+    }
 
     // Merge, deduplicating in priority order: codes > abbreviation > FTS > trigram
     // Tag codes results so they're exempt from proximity re-ranking — an exact
@@ -306,7 +446,10 @@ export async function searchPlaces({
         results.push(r)
       }
     }
-    results = results.slice(0, limit)
+    // The autocomplete pool is deliberately wider than `limit` — it is trimmed
+    // after the proximity re-rank below, not before, so the re-rank gets to see
+    // the whole candidate set. Every other mode is capped here as before.
+    results = results.slice(0, localAutocomplete ? AUTOCOMPLETE_POOL : limit)
 
     // Layer 4: Semantic search
     if (!autocomplete && (semantic || results.length < Math.min(5, limit))) {
@@ -347,6 +490,24 @@ export async function searchPlaces({
     }
   } else {
     // ── Browse mode: spatial + category/tag filter, no text query ──────────
+    // Order nearest-first via the GiST KNN operator (centroid <-> point) rather
+    // than `ORDER BY distance_m` (ST_Distance::geography). The latter computes an
+    // exact geodesic distance for EVERY row inside the radius before sorting —
+    // fine for a tight viewport, but catastrophic once the radius is widened over
+    // a dense category (e.g. ~18s for cafes within 10km of midtown). The KNN
+    // operator is index-driven: it walks the centroid index nearest-first and
+    // stops at `limit`, so cost scales with the result size, not the radius.
+    // `<->` is planar-degree distance (geography KNN can't use the index); the
+    // ordering is indistinguishable from geodesic at POI scale, and matches the
+    // proximity ranking the text-search layers already use. `distance_m` is still
+    // selected (exact geodesic metres) for display/consumers.
+    const browseOrder = isWiden
+      // Widen: sort the category-index rows by a cheap planar distance (a scalar,
+      // so it does NOT force the centroid KNN index — the category GIN drives).
+      ? sql`ORDER BY ST_Distance(centroid, ${locationPoint}) ASC`
+      : hasPointLocation
+        ? sql`ORDER BY centroid <-> ${locationPoint} ASC`
+        : sql`ORDER BY distance_m ASC NULLS LAST`
     results = Array.from(await db.execute(sql`
       SELECT
         id, osm_type, osm_id, name, name_abbrev, categories, tags,
@@ -359,7 +520,7 @@ export async function searchPlaces({
       ${spatialFilter}
       ${categoryFilter}
       ${tagsFilter}
-      ORDER BY distance_m ASC NULLS LAST
+      ${browseOrder}
       LIMIT ${limit}
       OFFSET ${offset}
     `) as any[])
@@ -392,6 +553,10 @@ export async function searchPlaces({
     // Browse mode with point: already sorted by distance_m ASC from the query
   }
 
+  // Trim the autocomplete candidate pool now that the re-rank has scored it.
+  // A no-op for every other mode, which was already capped at `limit`.
+  if (results.length > limit) results = results.slice(0, limit)
+
   // ── Fold in address results from Pelias ─────────────────────────────────
   // POIs come from PostGIS above; Pelias supplies street addresses. For an
   // address-intent query ("350 5th ave" — starts with a number) addresses lead;
@@ -403,7 +568,6 @@ export async function searchPlaces({
     // barrelman's rows, so a place already returned from PostGIS isn't repeated.
     const seenIds = new Set(results.map((r: any) => r.id))
     const fresh = addressResults.filter((a) => !seenIds.has(a.id))
-    const addressLike = /^\s*\d/.test(sanitizedQuery)
     results = addressLike ? [...fresh, ...results] : [...results, ...fresh]
     results = results.slice(0, limit)
   }

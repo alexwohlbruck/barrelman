@@ -1,11 +1,54 @@
 import postgres from 'postgres'
 import { drizzle } from 'drizzle-orm/postgres-js'
-import { sql } from 'drizzle-orm'
 
 export const dbUrl = process.env.DATABASE_URL || 'postgresql://barrelman:barrelman@localhost:5434/barrelman'
 
-export const connection = postgres(dbUrl)
+/**
+ * Statement timeout for the API query pool.
+ *
+ * Autocomplete fires one request per keystroke and nothing cancels the
+ * abandoned ones. postgres-js does support cancellation, but the search layers
+ * issue their queries through drizzle's db.execute(), which doesn't hand back
+ * the query object you'd need to call .cancel() on — so a keystroke the user
+ * has already typed past keeps its connection until the query finishes. With a
+ * pool of 10, typing one 8-character word measured 34s of wall time before the
+ * fast path landed. This timeout is the blunt backstop: any query slower than
+ * it is already too slow to render, so cut it loose rather than let it starve
+ * the pool. Wiring real per-query cancellation (bypassing db.execute for the
+ * search layers, and honouring the request's AbortSignal) would free the
+ * connection immediately and is the better long-term fix.
+ *
+ * Set BARRELMAN_STATEMENT_TIMEOUT_MS=0 to disable.
+ */
+const STATEMENT_TIMEOUT_MS = Number(process.env.BARRELMAN_STATEMENT_TIMEOUT_MS ?? 10_000)
+
+export const connection = postgres(dbUrl, {
+  connection: { statement_timeout: STATEMENT_TIMEOUT_MS },
+})
 export const db = drizzle(connection)
+
+/**
+ * A short-lived connection with no statement timeout, for schema DDL and
+ * maintenance.
+ *
+ * These legitimately run for minutes — the GiST trigram index below takes
+ * several on a fresh 21M-row import, and the enrichment backfill in
+ * lib/search-enrichment.ts longer still — so they must not inherit the API
+ * pool's timeout. Callers own the lifecycle and should `end()` when done.
+ */
+export function maintenanceConnection(max = 1) {
+  return postgres(dbUrl, { max, connection: { statement_timeout: 0 } })
+}
+
+/** Run startup DDL on an untimed connection, then release it. */
+async function runDdl(statements: string): Promise<void> {
+  const client = maintenanceConnection()
+  try {
+    await client.unsafe(statements)
+  } finally {
+    await client.end({ timeout: 5 })
+  }
+}
 
 /**
  * Ensure post-import columns exist on the geo_places table.
@@ -20,7 +63,7 @@ export const db = drizzle(connection)
  * the API can start cleanly even before the full post-import pipeline runs.
  */
 export async function ensureSchema() {
-  await db.execute(sql.raw(`
+  await runDdl(`
     ALTER TABLE geo_places
       ADD COLUMN IF NOT EXISTS name_abbrev TEXT,
       ADD COLUMN IF NOT EXISTS codes TEXT[],
@@ -47,9 +90,81 @@ export async function ensureSchema() {
     -- so without this GiST index every fuzzy query degrades to a parallel
     -- sequential scan over the full table (~45s on 21M rows) — which silently
     -- blows past the API search timeout and returns no place results.
-    CREATE INDEX IF NOT EXISTS geo_places_name_gist_trgm_idx
-      ON geo_places USING gist (name gist_trgm_ops) WHERE name IS NOT NULL;
-  `))
+    --
+    -- siglen=128: the default 12-byte signatures are too lossy at ~2M named
+    -- rows — the KNN scan visits far too many pages and recomputes distances
+    -- (measured 335ms-1.3s per query). 128-byte signatures cut that to
+    -- tens of ms at the cost of a larger index. (Replaces the old
+    -- default-siglen geo_places_name_gist_trgm_idx.)
+    CREATE INDEX IF NOT EXISTS geo_places_name_gist_trgm_sig128_idx
+      ON geo_places USING gist (name gist_trgm_ops(siglen=128)) WHERE name IS NOT NULL;
+  `)
+
+  await ensureBrandCatalogSchema()
+}
+
+/**
+ * Create the brand catalog materialized view (geo_brands) and its indexes.
+ *
+ * One row per distinct brand — keyed by the brand:wikidata QID when present,
+ * otherwise the normalized `brand` name ("name:<lower>"). It powers brand
+ * autocomplete ("McDonald's" → a brand suggestion) and the "see all locations
+ * of this brand" browse.
+ *
+ * Created empty here (WITH NO DATA) so startup stays cheap; population and
+ * subsequent refreshes happen in the background via ensureSearchEnrichment().
+ * The unique index on brand_key is required for REFRESH ... CONCURRENTLY.
+ */
+export async function ensureBrandCatalogSchema() {
+  await runDdl(`
+    CREATE MATERIALIZED VIEW IF NOT EXISTS geo_brands AS
+    WITH branded AS (
+      SELECT
+        COALESCE(
+          NULLIF(tags->>'brand:wikidata', ''),
+          'name:' || lower(regexp_replace(trim(tags->>'brand'), '\\s+', ' ', 'g'))
+        )                                        AS brand_key,
+        NULLIF(tags->>'brand:wikidata', '')      AS wikidata,
+        tags->>'brand'                           AS brand_name,
+        categories[1]                            AS category,
+        centroid
+      FROM geo_places
+      WHERE tags ? 'brand' AND name IS NOT NULL
+    )
+    SELECT
+      brand_key,
+      mode() WITHIN GROUP (ORDER BY brand_name)  AS name,
+      max(wikidata)                              AS wikidata,
+      count(*)::int                              AS location_count,
+      mode() WITHIN GROUP (ORDER BY category)    AS category,
+      ST_Y(ST_Centroid(ST_Collect(centroid)))    AS rep_lat,
+      ST_X(ST_Centroid(ST_Collect(centroid)))    AS rep_lng
+    FROM branded
+    GROUP BY brand_key
+    HAVING count(*) >= 2
+    WITH NO DATA;
+
+    -- Unique key REQUIRED for REFRESH MATERIALIZED VIEW CONCURRENTLY.
+    CREATE UNIQUE INDEX IF NOT EXISTS geo_brands_key_idx
+      ON geo_brands (brand_key);
+    -- Trigram index over the display name for prefix + fuzzy autocomplete.
+    CREATE INDEX IF NOT EXISTS geo_brands_name_trgm_idx
+      ON geo_brands USING gin (name gin_trgm_ops);
+    -- Popular-first ordering / tie-break.
+    CREATE INDEX IF NOT EXISTS geo_brands_count_idx
+      ON geo_brands (location_count DESC);
+
+    -- Brand logos + descriptions resolved from Wikidata (P154 + descriptions),
+    -- keyed by the brand:wikidata QID. A plain TABLE (not part of the matview)
+    -- so it persists across REFRESH MATERIALIZED VIEW; populated in the
+    -- background by lib/brand-logos.ts and LEFT JOINed by the /brands queries.
+    CREATE TABLE IF NOT EXISTS brand_logos (
+      wikidata TEXT PRIMARY KEY,
+      logo_url TEXT,
+      description TEXT,
+      fetched_at TIMESTAMPTZ DEFAULT NOW()
+    );
+  `)
 }
 
 /**
@@ -59,7 +174,7 @@ export async function ensureSchema() {
  * endpoints. Idempotent — safe to call on every startup.
  */
 export async function ensureGtfsSchema() {
-  await db.execute(sql.raw(`
+  await runDdl(`
     CREATE TABLE IF NOT EXISTS gtfs_feeds (
       id SERIAL PRIMARY KEY,
       feed_id TEXT NOT NULL UNIQUE,
@@ -95,6 +210,13 @@ export async function ensureGtfsSchema() {
       ON gtfs_stops (feed_id, stop_id);
     CREATE INDEX IF NOT EXISTS gtfs_stops_geom_idx
       ON gtfs_stops USING GIST (geom);
+    -- The walking-transfer join uses ST_DWithin(geom::geography, …); without a
+    -- GiST index on the geography cast the planner falls back to a full
+    -- cartesian nested loop (77k² pairs → hangs for tens of minutes). This
+    -- functional index makes that join an index nested loop (~seconds).
+    CREATE INDEX IF NOT EXISTS gtfs_stops_geog_idx
+      ON gtfs_stops USING GIST ((geom::geography))
+      WHERE (location_type = 0 OR location_type IS NULL);
     CREATE INDEX IF NOT EXISTS gtfs_stops_feed_id_idx
       ON gtfs_stops (feed_id);
     CREATE INDEX IF NOT EXISTS gtfs_stops_parent_idx
@@ -195,14 +317,14 @@ export async function ensureGtfsSchema() {
     -- bikes_allowed: 0=unknown, 1=at least one bike-allowed trip,
     -- 2=all trips allow bikes. Derived from trips.txt bikes_allowed field.
     ALTER TABLE gtfs_routes ADD COLUMN IF NOT EXISTS bikes_allowed INTEGER DEFAULT 0;
-  `))
+  `)
 }
 
 /**
  * Create GBFS shared-mobility tables for bikeshare/scootershare.
  */
 export async function ensureGbfsSchema() {
-  await db.execute(sql.raw(`
+  await runDdl(`
     -- ── GBFS system catalog ───────────────────────────────────────────
     CREATE TABLE IF NOT EXISTS gbfs_systems (
       id SERIAL PRIMARY KEY,
@@ -251,5 +373,5 @@ export async function ensureGbfsSchema() {
       ON gbfs_stations (system_id);
     CREATE INDEX IF NOT EXISTS gbfs_stations_lat_lon_idx
       ON gbfs_stations (lat, lon);
-  `))
+  `)
 }

@@ -7,8 +7,8 @@ export function createSearchRoutes(deps = { searchPlaces: _searchPlaces }) {
     .use(authMiddleware)
     .post(
       '/search',
-      async ({ body }) => {
-        return deps.searchPlaces(body)
+      async ({ body, request }) => {
+        return deps.searchPlaces(body, request.signal)
       },
       {
         body: t.Object({

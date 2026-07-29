@@ -161,6 +161,73 @@ Swagger UI: `http://localhost:5001/swagger`
 
 ---
 
+## Admin Console
+
+An internal operator UI for running every data task, watching live job logs, and
+monitoring service/data health. It lives in `web/` (Vue 3 + Reka UI + Tailwind)
+and is served by the API at `/console`.
+
+### What it does
+
+- **Scripts** — run any of the ~28 catalogued tasks (OSM/GTFS/GBFS imports,
+  search enrichment, migrations, routing-graph rebuilds, config generation) from
+  a form UI, with parameter inputs, a live command preview, and a confirmation
+  gate for destructive operations.
+- **Jobs** — every run is a tracked job with streamed stdout/stderr (SSE), status,
+  exit code, duration, and cancellation for process jobs.
+- **Dashboard / Data** — downstream service health (Postgres, MOTIS, GraphHopper,
+  Martin) and data metrics (table sizes, coverage, freshness).
+- **API Tester** — send requests to the running API with server-side key injection.
+
+### Auth
+
+The console and all `/admin/*` script/job routes are gated by `BARRELMAN_ADMIN_KEY`
+(falls back to `BARRELMAN_API_KEY` when unset; open in dev when neither is set).
+Set a strong, separate secret in production — these routes can trigger full
+re-imports and `DROP`/`TRUNCATE`.
+
+```dotenv
+BARRELMAN_ADMIN_KEY=brm_admin_use_a_strong_key
+```
+
+### Execution model
+
+Jobs run as child processes of the **API process** (or in-process for SQL/migration
+tasks). Host-oriented scripts (`run-import.sh`, `update-osm.sh`, graph rebuilds that
+`docker exec` into sibling containers) therefore expect the API to run on the host
+(`bun run dev`) where the repo layout and `docker` CLI are available. DB/migration
+tasks work anywhere the API can reach Postgres.
+
+### Development
+
+The console dev server (Vite + hot-reload) starts automatically with the dev
+stack — no separate command:
+
+```bash
+./start.sh dev        # brings up the API + the console at http://localhost:5199/console
+```
+
+It runs as the `barrelman-console` service in `docker-compose.dev.yml` and proxies
+`/admin` to the API over the compose network. It's dev-only.
+
+To run it standalone on the host instead (e.g. without Docker):
+
+```bash
+cd web && bun install && bun run dev     # http://localhost:5199/console (proxies /admin → :5001)
+```
+
+For a production-style check, build it and let the API serve it directly:
+
+```bash
+cd web && bun run build     # emits web/dist
+# then open http://localhost:5001/console
+```
+
+The production Docker image builds the console automatically (multi-stage) and
+serves it at `/console` — no dev server in prod.
+
+---
+
 ## Data Import
 
 The import pipeline transforms an OSM PBF extract into a fully indexed PostGIS database.
@@ -332,6 +399,28 @@ Features come back smallest contour first (`bucket: 0`), so renderers should dra
 | `BARRELMAN_API_KEY` | `brm_dev_changeme` | Shared Bearer token for API auth. **Change before deploying.** |
 | `OLLAMA_HOST` | `http://localhost:11434` | Ollama endpoint for generating search embeddings |
 | `ISOCHRONE_CONCURRENCY` | `8` | Parallel GraphHopper isochrone requests. Raise it only when GraphHopper isn't also serving interactive routing |
+| `BARRELMAN_STATEMENT_TIMEOUT_MS` | `10000` | Statement timeout on the API query pool. Schema DDL and the enrichment backfill are exempt. `0` disables |
+| `BARRELMAN_DB_SHARED_BUFFERS` | `2GB` | Postgres `shared_buffers`. Dev-sized — see below |
+| `BARRELMAN_DB_CACHE_SIZE` | `4GB` | Postgres `effective_cache_size` |
+| `BARRELMAN_DB_WORK_MEM` | `64MB` | Postgres `work_mem`. Below ~64MB, bitmap scans over `geo_places` go lossy |
+| `BARRELMAN_DB_MAINTENANCE_WORK_MEM` | `1GB` | Postgres `maintenance_work_mem` (index builds, `VACUUM`) |
+| `BARRELMAN_DB_RANDOM_PAGE_COST` | `1.1` | SSD/NVMe value. Raise toward `4` on spinning disks |
+| `BARRELMAN_DB_MEM_LIMIT` | `4g` | Container memory cap for `barrelman-db` |
+
+### Database sizing
+
+The compose defaults are deliberately modest so a dev machine can run Postgres
+alongside MOTIS, Elasticsearch and GraphHopper. **Production should size these
+up** — search latency is dominated by whether the working set stays resident.
+On a 32GB database host:
+
+```
+BARRELMAN_DB_SHARED_BUFFERS=8GB
+BARRELMAN_DB_CACHE_SIZE=24GB
+BARRELMAN_DB_WORK_MEM=128MB
+BARRELMAN_DB_MAINTENANCE_WORK_MEM=2GB
+BARRELMAN_DB_MEM_LIMIT=28g
+```
 
 ---
 
@@ -385,3 +474,13 @@ New Barrelman releases are published to Docker Hub on every push to `main` via G
 | Embeddings | [Ollama](https://ollama.com) (`nomic-embed-text`) |
 | Tile server | [Martin](https://martin.maplibre.org) |
 | Routing | [GraphHopper](https://graphhopper.com) |
+
+---
+
+## License
+
+Barrelman is source-available under the **Apache License 2.0 with the Commons Clause** — see [LICENSE](LICENSE).
+
+In short: **free to self-host and use, including inside your business — but you may not sell it.** You can run it for yourself or your company's internal use (for example, an on-prem GIS API for your own business), fork it, and contribute back. You may not resell it, or host it as a paid service, where the value comes substantially from Barrelman. See [LICENSING.md](LICENSING.md) for a plain-language explanation with examples.
+
+Commercial and enterprise licensing — including a managed, enterprise-grade GIS REST API, dedicated support, and SLAs — is available. Reach out to Alex Wohlbruck to discuss.

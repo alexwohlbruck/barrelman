@@ -1,5 +1,5 @@
 import Elysia from 'elysia'
-import { authMiddleware } from '../middleware/auth'
+import { authHandler } from '../middleware/auth'
 import {
   runPostImport as _runPostImport,
   runResolveParentContext as _runResolveParentContext,
@@ -21,8 +21,12 @@ export function createAdminRoutes(deps = {
   runFullMigration: _runFullMigration,
   getMigrationStatus: _getMigrationStatus,
 }) {
+  // Guard attached directly (not via `.use(plugin)`): Elysia scopes a plugin's
+  // lifecycle hooks to that plugin instance, so `.use(authMiddleware)` does NOT
+  // protect the sibling routes declared below — they'd be publicly reachable.
+  // `.onBeforeHandle(authHandler)` gates every route on this instance.
   return new Elysia({ prefix: '/admin' })
-    .use(authMiddleware)
+    .onBeforeHandle(authHandler)
     .get('/migration/status', () => deps.getMigrationStatus(), {
       detail: {
         summary: 'Migration status',

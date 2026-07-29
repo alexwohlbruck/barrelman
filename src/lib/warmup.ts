@@ -130,11 +130,16 @@ export function startTransitWarmup(): void {
   if (Date.now() - lastPass > 30_000) {
     g[WARMUP_LAST_PASS_KEY] = Date.now()
     const t0 = Date.now()
-    void warmOnce().then((n) => {
-      console.log(
-        `MOTIS warmup: first pass warmed ${n} feed(s) in ${Date.now() - t0}ms`,
-      )
-    })
+    // Warm-up is best-effort: a warmOnce() rejection (e.g. MOTIS returns 404 for
+    // a stale sample stop) must never surface as an unhandled rejection. Always
+    // .catch, even with the process-level guard in index.ts.
+    void warmOnce()
+      .then((n) => {
+        console.log(
+          `MOTIS warmup: first pass warmed ${n} feed(s) in ${Date.now() - t0}ms`,
+        )
+      })
+      .catch((e) => console.warn('MOTIS warmup (first pass) failed:', e?.message ?? e))
     // Pricing changes a few times a year (12h cache TTL), so warm it once.
     void warmAllPricing().catch(() => {})
   }
@@ -144,7 +149,7 @@ export function startTransitWarmup(): void {
     // only here to fill genuine idle gaps, not to compete with real requests.
     if (transitIdleMs() < WARMUP_INTERVAL_MS) return
     g[WARMUP_LAST_PASS_KEY] = Date.now()
-    void warmOnce()
+    void warmOnce().catch((e) => console.warn('MOTIS warmup failed:', e?.message ?? e))
   }, WARMUP_INTERVAL_MS)
   timer.unref?.()
   g[WARMUP_TIMER_KEY] = timer
