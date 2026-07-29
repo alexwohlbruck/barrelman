@@ -7,12 +7,16 @@ export const dbUrl = process.env.DATABASE_URL || 'postgresql://barrelman:barrelm
  * Statement timeout for the API query pool.
  *
  * Autocomplete fires one request per keystroke and nothing cancels the
- * abandoned ones: postgres-js has no query cancellation, and the pool defaults
- * to 10 connections. A single slow prefix query therefore kept a connection
- * busy long after the user had typed past it — typing one 8-character word
- * measured 34s of wall time before the fast path landed. Any query slower than
- * this is already too slow to render, so cut it loose rather than let it
- * starve the pool.
+ * abandoned ones. postgres-js does support cancellation, but the search layers
+ * issue their queries through drizzle's db.execute(), which doesn't hand back
+ * the query object you'd need to call .cancel() on — so a keystroke the user
+ * has already typed past keeps its connection until the query finishes. With a
+ * pool of 10, typing one 8-character word measured 34s of wall time before the
+ * fast path landed. This timeout is the blunt backstop: any query slower than
+ * it is already too slow to render, so cut it loose rather than let it starve
+ * the pool. Wiring real per-query cancellation (bypassing db.execute for the
+ * search layers, and honouring the request's AbortSignal) would free the
+ * connection immediately and is the better long-term fix.
  *
  * Set BARRELMAN_STATEMENT_TIMEOUT_MS=0 to disable.
  */
