@@ -20,6 +20,15 @@ import { startTransitWarmup } from './lib/warmup'
 
 const port = Number(process.env.PORT) || 5001
 
+// Last-resort guard: Bun (without --hot) exits the process on an unhandled
+// promise rejection, so one stray rejection from a background task (warmup
+// loop, fire-and-forget pricing, RT polling) would take the whole API down
+// with it. Route handlers catch their own errors — anything landing here is a
+// bug to fix, but it should cost a log line, not an outage.
+process.on('unhandledRejection', (err) => {
+  console.error('[unhandledRejection]', err)
+})
+
 // Ensure post-import columns exist before accepting requests
 await ensureSchema()
 await ensureGtfsSchema()
