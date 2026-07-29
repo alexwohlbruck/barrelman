@@ -1,5 +1,5 @@
 import postgres from 'postgres'
-import { dbUrl } from '../db'
+import { maintenanceConnection } from '../db'
 
 /**
  * Self-healing search enrichment.
@@ -277,8 +277,10 @@ async function fillTsvectors(sql: Sql, force = false): Promise<void> {
  */
 export async function ensureSearchEnrichment(): Promise<void> {
   // Dedicated single connection: the advisory lock is session-scoped (needs
-  // connection affinity) and this keeps the heavy UPDATEs off the main pool.
-  const sql = postgres(dbUrl, { max: 1 })
+  // connection affinity), this keeps the heavy UPDATEs off the main pool, and
+  // maintenanceConnection() exempts them from the API pool's statement timeout —
+  // the tsvector rebuild and VACUUM run for minutes on a full planet import.
+  const sql = maintenanceConnection()
   try {
     const estimate = await rowEstimate(sql)
     if (estimate === 0) return // table empty / not imported yet

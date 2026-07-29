@@ -1,11 +1,54 @@
 import postgres from 'postgres'
 import { drizzle } from 'drizzle-orm/postgres-js'
-import { sql } from 'drizzle-orm'
 
 export const dbUrl = process.env.DATABASE_URL || 'postgresql://barrelman:barrelman@localhost:5434/barrelman'
 
-export const connection = postgres(dbUrl)
+/**
+ * Statement timeout for the API query pool.
+ *
+ * Autocomplete fires one request per keystroke and nothing cancels the
+ * abandoned ones. postgres-js does support cancellation, but the search layers
+ * issue their queries through drizzle's db.execute(), which doesn't hand back
+ * the query object you'd need to call .cancel() on — so a keystroke the user
+ * has already typed past keeps its connection until the query finishes. With a
+ * pool of 10, typing one 8-character word measured 34s of wall time before the
+ * fast path landed. This timeout is the blunt backstop: any query slower than
+ * it is already too slow to render, so cut it loose rather than let it starve
+ * the pool. Wiring real per-query cancellation (bypassing db.execute for the
+ * search layers, and honouring the request's AbortSignal) would free the
+ * connection immediately and is the better long-term fix.
+ *
+ * Set BARRELMAN_STATEMENT_TIMEOUT_MS=0 to disable.
+ */
+const STATEMENT_TIMEOUT_MS = Number(process.env.BARRELMAN_STATEMENT_TIMEOUT_MS ?? 10_000)
+
+export const connection = postgres(dbUrl, {
+  connection: { statement_timeout: STATEMENT_TIMEOUT_MS },
+})
 export const db = drizzle(connection)
+
+/**
+ * A short-lived connection with no statement timeout, for schema DDL and
+ * maintenance.
+ *
+ * These legitimately run for minutes — the GiST trigram index below takes
+ * several on a fresh 21M-row import, and the enrichment backfill in
+ * lib/search-enrichment.ts longer still — so they must not inherit the API
+ * pool's timeout. Callers own the lifecycle and should `end()` when done.
+ */
+export function maintenanceConnection(max = 1) {
+  return postgres(dbUrl, { max, connection: { statement_timeout: 0 } })
+}
+
+/** Run startup DDL on an untimed connection, then release it. */
+async function runDdl(statements: string): Promise<void> {
+  const client = maintenanceConnection()
+  try {
+    await client.unsafe(statements)
+  } finally {
+    await client.end({ timeout: 5 })
+  }
+}
 
 /**
  * Ensure post-import columns exist on the geo_places table.
@@ -20,7 +63,7 @@ export const db = drizzle(connection)
  * the API can start cleanly even before the full post-import pipeline runs.
  */
 export async function ensureSchema() {
-  await db.execute(sql.raw(`
+  await runDdl(`
     ALTER TABLE geo_places
       ADD COLUMN IF NOT EXISTS name_abbrev TEXT,
       ADD COLUMN IF NOT EXISTS codes TEXT[],
@@ -55,7 +98,7 @@ export async function ensureSchema() {
     -- default-siglen geo_places_name_gist_trgm_idx.)
     CREATE INDEX IF NOT EXISTS geo_places_name_gist_trgm_sig128_idx
       ON geo_places USING gist (name gist_trgm_ops(siglen=128)) WHERE name IS NOT NULL;
-  `))
+  `)
 
   await ensureBrandCatalogSchema()
 }
@@ -73,7 +116,7 @@ export async function ensureSchema() {
  * The unique index on brand_key is required for REFRESH ... CONCURRENTLY.
  */
 export async function ensureBrandCatalogSchema() {
-  await db.execute(sql.raw(`
+  await runDdl(`
     CREATE MATERIALIZED VIEW IF NOT EXISTS geo_brands AS
     WITH branded AS (
       SELECT
@@ -121,7 +164,7 @@ export async function ensureBrandCatalogSchema() {
       description TEXT,
       fetched_at TIMESTAMPTZ DEFAULT NOW()
     );
-  `))
+  `)
 }
 
 /**
@@ -131,7 +174,7 @@ export async function ensureBrandCatalogSchema() {
  * endpoints. Idempotent — safe to call on every startup.
  */
 export async function ensureGtfsSchema() {
-  await db.execute(sql.raw(`
+  await runDdl(`
     CREATE TABLE IF NOT EXISTS gtfs_feeds (
       id SERIAL PRIMARY KEY,
       feed_id TEXT NOT NULL UNIQUE,
@@ -274,14 +317,14 @@ export async function ensureGtfsSchema() {
     -- bikes_allowed: 0=unknown, 1=at least one bike-allowed trip,
     -- 2=all trips allow bikes. Derived from trips.txt bikes_allowed field.
     ALTER TABLE gtfs_routes ADD COLUMN IF NOT EXISTS bikes_allowed INTEGER DEFAULT 0;
-  `))
+  `)
 }
 
 /**
  * Create GBFS shared-mobility tables for bikeshare/scootershare.
  */
 export async function ensureGbfsSchema() {
-  await db.execute(sql.raw(`
+  await runDdl(`
     -- ── GBFS system catalog ───────────────────────────────────────────
     CREATE TABLE IF NOT EXISTS gbfs_systems (
       id SERIAL PRIMARY KEY,
@@ -330,5 +373,5 @@ export async function ensureGbfsSchema() {
       ON gbfs_stations (system_id);
     CREATE INDEX IF NOT EXISTS gbfs_stations_lat_lon_idx
       ON gbfs_stations (lat, lon);
-  `))
+  `)
 }

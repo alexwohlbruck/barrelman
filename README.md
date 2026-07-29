@@ -354,6 +354,28 @@ Fetch full details for a single OSM element. `osmType` is `node`, `way`, or `rel
 | `PORT` | `3001` | HTTP port the API listens on |
 | `BARRELMAN_API_KEY` | `brm_dev_changeme` | Shared Bearer token for API auth. **Change before deploying.** |
 | `OLLAMA_HOST` | `http://localhost:11434` | Ollama endpoint for generating search embeddings |
+| `BARRELMAN_STATEMENT_TIMEOUT_MS` | `10000` | Statement timeout on the API query pool. Schema DDL and the enrichment backfill are exempt. `0` disables |
+| `BARRELMAN_DB_SHARED_BUFFERS` | `2GB` | Postgres `shared_buffers`. Dev-sized — see below |
+| `BARRELMAN_DB_CACHE_SIZE` | `4GB` | Postgres `effective_cache_size` |
+| `BARRELMAN_DB_WORK_MEM` | `64MB` | Postgres `work_mem`. Below ~64MB, bitmap scans over `geo_places` go lossy |
+| `BARRELMAN_DB_MAINTENANCE_WORK_MEM` | `1GB` | Postgres `maintenance_work_mem` (index builds, `VACUUM`) |
+| `BARRELMAN_DB_RANDOM_PAGE_COST` | `1.1` | SSD/NVMe value. Raise toward `4` on spinning disks |
+| `BARRELMAN_DB_MEM_LIMIT` | `4g` | Container memory cap for `barrelman-db` |
+
+### Database sizing
+
+The compose defaults are deliberately modest so a dev machine can run Postgres
+alongside MOTIS, Elasticsearch and GraphHopper. **Production should size these
+up** — search latency is dominated by whether the working set stays resident.
+On a 32GB database host:
+
+```
+BARRELMAN_DB_SHARED_BUFFERS=8GB
+BARRELMAN_DB_CACHE_SIZE=24GB
+BARRELMAN_DB_WORK_MEM=128MB
+BARRELMAN_DB_MAINTENANCE_WORK_MEM=2GB
+BARRELMAN_DB_MEM_LIMIT=28g
+```
 
 ---
 
