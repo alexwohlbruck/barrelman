@@ -15,6 +15,7 @@ import { consoleUiRoutes } from './lib/console-ui'
 import { tileRoutes } from './routes/tiles'
 import { graphhopperRoutes } from './routes/graphhopper'
 import { routeRoutes } from './routes/route'
+import { isochroneRoutes } from './routes/isochrone'
 import { transitRoutes } from './routes/transit'
 import { gbfsRoutes } from './routes/gbfs'
 import { ensureSchema, ensureGtfsSchema, ensureGbfsSchema } from './db'
@@ -73,6 +74,7 @@ const app = new Elysia()
   .use(tileRoutes)
   .use(graphhopperRoutes)
   .use(routeRoutes)
+  .use(isochroneRoutes)
   .use(transitRoutes)
   .use(gbfsRoutes)
   .listen(port)

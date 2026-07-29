@@ -62,6 +62,7 @@ const swaggerConfig = {
       { name: 'Brands', description: 'Brand catalog — chains, logos, and their locations.' },
       { name: 'Tiles', description: 'Mapbox Vector Tiles served via the Martin tile server.' },
       { name: 'Routing', description: 'Point-to-point route planning across travel profiles.' },
+      { name: 'Isochrone', description: 'Reachability polygons — how far you get in N minutes, per travel mode.' },
       { name: 'GraphHopper', description: 'GraphHopper routing engine passthrough and status.' },
       { name: 'Transit', description: 'GTFS schedules and GTFS-RT live vehicles, trips, and departures. Auth required.' },
       { name: 'GBFS', description: 'Shared-mobility (bike/scooter) systems and stations via GBFS.' },
