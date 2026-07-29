@@ -8,6 +8,39 @@ services:
     container_name: barrelman-db
     image: alexwohlbruck/barrelman-db:latest
     restart: unless-stopped
+    # The stock postgres image ships shared_buffers=128MB — for a 23GB table
+    # that means almost every search projection is a cold read, and it was the
+    # difference between a 6.6s and a 0.2s FTS layer on an uncached query.
+    #
+    # Defaults here are deliberately small: on a dev box this database shares an
+    # ~12GB Docker VM with MOTIS (~1.3GB), Elasticsearch (~1.7GB) and a
+    # GraphHopper JVM that needs several GB of *native* memory to map a 2.5GB
+    # routing graph. Overcommitting shared_buffers here starves GraphHopper's
+    # JVM at startup, which fails as an OutOfMemoryError from its thread
+    # allocator rather than anything that looks like a Postgres problem.
+    #
+    # Production wants roughly 25% of host RAM in shared_buffers and 50-75% in
+    # effective_cache_size — set them in .env:
+    #
+    #   BARRELMAN_DB_SHARED_BUFFERS=8GB
+    #   BARRELMAN_DB_CACHE_SIZE=24GB
+    #   BARRELMAN_DB_WORK_MEM=128MB
+    #
+    # - work_mem: bitmap scans over geo_places went lossy at 4MB (78K lossy heap
+    #   blocks forcing a recheck on 648K rows). Sized to hold the bitmap exactly.
+    # - random_page_cost: 4 assumes a spinning disk and pushes the planner off
+    #   index scans. 1.1 is the SSD/NVMe value.
+    # - jit: measured at ~280ms of compilation on search queries that execute in
+    #   single-digit milliseconds. Pure overhead for this workload.
+    command: >
+      postgres
+      -c shared_buffers=${BARRELMAN_DB_SHARED_BUFFERS:-1GB}
+      -c effective_cache_size=${BARRELMAN_DB_CACHE_SIZE:-3GB}
+      -c work_mem=${BARRELMAN_DB_WORK_MEM:-64MB}
+      -c maintenance_work_mem=${BARRELMAN_DB_MAINTENANCE_WORK_MEM:-1GB}
+      -c random_page_cost=${BARRELMAN_DB_RANDOM_PAGE_COST:-1.1}
+      -c effective_io_concurrency=200
+      -c jit=off
     environment:
       POSTGRES_DB: barrelman
       POSTGRES_USER: barrelman
@@ -18,6 +51,11 @@ services:
       - barrelman-osm-data:/data
     ports:
       - "5434:5432"
+    # Keeps Postgres from squeezing MOTIS, Elasticsearch and GraphHopper on a
+    # dev machine. Headroom over shared_buffers for work_mem allocations and
+    # per-backend overhead. Raise or drop it in production, where the database
+    # should own the box.
+    mem_limit: ${BARRELMAN_DB_MEM_LIMIT:-2g}
 
   martin:
     container_name: barrelman-martin
@@ -73,6 +111,9 @@ services:
     restart: unless-stopped
     environment:
       DATABASE_URL: postgresql://barrelman:${BARRELMAN_DB_PASSWORD:-barrelman}@barrelman-db:5432/barrelman
+      # Caps runaway queries on the API query pool only — schema DDL and the
+      # enrichment backfill get their own untimed connections (see src/db.ts).
+      BARRELMAN_STATEMENT_TIMEOUT_MS: ${BARRELMAN_STATEMENT_TIMEOUT_MS:-10000}
       OLLAMA_HOST: ${OLLAMA_HOST:-http://ollama:11434}
       PORT: 5001
       BARRELMAN_API_KEY: ${BARRELMAN_API_KEY:-brm_dev_changeme}

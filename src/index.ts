@@ -29,8 +29,11 @@ const port = Number(process.env.PORT) || 5001
 // Safety net: a stray unhandled rejection (a fire-and-forget task that forgot to
 // .catch, a background poll hitting a transient upstream error) must not take the
 // whole server down — that would drop search/geocoding/tiles for every client.
-// Log loudly and keep serving; individual request handlers still surface their
-// own errors normally.
+// This matters more now that the query pool carries a statement timeout: a query
+// that used to be merely slow now rejects, and several of those run detached
+// from any request (warm-up passes, GBFS/pricing refreshes, the enrichment
+// backfill). Log loudly and keep serving; individual request handlers still
+// surface their own errors normally.
 process.on('unhandledRejection', (reason) => {
   console.error('[unhandledRejection]', reason)
 })
