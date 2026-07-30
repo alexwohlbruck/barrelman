@@ -30,10 +30,15 @@ Martin  │  GraphHopper
 
 | Service | Image | Port | Description |
 |---------|-------|------|-------------|
-| `barrelman` | `alexwohlbruck/barrelman` | 3001 | REST API (Elysia/Bun) |
-| `barrelman-db` | `alexwohlbruck/barrelman-db` | 5433 | PostgreSQL + PostGIS + pgvector |
-| `martin` | `ghcr.io/maplibre/martin` | 3002 | Vector tile server |
-| `graphhopper` | `israelhikingmap/graphhopper` | 8990 | Routing engine |
+| `barrelman` | `alexwohlbruck/barrelman` | 5001 | REST API (Elysia/Bun) |
+| `barrelman-db` | `alexwohlbruck/barrelman-db` | 5434 | PostgreSQL + PostGIS + pgvector |
+| `martin` | `ghcr.io/maplibre/martin` | 5002 | Vector tile server |
+| `graphhopper` | `israelhikingmap/graphhopper` | 5003 | Street routing engine (walk / bike / car) |
+| `motis` | `ghcr.io/motis-project/motis` | 5004 | Transit routing engine (schedules, one-to-all) |
+
+Ports are host-side. Services reach each other over the Compose network on
+their own container ports, so remapping a host port here changes nothing
+internal.
 
 ---
 
