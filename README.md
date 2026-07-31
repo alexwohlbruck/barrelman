@@ -338,6 +338,14 @@ Find places within a radius, sorted by distance.
 
 Reverse geocodes a coordinate — returns the city, county, and state containing the point.
 
+### GET `/geocode/reverse?lat=&lng=&limit=&radius=`
+
+Reverse geocodes a coordinate to the places at it — venues, addresses, and streets — in the same result shape as `/search`.
+
+Hits come from the geocoder (OSM + OpenAddresses) and are hydrated into their full `geo_places` rows where one exists, so a result carries real geometry, tags, and categories rather than a bare point. A hit with no address of its own borrows the street address the geocoder found at the same spot.
+
+When nothing addressable sits within `radius` (default 100 m), falls back to the smallest administrative area containing the point, so a click on open water still resolves to something.
+
 ### GET `/contains?lat=&lng=`
 
 Returns all named areas (smallest first) containing the given point.

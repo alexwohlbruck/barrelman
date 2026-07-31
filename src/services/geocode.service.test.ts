@@ -17,7 +17,7 @@ mock.module('../lib/cache', () => ({
   embeddingCache: noop,
 }))
 
-const { reverseGeocode } = await import('./geocode.service')
+const { reverseGeocode, reverseGeocodePlaces } = await import('./geocode.service')
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -25,10 +25,55 @@ function adminRow(name: string, level: number) {
   return { id: `relation/${level}`, name, admin_level: level, area_m2: 1000 * level }
 }
 
+/** Feed db.execute a scripted result per call, in call order. */
+function queueDbResults(...results: any[][]) {
+  let i = 0
+  mockExecute.mockImplementation(async () => results[i++] ?? [])
+}
+
+/** Stub the Pelias HTTP call with the given GeoJSON features. */
+function stubPelias(features: any[]) {
+  globalThis.fetch = mock(async () => ({
+    ok: true,
+    json: async () => ({ features }),
+  })) as any
+}
+
+function osmFeature(overrides: Record<string, any> = {}) {
+  return {
+    geometry: { type: 'Point', coordinates: [-80.8431, 35.2271] },
+    properties: {
+      gid: 'openstreetmap:venue:node/8415199022',
+      source: 'openstreetmap',
+      layer: 'venue',
+      name: 'Industry',
+      ...overrides,
+    },
+  }
+}
+
+function addressFeature(overrides: Record<string, any> = {}) {
+  return {
+    geometry: { type: 'Point', coordinates: [-80.8431, 35.2271] },
+    properties: {
+      gid: 'openaddresses:address:us/nc/mecklenburg:51ed4905',
+      source: 'openaddresses',
+      layer: 'address',
+      housenumber: '105',
+      street: 'South Tryon Street',
+      locality: 'Charlotte',
+      ...overrides,
+    },
+  }
+}
+
+const originalFetch = globalThis.fetch
+
 beforeEach(() => {
   mockExecute.mockReset()
   mockExecute.mockImplementation(async () => [])
   spatialCacheStore.clear()
+  globalThis.fetch = originalFetch
 })
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -130,5 +175,95 @@ describe('reverseGeocode — caching', () => {
     await reverseGeocode(0, 0)
     await reverseGeocode(0, 0)
     expect(mockExecute).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('reverseGeocodePlaces — geocoder hits', () => {
+  test('hydrates an OSM-sourced hit into its full geo_places row', async () => {
+    stubPelias([osmFeature()])
+    queueDbResults([
+      { id: 'node/8415199022', name: 'Industry', tags: { tourism: 'artwork' }, geom_type: 'point' },
+    ])
+
+    const results = await reverseGeocodePlaces(35.2271, -80.8431)
+    expect(results).toHaveLength(1)
+    expect(results[0].tags).toEqual({ tourism: 'artwork' })
+  })
+
+  test('keeps the geocoder record when no geo_places row exists', async () => {
+    stubPelias([osmFeature()])
+    queueDbResults([]) // getPlace finds nothing — Pelias index ahead of the import
+
+    const results = await reverseGeocodePlaces(35.2271, -80.8431)
+    expect(results[0].id).toBe('node/8415199022')
+    expect(results[0].name).toBe('Industry')
+  })
+
+  test('dedupes the venue and address layers of the same OSM element', async () => {
+    stubPelias([
+      osmFeature({ layer: 'venue' }),
+      osmFeature({ gid: 'openstreetmap:address:node/8415199022', layer: 'address' }),
+    ])
+    queueDbResults([{ id: 'node/8415199022', name: 'Industry' }])
+
+    const results = await reverseGeocodePlaces(35.2271, -80.8431)
+    expect(results).toHaveLength(1)
+  })
+
+  test('lends the address-layer address to a hit that has none', async () => {
+    stubPelias([osmFeature(), addressFeature()])
+    queueDbResults(
+      [{ id: 'node/8415199022', name: 'Industry', address: null }], // getPlace
+      [], // findOsmByAddress for the OpenAddresses record
+    )
+
+    const results = await reverseGeocodePlaces(35.2271, -80.8431)
+    expect(results[0].name).toBe('Industry')
+    expect(results[0].address.street).toBe('South Tryon Street')
+  })
+
+  test('does not overwrite an address the hit already has', async () => {
+    stubPelias([osmFeature(), addressFeature()])
+    queueDbResults(
+      [{ id: 'node/8415199022', name: 'Industry', address: { street: 'North Tryon Street' } }],
+      [],
+    )
+
+    const results = await reverseGeocodePlaces(35.2271, -80.8431)
+    expect(results[0].address.street).toBe('North Tryon Street')
+  })
+})
+
+describe('reverseGeocodePlaces — admin fallback', () => {
+  test('falls back to the smallest containing area when nothing is addressable', async () => {
+    stubPelias([])
+    queueDbResults(
+      [adminRow('Charlotte', 8), adminRow('North Carolina', 4)], // hierarchy
+      [{ id: 'relation/8', name: 'Charlotte', admin_level: 8 }], // getPlace
+    )
+
+    const results = await reverseGeocodePlaces(35.2, -80.95)
+    expect(results).toHaveLength(1)
+    expect(results[0].name).toBe('Charlotte')
+  })
+
+  test('returns empty when the point is outside every known boundary', async () => {
+    stubPelias([])
+    queueDbResults([])
+
+    expect(await reverseGeocodePlaces(0, 0)).toEqual([])
+  })
+
+  test('a Pelias failure degrades to the admin fallback rather than throwing', async () => {
+    globalThis.fetch = mock(async () => {
+      throw new Error('ECONNREFUSED')
+    }) as any
+    queueDbResults(
+      [adminRow('Charlotte', 8)],
+      [{ id: 'relation/8', name: 'Charlotte' }],
+    )
+
+    const results = await reverseGeocodePlaces(35.2, -80.95)
+    expect(results[0].name).toBe('Charlotte')
   })
 })
