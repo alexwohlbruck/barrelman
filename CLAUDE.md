@@ -21,7 +21,8 @@ barrelman, check whether the console needs a matching update.
 | Add an in-process SQL/migration task (`exec.kind: 'internal'`) | also add its handler in `src/services/admin-internal-handlers.ts` |
 | Add / rename a DB table or a coverage-relevant column (e.g. new `gtfs_*`/`gbfs_*` table, a new enrichment column on `geo_places`) | the queries in `src/services/admin-metrics.service.ts` (and `DataMetrics` type + `web/src/lib/types.ts` + the Dashboard/Data views if it should be shown) |
 | Add / remove a downstream service, or change its URL / health endpoint | `getServiceStatuses()` in `src/services/admin-metrics.service.ts` |
-| Add a notable public API endpoint | consider adding a preset in `web/src/views/ApiTesterView.vue` |
+| Add a notable public API endpoint | consider adding a preset in `web/src/views/ApiTesterView.vue` — but only for endpoints that need no session, since the tester replays requests server-side and carries no cookie |
+| Add a metered public endpoint | give it a group in `groupForPath()` (`src/billing/plans.ts`) and attach `apiAuth('<group>')`, or it is served free and unattributed |
 | Add a new `/admin/*` route | gate it with `.onBeforeHandle(authHandler)` / `.onBeforeHandle(adminAuthHandler)` — **not** `.use(authMiddleware)` (see below) |
 
 If a change genuinely doesn't touch scripts, tables, services, or endpoints
@@ -37,13 +38,36 @@ considered it.
 - SPA served at `/console`: `src/lib/console-ui.ts`
 - Frontend: `web/` (views in `web/src/views/`, shared types in `web/src/lib/types.ts` — keep in sync with the backend shapes)
 
+### Public API accounts (`/auth`, `/account`, `/billing`)
+Barrelman is a public, metered API as well as an internal service. Developers
+sign in to the console (email code / passkey / OAuth), mint their own
+`brm_live_*` keys, and are billed in credits.
+
+- Sign-in + sessions (Lucia): `src/services/auth.service.ts`, `src/lib/lucia.ts`
+- Passkeys + OAuth: `src/services/passkey.service.ts`, `src/services/oauth.service.ts`
+- API keys: `src/services/api-keys.service.ts`
+- Pricing, plans, scopes and path→group mapping: `src/billing/plans.ts`
+- Metering (buffered, flushed on a timer): `src/services/usage.service.ts`
+- Balances and quota decisions: `src/services/credits.service.ts`
+- Polar + overage reporting: `src/services/billing.service.ts`, `src/services/overage.service.ts`
+
+`BARRELMAN_API_KEY` remains a shared, unmetered **service** credential — it is
+how Parchment calls barrelman — and is deliberately never billed.
+
 ### Auth footgun (important)
 Elysia scopes a plugin's lifecycle hooks to that plugin instance, so
 `.use(authMiddleware)` does **not** protect sibling routes on the parent
 instance — it silently leaves them public. Always attach auth directly with
-`.onBeforeHandle(authHandler)` (read API) or `.onBeforeHandle(adminAuthHandler)`
-(`/admin/*`). Admin routes are gated by `BARRELMAN_ADMIN_KEY` (falls back to
-`BARRELMAN_API_KEY`).
+`.onBeforeHandle(apiAuth('<group>'))` (metered read API) or
+`.onBeforeHandle(adminAuthHandler)` (`/admin/*`).
+
+This is not hypothetical: `/brands`, `/children`, `/contains` and `/geocode`
+used `.use(authMiddleware)` and were reachable **with no key at all** while
+`BARRELMAN_API_KEY` was set — confirmed against a running server before being
+fixed. If you add a route file, check it with an unauthenticated `curl`.
+
+Admin routes accept either an admin-role session or `BARRELMAN_ADMIN_KEY`
+(falling back to `BARRELMAN_API_KEY`).
 
 ### Dev
 `./start.sh dev` brings up the API **and** the console dev server

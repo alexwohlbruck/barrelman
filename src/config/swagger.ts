@@ -7,7 +7,7 @@
  */
 
 // Keep in sync with package.json.
-const VERSION = '0.1.0'
+const VERSION = '0.4.0'
 
 const localUrl = `http://localhost:${process.env.PORT || 5001}`
 
@@ -30,9 +30,39 @@ OSM extracts are imported per region (see \`config/regions.json\`) and enriched 
 searchable \`geo_places\` catalog, alongside GTFS transit and GBFS shared-mobility feeds.
 
 ### Authentication
-Public read endpoints (search, geocoding, places, brands, tiles) are open. Transit
-(\`/transit/*\`) and admin (\`/admin/*\`) endpoints require a bearer token — send
-\`Authorization: Bearer <BARRELMAN_API_KEY>\`.
+Every data endpoint requires an API key. Create one in the
+[console](/console) and send it as \`Authorization: Bearer brm_live_...\`.
+Tile URLs also accept \`?api_key=\` (or the older \`?token=\`), since a map
+library fetches tiles itself and cannot set a header.
+
+Keys carry **scopes** limiting which endpoint groups they may call, so a key
+embedded in a web map can be restricted to tiles and search and is then
+worthless for running up a routing bill. Keys created in the \`test\`
+environment (\`brm_test_...\`) exercise the whole request path — auth, scopes,
+rate limits — without spending credits.
+
+### Billing
+Usage is metered in **credits**, because the endpoints are not equally
+expensive: a vector tile is one indexed read, an isochrone fans out to hundreds
+of routing calls.
+
+| Group | Credits | Endpoints |
+|---|---|---|
+| \`tiles\` | 1 | \`/tiles/*\` |
+| \`places\` | 2 | \`/place/*\`, \`/brands\` |
+| \`spatial\` | 2 | \`/contains\`, \`/children\` |
+| \`geocode\` | 2 | \`/geocode/*\` |
+| \`search\` | 3 | \`/search\`, \`/autocomplete\` |
+| \`routing\` | 10 | \`/route\`, \`/graphhopper/*\` |
+| \`transit\` | 25 | \`/transit/*\`, \`/gbfs/*\` |
+| \`isochrone\` | 25 | \`/isochrone\` |
+
+Each response carries \`X-Barrelman-Credits-Charged\`. The free plan includes
+50,000 credits per month and **stops** at that ceiling with a \`402\` rather
+than accruing charges; paid plans continue and bill the overage. Rate limits are
+per plan and answer \`429\` with \`Retry-After\`.
+
+See \`GET /account/plans\` for the current pricing table.
 `.trim()
 
 const swaggerConfig = {
@@ -50,7 +80,7 @@ const swaggerConfig = {
         bearerAuth: {
           type: 'http',
           scheme: 'bearer',
-          description: 'BARRELMAN_API_KEY for /transit/* and /admin/* endpoints.',
+          description: 'An account API key (brm_live_… / brm_test_…), created in the console at /console.',
         },
       },
     },
@@ -64,9 +94,12 @@ const swaggerConfig = {
       { name: 'Routing', description: 'Point-to-point route planning across travel profiles.' },
       { name: 'Isochrone', description: 'Reachability polygons — how far you get in N minutes, per travel mode.' },
       { name: 'GraphHopper', description: 'GraphHopper routing engine passthrough and status.' },
-      { name: 'Transit', description: 'GTFS schedules and GTFS-RT live vehicles, trips, and departures. Auth required.' },
+      { name: 'Transit', description: 'GTFS schedules and GTFS-RT live vehicles, trips, and departures.' },
       { name: 'GBFS', description: 'Shared-mobility (bike/scooter) systems and stations via GBFS.' },
-      { name: 'Admin', description: 'Operator console API — scripts, jobs, and metrics. Auth required.' },
+      { name: 'Auth', description: 'Sign-in: email codes, passkeys and OAuth. Used by the console, not by API clients.' },
+      { name: 'Account', description: 'API keys, usage and credit balance for the signed-in account.' },
+      { name: 'Billing', description: 'Plans, checkout and the metered-usage webhook.' },
+      { name: 'Admin', description: 'Operator console API — scripts, jobs, and metrics. Admin access required.' },
     ],
   },
 }

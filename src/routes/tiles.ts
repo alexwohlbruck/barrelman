@@ -28,11 +28,21 @@ export function tileAuthHandler(context: {
   set: { status?: number | string; headers: Record<string, string | number> }
 }) {
   const tileKey = process.env.BARRELMAN_TILE_KEY
+  const authorization = context.headers['authorization']
 
   if (tileKey) {
-    const authorization = context.headers['authorization']
     if (authorization && authorization.replace('Bearer ', '').trim() === tileKey) return
     if (context.query.token === tileKey) return
+
+    // Setting a tile key is an explicit decision that tiles are not public, so
+    // an anonymous caller is refused here rather than being handed to the
+    // metered guard — which treats "no credential and no service key
+    // configured" as open development mode, and would make configuring a tile
+    // key *loosen* access instead of tightening it.
+    if (!authorization && !context.query.token && !context.query.api_key) {
+      context.set.status = 401
+      return { error: 'Invalid or missing tile key' }
+    }
   }
 
   return meteredTileAuth(context)

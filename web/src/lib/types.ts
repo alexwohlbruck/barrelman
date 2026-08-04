@@ -106,6 +106,14 @@ export interface DataMetrics {
   }
   gbfs: { systems: number | null; stations: number | null }
   transit: { stopAreaMembers: number | null }
+  accounts: {
+    users: number | null
+    activeKeys: number | null
+    activeThisCycle: number | null
+    creditsThisCycle: number | null
+    rejectedThisCycle: number | null
+    paidAccounts: number | null
+  }
 }
 
 // ── Import regions (DB-backed region store) ───────────────────────────

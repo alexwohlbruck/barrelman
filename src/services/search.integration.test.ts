@@ -15,7 +15,15 @@ import { describe, test, expect } from 'bun:test'
 // which poisons the module cache — searchPlaces silently returns empty arrays.
 // We detect the mock by checking if db.execute has mock metadata (bun attaches
 // a .mock property to mock functions), then verify the DB is actually reachable.
-const DATABASE_URL = process.env.DATABASE_URL
+/**
+ * Integration tests opt in explicitly rather than sniffing whether the `db`
+ * module happens to be mocked. That sniff only recognised one mocking style and
+ * depended on which test file bun loaded first, so adding unrelated test files
+ * could flip these from "skipped" to "running against a mock and failing".
+ *
+ * `bun run test:integration` sets this; a plain `bun test` skips them.
+ */
+const DATABASE_URL = process.env.BARRELMAN_INTEGRATION_TESTS ? process.env.DATABASE_URL : undefined
 let searchPlaces: typeof import('./search.service').searchPlaces
 let canRun = false
 

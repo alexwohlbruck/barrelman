@@ -43,6 +43,12 @@ const presets: Preset[] = [
   { label: 'Reverse geocode', method: 'GET', path: '/geocode', query: 'lat=40.7484&lng=-73.9857', auth: 'api' },
   { label: 'Contains', method: 'GET', path: '/contains', query: 'lat=40.7484&lng=-73.9857', auth: 'api' },
   { label: 'Migration status', method: 'GET', path: '/admin/migration/status', auth: 'api' },
+  // Public-API surface. Only the unauthenticated endpoints are listed: this
+  // tester replays requests from the server, which carries no session cookie,
+  // so a preset for /account/keys or /account/credits would only ever 401.
+  { label: 'Plans & pricing', method: 'GET', path: '/account/plans', auth: 'none' },
+  { label: 'Sign-in methods', method: 'GET', path: '/auth/config', auth: 'none' },
+  { label: 'Billing config', method: 'GET', path: '/billing/config', auth: 'none' },
 ]
 
 function applyPreset(p: Preset) {

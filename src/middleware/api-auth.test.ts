@@ -125,11 +125,14 @@ describe('identifyCaller', () => {
 
   test('is open when nothing is configured to check against', async () => {
     delete process.env.BARRELMAN_API_KEY
-    // Accounts are enabled by default, so a bare instance still asks for a key
-    // rather than silently serving the world.
+    // An unset BARRELMAN_API_KEY means "no auth configured", which every guard
+    // in this codebase treats as local development. A fresh clone has to be
+    // usable with no configuration; `assertAuthConfigured()` is what warns a
+    // production instance that it is wide open.
     const result = await identifyCaller({}, get())
 
-    expect(result.error?.status).toBe(401)
+    expect(result.error).toBeUndefined()
+    expect(result.caller.kind).toBe('anonymous')
   })
 })
 

@@ -28,46 +28,57 @@ export function createGraphHopperRoutes(deps: { fetchGraphHopper?: GraphHopperFe
   return new Elysia({ prefix: '/graphhopper' })
     .onBeforeHandle(apiAuth('routing'))
     .onAfterHandle(apiAuthAfter)
-    .all('/*', async ({ request, params, set }) => {
-      const subPath = (params as Record<string, string>)['*'] || ''
-      const url = new URL(request.url)
-      const target = `${getGraphHopperUrl()}/${subPath}${url.search}`
+    .all(
+      '/*',
+      async ({ request, params, set, body }) => {
+        const subPath = (params as Record<string, string>)['*'] || ''
+        const url = new URL(request.url)
+        const target = `${getGraphHopperUrl()}/${subPath}${url.search}`
 
-      // Forward only the headers GraphHopper cares about. Do NOT forward
-      // the inbound Authorization header — API keys must not leak upstream.
-      const headers: Record<string, string> = {}
-      const ct = request.headers.get('content-type')
-      if (ct) headers['content-type'] = ct
-      const accept = request.headers.get('accept')
-      if (accept) headers['accept'] = accept
+        // Forward only the headers GraphHopper cares about. Do NOT forward
+        // the inbound Authorization header — API keys must not leak upstream.
+        const headers: Record<string, string> = {}
+        const ct = request.headers.get('content-type')
+        if (ct) headers['content-type'] = ct
+        const accept = request.headers.get('accept')
+        if (accept) headers['accept'] = accept
 
-      const init: RequestInit = { method: request.method, headers }
-      if (request.method !== 'GET' && request.method !== 'HEAD') {
-        init.body = await request.arrayBuffer()
-      }
+        const init: RequestInit = { method: request.method, headers }
+        if (request.method !== 'GET' && request.method !== 'HEAD') {
+          // From the `parse` hook below, not `request.arrayBuffer()`: Elysia
+          // consumes the request stream before the handler runs, so reading it
+          // here throws ERR_BODY_ALREADY_USED.
+          init.body = (body as ArrayBuffer | undefined) ?? undefined
+        }
 
-      let response: Response
-      try {
-        response = await fetchGraphHopper(target, init)
-      } catch (err) {
-        set.status = 502
-        return { error: 'GraphHopper upstream unreachable', detail: String(err) }
-      }
+        let response: Response
+        try {
+          response = await fetchGraphHopper(target, init)
+        } catch (err) {
+          set.status = 502
+          return { error: 'GraphHopper upstream unreachable', detail: String(err) }
+        }
 
-      set.status = response.status
-      const respCt = response.headers.get('content-type')
-      if (respCt) set.headers['content-type'] = respCt
-      set.headers['cache-control'] = 'no-store'
-      set.headers['access-control-allow-origin'] = '*'
-      return response.body
-    }, {
-      detail: {
-        summary: 'GraphHopper routing engine proxy',
-        description:
-          'Transparent proxy to the GraphHopper server. Forwards any sub-path under /graphhopper (e.g. /graphhopper/route, /graphhopper/isochrone) with method, query, body, and content-type preserved.',
-        tags: ['GraphHopper'],
+        set.status = response.status
+        const respCt = response.headers.get('content-type')
+        if (respCt) set.headers['content-type'] = respCt
+        set.headers['cache-control'] = 'no-store'
+        set.headers['access-control-allow-origin'] = '*'
+          return response.body
       },
-    })
+      {
+        // Keep the body as raw bytes rather than letting Elysia decode it to
+        // an object: this is a transparent proxy, and re-encoding JSON would
+        // change what GraphHopper receives.
+        parse: ({ request }) => request.arrayBuffer(),
+        detail: {
+          summary: 'GraphHopper routing engine proxy',
+          description:
+            'Transparent proxy to the GraphHopper server. Forwards any sub-path under /graphhopper (e.g. /graphhopper/route, /graphhopper/isochrone) with method, query, body, and content-type preserved.',
+          tags: ['GraphHopper'],
+        },
+      },
+    )
 }
 
 export const graphhopperRoutes = createGraphHopperRoutes()

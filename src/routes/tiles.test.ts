@@ -6,7 +6,8 @@
  *   - Tile proxy: successful fetch, Martin errors, network failures
  *   - Response headers: content-type, cache-control, CORS
  *   - Auth: BARRELMAN_TILE_KEY via Bearer header and ?token query param
- *   - Auth: open access when no tile key is configured
+ *   - Auth: fall-through to the metered guard, and open access when nothing
+ *     is configured at all
  */
 
 import { describe, test, expect, mock, beforeEach, afterEach } from 'bun:test'
@@ -28,11 +29,15 @@ async function json(res: Response) {
 // ── Setup / Teardown ─────────────────────────────────────────────────────────
 
 const savedTileKey = process.env.BARRELMAN_TILE_KEY
+const savedApiKey = process.env.BARRELMAN_API_KEY
 const savedMartinUrl = process.env.MARTIN_URL
 
 beforeEach(() => {
-  // Default: no auth required (dev mode)
+  // Default: no auth configured at all (dev mode). Tiles now fall through to
+  // the metered guard when no dedicated tile key is set, so the service key
+  // has to be cleared too — bun loads it from .env otherwise.
   delete process.env.BARRELMAN_TILE_KEY
+  delete process.env.BARRELMAN_API_KEY
   // Set a predictable Martin URL for assertions
   process.env.MARTIN_URL = 'http://mock-martin:3000'
 })
@@ -42,6 +47,11 @@ afterEach(() => {
     delete process.env.BARRELMAN_TILE_KEY
   } else {
     process.env.BARRELMAN_TILE_KEY = savedTileKey
+  }
+  if (savedApiKey === undefined) {
+    delete process.env.BARRELMAN_API_KEY
+  } else {
+    process.env.BARRELMAN_API_KEY = savedApiKey
   }
   if (savedMartinUrl === undefined) {
     delete process.env.MARTIN_URL

@@ -149,21 +149,24 @@ export async function identifyCaller(
   const presented = bearerToken(headers) ?? queryKey(request)
 
   if (!presented) {
-    // No credential at all. Open only when nothing is configured to check
-    // against, which is the local-development case.
-    if (!serviceKey && !accountsEnabled) return { caller: { kind: 'anonymous' } }
-    if (!serviceKey && accountsEnabled) {
-      return {
-        caller: { kind: 'anonymous' },
-        error: {
-          status: 401,
-          body: { error: 'An API key is required. Create one in the console at /console.', docs: DOCS_URL },
-        },
-      }
-    }
+    // No credential presented. `BARRELMAN_API_KEY` unset means "no auth
+    // configured", which every guard in this codebase treats as open local
+    // development — a fresh clone must be usable with no configuration at all.
+    // A public deployment sets the key; `assertAuthConfigured()` below warns
+    // loudly on any instance that enables accounts without one.
+    if (!serviceKey) return { caller: { kind: 'anonymous' } }
+
     return {
       caller: { kind: 'anonymous' },
-      error: { status: 401, body: { error: 'Missing Authorization header', docs: DOCS_URL } },
+      error: {
+        status: 401,
+        body: {
+          error: accountsEnabled
+            ? 'An API key is required. Create one in the console at /console.'
+            : 'Missing Authorization header',
+          docs: DOCS_URL,
+        },
+      },
     }
   }
 
@@ -338,3 +341,23 @@ export function callerFor(request: Request): ApiCaller | undefined {
 }
 
 export { clientIp }
+
+/**
+ * Warn when an instance looks like a public deployment but has no service key,
+ * which leaves every data endpoint open. Called once at startup.
+ *
+ * Deliberately a warning rather than a hard failure: refusing to boot would
+ * break the local-development path that this same condition enables.
+ */
+export function assertAuthConfigured(): void {
+  if (process.env.BARRELMAN_API_KEY) return
+
+  if (process.env.NODE_ENV === 'production') {
+    console.warn(
+      '[auth] BARRELMAN_API_KEY is not set — every data endpoint is OPEN and unmetered. ' +
+        'Set it before exposing this instance.',
+    )
+  } else {
+    console.log('[auth] No BARRELMAN_API_KEY set — data endpoints are open (development mode)')
+  }
+}

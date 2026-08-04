@@ -183,6 +183,9 @@ and is served by the API at `/console`.
 - **Dashboard / Data** — downstream service health (Postgres, MOTIS, GraphHopper,
   Martin) and data metrics (table sizes, coverage, freshness).
 - **API Tester** — send requests to the running API with server-side key injection.
+- **API keys / Usage / Billing** — every signed-in developer manages their own
+  keys, watches credit consumption per endpoint and per key, and handles
+  subscriptions. Operator views (Scripts, Jobs, Data, Regions) are admin-only.
 
 ### Auth
 
@@ -280,15 +283,93 @@ bun run import:embed
 
 ---
 
+## Public API — accounts, keys and credits
+
+Barrelman can be run as a public API. Developers sign in to the console, mint
+their own API keys, and are metered in credits against a monthly allowance.
+
+### Signing in
+
+The console at `/console` supports one-time email codes, passkeys, and
+Google/GitHub/GitLab. Passkeys and OAuth are additive — email codes always work,
+so removing the last passkey or unlinking every provider cannot lock an account
+out.
+
+The **first account created on a fresh instance becomes an administrator**, so a
+new deployment is never locked out of its own console. After that, promote by
+listing addresses in `BARRELMAN_ADMIN_EMAILS`.
+
+### API keys
+
+Keys look like `brm_live_…` (or `brm_test_…`) and are shown exactly once, at
+creation — only a SHA-256 digest is stored, so a lost key is rolled, not
+recovered. Revocation takes effect immediately.
+
+```bash
+curl -H "Authorization: Bearer brm_live_..." \
+  "http://localhost:5001/contains?lat=35.77&lng=-78.63"
+```
+
+Tile URLs also accept `?api_key=` (or the older `?token=`), because a map
+library fetches tiles itself and cannot set a header.
+
+Each key carries **scopes** naming the endpoint groups it may call. A key
+embedded in a web map can be limited to `tiles` and `search`, and is then
+worthless for running up a routing bill. **Test keys** run the entire request
+path — auth, scopes, rate limits — while spending no credits, so integration
+suites cost nothing.
+
+### Credits
+
+Endpoints are metered in credits rather than requests, because they are not
+equally expensive — a vector tile is one indexed read, an isochrone fans out to
+hundreds of routing calls.
+
+| Group | Credits | Endpoints |
+|---|---|---|
+| `tiles` | 1 | `/tiles/*` |
+| `places` | 2 | `/place/*`, `/brands` |
+| `spatial` | 2 | `/contains`, `/children` |
+| `geocode` | 2 | `/geocode/*` |
+| `search` | 3 | `/search`, `/autocomplete` |
+| `routing` | 10 | `/route`, `/graphhopper/*` |
+| `transit` | 25 | `/transit/*`, `/gbfs/*` |
+| `isochrone` | 25 | `/isochrone` |
+
+Every response carries `X-Barrelman-Credits-Charged`. A request that fails with
+a 5xx is refunded — customers should not pay for our outages.
+
+| Plan | Credits / month | Requests / minute | Past the allowance |
+|---|---|---|---|
+| Free | 50,000 | 60 | Stops with `402` |
+| Developer | 1,000,000 | 600 | Billed as overage |
+| Scale | 10,000,000 | 3,000 | Billed as overage |
+
+The free plan **stops** rather than accruing charges, so nobody can run up a
+bill on a plan they did not pay for. Live figures come from
+`GET /account/plans`.
+
+Billing is optional: with no `POLAR_ACCESS_TOKEN` configured the subscription
+surface is inert, every account sits on the free plan, and metering exists only
+to show a self-hosted operator their own usage.
+
+### Service key
+
+`BARRELMAN_API_KEY` remains a shared, **unmetered** service credential — this is
+how Parchment's own server calls barrelman, and how existing deployments keep
+working unchanged. It is not a customer key and is never billed.
+
+---
+
 ## API Reference
 
-All endpoints require a `Bearer` token:
+Data endpoints require a key:
 
 ```
-Authorization: Bearer <BARRELMAN_API_KEY>
+Authorization: Bearer brm_live_...
 ```
 
-Interactive docs: `http://localhost:5001/swagger`
+Interactive docs: `http://localhost:5001/docs`
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -409,7 +490,16 @@ Features come back smallest contour first (`bucket: 0`), so renderers should dra
 | `DATABASE_URL` | `postgresql://barrelman:barrelman@localhost:5433/barrelman` | PostGIS connection string |
 | `BARRELMAN_DB_PASSWORD` | `barrelman` | Used by `docker-compose.yml` for the DB container |
 | `PORT` | `3001` | HTTP port the API listens on |
-| `BARRELMAN_API_KEY` | `brm_dev_changeme` | Shared Bearer token for API auth. **Change before deploying.** |
+| `BARRELMAN_API_KEY` | `brm_dev_changeme` | Shared, unmetered **service** credential (Parchment → barrelman). Not a customer key. **Change before deploying.** |
+| `BARRELMAN_ADMIN_KEY` | falls back to `BARRELMAN_API_KEY` | Shared key for `/admin/*`. An admin-role account session works too |
+| `BARRELMAN_SERVER_ORIGIN` | `http://localhost:$PORT` | Public origin. Used in emails and as the OAuth redirect base |
+| `BARRELMAN_CONSOLE_ORIGIN` | server origin | Only if the console is hosted separately. Also sets the WebAuthn relying-party ID |
+| `BARRELMAN_ADMIN_EMAILS` | — | Addresses granted admin on sign-up. The first account is always an admin |
+| `BARRELMAN_REGISTRATION_MODE` | `open` | `invite` limits sign-in to accounts an admin created |
+| `BARRELMAN_ACCOUNTS_ENABLED` | `true` | `false` disables accounts entirely, falling back to shared-key auth |
+| `BARRELMAN_SIGNUPS_PER_IP_PER_DAY` | `5` | New accounts one address may create per day. `0` disables |
+| `SMTP_HOST` / `SMTP_USER` / `SMTP_PASS` | — | Sign-in code delivery. Without it, codes are printed to the server log |
+| `POLAR_ACCESS_TOKEN` | — | Enables billing. Without it every account stays on the free plan |
 | `OLLAMA_HOST` | `http://localhost:11434` | Ollama endpoint for generating search embeddings |
 | `ISOCHRONE_CONCURRENCY` | `8` | Parallel GraphHopper isochrone requests. Raise it only when GraphHopper isn't also serving interactive routing |
 | `BARRELMAN_STATEMENT_TIMEOUT_MS` | `10000` | Statement timeout on the API query pool. Schema DDL and the enrichment backfill are exempt. `0` disables |

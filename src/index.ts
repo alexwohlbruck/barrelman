@@ -32,6 +32,8 @@ import { ensureBrandLogos } from './lib/brand-logos'
 import { startTransitWarmup } from './lib/warmup'
 import { flushUsage, startUsageFlush } from './services/usage.service'
 import { startOverageReporting } from './services/overage.service'
+import { startAccountSweep } from './services/account-maintenance.service'
+import { assertAuthConfigured } from './middleware/api-auth'
 
 const port = Number(process.env.PORT) || 5001
 
@@ -106,6 +108,13 @@ startUsageFlush()
 // Metered overage is batched to the billing provider on a timer — see
 // services/overage.service.ts. No-op unless Polar is configured.
 startOverageReporting()
+
+// Expired sessions and spent one-time codes are swept periodically; Lucia
+// validates expiry on read but never deletes, so the rows would otherwise
+// accumulate for the life of the instance.
+startAccountSweep()
+
+assertAuthConfigured()
 
 // Flush whatever is buffered before the process goes away, so a rolling deploy
 // doesn't discard the last few seconds of billing counters.
