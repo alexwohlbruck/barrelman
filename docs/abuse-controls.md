@@ -1,0 +1,152 @@
+# Abuse controls
+
+Three layers, in increasing order of severity: throttling, which is automatic
+and reversible; detection, which raises signals for a human; and moderation,
+which is a decision someone makes and is accountable for.
+
+## Throttling
+
+Five checks, cheapest first, so an abusive caller is refused before we spend
+anything on them.
+
+| Layer | Bounds | Why the layer below is not enough |
+|---|---|---|
+| **Penalty box** | Callers collecting a stream of 401/402/429 | Answering an error forever is free for a key-guesser, not for us |
+| **Per-IP** | One source address | Anonymous traffic never reaches an account |
+| **Per-key** | 80% of the account's budget | One leaked key must not starve the account's other keys |
+| **Per-account** | The plan's published limit | — |
+| **Concurrency** | Simultaneous isochrone / transit / routing | A caller inside their per-minute limit can still pin every engine |
+
+A `429` names the layer that refused it, which is the difference between "slow
+down" and "spread traffic across more keys":
+
+```json
+{ "error": "This key is limited to 240 requests per minute. …", "layer": "key" }
+```
+
+### The penalty box
+
+Rejections are strikes. Past 25 in a rolling ten-minute window the caller is
+refused outright for an escalating period, capped at thirty minutes — a mistake
+in someone's client should not cost them a day.
+
+Strikes attach to the **account** where one is known, so rotating keys does not
+shed them, and to the address otherwise.
+
+The check runs **first**, before scopes and quota. Putting it last — where it
+naturally lands — means a caller who only ever trips an early gate accumulates
+strikes that are recorded and never enforced, which is precisely the caller it
+exists for.
+
+### Concurrency
+
+Some requests occupy an upstream engine for seconds. Without a concurrency cap,
+an account well inside its per-minute limit can still pin every GraphHopper
+worker:
+
+| Group | Simultaneous per account |
+|---|---|
+| `isochrone` | 2 |
+| `transit` | 4 |
+| `routing` | 8 |
+
+Slots are released unconditionally after the handler, including on the error
+path — a slot leaked on a 402 is how an account ends up permanently unable to
+call an endpoint.
+
+### A caveat that matters
+
+All throttle state is **in memory, and therefore per-replica**. With N API
+replicas the effective limits are N times these. That is fine for protecting the
+process and the upstream engines, which is what it is for. The credit ledger is
+in Postgres and remains the accurate record for anything with money attached.
+
+If barrelman ever runs horizontally and you need exact limits, this is the piece
+to move behind Redis — `src/services/throttle.service.ts`.
+
+## Detection
+
+A periodic sweep raises **abuse signals** for an administrator to review at
+`/console/accounts`. A signal is an observation, not a judgement; most resolve as
+false positives.
+
+| Signal | Trips when |
+|---|---|
+| `burn-rate` | Daily spend exceeds 3× the plan's *monthly* allowance |
+| `error-hammering` | Sustained rejections past the strike threshold |
+| `multi-account` | Six or more sign-ups from one address in 30 days |
+| `quota-exhausted` | Refusals outnumber served requests 2:1 over a cycle |
+
+Signals are deduplicated, because a detector running every few minutes against a
+condition that persists for hours would otherwise fill the queue with the same
+finding until a human stops reading it.
+
+**Nothing here bans anyone automatically, with one exception:** an account on a
+plan that allows overage, burning 25× its monthly allowance in a single day,
+takes a **self-lifting six-hour hold**. That is real money accruing with no
+ceiling, and six hours is recoverable for a legitimate customer having an
+unusual day.
+
+Multi-account detection is *only* ever a signal — a university, an office or a
+mobile carrier NAT trips it honestly, and suspending on it would be
+indefensible.
+
+## Moderation
+
+An administrator can suspend an account from `/console/accounts`.
+
+Suspension takes effect **immediately**, not whenever a cache expires. Three
+things hold access open and all three are torn down together:
+
+1. Browser sessions — deleted, so the console signs out at once.
+2. The API-key verification cache — evicted.
+3. The credit-balance cache — evicted.
+
+> Adding a new cache keyed on account state means adding it to
+> `suspendUser()` too, or a suspended account keeps working.
+
+A suspended caller gets **403 and the reason**, verbatim, at sign-in and on every
+API response — not the "invalid key" a stranger sees. They hold a real
+credential and are owed something they can act on.
+
+```json
+{
+  "error": "This account is suspended: Terms of service violation: bulk scraping",
+  "suspended": true
+}
+```
+
+Suspensions can be time-limited, in which case they lift themselves on the
+sweep. Categories (`tos-violation`, `abuse`, `billing`, `spam`, …) decide whether
+the console offers an appeal: a billing hold clears itself when payment
+succeeds, a conduct judgement needs a human to look again.
+
+Every action — suspend, unsuspend, warn, note — is written to an append-only log
+with the acting administrator's ID. The columns on the user record hold only the
+current state, which tells you nothing about who decided what, or why.
+
+An administrator cannot suspend their own account; it is almost always a misclick
+on the wrong row.
+
+## Terms of service
+
+Set `BARRELMAN_TOS_URL` and acceptance is required **before creating an API
+key** — and nothing else.
+
+That narrowness is the point: a version bump never breaks a running integration,
+because existing keys keep working. Bumping `BARRELMAN_TOS_VERSION` asks everyone
+again, and the console shows a banner until they do.
+
+Accepting a stale version is refused with a `409`. Marking someone up to date
+against text they never saw is not consent.
+
+With no URL set the mechanism is silent — correct for a private or self-hosted
+instance, where there is nothing to agree to.
+
+## Tuning
+
+Every threshold is an environment variable; see
+[configuration](configuration.md#abuse-controls). The defaults are **not
+calibrated against real traffic** — they are reasonable starting points. Watch
+the abuse queue for a while before trusting the auto-suspend rule in particular,
+since it can cut off a paying customer.

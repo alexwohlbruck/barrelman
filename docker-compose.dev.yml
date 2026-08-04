@@ -51,3 +51,32 @@ services:
       - "5199:5199"
     depends_on:
       - barrelman
+
+  # Marketing site (Nuxt + HMR). Lives in its own repo, checked out alongside
+  # this one — the same layout parchment/parchment-landing use.
+  #
+  # Behind the `landing` profile so `docker compose up` still works for anyone
+  # who has only cloned barrelman: without the profile this service is skipped
+  # rather than failing on a missing bind mount. `./start.sh dev` enables the
+  # profile automatically when the sibling directory is there.
+  barrelman-landing:
+    container_name: barrelman-landing
+    profiles: ["landing"]
+    image: oven/bun:1
+    working_dir: /site
+    command: sh -c "bun install --frozen-lockfile 2>/dev/null || bun install; exec bun run dev"
+    environment:
+      # Point the site's links at the local API rather than production, so
+      # "Get a key" lands on the console you are actually running.
+      NUXT_PUBLIC_CONSOLE_URL: http://localhost:5199/console
+      NUXT_PUBLIC_DOCS_URL: http://localhost:5001/docs
+      NUXT_PUBLIC_API_URL: http://localhost:5001
+      NUXT_PORT: "5200"
+    volumes:
+      - ../barrelman-landing:/site
+      # Anonymous volumes so the container's installs never fight the host's —
+      # the Linux binaries bun resolves here differ from the macOS ones outside.
+      - /site/node_modules
+      - /site/.nuxt
+    ports:
+      - "5200:5200"

@@ -42,6 +42,19 @@ internal.
 
 ---
 
+## Documentation
+
+| | |
+|---|---|
+| [Development](docs/development.md) | Running the stack with Docker Compose |
+| [Accounts & API keys](docs/accounts.md) | Sign-in, sessions, keys, scopes |
+| [Pricing & credits](docs/pricing.md) | Endpoint costs and plans |
+| [Abuse controls](docs/abuse-controls.md) | Throttling, suspension, terms |
+| [Polar setup](docs/polar-setup.md) | Wiring up billing |
+| [Configuration](docs/configuration.md) | Every environment variable |
+
+---
+
 ## Quick Start (Production)
 
 No clone or build required — all services pull pre-built images from Docker Hub / GHCR.
@@ -108,8 +121,8 @@ A US state (~400 MB PBF) takes roughly 20–40 minutes. See [Data Import](#data-
 
 ### Prerequisites
 
-- [Bun](https://bun.sh) ≥ 1.1
 - [Docker](https://docker.com) + Docker Compose v2
+- [Bun](https://bun.sh) ≥ 1.1 — only for running tests on the host
 
 ### 1. Clone and configure
 
@@ -119,50 +132,64 @@ cd barrelman
 cp .env.example .env
 ```
 
-Edit `.env` as needed (defaults work for local development):
+The defaults work as-is. Nothing needs setting to get a running instance.
 
-```dotenv
-DATABASE_URL=postgresql://barrelman:barrelman@localhost:5433/barrelman
-BARRELMAN_API_KEY=brm_dev_changeme
-OLLAMA_HOST=http://localhost:11434
-```
-
-### 2. Start the database
+Optionally clone the marketing site alongside it, the same way
+`parchment`/`parchment-landing` sit together — `start.sh` picks it up
+automatically if present:
 
 ```bash
-docker compose up -d barrelman-db
+git clone https://github.com/alexwohlbruck/barrelman-landing.git ../barrelman-landing
 ```
 
-Wait ~15 seconds for PostGIS to initialise.
-
-### 3. Install dependencies
+### 2. Start everything
 
 ```bash
-bun install
+./start.sh dev
 ```
 
-### 4. Import data
+That brings up the API, the database, the tile server, both routing engines, the
+console dev server and — if you cloned it — the landing site:
+
+| | |
+|---|---|
+| API | http://localhost:5001 |
+| API docs | http://localhost:5001/docs |
+| Console | http://localhost:5199/console |
+| Landing site | http://localhost:5200 |
+
+Source is bind-mounted with hot reload, so edits to `src/`, `web/` and the
+landing site apply without a rebuild.
 
 ```bash
-# Download NC OSM extract
-wget -O data/region.osm.pbf \
-  https://download.geofabrik.de/north-america/us/north-carolina-latest.osm.pbf
-
-# Import (~20-40 min)
-bun run import:osm
-
-# Optional: generate semantic search embeddings (~30-90 min on CPU)
-bun run import:embed
+./start.sh dev --build   # rebuild images
+./start.sh dev --down    # stop
 ```
 
-### 5. Run the server
+### 3. Import data
+
+A fresh database has no OSM data, so search returns nothing until you import
+some. Either use the **Scripts** page in the console, or:
 
 ```bash
-bun run dev
+docker compose exec barrelman-ops bash scripts/import-osm.sh
 ```
 
-Server: `http://localhost:5001`
-Swagger UI: `http://localhost:5001/swagger`
+North Carolina takes 20–40 minutes. See [Data Import](#data-import) for other
+regions and the rest of the pipeline.
+
+### 4. Sign in
+
+With no SMTP configured, sign-in codes go to the log:
+
+```bash
+docker logs barrelman --tail 20 | grep "sign-in code"
+```
+
+The first account created becomes an administrator.
+
+More detail — hot-reload caveats, tests, database access — in
+[docs/development.md](docs/development.md).
 
 ---
 
@@ -285,135 +312,40 @@ bun run import:embed
 
 ## Public API — accounts, keys and credits
 
-Barrelman can be run as a public API. Developers sign in to the console, mint
-their own API keys, and are metered in credits against a monthly allowance.
+Barrelman can be run as a public, metered API as well as a private engine.
+Developers sign in to the console, mint their own keys, and are billed in
+credits against a monthly allowance.
 
-### Signing in
+| | |
+|---|---|
+| [Accounts & API keys](docs/accounts.md) | Sign-in, sessions, keys, scopes |
+| [Pricing & credits](docs/pricing.md) | What each endpoint costs, what each plan includes |
+| [Abuse controls](docs/abuse-controls.md) | Throttling, suspension, terms enforcement |
+| [Polar setup](docs/polar-setup.md) | Wiring up billing |
 
-The console at `/console` supports one-time email codes, passkeys, and
-Google/GitHub/GitLab. Passkeys and OAuth are additive — email codes always work,
-so removing the last passkey or unlinking every provider cannot lock an account
-out.
+The short version:
 
-The **first account created on a fresh instance becomes an administrator**, so a
-new deployment is never locked out of its own console. After that, promote by
-listing addresses in `BARRELMAN_ADMIN_EMAILS`.
+- **Keys** look like `brm_live_…`, are shown once, carry scopes limiting which
+  endpoint groups they may call, and revoke immediately.
+- **Credits** price endpoints by what they actually cost — a tile is 1, a
+  geocode 5, an isochrone 40 — because charging both as "one request" would
+  either give tiles away or price routing as if it were free.
+- **The free tier stops at its allowance** with a `402` rather than accruing
+  overage. Nobody can run up a bill on a plan they did not pay for.
+- **`BARRELMAN_API_KEY` remains a shared, unmetered service credential** — how
+  Parchment calls barrelman, and how existing deployments keep working.
 
-### API keys
+| Plan | Price | Credits / month | Past the allowance |
+|---|---|---|---|
+| Free | $0 | 100,000 | **Stops with `402`** |
+| Developer | $19 | 1,000,000 | $0.030 / 1k |
+| Business | $99 | 10,000,000 | $0.018 / 1k |
+| Scale | $299 | 40,000,000 | $0.012 / 1k |
+| Enterprise | Custom | Negotiated | $0.008 / 1k |
 
-Keys look like `brm_live_…` (or `brm_test_…`) and are shown exactly once, at
-creation — only a SHA-256 digest is stored, so a lost key is rolled, not
-recovered. Revocation takes effect immediately.
-
-```bash
-curl -H "Authorization: Bearer brm_live_..." \
-  "http://localhost:5001/contains?lat=35.77&lng=-78.63"
-```
-
-Tile URLs also accept `?api_key=` (or the older `?token=`), because a map
-library fetches tiles itself and cannot set a header.
-
-Each key carries **scopes** naming the endpoint groups it may call. A key
-embedded in a web map can be limited to `tiles` and `search`, and is then
-worthless for running up a routing bill. **Test keys** run the entire request
-path — auth, scopes, rate limits — while spending no credits, so integration
-suites cost nothing.
-
-### Credits
-
-Endpoints are metered in credits rather than requests, because they are not
-equally expensive — a vector tile is one indexed read, an isochrone fans out to
-hundreds of routing calls.
-
-| Group | Credits | Endpoints |
-|---|---|---|
-| `tiles` | 1 | `/tiles/*` |
-| `places` | 3 | `/place/*`, `/brands` |
-| `spatial` | 3 | `/contains`, `/children` |
-| `geocode` | 5 | `/geocode/*` |
-| `search` | 6 | `/search`, `/autocomplete` |
-| `routing` | 12 | `/route`, `/graphhopper/*` |
-| `transit` | 20 | `/transit/*`, `/gbfs/*` |
-| `isochrone` | 40 | `/isochrone` |
-
-The ratios are calibrated against the market rather than invented. Taking a tile
-as 1, Mapbox prices geocoding at roughly 3x a tile and directions at 8x; Stadia
-Maps prices both at 20x. Barrelman sits between them.
-
-Every response carries `X-Barrelman-Credits-Charged`. A request that fails with
-a 5xx is refunded — customers should not pay for our outages.
-
-### Plans
-
-| Plan | Price | Credits / month | Rate limit | Past the allowance |
-|---|---|---|---|---|
-| **Free** | $0 | 100,000 | 300 / min | **Stops with `402`** |
-| **Developer** | $19 | 1,000,000 | 900 / min | $0.030 / 1k credits |
-| **Business** | $99 | 10,000,000 | 1,800 / min | $0.018 / 1k credits |
-| **Scale** | $299 | 40,000,000 | 6,000 / min | $0.012 / 1k credits |
-| **Enterprise** | Custom | Negotiated | Negotiated | $0.008 / 1k credits |
-
-At Developer, $19 buys 200,000 geocodes, 166,000 searches or 83,000 routes a
-month. The same geocoding volume on Mapbox is roughly $150.
-
-Two properties are deliberate:
-
-- **The free tier stops rather than billing.** At zero credits the API answers
-  `402` with the reset date until the next cycle. Nobody can run up a bill on a
-  plan they did not pay for. Free is for evaluation and non-commercial use;
-  every paid plan includes commercial use.
-- **Overage stays close to the included rate** — 1.6-1.8x, rather than the 10x
-  an earlier draft charged. Overage should not punish the customer who is
-  growing into the next plan.
-
-Live figures come from `GET /account/plans`. Billing is optional: with no
-`POLAR_ACCESS_TOKEN` the subscription surface is inert, every account sits on
-the free plan, and metering exists only to show a self-hosted operator their own
-usage.
-
-### Abuse controls
-
-Throttling is layered, cheapest check first, so an abusive caller is refused
-before we spend anything on them:
-
-| Layer | Bounds | Why the layer below is not enough |
-|---|---|---|
-| Penalty box | Callers collecting a stream of 401/402/429 | Answering an error forever is free for a key-guesser, not for us |
-| Per-IP | One source address | Anonymous traffic never reaches an account |
-| Per-key | 80% of the account budget | One leaked key must not starve the account's other keys |
-| Per-account | The plan's published limit | — |
-| Concurrency | Simultaneous isochrone / transit / routing | A caller inside their per-minute limit can still pin every engine |
-
-All of it is in memory, so with N API replicas the effective limits are N times
-these. That protects the process and the upstreams; the credit ledger in
-Postgres remains the accurate record for anything with money attached.
-
-A periodic sweep raises **abuse signals** for an administrator to review —
-burn-rate spikes, sustained error hammering, many accounts from one sign-up
-address. A signal is an observation, not a judgement, and nothing here bans
-anyone automatically, with one exception: a paid account burning 25× its
-monthly allowance in a single day takes a **self-lifting six-hour hold**,
-because that is real money accruing with no ceiling.
-
-### Suspension
-
-An administrator can suspend an account from **Accounts** in the console. It
-takes effect immediately — every session ends and every API key stops working —
-and the reason is shown to the user verbatim, both at sign-in and on every API
-response. Suspensions can be time-limited, in which case they lift themselves.
-Every action lands in an append-only audit log.
-
-### Terms of service
-
-Set `BARRELMAN_TOS_URL` and users must accept the terms before creating an API
-key. Bumping `BARRELMAN_TOS_VERSION` asks everyone again. **Existing keys keep
-working across a bump**, so a terms change never breaks a running integration.
-
-### Service key
-
-`BARRELMAN_API_KEY` remains a shared, **unmetered** service credential — this is
-how Parchment's own server calls barrelman, and how existing deployments keep
-working unchanged. It is not a customer key and is never billed.
+All of it is optional. With no `POLAR_ACCESS_TOKEN` the billing surface is
+inert, every account sits on free, and metering exists only to show a
+self-hosted operator their own usage.
 
 ---
 
@@ -541,30 +473,26 @@ Features come back smallest contour first (`bucket: 0`), so renderers should dra
 
 ## Configuration
 
+Full reference: **[docs/configuration.md](docs/configuration.md)**. `.env.example`
+carries the same list with inline commentary.
+
+Nothing is required to run locally — the defaults give a working engine with an
+open API and no accounts, which is the right shape for development and for a
+private self-hosted instance.
+
+The ones worth knowing:
+
 | Variable | Default | Description |
-|----------|---------|-------------|
-| `DATABASE_URL` | `postgresql://barrelman:barrelman@localhost:5433/barrelman` | PostGIS connection string |
-| `BARRELMAN_DB_PASSWORD` | `barrelman` | Used by `docker-compose.yml` for the DB container |
-| `PORT` | `3001` | HTTP port the API listens on |
-| `BARRELMAN_API_KEY` | `brm_dev_changeme` | Shared, unmetered **service** credential (Parchment → barrelman). Not a customer key. **Change before deploying.** |
-| `BARRELMAN_ADMIN_KEY` | falls back to `BARRELMAN_API_KEY` | Shared key for `/admin/*`. An admin-role account session works too |
-| `BARRELMAN_SERVER_ORIGIN` | `http://localhost:$PORT` | Public origin. Used in emails and as the OAuth redirect base |
-| `BARRELMAN_CONSOLE_ORIGIN` | server origin | Only if the console is hosted separately. Also sets the WebAuthn relying-party ID |
-| `BARRELMAN_ADMIN_EMAILS` | — | Addresses granted admin on sign-up. The first account is always an admin |
-| `BARRELMAN_REGISTRATION_MODE` | `open` | `invite` limits sign-in to accounts an admin created |
-| `BARRELMAN_ACCOUNTS_ENABLED` | `true` | `false` disables accounts entirely, falling back to shared-key auth |
-| `BARRELMAN_SIGNUPS_PER_IP_PER_DAY` | `5` | New accounts one address may create per day. `0` disables |
-| `SMTP_HOST` / `SMTP_USER` / `SMTP_PASS` | — | Sign-in code delivery. Without it, codes are printed to the server log |
-| `POLAR_ACCESS_TOKEN` | — | Enables billing. Without it every account stays on the free plan |
-| `OLLAMA_HOST` | `http://localhost:11434` | Ollama endpoint for generating search embeddings |
-| `ISOCHRONE_CONCURRENCY` | `8` | Parallel GraphHopper isochrone requests. Raise it only when GraphHopper isn't also serving interactive routing |
-| `BARRELMAN_STATEMENT_TIMEOUT_MS` | `10000` | Statement timeout on the API query pool. Schema DDL and the enrichment backfill are exempt. `0` disables |
-| `BARRELMAN_DB_SHARED_BUFFERS` | `2GB` | Postgres `shared_buffers`. Dev-sized — see below |
-| `BARRELMAN_DB_CACHE_SIZE` | `4GB` | Postgres `effective_cache_size` |
-| `BARRELMAN_DB_WORK_MEM` | `64MB` | Postgres `work_mem`. Below ~64MB, bitmap scans over `geo_places` go lossy |
-| `BARRELMAN_DB_MAINTENANCE_WORK_MEM` | `1GB` | Postgres `maintenance_work_mem` (index builds, `VACUUM`) |
-| `BARRELMAN_DB_RANDOM_PAGE_COST` | `1.1` | SSD/NVMe value. Raise toward `4` on spinning disks |
-| `BARRELMAN_DB_MEM_LIMIT` | `4g` | Container memory cap for `barrelman-db` |
+|---|---|---|
+| `DATABASE_URL` | `postgresql://barrelman:barrelman@localhost:5434/barrelman` | PostGIS connection string |
+| `REGIONS` | `north-carolina,nyc-metro` | Which geographies the importers pull. `global` for everything |
+| `BARRELMAN_API_KEY` | — | Shared **service** credential, unmetered. **Unset means the data API is open** |
+| `BARRELMAN_ADMIN_KEY` | falls back to the API key | Gates `/admin/*`. An admin-role session works too |
+| `BARRELMAN_ADMIN_EMAILS` | — | Granted admin on sign-up. The first account is always an admin |
+| `SMTP_HOST` | — | Without it, sign-in codes print to the log |
+| `POLAR_ACCESS_TOKEN` | — | Enables billing. Without it every account stays on free |
+| `BARRELMAN_TOS_URL` | — | Setting it requires accepting terms before creating a key |
+| `OLLAMA_HOST` | `http://localhost:11434` | Embeddings for semantic search (optional) |
 
 ### Database sizing
 
@@ -573,7 +501,7 @@ alongside MOTIS, Elasticsearch and GraphHopper. **Production should size these
 up** — search latency is dominated by whether the working set stays resident.
 On a 32GB database host:
 
-```
+```dotenv
 BARRELMAN_DB_SHARED_BUFFERS=8GB
 BARRELMAN_DB_CACHE_SIZE=24GB
 BARRELMAN_DB_WORK_MEM=128MB

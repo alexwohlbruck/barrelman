@@ -78,7 +78,35 @@ Admin routes accept either an admin-role session or `BARRELMAN_ADMIN_KEY`
 (falling back to `BARRELMAN_API_KEY`).
 
 ### Dev
-`./start.sh dev` brings up the API **and** the console dev server
-(`barrelman-console` service, Vite + HMR) at `http://localhost:5199/console`.
-In production the API serves the pre-built console (multi-stage Docker build).
-After changing the console, a quick sanity check: `cd web && bun run typecheck && bun run build`.
+`./start.sh dev` brings up everything: the API, database, engines, the console
+dev server (`barrelman-console`, Vite + HMR) at `http://localhost:5199/console`,
+and — when `../barrelman-landing` is checked out — the marketing site at
+`http://localhost:5200` behind the `landing` compose profile. In production the
+API serves the pre-built console (multi-stage Docker build).
+
+Prefer compose over running things by hand; the user works this way.
+
+After changing the console: `cd web && bun run typecheck && bun run build`.
+
+Two hot-reload caveats that have cost real debugging time:
+
+- **New dependencies are not picked up** — `package.json` is baked into the
+  image, not mounted. Use `./start.sh dev --build`, which also renews the
+  anonymous `node_modules` volumes; Compose reuses those across recreation, so
+  rebuilding alone leaves a stale `node_modules` masking the new image and the
+  API crash-loops on a module that is present in the image. `docker cp` +
+  `bun install` patches the running container but is lost on recreation.
+- **Module-level singletons survive a hot reload.** `bun --hot` re-evaluates a
+  module body but keeps instances constructed at import time (the Lucia client,
+  the Polar client, interval timers). If a change appears not to apply,
+  `docker restart barrelman` before hunting for a bug.
+
+### Docs
+Prose documentation lives in `docs/` — `development.md`, `accounts.md`,
+`pricing.md`, `abuse-controls.md`, `polar-setup.md`, `configuration.md`, indexed
+by `docs/README.md`. The top-level README covers architecture, import and
+deployment and links out rather than restating.
+
+When you change behaviour, update the doc that owns it: pricing numbers live in
+`src/billing/plans.ts` and are described in `docs/pricing.md`; every environment
+variable belongs in both `.env.example` and `docs/configuration.md`.
