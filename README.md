@@ -353,6 +353,44 @@ Billing is optional: with no `POLAR_ACCESS_TOKEN` configured the subscription
 surface is inert, every account sits on the free plan, and metering exists only
 to show a self-hosted operator their own usage.
 
+### Abuse controls
+
+Throttling is layered, cheapest check first, so an abusive caller is refused
+before we spend anything on them:
+
+| Layer | Bounds | Why the layer below is not enough |
+|---|---|---|
+| Penalty box | Callers collecting a stream of 401/402/429 | Answering an error forever is free for a key-guesser, not for us |
+| Per-IP | One source address | Anonymous traffic never reaches an account |
+| Per-key | 80% of the account budget | One leaked key must not starve the account's other keys |
+| Per-account | The plan's published limit | — |
+| Concurrency | Simultaneous isochrone / transit / routing | A caller inside their per-minute limit can still pin every engine |
+
+All of it is in memory, so with N API replicas the effective limits are N times
+these. That protects the process and the upstreams; the credit ledger in
+Postgres remains the accurate record for anything with money attached.
+
+A periodic sweep raises **abuse signals** for an administrator to review —
+burn-rate spikes, sustained error hammering, many accounts from one sign-up
+address. A signal is an observation, not a judgement, and nothing here bans
+anyone automatically, with one exception: a paid account burning 25× its
+monthly allowance in a single day takes a **self-lifting six-hour hold**,
+because that is real money accruing with no ceiling.
+
+### Suspension
+
+An administrator can suspend an account from **Accounts** in the console. It
+takes effect immediately — every session ends and every API key stops working —
+and the reason is shown to the user verbatim, both at sign-in and on every API
+response. Suspensions can be time-limited, in which case they lift themselves.
+Every action lands in an append-only audit log.
+
+### Terms of service
+
+Set `BARRELMAN_TOS_URL` and users must accept the terms before creating an API
+key. Bumping `BARRELMAN_TOS_VERSION` asks everyone again. **Existing keys keep
+working across a bump**, so a terms change never breaks a running integration.
+
 ### Service key
 
 `BARRELMAN_API_KEY` remains a shared, **unmetered** service credential — this is

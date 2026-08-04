@@ -50,6 +50,14 @@ sign in to the console (email code / passkey / OAuth), mint their own
 - Metering (buffered, flushed on a timer): `src/services/usage.service.ts`
 - Balances and quota decisions: `src/services/credits.service.ts`
 - Polar + overage reporting: `src/services/billing.service.ts`, `src/services/overage.service.ts`
+- Layered throttling (penalty box / IP / key / account / concurrency): `src/services/throttle.service.ts`
+- Suspension, bans, audit log, abuse signals: `src/services/moderation.service.ts`
+- Automated detection, run on the sweep: `src/services/abuse-detection.service.ts`
+- Admin moderation API: `src/routes/admin-users.ts`
+
+Suspension must take effect immediately, so `suspendUser()` tears down all three
+things that hold access open: sessions, the API-key cache and the balance cache.
+Adding a new cache keyed on account state means adding it there too.
 
 `BARRELMAN_API_KEY` remains a shared, unmetered **service** credential — it is
 how Parchment calls barrelman — and is deliberately never billed.
