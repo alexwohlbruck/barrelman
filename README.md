@@ -518,17 +518,39 @@ Caddy auto-provisions TLS. Connect the `barrelman` container to Caddy's network:
 docker network connect caddy_network barrelman
 ```
 
-### Automatic updates with Watchtower
+### Updating a deployment
 
-[Watchtower](https://containrrr.dev/watchtower/) automatically pulls and restarts containers when new images are published:
+New Barrelman releases are published to Docker Hub on every push to `main` via
+GitHub Actions. To roll them out:
 
 ```bash
-docker run -d \
-  -v /var/run/docker.sock:/var/run/docker.sock \
-  containrrr/watchtower --interval 3600
+cd /opt/barrelman
+docker compose pull
+docker compose up -d
 ```
 
-New Barrelman releases are published to Docker Hub on every push to `main` via GitHub Actions.
+> **`docker compose pull` refreshes *every* service's image, not just
+> Barrelman's.** That's fine for anything stateless, which is why most images
+> here track a floating tag and pick up upstream fixes for free.
+>
+> Watch out for **engines that bake data into a version-specific binary
+> format** — MOTIS and GraphHopper. Their on-disk timetable and routing graph
+> are written by one engine version and rejected by another, so a pull that
+> brings in a new major version leaves the engine unable to start until its data
+> is rebuilt:
+>
+> ```
+> tt: binary version mismatch [existing=34 vs expected=37], please re-run import
+> ```
+>
+> That's a job, not a restart — `motis import` for MOTIS,
+> `scripts/rebuild-graphhopper.sh` for GraphHopper. Everything else in the stack
+> is stateless enough to upgrade in place. If you'd rather not be surprised,
+> pull during a window where you can run the rebuild.
+
+[Watchtower](https://containrrr.dev/watchtower/) can automate the pull, but note
+it only manages containers on **its own Docker host** — a Watchtower running on
+a different machine to the stack will never update it.
 
 ### Resource recommendations
 
