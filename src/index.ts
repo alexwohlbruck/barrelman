@@ -10,6 +10,8 @@ import { childrenRoutes } from './routes/children'
 import { placeRoutes } from './routes/place'
 import { geocodeRoutes } from './routes/geocode'
 import { authRoutes } from './routes/auth'
+import { passkeyRoutes } from './routes/auth-passkeys'
+import { oauthRoutes } from './routes/auth-oauth'
 import { adminRoutes } from './routes/admin'
 import { adminConsoleRoutes, adminConsoleConfigRoutes } from './routes/admin-console'
 import { consoleUiRoutes } from './lib/console-ui'
@@ -72,6 +74,8 @@ const app = new Elysia()
   .use(placeRoutes)
   .use(geocodeRoutes)
   .use(authRoutes)
+  .use(passkeyRoutes)
+  .use(oauthRoutes)
   .use(adminRoutes)
   .use(adminConsoleConfigRoutes)
   .use(adminConsoleRoutes)
