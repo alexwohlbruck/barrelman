@@ -28,12 +28,21 @@ if ! docker ps -a --format '{{.Names}}' | grep -q "^${CONTAINER}\$"; then
 fi
 
 echo "[$(date '+%H:%M:%S')] [graphhopper] Wiping graph cache..."
+# Stop first: a GraphHopper that cannot load its graph sits in a crash-restart
+# loop, and `docker exec` only works on a running container — so exec'ing here
+# would fail exactly when a rebuild is most needed.  Stopping also guarantees
+# nothing is mmap'ing the files we are about to delete.
+docker stop "$CONTAINER" >/dev/null 2>&1 || true
+
+# --volumes-from reuses the container's own /data mount, so this keeps working
+# regardless of how the volume is named or whether compose prefixes it.
 # The israelhikingmap/graphhopper entrypoint defaults to /data/default-gh unless
 # overridden with -o.  Wipe both possible locations to be safe.
-docker exec "$CONTAINER" bash -c 'rm -rf /data/graph-cache /data/default-gh'
+docker run --rm --volumes-from "$CONTAINER" alpine \
+  sh -c 'rm -rf /data/graph-cache /data/default-gh'
 
-echo "[$(date '+%H:%M:%S')] [graphhopper] Restarting to rebuild graph..."
-docker restart "$CONTAINER" >/dev/null
+echo "[$(date '+%H:%M:%S')] [graphhopper] Starting to rebuild graph..."
+docker start "$CONTAINER" >/dev/null
 
 echo "[$(date '+%H:%M:%S')] [graphhopper] Rebuild started in background. Tail logs with:"
 echo "    docker logs -f ${CONTAINER}"

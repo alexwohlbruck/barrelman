@@ -77,7 +77,14 @@ services:
 
   graphhopper:
     container_name: barrelman-graphhopper
-    image: israelhikingmap/graphhopper:latest
+    # Pinned by digest, NOT :latest. The graph cache on disk is written in a
+    # version-specific binary format, so an upstream :latest bump silently
+    # bricks the container on next recreate ("Unexpected version for
+    # 'geometry'. Got: 7, expected: 9" — GH 11 graph vs a GH 12 engine).
+    # Upgrading the engine therefore means: bump this digest AND run
+    # scripts/rebuild-graphhopper.sh (a full reimport, ~1.5h).
+    # This digest is GraphHopper 12.0-SNAPSHOT (published 2026-06-18).
+    image: israelhikingmap/graphhopper@sha256:3e79eb33862028cfc58f9d6c162630b68638d6aad790b5a698c854dbbaa7fe32
     restart: unless-stopped
     # -i and -o must be passed explicitly; the entrypoint script defaults
     # graph.location to /data/default-gh otherwise, ignoring our config value.
