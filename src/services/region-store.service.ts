@@ -179,6 +179,7 @@ export async function loadRegionsFromDb(): Promise<RegionsFile | null> {
       bbox: r.bbox,
       gtfsRegion: r.gtfsRegion,
       pelias: r.pelias,
+      enabled: r.enabled,
     }
     if (r.isGlobal) global = def
     else regions[r.key] = def

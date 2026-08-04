@@ -62,6 +62,11 @@ export interface DataMetrics {
   transit: {
     stopAreaMembers: number | null
   }
+  /** The catalog of importable regions backing "Add region by name". */
+  boundaries: {
+    count: number | null
+    fetchedAt: string | null
+  }
 }
 
 interface GeoSample {
@@ -118,6 +123,8 @@ export async function getDataMetrics(): Promise<DataMetrics> {
     gbfsSystems,
     gbfsStations,
     stopAreaMembers,
+    boundaryCount,
+    boundaryFetchedAt,
   ] = await Promise.all([
     scalar<number>(sql`SELECT pg_database_size(current_database()) AS s`),
     scalar<string>(sql`SELECT pg_size_pretty(pg_database_size(current_database())) AS s`),
@@ -134,6 +141,8 @@ export async function getDataMetrics(): Promise<DataMetrics> {
     tableCount('gbfs_systems'),
     tableCount('gbfs_stations'),
     tableCount('stop_area_members'),
+    tableCount('boundary_catalog'),
+    scalar<string>(sql`SELECT max(fetched_at)::text AS s FROM boundary_catalog`),
   ])
 
   const total = reltuples && reltuples > 0 ? reltuples : null
@@ -172,6 +181,7 @@ export async function getDataMetrics(): Promise<DataMetrics> {
     gtfs: { feeds, stops, routes, transfers, tripPatterns, shapes, feedsWithRt, lastImport },
     gbfs: { systems: gbfsSystems, stations: gbfsStations },
     transit: { stopAreaMembers },
+    boundaries: { count: boundaryCount, fetchedAt: boundaryFetchedAt },
   }
 }
 

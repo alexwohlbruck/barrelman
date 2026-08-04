@@ -7,23 +7,30 @@ Barrelman is the self-hosted OSM search engine that powers [Parchment](https://g
 ## Architecture
 
 ```
-OSM PBF extract (Geofabrik)
-        │
-        ▼
-  osm2pgsql (flex)   ←── import/osm2pgsql-flex.lua
-        │
+         REGIONS  ──►  region registry  ──►  what every importer fetches
+                       (config/regions.json + import_regions table)
+                              │
+        ┌─────────────────────┼──────────────┬──────────────┐
+        ▼                     ▼              ▼              ▼
+  OSM PBF extract        GTFS feeds      GBFS systems   OpenAddresses
+   (Geofabrik)          (Transitland)                    + WOF + TIGER
+        │                     │              │              │
+        ▼                     ▼              ▼              ▼
+  osm2pgsql (flex)         MOTIS          geo_* tables     Pelias
+  ←─ osm2pgsql-flex.lua   (transit)                      (addresses,
+        │                                                separate stack)
         ▼
   geo_places table   ←── import/post-import.sql (indexes, addr extraction)
-  (PostGIS)          ←── import/generate-abbreviations.ts
-        │             ←── import/embed-places.ts (Ollama embeddings, optional)
+  (PostGIS)          ←── import/embed-places.ts (Ollama embeddings, optional)
+        │
         ▼
-  Barrelman API      ←── src/routes/
+  Barrelman API      ←── src/routes/    ── /console (admin UI)
   (Elysia / Bun)
         │
-  ┌─────┼──────┐
-  │     │      │
-Martin  │  GraphHopper
-(tiles) │  (routing)
+  ┌─────┼───────┬────────────┐
+  │     │       │            │
+Martin  │  GraphHopper     MOTIS
+(tiles) │   (streets)     (transit)
         │
   Parchment API
 ```
@@ -35,10 +42,14 @@ Martin  │  GraphHopper
 | `martin` | `ghcr.io/maplibre/martin` | 5002 | Vector tile server |
 | `graphhopper` | `israelhikingmap/graphhopper` | 5003 | Street routing engine (walk / bike / car) |
 | `motis` | `ghcr.io/motis-project/motis` | 5004 | Transit routing engine (schedules, one-to-all) |
+| `pelias_api` | [separate stack](pelias/README.md) | 4000 | Address geocoder (OpenAddresses + OSM + WOF) |
 
 Ports are host-side. Services reach each other over the Compose network on
 their own container ports, so remapping a host port here changes nothing
 internal.
+
+Pelias is **not** part of the root `docker-compose.yml` — it joins barrelman's
+network as its own stack. Everything else comes up together.
 
 ---
 
@@ -75,32 +86,33 @@ curl http://localhost:5001/health
 # {"status":"ok","database":"connected"}
 ```
 
-### 5. Import OSM data
+### 5. Choose a region and import
 
-Download a PBF and run the import inside the DB container (all tools are baked in):
+Barrelman imports named **regions**, not "everything". Fetch the boundary
+catalog once, then define a region by name:
 
 ```bash
-# Download region (example: North Carolina)
-docker exec barrelman-db bash -c '
-  wget -O /data/region.osm.pbf \
-    https://download.geofabrik.de/north-america/us/north-carolina-latest.osm.pbf
-'
+# One-time: cache the index of every importable region (no API key needed)
+docker exec barrelman bun run scripts/fetch-boundaries.ts --search colorado
+```
 
-# Run the import detached (survives SSH disconnects)
-docker exec -d barrelman-db bash -c '
-  osm2pgsql --create --slim --output=flex \
-    --style=/app/import/osm2pgsql-flex.lua \
-    -d "$DATABASE_URL" /data/region.osm.pbf \
-  && psql "$DATABASE_URL" -f /app/import/post-import.sql \
-  && echo IMPORT_COMPLETE || echo IMPORT_FAILED
-'
+Add `REGIONS=colorado` to your `.env` (or create the region in the admin
+console under **Regions → Add by name**, which fills in the download URLs,
+bounding box, transit search area and address sources for you), then run the
+import:
+
+```bash
+docker exec -d barrelman bash scripts/run-import.sh
 
 # Check progress
 docker exec barrelman-db psql -U barrelman -d barrelman \
   -c "SELECT count(*) FROM geo_places;"
 ```
 
-A US state (~400 MB PBF) takes roughly 20–40 minutes. See [Data Import](#data-import) for more detail.
+A US state (~400 MB PBF) takes roughly 20–40 minutes.
+
+**[→ Full region guide](docs/REGIONS.md)** — what a region controls, the
+ordering of the transit/address/bikeshare steps, and how to build one by hand.
 
 ---
 
@@ -122,9 +134,12 @@ cp .env.example .env
 Edit `.env` as needed (defaults work for local development):
 
 ```dotenv
-DATABASE_URL=postgresql://barrelman:barrelman@localhost:5433/barrelman
+DATABASE_URL=postgresql://barrelman:barrelman@localhost:5434/barrelman
+REGIONS=north-carolina,nyc-metro
 BARRELMAN_API_KEY=brm_dev_changeme
+BARRELMAN_ADMIN_KEY=brm_admin_dev_changeme
 OLLAMA_HOST=http://localhost:11434
+TRANSITLAND_API_KEY=            # only needed for transit data
 ```
 
 ### 2. Start the database
@@ -141,19 +156,25 @@ Wait ~15 seconds for PostGIS to initialise.
 bun install
 ```
 
-### 4. Import data
+### 4. Pick a region and import
 
 ```bash
-# Download NC OSM extract
-wget -O data/region.osm.pbf \
-  https://download.geofabrik.de/north-america/us/north-carolina-latest.osm.pbf
+# One-time: cache the catalog of importable regions
+bun run scripts/fetch-boundaries.ts
 
-# Import (~20-40 min)
-bun run import:osm
+# See what matches, then put the key in .env as REGIONS=colorado
+bun run scripts/fetch-boundaries.ts --skip-fetch --search colorado
+
+# Import (~20-40 min for a US state)
+./scripts/run-import.sh
 
 # Optional: generate semantic search embeddings (~30-90 min on CPU)
 bun run import:embed
 ```
+
+`.env` ships with `REGIONS=north-carolina,nyc-metro`, so you can skip straight
+to the import if those suit you. See the **[region guide](docs/REGIONS.md)** for
+transit, address and bikeshare data, which are separate steps.
 
 ### 5. Run the server
 
@@ -235,36 +256,55 @@ serves it at `/console` — no dev server in prod.
 
 ## Data Import
 
-The import pipeline transforms an OSM PBF extract into a fully indexed PostGIS database.
+### Regions decide what gets imported
 
-### Download a PBF extract
+Coverage is driven by one environment variable, `REGIONS`, resolved against a
+region registry (the `import_regions` table, seeded from
+[`config/regions.json`](config/regions.json)):
 
-```bash
-# North Carolina (~400 MB)
-wget -O data/region.osm.pbf \
-  https://download.geofabrik.de/north-america/us/north-carolina-latest.osm.pbf
-
-# Germany
-wget -O data/region.osm.pbf \
-  https://download.geofabrik.de/europe/germany-latest.osm.pbf
-
-# Full United States
-wget -O data/region.osm.pbf \
-  https://download.geofabrik.de/north-america/us-latest.osm.pbf
+```dotenv
+REGIONS=colorado                    # one region
+REGIONS=north-carolina,nyc-metro    # several, merged into one extract
+REGIONS=global                      # planet OSM + every transit feed
 ```
 
-Find all regions at [download.geofabrik.de](https://download.geofabrik.de).
+Every importer — OSM, GTFS, GBFS and the Pelias geocoder — resolves what to
+fetch from it. Define regions by name with `scripts/fetch-boundaries.ts` plus
+**Regions → Add by name** in the console, or by hand.
 
-### Import pipeline
+**[→ Full region guide](docs/REGIONS.md)**
+
+### Pipeline order
+
+Each step depends on the previous one:
+
+```bash
+./scripts/run-import.sh                     # OSM → PostGIS + GraphHopper graph
+./scripts/prepare-motis-osm.sh              # transit-specific OSM repair
+./scripts/download-gtfs.sh                  # transit feeds (needs GraphHopper)
+bun run import/import-gbfs-systems.ts       # bikeshare
+bun run scripts/generate-pelias-config.ts   # addresses (then pelias/provision.sh)
+```
+
+Only the first is required; the rest add transit, bikeshare and address search.
+
+### What the OSM import does
 
 | Step | Description |
 |------|-------------|
+| download + merge | Fetches each region's PBF and `osmium merge`s them into one extract |
 | osm2pgsql | Imports all OSM objects via flex Lua style into `geo_places` |
 | post-import.sql | Extracts structured address/contact fields, builds GiST + GIN indexes, computes `area_m2` |
-| generate-abbreviations.ts | Pre-computes `name_abbrev` for autocomplete |
+| codes + abbreviations | Pre-computes `codes` (IATA/ICAO/ref) and `name_abbrev` for autocomplete |
+| intersections | Generates road-intersection records |
+| parent context | Spatial join resolving each place's containing city/county/state |
 | tsvector rebuild | Rebuilds full-text search vectors to include abbreviations |
 
 > **Note:** Do not use `--flat-nodes` for regional imports. It creates a ~31 GB sparse file that is only beneficial for full planet imports.
+
+> **Note:** The import is not clipped to a region's bounding box — the boundary
+> of your data is whatever the OSM extracts cover. The bbox narrows bikeshare
+> and transit feed *discovery* only.
 
 ### Embeddings (optional)
 
@@ -404,15 +444,40 @@ Features come back smallest contour first (`bucket: 0`), so renderers should dra
 
 ## Configuration
 
+### Core
+
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `DATABASE_URL` | `postgresql://barrelman:barrelman@localhost:5433/barrelman` | PostGIS connection string |
+| `REGIONS` | `north-carolina,nyc-metro` | **Which regions to import.** Comma-separated keys, or `global`. See the [region guide](docs/REGIONS.md) |
+| `DATABASE_URL` | `postgresql://barrelman:barrelman@localhost:5434/barrelman` | PostGIS connection string |
 | `BARRELMAN_DB_PASSWORD` | `barrelman` | Used by `docker-compose.yml` for the DB container |
-| `PORT` | `3001` | HTTP port the API listens on |
+| `PORT` | `5001` | HTTP port the API listens on |
 | `BARRELMAN_API_KEY` | `brm_dev_changeme` | Shared Bearer token for API auth. **Change before deploying.** |
+| `BARRELMAN_ADMIN_KEY` | falls back to `BARRELMAN_API_KEY` | Gates `/console` and every `/admin/*` route. Set a strong, separate secret in production |
 | `OLLAMA_HOST` | `http://localhost:11434` | Ollama endpoint for generating search embeddings |
 | `ISOCHRONE_CONCURRENCY` | `8` | Parallel GraphHopper isochrone requests. Raise it only when GraphHopper isn't also serving interactive routing |
 | `BARRELMAN_STATEMENT_TIMEOUT_MS` | `10000` | Statement timeout on the API query pool. Schema DDL and the enrichment backfill are exempt. `0` disables |
+
+### Import & updates
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `UPDATE_MODE` | `replication` | `replication` (incremental diffs) or `full` (re-download + re-import) for `update-osm.sh` |
+| `GEOFABRIK_URL` | — | Legacy single-extract override. Bypasses `REGIONS`; normally leave unset |
+| `GEOFABRIK_REPLICATION_URL` | — | Replication server for `update-osm.sh` / `init-replication.sh` |
+| `GITHUB_TOKEN` | — | Optional. Raises the GitHub API rate limit when resolving OpenAddresses coverage for a new region |
+
+### Downstream services
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `TRANSITLAND_API_KEY` | — | Required for GTFS import. Free at [transit.land](https://www.transit.land/users/sign_up) |
+| `GTFS_REGION` | — | Optional override of the GTFS search area, bypassing `REGIONS` |
+| `MOTIS_URL` | `http://localhost:8080` | Transit routing engine. Set automatically in Compose |
+| `MOTIS_RT_UPDATE_INTERVAL` | `60` | Seconds between GTFS-RT polls of every feed. Raise on a dev box to cut polling |
+| `GRAPHHOPPER_URL` | `http://localhost:8989` | Street routing engine. Set automatically in Compose |
+| `GRAPHHOPPER_JAVA_OPTS` | `-Xmx6g -Xms1g` | **Must exceed the on-disk `graph-cache` size** — the graph is loaded into heap, not mapped. Raise whenever `REGIONS` grows |
+| `PELIAS_URL` | `http://pelias_api:4000` | Address geocoder. A [separate stack](pelias/README.md) |
 | `BARRELMAN_DB_SHARED_BUFFERS` | `2GB` | Postgres `shared_buffers`. Dev-sized — see below |
 | `BARRELMAN_DB_CACHE_SIZE` | `4GB` | Postgres `effective_cache_size` |
 | `BARRELMAN_DB_WORK_MEM` | `64MB` | Postgres `work_mem`. Below ~64MB, bitmap scans over `geo_places` go lossy |
