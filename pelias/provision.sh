@@ -55,8 +55,12 @@ pelias prepare polylines
 log "importing all sources into Elasticsearch"
 pelias import all
 
-# 8. Bring up the API.
+# 8. Bring up the API — via the root compose file, with the profile.
+# Not `pelias compose up`: that issues a bare `docker compose up -d`, and every
+# Pelias service is behind a profile now, so it would start nothing. The CLI's
+# service-specific commands above are unaffected — naming a service explicitly
+# activates its profile.
 log "starting Pelias API"
-pelias compose up
+(cd .. && docker compose --profile pelias up -d)
 
 log "done — verify: curl 'localhost:4000/v1/autocomplete?text=350+5th+ave' | jq '.features[].properties.layer'"

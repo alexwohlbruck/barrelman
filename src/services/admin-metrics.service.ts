@@ -216,6 +216,7 @@ export async function getServiceStatuses(): Promise<ServiceStatus[]> {
   const graphhopperUrl = process.env.GRAPHHOPPER_URL || 'http://barrelman-graphhopper:8989'
   const martinUrl = process.env.MARTIN_URL || 'http://barrelman-martin:3000'
   const motisUrl = process.env.MOTIS_URL || 'http://barrelman-motis:8080'
+  const peliasUrl = process.env.PELIAS_URL || 'http://pelias_api:4000'
 
   const dbCheck = (async (): Promise<ServiceStatus> => {
     const start = performance.now()
@@ -245,5 +246,9 @@ export async function getServiceStatuses(): Promise<ServiceStatus[]> {
     motisCheck,
     pingHttp('GraphHopper (routing)', 'graphhopper', graphhopperUrl, '/health'),
     pingHttp('Martin (vector tiles)', 'martin', martinUrl, '/health'),
+    // Optional: only runs under the `pelias` compose profile, so "unavailable"
+    // here often means "not started" rather than "broken". /status is the only
+    // unauthenticated 200 the API offers — /v1/status is a 404.
+    pingHttp('Pelias (addresses)', 'pelias', peliasUrl, '/status'),
   ])
 }

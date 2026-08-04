@@ -1,3 +1,18 @@
+# Pelias (address geocoder) is part of this stack rather than a sibling project,
+# so it shares the network, shows up as one group, and is driven by one compose
+# file. Its services sit behind profiles and do NOT start with a plain
+# `docker compose up -d` — Elasticsearch alone wants a 1GB heap, and address
+# search is optional:
+#
+#   docker compose --profile pelias up -d                     # + geocoder API
+#   docker compose --profile pelias --profile pelias-full up -d   # + libpostal/pip/interpolation
+#
+# No env_file here on purpose: pelias/.env is gitignored, and referencing a
+# missing file would break `docker compose up` on a fresh clone. The variables
+# it would set have defaults inside pelias/docker-compose.yml instead.
+include:
+  - path: pelias/docker-compose.yml
+
 volumes:
   barrelman-data:
   barrelman-osm-data:
