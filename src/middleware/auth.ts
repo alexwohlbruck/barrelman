@@ -1,5 +1,6 @@
 import Elysia from 'elysia'
 import { resolveSession } from './session'
+import { safeEqual } from '../lib/crypto'
 
 /**
  * Operator-console auth.
@@ -48,7 +49,8 @@ export async function adminAuthHandler({ headers, request, set }: AuthContext) {
   const adminKey = configuredAdminKey()
   const token = presentedToken(headers)
 
-  if (adminKey && token && token === adminKey) return
+  // Constant-time — see the note in api-auth.ts on timing leaks.
+  if (adminKey && token && safeEqual(token, adminKey)) return
 
   // A session with the admin role is equally sufficient.
   const { user } = await resolveSession(request)
@@ -90,7 +92,7 @@ export function authHandler({
     set.status = 401
     return { error: 'Missing Authorization header' }
   }
-  if (token !== apiKey) {
+  if (!safeEqual(token, apiKey)) {
     set.status = 401
     return { error: 'Invalid API key' }
   }

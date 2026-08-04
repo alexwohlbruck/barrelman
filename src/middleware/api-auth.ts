@@ -41,6 +41,7 @@ import { recordUsage, refundUsage } from '../services/usage.service'
 import { getPlan } from '../billing/plans'
 import { accountsEnabled } from '../config/accounts.config'
 import { clientIp } from '../lib/rate-limit'
+import { safeEqual } from '../lib/crypto'
 import { hashIp } from '../services/accounts.service'
 
 /** Prefix that marks a customer key, as opposed to the shared service secret. */
@@ -155,7 +156,9 @@ export async function identifyCaller(
   }
 
   // The shared service secret is checked first and is never metered.
-  if (serviceKey && presented === serviceKey) {
+  // Constant-time: `===` short-circuits at the first differing byte, which
+  // leaks the secret's length and prefix through response timing.
+  if (serviceKey && safeEqual(presented, serviceKey)) {
     return { caller: { kind: 'service' } }
   }
 
@@ -243,7 +246,10 @@ export function apiAuth(group: EndpointGroup, overrides: Partial<ApiAuthDeps> = 
           credits: 0,
           rejected: true,
         })
-        void flagSustainedAbuse(penaltyKey, caller.userId, ip)
+        // Not for an account already suspended: an operator has acted on it,
+        // and its client retrying would otherwise bury the genuine signals in
+        // the review queue under noise proportional to the retry rate.
+        if (!caller.suspended) void flagSustainedAbuse(penaltyKey, caller.userId, ip)
       }
       return { ...body, docs: DOCS_URL }
     }
@@ -318,8 +324,11 @@ export function apiAuth(group: EndpointGroup, overrides: Partial<ApiAuthDeps> = 
       releaseSlot(throttleKey, group)
       return reject(402, {
         error:
-          'Credit allowance exhausted for this billing period. ' +
-          'Upgrade your plan or add credits at /console/billing.',
+          decision.reason === 'overage-cap-reached'
+            ? 'Overage spend limit reached for this billing period. Raise the limit or upgrade at /console/billing.'
+            : 'Credit allowance exhausted for this billing period. ' +
+              'Upgrade your plan or add credits at /console/billing.',
+        reason: decision.reason,
         remaining: decision.balance.remaining,
         resetsAt: decision.balance.cycleResetsAt,
       })

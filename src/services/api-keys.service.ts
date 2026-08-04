@@ -96,7 +96,11 @@ export async function createApiKey(options: CreateKeyOptions): Promise<CreatedKe
   return { key, record }
 }
 
-function normalizeScopes(scopes: string[] | undefined): string[] {
+/**
+ * Exported for testing: this decides what a leaked key can reach, and it was
+ * previously only exercisable through a database round-trip.
+ */
+export function normalizeScopes(scopes: string[] | undefined): string[] {
   if (!scopes || scopes.length === 0) return ['*']
   const valid = scopes.filter(isValidScope)
   if (valid.length === 0) return ['*']

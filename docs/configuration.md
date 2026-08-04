@@ -128,6 +128,13 @@ These defaults are **not calibrated against real traffic**.
 | `BARRELMAN_TOS_VERSION` | `1` | Bump to re-prompt everyone. Existing keys keep working |
 | `BARRELMAN_PRIVACY_URL` | — | Linked from the sign-in screen |
 
+> **All of these must be listed in the `barrelman` service's `environment:`
+> block in `docker-compose.yml`.** Compose does not forward the host
+> environment; a variable that is set in `.env` but not named there is silently
+> absent inside the container, and the symptom is a setting that appears
+> configured and has no effect. When you add a variable, add it in three places:
+> here, in `.env.example`, and in the compose file.
+
 ## Engines
 
 | Variable | Default | Description |

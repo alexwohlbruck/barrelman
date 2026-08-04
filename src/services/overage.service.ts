@@ -20,12 +20,46 @@ import { currentCycleStart, flushUsage } from './usage.service'
 
 const REPORT_INTERVAL_MS = Number(process.env.BARRELMAN_OVERAGE_REPORT_MS ?? 15 * 60_000)
 
-interface OverageRow {
+export interface OverageRow {
   user_id: string
   plan: string
   used: number
   purchased: number
   reported: number
+}
+
+export interface PendingOverage {
+  userId: string
+  /** Credits to ingest now — the delta since the last report. */
+  credits: number
+  /** Cycle-to-date total, stored as the new high-water mark. */
+  total: number
+}
+
+/**
+ * Work out what still needs reporting, as a pure function of the query rows.
+ *
+ * Reporting the *delta against a stored total* rather than "usage since last
+ * time" is what makes a crashed pass harmless: the next one recomputes the same
+ * figure. Extracted so that property is testable without a database or a
+ * billing provider.
+ */
+export function computePendingOverage(rows: OverageRow[]): PendingOverage[] {
+  const pending: PendingOverage[] = []
+
+  for (const row of rows) {
+    const plan = getPlan(row.plan)
+    if (!plan.overageAllowed) continue
+
+    // Purchased credits are spent before overage begins: a customer who bought
+    // a pack has already paid for those, and billing them again as metered
+    // usage would charge twice for the same credits.
+    const totalOverage = Math.max(0, row.used - plan.monthlyCredits - row.purchased)
+    const delta = totalOverage - row.reported
+    if (delta > 0) pending.push({ userId: row.user_id, credits: delta, total: totalOverage })
+  }
+
+  return pending
 }
 
 /**
@@ -66,19 +100,7 @@ export async function reportPendingOverage(): Promise<{ accounts: number; credit
       AND u.suspended_at IS NULL
       AND COALESCE(usage.credits, 0) > 0`
 
-  const pending: Array<{ userId: string; credits: number; total: number }> = []
-
-  for (const row of rows) {
-    const plan = getPlan(row.plan)
-    if (!plan.overageAllowed) continue
-
-    // Purchased credits are spent before overage begins: a customer who bought
-    // a pack has already paid for those, and billing them again as metered
-    // usage would charge twice for the same credits.
-    const totalOverage = Math.max(0, row.used - plan.monthlyCredits - row.purchased)
-    const delta = totalOverage - row.reported
-    if (delta > 0) pending.push({ userId: row.user_id, credits: delta, total: totalOverage })
-  }
+  const pending = computePendingOverage(rows)
 
   if (pending.length === 0) return { accounts: 0, credits: 0 }
 
@@ -89,12 +111,33 @@ export async function reportPendingOverage(): Promise<{ accounts: number; credit
     return { accounts: 0, credits: 0 }
   }
 
-  for (const entry of pending) {
+  // One statement, so the batch lands atomically. Row-by-row writes left a
+  // window where the provider had accepted the whole batch but only some
+  // accounts had their high-water mark recorded — a crash there re-reports the
+  // rest on the next pass, billing those credits twice.
+  try {
     await sql`
-      INSERT INTO accounts_overage_reports (user_id, cycle, reported_credits)
-      VALUES (${entry.userId}, ${cycle}, ${entry.total})
+      INSERT INTO accounts_overage_reports ${sql(
+        pending.map((entry) => ({
+          user_id: entry.userId,
+          cycle,
+          reported_credits: entry.total,
+        })),
+        'user_id',
+        'cycle',
+        'reported_credits',
+      )}
       ON CONFLICT (user_id, cycle) DO UPDATE
-        SET reported_credits = ${entry.total}, updated_at = now()`
+        SET reported_credits = EXCLUDED.reported_credits, updated_at = now()`
+  } catch (err) {
+    // Polar has the events but we failed to record that. Say so loudly: the
+    // next pass will re-report the same delta, and someone has to reconcile.
+    console.error(
+      `[billing] ingested ${pending.length} overage event(s) but FAILED to record the high-water ` +
+        'mark — the next pass will re-report them. Reconcile in Polar before it runs.',
+      err,
+    )
+    throw err
   }
 
   const credits = pending.reduce((sum, entry) => sum + entry.credits, 0)

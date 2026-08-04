@@ -44,14 +44,19 @@ export function readSessionId(request: Request): { id: string | null; fromCookie
 
 function originAllowed(request: Request): boolean {
   const origin = request.headers.get('origin')
-  // Same-origin non-CORS requests (a form post, a fetch from the console
-  // itself in some browsers) may omit Origin entirely. Sec-Fetch-Site is the
-  // modern signal and is sent by every browser that supports it.
-  if (!origin) {
-    const site = request.headers.get('sec-fetch-site')
-    return site === null || site === 'same-origin' || site === 'none'
-  }
-  return allowedOrigins.includes(origin.replace(/\/+$/, ''))
+  if (origin) return allowedOrigins.includes(origin.replace(/\/+$/, ''))
+
+  // No Origin header. Sec-Fetch-Site is the fallback, and it is sent by every
+  // browser that has shipped since 2020.
+  //
+  // Fails CLOSED when neither header is present. An earlier version treated a
+  // missing Sec-Fetch-Site as same-origin, which meant any client sending
+  // neither header — a stripping proxy, an old embedded webview — satisfied
+  // the CSRF check on a cookie-authenticated mutation. A caller that genuinely
+  // cannot send either header can still authenticate with a bearer token,
+  // which carries no CSRF risk because it is never attached automatically.
+  const site = request.headers.get('sec-fetch-site')
+  return site === 'same-origin' || site === 'none'
 }
 
 /**

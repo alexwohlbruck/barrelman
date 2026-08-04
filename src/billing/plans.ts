@@ -88,6 +88,20 @@ export interface Plan {
   contactOnly?: boolean
   /** Env var naming the Polar product for this plan; free and enterprise have none. */
   polarProductEnv?: string
+  /**
+   * Hard ceiling on overage credits per cycle, beyond which requests are
+   * refused with a 402 rather than billed.
+   *
+   * Without one, a leaked key on a plan with overage accrues charges with no
+   * upper bound — a Developer key driven at its own rate limit against
+   * /isochrone is roughly $1/minute, and the burn-rate detector only runs on
+   * the hourly sweep. This is the same "spend limit" control Mapbox and Google
+   * expose; a customer who genuinely wants more raises it or moves up a plan.
+   *
+   * Expressed as a multiple of the included allowance so it scales with the
+   * plan. 0 disables the cap.
+   */
+  overageCapMultiple: number
   /** Ordering for display, and for deciding which plan outranks which. */
   rank: number
 }
@@ -123,6 +137,8 @@ export const PLANS: Record<string, Plan> = {
     overageAllowed: false,
     overageMicrosPerCredit: 0,
     commercialUse: false,
+    // No overage at all, so nothing to cap.
+    overageCapMultiple: 0,
     rank: 0,
   },
   developer: {
@@ -137,6 +153,7 @@ export const PLANS: Record<string, Plan> = {
     overageMicrosPerCredit: 30,
     commercialUse: true,
     polarProductEnv: 'POLAR_DEVELOPER_PRODUCT_ID',
+    overageCapMultiple: 3,
     rank: 1,
   },
   business: {
@@ -152,6 +169,7 @@ export const PLANS: Record<string, Plan> = {
     overageMicrosPerCredit: 18,
     commercialUse: true,
     polarProductEnv: 'POLAR_BUSINESS_PRODUCT_ID',
+    overageCapMultiple: 3,
     rank: 2,
   },
   scale: {
@@ -166,6 +184,7 @@ export const PLANS: Record<string, Plan> = {
     overageMicrosPerCredit: 12,
     commercialUse: true,
     polarProductEnv: 'POLAR_SCALE_PRODUCT_ID',
+    overageCapMultiple: 2,
     rank: 3,
   },
   enterprise: {
@@ -181,6 +200,8 @@ export const PLANS: Record<string, Plan> = {
     overageMicrosPerCredit: 8,
     commercialUse: true,
     contactOnly: true,
+    // Uncapped: the volume is contractual, not discovered at runtime.
+    overageCapMultiple: 0,
     rank: 4,
   },
 }

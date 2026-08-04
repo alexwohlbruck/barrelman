@@ -227,3 +227,32 @@ describe('scopes', () => {
     expect(ALL_SCOPES.length).toBe(Object.keys(CREDIT_COSTS).length + 1)
   })
 })
+
+describe('overage spend caps', () => {
+  test('every plan that allows overage either caps it or is contractual', () => {
+    for (const plan of listPlans().filter((p) => p.overageAllowed)) {
+      // 0 means uncapped, which is only defensible when the volume is
+      // negotiated rather than discovered at runtime.
+      if (plan.overageCapMultiple === 0) expect(plan.contactOnly).toBe(true)
+      else expect(plan.overageCapMultiple).toBeGreaterThan(0)
+    }
+  })
+
+  test('free has no cap because it has no overage', () => {
+    expect(PLANS.free!.overageAllowed).toBe(false)
+    expect(PLANS.free!.overageCapMultiple).toBe(0)
+  })
+
+  test('a capped plan bounds the worst-case bill to something explicable', () => {
+    // The cap exists so a compromised key cannot run an unbounded bill. Express
+    // that as a number: the ceiling on a cycle, in dollars.
+    for (const plan of listPlans().filter((p) => p.overageAllowed && p.overageCapMultiple > 0)) {
+      const capCredits = plan.overageCapMultiple * plan.monthlyCredits
+      const worstCaseDollars = (capCredits * plan.overageMicrosPerCredit) / 1_000_000
+      expect(worstCaseDollars).toBeGreaterThan(0)
+      // Sanity: the worst case should be a multiple of the subscription, not
+      // hundreds of times it.
+      expect(worstCaseDollars).toBeLessThan((plan.priceCents / 100) * 20)
+    }
+  })
+})

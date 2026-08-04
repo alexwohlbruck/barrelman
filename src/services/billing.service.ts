@@ -135,13 +135,25 @@ export function creditsForProduct(productId: string): number | null {
  * used for rate limiting). Otherwise an upgrade would be invisible for up to a
  * minute, which is exactly when the customer is watching.
  */
-export async function applyPlanFromProduct(userId: string, productId: string | undefined): Promise<string> {
+export async function applyPlanFromProduct(userId: string, productId: string | undefined): Promise<string | null> {
   const plan = productId ? planForProductId(productId) : null
-  const planId = plan?.id ?? DEFAULT_PLAN
 
-  await setPlan(userId, planId)
+  if (!plan) {
+    // A subscription event is evidence the customer is PAYING. Falling back to
+    // the free plan here would revoke the plan of anyone whose product we
+    // cannot currently map — which happens whenever an environment is missing
+    // one of the POLAR_*_PRODUCT_ID vars, or a new product is added to Polar
+    // before it is configured here. Leave the plan alone and shout.
+    console.error(
+      `[billing] cannot map product ${productId ?? '(none)'} to a plan for ${userId} — ` +
+        'leaving their plan unchanged. Check the POLAR_*_PRODUCT_ID configuration.',
+    )
+    return null
+  }
+
+  await setPlan(userId, plan.id)
   invalidateUserKeys(userId)
-  return planId
+  return plan.id
 }
 
 export async function downgradeToFree(userId: string): Promise<void> {

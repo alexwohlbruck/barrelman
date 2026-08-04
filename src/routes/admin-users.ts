@@ -40,13 +40,40 @@ const ADMIN_KEY_ACTOR = 'admin-key'
 
 const SUSPENSION_KINDS = ['tos-violation', 'abuse', 'automated-abuse', 'billing', 'spam', 'operator-request'] as const
 
-async function actorFor(request: Request): Promise<string> {
-  const { user } = await resolveSession(request)
-  return user?.id ?? ADMIN_KEY_ACTOR
+export interface AdminUserDeps {
+  suspendUser: typeof suspendUser
+  unsuspendUser: typeof unsuspendUser
+  warnUser: typeof warnUser
+  addNote: typeof addNote
+  resolveAbuseSignal: typeof resolveAbuseSignal
+  listAbuseSignals: typeof listAbuseSignals
+  countOpenSignals: typeof countOpenSignals
+  resolveSession: typeof resolveSession
+  guard: typeof adminAuthHandler
 }
 
-export const adminUserRoutes = new Elysia({ prefix: '/admin' })
-  .onBeforeHandle(adminAuthHandler)
+const defaultDeps: AdminUserDeps = {
+  suspendUser,
+  unsuspendUser,
+  warnUser,
+  addNote,
+  resolveAbuseSignal,
+  listAbuseSignals,
+  countOpenSignals,
+  resolveSession,
+  guard: adminAuthHandler,
+}
+
+export function createAdminUserRoutes(overrides: Partial<AdminUserDeps> = {}) {
+  const deps = { ...defaultDeps, ...overrides }
+
+  async function actorFor(request: Request): Promise<string> {
+    const { user } = await deps.resolveSession(request)
+    return user?.id ?? ADMIN_KEY_ACTOR
+  }
+
+  return new Elysia({ prefix: '/admin' })
+  .onBeforeHandle(deps.guard)
 
   // ── Accounts ────────────────────────────────────────────────────────
   .get(
@@ -163,7 +190,7 @@ export const adminUserRoutes = new Elysia({ prefix: '/admin' })
       }
 
       const until = body.hours ? new Date(Date.now() + body.hours * 60 * 60_000) : null
-      const updated = await suspendUser({
+      const updated = await deps.suspendUser({
         userId: params.id,
         reason: body.reason.trim(),
         kind: body.kind,
@@ -197,7 +224,7 @@ export const adminUserRoutes = new Elysia({ prefix: '/admin' })
   .post(
     '/users/:id/unsuspend',
     async ({ params, body, request, set }) => {
-      const updated = await unsuspendUser(params.id, await actorFor(request), body?.reason)
+      const updated = await deps.unsuspendUser(params.id, await actorFor(request), body?.reason)
       if (!updated) {
         set.status = 404
         return { error: 'Account not found' }
@@ -213,7 +240,7 @@ export const adminUserRoutes = new Elysia({ prefix: '/admin' })
   .post(
     '/users/:id/warn',
     async ({ params, body, request }) => {
-      await warnUser(params.id, body.reason.trim(), await actorFor(request))
+      await deps.warnUser(params.id, body.reason.trim(), await actorFor(request))
       return { ok: true }
     },
     {
@@ -229,7 +256,7 @@ export const adminUserRoutes = new Elysia({ prefix: '/admin' })
   .post(
     '/users/:id/note',
     async ({ params, body, request }) => {
-      await addNote(params.id, body.note.trim(), await actorFor(request))
+      await deps.addNote(params.id, body.note.trim(), await actorFor(request))
       return { ok: true }
     },
     {
@@ -242,11 +269,11 @@ export const adminUserRoutes = new Elysia({ prefix: '/admin' })
   .get(
     '/abuse',
     async ({ query }) => ({
-      signals: await listAbuseSignals({
+      signals: await deps.listAbuseSignals({
         includeResolved: query.includeResolved === 'true',
         limit: Math.min(Number(query.limit ?? 100), 500),
       }),
-      open: await countOpenSignals(),
+      open: await deps.countOpenSignals(),
       throttle: throttleStats(),
     }),
     {
@@ -262,7 +289,7 @@ export const adminUserRoutes = new Elysia({ prefix: '/admin' })
   .post(
     '/abuse/:id/resolve',
     async ({ params, request, set }) => {
-      const resolved = await resolveAbuseSignal(params.id, await actorFor(request))
+      const resolved = await deps.resolveAbuseSignal(params.id, await actorFor(request))
       if (!resolved) {
         set.status = 404
         return { error: 'Signal not found or already resolved' }
@@ -271,3 +298,6 @@ export const adminUserRoutes = new Elysia({ prefix: '/admin' })
     },
     { detail: { summary: 'Dismiss an abuse signal', tags: ['Admin'] } },
   )
+}
+
+export const adminUserRoutes = createAdminUserRoutes()

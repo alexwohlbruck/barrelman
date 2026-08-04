@@ -1,5 +1,6 @@
 import Elysia, { t } from 'elysia'
 import { apiAuth, apiAuthAfter } from '../middleware/api-auth'
+import { safeEqual } from '../lib/crypto'
 
 function getMartinUrl() {
   return process.env.MARTIN_URL || 'http://barrelman-martin:3000'
@@ -31,8 +32,9 @@ export function tileAuthHandler(context: {
   const authorization = context.headers['authorization']
 
   if (tileKey) {
-    if (authorization && authorization.replace('Bearer ', '').trim() === tileKey) return
-    if (context.query.token === tileKey) return
+    // Constant-time — see the note in api-auth.ts on timing leaks.
+    if (authorization && safeEqual(authorization.replace('Bearer ', '').trim(), tileKey)) return
+    if (context.query.token && safeEqual(context.query.token, tileKey)) return
 
     // Setting a tile key is an explicit decision that tiles are not public, so
     // an anonymous caller is refused here rather than being handed to the

@@ -101,6 +101,20 @@ Two hot-reload caveats that have cost real debugging time:
   the Polar client, interval timers). If a change appears not to apply,
   `docker restart barrelman` before hunting for a bug.
 
+### Adding an environment variable
+Three places, or it will not work: `.env.example`, `docs/configuration.md`, and
+the `barrelman` service's `environment:` block in `docker-compose.yml`. Compose
+does not forward the host environment, so a variable missing from that block is
+absent inside the container while looking configured everywhere else.
+
+### Testing Elysia guards
+Never stub a lifecycle hook (`onBeforeHandle`, `onAfterHandle`) with `mock()`.
+Elysia compiles its handler chain by inspecting the hook function, and a bun
+mock defeats that: the guard's refusal is returned as the response **but the
+handler still runs**. A test written that way reports a passing guard while the
+side effect happened anyway. Use a plain function and count calls by hand — see
+`src/routes/admin-users.test.ts`.
+
 ### Docs
 Prose documentation lives in `docs/` — `development.md`, `accounts.md`,
 `pricing.md`, `abuse-controls.md`, `polar-setup.md`, `configuration.md`, indexed

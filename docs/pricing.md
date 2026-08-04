@@ -64,6 +64,14 @@ than sending anyone to a payment page.
 
 Nobody can run up a bill on a plan they did not pay for.
 
+**Overage is capped.** Paid plans keep serving past the allowance, but only up
+to a multiple of it (3x on Developer and Business, 2x on Scale); past that,
+requests are refused with a `402` carrying `reason: "overage-cap-reached"`. A
+leaked key would otherwise accrue charges with no ceiling — a Developer key at
+its own rate limit against `/isochrone` is roughly $1/minute — and the
+burn-rate detector only runs on the hourly sweep. Enterprise is uncapped
+because its volume is contractual.
+
 **Overage stays close to the included rate** — 1.6–1.8×, not the 10× an earlier
 draft charged. The customer hitting overage is the one about to buy the next
 plan up; punishing them for it is backwards. A test asserts this stays within 2×,

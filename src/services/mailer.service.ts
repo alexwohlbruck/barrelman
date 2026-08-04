@@ -66,8 +66,14 @@ async function send(to: string, subject: string, html: string, text: string): Pr
  * deliverable is not something an unauthenticated caller should learn.
  */
 export async function sendVerificationCode(email: string, code: string): Promise<boolean> {
-  if (!isEmailConfigured || process.env.NODE_ENV !== 'production') {
-    console.log(`[auth] sign-in code for ${email}: ${code}`)
+  // Logged ONLY when there is no mail transport to deliver it, because then
+  // the log is the sole way to obtain the code. Keying this on NODE_ENV (as an
+  // earlier version did) meant every deployment that forgot to set it — which
+  // is every docker-compose deployment, since no compose file sets NODE_ENV —
+  // wrote live sign-in codes to the log, where anyone with `docker logs` could
+  // read one inside its 15-minute window and sign in as that user.
+  if (!isEmailConfigured) {
+    console.log(`[auth] sign-in code for ${email}: ${code} (SMTP not configured)`)
   }
 
   const html = layout(

@@ -90,12 +90,19 @@ export interface CreditBalance {
   cycleResetsAt: string
 }
 
-export async function getBalance(userId: string): Promise<CreditBalance> {
-  const { plan, usedAtFetch, purchased } = await loadBalance(userId)
-  const used = usedAtFetch + pendingCredits(userId)
-
+/**
+ * The balance arithmetic, as a pure function of (plan, used, purchased).
+ *
+ * Split out from `getBalance` so it can be tested without a database — this is
+ * what decides whether a customer is served or refused, and it was previously
+ * reachable only through a live Postgres connection.
+ */
+export function computeBalance(plan: Plan, used: number, purchased: number): CreditBalance {
   const allowanceRemaining = Math.max(0, plan.monthlyCredits - used)
   const spentBeyondAllowance = Math.max(0, used - plan.monthlyCredits)
+
+  // The monthly allowance is spent before purchased credits, so a prepaid pack
+  // survives an idle month instead of being consumed by usage the plan covered.
   const purchasedRemaining = Math.max(0, purchased - spentBeyondAllowance)
   const overage = plan.overageAllowed ? Math.max(0, spentBeyondAllowance - purchased) : 0
 
@@ -112,6 +119,11 @@ export async function getBalance(userId: string): Promise<CreditBalance> {
   }
 }
 
+export async function getBalance(userId: string): Promise<CreditBalance> {
+  const { plan, usedAtFetch, purchased } = await loadBalance(userId)
+  return computeBalance(plan, usedAtFetch + pendingCredits(userId), purchased)
+}
+
 function nextCycleStart(date: Date = new Date()): string {
   const year = date.getUTCFullYear()
   const month = date.getUTCMonth()
@@ -120,7 +132,7 @@ function nextCycleStart(date: Date = new Date()): string {
 
 export type QuotaDecision =
   | { allowed: true; overage: boolean }
-  | { allowed: false; reason: 'out-of-credits'; balance: CreditBalance }
+  | { allowed: false; reason: 'out-of-credits' | 'overage-cap-reached'; balance: CreditBalance }
 
 /**
  * Decide whether an account may spend `credits` right now.
@@ -131,18 +143,28 @@ export type QuotaDecision =
  * request's cost per concurrent caller, which is not worth a lock on the hot
  * path of an autocomplete endpoint.
  */
-export async function checkQuota(userId: string, credits: number): Promise<QuotaDecision> {
-  const balance = await getBalance(userId)
-
+export function decideQuota(balance: CreditBalance, credits: number): QuotaDecision {
   if (balance.remaining >= credits) {
     return { allowed: true, overage: false }
   }
+
   if (balance.overageAllowed) {
     // Paid plans keep serving and bill the excess; stopping a production
     // integration dead at the allowance boundary would be worse than the bill.
+    // But not without limit — a leaked key would otherwise accrue charges
+    // indefinitely, and the burn-rate detector only runs on the hourly sweep.
+    const cap = balance.plan.overageCapMultiple * balance.plan.monthlyCredits
+    if (cap > 0 && balance.overage + credits > cap) {
+      return { allowed: false, reason: 'overage-cap-reached', balance }
+    }
     return { allowed: true, overage: true }
   }
+
   return { allowed: false, reason: 'out-of-credits', balance }
+}
+
+export async function checkQuota(userId: string, credits: number): Promise<QuotaDecision> {
+  return decideQuota(await getBalance(userId), credits)
 }
 
 // ── Ledger ──────────────────────────────────────────────────────────────
