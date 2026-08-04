@@ -9,6 +9,7 @@ import { containsRoutes } from './routes/contains'
 import { childrenRoutes } from './routes/children'
 import { placeRoutes } from './routes/place'
 import { geocodeRoutes } from './routes/geocode'
+import { authRoutes } from './routes/auth'
 import { adminRoutes } from './routes/admin'
 import { adminConsoleRoutes, adminConsoleConfigRoutes } from './routes/admin-console'
 import { consoleUiRoutes } from './lib/console-ui'
@@ -19,6 +20,7 @@ import { isochroneRoutes } from './routes/isochrone'
 import { transitRoutes } from './routes/transit'
 import { gbfsRoutes } from './routes/gbfs'
 import { ensureSchema, ensureGtfsSchema, ensureGbfsSchema } from './db'
+import { ensureAccountsSchema } from './services/accounts.service'
 import { ensureOpsJobsSchema } from './services/ops-job-store'
 import { ensureRegionsSchema } from './services/region-store.service'
 import { ensureSearchEnrichment } from './lib/search-enrichment'
@@ -50,6 +52,8 @@ await ensureGbfsSchema()
 await ensureOpsJobsSchema()
 // Import-region store (seeded from config/regions.json; editable in the console).
 await ensureRegionsSchema()
+// User accounts, API keys, usage and credits for the public API.
+await ensureAccountsSchema()
 
 // Backfill derived search columns (codes/name_abbrev/parent_context/ts) if a
 // prior import left them empty. Fire-and-forget so it never blocks startup —
@@ -67,6 +71,7 @@ const app = new Elysia()
   .use(childrenRoutes)
   .use(placeRoutes)
   .use(geocodeRoutes)
+  .use(authRoutes)
   .use(adminRoutes)
   .use(adminConsoleConfigRoutes)
   .use(adminConsoleRoutes)
