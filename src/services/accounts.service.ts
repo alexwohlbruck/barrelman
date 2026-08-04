@@ -132,6 +132,18 @@ export function ensureAccountsSchema(): Promise<void> {
       await sql`CREATE UNIQUE INDEX IF NOT EXISTS accounts_credit_ledger_external_idx ON accounts_credit_ledger (external_id)`
       await sql`CREATE INDEX IF NOT EXISTS accounts_credit_ledger_user_idx ON accounts_credit_ledger (user_id)`
 
+      // How much overage has already been reported to the billing provider for
+      // a given cycle. The reporter ingests the delta against this, so a
+      // restart or an overlapping run cannot bill the same credits twice.
+      await sql`
+        CREATE TABLE IF NOT EXISTS accounts_overage_reports (
+          user_id          text NOT NULL REFERENCES accounts_users(id) ON DELETE CASCADE,
+          cycle            date NOT NULL,
+          reported_credits integer NOT NULL DEFAULT 0,
+          updated_at       timestamptz NOT NULL DEFAULT now(),
+          PRIMARY KEY (user_id, cycle)
+        )`
+
       await sql`
         CREATE TABLE IF NOT EXISTS accounts_signup_attempts (
           ip_hash text NOT NULL,

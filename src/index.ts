@@ -13,6 +13,7 @@ import { authRoutes } from './routes/auth'
 import { passkeyRoutes } from './routes/auth-passkeys'
 import { oauthRoutes } from './routes/auth-oauth'
 import { accountRoutes } from './routes/account'
+import { billingRoutes } from './routes/billing'
 import { adminRoutes } from './routes/admin'
 import { adminConsoleRoutes, adminConsoleConfigRoutes } from './routes/admin-console'
 import { consoleUiRoutes } from './lib/console-ui'
@@ -30,6 +31,7 @@ import { ensureSearchEnrichment } from './lib/search-enrichment'
 import { ensureBrandLogos } from './lib/brand-logos'
 import { startTransitWarmup } from './lib/warmup'
 import { flushUsage, startUsageFlush } from './services/usage.service'
+import { startOverageReporting } from './services/overage.service'
 
 const port = Number(process.env.PORT) || 5001
 
@@ -79,6 +81,7 @@ const app = new Elysia()
   .use(passkeyRoutes)
   .use(oauthRoutes)
   .use(accountRoutes)
+  .use(billingRoutes)
   .use(adminRoutes)
   .use(adminConsoleConfigRoutes)
   .use(adminConsoleRoutes)
@@ -99,6 +102,10 @@ startTransitWarmup()
 // Metered usage is buffered in memory and written periodically — see
 // services/usage.service.ts for why a write per request is not viable here.
 startUsageFlush()
+
+// Metered overage is batched to the billing provider on a timer — see
+// services/overage.service.ts. No-op unless Polar is configured.
+startOverageReporting()
 
 // Flush whatever is buffered before the process goes away, so a rolling deploy
 // doesn't discard the last few seconds of billing counters.
