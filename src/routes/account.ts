@@ -23,7 +23,15 @@ import {
   currentCycleStart,
   utcDay,
 } from '../services/usage.service'
-import { toPublicUser, updateUser as _updateUser } from '../services/accounts.service'
+import {
+  acceptTerms as _acceptTerms,
+  describeTerms,
+  findUserById as _findUserById,
+  toPublicUser,
+  updateUser as _updateUser,
+} from '../services/accounts.service'
+import { describeSuspension } from '../services/moderation.service'
+import { terms as termsConfig } from '../config/accounts.config'
 import { resolveSession as _resolveSession, requireUser } from '../middleware/session'
 import { ALL_SCOPES, CREDIT_COSTS, isValidScope, listPlans } from '../billing/plans'
 
@@ -41,6 +49,8 @@ export interface AccountDeps {
   usageByDay: typeof _usageByDay
   usageByKey: typeof _usageByKey
   updateUser: typeof _updateUser
+  acceptTerms: typeof _acceptTerms
+  findUserById: typeof _findUserById
   resolveSession: typeof _resolveSession
 }
 
@@ -55,6 +65,8 @@ const defaultDeps: AccountDeps = {
   usageByDay: _usageByDay,
   usageByKey: _usageByKey,
   updateUser: _updateUser,
+  acceptTerms: _acceptTerms,
+  findUserById: _findUserById,
   resolveSession: _resolveSession,
 }
 
@@ -91,9 +103,46 @@ export function createAccountRoutes(overrides: Partial<AccountDeps> = {}) {
     .onBeforeHandle(requireUser)
 
     // ── Profile ───────────────────────────────────────────────────────
-    .get('/', ({ user }) => ({ user: toPublicUser(user!) }), {
-      detail: { summary: 'Current account', tags: ['Account'] },
-    })
+    .get(
+      '/',
+      async ({ user }) => {
+        // Read through rather than trusting the session snapshot: terms and
+        // suspension both change out from under a live session.
+        const account = (await deps.findUserById(user!.id)) ?? null
+        return {
+          user: toPublicUser(account ?? user!),
+          terms: describeTerms(account ?? { tosVersion: null, tosAcceptedAt: null }),
+          suspension: account
+            ? describeSuspension(account)
+            : { suspended: false, reason: null, kind: null, until: null, appealable: false },
+        }
+      },
+      { detail: { summary: 'Current account, terms state and any suspension', tags: ['Account'] } },
+    )
+
+    .post(
+      '/accept-terms',
+      async ({ user, body, set }) => {
+        if (body.version !== termsConfig.version) {
+          // Refuse a stale version: accepting terms the user was not shown is
+          // not consent, and it would mark them up to date against text that
+          // has since changed.
+          set.status = 409
+          return {
+            error: 'Those terms are out of date — reload and review the current version',
+            version: termsConfig.version,
+          }
+        }
+        const updated = await deps.acceptTerms(user!.id, termsConfig.version)
+        return {
+          terms: describeTerms(updated ?? { tosVersion: termsConfig.version, tosAcceptedAt: new Date() }),
+        }
+      },
+      {
+        body: t.Object({ version: t.String({ maxLength: 40 }) }),
+        detail: { summary: 'Accept the current terms of service', tags: ['Account'] },
+      },
+    )
 
     .patch(
       '/',
@@ -122,6 +171,20 @@ export function createAccountRoutes(overrides: Partial<AccountDeps> = {}) {
     .post(
       '/keys',
       async ({ user, body, set }) => {
+        // Creating a key is the moment someone starts actually using the API,
+        // which makes it the right place to require agreement. Existing keys
+        // keep working across a terms change so a version bump never breaks a
+        // running integration.
+        const account = await deps.findUserById(user!.id)
+        const terms = describeTerms(account ?? { tosVersion: null, tosAcceptedAt: null })
+        if (terms.outstanding) {
+          set.status = 451
+          return {
+            error: 'Accept the terms of service before creating an API key',
+            terms,
+          }
+        }
+
         const existing = await deps.listApiKeys(user!.id)
         if (existing.length >= MAX_KEYS_PER_ACCOUNT) {
           set.status = 409

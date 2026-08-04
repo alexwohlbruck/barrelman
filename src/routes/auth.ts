@@ -28,9 +28,10 @@ import {
 } from '../services/auth.service'
 import { sendVerificationCode as _sendVerificationCode } from '../services/mailer.service'
 import { resolveSession as _resolveSession, requireUser } from '../middleware/session'
+import { describeSuspension } from '../services/moderation.service'
 import { isValidEmail } from '../lib/email'
 import { clientIp, createRateLimiter } from '../lib/rate-limit'
-import { registrationMode } from '../config/accounts.config'
+import { registrationMode, terms } from '../config/accounts.config'
 import { enabledOAuthProviders } from '../config/oauth.config'
 
 /**
@@ -98,6 +99,7 @@ export function createAuthRoutes(overrides: Partial<AuthDeps> = {}) {
       '/config',
       () => ({
         registrationMode,
+        terms: { required: terms.required, version: terms.version, url: terms.url, privacyUrl: terms.privacyUrl },
         methods: {
           email: true,
           passkey: true,
@@ -193,7 +195,15 @@ export function createAuthRoutes(overrides: Partial<AuthDeps> = {}) {
         }
         if (user.suspendedAt) {
           set.status = 403
-          return { error: 'This account has been suspended' }
+          // Someone locked out is owed the reason and whether it lifts on its
+          // own; "suspended, goodbye" turns into a support thread that starts
+          // from nothing.
+          return {
+            error: user.suspendedReason
+              ? `This account is suspended: ${user.suspendedReason}`
+              : 'This account has been suspended',
+            suspension: describeSuspension(user),
+          }
         }
 
         const result = await deps.verifyOtp(user.id, body.code)

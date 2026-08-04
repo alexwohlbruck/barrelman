@@ -312,3 +312,70 @@ export interface BillingStatus {
   hasSubscription: boolean
   balance: CreditBalance
 }
+
+// ── Moderation (admin) ────────────────────────────────────────────────
+
+export type SuspensionKind =
+  | 'tos-violation'
+  | 'abuse'
+  | 'automated-abuse'
+  | 'billing'
+  | 'spam'
+  | 'operator-request'
+
+export interface SuspensionInfo {
+  suspended: boolean
+  reason: string | null
+  kind: SuspensionKind | null
+  until: string | null
+  /** Whether the user can plausibly do something about it themselves. */
+  appealable: boolean
+}
+
+export interface TermsState {
+  required: boolean
+  version: string
+  url: string
+  acceptedVersion: string | null
+  acceptedAt: string | null
+  /** True when the user must accept before they can create API keys. */
+  outstanding: boolean
+}
+
+export interface AdminUser {
+  id: string
+  email: string
+  name: string | null
+  role: UserRole
+  plan: string
+  createdAt: string
+  suspension: SuspensionInfo
+  terms: TermsState
+}
+
+export type AbuseSignalKind =
+  | 'burn-rate'
+  | 'error-hammering'
+  | 'multi-account'
+  | 'quota-exhausted'
+  | 'rate-limit-sustained'
+
+export interface AbuseSignal {
+  id: string
+  userId: string | null
+  kind: AbuseSignalKind
+  severity: 'low' | 'medium' | 'high'
+  detail: Record<string, unknown> | null
+  resolvedAt: string | null
+  createdAt: string
+  email: string | null
+  suspendedAt: string | null
+}
+
+export interface ThrottleStats {
+  trackedAddresses: number
+  trackedKeys: number
+  trackedAccounts: number
+  penalised: number
+  inFlight: number
+}

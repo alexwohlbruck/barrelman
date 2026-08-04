@@ -11,7 +11,7 @@ import { connection as sql, db } from '../db'
 import { users, type NewUser, type User, type UserRole } from '../schema/accounts'
 import { generateId, sha256Hex } from '../lib/crypto'
 import { emailDomain, isDisposableEmail, normalizeEmail } from '../lib/email'
-import { adminEmails, registrationMode } from '../config/accounts.config'
+import { adminEmails, registrationMode, terms, tosVersion } from '../config/accounts.config'
 
 let schemaReady: Promise<void> | null = null
 
@@ -30,9 +30,24 @@ export function ensureAccountsSchema(): Promise<void> {
           polar_customer_id text,
           signup_ip_hash    text,
           suspended_at      timestamptz,
+          suspended_reason  text,
+          suspended_kind    text,
+          suspended_by      text,
+          suspended_until   timestamptz,
+          tos_version       text,
+          tos_accepted_at   timestamptz,
           created_at        timestamptz NOT NULL DEFAULT now(),
           updated_at        timestamptz NOT NULL DEFAULT now()
         )`
+      // Added after the table shipped, so existing installs need them too.
+      await sql`
+        ALTER TABLE accounts_users
+          ADD COLUMN IF NOT EXISTS suspended_reason text,
+          ADD COLUMN IF NOT EXISTS suspended_kind   text,
+          ADD COLUMN IF NOT EXISTS suspended_by     text,
+          ADD COLUMN IF NOT EXISTS suspended_until  timestamptz,
+          ADD COLUMN IF NOT EXISTS tos_version      text,
+          ADD COLUMN IF NOT EXISTS tos_accepted_at  timestamptz`
       await sql`CREATE UNIQUE INDEX IF NOT EXISTS accounts_users_email_normalized_idx ON accounts_users (email_normalized)`
       await sql`CREATE UNIQUE INDEX IF NOT EXISTS accounts_users_polar_customer_idx ON accounts_users (polar_customer_id)`
 
@@ -143,6 +158,34 @@ export function ensureAccountsSchema(): Promise<void> {
           updated_at       timestamptz NOT NULL DEFAULT now(),
           PRIMARY KEY (user_id, cycle)
         )`
+
+      await sql`
+        CREATE TABLE IF NOT EXISTS accounts_moderation_log (
+          id         text PRIMARY KEY,
+          user_id    text NOT NULL REFERENCES accounts_users(id) ON DELETE CASCADE,
+          action     text NOT NULL,
+          kind       text,
+          reason     text,
+          actor_id   text NOT NULL,
+          metadata   jsonb,
+          created_at timestamptz NOT NULL DEFAULT now()
+        )`
+      await sql`CREATE INDEX IF NOT EXISTS accounts_moderation_log_user_idx ON accounts_moderation_log (user_id, created_at)`
+
+      await sql`
+        CREATE TABLE IF NOT EXISTS accounts_abuse_signals (
+          id          text PRIMARY KEY,
+          user_id     text REFERENCES accounts_users(id) ON DELETE CASCADE,
+          kind        text NOT NULL,
+          severity    text NOT NULL,
+          detail      jsonb,
+          ip_hash     text,
+          resolved_at timestamptz,
+          resolved_by text,
+          created_at  timestamptz NOT NULL DEFAULT now()
+        )`
+      await sql`CREATE INDEX IF NOT EXISTS accounts_abuse_signals_user_idx ON accounts_abuse_signals (user_id)`
+      await sql`CREATE INDEX IF NOT EXISTS accounts_abuse_signals_open_idx ON accounts_abuse_signals (resolved_at, created_at)`
 
       await sql`
         CREATE TABLE IF NOT EXISTS accounts_signup_attempts (
@@ -378,3 +421,42 @@ export function toPublicUser(user: {
 
 export { normalizeEmail }
 export type { User }
+
+// ── Terms of service ────────────────────────────────────────────────────
+
+/**
+ * Record acceptance of the current terms. Stores the version, so a later
+ * material change can require agreement again rather than silently assuming
+ * consent to terms nobody saw.
+ */
+export async function acceptTerms(userId: string, version: string): Promise<User | null> {
+  const [row] = await db
+    .update(users)
+    .set({ tosVersion: version, tosAcceptedAt: new Date(), updatedAt: new Date() })
+    .where(eq(users.id, userId))
+    .returning()
+  return row ?? null
+}
+
+export interface TermsState {
+  required: boolean
+  version: string
+  url: string
+  acceptedVersion: string | null
+  acceptedAt: string | null
+  /** True when the user must accept before they can create API keys. */
+  outstanding: boolean
+}
+
+export function describeTerms(user: { tosVersion: string | null; tosAcceptedAt: Date | null }): TermsState {
+  const outstanding = terms.required && user.tosVersion !== terms.version
+
+  return {
+    required: terms.required,
+    version: terms.version,
+    url: terms.url,
+    acceptedVersion: user.tosVersion,
+    acceptedAt: user.tosAcceptedAt?.toISOString() ?? null,
+    outstanding,
+  }
+}

@@ -32,8 +32,13 @@ export interface ResolvedKey {
   environment: KeyEnvironment
   scopes: string[]
   plan: string
+  /**
+   * Set when the owning account is suspended. The key still RESOLVES — the
+   * caller holds a valid credential and is owed a real explanation, not the
+   * same "invalid key" a stranger gets. The guard turns this into a 403.
+   */
   suspended: boolean
-  /** Test keys exercise the API without spending credits or hitting quota. */
+  suspensionReason: string | null
   isTest: boolean
 }
 
@@ -104,7 +109,9 @@ function normalizeScopes(scopes: string[] | undefined): string[] {
 
 /**
  * Resolve a presented key to its account. Returns null for anything unknown,
- * revoked, expired, or belonging to a suspended account.
+ * revoked or expired. A key belonging to a *suspended* account still resolves,
+ * carrying `suspended: true` — the caller holds a real credential and gets a
+ * 403 explaining why, rather than the "invalid key" a stranger would see.
  */
 export async function resolveApiKey(presented: string): Promise<ResolvedKey | null> {
   const hash = sha256Hex(presented)
@@ -123,13 +130,16 @@ export async function resolveApiKey(presented: string): Promise<ResolvedKey | nu
       expiresAt: apiKeys.expiresAt,
       plan: users.plan,
       suspendedAt: users.suspendedAt,
+      suspendedReason: users.suspendedReason,
     })
     .from(apiKeys)
     .innerJoin(users, eq(apiKeys.userId, users.id))
     .where(eq(apiKeys.hash, hash))
     .limit(1)
 
-  if (!row || row.revokedAt || (row.expiresAt && row.expiresAt.getTime() <= Date.now()) || row.suspendedAt) {
+  // A key that does not exist, was revoked, or has expired is indistinguishable
+  // from a guess, so it gets the negative cache and a flat null.
+  if (!row || row.revokedAt || (row.expiresAt && row.expiresAt.getTime() <= Date.now())) {
     negativeCache.set(hash, true)
     return null
   }
@@ -140,7 +150,8 @@ export async function resolveApiKey(presented: string): Promise<ResolvedKey | nu
     environment: row.environment,
     scopes: row.scopes,
     plan: row.plan,
-    suspended: false,
+    suspended: Boolean(row.suspendedAt),
+    suspensionReason: row.suspendedReason,
     isTest: row.environment === 'test',
   }
 

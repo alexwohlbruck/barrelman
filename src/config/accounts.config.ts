@@ -91,3 +91,31 @@ export const registrationMode = (process.env.BARRELMAN_REGISTRATION_MODE ?? 'ope
 export const accountsEnabled = process.env.BARRELMAN_ACCOUNTS_ENABLED !== 'false'
 
 export const isProduction = process.env.NODE_ENV === 'production'
+
+/**
+ * Terms of service.
+ *
+ * The version is a plain string an operator bumps when the terms materially
+ * change; accounts that accepted an older one are asked again. Leave
+ * `BARRELMAN_TOS_URL` unset on a private or self-hosted instance and the whole
+ * mechanism goes quiet — there is nothing to agree to.
+ */
+export const tosVersion = process.env.BARRELMAN_TOS_VERSION || '1'
+export const privacyUrl = process.env.BARRELMAN_PRIVACY_URL || ''
+
+/**
+ * A mutable object rather than separate consts so tests can exercise both the
+ * configured and unconfigured worlds without re-importing the module — the
+ * same shape `billing` uses, for the same reason.
+ */
+export const terms = {
+  version: tosVersion,
+  url: process.env.BARRELMAN_TOS_URL || '',
+  privacyUrl,
+  /** Acceptance is required only once an operator has terms to point at. */
+  get required(): boolean {
+    return Boolean(this.url)
+  },
+}
+
+export const tosUrl = terms.url

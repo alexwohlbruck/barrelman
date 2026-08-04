@@ -1,0 +1,330 @@
+<script setup lang="ts">
+/**
+ * Administrator view: accounts and the abuse queue.
+ *
+ * Suspending someone is destructive and hard to undo from their side — it kills
+ * their sessions and every key at once — so the dialog makes the operator type
+ * a reason, and shows them that the reason is what the user will read.
+ */
+import { computed, onMounted, ref } from 'vue'
+import { AlertTriangle, Ban, RefreshCw, Search, ShieldCheck, User } from 'lucide-vue-next'
+import PageHeader from '@/components/PageHeader.vue'
+import Badge from '@/components/ui/Badge.vue'
+import Button from '@/components/ui/Button.vue'
+import Card from '@/components/ui/Card.vue'
+import CardContent from '@/components/ui/CardContent.vue'
+import CardHeader from '@/components/ui/CardHeader.vue'
+import CardTitle from '@/components/ui/CardTitle.vue'
+import Dialog from '@/components/ui/Dialog.vue'
+import Input from '@/components/ui/Input.vue'
+import Label from '@/components/ui/Label.vue'
+import Select from '@/components/ui/Select.vue'
+import Spinner from '@/components/ui/Spinner.vue'
+import Tabs from '@/components/ui/Tabs.vue'
+import Textarea from '@/components/ui/Textarea.vue'
+import {
+  getAbuseSignals,
+  getAdminUsers,
+  resolveAbuseSignal,
+  suspendUser,
+  unsuspendUser,
+} from '@/lib/api'
+import { toast } from '@/lib/toast'
+import { formatNumber } from '@/lib/utils'
+import type { AbuseSignal, AdminUser, SuspensionKind } from '@/lib/types'
+
+const users = ref<AdminUser[]>([])
+const total = ref(0)
+const signals = ref<AbuseSignal[]>([])
+const openSignals = ref(0)
+const loading = ref(true)
+const busy = ref('')
+
+const search = ref('')
+const statusFilter = ref<'all' | 'suspended' | 'paid'>('all')
+const tab = ref<'accounts' | 'abuse'>('accounts')
+
+const target = ref<AdminUser | null>(null)
+const reason = ref('')
+const kind = ref<SuspensionKind>('tos-violation')
+const durationHours = ref('')
+
+const kindOptions: { label: string; value: SuspensionKind }[] = [
+  { label: 'Terms of service violation', value: 'tos-violation' },
+  { label: 'Abuse', value: 'abuse' },
+  { label: 'Spam', value: 'spam' },
+  { label: 'Billing', value: 'billing' },
+  { label: 'Operator request', value: 'operator-request' },
+]
+
+const suspendedCount = computed(() => users.value.filter((u) => u.suspension.suspended).length)
+
+function fail(err: unknown, title: string) {
+  toast({ title, description: err instanceof Error ? err.message : undefined, variant: 'error' })
+}
+
+async function load() {
+  loading.value = true
+  try {
+    const [userPage, abuse] = await Promise.all([
+      getAdminUsers({ search: search.value.trim() || undefined, status: statusFilter.value }),
+      getAbuseSignals(),
+    ])
+    users.value = userPage.users
+    total.value = userPage.total
+    signals.value = abuse.signals
+    openSignals.value = abuse.open
+  } catch (err) {
+    fail(err, 'Could not load accounts')
+  } finally {
+    loading.value = false
+  }
+}
+
+onMounted(load)
+
+function openSuspend(user: AdminUser) {
+  target.value = user
+  reason.value = ''
+  kind.value = 'tos-violation'
+  durationHours.value = ''
+}
+
+async function confirmSuspend() {
+  if (!target.value || !reason.value.trim()) return
+  busy.value = target.value.id
+  try {
+    await suspendUser(target.value.id, {
+      reason: reason.value.trim(),
+      kind: kind.value,
+      hours: durationHours.value ? Number(durationHours.value) : undefined,
+    })
+    toast({ title: `Suspended ${target.value.email}`, variant: 'success' })
+    target.value = null
+    await load()
+  } catch (err) {
+    fail(err, 'Could not suspend the account')
+  } finally {
+    busy.value = ''
+  }
+}
+
+async function reinstate(user: AdminUser) {
+  if (!confirm(`Reinstate ${user.email}?`)) return
+  busy.value = user.id
+  try {
+    await unsuspendUser(user.id)
+    toast({ title: `Reinstated ${user.email}`, variant: 'success' })
+    await load()
+  } catch (err) {
+    fail(err, 'Could not reinstate the account')
+  } finally {
+    busy.value = ''
+  }
+}
+
+async function dismiss(signal: AbuseSignal) {
+  busy.value = signal.id
+  try {
+    await resolveAbuseSignal(signal.id)
+    await load()
+  } catch (err) {
+    fail(err, 'Could not dismiss the signal')
+  } finally {
+    busy.value = ''
+  }
+}
+
+function severityVariant(severity: string) {
+  return severity === 'high' ? 'destructive' : severity === 'medium' ? 'warning' : 'muted'
+}
+
+function formatDate(value: string | null) {
+  return value ? new Date(value).toLocaleDateString(undefined, { dateStyle: 'medium' }) : '—'
+}
+
+function describeDetail(detail: Record<string, unknown> | null) {
+  if (!detail) return ''
+  return Object.entries(detail)
+    .map(([key, value]) => `${key}: ${typeof value === 'number' ? formatNumber(value) : value}`)
+    .join(' · ')
+}
+</script>
+
+<template>
+  <PageHeader title="Accounts" subtitle="Moderate developer accounts and review automated abuse signals">
+    <template #actions>
+      <Button variant="outline" size="sm" :disabled="loading" @click="load">
+        <RefreshCw :class="['size-4', loading && 'animate-spin']" />
+        Refresh
+      </Button>
+    </template>
+  </PageHeader>
+
+  <div class="mx-auto max-w-5xl space-y-4 p-8">
+    <Tabs
+      v-model="tab"
+      :tabs="[
+        { value: 'accounts', label: `Accounts (${total})` },
+        { value: 'abuse', label: `Abuse queue (${openSignals})` },
+      ]"
+    />
+
+    <div v-if="loading" class="flex justify-center py-16"><Spinner class="size-6" /></div>
+
+    <!-- Accounts -->
+    <template v-else-if="tab === 'accounts'">
+      <div class="flex flex-wrap items-center gap-2">
+        <div class="relative min-w-56 flex-1">
+          <Search class="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+          <Input v-model="search" placeholder="Search by email or name" class="pl-9" @keyup.enter="load" />
+        </div>
+        <Select
+          v-model="statusFilter"
+          :options="[
+            { label: 'All accounts', value: 'all' },
+            { label: 'Suspended', value: 'suspended' },
+            { label: 'Paid plans', value: 'paid' },
+          ]"
+          class="w-44"
+          @update:model-value="load"
+        />
+        <Button variant="outline" @click="load">Apply</Button>
+      </div>
+
+      <p v-if="suspendedCount" class="text-sm text-muted-foreground">
+        {{ suspendedCount }} of the accounts shown {{ suspendedCount === 1 ? 'is' : 'are' }} suspended.
+      </p>
+
+      <Card v-if="!users.length">
+        <CardContent class="py-14 text-center text-sm text-muted-foreground">No accounts match.</CardContent>
+      </Card>
+
+      <div v-else class="flex flex-col gap-2">
+        <Card v-for="account in users" :key="account.id">
+          <CardContent class="flex items-center gap-4 py-4">
+            <div
+              class="flex size-9 shrink-0 items-center justify-center rounded-lg"
+              :class="account.suspension.suspended ? 'bg-destructive/15 text-destructive' : 'bg-muted text-muted-foreground'"
+            >
+              <Ban v-if="account.suspension.suspended" class="size-4" />
+              <User v-else class="size-4" />
+            </div>
+
+            <div class="min-w-0 flex-1">
+              <div class="flex flex-wrap items-center gap-2">
+                <span class="truncate font-medium">{{ account.email }}</span>
+                <Badge variant="secondary">{{ account.plan }}</Badge>
+                <Badge v-if="account.role === 'admin'" variant="info">admin</Badge>
+                <Badge v-if="account.suspension.suspended" variant="destructive">
+                  {{ account.suspension.kind || 'suspended' }}
+                </Badge>
+                <Badge v-if="account.terms.required && account.terms.outstanding" variant="warning">
+                  terms not accepted
+                </Badge>
+              </div>
+              <p v-if="account.suspension.suspended" class="mt-1 text-xs text-destructive">
+                {{ account.suspension.reason }}
+                <span v-if="account.suspension.until" class="text-muted-foreground">
+                  · lifts {{ formatDate(account.suspension.until) }}
+                </span>
+              </p>
+              <p v-else class="mt-1 text-xs text-muted-foreground">Joined {{ formatDate(account.createdAt) }}</p>
+            </div>
+
+            <Button
+              v-if="account.suspension.suspended"
+              variant="outline"
+              size="sm"
+              :disabled="busy === account.id"
+              @click="reinstate(account)"
+            >
+              <ShieldCheck class="size-4" />
+              Reinstate
+            </Button>
+            <Button
+              v-else-if="account.role !== 'admin'"
+              variant="ghost"
+              size="sm"
+              :disabled="busy === account.id"
+              @click="openSuspend(account)"
+            >
+              <Ban class="size-4 text-destructive" />
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+    </template>
+
+    <!-- Abuse queue -->
+    <template v-else>
+      <Card v-if="!signals.length">
+        <CardContent class="flex flex-col items-center gap-2 py-14 text-center">
+          <ShieldCheck class="size-8 text-[var(--success)]" />
+          <p class="font-medium">Nothing to review</p>
+          <p class="text-sm text-muted-foreground">
+            Automated detections appear here. A signal is an observation, not a judgement.
+          </p>
+        </CardContent>
+      </Card>
+
+      <div v-else class="flex flex-col gap-2">
+        <Card v-for="signal in signals" :key="signal.id">
+          <CardContent class="flex items-center gap-4 py-4">
+            <AlertTriangle class="size-4 shrink-0 text-[var(--warning)]" />
+            <div class="min-w-0 flex-1">
+              <div class="flex flex-wrap items-center gap-2">
+                <span class="font-medium">{{ signal.kind }}</span>
+                <Badge :variant="severityVariant(signal.severity)">{{ signal.severity }}</Badge>
+                <span v-if="signal.email" class="truncate text-sm text-muted-foreground">{{ signal.email }}</span>
+                <Badge v-if="signal.suspendedAt" variant="destructive">already suspended</Badge>
+              </div>
+              <p class="mt-1 text-xs text-muted-foreground">
+                {{ describeDetail(signal.detail) }} · {{ formatDate(signal.createdAt) }}
+              </p>
+            </div>
+            <Button variant="ghost" size="sm" :disabled="busy === signal.id" @click="dismiss(signal)">
+              Dismiss
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+    </template>
+
+    <!-- Suspend -->
+    <Dialog :open="target !== null" title="Suspend account" @update:open="target = null">
+      <div class="flex flex-col gap-4">
+        <p class="text-sm text-muted-foreground">
+          This ends every session and disables every API key for
+          <strong>{{ target?.email }}</strong> immediately.
+        </p>
+
+        <div class="flex flex-col gap-1.5">
+          <Label for="suspend-kind">Category</Label>
+          <Select id="suspend-kind" v-model="kind" :options="kindOptions" />
+        </div>
+
+        <div class="flex flex-col gap-1.5">
+          <Label for="suspend-reason">Reason</Label>
+          <Textarea id="suspend-reason" v-model="reason" :rows="3" placeholder="What did they do?" />
+          <p class="text-xs text-muted-foreground">
+            Shown to the user verbatim — at sign-in and on every API response. Write it for them to read.
+          </p>
+        </div>
+
+        <div class="flex flex-col gap-1.5">
+          <Label for="suspend-hours">Duration (hours)</Label>
+          <Input id="suspend-hours" v-model="durationHours" inputmode="numeric" placeholder="Leave empty for indefinite" />
+        </div>
+      </div>
+
+      <div class="mt-2 flex justify-end gap-2">
+        <Button variant="outline" @click="target = null">Cancel</Button>
+        <Button variant="destructive" :disabled="!reason.trim() || busy === target?.id" @click="confirmSuspend">
+          <Spinner v-if="busy === target?.id" class="size-4" />
+          <template v-else>Suspend</template>
+        </Button>
+      </div>
+    </Dialog>
+  </div>
+</template>

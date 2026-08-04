@@ -19,6 +19,12 @@ import type {
   PublicUser,
   SessionSummary,
   UsageReport,
+  AbuseSignal,
+  AdminUser,
+  SuspensionInfo,
+  SuspensionKind,
+  TermsState,
+  ThrottleStats,
 } from './types'
 
 export class ApiError extends Error {
@@ -206,8 +212,8 @@ export async function streamJob(
 
 
 // ── Account: profile, sessions and passkeys ───────────────────────────
-export function getAccount(): Promise<{ user: PublicUser }> {
-  return request<{ user: PublicUser }>('/account')
+export function getAccount(): Promise<{ user: PublicUser; terms: TermsState; suspension: SuspensionInfo }> {
+  return request<{ user: PublicUser; terms: TermsState; suspension: SuspensionInfo }>('/account')
 }
 
 export function updateAccount(name: string): Promise<{ user: PublicUser }> {
@@ -325,4 +331,58 @@ export function getPortalUrl(): Promise<{ portalUrl: string }> {
 
 export function syncBilling(): Promise<{ planId: string }> {
   return request<{ planId: string }>('/billing/sync', { method: 'POST' })
+}
+
+// ── Terms of service ──────────────────────────────────────────────────
+export function acceptTerms(version: string): Promise<{ terms: TermsState }> {
+  return request<{ terms: TermsState }>('/account/accept-terms', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ version }),
+  })
+}
+
+// ── Admin moderation ──────────────────────────────────────────────────
+export function getAdminUsers(params: {
+  search?: string
+  status?: 'all' | 'suspended' | 'paid'
+  limit?: number
+  offset?: number
+} = {}): Promise<{ users: AdminUser[]; total: number; limit: number; offset: number }> {
+  const query = new URLSearchParams()
+  if (params.search) query.set('search', params.search)
+  if (params.status && params.status !== 'all') query.set('status', params.status)
+  if (params.limit) query.set('limit', String(params.limit))
+  if (params.offset) query.set('offset', String(params.offset))
+  const suffix = query.toString()
+  return request(`/admin/users${suffix ? `?${suffix}` : ''}`)
+}
+
+export function suspendUser(
+  id: string,
+  payload: { reason: string; kind: SuspensionKind; hours?: number },
+): Promise<{ suspension: SuspensionInfo }> {
+  return request<{ suspension: SuspensionInfo }>(`/admin/users/${id}/suspend`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+}
+
+export function unsuspendUser(id: string, reason?: string): Promise<{ suspension: SuspensionInfo }> {
+  return request<{ suspension: SuspensionInfo }>(`/admin/users/${id}/unsuspend`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ reason }),
+  })
+}
+
+export function getAbuseSignals(
+  includeResolved = false,
+): Promise<{ signals: AbuseSignal[]; open: number; throttle: ThrottleStats }> {
+  return request(`/admin/abuse?includeResolved=${includeResolved}`)
+}
+
+export function resolveAbuseSignal(id: string): Promise<{ ok: boolean }> {
+  return request<{ ok: boolean }>(`/admin/abuse/${id}/resolve`, { method: 'POST' })
 }

@@ -18,6 +18,7 @@ import {
   timestamp,
   date,
   bigint,
+  jsonb,
   index,
   uniqueIndex,
   primaryKey,
@@ -25,6 +26,19 @@ import {
 
 /** Roles are a flat ladder, not a set — `admin` implies everything `user` has. */
 export type UserRole = 'user' | 'admin'
+
+/**
+ * Why an account is suspended. The distinction matters to the user: `abuse`
+ * and `tos-violation` are judgements to appeal, while `billing` and
+ * `automated-abuse` clear themselves once the underlying condition does.
+ */
+export type SuspensionKind =
+  | 'tos-violation'
+  | 'abuse'
+  | 'automated-abuse'
+  | 'billing'
+  | 'spam'
+  | 'operator-request'
 
 export const users = pgTable(
   'accounts_users',
@@ -49,8 +63,23 @@ export const users = pgTable(
      * sign-ups per address — we never need the address back, so we don't keep it.
      */
     signupIpHash: text('signup_ip_hash'),
-    /** Set when an operator disables the account; blocks sign-in and API keys. */
+    /** Set when the account is disabled; blocks sign-in and every API key. */
     suspendedAt: timestamp('suspended_at', { withTimezone: true }),
+    /**
+     * Why it was suspended. Shown verbatim to the user — someone who has been
+     * cut off is owed a reason they can act on, and a support thread that
+     * starts with "your account is disabled, no idea why" helps nobody.
+     */
+    suspendedReason: text('suspended_reason'),
+    /** Category, for filtering and for deciding whether an appeal is possible. */
+    suspendedKind: text('suspended_kind').$type<SuspensionKind>(),
+    /** Admin user id, or `system` for an automated action. */
+    suspendedBy: text('suspended_by'),
+    /** When the suspension lifts on its own. Null means indefinite. */
+    suspendedUntil: timestamp('suspended_until', { withTimezone: true }),
+    /** Terms version this account has accepted; null means never accepted. */
+    tosVersion: text('tos_version'),
+    tosAcceptedAt: timestamp('tos_accepted_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
@@ -256,6 +285,64 @@ export const signupAttempts = pgTable(
   (t) => [primaryKey({ columns: [t.ipHash, t.day] })],
 )
 
+/**
+ * Moderation actions, append-only. Suspending is a judgement about a person, so
+ * it needs a record of who decided what and why — the columns on `users` hold
+ * only the current state, which tells you nothing about how it got there.
+ */
+export const moderationLog = pgTable(
+  'accounts_moderation_log',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    action: text('action').notNull().$type<ModerationAction>(),
+    kind: text('kind').$type<SuspensionKind>(),
+    reason: text('reason'),
+    /** Admin user id, or `system` when an automated rule acted. */
+    actorId: text('actor_id').notNull(),
+    metadata: jsonb('metadata').$type<Record<string, unknown>>(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('accounts_moderation_log_user_idx').on(t.userId, t.createdAt)],
+)
+
+export type ModerationAction = 'suspend' | 'unsuspend' | 'warn' | 'note' | 'flag' | 'dismiss-flag'
+
+/**
+ * Automated abuse detections awaiting a human decision. Kept separate from the
+ * moderation log because a signal is an observation, not an action — most
+ * resolve as false positives and should never imply anyone did anything.
+ */
+export const abuseSignals = pgTable(
+  'accounts_abuse_signals',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id').references(() => users.id, { onDelete: 'cascade' }),
+    /** What tripped: `burn-rate`, `error-hammering`, `multi-account`, … */
+    kind: text('kind').notNull().$type<AbuseSignalKind>(),
+    severity: text('severity').notNull().$type<'low' | 'medium' | 'high'>(),
+    detail: jsonb('detail').$type<Record<string, unknown>>(),
+    /** Hashed source address, when the signal is about an address not a user. */
+    ipHash: text('ip_hash'),
+    resolvedAt: timestamp('resolved_at', { withTimezone: true }),
+    resolvedBy: text('resolved_by'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('accounts_abuse_signals_user_idx').on(t.userId),
+    index('accounts_abuse_signals_open_idx').on(t.resolvedAt, t.createdAt),
+  ],
+)
+
+export type AbuseSignalKind =
+  | 'burn-rate'
+  | 'error-hammering'
+  | 'multi-account'
+  | 'quota-exhausted'
+  | 'rate-limit-sustained'
+
 export type User = typeof users.$inferSelect
 export type NewUser = typeof users.$inferInsert
 export type Session = typeof sessions.$inferSelect
@@ -265,3 +352,5 @@ export type OAuthAccount = typeof oauthAccounts.$inferSelect
 export type ApiKey = typeof apiKeys.$inferSelect
 export type UsageRecord = typeof usageRecords.$inferSelect
 export type CreditEntry = typeof creditLedger.$inferSelect
+export type ModerationEntry = typeof moderationLog.$inferSelect
+export type AbuseSignal = typeof abuseSignals.$inferSelect

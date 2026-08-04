@@ -11,12 +11,17 @@ import { connection as sql } from '../db'
 import { pruneExpiredTokens } from './auth.service'
 import { pruneSignupAttempts } from './accounts.service'
 import { pruneRateLimiters } from '../lib/rate-limit'
-import { pruneRateBuckets } from '../middleware/api-auth'
+import { pruneThrottleState } from './throttle.service'
+import { expireSuspensions } from './moderation.service'
+import { runAbuseDetection } from './abuse-detection.service'
 
 const SWEEP_INTERVAL_MS = Number(process.env.BARRELMAN_ACCOUNT_SWEEP_MS ?? 60 * 60_000)
 
 export interface SweepResult {
   sessions: number
+  suspensionsLifted: number
+  flagged: number
+  autoSuspended: number
 }
 
 export async function sweepAccounts(): Promise<SweepResult> {
@@ -27,9 +32,24 @@ export async function sweepAccounts(): Promise<SweepResult> {
   await pruneExpiredTokens()
   await pruneSignupAttempts()
   pruneRateLimiters()
-  pruneRateBuckets()
+  pruneThrottleState()
 
-  return { sessions: expired.length }
+  // A timed suspension that never lifts is an indefinite one with extra steps.
+  const suspensionsLifted = await expireSuspensions()
+
+  // Detection is best-effort: a failure here must not stop the rest of the
+  // sweep, which is doing the janitorial work that keeps tables bounded.
+  let flagged = 0
+  let autoSuspended = 0
+  try {
+    const result = await runAbuseDetection()
+    flagged = result.flagged
+    autoSuspended = result.suspended
+  } catch (err) {
+    console.error('[abuse] detection pass failed', err)
+  }
+
+  return { sessions: expired.length, suspensionsLifted, flagged, autoSuspended }
 }
 
 /**
@@ -44,8 +64,12 @@ export function startAccountSweep(): void {
 
   const run = () =>
     sweepAccounts()
-      .then(({ sessions }) => {
+      .then(({ sessions, suspensionsLifted, flagged, autoSuspended }) => {
         if (sessions > 0) console.log(`[accounts] swept ${sessions} expired session(s)`)
+        if (suspensionsLifted > 0) console.log(`[moderation] lifted ${suspensionsLifted} expired suspension(s)`)
+        if (flagged > 0 || autoSuspended > 0) {
+          console.warn(`[abuse] ${flagged} new signal(s), ${autoSuspended} automatic hold(s)`)
+        }
       })
       .catch((err) => console.error('[accounts] sweep failed', err))
 

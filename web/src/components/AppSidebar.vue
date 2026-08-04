@@ -14,6 +14,7 @@ import {
   MapPin,
   TerminalSquare,
   UserRound,
+  Users,
 } from 'lucide-vue-next'
 import { jobStats } from '@/lib/store'
 import { adminKey, authRequired, isAdmin, signOut, user } from '@/lib/auth'
@@ -33,6 +34,7 @@ const accountNav = [
 /** Operator tools, shown only to admins. */
 const adminNav = [
   { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
+  { to: '/accounts', label: 'Accounts', icon: Users },
   { to: '/regions', label: 'Regions', icon: MapPin },
   { to: '/scripts', label: 'Scripts', icon: TerminalSquare },
   { to: '/jobs', label: 'Jobs', icon: ListChecks, badge: 'jobs' as const },

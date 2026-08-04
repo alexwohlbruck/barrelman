@@ -15,6 +15,7 @@ import { oauthRoutes } from './routes/auth-oauth'
 import { accountRoutes } from './routes/account'
 import { billingRoutes } from './routes/billing'
 import { adminRoutes } from './routes/admin'
+import { adminUserRoutes } from './routes/admin-users'
 import { adminConsoleRoutes, adminConsoleConfigRoutes } from './routes/admin-console'
 import { consoleUiRoutes } from './lib/console-ui'
 import { tileRoutes } from './routes/tiles'
@@ -85,6 +86,7 @@ const app = new Elysia()
   .use(accountRoutes)
   .use(billingRoutes)
   .use(adminRoutes)
+  .use(adminUserRoutes)
   .use(adminConsoleConfigRoutes)
   .use(adminConsoleRoutes)
   .use(consoleUiRoutes)

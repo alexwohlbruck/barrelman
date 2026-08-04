@@ -3,7 +3,7 @@
  * Account settings: profile, sign-in methods and active sessions.
  */
 import { computed, onMounted, ref } from 'vue'
-import { Fingerprint, Link2, Link2Off, LogOut, Monitor, Plus, Trash2 } from 'lucide-vue-next'
+import { Fingerprint, Link2, Link2Off, LogOut, Monitor, Plus, ShieldAlert, Trash2 } from 'lucide-vue-next'
 import PageHeader from '@/components/PageHeader.vue'
 import Badge from '@/components/ui/Badge.vue'
 import Button from '@/components/ui/Button.vue'
@@ -15,7 +15,9 @@ import Input from '@/components/ui/Input.vue'
 import Label from '@/components/ui/Label.vue'
 import Spinner from '@/components/ui/Spinner.vue'
 import {
+  acceptTerms,
   deletePasskey,
+  getAccount,
   getLinkedProviders,
   getPasskeys,
   getSessions,
@@ -26,11 +28,13 @@ import {
 } from '@/lib/api'
 import { authConfig, passkeysSupported, refreshUser, registerPasskey, signInWithOAuth, user } from '@/lib/auth'
 import { toast } from '@/lib/toast'
-import type { PasskeySummary, SessionSummary } from '@/lib/types'
+import type { PasskeySummary, SessionSummary, SuspensionInfo, TermsState } from '@/lib/types'
 
 const passkeys = ref<PasskeySummary[]>([])
 const sessions = ref<SessionSummary[]>([])
 const linked = ref<{ provider: string; createdAt: string }[]>([])
+const terms = ref<TermsState | null>(null)
+const suspension = ref<SuspensionInfo | null>(null)
 const loading = ref(true)
 const busy = ref('')
 
@@ -46,11 +50,14 @@ function fail(err: unknown, title: string) {
 async function load() {
   loading.value = true
   try {
-    const [passkeyList, sessionList, providerList] = await Promise.all([
+    const [account, passkeyList, sessionList, providerList] = await Promise.all([
+      getAccount(),
       getPasskeys().catch(() => []),
       getSessions().catch(() => []),
       getLinkedProviders().catch(() => []),
     ])
+    terms.value = account.terms
+    suspension.value = account.suspension
     passkeys.value = passkeyList
     sessions.value = sessionList
     linked.value = providerList
@@ -63,6 +70,20 @@ async function load() {
 }
 
 onMounted(load)
+
+async function agreeToTerms() {
+  if (!terms.value) return
+  busy.value = 'terms'
+  try {
+    const result = await acceptTerms(terms.value.version)
+    terms.value = result.terms
+    toast({ title: 'Terms accepted', variant: 'success' })
+  } catch (err) {
+    fail(err, 'Could not record your acceptance')
+  } finally {
+    busy.value = ''
+  }
+}
 
 async function saveProfile() {
   busy.value = 'profile'
@@ -173,6 +194,45 @@ function formatDate(value: string | null) {
     <div v-if="loading" class="flex justify-center py-16"><Spinner class="size-6" /></div>
 
     <template v-else>
+      <!-- Suspension notice: the most important thing on the page when it applies -->
+      <Card v-if="suspension?.suspended" class="border-destructive">
+        <CardContent class="flex flex-col gap-2 py-5">
+          <div class="flex items-center gap-2">
+            <ShieldAlert class="size-4 text-destructive" />
+            <span class="font-medium text-destructive">This account is suspended</span>
+          </div>
+          <p class="text-sm">{{ suspension.reason }}</p>
+          <p v-if="suspension.until" class="text-xs text-muted-foreground">
+            The suspension lifts automatically on
+            {{ new Date(suspension.until).toLocaleString() }}.
+          </p>
+          <p v-else-if="suspension.appealable" class="text-xs text-muted-foreground">
+            If you believe this is a mistake, reply to any email from us to appeal.
+          </p>
+        </CardContent>
+      </Card>
+
+      <!-- Outstanding terms: blocks key creation, so say so plainly -->
+      <Card v-if="terms?.required && terms.outstanding" class="border-[var(--warning)]">
+        <CardContent class="flex flex-wrap items-center justify-between gap-3 py-5">
+          <div>
+            <p class="font-medium">
+              {{ terms.acceptedVersion ? 'The terms of service have changed' : 'Accept the terms of service' }}
+            </p>
+            <p class="mt-1 text-sm text-muted-foreground">
+              You need to accept version {{ terms.version }} before creating new API keys.
+              <a v-if="terms.url" :href="terms.url" target="_blank" rel="noopener" class="underline">
+                Read the terms
+              </a>
+            </p>
+          </div>
+          <Button :disabled="busy === 'terms'" @click="agreeToTerms">
+            <Spinner v-if="busy === 'terms'" class="size-4" />
+            <template v-else>Accept</template>
+          </Button>
+        </CardContent>
+      </Card>
+
       <!-- Profile -->
       <Card>
         <CardHeader><CardTitle>Profile</CardTitle></CardHeader>

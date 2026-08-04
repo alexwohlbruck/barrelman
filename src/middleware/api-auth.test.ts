@@ -42,6 +42,7 @@ function resolved(overrides: Partial<ResolvedKey> = {}): ResolvedKey {
     scopes: ['*'],
     plan: 'developer',
     suspended: false,
+    suspensionReason: null,
     isTest: false,
     ...overrides,
   }
@@ -184,7 +185,10 @@ describe('apiAuth guard', () => {
 
     expect(res.status).toBe(403)
     expect(body.scope).toBe('isochrone')
-    expect(d.recordUsage).not.toHaveBeenCalled()
+    // Recorded as a refused request so it shows up in the account's usage —
+    // a key being called with the wrong scope is something the owner should
+    // see — but never charged, and never quota-checked.
+    expect(d.recordUsage).toHaveBeenCalledWith(expect.objectContaining({ credits: 0, rejected: true }))
     expect(d.checkQuota).not.toHaveBeenCalled()
   })
 
@@ -239,40 +243,75 @@ describe('apiAuth guard', () => {
   })
 })
 
-describe('rate limiting', () => {
-  test('429s past the plan ceiling and reports Retry-After', async () => {
-    // The free plan allows 60/minute.
+describe('throttling', () => {
+  /**
+   * Layers, cheapest first: penalty box, per-IP, per-key, per-account. The
+   * per-key limit is a share of the account budget, so a single key is refused
+   * before the account is — one leaked key must not starve the others.
+   */
+  const PER_KEY_LIMIT = Math.floor(60 * 0.8) // free plan: 60/min, key share 80%
+
+  test('refuses a single key at its share of the account budget', async () => {
     const d = deps({ resolveApiKey: mock(async () => resolved({ plan: 'free' })) })
     const instance = app('tiles', d)
     const request = () => instance.handle(get({ authorization: `Bearer ${LIVE_KEY}` }))
 
     const statuses: number[] = []
-    for (let i = 0; i < 62; i += 1) statuses.push((await request()).status)
+    for (let i = 0; i < PER_KEY_LIMIT + 2; i += 1) statuses.push((await request()).status)
 
-    expect(statuses.slice(0, 60).every((s) => s === 200)).toBe(true)
-    expect(statuses[60]).toBe(429)
-
-    const limited = await request()
-    expect(limited.headers.get('retry-after')).toBe('60')
+    expect(statuses.slice(0, PER_KEY_LIMIT).every((s) => s === 200)).toBe(true)
+    expect(statuses[PER_KEY_LIMIT]).toBe(429)
   })
 
-  test('a throttled request is counted but not charged', async () => {
+  test('reports which layer refused, and a Retry-After', async () => {
     const d = deps({ resolveApiKey: mock(async () => resolved({ plan: 'free' })) })
     const instance = app('tiles', d)
-    for (let i = 0; i < 61; i += 1) await instance.handle(get({ authorization: `Bearer ${LIVE_KEY}` }))
+    for (let i = 0; i < PER_KEY_LIMIT; i += 1) await instance.handle(get({ authorization: `Bearer ${LIVE_KEY}` }))
+
+    const res = await instance.handle(get({ authorization: `Bearer ${LIVE_KEY}` }))
+    const body = await res.json()
+
+    expect(res.status).toBe(429)
+    expect(body.layer).toBe('key')
+    expect(Number(res.headers.get('retry-after'))).toBeGreaterThan(0)
+  })
+
+  test('a second key on the same account is refused by the account limit', async () => {
+    // Two distinct keys, each under its own per-key share, together exceed the
+    // account's 60/min — the account layer is what catches that.
+    const instance = (keyId: string) =>
+      app('tiles', deps({ resolveApiKey: mock(async () => resolved({ plan: 'free', keyId })) }))
+
+    const a = instance('key-a')
+    const b = instance('key-b')
+
+    let refusedByAccount = false
+    for (let i = 0; i < 40; i += 1) {
+      await a.handle(get({ authorization: `Bearer ${LIVE_KEY}` }))
+      const res = await b.handle(get({ authorization: `Bearer ${LIVE_KEY}` }))
+      if (res.status === 429 && (await res.json()).layer === 'account') refusedByAccount = true
+    }
+
+    expect(refusedByAccount).toBe(true)
+  })
+
+  test('a throttled request is counted but never charged', async () => {
+    const d = deps({ resolveApiKey: mock(async () => resolved({ plan: 'free' })) })
+    const instance = app('tiles', d)
+    for (let i = 0; i < PER_KEY_LIMIT + 1; i += 1) await instance.handle(get({ authorization: `Bearer ${LIVE_KEY}` }))
 
     const calls = (d.recordUsage as ReturnType<typeof mock>).mock.calls
     const rejections = calls.filter((c: unknown[]) => (c[0] as { rejected?: boolean }).rejected)
-    expect(rejections.length).toBe(1)
-    expect((rejections[0]![0] as { credits: number }).credits).toBe(0)
+    expect(rejections.length).toBeGreaterThan(0)
+    expect(rejections.every((c: unknown[]) => (c[0] as { credits: number }).credits === 0)).toBe(true)
   })
 
   test('accounts are limited independently of each other', async () => {
-    const first = deps({ resolveApiKey: mock(async () => resolved({ plan: 'free', userId: 'user-1' })) })
+    const first = deps({ resolveApiKey: mock(async () => resolved({ plan: 'free', userId: 'user-1', keyId: 'key-1' })) })
     const firstApp = app('tiles', first)
-    for (let i = 0; i < 61; i += 1) await firstApp.handle(get({ authorization: `Bearer ${LIVE_KEY}` }))
+    for (let i = 0; i < PER_KEY_LIMIT + 1; i += 1) await firstApp.handle(get({ authorization: `Bearer ${LIVE_KEY}` }))
 
-    const second = deps({ resolveApiKey: mock(async () => resolved({ plan: 'free', userId: 'user-2' })) })
+    const second = deps({ resolveApiKey: mock(async () => resolved({ plan: 'free', userId: 'user-2', keyId: 'key-2' })) })
     const res = await app('tiles', second).handle(get({ authorization: `Bearer ${LIVE_KEY}` }))
 
     expect(res.status).toBe(200)
@@ -285,14 +324,68 @@ describe('rate limiting', () => {
     const statuses: number[] = []
     for (let i = 0; i < 61; i += 1) statuses.push((await instance.handle(get({ authorization: `Bearer ${LIVE_KEY}` }))).status)
 
-    // 600/minute on developer, so 61 requests is unremarkable.
+    // 600/min on developer, so 61 requests is unremarkable.
     expect(statuses.every((s) => s === 200)).toBe(true)
+  })
+
+  test('caps simultaneous requests to an expensive group', async () => {
+    // Isochrone fans out to hundreds of routing calls, so an account inside its
+    // per-minute limit can still pin every upstream worker.
+    let release: (() => void) | undefined
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve
+    })
+
+    const d = deps()
+    const instance = new Elysia()
+      .onBeforeHandle(apiAuth('isochrone', d))
+      .onAfterHandle(apiAuthAfter)
+      .get('/probe', async () => {
+        await blocked
+        return { ok: true }
+      })
+
+    // Two concurrent requests occupy the account's isochrone slots (limit 2);
+    // the third must be refused rather than queued behind them.
+    const inFlight = [
+      instance.handle(get({ authorization: `Bearer ${LIVE_KEY}` })),
+      instance.handle(get({ authorization: `Bearer ${LIVE_KEY}` })),
+    ]
+    await Bun.sleep(20)
+    const third = await instance.handle(get({ authorization: `Bearer ${LIVE_KEY}` }))
+
+    expect(third.status).toBe(429)
+    expect((await third.json()).layer).toBe('concurrency')
+
+    release!()
+    await Promise.all(inFlight)
+
+    // Slots are released by the after-handler, so the next request succeeds.
+    expect((await instance.handle(get({ authorization: `Bearer ${LIVE_KEY}` }))).status).toBe(200)
+  })
+
+  test('boxes a caller that collects a stream of rejections', async () => {
+    // A key-guesser or a client wedged in a retry loop: answering 401 forever
+    // is free for them and not for us.
+    const d = deps({ resolveApiKey: mock(async () => resolved({ scopes: ['tiles'] })) })
+    const instance = app('isochrone', d)
+
+    let sawPenalty = false
+    for (let i = 0; i < 40; i += 1) {
+      const res = await instance.handle(get({ authorization: `Bearer ${LIVE_KEY}` }))
+      if (res.status === 429 && (await res.json()).layer === 'penalty') {
+        sawPenalty = true
+        break
+      }
+    }
+
+    expect(sawPenalty).toBe(true)
   })
 
   test('pruneRateBuckets does not disturb a live window', async () => {
     const d = deps({ resolveApiKey: mock(async () => resolved({ plan: 'free' })) })
     const instance = app('tiles', d)
-    for (let i = 0; i < 60; i += 1) await instance.handle(get({ authorization: `Bearer ${LIVE_KEY}` }))
+    for (let i = 0; i < PER_KEY_LIMIT; i += 1) await instance.handle(get({ authorization: `Bearer ${LIVE_KEY}` }))
 
     pruneRateBuckets()
 
@@ -300,10 +393,48 @@ describe('rate limiting', () => {
   })
 })
 
+describe('suspended accounts', () => {
+  test('403s with the reason rather than a generic invalid-key error', async () => {
+    const d = deps({
+      resolveApiKey: mock(async () =>
+        resolved({ suspended: true, suspensionReason: 'Terms of service violation: bulk scraping' }),
+      ),
+    })
+    const res = await app('search', d).handle(get({ authorization: `Bearer ${LIVE_KEY}` }))
+    const body = await res.json()
+
+    expect(res.status).toBe(403)
+    expect(body.suspended).toBe(true)
+    // Someone cut off is owed a reason they can act on.
+    expect(body.error).toContain('bulk scraping')
+    expect(d.checkQuota).not.toHaveBeenCalled()
+  })
+
+  test('suspension outranks a scope error', async () => {
+    const d = deps({
+      resolveApiKey: mock(async () => resolved({ suspended: true, suspensionReason: 'Abuse', scopes: ['tiles'] })),
+    })
+    const res = await app('isochrone', d).handle(get({ authorization: `Bearer ${LIVE_KEY}` }))
+
+    // Telling a suspended user their key lacks a scope would send them off
+    // fixing the wrong thing.
+    expect(res.status).toBe(403)
+    expect((await res.json()).suspended).toBe(true)
+  })
+
+  test('falls back to a plain message when no reason was recorded', async () => {
+    const d = deps({ resolveApiKey: mock(async () => resolved({ suspended: true, suspensionReason: null })) })
+    const res = await app('search', d).handle(get({ authorization: `Bearer ${LIVE_KEY}` }))
+
+    expect(res.status).toBe(403)
+    expect((await res.json()).error).toBe('This account is suspended.')
+  })
+})
+
 describe('refund on server error', () => {
   test('a 5xx does not leave the customer charged', async () => {
     const recorded: Array<Record<string, unknown>> = []
-    const d = deps({ recordUsage: mock((input: never) => void recorded.push(input)) })
+    const d = deps({ recordUsage: mock((input) => void recorded.push(input as never)) })
 
     const instance = new Elysia()
       .onBeforeHandle(apiAuth('routing', d))
