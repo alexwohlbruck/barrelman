@@ -8,6 +8,8 @@ import type {
   ServiceStatus,
   TestResult,
   ImportRegion,
+  BoundarySearchResponse,
+  DerivedRegion,
 } from './types'
 
 export class ApiError extends Error {
@@ -106,6 +108,24 @@ export function updateRegion(key: string, region: Omit<RegionPayload, 'key'>): P
 
 export function deleteRegion(key: string): Promise<{ ok: boolean }> {
   return request<{ ok: boolean }>(`/admin/regions/${encodeURIComponent(key)}`, { method: 'DELETE' })
+}
+
+// ── Boundary catalog ──────────────────────────────────────────────────
+
+export function searchBoundaries(q: string): Promise<BoundarySearchResponse> {
+  return request<BoundarySearchResponse>(`/admin/boundaries?q=${encodeURIComponent(q)}`)
+}
+
+export function refreshBoundaryCatalog(): Promise<{ count: number; source: string }> {
+  return request<{ count: number; source: string }>('/admin/boundaries/refresh', { method: 'POST' })
+}
+
+export function resolveBoundary(id: string): Promise<DerivedRegion> {
+  return request<DerivedRegion>('/admin/boundaries/resolve', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ id }),
+  })
 }
 
 // ── Metrics & services ────────────────────────────────────────────────
