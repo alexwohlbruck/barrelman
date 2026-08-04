@@ -36,7 +36,9 @@ services:
 
   # Admin console dev server (Vite + HMR). Dev-only — in production the API
   # serves the pre-built console at /console. Proxies /admin to the barrelman
-  # service over the compose network. Open http://localhost:5199/console.
+  # service over the compose network. Open http://localhost:5199/console/ —
+  # Vite is configured with base '/console/' and 404s without the trailing
+  # slash, which production (served by Elysia) does not require.
   barrelman-console:
     container_name: barrelman-console
     image: oven/bun:1
@@ -68,7 +70,10 @@ services:
     environment:
       # Point the site's links at the local API rather than production, so
       # "Get a key" lands on the console you are actually running.
-      NUXT_PUBLIC_CONSOLE_URL: http://localhost:5199/console
+      # Trailing slash is required: the console dev server is Vite with
+      # base '/console/', and answers 404 with "did you mean /console/" for
+      # the slashless form. Production serves it from Elysia and accepts both.
+      NUXT_PUBLIC_CONSOLE_URL: http://localhost:5199/console/
       NUXT_PUBLIC_DOCS_URL: http://localhost:5001/docs
       NUXT_PUBLIC_API_URL: http://localhost:5001
       NUXT_PORT: "5200"

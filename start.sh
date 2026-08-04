@@ -94,7 +94,9 @@ echo ""
 echo "  API            http://localhost:5001"
 echo "  API docs       http://localhost:5001/docs"
 if [ "$MODE" = "dev" ]; then
-    echo "  Console        http://localhost:5199/console   (HMR)"
+    # Trailing slash matters here — Vite's base is '/console/' and the
+    # slashless form 404s.
+    echo "  Console        http://localhost:5199/console/  (HMR)"
 else
     echo "  Console        http://localhost:5001/console"
 fi
