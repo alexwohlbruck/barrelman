@@ -238,9 +238,18 @@ export interface Plan {
   description: string
   monthlyCredits: number
   requestsPerMinute: number
+  /** List price per month, in cents. Polar wins once configured. */
+  priceCents: number
   overageAllowed: boolean
-  overageCentsPerThousand: number
+  /** Micro-dollars per credit. See overagePerThousand for the display value. */
+  overageMicrosPerCredit: number
+  commercialUse: boolean
+  /** Negotiated rather than purchasable — no checkout button. */
+  contactOnly?: boolean
   rank: number
+  /** Derived server-side so clients don't repeat the arithmetic. */
+  overagePerThousand?: number
+  includedPricePerThousand?: number
 }
 
 export interface CreditBalance {

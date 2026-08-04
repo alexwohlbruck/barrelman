@@ -17,6 +17,7 @@ import {
   type ApiAuthDeps,
 } from './api-auth'
 import type { ResolvedKey } from '../services/api-keys.service'
+import { CREDIT_COSTS, getPlan } from '../billing/plans'
 
 const BASE = 'http://localhost'
 const LIVE_KEY = 'brm_live_abcdefghijklmnopqrstuvwxyz0123456789ABCD'
@@ -144,9 +145,14 @@ describe('apiAuth guard', () => {
 
     expect(res.status).toBe(200)
     expect(d.recordUsage).toHaveBeenCalledWith(
-      expect.objectContaining({ userId: 'user-1', apiKeyId: 'key-1', endpoint: 'search', credits: 3 }),
+      expect.objectContaining({
+        userId: 'user-1',
+        apiKeyId: 'key-1',
+        endpoint: 'search',
+        credits: CREDIT_COSTS.search,
+      }),
     )
-    expect(res.headers.get('x-barrelman-credits-charged')).toBe('3')
+    expect(res.headers.get('x-barrelman-credits-charged')).toBe(String(CREDIT_COSTS.search))
   })
 
   test('charges each group its own price', async () => {
@@ -157,8 +163,12 @@ describe('apiAuth guard', () => {
     clearRateBuckets()
     await app('isochrone', isochrone).handle(get({ authorization: `Bearer ${LIVE_KEY}` }))
 
-    expect(search.recordUsage).toHaveBeenCalledWith(expect.objectContaining({ credits: 3 }))
-    expect(isochrone.recordUsage).toHaveBeenCalledWith(expect.objectContaining({ credits: 25 }))
+    expect(search.recordUsage).toHaveBeenCalledWith(expect.objectContaining({ credits: CREDIT_COSTS.search }))
+    expect(isochrone.recordUsage).toHaveBeenCalledWith(
+      expect.objectContaining({ credits: CREDIT_COSTS.isochrone }),
+    )
+    // The whole point of weighting: an isochrone must cost meaningfully more.
+    expect(CREDIT_COSTS.isochrone).toBeGreaterThan(CREDIT_COSTS.search)
   })
 
   test('does not meter the service credential', async () => {
@@ -249,7 +259,8 @@ describe('throttling', () => {
    * per-key limit is a share of the account budget, so a single key is refused
    * before the account is — one leaked key must not starve the others.
    */
-  const PER_KEY_LIMIT = Math.floor(60 * 0.8) // free plan: 60/min, key share 80%
+  const FREE_RPM = getPlan('free').requestsPerMinute
+  const PER_KEY_LIMIT = Math.floor(FREE_RPM * 0.8)
 
   test('refuses a single key at its share of the account budget', async () => {
     const d = deps({ resolveApiKey: mock(async () => resolved({ plan: 'free' })) })
@@ -286,7 +297,7 @@ describe('throttling', () => {
     const b = instance('key-b')
 
     let refusedByAccount = false
-    for (let i = 0; i < 40; i += 1) {
+    for (let i = 0; i < FREE_RPM; i += 1) {
       await a.handle(get({ authorization: `Bearer ${LIVE_KEY}` }))
       const res = await b.handle(get({ authorization: `Bearer ${LIVE_KEY}` }))
       if (res.status === 429 && (await res.json()).layer === 'account') refusedByAccount = true
@@ -322,9 +333,12 @@ describe('throttling', () => {
     const instance = app('tiles', d)
 
     const statuses: number[] = []
-    for (let i = 0; i < 61; i += 1) statuses.push((await instance.handle(get({ authorization: `Bearer ${LIVE_KEY}` }))).status)
+    for (let i = 0; i < FREE_RPM + 1; i += 1) {
+      statuses.push((await instance.handle(get({ authorization: `Bearer ${LIVE_KEY}` }))).status)
+    }
 
-    // 600/min on developer, so 61 requests is unremarkable.
+    // Developer's ceiling is well above the free plan's, so this is unremarkable.
+    expect(getPlan('developer').requestsPerMinute).toBeGreaterThan(FREE_RPM)
     expect(statuses.every((s) => s === 200)).toBe(true)
   })
 
@@ -450,7 +464,7 @@ describe('refund on server error', () => {
     // The charge is recorded up front; the refund nets it back out in the
     // usage buffer, which this test observes through pendingCredits below.
     const { pendingCredits } = await import('../services/usage.service')
-    expect(recorded[0]).toMatchObject({ endpoint: 'routing', credits: 10 })
+    expect(recorded[0]).toMatchObject({ endpoint: 'routing', credits: CREDIT_COSTS.routing })
     expect(pendingCredits('nobody')).toBe(0)
   })
 
@@ -459,6 +473,6 @@ describe('refund on server error', () => {
     const res = await app('routing', d).handle(get({ authorization: `Bearer ${LIVE_KEY}` }))
 
     expect(res.status).toBe(200)
-    expect(d.recordUsage).toHaveBeenCalledWith(expect.objectContaining({ credits: 10 }))
+    expect(d.recordUsage).toHaveBeenCalledWith(expect.objectContaining({ credits: CREDIT_COSTS.routing }))
   })
 })

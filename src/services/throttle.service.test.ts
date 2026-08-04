@@ -23,8 +23,8 @@ import {
 } from './throttle.service'
 import { getPlan } from '../billing/plans'
 
-const free = getPlan('free') // 60 rpm
-const developer = getPlan('developer') // 600 rpm
+const free = getPlan('free')
+const developer = getPlan('developer')
 const PER_KEY = Math.floor(free.requestsPerMinute * 0.8)
 
 beforeEach(clearThrottleState)
@@ -80,8 +80,9 @@ describe('per-key and per-account layers', () => {
   })
 
   test('the account limit catches what the per-key limits let through', () => {
+    // Two keys each under their own share still exceed the account budget.
     let accountRefusal = false
-    for (let i = 0; i < 40; i += 1) {
+    for (let i = 0; i < free.requestsPerMinute; i += 1) {
       request('u1', 'k1')
       const verdict = request('u1', 'k2')
       if (!verdict.allowed && verdict.layer === 'account') accountRefusal = true
@@ -100,8 +101,9 @@ describe('per-key and per-account layers', () => {
     const big = (i: number) =>
       checkThrottle({ ip: '198.51.100.2', group: 'tiles', userId: 'u-dev', keyId: `k${i}`, plan: developer })
 
-    // Spread across keys so only the account layer is in play.
-    for (let i = 0; i < 100; i += 1) expect(big(i).allowed).toBe(true)
+    // Spread across keys so only the account layer is in play. The free plan's
+    // whole budget must fit comfortably inside developer's.
+    for (let i = 0; i < free.requestsPerMinute; i += 1) expect(big(i).allowed).toBe(true)
   })
 })
 

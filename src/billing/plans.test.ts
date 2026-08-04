@@ -14,9 +14,12 @@ import {
   getPlan,
   groupForPath,
   isValidScope,
+  includedPricePerThousand,
   listPlans,
+  overagePerThousand,
   PLANS,
   planForProductId,
+  purchasablePlans,
   scopeAllows,
   type EndpointGroup,
 } from './plans'
@@ -33,10 +36,20 @@ describe('credit costs', () => {
   test('prices expensive engines above cheap reads', () => {
     // A tile is one indexed read; an isochrone fans out to hundreds of routing
     // calls. If this ordering ever inverts, the pricing is wrong.
-    expect(CREDIT_COSTS.tiles).toBeLessThan(CREDIT_COSTS.search)
+    expect(CREDIT_COSTS.tiles).toBeLessThan(CREDIT_COSTS.geocode)
+    expect(CREDIT_COSTS.geocode).toBeLessThan(CREDIT_COSTS.search)
     expect(CREDIT_COSTS.search).toBeLessThan(CREDIT_COSTS.routing)
-    expect(CREDIT_COSTS.routing).toBeLessThan(CREDIT_COSTS.isochrone)
     expect(CREDIT_COSTS.routing).toBeLessThan(CREDIT_COSTS.transit)
+    expect(CREDIT_COSTS.transit).toBeLessThan(CREDIT_COSTS.isochrone)
+  })
+
+  test('the geocode-to-tile ratio sits inside the market range', () => {
+    // Mapbox prices geocoding at roughly 3x a vector tile, Stadia at 20x.
+    // Landing outside that band means either giving geocoding away or
+    // charging more than the incumbents for it.
+    const ratio = CREDIT_COSTS.geocode / CREDIT_COSTS.tiles
+    expect(ratio).toBeGreaterThanOrEqual(3)
+    expect(ratio).toBeLessThanOrEqual(20)
   })
 })
 
@@ -93,29 +106,68 @@ describe('getPlan', () => {
 
 describe('plan definitions', () => {
   test('free never incurs overage', () => {
-    // Nobody should be able to run up a bill on a plan they did not pay for.
+    // Nobody should be able to run up a bill on a plan they did not pay for:
+    // the free tier stops dead at its allowance.
     expect(PLANS.free!.overageAllowed).toBe(false)
-    expect(PLANS.free!.overageCentsPerThousand).toBe(0)
+    expect(PLANS.free!.overageMicrosPerCredit).toBe(0)
+    expect(PLANS.free!.priceCents).toBe(0)
+  })
+
+  test('free is evaluation-only, and every paid plan permits commercial use', () => {
+    expect(PLANS.free!.commercialUse).toBe(false)
+    for (const plan of listPlans().filter((p) => p.priceCents > 0 || p.contactOnly)) {
+      expect(plan.commercialUse).toBe(true)
+    }
   })
 
   test('paid plans allow overage and price it', () => {
     for (const plan of listPlans().filter((p) => p.id !== 'free')) {
       expect(plan.overageAllowed).toBe(true)
-      expect(plan.overageCentsPerThousand).toBeGreaterThan(0)
+      expect(plan.overageMicrosPerCredit).toBeGreaterThan(0)
     }
   })
 
-  test('allowances, rate limits and unit prices move monotonically with rank', () => {
+  test('allowances and rate limits move monotonically with rank', () => {
     const ordered = listPlans()
     for (let i = 1; i < ordered.length; i += 1) {
       expect(ordered[i]!.monthlyCredits).toBeGreaterThan(ordered[i - 1]!.monthlyCredits)
       expect(ordered[i]!.requestsPerMinute).toBeGreaterThan(ordered[i - 1]!.requestsPerMinute)
     }
-    // Buying a bigger plan should make each overage credit cheaper, not dearer.
-    const paid = ordered.filter((p) => p.overageAllowed)
+  })
+
+  test('a bigger plan is never more expensive per credit', () => {
+    // Both for included credits and for overage. A pricing edit that inverts
+    // either would mean upgrading raises someone's unit cost.
+    const paid = listPlans().filter((p) => p.priceCents > 0)
     for (let i = 1; i < paid.length; i += 1) {
-      expect(paid[i]!.overageCentsPerThousand).toBeLessThanOrEqual(paid[i - 1]!.overageCentsPerThousand)
+      expect(includedPricePerThousand(paid[i]!)).toBeLessThan(includedPricePerThousand(paid[i - 1]!))
     }
+
+    const metered = listPlans().filter((p) => p.overageAllowed)
+    for (let i = 1; i < metered.length; i += 1) {
+      expect(metered[i]!.overageMicrosPerCredit).toBeLessThanOrEqual(metered[i - 1]!.overageMicrosPerCredit)
+    }
+  })
+
+  test('overage is close to the included rate, not punitive', () => {
+    // An earlier draft charged ten times the included rate, which penalises
+    // exactly the customer growing into the next plan. Keep it within 2x.
+    for (const plan of listPlans().filter((p) => p.priceCents > 0)) {
+      const included = includedPricePerThousand(plan)
+      expect(overagePerThousand(plan)).toBeLessThanOrEqual(included * 2)
+      expect(overagePerThousand(plan)).toBeGreaterThan(0)
+    }
+  })
+
+  test('enterprise is not purchasable without talking to anyone', () => {
+    expect(PLANS.enterprise!.contactOnly).toBe(true)
+    expect(purchasablePlans().map((p) => p.id)).toEqual(['developer', 'business', 'scale'])
+  })
+
+  test('the free allowance is competitive with the market', () => {
+    // Stadia gives 200k credits free, MapTiler 100k requests. A free tier well
+    // below that reads as a demo rather than something to build against.
+    expect(PLANS.free!.monthlyCredits).toBeGreaterThanOrEqual(100_000)
   })
 
   test('listPlans is sorted by rank', () => {

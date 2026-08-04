@@ -22,7 +22,7 @@ import { getBillingConfig, getBillingStatus, getLedger, getPortalUrl, startCheck
 import { toast } from '@/lib/toast'
 import { formatNumber } from '@/lib/utils'
 import { refreshUser } from '@/lib/auth'
-import type { BillingConfig, BillingStatus, LedgerEntry } from '@/lib/types'
+import type { BillingConfig, BillingStatus, LedgerEntry, Plan } from '@/lib/types'
 
 const route = useRoute()
 
@@ -33,19 +33,39 @@ const loading = ref(true)
 const busy = ref('')
 
 const currentPlanId = computed(() => status.value?.plan.id ?? 'free')
+
+function planRank(id: string) {
+  return config.value?.plans.find((p) => p.id === id)?.rank ?? 0
+}
 const billingEnabled = computed(() => config.value?.billingEnabled === true)
 
-function priceFor(planId: string) {
-  const product = config.value?.products.find((p) => p.planId === planId)
-  if (!product) return null
+/**
+ * Live price from the payment provider when it is configured, falling back to
+ * the plan's list price. A pricing page that renders nothing because Polar is
+ * unreachable is worse than one showing the list price.
+ */
+function priceFor(plan: Plan) {
+  const product = config.value?.products.find((p) => p.planId === plan.id)
+  const cents = product?.priceAmount ?? plan.priceCents
+  const currency = (product?.priceCurrency ?? 'usd').toUpperCase()
+
+  if (plan.contactOnly) return { amount: 'Custom', interval: null }
+  if (cents === 0) return { amount: 'Free', interval: null }
+
   return {
-    amount: (product.priceAmount / 100).toLocaleString(undefined, {
+    amount: (cents / 100).toLocaleString(undefined, {
       style: 'currency',
-      currency: product.priceCurrency.toUpperCase(),
+      currency,
       maximumFractionDigits: 0,
     }),
-    interval: product.interval,
+    interval: product?.interval ?? 'month',
   }
+}
+
+/** Dollars per 1,000 overage credits, formatted for the plan card. */
+function overageLabel(plan: Plan) {
+  const perThousand = plan.overagePerThousand ?? plan.overageMicrosPerCredit / 1000
+  return `$${perThousand.toFixed(perThousand < 0.01 ? 4 : 3).replace(/0+$/, '').replace(/\.$/, '')}`
 }
 
 function fail(err: unknown, title: string) {
@@ -154,8 +174,22 @@ async function sync() {
         below describe what metering would apply if it were.
       </div>
 
+      <!-- Exhausted free quota: the single most useful thing to say here -->
+      <div
+        v-if="status && !status.balance.overageAllowed && status.balance.remaining <= 0"
+        class="rounded-lg border border-destructive bg-destructive/5 px-4 py-3 text-sm"
+      >
+        <p class="font-medium text-destructive">Your free credits for this period are used up</p>
+        <p class="mt-1 text-muted-foreground">
+          API requests are being refused with <code>402</code> until
+          {{ new Date(status.balance.cycleResetsAt).toLocaleDateString(undefined, { dateStyle: 'medium', timeZone: 'UTC' }) }}
+          (UTC). Upgrade below to resume immediately — the free plan deliberately stops rather than
+          billing you for overage.
+        </p>
+      </div>
+
       <!-- Plans -->
-      <div class="grid gap-4 md:grid-cols-3">
+      <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         <Card
           v-for="plan in config?.plans ?? []"
           :key="plan.id"
@@ -167,38 +201,52 @@ async function sync() {
           </CardHeader>
           <CardContent class="flex h-full flex-col gap-4">
             <div>
-              <span class="text-2xl font-semibold">{{ priceFor(plan.id)?.amount ?? (plan.id === 'free' ? 'Free' : '—') }}</span>
-              <span v-if="priceFor(plan.id)" class="text-sm text-muted-foreground">
-                /{{ priceFor(plan.id)?.interval }}
+              <span class="text-2xl font-semibold">{{ priceFor(plan).amount }}</span>
+              <span v-if="priceFor(plan).interval" class="text-sm text-muted-foreground">
+                /{{ priceFor(plan).interval }}
               </span>
             </div>
             <p class="text-sm text-muted-foreground">{{ plan.description }}</p>
             <ul class="flex flex-col gap-1.5 text-sm">
               <li class="flex items-center gap-2">
                 <Check class="size-3.5 text-[var(--success)]" />
-                {{ formatNumber(plan.monthlyCredits) }} credits / month
+                <!-- The stored figures for a negotiated plan are placeholders;
+                     printing them would read as a real quoted allowance. -->
+                <span v-if="plan.contactOnly">Custom volume and rate limits</span>
+                <span v-else>{{ formatNumber(plan.monthlyCredits) }} credits / month</span>
               </li>
-              <li class="flex items-center gap-2">
+              <li v-if="!plan.contactOnly" class="flex items-center gap-2">
                 <Check class="size-3.5 text-[var(--success)]" />
                 {{ formatNumber(plan.requestsPerMinute) }} requests / minute
               </li>
-              <li class="flex items-center gap-2 text-muted-foreground">
+              <li v-if="!plan.contactOnly" class="flex items-center gap-2 text-muted-foreground">
                 <Check class="size-3.5" :class="plan.overageAllowed ? 'text-[var(--success)]' : 'opacity-30'" />
-                <span v-if="plan.overageAllowed">
-                  Overage at ${{ (plan.overageCentsPerThousand / 100).toFixed(2) }} / 1k credits
-                </span>
-                <span v-else>Stops at the allowance — no surprise bills</span>
+                <span v-if="plan.overageAllowed">Then {{ overageLabel(plan) }} / 1k credits</span>
+                <span v-else>Stops at the allowance — never billed for overage</span>
+              </li>
+              <li class="flex items-center gap-2 text-muted-foreground">
+                <Check class="size-3.5" :class="plan.commercialUse ? 'text-[var(--success)]' : 'opacity-30'" />
+                <span>{{ plan.commercialUse ? 'Commercial use' : 'Evaluation and non-commercial use' }}</span>
               </li>
             </ul>
             <div class="mt-auto pt-2">
               <Button
-                v-if="billingEnabled && plan.id !== currentPlanId && plan.id !== 'free'"
+                v-if="plan.contactOnly && plan.id !== currentPlanId"
+                variant="outline"
+                class="w-full"
+                as="a"
+                href="mailto:sales@barrelman.dev?subject=Enterprise%20plan"
+              >
+                Contact us
+              </Button>
+              <Button
+                v-else-if="billingEnabled && plan.id !== currentPlanId && plan.priceCents > 0"
                 class="w-full"
                 :disabled="busy === plan.id"
                 @click="subscribe(plan.id)"
               >
                 <Spinner v-if="busy === plan.id" class="size-4" />
-                <template v-else>Upgrade</template>
+                <template v-else>{{ planRank(plan.id) > planRank(currentPlanId) ? 'Upgrade' : 'Switch' }}</template>
               </Button>
             </div>
           </CardContent>

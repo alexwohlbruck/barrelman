@@ -230,6 +230,20 @@ export function createBillingRoutes(overrides: Partial<BillingDeps> = {}) {
           return { error: 'Billing is not enabled on this instance' }
         }
 
+        // An enterprise plan is negotiated, not bought. Saying "unknown plan"
+        // would read as a bug to someone who can see it on the pricing page.
+        if (body.plan) {
+          const plan = getPlan(body.plan)
+          if (plan.contactOnly) {
+            set.status = 409
+            return {
+              error: `The ${plan.name} plan is arranged directly — get in touch and we will set it up.`,
+              contactOnly: true,
+              plan: plan.id,
+            }
+          }
+        }
+
         // A plan id is resolved to a product here rather than accepting a
         // product id from the client, so a caller cannot check out against an
         // arbitrary product in the organization.

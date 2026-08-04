@@ -328,30 +328,48 @@ hundreds of routing calls.
 | Group | Credits | Endpoints |
 |---|---|---|
 | `tiles` | 1 | `/tiles/*` |
-| `places` | 2 | `/place/*`, `/brands` |
-| `spatial` | 2 | `/contains`, `/children` |
-| `geocode` | 2 | `/geocode/*` |
-| `search` | 3 | `/search`, `/autocomplete` |
-| `routing` | 10 | `/route`, `/graphhopper/*` |
-| `transit` | 25 | `/transit/*`, `/gbfs/*` |
-| `isochrone` | 25 | `/isochrone` |
+| `places` | 3 | `/place/*`, `/brands` |
+| `spatial` | 3 | `/contains`, `/children` |
+| `geocode` | 5 | `/geocode/*` |
+| `search` | 6 | `/search`, `/autocomplete` |
+| `routing` | 12 | `/route`, `/graphhopper/*` |
+| `transit` | 20 | `/transit/*`, `/gbfs/*` |
+| `isochrone` | 40 | `/isochrone` |
+
+The ratios are calibrated against the market rather than invented. Taking a tile
+as 1, Mapbox prices geocoding at roughly 3x a tile and directions at 8x; Stadia
+Maps prices both at 20x. Barrelman sits between them.
 
 Every response carries `X-Barrelman-Credits-Charged`. A request that fails with
 a 5xx is refunded — customers should not pay for our outages.
 
-| Plan | Credits / month | Requests / minute | Past the allowance |
-|---|---|---|---|
-| Free | 50,000 | 60 | Stops with `402` |
-| Developer | 1,000,000 | 600 | Billed as overage |
-| Scale | 10,000,000 | 3,000 | Billed as overage |
+### Plans
 
-The free plan **stops** rather than accruing charges, so nobody can run up a
-bill on a plan they did not pay for. Live figures come from
-`GET /account/plans`.
+| Plan | Price | Credits / month | Rate limit | Past the allowance |
+|---|---|---|---|---|
+| **Free** | $0 | 100,000 | 300 / min | **Stops with `402`** |
+| **Developer** | $19 | 1,000,000 | 900 / min | $0.030 / 1k credits |
+| **Business** | $99 | 10,000,000 | 1,800 / min | $0.018 / 1k credits |
+| **Scale** | $299 | 40,000,000 | 6,000 / min | $0.012 / 1k credits |
+| **Enterprise** | Custom | Negotiated | Negotiated | $0.008 / 1k credits |
 
-Billing is optional: with no `POLAR_ACCESS_TOKEN` configured the subscription
-surface is inert, every account sits on the free plan, and metering exists only
-to show a self-hosted operator their own usage.
+At Developer, $19 buys 200,000 geocodes, 166,000 searches or 83,000 routes a
+month. The same geocoding volume on Mapbox is roughly $150.
+
+Two properties are deliberate:
+
+- **The free tier stops rather than billing.** At zero credits the API answers
+  `402` with the reset date until the next cycle. Nobody can run up a bill on a
+  plan they did not pay for. Free is for evaluation and non-commercial use;
+  every paid plan includes commercial use.
+- **Overage stays close to the included rate** — 1.6-1.8x, rather than the 10x
+  an earlier draft charged. Overage should not punish the customer who is
+  growing into the next plan.
+
+Live figures come from `GET /account/plans`. Billing is optional: with no
+`POLAR_ACCESS_TOKEN` the subscription surface is inert, every account sits on
+the free plan, and metering exists only to show a self-hosted operator their own
+usage.
 
 ### Abuse controls
 

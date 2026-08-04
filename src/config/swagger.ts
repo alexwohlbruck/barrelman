@@ -49,18 +49,27 @@ of routing calls.
 | Group | Credits | Endpoints |
 |---|---|---|
 | \`tiles\` | 1 | \`/tiles/*\` |
-| \`places\` | 2 | \`/place/*\`, \`/brands\` |
-| \`spatial\` | 2 | \`/contains\`, \`/children\` |
-| \`geocode\` | 2 | \`/geocode/*\` |
-| \`search\` | 3 | \`/search\`, \`/autocomplete\` |
-| \`routing\` | 10 | \`/route\`, \`/graphhopper/*\` |
-| \`transit\` | 25 | \`/transit/*\`, \`/gbfs/*\` |
-| \`isochrone\` | 25 | \`/isochrone\` |
+| \`places\` | 3 | \`/place/*\`, \`/brands\` |
+| \`spatial\` | 3 | \`/contains\`, \`/children\` |
+| \`geocode\` | 5 | \`/geocode/*\` |
+| \`search\` | 6 | \`/search\`, \`/autocomplete\` |
+| \`routing\` | 12 | \`/route\`, \`/graphhopper/*\` |
+| \`transit\` | 20 | \`/transit/*\`, \`/gbfs/*\` |
+| \`isochrone\` | 40 | \`/isochrone\` |
 
-Each response carries \`X-Barrelman-Credits-Charged\`. The free plan includes
-50,000 credits per month and **stops** at that ceiling with a \`402\` rather
-than accruing charges; paid plans continue and bill the overage. Rate limits are
-per plan and answer \`429\` with \`Retry-After\`.
+Each response carries \`X-Barrelman-Credits-Charged\`.
+
+| Plan | Price | Credits / month | Past the allowance |
+|---|---|---|---|
+| Free | \$0 | 100,000 | **Stops with \`402\`** |
+| Developer | \$19 | 1,000,000 | \$0.030 / 1k |
+| Business | \$99 | 10,000,000 | \$0.018 / 1k |
+| Scale | \$299 | 40,000,000 | \$0.012 / 1k |
+| Enterprise | Custom | Negotiated | \$0.008 / 1k |
+
+The free plan **stops** at its ceiling rather than accruing charges, so nobody
+can run up a bill on a plan they did not pay for; paid plans continue and meter
+the overage. Rate limits are per plan and answer \`429\` with \`Retry-After\`.
 
 See \`GET /account/plans\` for the current pricing table.
 `.trim()
