@@ -1,0 +1,90 @@
+---
+title: Getting Started
+description: Base URL, authentication, and example requests for the Barrelman API.
+---
+
+The Barrelman API is a REST API served over HTTPS. Every response is JSON (tiles are the exception — they return binary Mapbox Vector Tiles).
+
+## Base URL
+
+```
+https://barrelman.parchment.app
+```
+
+When self-hosting, replace this with your own host. In local development the API listens on `http://localhost:5001`.
+
+## Authentication
+
+All endpoints (except the public `GET /health/`) require a bearer token. Send your API key in the `Authorization` header:
+
+```
+Authorization: Bearer <BARRELMAN_API_KEY>
+```
+
+You can verify both reachability and that your key is valid with the authenticated health check:
+
+```bash
+curl https://barrelman.parchment.app/health/auth \
+  -H "Authorization: Bearer $BARRELMAN_API_KEY"
+```
+
+The public probe needs no key and is safe for load balancers:
+
+```bash
+curl https://barrelman.parchment.app/health/
+# {"status":"ok","database":"connected"}
+```
+
+## Example requests
+
+### Search for places
+
+`POST /search` takes a JSON body. Provide a `query` for text search, and optionally `lat`/`lng` (plus `radius`) to bias and rank results by proximity.
+
+```bash
+curl -X POST https://barrelman.parchment.app/search \
+  -H "Authorization: Bearer $BARRELMAN_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "coffee",
+    "lat": 35.2271,
+    "lng": -80.8431,
+    "radius": 2000,
+    "limit": 10
+  }'
+```
+
+### Brand autocomplete
+
+`GET /brands` resolves chains and franchises from the brand catalog.
+
+```bash
+curl "https://barrelman.parchment.app/brands?q=Starbucks&limit=8" \
+  -H "Authorization: Bearer $BARRELMAN_API_KEY"
+```
+
+### Reverse geocode a coordinate
+
+`GET /geocode` turns a coordinate into a human-readable address.
+
+```bash
+curl "https://barrelman.parchment.app/geocode?lat=35.2271&lng=-80.8431" \
+  -H "Authorization: Bearer $BARRELMAN_API_KEY"
+```
+
+### Plan a transit trip
+
+`POST /transit/route` plans a trip between two coordinates. `from` and `to` are `{ lat, lng }` objects.
+
+```bash
+curl -X POST https://barrelman.parchment.app/transit/route \
+  -H "Authorization: Bearer $BARRELMAN_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "from": { "lat": 40.7527, "lng": -73.9772 },
+    "to":   { "lat": 40.6413, "lng": -73.7781 },
+    "numItineraries": 3
+  }'
+```
+
+See the [API Reference](/docs/api) for the full parameter list on every endpoint.
