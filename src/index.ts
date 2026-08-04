@@ -12,6 +12,7 @@ import { geocodeRoutes } from './routes/geocode'
 import { authRoutes } from './routes/auth'
 import { passkeyRoutes } from './routes/auth-passkeys'
 import { oauthRoutes } from './routes/auth-oauth'
+import { accountRoutes } from './routes/account'
 import { adminRoutes } from './routes/admin'
 import { adminConsoleRoutes, adminConsoleConfigRoutes } from './routes/admin-console'
 import { consoleUiRoutes } from './lib/console-ui'
@@ -28,6 +29,7 @@ import { ensureRegionsSchema } from './services/region-store.service'
 import { ensureSearchEnrichment } from './lib/search-enrichment'
 import { ensureBrandLogos } from './lib/brand-logos'
 import { startTransitWarmup } from './lib/warmup'
+import { flushUsage, startUsageFlush } from './services/usage.service'
 
 const port = Number(process.env.PORT) || 5001
 
@@ -76,6 +78,7 @@ const app = new Elysia()
   .use(authRoutes)
   .use(passkeyRoutes)
   .use(oauthRoutes)
+  .use(accountRoutes)
   .use(adminRoutes)
   .use(adminConsoleConfigRoutes)
   .use(adminConsoleRoutes)
@@ -92,6 +95,18 @@ const app = new Elysia()
 // gap doesn't eat MOTIS's multi-second cold-start. Engine warming, not result
 // caching — every real request still runs a fresh search. Fire-and-forget.
 startTransitWarmup()
+
+// Metered usage is buffered in memory and written periodically — see
+// services/usage.service.ts for why a write per request is not viable here.
+startUsageFlush()
+
+// Flush whatever is buffered before the process goes away, so a rolling deploy
+// doesn't discard the last few seconds of billing counters.
+for (const signal of ['SIGTERM', 'SIGINT'] as const) {
+  process.on(signal, () => {
+    void flushUsage().finally(() => process.exit(0))
+  })
+}
 
 console.log(`Barrelman running at http://localhost:${port}`)
 console.log(`API docs at http://localhost:${port}/docs`)

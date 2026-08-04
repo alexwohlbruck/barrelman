@@ -1,5 +1,5 @@
 import Elysia from 'elysia'
-import { authHandler } from '../middleware/auth'
+import { apiAuth, apiAuthAfter } from '../middleware/api-auth'
 import {
   getEnrichedRoute as _getEnrichedRoute,
   GraphHopperError,
@@ -27,7 +27,8 @@ export function createRouteRoutes(deps: {
   const fetchFn = deps.fetchFn || undefined
 
   return new Elysia()
-    .onBeforeHandle(authHandler)
+    .onBeforeHandle(apiAuth('routing'))
+    .onAfterHandle(apiAuthAfter)
     .post('/route', async ({ body, set }) => {
       try {
         const result = await getEnrichedRoute(body, fetchFn)

@@ -1,10 +1,11 @@
 import Elysia, { t } from 'elysia'
-import { authMiddleware } from '../middleware/auth'
+import { apiAuth, apiAuthAfter } from '../middleware/api-auth'
 import { searchBrands as _searchBrands, getBrand as _getBrand } from '../services/brands.service'
 
 export function createBrandsRoutes(deps = { searchBrands: _searchBrands, getBrand: _getBrand }) {
   return new Elysia()
-    .use(authMiddleware)
+    .onBeforeHandle(apiAuth('places'))
+    .onAfterHandle(apiAuthAfter)
     .get(
       '/brands',
       async ({ query }) => {

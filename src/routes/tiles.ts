@@ -1,40 +1,41 @@
 import Elysia, { t } from 'elysia'
+import { apiAuth, apiAuthAfter } from '../middleware/api-auth'
 
 function getMartinUrl() {
   return process.env.MARTIN_URL || 'http://barrelman-martin:3000'
 }
 
+const meteredTileAuth = apiAuth('tiles')
+
 /**
- * Tile auth handler — validates against BARRELMAN_TILE_KEY.
- * Checks both Bearer token header and ?token query param.
+ * Tile auth: the dedicated `BARRELMAN_TILE_KEY` first, then the ordinary
+ * metered path.
+ *
+ * The tile key predates accounts and stays as an unmetered service credential,
+ * for a self-hosted deployment pointing its own map at its own tiles. Anything
+ * else — including a customer's `brm_live_…` key in the `?token=` a tile URL
+ * already carries — falls through to the metered guard.
+ *
+ * Note the change in behaviour when no tile key is set: that used to mean open
+ * access, and now means "authenticate like every other endpoint". Local
+ * development is still open, because the metered guard is itself open when
+ * nothing is configured to check against.
  */
-export function tileAuthHandler({
-  headers,
-  query,
-  set,
-}: {
+export function tileAuthHandler(context: {
   headers: Record<string, string | undefined>
   query: Record<string, string | undefined>
-  set: { status: number | string }
+  request: Request
+  set: { status?: number | string; headers: Record<string, string | number> }
 }) {
   const tileKey = process.env.BARRELMAN_TILE_KEY
-  if (!tileKey) {
-    // No key configured = open access (dev mode)
-    return
+
+  if (tileKey) {
+    const authorization = context.headers['authorization']
+    if (authorization && authorization.replace('Bearer ', '').trim() === tileKey) return
+    if (context.query.token === tileKey) return
   }
 
-  // Check Authorization header first
-  const authorization = headers['authorization']
-  if (authorization) {
-    const token = authorization.replace('Bearer ', '')
-    if (token === tileKey) return
-  }
-
-  // Check ?token query parameter (used in tile URLs)
-  if (query.token === tileKey) return
-
-  set.status = 401
-  return { error: 'Invalid or missing tile key' }
+  return meteredTileAuth(context)
 }
 
 export interface TileFetcher {
@@ -46,6 +47,7 @@ export function createTileRoutes(deps: { fetchTile?: TileFetcher } = {}) {
 
   return new Elysia({ prefix: '/tiles' })
     .onBeforeHandle(tileAuthHandler)
+    .onAfterHandle(apiAuthAfter)
     .get(
       '/:source/:z/:x/:y',
       async ({ params, set }) => {

@@ -188,7 +188,13 @@ export const usageRecords = pgTable(
     userId: text('user_id')
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
-    apiKeyId: text('api_key_id'),
+    /**
+     * The key that made the requests, or `-` for usage with no key attached.
+     * A sentinel rather than NULL because this is part of the primary key, and
+     * NULL never equals itself — every flush would insert a new row instead of
+     * incrementing the existing one.
+     */
+    apiKeyId: text('api_key_id').notNull().default('-'),
     /** UTC day. Cycle boundaries are calendar months in UTC. */
     day: date('day').notNull(),
     /** Endpoint group as billed (`search`, `routing`, …) — see billing/plans.ts. */

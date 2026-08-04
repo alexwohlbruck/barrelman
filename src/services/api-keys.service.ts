@@ -1,0 +1,239 @@
+/**
+ * API key lifecycle and verification.
+ *
+ * Keys look like `brm_live_<40 base62 chars>`. Only a SHA-256 digest is stored,
+ * so the plaintext exists exactly once — in the response that created it. There
+ * is no "show key again": a lost key is rolled, not recovered.
+ *
+ * Verification sits in the hot path of every metered request, so a successful
+ * lookup is cached in memory. The cache is keyed by the digest and holds the
+ * account's plan and scopes, which means a revoked key stays usable for at most
+ * `CACHE_TTL_MS` — revocation therefore also punches the entry out directly.
+ */
+import { and, desc, eq, inArray, isNull } from 'drizzle-orm'
+import { LRUCache } from 'lru-cache'
+import { db } from '../db'
+import { apiKeys, users, type ApiKey, type KeyEnvironment } from '../schema/accounts'
+import { generateId, randomBase62, sha256Hex } from '../lib/crypto'
+import { isValidScope, type Scope } from '../billing/plans'
+
+const KEY_PREFIX = 'brm'
+/** 40 base62 characters ≈ 238 bits — far beyond guessing range. */
+const SECRET_LENGTH = 40
+/** How much of the key is shown in the console to identify it. */
+const DISPLAY_PREFIX_LENGTH = 16
+
+const CACHE_TTL_MS = 60_000
+const CACHE_MAX = 5_000
+
+export interface ResolvedKey {
+  keyId: string
+  userId: string
+  environment: KeyEnvironment
+  scopes: string[]
+  plan: string
+  suspended: boolean
+  /** Test keys exercise the API without spending credits or hitting quota. */
+  isTest: boolean
+}
+
+const cache = new LRUCache<string, ResolvedKey>({ max: CACHE_MAX, ttl: CACHE_TTL_MS })
+
+/** Keys whose lookup missed, cached briefly so a bad key can't hammer the DB. */
+const negativeCache = new LRUCache<string, true>({ max: CACHE_MAX, ttl: 30_000 })
+
+export function clearKeyCache(): void {
+  cache.clear()
+  negativeCache.clear()
+}
+
+// ── Creation ────────────────────────────────────────────────────────────
+
+export interface CreateKeyOptions {
+  userId: string
+  name: string
+  environment?: KeyEnvironment
+  scopes?: string[]
+  expiresAt?: Date | null
+}
+
+export interface CreatedKey {
+  /** Full plaintext key. Shown once; never retrievable again. */
+  key: string
+  record: Omit<ApiKey, 'hash'>
+}
+
+export async function createApiKey(options: CreateKeyOptions): Promise<CreatedKey> {
+  const { userId, name, environment = 'live', expiresAt = null } = options
+
+  const scopes = normalizeScopes(options.scopes)
+  const secret = randomBase62(SECRET_LENGTH)
+  const key = `${KEY_PREFIX}_${environment}_${secret}`
+
+  const [row] = await db
+    .insert(apiKeys)
+    .values({
+      id: generateId(),
+      userId,
+      name: name.trim() || 'Untitled key',
+      hash: sha256Hex(key),
+      prefix: key.slice(0, DISPLAY_PREFIX_LENGTH),
+      last4: key.slice(-4),
+      environment,
+      scopes,
+      expiresAt,
+    })
+    .returning()
+
+  if (!row) throw new Error('Failed to create API key')
+
+  const { hash: _hash, ...record } = row
+  return { key, record }
+}
+
+function normalizeScopes(scopes: string[] | undefined): string[] {
+  if (!scopes || scopes.length === 0) return ['*']
+  const valid = scopes.filter(isValidScope)
+  if (valid.length === 0) return ['*']
+  // A key holding `*` alongside narrower scopes is just `*`; storing both
+  // invites a reader into thinking the narrow ones constrain anything.
+  return valid.includes('*') ? ['*'] : Array.from(new Set(valid))
+}
+
+// ── Verification ────────────────────────────────────────────────────────
+
+/**
+ * Resolve a presented key to its account. Returns null for anything unknown,
+ * revoked, expired, or belonging to a suspended account.
+ */
+export async function resolveApiKey(presented: string): Promise<ResolvedKey | null> {
+  const hash = sha256Hex(presented)
+
+  const cached = cache.get(hash)
+  if (cached) return cached
+  if (negativeCache.has(hash)) return null
+
+  const [row] = await db
+    .select({
+      keyId: apiKeys.id,
+      userId: apiKeys.userId,
+      environment: apiKeys.environment,
+      scopes: apiKeys.scopes,
+      revokedAt: apiKeys.revokedAt,
+      expiresAt: apiKeys.expiresAt,
+      plan: users.plan,
+      suspendedAt: users.suspendedAt,
+    })
+    .from(apiKeys)
+    .innerJoin(users, eq(apiKeys.userId, users.id))
+    .where(eq(apiKeys.hash, hash))
+    .limit(1)
+
+  if (!row || row.revokedAt || (row.expiresAt && row.expiresAt.getTime() <= Date.now()) || row.suspendedAt) {
+    negativeCache.set(hash, true)
+    return null
+  }
+
+  const resolved: ResolvedKey = {
+    keyId: row.keyId,
+    userId: row.userId,
+    environment: row.environment,
+    scopes: row.scopes,
+    plan: row.plan,
+    suspended: false,
+    isTest: row.environment === 'test',
+  }
+
+  cache.set(hash, resolved)
+  return resolved
+}
+
+/**
+ * Drop every cached entry for an account. Called when a plan changes or an
+ * account is suspended, so the next request sees the new state rather than
+ * waiting out the TTL.
+ */
+export function invalidateUserKeys(userId: string): void {
+  for (const [hash, entry] of cache.entries()) {
+    if (entry.userId === userId) cache.delete(hash)
+  }
+}
+
+// ── Management ──────────────────────────────────────────────────────────
+
+export type ApiKeySummary = Omit<ApiKey, 'hash'>
+
+export async function listApiKeys(userId: string, includeRevoked = false): Promise<ApiKeySummary[]> {
+  const where = includeRevoked
+    ? eq(apiKeys.userId, userId)
+    : and(eq(apiKeys.userId, userId), isNull(apiKeys.revokedAt))
+
+  return db
+    .select({
+      id: apiKeys.id,
+      userId: apiKeys.userId,
+      name: apiKeys.name,
+      prefix: apiKeys.prefix,
+      last4: apiKeys.last4,
+      environment: apiKeys.environment,
+      scopes: apiKeys.scopes,
+      lastUsedAt: apiKeys.lastUsedAt,
+      revokedAt: apiKeys.revokedAt,
+      expiresAt: apiKeys.expiresAt,
+      createdAt: apiKeys.createdAt,
+    })
+    .from(apiKeys)
+    .where(where)
+    .orderBy(desc(apiKeys.createdAt))
+}
+
+export async function renameApiKey(userId: string, keyId: string, name: string): Promise<boolean> {
+  const [row] = await db
+    .update(apiKeys)
+    .set({ name: name.trim() })
+    .where(and(eq(apiKeys.id, keyId), eq(apiKeys.userId, userId)))
+    .returning({ id: apiKeys.id })
+  return Boolean(row)
+}
+
+export async function updateApiKeyScopes(userId: string, keyId: string, scopes: string[]): Promise<boolean> {
+  const [row] = await db
+    .update(apiKeys)
+    .set({ scopes: normalizeScopes(scopes) })
+    .where(and(eq(apiKeys.id, keyId), eq(apiKeys.userId, userId)))
+    .returning({ hash: apiKeys.hash })
+  if (!row) return false
+  // Scope changes must take effect now, not in a minute's time.
+  cache.delete(row.hash)
+  return true
+}
+
+/**
+ * Revoke a key. The row is kept rather than deleted so its usage history stays
+ * attributable and the console can still show what the key did.
+ */
+export async function revokeApiKey(userId: string, keyId: string): Promise<boolean> {
+  const [row] = await db
+    .update(apiKeys)
+    .set({ revokedAt: new Date() })
+    .where(and(eq(apiKeys.id, keyId), eq(apiKeys.userId, userId), isNull(apiKeys.revokedAt)))
+    .returning({ hash: apiKeys.hash })
+
+  if (!row) return false
+  // Evict immediately — a revoked key that keeps working for another minute is
+  // not revoked in any sense the user would accept.
+  cache.delete(row.hash)
+  negativeCache.set(row.hash, true)
+  return true
+}
+
+/**
+ * Record that a key was used. Written by the metering flush rather than on the
+ * request path, since a timestamp update per request would be a write per read.
+ */
+export async function markKeysUsed(keyIds: string[], at: Date = new Date()): Promise<void> {
+  if (keyIds.length === 0) return
+  await db.update(apiKeys).set({ lastUsedAt: at }).where(inArray(apiKeys.id, keyIds))
+}
+
+export type { ApiKey }

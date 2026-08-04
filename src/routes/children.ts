@@ -1,10 +1,11 @@
 import Elysia, { t } from 'elysia'
-import { authMiddleware } from '../middleware/auth'
+import { apiAuth, apiAuthAfter } from '../middleware/api-auth'
 import { findChildren as _findChildren } from '../services/spatial.service'
 
 export function createChildrenRoutes(deps = { findChildren: _findChildren }) {
   return new Elysia()
-    .use(authMiddleware)
+    .onBeforeHandle(apiAuth('spatial'))
+    .onAfterHandle(apiAuthAfter)
     .get(
       '/children',
       async ({ query }) => {

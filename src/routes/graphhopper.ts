@@ -1,5 +1,5 @@
 import Elysia from 'elysia'
-import { authHandler } from '../middleware/auth'
+import { apiAuth, apiAuthAfter } from '../middleware/api-auth'
 
 function getGraphHopperUrl() {
   return process.env.GRAPHHOPPER_URL || 'http://barrelman-graphhopper:8989'
@@ -26,7 +26,8 @@ export function createGraphHopperRoutes(deps: { fetchGraphHopper?: GraphHopperFe
     deps.fetchGraphHopper || ((url, init) => fetch(url, init))
 
   return new Elysia({ prefix: '/graphhopper' })
-    .onBeforeHandle(authHandler)
+    .onBeforeHandle(apiAuth('routing'))
+    .onAfterHandle(apiAuthAfter)
     .all('/*', async ({ request, params, set }) => {
       const subPath = (params as Record<string, string>)['*'] || ''
       const url = new URL(request.url)
