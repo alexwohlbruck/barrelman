@@ -79,6 +79,47 @@ const REGION_BBOXES: Record<string, string> = {
   us: '-125,24,-66,50',            // Continental US
 }
 
+/** "w,s,e,n" — the form a region's own bbox is passed in as. */
+const BBOX_LITERAL = /^\s*-?\d+(\.\d+)?\s*(,\s*-?\d+(\.\d+)?\s*){3}$/
+
+/**
+ * Resolve a GTFS region argument to a Transitland `bbox` parameter.
+ *
+ * Accepts a literal "west,south,east,north" box (what a region definition
+ * supplies from its own boundary) or one of the legacy named tokens above.
+ * Returns null only for 'global', which deliberately means "every feed".
+ *
+ * Throws on anything else. It would be easy to fall through to an unfiltered
+ * query here, but that silently downloads the entire ~2,800-feed global catalog
+ * when someone adds a region with a token nobody hardcoded — a typo costing
+ * hours and tens of GB rather than an error.
+ */
+export function resolveGtfsBbox(region: string): string | null {
+  if (region === 'global') return null
+
+  if (BBOX_LITERAL.test(region)) {
+    const [w, s, e, n] = region.split(',').map((v) => Number(v.trim()))
+    if (w < -180 || e > 180 || s < -90 || n > 90) {
+      throw new Error(`GTFS bbox "${region}" is outside valid lon/lat ranges.`)
+    }
+    if (w >= e || s >= n) {
+      throw new Error(
+        `GTFS bbox "${region}" is malformed — expected west,south,east,north with west < east and south < north.`,
+      )
+    }
+    return [w, s, e, n].join(',')
+  }
+
+  const named = REGION_BBOXES[region]
+  if (named) return named
+
+  throw new Error(
+    `Unknown GTFS region "${region}". Use a "west,south,east,north" bbox, "global", ` +
+      `or one of: ${Object.keys(REGION_BBOXES).join(', ')}. ` +
+      `Regions created from the boundary catalog supply their bbox automatically.`,
+  )
+}
+
 /**
  * Fetch GTFS feed list from Transitland API.
  *
@@ -213,11 +254,9 @@ function buildFeedListUrl(region: string, apiKey: string): string {
     limit: '100',
   })
 
-  if (region !== 'global') {
-    const bbox = REGION_BBOXES[region]
-    if (bbox) {
-      params.set('bbox', bbox)
-    }
+  const bbox = resolveGtfsBbox(region)
+  if (bbox) {
+    params.set('bbox', bbox)
   }
 
   return `${base}?${params}`

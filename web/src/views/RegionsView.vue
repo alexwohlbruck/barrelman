@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import { Plus, Pencil, Trash2, Globe, MapPin, Loader2, Database } from 'lucide-vue-next'
+import { Plus, Pencil, Trash2, Globe, MapPin, Loader2, Database, Search } from 'lucide-vue-next'
 import PageHeader from '@/components/PageHeader.vue'
 import Button from '@/components/ui/Button.vue'
 import Badge from '@/components/ui/Badge.vue'
@@ -8,15 +8,19 @@ import Switch from '@/components/ui/Switch.vue'
 import Spinner from '@/components/ui/Spinner.vue'
 import Dialog from '@/components/ui/Dialog.vue'
 import RegionEditor from '@/components/regions/RegionEditor.vue'
+import BoundaryPicker from '@/components/regions/BoundaryPicker.vue'
 import { getRegions, updateRegion, deleteRegion, ApiError } from '@/lib/api'
 import { toast } from '@/lib/toast'
-import type { ImportRegion } from '@/lib/types'
+import type { ImportRegion, DerivedRegion } from '@/lib/types'
 
 const regions = ref<ImportRegion[]>([])
 const loading = ref(true)
 
 const editorOpen = ref(false)
 const editing = ref<ImportRegion | null>(null)
+const prefill = ref<DerivedRegion | null>(null)
+
+const pickerOpen = ref(false)
 
 const deleteTarget = ref<ImportRegion | null>(null)
 const deleting = ref(false)
@@ -34,11 +38,20 @@ async function load() {
 
 function openNew() {
   editing.value = null
+  prefill.value = null
   editorOpen.value = true
 }
 
 function openEdit(r: ImportRegion) {
   editing.value = r
+  prefill.value = null
+  editorOpen.value = true
+}
+
+/** Catalog pick resolved — review the auto-filled definition before saving. */
+function onResolved(derived: DerivedRegion) {
+  editing.value = null
+  prefill.value = derived
   editorOpen.value = true
 }
 
@@ -77,6 +90,9 @@ onMounted(load)
   <div>
     <PageHeader title="Regions" subtitle="Geographic areas the OSM, transit, and address importers pull in">
       <template #actions>
+        <Button variant="outline" @click="pickerOpen = true">
+          <Search class="size-4" /> Add by name
+        </Button>
         <Button @click="openNew">
           <Plus class="size-4" /> New region
         </Button>
@@ -92,7 +108,10 @@ onMounted(load)
         <MapPin class="mx-auto size-8 text-muted-foreground" />
         <p class="mt-3 text-sm font-medium">No regions yet</p>
         <p class="mt-1 text-sm text-muted-foreground">Define an area to import, then run an import against it.</p>
-        <Button class="mt-4" @click="openNew"><Plus class="size-4" /> New region</Button>
+        <div class="mt-4 flex justify-center gap-2">
+          <Button @click="pickerOpen = true"><Search class="size-4" /> Add by name</Button>
+          <Button variant="outline" @click="openNew"><Plus class="size-4" /> Blank region</Button>
+        </div>
       </div>
 
       <div v-else class="grid gap-3 md:grid-cols-2">
@@ -143,7 +162,15 @@ onMounted(load)
       </p>
     </div>
 
-    <RegionEditor :region="editing" :open="editorOpen" @update:open="editorOpen = $event" @saved="load" />
+    <BoundaryPicker :open="pickerOpen" @update:open="pickerOpen = $event" @resolved="onResolved" />
+
+    <RegionEditor
+      :region="editing"
+      :prefill="prefill"
+      :open="editorOpen"
+      @update:open="editorOpen = $event"
+      @saved="load"
+    />
 
     <!-- Delete confirmation -->
     <Dialog :open="deleteTarget !== null" @update:open="deleteTarget = $event ? deleteTarget : null" class="max-w-md">

@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { ref, watch, computed } from 'vue'
-import { Save, Loader2 } from 'lucide-vue-next'
+import { Save, Loader2, AlertTriangle } from 'lucide-vue-next'
 import Dialog from '@/components/ui/Dialog.vue'
 import Button from '@/components/ui/Button.vue'
+import Badge from '@/components/ui/Badge.vue'
 import Input from '@/components/ui/Input.vue'
 import Label from '@/components/ui/Label.vue'
 import Textarea from '@/components/ui/Textarea.vue'
@@ -10,9 +11,14 @@ import Switch from '@/components/ui/Switch.vue'
 import BboxMap from './BboxMap.vue'
 import { createRegion, updateRegion, ApiError } from '@/lib/api'
 import { toast } from '@/lib/toast'
-import type { Bbox, ImportRegion } from '@/lib/types'
+import type { Bbox, ImportRegion, DerivedRegion } from '@/lib/types'
 
-const props = defineProps<{ region: ImportRegion | null; open: boolean }>()
+const props = defineProps<{
+  region: ImportRegion | null
+  open: boolean
+  /** Auto-filled definition from the boundary catalog, for a new region. */
+  prefill?: DerivedRegion | null
+}>()
 const emit = defineEmits<{ 'update:open': [value: boolean]; saved: [] }>()
 
 const isEdit = computed(() => props.region !== null)
@@ -57,25 +63,29 @@ const toLines = (s: string) => s.split('\n').map((x) => x.trim()).filter(Boolean
 const toList = (s: string) => s.split(/[\s,]+/).map((x) => x.trim()).filter(Boolean)
 const toNums = (s: string) => toList(s).map(Number).filter((n) => Number.isFinite(n))
 
+/** A saved region and a catalog-derived draft populate the form identically. */
+function fromRegion(r: ImportRegion | DerivedRegion['region']): Form {
+  return {
+    key: r.key,
+    label: r.label,
+    bbox: [...r.bbox] as Bbox,
+    osmExtracts: lines(r.osmExtracts),
+    osmReplication: lines(r.osmReplication ?? []),
+    gtfsRegion: r.gtfsRegion,
+    openaddresses: lines(r.pelias.openaddresses ?? []),
+    wofIds: (r.pelias.wofIds || []).join(', '),
+    tigerStates: (r.pelias.tigerStates || []).join(', '),
+    enabled: r.enabled,
+  }
+}
+
 watch(
-  () => [props.open, props.region?.key],
+  () => [props.open, props.region?.key, props.prefill?.region.key],
   () => {
     if (!props.open) return
-    const r = props.region
-    form.value = r
-      ? {
-          key: r.key,
-          label: r.label,
-          bbox: [...r.bbox],
-          osmExtracts: lines(r.osmExtracts),
-          osmReplication: lines(r.osmReplication),
-          gtfsRegion: r.gtfsRegion,
-          openaddresses: lines(r.pelias.openaddresses),
-          wofIds: (r.pelias.wofIds || []).join(', '),
-          tigerStates: (r.pelias.tigerStates || []).join(', '),
-          enabled: r.enabled,
-        }
-      : blank()
+    if (props.region) form.value = fromRegion(props.region)
+    else if (props.prefill) form.value = fromRegion(props.prefill.region)
+    else form.value = blank()
   },
   { immediate: true },
 )
@@ -140,6 +150,26 @@ const coordLabels = ['West', 'South', 'East', 'North']
         </p>
       </div>
 
+      <!-- Auto-fill provenance: what came from the catalog, and what didn't -->
+      <div v-if="!isEdit && prefill" class="flex flex-col gap-2 rounded-lg border border-border bg-muted/30 p-3">
+        <p class="text-sm font-medium">Auto-filled from the boundary catalog</p>
+        <div class="flex flex-wrap gap-1.5">
+          <Badge v-for="(src, field) in prefill.sources" :key="field" variant="secondary" class="text-[10px]">
+            {{ field }} — {{ src }}
+          </Badge>
+        </div>
+        <ul v-if="prefill.warnings.length" class="flex flex-col gap-1 pt-1">
+          <li
+            v-for="(w, i) in prefill.warnings"
+            :key="i"
+            class="flex gap-1.5 text-xs text-muted-foreground"
+          >
+            <AlertTriangle class="mt-0.5 size-3 shrink-0" />
+            <span>{{ w }}</span>
+          </li>
+        </ul>
+      </div>
+
       <!-- Identity -->
       <div class="grid grid-cols-2 gap-3">
         <div class="flex flex-col gap-1.5">
@@ -193,9 +223,17 @@ const coordLabels = ['West', 'South', 'East', 'North']
 
       <!-- Transit -->
       <div class="flex flex-col gap-1.5">
-        <Label>GTFS region token <span class="text-muted-foreground">(optional)</span></Label>
-        <Input :model-value="form.gtfsRegion" placeholder="nc" @update:model-value="form.gtfsRegion = $event" />
-        <p class="text-xs text-muted-foreground">Transitland operator/region token used by the GTFS importer.</p>
+        <Label>GTFS search area <span class="text-muted-foreground">(optional)</span></Label>
+        <Input
+          :model-value="form.gtfsRegion"
+          placeholder="-109.06,36.99,-102.04,41"
+          @update:model-value="form.gtfsRegion = $event"
+        />
+        <p class="text-xs text-muted-foreground">
+          Bounding box <code class="font-mono">west,south,east,north</code> used to find Transitland feeds
+          — normally the same as above. <code class="font-mono">global</code> fetches every feed worldwide.
+          An unrecognised value fails the import rather than silently downloading everything.
+        </p>
       </div>
 
       <!-- Addresses -->

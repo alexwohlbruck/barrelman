@@ -81,6 +81,6 @@ else
     echo "Admin console: http://localhost:5001/console"
 fi
 echo "Martin tiles: internal only (proxied via API)"
-echo "GraphHopper: http://localhost:5001/graphhopper/* (proxied)  |  http://localhost:8989 (direct, debug)"
+echo "GraphHopper: http://localhost:5001/graphhopper/* (proxied)  |  http://localhost:5003 (direct, debug)"
 echo ""
 echo "To stop: $0 $MODE --down"

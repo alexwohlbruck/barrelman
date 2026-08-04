@@ -1,7 +1,7 @@
 import { db } from '../db'
 import { sql } from 'drizzle-orm'
 import { spatialCache } from '../lib/cache'
-import { findOsmByAddress } from './place.service'
+import { findOsmByAddress, getPlace } from './place.service'
 
 export interface ReverseGeocodeResult {
   address: Record<string, string>
@@ -130,6 +130,38 @@ export async function forwardGeocode(
   }
 }
 
+/** True when a record carries at least one populated address component. */
+function hasAddress(place: any): boolean {
+  return Boolean(place.address) && Object.values(place.address).some((v) => v != null)
+}
+
+/**
+ * Associate an adapted Pelias record with the OSM feature at the same street
+ * address, when one exists. Geocoder points carry no geometry, tags, or
+ * categories; the OSM row does — so the detail view can outline the building
+ * perimeter and link to OSM instead of showing a bare point. Best-effort:
+ * returns the original record when there's no confident match.
+ */
+async function associateOsmByAddress(place: any): Promise<any> {
+  const hn = place.address?.housenumber
+  const street = place.address?.street
+  const coords = place.geometry?.coordinates
+  if (!hn || !street || !Array.isArray(coords)) return place
+
+  try {
+    const osm = await findOsmByAddress(hn, street, coords[1], coords[0])
+    if (!osm) return place
+    // Backfill only the address from the geocoded record when the OSM feature
+    // lacks one; the display name is derived from the street address downstream
+    // (parchment adaptPlace), so both the address-view and the direct-OSM-view
+    // resolve to identical data.
+    if (!hasAddress(osm)) osm.address = place.address
+    return osm
+  } catch {
+    return place // Association is best-effort — fall back to the bare point.
+  }
+}
+
 /**
  * Fetch a single Pelias record by its global id (gid), e.g.
  * "openaddresses:address:us/ny/city_of_new_york:7e5b…". Used to resolve an
@@ -151,37 +183,112 @@ export async function fetchPeliasPlaceByGid(
     const data = (await res.json()) as { features?: any[] }
     const feature = data.features?.[0]
     if (!feature) return null
-    const place = adaptPeliasFeature(feature)
-
-    // Associate with the OSM feature at the same address, if one exists, so the
-    // detail view can outline the building perimeter and link to OSM instead of
-    // showing a bare geocoder point. We return the OSM object (polygon + tags +
-    // osm id), backfilling name/address from the geocoded record when the
-    // building itself is unnamed/unaddressed.
-    const hn = place.address?.housenumber
-    const street = place.address?.street
-    const coords = place.geometry?.coordinates
-    if (hn && street && Array.isArray(coords)) {
-      try {
-        const osm = await findOsmByAddress(hn, street, coords[1], coords[0])
-        if (osm) {
-          // Backfill only the address from the geocoded record when the OSM
-          // feature lacks one; the display name is derived from the street
-          // address downstream (parchment adaptPlace), so both the address-view
-          // and the direct-OSM-view resolve to identical data.
-          const emptyAddr = !osm.address || Object.values(osm.address).every((v) => v == null)
-          if (emptyAddr) osm.address = place.address
-          return osm
-        }
-      } catch {
-        // Association is best-effort — fall back to the bare geocoder point.
-      }
-    }
-
-    return place
+    return associateOsmByAddress(adaptPeliasFeature(feature))
   } catch {
     return null
   }
+}
+
+// ── Reverse geocoding (coordinate → places) ──────────────────────────────────
+
+/** Pelias layers worth returning for a dropped pin: what's *at* the point. */
+const REVERSE_LAYERS = 'venue,address,street'
+
+/** How far from the click a result may be before it stops describing the point. */
+const REVERSE_RADIUS_M = 100
+
+/**
+ * Reverse-geocode a coordinate to the addressable features at that point,
+ * returning geo_places-shaped rows (the same shape `/search` emits).
+ *
+ * Two tiers, narrowest first:
+ *  1. Pelias reverse within `radiusM` — venues, addresses, and streets from the
+ *     OSM + OpenAddresses index. Each hit is hydrated into its real geo_places
+ *     row where possible, which upgrades a bare geocoder point into the full
+ *     OSM feature (polygon, tags, categories, opening hours).
+ *  2. Admin fallback — for a point with nothing addressable near it (a lake, a
+ *     field), return the smallest administrative area containing it so callers
+ *     still get a meaningful label instead of nothing. Widening the Pelias
+ *     radius instead would surface an unrelated address hundreds of metres away.
+ *
+ * Resilient: a Pelias failure degrades to the admin fallback rather than erroring.
+ */
+export async function reverseGeocodePlaces(
+  lat: number,
+  lng: number,
+  opts: { limit?: number; radiusM?: number; signal?: AbortSignal } = {},
+): Promise<any[]> {
+  const { limit = 5, radiusM = REVERSE_RADIUS_M, signal } = opts
+
+  const params = new URLSearchParams({
+    'point.lat': String(lat),
+    'point.lon': String(lng),
+    size: String(limit),
+    'boundary.circle.radius': String(radiusM / 1000), // Pelias takes kilometres
+    layers: REVERSE_LAYERS,
+  })
+
+  const backstop = AbortSignal.timeout(PELIAS_HANG_BACKSTOP_MS)
+  const fetchSignal = signal ? AbortSignal.any([signal, backstop]) : backstop
+
+  let features: any[] = []
+  try {
+    const res = await fetch(`${PELIAS_URL}/v1/reverse?${params}`, { signal: fetchSignal })
+    if (res.ok) {
+      const data = (await res.json()) as { features?: any[] }
+      features = data.features ?? []
+    }
+  } catch {
+    // Pelias unavailable/aborted — fall through to the admin tier.
+  }
+
+  // Pelias emits one feature per layer for the same OSM element (an `address`
+  // and a `venue` row both pointing at way/123). Keep the first — they are
+  // returned best-match first — so the caller sees one result per real feature.
+  const seen = new Set<string>()
+  const unique = features.map(adaptPeliasFeature).filter((p) => {
+    if (seen.has(p.id)) return false
+    seen.add(p.id)
+    return true
+  })
+
+  if (unique.length > 0) {
+    const hydrated = await Promise.all(unique.map(hydrateReverseResult))
+
+    // The nearest feature to a dropped pin is often an unaddressed node — a
+    // statue, a bench, a tree — while the same response also carries the street
+    // address of that spot from the address layer. Lend it to the results that
+    // have none, so a pin always resolves to a label *and* an address.
+    const donor = unique.find((p) => p.address?.housenumber && p.address?.street)
+    if (donor) {
+      for (const place of hydrated) {
+        if (!hasAddress(place)) place.address = donor.address
+      }
+    }
+
+    return hydrated
+  }
+
+  const { hierarchy } = await reverseGeocode(lat, lng)
+  const smallest = hierarchy[0]
+  if (!smallest) return []
+  const [osmType, osmId] = String(smallest.id).split('/')
+  const row = await getPlace(osmType, osmId)
+  return row ? [row] : []
+}
+
+/**
+ * Upgrade a single adapted Pelias reverse hit into its real geo_places row.
+ * OSM-sourced hits resolve by id; OpenAddresses hits fall back to matching the
+ * street address against a nearby building. Keeps the geocoder record when
+ * neither resolves (e.g. the Pelias index is ahead of the OSM import).
+ */
+async function hydrateReverseResult(place: any): Promise<any> {
+  const [osmType, osmId] = String(place.id).split('/')
+  if (['node', 'way', 'relation'].includes(osmType)) {
+    return (await getPlace(osmType, osmId)) ?? place
+  }
+  return associateOsmByAddress(place)
 }
 
 export async function reverseGeocode(lat: number, lng: number): Promise<ReverseGeocodeResult> {

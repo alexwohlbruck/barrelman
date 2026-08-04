@@ -30,6 +30,7 @@ const mockFindContaining   = mock(async () => [] as any[])
 const mockFindChildren     = mock(async () => [] as any[])
 const mockGetPlace         = mock(async () => null as any)
 const mockReverseGeocode   = mock(async () => ({ address: {}, hierarchy: [] }))
+const mockReverseGeocodePlaces = mock(async () => [] as any[])
 
 // ── App factory ───────────────────────────────────────────────────────────────
 
@@ -40,7 +41,10 @@ function makeApp() {
     .use(createContainsRoutes({ findContainingAreas: mockFindContaining }))
     .use(createChildrenRoutes({ findChildren: mockFindChildren }))
     .use(createPlaceRoutes({ getPlace: mockGetPlace }))
-    .use(createGeocodeRoutes({ reverseGeocode: mockReverseGeocode }))
+    .use(createGeocodeRoutes({
+      reverseGeocode: mockReverseGeocode,
+      reverseGeocodePlaces: mockReverseGeocodePlaces,
+    }))
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -78,6 +82,7 @@ beforeEach(() => {
   mockFindChildren.mockReset()
   mockGetPlace.mockReset()
   mockReverseGeocode.mockReset()
+  mockReverseGeocodePlaces.mockReset()
 
   mockCheckHealth.mockImplementation(async () => ({ status: 'ok', database: 'connected' }))
   mockSearchPlaces.mockImplementation(async () => [])
@@ -85,6 +90,7 @@ beforeEach(() => {
   mockFindChildren.mockImplementation(async () => [])
   mockGetPlace.mockImplementation(async () => null)
   mockReverseGeocode.mockImplementation(async () => ({ address: {}, hierarchy: [] }))
+  mockReverseGeocodePlaces.mockImplementation(async () => [])
 })
 
 afterEach(() => {
@@ -388,5 +394,57 @@ describe('GET /geocode', () => {
     await app.handle(get('/geocode?lat=36.2168&lng=-81.6746'))
     expect(typeof capturedLat!).toBe('number')
     expect(capturedLat!).toBeCloseTo(36.2168)
+  })
+})
+
+// ── GET /geocode/reverse ──────────────────────────────────────────────────────
+
+describe('GET /geocode/reverse', () => {
+  test('returns the places at the coordinate', async () => {
+    mockReverseGeocodePlaces.mockImplementation(async () => [
+      { id: 'node/1', name: 'Industry' },
+    ])
+    const app = makeApp()
+    const res = await app.handle(get('/geocode/reverse?lat=35.2271&lng=-80.8431'))
+    expect(res.status).toBe(200)
+    const body = await json(res)
+    expect(body[0].name).toBe('Industry')
+  })
+
+  test('passes lat/lng as numbers and forwards limit/radius', async () => {
+    let captured: any
+    mockReverseGeocodePlaces.mockImplementation(async (lat: number, lng: number, opts: any) => {
+      captured = { lat, lng, opts }
+      return []
+    })
+    const app = makeApp()
+    await app.handle(get('/geocode/reverse?lat=35.2271&lng=-80.8431&limit=3&radius=250'))
+    expect(typeof captured.lat).toBe('number')
+    expect(captured.lat).toBeCloseTo(35.2271)
+    expect(captured.opts.limit).toBe(3)
+    expect(captured.opts.radiusM).toBe(250)
+  })
+
+  test('leaves limit/radius unset so the service defaults apply', async () => {
+    let captured: any
+    mockReverseGeocodePlaces.mockImplementation(async (_lat: number, _lng: number, opts: any) => {
+      captured = opts
+      return []
+    })
+    const app = makeApp()
+    await app.handle(get('/geocode/reverse?lat=35.2271&lng=-80.8431'))
+    expect(captured.limit).toBeUndefined()
+    expect(captured.radiusM).toBeUndefined()
+  })
+
+  test('does not shadow the admin-hierarchy /geocode route', async () => {
+    mockReverseGeocode.mockImplementation(async () => ({
+      address: { city: 'Charlotte' },
+      hierarchy: [],
+    }))
+    const app = makeApp()
+    const res = await app.handle(get('/geocode?lat=35.2271&lng=-80.8431'))
+    expect((await json(res)).address.city).toBe('Charlotte')
+    expect(mockReverseGeocodePlaces).not.toHaveBeenCalled()
   })
 })

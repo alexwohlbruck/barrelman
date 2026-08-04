@@ -89,7 +89,7 @@ services:
       - ./graphhopper-config.yml:/graphhopper/config-example.yml:ro
       - ./custom_models:/graphhopper/custom_models:ro
     ports:
-      - "8989:8989"
+      - "5003:8989"
     depends_on:
       - barrelman-db
 
@@ -103,7 +103,7 @@ services:
       - barrelman-gtfs-data:/data
       - barrelman-osm-data:/osm-data:ro
     ports:
-      - "8080:8080"
+      - "5004:8080"
 
   barrelman:
     container_name: barrelman

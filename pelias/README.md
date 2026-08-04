@@ -60,11 +60,21 @@ it: `docker restart pelias_api`. Verify with
 
 ## Regions
 
-Coverage is defined entirely in [`pelias.json`](./pelias.json):
+Coverage lives in the `imports` block of [`pelias.json`](./pelias.json):
 `imports.openstreetmap.download/import` (PBFs), `imports.openaddresses.files`,
 `imports.whosonfirst.importPlace`, `imports.interpolation.download.tiger.states`.
-Currently NC + NY/NJ/CT. To add a region, add its PBF + OA files + WOF place id +
-TIGER state code, then re-run steps 4-6.
+
+**Don't hand-edit that block** — it is generated from barrelman's region
+registry so the geocoder's coverage always matches the rest of the pipeline:
+
+```sh
+bun run scripts/generate-pelias-config.ts   # rewrites imports from REGIONS
+```
+
+Everything outside `imports` (logger, esclient, api) is preserved. To add a
+region, define it in barrelman (see [`docs/REGIONS.md`](../docs/REGIONS.md) —
+adding one by name fills in its OpenAddresses files and TIGER state codes
+automatically), regenerate, then re-run steps 4-6 above.
 
 ## The `layers=address,street` gotcha
 

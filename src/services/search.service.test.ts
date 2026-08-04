@@ -10,6 +10,7 @@
  */
 
 import { describe, test, expect, mock, beforeEach } from 'bun:test'
+import * as realCache from '../lib/cache'
 
 // ── Mocks ─────────────────────────────────────────────────────────────────────
 
@@ -24,7 +25,12 @@ const noop = { get: () => undefined, set: () => {} }
 
 mock.module('../db', () => ({ db: { execute: mockExecute } }))
 mock.module('../lib/embeddings', () => ({ generateQueryEmbedding: mockGenerateQueryEmbedding }))
+// `mock.module` is process-global and replaces the module wholesale for every
+// test file in the run, so spread the real exports and override only what this
+// file cares about — otherwise a later file importing e.g. `isochroneCache`
+// blows up with "Export named ... not found".
 mock.module('../lib/cache', () => ({
+  ...realCache,
   searchCache: {
     get: (k: string) => searchCacheStore.get(k),
     set: (k: string, v: any) => searchCacheStore.set(k, v),
