@@ -1,4 +1,4 @@
-import { adminKey, clearKey } from './auth'
+import { adminKey, clearAdminKey } from './auth'
 import type {
   ScriptsResponse,
   Job,
@@ -8,6 +8,17 @@ import type {
   ServiceStatus,
   TestResult,
   ImportRegion,
+  ApiKeySummary,
+  CreatedApiKey,
+  BillingConfig,
+  BillingStatus,
+  CreditBalance,
+  LedgerEntry,
+  PasskeySummary,
+  PlansResponse,
+  PublicUser,
+  SessionSummary,
+  UsageReport,
 } from './types'
 
 export class ApiError extends Error {
@@ -17,6 +28,11 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * The console authenticates with a session cookie. The bearer header is only
+ * sent when an operator is using the legacy shared admin key instead of an
+ * account, which the server still accepts for scripts and CI.
+ */
 function authHeaders(): Record<string, string> {
   return adminKey.value ? { authorization: `Bearer ${adminKey.value}` } : {}
 }
@@ -24,12 +40,16 @@ function authHeaders(): Record<string, string> {
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const res = await fetch(path, {
     ...init,
+    credentials: 'same-origin',
     headers: { ...authHeaders(), ...(init.headers || {}) },
   })
   if (res.status === 401) {
-    clearKey()
-    throw new ApiError(401, 'Unauthorized — admin key invalid or missing')
+    // Only the shared key is ours to discard here; a dead session is cleared by
+    // the router guard on the next navigation.
+    clearAdminKey()
+    throw new ApiError(401, 'Unauthorized — sign in again')
   }
+  if (res.status === 204) return null as T
   const contentType = res.headers.get('content-type') || ''
   const payload = contentType.includes('application/json') ? await res.json() : await res.text()
   if (!res.ok) {
@@ -43,6 +63,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 export interface ConsoleConfig {
   authRequired: boolean
   usingDedicatedAdminKey: boolean
+  accountsEnabled: boolean
   apiName: string
   version: string
 }
@@ -144,7 +165,11 @@ export async function streamJob(
   onEvent: (evt: JobStreamEvent) => void,
   signal: AbortSignal,
 ): Promise<void> {
-  const res = await fetch(`/admin/jobs/${id}/stream`, { headers: authHeaders(), signal })
+  const res = await fetch(`/admin/jobs/${id}/stream`, {
+    headers: authHeaders(),
+    credentials: 'same-origin',
+    signal,
+  })
   if (!res.ok || !res.body) throw new ApiError(res.status, 'Failed to open log stream')
 
   const reader = res.body.getReader()
@@ -177,4 +202,127 @@ export async function streamJob(
       }
     }
   }
+}
+
+
+// ── Account: profile, sessions and passkeys ───────────────────────────
+export function getAccount(): Promise<{ user: PublicUser }> {
+  return request<{ user: PublicUser }>('/account')
+}
+
+export function updateAccount(name: string): Promise<{ user: PublicUser }> {
+  return request<{ user: PublicUser }>('/account', {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ name }),
+  })
+}
+
+export function getSessions(): Promise<SessionSummary[]> {
+  return request<SessionSummary[]>('/auth/sessions')
+}
+
+export function revokeSession(id: string): Promise<null> {
+  return request<null>(`/auth/sessions/${id}`, { method: 'DELETE' })
+}
+
+export function signOutOthers(): Promise<null> {
+  return request<null>('/auth/sessions?scope=others', { method: 'DELETE' })
+}
+
+export function getPasskeys(): Promise<PasskeySummary[]> {
+  return request<PasskeySummary[]>('/auth/passkeys/')
+}
+
+export function deletePasskey(id: string): Promise<null> {
+  return request<null>(`/auth/passkeys/${id}`, { method: 'DELETE' })
+}
+
+export function getLinkedProviders(): Promise<{ provider: string; createdAt: string }[]> {
+  return request<{ provider: string; createdAt: string }[]>('/auth/oauth/')
+}
+
+export function unlinkProvider(provider: string): Promise<null> {
+  return request<null>(`/auth/oauth/${provider}`, { method: 'DELETE' })
+}
+
+// ── Account: API keys ─────────────────────────────────────────────────
+export function getApiKeys(includeRevoked = false): Promise<{ keys: ApiKeySummary[] }> {
+  return request<{ keys: ApiKeySummary[] }>(`/account/keys?includeRevoked=${includeRevoked}`)
+}
+
+export function createApiKey(payload: {
+  name: string
+  environment?: 'live' | 'test'
+  scopes?: string[]
+}): Promise<CreatedApiKey> {
+  return request<CreatedApiKey>('/account/keys', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+}
+
+export function updateApiKey(
+  id: string,
+  payload: { name?: string; scopes?: string[] },
+): Promise<{ ok: boolean }> {
+  return request<{ ok: boolean }>(`/account/keys/${id}`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+}
+
+export function revokeApiKey(id: string): Promise<null> {
+  return request<null>(`/account/keys/${id}`, { method: 'DELETE' })
+}
+
+// ── Account: usage and credits ────────────────────────────────────────
+export function getPlans(): Promise<PlansResponse> {
+  return request<PlansResponse>('/account/plans')
+}
+
+export function getCredits(): Promise<CreditBalance> {
+  return request<CreditBalance>('/account/credits')
+}
+
+export function getLedger(): Promise<{ entries: LedgerEntry[] }> {
+  return request<{ entries: LedgerEntry[] }>('/account/credits/ledger')
+}
+
+export function getUsage(from?: string, to?: string): Promise<UsageReport> {
+  const params = new URLSearchParams()
+  if (from) params.set('from', from)
+  if (to) params.set('to', to)
+  const query = params.toString()
+  return request<UsageReport>(`/account/usage${query ? `?${query}` : ''}`)
+}
+
+// ── Billing ───────────────────────────────────────────────────────────
+export function getBillingConfig(): Promise<BillingConfig> {
+  return request<BillingConfig>('/billing/config')
+}
+
+export function getBillingStatus(): Promise<BillingStatus> {
+  return request<BillingStatus>('/billing/status')
+}
+
+export function startCheckout(payload: {
+  plan?: string
+  creditPack?: string
+}): Promise<{ checkoutUrl: string }> {
+  return request<{ checkoutUrl: string }>('/billing/checkout', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+}
+
+export function getPortalUrl(): Promise<{ portalUrl: string }> {
+  return request<{ portalUrl: string }>('/billing/portal')
+}
+
+export function syncBilling(): Promise<{ planId: string }> {
+  return request<{ planId: string }>('/billing/sync', { method: 'POST' })
 }

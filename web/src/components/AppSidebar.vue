@@ -1,13 +1,37 @@
 <script setup lang="ts">
-import { RouterLink, useRoute } from 'vue-router'
-import { LayoutDashboard, TerminalSquare, ListChecks, Database, FlaskConical, LogOut, Compass, MapPin } from 'lucide-vue-next'
+import { computed } from 'vue'
+import { RouterLink, useRoute, useRouter } from 'vue-router'
+import {
+  Activity,
+  Compass,
+  CreditCard,
+  Database,
+  FlaskConical,
+  KeyRound,
+  LayoutDashboard,
+  ListChecks,
+  LogOut,
+  MapPin,
+  TerminalSquare,
+  UserRound,
+} from 'lucide-vue-next'
 import { jobStats } from '@/lib/store'
-import { authRequired, clearKey } from '@/lib/auth'
+import { adminKey, authRequired, isAdmin, signOut, user } from '@/lib/auth'
 import Badge from '@/components/ui/Badge.vue'
 
 const route = useRoute()
+const router = useRouter()
 
-const nav = [
+/** Everything a signed-in developer needs; this is the primary surface now. */
+const accountNav = [
+  { to: '/keys', label: 'API keys', icon: KeyRound },
+  { to: '/usage', label: 'Usage', icon: Activity },
+  { to: '/billing', label: 'Billing', icon: CreditCard },
+  { to: '/account', label: 'Account', icon: UserRound },
+]
+
+/** Operator tools, shown only to admins. */
+const adminNav = [
   { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { to: '/regions', label: 'Regions', icon: MapPin },
   { to: '/scripts', label: 'Scripts', icon: TerminalSquare },
@@ -16,13 +40,16 @@ const nav = [
   { to: '/api', label: 'API Tester', icon: FlaskConical },
 ]
 
+const showAdmin = computed(() => isAdmin.value)
+const identity = computed(() => user.value?.name || user.value?.email || (adminKey.value ? 'Admin key' : 'Open mode'))
+
 function isActive(to: string) {
-  return route.path === to || (to !== '/dashboard' && route.path.startsWith(to))
+  return route.path === to || route.path.startsWith(`${to}/`)
 }
 
-function logout() {
-  clearKey()
-  window.location.href = '/console/login'
+async function logout() {
+  await signOut()
+  router.replace({ name: 'login' })
 }
 </script>
 
@@ -34,13 +61,13 @@ function logout() {
       </div>
       <div class="leading-tight">
         <div class="text-sm font-semibold">Barrelman</div>
-        <div class="text-xs text-muted-foreground">Admin Console</div>
+        <div class="text-xs text-muted-foreground">Geospatial API</div>
       </div>
     </div>
 
-    <nav class="flex flex-1 flex-col gap-1 px-3 py-2">
+    <nav class="flex flex-1 flex-col gap-1 overflow-y-auto px-3 py-2">
       <RouterLink
-        v-for="item in nav"
+        v-for="item in accountNav"
         :key="item.to"
         :to="item.to"
         :class="[
@@ -52,15 +79,36 @@ function logout() {
       >
         <component :is="item.icon" class="size-4" />
         <span class="flex-1">{{ item.label }}</span>
-        <Badge v-if="item.badge === 'jobs' && jobStats.running > 0" variant="info" class="px-1.5">
-          {{ jobStats.running }}
-        </Badge>
       </RouterLink>
+
+      <template v-if="showAdmin">
+        <div class="mt-4 px-3 pb-1 text-xs font-medium uppercase tracking-wider text-muted-foreground/70">
+          Operations
+        </div>
+        <RouterLink
+          v-for="item in adminNav"
+          :key="item.to"
+          :to="item.to"
+          :class="[
+            'group flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors',
+            isActive(item.to)
+              ? 'bg-accent text-accent-foreground'
+              : 'text-muted-foreground hover:bg-accent/50 hover:text-foreground',
+          ]"
+        >
+          <component :is="item.icon" class="size-4" />
+          <span class="flex-1">{{ item.label }}</span>
+          <Badge v-if="item.badge === 'jobs' && jobStats.running > 0" variant="info" class="px-1.5">
+            {{ jobStats.running }}
+          </Badge>
+        </RouterLink>
+      </template>
     </nav>
 
     <div class="border-t border-border px-3 py-3">
+      <div class="truncate px-3 pb-2 text-xs text-muted-foreground" :title="identity">{{ identity }}</div>
       <button
-        v-if="authRequired"
+        v-if="authRequired || user"
         class="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
         @click="logout"
       >

@@ -149,3 +149,158 @@ export interface TestResult {
   body?: unknown
   error?: string
 }
+
+// ── Accounts, keys, usage and billing ─────────────────────────────────
+// Mirrors the backend shapes in src/schema/accounts.ts, src/billing/plans.ts
+// and the /auth, /account and /billing routes. Keep in sync with those.
+
+export type UserRole = 'user' | 'admin'
+export type KeyEnvironment = 'live' | 'test'
+export type EndpointGroup =
+  | 'tiles'
+  | 'places'
+  | 'search'
+  | 'geocode'
+  | 'spatial'
+  | 'routing'
+  | 'isochrone'
+  | 'transit'
+export type Scope = EndpointGroup | '*'
+
+export interface PublicUser {
+  id: string
+  email: string
+  name: string | null
+  picture: string | null
+  role: UserRole
+  plan: string
+  createdAt: string | null
+}
+
+export interface AuthConfig {
+  registrationMode: 'open' | 'invite'
+  methods: {
+    email: boolean
+    passkey: boolean
+    oauth: { id: string; label: string }[]
+  }
+}
+
+export interface SessionSummary {
+  id: string
+  userAgent: string | null
+  createdAt: string
+  expiresAt: string
+  current: boolean
+}
+
+export interface PasskeySummary {
+  id: string
+  name: string
+  deviceType: string
+  backedUp: boolean
+  lastUsedAt: string | null
+  createdAt: string
+}
+
+export interface ApiKeySummary {
+  id: string
+  userId: string
+  name: string
+  prefix: string
+  last4: string
+  environment: KeyEnvironment
+  scopes: string[]
+  lastUsedAt: string | null
+  revokedAt: string | null
+  expiresAt: string | null
+  createdAt: string
+}
+
+/** Only ever returned once, at creation. */
+export interface CreatedApiKey {
+  key: string
+  record: ApiKeySummary
+  warning: string
+}
+
+export interface Plan {
+  id: string
+  name: string
+  description: string
+  monthlyCredits: number
+  requestsPerMinute: number
+  overageAllowed: boolean
+  overageCentsPerThousand: number
+  rank: number
+}
+
+export interface CreditBalance {
+  plan: Plan
+  monthlyCredits: number
+  used: number
+  purchased: number
+  allowanceRemaining: number
+  remaining: number
+  overageAllowed: boolean
+  overage: number
+  cycleResetsAt: string
+}
+
+export interface LedgerEntry {
+  id: string
+  amount: number
+  kind: 'purchase' | 'grant' | 'adjustment' | 'refund'
+  description: string | null
+  createdAt: string
+}
+
+export interface UsageBucket {
+  day: string
+  endpoint: string
+  requests: number
+  credits: number
+  rejected: number
+}
+
+export interface KeyUsageSummary {
+  apiKeyId: string
+  requests: number
+  credits: number
+}
+
+export interface UsageReport {
+  from: string
+  to: string
+  daily: UsageBucket[]
+  byKey: KeyUsageSummary[]
+}
+
+export interface PlansResponse {
+  plans: Plan[]
+  creditCosts: Record<EndpointGroup, number>
+  scopes: Scope[]
+}
+
+export interface BillingProduct {
+  planId: string
+  productId: string
+  name: string
+  priceAmount: number
+  priceCurrency: string
+  interval: string
+}
+
+export interface BillingConfig {
+  billingEnabled: boolean
+  plans: Plan[]
+  products: BillingProduct[]
+  creditPacks: { productId: string; credits: number }[]
+}
+
+export interface BillingStatus {
+  billingEnabled: boolean
+  plan: Plan
+  hasSubscription: boolean
+  balance: CreditBalance
+}
