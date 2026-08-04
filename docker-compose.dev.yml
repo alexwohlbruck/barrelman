@@ -79,6 +79,10 @@ services:
       NUXT_PORT: "5200"
     volumes:
       - ../barrelman-landing:/site
+      # The shared design package is a `file:../parchment-design` dependency,
+      # which bun resolves relative to /site. Without this mount the container
+      # cannot see it and Tailwind fails to load the stylesheet.
+      - ../parchment-design:/parchment-design
       # Anonymous volumes so the container's installs never fight the host's —
       # the Linux binaries bun resolves here differ from the macOS ones outside.
       - /site/node_modules
