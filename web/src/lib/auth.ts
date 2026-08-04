@@ -33,6 +33,19 @@ export const isAuthenticated = computed(
   () => isSignedIn.value || Boolean(adminKey.value) || !authRequired.value,
 )
 
+/**
+ * Whether the caller has an actual account, as opposed to reaching the console
+ * with the shared admin key or through open dev mode.
+ *
+ * The `/account/*` routes are session-authenticated only — the API deliberately
+ * ignores bearer tokens beginning with `brm_`, which the admin key is — so
+ * every account page 401s for these operators. Without this distinction the
+ * router admitted them to /keys, the first request failed, and the 401 handler
+ * cleared their key and bounced them back to sign-in looking like a random
+ * logout.
+ */
+export const hasAccount = isSignedIn
+
 export const passkeysSupported = browserSupportsWebAuthn()
 
 // ── Legacy admin key ────────────────────────────────────────────────────

@@ -17,7 +17,7 @@ import {
   Users,
 } from 'lucide-vue-next'
 import { jobStats } from '@/lib/store'
-import { adminKey, authRequired, isAdmin, signOut, user } from '@/lib/auth'
+import { adminKey, authRequired, hasAccount, isAdmin, signOut, user } from '@/lib/auth'
 import Badge from '@/components/ui/Badge.vue'
 
 const route = useRoute()
@@ -43,6 +43,9 @@ const adminNav = [
 ]
 
 const showAdmin = computed(() => isAdmin.value)
+// The account pages call session-authenticated endpoints, so hide them from an
+// operator who arrived with the shared admin key — every one would 401.
+const showAccount = computed(() => hasAccount.value)
 const identity = computed(() => user.value?.name || user.value?.email || (adminKey.value ? 'Admin key' : 'Open mode'))
 
 function isActive(to: string) {
@@ -69,7 +72,7 @@ async function logout() {
 
     <nav class="flex flex-1 flex-col gap-1 overflow-y-auto px-3 py-2">
       <RouterLink
-        v-for="item in accountNav"
+        v-for="item in (showAccount ? accountNav : [])"
         :key="item.to"
         :to="item.to"
         :class="[
@@ -84,7 +87,10 @@ async function logout() {
       </RouterLink>
 
       <template v-if="showAdmin">
-        <div class="mt-4 px-3 pb-1 text-xs font-medium uppercase tracking-wider text-muted-foreground/70">
+        <div
+          v-if="showAccount"
+          class="mt-4 px-3 pb-1 text-xs font-medium uppercase tracking-wider text-muted-foreground/70"
+        >
           Operations
         </div>
         <RouterLink
