@@ -1,5 +1,5 @@
 import Elysia, { t } from 'elysia'
-import { authMiddleware } from '../middleware/auth'
+import { apiAuth, apiAuthAfter } from '../middleware/api-auth'
 import {
   reverseGeocode as _reverseGeocode,
   reverseGeocodePlaces as _reverseGeocodePlaces,
@@ -12,7 +12,8 @@ export function createGeocodeRoutes(deps = {
   fetchPeliasPlaceByGid: _fetchPeliasPlaceByGid,
 }) {
   return new Elysia()
-    .use(authMiddleware)
+    .onBeforeHandle(apiAuth('geocode'))
+    .onAfterHandle(apiAuthAfter)
     .get(
       '/geocode/place',
       async ({ query, request, set }) => {

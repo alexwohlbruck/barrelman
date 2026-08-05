@@ -53,6 +53,19 @@ network as its own stack. Everything else comes up together.
 
 ---
 
+## Documentation
+
+| | |
+|---|---|
+| [Development](docs/development.md) | Running the stack with Docker Compose |
+| [Accounts & API keys](docs/accounts.md) | Sign-in, sessions, keys, scopes |
+| [Pricing & credits](docs/pricing.md) | Endpoint costs and plans |
+| [Abuse controls](docs/abuse-controls.md) | Throttling, suspension, terms |
+| [Polar setup](docs/polar-setup.md) | Wiring up billing |
+| [Configuration](docs/configuration.md) | Every environment variable |
+
+---
+
 ## Quick Start (Production)
 
 No clone or build required — all services pull pre-built images from Docker Hub / GHCR.
@@ -120,8 +133,8 @@ ordering of the transit/address/bikeshare steps, and how to build one by hand.
 
 ### Prerequisites
 
-- [Bun](https://bun.sh) ≥ 1.1
 - [Docker](https://docker.com) + Docker Compose v2
+- [Bun](https://bun.sh) ≥ 1.1 — only for running tests on the host
 
 ### 1. Clone and configure
 
@@ -131,32 +144,48 @@ cd barrelman
 cp .env.example .env
 ```
 
-Edit `.env` as needed (defaults work for local development):
+The defaults work as-is. Nothing needs setting to get a running instance.
 
-```dotenv
-DATABASE_URL=postgresql://barrelman:barrelman@localhost:5434/barrelman
-REGIONS=north-carolina,nyc-metro
-BARRELMAN_API_KEY=brm_dev_changeme
-BARRELMAN_ADMIN_KEY=brm_admin_dev_changeme
-OLLAMA_HOST=http://localhost:11434
-TRANSITLAND_API_KEY=            # only needed for transit data
-```
-
-### 2. Start the database
+Optionally clone the marketing site alongside it, the same way
+`parchment`/`parchment-landing` sit together — `start.sh` picks it up
+automatically if present:
 
 ```bash
-docker compose up -d barrelman-db
+git clone https://github.com/alexwohlbruck/barrelman-landing.git ../barrelman-landing
 ```
 
-Wait ~15 seconds for PostGIS to initialise.
-
-### 3. Install dependencies
+### 2. Start everything
 
 ```bash
-bun install
+./start.sh dev
 ```
 
-### 4. Pick a region and import
+That brings up the API, the database, the tile server, both routing engines, the
+console dev server and — if you cloned it — the landing site:
+
+| | |
+|---|---|
+| API | http://localhost:5001 |
+| API docs | http://localhost:5001/docs |
+| Console | http://localhost:5199/console |
+| Landing site | http://localhost:5200 |
+
+Source is bind-mounted with hot reload, so edits to `src/`, `web/` and the
+landing site apply without a rebuild.
+
+```bash
+./start.sh dev --build   # rebuild images
+./start.sh dev --down    # stop
+```
+
+### 3. Pick a region and import
+
+A fresh database has no OSM data, so search returns nothing until you import
+some.
+
+`.env` ships with `REGIONS=north-carolina,nyc-metro`, so you can skip straight
+to the import if those suit you. Otherwise pick one by name from the catalog of
+importable boundaries — the **Regions** page in the console does this, or:
 
 ```bash
 # One-time: cache the catalog of importable regions
@@ -164,26 +193,30 @@ bun run scripts/fetch-boundaries.ts
 
 # See what matches, then put the key in .env as REGIONS=colorado
 bun run scripts/fetch-boundaries.ts --skip-fetch --search colorado
-
-# Import (~20-40 min for a US state)
-./scripts/run-import.sh
-
-# Optional: generate semantic search embeddings (~30-90 min on CPU)
-bun run import:embed
 ```
 
-`.env` ships with `REGIONS=north-carolina,nyc-metro`, so you can skip straight
-to the import if those suit you. See the **[region guide](docs/REGIONS.md)** for
-transit, address and bikeshare data, which are separate steps.
-
-### 5. Run the server
+Then import, from the **Scripts** page in the console or directly:
 
 ```bash
-bun run dev
+docker compose exec barrelman-ops bash scripts/import-osm.sh
 ```
 
-Server: `http://localhost:5001`
-Swagger UI: `http://localhost:5001/swagger`
+North Carolina takes 20–40 minutes. See [Data Import](#data-import) for the rest
+of the pipeline, and the **[region guide](docs/REGIONS.md)** for transit, address
+and bikeshare data, which are separate steps.
+
+### 4. Sign in
+
+With no SMTP configured, sign-in codes go to the log:
+
+```bash
+docker logs barrelman --tail 20 | grep "sign-in code"
+```
+
+The first account created becomes an administrator.
+
+More detail — hot-reload caveats, tests, database access — in
+[docs/development.md](docs/development.md).
 
 ---
 
@@ -204,6 +237,9 @@ and is served by the API at `/console`.
 - **Dashboard / Data** — downstream service health (Postgres, MOTIS, GraphHopper,
   Martin) and data metrics (table sizes, coverage, freshness).
 - **API Tester** — send requests to the running API with server-side key injection.
+- **API keys / Usage / Billing** — every signed-in developer manages their own
+  keys, watches credit consumption per endpoint and per key, and handles
+  subscriptions. Operator views (Scripts, Jobs, Data, Regions) are admin-only.
 
 ### Auth
 
@@ -320,15 +356,54 @@ bun run import:embed
 
 ---
 
+## Public API — accounts, keys and credits
+
+Barrelman can be run as a public, metered API as well as a private engine.
+Developers sign in to the console, mint their own keys, and are billed in
+credits against a monthly allowance.
+
+| | |
+|---|---|
+| [Accounts & API keys](docs/accounts.md) | Sign-in, sessions, keys, scopes |
+| [Pricing & credits](docs/pricing.md) | What each endpoint costs, what each plan includes |
+| [Abuse controls](docs/abuse-controls.md) | Throttling, suspension, terms enforcement |
+| [Polar setup](docs/polar-setup.md) | Wiring up billing |
+
+The short version:
+
+- **Keys** look like `brm_live_…`, are shown once, carry scopes limiting which
+  endpoint groups they may call, and revoke immediately.
+- **Credits** price endpoints by what they actually cost — a tile is 1, a
+  geocode 5, an isochrone 40 — because charging both as "one request" would
+  either give tiles away or price routing as if it were free.
+- **The free tier stops at its allowance** with a `402` rather than accruing
+  overage. Nobody can run up a bill on a plan they did not pay for.
+- **`BARRELMAN_API_KEY` remains a shared, unmetered service credential** — how
+  Parchment calls barrelman, and how existing deployments keep working.
+
+| Plan | Price | Credits / month | Past the allowance |
+|---|---|---|---|
+| Free | $0 | 100,000 | **Stops with `402`** |
+| Developer | $19 | 1,000,000 | $0.030 / 1k |
+| Business | $99 | 10,000,000 | $0.018 / 1k |
+| Scale | $299 | 40,000,000 | $0.012 / 1k |
+| Enterprise | Custom | Negotiated | $0.008 / 1k |
+
+All of it is optional. With no `POLAR_ACCESS_TOKEN` the billing surface is
+inert, every account sits on free, and metering exists only to show a
+self-hosted operator their own usage.
+
+---
+
 ## API Reference
 
-All endpoints require a `Bearer` token:
+Data endpoints require a key:
 
 ```
-Authorization: Bearer <BARRELMAN_API_KEY>
+Authorization: Bearer brm_live_...
 ```
 
-Interactive docs: `http://localhost:5001/swagger`
+Interactive docs: `http://localhost:5001/docs`
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -444,46 +519,26 @@ Features come back smallest contour first (`bucket: 0`), so renderers should dra
 
 ## Configuration
 
-### Core
+Full reference: **[docs/configuration.md](docs/configuration.md)**. `.env.example`
+carries the same list with inline commentary.
+
+Nothing is required to run locally — the defaults give a working engine with an
+open API and no accounts, which is the right shape for development and for a
+private self-hosted instance.
+
+The ones worth knowing:
 
 | Variable | Default | Description |
-|----------|---------|-------------|
-| `REGIONS` | `north-carolina,nyc-metro` | **Which regions to import.** Comma-separated keys, or `global`. See the [region guide](docs/REGIONS.md) |
+|---|---|---|
 | `DATABASE_URL` | `postgresql://barrelman:barrelman@localhost:5434/barrelman` | PostGIS connection string |
-| `BARRELMAN_DB_PASSWORD` | `barrelman` | Used by `docker-compose.yml` for the DB container |
-| `PORT` | `5001` | HTTP port the API listens on |
-| `BARRELMAN_API_KEY` | `brm_dev_changeme` | Shared Bearer token for API auth. **Change before deploying.** |
-| `BARRELMAN_ADMIN_KEY` | falls back to `BARRELMAN_API_KEY` | Gates `/console` and every `/admin/*` route. Set a strong, separate secret in production |
-| `OLLAMA_HOST` | `http://localhost:11434` | Ollama endpoint for generating search embeddings |
-| `ISOCHRONE_CONCURRENCY` | `8` | Parallel GraphHopper isochrone requests. Raise it only when GraphHopper isn't also serving interactive routing |
-| `BARRELMAN_STATEMENT_TIMEOUT_MS` | `10000` | Statement timeout on the API query pool. Schema DDL and the enrichment backfill are exempt. `0` disables |
-
-### Import & updates
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `UPDATE_MODE` | `replication` | `replication` (incremental diffs) or `full` (re-download + re-import) for `update-osm.sh` |
-| `GEOFABRIK_URL` | — | Legacy single-extract override. Bypasses `REGIONS`; normally leave unset |
-| `GEOFABRIK_REPLICATION_URL` | — | Replication server for `update-osm.sh` / `init-replication.sh` |
-| `GITHUB_TOKEN` | — | Optional. Raises the GitHub API rate limit when resolving OpenAddresses coverage for a new region |
-
-### Downstream services
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `TRANSITLAND_API_KEY` | — | Required for GTFS import. Free at [transit.land](https://www.transit.land/users/sign_up) |
-| `GTFS_REGION` | — | Optional override of the GTFS search area, bypassing `REGIONS` |
-| `MOTIS_URL` | `http://localhost:8080` | Transit routing engine. Set automatically in Compose |
-| `MOTIS_RT_UPDATE_INTERVAL` | `60` | Seconds between GTFS-RT polls of every feed. Raise on a dev box to cut polling |
-| `GRAPHHOPPER_URL` | `http://localhost:8989` | Street routing engine. Set automatically in Compose |
-| `GRAPHHOPPER_JAVA_OPTS` | `-Xmx6g -Xms1g` | **Must exceed the on-disk `graph-cache` size** — the graph is loaded into heap, not mapped. Raise whenever `REGIONS` grows |
-| `PELIAS_URL` | `http://pelias_api:4000` | Address geocoder. A [separate stack](pelias/README.md) |
-| `BARRELMAN_DB_SHARED_BUFFERS` | `2GB` | Postgres `shared_buffers`. Dev-sized — see below |
-| `BARRELMAN_DB_CACHE_SIZE` | `4GB` | Postgres `effective_cache_size` |
-| `BARRELMAN_DB_WORK_MEM` | `64MB` | Postgres `work_mem`. Below ~64MB, bitmap scans over `geo_places` go lossy |
-| `BARRELMAN_DB_MAINTENANCE_WORK_MEM` | `1GB` | Postgres `maintenance_work_mem` (index builds, `VACUUM`) |
-| `BARRELMAN_DB_RANDOM_PAGE_COST` | `1.1` | SSD/NVMe value. Raise toward `4` on spinning disks |
-| `BARRELMAN_DB_MEM_LIMIT` | `4g` | Container memory cap for `barrelman-db` |
+| `REGIONS` | `north-carolina,nyc-metro` | Which geographies the importers pull. `global` for everything |
+| `BARRELMAN_API_KEY` | — | Shared **service** credential, unmetered. **Unset means the data API is open** |
+| `BARRELMAN_ADMIN_KEY` | falls back to the API key | Gates `/admin/*`. An admin-role session works too |
+| `BARRELMAN_ADMIN_EMAILS` | — | Granted admin on sign-up. The first account is always an admin |
+| `SMTP_HOST` | — | Without it, sign-in codes print to the log |
+| `POLAR_ACCESS_TOKEN` | — | Enables billing. Without it every account stays on free |
+| `BARRELMAN_TOS_URL` | — | Setting it requires accepting terms before creating a key |
+| `OLLAMA_HOST` | `http://localhost:11434` | Embeddings for semantic search (optional) |
 
 ### Database sizing
 
@@ -492,7 +547,7 @@ alongside MOTIS, Elasticsearch and GraphHopper. **Production should size these
 up** — search latency is dominated by whether the working set stays resident.
 On a 32GB database host:
 
-```
+```dotenv
 BARRELMAN_DB_SHARED_BUFFERS=8GB
 BARRELMAN_DB_CACHE_SIZE=24GB
 BARRELMAN_DB_WORK_MEM=128MB
@@ -518,17 +573,39 @@ Caddy auto-provisions TLS. Connect the `barrelman` container to Caddy's network:
 docker network connect caddy_network barrelman
 ```
 
-### Automatic updates with Watchtower
+### Updating a deployment
 
-[Watchtower](https://containrrr.dev/watchtower/) automatically pulls and restarts containers when new images are published:
+New Barrelman releases are published to Docker Hub on every push to `main` via
+GitHub Actions. To roll them out:
 
 ```bash
-docker run -d \
-  -v /var/run/docker.sock:/var/run/docker.sock \
-  containrrr/watchtower --interval 3600
+cd /opt/barrelman
+docker compose pull
+docker compose up -d
 ```
 
-New Barrelman releases are published to Docker Hub on every push to `main` via GitHub Actions.
+> **`docker compose pull` refreshes *every* service's image, not just
+> Barrelman's.** That's fine for anything stateless, which is why most images
+> here track a floating tag and pick up upstream fixes for free.
+>
+> Watch out for **engines that bake data into a version-specific binary
+> format** — MOTIS and GraphHopper. Their on-disk timetable and routing graph
+> are written by one engine version and rejected by another, so a pull that
+> brings in a new major version leaves the engine unable to start until its data
+> is rebuilt:
+>
+> ```
+> tt: binary version mismatch [existing=34 vs expected=37], please re-run import
+> ```
+>
+> That's a job, not a restart — `motis import` for MOTIS,
+> `scripts/rebuild-graphhopper.sh` for GraphHopper. Everything else in the stack
+> is stateless enough to upgrade in place. If you'd rather not be surprised,
+> pull during a window where you can run the rebuild.
+
+[Watchtower](https://containrrr.dev/watchtower/) can automate the pull, but note
+it only manages containers on **its own Docker host** — a Watchtower running on
+a different machine to the stack will never update it.
 
 ### Resource recommendations
 

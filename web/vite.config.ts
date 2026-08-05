@@ -24,11 +24,16 @@ export default defineConfig({
     host: true, // bind 0.0.0.0 so the port is reachable from outside the container
     port: 5199,
     strictPort: true,
-    proxy: {
-      '/admin': {
-        target: apiTarget,
-        changeOrigin: true,
-      },
-    },
+    proxy: Object.fromEntries(
+      // Everything the console talks to. `changeOrigin` is deliberately off for
+      // the account surface: the API's CSRF check compares the request Origin
+      // against its allow-list, and rewriting it to the upstream host would
+      // make every cookie-authenticated POST from the dev server look
+      // same-origin, hiding CSRF regressions until production.
+      ['/admin', '/auth', '/account', '/billing'].map((path) => [
+        path,
+        { target: apiTarget, changeOrigin: false },
+      ]),
+    ),
   },
 })

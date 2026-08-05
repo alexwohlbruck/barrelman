@@ -1,5 +1,5 @@
 import Elysia, { t } from 'elysia'
-import { authHandler } from '../middleware/auth'
+import { apiAuth, apiAuthAfter } from '../middleware/api-auth'
 import {
   getIsochrone as _getIsochrone,
   parseMode,
@@ -86,7 +86,8 @@ export function createIsochroneRoutes(deps: {
     '(bucket 0), so renderers should draw it back to front.'
 
   return new Elysia({ prefix: '/isochrone' })
-    .onBeforeHandle(authHandler)
+    .onBeforeHandle(apiAuth('isochrone'))
+    .onAfterHandle(apiAuthAfter)
 
     // ── GET /isochrone ──────────────────────────────────────────────
     .get('/', async ({ query, set }) => {

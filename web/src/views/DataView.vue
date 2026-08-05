@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onMounted, h, type Component } from 'vue'
 import { RouterLink } from 'vue-router'
-import { RefreshCw, Database, MapPin, TrainFront, Bike, Layers, Map } from 'lucide-vue-next'
+import { RefreshCw, Database, MapPin, TrainFront, Bike, Layers, Map, Users } from 'lucide-vue-next'
 import PageHeader from '@/components/PageHeader.vue'
 import Card from '@/components/ui/Card.vue'
 import CardHeader from '@/components/ui/CardHeader.vue'
@@ -118,6 +118,21 @@ const Row = (props: { label: string; value: string; hint?: string }) =>
           </CardContent>
         </Card>
       </div>
+
+      <!-- Public API accounts -->
+      <Card class="lg:col-span-2">
+        <CardHeader>
+          <CardTitle class="flex items-center gap-2"><Users class="size-4" /> Public API accounts</CardTitle>
+        </CardHeader>
+        <CardContent class="grid gap-x-10 gap-y-0 sm:grid-cols-2">
+          <Row label="Accounts" :value="formatNumber(metrics.accounts.users)" />
+          <Row label="Active API keys" :value="formatNumber(metrics.accounts.activeKeys)" />
+          <Row label="Active this cycle" :value="formatNumber(metrics.accounts.activeThisCycle)" />
+          <Row label="Paid accounts" :value="formatNumber(metrics.accounts.paidAccounts)" />
+          <Row label="Credits billed this cycle" :value="formatNumber(metrics.accounts.creditsThisCycle)" />
+          <Row label="Requests refused this cycle" :value="formatNumber(metrics.accounts.rejectedThisCycle)" />
+        </CardContent>
+      </Card>
 
       <!-- Quick actions -->
       <Card class="lg:col-span-2">

@@ -59,6 +59,9 @@ services:
 
   martin:
     container_name: barrelman-martin
+    # Deliberately unpinned. Martin renders tiles from PostGIS on each request
+    # and persists nothing of its own, so there is no baked artifact for a new
+    # release to invalidate — unlike MOTIS and GraphHopper below.
     image: ghcr.io/maplibre/martin
     restart: unless-stopped
     command: --config /config/martin-config.yaml --webui enable-for-all
@@ -95,6 +98,15 @@ services:
 
   motis:
     container_name: barrelman-motis
+    # MOTIS bakes its timetable into a versioned binary format and refuses to
+    # start when engine and data disagree — "tt: binary version mismatch
+    # [existing=34 vs expected=37], please re-run import". So a `docker compose
+    # pull` that moves :latest takes transit routing down until the timetable is
+    # rebuilt from the GTFS feeds (`motis import`), which is a job, not a
+    # restart. Same shape as GraphHopper's graph-cache above.
+    # Deliberately still :latest — pinning would freeze every downstream user on
+    # whatever version shipped with their compose file. Re-import after an
+    # upgrade instead.
     image: ghcr.io/motis-project/motis:latest
     restart: unless-stopped
     working_dir: /data
@@ -120,14 +132,82 @@ services:
       # Admin console auth (gates /console + script/job routes). Falls back to
       # BARRELMAN_API_KEY when unset. Set a strong, separate secret in prod.
       BARRELMAN_ADMIN_KEY: ${BARRELMAN_ADMIN_KEY:-}
-      # BARRELMAN_TILE_KEY: Set in .env for production. When unset, tile access is open (dev mode).
-      BARRELMAN_TILE_KEY: ${BARRELMAN_TILE_KEY:-}
       GRAPHHOPPER_URL: http://barrelman-graphhopper:8989
       MOTIS_URL: http://barrelman-motis:8080
       # GTFS-RT poll interval baked into motis/config.yml at import time. Unset →
       # MOTIS default 60s. Set in .env (e.g. 600) to throttle dev polling.
       MOTIS_RT_UPDATE_INTERVAL: ${MOTIS_RT_UPDATE_INTERVAL:-}
       GTFS_DATA_DIR: /gtfs-zips
+
+      # ── Public API accounts ──────────────────────────────────────────
+      # Compose does not forward the host environment, so every variable the
+      # app reads has to be named here or it is silently absent inside the
+      # container — the symptom is a setting that is documented, present in
+      # .env, and has no effect.
+      NODE_ENV: ${NODE_ENV:-}
+      BARRELMAN_ACCOUNTS_ENABLED: ${BARRELMAN_ACCOUNTS_ENABLED:-}
+      BARRELMAN_SERVER_ORIGIN: ${BARRELMAN_SERVER_ORIGIN:-}
+      BARRELMAN_CONSOLE_ORIGIN: ${BARRELMAN_CONSOLE_ORIGIN:-}
+      BARRELMAN_ALLOWED_ORIGINS: ${BARRELMAN_ALLOWED_ORIGINS:-}
+      BARRELMAN_ADMIN_EMAILS: ${BARRELMAN_ADMIN_EMAILS:-}
+      BARRELMAN_REGISTRATION_MODE: ${BARRELMAN_REGISTRATION_MODE:-}
+      BARRELMAN_SESSION_TTL_DAYS: ${BARRELMAN_SESSION_TTL_DAYS:-}
+      BARRELMAN_OTP_TTL_MINUTES: ${BARRELMAN_OTP_TTL_MINUTES:-}
+      BARRELMAN_SIGNUPS_PER_IP_PER_DAY: ${BARRELMAN_SIGNUPS_PER_IP_PER_DAY:-}
+      BARRELMAN_TEST_ACCOUNT_EMAIL: ${BARRELMAN_TEST_ACCOUNT_EMAIL:-}
+
+      # ── Email (sign-in codes) ────────────────────────────────────────
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-}
+      SMTP_SECURE: ${SMTP_SECURE:-}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+
+      # ── OAuth ────────────────────────────────────────────────────────
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID:-}
+      GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:-}
+      GITLAB_CLIENT_ID: ${GITLAB_CLIENT_ID:-}
+      GITLAB_CLIENT_SECRET: ${GITLAB_CLIENT_SECRET:-}
+      GITLAB_BASE_URL: ${GITLAB_BASE_URL:-}
+
+      # ── Billing ──────────────────────────────────────────────────────
+      POLAR_ACCESS_TOKEN: ${POLAR_ACCESS_TOKEN:-}
+      POLAR_WEBHOOK_SECRET: ${POLAR_WEBHOOK_SECRET:-}
+      POLAR_ORGANIZATION_ID: ${POLAR_ORGANIZATION_ID:-}
+      POLAR_SANDBOX: ${POLAR_SANDBOX:-}
+      POLAR_DEVELOPER_PRODUCT_ID: ${POLAR_DEVELOPER_PRODUCT_ID:-}
+      POLAR_BUSINESS_PRODUCT_ID: ${POLAR_BUSINESS_PRODUCT_ID:-}
+      POLAR_SCALE_PRODUCT_ID: ${POLAR_SCALE_PRODUCT_ID:-}
+      POLAR_CREDIT_PACKS: ${POLAR_CREDIT_PACKS:-}
+      POLAR_USAGE_EVENT_NAME: ${POLAR_USAGE_EVENT_NAME:-}
+      POLAR_METER_USAGE: ${POLAR_METER_USAGE:-}
+
+      # ── Metering and abuse controls ──────────────────────────────────
+      BARRELMAN_USAGE_FLUSH_MS: ${BARRELMAN_USAGE_FLUSH_MS:-}
+      BARRELMAN_BALANCE_CACHE_MS: ${BARRELMAN_BALANCE_CACHE_MS:-}
+      BARRELMAN_OVERAGE_REPORT_MS: ${BARRELMAN_OVERAGE_REPORT_MS:-}
+      BARRELMAN_ACCOUNT_SWEEP_MS: ${BARRELMAN_ACCOUNT_SWEEP_MS:-}
+      BARRELMAN_TRUSTED_PROXY_HOPS: ${BARRELMAN_TRUSTED_PROXY_HOPS:-}
+      BARRELMAN_ANON_RPM: ${BARRELMAN_ANON_RPM:-}
+      BARRELMAN_IP_RPM: ${BARRELMAN_IP_RPM:-}
+      BARRELMAN_PER_KEY_SHARE: ${BARRELMAN_PER_KEY_SHARE:-}
+      BARRELMAN_ISOCHRONE_CONCURRENCY_PER_ACCOUNT: ${BARRELMAN_ISOCHRONE_CONCURRENCY_PER_ACCOUNT:-}
+      BARRELMAN_TRANSIT_CONCURRENCY_PER_ACCOUNT: ${BARRELMAN_TRANSIT_CONCURRENCY_PER_ACCOUNT:-}
+      BARRELMAN_ROUTING_CONCURRENCY_PER_ACCOUNT: ${BARRELMAN_ROUTING_CONCURRENCY_PER_ACCOUNT:-}
+      BARRELMAN_ABUSE_STRIKES: ${BARRELMAN_ABUSE_STRIKES:-}
+      BARRELMAN_ABUSE_SIGNAL_STRIKES: ${BARRELMAN_ABUSE_SIGNAL_STRIKES:-}
+      BARRELMAN_BURN_RATE_MULTIPLE: ${BARRELMAN_BURN_RATE_MULTIPLE:-}
+      BARRELMAN_BURN_RATE_SUSPEND_MULTIPLE: ${BARRELMAN_BURN_RATE_SUSPEND_MULTIPLE:-}
+      BARRELMAN_AUTO_SUSPEND_HOURS: ${BARRELMAN_AUTO_SUSPEND_HOURS:-}
+      BARRELMAN_MULTI_ACCOUNT_THRESHOLD: ${BARRELMAN_MULTI_ACCOUNT_THRESHOLD:-}
+
+      # ── Terms of service ─────────────────────────────────────────────
+      BARRELMAN_TOS_URL: ${BARRELMAN_TOS_URL:-}
+      BARRELMAN_TOS_VERSION: ${BARRELMAN_TOS_VERSION:-}
+      BARRELMAN_PRIVACY_URL: ${BARRELMAN_PRIVACY_URL:-}
     ports:
       - "5001:5001"
     volumes:

@@ -15,7 +15,12 @@ postgres:
       srid: 4326
       geometry_column: centroid
       geometry_type: POINT
-      id_column: id
+      # No id_column. PostGIS requires the MVT feature-id column to be an
+      # integer, and geo_places.id is text ("node/4021155832"), so declaring it
+      # made every tile request fail with:
+      #   mvt_agg_transfn: Could not find column 'id' of integer type
+      # The id is still carried as a property below, which is what a client
+      # needs to look the place up again.
       minzoom: 10
       maxzoom: 16
       properties:
@@ -31,7 +36,6 @@ postgres:
       table: geo_places
       srid: 4326
       geometry_column: geom
-      id_column: id
       minzoom: 4
       maxzoom: 14
       properties:
@@ -47,7 +51,6 @@ postgres:
       table: geo_places
       srid: 4326
       geometry_column: geom
-      id_column: id
       minzoom: 6
       maxzoom: 16
       properties:
@@ -62,7 +65,6 @@ postgres:
       table: geo_places
       srid: 4326
       geometry_column: geom
-      id_column: id
       minzoom: 14
       maxzoom: 16
       properties:
@@ -77,7 +79,6 @@ postgres:
       table: geo_places
       srid: 4326
       geometry_column: geom
-      id_column: id
       minzoom: 8
       maxzoom: 16
       properties:
@@ -134,7 +135,6 @@ postgres:
       table: geo_places
       srid: 4326
       geometry_column: geom
-      id_column: id
       minzoom: 10
       maxzoom: 16
       properties:

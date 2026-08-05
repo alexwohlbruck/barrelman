@@ -33,6 +33,7 @@ import {
   catalogFetchedAt,
 } from '../services/boundary-catalog.service'
 import { GLOBAL_KEY } from '../config/regions'
+import { accountsEnabled } from '../config/accounts.config'
 
 const selfPort = Number(process.env.PORT) || 5001
 const SELF_BASE = `http://127.0.0.1:${selfPort}`
@@ -66,8 +67,11 @@ export const adminConsoleConfigRoutes = new Elysia({ prefix: '/admin' }).get(
   () => ({
     authRequired: Boolean(process.env.BARRELMAN_ADMIN_KEY || process.env.BARRELMAN_API_KEY),
     usingDedicatedAdminKey: Boolean(process.env.BARRELMAN_ADMIN_KEY),
+    // The console signs in with an account session; the admin key remains
+    // accepted for scripts and CI.
+    accountsEnabled,
     apiName: 'Barrelman',
-    version: '0.3.0',
+    version: '0.4.0',
   }),
   { detail: { summary: 'Admin console config', tags: ['Admin'] } },
 )

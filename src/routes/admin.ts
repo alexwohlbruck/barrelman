@@ -1,5 +1,5 @@
 import Elysia from 'elysia'
-import { authHandler } from '../middleware/auth'
+import { adminAuthHandler } from '../middleware/auth'
 import {
   runPostImport as _runPostImport,
   runResolveParentContext as _runResolveParentContext,
@@ -24,9 +24,14 @@ export function createAdminRoutes(deps = {
   // Guard attached directly (not via `.use(plugin)`): Elysia scopes a plugin's
   // lifecycle hooks to that plugin instance, so `.use(authMiddleware)` does NOT
   // protect the sibling routes declared below — they'd be publicly reachable.
-  // `.onBeforeHandle(authHandler)` gates every route on this instance.
+  //
+  // These run hours of destructive DDL over ~20M rows, so they take the ADMIN
+  // guard, not the read-API one. They previously used `authHandler`, which
+  // accepts the shared BARRELMAN_API_KEY — the service credential Parchment
+  // also holds — while rejecting signed-in administrators outright. Exactly
+  // backwards, and contrary to the rule in CLAUDE.md.
   return new Elysia({ prefix: '/admin' })
-    .onBeforeHandle(authHandler)
+    .onBeforeHandle(adminAuthHandler)
     .get('/migration/status', () => deps.getMigrationStatus(), {
       detail: {
         summary: 'Migration status',

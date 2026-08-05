@@ -65,7 +65,9 @@ describe('GET /health/auth', () => {
     const res = await app.handle(get('/health/auth'))
 
     expect(res.status).toBe(401)
-    expect(await res.json()).toEqual({ error: 'Missing Authorization header' })
+    // The body now points at the docs and names the console, since an
+    // unauthenticated caller is a developer who needs to go make a key.
+    expect(await res.json()).toMatchObject({ error: expect.stringContaining('API key') })
     expect(checkHealth).not.toHaveBeenCalled()
   })
 
@@ -77,7 +79,7 @@ describe('GET /health/auth', () => {
     const res = await app.handle(get('/health/auth', { authorization: 'Bearer wrong' }))
 
     expect(res.status).toBe(401)
-    expect(await res.json()).toEqual({ error: 'Invalid API key' })
+    expect(await res.json()).toMatchObject({ error: 'Invalid API key' })
     expect(checkHealth).not.toHaveBeenCalled()
   })
 
@@ -89,7 +91,9 @@ describe('GET /health/auth', () => {
     const res = await app.handle(get('/health/auth', { authorization: 'Bearer secret' }))
 
     expect(res.status).toBe(200)
-    expect(await res.json()).toEqual({ ...okHealth, authenticated: true })
+    // Also reports which kind of credential was accepted, so a developer can
+    // tell an account key from the shared service key.
+    expect(await res.json()).toMatchObject({ ...okHealth, authenticated: true, caller: 'service' })
     expect(checkHealth).toHaveBeenCalledTimes(1)
   })
 
@@ -100,6 +104,8 @@ describe('GET /health/auth', () => {
     const res = await app.handle(get('/health/auth'))
 
     expect(res.status).toBe(200)
-    expect(await res.json()).toEqual({ ...okHealth, authenticated: true })
+    // No credential presented and none configured, so the caller is anonymous
+    // rather than the shared service identity.
+    expect(await res.json()).toMatchObject({ ...okHealth, authenticated: true, caller: 'anonymous' })
   })
 })

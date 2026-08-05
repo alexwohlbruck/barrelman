@@ -6,7 +6,7 @@
  */
 
 import { Elysia, t } from 'elysia'
-import { authHandler } from '../middleware/auth'
+import { apiAuth, apiAuthAfter } from '../middleware/api-auth'
 import {
   getNearbyStations as _getNearbyStations,
   getSystemsInBounds as _getSystemsInBounds,
@@ -23,7 +23,8 @@ export function createGbfsRoutes(deps: {
   const getStation = deps.getStation || _getStation
 
   return new Elysia({ prefix: '/gbfs' })
-    .onBeforeHandle(authHandler)
+    .onBeforeHandle(apiAuth('transit'))
+    .onAfterHandle(apiAuthAfter)
 
     // ── GET /gbfs/nearby-stations ──────────────────────────────────
     .get('/nearby-stations', async ({ query, set }) => {
