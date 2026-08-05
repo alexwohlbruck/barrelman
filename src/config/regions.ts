@@ -38,6 +38,12 @@ export interface RegionDef {
   bbox: Bbox
   gtfsRegion: string
   pelias: PeliasRegionConfig
+  /**
+   * Console-editable on/off switch. Absent (the baked JSON) means enabled;
+   * only an explicit `false` disables. Selecting a disabled region through
+   * REGIONS is an error rather than a silent inclusion — see resolveFromFile.
+   */
+  enabled?: boolean
 }
 
 export interface RegionsFile {
@@ -127,6 +133,13 @@ export function resolveFromFile(file: RegionsFile, value = process.env.REGIONS):
     if (!def) {
       const known = Object.keys(file.regions).join(', ')
       throw new Error(`Unknown region "${key}". Known regions: ${known}, ${GLOBAL_KEY}`)
+    }
+    // Fail loudly rather than importing a region an operator has switched off
+    // in the console — a toggle that silently imports anyway is worse than none.
+    if (def.enabled === false) {
+      throw new Error(
+        `Region "${key}" is disabled. Enable it in the admin console (Regions) or drop it from REGIONS.`,
+      )
     }
     regions.push(def)
   }

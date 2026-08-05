@@ -59,6 +59,9 @@ services:
 
   martin:
     container_name: barrelman-martin
+    # Deliberately unpinned. Martin renders tiles from PostGIS on each request
+    # and persists nothing of its own, so there is no baked artifact for a new
+    # release to invalidate — unlike MOTIS and GraphHopper below.
     image: ghcr.io/maplibre/martin
     restart: unless-stopped
     command: --config /config/martin-config.yaml --webui enable-for-all
@@ -95,6 +98,15 @@ services:
 
   motis:
     container_name: barrelman-motis
+    # MOTIS bakes its timetable into a versioned binary format and refuses to
+    # start when engine and data disagree — "tt: binary version mismatch
+    # [existing=34 vs expected=37], please re-run import". So a `docker compose
+    # pull` that moves :latest takes transit routing down until the timetable is
+    # rebuilt from the GTFS feeds (`motis import`), which is a job, not a
+    # restart. Same shape as GraphHopper's graph-cache above.
+    # Deliberately still :latest — pinning would freeze every downstream user on
+    # whatever version shipped with their compose file. Re-import after an
+    # upgrade instead.
     image: ghcr.io/motis-project/motis:latest
     restart: unless-stopped
     working_dir: /data

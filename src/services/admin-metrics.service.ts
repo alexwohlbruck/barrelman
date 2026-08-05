@@ -62,6 +62,11 @@ export interface DataMetrics {
   transit: {
     stopAreaMembers: number | null
   }
+  /** The catalog of importable regions backing "Add region by name". */
+  boundaries: {
+    count: number | null
+    fetchedAt: string | null
+  }
   /**
    * Public-API accounts. Present even when billing is disabled — a self-hosted
    * operator still wants to see who is calling and how much.
@@ -133,6 +138,8 @@ export async function getDataMetrics(): Promise<DataMetrics> {
     gbfsSystems,
     gbfsStations,
     stopAreaMembers,
+    boundaryCount,
+    boundaryFetchedAt,
     accountUsers,
     activeKeys,
     accountsActive,
@@ -155,6 +162,8 @@ export async function getDataMetrics(): Promise<DataMetrics> {
     tableCount('gbfs_systems'),
     tableCount('gbfs_stations'),
     tableCount('stop_area_members'),
+    tableCount('boundary_catalog'),
+    scalar<string>(sql`SELECT max(fetched_at)::text AS s FROM boundary_catalog`),
     // Account tables are small — exact counts are cheap here, unlike geo_places.
     // `date_trunc('month', now())` is the same UTC cycle boundary the metering
     // layer uses; see services/usage.service.ts.
@@ -208,6 +217,7 @@ export async function getDataMetrics(): Promise<DataMetrics> {
     gtfs: { feeds, stops, routes, transfers, tripPatterns, shapes, feedsWithRt, lastImport },
     gbfs: { systems: gbfsSystems, stations: gbfsStations },
     transit: { stopAreaMembers },
+    boundaries: { count: boundaryCount, fetchedAt: boundaryFetchedAt },
     accounts: {
       users: accountUsers,
       activeKeys,

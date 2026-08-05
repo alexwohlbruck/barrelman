@@ -524,6 +524,30 @@ export const SCRIPTS: ScriptDef[] = [
     params: [REGIONS_PARAM],
     source: 'scripts/generate-pelias-config.ts',
   },
+  {
+    id: 'config-fetch-boundaries',
+    name: 'Fetch Boundary Catalog',
+    description:
+      "Download Geofabrik's extract index (every importable region, with its real boundary geometry and download URLs) into the boundary_catalog table. Run this before defining regions by name in Regions → Add by name. No API key required.",
+    category: 'config',
+    danger: 'safe',
+    longRunning: false,
+    confirm: false,
+    exec: { kind: 'process', command: 'bun', args: ['run', 'scripts/fetch-boundaries.ts'] },
+    params: [
+      {
+        name: 'search',
+        label: 'Search after fetching',
+        type: 'string',
+        apply: 'flag',
+        flag: '--search',
+        placeholder: 'e.g. colorado (blank = just refresh)',
+      },
+    ],
+    source: 'scripts/fetch-boundaries.ts',
+    notes:
+      'Replaces the cached catalog wholesale, so retired upstream extracts stop being offered. Safe to re-run.',
+  },
 ]
 
 export function getScript(id: string): ScriptDef | undefined {

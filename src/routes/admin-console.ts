@@ -24,6 +24,14 @@ import {
   deleteRegion,
   type RegionInput,
 } from '../services/region-store.service'
+import {
+  searchBoundaries,
+  getBoundary,
+  refreshBoundaryCatalog,
+  deriveRegion,
+  countBoundaries,
+  catalogFetchedAt,
+} from '../services/boundary-catalog.service'
 import { GLOBAL_KEY } from '../config/regions'
 import { accountsEnabled } from '../config/accounts.config'
 
@@ -151,6 +159,61 @@ export const adminConsoleRoutes = new Elysia({ prefix: '/admin' })
       return { ok: true }
     },
     { detail: { summary: 'Delete an import region', tags: ['Admin'] } },
+  )
+
+  // ── Boundary catalog ────────────────────────────────────────────────
+  // Search Geofabrik's published extracts by name and turn one into a fully
+  // populated region definition, so defining a region is "type Colorado"
+  // instead of hand-assembling six URLs and a bounding box.
+  .get(
+    '/boundaries',
+    async ({ query }) => {
+      const q = (query as Record<string, string>).q ?? ''
+      const limit = Math.min(Number((query as Record<string, string>).limit) || 20, 100)
+      const [count, fetchedAt] = await Promise.all([countBoundaries(), catalogFetchedAt()])
+      return {
+        catalog: { count, fetchedAt },
+        boundaries: q ? await searchBoundaries(q, limit) : [],
+      }
+    },
+    {
+      query: t.Object({ q: t.Optional(t.String()), limit: t.Optional(t.String()) }),
+      detail: { summary: 'Search the boundary catalog', tags: ['Admin'] },
+    },
+  )
+  .post(
+    '/boundaries/refresh',
+    async ({ set }) => {
+      try {
+        return await refreshBoundaryCatalog()
+      } catch (err) {
+        set.status = 502
+        return { error: err instanceof Error ? err.message : 'Boundary catalog refresh failed' }
+      }
+    },
+    { detail: { summary: 'Refresh the boundary catalog from Geofabrik', tags: ['Admin'] } },
+  )
+  .post(
+    '/boundaries/resolve',
+    async ({ body, set }) => {
+      // A preview, not a write: the console shows what was auto-filled (and any
+      // warnings) and the operator saves it through the normal region endpoint.
+      const { id } = body as { id: string }
+      const boundary = await getBoundary(id)
+      if (!boundary) {
+        set.status = 404
+        return {
+          error:
+            `Unknown boundary "${id}". If the catalog is empty, refresh it first ` +
+            `(POST /admin/boundaries/refresh or bun run scripts/fetch-boundaries.ts).`,
+        }
+      }
+      return await deriveRegion(boundary)
+    },
+    {
+      body: t.Object({ id: t.String({ minLength: 1 }) }),
+      detail: { summary: 'Derive a region definition from a boundary', tags: ['Admin'] },
+    },
   )
 
   // ── Scripts manifest ────────────────────────────────────────────────

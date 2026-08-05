@@ -21,6 +21,7 @@ import {
   deriveBikesAllowed,
   generateTransfersTxt,
   fetchFeedList,
+  resolveGtfsBbox,
   sanitizeGtfsZip,
   FLEX_EXTENSION_FILES,
 } from './gtfs.service'
@@ -1059,5 +1060,41 @@ describe('deriveBikesAllowed', () => {
     const result = deriveBikesAllowed(csv)
     expect(result.size).toBe(1)
     expect(result.get('route-1')).toBe(2)
+  })
+})
+
+// ── resolveGtfsBbox ─────────────────────────────────────────────────
+
+describe('resolveGtfsBbox', () => {
+  test('returns null for global (every feed, no bbox filter)', () => {
+    expect(resolveGtfsBbox('global')).toBeNull()
+  })
+
+  test('resolves the legacy named tokens', () => {
+    expect(resolveGtfsBbox('nc')).toBe('-84.5,33.8,-75.4,36.6')
+    expect(resolveGtfsBbox('nyc')).toBe('-74.3,40.45,-73.7,40.95')
+  })
+
+  test('accepts a literal west,south,east,north bbox', () => {
+    expect(resolveGtfsBbox('-109.06,36.99,-102.04,41')).toBe('-109.06,36.99,-102.04,41')
+  })
+
+  test('tolerates whitespace in a literal bbox', () => {
+    expect(resolveGtfsBbox('-109.06, 36.99, -102.04, 41')).toBe('-109.06,36.99,-102.04,41')
+  })
+
+  test('throws on an unknown token instead of silently fetching every feed', () => {
+    // The whole point: a region whose token nobody hardcoded used to fall
+    // through to an unfiltered query and download the global catalog.
+    expect(() => resolveGtfsBbox('co')).toThrow(/Unknown GTFS region "co"/)
+  })
+
+  test('throws when east/west or north/south are transposed', () => {
+    expect(() => resolveGtfsBbox('10,0,-10,20')).toThrow(/malformed/)
+    expect(() => resolveGtfsBbox('-10,20,10,0')).toThrow(/malformed/)
+  })
+
+  test('throws on out-of-range coordinates', () => {
+    expect(() => resolveGtfsBbox('-200,0,10,10')).toThrow(/valid lon\/lat ranges/)
   })
 })

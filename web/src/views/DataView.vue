@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onMounted, h, type Component } from 'vue'
 import { RouterLink } from 'vue-router'
-import { RefreshCw, Database, MapPin, TrainFront, Bike, Layers, Users } from 'lucide-vue-next'
+import { RefreshCw, Database, MapPin, TrainFront, Bike, Layers, Map, Users } from 'lucide-vue-next'
 import PageHeader from '@/components/PageHeader.vue'
 import Card from '@/components/ui/Card.vue'
 import CardHeader from '@/components/ui/CardHeader.vue'
@@ -94,6 +94,19 @@ const Row = (props: { label: string; value: string; hint?: string }) =>
           <CardContent>
             <Row label="Systems" :value="formatNumber(metrics.gbfs.systems)" />
             <Row label="Stations" :value="formatNumber(metrics.gbfs.stations)" />
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle class="flex items-center gap-2"><Map class="size-4" /> Boundary catalog</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <Row label="Regions available" :value="formatNumber(metrics.boundaries.count)" />
+            <Row
+              label="Last fetched"
+              :value="metrics.boundaries.fetchedAt ? timeAgo(metrics.boundaries.fetchedAt) : 'never'"
+              :hint="metrics.boundaries.count ? undefined : 'Run “Fetch Boundary Catalog”'"
+            />
           </CardContent>
         </Card>
         <Card>

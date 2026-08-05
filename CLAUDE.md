@@ -30,6 +30,10 @@ If a change genuinely doesn't touch scripts, tables, services, or endpoints
 considered it.
 
 ### Console architecture (where things live)
+- Region registry (what gets imported): `src/config/regions.ts` + `config/regions.json`,
+  DB-backed and console-editable via `src/services/region-store.service.ts`
+- Boundary catalog ("add a region by name"): `src/services/boundary-catalog.service.ts`,
+  refreshed by `scripts/fetch-boundaries.ts` from Geofabrik's `index-v1.json`
 - Script catalog (pure data, sent to the browser): `src/admin/scripts-manifest.ts`
 - Job runner (spawns processes / runs internal handlers, streams logs via SSE): `src/services/job-runner.service.ts`
 - Internal (in-process) task handlers: `src/services/admin-internal-handlers.ts`

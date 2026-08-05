@@ -106,6 +106,7 @@ export interface DataMetrics {
   }
   gbfs: { systems: number | null; stations: number | null }
   transit: { stopAreaMembers: number | null }
+  boundaries: { count: number | null; fetchedAt: string | null }
   accounts: {
     users: number | null
     activeKeys: number | null
@@ -136,6 +137,40 @@ export interface ImportRegion {
   pelias: RegionPelias
   isGlobal: boolean
   enabled: boolean
+}
+
+/** An entry in the boundary catalog (Geofabrik's published extract index). */
+export interface Boundary {
+  id: string
+  label: string
+  name: string
+  parent: string | null
+  iso3166_1: string[]
+  iso3166_2: string[]
+  pbfUrl: string
+  updatesUrl: string | null
+  bbox: Bbox
+}
+
+export interface BoundarySearchResponse {
+  catalog: { count: number; fetchedAt: string | null }
+  boundaries: Boundary[]
+}
+
+/** A region definition auto-filled from a boundary, before it is saved. */
+export interface DerivedRegion {
+  region: {
+    key: string
+    label: string
+    osmExtracts: string[]
+    osmReplication: string[]
+    bbox: Bbox
+    gtfsRegion: string
+    pelias: RegionPelias
+    enabled: boolean
+  }
+  warnings: string[]
+  sources: Record<string, string>
 }
 
 export interface ServiceStatus {
