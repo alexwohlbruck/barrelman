@@ -149,7 +149,6 @@ These defaults are **not calibrated against real traffic**.
 | `MOTIS_URL` | `http://localhost:8080` | |
 | `MOTIS_RT_UPDATE_INTERVAL` | MOTIS default (60s) | Raise in dev to cut realtime polling |
 | `MARTIN_URL` | `http://barrelman-martin:3000` | |
-| `BARRELMAN_TILE_KEY` | — | Dedicated unmetered tile credential. **Setting it means tiles are not public** |
 | `ISOCHRONE_CONCURRENCY` | `8` | Parallel GraphHopper calls per isochrone |
 | `TRANSITLAND_API_KEY` | — | For GTFS feed discovery |
 

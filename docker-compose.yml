@@ -120,8 +120,6 @@ services:
       # Admin console auth (gates /console + script/job routes). Falls back to
       # BARRELMAN_API_KEY when unset. Set a strong, separate secret in prod.
       BARRELMAN_ADMIN_KEY: ${BARRELMAN_ADMIN_KEY:-}
-      # BARRELMAN_TILE_KEY: Set in .env for production. When unset, tile access is open (dev mode).
-      BARRELMAN_TILE_KEY: ${BARRELMAN_TILE_KEY:-}
       GRAPHHOPPER_URL: http://barrelman-graphhopper:8989
       MOTIS_URL: http://barrelman-motis:8080
       # GTFS-RT poll interval baked into motis/config.yml at import time. Unset →
