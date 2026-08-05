@@ -85,6 +85,9 @@ services:
       # consumer, and revoking it cannot take Parchment down with it.
       BARRELMAN_API_URL: http://barrelman:5001
       BARRELMAN_DEMO_KEY: ${BARRELMAN_DEMO_KEY:-}
+      # Reaches the browser: MapLibre fetches tiles itself. Scoped to `tiles`
+      # only and separately revocable, so it cannot be used to run searches.
+      NUXT_PUBLIC_TILE_KEY: ${BARRELMAN_TILE_DEMO_KEY:-}
     volumes:
       - ../barrelman-landing:/site
       # The shared design package is a `file:../parchment-design` dependency,

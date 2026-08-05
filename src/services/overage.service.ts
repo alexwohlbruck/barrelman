@@ -17,8 +17,9 @@ import { getPlan } from '../billing/plans'
 import { billing } from '../config/billing.config'
 import { reportOverage } from './billing.service'
 import { currentCycleStart, flushUsage } from './usage.service'
+import { envNumber } from '../config/env'
 
-const REPORT_INTERVAL_MS = Number(process.env.BARRELMAN_OVERAGE_REPORT_MS ?? 15 * 60_000)
+const REPORT_INTERVAL_MS = envNumber('BARRELMAN_OVERAGE_REPORT_MS', 15 * 60_000)
 
 export interface OverageRow {
   user_id: string

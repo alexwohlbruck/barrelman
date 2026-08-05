@@ -43,6 +43,7 @@ import { accountsEnabled } from '../config/accounts.config'
 import { clientIp } from '../lib/rate-limit'
 import { safeEqual } from '../lib/crypto'
 import { hashIp } from '../services/accounts.service'
+import { envNumber } from '../config/env'
 
 /** Prefix that marks a customer key, as opposed to the shared service secret. */
 const KEY_PREFIX = 'brm_'
@@ -54,7 +55,6 @@ export interface ApiCaller {
   plan?: string
   /** Billing groups this key may call; `['*']` for all. */
   scopes?: string[]
-  isTest?: boolean
   /** The account is disabled — the guard turns this into a 403 with the reason. */
   suspended?: boolean
   suspensionReason?: string | null
@@ -196,7 +196,6 @@ function toCaller(resolved: ResolvedKey): ApiCaller {
     keyId: resolved.keyId,
     plan: resolved.plan,
     scopes: resolved.scopes,
-    isTest: resolved.isTest,
     suspended: resolved.suspended,
     suspensionReason: resolved.suspensionReason,
   }
@@ -311,14 +310,6 @@ export function apiAuth(group: EndpointGroup, overrides: Partial<ApiAuthDeps> = 
     // release it — that is what `throttleKey` in the metering context is for.
     const throttleKey = caller.userId
 
-    // Test keys exercise the full path — auth, scopes, limits, responses — but
-    // never spend credits, so integration suites cost nothing to run.
-    if (caller.isTest) {
-      stash(context, { caller, group, credits: 0, charged: false, throttleKey })
-      set.headers['x-barrelman-credits-charged'] = '0'
-      return
-    }
-
     const decision = await deps.checkQuota(caller.userId, cost)
     if (!decision.allowed) {
       releaseSlot(throttleKey, group)
@@ -365,7 +356,7 @@ async function flagSustainedAbuse(penaltyKey: string, userId: string, ip: string
   }
 }
 
-const SIGNAL_STRIKE_THRESHOLD = Number(process.env.BARRELMAN_ABUSE_SIGNAL_STRIKES ?? 100)
+const SIGNAL_STRIKE_THRESHOLD = envNumber('BARRELMAN_ABUSE_SIGNAL_STRIKES', 100)
 
 /**
  * Companion `onAfterHandle`: refunds the charge when the request failed with a

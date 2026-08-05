@@ -23,8 +23,9 @@ import { creditLedger, users, type CreditEntryKind } from '../schema/accounts'
 import { generateId } from '../lib/crypto'
 import { getPlan, type Plan } from '../billing/plans'
 import { creditsUsedThisCycle, pendingCredits } from './usage.service'
+import { envNumber } from '../config/env'
 
-const BALANCE_CACHE_TTL_MS = Number(process.env.BARRELMAN_BALANCE_CACHE_MS ?? 15_000)
+const BALANCE_CACHE_TTL_MS = envNumber('BARRELMAN_BALANCE_CACHE_MS', 15_000)
 
 interface CachedBalance {
   plan: Plan

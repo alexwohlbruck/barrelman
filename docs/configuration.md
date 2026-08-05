@@ -7,6 +7,11 @@ Nothing here is required to run barrelman locally. The defaults give you a
 working engine with an open API and no accounts — which is the right shape for
 development and for a private self-hosted instance.
 
+A variable set to nothing (`BARRELMAN_OTP_TTL_MINUTES=` in `.env`, or unset
+under compose, which forwards it as an empty string) counts as *not configured*
+and takes the default below — the same as omitting the line. Only an actual
+value overrides one, so a knob you mean to turn off needs an explicit `0`.
+
 ## Core
 
 | Variable | Default | Description |

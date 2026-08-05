@@ -14,26 +14,27 @@ import { connection as sql } from '../db'
 import { getPlan } from '../billing/plans'
 import { recordAbuseSignal, suspendUser, SYSTEM_ACTOR } from './moderation.service'
 import { currentCycleStart, utcDay } from './usage.service'
+import { envNumber } from '../config/env'
 
 /**
  * Multiple of a plan's *monthly* allowance burned in a single day before the
  * account is flagged. A free account is entitled to spend its whole month in a
  * day; spending several months' worth is the signal.
  */
-const DAILY_BURN_MULTIPLE = Number(process.env.BARRELMAN_BURN_RATE_MULTIPLE ?? 3)
+const DAILY_BURN_MULTIPLE = envNumber('BARRELMAN_BURN_RATE_MULTIPLE', 3)
 
 /**
  * Multiple at which the account is auto-suspended rather than merely flagged.
  * Only reachable on plans that allow overage, since a plan without overage
  * stops itself at the allowance.
  */
-const AUTO_SUSPEND_MULTIPLE = Number(process.env.BARRELMAN_BURN_RATE_SUSPEND_MULTIPLE ?? 25)
+const AUTO_SUSPEND_MULTIPLE = envNumber('BARRELMAN_BURN_RATE_SUSPEND_MULTIPLE', 25)
 
 /** How long an automated suspension lasts before lifting itself. */
-const AUTO_SUSPEND_HOURS = Number(process.env.BARRELMAN_AUTO_SUSPEND_HOURS ?? 6)
+const AUTO_SUSPEND_HOURS = envNumber('BARRELMAN_AUTO_SUSPEND_HOURS', 6)
 
 /** Accounts from one sign-up address before it looks like farming. */
-const MULTI_ACCOUNT_THRESHOLD = Number(process.env.BARRELMAN_MULTI_ACCOUNT_THRESHOLD ?? 6)
+const MULTI_ACCOUNT_THRESHOLD = envNumber('BARRELMAN_MULTI_ACCOUNT_THRESHOLD', 6)
 
 export interface DetectionResult {
   flagged: number

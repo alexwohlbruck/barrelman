@@ -13,7 +13,7 @@
 import { and, desc, eq, inArray, isNull } from 'drizzle-orm'
 import { LRUCache } from 'lru-cache'
 import { db } from '../db'
-import { apiKeys, users, type ApiKey, type KeyEnvironment } from '../schema/accounts'
+import { apiKeys, users, type ApiKey } from '../schema/accounts'
 import { generateId, randomBase62, sha256Hex } from '../lib/crypto'
 import { isValidScope, type Scope } from '../billing/plans'
 
@@ -29,7 +29,6 @@ const CACHE_MAX = 5_000
 export interface ResolvedKey {
   keyId: string
   userId: string
-  environment: KeyEnvironment
   scopes: string[]
   plan: string
   /**
@@ -39,7 +38,6 @@ export interface ResolvedKey {
    */
   suspended: boolean
   suspensionReason: string | null
-  isTest: boolean
 }
 
 const cache = new LRUCache<string, ResolvedKey>({ max: CACHE_MAX, ttl: CACHE_TTL_MS })
@@ -57,7 +55,6 @@ export function clearKeyCache(): void {
 export interface CreateKeyOptions {
   userId: string
   name: string
-  environment?: KeyEnvironment
   scopes?: string[]
   expiresAt?: Date | null
 }
@@ -69,11 +66,11 @@ export interface CreatedKey {
 }
 
 export async function createApiKey(options: CreateKeyOptions): Promise<CreatedKey> {
-  const { userId, name, environment = 'live', expiresAt = null } = options
+  const { userId, name, expiresAt = null } = options
 
   const scopes = normalizeScopes(options.scopes)
   const secret = randomBase62(SECRET_LENGTH)
-  const key = `${KEY_PREFIX}_${environment}_${secret}`
+  const key = `${KEY_PREFIX}_live_${secret}`
 
   const [row] = await db
     .insert(apiKeys)
@@ -84,7 +81,6 @@ export async function createApiKey(options: CreateKeyOptions): Promise<CreatedKe
       hash: sha256Hex(key),
       prefix: key.slice(0, DISPLAY_PREFIX_LENGTH),
       last4: key.slice(-4),
-      environment,
       scopes,
       expiresAt,
     })
@@ -128,7 +124,6 @@ export async function resolveApiKey(presented: string): Promise<ResolvedKey | nu
     .select({
       keyId: apiKeys.id,
       userId: apiKeys.userId,
-      environment: apiKeys.environment,
       scopes: apiKeys.scopes,
       revokedAt: apiKeys.revokedAt,
       expiresAt: apiKeys.expiresAt,
@@ -151,12 +146,10 @@ export async function resolveApiKey(presented: string): Promise<ResolvedKey | nu
   const resolved: ResolvedKey = {
     keyId: row.keyId,
     userId: row.userId,
-    environment: row.environment,
     scopes: row.scopes,
     plan: row.plan,
     suspended: Boolean(row.suspendedAt),
     suspensionReason: row.suspendedReason,
-    isTest: row.environment === 'test',
   }
 
   cache.set(hash, resolved)
@@ -190,7 +183,6 @@ export async function listApiKeys(userId: string, includeRevoked = false): Promi
       name: apiKeys.name,
       prefix: apiKeys.prefix,
       last4: apiKeys.last4,
-      environment: apiKeys.environment,
       scopes: apiKeys.scopes,
       lastUsedAt: apiKeys.lastUsedAt,
       revokedAt: apiKeys.revokedAt,

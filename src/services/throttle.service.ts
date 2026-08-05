@@ -28,6 +28,7 @@
  * for anything with money attached.
  */
 import type { EndpointGroup, Plan } from '../billing/plans'
+import { envNumber } from '../config/env'
 
 interface Window {
   count: number
@@ -97,7 +98,7 @@ const perAccount = new WindowCounter(60_000)
  * Only reachable in an open deployment (no service key configured), where it is
  * the only thing standing between a scraper and the database.
  */
-const ANONYMOUS_IP_LIMIT = Number(process.env.BARRELMAN_ANON_RPM ?? 120)
+const ANONYMOUS_IP_LIMIT = envNumber('BARRELMAN_ANON_RPM', 120)
 
 /**
  * Ceiling on any single source address, regardless of how many accounts or keys
@@ -105,13 +106,13 @@ const ANONYMOUS_IP_LIMIT = Number(process.env.BARRELMAN_ANON_RPM ?? 120)
  * many legitimate users behind one address — this is a backstop against a
  * single abusive host, not a per-user limit.
  */
-const IP_LIMIT = Number(process.env.BARRELMAN_IP_RPM ?? 3_000)
+const IP_LIMIT = envNumber('BARRELMAN_IP_RPM', 3_000)
 
 /**
  * A single key gets this share of its account's per-minute budget. One leaked
  * or runaway key then cannot starve the account's other keys.
  */
-const PER_KEY_SHARE = Number(process.env.BARRELMAN_PER_KEY_SHARE ?? 0.8)
+const PER_KEY_SHARE = envNumber('BARRELMAN_PER_KEY_SHARE', 0.8)
 
 // ── Penalty box ─────────────────────────────────────────────────────────
 
@@ -125,7 +126,7 @@ interface Penalty {
 const penalties = new Map<string, Penalty>()
 
 /** Rejections tolerated before a caller is boxed. */
-const STRIKES_BEFORE_PENALTY = Number(process.env.BARRELMAN_ABUSE_STRIKES ?? 25)
+const STRIKES_BEFORE_PENALTY = envNumber('BARRELMAN_ABUSE_STRIKES', 25)
 /** Strikes decay after this long without a new one. */
 const STRIKE_DECAY_MS = 10 * 60_000
 const MAX_PENALTY_MS = 30 * 60_000
@@ -181,9 +182,9 @@ export function strikeCount(key: string): number {
  * inside their per-minute limit can still pin every GraphHopper worker.
  */
 const CONCURRENCY_LIMITS: Partial<Record<EndpointGroup, number>> = {
-  isochrone: Number(process.env.BARRELMAN_ISOCHRONE_CONCURRENCY_PER_ACCOUNT ?? 2),
-  transit: Number(process.env.BARRELMAN_TRANSIT_CONCURRENCY_PER_ACCOUNT ?? 4),
-  routing: Number(process.env.BARRELMAN_ROUTING_CONCURRENCY_PER_ACCOUNT ?? 8),
+  isochrone: envNumber('BARRELMAN_ISOCHRONE_CONCURRENCY_PER_ACCOUNT', 2),
+  transit: envNumber('BARRELMAN_TRANSIT_CONCURRENCY_PER_ACCOUNT', 4),
+  routing: envNumber('BARRELMAN_ROUTING_CONCURRENCY_PER_ACCOUNT', 8),
 }
 
 const inFlight = new Map<string, number>()

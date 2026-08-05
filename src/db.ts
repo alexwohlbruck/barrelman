@@ -1,5 +1,6 @@
 import postgres from 'postgres'
 import { drizzle } from 'drizzle-orm/postgres-js'
+import { envNumber } from './config/env'
 
 export const dbUrl = process.env.DATABASE_URL || 'postgresql://barrelman:barrelman@localhost:5434/barrelman'
 
@@ -20,7 +21,7 @@ export const dbUrl = process.env.DATABASE_URL || 'postgresql://barrelman:barrelm
  *
  * Set BARRELMAN_STATEMENT_TIMEOUT_MS=0 to disable.
  */
-const STATEMENT_TIMEOUT_MS = Number(process.env.BARRELMAN_STATEMENT_TIMEOUT_MS ?? 10_000)
+const STATEMENT_TIMEOUT_MS = envNumber('BARRELMAN_STATEMENT_TIMEOUT_MS', 10_000)
 
 export const connection = postgres(dbUrl, {
   connection: { statement_timeout: STATEMENT_TIMEOUT_MS },

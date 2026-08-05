@@ -5,7 +5,7 @@ Parchment's server. They authenticate differently on purpose.
 
 | Credential | Looks like | Metered | For |
 |---|---|---|---|
-| Account API key | `brm_live_…` / `brm_test_…` | Yes | Customers |
+| Account API key | `brm_live_…` | Yes | Customers |
 | Service key | `BARRELMAN_API_KEY` | **No** | Parchment → barrelman, internal jobs |
 | Session cookie | — | n/a | The console. Never accepted on data endpoints |
 
@@ -71,12 +71,6 @@ tiles  places  spatial  geocode  search  routing  transit  isochrone
 `['*']` means every group, and is the default. A key holding `*` alongside
 narrower scopes is stored as just `*` — keeping both would suggest the narrow
 ones constrain something.
-
-### Test keys
-
-Keys created in the `test` environment (`brm_test_…`) run the entire request
-path — auth, scopes, rate limits, real responses — while **spending no
-credits**. Integration suites cost nothing to run.
 
 ### Presenting a key
 

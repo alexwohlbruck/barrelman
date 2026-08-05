@@ -8,6 +8,8 @@
  * have to agree with it.
  */
 
+import { envNumber, envString } from './env'
+
 export const appName = 'Barrelman'
 
 function trimSlash(url: string): string {
@@ -56,7 +58,7 @@ export const rpID = (() => {
 })()
 
 /** How long a browser session stays valid without re-authenticating. */
-export const sessionTtlMs = Number(process.env.BARRELMAN_SESSION_TTL_DAYS ?? 30) * 24 * 60 * 60 * 1000
+export const sessionTtlMs = envNumber('BARRELMAN_SESSION_TTL_DAYS', 30) * 24 * 60 * 60 * 1000
 
 /**
  * Sessions past half their lifetime are slid forward on use, so an active user
@@ -65,7 +67,7 @@ export const sessionTtlMs = Number(process.env.BARRELMAN_SESSION_TTL_DAYS ?? 30)
 export const sessionRenewThresholdMs = sessionTtlMs / 2
 
 /** One-time email codes are short-lived and single-use. */
-export const otpTtlMs = Number(process.env.BARRELMAN_OTP_TTL_MINUTES ?? 15) * 60 * 1000
+export const otpTtlMs = envNumber('BARRELMAN_OTP_TTL_MINUTES', 15) * 60 * 1000
 
 export const sessionCookieName = 'barrelman_session'
 
@@ -85,7 +87,7 @@ export const adminEmails = new Set(
  * `open` (default) lets anyone sign up — this is a public API. `invite` limits
  * sign-in to accounts an admin has already created, for private deployments.
  */
-export const registrationMode = (process.env.BARRELMAN_REGISTRATION_MODE ?? 'open') as 'open' | 'invite'
+export const registrationMode = envString<'open' | 'invite'>('BARRELMAN_REGISTRATION_MODE', 'open')
 
 /** Whether accounts/auth are available at all. Off = legacy shared-key mode. */
 export const accountsEnabled = process.env.BARRELMAN_ACCOUNTS_ENABLED !== 'false'

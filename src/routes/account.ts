@@ -217,7 +217,6 @@ export function createAccountRoutes(overrides: Partial<AccountDeps> = {}) {
         const created = await deps.createApiKey({
           userId: user!.id,
           name: body.name,
-          environment: body.environment ?? 'live',
           scopes: body.scopes,
         })
 
@@ -232,14 +231,12 @@ export function createAccountRoutes(overrides: Partial<AccountDeps> = {}) {
       {
         body: t.Object({
           name: t.String({ minLength: 1, maxLength: 80 }),
-          environment: t.Optional(t.Union([t.Literal('live'), t.Literal('test')])),
           scopes: t.Optional(t.Array(t.String())),
         }),
         detail: {
           summary: 'Create an API key',
           description:
-            'Returns the only copy of the key that will ever exist. Test keys exercise the full ' +
-            'request path — auth, scopes, rate limits — without spending credits.',
+            'Returns the only copy of the key that will ever exist.',
           tags: ['Account'],
         },
       },

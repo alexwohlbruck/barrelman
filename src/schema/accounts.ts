@@ -173,7 +173,6 @@ export const oauthAccounts = pgTable(
   ],
 )
 
-export type KeyEnvironment = 'live' | 'test'
 
 export const apiKeys = pgTable(
   'accounts_api_keys',
@@ -192,7 +191,6 @@ export const apiKeys = pgTable(
     prefix: text('prefix').notNull(),
     /** Final four characters, so a key can be matched against a copy elsewhere. */
     last4: text('last4').notNull(),
-    environment: text('environment').notNull().default('live').$type<KeyEnvironment>(),
     /** Endpoint groups this key may call; `['*']` means every group. */
     scopes: text('scopes').array().notNull().default(['*']),
     lastUsedAt: timestamp('last_used_at', { withTimezone: true }),

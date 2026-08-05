@@ -163,7 +163,6 @@ export interface TestResult {
 // and the /auth, /account and /billing routes. Keep in sync with those.
 
 export type UserRole = 'user' | 'admin'
-export type KeyEnvironment = 'live' | 'test'
 export type EndpointGroup =
   | 'tiles'
   | 'places'
@@ -217,7 +216,6 @@ export interface ApiKeySummary {
   name: string
   prefix: string
   last4: string
-  environment: KeyEnvironment
   scopes: string[]
   lastUsedAt: string | null
   revokedAt: string | null

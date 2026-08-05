@@ -259,7 +259,6 @@ export function getApiKeys(includeRevoked = false): Promise<{ keys: ApiKeySummar
 
 export function createApiKey(payload: {
   name: string
-  environment?: 'live' | 'test'
   scopes?: string[]
 }): Promise<CreatedApiKey> {
   return request<CreatedApiKey>('/account/keys', {

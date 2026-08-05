@@ -14,8 +14,9 @@ import { pruneRateLimiters } from '../lib/rate-limit'
 import { pruneThrottleState } from './throttle.service'
 import { expireSuspensions } from './moderation.service'
 import { runAbuseDetection } from './abuse-detection.service'
+import { envNumber } from '../config/env'
 
-const SWEEP_INTERVAL_MS = Number(process.env.BARRELMAN_ACCOUNT_SWEEP_MS ?? 60 * 60_000)
+const SWEEP_INTERVAL_MS = envNumber('BARRELMAN_ACCOUNT_SWEEP_MS', 60 * 60_000)
 
 export interface SweepResult {
   sessions: number

@@ -107,6 +107,15 @@ the `barrelman` service's `environment:` block in `docker-compose.yml`. Compose
 does not forward the host environment, so a variable missing from that block is
 absent inside the container while looking configured everywhere else.
 
+**Read it with `envNumber`/`envString` from `src/config/env.ts`, never
+`process.env.X ?? default`.** Compose forwards optional settings as
+`${VAR:-}`, which defines them as the *empty string* — `??` never reaches its
+fallback and `Number('')` is 0. That is not theoretical: blank
+`BARRELMAN_OTP_TTL_MINUTES` made every sign-in code expire in the millisecond it
+was issued, blank `BARRELMAN_SESSION_TTL_DAYS` made Lucia mint dead sessions,
+blank `BARRELMAN_ACCOUNT_SWEEP_MS` ran the sweep in a tight loop, and blank
+`BARRELMAN_IP_RPM` throttled every caller to one request per minute.
+
 ### Testing Elysia guards
 Never stub a lifecycle hook (`onBeforeHandle`, `onAfterHandle`) with `mock()`.
 Elysia compiles its handler chain by inspecting the hook function, and a bun

@@ -17,7 +17,6 @@ import Dialog from '@/components/ui/Dialog.vue'
 import Input from '@/components/ui/Input.vue'
 import Label from '@/components/ui/Label.vue'
 import Spinner from '@/components/ui/Spinner.vue'
-import Switch from '@/components/ui/Switch.vue'
 import { createApiKey, getApiKeys, getPlans, revokeApiKey } from '@/lib/api'
 import { toast } from '@/lib/toast'
 import type { ApiKeySummary, CreatedApiKey, EndpointGroup, Scope } from '@/lib/types'
@@ -34,7 +33,6 @@ const loading = ref(true)
 const showCreate = ref(false)
 const creating = ref(false)
 const newName = ref('')
-const newIsTest = ref(false)
 const newScopes = ref<Set<string>>(new Set())
 
 const created = ref<CreatedApiKey | null>(null)
@@ -69,7 +67,6 @@ function toggleScope(scope: string) {
 
 function openCreate() {
   newName.value = ''
-  newIsTest.value = false
   newScopes.value = new Set()
   showCreate.value = true
 }
@@ -80,7 +77,6 @@ async function submitCreate() {
   try {
     const result = await createApiKey({
       name: newName.value.trim(),
-      environment: newIsTest.value ? 'test' : 'live',
       scopes: newScopes.value.size ? [...newScopes.value] : undefined,
     })
     showCreate.value = false
@@ -155,7 +151,6 @@ function formatDate(value: string | null) {
           <div class="min-w-0 flex-1">
             <div class="flex items-center gap-2">
               <span class="truncate font-medium">{{ key.name }}</span>
-              <Badge v-if="key.environment === 'test'" variant="info">test</Badge>
               <Badge v-if="key.revokedAt" variant="destructive">revoked</Badge>
             </div>
             <div class="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
@@ -181,16 +176,6 @@ function formatDate(value: string | null) {
           <Label for="key-name">Name</Label>
           <Input id="key-name" v-model="newName" placeholder="Production web app" />
           <p class="text-xs text-muted-foreground">So you can tell your keys apart later.</p>
-        </div>
-
-        <div class="flex items-start justify-between gap-4 rounded-lg border border-border p-3">
-          <div>
-            <Label for="key-test">Test key</Label>
-            <p class="mt-0.5 text-xs text-muted-foreground">
-              Runs the full request path — auth, scopes, rate limits — without spending credits.
-            </p>
-          </div>
-          <Switch id="key-test" v-model="newIsTest" />
         </div>
 
         <div class="flex flex-col gap-2">

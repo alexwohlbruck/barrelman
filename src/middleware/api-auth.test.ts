@@ -21,7 +21,6 @@ import { CREDIT_COSTS, getPlan } from '../billing/plans'
 
 const BASE = 'http://localhost'
 const LIVE_KEY = 'brm_live_abcdefghijklmnopqrstuvwxyz0123456789ABCD'
-const TEST_KEY = 'brm_test_abcdefghijklmnopqrstuvwxyz0123456789ABCD'
 
 const savedServiceKey = process.env.BARRELMAN_API_KEY
 
@@ -39,12 +38,10 @@ function resolved(overrides: Partial<ResolvedKey> = {}): ResolvedKey {
   return {
     keyId: 'key-1',
     userId: 'user-1',
-    environment: 'live',
     scopes: ['*'],
     plan: 'developer',
     suspended: false,
     suspensionReason: null,
-    isTest: false,
     ...overrides,
   }
 }
@@ -234,23 +231,6 @@ describe('apiAuth guard', () => {
     expect(res.headers.get('x-barrelman-overage')).toBe('true')
   })
 
-  test('a test key runs the whole path but spends nothing', async () => {
-    const d = deps({ resolveApiKey: mock(async () => resolved({ environment: 'test', isTest: true })) })
-    const res = await app('isochrone', d).handle(get({ authorization: `Bearer ${TEST_KEY}` }))
-
-    expect(res.status).toBe(200)
-    expect(res.headers.get('x-barrelman-credits-charged')).toBe('0')
-    expect(d.checkQuota).not.toHaveBeenCalled()
-    expect(d.recordUsage).not.toHaveBeenCalled()
-  })
-
-  test('a test key is still scope-checked', async () => {
-    const d = deps({
-      resolveApiKey: mock(async () => resolved({ environment: 'test', isTest: true, scopes: ['tiles'] })),
-    })
-
-    expect((await app('search', d).handle(get({ authorization: `Bearer ${TEST_KEY}` }))).status).toBe(403)
-  })
 })
 
 describe('throttling', () => {

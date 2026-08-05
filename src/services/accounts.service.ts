@@ -12,6 +12,7 @@ import { users, type NewUser, type User, type UserRole } from '../schema/account
 import { generateId, sha256Hex } from '../lib/crypto'
 import { emailDomain, isDisposableEmail, normalizeEmail } from '../lib/email'
 import { adminEmails, registrationMode, terms, tosVersion } from '../config/accounts.config'
+import { envNumber } from '../config/env'
 
 let schemaReady: Promise<void> | null = null
 
@@ -107,7 +108,6 @@ export function ensureAccountsSchema(): Promise<void> {
           hash         text NOT NULL,
           prefix       text NOT NULL,
           last4        text NOT NULL,
-          environment  text NOT NULL DEFAULT 'live',
           scopes       text[] NOT NULL DEFAULT ARRAY['*'],
           last_used_at timestamptz,
           revoked_at   timestamptz,
@@ -116,6 +116,28 @@ export function ensureAccountsSchema(): Promise<void> {
         )`
       await sql`CREATE UNIQUE INDEX IF NOT EXISTS accounts_api_keys_hash_idx ON accounts_api_keys (hash)`
       await sql`CREATE INDEX IF NOT EXISTS accounts_api_keys_user_idx ON accounts_api_keys (user_id)`
+
+      // Test keys are gone. They returned real data and skipped the quota
+      // check entirely, so any account could mint one and use the API for
+      // free — the only ceiling was the rate limit.
+      //
+      // Revoke before dropping the column, in that order: without the column
+      // there is no way left to tell which keys were test keys, and they would
+      // silently become live keys that bill.
+      //
+      // Branching in JS rather than guarding the UPDATE with an EXISTS:
+      // Postgres resolves column references at parse time, so a statement
+      // naming `environment` fails on a database that never had the column,
+      // however well guarded the WHERE clause is.
+      const [envColumn] = await sql`
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'accounts_api_keys' AND column_name = 'environment'`
+      if (envColumn) {
+        await sql`
+          UPDATE accounts_api_keys SET revoked_at = now()
+          WHERE revoked_at IS NULL AND environment = 'test'`
+        await sql`ALTER TABLE accounts_api_keys DROP COLUMN environment`
+      }
 
       // api_key_id is nullable (usage can predate or outlive a key) and NULL is
       // never equal to itself in a primary key, so the key column is coalesced
@@ -353,7 +375,7 @@ export async function countActiveUsers(): Promise<number> {
 // ── Sign-up throttling ──────────────────────────────────────────────────
 
 /** Accounts one address may create per UTC day before we start refusing. */
-const SIGNUPS_PER_IP_PER_DAY = Number(process.env.BARRELMAN_SIGNUPS_PER_IP_PER_DAY ?? 5)
+const SIGNUPS_PER_IP_PER_DAY = envNumber('BARRELMAN_SIGNUPS_PER_IP_PER_DAY', 5)
 
 export function hashIp(ip: string): string {
   return sha256Hex(ip)
