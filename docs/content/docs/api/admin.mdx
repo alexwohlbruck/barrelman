@@ -1,0 +1,8 @@
+---
+title: Admin
+full: true
+---
+
+Operational endpoints backing the admin console — data migrations, runnable scripts and jobs, metrics, and downstream service health. These power the import and maintenance workflow and are not part of the public query surface.
+
+<APIPage document={"./openapi.json"} operations={[{"path":"/admin/migration/status","method":"get"},{"path":"/admin/migration/run","method":"post"},{"path":"/admin/migration/post-import","method":"post"},{"path":"/admin/migration/generate-codes","method":"post"},{"path":"/admin/migration/generate-abbreviations","method":"post"},{"path":"/admin/migration/resolve-parent-context","method":"post"},{"path":"/admin/migration/resolve-parent-context-incremental","method":"post"},{"path":"/admin/migration/rebuild-tsvectors","method":"post"},{"path":"/admin/config","method":"get"},{"path":"/admin/verify","method":"get"},{"path":"/admin/scripts","method":"get"},{"path":"/admin/scripts/{id}/run","method":"post"},{"path":"/admin/jobs","method":"get"},{"path":"/admin/jobs/{id}","method":"get"},{"path":"/admin/jobs/{id}/cancel","method":"post"},{"path":"/admin/jobs/{id}/stream","method":"get"},{"path":"/admin/metrics","method":"get"},{"path":"/admin/services","method":"get"},{"path":"/admin/test-endpoint","method":"post"}]} hasHead={true} />
