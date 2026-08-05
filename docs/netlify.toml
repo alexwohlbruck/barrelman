@@ -1,9 +1,19 @@
 # Netlify config for the Barrelman docs site (Next.js + Fumadocs).
 # When linking this repo, set "Base directory" to "docs" in the Netlify UI.
-# The Essential Next.js plugin auto-detects and sets the publish directory.
-
+#
+# The plugin is declared here rather than left to auto-detection, which is what
+# the note in its place used to assume. Netlify did identify the framework as
+# `next` on its own, and still ran a bare `next build` and published the static
+# assets with no server attached: 39 files, no functions, no redirect rules, and
+# every route answering 404 — including `/`. The plugin is the part that turns
+# `.next` into a served site, and `/api/search` is a dynamic route that cannot
+# be a static file at all.
 [build]
   command = "bun run build"
+  publish = ".next"
 
 [build.environment]
   NODE_VERSION = "20"
+
+[[plugins]]
+  package = "@netlify/plugin-nextjs"
