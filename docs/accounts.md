@@ -84,6 +84,41 @@ library fetches tiles itself and cannot set a header. A key in a URL ends up in
 logs and browser history, so this is documented for tiles specifically, where
 there is no alternative.
 
+### Unmetered keys, and why nobody can mint one
+
+A key is metered because its account's plan is. The one plan that is not is
+`demo`, which serves the API without spending credits — it is what runs the
+demo on the landing page.
+
+There is no way to ask for it. It is not on the pricing page, has no checkout,
+and cannot be selected when creating a key; an administrator moves an account
+onto it from the console, and that is recorded in the moderation log like a
+suspension. That constraint is the whole design. The previous answer to this
+was a `brm_test_…` key any account could mint from the key-creation form, which
+made unmetered access self-service — roughly 432,000 free requests a day on a
+free account, invisible to abuse detection because test-key usage was never
+recorded.
+
+Unmetered means *not charged*, not *unbounded*:
+
+| Still applies | Skipped |
+|---|---|
+| Authentication, scopes, suspension | The credit balance check |
+| Every throttle layer, plus a per-visitor one | Nothing else |
+| Usage recording, at zero credits | |
+
+The per-visitor limit is what replaces the credit ceiling. On a normal account
+the unit of abuse is the account, because the traffic is the customer's own; a
+public demo is one account and thousands of strangers, so the limit that
+matters bounds each of them separately. Without it the first scraper to find
+the page denies the demo to everybody else — and a hard-stop credit ceiling
+fails the same way, just once a month instead of once an afternoon.
+
+```
+demo:  240 requests/minute per visitor
+       3,000 requests/minute across all visitors
+```
+
 ## Sessions
 
 The console authenticates with a session cookie, not a bearer token in

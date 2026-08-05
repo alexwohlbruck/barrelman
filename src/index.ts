@@ -35,6 +35,7 @@ import { flushUsage, startUsageFlush } from './services/usage.service'
 import { startOverageReporting } from './services/overage.service'
 import { startAccountSweep } from './services/account-maintenance.service'
 import { assertAuthConfigured } from './middleware/api-auth'
+import { setPeerAddressResolver } from './lib/rate-limit'
 
 const port = Number(process.env.PORT) || 5001
 
@@ -97,6 +98,11 @@ const app = new Elysia()
   .use(transitRoutes)
   .use(gbfsRoutes)
   .listen(port)
+
+// Give the rate limiters a real peer address to fall back on when no proxy has
+// written one. Bun exposes it only through the server object, which does not
+// exist until `listen()` has run.
+setPeerAddressResolver((request) => app.server?.requestIP(request)?.address ?? null)
 
 // Keep MOTIS (and rental pricing) hot so the first trip request after an idle
 // gap doesn't eat MOTIS's multi-second cold-start. Engine warming, not result

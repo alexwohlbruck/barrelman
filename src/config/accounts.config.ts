@@ -87,7 +87,7 @@ export const adminEmails = new Set(
  * `open` (default) lets anyone sign up — this is a public API. `invite` limits
  * sign-in to accounts an admin has already created, for private deployments.
  */
-export const registrationMode = envString<'open' | 'invite'>('BARRELMAN_REGISTRATION_MODE', 'open')
+export const registrationMode = envString('BARRELMAN_REGISTRATION_MODE', 'open', ['open', 'invite'] as const)
 
 /** Whether accounts/auth are available at all. Off = legacy shared-key mode. */
 export const accountsEnabled = process.env.BARRELMAN_ACCOUNTS_ENABLED !== 'false'

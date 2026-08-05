@@ -157,6 +157,17 @@ export async function applyPlanFromProduct(userId: string, productId: string | u
 }
 
 export async function downgradeToFree(userId: string): Promise<void> {
+  // An operator-assigned plan is not the billing provider's to revoke. Without
+  // this, opening the billing page on the demo account is enough to end the
+  // demo: there is no Polar customer behind it, so the sync concludes the
+  // subscription lapsed and moves it to free — where it works until the hero
+  // has served 100,000 credits and then hard-stops for everyone.
+  const current = (await findUserById(userId))?.plan
+  if (current && getPlan(current).internal) {
+    console.warn(`[billing] leaving ${userId} on the ${current} plan; internal plans are operator-assigned`)
+    return
+  }
+
   await setPlan(userId, DEFAULT_PLAN)
   invalidateUserKeys(userId)
 }

@@ -89,18 +89,45 @@ describe('pruneRateLimiters', () => {
   })
 })
 
+/**
+ * These cover the property every per-address limit in the codebase rests on:
+ * that the address cannot be chosen by the caller. The default configuration
+ * is one trusted proxy, so the value to trust is the last entry — the one that
+ * proxy observed — and everything to its left is caller-supplied.
+ */
 describe('clientIp', () => {
   const req = (headers: Record<string, string>) => new Request('http://localhost/x', { headers })
 
-  test('prefers the first entry of x-forwarded-for', () => {
-    expect(clientIp(req({ 'x-forwarded-for': '203.0.113.7, 10.0.0.1, 10.0.0.2' }))).toBe('203.0.113.7')
+  test('reads the entry written by the trusted proxy, not the one the caller sent', () => {
+    // A client claiming to be 203.0.113.7; our proxy appends what it actually saw.
+    expect(clientIp(req({ 'x-forwarded-for': '203.0.113.7, 198.51.100.4' }))).toBe('198.51.100.4')
   })
 
-  test('falls back to x-real-ip', () => {
+  test('a spoofed chain cannot buy a fresh bucket', () => {
+    const spoofed = ['1.1.1.1', '2.2.2.2', '3.3.3.3'].map((claim) =>
+      clientIp(req({ 'x-forwarded-for': `${claim}, 198.51.100.4` })),
+    )
+    // Whatever the caller prepends, every request resolves to the same address,
+    // so all three land in one rate-limit window rather than three.
+    expect(new Set(spoofed).size).toBe(1)
+    expect(spoofed[0]).toBe('198.51.100.4')
+  })
+
+  test('a single-entry chain is used as-is', () => {
+    expect(clientIp(req({ 'x-forwarded-for': '198.51.100.4' }))).toBe('198.51.100.4')
+  })
+
+  test('tolerates a chain shorter than the configured hop count', () => {
+    // Clamped rather than reading past the start: losing the limit entirely is
+    // worse than falling back to the leftmost entry.
+    expect(clientIp(req({ 'x-forwarded-for': ' , 198.51.100.4 , ' }))).toBe('198.51.100.4')
+  })
+
+  test('falls back to x-real-ip, which is not a list', () => {
     expect(clientIp(req({ 'x-real-ip': '198.51.100.4' }))).toBe('198.51.100.4')
   })
 
-  test('returns a sentinel when no proxy header is present', () => {
+  test('returns a sentinel when no proxy header is present and no peer is known', () => {
     expect(clientIp(req({}))).toBe('unknown')
   })
 })

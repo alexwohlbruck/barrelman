@@ -15,6 +15,7 @@ import type {
   CreditBalance,
   LedgerEntry,
   PasskeySummary,
+  Plan,
   PlansResponse,
   PublicUser,
   SessionSummary,
@@ -347,7 +348,7 @@ export function getAdminUsers(params: {
   status?: 'all' | 'suspended' | 'paid'
   limit?: number
   offset?: number
-} = {}): Promise<{ users: AdminUser[]; total: number; limit: number; offset: number }> {
+} = {}): Promise<{ users: AdminUser[]; total: number; limit: number; offset: number; plans: Plan[] }> {
   const query = new URLSearchParams()
   if (params.search) query.set('search', params.search)
   if (params.status && params.status !== 'all') query.set('status', params.status)
@@ -373,6 +374,19 @@ export function unsuspendUser(id: string, reason?: string): Promise<{ suspension
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ reason }),
+  })
+}
+
+/**
+ * Operator override, independent of the billing provider. This is how an
+ * account is put on `demo`, which serves the API unmetered — recorded in the
+ * moderation log server-side.
+ */
+export function setUserPlan(id: string, plan: string, reason?: string): Promise<{ plan: Plan }> {
+  return request<{ plan: Plan }>(`/admin/users/${id}/plan`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ plan, reason }),
   })
 }
 

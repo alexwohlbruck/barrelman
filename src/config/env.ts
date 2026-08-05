@@ -22,8 +22,25 @@ export function envRaw(name: string): string | undefined {
   return trimmed === '' ? undefined : trimmed
 }
 
-export function envString<T extends string>(name: string, fallback: T): T {
-  return (envRaw(name) as T | undefined) ?? fallback
+/**
+ * String setting. Pass `allowed` for anything with a fixed set of values: a
+ * value outside it falls back with a warning rather than being handed on as a
+ * `T` it is not.
+ *
+ * Without that check the type is a lie with consequences. `BARRELMAN_
+ * REGISTRATION_MODE=Invite` typechecks as `'open' | 'invite'`, matches neither
+ * in `registrationMode === 'invite'`, and so opens sign-ups on the deployment
+ * that was trying to close them — a fail-open produced by a capital letter.
+ */
+export function envString<T extends string>(name: string, fallback: T, allowed?: readonly T[]): T {
+  const raw = envRaw(name) as T | undefined
+  if (raw === undefined) return fallback
+
+  if (allowed && !allowed.includes(raw)) {
+    console.warn(`[config] ${name}="${raw}" is not one of ${allowed.join(', ')} — using ${fallback}`)
+    return fallback
+  }
+  return raw
 }
 
 /**

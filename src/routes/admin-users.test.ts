@@ -45,6 +45,9 @@ function deps(overrides: Partial<AdminUserDeps> = {}): Partial<AdminUserDeps> {
     resolveAbuseSignal: mock(async () => true),
     listAbuseSignals: mock(async () => []),
     countOpenSignals: mock(async () => 0),
+    setPlan: mock(async () => undefined),
+    invalidateUserKeys: mock(() => undefined),
+    findUserById: mock(async () => ({ id: TARGET_ID, plan: 'free' }) as never),
     resolveSession: adminSession(),
     ...overrides,
   }
@@ -225,6 +228,86 @@ describe('POST /admin/users/:id/unsuspend', () => {
     const app = createAdminUserRoutes(deps({ unsuspendUser: mock(async () => null) }))
 
     expect((await app.handle(post('/admin/users/ghost/unsuspend', {}))).status).toBe(404)
+  })
+})
+
+/**
+ * Moving an account onto `demo` grants unmetered API access, so this endpoint
+ * is a privileged action and is tested as one: who can reach it, what it
+ * refuses, and whether it leaves a trail.
+ */
+describe('POST /admin/users/:id/plan', () => {
+  const onPlan = (plan: string) =>
+    deps({ findUserById: mock(async () => ({ id: TARGET_ID, plan }) as never) })
+
+  test('assigns the plan and drops the cached key state', async () => {
+    const d = onPlan('free')
+    const app = createAdminUserRoutes(d)
+
+    const res = await app.handle(post(`/admin/users/${TARGET_ID}/plan`, { plan: 'demo' }))
+
+    expect(res.status).toBe(200)
+    expect((await res.json()).plan.id).toBe('demo')
+    expect(d.setPlan).toHaveBeenCalledWith(TARGET_ID, 'demo')
+    // Keys cache the plan, so without this the account keeps billing until the
+    // cache expires — and an operator watching the console sees nothing happen.
+    expect(d.invalidateUserKeys).toHaveBeenCalledWith(TARGET_ID)
+  })
+
+  test('records the change against the acting administrator', async () => {
+    const d = onPlan('free')
+    const app = createAdminUserRoutes(d)
+
+    await app.handle(post(`/admin/users/${TARGET_ID}/plan`, { plan: 'demo', reason: 'landing page hero' }))
+
+    expect(d.addNote).toHaveBeenCalledWith(
+      TARGET_ID,
+      'Plan changed from free to demo: landing page hero',
+      ADMIN_ID,
+    )
+  })
+
+  test('refuses an unknown plan without touching the account', async () => {
+    const d = onPlan('free')
+    const app = createAdminUserRoutes(d)
+
+    const res = await app.handle(post(`/admin/users/${TARGET_ID}/plan`, { plan: 'platinum' }))
+
+    expect(res.status).toBe(400)
+    expect(d.setPlan).not.toHaveBeenCalled()
+  })
+
+  test('refuses an inherited property masquerading as a plan', async () => {
+    // `PLANS` is a plain object, so `'constructor' in PLANS` is true. Reaching
+    // setPlan with that would write a plan id nothing can resolve, and the
+    // account would silently fall back to free on every lookup.
+    const d = onPlan('free')
+    const app = createAdminUserRoutes(d)
+
+    expect((await app.handle(post(`/admin/users/${TARGET_ID}/plan`, { plan: 'constructor' }))).status).toBe(400)
+    expect(d.setPlan).not.toHaveBeenCalled()
+  })
+
+  test('404s for an account that does not exist', async () => {
+    const d = deps({ findUserById: mock(async () => null) })
+    const app = createAdminUserRoutes(d)
+
+    expect((await app.handle(post(`/admin/users/${TARGET_ID}/plan`, { plan: 'demo' }))).status).toBe(404)
+    expect(d.setPlan).not.toHaveBeenCalled()
+  })
+
+  test('a refusing guard blocks the plan change', async () => {
+    const guard = async ({ set }: { set: { status?: number } }) => {
+      set.status = 403
+      return { error: 'Administrator access required' }
+    }
+    const d = deps({ guard: guard as never, findUserById: mock(async () => ({ id: TARGET_ID, plan: 'free' }) as never) })
+    const app = createAdminUserRoutes(d)
+
+    const res = await app.handle(post(`/admin/users/${TARGET_ID}/plan`, { plan: 'demo' }))
+
+    expect(res.status).toBe(403)
+    expect(d.setPlan).not.toHaveBeenCalled()
   })
 })
 

@@ -28,12 +28,12 @@ import {
   unsuspendUser,
   warnUser,
 } from '../services/moderation.service'
-import { listApiKeys } from '../services/api-keys.service'
-import { getBalance } from '../services/credits.service'
+import { listApiKeys, invalidateUserKeys } from '../services/api-keys.service'
+import { getBalance, setPlan } from '../services/credits.service'
 import { usageByDay, currentCycleStart, utcDay } from '../services/usage.service'
-import { describeTerms } from '../services/accounts.service'
+import { describeTerms, findUserById } from '../services/accounts.service'
 import { throttleStats } from '../services/throttle.service'
-import { getPlan } from '../billing/plans'
+import { allPlans, getPlan, isPlanId } from '../billing/plans'
 
 /** Recorded as the actor when the caller authenticated with the shared key. */
 const ADMIN_KEY_ACTOR = 'admin-key'
@@ -48,6 +48,9 @@ export interface AdminUserDeps {
   resolveAbuseSignal: typeof resolveAbuseSignal
   listAbuseSignals: typeof listAbuseSignals
   countOpenSignals: typeof countOpenSignals
+  setPlan: typeof setPlan
+  invalidateUserKeys: typeof invalidateUserKeys
+  findUserById: typeof findUserById
   resolveSession: typeof resolveSession
   guard: typeof adminAuthHandler
 }
@@ -60,6 +63,9 @@ const defaultDeps: AdminUserDeps = {
   resolveAbuseSignal,
   listAbuseSignals,
   countOpenSignals,
+  setPlan,
+  invalidateUserKeys,
+  findUserById,
   resolveSession,
   guard: adminAuthHandler,
 }
@@ -125,6 +131,9 @@ export function createAdminUserRoutes(overrides: Partial<AdminUserDeps> = {}) {
         total: total?.count ?? 0,
         limit,
         offset,
+        // The operator's plan picker, sent with the list so changing a plan
+        // does not need a detail fetch first.
+        plans: allPlans(),
       }
     },
     {
@@ -172,6 +181,9 @@ export function createAdminUserRoutes(overrides: Partial<AdminUserDeps> = {}) {
         balance,
         usage,
         history,
+        // Every plan, internal ones included: this is the operator's picker,
+        // and `demo` exists precisely to be assigned from here.
+        plans: allPlans(),
       }
     },
     { detail: { summary: 'Account detail with usage, keys and moderation history', tags: ['Admin'] } },
@@ -234,6 +246,53 @@ export function createAdminUserRoutes(overrides: Partial<AdminUserDeps> = {}) {
     {
       body: t.Optional(t.Object({ reason: t.Optional(t.String({ maxLength: 500 })) })),
       detail: { summary: 'Reinstate a suspended account', tags: ['Admin'] },
+    },
+  )
+
+  .post(
+    '/users/:id/plan',
+    async ({ params, body, request, set }) => {
+      if (!isPlanId(body.plan)) {
+        set.status = 400
+        return { error: `Unknown plan '${body.plan}'` }
+      }
+
+      const account = await deps.findUserById(params.id)
+      if (!account) {
+        set.status = 404
+        return { error: 'Account not found' }
+      }
+
+      await deps.setPlan(params.id, body.plan)
+      // Keys cache the plan alongside the key, so a plan change that skipped
+      // this would not take effect until the cache expired — and the whole
+      // point of moving an account onto `demo` is that it takes effect now.
+      deps.invalidateUserKeys(params.id)
+
+      // Assigning an unmetered plan is granting free API access, so it belongs
+      // in the same audit trail as a suspension rather than only in a diff of
+      // the users table.
+      await deps.addNote(
+        params.id,
+        `Plan changed from ${account.plan} to ${body.plan}${body.reason ? `: ${body.reason.trim()}` : ''}`,
+        await actorFor(request),
+      )
+
+      return { plan: getPlan(body.plan) }
+    },
+    {
+      body: t.Object({
+        plan: t.String({ minLength: 1, maxLength: 40 }),
+        reason: t.Optional(t.String({ maxLength: 500 })),
+      }),
+      detail: {
+        summary: "Change an account's plan",
+        description:
+          'Operator override, independent of the billing provider. This is how an account is moved onto ' +
+          'an internal plan such as `demo`, which serves the API unmetered — so it is recorded in the ' +
+          'moderation log like any other privileged action.',
+        tags: ['Admin'],
+      },
     },
   )
 

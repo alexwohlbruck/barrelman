@@ -233,6 +233,70 @@ describe('apiAuth guard', () => {
 
 })
 
+/**
+ * The demo plan serves the API without spending credits. These tests exist to
+ * pin the two properties that made the removed `brm_test_…` keys a hole: that
+ * unmetered is not unlimited, and that unmetered is not invisible.
+ */
+describe('unmetered plans', () => {
+  const demo = () => deps({ resolveApiKey: mock(async () => resolved({ plan: 'demo' })) })
+
+  test('serves the request without consulting the balance', async () => {
+    const d = demo()
+    const res = await app('isochrone', d).handle(get({ authorization: `Bearer ${LIVE_KEY}` }))
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('x-barrelman-credits-charged')).toBe('0')
+    expect(d.checkQuota).not.toHaveBeenCalled()
+  })
+
+  test('still records the usage, at zero credits', async () => {
+    // The old test keys recorded nothing, which took their traffic out of the
+    // dashboards and out of abuse detection at the same time.
+    const d = demo()
+    await app('search', d).handle(get({ authorization: `Bearer ${LIVE_KEY}` }))
+
+    expect(d.recordUsage).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'user-1', endpoint: 'search', credits: 0 }),
+    )
+  })
+
+  test('is still scope-checked', async () => {
+    const d = deps({ resolveApiKey: mock(async () => resolved({ plan: 'demo', scopes: ['tiles'] })) })
+
+    expect((await app('search', d).handle(get({ authorization: `Bearer ${LIVE_KEY}` }))).status).toBe(403)
+  })
+
+  test('is still rate-limited, per address', async () => {
+    // The limit that matters on a shared demo account: one visitor is bounded
+    // on their own, so they cannot deny the demo to everybody else.
+    const perIp = getPlan('demo').requestsPerMinutePerIp!
+    const d = demo()
+    const instance = app('tiles', d)
+    const from = (ip: string) =>
+      instance.handle(get({ authorization: `Bearer ${LIVE_KEY}`, 'x-forwarded-for': ip }))
+
+    for (let i = 0; i < perIp; i++) {
+      expect((await from('198.51.100.4')).status).toBe(200)
+    }
+
+    const refused = await from('198.51.100.4')
+    expect(refused.status).toBe(429)
+    expect((await refused.json()).layer).toBe('ip')
+
+    // A different visitor is unaffected — that is the whole point of the layer.
+    expect((await from('203.0.113.9')).status).toBe(200)
+  })
+
+  test('a suspended demo account is still refused', async () => {
+    const d = deps({
+      resolveApiKey: mock(async () => resolved({ plan: 'demo', suspended: true, suspensionReason: 'abuse' })),
+    })
+
+    expect((await app('tiles', d).handle(get({ authorization: `Bearer ${LIVE_KEY}` }))).status).toBe(403)
+  })
+})
+
 describe('throttling', () => {
   /**
    * Layers, cheapest first: penalty box, per-IP, per-key, per-account. The

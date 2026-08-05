@@ -6,13 +6,14 @@ which is a decision someone makes and is accountable for.
 
 ## Throttling
 
-Five checks, cheapest first, so an abusive caller is refused before we spend
+Six checks, cheapest first, so an abusive caller is refused before we spend
 anything on them.
 
 | Layer | Bounds | Why the layer below is not enough |
 |---|---|---|
 | **Penalty box** | Callers collecting a stream of 401/402/429 | Answering an error forever is free for a key-guesser, not for us |
 | **Per-IP** | One source address | Anonymous traffic never reaches an account |
+| **Per-visitor** | One address *on one account* | On a shared account the account limit is everyone's shared fate |
 | **Per-key** | 80% of the account's budget | One leaked key must not starve the account's other keys |
 | **Per-account** | The plan's published limit | — |
 | **Concurrency** | Simultaneous isochrone / transit / routing | A caller inside their per-minute limit can still pin every engine |
@@ -23,6 +24,36 @@ down" and "spread traffic across more keys":
 ```json
 { "error": "This key is limited to 240 requests per minute. …", "layer": "key" }
 ```
+
+### Per-visitor
+
+Only for plans that set `requestsPerMinutePerIp` — today just `demo`, the
+operator-assigned plan behind the public demo.
+
+Every other layer assumes an account's traffic belongs to that account. A demo
+breaks the assumption: one account, thousands of unrelated visitors. An
+account-wide limit there is not a limit on abuse, it is a race — the first
+scraper to arrive spends the budget and the demo is down for everyone until the
+window rolls over. Bounding each address separately on that account is what
+keeps one bad client from being everybody's problem.
+
+### Trusting the address
+
+Every per-address layer above rests on knowing the address, and
+`X-Forwarded-For` is a list the *caller* writes the first entry of. Reading that
+entry — the obvious implementation — means a fresh value per request buys a
+fresh bucket, and every limit on this page is decoration.
+
+`BARRELMAN_TRUSTED_PROXY_HOPS` says how many proxies you actually run, and the
+address is counted in from the right, landing on the entry the outermost one
+you control observed rather than inherited. Set it to the number of hops in
+front of barrelman: `1` for a single reverse proxy (the default), `2` behind a
+CDN as well, `0` if barrelman is exposed directly, in which case the header is
+ignored entirely and the peer address is used.
+
+Getting this wrong is quiet in both directions: too high and callers can spoof
+their way past the limits, too low and every request appears to come from your
+own proxy and shares one bucket.
 
 ### The penalty box
 

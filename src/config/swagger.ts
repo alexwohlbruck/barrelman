@@ -37,9 +37,7 @@ library fetches tiles itself and cannot set a header.
 
 Keys carry **scopes** limiting which endpoint groups they may call, so a key
 embedded in a web map can be restricted to tiles and search and is then
-worthless for running up a routing bill. Keys created in the \`test\`
-environment (\`brm_test_...\`) exercise the whole request path — auth, scopes,
-rate limits — without spending credits.
+worthless for running up a routing bill.
 
 ### Billing
 Usage is metered in **credits**, because the endpoints are not equally
@@ -89,7 +87,7 @@ const swaggerConfig = {
         bearerAuth: {
           type: 'http',
           scheme: 'bearer',
-          description: 'An account API key (brm_live_… / brm_test_…), created in the console at /console.',
+          description: 'An account API key (brm_live_…), created in the console at /console.',
         },
       },
     },

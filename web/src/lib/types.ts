@@ -236,6 +236,12 @@ export interface Plan {
   description: string
   monthlyCredits: number
   requestsPerMinute: number
+  /** False on the demo plan: served without spending credits. */
+  metered: boolean
+  /** Per-minute ceiling applied to each visitor, where a plan sets one. */
+  requestsPerMinutePerIp?: number
+  /** Operator-assigned. Absent from every customer-facing plan list. */
+  internal?: boolean
   /** List price per month, in cents. Polar wins once configured. */
   priceCents: number
   overageAllowed: boolean

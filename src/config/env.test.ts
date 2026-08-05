@@ -56,10 +56,27 @@ describe('envNumber', () => {
 })
 
 describe('envString', () => {
+  const MODES = ['open', 'invite'] as const
+
   test('falls back on blank, keeps a configured value', () => {
     process.env[NAME] = ''
-    expect(envString<'open' | 'invite'>(NAME, 'open')).toBe('open')
+    expect(envString(NAME, 'open', MODES)).toBe('open')
     process.env[NAME] = 'invite'
-    expect(envString<'open' | 'invite'>(NAME, 'open')).toBe('invite')
+    expect(envString(NAME, 'open', MODES)).toBe('invite')
+  })
+
+  test('falls back on a value outside the allowed set', () => {
+    // The case that matters is a fail-open: `Invite` is neither 'open' nor
+    // 'invite', so a `=== 'invite'` check reads it as open registration on the
+    // instance that was trying to close it.
+    process.env[NAME] = 'Invite'
+    expect(envString(NAME, 'open', MODES)).toBe('open')
+    process.env[NAME] = 'inivte'
+    expect(envString(NAME, 'open', MODES)).toBe('open')
+  })
+
+  test('accepts any value when no set is given', () => {
+    process.env[NAME] = 'anything'
+    expect(envString<string>(NAME, 'fallback')).toBe('anything')
   })
 })

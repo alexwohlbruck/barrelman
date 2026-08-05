@@ -9,7 +9,9 @@
  *
  * Three kinds of caller are recognised:
  *
- *   - An account key (`brm_live_…` / `brm_test_…`) — metered and rate-limited.
+ *   - An account key (`brm_live_…`) — rate-limited, and metered unless the
+ *     account is on an unmetered plan (see `Plan.metered`; only the
+ *     operator-assigned `demo` plan is).
  *   - The legacy shared secret in `BARRELMAN_API_KEY` — unmetered. This is how
  *     Parchment's own server calls barrelman, and how existing deployments keep
  *     working; it is a service credential, not a customer.
@@ -309,6 +311,26 @@ export function apiAuth(group: EndpointGroup, overrides: Partial<ApiAuthDeps> = 
     // Past this point a concurrency slot may be held, so every exit has to
     // release it — that is what `throttleKey` in the metering context is for.
     const throttleKey = caller.userId
+
+    /**
+     * Unmetered plans — the operator-run demo — skip the balance check and
+     * charge nothing, but only from here: everything above still applies, and
+     * that ordering is the entire lesson from the `brm_test_…` keys this
+     * replaces. Those returned before the throttle ran, so an unmetered key was
+     * also an unlimited one; worse, any account could mint itself one.
+     *
+     * Usage is still recorded, at zero credits. An unmetered account that
+     * stopped appearing in the dashboards would also stop appearing to abuse
+     * detection, and "we cannot see it" is a strictly worse property than "we
+     * do not charge for it".
+     */
+    if (!plan.metered) {
+      deps.recordUsage({ userId: caller.userId, apiKeyId: caller.keyId, endpoint: group, credits: 0 })
+      stash(context, { caller, group, credits: 0, charged: false, throttleKey })
+      recordSuccess(caller.userId)
+      set.headers['x-barrelman-credits-charged'] = '0'
+      return
+    }
 
     const decision = await deps.checkQuota(caller.userId, cost)
     if (!decision.allowed) {

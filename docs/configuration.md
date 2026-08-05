@@ -110,6 +110,7 @@ See [abuse-controls.md](abuse-controls.md) for what these mean.
 
 | Variable | Default | Description |
 |---|---|---|
+| `BARRELMAN_TRUSTED_PROXY_HOPS` | `1` | Proxies in front of barrelman. **Read this one** — see below |
 | `BARRELMAN_ANON_RPM` | `120` | Per address when nobody is authenticated |
 | `BARRELMAN_IP_RPM` | `3000` | Ceiling on any address. Generous — NAT puts real users behind one |
 | `BARRELMAN_PER_KEY_SHARE` | `0.8` | Share of the account budget one key may spend |
@@ -124,6 +125,24 @@ See [abuse-controls.md](abuse-controls.md) for what these mean.
 | `BARRELMAN_MULTI_ACCOUNT_THRESHOLD` | `6` | Sign-ups from one address before flagging |
 
 These defaults are **not calibrated against real traffic**.
+
+### `BARRELMAN_TRUSTED_PROXY_HOPS`
+
+Every per-address limit above depends on the address being one the caller
+cannot choose, and `X-Forwarded-For` is a list whose first entry the caller
+writes. The address is therefore counted in from the **right**, so it lands on
+the entry written by the outermost proxy you run.
+
+| Set it to | When |
+|---|---|
+| `0` | barrelman is exposed directly. `X-Forwarded-For` is ignored; the peer address is used |
+| `1` *(default)* | One reverse proxy in front — Traefik, nginx, Caddy |
+| `2` | A CDN in front of that proxy |
+
+Both mistakes are silent. Too high and a caller spoofs past every per-address
+limit by prepending entries; too low and every request looks like it came from
+your own proxy, so all of them share one bucket and legitimate traffic throttles
+itself.
 
 ## Terms of service
 
@@ -151,6 +170,23 @@ These defaults are **not calibrated against real traffic**.
 | `MARTIN_URL` | `http://barrelman-martin:3000` | |
 | `ISOCHRONE_CONCURRENCY` | `8` | Parallel GraphHopper calls per isochrone |
 | `TRANSITLAND_API_KEY` | — | For GTFS feed discovery |
+
+## Landing-site demo
+
+Read by the `barrelman-landing` service in `docker-compose.dev.yml` (the
+`landing` profile), not by the API. Both are ordinary keys on an account an
+administrator has moved onto the `demo` plan — see
+[accounts.md](accounts.md#unmetered-keys-and-why-nobody-can-mint-one).
+
+| Variable | Default | Description |
+|---|---|---|
+| `BARRELMAN_DEMO_KEY` | — | Server-side, for `/api/demo/*`. Never reaches the browser |
+| `BARRELMAN_TILE_DEMO_KEY` | — | Browser-side, for map tiles. **Public by necessity** — scope it to `tiles` alone |
+
+Two keys rather than one so either can be revoked on its own, and so the key
+that ships in the page cannot run searches. Neither should be
+`BARRELMAN_API_KEY`: that is the service credential Parchment uses, and
+revoking it to stop a demo would take Parchment down with it.
 
 ## Database tuning
 

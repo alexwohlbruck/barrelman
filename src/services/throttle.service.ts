@@ -92,6 +92,8 @@ class WindowCounter {
 const perIp = new WindowCounter(60_000)
 const perKey = new WindowCounter(60_000)
 const perAccount = new WindowCounter(60_000)
+/** Per (account, address), for plans that bound each caller separately. */
+const perAccountIp = new WindowCounter(60_000)
 
 /**
  * Requests per minute allowed from one address when nobody is authenticated.
@@ -292,6 +294,25 @@ export function checkThrottle(request: ThrottleRequest): ThrottleVerdict {
 
   const accountLimit = plan?.requestsPerMinute ?? 60
 
+  /**
+   * Per-visitor ceiling, on the plans that ask for one. Checked before the
+   * account layer so a single abusive address is refused on its own account
+   * rather than by exhausting the shared budget — on a public demo those are
+   * the same number of requests but very different outcomes for everyone else.
+   */
+  const perIpLimit = plan?.requestsPerMinutePerIp
+  if (perIpLimit) {
+    const visitor = perAccountIp.hit(`${userId}:${ip}`, perIpLimit)
+    if (!visitor.allowed) {
+      return {
+        allowed: false,
+        layer: 'ip',
+        retryAfterSeconds: visitor.retryAfterSeconds,
+        message: `Rate limit exceeded for this address — ${perIpLimit} requests per minute.`,
+      }
+    }
+  }
+
   if (keyId) {
     const keyLimit = Math.max(1, Math.floor(accountLimit * PER_KEY_SHARE))
     const key = perKey.hit(keyId, keyLimit)
@@ -333,6 +354,7 @@ export function pruneThrottleState(): void {
   perIp.prune()
   perKey.prune()
   perAccount.prune()
+  perAccountIp.prune()
 
   const now = Date.now()
   for (const [key, penalty] of penalties) {
@@ -344,6 +366,7 @@ export function clearThrottleState(): void {
   perIp.clear()
   perKey.clear()
   perAccount.clear()
+  perAccountIp.clear()
   penalties.clear()
   inFlight.clear()
 }
@@ -354,6 +377,7 @@ export function throttleStats() {
     trackedAddresses: perIp.size,
     trackedKeys: perKey.size,
     trackedAccounts: perAccount.size,
+    trackedVisitors: perAccountIp.size,
     penalised: [...penalties.values()].filter((p) => p.until > Date.now()).length,
     inFlight: [...inFlight.values()].reduce((sum, n) => sum + n, 0),
   }

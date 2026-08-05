@@ -49,6 +49,26 @@ use. That matches how MapTiler and Stadia license theirs.
 Enterprise is `contactOnly` — checkout refuses it with a "get in touch" rather
 than sending anyone to a payment page.
 
+### The plan that is not on the ladder
+
+There is a sixth, `demo`, which does not appear here, in `/account/plans`, or in
+the console's plan picker, because it cannot be bought. It is `internal: true`
+and an administrator assigns it. It serves the API **unmetered**, and is what
+runs the interactive demo on the landing page.
+
+A demo cannot be a normal account: metered, it eventually stops, and it stops on
+whichever afternoon the page gets attention. What bounds it instead is a
+per-visitor rate limit, 240/min per address inside a 3,000/min account ceiling.
+That is a better fit for the actual risk — one account, thousands of strangers,
+where an account-wide limit means the first scraper decides everyone else's
+experience.
+
+Unmetered is not unbilled-and-unseen: usage is still recorded at zero credits,
+so demo traffic shows up in the dashboards and in abuse detection like anyone
+else's. See
+[accounts.md](accounts.md#unmetered-keys-and-why-nobody-can-mint-one) for why
+this is a plan rather than a kind of key.
+
 ### Two deliberate properties
 
 **The free tier stops rather than billing.** At zero credits the API answers

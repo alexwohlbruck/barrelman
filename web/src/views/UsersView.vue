@@ -7,7 +7,7 @@
  * a reason, and shows them that the reason is what the user will read.
  */
 import { computed, onMounted, ref } from 'vue'
-import { AlertTriangle, Ban, RefreshCw, Search, ShieldCheck, User } from 'lucide-vue-next'
+import { AlertTriangle, Ban, CreditCard, RefreshCw, Search, ShieldCheck, User } from 'lucide-vue-next'
 import PageHeader from '@/components/PageHeader.vue'
 import Badge from '@/components/ui/Badge.vue'
 import Button from '@/components/ui/Button.vue'
@@ -26,12 +26,13 @@ import {
   getAbuseSignals,
   getAdminUsers,
   resolveAbuseSignal,
+  setUserPlan,
   suspendUser,
   unsuspendUser,
 } from '@/lib/api'
 import { toast } from '@/lib/toast'
 import { formatNumber } from '@/lib/utils'
-import type { AbuseSignal, AdminUser, SuspensionKind } from '@/lib/types'
+import type { AbuseSignal, AdminUser, Plan, SuspensionKind } from '@/lib/types'
 
 const users = ref<AdminUser[]>([])
 const total = ref(0)
@@ -48,6 +49,15 @@ const target = ref<AdminUser | null>(null)
 const reason = ref('')
 const kind = ref<SuspensionKind>('tos-violation')
 const durationHours = ref('')
+
+const plans = ref<Plan[]>([])
+const planTarget = ref<AdminUser | null>(null)
+const nextPlan = ref('')
+const planReason = ref('')
+
+const planOptions = computed(() => plans.value.map((p) => ({ label: p.name, value: p.id })))
+/** The plan being assigned, for the warning about what it grants. */
+const chosenPlan = computed(() => plans.value.find((p) => p.id === nextPlan.value) ?? null)
 
 const kindOptions: { label: string; value: SuspensionKind }[] = [
   { label: 'Terms of service violation', value: 'tos-violation' },
@@ -72,6 +82,7 @@ async function load() {
     ])
     users.value = userPage.users
     total.value = userPage.total
+    plans.value = userPage.plans
     signals.value = abuse.signals
     openSignals.value = abuse.open
   } catch (err) {
@@ -118,6 +129,28 @@ async function reinstate(user: AdminUser) {
     await load()
   } catch (err) {
     fail(err, 'Could not reinstate the account')
+  } finally {
+    busy.value = ''
+  }
+}
+
+function openPlan(user: AdminUser) {
+  planTarget.value = user
+  nextPlan.value = user.plan
+  planReason.value = ''
+}
+
+async function confirmPlan() {
+  const user = planTarget.value
+  if (!user || nextPlan.value === user.plan) return
+  busy.value = user.id
+  try {
+    await setUserPlan(user.id, nextPlan.value, planReason.value.trim() || undefined)
+    toast({ title: `${user.email} moved to ${nextPlan.value}`, variant: 'success' })
+    planTarget.value = null
+    await load()
+  } catch (err) {
+    fail(err, 'Could not change the plan')
   } finally {
     busy.value = ''
   }
@@ -232,6 +265,11 @@ function describeDetail(detail: Record<string, unknown> | null) {
               <p v-else class="mt-1 text-xs text-muted-foreground">Joined {{ formatDate(account.createdAt) }}</p>
             </div>
 
+            <Button variant="ghost" size="sm" :disabled="busy === account.id" @click="openPlan(account)">
+              <CreditCard class="size-4" />
+              Plan
+            </Button>
+
             <Button
               v-if="account.suspension.suspended"
               variant="outline"
@@ -290,6 +328,51 @@ function describeDetail(detail: Record<string, unknown> | null) {
         </Card>
       </div>
     </template>
+
+    <!-- Plan -->
+    <Dialog :open="planTarget !== null" title="Change plan" @update:open="planTarget = null">
+      <div class="flex flex-col gap-4">
+        <p class="text-sm text-muted-foreground">
+          An operator override for <strong>{{ planTarget?.email }}</strong>, independent of what they have
+          paid for. A billing sync will not undo it.
+        </p>
+
+        <div class="flex flex-col gap-1.5">
+          <Label for="plan-id">Plan</Label>
+          <Select id="plan-id" v-model="nextPlan" :options="planOptions" />
+        </div>
+
+        <!--
+          Unmetered access is the one thing on this dialog that cannot be
+          undone by the next billing cycle, so it says out loud what it grants.
+        -->
+        <p
+          v-if="chosenPlan && !chosenPlan.metered"
+          class="rounded-md bg-warning/10 px-3 py-2 text-xs text-warning-foreground"
+        >
+          <strong>{{ chosenPlan.name }} is unmetered.</strong>
+          Requests are served without spending credits, bounded only by
+          {{ formatNumber(chosenPlan.requestsPerMinutePerIp ?? chosenPlan.requestsPerMinute) }} per minute
+          per visitor. Use it for demos you run yourself, not for customers.
+        </p>
+
+        <div class="flex flex-col gap-1.5">
+          <Label for="plan-reason">Reason</Label>
+          <Input id="plan-reason" v-model="planReason" placeholder="Why (recorded in the audit log)" />
+        </div>
+      </div>
+
+      <div class="mt-2 flex justify-end gap-2">
+        <Button variant="outline" @click="planTarget = null">Cancel</Button>
+        <Button
+          :disabled="nextPlan === planTarget?.plan || busy === planTarget?.id"
+          @click="confirmPlan"
+        >
+          <Spinner v-if="busy === planTarget?.id" class="size-4" />
+          <template v-else>Change plan</template>
+        </Button>
+      </div>
+    </Dialog>
 
     <!-- Suspend -->
     <Dialog :open="target !== null" title="Suspend account" @update:open="target = null">

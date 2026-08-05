@@ -8,11 +8,13 @@
 import { describe, test, expect } from 'bun:test'
 import {
   ALL_SCOPES,
+  allPlans,
   CREDIT_COSTS,
   creditCost,
   DEFAULT_PLAN,
   getPlan,
   groupForPath,
+  isPlanId,
   isValidScope,
   includedPricePerThousand,
   listPlans,
@@ -173,6 +175,71 @@ describe('plan definitions', () => {
   test('listPlans is sorted by rank', () => {
     const ranks = listPlans().map((p) => p.rank)
     expect(ranks).toEqual([...ranks].sort((a, b) => a - b))
+  })
+})
+
+/**
+ * The demo plan is the one place the API is served without charging for it, so
+ * the tests here are about containment: who can end up on it, where it can be
+ * seen, and what still bounds it once billing does not.
+ */
+describe('the demo plan', () => {
+  test('is the only unmetered plan', () => {
+    const unmetered = allPlans().filter((plan) => !plan.metered)
+    expect(unmetered.map((p) => p.id)).toEqual(['demo'])
+  })
+
+  test('is invisible to every customer-facing surface', () => {
+    // listPlans backs the pricing page, the plan picker and the product sync.
+    // Excluding it there rather than at each call site is what makes "cannot be
+    // bought" a property of the plan rather than of three separate callers.
+    expect(listPlans().map((p) => p.id)).not.toContain('demo')
+    expect(purchasablePlans().map((p) => p.id)).not.toContain('demo')
+    expect(allPlans().map((p) => p.id)).toContain('demo')
+  })
+
+  test('has no billing product, so no subscription can land on it', () => {
+    for (const plan of allPlans().filter((p) => p.internal)) {
+      expect(plan.polarProductEnv).toBeUndefined()
+    }
+  })
+
+  test('bounds each visitor separately, and everybody together', () => {
+    const demo = PLANS.demo!
+    expect(demo.requestsPerMinutePerIp).toBeGreaterThan(0)
+    // One visitor must not be able to consume the account's whole budget: that
+    // is the failure this layer exists to prevent.
+    expect(demo.requestsPerMinutePerIp!).toBeLessThan(demo.requestsPerMinute)
+  })
+
+  test('leaves one visitor room for real use of a map', () => {
+    // A MapLibre view is thirty to sixty tile requests. A limit below that
+    // would break the demo it exists to protect.
+    expect(PLANS.demo!.requestsPerMinutePerIp!).toBeGreaterThanOrEqual(120)
+  })
+
+  test('cannot start billing by accident', () => {
+    // Unmetered, so the allowance is never read. Zero rather than a plausible
+    // number, so flipping `metered` on would fail loudly instead of granting a
+    // silent allowance nobody chose.
+    expect(PLANS.demo!.monthlyCredits).toBe(0)
+    expect(PLANS.demo!.overageAllowed).toBe(false)
+  })
+
+  test('is not commercial-use, and is not the fallback for an unknown plan', () => {
+    expect(PLANS.demo!.commercialUse).toBe(false)
+    expect(getPlan('nonexistent').id).toBe('free')
+  })
+})
+
+describe('isPlanId', () => {
+  test('accepts real plans including internal ones, and rejects anything else', () => {
+    expect(isPlanId('free')).toBe(true)
+    expect(isPlanId('demo')).toBe(true)
+    expect(isPlanId('platinum')).toBe(false)
+    // Guards the admin endpoint against prototype keys reaching setPlan.
+    expect(isPlanId('constructor')).toBe(false)
+    expect(isPlanId('toString')).toBe(false)
   })
 })
 
