@@ -79,8 +79,12 @@ services:
       NUXT_PORT: "5200"
       # The hero demo calls the API server-side with this key. Over the compose
       # network, not localhost, since this runs inside a container.
+      #
+      # A real read-only brm_live_* key on its own account, not the shared
+      # service credential: the demo is metered and revocable like any other
+      # consumer, and revoking it cannot take Parchment down with it.
       BARRELMAN_API_URL: http://barrelman:5001
-      BARRELMAN_DEMO_KEY: ${BARRELMAN_API_KEY:-}
+      BARRELMAN_DEMO_KEY: ${BARRELMAN_DEMO_KEY:-}
     volumes:
       - ../barrelman-landing:/site
       # The shared design package is a `file:../parchment-design` dependency,
