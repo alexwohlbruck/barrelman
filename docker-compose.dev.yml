@@ -77,6 +77,10 @@ services:
       NUXT_PUBLIC_DOCS_URL: http://localhost:5001/docs
       NUXT_PUBLIC_API_URL: http://localhost:5001
       NUXT_PORT: "5200"
+      # The hero demo calls the API server-side with this key. Over the compose
+      # network, not localhost, since this runs inside a container.
+      BARRELMAN_API_URL: http://barrelman:5001
+      BARRELMAN_DEMO_KEY: ${BARRELMAN_API_KEY:-}
     volumes:
       - ../barrelman-landing:/site
       # The shared design package is a `file:../parchment-design` dependency,
