@@ -4,7 +4,15 @@
 #   1. Runs tests
 #   2. Builds and pushes Docker images to Docker Hub (tagged :latest + :<sha>)
 #
-# Watchtower running on the homelab automatically picks up new :latest images.
+# Deployment is NOT automatic. Production runs on vega2 (/opt/barrelman), and
+# Watchtower runs only on vega1 and vega7 — each instance watches its own Docker
+# socket, so nothing on vega2 is ever updated by it. Roll out a release by hand:
+#
+#   ssh vega2 'cd /opt/barrelman && docker compose pull && docker compose up -d'
+#
+# Note that `docker compose pull` refreshes every service's image, not just
+# Barrelman's — see "Updating a deployment" in README.md for the MOTIS /
+# GraphHopper binary-format caveat before pulling.
 #
 # Required GitHub secrets:
 #   DOCKERHUB_USERNAME  - Docker Hub username (e.g. alexwohlbruck)
