@@ -10,6 +10,7 @@
  */
 
 import { describe, test, expect, mock, beforeEach } from 'bun:test'
+import * as realCache from '../lib/cache'
 
 // ── Mocks ─────────────────────────────────────────────────────────────────────
 
@@ -24,7 +25,12 @@ const noop = { get: () => undefined, set: () => {} }
 
 mock.module('../db', () => ({ db: { execute: mockExecute } }))
 mock.module('../lib/embeddings', () => ({ generateQueryEmbedding: mockGenerateQueryEmbedding }))
+// `mock.module` is process-global and replaces the module wholesale for every
+// test file in the run, so spread the real exports and override only what this
+// file cares about — otherwise a later file importing e.g. `isochroneCache`
+// blows up with "Export named ... not found".
 mock.module('../lib/cache', () => ({
+  ...realCache,
   searchCache: {
     get: (k: string) => searchCacheStore.get(k),
     set: (k: string, v: any) => searchCacheStore.set(k, v),
@@ -238,8 +244,22 @@ describe('searchPlaces — location handling', () => {
     // Bug: `lat && lng` evaluates to false when lat=0, skipping proximity entirely.
     // Fix: `lat != null && lng != null` correctly handles lat=0 (Gulf of Guinea).
     await expect(searchPlaces({ query: 'coffee', lat: 0, lng: 0, autocomplete: true })).resolves.toBeDefined()
-    // With the fix, the location point is built and radius filter is applied
-    expect(mockExecute).toHaveBeenCalledTimes(4)
+    // With the fix, the location point is built and the layers run. Autocomplete
+    // with coordinates takes the local fast path: FTS + codes + abbrev (trigram
+    // is skipped), then — because the mocks return nothing — the global retry
+    // adds FTS + trigram. lat=0 being treated as falsy would have skipped the
+    // local path entirely and run the 4-layer global shape instead.
+    expect(mockExecute).toHaveBeenCalledTimes(5)
+  })
+
+  test('non-autocomplete search keeps the 4-layer global shape', async () => {
+    // Guards the fast path against leaking into submitted searches: those must
+    // still run FTS + trigram + codes + abbrev globally, with no local retry —
+    // plus the semantic layer, which fires here because the mocks return nothing
+    // and is suppressed for autocomplete.
+    await expect(searchPlaces({ query: 'coffee', lat: 35.22, lng: -80.84 })).resolves.toBeDefined()
+    expect(mockExecute).toHaveBeenCalledTimes(5)
+    expect(mockGenerateQueryEmbedding).toHaveBeenCalled()
   })
 
   test('proximity re-ranking elevates nearby result above higher-ranked distant one', async () => {
@@ -267,6 +287,104 @@ describe('searchPlaces — location handling', () => {
 })
 
 // ── Intersection search ──────────────────────────────────────────────────────
+
+describe('searchPlaces — autocomplete fast path', () => {
+  test('single-character query short-circuits without touching the database', async () => {
+    // A 1-char prefix matches a sizeable fraction of the tsvector index and
+    // measured ~20s uncached; its results are noise either way.
+    await expect(searchPlaces({ query: 'd', lat: 35.22, lng: -80.84, autocomplete: true }))
+      .resolves.toEqual([])
+    expect(mockExecute).not.toHaveBeenCalled()
+  })
+
+  test('the gate is autocomplete-only — a submitted 1-char search still runs', async () => {
+    await expect(searchPlaces({ query: 'd', lat: 35.22, lng: -80.84 })).resolves.toBeDefined()
+    expect(mockExecute).toHaveBeenCalled()
+  })
+
+  test('local pass skips trigram; codes and abbrev layers still run', async () => {
+    const local = makePlaces(6)
+    mockExecute
+      .mockImplementationOnce(async () => local) // FTS (local)
+      .mockImplementationOnce(async () => [])    // codes
+      .mockImplementationOnce(async () => [])    // nameAbbrev
+    const results = await searchPlaces({ query: 'sycamore', lat: 35.22, lng: -80.84, autocomplete: true })
+    // 6 local hits clears AUTOCOMPLETE_FALLBACK_MIN, so no global retry.
+    expect(mockExecute).toHaveBeenCalledTimes(3)
+    expect(results).toHaveLength(6)
+  })
+
+  test('a zero-result local pass triggers a global retry', async () => {
+    const faraway = { id: 'node/global', name: 'Faraway Match', text_rank: 0.95, distance_m: 900000 }
+    mockExecute
+      .mockImplementationOnce(async () => [])        // FTS (local) — nothing
+      .mockImplementationOnce(async () => [])        // codes
+      .mockImplementationOnce(async () => [])        // nameAbbrev
+      .mockImplementationOnce(async () => [faraway]) // FTS (global retry)
+      .mockImplementationOnce(async () => [])        // trigram (global retry)
+    const ids = (await searchPlaces({ query: 'sycamore', lat: 35.22, lng: -80.84, autocomplete: true }))
+      .map((r: any) => r.id)
+    expect(mockExecute).toHaveBeenCalledTimes(5)
+    expect(ids).toContain('node/global')
+  })
+
+  test('a single local hit is a match, not a miss — no global retry', async () => {
+    // The retry is dominated by the global trigram layer (240-330ms measured).
+    // A precise query matching exactly one place is the success case; retrying
+    // it just to pad the list with fuzzy near-misses cost ~250ms on every
+    // specific query.
+    const nearby = { id: 'node/local', name: 'Divine Barrel Brewing', text_rank: 0.9, distance_m: 300 }
+    mockExecute
+      .mockImplementationOnce(async () => [nearby]) // FTS (local)
+      .mockImplementationOnce(async () => [])       // codes
+      .mockImplementationOnce(async () => [])       // nameAbbrev
+    const ids = (await searchPlaces({ query: 'divine barrel', lat: 35.22, lng: -80.84, autocomplete: true }))
+      .map((r: any) => r.id)
+    expect(mockExecute).toHaveBeenCalledTimes(3)
+    expect(ids).toEqual(['node/local'])
+  })
+
+  test('address-intent queries skip the global retry — Pelias covers them', async () => {
+    // A leading digit means the user is typing an address. Pelias answers those
+    // in <10ms in parallel; a global POI scan for an address-shaped string
+    // costs ~250ms and returns street rows Pelias already supplies.
+    mockExecute
+      .mockImplementationOnce(async () => []) // FTS (local)
+      .mockImplementationOnce(async () => []) // codes
+      .mockImplementationOnce(async () => []) // nameAbbrev
+    await searchPlaces({ query: '1600 e 7th st', lat: 35.22, lng: -80.84, autocomplete: true })
+    expect(mockExecute).toHaveBeenCalledTimes(3)
+  })
+
+  test('short prefixes never trigger the global retry', async () => {
+    // "syc" is under AUTOCOMPLETE_FALLBACK_MIN_QUERY: matching it globally is
+    // the exact scan the fast path exists to avoid.
+    await searchPlaces({ query: 'syc', lat: 35.22, lng: -80.84, autocomplete: true })
+    expect(mockExecute).toHaveBeenCalledTimes(3)
+  })
+
+  test('autocomplete without coordinates falls back to the global shape', async () => {
+    // No viewport means no box to bound the scan, so the fast path can't apply.
+    await searchPlaces({ query: 'sycamore', autocomplete: true })
+    expect(mockExecute).toHaveBeenCalledTimes(4)
+  })
+
+  test('candidate pool is trimmed to limit after the proximity re-rank', async () => {
+    // The local pass over-fetches so the re-rank can see the whole candidate
+    // set; the caller must still get exactly `limit` rows back.
+    const pool = Array.from({ length: 60 }, (_, i) => ({
+      id: `node/${i}`, name: `Place ${i}`, text_rank: 0.5, distance_m: (60 - i) * 100,
+    }))
+    mockExecute
+      .mockImplementationOnce(async () => pool)
+      .mockImplementationOnce(async () => [])
+      .mockImplementationOnce(async () => [])
+    const results = await searchPlaces({ query: 'sycamore', lat: 35.22, lng: -80.84, limit: 10, autocomplete: true })
+    expect(results).toHaveLength(10)
+    // Re-ranked by proximity: the nearest (last generated) must lead.
+    expect(results[0].id).toBe('node/59')
+  })
+})
 
 describe('searchPlaces — intersections', () => {
   test('intersection result (osm_type X) is returned alongside regular places', async () => {

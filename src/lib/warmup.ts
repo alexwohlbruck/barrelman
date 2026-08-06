@@ -109,28 +109,50 @@ async function warmOnce(): Promise<number> {
 /**
  * Start the keep-warm loop. Fire-and-forget — never throws into startup, and
  * the periodic timer is `unref`'d so it can't keep the process alive on its own.
+ *
+ * Idempotent across `bun --hot` reloads: every reload re-runs index.ts and
+ * calls this again, but module-level state does NOT survive the reload — only
+ * globalThis does. Without the guard each edit stacked another interval whose
+ * stale-generation closures kept firing MOTIS fan-outs forever (observed as
+ * one warmup burst per edit, and eventually a rejection escaping a stale
+ * closure's catch and a wedged listener).
  */
+const WARMUP_TIMER_KEY = '__barrelmanWarmupTimer'
+const WARMUP_LAST_PASS_KEY = '__barrelmanWarmupLastPass'
+
 export function startTransitWarmup(): void {
-  const t0 = Date.now()
-  // Warm-up is best-effort: a warmOnce() rejection (e.g. MOTIS returns 404 for a
-  // stale sample stop) must never surface as an unhandled rejection — that kills
-  // the whole bun process and takes search/geocoding down with it. Always .catch.
-  void warmOnce()
-    .then((n) => {
-      console.log(
-        `MOTIS warmup: first pass warmed ${n} feed(s) in ${Date.now() - t0}ms`,
-      )
-    })
-    .catch((e) => console.warn('MOTIS warmup (first pass) failed:', e?.message ?? e))
-  // Pricing changes a few times a year (12h cache TTL), so warm it once.
-  void warmAllPricing().catch(() => {})
+  const g = globalThis as Record<string, any>
+  if (g[WARMUP_TIMER_KEY]) clearInterval(g[WARMUP_TIMER_KEY])
+
+  // Skip the immediate first pass when one ran recently — a burst of hot
+  // reloads (editing files during dev) shouldn't fire a burst of warmups.
+  const lastPass = Number(g[WARMUP_LAST_PASS_KEY]) || 0
+  if (Date.now() - lastPass > 30_000) {
+    g[WARMUP_LAST_PASS_KEY] = Date.now()
+    const t0 = Date.now()
+    // Warm-up is best-effort: a warmOnce() rejection (e.g. MOTIS returns 404 for
+    // a stale sample stop) must never surface as an unhandled rejection. Always
+    // .catch, even with the process-level guard in index.ts.
+    void warmOnce()
+      .then((n) => {
+        console.log(
+          `MOTIS warmup: first pass warmed ${n} feed(s) in ${Date.now() - t0}ms`,
+        )
+      })
+      .catch((e) => console.warn('MOTIS warmup (first pass) failed:', e?.message ?? e))
+    // Pricing changes a few times a year (12h cache TTL), so warm it once.
+    void warmAllPricing().catch(() => {})
+  }
+
   const timer = setInterval(() => {
     // Stand down while live traffic is already keeping MOTIS hot — warm-up is
     // only here to fill genuine idle gaps, not to compete with real requests.
     if (transitIdleMs() < WARMUP_INTERVAL_MS) return
+    g[WARMUP_LAST_PASS_KEY] = Date.now()
     void warmOnce().catch((e) => console.warn('MOTIS warmup failed:', e?.message ?? e))
   }, WARMUP_INTERVAL_MS)
   timer.unref?.()
+  g[WARMUP_TIMER_KEY] = timer
   console.log(
     `MOTIS warmup: scheduled (every ${WARMUP_INTERVAL_MS / 1000}s) to keep transit routing hot`,
   )

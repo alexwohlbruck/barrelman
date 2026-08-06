@@ -1,10 +1,11 @@
 import Elysia, { t } from 'elysia'
-import { authMiddleware } from '../middleware/auth'
+import { apiAuth, apiAuthAfter } from '../middleware/api-auth'
 import { searchPlaces as _searchPlaces } from '../services/search.service'
 
 export function createSearchRoutes(deps = { searchPlaces: _searchPlaces }) {
   return new Elysia()
-    .use(authMiddleware)
+    .onBeforeHandle(apiAuth('search'))
+    .onAfterHandle(apiAuthAfter)
     .post(
       '/search',
       async ({ body, request }) => {

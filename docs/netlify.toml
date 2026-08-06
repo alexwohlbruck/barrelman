@@ -1,0 +1,30 @@
+# Netlify config for the Barrelman docs site (Next.js + Fumadocs).
+# When linking this repo, set "Base directory" to "docs" in the Netlify UI.
+#
+# The plugin is declared here rather than left to auto-detection, which is what
+# the note in its place used to assume. Netlify did identify the framework as
+# `next` on its own, and still ran a bare `next build` and published the static
+# assets with no server attached: 39 files, no functions, no redirect rules, and
+# every route answering 404 — including `/`. The plugin is the part that turns
+# `.next` into a served site, and `/api/search` is a dynamic route that cannot
+# be a static file at all.
+[build]
+  # Build from a clean tree. Cheap on a 13-page site, and it removes one
+  # variable from any future "works locally, 500s deployed" hunt.
+  #
+  # It was added believing it fixed one of those, and it did not: after the
+  # search endpoint moved off /api/search, the deployed bundle kept shipping
+  # the old route handler and that URL answered 500 while every sibling page
+  # served fine. The stale chunk survived deleting the source, committing it,
+  # a fresh commit hash, and this clean. What actually fixed it was deploying
+  # the identical source to a *new Netlify site* — so the fault was per-site
+  # deploy state, not anything in this repo. Worth knowing if it recurs: the
+  # fix is a new site, not another redeploy.
+  command = "rm -rf .next .source && bun run build"
+  publish = ".next"
+
+[build.environment]
+  NODE_VERSION = "20"
+
+[[plugins]]
+  package = "@netlify/plugin-nextjs"

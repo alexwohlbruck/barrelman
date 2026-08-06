@@ -11,14 +11,52 @@ import {
   listJobs,
   getJob,
   cancelJob,
-  subscribeJob,
+  readLogsSince,
   jobStats,
   JobConflictError,
 } from '../services/job-runner.service'
 import { getDataMetrics, getServiceStatuses } from '../services/admin-metrics.service'
+import {
+  listRegions,
+  getRegion,
+  createRegion,
+  updateRegion,
+  deleteRegion,
+  type RegionInput,
+} from '../services/region-store.service'
+import {
+  searchBoundaries,
+  getBoundary,
+  refreshBoundaryCatalog,
+  deriveRegion,
+  countBoundaries,
+  catalogFetchedAt,
+} from '../services/boundary-catalog.service'
+import { GLOBAL_KEY } from '../config/regions'
+import { accountsEnabled } from '../config/accounts.config'
 
 const selfPort = Number(process.env.PORT) || 5001
 const SELF_BASE = `http://127.0.0.1:${selfPort}`
+
+// Validation for the region CRUD body. bbox is [west, south, east, north].
+const peliasSchema = t.Object({
+  openaddresses: t.Optional(t.Array(t.String())),
+  wofIds: t.Optional(t.Array(t.String())),
+  tigerStates: t.Optional(t.Array(t.Number())),
+  countryCode: t.Optional(t.String()),
+})
+const regionFields = {
+  label: t.String({ minLength: 1 }),
+  osmExtracts: t.Optional(t.Array(t.String())),
+  osmReplication: t.Optional(t.Array(t.String())),
+  bbox: t.Tuple([t.Number(), t.Number(), t.Number(), t.Number()]),
+  gtfsRegion: t.Optional(t.String()),
+  pelias: t.Optional(peliasSchema),
+  enabled: t.Optional(t.Boolean()),
+}
+const createRegionBody = t.Object({ key: t.String({ minLength: 1 }), ...regionFields })
+const updateRegionBody = t.Object(regionFields)
+const KEY_RE = /^[a-z0-9][a-z0-9-]*$/
 
 /**
  * Public (unauthenticated) endpoint so the console's login screen can discover
@@ -29,8 +67,11 @@ export const adminConsoleConfigRoutes = new Elysia({ prefix: '/admin' }).get(
   () => ({
     authRequired: Boolean(process.env.BARRELMAN_ADMIN_KEY || process.env.BARRELMAN_API_KEY),
     usingDedicatedAdminKey: Boolean(process.env.BARRELMAN_ADMIN_KEY),
+    // The console signs in with an account session; the admin key remains
+    // accepted for scripts and CI.
+    accountsEnabled,
     apiName: 'Barrelman',
-    version: '0.3.0',
+    version: '0.4.0',
   }),
   { detail: { summary: 'Admin console config', tags: ['Admin'] } },
 )
@@ -50,6 +91,131 @@ export const adminConsoleRoutes = new Elysia({ prefix: '/admin' })
   // Lightweight probe used by the login screen to validate a supplied key.
   .get('/verify', () => ({ ok: true }), { detail: { summary: 'Verify admin key', tags: ['Admin'] } })
 
+  // ── Import regions ──────────────────────────────────────────────────
+  // The DB-backed region store (seeded from config/regions.json) that drives
+  // which geographies the OSM/GTFS/GBFS/Pelias importers fetch. Editing here
+  // changes what a subsequent import (run with REGIONS=<key>) pulls in.
+  .get('/regions', async () => ({ regions: await listRegions() }), {
+    detail: { summary: 'List import regions', tags: ['Admin'] },
+  })
+  .get(
+    '/regions/:key',
+    async ({ params, set }) => {
+      const region = await getRegion(params.key)
+      if (!region) {
+        set.status = 404
+        return { error: 'Region not found' }
+      }
+      return { region }
+    },
+    { detail: { summary: 'Get an import region', tags: ['Admin'] } },
+  )
+  .post(
+    '/regions',
+    async ({ body, set }) => {
+      const b = body as RegionInput
+      if (!KEY_RE.test(b.key)) {
+        set.status = 400
+        return { error: 'Key must be lowercase letters, numbers and dashes (e.g. "north-carolina")' }
+      }
+      if (b.key === GLOBAL_KEY) {
+        set.status = 400
+        return { error: `"${GLOBAL_KEY}" is a reserved region key` }
+      }
+      if (await getRegion(b.key)) {
+        set.status = 409
+        return { error: `Region "${b.key}" already exists` }
+      }
+      const region = await createRegion(b)
+      set.status = 201
+      return { region }
+    },
+    { body: createRegionBody, detail: { summary: 'Create an import region', tags: ['Admin'] } },
+  )
+  .put(
+    '/regions/:key',
+    async ({ params, body, set }) => {
+      const region = await updateRegion(params.key, { key: params.key, ...(body as Omit<RegionInput, 'key'>) })
+      if (!region) {
+        set.status = 404
+        return { error: 'Region not found' }
+      }
+      return { region }
+    },
+    { body: updateRegionBody, detail: { summary: 'Update an import region', tags: ['Admin'] } },
+  )
+  .delete(
+    '/regions/:key',
+    async ({ params, set }) => {
+      if (params.key === GLOBAL_KEY) {
+        set.status = 400
+        return { error: 'The global (planet) region cannot be deleted' }
+      }
+      const ok = await deleteRegion(params.key)
+      if (!ok) {
+        set.status = 404
+        return { error: 'Region not found' }
+      }
+      return { ok: true }
+    },
+    { detail: { summary: 'Delete an import region', tags: ['Admin'] } },
+  )
+
+  // ── Boundary catalog ────────────────────────────────────────────────
+  // Search Geofabrik's published extracts by name and turn one into a fully
+  // populated region definition, so defining a region is "type Colorado"
+  // instead of hand-assembling six URLs and a bounding box.
+  .get(
+    '/boundaries',
+    async ({ query }) => {
+      const q = (query as Record<string, string>).q ?? ''
+      const limit = Math.min(Number((query as Record<string, string>).limit) || 20, 100)
+      const [count, fetchedAt] = await Promise.all([countBoundaries(), catalogFetchedAt()])
+      return {
+        catalog: { count, fetchedAt },
+        boundaries: q ? await searchBoundaries(q, limit) : [],
+      }
+    },
+    {
+      query: t.Object({ q: t.Optional(t.String()), limit: t.Optional(t.String()) }),
+      detail: { summary: 'Search the boundary catalog', tags: ['Admin'] },
+    },
+  )
+  .post(
+    '/boundaries/refresh',
+    async ({ set }) => {
+      try {
+        return await refreshBoundaryCatalog()
+      } catch (err) {
+        set.status = 502
+        return { error: err instanceof Error ? err.message : 'Boundary catalog refresh failed' }
+      }
+    },
+    { detail: { summary: 'Refresh the boundary catalog from Geofabrik', tags: ['Admin'] } },
+  )
+  .post(
+    '/boundaries/resolve',
+    async ({ body, set }) => {
+      // A preview, not a write: the console shows what was auto-filled (and any
+      // warnings) and the operator saves it through the normal region endpoint.
+      const { id } = body as { id: string }
+      const boundary = await getBoundary(id)
+      if (!boundary) {
+        set.status = 404
+        return {
+          error:
+            `Unknown boundary "${id}". If the catalog is empty, refresh it first ` +
+            `(POST /admin/boundaries/refresh or bun run scripts/fetch-boundaries.ts).`,
+        }
+      }
+      return await deriveRegion(boundary)
+    },
+    {
+      body: t.Object({ id: t.String({ minLength: 1 }) }),
+      detail: { summary: 'Derive a region definition from a boundary', tags: ['Admin'] },
+    },
+  )
+
   // ── Scripts manifest ────────────────────────────────────────────────
   .get(
     '/scripts',
@@ -67,14 +233,14 @@ export const adminConsoleRoutes = new Elysia({ prefix: '/admin' })
   // ── Run a script ────────────────────────────────────────────────────
   .post(
     '/scripts/:id/run',
-    ({ params, body, set }) => {
+    async ({ params, body, set }) => {
       const script = getScript(params.id)
       if (!script) {
         set.status = 404
         return { error: `Unknown script: ${params.id}` }
       }
       try {
-        const job = startJob(params.id, (body as any)?.params ?? {})
+        const job = await startJob(params.id, (body as any)?.params ?? {})
         set.status = 201
         return { job }
       } catch (err) {
@@ -93,14 +259,14 @@ export const adminConsoleRoutes = new Elysia({ prefix: '/admin' })
   )
 
   // ── Jobs ────────────────────────────────────────────────────────────
-  .get('/jobs', () => ({ jobs: listJobs(), stats: jobStats() }), {
+  .get('/jobs', async () => ({ jobs: await listJobs(), stats: await jobStats() }), {
     detail: { summary: 'List jobs', tags: ['Admin'] },
   })
 
   .get(
     '/jobs/:id',
-    ({ params, set }) => {
-      const found = getJob(params.id)
+    async ({ params, set }) => {
+      const found = await getJob(params.id)
       if (!found) {
         set.status = 404
         return { error: 'Job not found' }
@@ -112,26 +278,29 @@ export const adminConsoleRoutes = new Elysia({ prefix: '/admin' })
 
   .post(
     '/jobs/:id/cancel',
-    ({ params, set }) => {
-      const result = cancelJob(params.id)
+    async ({ params, set }) => {
+      const result = await cancelJob(params.id)
       if (!result.ok) set.status = 409
       return result
     },
     { detail: { summary: 'Cancel a running job', tags: ['Admin'] } },
   )
 
-  // ── Live log stream (SSE over fetch; consumed with a streaming reader) ──
+  // ── Live log stream (SSE) ───────────────────────────────────────────
+  // Jobs may run in a different process (the ops worker), so we can't use an
+  // in-memory event emitter — poll the DB job store for new log rows + status.
   .get(
     '/jobs/:id/stream',
-    ({ params, set }) => {
-      const existing = getJob(params.id)
+    async ({ params, set }) => {
+      const existing = await getJob(params.id)
       if (!existing) {
         set.status = 404
         return { error: 'Job not found' }
       }
 
-      let unsub: (() => void) | undefined
+      const id = params.id
       const encoder = new TextEncoder()
+      let closed = false
 
       const stream = new ReadableStream<Uint8Array>({
         start(controller) {
@@ -139,37 +308,48 @@ export const adminConsoleRoutes = new Elysia({ prefix: '/admin' })
             try {
               controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`))
             } catch {
-              /* controller closed */
+              closed = true
             }
           }
+          const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+          const terminal = (s: string) => s !== 'running' && s !== 'queued'
 
-          // Replay backlog, then stream live.
-          for (const line of existing.logs) send('log', line)
-          send('status', existing.job)
-
-          if (existing.job.status !== 'running') {
-            controller.close()
-            return
-          }
-
-          unsub = subscribeJob(params.id, (evt) => {
-            if (evt.type === 'log') {
-              send('log', evt.line)
-            } else {
-              send('status', evt.job)
-              if (evt.job.status !== 'running') {
-                unsub?.()
-                try {
-                  controller.close()
-                } catch {
-                  /* already closed */
-                }
+          ;(async () => {
+            let nextSeq = 0
+            for (const line of existing.logs) {
+              send('log', line)
+              nextSeq = line.seq + 1
+            }
+            let lastStatus = existing.job.status
+            send('status', existing.job)
+            if (terminal(existing.job.status)) {
+              controller.close()
+              return
+            }
+            while (!closed) {
+              await sleep(1000)
+              const newLogs = await readLogsSince(id, nextSeq)
+              for (const line of newLogs) {
+                send('log', line)
+                nextSeq = line.seq + 1
               }
+              const cur = await getJob(id)
+              if (!cur) break
+              if (cur.job.status !== lastStatus) {
+                lastStatus = cur.job.status
+                send('status', cur.job)
+              }
+              if (terminal(cur.job.status)) break
             }
-          })
+            try {
+              controller.close()
+            } catch {
+              /* already closed */
+            }
+          })()
         },
         cancel() {
-          unsub?.()
+          closed = true
         },
       })
 

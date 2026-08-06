@@ -10,10 +10,12 @@
     "typecheck": "vue-tsc --noEmit"
   },
   "dependencies": {
+    "@simplewebauthn/browser": "^10.0.0",
     "@vueuse/core": "^12.5.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "lucide-vue-next": "^0.469.0",
+    "maplibre-gl": "^5.24.0",
     "reka-ui": "^2.2.0",
     "tailwind-merge": "^2.6.0",
     "vue": "^3.5.13",

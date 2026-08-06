@@ -11,8 +11,21 @@ import { fileURLToPath, URL } from 'node:url'
 // via BARRELMAN_API_URL in docker-compose.dev.yml.
 const apiTarget = process.env.BARRELMAN_API_URL || 'http://localhost:5001'
 
+/**
+ * Where the console is mounted, which is now a property of the deployment
+ * rather than of the code.
+ *
+ * `/console/` is still the default, because that is where the API serves it
+ * (src/lib/console-ui.ts) and that is what a self-hosted instance with one
+ * origin gets. Behind the public edge it is served at the root of
+ * console.barrelman.dev instead, so it is built with CONSOLE_BASE=/ — see the
+ * Caddyfile. Vite bakes this into every asset URL, so a build made for one
+ * layout 404s under the other; it cannot be switched at runtime.
+ */
+const base = process.env.CONSOLE_BASE || '/console/'
+
 export default defineConfig({
-  base: '/console/',
+  base,
   build: { target: 'es2022' },
   plugins: [vue(), tailwindcss()],
   resolve: {
@@ -24,11 +37,16 @@ export default defineConfig({
     host: true, // bind 0.0.0.0 so the port is reachable from outside the container
     port: 5199,
     strictPort: true,
-    proxy: {
-      '/admin': {
-        target: apiTarget,
-        changeOrigin: true,
-      },
-    },
+    proxy: Object.fromEntries(
+      // Everything the console talks to. `changeOrigin` is deliberately off for
+      // the account surface: the API's CSRF check compares the request Origin
+      // against its allow-list, and rewriting it to the upstream host would
+      // make every cookie-authenticated POST from the dev server look
+      // same-origin, hiding CSRF regressions until production.
+      ['/admin', '/auth', '/account', '/billing'].map((path) => [
+        path,
+        { target: apiTarget, changeOrigin: false },
+      ]),
+    ),
   },
 })

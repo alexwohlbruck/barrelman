@@ -1,0 +1,99 @@
+# Public edge for barrelman.dev.
+#
+# Two hosts, one origin each, and the reason it is worth a proxy at all is the
+# session cookie. The console authenticates with a cookie and fetches with
+# `credentials: 'same-origin'` (web/src/lib/api.ts), so the browser attaches it
+# only when the page and the API share an origin — scheme, host and port, not
+# just the registrable domain. Serving the console from one host and the API
+# from another would send every request unauthenticated. So console.barrelman.dev
+# serves the console *and* proxies the four prefixes it calls, and the two never
+# leave the same origin.
+#
+#   barrelman.dev            the landing page. Not here — Netlify serves it.
+#   docs.barrelman.dev       the docs. Not here either — Netlify.
+#   api.barrelman.dev        this file
+#   console.barrelman.dev    this file
+#
+# TLS is automatic. Both names are under a .dev domain, which is in the HSTS
+# preload list, so browsers refuse plain HTTP with no click-through: a missing
+# certificate is not a warning here, it is an outage. Caddy solicits and renews
+# Let's Encrypt certificates itself, which is the whole reason to prefer it over
+# hand-rolled nginx for this job.
+#
+# Ports 80 and 443 must both reach this container from the internet. 80 is not
+# optional — it carries the ACME HTTP-01 challenge, and without it no
+# certificate is ever issued.
+
+{
+	# Where Let's Encrypt sends expiry warnings. Override ACME_EMAIL with an
+	# address you actually read; the alternative is finding out from a user
+	# that the certificate lapsed.
+	#
+	# The default is not decoration. A bare {$ACME_EMAIL} expands to nothing
+	# when the variable is unset, and Caddy rejects the config outright —
+	# "wrong argument count or unexpected line ending after 'email'" — so the
+	# proxy would fail to start at all on a host that had not set it.
+	email {$ACME_EMAIL:admin@barrelman.dev}
+}
+
+# ── The API ───────────────────────────────────────────────────────────────────
+#
+# Everything, unmodified. The public data routes (search, geocode, place,
+# contains, children, route, isochrone, transit, gbfs, brands, tiles, health)
+# and the account routes all live on the same Elysia app, and the API's own
+# auth layer decides what needs a key.
+api.barrelman.dev {
+	# The service name from docker-compose.yml, not localhost: this runs as a
+	# container on the same compose network.
+	#
+	# X-Forwarded-For is left to Caddy, which appends the client address by
+	# default — exactly one hop, which is what the API's throttling expects.
+	# Set BARRELMAN_TRUSTED_PROXY_HOPS=1 (see .env.example): the API counts the
+	# header from the right to find the address its own proxy observed. Too high
+	# and callers spoof past the per-address limits; too low and everyone lands
+	# in one bucket, throttled as a single client. Both fail quietly.
+	reverse_proxy barrelman:5001
+}
+
+# ── The console ───────────────────────────────────────────────────────────────
+console.barrelman.dev {
+	# The four prefixes web/src/lib/api.ts calls. Proxied to the API so they are
+	# same-origin with the page and the session cookie rides along.
+	#
+	# Order matters: this must be matched before the file server, or try_files
+	# would answer /auth/session with index.html and the console would parse
+	# HTML as JSON on every request.
+	@api path /account* /admin* /auth* /billing*
+	handle @api {
+		reverse_proxy barrelman:5001
+	}
+
+	# Everything else is the built SPA, served straight from disk rather than
+	# proxied through the API. Mount web/dist here read-only.
+	handle {
+		root * /srv/console
+
+		# Client-side routing: a deep link like /keys is not a file, so hand it
+		# index.html and let the router resolve it.
+		#
+		# The middle clause is load-bearing. With just `{path} /index.html`,
+		# a request for `/` matches {path} — the directory exists — and stops
+		# there, and the console's own front door answers with an empty body.
+		# Verified against a stub: `/` served nothing before this, index.html
+		# after.
+		try_files {path} {path}/index.html /index.html
+		file_server
+	}
+
+	encode gzip zstd
+}
+
+# The console must be built for this host with CONSOLE_BASE=/ — see
+# web/vite.config.ts. Built with its default /console/ base, every asset URL
+# would point at /console/assets/… and 404 against the layout above.
+#
+# WebAuthn: set BARRELMAN_CONSOLE_ORIGIN=https://console.barrelman.dev, and set
+# the relying-party ID to barrelman.dev rather than the console host. The RP ID
+# is the one value that cannot be changed later without invalidating every
+# passkey already registered, and a parent-domain RP ID keeps them working if
+# the console ever moves.

@@ -11,7 +11,15 @@
 import { describe, test, expect } from 'bun:test'
 
 // ── Guard: skip when DB is unreachable or mocked by sibling unit tests ─────
-const DATABASE_URL = process.env.DATABASE_URL
+/**
+ * Integration tests opt in explicitly rather than sniffing whether the `db`
+ * module happens to be mocked. That sniff only recognised one mocking style and
+ * depended on which test file bun loaded first, so adding unrelated test files
+ * could flip these from "skipped" to "running against a mock and failing".
+ *
+ * `bun run test:integration` sets this; a plain `bun test` skips them.
+ */
+const DATABASE_URL = process.env.BARRELMAN_INTEGRATION_TESTS ? process.env.DATABASE_URL : undefined
 let getPlace: typeof import('./place.service').getPlace
 let canRun = false
 

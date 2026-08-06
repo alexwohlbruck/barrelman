@@ -75,3 +75,16 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Build and push barrelman-ops (console job worker)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile.ops
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            alexwohlbruck/barrelman-ops:${{ github.sha }}
+            alexwohlbruck/barrelman-ops:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+

@@ -7,33 +7,76 @@ Barrelman is the self-hosted OSM search engine that powers [Parchment](https://g
 ## Architecture
 
 ```
-OSM PBF extract (Geofabrik)
-        │
-        ▼
-  osm2pgsql (flex)   ←── import/osm2pgsql-flex.lua
-        │
+         REGIONS  ──►  region registry  ──►  what every importer fetches
+                       (config/regions.json + import_regions table)
+                              │
+        ┌─────────────────────┼──────────────┬──────────────┐
+        ▼                     ▼              ▼              ▼
+  OSM PBF extract        GTFS feeds      GBFS systems   OpenAddresses
+   (Geofabrik)          (Transitland)                    + WOF + TIGER
+        │                     │              │              │
+        ▼                     ▼              ▼              ▼
+  osm2pgsql (flex)         MOTIS          geo_* tables     Pelias
+  ←─ osm2pgsql-flex.lua   (transit)                      (addresses,
+        │                                                 opt-in profile)
         ▼
   geo_places table   ←── import/post-import.sql (indexes, addr extraction)
-  (PostGIS)          ←── import/generate-abbreviations.ts
-        │             ←── import/embed-places.ts (Ollama embeddings, optional)
+  (PostGIS)          ←── import/embed-places.ts (Ollama embeddings, optional)
+        │
         ▼
-  Barrelman API      ←── src/routes/
+  Barrelman API      ←── src/routes/    ── /console (admin UI)
   (Elysia / Bun)
         │
-  ┌─────┼──────┐
-  │     │      │
-Martin  │  GraphHopper
-(tiles) │  (routing)
+  ┌─────┼───────┬────────────┐
+  │     │       │            │
+Martin  │  GraphHopper     MOTIS
+(tiles) │   (streets)     (transit)
         │
   Parchment API
 ```
 
 | Service | Image | Port | Description |
 |---------|-------|------|-------------|
-| `barrelman` | `alexwohlbruck/barrelman` | 3001 | REST API (Elysia/Bun) |
-| `barrelman-db` | `alexwohlbruck/barrelman-db` | 5433 | PostgreSQL + PostGIS + pgvector |
-| `martin` | `ghcr.io/maplibre/martin` | 3002 | Vector tile server |
-| `graphhopper` | `israelhikingmap/graphhopper` | 8990 | Routing engine |
+| `barrelman` | `alexwohlbruck/barrelman` | 5001 | REST API (Elysia/Bun) |
+| `barrelman-db` | `alexwohlbruck/barrelman-db` | 5434 | PostgreSQL + PostGIS + pgvector |
+| `martin` | `ghcr.io/maplibre/martin` | 5002 | Vector tile server |
+| `graphhopper` | `israelhikingmap/graphhopper` | 5003 | Street routing engine (walk / bike / car) |
+| `motis` | `ghcr.io/motis-project/motis` | 5004 | Transit routing engine (schedules, one-to-all) |
+| `pelias_api` | `pelias/api` | 4000 | Address geocoder — opt-in, see below |
+
+Ports are host-side. Services reach each other over the Compose network on
+their own container ports, so remapping a host port here changes nothing
+internal.
+
+### Optional services (profiles)
+
+Everything above comes up with `docker compose up -d` except the address
+geocoder, which is included from [`pelias/`](pelias/README.md) and gated behind
+profiles — Elasticsearch alone wants a 1 GB heap, and address search isn't
+needed to run Barrelman:
+
+```bash
+docker compose up -d                                       # core stack
+docker compose --profile pelias up -d                      # + geocoder (api + elasticsearch)
+docker compose --profile pelias --profile pelias-full up -d  # + libpostal / pip / interpolation
+```
+
+It's one Compose project, so everything shares a network and shows as a single
+group in Docker UIs. Provisioning the geocoder's index is a separate, much
+longer job — see [`pelias/README.md`](pelias/README.md).
+
+---
+
+## Documentation
+
+| | |
+|---|---|
+| [Development](docs/development.md) | Running the stack with Docker Compose |
+| [Accounts & API keys](docs/accounts.md) | Sign-in, sessions, keys, scopes |
+| [Pricing & credits](docs/pricing.md) | Endpoint costs and plans |
+| [Abuse controls](docs/abuse-controls.md) | Throttling, suspension, terms |
+| [Polar setup](docs/polar-setup.md) | Wiring up billing |
+| [Configuration](docs/configuration.md) | Every environment variable |
 
 ---
 
@@ -70,32 +113,33 @@ curl http://localhost:5001/health
 # {"status":"ok","database":"connected"}
 ```
 
-### 5. Import OSM data
+### 5. Choose a region and import
 
-Download a PBF and run the import inside the DB container (all tools are baked in):
+Barrelman imports named **regions**, not "everything". Fetch the boundary
+catalog once, then define a region by name:
 
 ```bash
-# Download region (example: North Carolina)
-docker exec barrelman-db bash -c '
-  wget -O /data/region.osm.pbf \
-    https://download.geofabrik.de/north-america/us/north-carolina-latest.osm.pbf
-'
+# One-time: cache the index of every importable region (no API key needed)
+docker exec barrelman bun run scripts/fetch-boundaries.ts --search colorado
+```
 
-# Run the import detached (survives SSH disconnects)
-docker exec -d barrelman-db bash -c '
-  osm2pgsql --create --slim --output=flex \
-    --style=/app/import/osm2pgsql-flex.lua \
-    -d "$DATABASE_URL" /data/region.osm.pbf \
-  && psql "$DATABASE_URL" -f /app/import/post-import.sql \
-  && echo IMPORT_COMPLETE || echo IMPORT_FAILED
-'
+Add `REGIONS=colorado` to your `.env` (or create the region in the admin
+console under **Regions → Add by name**, which fills in the download URLs,
+bounding box, transit search area and address sources for you), then run the
+import:
+
+```bash
+docker exec -d barrelman bash scripts/run-import.sh
 
 # Check progress
 docker exec barrelman-db psql -U barrelman -d barrelman \
   -c "SELECT count(*) FROM geo_places;"
 ```
 
-A US state (~400 MB PBF) takes roughly 20–40 minutes. See [Data Import](#data-import) for more detail.
+A US state (~400 MB PBF) takes roughly 20–40 minutes.
+
+**[→ Full region guide](docs/REGIONS.md)** — what a region controls, the
+ordering of the transit/address/bikeshare steps, and how to build one by hand.
 
 ---
 
@@ -103,8 +147,8 @@ A US state (~400 MB PBF) takes roughly 20–40 minutes. See [Data Import](#data-
 
 ### Prerequisites
 
-- [Bun](https://bun.sh) ≥ 1.1
 - [Docker](https://docker.com) + Docker Compose v2
+- [Bun](https://bun.sh) ≥ 1.1 — only for running tests on the host
 
 ### 1. Clone and configure
 
@@ -114,50 +158,79 @@ cd barrelman
 cp .env.example .env
 ```
 
-Edit `.env` as needed (defaults work for local development):
+The defaults work as-is. Nothing needs setting to get a running instance.
 
-```dotenv
-DATABASE_URL=postgresql://barrelman:barrelman@localhost:5433/barrelman
-BARRELMAN_API_KEY=brm_dev_changeme
-OLLAMA_HOST=http://localhost:11434
-```
-
-### 2. Start the database
+Optionally clone the marketing site alongside it, the same way
+`parchment`/`parchment-landing` sit together — `start.sh` picks it up
+automatically if present:
 
 ```bash
-docker compose up -d barrelman-db
+git clone https://github.com/alexwohlbruck/barrelman-landing.git ../barrelman-landing
 ```
 
-Wait ~15 seconds for PostGIS to initialise.
-
-### 3. Install dependencies
+### 2. Start everything
 
 ```bash
-bun install
+./start.sh dev
 ```
 
-### 4. Import data
+That brings up the API, the database, the tile server, both routing engines, the
+console dev server and — if you cloned it — the landing site:
+
+| | |
+|---|---|
+| API | http://localhost:5001 |
+| API docs | http://localhost:5001/docs |
+| Console | http://localhost:5199/console |
+| Landing site | http://localhost:5200 |
+
+Source is bind-mounted with hot reload, so edits to `src/`, `web/` and the
+landing site apply without a rebuild.
 
 ```bash
-# Download NC OSM extract
-wget -O data/region.osm.pbf \
-  https://download.geofabrik.de/north-america/us/north-carolina-latest.osm.pbf
-
-# Import (~20-40 min)
-bun run import:osm
-
-# Optional: generate semantic search embeddings (~30-90 min on CPU)
-bun run import:embed
+./start.sh dev --build   # rebuild images
+./start.sh dev --down    # stop
 ```
 
-### 5. Run the server
+### 3. Pick a region and import
+
+A fresh database has no OSM data, so search returns nothing until you import
+some.
+
+`.env` ships with `REGIONS=north-carolina,nyc-metro`, so you can skip straight
+to the import if those suit you. Otherwise pick one by name from the catalog of
+importable boundaries — the **Regions** page in the console does this, or:
 
 ```bash
-bun run dev
+# One-time: cache the catalog of importable regions
+bun run scripts/fetch-boundaries.ts
+
+# See what matches, then put the key in .env as REGIONS=colorado
+bun run scripts/fetch-boundaries.ts --skip-fetch --search colorado
 ```
 
-Server: `http://localhost:5001`
-Swagger UI: `http://localhost:5001/swagger`
+Then import, from the **Scripts** page in the console or directly:
+
+```bash
+docker compose exec barrelman-ops bash scripts/import-osm.sh
+```
+
+North Carolina takes 20–40 minutes. See [Data Import](#data-import) for the rest
+of the pipeline, and the **[region guide](docs/REGIONS.md)** for transit, address
+and bikeshare data, which are separate steps.
+
+### 4. Sign in
+
+With no SMTP configured, sign-in codes go to the log:
+
+```bash
+docker logs barrelman --tail 20 | grep "sign-in code"
+```
+
+The first account created becomes an administrator.
+
+More detail — hot-reload caveats, tests, database access — in
+[docs/development.md](docs/development.md).
 
 ---
 
@@ -178,6 +251,9 @@ and is served by the API at `/console`.
 - **Dashboard / Data** — downstream service health (Postgres, MOTIS, GraphHopper,
   Martin) and data metrics (table sizes, coverage, freshness).
 - **API Tester** — send requests to the running API with server-side key injection.
+- **API keys / Usage / Billing** — every signed-in developer manages their own
+  keys, watches credit consumption per endpoint and per key, and handles
+  subscriptions. Operator views (Scripts, Jobs, Data, Regions) are admin-only.
 
 ### Auth
 
@@ -230,36 +306,55 @@ serves it at `/console` — no dev server in prod.
 
 ## Data Import
 
-The import pipeline transforms an OSM PBF extract into a fully indexed PostGIS database.
+### Regions decide what gets imported
 
-### Download a PBF extract
+Coverage is driven by one environment variable, `REGIONS`, resolved against a
+region registry (the `import_regions` table, seeded from
+[`config/regions.json`](config/regions.json)):
 
-```bash
-# North Carolina (~400 MB)
-wget -O data/region.osm.pbf \
-  https://download.geofabrik.de/north-america/us/north-carolina-latest.osm.pbf
-
-# Germany
-wget -O data/region.osm.pbf \
-  https://download.geofabrik.de/europe/germany-latest.osm.pbf
-
-# Full United States
-wget -O data/region.osm.pbf \
-  https://download.geofabrik.de/north-america/us-latest.osm.pbf
+```dotenv
+REGIONS=colorado                    # one region
+REGIONS=north-carolina,nyc-metro    # several, merged into one extract
+REGIONS=global                      # planet OSM + every transit feed
 ```
 
-Find all regions at [download.geofabrik.de](https://download.geofabrik.de).
+Every importer — OSM, GTFS, GBFS and the Pelias geocoder — resolves what to
+fetch from it. Define regions by name with `scripts/fetch-boundaries.ts` plus
+**Regions → Add by name** in the console, or by hand.
 
-### Import pipeline
+**[→ Full region guide](docs/REGIONS.md)**
+
+### Pipeline order
+
+Each step depends on the previous one:
+
+```bash
+./scripts/run-import.sh                     # OSM → PostGIS + GraphHopper graph
+./scripts/prepare-motis-osm.sh              # transit-specific OSM repair
+./scripts/download-gtfs.sh                  # transit feeds (needs GraphHopper)
+bun run import/import-gbfs-systems.ts       # bikeshare
+bun run scripts/generate-pelias-config.ts   # addresses (then pelias/provision.sh)
+```
+
+Only the first is required; the rest add transit, bikeshare and address search.
+
+### What the OSM import does
 
 | Step | Description |
 |------|-------------|
+| download + merge | Fetches each region's PBF and `osmium merge`s them into one extract |
 | osm2pgsql | Imports all OSM objects via flex Lua style into `geo_places` |
 | post-import.sql | Extracts structured address/contact fields, builds GiST + GIN indexes, computes `area_m2` |
-| generate-abbreviations.ts | Pre-computes `name_abbrev` for autocomplete |
+| codes + abbreviations | Pre-computes `codes` (IATA/ICAO/ref) and `name_abbrev` for autocomplete |
+| intersections | Generates road-intersection records |
+| parent context | Spatial join resolving each place's containing city/county/state |
 | tsvector rebuild | Rebuilds full-text search vectors to include abbreviations |
 
 > **Note:** Do not use `--flat-nodes` for regional imports. It creates a ~31 GB sparse file that is only beneficial for full planet imports.
+
+> **Note:** The import is not clipped to a region's bounding box — the boundary
+> of your data is whatever the OSM extracts cover. The bbox narrows bikeshare
+> and transit feed *discovery* only.
 
 ### Embeddings (optional)
 
@@ -275,15 +370,54 @@ bun run import:embed
 
 ---
 
+## Public API — accounts, keys and credits
+
+Barrelman can be run as a public, metered API as well as a private engine.
+Developers sign in to the console, mint their own keys, and are billed in
+credits against a monthly allowance.
+
+| | |
+|---|---|
+| [Accounts & API keys](docs/accounts.md) | Sign-in, sessions, keys, scopes |
+| [Pricing & credits](docs/pricing.md) | What each endpoint costs, what each plan includes |
+| [Abuse controls](docs/abuse-controls.md) | Throttling, suspension, terms enforcement |
+| [Polar setup](docs/polar-setup.md) | Wiring up billing |
+
+The short version:
+
+- **Keys** look like `brm_live_…`, are shown once, carry scopes limiting which
+  endpoint groups they may call, and revoke immediately.
+- **Credits** price endpoints by what they actually cost — a tile is 1, a
+  geocode 5, an isochrone 40 — because charging both as "one request" would
+  either give tiles away or price routing as if it were free.
+- **The free tier stops at its allowance** with a `402` rather than accruing
+  overage. Nobody can run up a bill on a plan they did not pay for.
+- **`BARRELMAN_API_KEY` remains a shared, unmetered service credential** — how
+  Parchment calls barrelman, and how existing deployments keep working.
+
+| Plan | Price | Credits / month | Past the allowance |
+|---|---|---|---|
+| Free | $0 | 100,000 | **Stops with `402`** |
+| Developer | $19 | 1,000,000 | $0.030 / 1k |
+| Business | $99 | 10,000,000 | $0.018 / 1k |
+| Scale | $299 | 40,000,000 | $0.012 / 1k |
+| Enterprise | Custom | Negotiated | $0.008 / 1k |
+
+All of it is optional. With no `POLAR_ACCESS_TOKEN` the billing surface is
+inert, every account sits on free, and metering exists only to show a
+self-hosted operator their own usage.
+
+---
+
 ## API Reference
 
-All endpoints require a `Bearer` token:
+Data endpoints require a key:
 
 ```
-Authorization: Bearer <BARRELMAN_API_KEY>
+Authorization: Bearer brm_live_...
 ```
 
-Interactive docs: `http://localhost:5001/swagger`
+Interactive docs: `http://localhost:5001/docs`
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -294,6 +428,8 @@ Interactive docs: `http://localhost:5001/swagger`
 | `GET` | `/contains` | Find parent areas containing a point |
 | `GET` | `/children` | Find POIs inside an area |
 | `GET` | `/place/:osmType/:osmId` | Get a single place by OSM ID |
+| `GET` `POST` | `/isochrone` | Reachability polygons for any travel mode |
+| `GET` | `/isochrone/modes` | Supported isochrone modes and their limits |
 
 ### POST `/search`
 
@@ -331,6 +467,14 @@ Find places within a radius, sorted by distance.
 
 Reverse geocodes a coordinate — returns the city, county, and state containing the point.
 
+### GET `/geocode/reverse?lat=&lng=&limit=&radius=`
+
+Reverse geocodes a coordinate to the places at it — venues, addresses, and streets — in the same result shape as `/search`.
+
+Hits come from the geocoder (OSM + OpenAddresses) and are hydrated into their full `geo_places` rows where one exists, so a result carries real geometry, tags, and categories rather than a bare point. A hit with no address of its own borrows the street address the geocoder found at the same spot.
+
+When nothing addressable sits within `radius` (default 100 m), falls back to the smallest administrative area containing the point, so a click on open water still resolves to something.
+
 ### GET `/contains?lat=&lng=`
 
 Returns all named areas (smallest first) containing the given point.
@@ -343,17 +487,87 @@ Returns places whose centroids fall inside the given area's polygon.
 
 Fetch full details for a single OSM element. `osmType` is `node`, `way`, or `relation`.
 
+### GET / POST `/isochrone`
+
+Where can you get in _N_ minutes? Returns one polygon per requested duration as a GeoJSON `FeatureCollection`.
+
+```bash
+curl -H "Authorization: Bearer $BARRELMAN_API_KEY" \
+  "http://localhost:5001/isochrone?lat=35.7796&lng=-78.6382&mode=walk&durations=300,600,900"
+```
+
+The same request as JSON:
+
+```json
+{
+  "lat": 35.7796,
+  "lng": -78.6382,
+  "mode": "transit",
+  "durations": [900, 1800, 2700],
+  "time": "2026-07-30T13:00:00Z",
+  "simplify": 20
+}
+```
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `lat`, `lng` | — | Origin (required) |
+| `mode` | `walk` | `walk`, `bike`, `car`, `transit` (aliases: `foot`, `bicycle`, `drive`, `pt`, …) |
+| `durations` | `900` | Contour budgets in **seconds** — any values, up to 8 per request. Query-string form is comma-separated |
+| `arriveBy` | `false` | Reverse isochrone: the area that can *reach* the point |
+| `time` | now | ISO 8601 departure (or arrival) time. Transit only |
+| `simplify` | `0` | Douglas–Peucker tolerance in meters. `30` typically cuts payload ~5× |
+| `maxTransfers` | — | Transit only |
+| `transitModes` | all | Transit only — `BUS`, `RAIL`, `SUBWAY`, `TRAM`, `FERRY`, … |
+| `maxEgressTime` | `600` | Transit only — cap (s) on the walk away from each reachable stop |
+| `wheelchair` | `false` | Transit only — accessible stops and vehicles |
+| `maxStopIsochrones` | `250` | Transit only — per-contour walk-isochrone budget (see below) |
+
+Features come back smallest contour first (`bucket: 0`), so renderers should draw them back to front. Contours nest — each one is folded into the next, so a 30-minute polygon is always fully inside the 45-minute one. Geometry is a valid `Polygon` or `MultiPolygon`, never a `GeometryCollection`. Ceilings are 3 h for street modes, 2 h for transit.
+
+**How each mode is computed.** `walk`/`bike`/`car` are GraphHopper `/isochrone` searches (evenly spaced durations like `300,600,900` are served by a single bucketed search). `transit` is composed here: MOTIS `one-to-all` reports every stop reachable within the budget, each stop gets a GraphHopper walking isochrone sized to its leftover time, and those are unioned in PostGIS with the direct walk from the origin.
+
+**Cost.** Street isochrones are sub-second to a few seconds depending on area. A transit isochrone fans out to hundreds of walk isochrones — a 45-minute, 3-contour Manhattan query takes ~14 s cold and under a second once the polygon cache is warm. When more stops are reachable than `maxStopIsochrones`, the stop set is thinned by coarsening its dedupe grid (evenly, so the contour's outer edge survives) rather than by dropping the farthest stops; `meta.stopGridMeters` reports the resolution actually used.
+
 ---
 
 ## Configuration
 
+Full reference: **[docs/configuration.md](docs/configuration.md)**. `.env.example`
+carries the same list with inline commentary.
+
+Nothing is required to run locally — the defaults give a working engine with an
+open API and no accounts, which is the right shape for development and for a
+private self-hosted instance.
+
+The ones worth knowing:
+
 | Variable | Default | Description |
-|----------|---------|-------------|
-| `DATABASE_URL` | `postgresql://barrelman:barrelman@localhost:5433/barrelman` | PostGIS connection string |
-| `BARRELMAN_DB_PASSWORD` | `barrelman` | Used by `docker-compose.yml` for the DB container |
-| `PORT` | `3001` | HTTP port the API listens on |
-| `BARRELMAN_API_KEY` | `brm_dev_changeme` | Shared Bearer token for API auth. **Change before deploying.** |
-| `OLLAMA_HOST` | `http://localhost:11434` | Ollama endpoint for generating search embeddings |
+|---|---|---|
+| `DATABASE_URL` | `postgresql://barrelman:barrelman@localhost:5434/barrelman` | PostGIS connection string |
+| `REGIONS` | `north-carolina,nyc-metro` | Which geographies the importers pull. `global` for everything |
+| `BARRELMAN_API_KEY` | — | Shared **service** credential, unmetered. **Unset means the data API is open** |
+| `BARRELMAN_ADMIN_KEY` | falls back to the API key | Gates `/admin/*`. An admin-role session works too |
+| `BARRELMAN_ADMIN_EMAILS` | — | Granted admin on sign-up. The first account is always an admin |
+| `SMTP_HOST` | — | Without it, sign-in codes print to the log |
+| `POLAR_ACCESS_TOKEN` | — | Enables billing. Without it every account stays on free |
+| `BARRELMAN_TOS_URL` | — | Setting it requires accepting terms before creating a key |
+| `OLLAMA_HOST` | `http://localhost:11434` | Embeddings for semantic search (optional) |
+
+### Database sizing
+
+The compose defaults are deliberately modest so a dev machine can run Postgres
+alongside MOTIS, Elasticsearch and GraphHopper. **Production should size these
+up** — search latency is dominated by whether the working set stays resident.
+On a 32GB database host:
+
+```dotenv
+BARRELMAN_DB_SHARED_BUFFERS=8GB
+BARRELMAN_DB_CACHE_SIZE=24GB
+BARRELMAN_DB_WORK_MEM=128MB
+BARRELMAN_DB_MAINTENANCE_WORK_MEM=2GB
+BARRELMAN_DB_MEM_LIMIT=28g
+```
 
 ---
 
@@ -373,17 +587,39 @@ Caddy auto-provisions TLS. Connect the `barrelman` container to Caddy's network:
 docker network connect caddy_network barrelman
 ```
 
-### Automatic updates with Watchtower
+### Updating a deployment
 
-[Watchtower](https://containrrr.dev/watchtower/) automatically pulls and restarts containers when new images are published:
+New Barrelman releases are published to Docker Hub on every push to `main` via
+GitHub Actions. To roll them out:
 
 ```bash
-docker run -d \
-  -v /var/run/docker.sock:/var/run/docker.sock \
-  containrrr/watchtower --interval 3600
+cd /opt/barrelman
+docker compose pull
+docker compose up -d
 ```
 
-New Barrelman releases are published to Docker Hub on every push to `main` via GitHub Actions.
+> **`docker compose pull` refreshes *every* service's image, not just
+> Barrelman's.** That's fine for anything stateless, which is why most images
+> here track a floating tag and pick up upstream fixes for free.
+>
+> Watch out for **engines that bake data into a version-specific binary
+> format** — MOTIS and GraphHopper. Their on-disk timetable and routing graph
+> are written by one engine version and rejected by another, so a pull that
+> brings in a new major version leaves the engine unable to start until its data
+> is rebuilt:
+>
+> ```
+> tt: binary version mismatch [existing=34 vs expected=37], please re-run import
+> ```
+>
+> That's a job, not a restart — `motis import` for MOTIS,
+> `scripts/rebuild-graphhopper.sh` for GraphHopper. Everything else in the stack
+> is stateless enough to upgrade in place. If you'd rather not be surprised,
+> pull during a window where you can run the rebuild.
+
+[Watchtower](https://containrrr.dev/watchtower/) can automate the pull, but note
+it only manages containers on **its own Docker host** — a Watchtower running on
+a different machine to the stack will never update it.
 
 ### Resource recommendations
 
@@ -407,3 +643,13 @@ New Barrelman releases are published to Docker Hub on every push to `main` via G
 | Embeddings | [Ollama](https://ollama.com) (`nomic-embed-text`) |
 | Tile server | [Martin](https://martin.maplibre.org) |
 | Routing | [GraphHopper](https://graphhopper.com) |
+
+---
+
+## License
+
+Barrelman is source-available under the **Apache License 2.0 with the Commons Clause** — see [LICENSE](LICENSE).
+
+In short: **free to self-host and use, including inside your business — but you may not sell it.** You can run it for yourself or your company's internal use (for example, an on-prem GIS API for your own business), fork it, and contribute back. You may not resell it, or host it as a paid service, where the value comes substantially from Barrelman. See [LICENSING.md](LICENSING.md) for a plain-language explanation with examples.
+
+Commercial and enterprise licensing — including a managed, enterprise-grade GIS REST API, dedicated support, and SLAs — is available. Reach out to Alex Wohlbruck to discuss.

@@ -1,41 +1,27 @@
 import Elysia, { t } from 'elysia'
+import { apiAuth, apiAuthAfter } from '../middleware/api-auth'
 
 function getMartinUrl() {
   return process.env.MARTIN_URL || 'http://barrelman-martin:3000'
 }
 
+const meteredTileAuth = apiAuth('tiles')
+
 /**
- * Tile auth handler — validates against BARRELMAN_TILE_KEY.
- * Checks both Bearer token header and ?token query param.
+ * Tiles authenticate exactly like every other endpoint: an ordinary
+ * `brm_live_…` key, metered and revocable.
+ *
+ * There used to be a separate unmetered `BARRELMAN_TILE_KEY`, which meant tile
+ * traffic was the one thing the platform could not see or bill. A map is not a
+ * few requests — one view is thirty to sixty tiles — so that was the largest
+ * unmetered surface in the product, and it had its own auth path to maintain.
+ *
+ * A map library cannot set an Authorization header, so `?api_key=` on the tile
+ * URL stays supported. That means the key is visible to anyone reading the
+ * page, which is why keys are scopeable: a browser-side key should carry the
+ * `tiles` scope and nothing else.
  */
-export function tileAuthHandler({
-  headers,
-  query,
-  set,
-}: {
-  headers: Record<string, string | undefined>
-  query: Record<string, string | undefined>
-  set: { status: number | string }
-}) {
-  const tileKey = process.env.BARRELMAN_TILE_KEY
-  if (!tileKey) {
-    // No key configured = open access (dev mode)
-    return
-  }
-
-  // Check Authorization header first
-  const authorization = headers['authorization']
-  if (authorization) {
-    const token = authorization.replace('Bearer ', '')
-    if (token === tileKey) return
-  }
-
-  // Check ?token query parameter (used in tile URLs)
-  if (query.token === tileKey) return
-
-  set.status = 401
-  return { error: 'Invalid or missing tile key' }
-}
+export const tileAuthHandler = meteredTileAuth
 
 export interface TileFetcher {
   (url: string): Promise<Response>
@@ -46,6 +32,7 @@ export function createTileRoutes(deps: { fetchTile?: TileFetcher } = {}) {
 
   return new Elysia({ prefix: '/tiles' })
     .onBeforeHandle(tileAuthHandler)
+    .onAfterHandle(apiAuthAfter)
     .get(
       '/:source/:z/:x/:y',
       async ({ params, set }) => {
@@ -77,6 +64,12 @@ export function createTileRoutes(deps: { fetchTile?: TileFetcher } = {}) {
           x: t.String({ description: 'Tile X coordinate' }),
           y: t.String({ description: 'Tile Y coordinate' }),
         }),
+        detail: {
+          tags: ['Tiles'],
+          summary: 'Vector tile (Martin proxy)',
+          description:
+            'Proxies Mapbox Vector Tiles from the Martin tile server. Authenticates with an ordinary API key, via Bearer header or `?api_key=` for map libraries that cannot set headers.',
+        },
       },
     )
 }

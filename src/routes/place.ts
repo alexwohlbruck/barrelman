@@ -1,10 +1,11 @@
 import Elysia, { t } from 'elysia'
-import { authMiddleware } from '../middleware/auth'
+import { apiAuth, apiAuthAfter } from '../middleware/api-auth'
 import { getPlace as _getPlace } from '../services/place.service'
 
 export function createPlaceRoutes(deps = { getPlace: _getPlace }) {
   return new Elysia()
-    .use(authMiddleware)
+    .onBeforeHandle(apiAuth('places'))
+    .onAfterHandle(apiAuthAfter)
     .get(
       '/place/:osmType/:osmId',
       async ({ params, set }) => {

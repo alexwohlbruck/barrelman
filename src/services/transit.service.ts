@@ -954,6 +954,9 @@ function withAccessEgressWalks(
 /** Cap on MOTIS stop-to-stop queries fired per request (origin×dest pairs). */
 const COMPOSE_MAX_PAIRS = 12
 
+/** Feed pairs already warned about for MOTIS timetable misses (once per process). */
+const motis404Warned = new Set<string>()
+
 /**
  * Plan transit by composing GraphHopper-owned access/egress walks around a
  * MOTIS stop-to-stop search. Replaces MOTIS coordinate-intermodal for pure
@@ -1009,7 +1012,21 @@ async function composeTransitFromStops(
           fetchFn,
         )
         return resp.itineraries.map((it) => withAccessEgressWalks(it, request.from, request.to, accessSec, egressSec))
-      } catch {
+      } catch (err) {
+        // One bad pair must not sink the rest of the fan-out. A 404 here
+        // means the stop exists in PostGIS but not in the baked MOTIS
+        // timetable (stale GTFS vs. bake) — warn once per feed pair so that
+        // drift is visible instead of surfacing as silently-empty results.
+        if (err instanceof MotisError && err.statusCode === 404) {
+          const key = `${o.feedId}:${d.feedId}`
+          if (!motis404Warned.has(key)) {
+            motis404Warned.add(key)
+            console.warn(
+              `[transit] MOTIS has no timetable location for ${o.feedId}_${o.stationId} → ` +
+              `${d.feedId}_${d.stationId} — GTFS DB is ahead of the MOTIS bake for these feeds`,
+            )
+          }
+        }
         return [] as TransitItinerary[]
       }
     }),

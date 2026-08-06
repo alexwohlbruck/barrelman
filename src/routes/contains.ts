@@ -1,10 +1,11 @@
 import Elysia, { t } from 'elysia'
-import { authMiddleware } from '../middleware/auth'
+import { apiAuth, apiAuthAfter } from '../middleware/api-auth'
 import { findContainingAreas as _findContainingAreas } from '../services/spatial.service'
 
 export function createContainsRoutes(deps = { findContainingAreas: _findContainingAreas }) {
   return new Elysia()
-    .use(authMiddleware)
+    .onBeforeHandle(apiAuth('spatial'))
+    .onAfterHandle(apiAuthAfter)
     .get(
       '/contains',
       async ({ query: q }) => {

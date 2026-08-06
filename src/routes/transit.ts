@@ -1,5 +1,5 @@
 import Elysia, { t } from 'elysia'
-import { authHandler } from '../middleware/auth'
+import { apiAuth, apiAuthAfter } from '../middleware/api-auth'
 import {
   getTransitRoute as _getTransitRoute,
   getIntermodalRoute as _getIntermodalRoute,
@@ -71,7 +71,8 @@ export function createTransitRoutes(deps: {
   const getNearestEntrance = deps.getNearestEntrance || _getNearestEntrance
 
   return new Elysia({ prefix: '/transit' })
-    .onBeforeHandle(authHandler)
+    .onBeforeHandle(apiAuth('transit'))
+    .onAfterHandle(apiAuthAfter)
 
     // ── POST /transit/route ─────────────────────────────────────────
     .post('/route', async ({ body, set }) => {

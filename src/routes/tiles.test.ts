@@ -5,8 +5,9 @@
  * hitting the real Martin tile server. Tests cover:
  *   - Tile proxy: successful fetch, Martin errors, network failures
  *   - Response headers: content-type, cache-control, CORS
- *   - Auth: BARRELMAN_TILE_KEY via Bearer header and ?token query param
- *   - Auth: open access when no tile key is configured
+ *   - Auth: the ordinary metered guard, same as every other endpoint
+ *   - Auth: fall-through to the metered guard, and open access when nothing
+ *     is configured at all
  */
 
 import { describe, test, expect, mock, beforeEach, afterEach } from 'bun:test'
@@ -27,21 +28,23 @@ async function json(res: Response) {
 
 // ── Setup / Teardown ─────────────────────────────────────────────────────────
 
-const savedTileKey = process.env.BARRELMAN_TILE_KEY
+const savedApiKey = process.env.BARRELMAN_API_KEY
 const savedMartinUrl = process.env.MARTIN_URL
 
 beforeEach(() => {
-  // Default: no auth required (dev mode)
-  delete process.env.BARRELMAN_TILE_KEY
+  // Default: no auth configured at all, which is what the metered guard reads
+  // as local development. bun loads the service key from .env, so it has to be
+  // cleared explicitly.
+  delete process.env.BARRELMAN_API_KEY
   // Set a predictable Martin URL for assertions
   process.env.MARTIN_URL = 'http://mock-martin:3000'
 })
 
 afterEach(() => {
-  if (savedTileKey === undefined) {
-    delete process.env.BARRELMAN_TILE_KEY
+  if (savedApiKey === undefined) {
+    delete process.env.BARRELMAN_API_KEY
   } else {
-    process.env.BARRELMAN_TILE_KEY = savedTileKey
+    process.env.BARRELMAN_API_KEY = savedApiKey
   }
   if (savedMartinUrl === undefined) {
     delete process.env.MARTIN_URL
@@ -149,9 +152,7 @@ describe('GET /tiles/:source/:z/:x/:y', () => {
 
 // ── Tile auth ────────────────────────────────────────────────────────────────
 
-describe('tile auth (BARRELMAN_TILE_KEY)', () => {
-  const TILE_KEY = 'test_tile_secret'
-
+describe('tile auth', () => {
   function makeTileApp() {
     const mockFetch = mock<TileFetcher>(async () =>
       new Response('tile-data', {
@@ -162,51 +163,47 @@ describe('tile auth (BARRELMAN_TILE_KEY)', () => {
     return new Elysia().use(createTileRoutes({ fetchTile: mockFetch }))
   }
 
-  test('open access when BARRELMAN_TILE_KEY is not set', async () => {
-    delete process.env.BARRELMAN_TILE_KEY
-    const app = makeTileApp()
-    const res = await app.handle(get('/tiles/basemap/10/500/300'))
-    expect(res.status).toBe(200)
+  /**
+   * Tiles now go through the ordinary metered guard, which treats "no service
+   * key configured" as local development and lets anonymous callers through.
+   * That is the same rule every other endpoint follows; the dedicated tile
+   * credential that used to sit in front of this is gone, so tile traffic is
+   * metered and attributable like everything else.
+   */
+  test('open in development, when no service key is configured', async () => {
+    const saved = process.env.BARRELMAN_API_KEY
+    delete process.env.BARRELMAN_API_KEY
+    try {
+      const res = await makeTileApp().handle(get('/tiles/basemap/10/500/300'))
+      expect(res.status).toBe(200)
+    } finally {
+      if (saved !== undefined) process.env.BARRELMAN_API_KEY = saved
+    }
   })
 
-  test('returns 401 when tile key is set and no auth provided', async () => {
-    process.env.BARRELMAN_TILE_KEY = TILE_KEY
-    const app = makeTileApp()
-    const res = await app.handle(get('/tiles/basemap/10/500/300'))
-    expect(res.status).toBe(401)
-    const body = await json(res)
-    expect(body.error).toContain('tile key')
+  test('refuses an anonymous caller once a service key is configured', async () => {
+    const saved = process.env.BARRELMAN_API_KEY
+    process.env.BARRELMAN_API_KEY = 'svc_secret'
+    try {
+      const res = await makeTileApp().handle(get('/tiles/basemap/10/500/300'))
+      expect(res.status).toBe(401)
+    } finally {
+      if (saved === undefined) delete process.env.BARRELMAN_API_KEY
+      else process.env.BARRELMAN_API_KEY = saved
+    }
   })
 
-  test('accepts valid Bearer token in Authorization header', async () => {
-    process.env.BARRELMAN_TILE_KEY = TILE_KEY
-    const app = makeTileApp()
-    const res = await app.handle(
-      get('/tiles/basemap/10/500/300', { Authorization: `Bearer ${TILE_KEY}` }),
-    )
-    expect(res.status).toBe(200)
-  })
-
-  test('rejects invalid Bearer token', async () => {
-    process.env.BARRELMAN_TILE_KEY = TILE_KEY
-    const app = makeTileApp()
-    const res = await app.handle(
-      get('/tiles/basemap/10/500/300', { Authorization: 'Bearer wrong_key' }),
-    )
-    expect(res.status).toBe(401)
-  })
-
-  test('accepts valid ?token query parameter', async () => {
-    process.env.BARRELMAN_TILE_KEY = TILE_KEY
-    const app = makeTileApp()
-    const res = await app.handle(get(`/tiles/basemap/10/500/300?token=${TILE_KEY}`))
-    expect(res.status).toBe(200)
-  })
-
-  test('rejects invalid ?token query parameter', async () => {
-    process.env.BARRELMAN_TILE_KEY = TILE_KEY
-    const app = makeTileApp()
-    const res = await app.handle(get('/tiles/basemap/10/500/300?token=wrong'))
-    expect(res.status).toBe(401)
+  test('accepts the service key as a Bearer token', async () => {
+    const saved = process.env.BARRELMAN_API_KEY
+    process.env.BARRELMAN_API_KEY = 'svc_secret'
+    try {
+      const res = await makeTileApp().handle(
+        get('/tiles/basemap/10/500/300', { Authorization: 'Bearer svc_secret' }),
+      )
+      expect(res.status).toBe(200)
+    } finally {
+      if (saved === undefined) delete process.env.BARRELMAN_API_KEY
+      else process.env.BARRELMAN_API_KEY = saved
+    }
   })
 })

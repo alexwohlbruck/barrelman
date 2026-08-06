@@ -114,6 +114,71 @@ export interface DataMetrics {
   }
   gbfs: { systems: number | null; stations: number | null }
   transit: { stopAreaMembers: number | null }
+  boundaries: { count: number | null; fetchedAt: string | null }
+  accounts: {
+    users: number | null
+    activeKeys: number | null
+    activeThisCycle: number | null
+    creditsThisCycle: number | null
+    rejectedThisCycle: number | null
+    paidAccounts: number | null
+  }
+}
+
+// ── Import regions (DB-backed region store) ───────────────────────────
+export type Bbox = [west: number, south: number, east: number, north: number]
+
+export interface RegionPelias {
+  openaddresses: string[]
+  wofIds: string[]
+  tigerStates: number[]
+  countryCode?: string
+}
+
+export interface ImportRegion {
+  key: string
+  label: string
+  osmExtracts: string[]
+  osmReplication: string[]
+  bbox: Bbox
+  gtfsRegion: string
+  pelias: RegionPelias
+  isGlobal: boolean
+  enabled: boolean
+}
+
+/** An entry in the boundary catalog (Geofabrik's published extract index). */
+export interface Boundary {
+  id: string
+  label: string
+  name: string
+  parent: string | null
+  iso3166_1: string[]
+  iso3166_2: string[]
+  pbfUrl: string
+  updatesUrl: string | null
+  bbox: Bbox
+}
+
+export interface BoundarySearchResponse {
+  catalog: { count: number; fetchedAt: string | null }
+  boundaries: Boundary[]
+}
+
+/** A region definition auto-filled from a boundary, before it is saved. */
+export interface DerivedRegion {
+  region: {
+    key: string
+    label: string
+    osmExtracts: string[]
+    osmReplication: string[]
+    bbox: Bbox
+    gtfsRegion: string
+    pelias: RegionPelias
+    enabled: boolean
+  }
+  warnings: string[]
+  sources: Record<string, string>
 }
 
 export interface ServiceStatus {
@@ -134,4 +199,239 @@ export interface TestResult {
   bytes?: number
   body?: unknown
   error?: string
+}
+
+// ── Accounts, keys, usage and billing ─────────────────────────────────
+// Mirrors the backend shapes in src/schema/accounts.ts, src/billing/plans.ts
+// and the /auth, /account and /billing routes. Keep in sync with those.
+
+export type UserRole = 'user' | 'admin'
+export type EndpointGroup =
+  | 'tiles'
+  | 'places'
+  | 'search'
+  | 'geocode'
+  | 'spatial'
+  | 'routing'
+  | 'isochrone'
+  | 'transit'
+export type Scope = EndpointGroup | '*'
+
+export interface PublicUser {
+  id: string
+  email: string
+  name: string | null
+  picture: string | null
+  role: UserRole
+  plan: string
+  createdAt: string | null
+}
+
+export interface AuthConfig {
+  registrationMode: 'open' | 'invite'
+  methods: {
+    email: boolean
+    passkey: boolean
+    oauth: { id: string; label: string }[]
+  }
+}
+
+export interface SessionSummary {
+  id: string
+  userAgent: string | null
+  createdAt: string
+  expiresAt: string
+  current: boolean
+}
+
+export interface PasskeySummary {
+  id: string
+  name: string
+  deviceType: string
+  backedUp: boolean
+  lastUsedAt: string | null
+  createdAt: string
+}
+
+export interface ApiKeySummary {
+  id: string
+  userId: string
+  name: string
+  prefix: string
+  last4: string
+  scopes: string[]
+  lastUsedAt: string | null
+  revokedAt: string | null
+  expiresAt: string | null
+  createdAt: string
+}
+
+/** Only ever returned once, at creation. */
+export interface CreatedApiKey {
+  key: string
+  record: ApiKeySummary
+  warning: string
+}
+
+export interface Plan {
+  id: string
+  name: string
+  description: string
+  monthlyCredits: number
+  requestsPerMinute: number
+  /** False on the demo plan: served without spending credits. */
+  metered: boolean
+  /** Per-minute ceiling applied to each visitor, where a plan sets one. */
+  requestsPerMinutePerIp?: number
+  /** Operator-assigned. Absent from every customer-facing plan list. */
+  internal?: boolean
+  /** List price per month, in cents. Polar wins once configured. */
+  priceCents: number
+  overageAllowed: boolean
+  /** Micro-dollars per credit. See overagePerThousand for the display value. */
+  overageMicrosPerCredit: number
+  commercialUse: boolean
+  /** Negotiated rather than purchasable — no checkout button. */
+  contactOnly?: boolean
+  rank: number
+  /** Derived server-side so clients don't repeat the arithmetic. */
+  overagePerThousand?: number
+  includedPricePerThousand?: number
+}
+
+export interface CreditBalance {
+  plan: Plan
+  monthlyCredits: number
+  used: number
+  purchased: number
+  allowanceRemaining: number
+  remaining: number
+  overageAllowed: boolean
+  overage: number
+  cycleResetsAt: string
+}
+
+export interface LedgerEntry {
+  id: string
+  amount: number
+  kind: 'purchase' | 'grant' | 'adjustment' | 'refund'
+  description: string | null
+  createdAt: string
+}
+
+export interface UsageBucket {
+  day: string
+  endpoint: string
+  requests: number
+  credits: number
+  rejected: number
+}
+
+export interface KeyUsageSummary {
+  apiKeyId: string
+  requests: number
+  credits: number
+}
+
+export interface UsageReport {
+  from: string
+  to: string
+  daily: UsageBucket[]
+  byKey: KeyUsageSummary[]
+}
+
+export interface PlansResponse {
+  plans: Plan[]
+  creditCosts: Record<EndpointGroup, number>
+  scopes: Scope[]
+}
+
+export interface BillingProduct {
+  planId: string
+  productId: string
+  name: string
+  priceAmount: number
+  priceCurrency: string
+  interval: string
+}
+
+export interface BillingConfig {
+  billingEnabled: boolean
+  plans: Plan[]
+  products: BillingProduct[]
+  creditPacks: { productId: string; credits: number }[]
+}
+
+export interface BillingStatus {
+  billingEnabled: boolean
+  plan: Plan
+  hasSubscription: boolean
+  balance: CreditBalance
+}
+
+// ── Moderation (admin) ────────────────────────────────────────────────
+
+export type SuspensionKind =
+  | 'tos-violation'
+  | 'abuse'
+  | 'automated-abuse'
+  | 'billing'
+  | 'spam'
+  | 'operator-request'
+
+export interface SuspensionInfo {
+  suspended: boolean
+  reason: string | null
+  kind: SuspensionKind | null
+  until: string | null
+  /** Whether the user can plausibly do something about it themselves. */
+  appealable: boolean
+}
+
+export interface TermsState {
+  required: boolean
+  version: string
+  url: string
+  acceptedVersion: string | null
+  acceptedAt: string | null
+  /** True when the user must accept before they can create API keys. */
+  outstanding: boolean
+}
+
+export interface AdminUser {
+  id: string
+  email: string
+  name: string | null
+  role: UserRole
+  plan: string
+  createdAt: string
+  suspension: SuspensionInfo
+  terms: TermsState
+}
+
+export type AbuseSignalKind =
+  | 'burn-rate'
+  | 'error-hammering'
+  | 'multi-account'
+  | 'quota-exhausted'
+  | 'rate-limit-sustained'
+
+export interface AbuseSignal {
+  id: string
+  userId: string | null
+  kind: AbuseSignalKind
+  severity: 'low' | 'medium' | 'high'
+  detail: Record<string, unknown> | null
+  resolvedAt: string | null
+  createdAt: string
+  email: string | null
+  suspendedAt: string | null
+}
+
+export interface ThrottleStats {
+  trackedAddresses: number
+  trackedKeys: number
+  trackedAccounts: number
+  penalised: number
+  inFlight: number
 }

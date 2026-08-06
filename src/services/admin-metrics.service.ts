@@ -62,6 +62,26 @@ export interface DataMetrics {
   transit: {
     stopAreaMembers: number | null
   }
+  /** The catalog of importable regions backing "Add region by name". */
+  boundaries: {
+    count: number | null
+    fetchedAt: string | null
+  }
+  /**
+   * Public-API accounts. Present even when billing is disabled — a self-hosted
+   * operator still wants to see who is calling and how much.
+   */
+  accounts: {
+    users: number | null
+    activeKeys: number | null
+    /** Accounts that made at least one metered request this cycle. */
+    activeThisCycle: number | null
+    /** Credits billed across all accounts this cycle. */
+    creditsThisCycle: number | null
+    /** Requests refused this cycle for want of credits or quota. */
+    rejectedThisCycle: number | null
+    paidAccounts: number | null
+  }
 }
 
 interface GeoSample {
@@ -118,6 +138,14 @@ export async function getDataMetrics(): Promise<DataMetrics> {
     gbfsSystems,
     gbfsStations,
     stopAreaMembers,
+    boundaryCount,
+    boundaryFetchedAt,
+    accountUsers,
+    activeKeys,
+    accountsActive,
+    creditsThisCycle,
+    rejectedThisCycle,
+    paidAccounts,
   ] = await Promise.all([
     scalar<number>(sql`SELECT pg_database_size(current_database()) AS s`),
     scalar<string>(sql`SELECT pg_size_pretty(pg_database_size(current_database())) AS s`),
@@ -134,6 +162,23 @@ export async function getDataMetrics(): Promise<DataMetrics> {
     tableCount('gbfs_systems'),
     tableCount('gbfs_stations'),
     tableCount('stop_area_members'),
+    tableCount('boundary_catalog'),
+    scalar<string>(sql`SELECT max(fetched_at)::text AS s FROM boundary_catalog`),
+    // Account tables are small — exact counts are cheap here, unlike geo_places.
+    // `date_trunc('month', now())` is the same UTC cycle boundary the metering
+    // layer uses; see services/usage.service.ts.
+    tableCount('accounts_users'),
+    scalar<number>(sql`SELECT count(*)::bigint AS c FROM accounts_api_keys WHERE revoked_at IS NULL`),
+    scalar<number>(sql`
+      SELECT count(DISTINCT user_id)::bigint AS c FROM accounts_usage
+      WHERE day >= date_trunc('month', now() AT TIME ZONE 'utc')::date`),
+    scalar<number>(sql`
+      SELECT COALESCE(sum(credits), 0)::bigint AS c FROM accounts_usage
+      WHERE day >= date_trunc('month', now() AT TIME ZONE 'utc')::date`),
+    scalar<number>(sql`
+      SELECT COALESCE(sum(rejected), 0)::bigint AS c FROM accounts_usage
+      WHERE day >= date_trunc('month', now() AT TIME ZONE 'utc')::date`),
+    scalar<number>(sql`SELECT count(*)::bigint AS c FROM accounts_users WHERE plan <> 'free'`),
   ])
 
   const total = reltuples && reltuples > 0 ? reltuples : null
@@ -172,6 +217,15 @@ export async function getDataMetrics(): Promise<DataMetrics> {
     gtfs: { feeds, stops, routes, transfers, tripPatterns, shapes, feedsWithRt, lastImport },
     gbfs: { systems: gbfsSystems, stations: gbfsStations },
     transit: { stopAreaMembers },
+    boundaries: { count: boundaryCount, fetchedAt: boundaryFetchedAt },
+    accounts: {
+      users: accountUsers,
+      activeKeys,
+      activeThisCycle: accountsActive,
+      creditsThisCycle,
+      rejectedThisCycle,
+      paidAccounts,
+    },
   }
 }
 
@@ -206,6 +260,7 @@ export async function getServiceStatuses(): Promise<ServiceStatus[]> {
   const graphhopperUrl = process.env.GRAPHHOPPER_URL || 'http://barrelman-graphhopper:8989'
   const martinUrl = process.env.MARTIN_URL || 'http://barrelman-martin:3000'
   const motisUrl = process.env.MOTIS_URL || 'http://barrelman-motis:8080'
+  const peliasUrl = process.env.PELIAS_URL || 'http://pelias_api:4000'
 
   const dbCheck = (async (): Promise<ServiceStatus> => {
     const start = performance.now()
@@ -235,5 +290,9 @@ export async function getServiceStatuses(): Promise<ServiceStatus[]> {
     motisCheck,
     pingHttp('GraphHopper (routing)', 'graphhopper', graphhopperUrl, '/health'),
     pingHttp('Martin (vector tiles)', 'martin', martinUrl, '/health'),
+    // Optional: only runs under the `pelias` compose profile, so "unavailable"
+    // here often means "not started" rather than "broken". /status is the only
+    // unauthenticated 200 the API offers — /v1/status is a 404.
+    pingHttp('Pelias (addresses)', 'pelias', peliasUrl, '/status'),
   ])
 }
