@@ -4,7 +4,7 @@
 // The spec is committed so Netlify builds are reproducible without a live
 // server. To refresh it, re-download the source of truth:
 //
-//   curl -sSf https://barrelman.parchment.app/swagger/json -o openapi.json
+//   curl -sSf https://api.barrelman.dev/docs/json -o openapi.json
 //
 // then run `bun run generate:api`.
 import { generateFiles } from 'fumadocs-openapi'
