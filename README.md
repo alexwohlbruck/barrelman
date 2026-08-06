@@ -18,7 +18,7 @@ Barrelman is the self-hosted OSM search engine that powers [Parchment](https://g
         ▼                     ▼              ▼              ▼
   osm2pgsql (flex)         MOTIS          geo_* tables     Pelias
   ←─ osm2pgsql-flex.lua   (transit)                      (addresses,
-        │                                                separate stack)
+        │                                                 opt-in profile)
         ▼
   geo_places table   ←── import/post-import.sql (indexes, addr extraction)
   (PostGIS)          ←── import/embed-places.ts (Ollama embeddings, optional)
@@ -42,14 +42,28 @@ Martin  │  GraphHopper     MOTIS
 | `martin` | `ghcr.io/maplibre/martin` | 5002 | Vector tile server |
 | `graphhopper` | `israelhikingmap/graphhopper` | 5003 | Street routing engine (walk / bike / car) |
 | `motis` | `ghcr.io/motis-project/motis` | 5004 | Transit routing engine (schedules, one-to-all) |
-| `pelias_api` | [separate stack](pelias/README.md) | 4000 | Address geocoder (OpenAddresses + OSM + WOF) |
+| `pelias_api` | `pelias/api` | 4000 | Address geocoder — opt-in, see below |
 
 Ports are host-side. Services reach each other over the Compose network on
 their own container ports, so remapping a host port here changes nothing
 internal.
 
-Pelias is **not** part of the root `docker-compose.yml` — it joins barrelman's
-network as its own stack. Everything else comes up together.
+### Optional services (profiles)
+
+Everything above comes up with `docker compose up -d` except the address
+geocoder, which is included from [`pelias/`](pelias/README.md) and gated behind
+profiles — Elasticsearch alone wants a 1 GB heap, and address search isn't
+needed to run Barrelman:
+
+```bash
+docker compose up -d                                       # core stack
+docker compose --profile pelias up -d                      # + geocoder (api + elasticsearch)
+docker compose --profile pelias --profile pelias-full up -d  # + libpostal / pip / interpolation
+```
+
+It's one Compose project, so everything shares a network and shows as a single
+group in Docker UIs. Provisioning the geocoder's index is a separate, much
+longer job — see [`pelias/README.md`](pelias/README.md).
 
 ---
 

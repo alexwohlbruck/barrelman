@@ -5,10 +5,27 @@ have no `name` and aren't searchable there. Pelias fills that gap: barrelman's
 `forwardGeocode` (see `src/services/geocode.service.ts`) proxies `pelias_api:4000`
 and folds address + street results into `/search`.
 
-Pelias is a **separate stack** — it is NOT part of barrelman's root
-`docker-compose.yml`. It joins barrelman's docker network (`barrelman_default`,
-declared `external` here) so the API can reach `pelias_api:4000` (barrelman's
-`PELIAS_URL` default). Bring barrelman up first, then provision Pelias.
+Pelias is **part of the barrelman stack** — barrelman's root
+`docker-compose.yml` pulls this file in with `include:`, so both run as one
+Compose project on one network, and the API reaches `pelias_api:4000`
+(barrelman's `PELIAS_URL` default) with no external-network wiring.
+
+Its services sit behind profiles, so they don't start with a plain
+`docker compose up -d`. From the **repo root**:
+
+```sh
+docker compose --profile pelias up -d                        # api + elasticsearch
+docker compose --profile pelias --profile pelias-full up -d  # + libpostal / pip / interpolation
+```
+
+| Profile | Services |
+|---|---|
+| `pelias` | `api`, `elasticsearch` — all barrelman's `/v1/autocomplete` needs |
+| `pelias-full` | `libpostal`, `placeholder`, `interpolation`, `pip` — for `/v1/search` & `/v1/reverse` (~4GB) |
+| `pelias-tools` | one-shot importers; started by `docker compose run`, never by `up` |
+
+Running the containers is the easy part — the index still has to be built, which
+is the multi-hour job below.
 
 ## Provisioning a fresh server
 
@@ -25,6 +42,8 @@ git clone https://github.com/pelias/docker.git /opt/pelias-docker
 sudo ln -sf /opt/pelias-docker/pelias /usr/local/bin/pelias
 
 # 2. Env — copy the template, set DATA_DIR to an absolute path under here.
+#    Keep COMPOSE_PROJECT_NAME=barrelman so the CLI drives the same stack the
+#    root compose file does, rather than a second one with clashing names.
 cp .env.example .env && $EDITOR .env      # DATA_DIR=<abs>/pelias/data, DOCKER_USER=1000:1000
 
 # 3. Elasticsearch up + schema.
@@ -45,8 +64,12 @@ pelias prepare polylines
 # 6. Import everything (WOF + OpenAddresses + OSM addresses + polyline streets).
 pelias import all
 
-# 7. Start the API.
-pelias compose up
+# 7. Start the API — from the repo root, with the profile.
+#    NOT `pelias compose up`: that runs a bare `docker compose up -d`, and every
+#    service here is behind a profile, so it would start nothing. The CLI's
+#    service-specific commands (`pelias elastic start`) are unaffected — naming a
+#    service explicitly activates its profile.
+cd .. && docker compose --profile pelias up -d
 ```
 
 ### Re-importing into an already-running API
