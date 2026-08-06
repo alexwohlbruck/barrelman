@@ -8,7 +8,7 @@ The Barrelman API is a REST API served over HTTPS. Every response is JSON (tiles
 ## Base URL
 
 ```
-https://barrelman.parchment.app
+https://api.barrelman.dev
 ```
 
 When self-hosting, replace this with your own host. In local development the API listens on `http://localhost:5001`.
@@ -24,14 +24,14 @@ Authorization: Bearer <BARRELMAN_API_KEY>
 You can verify both reachability and that your key is valid with the authenticated health check:
 
 ```bash
-curl https://barrelman.parchment.app/health/auth \
+curl https://api.barrelman.dev/health/auth \
   -H "Authorization: Bearer $BARRELMAN_API_KEY"
 ```
 
 The public probe needs no key and is safe for load balancers:
 
 ```bash
-curl https://barrelman.parchment.app/health/
+curl https://api.barrelman.dev/health/
 # {"status":"ok","database":"connected"}
 ```
 
@@ -42,7 +42,7 @@ curl https://barrelman.parchment.app/health/
 `POST /search` takes a JSON body. Provide a `query` for text search, and optionally `lat`/`lng` (plus `radius`) to bias and rank results by proximity.
 
 ```bash
-curl -X POST https://barrelman.parchment.app/search \
+curl -X POST https://api.barrelman.dev/search \
   -H "Authorization: Bearer $BARRELMAN_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
@@ -59,7 +59,7 @@ curl -X POST https://barrelman.parchment.app/search \
 `GET /brands` resolves chains and franchises from the brand catalog.
 
 ```bash
-curl "https://barrelman.parchment.app/brands?q=Starbucks&limit=8" \
+curl "https://api.barrelman.dev/brands?q=Starbucks&limit=8" \
   -H "Authorization: Bearer $BARRELMAN_API_KEY"
 ```
 
@@ -68,7 +68,7 @@ curl "https://barrelman.parchment.app/brands?q=Starbucks&limit=8" \
 `GET /geocode` turns a coordinate into a human-readable address.
 
 ```bash
-curl "https://barrelman.parchment.app/geocode?lat=35.2271&lng=-80.8431" \
+curl "https://api.barrelman.dev/geocode?lat=35.2271&lng=-80.8431" \
   -H "Authorization: Bearer $BARRELMAN_API_KEY"
 ```
 
@@ -77,7 +77,7 @@ curl "https://barrelman.parchment.app/geocode?lat=35.2271&lng=-80.8431" \
 `POST /transit/route` plans a trip between two coordinates. `from` and `to` are `{ lat, lng }` objects.
 
 ```bash
-curl -X POST https://barrelman.parchment.app/transit/route \
+curl -X POST https://api.barrelman.dev/transit/route \
   -H "Authorization: Bearer $BARRELMAN_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
