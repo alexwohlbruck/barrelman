@@ -1,6 +1,12 @@
 import type { BaseLayoutProps } from 'fumadocs-ui/layouts/shared'
 
-const apiOrigin = process.env.NEXT_PUBLIC_API_ORIGIN ?? 'https://barrelman.parchment.app'
+/**
+ * Where the API itself lives. Its own subdomain, not a path on this one.
+ *
+ * The default used to be barrelman.parchment.app, from before the service had
+ * a domain of its own — a link that now points at the wrong product.
+ */
+const apiOrigin = process.env.NEXT_PUBLIC_API_ORIGIN ?? 'https://api.barrelman.dev'
 
 export function baseOptions(): BaseLayoutProps {
   return {
