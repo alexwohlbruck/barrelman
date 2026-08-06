@@ -9,7 +9,15 @@
 # `.next` into a served site, and `/api/search` is a dynamic route that cannot
 # be a static file at all.
 [build]
-  command = "bun run build"
+  # The clean is not superstition. Netlify restores build output between
+  # deploys, and after the docs search endpoint moved off /api/search the old
+  # route handler kept being emitted from cache — the deployed file list
+  # carried both app/api/search/route-<hash>.js and app/docs-search/route with
+  # the same hash, long after the source file was gone. The stale handler took
+  # precedence over the catch-all and answered 500 on the one URL that
+  # documents the API's own /search endpoint. A 13-page site builds in well
+  # under a minute; the cache is not worth the class of bug it hides.
+  command = "rm -rf .next .source && bun run build"
   publish = ".next"
 
 [build.environment]

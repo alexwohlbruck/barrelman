@@ -4,3 +4,6 @@
 /out
 *.tsbuildinfo
 .env*.local
+
+# Netlify CLI site-link state; not source.
+.netlify/
