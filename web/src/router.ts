@@ -12,7 +12,13 @@ import { bootstrap, hasAccount, isAdmin, isAuthenticated, ready } from '@/lib/au
  *     honest, since a client-side check is not a security boundary.
  */
 const router = createRouter({
-  history: createWebHistory('/console/'),
+  // Whatever Vite was built with, rather than a second copy of the same
+  // literal. The two have to agree — assets resolve against Vite's base and
+  // links against this one — and hardcoding it here meant a build for the
+  // console subdomain would load its assets from / and then push URLs under
+  // /console/. BASE_URL is Vite's own record of the base it used, so they
+  // cannot drift apart.
+  history: createWebHistory(import.meta.env.BASE_URL),
   routes: [
     // A plain redirect, deliberately: a redirect *function* is evaluated during
     // route resolution, before `bootstrap()` has answered, so it would send a

@@ -11,8 +11,21 @@ import { fileURLToPath, URL } from 'node:url'
 // via BARRELMAN_API_URL in docker-compose.dev.yml.
 const apiTarget = process.env.BARRELMAN_API_URL || 'http://localhost:5001'
 
+/**
+ * Where the console is mounted, which is now a property of the deployment
+ * rather than of the code.
+ *
+ * `/console/` is still the default, because that is where the API serves it
+ * (src/lib/console-ui.ts) and that is what a self-hosted instance with one
+ * origin gets. Behind the public edge it is served at the root of
+ * console.barrelman.dev instead, so it is built with CONSOLE_BASE=/ — see the
+ * Caddyfile. Vite bakes this into every asset URL, so a build made for one
+ * layout 404s under the other; it cannot be switched at runtime.
+ */
+const base = process.env.CONSOLE_BASE || '/console/'
+
 export default defineConfig({
-  base: '/console/',
+  base,
   build: { target: 'es2022' },
   plugins: [vue(), tailwindcss()],
   resolve: {
