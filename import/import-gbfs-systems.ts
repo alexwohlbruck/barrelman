@@ -48,6 +48,7 @@ console.log(`  Bounding box: ${bbox ? `${bbox.south},${bbox.west} → ${bbox.nor
 
 // ── Ensure schema ───────────────────────────────────────────────────
 
+console.log('[1/3] Ensuring GBFS schema')
 await ensureGbfsSchema()
 
 // ── Fetch systems catalog ───────────────────────────────────────────
@@ -55,7 +56,7 @@ await ensureGbfsSchema()
 const SYSTEMS_CSV_URL =
   'https://raw.githubusercontent.com/MobilityData/gbfs/master/systems.csv'
 
-console.log('\nFetching MobilityData systems catalog...')
+console.log('\n[2/3] Fetching MobilityData systems catalog...')
 const csvResponse = await fetch(SYSTEMS_CSV_URL)
 if (!csvResponse.ok) {
   console.error(`Failed to fetch systems.csv: ${csvResponse.status}`)
@@ -89,7 +90,7 @@ if (bbox) {
   console.log(`  Note: bbox filtering will be applied to stations after import (catalog has no coordinates)`)
 }
 
-console.log(`\nImporting ${filtered.length} systems...\n`)
+console.log(`\n[3/3] Importing ${filtered.length} systems...\n`)
 
 // ── Import each system ──────────────────────────────────────────────
 

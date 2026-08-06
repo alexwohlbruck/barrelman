@@ -1,12 +1,16 @@
 <script setup lang="ts">
+import { toRef } from 'vue'
 import { Play, Clock, Lock, FileCode2 } from 'lucide-vue-next'
 import Button from '@/components/ui/Button.vue'
 import Badge from '@/components/ui/Badge.vue'
+import Progress from '@/components/ui/Progress.vue'
 import DangerBadge from '@/components/DangerBadge.vue'
+import { useJobProgress } from '@/lib/job-progress'
 import type { ScriptDef, Job } from '@/lib/types'
 
-defineProps<{ script: ScriptDef; runningJob?: Job }>()
+const props = defineProps<{ script: ScriptDef; runningJob?: Job }>()
 const emit = defineEmits<{ run: [] }>()
+const progress = useJobProgress(toRef(props, 'runningJob'))
 </script>
 
 <template>
@@ -40,6 +44,21 @@ const emit = defineEmits<{ run: [] }>()
         <Play class="size-3.5" />
         {{ runningJob ? 'Running…' : 'Run' }}
       </Button>
+    </div>
+
+    <div v-if="progress" class="mt-3">
+      <Progress
+        :value="progress.percent"
+        :indeterminate="progress.indeterminate"
+        :variant="script.danger === 'destructive' ? 'destructive' : 'default'"
+      />
+      <div class="mt-1.5 flex items-center justify-between text-[10px] text-muted-foreground">
+        <span>
+          <template v-if="progress.indeterminate">Running…</template>
+          <template v-else>{{ progress.percent }}%<template v-if="progress.label"> · {{ progress.label }}</template></template>
+        </span>
+        <span v-if="progress.etaLabel">{{ progress.etaLabel }}</span>
+      </div>
     </div>
   </div>
 </template>

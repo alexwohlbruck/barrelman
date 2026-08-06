@@ -51,6 +51,7 @@ async function main() {
   console.log(`Backfilling trip patterns for ${feedIds.length} feed(s) from ${dir}`)
   let totalPatterns = 0
   for (const feedId of feedIds) {
+    console.log(`[${feedIds.indexOf(feedId) + 1}/${feedIds.length}] ${feedId}`)
     const path = join(dir, zipNameForFeed(feedId))
     if (!existsSync(path)) {
       console.log(`  ⚠ ${feedId}: ${path} not found, skipping`)

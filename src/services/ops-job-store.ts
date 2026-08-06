@@ -13,6 +13,7 @@ import { connection as sql } from '../db'
 import { randomUUID } from 'node:crypto'
 import { getScript } from '../admin/scripts-manifest'
 import { buildInvocation, type Job, type JobStatus, type LogLine, type LogStream } from './job-invocation'
+import { getEtaMs, recordRun, parseStage, parseCount } from './job-history.service'
 
 const MAX_JOBS = 200
 const MAX_LOG_LINES = 8000
@@ -44,8 +45,23 @@ export function ensureOpsJobsSchema(): Promise<void> {
           log_count        integer NOT NULL DEFAULT 0,
           cancel_requested boolean NOT NULL DEFAULT false,
           worker_id        text,
-          heartbeat_at     bigint
+          heartbeat_at     bigint,
+          eta_ms           integer,
+          progress         real,
+          progress_label   text,
+          stages           jsonb,
+          sub_fraction     real
         )`
+      // Progress/ETA columns landed after the table shipped, so add them
+      // explicitly — CREATE TABLE IF NOT EXISTS above is a no-op on installs
+      // that already have ops_jobs.
+      await sql`
+        ALTER TABLE ops_jobs
+          ADD COLUMN IF NOT EXISTS eta_ms         integer,
+          ADD COLUMN IF NOT EXISTS progress       real,
+          ADD COLUMN IF NOT EXISTS progress_label text,
+          ADD COLUMN IF NOT EXISTS stages         jsonb,
+          ADD COLUMN IF NOT EXISTS sub_fraction   real`
       await sql`CREATE INDEX IF NOT EXISTS ops_jobs_status_idx ON ops_jobs (status, created_at)`
       await sql`
         CREATE TABLE IF NOT EXISTS ops_job_logs (
@@ -80,6 +96,10 @@ function rowToJob(r: any): Job {
     exitCode: r.exit_code ?? undefined,
     error: r.error ?? undefined,
     logCount: r.log_count ?? 0,
+    etaMs: r.eta_ms != null ? Number(r.eta_ms) : undefined,
+    progress: r.progress != null ? Number(r.progress) : undefined,
+    progressLabel: r.progress_label ?? undefined,
+    stages: r.stages ?? undefined,
   }
 }
 
@@ -97,10 +117,10 @@ export async function createJob(scriptId: string, params: Record<string, unknown
   const [row] = await sql`
     INSERT INTO ops_jobs (id, script_id, script_name, category, danger, exec_kind, status,
                           params, display_command, exclusive, advisory_key, created_at,
-                          started_at, log_count, cancel_requested)
+                          started_at, log_count, cancel_requested, eta_ms)
     VALUES (${id}, ${script.id}, ${script.name}, ${script.category}, ${script.danger}, ${inv.kind},
             ${status}, ${JSON.stringify(params)}::jsonb, ${inv.display}, ${exclusive}, ${advisoryKey},
-            ${now}, ${status === 'running' ? now : null}, 0, false)
+            ${now}, ${status === 'running' ? now : null}, 0, false, ${getEtaMs(script.id) ?? null})
     RETURNING *`
   await appendLogs(id, [
     { stream: 'system', text: `▶ ${script.name}` },
@@ -154,6 +174,68 @@ export async function appendLogs(
   if (endSeq > MAX_LOG_LINES) {
     await sql`DELETE FROM ops_job_logs WHERE job_id = ${jobId} AND seq < ${endSeq - MAX_LOG_LINES}`
   }
+
+  await trackProgress(jobId, lines)
+}
+
+/**
+ * Update a job's stage/progress model from a batch of log lines.
+ *
+ * `[N/M] Name` advances the stage and resets the within-stage fraction; running
+ * counts advance that fraction. Overall progress is monotonic (GREATEST), so a
+ * small sub-step count can never drag a later stage backwards.
+ *
+ * The read-modify-write is safe because exactly one process appends logs for a
+ * given job — the owning ops worker, or the API itself for internal jobs.
+ */
+async function trackProgress(
+  jobId: string,
+  lines: Array<{ stream: LogStream; text: string }>,
+): Promise<void> {
+  const relevant = lines.filter((l) => l.stream !== 'system')
+  if (!relevant.length) return
+
+  const [row] = await sql`
+    SELECT status, stages, sub_fraction FROM ops_jobs WHERE id = ${jobId}`
+  if (!row || row.status !== 'running') return
+
+  let stages: { total: number; index: number; labels: string[] } | null = row.stages ?? null
+  let subFraction = row.sub_fraction != null ? Number(row.sub_fraction) : 0
+  let changed = false
+
+  for (const l of relevant) {
+    const stage = parseStage(l.text)
+    if (stage) {
+      // Carry forward names already seen; a stage is only named once, at its
+      // own boundary, so earlier labels must survive later markers.
+      const labels = new Array<string>(stage.total).fill('')
+      const prev = stages?.labels ?? []
+      for (let i = 0; i < Math.min(prev.length, stage.total); i++) labels[i] = prev[i]
+      if (stage.name) labels[stage.index - 1] = stage.name
+      stages = { total: stage.total, index: stage.index, labels }
+      subFraction = 0
+      changed = true
+      continue
+    }
+    const c = parseCount(l.text)
+    if (c != null && c > subFraction) {
+      subFraction = c
+      changed = true
+    }
+  }
+  if (!changed) return
+
+  let frac = stages && stages.total > 0 ? (stages.index - 1 + subFraction) / stages.total : subFraction
+  frac = frac < 0 ? 0 : frac > 1 ? 1 : frac
+  const label = stages ? `${stages.index}/${stages.total}` : `${Math.round(frac * 100)}%`
+
+  await sql`
+    UPDATE ops_jobs
+    SET stages = ${stages ? JSON.stringify(stages) : null}::jsonb,
+        sub_fraction = ${subFraction},
+        progress_label = CASE WHEN ${frac} >= COALESCE(progress, 0) THEN ${label} ELSE progress_label END,
+        progress = GREATEST(COALESCE(progress, 0), ${frac})
+    WHERE id = ${jobId} AND status = 'running'`
 }
 
 export async function setStatus(
@@ -163,13 +245,32 @@ export async function setStatus(
   error?: string,
 ): Promise<void> {
   const ended = status !== 'running' && status !== 'queued' ? Date.now() : null
-  await sql`
+  const [row] = await sql`
     UPDATE ops_jobs
     SET status = ${status},
         ended_at = COALESCE(${ended}, ended_at),
         exit_code = ${exitCode ?? null},
-        error = COALESCE(${error ?? null}, error)
-    WHERE id = ${jobId}`
+        error = COALESCE(${error ?? null}, error),
+        progress = CASE WHEN ${status} = 'succeeded' THEN 1 ELSE progress END
+    WHERE id = ${jobId}
+    RETURNING script_id, started_at, ended_at, exit_code`
+
+  // Persist the finished run so future jobs for this script get an ETA.
+  // Best-effort: recordRun swallows its own errors, and a job that never
+  // started (canceled while queued) has no runtime worth recording.
+  if (row && ended && row.started_at != null) {
+    const startedAt = Number(row.started_at)
+    const endedAt = Number(row.ended_at)
+    void recordRun({
+      id: jobId,
+      scriptId: row.script_id,
+      status,
+      startedAt,
+      endedAt,
+      durationMs: endedAt - startedAt,
+      exitCode: row.exit_code ?? null,
+    })
+  }
 }
 
 export async function heartbeat(jobId: string): Promise<void> {

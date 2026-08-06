@@ -36,6 +36,17 @@ export interface Job {
   exitCode?: number | null
   error?: string
   logCount: number
+  /** Median successful runtime (ms) for this script, for ETA estimation. */
+  etaMs?: number
+  /** True progress fraction 0–1, parsed from the script's own log markers. */
+  progress?: number
+  /** Short label for the current progress marker, e.g. "3/8" or "42%". */
+  progressLabel?: string
+  /**
+   * Named stage breakdown, parsed from `[N/M] Stage name` log markers. `index`
+   * is 1-based; `labels[i]` is the name of stage i (empty until first seen).
+   */
+  stages?: { total: number; index: number; labels: string[] }
 }
 
 export type Invocation =

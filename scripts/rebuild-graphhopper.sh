@@ -27,12 +27,12 @@ if ! docker ps -a --format '{{.Names}}' | grep -q "^${CONTAINER}\$"; then
   exit 0
 fi
 
-echo "[$(date '+%H:%M:%S')] [graphhopper] Wiping graph cache..."
+echo "[$(date '+%H:%M:%S')] [1/2] [graphhopper] Wiping graph cache..."
 # The israelhikingmap/graphhopper entrypoint defaults to /data/default-gh unless
 # overridden with -o.  Wipe both possible locations to be safe.
 docker exec "$CONTAINER" bash -c 'rm -rf /data/graph-cache /data/default-gh'
 
-echo "[$(date '+%H:%M:%S')] [graphhopper] Restarting to rebuild graph..."
+echo "[$(date '+%H:%M:%S')] [2/2] [graphhopper] Restarting to rebuild graph..."
 docker restart "$CONTAINER" >/dev/null
 
 echo "[$(date '+%H:%M:%S')] [graphhopper] Rebuild started in background. Tail logs with:"

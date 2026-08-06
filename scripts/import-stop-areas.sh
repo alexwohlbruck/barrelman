@@ -30,7 +30,7 @@ fi
 
 PSQL=(docker exec -i "$DB_CONTAINER" sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" psql -h 127.0.0.1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1')
 
-echo "[$(date '+%H:%M:%S')] Extracting stop_area relations from $OSM_PBF"
+echo "[$(date '+%H:%M:%S')] [1/2] Extracting stop_area relations from $OSM_PBF"
 TSV="$(mktemp)"
 trap 'rm -f "$TSV"' EXIT
 if command -v uv >/dev/null 2>&1 && ! python3 -c 'import osmium' 2>/dev/null; then
@@ -40,7 +40,7 @@ else
 fi
 echo "  $(wc -l < "$TSV" | tr -d ' ') member rows"
 
-echo "[$(date '+%H:%M:%S')] Loading stop_area_members"
+echo "[$(date '+%H:%M:%S')] [2/2] Loading stop_area_members"
 "${PSQL[@]}" <<'SQL'
 CREATE TABLE IF NOT EXISTS stop_area_members (
   relation_id   bigint NOT NULL,

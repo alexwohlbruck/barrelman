@@ -12,6 +12,7 @@ const BATCH_SIZE = 64
 
 async function embedPlaces() {
   // Count remaining
+  console.log('[1/3] Counting places needing embeddings')
   const [{ count }] = await sql`
     SELECT count(*) FROM geo_places
     WHERE name IS NOT NULL AND embedding IS NULL
@@ -26,6 +27,7 @@ async function embedPlaces() {
   let processed = 0
   let errors = 0
 
+  console.log('[2/3] Embedding places')
   while (true) {
     // Fetch next batch
     const batch = await sql`
@@ -85,7 +87,7 @@ async function embedPlaces() {
   }
 
   // Build IVFFlat index
-  console.log('\nBuilding IVFFlat vector index...')
+  console.log('\n[3/3] Building IVFFlat vector index...')
   const [{ cnt }] = await sql`SELECT count(*) AS cnt FROM geo_places WHERE embedding IS NOT NULL`
   const lists = Math.min(Math.max(Math.floor(Number(cnt) / 1000), 10), 1000)
   console.log(`  Using ${lists} lists for ${cnt} embedded places`)
