@@ -11,7 +11,7 @@ const VERSION = '0.4.0'
 
 const localUrl = `http://localhost:${process.env.PORT || 5001}`
 
-// A public base URL (e.g. https://barrelman.parchment.app) can be advertised as
+// A public base URL (e.g. https://api.barrelman.dev) can be advertised as
 // the default "try it" server via PUBLIC_BASE_URL; localhost is always offered.
 const servers = [
   ...(process.env.PUBLIC_BASE_URL

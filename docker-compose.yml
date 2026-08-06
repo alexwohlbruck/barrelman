@@ -154,6 +154,12 @@ services:
       MOTIS_RT_UPDATE_INTERVAL: ${MOTIS_RT_UPDATE_INTERVAL:-}
       GTFS_DATA_DIR: /gtfs-zips
 
+      # The origin /docs advertises as its "Production" server, so the docs'
+      # try-it button points at the real API rather than only localhost.
+      # src/config/swagger.ts has read this since the docs shipped, but it was
+      # never named here — so it has never had any effect in a container.
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-}
+
       # ── Public API accounts ──────────────────────────────────────────
       # Compose does not forward the host environment, so every variable the
       # app reads has to be named here or it is silently absent inside the

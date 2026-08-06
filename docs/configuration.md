@@ -22,6 +22,7 @@ value overrides one, so a knob you mean to turn off needs an explicit `0`.
 | `REGIONS` | `north-carolina,nyc-metro` | Which geographies the importers pull. `global` for everything |
 | `OLLAMA_HOST` | `http://localhost:11434` | Embeddings for semantic search (optional) |
 | `BARRELMAN_STATEMENT_TIMEOUT_MS` | `10000` | Query timeout on the API pool. `0` disables. DDL is exempt |
+| `PUBLIC_BASE_URL` | — | Origin `/docs` advertises as its "Production" server. Unset offers only localhost |
 
 ## Authentication
 
