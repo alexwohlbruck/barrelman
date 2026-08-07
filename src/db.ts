@@ -23,8 +23,31 @@ export const dbUrl = process.env.DATABASE_URL || 'postgresql://barrelman:barrelm
  */
 const STATEMENT_TIMEOUT_MS = envNumber('BARRELMAN_STATEMENT_TIMEOUT_MS', 10_000)
 
+/**
+ * Postgres NOTICEs go to stderr, not stdout.
+ *
+ * postgres-js logs them with console.log by default, and `CREATE TABLE IF NOT
+ * EXISTS` emits one ("relation already exists, skipping") on every run after
+ * the first — so any schema-ensuring code path prints nine lines of object dump
+ * to stdout. That is merely noisy in the server, but `src/config/regions.ts` is
+ * also a CLI whose stdout the bash importers parse:
+ *
+ *   OSM_EXTRACTS="$(bun run src/config/regions.ts osm-extracts)"
+ *
+ * With notices on stdout that variable holds the dump *and* the URLs, `read -ra`
+ * splits it into ~20 tokens, and run-import.sh takes its multi-extract branch
+ * and wgets "{" as a URL. The import then fails on a zero-byte PBF.
+ *
+ * Notices are diagnostics, never data. stderr is where they belong.
+ */
+export const onnotice = (notice: unknown) => {
+  const message = (notice as { message?: string })?.message
+  if (message) console.error(`[pg notice] ${message}`)
+}
+
 export const connection = postgres(dbUrl, {
   connection: { statement_timeout: STATEMENT_TIMEOUT_MS },
+  onnotice,
 })
 export const db = drizzle(connection)
 
@@ -38,7 +61,7 @@ export const db = drizzle(connection)
  * pool's timeout. Callers own the lifecycle and should `end()` when done.
  */
 export function maintenanceConnection(max = 1) {
-  return postgres(dbUrl, { max, connection: { statement_timeout: 0 } })
+  return postgres(dbUrl, { max, connection: { statement_timeout: 0 }, onnotice })
 }
 
 /** Run startup DDL on an untimed connection, then release it. */
@@ -72,6 +95,19 @@ export async function ensureScriptRunsSchema() {
   `)
 }
 
+/** Whether a relation exists, so DDL that targets it can be skipped safely. */
+async function relationExists(name: string): Promise<boolean> {
+  const client = maintenanceConnection()
+  try {
+    const [row] = await client`SELECT to_regclass(${name}) IS NOT NULL AS present`
+    return Boolean(row?.present)
+  } catch {
+    return false
+  } finally {
+    await client.end({ timeout: 5 })
+  }
+}
+
 /**
  * Ensure post-import columns exist on the geo_places table.
  *
@@ -83,8 +119,21 @@ export async function ensureScriptRunsSchema() {
  *
  * This function adds the columns idempotently (ADD COLUMN IF NOT EXISTS) so
  * the API can start cleanly even before the full post-import pipeline runs.
+ *
+ * On a brand-new instance geo_places does not exist at all — osm2pgsql creates
+ * it during the first OSM import. `ADD COLUMN IF NOT EXISTS` still throws 42P01
+ * against a missing table, and because this runs in a top-level await it took
+ * the process down and crash-looped the container. That is the state every
+ * fresh deployment boots into, and the import is started from the console the
+ * API itself serves, so the crash made it unrecoverable without a shell. Skip
+ * the DDL until the table is there; the next restart picks it up.
  */
 export async function ensureSchema() {
+  if (!(await relationExists('public.geo_places'))) {
+    console.log('[schema] geo_places not present yet — skipping post-import DDL until the first OSM import')
+    return
+  }
+
   await runDdl(`
     ALTER TABLE geo_places
       ADD COLUMN IF NOT EXISTS name_abbrev TEXT,
