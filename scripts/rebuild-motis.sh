@@ -92,9 +92,16 @@ else
   fi
 fi
 
+# The feed ZIPs are a host bind mount, not part of the gtfs-data volume, so the
+# import container needs them mounted exactly where the config expects them
+# (/data/gtfs) — same bind the motis service carries in docker-compose.yml.
+GTFS_ZIPS="$(docker inspect "$CONTAINER" \
+  --format '{{range .Mounts}}{{if eq .Destination "/data/gtfs"}}{{.Source}}{{end}}{{end}}' 2>/dev/null)"
+
 if docker run --rm --network "$NETWORK" \
      -v "${GTFS_VOL}:/data" \
      -v "${OSM_VOL}:/osm-data:ro" \
+     ${GTFS_ZIPS:+-v "${GTFS_ZIPS}:/data/gtfs:ro"} \
      -w /data "$MOTIS_IMAGE" /motis import; then
   echo "[$(date '+%H:%M:%S')] [3/3] [motis] Restarting server to serve fresh dataset..."
   docker start "$CONTAINER" >/dev/null

@@ -141,6 +141,12 @@ services:
     volumes:
       - barrelman-gtfs-data:/data
       - barrelman-osm-data:/osm-data:ro
+      # The feeds themselves. generate-motis-config.ts writes dataset paths as
+      # "gtfs/<id>.zip", relative to MOTIS's working dir /data — but /data is the
+      # gtfs-data volume, which holds only config.yml. Without this bind the ZIPs
+      # exist for barrelman and barrelman-ops and are invisible here, and
+      # `motis import` exits 1 having printed its config and nothing else.
+      - ./data/gtfs:/data/gtfs:ro
     ports:
       - "5004:8080"
 
