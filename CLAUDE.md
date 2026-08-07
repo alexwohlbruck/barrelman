@@ -140,8 +140,10 @@ consumed in `src/config/billing.config.ts`). Only the official deployment holds
 one. Never document billing setup as something a self-hoster does, and never add
 a code path that enables paid features without checking `billing.enabled`.
 Everything else — search, tiles, routing, transit, accounts, keys, metering —
-stays unlicensed. Issue tokens with `scripts/generate-license.ts`; the private key
-never enters the repo.
+stays unlicensed. Issue tokens with `scripts/generate-license.ts` (see
+`docs/polar-setup.md`); the private key never enters the repo. That script is a
+deliberate exception to the console-sync rule above — it takes the private key
+as input, so it must never get a `SCRIPTS` entry or a `package.json` script.
 
 **Suspension.** `suspendUser()` tears down sessions, the API-key cache and the
 balance cache. A new cache keyed on account state belongs there too.

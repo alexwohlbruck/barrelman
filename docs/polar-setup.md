@@ -19,6 +19,80 @@ repeat steps 2–4 when you go live.
 
 ---
 
+## 0. Issue the license
+
+Nothing below has any effect until the server holds a license granting the
+`billing` feature. Do this first.
+
+`scripts/generate-license.ts` has no imports — only the `crypto.subtle` and
+`Buffer` globals — so `bun` can run it by absolute path from any directory,
+including a machine that has no checkout of this repo.
+
+### Once, to create the keypair
+
+```bash
+bun ~/Documents/code/barrelman/scripts/generate-license.ts --keygen
+```
+
+It prints two hex strings:
+
+- **Public key** — paste into `DEFAULT_LICENSE_PUBLIC_KEY` in
+  [`src/lib/license.ts`](../src/lib/license.ts) and commit it. Until it is set,
+  no token verifies and billing is off everywhere, including production.
+- **Private key** — a 32-byte seed. Store it in a password manager. It never
+  belongs in this repo, in an issue, in CI, or on a deployed host. Only the
+  signed *token* goes to a server.
+
+Losing it means generating a new keypair and reissuing every license. Leaking it
+means anyone can mint themselves the `billing` feature.
+
+### Per license
+
+```bash
+LICENSE_PRIVATE_KEY=<hex-seed> \
+  bun ~/Documents/code/barrelman/scripts/generate-license.ts --exp 2027-01-01
+```
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--exp` | none (perpetual) | Any date `Date.parse` accepts |
+| `--org` | `barrelman` | Who the license is issued to |
+
+Set the printed token as `BARRELMAN_LICENSE` on the server and recreate the
+container — Compose bakes environment at creation, so a restart is not enough:
+
+```bash
+docker compose up -d --force-recreate barrelman
+```
+
+Startup logs which state it landed in:
+
+```
+[billing] Polar billing enabled (production)                      # licensed
+[license] BARRELMAN_LICENSE is set but invalid or expired …       # bad token
+[license] POLAR_ACCESS_TOKEN is set but no license grants …       # no token
+```
+
+**Renew before it lapses.** An expiring license does not cut customers off — it
+stops you charging them. Quota is resolved from the `users.plan` column
+(`credits.service.ts`), which never consults `billing.enabled`, so everyone
+keeps serving at their paid allowance. What stops is the commercial machinery:
+
+| Still works | Stops |
+|---|---|
+| Every data endpoint | New checkouts and the billing portal |
+| Existing plans and their allowances | Overage reporting to Polar |
+| Metering and credit accounting | Polar webhooks — `/billing/webhook` returns 404 |
+
+The webhook is the one to watch. With it dark, subscription lifecycle events
+stop being applied, so a customer who cancels or downgrades keeps their old plan
+until a valid license lets the events flow again.
+
+The license is deliberately not runnable from the admin console. It takes the
+private key as input, and a web UI is the wrong place for that.
+
+---
+
 ## 1. Organization and access token
 
 1. Create an organization at [polar.sh](https://polar.sh).
