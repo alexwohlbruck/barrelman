@@ -34,6 +34,36 @@ sed -i 's/^REGIONS=.*/REGIONS=colorado/' .env
 docker compose up -d barrelman-ops
 ```
 
+<Callout type="warn" title="Create the region before naming it in REGIONS">
+The two steps are independent. Naming a key no region defines fails closed:
+
+```
+Unknown region "colorado". Known regions: north-carolina, nyc-metro, global
+```
+
+Only `north-carolina`, `nyc-metro` and `global` ship in `config/regions.json`. Anything else has to be created first, in the console or via the admin API.
+</Callout>
+
+### Without the console
+
+The console is a client of the admin API, so a scripted setup can do the same thing. Authenticate with `BARRELMAN_ADMIN_KEY`:
+
+```bash
+KEY=$BARRELMAN_ADMIN_KEY
+API=http://localhost:5001
+
+curl -s -X POST -H "Authorization: Bearer $KEY" $API/admin/boundaries/refresh
+curl -s -H "Authorization: Bearer $KEY" "$API/admin/boundaries?q=colorado"
+curl -s -X POST -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' \
+  -d '{"id":"us/colorado"}' $API/admin/boundaries/resolve
+```
+
+The last call returns `{"region":{…}}` and writes nothing. Add a `"key"` to that object and POST it to `$API/admin/regions` to save it. Confirm with:
+
+```bash
+docker compose exec barrelman-ops bun run src/config/regions.ts summary
+```
+
 ### Confirm what is selected
 
 ```bash

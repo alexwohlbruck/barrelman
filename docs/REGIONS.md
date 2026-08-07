@@ -53,6 +53,40 @@ REGIONS=colorado
 `REGIONS` is read by the importers in `barrelman-ops`, so recreate that service
 after changing it — `docker compose up -d barrelman-ops`.
 
+**Create the region before naming it in `REGIONS`.** The two steps are
+independent, and a key that no region defines fails closed:
+
+```
+Unknown region "colorado". Known regions: north-carolina, nyc-metro, global
+```
+
+### Without the console
+
+The console is a client of the admin API, so a scripted or headless setup can do
+the same three calls. Authenticate with `BARRELMAN_ADMIN_KEY`:
+
+```bash
+KEY=$BARRELMAN_ADMIN_KEY
+API=http://localhost:5001
+
+# 1. Cache the boundary catalog (equivalent to scripts/fetch-boundaries.ts)
+curl -s -X POST -H "Authorization: Bearer $KEY" $API/admin/boundaries/refresh
+
+# 2. Find the boundary id
+curl -s -H "Authorization: Bearer $KEY" "$API/admin/boundaries?q=colorado"
+
+# 3. Derive a definition, then save it under a key of your choice
+curl -s -X POST -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' \
+  -d '{"id":"us/colorado"}' $API/admin/boundaries/resolve
+# → {"region":{…}}  — add "key":"colorado" to that object and POST it:
+curl -s -X POST -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' \
+  -d '{"key":"colorado","label":"Colorado","osmExtracts":[…],"bbox":[…],…}' \
+  $API/admin/regions
+```
+
+`/admin/boundaries/resolve` is a preview and writes nothing; `/admin/regions` is
+the write. Confirm with `bun run src/config/regions.ts summary` before importing.
+
 ### What gets filled in automatically
 
 | Field | Value for `colorado` | Source |
@@ -62,7 +96,7 @@ after changing it — `docker compose up -d barrelman-ops`.
 | `bbox` | `-109.06, 36.99, -102.04, 41.00` | Computed from the real boundary polygon |
 | `gtfsRegion` | the same bbox | Used as the Transitland feed search area |
 | `pelias.tigerStates` | `[8]` | ISO `US-CO` → Census FIPS |
-| `pelias.openaddresses` | 55 county CSV paths | OpenAddresses source listing |
+| `pelias.openaddresses` | 55 CSV paths (counties, cities, statewide) | OpenAddresses source listing |
 
 Two things are deliberately **not** guessed:
 
@@ -70,10 +104,11 @@ Two things are deliberately **not** guessed:
   code to a Who's-on-First place id, and a wrong id silently imports the wrong
   place. Empty just means Pelias imports the country's full admin hierarchy —
   slower, but correct. Narrow it later from [spelunker.whosonfirst.org][wof].
-- **OpenAddresses coverage is uneven and is read, not assumed.** New York has a
-  single `statewide` file; Colorado has 55 county files and *no* statewide file.
-  Guessing `us/co/statewide.csv` would silently import zero addresses, so the
-  list comes from the actual repository listing.
+- **OpenAddresses coverage is uneven and is read, not assumed.** New York is one
+  `statewide` file; Colorado is 55 entries — mostly counties, plus a handful of
+  city extracts and a statewide file. There is no pattern to guess from, and a
+  guessed path silently imports zero addresses, so the list comes from the
+  actual repository listing.
 
 > The OpenAddresses lookup uses the GitHub API (60 requests/hour
 > unauthenticated — one per region). If it's rate-limited you'll get a warning
