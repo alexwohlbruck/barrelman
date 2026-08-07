@@ -86,7 +86,14 @@ export function buildInvocation(script: ScriptDef, params: Record<string, unknow
       if (p.type === 'boolean') {
         if (val === true || val === 'true') args.push(flag)
       } else {
-        args.push(flag, String(val))
+        const str = String(val)
+        // A value starting with "-" (a bbox like "-109.06,36.99,...") is read as
+        // the next option by node:util parseArgs, which import-gtfs.ts uses:
+        //   TypeError: Option '--region' argument is ambiguous.
+        // The "=" form is unambiguous. Only used when needed, since some
+        // importers parse argv by index and expect the separated form.
+        if (str.startsWith('-')) args.push(`${flag}=${str}`)
+        else args.push(flag, str)
       }
     } else if (p.apply === 'positional') {
       if (typeof val === 'string' && val.trim()) positional.push(...val.trim().split(/\s+/))

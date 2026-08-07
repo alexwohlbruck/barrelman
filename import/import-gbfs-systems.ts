@@ -23,6 +23,11 @@ import { resolveRegions } from '../src/config/regions'
 
 const args = process.argv.slice(2)
 function getArg(name: string): string | undefined {
+  // Both forms: "--bbox <value>" and "--bbox=<value>". The console sends the
+  // second when the value starts with "-" (see services/job-invocation.ts),
+  // because a bbox west of Greenwich is otherwise read as another option.
+  const eq = args.find((a) => a.startsWith(`--${name}=`))
+  if (eq) return eq.slice(name.length + 3)
   const idx = args.indexOf(`--${name}`)
   return idx >= 0 && idx + 1 < args.length ? args[idx + 1] : undefined
 }

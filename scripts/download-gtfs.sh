@@ -57,8 +57,15 @@ mkdir -p "$DATA_DIR"
 # stops/routes into PostGIS, compute walking transfers, generate transfers.txt).
 for region in "${REGIONS_LIST[@]}"; do
   echo "── GTFS region: $region ──────────────────────────────"
+  # --flag=value, not --flag value. A gtfsRegion is usually a bbox, and every
+  # bbox west of Greenwich starts with a minus sign, which parseArgs reads as
+  # the next option rather than this one's value:
+  #
+  #   TypeError: Option '--region' argument is ambiguous.
+  #
+  # That broke GTFS import for every region in the Americas.
   bun run import/import-gtfs.ts \
-    --region "$region" \
-    --api-key "$API_KEY" \
-    --output-dir "$DATA_DIR"
+    --region="$region" \
+    --api-key="$API_KEY" \
+    --output-dir="$DATA_DIR"
 done
