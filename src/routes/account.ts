@@ -11,8 +11,10 @@ import {
   listApiKeys as _listApiKeys,
   renameApiKey as _renameApiKey,
   revokeApiKey as _revokeApiKey,
+  updateApiKeyOrigins as _updateApiKeyOrigins,
   updateApiKeyScopes as _updateApiKeyScopes,
 } from '../services/api-keys.service'
+import { invalidOrigins } from '../lib/origins'
 import {
   getBalance as _getBalance,
   listLedger as _listLedger,
@@ -45,12 +47,19 @@ import {
 /** Keys per account. High enough never to bind in practice, low enough to bound abuse. */
 const MAX_KEYS_PER_ACCOUNT = 50
 
+/** Origins per key. Generous for deploy previews, bounded so the array stays sane. */
+const MAX_ORIGINS_PER_KEY = 20
+
+/** Shown alongside a rejected origin, since the accepted forms are not obvious. */
+const ORIGIN_EXAMPLE = 'https://example.com, http://localhost:5200, https://*.netlify.app'
+
 export interface AccountDeps {
   createApiKey: typeof _createApiKey
   listApiKeys: typeof _listApiKeys
   renameApiKey: typeof _renameApiKey
   revokeApiKey: typeof _revokeApiKey
   updateApiKeyScopes: typeof _updateApiKeyScopes
+  updateApiKeyOrigins: typeof _updateApiKeyOrigins
   getBalance: typeof _getBalance
   listLedger: typeof _listLedger
   usageByDay: typeof _usageByDay
@@ -67,6 +76,7 @@ const defaultDeps: AccountDeps = {
   renameApiKey: _renameApiKey,
   revokeApiKey: _revokeApiKey,
   updateApiKeyScopes: _updateApiKeyScopes,
+  updateApiKeyOrigins: _updateApiKeyOrigins,
   getBalance: _getBalance,
   listLedger: _listLedger,
   usageByDay: _usageByDay,
@@ -214,10 +224,17 @@ export function createAccountRoutes(overrides: Partial<AccountDeps> = {}) {
           return { error: `Unknown scope(s): ${invalid.join(', ')}`, validScopes: ALL_SCOPES }
         }
 
+        const badOrigins = invalidOrigins(body.allowedOrigins ?? [])
+        if (badOrigins.length > 0) {
+          set.status = 400
+          return { error: `Not valid origin(s): ${badOrigins.join(', ')}`, example: ORIGIN_EXAMPLE }
+        }
+
         const created = await deps.createApiKey({
           userId: user!.id,
           name: body.name,
           scopes: body.scopes,
+          allowedOrigins: body.allowedOrigins,
         })
 
         set.status = 201
@@ -232,11 +249,14 @@ export function createAccountRoutes(overrides: Partial<AccountDeps> = {}) {
         body: t.Object({
           name: t.String({ minLength: 1, maxLength: 80 }),
           scopes: t.Optional(t.Array(t.String())),
+          allowedOrigins: t.Optional(t.Array(t.String(), { maxItems: MAX_ORIGINS_PER_KEY })),
         }),
         detail: {
           summary: 'Create an API key',
           description:
-            'Returns the only copy of the key that will ever exist.',
+            'Returns the only copy of the key that will ever exist. `allowedOrigins` restricts the key to ' +
+            'requests carrying a matching `Origin` or `Referer` — use it for keys that ship in a web page. ' +
+            'A restricted key cannot be used from a server, which sends neither header.',
           tags: ['Account'],
         },
       },
@@ -258,6 +278,14 @@ export function createAccountRoutes(overrides: Partial<AccountDeps> = {}) {
           }
           changed = (await deps.updateApiKeyScopes(user!.id, params.id, body.scopes)) || changed
         }
+        if (body.allowedOrigins !== undefined) {
+          const badOrigins = invalidOrigins(body.allowedOrigins)
+          if (badOrigins.length > 0) {
+            set.status = 400
+            return { error: `Not valid origin(s): ${badOrigins.join(', ')}`, example: ORIGIN_EXAMPLE }
+          }
+          changed = (await deps.updateApiKeyOrigins(user!.id, params.id, body.allowedOrigins)) || changed
+        }
 
         if (!changed) {
           set.status = 404
@@ -269,8 +297,13 @@ export function createAccountRoutes(overrides: Partial<AccountDeps> = {}) {
         body: t.Object({
           name: t.Optional(t.String({ minLength: 1, maxLength: 80 })),
           scopes: t.Optional(t.Array(t.String())),
+          allowedOrigins: t.Optional(t.Array(t.String(), { maxItems: MAX_ORIGINS_PER_KEY })),
         }),
-        detail: { summary: 'Rename an API key or change its scopes', tags: ['Account'] },
+        detail: {
+          summary: 'Rename an API key or change its scopes and origins',
+          description: 'Passing an empty `allowedOrigins` lifts the origin restriction entirely.',
+          tags: ['Account'],
+        },
       },
     )
 

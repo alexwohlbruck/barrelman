@@ -281,6 +281,7 @@ export function getApiKeys(includeRevoked = false): Promise<{ keys: ApiKeySummar
 export function createApiKey(payload: {
   name: string
   scopes?: string[]
+  allowedOrigins?: string[]
 }): Promise<CreatedApiKey> {
   return request<CreatedApiKey>('/account/keys', {
     method: 'POST',
@@ -291,7 +292,7 @@ export function createApiKey(payload: {
 
 export function updateApiKey(
   id: string,
-  payload: { name?: string; scopes?: string[] },
+  payload: { name?: string; scopes?: string[]; allowedOrigins?: string[] },
 ): Promise<{ ok: boolean }> {
   return request<{ ok: boolean }>(`/account/keys/${id}`, {
     method: 'PATCH',

@@ -39,6 +39,7 @@ function resolved(overrides: Partial<ResolvedKey> = {}): ResolvedKey {
     keyId: 'key-1',
     userId: 'user-1',
     scopes: ['*'],
+    allowedOrigins: [],
     plan: 'developer',
     suspended: false,
     suspensionReason: null,
@@ -486,6 +487,78 @@ describe('suspended accounts', () => {
 
     expect(res.status).toBe(403)
     expect((await res.json()).error).toBe('This account is suspended.')
+  })
+})
+
+/**
+ * Origin restrictions. The matching rules themselves are covered in
+ * `lib/origins.test.ts`; what matters here is that the guard consults them, and
+ * that a refused request costs the caller nothing and the owner nothing.
+ */
+describe('origin-restricted keys', () => {
+  const restricted = () =>
+    deps({ resolveApiKey: mock(async () => resolved({ allowedOrigins: ['https://barrelman.dev'] })) })
+
+  test('serves a request from an allowed origin', async () => {
+    const d = restricted()
+    const res = await app('tiles', d).handle(
+      get({ authorization: `Bearer ${LIVE_KEY}`, origin: 'https://barrelman.dev' }),
+    )
+
+    expect(res.status).toBe(200)
+  })
+
+  test('accepts a Referer when Origin is absent', async () => {
+    const d = restricted()
+    const res = await app('tiles', d).handle(
+      get({ authorization: `Bearer ${LIVE_KEY}`, referer: 'https://barrelman.dev/pricing' }),
+    )
+
+    expect(res.status).toBe(200)
+  })
+
+  test('403s a request from another site and never charges for it', async () => {
+    const d = restricted()
+    const res = await app('tiles', d).handle(
+      get({ authorization: `Bearer ${LIVE_KEY}`, origin: 'https://someone-elses-map.example' }),
+    )
+    const body = await res.json()
+
+    expect(res.status).toBe(403)
+    expect(body.error).toContain('someone-elses-map.example')
+    // Refused before the balance check: a stolen key must not be able to spend
+    // the owner's credits simply by being refused a lot.
+    expect(d.checkQuota).not.toHaveBeenCalled()
+    expect(d.recordUsage).toHaveBeenCalledWith(expect.objectContaining({ credits: 0, rejected: true }))
+  })
+
+  test('403s a request presenting no origin at all', async () => {
+    // curl sends neither header. If this passed, the restriction would be
+    // decoration — this is the case the whole feature rests on.
+    const d = restricted()
+    const res = await app('tiles', d).handle(get({ authorization: `Bearer ${LIVE_KEY}` }))
+
+    expect(res.status).toBe(403)
+    expect((await res.json()).error).toContain('presented none')
+  })
+
+  test('leaves an unrestricted key usable from anywhere, including with no origin', async () => {
+    const d = deps()
+    const anywhere = await app('tiles', d).handle(
+      get({ authorization: `Bearer ${LIVE_KEY}`, origin: 'https://unrelated.example' }),
+    )
+    expect(anywhere.status).toBe(200)
+
+    clearRateBuckets()
+    const headless = await app('tiles', deps()).handle(get({ authorization: `Bearer ${LIVE_KEY}` }))
+    expect(headless.status).toBe(200)
+  })
+
+  test('does not let the service credential be caught by a key restriction', async () => {
+    const d = restricted()
+    const res = await app('tiles', d).handle(get({ authorization: 'Bearer service-secret' }))
+
+    expect(res.status).toBe(200)
   })
 })
 

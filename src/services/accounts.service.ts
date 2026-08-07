@@ -109,11 +109,18 @@ export function ensureAccountsSchema(): Promise<void> {
           prefix       text NOT NULL,
           last4        text NOT NULL,
           scopes       text[] NOT NULL DEFAULT ARRAY['*'],
+          allowed_origins text[] NOT NULL DEFAULT ARRAY[]::text[],
           last_used_at timestamptz,
           revoked_at   timestamptz,
           expires_at   timestamptz,
           created_at   timestamptz NOT NULL DEFAULT now()
         )`
+      // Added after the table shipped. The empty default is load-bearing: it is
+      // what makes every existing key stay unrestricted rather than stop working
+      // the moment this column appears.
+      await sql`
+        ALTER TABLE accounts_api_keys
+          ADD COLUMN IF NOT EXISTS allowed_origins text[] NOT NULL DEFAULT ARRAY[]::text[]`
       await sql`CREATE UNIQUE INDEX IF NOT EXISTS accounts_api_keys_hash_idx ON accounts_api_keys (hash)`
       await sql`CREATE INDEX IF NOT EXISTS accounts_api_keys_user_idx ON accounts_api_keys (user_id)`
 
