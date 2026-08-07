@@ -1,0 +1,103 @@
+---
+title: Going to production
+description: TLS, origins, proxy hops, email, and closing sign-up.
+---
+
+Everything so far assumed `localhost`. For a real deployment:
+
+## Reverse proxy and TLS
+
+Caddy auto-provisions certificates. The API listens on **5001**:
+
+```
+api.example.com {
+  reverse_proxy barrelman:5001
+}
+```
+
+Connect the container to Caddy's network:
+
+```bash
+docker network connect caddy_network barrelman
+```
+
+Then stop publishing ports to the world. The Compose file maps 5001, 5002, 5003, 5004 and 5434 to the host; only the API needs to be reachable, and the database port should never be. Bind the rest to loopback in a `docker-compose.override.yml`:
+
+```yaml
+services:
+  barrelman-db:
+    ports: ["127.0.0.1:5434:5432"]
+  martin:
+    ports: ["127.0.0.1:5002:3000"]
+  graphhopper:
+    ports: ["127.0.0.1:5003:8989"]
+  motis:
+    ports: ["127.0.0.1:5004:8080"]
+```
+
+## Tell Barrelman its own origin
+
+```dotenv
+BARRELMAN_SERVER_ORIGIN=https://api.example.com
+PUBLIC_BASE_URL=https://api.example.com
+NODE_ENV=production
+```
+
+`BARRELMAN_SERVER_ORIGIN` is used in sign-in emails and as the OAuth redirect base, so it must match what a browser actually reaches. `PUBLIC_BASE_URL` is the origin `/docs` advertises as its "Production" server, so the try-it button points at the real API.
+
+<Callout type="warn">
+Set `BARRELMAN_CONSOLE_ORIGIN` **only** if you serve the console on a separate hostname. It also determines the WebAuthn relying-party ID, and changing it after passkeys exist invalidates every one of them.
+</Callout>
+
+## Count your proxy hops
+
+```dotenv
+BARRELMAN_TRUSTED_PROXY_HOPS=1
+```
+
+Every per-address rate limit depends on this, and **both mistakes are silent**. `X-Forwarded-For` is a list whose first entry the caller writes, so the address is counted in from the right, landing on the entry your own outermost proxy wrote.
+
+| Set it to | When |
+|---|---|
+| `0` | Barrelman is exposed directly. `X-Forwarded-For` is ignored; the peer address is used |
+| `1` (default) | One reverse proxy in front — Traefik, nginx, Caddy |
+| `2` | A CDN in front of that proxy |
+
+Too high and a caller spoofs past every per-address limit by prepending entries. Too low and every request looks like it came from your own proxy, so all of them share one bucket and legitimate traffic throttles itself.
+
+## Email
+
+Without SMTP, sign-in codes print to the log — fine for you, useless for anyone else.
+
+```dotenv
+SMTP_HOST=smtp.example.com
+SMTP_PORT=465
+SMTP_SECURE=true
+SMTP_USER=...
+SMTP_PASS=...
+SMTP_FROM=Barrelman <noreply@example.com>
+```
+
+## Closing sign-up
+
+An instance for your own use should not accept strangers:
+
+```dotenv
+BARRELMAN_REGISTRATION_MODE=invite
+```
+
+Sign-in is then restricted to accounts an administrator created.
+
+## Optional extras
+
+- **OAuth sign-in** — set a provider's client ID and secret and it turns on. Register the redirect as `<BARRELMAN_SERVER_ORIGIN>/auth/oauth/<provider>/callback`. Google, GitHub and GitLab are supported.
+- **Terms of service** — setting `BARRELMAN_TOS_URL` gates API-key creation on acceptance.
+- **Billing** — see [Polar setup](https://github.com/alexwohlbruck/barrelman/blob/main/docs/polar-setup.md). Skip it entirely for a private instance.
+- **Abuse controls** — the defaults are *not calibrated against real traffic*. Read [abuse controls](https://github.com/alexwohlbruck/barrelman/blob/main/docs/abuse-controls.md) before opening sign-up.
+
+## Next
+
+<Cards>
+  <Card title="Operations" href="/self-hosting/operations" description="Upgrades, data refreshes, backups, and rotating secrets." />
+  <Card title="Troubleshooting" href="/self-hosting/troubleshooting" description="What the common failures look like, and what they actually mean." />
+</Cards>

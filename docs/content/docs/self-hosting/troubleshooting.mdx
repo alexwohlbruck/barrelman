@@ -1,0 +1,86 @@
+---
+title: Troubleshooting
+description: What the common failures look like, and what they actually mean.
+---
+
+## Health and startup
+
+**`/health` returns `"status":"degraded"`**
+
+Not an error. `degraded` means the database is up but MOTIS is not, which is the expected state until you run the transit import. `"status":"error"` is the one that means something is actually broken.
+
+**`/health` returns `"database":"disconnected"`**
+
+`barrelman-db` is still initializing, or `BARRELMAN_DB_PASSWORD` was changed after the volume was created. Postgres only reads `POSTGRES_PASSWORD` on *first* initialization; changing it later has no effect on an existing volume. Check `docker compose logs barrelman-db`.
+
+## Data
+
+**Search returns `[]` but `/health` is fine**
+
+Either the import has not run, or you are querying outside your imported region. Check the row count:
+
+```bash
+docker exec barrelman-db psql -U barrelman -d barrelman -c "SELECT count(*) FROM geo_places;"
+```
+
+Remember the import is not clipped to the bounding box — the boundary of your data is whatever the OSM extracts cover, and the bbox narrows only bikeshare and transit feed *discovery*.
+
+**`Region "colorado" is disabled`**
+
+The console toggle is off. Enable it under **Regions**, or drop it from `REGIONS`. A disabled region named in `REGIONS` is an error, not a silent skip.
+
+**`Unknown boundary "us/colorado"` when resolving**
+
+The catalog is empty or stale — run `scripts/fetch-boundaries.ts`.
+
+**`Unknown GTFS region "co"`**
+
+`gtfsRegion` accepts a `w,s,e,n` bounding box, `global`, or one of the legacy tokens (`nc`, `nyc`, `southeast`, `us`). Anything else is rejected rather than falling through to an unfiltered query that would download the entire ~2,800 feed global catalog. Use the region's own bbox.
+
+**Address search returns nothing**
+
+Either `pelias.openaddresses` is empty for your region, or the Pelias `street` layer was never populated. See the layers note in [`pelias/README.md`](https://github.com/alexwohlbruck/barrelman/blob/main/pelias/README.md).
+
+## Engines
+
+**GraphHopper will not start, and dies before logging its version**
+
+The graph outgrew the heap. GraphHopper loads it into heap rather than memory-mapping it, so the failure looks like a crash rather than an out-of-memory. Check `du -sh` on the `graph-cache` directory, raise `-Xmx` in `GRAPHHOPPER_JAVA_OPTS` above it, and re-run `scripts/rebuild-graphhopper.sh`.
+
+**Transit routing returns nothing, but stops exist**
+
+The MOTIS dataset was never rebuilt after the GTFS import, or was rebuilt without the street graph. Run `scripts/rebuild-motis.sh` — the config it generates must include the OSM input, or MOTIS builds only the timetable and the router cannot reach any stop.
+
+Stops live in PostGIS while routing comes from MOTIS's own baked dataset, so the two can disagree.
+
+**`tt: binary version mismatch` on MOTIS startup**
+
+A `docker compose pull` moved the engine version. Re-run `scripts/rebuild-motis.sh`.
+
+## Configuration
+
+**A setting in `.env` has no effect**
+
+It is almost certainly not named in that service's `environment:` block in `docker-compose.yml`. Compose does not forward the host environment. Confirm with:
+
+```bash
+docker compose exec barrelman env | grep VARNAME
+```
+
+**A setting is present but reads as its default**
+
+Compose forwards optional settings as `${VAR:-}`, which defines them as the *empty string*. Barrelman reads config through `envNumber`/`envString`, which treat empty as "not configured" — so a knob you mean to turn *off* needs an explicit `0`, not a blank.
+
+## Jobs
+
+**A console job says "Another run of this script is in progress"**
+
+Long-running scripts are single-flight, guarded by a Postgres advisory lock, and the job is requeued rather than dropped. Check **Jobs** for what is holding it.
+
+**Console jobs sit in `queued` forever**
+
+`barrelman-ops` is not running, or cannot reach the database. It is what claims `process` jobs; the API only enqueues them.
+
+```bash
+docker compose logs barrelman-ops
+```

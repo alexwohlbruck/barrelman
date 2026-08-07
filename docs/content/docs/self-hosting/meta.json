@@ -1,0 +1,11 @@
+{
+  "title": "Self-hosting",
+  "pages": [
+    "index",
+    "first-run",
+    "importing-data",
+    "production",
+    "operations",
+    "troubleshooting"
+  ]
+}
