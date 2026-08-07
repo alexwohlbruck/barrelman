@@ -134,6 +134,15 @@ Elysia inspects the hook to compile its chain; a mock defeats that, so the
 guard's refusal is returned **and the handler still runs**. Use a plain function
 and count calls — see `src/routes/admin-users.test.ts`.
 
+**Licensing.** The Commons Clause forbids selling barrelman, so billing is gated
+on a signed Ed25519 license granting the `billing` feature (`src/lib/license.ts`,
+consumed in `src/config/billing.config.ts`). Only the official deployment holds
+one. Never document billing setup as something a self-hoster does, and never add
+a code path that enables paid features without checking `billing.enabled`.
+Everything else — search, tiles, routing, transit, accounts, keys, metering —
+stays unlicensed. Issue tokens with `scripts/sign-license.ts`; the private key
+never enters the repo.
+
 **Suspension.** `suspendUser()` tears down sessions, the API-key cache and the
 balance cache. A new cache keyed on account state belongs there too.
 

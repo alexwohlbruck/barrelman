@@ -78,7 +78,6 @@ longer job — see [`pelias/README.md`](pelias/README.md).
 | [Accounts & API keys](docs/accounts.md) | Sign-in, sessions, keys, scopes |
 | [Pricing & credits](docs/pricing.md) | Endpoint costs and plans |
 | [Abuse controls](docs/abuse-controls.md) | Throttling, suspension, terms |
-| [Polar setup](docs/polar-setup.md) | Wiring up billing |
 | [Configuration](docs/configuration.md) | Every environment variable |
 
 ---
@@ -421,18 +420,16 @@ bun run import:embed
 
 ---
 
-## Public API — accounts, keys and credits
+## Accounts, keys and credits
 
-Barrelman can be run as a public, metered API as well as a private engine.
-Developers sign in to the console, mint their own keys, and are billed in
-credits against a monthly allowance.
+Barrelman has a full account system: developers sign in to the console, mint
+their own scoped keys, and their usage is metered in credits.
 
 | | |
 |---|---|
 | [Accounts & API keys](docs/accounts.md) | Sign-in, sessions, keys, scopes |
-| [Pricing & credits](docs/pricing.md) | What each endpoint costs, what each plan includes |
+| [Pricing & credits](docs/pricing.md) | What each endpoint costs on the hosted API |
 | [Abuse controls](docs/abuse-controls.md) | Throttling, suspension, terms enforcement |
-| [Polar setup](docs/polar-setup.md) | Wiring up billing |
 
 The short version:
 
@@ -441,22 +438,25 @@ The short version:
 - **Credits** price endpoints by what they actually cost — a tile is 1, a
   geocode 5, an isochrone 40 — because charging both as "one request" would
   either give tiles away or price routing as if it were free.
-- **The free tier stops at its allowance** with a `402` rather than accruing
-  overage. Nobody can run up a bill on a plan they did not pay for.
 - **`BARRELMAN_API_KEY` remains a shared, unmetered service credential** — how
   Parchment calls barrelman, and how existing deployments keep working.
 
-| Plan | Price | Credits / month | Past the allowance |
-|---|---|---|---|
-| Free | $0 | 100,000 | **Stops with `402`** |
-| Developer | $19 | 1,000,000 | $0.030 / 1k |
-| Business | $99 | 10,000,000 | $0.018 / 1k |
-| Scale | $299 | 40,000,000 | $0.012 / 1k |
-| Enterprise | Custom | Negotiated | $0.008 / 1k |
+On a self-hosted instance, metering exists to show you your own usage. There is
+no plan to buy and no bill: accounts sit on the free tier, and the console hides
+its billing pages.
 
-All of it is optional. With no `POLAR_ACCESS_TOKEN` the billing surface is
-inert, every account sits on free, and metering exists only to show a
-self-hosted operator their own usage.
+### Selling access is not permitted
+
+Barrelman is source-available under Apache 2.0 with the **Commons Clause**. You
+may run it for yourself or your business, including as internal infrastructure,
+but you may not charge third parties for a service whose value is substantially
+Barrelman — see [LICENSING.md](LICENSING.md).
+
+Subscription billing is accordingly gated on a signed license that only the
+official deployment holds (`src/lib/license.ts`). Setting `POLAR_ACCESS_TOKEN`
+without one logs a warning and leaves billing off. Commercial licensing is
+available if you want to offer Barrelman as a paid product or service — reach
+out to discuss.
 
 ---
 
@@ -609,7 +609,7 @@ The ones worth knowing:
 | `BARRELMAN_ADMIN_KEY` | falls back to the API key | Gates `/admin/*`. An admin-role session works too |
 | `BARRELMAN_ADMIN_EMAILS` | — | Granted admin on sign-up. The first account is always an admin |
 | `SMTP_HOST` | — | Without it, sign-in codes print to the log |
-| `POLAR_ACCESS_TOKEN` | — | Enables billing. Without it every account stays on free |
+| `BARRELMAN_LICENSE` | — | Signed token unlocking billing. Official deployment only — see [LICENSING.md](LICENSING.md) |
 | `BARRELMAN_TOS_URL` | — | Setting it requires accepting terms before creating a key |
 | `OLLAMA_HOST` | `http://localhost:11434` | Embeddings for semantic search (optional) |
 

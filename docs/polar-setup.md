@@ -1,9 +1,16 @@
 # Setting up Polar billing
 
-Barrelman's billing is optional. With no `POLAR_ACCESS_TOKEN` the whole
-subscription surface is inert — every account sits on the free plan, `/billing/*`
-returns 404, and the Polar SDK is never constructed. Follow this only when you
-want to charge for the API.
+> **Official deployment only.** The Commons Clause in [LICENSE](../LICENSE)
+> removes the right to sell Barrelman, so charging third parties for access is
+> not something a self-hosted instance may do — see
+> [LICENSING.md](../LICENSING.md). Billing is gated on a signed license granting
+> the `billing` feature (`src/lib/license.ts`), and `POLAR_ACCESS_TOKEN` alone
+> does nothing without one. This document is operational notes for whoever runs
+> the official API, not a self-hosting guide.
+
+With no valid license the whole subscription surface is inert — every account
+sits on the free plan, `/billing/*` returns 404, and the Polar SDK is never
+constructed.
 
 Work through it in the **sandbox** first (`POLAR_SANDBOX=true`,
 [sandbox.polar.sh](https://sandbox.polar.sh)). It mirrors production with test

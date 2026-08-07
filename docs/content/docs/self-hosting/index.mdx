@@ -7,21 +7,19 @@ Barrelman is designed to be run by you. Every service is a published Docker imag
 
 Every step says how to tell it worked. Prefer the verification command over assuming success — most failures in this pipeline are silent and surface hours later as empty search results.
 
-## Decide what you're running
+## What you get
 
-Barrelman is two products in one codebase. Which one you want changes almost nothing about the install, but a lot about the configuration.
+A self-hosted Barrelman is a complete geospatial engine: search, geocoding, tiles, routing and transit, over whatever geography you import. Everything the [API reference](/api) documents works on your own instance.
 
-| | Private engine | Public metered API |
-|---|---|---|
-| Who calls it | Your own apps | Developers who sign up |
-| Auth | One shared `BARRELMAN_API_KEY` | Per-account `brm_live_…` keys |
-| Accounts | Only yours, for the console | Open sign-up |
-| Billing | Off | Polar |
-| Extra setup | None | SMTP, TLS, terms, Polar |
+Accounts and API keys work too. You can run it single-user with one shared `BARRELMAN_API_KEY`, or hand out per-account `brm_live_…` keys to your own team with scopes and usage tracking. Usage metering runs either way — on a self-hosted instance it exists to show you your own consumption.
 
-**Most self-hosters want the private engine.** With no `POLAR_ACCESS_TOKEN` the whole commercial surface is inert: every account sits on the free plan, the console hides its billing pages, and the Polar SDK is never constructed. Metering still runs, but only so you can see your own usage.
+<Callout type="info" title="Selling access is not permitted">
+Barrelman is source-available under the Apache 2.0 license with the [Commons Clause](https://github.com/alexwohlbruck/barrelman/blob/main/LICENSING.md). You may run it for yourself, your family, or your business — including as internal infrastructure — but you may not charge third parties for a service whose value is substantially Barrelman.
 
-These pages build the private engine first. [Going to production](/self-hosting/production) covers what to add if you are exposing it publicly.
+Subscription billing is therefore not part of a self-hosted instance. It is disabled without a signed license, which only the official deployment holds. If you want to offer Barrelman commercially, a commercial license is available — get in touch.
+</Callout>
+
+The rest of these pages set up the engine. [Going to production](/self-hosting/production) covers what to add when you put it behind a domain.
 
 ## Requirements
 

@@ -1,5 +1,10 @@
 # Pricing & credits
 
+> This describes the **hosted API** at `api.barrelman.dev`. A self-hosted
+> instance meters usage the same way but has nothing to charge — subscription
+> billing is gated on a license only the official deployment holds, because the
+> Commons Clause forbids selling barrelman. See [LICENSING.md](../LICENSING.md).
+
 Usage is metered in **credits**, not requests, because barrelman's endpoints are
 wildly unequal. A vector tile is one indexed read; an isochrone fans out to
 hundreds of GraphHopper calls. Charging both as "one request" would either give

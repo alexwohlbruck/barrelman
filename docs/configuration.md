@@ -81,13 +81,28 @@ URI as `<BARRELMAN_SERVER_ORIGIN>/auth/oauth/<provider>/callback`.
 | `GITLAB_CLIENT_ID` / `GITLAB_CLIENT_SECRET` | |
 | `GITLAB_BASE_URL` | `https://gitlab.com`. Set for a self-hosted instance |
 
-## Billing
-
-See [polar-setup.md](polar-setup.md) for the walkthrough.
+## Licensing
 
 | Variable | Description |
 |---|---|
-| `POLAR_ACCESS_TOKEN` | **Enables billing.** Without it every account stays on free |
+| `BARRELMAN_LICENSE` | Signed token unlocking gated features. Only `billing` today |
+| `BARRELMAN_LICENSE_PUBLIC_KEY` | Overrides the key licenses verify against. For tests and commercial licensees |
+
+The Commons Clause in [LICENSE](../LICENSE) removes the right to sell
+Barrelman, so a self-hosted instance may not charge third parties for access —
+see [LICENSING.md](../LICENSING.md). Subscription billing is gated on a license
+granting the `billing` feature, which only the official deployment holds.
+Everything else — search, tiles, routing, transit, accounts, keys, metering —
+needs no license and never will.
+
+## Billing
+
+**Requires a license granting `billing` (above).** Setting these without one
+logs a warning and leaves billing disabled.
+
+| Variable | Description |
+|---|---|
+| `POLAR_ACCESS_TOKEN` | Polar API token. Billing needs this *and* a license |
 | `POLAR_WEBHOOK_SECRET` | Required when billing is on — the server refuses to start otherwise |
 | `POLAR_ORGANIZATION_ID` | |
 | `POLAR_SANDBOX` | `true` for sandbox.polar.sh |
