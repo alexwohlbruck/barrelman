@@ -72,6 +72,49 @@ tiles  places  spatial  geocode  search  routing  transit  isochrone
 narrower scopes is stored as just `*` — keeping both would suggest the narrow
 ones constrain something.
 
+### Origin restrictions
+
+Scopes bound what a key can *reach*. Origin restrictions bound where it can be
+used *from*, which is the other half of the problem for a key that ships inside
+a web page — a tile key travels in the query string and is visible to anyone
+reading source.
+
+A key may list the origins it works from. Empty means unrestricted, which is the
+default and what every key created before this shipped has.
+
+```
+https://barrelman.dev        exact origin
+http://localhost:5200        scheme and port are part of the match
+https://*.netlify.app        any subdomain — deploy previews, without listing each
+```
+
+The request must carry a matching `Origin` or `Referer`. `Origin` is preferred
+and is what a browser sends on a tile fetch; `Referer` is the fallback and has
+its path stripped before matching.
+
+Two rules are worth stating outright, because both surprise people:
+
+- **A restricted key cannot be used from a server.** curl and server-side fetches
+  send neither header, and a request presenting no origin is refused. Accepting
+  the absent case would make the restriction decoration — anyone who dropped the
+  header would walk straight through. Restrict browser keys; leave server keys
+  open and secret.
+- **A wildcard does not match its own apex.** `https://*.netlify.app` does not
+  cover `https://netlify.app`; list it separately if you want it. Lookalike
+  suffixes never match — `evil-netlify.app` is not a subdomain of `netlify.app`.
+
+What this is worth: `Origin` and `Referer` are set by the browser and cannot be
+overridden by page script, so a key pasted into someone else's site stops
+working. They are trivially forged by curl, so this stops casual theft, not a
+determined scraper — the same guarantee Mapbox and Google Maps give for their
+URL restrictions, and the same reason both still meter. Refusals are recorded as
+rejected usage and count toward the penalty box, so a key being hammered from
+the wrong origin is visible rather than merely blocked.
+
+Set them when creating a key, or on an existing key from the globe button in
+`/console/keys`. Changes take effect immediately — the verification cache is
+evicted directly, as with revocation.
+
 ### Presenting a key
 
 ```bash

@@ -193,6 +193,12 @@ export const apiKeys = pgTable(
     last4: text('last4').notNull(),
     /** Endpoint groups this key may call; `['*']` means every group. */
     scopes: text('scopes').array().notNull().default(['*']),
+    /**
+     * Origins this key may be used from, as canonical `scheme://host[:port]`
+     * with an optional leading `*.` label. Empty means no restriction, which is
+     * what every key predating the column has and what a server-side key wants.
+     */
+    allowedOrigins: text('allowed_origins').array().notNull().default([]),
     lastUsedAt: timestamp('last_used_at', { withTimezone: true }),
     revokedAt: timestamp('revoked_at', { withTimezone: true }),
     expiresAt: timestamp('expires_at', { withTimezone: true }),

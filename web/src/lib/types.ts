@@ -260,6 +260,8 @@ export interface ApiKeySummary {
   prefix: string
   last4: string
   scopes: string[]
+  /** Origins the key may be used from; empty means unrestricted. */
+  allowedOrigins: string[]
   lastUsedAt: string | null
   revokedAt: string | null
   expiresAt: string | null

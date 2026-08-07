@@ -43,6 +43,7 @@ import { recordUsage, refundUsage } from '../services/usage.service'
 import { getPlan } from '../billing/plans'
 import { accountsEnabled } from '../config/accounts.config'
 import { clientIp } from '../lib/rate-limit'
+import { originAllowed, presentedOrigin } from '../lib/origins'
 import { safeEqual } from '../lib/crypto'
 import { hashIp } from '../services/accounts.service'
 import { envNumber } from '../config/env'
@@ -57,6 +58,8 @@ export interface ApiCaller {
   plan?: string
   /** Billing groups this key may call; `['*']` for all. */
   scopes?: string[]
+  /** Origins this key may be used from; empty or absent means unrestricted. */
+  allowedOrigins?: string[]
   /** The account is disabled — the guard turns this into a 403 with the reason. */
   suspended?: boolean
   suspensionReason?: string | null
@@ -198,6 +201,7 @@ function toCaller(resolved: ResolvedKey): ApiCaller {
     keyId: resolved.keyId,
     plan: resolved.plan,
     scopes: resolved.scopes,
+    allowedOrigins: resolved.allowedOrigins,
     suspended: resolved.suspended,
     suspensionReason: resolved.suspensionReason,
   }
@@ -301,6 +305,28 @@ export function apiAuth(group: EndpointGroup, overrides: Partial<ApiAuthDeps> = 
         error: `This API key is not permitted to call ${group} endpoints`,
         scope: group,
       })
+    }
+
+    /**
+     * Origin restrictions, checked here for the same reason as scopes: this is
+     * a property of the key, so it should be refused before any budget — rate,
+     * concurrency or credit — is spent deciding.
+     *
+     * The message names the origin the request actually presented. That is the
+     * one thing the owner needs to fix a misconfigured allowlist, and it tells
+     * a thief nothing they did not already send.
+     */
+    const origins = caller.allowedOrigins ?? []
+    if (origins.length > 0) {
+      const presented = presentedOrigin(headers)
+      if (!originAllowed(origins, presented)) {
+        return reject(403, {
+          error: presented
+            ? `This API key is not permitted for requests from ${presented}`
+            : 'This API key is restricted to specific origins and this request presented none.',
+          origin: presented ?? null,
+        })
+      }
     }
 
     const verdict = checkThrottle({ ip, group, userId: caller.userId, keyId: caller.keyId, plan })
