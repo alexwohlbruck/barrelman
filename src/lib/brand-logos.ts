@@ -1,5 +1,5 @@
 import postgres from 'postgres'
-import { dbUrl } from '../db'
+import { dbUrl, onnotice } from '../db'
 import { brandCache } from './cache'
 
 /**
@@ -56,7 +56,7 @@ async function fetchEntityBatch(qids: string[]): Promise<Map<string, LogoMeta>> 
 }
 
 export async function ensureBrandLogos(): Promise<void> {
-  const sql = postgres(dbUrl, { max: 1 })
+  const sql = postgres(dbUrl, { max: 1, onnotice })
   try {
     // Brands with a wikidata id but no brand_logos row yet.
     const missing = await sql<{ wikidata: string }[]>`
