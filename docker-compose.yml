@@ -293,6 +293,13 @@ services:
       # here, not by the API — see docs/REGIONS.md.
       REGIONS: ${REGIONS:-}
       GTFS_DATA_DIR: /gtfs-zips
+      # Where the shared OSM volume is mounted in THIS container. The scripts
+      # default to <repo>/data, which is /app/data here and holds nothing —
+      # prepare-motis-osm.sh failed with "region.osm.pbf not found" while the
+      # file sat in the volume all along. barrelman-db gets the equivalent
+      # BARRELMAN_DATA_DIR baked into its image.
+      OSM_DATA_DIR: /data
+      BARRELMAN_DATA_DIR: /data
       # scripts/*.sh docker-exec into these sibling containers by name.
       DB_CONTAINER: barrelman-db
     volumes:
