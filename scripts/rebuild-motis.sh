@@ -64,11 +64,33 @@ echo "[$(date '+%H:%M:%S')] [1/3] [motis] Regenerating config from gtfs_feeds...
 docker exec barrelman sh -lc 'cd /app && bun run import/generate-motis-config.ts --street-routing --osm-path /osm-data/region.osm.pbf --output /gtfs-data/config.yml'
 
 echo "[$(date '+%H:%M:%S')] [2/3] [motis] Clean-rebuilding dataset (motis import)..."
-# Move the current dataset aside (while the server is still up — it keeps serving
-# via the memory-mapped inodes) so the import builds a fresh, internally
-# consistent /data/data. Then stop the server so nothing holds files open.
-docker exec "$CONTAINER" sh -c 'rm -rf /data/data.prev; [ -d /data/data ] && mv /data/data /data/data.prev || true'
-docker stop "$CONTAINER" >/dev/null 2>&1 || true
+# Move the current dataset aside so the import builds a fresh, internally
+# consistent /data/data.
+#
+# On a healthy instance this happens while the server is still up — it keeps
+# serving via the memory-mapped inodes, so there is no gap. But a MOTIS with no
+# valid dataset crash-loops, and `docker exec` into a restarting container
+# fails ("Container is restarting, wait until the container is running") —
+# which is exactly the state a first-time install is in. So fall back to moving
+# the dataset from outside once the container is stopped. Same failure mode
+# rebuild-graphhopper.sh had.
+MOVE='rm -rf /data/data.prev; [ -d /data/data ] && mv /data/data /data/data.prev || true'
+
+if [ "$(docker inspect "$CONTAINER" --format '{{.State.Running}}' 2>/dev/null)" = "true" ] \
+   && docker exec "$CONTAINER" sh -c "$MOVE" 2>/dev/null; then
+  docker stop "$CONTAINER" >/dev/null 2>&1 || true
+else
+  log "container not usable for an in-place move — stopping and moving from outside"
+  docker stop "$CONTAINER" >/dev/null 2>&1 || true
+  # barrelman-ops mounts the same volume at /gtfs-data; otherwise use a
+  # throwaway container holding it.
+  if [ -d /gtfs-data ] && [ -w /gtfs-data ]; then
+    rm -rf /gtfs-data/data.prev
+    [ -d /gtfs-data/data ] && mv /gtfs-data/data /gtfs-data/data.prev || true
+  else
+    docker run --rm -v "${GTFS_VOL}:/data" alpine sh -c "$MOVE"
+  fi
+fi
 
 if docker run --rm --network "$NETWORK" \
      -v "${GTFS_VOL}:/data" \
