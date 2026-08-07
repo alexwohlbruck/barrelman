@@ -485,7 +485,7 @@ surface. The table below is the shape of it.
 | `GET` | `/brands`, `/brands/:key` | `places` | Brand lookup |
 | `GET` `POST` | `/isochrone` | `isochrone` | Reachability polygons for any travel mode |
 | `GET` | `/isochrone/modes` | `isochrone` | Supported isochrone modes and their limits |
-| `POST` | `/route` | `routing` | Point-to-point street routing |
+| `POST` | `/route` | `routing` | Point-to-point street routing. Takes a **GraphHopper-native** body — `profile`, not `mode` (see below) |
 | `GET` | `/graphhopper/*` | `routing` | Proxied GraphHopper |
 | `POST` `GET` | `/transit/*` | `transit` | Stops, routes, departures, vehicles, intermodal routing |
 | `GET` | `/gbfs/*` | `transit` | Bikeshare systems and stations |
@@ -545,6 +545,25 @@ Returns places whose centroids fall inside the given area's polygon.
 ### GET `/place/:osmType/:osmId`
 
 Fetch full details for a single OSM element. `osmType` is `node`, `way`, or `relation`.
+
+### POST `/route`
+
+Point-to-point routing, enriched with per-edge surface / road class / bike
+network / smoothness / slope details and elevation statistics.
+
+The body is passed through to GraphHopper, so it takes GraphHopper's own
+parameters — **`profile`, not `mode`** (unlike `/isochrone`, which takes `mode`).
+Omitting it returns `profile parameter required`.
+
+```bash
+curl -X POST http://localhost:5001/route \
+  -H "Authorization: Bearer $BARRELMAN_API_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{"points":[[-104.9903,39.7392],[-105.2705,40.0150]],"profile":"car"}'
+```
+
+`points` are `[lng, lat]` pairs. Profiles are `car`, `bike`, `foot` and the
+custom models in [`custom_models/`](custom_models).
 
 ### GET / POST `/isochrone`
 
