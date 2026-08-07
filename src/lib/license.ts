@@ -14,7 +14,7 @@
  * intended to resell cannot switch billing on by fumbling an env var.
  *
  * Token format: `base64(JSON payload) + "." + hex(Ed25519 signature)`.
- * Sign one with `bun run scripts/sign-license.ts`.
+ * Sign one with `bun scripts/generate-license.ts`.
  */
 
 /**

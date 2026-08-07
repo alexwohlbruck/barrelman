@@ -140,7 +140,7 @@ consumed in `src/config/billing.config.ts`). Only the official deployment holds
 one. Never document billing setup as something a self-hoster does, and never add
 a code path that enables paid features without checking `billing.enabled`.
 Everything else — search, tiles, routing, transit, accounts, keys, metering —
-stays unlicensed. Issue tokens with `scripts/sign-license.ts`; the private key
+stays unlicensed. Issue tokens with `scripts/generate-license.ts`; the private key
 never enters the repo.
 
 **Suspension.** `suspendUser()` tears down sessions, the API-key cache and the

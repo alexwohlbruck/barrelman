@@ -10,7 +10,7 @@ let publicKeyHex: string
 let otherPublicKeyHex: string
 const originalKey = process.env.BARRELMAN_LICENSE_PUBLIC_KEY
 
-/** Sign a payload the same way scripts/sign-license.ts does. */
+/** Sign a payload the same way scripts/generate-license.ts does. */
 async function issue(payload: Record<string, unknown>, key = signingKey): Promise<string> {
   const bytes = new TextEncoder().encode(JSON.stringify(payload))
   const sig = await crypto.subtle.sign({ name: 'Ed25519' }, key, bytes)
