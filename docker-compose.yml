@@ -207,7 +207,14 @@ services:
       GITLAB_CLIENT_SECRET: ${GITLAB_CLIENT_SECRET:-}
       GITLAB_BASE_URL: ${GITLAB_BASE_URL:-}
 
-      # ── Billing ──────────────────────────────────────────────────────
+      # ── Licensing ────────────────────────────────────────────────────
+      # Signed token granting the `billing` feature. Only the official
+      # deployment holds one; the Commons Clause forbids selling access to a
+      # self-hosted instance (LICENSING.md). Without it the Polar settings
+      # below do nothing.
+      BARRELMAN_LICENSE: ${BARRELMAN_LICENSE:-}
+
+      # ── Billing (requires a license, see above) ──────────────────────
       POLAR_ACCESS_TOKEN: ${POLAR_ACCESS_TOKEN:-}
       POLAR_WEBHOOK_SECRET: ${POLAR_WEBHOOK_SECRET:-}
       POLAR_ORGANIZATION_ID: ${POLAR_ORGANIZATION_ID:-}
