@@ -168,10 +168,19 @@ config or feeds change, so a plain restart keeps serving the old schedules and
 the new feeds never reach riders. Re-run it after every GTFS refresh, and after
 any MOTIS version bump.
 
-Rough timings for a single US state: OSM import 20–40 min, GraphHopper graph
-~10–20 min, GTFS depends on feed count, MOTIS rebuild a few minutes, Pelias
-several hours (it's a separate stack — see
-[`pelias/README.md`](../pelias/README.md)).
+Measured on an 8-core / 16 GB host importing Colorado (360 MB PBF, 6.0M
+objects, 75 transit feeds):
+
+| Step | Time |
+|---|---|
+| OSM download + osm2pgsql + post-processing | ~14 min |
+| GraphHopper graph | ~7 min |
+| GTFS download + import + 173k walking transfers | ~5 min |
+| MOTIS dataset rebuild | ~4 min |
+| GBFS systems | ~10 min |
+
+A larger region scales roughly with PBF size. Pelias is a separate stack and
+takes hours — see [`pelias/README.md`](../pelias/README.md).
 
 ### Sizing
 
