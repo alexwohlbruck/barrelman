@@ -246,12 +246,34 @@ Elasticsearch and GraphHopper. **Production should give the database the box.**
 | `BARRELMAN_DB_CACHE_SIZE` | `3GB` | `24GB` |
 | `BARRELMAN_DB_WORK_MEM` | `64MB` | `128MB` |
 | `BARRELMAN_DB_MAINTENANCE_WORK_MEM` | `1GB` | `2GB` |
+| `BARRELMAN_DB_SHM_SIZE` | `1gb` | `2gb` |
 | `BARRELMAN_DB_MEM_LIMIT` | `2g` | `28g` |
 | `BARRELMAN_DB_RANDOM_PAGE_COST` | `1.1` | `1.1` (SSD); raise toward `4` on spinning disks |
 
 Rules of thumb: ~25% of host RAM in `shared_buffers`, 50–75% in
-`effective_cache_size`, and `mem_limit` with headroom over `shared_buffers` for
-`work_mem` allocations and per-backend overhead.
+`effective_cache_size`.
+
+### The one that bites
+
+`mem_limit` has to cover **`shared_buffers` + `shm_size` + `maintenance_work_mem`**,
+plus headroom for `work_mem` and per-backend overhead.
+
+`shared_buffers` and `/dev/shm` are both shared memory charged to the same
+container cgroup, so they add up. Get it wrong and the kernel OOM-kills Postgres
+partway through an index build, which surfaces at the client as a bare:
+
+```
+psql:/app/import/post-import.sql:114: error: connection to server was lost
+```
+
+Nothing in that message points at memory. Confirm it with
+`docker inspect barrelman-db --format '{{.State.OOMKilled}}'`.
+
+`BARRELMAN_DB_SHM_SIZE` exists because Docker's 64 MB default is far too small
+for parallel index builds — those fail the other way, with
+`could not resize shared memory segment ... No space left on device`, which
+reads like a full disk. Its requirement scales with `maintenance_work_mem` and
+the parallel worker count, so raise the two together.
 
 Search latency is dominated by whether the working set stays resident, so these
 matter more than they look.

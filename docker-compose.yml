@@ -70,8 +70,14 @@ services:
     # query workers' shared memory there. The post-import index builds ask for
     # ~2GB and die with "could not resize shared memory segment ... No space
     # left on device" — which reads like a disk problem on a host with 200GB
-    # free. Sized to match maintenance_work_mem headroom.
-    shm_size: 2gb
+    # free.
+    #
+    # This counts against mem_limit below. The budget the container must fit is
+    # roughly shared_buffers + shm_size + maintenance_work_mem, and exceeding it
+    # gets Postgres OOM-killed mid-index-build, surfacing as a bare
+    # "connection to server was lost". Raise this with maintenance_work_mem,
+    # and raise mem_limit with both.
+    shm_size: ${BARRELMAN_DB_SHM_SIZE:-1gb}
     # Keeps Postgres from squeezing MOTIS, Elasticsearch and GraphHopper on a
     # dev machine. Headroom over shared_buffers for work_mem allocations and
     # per-backend overhead. Raise or drop it in production, where the database
