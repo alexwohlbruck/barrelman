@@ -617,9 +617,27 @@ docker compose up -d
 > is stateless enough to upgrade in place. If you'd rather not be surprised,
 > pull during a window where you can run the rebuild.
 
-[Watchtower](https://containrrr.dev/watchtower/) can automate the pull, but note
-it only manages containers on **its own Docker host** — a Watchtower running on
-a different machine to the stack will never update it.
+Watchtower can automate the pull, with two caveats worth knowing before you rely
+on it:
+
+- **It only manages containers on its own Docker host.** Watchtower watches the
+  Docker socket it is given and nothing else, so an instance running on a
+  different machine to the stack will never update it. Every host you want
+  auto-updated needs its own Watchtower.
+- **A blanket Watchtower will eventually hit the binary-format trap above.** It
+  pulls the same floating tags `docker compose pull` would, so if MOTIS or
+  GraphHopper are on `:latest` it will one day restart them onto an incompatible
+  engine version with no one watching. Either pin those two services to explicit
+  version tags, or run Watchtower with `--label-enable` and label only the
+  stateless services.
+
+Note that the original [containrrr/watchtower](https://github.com/containrrr/watchtower)
+has been unmaintained since November 2023, and its Docker client negotiates API
+version 1.25 — which Docker 29 refuses (`client version 1.25 is too old`),
+leaving the container dead on arrival. Use the maintained community fork,
+[nicholas-fedor/watchtower](https://github.com/nicholas-fedor/watchtower)
+(`nickfedor/watchtower`), which takes the same flags and the same
+`com.centurylinklabs.watchtower.*` labels.
 
 ### Resource recommendations
 
