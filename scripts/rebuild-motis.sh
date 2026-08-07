@@ -32,8 +32,14 @@ set -euo pipefail
 # Skips silently if barrelman-motis does not exist (e.g. minimal dev setup).
 # =============================================================================
 
+# The server is stopped before the import and started again after, rather than
+# recreated via `docker compose up --force-recreate`. Nothing about the
+# container's definition changes — only the dataset on the shared volume — and a
+# stopped container re-opens (re-mmaps) the fresh files on start. Using plain
+# `docker` also keeps this runnable from barrelman-ops, which has the docker CLI
+# but no compose plugin, and whose working directory would resolve to a
+# different compose project name than the operator's.
 CONTAINER="barrelman-motis"
-SERVICE="motis"
 MOTIS_IMAGE="ghcr.io/motis-project/motis:latest"
 NETWORK="barrelman_default"
 GTFS_VOL="barrelman_barrelman-gtfs-data"
@@ -68,14 +74,14 @@ if docker run --rm --network "$NETWORK" \
      -v "${GTFS_VOL}:/data" \
      -v "${OSM_VOL}:/osm-data:ro" \
      -w /data "$MOTIS_IMAGE" /motis import; then
-  echo "[$(date '+%H:%M:%S')] [3/3] [motis] Recreating server to serve fresh dataset..."
-  docker compose up -d --force-recreate "$SERVICE" >/dev/null
+  echo "[$(date '+%H:%M:%S')] [3/3] [motis] Restarting server to serve fresh dataset..."
+  docker start "$CONTAINER" >/dev/null
 else
   log "ERROR: motis import failed — restoring previous dataset"
   # Server is stopped; use a throwaway container to swap the dataset back.
   docker run --rm -v "${GTFS_VOL}:/data" alpine sh -c \
     'rm -rf /data/data; [ -d /data/data.prev ] && mv /data/data.prev /data/data || true'
-  docker compose up -d --force-recreate "$SERVICE" >/dev/null
+  docker start "$CONTAINER" >/dev/null
   exit 1
 fi
 
