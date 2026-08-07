@@ -306,6 +306,9 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       - barrelman-osm-data:/data
       - barrelman-gtfs-data:/gtfs-data
-      - ./data/gtfs:/gtfs-zips:ro
+      # Read-WRITE, unlike the API's mount of the same directory: this is the
+      # container that downloads the feeds. With :ro every download failed with
+      # "EROFS: read-only file system" and the run ended "Processed 0 feeds".
+      - ./data/gtfs:/gtfs-zips
     depends_on:
       - barrelman-db
