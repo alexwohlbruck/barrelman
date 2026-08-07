@@ -66,6 +66,12 @@ services:
       - barrelman-osm-data:/data
     ports:
       - "5434:5432"
+    # Docker gives a container 64MB of /dev/shm, and Postgres puts parallel
+    # query workers' shared memory there. The post-import index builds ask for
+    # ~2GB and die with "could not resize shared memory segment ... No space
+    # left on device" — which reads like a disk problem on a host with 200GB
+    # free. Sized to match maintenance_work_mem headroom.
+    shm_size: 2gb
     # Keeps Postgres from squeezing MOTIS, Elasticsearch and GraphHopper on a
     # dev machine. Headroom over shared_buffers for work_mem allocations and
     # per-backend overhead. Raise or drop it in production, where the database
