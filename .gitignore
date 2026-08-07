@@ -4,3 +4,5 @@ dist/
 *.log
 data/
 drizzle/meta/
+
+.claude/settings.local.json

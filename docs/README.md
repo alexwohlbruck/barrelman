@@ -2,14 +2,17 @@
 
 | Document | What it covers |
 |---|---|
-| [Development](development.md) | Running the whole stack with Docker Compose |
+| [**Self-hosting**](https://docs.barrelman.dev/self-hosting) | **Start here.** Server to running instance, end to end |
+| [Regions](REGIONS.md) | Choosing what data to import, and the import pipeline |
+| [Configuration](configuration.md) | Every environment variable |
+| [Development](development.md) | Running the stack from a clone, with hot reload |
 | [Accounts & API keys](accounts.md) | Sign-in, sessions, keys, scopes |
 | [Pricing & credits](pricing.md) | What each endpoint costs, what each plan includes |
 | [Abuse controls](abuse-controls.md) | Throttling, suspension, terms enforcement |
 | [Polar setup](polar-setup.md) | Wiring up billing |
-| [Configuration](configuration.md) | Every environment variable |
+| [Pelias](../pelias/README.md) | Provisioning the optional address geocoder |
 
-The [top-level README](../README.md) covers architecture, data import and
+The [top-level README](../README.md) covers architecture, the API surface and
 deployment. [CLAUDE.md](../CLAUDE.md) is the working guide for agents and the
 checklist for keeping the admin console in sync.
 
