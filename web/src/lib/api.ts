@@ -389,6 +389,17 @@ export function suspendUser(
   })
 }
 
+export function setUserRole(
+  id: string,
+  role: 'user' | 'admin',
+  reason?: string,
+): Promise<{ user: { id: string; role: string } }> {
+  return request(`/admin/users/${id}/role`, {
+    method: 'POST',
+    body: JSON.stringify({ role, reason }),
+  })
+}
+
 export function unsuspendUser(id: string, reason?: string): Promise<{ suspension: SuspensionInfo }> {
   return request<{ suspension: SuspensionInfo }>(`/admin/users/${id}/unsuspend`, {
     method: 'POST',

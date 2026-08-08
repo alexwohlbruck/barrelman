@@ -70,7 +70,7 @@ docker logs barrelman --tail 50 | grep -i "sign-in code"
 
 Enter the eight-digit code. You are now signed in as an administrator, and the operator views — **Scripts**, **Jobs**, **Data**, **Regions** — are visible.
 
-To promote further accounts later, list their addresses in `BARRELMAN_ADMIN_EMAILS` (comma-separated); they are granted the role on sign-up.
+To promote further accounts later, open **Users** in the console and make them an administrator. The last administrator cannot be demoted, so an instance always has someone who can administer it.
 
 <Callout type="warn">
 If you are exposing this instance publicly, do this **before** [going to production](/self-hosting/production). Sign-up is open by default, and "first account wins" is a race you want to have already finished. Set `BARRELMAN_REGISTRATION_MODE=invite` if you never want open sign-up at all.

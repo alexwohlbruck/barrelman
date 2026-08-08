@@ -28,21 +28,35 @@ import {
   unsuspendUser,
   warnUser,
 } from '../services/moderation.service'
-import { listApiKeys, invalidateUserKeys } from '../services/api-keys.service'
+import { listApiKeys, invalidateUserKeys, resolveApiKey } from '../services/api-keys.service'
 import { getBalance, setPlan } from '../services/credits.service'
 import { usageByDay, currentCycleStart, utcDay } from '../services/usage.service'
-import { describeTerms, findUserById } from '../services/accounts.service'
+import {
+  countAdmins,
+  describeTerms,
+  findUserById,
+  LastAdminError,
+  setUserRole,
+} from '../services/accounts.service'
 import { throttleStats } from '../services/throttle.service'
 import { allPlans, getPlan, isPlanId } from '../billing/plans'
 
-/** Recorded as the actor when the caller authenticated with the shared key. */
-const ADMIN_KEY_ACTOR = 'admin-key'
+/**
+ * Recorded as the actor when a caller somehow reaches these routes without a
+ * resolvable account. The guard should make that unreachable — both accepted
+ * credentials carry a user — so it exists to keep the audit trail non-null
+ * rather than to describe a real caller.
+ */
+const UNKNOWN_ACTOR = 'unknown'
 
 const SUSPENSION_KINDS = ['tos-violation', 'abuse', 'automated-abuse', 'billing', 'spam', 'operator-request'] as const
 
 export interface AdminUserDeps {
   suspendUser: typeof suspendUser
   unsuspendUser: typeof unsuspendUser
+  setUserRole: typeof setUserRole
+  countAdmins: typeof countAdmins
+  resolveApiKey: typeof resolveApiKey
   warnUser: typeof warnUser
   addNote: typeof addNote
   resolveAbuseSignal: typeof resolveAbuseSignal
@@ -58,6 +72,9 @@ export interface AdminUserDeps {
 const defaultDeps: AdminUserDeps = {
   suspendUser,
   unsuspendUser,
+  setUserRole,
+  countAdmins,
+  resolveApiKey,
   warnUser,
   addNote,
   resolveAbuseSignal,
@@ -73,9 +90,25 @@ const defaultDeps: AdminUserDeps = {
 export function createAdminUserRoutes(overrides: Partial<AdminUserDeps> = {}) {
   const deps = { ...defaultDeps, ...overrides }
 
+  /**
+   * Who to record in the moderation log.
+   *
+   * A session gives the user directly. A caller using an admin-scoped API key
+   * has no session, but the key resolves to its owner — attributing those
+   * actions to a person is one of the reasons the shared admin secret was
+   * retired, so resolve it rather than logging an anonymous placeholder.
+   */
   async function actorFor(request: Request): Promise<string> {
     const { user } = await deps.resolveSession(request)
-    return user?.id ?? ADMIN_KEY_ACTOR
+    if (user) return user.id
+
+    const authorization = request.headers.get('authorization')
+    const token = authorization?.replace('Bearer ', '').trim()
+    if (token) {
+      const key = await deps.resolveApiKey(token)
+      if (key) return key.userId
+    }
+    return UNKNOWN_ACTOR
   }
 
   return new Elysia({ prefix: '/admin' })
@@ -291,6 +324,58 @@ export function createAdminUserRoutes(overrides: Partial<AdminUserDeps> = {}) {
           'Operator override, independent of the billing provider. This is how an account is moved onto ' +
           'an internal plan such as `demo`, which serves the API unmetered — so it is recorded in the ' +
           'moderation log like any other privileged action.',
+        tags: ['Admin'],
+      },
+    },
+  )
+
+  .post(
+    '/users/:id/role',
+    async ({ params, body, request, set }) => {
+      const account = await deps.findUserById(params.id)
+      if (!account) {
+        set.status = 404
+        return { error: 'Account not found' }
+      }
+      if (account.role === body.role) {
+        return { user: { id: account.id, role: account.role } }
+      }
+
+      try {
+        const updated = await deps.setUserRole(params.id, body.role)
+        if (!updated) {
+          set.status = 404
+          return { error: 'Account not found' }
+        }
+
+        // Granting or removing administrator access reaches every destructive
+        // operation in the console, so it belongs in the same audit trail as a
+        // suspension.
+        await deps.addNote(
+          params.id,
+          `Role changed from ${account.role} to ${body.role}${body.reason ? `: ${body.reason.trim()}` : ''}`,
+          await actorFor(request),
+        )
+
+        return { user: { id: updated.id, role: updated.role } }
+      } catch (err) {
+        if (err instanceof LastAdminError) {
+          set.status = 409
+          return { error: err.message }
+        }
+        throw err
+      }
+    },
+    {
+      body: t.Object({
+        role: t.Union([t.Literal('user'), t.Literal('admin')]),
+        reason: t.Optional(t.String({ maxLength: 500 })),
+      }),
+      detail: {
+        summary: "Change an account's role",
+        description:
+          'Promote an account to administrator or demote it. Refuses to remove the last administrator — ' +
+          'with no shared admin secret, an instance with zero admins can only be recovered from the database.',
         tags: ['Admin'],
       },
     },

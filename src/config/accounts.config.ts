@@ -72,18 +72,6 @@ export const otpTtlMs = envNumber('BARRELMAN_OTP_TTL_MINUTES', 15) * 60 * 1000
 export const sessionCookieName = 'barrelman_session'
 
 /**
- * Emails that are granted the `admin` role on sign-up. The very first account
- * created on a fresh instance also becomes an admin, so a new deployment is
- * never locked out of its own console.
- */
-export const adminEmails = new Set(
-  (process.env.BARRELMAN_ADMIN_EMAILS || '')
-    .split(',')
-    .map((e) => e.trim().toLowerCase())
-    .filter(Boolean),
-)
-
-/**
  * `open` (default) lets anyone sign up — this is a public API. `invite` limits
  * sign-in to accounts an admin has already created, for private deployments.
  */

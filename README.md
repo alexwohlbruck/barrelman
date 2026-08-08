@@ -655,7 +655,6 @@ The ones worth knowing:
 | `REGIONS` | `north-carolina,nyc-metro` | Which geographies the importers pull. `global` for everything |
 | `BARRELMAN_API_KEY` | — | Shared **service** credential, unmetered. **Unset means the data API is open** |
 | `BARRELMAN_ACCOUNTS_ENABLED` | `true` | `false` disables accounts — and with them `/admin/*`, which has no other credential |
-| `BARRELMAN_ADMIN_EMAILS` | — | Granted admin on sign-up. The first account is always an admin |
 | `SMTP_HOST` | — | Without it, sign-in codes print to the log |
 | `BARRELMAN_LICENSE` | — | Signed token unlocking billing. Official deployment only — see [LICENSING.md](LICENSING.md) |
 | `BARRELMAN_TOS_URL` | — | Setting it requires accepting terms before creating a key |

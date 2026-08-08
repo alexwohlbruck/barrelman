@@ -42,7 +42,13 @@ specifically.
 
 The **first account created on a fresh instance becomes an administrator**, so a
 new deployment is never locked out of its own console. After that, promote by
-listing addresses in `BARRELMAN_ADMIN_EMAILS`.
+promoting them in the console under **Users**.
+
+Roles are changed with `POST /admin/users/:id/role`, and the endpoint **refuses
+to remove the last administrator** — with no shared admin secret, an instance
+with zero admins can only be recovered with direct database access. The check
+and the write share a transaction with the admin rows locked, so two concurrent
+demotions cannot both slip through.
 
 Admin routes accept an admin-role session, or an account API key carrying the
 `admin` scope whose owner holds the admin role — humans sign in, scripts and CI

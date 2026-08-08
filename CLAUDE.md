@@ -146,8 +146,11 @@ deliberate exception to the console-sync rule above — it takes the private key
 as input, so it must never get a `SCRIPTS` entry or a `package.json` script.
 
 **Admin auth.** `/admin/*` takes an admin-role session or an account API key
-with the `admin` scope owned by an admin. There is no shared secret — the old
-`BARRELMAN_ADMIN_KEY` is retired. Keep `admin` OUT of the `*` wildcard
+with the `admin` scope owned by an admin. There is no shared secret — both
+`BARRELMAN_ADMIN_KEY` and `BARRELMAN_ADMIN_EMAILS` are retired. The first account
+on a fresh instance is an admin; the rest are promoted in the console. Changing a
+role goes through `setUserRole()`, which **refuses to remove the last admin** —
+zero admins is only recoverable from psql, so keep that guard. Keep `admin` OUT of the `*` wildcard
 (`src/billing/plans.ts`): `*` is the default for a scopeless key, so folding
 admin in would promote every existing key. Only an admin may grant it, on
 create *and* on scope update — both paths need the guard.
