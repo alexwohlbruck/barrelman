@@ -74,8 +74,29 @@ await initJobHistory()
 // Wikidata (needs the geo_brands catalog to exist first).
 void ensureSearchEnrichment().then(() => ensureBrandLogos())
 
+/**
+ * CORS.
+ *
+ * The data API is meant to be called from a browser on any origin — a tile key
+ * in a customer's map, the landing page demo — so the origin stays open. What
+ * is NOT open is credentials: the plugin's default is `credentials: true`
+ * alongside a reflected origin, which is the combination that lets any page
+ * read a credentialed response.
+ *
+ * Nothing needs it. The console authenticates with `credentials: 'same-origin'`
+ * and is reached same-origin in every layout: the API serves it at /console,
+ * and the split deployment proxies /admin, /auth, /account and /billing through
+ * the console's own origin (which is also why the Vite dev proxy sets
+ * changeOrigin: false). So cookies never legitimately cross an origin here.
+ *
+ * SameSite=lax on the session cookie already stopped a cross-site fetch from
+ * carrying it, and `middleware/session.ts` origin-checks cookie-authenticated
+ * mutations. This removes the reliance on those being the only line of defence
+ * — flipping the cookie to SameSite=none for some future embed should not
+ * silently become an account-takeover bug.
+ */
 const app = new Elysia()
-  .use(cors())
+  .use(cors({ credentials: false }))
   .use(swagger(swaggerConfig))
   .use(healthRoutes)
   .use(searchRoutes)
