@@ -162,7 +162,7 @@ async function findNearbyStops(
   radius: number,
   limit: number,
 ): Promise<Array<{ feedId: string; stopId: string; name: string; code?: string; lat: number; lng: number; distance: number }>> {
-  const result = await db.execute(sql.raw(`
+  const result = await db.execute(sql`
     SELECT
       stop_id,
       feed_id,
@@ -183,7 +183,7 @@ async function findNearbyStops(
     AND (location_type = 0 OR location_type IS NULL)
     ORDER BY distance
     LIMIT ${limit}
-  `))
+  `)
 
   return (result as any[]).map((row: any) => ({
     feedId: row.feed_id,
@@ -209,17 +209,20 @@ async function fetchRouteColors(
   // Deduplicate
   const unique = [...new Map(pairs.map(p => [`${p.feedId}_${p.routeId}`, p])).values()]
 
-  // Build WHERE clause for batch lookup
-  const conditions = unique
-    .map(p => `(feed_id = '${p.feedId.replace(/'/g, "''")}' AND route_id = '${p.routeId.replace(/'/g, "''")}')`)
-    .join(' OR ')
+  // Build WHERE clause for batch lookup. One parametrized fragment per pair,
+  // OR-joined — the pairs come from MOTIS responses, so they are not ours to
+  // trust, and a quoted string would be the same bug station.service.ts had.
+  const conditions = sql.join(
+    unique.map(p => sql`(feed_id = ${p.feedId} AND route_id = ${p.routeId})`),
+    sql` OR `,
+  )
 
   try {
-    const result = await db.execute(sql.raw(`
+    const result = await db.execute(sql`
       SELECT feed_id, route_id, route_color, route_text_color
       FROM gtfs_routes
       WHERE ${conditions}
-    `))
+    `)
 
     for (const row of result as any[]) {
       const key = `${row.feed_id}_${row.route_id}`
