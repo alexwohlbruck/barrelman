@@ -1,12 +1,17 @@
 /**
  * Polar billing configuration.
  *
- * Billing is entirely optional. With no `POLAR_ACCESS_TOKEN` the whole
- * subscription surface is inert: every account sits on the free plan, the
- * console hides its billing pages, and the Polar SDK is never constructed. That
- * is the correct default for a self-hosted barrelman, where the operator owns
- * the hardware and metering exists only to show them their own usage.
+ * Billing is off unless BOTH are true: Polar is configured, and a valid license
+ * grants the `billing` feature. With either missing the whole subscription
+ * surface is inert — every account sits on the free plan, the console hides its
+ * billing pages, and the Polar SDK is never constructed.
+ *
+ * That is the correct state for a self-hosted barrelman. The Commons Clause in
+ * LICENSE removes the right to sell the software, so charging third parties for
+ * access is not something a self-hoster may do; metering exists there only to
+ * show an operator their own usage. See src/lib/license.ts and LICENSING.md.
  */
+import { verifyLicense, hasFeature } from '../lib/license'
 
 /** Credit packs, as `productId:credits` pairs. Bought once, never expiring. */
 function parseCreditPacks(raw: string | undefined): Record<string, number> {
@@ -26,8 +31,25 @@ function parseCreditPacks(raw: string | undefined): Record<string, number> {
   return packs
 }
 
+const licenseToken = process.env.BARRELMAN_LICENSE ?? ''
+export const license = licenseToken ? await verifyLicense(licenseToken) : null
+
+if (licenseToken && !license) {
+  console.warn('[license] BARRELMAN_LICENSE is set but invalid or expired — billing stays disabled')
+}
+
+const polarConfigured = Boolean(process.env.POLAR_ACCESS_TOKEN)
+const billingLicensed = hasFeature(license, 'billing')
+
+if (polarConfigured && !billingLicensed) {
+  console.warn(
+    '[license] POLAR_ACCESS_TOKEN is set but no license grants the "billing" feature — ' +
+      'billing is disabled. Selling access to barrelman requires a commercial license; see LICENSING.md.',
+  )
+}
+
 export const billing = {
-  enabled: Boolean(process.env.POLAR_ACCESS_TOKEN),
+  enabled: polarConfigured && billingLicensed,
   sandbox: process.env.POLAR_SANDBOX === 'true',
   accessToken: process.env.POLAR_ACCESS_TOKEN ?? '',
   webhookSecret: process.env.POLAR_WEBHOOK_SECRET ?? '',

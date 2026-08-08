@@ -16,7 +16,16 @@
  */
 
 import { db } from '../db'
-import { sql } from 'drizzle-orm'
+import { and, eq, sql } from 'drizzle-orm'
+import {
+  gtfsFeeds,
+  gtfsRoutes,
+  gtfsShapes,
+  gtfsStopRoutes,
+  gtfsStops,
+  gtfsTransfers,
+  gtfsTripPatterns,
+} from '../schema/gtfs'
 import { parse } from 'csv-parse/sync'
 import { type FetchFn } from './transit.service'
 
@@ -288,17 +297,14 @@ export async function discoverRtUrls(
   if (!key) throw new Error('TRANSITLAND_API_KEY is required')
 
   // Get feeds that need RT URL discovery
-  const feedFilter = feedId
-    ? `AND feed_id = '${feedId.replace(/'/g, "''")}'`
-    : ''
-  const result = await db.execute(sql.raw(`
+  const result = await db.execute(sql`
     SELECT feed_id, onestop_id
     FROM gtfs_feeds
     WHERE onestop_id IS NOT NULL
       AND (rt_urls IS NULL OR rt_urls = '[]'::jsonb)
-      ${feedFilter}
+      ${feedId ? sql`AND feed_id = ${feedId}` : sql.empty()}
     ORDER BY feed_id
-  `))
+  `)
 
   const feeds = result as unknown as Array<{ feed_id: string; onestop_id: string }>
   let checked = 0
@@ -312,12 +318,10 @@ export async function discoverRtUrls(
 
       if (rtUrls.length > 0) {
         if (!dryRun) {
-          const rtUrlsJson = JSON.stringify(rtUrls).replace(/'/g, "''")
-          await db.execute(sql.raw(`
-            UPDATE gtfs_feeds
-            SET rt_urls = '${rtUrlsJson}'::jsonb
-            WHERE feed_id = '${feed.feed_id.replace(/'/g, "''")}'
-          `))
+          await db
+            .update(gtfsFeeds)
+            .set({ rtUrls })
+            .where(eq(gtfsFeeds.feedId, feed.feed_id))
         }
         updated++
       }
@@ -786,9 +790,7 @@ export async function importShapes(
   if (shapes.size === 0) return 0
 
   // Clear existing shapes for this feed
-  await db.execute(sql.raw(
-    `DELETE FROM gtfs_shapes WHERE feed_id = '${feedId.replace(/'/g, "''")}'`,
-  ))
+  await db.delete(gtfsShapes).where(eq(gtfsShapes.feedId, feedId))
 
   // Batch insert in chunks of 100 (shapes can be large)
   const entries = Array.from(shapes.entries())
@@ -797,18 +799,14 @@ export async function importShapes(
 
   for (let i = 0; i < entries.length; i += chunkSize) {
     const chunk = entries.slice(i, i + chunkSize)
-    const values = chunk
-      .map(([shapeId, coords]) => {
-        const coordsJson = JSON.stringify(coords)
-        return `('${feedId.replace(/'/g, "''")}', '${shapeId.replace(/'/g, "''")}', '${coordsJson.replace(/'/g, "''")}'::jsonb)`
-      })
-      .join(',\n')
 
-    await db.execute(sql.raw(`
-      INSERT INTO gtfs_shapes (feed_id, shape_id, coordinates)
-      VALUES ${values}
-      ON CONFLICT (feed_id, shape_id) DO UPDATE SET coordinates = EXCLUDED.coordinates
-    `))
+    await db
+      .insert(gtfsShapes)
+      .values(chunk.map(([shapeId, coordinates]) => ({ feedId, shapeId, coordinates })))
+      .onConflictDoUpdate({
+        target: [gtfsShapes.feedId, gtfsShapes.shapeId],
+        set: { coordinates: sql`excluded.coordinates` },
+      })
     imported += chunk.length
   }
 
@@ -823,11 +821,10 @@ export async function updateRouteShapes(
   feedId: string,
 ): Promise<void> {
   for (const [routeId, shapeId] of routeShapes) {
-    await db.execute(sql.raw(`
-      UPDATE gtfs_routes
-      SET shape_id = '${shapeId.replace(/'/g, "''")}'
-      WHERE feed_id = '${feedId.replace(/'/g, "''")}' AND route_id = '${routeId.replace(/'/g, "''")}'
-    `))
+    await db
+      .update(gtfsRoutes)
+      .set({ shapeId })
+      .where(and(eq(gtfsRoutes.feedId, feedId), eq(gtfsRoutes.routeId, routeId)))
   }
 }
 
@@ -841,15 +838,16 @@ export async function getBikesAllowed(
 ): Promise<Record<string, number>> {
   if (routes.length === 0) return {}
 
-  const conditions = routes.map(({ feedId, routeId }) =>
-    `(feed_id = '${feedId.replace(/'/g, "''")}' AND route_id = '${routeId.replace(/'/g, "''")}')`
-  ).join(' OR ')
+  const conditions = sql.join(
+    routes.map(({ feedId, routeId }) => sql`(feed_id = ${feedId} AND route_id = ${routeId})`),
+    sql` OR `,
+  )
 
-  const rows = await db.execute(sql.raw(`
+  const rows = await db.execute(sql`
     SELECT feed_id, route_id, bikes_allowed
     FROM gtfs_routes
     WHERE ${conditions}
-  `))
+  `)
 
   const result: Record<string, number> = {}
   // Default all requested routes to 0
@@ -871,12 +869,11 @@ export async function updateBikesAllowed(
   bikesAllowed: Map<string, number>,
   feedId: string,
 ): Promise<void> {
-  for (const [routeId, value] of bikesAllowed) {
-    await db.execute(sql.raw(`
-      UPDATE gtfs_routes
-      SET bikes_allowed = ${value}
-      WHERE feed_id = '${feedId.replace(/'/g, "''")}' AND route_id = '${routeId.replace(/'/g, "''")}'
-    `))
+  for (const [routeId, bikesAllowedValue] of bikesAllowed) {
+    await db
+      .update(gtfsRoutes)
+      .set({ bikesAllowed: bikesAllowedValue })
+      .where(and(eq(gtfsRoutes.feedId, feedId), eq(gtfsRoutes.routeId, routeId)))
   }
 }
 
@@ -900,45 +897,37 @@ export async function importStops(
 
     const validBatch = batch.filter(s => s.stopId && s.feedId)
     if (validBatch.length === 0) continue
-    const values = validBatch.map(s => {
-      const name = s.stopName ? `'${s.stopName.replace(/'/g, "''")}'` : 'NULL'
-      const code = s.stopCode ? `'${s.stopCode.replace(/'/g, "''")}'` : 'NULL'
-      const parent = s.parentStation ? `'${s.parentStation.replace(/'/g, "''")}'` : 'NULL'
-      const platform = s.platformCode ? `'${s.platformCode.replace(/'/g, "''")}'` : 'NULL'
 
-      return `(
-        '${s.stopId.replace(/'/g, "''")}',
-        '${s.feedId.replace(/'/g, "''")}',
-        ${name},
-        ${code},
-        ${s.stopLat},
-        ${s.stopLon},
-        ${s.locationType},
-        ${parent},
-        ${s.wheelchairBoarding},
-        ${platform},
-        ST_SetSRID(ST_MakePoint(${s.stopLon}, ${s.stopLat}), 4326)
-      )`
-    }).join(',\n')
-
-    await db.execute(sql.raw(`
-      INSERT INTO gtfs_stops (
-        stop_id, feed_id, stop_name, stop_code,
-        stop_lat, stop_lon, location_type, parent_station,
-        wheelchair_boarding, platform_code, geom
+    await db
+      .insert(gtfsStops)
+      .values(
+        validBatch.map(s => ({
+          stopId: s.stopId,
+          feedId: s.feedId,
+          stopName: s.stopName || null,
+          stopCode: s.stopCode || null,
+          stopLat: s.stopLat,
+          stopLon: s.stopLon,
+          locationType: s.locationType,
+          parentStation: s.parentStation || null,
+          wheelchairBoarding: s.wheelchairBoarding,
+          platformCode: s.platformCode || null,
+          geom: sql`ST_SetSRID(ST_MakePoint(${s.stopLon}, ${s.stopLat}), 4326)`,
+        })),
       )
-      VALUES ${values}
-      ON CONFLICT (feed_id, stop_id)
-      DO UPDATE SET
-        stop_name = EXCLUDED.stop_name,
-        stop_lat = EXCLUDED.stop_lat,
-        stop_lon = EXCLUDED.stop_lon,
-        location_type = EXCLUDED.location_type,
-        parent_station = EXCLUDED.parent_station,
-        wheelchair_boarding = EXCLUDED.wheelchair_boarding,
-        platform_code = EXCLUDED.platform_code,
-        geom = EXCLUDED.geom
-    `))
+      .onConflictDoUpdate({
+        target: [gtfsStops.feedId, gtfsStops.stopId],
+        set: {
+          stopName: sql`excluded.stop_name`,
+          stopLat: sql`excluded.stop_lat`,
+          stopLon: sql`excluded.stop_lon`,
+          locationType: sql`excluded.location_type`,
+          parentStation: sql`excluded.parent_station`,
+          wheelchairBoarding: sql`excluded.wheelchair_boarding`,
+          platformCode: sql`excluded.platform_code`,
+          geom: sql`excluded.geom`,
+        },
+      })
 
     imported += validBatch.length
   }
@@ -960,33 +949,35 @@ export async function importRoutes(
   for (let i = 0; i < routes.length; i += BATCH_SIZE) {
     const batch = routes.slice(i, i + BATCH_SIZE)
 
-    const values = batch.map(r => {
-      const esc = (v: string | null) => v ? `'${v.replace(/'/g, "''")}'` : 'NULL'
-      return `(
-        ${esc(r.routeId)}, ${esc(r.feedId)}, ${esc(r.agencyId)}, ${esc(r.agencyName)},
-        ${esc(r.routeShortName)}, ${esc(r.routeLongName)}, ${r.routeType},
-        ${esc(r.routeColor)}, ${esc(r.routeTextColor)}, ${esc(r.routeUrl)}
-      )`
-    }).join(',\n')
-
-    await db.execute(sql.raw(`
-      INSERT INTO gtfs_routes (
-        route_id, feed_id, agency_id, agency_name,
-        route_short_name, route_long_name, route_type,
-        route_color, route_text_color, route_url
+    await db
+      .insert(gtfsRoutes)
+      .values(
+        batch.map(r => ({
+          routeId: r.routeId,
+          feedId: r.feedId,
+          agencyId: r.agencyId,
+          agencyName: r.agencyName,
+          routeShortName: r.routeShortName,
+          routeLongName: r.routeLongName,
+          routeType: r.routeType,
+          routeColor: r.routeColor,
+          routeTextColor: r.routeTextColor,
+          routeUrl: r.routeUrl,
+        })),
       )
-      VALUES ${values}
-      ON CONFLICT (feed_id, route_id)
-      DO UPDATE SET
-        agency_id = EXCLUDED.agency_id,
-        agency_name = EXCLUDED.agency_name,
-        route_short_name = EXCLUDED.route_short_name,
-        route_long_name = EXCLUDED.route_long_name,
-        route_type = EXCLUDED.route_type,
-        route_color = EXCLUDED.route_color,
-        route_text_color = EXCLUDED.route_text_color,
-        route_url = EXCLUDED.route_url
-    `))
+      .onConflictDoUpdate({
+        target: [gtfsRoutes.feedId, gtfsRoutes.routeId],
+        set: {
+          agencyId: sql`excluded.agency_id`,
+          agencyName: sql`excluded.agency_name`,
+          routeShortName: sql`excluded.route_short_name`,
+          routeLongName: sql`excluded.route_long_name`,
+          routeType: sql`excluded.route_type`,
+          routeColor: sql`excluded.route_color`,
+          routeTextColor: sql`excluded.route_text_color`,
+          routeUrl: sql`excluded.route_url`,
+        },
+      })
 
     imported += batch.length
   }
@@ -1008,16 +999,10 @@ export async function importStopRoutes(
   for (let i = 0; i < associations.length; i += BATCH_SIZE) {
     const batch = associations.slice(i, i + BATCH_SIZE)
 
-    const values = batch.map(a => {
-      const esc = (v: string) => `'${v.replace(/'/g, "''")}'`
-      return `(${esc(a.feedId)}, ${esc(a.stopId)}, ${esc(a.routeId)})`
-    }).join(',\n')
-
-    await db.execute(sql.raw(`
-      INSERT INTO gtfs_stop_routes (feed_id, stop_id, route_id)
-      VALUES ${values}
-      ON CONFLICT (feed_id, stop_id, route_id) DO NOTHING
-    `))
+    await db
+      .insert(gtfsStopRoutes)
+      .values(batch.map(a => ({ feedId: a.feedId, stopId: a.stopId, routeId: a.routeId })))
+      .onConflictDoNothing()
 
     imported += batch.length
   }
@@ -1035,23 +1020,22 @@ export async function importTripPatterns(
   feedId: string,
   patterns: ReturnType<typeof deriveTripPatterns>,
 ): Promise<number> {
-  const feedEsc = feedId.replace(/'/g, "''")
-  await db.execute(sql.raw(`DELETE FROM gtfs_trip_patterns WHERE feed_id = '${feedEsc}'`))
+  await db.delete(gtfsTripPatterns).where(eq(gtfsTripPatterns.feedId, feedId))
   if (patterns.length === 0) return 0
 
   const BATCH_SIZE = 500
   let imported = 0
   for (let i = 0; i < patterns.length; i += BATCH_SIZE) {
     const batch = patterns.slice(i, i + BATCH_SIZE)
-    const values = batch.map(p => {
-      const esc = (v: string) => `'${v.replace(/'/g, "''")}'`
-      return `(${esc(p.feedId)}, ${esc(p.routeId)}, ${p.directionId ?? 'NULL'}, ${esc(p.stopSeq)})`
-    }).join(',\n')
 
-    await db.execute(sql.raw(`
-      INSERT INTO gtfs_trip_patterns (feed_id, route_id, direction_id, stop_seq)
-      VALUES ${values}
-    `))
+    await db.insert(gtfsTripPatterns).values(
+      batch.map(p => ({
+        feedId: p.feedId,
+        routeId: p.routeId,
+        directionId: p.directionId ?? null,
+        stopSeq: p.stopSeq,
+      })),
+    )
 
     imported += batch.length
   }
@@ -1095,22 +1079,24 @@ export async function importTransfers(
   transfers: ReturnType<typeof parseTransfers>,
 ): Promise<number> {
   if (transfers.length === 0) return 0
-  const feedEsc = transfers[0].feedId.replace(/'/g, "''")
-  await db.execute(sql.raw(`DELETE FROM gtfs_transfers WHERE feed_id = '${feedEsc}'`))
+  await db.delete(gtfsTransfers).where(eq(gtfsTransfers.feedId, transfers[0].feedId))
 
   const BATCH_SIZE = 500
   let imported = 0
   for (let i = 0; i < transfers.length; i += BATCH_SIZE) {
     const batch = transfers.slice(i, i + BATCH_SIZE)
-    const values = batch.map(t => {
-      const esc = (v: string) => `'${v.replace(/'/g, "''")}'`
-      return `(${esc(t.feedId)}, ${esc(t.fromStopId)}, ${esc(t.toStopId)}, ${t.transferType}, ${t.minTransferTime ?? 'NULL'})`
-    }).join(',\n')
-    await db.execute(sql.raw(`
-      INSERT INTO gtfs_transfers (feed_id, from_stop_id, to_stop_id, transfer_type, min_transfer_time)
-      VALUES ${values}
-      ON CONFLICT (feed_id, from_stop_id, to_stop_id) DO NOTHING
-    `))
+    await db
+      .insert(gtfsTransfers)
+      .values(
+        batch.map(t => ({
+          feedId: t.feedId,
+          fromStopId: t.fromStopId,
+          toStopId: t.toStopId,
+          transferType: t.transferType,
+          minTransferTime: t.minTransferTime ?? null,
+        })),
+      )
+      .onConflictDoNothing()
     imported += batch.length
   }
   return imported
@@ -1120,35 +1106,42 @@ export async function importTransfers(
  * Record a feed import in the gtfs_feeds table.
  */
 export async function recordFeed(feed: GtfsFeedInfo, stopCount: number, routeCount: number): Promise<void> {
-  const esc = (v: string | null | undefined) => v ? `'${v.replace(/'/g, "''")}'` : 'NULL'
-  const rtUrlsJson = feed.rtUrls?.length
-    ? `'${JSON.stringify(feed.rtUrls).replace(/'/g, "''")}'::jsonb`
-    : 'NULL'
-  await db.execute(sql.raw(`
-    INSERT INTO gtfs_feeds (feed_id, onestop_id, name, url, region, stop_count, route_count, rt_urls, imported_at)
-    VALUES (${esc(feed.feedId)}, ${esc(feed.onestopId)}, ${esc(feed.name)}, ${esc(feed.url)}, ${esc(feed.region)}, ${stopCount}, ${routeCount}, ${rtUrlsJson}, NOW())
-    ON CONFLICT (feed_id)
-    DO UPDATE SET
-      name = EXCLUDED.name,
-      url = EXCLUDED.url,
-      stop_count = EXCLUDED.stop_count,
-      route_count = EXCLUDED.route_count,
-      rt_urls = EXCLUDED.rt_urls,
-      imported_at = NOW()
-  `))
+  await db
+    .insert(gtfsFeeds)
+    .values({
+      feedId: feed.feedId,
+      onestopId: feed.onestopId || null,
+      name: feed.name || null,
+      url: feed.url || null,
+      region: feed.region || null,
+      stopCount,
+      routeCount,
+      rtUrls: feed.rtUrls?.length ? feed.rtUrls : null,
+      importedAt: new Date(),
+    })
+    .onConflictDoUpdate({
+      target: gtfsFeeds.feedId,
+      set: {
+        name: sql`excluded.name`,
+        url: sql`excluded.url`,
+        stopCount: sql`excluded.stop_count`,
+        routeCount: sql`excluded.route_count`,
+        rtUrls: sql`excluded.rt_urls`,
+        importedAt: sql`NOW()`,
+      },
+    })
 }
 
 /**
  * Remove all data for a specific feed (for re-import).
  */
 export async function clearFeed(feedId: string): Promise<void> {
-  const escaped = feedId.replace(/'/g, "''")
-  await db.execute(sql.raw(`DELETE FROM gtfs_transfers WHERE feed_id = '${escaped}'`))
-  await db.execute(sql.raw(`DELETE FROM gtfs_trip_patterns WHERE feed_id = '${escaped}'`))
-  await db.execute(sql.raw(`DELETE FROM gtfs_stop_routes WHERE feed_id = '${escaped}'`))
-  await db.execute(sql.raw(`DELETE FROM gtfs_routes WHERE feed_id = '${escaped}'`))
-  await db.execute(sql.raw(`DELETE FROM gtfs_stops WHERE feed_id = '${escaped}'`))
-  await db.execute(sql.raw(`DELETE FROM gtfs_feeds WHERE feed_id = '${escaped}'`))
+  await db.delete(gtfsTransfers).where(eq(gtfsTransfers.feedId, feedId))
+  await db.delete(gtfsTripPatterns).where(eq(gtfsTripPatterns.feedId, feedId))
+  await db.delete(gtfsStopRoutes).where(eq(gtfsStopRoutes.feedId, feedId))
+  await db.delete(gtfsRoutes).where(eq(gtfsRoutes.feedId, feedId))
+  await db.delete(gtfsStops).where(eq(gtfsStops.feedId, feedId))
+  await db.delete(gtfsFeeds).where(eq(gtfsFeeds.feedId, feedId))
 }
 
 // ── Transfer precomputation ─────────────────────────────────────────
@@ -1163,7 +1156,7 @@ export async function clearFeed(feedId: string): Promise<void> {
 export async function findTransferPairs(
   maxDistance: number = 500,
 ): Promise<TransferPair[]> {
-  const result = await db.execute(sql.raw(`
+  const result = await db.execute(sql`
     SELECT
       a.stop_id AS from_stop_id,
       b.stop_id AS to_stop_id,
@@ -1179,7 +1172,7 @@ export async function findTransferPairs(
       AND ST_DWithin(a.geom::geography, b.geom::geography, ${maxDistance})
     WHERE (a.location_type = 0 OR a.location_type IS NULL)
       AND (b.location_type = 0 OR b.location_type IS NULL)
-  `))
+  `)
 
   return (result as any[]).map((row: any) => ({
     fromStopId: row.from_stop_id,
@@ -1371,11 +1364,11 @@ export async function generateMotisConfig(options?: MotisConfigOptions): Promise
     includeGbfs = enableStreetRouting,
   } = options || {}
 
-  const result = await db.execute(sql.raw(`
+  const result = await db.execute(sql`
     SELECT feed_id, rt_urls
     FROM gtfs_feeds
     ORDER BY feed_id
-  `))
+  `)
 
   const feeds = (result as any[]) as Array<{ feed_id: string; rt_urls: GtfsRtUrl[] | null }>
 
@@ -1460,12 +1453,12 @@ export async function generateMotisConfig(options?: MotisConfigOptions): Promise
 }
 
 async function getGbfsFeedsForMotis(): Promise<Array<{ systemId: string; url: string }>> {
-  const result = await db.execute(sql.raw(`
+  const result = await db.execute(sql`
     SELECT system_id, url
     FROM gbfs_systems
     WHERE enabled = TRUE
     ORDER BY system_id
-  `))
+  `)
   return (result as any[]).map(row => ({
     systemId: row.system_id,
     url: row.url,

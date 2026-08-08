@@ -13,7 +13,7 @@ import { resolve } from 'node:path'
 import { hostname } from 'node:os'
 import { randomUUID } from 'node:crypto'
 import postgres from 'postgres'
-import { connection as sql, dbUrl } from '../db'
+import { connection as sql, dbUrl, onnotice } from '../db'
 import { getScript } from '../admin/scripts-manifest'
 import { buildInvocation, advisoryKeyFor, type Job } from '../services/job-invocation'
 import * as store from '../services/ops-job-store'
@@ -61,7 +61,7 @@ async function runJob(job: Job): Promise<void> {
   // pool would unlock on a different socket). One connection, held for the job.
   let lockConn: ReturnType<typeof postgres> | null = null
   if (exclusive) {
-    lockConn = postgres(dbUrl, { max: 1 })
+    lockConn = postgres(dbUrl, { max: 1, onnotice })
     const [{ locked }] = await lockConn`SELECT pg_try_advisory_lock(${key}) AS locked`
     if (!locked) {
       await store.appendLogs(job.id, [{ stream: 'system', text: 'Another run of this script is in progress — requeued' }])

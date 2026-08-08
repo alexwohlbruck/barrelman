@@ -843,7 +843,7 @@ async function getNearbyBoardingStations(
   limit: number,
 ): Promise<BoardingStation[]> {
   const rows = (await db.execute(
-    sql.raw(`
+    sql`
       SELECT feed_id, station_id, stop_name, stop_lat, stop_lon, distance, route_type
       FROM (
         SELECT DISTINCT ON (st.feed_id, COALESCE(NULLIF(st.parent_station,''), st.stop_id))
@@ -865,7 +865,7 @@ async function getNearbyBoardingStations(
       -- stops can't crowd the subway out of the candidate set; nearest within tier.
       ORDER BY (COALESCE(route_type, 3) = 3), distance
       LIMIT ${limit}
-    `),
+    `,
   )) as any[]
   return rows.map((r) => ({
     feedId: r.feed_id,
@@ -1091,7 +1091,7 @@ export async function getNearbyStops(
 ): Promise<NearbyStop[]> {
   const { lat, lng, radius = 1000, limit = 20 } = request
 
-  const result = await db.execute(sql.raw(`
+  const result = await db.execute(sql`
     SELECT
       stop_id,
       feed_id,
@@ -1116,7 +1116,7 @@ export async function getNearbyStops(
     AND (location_type = 0 OR location_type IS NULL)
     ORDER BY distance
     LIMIT ${limit}
-  `))
+  `)
 
   return (result as any[]).map((row: any) => ({
     stopId: row.stop_id,
@@ -1146,31 +1146,29 @@ export async function getRoutesForStop(
   feedId: string,
   stopId: string,
 ): Promise<StopRoutesResult[]> {
-  const feed = feedId.replace(/'/g, "''")
-  const stop = stopId.replace(/'/g, "''")
-  const result = await db.execute(sql.raw(`
+  const result = await db.execute(sql`
     WITH seed AS (
       -- the stop itself, plus its parent station when it's a platform
-      SELECT '${stop}'::text AS sid
+      SELECT ${stopId}::text AS sid
       UNION
       SELECT parent_station FROM gtfs_stops
-      WHERE feed_id = '${feed}' AND stop_id = '${stop}'
+      WHERE feed_id = ${feedId} AND stop_id = ${stopId}
         AND parent_station IS NOT NULL AND parent_station <> ''
     ),
     complex AS (
       SELECT sid FROM seed
       UNION
       SELECT t.to_stop_id FROM gtfs_transfers t JOIN seed ON t.from_stop_id = seed.sid
-      WHERE t.feed_id = '${feed}' AND t.to_stop_id <> t.from_stop_id
+      WHERE t.feed_id = ${feedId} AND t.to_stop_id <> t.from_stop_id
       UNION
       SELECT t.from_stop_id FROM gtfs_transfers t JOIN seed ON t.to_stop_id = seed.sid
-      WHERE t.feed_id = '${feed}' AND t.to_stop_id <> t.from_stop_id
+      WHERE t.feed_id = ${feedId} AND t.to_stop_id <> t.from_stop_id
     ),
     members AS (
       SELECT sid FROM complex
       UNION
       SELECT s.stop_id FROM gtfs_stops s JOIN complex c ON s.parent_station = c.sid
-      WHERE s.feed_id = '${feed}'
+      WHERE s.feed_id = ${feedId}
     )
     SELECT DISTINCT
       r.route_id,
@@ -1184,9 +1182,9 @@ export async function getRoutesForStop(
     FROM gtfs_stop_routes sr
     JOIN members m ON sr.stop_id = m.sid
     JOIN gtfs_routes r ON r.feed_id = sr.feed_id AND r.route_id = sr.route_id
-    WHERE sr.feed_id = '${feed}'
+    WHERE sr.feed_id = ${feedId}
     ORDER BY r.route_type, r.route_short_name
-  `))
+  `)
 
   return (result as any[]).map((row: any) => ({
     routeId: row.route_id,
@@ -1225,16 +1223,20 @@ export async function getRoutesForStopSequence(
   rawStopIds: string[],
 ): Promise<InterchangeableRoute[]> {
   if (rawStopIds.length < 2) return []
-  const feed = feedId.replace(/'/g, "''")
 
-  // Normalise each distinct leg stop to its parent station.
+  // Normalise each distinct leg stop to its parent station. The id list is a
+  // variable-length IN, so it is built from one parametrized fragment per entry
+  // rather than by quoting — `sql.join` keeps each value a bind parameter.
   const uniq = [...new Set(rawStopIds)]
-  const inList = uniq.map((s) => `'${s.replace(/'/g, "''")}'`).join(',')
-  const normRows = await db.execute(sql.raw(`
+  const inList = sql.join(
+    uniq.map((s) => sql`${s}`),
+    sql`, `,
+  )
+  const normRows = await db.execute(sql`
     SELECT stop_id, COALESCE(NULLIF(parent_station, ''), stop_id) AS norm
     FROM gtfs_stops
-    WHERE feed_id = '${feed}' AND stop_id IN (${inList})
-  `))
+    WHERE feed_id = ${feedId} AND stop_id IN (${inList})
+  `)
   const normMap = new Map<string, string>()
   for (const r of normRows as any[]) normMap.set(r.stop_id, r.norm)
 
@@ -1246,18 +1248,18 @@ export async function getRoutesForStopSequence(
   // A comma in an id would make the delimiter ambiguous (it can't, for sane
   // GTFS, but guard symmetrically with the pattern derivation).
   if (seq.length < 2 || seq.some((n) => n.includes(','))) return []
-  const needle = `,${seq.join(',')},`.replace(/'/g, "''")
+  const needle = `,${seq.join(',')},`
 
-  const rows = await db.execute(sql.raw(`
+  const rows = await db.execute(sql`
     SELECT DISTINCT
       r.route_id, r.route_short_name, r.route_long_name,
       r.route_type, r.route_color, r.route_text_color
     FROM gtfs_trip_patterns p
     JOIN gtfs_routes r ON r.feed_id = p.feed_id AND r.route_id = p.route_id
-    WHERE p.feed_id = '${feed}'
-      AND strpos(p.stop_seq, '${needle}') > 0
+    WHERE p.feed_id = ${feedId}
+      AND strpos(p.stop_seq, ${needle}) > 0
     ORDER BY r.route_type, r.route_short_name
-  `))
+  `)
 
   return (rows as any[]).map((row) => ({
     routeId: row.route_id,

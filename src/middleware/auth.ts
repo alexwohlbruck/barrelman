@@ -1,6 +1,9 @@
 import Elysia from 'elysia'
 import { resolveSession } from './session'
 import { safeEqual } from '../lib/crypto'
+import { resolveApiKey } from '../services/api-keys.service'
+import { scopeAllowsAdmin, ADMIN_SCOPE } from '../billing/plans'
+import { accountsEnabled } from '../config/accounts.config'
 
 /**
  * Operator-console auth.
@@ -10,26 +13,29 @@ import { safeEqual } from '../lib/crypto'
  * `/admin/*` surface, which is far more powerful than the read API: full
  * re-imports, DROP/TRUNCATE, graph rebuilds.
  *
- * Two credentials are accepted, because the console has two kinds of caller:
+ * Two credentials are accepted, both tied to a real account:
  *
- *   - A signed-in account holding the `admin` role. This is how a human uses
- *     the console, and it is what the browser sends.
- *   - The shared `BARRELMAN_ADMIN_KEY` (falling back to `BARRELMAN_API_KEY`).
- *     This is for scripts and CI, and it is how every existing deployment
- *     already drives these routes.
+ *   - A signed-in session whose account holds the `admin` role. This is how a
+ *     human uses the console, and it is what the browser sends.
+ *   - An account API key carrying the `admin` scope, whose owner holds the
+ *     `admin` role. This is for scripts and CI.
  *
- * When no key is configured AND nobody is signed in, access is open — this is
- * the local-development case, matching the previous behaviour.
+ * `BARRELMAN_ADMIN_KEY` used to be accepted here and is gone. It was a single
+ * static shared secret: unattributed in the moderation log, unrevocable without
+ * recreating the container, unscoped, and — because it fell back to
+ * `BARRELMAN_API_KEY` when unset, which is the compose default — it quietly
+ * turned every holder of the *data* key into an administrator. An account key
+ * has an owner, a scope, an expiry and immediate revocation.
+ *
+ * There is deliberately no "open when nothing is configured" path. A fresh
+ * instance is reached by signing up: the first account created becomes an
+ * admin, so the console is usable immediately without any secret existing.
  */
 
 interface AuthContext {
   headers: Record<string, string | undefined>
   request: Request
   set: { status?: number | string }
-}
-
-function configuredAdminKey(): string | undefined {
-  return process.env.BARRELMAN_ADMIN_KEY || process.env.BARRELMAN_API_KEY
 }
 
 function presentedToken(headers: Record<string, string | undefined>): string | null {
@@ -45,37 +51,85 @@ function presentedToken(headers: Record<string, string | undefined>): string | n
  * the parent's routes public. See the note in `middleware/api-auth.ts` for what
  * that cost us on the read API.
  */
-export async function adminAuthHandler({ headers, request, set }: AuthContext) {
-  const adminKey = configuredAdminKey()
-  const token = presentedToken(headers)
+export interface AdminAuthDeps {
+  resolveSession: typeof resolveSession
+  resolveApiKey: typeof resolveApiKey
+  accountsEnabled: boolean
+}
 
-  // Constant-time — see the note in api-auth.ts on timing leaks.
-  if (adminKey && token && safeEqual(token, adminKey)) return
+/**
+ * Factory so the guard can be exercised without a database — this decides who
+ * can run a full re-import, and it was previously only reachable through one.
+ * Same `deps` shape the route modules use.
+ */
+export function createAdminAuthHandler(deps: Partial<AdminAuthDeps> = {}) {
+  const d: AdminAuthDeps = {
+    resolveSession,
+    resolveApiKey,
+    accountsEnabled,
+    ...deps,
+  }
+  return async function adminAuthHandler({ headers, request, set }: AuthContext) {
+    return handle(d, { headers, request, set })
+  }
+}
 
-  // A session with the admin role is equally sufficient.
-  const { user } = await resolveSession(request)
+export async function adminAuthHandler(ctx: AuthContext) {
+  return handle({ resolveSession, resolveApiKey, accountsEnabled }, ctx)
+}
+
+async function handle(d: AdminAuthDeps, { headers, request, set }: AuthContext) {
+  // Every admin credential is an account credential now, so with accounts off
+  // there is nothing that could authorise this. Fail closed and say why rather
+  // than 401 at someone who has no way to satisfy it.
+  if (!d.accountsEnabled) {
+    set.status = 503
+    return {
+      error:
+        'Admin routes require accounts, which are disabled (BARRELMAN_ACCOUNTS_ENABLED=false). ' +
+        'Enable accounts and sign in — the first account created becomes an administrator.',
+    }
+  }
+
+  // A session with the admin role.
+  const { user } = await d.resolveSession(request)
   if (user) {
     if (user.role === 'admin') return
     set.status = 403
     return { error: 'Administrator access required' }
   }
 
-  // Nothing presented and nothing configured to check against: open, so a
-  // fresh local instance still has a usable console.
-  if (!adminKey) return
+  // An account API key scoped to `admin`, owned by an admin.
+  const token = presentedToken(headers)
+  if (token) {
+    const key = await d.resolveApiKey(token)
+    if (key && key.role === 'admin' && scopeAllowsAdmin(key.scopes)) {
+      if (key.suspended) {
+        set.status = 403
+        return { error: key.suspensionReason ?? 'Account suspended' }
+      }
+      return
+    }
+    set.status = 403
+    return {
+      error: `Not an administrator key. It must be created by an admin account with the "${ADMIN_SCOPE}" scope.`,
+    }
+  }
 
   set.status = 401
-  return { error: token ? 'Invalid admin key' : 'Sign in to the console, or present an admin key' }
+  return { error: 'Sign in to the console, or present an admin-scoped API key' }
 }
 
 export const adminAuthMiddleware = new Elysia({ name: 'admin-auth' }).onBeforeHandle(adminAuthHandler)
 
 /**
- * Legacy shared-secret check for the read API.
+ * Legacy shared-secret check for the READ API.
  *
- * Superseded by `apiAuth()` in `middleware/api-auth.ts`, which additionally
- * resolves customer keys, enforces scopes and meters usage. Retained only for
- * callers that genuinely want "the service key and nothing else".
+ * Unrelated to the admin surface above: this is `BARRELMAN_API_KEY`, the
+ * unmetered service credential Parchment authenticates with, and it stays.
+ * Superseded for customer traffic by `apiAuth()` in `middleware/api-auth.ts`,
+ * which additionally resolves account keys, enforces scopes and meters usage.
+ * Retained for callers that genuinely want "the service key and nothing else".
  */
 export function authHandler({
   headers,

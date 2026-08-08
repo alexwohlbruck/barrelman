@@ -61,13 +61,19 @@ export async function runAbuseDetection(): Promise<DetectionResult> {
  * Compares today's spend against the plan's monthly allowance rather than
  * against the account's own history: a brand-new account has no history, and
  * that is exactly when a stolen card or a scraper shows up.
+ *
+ * Administrators are excluded. This can suspend unattended, and suspension
+ * revokes sessions *and* API keys — so auto-suspending the last admin would
+ * leave nobody able to reach /admin/*, including the unsuspend route, with no
+ * shared secret left to recover with. Operators are not the abuse surface this
+ * is aimed at, and the interactive suspend route guards the same case.
  */
 async function detectBurnRate(): Promise<{ flagged: number; suspended: number }> {
   const rows = await sql<Array<{ user_id: string; plan: string; today: number }>>`
     SELECT user_id, u.plan, SUM(credits)::int AS today
     FROM accounts_usage a
     JOIN accounts_users u ON u.id = a.user_id
-    WHERE a.day = ${utcDay()} AND u.suspended_at IS NULL
+    WHERE a.day = ${utcDay()} AND u.suspended_at IS NULL AND u.role <> 'admin'
     GROUP BY user_id, u.plan
     HAVING SUM(credits) > 0`
 

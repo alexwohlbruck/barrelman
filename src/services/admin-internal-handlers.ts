@@ -50,7 +50,7 @@ export const INTERNAL_HANDLERS: Record<string, (log: LogFn) => Promise<void>> = 
   // admin.service-backed migration tasks
   'admin:full-migration': async (log) => {
     log('Running full migration: post-import → codes → abbreviations → parent context → tsvectors')
-    reportTask(log, await runFullMigration())
+    reportTask(log, await runFullMigration(log))
   },
   'admin:post-import': async (log) => reportTask(log, await runPostImport()),
   'admin:generate-codes': async (log) => reportTask(log, await runGenerateCodes()),

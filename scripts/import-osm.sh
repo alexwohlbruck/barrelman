@@ -75,6 +75,16 @@ echo "  osm2pgsql complete."
 echo "[$(date '+%H:%M:%S')] [3/8] Running post-import SQL..."
 psql "$DATABASE_URL" -f "$PROJECT_DIR/import/post-import.sql"
 
+# Transit tile views. Named "transit" but derived purely from geo_places — no
+# GTFS table is involved — so they belong to the OSM import, not the optional
+# transit pipeline.
+#
+# Martin treats an unresolvable source as fatal and exits, so while these views
+# were created only by the transit steps, an OSM-only install (the documented
+# minimum) had no vector tiles at all: martin crash-looped on
+# "Source transit_platforms: Unavailable".
+psql "$DATABASE_URL" -f "$PROJECT_DIR/import/create-transit-views.sql"
+
 # ── Step 4: Generate codes from OSM tags ─────────────────────────────────────
 echo "[$(date '+%H:%M:%S')] [4/8] Extracting codes (IATA, ICAO, ref, short_name, alt_name)..."
 psql "$DATABASE_URL" -c "

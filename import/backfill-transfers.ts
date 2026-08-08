@@ -21,8 +21,10 @@ await ensureGtfsSchema()
 
 let feeds = 0
 let rows = 0
-for (const f of readdirSync(values.dir!).filter((x) => x.endsWith('.zip'))) {
+const zipFiles = readdirSync(values.dir!).filter((x) => x.endsWith('.zip'))
+for (const f of zipFiles) {
   const feedId = basename(f, '.zip')
+  console.log(`[${zipFiles.indexOf(f) + 1}/${zipFiles.length}] ${feedId}`)
   try {
     const zip = await JSZip.loadAsync(await Bun.file(join(values.dir!, f)).arrayBuffer())
     const entry = zip.file('transfers.txt') ?? zip.file(/(^|\/)transfers\.txt$/)[0]

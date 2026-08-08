@@ -53,29 +53,26 @@ export async function getRouteShape(
     // this route — needed when a unified RT feed (e.g. MTA Bus)
     // returns vehicles tagged with one feed_id but shapes live
     // under per-borough feed_ids.
-    const safeFeed = feedId.replace(/'/g, "''")
-    const safeRoute = routeId.replace(/'/g, "''")
-
-    let routeResult = await db.execute(sql.raw(`
+    let routeResult = await db.execute(sql`
       SELECT feed_id, shape_id
       FROM gtfs_routes
-      WHERE feed_id = '${safeFeed}'
-        AND route_id = '${safeRoute}'
+      WHERE feed_id = ${feedId}
+        AND route_id = ${routeId}
         AND shape_id IS NOT NULL AND shape_id != ''
       LIMIT 1
-    `))
+    `)
 
     let route = (routeResult as any[])[0]
 
     // Cross-feed fallback
     if (!route?.shape_id) {
-      routeResult = await db.execute(sql.raw(`
+      routeResult = await db.execute(sql`
         SELECT feed_id, shape_id
         FROM gtfs_routes
-        WHERE route_id = '${safeRoute}'
+        WHERE route_id = ${routeId}
           AND shape_id IS NOT NULL AND shape_id != ''
         LIMIT 1
-      `))
+      `)
       route = (routeResult as any[])[0]
     }
 
@@ -86,13 +83,13 @@ export async function getRouteShape(
     const shapeFeedId = route.feed_id || feedId
 
     // Fetch the shape coordinates
-    const shapeResult = await db.execute(sql.raw(`
+    const shapeResult = await db.execute(sql`
       SELECT coordinates
       FROM gtfs_shapes
-      WHERE feed_id = '${shapeFeedId.replace(/'/g, "''")}'
-        AND shape_id = '${route.shape_id.replace(/'/g, "''")}'
+      WHERE feed_id = ${shapeFeedId}
+        AND shape_id = ${route.shape_id}
       LIMIT 1
-    `))
+    `)
 
     const shape = (shapeResult as any[])[0]
     if (!shape?.coordinates) {
@@ -133,13 +130,13 @@ export async function getShapeById(
   if (cached !== undefined) return cached?.coordinates ?? null
 
   try {
-    const result = await db.execute(sql.raw(`
+    const result = await db.execute(sql`
       SELECT coordinates
       FROM gtfs_shapes
-      WHERE feed_id = '${feedId.replace(/'/g, "''")}'
-        AND shape_id = '${shapeId.replace(/'/g, "''")}'
+      WHERE feed_id = ${feedId}
+        AND shape_id = ${shapeId}
       LIMIT 1
-    `))
+    `)
 
     const row = (result as any[])[0]
     if (!row?.coordinates) return null

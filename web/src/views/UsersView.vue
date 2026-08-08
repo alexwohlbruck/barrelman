@@ -7,7 +7,7 @@
  * a reason, and shows them that the reason is what the user will read.
  */
 import { computed, onMounted, ref } from 'vue'
-import { AlertTriangle, Ban, CreditCard, RefreshCw, Search, ShieldCheck, User } from 'lucide-vue-next'
+import { AlertTriangle, Ban, CreditCard, RefreshCw, Search, ShieldCheck, ShieldOff, User } from 'lucide-vue-next'
 import PageHeader from '@/components/PageHeader.vue'
 import Badge from '@/components/ui/Badge.vue'
 import Button from '@/components/ui/Button.vue'
@@ -27,6 +27,7 @@ import {
   getAdminUsers,
   resolveAbuseSignal,
   setUserPlan,
+  setUserRole,
   suspendUser,
   unsuspendUser,
 } from '@/lib/api'
@@ -115,6 +116,28 @@ async function confirmSuspend() {
     await load()
   } catch (err) {
     fail(err, 'Could not suspend the account')
+  } finally {
+    busy.value = ''
+  }
+}
+
+async function toggleRole(account: AdminUser) {
+  const promoting = account.role !== 'admin'
+  const verb = promoting ? 'Make' : 'Remove'
+  if (!confirm(`${verb} ${account.email} ${promoting ? 'an administrator?' : ' as an administrator?'}`)) return
+
+  busy.value = account.id
+  try {
+    const r = await setUserRole(account.id, promoting ? 'admin' : 'user')
+    account.role = r.user.role as typeof account.role
+    toast({ title: promoting ? 'Now an administrator' : 'Administrator access removed', variant: 'success' })
+  } catch (err) {
+    // 409 is the last-administrator guard, and it is the interesting case.
+    toast({
+      title: 'Could not change the role',
+      description: err instanceof Error ? err.message : undefined,
+      variant: 'error',
+    })
   } finally {
     busy.value = ''
   }
@@ -268,6 +291,17 @@ function describeDetail(detail: Record<string, unknown> | null) {
             <Button variant="ghost" size="sm" :disabled="busy === account.id" @click="openPlan(account)">
               <CreditCard class="size-4" />
               Plan
+            </Button>
+
+            <Button
+              variant="ghost"
+              size="sm"
+              :disabled="busy === account.id"
+              :title="account.role === 'admin' ? 'Remove administrator access' : 'Make administrator'"
+              @click="toggleRole(account)"
+            >
+              <ShieldCheck v-if="account.role !== 'admin'" class="size-4" />
+              <ShieldOff v-else class="size-4 text-muted-foreground" />
             </Button>
 
             <Button

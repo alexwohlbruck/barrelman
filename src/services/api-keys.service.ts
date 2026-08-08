@@ -15,6 +15,7 @@ import { LRUCache } from 'lru-cache'
 import { db } from '../db'
 import { apiKeys, users, type ApiKey } from '../schema/accounts'
 import { generateId, randomBase62, sha256Hex } from '../lib/crypto'
+import { normalizeOrigins } from '../lib/origins'
 import { isValidScope, type Scope } from '../billing/plans'
 
 const KEY_PREFIX = 'brm'
@@ -30,7 +31,11 @@ export interface ResolvedKey {
   keyId: string
   userId: string
   scopes: string[]
+  /** Origins the key may be used from; empty means unrestricted. */
+  allowedOrigins: string[]
   plan: string
+  /** Owning account's role. `admin` + the `admin` scope is what reaches /admin/*. */
+  role: string
   /**
    * Set when the owning account is suspended. The key still RESOLVES — the
    * caller holds a valid credential and is owed a real explanation, not the
@@ -56,6 +61,7 @@ export interface CreateKeyOptions {
   userId: string
   name: string
   scopes?: string[]
+  allowedOrigins?: string[]
   expiresAt?: Date | null
 }
 
@@ -69,6 +75,7 @@ export async function createApiKey(options: CreateKeyOptions): Promise<CreatedKe
   const { userId, name, expiresAt = null } = options
 
   const scopes = normalizeScopes(options.scopes)
+  const allowedOrigins = normalizeOrigins(options.allowedOrigins)
   const secret = randomBase62(SECRET_LENGTH)
   const key = `${KEY_PREFIX}_live_${secret}`
 
@@ -82,6 +89,7 @@ export async function createApiKey(options: CreateKeyOptions): Promise<CreatedKe
       prefix: key.slice(0, DISPLAY_PREFIX_LENGTH),
       last4: key.slice(-4),
       scopes,
+      allowedOrigins,
       expiresAt,
     })
     .returning()
@@ -125,9 +133,11 @@ export async function resolveApiKey(presented: string): Promise<ResolvedKey | nu
       keyId: apiKeys.id,
       userId: apiKeys.userId,
       scopes: apiKeys.scopes,
+      allowedOrigins: apiKeys.allowedOrigins,
       revokedAt: apiKeys.revokedAt,
       expiresAt: apiKeys.expiresAt,
       plan: users.plan,
+      role: users.role,
       suspendedAt: users.suspendedAt,
       suspendedReason: users.suspendedReason,
     })
@@ -147,7 +157,9 @@ export async function resolveApiKey(presented: string): Promise<ResolvedKey | nu
     keyId: row.keyId,
     userId: row.userId,
     scopes: row.scopes,
+    allowedOrigins: row.allowedOrigins,
     plan: row.plan,
+    role: row.role,
     suspended: Boolean(row.suspendedAt),
     suspensionReason: row.suspendedReason,
   }
@@ -184,6 +196,7 @@ export async function listApiKeys(userId: string, includeRevoked = false): Promi
       prefix: apiKeys.prefix,
       last4: apiKeys.last4,
       scopes: apiKeys.scopes,
+      allowedOrigins: apiKeys.allowedOrigins,
       lastUsedAt: apiKeys.lastUsedAt,
       revokedAt: apiKeys.revokedAt,
       expiresAt: apiKeys.expiresAt,
@@ -211,6 +224,28 @@ export async function updateApiKeyScopes(userId: string, keyId: string, scopes: 
     .returning({ hash: apiKeys.hash })
   if (!row) return false
   // Scope changes must take effect now, not in a minute's time.
+  cache.delete(row.hash)
+  return true
+}
+
+/**
+ * Replace a key's origin restrictions. An empty list lifts the restriction
+ * entirely, which is the only way back to an unrestricted key short of rolling
+ * a new one.
+ */
+export async function updateApiKeyOrigins(
+  userId: string,
+  keyId: string,
+  origins: string[],
+): Promise<boolean> {
+  const [row] = await db
+    .update(apiKeys)
+    .set({ allowedOrigins: normalizeOrigins(origins) })
+    .where(and(eq(apiKeys.id, keyId), eq(apiKeys.userId, userId)))
+    .returning({ hash: apiKeys.hash })
+  if (!row) return false
+  // Same reason as scopes: locking a key down has to take effect now, not up to
+  // a cache TTL later, or the console reports a restriction that is not live.
   cache.delete(row.hash)
   return true
 }

@@ -22,7 +22,7 @@ Type a place name, get a complete region definition. Two steps:
 ### 1. Fetch the boundary catalog (once)
 
 ```bash
-bun run scripts/fetch-boundaries.ts
+docker compose exec barrelman-ops bun run scripts/fetch-boundaries.ts
 ```
 
 This downloads [Geofabrik's extract index][gf-index] — 555 published extracts
@@ -41,7 +41,7 @@ Review the auto-filled definition and save.
 From the CLI, to see what's available:
 
 ```bash
-bun run scripts/fetch-boundaries.ts --skip-fetch --search colorado
+docker compose exec barrelman-ops bun run scripts/fetch-boundaries.ts --skip-fetch --search colorado
 ```
 
 Then set it live and import:
@@ -49,6 +49,45 @@ Then set it live and import:
 ```dotenv
 REGIONS=colorado
 ```
+
+`REGIONS` is read by the importers in `barrelman-ops`, so recreate that service
+after changing it — `docker compose up -d barrelman-ops`.
+
+**Create the region before naming it in `REGIONS`.** The two steps are
+independent, and a key that no region defines fails closed:
+
+```
+Unknown region "colorado". Known regions: north-carolina, nyc-metro, global
+```
+
+### Without the console
+
+The console is a client of the admin API, so a scripted or headless setup can do
+the same three calls. Authenticate with an **admin-scoped API key** — sign in to
+the console, create a key under **API keys**, and give it the `admin` scope
+(only administrators may grant it):
+
+```bash
+KEY=brm_live_…   # an API key with the `admin` scope
+API=http://localhost:5001
+
+# 1. Cache the boundary catalog (equivalent to scripts/fetch-boundaries.ts)
+curl -s -X POST -H "Authorization: Bearer $KEY" $API/admin/boundaries/refresh
+
+# 2. Find the boundary id
+curl -s -H "Authorization: Bearer $KEY" "$API/admin/boundaries?q=colorado"
+
+# 3. Derive a definition, then save it under a key of your choice
+curl -s -X POST -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' \
+  -d '{"id":"us/colorado"}' $API/admin/boundaries/resolve
+# → {"region":{…}}  — add "key":"colorado" to that object and POST it:
+curl -s -X POST -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' \
+  -d '{"key":"colorado","label":"Colorado","osmExtracts":[…],"bbox":[…],…}' \
+  $API/admin/regions
+```
+
+`/admin/boundaries/resolve` is a preview and writes nothing; `/admin/regions` is
+the write. Confirm with `bun run src/config/regions.ts summary` before importing.
 
 ### What gets filled in automatically
 
@@ -59,7 +98,7 @@ REGIONS=colorado
 | `bbox` | `-109.06, 36.99, -102.04, 41.00` | Computed from the real boundary polygon |
 | `gtfsRegion` | the same bbox | Used as the Transitland feed search area |
 | `pelias.tigerStates` | `[8]` | ISO `US-CO` → Census FIPS |
-| `pelias.openaddresses` | 55 county CSV paths | OpenAddresses source listing |
+| `pelias.openaddresses` | 55 CSV paths (counties, cities, statewide) | OpenAddresses source listing |
 
 Two things are deliberately **not** guessed:
 
@@ -67,10 +106,11 @@ Two things are deliberately **not** guessed:
   code to a Who's-on-First place id, and a wrong id silently imports the wrong
   place. Empty just means Pelias imports the country's full admin hierarchy —
   slower, but correct. Narrow it later from [spelunker.whosonfirst.org][wof].
-- **OpenAddresses coverage is uneven and is read, not assumed.** New York has a
-  single `statewide` file; Colorado has 55 county files and *no* statewide file.
-  Guessing `us/co/statewide.csv` would silently import zero addresses, so the
-  list comes from the actual repository listing.
+- **OpenAddresses coverage is uneven and is read, not assumed.** New York is one
+  `statewide` file; Colorado is 55 entries — mostly counties, plus a handful of
+  city extracts and a statewide file. There is no pattern to guess from, and a
+  guessed path silently imports zero addresses, so the list comes from the
+  actual repository listing.
 
 > The OpenAddresses lookup uses the GitHub API (60 requests/hour
 > unauthenticated — one per region). If it's rate-limited you'll get a warning
@@ -83,33 +123,94 @@ Two things are deliberately **not** guessed:
 
 ## Running the import
 
-Order matters, and each step depends on the one before it:
+Order matters, and each step depends on the one before it.
+
+Run these from the console's **Scripts** page — which gives you streamed logs,
+job history, and survival across a dropped SSH session — or inside
+`barrelman-ops`, which is the container that carries the docker CLI, osmium and
+python that these scripts need. The API container has the scripts but not the
+tools.
 
 ```bash
-./start.sh dev                              # 1. bring the stack up
+docker compose up -d                        # 1. bring the stack up
 
-./scripts/run-import.sh                     # 2. OSM → PostGIS, then rebuild
+# then, inside barrelman-ops:
+bash scripts/run-import.sh                  # 2. OSM → PostGIS, then rebuild
                                             #    the GraphHopper routing graph
 
-./scripts/prepare-motis-osm.sh              # 3. repair underground transit
+bash scripts/prepare-motis-osm.sh           # 3. repair underground transit
                                             #    platforms → region-transit.osm.pbf
 
-./scripts/download-gtfs.sh                  # 4. transit feeds. Needs GraphHopper
+bash scripts/download-gtfs.sh               # 4. transit feeds. Needs GraphHopper
                                             #    from step 2 — walking transfers
                                             #    between stops are routed through it
 
-bun run import/import-gbfs-systems.ts       # 5. bikeshare, filtered by the region bbox
+bash scripts/rebuild-motis.sh               # 5. rebuild the MOTIS timetable +
+                                            #    street graph from those feeds
 
-bun run scripts/generate-pelias-config.ts   # 6. addresses: regenerate pelias.json…
+bun run import/import-gbfs-systems.ts       # 6. bikeshare, filtered by the region bbox
+
+bun run scripts/generate-pelias-config.ts   # 7. addresses: regenerate pelias.json…
 cd pelias && ./provision.sh                 #    …then provision the geocoder stack
 ```
 
-Steps 3–6 are optional — skip transit, bikeshare or address search if you don't
+For example:
+
+```bash
+docker compose exec -d barrelman-ops bash scripts/run-import.sh
+docker compose logs -f barrelman-ops
+```
+
+Steps 3–7 are optional — skip transit, bikeshare or address search if you don't
 need them. Step 2 is not optional.
 
-Rough timings for a single US state: OSM import 20–40 min, GraphHopper graph
-~10–20 min, GTFS depends on feed count, Pelias several hours (it's a separate
-stack — see [`pelias/README.md`](../pelias/README.md)).
+**If you do steps 3 and 4, step 5 is not optional either.** `motis server` only
+serves the pre-built dataset at `/data/data`; it never re-imports when the
+config or feeds change, so a plain restart keeps serving the old schedules and
+the new feeds never reach riders. Re-run it after every GTFS refresh, and after
+any MOTIS version bump.
+
+### Measured timings
+
+Colorado — a 360 MB PBF yielding 6.04M objects and 75 transit feeds — on a
+Hetzner CPX41 (8 shared vCPU, 16 GB RAM, NVMe). Wall-clock on a clean server:
+
+| Step | Time |
+|---|---|
+| Install Docker, deploy, build images, boot to a healthy API | 3 min |
+| Create the region (catalog + resolve + save) | 3 s |
+| **2. OSM import** (`run-import.sh`) | **15 min** |
+| ↳ download the 360 MB PBF | 22 s |
+| ↳ osm2pgsql | 3 min 30 s |
+| ↳ post-import SQL | 3 min 40 s |
+| ↳ codes, abbreviations, intersections | 3 min 10 s |
+| ↳ parent context (spatial join) | 2 min |
+| ↳ full-text index + ANALYZE | 2 min 15 s |
+| **2b. GraphHopper graph** (rebuilds inside the engine afterwards) | **5 min** |
+| 3. MOTIS OSM prep | 6 min |
+| 4. GTFS download + import + 173k walking transfers | 3 min |
+| 5. MOTIS dataset rebuild | 45 s |
+
+**A full stack with transit is about 35 minutes from an empty server.** Only
+steps 2 and 2b are required, so search and street routing are answering
+about 20 minutes in.
+
+Scaling is roughly by PBF size but not linear — osm2pgsql and the spatial joins
+grow faster than the download. A country is hours; the planet is a day.
+
+Two run long for what they deliver. MOTIS OSM prep rewrites the whole extract to
+repair a handful of underground platforms — 6 minutes to synthesise 0 connectors
+in Colorado.
+
+The GBFS importer is worse: it fetches **every** system in the global catalog
+and only then filters to your bbox, so its cost is unrelated to your region. On
+the Colorado run it was still going **40 minutes in** and had not finished when
+the host was torn down, having spent that time on systems in Abu Dhabi, Zurich
+and Darmstadt. Budget an hour, run it last, and skip it entirely unless you
+need bikeshare — nothing else in the pipeline depends on it.
+
+Pelias is a separate stack and takes hours — see
+[`pelias/README.md`](../pelias/README.md).
 
 ### Sizing
 
@@ -119,11 +220,20 @@ an undersized heap dies before it logs its version, so the failure looks like a
 crash rather than an out-of-memory. Check with `du -sh` on the `graph-cache`
 directory and raise `-Xmx` whenever `REGIONS` grows.
 
-| Scale | DB size | RAM | Disk |
-|---|---|---|---|
-| One US state | ~10 GB | 2 GB | 20 GB |
-| Full United States | ~60 GB | 8 GB | 120 GB |
-| Europe | ~100 GB | 16 GB | 200 GB |
+| Scale | DB size | RAM | Disk | |
+|---|---|---|---|---|
+| One US state (Colorado) | 11 GB | 8 GB min / 16 GB comfortable | 25 GB | **measured** |
+| Full United States | ~60 GB | 32 GB | 250 GB | extrapolated |
+| Europe | ~100 GB | 64 GB | 400 GB | extrapolated |
+
+Only the first row is measured; the rest scale it by extract size and are
+deliberately generous.
+
+On that Colorado run the whole stack peaked at **6.4 GB resident** — Postgres
+6.4 GB (against an 8 GB `mem_limit`), GraphHopper 2.5 GB, everything else under
+400 MB combined. Disk came to 22 GB including images, of which the Postgres
+volume was 13 GB. The `graph-cache` was 654 MB, comfortably inside the
+`-Xmx4g` used here.
 
 ---
 
@@ -141,12 +251,13 @@ the table and falls back to the file, so a fresh checkout works with no database
 and an operator's console edits win once there is one.
 
 Bash scripts read resolved values through a small CLI rather than re-parsing the
-config:
+config. It's also the quickest way to check what an instance will actually
+import:
 
 ```bash
-bun run src/config/regions.ts summary        # what's currently selected
-bun run src/config/regions.ts osm-extracts   # one URL per line
-bun run src/config/regions.ts bbox           # w,s,e,n
+docker compose exec barrelman-ops bun run src/config/regions.ts summary        # what's currently selected
+docker compose exec barrelman-ops bun run src/config/regions.ts osm-extracts   # one URL per line
+docker compose exec barrelman-ops bun run src/config/regions.ts bbox           # w,s,e,n
 ```
 
 ### Field reference
@@ -196,15 +307,21 @@ the extracts cover.
 
 **`Unknown GTFS region "co"`**
 `gtfsRegion` accepts a `w,s,e,n` bounding box, `global`, or one of the legacy
-tokens (`nc`, `nyc`, `southeast`, `us`). Anything else is rejected on purpose —
-it used to fall through to an unfiltered query and download the entire ~2,800
+tokens (`nc`, `nyc`, `southeast`, `us`). Anything else is rejected rather than
+falling through to an unfiltered query that would download the entire ~2,800
 feed global catalog. Use the region's own bbox.
 
 **`Region "colorado" is disabled`**
 The console toggle is off. Enable it in **Regions**, or drop it from `REGIONS`.
 
 **`Unknown boundary "us/colorado"` when resolving**
-The catalog is empty or stale — run `bun run scripts/fetch-boundaries.ts`.
+The catalog is empty or stale — run `scripts/fetch-boundaries.ts`.
+
+**Transit routing returns nothing, but `/transit/stops` finds stops**
+The MOTIS dataset was never rebuilt after the GTFS import. Run
+`scripts/rebuild-motis.sh`. Stops live in PostGIS (populated by step 4) while
+routing comes from MOTIS's own baked timetable (step 5), so the two can
+disagree.
 
 **Address search returns nothing**
 Either `pelias.openaddresses` is empty, or the Pelias `street` layer was never

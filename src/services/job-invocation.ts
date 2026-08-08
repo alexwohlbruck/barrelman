@@ -36,6 +36,17 @@ export interface Job {
   exitCode?: number | null
   error?: string
   logCount: number
+  /** Median successful runtime (ms) for this script, for ETA estimation. */
+  etaMs?: number
+  /** True progress fraction 0–1, parsed from the script's own log markers. */
+  progress?: number
+  /** Short label for the current progress marker, e.g. "3/8" or "42%". */
+  progressLabel?: string
+  /**
+   * Named stage breakdown, parsed from `[N/M] Stage name` log markers. `index`
+   * is 1-based; `labels[i]` is the name of stage i (empty until first seen).
+   */
+  stages?: { total: number; index: number; labels: string[] }
 }
 
 export type Invocation =
@@ -75,7 +86,14 @@ export function buildInvocation(script: ScriptDef, params: Record<string, unknow
       if (p.type === 'boolean') {
         if (val === true || val === 'true') args.push(flag)
       } else {
-        args.push(flag, String(val))
+        const str = String(val)
+        // A value starting with "-" (a bbox like "-109.06,36.99,...") is read as
+        // the next option by node:util parseArgs, which import-gtfs.ts uses:
+        //   TypeError: Option '--region' argument is ambiguous.
+        // The "=" form is unambiguous. Only used when needed, since some
+        // importers parse argv by index and expect the separated form.
+        if (str.startsWith('-')) args.push(`${flag}=${str}`)
+        else args.push(flag, str)
       }
     } else if (p.apply === 'positional') {
       if (typeof val === 'string' && val.trim()) positional.push(...val.trim().split(/\s+/))

@@ -19,8 +19,34 @@ async function scalar<T = number>(query: ReturnType<typeof sql>, fallback: T | n
   }
 }
 
+/**
+ * Tables this module is allowed to count.
+ *
+ * A table name is an identifier, not a value, so it cannot be a bind parameter
+ * — it has to be spliced into the SQL text. The allowlist is what makes that
+ * safe: every caller today passes a literal, and this makes sure that stays
+ * true rather than depending on it. Nothing here is reachable from a request
+ * body, and it must not become so.
+ */
+const COUNTABLE_TABLES = [
+  'gtfs_feeds',
+  'gtfs_stops',
+  'gtfs_routes',
+  'gtfs_transfers',
+  'gtfs_trip_patterns',
+  'gtfs_shapes',
+  'gbfs_systems',
+  'gbfs_stations',
+  'stop_area_members',
+  'boundary_catalog',
+  'accounts_users',
+] as const
+
+type CountableTable = (typeof COUNTABLE_TABLES)[number]
+
 /** Count rows in a table, returning null if the table does not exist. */
-async function tableCount(table: string): Promise<number | null> {
+async function tableCount(table: CountableTable): Promise<number | null> {
+  if (!COUNTABLE_TABLES.includes(table)) return null
   return scalar<number>(sql.raw(`SELECT count(*)::bigint AS c FROM ${table}`), null)
 }
 
@@ -260,6 +286,7 @@ export async function getServiceStatuses(): Promise<ServiceStatus[]> {
   const graphhopperUrl = process.env.GRAPHHOPPER_URL || 'http://barrelman-graphhopper:8989'
   const martinUrl = process.env.MARTIN_URL || 'http://barrelman-martin:3000'
   const motisUrl = process.env.MOTIS_URL || 'http://barrelman-motis:8080'
+  const peliasUrl = process.env.PELIAS_URL || 'http://pelias_api:4000'
 
   const dbCheck = (async (): Promise<ServiceStatus> => {
     const start = performance.now()
@@ -289,5 +316,9 @@ export async function getServiceStatuses(): Promise<ServiceStatus[]> {
     motisCheck,
     pingHttp('GraphHopper (routing)', 'graphhopper', graphhopperUrl, '/health'),
     pingHttp('Martin (vector tiles)', 'martin', martinUrl, '/health'),
+    // Optional: only runs under the `pelias` compose profile, so "unavailable"
+    // here often means "not started" rather than "broken". /status is the only
+    // unauthenticated 200 the API offers — /v1/status is a 404.
+    pingHttp('Pelias (addresses)', 'pelias', peliasUrl, '/status'),
   ])
 }

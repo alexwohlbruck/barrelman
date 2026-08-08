@@ -72,6 +72,14 @@ export interface Job {
   exitCode?: number | null
   error?: string
   logCount: number
+  /** Median successful runtime (ms) for this script, for ETA estimation. */
+  etaMs?: number
+  /** True progress fraction 0–1, parsed from the script's own log markers. */
+  progress?: number
+  /** Short label for the current progress marker, e.g. "3/8" or "42%". */
+  progressLabel?: string
+  /** Named stage breakdown from `[N/M] Stage name` markers. `index` is 1-based. */
+  stages?: { total: number; index: number; labels: string[] }
 }
 
 export interface JobStats {
@@ -252,6 +260,8 @@ export interface ApiKeySummary {
   prefix: string
   last4: string
   scopes: string[]
+  /** Origins the key may be used from; empty means unrestricted. */
+  allowedOrigins: string[]
   lastUsedAt: string | null
   revokedAt: string | null
   expiresAt: string | null

@@ -1,0 +1,152 @@
+---
+title: Overview
+description: What you get from a self-hosted Barrelman, what it costs to run, and how to install it.
+---
+
+Barrelman is designed to be run by you. Every service is a published Docker image, every data source is public, and nothing calls home. This section takes you from an empty server to a running instance with imported data, an administrator account, and an API key that answers real queries.
+
+Every step says how to tell it worked. Prefer the verification command over assuming success — most failures in this pipeline are silent and surface hours later as empty search results.
+
+## What you get
+
+A self-hosted Barrelman is a complete geospatial engine: search, geocoding, tiles, routing and transit, over whatever geography you import. Everything the [API reference](/api) documents works on your own instance.
+
+Accounts and API keys work too. You can run it single-user with one shared `BARRELMAN_API_KEY`, or hand out per-account `brm_live_…` keys to your own team with scopes and usage tracking. Usage metering runs either way — on a self-hosted instance it exists to show you your own consumption.
+
+<Callout type="info" title="Selling access is not permitted">
+Barrelman is source-available under the Apache 2.0 license with the [Commons Clause](https://github.com/alexwohlbruck/barrelman/blob/main/LICENSING.md). You may run it for yourself, your family, or your business — including as internal infrastructure — but you may not charge third parties for a service whose value is substantially Barrelman.
+
+Subscription billing is therefore not part of a self-hosted instance. It is disabled without a signed license, which only the official deployment holds. If you want to offer Barrelman commercially, a commercial license is available — get in touch.
+</Callout>
+
+The rest of these pages set up the engine. [Going to production](/self-hosting/production) covers what to add when you put it behind a domain.
+
+## Requirements
+
+### Software
+
+- **Docker** 24+ with **Compose v2** (`docker compose version`)
+- `curl`, and enough disk for the OSM extract *plus* the database *plus* the routing graph
+
+Nothing else. You do not need Bun, Node, Postgres, osm2pgsql or Java on the host — every tool lives in a container. A clone of the repository is optional; the install below downloads the Compose file and the few config files it mounts.
+
+### Hardware
+
+Sizing is driven entirely by how much geography you import.
+
+| Scale | DB size | RAM | Disk | OSM import | |
+|---|---|---|---|---|---|
+| One US state (Colorado) | 11 GB | 8 GB min, 16 GB comfortable | 25 GB | 15 min | **measured** |
+| Full United States | ~60 GB | 32 GB | 250 GB | 6–12 h | estimated |
+| Europe | ~100 GB | 64 GB | 400 GB | 12–24 h | estimated |
+
+The first row is measured on a Hetzner CPX41 (8 shared vCPU, 16 GB, NVMe)
+importing Colorado — a 360 MB extract yielding 6.04M places. **A complete stack
+including transit took about 35 minutes from an empty server**, and search and
+street routing were answering roughly 20 minutes in. The other rows scale that
+by extract size and are deliberately generous.
+
+Measured peaks on that run: 6.4 GB resident across the whole stack (Postgres
+6.4 GB against an 8 GB cap, GraphHopper 2.5 GB, everything else under 400 MB
+combined), and 22 GB of disk including container images.
+
+The RAM figures assume everything runs on one box. GraphHopper loads its routing graph into JVM **heap** rather than memory-mapping it, so it wants several GB to itself, and MOTIS and Elasticsearch each want their own. Search latency is dominated by whether the database's working set stays resident, so give Postgres whatever is left.
+
+Add roughly 1 GB of RAM and tens of GB of disk if you enable the Pelias address geocoder.
+
+## Install
+
+### 1. Create the directory
+
+The directory name becomes the Compose **project name**, and some scripts resolve sibling resources by that name (the `barrelman_default` network, the `barrelman_barrelman-gtfs-data` volume). Name it `barrelman`.
+
+```bash
+sudo mkdir -p /opt/barrelman && cd /opt/barrelman
+```
+
+### 2. Download the Compose file
+
+```bash
+BASE=https://raw.githubusercontent.com/alexwohlbruck/barrelman/main
+curl -fsSL -O $BASE/docker-compose.yml
+curl -fsSL -O $BASE/martin-config.yaml
+curl -fsSL -O $BASE/graphhopper-config.yml
+mkdir -p custom_models data/gtfs
+for m in barrelman_car barrelman_bike barrelman_foot; do
+  curl -fsSL -o custom_models/$m.json $BASE/custom_models/$m.json
+done
+```
+
+The Compose file bind-mounts `martin-config.yaml`, `graphhopper-config.yml` and
+`custom_models/` from this directory. Docker silently creates a **directory** in
+place of any missing bind source, so fetching only `docker-compose.yml` leaves
+Martin and GraphHopper trying to parse a directory as their config.
+
+All images are pre-built and published — no clone, no build step. Cloning the
+repository instead of fetching these four is equally fine, and is simpler if you
+also want the Pelias geocoder later.
+
+The Compose file `include:`s `pelias/docker-compose.yml`. If you are not using the address geocoder you can ignore this; the Pelias services sit behind profiles and never start with a plain `docker compose up`. If you want addresses later, clone the repository so that path exists.
+
+### 3. Write `.env`
+
+```bash
+cat > .env <<'EOF'
+# ── Secrets ───────────────────────────────────────────────────────────────
+# Both of these MUST be changed. The Compose defaults are placeholders.
+BARRELMAN_DB_PASSWORD=<a long random string>
+BARRELMAN_API_KEY=brm_<a long random string>
+
+# ── Coverage ──────────────────────────────────────────────────────────────
+# Which geographies the importers pull.
+REGIONS=north-carolina
+
+# ── Engines ───────────────────────────────────────────────────────────────
+# GraphHopper's heap must exceed the on-disk routing graph. Colorado's is
+# 654 MB, so 4g is generous; raise it as REGIONS grows. An undersized heap dies
+# before it logs its version, so the failure looks like a crash.
+GRAPHHOPPER_JAVA_OPTS=-Xmx4g -Xms1g
+
+# ── Database tuning ───────────────────────────────────────────────────────
+# Sized for a 16 GB host. mem_limit must cover shared_buffers + shm_size +
+# maintenance_work_mem, with headroom — see the note below.
+BARRELMAN_DB_SHARED_BUFFERS=2GB
+BARRELMAN_DB_CACHE_SIZE=6GB
+BARRELMAN_DB_WORK_MEM=128MB
+BARRELMAN_DB_MAINTENANCE_WORK_MEM=1GB
+BARRELMAN_DB_SHM_SIZE=2gb
+BARRELMAN_DB_MEM_LIMIT=8g
+EOF
+chmod 600 .env
+```
+
+Generate the secrets with something like `openssl rand -hex 32`.
+
+These are the values the measured Colorado run used, and they left headroom on
+a 16 GB box. On a 32 GB host give the database more — `8GB` / `24GB` / `2GB` /
+`28g` — since search latency is dominated by whether the working set stays
+resident.
+
+<Callout type="warn">
+`BARRELMAN_DB_MEM_LIMIT` must cover `shared_buffers` + `BARRELMAN_DB_SHM_SIZE` +
+`maintenance_work_mem`. The first two are both shared memory charged to the same
+cgroup, so they add up; exceed the limit and the kernel OOM-kills Postgres
+mid-index-build, which surfaces only as `connection to server was lost`.
+</Callout>
+
+<Callout type="warn" title="Three things worth understanding before you continue">
+**`BARRELMAN_API_KEY` unset means the data API is open.** That is deliberate — it is how every guard in this codebase spells "local development," and a fresh clone has to be usable with no configuration. On a server, set it.
+
+**There is no shared admin secret.** `/admin/*` — full re-imports, `DROP`/`TRUNCATE` — takes an admin-role session, or an API key with the `admin` scope. The first account created on a fresh instance becomes an administrator, so nothing needs configuring to get in.
+
+**Compose does not forward the host environment.** A variable set in `.env` but not named in the service's `environment:` block is silently absent inside the container. If you add a variable and it appears to have no effect, that is almost always why.
+</Callout>
+
+Full variable reference: [Configuration](https://github.com/alexwohlbruck/barrelman/blob/main/docs/configuration.md).
+
+## Next
+
+<Cards>
+  <Card title="First run" href="/self-hosting/first-run" description="Boot the stack, claim the administrator account, and mint an API key." />
+  <Card title="Importing data" href="/self-hosting/importing-data" description="Choose a region and run the import pipeline." />
+</Cards>

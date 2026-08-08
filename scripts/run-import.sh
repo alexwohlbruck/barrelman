@@ -39,6 +39,7 @@ echo "  Regions: ${REGIONS:-north-carolina,nyc-metro}"
 echo "  OSM extracts: ${OSM_EXTRACTS:-$GEOFABRIK_URL}"
 echo ""
 
+echo "[1/2] OSM import"
 docker exec \
   -e DATABASE_URL="$DB_URL" \
   -e GEOFABRIK_URL="${GEOFABRIK_URL:-https://download.geofabrik.de/north-america/us/north-carolina-latest.osm.pbf}" \
@@ -47,6 +48,7 @@ docker exec \
   barrelman-db bash /app/scripts/import-osm.sh
 
 echo ""
+echo "[2/2] GraphHopper rebuild"
 echo "Triggering GraphHopper graph rebuild..."
 "$SCRIPT_DIR/rebuild-graphhopper.sh"
 

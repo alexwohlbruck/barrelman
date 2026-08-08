@@ -20,6 +20,13 @@ BEGIN
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'geo_places' AND column_name = 'name_abbrev') THEN
         ALTER TABLE geo_places ADD COLUMN name_abbrev TEXT;
     END IF;
+    -- codes was the one column only the API's ensureSchema() added, which meant
+    -- a fresh instance never got it: osm2pgsql creates geo_places long after the
+    -- API booted, so the index below and the codes UPDATE in run-import.sh both
+    -- failed with "column codes does not exist" on every first-time import.
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'geo_places' AND column_name = 'codes') THEN
+        ALTER TABLE geo_places ADD COLUMN codes TEXT[];
+    END IF;
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'geo_places' AND column_name = 'embedding') THEN
         ALTER TABLE geo_places ADD COLUMN embedding vector(512);
     END IF;

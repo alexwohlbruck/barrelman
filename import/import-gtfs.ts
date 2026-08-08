@@ -253,8 +253,11 @@ async function main() {
   console.log(`MOTIS config: ${motisConfigPath}`)
   console.log('')
   console.log('Next steps:')
-  console.log('  1. Restart MOTIS to load updated GTFS data and RT feeds')
-  console.log('     docker compose restart motis')
+  // NOT `docker compose restart motis`: `motis server` only serves the
+  // pre-built dataset at /data/data and never re-imports, so a restart keeps
+  // serving the old schedules and the feeds just downloaded never reach riders.
+  console.log('  1. Rebuild the MOTIS dataset so these feeds take effect')
+  console.log('     bash scripts/rebuild-motis.sh   (a restart alone keeps the old timetable)')
   console.log('')
 
   process.exit(0)

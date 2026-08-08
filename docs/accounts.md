@@ -42,10 +42,27 @@ specifically.
 
 The **first account created on a fresh instance becomes an administrator**, so a
 new deployment is never locked out of its own console. After that, promote by
-listing addresses in `BARRELMAN_ADMIN_EMAILS`.
+promoting them in the console under **Users**.
 
-Admin routes accept either an admin-role session or the shared
-`BARRELMAN_ADMIN_KEY` — humans get real accounts, scripts and CI keep the key.
+Roles are changed with `POST /admin/users/:id/role`, and the endpoint **refuses
+to remove the last administrator** — with no shared admin secret, an instance
+with zero admins can only be recovered with direct database access. The check
+and the write share a transaction with the admin rows locked, so two concurrent
+demotions cannot both slip through.
+
+Admin routes accept an admin-role session, or an account API key carrying the
+`admin` scope whose owner holds the admin role — humans sign in, scripts and CI
+use a key.
+
+The `admin` scope sits deliberately **outside** the `*` wildcard. `*` is what a
+key gets when created with no scopes, so folding admin into it would promote
+every existing key to an administrative credential. Only an administrator may
+grant `admin`, on creation or by widening an existing key.
+
+This replaced a shared `BARRELMAN_ADMIN_KEY` secret, which had no owner in the
+audit log, could not be revoked without recreating the container, and — because
+it fell back to `BARRELMAN_API_KEY` when unset — silently made every holder of
+the data key an administrator.
 
 ## API keys
 
@@ -71,6 +88,49 @@ tiles  places  spatial  geocode  search  routing  transit  isochrone
 `['*']` means every group, and is the default. A key holding `*` alongside
 narrower scopes is stored as just `*` — keeping both would suggest the narrow
 ones constrain something.
+
+### Origin restrictions
+
+Scopes bound what a key can *reach*. Origin restrictions bound where it can be
+used *from*, which is the other half of the problem for a key that ships inside
+a web page — a tile key travels in the query string and is visible to anyone
+reading source.
+
+A key may list the origins it works from. Empty means unrestricted, which is the
+default and what every key created before this shipped has.
+
+```
+https://barrelman.dev        exact origin
+http://localhost:5200        scheme and port are part of the match
+https://*.netlify.app        any subdomain — deploy previews, without listing each
+```
+
+The request must carry a matching `Origin` or `Referer`. `Origin` is preferred
+and is what a browser sends on a tile fetch; `Referer` is the fallback and has
+its path stripped before matching.
+
+Two rules are worth stating outright, because both surprise people:
+
+- **A restricted key cannot be used from a server.** curl and server-side fetches
+  send neither header, and a request presenting no origin is refused. Accepting
+  the absent case would make the restriction decoration — anyone who dropped the
+  header would walk straight through. Restrict browser keys; leave server keys
+  open and secret.
+- **A wildcard does not match its own apex.** `https://*.netlify.app` does not
+  cover `https://netlify.app`; list it separately if you want it. Lookalike
+  suffixes never match — `evil-netlify.app` is not a subdomain of `netlify.app`.
+
+What this is worth: `Origin` and `Referer` are set by the browser and cannot be
+overridden by page script, so a key pasted into someone else's site stops
+working. They are trivially forged by curl, so this stops casual theft, not a
+determined scraper — the same guarantee Mapbox and Google Maps give for their
+URL restrictions, and the same reason both still meter. Refusals are recorded as
+rejected usage and count toward the penalty box, so a key being hammered from
+the wrong origin is visible rather than merely blocked.
+
+Set them when creating a key, or on an existing key from the globe button in
+`/console/keys`. Changes take effect immediately — the verification cache is
+evicted directly, as with revocation.
 
 ### Presenting a key
 

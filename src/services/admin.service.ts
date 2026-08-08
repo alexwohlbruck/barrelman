@@ -133,22 +133,27 @@ export async function runGenerateAbbreviations(): Promise<AdminTaskResult> {
 }
 
 /** Full migration: post-import → codes → abbreviations → parent context → tsvectors. */
-export async function runFullMigration(): Promise<AdminTaskResult> {
+export async function runFullMigration(onPhase?: (msg: string) => void): Promise<AdminTaskResult> {
   const start = performance.now()
   const steps = []
 
+  onPhase?.('[1/5] Post-import SQL')
   steps.push(await runSqlFile('post-import.sql'))
 
   // Generate codes and abbreviations before tsvectors (tsvectors include abbreviations)
+  onPhase?.('[2/5] Generate codes')
   const codesResult = await runGenerateCodes()
   steps.push(codesResult.steps[0])
 
+  onPhase?.('[3/5] Generate abbreviations')
   const abbrevResult = await runGenerateAbbreviations()
   steps.push(abbrevResult.steps[0])
 
+  onPhase?.('[4/5] Resolve parent context')
   steps.push(await runSqlFile('resolve-parent-context.sql'))
 
   // Rebuild tsvectors (now that codes, abbreviations, and parent_context are populated)
+  onPhase?.('[5/5] Rebuild tsvectors')
   const tsStart = performance.now()
   await db.execute(sql`
     UPDATE geo_places SET ts = to_tsvector('simple', unaccent(

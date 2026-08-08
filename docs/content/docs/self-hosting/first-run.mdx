@@ -1,0 +1,109 @@
+---
+title: First run
+description: Boot the stack, claim the administrator account, and mint your first API key.
+---
+
+## Start the stack
+
+```bash
+docker compose up -d
+```
+
+This starts six services:
+
+| Container | Port | What it is |
+|---|---|---|
+| `barrelman` | 5001 | The API, and the console at `/console` |
+| `barrelman-db` | 5434 | PostgreSQL + PostGIS + pgvector, and osm2pgsql |
+| `barrelman-ops` | — | Privileged worker that runs import jobs |
+| `barrelman-martin` | 5002 | Vector tiles |
+| `barrelman-graphhopper` | 5003 | Street routing |
+| `barrelman-motis` | 5004 | Transit routing |
+
+Ports are host-side. Services reach each other over the Compose network on their own container ports, so remapping a host port changes nothing internal.
+
+### Verify
+
+```bash
+curl -s http://localhost:5001/health
+```
+
+```json
+{"status":"degraded","database":"connected","motis":"unavailable"}
+```
+
+<Callout type="info" title="`degraded` is the correct answer on a fresh install">
+`status` is `ok` only when MOTIS is up too, and MOTIS has no timetable until you run the transit import. The field to check right now is `"database":"connected"`. A real failure looks like `"status":"error"`.
+</Callout>
+
+There is no migration step — all schema is created by idempotent `ensure*Schema()` calls at startup, and the database image creates the PostGIS, pgvector, `pg_trgm` and `unaccent` extensions on first initialization.
+
+MOTIS and GraphHopper will log errors at this point. That is expected: neither has any data yet.
+
+## How jobs actually run
+
+This is the piece most likely to surprise you. The API container is deliberately lean — no docker CLI, no osmium, no python. It **enqueues** jobs into Postgres and nothing more.
+
+`barrelman-ops` mounts the docker socket and claims those jobs, one at a time, holding a Postgres advisory lock so two imports can never overlap. It is what actually runs `run-import.sh`, `download-gtfs.sh` and the graph rebuilds, and it is what `docker exec`s into `barrelman-db` to drive osm2pgsql.
+
+<Callout type="warn">
+Run import commands in **`barrelman-ops`**, never in `barrelman`. The API container has the scripts but not the tools.
+</Callout>
+
+SQL and migration tasks are the exception: they run in-process in the API, which already has the database client. Job state — status, exit code, logs — lives entirely in the database, so the console renders one unified job list regardless of which process ran a job.
+
+## Claim the administrator account
+
+**The first account created on a fresh instance becomes an administrator**, so a new deployment can never lock itself out of its own console. Create yours before anyone else can.
+
+Open the console:
+
+```
+http://localhost:5001/console
+```
+
+Enter your email and request a sign-in code. With no SMTP configured, the code is printed to the server log instead of emailed:
+
+```bash
+docker logs barrelman --tail 50 | grep -i "sign-in code"
+```
+
+Enter the eight-digit code. You are now signed in as an administrator, and the operator views — **Scripts**, **Jobs**, **Data**, **Regions** — are visible.
+
+To promote further accounts later, open **Users** in the console and make them an administrator. The last administrator cannot be demoted, so an instance always has someone who can administer it.
+
+<Callout type="warn">
+If you are exposing this instance publicly, do this **before** [going to production](/self-hosting/production). Sign-up is open by default, and "first account wins" is a race you want to have already finished. Set `BARRELMAN_REGISTRATION_MODE=invite` if you never want open sign-up at all.
+</Callout>
+
+## Mint an API key
+
+In the console, go to **API keys** (`/console/keys`) and create one. It is **shown once** — only a SHA-256 digest is stored, so a lost key is rolled, not recovered.
+
+Scope it. A key names the endpoint groups it may call:
+
+```
+tiles  places  spatial  geocode  search  routing  transit  isochrone
+```
+
+`*` (every group) is the default. A key embedded in a web map should be limited to `tiles` and `search`, so a leak cannot run up a routing bill.
+
+### Verify the key works
+
+`/health/auth` accepts any valid credential and spends no credits — it exists precisely so an integration can check its key without paying for a real call.
+
+```bash
+curl -s -H "Authorization: Bearer brm_live_..." http://localhost:5001/health/auth
+```
+
+```json
+{"status":"degraded","database":"connected","motis":"unavailable","authenticated":true,"caller":"account","plan":"free"}
+```
+
+A bad key gets a `401` instead. Your shared `BARRELMAN_API_KEY` works here too, and reports `"caller":"service"` with a null plan. That one is unmetered and never billed — it is the credential for your own backend services, not a customer key.
+
+## Next
+
+<Cards>
+  <Card title="Importing data" href="/self-hosting/importing-data" description="A fresh database has no OSM data. Search returns nothing until you import some." />
+</Cards>

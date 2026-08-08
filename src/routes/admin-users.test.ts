@@ -9,6 +9,7 @@
  */
 import { describe, test, expect, mock } from 'bun:test'
 import { createAdminUserRoutes, type AdminUserDeps } from './admin-users'
+import { LastAdminError } from '../services/accounts.service'
 
 const BASE = 'http://localhost'
 const ADMIN_ID = 'admin-1'
@@ -48,15 +49,20 @@ function deps(overrides: Partial<AdminUserDeps> = {}): Partial<AdminUserDeps> {
     setPlan: mock(async () => undefined),
     invalidateUserKeys: mock(() => undefined),
     findUserById: mock(async () => ({ id: TARGET_ID, plan: 'free' }) as never),
+    setUserRole: mock(async () => ({ id: TARGET_ID, role: 'admin' }) as never),
+    resolveApiKey: mock(async () => null),
     resolveSession: adminSession(),
     ...overrides,
   }
 }
 
-function post(path: string, body: unknown) {
+function post(path: string, body: unknown, token?: string) {
   return new Request(`${BASE}${path}`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: {
+      'content-type': 'application/json',
+      ...(token ? { authorization: `Bearer ${token}` } : {}),
+    },
     body: JSON.stringify(body),
   })
 }
@@ -119,14 +125,31 @@ describe('POST /admin/users/:id/suspend', () => {
     expect(d.suspendUser).toHaveBeenCalledWith(expect.objectContaining({ actorId: ADMIN_ID }))
   })
 
-  test('records the shared key honestly when there is no session', async () => {
-    const d = deps({ resolveSession: mock(async () => ({ user: null, session: null })) })
+  test('attributes a key-authenticated caller to the key owner', async () => {
+    // No session, but an admin-scoped API key resolves to a person — which is
+    // the reason the anonymous shared admin secret was retired.
+    const d = deps({
+      resolveSession: mock(async () => ({ user: null, session: null })),
+      resolveApiKey: mock(async () => ({ keyId: 'k1', userId: 'key-owner-9', scopes: ['admin'], role: 'admin' })),
+    })
+    const app = createAdminUserRoutes(d)
+
+    await app.handle(post(`/admin/users/${TARGET_ID}/suspend`, validSuspend, 'brm_live_admin'))
+
+    expect(d.suspendUser).toHaveBeenCalledWith(expect.objectContaining({ actorId: 'key-owner-9' }))
+  })
+
+  test('falls back to a non-null placeholder when nothing resolves', async () => {
+    const d = deps({
+      resolveSession: mock(async () => ({ user: null, session: null })),
+      resolveApiKey: mock(async () => null),
+    })
     const app = createAdminUserRoutes(d)
 
     await app.handle(post(`/admin/users/${TARGET_ID}/suspend`, validSuspend))
 
-    // We know the credential, not who held it — saying so beats inventing an id.
-    expect(d.suspendUser).toHaveBeenCalledWith(expect.objectContaining({ actorId: 'admin-key' }))
+    // The guard should make this unreachable; the audit row must not be null.
+    expect(d.suspendUser).toHaveBeenCalledWith(expect.objectContaining({ actorId: 'unknown' }))
   })
 
   test('refuses to let an administrator suspend themselves', async () => {
@@ -365,5 +388,57 @@ describe('the abuse queue', () => {
     const app = createAdminUserRoutes(deps({ resolveAbuseSignal: mock(async () => false) }))
 
     expect((await app.handle(post('/admin/abuse/sig-1/resolve', {}))).status).toBe(404)
+  })
+})
+
+describe('POST /admin/users/:id/role', () => {
+  test('promotes an account and records it', async () => {
+    const d = deps({ setUserRole: mock(async () => ({ id: TARGET_ID, role: 'admin' })) })
+    const app = createAdminUserRoutes(d)
+
+    const res = await app.handle(post(`/admin/users/${TARGET_ID}/role`, { role: 'admin' }))
+    expect(res.status).toBe(200)
+    expect(d.setUserRole).toHaveBeenCalledWith(TARGET_ID, 'admin')
+    // Granting admin reaches every destructive operation, so it is audited.
+    expect(d.addNote).toHaveBeenCalled()
+    // Keys cache the owner's role, so a role change that skipped this would
+    // leave a demoted admin's admin-scoped key working until the cache expired.
+    expect(d.invalidateUserKeys).toHaveBeenCalledWith(TARGET_ID)
+  })
+
+  // With no shared admin secret, zero admins is only recoverable from psql.
+  test('refuses to demote the last administrator with 409', async () => {
+    const d = deps({
+      setUserRole: mock(async () => {
+        throw new LastAdminError('This is the only administrator.')
+      }),
+    })
+    const app = createAdminUserRoutes(d)
+
+    const res = await app.handle(post(`/admin/users/${TARGET_ID}/role`, { role: 'user' }))
+    expect(res.status).toBe(409)
+    expect((await res.json()).error).toContain('only administrator')
+  })
+
+  test('404s for an unknown account', async () => {
+    const d = deps({ findUserById: mock(async () => null) })
+    const app = createAdminUserRoutes(d)
+
+    const res = await app.handle(post('/admin/users/nope/role', { role: 'admin' }))
+    expect(res.status).toBe(404)
+  })
+
+  test('rejects a role outside the enum', async () => {
+    const app = createAdminUserRoutes(deps())
+    const res = await app.handle(post(`/admin/users/${TARGET_ID}/role`, { role: 'superuser' }))
+    expect(res.status).toBe(422)
+  })
+
+  test('is a no-op when the role already matches', async () => {
+    const d = deps({ findUserById: mock(async () => ({ id: TARGET_ID, plan: 'free', role: 'user' }) as never) })
+    const app = createAdminUserRoutes(d)
+    const res = await app.handle(post(`/admin/users/${TARGET_ID}/role`, { role: 'user' }))
+    expect(res.status).toBe(200)
+    expect(d.setUserRole).not.toHaveBeenCalled()
   })
 })

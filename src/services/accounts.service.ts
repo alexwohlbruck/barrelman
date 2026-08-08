@@ -11,7 +11,7 @@ import { connection as sql, db } from '../db'
 import { users, type NewUser, type User, type UserRole } from '../schema/accounts'
 import { generateId, sha256Hex } from '../lib/crypto'
 import { emailDomain, isDisposableEmail, normalizeEmail } from '../lib/email'
-import { adminEmails, registrationMode, terms, tosVersion } from '../config/accounts.config'
+import { registrationMode, terms, tosVersion } from '../config/accounts.config'
 import { envNumber } from '../config/env'
 
 let schemaReady: Promise<void> | null = null
@@ -109,11 +109,18 @@ export function ensureAccountsSchema(): Promise<void> {
           prefix       text NOT NULL,
           last4        text NOT NULL,
           scopes       text[] NOT NULL DEFAULT ARRAY['*'],
+          allowed_origins text[] NOT NULL DEFAULT ARRAY[]::text[],
           last_used_at timestamptz,
           revoked_at   timestamptz,
           expires_at   timestamptz,
           created_at   timestamptz NOT NULL DEFAULT now()
         )`
+      // Added after the table shipped. The empty default is load-bearing: it is
+      // what makes every existing key stay unrestricted rather than stop working
+      // the moment this column appears.
+      await sql`
+        ALTER TABLE accounts_api_keys
+          ADD COLUMN IF NOT EXISTS allowed_origins text[] NOT NULL DEFAULT ARRAY[]::text[]`
       await sql`CREATE UNIQUE INDEX IF NOT EXISTS accounts_api_keys_hash_idx ON accounts_api_keys (hash)`
       await sql`CREATE INDEX IF NOT EXISTS accounts_api_keys_user_idx ON accounts_api_keys (user_id)`
 
@@ -266,13 +273,56 @@ export class SignupError extends Error {
 
 /**
  * The first account on a fresh instance is an admin — otherwise a new
- * deployment has a console nobody can administer. After that, only addresses
- * named in `BARRELMAN_ADMIN_EMAILS` are promoted automatically.
+ * deployment has a console nobody can administer. Every later promotion goes
+ * through `setUserRole()`, so administrators are managed in the console rather
+ * than by an environment variable.
  */
-async function roleForNewUser(email: string): Promise<UserRole> {
-  if (adminEmails.has(email.trim().toLowerCase())) return 'admin'
-  if (adminEmails.has(normalizeEmail(email))) return 'admin'
+async function roleForNewUser(): Promise<UserRole> {
   return (await countUsers()) === 0 ? 'admin' : 'user'
+}
+
+/** Raised when a change would leave the instance with no administrator. */
+export class LastAdminError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'LastAdminError'
+  }
+}
+
+/**
+ * Change a user's role.
+ *
+ * Refuses to remove the last administrator. Since retiring the shared admin
+ * secret there is no credential outside the accounts table, so an instance with
+ * zero admins can only be recovered with direct database access.
+ *
+ * The check and the write share a transaction, and the admin rows are locked
+ * for the duration: two concurrent demotions would otherwise each see a count
+ * of two and both succeed, which is exactly the state being guarded against.
+ */
+export async function setUserRole(userId: string, role: UserRole): Promise<User | null> {
+  return db.transaction(async (tx) => {
+    const admins = await tx
+      .select({ id: users.id })
+      .from(users)
+      .where(eq(users.role, 'admin'))
+      .for('update')
+
+    const isDemotingAnAdmin = role !== 'admin' && admins.some((a) => a.id === userId)
+    if (isDemotingAnAdmin && admins.length <= 1) {
+      throw new LastAdminError(
+        'This is the only administrator. Promote someone else before changing this role.',
+      )
+    }
+
+    const [updated] = await tx
+      .update(users)
+      .set({ role, updatedAt: new Date() })
+      .where(eq(users.id, userId))
+      .returning()
+
+    return updated ?? null
+  })
 }
 
 export interface CreateUserOptions {
@@ -303,7 +353,7 @@ export async function createUser(options: CreateUserOptions): Promise<User> {
     emailNormalized: normalizeEmail(email),
     name,
     picture,
-    role: await roleForNewUser(email),
+    role: await roleForNewUser(),
     plan: 'free',
     signupIpHash: ipHash,
   }

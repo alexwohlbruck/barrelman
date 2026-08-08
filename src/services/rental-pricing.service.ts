@@ -65,11 +65,11 @@ async function loadUrlMap(): Promise<Map<string, string>> {
   const now = Date.now()
   if (urlMap && now < urlMapExpiry) return urlMap
   const rows = (await db.execute(
-    sql.raw(`
+    sql`
       SELECT system_id, feed_urls->>'system_pricing_plans' AS url
       FROM gbfs_systems
       WHERE enabled = TRUE AND feed_urls ? 'system_pricing_plans'
-    `),
+    `,
   )) as any[]
   const m = new Map<string, string>()
   for (const r of rows) if (r.url) m.set(r.system_id, r.url)

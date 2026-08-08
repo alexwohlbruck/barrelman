@@ -374,16 +374,38 @@ export function groupForPath(pathname: string): EndpointGroup | null {
 }
 
 /**
- * Scopes are the billing groups plus `*`. A key's scopes decide which groups it
- * may call, so a key embedded in a web map can be limited to tiles and search
- * and is then worthless for driving up a routing bill.
+ * Scopes are the billing groups plus `*`, and the separate `admin` scope. A
+ * key's scopes decide which groups it may call, so a key embedded in a web map
+ * can be limited to tiles and search and is then worthless for driving up a
+ * routing bill.
  */
-export type Scope = EndpointGroup | '*'
+export type Scope = EndpointGroup | '*' | typeof ADMIN_SCOPE
 
-export const ALL_SCOPES: Scope[] = ['*', ...(Object.keys(CREDIT_COSTS) as EndpointGroup[])]
+/**
+ * Grants `/admin/*` — full re-imports, DROP/TRUNCATE, moderation.
+ *
+ * Deliberately OUTSIDE the `*` wildcard. `*` means "every billing group", and
+ * it is the default for a key created with no scopes, so folding admin into it
+ * would silently promote every existing key to an administrative credential —
+ * exactly the escalation that retiring BARRELMAN_ADMIN_KEY was meant to end.
+ * Admin is only ever granted by naming it, and only to a key whose owner
+ * already holds the admin role.
+ */
+export const ADMIN_SCOPE = 'admin' as const
+
+export const ALL_SCOPES: Scope[] = [
+  '*',
+  ...(Object.keys(CREDIT_COSTS) as EndpointGroup[]),
+  ADMIN_SCOPE,
+]
 
 export function scopeAllows(scopes: readonly string[], group: EndpointGroup): boolean {
   return scopes.includes('*') || scopes.includes(group)
+}
+
+/** Whether a key may reach `/admin/*`. Never satisfied by `*` — see ADMIN_SCOPE. */
+export function scopeAllowsAdmin(scopes: readonly string[]): boolean {
+  return scopes.includes(ADMIN_SCOPE)
 }
 
 export function isValidScope(scope: string): scope is Scope {

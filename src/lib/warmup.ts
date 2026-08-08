@@ -51,7 +51,7 @@ async function loadWarmPoints(): Promise<WarmPoint[]> {
   if (cachedPoints) return cachedPoints
   try {
     const rows = (await db.execute(
-      sql.raw(`
+      sql`
         SELECT AVG(stop_lat)::float AS lat, AVG(stop_lon)::float AS lng
         FROM gtfs_stops
         WHERE (location_type = 0 OR location_type IS NULL)
@@ -59,7 +59,7 @@ async function loadWarmPoints(): Promise<WarmPoint[]> {
         GROUP BY feed_id
         ORDER BY COUNT(*) DESC
         LIMIT ${MAX_WARM_FEEDS}
-      `),
+      `,
     )) as any[]
     cachedPoints = rows
       .map((r) => ({ lat: Number(r.lat), lng: Number(r.lng) }))

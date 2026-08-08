@@ -232,6 +232,7 @@ if (import.meta.main) {
   let converted = 0
   const counts: Record<string, number> = {}
   for (const f of zips) {
+    console.log(`[${zips.indexOf(f) + 1}/${zips.length}] ${basename(f)}`)
     try {
       const status = await injectFaresV2(join(dir, f), values['dry-run'])
       counts[status.split(' ')[0]] = (counts[status.split(' ')[0]] || 0) + 1

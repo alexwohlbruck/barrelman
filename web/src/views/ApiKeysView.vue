@@ -7,7 +7,7 @@
  * plainly that it will not be shown again.
  */
 import { computed, onMounted, ref } from 'vue'
-import { Check, Copy, KeyRound, Plus, Trash2 } from 'lucide-vue-next'
+import { Check, Copy, Globe, KeyRound, Plus, Trash2 } from 'lucide-vue-next'
 import PageHeader from '@/components/PageHeader.vue'
 import Badge from '@/components/ui/Badge.vue'
 import Button from '@/components/ui/Button.vue'
@@ -17,7 +17,8 @@ import Dialog from '@/components/ui/Dialog.vue'
 import Input from '@/components/ui/Input.vue'
 import Label from '@/components/ui/Label.vue'
 import Spinner from '@/components/ui/Spinner.vue'
-import { createApiKey, getApiKeys, getPlans, revokeApiKey } from '@/lib/api'
+import Textarea from '@/components/ui/Textarea.vue'
+import { createApiKey, getApiKeys, getPlans, revokeApiKey, updateApiKey } from '@/lib/api'
 import { toast } from '@/lib/toast'
 import type { ApiKeySummary, CreatedApiKey, EndpointGroup, Scope } from '@/lib/types'
 
@@ -34,6 +35,24 @@ const showCreate = ref(false)
 const creating = ref(false)
 const newName = ref('')
 const newScopes = ref<Set<string>>(new Set())
+const newOrigins = ref('')
+
+/** The key whose origins are being edited, and the textarea backing that edit. */
+const editing = ref<ApiKeySummary | null>(null)
+const editOrigins = ref('')
+const savingOrigins = ref(false)
+
+/**
+ * One origin per line is the only sane input here: origins contain commas
+ * nowhere but a person typing a list will use them anyway, so splitting on both
+ * and discarding blanks avoids a class of silent mistake.
+ */
+function parseOrigins(text: string): string[] {
+  return text
+    .split(/[\n,]/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+}
 
 const created = ref<CreatedApiKey | null>(null)
 const copied = ref(false)
@@ -68,16 +87,39 @@ function toggleScope(scope: string) {
 function openCreate() {
   newName.value = ''
   newScopes.value = new Set()
+  newOrigins.value = ''
   showCreate.value = true
+}
+
+function openOrigins(key: ApiKeySummary) {
+  editing.value = key
+  editOrigins.value = key.allowedOrigins.join('\n')
+}
+
+async function saveOrigins() {
+  if (!editing.value || savingOrigins.value) return
+  savingOrigins.value = true
+  try {
+    await updateApiKey(editing.value.id, { allowedOrigins: parseOrigins(editOrigins.value) })
+    toast({ title: 'Origins updated', variant: 'success' })
+    editing.value = null
+    await load()
+  } catch (err) {
+    toast({ title: 'Could not update origins', description: message(err), variant: 'error' })
+  } finally {
+    savingOrigins.value = false
+  }
 }
 
 async function submitCreate() {
   if (!newName.value.trim() || creating.value) return
   creating.value = true
   try {
+    const origins = parseOrigins(newOrigins.value)
     const result = await createApiKey({
       name: newName.value.trim(),
       scopes: newScopes.value.size ? [...newScopes.value] : undefined,
+      allowedOrigins: origins.length ? origins : undefined,
     })
     showCreate.value = false
     created.value = result
@@ -161,7 +203,14 @@ function formatDate(value: string | null) {
             <div v-if="!key.scopes.includes('*')" class="mt-2 flex flex-wrap gap-1">
               <Badge v-for="scope in key.scopes" :key="scope" variant="secondary">{{ scope }}</Badge>
             </div>
+            <div v-if="key.allowedOrigins.length" class="mt-2 flex flex-wrap items-center gap-1">
+              <Globe class="size-3 text-muted-foreground" />
+              <Badge v-for="origin in key.allowedOrigins" :key="origin" variant="outline">{{ origin }}</Badge>
+            </div>
           </div>
+          <Button v-if="!key.revokedAt" variant="ghost" size="sm" title="Origin restrictions" @click="openOrigins(key)">
+            <Globe class="size-4" />
+          </Button>
           <Button v-if="!key.revokedAt" variant="ghost" size="sm" @click="revoke(key)">
             <Trash2 class="size-4 text-destructive" />
           </Button>
@@ -205,6 +254,22 @@ function formatDate(value: string | null) {
             </button>
           </div>
         </div>
+
+        <div class="flex flex-col gap-1.5">
+          <Label for="key-origins">Allowed origins</Label>
+          <Textarea
+            id="key-origins"
+            v-model="newOrigins"
+            :rows="3"
+            placeholder="https://example.com&#10;https://*.netlify.app"
+            class="font-mono text-xs"
+          />
+          <p class="text-xs text-muted-foreground">
+            One per line. Leave empty to allow any origin. Restricting a key means the browser must send a
+            matching <code>Origin</code> or <code>Referer</code> — use it for a key that ships in a web page,
+            not one your server calls with.
+          </p>
+        </div>
       </div>
 
       <div class="mt-2 flex justify-end gap-2">
@@ -212,6 +277,34 @@ function formatDate(value: string | null) {
         <Button :disabled="creating || !newName.trim()" @click="submitCreate">
           <Spinner v-if="creating" class="size-4" />
           <template v-else>Create key</template>
+        </Button>
+      </div>
+    </Dialog>
+
+    <!-- Origin restrictions on an existing key -->
+    <Dialog
+      :open="editing !== null"
+      :title="`Origin restrictions — ${editing?.name ?? ''}`"
+      @update:open="editing = null"
+    >
+      <div class="flex flex-col gap-1.5">
+        <Textarea
+          v-model="editOrigins"
+          :rows="4"
+          placeholder="https://example.com&#10;https://*.netlify.app"
+          class="font-mono text-xs"
+        />
+        <p class="text-xs text-muted-foreground">
+          One per line; empty allows any origin. A restricted key only works from a browser on a matching
+          site — requests with no <code>Origin</code> or <code>Referer</code>, including anything sent with
+          curl or from a server, are refused.
+        </p>
+      </div>
+      <div class="mt-2 flex justify-end gap-2">
+        <Button variant="outline" @click="editing = null">Cancel</Button>
+        <Button :disabled="savingOrigins" @click="saveOrigins">
+          <Spinner v-if="savingOrigins" class="size-4" />
+          <template v-else>Save</template>
         </Button>
       </div>
     </Dialog>
