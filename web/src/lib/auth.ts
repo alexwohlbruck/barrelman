@@ -6,8 +6,9 @@
  * the page to read. `bootstrap()` asks the server who we are on load; every
  * other export drives one of the sign-in methods.
  *
- * `adminKey` remains for the legacy shared-secret path, which stays available
- * so an operator who has not created an account can still reach the console.
+ * `adminKey` holds an account API key carrying the `admin` scope, sent as a
+ * bearer. It replaces the old shared BARRELMAN_ADMIN_KEY secret: same header,
+ * but the credential now has an owner, a scope, an expiry and revocation.
  */
 import { computed, ref } from 'vue'
 import { startAuthentication, startRegistration, browserSupportsWebAuthn } from '@simplewebauthn/browser'

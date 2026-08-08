@@ -1,6 +1,6 @@
 import { ref } from 'vue'
 import * as api from './api'
-import type { Job, JobStats, DataMetrics, ServiceStatus } from './types'
+import type { Job, JobStats, DataMetrics, ServiceStatus, ImportRegion } from './types'
 
 // ── Jobs (globally polled) ────────────────────────────────────────────
 export const jobs = ref<Job[]>([])
@@ -50,6 +50,22 @@ export async function refreshMetrics() {
     metricsError.value = err instanceof Error ? err.message : 'Failed to load metrics'
   } finally {
     metricsLoading.value = false
+  }
+}
+
+// ── Import regions (on-demand) ────────────────────────────────────────
+// Shared so the setup checklist can tell "no region defined yet" from
+// "region defined, nothing imported" without the Regions view being open.
+export const regions = ref<ImportRegion[] | null>(null)
+export const regionsError = ref<string | null>(null)
+
+export async function refreshRegions() {
+  try {
+    const r = await api.getRegions()
+    regions.value = r.regions
+    regionsError.value = null
+  } catch (err) {
+    regionsError.value = err instanceof Error ? err.message : 'Failed to load regions'
   }
 }
 

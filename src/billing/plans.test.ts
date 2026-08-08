@@ -7,6 +7,7 @@
  */
 import { describe, test, expect } from 'bun:test'
 import {
+  ADMIN_SCOPE,
   ALL_SCOPES,
   allPlans,
   CREDIT_COSTS,
@@ -23,6 +24,7 @@ import {
   planForProductId,
   purchasablePlans,
   scopeAllows,
+  scopeAllowsAdmin,
   type EndpointGroup,
 } from './plans'
 
@@ -281,17 +283,37 @@ describe('scopes', () => {
     expect(scopeAllows([], 'search')).toBe(false)
   })
 
-  test('isValidScope accepts the wildcard and every group, and nothing else', () => {
+  test('isValidScope accepts the wildcard, every group and admin, and nothing else', () => {
     expect(isValidScope('*')).toBe(true)
     for (const group of Object.keys(CREDIT_COSTS)) expect(isValidScope(group)).toBe(true)
-    expect(isValidScope('admin')).toBe(false)
+    expect(isValidScope(ADMIN_SCOPE)).toBe(true)
+    expect(isValidScope('nonsense')).toBe(false)
     expect(isValidScope('')).toBe(false)
   })
 
-  test('ALL_SCOPES covers the wildcard plus each group exactly once', () => {
+  test('ALL_SCOPES covers the wildcard, each group and admin, exactly once', () => {
     expect(new Set(ALL_SCOPES).size).toBe(ALL_SCOPES.length)
     expect(ALL_SCOPES).toContain('*')
-    expect(ALL_SCOPES.length).toBe(Object.keys(CREDIT_COSTS).length + 1)
+    expect(ALL_SCOPES).toContain(ADMIN_SCOPE)
+    expect(ALL_SCOPES.length).toBe(Object.keys(CREDIT_COSTS).length + 2)
+  })
+
+  // The whole point of retiring BARRELMAN_ADMIN_KEY was to stop a data
+  // credential being an administrative one. `*` is the DEFAULT for a key
+  // created with no scopes, so if it ever granted admin every existing key
+  // would silently become an administrator.
+  test('the wildcard never grants admin', () => {
+    expect(scopeAllowsAdmin(['*'])).toBe(false)
+    expect(scopeAllowsAdmin([])).toBe(false)
+    expect(scopeAllowsAdmin(['search', 'tiles'])).toBe(false)
+    expect(scopeAllowsAdmin([ADMIN_SCOPE])).toBe(true)
+    expect(scopeAllowsAdmin(['*', ADMIN_SCOPE])).toBe(true)
+  })
+
+  test('admin is not a billing group, so it grants no data access', () => {
+    for (const group of Object.keys(CREDIT_COSTS)) {
+      expect(scopeAllows([ADMIN_SCOPE], group as never)).toBe(false)
+    }
   })
 })
 

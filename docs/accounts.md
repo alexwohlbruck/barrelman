@@ -42,10 +42,27 @@ specifically.
 
 The **first account created on a fresh instance becomes an administrator**, so a
 new deployment is never locked out of its own console. After that, promote by
-listing addresses in `BARRELMAN_ADMIN_EMAILS`.
+promoting them in the console under **Users**.
 
-Admin routes accept either an admin-role session or the shared
-`BARRELMAN_ADMIN_KEY` — humans get real accounts, scripts and CI keep the key.
+Roles are changed with `POST /admin/users/:id/role`, and the endpoint **refuses
+to remove the last administrator** — with no shared admin secret, an instance
+with zero admins can only be recovered with direct database access. The check
+and the write share a transaction with the admin rows locked, so two concurrent
+demotions cannot both slip through.
+
+Admin routes accept an admin-role session, or an account API key carrying the
+`admin` scope whose owner holds the admin role — humans sign in, scripts and CI
+use a key.
+
+The `admin` scope sits deliberately **outside** the `*` wildcard. `*` is what a
+key gets when created with no scopes, so folding admin into it would promote
+every existing key to an administrative credential. Only an administrator may
+grant `admin`, on creation or by widening an existing key.
+
+This replaced a shared `BARRELMAN_ADMIN_KEY` secret, which had no owner in the
+audit log, could not be revoked without recreating the container, and — because
+it fell back to `BARRELMAN_API_KEY` when unset — silently made every holder of
+the data key an administrator.
 
 ## API keys
 

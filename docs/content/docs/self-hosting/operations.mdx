@@ -74,7 +74,7 @@ Treat `accounts_sessions` as credential material: Lucia stores session IDs in th
 
 ## Rotating secrets
 
-Changing `BARRELMAN_API_KEY` or `BARRELMAN_ADMIN_KEY` in `.env` needs a recreate, not a restart — Compose bakes environment at container creation:
+Changing `BARRELMAN_API_KEY` in `.env` needs a recreate, not a restart — Compose bakes environment at container creation:
 
 ```bash
 docker compose up -d --force-recreate barrelman

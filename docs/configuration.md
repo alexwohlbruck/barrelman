@@ -34,8 +34,11 @@ by the API. It is named in that service's `environment:` block, not the API's.
 | Variable | Default | Description |
 |---|---|---|
 | `BARRELMAN_API_KEY` | — | Shared **service** credential (Parchment → barrelman). Unmetered, never billed. **Unset means the data API is open** |
-| `BARRELMAN_ADMIN_KEY` | falls back to `BARRELMAN_API_KEY` | Shared key for `/admin/*`. An admin-role session works too |
-| `BARRELMAN_ACCOUNTS_ENABLED` | `true` | `false` disables accounts entirely |
+| `BARRELMAN_ACCOUNTS_ENABLED` | `true` | `false` disables accounts — and with them `/admin/*`, which has no other credential |
+
+**There is no shared admin secret.** `/admin/*` takes an admin-role session, or
+an API key carrying the `admin` scope owned by an admin. The `admin` scope sits
+outside the `*` wildcard and only an administrator may grant it.
 
 > Leaving `BARRELMAN_API_KEY` unset is how every guard in this codebase spells
 > "local development", and a fresh clone has to be usable with no configuration.
@@ -49,12 +52,16 @@ by the API. It is named in that service's `environment:` block, not the API's.
 | `BARRELMAN_SERVER_ORIGIN` | `http://localhost:$PORT` | Public origin. Used in emails and as the OAuth redirect base |
 | `BARRELMAN_CONSOLE_ORIGIN` | server origin | Only if the console is hosted separately. **Also sets the WebAuthn relying-party ID** |
 | `BARRELMAN_ALLOWED_ORIGINS` | — | Extra browser origins allowed to present a session cookie |
-| `BARRELMAN_ADMIN_EMAILS` | — | Addresses granted admin on sign-up. The first account is always an admin |
 | `BARRELMAN_REGISTRATION_MODE` | `open` | `invite` restricts sign-in to accounts an admin created |
 | `BARRELMAN_SESSION_TTL_DAYS` | `30` | Session lifetime |
 | `BARRELMAN_OTP_TTL_MINUTES` | `15` | Sign-in code lifetime |
 | `BARRELMAN_SIGNUPS_PER_IP_PER_DAY` | `5` | New accounts per address per day. `0` disables |
 | `BARRELMAN_TEST_ACCOUNT_EMAIL` | — | Fixed code `00000000` for this address, for E2E tests. **Unset in production** |
+
+Administrators are not configured here. The first account created on a fresh
+instance is an admin; promote others in the console under **Users**. The last
+administrator cannot be demoted, so an instance always has someone who can
+administer it.
 
 Changing `BARRELMAN_CONSOLE_ORIGIN` after passkeys exist invalidates them — a
 credential registered under one relying-party ID cannot be used under another.

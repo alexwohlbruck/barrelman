@@ -63,10 +63,12 @@ Unknown region "colorado". Known regions: north-carolina, nyc-metro, global
 ### Without the console
 
 The console is a client of the admin API, so a scripted or headless setup can do
-the same three calls. Authenticate with `BARRELMAN_ADMIN_KEY`:
+the same three calls. Authenticate with an **admin-scoped API key** — sign in to
+the console, create a key under **API keys**, and give it the `admin` scope
+(only administrators may grant it):
 
 ```bash
-KEY=$BARRELMAN_ADMIN_KEY
+KEY=brm_live_…   # an API key with the `admin` scope
 API=http://localhost:5001
 
 # 1. Cache the boundary catalog (equivalent to scripts/fetch-boundaries.ts)

@@ -37,6 +37,7 @@ import { terms as termsConfig } from '../config/accounts.config'
 import { resolveSession as _resolveSession, requireUser } from '../middleware/session'
 import {
   ALL_SCOPES,
+  ADMIN_SCOPE,
   CREDIT_COSTS,
   includedPricePerThousand,
   isValidScope,
@@ -224,6 +225,14 @@ export function createAccountRoutes(overrides: Partial<AccountDeps> = {}) {
           return { error: `Unknown scope(s): ${invalid.join(', ')}`, validScopes: ALL_SCOPES }
         }
 
+        // `admin` reaches /admin/* — full re-imports, DROP/TRUNCATE, moderation.
+        // Minting it has to be gated on the requester already being an admin,
+        // or self-service key creation becomes a privilege-escalation route.
+        if ((body.scopes ?? []).includes(ADMIN_SCOPE) && user!.role !== 'admin') {
+          set.status = 403
+          return { error: `Only an administrator may create a key with the "${ADMIN_SCOPE}" scope.` }
+        }
+
         const badOrigins = invalidOrigins(body.allowedOrigins ?? [])
         if (badOrigins.length > 0) {
           set.status = 400
@@ -271,6 +280,12 @@ export function createAccountRoutes(overrides: Partial<AccountDeps> = {}) {
           changed = (await deps.renameApiKey(user!.id, params.id, body.name)) || changed
         }
         if (body.scopes !== undefined) {
+          // Same escalation guard as creation — otherwise a non-admin could
+          // mint a plain key and then widen it to `admin`.
+          if (body.scopes.includes(ADMIN_SCOPE) && user!.role !== 'admin') {
+            set.status = 403
+            return { error: `Only an administrator may grant the "${ADMIN_SCOPE}" scope.` }
+          }
           const invalid = body.scopes.filter((s) => !isValidScope(s))
           if (invalid.length > 0) {
             set.status = 400

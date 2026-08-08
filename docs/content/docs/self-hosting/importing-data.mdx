@@ -46,10 +46,10 @@ Only `north-carolina`, `nyc-metro` and `global` ship in `config/regions.json`. A
 
 ### Without the console
 
-The console is a client of the admin API, so a scripted setup can do the same thing. Authenticate with `BARRELMAN_ADMIN_KEY`:
+The console is a client of the admin API, so a scripted setup can do the same thing. Authenticate with an **admin-scoped API key** — sign in, create a key under **API keys**, and give it the `admin` scope (only administrators may grant it):
 
 ```bash
-KEY=$BARRELMAN_ADMIN_KEY
+KEY=brm_live_…   # an API key with the `admin` scope
 API=http://localhost:5001
 
 curl -s -X POST -H "Authorization: Bearer $KEY" $API/admin/boundaries/refresh

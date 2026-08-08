@@ -162,9 +162,6 @@ services:
       OLLAMA_HOST: ${OLLAMA_HOST:-http://ollama:11434}
       PORT: 5001
       BARRELMAN_API_KEY: ${BARRELMAN_API_KEY:-brm_dev_changeme}
-      # Admin console auth (gates /console + script/job routes). Falls back to
-      # BARRELMAN_API_KEY when unset. Set a strong, separate secret in prod.
-      BARRELMAN_ADMIN_KEY: ${BARRELMAN_ADMIN_KEY:-}
       GRAPHHOPPER_URL: http://barrelman-graphhopper:8989
       MOTIS_URL: http://barrelman-motis:8080
       # Both default to the compose service names in code, so they only need
@@ -201,7 +198,6 @@ services:
       BARRELMAN_SERVER_ORIGIN: ${BARRELMAN_SERVER_ORIGIN:-}
       BARRELMAN_CONSOLE_ORIGIN: ${BARRELMAN_CONSOLE_ORIGIN:-}
       BARRELMAN_ALLOWED_ORIGINS: ${BARRELMAN_ALLOWED_ORIGINS:-}
-      BARRELMAN_ADMIN_EMAILS: ${BARRELMAN_ADMIN_EMAILS:-}
       BARRELMAN_REGISTRATION_MODE: ${BARRELMAN_REGISTRATION_MODE:-}
       BARRELMAN_SESSION_TTL_DAYS: ${BARRELMAN_SESSION_TTL_DAYS:-}
       BARRELMAN_OTP_TTL_MINUTES: ${BARRELMAN_OTP_TTL_MINUTES:-}

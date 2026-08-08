@@ -122,14 +122,12 @@ Martin and GraphHopper trying to parse a directory as their config.
 ```dotenv
 BARRELMAN_DB_PASSWORD=changeme
 BARRELMAN_API_KEY=brm_changeme_use_a_strong_key
-BARRELMAN_ADMIN_KEY=brm_admin_a_different_strong_key
 REGIONS=north-carolina
 OLLAMA_HOST=http://ollama:11434   # optional — skip if not using semantic search
 ```
 
-`BARRELMAN_ADMIN_KEY` falls back to `BARRELMAN_API_KEY` when unset, so leaving
-it blank hands console power — full re-imports, `DROP`/`TRUNCATE` — to anyone
-holding a data key.
+There is no shared admin secret. The console is reached by signing in, and the
+first account created on a fresh instance becomes an administrator.
 
 ### 4. Start
 
@@ -301,14 +299,22 @@ and is served by the API at `/console`.
 
 ### Auth
 
-The console and all `/admin/*` script/job routes are gated by `BARRELMAN_ADMIN_KEY`
-(falls back to `BARRELMAN_API_KEY` when unset; open in dev when neither is set).
-Set a strong, separate secret in production — these routes can trigger full
-re-imports and `DROP`/`TRUNCATE`.
+The console and all `/admin/*` script/job routes — full re-imports,
+`DROP`/`TRUNCATE`, moderation — accept two credentials, both tied to a real
+account:
 
-```dotenv
-BARRELMAN_ADMIN_KEY=brm_admin_use_a_strong_key
-```
+- **An admin-role session.** How a human uses the console. The first account
+  created on a fresh instance becomes an administrator, so a new deployment is
+  never locked out and no secret has to be configured.
+- **An API key with the `admin` scope**, owned by an admin. For scripts and CI.
+
+The `admin` scope sits outside the `*` wildcard, and only an administrator can
+grant it — so a data key can never become an administrative one.
+
+This replaced a shared `BARRELMAN_ADMIN_KEY`, which was unattributed in the
+audit log, unrevocable without recreating the container, and fell back to
+`BARRELMAN_API_KEY` when unset — quietly making every holder of the data key an
+administrator.
 
 ### Execution model
 
@@ -648,8 +654,7 @@ The ones worth knowing:
 | `DATABASE_URL` | `postgresql://barrelman:barrelman@localhost:5434/barrelman` | PostGIS connection string |
 | `REGIONS` | `north-carolina,nyc-metro` | Which geographies the importers pull. `global` for everything |
 | `BARRELMAN_API_KEY` | — | Shared **service** credential, unmetered. **Unset means the data API is open** |
-| `BARRELMAN_ADMIN_KEY` | falls back to the API key | Gates `/admin/*`. An admin-role session works too |
-| `BARRELMAN_ADMIN_EMAILS` | — | Granted admin on sign-up. The first account is always an admin |
+| `BARRELMAN_ACCOUNTS_ENABLED` | `true` | `false` disables accounts — and with them `/admin/*`, which has no other credential |
 | `SMTP_HOST` | — | Without it, sign-in codes print to the log |
 | `BARRELMAN_LICENSE` | — | Signed token unlocking billing. Official deployment only — see [LICENSING.md](LICENSING.md) |
 | `BARRELMAN_TOS_URL` | — | Setting it requires accepting terms before creating a key |

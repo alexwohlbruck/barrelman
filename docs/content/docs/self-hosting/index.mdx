@@ -96,7 +96,6 @@ cat > .env <<'EOF'
 # Both of these MUST be changed. The Compose defaults are placeholders.
 BARRELMAN_DB_PASSWORD=<a long random string>
 BARRELMAN_API_KEY=brm_<a long random string>
-BARRELMAN_ADMIN_KEY=brm_admin_<a different long random string>
 
 # ── Coverage ──────────────────────────────────────────────────────────────
 # Which geographies the importers pull.
@@ -138,7 +137,7 @@ mid-index-build, which surfaces only as `connection to server was lost`.
 <Callout type="warn" title="Three things worth understanding before you continue">
 **`BARRELMAN_API_KEY` unset means the data API is open.** That is deliberate — it is how every guard in this codebase spells "local development," and a fresh clone has to be usable with no configuration. On a server, set it.
 
-**`BARRELMAN_ADMIN_KEY` gates `/admin/*`**, which can trigger full re-imports and `DROP`/`TRUNCATE`. It falls back to `BARRELMAN_API_KEY` when unset, so leaving it blank hands console power to anyone holding a data key. Set a separate secret.
+**There is no shared admin secret.** `/admin/*` — full re-imports, `DROP`/`TRUNCATE` — takes an admin-role session, or an API key with the `admin` scope. The first account created on a fresh instance becomes an administrator, so nothing needs configuring to get in.
 
 **Compose does not forward the host environment.** A variable set in `.env` but not named in the service's `environment:` block is silently absent inside the container. If you add a variable and it appears to have no effect, that is almost always why.
 </Callout>
