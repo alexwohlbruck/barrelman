@@ -196,11 +196,16 @@ about 20 minutes in.
 Scaling is roughly by PBF size but not linear — osm2pgsql and the spatial joins
 grow faster than the download. A country is hours; the planet is a day.
 
-Two that run long for their value: MOTIS OSM prep rewrites the whole extract to
-repair a handful of underground platforms (6 minutes to synthesise 0 connectors
-in Colorado), and the GBFS importer walks the *global* systems list before
-filtering to your bbox, so it takes the same ~10 minutes regardless of region.
-Skip both if you do not need transit or bikeshare.
+Two run long for what they deliver. MOTIS OSM prep rewrites the whole extract to
+repair a handful of underground platforms — 6 minutes to synthesise 0 connectors
+in Colorado.
+
+The GBFS importer is worse: it fetches **every** system in the global catalog
+and only then filters to your bbox, so its cost is unrelated to your region. On
+the Colorado run it was still going **40 minutes in** and had not finished when
+the host was torn down, having spent that time on systems in Abu Dhabi, Zurich
+and Darmstadt. Budget an hour, run it last, and skip it entirely unless you
+need bikeshare — nothing else in the pipeline depends on it.
 
 Pelias is a separate stack and takes hours — see
 [`pelias/README.md`](../pelias/README.md).

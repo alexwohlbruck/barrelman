@@ -138,6 +138,10 @@ docker compose exec barrelman-ops bun run import/import-gbfs-systems.ts
 
 Discovers GBFS systems and filters them to the region's bounding box.
 
+<Callout type="warn" title="Slow, and unrelated to your region size">
+It fetches every system in the global catalog before filtering, so a one-state import costs the same as a planet one. Measured on Colorado it was still running **40 minutes in** and had not finished. Run it last, and skip it unless you need bikeshare — nothing else depends on it.
+</Callout>
+
 ### Step 4 — Addresses (optional, and much bigger than the rest)
 
 Street addresses have no `name`, so they are not searchable in `geo_places`. Pelias fills that gap and folds address and street results into `/search`.
