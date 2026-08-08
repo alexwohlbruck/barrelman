@@ -23,6 +23,11 @@ value overrides one, so a knob you mean to turn off needs an explicit `0`.
 | `OLLAMA_HOST` | `http://localhost:11434` | Embeddings for semantic search (optional) |
 | `BARRELMAN_STATEMENT_TIMEOUT_MS` | `10000` | Query timeout on the API pool. `0` disables. DDL is exempt |
 | `PUBLIC_BASE_URL` | — | Origin `/docs` advertises as its "Production" server. Unset offers only localhost |
+| `NODE_ENV` | — | `production` makes the server warn at startup about missing secrets |
+| `COMPOSE_FILE` | — | Read by Compose, not by barrelman. `.env.example` sets it so a bare `docker compose up` picks up the dev overrides |
+
+`REGIONS` is consumed by the **importers**, which run in `barrelman-ops` — not
+by the API. It is named in that service's `environment:` block, not the API's.
 
 ## Authentication
 
@@ -76,13 +81,28 @@ URI as `<BARRELMAN_SERVER_ORIGIN>/auth/oauth/<provider>/callback`.
 | `GITLAB_CLIENT_ID` / `GITLAB_CLIENT_SECRET` | |
 | `GITLAB_BASE_URL` | `https://gitlab.com`. Set for a self-hosted instance |
 
-## Billing
-
-See [polar-setup.md](polar-setup.md) for the walkthrough.
+## Licensing
 
 | Variable | Description |
 |---|---|
-| `POLAR_ACCESS_TOKEN` | **Enables billing.** Without it every account stays on free |
+| `BARRELMAN_LICENSE` | Signed token unlocking gated features. Only `billing` today |
+| `BARRELMAN_LICENSE_PUBLIC_KEY` | Overrides the key licenses verify against. For tests and commercial licensees |
+
+The Commons Clause in [LICENSE](../LICENSE) removes the right to sell
+Barrelman, so a self-hosted instance may not charge third parties for access —
+see [LICENSING.md](../LICENSING.md). Subscription billing is gated on a license
+granting the `billing` feature, which only the official deployment holds.
+Everything else — search, tiles, routing, transit, accounts, keys, metering —
+needs no license and never will.
+
+## Billing
+
+**Requires a license granting `billing` (above).** Setting these without one
+logs a warning and leaves billing disabled.
+
+| Variable | Description |
+|---|---|
+| `POLAR_ACCESS_TOKEN` | Polar API token. Billing needs this *and* a license |
 | `POLAR_WEBHOOK_SECRET` | Required when billing is on — the server refuses to start otherwise |
 | `POLAR_ORGANIZATION_ID` | |
 | `POLAR_SANDBOX` | `true` for sandbox.polar.sh |
@@ -164,13 +184,39 @@ itself.
 
 | Variable | Default | Description |
 |---|---|---|
-| `GRAPHHOPPER_URL` | `http://localhost:8989` | |
-| `GRAPHHOPPER_JAVA_OPTS` | `-Xmx5g -Xms1g` | Heap must fit the whole routing graph |
-| `MOTIS_URL` | `http://localhost:8080` | |
-| `MOTIS_RT_UPDATE_INTERVAL` | MOTIS default (60s) | Raise in dev to cut realtime polling |
-| `MARTIN_URL` | `http://barrelman-martin:3000` | |
-| `ISOCHRONE_CONCURRENCY` | `8` | Parallel GraphHopper calls per isochrone |
-| `TRANSITLAND_API_KEY` | — | For GTFS feed discovery |
+| `GRAPHHOPPER_URL` | `http://localhost:8989` | Compose sets `http://barrelman-graphhopper:8989` |
+| `GRAPHHOPPER_JAVA_OPTS` | `-Xmx6g -Xms1g` | Heap must fit the whole routing graph — see below |
+| `MOTIS_URL` | `http://localhost:8080` | Compose sets `http://barrelman-motis:8080` |
+| `MOTIS_RT_UPDATE_INTERVAL` | MOTIS default (60s) | GTFS-RT poll interval. Baked into the MOTIS config at import time, so it takes effect on the next `rebuild-motis.sh`, not on restart |
+| `MARTIN_URL` | `http://barrelman-martin:3000` | Set to point at a Martin outside this stack |
+| `PELIAS_URL` | `http://pelias_api:4000` | Address geocoder. Only used when the `pelias` profile is up |
+| `ISOCHRONE_CONCURRENCY` | `8` | Parallel GraphHopper calls per isochrone. Raise only if GraphHopper is dedicated to isochrone work |
+| `TRANSITLAND_API_KEY` | — | For GTFS feed discovery. Free at [transit.land](https://transit.land/users/sign_up) |
+
+`GRAPHHOPPER_JAVA_OPTS` is the one to watch as `REGIONS` grows. GraphHopper
+loads its graph into JVM **heap** rather than memory-mapping it, so an
+undersized `-Xmx` dies before the process logs its version — the failure looks
+like a crash, not an out-of-memory. Check `du -sh` on the `graph-cache`
+directory and keep `-Xmx` comfortably above it.
+
+## Import pipeline
+
+Read by the scripts running in `barrelman-ops` (and, for the osm2pgsql step, in
+`barrelman-db`). None of them affect a running API.
+
+| Variable | Default | Description |
+|---|---|---|
+| `GEOFABRIK_URL` | NC extract | Single-PBF fallback, used only when `REGIONS` resolves to nothing |
+| `GEOFABRIK_REPLICATION_URL` | NC updates feed | Replication feed for `UPDATE_MODE=replication`. **Change this with `REGIONS`** — the default is North Carolina's, so an unchanged value applies the wrong region's diffs |
+| `IMPORT_PBF` | — | Path to a local PBF inside the container, overriding the download |
+| `FORCE_DOWNLOAD` | `0` | `1` re-downloads even when the PBF is already present |
+| `UPDATE_MODE` | `replication` | `full` re-downloads and re-imports instead, for extracts with no replication feed |
+| `BARRELMAN_DATA_DIR` | `/data` | Where PBFs and derived extracts live. Set by the DB image |
+| `OSM_DATA_DIR` | `./data` | Where `prepare-motis-osm.sh` looks for `region.osm.pbf` |
+| `GTFS_DATA_DIR` | `./data/gtfs` | GTFS ZIP output. Compose sets `/gtfs-zips` |
+| `GTFS_REGION` | — | Overrides a single GTFS search area, bypassing `REGIONS` |
+| `GITHUB_TOKEN` | — | Raises the GitHub API limit when resolving a region's OpenAddresses file list (60 req/hour unauthenticated). A rate-limited lookup yields an empty address list and a warning, not a failure |
+| `DB_CONTAINER` | `barrelman-db` | Container the scripts `docker exec` into for osm2pgsql |
 
 ## Landing-site demo
 
@@ -194,14 +240,40 @@ revoking it to stop a demo would take Parchment down with it.
 Compose defaults are sized for a dev laptop sharing RAM with MOTIS,
 Elasticsearch and GraphHopper. **Production should give the database the box.**
 
-| Variable | Dev default | 32GB host |
+| Variable | Compose default | 32GB host |
 |---|---|---|
-| `BARRELMAN_DB_SHARED_BUFFERS` | `2GB` | `8GB` |
-| `BARRELMAN_DB_CACHE_SIZE` | `4GB` | `24GB` |
+| `BARRELMAN_DB_SHARED_BUFFERS` | `1GB` | `8GB` |
+| `BARRELMAN_DB_CACHE_SIZE` | `3GB` | `24GB` |
 | `BARRELMAN_DB_WORK_MEM` | `64MB` | `128MB` |
 | `BARRELMAN_DB_MAINTENANCE_WORK_MEM` | `1GB` | `2GB` |
-| `BARRELMAN_DB_MEM_LIMIT` | `4g` | `28g` |
+| `BARRELMAN_DB_SHM_SIZE` | `1gb` | `2gb` |
+| `BARRELMAN_DB_MEM_LIMIT` | `2g` | `28g` |
 | `BARRELMAN_DB_RANDOM_PAGE_COST` | `1.1` | `1.1` (SSD); raise toward `4` on spinning disks |
+
+Rules of thumb: ~25% of host RAM in `shared_buffers`, 50–75% in
+`effective_cache_size`.
+
+### The one that bites
+
+`mem_limit` has to cover **`shared_buffers` + `shm_size` + `maintenance_work_mem`**,
+plus headroom for `work_mem` and per-backend overhead.
+
+`shared_buffers` and `/dev/shm` are both shared memory charged to the same
+container cgroup, so they add up. Get it wrong and the kernel OOM-kills Postgres
+partway through an index build, which surfaces at the client as a bare:
+
+```
+psql:/app/import/post-import.sql:114: error: connection to server was lost
+```
+
+Nothing in that message points at memory. Confirm it with
+`docker inspect barrelman-db --format '{{.State.OOMKilled}}'`.
+
+`BARRELMAN_DB_SHM_SIZE` exists because Docker's 64 MB default is far too small
+for parallel index builds — those fail the other way, with
+`could not resize shared memory segment ... No space left on device`, which
+reads like a full disk. Its requirement scales with `maintenance_work_mem` and
+the parallel worker count, so raise the two together.
 
 Search latency is dominated by whether the working set stays resident, so these
 matter more than they look.

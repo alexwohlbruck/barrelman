@@ -66,6 +66,18 @@ services:
       - barrelman-osm-data:/data
     ports:
       - "5434:5432"
+    # Docker gives a container 64MB of /dev/shm, and Postgres puts parallel
+    # query workers' shared memory there. The post-import index builds ask for
+    # ~2GB and die with "could not resize shared memory segment ... No space
+    # left on device" — which reads like a disk problem on a host with 200GB
+    # free.
+    #
+    # This counts against mem_limit below. The budget the container must fit is
+    # roughly shared_buffers + shm_size + maintenance_work_mem, and exceeding it
+    # gets Postgres OOM-killed mid-index-build, surfacing as a bare
+    # "connection to server was lost". Raise this with maintenance_work_mem,
+    # and raise mem_limit with both.
+    shm_size: ${BARRELMAN_DB_SHM_SIZE:-1gb}
     # Keeps Postgres from squeezing MOTIS, Elasticsearch and GraphHopper on a
     # dev machine. Headroom over shared_buffers for work_mem allocations and
     # per-backend overhead. Raise or drop it in production, where the database
@@ -129,6 +141,12 @@ services:
     volumes:
       - barrelman-gtfs-data:/data
       - barrelman-osm-data:/osm-data:ro
+      # The feeds themselves. generate-motis-config.ts writes dataset paths as
+      # "gtfs/<id>.zip", relative to MOTIS's working dir /data — but /data is the
+      # gtfs-data volume, which holds only config.yml. Without this bind the ZIPs
+      # exist for barrelman and barrelman-ops and are invisible here, and
+      # `motis import` exits 1 having printed its config and nothing else.
+      - ./data/gtfs:/data/gtfs:ro
     ports:
       - "5004:8080"
 
@@ -149,16 +167,29 @@ services:
       BARRELMAN_ADMIN_KEY: ${BARRELMAN_ADMIN_KEY:-}
       GRAPHHOPPER_URL: http://barrelman-graphhopper:8989
       MOTIS_URL: http://barrelman-motis:8080
+      # Both default to the compose service names in code, so they only need
+      # naming here so an operator CAN point them elsewhere — a shared Martin,
+      # or a Pelias stack on another host.
+      MARTIN_URL: ${MARTIN_URL:-http://barrelman-martin:3000}
+      PELIAS_URL: ${PELIAS_URL:-http://pelias_api:4000}
       # GTFS-RT poll interval baked into motis/config.yml at import time. Unset →
       # MOTIS default 60s. Set in .env (e.g. 600) to throttle dev polling.
       MOTIS_RT_UPDATE_INTERVAL: ${MOTIS_RT_UPDATE_INTERVAL:-}
       GTFS_DATA_DIR: /gtfs-zips
+      # Parallel GraphHopper calls per isochrone. Documented in
+      # docs/configuration.md; without this line it had no effect in a container.
+      ISOCHRONE_CONCURRENCY: ${ISOCHRONE_CONCURRENCY:-}
 
       # The origin /docs advertises as its "Production" server, so the docs'
       # try-it button points at the real API rather than only localhost.
       # src/config/swagger.ts has read this since the docs shipped, but it was
       # never named here — so it has never had any effect in a container.
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-}
+
+      # Raises the GitHub API rate limit used when resolving a region's
+      # OpenAddresses file list (60 req/hour unauthenticated). Optional, but a
+      # rate-limited lookup yields an empty address list rather than an error.
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
 
       # ── Public API accounts ──────────────────────────────────────────
       # Compose does not forward the host environment, so every variable the
@@ -194,7 +225,14 @@ services:
       GITLAB_CLIENT_SECRET: ${GITLAB_CLIENT_SECRET:-}
       GITLAB_BASE_URL: ${GITLAB_BASE_URL:-}
 
-      # ── Billing ──────────────────────────────────────────────────────
+      # ── Licensing ────────────────────────────────────────────────────
+      # Signed token granting the `billing` feature. Only the official
+      # deployment holds one; the Commons Clause forbids selling access to a
+      # self-hosted instance (LICENSING.md). Without it the Polar settings
+      # below do nothing.
+      BARRELMAN_LICENSE: ${BARRELMAN_LICENSE:-}
+
+      # ── Billing (requires a license, see above) ──────────────────────
       POLAR_ACCESS_TOKEN: ${POLAR_ACCESS_TOKEN:-}
       POLAR_WEBHOOK_SECRET: ${POLAR_WEBHOOK_SECRET:-}
       POLAR_ORGANIZATION_ID: ${POLAR_ORGANIZATION_ID:-}
@@ -256,14 +294,27 @@ services:
       GRAPHHOPPER_URL: http://barrelman-graphhopper:8989
       MOTIS_URL: http://barrelman-motis:8080
       TRANSITLAND_API_KEY: ${TRANSITLAND_API_KEY:-}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      # The one variable that decides coverage. Read by the importers that run
+      # here, not by the API — see docs/REGIONS.md.
       REGIONS: ${REGIONS:-}
       GTFS_DATA_DIR: /gtfs-zips
+      # Where the shared OSM volume is mounted in THIS container. The scripts
+      # default to <repo>/data, which is /app/data here and holds nothing —
+      # prepare-motis-osm.sh failed with "region.osm.pbf not found" while the
+      # file sat in the volume all along. barrelman-db gets the equivalent
+      # BARRELMAN_DATA_DIR baked into its image.
+      OSM_DATA_DIR: /data
+      BARRELMAN_DATA_DIR: /data
       # scripts/*.sh docker-exec into these sibling containers by name.
       DB_CONTAINER: barrelman-db
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - barrelman-osm-data:/data
       - barrelman-gtfs-data:/gtfs-data
-      - ./data/gtfs:/gtfs-zips:ro
+      # Read-WRITE, unlike the API's mount of the same directory: this is the
+      # container that downloads the feeds. With :ro every download failed with
+      # "EROFS: read-only file system" and the run ended "Processed 0 feeds".
+      - ./data/gtfs:/gtfs-zips
     depends_on:
       - barrelman-db

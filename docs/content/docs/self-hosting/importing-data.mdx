@@ -1,0 +1,209 @@
+---
+title: Importing data
+description: Choose a region, run the import pipeline, and verify that every layer works.
+---
+
+A fresh database has no OSM data, so search returns nothing until you import some.
+
+## Choose a region
+
+Barrelman does not import "the world" by default. A **region** is a named bundle of data sources — an OSM extract, a transit search area, address files — and `REGIONS` picks which ones the pipeline pulls. Every importer resolves coverage from that one variable. There is no second place to configure it.
+
+`REGIONS` is read by `barrelman-ops` (the importers), not by the API.
+
+### Add a region by name
+
+Fetch the boundary catalog once. It downloads Geofabrik's extract index — every published extract with its real political boundary, download URLs and ISO codes. No API key required.
+
+```bash
+docker compose exec barrelman-ops bun run scripts/fetch-boundaries.ts
+```
+
+Then in the console: **Regions → Add by name**, type a place, pick the match. That fills in the OSM extract URLs, the replication feed, a bounding box computed from the real boundary polygon, the Transitland search area, and US Census FIPS codes for address interpolation.
+
+From the CLI, to see what matches without re-downloading the catalog:
+
+```bash
+docker compose exec barrelman-ops bun run scripts/fetch-boundaries.ts --skip-fetch --search colorado
+```
+
+Set the key in `.env` and recreate the worker so it sees the change:
+
+```bash
+sed -i 's/^REGIONS=.*/REGIONS=colorado/' .env
+docker compose up -d barrelman-ops
+```
+
+<Callout type="warn" title="Create the region before naming it in REGIONS">
+The two steps are independent. Naming a key no region defines fails closed:
+
+```
+Unknown region "colorado". Known regions: north-carolina, nyc-metro, global
+```
+
+Only `north-carolina`, `nyc-metro` and `global` ship in `config/regions.json`. Anything else has to be created first, in the console or via the admin API.
+</Callout>
+
+### Without the console
+
+The console is a client of the admin API, so a scripted setup can do the same thing. Authenticate with `BARRELMAN_ADMIN_KEY`:
+
+```bash
+KEY=$BARRELMAN_ADMIN_KEY
+API=http://localhost:5001
+
+curl -s -X POST -H "Authorization: Bearer $KEY" $API/admin/boundaries/refresh
+curl -s -H "Authorization: Bearer $KEY" "$API/admin/boundaries?q=colorado"
+curl -s -X POST -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' \
+  -d '{"id":"us/colorado"}' $API/admin/boundaries/resolve
+```
+
+The last call returns `{"region":{…}}` and writes nothing. Add a `"key"` to that object and POST it to `$API/admin/regions` to save it. Confirm with:
+
+```bash
+docker compose exec barrelman-ops bun run src/config/regions.ts summary
+```
+
+### Confirm what is selected
+
+```bash
+docker compose exec barrelman-ops bun run src/config/regions.ts summary
+docker compose exec barrelman-ops bun run src/config/regions.ts osm-extracts
+```
+
+Two things are deliberately **not** guessed for you: Who's-on-First place IDs, and any OpenAddresses coverage the repository listing does not actually show. The [region guide](https://github.com/alexwohlbruck/barrelman/blob/main/docs/REGIONS.md) has the field reference, how to build a region by hand (for example a metro area spanning three states), and why the import is *not* clipped to the bounding box.
+
+## Run the pipeline
+
+Each step depends on the one before it.
+
+You can run every step from the console under **Scripts** — which gives you streamed logs, a confirmation gate on destructive tasks, and a job history — or from the CLI as shown here. They are the same jobs either way.
+
+<Callout type="info">
+Run these detached (`-d`) or under `tmux`. A state-sized import is tens of minutes; a country-sized one is hours. The console is the better option precisely because it survives your SSH session dropping.
+</Callout>
+
+### Step 1 — OSM to PostGIS and street routing (required)
+
+```bash
+docker compose exec -d barrelman-ops bash scripts/run-import.sh
+```
+
+This downloads each region's PBF, `osmium merge`s them into one extract, runs osm2pgsql inside `barrelman-db`, then does all the post-processing that makes search work: structured address extraction, GiST and GIN indexes, `codes` and `name_abbrev` precomputation, road intersections, parent-context spatial joins, and a full-text vector rebuild. Finally it rebuilds the GraphHopper graph.
+
+Watch it:
+
+```bash
+docker compose logs -f barrelman-ops
+```
+
+Check progress from another shell:
+
+```bash
+docker exec barrelman-db psql -U barrelman -d barrelman -c "SELECT count(*) FROM geo_places;"
+```
+
+Nothing below this line is required. Skip any of it you do not need.
+
+### Step 2 — Transit (optional)
+
+Three commands, in this order. All three are required.
+
+```bash
+# 2a. Repair underground platform topology → region-transit.osm.pbf
+docker compose exec -d barrelman-ops bash scripts/prepare-motis-osm.sh
+
+# 2b. Download + import GTFS feeds. Needs GraphHopper from step 1 —
+#     walking transfers between stops are routed through it.
+#     Get a free key at https://transit.land/users/sign_up
+docker compose exec -d -e TRANSITLAND_API_KEY=tlk_... barrelman-ops bash scripts/download-gtfs.sh
+
+# 2c. Rebuild the MOTIS dataset. REQUIRED — see below.
+docker compose exec -d barrelman-ops bash scripts/rebuild-motis.sh
+```
+
+<Callout type="warn" title="Why step 2c is not optional">
+`motis server` only *serves* the pre-built dataset at `/data/data`. It never re-imports when the config or the feeds change, so a plain `docker restart` keeps serving the old schedules indefinitely and the new feeds never reach riders.
+
+`rebuild-motis.sh` regenerates the config from the `gtfs_feeds` table, clean-rebuilds the timetable *and* street graph together — an in-place incremental import can leave the stop-to-street match index stale, which silently breaks routing to every stop — and restarts the server. The previous dataset is kept at `/data/data.prev` and restored automatically if the import fails.
+</Callout>
+
+Put `TRANSITLAND_API_KEY` in `.env` if you will refresh feeds regularly; it is already forwarded to `barrelman-ops`.
+
+### Step 3 — Bikeshare (optional)
+
+```bash
+docker compose exec barrelman-ops bun run import/import-gbfs-systems.ts
+```
+
+Discovers GBFS systems and filters them to the region's bounding box.
+
+<Callout type="warn" title="Slow, and unrelated to your region size">
+It fetches every system in the global catalog before filtering, so a one-state import costs the same as a planet one. Measured on Colorado it was still running **40 minutes in** and had not finished. Run it last, and skip it unless you need bikeshare — nothing else depends on it.
+</Callout>
+
+### Step 4 — Addresses (optional, and much bigger than the rest)
+
+Street addresses have no `name`, so they are not searchable in `geo_places`. Pelias fills that gap and folds address and street results into `/search`.
+
+This is a separate stack behind Compose profiles — Elasticsearch alone wants a 1 GB heap — and provisioning its index takes **hours**, not minutes.
+
+```bash
+docker compose exec barrelman-ops bun run scripts/generate-pelias-config.ts
+docker compose --profile pelias up -d
+```
+
+Then follow [`pelias/README.md`](https://github.com/alexwohlbruck/barrelman/blob/main/pelias/README.md) for the index build. It has a step (`pelias prepare polylines`) that is easy to miss and whose omission silently returns nothing for street-name search.
+
+## Verify
+
+Run all of these. Each one exercises a different layer, and a stack can pass the first and fail the rest.
+
+```bash
+KEY=brm_live_...   # or your BARRELMAN_API_KEY
+
+# Liveness + database. "degraded" just means MOTIS has no timetable yet.
+curl -s http://localhost:5001/health
+
+# Credential
+curl -s -H "Authorization: Bearer $KEY" http://localhost:5001/health/auth
+
+# Search — the OSM import (step 1)
+curl -s -X POST http://localhost:5001/search \
+  -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' \
+  -d '{"query":"coffee","lat":35.2271,"lng":-80.8431,"radius":5000,"limit":5}'
+
+# Reverse geocode — parent-context resolution (step 1 post-processing)
+curl -s -H "Authorization: Bearer $KEY" \
+  "http://localhost:5001/geocode?lat=35.2271&lng=-80.8431"
+
+# Street routing — the GraphHopper graph (step 1)
+curl -s -H "Authorization: Bearer $KEY" \
+  "http://localhost:5001/isochrone?lat=35.7796&lng=-78.6382&mode=walk&durations=600"
+
+# Vector tiles — Martin against PostGIS. Source names come from
+# martin-config.yaml (parchment_pois, parchment_roads, transit_platforms, …).
+curl -s -o /dev/null -w '%{http_code} %{content_type}\n' \
+  "http://localhost:5001/tiles/parchment_pois/12/1146/1635?api_key=$KEY"
+
+# Transit stops — the GTFS import (step 2b). Reads PostGIS, not MOTIS.
+curl -s -H "Authorization: Bearer $KEY" \
+  "http://localhost:5001/transit/stops?lat=40.7527&lng=-73.9772&radius=500"
+
+# Transit routing — MOTIS's baked timetable (step 2c).
+curl -s -H "Authorization: Bearer $KEY" \
+  "http://localhost:5001/isochrone?lat=40.7527&lng=-73.9772&mode=transit&durations=1800"
+```
+
+Those last two are worth running as a pair. Stops live in PostGIS while routing comes from MOTIS's own dataset, so a stack that skipped step 2c answers the first happily and returns nothing useful for the second.
+
+Adjust the coordinates to somewhere inside your imported region — the most common cause of an empty-but-successful response is querying outside your data.
+
+The console's **Dashboard** and **Data** views show the same thing visually: downstream service health for Postgres, MOTIS, GraphHopper and Martin, plus table sizes, coverage and freshness.
+
+## Next
+
+<Cards>
+  <Card title="Going to production" href="/self-hosting/production" description="TLS, proxy hops, SMTP, and closing sign-up." />
+  <Card title="Operations" href="/self-hosting/operations" description="Upgrades, data refreshes, and backups." />
+</Cards>

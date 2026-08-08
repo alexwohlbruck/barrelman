@@ -1,0 +1,83 @@
+---
+title: Operations
+description: Upgrading, refreshing OSM and transit data, backups, and rotating secrets.
+---
+
+## Upgrading
+
+```bash
+cd /opt/barrelman
+docker compose pull
+docker compose up -d
+```
+
+`docker compose pull` refreshes **every** service's image, not just Barrelman's. That is fine for anything stateless — which is why most images here track a floating tag and pick up upstream fixes for free.
+
+<Callout type="warn" title="MOTIS and GraphHopper bake data into a version-specific binary format">
+Their on-disk timetable and routing graph are written by one engine version and rejected by another, so a pull that brings in a new major version leaves the engine unable to start:
+
+```
+tt: binary version mismatch [existing=34 vs expected=37], please re-run import
+```
+
+That is a job, not a restart:
+
+```bash
+docker compose exec -d barrelman-ops bash scripts/rebuild-motis.sh
+docker compose exec -d barrelman-ops bash scripts/rebuild-graphhopper.sh
+```
+
+Pull during a window where you can run the rebuild, or pin those two services to explicit version tags.
+</Callout>
+
+### Automating it
+
+Watchtower can automate the pull, with two caveats.
+
+- **It only manages containers on its own Docker host.** Watchtower watches the Docker socket it is given and nothing else, so an instance running on a different machine will never update your stack. Every host you want auto-updated needs its own.
+- **A blanket Watchtower will eventually hit the binary-format trap above.** It pulls the same floating tags `docker compose pull` would, so if MOTIS or GraphHopper are on `:latest` it will one day restart them onto an incompatible engine version with nobody watching. Either pin those two services, or run Watchtower with `--label-enable` and label only the stateless services.
+
+Note that the original [containrrr/watchtower](https://github.com/containrrr/watchtower) has been unmaintained since November 2023, and its Docker client negotiates API version 1.25 — which Docker 29 refuses (`client version 1.25 is too old`), leaving the container dead on arrival. Use the maintained community fork, [nicholas-fedor/watchtower](https://github.com/nicholas-fedor/watchtower) (`nickfedor/watchtower`), which takes the same flags and the same `com.centurylinklabs.watchtower.*` labels.
+
+## Refreshing OSM data
+
+Incremental, via Geofabrik's replication feed:
+
+```bash
+docker compose exec -d barrelman-ops bash scripts/update-osm.sh
+```
+
+Not every extract publishes a replication feed. Set `UPDATE_MODE=full` to re-download and re-import instead. If replication state was never initialized, run `scripts/init-replication.sh` first — also in the console, under **Scripts**.
+
+<Callout type="warn">
+`GEOFABRIK_REPLICATION_URL` defaults to North Carolina's updates feed regardless of `REGIONS`. Change it alongside your region, or replication applies the wrong region's diffs.
+</Callout>
+
+## Refreshing transit feeds
+
+```bash
+docker compose exec -d -e TRANSITLAND_API_KEY=tlk_... barrelman-ops bash scripts/download-gtfs.sh
+docker compose exec -d barrelman-ops bash scripts/rebuild-motis.sh
+```
+
+The second command is required every time. `motis server` never re-imports on its own.
+
+## Backups
+
+Only the database holds anything you cannot regenerate — accounts, API keys, usage history, region definitions and job history. OSM, GTFS and the routing graphs are all rebuildable from source.
+
+```bash
+docker exec barrelman-db pg_dump -U barrelman -Fc barrelman > barrelman-$(date +%F).dump
+```
+
+Treat `accounts_sessions` as credential material: Lucia stores session IDs in the clear, so the cookie value *is* the row's primary key.
+
+## Rotating secrets
+
+Changing `BARRELMAN_API_KEY` or `BARRELMAN_ADMIN_KEY` in `.env` needs a recreate, not a restart — Compose bakes environment at container creation:
+
+```bash
+docker compose up -d --force-recreate barrelman
+```
+
+Account API keys (`brm_live_…`) are revoked from the console instead, and revocation is immediate: it evicts the verification cache directly rather than waiting out its TTL.

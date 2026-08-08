@@ -1,9 +1,21 @@
 # Martin tile server configuration
-# Serves vector tiles from PMTiles basemap + PostGIS geo_places table
+# Serves vector tiles from PostGIS geo_places, plus an optional PMTiles basemap.
 
-pmtiles:
-  sources:
-    basemap: /data/basemap.pmtiles
+# Optional basemap, disabled by default.
+#
+# Martin treats an unresolvable source as FATAL and exits, so naming a file that
+# nothing in the import pipeline produces meant martin crash-looped on every
+# fresh install and no tiles were served at all:
+#
+#   Source basemap: IO error No such file or directory (os error 2):
+#   /data/basemap.pmtiles
+#
+# To enable it, put a .pmtiles file at data/basemap.pmtiles (the host side of
+# the barrelman-osm-data volume) and uncomment:
+#
+# pmtiles:
+#   sources:
+#     basemap: /data/basemap.pmtiles
 
 postgres:
   connection_string: ${DATABASE_URL}

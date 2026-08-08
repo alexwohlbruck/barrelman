@@ -68,7 +68,7 @@ async function main() {
     console.log('Next steps:')
     console.log('  1. Regenerate MOTIS config to include RT feeds:')
     console.log('     bun run import/import-gtfs.ts --skip-download --skip-transfers')
-    console.log('  2. Restart MOTIS: docker compose restart motis')
+    console.log('  2. Rebuild MOTIS: bash scripts/rebuild-motis.sh (a restart keeps the old timetable)')
   }
 
   if (dryRun && result.updated > 0) {

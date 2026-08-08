@@ -416,6 +416,8 @@ export const SCRIPTS: ScriptDef[] = [
     confirm: true,
     exec: { kind: 'process', command: 'bash', args: ['scripts/rebuild-valhalla.sh'] },
     source: 'scripts/rebuild-valhalla.sh',
+    notes:
+      'No Valhalla service ships in docker-compose.yml — this is only useful on a deployment that adds one. GraphHopper is the street router the API actually calls.',
   },
   {
     id: 'routing-motis-osm',
@@ -427,6 +429,21 @@ export const SCRIPTS: ScriptDef[] = [
     confirm: false,
     exec: { kind: 'process', command: 'bash', args: ['scripts/prepare-motis-osm.sh'] },
     source: 'scripts/prepare-motis-osm.sh',
+  },
+  {
+    id: 'routing-motis',
+    name: 'Rebuild MOTIS Dataset',
+    description:
+      'Regenerate motis config from gtfs_feeds, clean-rebuild the timetable + street graph with `motis import`, and restart the server on the fresh dataset.',
+    category: 'routing',
+    danger: 'caution',
+    longRunning: true,
+    confirm: true,
+    exclusive: true,
+    exec: { kind: 'process', command: 'bash', args: ['scripts/rebuild-motis.sh'] },
+    source: 'scripts/rebuild-motis.sh',
+    notes:
+      'REQUIRED after every GTFS import and after any MOTIS version bump — `motis server` only serves the pre-built dataset and never re-imports, so a plain restart keeps serving stale schedules. The previous dataset is kept at /data/data.prev and restored automatically if the import fails.',
   },
 
   // ── Database & Migration (in-process via existing admin service) ───────

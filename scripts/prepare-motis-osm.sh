@@ -35,5 +35,13 @@ if [ ! -f "$IN" ]; then
 fi
 
 echo "[$(date '+%H:%M:%S')] Synthesizing platform connectors: $IN -> $OUT"
-python3 "$PROJECT_DIR/import/synthesize-platform-connectors.py" "$IN" "$OUT"
+# pyosmium is not installed system-wide in barrelman-ops (Dockerfile.ops ships
+# python3 + uv, not the module), so fetch it on demand the same way
+# import-stop-areas.sh does. Falls back to the system interpreter where the
+# module is already present.
+if command -v uv >/dev/null 2>&1 && ! python3 -c 'import osmium' 2>/dev/null; then
+  uv run --with osmium python3 "$PROJECT_DIR/import/synthesize-platform-connectors.py" "$IN" "$OUT"
+else
+  python3 "$PROJECT_DIR/import/synthesize-platform-connectors.py" "$IN" "$OUT"
+fi
 echo "[$(date '+%H:%M:%S')] ✓ MOTIS OSM extract ready: $(du -h "$OUT" | cut -f1)"

@@ -3,6 +3,9 @@
 Everything runs under Docker Compose. You should not need to start a server by
 hand.
 
+This page is about working *on* barrelman from a clone. If you want to stand an
+instance *up*, see [the self-hosting guide](https://docs.barrelman.dev/self-hosting).
+
 ## The stack
 
 ```bash
@@ -27,6 +30,54 @@ Also worth knowing:
 - **API docs** at http://localhost:5001/docs — the OpenAPI surface.
 - In production the API serves the pre-built console itself at `/console`; the
   separate dev server exists only for HMR.
+- The console dev server is Vite with `base: '/console/'`, so the **trailing
+  slash is required** in dev. Production (served by Elysia) accepts both.
+
+## Where jobs actually run
+
+The API container is deliberately lean — no docker CLI, no osmium, no python.
+It only *enqueues* `process` jobs into Postgres. **`barrelman-ops`** mounts the
+docker socket, carries that tooling, and claims them one at a time under a
+Postgres advisory lock (single-flight, so two imports can never overlap).
+`internal` jobs — SQL and migrations — still run in-process in the API, which
+already has the DB client.
+
+So anything that shells out runs there:
+
+```bash
+docker compose exec -d barrelman-ops bash scripts/run-import.sh
+docker compose logs -f barrelman-ops
+```
+
+Running the same script in `barrelman` fails on a missing `docker` or `osmium`.
+Job state — status, exit code, logs — lives in the DB, so the console renders
+one unified list either way.
+
+`barrelman-ops` is **not** source-mounted, unlike the API. Changes to
+`scripts/` or `import/` need `./start.sh dev --build` to reach it.
+
+## Deploying a branch to a server
+
+`docker-compose.yml` gives `barrelman` and `barrelman-db` an `image:` and no
+`build:` — the `build:` stanzas live in `docker-compose.dev.yml`. So on a server
+that only has the base file:
+
+```bash
+docker compose build barrelman     # → "No services to build", exit 0
+```
+
+It is a silent no-op, and the container keeps running the published image from
+`main` while you believe your fix is deployed. Build those two explicitly:
+
+```bash
+docker build -t alexwohlbruck/barrelman:latest .
+docker build -f Dockerfile.db -t alexwohlbruck/barrelman-db:latest .
+docker compose up -d --force-recreate barrelman barrelman-db
+```
+
+`barrelman-ops` does have a `build:` in the base file, so `docker compose build
+barrelman-ops` works — but it still needs an explicit rebuild for any change to
+`scripts/` or `import/`, since it is not source-mounted.
 
 ## The marketing site
 
@@ -97,14 +148,13 @@ instantly. Two things it does **not** pick up:
   docker restart barrelman
   ```
 
-  This patches the running container only — the next recreation loses it, which
-  is exactly how the crash-loop above gets discovered at the worst moment.
+  This patches the running container only; the next recreation loses it.
 
 - **Module-level singletons.** `bun --hot` re-evaluates a module's body but
   keeps the old instance for things constructed at import time — the Lucia
   client, the Polar client, the metering timers. If a change to one of those
   seems not to apply, `docker restart barrelman` before you go looking for the
-  bug. This has cost real debugging time.
+  bug.
 
 Anything started on an interval is guarded on `globalThis` for the same reason:
 without the guard, each hot reload stacks another copy of the timer.
