@@ -181,7 +181,13 @@ export type GtfsTransfer = typeof gtfsTransfers.$inferSelect
 export type NewGtfsTransfer = typeof gtfsTransfers.$inferInsert
 
 // ── GTFS Shapes ─────────────────────────────────────────────────────
-// `geom` is added by the shape importer, not by ensureGtfsSchema().
+//
+// Deliberately omits the `geom` column that exists on long-lived databases.
+// `ensureGtfsSchema()` does not create it, nothing in this repo populates or
+// reads it, and it appears to be left over from an ad-hoc migration. Listing it
+// here is not free: drizzle names every column of the table in an INSERT, so a
+// definition claiming `geom` makes importShapes fail outright on any instance
+// that has never had it — which is every fresh install.
 
 export const gtfsShapes = pgTable(
   'gtfs_shapes',
@@ -190,12 +196,10 @@ export const gtfsShapes = pgTable(
     feedId: text('feed_id').notNull(),
     shapeId: text('shape_id').notNull(),
     coordinates: jsonb('coordinates').$type<[number, number][]>().notNull(),
-    geom: spatialColumn('geom', 'LINESTRING'),
   },
   (table) => [
     uniqueIndex('gtfs_shapes_feed_shape_idx').on(table.feedId, table.shapeId),
     index('gtfs_shapes_feed_id_idx').on(table.feedId),
-    spatialIndex('gtfs_shapes_geom_idx', table.geom),
   ],
 )
 
