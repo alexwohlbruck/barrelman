@@ -66,7 +66,7 @@ If a run is still going when the next one is due, the new one is skipped rather
 than queued behind it, and the page says so. So a long OSM import can't stack up
 copies of itself.
 
-<Callout>
+<Callout type="info">
 Prefer a host crontab? It still works — but a script driven by `docker exec`
 bypasses the job store, so nothing about that run appears in the console.
 </Callout>
