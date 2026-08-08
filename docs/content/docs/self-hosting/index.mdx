@@ -34,11 +34,21 @@ Nothing else. You do not need Bun, Node, Postgres, osm2pgsql or Java on the host
 
 Sizing is driven entirely by how much geography you import.
 
-| Scale | DB size | RAM | Disk | OSM import time |
-|---|---|---|---|---|
-| One US state (e.g. North Carolina) | ~10 GB | 8 GB | 60 GB | 20–40 min |
-| Full United States | ~60 GB | 32 GB | 250 GB | 6–12 h |
-| Europe | ~100 GB | 64 GB | 400 GB | 12–24 h |
+| Scale | DB size | RAM | Disk | OSM import | |
+|---|---|---|---|---|---|
+| One US state (Colorado) | 11 GB | 8 GB min, 16 GB comfortable | 25 GB | 15 min | **measured** |
+| Full United States | ~60 GB | 32 GB | 250 GB | 6–12 h | estimated |
+| Europe | ~100 GB | 64 GB | 400 GB | 12–24 h | estimated |
+
+The first row is measured on a Hetzner CPX41 (8 shared vCPU, 16 GB, NVMe)
+importing Colorado — a 360 MB extract yielding 6.04M places. **A complete stack
+including transit took about 35 minutes from an empty server**, and search and
+street routing were answering roughly 20 minutes in. The other rows scale that
+by extract size and are deliberately generous.
+
+Measured peaks on that run: 6.4 GB resident across the whole stack (Postgres
+6.4 GB against an 8 GB cap, GraphHopper 2.5 GB, everything else under 400 MB
+combined), and 22 GB of disk including container images.
 
 The RAM figures assume everything runs on one box. GraphHopper loads its routing graph into JVM **heap** rather than memory-mapping it, so it wants several GB to itself, and MOTIS and Elasticsearch each want their own. Search latency is dominated by whether the database's working set stays resident, so give Postgres whatever is left.
 
@@ -80,25 +90,37 @@ BARRELMAN_ADMIN_KEY=brm_admin_<a different long random string>
 REGIONS=north-carolina
 
 # ── Engines ───────────────────────────────────────────────────────────────
-# GraphHopper's heap must exceed the on-disk routing graph. Raise whenever
-# REGIONS grows — an undersized heap dies before it logs its version, so the
-# failure looks like a crash rather than an out-of-memory.
-GRAPHHOPPER_JAVA_OPTS=-Xmx6g -Xms1g
+# GraphHopper's heap must exceed the on-disk routing graph. Colorado's is
+# 654 MB, so 4g is generous; raise it as REGIONS grows. An undersized heap dies
+# before it logs its version, so the failure looks like a crash.
+GRAPHHOPPER_JAVA_OPTS=-Xmx4g -Xms1g
 
 # ── Database tuning ───────────────────────────────────────────────────────
-# Compose defaults are sized for a laptop. Production should give the database
-# the box: ~25% of host RAM in shared_buffers, 50-75% in effective_cache_size.
-# These values suit a 32GB host.
-BARRELMAN_DB_SHARED_BUFFERS=8GB
-BARRELMAN_DB_CACHE_SIZE=24GB
+# Sized for a 16 GB host. mem_limit must cover shared_buffers + shm_size +
+# maintenance_work_mem, with headroom — see the note below.
+BARRELMAN_DB_SHARED_BUFFERS=2GB
+BARRELMAN_DB_CACHE_SIZE=6GB
 BARRELMAN_DB_WORK_MEM=128MB
-BARRELMAN_DB_MAINTENANCE_WORK_MEM=2GB
-BARRELMAN_DB_MEM_LIMIT=28g
+BARRELMAN_DB_MAINTENANCE_WORK_MEM=1GB
+BARRELMAN_DB_SHM_SIZE=2gb
+BARRELMAN_DB_MEM_LIMIT=8g
 EOF
 chmod 600 .env
 ```
 
 Generate the secrets with something like `openssl rand -hex 32`.
+
+These are the values the measured Colorado run used, and they left headroom on
+a 16 GB box. On a 32 GB host give the database more — `8GB` / `24GB` / `2GB` /
+`28g` — since search latency is dominated by whether the working set stays
+resident.
+
+<Callout type="warn">
+`BARRELMAN_DB_MEM_LIMIT` must cover `shared_buffers` + `BARRELMAN_DB_SHM_SIZE` +
+`maintenance_work_mem`. The first two are both shared memory charged to the same
+cgroup, so they add up; exceed the limit and the kernel OOM-kills Postgres
+mid-index-build, which surfaces only as `connection to server was lost`.
+</Callout>
 
 <Callout type="warn" title="Three things worth understanding before you continue">
 **`BARRELMAN_API_KEY` unset means the data API is open.** That is deliberate — it is how every guard in this codebase spells "local development," and a fresh clone has to be usable with no configuration. On a server, set it.

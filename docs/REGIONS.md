@@ -168,19 +168,42 @@ config or feeds change, so a plain restart keeps serving the old schedules and
 the new feeds never reach riders. Re-run it after every GTFS refresh, and after
 any MOTIS version bump.
 
-Measured on an 8-core / 16 GB host importing Colorado (360 MB PBF, 6.0M
-objects, 75 transit feeds):
+### Measured timings
+
+Colorado — a 360 MB PBF yielding 6.04M objects and 75 transit feeds — on a
+Hetzner CPX41 (8 shared vCPU, 16 GB RAM, NVMe). Wall-clock on a clean server:
 
 | Step | Time |
 |---|---|
-| OSM download + osm2pgsql + post-processing | ~14 min |
-| GraphHopper graph | ~7 min |
-| GTFS download + import + 173k walking transfers | ~5 min |
-| MOTIS dataset rebuild | ~4 min |
-| GBFS systems | 10 min+ (not precisely timed) |
+| Install Docker, deploy, build images, boot to a healthy API | 3 min |
+| Create the region (catalog + resolve + save) | 3 s |
+| **2. OSM import** (`run-import.sh`) | **15 min** |
+| ↳ download the 360 MB PBF | 22 s |
+| ↳ osm2pgsql | 3 min 30 s |
+| ↳ post-import SQL | 3 min 40 s |
+| ↳ codes, abbreviations, intersections | 3 min 10 s |
+| ↳ parent context (spatial join) | 2 min |
+| ↳ full-text index + ANALYZE | 2 min 15 s |
+| **2b. GraphHopper graph** (rebuilds inside the engine afterwards) | **5 min** |
+| 3. MOTIS OSM prep | 6 min |
+| 4. GTFS download + import + 173k walking transfers | 3 min |
+| 5. MOTIS dataset rebuild | 45 s |
 
-A larger region scales roughly with PBF size. Pelias is a separate stack and
-takes hours — see [`pelias/README.md`](../pelias/README.md).
+**A full stack with transit is about 35 minutes from an empty server.** Only
+steps 2 and 2b are required, so search and street routing are answering
+about 20 minutes in.
+
+Scaling is roughly by PBF size but not linear — osm2pgsql and the spatial joins
+grow faster than the download. A country is hours; the planet is a day.
+
+Two that run long for their value: MOTIS OSM prep rewrites the whole extract to
+repair a handful of underground platforms (6 minutes to synthesise 0 connectors
+in Colorado), and the GBFS importer walks the *global* systems list before
+filtering to your bbox, so it takes the same ~10 minutes regardless of region.
+Skip both if you do not need transit or bikeshare.
+
+Pelias is a separate stack and takes hours — see
+[`pelias/README.md`](../pelias/README.md).
 
 ### Sizing
 
@@ -190,11 +213,20 @@ an undersized heap dies before it logs its version, so the failure looks like a
 crash rather than an out-of-memory. Check with `du -sh` on the `graph-cache`
 directory and raise `-Xmx` whenever `REGIONS` grows.
 
-| Scale | DB size | RAM | Disk |
-|---|---|---|---|
-| One US state | ~10 GB | 2 GB | 20 GB |
-| Full United States | ~60 GB | 8 GB | 120 GB |
-| Europe | ~100 GB | 16 GB | 200 GB |
+| Scale | DB size | RAM | Disk | |
+|---|---|---|---|---|
+| One US state (Colorado) | 11 GB | 8 GB min / 16 GB comfortable | 25 GB | **measured** |
+| Full United States | ~60 GB | 32 GB | 250 GB | extrapolated |
+| Europe | ~100 GB | 64 GB | 400 GB | extrapolated |
+
+Only the first row is measured; the rest scale it by extract size and are
+deliberately generous.
+
+On that Colorado run the whole stack peaked at **6.4 GB resident** — Postgres
+6.4 GB (against an 8 GB `mem_limit`), GraphHopper 2.5 GB, everything else under
+400 MB combined. Disk came to 22 GB including images, of which the Postgres
+volume was 13 GB. The `graph-cache` was 654 MB, comfortably inside the
+`-Xmx4g` used here.
 
 ---
 

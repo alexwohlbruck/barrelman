@@ -168,7 +168,8 @@ docker exec barrelman-db psql -U barrelman -d barrelman \
 Import commands run in **`barrelman-ops`**, not `barrelman` — the API container
 is deliberately lean and has neither the docker CLI nor osmium.
 
-A US state (~400 MB PBF) takes roughly 20–40 minutes.
+A US state (~400 MB PBF) takes about 15 minutes; add ~5 for the GraphHopper
+graph that follows it.
 
 **[→ Full region guide](docs/REGIONS.md)** — what a region controls, the
 ordering of the transit/address/bikeshare steps, and how to build one by hand.
@@ -751,11 +752,15 @@ together. GraphHopper loads its graph into JVM heap rather than memory-mapping
 it, so it wants several GB to itself; add ~1 GB and tens of GB of disk again if
 you enable the Pelias geocoder.
 
-| Scale | DB size | RAM | Disk |
-|-------|---------|-----|------|
-| Single US state (e.g. NC) | ~10 GB | 8 GB | 60 GB |
-| Full United States | ~60 GB | 32 GB | 250 GB |
-| Europe | ~100 GB | 64 GB | 400 GB |
+| Scale | DB size | RAM | Disk | |
+|-------|---------|-----|------|---|
+| Single US state (Colorado) | 11 GB | 8 GB min, 16 GB comfortable | 25 GB | **measured** |
+| Full United States | ~60 GB | 32 GB | 250 GB | estimated |
+| Europe | ~100 GB | 64 GB | 400 GB | estimated |
+
+The first row is measured end to end on a Hetzner CPX41 (8 shared vCPU, 16 GB):
+a 360 MB Colorado extract → 6.04M places in 15 minutes, full stack with transit
+in ~35 minutes, peaking at 6.4 GB resident. The rest are scaled estimates.
 
 ---
 
