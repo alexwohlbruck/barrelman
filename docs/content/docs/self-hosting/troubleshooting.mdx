@@ -41,6 +41,36 @@ The catalog is empty or stale — run `scripts/fetch-boundaries.ts`.
 
 Either `pelias.openaddresses` is empty for your region, or the Pelias `street` layer was never populated. See the layers note in [`pelias/README.md`](https://github.com/alexwohlbruck/barrelman/blob/main/pelias/README.md).
 
+## During the import
+
+**`connection to server was lost` partway through post-import SQL**
+
+Postgres was OOM-killed. `mem_limit` has to cover `shared_buffers` + `shm_size` + `maintenance_work_mem` — the first two are both shared memory charged to the same cgroup. Nothing in the message says "memory"; confirm with:
+
+```bash
+docker inspect barrelman-db --format '{{.State.OOMKilled}}'
+```
+
+**`could not resize shared memory segment ... No space left on device`**
+
+The opposite problem, and it means `/dev/shm`, not disk — it will say this on a host with hundreds of GB free. Raise `BARRELMAN_DB_SHM_SIZE` (and `BARRELMAN_DB_MEM_LIMIT` with it).
+
+**`Option '--region' argument is ambiguous`**
+
+A bbox starting with `-` was read as a flag. Fixed in the shipped scripts; if you invoke an importer by hand, use `--region=<value>` rather than `--region <value>`.
+
+**`error: /app/data/region.osm.pbf not found`, but the file exists**
+
+The script is looking in the repo directory rather than the mounted volume. `barrelman-ops` sets `OSM_DATA_DIR=/data` for this; a hand-run container needs it too.
+
+**`ModuleNotFoundError: No module named 'osmium'`**
+
+`barrelman-ops` ships `python3` and `uv`, not pyosmium. The scripts fetch it on demand with `uv run --with osmium`; that requires `uv` on `PATH`.
+
+**GTFS finishes with `Processed 0 feeds`**
+
+Downloads had nowhere to go. `./data/gtfs` must be mounted **read-write** into `barrelman-ops` — read-only is correct only for the API. Look for `EROFS: read-only file system` above the summary. Note the run still exits 0.
+
 ## Engines
 
 **GraphHopper will not start, and dies before logging its version**
@@ -56,6 +86,44 @@ Stops live in PostGIS while routing comes from MOTIS's own baked dataset, so the
 **`tt: binary version mismatch` on MOTIS startup**
 
 A `docker compose pull` moved the engine version. Re-run `scripts/rebuild-motis.sh`.
+
+**`Not a GraphHopper file /data/graph-cache/properties! Expected 'GH' as file marker`**
+
+A corrupt or half-written graph cache. GraphHopper will not rebuild over it — it just refuses to start, and a first boot with no PBF leaves exactly this skeleton behind. `scripts/rebuild-graphhopper.sh` wipes it from outside the container and restarts.
+
+**`motis import` exits 1 having printed only its config**
+
+MOTIS could not open the feeds. The generated config lists dataset paths as `gtfs/<id>.zip` relative to `/data`, so the ZIP directory has to be mounted into the MOTIS container at `/data/gtfs` — it is not part of the `barrelman-gtfs-data` volume. Check what MOTIS actually sees:
+
+```bash
+docker run --rm -v barrelman_barrelman-gtfs-data:/data alpine ls /data /data/gtfs
+```
+
+There is no "file not found" in the output; an empty `/data/gtfs` is the only symptom.
+
+**Martin crash-loops and every `/tiles` request returns 500**
+
+Martin treats *any* unresolvable tile source as fatal, so one missing table takes down all tiles. `docker compose logs martin | grep -i unavailable` names it. The two that bite: the `transit_*` views (created by the OSM import) and the optional `basemap.pmtiles`, which is commented out by default because nothing in the pipeline produces it.
+
+## Endpoints
+
+**`/geocode` returns fewer levels than expected**
+
+It returns what the imported extract actually contains. A single-state extract usually has no state polygon — Geofabrik clips the boundary relation, so it imports as lines, and only closed areas can contain a point:
+
+```sql
+SELECT geom_type, count(*) FROM geo_places WHERE admin_level='4' GROUP BY geom_type;
+```
+
+All `line` means no state will ever be returned. Consolidated city-counties (Denver, San Francisco) are also legitimately one area, not two.
+
+**`422` from an endpoint that looks correct**
+
+A required query parameter is missing. `/gbfs/systems` needs a full bbox (`north`, `south`, `east`, `west`); `/transit/departures` needs `feedId`. The response body names the property.
+
+**`profile parameter required` from `/route`**
+
+`/route` passes its body to GraphHopper, so it takes `profile` (`car`, `bike`, `foot`), not the `mode` that `/isochrone` uses.
 
 ## Configuration
 

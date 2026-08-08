@@ -177,7 +177,7 @@ objects, 75 transit feeds):
 | GraphHopper graph | ~7 min |
 | GTFS download + import + 173k walking transfers | ~5 min |
 | MOTIS dataset rebuild | ~4 min |
-| GBFS systems | ~10 min |
+| GBFS systems | 10 min+ (not precisely timed) |
 
 A larger region scales roughly with PBF size. Pelias is a separate stack and
 takes hours — see [`pelias/README.md`](../pelias/README.md).

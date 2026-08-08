@@ -476,7 +476,7 @@ surface. The table below is the shape of it.
 | `GET` | `/health` | — | Liveness + database. No auth; safe for LB probes |
 | `GET` | `/health/auth` | — | Same, but validates a credential. Spends no credits |
 | `POST` | `/search` | `search` | Hybrid text + semantic search |
-| `GET` | `/geocode` | `geocode` | Reverse geocode a coordinate to city/county/state |
+| `GET` | `/geocode` | `geocode` | Reverse geocode a coordinate to its administrative areas |
 | `GET` | `/geocode/reverse` | `geocode` | Reverse geocode to the places at a point |
 | `GET` | `/geocode/place` | `geocode` | Hydrate a geocoder result |
 | `GET` | `/contains` | `spatial` | Find parent areas containing a point |
@@ -524,7 +524,18 @@ One endpoint, three modes:
 
 ### GET `/geocode?lat=&lng=`
 
-Reverse geocodes a coordinate — returns the city, county, and state containing the point.
+Reverse geocodes a coordinate — returns the administrative areas containing the
+point (city, county, state), smallest first.
+
+Which levels come back depends on what the imported extract actually contains,
+not on the endpoint. Two things routinely reduce it:
+
+- **A single-state extract usually has no state polygon.** Geofabrik clips the
+  state boundary relation at the extract edge, so those features import as
+  lines rather than closed areas and cannot contain anything. A Colorado-only
+  import returns county but no state; importing a wider extract restores it.
+- **Consolidated city-counties return one area, not two.** Denver, San
+  Francisco and similar are a single administrative entity in OSM.
 
 ### GET `/geocode/reverse?lat=&lng=&limit=&radius=`
 

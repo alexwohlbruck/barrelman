@@ -56,6 +56,29 @@ one unified list either way.
 `barrelman-ops` is **not** source-mounted, unlike the API. Changes to
 `scripts/` or `import/` need `./start.sh dev --build` to reach it.
 
+## Deploying a branch to a server
+
+`docker-compose.yml` gives `barrelman` and `barrelman-db` an `image:` and no
+`build:` — the `build:` stanzas live in `docker-compose.dev.yml`. So on a server
+that only has the base file:
+
+```bash
+docker compose build barrelman     # → "No services to build", exit 0
+```
+
+It is a silent no-op, and the container keeps running the published image from
+`main` while you believe your fix is deployed. Build those two explicitly:
+
+```bash
+docker build -t alexwohlbruck/barrelman:latest .
+docker build -f Dockerfile.db -t alexwohlbruck/barrelman-db:latest .
+docker compose up -d --force-recreate barrelman barrelman-db
+```
+
+`barrelman-ops` does have a `build:` in the base file, so `docker compose build
+barrelman-ops` works — but it still needs an explicit rebuild for any change to
+`scripts/` or `import/`, since it is not source-mounted.
+
 ## The marketing site
 
 It lives in its own repository, checked out alongside this one — the same layout
