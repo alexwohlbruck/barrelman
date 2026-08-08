@@ -355,16 +355,12 @@ interface FeedRtInfo {
 async function getFeedsWithVehiclePositions(
   feedIdFilter?: string,
 ): Promise<FeedRtInfo[]> {
-  const whereClause = feedIdFilter
-    ? `WHERE feed_id = '${feedIdFilter.replace(/'/g, "''")}'`
-    : ''
-
-  const result = await db.execute(sql.raw(`
+  const result = await db.execute(sql`
     SELECT feed_id, rt_urls
     FROM gtfs_feeds
     WHERE rt_urls IS NOT NULL
-    ${feedIdFilter ? `AND feed_id = '${feedIdFilter.replace(/'/g, "''")}'` : ''}
-  `))
+    ${feedIdFilter ? sql`AND feed_id = ${feedIdFilter}` : sql.empty()}
+  `)
 
   const feeds: FeedRtInfo[] = []
 
@@ -718,20 +714,18 @@ async function enrichWithRouteInfo(
       ...new Map(uncached.map(r => [`${r.feedId}_${r.routeId}`, r])).values(),
     ]
 
-    const conditions = unique
-      .map(
-        p =>
-          `(feed_id = '${p.feedId.replace(/'/g, "''")}' AND route_id = '${p.routeId.replace(/'/g, "''")}')`,
-      )
-      .join(' OR ')
+    const conditions = sql.join(
+      unique.map(p => sql`(feed_id = ${p.feedId} AND route_id = ${p.routeId})`),
+      sql` OR `,
+    )
 
     try {
       const result = await db.execute(
-        sql.raw(`
+        sql`
           SELECT feed_id, route_id, route_short_name, route_long_name, route_color, route_text_color, route_type
           FROM gtfs_routes
           WHERE ${conditions}
-        `),
+        `,
       )
 
       for (const row of result as any[]) {
@@ -757,19 +751,20 @@ async function enrichWithRouteInfo(
       const stillMissing = unique.filter(r => !routeInfoCache.has(`${r.feedId}_${r.routeId}`))
       if (stillMissing.length > 0) {
         const routeIds = [...new Set(stillMissing.map(r => r.routeId))]
-        const routeConditions = routeIds
-          .map(rid => `route_id = '${rid.replace(/'/g, "''")}'`)
-          .join(' OR ')
+        const routeConditions = sql.join(
+          routeIds.map(rid => sql`route_id = ${rid}`),
+          sql` OR `,
+        )
 
         const fallbackResult = await db.execute(
-          sql.raw(`
+          sql`
             SELECT feed_id, route_id, route_short_name, route_long_name, route_color, route_text_color, route_type
             FROM gtfs_routes
             WHERE (${routeConditions})
               AND (route_short_name IS NOT NULL AND route_short_name != ''
                 OR route_long_name IS NOT NULL AND route_long_name != '')
             LIMIT ${routeIds.length}
-          `),
+          `,
         )
 
         for (const row of fallbackResult as any[]) {

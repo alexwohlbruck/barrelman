@@ -27,6 +27,27 @@ export interface TileFetcher {
   (url: string): Promise<Response>
 }
 
+/**
+ * A Martin source name: one or more comma-separated table/function sources.
+ *
+ * Constrained because the four path segments are concatenated into the upstream
+ * URL. Unvalidated, `..` segments walk out of the tile path and reach Martin's
+ * other endpoints — its catalog and per-source metadata — which are not
+ * intended to be republished through a metered route. Martin's own names are
+ * Postgres identifiers, so this is not a real restriction on legitimate use.
+ */
+const SOURCE_RE = /^[A-Za-z0-9_-]+(,[A-Za-z0-9_-]+)*$/
+
+/**
+ * Tile coordinates are integers. `z` is a zoom level (Martin caps well below
+ * 100), while `x`/`y` run to 2^z - 1 — seven digits at z22 — so they get a
+ * generous bound rather than a tight one. `y` may carry a format suffix, which
+ * some clients append (`3.pbf`).
+ */
+const Z_RE = /^\d{1,2}$/
+const XY_RE = /^\d{1,10}$/
+const Y_RE = /^\d{1,10}(\.[A-Za-z0-9]+)?$/
+
 export function createTileRoutes(deps: { fetchTile?: TileFetcher } = {}) {
   const fetchTile: TileFetcher = deps.fetchTile || ((url: string) => fetch(url))
 
@@ -37,6 +58,12 @@ export function createTileRoutes(deps: { fetchTile?: TileFetcher } = {}) {
       '/:source/:z/:x/:y',
       async ({ params, set }) => {
         const { source, z, x, y } = params
+
+        if (!SOURCE_RE.test(source) || !Z_RE.test(z) || !XY_RE.test(x) || !Y_RE.test(y)) {
+          set.status = 400
+          return { error: 'Invalid tile source or coordinates' }
+        }
+
         const martinUrl = `${getMartinUrl()}/${source}/${z}/${x}/${y}`
 
         const response = await fetchTile(martinUrl)

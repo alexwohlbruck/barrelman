@@ -132,7 +132,7 @@ export async function getNearbyStations(
   const dLng = radius / (111320 * Math.cos((lat * Math.PI) / 180))
 
   // Spatial query: find stations within bounding box, compute distance
-  const rows = await db.execute(sql.raw(`
+  const rows = await db.execute(sql`
     SELECT
       s.system_id, s.station_id, s.name, s.lat, s.lon, s.capacity,
       s.num_bikes_available, s.num_ebikes_available,
@@ -155,7 +155,7 @@ export async function getNearbyStations(
       AND s.is_renting = TRUE
     ORDER BY distance
     LIMIT ${limit * 3}
-  `)) as any[]
+  `) as any[]
 
   // ── Station-based results ──────────────────────────────────────────
 
@@ -202,13 +202,13 @@ export async function getNearbyStations(
 
   // ── Free-floating vehicles ────────────────────────────────────────
 
-  const freeFloatingSystems = await db.execute(sql.raw(`
+  const freeFloatingSystems = await db.execute(sql`
     SELECT system_id FROM gbfs_systems
     WHERE enabled = TRUE AND has_free_floating = TRUE
       AND lat IS NOT NULL
       AND lat BETWEEN ${lat - 1} AND ${lat + 1}
       AND lon BETWEEN ${lng - 1} AND ${lng + 1}
-  `)) as any[]
+  `) as any[]
 
   if (freeFloatingSystems.length > 0) {
     const ffSystemIds = freeFloatingSystems.map((r: any) => r.system_id as string)
@@ -253,7 +253,7 @@ export async function getNearbyStations(
 export async function getSystemsInBounds(
   north: number, south: number, east: number, west: number,
 ): Promise<GbfsSystem[]> {
-  const rows = await db.execute(sql.raw(`
+  const rows = await db.execute(sql`
     SELECT system_id, name, operator, url, country_code, lat, lon,
            vehicle_types, has_stations, has_free_floating, feed_urls, ttl, enabled
     FROM gbfs_systems
@@ -262,7 +262,7 @@ export async function getSystemsInBounds(
       AND lon BETWEEN ${west} AND ${east}
     ORDER BY name
     LIMIT 100
-  `)) as any[]
+  `) as any[]
 
   return rows.map(rowToSystem)
 }
@@ -284,7 +284,9 @@ export async function getStation(request: {
 }): Promise<(GbfsStation & { systemName: string | null; operator: string | null }) | null> {
   const { systemId, stationId, lat, lng, radius = 60 } = request
 
-  const SELECT_COLS = `
+  // A column list, not a value — kept as a SQL fragment so it can be spliced
+  // into both branches below without either one going back to string building.
+  const SELECT_COLS = sql`
     s.system_id, s.station_id, s.name, s.lat, s.lon, s.capacity,
     s.num_bikes_available, s.num_ebikes_available,
     s.num_scooters_available, s.num_docks_available,
@@ -294,14 +296,14 @@ export async function getStation(request: {
   let row: any | undefined
 
   if (systemId && stationId) {
-    const rows = await db.execute(sql.raw(`
+    const rows = await db.execute(sql`
       SELECT ${SELECT_COLS}
       FROM gbfs_stations s
       JOIN gbfs_systems sys ON s.system_id = sys.system_id
-      WHERE s.system_id = '${systemId.replace(/'/g, "''")}'
-        AND s.station_id = '${stationId.replace(/'/g, "''")}'
+      WHERE s.system_id = ${systemId}
+        AND s.station_id = ${stationId}
       LIMIT 1
-    `)) as any[]
+    `) as any[]
     row = rows[0]
   }
 
@@ -309,7 +311,7 @@ export async function getStation(request: {
   if (!row && lat != null && lng != null) {
     const dLat = radius / 111320
     const dLng = radius / (111320 * Math.cos((lat * Math.PI) / 180))
-    const rows = await db.execute(sql.raw(`
+    const rows = await db.execute(sql`
       SELECT ${SELECT_COLS},
         (
           6371000 * acos(
@@ -327,7 +329,7 @@ export async function getStation(request: {
         AND s.lon BETWEEN ${lng - dLng} AND ${lng + dLng}
       ORDER BY distance
       LIMIT 1
-    `)) as any[]
+    `) as any[]
     row = rows[0]
     if (row && row.distance > radius) row = undefined
   }
@@ -503,13 +505,13 @@ async function getSystem(systemId: string): Promise<GbfsSystem | null> {
   const cached = systemCache.get(systemId)
   if (cached) return cached
 
-  const rows = await db.execute(sql.raw(`
+  const rows = await db.execute(sql`
     SELECT system_id, name, operator, url, country_code, lat, lon,
            vehicle_types, has_stations, has_free_floating, feed_urls, ttl, enabled
     FROM gbfs_systems
-    WHERE system_id = '${systemId.replace(/'/g, "''")}'
+    WHERE system_id = ${systemId}
     LIMIT 1
-  `)) as any[]
+  `) as any[]
 
   if (rows.length === 0) return null
   const system = rowToSystem(rows[0])
@@ -522,11 +524,11 @@ async function getSystemsMeta(
 ): Promise<Array<{ systemId: string; name: string | null; operator: string | null }>> {
   if (systemIds.length === 0) return []
 
-  const inList = systemIds.map(id => `'${id.replace(/'/g, "''")}'`).join(',')
-  const rows = await db.execute(sql.raw(`
+  const inList = sql.join(systemIds.map(id => sql`${id}`), sql`, `)
+  const rows = await db.execute(sql`
     SELECT system_id, name, operator FROM gbfs_systems
     WHERE system_id IN (${inList})
-  `)) as any[]
+  `) as any[]
 
   return rows.map(r => ({
     systemId: r.system_id,

@@ -57,13 +57,13 @@ let stopPositions: Map<string, StopPosition> | null = null
 async function getStopPositions(): Promise<Map<string, StopPosition>> {
   if (stopPositions) return stopPositions
 
-  const result = await db.execute(sql.raw(`
+  const result = await db.execute(sql`
     SELECT stop_id, stop_name,
            ST_Y(geom::geometry) as lat,
            ST_X(geom::geometry) as lng
     FROM gtfs_stops
-    WHERE feed_id = '${SUBWAY_FEED_ID}'
-  `))
+    WHERE feed_id = ${SUBWAY_FEED_ID}
+  `)
 
   const map = new Map<string, StopPosition>()
   for (const row of result as any[]) {

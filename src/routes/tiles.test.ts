@@ -207,3 +207,62 @@ describe('tile auth', () => {
     }
   })
 })
+
+// ── Path validation ──────────────────────────────────────────────────────────
+
+describe('tile path validation', () => {
+  /**
+   * The four segments are concatenated into the upstream Martin URL. Left
+   * unchecked, `..` walks out of the tile path and reaches Martin's catalog and
+   * per-source metadata — republished through a route the caller is being
+   * metered for. The assertion is that nothing is fetched at all, not merely
+   * that the response is an error.
+   */
+  const REJECTED = [
+    ['traversal in source', '/tiles/..%2F..%2Fcatalog/1/2/3'],
+    ['traversal in y', '/tiles/basemap/1/2/..%2F..%2Fcatalog'],
+    ['dot segment as source', '/tiles/../1/2/3'],
+    ['query smuggled into y', '/tiles/basemap/1/2/3%3Ffoo%3Dbar'],
+    ['non-numeric zoom', '/tiles/basemap/abc/2/3'],
+    ['zoom out of range', '/tiles/basemap/999/2/3'],
+    ['space in source', '/tiles/basemap%20x/1/2/3'],
+  ] as const
+
+  for (const [label, path] of REJECTED) {
+    test(`rejects ${label} without calling Martin`, async () => {
+      const fetchTile = mock<TileFetcher>(async () => new Response('nope'))
+      const app = new Elysia().use(createTileRoutes({ fetchTile }))
+
+      const res = await app.handle(get(path))
+
+      // Some of these never reach the handler at all — `/tiles/../1/2/3` is
+      // normalised by the router into a path with no matching route, so it 404s
+      // rather than 400s. Either way the request must not reach Martin, which
+      // is what is actually being asserted.
+      expect(res.status).toBeGreaterThanOrEqual(400)
+      expect(fetchTile).not.toHaveBeenCalled()
+    })
+  }
+
+  test('still allows the shapes real clients send', async () => {
+    // Comma-joined sources, deep zoom (x/y run to 2^z - 1), and the `.pbf`
+    // suffix some map libraries append.
+    const accepted = [
+      '/tiles/basemap/0/0/0',
+      '/tiles/basemap,parchment_pois/14/4823/6160',
+      '/tiles/basemap/22/4194303/4194303',
+      '/tiles/basemap/14/4823/6160.pbf',
+      '/tiles/some_source-2/10/500/300',
+    ]
+
+    for (const path of accepted) {
+      const fetchTile = mock<TileFetcher>(async () => new Response('tile'))
+      const app = new Elysia().use(createTileRoutes({ fetchTile }))
+
+      const res = await app.handle(get(path))
+
+      expect(res.status).toBe(200)
+      expect(fetchTile).toHaveBeenCalledTimes(1)
+    }
+  })
+})

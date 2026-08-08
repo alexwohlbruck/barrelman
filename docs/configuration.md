@@ -18,6 +18,7 @@ value overrides one, so a knob you mean to turn off needs an explicit `0`.
 |---|---|---|
 | `DATABASE_URL` | `postgresql://barrelman:barrelman@localhost:5434/barrelman` | PostGIS connection string |
 | `BARRELMAN_DB_PASSWORD` | `barrelman` | Used by compose for the DB container |
+| `BARRELMAN_BIND_ADDR` | `127.0.0.1` | Interface the unauthenticated internal services (Postgres, Martin, GraphHopper, MOTIS) publish on. `0.0.0.0` exposes them |
 | `PORT` | `5001` | HTTP port |
 | `REGIONS` | `north-carolina,nyc-metro` | Which geographies the importers pull. `global` for everything |
 | `OLLAMA_HOST` | `http://localhost:11434` | Embeddings for semantic search (optional) |

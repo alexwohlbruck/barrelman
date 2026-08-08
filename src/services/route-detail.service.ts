@@ -46,29 +46,26 @@ export async function getRouteDetail(
   feedId: string,
   routeId: string,
 ): Promise<RouteDetailResponse | null> {
-  const safeFeed = feedId.replace(/'/g, "''")
-  const safeRoute = routeId.replace(/'/g, "''")
-
   // Get route metadata
-  const routeResult = await db.execute(sql.raw(`
+  const routeResult = await db.execute(sql`
     SELECT route_id, route_short_name, route_long_name, route_color,
            route_text_color, route_type, agency_name, bikes_allowed
     FROM gtfs_routes
-    WHERE feed_id = '${safeFeed}' AND route_id = '${safeRoute}'
+    WHERE feed_id = ${feedId} AND route_id = ${routeId}
     LIMIT 1
-  `))
+  `)
 
   let route = (routeResult as any[])[0]
 
   // Cross-feed fallback (same pattern as shapes)
   if (!route) {
-    const fallback = await db.execute(sql.raw(`
+    const fallback = await db.execute(sql`
       SELECT feed_id, route_id, route_short_name, route_long_name, route_color,
              route_text_color, route_type, agency_name, bikes_allowed
       FROM gtfs_routes
-      WHERE route_id = '${safeRoute}'
+      WHERE route_id = ${routeId}
       LIMIT 1
-    `))
+    `)
     route = (fallback as any[])[0]
     if (!route) return null
   }
@@ -76,18 +73,18 @@ export async function getRouteDetail(
   const actualFeedId = route.feed_id || feedId
 
   // Get stops for this route
-  const stopsResult = await db.execute(sql.raw(`
+  const stopsResult = await db.execute(sql`
     SELECT DISTINCT ON (s.stop_name)
       sr.stop_id, s.stop_name,
       ST_Y(s.geom::geometry) as lat,
       ST_X(s.geom::geometry) as lng
     FROM gtfs_stop_routes sr
     JOIN gtfs_stops s ON s.feed_id = sr.feed_id AND s.stop_id = sr.stop_id
-    WHERE sr.feed_id = '${actualFeedId.replace(/'/g, "''")}'
-      AND sr.route_id = '${safeRoute}'
+    WHERE sr.feed_id = ${actualFeedId}
+      AND sr.route_id = ${routeId}
       AND s.stop_name IS NOT NULL
     ORDER BY s.stop_name, sr.stop_id
-  `))
+  `)
 
   const rawStops = (stopsResult as any[]).map(row => ({
     stopId: row.stop_id as string,
@@ -218,18 +215,15 @@ async function findRelatedRoutes(
 ): Promise<string[]> {
   if (!routeColor) return []
 
-  const safeFeed = feedId.replace(/'/g, "''")
-  const safeColor = routeColor.replace(/'/g, "''")
-
-  const result = await db.execute(sql.raw(`
+  const result = await db.execute(sql`
     SELECT route_id
     FROM gtfs_routes
-    WHERE feed_id = '${safeFeed}'
-      AND route_color = '${safeColor}'
+    WHERE feed_id = ${feedId}
+      AND route_color = ${routeColor}
       AND route_type = ${parseInt(String(routeType ?? 0), 10)}
-      AND route_id != '${routeId.replace(/'/g, "''")}'
+      AND route_id != ${routeId}
     ORDER BY route_id
-  `))
+  `)
 
   return (result as any[]).map(r => r.route_id as string)
 }
