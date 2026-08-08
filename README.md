@@ -102,9 +102,20 @@ mkdir -p /opt/barrelman && cd /opt/barrelman
 ### 2. Download the compose file
 
 ```bash
-curl -fsSL -o docker-compose.yml \
-  https://raw.githubusercontent.com/alexwohlbruck/barrelman/main/docker-compose.yml
+BASE=https://raw.githubusercontent.com/alexwohlbruck/barrelman/main
+curl -fsSL -O $BASE/docker-compose.yml
+curl -fsSL -O $BASE/martin-config.yaml
+curl -fsSL -O $BASE/graphhopper-config.yml
+mkdir -p custom_models data/gtfs
+for m in barrelman_car barrelman_bike barrelman_foot; do
+  curl -fsSL -o custom_models/$m.json $BASE/custom_models/$m.json
+done
 ```
+
+The Compose file bind-mounts `martin-config.yaml`, `graphhopper-config.yml` and
+`custom_models/` from this directory. Docker silently creates a **directory** in
+place of any missing bind source, so fetching only `docker-compose.yml` leaves
+Martin and GraphHopper trying to parse a directory as their config.
 
 ### 3. Create `.env`
 
