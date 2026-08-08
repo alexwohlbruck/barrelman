@@ -325,15 +325,6 @@ export async function setUserRole(userId: string, role: UserRole): Promise<User 
   })
 }
 
-/** How many administrators exist. Used to guard removals. */
-export async function countAdmins(): Promise<number> {
-  const [row] = await db
-    .select({ count: dsql<number>`count(*)::int` })
-    .from(users)
-    .where(eq(users.role, 'admin'))
-  return row?.count ?? 0
-}
-
 export interface CreateUserOptions {
   email: string
   name?: string | null

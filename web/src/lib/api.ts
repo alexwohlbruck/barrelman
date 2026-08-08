@@ -39,8 +39,9 @@ export class ApiError extends Error {
 
 /**
  * The console authenticates with a session cookie. The bearer header is only
- * sent when an operator is using the legacy shared admin key instead of an
- * account, which the server still accepts for scripts and CI.
+ * sent when signing in with an API key instead — an account key carrying the
+ * `admin` scope, which is what automation uses. There is no shared admin
+ * secret; `adminAuthHandler` accepts only those two credentials.
  */
 function authHeaders(): Record<string, string> {
   return adminKey.value ? { authorization: `Bearer ${adminKey.value}` } : {}

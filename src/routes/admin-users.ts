@@ -7,9 +7,9 @@
  * has already left routes in this codebase publicly reachable once.
  *
  * The acting administrator is resolved from their session so the audit trail
- * names a person. An operator driving these routes with the shared admin key
- * has no session, and is recorded as `admin-key` — which is the honest answer:
- * we know the credential, not who held it.
+ * names a person. A caller driving these routes with an admin-scoped API key
+ * has no session, but the key resolves to its owner, so those actions are
+ * attributed too.
  */
 import Elysia, { t } from 'elysia'
 import { and, desc, eq, ilike, isNotNull, or, sql as dsql } from 'drizzle-orm'
@@ -32,7 +32,6 @@ import { listApiKeys, invalidateUserKeys, resolveApiKey } from '../services/api-
 import { getBalance, setPlan } from '../services/credits.service'
 import { usageByDay, currentCycleStart, utcDay } from '../services/usage.service'
 import {
-  countAdmins,
   describeTerms,
   findUserById,
   LastAdminError,
@@ -55,7 +54,6 @@ export interface AdminUserDeps {
   suspendUser: typeof suspendUser
   unsuspendUser: typeof unsuspendUser
   setUserRole: typeof setUserRole
-  countAdmins: typeof countAdmins
   resolveApiKey: typeof resolveApiKey
   warnUser: typeof warnUser
   addNote: typeof addNote
@@ -73,7 +71,6 @@ const defaultDeps: AdminUserDeps = {
   suspendUser,
   unsuspendUser,
   setUserRole,
-  countAdmins,
   resolveApiKey,
   warnUser,
   addNote,
@@ -347,6 +344,11 @@ export function createAdminUserRoutes(overrides: Partial<AdminUserDeps> = {}) {
           set.status = 404
           return { error: 'Account not found' }
         }
+
+        // Keys cache the owner's role alongside the key, so a demotion that
+        // skipped this would leave the account's admin-scoped keys reaching
+        // /admin/* until the cache expired — long enough to re-promote itself.
+        deps.invalidateUserKeys(params.id)
 
         // Granting or removing administrator access reaches every destructive
         // operation in the console, so it belongs in the same audit trail as a

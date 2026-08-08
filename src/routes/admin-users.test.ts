@@ -50,7 +50,6 @@ function deps(overrides: Partial<AdminUserDeps> = {}): Partial<AdminUserDeps> {
     invalidateUserKeys: mock(() => undefined),
     findUserById: mock(async () => ({ id: TARGET_ID, plan: 'free' }) as never),
     setUserRole: mock(async () => ({ id: TARGET_ID, role: 'admin' }) as never),
-    countAdmins: mock(async () => 2),
     resolveApiKey: mock(async () => null),
     resolveSession: adminSession(),
     ...overrides,
@@ -402,6 +401,9 @@ describe('POST /admin/users/:id/role', () => {
     expect(d.setUserRole).toHaveBeenCalledWith(TARGET_ID, 'admin')
     // Granting admin reaches every destructive operation, so it is audited.
     expect(d.addNote).toHaveBeenCalled()
+    // Keys cache the owner's role, so a role change that skipped this would
+    // leave a demoted admin's admin-scoped key working until the cache expired.
+    expect(d.invalidateUserKeys).toHaveBeenCalledWith(TARGET_ID)
   })
 
   // With no shared admin secret, zero admins is only recoverable from psql.
