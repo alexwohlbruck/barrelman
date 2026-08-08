@@ -12,6 +12,55 @@ under compose, which forwards it as an empty string) counts as *not configured*
 and takes the default below — the same as omitting the line. Only an actual
 value overrides one, so a knob you mean to turn off needs an explicit `0`.
 
+## Where secrets come from
+
+Barrelman reads plain environment variables and nothing else, so it works with
+whatever you already use. Two paths, neither special-cased in the code:
+
+**`.env`** — the self-hosting default. Compose reads it, and it is gitignored.
+Fine for a private instance; everything below assumes it unless stated.
+
+**A secrets manager** — what the hosted deployment uses. Ours live in Infisical,
+in a project of barrelman's own: the same tool parchment uses, deliberately not
+the same project, so a credential scoped to one cannot read the other. Secrets
+are injected at the point of running:
+
+```bash
+infisical run --env=prod -- docker compose up -d
+```
+
+The CLI puts the secrets in the environment, Compose interpolates `${VAR}` from
+there, and nothing sensitive touches disk. `.infisical.json` is the local
+project link and is gitignored, so the repo stays provider-agnostic — AWS
+Secrets Manager, Vault, 1Password, `sops`, or a systemd `EnvironmentFile` all
+work the same way.
+
+First time on a machine:
+
+```bash
+infisical login
+infisical init          # link this checkout to the Barrelman project
+```
+
+`infisical init` only links to a project that already exists — there is no CLI
+command to create one, so a new project is made in the web UI first.
+
+The variables worth keeping there rather than in a file:
+
+| Variable | Why |
+|---|---|
+| `BARRELMAN_DB_PASSWORD` | Database access |
+| `BARRELMAN_API_KEY` | Unmetered service credential |
+| `BARRELMAN_LICENSE` | Unlocks billing |
+| `LICENSE_PRIVATE_KEY` | Signs licenses. Never deployed — only used to mint tokens |
+| `POLAR_ACCESS_TOKEN`, `POLAR_WEBHOOK_SECRET` | Payments and webhook verification |
+| `TRANSITLAND_API_KEY`, `GITHUB_TOKEN` | Import-time API access |
+| `GOOGLE_CLIENT_SECRET`, `GITHUB_CLIENT_SECRET`, `GITLAB_CLIENT_SECRET` | OAuth sign-in |
+
+`BARRELMAN_LICENSE_PUBLIC_KEY` is deliberately not among them — it verifies
+signatures and cannot make them, which is why it is compiled into
+`src/lib/license.ts` rather than configured.
+
 ## Core
 
 | Variable | Default | Description |

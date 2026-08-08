@@ -234,6 +234,11 @@ services:
       # self-hosted instance (LICENSING.md). Without it the Polar settings
       # below do nothing.
       BARRELMAN_LICENSE: ${BARRELMAN_LICENSE:-}
+      # Overrides the public key baked into src/lib/license.ts. Only needed to
+      # verify tokens from a different keypair (a test license, a re-key);
+      # Compose does not forward host env on its own, so without this line the
+      # variable the code reads could never arrive.
+      BARRELMAN_LICENSE_PUBLIC_KEY: ${BARRELMAN_LICENSE_PUBLIC_KEY:-}
 
       # ── Billing (requires a license, see above) ──────────────────────
       POLAR_ACCESS_TOKEN: ${POLAR_ACCESS_TOKEN:-}
