@@ -28,30 +28,43 @@ Nothing below has any effect until the server holds a license granting the
 `Buffer` globals — so `bun` can run it by absolute path from any directory,
 including a machine that has no checkout of this repo.
 
+### Where the private key lives
+
+The OS keychain, under **`dev.barrelman` / `license-signing-key`** — the same
+place parchment keeps its master seed (`web/src-tauri/src/keychain.rs`), named
+after the app the same way. The script reads it from there, so the seed never
+appears in shell history, in `ps` output, or in a file anyone has to remember to
+delete.
+
+Back up the keychain. Losing the key means generating a new keypair and
+reissuing every license; leaking it means anyone can mint themselves the
+`billing` feature.
+
 ### Once, to create the keypair
 
 ```bash
 bun ~/Documents/code/barrelman/scripts/generate-license.ts --keygen
 ```
 
-It prints two hex strings:
+This has already been done. It prints **only** the public key — the private seed
+goes straight to the keychain and is never displayed. The public key is
+committed as `DEFAULT_LICENSE_PUBLIC_KEY` in
+[`src/lib/license.ts`](../src/lib/license.ts); while it was empty, no token
+verified and billing was off everywhere, including production.
 
-- **Public key** — paste into `DEFAULT_LICENSE_PUBLIC_KEY` in
-  [`src/lib/license.ts`](../src/lib/license.ts) and commit it. Until it is set,
-  no token verifies and billing is off everywhere, including production.
-- **Private key** — a 32-byte seed. Store it in a password manager. It never
-  belongs in this repo, in an issue, in CI, or on a deployed host. Only the
-  signed *token* goes to a server.
-
-Losing it means generating a new keypair and reissuing every license. Leaking it
-means anyone can mint themselves the `billing` feature.
+The command refuses to run if a key is already in the keychain, since a second
+keypair would silently invalidate every license issued under the first. Delete
+the entry in Keychain Access if a re-key is genuinely what you want.
 
 ### Per license
 
 ```bash
-LICENSE_PRIVATE_KEY=<hex-seed> \
-  bun ~/Documents/code/barrelman/scripts/generate-license.ts --exp 2027-01-01
+bun ~/Documents/code/barrelman/scripts/generate-license.ts --exp 2027-01-01
 ```
+
+The seed comes from the keychain. `LICENSE_PRIVATE_KEY=<hex-seed>` still works
+and takes precedence — for CI, for Linux hosts with no Secret Service, and for
+anyone holding the seed elsewhere.
 
 | Flag | Default | Meaning |
 |---|---|---|
