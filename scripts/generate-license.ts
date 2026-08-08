@@ -2,18 +2,24 @@
  * Offline license generator — signs a BARRELMAN_LICENSE token with the
  * licensing private key.
  *
- * The private key lives in the OS keychain, the same place parchment keeps its
- * master seed (`web/src-tauri/src/keychain.rs`, service `app.parchment`). Here
- * the service is `dev.barrelman`, so the entry shows up under "Barrelman" in
- * Keychain Access. Two reasons over an env var: it never appears in shell
- * history or in `ps` output for the seconds the command runs, and there is no
- * plaintext file anyone has to remember to shred afterwards.
+ * The seed is read from LICENSE_PRIVATE_KEY and from nowhere else, so this
+ * stays provider-agnostic: whatever holds your secrets just has to put it in
+ * the environment. We keep ours in Infisical, the same place parchment does:
  *
- *   bun scripts/generate-license.ts --keygen              # once, ever
- *   bun scripts/generate-license.ts --exp 2027-01-01      # per license
+ *   infisical run --env=prod -- bun scripts/generate-license.ts --exp 2027-01-01
  *
- * `LICENSE_PRIVATE_KEY` still works and takes precedence, for CI, for Linux
- * hosts without a Secret Service, and for anyone holding the seed elsewhere.
+ * A self-hoster with it in .env gets the same result. Neither path is special
+ * to this script.
+ *
+ *   bun scripts/generate-license.ts --keygen        # once, ever
+ *
+ * --keygen writes the seed to a file rather than printing it, so it can be fed
+ * straight to a secrets store without passing through a terminal, a shell
+ * history, or argv (which every process on the machine can read):
+ *
+ *   bun scripts/generate-license.ts --keygen --out license-seed.key
+ *   infisical secrets set LICENSE_PRIVATE_KEY=@license-seed.key --env=prod
+ *   rm -P license-seed.key
  *
  * The private key is a hex-encoded 32-byte seed, the same format parchment's
  * generator uses. WebCrypto imports Ed25519 private keys as PKCS8 rather than
@@ -28,66 +34,30 @@
 /** DER prefix for a PKCS8-wrapped Ed25519 private key; the 32-byte seed follows. */
 const PKCS8_PREFIX = Buffer.from('302e020100300506032b657004220420', 'hex')
 
-/** Matches parchment's convention of naming the service after the app. */
-const KEYCHAIN_SERVICE = 'dev.barrelman'
-const KEYCHAIN_ACCOUNT = 'license-signing-key'
 
 function hex(bytes: ArrayBuffer | Uint8Array): string {
   return Buffer.from(bytes as ArrayBuffer).toString('hex')
 }
 
-/**
- * Read the seed from the OS keychain. Returns null when there is no entry, or
- * when the platform has no keychain we know how to reach — both are ordinary,
- * and the caller falls back to LICENSE_PRIVATE_KEY.
- *
- * The value is passed to and from `security` on stdout only; it is never an
- * argument, since arguments are visible to every process on the machine.
- */
-async function keychainGet(): Promise<string | null> {
-  if (process.platform !== 'darwin') return null
-  const proc = Bun.spawn(
-    ['security', 'find-generic-password', '-s', KEYCHAIN_SERVICE, '-a', KEYCHAIN_ACCOUNT, '-w'],
-    { stdout: 'pipe', stderr: 'ignore' },
-  )
-  const out = (await new Response(proc.stdout).text()).trim()
-  return (await proc.exited) === 0 && out ? out : null
-}
-
-/** Store the seed, replacing any existing entry (`-U`). */
-async function keychainSet(seedHex: string): Promise<boolean> {
-  if (process.platform !== 'darwin') return false
-  const proc = Bun.spawn(
-    [
-      'security', 'add-generic-password',
-      '-s', KEYCHAIN_SERVICE,
-      '-a', KEYCHAIN_ACCOUNT,
-      '-l', 'Barrelman license signing key',
-      '-D', 'Ed25519 private seed',
-      '-U',
-      // `-w` with no value makes `security` read the secret from stdin instead
-      // of argv, which every process on the machine can see. It prompts twice —
-      // once for the value and once to confirm — so the seed is written twice;
-      // sending it once leaves an empty entry behind and reports success.
-      '-w',
-    ],
-    { stdin: 'pipe', stdout: 'ignore', stderr: 'pipe' },
-  )
-  proc.stdin.write(`${seedHex}\n${seedHex}\n`)
-  await proc.stdin.end()
-  if ((await proc.exited) !== 0) return false
-
-  // Read it back: an empty or truncated entry is worse than a failed write,
-  // because the seed is gone by the time anyone notices.
-  return (await keychainGet()) === seedHex
-}
+/** Default landing spot for a freshly generated seed. Gitignored. */
+const DEFAULT_SEED_FILE = 'license-seed.key'
 
 async function keygen() {
-  if (await keychainGet()) {
+  const args = process.argv.slice(2)
+  const outIdx = args.indexOf('--out')
+  const outPath = outIdx !== -1 ? args[outIdx + 1] : DEFAULT_SEED_FILE
+
+  if (!outPath) {
+    console.error('--out needs a path')
+    process.exit(1)
+  }
+
+  // Never clobber: an existing file here is very likely a seed someone has not
+  // moved into their secrets store yet, and overwriting it loses the key.
+  if (await Bun.file(outPath).exists()) {
     console.error(
-      `A signing key already exists in the keychain (${KEYCHAIN_SERVICE} / ${KEYCHAIN_ACCOUNT}).\n` +
-        'Generating a new one invalidates every license already issued under the old key.\n' +
-        'Delete the entry in Keychain Access first if that is really what you want.',
+      `${outPath} already exists — refusing to overwrite it.\n` +
+        'Move that seed into your secrets store and delete the file first.',
     )
     process.exit(1)
   }
@@ -100,31 +70,30 @@ async function keygen() {
   const seed = pkcs8.slice(PKCS8_PREFIX.length)
   const publicKey = await crypto.subtle.exportKey('raw', kp.publicKey)
 
+  // Create the file empty and locked down *before* the seed goes in, so it is
+  // never briefly world-readable.
+  await Bun.write(outPath, '')
+  await Bun.$`chmod 600 ${outPath}`.quiet()
+  await Bun.write(outPath, hex(seed))
+
   // The public key is the only half that is safe to look at, and the only half
-  // anyone needs to copy anywhere. The private seed goes straight to the
-  // keychain without ever being printed.
+  // that needs copying anywhere. The seed is written, never printed.
   console.log('Public key (paste into DEFAULT_LICENSE_PUBLIC_KEY in src/lib/license.ts):')
   console.log(hex(publicKey))
-
-  if (await keychainSet(hex(seed))) {
-    console.log(`\nPrivate key stored in the OS keychain: ${KEYCHAIN_SERVICE} / ${KEYCHAIN_ACCOUNT}`)
-    console.log('It was not printed. Back the keychain up — losing it means reissuing every license.')
-  } else {
-    console.error(
-      '\nCould not write to the OS keychain, and the private key has NOT been printed —' +
-        ' it is gone. Re-run on macOS, or set LICENSE_PRIVATE_KEY from a seed you generate' +
-        ' and store yourself.',
-    )
-    process.exit(1)
-  }
+  console.log(`\nPrivate seed written to ${outPath} (mode 600). It was not printed.`)
+  console.log('Move it into your secrets store, then delete the file:')
+  console.log(`  infisical secrets set LICENSE_PRIVATE_KEY=@${outPath} --env=prod`)
+  console.log(`  rm -P ${outPath}`)
 }
 
 async function generate() {
-  const privateKeyHex = process.env.LICENSE_PRIVATE_KEY || (await keychainGet())
+  const privateKeyHex = process.env.LICENSE_PRIVATE_KEY
   if (!privateKeyHex) {
     console.error(
-      `No signing key. Expected it in the OS keychain (${KEYCHAIN_SERVICE} / ${KEYCHAIN_ACCOUNT})` +
-        ' or in LICENSE_PRIVATE_KEY.\nRun with --keygen if you have not created one yet.',
+      'LICENSE_PRIVATE_KEY is not set.\n' +
+        '  From Infisical:  infisical run --env=prod -- bun scripts/generate-license.ts …\n' +
+        '  From .env:       set LICENSE_PRIVATE_KEY (hex-encoded 32-byte seed)\n' +
+        'Run with --keygen if you have not created a keypair yet.',
     )
     process.exit(1)
   }
