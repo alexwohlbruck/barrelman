@@ -252,6 +252,12 @@ services:
       POLAR_USAGE_EVENT_NAME: ${POLAR_USAGE_EVENT_NAME:-}
       POLAR_METER_USAGE: ${POLAR_METER_USAGE:-}
 
+      # ── Scheduled jobs ───────────────────────────────────────────────
+      # The schedules themselves live in the database (console → Schedules);
+      # these only set the default timezone offered and the poll cadence.
+      BARRELMAN_SCHEDULE_TZ: ${BARRELMAN_SCHEDULE_TZ:-}
+      BARRELMAN_SCHEDULER_INTERVAL_MS: ${BARRELMAN_SCHEDULER_INTERVAL_MS:-}
+
       # ── Metering and abuse controls ──────────────────────────────────
       BARRELMAN_USAGE_FLUSH_MS: ${BARRELMAN_USAGE_FLUSH_MS:-}
       BARRELMAN_BALANCE_CACHE_MS: ${BARRELMAN_BALANCE_CACHE_MS:-}

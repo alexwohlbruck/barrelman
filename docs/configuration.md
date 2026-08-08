@@ -275,6 +275,22 @@ Read by the scripts running in `barrelman-ops` (and, for the osm2pgsql step, in
 | `GITHUB_TOKEN` | — | Raises the GitHub API limit when resolving a region's OpenAddresses file list (60 req/hour unauthenticated). A rate-limited lookup yields an empty address list and a warning, not a failure |
 | `DB_CONTAINER` | `barrelman-db` | Container the scripts `docker exec` into for osm2pgsql |
 
+## Scheduled jobs
+
+Recurring refreshes are defined in the console under **Schedules** and stored in
+`ops_schedules`, so there is nothing here you must set to use them. A schedule
+fires by enqueueing an ordinary job, which means a nightly import shows up in
+**Jobs** with its full log and can be canceled like any other run.
+
+| Variable | Default | Description |
+|---|---|---|
+| `BARRELMAN_SCHEDULE_TZ` | `UTC` | Timezone offered as the default when creating a schedule. Any IANA zone. Each schedule stores its own, so changing this never moves an existing one |
+| `BARRELMAN_SCHEDULER_INTERVAL_MS` | `30000` | How often the API polls for due schedules. Cron has minute granularity, so there is nothing to gain below 30s. Floored at 10s |
+
+Read by the API, not by ops — the API decides *when*, `barrelman-ops` still does
+the work. A fresh install is seeded with three **disabled** schedules (OSM
+replication, GTFS drift check, GBFS); enable the ones you want in the console.
+
 ## Landing-site demo
 
 Read by the `barrelman-landing` service in `docker-compose.dev.yml` (the
