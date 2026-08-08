@@ -251,13 +251,13 @@ function back() {
           @click="showAdminKey = true"
         >
           <KeyRound class="size-3" />
-          Sign in with an admin key
+          Sign in with an API key
         </button>
         <form v-else class="flex flex-col gap-2" @submit.prevent="submitAdminKey">
           <Input
             v-model="adminKeyInput"
             type="password"
-            placeholder="BARRELMAN_ADMIN_KEY"
+            placeholder="brm_live_…"
             class="h-10"
             :disabled="loading"
           />
@@ -265,7 +265,8 @@ function back() {
             Enter console
           </Button>
           <p class="text-center text-xs text-muted-foreground">
-            For operators without an account. Grants full administrator access.
+            An API key with the <code class="font-mono">admin</code> scope, created by an
+            administrator. Intended for automation — humans should sign in above.
           </p>
         </form>
       </div>

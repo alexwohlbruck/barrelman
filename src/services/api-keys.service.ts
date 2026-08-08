@@ -34,6 +34,8 @@ export interface ResolvedKey {
   /** Origins the key may be used from; empty means unrestricted. */
   allowedOrigins: string[]
   plan: string
+  /** Owning account's role. `admin` + the `admin` scope is what reaches /admin/*. */
+  role: string
   /**
    * Set when the owning account is suspended. The key still RESOLVES — the
    * caller holds a valid credential and is owed a real explanation, not the
@@ -135,6 +137,7 @@ export async function resolveApiKey(presented: string): Promise<ResolvedKey | nu
       revokedAt: apiKeys.revokedAt,
       expiresAt: apiKeys.expiresAt,
       plan: users.plan,
+      role: users.role,
       suspendedAt: users.suspendedAt,
       suspendedReason: users.suspendedReason,
     })
@@ -156,6 +159,7 @@ export async function resolveApiKey(presented: string): Promise<ResolvedKey | nu
     scopes: row.scopes,
     allowedOrigins: row.allowedOrigins,
     plan: row.plan,
+    role: row.role,
     suspended: Boolean(row.suspendedAt),
     suspensionReason: row.suspendedReason,
   }

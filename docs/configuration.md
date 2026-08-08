@@ -34,7 +34,7 @@ by the API. It is named in that service's `environment:` block, not the API's.
 | Variable | Default | Description |
 |---|---|---|
 | `BARRELMAN_API_KEY` | — | Shared **service** credential (Parchment → barrelman). Unmetered, never billed. **Unset means the data API is open** |
-| `BARRELMAN_ADMIN_KEY` | falls back to `BARRELMAN_API_KEY` | Shared key for `/admin/*`. An admin-role session works too |
+| — | — | There is no shared admin secret. `/admin/*` takes an admin-role session, or an API key with the `admin` scope owned by an admin |
 | `BARRELMAN_ACCOUNTS_ENABLED` | `true` | `false` disables accounts entirely |
 
 > Leaving `BARRELMAN_API_KEY` unset is how every guard in this codebase spells

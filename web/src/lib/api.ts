@@ -71,7 +71,6 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 // ── Config / auth ─────────────────────────────────────────────────────
 export interface ConsoleConfig {
   authRequired: boolean
-  usingDedicatedAdminKey: boolean
   accountsEnabled: boolean
   apiName: string
   version: string

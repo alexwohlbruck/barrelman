@@ -145,6 +145,13 @@ stays unlicensed. Issue tokens with `scripts/generate-license.ts` (see
 deliberate exception to the console-sync rule above — it takes the private key
 as input, so it must never get a `SCRIPTS` entry or a `package.json` script.
 
+**Admin auth.** `/admin/*` takes an admin-role session or an account API key
+with the `admin` scope owned by an admin. There is no shared secret — the old
+`BARRELMAN_ADMIN_KEY` is retired. Keep `admin` OUT of the `*` wildcard
+(`src/billing/plans.ts`): `*` is the default for a scopeless key, so folding
+admin in would promote every existing key. Only an admin may grant it, on
+create *and* on scope update — both paths need the guard.
+
 **Suspension.** `suspendUser()` tears down sessions, the API-key cache and the
 balance cache. A new cache keyed on account state belongs there too.
 

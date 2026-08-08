@@ -17,14 +17,13 @@ const method = ref('GET')
 const path = ref('/health')
 const query = ref('')
 const body = ref('')
-const auth = ref<'api' | 'admin' | 'none'>('api')
+const auth = ref<'api' | 'none'>('api')
 const loading = ref(false)
 const result = ref<TestResult | null>(null)
 
 const methodOptions = ['GET', 'POST', 'PUT', 'DELETE'].map((m) => ({ label: m, value: m }))
 const authOptions = [
   { label: 'API key', value: 'api' },
-  { label: 'Admin key', value: 'admin' },
   { label: 'No auth', value: 'none' },
 ]
 
@@ -34,7 +33,7 @@ interface Preset {
   path: string
   query?: string
   body?: string
-  auth?: 'api' | 'admin' | 'none'
+  auth?: 'api' | 'none'
 }
 const presets: Preset[] = [
   { label: 'Health', method: 'GET', path: '/health', auth: 'none' },
@@ -42,7 +41,6 @@ const presets: Preset[] = [
   { label: 'Search', method: 'POST', path: '/search', body: '{\n  "query": "starbucks",\n  "limit": 5\n}', auth: 'api' },
   { label: 'Reverse geocode', method: 'GET', path: '/geocode', query: 'lat=40.7484&lng=-73.9857', auth: 'api' },
   { label: 'Contains', method: 'GET', path: '/contains', query: 'lat=40.7484&lng=-73.9857', auth: 'api' },
-  { label: 'Migration status', method: 'GET', path: '/admin/migration/status', auth: 'api' },
   // Public-API surface. Only the unauthenticated endpoints are listed: this
   // tester replays requests from the server, which carries no session cookie,
   // so a preset for /account/keys or /account/credits would only ever 401.

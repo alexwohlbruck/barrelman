@@ -70,7 +70,7 @@ try {
     console.log('Create a region from one of these in the admin console (Regions → Add by name),')
     console.log('or preview the derived config with:')
     console.log(`  curl -XPOST localhost:5001/admin/boundaries/resolve -H 'content-type: application/json' \\`)
-    console.log(`    -H "Authorization: Bearer $BARRELMAN_ADMIN_KEY" -d '{"id":"<id>"}'`)
+    console.log(`    -H "Authorization: Bearer $ADMIN_SCOPED_API_KEY" -d '{"id":"<id>"}'`)
   }
 
   process.exit(0)

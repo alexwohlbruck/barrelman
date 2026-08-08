@@ -65,10 +65,10 @@ const KEY_RE = /^[a-z0-9][a-z0-9-]*$/
 export const adminConsoleConfigRoutes = new Elysia({ prefix: '/admin' }).get(
   '/config',
   () => ({
-    authRequired: Boolean(process.env.BARRELMAN_ADMIN_KEY || process.env.BARRELMAN_API_KEY),
-    usingDedicatedAdminKey: Boolean(process.env.BARRELMAN_ADMIN_KEY),
-    // The console signs in with an account session; the admin key remains
-    // accepted for scripts and CI.
+    // Admin access is always account-based now — an admin-role session, or an
+    // account API key carrying the `admin` scope. There is no shared secret to
+    // advertise, so the console always asks for a sign-in.
+    authRequired: true,
     accountsEnabled,
     apiName: 'Barrelman',
     version: '0.4.0',
@@ -381,10 +381,12 @@ export const adminConsoleRoutes = new Elysia({ prefix: '/admin' })
       if (b.query) path += (path.includes('?') ? '&' : '?') + b.query.replace(/^\?/, '')
 
       const headers: Record<string, string> = {}
+      // Only the read-API service credential is injectable. Admin requests are
+      // not: they need an account credential, and this replay runs server-side
+      // with no session. Point the tester at public endpoints, or drive
+      // /admin/* with your own admin-scoped key from a shell.
       if (b.auth === 'api' && process.env.BARRELMAN_API_KEY) {
         headers['authorization'] = `Bearer ${process.env.BARRELMAN_API_KEY}`
-      } else if (b.auth === 'admin' && (process.env.BARRELMAN_ADMIN_KEY || process.env.BARRELMAN_API_KEY)) {
-        headers['authorization'] = `Bearer ${process.env.BARRELMAN_ADMIN_KEY || process.env.BARRELMAN_API_KEY}`
       }
 
       const init: RequestInit = { method, headers, signal: AbortSignal.timeout(30000) }
