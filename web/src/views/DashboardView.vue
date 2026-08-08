@@ -4,6 +4,7 @@ import { RouterLink } from 'vue-router'
 import { RefreshCw, Database, MapPin, TrainFront, Bike, HardDrive, Activity, ArrowRight } from 'lucide-vue-next'
 import PageHeader from '@/components/PageHeader.vue'
 import StatTile from '@/components/StatTile.vue'
+import SetupChecklist from '@/components/SetupChecklist.vue'
 import JobStatusBadge from '@/components/JobStatusBadge.vue'
 import Button from '@/components/ui/Button.vue'
 import Card from '@/components/ui/Card.vue'
@@ -11,6 +12,7 @@ import Spinner from '@/components/ui/Spinner.vue'
 import {
   services, servicesLoading, refreshServices,
   metrics, metricsLoading, refreshMetrics,
+  regions, refreshRegions,
   jobs,
 } from '@/lib/store'
 import { formatNumber, timeAgo, formatDuration } from '@/lib/utils'
@@ -20,6 +22,8 @@ const recentJobs = computed(() => jobs.value.slice(0, 5))
 function refreshAll() {
   refreshServices()
   refreshMetrics()
+  // Only needed by the setup checklist, and only until setup is done.
+  if (regions.value === null || !regions.value.length) refreshRegions()
 }
 
 onMounted(refreshAll)
@@ -36,6 +40,8 @@ onMounted(refreshAll)
   </PageHeader>
 
   <div class="space-y-8 p-8">
+    <SetupChecklist />
+
     <!-- Service health -->
     <section>
       <h2 class="mb-3 flex items-center gap-2 text-sm font-medium text-muted-foreground">
