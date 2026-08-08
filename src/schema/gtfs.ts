@@ -1,14 +1,39 @@
+/**
+ * Drizzle definitions for the GTFS/transit tables.
+ *
+ * These are NOT the source of truth for the schema — `ensureGtfsSchema()` in
+ * `src/db.ts` runs the DDL, and the import scripts add a few columns and
+ * materialized views on top. What these buy is a typed, *parametrized* query
+ * surface: every value placed through the builder (or through a `sql` tagged
+ * template) becomes a bind parameter, which puts the query on Postgres's
+ * extended protocol. That protocol refuses multiple statements outright, so an
+ * injected `'; UPDATE …` cannot execute even if a call site is written wrong.
+ * The `sql.raw` string-building they replace had no such floor.
+ *
+ * Keep this file in step with `ensureGtfsSchema()` when a column is added — a
+ * definition that has drifted is worse than none, because the builder will
+ * happily generate SQL for a column that is not there.
+ */
 import {
   pgTable,
   text,
+  char,
+  bigint,
   integer,
   doublePrecision,
+  jsonb,
   serial,
   timestamp,
   index,
   uniqueIndex,
 } from 'drizzle-orm/pg-core'
 import { spatialColumn, spatialIndex } from './spatial-helpers'
+
+/** One entry of a feed's GTFS-RT URL list, as stored in `gtfs_feeds.rt_urls`. */
+export interface RtUrlEntry {
+  url: string
+  headers?: Record<string, string>
+}
 
 // ── GTFS Feeds ──────────────────────────────────────────────────────
 
@@ -23,6 +48,7 @@ export const gtfsFeeds = pgTable(
     region: text('region'),
     stopCount: integer('stop_count').default(0),
     routeCount: integer('route_count').default(0),
+    rtUrls: jsonb('rt_urls').$type<RtUrlEntry[] | null>(),
     importedAt: timestamp('imported_at', { withTimezone: true }).defaultNow(),
   },
 )
@@ -76,6 +102,10 @@ export const gtfsRoutes = pgTable(
     routeColor: text('route_color'),
     routeTextColor: text('route_text_color'),
     routeUrl: text('route_url'),
+    /** Most common shape for the route, derived from trips.txt during import. */
+    shapeId: text('shape_id'),
+    /** 0=unknown, 1=at least one bike-allowed trip, 2=all trips allow bikes. */
+    bikesAllowed: integer('bikes_allowed').default(0),
   },
   (table) => [
     uniqueIndex('gtfs_routes_feed_route_idx').on(table.feedId, table.routeId),
@@ -125,3 +155,104 @@ export const gtfsTripPatterns = pgTable(
 
 export type GtfsTripPattern = typeof gtfsTripPatterns.$inferSelect
 export type NewGtfsTripPattern = typeof gtfsTripPatterns.$inferInsert
+
+// ── GTFS Transfers ──────────────────────────────────────────────────
+// transfers.txt: the agency's own definition of which stations form one
+// complex (Times Sq 1/2/3 <-> N/Q/R/W) and the minimum connection times.
+
+export const gtfsTransfers = pgTable(
+  'gtfs_transfers',
+  {
+    id: serial('id').primaryKey(),
+    feedId: text('feed_id').notNull(),
+    fromStopId: text('from_stop_id').notNull(),
+    toStopId: text('to_stop_id').notNull(),
+    transferType: integer('transfer_type').default(0),
+    minTransferTime: integer('min_transfer_time'),
+  },
+  (table) => [
+    uniqueIndex('gtfs_transfers_uniq_idx').on(table.feedId, table.fromStopId, table.toStopId),
+    index('gtfs_transfers_from_idx').on(table.feedId, table.fromStopId),
+    index('gtfs_transfers_to_idx').on(table.feedId, table.toStopId),
+  ],
+)
+
+export type GtfsTransfer = typeof gtfsTransfers.$inferSelect
+export type NewGtfsTransfer = typeof gtfsTransfers.$inferInsert
+
+// ── GTFS Shapes ─────────────────────────────────────────────────────
+// `geom` is added by the shape importer, not by ensureGtfsSchema().
+
+export const gtfsShapes = pgTable(
+  'gtfs_shapes',
+  {
+    id: serial('id').primaryKey(),
+    feedId: text('feed_id').notNull(),
+    shapeId: text('shape_id').notNull(),
+    coordinates: jsonb('coordinates').$type<[number, number][]>().notNull(),
+    geom: spatialColumn('geom', 'LINESTRING'),
+  },
+  (table) => [
+    uniqueIndex('gtfs_shapes_feed_shape_idx').on(table.feedId, table.shapeId),
+    index('gtfs_shapes_feed_id_idx').on(table.feedId),
+    spatialIndex('gtfs_shapes_geom_idx', table.geom),
+  ],
+)
+
+export type GtfsShape = typeof gtfsShapes.$inferSelect
+export type NewGtfsShape = typeof gtfsShapes.$inferInsert
+
+// ── OSM-linked station infrastructure ───────────────────────────────
+// The next two are MATERIALIZED VIEWS, built by the station-linking import,
+// not tables. Modelled as pgTable because the only thing barrelman ever does
+// with them is SELECT — treat them as read-only and never insert.
+
+export const stationEntrances = pgTable(
+  'station_entrances',
+  {
+    feedId: text('feed_id'),
+    stopId: text('stop_id'),
+    osmEntranceId: text('osm_entrance_id'),
+    entranceName: text('entrance_name'),
+    entranceDescription: text('entrance_description'),
+    entranceWheelchair: text('entrance_wheelchair'),
+    entranceLevel: text('entrance_level'),
+    railwayType: text('railway_type'),
+    entranceGeom: spatialColumn('entrance_geom', 'POINT'),
+    distanceM: doublePrecision('distance_m'),
+  },
+  (table) => [index('station_entrances_stop_idx').on(table.feedId, table.stopId)],
+)
+
+export const stationBuildings = pgTable(
+  'station_buildings',
+  {
+    feedId: text('feed_id'),
+    stopId: text('stop_id'),
+    osmBuildingId: text('osm_building_id'),
+    buildingName: text('building_name'),
+    stationType: text('station_type'),
+    buildingGeom: spatialColumn('building_geom', 'GEOMETRY'),
+  },
+  (table) => [index('station_buildings_stop_idx').on(table.feedId, table.stopId)],
+)
+
+// ── OSM stop_area relations ─────────────────────────────────────────
+// Loaded by scripts/import-stop-areas.sh; absent on instances that have not
+// run it, which is why station.service.ts probes for it before use.
+
+export const stopAreaMembers = pgTable(
+  'stop_area_members',
+  {
+    relationId: bigint('relation_id', { mode: 'number' }).notNull(),
+    relationName: text('relation_name'),
+    /** OSM element type: 'N', 'W' or 'R'. */
+    memberType: char('member_type', { length: 1 }).notNull(),
+    memberRef: bigint('member_ref', { mode: 'number' }).notNull(),
+    memberRole: text('member_role'),
+  },
+  (table) => [
+    index('stop_area_members_ref_idx').on(table.memberType, table.memberRef),
+    index('stop_area_members_rel_idx').on(table.relationId),
+  ],
+)

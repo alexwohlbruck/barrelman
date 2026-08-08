@@ -1,5 +1,19 @@
+/**
+ * Station infrastructure: GTFS stations joined to the OSM entrances, elevators
+ * and building outlines that let a router put someone at the right door.
+ *
+ * Every value that reaches Postgres from here is a bind parameter — through the
+ * query builder for the plain lookups, through a `sql` tagged template for the
+ * PostGIS work the builder cannot express. Neither form is a suggestion: with a
+ * parameter present the driver uses Postgres's extended protocol, which refuses
+ * multiple statements, so a `'; UPDATE …` in a path segment cannot execute even
+ * if this file is edited carelessly later. The `sql.raw` string concatenation
+ * this replaced had no such floor — `feedId` and `stopId` arrive straight from
+ * `/transit/station/:feedId/:stopId` and were spliced in unescaped.
+ */
 import { db } from '../db'
-import { sql } from 'drizzle-orm'
+import { and, eq, sql } from 'drizzle-orm'
+import { gtfsStops, stationBuildings, stationEntrances } from '../schema/gtfs'
 import { getRoutesForStop, type StopRoutesResult } from './transit.service'
 
 // Whether the stop_area_members table exists (loaded by
@@ -49,66 +63,71 @@ export async function getStationDetail(
   stopId: string,
 ): Promise<StationDetail | null> {
   // Get the GTFS station
-  const stationRows = await db.execute(sql.raw(`
-    SELECT id, stop_id, feed_id, stop_name, stop_lat, stop_lon
-    FROM gtfs_stops
-    WHERE feed_id = '${feedId}' AND stop_id = '${stopId}' AND location_type = 1
-    LIMIT 1
-  `))
+  const [station] = await db
+    .select({
+      stopId: gtfsStops.stopId,
+      feedId: gtfsStops.feedId,
+      stopName: gtfsStops.stopName,
+      stopLat: gtfsStops.stopLat,
+      stopLon: gtfsStops.stopLon,
+    })
+    .from(gtfsStops)
+    .where(
+      and(eq(gtfsStops.feedId, feedId), eq(gtfsStops.stopId, stopId), eq(gtfsStops.locationType, 1)),
+    )
+    .limit(1)
 
-  const stations = stationRows as any[]
-  if (stations.length === 0) return null
-  const station = stations[0]
+  if (!station) return null
 
   // Get linked entrances
-  const entrances = (await db.execute(sql.raw(`
-    SELECT
-      osm_entrance_id as osm_id,
-      entrance_name as name,
-      entrance_description as description,
-      entrance_wheelchair as wheelchair,
-      entrance_level as level,
-      railway_type,
-      ST_Y(entrance_geom) as lat,
-      ST_X(entrance_geom) as lon,
-      distance_m
-    FROM station_entrances
-    WHERE feed_id = '${feedId}' AND stop_id = '${stopId}'
-    ORDER BY distance_m
-  `))) as any[]
+  const entrances = await db
+    .select({
+      osmId: stationEntrances.osmEntranceId,
+      name: stationEntrances.entranceName,
+      description: stationEntrances.entranceDescription,
+      wheelchair: stationEntrances.entranceWheelchair,
+      level: stationEntrances.entranceLevel,
+      railwayType: stationEntrances.railwayType,
+      lat: sql<number>`ST_Y(${stationEntrances.entranceGeom})`,
+      lon: sql<number>`ST_X(${stationEntrances.entranceGeom})`,
+      distanceM: stationEntrances.distanceM,
+    })
+    .from(stationEntrances)
+    .where(and(eq(stationEntrances.feedId, feedId), eq(stationEntrances.stopId, stopId)))
+    .orderBy(stationEntrances.distanceM)
 
   // Get linked buildings
-  const buildings = (await db.execute(sql.raw(`
-    SELECT
-      osm_building_id as osm_id,
-      building_name as name,
-      station_type,
-      ST_AsGeoJSON(building_geom)::jsonb as geometry
-    FROM station_buildings
-    WHERE feed_id = '${feedId}' AND stop_id = '${stopId}'
-  `))) as any[]
+  const buildings = await db
+    .select({
+      osmId: stationBuildings.osmBuildingId,
+      name: stationBuildings.buildingName,
+      stationType: stationBuildings.stationType,
+      geometry: sql<GeoJSON.Geometry>`ST_AsGeoJSON(${stationBuildings.buildingGeom})::jsonb`,
+    })
+    .from(stationBuildings)
+    .where(and(eq(stationBuildings.feedId, feedId), eq(stationBuildings.stopId, stopId)))
 
   return {
-    stopId: station.stop_id,
-    feedId: station.feed_id,
-    stopName: station.stop_name,
-    lat: station.stop_lat,
-    lon: station.stop_lon,
-    entrances: entrances.map((r: any) => ({
-      osmId: r.osm_id,
+    stopId: station.stopId,
+    feedId: station.feedId,
+    stopName: station.stopName as string,
+    lat: station.stopLat,
+    lon: station.stopLon,
+    entrances: entrances.map((r) => ({
+      osmId: r.osmId as string,
       name: r.name || null,
       description: r.description || null,
       wheelchair: r.wheelchair || null,
       level: r.level || null,
-      accessType: r.railway_type,
-      lat: parseFloat(r.lat),
-      lon: parseFloat(r.lon),
-      distanceM: parseFloat(r.distance_m),
+      accessType: r.railwayType as string,
+      lat: Number(r.lat),
+      lon: Number(r.lon),
+      distanceM: Number(r.distanceM),
     })),
-    buildings: buildings.map((r: any) => ({
-      osmId: r.osm_id,
+    buildings: buildings.map((r) => ({
+      osmId: r.osmId as string,
       name: r.name || null,
-      stationType: r.station_type || null,
+      stationType: r.stationType || null,
       geometry: r.geometry,
     })),
     routes: await getRoutesForStop(feedId, stopId),
@@ -152,40 +171,44 @@ export async function getNearestEntrance(
   // Accessible mode: drop anything explicitly wheelchair=no (unknown is
   // allowed — most entrances are untagged), require elevators rather than
   // stairs for vertical access, and prefer confirmed wheelchair=yes.
+  //
+  // The conditional pieces below are SQL *fragments*, not values: they select
+  // between fixed clauses this module wrote, and carry nothing a caller
+  // supplied. Only `lat`, `lon` and the radii come from outside, and those go
+  // through `${}` in a `sql` template, which binds them as parameters.
   const accessFilter = wheelchair
-    ? "AND COALESCE(tags->>'wheelchair', '') <> 'no'"
-    : ''
-  const point = `ST_SetSRID(ST_MakePoint(${lon}, ${lat}), 4326)`
+    ? sql`AND COALESCE(tags->>'wheelchair', '') <> 'no'`
+    : sql.empty()
+  const point = sql`ST_SetSRID(ST_MakePoint(${lon}, ${lat}), 4326)`
   // Tighter radius for proximity-to-platform checks (~ 100m in degrees)
   const platformProximity = 0.001
 
   // First, check if there are any platforms in the search area.
   // This lets us skip the expensive EXISTS subqueries for tiers 2/3/5
   // when no platform is nearby (most places on earth).
-  const platformCheck = (await db.execute(sql.raw(`
+  const platformCheck = (await db.execute(sql`
     SELECT 1 FROM geo_places
     WHERE (tags->>'public_transport' = 'platform' OR tags->>'railway' = 'platform')
       AND centroid && ST_Expand(${point}, ${degRadius})
     LIMIT 1
-  `))) as any[]
+  `)) as any[]
   const hasPlatformNearby = platformCheck.length > 0
 
   // stop_area relations are loaded by scripts/import-stop-areas.sh —
   // skip Tier 0 gracefully on databases that haven't run it yet.
   if (stopAreasAvailable === null) {
     const reg = (await db.execute(
-      sql.raw(`SELECT to_regclass('stop_area_members') IS NOT NULL AS ok`),
+      sql`SELECT to_regclass(${'stop_area_members'}) IS NOT NULL AS ok`,
     )) as any[]
     stopAreasAvailable = reg[0]?.ok === true
   }
 
   const accessFilterE = wheelchair
-    ? "AND COALESCE(e.tags->>'wheelchair', '') <> 'no'"
-    : ''
+    ? sql`AND COALESCE(e.tags->>'wheelchair', '') <> 'no'`
+    : sql.empty()
 
-  const rows = (await db.execute(sql.raw(`
-    WITH candidates AS (
-      ${stopAreasAvailable ? `
+  const tier0 = stopAreasAvailable
+    ? sql`
       -- Tier 0: Relation-linked entrances — the mapper's authoritative
       -- public_transport=stop_area grouping. An entrance (or elevator) that
       -- shares a stop_area with the platform/stop near the query point wins
@@ -219,29 +242,19 @@ export async function getNearestEntrance(
           OR me.member_role = 'entrance'
         )
         AND COALESCE(e.tags->>'entrance', '') NOT IN ('no', 'service', 'emergency')
-        ${wheelchair ? "AND e.tags->>'highway' IS DISTINCT FROM 'steps'" : ''}
+        ${wheelchair ? sql`AND e.tags->>'highway' IS DISTINCT FROM 'steps'` : sql.empty()}
         ${accessFilterE}
         AND e.centroid && ST_Expand(${point}, ${degRadius})
 
       UNION ALL
-      ` : ''}
+      `
+    : sql.empty()
 
-      -- Tier 1: Explicit transit entrances (subway, train station)
-      SELECT
-        id as osm_id, name,
-        COALESCE(tags->>'description', '') as description,
-        COALESCE(tags->>'wheelchair', '') as wheelchair,
-        COALESCE(tags->>'level', '') as level,
-        COALESCE(tags->>'railway', 'entrance') as access_type,
-        ST_Y(centroid) as lat, ST_X(centroid) as lon,
-        ST_Distance(centroid::geography, ${point}::geography) as distance_m,
-        1 as tier
-      FROM geo_places
-      WHERE tags->>'railway' IN ('subway_entrance', 'train_station_entrance')
-        ${accessFilter}
-        AND centroid && ST_Expand(${point}, ${degRadius})
-
-      ${hasPlatformNearby ? `
+  // Tiers 2, 3 and 5 all require a platform nearby, so they are omitted
+  // entirely rather than evaluated and discarded — their EXISTS subqueries are
+  // the expensive part, and most coordinates on earth have no platform.
+  const tiers23 = hasPlatformNearby
+    ? sql`
       UNION ALL
 
       -- Tier 2: Generic entrance nodes near a transit platform
@@ -280,7 +293,7 @@ export async function getNearestEntrance(
         ST_Distance(centroid::geography, ${point}::geography) as distance_m,
         3 as tier
       FROM geo_places
-      WHERE tags->>'highway' IN ${wheelchair ? "('elevator')" : "('steps', 'elevator')"}
+      WHERE tags->>'highway' IN ${wheelchair ? sql`('elevator')` : sql`('steps', 'elevator')`}
         ${accessFilter}
         AND centroid && ST_Expand(${point}, ${degRadius})
         AND EXISTS (
@@ -288,26 +301,11 @@ export async function getNearestEntrance(
           WHERE (p.tags->>'public_transport' = 'platform' OR p.tags->>'railway' = 'platform')
             AND p.centroid && ST_Expand(geo_places.centroid, ${platformProximity * 1.5})
         )
-      ` : ''}
+      `
+    : sql.empty()
 
-      UNION ALL
-
-      -- Tier 4: Railway crossings (at-grade track crossings)
-      SELECT
-        id as osm_id, name,
-        '' as description,
-        COALESCE(tags->>'wheelchair', '') as wheelchair,
-        '0' as level,
-        'railway_crossing' as access_type,
-        ST_Y(centroid) as lat, ST_X(centroid) as lon,
-        ST_Distance(centroid::geography, ${point}::geography) as distance_m,
-        4 as tier
-      FROM geo_places
-      WHERE tags->>'railway' = 'crossing'
-        ${accessFilter}
-        AND centroid && ST_Expand(${point}, ${degRadius})
-
-      ${hasPlatformNearby ? `
+  const tier5 = hasPlatformNearby
+    ? sql`
       UNION ALL
 
       -- Tier 5: Pedestrian crossings near platforms
@@ -329,13 +327,54 @@ export async function getNearestEntrance(
           WHERE (p.tags->>'public_transport' = 'platform' OR p.tags->>'railway' = 'platform')
             AND p.centroid && ST_Expand(geo_places.centroid, ${platformProximity})
         )
-      ` : ''}
+      `
+    : sql.empty()
+
+  const rows = (await db.execute(sql`
+    WITH candidates AS (
+      ${tier0}
+
+      -- Tier 1: Explicit transit entrances (subway, train station)
+      SELECT
+        id as osm_id, name,
+        COALESCE(tags->>'description', '') as description,
+        COALESCE(tags->>'wheelchair', '') as wheelchair,
+        COALESCE(tags->>'level', '') as level,
+        COALESCE(tags->>'railway', 'entrance') as access_type,
+        ST_Y(centroid) as lat, ST_X(centroid) as lon,
+        ST_Distance(centroid::geography, ${point}::geography) as distance_m,
+        1 as tier
+      FROM geo_places
+      WHERE tags->>'railway' IN ('subway_entrance', 'train_station_entrance')
+        ${accessFilter}
+        AND centroid && ST_Expand(${point}, ${degRadius})
+
+      ${tiers23}
+
+      UNION ALL
+
+      -- Tier 4: Railway crossings (at-grade track crossings)
+      SELECT
+        id as osm_id, name,
+        '' as description,
+        COALESCE(tags->>'wheelchair', '') as wheelchair,
+        '0' as level,
+        'railway_crossing' as access_type,
+        ST_Y(centroid) as lat, ST_X(centroid) as lon,
+        ST_Distance(centroid::geography, ${point}::geography) as distance_m,
+        4 as tier
+      FROM geo_places
+      WHERE tags->>'railway' = 'crossing'
+        ${accessFilter}
+        AND centroid && ST_Expand(${point}, ${degRadius})
+
+      ${tier5}
     )
     SELECT * FROM candidates
     WHERE tier = (SELECT MIN(tier) FROM candidates)
-    ORDER BY ${wheelchair ? "(wheelchair = 'yes') DESC, " : ''}distance_m
+    ORDER BY ${wheelchair ? sql`(wheelchair = 'yes') DESC,` : sql.empty()} distance_m
     LIMIT 1
-  `))) as any[]
+  `)) as any[]
 
   if (rows.length === 0) return null
   const r = rows[0]
