@@ -65,7 +65,14 @@ services:
       - barrelman-data:/var/lib/postgresql/data
       - barrelman-osm-data:/data
     ports:
-      - "5434:5432"
+      # Loopback by default. These four services have no authentication of
+      # their own — Postgres accepts BARRELMAN_DB_PASSWORD (which defaults to
+      # "barrelman"), and Martin, GraphHopper and MOTIS answer anyone who asks —
+      # so publishing them on 0.0.0.0 puts the database and an unmetered copy of
+      # the tile, routing and transit APIs on the public internet the moment the
+      # host has no firewall. Only `barrelman` (5001) is meant to be reachable.
+      # Override BARRELMAN_BIND_ADDR=0.0.0.0 to expose them deliberately.
+      - "${BARRELMAN_BIND_ADDR:-127.0.0.1}:5434:5432"
     # Docker gives a container 64MB of /dev/shm, and Postgres puts parallel
     # query workers' shared memory there. The post-import index builds ask for
     # ~2GB and die with "could not resize shared memory segment ... No space
@@ -101,7 +108,7 @@ services:
       - barrelman-osm-data:/data
       - ./martin-config.yaml:/config/martin-config.yaml:ro
     ports:
-      - "5002:3000"
+      - "${BARRELMAN_BIND_ADDR:-127.0.0.1}:5002:3000"
     depends_on:
       - barrelman-db
 
@@ -119,7 +126,7 @@ services:
       - ./graphhopper-config.yml:/graphhopper/config-example.yml:ro
       - ./custom_models:/graphhopper/custom_models:ro
     ports:
-      - "5003:8989"
+      - "${BARRELMAN_BIND_ADDR:-127.0.0.1}:5003:8989"
     depends_on:
       - barrelman-db
 
@@ -148,7 +155,7 @@ services:
       # `motis import` exits 1 having printed its config and nothing else.
       - ./data/gtfs:/data/gtfs:ro
     ports:
-      - "5004:8080"
+      - "${BARRELMAN_BIND_ADDR:-127.0.0.1}:5004:8080"
 
   barrelman:
     container_name: barrelman

@@ -21,18 +21,18 @@ Connect the container to Caddy's network:
 docker network connect caddy_network barrelman
 ```
 
-Then stop publishing ports to the world. The Compose file maps 5001, 5002, 5003, 5004 and 5434 to the host; only the API needs to be reachable, and the database port should never be. Bind the rest to loopback in a `docker-compose.override.yml`:
+Only the API needs to be reachable from off-box. Postgres (5434), Martin (5002), GraphHopper (5003) and MOTIS (5004) already bind to `127.0.0.1`, so nothing further is needed — none of them authenticate, and exposing them would publish both the database and an unmetered copy of the tile, routing and transit APIs.
 
-```yaml
-services:
-  barrelman-db:
-    ports: ["127.0.0.1:5434:5432"]
-  martin:
-    ports: ["127.0.0.1:5002:3000"]
-  graphhopper:
-    ports: ["127.0.0.1:5003:8989"]
-  motis:
-    ports: ["127.0.0.1:5004:8080"]
+If you deliberately need one of them reachable, widen the binding with `BARRELMAN_BIND_ADDR` and put a firewall in front:
+
+```dotenv
+BARRELMAN_BIND_ADDR=0.0.0.0
+```
+
+Check what is actually listening after any change:
+
+```bash
+docker compose ps --format 'table {{.Service}}\t{{.Ports}}'
 ```
 
 ## Tell Barrelman its own origin
