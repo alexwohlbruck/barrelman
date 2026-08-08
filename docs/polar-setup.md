@@ -30,7 +30,11 @@ including a machine that has no checkout of this repo.
 
 ### Where the private key lives
 
-Infisical, as `LICENSE_PRIVATE_KEY` — the same secrets store parchment uses.
+Infisical, as `LICENSE_PRIVATE_KEY`, in barrelman's **own** project — the same
+tool parchment uses, deliberately not the same project. Barrelman's secrets and
+parchment's have no overlap and no reason to share a blast radius; a service
+token scoped to one should never be able to read the other.
+
 The repo stays provider-agnostic: nothing in the code knows about Infisical, it
 just reads the environment, so a self-hoster with the value in `.env` gets the
 same behaviour.

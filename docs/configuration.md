@@ -20,8 +20,10 @@ whatever you already use. Two paths, neither special-cased in the code:
 **`.env`** — the self-hosting default. Compose reads it, and it is gitignored.
 Fine for a private instance; everything below assumes it unless stated.
 
-**A secrets manager** — what the hosted deployment uses. We keep ours in
-Infisical, the same store parchment uses, and inject at the point of running:
+**A secrets manager** — what the hosted deployment uses. Ours live in Infisical,
+in a project of barrelman's own: the same tool parchment uses, deliberately not
+the same project, so a credential scoped to one cannot read the other. Secrets
+are injected at the point of running:
 
 ```bash
 infisical run --env=prod -- docker compose up -d
@@ -32,6 +34,16 @@ there, and nothing sensitive touches disk. `.infisical.json` is the local
 project link and is gitignored, so the repo stays provider-agnostic — AWS
 Secrets Manager, Vault, 1Password, `sops`, or a systemd `EnvironmentFile` all
 work the same way.
+
+First time on a machine:
+
+```bash
+infisical login
+infisical init          # link this checkout to the Barrelman project
+```
+
+`infisical init` only links to a project that already exists — there is no CLI
+command to create one, so a new project is made in the web UI first.
 
 The variables worth keeping there rather than in a file:
 
