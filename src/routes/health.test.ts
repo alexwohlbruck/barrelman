@@ -11,6 +11,7 @@
 import { describe, test, expect, mock, beforeEach, afterEach } from 'bun:test'
 import Elysia from 'elysia'
 import { createHealthRoutes } from './health'
+import { clearThrottleState as clearRateBuckets } from '../services/throttle.service'
 import type { HealthResult } from '../services/health.service'
 
 const BASE = 'http://localhost'
@@ -107,5 +108,64 @@ describe('GET /health/auth', () => {
     // No credential presented and none configured, so the caller is anonymous
     // rather than the shared service identity.
     expect(await res.json()).toMatchObject({ ...okHealth, authenticated: true, caller: 'anonymous' })
+  })
+})
+
+// ── Penalty box ──────────────────────────────────────────────────────────────
+
+describe('GET /health/auth throttling', () => {
+  /**
+   * This route validates a credential and charges nothing, which makes it the
+   * cheapest place on the instance to test whether a stolen key is real. It
+   * calls identifyCaller directly rather than going through apiAuth(), so the
+   * penalty box has to be wired up by hand — and was not, which left an
+   * unlimited, unlogged key-validation oracle that an address already refused
+   * everywhere else could keep using.
+   */
+  test('rejections earn strikes and eventually 429', async () => {
+    clearRateBuckets()
+    const checkHealth = mock(async () => okHealth)
+    process.env.BARRELMAN_API_KEY = 'svc_secret'
+    const app = new Elysia().use(createHealthRoutes({ checkHealth }))
+
+    const statuses: number[] = []
+    for (let i = 0; i < 80; i++) {
+      const res = await app.handle(
+        get('/health/auth', { Authorization: `Bearer brm_live_guess${i}` }),
+      )
+      statuses.push(res.status)
+    }
+
+    expect(statuses[0]).toBe(401)
+    expect(statuses).toContain(429)
+    // Once boxed it stays boxed, rather than alternating.
+    expect(statuses[statuses.length - 1]).toBe(429)
+    clearRateBuckets()
+  })
+
+  test('a boxed address cannot validate a good credential either', async () => {
+    clearRateBuckets()
+    const checkHealth = mock(async () => okHealth)
+    process.env.BARRELMAN_API_KEY = 'svc_secret'
+    const app = new Elysia().use(createHealthRoutes({ checkHealth }))
+
+    for (let i = 0; i < 80; i++) {
+      await app.handle(get('/health/auth', { Authorization: `Bearer brm_live_g${i}` }))
+    }
+
+    const res = await app.handle(get('/health/auth', { Authorization: 'Bearer svc_secret' }))
+    expect(res.status).toBe(429)
+    clearRateBuckets()
+  })
+
+  test('a clean address is unaffected', async () => {
+    clearRateBuckets()
+    const checkHealth = mock(async () => okHealth)
+    process.env.BARRELMAN_API_KEY = 'svc_secret'
+    const app = new Elysia().use(createHealthRoutes({ checkHealth }))
+
+    const res = await app.handle(get('/health/auth', { Authorization: 'Bearer svc_secret' }))
+    expect(res.status).toBe(200)
+    clearRateBuckets()
   })
 })
