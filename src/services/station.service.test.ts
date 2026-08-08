@@ -21,19 +21,28 @@ const statements: Array<{ sql: string; params: unknown[] }> = []
 // A postgres-js stand-in that records instead of connecting. Using a real
 // drizzle instance on top means the SQL under test is the SQL this codebase
 // actually generates, not a reconstruction.
+/**
+ * What each query resolves to, so a test can stand the service up over a
+ * database that does or does not have the optional station-link relations.
+ * Keyed by a substring of the generated SQL; first match wins.
+ */
+let responses: Array<[string, unknown[]]> = []
+
 const client: any = () => Promise.resolve([])
 client.unsafe = (text: string, params: unknown[] = []) => {
   statements.push({ sql: text, params })
-  const result: any = Promise.resolve([])
-  result.values = () => Promise.resolve([])
-  result.execute = () => Promise.resolve([])
+  const rows = responses.find(([needle]) => text.includes(needle))?.[1] ?? []
+  const result: any = Promise.resolve(rows)
+  result.values = () => Promise.resolve(rows)
+  result.execute = () => Promise.resolve(rows)
   return result
 }
 client.options = { parsers: {}, serializers: {} }
 
 mock.module('../db', () => ({ db: drizzle(client), connection: client }))
 
-const { getStationDetail, getNearestEntrance } = await import('./station.service')
+const { getStationDetail, getNearestEntrance, __resetRelationCacheForTests } =
+  await import('./station.service')
 
 /** Payloads that would each have been catastrophic through string building. */
 const PAYLOADS = [
@@ -78,5 +87,64 @@ describe('station.service parametrization', () => {
     const bound = statements.flatMap((s) => s.params)
     expect(bound).toContain(40.7527)
     expect(bound).toContain(-73.9772)
+  })
+})
+
+// ── Optional station-link relations ──────────────────────────────────────────
+
+describe('station.service on an instance without the station-link import', () => {
+  /**
+   * `station_entrances` and `station_buildings` are materialized views built by
+   * `import/create-station-links.sql`, which is a separate step from the GTFS
+   * import. A GTFS-only instance has stations but neither view — a normal state,
+   * and one that made GET /transit/station/:feedId/:stopId answer 500 with
+   * `relation "station_entrances" does not exist` in the response body.
+   *
+   * getNearestEntrance had always probed for its own optional relation
+   * (stop_area_members); getStationDetail simply did not.
+   */
+  test('reports no entrances or buildings instead of throwing', async () => {
+    __resetRelationCacheForTests()
+    statements.length = 0
+    // A station exists; neither optional view does.
+    responses = [
+      ['to_regclass', [{ ok: false }]],
+      ['gtfs_stops', [['S1', 'F1', 'Test Station', 40.7, -73.9]]],
+    ]
+
+    const detail = await getStationDetail('F1', 'S1')
+
+    expect(detail).not.toBeNull()
+    expect(detail!.stopName).toBe('Test Station')
+    expect(detail!.entrances).toEqual([])
+    expect(detail!.buildings).toEqual([])
+
+    // It asked rather than assumed, and never queried the missing views.
+    const text = statements.map((s) => s.sql).join('\n')
+    expect(statements.some((s) => s.params.includes('station_entrances'))).toBe(true)
+    expect(statements.some((s) => s.params.includes('station_buildings'))).toBe(true)
+    expect(text).not.toContain('from "station_entrances"')
+    expect(text).not.toContain('from "station_buildings"')
+
+    responses = []
+    __resetRelationCacheForTests()
+  })
+
+  test('queries the views when they are present', async () => {
+    __resetRelationCacheForTests()
+    statements.length = 0
+    responses = [
+      ['to_regclass', [{ ok: true }]],
+      ['gtfs_stops', [['S1', 'F1', 'Test Station', 40.7, -73.9]]],
+    ]
+
+    await getStationDetail('F1', 'S1')
+
+    const text = statements.map((s) => s.sql).join('\n').toLowerCase()
+    expect(text).toContain('station_entrances')
+    expect(text).toContain('station_buildings')
+
+    responses = []
+    __resetRelationCacheForTests()
   })
 })

@@ -16,9 +16,35 @@ import { and, eq, sql } from 'drizzle-orm'
 import { gtfsStops, stationBuildings, stationEntrances } from '../schema/gtfs'
 import { getRoutesForStop, type StopRoutesResult } from './transit.service'
 
-// Whether the stop_area_members table exists (loaded by
-// scripts/import-stop-areas.sh). Checked once and cached for the process.
-let stopAreasAvailable: boolean | null = null
+/**
+ * The OSM-linked relations this module reads are all built by import steps that
+ * are separate from the GTFS import: `station_entrances` and `station_buildings`
+ * by `import/create-station-links.sql`, `stop_area_members` by
+ * `scripts/import-stop-areas.sh`. A GTFS-only instance has stations but none of
+ * these, and that is a normal state, not an error — so their absence degrades to
+ * "no entrances found" rather than a 500.
+ *
+ * Probed once per relation and cached for the process. `to_regclass` returns
+ * NULL instead of raising, so this is a cheap lookup rather than a failed query.
+ */
+const relationCache = new Map<string, boolean>()
+
+async function relationAvailable(name: string): Promise<boolean> {
+  const cached = relationCache.get(name)
+  if (cached !== undefined) return cached
+
+  const [row] = (await db.execute(
+    sql`SELECT to_regclass(${name}) IS NOT NULL AS ok`,
+  )) as Array<{ ok: boolean }>
+  const present = row?.ok === true
+  relationCache.set(name, present)
+  return present
+}
+
+/** Test seam: forget what was probed, so a fixture can change under the process. */
+export function __resetRelationCacheForTests(): void {
+  relationCache.clear()
+}
 
 export interface PlatformAccessPoint {
   osmId: string
@@ -80,7 +106,7 @@ export async function getStationDetail(
   if (!station) return null
 
   // Get linked entrances
-  const entrances = await db
+  const entrances = !(await relationAvailable('station_entrances')) ? [] : await db
     .select({
       osmId: stationEntrances.osmEntranceId,
       name: stationEntrances.entranceName,
@@ -97,7 +123,7 @@ export async function getStationDetail(
     .orderBy(stationEntrances.distanceM)
 
   // Get linked buildings
-  const buildings = await db
+  const buildings = !(await relationAvailable('station_buildings')) ? [] : await db
     .select({
       osmId: stationBuildings.osmBuildingId,
       name: stationBuildings.buildingName,
@@ -196,12 +222,7 @@ export async function getNearestEntrance(
 
   // stop_area relations are loaded by scripts/import-stop-areas.sh —
   // skip Tier 0 gracefully on databases that haven't run it yet.
-  if (stopAreasAvailable === null) {
-    const reg = (await db.execute(
-      sql`SELECT to_regclass(${'stop_area_members'}) IS NOT NULL AS ok`,
-    )) as any[]
-    stopAreasAvailable = reg[0]?.ok === true
-  }
+  const stopAreasAvailable = await relationAvailable('stop_area_members')
 
   const accessFilterE = wheelchair
     ? sql`AND COALESCE(e.tags->>'wheelchair', '') <> 'no'`
