@@ -72,6 +72,7 @@ signatures and cannot make them, which is why it is compiled into
 | `REGIONS` | `north-carolina,nyc-metro` | Which geographies the importers pull. `global` for everything |
 | `OLLAMA_HOST` | `http://localhost:11434` | Embeddings for semantic search (optional) |
 | `BARRELMAN_STATEMENT_TIMEOUT_MS` | `10000` | Query timeout on the API pool. `0` disables. DDL is exempt |
+| `BARRELMAN_HEALTH_CACHE_MS` | `5000` | How long `/health` reuses its dependency probes. The endpoint is public and a load balancer may hit it every second; without caching each call fans out to Postgres, GraphHopper, Martin, MOTIS and Pelias. `checkedAt` in the response reports the age. `0` disables |
 | `PUBLIC_BASE_URL` | — | Origin `/docs` advertises as its "Production" server. Unset offers only localhost |
 | `NODE_ENV` | — | `production` makes the server warn at startup about missing secrets |
 | `COMPOSE_FILE` | — | Read by Compose, not by barrelman. `.env.example` sets it so a bare `docker compose up` picks up the dev overrides |
