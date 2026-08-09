@@ -16,6 +16,7 @@ import { describe, test, expect, mock, beforeEach, afterEach } from 'bun:test'
 import Elysia from 'elysia'
 import { authHandler } from '../middleware/auth'
 import { createHealthRoutes }   from './health'
+import { healthFixture }        from '../services/health.fixture'
 import { createSearchRoutes }   from './search'
 import { createContainsRoutes } from './contains'
 import { createChildrenRoutes } from './children'
@@ -24,7 +25,7 @@ import { createGeocodeRoutes }  from './geocode'
 
 // ── Service mocks ─────────────────────────────────────────────────────────────
 
-const mockCheckHealth      = mock(async () => ({ status: 'ok' as const, database: 'connected' as const }))
+const mockCheckHealth      = mock(async () => healthFixture())
 const mockSearchPlaces     = mock(async () => [] as any[])
 const mockFindContaining   = mock(async () => [] as any[])
 const mockFindChildren     = mock(async () => [] as any[])
@@ -84,7 +85,7 @@ beforeEach(() => {
   mockReverseGeocode.mockReset()
   mockReverseGeocodePlaces.mockReset()
 
-  mockCheckHealth.mockImplementation(async () => ({ status: 'ok', database: 'connected' }))
+  mockCheckHealth.mockImplementation(async () => healthFixture())
   mockSearchPlaces.mockImplementation(async () => [])
   mockFindContaining.mockImplementation(async () => [])
   mockFindChildren.mockImplementation(async () => [])
@@ -114,7 +115,7 @@ describe('GET /health', () => {
   })
 
   test('reflects disconnected status from service', async () => {
-    mockCheckHealth.mockImplementation(async () => ({ status: 'error', database: 'disconnected' }))
+    mockCheckHealth.mockImplementation(async () => healthFixture({ status: 'error', database: 'disconnected' }))
     const app = makeApp()
     const res = await app.handle(get('/health'))
     const body = await json(res)

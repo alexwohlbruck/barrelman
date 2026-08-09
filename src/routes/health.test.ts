@@ -12,7 +12,8 @@ import { describe, test, expect, mock, beforeEach, afterEach } from 'bun:test'
 import Elysia from 'elysia'
 import { createHealthRoutes } from './health'
 import { clearThrottleState as clearRateBuckets } from '../services/throttle.service'
-import type { HealthResult } from '../services/health.service'
+import { redactHealth } from '../services/health.service'
+import { healthFixture } from '../services/health.fixture'
 
 const BASE = 'http://localhost'
 
@@ -20,7 +21,9 @@ function get(path: string, headers?: Record<string, string>) {
   return new Request(`${BASE}${path}`, { headers })
 }
 
-const okHealth: HealthResult = { status: 'ok', database: 'connected' }
+const okHealth = healthFixture()
+/** What /health serves: the same result with upstream error text stripped. */
+const publicHealth = JSON.parse(JSON.stringify(redactHealth(okHealth)))
 
 const savedApiKey = process.env.BARRELMAN_API_KEY
 
@@ -41,7 +44,7 @@ describe('GET /health', () => {
     const res = await app.handle(get('/health'))
 
     expect(res.status).toBe(200)
-    expect(await res.json()).toEqual(okHealth)
+    expect(await res.json()).toEqual(publicHealth)
     expect(checkHealth).toHaveBeenCalledTimes(1)
   })
 
@@ -53,7 +56,7 @@ describe('GET /health', () => {
     const res = await app.handle(get('/health'))
 
     expect(res.status).toBe(200)
-    expect(await res.json()).toEqual(okHealth)
+    expect(await res.json()).toEqual(publicHealth)
   })
 })
 
