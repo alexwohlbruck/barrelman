@@ -28,6 +28,9 @@ import type {
   SuspensionKind,
   TermsState,
   ThrottleStats,
+  Schedule,
+  SchedulePayload,
+  CronPreview,
 } from './types'
 
 export class ApiError extends Error {
@@ -109,6 +112,40 @@ export function getJob(id: string): Promise<{ job: Job; logs: LogLine[] }> {
 
 export function cancelJob(id: string): Promise<{ ok: boolean; message: string }> {
   return request<{ ok: boolean; message: string }>(`/admin/jobs/${id}/cancel`, { method: 'POST' })
+}
+
+// ── Schedules ─────────────────────────────────────────────────────────
+const json = (body: unknown): RequestInit => ({
+  headers: { 'content-type': 'application/json' },
+  body: JSON.stringify(body),
+})
+
+export function getSchedules(): Promise<{ schedules: Schedule[]; defaultTimezone: string }> {
+  return request<{ schedules: Schedule[]; defaultTimezone: string }>('/admin/schedules')
+}
+
+export function createSchedule(payload: SchedulePayload): Promise<{ schedule: Schedule }> {
+  return request<{ schedule: Schedule }>('/admin/schedules', { method: 'POST', ...json(payload) })
+}
+
+export function updateSchedule(id: string, payload: SchedulePayload): Promise<{ schedule: Schedule }> {
+  return request<{ schedule: Schedule }>(`/admin/schedules/${id}`, { method: 'PUT', ...json(payload) })
+}
+
+export function setScheduleEnabled(id: string, enabled: boolean): Promise<{ schedule: Schedule }> {
+  return request<{ schedule: Schedule }>(`/admin/schedules/${id}/enabled`, { method: 'POST', ...json({ enabled }) })
+}
+
+export function deleteSchedule(id: string): Promise<{ ok: boolean }> {
+  return request<{ ok: boolean }>(`/admin/schedules/${id}`, { method: 'DELETE' })
+}
+
+export function runSchedule(id: string): Promise<{ job: Job }> {
+  return request<{ job: Job }>(`/admin/schedules/${id}/run`, { method: 'POST' })
+}
+
+export function previewCron(cron: string, timezone?: string): Promise<CronPreview> {
+  return request<CronPreview>('/admin/schedules/preview', { method: 'POST', ...json({ cron, timezone }) })
 }
 
 // ── Import regions ────────────────────────────────────────────────────

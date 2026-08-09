@@ -18,7 +18,9 @@ set -euo pipefail
 #      Changes     -> re-import each changed region (download-gtfs.sh), record
 #                     the new shas, then rebuild MOTIS (scripts/rebuild-motis.sh).
 #
-# Called nightly from scripts/barrelman-daily.sh, or run manually:
+# Runs in barrelman-ops (it needs the docker socket to reach its siblings).
+# Scheduled nightly from the console — Schedules → "Check for GTFS Updates" —
+# which enqueues it as a tracked job. Also runnable by hand:
 #   ./scripts/gtfs-watch.sh
 #
 # Skips silently if the barrelman container is not present.

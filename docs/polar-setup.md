@@ -28,30 +28,51 @@ Nothing below has any effect until the server holds a license granting the
 `Buffer` globals — so `bun` can run it by absolute path from any directory,
 including a machine that has no checkout of this repo.
 
+### Where the private key lives
+
+Infisical, as `LICENSE_PRIVATE_KEY`, in barrelman's **own** project — the same
+tool parchment uses, deliberately not the same project. Barrelman's secrets and
+parchment's have no overlap and no reason to share a blast radius; a service
+token scoped to one should never be able to read the other.
+
+The repo stays provider-agnostic: nothing in the code knows about Infisical, it
+just reads the environment, so a self-hoster with the value in `.env` gets the
+same behaviour.
+
+```bash
+infisical run --env=prod -- bun ~/Documents/code/barrelman/scripts/generate-license.ts --exp 2027-01-01
+```
+
+`.infisical.json` is the local CLI project link and is gitignored, exactly as in
+parchment.
+
+Losing the key means generating a new keypair and reissuing every license;
+leaking it means anyone can mint themselves the `billing` feature.
+
 ### Once, to create the keypair
 
 ```bash
 bun ~/Documents/code/barrelman/scripts/generate-license.ts --keygen
+infisical secrets set LICENSE_PRIVATE_KEY=@license-seed.key --env=prod
+rm -P license-seed.key
 ```
 
-It prints two hex strings:
+This has already been done. `--keygen` prints **only** the public key; the seed
+is written to `license-seed.key` (mode 600, gitignored) so it can go straight
+into the secrets store without passing through a terminal, shell history, or
+argv — which every process on the machine can read. It refuses to overwrite an
+existing file, since that is usually a seed nobody has stored yet.
 
-- **Public key** — paste into `DEFAULT_LICENSE_PUBLIC_KEY` in
-  [`src/lib/license.ts`](../src/lib/license.ts) and commit it. Until it is set,
-  no token verifies and billing is off everywhere, including production.
-- **Private key** — a 32-byte seed. Store it in a password manager. It never
-  belongs in this repo, in an issue, in CI, or on a deployed host. Only the
-  signed *token* goes to a server.
-
-Losing it means generating a new keypair and reissuing every license. Leaking it
-means anyone can mint themselves the `billing` feature.
+The public key is committed as `DEFAULT_LICENSE_PUBLIC_KEY` in
+[`src/lib/license.ts`](../src/lib/license.ts). While it was empty, no token
+verified and billing was off everywhere, including production.
 
 ### Per license
 
 ```bash
-LICENSE_PRIVATE_KEY=<hex-seed> \
-  bun ~/Documents/code/barrelman/scripts/generate-license.ts --exp 2027-01-01
+infisical run --env=prod -- bun ~/Documents/code/barrelman/scripts/generate-license.ts --exp 2027-01-01
 ```
+
 
 | Flag | Default | Meaning |
 |---|---|---|

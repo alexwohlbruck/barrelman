@@ -1,6 +1,12 @@
 node_modules/
 dist/
 .env
+# Infisical CLI project link (local dev convenience; keeps repo provider-agnostic)
+.infisical.json
+# Transient landing spot for a freshly generated licensing seed — it belongs in
+# the secrets store, not on disk.
+license-seed.key
+*.seed.key
 *.log
 data/
 drizzle/meta/

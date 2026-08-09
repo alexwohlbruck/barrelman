@@ -122,6 +122,10 @@ describe('GET /health/auth throttling', () => {
    * unlimited, unlogged key-validation oracle that an address already refused
    * everywhere else could keep using.
    */
+  // Credentials deliberately WITHOUT the `brm_` prefix: identifyCaller refuses
+  // those at the prefix check, before it would resolve a key against Postgres.
+  // With the prefix they reach the database, which passes on a developer's
+  // machine and throws in CI — where this failed after passing locally.
   test('rejections earn strikes and eventually 429', async () => {
     clearRateBuckets()
     const checkHealth = mock(async () => okHealth)
@@ -131,7 +135,7 @@ describe('GET /health/auth throttling', () => {
     const statuses: number[] = []
     for (let i = 0; i < 80; i++) {
       const res = await app.handle(
-        get('/health/auth', { Authorization: `Bearer brm_live_guess${i}` }),
+        get('/health/auth', { Authorization: `Bearer not_a_real_key_${i}` }),
       )
       statuses.push(res.status)
     }
@@ -150,7 +154,7 @@ describe('GET /health/auth throttling', () => {
     const app = new Elysia().use(createHealthRoutes({ checkHealth }))
 
     for (let i = 0; i < 80; i++) {
-      await app.handle(get('/health/auth', { Authorization: `Bearer brm_live_g${i}` }))
+      await app.handle(get('/health/auth', { Authorization: `Bearer not_a_real_key_${i}` }))
     }
 
     const res = await app.handle(get('/health/auth', { Authorization: 'Bearer svc_secret' }))

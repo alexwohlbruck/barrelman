@@ -26,7 +26,16 @@
  * official one. `BARRELMAN_LICENSE_PUBLIC_KEY` overrides it, for tests and for
  * a commercial licensee running their own signing key.
  */
-const DEFAULT_LICENSE_PUBLIC_KEY = ''
+/**
+ * Verification key for `BARRELMAN_LICENSE`. Public by definition — it can only
+ * check a signature, never make one — so it is committed rather than configured.
+ * Its private half lives in the OS keychain (`dev.barrelman` /
+ * `license-signing-key`); see `scripts/generate-license.ts`.
+ *
+ * Empty means no token can ever verify, which is why billing was off everywhere
+ * including production until this was filled in.
+ */
+const DEFAULT_LICENSE_PUBLIC_KEY = 'adb594bb8940a8c277316a9efd3a3701b97fd00a198eb1e8829880c0adcb1ea8'
 
 export interface LicensePayload {
   /** Who the license was issued to. */

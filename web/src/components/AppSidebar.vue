@@ -3,6 +3,7 @@ import { computed } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import {
   Activity,
+  CalendarClock,
   Compass,
   CreditCard,
   Database,
@@ -37,6 +38,7 @@ const adminNav = [
   { to: '/accounts', label: 'Accounts', icon: Users },
   { to: '/regions', label: 'Regions', icon: MapPin },
   { to: '/scripts', label: 'Scripts', icon: TerminalSquare },
+  { to: '/schedules', label: 'Schedules', icon: CalendarClock },
   { to: '/jobs', label: 'Jobs', icon: ListChecks, badge: 'jobs' as const },
   { to: '/data', label: 'Data', icon: Database },
   { to: '/api', label: 'API Tester', icon: FlaskConical },

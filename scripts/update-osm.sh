@@ -5,8 +5,13 @@ set -euo pipefail
 # Barrelman Daily OSM Update (Patch Import)
 # =============================================================================
 #
-# Applies OSM changes and re-runs post-processing. Intended for daily/weekly
-# cron jobs. Everything runs inside the barrelman-db container.
+# Applies OSM changes and re-runs post-processing. Everything runs inside the
+# barrelman-db container.
+#
+# Run it from the console (Scripts → "OSM Update") or, for the daily refresh,
+# from Schedules — a scheduled run is an ordinary tracked job with logs and a
+# progress bar. That replaces the host crontab this script used to document:
+# cron drove it with `docker exec` and left no trace in the job list.
 #
 # MODES:
 #   replication (default)
@@ -24,9 +29,9 @@ set -euo pipefail
 #   GEOFABRIK_REPLICATION_URL   Diff update server URL (replication mode only)
 #   BARRELMAN_DB_PASSWORD       DB password (default: barrelman)
 #
-# SCHEDULING (crontab):
-#   Daily at 3am:
-#     0 3 * * * /opt/barrelman/scripts/update-osm.sh >> /var/log/barrelman-update.log 2>&1
+# SCHEDULING:
+#   Console → Schedules. The seeded "OSM Update" entry runs daily at 03:00 with
+#   UPDATE_MODE=replication; enable it to turn it on.
 # =============================================================================
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"

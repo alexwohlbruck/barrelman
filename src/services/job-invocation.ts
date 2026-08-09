@@ -11,6 +11,8 @@ import { type ScriptDef, type DangerLevel, type ScriptCategory } from '../admin/
 export type JobStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'canceled'
 export type LogStream = 'stdout' | 'stderr' | 'system'
 export type ExecKind = 'internal' | 'process'
+/** What put the job in the queue: an operator in the console, or a schedule. */
+export type JobTrigger = 'manual' | 'schedule'
 
 export interface LogLine {
   seq: number
@@ -27,6 +29,9 @@ export interface Job {
   danger: DangerLevel
   execKind: ExecKind
   status: JobStatus
+  trigger: JobTrigger
+  /** Set when trigger is 'schedule' — the schedule that enqueued this run. */
+  scheduleId?: string
   params: Record<string, unknown>
   displayCommand: string
   createdAt: number

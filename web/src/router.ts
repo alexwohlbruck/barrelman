@@ -38,6 +38,7 @@ const router = createRouter({
     { path: '/accounts', name: 'accounts', component: () => import('@/views/UsersView.vue'), meta: { admin: true } },
     { path: '/regions', name: 'regions', component: () => import('@/views/RegionsView.vue'), meta: { admin: true } },
     { path: '/scripts', name: 'scripts', component: () => import('@/views/ScriptsView.vue'), meta: { admin: true } },
+    { path: '/schedules', name: 'schedules', component: () => import('@/views/SchedulesView.vue'), meta: { admin: true } },
     { path: '/jobs', name: 'jobs', component: () => import('@/views/JobsView.vue'), meta: { admin: true } },
     { path: '/jobs/:id', name: 'job-detail', component: () => import('@/views/JobDetailView.vue'), meta: { admin: true } },
     { path: '/data', name: 'data', component: () => import('@/views/DataView.vue'), meta: { admin: true } },

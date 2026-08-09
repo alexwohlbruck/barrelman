@@ -213,6 +213,33 @@ export const SCRIPTS: ScriptDef[] = [
     source: 'scripts/download-gtfs.sh',
   },
   {
+    id: 'gtfs-watch',
+    name: 'Check for GTFS Updates',
+    description:
+      "Compare each imported feed's stored version sha against Transitland's current one, re-import only the regions that changed, then rebuild the MOTIS dataset so the new schedules go live. Exits early and cheaply when nothing has changed.",
+    category: 'transit',
+    danger: 'caution',
+    longRunning: true,
+    confirm: false,
+    exclusive: true,
+    exec: { kind: 'process', command: 'bash', args: ['scripts/gtfs-watch.sh'] },
+    params: [
+      {
+        name: 'TRANSITLAND_API_KEY',
+        label: 'Transitland API key',
+        type: 'string',
+        apply: 'env',
+        envVar: 'TRANSITLAND_API_KEY',
+        secret: true,
+        placeholder: 'tlk_…  (blank = use server env)',
+        description: 'Required unless already set in the server environment.',
+      },
+    ],
+    source: 'scripts/gtfs-watch.sh',
+    notes:
+      'The intended nightly job — see the Schedules page. The very first run only records a baseline of current feed versions; it cannot detect drift until it has a prior sha to compare against.',
+  },
+  {
     id: 'gtfs-import',
     name: 'GTFS Importer (advanced)',
     description:

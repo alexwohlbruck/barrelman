@@ -234,6 +234,11 @@ services:
       # self-hosted instance (LICENSING.md). Without it the Polar settings
       # below do nothing.
       BARRELMAN_LICENSE: ${BARRELMAN_LICENSE:-}
+      # Overrides the public key baked into src/lib/license.ts. Only needed to
+      # verify tokens from a different keypair (a test license, a re-key);
+      # Compose does not forward host env on its own, so without this line the
+      # variable the code reads could never arrive.
+      BARRELMAN_LICENSE_PUBLIC_KEY: ${BARRELMAN_LICENSE_PUBLIC_KEY:-}
 
       # ── Billing (requires a license, see above) ──────────────────────
       POLAR_ACCESS_TOKEN: ${POLAR_ACCESS_TOKEN:-}
@@ -246,6 +251,12 @@ services:
       POLAR_CREDIT_PACKS: ${POLAR_CREDIT_PACKS:-}
       POLAR_USAGE_EVENT_NAME: ${POLAR_USAGE_EVENT_NAME:-}
       POLAR_METER_USAGE: ${POLAR_METER_USAGE:-}
+
+      # ── Scheduled jobs ───────────────────────────────────────────────
+      # The schedules themselves live in the database (console → Schedules);
+      # these only set the default timezone offered and the poll cadence.
+      BARRELMAN_SCHEDULE_TZ: ${BARRELMAN_SCHEDULE_TZ:-}
+      BARRELMAN_SCHEDULER_INTERVAL_MS: ${BARRELMAN_SCHEDULER_INTERVAL_MS:-}
 
       # ── Metering and abuse controls ──────────────────────────────────
       BARRELMAN_USAGE_FLUSH_MS: ${BARRELMAN_USAGE_FLUSH_MS:-}

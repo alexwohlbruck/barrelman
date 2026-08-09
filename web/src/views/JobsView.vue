@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { RouterLink } from 'vue-router'
-import { RefreshCw, ChevronRight, Inbox } from 'lucide-vue-next'
+import { RefreshCw, ChevronRight, Inbox, CalendarClock } from 'lucide-vue-next'
 import PageHeader from '@/components/PageHeader.vue'
 import JobStatusBadge from '@/components/JobStatusBadge.vue'
+import Badge from '@/components/ui/Badge.vue'
 import Card from '@/components/ui/Card.vue'
 import Button from '@/components/ui/Button.vue'
 import { jobs, jobStats, refreshJobs } from '@/lib/store'
@@ -84,7 +85,14 @@ onMounted(refreshJobs)
       >
         <JobStatusBadge :status="job.status" />
         <div class="min-w-0 flex-1">
-          <div class="truncate text-sm font-medium">{{ job.scriptName }}</div>
+          <div class="flex items-center gap-2">
+            <span class="truncate text-sm font-medium">{{ job.scriptName }}</span>
+            <!-- Provenance: without this a nightly import is indistinguishable
+                 from someone having clicked Run at 3am. -->
+            <Badge v-if="job.trigger === 'schedule'" variant="outline" class="shrink-0 gap-1 text-[11px] font-normal">
+              <CalendarClock class="size-3" /> Scheduled
+            </Badge>
+          </div>
           <div class="truncate font-mono text-xs text-muted-foreground">{{ job.displayCommand }}</div>
         </div>
         <div class="hidden shrink-0 text-right sm:block">
