@@ -5,7 +5,7 @@
  */
 import { sql } from 'drizzle-orm'
 import { db } from '../db'
-import { checkMotisHealth } from './transit.service'
+import { checkHealth, dependencyUrls, resetHealthCache, type DependencyKey } from './health.service'
 
 async function scalar<T = number>(query: ReturnType<typeof sql>, fallback: T | null = null): Promise<T | null> {
   try {
@@ -264,61 +264,41 @@ export interface ServiceStatus {
   message?: string
 }
 
-async function pingHttp(name: string, key: string, url: string, path: string): Promise<ServiceStatus> {
-  const start = performance.now()
-  try {
-    const res = await fetch(`${url}${path}`, { signal: AbortSignal.timeout(3000) })
-    const latencyMs = Math.round(performance.now() - start)
-    if (res.ok) return { name, key, status: 'ok', url, latencyMs }
-    return { name, key, status: 'unavailable', url, latencyMs, message: `HTTP ${res.status}` }
-  } catch (err) {
-    return {
-      name,
-      key,
-      status: 'unavailable',
-      url,
-      message: err instanceof Error ? err.message : 'Connection failed',
-    }
-  }
+/** Display names for the console; the probing itself lives in health.service. */
+const SERVICE_NAMES: Record<DependencyKey, string> = {
+  database: 'PostgreSQL / PostGIS',
+  motis: 'MOTIS (transit routing)',
+  graphhopper: 'GraphHopper (routing)',
+  martin: 'Martin (vector tiles)',
+  // Optional: only runs under the `pelias` compose profile, so "unavailable"
+  // here often means "not started" rather than "broken".
+  pelias: 'Pelias (addresses)',
 }
 
+/** Order the console renders them in — most fundamental first. */
+const SERVICE_ORDER: DependencyKey[] = ['database', 'motis', 'graphhopper', 'martin', 'pelias']
+
+/**
+ * Decorate the health service's probes with the names and URLs the console
+ * shows. The probing is deliberately not duplicated here: this and `/health`
+ * disagreeing about whether MOTIS is up would be a genuinely confusing bug, and
+ * it used to be possible — the two kept their own copies of the ping.
+ *
+ * The dashboard wants live values, so the cached snapshot is discarded first;
+ * an operator refreshing the page is asking to re-check, not to see what a
+ * load-balancer probe saw five seconds ago.
+ */
 export async function getServiceStatuses(): Promise<ServiceStatus[]> {
-  const graphhopperUrl = process.env.GRAPHHOPPER_URL || 'http://barrelman-graphhopper:8989'
-  const martinUrl = process.env.MARTIN_URL || 'http://barrelman-martin:3000'
-  const motisUrl = process.env.MOTIS_URL || 'http://barrelman-motis:8080'
-  const peliasUrl = process.env.PELIAS_URL || 'http://pelias_api:4000'
+  resetHealthCache()
+  const { dependencies } = await checkHealth()
+  const urls = dependencyUrls()
 
-  const dbCheck = (async (): Promise<ServiceStatus> => {
-    const start = performance.now()
-    try {
-      await db.execute(sql`SELECT 1`)
-      return { name: 'PostgreSQL / PostGIS', key: 'database', status: 'ok', latencyMs: Math.round(performance.now() - start) }
-    } catch (err) {
-      return { name: 'PostgreSQL / PostGIS', key: 'database', status: 'unavailable', message: err instanceof Error ? err.message : 'Connection failed' }
-    }
-  })()
-
-  const motisCheck = (async (): Promise<ServiceStatus> => {
-    const start = performance.now()
-    const r = await checkMotisHealth()
-    return {
-      name: 'MOTIS (transit routing)',
-      key: 'motis',
-      status: r.status,
-      url: motisUrl,
-      latencyMs: Math.round(performance.now() - start),
-      message: r.message,
-    }
-  })()
-
-  return Promise.all([
-    dbCheck,
-    motisCheck,
-    pingHttp('GraphHopper (routing)', 'graphhopper', graphhopperUrl, '/health'),
-    pingHttp('Martin (vector tiles)', 'martin', martinUrl, '/health'),
-    // Optional: only runs under the `pelias` compose profile, so "unavailable"
-    // here often means "not started" rather than "broken". /status is the only
-    // unauthenticated 200 the API offers — /v1/status is a 404.
-    pingHttp('Pelias (addresses)', 'pelias', peliasUrl, '/status'),
-  ])
+  return SERVICE_ORDER.map((key) => ({
+    name: SERVICE_NAMES[key],
+    key,
+    status: dependencies[key].status,
+    ...(key === 'database' ? {} : { url: urls[key as Exclude<DependencyKey, 'database'>] }),
+    latencyMs: dependencies[key].latencyMs,
+    message: dependencies[key].message,
+  }))
 }
