@@ -36,6 +36,10 @@ export interface DepartureRequest {
   /** Keep only departures in this GTFS direction ("0"/"1"). A platform stop
    *  can return both directions, so the board filters to the rider's way. */
   directionId?: string
+  /** GTFS route types the caller expects here, derived from the place's own
+   *  tags. Stops served by a matching route rank first and are searched out to
+   *  a wider radius — see `MODE_MATCH_RADIUS`. */
+  routeTypes?: number[]
 }
 
 export interface StopDepartures {
@@ -154,34 +158,67 @@ function computeDelay(actual?: string, scheduled?: string): number | undefined {
 }
 
 /**
+ * How far out to look for a stop whose mode matches the caller's, when
+ * `routeTypes` is given. A ferry landing's GTFS point sits at the end of the
+ * pier and an aerial tramway's out under the cables, so the stop that actually
+ * belongs to the place is routinely further away than an unrelated bus stop on
+ * the street outside. Mode-matched stops get this reach; everything else stays
+ * within the caller's radius.
+ */
+const MODE_MATCH_RADIUS = 400
+
+/**
  * Find nearby GTFS stops using PostGIS spatial index.
+ *
+ * When `routeTypes` is supplied, stops served by a route of one of those types
+ * sort ahead of merely closer ones — the first stop returned names the station
+ * and supplies its route list, so a ferry terminal must not be identified by
+ * the bus stop across the street. The preference is a ranking, never a filter:
+ * feeds mistype their routes (the Roosevelt Island tram is published as a bus),
+ * so a nearby stop of any mode is still better than nothing.
  */
 async function findNearbyStops(
   lat: number,
   lng: number,
   radius: number,
   limit: number,
+  routeTypes?: number[],
 ): Promise<Array<{ feedId: string; stopId: string; name: string; code?: string; lat: number; lng: number; distance: number }>> {
+  const modeMatch = routeTypes?.length
+    ? sql`EXISTS (
+        SELECT 1 FROM gtfs_stop_routes sr
+        JOIN gtfs_routes r ON r.feed_id = sr.feed_id AND r.route_id = sr.route_id
+        WHERE sr.feed_id = s.feed_id AND sr.stop_id = s.stop_id
+          AND r.route_type IN (${sql.join(routeTypes.map((t) => sql`${t}`), sql`, `)})
+      )`
+    : sql`FALSE`
+  const searchRadius = routeTypes?.length ? Math.max(radius, MODE_MATCH_RADIUS) : radius
+
   const result = await db.execute(sql`
-    SELECT
-      stop_id,
-      feed_id,
-      stop_name,
-      stop_code,
-      stop_lat,
-      stop_lon,
-      ST_Distance(
-        geom::geography,
-        ST_SetSRID(ST_MakePoint(${lng}, ${lat}), 4326)::geography
-      ) AS distance
-    FROM gtfs_stops
-    WHERE ST_DWithin(
-      geom::geography,
-      ST_SetSRID(ST_MakePoint(${lng}, ${lat}), 4326)::geography,
-      ${radius}
+    WITH candidates AS (
+      SELECT
+        s.stop_id,
+        s.feed_id,
+        s.stop_name,
+        s.stop_code,
+        s.stop_lat,
+        s.stop_lon,
+        ST_Distance(
+          s.geom::geography,
+          ST_SetSRID(ST_MakePoint(${lng}, ${lat}), 4326)::geography
+        ) AS distance,
+        ${modeMatch} AS mode_match
+      FROM gtfs_stops s
+      WHERE ST_DWithin(
+        s.geom::geography,
+        ST_SetSRID(ST_MakePoint(${lng}, ${lat}), 4326)::geography,
+        ${searchRadius}
+      )
+      AND (s.location_type = 0 OR s.location_type IS NULL)
     )
-    AND (location_type = 0 OR location_type IS NULL)
-    ORDER BY distance
+    SELECT * FROM candidates
+    WHERE mode_match OR distance <= ${radius}
+    ORDER BY mode_match DESC, distance
     LIMIT ${limit}
   `)
 
@@ -334,6 +371,7 @@ export async function getDepartures(
     stopId,
     routeShortNames,
     directionId,
+    routeTypes,
   } = request
 
   const routeFilter =
@@ -348,7 +386,7 @@ export async function getDepartures(
     // Direct stop query — skip spatial search
     stops = [{ feedId, stopId, name: '', lat, lng }]
   } else {
-    stops = await findNearbyStops(lat, lng, radius, 5)
+    stops = await findNearbyStops(lat, lng, radius, 5, routeTypes)
     if (stops.length === 0) return []
   }
 
