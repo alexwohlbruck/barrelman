@@ -224,7 +224,7 @@ async function findNearbyStops(
   radius: number,
   limit: number,
   routeTypes?: number[],
-): Promise<Array<{ feedId: string; stopId: string; name: string; code?: string; lat: number; lng: number; distance: number }>> {
+): Promise<Array<{ feedId: string; stopId: string; name: string; code?: string; lat: number; lng: number; distance: number; parentStation?: string }>> {
   const modeMatch = routeTypes?.length
     ? sql`EXISTS (
         SELECT 1 FROM gtfs_stop_routes sr
@@ -244,6 +244,7 @@ async function findNearbyStops(
         s.stop_code,
         s.stop_lat,
         s.stop_lon,
+        s.parent_station,
         ST_Distance(
           s.geom::geography,
           ST_SetSRID(ST_MakePoint(${lng}, ${lat}), 4326)::geography
@@ -271,7 +272,51 @@ async function findNearbyStops(
     lat: row.stop_lat,
     lng: row.stop_lon,
     distance: Math.round(row.distance * 10) / 10,
+    parentStation: row.parent_station || undefined,
   }))
+}
+
+/**
+ * How close a stop has to be before it counts as *being* the place rather than
+ * standing near it. The Roosevelt Island Tramway's stop is 2.4 m from the OSM
+ * way; the bus stops that were crowding its board are 43 m and further, across
+ * the street.
+ */
+const AT_THE_PLACE_RADIUS = 25
+
+/** Same station: the GTFS parent when both declare one, otherwise the name. */
+function sameStation(
+  a: { feedId: string; name: string; parentStation?: string },
+  b: { feedId: string; name: string; parentStation?: string },
+): boolean {
+  if (a.feedId !== b.feedId) return false
+  if (a.parentStation && b.parentStation) return a.parentStation === b.parentStation
+  return a.name.trim().toLowerCase() === b.name.trim().toLowerCase()
+}
+
+/**
+ * Narrow a nearby-stop list to the station the place actually *is*.
+ *
+ * Merging every stop within the radius is right for a bare coordinate — tell me
+ * what I can catch from here — but wrong for a station, which has an identity.
+ * Opening the Roosevelt Island Tramway and reading a board of Q32, M15 and Q60
+ * buses bound for Penn Station is not a departure board for that station.
+ *
+ * Mode alone can't separate them: RIOC publishes the tramway as `route_type=3`,
+ * the same code the buses outside carry, so a mode filter keeps all of them.
+ * What does separate them is distance — 2.4 m against 43 m — so a stop sitting
+ * essentially on the place claims it, and the board narrows to that stop's
+ * station complex (its platforms, both directions). When the nearest stop is
+ * merely nearby, nothing is dropped and the old merge stands.
+ */
+function narrowToStation<T extends { feedId: string; name: string; distance?: number; parentStation?: string }>(
+  stops: T[],
+): T[] {
+  const primary = stops[0]
+  if (!primary || (primary.distance ?? Infinity) > AT_THE_PLACE_RADIUS) return stops
+
+  const complex = stops.filter((stop) => sameStation(primary, stop))
+  return complex.length ? complex : stops
 }
 
 /**
@@ -465,6 +510,9 @@ export async function getDepartures(
   } else {
     stops = await findNearbyStops(lat, lng, radius, 5, routeTypes)
     if (stops.length === 0) return []
+    // Only when the caller says this place is a transit stop of a given mode —
+    // a bare coordinate still gets everything nearby.
+    if (routeTypes?.length) stops = narrowToStation(stops)
   }
 
   // 2. Query MOTIS stoptimes for each stop in parallel

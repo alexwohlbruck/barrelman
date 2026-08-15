@@ -17,9 +17,16 @@ import { drizzle } from 'drizzle-orm/postgres-js'
 
 const statements: Array<{ sql: string; params: unknown[] }> = []
 
-const STOP_ROWS = [
+let STOP_ROWS: any[] = [
   { stop_id: 's-ferry', feed_id: '917', stop_name: 'East 34th Street', stop_lat: 40.74, stop_lon: -73.97, distance: 165.3 },
   { stop_id: 's-bus', feed_id: '7', stop_name: 'MARGINAL ST/E 34 ST', stop_lat: 40.74, stop_lon: -73.97, distance: 88.2 },
+]
+
+/** The Roosevelt Island Tramway: its stop is metres away, the buses across the street. */
+const TRAM_AND_BUSES = [
+  { stop_id: '2436149', feed_id: '3364', stop_name: 'Manhattan Tram Station', stop_lat: 40.76, stop_lon: -73.96, distance: 2.4 },
+  { stop_id: '450338', feed_id: '34', stop_name: 'E 60 ST/2 AV', stop_lat: 40.76, stop_lon: -73.96, distance: 43.7 },
+  { stop_id: '981016', feed_id: '34', stop_name: 'E 60 ST/2 AV', stop_lat: 40.76, stop_lon: -73.96, distance: 49.6 },
 ]
 
 // A postgres-js stand-in that records instead of connecting. Running a real
@@ -70,8 +77,87 @@ function stopSearch() {
   return statements.find((s) => s.sql.includes('gtfs_stops'))!
 }
 
+const DEFAULT_STOP_ROWS = [...STOP_ROWS]
+
 beforeEach(() => {
   statements.length = 0
+  STOP_ROWS = [...DEFAULT_STOP_ROWS]
+})
+
+describe('narrowing to the station', () => {
+  /** Which stops actually got queried for departures. */
+  function queriedStops(result: Awaited<ReturnType<typeof getDepartures>>) {
+    return result.map((r) => r.stop.name)
+  }
+
+  test('drops the bus stops across the street from a station', async () => {
+    // The reported bug: opening the Roosevelt Island Tramway showed a board of
+    // Q32, M15 and Q60 buses bound for Penn Station. Mode can't separate them —
+    // the tram and the buses were both published as route_type 3 — so the stop
+    // sitting essentially on the place claims the board.
+    STOP_ROWS = TRAM_AND_BUSES
+
+    const result = await getDepartures(
+      { lat: 40.76, lng: -73.96, routeTypes: [5, 6, 0] },
+      fetchFn,
+    )
+
+    expect(queriedStops(result)).toEqual(['Manhattan Tram Station'])
+  })
+
+  test('keeps every platform of the same station', async () => {
+    // Both directions of one stop, and every platform of a complex, share a
+    // name — those belong on the board together.
+    STOP_ROWS = [
+      { stop_id: 'a', feed_id: '34', stop_name: 'E 60 ST/2 AV', stop_lat: 40.76, stop_lon: -73.96, distance: 4 },
+      { stop_id: 'b', feed_id: '34', stop_name: 'E 60 ST/2 AV', stop_lat: 40.76, stop_lon: -73.96, distance: 22 },
+      { stop_id: 'c', feed_id: '7', stop_name: 'Somewhere Else', stop_lat: 40.76, stop_lon: -73.96, distance: 40 },
+    ]
+
+    const result = await getDepartures(
+      { lat: 40.76, lng: -73.96, routeTypes: [3] },
+      fetchFn,
+    )
+
+    expect(result).toHaveLength(2)
+    expect(new Set(queriedStops(result))).toEqual(new Set(['E 60 ST/2 AV']))
+  })
+
+  test('prefers the GTFS parent station over the name', async () => {
+    STOP_ROWS = [
+      { stop_id: 'n', feed_id: '5', stop_name: '34 St-Penn Station', parent_station: 'P1', stop_lat: 40.75, stop_lon: -73.99, distance: 3 },
+      { stop_id: 's', feed_id: '5', stop_name: '34 St (Penn)', parent_station: 'P1', stop_lat: 40.75, stop_lon: -73.99, distance: 12 },
+      { stop_id: 'x', feed_id: '5', stop_name: '34 St-Penn Station', parent_station: 'P2', stop_lat: 40.75, stop_lon: -73.99, distance: 15 },
+    ]
+
+    const result = await getDepartures(
+      { lat: 40.75, lng: -73.99, routeTypes: [1] },
+      fetchFn,
+    )
+
+    expect(result.map((r) => r.stop.stopId).sort()).toEqual(['n', 's'])
+  })
+
+  test('leaves the merge alone when the nearest stop is merely nearby', async () => {
+    // The E 34th St ferry terminal: its landing is 165 m out on the pier, so
+    // nothing is "at" the place and every candidate stays in play.
+    const result = await getDepartures(
+      { lat: 40.74, lng: -73.97, routeTypes: [4] },
+      fetchFn,
+    )
+
+    expect(result).toHaveLength(2)
+  })
+
+  test('never narrows a bare coordinate lookup', async () => {
+    // Right-clicking the map asks "what can I catch from here", not "what does
+    // this station run" — every nearby stop still counts.
+    STOP_ROWS = TRAM_AND_BUSES
+
+    const result = await getDepartures({ lat: 40.76, lng: -73.96 }, fetchFn)
+
+    expect(result).toHaveLength(3)
+  })
 })
 
 describe('nearby stop search', () => {
