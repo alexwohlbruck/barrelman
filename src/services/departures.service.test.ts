@@ -38,13 +38,32 @@ client.options = { parsers: {}, serializers: {} }
 
 mock.module('../db', () => ({ db: drizzle(client), connection: client }))
 
-const { getDepartures } = await import('./departures.service')
+const { getDepartures, parseServiceDate } = await import('./departures.service')
 
 /** MOTIS stand-in — the stop search is what's under test, not the timetable. */
 const fetchFn = async () =>
   new Response(JSON.stringify({ stopTimes: [], place: { name: '', stopId: '', lat: 0, lon: 0 } }), {
     headers: { 'content-type': 'application/json' },
   })
+
+/** A MOTIS stoptimes response with runs at the given absolute times. */
+function motisWith(times: string[]): typeof fetchFn {
+  return async () =>
+    new Response(
+      JSON.stringify({
+        place: { name: 'Somewhere', stopId: 'f_s', lat: 0, lon: 0, tz: 'America/New_York' },
+        stopTimes: times.map((departure, i) => ({
+          place: { name: 'Somewhere', stopId: 'f_s', lat: 0, lon: 0, departure, scheduledDeparture: departure },
+          mode: 'BUS',
+          realTime: false,
+          routeId: 'f_R1',
+          routeType: 3,
+          tripId: `20260815_08:0${i}_f_${i}`,
+        })),
+      }),
+      { headers: { 'content-type': 'application/json' } },
+    )
+}
 
 /** The stop-search statement, which is the only one that reads gtfs_stops. */
 function stopSearch() {
@@ -96,5 +115,84 @@ describe('nearby stop search', () => {
     await getDepartures({ lat: 0, lng: 0, feedId: 'f-1', stopId: 's-1', routeTypes: [4] }, fetchFn)
 
     expect(statements.some((s) => s.sql.includes('gtfs_stops'))).toBe(false)
+  })
+})
+
+describe('time window', () => {
+  const base = '2026-08-15T10:00:00Z'
+
+  test('drops runs past the window', async () => {
+    const result = await getDepartures(
+      {
+        lat: 0, lng: 0, feedId: 'f', stopId: 's', time: base, windowMinutes: 60,
+      },
+      motisWith(['2026-08-15T10:30:00Z', '2026-08-15T12:30:00Z']),
+    )
+
+    expect(result[0].departures.map((d) => d.departureTime)).toEqual(['2026-08-15T10:30:00Z'])
+  })
+
+  test('flags that more exist once anything was trimmed', async () => {
+    const result = await getDepartures(
+      { lat: 0, lng: 0, feedId: 'f', stopId: 's', time: base, windowMinutes: 60 },
+      motisWith(['2026-08-15T10:30:00Z', '2026-08-15T12:30:00Z']),
+    )
+
+    expect(result[0].hasMore).toBe(true)
+  })
+
+  test('flags more when MOTIS filled the page, even with nothing trimmed', async () => {
+    // A full page means the timetable had more to give — the board can still
+    // offer "show later" honestly.
+    const result = await getDepartures(
+      { lat: 0, lng: 0, feedId: 'f', stopId: 's', time: base, n: 2, windowMinutes: 600 },
+      motisWith(['2026-08-15T10:30:00Z', '2026-08-15T10:40:00Z']),
+    )
+
+    expect(result[0].departures).toHaveLength(2)
+    expect(result[0].hasMore).toBe(true)
+  })
+
+  test('comes back empty rather than reaching past a stop that is shut', async () => {
+    // The caller has to be able to tell "nothing for hours" from "nothing at
+    // all" — that distinction is what stops a run weeks out being rendered
+    // beside trains due in minutes.
+    const result = await getDepartures(
+      { lat: 0, lng: 0, feedId: 'f', stopId: 's', time: base, windowMinutes: 60 },
+      motisWith(['2026-08-16T06:00:00Z']),
+    )
+
+    expect(result[0].departures).toHaveLength(0)
+    expect(result[0].hasMore).toBe(true)
+  })
+
+  test('keeps everything when no window is asked for', async () => {
+    const result = await getDepartures(
+      { lat: 0, lng: 0, feedId: 'f', stopId: 's', time: base },
+      motisWith(['2026-08-15T10:30:00Z', '2026-10-03T12:30:00Z']),
+    )
+
+    expect(result[0].departures).toHaveLength(2)
+  })
+})
+
+describe('parseServiceDate', () => {
+  test('reads the service date off a MOTIS trip id', () => {
+    expect(parseServiceDate('20260815_08:21_917_2729')).toBe('2026-08-15')
+  })
+
+  test('keeps the service date of an after-midnight run', () => {
+    // 24:49 is Friday's timetable departing 01:00 Saturday. The prefix is the
+    // only place that survives into the stoptimes response.
+    expect(parseServiceDate('20260815_24:49_5_1633')).toBe('2026-08-15')
+  })
+
+  test('returns nothing for an id that carries no date', () => {
+    expect(parseServiceDate('trip-42')).toBeUndefined()
+    expect(parseServiceDate('')).toBeUndefined()
+  })
+
+  test('rejects a prefix that is not a real date', () => {
+    expect(parseServiceDate('20261915_08:21_917_1')).toBeUndefined()
   })
 })

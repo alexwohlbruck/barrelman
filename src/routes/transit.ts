@@ -324,6 +324,7 @@ export function createTransitRoutes(deps: {
                 .map((t) => Number(t.trim()))
                 .filter((t) => Number.isFinite(t))
             : undefined,
+          windowMinutes: query.windowMinutes ? Number(query.windowMinutes) : undefined,
         }
 
         return await getDepartures(request, fetchFn)
@@ -346,6 +347,7 @@ export function createTransitRoutes(deps: {
         routeShortNames: t.Optional(t.String()),
         directionId: t.Optional(t.String()),
         routeTypes: t.Optional(t.String()),
+        windowMinutes: t.Optional(t.String()),
       }),
       detail: {
         summary: 'Get upcoming departures at nearby stops',
@@ -357,7 +359,9 @@ export function createTransitRoutes(deps: {
           'Pass `routeTypes` (comma-separated GTFS route_type values) to rank ' +
           'stops of that mode first and reach further for them — a ferry ' +
           'terminal or aerial tramway station otherwise matches the bus stop ' +
-          'on the street outside.',
+          'on the street outside. Pass `windowMinutes` to bound the board by ' +
+          'time rather than by event count; each stop then reports `hasMore` ' +
+          'when runs exist past what was returned.',
         tags: ['Transit'],
       },
     })

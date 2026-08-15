@@ -40,6 +40,12 @@ export interface DepartureRequest {
    *  tags. Stops served by a matching route rank first and are searched out to
    *  a wider radius — see `MODE_MATCH_RADIUS`. */
   routeTypes?: number[]
+  /** Drop departures further out than this many minutes. MOTIS's `n` is a plain
+   *  event count with no time bound, so the horizon it buys swings wildly with
+   *  service frequency — 50 events is 45 minutes at a subway platform and five
+   *  hours at a ferry landing. Bounding by time makes the board mean the same
+   *  thing everywhere. Callers still choose `n`; this only trims. */
+  windowMinutes?: number
 }
 
 export interface StopDepartures {
@@ -54,12 +60,20 @@ export interface StopDepartures {
     distance?: number
   }
   departures: Departure[]
+  /** More runs exist past what was returned — either trimmed by `windowMinutes`
+   *  or cut off by `n`. Lets a caller offer "show more" honestly. */
+  hasMore?: boolean
   nextPageCursor?: string
   previousPageCursor?: string
 }
 
 export interface Departure {
   tripId: string
+  /** GTFS service date this run belongs to (YYYY-MM-DD), which is NOT always
+   *  the calendar date it departs on: a 01:00 train is filed under the previous
+   *  day's service, published as a 25:00 stop time. Lets a board tell "tonight's
+   *  last run" from "tomorrow's first". */
+  serviceDate?: string
   route: {
     id: string
     feedId: string
@@ -145,6 +159,33 @@ function parseMotisId(motisId: string): { feedId: string; stopId: string } {
   const sep = motisId.indexOf('_')
   if (sep === -1) return { feedId: '', stopId: motisId }
   return { feedId: motisId.slice(0, sep), stopId: motisId.slice(sep + 1) }
+}
+
+/**
+ * Pull the GTFS service date out of a MOTIS trip id.
+ *
+ * MOTIS mints ids as `{YYYYMMDD}_{HH:MM}_{feed}_{n}`, where the date is the
+ * service date and the time is the trip's scheduled start — which may exceed
+ * 24:00 for a run that crosses midnight. That prefix is the only place the
+ * service date survives into the stoptimes response, and it is what separates
+ * `20260815_24:49` (still Friday's timetable, departing 01:00 Saturday) from
+ * `20260816_00:29` (Saturday's own first runs) at the same platform minute.
+ *
+ * Returns undefined for any id that doesn't carry the prefix, so a change in
+ * MOTIS's id scheme degrades to "no service date" rather than to a wrong one.
+ */
+const MOTIS_TRIP_ID_DATE = /^(\d{4})(\d{2})(\d{2})_/
+
+export function parseServiceDate(tripId: string): string | undefined {
+  const match = MOTIS_TRIP_ID_DATE.exec(tripId)
+  if (!match) return undefined
+
+  const [, year, month, day] = match
+  // Reject a prefix that parses as a date but isn't one (e.g. month 19).
+  const asDate = new Date(`${year}-${month}-${day}T00:00:00Z`)
+  if (isNaN(asDate.getTime()) || asDate.getUTCMonth() + 1 !== Number(month)) return undefined
+
+  return `${year}-${month}-${day}`
 }
 
 /**
@@ -319,6 +360,7 @@ function transformDepartures(
 
       return {
         tripId: st.tripId,
+        serviceDate: parseServiceDate(st.tripId),
         route: {
           id: routeId,
           feedId,
@@ -344,6 +386,34 @@ function transformDepartures(
         tripDestination: st.tripTo?.name,
       }
     })
+}
+
+/**
+ * Cut a stop's departures down to the requested window.
+ *
+ * Deliberately does NOT guarantee a non-empty result: a stop closed for the
+ * night should come back empty here so the caller can tell "nothing for hours"
+ * apart from "nothing at all", and decide for itself whether to reach past the
+ * window. Losing that distinction is how a board ends up showing a single run
+ * seven weeks out next to trains due in three minutes.
+ */
+function trimToWindow(
+  departures: Departure[],
+  windowEnd: Date | null,
+  truncated: boolean,
+): { departures: Departure[]; hasMore: boolean } {
+  if (!windowEnd) return { departures, hasMore: truncated }
+
+  const cutoff = windowEnd.getTime()
+  const withinWindow = departures.filter((d) => {
+    const at = Date.parse(d.departureTime || d.scheduledDepartureTime)
+    return isNaN(at) || at <= cutoff
+  })
+
+  return {
+    departures: withinWindow,
+    hasMore: truncated || withinWindow.length < departures.length,
+  }
 }
 
 // ── Public API ──────────────────────────────────────────────────────
@@ -372,7 +442,14 @@ export async function getDepartures(
     routeShortNames,
     directionId,
     routeTypes,
+    windowMinutes,
   } = request
+
+  // The window is measured from the query time, not from wall-clock now — a
+  // caller paging forward with `time` gets a window around what it asked for.
+  const windowEnd = windowMinutes
+    ? new Date((time ? new Date(time).getTime() : Date.now()) + windowMinutes * 60_000)
+    : null
 
   const routeFilter =
     routeShortNames && routeShortNames.length
@@ -435,10 +512,16 @@ export async function getDepartures(
         timezone,
         distance: stop.distance,
       },
-      departures: transformDepartures(result.stopTimes, colorMap).filter(
-        (d) =>
-          (!routeFilter || routeFilter.has(d.route.shortName ?? '')) &&
-          (directionId == null || d.directionId === directionId),
+      ...trimToWindow(
+        transformDepartures(result.stopTimes, colorMap).filter(
+          (d) =>
+            (!routeFilter || routeFilter.has(d.route.shortName ?? '')) &&
+            (directionId == null || d.directionId === directionId),
+        ),
+        windowEnd,
+        // A full page means MOTIS had more to give, so more runs exist even
+        // when none of what came back was trimmed.
+        result.stopTimes.length >= n,
       ),
       nextPageCursor: result.nextPageCursor,
       previousPageCursor: result.previousPageCursor,
