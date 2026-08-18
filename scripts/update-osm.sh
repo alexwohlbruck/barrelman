@@ -138,6 +138,12 @@ PBF_MTIME_BEFORE=$(docker exec barrelman-db stat -c %Y "$PBF_FILE" 2>/dev/null |
 # routing graph tracks the database instead of the last full import. The hook
 # runs before the cursor advances, so a failed patch is retried rather than
 # skipped. See apply-osm-diff.sh.
+#
+# --output=flex is not redundant. osm2pgsql-replication builds its own append
+# command and passes only what it is given after `--`; without an explicit
+# output the binary falls back to the pgsql output and dies on the Lua style
+# with "Weird style line ...:1". osm2pgsql 1.9+ can recover the output from
+# osm2pgsql_properties, but the version in barrelman-db predates that table.
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] [1/8] Applying OSM diffs (database + extract)..."
 docker exec \
   -e OSM_DIFF_FILE="$DIFF_FILE" \
@@ -148,6 +154,7 @@ docker exec \
     --diff-file "$DIFF_FILE" \
     --post-processing /app/scripts/apply-osm-diff.sh \
     -- \
+    --output=flex \
     --style /app/import/osm2pgsql-flex.lua \
     --slim
 
