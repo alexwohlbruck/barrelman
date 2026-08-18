@@ -148,7 +148,7 @@ export const SCRIPTS: ScriptDef[] = [
     id: 'osm-update',
     name: 'OSM Update',
     description:
-      'Apply an incremental replication diff (fast) or re-run a full re-import, then re-run incremental post-processing and rebuild the routing graph.',
+      'Apply an incremental replication diff (fast) or re-run a full re-import, then re-run incremental post-processing. Diffs are applied to both Postgres and region.osm.pbf, and the routing graph is rebuilt only when the extract actually changed.',
     category: 'osm',
     danger: 'caution',
     longRunning: true,
@@ -170,7 +170,8 @@ export const SCRIPTS: ScriptDef[] = [
       },
     ],
     source: 'scripts/update-osm.sh',
-    notes: 'Full mode is a destructive re-import. Replication requires init-replication to have been run once.',
+    notes:
+      'Full mode is a destructive re-import. Replication requires init-replication to have been run once. Safe to run at any interval — the cursor is stored in the database — but Geofabrik only retains about four months of diffs, so a database further behind than that needs a full re-import.',
   },
   {
     id: 'osm-init-replication',
