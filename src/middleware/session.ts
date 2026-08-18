@@ -11,6 +11,9 @@
  * Two credential shapes are accepted. Browsers send the session cookie; scripts
  * and the CLI send `Authorization: Bearer <session id>`. Only the cookie form
  * is a CSRF risk — it travels automatically — so only that form is origin-checked.
+ *
+ * Both are *candidates*, not alternatives: a request may carry a bearer AND a
+ * cookie, and the bearer may not be a session at all. Each is tried in turn.
  */
 import type { Session, User } from 'lucia'
 import { lucia } from '../lib/lucia'
@@ -23,23 +26,39 @@ export interface SessionContext {
   refreshedCookie?: string
 }
 
-/** Pull a session id out of either credential form. */
-export function readSessionId(request: Request): { id: string | null; fromCookie: boolean } {
+export interface SessionCandidate {
+  id: string
+  fromCookie: boolean
+}
+
+/**
+ * Every session-id candidate on the request, bearer first.
+ *
+ * Returns a list rather than the first hit. Returning only the first let an
+ * unrecognised bearer *shadow* the cookie: the bearer was handed to Lucia, it
+ * missed, and the perfectly good session cookie on the same request was never
+ * read. A console holding a stale token in `localStorage` therefore looked
+ * signed out to every admin route, which reported "not an administrator key" at
+ * an operator who was, in fact, a signed-in administrator.
+ */
+export function readSessionIds(request: Request): SessionCandidate[] {
+  const candidates: SessionCandidate[] = []
+
   const authorization = request.headers.get('authorization')
   if (authorization?.startsWith('Bearer ')) {
     const token = authorization.slice(7).trim()
     // API keys share this header but are a different credential entirely —
     // don't hand them to Lucia, which would just miss and cost a query.
-    if (token && !token.startsWith('brm_')) return { id: token, fromCookie: false }
+    if (token && !token.startsWith('brm_')) candidates.push({ id: token, fromCookie: false })
   }
 
   const cookieHeader = request.headers.get('cookie')
   if (cookieHeader) {
     const id = lucia.readSessionCookie(cookieHeader)
-    if (id) return { id, fromCookie: true }
+    if (id) candidates.push({ id, fromCookie: true })
   }
 
-  return { id: null, fromCookie: false }
+  return candidates
 }
 
 function originAllowed(request: Request): boolean {
@@ -65,26 +84,29 @@ function originAllowed(request: Request): boolean {
  * cross-origin credential.
  */
 export async function resolveSession(request: Request): Promise<SessionContext> {
-  const { id, fromCookie } = readSessionId(request)
-  if (!id) return { user: null, session: null }
+  const stateChanging = request.method !== 'GET' && request.method !== 'HEAD'
 
-  // A cookie is presented by the browser on any request the attacker's page
-  // can provoke, so a state-changing one must prove it came from our own UI.
-  if (fromCookie && request.method !== 'GET' && request.method !== 'HEAD' && !originAllowed(request)) {
-    return { user: null, session: null }
+  for (const { id, fromCookie } of readSessionIds(request)) {
+    // A cookie is presented by the browser on any request the attacker's page
+    // can provoke, so a state-changing one must prove it came from our own UI.
+    if (fromCookie && stateChanging && !originAllowed(request)) continue
+
+    const { session, user } = await lucia.validateSession(id)
+    if (!session || !user) continue
+
+    // A suspended account keeps its rows but loses access immediately. This is
+    // a hard stop, not a miss — don't fall through to another credential for
+    // the same person.
+    if (user.suspendedAt) return { user: null, session: null }
+
+    return {
+      user,
+      session,
+      refreshedCookie: session.fresh && fromCookie ? lucia.createSessionCookie(session.id).serialize() : undefined,
+    }
   }
 
-  const { session, user } = await lucia.validateSession(id)
-  if (!session || !user) return { user: null, session: null }
-
-  // A suspended account keeps its rows but loses access immediately.
-  if (user.suspendedAt) return { user: null, session: null }
-
-  return {
-    user,
-    session,
-    refreshedCookie: session.fresh && fromCookie ? lucia.createSessionCookie(session.id).serialize() : undefined,
-  }
+  return { user: null, session: null }
 }
 
 /**
