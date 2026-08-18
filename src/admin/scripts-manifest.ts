@@ -105,6 +105,27 @@ const REGIONS_PARAM: ScriptParam = {
   description: 'Comma-separated region keys, or "global". Leave blank to use the server default.',
 }
 
+/**
+ * Re-download the extracts instead of reusing whatever `region.osm.pbf` is on
+ * disk.
+ *
+ * `import-osm.sh` keeps an existing PBF by default, which quietly turns a "full
+ * import" into a replay of the last download. If that file is older than the
+ * data in the database — or covers fewer regions than the current REGIONS —
+ * the import silently rolls the database backwards, because osm2pgsql --create
+ * drops the tables first and only then discovers it has nothing new to load.
+ */
+const FORCE_DOWNLOAD_PARAM: ScriptParam = {
+  name: 'FORCE_DOWNLOAD',
+  label: 'Re-download extracts',
+  type: 'boolean',
+  apply: 'env',
+  envVar: 'FORCE_DOWNLOAD',
+  default: true,
+  description:
+    'Fetch the region extracts again rather than reusing the PBF on disk. Turn this off only to replay an import from the exact file already downloaded.',
+}
+
 export const SCRIPTS: ScriptDef[] = [
   // ── OSM Import & Updates ──────────────────────────────────────────────
   {
@@ -118,10 +139,10 @@ export const SCRIPTS: ScriptDef[] = [
     confirm: true,
     exclusive: true,
     exec: { kind: 'process', command: 'bash', args: ['scripts/run-import.sh'] },
-    params: [REGIONS_PARAM],
+    params: [REGIONS_PARAM, FORCE_DOWNLOAD_PARAM],
     source: 'scripts/run-import.sh',
     notes:
-      'osm2pgsql --create drops and recreates the geo_places tables. Expect 20–40+ minutes for a US state; longer for larger regions.',
+      'osm2pgsql --create drops and recreates the geo_places tables. Expect 20–40+ minutes for a US state; longer for larger regions. Leave "Re-download extracts" on unless the PBF on disk is known to match the selected regions — a stale file covers fewer regions than expected and the tables are already dropped by the time that shows.',
   },
   {
     id: 'osm-update',

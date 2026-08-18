@@ -45,6 +45,7 @@ docker exec \
   -e GEOFABRIK_URL="${GEOFABRIK_URL:-https://download.geofabrik.de/north-america/us/north-carolina-latest.osm.pbf}" \
   ${OSM_EXTRACTS:+-e OSM_EXTRACTS="$OSM_EXTRACTS"} \
   ${IMPORT_PBF:+-e IMPORT_PBF="$IMPORT_PBF"} \
+  ${FORCE_DOWNLOAD:+-e FORCE_DOWNLOAD="$FORCE_DOWNLOAD"} \
   barrelman-db bash /app/scripts/import-osm.sh
 
 echo ""
