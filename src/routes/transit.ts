@@ -29,6 +29,9 @@ import {
   getRouteShape as _getRouteShape,
 } from '../services/shapes.service'
 import {
+  getServiceAlerts as _getServiceAlerts,
+} from '../services/alerts.service'
+import {
   discoverRtUrls as _discoverRtUrls,
 } from '../services/gtfs.service'
 import {
@@ -47,6 +50,7 @@ export function createTransitRoutes(deps: {
   getDepartures?: typeof _getDepartures
   getVehiclePositions?: typeof _getVehiclePositions
   getRouteShape?: typeof _getRouteShape
+  getServiceAlerts?: typeof _getServiceAlerts
   discoverRtUrls?: typeof _discoverRtUrls
   getRouteDetail?: typeof _getRouteDetail
   getVehiclesForRoute?: typeof _getVehiclesForRoute
@@ -62,6 +66,7 @@ export function createTransitRoutes(deps: {
   const getDepartures = deps.getDepartures || _getDepartures
   const getVehiclePositions = deps.getVehiclePositions || _getVehiclePositions
   const getRouteShape = deps.getRouteShape || _getRouteShape
+  const getServiceAlerts = deps.getServiceAlerts || _getServiceAlerts
   const discoverRtUrls = deps.discoverRtUrls || _discoverRtUrls
   const getRouteDetail = deps.getRouteDetail || _getRouteDetail
   const getVehiclesForRoute = deps.getVehiclesForRoute || _getVehiclesForRoute
@@ -549,6 +554,47 @@ export function createTransitRoutes(deps: {
     }, {
       query: t.Object({ feedId: t.String(), tripId: t.String() }),
       detail: { summary: 'Get real-time stop times for a specific trip', tags: ['Transit'] },
+    })
+
+    // ── GET /transit/alerts ───────────────────────────────────────────
+    .get('/alerts', async ({ query, set }) => {
+      try {
+        const ids = (value?: string) =>
+          value ? value.split(',').map(s => s.trim()).filter(Boolean) : undefined
+
+        return await getServiceAlerts({
+          feedId: query.feedId || undefined,
+          routeIds: ids(query.routeIds),
+          stopIds: ids(query.stopIds),
+          tripIds: ids(query.tripIds),
+          includeUpcoming: query.includeUpcoming === 'true',
+        }, fetchFn)
+      } catch (err) {
+        set.status = 500
+        return {
+          error: 'Failed to fetch service alerts',
+          detail: err instanceof Error ? err.message : String(err),
+        }
+      }
+    }, {
+      query: t.Object({
+        feedId: t.Optional(t.String()),
+        routeIds: t.Optional(t.String()),
+        stopIds: t.Optional(t.String()),
+        tripIds: t.Optional(t.String()),
+        includeUpcoming: t.Optional(t.String()),
+      }),
+      detail: {
+        summary: 'Get GTFS-RT service alerts',
+        description:
+          'Fetches GTFS-RT ServiceAlert entities from configured feeds and ' +
+          'returns those currently in effect, filtered to the routes, stops ' +
+          'and trips the caller names (comma-separated, feed-local ids — pass ' +
+          'feedId alongside them). Alerts informing only an agency match every ' +
+          'filter. Pass includeUpcoming=true to also get alerts whose active ' +
+          'period is still in the future. Sorted worst-first. Cached 60s per feed.',
+        tags: ['Transit'],
+      },
     })
 
     // ── GET /transit/bikes-allowed ────────────────────────────────────
