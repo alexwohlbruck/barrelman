@@ -17,8 +17,9 @@ set -euo pipefail
 #
 # Failure semantics: a non-zero exit here fails the whole update run and leaves
 # the cursor unmoved, so the chunk is re-downloaded and re-applied next time.
-# That is safe in both directions — `osm2pgsql --append` and
-# `osmium apply-changes` are both idempotent for a given diff.
+# `osmium apply-changes` is idempotent for a given diff, so the extract side of
+# that retry converges; re-appending a diff to Postgres is what pyosmium itself
+# documents as "usually safe" and is the behaviour it relies on already.
 #
 # Arguments (supplied by osm2pgsql-replication): <sequence> <timestamp>
 #
@@ -52,6 +53,14 @@ trap 'rm -f "$TMP_FILE"' EXIT
 # -f pbf is not optional: osmium infers the output format from the filename, and
 # the .patching suffix it cannot parse aborts the run. GraphHopper and MOTIS
 # both require PBF, so there is nothing else this could sensibly be.
+#
+# On a merged multi-region extract this patches only the region whose feed the
+# database follows; the others are left at their last full import, which is what
+# update-osm.sh warns about. One inaccuracy comes with that: Geofabrik clips its
+# extract diffs to the region polygon, so an object that moves out of the region
+# arrives as a delete, and if a neighbouring extract in the merge also held that
+# object it is dropped here too. It reappears on the next UPDATE_MODE=full, and
+# the alternative — leaving the routing graph months stale — is worse.
 echo "  [pbf] applying sequence ${SEQUENCE} to $(basename "$PBF_FILE")..."
 osmium apply-changes --overwrite -f pbf -o "$TMP_FILE" "$PBF_FILE" "$DIFF_FILE"
 
