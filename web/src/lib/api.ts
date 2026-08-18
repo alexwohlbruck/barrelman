@@ -1,4 +1,3 @@
-import { adminKey, clearAdminKey } from './auth'
 import type {
   ScriptsResponse,
   Job,
@@ -41,25 +40,20 @@ export class ApiError extends Error {
 }
 
 /**
- * The console authenticates with a session cookie. The bearer header is only
- * sent when signing in with an API key instead — an account key carrying the
- * `admin` scope, which is what automation uses. There is no shared admin
- * secret; `adminAuthHandler` accepts only those two credentials.
+ * The console authenticates with the session cookie alone — it never sets an
+ * Authorization header. Doing so would be worse than redundant: `resolveSession`
+ * treats a non-`brm_` bearer as a session id, so a stale token here masked the
+ * real session and every `/admin/*` call came back 403. Account API keys with
+ * the `admin` scope are for scripts, which send their own header.
  */
-function authHeaders(): Record<string, string> {
-  return adminKey.value ? { authorization: `Bearer ${adminKey.value}` } : {}
-}
-
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const res = await fetch(path, {
     ...init,
     credentials: 'same-origin',
-    headers: { ...authHeaders(), ...(init.headers || {}) },
+    headers: { ...(init.headers || {}) },
   })
   if (res.status === 401) {
-    // Only the shared key is ours to discard here; a dead session is cleared by
-    // the router guard on the next navigation.
-    clearAdminKey()
+    // A dead session is cleared by the router guard on the next navigation.
     throw new ApiError(401, 'Unauthorized — sign in again')
   }
   if (res.status === 204) return null as T
@@ -82,11 +76,6 @@ export interface ConsoleConfig {
 
 export function getConfig(): Promise<ConsoleConfig> {
   return request<ConsoleConfig>('/admin/config')
-}
-
-export async function verifyKey(key: string): Promise<boolean> {
-  const res = await fetch('/admin/verify', { headers: { authorization: `Bearer ${key}` } })
-  return res.ok
 }
 
 // ── Scripts & jobs ────────────────────────────────────────────────────
@@ -230,7 +219,6 @@ export async function streamJob(
   signal: AbortSignal,
 ): Promise<void> {
   const res = await fetch(`/admin/jobs/${id}/stream`, {
-    headers: authHeaders(),
     credentials: 'same-origin',
     signal,
   })

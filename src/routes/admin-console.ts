@@ -87,8 +87,9 @@ type ScheduleBody = {
 }
 
 /**
- * Public (unauthenticated) endpoint so the console's login screen can discover
- * whether an admin key is required before prompting for one.
+ * Public (unauthenticated) endpoint so the console's login screen can render
+ * before it has any credential — it reports the instance name and whether
+ * accounts are on at all.
  */
 export const adminConsoleConfigRoutes = new Elysia({ prefix: '/admin' }).get(
   '/config',
@@ -116,8 +117,11 @@ export const adminConsoleConfigRoutes = new Elysia({ prefix: '/admin' }).get(
 export const adminConsoleRoutes = new Elysia({ prefix: '/admin' })
   .onBeforeHandle(adminAuthHandler)
 
-  // Lightweight probe used by the login screen to validate a supplied key.
-  .get('/verify', () => ({ ok: true }), { detail: { summary: 'Verify admin key', tags: ['Admin'] } })
+  // Lightweight probe: a script can check that its admin credential still works
+  // without running anything. Reaching the handler at all means it does.
+  .get('/verify', () => ({ ok: true }), {
+    detail: { summary: 'Verify admin credentials', tags: ['Admin'] },
+  })
 
   // ── Import regions ──────────────────────────────────────────────────
   // The DB-backed region store (seeded from config/regions.json) that drives

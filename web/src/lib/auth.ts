@@ -1,65 +1,37 @@
 /**
  * Console authentication state.
  *
- * The console authenticates with a session cookie, not a bearer token, so
- * there is nothing to keep in `localStorage` and nothing for a stray script on
- * the page to read. `bootstrap()` asks the server who we are on load; every
- * other export drives one of the sign-in methods.
+ * The console authenticates with a session cookie and nothing else, so there is
+ * no credential in `localStorage` and nothing for a stray script on the page to
+ * read. `bootstrap()` asks the server who we are on load; every other export
+ * drives one of the sign-in methods.
  *
- * `adminKey` holds an account API key carrying the `admin` scope, sent as a
- * bearer. It replaces the old shared BARRELMAN_ADMIN_KEY secret: same header,
- * but the credential now has an owner, a scope, an expiry and revocation.
+ * Authorisation is the account's role: `admin` unlocks the operator views, and
+ * the server enforces the same thing on `/admin/*`. Automation authenticates
+ * separately, with an account API key carrying the `admin` scope — that is a
+ * header on a script's request, never something the browser holds.
  */
 import { computed, ref } from 'vue'
 import { startAuthentication, startRegistration, browserSupportsWebAuthn } from '@simplewebauthn/browser'
 import type { AuthConfig, PublicUser } from './types'
 
-const ADMIN_KEY_STORAGE = 'barrelman_admin_key'
+/**
+ * The console used to stash an admin bearer here. A leftover value actively
+ * broke sign-in: it was sent on every admin request and, being neither a
+ * session nor a valid key, came back 403 while a perfectly good session cookie
+ * rode along unread. Purge it on load so an old browser heals itself.
+ */
+localStorage.removeItem('barrelman_admin_key')
 
 export const user = ref<PublicUser | null>(null)
 export const authConfig = ref<AuthConfig | null>(null)
 /** False until `bootstrap()` has answered — the UI waits rather than flashing. */
 export const ready = ref(false)
 
-/** Legacy shared-secret access, for operators without an account. */
-export const adminKey = ref<string>(localStorage.getItem(ADMIN_KEY_STORAGE) || '')
-/** Whether the server requires any admin credential at all (false in open dev mode). */
-export const authRequired = ref<boolean>(true)
-
 export const isSignedIn = computed(() => user.value !== null)
-export const isAdmin = computed(
-  () => user.value?.role === 'admin' || Boolean(adminKey.value) || !authRequired.value,
-)
-export const isAuthenticated = computed(
-  () => isSignedIn.value || Boolean(adminKey.value) || !authRequired.value,
-)
-
-/**
- * Whether the caller has an actual account, as opposed to reaching the console
- * with the shared admin key or through open dev mode.
- *
- * The `/account/*` routes are session-authenticated only — the API deliberately
- * ignores bearer tokens beginning with `brm_`, which the admin key is — so
- * every account page 401s for these operators. Without this distinction the
- * router admitted them to /keys, the first request failed, and the 401 handler
- * cleared their key and bounced them back to sign-in looking like a random
- * logout.
- */
-export const hasAccount = isSignedIn
+export const isAdmin = computed(() => user.value?.role === 'admin')
 
 export const passkeysSupported = browserSupportsWebAuthn()
-
-// ── Legacy admin key ────────────────────────────────────────────────────
-
-export function setAdminKey(key: string) {
-  adminKey.value = key
-  localStorage.setItem(ADMIN_KEY_STORAGE, key)
-}
-
-export function clearAdminKey() {
-  adminKey.value = ''
-  localStorage.removeItem(ADMIN_KEY_STORAGE)
-}
 
 // ── Requests ────────────────────────────────────────────────────────────
 
@@ -105,14 +77,12 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 /** Load the sign-in configuration and the current session. Call once on boot. */
 export async function bootstrap(): Promise<void> {
   try {
-    const [config, session, consoleConfig] = await Promise.all([
+    const [config, session] = await Promise.all([
       request<AuthConfig>('/auth/config'),
       request<{ user: PublicUser } | null>('/auth/session'),
-      request<{ authRequired: boolean }>('/admin/config').catch(() => ({ authRequired: true })),
     ])
     authConfig.value = config
     user.value = session?.user ?? null
-    authRequired.value = consoleConfig.authRequired
   } catch {
     // A failed bootstrap must not wedge the console on a blank screen — fall
     // through to the sign-in page and let the user retry from there.
@@ -173,7 +143,6 @@ export async function signOut(): Promise<void> {
     await request('/auth/session', { method: 'DELETE' })
   } finally {
     user.value = null
-    clearAdminKey()
   }
 }
 
