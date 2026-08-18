@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Initialize osm2pgsql-replication state after the first full import.
-# Run this once before enabling the daily update cron job.
+# Run this once before enabling the OSM Update schedule.
 #
 # This records the current OSM replication sequence in the database so that
 # update-osm.sh knows which diffs to apply going forward.
@@ -11,14 +11,15 @@ set -euo pipefail
 #   ./scripts/init-replication.sh
 #
 # Environment variables (or set in .env):
-#   GEOFABRIK_REPLICATION_URL - Geofabrik update server for your region
-#                               Default: North Carolina updates
+#   GEOFABRIK_REPLICATION_URL - Geofabrik update server for your region.
+#                               Defaults to the first feed REGIONS resolves to.
 #                               Find yours at: https://download.geofabrik.de
 #                               e.g. https://download.geofabrik.de/europe/germany-updates/
 #   BARRELMAN_DB_PASSWORD     - DB password (default: barrelman)
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-ENV_FILE="$(dirname "$SCRIPT_DIR")/.env"
+PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+ENV_FILE="$PROJECT_DIR/.env"
 
 if [ -f "$ENV_FILE" ]; then
   set -a; source "$ENV_FILE"; set +a
@@ -26,17 +27,28 @@ fi
 
 DB_PASS="${BARRELMAN_DB_PASSWORD:-barrelman}"
 DB_URL="postgresql://barrelman:${DB_PASS}@localhost:5432/barrelman"
-REPLICATION_URL="${GEOFABRIK_REPLICATION_URL:-https://download.geofabrik.de/north-america/us/north-carolina-updates/}"
+
+# Match update-osm.sh: derive the feed from REGIONS so init and update can never
+# seed and follow different servers.
+OSM_REPLICATION="$(cd "$PROJECT_DIR" && bun run src/config/regions.ts osm-replication 2>/dev/null || true)"
+REPLICATION_COUNT="$(printf '%s\n' "$OSM_REPLICATION" | grep -c . || true)"
+REPLICATION_URL="${GEOFABRIK_REPLICATION_URL:-$(printf '%s\n' "$OSM_REPLICATION" | head -n1)}"
+REPLICATION_URL="${REPLICATION_URL:-https://download.geofabrik.de/north-america/us/north-carolina-updates/}"
 
 echo "Initializing replication state..."
 echo "  DB:     $DB_URL"
 echo "  Server: $REPLICATION_URL"
+
+if [ "${REPLICATION_COUNT:-0}" -gt 1 ]; then
+  echo ""
+  echo "  WARNING: REGIONS resolves to $REPLICATION_COUNT replication feeds, but a database"
+  echo "  can follow only one. The remaining regions will only move on UPDATE_MODE=full."
+fi
 
 docker exec barrelman-db \
   osm2pgsql-replication init \
     -d "$DB_URL" \
     --server "$REPLICATION_URL"
 
-echo "Replication initialized. You can now enable the daily update cron job."
-echo "  Run: crontab -e"
-echo "  Add: 0 3 * * * /opt/barrelman/scripts/update-osm.sh >> /var/log/barrelman-update.log 2>&1"
+echo "Replication initialized. Enable the OSM Update schedule in the console"
+echo "(Schedules → OSM Update) to apply diffs on a cadence."

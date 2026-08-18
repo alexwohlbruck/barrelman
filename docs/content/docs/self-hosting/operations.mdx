@@ -82,8 +82,35 @@ docker compose exec -d barrelman-ops bash scripts/update-osm.sh
 
 Not every extract publishes a replication feed. Set `UPDATE_MODE=full` to re-download and re-import instead. If replication state was never initialized, run `scripts/init-replication.sh` first — also in the console, under **Scripts**.
 
+### How often to run it
+
+Whenever you like. The replication cursor lives in the database
+(`osm2pgsql_properties.replication_sequence_number`), not in a clock, so each run
+applies every diff published since the last successful one. Skipping a week and
+running once lands in the same place as running daily — the job just takes
+longer. The seeded daily schedule exists to keep each run small, not because the
+script depends on the interval.
+
+Each chunk is applied to `region.osm.pbf` as well as to Postgres, so the
+GraphHopper graph is rebuilt from data that matches the database. The rebuild is
+skipped entirely when a run finds no new diffs.
+
 <Callout type="warn">
-`GEOFABRIK_REPLICATION_URL` defaults to North Carolina's updates feed regardless of `REGIONS`. Change it alongside your region, or replication applies the wrong region's diffs.
+Geofabrik keeps roughly four months of diffs. A database left behind longer than
+that can't be caught up incrementally — the next run fails on a sequence the
+server has already dropped, and recovery means `UPDATE_MODE=full` followed by
+`scripts/init-replication.sh`. Check how far behind you are with:
+
+```bash
+docker compose exec barrelman-db psql -U barrelman -d barrelman \
+  -c "SELECT value FROM osm2pgsql_properties WHERE property = 'replication_timestamp';"
+```
+</Callout>
+
+<Callout type="warn">
+A database follows one replication feed. If `REGIONS` resolves to several, only
+the first is replicated and the others stay at their last full import — the
+script warns when it detects this. Use `UPDATE_MODE=full` to refresh all of them.
 </Callout>
 
 ## Refreshing transit feeds
