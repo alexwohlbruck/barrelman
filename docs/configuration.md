@@ -68,6 +68,7 @@ signatures and cannot make them, which is why it is compiled into
 | `DATABASE_URL` | `postgresql://barrelman:barrelman@localhost:5434/barrelman` | PostGIS connection string |
 | `BARRELMAN_DB_PASSWORD` | `barrelman` | Used by compose for the DB container |
 | `BARRELMAN_BIND_ADDR` | `127.0.0.1` | Interface the unauthenticated internal services (Postgres, Martin, GraphHopper, MOTIS) publish on. `0.0.0.0` exposes them |
+| `BARRELMAN_API_BIND_ADDR` | `0.0.0.0` | Interface the API (5001) publishes on. Public by default, so a fresh server's console and sign-up are internet-reachable immediately. Set `127.0.0.1` once a reverse proxy fronts it — the proxy reaches `barrelman:5001` over the Compose network. A host firewall will not close this port: Docker DNATs published ports ahead of ufw |
 | `PORT` | `5001` | HTTP port |
 | `REGIONS` | `north-carolina,nyc-metro` | Which geographies the importers pull. `global` for everything |
 | `OLLAMA_HOST` | `http://localhost:11434` | Embeddings for semantic search (optional) |

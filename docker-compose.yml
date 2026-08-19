@@ -276,7 +276,15 @@ services:
       BARRELMAN_TOS_VERSION: ${BARRELMAN_TOS_VERSION:-}
       BARRELMAN_PRIVACY_URL: ${BARRELMAN_PRIVACY_URL:-}
     ports:
-      - "5001:5001"
+      # Defaults to every interface, unlike the sibling services above: this is
+      # the one port that is meant to serve traffic. Note what that implies on a
+      # fresh public server — the console and open sign-up answer the internet as
+      # soon as the stack is up, and the first account created becomes an admin.
+      # Set BARRELMAN_API_BIND_ADDR=127.0.0.1 once a reverse proxy fronts it (the
+      # proxy reaches this container as barrelman:5001 over the Compose network,
+      # so nothing breaks). A host firewall is NOT a substitute — Docker DNATs
+      # published ports before ufw's INPUT rules are consulted.
+      - "${BARRELMAN_API_BIND_ADDR:-0.0.0.0}:5001:5001"
     volumes:
       - barrelman-osm-data:/data
       - barrelman-gtfs-data:/gtfs-data
@@ -314,12 +322,27 @@ services:
       # BARRELMAN_DATA_DIR baked into its image.
       OSM_DATA_DIR: /data
       BARRELMAN_DATA_DIR: /data
+      # Refresh knobs for scripts/update-osm.sh and scripts/init-replication.sh.
+      # Those scripts `source ../.env`, which works when they are run from a host
+      # checkout but never here — .env is in .dockerignore, so /app/.env does not
+      # exist in this image. Without these three lines, setting them in .env is a
+      # silent no-op and both scripts fall back to their built-in defaults.
+      UPDATE_MODE: ${UPDATE_MODE:-}
+      GEOFABRIK_URL: ${GEOFABRIK_URL:-}
+      GEOFABRIK_REPLICATION_URL: ${GEOFABRIK_REPLICATION_URL:-}
       # scripts/*.sh docker-exec into these sibling containers by name.
       DB_CONTAINER: barrelman-db
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - barrelman-osm-data:/data
       - barrelman-gtfs-data:/gtfs-data
+      # scripts/generate-pelias-config.ts rewrites pelias/pelias.json, and the
+      # Pelias services bind-mount that file from the host. pelias/ is in
+      # .dockerignore (it holds tens of GB of index under pelias/data), so
+      # without this mount the script dies on ENOENT /app/pelias/pelias.json —
+      # and a write inside the container could never reach the file the geocoder
+      # actually reads.
+      - ./pelias:/app/pelias
       # Read-WRITE, unlike the API's mount of the same directory: this is the
       # container that downloads the feeds. With :ro every download failed with
       # "EROFS: read-only file system" and the run ended "Processed 0 feeds".
