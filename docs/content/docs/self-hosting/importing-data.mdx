@@ -66,6 +66,24 @@ POST the **inner** object — not the `{"region":…}` envelope — to
 `$API/admin/regions` to save it. A `201` with the saved region back is success;
 `409` means that key already exists.
 
+Unwrapping it needs a JSON tool. `jq` is not installed on a stock server and is
+not otherwise required by this guide, so either install it or use the `python3`
+that most distributions already ship:
+
+```bash
+curl -s -X POST -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' \
+  -d '{"id":"us/colorado"}' $API/admin/boundaries/resolve > resolve.json
+
+# with jq
+jq '.region' resolve.json > region.json
+# or without
+python3 -c "import json;json.dump(json.load(open('resolve.json'))['region'],open('region.json','w'))"
+
+curl -s -o /dev/null -w '%{http_code}\n' \
+  -X POST -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' \
+  --data-binary @region.json $API/admin/regions
+```
+
 Confirm with:
 
 ```bash
