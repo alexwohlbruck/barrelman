@@ -1,6 +1,6 @@
 ---
 title: Operations
-description: Upgrading, refreshing OSM and transit data, backups, and rotating secrets.
+description: Upgrading, scheduling refreshes, refreshing OSM and transit data, backups, and rotating secrets.
 ---
 
 ## Upgrading
@@ -39,9 +39,42 @@ Watchtower can automate the pull, with two caveats.
 
 Note that the original [containrrr/watchtower](https://github.com/containrrr/watchtower) has been unmaintained since November 2023, and its Docker client negotiates API version 1.25 — which Docker 29 refuses (`client version 1.25 is too old`), leaving the container dead on arrival. Use the maintained community fork, [nicholas-fedor/watchtower](https://github.com/nicholas-fedor/watchtower) (`nickfedor/watchtower`), which takes the same flags and the same `com.centurylinklabs.watchtower.*` labels.
 
+## Keeping data fresh automatically
+
+OSM, GTFS and GBFS all go stale, and the console can refresh them on a schedule
+so you don't have to remember to. Open **Schedules**: a fresh install is seeded
+with three entries, all **disabled** until you turn them on.
+
+| Schedule | Default | What it does |
+|---|---|---|
+| OSM Update | Daily 03:00 | Applies the Geofabrik replication diff and re-runs incremental post-processing |
+| Check for GTFS Updates | Daily 04:00 | Compares each feed's version against Transitland and re-imports only the regions that changed, then rebuilds MOTIS |
+| Import GBFS Systems | Sunday 05:30 | Re-fetches the GBFS systems catalog |
+
+Any script under **Scripts** can be scheduled, with the same parameters you'd
+fill in to run it by hand. Each entry takes a standard five-field cron
+expression and its own IANA timezone, so `0 3 * * *` means 3am where you set it,
+across daylight-saving changes.
+
+A schedule fires by enqueueing an ordinary job. That's the point: a scheduled
+import appears under **Jobs** marked *Scheduled*, with the same live log,
+progress bar and cancel button as one you started yourself — not a line in a
+logfile on the host. The **Schedules** page shows each entry's next and last
+run, linking straight to that job.
+
+If a run is still going when the next one is due, the new one is skipped rather
+than queued behind it, and the page says so. So a long OSM import can't stack up
+copies of itself.
+
+<Callout type="info">
+Prefer a host crontab? It still works — but a script driven by `docker exec`
+bypasses the job store, so nothing about that run appears in the console.
+</Callout>
+
 ## Refreshing OSM data
 
-Incremental, via Geofabrik's replication feed:
+To run one now instead of waiting for a schedule, use **Scripts** in the
+console, or the command line. Incremental, via Geofabrik's replication feed:
 
 ```bash
 docker compose exec -d barrelman-ops bash scripts/update-osm.sh
@@ -49,8 +82,35 @@ docker compose exec -d barrelman-ops bash scripts/update-osm.sh
 
 Not every extract publishes a replication feed. Set `UPDATE_MODE=full` to re-download and re-import instead. If replication state was never initialized, run `scripts/init-replication.sh` first — also in the console, under **Scripts**.
 
+### How often to run it
+
+Whenever you like. The replication cursor lives in the database
+(`osm2pgsql_properties.replication_sequence_number`), not in a clock, so each run
+applies every diff published since the last successful one. Skipping a week and
+running once lands in the same place as running daily — the job just takes
+longer. The seeded daily schedule exists to keep each run small, not because the
+script depends on the interval.
+
+Each chunk is applied to `region.osm.pbf` as well as to Postgres, so the
+GraphHopper graph is rebuilt from data that matches the database. The rebuild is
+skipped entirely when a run finds no new diffs.
+
 <Callout type="warn">
-`GEOFABRIK_REPLICATION_URL` defaults to North Carolina's updates feed regardless of `REGIONS`. Change it alongside your region, or replication applies the wrong region's diffs.
+Geofabrik keeps roughly four months of diffs. A database left behind longer than
+that can't be caught up incrementally — the next run fails on a sequence the
+server has already dropped, and recovery means `UPDATE_MODE=full` followed by
+`scripts/init-replication.sh`. Check how far behind you are with:
+
+```bash
+docker compose exec barrelman-db psql -U barrelman -d barrelman \
+  -c "SELECT value FROM osm2pgsql_properties WHERE property = 'replication_timestamp';"
+```
+</Callout>
+
+<Callout type="warn">
+A database follows one replication feed. If `REGIONS` resolves to several, only
+the first is replicated and the others stay at their last full import — the
+script warns when it detects this. Use `UPDATE_MODE=full` to refresh all of them.
 </Callout>
 
 ## Refreshing transit feeds
@@ -61,6 +121,12 @@ docker compose exec -d barrelman-ops bash scripts/rebuild-motis.sh
 ```
 
 The second command is required every time. `motis server` never re-imports on its own.
+
+`scripts/gtfs-watch.sh` wraps both, and only does the expensive part when a feed
+has actually changed upstream — it compares each imported feed's version sha
+against Transitland's. That's what the seeded GTFS schedule runs. Its first run
+only records a baseline; it can't detect drift until it has a prior sha to
+compare against.
 
 ## Backups
 

@@ -20,9 +20,21 @@ curl -fsSL -o pelias/pelias.json $BASE/pelias/pelias.json
 
 ## Health and startup
 
+**Start here: `/health` says which part is broken**
+
+Before diagnosing a specific endpoint, read the `endpoints` array — it reports every API group's status and names the service responsible for each failure, which usually turns "some requests are failing" into a single container to look at.
+
+```bash
+curl -s localhost:5001/health | jq '.endpoints[] | select(.status != "ok")'
+```
+
+`dependencies` shows the probe behind each verdict, with latency. `checkedAt` is when those probes ran — results are cached for a few seconds, so a service you just restarted may take one more call to show as recovered.
+
 **`/health` returns `"status":"degraded"`**
 
-Not an error. `degraded` means the database is up but MOTIS is not, which is the expected state until you run the transit import. `"status":"error"` is the one that means something is actually broken.
+Not an error. `degraded` means the database is up but a service some endpoint group needs — usually MOTIS — is not, which is the expected state until you run the transit import. `"status":"error"` is the one that means something is actually broken.
+
+Pelias is deliberately excluded from this: it runs under a compose profile, so an instance that never starts it is not degraded. `/search` and `/geocode` still report themselves as `degraded` individually, because without it they genuinely return no street addresses.
 
 **`/health` returns `"database":"disconnected"`**
 

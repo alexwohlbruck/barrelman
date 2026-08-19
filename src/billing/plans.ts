@@ -352,24 +352,38 @@ export function purchasablePlans(): Plan[] {
 }
 
 /**
+ * Path prefixes owned by each billing group, in match order.
+ *
+ * Data rather than a chain of ifs because two things need it: `groupForPath`
+ * below, which decides what a request costs, and `/health`, which reports which
+ * paths each group serves. Deriving both from one table means a new endpoint
+ * can't end up metered as one group and reported as another.
+ *
+ * ORDER MATTERS where prefixes overlap. `/transit/...` must be tested before
+ * any broader rule that would also match it — this array is scanned top to
+ * bottom and the first prefix hit wins, exactly as the if-chain did.
+ */
+export const GROUP_PREFIXES: ReadonlyArray<{ group: EndpointGroup; prefixes: readonly string[] }> = [
+  { group: 'tiles', prefixes: ['/tiles'] },
+  { group: 'search', prefixes: ['/search', '/autocomplete'] },
+  { group: 'geocode', prefixes: ['/geocode'] },
+  { group: 'isochrone', prefixes: ['/isochrone'] },
+  { group: 'transit', prefixes: ['/transit', '/gbfs'] },
+  { group: 'routing', prefixes: ['/route', '/graphhopper', '/directions'] },
+  { group: 'spatial', prefixes: ['/contains', '/children'] },
+  { group: 'places', prefixes: ['/place', '/brands'] },
+]
+
+/**
  * The billing group a path belongs to, or null when the path is not metered
  * (health checks, the console, auth, docs).
- *
- * Ordering matters where prefixes overlap — `/transit/...` must be tested
- * before any broader rule that might also match it.
  */
 export function groupForPath(pathname: string): EndpointGroup | null {
   const path = pathname.toLowerCase()
 
-  if (path.startsWith('/tiles')) return 'tiles'
-  if (path.startsWith('/search') || path.startsWith('/autocomplete')) return 'search'
-  if (path.startsWith('/geocode')) return 'geocode'
-  if (path.startsWith('/isochrone')) return 'isochrone'
-  if (path.startsWith('/transit') || path.startsWith('/gbfs')) return 'transit'
-  if (path.startsWith('/route') || path.startsWith('/graphhopper') || path.startsWith('/directions')) return 'routing'
-  if (path.startsWith('/contains') || path.startsWith('/children')) return 'spatial'
-  if (path.startsWith('/place') || path.startsWith('/brands')) return 'places'
-
+  for (const { group, prefixes } of GROUP_PREFIXES) {
+    if (prefixes.some((prefix) => path.startsWith(prefix))) return group
+  }
   return null
 }
 

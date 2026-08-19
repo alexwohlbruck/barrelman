@@ -4,11 +4,11 @@ import { useRoute } from 'vue-router'
 import AppSidebar from '@/components/AppSidebar.vue'
 import Toaster from '@/components/ui/Toaster.vue'
 import Spinner from '@/components/ui/Spinner.vue'
-import { isAdmin, isAuthenticated, ready } from '@/lib/auth'
+import { isAdmin, isSignedIn, ready } from '@/lib/auth'
 import { startJobPolling, stopJobPolling } from '@/lib/store'
 
 const route = useRoute()
-const showShell = computed(() => ready.value && route.meta.public !== true && isAuthenticated.value)
+const showShell = computed(() => ready.value && route.meta.public !== true && isSignedIn.value)
 
 /**
  * The job list is an operator concern and its endpoint is admin-gated, so

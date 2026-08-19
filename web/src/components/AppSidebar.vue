@@ -3,6 +3,7 @@ import { computed } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import {
   Activity,
+  CalendarClock,
   Compass,
   CreditCard,
   Database,
@@ -17,7 +18,7 @@ import {
   Users,
 } from 'lucide-vue-next'
 import { jobStats } from '@/lib/store'
-import { adminKey, authRequired, hasAccount, isAdmin, signOut, user } from '@/lib/auth'
+import { isAdmin, signOut, user } from '@/lib/auth'
 import Badge from '@/components/ui/Badge.vue'
 
 const route = useRoute()
@@ -37,16 +38,14 @@ const adminNav = [
   { to: '/accounts', label: 'Accounts', icon: Users },
   { to: '/regions', label: 'Regions', icon: MapPin },
   { to: '/scripts', label: 'Scripts', icon: TerminalSquare },
+  { to: '/schedules', label: 'Schedules', icon: CalendarClock },
   { to: '/jobs', label: 'Jobs', icon: ListChecks, badge: 'jobs' as const },
   { to: '/data', label: 'Data', icon: Database },
   { to: '/api', label: 'API Tester', icon: FlaskConical },
 ]
 
 const showAdmin = computed(() => isAdmin.value)
-// The account pages call session-authenticated endpoints, so hide them from an
-// operator who arrived with the shared admin key — every one would 401.
-const showAccount = computed(() => hasAccount.value)
-const identity = computed(() => user.value?.name || user.value?.email || (adminKey.value ? 'Admin key' : 'Open mode'))
+const identity = computed(() => user.value?.name || user.value?.email || '')
 
 function isActive(to: string) {
   return route.path === to || route.path.startsWith(`${to}/`)
@@ -72,7 +71,7 @@ async function logout() {
 
     <nav class="flex flex-1 flex-col gap-1 overflow-y-auto px-3 py-2">
       <RouterLink
-        v-for="item in (showAccount ? accountNav : [])"
+        v-for="item in accountNav"
         :key="item.to"
         :to="item.to"
         :class="[
@@ -87,12 +86,7 @@ async function logout() {
       </RouterLink>
 
       <template v-if="showAdmin">
-        <div
-          v-if="showAccount"
-          class="mt-4 px-3 pb-1 text-xs font-medium uppercase tracking-wider text-muted-foreground/70"
-        >
-          Operations
-        </div>
+        <div class="mt-4 px-3 pb-1 text-xs font-medium text-muted-foreground/70">Operations</div>
         <RouterLink
           v-for="item in adminNav"
           :key="item.to"
@@ -116,14 +110,12 @@ async function logout() {
     <div class="border-t border-border px-3 py-3">
       <div class="truncate px-3 pb-2 text-xs text-muted-foreground" :title="identity">{{ identity }}</div>
       <button
-        v-if="authRequired || user"
         class="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
         @click="logout"
       >
         <LogOut class="size-4" />
         Sign out
       </button>
-      <p v-else class="px-3 py-1 text-xs text-muted-foreground">Open (dev) mode — no auth</p>
     </div>
   </aside>
 </template>

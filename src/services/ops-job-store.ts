@@ -12,7 +12,7 @@
 import { connection as sql } from '../db'
 import { randomUUID } from 'node:crypto'
 import { getScript } from '../admin/scripts-manifest'
-import { buildInvocation, type Job, type JobStatus, type LogLine, type LogStream } from './job-invocation'
+import { buildInvocation, type Job, type JobStatus, type JobTrigger, type LogLine, type LogStream } from './job-invocation'
 import { getEtaMs, recordRun, parseStage, parseCount } from './job-history.service'
 
 const MAX_JOBS = 200
@@ -33,6 +33,8 @@ export function ensureOpsJobsSchema(): Promise<void> {
           danger           text NOT NULL,
           exec_kind        text NOT NULL,
           status           text NOT NULL,
+          trigger          text NOT NULL DEFAULT 'manual',
+          schedule_id      uuid,
           params           jsonb NOT NULL DEFAULT '{}'::jsonb,
           display_command  text NOT NULL,
           exclusive        boolean NOT NULL DEFAULT false,
@@ -61,7 +63,9 @@ export function ensureOpsJobsSchema(): Promise<void> {
           ADD COLUMN IF NOT EXISTS progress       real,
           ADD COLUMN IF NOT EXISTS progress_label text,
           ADD COLUMN IF NOT EXISTS stages         jsonb,
-          ADD COLUMN IF NOT EXISTS sub_fraction   real`
+          ADD COLUMN IF NOT EXISTS sub_fraction   real,
+          ADD COLUMN IF NOT EXISTS trigger        text NOT NULL DEFAULT 'manual',
+          ADD COLUMN IF NOT EXISTS schedule_id    uuid`
       await sql`CREATE INDEX IF NOT EXISTS ops_jobs_status_idx ON ops_jobs (status, created_at)`
       await sql`
         CREATE TABLE IF NOT EXISTS ops_job_logs (
@@ -87,6 +91,8 @@ function rowToJob(r: any): Job {
     danger: r.danger,
     execKind: r.exec_kind,
     status: r.status,
+    trigger: r.trigger ?? 'manual',
+    scheduleId: r.schedule_id ?? undefined,
     params: r.params ?? {},
     displayCommand: r.display_command,
     createdAt: Number(r.created_at),
@@ -104,7 +110,11 @@ function rowToJob(r: any): Job {
 }
 
 /** Create a job row. Process jobs start `queued`; internal jobs `running` (API runs them). */
-export async function createJob(scriptId: string, params: Record<string, unknown>): Promise<Job> {
+export async function createJob(
+  scriptId: string,
+  params: Record<string, unknown>,
+  origin: { trigger?: JobTrigger; scheduleId?: string; scheduleName?: string } = {},
+): Promise<Job> {
   const script = getScript(scriptId)
   if (!script) throw new Error(`Unknown script: ${scriptId}`)
   const exclusive = script.exclusive ?? script.longRunning
@@ -113,17 +123,24 @@ export async function createJob(scriptId: string, params: Record<string, unknown
   const id = randomUUID()
   const status: JobStatus = inv.kind === 'internal' ? 'running' : 'queued'
   const advisoryKey = exclusive ? (await import('./job-invocation')).advisoryKeyFor(scriptId) : null
+  const trigger: JobTrigger = origin.trigger ?? 'manual'
 
   const [row] = await sql`
     INSERT INTO ops_jobs (id, script_id, script_name, category, danger, exec_kind, status,
-                          params, display_command, exclusive, advisory_key, created_at,
-                          started_at, log_count, cancel_requested, eta_ms)
+                          trigger, schedule_id, params, display_command, exclusive, advisory_key,
+                          created_at, started_at, log_count, cancel_requested, eta_ms)
     VALUES (${id}, ${script.id}, ${script.name}, ${script.category}, ${script.danger}, ${inv.kind},
-            ${status}, ${JSON.stringify(params)}::jsonb, ${inv.display}, ${exclusive}, ${advisoryKey},
+            ${status}, ${trigger}, ${origin.scheduleId ?? null},
+            ${JSON.stringify(params)}::jsonb, ${inv.display}, ${exclusive}, ${advisoryKey},
             ${now}, ${status === 'running' ? now : null}, 0, false, ${getEtaMs(script.id) ?? null})
     RETURNING *`
   await appendLogs(id, [
     { stream: 'system', text: `▶ ${script.name}` },
+    // Provenance in the log itself, so a scheduled run is self-explanatory in
+    // the job detail view without cross-referencing the schedules table.
+    ...(trigger === 'schedule'
+      ? [{ stream: 'system' as const, text: `⏱ Started by schedule "${origin.scheduleName ?? script.name}"` }]
+      : []),
     { stream: 'system', text: `$ ${inv.display}` },
   ])
   await pruneHistory()

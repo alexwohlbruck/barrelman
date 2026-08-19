@@ -57,6 +57,9 @@ export interface LogLine {
   text: string
 }
 
+/** What put a job in the queue — an operator's click, or a schedule firing. */
+export type JobTrigger = 'manual' | 'schedule'
+
 export interface Job {
   id: string
   scriptId: string
@@ -64,6 +67,9 @@ export interface Job {
   category: ScriptCategory
   danger: DangerLevel
   status: JobStatus
+  trigger: JobTrigger
+  /** Set when trigger is 'schedule' — the schedule that enqueued this run. */
+  scheduleId?: string
   params: Record<string, unknown>
   displayCommand: string
   startedAt: number
@@ -87,6 +93,41 @@ export interface JobStats {
   running: number
   succeeded: number
   failed: number
+}
+
+/** A cron entry that enqueues a manifest script. Mirrors ops_schedules. */
+export interface Schedule {
+  id: string
+  scriptId: string
+  scriptName: string
+  cron: string
+  timezone: string
+  params: Record<string, unknown>
+  enabled: boolean
+  createdAt: number
+  updatedAt: number
+  nextRunAt?: number
+  lastRunAt?: number
+  lastJobId?: string
+  /** Why the last fire produced no job (e.g. the previous run was still going). */
+  lastSkipReason?: string
+  /** Server-rendered plain-English summary of `cron`. */
+  description?: string
+}
+
+export interface SchedulePayload {
+  scriptId: string
+  cron: string
+  timezone?: string
+  params?: Record<string, unknown>
+  enabled?: boolean
+}
+
+export interface CronPreview {
+  description: string
+  timezone: string
+  /** Next few fire times, ISO-8601. */
+  upcoming: string[]
 }
 
 export interface DataMetrics {

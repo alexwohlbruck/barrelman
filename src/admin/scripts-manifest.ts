@@ -105,6 +105,27 @@ const REGIONS_PARAM: ScriptParam = {
   description: 'Comma-separated region keys, or "global". Leave blank to use the server default.',
 }
 
+/**
+ * Re-download the extracts instead of reusing whatever `region.osm.pbf` is on
+ * disk.
+ *
+ * `import-osm.sh` keeps an existing PBF by default, which quietly turns a "full
+ * import" into a replay of the last download. If that file is older than the
+ * data in the database — or covers fewer regions than the current REGIONS —
+ * the import silently rolls the database backwards, because osm2pgsql --create
+ * drops the tables first and only then discovers it has nothing new to load.
+ */
+const FORCE_DOWNLOAD_PARAM: ScriptParam = {
+  name: 'FORCE_DOWNLOAD',
+  label: 'Re-download extracts',
+  type: 'boolean',
+  apply: 'env',
+  envVar: 'FORCE_DOWNLOAD',
+  default: true,
+  description:
+    'Fetch the region extracts again rather than reusing the PBF on disk. Turn this off only to replay an import from the exact file already downloaded.',
+}
+
 export const SCRIPTS: ScriptDef[] = [
   // ── OSM Import & Updates ──────────────────────────────────────────────
   {
@@ -118,16 +139,16 @@ export const SCRIPTS: ScriptDef[] = [
     confirm: true,
     exclusive: true,
     exec: { kind: 'process', command: 'bash', args: ['scripts/run-import.sh'] },
-    params: [REGIONS_PARAM],
+    params: [REGIONS_PARAM, FORCE_DOWNLOAD_PARAM],
     source: 'scripts/run-import.sh',
     notes:
-      'osm2pgsql --create drops and recreates the geo_places tables. Expect 20–40+ minutes for a US state; longer for larger regions.',
+      'osm2pgsql --create drops and recreates the geo_places tables. Expect 20–40+ minutes for a US state; longer for larger regions. Leave "Re-download extracts" on unless the PBF on disk is known to match the selected regions — a stale file covers fewer regions than expected and the tables are already dropped by the time that shows.',
   },
   {
     id: 'osm-update',
     name: 'OSM Update',
     description:
-      'Apply an incremental replication diff (fast) or re-run a full re-import, then re-run incremental post-processing and rebuild the routing graph.',
+      'Apply an incremental replication diff (fast) or re-run a full re-import, then re-run incremental post-processing. Diffs are applied to both Postgres and region.osm.pbf, and the routing graph is rebuilt only when the extract actually changed.',
     category: 'osm',
     danger: 'caution',
     longRunning: true,
@@ -149,7 +170,8 @@ export const SCRIPTS: ScriptDef[] = [
       },
     ],
     source: 'scripts/update-osm.sh',
-    notes: 'Full mode is a destructive re-import. Replication requires init-replication to have been run once.',
+    notes:
+      'Full mode is a destructive re-import. Replication requires init-replication to have been run once. Safe to run at any interval — the cursor is stored in the database — but Geofabrik only retains about four months of diffs, so a database further behind than that needs a full re-import.',
   },
   {
     id: 'osm-init-replication',
@@ -211,6 +233,33 @@ export const SCRIPTS: ScriptDef[] = [
       },
     ],
     source: 'scripts/download-gtfs.sh',
+  },
+  {
+    id: 'gtfs-watch',
+    name: 'Check for GTFS Updates',
+    description:
+      "Compare each imported feed's stored version sha against Transitland's current one, re-import only the regions that changed, then rebuild the MOTIS dataset so the new schedules go live. Exits early and cheaply when nothing has changed.",
+    category: 'transit',
+    danger: 'caution',
+    longRunning: true,
+    confirm: false,
+    exclusive: true,
+    exec: { kind: 'process', command: 'bash', args: ['scripts/gtfs-watch.sh'] },
+    params: [
+      {
+        name: 'TRANSITLAND_API_KEY',
+        label: 'Transitland API key',
+        type: 'string',
+        apply: 'env',
+        envVar: 'TRANSITLAND_API_KEY',
+        secret: true,
+        placeholder: 'tlk_…  (blank = use server env)',
+        description: 'Required unless already set in the server environment.',
+      },
+    ],
+    source: 'scripts/gtfs-watch.sh',
+    notes:
+      'The intended nightly job — see the Schedules page. The very first run only records a baseline of current feed versions; it cannot detect drift until it has a prior sha to compare against.',
   },
   {
     id: 'gtfs-import',

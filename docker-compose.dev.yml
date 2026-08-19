@@ -100,3 +100,22 @@ services:
       - /site/.nuxt
     ports:
       - "5200:5200"
+
+  # The ops worker runs the import/maintenance scripts, so in dev it needs the
+  # same live source the API gets. Without these mounts its /app is whatever the
+  # image was last built from, and an edit to a script, a post-import SQL file or
+  # the region resolver appears to take effect (it does, in the API container)
+  # while the job that actually runs it uses the stale baked copy. That failure
+  # is silent and expensive: it re-imported a five-month-old extract, then later
+  # resolved a blank REGIONS to the whole planet and started an 80 GB download.
+  # node_modules stays from the image — the host's are built for a different
+  # platform.
+  barrelman-ops:
+    volumes:
+      - ./src:/app/src
+      - ./import:/app/import
+      - ./scripts:/app/scripts
+      - ./config:/app/config
+      - /var/run/docker.sock:/var/run/docker.sock
+      - barrelman-osm-data:/data
+      - /app/node_modules

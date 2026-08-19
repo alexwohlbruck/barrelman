@@ -1,4 +1,3 @@
-import { adminKey, clearAdminKey } from './auth'
 import type {
   ScriptsResponse,
   Job,
@@ -28,6 +27,9 @@ import type {
   SuspensionKind,
   TermsState,
   ThrottleStats,
+  Schedule,
+  SchedulePayload,
+  CronPreview,
 } from './types'
 
 export class ApiError extends Error {
@@ -38,25 +40,20 @@ export class ApiError extends Error {
 }
 
 /**
- * The console authenticates with a session cookie. The bearer header is only
- * sent when signing in with an API key instead — an account key carrying the
- * `admin` scope, which is what automation uses. There is no shared admin
- * secret; `adminAuthHandler` accepts only those two credentials.
+ * The console authenticates with the session cookie alone — it never sets an
+ * Authorization header. Doing so would be worse than redundant: `resolveSession`
+ * treats a non-`brm_` bearer as a session id, so a stale token here masked the
+ * real session and every `/admin/*` call came back 403. Account API keys with
+ * the `admin` scope are for scripts, which send their own header.
  */
-function authHeaders(): Record<string, string> {
-  return adminKey.value ? { authorization: `Bearer ${adminKey.value}` } : {}
-}
-
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const res = await fetch(path, {
     ...init,
     credentials: 'same-origin',
-    headers: { ...authHeaders(), ...(init.headers || {}) },
+    headers: { ...(init.headers || {}) },
   })
   if (res.status === 401) {
-    // Only the shared key is ours to discard here; a dead session is cleared by
-    // the router guard on the next navigation.
-    clearAdminKey()
+    // A dead session is cleared by the router guard on the next navigation.
     throw new ApiError(401, 'Unauthorized — sign in again')
   }
   if (res.status === 204) return null as T
@@ -79,11 +76,6 @@ export interface ConsoleConfig {
 
 export function getConfig(): Promise<ConsoleConfig> {
   return request<ConsoleConfig>('/admin/config')
-}
-
-export async function verifyKey(key: string): Promise<boolean> {
-  const res = await fetch('/admin/verify', { headers: { authorization: `Bearer ${key}` } })
-  return res.ok
 }
 
 // ── Scripts & jobs ────────────────────────────────────────────────────
@@ -109,6 +101,40 @@ export function getJob(id: string): Promise<{ job: Job; logs: LogLine[] }> {
 
 export function cancelJob(id: string): Promise<{ ok: boolean; message: string }> {
   return request<{ ok: boolean; message: string }>(`/admin/jobs/${id}/cancel`, { method: 'POST' })
+}
+
+// ── Schedules ─────────────────────────────────────────────────────────
+const json = (body: unknown): RequestInit => ({
+  headers: { 'content-type': 'application/json' },
+  body: JSON.stringify(body),
+})
+
+export function getSchedules(): Promise<{ schedules: Schedule[]; defaultTimezone: string }> {
+  return request<{ schedules: Schedule[]; defaultTimezone: string }>('/admin/schedules')
+}
+
+export function createSchedule(payload: SchedulePayload): Promise<{ schedule: Schedule }> {
+  return request<{ schedule: Schedule }>('/admin/schedules', { method: 'POST', ...json(payload) })
+}
+
+export function updateSchedule(id: string, payload: SchedulePayload): Promise<{ schedule: Schedule }> {
+  return request<{ schedule: Schedule }>(`/admin/schedules/${id}`, { method: 'PUT', ...json(payload) })
+}
+
+export function setScheduleEnabled(id: string, enabled: boolean): Promise<{ schedule: Schedule }> {
+  return request<{ schedule: Schedule }>(`/admin/schedules/${id}/enabled`, { method: 'POST', ...json({ enabled }) })
+}
+
+export function deleteSchedule(id: string): Promise<{ ok: boolean }> {
+  return request<{ ok: boolean }>(`/admin/schedules/${id}`, { method: 'DELETE' })
+}
+
+export function runSchedule(id: string): Promise<{ job: Job }> {
+  return request<{ job: Job }>(`/admin/schedules/${id}/run`, { method: 'POST' })
+}
+
+export function previewCron(cron: string, timezone?: string): Promise<CronPreview> {
+  return request<CronPreview>('/admin/schedules/preview', { method: 'POST', ...json({ cron, timezone }) })
 }
 
 // ── Import regions ────────────────────────────────────────────────────
@@ -193,7 +219,6 @@ export async function streamJob(
   signal: AbortSignal,
 ): Promise<void> {
   const res = await fetch(`/admin/jobs/${id}/stream`, {
-    headers: authHeaders(),
     credentials: 'same-origin',
     signal,
   })

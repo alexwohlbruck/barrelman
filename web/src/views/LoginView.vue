@@ -4,24 +4,22 @@
  * provider. Which appear depends on what the server reports at /auth/config,
  * so an instance with no OAuth configured simply shows fewer buttons.
  *
- * The legacy shared admin key stays reachable behind a disclosure, so an
- * operator who has not created an account is never locked out of their own
- * console.
+ * There is no key-paste escape hatch. Admin access is the account's `admin`
+ * role, and the first account on a fresh instance gets it — so signing up is
+ * enough to reach the console, and an admin-scoped API key stays what it is
+ * meant to be: a credential for scripts, not something a browser stores.
  */
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ArrowLeft, ArrowRight, Compass, Fingerprint, KeyRound, Mail } from 'lucide-vue-next'
+import { ArrowLeft, ArrowRight, Compass, Fingerprint, Mail } from 'lucide-vue-next'
 import Button from '@/components/ui/Button.vue'
 import Input from '@/components/ui/Input.vue'
 import Spinner from '@/components/ui/Spinner.vue'
-import { verifyKey } from '@/lib/api'
 import {
   authConfig,
-  authRequired,
   isSignedIn,
   passkeysSupported,
   requestCode,
-  setAdminKey,
   signInWithOAuth,
   signInWithPasskey,
   verifyCode,
@@ -38,9 +36,6 @@ const error = ref('')
 const notice = ref('')
 const loading = ref(false)
 
-const showAdminKey = ref(false)
-const adminKeyInput = ref('')
-
 const providers = computed(() => authConfig.value?.methods.oauth ?? [])
 const canUsePasskeys = computed(() => passkeysSupported && authConfig.value?.methods.passkey !== false)
 // Default to the router root, which sends everyone to their own keys —
@@ -53,7 +48,6 @@ onMounted(() => {
   if (oauthError) error.value = oauthError
 
   if (isSignedIn.value) router.replace(redirect.value)
-  else if (!authRequired.value) router.replace('/')
 })
 
 function fail(err: unknown, fallback: string) {
@@ -99,25 +93,6 @@ async function usePasskey() {
     // A cancelled WebAuthn prompt throws as well; that is not worth an error.
     if (err instanceof Error && /abort|cancel|NotAllowed/i.test(err.message)) error.value = ''
     else fail(err, 'Passkey sign-in failed')
-  } finally {
-    loading.value = false
-  }
-}
-
-async function submitAdminKey() {
-  if (!adminKeyInput.value.trim() || loading.value) return
-  loading.value = true
-  error.value = ''
-  try {
-    const ok = await verifyKey(adminKeyInput.value.trim())
-    if (!ok) {
-      error.value = 'That admin key was not accepted.'
-      return
-    }
-    setAdminKey(adminKeyInput.value.trim())
-    router.replace(redirect.value)
-  } catch (err) {
-    fail(err, 'Verification failed')
   } finally {
     loading.value = false
   }
@@ -242,34 +217,6 @@ function back() {
           Use a different email
         </button>
       </form>
-
-      <!-- Operator escape hatch -->
-      <div class="mt-8 border-t border-border pt-4">
-        <button
-          v-if="!showAdminKey"
-          class="mx-auto flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground"
-          @click="showAdminKey = true"
-        >
-          <KeyRound class="size-3" />
-          Sign in with an API key
-        </button>
-        <form v-else class="flex flex-col gap-2" @submit.prevent="submitAdminKey">
-          <Input
-            v-model="adminKeyInput"
-            type="password"
-            placeholder="brm_live_…"
-            class="h-10"
-            :disabled="loading"
-          />
-          <Button type="submit" variant="outline" class="h-10 w-full" :disabled="loading" as="button">
-            Enter console
-          </Button>
-          <p class="text-center text-xs text-muted-foreground">
-            An API key with the <code class="font-mono">admin</code> scope, created by an
-            administrator. Intended for automation — humans should sign in above.
-          </p>
-        </form>
-      </div>
     </div>
   </div>
 </template>

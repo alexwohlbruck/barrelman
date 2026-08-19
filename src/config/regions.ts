@@ -53,6 +53,9 @@ export interface RegionsFile {
 
 export const GLOBAL_KEY = 'global'
 
+/** Regions imported when REGIONS says nothing — the standard dev pair. */
+export const DEFAULT_REGIONS = 'north-carolina,nyc-metro'
+
 /** Read the baked config/regions.json — the seed + fallback for the DB store. */
 export function loadFile(): RegionsFile {
   const here = dirname(fileURLToPath(import.meta.url))
@@ -108,12 +111,17 @@ async function loadRegions(): Promise<RegionsFile> {
  * data sources. Pure: no I/O — see {@link resolveRegions} for the loading wrapper.
  */
 export function resolveFromFile(file: RegionsFile, value = process.env.REGIONS): ResolvedRegions {
-  const raw = (value ?? 'north-carolina,nyc-metro').trim()
+  // An empty or blank REGIONS means "not specified", exactly like an unset one.
+  // It used to fall through to the global branch, so a console run that left the
+  // regions field blank resolved to the whole planet — an 80 GB download in
+  // place of two state extracts, and reported as `isGlobal: false` while doing
+  // it. Only the literal "global" selects the planet.
+  const raw = (value ?? '').trim() || DEFAULT_REGIONS
 
-  if (raw === GLOBAL_KEY || raw === '') {
+  if (raw === GLOBAL_KEY) {
     const g = file.global
     return {
-      isGlobal: raw === GLOBAL_KEY,
+      isGlobal: true,
       keys: [GLOBAL_KEY],
       regions: [g],
       osmExtracts: g.osmExtracts,

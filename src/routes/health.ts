@@ -1,15 +1,18 @@
 import Elysia from 'elysia'
 import { clientIp, identifyCaller } from '../middleware/api-auth'
-import { checkHealth as _checkHealth } from '../services/health.service'
+import { checkHealth as _checkHealth, redactHealth } from '../services/health.service'
 import { checkPenalty, penaltyKeyFor, recordRejection } from '../services/throttle.service'
 
 export function createHealthRoutes(deps = { checkHealth: _checkHealth }) {
   return new Elysia({ prefix: '/health' })
-    .get('/', deps.checkHealth, {
+    // Redacted: the per-dependency `message` is a raw upstream error and can
+    // carry internal hostnames and ports. Everything a caller needs — each
+    // endpoint group's status and why — is authored by us and survives.
+    .get('/', async () => redactHealth(await deps.checkHealth()), {
       detail: {
         summary: 'Public health check',
         description:
-          'Liveness + database connectivity. No auth required — safe for load-balancer probes.',
+          'Liveness, backing-service reachability, and the resulting status of every API endpoint group — so a caller can tell "transit is down" from "the whole instance is down". No auth required; safe for load-balancer probes. Probe results are cached for a few seconds, and `checkedAt` says how fresh they are.',
         tags: ['Health'],
       },
     })
@@ -47,13 +50,15 @@ export function createHealthRoutes(deps = { checkHealth: _checkHealth }) {
           set.status = error.status
           return error.body
         }
+        // Unredacted: a caller who authenticated gets the upstream error text,
+        // which is what makes this useful for debugging a failing integration.
         return { ...(await deps.checkHealth()), authenticated: true, caller: caller.kind, plan: caller.plan ?? null }
       },
       {
         detail: {
           summary: 'Authenticated health check',
           description:
-            'Same as /health but requires a valid credential — an account API key or the shared service key. Use it to check that a key works without spending credits.',
+            'Same as /health but requires a valid credential — an account API key or the shared service key. Use it to check that a key works without spending credits. Unlike the public route it includes the underlying error for any unreachable service.',
           tags: ['Health'],
         },
       },
