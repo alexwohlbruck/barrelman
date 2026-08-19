@@ -431,7 +431,7 @@ function buildMockFetch(handlers: {
     const urlStr = typeof url === 'string' ? url : url instanceof URL ? url.toString() : url.url
 
     // RT feed lookup — matches spec=GTFS_RT&onestop_id=...
-    if (urlStr.includes('spec=GTFS_RT') && urlStr.includes('onestop_id=')) {
+    if (urlStr.includes('spec=GTFS_RT') && urlStr.includes('&onestop_id=')) {
       const parsed = new URL(urlStr)
       const onestopId = parsed.searchParams.get('onestop_id') || ''
       const rtFeed = handlers.rtFeeds?.[onestopId]
@@ -1131,97 +1131,150 @@ describe('resolveGtfsBbox', () => {
 // ── resolveRtUrlsForFeed ────────────────────────────────────────────
 
 /**
- * Which id `gtfs_feeds.onestop_id` holds has changed over time — older rows
- * carry Transitland's numeric feed id, rows written by the current importer
- * carry the real onestop id. Discovery used to assume the numeric form and
- * looked up `?id=f-dr5r-nyctsubway`, which Transitland answers with an empty
- * list: every feed came back with no RT URLs and the run reported success.
- * These pin both shapes so that can't return silently to being a no-op.
+ * Finding an agency's realtime feeds.
+ *
+ * Deriving `{staticOnestopId}~rt` holds for some agencies and not at all for
+ * others: MTA's realtime feeds are named `f-mta~nyc~rt~subway~a~c~e`, which
+ * cannot be derived from the static `f-dr5r-nyctsubway`. Discovery found
+ * nothing for the whole of New York and reported success while doing it, so
+ * these pin the operator lookup that actually joins them — including the part
+ * that matters most for MTA, that one static feed maps to *many* RT feeds.
  */
 describe('resolveRtUrlsForFeed', () => {
-  const RT_FEED = {
-    feeds: [{
-      urls: {
-        realtime_alerts: 'https://agency.example/alerts.pb',
-        realtime_vehicle_positions: 'https://agency.example/vehicles.pb',
-      },
-    }],
-  }
+  const STATIC = { feeds: [{ onestop_id: 'f-dr5r-nyctsubway', urls: {} }] }
 
-  /** Records every URL asked for, answering each by what it queries. */
+  /** Answers each request by what it queries; records the order asked. */
   function trackingFetch(responses: Record<string, unknown>) {
     const calls: string[] = []
     const fetchFn = (async (url: string) => {
       calls.push(url)
-      const key = Object.keys(responses).find(k => url.includes(k))
-      return new Response(JSON.stringify(key ? responses[key] : { feeds: [] }), { status: 200 })
+      // Longest match wins, so '&onestop_id=f-x~rt' beats '&onestop_id=f-x'.
+      const key = Object.keys(responses)
+        .filter(k => url.includes(k))
+        .sort((a, b) => b.length - a.length)[0]
+      return new Response(JSON.stringify(key ? responses[key] : { feeds: [], operators: [] }), { status: 200 })
     }) as unknown as typeof fetch
     return { calls, fetchFn }
   }
 
-  /** How Transitland answers today: realtime URLs on the feed's own record. */
-  const OWN_RECORD = {
-    feeds: [{
-      onestop_id: 'f-dr5r-nyctsubway',
-      urls: {
-        static_current: 'https://agency.example/gtfs.zip',
-        realtime_alerts: 'https://agency.example/alerts.pb',
-        realtime_vehicle_positions: 'https://agency.example/vehicles.pb',
-      },
+  const operatorWith = (...rtIds: string[]) => ({
+    operators: [{
+      onestop_id: 'o-dr5r-nyct',
+      feeds: [
+        { onestop_id: 'f-dr5r-nyctsubway', spec: 'GTFS' },
+        ...rtIds.map(id => ({ onestop_id: id, spec: 'GTFS_RT' })),
+      ],
     }],
-  }
-
-  test('reads the realtime URLs off the feed\'s own record', async () => {
-    const { calls, fetchFn } = trackingFetch({ 'onestop_id=f-dr5r-nyctsubway&': OWN_RECORD })
-
-    const urls = await resolveRtUrlsForFeed('f-dr5r-nyctsubway', 'key', fetchFn)
-
-    expect(urls.map(u => u.url)).toContain('https://agency.example/alerts.pb')
-    // Answered by the first lookup — no round trip to the legacy `~rt` record.
-    expect(calls).toHaveLength(1)
   })
 
-  test('falls back to the legacy ~rt companion when the record carries none', async () => {
-    const { calls, fetchFn } = trackingFetch({
-      'onestop_id=f-dr5r-nyctsubway&': { feeds: [{ onestop_id: 'f-dr5r-nyctsubway', urls: {} }] },
-      'spec=GTFS_RT': RT_FEED,
+  test('collects every realtime feed the operator publishes', async () => {
+    const { fetchFn } = trackingFetch({
+      '&onestop_id=f-dr5r-nyctsubway&': STATIC,
+      '/operators?': operatorWith('f-mta~nyc~rt~subway~a~c~e', 'f-mta~nyc~rt~alerts'),
+      '&onestop_id=f-mta~nyc~rt~subway~a~c~e': {
+        feeds: [{ urls: { realtime_trip_updates: 'https://mta.example/gtfs-ace' } }],
+      },
+      '&onestop_id=f-mta~nyc~rt~alerts': {
+        feeds: [{ urls: { realtime_alerts: 'https://mta.example/all-alerts' } }],
+      },
     })
 
     const urls = await resolveRtUrlsForFeed('f-dr5r-nyctsubway', 'key', fetchFn)
 
-    expect(urls.map(u => u.url)).toContain('https://agency.example/alerts.pb')
-    expect(calls).toHaveLength(2)
-    expect(calls[1]).toContain('onestop_id=f-dr5r-nyctsubway~rt')
+    // One static feed, many realtime feeds — the case id-derivation could not express.
+    expect(urls.map(u => u.url).sort()).toEqual([
+      'https://mta.example/all-alerts',
+      'https://mta.example/gtfs-ace',
+    ])
+  })
+
+  test('does not repeat a URL two operator feeds both list', async () => {
+    const { fetchFn } = trackingFetch({
+      '&onestop_id=f-dr5r-nyctsubway&': STATIC,
+      '/operators?': operatorWith('f-a~rt', 'f-b~rt'),
+      '&onestop_id=f-a~rt': { feeds: [{ urls: { realtime_alerts: 'https://mta.example/all-alerts' } }] },
+      '&onestop_id=f-b~rt': { feeds: [{ urls: { realtime_alerts: 'https://mta.example/all-alerts' } }] },
+    })
+
+    const urls = await resolveRtUrlsForFeed('f-dr5r-nyctsubway', 'key', fetchFn)
+
+    expect(urls).toHaveLength(1)
+  })
+
+  test('falls back to URLs on the feed\'s own record', async () => {
+    const { fetchFn } = trackingFetch({
+      '&onestop_id=f-solo&': {
+        feeds: [{
+          onestop_id: 'f-solo',
+          urls: { realtime_alerts: 'https://solo.example/alerts.pb' },
+        }],
+      },
+    })
+
+    const urls = await resolveRtUrlsForFeed('f-solo', 'key', fetchFn)
+
+    expect(urls.map(u => u.url)).toEqual(['https://solo.example/alerts.pb'])
+  })
+
+  test('falls back to the legacy ~rt companion record', async () => {
+    const { fetchFn } = trackingFetch({
+      '&onestop_id=f-legacy&': { feeds: [{ onestop_id: 'f-legacy', urls: {} }] },
+      '&onestop_id=f-legacy~rt': {
+        feeds: [{ urls: { realtime_vehicle_positions: 'https://legacy.example/vp.pb' } }],
+      },
+    })
+
+    const urls = await resolveRtUrlsForFeed('f-legacy', 'key', fetchFn)
+
+    expect(urls.map(u => u.url)).toEqual(['https://legacy.example/vp.pb'])
   })
 
   test('looks a numeric id up by id rather than as an onestop id', async () => {
-    const { calls, fetchFn } = trackingFetch({ 'id=886': OWN_RECORD })
+    const { calls, fetchFn } = trackingFetch({ 'id=886': STATIC })
 
-    const urls = await resolveRtUrlsForFeed('886', 'key', fetchFn)
+    await resolveRtUrlsForFeed('886', 'key', fetchFn)
 
-    expect(urls).toHaveLength(2)
-    expect(calls[0]).toContain('id=886')
+    expect(calls[0]).toContain('&id=886')
   })
 
-  test('carries feed authorization headers onto each RT URL', async () => {
+  test('carries header authorization onto each RT URL', async () => {
     const { fetchFn } = trackingFetch({
-      'onestop_id=f-dr5r-nyctsubway&': {
+      '&onestop_id=f-solo&': {
         feeds: [{
-          onestop_id: 'f-dr5r-nyctsubway',
-          urls: { realtime_alerts: 'https://agency.example/alerts.pb' },
+          onestop_id: 'f-solo',
+          urls: { realtime_alerts: 'https://solo.example/alerts.pb' },
           authorization: { type: 'header', param_name: 'x-api-key', param_value: 'secret' },
         }],
       },
     })
 
-    const urls = await resolveRtUrlsForFeed('f-dr5r-nyctsubway', 'key', fetchFn)
+    const urls = await resolveRtUrlsForFeed('f-solo', 'key', fetchFn)
 
     expect(urls[0].headers).toEqual({ 'x-api-key': 'secret' })
   })
 
-  test('a feed with no RT counterpart yields nothing', async () => {
-    const { fetchFn } = trackingFetch({})
+  test('bakes query-param authorization into the URL, which carries no headers', async () => {
+    // MTA's Bus Time RT feed declares this form; a header-only reader drops it
+    // silently and every request goes out unauthenticated.
+    const { fetchFn } = trackingFetch({
+      '&onestop_id=f-bus&': {
+        feeds: [{
+          onestop_id: 'f-bus',
+          urls: { realtime_alerts: 'https://bus.example/alerts?x=1' },
+          authorization: { type: 'query_param', param_name: 'key', param_value: 's3cret' },
+        }],
+      },
+    })
 
-    expect(await resolveRtUrlsForFeed('f-dr5r-nowhere', 'key', fetchFn)).toEqual([])
+    const urls = await resolveRtUrlsForFeed('f-bus', 'key', fetchFn)
+
+    expect(urls[0].url).toBe('https://bus.example/alerts?x=1&key=s3cret')
+    expect(urls[0].headers).toBeUndefined()
+  })
+
+  test('a feed with no realtime counterpart anywhere yields nothing', async () => {
+    const { fetchFn } = trackingFetch({ '&onestop_id=f-nowhere&': { feeds: [{ onestop_id: 'f-nowhere', urls: {} }] } })
+
+    expect(await resolveRtUrlsForFeed('f-nowhere', 'key', fetchFn)).toEqual([])
   })
 })

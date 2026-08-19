@@ -170,6 +170,20 @@ describe('getServiceAlerts — decoding', () => {
     expect(alerts).toEqual([])
   })
 
+  test('picks the alert feed by recorded type, not by URL text', async () => {
+    // An operator's feeds all land on each of its rows, so a subway feed also
+    // carries the bus alert URL. Both match /alert/i; only one is right.
+    withFeed([alertEntity('a1')], [
+      { url: 'https://agency.example/gtfs-rt/nyct%2Fgtfs-ace', type: 'tripUpdates' },
+      { url: 'https://bus.example/alerts', type: 'alerts' },
+      { url: 'https://agency.example/subway-alerts', type: 'alerts' },
+    ])
+
+    const { alerts } = await getServiceAlerts({}, okFetch)
+
+    expect(alerts).toHaveLength(1)
+  })
+
   test('a feed with one combined RT URL is tried anyway', async () => {
     withFeed([alertEntity('a1')], [{ url: 'https://agency.example/gtfs-rt/all.pb' }])
 

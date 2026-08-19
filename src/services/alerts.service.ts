@@ -198,11 +198,10 @@ interface FeedAlertInfo {
 /**
  * Query gtfs_feeds for feeds publishing a service alerts URL.
  *
- * `rt_urls` is a flat list with no type tag, so the URL itself is the only
- * signal — same convention the vehicle feed uses. A feed with a single RT URL
- * is worth trying regardless: combined feeds carry TripUpdate, VehiclePosition
- * and Alert entities in one message, and the decode below only reads the
- * alerts.
+ * Discovery records each URL's kind, so the alert feed is picked by type. It
+ * has to be: an agency's realtime feeds are found through its operator, which
+ * lists all of them, so a subway feed's row also carries the bus alert URL —
+ * and picking the first URL matching /alert/i could take either.
  */
 async function getFeedsWithAlerts(feedIdFilter?: string): Promise<FeedAlertInfo[]> {
   const result = await db.execute(sql`
@@ -215,13 +214,18 @@ async function getFeedsWithAlerts(feedIdFilter?: string): Promise<FeedAlertInfo[
   const feeds: FeedAlertInfo[] = []
 
   for (const row of result as any[]) {
-    const rtUrls: Array<{ url: string; headers?: Record<string, string> }> =
+    const rtUrls: Array<{ url: string; headers?: Record<string, string>; type?: string }> =
       typeof row.rt_urls === 'string' ? JSON.parse(row.rt_urls) : row.rt_urls
 
     if (!Array.isArray(rtUrls)) continue
 
+    // Discovery records what each URL is; the regex is the fallback for rows
+    // written before it did. A feed with a single RT URL is worth trying
+    // regardless — combined feeds carry alerts alongside everything else, and
+    // the decode below only reads the alerts.
     const entry =
-      rtUrls.find(u => /alert/i.test(u.url)) ??
+      rtUrls.find(u => u.type === 'alerts') ??
+      rtUrls.find(u => !u.type && /alert/i.test(u.url)) ??
       (rtUrls.length === 1 ? rtUrls[0] : undefined)
 
     if (entry) {
