@@ -23,6 +23,7 @@ import {
   fetchFeedList,
   resolveGtfsBbox,
   sanitizeGtfsZip,
+  resolveRtUrlsForFeed,
   FLEX_EXTENSION_FILES,
 } from './gtfs.service'
 import JSZip from 'jszip'
@@ -1124,5 +1125,103 @@ describe('resolveGtfsBbox', () => {
 
   test('throws on out-of-range coordinates', () => {
     expect(() => resolveGtfsBbox('-200,0,10,10')).toThrow(/valid lon\/lat ranges/)
+  })
+})
+
+// ── resolveRtUrlsForFeed ────────────────────────────────────────────
+
+/**
+ * Which id `gtfs_feeds.onestop_id` holds has changed over time — older rows
+ * carry Transitland's numeric feed id, rows written by the current importer
+ * carry the real onestop id. Discovery used to assume the numeric form and
+ * looked up `?id=f-dr5r-nyctsubway`, which Transitland answers with an empty
+ * list: every feed came back with no RT URLs and the run reported success.
+ * These pin both shapes so that can't return silently to being a no-op.
+ */
+describe('resolveRtUrlsForFeed', () => {
+  const RT_FEED = {
+    feeds: [{
+      urls: {
+        realtime_alerts: 'https://agency.example/alerts.pb',
+        realtime_vehicle_positions: 'https://agency.example/vehicles.pb',
+      },
+    }],
+  }
+
+  /** Records every URL asked for, answering each by what it queries. */
+  function trackingFetch(responses: Record<string, unknown>) {
+    const calls: string[] = []
+    const fetchFn = (async (url: string) => {
+      calls.push(url)
+      const key = Object.keys(responses).find(k => url.includes(k))
+      return new Response(JSON.stringify(key ? responses[key] : { feeds: [] }), { status: 200 })
+    }) as unknown as typeof fetch
+    return { calls, fetchFn }
+  }
+
+  /** How Transitland answers today: realtime URLs on the feed's own record. */
+  const OWN_RECORD = {
+    feeds: [{
+      onestop_id: 'f-dr5r-nyctsubway',
+      urls: {
+        static_current: 'https://agency.example/gtfs.zip',
+        realtime_alerts: 'https://agency.example/alerts.pb',
+        realtime_vehicle_positions: 'https://agency.example/vehicles.pb',
+      },
+    }],
+  }
+
+  test('reads the realtime URLs off the feed\'s own record', async () => {
+    const { calls, fetchFn } = trackingFetch({ 'onestop_id=f-dr5r-nyctsubway&': OWN_RECORD })
+
+    const urls = await resolveRtUrlsForFeed('f-dr5r-nyctsubway', 'key', fetchFn)
+
+    expect(urls.map(u => u.url)).toContain('https://agency.example/alerts.pb')
+    // Answered by the first lookup — no round trip to the legacy `~rt` record.
+    expect(calls).toHaveLength(1)
+  })
+
+  test('falls back to the legacy ~rt companion when the record carries none', async () => {
+    const { calls, fetchFn } = trackingFetch({
+      'onestop_id=f-dr5r-nyctsubway&': { feeds: [{ onestop_id: 'f-dr5r-nyctsubway', urls: {} }] },
+      'spec=GTFS_RT': RT_FEED,
+    })
+
+    const urls = await resolveRtUrlsForFeed('f-dr5r-nyctsubway', 'key', fetchFn)
+
+    expect(urls.map(u => u.url)).toContain('https://agency.example/alerts.pb')
+    expect(calls).toHaveLength(2)
+    expect(calls[1]).toContain('onestop_id=f-dr5r-nyctsubway~rt')
+  })
+
+  test('looks a numeric id up by id rather than as an onestop id', async () => {
+    const { calls, fetchFn } = trackingFetch({ 'id=886': OWN_RECORD })
+
+    const urls = await resolveRtUrlsForFeed('886', 'key', fetchFn)
+
+    expect(urls).toHaveLength(2)
+    expect(calls[0]).toContain('id=886')
+  })
+
+  test('carries feed authorization headers onto each RT URL', async () => {
+    const { fetchFn } = trackingFetch({
+      'onestop_id=f-dr5r-nyctsubway&': {
+        feeds: [{
+          onestop_id: 'f-dr5r-nyctsubway',
+          urls: { realtime_alerts: 'https://agency.example/alerts.pb' },
+          authorization: { type: 'header', param_name: 'x-api-key', param_value: 'secret' },
+        }],
+      },
+    })
+
+    const urls = await resolveRtUrlsForFeed('f-dr5r-nyctsubway', 'key', fetchFn)
+
+    expect(urls[0].headers).toEqual({ 'x-api-key': 'secret' })
+  })
+
+  test('a feed with no RT counterpart yields nothing', async () => {
+    const { fetchFn } = trackingFetch({})
+
+    expect(await resolveRtUrlsForFeed('f-dr5r-nowhere', 'key', fetchFn)).toEqual([])
   })
 })

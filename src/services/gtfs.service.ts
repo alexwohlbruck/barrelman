@@ -195,6 +195,28 @@ export async function fetchFeedList(
  * We look up each static feed's expected RT onestop_id directly,
  * avoiding a full global scan of all RT feeds.
  */
+/**
+ * Pull the realtime URLs off a Transitland feed record.
+ *
+ * A feed's authorization applies to all of its URLs, so it is copied onto each
+ * one — the RT fetchers get a URL and its headers together rather than having
+ * to carry the feed around.
+ */
+function extractRtUrls(feed: any): GtfsRtUrl[] {
+  const urls = feed?.urls || {}
+  const headers: Record<string, string> = {}
+  if (feed?.authorization?.type === 'header' && feed.authorization?.param_name) {
+    headers[feed.authorization.param_name] = feed.authorization.param_value || ''
+  }
+
+  const rtUrls: GtfsRtUrl[] = []
+  for (const key of ['realtime_trip_updates', 'realtime_vehicle_positions', 'realtime_alerts'] as const) {
+    const url = urls[key]
+    if (url) rtUrls.push(Object.keys(headers).length ? { url, headers } : { url })
+  }
+  return rtUrls
+}
+
 async function fetchRtFeedMap(
   staticFeeds: GtfsFeedInfo[],
   apiKey: string,
@@ -216,15 +238,21 @@ async function fetchRtFeedMap(
     const batch = candidates.slice(i, i + BATCH_SIZE)
     const results = await Promise.allSettled(
       batch.map(async ({ staticOnestopId, rtOnestopId }) => {
-        const url = `https://transit.land/api/v2/rest/feeds?apikey=${apiKey}&spec=GTFS_RT&onestop_id=${encodeURIComponent(rtOnestopId)}&limit=1`
-        const response = await fetchFn(url)
-        if (!response.ok) return null
+        // The feed's own record first: Transitland publishes realtime_* URLs
+        // on the GTFS feed itself. The separate `~rt` record is the older
+        // convention and no longer exists for most feeds.
+        for (const url of [
+          `https://transit.land/api/v2/rest/feeds?apikey=${apiKey}&onestop_id=${encodeURIComponent(staticOnestopId)}&limit=1`,
+          `https://transit.land/api/v2/rest/feeds?apikey=${apiKey}&spec=GTFS_RT&onestop_id=${encodeURIComponent(rtOnestopId)}&limit=1`,
+        ]) {
+          const response = await fetchFn(url)
+          if (!response.ok) continue
 
-        const data = await response.json() as any
-        const feed = data.feeds?.[0]
-        if (!feed) return null
-
-        return { staticOnestopId, feed }
+          const data = await response.json() as any
+          const feed = data.feeds?.[0]
+          if (feed && extractRtUrls(feed).length) return { staticOnestopId, feed }
+        }
+        return null
       }),
     )
 
@@ -232,20 +260,7 @@ async function fetchRtFeedMap(
       if (result.status !== 'fulfilled' || !result.value) continue
       const { staticOnestopId, feed } = result.value
 
-      const urls = feed.urls || {}
-      const rtUrls: GtfsRtUrl[] = []
-
-      for (const key of ['realtime_trip_updates', 'realtime_vehicle_positions', 'realtime_alerts'] as const) {
-        const url = urls[key]
-        if (url) {
-          const headers: Record<string, string> = {}
-          if (feed.authorization?.type === 'header' && feed.authorization?.param_name) {
-            headers[feed.authorization.param_name] = feed.authorization.param_value || ''
-          }
-          rtUrls.push(Object.keys(headers).length ? { url, headers } : { url })
-        }
-      }
-
+      const rtUrls = extractRtUrls(feed)
       if (rtUrls.length) {
         rtMap.set(staticOnestopId, rtUrls)
       }
@@ -347,32 +362,52 @@ export async function discoverRtUrls(
 }
 
 /**
- * Resolve RT URLs for a single feed by its Transitland numeric ID.
+ * A Transitland onestop id, e.g. `f-dr5r-nyctsubway` — as opposed to the
+ * numeric feed id (`"886"`) the same API also accepts.
+ *
+ * Which one `gtfs_feeds.onestop_id` holds has changed over time: older rows
+ * carry the numeric id, rows written by the current importer carry the real
+ * onestop id. Discovery has to cope with both, and telling them apart on shape
+ * is reliable — onestop ids always lead with a single-letter type tag.
+ */
+const ONESTOP_ID = /^[a-z]-/i
+
+/**
+ * Resolve RT URLs for a single feed, by numeric feed ID or onestop ID.
  *
  * Steps:
- *   1. GET /feeds?id={numericId} to get the real onestop_id
+ *   1. GET /feeds?id={numericId} to get the real onestop_id — skipped when the
+ *      caller already has one
  *   2. GET /feeds?spec=GTFS_RT&onestop_id={onestopId}~rt to find RT feed
  *   3. Extract realtime_vehicle_positions, realtime_trip_updates,
  *      realtime_alerts URLs from the response
  */
-async function resolveRtUrlsForFeed(
-  numericId: string,
+export async function resolveRtUrlsForFeed(
+  feedRef: string,
   apiKey: string,
   fetchFn: FetchFn = globalThis.fetch,
 ): Promise<GtfsRtUrl[]> {
-  // Step 1: Resolve numeric ID to real onestop_id
-  const feedUrl = `https://transit.land/api/v2/rest/feeds?apikey=${apiKey}&id=${encodeURIComponent(numericId)}&limit=1`
-  const feedResponse = await fetchFn(feedUrl)
+  // Step 1: Get the feed's own record. A numeric id needs a lookup by id; an
+  // onestop id can be queried directly.
+  const lookupUrl = ONESTOP_ID.test(feedRef)
+    ? `https://transit.land/api/v2/rest/feeds?apikey=${apiKey}&onestop_id=${encodeURIComponent(feedRef)}&limit=1`
+    : `https://transit.land/api/v2/rest/feeds?apikey=${apiKey}&id=${encodeURIComponent(feedRef)}&limit=1`
+
+  const feedResponse = await fetchFn(lookupUrl)
   if (!feedResponse.ok) return []
 
   const feedData = await feedResponse.json() as any
   const staticFeed = feedData.feeds?.[0]
   if (!staticFeed?.onestop_id) return []
 
-  const realOnestopId = staticFeed.onestop_id as string
+  // Step 2: Transitland publishes the realtime URLs on the feed's own record,
+  // so most feeds are answered here.
+  const own = extractRtUrls(staticFeed)
+  if (own.length) return own
 
-  // Step 2: Look up the RT feed using the {onestopId}~rt convention
-  const rtOnestopId = `${realOnestopId}~rt`
+  // Step 3: Fall back to the older `{onestopId}~rt` companion record, which
+  // still exists for some feeds.
+  const rtOnestopId = `${staticFeed.onestop_id}~rt`
   const rtUrl = `https://transit.land/api/v2/rest/feeds?apikey=${apiKey}&spec=GTFS_RT&onestop_id=${encodeURIComponent(rtOnestopId)}&limit=1`
   const rtResponse = await fetchFn(rtUrl)
   if (!rtResponse.ok) return []
@@ -381,22 +416,7 @@ async function resolveRtUrlsForFeed(
   const rtFeed = rtData.feeds?.[0]
   if (!rtFeed) return []
 
-  // Step 3: Extract RT URLs
-  const urls = rtFeed.urls || {}
-  const rtUrls: GtfsRtUrl[] = []
-
-  for (const key of ['realtime_trip_updates', 'realtime_vehicle_positions', 'realtime_alerts'] as const) {
-    const url = urls[key]
-    if (url) {
-      const headers: Record<string, string> = {}
-      if (rtFeed.authorization?.type === 'header' && rtFeed.authorization?.param_name) {
-        headers[rtFeed.authorization.param_name] = rtFeed.authorization.param_value || ''
-      }
-      rtUrls.push(Object.keys(headers).length ? { url, headers } : { url })
-    }
-  }
-
-  return rtUrls
+  return extractRtUrls(rtFeed)
 }
 
 // ── GTFS ZIP parsing ────────────────────────────────────────────────
