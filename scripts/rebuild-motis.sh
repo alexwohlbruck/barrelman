@@ -55,6 +55,21 @@ fi
 BARRELMAN_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$BARRELMAN_DIR"
 
+# A MOTIS dataset cannot be built without a timetable: with no feeds the import
+# fails either on an empty `datasets:` map or, once `osm:` is set, on
+# "feature OSR_FOOTPATH requires features STREET_ROUTING and TIMETABLE".
+# Checked up front because the failure otherwise happens *after* the current
+# dataset has been moved aside — costing a restore and exiting non-zero — and it
+# is easy to reach: importing GBFS (step 3) or rebuilding before the transit
+# import (step 2) both land here.
+FEED_COUNT="$(docker exec "${DB_CONTAINER:-barrelman-db}" \
+  psql -U barrelman -d barrelman -tAc 'SELECT count(*) FROM gtfs_feeds' 2>/dev/null | tr -d '[:space:]')"
+if [ "${FEED_COUNT:-0}" = "0" ]; then
+  log "no GTFS feeds in the database — nothing to build, leaving the current dataset alone"
+  log "run scripts/download-gtfs.sh first (transit step 2b)"
+  exit 0
+fi
+
 echo "[$(date '+%H:%M:%S')] [1/3] [motis] Regenerating config from gtfs_feeds..."
 # --street-routing is REQUIRED: without it the config omits the OSM input and
 # MOTIS builds only the timetable (no street graph, no stop<->street matches),
