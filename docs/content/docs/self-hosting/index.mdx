@@ -28,6 +28,12 @@ The rest of these pages set up the engine. [Going to production](/self-hosting/p
 - **Docker** 24+ with **Compose v2** (`docker compose version`)
 - `curl`, and enough disk for the OSM extract *plus* the database *plus* the routing graph
 
+On a fresh server, Docker's own convenience script installs both:
+
+```bash
+curl -fsSL https://get.docker.com | sh
+```
+
 Nothing else. You do not need Bun, Node, Postgres, osm2pgsql or Java on the host — every tool lives in a container. A clone of the repository is optional; the install below downloads the Compose file and the few config files it mounts.
 
 ### Hardware
@@ -71,10 +77,12 @@ BASE=https://raw.githubusercontent.com/alexwohlbruck/barrelman/main
 curl -fsSL -O $BASE/docker-compose.yml
 curl -fsSL -O $BASE/martin-config.yaml
 curl -fsSL -O $BASE/graphhopper-config.yml
-mkdir -p custom_models data/gtfs
+mkdir -p custom_models data/gtfs pelias
 for m in barrelman_car barrelman_bike barrelman_foot; do
   curl -fsSL -o custom_models/$m.json $BASE/custom_models/$m.json
 done
+curl -fsSL -o pelias/docker-compose.yml $BASE/pelias/docker-compose.yml
+curl -fsSL -o pelias/pelias.json $BASE/pelias/pelias.json
 ```
 
 The Compose file bind-mounts `martin-config.yaml`, `graphhopper-config.yml` and
@@ -83,10 +91,23 @@ place of any missing bind source, so fetching only `docker-compose.yml` leaves
 Martin and GraphHopper trying to parse a directory as their config.
 
 All images are pre-built and published — no clone, no build step. Cloning the
-repository instead of fetching these four is equally fine, and is simpler if you
+repository instead of fetching these files is equally fine, and is simpler if you
 also want the Pelias geocoder later.
 
-The Compose file `include:`s `pelias/docker-compose.yml`. If you are not using the address geocoder you can ignore this; the Pelias services sit behind profiles and never start with a plain `docker compose up`. If you want addresses later, clone the repository so that path exists.
+<Callout type="warn" title="The two `pelias/` files are not optional">
+The Compose file `include:`s `pelias/docker-compose.yml`, and Compose resolves
+an `include:` while **parsing**, long before profiles decide what starts. A
+missing file is therefore not "an unused geocoder" — every `docker compose`
+command in this guide fails outright with:
+
+```
+open /opt/barrelman/pelias/docker-compose.yml: no such file or directory
+```
+
+Fetch them even if you never intend to run the address geocoder. The services
+themselves sit behind profiles and still never start with a plain
+`docker compose up`.
+</Callout>
 
 ### 3. Write `.env`
 

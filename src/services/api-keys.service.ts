@@ -16,7 +16,7 @@ import { db } from '../db'
 import { apiKeys, users, type ApiKey } from '../schema/accounts'
 import { generateId, randomBase62, sha256Hex } from '../lib/crypto'
 import { normalizeOrigins } from '../lib/origins'
-import { isValidScope, type Scope } from '../billing/plans'
+import { ADMIN_SCOPE, isValidScope, type Scope } from '../billing/plans'
 
 const KEY_PREFIX = 'brm'
 /** 40 base62 characters ≈ 238 bits — far beyond guessing range. */
@@ -108,9 +108,15 @@ export function normalizeScopes(scopes: string[] | undefined): string[] {
   if (!scopes || scopes.length === 0) return ['*']
   const valid = scopes.filter(isValidScope)
   if (valid.length === 0) return ['*']
+  if (!valid.includes('*')) return Array.from(new Set(valid))
   // A key holding `*` alongside narrower scopes is just `*`; storing both
   // invites a reader into thinking the narrow ones constrain anything.
-  return valid.includes('*') ? ['*'] : Array.from(new Set(valid))
+  //
+  // `admin` is the exception, because it sits OUTSIDE the wildcard (see
+  // ADMIN_SCOPE). Collapsing it into `*` would silently strip a privilege the
+  // caller was granted, handing back a key that 403s on /admin/* with nothing
+  // in the response to say why.
+  return valid.includes(ADMIN_SCOPE) ? ['*', ADMIN_SCOPE] : ['*']
 }
 
 // ── Verification ────────────────────────────────────────────────────────

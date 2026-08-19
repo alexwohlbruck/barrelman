@@ -115,6 +115,13 @@ else
 fi
 
 sleep 6
-code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 http://localhost:8080/ 2>/dev/null || echo "000")
-log "server responding: HTTP ${code} (404 at / is expected — the API lives under /api/v1)"
+# Probe the container by name, not localhost: this script runs inside
+# barrelman-ops, where :8080 is ops itself and the check could only ever fail.
+# `-w` already prints 000 on a connection error, so a `|| echo` fallback would
+# concatenate onto it and report "000000".
+code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "http://${CONTAINER}:8080/" 2>/dev/null) || true
+log "server responding: HTTP ${code:-000} (404 at / is expected — the API lives under /api/v1)"
+if [ "${code:-000}" = "000" ]; then
+  log "WARNING: could not reach ${CONTAINER}:8080 — the dataset was rebuilt but the server is not answering"
+fi
 log "Rebuild complete."

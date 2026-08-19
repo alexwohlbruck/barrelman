@@ -38,7 +38,23 @@ curl -s http://localhost:5001/health
 
 There is no migration step — all schema is created by idempotent `ensure*Schema()` calls at startup, and the database image creates the PostGIS, pgvector, `pg_trgm` and `unaccent` extensions on first initialization.
 
-MOTIS and GraphHopper will log errors at this point. That is expected: neither has any data yet.
+MOTIS, GraphHopper **and Martin** will log errors and sit in `Restarting` at
+this point. That is expected: none of them has any data yet. Martin's is the
+least obvious — it treats an unresolvable tile source as fatal, so before the
+import every source fails at once:
+
+```
+Unable to configure source parchment_pois because schema 'public'
+exists but has no tables with a geometry column.
+```
+
+All three recover on their own once the import creates their inputs. Nothing
+needs restarting by hand.
+
+The API itself may also log one `[uncaughtException] connect ECONNREFUSED`
+against Postgres on a cold first boot — it races the database's initialization
+and reconnects a moment later. It matters only if `/health` never reaches
+`"database":"connected"`.
 
 ## How jobs actually run
 
@@ -62,6 +78,19 @@ Open the console:
 http://localhost:5001/console
 ```
 
+<Callout type="info" title="On a remote server, `localhost` is the server's own loopback">
+Every port binds to `127.0.0.1` by default (`BARRELMAN_BIND_ADDR`), so nothing
+is reachable from your laptop yet — and it should stay that way until TLS is in
+front of it. Forward the port over SSH rather than widening the binding:
+
+```bash
+ssh -L 5001:localhost:5001 root@your-server
+```
+
+`http://localhost:5001/console` then works in your own browser, and the URLs in
+this guide are correct as written on both sides.
+</Callout>
+
 Enter your email and request a sign-in code. With no SMTP configured, the code is printed to the server log instead of emailed:
 
 ```bash
@@ -71,6 +100,32 @@ docker logs barrelman --tail 50 | grep -i "sign-in code"
 Enter the eight-digit code. You are now signed in as an administrator, and the operator views — **Scripts**, **Jobs**, **Data**, **Regions** — are visible.
 
 To promote further accounts later, open **Users** in the console and make them an administrator. The last administrator cannot be demoted, so an instance always has someone who can administer it.
+
+### Without a browser
+
+The console is just a client of the same API, so a headless server can claim its
+first account with two calls:
+
+```bash
+API=http://localhost:5001
+EMAIL=you@example.com
+
+curl -s -X POST $API/auth/request-code \
+  -H 'Content-Type: application/json' -d "{\"email\":\"$EMAIL\"}"
+
+docker logs barrelman --tail 50 | grep -i "sign-in code"
+
+curl -s -X POST $API/auth/verify-code \
+  -H 'Content-Type: application/json' \
+  -d "{\"email\":\"$EMAIL\",\"code\":\"01234567\"}"
+```
+
+The reply carries `"role":"admin"` for the first account, and a `token` that is
+your session id. Export it — the key below is minted with it:
+
+```bash
+SESSION_TOKEN=<the token from the reply>
+```
 
 <Callout type="warn">
 If you are exposing this instance publicly, do this **before** [going to production](/self-hosting/production). Sign-up is open by default, and "first account wins" is a race you want to have already finished. Set `BARRELMAN_REGISTRATION_MODE=invite` if you never want open sign-up at all.
@@ -87,6 +142,21 @@ tiles  places  spatial  geocode  search  routing  transit  isochrone
 ```
 
 `*` (every group) is the default. A key embedded in a web map should be limited to `tiles` and `search`, so a leak cannot run up a routing bill.
+
+There is a ninth scope, `admin`, and it is **not** covered by `*`. `*` means
+"every billing group"; since it is also the default for a key created with no
+scopes, folding admin into it would quietly promote every key you have ever
+issued. Admin is granted only by naming it, and only by an administrator:
+
+```bash
+curl -s -X POST $API/account/keys \
+  -H "Authorization: Bearer $SESSION_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"name":"ops","scopes":["*","admin"]}'
+```
+
+That key is what the [import steps](/self-hosting/importing-data) use for
+`/admin/*`. Check the `scopes` in the response really contains `admin` — a key
+without it gets a `403` from every admin route.
 
 ### Verify the key works
 

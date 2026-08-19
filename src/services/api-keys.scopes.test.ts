@@ -8,7 +8,7 @@
  */
 import { describe, test, expect } from 'bun:test'
 import { normalizeScopes } from './api-keys.service'
-import { CREDIT_COSTS, scopeAllows, type EndpointGroup } from '../billing/plans'
+import { ADMIN_SCOPE, CREDIT_COSTS, scopeAllows, scopeAllowsAdmin, type EndpointGroup } from '../billing/plans'
 
 const groups = Object.keys(CREDIT_COSTS) as EndpointGroup[]
 
@@ -48,6 +48,18 @@ describe('normalizeScopes', () => {
   test('every valid group survives normalisation', () => {
     expect(normalizeScopes(groups)).toEqual(groups)
   })
+
+  test('the wildcard collapse does not swallow `admin`', () => {
+    // `admin` is not a billing group and is not implied by `*`, so collapsing
+    // it away would hand back a key that 403s on /admin/* having been asked
+    // for admin — the console's own "all groups + admin" selection.
+    expect(normalizeScopes(['*', ADMIN_SCOPE])).toEqual(['*', ADMIN_SCOPE])
+    expect(normalizeScopes([...groups, ADMIN_SCOPE, '*'])).toEqual(['*', ADMIN_SCOPE])
+  })
+
+  test('admin survives alongside narrow scopes', () => {
+    expect(normalizeScopes(['tiles', ADMIN_SCOPE])).toEqual(['tiles', ADMIN_SCOPE])
+  })
 })
 
 describe('normalizeScopes composed with the enforcement check', () => {
@@ -64,6 +76,18 @@ describe('normalizeScopes composed with the enforcement check', () => {
     // up a routing bill if it leaks.
     expect(scopeAllows(scopes, 'routing')).toBe(false)
     expect(scopeAllows(scopes, 'isochrone')).toBe(false)
+  })
+
+  test('a wildcard key granted admin still reaches /admin/*', () => {
+    const scopes = normalizeScopes(['*', ADMIN_SCOPE])
+
+    expect(scopeAllowsAdmin(scopes)).toBe(true)
+    for (const group of groups) expect(scopeAllows(scopes, group)).toBe(true)
+  })
+
+  test('a wildcard key NOT granted admin stays out of /admin/*', () => {
+    expect(scopeAllowsAdmin(normalizeScopes(undefined))).toBe(false)
+    expect(scopeAllowsAdmin(normalizeScopes(['*']))).toBe(false)
   })
 
   test('a dropped unknown scope does not accidentally grant access', () => {
