@@ -174,14 +174,34 @@ Put `TRANSITLAND_API_KEY` in `.env` if you will refresh feeds regularly; it is a
 ### Step 3 — Bikeshare (optional)
 
 ```bash
-docker compose exec barrelman-ops bun run import/import-gbfs-systems.ts
+docker compose exec -d barrelman-ops \
+  bash -c 'bun run import/import-gbfs-systems.ts > /tmp/gbfs.log 2>&1'
+docker compose exec barrelman-ops tail -f /tmp/gbfs.log
 ```
 
-Discovers GBFS systems and filters them to the region's bounding box.
+Registers every GBFS **system** in the global catalog, then polls each one's feed
+and keeps the **stations** that fall inside your region's bounding box.
 
-<Callout type="warn" title="Slow, and unrelated to your region size">
-It fetches every system in the global catalog before filtering, so a one-state import costs the same as a planet one. Measured on Colorado it was still running **40 minutes in** and had not finished. Run it last, and skip it unless you need bikeshare — nothing else depends on it.
+<Callout type="info" title="`gbfs_systems` is a worldwide table, by design">
+The catalog it reads (`systems.csv`) carries no coordinates, so systems cannot be
+filtered by bbox — only the stations fetched from each feed can be. On the
+Colorado run that meant **1,336 systems imported and 191 stations kept**:
+
+```
+ country_code | count
+ FR           |   266
+ DE           |   239
+ US           |   170
+```
+
+Three of those 1,334 rows have coordinates inside Colorado. That is expected, not
+a mis-import — filter on `gbfs_stations` when you want regional data.
 </Callout>
+
+It costs the same whatever your region size, since it walks the whole catalog
+either way. Measured end to end on Colorado: **6 min 48 s**, with `200 failed` of
+1,536 feeds — unreachable or dead endpoints are routine and not an error worth
+chasing. Nothing else depends on this step, so skip it unless you need bikeshare.
 
 ### Step 4 — Addresses (optional, and much bigger than the rest)
 
@@ -189,12 +209,75 @@ Street addresses have no `name`, so they are not searchable in `geo_places`. Pel
 
 This is a separate stack behind Compose profiles — Elasticsearch alone wants a 1 GB heap — and provisioning its index takes **hours**, not minutes.
 
+<Callout type="warn" title="This step wants the repository, not just the Compose file">
+Unlike everything above it, Pelias is driven by files the curl install does not
+fetch — `pelias/provision.sh`, `pelias/.env.example`, and the `pelias` CLI's
+expectations about the directory it runs in. Clone the repo over your install
+directory before starting:
+
+```bash
+cd /opt && git clone https://github.com/alexwohlbruck/barrelman.git barrelman-repo
+cp -rn barrelman-repo/pelias/. /opt/barrelman/pelias/
+```
+
+Keep your existing `.env` and `docker-compose.yml`; you only need the `pelias/`
+contents.
+</Callout>
+
+First regenerate the geocoder's coverage so it matches `REGIONS`, create the data
+directory Elasticsearch will own, then start the two lean services:
+
 ```bash
 docker compose exec barrelman-ops bun run scripts/generate-pelias-config.ts
+
+# Elasticsearch runs as uid 1000 and cannot create its own directories under a
+# root-owned bind mount.
+mkdir -p pelias/data && sudo chown -R 1000:1000 pelias/data
+
 docker compose --profile pelias up -d
 ```
 
-Then follow [`pelias/README.md`](https://github.com/alexwohlbruck/barrelman/blob/main/pelias/README.md) for the index build. It has a step (`pelias prepare polylines`) that is easy to miss and whose omission silently returns nothing for street-name search.
+<Callout type="warn" title="Skip the `chown` and Elasticsearch crash-loops">
+`docker compose ps` shows `pelias_elasticsearch` restarting, and only its logs
+say why:
+
+```
+ElasticsearchException[failed to bind service];
+  nested: AccessDeniedException[/usr/share/elasticsearch/data/nodes];
+```
+
+`pelias_api` starts fine and answers queries regardless, so the stack looks
+half-working: every geocode just returns nothing. Fix the ownership and
+`docker restart pelias_elasticsearch`.
+</Callout>
+
+The generator reports exactly what it wrote and where. Check the path is the
+**host** file — that is the copy the Pelias containers bind-mount, and a stale
+one silently geocodes the wrong part of the world:
+
+```
+Wrote /app/pelias/pelias.json
+  regions: colorado
+  osm extracts: 1
+  openaddresses files: 55
+  wof places: 0, tiger states: 8
+```
+
+`wof places: 0` is normal — Who's-on-First IDs are one of the two fields the
+region resolver deliberately does not guess.
+
+<Callout type="warn" title="Older installs: the generator needs a Compose file from 2026-08 or later">
+`barrelman-ops` only gained its `./pelias:/app/pelias` mount recently. Without
+it the command above dies with `ENOENT … /app/pelias/pelias.json`, because
+`pelias/` is excluded from the ops image and the container has no path to the
+host's config. If you see that error, re-fetch `docker-compose.yml` and run
+`docker compose up -d barrelman-ops`.
+</Callout>
+
+Then follow [`pelias/README.md`](https://github.com/alexwohlbruck/barrelman/blob/main/pelias/README.md) for the index build — budget hours, not minutes. Two things there are easy to miss and both fail silently:
+
+- `vm.max_map_count` must be at least `262144`. Check first — Ubuntu 24.04 already ships `1048576` — and only raise it if yours is lower: `sysctl vm.max_map_count`, then `sudo sysctl -w vm.max_map_count=262144`.
+- `pelias prepare polylines`, without which the `street` layer stays empty and street-name search returns nothing.
 
 ## Verify
 
@@ -212,30 +295,53 @@ curl -s -H "Authorization: Bearer $KEY" http://localhost:5001/health/auth
 # Search — the OSM import (step 1)
 curl -s -X POST http://localhost:5001/search \
   -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' \
-  -d '{"query":"coffee","lat":35.2271,"lng":-80.8431,"radius":5000,"limit":5}'
+  -d '{"query":"coffee","lat":39.7392,"lng":-104.9903,"radius":5000,"limit":5}'
 
-# Reverse geocode — parent-context resolution (step 1 post-processing)
+# Reverse geocode — parent-context resolution (step 1 post-processing).
+# THIS is the check that proves you imported the region you meant to.
 curl -s -H "Authorization: Bearer $KEY" \
-  "http://localhost:5001/geocode?lat=35.2271&lng=-80.8431"
+  "http://localhost:5001/geocode?lat=39.7392&lng=-104.9903"
 
 # Street routing — the GraphHopper graph (step 1)
 curl -s -H "Authorization: Bearer $KEY" \
-  "http://localhost:5001/isochrone?lat=35.7796&lng=-78.6382&mode=walk&durations=600"
+  "http://localhost:5001/isochrone?lat=39.7392&lng=-104.9903&mode=walk&durations=600"
 
 # Vector tiles — Martin against PostGIS. Source names come from
 # martin-config.yaml (parchment_pois, parchment_roads, transit_platforms, …).
 # Watch the size, not just the status — see the note below.
 curl -s -o /dev/null -w '%{http_code} %{content_type} %{size_download}\n' \
-  "http://localhost:5001/tiles/parchment_pois/12/1146/1635?api_key=$KEY"
+  "http://localhost:5001/tiles/parchment_pois/12/853/1554?api_key=$KEY"
 
 # Transit stops — the GTFS import (step 2b). Reads PostGIS, not MOTIS.
 curl -s -H "Authorization: Bearer $KEY" \
-  "http://localhost:5001/transit/stops?lat=40.7527&lng=-73.9772&radius=500"
+  "http://localhost:5001/transit/stops?lat=39.7392&lng=-104.9903&radius=500"
 
 # Transit routing — MOTIS's baked timetable (step 2c).
 curl -s -H "Authorization: Bearer $KEY" \
-  "http://localhost:5001/isochrone?lat=40.7527&lng=-73.9772&mode=transit&durations=1800"
+  "http://localhost:5001/isochrone?lat=39.7392&lng=-104.9903&mode=transit&durations=1800"
 ```
+
+The coordinates above are Denver, matching the `colorado` region this page builds.
+Change them to your own region — and note which check actually detects a
+mis-import:
+
+| Endpoint | Queried outside your data |
+|---|---|
+| `/geocode` | `{"address":{},"hierarchy":[]}` — the honest, obvious failure |
+| `/isochrone` | `Point not found:<lat>,<lng>` |
+| `/search` | **still returns results** |
+
+<Callout type="warn" title="A `/search` hit does not prove you imported the right region">
+For a **text** query, `radius` biases ranking rather than filtering: text search
+runs globally and re-ranks by proximity, so any place worldwide can still match.
+Asked for `coffee` near Charlotte on a Colorado-only instance, `/search`
+cheerfully returns Denver cafés — `distance_m` around `2186847`, i.e. 2,186 km
+away. `radius` only becomes a hard `ST_DWithin` filter for category browse and
+route-corridor searches, which carry no `query`.
+
+So read `distance_m`, not just the result count, and use `/geocode` as the
+region check.
+</Callout>
 
 <Callout type="warn" title="Low-zoom tiles are very large, and that is the shipped behaviour">
 `parchment_pois` and `parchment_roads` are unfiltered tables between their
