@@ -18,7 +18,37 @@ curl -fsSL -o pelias/docker-compose.yml $BASE/pelias/docker-compose.yml
 curl -fsSL -o pelias/pelias.json $BASE/pelias/pelias.json
 ```
 
+**`ENOENT … open '/app/pelias/pelias.json'` from `generate-pelias-config.ts`**
+
+`barrelman-ops` has no mount of `./pelias`, and `pelias/` is excluded from the
+ops image, so the script cannot see the file it rewrites. The mount was added to
+`docker-compose.yml` in August 2026 — re-fetch it and recreate the worker:
+
+```bash
+docker compose up -d barrelman-ops
+docker compose exec barrelman-ops ls /app/pelias
+```
+
+Note the script must write the **host** copy: the Pelias services bind-mount
+`./pelias.json`, so a config written anywhere else never reaches the geocoder.
+
 ## Health and startup
+
+**Every request through your reverse proxy returns `502`, but `/health` is fine on the box**
+
+The `barrelman` container was recreated and lost an imperative network
+attachment. `docker network connect caddy_network barrelman` is not part of the
+Compose definition, so `docker compose up -d` after a `pull`, or a
+`--force-recreate` when rotating `BARRELMAN_API_KEY`, silently drops it. Nothing
+appears in barrelman's logs, because barrelman is healthy — merely unreachable.
+
+```bash
+docker inspect barrelman --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}'
+```
+
+Reconnecting fixes it until the next recreate; declaring the network in
+`docker-compose.override.yml` fixes it permanently. See
+[reverse proxy and TLS](/self-hosting/production#reverse-proxy-and-tls).
 
 **`/health` returns `"status":"degraded"`**
 
@@ -116,6 +146,35 @@ docker run --rm -v barrelman_barrelman-gtfs-data:/data alpine ls /data /data/gtf
 
 There is no "file not found" in the output; an empty `/data/gtfs` is the only symptom.
 
+**`motis import` fails on `datasets: Could not cast to map!`, or `OSR_FOOTPATH requires … TIMETABLE`**
+
+There are no rows in `gtfs_feeds`, so the generated config had an empty
+`datasets:` map — which MOTIS reads as null and rejects. Removing the block does
+not help either: with `osm:` set, MOTIS then refuses because a dataset genuinely
+needs a timetable. Easy to reach by running the GBFS import (step 3) or a
+rebuild before the transit import (step 2).
+
+Current versions of `rebuild-motis.sh` check first and exit without touching the
+live dataset. Older ones fail *after* moving it aside, then run their restore
+path and exit 1. Either way the fix is to import feeds first:
+
+```bash
+docker exec barrelman-db psql -U barrelman -d barrelman -tAc 'SELECT count(*) FROM gtfs_feeds'
+```
+
+**`pelias_elasticsearch` restarts forever with `AccessDeniedException[/usr/share/elasticsearch/data/nodes]`**
+
+The Pelias data directory is root-owned and Elasticsearch runs as uid 1000. On a
+curl install there is no `pelias/.env`, so `DATA_DIR` falls back to `./data`,
+which Docker creates as root.
+
+```bash
+chown -R 1000:1000 pelias/data && docker restart pelias_elasticsearch
+```
+
+`pelias_api` starts and answers HTTP regardless, so the stack looks half-healthy
+while every address lookup quietly returns nothing.
+
 **Martin crash-loops and every `/tiles` request returns 500**
 
 Martin treats *any* unresolvable tile source as fatal, so one missing table takes down all tiles. `docker compose logs martin | grep -i unavailable` names it. The two that bite: the `transit_*` views (created by the OSM import) and the optional `basemap.pmtiles`, which is commented out by default because nothing in the pipeline produces it.
@@ -131,6 +190,18 @@ SELECT geom_type, count(*) FROM geo_places WHERE admin_level='4' GROUP BY geom_t
 ```
 
 All `line` means no state will ever be returned. Consolidated city-counties (Denver, San Francisco) are also legitimately one area, not two.
+
+**`/search` returns results from nowhere near the point I asked about**
+
+Working as intended, and worth knowing before you use it to check an import. For
+a **text** query, `radius` biases ranking rather than filtering — text search is
+global and re-ranked by proximity, so any place on earth can still match. A
+`coffee` query near Charlotte on a Colorado-only instance returns Denver cafés
+with `distance_m` around `2186847`.
+
+`radius` becomes a hard filter only for category-browse and route-corridor
+searches, which carry no `query`. Read `distance_m`, and use `/geocode` — which
+returns `{"address":{},"hierarchy":[]}` outside your data — to check coverage.
 
 **`422` from an endpoint that looks correct**
 
@@ -170,11 +241,16 @@ key.
 
 **A setting in `.env` has no effect**
 
-It is almost certainly not named in that service's `environment:` block in `docker-compose.yml`. Compose does not forward the host environment. Confirm with:
+It is almost certainly not named in that service's `environment:` block in `docker-compose.yml`. Compose does not forward the host environment. Check the service that actually reads it — the importers run in `barrelman-ops`, not the API:
 
 ```bash
-docker compose exec barrelman env | grep VARNAME
+docker compose exec barrelman     env | grep VARNAME   # API settings
+docker compose exec barrelman-ops env | grep VARNAME   # REGIONS, UPDATE_MODE, GEOFABRIK_*
 ```
+
+The scripts under `scripts/` also `source ../.env`, which looks like a second
+route in but is not one inside a container: `.env` is in `.dockerignore`, so
+`/app/.env` does not exist there.
 
 **A setting is present but reads as its default**
 

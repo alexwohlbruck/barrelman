@@ -265,7 +265,7 @@ Read by the scripts running in `barrelman-ops` (and, for the osm2pgsql step, in
 | Variable | Default | Description |
 |---|---|---|
 | `GEOFABRIK_URL` | NC extract | Single-PBF fallback, used only when `REGIONS` resolves to nothing |
-| `GEOFABRIK_REPLICATION_URL` | NC updates feed | Replication feed for `UPDATE_MODE=replication`. **Change this with `REGIONS`** — the default is North Carolina's, so an unchanged value applies the wrong region's diffs |
+| `GEOFABRIK_REPLICATION_URL` | resolved from `REGIONS` | Replication feed for `UPDATE_MODE=replication`. Normally leave unset — it is derived from your regions. **Setting it overrides that**, so a stale value applies the wrong region's diffs to your database |
 | `IMPORT_PBF` | — | Path to a local PBF inside the container, overriding the download |
 | `FORCE_DOWNLOAD` | `0` | `1` re-downloads even when the PBF is already present |
 | `UPDATE_MODE` | `replication` | `full` re-downloads and re-imports instead, for extracts with no replication feed |
