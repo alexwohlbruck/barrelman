@@ -19,6 +19,7 @@ import { db } from '../db'
 import { sql } from 'drizzle-orm'
 import GtfsRealtimeBindings from 'gtfs-realtime-bindings'
 import { LRUCache } from 'lru-cache'
+import { readAlertExtensions } from './alert-extensions'
 
 // Decode through the live import binding at call time rather than destructuring
 // at load, so a test mock of `gtfs-realtime-bindings` applies even when this
@@ -68,6 +69,19 @@ export interface ServiceAlert {
   description?: string
   /** Agency page with more detail, when the feed supplies one. */
   url?: string
+  /**
+   * The agency's own category for this alert, verbatim — "Planned - Detour",
+   * "Station Notice". Only feeds carrying a vendor extension supply it; it is
+   * the agency's wording, not ours, so it is untranslated and better suited to
+   * a tooltip than a chip.
+   */
+  category?: string
+  /** The agency scheduled this rather than reacting to it. */
+  planned?: boolean
+  /** When the agency published the alert, when the feed says. */
+  postedAt?: string
+  /** When the agency last revised it. */
+  updatedAt?: string
   activePeriods: AlertActivePeriod[]
   informedEntities: InformedEntity[]
 }
@@ -162,6 +176,11 @@ function enumName(value: any, names: string[], fallback: string, offset = 1): st
   return names[value - offset] ?? fallback
 }
 
+/** Take the extension's answer only where the feed left the spec field unset. */
+function withFallback(declared: string, unsetValue: string, fromExtension?: string): string {
+  return declared === unsetValue && fromExtension ? fromExtension : declared
+}
+
 /** Pull the first translation out of a GTFS-RT TranslatedString. */
 function translatedText(field: any): string | undefined {
   const text = field?.translation?.[0]?.text
@@ -243,12 +262,18 @@ async function fetchFeedAlerts(
     })
     if (!response.ok) return empty
 
-    const buffer = await response.arrayBuffer()
-    const feedMessage = decodeFeedMessage(new Uint8Array(buffer))
+    const buffer = new Uint8Array(await response.arrayBuffer())
+    const feedMessage = decodeFeedMessage(buffer)
+
+    // Whatever the stock decoder dropped: agency categories and posting times
+    // carried in vendor extensions, keyed by the entity's position in the feed.
+    const enrichments = readAlertExtensions(buffer)
 
     const alerts: ServiceAlert[] = []
+    let entityIndex = -1
 
     for (const entity of feedMessage.entity ?? []) {
+      entityIndex++
       const alert = (entity as any).alert
       if (!alert) continue
 
@@ -257,15 +282,30 @@ async function fetchFeedAlerts(
       // An alert with no words is not something we can show a rider.
       if (!header && !description) continue
 
+      const extra = enrichments.get(entityIndex)
+
       alerts.push({
         id: `${feed.feedId}_${(entity as any).id ?? alerts.length}`,
         feedId: feed.feedId,
         cause: enumName(alert.cause, CAUSE_NAMES, 'UNKNOWN_CAUSE'),
-        effect: enumName(alert.effect, EFFECT_NAMES, 'UNKNOWN_EFFECT'),
-        severity: enumName(alert.severityLevel, SEVERITY_NAMES, 'UNKNOWN_SEVERITY', 0),
+        // The feed's own words win; an extension only fills a gap it left.
+        effect: withFallback(
+          enumName(alert.effect, EFFECT_NAMES, 'UNKNOWN_EFFECT'),
+          'UNKNOWN_EFFECT',
+          extra?.effect,
+        ),
+        severity: withFallback(
+          enumName(alert.severityLevel, SEVERITY_NAMES, 'UNKNOWN_SEVERITY', 0),
+          'UNKNOWN_SEVERITY',
+          extra?.severity,
+        ),
         header: header ?? description!,
         description: header ? description : undefined,
         url: translatedText(alert.url),
+        category: extra?.category,
+        planned: extra?.planned,
+        postedAt: extra?.postedAt,
+        updatedAt: extra?.updatedAt,
         activePeriods: (alert.activePeriod ?? []).map((p: any) => ({
           start: toIso(p.start),
           end: toIso(p.end),
