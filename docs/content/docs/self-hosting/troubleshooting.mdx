@@ -3,6 +3,27 @@ title: Troubleshooting
 description: What the common failures look like, and what they actually mean.
 ---
 
+## Install
+
+**Every `docker compose` command fails with `open .../pelias/docker-compose.yml: no such file or directory`**
+
+The root Compose file `include:`s the Pelias one, and Compose resolves includes
+while parsing — before profiles decide what starts — so the file has to exist
+even if you never run the address geocoder. Fetch it and the config beside it:
+
+```bash
+BASE=https://raw.githubusercontent.com/alexwohlbruck/barrelman/main
+mkdir -p pelias
+curl -fsSL -o pelias/docker-compose.yml $BASE/pelias/docker-compose.yml
+curl -fsSL -o pelias/pelias.json $BASE/pelias/pelias.json
+```
+
+**`martin-config.yaml` or `graphhopper-config.yml` appears to be a directory**
+
+Docker silently creates a *directory* in place of a missing bind-mount source,
+so fetching only `docker-compose.yml` leaves Martin and GraphHopper parsing a
+directory as their config. Remove them and fetch the real files.
+
 ## Health and startup
 
 **`/health` returns `"status":"degraded"`**
@@ -124,6 +145,32 @@ A required query parameter is missing. `/gbfs/systems` needs a full bbox (`north
 **`profile parameter required` from `/route`**
 
 `/route` passes its body to GraphHopper, so it takes `profile` (`car`, `bike`, `foot`), not the `mode` that `/isochrone` uses.
+
+## Admin access
+
+**An API key created with the `admin` scope gets `403` from every `/admin/*` route**
+
+Check what the key actually stored:
+
+```bash
+curl -s -H "Authorization: Bearer $SESSION_TOKEN" localhost:5001/account/keys \
+  | grep -o '"scopes":\[[^]]*\]'
+```
+
+If it reads `["*"]` when you asked for `["*","admin"]`, the key was minted by a
+version that collapsed the two — `*` and `admin` are separate grants, and the
+wildcard swallowed the admin half without an error. Keys already stored that way
+stay broken; issue a new one, or update the existing key's scopes:
+
+```bash
+curl -s -X PATCH -H "Authorization: Bearer $SESSION_TOKEN" \
+  -H 'Content-Type: application/json' -d '{"scopes":["*","admin"]}' \
+  localhost:5001/account/keys/<id>
+```
+
+Only an account whose *role* is already `admin` may grant the scope at all — a
+non-admin asking for it gets a `403` naming the scope, not a silently narrowed
+key.
 
 ## Configuration
 

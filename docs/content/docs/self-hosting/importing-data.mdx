@@ -58,7 +58,21 @@ curl -s -X POST -H "Authorization: Bearer $KEY" -H 'Content-Type: application/js
   -d '{"id":"us/colorado"}' $API/admin/boundaries/resolve
 ```
 
-The last call returns `{"region":{…}}` and writes nothing. Add a `"key"` to that object and POST it to `$API/admin/regions` to save it. Confirm with:
+The last call returns `{"region":{…}}` and writes nothing. It already derives a
+`key` from the boundary name (`us/colorado` → `colorado`); override it only if
+you want a different one. POST the **inner** object — not the `{"region":…}`
+envelope — to `$API/admin/regions` to save it:
+
+```bash
+curl -s -X POST -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' \
+  -d '{"id":"us/colorado"}' $API/admin/boundaries/resolve \
+  | python3 -c 'import sys,json; json.dump(json.load(sys.stdin)["region"], sys.stdout)' \
+  | curl -s -X POST -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' \
+      --data-binary @- $API/admin/regions
+```
+
+A `201` with the saved region back is success; `409` means that key already
+exists. Confirm with:
 
 ```bash
 docker compose exec barrelman-ops bun run src/config/regions.ts summary
@@ -94,14 +108,31 @@ This downloads each region's PBF, `osmium merge`s them into one extract, runs os
 Watch it:
 
 ```bash
-docker compose logs -f barrelman-ops
-```
-
-Check progress from another shell:
-
-```bash
 docker exec barrelman-db psql -U barrelman -d barrelman -c "SELECT count(*) FROM geo_places;"
 ```
+
+<Callout type="warn" title="`docker compose logs barrelman-ops` will not show this run">
+Container logs carry the worker's own output — PID 1 — and a script started
+with `docker compose exec -d` is a *different* process whose output goes
+nowhere. The log stays empty on `[ops-worker] … polling for process jobs` for
+the entire import, which reads exactly like nothing is happening.
+
+Two ways to get real output:
+
+- **Run it from the console**, under **Scripts**. The job runner captures the
+  logs into the database, so **Jobs** shows streamed output, progress and an
+  exit code — and it survives your SSH session dropping.
+- **Redirect to a file** if you want to stay on the CLI:
+
+  ```bash
+  docker compose exec -d barrelman-ops \
+    bash -c 'bash scripts/run-import.sh > /tmp/import.log 2>&1'
+  docker compose exec barrelman-ops tail -f /tmp/import.log
+  ```
+
+A CLI run started with `-d` also has no completion signal. It is finished when
+`docker top barrelman-ops` shows only `bun run src/worker/index.ts`.
+</Callout>
 
 Nothing below this line is required. Skip any of it you do not need.
 
@@ -183,7 +214,8 @@ curl -s -H "Authorization: Bearer $KEY" \
 
 # Vector tiles — Martin against PostGIS. Source names come from
 # martin-config.yaml (parchment_pois, parchment_roads, transit_platforms, …).
-curl -s -o /dev/null -w '%{http_code} %{content_type}\n' \
+# Watch the size, not just the status — see the note below.
+curl -s -o /dev/null -w '%{http_code} %{content_type} %{size_download}\n' \
   "http://localhost:5001/tiles/parchment_pois/12/1146/1635?api_key=$KEY"
 
 # Transit stops — the GTFS import (step 2b). Reads PostGIS, not MOTIS.
@@ -194,6 +226,25 @@ curl -s -H "Authorization: Bearer $KEY" \
 curl -s -H "Authorization: Bearer $KEY" \
   "http://localhost:5001/isochrone?lat=40.7527&lng=-73.9772&mode=transit&durations=1800"
 ```
+
+<Callout type="warn" title="Low-zoom tiles are very large, and that is the shipped behaviour">
+`parchment_pois` and `parchment_roads` are unfiltered tables between their
+`minzoom: 10` and `maxzoom: 16`, so a low-zoom tile over a city serialises
+everything inside it. Measured over Denver on a Colorado import:
+
+| Zoom | `parchment_pois` | Time |
+|---|---|---|
+| 10 | 63 MB | 6.9 s |
+| 12 | 14 MB | 0.7 s |
+| 14 | 1.3 MB | 0.2 s |
+| 16 | 92 KB | 0.05 s |
+
+A `200` therefore proves nothing about usability. If you are pointing a real map
+at this, either start your POI and road layers at z14, or narrow the sources in
+`martin-config.yaml` — a `minzoom` closer to 14, or a filtered view that admits
+only prominent features at low zoom. Left as-is, a zoomed-out map will pull tens
+of megabytes per tile and stall the database behind it.
+</Callout>
 
 Those last two are worth running as a pair. Stops live in PostGIS while routing comes from MOTIS's own dataset, so a stack that skipped step 2c answers the first happily and returns nothing useful for the second.
 
