@@ -359,10 +359,20 @@ export function isAlertActive(
 /**
  * Does this alert inform what the caller is looking at?
  *
- * An entity constrains on every field it names, so `{routeId: 'B48'}` matches
- * anything on the B48 while `{routeId: 'B48', stopId: 'X'}` matches the B48
- * only at stop X. An entity naming only an agency matches everything that
- * agency runs — which is what makes system-wide notices reach every page.
+ * An informed entity constrains on the fields it names — but only on the
+ * dimensions the caller can actually answer for. MTA scopes almost every
+ * subway alert to a route *and* a stop (`{routeId: "N", stopId: "R09"}`);
+ * a route page asks about the route and knows nothing about stops, and if the
+ * unanswerable stop constraint were allowed to veto, that page would show
+ * nothing at all. So a dimension the caller didn't supply is not checked.
+ *
+ * A caller that *does* supply a dimension gets the precision back: asking
+ * about route B48 at stop S1 will not match an entity scoped to B48 at S2.
+ *
+ * At least one dimension has to be both named and asked about, so a
+ * trip-scoped alert doesn't surface on a stop board that never mentioned trips.
+ * An entity naming only an agency constrains nothing and matches everywhere,
+ * which is what carries system-wide notices onto every page.
  *
  * With no filters at all, every alert matches.
  */
@@ -376,22 +386,24 @@ export function alertMatches(
   if (!routes.length && !stops.length && !trips.length) return true
 
   return alert.informedEntities.some(entity => {
-    // An entity that names nothing we can check (agency-wide, or route-type
-    // wide) is a blanket notice — it applies wherever we're asking about.
-    if (!entity.routeId && !entity.stopId && !entity.tripId) return true
+    // Named by the entity, and something the caller asked about.
+    const dimensions: Array<[string | undefined, string[]]> = [
+      [entity.routeId, routes],
+      [entity.stopId, stops],
+      [entity.tripId, trips],
+    ]
 
-    if (entity.routeId && !routes.includes(entity.routeId)) return false
-    if (entity.stopId && !stops.includes(entity.stopId)) return false
-    if (entity.tripId && !trips.includes(entity.tripId)) return false
+    // Nothing checkable (agency-wide, or route-type wide) — a blanket notice.
+    if (dimensions.every(([value]) => !value)) return true
 
-    // Every named field the caller can answer for agrees. Require that at
-    // least one of them was actually checked, so a trip-scoped alert doesn't
-    // leak onto a stop page that only asked about a stop.
-    return Boolean(
-      (entity.routeId && routes.length) ||
-      (entity.stopId && stops.length) ||
-      (entity.tripId && trips.length),
-    )
+    let checked = 0
+    for (const [value, asked] of dimensions) {
+      if (!value || !asked.length) continue
+      if (!asked.includes(value)) return false
+      checked++
+    }
+
+    return checked > 0
   })
 }
 

@@ -245,11 +245,22 @@ describe('alertMatches', () => {
     ).toBe(true)
   })
 
-  test('a route+stop entity only matches at that stop', () => {
+  test('a route+stop entity only matches at that stop, when a stop was named', () => {
     const alert = withEntities([{ routeId: 'B48', stopId: 'S1' }])
 
     expect(alertMatches(alert, { routeIds: ['B48'], stopIds: ['S1'] })).toBe(true)
     expect(alertMatches(alert, { routeIds: ['B48'], stopIds: ['S2'] })).toBe(false)
+  })
+
+  test('a stop the caller never asked about cannot veto a route match', () => {
+    // MTA scopes nearly every subway alert to a route *and* a stop. A route
+    // page knows its route and nothing about stops; letting the unanswerable
+    // half of the entity veto emptied the page entirely.
+    const alert = withEntities([
+      { agencyId: 'MTASBWY', routeId: 'N', routeType: 0, directionId: 0, stopId: 'R09' },
+    ])
+
+    expect(alertMatches(alert, { routeIds: ['N'] })).toBe(true)
   })
 
   test('a trip-scoped alert does not leak onto a stop board that never asked about trips', () => {
