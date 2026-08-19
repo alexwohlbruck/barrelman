@@ -18,12 +18,6 @@ curl -fsSL -o pelias/docker-compose.yml $BASE/pelias/docker-compose.yml
 curl -fsSL -o pelias/pelias.json $BASE/pelias/pelias.json
 ```
 
-**`martin-config.yaml` or `graphhopper-config.yml` appears to be a directory**
-
-Docker silently creates a *directory* in place of a missing bind-mount source,
-so fetching only `docker-compose.yml` leaves Martin and GraphHopper parsing a
-directory as their config. Remove them and fetch the real files.
-
 ## Health and startup
 
 **`/health` returns `"status":"degraded"`**

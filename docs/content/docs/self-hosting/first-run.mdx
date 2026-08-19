@@ -121,8 +121,11 @@ curl -s -X POST $API/auth/verify-code \
 ```
 
 The reply carries `"role":"admin"` for the first account, and a `token` that is
-your session id. Send it as `Authorization: Bearer <token>` to mint the key
-below.
+your session id. Export it — the key below is minted with it:
+
+```bash
+SESSION_TOKEN=<the token from the reply>
+```
 
 <Callout type="warn">
 If you are exposing this instance publicly, do this **before** [going to production](/self-hosting/production). Sign-up is open by default, and "first account wins" is a race you want to have already finished. Set `BARRELMAN_REGISTRATION_MODE=invite` if you never want open sign-up at all.

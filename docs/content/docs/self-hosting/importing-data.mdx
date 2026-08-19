@@ -60,19 +60,13 @@ curl -s -X POST -H "Authorization: Bearer $KEY" -H 'Content-Type: application/js
 
 The last call returns `{"region":{…}}` and writes nothing. It already derives a
 `key` from the boundary name (`us/colorado` → `colorado`); override it only if
-you want a different one. POST the **inner** object — not the `{"region":…}`
-envelope — to `$API/admin/regions` to save it:
+you want a different one.
 
-```bash
-curl -s -X POST -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' \
-  -d '{"id":"us/colorado"}' $API/admin/boundaries/resolve \
-  | python3 -c 'import sys,json; json.dump(json.load(sys.stdin)["region"], sys.stdout)' \
-  | curl -s -X POST -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' \
-      --data-binary @- $API/admin/regions
-```
+POST the **inner** object — not the `{"region":…}` envelope — to
+`$API/admin/regions` to save it. A `201` with the saved region back is success;
+`409` means that key already exists.
 
-A `201` with the saved region back is success; `409` means that key already
-exists. Confirm with:
+Confirm with:
 
 ```bash
 docker compose exec barrelman-ops bun run src/config/regions.ts summary
@@ -138,20 +132,36 @@ Nothing below this line is required. Skip any of it you do not need.
 
 ### Step 2 — Transit (optional)
 
-Three commands, in this order. All three are required.
+Three steps, in this order. All three are required, and each one needs the
+previous to have **finished** — 2b imports the extract 2a writes, and 2c bakes
+the feeds 2b downloads.
+
+`-d` returns immediately, so running them as three separate detached commands
+starts them all at once and the later two operate on inputs that do not exist
+yet. Chain them in one command instead:
 
 ```bash
 # 2a. Repair underground platform topology → region-transit.osm.pbf
-docker compose exec -d barrelman-ops bash scripts/prepare-motis-osm.sh
-
 # 2b. Download + import GTFS feeds. Needs GraphHopper from step 1 —
 #     walking transfers between stops are routed through it.
 #     Get a free key at https://transit.land/users/sign_up
-docker compose exec -d -e TRANSITLAND_API_KEY=tlk_... barrelman-ops bash scripts/download-gtfs.sh
-
 # 2c. Rebuild the MOTIS dataset. REQUIRED — see below.
-docker compose exec -d barrelman-ops bash scripts/rebuild-motis.sh
+docker compose exec -d -e TRANSITLAND_API_KEY=<your key> barrelman-ops bash -c '
+  { bash scripts/prepare-motis-osm.sh &&
+    bash scripts/download-gtfs.sh &&
+    bash scripts/rebuild-motis.sh ; } > /tmp/transit.log 2>&1
+'
+
+docker compose exec barrelman-ops tail -f /tmp/transit.log
 ```
+
+The redirect has to be *inside* the container command — a `>` outside it applies
+to the host shell, and a `-d` run has no output there to capture.
+
+Running them one at a time is fine too — just wait for each to finish before
+starting the next. In the console's **Scripts** view that is automatic: jobs are
+claimed one at a time under an advisory lock, so a queued step cannot start
+early.
 
 <Callout type="warn" title="Why step 2c is not optional">
 `motis server` only *serves* the pre-built dataset at `/data/data`. It never re-imports when the config or the feeds change, so a plain `docker restart` keeps serving the old schedules indefinitely and the new feeds never reach riders.
