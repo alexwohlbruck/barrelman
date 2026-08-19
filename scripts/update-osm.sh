@@ -20,9 +20,14 @@ set -euo pipefail
 #
 # CONFIGURATION (set in .env or export before running):
 #   UPDATE_MODE                 replication | full  (default: replication)
-#   GEOFABRIK_URL               Full extract download URL
-#   GEOFABRIK_REPLICATION_URL   Diff update server URL (replication mode only)
+#   GEOFABRIK_REPLICATION_URL   Diff update server URL (replication mode only).
+#                               Defaults to the replication feed of whatever
+#                               REGIONS resolves to — override only to point at
+#                               a different server.
 #   BARRELMAN_DB_PASSWORD       DB password (default: barrelman)
+#
+# Running inside barrelman-ops? These come from the container's environment (see
+# docker-compose.yml), not from .env — the image has no .env to source.
 #
 # SCHEDULING (crontab):
 #   Daily at 3am:
@@ -30,8 +35,12 @@ set -euo pipefail
 # =============================================================================
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-ENV_FILE="$(dirname "$SCRIPT_DIR")/.env"
+PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+ENV_FILE="$PROJECT_DIR/.env"
 
+# Only present when this script is run from a host checkout. Inside barrelman-ops
+# there is no /app/.env (.env is in .dockerignore), so the variables below have to
+# reach the container through its `environment:` block instead.
 if [ -f "$ENV_FILE" ]; then
   set -a; source "$ENV_FILE"; set +a
 fi
@@ -40,29 +49,24 @@ DB_PASS="${BARRELMAN_DB_PASSWORD:-barrelman}"
 DB_URL="postgresql://barrelman:${DB_PASS}@localhost:5432/barrelman"
 
 UPDATE_MODE="${UPDATE_MODE:-replication}"
-GEOFABRIK_URL="${GEOFABRIK_URL:-https://download.geofabrik.de/north-america/us/north-carolina-latest.osm.pbf}"
-GEOFABRIK_REPLICATION_URL="${GEOFABRIK_REPLICATION_URL:-https://download.geofabrik.de/north-america/us/north-carolina-updates/}"
+
+# The replication feed follows REGIONS, exactly as run-import.sh resolves its
+# extracts. It used to default to North Carolina's feed no matter what REGIONS
+# said, so a Colorado instance quietly applied North Carolina diffs on every run.
+REGION_REPLICATION="$(cd "$PROJECT_DIR" && bun run src/config/regions.ts osm-replication 2>/dev/null | head -1 || true)"
+GEOFABRIK_REPLICATION_URL="${GEOFABRIK_REPLICATION_URL:-${REGION_REPLICATION:-https://download.geofabrik.de/north-america/us/north-carolina-updates/}}"
 
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] Starting OSM update (mode: $UPDATE_MODE)"
 
 # ── Step 1: Apply OSM changes ────────────────────────────────────────────────
 
 if [ "$UPDATE_MODE" = "full" ]; then
-  echo "[$(date '+%Y-%m-%d %H:%M:%S')] [1/8] Downloading latest extract..."
-  docker exec barrelman-db \
-    wget -q --show-progress -O /data/region.osm.pbf "$GEOFABRIK_URL"
-
-  echo "[$(date '+%Y-%m-%d %H:%M:%S')] [1/8] Running full re-import..."
-  docker exec \
-    -e DATABASE_URL="$DB_URL" \
-    barrelman-db bash /app/scripts/import-osm.sh
-
-  echo "[$(date '+%Y-%m-%d %H:%M:%S')] Triggering GraphHopper graph rebuild..."
-  "$SCRIPT_DIR/rebuild-graphhopper.sh"
-
-  # Full import runs the complete pipeline — we're done
-  echo "[$(date '+%Y-%m-%d %H:%M:%S')] Full re-import complete."
-  exit 0
+  # Delegate rather than re-deriving a download URL here. run-import.sh resolves
+  # every extract from the region registry and osmium-merges them; this branch
+  # used to wget a single GEOFABRIK_URL that defaulted to North Carolina, so a
+  # "full refresh" on any other region replaced its data with the wrong state.
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] Full re-import — handing off to run-import.sh"
+  exec "$SCRIPT_DIR/run-import.sh"
 fi
 
 # ── Replication mode ─────────────────────────────────────────────────────────

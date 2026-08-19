@@ -11,22 +11,29 @@ set -euo pipefail
 #   ./scripts/init-replication.sh
 #
 # Environment variables (or set in .env):
-#   GEOFABRIK_REPLICATION_URL - Geofabrik update server for your region
-#                               Default: North Carolina updates
-#                               Find yours at: https://download.geofabrik.de
+#   GEOFABRIK_REPLICATION_URL - Geofabrik update server. Defaults to the feed of
+#                               whatever REGIONS resolves to, so it normally
+#                               needs no setting at all. Override to point at a
+#                               different server:
 #                               e.g. https://download.geofabrik.de/europe/germany-updates/
 #   BARRELMAN_DB_PASSWORD     - DB password (default: barrelman)
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-ENV_FILE="$(dirname "$SCRIPT_DIR")/.env"
+PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+ENV_FILE="$PROJECT_DIR/.env"
 
+# Only present when run from a host checkout — barrelman-ops has no /app/.env.
 if [ -f "$ENV_FILE" ]; then
   set -a; source "$ENV_FILE"; set +a
 fi
 
 DB_PASS="${BARRELMAN_DB_PASSWORD:-barrelman}"
 DB_URL="postgresql://barrelman:${DB_PASS}@localhost:5432/barrelman"
-REPLICATION_URL="${GEOFABRIK_REPLICATION_URL:-https://download.geofabrik.de/north-america/us/north-carolina-updates/}"
+
+# Follows REGIONS by default; the old hard-coded North Carolina default meant
+# replication was initialized against the wrong feed for every other region.
+REGION_REPLICATION="$(cd "$PROJECT_DIR" && bun run src/config/regions.ts osm-replication 2>/dev/null | head -1 || true)"
+REPLICATION_URL="${GEOFABRIK_REPLICATION_URL:-${REGION_REPLICATION:-https://download.geofabrik.de/north-america/us/north-carolina-updates/}}"
 
 echo "Initializing replication state..."
 echo "  DB:     $DB_URL"
