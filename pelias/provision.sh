@@ -84,7 +84,7 @@ for src in wof oa osm polylines; do
   pelias import "$src"
 done
 
-# 8. Starting the API is left to you, on purpose.
+# 8. Starting the API is left to you.
 #
 # It has to be done from the root compose file, naming both the profile and the
 # service. Do not use `pelias compose up`: it runs a plain `docker compose up -d`,

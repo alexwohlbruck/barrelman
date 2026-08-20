@@ -82,7 +82,7 @@ pelias elastic start && pelias elastic wait
 pelias elastic create
 
 # 3. Download the sources (WOF, OpenAddresses, OSM PBFs, TIGER for interpolation).
-#    Named individually on purpose — see the `transit` note below.
+#    Listed one by one. See the `transit` note below for why.
 pelias download wof & pelias download oa & pelias download osm & pelias download tiger & wait
 
 # 4. Prepare polylines — THE STEP THAT IS EASY TO MISS.
@@ -93,7 +93,7 @@ pelias download wof & pelias download oa & pelias download osm & pelias download
 pelias prepare polylines
 
 # 5. Import each source (WOF + OpenAddresses + OSM addresses + polyline streets).
-#    NOT `pelias import all` — see the `transit` note below.
+#    Not `pelias import all`. See the `transit` note below for why.
 for src in wof oa osm polylines; do pelias import "$src"; done
 ```
 
@@ -125,8 +125,7 @@ with an error. With `set -e`, that stopped `provision.sh` after the long import
 had finished but before it started the API. The run did all the work and still
 ended in failure.
 
-Both steps above therefore name the sources this stack actually has rather than
-using `all`.
+So both steps above list the sources this stack defines, and avoid `all`.
 
 ### Re-importing into an already-running API
 
