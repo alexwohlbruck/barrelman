@@ -132,8 +132,8 @@ docker compose exec barrelman-ops env | grep -E 'UPDATE_MODE|GEOFABRIK'
 ### How often to run it
 
 Whenever you like. The replication cursor lives in the database
-(`osm2pgsql_properties.replication_sequence_number`), not in a clock, so each run
-applies every diff published since the last successful one. Skipping a week and
+(`planet_osm_replication_status`), not in a clock, so each run applies every
+diff published since the last successful one. Skipping a week and
 running once lands in the same place as running daily — the job just takes
 longer. The seeded daily schedule exists to keep each run small, not because the
 script depends on the interval.
@@ -149,9 +149,20 @@ server has already dropped, and recovery means `UPDATE_MODE=full` followed by
 `scripts/init-replication.sh`. Check how far behind you are with:
 
 ```bash
-docker compose exec barrelman-db psql -U barrelman -d barrelman \
-  -c "SELECT value FROM osm2pgsql_properties WHERE property = 'replication_timestamp';"
+docker exec barrelman-db psql -U barrelman -d barrelman \
+  -c "SELECT url, sequence, importdate FROM planet_osm_replication_status;"
 ```
+
+```
+                               url                                | sequence |       importdate
+------------------------------------------------------------------+----------+------------------------
+ https://download.geofabrik.de/north-america/us/colorado-updates/ |     4885 | 2026-08-19 20:20:48+00
+```
+
+The table name follows the osm2pgsql generation, not barrelman: the 1.8 shipped
+in `barrelman-db` writes `planet_osm_replication_status`, while 1.9 and later
+keep the same state in `osm2pgsql_properties`. On this image, querying the
+latter just errors with `relation "osm2pgsql_properties" does not exist`.
 </Callout>
 
 <Callout type="warn">
@@ -163,7 +174,7 @@ script warns when it detects this. Use `UPDATE_MODE=full` to refresh all of them
 ## Refreshing transit feeds
 
 ```bash
-docker compose exec -d -e TRANSITLAND_API_KEY=tlk_... barrelman-ops bash scripts/download-gtfs.sh
+docker compose exec -d -e TRANSITLAND_API_KEY=<your key> barrelman-ops bash scripts/download-gtfs.sh
 docker compose exec -d barrelman-ops bash scripts/rebuild-motis.sh
 ```
 

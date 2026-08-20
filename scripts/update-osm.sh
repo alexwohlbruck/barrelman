@@ -122,10 +122,25 @@ if [ "${REPLICATION_COUNT:-0}" -gt 1 ]; then
   echo "  The other regions stay at their last full import. Use UPDATE_MODE=full to refresh them all."
 fi
 
-# Auto-initialize replication state if missing
+# Auto-initialize replication state if missing.
+#
+# Which table holds that state depends on the osm2pgsql generation:
+# 1.9+ keeps it in osm2pgsql_properties, while the 1.8 in barrelman-db writes
+# planet_osm_replication_status (url, sequence, importdate). Checking only the
+# former means the check never matches on this image, so every run re-ran
+# `osm2pgsql-replication init` — which resets the cursor back to the ORIGINAL
+# import sequence and re-applies every diff since, growing without bound and
+# eventually failing outright once that sequence ages out of Geofabrik's
+# ~4-month window. Check the table this image actually writes first.
 INIT_CHECK=$(docker exec barrelman-db \
   psql "$DB_URL" -tAc \
-  "SELECT count(*) FROM osm2pgsql_properties WHERE property='replication_base_url';" 2>/dev/null || echo "0")
+  "SELECT count(*) FROM planet_osm_replication_status;" 2>/dev/null || echo "0")
+
+if [ "${INIT_CHECK:-0}" = "0" ]; then
+  INIT_CHECK=$(docker exec barrelman-db \
+    psql "$DB_URL" -tAc \
+    "SELECT count(*) FROM osm2pgsql_properties WHERE property='replication_base_url';" 2>/dev/null || echo "0")
+fi
 
 if [ "$INIT_CHECK" = "0" ]; then
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] Replication not initialized — running init..."
