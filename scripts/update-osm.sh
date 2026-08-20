@@ -34,7 +34,10 @@ set -euo pipefail
 #     Downloads the latest extracts and re-imports from scratch. Slower
 #     but always consistent. No initialization needed.
 #
-# CONFIGURATION (set in .env or export before running):
+# CONFIGURATION (set in .env, or pass with -e when running in a container):
+#   Inside barrelman-ops there is no /app/.env to source — .env is in
+#   .dockerignore — so these arrive through the service's `environment:`
+#   block in docker-compose.yml, or per-job from the console.
 #   UPDATE_MODE                 replication | full  (default: replication)
 #   GEOFABRIK_URL               Full extract download URL
 #   GEOFABRIK_REPLICATION_URL   Diff update server URL (replication mode only).

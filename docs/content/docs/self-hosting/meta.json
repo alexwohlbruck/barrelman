@@ -4,8 +4,11 @@
     "index",
     "first-run",
     "importing-data",
+    "regions",
     "production",
     "operations",
+    "configuration",
+    "abuse-controls",
     "troubleshooting"
   ]
 }

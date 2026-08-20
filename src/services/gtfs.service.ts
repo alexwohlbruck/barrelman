@@ -1390,39 +1390,51 @@ export async function generateMotisConfig(options?: MotisConfigOptions): Promise
     lines.push('')
   }
 
-  lines.push('timetable:')
-  lines.push('  first_day: TODAY')
-  lines.push(`  num_days: ${numDays}`)
-  lines.push('  with_shapes: true')
-  lines.push('  adjust_footpaths: true')
-  // How often MOTIS re-polls every feed's GTFS-RT URLs. MOTIS default is 60s;
-  // dev can raise this (MOTIS_RT_UPDATE_INTERVAL) to cut continuous polling of
-  // agencies it isn't testing while keeping realtime data present.
-  lines.push(`  update_interval: ${rtUpdateInterval}`)
-  lines.push(`  max_footpath_length: ${maxFootpathLength}`)
-  // Import-time stop↔street matching radius used when generating
-  // stop-to-stop transfer footpaths (osr_footpath). The MOTIS default of
-  // 25m leaves off-street platforms (e.g. under Union Square Park) with
-  // crow-fly transfer estimates instead of street-routed ones. Note the
-  // QUERY-time equivalent (maxMatchingDistance on /api/v1/plan) is what
-  // governs access/egress walks — transit.service.ts passes that per query.
-  lines.push('  max_matching_distance: 250')
-  lines.push('  datasets:')
+  // Emitted only when there is at least one feed. `datasets:` with nothing under
+  // it is YAML null, and MOTIS rejects the whole config rather than reading it as
+  // empty: "Failed to parse field 'timetable': Failed to parse field 'datasets':
+  // Could not cast to map!".
+  //
+  // Note this does not make a feed-less config importable — MOTIS also refuses
+  // "feature OSR_FOOTPATH requires features STREET_ROUTING and TIMETABLE" once
+  // `osm:` is set. A MOTIS dataset genuinely needs a timetable, so callers should
+  // not rebuild at all with no feeds; rebuild-motis.sh checks first. This branch
+  // only keeps the generated YAML well-formed.
+  if (feeds.length > 0) {
+    lines.push('timetable:')
+    lines.push('  first_day: TODAY')
+    lines.push(`  num_days: ${numDays}`)
+    lines.push('  with_shapes: true')
+    lines.push('  adjust_footpaths: true')
+    // How often MOTIS re-polls every feed's GTFS-RT URLs. MOTIS default is 60s;
+    // dev can raise this (MOTIS_RT_UPDATE_INTERVAL) to cut continuous polling of
+    // agencies it isn't testing while keeping realtime data present.
+    lines.push(`  update_interval: ${rtUpdateInterval}`)
+    lines.push(`  max_footpath_length: ${maxFootpathLength}`)
+    // Import-time stop↔street matching radius used when generating
+    // stop-to-stop transfer footpaths (osr_footpath). The MOTIS default of
+    // 25m leaves off-street platforms (e.g. under Union Square Park) with
+    // crow-fly transfer estimates instead of street-routed ones. Note the
+    // QUERY-time equivalent (maxMatchingDistance on /api/v1/plan) is what
+    // governs access/egress walks — transit.service.ts passes that per query.
+    lines.push('  max_matching_distance: 250')
+    lines.push('  datasets:')
 
-  for (const feed of feeds) {
-    lines.push(`    "${feed.feed_id}":`)
-    lines.push(`      path: "${gtfsDir}/${feed.feed_id}.zip"`)
+    for (const feed of feeds) {
+      lines.push(`    "${feed.feed_id}":`)
+      lines.push(`      path: "${gtfsDir}/${feed.feed_id}.zip"`)
 
-    // Add RT feeds if available
-    const rtUrls = feed.rt_urls
-    if (rtUrls && Array.isArray(rtUrls) && rtUrls.length > 0) {
-      lines.push('      rt:')
-      for (const rt of rtUrls) {
-        lines.push(`        - url: "${rt.url}"`)
-        if (rt.headers && Object.keys(rt.headers).length > 0) {
-          lines.push('          headers:')
-          for (const [key, value] of Object.entries(rt.headers)) {
-            lines.push(`            "${key}": "${value}"`)
+      // Add RT feeds if available
+      const rtUrls = feed.rt_urls
+      if (rtUrls && Array.isArray(rtUrls) && rtUrls.length > 0) {
+        lines.push('      rt:')
+        for (const rt of rtUrls) {
+          lines.push(`        - url: "${rt.url}"`)
+          if (rt.headers && Object.keys(rt.headers).length > 0) {
+            lines.push('          headers:')
+            for (const [key, value] of Object.entries(rt.headers)) {
+              lines.push(`            "${key}": "${value}"`)
+            }
           }
         }
       }

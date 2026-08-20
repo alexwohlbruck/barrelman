@@ -61,11 +61,18 @@ async function main() {
   console.log(`✓ Wrote MOTIS config to ${outputPath}`)
 
   // Summary
+  // Count the entries themselves, not their quoted keys: GTFS and GBFS blocks
+  // both key on `    "<id>":`, so matching that reported every GBFS system as a
+  // timetable dataset — "1334 datasets" on an instance with zero GTFS feeds.
   const lines = configYaml.split('\n')
-  const datasetCount = lines.filter(l => l.match(/^\s{4}"/)).length
+  const datasetCount = lines.filter(l => l.startsWith('      path: "')).length
   const rtCount = lines.filter(l => l.trim().startsWith('- url:')).length
-  const gbfsCount = lines.filter(l => l.match(/^\s{4}"/) && lines.indexOf(l) > lines.indexOf('gbfs:')).length
+  const gbfsCount = lines.filter(l => l.startsWith('      url: "')).length
   console.log(`  ${datasetCount} datasets, ${rtCount} GTFS-RT feed URLs`)
+  if (datasetCount === 0) {
+    console.log('  No GTFS feeds — timetable block omitted. MOTIS cannot import a')
+    console.log('  dataset without one; run the transit import (scripts/download-gtfs.sh) first.')
+  }
   if (includeGbfs) {
     console.log(`  ${gbfsCount} GBFS feeds`)
   }

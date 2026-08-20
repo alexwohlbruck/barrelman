@@ -95,7 +95,7 @@ bun run scripts/generate-pelias-config.ts   # rewrites imports from REGIONS
 ```
 
 Everything outside `imports` (logger, esclient, api) is preserved. To add a
-region, define it in barrelman (see [`docs/REGIONS.md`](../docs/REGIONS.md) —
+region, define it in barrelman (see [the region guide](https://docs.barrelman.dev/self-hosting/regions) —
 adding one by name fills in its OpenAddresses files and TIGER state codes
 automatically), regenerate, then re-run steps 4-6 above.
 

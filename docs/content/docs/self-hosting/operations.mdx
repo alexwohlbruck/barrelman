@@ -11,7 +11,26 @@ docker compose pull
 docker compose up -d
 ```
 
-`docker compose pull` refreshes **every** service's image, not just Barrelman's. That is fine for anything stateless — which is why most images here track a floating tag and pick up upstream fixes for free.
+`docker compose pull` refreshes every service's image in the **active profiles**, not just Barrelman's. That is fine for anything stateless — which is why most images here track a floating tag and pick up upstream fixes for free.
+
+Profile-gated services are skipped, which is easy to miss: on an instance running
+the address geocoder, a plain `pull` fetches the six core images and leaves
+`pelias/api` and `pelias/elasticsearch` on whatever they were. Name the profile
+to include them:
+
+```bash
+docker compose --profile pelias pull
+docker compose --profile pelias up -d
+```
+
+<Callout type="warn" title="An upgrade recreates containers, and takes imperative wiring with it">
+Anything attached to the `barrelman` container from outside Compose is discarded
+here. The usual casualty is a reverse proxy wired with
+`docker network connect`: after `up -d` the container is no longer on the
+proxy's network and every request 502s, while barrelman itself looks perfectly
+healthy. Declare the attachment in an override file instead — see
+[reverse proxy and TLS](/self-hosting/production#reverse-proxy-and-tls).
+</Callout>
 
 <Callout type="warn" title="MOTIS and GraphHopper bake data into a version-specific binary format">
 Their on-disk timetable and routing graph are written by one engine version and rejected by another, so a pull that brings in a new major version leaves the engine unable to start:
@@ -80,7 +99,35 @@ console, or the command line. Incremental, via Geofabrik's replication feed:
 docker compose exec -d barrelman-ops bash scripts/update-osm.sh
 ```
 
-Not every extract publishes a replication feed. Set `UPDATE_MODE=full` to re-download and re-import instead. If replication state was never initialized, run `scripts/init-replication.sh` first — also in the console, under **Scripts**.
+The feed is resolved from the region registry, so it follows `REGIONS` with
+nothing to configure. Confirm what it will use before the first run:
+
+```bash
+docker compose exec barrelman-ops bun run src/config/regions.ts osm-replication
+```
+
+Not every extract publishes one. Re-download and re-import from scratch instead
+with `UPDATE_MODE=full` — passed on the `exec`, because `.env` is not visible
+inside the container:
+
+```bash
+docker compose exec -d -e UPDATE_MODE=full barrelman-ops bash scripts/update-osm.sh
+```
+
+If replication state was never initialized, run `scripts/init-replication.sh` first — also in the console, under **Scripts**.
+
+<Callout type="warn" title="`.env` alone does not reach the importers">
+Compose does not forward the host environment: a variable reaches
+`barrelman-ops` only if its `environment:` block names it, and the scripts'
+`source ../.env` cannot help — `.env` is excluded from the ops image, so there is
+no `/app/.env` to read. `UPDATE_MODE`, `GEOFABRIK_URL` and
+`GEOFABRIK_REPLICATION_URL` are named there as of August 2026; on an older file,
+setting them in `.env` is a silent no-op. Check what actually arrived:
+
+```bash
+docker compose exec barrelman-ops env | grep -E 'UPDATE_MODE|GEOFABRIK'
+```
+</Callout>
 
 ### How often to run it
 
@@ -132,8 +179,35 @@ compare against.
 
 Only the database holds anything you cannot regenerate — accounts, API keys, usage history, region definitions and job history. OSM, GTFS and the routing graphs are all rebuildable from source.
 
+Back up exactly that, and the dump stays small enough to keep forever:
+
+```bash
+docker exec barrelman-db pg_dump -U barrelman -Fc \
+  -t 'accounts_*' -t 'ops_*' -t 'import_*' \
+  barrelman > barrelman-state-$(date +%F).dump
+```
+
+Measured on the Colorado instance: **35 KB in 0.2 s**, covering all sixteen
+`accounts_*`, `ops_*` and `import_*` tables — accounts, API-key hashes, sessions,
+usage, the credit ledger, region definitions and job history.
+
+A whole-database dump is the belt-and-braces option, and worth taking before an
+upgrade or a risky migration:
+
 ```bash
 docker exec barrelman-db pg_dump -U barrelman -Fc barrelman > barrelman-$(date +%F).dump
+```
+
+That one is dominated by data you can rebuild: on the same instance it took
+**3 m 30 s and produced 1.8 GB**, of which `geo_places` (7.4 GB on disk) and
+`planet_osm_*` (4.9 GB) are almost all of it. Scale that by extract size before
+scheduling it — a country-sized import makes this a tens-of-gigabytes job that a
+re-import would reproduce anyway.
+
+Verify a dump rather than trusting it, with either form:
+
+```bash
+docker exec -i barrelman-db pg_restore -l < barrelman-state-$(date +%F).dump | head
 ```
 
 Treat `accounts_sessions` as credential material: Lucia stores session IDs in the clear, so the cookie value *is* the row's primary key.
