@@ -13,10 +13,10 @@ PELIAS_DOCKER_DIR=${PELIAS_DOCKER_DIR:-/opt/pelias-docker}
 
 log() { echo "[provision] $*"; }
 
-# 1+2. Host prereqs, both of which need root — and this script must NOT be run
-# as root, because the pelias CLI refuses to run as 0:0. Rather than calling
-# sudo from an account that generally will not have it, check and report: the
-# operator runs these two as root once, then runs this script as a normal user.
+# 1+2. Two things need root, and this script must NOT be run as root, because
+# the pelias CLI will not run as uid 0. So check for them and report what is
+# missing, instead of calling sudo from an account that usually cannot. Run these
+# as root once, then run this script as a normal user.
 MISSING=()
 if [ "$(sysctl -n vm.max_map_count 2>/dev/null || echo 0)" -lt 262144 ]; then
   MISSING+=("sysctl -w vm.max_map_count=262144 && echo 'vm.max_map_count=262144' > /etc/sysctl.d/99-pelias-es.conf")
@@ -52,11 +52,11 @@ pelias elastic create || log "elastic index already exists — continuing"
 
 # 5. Download the configured sources (WOF, OpenAddresses, OSM PBFs, TIGER).
 #
-# Named individually rather than `pelias download all`: the CLI's `all` target
-# also drives a `transit` service, which this stack does not define, so it
-# prints `no such service: transit`. Harmless during download (the CLI
-# backgrounds each source), but see the import step below, where it is not.
-# Downloaded in parallel, as `all` does — this is the long pole.
+# Listed one by one instead of using `pelias download all`. The CLI's `all`
+# target also runs a `transit` service, which this stack does not define, so it
+# prints `no such service: transit`. That is harmless here, because the CLI runs
+# each source in the background, but see the import step below where it is not.
+# Downloaded in parallel, as `all` does, since this is the slowest step.
 log "downloading sources (this is large; resumable)"
 dl_pids=()
 for src in wof oa osm tiger; do
@@ -73,26 +73,27 @@ pelias prepare polylines
 
 # 7. Import each source into ES (WOF + OpenAddresses + OSM addresses + streets).
 #
-# NOT `pelias import all`. That target calls its importers in sequence and
-# includes `transit`, which this stack does not define; the CLI aborts there
-# with `no such service: transit` and returns non-zero. Under `set -e` that
-# killed this script *after* a multi-hour import had succeeded but *before*
-# step 8, so the run ended in an error with the API never started.
+# Not `pelias import all`. That target runs the importers one after another and
+# includes `transit`, which this stack does not define, so the CLI stops there
+# with `no such service: transit` and exits with an error. With `set -e` that
+# killed this script after the long import had finished but before step 8, so
+# the run failed and the API was never started.
 log "importing sources into Elasticsearch"
 for src in wof oa osm polylines; do
   log "  importing $src"
   pelias import "$src"
 done
 
-# 8. Starting the API is left to the operator, deliberately.
+# 8. Starting the API is left to you, on purpose.
 #
-# It has to happen from the root compose file with the profile named — NOT
-# `pelias compose up`, which issues a bare `docker compose up -d` that starts
-# nothing now every Pelias service sits behind a profile. But that command also
-# has to read ../.env, which is chmod 600 and root-owned, and a bare `up -d`
-# with no service named touches every service in an active profile — so running
-# it from this unprivileged account would reconcile the core stack with an
-# unreadable .env, i.e. an empty BARRELMAN_DB_PASSWORD.
+# It has to be done from the root compose file, naming both the profile and the
+# service. Do not use `pelias compose up`: it runs a plain `docker compose up -d`,
+# which now starts nothing, because every Pelias service sits behind a profile.
+#
+# Do not run it from this account either. The command reads ../.env, which is
+# mode 600 and owned by root, so this user cannot read it. And `up -d` with no
+# service named restarts every service in an active profile. Together that would
+# recreate the main stack with an empty BARRELMAN_DB_PASSWORD.
 log "index built. Start the API as root:"
 echo "    cd $(cd .. && pwd) && docker compose --profile pelias up -d api"
 echo

@@ -159,10 +159,11 @@ docker exec barrelman-db psql -U barrelman -d barrelman \
  https://download.geofabrik.de/north-america/us/colorado-updates/ |     4885 | 2026-08-19 20:20:48+00
 ```
 
-The table name follows the osm2pgsql generation, not barrelman: the 1.8 shipped
-in `barrelman-db` writes `planet_osm_replication_status`, while 1.9 and later
-keep the same state in `osm2pgsql_properties`. On this image, querying the
-latter just errors with `relation "osm2pgsql_properties" does not exist`.
+Which table holds this depends on your osm2pgsql version, not on barrelman.
+Version 1.8, which `barrelman-db` ships, writes `planet_osm_replication_status`.
+Version 1.9 and later store the same thing in `osm2pgsql_properties`. On this
+image, querying `osm2pgsql_properties` fails with
+`relation "osm2pgsql_properties" does not exist`.
 </Callout>
 
 <Callout type="warn">

@@ -158,9 +158,10 @@ cd pelias && ./provision.sh                 #    …then provision the geocoder 
                                             #    (as a NON-root user — see below)
 ```
 
-Step 7 is the one exception to running everything as root: the `pelias` CLI
-refuses to run as `0:0`, and `sudo -u` does not satisfy it either. See
-[importing data](/self-hosting/importing-data#step-4--addresses-optional-and-much-bigger-than-the-rest).
+Step 7 is the one step you cannot run as root. The `pelias` CLI refuses, and
+`sudo -u` does not help. See
+[importing data](/self-hosting/importing-data#step-4--addresses-optional-and-much-bigger-than-the-rest)
+for the user account to create first.
 
 For example:
 
@@ -210,12 +211,11 @@ Two run long for what they deliver. MOTIS OSM prep rewrites the whole extract to
 repair a handful of underground platforms — 6 minutes to synthesise 0 connectors
 in Colorado.
 
-The GBFS importer fetches **every** system in the global catalog and only then
-filters to your bbox, so its cost is unrelated to your region — it walks systems
-in Abu Dhabi, Zurich and Darmstadt whatever you imported. Measured end to end on
-Colorado: **6 min 48 s**, keeping 191 stations out of 1,336 systems. Run it last,
-and skip it entirely unless you need bikeshare — nothing else in the pipeline
-depends on it.
+The GBFS importer downloads **every** system in the global catalog, then keeps
+only the stations inside your bbox. It takes the same time whatever region you
+import, because it checks systems in Abu Dhabi, Zurich and Darmstadt either way.
+On Colorado it took **6 min 48 s** and kept 191 stations out of 1,336 systems.
+Run it last, and skip it unless you need bikeshare. Nothing else depends on it.
 
 Pelias is a separate stack and takes hours — see
 [`pelias/README.md`](https://github.com/alexwohlbruck/barrelman/blob/main/pelias/README.md).

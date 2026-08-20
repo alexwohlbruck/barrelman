@@ -24,26 +24,27 @@ docker compose --profile pelias --profile pelias-full up -d  # + libpostal / pip
 | `pelias-full` | `libpostal`, `placeholder`, `interpolation`, `pip` — for `/v1/search` & `/v1/reverse` (~4GB) |
 | `pelias-tools` | one-shot importers; started by `docker compose run`, never by `up` |
 
-Running the containers is the easy part — the index still has to be built, which
-is the job below. Measured on Colorado: about **25 minutes** for download,
-polylines and import together, producing 7.31M documents and a 1.9 GB index from
-9.2 GB of sources. A country-sized region is hours.
+Starting the containers is the easy part. The index still has to be built, which
+is the job below. On Colorado that took about **25 minutes** for the download,
+polylines and import together. It produced 7.31M documents and a 1.9 GB index
+from 9.2 GB of downloaded sources. A whole country takes hours.
 
 ## Provisioning a fresh server
 
 Everything below is codified in [`provision.sh`](./provision.sh). It is
 idempotent; safe to re-run.
 
-**The `pelias` CLI refuses to run as root** — it derives the container user from
-the invoking account and hard-fails on `0:0` with "You are running as root". The
-rest of the self-hosting guide runs as root, so this part, and only this part,
-needs an ordinary user. `sudo -u` does not satisfy it either: the CLI reads
-`id -u ${SUDO_USER-${USER}}`, and under `sudo` from root that is still `root`,
-so it refuses with the identical message. Use `su -`.
+**The `pelias` CLI will not run as root.** It works out which user to run as
+from the account that invoked it, and stops with "You are running as root" if
+that is uid 0. The rest of the self-hosting guide runs as root, so this part,
+and only this part, needs an ordinary user.
 
-Two host prerequisites need root, so they are done first and separately.
-`provision.sh` checks for both and tells you what to run if either is missing,
-rather than reaching for sudo from an account that will not have it.
+`sudo -u` does not help. The CLI reads `id -u ${SUDO_USER-${USER}}`, and when you
+use `sudo` from root that is still `root`, so you get the same error. Use `su -`.
+
+Two things have to be set up as root before you start. `provision.sh` checks for
+both and tells you what to run if either is missing. It does not call `sudo`
+itself, because the account you run it from will usually not have it.
 
 ```sh
 # ── As root, once ────────────────────────────────────────────────────────────
@@ -99,12 +100,12 @@ for src in wof oa osm polylines; do pelias import "$src"; done
 ```sh
 # ── Back as root: start the API ──────────────────────────────────────────────
 #
-# Naming the service matters twice over. `pelias compose up` runs a bare
-# `docker compose up -d` and would start nothing, since every service here is
-# behind a profile. But a bare `up -d` is also wrong from the *unprivileged*
-# account: it reconciles every service in an active profile, and ../.env is
-# chmod 600 and root-owned, so the core stack would be recreated with an empty
-# BARRELMAN_DB_PASSWORD.
+# Name both the profile and the service. `pelias compose up` would start
+# nothing, because every service here sits behind a profile. And `up -d` without
+# a service name restarts everything in an active profile, which from the
+# unprivileged account would recreate the main stack with an empty
+# BARRELMAN_DB_PASSWORD. That account cannot read ../.env, which is mode 600 and
+# owned by root.
 cd /opt/barrelman && docker compose --profile pelias up -d api
 ```
 
@@ -117,11 +118,12 @@ The CLI's `all` targets (`pelias download all`, `pelias import all`) drive a
 no such service: transit
 ```
 
-During **download** that is only noise — the CLI backgrounds each source, so the
-rest still run. During **import** it is not: `import all` runs its importers in
-sequence and hits `transit` last, so the CLI exits non-zero. Under `set -e` that
-aborted `provision.sh` *after* a multi-hour import had succeeded but *before* it
-started the API — a run that did all the work and still ended in an error.
+During **download** this is harmless. The CLI runs each source in the
+background, so the others still finish. During **import** it is not. `import all`
+runs the importers one after another and reaches `transit` last, so the CLI exits
+with an error. With `set -e`, that stopped `provision.sh` after the long import
+had finished but before it started the API. The run did all the work and still
+ended in failure.
 
 Both steps above therefore name the sources this stack actually has rather than
 using `all`.

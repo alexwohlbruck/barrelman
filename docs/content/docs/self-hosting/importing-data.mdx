@@ -225,7 +225,7 @@ chasing. Nothing else depends on this step, so skip it unless you need bikeshare
 
 Street addresses have no `name`, so they are not searchable in `geo_places`. Pelias fills that gap and folds address and street results into `/search`.
 
-This is a separate stack behind Compose profiles — Elasticsearch alone wants a 1 GB heap — and provisioning its index is a job in its own right: roughly half an hour for one US state, hours for a country.
+Pelias runs as a separate stack behind Compose profiles. Elasticsearch alone needs 1 GB of heap. Building the index takes about half an hour for one US state, and hours for a country.
 
 <Callout type="warn" title="This step wants the repository, not just the Compose file">
 Unlike everything above it, Pelias is driven by files the curl install does not
@@ -292,12 +292,13 @@ host's config. If you see that error, re-fetch `docker-compose.yml` and run
 `docker compose up -d barrelman-ops`.
 </Callout>
 
-Then build the index. Measured on Colorado: about **25 minutes** end to end —
-download, polylines and import — producing 7.31M documents in a 1.9 GB index. A
-country-sized region is hours, not minutes.
+Now build the index. On Colorado this took about **25 minutes** to download the
+sources, prepare polylines and import them, and produced 7.31M documents in a
+1.9 GB index. A whole country takes hours.
 
-The `pelias` CLI refuses to run as root, so this is the one step in this guide
-that does not run as root. As root, once:
+The `pelias` CLI will not run as root. Every other step in this guide runs as
+root, so this one needs an ordinary user account. Install the CLI and create
+that account first, as root:
 
 ```bash
 git clone https://github.com/pelias/docker.git /opt/pelias-docker
@@ -308,27 +309,27 @@ usermod -aG docker barrelman
 chown -R 1000:1000 /opt/barrelman/pelias
 ```
 
-Then hand the build to that user:
+Then run the build as that user:
 
 ```bash
 su - barrelman -c 'cd /opt/barrelman/pelias && ./provision.sh'
 ```
 
 <Callout type="warn" title="`sudo -u` does not work here">
-The CLI resolves the container user from `id -u ${SUDO_USER-${USER}}`, and under
-`sudo` from root `SUDO_USER` is `root` — so it refuses with the identical
-"You are running as root" message, which reads as though switching user had no
-effect at all. Use `su -`.
+The CLI works out which user to run as from `id -u ${SUDO_USER-${USER}}`. When
+you use `sudo` from root, `SUDO_USER` is set to `root`, so the CLI still sees
+root and prints the same "You are running as root" error. It looks as though the
+command was ignored. Use `su -` instead.
 </Callout>
 
-`provision.sh` checks the remaining host prerequisites and prints exactly what
-to run as root if any are missing, so it will not get halfway and stall. When it
-finishes it prints the command to start the API.
+`provision.sh` checks the other host requirements before it starts. If any are
+missing, it prints the commands to run as root and stops, so it will not fail
+halfway through. When it finishes, it prints the command to start the API.
 
 [`pelias/README.md`](https://github.com/alexwohlbruck/barrelman/blob/main/pelias/README.md)
-has the annotated manual equivalent, and the detail of the one step that fails
-silently when skipped: `pelias prepare polylines`, without which the `street`
-layer stays empty and street-name search returns nothing.
+explains each step on its own. The step people most often miss is
+`pelias prepare polylines`. Skip it and the `street` layer stays empty, so
+searching for a street name returns nothing.
 
 ## Verify
 

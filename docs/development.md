@@ -173,10 +173,10 @@ without the guard, each hot reload stacks another copy of the timer.
    statically with no API dependency. If the two disagree, `/account/plans`
    wins.
 
-This lives here rather than on the docs site because every step is a
-maintainer action on the official deployment. Self-hosted instances cannot
-charge for access at all — billing is gated on a license only the official
-deployment holds.
+This is here rather than on the docs site because every step is something a
+maintainer does on the official deployment. Self-hosted instances cannot charge
+for access at all: billing needs a license that only the official deployment
+has.
 
 ## Tests
 
