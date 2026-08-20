@@ -80,6 +80,15 @@ so the port stays open while `ufw status` reports it `DENY`.
 
 Only the API needs to be reachable from off-box. Postgres (5434), Martin (5002), GraphHopper (5003) and MOTIS (5004) already bind to `127.0.0.1`, so nothing further is needed — none of them authenticate, and exposing them would publish both the database and an unmetered copy of the tile, routing and transit APIs.
 
+The same goes for the Pelias services if you run that profile: `pelias_api`
+(4000) and Elasticsearch (9200) are loopback-bound for the same reason. Confirm
+it after enabling the profile — an exposed `pelias_api` is an open, unmetered
+geocoder:
+
+```bash
+docker compose --profile pelias ps --format 'table {{.Service}}\t{{.Ports}}'
+```
+
 If you deliberately need one of them reachable, widen the binding with `BARRELMAN_BIND_ADDR` and put a firewall in front:
 
 ```dotenv
