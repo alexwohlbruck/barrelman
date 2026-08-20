@@ -1,4 +1,7 @@
-# Configuration
+---
+title: Configuration
+description: Every environment variable, grouped by what it affects.
+---
 
 Every environment variable, grouped by what it affects. `.env.example` carries
 the same list with inline commentary; this is the reference.
@@ -148,7 +151,7 @@ URI as `<BARRELMAN_SERVER_ORIGIN>/auth/oauth/<provider>/callback`.
 
 The Commons Clause in [LICENSE](../LICENSE) removes the right to sell
 Barrelman, so a self-hosted instance may not charge third parties for access —
-see [LICENSING.md](../LICENSING.md). Subscription billing is gated on a license
+see [LICENSING.md](https://github.com/alexwohlbruck/barrelman/blob/main/LICENSING.md). Subscription billing is gated on a license
 granting the `billing` feature, which only the official deployment holds.
 Everything else — search, tiles, routing, transit, accounts, keys, metering —
 needs no license and never will.
@@ -185,7 +188,7 @@ endpoint would let anyone who guesses the URL grant themselves a plan.
 
 ## Abuse controls
 
-See [abuse-controls.md](abuse-controls.md) for what these mean.
+See [abuse controls](/self-hosting/abuse-controls) for what these mean.
 
 | Variable | Default | Description |
 |---|---|---|
@@ -281,7 +284,7 @@ Read by the scripts running in `barrelman-ops` (and, for the osm2pgsql step, in
 Read by the `barrelman-landing` service in `docker-compose.dev.yml` (the
 `landing` profile), not by the API. Both are ordinary keys on an account an
 administrator has moved onto the `demo` plan — see
-[accounts.md](accounts.md#unmetered-keys-and-why-nobody-can-mint-one).
+[accounts & API keys](/usage/accounts#unmetered-keys-and-why-nobody-can-mint-one).
 
 | Variable | Default | Description |
 |---|---|---|

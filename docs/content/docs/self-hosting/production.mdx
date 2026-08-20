@@ -62,12 +62,21 @@ above survives both.
 
 Once the proxy is in front, close the direct port. The API's `5001` is published
 on **all interfaces** — unlike the other services it has no `BARRELMAN_BIND_ADDR`
-prefix — so until you firewall it, callers can skip TLS, your proxy and its rate
+prefix — so until you close it, callers can skip TLS, your proxy and its rate
 limits entirely by hitting `http://your-server-ip:5001`:
 
-```bash
-ufw deny 5001
+```dotenv
+BARRELMAN_API_BIND_ADDR=127.0.0.1
 ```
+
+```bash
+docker compose up -d barrelman
+```
+
+Caddy keeps working: it reaches the container as `barrelman:5001` over the
+Compose network, not through the host port. Do **not** reach for `ufw deny 5001`
+instead — Docker DNATs published ports before ufw's `INPUT` rules are consulted,
+so the port stays open while `ufw status` reports it `DENY`.
 
 Only the API needs to be reachable from off-box. Postgres (5434), Martin (5002), GraphHopper (5003) and MOTIS (5004) already bind to `127.0.0.1`, so nothing further is needed — none of them authenticate, and exposing them would publish both the database and an unmetered copy of the tile, routing and transit APIs.
 
@@ -140,7 +149,7 @@ Sign-in is then restricted to accounts an administrator created.
 
 - **OAuth sign-in** — set a provider's client ID and secret and it turns on. Register the redirect as `<BARRELMAN_SERVER_ORIGIN>/auth/oauth/<provider>/callback`. Google, GitHub and GitLab are supported.
 - **Terms of service** — setting `BARRELMAN_TOS_URL` gates API-key creation on acceptance.
-- **Abuse controls** — the defaults are *not calibrated against real traffic*. Read [abuse controls](https://github.com/alexwohlbruck/barrelman/blob/main/docs/abuse-controls.md) before opening sign-up.
+- **Abuse controls** — the defaults are *not calibrated against real traffic*. Read [abuse controls](/self-hosting/abuse-controls) before opening sign-up.
 
 Subscription billing is not available on a self-hosted instance — see [the note on selling access](/self-hosting#what-you-get).
 

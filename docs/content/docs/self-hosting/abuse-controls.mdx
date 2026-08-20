@@ -1,4 +1,7 @@
-# Abuse controls
+---
+title: Abuse controls
+description: Throttling, detection and moderation, and why the defaults are not calibrated.
+---
 
 Three layers, in increasing order of severity: throttling, which is automatic
 and reversible; detection, which raises signals for a human; and moderation,
@@ -177,7 +180,7 @@ instance, where there is nothing to agree to.
 ## Tuning
 
 Every threshold is an environment variable; see
-[configuration](configuration.md#abuse-controls). The defaults are **not
+[configuration](/self-hosting/configuration#abuse-controls). The defaults are **not
 calibrated against real traffic** — they are reasonable starting points. Watch
 the abuse queue for a while before trusting the auto-suspend rule in particular,
 since it can cut off a paying customer.

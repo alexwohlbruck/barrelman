@@ -73,11 +73,17 @@ Then: `cd web && bun run typecheck && bun run build`.
 
 ### 2. Documentation
 
-Two surfaces. **Public site**: `docs/`, Next.js + Fumadocs → `docs.barrelman.dev`.
-MDX in `docs/content/docs/` — `introduction`, `usage/`, `api/` (generated),
-`self-hosting/`. **Repo markdown**: `docs/*.md` (`REGIONS`, `configuration`,
-`development`, `accounts`, `pricing`, `abuse-controls`, `polar-setup`) for
-operators reading the repo.
+**Almost everything is the public site**: `docs/`, Next.js + Fumadocs →
+`docs.barrelman.dev`. Only `docs/content/docs/` is built (`source.config.ts` sets
+`dir: 'content/docs'`) — `introduction`, `usage/` (incl. `accounts`, `pricing`),
+`api/` (generated), `self-hosting/` (incl. `regions`, `configuration`,
+`abuse-controls`).
+
+A `.md` file dropped in `docs/` is **not published** — it is invisible to the
+site and reachable only as a GitHub blob. Two deliberately stay that way, because
+they are about working on barrelman rather than running it:
+`docs/development.md` and `docs/polar-setup.md` (issuing the signed licence and
+wiring Polar — never a self-hosting step).
 
 | If you… | Update… |
 |---|---|
@@ -85,8 +91,9 @@ operators reading the repo.
 | Change a capability visibly | `introduction.mdx` |
 | Change install, import, deploy or ops behaviour | the right page in `self-hosting/` |
 | Add a failure mode operators will hit | `self-hosting/troubleshooting.mdx` |
-| Change pricing or credit costs | `src/billing/plans.ts` is source of truth → `docs/pricing.md` + the landing pricing table |
-| Add an env var | `.env.example` + `docs/configuration.md` + the compose block |
+| Change region fields or the import pipeline | `self-hosting/regions.mdx` |
+| Change pricing or credit costs | `src/billing/plans.ts` is source of truth → `usage/pricing.mdx` + the landing pricing table |
+| Add an env var | `.env.example` + `self-hosting/configuration.mdx` + the compose block |
 
 ```bash
 cd docs && curl -sSf https://api.barrelman.dev/docs/json -o openapi.json && bun run generate:api
@@ -94,8 +101,9 @@ cd docs && curl -sSf https://api.barrelman.dev/docs/json -o openapi.json && bun 
 
 Notes:
 
-- Only `bash`, `dotenv`, `json`, `yaml` fences are bundled. An unknown one
-  (`caddy`) 500s **every page in the collection**, not just its own file.
+- `bash`, `dotenv`, `json`, `yaml` and `sql` fences all render (verified by a
+  local `bun run build`). An unknown language like `caddy` 500s **every page in
+  the collection**, not just its own file — check before introducing one.
 - Don't run `bun run build` against a live docs dev server — it opens with
   `rm -rf .next .source` and wedges it until stopped, cleaned and restarted.
 - Internal links take no `/docs` prefix (`baseUrl: '/'`): `/usage`, not `/docs/usage`.
@@ -124,7 +132,7 @@ leaves sibling routes on the parent **public**. Always attach directly:
 Check every new route file with an unauthenticated `curl`.
 
 **Env vars.** Three places or it won't work: `.env.example`,
-`docs/configuration.md`, and the right service's `environment:` block in
+`docs/content/docs/self-hosting/configuration.mdx`, and the right service's `environment:` block in
 `docker-compose.yml` (Compose doesn't forward the host env). Note *which*
 service — `REGIONS` is read by the importers in ops, not the API. Read values
 with `envNumber`/`envString` from `src/config/env.ts`, never

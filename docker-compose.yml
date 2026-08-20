@@ -181,7 +181,7 @@ services:
       MOTIS_RT_UPDATE_INTERVAL: ${MOTIS_RT_UPDATE_INTERVAL:-}
       GTFS_DATA_DIR: /gtfs-zips
       # Parallel GraphHopper calls per isochrone. Documented in
-      # docs/configuration.md; without this line it had no effect in a container.
+      # https://docs.barrelman.dev/self-hosting/configuration; without this line it had no effect in a container.
       ISOCHRONE_CONCURRENCY: ${ISOCHRONE_CONCURRENCY:-}
 
       # The origin /docs advertises as its "Production" server, so the docs'
@@ -312,7 +312,7 @@ services:
       TRANSITLAND_API_KEY: ${TRANSITLAND_API_KEY:-}
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
       # The one variable that decides coverage. Read by the importers that run
-      # here, not by the API — see docs/REGIONS.md.
+      # here, not by the API — see https://docs.barrelman.dev/self-hosting/regions.
       REGIONS: ${REGIONS:-}
       GTFS_DATA_DIR: /gtfs-zips
       # Where the shared OSM volume is mounted in THIS container. The scripts
