@@ -155,7 +155,12 @@ bun run import/import-gbfs-systems.ts       # 6. bikeshare, filtered by the regi
 
 bun run scripts/generate-pelias-config.ts   # 7. addresses: regenerate pelias.json…
 cd pelias && ./provision.sh                 #    …then provision the geocoder stack
+                                            #    (as a NON-root user — see below)
 ```
+
+Step 7 is the one exception to running everything as root: the `pelias` CLI
+refuses to run as `0:0`, and `sudo -u` does not satisfy it either. See
+[importing data](/self-hosting/importing-data#step-4--addresses-optional-and-much-bigger-than-the-rest).
 
 For example:
 
@@ -205,12 +210,12 @@ Two run long for what they deliver. MOTIS OSM prep rewrites the whole extract to
 repair a handful of underground platforms — 6 minutes to synthesise 0 connectors
 in Colorado.
 
-The GBFS importer is worse: it fetches **every** system in the global catalog
-and only then filters to your bbox, so its cost is unrelated to your region. On
-the Colorado run it was still going **40 minutes in** and had not finished when
-the host was torn down, having spent that time on systems in Abu Dhabi, Zurich
-and Darmstadt. Budget an hour, run it last, and skip it entirely unless you
-need bikeshare — nothing else in the pipeline depends on it.
+The GBFS importer fetches **every** system in the global catalog and only then
+filters to your bbox, so its cost is unrelated to your region — it walks systems
+in Abu Dhabi, Zurich and Darmstadt whatever you imported. Measured end to end on
+Colorado: **6 min 48 s**, keeping 191 stations out of 1,336 systems. Run it last,
+and skip it entirely unless you need bikeshare — nothing else in the pipeline
+depends on it.
 
 Pelias is a separate stack and takes hours — see
 [`pelias/README.md`](https://github.com/alexwohlbruck/barrelman/blob/main/pelias/README.md).
@@ -246,10 +251,10 @@ Two layers, DB first:
 
 1. **`import_regions` table** — the live source of truth, edited from the admin
    console. Seeded from the JSON file on first boot.
-2. **[`config/regions.json`](../config/regions.json)** — the shipped defaults
+2. **[`config/regions.json`](https://github.com/alexwohlbruck/barrelman/blob/main/config/regions.json)** — the shipped defaults
    and the fallback used when the table is empty or the database is unreachable.
 
-`resolveRegions()` ([`src/config/regions.ts`](../src/config/regions.ts)) reads
+`resolveRegions()` ([`src/config/regions.ts`](https://github.com/alexwohlbruck/barrelman/blob/main/src/config/regions.ts)) reads
 the table and falls back to the file, so a fresh checkout works with no database
 and an operator's console edits win once there is one.
 

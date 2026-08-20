@@ -155,16 +155,6 @@ The marketing site duplicates the figures so it can build statically with no API
 dependency — if the two disagree, `/account/plans` wins, and the site needs
 updating. This is a known duplication, recorded in the landing repo's README.
 
-## Changing prices
-
-1. Edit `CREDIT_COSTS` or `PLANS` in `src/billing/plans.ts`.
-2. Run `bun test src/billing/plans.test.ts` — the invariants (monotonic
-   allowances, overage within 2× of included, free never accrues) are asserted,
-   not assumed.
-3. Update the Polar products to match — see [polar-setup.md](https://github.com/alexwohlbruck/barrelman/blob/main/docs/polar-setup.md).
-   Polar only knows the price; the allowance lives in the code.
-4. Update the landing site.
-
-Existing subscribers keep the Polar price they signed up at until you change it
-there; the *allowance* changes immediately for everyone, because it is read from
-the code on every request.
+Existing subscribers keep the price they signed up at until it is changed with
+the payment provider; the *allowance* changes immediately for everyone, because
+it is read from the code on every request.

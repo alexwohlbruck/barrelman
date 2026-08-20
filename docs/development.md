@@ -159,6 +159,25 @@ instantly. Two things it does **not** pick up:
 Anything started on an interval is guarded on `globalThis` for the same reason:
 without the guard, each hot reload stacks another copy of the timer.
 
+## Changing prices and credit costs
+
+`src/billing/plans.ts` is the source of truth; `GET /account/plans` serves it.
+
+1. Edit `CREDIT_COSTS` or `PLANS`.
+2. Run `bun test src/billing/plans.test.ts` — the invariants (monotonic
+   allowances, overage within 2x of included, free never accrues) are asserted,
+   not assumed.
+3. Update the Polar products to match — see [polar-setup.md](./polar-setup.md).
+   Polar only knows the price; the allowance lives in the code.
+4. Update the landing site, which duplicates the figures so it can build
+   statically with no API dependency. If the two disagree, `/account/plans`
+   wins.
+
+This lives here rather than on the docs site because every step is a
+maintainer action on the official deployment. Self-hosted instances cannot
+charge for access at all — billing is gated on a license only the official
+deployment holds.
+
 ## Tests
 
 ```bash
