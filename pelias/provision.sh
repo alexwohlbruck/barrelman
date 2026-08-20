@@ -13,18 +13,27 @@ PELIAS_DOCKER_DIR=${PELIAS_DOCKER_DIR:-/opt/pelias-docker}
 
 log() { echo "[provision] $*"; }
 
-# 1. Host prereq: Elasticsearch refuses to boot without a high mmap count.
+# 1+2. Host prereqs, both of which need root — and this script must NOT be run
+# as root, because the pelias CLI refuses to run as 0:0. Rather than calling
+# sudo from an account that generally will not have it, check and report: the
+# operator runs these two as root once, then runs this script as a normal user.
+MISSING=()
 if [ "$(sysctl -n vm.max_map_count 2>/dev/null || echo 0)" -lt 262144 ]; then
-  log "raising vm.max_map_count to 262144 (needs sudo)"
-  sudo sysctl -w vm.max_map_count=262144
-  echo 'vm.max_map_count=262144' | sudo tee /etc/sysctl.d/99-pelias-es.conf >/dev/null
+  MISSING+=("sysctl -w vm.max_map_count=262144 && echo 'vm.max_map_count=262144' > /etc/sysctl.d/99-pelias-es.conf")
+fi
+if ! command -v pelias >/dev/null 2>&1; then
+  MISSING+=("git clone https://github.com/pelias/docker.git $PELIAS_DOCKER_DIR && ln -sf $PELIAS_DOCKER_DIR/pelias /usr/local/bin/pelias")
+fi
+if [ ${#MISSING[@]} -gt 0 ]; then
+  log "missing host prerequisites. Run these as root, then re-run this script:"
+  for cmd in "${MISSING[@]}"; do echo "    $cmd"; done
+  exit 1
 fi
 
-# 2. The pelias CLI (orchestrates the stack pinned by this dir's compose+config).
-if ! command -v pelias >/dev/null 2>&1; then
-  log "installing pelias CLI -> $PELIAS_DOCKER_DIR"
-  [ -d "$PELIAS_DOCKER_DIR" ] || sudo git clone https://github.com/pelias/docker.git "$PELIAS_DOCKER_DIR"
-  sudo ln -sf "$PELIAS_DOCKER_DIR/pelias" /usr/local/bin/pelias
+if [ "$(id -u)" = "0" ]; then
+  log "refusing to run as root — the pelias CLI does too, and 'sudo -u' does not"
+  log "help (it reads SUDO_USER). See README.md; use: su - <user> -c '...'"
+  exit 1
 fi
 
 # 3. Env: created from template if missing; DATA_DIR must be an absolute path.
@@ -75,12 +84,16 @@ for src in wof oa osm polylines; do
   pelias import "$src"
 done
 
-# 8. Bring up the API — via the root compose file, with the profile.
-# Not `pelias compose up`: that issues a bare `docker compose up -d`, and every
-# Pelias service is behind a profile now, so it would start nothing. The CLI's
-# service-specific commands above are unaffected — naming a service explicitly
-# activates its profile.
-log "starting Pelias API"
-(cd .. && docker compose --profile pelias up -d)
-
-log "done — verify: curl 'localhost:4000/v1/autocomplete?text=350+5th+ave' | jq '.features[].properties.layer'"
+# 8. Starting the API is left to the operator, deliberately.
+#
+# It has to happen from the root compose file with the profile named — NOT
+# `pelias compose up`, which issues a bare `docker compose up -d` that starts
+# nothing now every Pelias service sits behind a profile. But that command also
+# has to read ../.env, which is chmod 600 and root-owned, and a bare `up -d`
+# with no service named touches every service in an active profile — so running
+# it from this unprivileged account would reconcile the core stack with an
+# unreadable .env, i.e. an empty BARRELMAN_DB_PASSWORD.
+log "index built. Start the API as root:"
+echo "    cd $(cd .. && pwd) && docker compose --profile pelias up -d api"
+echo
+log "then verify: curl 'localhost:4000/v1/autocomplete?text=350+5th+ave'"

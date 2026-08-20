@@ -225,7 +225,7 @@ chasing. Nothing else depends on this step, so skip it unless you need bikeshare
 
 Street addresses have no `name`, so they are not searchable in `geo_places`. Pelias fills that gap and folds address and street results into `/search`.
 
-This is a separate stack behind Compose profiles — Elasticsearch alone wants a 1 GB heap — and provisioning its index takes **hours**, not minutes.
+This is a separate stack behind Compose profiles — Elasticsearch alone wants a 1 GB heap — and provisioning its index is a job in its own right: roughly half an hour for one US state, hours for a country.
 
 <Callout type="warn" title="This step wants the repository, not just the Compose file">
 Unlike everything above it, Pelias is driven by files the curl install does not
@@ -254,11 +254,6 @@ mkdir -p pelias/data && sudo chown -R 1000:1000 pelias/data
 
 docker compose --profile pelias up -d
 ```
-
-`pelias_api` publishes on `${BARRELMAN_BIND_ADDR:-127.0.0.1}:4000` like the other
-internal engines, so it is not reachable from off-box unless you widen that. It
-has no authentication of its own — barrelman reaches it as `pelias_api:4000` over
-the Compose network.
 
 <Callout type="warn" title="Skip the `chown` and Elasticsearch crash-loops">
 `docker compose ps` shows `pelias_elasticsearch` restarting, and only its logs
@@ -297,45 +292,43 @@ host's config. If you see that error, re-fetch `docker-compose.yml` and run
 `docker compose up -d barrelman-ops`.
 </Callout>
 
-Then follow [`pelias/README.md`](https://github.com/alexwohlbruck/barrelman/blob/main/pelias/README.md) for the index build. Measured on Colorado it took about **25 minutes** end to end — download, polylines and import — producing 7.31M documents and a 1.9 GB index from 9.2 GB of sources. Scale that by region: a country-sized import is hours.
+Then build the index. Measured on Colorado: about **25 minutes** end to end —
+download, polylines and import — producing 7.31M documents in a 1.9 GB index. A
+country-sized region is hours, not minutes.
 
-Three things there are easy to miss, and all three fail in ways that do not look like their cause:
-
-- **The `pelias` CLI refuses to run as root** — see the callout below. Everything else in this guide runs as root, so this is the one step that does not.
-- `vm.max_map_count` must be at least `262144`. Check first — Ubuntu 24.04 already ships `1048576` — and only raise it if yours is lower: `sysctl vm.max_map_count`, then `sudo sysctl -w vm.max_map_count=262144`.
-- `pelias prepare polylines`, without which the `street` layer stays empty and street-name search returns nothing.
-
-<Callout type="warn" title="The Pelias CLI will not run as root, and `sudo -u` does not help">
-It derives the container user from the invoking account and hard-fails on `0:0`:
-
-```
-You are running as root
-This is insecure and not supported by Pelias.
-Please try again as a non-root user.
-```
-
-Create an ordinary user, put it in the `docker` group, and hand it the Pelias
-directory. uid 1000 matches the Elasticsearch user that owns `pelias/data`:
+The `pelias` CLI refuses to run as root, so this is the one step in this guide
+that does not run as root. As root, once:
 
 ```bash
-useradd -m -u 1000 -s /bin/bash barrelman
+git clone https://github.com/pelias/docker.git /opt/pelias-docker
+ln -sf /opt/pelias-docker/pelias /usr/local/bin/pelias
+
+useradd -m -u 1000 -s /bin/bash barrelman   # uid 1000 already owns pelias/data
 usermod -aG docker barrelman
 chown -R 1000:1000 /opt/barrelman/pelias
+```
+
+Then hand the build to that user:
+
+```bash
 su - barrelman -c 'cd /opt/barrelman/pelias && ./provision.sh'
 ```
 
-`sudo -u barrelman ./provision.sh` does **not** work. The CLI reads
-`id -u ${SUDO_USER-${USER}}`, and under `sudo` from root `SUDO_USER` is `root`,
-so it resolves to `0:0` and prints the identical message — which reads as though
-switching user had no effect at all. Use `su -`.
+<Callout type="warn" title="`sudo -u` does not work here">
+The CLI resolves the container user from `id -u ${SUDO_USER-${USER}}`, and under
+`sudo` from root `SUDO_USER` is `root` — so it refuses with the identical
+"You are running as root" message, which reads as though switching user had no
+effect at all. Use `su -`.
 </Callout>
 
-<Callout type="info" title="`no such service: transit` during download and import is expected">
-The Pelias CLI's `all` targets drive a `transit` service this stack does not
-define. `provision.sh` names the sources individually to avoid it; if you run
-`pelias import all` by hand instead, it exits non-zero *after* the import
-succeeds, which can abort a script before it starts the API.
-</Callout>
+`provision.sh` checks the remaining host prerequisites and prints exactly what
+to run as root if any are missing, so it will not get halfway and stall. When it
+finishes it prints the command to start the API.
+
+[`pelias/README.md`](https://github.com/alexwohlbruck/barrelman/blob/main/pelias/README.md)
+has the annotated manual equivalent, and the detail of the one step that fails
+silently when skipped: `pelias prepare polylines`, without which the `street`
+layer stays empty and street-name search returns nothing.
 
 ## Verify
 

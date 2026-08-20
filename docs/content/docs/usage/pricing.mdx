@@ -152,8 +152,7 @@ synchronously and keyed on the provider's order ID.
 `src/billing/plans.ts` is the source of truth. `GET /account/plans` serves it.
 
 The marketing site duplicates the figures so it can build statically with no API
-dependency — if the two disagree, `/account/plans` wins, and the site needs
-updating. This is a known duplication, recorded in the landing repo's README.
+dependency. If the two ever disagree, `/account/plans` is authoritative.
 
 Existing subscribers keep the price they signed up at until it is changed with
 the payment provider; the *allowance* changes immediately for everyone, because

@@ -25,89 +25,87 @@ docker compose --profile pelias --profile pelias-full up -d  # + libpostal / pip
 | `pelias-tools` | one-shot importers; started by `docker compose run`, never by `up` |
 
 Running the containers is the easy part — the index still has to be built, which
-is the multi-hour job below.
+is the job below. Measured on Colorado: about **25 minutes** for download,
+polylines and import together, producing 7.31M documents and a 1.9 GB index from
+9.2 GB of sources. A country-sized region is hours.
 
 ## Provisioning a fresh server
 
-Everything below is codified in [`provision.sh`](./provision.sh) — run it from
-this directory. It is idempotent; safe to re-run. The manual equivalent:
+Everything below is codified in [`provision.sh`](./provision.sh). It is
+idempotent; safe to re-run.
 
-> **The `pelias` CLI refuses to run as root.** It derives the container user
-> from the invoking account and hard-fails on `0:0`:
->
-> ```
-> You are running as root
-> This is insecure and not supported by Pelias.
-> Please try again as a non-root user.
-> ```
->
-> The rest of the self-hosting guide is written for root in `/opt/barrelman`,
-> so this step — and only this step — needs an ordinary user. Create one, put
-> it in the `docker` group, and give it the Pelias directory:
->
-> ```sh
-> useradd -m -u 1000 -s /bin/bash barrelman
-> usermod -aG docker barrelman
-> chown -R 1000:1000 /opt/barrelman/pelias
-> ```
->
-> uid 1000 is deliberate: Elasticsearch runs as uid 1000 and owns
-> `pelias/data`, so matching them keeps a single owner for the index.
->
-> Then run everything below **as that user**:
->
-> ```sh
-> su - barrelman -c 'cd /opt/barrelman/pelias && ./provision.sh'
-> ```
->
-> `sudo -u barrelman ./provision.sh` does **not** work. The CLI reads
-> `id -u ${SUDO_USER-${USER}}`, and under `sudo` from root `SUDO_USER` is
-> `root` — so it resolves to `0:0` and refuses with the same message, which
-> reads as though the switch had no effect at all. Use `su -`.
+**The `pelias` CLI refuses to run as root** — it derives the container user from
+the invoking account and hard-fails on `0:0` with "You are running as root". The
+rest of the self-hosting guide runs as root, so this part, and only this part,
+needs an ordinary user. `sudo -u` does not satisfy it either: the CLI reads
+`id -u ${SUDO_USER-${USER}}`, and under `sudo` from root that is still `root`,
+so it refuses with the identical message. Use `su -`.
+
+Two host prerequisites need root, so they are done first and separately.
+`provision.sh` checks for both and tells you what to run if either is missing,
+rather than reaching for sudo from an account that will not have it.
 
 ```sh
-# 0. Host prereq — Elasticsearch needs a high mmap count, or ES won't boot.
-#    Check before setting: Ubuntu 24.04 already ships 1048576.
+# ── As root, once ────────────────────────────────────────────────────────────
+
+# Elasticsearch needs a high mmap count or it will not boot. Check first —
+# Ubuntu 24.04 already ships 1048576 — and only raise it if yours is lower.
 sysctl vm.max_map_count
-sudo sysctl -w vm.max_map_count=262144
-echo 'vm.max_map_count=262144' | sudo tee /etc/sysctl.d/99-pelias-es.conf
+sysctl -w vm.max_map_count=262144
+echo 'vm.max_map_count=262144' > /etc/sysctl.d/99-pelias-es.conf
 
-# 1. The `pelias` CLI (this repo pins the stack; the CLI orchestrates it).
+# The pelias CLI (this repo pins the stack; the CLI orchestrates it).
 git clone https://github.com/pelias/docker.git /opt/pelias-docker
-sudo ln -sf /opt/pelias-docker/pelias /usr/local/bin/pelias
+ln -sf /opt/pelias-docker/pelias /usr/local/bin/pelias
 
-# 2. Env — copy the template, set DATA_DIR to an absolute path under here.
+# The unprivileged account that will own the index. uid 1000 is deliberate:
+# Elasticsearch runs as uid 1000 and owns pelias/data, so matching them keeps a
+# single owner.
+useradd -m -u 1000 -s /bin/bash barrelman
+usermod -aG docker barrelman
+chown -R 1000:1000 /opt/barrelman/pelias
+```
+
+```sh
+# ── As that user: su - barrelman ─────────────────────────────────────────────
+
+# 1. Env — copy the template, set DATA_DIR to an absolute path under here.
 #    Keep COMPOSE_PROJECT_NAME=barrelman so the CLI drives the same stack the
 #    root compose file does, rather than a second one with clashing names.
 #    Do NOT set DOCKER_USER — it is deprecated and the CLI overrides it.
 cp .env.example .env && $EDITOR .env      # DATA_DIR=<abs>/pelias/data
 
-# 3. Elasticsearch up + schema.
+# 2. Elasticsearch up + schema.
 pelias compose pull
 pelias elastic start && pelias elastic wait
 pelias elastic create
 
-# 4. Download the sources (WOF, OpenAddresses, OSM PBFs, TIGER for interpolation).
+# 3. Download the sources (WOF, OpenAddresses, OSM PBFs, TIGER for interpolation).
 #    Named individually on purpose — see the `transit` note below.
 pelias download wof & pelias download oa & pelias download osm & pelias download tiger & wait
 
-# 5. Prepare polylines — THE STEP THAT IS EASY TO MISS.
-#    `import all` imports the `street` layer from /data/polylines/extract.0sv,
+# 4. Prepare polylines — THE STEP THAT IS EASY TO MISS.
+#    `import polylines` imports the `street` layer from /data/polylines/extract.0sv,
 #    but nothing GENERATES that file. This runs Valhalla over the OSM PBFs to
 #    build it. Skip this and street-name search silently returns nothing
 #    (only the `address` layer gets populated). See the layers note below.
 pelias prepare polylines
 
-# 6. Import each source (WOF + OpenAddresses + OSM addresses + polyline streets).
+# 5. Import each source (WOF + OpenAddresses + OSM addresses + polyline streets).
 #    NOT `pelias import all` — see the `transit` note below.
 for src in wof oa osm polylines; do pelias import "$src"; done
+```
 
-# 7. Start the API — from the repo root, with the profile.
-#    NOT `pelias compose up`: that runs a bare `docker compose up -d`, and every
-#    service here is behind a profile, so it would start nothing. The CLI's
-#    service-specific commands (`pelias elastic start`) are unaffected — naming a
-#    service explicitly activates its profile.
-cd .. && docker compose --profile pelias up -d
+```sh
+# ── Back as root: start the API ──────────────────────────────────────────────
+#
+# Naming the service matters twice over. `pelias compose up` runs a bare
+# `docker compose up -d` and would start nothing, since every service here is
+# behind a profile. But a bare `up -d` is also wrong from the *unprivileged*
+# account: it reconciles every service in an active profile, and ../.env is
+# chmod 600 and root-owned, so the core stack would be recreated with an empty
+# BARRELMAN_DB_PASSWORD.
+cd /opt/barrelman && docker compose --profile pelias up -d api
 ```
 
 ### `no such service: transit`
@@ -126,9 +124,7 @@ aborted `provision.sh` *after* a multi-hour import had succeeded but *before* it
 started the API — a run that did all the work and still ended in an error.
 
 Both steps above therefore name the sources this stack actually has rather than
-using `all`. Measured on Colorado: the whole build — download, polylines, import
-— took about **25 minutes**, producing 7.31M documents and a 1.9 GB index from
-9.2 GB of downloaded sources.
+using `all`.
 
 ### Re-importing into an already-running API
 
