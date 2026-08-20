@@ -23,6 +23,7 @@ import {
   fetchFeedList,
   resolveGtfsBbox,
   sanitizeGtfsZip,
+  resolveRtUrlsForFeed,
   FLEX_EXTENSION_FILES,
 } from './gtfs.service'
 import JSZip from 'jszip'
@@ -430,7 +431,7 @@ function buildMockFetch(handlers: {
     const urlStr = typeof url === 'string' ? url : url instanceof URL ? url.toString() : url.url
 
     // RT feed lookup — matches spec=GTFS_RT&onestop_id=...
-    if (urlStr.includes('spec=GTFS_RT') && urlStr.includes('onestop_id=')) {
+    if (urlStr.includes('spec=GTFS_RT') && urlStr.includes('&onestop_id=')) {
       const parsed = new URL(urlStr)
       const onestopId = parsed.searchParams.get('onestop_id') || ''
       const rtFeed = handlers.rtFeeds?.[onestopId]
@@ -1124,5 +1125,156 @@ describe('resolveGtfsBbox', () => {
 
   test('throws on out-of-range coordinates', () => {
     expect(() => resolveGtfsBbox('-200,0,10,10')).toThrow(/valid lon\/lat ranges/)
+  })
+})
+
+// ── resolveRtUrlsForFeed ────────────────────────────────────────────
+
+/**
+ * Finding an agency's realtime feeds.
+ *
+ * Deriving `{staticOnestopId}~rt` holds for some agencies and not at all for
+ * others: MTA's realtime feeds are named `f-mta~nyc~rt~subway~a~c~e`, which
+ * cannot be derived from the static `f-dr5r-nyctsubway`. Discovery found
+ * nothing for the whole of New York and reported success while doing it, so
+ * these pin the operator lookup that actually joins them — including the part
+ * that matters most for MTA, that one static feed maps to *many* RT feeds.
+ */
+describe('resolveRtUrlsForFeed', () => {
+  const STATIC = { feeds: [{ onestop_id: 'f-dr5r-nyctsubway', urls: {} }] }
+
+  /** Answers each request by what it queries; records the order asked. */
+  function trackingFetch(responses: Record<string, unknown>) {
+    const calls: string[] = []
+    const fetchFn = (async (url: string) => {
+      calls.push(url)
+      // Longest match wins, so '&onestop_id=f-x~rt' beats '&onestop_id=f-x'.
+      const key = Object.keys(responses)
+        .filter(k => url.includes(k))
+        .sort((a, b) => b.length - a.length)[0]
+      return new Response(JSON.stringify(key ? responses[key] : { feeds: [], operators: [] }), { status: 200 })
+    }) as unknown as typeof fetch
+    return { calls, fetchFn }
+  }
+
+  const operatorWith = (...rtIds: string[]) => ({
+    operators: [{
+      onestop_id: 'o-dr5r-nyct',
+      feeds: [
+        { onestop_id: 'f-dr5r-nyctsubway', spec: 'GTFS' },
+        ...rtIds.map(id => ({ onestop_id: id, spec: 'GTFS_RT' })),
+      ],
+    }],
+  })
+
+  test('collects every realtime feed the operator publishes', async () => {
+    const { fetchFn } = trackingFetch({
+      '&onestop_id=f-dr5r-nyctsubway&': STATIC,
+      '/operators?': operatorWith('f-mta~nyc~rt~subway~a~c~e', 'f-mta~nyc~rt~alerts'),
+      '&onestop_id=f-mta~nyc~rt~subway~a~c~e': {
+        feeds: [{ urls: { realtime_trip_updates: 'https://mta.example/gtfs-ace' } }],
+      },
+      '&onestop_id=f-mta~nyc~rt~alerts': {
+        feeds: [{ urls: { realtime_alerts: 'https://mta.example/all-alerts' } }],
+      },
+    })
+
+    const urls = await resolveRtUrlsForFeed('f-dr5r-nyctsubway', 'key', fetchFn)
+
+    // One static feed, many realtime feeds — the case id-derivation could not express.
+    expect(urls.map(u => u.url).sort()).toEqual([
+      'https://mta.example/all-alerts',
+      'https://mta.example/gtfs-ace',
+    ])
+  })
+
+  test('does not repeat a URL two operator feeds both list', async () => {
+    const { fetchFn } = trackingFetch({
+      '&onestop_id=f-dr5r-nyctsubway&': STATIC,
+      '/operators?': operatorWith('f-a~rt', 'f-b~rt'),
+      '&onestop_id=f-a~rt': { feeds: [{ urls: { realtime_alerts: 'https://mta.example/all-alerts' } }] },
+      '&onestop_id=f-b~rt': { feeds: [{ urls: { realtime_alerts: 'https://mta.example/all-alerts' } }] },
+    })
+
+    const urls = await resolveRtUrlsForFeed('f-dr5r-nyctsubway', 'key', fetchFn)
+
+    expect(urls).toHaveLength(1)
+  })
+
+  test('falls back to URLs on the feed\'s own record', async () => {
+    const { fetchFn } = trackingFetch({
+      '&onestop_id=f-solo&': {
+        feeds: [{
+          onestop_id: 'f-solo',
+          urls: { realtime_alerts: 'https://solo.example/alerts.pb' },
+        }],
+      },
+    })
+
+    const urls = await resolveRtUrlsForFeed('f-solo', 'key', fetchFn)
+
+    expect(urls.map(u => u.url)).toEqual(['https://solo.example/alerts.pb'])
+  })
+
+  test('falls back to the legacy ~rt companion record', async () => {
+    const { fetchFn } = trackingFetch({
+      '&onestop_id=f-legacy&': { feeds: [{ onestop_id: 'f-legacy', urls: {} }] },
+      '&onestop_id=f-legacy~rt': {
+        feeds: [{ urls: { realtime_vehicle_positions: 'https://legacy.example/vp.pb' } }],
+      },
+    })
+
+    const urls = await resolveRtUrlsForFeed('f-legacy', 'key', fetchFn)
+
+    expect(urls.map(u => u.url)).toEqual(['https://legacy.example/vp.pb'])
+  })
+
+  test('looks a numeric id up by id rather than as an onestop id', async () => {
+    const { calls, fetchFn } = trackingFetch({ 'id=886': STATIC })
+
+    await resolveRtUrlsForFeed('886', 'key', fetchFn)
+
+    expect(calls[0]).toContain('&id=886')
+  })
+
+  test('carries header authorization onto each RT URL', async () => {
+    const { fetchFn } = trackingFetch({
+      '&onestop_id=f-solo&': {
+        feeds: [{
+          onestop_id: 'f-solo',
+          urls: { realtime_alerts: 'https://solo.example/alerts.pb' },
+          authorization: { type: 'header', param_name: 'x-api-key', param_value: 'secret' },
+        }],
+      },
+    })
+
+    const urls = await resolveRtUrlsForFeed('f-solo', 'key', fetchFn)
+
+    expect(urls[0].headers).toEqual({ 'x-api-key': 'secret' })
+  })
+
+  test('bakes query-param authorization into the URL, which carries no headers', async () => {
+    // MTA's Bus Time RT feed declares this form; a header-only reader drops it
+    // silently and every request goes out unauthenticated.
+    const { fetchFn } = trackingFetch({
+      '&onestop_id=f-bus&': {
+        feeds: [{
+          onestop_id: 'f-bus',
+          urls: { realtime_alerts: 'https://bus.example/alerts?x=1' },
+          authorization: { type: 'query_param', param_name: 'key', param_value: 's3cret' },
+        }],
+      },
+    })
+
+    const urls = await resolveRtUrlsForFeed('f-bus', 'key', fetchFn)
+
+    expect(urls[0].url).toBe('https://bus.example/alerts?x=1&key=s3cret')
+    expect(urls[0].headers).toBeUndefined()
+  })
+
+  test('a feed with no realtime counterpart anywhere yields nothing', async () => {
+    const { fetchFn } = trackingFetch({ '&onestop_id=f-nowhere&': { feeds: [{ onestop_id: 'f-nowhere', urls: {} }] } })
+
+    expect(await resolveRtUrlsForFeed('f-nowhere', 'key', fetchFn)).toEqual([])
   })
 })

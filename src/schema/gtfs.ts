@@ -29,10 +29,24 @@ import {
 } from 'drizzle-orm/pg-core'
 import { spatialColumn, spatialIndex } from './spatial-helpers'
 
+/**
+ * Which kind of GTFS-RT feed a URL points at.
+ *
+ * Recorded rather than inferred from the URL. An agency's realtime feeds are
+ * discovered through its operator, which lists *all* of them — MTA New York
+ * City Transit publishes ten, covering subway line groups and buses — so the
+ * subway's feed row carries the bus URLs too. Guessing the kind from the URL
+ * string picked the bus vehicle feed for subway trains, and MTA's subway URLs
+ * (`nyct%2Fgtfs-ace`) name no kind at all.
+ */
+export type RtUrlType = 'tripUpdates' | 'vehiclePositions' | 'alerts'
+
 /** One entry of a feed's GTFS-RT URL list, as stored in `gtfs_feeds.rt_urls`. */
 export interface RtUrlEntry {
   url: string
   headers?: Record<string, string>
+  /** Absent on rows written before discovery recorded it. */
+  type?: RtUrlType
 }
 
 // ── GTFS Feeds ──────────────────────────────────────────────────────
