@@ -15,9 +15,9 @@
 import { getScript } from '../admin/scripts-manifest'
 import { INTERNAL_HANDLERS } from './admin-internal-handlers'
 import * as store from './ops-job-store'
-import type { Job } from './job-invocation'
+import type { Job, JobTrigger } from './job-invocation'
 
-export type { Job } from './job-invocation'
+export type { Job, JobTrigger } from './job-invocation'
 export const { listJobs, getJob, jobStats, readLogsSince, ensureOpsJobsSchema } = store
 
 export class JobConflictError extends Error {
@@ -28,7 +28,11 @@ export class JobConflictError extends Error {
 }
 
 /** Enqueue a job for the given script id. Internal jobs start running immediately. */
-export async function startJob(scriptId: string, params: Record<string, unknown> = {}): Promise<Job> {
+export async function startJob(
+  scriptId: string,
+  params: Record<string, unknown> = {},
+  origin: { trigger?: JobTrigger; scheduleId?: string; scheduleName?: string } = {},
+): Promise<Job> {
   const script = getScript(scriptId)
   if (!script) throw new Error(`Unknown script: ${scriptId}`)
 
@@ -37,7 +41,7 @@ export async function startJob(scriptId: string, params: Record<string, unknown>
     throw new JobConflictError(scriptId)
   }
 
-  const job = await store.createJob(scriptId, params)
+  const job = await store.createJob(scriptId, params, origin)
 
   if (job.execKind === 'internal' && script.exec.kind === 'internal') {
     // Run in-process; process jobs are picked up by the ops worker.

@@ -1,15 +1,14 @@
 import { createRouter, createWebHistory } from 'vue-router'
-import { bootstrap, hasAccount, isAdmin, isAuthenticated, ready } from '@/lib/auth'
+import { bootstrap, isAdmin, isSignedIn, ready } from '@/lib/auth'
 
 /**
- * Two tiers of route:
+ * Two tiers of route, both keyed off the signed-in account:
  *
- *   - Account routes (`meta.account`) — need a real account session. An
- *     operator holding only the shared admin key does not have one, and the
- *     API's /account/* routes would 401 them.
- *   - Operator routes (`meta.admin`) — imports, migrations, graph rebuilds.
- *     These are also enforced server-side; the guard here only keeps the nav
- *     honest, since a client-side check is not a security boundary.
+ *   - Account routes (`meta.account`) — any session.
+ *   - Operator routes (`meta.admin`) — imports, migrations, graph rebuilds;
+ *     the `admin` role. These are also enforced server-side; the guard here
+ *     only keeps the nav honest, since a client-side check is not a security
+ *     boundary.
  */
 const router = createRouter({
   // Whatever Vite was built with, rather than a second copy of the same
@@ -22,8 +21,7 @@ const router = createRouter({
   routes: [
     // A plain redirect, deliberately: a redirect *function* is evaluated during
     // route resolution, before `bootstrap()` has answered, so it would send a
-    // real account holder to the operator dashboard on a cold load. The
-    // `meta.account` guard below then bounces an admin-key operator onward.
+    // real account holder to the operator dashboard on a cold load.
     { path: '/', redirect: '/keys' },
     { path: '/login', name: 'login', component: () => import('@/views/LoginView.vue'), meta: { public: true } },
 
@@ -38,6 +36,7 @@ const router = createRouter({
     { path: '/accounts', name: 'accounts', component: () => import('@/views/UsersView.vue'), meta: { admin: true } },
     { path: '/regions', name: 'regions', component: () => import('@/views/RegionsView.vue'), meta: { admin: true } },
     { path: '/scripts', name: 'scripts', component: () => import('@/views/ScriptsView.vue'), meta: { admin: true } },
+    { path: '/schedules', name: 'schedules', component: () => import('@/views/SchedulesView.vue'), meta: { admin: true } },
     { path: '/jobs', name: 'jobs', component: () => import('@/views/JobsView.vue'), meta: { admin: true } },
     { path: '/jobs/:id', name: 'job-detail', component: () => import('@/views/JobDetailView.vue'), meta: { admin: true } },
     { path: '/data', name: 'data', component: () => import('@/views/DataView.vue'), meta: { admin: true } },
@@ -54,17 +53,13 @@ router.beforeEach(async (to) => {
 
   if (to.meta.public) return true
 
-  if (!isAuthenticated.value) {
+  if (!isSignedIn.value) {
     return { name: 'login', query: to.fullPath !== '/keys' ? { redirect: to.fullPath } : {} }
   }
 
   // A non-admin who lands on an operator route (a bookmark, a stale link) goes
   // to their own keys rather than a 403 they can do nothing about.
   if (to.meta.admin && !isAdmin.value) return { name: 'keys' }
-
-  // Likewise an admin-key operator on an account route: those pages call
-  // session-authenticated endpoints that would 401 and sign them out.
-  if (to.meta.account && !hasAccount.value) return { name: 'dashboard' }
 
   return true
 })

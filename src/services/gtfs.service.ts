@@ -476,7 +476,10 @@ export function parseRoutes(
     agencyName: agencyMap.get(r.agency_id || '') || null,
     routeShortName: r.route_short_name || null,
     routeLongName: r.route_long_name || null,
-    routeType: parseInt(r.route_type, 10) || 3,
+    // NOT `|| 3`: route_type 0 is tram, and 0 is falsy, so every tram and
+    // streetcar route in every feed imported as a bus. Only a genuinely
+    // missing or unparseable value falls back.
+    routeType: Number.isFinite(parseInt(r.route_type, 10)) ? parseInt(r.route_type, 10) : 3,
     routeColor: r.route_color || null,
     routeTextColor: r.route_text_color || null,
     routeUrl: r.route_url || null,

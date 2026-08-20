@@ -36,6 +36,16 @@ export interface DepartureRequest {
   /** Keep only departures in this GTFS direction ("0"/"1"). A platform stop
    *  can return both directions, so the board filters to the rider's way. */
   directionId?: string
+  /** GTFS route types the caller expects here, derived from the place's own
+   *  tags. Stops served by a matching route rank first and are searched out to
+   *  a wider radius — see `MODE_MATCH_RADIUS`. */
+  routeTypes?: number[]
+  /** Drop departures further out than this many minutes. MOTIS's `n` is a plain
+   *  event count with no time bound, so the horizon it buys swings wildly with
+   *  service frequency — 50 events is 45 minutes at a subway platform and five
+   *  hours at a ferry landing. Bounding by time makes the board mean the same
+   *  thing everywhere. Callers still choose `n`; this only trims. */
+  windowMinutes?: number
 }
 
 export interface StopDepartures {
@@ -50,12 +60,20 @@ export interface StopDepartures {
     distance?: number
   }
   departures: Departure[]
+  /** More runs exist past what was returned — either trimmed by `windowMinutes`
+   *  or cut off by `n`. Lets a caller offer "show more" honestly. */
+  hasMore?: boolean
   nextPageCursor?: string
   previousPageCursor?: string
 }
 
 export interface Departure {
   tripId: string
+  /** GTFS service date this run belongs to (YYYY-MM-DD), which is NOT always
+   *  the calendar date it departs on: a 01:00 train is filed under the previous
+   *  day's service, published as a 25:00 stop time. Lets a board tell "tonight's
+   *  last run" from "tomorrow's first". */
+  serviceDate?: string
   route: {
     id: string
     feedId: string
@@ -144,6 +162,33 @@ function parseMotisId(motisId: string): { feedId: string; stopId: string } {
 }
 
 /**
+ * Pull the GTFS service date out of a MOTIS trip id.
+ *
+ * MOTIS mints ids as `{YYYYMMDD}_{HH:MM}_{feed}_{n}`, where the date is the
+ * service date and the time is the trip's scheduled start — which may exceed
+ * 24:00 for a run that crosses midnight. That prefix is the only place the
+ * service date survives into the stoptimes response, and it is what separates
+ * `20260815_24:49` (still Friday's timetable, departing 01:00 Saturday) from
+ * `20260816_00:29` (Saturday's own first runs) at the same platform minute.
+ *
+ * Returns undefined for any id that doesn't carry the prefix, so a change in
+ * MOTIS's id scheme degrades to "no service date" rather than to a wrong one.
+ */
+const MOTIS_TRIP_ID_DATE = /^(\d{4})(\d{2})(\d{2})_/
+
+export function parseServiceDate(tripId: string): string | undefined {
+  const match = MOTIS_TRIP_ID_DATE.exec(tripId)
+  if (!match) return undefined
+
+  const [, year, month, day] = match
+  // Reject a prefix that parses as a date but isn't one (e.g. month 19).
+  const asDate = new Date(`${year}-${month}-${day}T00:00:00Z`)
+  if (isNaN(asDate.getTime()) || asDate.getUTCMonth() + 1 !== Number(month)) return undefined
+
+  return `${year}-${month}-${day}`
+}
+
+/**
  * Compute delay in seconds from scheduled vs actual times.
  */
 function computeDelay(actual?: string, scheduled?: string): number | undefined {
@@ -154,34 +199,68 @@ function computeDelay(actual?: string, scheduled?: string): number | undefined {
 }
 
 /**
+ * How far out to look for a stop whose mode matches the caller's, when
+ * `routeTypes` is given. A ferry landing's GTFS point sits at the end of the
+ * pier and an aerial tramway's out under the cables, so the stop that actually
+ * belongs to the place is routinely further away than an unrelated bus stop on
+ * the street outside. Mode-matched stops get this reach; everything else stays
+ * within the caller's radius.
+ */
+const MODE_MATCH_RADIUS = 400
+
+/**
  * Find nearby GTFS stops using PostGIS spatial index.
+ *
+ * When `routeTypes` is supplied, stops served by a route of one of those types
+ * sort ahead of merely closer ones — the first stop returned names the station
+ * and supplies its route list, so a ferry terminal must not be identified by
+ * the bus stop across the street. The preference is a ranking, never a filter:
+ * feeds mistype their routes (the Roosevelt Island tram is published as a bus),
+ * so a nearby stop of any mode is still better than nothing.
  */
 async function findNearbyStops(
   lat: number,
   lng: number,
   radius: number,
   limit: number,
-): Promise<Array<{ feedId: string; stopId: string; name: string; code?: string; lat: number; lng: number; distance: number }>> {
+  routeTypes?: number[],
+): Promise<Array<{ feedId: string; stopId: string; name: string; code?: string; lat: number; lng: number; distance: number; parentStation?: string }>> {
+  const modeMatch = routeTypes?.length
+    ? sql`EXISTS (
+        SELECT 1 FROM gtfs_stop_routes sr
+        JOIN gtfs_routes r ON r.feed_id = sr.feed_id AND r.route_id = sr.route_id
+        WHERE sr.feed_id = s.feed_id AND sr.stop_id = s.stop_id
+          AND r.route_type IN (${sql.join(routeTypes.map((t) => sql`${t}`), sql`, `)})
+      )`
+    : sql`FALSE`
+  const searchRadius = routeTypes?.length ? Math.max(radius, MODE_MATCH_RADIUS) : radius
+
   const result = await db.execute(sql`
-    SELECT
-      stop_id,
-      feed_id,
-      stop_name,
-      stop_code,
-      stop_lat,
-      stop_lon,
-      ST_Distance(
-        geom::geography,
-        ST_SetSRID(ST_MakePoint(${lng}, ${lat}), 4326)::geography
-      ) AS distance
-    FROM gtfs_stops
-    WHERE ST_DWithin(
-      geom::geography,
-      ST_SetSRID(ST_MakePoint(${lng}, ${lat}), 4326)::geography,
-      ${radius}
+    WITH candidates AS (
+      SELECT
+        s.stop_id,
+        s.feed_id,
+        s.stop_name,
+        s.stop_code,
+        s.stop_lat,
+        s.stop_lon,
+        s.parent_station,
+        ST_Distance(
+          s.geom::geography,
+          ST_SetSRID(ST_MakePoint(${lng}, ${lat}), 4326)::geography
+        ) AS distance,
+        ${modeMatch} AS mode_match
+      FROM gtfs_stops s
+      WHERE ST_DWithin(
+        s.geom::geography,
+        ST_SetSRID(ST_MakePoint(${lng}, ${lat}), 4326)::geography,
+        ${searchRadius}
+      )
+      AND (s.location_type = 0 OR s.location_type IS NULL)
     )
-    AND (location_type = 0 OR location_type IS NULL)
-    ORDER BY distance
+    SELECT * FROM candidates
+    WHERE mode_match OR distance <= ${radius}
+    ORDER BY mode_match DESC, distance
     LIMIT ${limit}
   `)
 
@@ -193,7 +272,51 @@ async function findNearbyStops(
     lat: row.stop_lat,
     lng: row.stop_lon,
     distance: Math.round(row.distance * 10) / 10,
+    parentStation: row.parent_station || undefined,
   }))
+}
+
+/**
+ * How close a stop has to be before it counts as *being* the place rather than
+ * standing near it. The Roosevelt Island Tramway's stop is 2.4 m from the OSM
+ * way; the bus stops that were crowding its board are 43 m and further, across
+ * the street.
+ */
+const AT_THE_PLACE_RADIUS = 25
+
+/** Same station: the GTFS parent when both declare one, otherwise the name. */
+function sameStation(
+  a: { feedId: string; name: string; parentStation?: string },
+  b: { feedId: string; name: string; parentStation?: string },
+): boolean {
+  if (a.feedId !== b.feedId) return false
+  if (a.parentStation && b.parentStation) return a.parentStation === b.parentStation
+  return a.name.trim().toLowerCase() === b.name.trim().toLowerCase()
+}
+
+/**
+ * Narrow a nearby-stop list to the station the place actually *is*.
+ *
+ * Merging every stop within the radius is right for a bare coordinate — tell me
+ * what I can catch from here — but wrong for a station, which has an identity.
+ * Opening the Roosevelt Island Tramway and reading a board of Q32, M15 and Q60
+ * buses bound for Penn Station is not a departure board for that station.
+ *
+ * Mode alone can't separate them: RIOC publishes the tramway as `route_type=3`,
+ * the same code the buses outside carry, so a mode filter keeps all of them.
+ * What does separate them is distance — 2.4 m against 43 m — so a stop sitting
+ * essentially on the place claims it, and the board narrows to that stop's
+ * station complex (its platforms, both directions). When the nearest stop is
+ * merely nearby, nothing is dropped and the old merge stands.
+ */
+function narrowToStation<T extends { feedId: string; name: string; distance?: number; parentStation?: string }>(
+  stops: T[],
+): T[] {
+  const primary = stops[0]
+  if (!primary || (primary.distance ?? Infinity) > AT_THE_PLACE_RADIUS) return stops
+
+  const complex = stops.filter((stop) => sameStation(primary, stop))
+  return complex.length ? complex : stops
 }
 
 /**
@@ -282,6 +405,7 @@ function transformDepartures(
 
       return {
         tripId: st.tripId,
+        serviceDate: parseServiceDate(st.tripId),
         route: {
           id: routeId,
           feedId,
@@ -309,6 +433,34 @@ function transformDepartures(
     })
 }
 
+/**
+ * Cut a stop's departures down to the requested window.
+ *
+ * Deliberately does NOT guarantee a non-empty result: a stop closed for the
+ * night should come back empty here so the caller can tell "nothing for hours"
+ * apart from "nothing at all", and decide for itself whether to reach past the
+ * window. Losing that distinction is how a board ends up showing a single run
+ * seven weeks out next to trains due in three minutes.
+ */
+function trimToWindow(
+  departures: Departure[],
+  windowEnd: Date | null,
+  truncated: boolean,
+): { departures: Departure[]; hasMore: boolean } {
+  if (!windowEnd) return { departures, hasMore: truncated }
+
+  const cutoff = windowEnd.getTime()
+  const withinWindow = departures.filter((d) => {
+    const at = Date.parse(d.departureTime || d.scheduledDepartureTime)
+    return isNaN(at) || at <= cutoff
+  })
+
+  return {
+    departures: withinWindow,
+    hasMore: truncated || withinWindow.length < departures.length,
+  }
+}
+
 // ── Public API ──────────────────────────────────────────────────────
 
 /**
@@ -334,7 +486,15 @@ export async function getDepartures(
     stopId,
     routeShortNames,
     directionId,
+    routeTypes,
+    windowMinutes,
   } = request
+
+  // The window is measured from the query time, not from wall-clock now — a
+  // caller paging forward with `time` gets a window around what it asked for.
+  const windowEnd = windowMinutes
+    ? new Date((time ? new Date(time).getTime() : Date.now()) + windowMinutes * 60_000)
+    : null
 
   const routeFilter =
     routeShortNames && routeShortNames.length
@@ -348,8 +508,11 @@ export async function getDepartures(
     // Direct stop query — skip spatial search
     stops = [{ feedId, stopId, name: '', lat, lng }]
   } else {
-    stops = await findNearbyStops(lat, lng, radius, 5)
+    stops = await findNearbyStops(lat, lng, radius, 5, routeTypes)
     if (stops.length === 0) return []
+    // Only when the caller says this place is a transit stop of a given mode —
+    // a bare coordinate still gets everything nearby.
+    if (routeTypes?.length) stops = narrowToStation(stops)
   }
 
   // 2. Query MOTIS stoptimes for each stop in parallel
@@ -397,10 +560,16 @@ export async function getDepartures(
         timezone,
         distance: stop.distance,
       },
-      departures: transformDepartures(result.stopTimes, colorMap).filter(
-        (d) =>
-          (!routeFilter || routeFilter.has(d.route.shortName ?? '')) &&
-          (directionId == null || d.directionId === directionId),
+      ...trimToWindow(
+        transformDepartures(result.stopTimes, colorMap).filter(
+          (d) =>
+            (!routeFilter || routeFilter.has(d.route.shortName ?? '')) &&
+            (directionId == null || d.directionId === directionId),
+        ),
+        windowEnd,
+        // A full page means MOTIS had more to give, so more runs exist even
+        // when none of what came back was trimmed.
+        result.stopTimes.length >= n,
       ),
       nextPageCursor: result.nextPageCursor,
       previousPageCursor: result.previousPageCursor,

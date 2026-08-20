@@ -204,6 +204,34 @@ describe('parseRoutes', () => {
     const routes = parseRoutes(csv, 'feed_1', new Map())
     expect(routes[0].routeType).toBe(3)
   })
+
+  test('keeps route_type 0 (tram) instead of defaulting it to bus', () => {
+    // `parseInt('0') || 3` is 3: every tram and streetcar route in every feed
+    // imported as a bus, silently. The Roosevelt Island Tramway is published as
+    // type 0, and rode the whole way through the app labelled a bus.
+    const csv = [
+      'route_id,route_type,route_long_name',
+      'R001,0,Roosevelt Island Aerial Tramway',
+    ].join('\n')
+
+    const routes = parseRoutes(csv, 'feed_1', new Map())
+    expect(routes[0].routeType).toBe(0)
+  })
+
+  test.each([
+    ['tram', 0],
+    ['subway', 1],
+    ['rail', 2],
+    ['bus', 3],
+    ['ferry', 4],
+    ['cable tram', 5],
+    ['aerial lift', 6],
+    ['funicular', 7],
+  ])('preserves route_type %s (%i)', (_mode, type) => {
+    const csv = ['route_id,route_type', `R001,${type}`].join('\n')
+
+    expect(parseRoutes(csv, 'feed_1', new Map())[0].routeType).toBe(type)
+  })
 })
 
 // ── deriveStopRoutes ────────────────────────────────────────────────

@@ -15,6 +15,17 @@ import {
   jobStats,
   JobConflictError,
 } from '../services/job-runner.service'
+import {
+  createSchedule,
+  defaultTimeZone,
+  deleteSchedule,
+  getSchedule,
+  listSchedules,
+  setScheduleEnabled,
+  updateSchedule,
+  ScheduleValidationError,
+} from '../services/schedules.service'
+import { describeCron, nextRun } from '../lib/cron'
 import { getDataMetrics, getServiceStatuses } from '../services/admin-metrics.service'
 import {
   listRegions,
@@ -58,9 +69,27 @@ const createRegionBody = t.Object({ key: t.String({ minLength: 1 }), ...regionFi
 const updateRegionBody = t.Object(regionFields)
 const KEY_RE = /^[a-z0-9][a-z0-9-]*$/
 
+// Cron/timezone/script are validated in the service (against the manifest and
+// the cron grammar), so the shape check here is deliberately loose.
+const scheduleBody = t.Object({
+  scriptId: t.String({ minLength: 1 }),
+  cron: t.String({ minLength: 1 }),
+  timezone: t.Optional(t.String()),
+  params: t.Optional(t.Record(t.String(), t.Any())),
+  enabled: t.Optional(t.Boolean()),
+})
+type ScheduleBody = {
+  scriptId: string
+  cron: string
+  timezone?: string
+  params?: Record<string, unknown>
+  enabled?: boolean
+}
+
 /**
- * Public (unauthenticated) endpoint so the console's login screen can discover
- * whether an admin key is required before prompting for one.
+ * Public (unauthenticated) endpoint so the console's login screen can render
+ * before it has any credential — it reports the instance name and whether
+ * accounts are on at all.
  */
 export const adminConsoleConfigRoutes = new Elysia({ prefix: '/admin' }).get(
   '/config',
@@ -88,8 +117,11 @@ export const adminConsoleConfigRoutes = new Elysia({ prefix: '/admin' }).get(
 export const adminConsoleRoutes = new Elysia({ prefix: '/admin' })
   .onBeforeHandle(adminAuthHandler)
 
-  // Lightweight probe used by the login screen to validate a supplied key.
-  .get('/verify', () => ({ ok: true }), { detail: { summary: 'Verify admin key', tags: ['Admin'] } })
+  // Lightweight probe: a script can check that its admin credential still works
+  // without running anything. Reaching the handler at all means it does.
+  .get('/verify', () => ({ ok: true }), {
+    detail: { summary: 'Verify admin credentials', tags: ['Admin'] },
+  })
 
   // ── Import regions ──────────────────────────────────────────────────
   // The DB-backed region store (seeded from config/regions.json) that drives
@@ -255,6 +287,135 @@ export const adminConsoleRoutes = new Elysia({ prefix: '/admin' })
     {
       body: t.Optional(t.Object({ params: t.Optional(t.Record(t.String(), t.Any())) })),
       detail: { summary: 'Run a script', tags: ['Admin'] },
+    },
+  )
+
+  // ── Schedules ───────────────────────────────────────────────────────
+  // Cron entries that enqueue manifest scripts. Firing one produces an ordinary
+  // job (trigger:'schedule'), so scheduled imports appear in the list below
+  // alongside manual runs instead of vanishing into a host logfile.
+  .get(
+    '/schedules',
+    async () => ({
+      schedules: (await listSchedules()).map((s) => ({ ...s, description: describeCron(s.cron, s.timezone) })),
+      defaultTimezone: defaultTimeZone(),
+    }),
+    { detail: { summary: 'List job schedules', tags: ['Admin'] } },
+  )
+
+  .post(
+    '/schedules',
+    async ({ body, set }) => {
+      try {
+        set.status = 201
+        return { schedule: await createSchedule(body as ScheduleBody) }
+      } catch (err) {
+        set.status = err instanceof ScheduleValidationError ? 400 : 500
+        return { error: err instanceof Error ? err.message : 'Failed to create schedule' }
+      }
+    },
+    { body: scheduleBody, detail: { summary: 'Create a job schedule', tags: ['Admin'] } },
+  )
+
+  .put(
+    '/schedules/:id',
+    async ({ params, body, set }) => {
+      try {
+        const schedule = await updateSchedule(params.id, body as ScheduleBody)
+        if (!schedule) {
+          set.status = 404
+          return { error: 'Schedule not found' }
+        }
+        return { schedule }
+      } catch (err) {
+        set.status = err instanceof ScheduleValidationError ? 400 : 500
+        return { error: err instanceof Error ? err.message : 'Failed to update schedule' }
+      }
+    },
+    { body: scheduleBody, detail: { summary: 'Update a job schedule', tags: ['Admin'] } },
+  )
+
+  // Separate from PUT so the console's on/off switch doesn't have to round-trip
+  // the whole expression (and can't corrupt it by racing an open edit form).
+  .post(
+    '/schedules/:id/enabled',
+    async ({ params, body, set }) => {
+      const schedule = await setScheduleEnabled(params.id, (body as { enabled: boolean }).enabled)
+      if (!schedule) {
+        set.status = 404
+        return { error: 'Schedule not found' }
+      }
+      return { schedule }
+    },
+    {
+      body: t.Object({ enabled: t.Boolean() }),
+      detail: { summary: 'Enable or disable a schedule', tags: ['Admin'] },
+    },
+  )
+
+  .delete(
+    '/schedules/:id',
+    async ({ params, set }) => {
+      if (!(await deleteSchedule(params.id))) {
+        set.status = 404
+        return { error: 'Schedule not found' }
+      }
+      return { ok: true }
+    },
+    { detail: { summary: 'Delete a job schedule', tags: ['Admin'] } },
+  )
+
+  // Run a schedule now, out of band. The job is still tagged to the schedule so
+  // the console can show it as that schedule's last run; the cron timing is
+  // untouched, so this doesn't skip or shift the next occurrence.
+  .post(
+    '/schedules/:id/run',
+    async ({ params, set }) => {
+      const schedule = await getSchedule(params.id)
+      if (!schedule) {
+        set.status = 404
+        return { error: 'Schedule not found' }
+      }
+      try {
+        const job = await startJob(schedule.scriptId, schedule.params, {
+          trigger: 'schedule',
+          scheduleId: schedule.id,
+          scheduleName: schedule.scriptName,
+        })
+        set.status = 201
+        return { job }
+      } catch (err) {
+        set.status = err instanceof JobConflictError ? 409 : 500
+        return { error: err instanceof Error ? err.message : 'Failed to start job' }
+      }
+    },
+    { detail: { summary: 'Run a schedule immediately', tags: ['Admin'] } },
+  )
+
+  // Preview upcoming fire times so an operator can sanity-check an expression
+  // (especially its timezone) before saving it.
+  .post(
+    '/schedules/preview',
+    async ({ body, set }) => {
+      const { cron, timezone } = body as { cron: string; timezone?: string }
+      const zone = timezone || defaultTimeZone()
+      const upcoming: string[] = []
+      let cursor = new Date()
+      for (let i = 0; i < 5; i++) {
+        const next = nextRun(cron, cursor, zone)
+        if (!next) break
+        upcoming.push(next.toISOString())
+        cursor = next
+      }
+      if (!upcoming.length) {
+        set.status = 400
+        return { error: `"${cron}" is not a valid cron expression, or never matches` }
+      }
+      return { description: describeCron(cron, zone), timezone: zone, upcoming }
+    },
+    {
+      body: t.Object({ cron: t.String(), timezone: t.Optional(t.String()) }),
+      detail: { summary: 'Preview a cron expression', tags: ['Admin'] },
     },
   )
 

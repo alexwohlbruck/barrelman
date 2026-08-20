@@ -35,6 +35,7 @@ import { startTransitWarmup } from './lib/warmup'
 import { flushUsage, startUsageFlush } from './services/usage.service'
 import { startOverageReporting } from './services/overage.service'
 import { startAccountSweep } from './services/account-maintenance.service'
+import { startScheduler } from './services/scheduler.service'
 import { assertAuthConfigured } from './middleware/api-auth'
 import { setPeerAddressResolver } from './lib/rate-limit'
 
@@ -145,6 +146,11 @@ startOverageReporting()
 // validates expiry on read but never deletes, so the rows would otherwise
 // accumulate for the life of the instance.
 startAccountSweep()
+
+// Cron-driven refreshes (OSM replication, GTFS drift, GBFS). These enqueue
+// ordinary jobs the ops worker executes, so a nightly import is visible and
+// cancelable in the console instead of being a host crontab nobody can see.
+void startScheduler()
 
 assertAuthConfigured()
 

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount, computed } from 'vue'
 import { useRoute, useRouter, RouterLink } from 'vue-router'
-import { ArrowLeft, Ban, RotateCcw, Copy, Clock } from 'lucide-vue-next'
+import { ArrowLeft, Ban, RotateCcw, Copy, Clock, CalendarClock } from 'lucide-vue-next'
 import PageHeader from '@/components/PageHeader.vue'
 import LogViewer from '@/components/jobs/LogViewer.vue'
 import JobStatusBadge from '@/components/JobStatusBadge.vue'
@@ -124,6 +124,13 @@ onBeforeUnmount(() => controller?.abort())
         <div class="flex flex-wrap items-center gap-x-6 gap-y-3">
           <JobStatusBadge :status="job.status" />
           <DangerBadge :danger="job.danger" />
+          <RouterLink
+            v-if="job.trigger === 'schedule'"
+            to="/schedules"
+            class="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground"
+          >
+            <CalendarClock class="size-4" /> Scheduled
+          </RouterLink>
           <div class="flex items-center gap-1.5 text-sm text-muted-foreground">
             <Clock class="size-4" /> {{ formatDuration(job.durationMs) }}
             <span v-if="isRunning" class="text-info">· live</span>

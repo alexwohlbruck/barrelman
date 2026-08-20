@@ -32,8 +32,38 @@ The public probe needs no key and is safe for load balancers:
 
 ```bash
 curl https://api.barrelman.dev/health/
-# {"status":"ok","database":"connected"}
 ```
+
+`status` is the one-line answer — `ok`, `degraded`, or `error` — and it's all a
+load-balancer probe needs. Below it, `endpoints` says what each part of the API
+can do right now, so when calls start failing you can tell "transit is down"
+from "the instance is down":
+
+```json
+{
+  "status": "degraded",
+  "checkedAt": "2026-08-08T03:00:00.000Z",
+  "dependencies": {
+    "database": { "status": "ok", "latencyMs": 3 },
+    "motis":    { "status": "unavailable" }
+  },
+  "endpoints": [
+    { "group": "search",  "status": "ok",          "paths": ["/search", "/autocomplete"], "creditCost": 6 },
+    { "group": "transit", "status": "unavailable", "paths": ["/transit", "/gbfs"], "creditCost": 20,
+      "message": "Requires motis, currently unreachable" }
+  ]
+}
+```
+
+Each entry carries its `creditCost` and the `paths` it covers, so one call
+answers both "is this working" and "what does it cost". A group is `degraded`
+when a service that only adds coverage is down — `/search` without the address
+geocoder still returns POIs — and `unavailable` when something it genuinely
+needs is gone.
+
+Probe results are cached for a few seconds; `checkedAt` tells you how fresh they
+are. The authenticated `/health/auth` returns the same payload plus the
+underlying error for anything unreachable.
 
 ## Example requests
 

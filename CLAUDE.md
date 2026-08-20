@@ -59,10 +59,12 @@ change touches none (an internal refactor), just confirm you considered it.
 | Add an `exec.kind: 'internal'` task | also its handler in `src/services/admin-internal-handlers.ts` |
 | Make a script need a new tool (docker, python, a binary) | `Dockerfile.ops` — ops carries only docker/osmium/python/uv |
 | Add/rename a table or coverage-relevant column | queries in `src/services/admin-metrics.service.ts`, plus `DataMetrics` + `web/src/lib/types.ts` + the Dashboard/Data views if shown |
-| Add/remove a downstream service or change its health URL | `getServiceStatuses()` in `src/services/admin-metrics.service.ts` |
+| Add/remove a downstream service or change its health URL | `dependencyUrls()` + `probeAll()` in `src/services/health.service.ts` — `getServiceStatuses()` (the console) and `/health` both read from there, so probing is never duplicated. Add a display name to `SERVICE_NAMES` in `admin-metrics.service.ts` |
+| Add an endpoint group, or change what one calls at request time | `ENDPOINT_DEPENDENCIES` in `src/services/health.service.ts` — `/health` reports each group's status from it, and a wrong entry makes the API lie about what's working |
 | Add a notable public endpoint | consider a preset in `web/src/views/ApiTesterView.vue` — session-free endpoints only, the tester replays server-side with no cookie |
-| Add a metered endpoint | a group in `groupForPath()` (`src/billing/plans.ts`) + `apiAuth('<group>')`, or it's free and unattributed |
+| Add a metered endpoint | a prefix in `GROUP_PREFIXES` (`src/billing/plans.ts`, order matters) + `apiAuth('<group>')`, or it's free and unattributed. `groupForPath()` and `/health`'s endpoint list both read that table |
 | Add an `/admin/*` route | `.onBeforeHandle(adminAuthHandler)` — never `.use()` (see auth footgun) |
+| Add a script that refreshes data on a cadence | consider a `SEEDS` entry in `src/services/schedules.service.ts` — seeded schedules ship **disabled**, so adding one is safe |
 
 A manifest entry the ops image can't run is worse than none — it's a button that
 always fails. Check tooling first.
@@ -171,6 +173,7 @@ balance cache. A new cache keyed on account state belongs there too.
 - Regions: `src/config/regions.ts`, `config/regions.json`, `src/services/region-store.service.ts`
 - Boundary catalog: `src/services/boundary-catalog.service.ts`
 - Script catalog: `src/admin/scripts-manifest.ts` · job runner: `src/services/job-runner.service.ts` · ops worker: `src/worker/index.ts`
+- Schedules: `src/services/schedules.service.ts` (store + seeds) · `src/services/scheduler.service.ts` (tick) · `src/lib/cron.ts` (parser). A schedule fires via `startJob(…, { trigger: 'schedule' })`, so scheduled runs are ordinary tracked jobs — never add a path that bypasses the job store
 - Metrics/health: `src/services/admin-metrics.service.ts`
 - Admin routes: `src/routes/admin-console.ts`, `src/routes/admin.ts`, `src/routes/admin-users.ts`
 - Console SPA: `web/` (views in `web/src/views/`, types in `web/src/lib/types.ts` — mirror backend shapes)
