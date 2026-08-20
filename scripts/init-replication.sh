@@ -35,8 +35,11 @@ REPLICATION_COUNT="$(printf '%s\n' "$OSM_REPLICATION" | grep -c . || true)"
 REPLICATION_URL="${GEOFABRIK_REPLICATION_URL:-$(printf '%s\n' "$OSM_REPLICATION" | head -n1)}"
 REPLICATION_URL="${REPLICATION_URL:-https://download.geofabrik.de/north-america/us/north-carolina-updates/}"
 
+# The URL carries BARRELMAN_DB_PASSWORD, and this script is runnable from the
+# console — where the job runner captures stdout into the database and renders
+# it in the job log. Print the connection without the credential.
 echo "Initializing replication state..."
-echo "  DB:     $DB_URL"
+echo "  DB:     postgresql://barrelman:***@localhost:5432/barrelman"
 echo "  Server: $REPLICATION_URL"
 
 if [ "${REPLICATION_COUNT:-0}" -gt 1 ]; then
