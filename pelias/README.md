@@ -32,8 +32,43 @@ is the multi-hour job below.
 Everything below is codified in [`provision.sh`](./provision.sh) — run it from
 this directory. It is idempotent; safe to re-run. The manual equivalent:
 
+> **The `pelias` CLI refuses to run as root.** It derives the container user
+> from the invoking account and hard-fails on `0:0`:
+>
+> ```
+> You are running as root
+> This is insecure and not supported by Pelias.
+> Please try again as a non-root user.
+> ```
+>
+> The rest of the self-hosting guide is written for root in `/opt/barrelman`,
+> so this step — and only this step — needs an ordinary user. Create one, put
+> it in the `docker` group, and give it the Pelias directory:
+>
+> ```sh
+> useradd -m -u 1000 -s /bin/bash barrelman
+> usermod -aG docker barrelman
+> chown -R 1000:1000 /opt/barrelman/pelias
+> ```
+>
+> uid 1000 is deliberate: Elasticsearch runs as uid 1000 and owns
+> `pelias/data`, so matching them keeps a single owner for the index.
+>
+> Then run everything below **as that user**:
+>
+> ```sh
+> su - barrelman -c 'cd /opt/barrelman/pelias && ./provision.sh'
+> ```
+>
+> `sudo -u barrelman ./provision.sh` does **not** work. The CLI reads
+> `id -u ${SUDO_USER-${USER}}`, and under `sudo` from root `SUDO_USER` is
+> `root` — so it resolves to `0:0` and refuses with the same message, which
+> reads as though the switch had no effect at all. Use `su -`.
+
 ```sh
 # 0. Host prereq — Elasticsearch needs a high mmap count, or ES won't boot.
+#    Check before setting: Ubuntu 24.04 already ships 1048576.
+sysctl vm.max_map_count
 sudo sysctl -w vm.max_map_count=262144
 echo 'vm.max_map_count=262144' | sudo tee /etc/sysctl.d/99-pelias-es.conf
 
@@ -44,15 +79,17 @@ sudo ln -sf /opt/pelias-docker/pelias /usr/local/bin/pelias
 # 2. Env — copy the template, set DATA_DIR to an absolute path under here.
 #    Keep COMPOSE_PROJECT_NAME=barrelman so the CLI drives the same stack the
 #    root compose file does, rather than a second one with clashing names.
-cp .env.example .env && $EDITOR .env      # DATA_DIR=<abs>/pelias/data, DOCKER_USER=1000:1000
+#    Do NOT set DOCKER_USER — it is deprecated and the CLI overrides it.
+cp .env.example .env && $EDITOR .env      # DATA_DIR=<abs>/pelias/data
 
 # 3. Elasticsearch up + schema.
 pelias compose pull
 pelias elastic start && pelias elastic wait
 pelias elastic create
 
-# 4. Download all sources (WOF, OpenAddresses, OSM PBFs, TIGER for interpolation).
-pelias download all
+# 4. Download the sources (WOF, OpenAddresses, OSM PBFs, TIGER for interpolation).
+#    Named individually on purpose — see the `transit` note below.
+pelias download wof & pelias download oa & pelias download osm & pelias download tiger & wait
 
 # 5. Prepare polylines — THE STEP THAT IS EASY TO MISS.
 #    `import all` imports the `street` layer from /data/polylines/extract.0sv,
@@ -61,8 +98,9 @@ pelias download all
 #    (only the `address` layer gets populated). See the layers note below.
 pelias prepare polylines
 
-# 6. Import everything (WOF + OpenAddresses + OSM addresses + polyline streets).
-pelias import all
+# 6. Import each source (WOF + OpenAddresses + OSM addresses + polyline streets).
+#    NOT `pelias import all` — see the `transit` note below.
+for src in wof oa osm polylines; do pelias import "$src"; done
 
 # 7. Start the API — from the repo root, with the profile.
 #    NOT `pelias compose up`: that runs a bare `docker compose up -d`, and every
@@ -71,6 +109,26 @@ pelias import all
 #    service explicitly activates its profile.
 cd .. && docker compose --profile pelias up -d
 ```
+
+### `no such service: transit`
+
+The CLI's `all` targets (`pelias download all`, `pelias import all`) drive a
+`transit` service that this stack does not define, so both print:
+
+```
+no such service: transit
+```
+
+During **download** that is only noise — the CLI backgrounds each source, so the
+rest still run. During **import** it is not: `import all` runs its importers in
+sequence and hits `transit` last, so the CLI exits non-zero. Under `set -e` that
+aborted `provision.sh` *after* a multi-hour import had succeeded but *before* it
+started the API — a run that did all the work and still ended in an error.
+
+Both steps above therefore name the sources this stack actually has rather than
+using `all`. Measured on Colorado: the whole build — download, polylines, import
+— took about **25 minutes**, producing 7.31M documents and a 1.9 GB index from
+9.2 GB of downloaded sources.
 
 ### Re-importing into an already-running API
 

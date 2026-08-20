@@ -255,6 +255,11 @@ mkdir -p pelias/data && sudo chown -R 1000:1000 pelias/data
 docker compose --profile pelias up -d
 ```
 
+`pelias_api` publishes on `${BARRELMAN_BIND_ADDR:-127.0.0.1}:4000` like the other
+internal engines, so it is not reachable from off-box unless you widen that. It
+has no authentication of its own — barrelman reaches it as `pelias_api:4000` over
+the Compose network.
+
 <Callout type="warn" title="Skip the `chown` and Elasticsearch crash-loops">
 `docker compose ps` shows `pelias_elasticsearch` restarting, and only its logs
 say why:
@@ -292,10 +297,45 @@ host's config. If you see that error, re-fetch `docker-compose.yml` and run
 `docker compose up -d barrelman-ops`.
 </Callout>
 
-Then follow [`pelias/README.md`](https://github.com/alexwohlbruck/barrelman/blob/main/pelias/README.md) for the index build — budget hours, not minutes. Two things there are easy to miss and both fail silently:
+Then follow [`pelias/README.md`](https://github.com/alexwohlbruck/barrelman/blob/main/pelias/README.md) for the index build. Measured on Colorado it took about **25 minutes** end to end — download, polylines and import — producing 7.31M documents and a 1.9 GB index from 9.2 GB of sources. Scale that by region: a country-sized import is hours.
 
+Three things there are easy to miss, and all three fail in ways that do not look like their cause:
+
+- **The `pelias` CLI refuses to run as root** — see the callout below. Everything else in this guide runs as root, so this is the one step that does not.
 - `vm.max_map_count` must be at least `262144`. Check first — Ubuntu 24.04 already ships `1048576` — and only raise it if yours is lower: `sysctl vm.max_map_count`, then `sudo sysctl -w vm.max_map_count=262144`.
 - `pelias prepare polylines`, without which the `street` layer stays empty and street-name search returns nothing.
+
+<Callout type="warn" title="The Pelias CLI will not run as root, and `sudo -u` does not help">
+It derives the container user from the invoking account and hard-fails on `0:0`:
+
+```
+You are running as root
+This is insecure and not supported by Pelias.
+Please try again as a non-root user.
+```
+
+Create an ordinary user, put it in the `docker` group, and hand it the Pelias
+directory. uid 1000 matches the Elasticsearch user that owns `pelias/data`:
+
+```bash
+useradd -m -u 1000 -s /bin/bash barrelman
+usermod -aG docker barrelman
+chown -R 1000:1000 /opt/barrelman/pelias
+su - barrelman -c 'cd /opt/barrelman/pelias && ./provision.sh'
+```
+
+`sudo -u barrelman ./provision.sh` does **not** work. The CLI reads
+`id -u ${SUDO_USER-${USER}}`, and under `sudo` from root `SUDO_USER` is `root`,
+so it resolves to `0:0` and prints the identical message — which reads as though
+switching user had no effect at all. Use `su -`.
+</Callout>
+
+<Callout type="info" title="`no such service: transit` during download and import is expected">
+The Pelias CLI's `all` targets drive a `transit` service this stack does not
+define. `provision.sh` names the sources individually to avoid it; if you run
+`pelias import all` by hand instead, it exits non-zero *after* the import
+succeeds, which can abort a script before it starts the API.
+</Callout>
 
 ## Verify
 

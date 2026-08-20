@@ -41,9 +41,20 @@ pelias elastic start
 pelias elastic wait
 pelias elastic create || log "elastic index already exists — continuing"
 
-# 5. Download all configured sources (WOF, OpenAddresses, OSM PBFs, TIGER).
+# 5. Download the configured sources (WOF, OpenAddresses, OSM PBFs, TIGER).
+#
+# Named individually rather than `pelias download all`: the CLI's `all` target
+# also drives a `transit` service, which this stack does not define, so it
+# prints `no such service: transit`. Harmless during download (the CLI
+# backgrounds each source), but see the import step below, where it is not.
+# Downloaded in parallel, as `all` does — this is the long pole.
 log "downloading sources (this is large; resumable)"
-pelias download all
+dl_pids=()
+for src in wof oa osm tiger; do
+  pelias download "$src" &
+  dl_pids+=($!)
+done
+for pid in "${dl_pids[@]}"; do wait "$pid"; done
 
 # 6. Prepare polylines — generates /data/polylines/extract.0sv via Valhalla from
 #    the OSM PBFs. WITHOUT this the `street` layer stays empty and street-name
@@ -51,9 +62,18 @@ pelias download all
 log "preparing polylines (Valhalla; CPU/RAM heavy)"
 pelias prepare polylines
 
-# 7. Import everything into ES (WOF + OpenAddresses + OSM addresses + streets).
-log "importing all sources into Elasticsearch"
-pelias import all
+# 7. Import each source into ES (WOF + OpenAddresses + OSM addresses + streets).
+#
+# NOT `pelias import all`. That target calls its importers in sequence and
+# includes `transit`, which this stack does not define; the CLI aborts there
+# with `no such service: transit` and returns non-zero. Under `set -e` that
+# killed this script *after* a multi-hour import had succeeded but *before*
+# step 8, so the run ended in an error with the API never started.
+log "importing sources into Elasticsearch"
+for src in wof oa osm polylines; do
+  log "  importing $src"
+  pelias import "$src"
+done
 
 # 8. Bring up the API — via the root compose file, with the profile.
 # Not `pelias compose up`: that issues a bare `docker compose up -d`, and every
