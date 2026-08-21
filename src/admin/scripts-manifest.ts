@@ -373,6 +373,114 @@ export const SCRIPTS: ScriptDef[] = [
     ],
     source: 'import/generate-motis-config.ts',
   },
+  // ── Portolan (corrected transit geometry) ─────────────────────────────
+  // All three wrap `portolan sync` via import/portolan-sync.ts: rebuild
+  // corrected route geometry + tile pyramids in the portolan workspace, then
+  // re-import the corrected GTFS zips and rebuild the MOTIS dataset.
+  {
+    id: 'portolan-global-import',
+    name: 'Portolan Global Import',
+    description:
+      'Run `portolan sync global`: rebuild corrected geometry for EVERY registered feed, retile all pyramids, re-export corrected GTFS, then re-import the corrected zips into PostGIS and rebuild the MOTIS dataset.',
+    category: 'transit',
+    danger: 'caution',
+    longRunning: true,
+    confirm: true,
+    exclusive: true,
+    exec: { kind: 'process', command: 'bun', args: ['run', 'import/portolan-sync.ts', '--global'] },
+    params: [
+      {
+        name: 'skip-motis',
+        label: 'Skip MOTIS rebuild',
+        type: 'boolean',
+        apply: 'flag',
+        flag: '--skip-motis',
+        default: false,
+        description: 'Leave the MOTIS dataset stale; the corrected schedules go live only after scripts/rebuild-motis.sh runs.',
+      },
+      {
+        name: 'dry-run',
+        label: 'Dry run (plan only)',
+        type: 'boolean',
+        apply: 'flag',
+        flag: '--dry-run',
+        default: false,
+      },
+    ],
+    source: 'import/portolan-sync.ts',
+    notes:
+      'A full-fleet rebuild — expect roughly an hour for a global registry. Requires the portolan binary (PORTOLAN_BIN) and workspace (PORTOLAN_WORKSPACE) to be set up; see the Portolan page under Self-hosting docs.',
+  },
+  {
+    id: 'portolan-patch-import',
+    name: 'Portolan Patch Import',
+    description:
+      'Run `portolan sync patch` for specific feed keys: rebuild exactly the builds whose inputs changed (including interleaved neighbors and group closure — byte-identical to a global run), then re-import the corrected zips and rebuild MOTIS.',
+    category: 'transit',
+    danger: 'caution',
+    longRunning: true,
+    confirm: true,
+    exclusive: true,
+    exec: { kind: 'process', command: 'bun', args: ['run', 'import/portolan-sync.ts'] },
+    params: [
+      {
+        name: 'feeds',
+        label: 'Portolan feed keys',
+        type: 'string',
+        apply: 'flag',
+        flag: '--patch',
+        required: true,
+        placeholder: 'mta-subway,marc',
+        description: 'Comma-separated portolan feed keys (registry keys in portolan.json, not barrelman feed ids).',
+      },
+      {
+        name: 'skip-motis',
+        label: 'Skip MOTIS rebuild',
+        type: 'boolean',
+        apply: 'flag',
+        flag: '--skip-motis',
+        default: false,
+      },
+    ],
+    source: 'import/portolan-sync.ts',
+    notes:
+      'The patch may rebuild more than the named feeds: anything sharing steel with a changed feed rebuilds too, so the tile/export trees stay identical to a global run.',
+  },
+  {
+    id: 'portolan-check-updates',
+    name: 'Portolan Check for Updates',
+    description:
+      "Run `portolan sync check`: diff every registered feed's transitland sha against the sync state, download the changed ones, run the patch flow on them, then re-import + rebuild MOTIS. Exits early and cheaply when nothing moved.",
+    category: 'transit',
+    danger: 'safe',
+    longRunning: true,
+    confirm: false,
+    exclusive: true,
+    exec: { kind: 'process', command: 'bun', args: ['run', 'import/portolan-sync.ts', '--check'] },
+    params: [
+      {
+        name: 'TRANSITLAND_API_KEY',
+        label: 'Transitland API key',
+        type: 'string',
+        apply: 'env',
+        envVar: 'TRANSITLAND_API_KEY',
+        secret: true,
+        placeholder: 'tlk_…  (blank = use server env)',
+        description: 'Required unless already set in the server environment.',
+      },
+      {
+        name: 'dry-run',
+        label: 'Dry run (diff only, no downloads)',
+        type: 'boolean',
+        apply: 'flag',
+        flag: '--dry-run',
+        default: false,
+      },
+    ],
+    source: 'import/portolan-sync.ts',
+    notes:
+      'The intended nightly job for portolan-corrected feeds — point a daily schedule at this (Schedules page), the same way gtfs-watch is scheduled for plain feeds.',
+  },
   {
     id: 'transit-station-links',
     name: 'Rebuild Station Links',
