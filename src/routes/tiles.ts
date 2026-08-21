@@ -1,4 +1,5 @@
 import Elysia, { t } from 'elysia'
+import { join, resolve } from 'path'
 import { apiAuth, apiAuthAfter } from '../middleware/api-auth'
 
 function getMartinUrl() {
@@ -48,12 +49,147 @@ const Z_RE = /^\d{1,2}$/
 const XY_RE = /^\d{1,10}$/
 const Y_RE = /^\d{1,10}(\.[A-Za-z0-9]+)?$/
 
-export function createTileRoutes(deps: { fetchTile?: TileFetcher } = {}) {
+/**
+ * A portolan feed key: one directory name under the tiles dir. Same guard idea
+ * as SOURCE_RE above — the segments are joined into a filesystem path, so
+ * anything that could traverse out of the pyramid (`..`, separators) must be
+ * rejected before it reaches join(). Portolan keys are slug-shaped, so this is
+ * not a restriction on legitimate use.
+ */
+const PORTOLAN_FEED_RE = /^[A-Za-z0-9_-]+$/
+
+const CORS = 'access-control-allow-origin'
+
+export function createTileRoutes(
+  deps: { fetchTile?: TileFetcher; portolanTilesDir?: string } = {},
+) {
   const fetchTile: TileFetcher = deps.fetchTile || ((url: string) => fetch(url))
+
+  /**
+   * Portolan tiles are static files, not Martin: `portolan sync` writes MVT
+   * pyramids to <PORTOLAN_TILES_DIR>/<feed>/{z}/{x}/{y}.mvt plus a per-feed
+   * tiles.json and a global index.json. Resolved once at startup; if the dir
+   * does not exist (portolan not set up) every route answers 404 — missing
+   * data is not a crash.
+   */
+  const portolanDir = resolve(
+    deps.portolanTilesDir || process.env.PORTOLAN_TILES_DIR || './data/portolan/build/tiles',
+  )
 
   return new Elysia({ prefix: '/tiles' })
     .onBeforeHandle(tileAuthHandler)
     .onAfterHandle(apiAuthAfter)
+    .get(
+      '/portolan/index.json',
+      async ({ set }) => {
+        // The global index: every feed with a cut pyramid, with its bounds —
+        // entries of {feed, name, bounds, maxzoom}. It carries no tile URL
+        // templates, so it is served verbatim.
+        const file = Bun.file(join(portolanDir, 'index.json'))
+        if (!(await file.exists())) {
+          set.status = 404
+          return { error: 'Portolan tile index not found' }
+        }
+        set.headers['content-type'] = 'application/json'
+        set.headers['cache-control'] = 'public, max-age=60'
+        set.headers[CORS] = '*'
+        return await file.text()
+      },
+      {
+        detail: {
+          tags: ['Tiles'],
+          summary: 'Portolan tile index',
+          description:
+            'Lists every feed with a corrected-geometry tile pyramid, with its bounds and max zoom.',
+        },
+      },
+    )
+    .get(
+      '/portolan/:feed/tiles.json',
+      async ({ params, query, set }) => {
+        const { feed } = params
+        if (!PORTOLAN_FEED_RE.test(feed)) {
+          set.status = 400
+          return { error: 'Invalid feed name' }
+        }
+        const file = Bun.file(join(portolanDir, feed, 'tiles.json'))
+        if (!(await file.exists())) {
+          set.status = 404
+          return { error: 'Unknown portolan feed' }
+        }
+
+        // Portolan writes a relative template ("{z}/{x}/{y}.mvt") that is only
+        // valid against its own on-disk layout. Rewrite the tiles array to the
+        // public route, carrying the caller's api_key into the template — map
+        // libraries can't set headers, so the key has to ride the tile URL.
+        // The path is root-relative; MapLibre resolves it against the origin
+        // this tiles.json was fetched from.
+        const tileJson = await file.json()
+        const apiKey = typeof query.api_key === 'string' && query.api_key
+          ? `?api_key=${encodeURIComponent(query.api_key)}`
+          : ''
+        tileJson.tiles = [`/tiles/portolan/${feed}/{z}/{x}/{y}.mvt${apiKey}`]
+
+        set.headers['content-type'] = 'application/json'
+        set.headers['cache-control'] = 'public, max-age=60'
+        set.headers[CORS] = '*'
+        return JSON.stringify(tileJson)
+      },
+      {
+        params: t.Object({
+          feed: t.String({ description: 'Portolan feed key (e.g. "mta-subway")' }),
+        }),
+        detail: {
+          tags: ['Tiles'],
+          summary: 'Portolan feed TileJSON',
+          description:
+            'TileJSON for one feed\'s corrected-geometry pyramid, with tile URLs rewritten to this API.',
+        },
+      },
+    )
+    .get(
+      '/portolan/:feed/:z/:x/:y',
+      async ({ params, set }) => {
+        const { feed, z, x, y } = params
+        if (!PORTOLAN_FEED_RE.test(feed) || !Z_RE.test(z) || !XY_RE.test(x) || !Y_RE.test(y)) {
+          set.status = 400
+          return { error: 'Invalid tile feed or coordinates' }
+        }
+
+        // The cutter only writes tiles a feature touches, so a missing file
+        // inside the pyramid is a valid empty tile, not an error: 204 with no
+        // body, which MapLibre renders as emptiness without logging a failure.
+        const yBase = y.replace(/\.[A-Za-z0-9]+$/, '')
+        const file = Bun.file(join(portolanDir, feed, z, x, `${yBase}.mvt`))
+        if (!(await file.exists())) {
+          return new Response(null, {
+            status: 204,
+            headers: { 'cache-control': 'public, max-age=3600', [CORS]: '*' },
+          })
+        }
+
+        // Portolan writes raw (uncompressed) MVT — no Content-Encoding to
+        // forward. Elysia may compress on the way out if the client accepts it.
+        set.headers['content-type'] = 'application/x-protobuf'
+        set.headers['cache-control'] = 'public, max-age=3600'
+        set.headers[CORS] = '*'
+        return file
+      },
+      {
+        params: t.Object({
+          feed: t.String({ description: 'Portolan feed key' }),
+          z: t.String({ description: 'Zoom level' }),
+          x: t.String({ description: 'Tile X coordinate' }),
+          y: t.String({ description: 'Tile Y coordinate (optionally suffixed, e.g. "42.mvt")' }),
+        }),
+        detail: {
+          tags: ['Tiles'],
+          summary: 'Portolan corrected-geometry tile',
+          description:
+            'Serves a static MVT tile from the portolan pyramid. 204 for tiles inside the pyramid with no features.',
+        },
+      },
+    )
     .get(
       '/:source/:z/:x/:y',
       async ({ params, set }) => {

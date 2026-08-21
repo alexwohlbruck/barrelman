@@ -10,7 +10,10 @@
  *     is configured at all
  */
 
-import { describe, test, expect, mock, beforeEach, afterEach } from 'bun:test'
+import { describe, test, expect, mock, beforeEach, afterEach, beforeAll, afterAll } from 'bun:test'
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'fs'
+import { tmpdir } from 'os'
+import { join } from 'path'
 import Elysia from 'elysia'
 import { createTileRoutes, type TileFetcher } from './tiles'
 
@@ -263,6 +266,171 @@ describe('tile path validation', () => {
 
       expect(res.status).toBe(200)
       expect(fetchTile).toHaveBeenCalledTimes(1)
+    }
+  })
+})
+
+// ── Portolan static tiles ────────────────────────────────────────────────────
+
+describe('portolan tile routes', () => {
+  /**
+   * Portolan tiles are static files, not a Martin proxy: the routes read a
+   * pyramid directory written by `portolan sync`. The fixture mirrors its
+   * layout — <dir>/index.json, <dir>/<feed>/tiles.json, <dir>/<feed>/z/x/y.mvt.
+   */
+  let dir: string
+  const TILE_BYTES = new Uint8Array([0x1a, 0x03, 0x78, 0x79, 0x7a])
+
+  beforeAll(() => {
+    dir = mkdtempSync(join(tmpdir(), 'portolan-tiles-'))
+    writeFileSync(
+      join(dir, 'index.json'),
+      JSON.stringify([{ feed: 'embark', name: 'EMBARK', bounds: [-97.6, 35.4, -97.5, 35.5], maxzoom: 18 }]),
+    )
+    mkdirSync(join(dir, 'embark', '8', '66'), { recursive: true })
+    writeFileSync(
+      join(dir, 'embark', 'tiles.json'),
+      JSON.stringify({
+        tilejson: '3.0.0',
+        name: 'embark',
+        tiles: ['{z}/{x}/{y}.mvt'],
+        minzoom: 0,
+        maxzoom: 18,
+        bounds: [-97.6, 35.4, -97.5, 35.5],
+        vector_layers: [{ id: 'ribbons', minzoom: 0, maxzoom: 18 }],
+      }),
+    )
+    writeFileSync(join(dir, 'embark', '8', '66', '100.mvt'), TILE_BYTES)
+  })
+
+  afterAll(() => {
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  function makeApp(tilesDir = dir) {
+    // fetchTile mocked so a route mismatch that falls into the Martin proxy
+    // fails loudly instead of hitting the network.
+    const fetchTile = mock<TileFetcher>(async () => new Response('martin', { status: 200 }))
+    return { app: new Elysia().use(createTileRoutes({ fetchTile, portolanTilesDir: tilesDir })), fetchTile }
+  }
+
+  test('serves the global index verbatim with json headers', async () => {
+    const { app, fetchTile } = makeApp()
+    const res = await app.handle(get('/tiles/portolan/index.json'))
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('content-type')).toContain('application/json')
+    expect(res.headers.get('cache-control')).toBe('public, max-age=60')
+    expect(res.headers.get('access-control-allow-origin')).toBe('*')
+    const body = await res.json()
+    expect(body[0].feed).toBe('embark')
+    expect(fetchTile).not.toHaveBeenCalled()
+  })
+
+  test('rewrites the tiles.json template to the public route', async () => {
+    const { app } = makeApp()
+    const res = await app.handle(get('/tiles/portolan/embark/tiles.json'))
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    // The on-disk template is relative to the pyramid dir and useless to a
+    // client; it must come back pointing at this API.
+    expect(body.tiles).toEqual(['/tiles/portolan/embark/{z}/{x}/{y}.mvt'])
+    // …while everything else survives untouched.
+    expect(body.vector_layers[0].id).toBe('ribbons')
+    expect(body.maxzoom).toBe(18)
+    expect(res.headers.get('cache-control')).toBe('public, max-age=60')
+  })
+
+  test('carries the api_key query into the rewritten template', async () => {
+    // A presented key is validated for real by the metered guard, so the test
+    // has to present one the guard accepts — the service key, which is also
+    // valid via ?api_key= (map libraries cannot set headers).
+    const saved = process.env.BARRELMAN_API_KEY
+    process.env.BARRELMAN_API_KEY = 'svc_secret'
+    try {
+      const { app } = makeApp()
+      const res = await app.handle(get('/tiles/portolan/embark/tiles.json?api_key=svc_secret'))
+
+      expect(res.status).toBe(200)
+      const body = await res.json()
+      expect(body.tiles).toEqual(['/tiles/portolan/embark/{z}/{x}/{y}.mvt?api_key=svc_secret'])
+    } finally {
+      if (saved === undefined) delete process.env.BARRELMAN_API_KEY
+      else process.env.BARRELMAN_API_KEY = saved
+    }
+  })
+
+  test('serves a tile with protobuf content-type and long cache', async () => {
+    const { app, fetchTile } = makeApp()
+    const res = await app.handle(get('/tiles/portolan/embark/8/66/100'))
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('content-type')).toContain('application/x-protobuf')
+    expect(res.headers.get('cache-control')).toBe('public, max-age=3600')
+    expect(res.headers.get('access-control-allow-origin')).toBe('*')
+    expect(new Uint8Array(await res.arrayBuffer())).toEqual(TILE_BYTES)
+    expect(fetchTile).not.toHaveBeenCalled()
+  })
+
+  test('accepts the .mvt suffix some map libraries append', async () => {
+    const { app } = makeApp()
+    const res = await app.handle(get('/tiles/portolan/embark/8/66/100.mvt'))
+    expect(res.status).toBe(200)
+  })
+
+  test('a missing tile inside the pyramid is an empty 204, not an error', async () => {
+    const { app } = makeApp()
+    const res = await app.handle(get('/tiles/portolan/embark/8/66/101'))
+
+    // The cutter only writes tiles a feature touches — absence means empty.
+    expect(res.status).toBe(204)
+    expect((await res.arrayBuffer()).byteLength).toBe(0)
+  })
+
+  test('unknown feed 404s on tiles.json', async () => {
+    const { app } = makeApp()
+    const res = await app.handle(get('/tiles/portolan/nope/tiles.json'))
+    expect(res.status).toBe(404)
+  })
+
+  test('a missing tiles dir serves 404s rather than crashing', async () => {
+    const { app } = makeApp('/nonexistent/portolan/tiles')
+    expect((await app.handle(get('/tiles/portolan/index.json'))).status).toBe(404)
+    expect((await app.handle(get('/tiles/portolan/embark/tiles.json'))).status).toBe(404)
+  })
+
+  test('rejects traversal and malformed segments without touching the filesystem root', async () => {
+    const { app, fetchTile } = makeApp()
+    const rejected = [
+      '/tiles/portolan/..%2F..%2Fetc/tiles.json',
+      '/tiles/portolan/embark%2F..%2F..%2Fother/tiles.json',
+      '/tiles/portolan/embark/999/66/100',
+      '/tiles/portolan/embark/8/abc/100',
+      '/tiles/portolan/em%20bark/8/66/100',
+    ]
+    for (const path of rejected) {
+      const res = await app.handle(get(path))
+      expect(res.status).toBeGreaterThanOrEqual(400)
+    }
+    expect(fetchTile).not.toHaveBeenCalled()
+  })
+
+  test('portolan routes sit behind the same metered guard as Martin tiles', async () => {
+    const saved = process.env.BARRELMAN_API_KEY
+    process.env.BARRELMAN_API_KEY = 'svc_secret'
+    try {
+      const { app } = makeApp()
+      const anon = await app.handle(get('/tiles/portolan/embark/8/66/100'))
+      expect(anon.status).toBe(401)
+
+      const authed = await app.handle(
+        get('/tiles/portolan/embark/8/66/100', { Authorization: 'Bearer svc_secret' }),
+      )
+      expect(authed.status).toBe(200)
+    } finally {
+      if (saved === undefined) delete process.env.BARRELMAN_API_KEY
+      else process.env.BARRELMAN_API_KEY = saved
     }
   })
 })
