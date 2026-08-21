@@ -27,4 +27,15 @@ RUN bun install --frozen-lockfile 2>/dev/null || bun install
 
 COPY . .
 
+# Portolan (corrected transit geometry) is a single static Go binary from a
+# SEPARATE repo, so there is no build stage here to COPY it from. The sync
+# wrapper (import/portolan-sync.ts) finds it via PORTOLAN_BIN, which
+# docker-compose.yml defaults to /portolan-data/bin/portolan — i.e. a linux
+# build dropped into ./data/portolan/bin/ on the host, riding the workspace
+# bind mount. To bake it into the image instead, place the binary beside this
+# Dockerfile and uncomment:
+#   COPY portolan /usr/local/bin/portolan
+# (then set PORTOLAN_BIN=/usr/local/bin/portolan, or leave it on PATH and set
+# PORTOLAN_BIN=portolan).
+
 CMD ["bun", "run", "src/worker/index.ts"]
