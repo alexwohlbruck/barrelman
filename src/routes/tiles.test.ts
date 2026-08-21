@@ -301,6 +301,10 @@ describe('portolan tile routes', () => {
       }),
     )
     writeFileSync(join(dir, 'embark', '8', '66', '100.mvt'), TILE_BYTES)
+    writeFileSync(
+      join(dir, 'embark', 'style.json'),
+      JSON.stringify({ feed: 'embark', colors: { '40X': '#0f4d92' } }),
+    )
   })
 
   afterAll(() => {
@@ -340,6 +344,23 @@ describe('portolan tile routes', () => {
     expect(body.vector_layers[0].id).toBe('ribbons')
     expect(body.maxzoom).toBe(18)
     expect(res.headers.get('cache-control')).toBe('public, max-age=60')
+  })
+
+  test('serves the style manifest verbatim', async () => {
+    const { app } = makeApp()
+    const res = await app.handle(get('/tiles/portolan/embark/style.json'))
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('content-type')).toContain('application/json')
+    expect(res.headers.get('access-control-allow-origin')).toBe('*')
+    const body = await res.json()
+    expect(body.colors['40X']).toBe('#0f4d92')
+  })
+
+  test('404s a style manifest for an unknown feed, 400s a bad name', async () => {
+    const { app } = makeApp()
+    expect((await app.handle(get('/tiles/portolan/nope/style.json'))).status).toBe(404)
+    expect((await app.handle(get('/tiles/portolan/..%2Fetc/style.json'))).status).toBe(400)
   })
 
   test('carries the api_key query into the rewritten template', async () => {

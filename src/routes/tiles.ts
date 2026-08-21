@@ -148,6 +148,39 @@ export function createTileRoutes(
       },
     )
     .get(
+      '/portolan/:feed/style.json',
+      async ({ params, set }) => {
+        const { feed } = params
+        if (!PORTOLAN_FEED_RE.test(feed)) {
+          set.status = 400
+          return { error: 'Invalid feed name' }
+        }
+        // The feed's resolved curation manifest (colors, widths, trunk policy),
+        // written by `portolan sync` next to the pyramid. Clients that miss it
+        // fall back to defaults, so 404 is fine — but never a crash.
+        const file = Bun.file(join(portolanDir, feed, 'style.json'))
+        if (!(await file.exists())) {
+          set.status = 404
+          return { error: 'Unknown portolan feed or no style manifest' }
+        }
+        set.headers['content-type'] = 'application/json'
+        set.headers['cache-control'] = 'public, max-age=60'
+        set.headers[CORS] = '*'
+        return await file.text()
+      },
+      {
+        params: t.Object({
+          feed: t.String({ description: 'Portolan feed key (e.g. "mta-subway")' }),
+        }),
+        detail: {
+          tags: ['Tiles'],
+          summary: 'Portolan feed style manifest',
+          description:
+            "One feed's resolved portolan style manifest, served verbatim from the pyramid directory.",
+        },
+      },
+    )
+    .get(
       '/portolan/:feed/:z/:x/:y',
       async ({ params, set }) => {
         const { feed, z, x, y } = params
