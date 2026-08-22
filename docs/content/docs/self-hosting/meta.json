@@ -4,8 +4,12 @@
     "index",
     "first-run",
     "importing-data",
+    "regions",
     "production",
     "operations",
+    "portolan",
+    "configuration",
+    "abuse-controls",
     "troubleshooting"
   ]
 }

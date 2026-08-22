@@ -78,10 +78,37 @@ Open the console:
 http://localhost:5001/console
 ```
 
-<Callout type="info" title="On a remote server, `localhost` is the server's own loopback">
-Every port binds to `127.0.0.1` by default (`BARRELMAN_BIND_ADDR`), so nothing
-is reachable from your laptop yet — and it should stay that way until TLS is in
-front of it. Forward the port over SSH rather than widening the binding:
+<Callout type="warn" title="On a remote server, the API is already on the public internet">
+The supporting services — Postgres (5434), Martin (5002), GraphHopper (5003)
+and MOTIS (5004) — bind to `127.0.0.1` via `BARRELMAN_BIND_ADDR`. **The API does
+not.** Its mapping is a plain `5001:5001`, so from the moment
+`docker compose up -d` returns, `http://your-server-ip:5001/console` answers
+anyone who asks, and so does open sign-up.
+
+That matters because of the rule right below: **the first account created wins
+administrator.** On a public box that is a race against the internet, not a
+formality. Either claim the account now — it is the very next step and takes a
+minute — or close the port first:
+
+```dotenv
+BARRELMAN_API_BIND_ADDR=127.0.0.1
+```
+
+```bash
+docker compose up -d barrelman
+```
+
+<Callout type="warn" title="`ufw deny 5001` does not work here">
+A published Docker port is DNAT'd in `nat`/`PREROUTING` before ufw's `INPUT`
+rules ever see it, so ufw reports the port as `DENY` while the outside world
+keeps getting `200`. Verified, not theorised. Bind the port as above (or write
+rules into the `DOCKER-USER` chain); do not rely on a host firewall alone.
+</Callout>
+
+Binding to loopback costs you nothing later — a reverse proxy reaches the API
+over the Compose network as `barrelman:5001`, not through the host port.
+
+With 5001 closed, reach the console over an SSH tunnel instead:
 
 ```bash
 ssh -L 5001:localhost:5001 root@your-server

@@ -45,7 +45,12 @@ services:
     user: '${DOCKER_USER:-}'
     restart: always
     environment: ['PORT=4000']
-    ports: ['0.0.0.0:4000:4000']
+    # Bound to loopback, like every other service in this file and in the root
+    # compose file. This used to publish on 0.0.0.0, which put an open geocoder
+    # on the public internet as soon as the pelias profile was turned on.
+    # Nothing needs the host port: barrelman reaches it as pelias_api:4000 over
+    # the Compose network.
+    ports: ['${BARRELMAN_BIND_ADDR:-127.0.0.1}:4000:4000']
     volumes:
       - './pelias.json:/code/pelias.json'
 

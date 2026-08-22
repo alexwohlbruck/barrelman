@@ -1,0 +1,61 @@
+---
+title: Portolan integration
+description: Corrected transit geometry — rebuilt route shapes, tile pyramids, and how they flow back into Barrelman.
+---
+
+[Portolan](https://github.com/alexwohlbruck/portolan) takes raw GTFS feeds and rebuilds their route geometry against real track data. It produces two things Barrelman consumes:
+
+- **Tile pyramids** — corrected geometry as static MVT tiles, one pyramid per feed, served by the API at `/tiles/portolan/…`.
+- **Corrected GTFS zips** — the same feeds with `shapes.txt` rewritten to real track geometry, re-imported into PostGIS and MOTIS so vehicle interpolation and route rendering follow actual rails.
+
+The integration is optional. Without a portolan workspace, the tile routes answer 404 and nothing else changes.
+
+## Workspace layout
+
+Everything portolan reads and writes lives under `./data/portolan` on the host, mounted into `barrelman-ops` read-write at `/portolan-data` and into the API read-only:
+
+```
+data/portolan/
+├── bin/portolan          # the portolan binary (single static Go binary)
+├── portolan.json         # feed registry — each entry carries an `onestop` id
+├── style/                # curation documents
+├── data/gtfs/            # raw feeds, portolan's own copies
+└── build/
+    ├── tiles/            # <feed>/{z}/{x}/{y}.mvt + tiles.json, + index.json
+    ├── export/           # corrected GTFS zips, <feedkey>.zip
+    └── sync-state.json   # per-feed sha/content-hash manifest
+```
+
+Portolan is a separate repository, so its binary is not baked into the ops image: drop a Linux build at `data/portolan/bin/portolan` (the `PORTOLAN_BIN` default), or bake it in — `Dockerfile.ops` documents both.
+
+## The three console scripts
+
+All three live under **GTFS / Transit** in the console and wrap `bun run import/portolan-sync.ts`, which runs `portolan sync`, parses its machine-readable result, and lands every corrected zip through the same per-zip pipeline the GTFS importer uses (flex sanitize → PostGIS import → transfers carryover → Fares v2), then rebuilds the MOTIS dataset. MOTIS has no incremental import — even a one-feed patch needs the full rebuild before corrected schedules reach riders.
+
+| Script | What it does |
+| --- | --- |
+| **Portolan Global Import** | `sync global` — rebuild every registered feed, retile everything, re-export, re-import. A full-fleet job; expect roughly an hour for a global registry. |
+| **Portolan Patch Import** | `sync patch --feeds=…` — rebuild exactly the builds whose inputs changed. Portolan widens the set itself (feeds sharing track with a changed feed rebuild too), so the output stays byte-identical to a global run. |
+| **Portolan Check for Updates** | `sync check` — diff each feed's Transitland sha against the sync state, download what moved, patch just that. Cheap when nothing changed. Needs `TRANSITLAND_API_KEY`. |
+
+### Scheduling the check
+
+Point a daily schedule at **Portolan Check for Updates** (console → Schedules), the same way `gtfs-watch` is scheduled for uncorrected feeds. It is marked safe and needs no confirmation; on a quiet day it diffs shas and exits.
+
+### How feeds are matched
+
+Portolan and Barrelman name feeds differently, so the wrapper joins them on the **Transitland onestop id**: `portolan.json` carries `onestop` per feed entry, and imported feeds carry `gtfs_feeds.onestop_id`. An exported zip whose key has no onestop id, or whose onestop id no imported feed carries, is skipped with a logged reason — never guessed.
+
+## Tile endpoint
+
+Static files behind the same metered key auth as the [Martin tile proxy](/self-hosting/configuration):
+
+```
+GET /tiles/portolan/index.json                 # every feed with a pyramid: {feed, name, bounds, maxzoom}
+GET /tiles/portolan/<feed>/tiles.json          # TileJSON, tile URLs rewritten to this API
+GET /tiles/portolan/<feed>/<z>/<x>/<y>         # raw MVT (".mvt" suffix accepted)
+```
+
+The TileJSON's `tiles` template comes back as `/tiles/portolan/<feed>/{z}/{x}/{y}.mvt`, carrying your `?api_key=…` through if you fetched `tiles.json` with one — so a map library can consume the TileJSON URL directly. A `204 No Content` inside a pyramid is a valid empty tile (portolan only writes tiles a feature touches); tiles cache for an hour, the JSON documents for a minute.
+
+`PORTOLAN_TILES_DIR` points the API at the pyramids (compose sets it to `/portolan-data/build/tiles`).

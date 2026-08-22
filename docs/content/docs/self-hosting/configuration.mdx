@@ -1,4 +1,7 @@
-# Configuration
+---
+title: Configuration
+description: Every environment variable, grouped by what it affects.
+---
 
 Every environment variable, grouped by what it affects. `.env.example` carries
 the same list with inline commentary; this is the reference.
@@ -68,6 +71,7 @@ signatures and cannot make them, which is why it is compiled into
 | `DATABASE_URL` | `postgresql://barrelman:barrelman@localhost:5434/barrelman` | PostGIS connection string |
 | `BARRELMAN_DB_PASSWORD` | `barrelman` | Used by compose for the DB container |
 | `BARRELMAN_BIND_ADDR` | `127.0.0.1` | Interface the unauthenticated internal services (Postgres, Martin, GraphHopper, MOTIS) publish on. `0.0.0.0` exposes them |
+| `BARRELMAN_API_BIND_ADDR` | `0.0.0.0` | Interface the API (5001) publishes on. Public by default, so a fresh server's console and sign-up are internet-reachable immediately. Set `127.0.0.1` once a reverse proxy fronts it — the proxy reaches `barrelman:5001` over the Compose network. A host firewall will not close this port: Docker DNATs published ports ahead of ufw |
 | `PORT` | `5001` | HTTP port |
 | `REGIONS` | `north-carolina,nyc-metro` | Which geographies the importers pull. `global` for everything |
 | `OLLAMA_HOST` | `http://localhost:11434` | Embeddings for semantic search (optional) |
@@ -146,9 +150,9 @@ URI as `<BARRELMAN_SERVER_ORIGIN>/auth/oauth/<provider>/callback`.
 | `BARRELMAN_LICENSE` | Signed token unlocking gated features. Only `billing` today |
 | `BARRELMAN_LICENSE_PUBLIC_KEY` | Overrides the key licenses verify against. For tests and commercial licensees |
 
-The Commons Clause in [LICENSE](../LICENSE) removes the right to sell
+The Commons Clause in [LICENSE](https://github.com/alexwohlbruck/barrelman/blob/main/LICENSE) removes the right to sell
 Barrelman, so a self-hosted instance may not charge third parties for access —
-see [LICENSING.md](../LICENSING.md). Subscription billing is gated on a license
+see [LICENSING.md](https://github.com/alexwohlbruck/barrelman/blob/main/LICENSING.md). Subscription billing is gated on a license
 granting the `billing` feature, which only the official deployment holds.
 Everything else — search, tiles, routing, transit, accounts, keys, metering —
 needs no license and never will.
@@ -185,7 +189,7 @@ endpoint would let anyone who guesses the URL grant themselves a plan.
 
 ## Abuse controls
 
-See [abuse-controls.md](abuse-controls.md) for what these mean.
+See [abuse controls](/self-hosting/abuse-controls) for what these mean.
 
 | Variable | Default | Description |
 |---|---|---|
@@ -297,7 +301,7 @@ replication, GTFS drift check, GBFS); enable the ones you want in the console.
 Read by the `barrelman-landing` service in `docker-compose.dev.yml` (the
 `landing` profile), not by the API. Both are ordinary keys on an account an
 administrator has moved onto the `demo` plan — see
-[accounts.md](accounts.md#unmetered-keys-and-why-nobody-can-mint-one).
+[accounts & API keys](/usage/accounts#unmetered-keys-and-why-nobody-can-mint-one).
 
 | Variable | Default | Description |
 |---|---|---|

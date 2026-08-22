@@ -73,12 +73,12 @@ longer job — see [`pelias/README.md`](pelias/README.md).
 | | |
 |---|---|
 | [**Self-hosting**](https://docs.barrelman.dev/self-hosting) | **Start here** — server to running instance, end to end |
-| [Regions](docs/REGIONS.md) | Choosing what data to import |
+| [Regions](https://docs.barrelman.dev/self-hosting/regions) | Choosing what data to import |
 | [Development](docs/development.md) | Running the stack from a clone, with hot reload |
-| [Accounts & API keys](docs/accounts.md) | Sign-in, sessions, keys, scopes |
-| [Pricing & credits](docs/pricing.md) | Endpoint costs and plans |
-| [Abuse controls](docs/abuse-controls.md) | Throttling, suspension, terms |
-| [Configuration](docs/configuration.md) | Every environment variable |
+| [Accounts & API keys](https://docs.barrelman.dev/usage/accounts) | Sign-in, sessions, keys, scopes |
+| [Pricing & credits](https://docs.barrelman.dev/usage/pricing) | Endpoint costs and plans |
+| [Abuse controls](https://docs.barrelman.dev/self-hosting/abuse-controls) | Throttling, suspension, terms |
+| [Configuration](https://docs.barrelman.dev/self-hosting/configuration) | Every environment variable |
 
 ---
 
@@ -180,7 +180,7 @@ is deliberately lean and has neither the docker CLI nor osmium.
 A US state (~400 MB PBF) takes about 15 minutes; add ~5 for the GraphHopper
 graph that follows it.
 
-**[→ Full region guide](docs/REGIONS.md)** — what a region controls, the
+**[→ Full region guide](https://docs.barrelman.dev/self-hosting/regions)** — what a region controls, the
 ordering of the transit/address/bikeshare steps, and how to build one by hand.
 
 ---
@@ -258,7 +258,7 @@ docker compose exec -d barrelman-ops bash scripts/run-import.sh
 ```
 
 North Carolina takes 20–40 minutes. See [Data Import](#data-import) for the rest
-of the pipeline, and the **[region guide](docs/REGIONS.md)** for transit, address
+of the pipeline, and the **[region guide](https://docs.barrelman.dev/self-hosting/regions)** for transit, address
 and bikeshare data, which are separate steps.
 
 ### 4. Sign in
@@ -383,7 +383,7 @@ Every importer — OSM, GTFS, GBFS and the Pelias geocoder — resolves what to
 fetch from it. Define regions by name with `scripts/fetch-boundaries.ts` plus
 **Regions → Add by name** in the console, or by hand.
 
-**[→ Full region guide](docs/REGIONS.md)**
+**[→ Full region guide](https://docs.barrelman.dev/self-hosting/regions)**
 
 ### Pipeline order
 
@@ -445,9 +445,9 @@ their own scoped keys, and their usage is metered in credits.
 
 | | |
 |---|---|
-| [Accounts & API keys](docs/accounts.md) | Sign-in, sessions, keys, scopes |
-| [Pricing & credits](docs/pricing.md) | What each endpoint costs on the hosted API |
-| [Abuse controls](docs/abuse-controls.md) | Throttling, suspension, terms enforcement |
+| [Accounts & API keys](https://docs.barrelman.dev/usage/accounts) | Sign-in, sessions, keys, scopes |
+| [Pricing & credits](https://docs.barrelman.dev/usage/pricing) | What each endpoint costs on the hosted API |
+| [Abuse controls](https://docs.barrelman.dev/self-hosting/abuse-controls) | Throttling, suspension, terms enforcement |
 
 The short version:
 
@@ -510,7 +510,7 @@ surface. The table below is the shape of it.
 | `GET` | `/tiles/:source/:z/:x/:y` | `tiles` | Vector tiles, proxied from Martin |
 
 The **group** is what a key's scopes name, and what pricing is defined against —
-see [accounts.md](docs/accounts.md#scopes) and [pricing.md](docs/pricing.md).
+see [accounts](https://docs.barrelman.dev/usage/accounts#scopes) and [pricing](https://docs.barrelman.dev/usage/pricing).
 
 ### POST `/search`
 
@@ -640,7 +640,7 @@ Features come back smallest contour first (`bucket: 0`), so renderers should dra
 
 ## Configuration
 
-Full reference: **[docs/configuration.md](docs/configuration.md)**. `.env.example`
+Full reference: **[configuration](https://docs.barrelman.dev/self-hosting/configuration)**. `.env.example`
 carries the same list with inline commentary.
 
 Nothing is required to run locally — the defaults give a working engine with an
@@ -700,7 +700,7 @@ docker network connect caddy_network barrelman
 Then set `BARRELMAN_SERVER_ORIGIN` and `PUBLIC_BASE_URL` to that hostname, and
 `BARRELMAN_TRUSTED_PROXY_HOPS` to the number of proxies in front — every
 per-address rate limit depends on it, and both mistakes are silent. See
-[configuration.md](docs/configuration.md#barrelman_trusted_proxy_hops).
+[configuration](https://docs.barrelman.dev/self-hosting/configuration#barrelman_trusted_proxy_hops).
 
 The compose file publishes 5002, 5003, 5004 and 5434 to the host as well. Only
 the API needs to be reachable; bind the rest to loopback in an override file.

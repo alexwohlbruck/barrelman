@@ -7,21 +7,87 @@ Everything so far assumed `localhost`. For a real deployment:
 
 ## Reverse proxy and TLS
 
-Caddy auto-provisions certificates. The API listens on **5001**:
+Caddy auto-provisions certificates. None of this is barrelman-specific, but the
+install so far has no proxy at all, so here is the whole thing. Point your DNS A
+record at the box first — Caddy provisions the certificate on the first request
+and fails loudly if the name does not resolve to it.
 
-```
+```bash
+docker network create caddy_network
+
+mkdir -p /opt/caddy
+cat > /opt/caddy/Caddyfile <<'EOF'
 api.example.com {
   reverse_proxy barrelman:5001
 }
+EOF
+
+docker run -d --name caddy --restart unless-stopped \
+  --network caddy_network \
+  -p 80:80 -p 443:443 \
+  -v /opt/caddy/Caddyfile:/etc/caddy/Caddyfile:ro \
+  -v caddy_data:/data \
+  caddy:2
 ```
 
-Connect the container to Caddy's network:
+Then attach barrelman to that network **in Compose**, with an override file next
+to `docker-compose.yml`:
+
+```yaml
+# docker-compose.override.yml
+networks:
+  caddy_network:
+    external: true
+
+services:
+  barrelman:
+    networks: [default, caddy_network]
+```
 
 ```bash
-docker network connect caddy_network barrelman
+docker compose up -d barrelman
 ```
 
+<Callout type="warn" title="Do not wire this with `docker network connect`">
+`docker network connect caddy_network barrelman` works until the next time the
+container is recreated, and then it is silently gone — an imperative attachment
+is not part of the Compose definition. Both routine operations recreate it:
+`docker compose up -d` after a [pull](/self-hosting/operations#upgrading), and
+`--force-recreate` when you
+[rotate `BARRELMAN_API_KEY`](/self-hosting/operations#rotating-secrets). The
+proxy starts answering `502` for every request, and barrelman's own logs say
+nothing, because barrelman is fine — it is merely unreachable. The override file
+above survives both.
+</Callout>
+
+Once the proxy is in front, close the direct port. The API's `5001` is published
+on **all interfaces** — unlike the other services it has no `BARRELMAN_BIND_ADDR`
+prefix — so until you close it, callers can skip TLS, your proxy and its rate
+limits entirely by hitting `http://your-server-ip:5001`:
+
+```dotenv
+BARRELMAN_API_BIND_ADDR=127.0.0.1
+```
+
+```bash
+docker compose up -d barrelman
+```
+
+Caddy keeps working: it reaches the container as `barrelman:5001` over the
+Compose network, not through the host port. Do **not** reach for `ufw deny 5001`
+instead — Docker DNATs published ports before ufw's `INPUT` rules are consulted,
+so the port stays open while `ufw status` reports it `DENY`.
+
 Only the API needs to be reachable from off-box. Postgres (5434), Martin (5002), GraphHopper (5003) and MOTIS (5004) already bind to `127.0.0.1`, so nothing further is needed — none of them authenticate, and exposing them would publish both the database and an unmetered copy of the tile, routing and transit APIs.
+
+The Pelias services work the same way if you run that profile. `pelias_api`
+(4000) and Elasticsearch (9200) both bind to `127.0.0.1`. Check this after you
+turn the profile on. If `pelias_api` is reachable from outside, anyone can use
+your geocoder for free:
+
+```bash
+docker compose --profile pelias ps --format 'table {{.Service}}\t{{.Ports}}'
+```
 
 If you deliberately need one of them reachable, widen the binding with `BARRELMAN_BIND_ADDR` and put a firewall in front:
 
@@ -92,7 +158,7 @@ Sign-in is then restricted to accounts an administrator created.
 
 - **OAuth sign-in** — set a provider's client ID and secret and it turns on. Register the redirect as `<BARRELMAN_SERVER_ORIGIN>/auth/oauth/<provider>/callback`. Google, GitHub and GitLab are supported.
 - **Terms of service** — setting `BARRELMAN_TOS_URL` gates API-key creation on acceptance.
-- **Abuse controls** — the defaults are *not calibrated against real traffic*. Read [abuse controls](https://github.com/alexwohlbruck/barrelman/blob/main/docs/abuse-controls.md) before opening sign-up.
+- **Abuse controls** — the defaults are *not calibrated against real traffic*. Read [abuse controls](/self-hosting/abuse-controls) before opening sign-up.
 
 Subscription billing is not available on a self-hosted instance — see [the note on selling access](/self-hosting#what-you-get).
 

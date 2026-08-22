@@ -1,4 +1,7 @@
-# Regions — choosing what data to import
+---
+title: Regions
+description: Choosing what data to import, and what a region controls.
+---
 
 Barrelman doesn't import "the world" by default. A **region** is a named bundle
 of data sources — an OSM extract, a transit search area, address files — and the
@@ -152,7 +155,13 @@ bun run import/import-gbfs-systems.ts       # 6. bikeshare, filtered by the regi
 
 bun run scripts/generate-pelias-config.ts   # 7. addresses: regenerate pelias.json…
 cd pelias && ./provision.sh                 #    …then provision the geocoder stack
+                                            #    (as a NON-root user — see below)
 ```
+
+Step 7 is the one step you cannot run as root. The `pelias` CLI refuses, and
+`sudo -u` does not help. See
+[importing data](/self-hosting/importing-data#step-4--addresses-optional-and-much-bigger-than-the-rest)
+for the user account to create first.
 
 For example:
 
@@ -202,15 +211,14 @@ Two run long for what they deliver. MOTIS OSM prep rewrites the whole extract to
 repair a handful of underground platforms — 6 minutes to synthesise 0 connectors
 in Colorado.
 
-The GBFS importer is worse: it fetches **every** system in the global catalog
-and only then filters to your bbox, so its cost is unrelated to your region. On
-the Colorado run it was still going **40 minutes in** and had not finished when
-the host was torn down, having spent that time on systems in Abu Dhabi, Zurich
-and Darmstadt. Budget an hour, run it last, and skip it entirely unless you
-need bikeshare — nothing else in the pipeline depends on it.
+The GBFS importer downloads **every** system in the global catalog, then keeps
+only the stations inside your bbox. It takes the same time whatever region you
+import, because it checks systems in Abu Dhabi, Zurich and Darmstadt either way.
+On Colorado it took **6 min 48 s** and kept 191 stations out of 1,336 systems.
+Run it last, and skip it unless you need bikeshare. Nothing else depends on it.
 
 Pelias is a separate stack and takes hours — see
-[`pelias/README.md`](../pelias/README.md).
+[`pelias/README.md`](https://github.com/alexwohlbruck/barrelman/blob/main/pelias/README.md).
 
 ### Sizing
 
@@ -243,10 +251,10 @@ Two layers, DB first:
 
 1. **`import_regions` table** — the live source of truth, edited from the admin
    console. Seeded from the JSON file on first boot.
-2. **[`config/regions.json`](../config/regions.json)** — the shipped defaults
+2. **[`config/regions.json`](https://github.com/alexwohlbruck/barrelman/blob/main/config/regions.json)** — the shipped defaults
    and the fallback used when the table is empty or the database is unreachable.
 
-`resolveRegions()` ([`src/config/regions.ts`](../src/config/regions.ts)) reads
+`resolveRegions()` ([`src/config/regions.ts`](https://github.com/alexwohlbruck/barrelman/blob/main/src/config/regions.ts)) reads
 the table and falls back to the file, so a fresh checkout works with no database
 and an operator's console edits win once there is one.
 
@@ -325,7 +333,7 @@ disagree.
 
 **Address search returns nothing**
 Either `pelias.openaddresses` is empty, or the Pelias `street` layer was never
-populated. See the layers note in [`pelias/README.md`](../pelias/README.md).
+populated. See the layers note in [`pelias/README.md`](https://github.com/alexwohlbruck/barrelman/blob/main/pelias/README.md).
 
 **GraphHopper won't start after adding a region**
 The graph outgrew the heap. Raise `-Xmx` in `GRAPHHOPPER_JAVA_OPTS` above the

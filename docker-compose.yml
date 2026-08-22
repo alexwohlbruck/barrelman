@@ -180,8 +180,13 @@ services:
       # MOTIS default 60s. Set in .env (e.g. 600) to throttle dev polling.
       MOTIS_RT_UPDATE_INTERVAL: ${MOTIS_RT_UPDATE_INTERVAL:-}
       GTFS_DATA_DIR: /gtfs-zips
+      # Portolan corrected-geometry tiles: static MVT pyramids written by
+      # `portolan sync` (run in barrelman-ops) into the shared workspace,
+      # served by this container at /tiles/portolan/… . Missing dir → the
+      # routes answer 404, so this is safe on a stack that never runs portolan.
+      PORTOLAN_TILES_DIR: /portolan-data/build/tiles
       # Parallel GraphHopper calls per isochrone. Documented in
-      # docs/configuration.md; without this line it had no effect in a container.
+      # https://docs.barrelman.dev/self-hosting/configuration; without this line it had no effect in a container.
       ISOCHRONE_CONCURRENCY: ${ISOCHRONE_CONCURRENCY:-}
 
       # The origin /docs advertises as its "Production" server, so the docs'
@@ -286,11 +291,22 @@ services:
       BARRELMAN_TOS_VERSION: ${BARRELMAN_TOS_VERSION:-}
       BARRELMAN_PRIVACY_URL: ${BARRELMAN_PRIVACY_URL:-}
     ports:
-      - "5001:5001"
+      # Defaults to every interface, unlike the sibling services above: this is
+      # the one port that is meant to serve traffic. Note what that implies on a
+      # fresh public server — the console and open sign-up answer the internet as
+      # soon as the stack is up, and the first account created becomes an admin.
+      # Set BARRELMAN_API_BIND_ADDR=127.0.0.1 once a reverse proxy fronts it (the
+      # proxy reaches this container as barrelman:5001 over the Compose network,
+      # so nothing breaks). A host firewall is NOT a substitute — Docker DNATs
+      # published ports before ufw's INPUT rules are consulted.
+      - "${BARRELMAN_API_BIND_ADDR:-0.0.0.0}:5001:5001"
     volumes:
       - barrelman-osm-data:/data
       - barrelman-gtfs-data:/gtfs-data
       - ./data/gtfs:/gtfs-zips:ro
+      # Read-only: the API only serves tiles from here; barrelman-ops owns the
+      # writes (same split as ./data/gtfs above).
+      - ./data/portolan:/portolan-data:ro
     depends_on:
       - barrelman-db
 
@@ -314,7 +330,7 @@ services:
       TRANSITLAND_API_KEY: ${TRANSITLAND_API_KEY:-}
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
       # The one variable that decides coverage. Read by the importers that run
-      # here, not by the API — see docs/REGIONS.md.
+      # here, not by the API — see https://docs.barrelman.dev/self-hosting/regions.
       REGIONS: ${REGIONS:-}
       GTFS_DATA_DIR: /gtfs-zips
       # Where the shared OSM volume is mounted in THIS container. The scripts
@@ -324,15 +340,44 @@ services:
       # BARRELMAN_DATA_DIR baked into its image.
       OSM_DATA_DIR: /data
       BARRELMAN_DATA_DIR: /data
+      # Refresh knobs for scripts/update-osm.sh and scripts/init-replication.sh.
+      # Those scripts `source ../.env`, which works when they are run from a host
+      # checkout but never here — .env is in .dockerignore, so /app/.env does not
+      # exist in this image. Without these three lines, setting them in .env is a
+      # silent no-op and both scripts fall back to their built-in defaults.
+      UPDATE_MODE: ${UPDATE_MODE:-}
+      GEOFABRIK_URL: ${GEOFABRIK_URL:-}
+      GEOFABRIK_REPLICATION_URL: ${GEOFABRIK_REPLICATION_URL:-}
+      # ── Portolan (corrected transit geometry) ───────────────────────
+      # Workspace root for import/portolan-sync.ts: portolan.json + style/ +
+      # data/gtfs/ (raw feeds, portolan's own copies) + build/ (tiles, exports,
+      # sync state). Lives under ./data/portolan on the host.
+      PORTOLAN_WORKSPACE: /portolan-data
+      # The portolan binary is NOT baked into this image — it is a single
+      # static Go binary from a separate repo (see Dockerfile.ops). Drop a
+      # linux build at ./data/portolan/bin/portolan on the host, or point this
+      # somewhere else.
+      PORTOLAN_BIN: ${PORTOLAN_BIN:-/portolan-data/bin/portolan}
       # scripts/*.sh docker-exec into these sibling containers by name.
       DB_CONTAINER: barrelman-db
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - barrelman-osm-data:/data
       - barrelman-gtfs-data:/gtfs-data
+      # scripts/generate-pelias-config.ts rewrites pelias/pelias.json, and the
+      # Pelias services bind-mount that file from the host. pelias/ is in
+      # .dockerignore (it holds tens of GB of index under pelias/data), so
+      # without this mount the script dies on ENOENT /app/pelias/pelias.json —
+      # and a write inside the container could never reach the file the geocoder
+      # actually reads.
+      - ./pelias:/app/pelias
       # Read-WRITE, unlike the API's mount of the same directory: this is the
       # container that downloads the feeds. With :ro every download failed with
       # "EROFS: read-only file system" and the run ended "Processed 0 feeds".
       - ./data/gtfs:/gtfs-zips
+      # Portolan workspace, read-write: `portolan sync` (run from here) writes
+      # builds, tile pyramids and corrected GTFS exports into it. The API
+      # mounts the same directory :ro to serve the tiles.
+      - ./data/portolan:/portolan-data
     depends_on:
       - barrelman-db

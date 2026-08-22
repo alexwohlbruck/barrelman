@@ -46,11 +46,18 @@ Sizing is driven entirely by how much geography you import.
 | Full United States | ~60 GB | 32 GB | 250 GB | 6–12 h | estimated |
 | Europe | ~100 GB | 64 GB | 400 GB | 12–24 h | estimated |
 
-The first row is measured on a Hetzner CPX41 (8 shared vCPU, 16 GB, NVMe)
-importing Colorado — a 360 MB extract yielding 6.04M places. **A complete stack
-including transit took about 35 minutes from an empty server**, and search and
-street routing were answering roughly 20 minutes in. The other rows scale that
-by extract size and are deliberately generous.
+The first row is measured on **8 shared vCPU, 16 GB, NVMe** (Hetzner CPX41 and,
+on a later run, CPX42 — buy on the spec, not the SKU) importing Colorado, a
+360 MB extract. **A complete stack including transit took about 35 minutes from
+an empty server**, and search and street routing were answering roughly 20
+minutes in. The other rows scale that by extract size and are deliberately
+generous.
+
+A second from-scratch run on CPX42 reproduced the OSM path closely: 5.86M places,
+362 MB extract downloaded in 19 s, osm2pgsql in 2 m 53 s, `run-import.sh` end to
+end in **18 m**, GraphHopper answering isochrones about 5 minutes after that.
+Post-processing — indexes, abbreviations, intersections, the parent-context
+spatial join and the FTS rebuild — is the bulk of that time, not osm2pgsql.
 
 Measured peaks on that run: 6.4 GB resident across the whole stack (Postgres
 6.4 GB against an 8 GB cap, GraphHopper 2.5 GB, everything else under 400 MB
@@ -163,7 +170,7 @@ mid-index-build, which surfaces only as `connection to server was lost`.
 **Compose does not forward the host environment.** A variable set in `.env` but not named in the service's `environment:` block is silently absent inside the container. If you add a variable and it appears to have no effect, that is almost always why.
 </Callout>
 
-Full variable reference: [Configuration](https://github.com/alexwohlbruck/barrelman/blob/main/docs/configuration.md).
+Full variable reference: [Configuration](/self-hosting/configuration).
 
 ## Next
 

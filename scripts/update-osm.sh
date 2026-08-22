@@ -34,7 +34,10 @@ set -euo pipefail
 #     Downloads the latest extracts and re-imports from scratch. Slower
 #     but always consistent. No initialization needed.
 #
-# CONFIGURATION (set in .env or export before running):
+# CONFIGURATION (set in .env, or pass with -e when running in a container):
+#   Inside barrelman-ops there is no /app/.env to source — .env is in
+#   .dockerignore — so these arrive through the service's `environment:`
+#   block in docker-compose.yml, or per-job from the console.
 #   UPDATE_MODE                 replication | full  (default: replication)
 #   GEOFABRIK_URL               Full extract download URL
 #   GEOFABRIK_REPLICATION_URL   Diff update server URL (replication mode only).
@@ -119,10 +122,25 @@ if [ "${REPLICATION_COUNT:-0}" -gt 1 ]; then
   echo "  The other regions stay at their last full import. Use UPDATE_MODE=full to refresh them all."
 fi
 
-# Auto-initialize replication state if missing
+# Auto-initialize replication state if missing.
+#
+# Which table holds this depends on the osm2pgsql version. Version 1.8, which
+# barrelman-db ships, writes planet_osm_replication_status (url, sequence,
+# importdate). Version 1.9 and later use osm2pgsql_properties. Checking only
+# osm2pgsql_properties never matched on this image, so every run re-ran
+# `osm2pgsql-replication init`. That reset the cursor back to the sequence of the
+# first import and re-applied every diff since, so each run did more work than
+# the last. Once that sequence is older than the four months or so of diffs
+# Geofabrik keeps, every run fails. Check the table this image writes first.
 INIT_CHECK=$(docker exec barrelman-db \
   psql "$DB_URL" -tAc \
-  "SELECT count(*) FROM osm2pgsql_properties WHERE property='replication_base_url';" 2>/dev/null || echo "0")
+  "SELECT count(*) FROM planet_osm_replication_status;" 2>/dev/null || echo "0")
+
+if [ "${INIT_CHECK:-0}" = "0" ]; then
+  INIT_CHECK=$(docker exec barrelman-db \
+    psql "$DB_URL" -tAc \
+    "SELECT count(*) FROM osm2pgsql_properties WHERE property='replication_base_url';" 2>/dev/null || echo "0")
+fi
 
 if [ "$INIT_CHECK" = "0" ]; then
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] Replication not initialized — running init..."

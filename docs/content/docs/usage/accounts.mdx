@@ -1,12 +1,18 @@
-# Accounts & API keys
+---
+title: Accounts & API keys
+description: Sign-in, sessions, keys, scopes and origin restrictions.
+---
 
-Barrelman serves two kinds of caller: developers with their own accounts, and
-Parchment's server. They authenticate differently on purpose.
+Barrelman serves two kinds of caller, and they sign in differently.
+Developers use their own accounts and keys. Your own backend calls the instance
+directly with a shared key. On the hosted service that second caller is
+Parchment, the map app barrelman was built for. On your own instance it is
+whatever you point at it.
 
 | Credential | Looks like | Metered | For |
 |---|---|---|---|
 | Account API key | `brm_live_…` | Yes | Customers |
-| Service key | `BARRELMAN_API_KEY` | **No** | Parchment → barrelman, internal jobs |
+| Service key | `BARRELMAN_API_KEY` | **No** | Your own backend → barrelman, internal jobs |
 | Session cookie | — | n/a | The console. Never accepted on data endpoints |
 
 The service key is not a customer key and is never billed. Existing deployments
@@ -41,8 +47,8 @@ specifically.
 ### Administrators
 
 The **first account created on a fresh instance becomes an administrator**, so a
-new deployment is never locked out of its own console. After that, promote by
-promoting them in the console under **Users**.
+new deployment is never locked out of its own console. Promote everyone after
+that in the console, under **Users**.
 
 Roles are changed with `POST /admin/users/:id/role`, and the endpoint **refuses
 to remove the last administrator** — with no shared admin secret, an instance
@@ -220,7 +226,7 @@ mint more keys or read the billing history of the account it belongs to.
 
 ## Sign-up abuse
 
-Deliberately light — see [abuse controls](abuse-controls.md) for the rest.
+Deliberately light — see [abuse controls](/self-hosting/abuse-controls) for the rest.
 
 - **Email normalisation.** Uniqueness is enforced on a canonical form, folding
   gmail dots and `+tags`. `a.b+x@gmail.com` and `ab@gmail.com` are one account,
