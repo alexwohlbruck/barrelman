@@ -305,6 +305,13 @@ describe('portolan tile routes', () => {
       join(dir, 'embark', 'style.json'),
       JSON.stringify({ feed: 'embark', colors: { '40X': '#0f4d92' } }),
     )
+    writeFileSync(
+      join(dir, 'embark', 'routes.json'),
+      JSON.stringify({
+        '40X': { label: '40X', color: '0f4d92', mode: 'bus' },
+        'f3:2': { label: '2', color: 'D82233', shape: 'notch', mode: 'metro' },
+      }),
+    )
   })
 
   afterAll(() => {
@@ -355,6 +362,26 @@ describe('portolan tile routes', () => {
     expect(res.headers.get('access-control-allow-origin')).toBe('*')
     const body = await res.json()
     expect(body.colors['40X']).toBe('#0f4d92')
+  })
+
+  test('serves the route index, bullet styles and all', async () => {
+    const { app } = makeApp()
+    const res = await app.handle(get('/tiles/portolan/embark/routes.json'))
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('content-type')).toContain('application/json')
+    expect(res.headers.get('access-control-allow-origin')).toBe('*')
+    const body = await res.json()
+    // the curated outline is the whole point: a panel cannot re-derive it
+    expect(body['f3:2'].shape).toBe('notch')
+    // …and the ids are the TILES' ids, prefixes included
+    expect(Object.keys(body)).toContain('f3:2')
+  })
+
+  test('404s a route index for an unknown feed, 400s a bad name', async () => {
+    const { app } = makeApp()
+    expect((await app.handle(get('/tiles/portolan/nope/routes.json'))).status).toBe(404)
+    expect((await app.handle(get('/tiles/portolan/..%2Fetc/routes.json'))).status).toBe(400)
   })
 
   test('404s a style manifest for an unknown feed, 400s a bad name', async () => {

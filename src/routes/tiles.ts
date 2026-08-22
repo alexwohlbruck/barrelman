@@ -148,6 +148,43 @@ export function createTileRoutes(
       },
     )
     .get(
+      '/portolan/:feed/routes.json',
+      async ({ params, set }) => {
+        const { feed } = params
+        if (!PORTOLAN_FEED_RE.test(feed)) {
+          set.status = 400
+          return { error: 'Invalid feed name' }
+        }
+        // Every route this pyramid draws, keyed by the id its TILES use,
+        // with the bullet style already resolved: label, colour, and the
+        // outline curation puts it in. A panel beside the map cannot redo
+        // that resolution — it holds a route id from a routing engine and
+        // knows nothing about portolan's style documents — so the map
+        // published the answer next to the tiles.
+        const file = Bun.file(join(portolanDir, feed, 'routes.json'))
+        if (!(await file.exists())) {
+          set.status = 404
+          return { error: 'Unknown portolan feed or no route index' }
+        }
+        set.headers['content-type'] = 'application/json'
+        set.headers['cache-control'] = 'public, max-age=60'
+        set.headers[CORS] = '*'
+        return await file.text()
+      },
+      {
+        params: t.Object({
+          feed: t.String({ description: 'Portolan feed key (e.g. "mta-subway")' }),
+        }),
+        detail: {
+          tags: ['Tiles'],
+          summary: 'Portolan feed route index',
+          description:
+            "One feed's routes with their resolved bullet styles (label, colour, shape), " +
+            'so a client can draw the same bullets the map draws.',
+        },
+      },
+    )
+    .get(
       '/portolan/:feed/style.json',
       async ({ params, set }) => {
         const { feed } = params
