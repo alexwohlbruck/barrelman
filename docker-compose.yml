@@ -180,6 +180,11 @@ services:
       # MOTIS default 60s. Set in .env (e.g. 600) to throttle dev polling.
       MOTIS_RT_UPDATE_INTERVAL: ${MOTIS_RT_UPDATE_INTERVAL:-}
       GTFS_DATA_DIR: /gtfs-zips
+      # Portolan corrected-geometry tiles: static MVT pyramids written by
+      # `portolan sync` (run in barrelman-ops) into the shared workspace,
+      # served by this container at /tiles/portolan/… . Missing dir → the
+      # routes answer 404, so this is safe on a stack that never runs portolan.
+      PORTOLAN_TILES_DIR: /portolan-data/build/tiles
       # Parallel GraphHopper calls per isochrone. Documented in
       # https://docs.barrelman.dev/self-hosting/configuration; without this line it had no effect in a container.
       ISOCHRONE_CONCURRENCY: ${ISOCHRONE_CONCURRENCY:-}
@@ -299,6 +304,9 @@ services:
       - barrelman-osm-data:/data
       - barrelman-gtfs-data:/gtfs-data
       - ./data/gtfs:/gtfs-zips:ro
+      # Read-only: the API only serves tiles from here; barrelman-ops owns the
+      # writes (same split as ./data/gtfs above).
+      - ./data/portolan:/portolan-data:ro
     depends_on:
       - barrelman-db
 
@@ -340,6 +348,16 @@ services:
       UPDATE_MODE: ${UPDATE_MODE:-}
       GEOFABRIK_URL: ${GEOFABRIK_URL:-}
       GEOFABRIK_REPLICATION_URL: ${GEOFABRIK_REPLICATION_URL:-}
+      # ── Portolan (corrected transit geometry) ───────────────────────
+      # Workspace root for import/portolan-sync.ts: portolan.json + style/ +
+      # data/gtfs/ (raw feeds, portolan's own copies) + build/ (tiles, exports,
+      # sync state). Lives under ./data/portolan on the host.
+      PORTOLAN_WORKSPACE: /portolan-data
+      # The portolan binary is NOT baked into this image — it is a single
+      # static Go binary from a separate repo (see Dockerfile.ops). Drop a
+      # linux build at ./data/portolan/bin/portolan on the host, or point this
+      # somewhere else.
+      PORTOLAN_BIN: ${PORTOLAN_BIN:-/portolan-data/bin/portolan}
       # scripts/*.sh docker-exec into these sibling containers by name.
       DB_CONTAINER: barrelman-db
     volumes:
@@ -357,5 +375,9 @@ services:
       # container that downloads the feeds. With :ro every download failed with
       # "EROFS: read-only file system" and the run ended "Processed 0 feeds".
       - ./data/gtfs:/gtfs-zips
+      # Portolan workspace, read-write: `portolan sync` (run from here) writes
+      # builds, tile pyramids and corrected GTFS exports into it. The API
+      # mounts the same directory :ro to serve the tiles.
+      - ./data/portolan:/portolan-data
     depends_on:
       - barrelman-db
