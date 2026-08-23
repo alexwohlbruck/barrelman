@@ -179,3 +179,51 @@ describe('mapExportedZips', () => {
     expect(unmapped).toHaveLength(2)
   })
 })
+
+// ── where portolan runs ──────────────────────────────────────────────────────
+//
+// The registry's paths are relative to the WORKSPACE ("data/gtfs/x.zip",
+// "build/x-rail.geojson"), so portolan resolves them against its own working
+// directory — not against --data/--build, which say where the trees live and
+// not what a relative path in portolan.json means.
+//
+// Spawned without a cwd it ran in /app, every feed read as "no zip on disk"
+// and landed in `skipped`, the plan came out empty, and the run exited 0: a
+// global import that reported success and rebuilt nothing. This drives the
+// real wrapper against a stub binary and asserts the directory it was given.
+
+describe('the wrapper runs portolan in the workspace', () => {
+  test('a global run starts portolan with cwd = workspace', async () => {
+    const { mkdtempSync, writeFileSync, chmodSync, readFileSync, existsSync } = await import('fs')
+    const { join } = await import('path')
+    const { tmpdir } = await import('os')
+
+    const workspace = mkdtempSync(join(tmpdir(), 'portolan-ws-'))
+    const witness = join(workspace, 'cwd.txt')
+    const stub = join(workspace, 'fake-portolan')
+    // records the directory it was started in, then satisfies the contract
+    writeFileSync(
+      stub,
+      '#!/bin/sh\npwd > "' + witness + '"\n' +
+        'echo \'RESULT {"changed":[],"affected":[],"rebuilt":[],"groups_rewritten":false,' +
+        '"tiles":{"written":0,"unchanged":0,"removed":0},"exported":[],"skipped":[],"errors":[]}\'\n',
+    )
+    chmodSync(stub, 0o755)
+    // the wrapper preflights the workspace before it spawns anything
+    writeFileSync(join(workspace, 'portolan.json'), JSON.stringify({ feeds: {} }))
+
+    const proc = Bun.spawn(
+      ['bun', 'run', join(import.meta.dir, 'portolan-sync.ts'),
+        '--global', '--dry-run', '--skip-motis',
+        `--workspace=${workspace}`, `--portolan-bin=${stub}`],
+      { stdout: 'pipe', stderr: 'pipe', cwd: join(import.meta.dir, '..') },
+    )
+    await proc.exited
+
+    expect(existsSync(witness)).toBe(true)
+    // realpath both sides: macOS hands out /var/folders symlinked to /private
+    const seen = readFileSync(witness, 'utf8').trim()
+    const { realpathSync } = await import('fs')
+    expect(realpathSync(seen)).toBe(realpathSync(workspace))
+  })
+})
