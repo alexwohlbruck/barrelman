@@ -260,6 +260,18 @@ if (import.meta.main) {
         stdout: 'pipe',
         stderr: 'inherit',
         env: process.env as Record<string, string>,
+        // Run IN the workspace. Every path in portolan.json is relative to
+        // it — "data/gtfs/amsterdam.zip", "build/amsterdam-rail.geojson" —
+        // so portolan resolves them against its own working directory, not
+        // against the --data/--build flags, which say where the trees are
+        // and not what the registry means by a relative path.
+        //
+        // Without this the flags all pointed at the right places and every
+        // feed still read as "no zip on disk": the registry's paths
+        // resolved under /app, the wrapper's own directory. Each one landed
+        // in `skipped`, the plan came out empty, and the run exited 0. A
+        // global import reported success and rebuilt nothing.
+        cwd: workspace,
       })
     } catch (err) {
       console.error(`Error: could not exec "${portolanBin}": ${err instanceof Error ? err.message : err}`)
