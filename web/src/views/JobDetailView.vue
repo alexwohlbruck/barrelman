@@ -6,6 +6,7 @@ import PageHeader from '@/components/PageHeader.vue'
 import LogViewer from '@/components/jobs/LogViewer.vue'
 import JobStatusBadge from '@/components/JobStatusBadge.vue'
 import JobStages from '@/components/jobs/JobStages.vue'
+import QueuePosition from '@/components/jobs/QueuePosition.vue'
 import DangerBadge from '@/components/DangerBadge.vue'
 import Button from '@/components/ui/Button.vue'
 import Card from '@/components/ui/Card.vue'
@@ -28,6 +29,9 @@ const canceling = ref(false)
 let controller: AbortController | null = null
 
 const isRunning = computed(() => job.value?.status === 'running')
+const isQueued = computed(() => job.value?.status === 'queued')
+// A queued job can be canceled too — nothing has claimed it, so it just goes away.
+const isActive = computed(() => isRunning.value || isQueued.value)
 const progress = useJobProgress(job)
 
 async function start() {
@@ -106,7 +110,7 @@ onBeforeUnmount(() => controller?.abort())
       <Button variant="outline" size="sm" as="a" @click="router.push('/jobs')">
         <ArrowLeft class="size-4" /> Jobs
       </Button>
-      <Button v-if="isRunning" variant="destructive" size="sm" :disabled="canceling" @click="doCancel">
+      <Button v-if="isActive" variant="destructive" size="sm" :disabled="canceling" @click="doCancel">
         <Ban class="size-4" /> Cancel
       </Button>
     </template>
@@ -131,18 +135,31 @@ onBeforeUnmount(() => controller?.abort())
           >
             <CalendarClock class="size-4" /> Scheduled
           </RouterLink>
-          <div class="flex items-center gap-1.5 text-sm text-muted-foreground">
+          <div v-if="!isQueued" class="flex items-center gap-1.5 text-sm text-muted-foreground">
             <Clock class="size-4" /> {{ formatDuration(job.durationMs) }}
             <span v-if="isRunning" class="text-info">· live</span>
           </div>
-          <div class="text-sm text-muted-foreground">Started {{ timeAgo(job.startedAt) }} · {{ formatClock(job.startedAt) }}</div>
+          <div class="text-sm text-muted-foreground">
+            <template v-if="isQueued">Queued {{ timeAgo(job.createdAt) }} · {{ formatClock(job.createdAt) }}</template>
+            <template v-else>Started {{ timeAgo(job.startedAt) }} · {{ formatClock(job.startedAt) }}</template>
+          </div>
           <div v-if="job.exitCode !== undefined && job.exitCode !== null" class="text-sm text-muted-foreground">
             Exit code <code class="rounded bg-muted px-1.5 py-0.5 font-mono">{{ job.exitCode }}</code>
           </div>
           <div class="ml-auto flex items-center gap-2">
             <Button variant="ghost" size="sm" @click="copyLogs"><Copy class="size-3.5" /> Copy logs</Button>
-            <Button v-if="!isRunning" variant="ghost" size="sm" @click="start"><RotateCcw class="size-3.5" /> Reload</Button>
+            <Button v-if="!isActive" variant="ghost" size="sm" @click="start"><RotateCcw class="size-3.5" /> Reload</Button>
           </div>
+        </div>
+
+        <!-- Why this hasn't started. The queue is strictly serial, so this is a
+             wait on one named job, not a vague "pending". -->
+        <div v-if="isQueued" class="mt-3 rounded-lg border border-[var(--warning)]/40 bg-[var(--warning)]/10 p-3">
+          <QueuePosition :queue="job.queue" />
+          <p class="mt-1 text-xs text-muted-foreground">
+            The ops worker runs one job at a time, so this starts on its own as soon as the queue clears — nothing to
+            re-trigger.
+          </p>
         </div>
         <div v-if="progress" class="mt-3">
           <div class="mb-1.5 flex items-center justify-between text-xs text-muted-foreground">

@@ -28,7 +28,8 @@ export interface ScriptDef {
   danger: DangerLevel
   longRunning: boolean
   confirm: boolean
-  exclusive?: boolean
+  /** Resolved server-side: only one run of this script may be in flight. */
+  exclusive: boolean
   exec: { kind: 'process'; command: string; args: string[] } | { kind: 'internal'; handler: string }
   params?: ScriptParam[]
   env?: Record<string, string>
@@ -47,7 +48,7 @@ export interface ScriptsResponse {
   scripts: ScriptDef[]
 }
 
-export type JobStatus = 'running' | 'succeeded' | 'failed' | 'canceled'
+export type JobStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'canceled'
 export type LogStreamName = 'stdout' | 'stderr' | 'system'
 
 export interface LogLine {
@@ -59,6 +60,15 @@ export interface LogLine {
 
 /** What put a job in the queue — an operator's click, or a schedule firing. */
 export type JobTrigger = 'manual' | 'schedule'
+
+/**
+ * Where a queued job sits in the ops worker's line. The worker runs one process
+ * job at a time, so a queued job is always waiting behind one specific job.
+ */
+export interface QueuePlacement {
+  position: number
+  waitingOn?: { id: string; scriptId: string; scriptName: string; status: JobStatus }
+}
 
 export interface Job {
   id: string
@@ -72,7 +82,9 @@ export interface Job {
   scheduleId?: string
   params: Record<string, unknown>
   displayCommand: string
-  startedAt: number
+  createdAt: number
+  /** Unset while queued — nothing has started it yet. */
+  startedAt?: number
   endedAt?: number
   durationMs?: number
   exitCode?: number | null
@@ -86,11 +98,14 @@ export interface Job {
   progressLabel?: string
   /** Named stage breakdown from `[N/M] Stage name` markers. `index` is 1-based. */
   stages?: { total: number; index: number; labels: string[] }
+  /** Set only while `status === 'queued'`. */
+  queue?: QueuePlacement
 }
 
 export interface JobStats {
   total: number
   running: number
+  queued: number
   succeeded: number
   failed: number
 }
