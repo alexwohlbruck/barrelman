@@ -272,11 +272,13 @@ Compose forwards optional settings as `${VAR:-}`, which defines them as the *emp
 
 **A console job says "Another run of this script is in progress"**
 
-Long-running scripts are single-flight, guarded by a Postgres advisory lock, and the job is requeued rather than dropped. Check **Jobs** for what is holding it.
+Long-running scripts are single-flight, guarded by a Postgres advisory lock, and the job is requeued rather than dropped. The job's page links to the run holding the lock.
 
-**Console jobs sit in `queued` forever**
+**A console job sits in `queued`**
 
-`barrelman-ops` is not running, or cannot reach the database. It is what claims `process` jobs; the API only enqueues them.
+Normal, up to a point: the ops worker runs one job at a time, so a queued job is waiting its turn. The job's page names the job ahead of it and links there — if it names one, nothing is wrong and it will start on its own.
+
+If it says it is next in line and nothing is running, `barrelman-ops` is down or cannot reach the database. It is what claims `process` jobs; the API only enqueues them.
 
 ```bash
 docker compose logs barrelman-ops

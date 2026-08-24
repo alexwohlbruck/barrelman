@@ -33,7 +33,13 @@ import type {
 } from './types'
 
 export class ApiError extends Error {
-  constructor(public status: number, message: string) {
+  /** Parsed error payload, for responses that carry more than a message —
+   *  a 409 from a script run names the job already in flight. */
+  constructor(
+    public status: number,
+    message: string,
+    public body?: Record<string, unknown>,
+  ) {
     super(message)
     this.name = 'ApiError'
   }
@@ -60,8 +66,9 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const contentType = res.headers.get('content-type') || ''
   const payload = contentType.includes('application/json') ? await res.json() : await res.text()
   if (!res.ok) {
-    const message = typeof payload === 'object' && payload && 'error' in payload ? (payload as any).error : res.statusText
-    throw new ApiError(res.status, message)
+    const isObject = typeof payload === 'object' && payload !== null
+    const message = isObject && 'error' in payload ? (payload as any).error : res.statusText
+    throw new ApiError(res.status, message, isObject ? (payload as Record<string, unknown>) : undefined)
   }
   return payload as T
 }

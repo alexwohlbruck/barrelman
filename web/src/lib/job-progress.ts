@@ -44,7 +44,7 @@ export function useJobProgress(job: Ref<Job | null | undefined>) {
   return computed<JobProgress | null>(() => {
     const j = job.value
     if (!j || j.status !== 'running') return null
-    const elapsed = Math.max(0, now.value - j.startedAt)
+    const elapsed = Math.max(0, now.value - (j.startedAt ?? j.createdAt))
 
     // 1) True progress from the script's own markers.
     if (typeof j.progress === 'number' && j.progress > 0) {

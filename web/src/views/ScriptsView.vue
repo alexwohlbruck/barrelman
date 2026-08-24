@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
-import { useRouter } from 'vue-router'
-import { Map as MapIcon, TrainFront, Bike, Search, Route, Database, FileCog, LayoutGrid } from 'lucide-vue-next'
+import { useRouter, RouterLink } from 'vue-router'
+import { Map as MapIcon, TrainFront, Bike, Search, Route, Database, FileCog, LayoutGrid, Layers } from 'lucide-vue-next'
 import PageHeader from '@/components/PageHeader.vue'
 import ScriptCard from '@/components/scripts/ScriptCard.vue'
 import RunScriptDialog from '@/components/scripts/RunScriptDialog.vue'
@@ -29,11 +29,18 @@ const categoryIcons: Record<ScriptCategory, any> = {
   config: FileCog,
 }
 
-const runningByScript = computed(() => {
+// A script's own in-flight job — queued counts, since that is exactly the state
+// an operator needs to see before clicking Run again.
+const activeByScript = computed(() => {
   const m = new Map<string, Job>()
-  for (const j of jobs.value) if (j.status === 'running') m.set(j.scriptId, j)
+  for (const j of jobs.value) {
+    if (j.status === 'running' || j.status === 'queued') if (!m.has(j.scriptId)) m.set(j.scriptId, j)
+  }
   return m
 })
+
+const queuedCount = computed(() => jobs.value.filter((j) => j.status === 'queued').length)
+const runningJob = computed(() => jobs.value.find((j) => j.status === 'running'))
 
 const visibleCategories = computed(() => {
   if (!data.value) return []
@@ -65,6 +72,24 @@ onMounted(async () => {
   <PageHeader title="Scripts" subtitle="Run and manage every barrelman data task" />
 
   <div class="p-8">
+    <!-- The single most confusing thing about this page is that Run doesn't
+         always mean start now. Say so once, at the top. -->
+    <div class="mb-6 flex items-start gap-2 rounded-lg border border-border bg-muted/40 p-3 text-xs text-muted-foreground">
+      <Layers class="mt-0.5 size-3.5 shrink-0" />
+      <span>
+        Scripts run one at a time on the ops worker. Anything started while it's busy waits in the queue and begins on
+        its own — it is never run alongside another script. Scripts marked
+        <span class="font-medium text-foreground">One at a time</span> go further: a second run is refused outright
+        while one is queued or running, which is why a nightly schedule can never stack up behind a slow import.
+        <template v-if="runningJob || queuedCount">
+          <RouterLink to="/jobs" class="underline underline-offset-4 hover:text-foreground">
+            {{ runningJob ? '1 running' : 'Nothing running' }}<template v-if="queuedCount">, {{ queuedCount }} queued</template>
+          </RouterLink>
+          right now.
+        </template>
+      </span>
+    </div>
+
     <div v-if="loading" class="flex items-center justify-center py-20 text-muted-foreground">
       <Spinner class="mr-2 size-5" /> Loading scripts…
     </div>
@@ -110,7 +135,7 @@ onMounted(async () => {
               v-for="script in cat.scripts"
               :key="script.id"
               :script="script"
-              :running-job="runningByScript.get(script.id)"
+              :active-job="activeByScript.get(script.id)"
               @run="openRun(script)"
             />
           </div>
@@ -119,5 +144,10 @@ onMounted(async () => {
     </template>
   </div>
 
-  <RunScriptDialog v-model:open="dialogOpen" :script="selectedScript" @started="onStarted" />
+  <RunScriptDialog
+    v-model:open="dialogOpen"
+    :script="selectedScript"
+    @started="onStarted"
+    @conflict="(id: string) => router.push(`/jobs/${id}`)"
+  />
 </template>

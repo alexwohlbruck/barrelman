@@ -15,7 +15,7 @@ import { randomUUID } from 'node:crypto'
 import postgres from 'postgres'
 import { connection as sql, dbUrl, onnotice } from '../db'
 import { getScript } from '../admin/scripts-manifest'
-import { buildInvocation, advisoryKeyFor, type Job } from '../services/job-invocation'
+import { buildInvocation, advisoryKeyFor, isExclusive, type Job } from '../services/job-invocation'
 import * as store from '../services/ops-job-store'
 
 const REPO_ROOT = resolve(import.meta.dir, '../..')
@@ -54,7 +54,7 @@ async function runJob(job: Job): Promise<void> {
     await store.setStatus(job.id, 'failed', 1, 'not a runnable process script')
     return
   }
-  const exclusive = script.exclusive ?? script.longRunning
+  const exclusive = isExclusive(script)
   const key = advisoryKeyFor(job.scriptId)
 
   // Session-level advisory lock needs its own dedicated connection (the shared

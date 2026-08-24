@@ -135,8 +135,10 @@ onMounted(refreshAll)
         >
           <JobStatusBadge :status="job.status" />
           <span class="flex-1 truncate text-sm font-medium">{{ job.scriptName }}</span>
-          <span class="hidden text-xs text-muted-foreground sm:inline">{{ formatDuration(job.durationMs) }}</span>
-          <span class="text-xs text-muted-foreground">{{ timeAgo(job.startedAt) }}</span>
+          <span class="hidden text-xs text-muted-foreground sm:inline">
+            {{ job.status === 'queued' ? 'Not started' : formatDuration(job.durationMs) }}
+          </span>
+          <span class="text-xs text-muted-foreground">{{ timeAgo(job.startedAt ?? job.createdAt) }}</span>
         </RouterLink>
       </Card>
     </section>
