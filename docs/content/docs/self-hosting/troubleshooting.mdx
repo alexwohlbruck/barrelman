@@ -126,7 +126,7 @@ The script is looking in the repo directory rather than the mounted volume. `bar
 
 **GTFS finishes with `Processed 0 feeds`**
 
-Downloads had nowhere to go. `./data/gtfs` must be mounted **read-write** into `barrelman-ops` — read-only is correct only for the API. Look for `EROFS: read-only file system` above the summary. Note the run still exits 0.
+Downloads had nowhere to go. `./data/gtfs` must be mounted **read-write** into `barrelman-ops` — read-only is correct only for the API. Look for `EROFS: read-only file system` above the summary. If every feed failed, the import now exits non-zero rather than reporting an empty success, so "Check for GTFS Updates" stops before recording the upstream versions and will retry on its next run.
 
 ## Engines
 
