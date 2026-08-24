@@ -12,7 +12,16 @@
 import { connection as sql } from '../db'
 import { randomUUID } from 'node:crypto'
 import { getScript } from '../admin/scripts-manifest'
-import { buildInvocation, type Job, type JobStatus, type JobTrigger, type LogLine, type LogStream } from './job-invocation'
+import {
+  buildInvocation,
+  isExclusive,
+  type Job,
+  type JobStatus,
+  type JobTrigger,
+  type LogLine,
+  type LogStream,
+  type QueuePlacement,
+} from './job-invocation'
 import { getEtaMs, recordRun, parseStage, parseCount } from './job-history.service'
 
 const MAX_JOBS = 200
@@ -117,7 +126,7 @@ export async function createJob(
 ): Promise<Job> {
   const script = getScript(scriptId)
   if (!script) throw new Error(`Unknown script: ${scriptId}`)
-  const exclusive = script.exclusive ?? script.longRunning
+  const exclusive = isExclusive(script)
   const inv = buildInvocation(script, params)
   const now = Date.now()
   const id = randomUUID()
@@ -317,8 +326,10 @@ export async function isCancelRequested(jobId: string): Promise<boolean> {
 export async function getJob(id: string): Promise<{ job: Job; logs: LogLine[] } | undefined> {
   const [row] = await sql`SELECT * FROM ops_jobs WHERE id = ${id}`
   if (!row) return undefined
+  const job = rowToJob(row)
+  if (job.status === 'queued') job.queue = (await queuePlacements()).get(job.id)
   const logs = await sql`SELECT seq, t, stream, text FROM ops_job_logs WHERE job_id = ${id} ORDER BY seq ASC`
-  return { job: rowToJob(row), logs: logs.map((l: any) => ({ seq: Number(l.seq), t: Number(l.t), stream: l.stream, text: l.text })) }
+  return { job, logs: logs.map((l: any) => ({ seq: Number(l.seq), t: Number(l.t), stream: l.stream, text: l.text })) }
 }
 
 export async function readLogsSince(id: string, afterSeq: number): Promise<LogLine[]> {
@@ -330,13 +341,74 @@ export async function readLogsSince(id: string, afterSeq: number): Promise<LogLi
 
 export async function listJobs(): Promise<Job[]> {
   const rows = await sql`SELECT * FROM ops_jobs ORDER BY created_at DESC LIMIT ${MAX_JOBS}`
-  return rows.map(rowToJob)
+  const jobs = rows.map(rowToJob)
+  // Only pay for the extra query when something is actually waiting.
+  if (jobs.some((j) => j.status === 'queued')) {
+    const placements = await queuePlacements()
+    for (const j of jobs) if (j.status === 'queued') j.queue = placements.get(j.id)
+  }
+  return jobs
 }
 
-/** Is there already a queued/running job for this script? (enqueue-time single-flight guard) */
-export async function hasActiveJob(scriptId: string): Promise<boolean> {
-  const [r] = await sql`SELECT 1 FROM ops_jobs WHERE script_id = ${scriptId} AND status IN ('queued','running') LIMIT 1`
-  return Boolean(r)
+/**
+ * Reconstruct the ops worker's serial queue: which job each queued job is
+ * waiting on, and how far back it is.
+ *
+ * The order mirrors `claimNextProcessJob` exactly — oldest queued first — with
+ * whatever is running now at the head, since that is what has to end before the
+ * worker takes anything else. Anything but a single running job is impossible
+ * with one worker, but the walk handles it by chaining each job to the one ahead.
+ */
+export async function queuePlacements(): Promise<Map<string, QueuePlacement>> {
+  const rows = await sql`
+    SELECT id, script_id, script_name, status FROM ops_jobs
+    WHERE exec_kind = 'process' AND status IN ('running', 'queued')
+    ORDER BY (status = 'queued'), COALESCE(started_at, created_at) ASC`
+  return buildQueuePlacements(rows as unknown as QueueRow[])
+}
+
+export interface QueueRow {
+  id: string
+  script_id: string
+  script_name: string
+  status: JobStatus
+}
+
+/**
+ * Walk an already-ordered run queue (running first, then queued oldest-first)
+ * into a placement per queued job. Pure, so the ordering rules are testable
+ * without a database.
+ */
+export function buildQueuePlacements(rows: QueueRow[]): Map<string, QueuePlacement> {
+  const out = new Map<string, QueuePlacement>()
+  let position = 0
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i]
+    if (r.status !== 'queued') continue
+    const ahead = rows[i - 1]
+    out.set(r.id, {
+      position: ++position,
+      // Absent only in the seconds between enqueue and the worker's next poll,
+      // when nothing is running and this job is first in line.
+      waitingOn: ahead
+        ? { id: ahead.id, scriptId: ahead.script_id, scriptName: ahead.script_name, status: ahead.status }
+        : undefined,
+    })
+  }
+  return out
+}
+
+/**
+ * The queued/running job that blocks a new run of this script, if any
+ * (enqueue-time single-flight guard). Returns the job rather than a boolean so
+ * the refusal can link to what is already in flight.
+ */
+export async function findActiveJob(scriptId: string): Promise<{ id: string; status: JobStatus } | undefined> {
+  const [r] = await sql`
+    SELECT id, status FROM ops_jobs
+    WHERE script_id = ${scriptId} AND status IN ('queued','running')
+    ORDER BY created_at ASC LIMIT 1`
+  return r ? { id: r.id, status: r.status } : undefined
 }
 
 export async function jobStats(): Promise<{ total: number; running: number; succeeded: number; failed: number; queued: number }> {

@@ -6,6 +6,7 @@ import {
   CATEGORY_ORDER,
   getScript,
 } from '../admin/scripts-manifest'
+import { isExclusive } from '../services/job-invocation'
 import {
   startJob,
   listJobs,
@@ -251,14 +252,20 @@ export const adminConsoleRoutes = new Elysia({ prefix: '/admin' })
   // ── Scripts manifest ────────────────────────────────────────────────
   .get(
     '/scripts',
-    () => ({
-      categories: CATEGORY_ORDER.map((key) => ({
-        key,
-        label: CATEGORY_LABELS[key],
-        scripts: SCRIPTS.filter((s) => s.category === key),
-      })).filter((c) => c.scripts.length > 0),
-      scripts: SCRIPTS,
-    }),
+    () => {
+      // `exclusive` is implied by `longRunning` when not set explicitly, so send
+      // the resolved value — the console has to show the same rule the enqueue
+      // guard applies, not the manifest's shorthand for it.
+      const scripts = SCRIPTS.map((s) => ({ ...s, exclusive: isExclusive(s) }))
+      return {
+        categories: CATEGORY_ORDER.map((key) => ({
+          key,
+          label: CATEGORY_LABELS[key],
+          scripts: scripts.filter((s) => s.category === key),
+        })).filter((c) => c.scripts.length > 0),
+        scripts,
+      }
+    },
     { detail: { summary: 'List runnable scripts', tags: ['Admin'] } },
   )
 
@@ -278,7 +285,7 @@ export const adminConsoleRoutes = new Elysia({ prefix: '/admin' })
       } catch (err) {
         if (err instanceof JobConflictError) {
           set.status = 409
-          return { error: err.message }
+          return { error: err.message, activeJobId: err.activeJobId, activeStatus: err.activeStatus }
         }
         set.status = 500
         return { error: err instanceof Error ? err.message : 'Failed to start job' }
@@ -385,7 +392,11 @@ export const adminConsoleRoutes = new Elysia({ prefix: '/admin' })
         set.status = 201
         return { job }
       } catch (err) {
-        set.status = err instanceof JobConflictError ? 409 : 500
+        if (err instanceof JobConflictError) {
+          set.status = 409
+          return { error: err.message, activeJobId: err.activeJobId, activeStatus: err.activeStatus }
+        }
+        set.status = 500
         return { error: err instanceof Error ? err.message : 'Failed to start job' }
       }
     },
