@@ -72,6 +72,9 @@ async function main() {
   mkdirSync(outputDir, { recursive: true })
 
   let feedFiles: string[] = []
+  // How many feeds we tried, so a run where every one failed can be told apart
+  // from a region that legitimately has none.
+  let attemptedFeeds = 0
 
   if (!skipDownload) {
     // Step 1: Fetch feed list from Transitland
@@ -88,6 +91,7 @@ async function main() {
     }
 
     // Step 2: Download each feed
+    attemptedFeeds = feeds.length
     for (let i = 0; i < feeds.length; i++) {
       const feed = feeds[i]
       const filename = `${feed.feedId.replace(/[^a-zA-Z0-9_-]/g, '_')}.zip`
@@ -130,6 +134,7 @@ async function main() {
     feedFiles = readdirSync(outputDir)
       .filter(f => f.endsWith('.zip'))
       .map(f => join(outputDir, f))
+    attemptedFeeds = feedFiles.length
 
     for (const filepath of feedFiles) {
       const feedId = basename(filepath, '.zip')
@@ -157,6 +162,17 @@ async function main() {
   }
 
   // Step 4: Compute walking transfers
+  // A run that downloaded nothing is a failure, not an empty success. It used
+  // to print "Processed 0 feeds" and exit 0, which let scripts/gtfs-watch.sh
+  // record the upstream shas as imported and stop retrying the drift.
+  if (feedFiles.length === 0 && attemptedFeeds > 0) {
+    console.error(
+      `\n✗ Import failed: 0 of ${attemptedFeeds} feeds were written to ${outputDir}. ` +
+        'See the per-feed errors above.',
+    )
+    process.exit(1)
+  }
+
   if (!skipTransfers && feedFiles.length > 0) {
     console.log('\n=== Computing Walking Transfers ===')
     console.log(`Max distance: ${transferDistance}m`)
