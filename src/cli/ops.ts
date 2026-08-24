@@ -166,7 +166,7 @@ async function cmdRun(scriptId: string | undefined, flags: Record<string, string
     job = await startJob(scriptId, params)
   } catch (err) {
     if (err instanceof JobConflictError) {
-      console.error(`${err.message} — cancel it first, or wait for it to finish.`)
+      console.error(`${err.message} (job ${err.activeJobId}) — cancel it first, or wait for it to finish.`)
       process.exitCode = 1
       return
     }

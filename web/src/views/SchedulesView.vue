@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
-import { RouterLink } from 'vue-router'
-import { CalendarClock, Loader2, Pencil, Play, Plus, Trash2 } from 'lucide-vue-next'
+import { RouterLink, useRouter } from 'vue-router'
+import { CalendarClock, Layers, Loader2, Pencil, Play, Plus, Trash2 } from 'lucide-vue-next'
 import PageHeader from '@/components/PageHeader.vue'
 import Button from '@/components/ui/Button.vue'
 import Badge from '@/components/ui/Badge.vue'
@@ -27,7 +27,10 @@ const deleteTarget = ref<Schedule | null>(null)
 const deleting = ref(false)
 const running = ref<string | null>(null)
 
+const router = useRouter()
 const enabledCount = computed(() => schedules.value.filter((s) => s.enabled).length)
+
+const scriptById = computed(() => new Map(scripts.value.map((s) => [s.id, s])))
 
 async function load() {
   loading.value = true
@@ -72,7 +75,13 @@ async function runNow(s: Schedule) {
     await load()
   } catch (err) {
     if (err instanceof ApiError && err.status === 409) {
-      toast({ title: 'Already running', description: err.message, variant: 'warning' })
+      const activeJobId = err.body?.activeJobId as string | undefined
+      toast({
+        title: 'Already in flight',
+        description: activeJobId ? `${s.scriptName} is already queued or running — opening it.` : err.message,
+        variant: 'warning',
+      })
+      if (activeJobId) router.push(`/jobs/${activeJobId}`)
     } else {
       toast({ title: 'Failed to start', description: err instanceof Error ? err.message : '', variant: 'error' })
     }
@@ -170,6 +179,19 @@ onMounted(load)
               Last fire skipped: {{ s.lastSkipReason }}
             </p>
 
+            <!-- The question every operator asks before enabling a nightly
+                 import: what happens if the last one is still going? -->
+            <p class="flex items-start gap-1.5 text-[11px] text-muted-foreground">
+              <Layers class="mt-0.5 size-3 shrink-0" />
+              <span v-if="scriptById.get(s.scriptId)?.exclusive">
+                If the previous run is still going when this fires, the occurrence is skipped — two runs of
+                {{ s.scriptName }} never overlap.
+              </span>
+              <span v-else>
+                Fires queue behind whatever the ops worker is running; they never execute alongside it.
+              </span>
+            </p>
+
             <div class="mt-auto flex justify-end gap-1.5">
               <Button variant="ghost" size="sm" :disabled="running === s.id" @click="runNow(s)">
                 <Spinner v-if="running === s.id" class="size-3.5" />
@@ -190,6 +212,12 @@ onMounted(load)
         Every scheduled run appears in
         <RouterLink to="/jobs" class="underline">Jobs</RouterLink>
         with its full log, marked <span class="font-medium">Scheduled</span>.
+      </p>
+      <p class="mt-2 flex items-start gap-1.5 text-xs text-muted-foreground">
+        <Layers class="mt-0.5 size-3.5 shrink-0" />
+        A schedule can't cause two imports at once. The ops worker runs one job at a time, and a script marked
+        <span class="font-medium">One at a time</span> refuses a second run outright — a fire that lands mid-run is
+        recorded as skipped rather than stacking up.
       </p>
     </div>
 

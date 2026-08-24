@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, watch, computed } from 'vue'
-import { Play, AlertTriangle, Flame, Terminal, Info } from 'lucide-vue-next'
+import { Play, AlertTriangle, Flame, Terminal, Info, Layers } from 'lucide-vue-next'
 import Dialog from '@/components/ui/Dialog.vue'
 import Button from '@/components/ui/Button.vue'
 import Switch from '@/components/ui/Switch.vue'
@@ -13,7 +13,7 @@ import { refreshJobs } from '@/lib/store'
 import type { ScriptDef, Job } from '@/lib/types'
 
 const props = defineProps<{ script: ScriptDef | null; open: boolean }>()
-const emit = defineEmits<{ 'update:open': [value: boolean]; started: [job: Job] }>()
+const emit = defineEmits<{ 'update:open': [value: boolean]; started: [job: Job]; conflict: [jobId: string] }>()
 
 const params = ref<Record<string, unknown>>({})
 const confirmed = ref(false)
@@ -84,7 +84,18 @@ async function run() {
     refreshJobs()
   } catch (err) {
     if (err instanceof ApiError && err.status === 409) {
-      toast({ title: 'Already running', description: err.message, variant: 'warning' })
+      // Rather than a dead-end warning, take the operator to the run that's in
+      // the way — that job's page is where they decide to wait or cancel.
+      const activeJobId = err.body?.activeJobId as string | undefined
+      toast({
+        title: 'Already in flight',
+        description: activeJobId ? `${props.script.name} is already queued or running — opening it.` : err.message,
+        variant: 'warning',
+      })
+      if (activeJobId) {
+        emit('update:open', false)
+        emit('conflict', activeJobId)
+      }
     } else {
       toast({ title: 'Failed to start', description: err instanceof Error ? err.message : 'Unknown error', variant: 'error' })
     }
@@ -120,6 +131,18 @@ async function run() {
       <div v-if="script.notes" class="flex gap-2 rounded-lg border border-border bg-muted/40 p-3 text-xs text-muted-foreground">
         <Info class="mt-0.5 size-3.5 shrink-0" />
         <span>{{ script.notes }}</span>
+      </div>
+
+      <!-- Concurrency, stated at the point of action -->
+      <div class="flex gap-2 rounded-lg border border-border bg-muted/40 p-3 text-xs text-muted-foreground">
+        <Layers class="mt-0.5 size-3.5 shrink-0" />
+        <span v-if="script.exclusive">
+          Only one run of this script happens at a time. If one is already queued or running this is refused, so it can
+          never overlap itself — including when a schedule fires mid-run.
+        </span>
+        <span v-else>
+          Scripts run one at a time on the ops worker. If it's busy, this waits in the queue and starts on its own.
+        </span>
       </div>
 
       <!-- Command preview -->

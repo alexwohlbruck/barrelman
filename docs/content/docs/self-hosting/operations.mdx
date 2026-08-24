@@ -81,9 +81,14 @@ progress bar and cancel button as one you started yourself — not a line in a
 logfile on the host. The **Schedules** page shows each entry's next and last
 run, linking straight to that job.
 
-If a run is still going when the next one is due, the new one is skipped rather
-than queued behind it, and the page says so. So a long OSM import can't stack up
-copies of itself.
+Two separate things stop runs from colliding. First, the ops worker runs one job
+at a time, so anything started while it is busy waits in a queue instead of
+running alongside — **Jobs** shows a queued job's place in line and links to the
+job it is waiting on. Second, scripts marked *One at a time*, which is every
+long-running import including OSM Update, refuse a second run outright while one
+is queued or running. A schedule that fires mid-run is recorded as skipped, with
+the reason shown on its card, so a slow OSM import cannot stack up copies of
+itself.
 
 <Callout type="info">
 Prefer a host crontab? It still works — but a script driven by `docker exec`

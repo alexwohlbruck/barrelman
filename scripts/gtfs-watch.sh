@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # =============================================================================
-# Barrelman nightly GTFS update watcher (host wrapper)
+# Barrelman nightly GTFS update watcher
 # =============================================================================
 #
 # GTFS static feeds are republished by agencies on no fixed cadence, and nothing
@@ -74,14 +74,21 @@ IFS=',' read -ra REGION_LIST <<< "$CHANGED"
 for region in "${REGION_LIST[@]}"; do
   [ -z "$region" ] && continue
   log "Re-importing GTFS for region: $region"
-  docker exec -e GTFS_REGION="$region" -e TRANSITLAND_API_KEY="$TRANSITLAND_API_KEY" \
-    barrelman bash /app/scripts/download-gtfs.sh
+  # Runs here in barrelman-ops, NOT `docker exec barrelman`: both containers
+  # mount ./data/gtfs, but the API's copy is :ro. Exec'd into barrelman, every
+  # feed died on "EROFS: read-only file system" and the run still ended
+  # "Processed 0 feeds" with status 0 — so the new shas got recorded below and
+  # the drift was never retried.
+  GTFS_REGION="$region" TRANSITLAND_API_KEY="$TRANSITLAND_API_KEY" \
+    bash "$SCRIPT_DIR/download-gtfs.sh"
 done
 
 log "Recording new feed versions."
 run_watch --record
 
 log "Rebuilding MOTIS to publish the updated schedules."
-"$SCRIPT_DIR/rebuild-motis.sh"
+# Invoked through bash rather than executed: the file's mode is not something
+# this script should have to depend on.
+bash "$SCRIPT_DIR/rebuild-motis.sh"
 
 log "GTFS update complete."

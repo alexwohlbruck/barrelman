@@ -21,6 +21,21 @@ export interface LogLine {
   text: string
 }
 
+/**
+ * Where a queued process job sits in line.
+ *
+ * The ops worker is a single serial loop, so "queued" always means "waiting
+ * behind one specific job", never "waiting for a free slot". Naming the blocker
+ * is the difference between a job that looks stuck and one that is visibly
+ * third in line behind a nine-hour import.
+ */
+export interface QueuePlacement {
+  /** 1-based position among queued process jobs. */
+  position: number
+  /** The job that has to finish before this one can start. */
+  waitingOn?: { id: string; scriptId: string; scriptName: string; status: JobStatus }
+}
+
 export interface Job {
   id: string
   scriptId: string
@@ -52,6 +67,8 @@ export interface Job {
    * is 1-based; `labels[i]` is the name of stage i (empty until first seen).
    */
   stages?: { total: number; index: number; labels: string[] }
+  /** Set only while `status === 'queued'` — see QueuePlacement. */
+  queue?: QueuePlacement
 }
 
 export type Invocation =
@@ -112,6 +129,18 @@ export function buildInvocation(script: ScriptDef, params: Record<string, unknow
     .join(' ')
 
   return { kind: 'process', command: script.exec.command, args, env, display }
+}
+
+/**
+ * Whether only one run of this script may be in flight at a time.
+ *
+ * An explicit `exclusive` wins; otherwise every long-running script is exclusive,
+ * since those are the imports that corrupt each other when overlapped. Three
+ * places enforce this (the enqueue guard, the worker's advisory lock, and the
+ * stored `exclusive` column) and they must agree, so they all read it from here.
+ */
+export function isExclusive(script: ScriptDef): boolean {
+  return script.exclusive ?? script.longRunning
 }
 
 /** Stable 31-bit advisory-lock key derived from a script id (for exclusive single-flight). */

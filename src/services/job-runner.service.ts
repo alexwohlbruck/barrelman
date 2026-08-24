@@ -15,14 +15,23 @@
 import { getScript } from '../admin/scripts-manifest'
 import { INTERNAL_HANDLERS } from './admin-internal-handlers'
 import * as store from './ops-job-store'
-import type { Job, JobTrigger } from './job-invocation'
+import { isExclusive, type Job, type JobStatus, type JobTrigger } from './job-invocation'
 
-export type { Job, JobTrigger } from './job-invocation'
+export type { Job, JobTrigger, QueuePlacement } from './job-invocation'
 export const { listJobs, getJob, jobStats, readLogsSince, ensureOpsJobsSchema } = store
 
+/**
+ * Raised when an exclusive script is asked to start while one of its runs is
+ * still in flight. Carries the blocking job so callers can point at it — the
+ * console links to it, the CLI prints its id.
+ */
 export class JobConflictError extends Error {
-  constructor(public readonly scriptId: string) {
-    super(`A job for "${scriptId}" is already running`)
+  constructor(
+    public readonly scriptId: string,
+    public readonly activeJobId: string,
+    public readonly activeStatus: JobStatus,
+  ) {
+    super(`A job for "${scriptId}" is already ${activeStatus}`)
     this.name = 'JobConflictError'
   }
 }
@@ -36,9 +45,9 @@ export async function startJob(
   const script = getScript(scriptId)
   if (!script) throw new Error(`Unknown script: ${scriptId}`)
 
-  const exclusive = script.exclusive ?? script.longRunning
-  if (exclusive && (await store.hasActiveJob(scriptId))) {
-    throw new JobConflictError(scriptId)
+  if (isExclusive(script)) {
+    const active = await store.findActiveJob(scriptId)
+    if (active) throw new JobConflictError(scriptId, active.id, active.status)
   }
 
   const job = await store.createJob(scriptId, params, origin)

@@ -4,7 +4,7 @@ import type { Job, JobStats, DataMetrics, ServiceStatus, ImportRegion } from './
 
 // ── Jobs (globally polled) ────────────────────────────────────────────
 export const jobs = ref<Job[]>([])
-export const jobStats = ref<JobStats>({ total: 0, running: 0, succeeded: 0, failed: 0 })
+export const jobStats = ref<JobStats>({ total: 0, running: 0, queued: 0, succeeded: 0, failed: 0 })
 export const jobsError = ref<string | null>(null)
 
 export async function refreshJobs() {
@@ -77,7 +77,7 @@ export function startJobPolling() {
   const tick = async () => {
     await refreshJobs()
     // Poll faster while something is running, slower when idle.
-    const delay = jobStats.value.running > 0 ? 2000 : 6000
+    const delay = jobStats.value.running + jobStats.value.queued > 0 ? 2000 : 6000
     pollTimer = window.setTimeout(tick, delay)
   }
   tick()

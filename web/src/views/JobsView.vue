@@ -4,6 +4,7 @@ import { RouterLink } from 'vue-router'
 import { RefreshCw, ChevronRight, Inbox, CalendarClock } from 'lucide-vue-next'
 import PageHeader from '@/components/PageHeader.vue'
 import JobStatusBadge from '@/components/JobStatusBadge.vue'
+import QueuePosition from '@/components/jobs/QueuePosition.vue'
 import Badge from '@/components/ui/Badge.vue'
 import Card from '@/components/ui/Card.vue'
 import Button from '@/components/ui/Button.vue'
@@ -15,6 +16,7 @@ const filter = ref<JobStatus | 'all'>('all')
 
 const filters: { value: JobStatus | 'all'; label: string }[] = [
   { value: 'all', label: 'All' },
+  { value: 'queued', label: 'Queued' },
   { value: 'running', label: 'Running' },
   { value: 'succeeded', label: 'Succeeded' },
   { value: 'failed', label: 'Failed' },
@@ -37,10 +39,14 @@ onMounted(refreshJobs)
 
   <div class="p-8">
     <!-- Stat strip -->
-    <div class="mb-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
+    <div class="mb-5 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
       <div class="rounded-lg border border-border bg-card px-4 py-3">
         <div class="text-xs text-muted-foreground">Total</div>
         <div class="text-xl font-semibold tabular-nums">{{ jobStats.total }}</div>
+      </div>
+      <div class="rounded-lg border border-border bg-card px-4 py-3">
+        <div class="text-xs text-muted-foreground">Queued</div>
+        <div class="text-xl font-semibold tabular-nums text-[var(--warning)]">{{ jobStats.queued }}</div>
       </div>
       <div class="rounded-lg border border-border bg-card px-4 py-3">
         <div class="text-xs text-muted-foreground">Running</div>
@@ -93,13 +99,18 @@ onMounted(refreshJobs)
               <CalendarClock class="size-3" /> Scheduled
             </Badge>
           </div>
-          <div class="truncate font-mono text-xs text-muted-foreground">{{ job.displayCommand }}</div>
+          <QueuePosition v-if="job.status === 'queued'" :queue="job.queue" compact class="mt-0.5" />
+          <div v-else class="truncate font-mono text-xs text-muted-foreground">{{ job.displayCommand }}</div>
         </div>
         <div class="hidden shrink-0 text-right sm:block">
-          <div class="text-xs text-muted-foreground">{{ formatDuration(job.durationMs) }}</div>
-          <div class="text-xs text-muted-foreground/70">{{ formatClock(job.startedAt) }}</div>
+          <div class="text-xs text-muted-foreground">
+            {{ job.status === 'queued' ? 'Not started' : formatDuration(job.durationMs) }}
+          </div>
+          <div class="text-xs text-muted-foreground/70">{{ formatClock(job.startedAt ?? job.createdAt) }}</div>
         </div>
-        <div class="w-16 shrink-0 text-right text-xs text-muted-foreground">{{ timeAgo(job.startedAt) }}</div>
+        <div class="w-16 shrink-0 text-right text-xs text-muted-foreground">
+          {{ timeAgo(job.startedAt ?? job.createdAt) }}
+        </div>
         <ChevronRight class="size-4 shrink-0 text-muted-foreground" />
       </RouterLink>
     </Card>
