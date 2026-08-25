@@ -44,6 +44,22 @@ BEGIN
     END IF;
 END $$;
 
+-- ── Re-derive columns from tags ─────────────────────────────────────────
+--
+-- These run on every replication update, where a diff touches a few thousand
+-- objects out of 27 million. Filtering on "which rows carry the tag" therefore
+-- rewrites most of the table to absorb almost nothing: the address statement
+-- alone reported UPDATE 7948686 for a diff of 5,411 nodes, and the dead tuples,
+-- WAL and index maintenance that came with it are most of why a daily update
+-- took ~12 hours. The IS DISTINCT FROM guard writes only the rows that moved.
+--
+-- The guard repeats the SET expression rather than joining a computed subquery
+-- back to the table. geo_places.id is text and carries no unique index, so a
+-- self-join on it can match more than one row; joining on ctid avoids that but
+-- costs a second full scan plus a 14M-row hash (planner cost 8.4M against 3.3M
+-- for the repeat). Repeating a cheap expression is the better trade. area_m2 is
+-- the exception below, because its expression is not cheap.
+
 -- Extract address from addr:* tags
 UPDATE geo_places SET address = jsonb_build_object(
     'housenumber', tags->>'addr:housenumber',
@@ -54,11 +70,21 @@ UPDATE geo_places SET address = jsonb_build_object(
     'postcode', tags->>'addr:postcode',
     'country', tags->>'addr:country'
 )
-WHERE tags ? 'addr:street' OR tags ? 'addr:housenumber';
+WHERE (tags ? 'addr:street' OR tags ? 'addr:housenumber')
+  AND address IS DISTINCT FROM jsonb_build_object(
+    'housenumber', tags->>'addr:housenumber',
+    'street', tags->>'addr:street',
+    'unit', tags->>'addr:unit',
+    'city', tags->>'addr:city',
+    'state', tags->>'addr:state',
+    'postcode', tags->>'addr:postcode',
+    'country', tags->>'addr:country'
+);
 
 -- Extract opening hours
 UPDATE geo_places SET hours = tags->>'opening_hours'
-WHERE tags ? 'opening_hours';
+WHERE tags ? 'opening_hours'
+  AND hours IS DISTINCT FROM tags->>'opening_hours';
 
 -- Extract phone numbers
 UPDATE geo_places SET phones = ARRAY(
@@ -68,7 +94,14 @@ UPDATE geo_places SET phones = ARRAY(
         tags->>'contact:mobile'
     ]) WHERE unnest IS NOT NULL
 )
-WHERE tags ? 'phone' OR tags ? 'contact:phone' OR tags ? 'contact:mobile';
+WHERE (tags ? 'phone' OR tags ? 'contact:phone' OR tags ? 'contact:mobile')
+  AND phones IS DISTINCT FROM ARRAY(
+    SELECT unnest FROM unnest(ARRAY[
+        tags->>'phone',
+        tags->>'contact:phone',
+        tags->>'contact:mobile'
+    ]) WHERE unnest IS NOT NULL
+);
 
 -- Extract websites
 UPDATE geo_places SET websites = ARRAY(
@@ -78,11 +111,37 @@ UPDATE geo_places SET websites = ARRAY(
         tags->>'url'
     ]) WHERE unnest IS NOT NULL
 )
-WHERE tags ? 'website' OR tags ? 'contact:website' OR tags ? 'url';
+WHERE (tags ? 'website' OR tags ? 'contact:website' OR tags ? 'url')
+  AND websites IS DISTINCT FROM ARRAY(
+    SELECT unnest FROM unnest(ARRAY[
+        tags->>'website',
+        tags->>'contact:website',
+        tags->>'url'
+    ]) WHERE unnest IS NOT NULL
+);
 
--- Compute area for polygons
-UPDATE geo_places SET area_m2 = ST_Area(geom::geography)
-WHERE geom_type = 'area';
+-- Compute area for polygons.
+--
+-- ST_Area over 12M geographies is the expensive part of this file (planner cost
+-- ~154M), so unlike the statements above this one must not evaluate it twice:
+-- repeating it inline measured 311M. Materialize the computation once and join
+-- it back on ctid, which is unique per row where id is not, and which is stable
+-- for the length of the statement. Rows this statement updates are invisible to
+-- its own snapshot, so none is processed twice.
+--
+-- The ::real cast is load-bearing. ST_Area returns double precision; comparing
+-- that against a real column promotes the stored value back to double with a
+-- different bit pattern, so without the cast every row looks changed and the
+-- guard buys nothing.
+WITH computed AS MATERIALIZED (
+    SELECT ctid AS row_id, ST_Area(geom::geography)::real AS area_m2
+    FROM geo_places
+    WHERE geom_type = 'area'
+)
+UPDATE geo_places p SET area_m2 = computed.area_m2
+FROM computed
+WHERE p.ctid = computed.row_id
+  AND p.area_m2 IS DISTINCT FROM computed.area_m2;
 
 -- NOTE: tsvector (ts column) is NOT built here — it depends on name_abbrev,
 -- codes, and parent_context which are populated in later pipeline steps.
