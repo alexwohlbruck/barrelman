@@ -710,14 +710,20 @@ setup (`api.` + `console.`).
 
 ### Updating a deployment
 
-New Barrelman releases are published to Docker Hub on every push to `main` via
-GitHub Actions. To roll them out:
+Barrelman is released by version. Bumping `version` in `package.json` on `main`
+tags `vX.Y.Z` and publishes all three images to Docker Hub as both
+`:X.Y.Z` and `:latest`; a push to `main` that does not change the version
+publishes nothing. Pin the three to a version in `docker-compose.yml` if you
+want a deployment to hold still, and roll them out deliberately:
 
 ```bash
 cd /opt/barrelman
-docker compose pull
-docker compose up -d
+docker compose pull barrelman barrelman-db barrelman-ops
+docker compose up -d barrelman barrelman-db barrelman-ops
 ```
+
+Naming the services is deliberate — see the warning below for what a bare
+`docker compose pull` does to MOTIS and GraphHopper.
 
 > **`docker compose pull` refreshes *every* service's image, not just
 > Barrelman's.** That's fine for anything stateless, which is why most images
