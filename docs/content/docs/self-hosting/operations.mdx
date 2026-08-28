@@ -51,10 +51,34 @@ Pull during a window where you can run the rebuild, or pin those two services to
 
 ### Automating it
 
-Watchtower can automate the pull, with two caveats.
+Watchtower can automate the pull, with three caveats.
 
 - **It only manages containers on its own Docker host.** Watchtower watches the Docker socket it is given and nothing else, so an instance running on a different machine will never update your stack. Every host you want auto-updated needs its own.
 - **A blanket Watchtower will eventually hit the binary-format trap above.** It pulls the same floating tags `docker compose pull` would, so if MOTIS or GraphHopper are on `:latest` it will one day restart them onto an incompatible engine version with nobody watching. Either pin those two services, or run Watchtower with `--label-enable` and label only the stateless services.
+- **It will restart the stack in the middle of a job.** An import runs for hours — a replication update with post-processing has taken nearly twelve — while Watchtower polls hourly, so a push that lands mid-run kills it. See below.
+
+### Not restarting mid-import
+
+`docker-compose.yml` ships a `pre-update` lifecycle hook on `barrelman-db` and `barrelman-ops`. Watchtower runs it before it stops either container, and the hook exits 75 (`EX_TEMPFAIL`) if a job is running, which tells Watchtower to skip that container and ask again on the next poll. The update lands on its own once the job finishes.
+
+Both containers need the gate. The worker runs the script, but the SQL runs inside the database container over the docker socket, so restarting either one ends the job.
+
+The hook is inert unless Watchtower is started with `--enable-lifecycle-hooks`:
+
+```yaml
+services:
+  watchtower:
+    image: nickfedor/watchtower
+    command: --cleanup --interval 3600 --enable-lifecycle-hooks
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+```
+
+<Callout type="warn" title="Only 0 and 75 are safe exit codes">
+Any other non-zero exit from a pre-update hook aborts Watchtower's entire update run, not just the one container. The shipped hook fails closed to 75 when it cannot reach the database, so an unreachable database postpones the update rather than wedging every container on the host.
+</Callout>
+
+Without the hook, a job killed this way sits `running` until the heartbeat reaper fails it about a minute after the worker disappears. The worker also hands its in-flight job back to the queue when it receives `SIGTERM`, so the replacement worker picks it up and re-runs it — every step of the import pipeline is idempotent — but that only helps if the database container survives.
 
 Note that the original [containrrr/watchtower](https://github.com/containrrr/watchtower) has been unmaintained since November 2023, and its Docker client negotiates API version 1.25 — which Docker 29 refuses (`client version 1.25 is too old`), leaving the container dead on arrival. Use the maintained community fork, [nicholas-fedor/watchtower](https://github.com/nicholas-fedor/watchtower) (`nickfedor/watchtower`), which takes the same flags and the same `com.centurylinklabs.watchtower.*` labels.
 

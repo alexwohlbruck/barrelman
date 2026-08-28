@@ -739,8 +739,8 @@ docker compose up -d
 > enough to upgrade in place. If you'd rather not be surprised, pull during a
 > window where you can run the rebuild.
 
-Watchtower can automate the pull, with two caveats worth knowing before you rely
-on it:
+Watchtower can automate the pull, with three caveats worth knowing before you
+rely on it:
 
 - **It only manages containers on its own Docker host.** Watchtower watches the
   Docker socket it is given and nothing else, so an instance running on a
@@ -752,6 +752,25 @@ on it:
   engine version with no one watching. Either pin those two services to explicit
   version tags, or run Watchtower with `--label-enable` and label only the
   stateless services.
+- **It will restart the stack in the middle of a job.** An import runs for
+  hours — a replication update with post-processing has taken nearly twelve —
+  while Watchtower polls hourly, so a push that lands mid-run kills it. The
+  compose file ships a `pre-update` hook on `barrelman-db` and `barrelman-ops`
+  that refuses the restart while a job is running, but it is inert unless
+  Watchtower itself is started with `--enable-lifecycle-hooks`:
+
+  ```yaml
+  services:
+    watchtower:
+      image: nickfedor/watchtower
+      command: --cleanup --interval 3600 --enable-lifecycle-hooks
+  ```
+
+  The hook exits 75 (`EX_TEMPFAIL`), which tells Watchtower to skip that
+  container and ask again on the next poll. The update lands on its own once the
+  job finishes. Both containers need the gate: the worker runs the script, but
+  the SQL runs inside the database container, so restarting either one ends the
+  job.
 
 Note that the original [containrrr/watchtower](https://github.com/containrrr/watchtower)
 has been unmaintained since November 2023, and its Docker client negotiates API
