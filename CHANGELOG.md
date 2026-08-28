@@ -10,6 +10,20 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Added
+
+* Each account's usage is visible from the console's accounts page — the current
+  billing cycle broken down by endpoint group and by key, a lifetime total
+  beside it, and the account's API keys and moderation history in the same
+  place. An account that was abusive last month reads as spotless through a
+  cycle window, which is why the lifetime figure is there
+* Accounts can be deleted outright, not only suspended. Deleting erases the
+  account's keys, usage, credit ledger, abuse signals and its own moderation
+  history, so it is the answer to "remove me" rather than to a troublesome
+  customer — suspension remains the reversible option, and the one that keeps a
+  record. The console asks for the address typed back and the API checks it;
+  your own account and the last remaining administrator are both refused
+
 ## [0.1.0] - 2026-08-28
 
 First tagged release. Barrelman has been running in production for some time;

@@ -127,7 +127,11 @@ indefensible.
 
 ## Moderation
 
-An administrator can suspend an account from `/console/accounts`.
+An administrator can suspend an account from `/console/accounts`. Opening an
+account there shows what it has spent — the current cycle broken down by
+endpoint group and by key, plus a lifetime total, because an account that was
+abusive last month reads as spotless through a cycle window — along with its
+keys and everything ever recorded against it.
 
 Suspension takes effect **immediately**, not whenever a cache expires. Three
 things hold access open and all three are torn down together:
@@ -161,6 +165,36 @@ current state, which tells you nothing about who decided what, or why.
 
 An administrator cannot suspend their own account; it is almost always a misclick
 on the wrong row.
+
+### Deleting an account
+
+Suspension is the reversible option and the one that keeps a record. Deletion
+keeps nothing: the account's API keys, usage counters, credit ledger, abuse
+signals and its own moderation history all go with it, by `ON DELETE CASCADE`.
+Afterwards there is no evidence the account existed, which is the point when
+someone asks to be removed and the reason it is the wrong tool for a
+troublesome customer.
+
+The console asks the operator to type the address back, and the API checks that
+confirmation too — an admin-scoped key reaches the route with a one-line curl:
+
+```bash
+curl -X DELETE https://your-instance/admin/users/<id> \
+  -H "authorization: Bearer $BARRELMAN_ADMIN_SCOPED_KEY" \
+  -H "content-type: application/json" \
+  -d '{"email":"them@example.com"}'
+```
+
+Two accounts are refused: your own, and the last remaining administrator —
+with no shared admin secret, an instance with zero admins can only be recovered
+from psql. Delete an administrator by demoting them first.
+
+The only trace left is a line in the server log, since the audit trail is one
+of the things being erased:
+
+```
+[moderation] deleted account usr_… <them@example.com> by usr_…
+```
 
 ## Terms of service
 

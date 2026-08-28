@@ -456,6 +456,28 @@ export interface TermsState {
   outstanding: boolean
 }
 
+/** Everything an account has ever spent, not just the current cycle. */
+export interface UsageTotals {
+  requests: number
+  credits: number
+  rejected: number
+  /** Null when the account has never made a metered request. */
+  firstDay: string | null
+  lastDay: string | null
+}
+
+export type ModerationAction = 'suspend' | 'unsuspend' | 'warn' | 'note' | 'flag' | 'dismiss-flag'
+
+export interface ModerationEntry {
+  id: string
+  action: ModerationAction
+  kind: SuspensionKind | null
+  reason: string | null
+  /** The acting administrator's user id, or `system` for an automated rule. */
+  actorId: string
+  createdAt: string
+}
+
 export interface AdminUser {
   id: string
   email: string
@@ -465,6 +487,28 @@ export interface AdminUser {
   createdAt: string
   suspension: SuspensionInfo
   terms: TermsState
+}
+
+/** `GET /admin/users/:id` — the operator's view of one account. */
+export interface AdminUserDetail {
+  user: {
+    id: string
+    email: string
+    name: string | null
+    role: UserRole
+    plan: Plan
+    createdAt: string
+    /** Only ever a hash; the address itself was never stored. */
+    signupIpHash: string | null
+  }
+  suspension: SuspensionInfo
+  terms: TermsState
+  keys: ApiKeySummary[]
+  balance: CreditBalance | null
+  usage: UsageReport
+  lifetime: UsageTotals | null
+  history: ModerationEntry[]
+  plans: Plan[]
 }
 
 export type AbuseSignalKind =

@@ -14,6 +14,7 @@ import { LastAdminError } from '../services/accounts.service'
 const BASE = 'http://localhost'
 const ADMIN_ID = 'admin-1'
 const TARGET_ID = 'user-2'
+const TARGET_EMAIL = 'scraper@example.com'
 
 function suspendedUser(overrides: Record<string, unknown> = {}) {
   return {
@@ -40,6 +41,7 @@ function deps(overrides: Partial<AdminUserDeps> = {}): Partial<AdminUserDeps> {
     // which short-circuits correctly. Call counts are tracked by hand below.
     guard: (async () => undefined) as never,
     suspendUser: mock(async () => suspendedUser()),
+    deleteAccount: mock(async () => ({ id: TARGET_ID, email: TARGET_EMAIL }) as never),
     unsuspendUser: mock(async () => ({ ...suspendedUser(), suspendedAt: null, suspendedReason: null }) as never),
     warnUser: mock(async () => undefined),
     addNote: mock(async () => undefined),
@@ -48,7 +50,7 @@ function deps(overrides: Partial<AdminUserDeps> = {}): Partial<AdminUserDeps> {
     countOpenSignals: mock(async () => 0),
     setPlan: mock(async () => undefined),
     invalidateUserKeys: mock(() => undefined),
-    findUserById: mock(async () => ({ id: TARGET_ID, plan: 'free' }) as never),
+    findUserById: mock(async () => ({ id: TARGET_ID, email: TARGET_EMAIL, plan: 'free' }) as never),
     setUserRole: mock(async () => ({ id: TARGET_ID, role: 'admin' }) as never),
     resolveApiKey: mock(async () => null),
     resolveSession: adminSession(),
@@ -63,6 +65,14 @@ function post(path: string, body: unknown, token?: string) {
       'content-type': 'application/json',
       ...(token ? { authorization: `Bearer ${token}` } : {}),
     },
+    body: JSON.stringify(body),
+  })
+}
+
+function del(path: string, body: unknown) {
+  return new Request(`${BASE}${path}`, {
+    method: 'DELETE',
+    headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body),
   })
 }
@@ -440,5 +450,91 @@ describe('POST /admin/users/:id/role', () => {
     const res = await app.handle(post(`/admin/users/${TARGET_ID}/role`, { role: 'user' }))
     expect(res.status).toBe(200)
     expect(d.setUserRole).not.toHaveBeenCalled()
+  })
+})
+
+describe('DELETE /admin/users/:id', () => {
+  test('deletes the account and names the actor', async () => {
+    const d = deps()
+    const app = createAdminUserRoutes(d)
+
+    const res = await app.handle(del(`/admin/users/${TARGET_ID}`, { email: TARGET_EMAIL }))
+
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ deleted: { id: TARGET_ID, email: TARGET_EMAIL } })
+    expect(d.deleteAccount).toHaveBeenCalledWith(TARGET_ID, ADMIN_ID)
+  })
+
+  // The typed confirmation is checked server-side, not only in the console:
+  // an admin-scoped API key reaches this route with a one-line curl.
+  test('refuses a confirmation that does not match the account', async () => {
+    const d = deps()
+    const app = createAdminUserRoutes(d)
+
+    const res = await app.handle(del(`/admin/users/${TARGET_ID}`, { email: 'someone-else@example.com' }))
+
+    expect(res.status).toBe(400)
+    expect(d.deleteAccount).not.toHaveBeenCalled()
+  })
+
+  test('accepts the confirmation regardless of case and padding', async () => {
+    const d = deps()
+    const app = createAdminUserRoutes(d)
+
+    const res = await app.handle(del(`/admin/users/${TARGET_ID}`, { email: `  ${TARGET_EMAIL.toUpperCase()} ` }))
+
+    expect(res.status).toBe(200)
+    expect(d.deleteAccount).toHaveBeenCalled()
+  })
+
+  test('refuses to let an administrator delete themselves', async () => {
+    const d = deps({
+      findUserById: mock(async () => ({ id: ADMIN_ID, email: 'admin@example.com', plan: 'free' }) as never),
+    })
+    const app = createAdminUserRoutes(d)
+
+    const res = await app.handle(del(`/admin/users/${ADMIN_ID}`, { email: 'admin@example.com' }))
+
+    // Unlike a suspension, there is nothing to reinstate afterwards.
+    expect(res.status).toBe(400)
+    expect(d.deleteAccount).not.toHaveBeenCalled()
+  })
+
+  test('surfaces the last-administrator guard as 409', async () => {
+    const d = deps({
+      deleteAccount: mock(async () => {
+        throw new LastAdminError('This is the only administrator.')
+      }),
+    })
+    const app = createAdminUserRoutes(d)
+
+    const res = await app.handle(del(`/admin/users/${TARGET_ID}`, { email: TARGET_EMAIL }))
+
+    expect(res.status).toBe(409)
+    expect((await res.json()).error).toContain('only administrator')
+  })
+
+  test('404s for an unknown account', async () => {
+    const d = deps({ findUserById: mock(async () => null) })
+    const app = createAdminUserRoutes(d)
+
+    const res = await app.handle(del('/admin/users/nope', { email: TARGET_EMAIL }))
+
+    expect(res.status).toBe(404)
+    expect(d.deleteAccount).not.toHaveBeenCalled()
+  })
+
+  test('runs the admin guard', async () => {
+    const guard = async ({ set }: { set: { status?: number } }) => {
+      set.status = 403
+      return { error: 'Administrator access required' }
+    }
+    const d = deps({ guard: guard as never })
+    const app = createAdminUserRoutes(d)
+
+    const res = await app.handle(del(`/admin/users/${TARGET_ID}`, { email: TARGET_EMAIL }))
+
+    expect(res.status).toBe(403)
+    expect(d.deleteAccount).not.toHaveBeenCalled()
   })
 })
