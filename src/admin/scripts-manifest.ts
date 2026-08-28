@@ -505,6 +505,19 @@ export const SCRIPTS: ScriptDef[] = [
     source: 'import/create-transit-views.sql',
     notes: 'Uses DROP VIEW … CASCADE — dependent views are dropped and rebuilt.',
   },
+  {
+    id: 'detail-views',
+    name: 'Rebuild Map Detail Tile Views',
+    description:
+      'Recreate the map detail vector-tile source views (parking surfaces, street trees, tree rows, street furniture) that Martin serves.',
+    category: 'osm',
+    danger: 'caution',
+    longRunning: false,
+    confirm: true,
+    exec: { kind: 'internal', handler: 'sql:create-detail-views.sql' },
+    source: 'import/create-detail-views.sql',
+    notes: 'Uses DROP VIEW … CASCADE — dependent views are dropped and rebuilt.',
+  },
 
   // ── GBFS ──────────────────────────────────────────────────────────────
   {
