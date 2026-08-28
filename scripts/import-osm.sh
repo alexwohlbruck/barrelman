@@ -85,6 +85,12 @@ psql "$DATABASE_URL" -f "$PROJECT_DIR/import/post-import.sql"
 # "Source transit_platforms: Unavailable".
 psql "$DATABASE_URL" -f "$PROJECT_DIR/import/create-transit-views.sql"
 
+# Map detail tile views (trees, parking surfaces, street furniture). Like the
+# transit views these are derived purely from geo_places, so they belong to the
+# OSM import. The API also creates them at startup, which is what covers an
+# instance upgrading without a re-import.
+psql "$DATABASE_URL" -f "$PROJECT_DIR/import/create-detail-views.sql"
+
 # ── Step 4: Generate codes from OSM tags ─────────────────────────────────────
 echo "[$(date '+%H:%M:%S')] [4/8] Extracting codes (IATA, ICAO, ref, short_name, alt_name)..."
 psql "$DATABASE_URL" -c "

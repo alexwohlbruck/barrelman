@@ -224,3 +224,90 @@ postgres:
         operator: operator
       buffer: 64
       clip_geom: true
+
+    # ── Map detail (import/create-detail-views.sql) ──────────────────────
+    # Trees, parking surfaces and street furniture. OpenMapTiles has no schema
+    # for any of it, so the basemap can't carry them and they are served here
+    # as their own sources. Zoom ranges match the client's source definitions —
+    # these are dense enough that a level lower would be a very large tile.
+    #
+    # No `bounds`: unlike the transit views these aren't tied to a region with
+    # a known extent, and a self-hoster importing anywhere else would get empty
+    # tiles from a hardcoded one.
+
+    parking_areas:
+      schema: public
+      table: parking_areas
+      srid: 4326
+      geometry_column: geom
+      geometry_type: GEOMETRY
+      id_column: fid
+      minzoom: 13
+      maxzoom: 16
+      properties:
+        id: id
+        parking: parking
+      buffer: 64
+      clip_geom: true
+
+    street_trees:
+      schema: public
+      table: street_trees
+      srid: 4326
+      geometry_column: centroid
+      geometry_type: POINT
+      id_column: fid
+      minzoom: 16
+      maxzoom: 17
+      properties:
+        id: id
+        leaf_type: leaf_type
+        genus: genus
+        species: species
+        taxon: taxon
+        height: height
+        est_height: est_height
+        diameter_crown: diameter_crown
+        circumference: circumference
+        denotation: denotation
+      buffer: 64
+      clip_geom: true
+
+    tree_rows:
+      schema: public
+      table: tree_rows
+      srid: 4326
+      geometry_column: geom
+      geometry_type: GEOMETRY
+      id_column: fid
+      minzoom: 16
+      maxzoom: 17
+      properties:
+        id: id
+        leaf_type: leaf_type
+        genus: genus
+        species: species
+        taxon: taxon
+        height: height
+        est_height: est_height
+        diameter_crown: diameter_crown
+        circumference: circumference
+        denotation: denotation
+      buffer: 64
+      clip_geom: true
+
+    street_furniture:
+      schema: public
+      table: street_furniture
+      srid: 4326
+      geometry_column: centroid
+      geometry_type: POINT
+      id_column: fid
+      minzoom: 17
+      maxzoom: 17
+      properties:
+        id: id
+        kind: kind
+        direction: direction
+      buffer: 64
+      clip_geom: true
