@@ -184,16 +184,16 @@ export async function ensureSchema() {
  * These are also created by `scripts/import-osm.sh`, which covers a fresh
  * install — but only a re-import would create them on an instance that already
  * has its OSM data, and a re-import is a multi-hour job nobody runs to pick up
- * a view. Martin drops a source it cannot resolve at startup and answers
- * "Source … does not exist" per request, so the failure is quiet: the rest of
- * the tiles keep working and only these layers are missing.
+ * a view. Creating them at startup is what makes an upgrade self-healing, and a
+ * view is cheap to define: no data is read or written.
  *
- * That is not hypothetical. The transit views have the same shape and no such
- * hook, and on an instance that imported before they were added to the import
- * script they are configured in `martin-config.yaml` but absent from the
- * database — their tiles have been failing ever since, unnoticed. Recreating
- * these at startup makes the upgrade self-healing instead, and a view is cheap
- * to define: no data is read or written.
+ * Doing it here also keeps `martin-config.yaml` and the database in step. A
+ * source named in that file whose relation is missing is the one failure mode
+ * worth avoiding: the operator note in the deployed config records Martin
+ * treating an unresolved source as fatal and crash-looping, which takes every
+ * other layer down with it, and the config's own pmtiles comment documents the
+ * same behaviour for a missing .pmtiles file. Creating the views before Martin
+ * is ever pointed at them sidesteps the question entirely.
  *
  * The SQL file stays the single source of truth — this reads the same one the
  * import script and the console task run, rather than restating it here.
