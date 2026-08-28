@@ -201,6 +201,10 @@ Sign-in codes print to the log without SMTP:
 - Don't merge to main. Branch (`feat/…`, `docs/…`, `fix/…`) and open a PR. `dev`
   is the working branch.
 - Update the Linear ticket status as work progresses, if one is linked.
+- User-visible changes get a `CHANGELOG.md` entry under `## [Unreleased]`, in
+  prose an operator would read. Releases are cut from that section — bump
+  `version` in `package.json` on `main` and the pipeline tags, builds, pushes
+  and writes the GitHub Release. See "Cutting a release" in `docs/development.md`.
 - `bun`, not `npm`. Commits short (5–20 words), distinct and logical.
 - Keep code modular and DRY; move code to the right module. Comment *why* for
   non-obvious choices.
