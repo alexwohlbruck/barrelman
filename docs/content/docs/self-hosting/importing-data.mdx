@@ -425,6 +425,7 @@ for, so a client drawing them has nowhere else to get them:
 | `street_trees` | point | 16–17 | Individual trees, with `leaf_type`, genus/species, height and trunk girth where a surveyor recorded them |
 | `tree_rows` | line | 16–17 | Tree-lined streets, which OSM maps as one line rather than a tree per node |
 | `street_furniture` | point | 17 | Benches, bins and recycling containers, with the bearing a bench faces |
+| `buildings_3d` | polygon | 14–16 | Building outlines and `building:part`s, with `hide_3d` marking the outlines a 3D client must not draw, plus wall and roof colour |
 
 They are views over `geo_places` (`import/create-detail-views.sql`), so they
 need no extra import — the OSM import already keeps every tagged node and way
@@ -435,6 +436,23 @@ re-import.
 The zoom floors are deliberate. Trees are the densest thing in the database on a
 city extract — a few hundred thousand rows is normal — so a level lower is a
 very large tile for something invisible at that scale.
+
+`buildings_3d` is the one that is not a plain view. OpenStreetMap maps a detailed
+building twice — an outline tagged `building=*` and `building:part=*` polygons
+inside it holding the real heights — and a 3D client must draw the parts and not
+the outline, or it draws both and they z-fight. OpenMapTiles marks the outline
+with `hide_3d`; working out which outlines contain a part is a spatial join, and
+a join cannot be pushed into Martin's per-tile filter, so this one is
+MATERIALIZED and computed once.
+
+That means it comes into existence empty. `scripts/import-osm.sh` refreshes it
+after an import, and the API refreshes it in the background on startup if it is
+still empty, so an instance upgrading without a re-import fills it once and then
+leaves it alone. It also carries `roof:colour`, which the OpenMapTiles schema has
+no field for at all.
+
+Changing its definition needs `DROP MATERIALIZED VIEW buildings_3d` first — it is
+created `IF NOT EXISTS`, so that a restart cannot blank a populated view.
 
 Those last two are worth running as a pair. Stops live in PostGIS while routing comes from MOTIS's own dataset, so a stack that skipped step 2c answers the first happily and returns nothing useful for the second.
 

@@ -175,6 +175,11 @@ export async function ensureSchema() {
 
   await ensureDetailViews()
   await ensureBrandCatalogSchema()
+
+  // Not awaited: the 3D buildings view is a spatial join over every building in
+  // the region and takes minutes on a large extract. Startup must not wait on
+  // it, and nothing else does — Martin serves the view empty until it lands.
+  void populateBuildings3d()
 }
 
 /**
@@ -206,6 +211,36 @@ async function ensureDetailViews() {
     // Never block startup on this. A failure here costs the detail layers;
     // throwing would cost the whole API.
     console.error('[schema] could not create map detail views:', err)
+  }
+}
+
+/**
+ * Populate `buildings_3d` if it is still empty.
+ *
+ * `create-detail-views.sql` creates it WITH NO DATA so startup stays cheap, and
+ * `scripts/import-osm.sh` refreshes it after an import. Neither covers the case
+ * the detail views were written for: an existing instance upgrading without a
+ * re-import, which is how every other source in that file arrives. So an empty
+ * view is filled here, once, in the background.
+ *
+ * Only when empty. A populated view is left alone — refreshing it costs the
+ * same spatial join, and buildings only change when OSM data is re-imported,
+ * which is where the refresh belongs.
+ */
+async function populateBuildings3d() {
+  const client = maintenanceConnection()
+  try {
+    const rows = await client<{ populated: boolean }[]>`
+      SELECT relispopulated AS populated FROM pg_class WHERE relname = 'buildings_3d'
+    `
+    if (rows.length === 0 || rows[0].populated) return
+    await client`REFRESH MATERIALIZED VIEW buildings_3d`
+  } catch (err) {
+    // Same bargain as ensureDetailViews: a failure here costs the 3D building
+    // layer, and throwing from an un-awaited task would take the process down.
+    console.error('[schema] could not populate buildings_3d:', err)
+  } finally {
+    await client.end({ timeout: 5 })
   }
 }
 
