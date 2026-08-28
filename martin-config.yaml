@@ -1,5 +1,19 @@
 # Martin tile server configuration
 # Serves vector tiles from PostGIS geo_places, plus an optional PMTiles basemap.
+#
+# ⚠ Do NOT copy this file over a running deployment's copy.
+#
+# This is the defaults-for-a-fresh-install version. A deployment's config is a
+# host file (bind-mounted at ./martin-config.yaml), not something an image
+# update touches, so it drifts on purpose — a real one is likely to have the
+# pmtiles basemap below *enabled*, and to have dropped source entries whose
+# relations that instance has never built. Overwriting it wholesale therefore
+# removes the basemap and every other local decision along with it.
+#
+# To roll out a new source: append just that entry to the deployment's own
+# file, create its relation first, and restart Martin afterwards — it resolves
+# its source list at startup, so a Martin restarted before the relation exists
+# will not pick it up.
 
 # Optional basemap, disabled by default.
 #
