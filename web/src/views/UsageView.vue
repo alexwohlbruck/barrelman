@@ -19,6 +19,7 @@ import CardTitle from '@/components/ui/CardTitle.vue'
 import Spinner from '@/components/ui/Spinner.vue'
 import { getApiKeys, getCredits, getUsage } from '@/lib/api'
 import { toast } from '@/lib/toast'
+import { creditsPerDay, formatCycleDate, keyLabel as labelForKey, shortDay, totalsByEndpoint } from '@/lib/usage'
 import { formatNumber } from '@/lib/utils'
 import type { ApiKeySummary, CreditBalance, UsageReport } from '@/lib/types'
 
@@ -27,29 +28,8 @@ const usage = ref<UsageReport | null>(null)
 const keys = ref<ApiKeySummary[]>([])
 const loading = ref(true)
 
-const byDay = computed(() => {
-  if (!usage.value) return []
-  const totals = new Map<string, number>()
-  for (const bucket of usage.value.daily) {
-    totals.set(bucket.day, (totals.get(bucket.day) ?? 0) + bucket.credits)
-  }
-  return [...totals.entries()].map(([day, credits]) => ({ day, credits })).sort((a, b) => a.day.localeCompare(b.day))
-})
-
-const byEndpoint = computed(() => {
-  if (!usage.value) return []
-  const totals = new Map<string, { requests: number; credits: number; rejected: number }>()
-  for (const bucket of usage.value.daily) {
-    const current = totals.get(bucket.endpoint) ?? { requests: 0, credits: 0, rejected: 0 }
-    current.requests += bucket.requests
-    current.credits += bucket.credits
-    current.rejected += bucket.rejected
-    totals.set(bucket.endpoint, current)
-  }
-  return [...totals.entries()]
-    .map(([endpoint, value]) => ({ endpoint, ...value }))
-    .sort((a, b) => b.credits - a.credits)
-})
+const byDay = computed(() => creditsPerDay(usage.value?.daily ?? []))
+const byEndpoint = computed(() => totalsByEndpoint(usage.value?.daily ?? []))
 
 const totalRequests = computed(() => byEndpoint.value.reduce((sum, row) => sum + row.requests, 0))
 const totalRejected = computed(() => byEndpoint.value.reduce((sum, row) => sum + row.rejected, 0))
@@ -63,9 +43,7 @@ const usedPercent = computed(() => {
 const keyNames = computed(() => new Map(keys.value.map((key) => [key.id, key.name])))
 
 function keyLabel(id: string) {
-  // '-' is the sentinel the metering layer uses for usage with no key.
-  if (id === '-') return 'No key'
-  return keyNames.value.get(id) ?? 'Deleted key'
+  return labelForKey(id, keyNames.value)
 }
 
 async function load() {
@@ -87,20 +65,6 @@ async function load() {
 }
 
 onMounted(load)
-
-function shortDay(day: string) {
-  return day.slice(5)
-}
-
-/**
- * Billing cycles are defined in UTC, so the reset date must be rendered in UTC
- * too. Formatting the UTC-midnight boundary in local time shows the previous
- * day to everyone west of Greenwich — "resets Aug 31" for a cycle that actually
- * rolls over on Sep 1.
- */
-function formatCycleDate(iso: string) {
-  return new Date(iso).toLocaleDateString(undefined, { dateStyle: 'medium', timeZone: 'UTC' })
-}
 </script>
 
 <template>
