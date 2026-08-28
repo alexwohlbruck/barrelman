@@ -175,6 +175,23 @@ export async function claimNextProcessJob(workerId: string): Promise<Job | null>
   return rows.length ? rowToJob(rows[0]) : null
 }
 
+/**
+ * Hand a claimed job back to the queue so the next worker to poll picks it up.
+ *
+ * Two callers, both cases where this worker cannot run a job it already claimed:
+ * another run holds the script's advisory lock, or the worker is shutting down
+ * mid-run. Clearing the run-specific columns matters — a requeued job that kept
+ * its old progress would render in the console as though it were still part way
+ * through a run that no longer exists.
+ */
+export async function requeue(jobId: string): Promise<void> {
+  await sql`
+    UPDATE ops_jobs
+    SET status = 'queued', worker_id = NULL, started_at = NULL, heartbeat_at = NULL,
+        progress = NULL, progress_label = NULL, stages = NULL, sub_fraction = NULL
+    WHERE id = ${jobId}`
+}
+
 export async function appendLogs(
   jobId: string,
   lines: Array<{ stream: LogStream; text: string }>,

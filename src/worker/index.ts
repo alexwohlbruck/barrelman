@@ -13,7 +13,7 @@ import { resolve } from 'node:path'
 import { hostname } from 'node:os'
 import { randomUUID } from 'node:crypto'
 import postgres from 'postgres'
-import { connection as sql, dbUrl, onnotice } from '../db'
+import { dbUrl, onnotice } from '../db'
 import { getScript } from '../admin/scripts-manifest'
 import { buildInvocation, advisoryKeyFor, isExclusive, type Job } from '../services/job-invocation'
 import * as store from '../services/ops-job-store'
@@ -24,8 +24,52 @@ const POLL_MS = 2000
 const HEARTBEAT_MS = 10_000
 const CANCEL_CHECK_MS = 3000
 const LOG_FLUSH_MS = 500
+const SHUTDOWN_GRACE_MS = 8000
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+
+// Watchtower, `docker compose up -d` and a plain `docker restart` all stop this
+// container with SIGTERM while a job may be hours into its run. With no handler
+// the process is SIGKILLed once the stop timeout expires and the job sits
+// `running` until reapStaleJobs fails it a minute later — an OSM update lost
+// 2h19m of work that way when an hourly Watchtower poll landed mid-import.
+// Hand the job back to the queue instead. Every step of the import pipeline is
+// idempotent, so the worker that replaces us re-running it is a resume at
+// coarse granularity rather than a loss.
+//
+// This does not reach the work itself: the scripts do theirs as `docker exec
+// barrelman-db psql`, and killing the local exec client leaves the process on
+// the other side running. That is moot when the whole stack stops together,
+// but restarting ops alone can leave the previous psql running alongside the
+// requeued job's. They contend on row locks, and the statements are idempotent,
+// so the result is slow rather than wrong.
+let active: { jobId: string; proc?: ReturnType<typeof Bun.spawn> } | null = null
+let shuttingDown = false
+
+async function shutdown(signal: string): Promise<void> {
+  if (shuttingDown) return
+  shuttingDown = true
+  const job = active
+  if (job) {
+    try {
+      job.proc?.kill()
+      // Let the child unwind first. Docker's default stop timeout is 10s and
+      // Watchtower's is 30s, so this grace period stays inside both.
+      if (job.proc) await Promise.race([job.proc.exited, sleep(SHUTDOWN_GRACE_MS)])
+      await store.appendLogs(job.jobId, [
+        { stream: 'system', text: `⨯ Worker received ${signal} — job returned to the queue` },
+      ])
+      await store.requeue(job.jobId)
+    } catch (err) {
+      console.error('[ops-worker] failed to requeue on shutdown:', err)
+    }
+  }
+  process.exit(0)
+}
+
+for (const signal of ['SIGTERM', 'SIGINT'] as const) {
+  process.on(signal, () => void shutdown(signal))
+}
 
 async function pumpStream(stream: ReadableStream<Uint8Array>, onLine: (l: string) => void) {
   const reader = stream.getReader()
@@ -65,7 +109,7 @@ async function runJob(job: Job): Promise<void> {
     const [{ locked }] = await lockConn`SELECT pg_try_advisory_lock(${key}) AS locked`
     if (!locked) {
       await store.appendLogs(job.id, [{ stream: 'system', text: 'Another run of this script is in progress — requeued' }])
-      await sql`UPDATE ops_jobs SET status='queued', worker_id=NULL, started_at=NULL WHERE id=${job.id}`
+      await store.requeue(job.id)
       await lockConn.end()
       return
     }
@@ -77,6 +121,8 @@ async function runJob(job: Job): Promise<void> {
     if (lockConn) await lockConn.end()
     return
   }
+
+  active = { jobId: job.id }
 
   const buf: Array<{ stream: 'stdout' | 'stderr' | 'system'; text: string }> = []
   const flush = async () => {
@@ -113,12 +159,16 @@ async function runJob(job: Job): Promise<void> {
       stdout: 'pipe',
       stderr: 'pipe',
     })
+    active.proc = proc
     const so = pumpStream(proc.stdout as ReadableStream<Uint8Array>, (l) => buf.push({ stream: 'stdout', text: l }))
     const se = pumpStream(proc.stderr as ReadableStream<Uint8Array>, (l) => buf.push({ stream: 'stderr', text: l }))
     const [, , code] = await Promise.all([so, se, proc.exited])
     cleanup()
     await flush()
-    if (canceled) {
+    if (shuttingDown) {
+      // shutdown() has already handed this job back to the queue. Writing a
+      // terminal status here would overwrite that and lose the run for good.
+    } else if (canceled) {
       await store.setStatus(job.id, 'canceled', code)
     } else if (code === 0) {
       await store.setStatus(job.id, 'succeeded', 0)
@@ -131,8 +181,10 @@ async function runJob(job: Job): Promise<void> {
     await flush()
     const msg = err instanceof Error ? err.message : String(err)
     await store.appendLogs(job.id, [{ stream: 'stderr', text: `Failed to run: ${msg}` }])
-    await store.setStatus(job.id, 'failed', 1, msg)
+    // Same reason as the shutdown branch above: don't overwrite the requeue.
+    if (!shuttingDown) await store.setStatus(job.id, 'failed', 1, msg)
   } finally {
+    active = null
     if (lockConn) {
       try {
         await lockConn`SELECT pg_advisory_unlock(${key})`
@@ -148,6 +200,11 @@ async function main() {
   await store.ensureOpsJobsSchema()
   console.log(`[ops-worker] ${WORKER_ID} started; polling for process jobs from the DB queue`)
   for (;;) {
+    // Claiming a job now would race the requeue shutdown() is in the middle of.
+    if (shuttingDown) {
+      await sleep(POLL_MS)
+      continue
+    }
     let ranSomething = false
     try {
       await store.reapStaleJobs()

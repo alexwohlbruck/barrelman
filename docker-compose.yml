@@ -91,6 +91,23 @@ services:
     # should own the box.
     mem_limit: ${BARRELMAN_DB_MEM_LIMIT:-2g}
 
+    # Watchtower asks before it restarts this container, and a job in flight
+    # says no. An OSM update runs its SQL as `docker exec barrelman-db psql`, so
+    # restarting the database kills an import just as surely as restarting the
+    # worker — a run on 2026-08-24 died 2h19m in when the hourly poll landed
+    # mid-import. Exit 75 (EX_TEMPFAIL) means "skip this container, ask again
+    # next poll"; anything other than 0 or 75 aborts Watchtower's whole update
+    # run, so this fails closed to 75 when it cannot reach the database at all.
+    #
+    # Inert unless Watchtower itself runs with --enable-lifecycle-hooks.
+    labels:
+      com.centurylinklabs.watchtower.lifecycle.pre-update: >-
+        psql -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" -tAc
+        "SELECT count(*) FROM ops_jobs WHERE status = 'running'"
+        | grep -qx 0 || exit 75
+      # Minutes, not seconds. 1 is the default and is ample for one COUNT.
+      com.centurylinklabs.watchtower.lifecycle.pre-update-timeout: "1"
+
   martin:
     container_name: barrelman-martin
     # Deliberately unpinned. Martin renders tiles from PostGIS on each request
@@ -381,3 +398,14 @@ services:
       - ./data/portolan:/portolan-data
     depends_on:
       - barrelman-db
+
+    # The same gate as barrelman-db: don't restart the worker out from under a
+    # job it is hours into running. This image carries no psql, so the check
+    # goes through the database container over the docker socket it already
+    # mounts. See barrelman-db above for what the exit codes mean.
+    labels:
+      com.centurylinklabs.watchtower.lifecycle.pre-update: >-
+        docker exec barrelman-db psql "$$DATABASE_URL" -tAc
+        "SELECT count(*) FROM ops_jobs WHERE status = 'running'"
+        | grep -qx 0 || exit 75
+      com.centurylinklabs.watchtower.lifecycle.pre-update-timeout: "1"
