@@ -414,6 +414,28 @@ only prominent features at low zoom. Left as-is, a zoomed-out map will pull tens
 of megabytes per tile and stall the database behind it.
 </Callout>
 
+### Map detail sources
+
+Four sources carry detail that a standard OpenMapTiles basemap has no schema
+for, so a client drawing them has nowhere else to get them:
+
+| Source | Geometry | Zooms | What it carries |
+|---|---|---|---|
+| `parking_areas` | polygon | 13–16 | Parking surfaces, with the raw `parking` tag so a client can drop multi-storey and underground |
+| `street_trees` | point | 16–17 | Individual trees, with `leaf_type`, genus/species, height and trunk girth where a surveyor recorded them |
+| `tree_rows` | line | 16–17 | Tree-lined streets, which OSM maps as one line rather than a tree per node |
+| `street_furniture` | point | 17 | Benches, bins and recycling containers, with the bearing a bench faces |
+
+They are views over `geo_places` (`import/create-detail-views.sql`), so they
+need no extra import — the OSM import already keeps every tagged node and way
+with its full tag set. `scripts/import-osm.sh` creates them, and so does the API
+at startup, which means an existing instance picks them up on upgrade without a
+re-import.
+
+The zoom floors are deliberate. Trees are the densest thing in the database on a
+city extract — a few hundred thousand rows is normal — so a level lower is a
+very large tile for something invisible at that scale.
+
 Those last two are worth running as a pair. Stops live in PostGIS while routing comes from MOTIS's own dataset, so a stack that skipped step 2c answers the first happily and returns nothing useful for the second.
 
 Adjust the coordinates to somewhere inside your imported region — the most common cause of an empty-but-successful response is querying outside your data.

@@ -66,5 +66,6 @@ export const INTERNAL_HANDLERS: Record<string, (log: LogFn) => Promise<void>> = 
   // raw SQL-file tasks
   'sql:create-station-links.sql': (log) => runSqlFile(log, 'create-station-links.sql'),
   'sql:create-transit-views.sql': (log) => runSqlFile(log, 'create-transit-views.sql'),
+  'sql:create-detail-views.sql': (log) => runSqlFile(log, 'create-detail-views.sql'),
   'sql:generate-intersections.sql': (log) => runSqlFile(log, 'generate-intersections.sql'),
 }

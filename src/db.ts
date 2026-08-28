@@ -1,5 +1,7 @@
 import postgres from 'postgres'
 import { drizzle } from 'drizzle-orm/postgres-js'
+import { readFileSync } from 'fs'
+import { join } from 'path'
 import { envNumber } from './config/env'
 
 export const dbUrl = process.env.DATABASE_URL || 'postgresql://barrelman:barrelman@localhost:5434/barrelman'
@@ -171,7 +173,40 @@ export async function ensureSchema() {
       ON geo_places USING gist (name gist_trgm_ops(siglen=128)) WHERE name IS NOT NULL;
   `)
 
+  await ensureDetailViews()
   await ensureBrandCatalogSchema()
+}
+
+/**
+ * Create the map detail tile views (parking surfaces, trees, tree rows, street
+ * furniture) that Martin serves.
+ *
+ * These are also created by `scripts/import-osm.sh`, which covers a fresh
+ * install — but only a re-import would create them on an instance that already
+ * has its OSM data, and a re-import is a multi-hour job nobody runs to pick up
+ * a view. Martin drops a source it cannot resolve at startup and answers
+ * "Source … does not exist" per request, so the failure is quiet: the rest of
+ * the tiles keep working and only these layers are missing.
+ *
+ * That is not hypothetical. The transit views have the same shape and no such
+ * hook, and on an instance that imported before they were added to the import
+ * script they are configured in `martin-config.yaml` but absent from the
+ * database — their tiles have been failing ever since, unnoticed. Recreating
+ * these at startup makes the upgrade self-healing instead, and a view is cheap
+ * to define: no data is read or written.
+ *
+ * The SQL file stays the single source of truth — this reads the same one the
+ * import script and the console task run, rather than restating it here.
+ */
+async function ensureDetailViews() {
+  try {
+    const path = join(import.meta.dir, '../import/create-detail-views.sql')
+    await runDdl(readFileSync(path, 'utf-8'))
+  } catch (err) {
+    // Never block startup on this. A failure here costs the detail layers;
+    // throwing would cost the whole API.
+    console.error('[schema] could not create map detail views:', err)
+  }
 }
 
 /**
