@@ -170,6 +170,16 @@ services:
     # upgrade instead.
     image: ghcr.io/motis-project/motis:latest
     restart: unless-stopped
+    # MOTIS logs a timer pair per realtime poll — `[scoped_timer] [rt update]`
+    # and friends — at a few lines a second, forever. Docker's json-file driver
+    # is unbounded by default, so that had grown to 18 GB on one dev box and
+    # 7.7 GB in production, on disks that also hold the OSM database. Nothing
+    # reads it beyond the last few minutes of a debugging session.
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
     working_dir: /data
     command: ["/motis", "server", "/data"]
     volumes:
