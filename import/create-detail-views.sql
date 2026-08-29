@@ -133,6 +133,14 @@ WHERE geom_type = 'point'
 -- Changing the SELECT below therefore needs the view dropped by hand, since
 -- IF NOT EXISTS will not redefine one that is already there:
 --   DROP MATERIALIZED VIEW buildings_3d;  -- then re-run this file
+--
+-- Order matters on a deployment that does not have this view yet. Reading a
+-- materialized view that has never been refreshed raises rather than returning
+-- no rows, so between this statement and the first refresh the view exists and
+-- is unreadable — and Martin validates every source at startup. Create it,
+-- refresh it, and only then let Martin see it; `--on-invalid warn` in
+-- docker-compose.yml is what keeps a mistake here from taking the whole tile
+-- server down rather than just this layer.
 CREATE MATERIALIZED VIEW IF NOT EXISTS buildings_3d AS
 WITH shapes AS (
   SELECT (osm_id * 4 + CASE osm_type WHEN 'N' THEN 0 WHEN 'W' THEN 1 ELSE 2 END) as fid,

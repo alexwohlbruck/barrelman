@@ -267,6 +267,19 @@ docker exec barrelman-db psql "$DB_URL" -f /app/import/resolve-parent-context-in
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] [7/8] Rebuilding tsvectors (intersections + new rows)..."
 docker exec barrelman-db psql "$DB_URL" -v scope='intersections' -f /app/import/rebuild-tsvectors.sql
 
+# The 3D buildings view holds rows rather than being computed per request, so a
+# diff that adds or reshapes a building does not reach the tiles until it is
+# rebuilt. Daily, here, for the same reason `import-osm.sh` does it after a full
+# import. Minutes on a large extract.
+#
+# Not CONCURRENTLY: that needs the view already populated, and a first run after
+# an upgrade finds it empty. A plain refresh takes an exclusive lock on the view
+# for the duration, during which Martin cannot read it — which is survivable
+# because `--on-invalid warn` keeps one unreadable source from taking the rest
+# of the tile server down with it. See `martin` in docker-compose.yml.
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Rebuilding the 3D buildings view..."
+docker exec barrelman-db psql "$DB_URL" -c "REFRESH MATERIALIZED VIEW buildings_3d;"
+
 # ── Step 8: ANALYZE ──────────────────────────────────────────────────────────
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] [8/8] Running ANALYZE..."
 docker exec barrelman-db psql "$DB_URL" -c "ANALYZE geo_places; ANALYZE bicycle_ways; ANALYZE bicycle_routes;"
