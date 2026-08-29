@@ -146,11 +146,52 @@ WITH shapes AS (
     AND (COALESCE(tags->>'building', 'no') <> 'no'
       OR COALESCE(tags->>'building:part', 'no') <> 'no')
 ),
--- One representative point per part, which is what the containment test needs:
--- ST_Contains against a point is far cheaper than against a polygon, and a part
--- is by definition inside the outline it belongs to.
-parts AS (
-  SELECT geom, ST_PointOnSurface(geom) as pt FROM shapes WHERE is_part
+-- How much of each outline its own parts cover.
+--
+-- Two separate questions, and conflating them is what makes a naive
+-- implementation eat buildings.
+--
+-- *Which parts belong to this outline.* S3DB says a part belongs to the
+-- outline it is inside, so this is containment — but not a bare
+-- `ST_Contains`, because a part clipped by an import boundary or drawn a
+-- fraction outside its own outline would then belong to nothing. 99% of the
+-- part's area is OSM2World's threshold and it is the right one: generous
+-- enough for hand-drawn geometry, tight enough that a row house does not
+-- adopt its neighbour's parts through a shared wall. A representative point
+-- would be cheaper, and was what this did before, but a point says nothing
+-- about how much of the part is actually inside — an L-shaped part lying
+-- mostly over the building next door can still put its centre here.
+--
+-- *Whether they cover enough of it to stand in for it.* The wiki says the
+-- parts should fill the outline and that a filled outline is not rendered,
+-- but plenty of real buildings carry one small part — a rooftop plant room,
+-- a lift overrun — on an otherwise unmodelled footprint. Dropping the outline
+-- there deletes the building and leaves a box floating where its roof was.
+-- So the outline goes only when the parts cover 90% of it, again OSM2World's
+-- number, and otherwise it draws in full with the parts on top of it.
+--
+-- Not F4Map's approach, which subtracts the parts from the outline and draws
+-- the remainder. That is the prettier answer on clean data and a worse one on
+-- real data: an entrance node added to the part but not to the outline leaves
+-- a sliver of building behind, and OSM2World dropped subtraction for exactly
+-- that reason. Whole or nothing has no slivers.
+--
+-- The union is clipped to the outline before measuring, since parts may
+-- overlap each other and a plain sum would read as covered when it is not.
+covered AS (
+  SELECT o.fid,
+         ST_Area(ST_Intersection(ST_Union(p.geom), o.geom)) as covered_area,
+         ST_Area(o.geom) as outline_area
+  FROM shapes o
+  JOIN shapes p
+    ON p.is_part
+   AND p.geom && o.geom
+   AND (ST_Contains(o.geom, p.geom)
+        -- Only for the parts a plain containment misses, since ST_Intersection
+        -- is the expensive half of this join.
+        OR ST_Area(ST_Intersection(o.geom, p.geom)) >= 0.99 * ST_Area(p.geom))
+  WHERE NOT o.is_part
+  GROUP BY o.fid, o.geom
 ),
 -- Heights arrive as free text — "12", "12 m", "~10", "3,5" are all in use — and
 -- a plain cast turns one bad value into a failed tile for the whole area. The
@@ -180,7 +221,8 @@ SELECT m.fid, m.id, m.geom,
        -- The roof, separately. OpenMapTiles has no field for this at all, which
        -- is half the reason for serving buildings ourselves.
        NULLIF(COALESCE(m.tags->>'roof:colour', m.tags->>'roof:color', ''), '')         as roof_colour,
-       -- An outline with a part inside it is the one thing that must not draw.
+       -- An outline its parts have replaced is the one thing that must not draw;
+       -- see `covered` above for when that is and is not the case.
        --
        -- TRUE or NULL, never FALSE, which is deliberate on both counts. A vector
        -- tile has no null, so Martin drops the key entirely for the ordinary
@@ -188,11 +230,9 @@ SELECT m.fid, m.id, m.geom,
        -- OpenMapTiles emits `hide_3d`, so a client's `["!has", "hide_3d"]`
        -- filter works unchanged, and the flag costs nothing on the 99% of
        -- buildings that are not part-mapped.
-       CASE WHEN NOT m.is_part AND EXISTS (
-          SELECT 1 FROM parts p
-          WHERE p.geom && m.geom AND ST_Contains(m.geom, p.pt)
-       ) THEN true END as hide_3d
+       CASE WHEN c.covered_area >= 0.9 * c.outline_area THEN true END as hide_3d
 FROM measured m
+LEFT JOIN covered c ON c.fid = m.fid
 WITH NO DATA;
 
 -- Unique on fid so the view can be refreshed CONCURRENTLY, and GIST on geom so
