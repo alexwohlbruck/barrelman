@@ -454,6 +454,21 @@ no field for at all.
 Changing its definition needs `DROP MATERIALIZED VIEW buildings_3d` first — it is
 created `IF NOT EXISTS`, so that a restart cannot blank a populated view.
 
+<Callout type="warn">
+Refresh it before you let Martin see it. Reading a materialized view that has
+never been refreshed raises an error rather than returning no rows, and Martin
+validates every source at startup — so on its default `--on-invalid abort` a
+view that exists but has never been filled is fatal to the *whole* tile server,
+not just to that layer. It exits, the container restarts, it exits again, and
+your basemap goes down with it.
+
+The compose file therefore runs Martin with `--on-invalid warn`, which drops an
+unreadable source from the catalog (it answers 404) and keeps everything else
+serving. Keep that flag if you change the command. On a first deployment the
+safe order is: create the view, `REFRESH MATERIALIZED VIEW buildings_3d`, then
+restart Martin.
+</Callout>
+
 Those last two are worth running as a pair. Stops live in PostGIS while routing comes from MOTIS's own dataset, so a stack that skipped step 2c answers the first happily and returns nothing useful for the second.
 
 Adjust the coordinates to somewhere inside your imported region — the most common cause of an empty-but-successful response is querying outside your data.
