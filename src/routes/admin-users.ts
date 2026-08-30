@@ -20,6 +20,7 @@ import { users } from '../schema/accounts'
 import {
   addNote,
   countOpenSignals,
+  deleteAccount,
   describeSuspension,
   listAbuseSignals,
   moderationHistory,
@@ -30,7 +31,7 @@ import {
 } from '../services/moderation.service'
 import { listApiKeys, invalidateUserKeys, resolveApiKey } from '../services/api-keys.service'
 import { getBalance, setPlan } from '../services/credits.service'
-import { usageByDay, currentCycleStart, utcDay } from '../services/usage.service'
+import { usageByDay, usageByKey, usageTotals, currentCycleStart, utcDay } from '../services/usage.service'
 import {
   describeTerms,
   findUserById,
@@ -53,6 +54,7 @@ const SUSPENSION_KINDS = ['tos-violation', 'abuse', 'automated-abuse', 'billing'
 export interface AdminUserDeps {
   suspendUser: typeof suspendUser
   unsuspendUser: typeof unsuspendUser
+  deleteAccount: typeof deleteAccount
   setUserRole: typeof setUserRole
   resolveApiKey: typeof resolveApiKey
   warnUser: typeof warnUser
@@ -70,6 +72,7 @@ export interface AdminUserDeps {
 const defaultDeps: AdminUserDeps = {
   suspendUser,
   unsuspendUser,
+  deleteAccount,
   setUserRole,
   resolveApiKey,
   warnUser,
@@ -186,10 +189,15 @@ export function createAdminUserRoutes(overrides: Partial<AdminUserDeps> = {}) {
         return { error: 'Account not found' }
       }
 
-      const [keys, balance, usage, history] = await Promise.all([
+      const from = currentCycleStart()
+      const to = utcDay()
+
+      const [keys, balance, daily, byKey, lifetime, history] = await Promise.all([
         listApiKeys(account.id, true),
         getBalance(account.id).catch(() => null),
-        usageByDay(account.id, currentCycleStart(), utcDay()).catch(() => []),
+        usageByDay(account.id, from, to).catch(() => []),
+        usageByKey(account.id, from, to).catch(() => []),
+        usageTotals(account.id).catch(() => null),
         moderationHistory(account.id),
       ])
 
@@ -209,7 +217,11 @@ export function createAdminUserRoutes(overrides: Partial<AdminUserDeps> = {}) {
         terms: describeTerms(account),
         keys,
         balance,
-        usage,
+        // Cycle-shaped, like every other usage view — and `lifetime` beside
+        // it, because an account that was abusive last month reads as
+        // spotless through a cycle window.
+        usage: { from, to, daily, byKey },
+        lifetime,
         history,
         // Every plan, internal ones included: this is the operator's picker,
         // and `demo` exists precisely to be assigned from here.
@@ -217,6 +229,64 @@ export function createAdminUserRoutes(overrides: Partial<AdminUserDeps> = {}) {
       }
     },
     { detail: { summary: 'Account detail with usage, keys and moderation history', tags: ['Admin'] } },
+  )
+
+  .delete(
+    '/users/:id',
+    async ({ params, body, request, set }) => {
+      const actor = await actorFor(request)
+
+      // Deleting yourself is never the intent behind a click on someone
+      // else's row, and unlike a suspension there is no undoing it.
+      if (actor === params.id) {
+        set.status = 400
+        return { error: 'You cannot delete your own account' }
+      }
+
+      const account = await deps.findUserById(params.id)
+      if (!account) {
+        set.status = 404
+        return { error: 'Account not found' }
+      }
+
+      // Typed confirmation, checked server-side rather than only in the
+      // console: this cascades away keys, usage, credits and the audit trail,
+      // and an admin-scoped API key can reach it with a one-line curl.
+      if (body.email.trim().toLowerCase() !== account.email.trim().toLowerCase()) {
+        set.status = 400
+        return { error: 'The email you typed does not match this account' }
+      }
+
+      try {
+        const deleted = await deps.deleteAccount(params.id, actor)
+        if (!deleted) {
+          set.status = 404
+          return { error: 'Account not found' }
+        }
+        return { deleted: { id: deleted.id, email: deleted.email } }
+      } catch (err) {
+        if (err instanceof LastAdminError) {
+          set.status = 409
+          return { error: err.message }
+        }
+        throw err
+      }
+    },
+    {
+      body: t.Object({
+        /** The account's own address, to confirm the right row is going. */
+        email: t.String({ minLength: 1, maxLength: 320 }),
+      }),
+      detail: {
+        summary: 'Delete an account permanently',
+        description:
+          'Erases the account and everything attached to it — API keys, usage, the credit ledger, abuse ' +
+          'signals and its moderation history — with no way back. Suspending is the reversible option, ' +
+          'and the one that keeps a record of the decision. The request body must repeat the account\'s ' +
+          'email address. Refuses your own account and the last administrator.',
+        tags: ['Admin'],
+      },
+    },
   )
 
   .post(

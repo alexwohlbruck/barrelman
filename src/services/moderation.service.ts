@@ -27,6 +27,7 @@ import {
   type User,
 } from '../schema/accounts'
 import { generateId } from '../lib/crypto'
+import { LastAdminError } from './accounts.service'
 import { endAllSessions } from './auth.service'
 import { invalidateUserKeys } from './api-keys.service'
 import { invalidateBalance } from './credits.service'
@@ -104,6 +105,54 @@ async function revokeAccess(userId: string): Promise<void> {
   await endAllSessions(userId)
   invalidateUserKeys(userId)
   invalidateBalance(userId)
+}
+
+/**
+ * Erase an account and everything attached to it.
+ *
+ * The opposite bargain from a suspension. A suspension keeps the person on
+ * file — their keys, their usage, the log of what was decided about them — so
+ * it can be argued with and undone. Deletion keeps nothing: keys, usage,
+ * credit ledger, abuse signals and the moderation log itself all go with the
+ * row, by `ON DELETE CASCADE`. That is the point when the request is "remove
+ * me", and it is also why the only record left of this action is the server
+ * log — the audit trail is one of the things being erased.
+ *
+ * Prefer `suspendUser()` for anything you might have to justify later.
+ *
+ * Refuses the last administrator for the same reason `setUserRole()` does:
+ * with no shared admin secret, an instance with zero administrators can only
+ * be recovered with direct database access. The check and the delete share a
+ * transaction with the admin rows locked, so two concurrent deletions cannot
+ * each see a count of two and both go through.
+ */
+export async function deleteAccount(userId: string, actorId: string): Promise<User | null> {
+  const deleted = await db.transaction(async (tx) => {
+    const admins = await tx
+      .select({ id: users.id })
+      .from(users)
+      .where(eq(users.role, 'admin'))
+      .for('update')
+
+    if (admins.length <= 1 && admins.some((a) => a.id === userId)) {
+      throw new LastAdminError(
+        'This is the only administrator. Promote someone else before deleting this account.',
+      )
+    }
+
+    const [row] = await tx.delete(users).where(eq(users.id, userId)).returning()
+    return row ?? null
+  })
+
+  if (!deleted) return null
+
+  // The row is gone but the caches keyed on it are not, and an API-key verdict
+  // cached a moment before the delete would keep serving a deleted account
+  // until it expired.
+  await revokeAccess(userId)
+
+  console.warn(`[moderation] deleted account ${userId} <${deleted.email}> by ${actorId}`)
+  return deleted
 }
 
 /**

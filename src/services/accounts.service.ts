@@ -394,10 +394,6 @@ export async function linkPolarCustomer(userId: string, polarCustomerId: string)
     .where(eq(users.id, userId))
 }
 
-export async function deleteUser(id: string): Promise<void> {
-  await db.delete(users).where(eq(users.id, id))
-}
-
 // ── Operator views ──────────────────────────────────────────────────────
 
 export interface UserListOptions {

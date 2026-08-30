@@ -5,10 +5,27 @@
  * Suspending someone is destructive and hard to undo from their side — it kills
  * their sessions and every key at once — so the dialog makes the operator type
  * a reason, and shows them that the reason is what the user will read.
+ *
+ * Deleting is worse: it cascades away the keys, the usage, the ledger and the
+ * audit trail, and cannot be undone from either side. That dialog asks for the
+ * address typed back rather than a reason, since there is nothing left to
+ * write a reason on.
  */
 import { computed, onMounted, ref } from 'vue'
-import { AlertTriangle, Ban, CreditCard, RefreshCw, Search, ShieldCheck, ShieldOff, User } from 'lucide-vue-next'
+import {
+  AlertTriangle,
+  Ban,
+  BarChart3,
+  CreditCard,
+  RefreshCw,
+  Search,
+  ShieldCheck,
+  ShieldOff,
+  Trash2,
+  User,
+} from 'lucide-vue-next'
 import PageHeader from '@/components/PageHeader.vue'
+import UserDetailDialog from '@/components/UserDetailDialog.vue'
 import Badge from '@/components/ui/Badge.vue'
 import Button from '@/components/ui/Button.vue'
 import Card from '@/components/ui/Card.vue'
@@ -23,6 +40,7 @@ import Spinner from '@/components/ui/Spinner.vue'
 import Tabs from '@/components/ui/Tabs.vue'
 import Textarea from '@/components/ui/Textarea.vue'
 import {
+  deleteAdminUser,
   getAbuseSignals,
   getAdminUsers,
   resolveAbuseSignal,
@@ -50,6 +68,21 @@ const target = ref<AdminUser | null>(null)
 const reason = ref('')
 const kind = ref<SuspensionKind>('tos-violation')
 const durationHours = ref('')
+
+/** The row whose usage, keys and audit trail are being read. */
+const detailTarget = ref<AdminUser | null>(null)
+
+const deleteTarget = ref<AdminUser | null>(null)
+const deleteConfirm = ref('')
+/**
+ * Deletion is irreversible and cascades — the operator types the address back
+ * rather than confirming a dialog they have stopped reading. The server checks
+ * this too; it is not only a UI courtesy.
+ */
+const deleteConfirmed = computed(() => {
+  const email = deleteTarget.value?.email.trim().toLowerCase()
+  return !!email && deleteConfirm.value.trim().toLowerCase() === email
+})
 
 const plans = ref<Plan[]>([])
 const planTarget = ref<AdminUser | null>(null)
@@ -179,6 +212,27 @@ async function confirmPlan() {
   }
 }
 
+function openDelete(user: AdminUser) {
+  deleteTarget.value = user
+  deleteConfirm.value = ''
+}
+
+async function confirmDelete() {
+  const user = deleteTarget.value
+  if (!user || !deleteConfirmed.value) return
+  busy.value = user.id
+  try {
+    await deleteAdminUser(user.id, deleteConfirm.value.trim())
+    toast({ title: `Deleted ${user.email}`, variant: 'success' })
+    deleteTarget.value = null
+    await load()
+  } catch (err) {
+    fail(err, 'Could not delete the account')
+  } finally {
+    busy.value = ''
+  }
+}
+
 async function dismiss(signal: AbuseSignal) {
   busy.value = signal.id
   try {
@@ -288,6 +342,11 @@ function describeDetail(detail: Record<string, unknown> | null) {
               <p v-else class="mt-1 text-xs text-muted-foreground">Joined {{ formatDate(account.createdAt) }}</p>
             </div>
 
+            <Button variant="ghost" size="sm" @click="detailTarget = account">
+              <BarChart3 class="size-4" />
+              Usage
+            </Button>
+
             <Button variant="ghost" size="sm" :disabled="busy === account.id" @click="openPlan(account)">
               <CreditCard class="size-4" />
               Plan
@@ -319,9 +378,22 @@ function describeDetail(detail: Record<string, unknown> | null) {
               variant="ghost"
               size="sm"
               :disabled="busy === account.id"
+              title="Suspend"
               @click="openSuspend(account)"
             >
               <Ban class="size-4 text-destructive" />
+            </Button>
+
+            <!-- Demote an administrator before deleting them, as with suspend. -->
+            <Button
+              v-if="account.role !== 'admin'"
+              variant="ghost"
+              size="sm"
+              :disabled="busy === account.id"
+              title="Delete permanently"
+              @click="openDelete(account)"
+            >
+              <Trash2 class="size-4 text-destructive" />
             </Button>
           </CardContent>
         </Card>
@@ -362,6 +434,36 @@ function describeDetail(detail: Record<string, unknown> | null) {
         </Card>
       </div>
     </template>
+
+    <UserDetailDialog :account="detailTarget" @close="detailTarget = null" />
+
+    <!-- Delete -->
+    <Dialog :open="deleteTarget !== null" title="Delete account" @update:open="deleteTarget = null">
+      <div class="flex flex-col gap-4">
+        <p class="text-sm text-muted-foreground">
+          This erases <strong>{{ deleteTarget?.email }}</strong> and everything attached to it — API keys,
+          usage, the credit ledger and its own moderation history. There is no undo, and no record left of
+          the account having existed. Suspending is the reversible option.
+        </p>
+
+        <div class="flex flex-col gap-1.5">
+          <Label for="delete-confirm">Type the email address to confirm</Label>
+          <Input id="delete-confirm" v-model="deleteConfirm" :placeholder="deleteTarget?.email" autocomplete="off" />
+        </div>
+      </div>
+
+      <div class="mt-2 flex justify-end gap-2">
+        <Button variant="outline" @click="deleteTarget = null">Cancel</Button>
+        <Button
+          variant="destructive"
+          :disabled="!deleteConfirmed || busy === deleteTarget?.id"
+          @click="confirmDelete"
+        >
+          <Spinner v-if="busy === deleteTarget?.id" class="size-4" />
+          <template v-else>Delete permanently</template>
+        </Button>
+      </div>
+    </Dialog>
 
     <!-- Plan -->
     <Dialog :open="planTarget !== null" title="Change plan" @update:open="planTarget = null">

@@ -1,27 +1,35 @@
-# CI/CD pipeline for Barrelman
+# Release pipeline: on a v* tag, test, build all three images, then publish.
 #
-# Triggers on every push to main:
-#   1. Runs tests
-#   2. Builds and pushes Docker images to Docker Hub (tagged :latest + :<sha>)
+# Flow: test → build (no push) → push images → create the GitHub Release
+#
+# Building and pushing are separate phases on purpose. Barrelman ships three
+# images that are only meaningful as a set — the API, the database and the ops
+# worker are versioned together — and a single job that pushed as it went would
+# leave a half-published release on Docker Hub if the third build failed. The
+# push phase is a cache hit on what the build phase already produced.
+#
+# Tags: every image gets :<version> and :latest. Pin to :<version> to hold a
+# deployment still; :latest is what an unattended puller follows.
 #
 # Production runs on vega2 (/opt/barrelman). As of 2026-08-06 vega2 runs
-# Watchtower (/opt/watchtower), polling hourly, so a push to main reaches
-# production on its own within ~1h of the image landing on Docker Hub. Each
-# Watchtower only ever watches its own Docker socket — there is no cross-host
-# updating — so this works because vega2 has its own instance, not because
-# anything else on the homelab does.
+# Watchtower (/opt/watchtower), polling hourly, so a release reaches production
+# on its own within ~1h of the images landing on Docker Hub. Each Watchtower
+# only ever watches its own Docker socket — there is no cross-host updating —
+# so this works because vega2 has its own instance, not because anything else
+# on the homelab does.
 #
 # To roll out immediately instead of waiting for the poll:
 #
-#   ssh vega2 'cd /opt/barrelman && docker compose pull && docker compose up -d'
+#   ssh vega2 'cd /opt/barrelman && docker compose pull barrelman barrelman-ops && docker compose up -d barrelman barrelman-ops'
 #
 # CAVEAT: vega2's Watchtower is unfiltered — it updates every container on the
 # host, not just Barrelman's. barrelman-motis and barrelman-graphhopper track
 # :latest, and both bake data into a version-specific binary format, so an
 # upstream release can restart them onto an engine that rejects the existing
 # timetable / routing graph ("tt: binary version mismatch"). Recovery is an
-# import job, not a restart — see "Updating a deployment" in README.md.
-# Pre-Watchtower image digests are recorded on the host at
+# import job, not a restart — see "Updating a deployment" in README.md. This is
+# also why the command above names services rather than pulling the whole
+# stack. Pre-Watchtower image digests are recorded on the host at
 # /opt/watchtower/pre-watchtower-digests.txt if you need to pin back.
 #
 # Required GitHub secrets:
@@ -32,7 +40,21 @@ name: Release
 
 on:
   push:
-    branches: [main]
+    tags:
+      - 'v*'
+  workflow_call:
+    inputs:
+      tag:
+        required: true
+        type: string
+
+env:
+  # A tag push names itself; a workflow_call from tag-release.yml passes the
+  # tag it just created, because a tag pushed by GITHUB_TOKEN does not itself
+  # trigger `on: push: tags`.
+  RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+
+# ─── PHASE 1: TEST ────────────────────────────────────────────────────────────
 
 jobs:
   test:
@@ -51,9 +73,66 @@ jobs:
       - name: Run tests
         run: bun test
 
-  build-and-push:
-    name: Build and push Docker images
+# ─── PHASE 2: BUILD (no publishing) ──────────────────────────────────────────
+
+  build:
+    name: Build Docker images
     needs: [test]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Extract version
+        id: version
+        run: echo "VERSION=${RELEASE_TAG#v}" >> $GITHUB_OUTPUT
+
+      - name: Build barrelman API
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: false
+          tags: |
+            alexwohlbruck/barrelman:${{ steps.version.outputs.VERSION }}
+            alexwohlbruck/barrelman:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build barrelman-db
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile.db
+          platforms: linux/amd64,linux/arm64
+          push: false
+          tags: |
+            alexwohlbruck/barrelman-db:${{ steps.version.outputs.VERSION }}
+            alexwohlbruck/barrelman-db:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build barrelman-ops (console job worker)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile.ops
+          platforms: linux/amd64,linux/arm64
+          push: false
+          tags: |
+            alexwohlbruck/barrelman-ops:${{ steps.version.outputs.VERSION }}
+            alexwohlbruck/barrelman-ops:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+# ─── PHASE 3: PUBLISH ────────────────────────────────────────────────────────
+
+  push-images:
+    name: Push Docker images
+    needs: [build]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -67,7 +146,11 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Build and push barrelman API
+      - name: Extract version
+        id: version
+        run: echo "VERSION=${RELEASE_TAG#v}" >> $GITHUB_OUTPUT
+
+      - name: Push barrelman API
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -75,12 +158,11 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
-            alexwohlbruck/barrelman:${{ github.sha }}
+            alexwohlbruck/barrelman:${{ steps.version.outputs.VERSION }}
             alexwohlbruck/barrelman:latest
           cache-from: type=gha
-          cache-to: type=gha,mode=max
 
-      - name: Build and push barrelman-db
+      - name: Push barrelman-db
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -88,12 +170,11 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
-            alexwohlbruck/barrelman-db:${{ github.sha }}
+            alexwohlbruck/barrelman-db:${{ steps.version.outputs.VERSION }}
             alexwohlbruck/barrelman-db:latest
           cache-from: type=gha
-          cache-to: type=gha,mode=max
 
-      - name: Build and push barrelman-ops (console job worker)
+      - name: Push barrelman-ops (console job worker)
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -101,8 +182,42 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
-            alexwohlbruck/barrelman-ops:${{ github.sha }}
+            alexwohlbruck/barrelman-ops:${{ steps.version.outputs.VERSION }}
             alexwohlbruck/barrelman-ops:latest
           cache-from: type=gha
-          cache-to: type=gha,mode=max
 
+  github-release:
+    name: Create GitHub Release
+    needs: [push-images]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare release notes
+        id: changelog
+        # CHANGELOG.md is cumulative, so take only the newest version's section.
+        run: |
+          CHANGELOG=$(./scripts/changelog.sh latest || true)
+          if [ -z "$CHANGELOG" ]; then
+            CHANGELOG="Release ${RELEASE_TAG}"
+          fi
+          {
+            echo "body<<CHANGELOG_EOF"
+            echo "$CHANGELOG"
+            echo ""
+            echo "---"
+            echo ""
+            echo "Images: \`alexwohlbruck/barrelman:${RELEASE_TAG#v}\`, \`alexwohlbruck/barrelman-db:${RELEASE_TAG#v}\`, \`alexwohlbruck/barrelman-ops:${RELEASE_TAG#v}\`"
+            echo "CHANGELOG_EOF"
+          } >> $GITHUB_OUTPUT
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: ${{ env.RELEASE_TAG }}
+          body: ${{ steps.changelog.outputs.body }}
+          draft: false
+          prerelease: false

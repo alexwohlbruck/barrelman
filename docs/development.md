@@ -79,6 +79,46 @@ docker compose up -d --force-recreate barrelman barrelman-db
 barrelman-ops` works — but it still needs an explicit rebuild for any change to
 `scripts/` or `import/`, since it is not source-mounted.
 
+## Cutting a release
+
+Releases are driven by `version` in `package.json`. Nothing is run by hand: a
+push to `main` where the version changed tags `vX.Y.Z`, builds the three images,
+pushes them to Docker Hub as `:X.Y.Z` and `:latest`, and opens a GitHub Release
+whose notes are that version's `CHANGELOG.md` section. A push where the version
+did not change releases nothing, so `main` stays mergeable without shipping.
+
+`CHANGELOG.md` follows [Keep a Changelog](https://keepachangelog.com/): entries
+accumulate under `## [Unreleased]` as work lands, and cutting a version renames
+that heading and opens a fresh one. `scripts/changelog.sh` is the only thing
+that knows the format — use it rather than editing headings by hand:
+
+```bash
+scripts/changelog.sh unreleased        # what would ship right now
+scripts/changelog.sh latest            # the newest released section
+scripts/changelog.sh release 0.2.0     # stamp [Unreleased] as 0.2.0
+```
+
+So a release is an ordinary PR:
+
+```bash
+scripts/changelog.sh release 0.2.0
+sed -i 's/"version": ".*"/"version": "0.2.0"/' package.json
+git commit -am "Release 0.2.0" && gh pr create --base main
+```
+
+Two failure modes are worth knowing, both inherited from Parchment's pipeline,
+which is where this one came from:
+
+- GitHub **skips the whole push event** when a commit message contains a CI-skip
+  directive, and squash-merging concatenates every branch commit into the merge
+  body. One stray commit message can swallow a release with no run and no
+  failure to notice.
+- Once the tag exists, a re-run finds it and no-ops, so a version that tagged
+  but never shipped cannot be retried.
+
+Both are why `Tag Release` has a manual trigger with a `force` input. Dispatch
+it to release a version whose tag already exists.
+
 ## The marketing site
 
 It lives in its own repository, checked out alongside this one — the same layout
