@@ -6,8 +6,13 @@
  * supplies the top-level metadata, tag groups, and server list.
  */
 
-// Keep in sync with package.json.
-const VERSION = '0.4.0'
+// Read from package.json rather than restated here. This used to be a literal
+// with a "keep in sync" comment above it, and it drifted — the spec advertised
+// 0.4.0 while the released version was 0.1.0. package.json is what the release
+// pipeline tags from, so it is the only version that means anything.
+import pkg from '../../package.json' with { type: 'json' }
+
+const VERSION = pkg.version
 
 const localUrl = `http://localhost:${process.env.PORT || 5001}`
 
