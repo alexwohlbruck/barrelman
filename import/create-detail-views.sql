@@ -156,19 +156,13 @@ WITH shapes AS (
 ),
 -- How much of each outline its own parts cover.
 --
--- Two separate questions, and conflating them is what makes a naive
--- implementation eat buildings.
---
 -- *Which parts belong to this outline.* S3DB says a part belongs to the
 -- outline it is inside, so this is containment — but not a bare
 -- `ST_Contains`, because a part clipped by an import boundary or drawn a
 -- fraction outside its own outline would then belong to nothing. 99% of the
--- part's area is OSM2World's threshold and it is the right one: generous
--- enough for hand-drawn geometry, tight enough that a row house does not
--- adopt its neighbour's parts through a shared wall. A representative point
--- would be cheaper, and was what this did before, but a point says nothing
--- about how much of the part is actually inside — an L-shaped part lying
--- mostly over the building next door can still put its centre here.
+-- part's area is OSM2World's threshold: generous enough for hand-drawn
+-- geometry, tight enough that a row house does not adopt its neighbour's
+-- parts through a shared wall.
 --
 -- *Whether they cover enough of it to stand in for it.* The wiki says the
 -- parts should fill the outline and that a filled outline is not rendered,
@@ -179,27 +173,45 @@ WITH shapes AS (
 -- number, and otherwise it draws in full with the parts on top of it.
 --
 -- Not F4Map's approach, which subtracts the parts from the outline and draws
--- the remainder. That is the prettier answer on clean data and a worse one on
--- real data: an entrance node added to the part but not to the outline leaves
--- a sliver of building behind, and OSM2World dropped subtraction for exactly
--- that reason. Whole or nothing has no slivers.
+-- the remainder: an entrance node added to the part but not to the outline
+-- leaves a sliver of building behind, and OSM2World dropped subtraction for
+-- exactly that reason. Whole or nothing has no slivers.
 --
 -- The union is clipped to the outline before measuring, since parts may
 -- overlap each other and a plain sum would read as covered when it is not.
+--
+-- Both sides read `geo_places` directly rather than sharing the `shapes` CTE
+-- below, and that is load-bearing rather than repetition. A CTE referenced
+-- more than once is materialised, a materialised CTE carries no indexes, and
+-- without an index the planner cannot turn `&&` into an index probe — it falls
+-- back to a nested loop that evaluates the spatial predicate over every pair.
+-- Sharing `shapes` here planned at cost 9e14 over ~36 trillion pairs and ran
+-- 40 minutes on production without writing a row before it was killed. Driven
+-- off `parts` against the GIST index on `geo_places.geom` it is one scan and
+-- a few hundred thousand index probes.
+parts AS MATERIALIZED (
+  SELECT geom
+  FROM geo_places
+  WHERE geom_type = 'area'
+    AND COALESCE(tags->>'location', '') <> 'underground'
+    AND COALESCE(tags->>'building:part', 'no') <> 'no'
+),
 covered AS (
-  SELECT o.fid,
+  SELECT o.id as id,
          ST_Area(ST_Intersection(ST_Union(p.geom), o.geom)) as covered_area,
          ST_Area(o.geom) as outline_area
-  FROM shapes o
-  JOIN shapes p
-    ON p.is_part
-   AND p.geom && o.geom
+  FROM parts p
+  JOIN geo_places o
+    ON o.geom && p.geom
+   AND o.geom_type = 'area'
+   AND COALESCE(o.tags->>'location', '') <> 'underground'
+   AND COALESCE(o.tags->>'building', 'no') <> 'no'
+   AND COALESCE(o.tags->>'building:part', 'no') = 'no'
+   -- ST_Intersection is the expensive half, so it only runs for the parts a
+   -- plain containment misses.
    AND (ST_Contains(o.geom, p.geom)
-        -- Only for the parts a plain containment misses, since ST_Intersection
-        -- is the expensive half of this join.
         OR ST_Area(ST_Intersection(o.geom, p.geom)) >= 0.99 * ST_Area(p.geom))
-  WHERE NOT o.is_part
-  GROUP BY o.fid, o.geom
+  GROUP BY o.id, o.geom
 ),
 -- Heights arrive as free text — "12", "12 m", "~10", "3,5" are all in use — and
 -- a plain cast turns one bad value into a failed tile for the whole area. The
@@ -240,11 +252,20 @@ SELECT m.fid, m.id, m.geom,
        -- buildings that are not part-mapped.
        CASE WHEN c.covered_area >= 0.9 * c.outline_area THEN true END as hide_3d
 FROM measured m
-LEFT JOIN covered c ON c.fid = m.fid
+LEFT JOIN covered c ON c.id = m.id
 WITH NO DATA;
 
 -- Unique on fid so the view can be refreshed CONCURRENTLY, and GIST on geom so
 -- Martin's envelope filter is an index scan rather than a walk of every
 -- building in the region.
+-- Parts are 334k rows out of 27M, but the planner cannot estimate a jsonb
+-- expression and guesses 12M — which is why, left alone, it refuses to drive
+-- the join from this side and scans every outline instead. A partial index
+-- over exactly the predicate both makes the scan cheap and gives ANALYZE
+-- something honest to read, and it is small because it only covers the parts.
+CREATE INDEX IF NOT EXISTS geo_places_building_part_geom_idx
+  ON geo_places USING GIST (geom)
+  WHERE COALESCE(tags->>'building:part', 'no') <> 'no';
+
 CREATE UNIQUE INDEX IF NOT EXISTS buildings_3d_fid_idx ON buildings_3d (fid);
 CREATE INDEX IF NOT EXISTS buildings_3d_geom_idx ON buildings_3d USING GIST (geom);
