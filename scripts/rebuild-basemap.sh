@@ -52,6 +52,11 @@ HELPER_IMAGE="${BASEMAP_HELPER_IMAGE:-alpine}"
 
 PBF_NAME="region.osm.pbf"
 BASEMAP_NAME="basemap.pmtiles"
+# planetiler infers the archive format from the output file's *last* extension,
+# so the staging file has to keep .pmtiles at the end. Naming it
+# basemap.pmtiles.next fails argument parsing with "Unsupported format next"
+# before a single OSM block is read.
+STAGING_NAME="${BASEMAP_NAME%.pmtiles}.next.pmtiles"
 LOCK_NAME=".basemap-rebuild.lock"
 
 log() { echo "[$(date '+%H:%M:%S')] [basemap] $*"; }
@@ -144,7 +149,7 @@ if ! io_sh "test -f /out/${BASEMAP_NAME}" >/dev/null 2>&1 && [ "${BASEMAP_FORCE:
 fi
 
 OLD_SIZE=$(io_sh "stat -c %s /out/${BASEMAP_NAME} 2>/dev/null || echo 0" | tr -cd '0-9')
-io_sh "rm -f /out/${BASEMAP_NAME}.next" >/dev/null 2>&1 || true
+io_sh "rm -f /out/${STAGING_NAME}" >/dev/null 2>&1 || true
 
 log "[1/3] Rendering from ${PBF_NAME} (heap ${PLANETILER_MEMORY})..."
 log "      input:  ${IN_DIR}"
@@ -159,20 +164,20 @@ if ! docker run --rm \
   -v "${OUT_DIR}:/out" \
   "$PLANETILER_IMAGE" \
   --osm-path="/in/${PBF_NAME}" \
-  --output="/out/${BASEMAP_NAME}.next" \
+  --output="/out/${STAGING_NAME}" \
   --download \
   --download-dir=/out/sources \
   --tmpdir=/out/tmp \
   --force; then
   log "ERROR: planetiler failed — leaving the current basemap in place" >&2
-  io_sh "rm -f /out/${BASEMAP_NAME}.next" >/dev/null 2>&1 || true
+  io_sh "rm -f /out/${STAGING_NAME}" >/dev/null 2>&1 || true
   exit 1
 fi
 
-NEW_SIZE=$(io_sh "stat -c %s /out/${BASEMAP_NAME}.next 2>/dev/null || echo 0" | tr -cd '0-9')
+NEW_SIZE=$(io_sh "stat -c %s /out/${STAGING_NAME} 2>/dev/null || echo 0" | tr -cd '0-9')
 if [ "${NEW_SIZE:-0}" -eq 0 ]; then
   log "ERROR: planetiler exited 0 but produced no archive — keeping the current basemap" >&2
-  io_sh "rm -f /out/${BASEMAP_NAME}.next" >/dev/null 2>&1 || true
+  io_sh "rm -f /out/${STAGING_NAME}" >/dev/null 2>&1 || true
   exit 1
 fi
 
@@ -191,7 +196,7 @@ log "[2/3] Swapping in the new archive (${NEW_SIZE} bytes)..."
 # data.prev, so a bad render can be rolled back by hand.
 io_sh "set -e
 if [ -f /out/${BASEMAP_NAME} ]; then mv -f /out/${BASEMAP_NAME} /out/${BASEMAP_NAME}.prev; fi
-mv -f /out/${BASEMAP_NAME}.next /out/${BASEMAP_NAME}"
+mv -f /out/${STAGING_NAME} /out/${BASEMAP_NAME}"
 
 # The rename swaps the directory entry, not the inode martin already has open.
 # rebuild-motis.sh documents the same behaviour for MOTIS ("it keeps serving via
