@@ -10,6 +10,28 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-08-31
+
+### Fixed
+
+* Rebuild Basemap now renders successfully. Planetiler reads the archive format
+  from the output file's last extension, and the script staged its render as
+  `basemap.pmtiles.next` — so every run died during argument parsing with
+  "Unsupported format next", before reading a single OSM block. The staging file
+  is now `basemap.next.pmtiles`. The existing basemap was never at risk: the
+  failure path leaves it in place, so instances have been serving an archive
+  that simply stopped following the data
+* `rebuild-motis.sh` now checks that the import will actually see the feed ZIPs,
+  instead of quietly rebuilding from a stale copy. It locates them by inspecting
+  the motis service for a `/data/gtfs` bind mount, and simply omitted the mount
+  when there wasn't one — but `/data/gtfs` still resolves inside the gtfs-data
+  volume, so on an instance missing that bind the import found whatever old
+  feeds lived there, succeeded, and reported fresh schedules. The check counts
+  the ZIPs the import container will see, warns and names the missing compose
+  line when it falls back to the in-volume copy, and refuses when there are none
+  at all. Like the existing feed-count guard it runs before the current dataset
+  is moved aside, so a misconfigured instance costs nothing
+
 ## [0.2.1] - 2026-08-31
 
 ### Added

@@ -70,6 +70,38 @@ if [ "${FEED_COUNT:-0}" = "0" ]; then
   exit 0
 fi
 
+# The feed ZIPs are a host bind mount, not part of the gtfs-data volume, so the
+# import container needs them mounted exactly where the config expects them
+# (/data/gtfs) — same bind the motis service carries in docker-compose.yml.
+GTFS_ZIPS="$(docker inspect "$CONTAINER" \
+  --format '{{range .Mounts}}{{if eq .Destination "/data/gtfs"}}{{.Source}}{{end}}{{end}}' 2>/dev/null)"
+
+# Whichever way the ZIPs arrive, confirm the import will actually SEE them, and
+# do it here rather than at the import — same reason as the feed count above,
+# the dataset has been moved aside by then. An instance whose motis service is
+# missing the bind still resolves /data/gtfs, to a directory inside the volume,
+# so the import succeeds against whatever stale copy lives there and reports a
+# fresh rebuild. That is worse than failing: the operator is told the new
+# schedules are live.
+ZIP_COUNT="$(docker run --rm \
+  -v "${GTFS_VOL}:/data" \
+  ${GTFS_ZIPS:+-v "${GTFS_ZIPS}:/data/gtfs:ro"} \
+  alpine sh -c 'ls /data/gtfs/*.zip 2>/dev/null | wc -l' | tr -cd '0-9')"
+
+if [ -z "$GTFS_ZIPS" ]; then
+  log "WARNING: ${CONTAINER} has no /data/gtfs bind mount — falling back to the"
+  log "         copy inside the ${GTFS_VOL} volume (${ZIP_COUNT:-0} ZIPs)."
+  log "         Downloads land in ./data/gtfs on the host, so this import will"
+  log "         NOT see them. Add './data/gtfs:/data/gtfs:ro' to the motis"
+  log "         service in docker-compose.yml and recreate it."
+fi
+
+if [ "${ZIP_COUNT:-0}" -eq 0 ]; then
+  log "ERROR: no feed ZIPs visible at /data/gtfs — leaving the current dataset alone"
+  log "run scripts/download-gtfs.sh first (transit step 2b)"
+  exit 1
+fi
+
 echo "[$(date '+%H:%M:%S')] [1/3] [motis] Regenerating config from gtfs_feeds..."
 # --street-routing is REQUIRED: without it the config omits the OSM input and
 # MOTIS builds only the timetable (no street graph, no stop<->street matches),
@@ -106,12 +138,6 @@ else
     docker run --rm -v "${GTFS_VOL}:/data" alpine sh -c "$MOVE"
   fi
 fi
-
-# The feed ZIPs are a host bind mount, not part of the gtfs-data volume, so the
-# import container needs them mounted exactly where the config expects them
-# (/data/gtfs) — same bind the motis service carries in docker-compose.yml.
-GTFS_ZIPS="$(docker inspect "$CONTAINER" \
-  --format '{{range .Mounts}}{{if eq .Destination "/data/gtfs"}}{{.Source}}{{end}}{{end}}' 2>/dev/null)"
 
 if docker run --rm --network "$NETWORK" \
      -v "${GTFS_VOL}:/data" \
