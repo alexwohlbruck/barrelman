@@ -9,6 +9,7 @@ import Spinner from '@/components/ui/Spinner.vue'
 import { getScripts } from '@/lib/api'
 import { jobs } from '@/lib/store'
 import { toast } from '@/lib/toast'
+import { resolveChain } from '@/lib/script-chain'
 import type { ScriptsResponse, ScriptDef, ScriptCategory, Job } from '@/lib/types'
 
 const router = useRouter()
@@ -47,6 +48,16 @@ const visibleCategories = computed(() => {
   if (activeCategory.value === 'all') return data.value.categories
   return data.value.categories.filter((c) => c.key === activeCategory.value)
 })
+
+// Chains are resolved here rather than in the card so the id→script lookup is
+// built once for the page instead of once per card.
+function chainFor(script: ScriptDef) {
+  return resolveChain(script, data.value?.scripts || [])
+}
+
+const selectedChain = computed(() =>
+  selectedScript.value ? chainFor(selectedScript.value) : [],
+)
 
 function openRun(script: ScriptDef) {
   selectedScript.value = script
@@ -136,6 +147,7 @@ onMounted(async () => {
               :key="script.id"
               :script="script"
               :active-job="activeByScript.get(script.id)"
+              :chain="chainFor(script)"
               @run="openRun(script)"
             />
           </div>
@@ -147,6 +159,7 @@ onMounted(async () => {
   <RunScriptDialog
     v-model:open="dialogOpen"
     :script="selectedScript"
+    :chain="selectedChain"
     @started="onStarted"
     @conflict="(id: string) => router.push(`/jobs/${id}`)"
   />

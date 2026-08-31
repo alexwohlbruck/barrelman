@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, watch, computed } from 'vue'
-import { Play, AlertTriangle, Flame, Terminal, Info, Layers } from 'lucide-vue-next'
+import { Play, AlertTriangle, Flame, Terminal, Info, Layers, CornerDownRight } from 'lucide-vue-next'
 import Dialog from '@/components/ui/Dialog.vue'
 import Button from '@/components/ui/Button.vue'
 import Switch from '@/components/ui/Switch.vue'
@@ -10,9 +10,9 @@ import DangerBadge from '@/components/DangerBadge.vue'
 import { runScript, ApiError } from '@/lib/api'
 import { toast } from '@/lib/toast'
 import { refreshJobs } from '@/lib/store'
-import type { ScriptDef, Job } from '@/lib/types'
+import type { ScriptDef, Job, ResolvedChainStep } from '@/lib/types'
 
-const props = defineProps<{ script: ScriptDef | null; open: boolean }>()
+const props = defineProps<{ script: ScriptDef | null; open: boolean; chain?: ResolvedChainStep[] }>()
 const emit = defineEmits<{ 'update:open': [value: boolean]; started: [job: Job]; conflict: [jobId: string] }>()
 
 const params = ref<Record<string, unknown>>({})
@@ -151,6 +151,29 @@ async function run() {
           <Terminal class="size-3.5" /> Will run
         </div>
         <code class="block whitespace-pre-wrap break-all font-mono text-xs text-foreground">{{ preview }}</code>
+      </div>
+
+      <!--
+        Follow-ups the script shells out to. Part of the same job and the same
+        log stream — not separate runs — so this is framed as what else the run
+        does rather than as a queue.
+      -->
+      <div v-if="chain?.length" class="rounded-lg border border-border bg-background/60 p-3">
+        <div class="mb-2 flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+          <CornerDownRight class="size-3.5" /> Then runs
+        </div>
+        <ol class="flex flex-col gap-1.5">
+          <li v-for="(step, i) in chain" :key="step.id" class="flex items-baseline gap-2 text-xs">
+            <span class="font-mono text-[10px] text-muted-foreground">{{ i + 1 }}</span>
+            <div class="min-w-0">
+              <span class="text-foreground">{{ step.name }}</span>
+              <span v-if="step.when" class="text-muted-foreground"> — {{ step.when }}</span>
+            </div>
+          </li>
+        </ol>
+        <p class="mt-2 text-[11px] text-muted-foreground">
+          Part of this job, streamed into the same log. Each can also be run on its own.
+        </p>
       </div>
 
       <!-- Destructive confirmation -->

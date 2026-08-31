@@ -105,6 +105,15 @@ if [ "$UPDATE_MODE" = "full" ]; then
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] Triggering GraphHopper graph rebuild..."
   "$SCRIPT_DIR/rebuild-graphhopper.sh"
 
+  # A full re-import always replaces the extract, so there is no mtime guard to
+  # apply here — the basemap is stale by definition.
+  if [ "${REBUILD_BASEMAP:-1}" = "1" ]; then
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Triggering basemap rebuild..."
+    "$SCRIPT_DIR/rebuild-basemap.sh"
+  else
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Basemap rebuild disabled (REBUILD_BASEMAP=0) — skipping."
+  fi
+
   # Full import runs the complete pipeline — we're done
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] Full re-import complete."
   exit 0
@@ -269,8 +278,24 @@ docker exec barrelman-db psql "$DB_URL" -c "ANALYZE geo_places; ANALYZE bicycle_
 if [ "$PBF_MTIME_AFTER" != "$PBF_MTIME_BEFORE" ]; then
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] Extract changed — triggering GraphHopper graph rebuild..."
   "$SCRIPT_DIR/rebuild-graphhopper.sh"
+
+  # The basemap is rendered from the same extract, so the mtime guard above is
+  # exactly the right condition for it too: if region.osm.pbf did not move,
+  # planetiler would spend four minutes producing an identical archive.
+  #
+  # Without this the basemap was the one output that never tracked an update.
+  # Postgres got the diff, GraphHopper got a fresh graph, and the map still
+  # showed whatever planetiler last rendered by hand — because martin serves
+  # the DB-backed sources live but the `basemap` source is a static PMTiles
+  # file, and nothing in the pipeline rebuilt it.
+  if [ "${REBUILD_BASEMAP:-1}" = "1" ]; then
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Extract changed — triggering basemap rebuild..."
+    "$SCRIPT_DIR/rebuild-basemap.sh"
+  else
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Basemap rebuild disabled (REBUILD_BASEMAP=0) — skipping."
+  fi
 else
-  echo "[$(date '+%Y-%m-%d %H:%M:%S')] Extract unchanged — skipping GraphHopper rebuild."
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] Extract unchanged — skipping GraphHopper and basemap rebuilds."
 fi
 
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] OSM update complete."

@@ -189,7 +189,18 @@ while every address lookup quietly returns nothing.
 
 **Martin crash-loops and every `/tiles` request returns 500**
 
-Martin treats *any* unresolvable tile source as fatal, so one missing table takes down all tiles. `docker compose logs martin | grep -i unavailable` names it. The two that bite: the `transit_*` views (created by the OSM import) and the optional `basemap.pmtiles`, which is commented out by default because nothing in the pipeline produces it.
+Martin treats *any* unresolvable tile source as fatal, so one missing table takes down all tiles. `docker compose logs martin | grep -i unavailable` names it. The two that bite: the `transit_*` views (created by the OSM import) and the optional `basemap.pmtiles`. If you do not want a basemap, comment the `pmtiles:` block out of `martin-config.yaml`; if you do, build the first archive with `BASEMAP_FORCE=1 ./scripts/rebuild-basemap.sh`.
+
+**The basemap does not change after an OSM update**
+
+Everything under `postgres:` in `martin-config.yaml` is queried live, so `parchment_*`, `bicycle_*` and the `transit_*` sources reflect a replication diff immediately. The `basemap` source is different — a static PMTiles archive that only changes when something re-renders it. `scripts/rebuild-basemap.sh` does that, and runs automatically after an import or an update that moved the extract, so a basemap that is standing still usually means one of:
+
+- The install predates that script and the archive was built by hand. Run **Rebuild Basemap** once from the console.
+- `REBUILD_BASEMAP=0` is set on the update.
+- The update ran but the extract did not move, so the render was correctly skipped — the log says so.
+- Martin was never restarted after the swap. The rename replaces the directory entry, not the inode Martin already has open, so it goes on serving the old archive. The script restarts Martin unless `BASEMAP_RESTART_MARTIN=0`.
+
+A browser holding day-old tiles looks identical to all four: `/tiles` sends `cache-control: max-age=86400`, so confirm with a hard reload or a direct `curl` before digging.
 
 ## Endpoints
 

@@ -39,7 +39,7 @@ echo "  Regions: ${REGIONS:-north-carolina,nyc-metro}"
 echo "  OSM extracts: ${OSM_EXTRACTS:-$GEOFABRIK_URL}"
 echo ""
 
-echo "[1/2] OSM import"
+echo "[1/3] OSM import"
 docker exec \
   -e DATABASE_URL="$DB_URL" \
   -e GEOFABRIK_URL="${GEOFABRIK_URL:-https://download.geofabrik.de/north-america/us/north-carolina-latest.osm.pbf}" \
@@ -49,9 +49,20 @@ docker exec \
   barrelman-db bash /app/scripts/import-osm.sh
 
 echo ""
-echo "[2/2] GraphHopper rebuild"
+echo "[2/3] GraphHopper rebuild"
 echo "Triggering GraphHopper graph rebuild..."
 "$SCRIPT_DIR/rebuild-graphhopper.sh"
+
+echo ""
+echo "[3/3] Basemap rebuild"
+# martin serves the DB-backed sources live, but the `basemap` source is a static
+# PMTiles archive — a full import moves everything else and leaves it frozen
+# unless it is re-rendered here. Skips itself when the install has no basemap.
+if [ "${REBUILD_BASEMAP:-1}" = "1" ]; then
+  "$SCRIPT_DIR/rebuild-basemap.sh"
+else
+  echo "Basemap rebuild disabled (REBUILD_BASEMAP=0) — skipping."
+fi
 
 echo ""
 echo "Full import pipeline complete!"

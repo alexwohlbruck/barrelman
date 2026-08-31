@@ -168,8 +168,18 @@ longer. The seeded daily schedule exists to keep each run small, not because the
 script depends on the interval.
 
 Each chunk is applied to `region.osm.pbf` as well as to Postgres, so the
-GraphHopper graph is rebuilt from data that matches the database. The rebuild is
-skipped entirely when a run finds no new diffs.
+GraphHopper graph and the PMTiles basemap are both rebuilt from data that
+matches the database. Both rebuilds are skipped entirely when a run finds no new
+diffs.
+
+The basemap matters here because it is the one output that cannot follow the
+database on its own. Martin queries every `postgres:` source in
+`martin-config.yaml` per request, so a diff reaches those tiles the moment it
+lands; `basemap` is a static PMTiles archive, and PMTiles is a write-once format
+that no tool can patch in place. `scripts/rebuild-basemap.sh` therefore
+re-renders it with planetiler — a few minutes for a couple of US states. Set
+`REBUILD_BASEMAP=0` on the update to skip it and enable the seeded weekly
+**Rebuild Basemap** schedule instead.
 
 <Callout type="warn">
 Geofabrik keeps roughly four months of diffs. A database left behind longer than
