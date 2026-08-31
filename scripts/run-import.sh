@@ -39,7 +39,7 @@ echo "  Regions: ${REGIONS:-north-carolina,nyc-metro}"
 echo "  OSM extracts: ${OSM_EXTRACTS:-$GEOFABRIK_URL}"
 echo ""
 
-echo "[1/2] OSM import"
+echo "[1/3] OSM import"
 docker exec \
   -e DATABASE_URL="$DB_URL" \
   -e GEOFABRIK_URL="${GEOFABRIK_URL:-https://download.geofabrik.de/north-america/us/north-carolina-latest.osm.pbf}" \

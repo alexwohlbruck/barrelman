@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { RouterLink } from 'vue-router'
-import { Play, Clock, Lock, FileCode2, ChevronRight } from 'lucide-vue-next'
+import { Play, Clock, Lock, FileCode2, ChevronRight, CornerDownRight } from 'lucide-vue-next'
 import Button from '@/components/ui/Button.vue'
 import Badge from '@/components/ui/Badge.vue'
 import Progress from '@/components/ui/Progress.vue'
@@ -9,10 +9,10 @@ import Spinner from '@/components/ui/Spinner.vue'
 import DangerBadge from '@/components/DangerBadge.vue'
 import QueuePosition from '@/components/jobs/QueuePosition.vue'
 import { useJobProgress } from '@/lib/job-progress'
-import type { ScriptDef, Job } from '@/lib/types'
+import type { ScriptDef, Job, ResolvedChainStep } from '@/lib/types'
 
 /** `activeJob` is this script's own queued or running job, if it has one. */
-const props = defineProps<{ script: ScriptDef; activeJob?: Job }>()
+const props = defineProps<{ script: ScriptDef; activeJob?: Job; chain?: ResolvedChainStep[] }>()
 const emit = defineEmits<{ run: [] }>()
 
 const running = computed(() => (props.activeJob?.status === 'running' ? props.activeJob : undefined))
@@ -26,6 +26,12 @@ const runLabel = computed(() => {
   if (blocked.value) return props.activeJob?.status === 'queued' ? 'Queued…' : 'Running…'
   return props.activeJob ? 'Run again' : 'Run'
 })
+
+// Named in the tooltip so the card answers "what else does this touch?" without
+// opening the dialog — the whole point of surfacing the chain at all.
+const chainTitle = computed(() =>
+  props.chain?.length ? `Also runs: ${props.chain.map((s) => s.name).join(', ')}` : undefined,
+)
 </script>
 
 <template>
@@ -47,6 +53,10 @@ const runLabel = computed(() => {
         title="Only one run of this script at a time. While one is queued or running, a second one is refused rather than started alongside it."
       >
         <Lock class="size-3" /> One at a time
+      </Badge>
+      <Badge v-if="chain?.length" variant="outline" class="text-[10px]" :title="chainTitle">
+        <CornerDownRight class="size-3" />
+        {{ chain.length }} follow-up{{ chain.length > 1 ? 's' : '' }}
       </Badge>
       <Badge v-if="script.source" variant="muted" class="text-[10px] font-mono">
         <FileCode2 class="size-3" /> {{ script.source }}

@@ -53,6 +53,30 @@ export type ScriptExec =
   | { kind: 'process'; command: string; args: string[] }
   | { kind: 'internal'; handler: string }
 
+/**
+ * One follow-up script a parent script invokes on its way through.
+ *
+ * DESCRIPTIVE, NOT EXECUTIVE. The job runner does not read this and will never
+ * start a second job from it — `startJob()` takes one script id and runs one
+ * command. The chaining is done in bash, by the parent script shelling out to a
+ * sibling (`update-osm.sh` → `rebuild-graphhopper.sh`, and so on), which is why
+ * a chain is one job with one log stream under one exclusive lock.
+ *
+ * It exists so the console can say so. Before this, "OSM Update" looked like a
+ * single step in the UI while actually rebuilding the routing graph and the
+ * basemap too, and the only way to find that out was to read the shell.
+ *
+ * Keeping it as data means it can drift from the shell it describes, so
+ * scripts-manifest.test.ts asserts every id resolves — a dangling one renders
+ * as a blank row.
+ */
+export interface ScriptChainStep {
+  /** Manifest id of the script the parent invokes. */
+  script: string
+  /** Describes when the step is skipped. Omit for steps that always run. */
+  when?: string
+}
+
 export interface ScriptDef {
   id: string
   name: string
@@ -67,6 +91,11 @@ export interface ScriptDef {
   exclusive?: boolean
   exec: ScriptExec
   params?: ScriptParam[]
+  /**
+   * Follow-up scripts this one invokes internally, in the order they run.
+   * Surfaced in the console — see ScriptChainStep for why it is not executed.
+   */
+  postScripts?: ScriptChainStep[]
   /** Static environment additions applied to every run. */
   env?: Record<string, string>
   /** Source file (for the UI "view source" reference). */
@@ -126,6 +155,29 @@ const FORCE_DOWNLOAD_PARAM: ScriptParam = {
     'Fetch the region extracts again rather than reusing the PBF on disk. Turn this off only to replay an import from the exact file already downloaded.',
 }
 
+/**
+ * Re-render the PMTiles basemap at the end of an import or update.
+ *
+ * On by default because the basemap is the one output that has no other way to
+ * track the data: martin serves every `parchment_*` source live from PostGIS,
+ * but `basemap` is a static archive, so without this an update moves the
+ * database and the map keeps showing the last hand-built render.
+ *
+ * Turning it off is for deployments that would rather rebuild on a slower
+ * cadence than pay a planetiler run per update. The script skips itself anyway
+ * on installs that have no basemap.pmtiles at all.
+ */
+const REBUILD_BASEMAP_PARAM: ScriptParam = {
+  name: 'REBUILD_BASEMAP',
+  label: 'Rebuild basemap',
+  type: 'boolean',
+  apply: 'env',
+  envVar: 'REBUILD_BASEMAP',
+  default: true,
+  description:
+    'Re-render basemap.pmtiles with planetiler once the extract has changed. Adds a few minutes. Turn off to refresh the basemap separately.',
+}
+
 export const SCRIPTS: ScriptDef[] = [
   // ── OSM Import & Updates ──────────────────────────────────────────────
   {
@@ -139,7 +191,11 @@ export const SCRIPTS: ScriptDef[] = [
     confirm: true,
     exclusive: true,
     exec: { kind: 'process', command: 'bash', args: ['scripts/run-import.sh'] },
-    params: [REGIONS_PARAM, FORCE_DOWNLOAD_PARAM],
+    params: [REGIONS_PARAM, FORCE_DOWNLOAD_PARAM, REBUILD_BASEMAP_PARAM],
+    postScripts: [
+      { script: 'routing-graphhopper' },
+      { script: 'osm-basemap', when: 'unless "Rebuild basemap" is off, or the install has no basemap' },
+    ],
     source: 'scripts/run-import.sh',
     notes:
       'osm2pgsql --create drops and recreates the geo_places tables. Expect 20–40+ minutes for a US state; longer for larger regions. Leave "Re-download extracts" on unless the PBF on disk is known to match the selected regions — a stale file covers fewer regions than expected and the tables are already dropped by the time that shows.',
@@ -148,7 +204,7 @@ export const SCRIPTS: ScriptDef[] = [
     id: 'osm-update',
     name: 'OSM Update',
     description:
-      'Apply an incremental replication diff (fast) or re-run a full re-import, then re-run incremental post-processing. Diffs are applied to both Postgres and region.osm.pbf, and the routing graph is rebuilt only when the extract actually changed.',
+      'Apply an incremental replication diff (fast) or re-run a full re-import, then re-run incremental post-processing. Diffs are applied to both Postgres and region.osm.pbf, and the routing graph and PMTiles basemap are rebuilt only when the extract actually changed.',
     category: 'osm',
     danger: 'caution',
     longRunning: true,
@@ -168,10 +224,52 @@ export const SCRIPTS: ScriptDef[] = [
           { label: 'Full (re-download + re-import — destructive)', value: 'full' },
         ],
       },
+      REBUILD_BASEMAP_PARAM,
+    ],
+    postScripts: [
+      { script: 'routing-graphhopper', when: 'only when the extract actually changed' },
+      { script: 'osm-basemap', when: 'only when the extract changed, and "Rebuild basemap" is on' },
     ],
     source: 'scripts/update-osm.sh',
     notes:
       'Full mode is a destructive re-import. Replication requires init-replication to have been run once. Safe to run at any interval — the cursor is stored in the database — but Geofabrik only retains about four months of diffs, so a database further behind than that needs a full re-import.',
+  },
+  {
+    id: 'osm-basemap',
+    name: 'Rebuild Basemap',
+    description:
+      'Re-render basemap.pmtiles from region.osm.pbf with planetiler, swap it in atomically and restart martin so the new archive is served.',
+    category: 'osm',
+    danger: 'caution',
+    longRunning: true,
+    confirm: true,
+    exclusive: true,
+    exec: { kind: 'process', command: 'bash', args: ['scripts/rebuild-basemap.sh'] },
+    params: [
+      {
+        name: 'BASEMAP_FORCE',
+        label: 'Build even if none exists',
+        type: 'boolean',
+        apply: 'env',
+        envVar: 'BASEMAP_FORCE',
+        default: false,
+        description:
+          'By default this only refreshes an existing basemap. Turn on to render the first one — you must also uncomment the pmtiles source in martin-config.yaml for it to be served.',
+      },
+      {
+        name: 'PLANETILER_MEMORY',
+        label: 'Render heap',
+        type: 'string',
+        apply: 'env',
+        envVar: 'PLANETILER_MEMORY',
+        default: '4g',
+        placeholder: '4g',
+        description: 'JVM heap for the planetiler container. Raise for larger extracts.',
+      },
+    ],
+    source: 'scripts/rebuild-basemap.sh',
+    notes:
+      'The basemap is a static PMTiles archive, so unlike every parchment_* source it does not follow the database — this is what makes it track an import. PMTiles cannot be patched in place (write-once, absolute offsets, content-deduplicated) and planetiler has no incremental mode, so this is always a full re-render: about four minutes for NC+NY. Runs automatically after a full import and after an OSM update that moved the extract. The previous archive is kept as basemap.pmtiles.prev.',
   },
   {
     id: 'osm-init-replication',
@@ -257,6 +355,7 @@ export const SCRIPTS: ScriptDef[] = [
         description: 'Required unless already set in the server environment.',
       },
     ],
+    postScripts: [{ script: 'routing-motis', when: 'only when a feed actually changed' }],
     source: 'scripts/gtfs-watch.sh',
     notes:
       'The intended nightly job — see the Schedules page. The very first run only records a baseline of current feed versions; it cannot detect drift until it has a prior sha to compare against.',

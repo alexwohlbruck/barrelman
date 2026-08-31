@@ -20,6 +20,16 @@ export interface ScriptParam {
   description?: string
 }
 
+/**
+ * A follow-up script the parent invokes internally. The runner never starts a
+ * second job from this — the parent's shell script shells out to it, so the
+ * whole chain is one job with one log stream.
+ */
+export interface ScriptChainStep {
+  script: string
+  when?: string
+}
+
 export interface ScriptDef {
   id: string
   name: string
@@ -32,9 +42,18 @@ export interface ScriptDef {
   exclusive: boolean
   exec: { kind: 'process'; command: string; args: string[] } | { kind: 'internal'; handler: string }
   params?: ScriptParam[]
+  postScripts?: ScriptChainStep[]
   env?: Record<string, string>
   source?: string
   notes?: string
+}
+
+/** A chain step with its target resolved against the manifest, for rendering. */
+export interface ResolvedChainStep {
+  id: string
+  name: string
+  danger: DangerLevel
+  when?: string
 }
 
 export interface ScriptCategoryGroup {
