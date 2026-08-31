@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onMounted } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import {
   Activity,
@@ -17,7 +17,7 @@ import {
   UserRound,
   Users,
 } from 'lucide-vue-next'
-import { jobStats } from '@/lib/store'
+import { jobStats, loadVersion, version } from '@/lib/store'
 import { isAdmin, signOut, user } from '@/lib/auth'
 import Badge from '@/components/ui/Badge.vue'
 
@@ -50,6 +50,8 @@ const identity = computed(() => user.value?.name || user.value?.email || '')
 function isActive(to: string) {
   return route.path === to || route.path.startsWith(`${to}/`)
 }
+
+onMounted(loadVersion)
 
 async function logout() {
   await signOut()
@@ -116,6 +118,7 @@ async function logout() {
         <LogOut class="size-4" />
         Sign out
       </button>
+      <div v-if="version" class="px-3 pt-3 text-xs text-muted-foreground/70">Barrelman v{{ version }}</div>
     </div>
   </aside>
 </template>

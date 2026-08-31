@@ -10,6 +10,13 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Added
+
+* The console sidebar shows the version of the instance it is talking to, below
+  the sign-out button. `/admin/config` now reports the version from
+  `package.json` — what the release pipeline tags from — rather than a hardcoded
+  literal, which had drifted to a 0.4.0 that was never released
+
 ### Fixed
 
 * Rebuild Basemap now renders successfully. Planetiler reads the archive format
