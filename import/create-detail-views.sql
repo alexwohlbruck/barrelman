@@ -98,3 +98,174 @@ WHERE geom_type = 'point'
   -- pavement. Both are amenity=recycling, and only recycling_type separates
   -- them, so without this a civic amenity site draws as a single wheelie bin.
   AND COALESCE(tags->>'recycling_type', 'container') <> 'centre';
+
+-- ─── 3D buildings ────────────────────────────────────────────────────────────
+--
+-- Building outlines and building:parts, with the flag that tells them apart.
+--
+-- OpenStreetMap's Simple 3D Buildings scheme maps a detailed building twice: an
+-- outline tagged `building=*` covering the whole footprint, and one or more
+-- `building:part=*` polygons inside it carrying the real heights and colours.
+-- A 3D renderer must draw the parts and NOT the outline, or it draws both — two
+-- solids in the same place, z-fighting, one at the outline's default height and
+-- default colour and one at the part's own.
+--
+-- OpenMapTiles has a field for exactly this, `hide_3d`, set on the outline. Our
+-- basemap is a stock OpenMapTiles build whose building layer carries only
+-- `colour`, `render_height` and `render_min_height` — no `hide_3d` — so the
+-- client's `["!has", "hide_3d"]` filter has nothing to bite on and every
+-- part-mapped building renders doubled. Same reasoning as the views above: the
+-- features are already in geo_places with their full tag set, so serving them
+-- ourselves beats waiting on a custom Planetiler profile and a pmtiles rebuild.
+--
+-- MATERIALIZED, unlike everything else in this file, because `hide_3d` is a
+-- spatial self-join — which outlines contain a part — and a join cannot be
+-- pushed down into Martin's per-tile envelope filter. Computed once here,
+-- indexed, and read like a table.
+--
+-- IF NOT EXISTS and WITH NO DATA, unlike the DROP/CREATE above, because this one
+-- holds rows: the API runs this same file on every startup, and a DROP there
+-- would empty the layer on each restart until something refreshed it again.
+-- Created empty and populated out of band — `scripts/import-osm.sh` refreshes it
+-- after an import, and the API refreshes it in the background on startup if it
+-- is still empty. Same shape as the brand catalog in `src/db.ts`.
+--
+-- Changing the SELECT below therefore needs the view dropped by hand, since
+-- IF NOT EXISTS will not redefine one that is already there:
+--   DROP MATERIALIZED VIEW buildings_3d;  -- then re-run this file
+--
+-- Order matters on a deployment that does not have this view yet. Reading a
+-- materialized view that has never been refreshed raises rather than returning
+-- no rows, so between this statement and the first refresh the view exists and
+-- is unreadable — and Martin validates every source at startup. Create it,
+-- refresh it, and only then let Martin see it; `--on-invalid warn` in
+-- docker-compose.yml is what keeps a mistake here from taking the whole tile
+-- server down rather than just this layer.
+CREATE MATERIALIZED VIEW IF NOT EXISTS buildings_3d AS
+WITH shapes AS (
+  SELECT (osm_id * 4 + CASE osm_type WHEN 'N' THEN 0 WHEN 'W' THEN 1 ELSE 2 END) as fid,
+         id, geom, tags,
+         COALESCE(tags->>'building:part', 'no') <> 'no' as is_part
+  FROM geo_places
+  WHERE geom_type = 'area'
+    -- A basement or a subway concourse is not something you can see from above.
+    -- OpenMapTiles drops these too.
+    AND COALESCE(tags->>'location', '') <> 'underground'
+    AND (COALESCE(tags->>'building', 'no') <> 'no'
+      OR COALESCE(tags->>'building:part', 'no') <> 'no')
+),
+-- How much of each outline its own parts cover.
+--
+-- *Which parts belong to this outline.* S3DB says a part belongs to the
+-- outline it is inside, so this is containment — but not a bare
+-- `ST_Contains`, because a part clipped by an import boundary or drawn a
+-- fraction outside its own outline would then belong to nothing. 99% of the
+-- part's area is OSM2World's threshold: generous enough for hand-drawn
+-- geometry, tight enough that a row house does not adopt its neighbour's
+-- parts through a shared wall.
+--
+-- *Whether they cover enough of it to stand in for it.* The wiki says the
+-- parts should fill the outline and that a filled outline is not rendered,
+-- but plenty of real buildings carry one small part — a rooftop plant room,
+-- a lift overrun — on an otherwise unmodelled footprint. Dropping the outline
+-- there deletes the building and leaves a box floating where its roof was.
+-- So the outline goes only when the parts cover 90% of it, again OSM2World's
+-- number, and otherwise it draws in full with the parts on top of it.
+--
+-- Not F4Map's approach, which subtracts the parts from the outline and draws
+-- the remainder: an entrance node added to the part but not to the outline
+-- leaves a sliver of building behind, and OSM2World dropped subtraction for
+-- exactly that reason. Whole or nothing has no slivers.
+--
+-- The union is clipped to the outline before measuring, since parts may
+-- overlap each other and a plain sum would read as covered when it is not.
+--
+-- Both sides read `geo_places` directly rather than sharing the `shapes` CTE
+-- below, and that is load-bearing rather than repetition. A CTE referenced
+-- more than once is materialised, a materialised CTE carries no indexes, and
+-- without an index the planner cannot turn `&&` into an index probe — it falls
+-- back to a nested loop that evaluates the spatial predicate over every pair.
+-- Sharing `shapes` here planned at cost 9e14 over ~36 trillion pairs and ran
+-- 40 minutes on production without writing a row before it was killed. Driven
+-- off `parts` against the GIST index on `geo_places.geom` it is one scan and
+-- a few hundred thousand index probes.
+parts AS MATERIALIZED (
+  SELECT geom
+  FROM geo_places
+  WHERE geom_type = 'area'
+    AND COALESCE(tags->>'location', '') <> 'underground'
+    AND COALESCE(tags->>'building:part', 'no') <> 'no'
+),
+covered AS (
+  SELECT o.id as id,
+         ST_Area(ST_Intersection(ST_Union(p.geom), o.geom)) as covered_area,
+         ST_Area(o.geom) as outline_area
+  FROM parts p
+  JOIN geo_places o
+    ON o.geom && p.geom
+   AND o.geom_type = 'area'
+   AND COALESCE(o.tags->>'location', '') <> 'underground'
+   AND COALESCE(o.tags->>'building', 'no') <> 'no'
+   AND COALESCE(o.tags->>'building:part', 'no') = 'no'
+   -- ST_Intersection is the expensive half, so it only runs for the parts a
+   -- plain containment misses.
+   AND (ST_Contains(o.geom, p.geom)
+        OR ST_Area(ST_Intersection(o.geom, p.geom)) >= 0.99 * ST_Area(p.geom))
+  GROUP BY o.id, o.geom
+),
+-- Heights arrive as free text — "12", "12 m", "~10", "3,5" are all in use — and
+-- a plain cast turns one bad value into a failed tile for the whole area. The
+-- leading number is taken where there is one and the row falls through to the
+-- level count otherwise, which is what OpenMapTiles does and what keeps these
+-- columns numeric like the basemap's own.
+measured AS (
+  SELECT s.*,
+         NULLIF(substring(s.tags->>'height'            from '^\s*([0-9]+(?:\.[0-9]+)?)'), '')::real as h,
+         NULLIF(substring(s.tags->>'min_height'        from '^\s*([0-9]+(?:\.[0-9]+)?)'), '')::real as min_h,
+         NULLIF(substring(s.tags->>'building:levels'   from '^\s*([0-9]+(?:\.[0-9]+)?)'), '')::real as levels,
+         NULLIF(substring(s.tags->>'building:min_level' from '^\s*([0-9]+(?:\.[0-9]+)?)'), '')::real as min_levels
+  FROM shapes s
+)
+SELECT m.fid, m.id, m.geom,
+       -- 3.66m a storey and 5m for a building that records neither, both
+       -- OpenMapTiles' numbers, so a building served from here and one served
+       -- from the basemap stand the same height.
+       COALESCE(m.h, m.levels * 3.66, 5)::real          as render_height,
+       COALESCE(m.min_h, m.min_levels * 3.66, 0)::real  as render_min_height,
+       -- Both spellings: OSM accepts either and both are in the data. NULL
+       -- rather than '' where there is none, for the same reason as `hide_3d`
+       -- below — a vector tile has no null, so the key is simply absent and a
+       -- client can ask `["has", "colour"]` rather than testing for an empty
+       -- string it would otherwise have to know about.
+       NULLIF(COALESCE(m.tags->>'building:colour', m.tags->>'building:color', ''), '') as colour,
+       -- The roof, separately. OpenMapTiles has no field for this at all, which
+       -- is half the reason for serving buildings ourselves.
+       NULLIF(COALESCE(m.tags->>'roof:colour', m.tags->>'roof:color', ''), '')         as roof_colour,
+       -- An outline its parts have replaced is the one thing that must not draw;
+       -- see `covered` above for when that is and is not the case.
+       --
+       -- TRUE or NULL, never FALSE, which is deliberate on both counts. A vector
+       -- tile has no null, so Martin drops the key entirely for the ordinary
+       -- building and only the hidden outlines carry it — which is how
+       -- OpenMapTiles emits `hide_3d`, so a client's `["!has", "hide_3d"]`
+       -- filter works unchanged, and the flag costs nothing on the 99% of
+       -- buildings that are not part-mapped.
+       CASE WHEN c.covered_area >= 0.9 * c.outline_area THEN true END as hide_3d
+FROM measured m
+LEFT JOIN covered c ON c.id = m.id
+WITH NO DATA;
+
+-- Unique on fid so the view can be refreshed CONCURRENTLY, and GIST on geom so
+-- Martin's envelope filter is an index scan rather than a walk of every
+-- building in the region.
+-- Parts are 334k rows out of 27M, but the planner cannot estimate a jsonb
+-- expression and guesses 12M — which is why, left alone, it refuses to drive
+-- the join from this side and scans every outline instead. A partial index
+-- over exactly the predicate both makes the scan cheap and gives ANALYZE
+-- something honest to read, and it is small because it only covers the parts.
+CREATE INDEX IF NOT EXISTS geo_places_building_part_geom_idx
+  ON geo_places USING GIST (geom)
+  WHERE COALESCE(tags->>'building:part', 'no') <> 'no';
+
+CREATE UNIQUE INDEX IF NOT EXISTS buildings_3d_fid_idx ON buildings_3d (fid);
+CREATE INDEX IF NOT EXISTS buildings_3d_geom_idx ON buildings_3d USING GIST (geom);

@@ -91,6 +91,12 @@ psql "$DATABASE_URL" -f "$PROJECT_DIR/import/create-transit-views.sql"
 # instance upgrading without a re-import.
 psql "$DATABASE_URL" -f "$PROJECT_DIR/import/create-detail-views.sql"
 
+# The 3D buildings view holds rows rather than being a plain view, so creating
+# it is not enough — it comes into existence empty. Filled here, where the
+# building data it joins over has just changed. Minutes on a large extract.
+echo "[$(date '+%H:%M:%S')] Building the 3D buildings view (spatial join, this takes a while)..."
+psql "$DATABASE_URL" -c "REFRESH MATERIALIZED VIEW buildings_3d;"
+
 # ── Step 4: Generate codes from OSM tags ─────────────────────────────────────
 echo "[$(date '+%H:%M:%S')] [4/8] Extracting codes (IATA, ICAO, ref, short_name, alt_name)..."
 psql "$DATABASE_URL" -c "

@@ -115,7 +115,17 @@ services:
     # release to invalidate — unlike MOTIS and GraphHopper below.
     image: ghcr.io/maplibre/martin
     restart: unless-stopped
-    command: --config /config/martin-config.yaml --webui enable-for-all
+    # --on-invalid warn, because the default is abort and abort means *all*
+    # tiles. Martin validates every source at startup and a single one it
+    # cannot read is fatal: it exits, compose restarts it, and it exits again,
+    # so the basemap and every other layer go down along with the broken one.
+    # A materialized view that exists but has never been refreshed is exactly
+    # such a source — reading one raises rather than returning no rows — so
+    # `buildings_3d` puts the whole tile server into a crash loop between the
+    # deploy that creates it and the import that first fills it. With `warn`
+    # the unreadable source is dropped from the catalog, answers 404, and
+    # everything else keeps serving.
+    command: --config /config/martin-config.yaml --webui enable-for-all --on-invalid warn
     environment:
       # statement_timeout caps tile queries — an abandoned HTTP request must
       # not keep grinding in Postgres for minutes (scoped to martin's
@@ -160,6 +170,16 @@ services:
     # upgrade instead.
     image: ghcr.io/motis-project/motis:latest
     restart: unless-stopped
+    # MOTIS logs a timer pair per realtime poll — `[scoped_timer] [rt update]`
+    # and friends — at a few lines a second, forever. Docker's json-file driver
+    # is unbounded by default, so that had grown to 18 GB on one dev box and
+    # 7.7 GB in production, on disks that also hold the OSM database. Nothing
+    # reads it beyond the last few minutes of a debugging session.
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
     working_dir: /data
     command: ["/motis", "server", "/data"]
     volumes:

@@ -319,6 +319,33 @@ postgres:
       buffer: 64
       clip_geom: true
 
+    # 3D buildings: outlines and building:parts, from `buildings_3d` (see
+    # import/create-detail-views.sql). Served here rather than read off the
+    # basemap because a stock OpenMapTiles build carries no `hide_3d`, so a
+    # client cannot tell a part-mapped building's outline from its parts and
+    # draws both, and no roof colour at all.
+    #
+    # Zooms match the basemap's own building layer: nothing draws buildings
+    # below 14, and 16 is where the source stops and the client over-zooms.
+    buildings_3d:
+      schema: public
+      table: buildings_3d
+      srid: 4326
+      geometry_column: geom
+      geometry_type: GEOMETRY
+      id_column: fid
+      minzoom: 14
+      maxzoom: 16
+      properties:
+        id: id
+        render_height: render_height
+        render_min_height: render_min_height
+        colour: colour
+        roof_colour: roof_colour
+        hide_3d: hide_3d
+      buffer: 64
+      clip_geom: true
+
     street_furniture:
       schema: public
       table: street_furniture

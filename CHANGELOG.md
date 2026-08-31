@@ -10,6 +10,17 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Added
+
+* A `buildings_3d` tile source, carrying building outlines and `building:part`
+  polygons with the `hide_3d` flag that separates them. OpenStreetMap maps a
+  detailed building twice — an outline covering the whole footprint and parts
+  inside it holding the real heights — and a stock OpenMapTiles basemap carries
+  no way to tell one from the other, so a 3D client draws both and every
+  part-mapped building comes out doubled and z-fighting. The source also carries
+  wall and roof colour, the latter having no field in the OpenMapTiles schema at
+  all
+
 ## [0.2.0] - 2026-08-30
 
 ### Added
