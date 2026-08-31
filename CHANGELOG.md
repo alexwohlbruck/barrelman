@@ -10,6 +10,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-08-31
+
 ### Added
 
 * A `buildings_3d` tile source, carrying building outlines and `building:part`
@@ -20,6 +22,22 @@ does it — and the release pipeline turns it into the GitHub Release notes.
   part-mapped building comes out doubled and z-fighting. The source also carries
   wall and roof colour, the latter having no field in the OpenMapTiles schema at
   all
+* The PMTiles basemap is re-rendered whenever an import or an OSM update moves
+  the extract, so it stops being the one output that never followed the data.
+  Martin queries every `postgres:` source live, so a replication diff reaches
+  those tiles at once, but `basemap` is a static archive — the database and the
+  routing graph moved while the map went on showing whatever planetiler last
+  rendered by hand. It is always a full re-render: PMTiles is write-once, with
+  absolute directory offsets and content-deduplicated tiles, and planetiler has
+  no incremental mode. A couple of US states take a few minutes, which is
+  cheaper than the machinery incremental tiling would need. Gated on
+  `REBUILD_BASEMAP`, and skipped outright on an install that has no basemap
+* Scripts that chain into other scripts say so in the console. An OSM update
+  also rebuilds the routing graph and the basemap, and a GTFS check rebuilds the
+  MOTIS dataset — all of which the Scripts page rendered as a single step, so
+  the only way to learn what a run would touch was to read the shell. The card
+  now badges its follow-ups and the run dialog lists them with the conditions
+  under which each is skipped
 
 ## [0.2.0] - 2026-08-30
 
