@@ -1,4 +1,5 @@
 import Elysia, { t } from 'elysia'
+import pkg from '../../package.json' with { type: 'json' }
 import { adminAuthHandler } from '../middleware/auth'
 import {
   SCRIPTS,
@@ -101,7 +102,9 @@ export const adminConsoleConfigRoutes = new Elysia({ prefix: '/admin' }).get(
     authRequired: true,
     accountsEnabled,
     apiName: 'Barrelman',
-    version: '0.4.0',
+    // package.json is what the release pipeline tags from, so it is the only
+    // version worth reporting. This was a literal and had drifted to 0.4.0.
+    version: pkg.version,
   }),
   { detail: { summary: 'Admin console config', tags: ['Admin'] } },
 )

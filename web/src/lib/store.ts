@@ -69,6 +69,19 @@ export async function refreshRegions() {
   }
 }
 
+// ── Instance version (once per load) ──────────────────────────────────
+// `/admin/config` is public, so this resolves even before sign-in.
+export const version = ref<string | null>(null)
+
+export async function loadVersion() {
+  if (version.value !== null) return
+  try {
+    version.value = (await api.getConfig()).version
+  } catch {
+    // Purely decorative — a failure just leaves the sidebar without a version.
+  }
+}
+
 // ── Global jobs poller ────────────────────────────────────────────────
 let pollTimer: number | null = null
 
