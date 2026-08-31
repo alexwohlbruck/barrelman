@@ -23,6 +23,7 @@ import type {
   UsageReport,
   AbuseSignal,
   AdminUser,
+  AdminUserDetail,
   SuspensionInfo,
   SuspensionKind,
   TermsState,
@@ -409,6 +410,24 @@ export function getAdminUsers(params: {
   if (params.offset) query.set('offset', String(params.offset))
   const suffix = query.toString()
   return request(`/admin/users${suffix ? `?${suffix}` : ''}`)
+}
+
+/** One account in full: keys, balance, cycle and lifetime usage, audit trail. */
+export function getAdminUser(id: string): Promise<AdminUserDetail> {
+  return request<AdminUserDetail>(`/admin/users/${id}`)
+}
+
+/**
+ * Permanent. Cascades away the account's keys, usage, credit ledger and its
+ * own moderation history — `suspendUser` is the reversible option. The address
+ * is repeated back as a confirmation and the server checks it.
+ */
+export function deleteAdminUser(id: string, email: string): Promise<{ deleted: { id: string; email: string } }> {
+  return request(`/admin/users/${id}`, {
+    method: 'DELETE',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ email }),
+  })
 }
 
 export function suspendUser(
