@@ -303,12 +303,32 @@ if [ "$PBF_MTIME_AFTER" != "$PBF_MTIME_BEFORE" ]; then
   # over a multi-gigabyte file, and once per run — immediately before the
   # consumers that would choke on it — is enough.
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] Verifying the patched extract's referential integrity..."
-  MISSING_NODES="$(docker exec barrelman-db osmium check-refs -r "$PBF_FILE" 2>/dev/null \
+  # Two things here are load-bearing, both learned the hard way:
+  #
+  #   2>&1  — check-refs writes its whole report to stderr, not stdout. Discard
+  #           stderr and the command yields nothing at all.
+  #   || true — under `set -o pipefail` this would otherwise abort the script on
+  #           every run. check-refs exits non-zero whenever ANY reference is
+  #           missing, and a bounded extract always has missing relation members
+  #           (a healthy one here reports 924). Its exit status is useless as a
+  #           verdict; only the parsed node count decides.
+  CHECK_REFS_OUT="$(docker exec barrelman-db osmium check-refs -r "$PBF_FILE" 2>&1 || true)"
+  MISSING_NODES="$(printf '%s\n' "$CHECK_REFS_OUT" \
     | sed -n 's/^Nodes  *in ways  *missing: *//p' | tr -cd '0-9')"
+
+  # An empty parse means the check did not run (no osmium, unreadable file) —
+  # distinct from "ran and found nothing". Failing open there would restore the
+  # exact silence this guard exists to remove, so say so and stop.
+  if [ -z "$MISSING_NODES" ]; then
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: could not verify $(basename "$PBF_FILE") —" >&2
+    echo "  'osmium check-refs' produced no node count. Skipping the rebuilds rather" >&2
+    echo "  than feeding them an unverified extract." >&2
+    exit 1
+  fi
 
   # Relations may reference objects outside the extract — that is normal for any
   # bounded region and is not checked. Only ways with missing nodes are fatal.
-  if [ "${MISSING_NODES:-0}" -gt 0 ]; then
+  if [ "$MISSING_NODES" -gt 0 ]; then
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: $(basename "$PBF_FILE") has ${MISSING_NODES} node(s) referenced by ways" >&2
     echo "  but absent from the file. Every consumer of the extract will fail on it:" >&2
     echo "    MOTIS       — import aborts: unable to import: invalid location" >&2
