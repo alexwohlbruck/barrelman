@@ -15,17 +15,26 @@
 # its source list at startup, so a Martin restarted before the relation exists
 # will not pick it up.
 
-# Optional basemap, disabled by default.
+# Optional basemap.
 #
 # Martin treats an unresolvable source as FATAL and exits, so naming a file that
-# nothing in the import pipeline produces meant martin crash-looped on every
-# fresh install and no tiles were served at all:
+# is not there crash-loops martin and takes down EVERY tile source, not just
+# this one:
 #
 #   Source basemap: IO error No such file or directory (os error 2):
 #   /data/basemap.pmtiles
 #
-# To enable it, put a .pmtiles file at data/basemap.pmtiles (the host side of
-# the barrelman-osm-data volume) and uncomment:
+# So this block and the file must be kept in step, and it ships commented out
+# because a fresh install has no archive. To turn a basemap on: build the first
+# one with "Rebuild Basemap" in the console with "Build even if none exists"
+# on (or `BASEMAP_FORCE=1 ./scripts/rebuild-basemap.sh`), then uncomment.
+#
+# Unlike every source under `postgres:` below, this one is a static archive
+# rather than a live query. scripts/rebuild-basemap.sh is what keeps it in step
+# with the database — it runs automatically after an import, and after an OSM
+# update that moved the extract. Enabling this block without that archive on
+# disk is the crash-loop above; building it without enabling the block renders
+# 700 MB that nothing serves.
 #
 # pmtiles:
 #   sources:

@@ -76,6 +76,11 @@ const SEEDS: Array<Pick<ScheduleInput, 'scriptId' | 'cron'> & { params?: Record<
   { scriptId: 'gtfs-watch', cron: '0 4 * * *' },
   // GBFS systems churn slowly — weekly is plenty.
   { scriptId: 'gbfs-import', cron: '30 5 * * 0' },
+  // Redundant with the default nightly OSM update, which rebuilds the basemap
+  // itself whenever the extract moves. This seed is for the other setup: turn
+  // REBUILD_BASEMAP off on osm-update so nightly stays quick, and enable this to
+  // re-render on a slower cadence instead. Enabling both just renders twice.
+  { scriptId: 'osm-basemap', cron: '0 6 * * 0' },
 ]
 
 let schemaReady: Promise<void> | null = null

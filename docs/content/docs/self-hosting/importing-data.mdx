@@ -115,7 +115,7 @@ Run these detached (`-d`) or under `tmux`. A state-sized import is tens of minut
 docker compose exec -d barrelman-ops bash scripts/run-import.sh
 ```
 
-This downloads each region's PBF, `osmium merge`s them into one extract, runs osm2pgsql inside `barrelman-db`, then does all the post-processing that makes search work: structured address extraction, GiST and GIN indexes, `codes` and `name_abbrev` precomputation, road intersections, parent-context spatial joins, and a full-text vector rebuild. Finally it rebuilds the GraphHopper graph.
+This downloads each region's PBF, `osmium merge`s them into one extract, runs osm2pgsql inside `barrelman-db`, then does all the post-processing that makes search work: structured address extraction, GiST and GIN indexes, `codes` and `name_abbrev` precomputation, road intersections, parent-context spatial joins, and a full-text vector rebuild. Finally it rebuilds the GraphHopper graph and, on an install that has one, re-renders the PMTiles basemap.
 
 Watch it:
 
