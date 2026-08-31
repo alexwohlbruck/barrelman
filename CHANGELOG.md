@@ -12,6 +12,20 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ### Fixed
 
+* A replication update can leave the OSM extract with ways referencing nodes
+  that are no longer in it, and every consumer then fails on the same dangling
+  reference — MOTIS with `unable to import: invalid location`, GraphHopper and
+  the basemap render with their own variants of it, an hour after the update
+  reported success. Geofabrik clips its diffs to one region's polygon, so on a
+  merged multi-region extract a node deleted in the followed region is dropped
+  while a neighbouring region's ways still reference it; patching cannot repair
+  that. `update-osm.sh` now verifies the patched extract before the rebuilds
+  that consume it, and refuses to run them on a damaged one, naming
+  `UPDATE_MODE=full` as the repair. `rebuild-motis.sh` points at the same
+  diagnosis when an import dies this way
+
+### Fixed
+
 * Rebuild Basemap now renders successfully. Planetiler reads the archive format
   from the output file's last extension, and the script staged its render as
   `basemap.pmtiles.next` — so every run died during argument parsing with

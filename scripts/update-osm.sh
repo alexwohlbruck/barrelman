@@ -289,6 +289,37 @@ docker exec barrelman-db psql "$DB_URL" -c "ANALYZE geo_places; ANALYZE bicycle_
 # moved. Before the extract was patched above, this ran unconditionally and
 # rebuilt an identical graph on every replication run.
 if [ "$PBF_MTIME_AFTER" != "$PBF_MTIME_BEFORE" ]; then
+  # A patched extract can be structurally valid and still be unusable. Geofabrik
+  # clips its diffs to one region's polygon, so a node deleted there is dropped
+  # from the merged extract while a way from a neighbouring region's extract goes
+  # on referencing it — the case apply-osm-diff.sh notes but treats as cosmetic.
+  # It is not: libosmium raises `invalid location` on the first dangling
+  # reference, so MOTIS dies with "unable to import: invalid location" and
+  # GraphHopper and planetiler fail the same way. Left unchecked that surfaces
+  # an hour later as three separate rebuild failures with no shared cause.
+  #
+  # Checked here rather than per chunk in apply-osm-diff.sh: this is a full pass
+  # over a multi-gigabyte file, and once per run — immediately before the
+  # consumers that would choke on it — is enough.
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] Verifying the patched extract's referential integrity..."
+  MISSING_NODES="$(docker exec barrelman-db osmium check-refs -r "$PBF_FILE" 2>/dev/null \
+    | sed -n 's/^Nodes  *in ways  *missing: *//p' | tr -cd '0-9')"
+
+  # Relations may reference objects outside the extract — that is normal for any
+  # bounded region and is not checked. Only ways with missing nodes are fatal.
+  if [ "${MISSING_NODES:-0}" -gt 0 ]; then
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: $(basename "$PBF_FILE") has ${MISSING_NODES} node(s) referenced by ways" >&2
+    echo "  but absent from the file. Every consumer of the extract will fail on it:" >&2
+    echo "    MOTIS       — unable to import: invalid location" >&2
+    echo "    GraphHopper — graph build aborts on the same reference" >&2
+    echo "    planetiler  — basemap render aborts on the same reference" >&2
+    echo "  Postgres is updated and consistent; only the extract is damaged." >&2
+    echo "  Rebuild it from fresh extracts with UPDATE_MODE=full, which re-downloads" >&2
+    echo "  and re-merges rather than patching. Skipping the rebuilds below." >&2
+    exit 1
+  fi
+  echo "  Extract is intact (no ways reference missing nodes)."
+
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] Extract changed — triggering GraphHopper graph rebuild..."
   "$SCRIPT_DIR/rebuild-graphhopper.sh"
 
