@@ -10,6 +10,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-08-31
+
 ### Fixed
 
 * Rebuild Basemap now renders successfully. Planetiler reads the archive format
