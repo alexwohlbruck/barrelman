@@ -150,7 +150,9 @@ osmium check-refs -r data/region.osm.pbf
 
 `Nodes in ways missing` above zero is the fault; non-zero counts for relations are normal for any bounded extract and are harmless.
 
-Replication is how it happens. Geofabrik clips its diffs to one region's polygon, so on a merged multi-region extract a node deleted in the followed region is dropped while a neighbouring region's ways still reference it. Patching cannot repair that — the nodes are simply gone. Re-run `scripts/update-osm.sh` with `UPDATE_MODE=full`, which re-downloads and re-merges the extracts instead of patching. GraphHopper and the basemap render fail on the same extract for the same reason.
+Replication is how it happens. Geofabrik clips its diffs to one region's polygon, so on a merged multi-region extract a node deleted in the followed region is dropped while a neighbouring region's ways still reference it. Patching cannot repair that — the nodes are simply gone. Re-run `scripts/update-osm.sh` with `UPDATE_MODE=full`, which re-downloads and re-merges the extracts instead of patching.
+
+MOTIS is the loud symptom, not the only one. GraphHopper builds a graph from a damaged extract without complaining, leaving the affected ways out of the routing graph, so street routing loses roads with nothing in the logs to say why. Since `update-osm.sh` checks the extract before triggering either rebuild, a failure here means neither ran.
 
 **`tt: binary version mismatch` on MOTIS startup**
 
