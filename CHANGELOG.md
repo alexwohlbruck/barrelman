@@ -28,16 +28,6 @@ does it — and the release pipeline turns it into the GitHub Release notes.
   and exited 0. The console showed a green job that had rendered nothing. A lock
   older than six hours, well beyond the longest render, is now reclaimed with a
   warning instead of obeyed
-
-### Added
-
-* The console sidebar shows the version of the instance it is talking to, below
-  the sign-out button. `/admin/config` now reports the version from
-  `package.json` — what the release pipeline tags from — rather than a hardcoded
-  literal, which had drifted to a 0.4.0 that was never released
-
-### Fixed
-
 * A replication update can leave the OSM extract with ways referencing nodes
   that are no longer in it. MOTIS then fails outright with `unable to import:
   invalid location`, an hour after the update reported success — and GraphHopper
@@ -50,6 +40,15 @@ does it — and the release pipeline turns it into the GitHub Release notes.
   that consume it, and refuses to run them on a damaged one, naming
   `UPDATE_MODE=full` as the repair. `rebuild-motis.sh` points at the same
   diagnosis when an import dies this way
+
+### Added
+
+* The console sidebar shows the version of the instance it is talking to, below
+  the sign-out button. `/admin/config` now reports the version from
+  `package.json` — what the release pipeline tags from — rather than a hardcoded
+  literal, which had drifted to a 0.4.0 that was never released
+
+## [0.2.2] - 2026-08-31
 
 ### Fixed
 
