@@ -58,6 +58,9 @@ BASEMAP_NAME="basemap.pmtiles"
 # before a single OSM block is read.
 STAGING_NAME="${BASEMAP_NAME%.pmtiles}.next.pmtiles"
 LOCK_NAME=".basemap-rebuild.lock"
+# Older than this and the lock cannot belong to a live render, so it is reclaimed
+# rather than obeyed. Well above the longest observed render (~45 min).
+STALE_LOCK_HOURS="${BASEMAP_STALE_LOCK_HOURS:-6}"
 
 log() { echo "[$(date '+%H:%M:%S')] [basemap] $*"; }
 
@@ -129,9 +132,27 @@ fi
 # runs writing the same temp file. mkdir is atomic on every filesystem here and
 # needs no util-linux, unlike flock.
 if ! io_sh "mkdir /out/${LOCK_NAME}" >/dev/null 2>&1; then
-  log "another basemap rebuild is already running — skipping"
-  log "(clear a stale lock with: rm -rf <data>/${LOCK_NAME})"
-  exit 0
+  # The lock outlives its holder if that holder was killed rather than exited —
+  # the EXIT trap below cannot run on SIGKILL, which is exactly what a container
+  # restart delivers. A basemap render lost its parent that way and left this
+  # directory behind; every later run then took this branch and exited 0, so the
+  # console showed a green job that had rendered nothing. Silently disabling the
+  # job until someone reads the script is the worst of the options.
+  #
+  # A render takes tens of minutes, so anything older than STALE_LOCK_HOURS is
+  # not a live holder. Take it over and say so.
+  LOCK_AGE_S="$(io_sh "echo \$(( \$(date +%s) - \$(stat -c %Y /out/${LOCK_NAME} 2>/dev/null || date +%s) ))" 2>/dev/null | tr -cd '0-9')"
+  if [ "${LOCK_AGE_S:-0}" -gt "$((STALE_LOCK_HOURS * 3600))" ]; then
+    log "WARNING: lock is $((LOCK_AGE_S / 3600))h old — its holder is gone, taking it over"
+    io_sh "rm -rf /out/${LOCK_NAME} && mkdir /out/${LOCK_NAME}" >/dev/null 2>&1 || {
+      log "ERROR: could not reclaim the stale lock" >&2
+      exit 1
+    }
+  else
+    log "another basemap rebuild is already running — skipping"
+    log "(clear a stale lock with: rm -rf <data>/${LOCK_NAME})"
+    exit 0
+  fi
 fi
 trap 'io_sh "rmdir /out/'"${LOCK_NAME}"'" >/dev/null 2>&1 || true' EXIT
 
