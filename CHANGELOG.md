@@ -10,6 +10,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-08-31
+
 ### Fixed
 
 * A slow query no longer kills the ops worker and the job it is running. The
