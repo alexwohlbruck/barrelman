@@ -128,8 +128,27 @@ async function runJob(job: Job): Promise<void> {
   const flush = async () => {
     if (buf.length) await store.appendLogs(job.id, buf.splice(0, buf.length))
   }
-  const flushTimer = setInterval(() => void flush(), LOG_FLUSH_MS)
-  const hbTimer = setInterval(() => void store.heartbeat(job.id), HEARTBEAT_MS)
+  // Every timer below talks to Postgres on a schedule while a job runs, and a
+  // rejection from any of them used to be unhandled — which Bun treats as fatal.
+  // So one slow query killed the worker *and* the job it was supervising: a
+  // basemap render lost its parent mid-run this way, leaving an orphaned
+  // planetiler container and a job the console reported as failed after 40
+  // minutes of work that had actually succeeded. The trigger was
+  // "canceling statement due to statement timeout" on a log INSERT while the box
+  // was under memory pressure — bookkeeping, not the job's own work.
+  //
+  // None of these are worth a job for. Log and carry on; the heartbeat has a
+  // grace period, the cancel poll retries next tick, and log lines are
+  // diagnostics. A genuinely dead database still stops the job, via the
+  // heartbeat timeout that marks it failed.
+  const survive = (what: string) => (err: unknown) =>
+    console.error(`[ops-worker] ${what} failed for job ${job.id} (continuing):`, err)
+
+  const flushTimer = setInterval(() => void flush().catch(survive('log flush')), LOG_FLUSH_MS)
+  const hbTimer = setInterval(
+    () => void store.heartbeat(job.id).catch(survive('heartbeat')),
+    HEARTBEAT_MS,
+  )
   let proc: ReturnType<typeof Bun.spawn> | undefined
   let canceled = false
   const cancelTimer = setInterval(() => {
@@ -143,7 +162,7 @@ async function runJob(job: Job): Promise<void> {
           /* already gone */
         }
       }
-    })()
+    })().catch(survive('cancel check'))
   }, CANCEL_CHECK_MS)
 
   const cleanup = () => {

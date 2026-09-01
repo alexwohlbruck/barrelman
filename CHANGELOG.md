@@ -10,6 +10,18 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Fixed
+
+* A slow query no longer kills the ops worker and the job it is running. The
+  log-flush, heartbeat and cancel-check timers each talked to Postgres on a
+  schedule with their rejections unhandled, which Bun treats as fatal — so
+  `canceling statement due to statement timeout` on an *log line insert* took the
+  whole worker down. A basemap render lost its parent that way mid-run: the
+  planetiler container was left orphaned, and the console reported the job failed
+  after forty minutes of work that had in fact succeeded. All three now log and
+  continue, none of them being worth a job. A genuinely unreachable database
+  still stops the job, through the heartbeat timeout that marks it failed
+
 ### Added
 
 * The console sidebar shows the version of the instance it is talking to, below
