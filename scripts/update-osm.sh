@@ -289,6 +289,58 @@ docker exec barrelman-db psql "$DB_URL" -c "ANALYZE geo_places; ANALYZE bicycle_
 # moved. Before the extract was patched above, this ran unconditionally and
 # rebuilt an identical graph on every replication run.
 if [ "$PBF_MTIME_AFTER" != "$PBF_MTIME_BEFORE" ]; then
+  # A patched extract can be structurally valid and still be unusable. Geofabrik
+  # clips its diffs to one region's polygon, so a node deleted there is dropped
+  # from the merged extract while a way from a neighbouring region's extract goes
+  # on referencing it — the case apply-osm-diff.sh notes but treats as cosmetic.
+  # It is not. libosmium raises `invalid location` on the first dangling
+  # reference, so MOTIS's import dies outright. GraphHopper does not: it built a
+  # graph from an extract carrying 1571 such references without complaint, which
+  # is the worse half of this — the ways involved are simply absent from the
+  # routing graph, and nothing says so.
+  #
+  # Checked here rather than per chunk in apply-osm-diff.sh: this is a full pass
+  # over a multi-gigabyte file, and once per run — immediately before the
+  # consumers that would choke on it — is enough.
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] Verifying the patched extract's referential integrity..."
+  # Two things here are load-bearing, both learned the hard way:
+  #
+  #   2>&1  — check-refs writes its whole report to stderr, not stdout. Discard
+  #           stderr and the command yields nothing at all.
+  #   || true — under `set -o pipefail` this would otherwise abort the script on
+  #           every run. check-refs exits non-zero whenever ANY reference is
+  #           missing, and a bounded extract always has missing relation members
+  #           (a healthy one here reports 924). Its exit status is useless as a
+  #           verdict; only the parsed node count decides.
+  CHECK_REFS_OUT="$(docker exec barrelman-db osmium check-refs -r "$PBF_FILE" 2>&1 || true)"
+  MISSING_NODES="$(printf '%s\n' "$CHECK_REFS_OUT" \
+    | sed -n 's/^Nodes  *in ways  *missing: *//p' | tr -cd '0-9')"
+
+  # An empty parse means the check did not run (no osmium, unreadable file) —
+  # distinct from "ran and found nothing". Failing open there would restore the
+  # exact silence this guard exists to remove, so say so and stop.
+  if [ -z "$MISSING_NODES" ]; then
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: could not verify $(basename "$PBF_FILE") —" >&2
+    echo "  'osmium check-refs' produced no node count. Skipping the rebuilds rather" >&2
+    echo "  than feeding them an unverified extract." >&2
+    exit 1
+  fi
+
+  # Relations may reference objects outside the extract — that is normal for any
+  # bounded region and is not checked. Only ways with missing nodes are fatal.
+  if [ "$MISSING_NODES" -gt 0 ]; then
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: $(basename "$PBF_FILE") has ${MISSING_NODES} node(s) referenced by ways" >&2
+    echo "  but absent from the file. Every consumer of the extract will fail on it:" >&2
+    echo "    MOTIS       — import aborts: unable to import: invalid location" >&2
+    echo "    GraphHopper — builds anyway, without the affected ways and without" >&2
+    echo "                  reporting it, so street routing quietly loses roads" >&2
+    echo "  Postgres is updated and consistent; only the extract is damaged." >&2
+    echo "  Rebuild it from fresh extracts with UPDATE_MODE=full, which re-downloads" >&2
+    echo "  and re-merges rather than patching. Skipping the rebuilds below." >&2
+    exit 1
+  fi
+  echo "  Extract is intact (no ways reference missing nodes)."
+
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] Extract changed — triggering GraphHopper graph rebuild..."
   "$SCRIPT_DIR/rebuild-graphhopper.sh"
 
