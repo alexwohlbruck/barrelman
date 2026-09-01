@@ -212,3 +212,4 @@ Sign-in codes print to the log without SMTP:
 - Meaningful tests only. Keep OpenAPI accurate — it generates the public reference.
 - UI: clean, minimalist, refined. No uppercase tracking-wider text.
 - Verify runtime claims against the running stack, not just the source.
+- When creating pull requests, if applicable, run the app and take a screenshot of the feature or change and attach to the PR for visual confirmation.

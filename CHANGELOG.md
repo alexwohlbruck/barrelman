@@ -10,6 +10,46 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-08-31
+
+### Fixed
+
+* A slow query no longer kills the ops worker and the job it is running. The
+  log-flush, heartbeat and cancel-check timers each talked to Postgres on a
+  schedule with their rejections unhandled, which Bun treats as fatal — so
+  `canceling statement due to statement timeout` on an *log line insert* took the
+  whole worker down. A basemap render lost its parent that way mid-run: the
+  planetiler container was left orphaned, and the console reported the job failed
+  after forty minutes of work that had in fact succeeded. All three now log and
+  continue, none of them being worth a job. A genuinely unreachable database
+  still stops the job, through the heartbeat timeout that marks it failed
+* A basemap rebuild that is killed rather than exited no longer disables every
+  later one. The single-flight lock is released by an `EXIT` trap, which cannot
+  run on `SIGKILL` — what a container restart delivers — so the lock directory
+  outlived its holder and every subsequent run took the "already running" branch
+  and exited 0. The console showed a green job that had rendered nothing. A lock
+  older than six hours, well beyond the longest render, is now reclaimed with a
+  warning instead of obeyed
+* A replication update can leave the OSM extract with ways referencing nodes
+  that are no longer in it. MOTIS then fails outright with `unable to import:
+  invalid location`, an hour after the update reported success — and GraphHopper
+  does something worse, building a graph that silently omits the affected ways,
+  so street routing loses roads with nothing in the logs to say why. Geofabrik
+  clips its diffs to one region's polygon, so on a
+  merged multi-region extract a node deleted in the followed region is dropped
+  while a neighbouring region's ways still reference it; patching cannot repair
+  that. `update-osm.sh` now verifies the patched extract before the rebuilds
+  that consume it, and refuses to run them on a damaged one, naming
+  `UPDATE_MODE=full` as the repair. `rebuild-motis.sh` points at the same
+  diagnosis when an import dies this way
+
+### Added
+
+* The console sidebar shows the version of the instance it is talking to, below
+  the sign-out button. `/admin/config` now reports the version from
+  `package.json` — what the release pipeline tags from — rather than a hardcoded
+  literal, which had drifted to a 0.4.0 that was never released
+
 ## [0.2.2] - 2026-08-31
 
 ### Fixed

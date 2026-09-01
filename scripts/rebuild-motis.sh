@@ -148,6 +148,13 @@ if docker run --rm --network "$NETWORK" \
   docker start "$CONTAINER" >/dev/null
 else
   log "ERROR: motis import failed — restoring previous dataset"
+  # `invalid location` is libosmium's error for a way referencing a node that is
+  # not in the file, so it points at the extract rather than at anything MOTIS or
+  # the feeds did. Naming it here saves bisecting the import tasks to find that
+  # out — the timetable builds fine and only the OSM-reading tasks fail.
+  log "  If the error above is 'invalid location', the OSM extract is damaged:"
+  log "  ways reference missing nodes. Confirm with 'osmium check-refs -r <extract>'"
+  log "  and rebuild it with UPDATE_MODE=full — patched diffs cannot repair it."
   # Server is stopped; use a throwaway container to swap the dataset back.
   docker run --rm -v "${GTFS_VOL}:/data" alpine sh -c \
     'rm -rf /data/data; [ -d /data/data.prev ] && mv /data/data.prev /data/data || true'
