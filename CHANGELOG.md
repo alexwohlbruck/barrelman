@@ -49,6 +49,34 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ### Fixed
 
+* MTA subway departures carry realtime again. MTA publishes subway GTFS-RT with
+  the static feed's schedule-version prefix stripped off the trip id —
+  `ASP26GEN-1038-Sunday-00_000600_1..S03R` in the schedule against
+  `000600_1..S03R` on the wire — and MOTIS matches realtime trips by exact id,
+  so every subway trip update failed to resolve and every subway departure came
+  back with `realTime: false`. The import now strips the prefix on the static
+  side for the feeds that need it. Measured against the seven live subway
+  feeds, 455 of 714 trip updates resolve where none did before. Scope is keyed
+  on the feed's onestop id, so feeds that already publish matching ids, MTA's
+  buses among them, are untouched. The rewrite is skipped, with the reason
+  printed, if the id format changes or if stripping would make two trips
+  running on the same day indistinguishable
+* Re-running the GTFS import no longer empties `gtfs_feeds.rt_urls`, which took
+  realtime down for every feed rather than just one. Importing a feed clears its
+  row before writing the new one, so anything the importer did not itself carry
+  was dropped — and RT URLs come from `import/backfill-rt-urls.ts`, not from the
+  import. The next `scripts/rebuild-motis.sh` then baked a config with no `rt:`
+  section at all, and nothing along the way reported an error. The importer now
+  carries the stored values forward, `--skip-download` included, where the same
+  bug also overwrote each feed's onestop id, name and URL
+* `generate-motis-config.ts` warns when it writes a config that has feeds but no
+  realtime URLs, instead of reporting success. Recovering from one takes a full
+  `motis import`; restarting MOTIS keeps serving the config baked into the
+  dataset
+* Feed ZIPs are written compressed. Every step that rewrote one — the GTFS-Flex
+  strip, the transfers injection, the Fares v2 conversion — re-serialized it
+  uncompressed, taking the subway feed from 5.6 MB to 43 MB on the volume MOTIS
+  imports from
 * A departure board never carries a neighbouring station's runs. MOTIS answers
   a stoptimes query with every stop that shares the requested stop's name, so a
   board for the Chambers St J/Z platform arrived with the 1, 2, 3, A and C of

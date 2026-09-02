@@ -21,7 +21,9 @@ import {
   generateTransfersTxt,
   generateMotisConfig,
   sanitizeGtfsZip,
+  loadFeedIdentities,
 } from '../src/services/gtfs.service'
+import { normalizeSuffixTripIds } from './normalize-trip-ids'
 
 // ── CLI args ────────────────────────────────────────────────────────
 
@@ -56,6 +58,42 @@ if (!apiKey && !skipDownload) {
 
 // ── Main pipeline ───────────────────────────────────────────────────
 
+/**
+ * Align a feed's static trip_ids with its realtime feed, and say what
+ * happened. A skipped rewrite still imports the feed, which then serves
+ * schedules with no realtime. That is what it did before this step existed.
+ */
+async function alignTripIds(
+  buffer: ArrayBuffer,
+  feed: { feedId: string; onestopId?: string; name?: string },
+): Promise<ArrayBuffer> {
+  const { buffer: out, result } = await normalizeSuffixTripIds(buffer, feed)
+  const label = feed.name || feed.onestopId || feed.feedId
+
+  if (result.applied) {
+    const counts = Object.entries(result.rewrittenRows)
+      .map(([file, n]) => `${file} ${n}`)
+      .join(', ')
+    console.log(`  ✓ Aligned trip_ids with realtime (${counts}; ${result.collidingSuffixes} colliding suffixes)`)
+  } else if (result.skipReason === 'date-overlap') {
+    console.error(
+      `  ✗ trip_id alignment SKIPPED for ${label}: ${result.overlaps.length} suffix group(s) ` +
+        'have services running on the same date. Realtime will not resolve for this feed ' +
+        'until this is resolved.',
+    )
+    for (const o of result.overlaps.slice(0, 5)) {
+      console.error(`      ${o.suffix}: ${o.serviceA} vs ${o.serviceB} share ${o.sharedDates.join(', ')}`)
+    }
+  } else if (result.skipReason === 'shape-guard') {
+    console.error(
+      `  ✗ trip_id alignment SKIPPED for ${label}: stripped ids do not have the expected ` +
+        "shape. The feed's trip_id format has probably changed.",
+    )
+  }
+
+  return out
+}
+
 async function main() {
   console.log(`\n=== GTFS Import Pipeline ===`)
   console.log(`Region: ${region}`)
@@ -75,6 +113,11 @@ async function main() {
   // How many feeds we tried, so a run where every one failed can be told apart
   // from a region that legitimately has none.
   let attemptedFeeds = 0
+
+  // Read before anything is imported: importFeedFile clears each feed's row,
+  // so whatever a caller doesn't carry forward is gone. rt_urls in particular
+  // come from backfill-rt-urls.ts, never from this script.
+  const stored = await loadFeedIdentities()
 
   if (!skipDownload) {
     // Step 1: Fetch feed list from Transitland
@@ -119,11 +162,17 @@ async function main() {
           console.log(`  ⚠ Stripped ${removedFiles.length} GTFS-Flex files: ${removedFiles.join(', ')}`)
         }
 
-        writeFileSync(filepath, Buffer.from(buffer))
+        writeFileSync(filepath, Buffer.from(await alignTripIds(buffer, feed)))
         feedFiles.push(filepath)
 
-        // Step 3: Parse and import
-        await importFeedFile(filepath, feed)
+        // Step 3: Parse and import. Transitland's feed listing only finds RT
+        // URLs published on the feed's own record or its `~rt` companion;
+        // backfill-rt-urls.ts also walks the operator listing and finds more.
+        // Keep what's stored when this run turned up nothing.
+        await importFeedFile(filepath, {
+          ...feed,
+          rtUrls: feed.rtUrls?.length ? feed.rtUrls : (stored.get(feed.feedId)?.rtUrls ?? undefined),
+        })
       } catch (err) {
         console.error(`  ✗ Error: ${err instanceof Error ? err.message : err}`)
       }
@@ -139,25 +188,40 @@ async function main() {
     for (const filepath of feedFiles) {
       const feedId = basename(filepath, '.zip')
 
-      // Sanitize existing files too (they may pre-date the flex strip)
+      // The filename is the only identity this path has. Everything else has
+      // to come from the row already in gtfs_feeds, or the re-import
+      // overwrites the real onestop id with the numeric feed id and drops the
+      // feed's name, URL and realtime URLs.
+      const existing = stored.get(feedId)
+      const feed = {
+        feedId,
+        onestopId: existing?.onestopId || feedId,
+        name: existing?.name || feedId,
+        url: existing?.url || '',
+        region: existing?.region || region,
+        rtUrls: existing?.rtUrls ?? undefined,
+      }
+
+      // Sanitize existing files too (they may pre-date the flex strip), then
+      // align trip_ids. Re-running over existing zips has to reach the same
+      // state as a fresh download, or --skip-download quietly produces a feed
+      // whose realtime never resolves. Running it twice is safe: an
+      // already-stripped id fails the shape guard and the feed is left alone.
       try {
         const existingBuffer = await Bun.file(filepath).arrayBuffer()
         const { buffer: cleanBuffer, removedFiles } = await sanitizeGtfsZip(existingBuffer)
         if (removedFiles.length > 0) {
-          writeFileSync(filepath, Buffer.from(cleanBuffer))
           console.log(`  ⚠ Stripped ${removedFiles.length} GTFS-Flex files from ${basename(filepath)}`)
         }
+        const aligned = await alignTripIds(cleanBuffer, feed)
+        if (aligned !== existingBuffer) {
+          writeFileSync(filepath, Buffer.from(aligned))
+        }
       } catch (err) {
-        console.error(`  ⚠ Flex sanitization failed for ${basename(filepath)}: ${err}`)
+        console.error(`  ⚠ Zip preparation failed for ${basename(filepath)}: ${err}`)
       }
 
-      await importFeedFile(filepath, {
-        feedId,
-        onestopId: feedId,
-        name: feedId,
-        url: '',
-        region,
-      })
+      await importFeedFile(filepath, feed)
     }
   }
 

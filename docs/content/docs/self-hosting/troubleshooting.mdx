@@ -188,6 +188,59 @@ path and exit 1. Either way the fix is to import feeds first:
 docker exec barrelman-db psql -U barrelman -d barrelman -tAc 'SELECT count(*) FROM gtfs_feeds'
 ```
 
+**Every departure returns `realTime: false`, across every feed**
+
+The generated MOTIS config has no `rt:` section, so MOTIS polls nothing. It
+imports cleanly and starts cleanly, which is why nothing anywhere reports an
+error. Check what is stored:
+
+```bash
+docker exec barrelman-db psql -U barrelman -d barrelman -tAc \
+  "SELECT count(*), count(*) FILTER (WHERE jsonb_array_length(rt_urls) > 0) FROM gtfs_feeds"
+```
+
+A second number of zero means `gtfs_feeds.rt_urls` was emptied. RT URLs are
+populated by `import/backfill-rt-urls.ts` rather than by the import, and
+versions before 0.3.0 dropped them on every re-import. Recovery is three steps
+in order, and the last one has to be a full rebuild:
+
+```bash
+docker compose exec barrelman bun run import/backfill-rt-urls.ts
+docker compose exec barrelman bun run import/generate-motis-config.ts
+bash scripts/rebuild-motis.sh
+```
+
+Restarting MOTIS does nothing here. `motis server` reads the config baked into
+the dataset at `/data/data/config.yml`, not the one you just regenerated, so
+only a full `motis import` picks up the change.
+
+**MTA subway departures have no realtime, while buses do**
+
+MTA publishes subway realtime with the static feed's schedule-version prefix
+removed, so the two id spaces never meet:
+
+```
+static  ASP26GEN-1038-Sunday-00_000600_1..S03R
+RT                              000600_1..S03R
+```
+
+MOTIS resolves realtime trips by exact id match, so every subway trip update
+fails with `trip_resolve_error`. The import strips the prefix from the static
+side for the feeds that need it. If subway realtime is still missing after
+0.3.0, re-run the import and read its per-feed output — the step announces
+itself, and says why when it declines to run.
+
+It declines in two cases. `stripped ids do not have the expected shape` means
+MTA changed the trip_id format and the rule needs revisiting. `services running
+on the same date` means two trips would collapse onto one id on a day both run,
+which MOTIS cannot tell apart. Either way the feed still imports and still
+serves schedules.
+
+Around a third of subway trip updates will not resolve no matter what. Added
+and unscheduled trips appear in no published schedule, and L trains are
+published with a shorter id on the realtime side than in the schedule
+(`079550_L..N` against `079550_L..N01R`), so the L stays schedule-only.
+
 **`pelias_elasticsearch` restarts forever with `AccessDeniedException[/usr/share/elasticsearch/data/nodes]`**
 
 The Pelias data directory is root-owned and Elasticsearch runs as uid 1000. On a

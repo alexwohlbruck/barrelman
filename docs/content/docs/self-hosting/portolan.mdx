@@ -30,7 +30,7 @@ Portolan is a separate repository, so its binary is not baked into the ops image
 
 ## The three console scripts
 
-All three live under **GTFS / Transit** in the console and wrap `bun run import/portolan-sync.ts`, which runs `portolan sync`, parses its machine-readable result, and lands every corrected zip through the same per-zip pipeline the GTFS importer uses (flex sanitize → PostGIS import → transfers carryover → Fares v2), then rebuilds the MOTIS dataset. MOTIS has no incremental import — even a one-feed patch needs the full rebuild before corrected schedules reach riders.
+All three live under **GTFS / Transit** in the console and wrap `bun run import/portolan-sync.ts`, which runs `portolan sync`, parses its machine-readable result, and lands every corrected zip through the same per-zip pipeline the GTFS importer uses (flex sanitize → realtime trip_id alignment → PostGIS import → transfers carryover → Fares v2), then rebuilds the MOTIS dataset. MOTIS has no incremental import — even a one-feed patch needs the full rebuild before corrected schedules reach riders.
 
 | Script | What it does |
 | --- | --- |

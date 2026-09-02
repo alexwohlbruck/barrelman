@@ -320,6 +320,7 @@ if (import.meta.main) {
       const { db } = await import('../src/db')
       const { gtfsFeeds } = await import('../src/schema/gtfs')
       const { sanitizeGtfsZip } = await import('../src/services/gtfs.service')
+      const { normalizeSuffixTripIds } = await import('./normalize-trip-ids')
       const { importFeedFile, injectTransfersTxt, readZipEntry } = await import('./feed-import')
       const { injectFaresV2 } = await import('./inject-fares-v2')
 
@@ -365,13 +366,32 @@ if (import.meta.main) {
           }
         }
 
-        // Sanitize (strip GTFS-Flex files that crash MOTIS), then land the
-        // zip atomically — temp file + rename, so a crash mid-copy never
-        // leaves a torn zip where MOTIS or a re-import will read it.
+        const existing = rowByFeedId.get(m.feedId)
+        const feedInfo = {
+          feedId: m.feedId,
+          onestopId: existing?.onestopId || m.onestop,
+          name: existing?.name || m.key,
+          url: existing?.url || '',
+          region: existing?.region || undefined,
+          rtUrls: existing?.rtUrls || undefined,
+        }
+
+        // Sanitize (strip GTFS-Flex files that crash MOTIS), align trip_ids
+        // with the feed's realtime ids, then land the zip atomically — temp
+        // file + rename, so a crash mid-copy never leaves a torn zip where
+        // MOTIS or a re-import will read it. Portolan exports from the raw
+        // feed, so without the alignment a geometry correction would quietly
+        // revert the feed to prefixed ids and take its realtime with it.
         const raw = await Bun.file(src).arrayBuffer()
-        const { buffer, removedFiles } = await sanitizeGtfsZip(raw)
+        const { buffer: sanitized, removedFiles } = await sanitizeGtfsZip(raw)
         if (removedFiles.length > 0) {
           console.log(`  ⚠ Stripped ${removedFiles.length} GTFS-Flex files: ${removedFiles.join(', ')}`)
+        }
+        const { buffer, result: alignment } = await normalizeSuffixTripIds(sanitized, feedInfo)
+        if (alignment.applied) {
+          console.log(`  ✓ Aligned trip_ids with realtime (${alignment.collidingSuffixes} colliding suffixes)`)
+        } else if (alignment.skipReason && alignment.skipReason !== 'not-in-scope') {
+          console.error(`  ✗ trip_id alignment SKIPPED (${alignment.skipReason}); realtime will not resolve for this feed`)
         }
         const tmp = `${dest}.tmp-${process.pid}`
         try {
@@ -384,18 +404,10 @@ if (import.meta.main) {
         }
 
         // Re-import into PostGIS through the same path the GTFS importer
-        // uses. Identity fields come from the existing gtfs_feeds row so
-        // recordFeed's upsert preserves name/url/region/rt_urls instead of
-        // blanking them.
-        const existing = rowByFeedId.get(m.feedId)
-        await importFeedFile(dest, {
-          feedId: m.feedId,
-          onestopId: existing?.onestopId || m.onestop,
-          name: existing?.name || m.key,
-          url: existing?.url || '',
-          region: existing?.region || undefined,
-          rtUrls: existing?.rtUrls || undefined,
-        })
+        // uses. Identity fields come from the existing gtfs_feeds row because
+        // importFeedFile clears the row first — anything not carried here is
+        // lost, rt_urls included.
+        await importFeedFile(dest, feedInfo)
 
         // Post-import zip surgery, in the importer's order: transfers
         // injection AFTER the PostGIS import (so gtfs_transfers holds the

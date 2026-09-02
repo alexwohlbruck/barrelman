@@ -73,6 +73,16 @@ async function main() {
     console.log('  No GTFS feeds — timetable block omitted. MOTIS cannot import a')
     console.log('  dataset without one; run the transit import (scripts/download-gtfs.sh) first.')
   }
+  // A config with datasets but no RT URLs is valid YAML and imports cleanly,
+  // so nothing downstream complains. MOTIS simply polls nothing and every
+  // departure comes back with realTime: false. Warn here, because the next
+  // step bakes this file into the dataset at /data/data/config.yml. Only a
+  // full `motis import` undoes that; restarting MOTIS does not.
+  if (datasetCount > 0 && rtCount === 0) {
+    console.warn('  ⚠ No GTFS-RT URLs in this config. Realtime will be off for every feed.')
+    console.warn('    If it was working before, gtfs_feeds.rt_urls is likely empty:')
+    console.warn('    bun run import/backfill-rt-urls.ts, then regenerate and rebuild MOTIS.')
+  }
   if (includeGbfs) {
     console.log(`  ${gbfsCount} GBFS feeds`)
   }
