@@ -10,6 +10,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.2.7] - 2026-09-02
+
 ### Added
 
 * OSM Update, Check for GTFS Updates and Import GBFS Systems take a Regions
