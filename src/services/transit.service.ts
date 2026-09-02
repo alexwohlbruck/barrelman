@@ -261,8 +261,13 @@ export interface StopRoutesResult {
    * connects to this one, so it is reachable without leaving the paid area:
    * the J and Z at Chambers St from Brooklyn Bridge–City Hall. Useful to
    * offer, wrong to list as departing from here.
+   * `nearby` — it calls at a stop within walking distance that the feed does
+   * not join to this station. Usually another agency's: the M22 outside
+   * Brooklyn Bridge–City Hall. Carries no promise about fare.
    */
-  via: 'station' | 'transfer'
+  via: 'station' | 'transfer' | 'nearby'
+  /** Metres to the nearest stop serving this line, on `nearby` rows only. */
+  distanceM?: number
 }
 
 export type FetchFn = (url: string, init?: RequestInit) => Promise<Response>
@@ -1168,6 +1173,7 @@ export async function getNearbyStops(
 export async function getRoutesForStop(
   feedId: string,
   stopId: string,
+  nearby?: { lat: number; lng: number; radius?: number },
 ): Promise<StopRoutesResult[]> {
   const result = await db.execute(sql`
     WITH seed AS (
@@ -1227,7 +1233,7 @@ export async function getRoutesForStop(
     ORDER BY bool_or(m.at_station) DESC, r.route_type, r.route_short_name
   `)
 
-  return (result as any[]).map((row: any) => ({
+  const inSystem: StopRoutesResult[] = (result as any[]).map((row: any) => ({
     routeId: row.route_id,
     feedId: row.feed_id,
     routeShortName: row.route_short_name,
@@ -1238,6 +1244,102 @@ export async function getRoutesForStop(
     agencyName: row.agency_name,
     via: row.at_station ? 'station' : 'transfer',
   }))
+
+  if (!nearby) return inSystem
+  return [...inSystem, ...(await routesNearby(nearby, inSystem))]
+}
+
+/**
+ * How far a "nearby" line may be. Short on purpose: this list is meant to be
+ * the stops a rider can see from the station door, and the radius is the only
+ * thing standing between that and a page of every bus in the district. Two
+ * hundred metres around Brooklyn Bridge–City Hall finds the M22 across the
+ * street and nothing else; four hundred finds sixty stops across ten feeds.
+ *
+ * It is a judgement, not a fact, and a suburban park-and-ride would want more
+ * — hence the caller's override.
+ */
+const NEARBY_RADIUS = 200
+
+/**
+ * Lines calling at stops near the station that the feed does not connect to it.
+ *
+ * Deliberately cross-feed, which is the whole point: a subway station's bus
+ * connections live in another agency's feed and no `transfers.txt` can reach
+ * them. That also means the same service can arrive several times over — New
+ * York is covered by a handful of overlapping bus feeds, so the M22 appears
+ * under three different feed ids — so rows are folded to one per line, keeping
+ * the closest, and anything already reported as `station` or `transfer` is
+ * dropped rather than repeated.
+ */
+async function routesNearby(
+  { lat, lng, radius = NEARBY_RADIUS }: { lat: number; lng: number; radius?: number },
+  inSystem: StopRoutesResult[],
+): Promise<StopRoutesResult[]> {
+  const rows = (await db.execute(sql`
+    SELECT DISTINCT ON (r.route_id, r.feed_id)
+      r.route_id, r.feed_id, r.route_short_name, r.route_long_name,
+      r.route_type, r.route_color, r.route_text_color, r.agency_name,
+      ST_Distance(
+        s.geom::geography,
+        ST_SetSRID(ST_MakePoint(${lng}, ${lat}), 4326)::geography
+      ) AS distance
+    FROM gtfs_stops s
+    JOIN gtfs_stop_routes sr ON sr.feed_id = s.feed_id AND sr.stop_id = s.stop_id
+    JOIN gtfs_routes r ON r.feed_id = sr.feed_id AND r.route_id = sr.route_id
+    WHERE ST_DWithin(
+      s.geom::geography,
+      ST_SetSRID(ST_MakePoint(${lng}, ${lat}), 4326)::geography,
+      ${radius}
+    )
+    AND (s.location_type = 0 OR s.location_type IS NULL)
+    ORDER BY r.route_id, r.feed_id, distance
+  `)) as any[]
+
+  // One row per line as a rider names it. Agency is part of the key because
+  // two operators may both run a "1"; the feed id is not, because one operator
+  // arriving twice from two feeds is the duplication being removed.
+  const seen = new Set(
+    inSystem.map((r) => lineKey(r.routeShortName, r.routeLongName, r.agencyName)),
+  )
+  const nearby: StopRoutesResult[] = []
+
+  for (const row of rows.sort((a, b) => a.distance - b.distance)) {
+    const key = lineKey(row.route_short_name, row.route_long_name, row.agency_name)
+    if (seen.has(key)) continue
+    seen.add(key)
+    nearby.push({
+      routeId: row.route_id,
+      feedId: row.feed_id,
+      routeShortName: row.route_short_name,
+      routeLongName: row.route_long_name,
+      routeType: row.route_type,
+      routeColor: row.route_color,
+      routeTextColor: row.route_text_color,
+      agencyName: row.agency_name,
+      via: 'nearby',
+      distanceM: Math.round(row.distance),
+    })
+  }
+
+  return nearby.sort(
+    (a, b) =>
+      a.routeType - b.routeType ||
+      (a.distanceM ?? 0) - (b.distanceM ?? 0) ||
+      (a.routeShortName ?? '').localeCompare(b.routeShortName ?? ''),
+  )
+}
+
+/** What makes two rows the same line to a rider: its name and who runs it. */
+function lineKey(
+  shortName: string | null,
+  longName: string | null,
+  agencyName: string | null,
+): string {
+  return [
+    (shortName || longName || '').trim().toLowerCase(),
+    (agencyName || '').trim().toLowerCase(),
+  ].join('\u0000')
 }
 
 /** Split a MOTIS stop id ("feedId_stopId") into parts. The feed tag has no

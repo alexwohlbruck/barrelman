@@ -36,13 +36,18 @@ const client: any = () => Promise.resolve([])
 /** What `resolveStations` reads: one row per (seed stop, station member). */
 let STATION_ROWS: any[] = []
 
+/** What `complexSiblings` reads: the stations transfers.txt joins to these. */
+let TRANSFER_ROWS: any[] = []
+
 client.unsafe = (text: string, params: unknown[] = []) => {
   statements.push({ sql: text, params })
-  const rows = text.includes('station_id')
-    ? STATION_ROWS
-    : text.includes('gtfs_stops')
-      ? STOP_ROWS
-      : []
+  const rows = text.includes('gtfs_transfers')
+    ? TRANSFER_ROWS
+    : text.includes('station_id')
+      ? STATION_ROWS
+      : text.includes('gtfs_stops')
+        ? STOP_ROWS
+        : []
   const result: any = Promise.resolve(rows)
   result.values = () => Promise.resolve(rows)
   result.execute = () => Promise.resolve(rows)
@@ -91,6 +96,7 @@ beforeEach(() => {
   statements.length = 0
   STOP_ROWS = [...DEFAULT_STOP_ROWS]
   STATION_ROWS = []
+  TRANSFER_ROWS = []
 })
 
 describe('narrowing to the station', () => {
@@ -522,4 +528,51 @@ describe('a board only ever carries its own stop', () => {
         { headers: { 'content-type': 'application/json' } },
       )
   }
+})
+
+describe('a whole complex', () => {
+  /**
+   * Canal St is four separate GTFS stations — Q01 (N/Q), M20 (J/Z), 639 (4/6)
+   * and R23 (N/R/W) — all named "Canal St" and all joined to each other by
+   * transfers.txt. The map draws them as one label; tapping it asks about all
+   * four, not whichever happened to be nearest the tap.
+   */
+  const CANAL = [
+    { stop_id: 'Q01N', feed_id: '5', stop_name: 'Canal St', parent_station: 'Q01', stop_lat: 40.7186, stop_lon: -74.0008, distance: 12, mode_match: true },
+    { stop_id: 'Q01S', feed_id: '5', stop_name: 'Canal St', parent_station: 'Q01', stop_lat: 40.7186, stop_lon: -74.0008, distance: 12, mode_match: true },
+  ]
+
+  beforeEach(() => {
+    STOP_ROWS = CANAL
+    STATION_ROWS = [
+      { feed_id: '5', seed_id: 'Q01N', station_id: 'Q01', member_id: 'Q01N' },
+      { feed_id: '5', seed_id: 'Q01S', station_id: 'Q01', member_id: 'Q01S' },
+      { feed_id: '5', seed_id: 'M20', station_id: 'M20', member_id: 'M20N' },
+      { feed_id: '5', seed_id: '639', station_id: '639', member_id: '639N' },
+    ]
+    TRANSFER_ROWS = [
+      { feed_id: '5', sid: 'M20' },
+      { feed_id: '5', sid: '639' },
+      { feed_id: '5', sid: 'Q01' },
+    ]
+  })
+
+  test('asks about one station by default', async () => {
+    const result = await getDepartures(
+      { lat: 40.7186, lng: -74.0008, name: 'Canal Street', routeTypes: [1] },
+      fetchFn,
+    )
+
+    expect(result.map((r) => r.stop.stopId)).toEqual(['Q01'])
+  })
+
+  test('adds the stations transfers.txt joins to it', async () => {
+    const result = await getDepartures(
+      { lat: 40.7186, lng: -74.0008, name: 'Canal Street', routeTypes: [1], complex: true },
+      fetchFn,
+    )
+
+    // The seed station is not repeated, and its siblings each get a board.
+    expect(result.map((r) => r.stop.stopId).sort()).toEqual(['639', 'M20', 'Q01'])
+  })
 })

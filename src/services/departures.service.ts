@@ -41,6 +41,11 @@ export interface DepartureRequest {
    *  tags. Stops served by a matching route rank first and are searched out to
    *  a wider radius — see `MODE_MATCH_RADIUS`. */
   routeTypes?: number[]
+  /** Return a board for every station the agency's transfers.txt joins to this
+   *  one, not just the station itself. What a merged station label on the map
+   *  stands for: tapping "Canal St" where four stations are drawn as one asks
+   *  about all four. Off by default — a single station is the normal ask. */
+  complex?: boolean
   /** The place's own name. A station has an identity, and distance alone gets
    *  it wrong: the Brooklyn Bridge–City Hall node is nearer the Chambers St
    *  platforms than its own. A stop whose name folds to this one claims the
@@ -454,6 +459,67 @@ async function resolveStations(
   return resolved
 }
 
+/**
+ * How many stations one complex may return boards for. Canal St is four; the
+ * biggest interchanges in the feed are not much more. The cap exists so a feed
+ * with a pathological transfer graph cannot turn one tap into thirty MOTIS
+ * queries.
+ */
+const MAX_COMPLEX_STATIONS = 8
+
+/**
+ * The stations an agency joins to these by `transfers.txt`.
+ *
+ * One hop, not a closure: transfers are published between the stations a rider
+ * actually walks between, so following them transitively would wander down a
+ * line rather than around an interchange.
+ *
+ * Feed-scoped, because `transfers.txt` is — a bus outside the station belongs
+ * to another agency's feed and cannot appear here at all. `/transit/routes`
+ * answers that question separately, from proximity.
+ */
+async function complexSiblings(
+  stations: Array<{ feedId: string; stopId: string }>,
+): Promise<NearbyStop[]> {
+  if (stations.length === 0) return []
+
+  const seed = sql.join(
+    stations.map((s) => sql`(${s.feedId}::text, ${s.stopId}::text)`),
+    sql`, `,
+  )
+  const known = new Set(stations.map((s) => stationKey(s.feedId, s.stopId)))
+
+  try {
+    const rows = (await db.execute(sql`
+      WITH seed (feed_id, stop_id) AS (VALUES ${seed})
+      SELECT DISTINCT t.feed_id, t.to_stop_id AS sid
+      FROM gtfs_transfers t
+      JOIN seed ON t.feed_id = seed.feed_id AND t.from_stop_id = seed.stop_id
+      WHERE t.to_stop_id <> t.from_stop_id
+      UNION
+      SELECT DISTINCT t.feed_id, t.from_stop_id AS sid
+      FROM gtfs_transfers t
+      JOIN seed ON t.feed_id = seed.feed_id AND t.to_stop_id = seed.stop_id
+      WHERE t.to_stop_id <> t.from_stop_id
+    `)) as any[]
+
+    const out: NearbyStop[] = []
+    for (const row of rows) {
+      const key = stationKey(row.feed_id, row.sid)
+      if (known.has(key)) continue
+      known.add(key)
+      out.push({ feedId: row.feed_id, stopId: row.sid, name: '', lat: 0, lng: 0 })
+      if (out.length >= MAX_COMPLEX_STATIONS - stations.length) break
+    }
+    return out
+  } catch (err) {
+    // The station's own board is the answer that matters; losing its
+    // neighbours is a smaller failure than losing everything.
+    console.error('[Departures] Failed to expand the station complex:', err)
+    return []
+  }
+}
+
 /** A separator no GTFS id contains, so ('a_b','c') and ('a','b_c') stay distinct. */
 function stationKey(feedId: string, stopId: string): string {
   return `${feedId}\u0000${stopId}`
@@ -660,6 +726,7 @@ export async function getDepartures(
     directionId,
     routeTypes,
     name,
+    complex,
     windowMinutes,
   } = request
 
@@ -708,7 +775,22 @@ export async function getDepartures(
   //    1, 2, 3, A and C of the Chambers St 200 m away and claims they depart
   //    from here. Merging several nearby stops is still fine — that is what a
   //    bare coordinate asks for — but each of them keeps its own departures.
-  const stations = await resolveStations(stops)
+  let stations = await resolveStations(stops)
+
+  // A complex is asked for as a whole: add the stations transfers.txt joins to
+  // the ones resolved so far, then resolve those the same way.
+  if (complex) {
+    const siblings = await complexSiblings(
+      [...new Map(stops.map((s) => [stationKey(s.feedId, stations.get(stationKey(s.feedId, s.stopId))?.stationId ?? s.stopId), {
+        feedId: s.feedId,
+        stopId: stations.get(stationKey(s.feedId, s.stopId))?.stationId ?? s.stopId,
+      }])).values()],
+    )
+    if (siblings.length) {
+      stops = [...stops, ...siblings]
+      stations = await resolveStations(stops)
+    }
+  }
 
   const boards = [
     ...new Map(

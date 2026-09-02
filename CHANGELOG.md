@@ -10,6 +10,28 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.2.6] - 2026-09-02
+
+### Added
+
+* `/transit/departures` takes `complex=true` and returns a board for every
+  station the agency's transfers.txt joins to the resolved one, rather than
+  only that station. This is what a merged station label on a map stands for:
+  New York draws four separate GTFS stations named "Canal St" — Q01 (N/Q), M20
+  (J/Z), 639 (4/6/6X) and R23 (N/R/W) — as a single symbol, and tapping it asks
+  about all four rather than whichever was nearest the tap. One hop, not a
+  transitive closure, so it wanders around an interchange and not down a line;
+  capped at eight stations
+* `/transit/routes` takes `lat`/`lng` (and an optional `radius`, default 200 m)
+  and additionally reports `via: 'nearby'` lines — stops within walking
+  distance that the feed does not join to this station. This is how a subway
+  station's bus connections are found at all: `transfers.txt` is scoped to a
+  single feed, so no file in either the subway's or the bus operator's feed can
+  reference the other, and proximity is the only signal left. Nearby rows carry
+  `distanceM`, are folded to one row per line and agency (several overlapping
+  feeds cover the same New York buses, so the M22 otherwise arrives three
+  times), and say nothing about whether the connection is free
+
 ## [0.2.5] - 2026-09-02
 
 ### Fixed
