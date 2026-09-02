@@ -10,6 +10,17 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.2.5] - 2026-09-02
+
+### Fixed
+
+* A departure board never carries a neighbouring station's runs. MOTIS answers
+  a stoptimes query with every stop that shares the requested stop's name, so a
+  board for the Chambers St J/Z platform arrived with the 1, 2, 3, A and C of
+  the unrelated Chambers St 200 m away. Those were already dropped once the
+  caller identified the station; now every board is filtered to the stop it
+  names, including a plain nearby-stops lookup
+
 ## [0.2.4] - 2026-09-02
 
 ### Added
