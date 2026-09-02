@@ -12,6 +12,38 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ### Added
 
+* `/transit/departures` takes `complex=true` and returns a board for every
+  station the agency's transfers.txt joins to the resolved one, rather than
+  only that station. This is what a merged station label on a map stands for:
+  New York draws four separate GTFS stations named "Canal St" — Q01 (N/Q), M20
+  (J/Z), 639 (4/6/6X) and R23 (N/R/W) — as a single symbol, and tapping it asks
+  about all four rather than whichever was nearest the tap. One hop, not a
+  transitive closure, so it wanders around an interchange and not down a line;
+  capped at eight stations
+* The console sidebar shows the version of the instance it is talking to, below
+  the sign-out button. `/admin/config` now reports the version from
+  `package.json` — what the release pipeline tags from — rather than a hardcoded
+  literal, which had drifted to a 0.4.0 that was never released
+* `/transit/departures` takes a `name` parameter — the place's own name — and
+  uses it to identify which station a set of coordinates belongs to. A stop
+  whose name matches claims the board even when another is nearer, and the
+  board is then reported for that station alone
+* Every route from `/transit/routes` now carries `via`: `station` for a line
+  that calls there, `transfer` for one reachable at a connecting station
+  without leaving the paid area — the J and Z at Chambers St, from Brooklyn
+  Bridge–City Hall. Station lines are listed first. A transfer a fare rule buys
+  rather than a walk between platforms is not in `transfers.txt` and is not
+  reported
+
+* `/transit/routes` takes `lat`/`lng` (and an optional `radius`, default 200 m)
+  and additionally reports `via: 'nearby'` lines — stops within walking
+  distance that the feed does not join to this station. This is how a subway
+  station's bus connections are found at all: `transfers.txt` is scoped to a
+  single feed, so no file in either the subway's or the bus operator's feed can
+  reference the other, and proximity is the only signal left. Nearby rows carry
+  `distanceM`, are folded to one row per line and agency (several overlapping
+  feeds cover the same New York buses, so the M22 otherwise arrives three
+  times), and say nothing about whether the connection is free
 * The three portolan sync scripts take a **Parallel feed builds** setting,
   passed to `portolan sync --jobs`. Portolan otherwise sizes its own
   parallelism from CPU count, with no view of what else the host is running,
@@ -27,6 +59,12 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ### Fixed
 
+* A departure board never carries a neighbouring station's runs. MOTIS answers
+  a stoptimes query with every stop that shares the requested stop's name, so a
+  board for the Chambers St J/Z platform arrived with the 1, 2, 3, A and C of
+  the unrelated Chambers St 200 m away. Those were already dropped once the
+  caller identified the station; now every board is filtered to the stop it
+  names, including a plain nearby-stops lookup
 * A slow query no longer kills the ops worker and the job it is running. The
   log-flush, heartbeat and cancel-check timers each talked to Postgres on a
   schedule with their rejections unhandled, which Bun treats as fatal — so
@@ -43,16 +81,6 @@ does it — and the release pipeline turns it into the GitHub Release notes.
   and exited 0. The console showed a green job that had rendered nothing. A lock
   older than six hours, well beyond the longest render, is now reclaimed with a
   warning instead of obeyed
-
-### Added
-
-* The console sidebar shows the version of the instance it is talking to, below
-  the sign-out button. `/admin/config` now reports the version from
-  `package.json` — what the release pipeline tags from — rather than a hardcoded
-  literal, which had drifted to a 0.4.0 that was never released
-
-### Fixed
-
 * A replication update can leave the OSM extract with ways referencing nodes
   that are no longer in it. MOTIS then fails outright with `unable to import:
   invalid location`, an hour after the update reported success — and GraphHopper
@@ -65,9 +93,6 @@ does it — and the release pipeline turns it into the GitHub Release notes.
   that consume it, and refuses to run them on a damaged one, naming
   `UPDATE_MODE=full` as the repair. `rebuild-motis.sh` points at the same
   diagnosis when an import dies this way
-
-### Fixed
-
 * Rebuild Basemap now renders successfully. Planetiler reads the archive format
   from the output file's last extension, and the script staged its render as
   `basemap.pmtiles.next` — so every run died during argument parsing with
@@ -85,6 +110,19 @@ does it — and the release pipeline turns it into the GitHub Release notes.
   line when it falls back to the in-volume copy, and refuses when there are none
   at all. Like the existing feed-count guard it runs before the current dataset
   is moved aside, so a misconfigured instance costs nothing
+* A departure board opened on a subway station showed the lines of whichever
+  stop happened to be nearest, which is not always the station itself. The
+  Brooklyn Bridge–City Hall stop_position sits 37.8 m from the Chambers St
+  platforms and 52.2 m from its own, so its board filled with the 1, 2, 3, A
+  and C from an unrelated complex 200 m away and listed its own 4, 5 and 6
+  last, if at all. Naming the place now settles which station it is
+* A station's departures are no longer listed twice. The board was built by
+  asking MOTIS about each platform, and MOTIS answers every platform with the
+  same station-level list — so each train appeared once per platform ("Now,
+  Now"). It is now asked once, at the GTFS parent
+* Departures are filtered to runs that actually call at the station. MOTIS
+  resolves a stoptimes query to every stop sharing the requested stop's name,
+  and New York has two unrelated Chambers St complexes 200 m apart
 
 ## [0.2.1] - 2026-08-31
 

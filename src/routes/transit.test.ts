@@ -91,6 +91,7 @@ const mockStopRoutes: StopRoutesResult[] = [
     routeId: 'R001', feedId: 'feed_1', routeShortName: '9',
     routeLongName: 'Route 9 - Downtown', routeType: 3,
     routeColor: 'FF0000', routeTextColor: 'FFFFFF', agencyName: 'CATS',
+    via: 'station',
   },
 ]
 

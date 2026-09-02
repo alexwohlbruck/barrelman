@@ -275,7 +275,16 @@ export function createTransitRoutes(deps: {
           return { error: 'feedId and stopId are required' }
         }
 
-        return await getRoutesForStop(query.feedId, query.stopId)
+        // Nearby lines need a point: `transfers.txt` is scoped to one feed, so
+        // a stop id alone cannot reach another agency's bus outside the door.
+        const lat = Number(query.lat)
+        const lng = Number(query.lng)
+        const nearby =
+          Number.isFinite(lat) && Number.isFinite(lng)
+            ? { lat, lng, radius: query.radius ? Number(query.radius) : undefined }
+            : undefined
+
+        return await getRoutesForStop(query.feedId, query.stopId, nearby)
       } catch (err) {
         set.status = 500
         return {
@@ -287,12 +296,27 @@ export function createTransitRoutes(deps: {
       query: t.Object({
         feedId: t.String(),
         stopId: t.String(),
+        lat: t.Optional(t.String()),
+        lng: t.Optional(t.String()),
+        radius: t.Optional(t.String()),
       }),
       detail: {
         summary: 'Get routes serving a stop',
         description:
-          'Returns all transit routes that pass through the specified stop, ' +
-          'including route name, color, type, and agency information.',
+          'Returns the transit routes reachable at the specified stop, with ' +
+          'route name, color, type and agency. Each route carries `via`: ' +
+          '`station` for a line that calls here, `transfer` for one that calls ' +
+          "at a station the agency's transfers.txt connects to this one, " +
+          'reachable without leaving the paid area — the J and Z at Chambers ' +
+          'St from Brooklyn Bridge–City Hall. Station lines are listed first. ' +
+          'A free transfer bought by a fare rule rather than a walk between ' +
+          'platforms is not published in transfers.txt and is not reported. ' +
+          'Pass `lat`/`lng` (and optionally `radius`, default 200 m) to also ' +
+          'get `nearby` lines: stops within walking distance that the feed ' +
+          "does not join to this station — typically another agency's buses, " +
+          'which no transfers.txt can reference because it is scoped to a ' +
+          'single feed. Those rows carry `distanceM`, are folded to one per ' +
+          'line and agency, and imply nothing about fare.',
         tags: ['Transit'],
       },
     })
@@ -323,6 +347,8 @@ export function createTransitRoutes(deps: {
             ? query.routeShortNames.split(',').map((s) => s.trim()).filter(Boolean)
             : undefined,
           directionId: query.directionId || undefined,
+          name: query.name || undefined,
+          complex: query.complex === 'true' || query.complex === '1',
           routeTypes: query.routeTypes
             ? query.routeTypes
                 .split(',')
@@ -351,6 +377,8 @@ export function createTransitRoutes(deps: {
         stopId: t.Optional(t.String()),
         routeShortNames: t.Optional(t.String()),
         directionId: t.Optional(t.String()),
+        name: t.Optional(t.String()),
+        complex: t.Optional(t.String()),
         routeTypes: t.Optional(t.String()),
         windowMinutes: t.Optional(t.String()),
       }),
@@ -364,9 +392,19 @@ export function createTransitRoutes(deps: {
           'Pass `routeTypes` (comma-separated GTFS route_type values) to rank ' +
           'stops of that mode first and reach further for them — a ferry ' +
           'terminal or aerial tramway station otherwise matches the bus stop ' +
-          'on the street outside. Pass `windowMinutes` to bound the board by ' +
-          'time rather than by event count; each stop then reports `hasMore` ' +
-          'when runs exist past what was returned.',
+          'on the street outside. Pass `name` (the place\'s own name) to ' +
+          'identify the station outright: a stop whose name matches claims the ' +
+          'board even when another is nearer, and the board is then reported ' +
+          'for that station alone — asked once at its GTFS parent, so its ' +
+          'platforms are not listed twice, and filtered to runs that call ' +
+          'there. Without it the board merges whatever is nearby. Pass ' +
+          '`complex=true` to get a board for every station the agency joins ' +
+          'to this one in transfers.txt rather than only the station itself — ' +
+          'what a merged station label stands for, where four "Canal St" ' +
+          'stations are drawn as one. Pass ' +
+          '`windowMinutes` to bound the board by time rather than by event ' +
+          'count; each stop then reports `hasMore` when runs exist past what ' +
+          'was returned.',
         tags: ['Transit'],
       },
     })

@@ -33,9 +33,21 @@ const TRAM_AND_BUSES = [
 // drizzle instance on top means the assertions see the SQL this codebase
 // actually generates, not a reconstruction of it.
 const client: any = () => Promise.resolve([])
+/** What `resolveStations` reads: one row per (seed stop, station member). */
+let STATION_ROWS: any[] = []
+
+/** What `complexSiblings` reads: the stations transfers.txt joins to these. */
+let TRANSFER_ROWS: any[] = []
+
 client.unsafe = (text: string, params: unknown[] = []) => {
   statements.push({ sql: text, params })
-  const rows = text.includes('gtfs_stops') ? STOP_ROWS : []
+  const rows = text.includes('gtfs_transfers')
+    ? TRANSFER_ROWS
+    : text.includes('station_id')
+      ? STATION_ROWS
+      : text.includes('gtfs_stops')
+        ? STOP_ROWS
+        : []
   const result: any = Promise.resolve(rows)
   result.values = () => Promise.resolve(rows)
   result.execute = () => Promise.resolve(rows)
@@ -46,6 +58,7 @@ client.options = { parsers: {}, serializers: {} }
 mock.module('../db', () => ({ db: drizzle(client), connection: client }))
 
 const { getDepartures, parseServiceDate } = await import('./departures.service')
+import type { FetchFn } from './departures.service'
 
 /** MOTIS stand-in — the stop search is what's under test, not the timetable. */
 const fetchFn = async () =>
@@ -82,6 +95,8 @@ const DEFAULT_STOP_ROWS = [...STOP_ROWS]
 beforeEach(() => {
   statements.length = 0
   STOP_ROWS = [...DEFAULT_STOP_ROWS]
+  STATION_ROWS = []
+  TRANSFER_ROWS = []
 })
 
 describe('narrowing to the station', () => {
@@ -200,7 +215,9 @@ describe('nearby stop search', () => {
   test('skips the spatial search entirely for a direct stop query', async () => {
     await getDepartures({ lat: 0, lng: 0, feedId: 'f-1', stopId: 's-1', routeTypes: [4] }, fetchFn)
 
-    expect(statements.some((s) => s.sql.includes('gtfs_stops'))).toBe(false)
+    // The stop is already named, so nothing is searched for by position. It is
+    // still looked up by id, to find the station it is a platform of.
+    expect(statements.some((s) => s.sql.includes('ST_DWithin'))).toBe(false)
   })
 })
 
@@ -280,5 +297,282 @@ describe('parseServiceDate', () => {
 
   test('rejects a prefix that is not a real date', () => {
     expect(parseServiceDate('20261915_08:21_917_1')).toBeUndefined()
+  })
+})
+
+describe('identifying the station by name', () => {
+  /**
+   * Brooklyn Bridge–City Hall as it really sits: the OSM stop_position is 37.8 m
+   * from the Chambers St (J/Z) platforms and 52.2 m from its own, so ranking by
+   * distance hands the station to its neighbour. Both are subway, so mode
+   * cannot break the tie either — the name is the only thing that can.
+   */
+  const BROOKLYN_BRIDGE = [
+    { stop_id: 'M21N', feed_id: '5', stop_name: 'Chambers St', parent_station: 'M21', stop_lat: 40.713243, stop_lon: -74.003401, distance: 37.8, mode_match: true },
+    { stop_id: 'M21S', feed_id: '5', stop_name: 'Chambers St', parent_station: 'M21', stop_lat: 40.713243, stop_lon: -74.003401, distance: 37.8, mode_match: true },
+    { stop_id: '640N', feed_id: '5', stop_name: 'Brooklyn Bridge-City Hall', parent_station: '640', stop_lat: 40.713065, stop_lon: -74.004131, distance: 52.2, mode_match: true },
+    { stop_id: '640S', feed_id: '5', stop_name: 'Brooklyn Bridge-City Hall', parent_station: '640', stop_lat: 40.713065, stop_lon: -74.004131, distance: 52.2, mode_match: true },
+  ]
+
+  test('takes the stop that shares the place name over a nearer one', async () => {
+    STOP_ROWS = BROOKLYN_BRIDGE
+    STATION_ROWS = [
+      { feed_id: '5', seed_id: '640N', station_id: '640', member_id: '640N' },
+      { feed_id: '5', seed_id: '640S', station_id: '640', member_id: '640S' },
+    ]
+
+    const result = await getDepartures(
+      {
+        lat: 40.7134428,
+        lng: -74.0037637,
+        name: 'Brooklyn Bridge–City Hall',
+        routeTypes: [1],
+      },
+      fetchFn,
+    )
+
+    expect(result.map((r) => r.stop.name)).toEqual(['Brooklyn Bridge-City Hall'])
+  })
+
+  test('folds the spelling apart an OSM name and a GTFS one', async () => {
+    // "Grand Central–42nd Street" against "Grand Central-42 St": an en dash, a
+    // spelled-out word and an ordinal suffix, and the same station.
+    STOP_ROWS = [
+      { stop_id: '724N', feed_id: '5', stop_name: '5 Av', parent_station: '724', stop_lat: 40.75, stop_lon: -73.98, distance: 9, mode_match: true },
+      { stop_id: '631N', feed_id: '5', stop_name: 'Grand Central-42 St', parent_station: '631', stop_lat: 40.75, stop_lon: -73.97, distance: 61, mode_match: true },
+    ]
+
+    const result = await getDepartures(
+      { lat: 40.7518728, lng: -73.9769434, name: 'Grand Central–42nd Street', routeTypes: [1] },
+      fetchFn,
+    )
+
+    expect(result.map((r) => r.stop.name)).toEqual(['Grand Central-42 St'])
+  })
+
+  test('keeps mode ahead of the name', async () => {
+    // A ferry terminal and the bus stop outside it often carry the same name on
+    // the sign. The mode the place claims still decides.
+    STOP_ROWS = [
+      { stop_id: 'bus', feed_id: '7', stop_name: 'Wall St/Pier 11', stop_lat: 40.7, stop_lon: -74, distance: 12, mode_match: false },
+      { stop_id: 'pier', feed_id: '917', stop_name: 'Wall St/Pier 11', stop_lat: 40.7, stop_lon: -74, distance: 140, mode_match: true },
+    ]
+
+    const result = await getDepartures(
+      { lat: 40.7, lng: -74, name: 'Wall St/Pier 11', routeTypes: [4] },
+      fetchFn,
+    )
+
+    expect(result.map((r) => r.stop.stopId)).toEqual(['pier'])
+  })
+
+  test('falls back to distance when the name matches nothing', async () => {
+    // An OSM name the feed never uses must leave the search exactly as it was,
+    // not narrow the board to whichever stop happened to sort first.
+    STOP_ROWS = BROOKLYN_BRIDGE
+
+    const result = await getDepartures(
+      { lat: 40.7134428, lng: -74.0037637, name: 'Some Other Place', routeTypes: [1] },
+      fetchFn,
+    )
+
+    expect(result).toHaveLength(4)
+  })
+
+  test('looks at more candidates once a name is given', async () => {
+    // The name is matched in TypeScript, so the shortlist has to be long enough
+    // to still hold the right station after distance has sorted it down.
+    await getDepartures({ lat: 40.71, lng: -74, name: 'Anywhere', routeTypes: [1] }, fetchFn)
+    const named = stopSearch().params.at(-1)
+
+    statements.length = 0
+    await getDepartures({ lat: 40.71, lng: -74, routeTypes: [1] }, fetchFn)
+    const unnamed = stopSearch().params.at(-1)
+
+    expect(Number(named)).toBeGreaterThan(Number(unnamed))
+  })
+})
+
+describe('one board per station', () => {
+  /** MOTIS runs at the given stops, in order, one minute apart. */
+  function motisAt(stopIds: string[]): FetchFn {
+    return async (url: string | URL) => {
+      motisCalls.push(String(url))
+      return new Response(
+        JSON.stringify({
+          place: { name: 'Brooklyn Bridge-City Hall', stopId: '5_640', lat: 0, lon: 0, tz: 'America/New_York' },
+          stopTimes: stopIds.map((stopId, i) => ({
+            place: {
+              name: 'Somewhere', stopId, lat: 0, lon: 0,
+              departure: `2026-08-15T10:0${i}:00Z`,
+              scheduledDeparture: `2026-08-15T10:0${i}:00Z`,
+            },
+            mode: 'SUBWAY',
+            realTime: false,
+            routeId: `5_R${i}`,
+            routeType: 1,
+            tripId: `20260815_10:0${i}_5_${i}`,
+          })),
+        }),
+        { headers: { 'content-type': 'application/json' } },
+      )
+    }
+  }
+
+  let motisCalls: string[] = []
+
+  beforeEach(() => {
+    motisCalls = []
+    STOP_ROWS = [
+      { stop_id: '640N', feed_id: '5', stop_name: 'Brooklyn Bridge-City Hall', parent_station: '640', stop_lat: 40.713, stop_lon: -74.004, distance: 52.2, mode_match: true },
+      { stop_id: '640S', feed_id: '5', stop_name: 'Brooklyn Bridge-City Hall', parent_station: '640', stop_lat: 40.713, stop_lon: -74.004, distance: 52.2, mode_match: true },
+    ]
+    STATION_ROWS = [
+      { feed_id: '5', seed_id: '640N', station_id: '640', member_id: '640N' },
+      { feed_id: '5', seed_id: '640N', station_id: '640', member_id: '640S' },
+      { feed_id: '5', seed_id: '640S', station_id: '640', member_id: '640N' },
+      { feed_id: '5', seed_id: '640S', station_id: '640', member_id: '640S' },
+    ]
+  })
+
+  test('asks once at the parent instead of once per platform', async () => {
+    // MOTIS answers 640N and 640S with the same station-level list, so querying
+    // both put every train on the board twice — the "Now, Now" a rider sees.
+    const result = await getDepartures(
+      { lat: 40.7134428, lng: -74.0037637, name: 'Brooklyn Bridge–City Hall', routeTypes: [1] },
+      motisAt(['5_640N']),
+    )
+
+    expect(motisCalls).toHaveLength(1)
+    expect(motisCalls[0]).toContain('stopId=5_640')
+    expect(result).toHaveLength(1)
+    expect(result[0].stop.stopId).toBe('640')
+    expect(result[0].departures).toHaveLength(1)
+  })
+
+  test('drops runs at a stop that only shares the station name', async () => {
+    // MOTIS resolves a stoptimes query to every same-named stop, and New York
+    // has two unrelated Chambers St complexes 200 m apart. A run at the other
+    // one is not a departure from here.
+    const result = await getDepartures(
+      { lat: 40.7134428, lng: -74.0037637, name: 'Brooklyn Bridge–City Hall', routeTypes: [1] },
+      motisAt(['5_640N', '5_137N', '5_A36S', '5_640S']),
+    )
+
+    expect(result[0].departures.map((d) => d.tripId)).toEqual([
+      '20260815_10:00_5_0',
+      '20260815_10:03_5_3',
+    ])
+  })
+
+  test('still reports more when the page was full before filtering', async () => {
+    // A page MOTIS filled with a neighbour's runs still means the timetable had
+    // more to give here; counting only what survived would say otherwise.
+    const result = await getDepartures(
+      { lat: 40.7134428, lng: -74.0037637, name: 'Brooklyn Bridge–City Hall', routeTypes: [1], n: 3 },
+      motisAt(['5_640N', '5_137N', '5_A36S']),
+    )
+
+    expect(result[0].departures).toHaveLength(1)
+    expect(result[0].hasMore).toBe(true)
+  })
+})
+
+describe('a board only ever carries its own stop', () => {
+  /**
+   * MOTIS resolves a stoptimes query to every stop that shares the requested
+   * stop's name, so the Chambers St J/Z platform answers with the 1, 2, 3, A
+   * and C of the unrelated Chambers St 200 m away. A board names the stop it is
+   * for; carrying a neighbour's runs makes that name a lie. This held once the
+   * caller identified the station, and not otherwise — which is exactly the
+   * case a bare coordinate hits.
+   */
+  test('filters even when nothing identified the station', async () => {
+    STOP_ROWS = [
+      { stop_id: 'M21N', feed_id: '5', stop_name: 'Chambers St', parent_station: 'M21', stop_lat: 40.713, stop_lon: -74.003, distance: 96 },
+    ]
+    STATION_ROWS = [
+      { feed_id: '5', seed_id: 'M21N', station_id: 'M21', member_id: 'M21N' },
+      { feed_id: '5', seed_id: 'M21N', station_id: 'M21', member_id: 'M21S' },
+    ]
+
+    // No name and no routeTypes — nothing tells us which station this is, and
+    // the one candidate is too far away to claim the place.
+    const result = await getDepartures(
+      { lat: 40.7134, lng: -74.0037 },
+      motisMixed(['5_M21N', '5_137N', '5_A36S']),
+    )
+
+    expect(result).toHaveLength(1)
+    expect(result[0].departures.map((d) => d.route.shortName)).toEqual(['J'])
+  })
+
+  /** Runs at the given stops, one route each, a minute apart. */
+  function motisMixed(stopIds: string[]): FetchFn {
+    const routes: Record<string, string> = { '5_M21N': 'J', '5_137N': '1', '5_A36S': 'C' }
+    return async () =>
+      new Response(
+        JSON.stringify({
+          place: { name: 'Chambers St', stopId: '5_M21', lat: 0, lon: 0, tz: 'America/New_York' },
+          stopTimes: stopIds.map((stopId, i) => ({
+            place: {
+              name: 'Chambers St', stopId, lat: 0, lon: 0,
+              departure: `2026-08-15T10:0${i}:00Z`,
+              scheduledDeparture: `2026-08-15T10:0${i}:00Z`,
+            },
+            mode: 'SUBWAY', realTime: false,
+            routeId: `5_${routes[stopId]}`, routeShortName: routes[stopId],
+            routeType: 1, tripId: `20260815_10:0${i}_5_${i}`,
+          })),
+        }),
+        { headers: { 'content-type': 'application/json' } },
+      )
+  }
+})
+
+describe('a whole complex', () => {
+  /**
+   * Canal St is four separate GTFS stations — Q01 (N/Q), M20 (J/Z), 639 (4/6)
+   * and R23 (N/R/W) — all named "Canal St" and all joined to each other by
+   * transfers.txt. The map draws them as one label; tapping it asks about all
+   * four, not whichever happened to be nearest the tap.
+   */
+  const CANAL = [
+    { stop_id: 'Q01N', feed_id: '5', stop_name: 'Canal St', parent_station: 'Q01', stop_lat: 40.7186, stop_lon: -74.0008, distance: 12, mode_match: true },
+    { stop_id: 'Q01S', feed_id: '5', stop_name: 'Canal St', parent_station: 'Q01', stop_lat: 40.7186, stop_lon: -74.0008, distance: 12, mode_match: true },
+  ]
+
+  beforeEach(() => {
+    STOP_ROWS = CANAL
+    STATION_ROWS = [
+      { feed_id: '5', seed_id: 'Q01N', station_id: 'Q01', member_id: 'Q01N' },
+      { feed_id: '5', seed_id: 'Q01S', station_id: 'Q01', member_id: 'Q01S' },
+      { feed_id: '5', seed_id: 'M20', station_id: 'M20', member_id: 'M20N' },
+      { feed_id: '5', seed_id: '639', station_id: '639', member_id: '639N' },
+    ]
+    TRANSFER_ROWS = [
+      { feed_id: '5', sid: 'M20' },
+      { feed_id: '5', sid: '639' },
+      { feed_id: '5', sid: 'Q01' },
+    ]
+  })
+
+  test('asks about one station by default', async () => {
+    const result = await getDepartures(
+      { lat: 40.7186, lng: -74.0008, name: 'Canal Street', routeTypes: [1] },
+      fetchFn,
+    )
+
+    expect(result.map((r) => r.stop.stopId)).toEqual(['Q01'])
+  })
+
+  test('adds the stations transfers.txt joins to it', async () => {
+    const result = await getDepartures(
+      { lat: 40.7186, lng: -74.0008, name: 'Canal Street', routeTypes: [1], complex: true },
+      fetchFn,
+    )
+
+    // The seed station is not repeated, and its siblings each get a board.
+    expect(result.map((r) => r.stop.stopId).sort()).toEqual(['639', 'M20', 'Q01'])
   })
 })

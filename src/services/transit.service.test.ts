@@ -14,12 +14,28 @@ import { describe, test, expect, mock, beforeEach } from 'bun:test'
 // destination. Reset in beforeEach.
 let dbCallIndex = 0
 
+/** Rows for a test that drives one specific query; null keeps the stop-pair
+ *  behaviour every routing test relies on. A function is called with the SQL
+ *  text, for a test whose service issues more than one query. Reset in
+ *  beforeEach. */
+let dbRows: any[] | ((sql: string) => any[]) | null = null
+/** SQL the service generated, for a test that asserts on its shape. */
+let dbStatements: any[] = []
+
 // Mock the database so getNearbyStops returns controlled stops without a
 // real PostgreSQL connection. Each call alternates between an origin stop
 // and a destination stop, producing exactly one stop pair per test.
 mock.module('../db', () => ({
   db: {
-    execute: async () => {
+    execute: async (query: any) => {
+      dbStatements.push(query)
+      if (typeof dbRows === 'function') {
+        const text = (query?.queryChunks ?? [])
+          .flatMap((chunk: any) => chunk?.value ?? [])
+          .join(' ')
+        return dbRows(text)
+      }
+      if (dbRows) return dbRows
       dbCallIndex++
       const isOrigin = dbCallIndex % 2 === 1
       return [{
@@ -41,6 +57,7 @@ mock.module('../db', () => ({
 
 import {
   getTransitRoute,
+  getRoutesForStop,
   extractFare,
   MotisError,
   type TransitRouteRequest,
@@ -458,5 +475,121 @@ describe('extractFare', () => {
   test('returns undefined without fare data', () => {
     expect(extractFare({})).toBeUndefined()
     expect(extractFare({ fareTransfers: [] })).toBeUndefined()
+  })
+})
+
+describe('getRoutesForStop', () => {
+  /**
+   * A station's own lines and the ones a transfer reaches are different
+   * answers, and merging them is what put the A and C — a separate Chambers St
+   * complex, no free transfer — on a Brooklyn Bridge–City Hall board. The
+   * query decides which is which; this pins the contract it reports it under.
+   */
+  beforeEach(() => {
+    dbRows = null
+    dbStatements = []
+  })
+
+  const row = (shortName: string, atStation: boolean) => ({
+    route_id: shortName, feed_id: '5', route_short_name: shortName,
+    route_long_name: `${shortName} line`, route_type: 1,
+    route_color: '00933C', route_text_color: 'FFFFFF',
+    agency_name: 'MTA New York City Transit', at_station: atStation,
+  })
+
+  test('marks a line calling here apart from one a transfer reaches', async () => {
+    dbRows = [row('4', true), row('6', true), row('J', false)]
+
+    const routes = await getRoutesForStop('5', '640')
+
+    expect(routes.map((r) => [r.routeShortName, r.via])).toEqual([
+      ['4', 'station'],
+      ['6', 'station'],
+      ['J', 'transfer'],
+    ])
+  })
+
+  test('separates this station from the complex around it', async () => {
+    // Both halves have to be in the query: `station` is the seed and its own
+    // platforms, `complex` is what transfers.txt reaches. Collapsing them back
+    // into one set is the regression this guards.
+    dbRows = []
+    await getRoutesForStop('5', '640')
+
+    // Drizzle keeps the literal SQL in string chunks, with the bound values
+    // interleaved as parameter objects that carry no text.
+    const text = (dbStatements[0]?.queryChunks ?? [])
+      .flatMap((chunk: any) => chunk?.value ?? [])
+      .join(' ')
+    expect(text).toContain('station')
+    expect(text).toContain('gtfs_transfers')
+    expect(text).toContain('at_station')
+  })
+})
+
+describe('nearby lines', () => {
+  /**
+   * A subway station's bus connections cannot come from `transfers.txt` —
+   * that file is scoped to one feed, and the bus is another agency's. So they
+   * come from proximity, which brings its own problem: New York is covered by
+   * several overlapping bus feeds, so the same M22 arrives under three feed
+   * ids and would be listed three times.
+   */
+  beforeEach(() => {
+    dbRows = null
+    dbStatements = []
+  })
+
+  const inSystem = (shortName: string) => ({
+    route_id: shortName, feed_id: '5', route_short_name: shortName,
+    route_long_name: `${shortName} line`, route_type: 1,
+    route_color: null, route_text_color: null,
+    agency_name: 'MTA New York City Transit', at_station: true,
+  })
+
+  const near = (routeId: string, feedId: string, shortName: string, distance: number) => ({
+    route_id: routeId, feed_id: feedId, route_short_name: shortName,
+    route_long_name: `${shortName} bus`, route_type: 3,
+    route_color: null, route_text_color: null,
+    agency_name: 'MTA New York City Transit', distance,
+  })
+
+  test('folds one line arriving from several feeds into one row', async () => {
+    // The station's own lines and the nearby ones come from separate queries;
+    // only the second one is a spatial search.
+    dbRows = (text) =>
+      text.includes('ST_DWithin')
+        ? [
+            near('M22', '7', 'M22', 29),
+            near('M22-SBS', '8', 'M22', 140),
+            near('M9', '7', 'M9', 88),
+          ]
+        : [inSystem('4')]
+
+    const routes = await getRoutesForStop('5', '640', { lat: 40.71, lng: -74 })
+    const nearby = routes.filter((r) => r.via === 'nearby')
+
+    expect(nearby.map((r) => r.routeShortName)).toEqual(['M22', 'M9'])
+    // The closest of the duplicates is the one kept.
+    expect(nearby[0].distanceM).toBe(29)
+  })
+
+  test('never repeats a line the station already runs', async () => {
+    // The M22 both stops here and runs from the stop outside: it is the
+    // station's line, and must not also be offered as a nearby one.
+    dbRows = (text) =>
+      text.includes('ST_DWithin') ? [near('M22', '7', 'M22', 29)] : [inSystem('M22')]
+
+    const routes = await getRoutesForStop('5', '640', { lat: 40.71, lng: -74 })
+
+    expect(routes.filter((r) => r.routeShortName === 'M22')).toHaveLength(1)
+    expect(routes[0].via).toBe('station')
+  })
+
+  test('asks for nothing extra when no point is given', async () => {
+    dbRows = []
+    await getRoutesForStop('5', '640')
+
+    expect(dbStatements).toHaveLength(1)
   })
 })
