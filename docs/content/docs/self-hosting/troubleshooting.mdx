@@ -299,6 +299,28 @@ Compose forwards optional settings as `${VAR:-}`, which defines them as the *emp
 
 Long-running scripts are single-flight, guarded by a Postgres advisory lock, and the job is requeued rather than dropped. The job's page links to the run holding the lock.
 
+**A portolan import made the whole host stop responding**
+
+`portolan sync` sizes its own parallelism from CPU count (`min(4, CPUs)`), with
+no view of what else the machine is running. On a host that also serves the API,
+four concurrent charts can take all the RAM: the kernel keeps running, so the
+box still answers pings and still completes TCP handshakes on every open port,
+but nothing in userspace gets scheduled. The API times out, `psql` times out,
+and SSH hangs at "banner exchange" — which reads like a dead machine when the
+machine is fine.
+
+Set **Parallel feed builds** to 1 or 2 on that host (see
+[Portolan](/self-hosting/portolan)). If you are already in this state, keep
+retrying SSH — the run eventually frees enough memory for a session to land,
+and from there `docker stop barrelman-ops` ends it.
+
+Stopping the worker gracefully **requeues** the job by design, so it will start
+again the moment the worker returns. Cancel it before restarting anything:
+
+```sql
+UPDATE ops_jobs SET status='canceled' WHERE id='<job id>';
+```
+
 **A console job sits in `queued`**
 
 Normal, up to a point: the ops worker runs one job at a time, so a queued job is waiting its turn. The job's page names the job ahead of it and links there — if it names one, nothing is wrong and it will start on its own.
