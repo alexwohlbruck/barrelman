@@ -29,39 +29,10 @@ import { parseArgs } from 'util'
 
 // ── CSV helpers ─────────────────────────────────────────────────────
 
-/** Minimal RFC-4180-ish parser: quoted fields, embedded commas, CRLF. */
-export function parseCsv(text: string): Record<string, string>[] {
-  const rows: string[][] = []
-  let field = ''
-  let row: string[] = []
-  let inQuotes = false
-  for (let i = 0; i < text.length; i++) {
-    const c = text[i]
-    if (inQuotes) {
-      if (c === '"') {
-        if (text[i + 1] === '"') { field += '"'; i++ } else inQuotes = false
-      } else field += c
-    } else if (c === '"') inQuotes = true
-    else if (c === ',') { row.push(field); field = '' }
-    else if (c === '\n') {
-      row.push(field); field = ''
-      rows.push(row); row = []
-    } else if (c !== '\r') field += c
-  }
-  if (field !== '' || row.length) { row.push(field); rows.push(row) }
-  if (!rows.length) return []
-  const header = rows[0].map((h) => h.trim().replace(/^﻿/, ''))
-  return rows.slice(1).filter((r) => r.some((v) => v !== '')).map((r) => {
-    const obj: Record<string, string> = {}
-    header.forEach((h, i) => { obj[h] = (r[i] ?? '').trim() })
-    return obj
-  })
-}
-
-function toCsv(header: string[], rows: string[][]): string {
-  const esc = (v: string) => (/[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v)
-  return [header.join(','), ...rows.map((r) => r.map(esc).join(','))].join('\n') + '\n'
-}
+// Shared with the other zip-surgery steps. Re-exported so callers and tests
+// that already import it from here keep working.
+import { parseCsv, toCsv } from './csv'
+export { parseCsv }
 
 // ── Conversion ──────────────────────────────────────────────────────
 
@@ -209,7 +180,8 @@ export async function injectFaresV2(zipPath: string, dryRun = false): Promise<st
     for (const [name, content] of Object.entries(result.files!)) {
       zip.file(name, content)
     }
-    writeFileSync(zipPath, await zip.generateAsync({ type: 'nodebuffer' }))
+    // DEFLATE because JSZip defaults to STORE. See injectTransfersTxt.
+    writeFileSync(zipPath, await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' }))
   }
   return `converted (${result.shape}, ${result.productCount} products)`
 }

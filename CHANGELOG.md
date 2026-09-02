@@ -10,6 +10,89 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.2.7] - 2026-09-02
+
+### Added
+
+* OSM Update, Check for GTFS Updates and Import GBFS Systems take a Regions
+  override, the same one Full OSM Import and Download GTFS Feeds already had.
+  Every script that resolves regions can now be pointed at a different set for
+  one run, from the console, without editing the server's `.env` and restarting
+  ops. That matters most when the two disagree: naming a region in `REGIONS`
+  that has been switched off in the console makes the resolver refuse — by
+  design, since silently importing a disabled region would be worse — and
+  without an override the only way out was a shell on the host
+* `/transit/routes` takes `complex=true`, which treats the whole interchange as
+  one station: every line in it comes back as `via: 'station'` instead of the
+  connecting ones being filed under `transfer`. It is the counterpart to the
+  same flag on `/transit/departures` — a tap on the single symbol a map draws
+  over an interchange is a question about the interchange, so Brooklyn
+  Bridge–City Hall answers 4 5 6 J Z rather than 4 5 6 with the J and Z listed
+  as connections. Tapping one station of the group keeps the split
+* The three portolan sync scripts take a **Parallel feed builds** setting,
+  passed to `portolan sync --jobs`. Portolan otherwise sizes its own
+  parallelism from CPU count, with no view of what else the host is running,
+  and charts are memory-heavy: on a machine that also serves the API, four
+  concurrent charts can take all the RAM. What that looks like is worth
+  knowing, because it does not look like a crash — the kernel keeps running,
+  so the host still answers pings and still completes TCP handshakes on every
+  open port, while nothing in userspace gets scheduled and even SSH hangs at
+  the banner. Blank still means portolan's default; set 1 or 2 where memory is
+  thin. Also note that stopping the ops worker gracefully *requeues* the
+  running job by design, so a job has to be cancelled before the worker comes
+  back or it starts over
+
+### Fixed
+
+* Feeds whose realtime trip ids do not match their schedule trip ids now
+  resolve. MOTIS matches realtime trips by exact trip_id, so where an agency
+  publishes the two in different id spaces nothing resolves and the feed serves
+  schedules with no realtime — MTA's subway drops a schedule-version prefix
+  (`ASP26GEN-1038-Sunday-00_000600_1..S03R` in the schedule against
+  `000600_1..S03R` on the wire), and every subway departure came back
+  `realTime: false`. The import now samples each feed's own realtime data,
+  tries a set of candidate id transforms against it, and rewrites the schedule
+  only where one measurably resolves more trips. There is no list of affected
+  agencies to maintain: a feed that already resolves is measured as such and
+  left untouched, and a transform that stops working is caught on the next
+  import. Against the seven live MTA subway feeds it finds the prefix strip on
+  its own and takes 495 of 705 sampled realtime trips from unmatched to
+  matched. The rewrite is skipped, with the reason printed, when the sample is
+  too small to judge or when it would leave two trips running the same day
+  sharing one id
+* Re-running the GTFS import no longer empties `gtfs_feeds.rt_urls`, which took
+  realtime down for every feed rather than just one. Importing a feed clears its
+  row before writing the new one, so anything the importer did not itself carry
+  was dropped — and RT URLs come from `import/backfill-rt-urls.ts`, not from the
+  import. The next `scripts/rebuild-motis.sh` then baked a config with no `rt:`
+  section at all, and nothing along the way reported an error. The importer now
+  carries the stored values forward, `--skip-download` included, where the same
+  bug also overwrote each feed's onestop id, name and URL
+* `generate-motis-config.ts` warns when it writes a config that has feeds but no
+  realtime URLs, instead of reporting success. Recovering from one takes a full
+  `motis import`; restarting MOTIS keeps serving the config baked into the
+  dataset
+* Feed ZIPs are written compressed. Every step that rewrote one — the GTFS-Flex
+  strip, the transfers injection, the Fares v2 conversion — re-serialized it
+  uncompressed, taking the subway feed from 5.6 MB to 43 MB on the volume MOTIS
+  imports from
+* MOTIS is handed only the GBFS systems inside the regions an instance imports,
+  rather than the whole catalog. `gbfs_systems` keeps every system the operator
+  directory lists — the stations are filtered by bbox, the systems are not — and
+  MOTIS polls every feed it is given for the life of the process. A New York
+  instance was polling 1345 live feeds to serve 2, and reporting itself
+  unhealthy for the whole time, its health endpoint being an AND over all of
+  them. A global instance still gets everything, as does one whose regions
+  declare no usable bounding box
+* `/health` no longer reports transit as down when MOTIS is merely degraded.
+  MOTIS answers its health endpoint with a flag per updater and only returns
+  200 when every one is true, so an instance whose GBFS feeds failed to load
+  replies `400 {"rt":true,"gbfs":false}` while serving stoptimes queries
+  normally. That was read as an outage, which took the whole transit endpoint
+  group off `/health` and lit the console red over a working timetable. A
+  subsystem report now counts as up and names what is degraded; a status with
+  no such report is still unavailable
+
 ## [0.2.6] - 2026-09-02
 
 ### Added

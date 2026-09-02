@@ -211,11 +211,25 @@ Two run long for what they deliver. MOTIS OSM prep rewrites the whole extract to
 repair a handful of underground platforms — 6 minutes to synthesise 0 connectors
 in Colorado.
 
+Every script that resolves regions also takes a **Regions override** in the
+console, applied as `REGIONS` for that run only. Reach for it when the env var
+and the console disagree — a region named in `REGIONS` but switched off in the
+console makes the resolver refuse, and the override is the way to run an import
+without editing `.env` and restarting the ops container.
+
 The GBFS importer downloads **every** system in the global catalog, then keeps
 only the stations inside your bbox. It takes the same time whatever region you
 import, because it checks systems in Abu Dhabi, Zurich and Darmstadt either way.
 On Colorado it took **6 min 48 s** and kept 191 stations out of 1,336 systems.
 Run it last, and skip it unless you need bikeshare. Nothing else depends on it.
+
+The `gbfs_systems` catalog keeps every system it saw, though — only the
+*stations* are filtered. MOTIS is handed the systems inside your regions'
+bounding boxes, not the whole catalog: it polls every feed it is given for the
+life of the process, and its health endpoint is an AND over all of them, so a
+single-metro instance given the catalog would both pay for a thousand live
+feeds and report itself permanently unhealthy. A global instance still gets
+everything.
 
 Pelias is a separate stack and takes hours — see
 [`pelias/README.md`](https://github.com/alexwohlbruck/barrelman/blob/main/pelias/README.md).
