@@ -55,7 +55,13 @@ client.unsafe = (text: string, params: unknown[] = []) => {
 }
 client.options = { parsers: {}, serializers: {} }
 
-mock.module('../db', () => ({ db: drizzle(client), connection: client }))
+// Spread the real module: a bare replacement drops `connection` and the
+// ensure*Schema helpers for every test file loaded after this one, which
+// fails whichever suite imports them next rather than this one.
+const actualDb = await import('../db')
+
+mock.module('../db', () => ({
+  ...actualDb, db: drizzle(client), connection: client }))
 
 const { getDepartures, parseServiceDate } = await import('./departures.service')
 import type { FetchFn } from './departures.service'

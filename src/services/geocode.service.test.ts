@@ -8,7 +8,13 @@ const spatialCacheStore = new Map<string, any>()
 
 const noop = { get: () => undefined, set: () => {} }
 
-mock.module('../db', () => ({ db: { execute: mockExecute } }))
+// Spread the real module: a bare replacement drops `connection` and the
+// ensure*Schema helpers for every test file loaded after this one, which
+// fails whichever suite imports them next rather than this one.
+const actualDb = await import('../db')
+
+mock.module('../db', () => ({
+  ...actualDb, db: { execute: mockExecute } }))
 // `mock.module` is process-global and replaces the module wholesale for every
 // test file in the run, so spread the real exports and override only what this
 // file cares about — otherwise a later file importing e.g. `isochroneCache`

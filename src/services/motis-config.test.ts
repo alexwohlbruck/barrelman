@@ -12,7 +12,20 @@ import { describe, test, expect, mock, beforeEach } from 'bun:test'
 /** SQL the generator issued, in order. */
 let statements: any[] = []
 
+/**
+ * Replace only `db`, keeping every other export.
+ *
+ * Bun's module registry is shared across the whole test process, so a
+ * `mock.module` that returns a bare object deletes the module's other exports
+ * for every file that loads afterwards — `connection`, which `region-store`
+ * imports, among them. That surfaces as `SyntaxError: Export named 'connection'
+ * not found` in unrelated suites, and only when the file order puts this one
+ * first, which is why it passed locally and took the 0.2.7 release build down.
+ */
+const actualDb = await import('../db')
+
 mock.module('../db', () => ({
+  ...actualDb,
   db: {
     execute: async (query: any) => {
       statements.push(query)
