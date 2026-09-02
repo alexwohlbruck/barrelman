@@ -284,7 +284,11 @@ export function createTransitRoutes(deps: {
             ? { lat, lng, radius: query.radius ? Number(query.radius) : undefined }
             : undefined
 
-        return await getRoutesForStop(query.feedId, query.stopId, nearby)
+        // A tap on the map's merged interchange label asks about the whole
+        // group, so the group's lines are the place's own.
+        const complex = query.complex === 'true' || query.complex === '1'
+
+        return await getRoutesForStop(query.feedId, query.stopId, nearby, { complex })
       } catch (err) {
         set.status = 500
         return {
@@ -299,6 +303,7 @@ export function createTransitRoutes(deps: {
         lat: t.Optional(t.String()),
         lng: t.Optional(t.String()),
         radius: t.Optional(t.String()),
+        complex: t.Optional(t.String()),
       }),
       detail: {
         summary: 'Get routes serving a stop',
@@ -309,6 +314,9 @@ export function createTransitRoutes(deps: {
           "at a station the agency's transfers.txt connects to this one, " +
           'reachable without leaving the paid area — the J and Z at Chambers ' +
           'St from Brooklyn Bridge–City Hall. Station lines are listed first. ' +
+          'Set `complex=true` to treat the whole interchange as one station, ' +
+          'for a caller asking about a merged label rather than one platform ' +
+          'group: every line in it comes back as `station`. ' +
           'A free transfer bought by a fare rule rather than a walk between ' +
           'platforms is not published in transfers.txt and is not reported. ' +
           'Pass `lat`/`lng` (and optionally `radius`, default 200 m) to also ' +
