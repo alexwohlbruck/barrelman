@@ -10,6 +10,19 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Fixed
+
+* Removing data no longer triggers a full re-derivation of every search column.
+  Startup compares the row count against the one recorded when enrichment last
+  completed and re-enriches when they differ by more than 10%, which could not
+  tell a prune from a re-import: dropping one region from a two-region instance
+  moved 27M rows to 19.4M, and the 28% fall queued a rewrite of `codes`,
+  `name_abbrev` and `ts` that nothing needed, since the surviving rows keep the
+  values they already had. Worse, it never finished — each backfill is a single
+  statement, so a container restart rolled the whole thing back and the next
+  boot began again, holding transactions long enough to block index maintenance
+  for as long as it ran. Only growth counts as a re-import now
+
 ### Added
 
 * `/transit/route-detail` reports the other lines available at each stop on the

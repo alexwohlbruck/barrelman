@@ -82,7 +82,16 @@ async function readMarker(sql: Sql, estimate: number): Promise<Marker> {
     SELECT completed_at, row_estimate, ts_version, brands_version FROM search_enrichment_state WHERE id = 1
   `
   const m = rows[0]
-  const drift = m?.row_estimate ? Math.abs(estimate - Number(m.row_estimate)) / Number(m.row_estimate) : 1
+  // Only GROWTH counts as a re-import. Rows disappearing means data was pruned,
+  // and pruning does not invalidate what survives — the remaining places keep
+  // the codes, abbreviations and tsvectors they were already given. Reading a
+  // drop as a re-import is how removing one region from a two-region instance
+  // queued a full re-derivation across nineteen million rows that nothing
+  // needed: a 28% fall against a 10% threshold, re-armed on every restart
+  // because the work never survived long enough to be marked done, and holding
+  // transactions long enough to block index maintenance the whole time.
+  const prior = Number(m?.row_estimate ?? 0)
+  const drift = prior ? Math.max(0, estimate - prior) / prior : 1
   return {
     fresh: Boolean(m?.completed_at) && drift <= REIMPORT_DRIFT,
     tsVersion: Number(m?.ts_version ?? 0),
