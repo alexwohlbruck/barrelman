@@ -13,6 +13,20 @@ import { db } from '../db'
 import { sql } from 'drizzle-orm'
 import { getRouteShape } from './shapes.service'
 
+/** One other line a rider can reach at a stop on this route. */
+export interface StopTransferRoute {
+  routeId: string
+  routeShortName: string | null
+  routeLongName: string | null
+  routeType: number | null
+  routeColor: string | null
+  routeTextColor: string | null
+  agencyName: string | null
+  /** `station` when it calls at this stop, `transfer` when transfers.txt
+   *  reaches it from here without leaving the paid area. */
+  via: 'station' | 'transfer'
+}
+
 export interface RouteDetailStop {
   stopId: string
   stopName: string
@@ -20,6 +34,9 @@ export interface RouteDetailStop {
   lng: number
   /** Distance along the route shape in meters (for ordering). */
   distanceAlongRoute: number
+  /** Lines other than this route available here — the bullets a stop row
+   *  draws under its name. Empty where nothing else calls. */
+  routes: StopTransferRoute[]
 }
 
 export interface RouteDetailResponse {
@@ -31,12 +48,106 @@ export interface RouteDetailResponse {
   routeTextColor: string | null
   routeType: number | null
   agencyName: string | null
+  /** GTFS `bikes_allowed`: 0 unknown, 1 allowed, 2 not allowed. */
+  bikesAllowed: number
   /** Stops ordered by position along the route. One direction only. */
   stops: RouteDetailStop[]
   /** Route shape as [lng, lat] pairs, or null if no shape available. */
   coordinates: [number, number][] | null
   /** Related route IDs that share the same color/trunk (e.g., 1/2/3 on the red line). */
   relatedRouteIds: string[]
+}
+
+/**
+ * The other lines available at each of a route's stops, keyed by stop id.
+ *
+ * One query for the whole route rather than one per stop: a long subway line
+ * is forty-odd stops, and forty round trips to render a list nobody has
+ * scrolled to yet is the difference between a route panel that opens and one
+ * that hangs.
+ *
+ * "Available here" is read the way a rider reads it, so it spans the transfer
+ * complex as well as the station: at Brooklyn Bridge–City Hall the J and Z are
+ * a walk through the passageway, and a stop row that omits them is describing
+ * the feed's filing system rather than the interchange. They stay marked
+ * `transfer` so the caller can draw them differently from the lines that
+ * actually stop here.
+ *
+ * The route being viewed is excluded — its own bullet on every one of its own
+ * stops is noise.
+ */
+async function routesAtStops(
+  feedId: string,
+  routeId: string,
+  stopIds: string[],
+): Promise<Map<string, StopTransferRoute[]>> {
+  const byStop = new Map<string, StopTransferRoute[]>()
+  if (!stopIds.length) return byStop
+
+  const idList = sql.join(
+    [...new Set(stopIds)].map((id) => sql`${id}`),
+    sql`, `,
+  )
+
+  const rows = await db.execute(sql`
+    WITH seed AS (
+      SELECT s.stop_id AS origin,
+             COALESCE(NULLIF(s.parent_station, ''), s.stop_id) AS station
+      FROM gtfs_stops s
+      WHERE s.feed_id = ${feedId} AND s.stop_id IN (${idList})
+    ),
+    -- the station itself, plus whatever transfers.txt joins it to, one hop
+    complex AS (
+      SELECT origin, station AS sid, TRUE AS at_station FROM seed
+      UNION
+      SELECT seed.origin, t.to_stop_id, FALSE
+      FROM seed JOIN gtfs_transfers t
+        ON t.feed_id = ${feedId} AND t.from_stop_id = seed.station
+       AND t.to_stop_id <> t.from_stop_id
+      UNION
+      SELECT seed.origin, t.from_stop_id, FALSE
+      FROM seed JOIN gtfs_transfers t
+        ON t.feed_id = ${feedId} AND t.to_stop_id = seed.station
+       AND t.to_stop_id <> t.from_stop_id
+    ),
+    -- platforms file under a parent, and stop_times references the platform
+    members AS (
+      SELECT origin, sid, at_station FROM complex
+      UNION ALL
+      SELECT c.origin, s.stop_id, c.at_station
+      FROM complex c JOIN gtfs_stops s
+        ON s.feed_id = ${feedId} AND s.parent_station = c.sid
+    )
+    SELECT
+      m.origin,
+      r.route_id, r.route_short_name, r.route_long_name, r.route_type,
+      r.route_color, r.route_text_color, r.agency_name,
+      bool_or(m.at_station) AS at_station
+    FROM members m
+    JOIN gtfs_stop_routes sr ON sr.feed_id = ${feedId} AND sr.stop_id = m.sid
+    JOIN gtfs_routes r ON r.feed_id = sr.feed_id AND r.route_id = sr.route_id
+    WHERE r.route_id <> ${routeId}
+    GROUP BY
+      m.origin, r.route_id, r.route_short_name, r.route_long_name,
+      r.route_type, r.route_color, r.route_text_color, r.agency_name
+    ORDER BY m.origin, bool_or(m.at_station) DESC, r.route_type, r.route_short_name
+  `)
+
+  for (const row of rows as any[]) {
+    const list = byStop.get(row.origin) ?? []
+    list.push({
+      routeId: row.route_id,
+      routeShortName: row.route_short_name ?? null,
+      routeLongName: row.route_long_name ?? null,
+      routeType: row.route_type != null ? Number(row.route_type) : null,
+      routeColor: row.route_color ?? null,
+      routeTextColor: row.route_text_color ?? null,
+      agencyName: row.agency_name ?? null,
+      via: row.at_station ? 'station' : 'transfer',
+    })
+    byStop.set(row.origin, list)
+  }
+  return byStop
 }
 
 /**
@@ -104,9 +215,18 @@ export async function getRouteDetail(
   } else {
     // Fallback: order by latitude (north to south for most transit)
     orderedStops = rawStops
-      .map(s => ({ ...s, distanceAlongRoute: 0 }))
+      .map(s => ({ ...s, distanceAlongRoute: 0, routes: [] as StopTransferRoute[] }))
       .sort((a, b) => b.lat - a.lat)
   }
+
+  // Bullets per stop, resolved once the order is settled so the map lookup
+  // and the rendered list agree on which stops exist.
+  const stopRoutes = await routesAtStops(
+    actualFeedId,
+    routeId,
+    orderedStops.map((s) => s.stopId),
+  )
+  for (const stop of orderedStops) stop.routes = stopRoutes.get(stop.stopId) ?? []
 
   // Find related routes (same color = same trunk line, e.g., 1/2/3)
   const relatedRouteIds = await findRelatedRoutes(
@@ -150,7 +270,7 @@ function orderStopsByShape(
   return stops
     .map(stop => {
       const dist = projectOntoPolyline(stop.lat, stop.lng, coordinates, cumDist)
-      return { ...stop, distanceAlongRoute: dist }
+      return { ...stop, distanceAlongRoute: dist, routes: [] as StopTransferRoute[] }
     })
     .sort((a, b) => a.distanceAlongRoute - b.distanceAlongRoute)
 }
