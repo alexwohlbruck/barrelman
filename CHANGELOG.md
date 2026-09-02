@@ -29,6 +29,12 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ### Fixed
 
+* A departure board never carries a neighbouring station's runs. MOTIS answers
+  a stoptimes query with every stop that shares the requested stop's name, so a
+  board for the Chambers St J/Z platform arrived with the 1, 2, 3, A and C of
+  the unrelated Chambers St 200 m away. Those were already dropped once the
+  caller identified the station; now every board is filtered to the stop it
+  names, including a plain nearby-stops lookup
 * A slow query no longer kills the ops worker and the job it is running. The
   log-flush, heartbeat and cancel-check timers each talked to Postgres on a
   schedule with their rejections unhandled, which Bun treats as fatal — so
