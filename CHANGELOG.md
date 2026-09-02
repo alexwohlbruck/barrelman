@@ -65,6 +65,38 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ### Fixed
 
+* Feeds whose realtime trip ids do not match their schedule trip ids now
+  resolve. MOTIS matches realtime trips by exact trip_id, so where an agency
+  publishes the two in different id spaces nothing resolves and the feed serves
+  schedules with no realtime — MTA's subway drops a schedule-version prefix
+  (`ASP26GEN-1038-Sunday-00_000600_1..S03R` in the schedule against
+  `000600_1..S03R` on the wire), and every subway departure came back
+  `realTime: false`. The import now samples each feed's own realtime data,
+  tries a set of candidate id transforms against it, and rewrites the schedule
+  only where one measurably resolves more trips. There is no list of affected
+  agencies to maintain: a feed that already resolves is measured as such and
+  left untouched, and a transform that stops working is caught on the next
+  import. Against the seven live MTA subway feeds it finds the prefix strip on
+  its own and takes 495 of 705 sampled realtime trips from unmatched to
+  matched. The rewrite is skipped, with the reason printed, when the sample is
+  too small to judge or when it would leave two trips running the same day
+  sharing one id
+* Re-running the GTFS import no longer empties `gtfs_feeds.rt_urls`, which took
+  realtime down for every feed rather than just one. Importing a feed clears its
+  row before writing the new one, so anything the importer did not itself carry
+  was dropped — and RT URLs come from `import/backfill-rt-urls.ts`, not from the
+  import. The next `scripts/rebuild-motis.sh` then baked a config with no `rt:`
+  section at all, and nothing along the way reported an error. The importer now
+  carries the stored values forward, `--skip-download` included, where the same
+  bug also overwrote each feed's onestop id, name and URL
+* `generate-motis-config.ts` warns when it writes a config that has feeds but no
+  realtime URLs, instead of reporting success. Recovering from one takes a full
+  `motis import`; restarting MOTIS keeps serving the config baked into the
+  dataset
+* Feed ZIPs are written compressed. Every step that rewrote one — the GTFS-Flex
+  strip, the transfers injection, the Fares v2 conversion — re-serialized it
+  uncompressed, taking the subway feed from 5.6 MB to 43 MB on the volume MOTIS
+  imports from
 * MOTIS is handed only the GBFS systems inside the regions an instance imports,
   rather than the whole catalog. `gbfs_systems` keeps every system the operator
   directory lists — the stations are filtered by bbox, the systems are not — and

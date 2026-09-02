@@ -149,6 +149,9 @@ export async function injectTransfersTxt(zipPath: string, transfersTxt: string):
 
   zip.file('transfers.txt', transfersTxt)
 
-  const updatedBuffer = await zip.generateAsync({ type: 'nodebuffer' })
+  // JSZip defaults to STORE, so a feed re-serialized without this lands
+  // uncompressed on the volume MOTIS imports from. The subway feed goes from
+  // 5.6 MB to 43 MB that way.
+  const updatedBuffer = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' })
   writeFileSync(zipPath, updatedBuffer)
 }

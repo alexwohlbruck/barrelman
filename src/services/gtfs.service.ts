@@ -1189,7 +1189,53 @@ export async function importTransfers(
 }
 
 /**
+ * What `gtfs_feeds` already holds for each feed, keyed by feed_id.
+ *
+ * `importFeedFile` calls `clearFeed`, which deletes the `gtfs_feeds` row
+ * before `recordFeed` inserts a new one. `recordFeed`'s ON CONFLICT branch
+ * therefore never runs during an import, and any column the caller does not
+ * supply is lost rather than kept.
+ *
+ * `rt_urls` is the column that hurts. It is populated by
+ * `import/backfill-rt-urls.ts`, not by the import, so a re-import blanked it
+ * for every feed; the next `scripts/rebuild-motis.sh` regenerated config.yml
+ * with no `rt:` section at all, `motis import` baked that in, and realtime
+ * went dark across every feed with no error at any step. `onestop_id` has the
+ * same problem in the `--skip-download` path, which knows only the zip's
+ * filename and would otherwise overwrite the real onestop id with the numeric
+ * feed id — the value the RT backfill and the trip_id rewrite both key on.
+ *
+ * Callers merge this over what they know before calling `importFeedFile`.
+ */
+export async function loadFeedIdentities(): Promise<Map<string, StoredFeedIdentity>> {
+  const rows = await db
+    .select({
+      feedId: gtfsFeeds.feedId,
+      onestopId: gtfsFeeds.onestopId,
+      name: gtfsFeeds.name,
+      url: gtfsFeeds.url,
+      region: gtfsFeeds.region,
+      rtUrls: gtfsFeeds.rtUrls,
+    })
+    .from(gtfsFeeds)
+  return new Map(rows.map(r => [r.feedId, r]))
+}
+
+export interface StoredFeedIdentity {
+  feedId: string
+  onestopId: string | null
+  name: string | null
+  url: string | null
+  region: string | null
+  rtUrls: GtfsRtUrl[] | null
+}
+
+/**
  * Record a feed import in the gtfs_feeds table.
+ *
+ * Every field written here has to be supplied by the caller. `clearFeed` runs
+ * first, so the ON CONFLICT branch below only covers callers that write
+ * without clearing — see `loadFeedIdentities`.
  */
 export async function recordFeed(feed: GtfsFeedInfo, stopCount: number, routeCount: number): Promise<void> {
   await db
@@ -1645,6 +1691,8 @@ export async function sanitizeGtfsZip(
     return { buffer, removedFiles: [] }
   }
 
-  const sanitized = await zip.generateAsync({ type: 'arraybuffer' })
+  // JSZip defaults to STORE, which multiplies a re-serialized feed several
+  // times over on disk for no gain.
+  const sanitized = await zip.generateAsync({ type: 'arraybuffer', compression: 'DEFLATE' })
   return { buffer: sanitized, removedFiles }
 }
