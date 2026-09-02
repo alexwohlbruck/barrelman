@@ -320,7 +320,7 @@ if (import.meta.main) {
       const { db } = await import('../src/db')
       const { gtfsFeeds } = await import('../src/schema/gtfs')
       const { sanitizeGtfsZip } = await import('../src/services/gtfs.service')
-      const { normalizeSuffixTripIds } = await import('./normalize-trip-ids')
+      const { alignRealtimeTripIds } = await import('./align-trip-ids')
       const { importFeedFile, injectTransfersTxt, readZipEntry } = await import('./feed-import')
       const { injectFaresV2 } = await import('./inject-fares-v2')
 
@@ -387,11 +387,16 @@ if (import.meta.main) {
         if (removedFiles.length > 0) {
           console.log(`  ⚠ Stripped ${removedFiles.length} GTFS-Flex files: ${removedFiles.join(', ')}`)
         }
-        const { buffer, result: alignment } = await normalizeSuffixTripIds(sanitized, feedInfo)
+        const { buffer, result: alignment } = await alignRealtimeTripIds(sanitized, feedInfo)
         if (alignment.applied) {
-          console.log(`  ✓ Aligned trip_ids with realtime (${alignment.collidingSuffixes} colliding suffixes)`)
-        } else if (alignment.skipReason && alignment.skipReason !== 'not-in-scope') {
-          console.error(`  ✗ trip_id alignment SKIPPED (${alignment.skipReason}); realtime will not resolve for this feed`)
+          console.log(
+            `  ✓ Realtime trip_ids did not match static. Rewrote to ${alignment.describe} ` +
+              `(${alignment.matched}/${alignment.sampleSize} sampled trips now resolve)`,
+          )
+        } else if (alignment.skipReason === 'date-overlap' || alignment.skipReason === 'no-improvement') {
+          console.error(
+            `  ✗ trip_id alignment SKIPPED (${alignment.skipReason}); realtime will not resolve for this feed`,
+          )
         }
         const tmp = `${dest}.tmp-${process.pid}`
         try {

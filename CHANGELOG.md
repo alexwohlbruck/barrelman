@@ -49,18 +49,22 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ### Fixed
 
-* MTA subway departures carry realtime again. MTA publishes subway GTFS-RT with
-  the static feed's schedule-version prefix stripped off the trip id —
-  `ASP26GEN-1038-Sunday-00_000600_1..S03R` in the schedule against
-  `000600_1..S03R` on the wire — and MOTIS matches realtime trips by exact id,
-  so every subway trip update failed to resolve and every subway departure came
-  back with `realTime: false`. The import now strips the prefix on the static
-  side for the feeds that need it. Measured against the seven live subway
-  feeds, 455 of 714 trip updates resolve where none did before. Scope is keyed
-  on the feed's onestop id, so feeds that already publish matching ids, MTA's
-  buses among them, are untouched. The rewrite is skipped, with the reason
-  printed, if the id format changes or if stripping would make two trips
-  running on the same day indistinguishable
+* Feeds whose realtime trip ids do not match their schedule trip ids now
+  resolve. MOTIS matches realtime trips by exact trip_id, so where an agency
+  publishes the two in different id spaces nothing resolves and the feed serves
+  schedules with no realtime — MTA's subway drops a schedule-version prefix
+  (`ASP26GEN-1038-Sunday-00_000600_1..S03R` in the schedule against
+  `000600_1..S03R` on the wire), and every subway departure came back
+  `realTime: false`. The import now samples each feed's own realtime data,
+  tries a set of candidate id transforms against it, and rewrites the schedule
+  only where one measurably resolves more trips. There is no list of affected
+  agencies to maintain: a feed that already resolves is measured as such and
+  left untouched, and a transform that stops working is caught on the next
+  import. Against the seven live MTA subway feeds it finds the prefix strip on
+  its own and takes 495 of 705 sampled realtime trips from unmatched to
+  matched. The rewrite is skipped, with the reason printed, when the sample is
+  too small to judge or when it would leave two trips running the same day
+  sharing one id
 * Re-running the GTFS import no longer empties `gtfs_feeds.rt_urls`, which took
   realtime down for every feed rather than just one. Importing a feed clears its
   row before writing the new one, so anything the importer did not itself carry

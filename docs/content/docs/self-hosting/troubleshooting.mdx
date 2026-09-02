@@ -214,32 +214,47 @@ Restarting MOTIS does nothing here. `motis server` reads the config baked into
 the dataset at `/data/data/config.yml`, not the one you just regenerated, so
 only a full `motis import` picks up the change.
 
-**MTA subway departures have no realtime, while buses do**
+**One feed has no realtime while the others do**
 
-MTA publishes subway realtime with the static feed's schedule-version prefix
-removed, so the two id spaces never meet:
+Its realtime trip ids probably do not match its schedule trip ids. MOTIS
+resolves a realtime trip by exact `trip_id`, so where an agency publishes the
+two in different id spaces every trip update fails with `trip_resolve_error`.
+MTA's subway is the common case — it drops a schedule-version prefix:
 
 ```
 static  ASP26GEN-1038-Sunday-00_000600_1..S03R
 RT                              000600_1..S03R
 ```
 
-MOTIS resolves realtime trips by exact id match, so every subway trip update
-fails with `trip_resolve_error`. The import strips the prefix from the static
-side for the feeds that need it. If subway realtime is still missing after
-0.3.0, re-run the import and read its per-feed output — the step announces
-itself, and says why when it declines to run.
+The import handles this without being told which feeds are affected. For each
+feed it samples the feed's own realtime data, tries a set of candidate id
+transforms against it, and rewrites the schedule only where one measurably
+resolves more trips. The step reports itself per feed, so re-run the import and
+read its output:
 
-It declines in two cases. `stripped ids do not have the expected shape` means
-MTA changed the trip_id format and the rule needs revisiting. `services running
-on the same date` means two trips would collapse onto one id on a day both run,
-which MOTIS cannot tell apart. Either way the feed still imports and still
-serves schedules.
+```
+✓ Realtime trip_ids did not match static. Rewrote to drop everything through the first "_"
+  495/705 sampled realtime trips now resolve; 2660 id(s) shared by more than one trip
+```
 
-Around a third of subway trip updates will not resolve no matter what. Added
-and unscheduled trips appear in no published schedule, and L trains are
-published with a shorter id on the realtime side than in the schedule
-(`079550_L..N` against `079550_L..N01R`), so the L stays schedule-only.
+It declines in four cases, and says which. `sample-too-small` means the feed
+published too few trip updates to judge — likely a late-night or holiday run,
+so try again during service hours. `already-resolving` means the ids match and
+nothing was needed. `no-improvement` means no candidate transform helped, so
+the two id spaces differ in a way this cannot repair. `date-overlap` means the
+rewrite would leave two trips running on the same day sharing one id, which
+MOTIS cannot tell apart. In every case the feed still imports and still serves
+schedules.
+
+A feed whose realtime is unreachable at import time is left alone rather than
+guessed at, so check that `gtfs_feeds.rt_urls` is populated before reading too
+much into a skip.
+
+Some realtime trips never resolve no matter what. Added and unscheduled trips
+appear in no published schedule. And a feed can differ in more than one way at
+once: MTA's L train is published with a shorter id in realtime than in the
+schedule (`079550_L..N` against `079550_L..N01R`) on top of the prefix, so it
+stays schedule-only.
 
 **`pelias_elasticsearch` restarts forever with `AccessDeniedException[/usr/share/elasticsearch/data/nodes]`**
 
