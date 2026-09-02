@@ -10,6 +10,23 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.2.8] - 2026-09-02
+
+### Added
+
+* `/transit/route-detail` reports the other lines available at each stop on the
+  route, so a stop row can draw its connections the way the Transit app does —
+  Union Square on the N showing Q and R and W beside it, and the 4, 5, 6 and L
+  a passageway away. Lines that call at the stop are marked `station` and ones
+  transfers.txt reaches from it `transfer`, so a caller can tell a train on this
+  platform from a walk across the interchange. The route being viewed is left
+  out. One query for the whole route, not one per stop
+
+### Fixed
+
+* `RouteDetailResponse` declares `bikesAllowed`, which it has been returning
+  since the field was added without ever saying so in its type
+
 ## [0.2.7] - 2026-09-02
 
 ### Added
