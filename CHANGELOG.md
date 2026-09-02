@@ -10,6 +10,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.2.8] - 2026-09-02
+
 ### Added
 
 * `/transit/route-detail` reports the other lines available at each stop on the
