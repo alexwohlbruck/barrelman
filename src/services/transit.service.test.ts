@@ -58,6 +58,7 @@ mock.module('../db', () => ({
 import {
   getTransitRoute,
   getRoutesForStop,
+  checkMotisHealth,
   extractFare,
   MotisError,
   type TransitRouteRequest,
@@ -525,6 +526,28 @@ describe('getRoutesForStop', () => {
     expect(text).toContain('gtfs_transfers')
     expect(text).toContain('at_station')
   })
+
+  test('folds the interchange into the station when a complex is asked for', async () => {
+    // Whether a complex member counts as at_station is decided in SQL, which
+    // the stub cannot evaluate — so what is pinned is the value bound into the
+    // query. A tap on a merged label sends true; a tap on one station sends
+    // false and keeps the split the tests above describe.
+    //
+    // Drizzle interleaves the literal SQL as StringChunks (whose `value` is a
+    // string array) with the interpolated values themselves; anything that is
+    // not a StringChunk is a bound value.
+    const bound = (stmt: any) =>
+      (stmt?.queryChunks ?? []).filter((chunk: any) => !Array.isArray(chunk?.value))
+
+    dbRows = []
+    await getRoutesForStop('5', '640', undefined, { complex: true })
+    expect(bound(dbStatements[0])).toContain(true)
+
+    dbStatements = []
+    dbRows = []
+    await getRoutesForStop('5', '640')
+    expect(bound(dbStatements[0])).toContain(false)
+  })
 })
 
 describe('nearby lines', () => {
@@ -591,5 +614,49 @@ describe('nearby lines', () => {
     await getRoutesForStop('5', '640')
 
     expect(dbStatements).toHaveLength(1)
+  })
+})
+
+describe('checkMotisHealth', () => {
+  /**
+   * MOTIS only answers 200 when every updater is healthy, so a dead GBFS feed
+   * makes it return 400 while it is still serving stoptimes normally. That was
+   * read as an outage, and `/health` took the whole transit group down with it.
+   */
+  const respond = (status: number, body: unknown) =>
+    (async () =>
+      new Response(JSON.stringify(body), {
+        status,
+        headers: { 'content-type': 'application/json' },
+      })) as unknown as typeof fetch
+
+  test('is ok when every subsystem is healthy', async () => {
+    expect(await checkMotisHealth(respond(200, { rt: true, gbfs: true }))).toEqual({ status: 'ok' })
+  })
+
+  test('stays up when a subsystem is degraded, and names it', async () => {
+    const health = await checkMotisHealth(respond(400, { rt: true, gbfs: false }))
+
+    expect(health.status).toBe('ok')
+    expect(health.message).toContain('gbfs')
+    expect(health.message).not.toContain('rt')
+  })
+
+  test('is unavailable for an error that is not a subsystem report', async () => {
+    const health = await checkMotisHealth(respond(502, { error: 'bad gateway' }))
+
+    expect(health.status).toBe('unavailable')
+    expect(health.message).toContain('502')
+  })
+
+  test('is unavailable when nothing answers', async () => {
+    const refuse = (async () => {
+      throw new Error('Connection refused')
+    }) as unknown as typeof fetch
+
+    expect(await checkMotisHealth(refuse)).toEqual({
+      status: 'unavailable',
+      message: 'Connection refused',
+    })
   })
 })

@@ -489,6 +489,16 @@ export const SCRIPTS: ScriptDef[] = [
     exec: { kind: 'process', command: 'bun', args: ['run', 'import/portolan-sync.ts', '--global'] },
     params: [
       {
+        name: 'jobs',
+        label: 'Parallel feed builds',
+        type: 'number',
+        apply: 'flag',
+        flag: '--jobs',
+        placeholder: 'blank = portolan default (min(4, CPUs))',
+        description:
+          'Charts are memory-heavy, and the default is chosen from CPU count alone — it has no idea what else the host is running. On a box that also serves the API, four concurrent charts can exhaust RAM and wedge it. Set 1 or 2 where memory is tight.',
+      },
+      {
         name: 'skip-motis',
         label: 'Skip MOTIS rebuild',
         type: 'boolean',
@@ -508,7 +518,7 @@ export const SCRIPTS: ScriptDef[] = [
     ],
     source: 'import/portolan-sync.ts',
     notes:
-      'A full-fleet rebuild — expect roughly an hour for a global registry. Requires the portolan binary (PORTOLAN_BIN) and workspace (PORTOLAN_WORKSPACE) to be set up; see the Portolan page under Self-hosting docs.',
+      'A full-fleet rebuild — expect roughly an hour for a global registry. Requires the portolan binary (PORTOLAN_BIN) and workspace (PORTOLAN_WORKSPACE) to be set up; see the Portolan page under Self-hosting docs. Check free memory before starting: portolan sizes its own parallelism from CPU count, so on a host that also serves the API the default can exhaust RAM mid-run — set "Parallel feed builds" to 1 or 2 there.',
   },
   {
     id: 'portolan-patch-import',
@@ -531,6 +541,16 @@ export const SCRIPTS: ScriptDef[] = [
         required: true,
         placeholder: 'mta-subway,marc',
         description: 'Comma-separated portolan feed keys (registry keys in portolan.json, not barrelman feed ids).',
+      },
+      {
+        name: 'jobs',
+        label: 'Parallel feed builds',
+        type: 'number',
+        apply: 'flag',
+        flag: '--jobs',
+        placeholder: 'blank = portolan default (min(4, CPUs))',
+        description:
+          'Charts are memory-heavy, and the default is chosen from CPU count alone — it has no idea what else the host is running. On a box that also serves the API, four concurrent charts can exhaust RAM and wedge it. Set 1 or 2 where memory is tight.',
       },
       {
         name: 'skip-motis',

@@ -34,9 +34,13 @@ does it — and the release pipeline turns it into the GitHub Release notes.
   Bridge–City Hall. Station lines are listed first. A transfer a fare rule buys
   rather than a walk between platforms is not in `transfers.txt` and is not
   reported
-
-### Added
-
+* `/transit/routes` takes `complex=true`, which treats the whole interchange as
+  one station: every line in it comes back as `via: 'station'` instead of the
+  connecting ones being filed under `transfer`. It is the counterpart to the
+  same flag on `/transit/departures` — a tap on the single symbol a map draws
+  over an interchange is a question about the interchange, so Brooklyn
+  Bridge–City Hall answers 4 5 6 J Z rather than 4 5 6 with the J and Z listed
+  as connections. Tapping one station of the group keeps the split
 * `/transit/routes` takes `lat`/`lng` (and an optional `radius`, default 200 m)
   and additionally reports `via: 'nearby'` lines — stops within walking
   distance that the feed does not join to this station. This is how a subway
@@ -46,6 +50,18 @@ does it — and the release pipeline turns it into the GitHub Release notes.
   `distanceM`, are folded to one row per line and agency (several overlapping
   feeds cover the same New York buses, so the M22 otherwise arrives three
   times), and say nothing about whether the connection is free
+* The three portolan sync scripts take a **Parallel feed builds** setting,
+  passed to `portolan sync --jobs`. Portolan otherwise sizes its own
+  parallelism from CPU count, with no view of what else the host is running,
+  and charts are memory-heavy: on a machine that also serves the API, four
+  concurrent charts can take all the RAM. What that looks like is worth
+  knowing, because it does not look like a crash — the kernel keeps running,
+  so the host still answers pings and still completes TCP handshakes on every
+  open port, while nothing in userspace gets scheduled and even SSH hangs at
+  the banner. Blank still means portolan's default; set 1 or 2 where memory is
+  thin. Also note that stopping the ops worker gracefully *requeues* the
+  running job by design, so a job has to be cancelled before the worker comes
+  back or it starts over
 
 ### Fixed
 
@@ -81,6 +97,22 @@ does it — and the release pipeline turns it into the GitHub Release notes.
   strip, the transfers injection, the Fares v2 conversion — re-serialized it
   uncompressed, taking the subway feed from 5.6 MB to 43 MB on the volume MOTIS
   imports from
+* MOTIS is handed only the GBFS systems inside the regions an instance imports,
+  rather than the whole catalog. `gbfs_systems` keeps every system the operator
+  directory lists — the stations are filtered by bbox, the systems are not — and
+  MOTIS polls every feed it is given for the life of the process. A New York
+  instance was polling 1345 live feeds to serve 2, and reporting itself
+  unhealthy for the whole time, its health endpoint being an AND over all of
+  them. A global instance still gets everything, as does one whose regions
+  declare no usable bounding box
+* `/health` no longer reports transit as down when MOTIS is merely degraded.
+  MOTIS answers its health endpoint with a flag per updater and only returns
+  200 when every one is true, so an instance whose GBFS feeds failed to load
+  replies `400 {"rt":true,"gbfs":false}` while serving stoptimes queries
+  normally. That was read as an outage, which took the whole transit endpoint
+  group off `/health` and lit the console red over a working timetable. A
+  subsystem report now counts as up and names what is degraded; a status with
+  no such report is still unavailable
 * A departure board never carries a neighbouring station's runs. MOTIS answers
   a stoptimes query with every stop that shares the requested stop's name, so a
   board for the Chambers St J/Z platform arrived with the 1, 2, 3, A and C of

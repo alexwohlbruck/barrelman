@@ -29,6 +29,7 @@ import {
 } from '../schema/gtfs'
 import { parse } from 'csv-parse/sync'
 import { type FetchFn } from './transit.service'
+import { resolveRegions } from '../config/regions'
 
 // ── Types ───────────────────────────────────────────────────────────
 
@@ -1595,11 +1596,45 @@ export async function generateMotisConfig(options?: MotisConfigOptions): Promise
   return lines.join('\n')
 }
 
+/**
+ * The GBFS systems MOTIS should poll, scoped to what this instance covers.
+ *
+ * `gbfs_systems` is a catalog of every system the operator directory lists —
+ * over a thousand worldwide — and MOTIS polls every one it is handed, for the
+ * life of the process. An instance serving a single metro area was paying for
+ * all of them: the memory and network of a thousand live feeds it can never
+ * answer a question about, and a health endpoint that calls the whole service
+ * unhealthy the moment any one of them is unreachable, which at that count is
+ * always. New York alone was polling 1345 feeds to serve 2.
+ *
+ * So they are scoped the way every other source in the pipeline is: to the
+ * bounding boxes of the regions the instance imports. Per region rather than
+ * their union, since the union of two distant regions is mostly the gap
+ * between them. A global instance still gets everything, which is the right
+ * answer there, as does one whose regions declare no usable box — better to
+ * poll too much than to silently serve no shared mobility at all.
+ */
 async function getGbfsFeedsForMotis(): Promise<Array<{ systemId: string; url: string }>> {
+  const { isGlobal, regions } = await resolveRegions()
+  const boxes = regions
+    .map(r => r.bbox)
+    .filter((b): b is [number, number, number, number] => Array.isArray(b) && b.length === 4)
+
+  const scope =
+    isGlobal || boxes.length === 0
+      ? sql`TRUE`
+      : sql`lat IS NOT NULL AND lon IS NOT NULL AND (${sql.join(
+          boxes.map(
+            ([west, south, east, north]) =>
+              sql`(lon BETWEEN ${west} AND ${east} AND lat BETWEEN ${south} AND ${north})`,
+          ),
+          sql` OR `,
+        )})`
+
   const result = await db.execute(sql`
     SELECT system_id, url
     FROM gbfs_systems
-    WHERE enabled = TRUE
+    WHERE enabled = TRUE AND (${scope})
     ORDER BY system_id
   `)
   return (result as any[]).map(row => ({

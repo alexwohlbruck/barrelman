@@ -217,6 +217,14 @@ import, because it checks systems in Abu Dhabi, Zurich and Darmstadt either way.
 On Colorado it took **6 min 48 s** and kept 191 stations out of 1,336 systems.
 Run it last, and skip it unless you need bikeshare. Nothing else depends on it.
 
+The `gbfs_systems` catalog keeps every system it saw, though — only the
+*stations* are filtered. MOTIS is handed the systems inside your regions'
+bounding boxes, not the whole catalog: it polls every feed it is given for the
+life of the process, and its health endpoint is an AND over all of them, so a
+single-metro instance given the catalog would both pay for a thousand live
+feeds and report itself permanently unhealthy. A global instance still gets
+everything.
+
 Pelias is a separate stack and takes hours — see
 [`pelias/README.md`](https://github.com/alexwohlbruck/barrelman/blob/main/pelias/README.md).
 
