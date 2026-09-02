@@ -53,6 +53,14 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ### Fixed
 
+* MOTIS is handed only the GBFS systems inside the regions an instance imports,
+  rather than the whole catalog. `gbfs_systems` keeps every system the operator
+  directory lists — the stations are filtered by bbox, the systems are not — and
+  MOTIS polls every feed it is given for the life of the process. A New York
+  instance was polling 1345 live feeds to serve 2, and reporting itself
+  unhealthy for the whole time, its health endpoint being an AND over all of
+  them. A global instance still gets everything, as does one whose regions
+  declare no usable bounding box
 * `/health` no longer reports transit as down when MOTIS is merely degraded.
   MOTIS answers its health endpoint with a flag per updater and only returns
   200 when every one is true, so an instance whose GBFS feeds failed to load
