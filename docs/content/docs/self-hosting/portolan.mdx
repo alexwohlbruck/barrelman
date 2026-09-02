@@ -38,6 +38,24 @@ All three live under **GTFS / Transit** in the console and wrap `bun run import/
 | **Portolan Patch Import** | `sync patch --feeds=…` — rebuild exactly the builds whose inputs changed. Portolan widens the set itself (feeds sharing track with a changed feed rebuild too), so the output stays byte-identical to a global run. |
 | **Portolan Check for Updates** | `sync check` — diff each feed's Transitland sha against the sync state, download what moved, patch just that. Cheap when nothing changed. Needs `TRANSITLAND_API_KEY`. |
 
+### Parallel feed builds
+
+All three scripts take a **Parallel feed builds** setting, passed through to
+`portolan sync --jobs`. Leave it blank and portolan picks `min(4, CPUs)`.
+
+That default is chosen from CPU count alone, and it does not know what else the
+host is running. Charts are memory-heavy, so on a machine that also serves the
+API — alongside Postgres, GraphHopper, MOTIS, Martin and Pelias — four
+concurrent charts can exhaust RAM part-way through a global run. The box does
+not crash: the kernel stays up and keeps answering pings while every userspace
+process is starved, so the API stops responding and even SSH cannot complete a
+handshake.
+
+Check free memory before a global run and set this to 1 or 2 where headroom is
+thin. A global run that dies half-finished is worse than a slow one — it leaves
+the tile tree mixed, and any metro-area group builds it had already cleared stay
+missing until the next complete run.
+
 ### Scheduling the check
 
 Point a daily schedule at **Portolan Check for Updates** (console → Schedules), the same way `gtfs-watch` is scheduled for uncorrected feeds. It is marked safe and needs no confirmation; on a quiet day it diffs shas and exits.

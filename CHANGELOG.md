@@ -10,6 +10,21 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Added
+
+* The three portolan sync scripts take a **Parallel feed builds** setting,
+  passed to `portolan sync --jobs`. Portolan otherwise sizes its own
+  parallelism from CPU count, with no view of what else the host is running,
+  and charts are memory-heavy: on a machine that also serves the API, four
+  concurrent charts can take all the RAM. What that looks like is worth
+  knowing, because it does not look like a crash — the kernel keeps running,
+  so the host still answers pings and still completes TCP handshakes on every
+  open port, while nothing in userspace gets scheduled and even SSH hangs at
+  the banner. Blank still means portolan's default; set 1 or 2 where memory is
+  thin. Also note that stopping the ops worker gracefully *requeues* the
+  running job by design, so a job has to be cancelled before the worker comes
+  back or it starts over
+
 ### Fixed
 
 * A slow query no longer kills the ops worker and the job it is running. The
