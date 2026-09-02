@@ -12,3 +12,7 @@ data/
 drizzle/meta/
 
 .claude/settings.local.json
+
+# Editor/OS junk and local worktrees
+._*
+.claude/worktrees/

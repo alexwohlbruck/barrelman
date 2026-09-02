@@ -1166,6 +1166,13 @@ export async function getNearbyStops(
  * Both are worth showing and they mean different things, so the caller gets to
  * decide. Station lines sort first.
  *
+ * `complex` collapses that distinction on purpose. A rider who taps the merged
+ * label the map draws over an interchange has asked about the interchange, not
+ * about whichever platform group happens to carry the stop id — so every line
+ * in it is one the place they tapped runs, and Brooklyn Bridge–City Hall
+ * answers 4 5 6 J Z rather than 4 5 6 with the J and Z filed under transfers.
+ * Tapping one station of the group keeps the split.
+ *
  * Only what the agency published counts as a transfer. A free bus-to-subway
  * ride bought by a fare rule rather than a walk between platforms is not in
  * transfers.txt and does not appear here.
@@ -1174,7 +1181,11 @@ export async function getRoutesForStop(
   feedId: string,
   stopId: string,
   nearby?: { lat: number; lng: number; radius?: number },
+  opts?: { complex?: boolean },
 ): Promise<StopRoutesResult[]> {
+  // Whether a line reached across the interchange counts as one of this
+  // place's own. Bound as a parameter, so it rides the same prepared plan.
+  const complexIsStation = opts?.complex === true
   const result = await db.execute(sql`
     WITH seed AS (
       -- the stop itself, plus its parent station when it's a platform
@@ -1204,9 +1215,9 @@ export async function getRoutesForStop(
       SELECT sid, bool_or(at_station) AS at_station FROM (
         SELECT sid, TRUE AS at_station FROM station
         UNION ALL
-        SELECT sid, FALSE FROM complex
+        SELECT sid, ${complexIsStation} FROM complex
         UNION ALL
-        SELECT s.stop_id, FALSE FROM gtfs_stops s JOIN complex c ON s.parent_station = c.sid
+        SELECT s.stop_id, ${complexIsStation} FROM gtfs_stops s JOIN complex c ON s.parent_station = c.sid
         WHERE s.feed_id = ${feedId}
       ) reachable
       GROUP BY sid
@@ -1479,7 +1490,37 @@ async function enrichInterchangeableRoutes(itineraries: TransitItinerary[]): Pro
 }
 
 /**
+ * The subsystems a MOTIS health response reports as unhealthy, or null when the
+ * body is not a subsystem report at all.
+ *
+ * MOTIS answers `/api/v1/health` with a flag per subsystem — `{"rt":true,
+ * "gbfs":false}` — and only 200 when every one of them is true. The shape is
+ * checked rather than assumed: an all-boolean object is a report, anything
+ * else is some other error that happens to have a body.
+ */
+async function motisSubsystemsDown(response: Response): Promise<string[] | null> {
+  try {
+    const body: unknown = await response.json()
+    if (!body || typeof body !== 'object' || Array.isArray(body)) return null
+    const flags = Object.entries(body as Record<string, unknown>)
+    if (!flags.length || flags.some(([, value]) => typeof value !== 'boolean')) return null
+    return flags.filter(([, value]) => value === false).map(([name]) => name)
+  } catch {
+    return null
+  }
+}
+
+/**
  * Check if MOTIS is healthy and accepting requests.
+ *
+ * A subsystem report is not an outage. MOTIS returns 400 the moment any one of
+ * its updaters is unhealthy, so an instance whose GBFS feeds failed to load
+ * answers `{"rt":true,"gbfs":false}` with a 400 while serving stoptimes
+ * queries perfectly well. Reading that as "MOTIS is down" took the whole
+ * transit endpoint group off `/health` — the API reporting an outage it did
+ * not have. A partial answer therefore counts as up, and names what is
+ * degraded. Anything that is not a subsystem report — another status, an
+ * unparseable body, no answer at all — is still unavailable.
  */
 export async function checkMotisHealth(
   fetchFn: FetchFn = globalThis.fetch,
@@ -1490,6 +1531,14 @@ export async function checkMotisHealth(
     if (response.ok) {
       return { status: 'ok' }
     }
+
+    const down = await motisSubsystemsDown(response)
+    if (down) {
+      return down.length
+        ? { status: 'ok', message: `degraded: ${down.join(', ')}` }
+        : { status: 'ok' }
+    }
+
     return { status: 'unavailable', message: `MOTIS returned ${response.status}` }
   } catch (err) {
     return {
