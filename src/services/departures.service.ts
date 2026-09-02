@@ -361,23 +361,17 @@ function rankByIdentity<T extends NearbyStop>(stops: T[], name?: string): T[] {
  *
  * When neither applies, nothing is dropped and the old merge stands.
  */
-function narrowToStation<T extends NearbyStop>(
-  stops: T[],
-  name?: string,
-): { stops: T[]; identified: boolean } {
+function narrowToStation<T extends NearbyStop>(stops: T[], name?: string): { stops: T[] } {
   const primary = stops[0]
-  if (!primary) return { stops, identified: false }
+  if (!primary) return { stops }
 
   const identified =
     (name != null && sameStationName(name, primary.name)) ||
     (primary.distance ?? Infinity) <= AT_THE_PLACE_RADIUS
-  if (!identified) return { stops, identified: false }
+  if (!identified) return { stops }
 
   const complex = stops.filter((stop) => sameStation(primary, stop))
-  // Identity is about knowing which station this is, not about how many
-  // candidates that dropped: a search that only ever saw this station's own
-  // platforms has still identified it.
-  return { stops: complex.length ? complex : stops, identified: true }
+  return { stops: complex.length ? complex : stops }
 }
 
 /** A station resolved from one of its stops: what to ask MOTIS for, and which
@@ -542,9 +536,9 @@ async function queryMotisStopTimes(
  * names the stop it actually calls at, so the ones that belong are the ones
  * whose stop is in this station.
  *
- * Only applied where the station is known. A merged nearby-stops board has no
- * single station to filter against, and answering "what can I catch here" with
- * a neighbour's departures is not wrong there.
+ * Applied to every board. Merging several nearby stops is still how a bare
+ * coordinate is answered — but each board names the stop it is for, so it may
+ * only carry that stop's own runs.
  */
 function onlyAtStation(
   result: MotisStopTimesResponse,
@@ -680,14 +674,12 @@ export async function getDepartures(
       ? new Set(routeShortNames)
       : null
 
-  // 1. Determine which stops to query, and whether they name one station
+  // 1. Determine which stops to query
   let stops: NearbyStop[]
-  let identified: boolean
 
   if (feedId && stopId) {
     // Direct stop query — skip spatial search
     stops = [{ feedId, stopId, name: '', lat, lng }]
-    identified = true
   } else {
     stops = await findNearbyStops(
       lat,
@@ -700,11 +692,7 @@ export async function getDepartures(
     // Only when the caller says this place is a transit stop — by naming it, or
     // by claiming a mode. A bare coordinate still gets everything nearby.
     if (routeTypes?.length || name) {
-      const narrowed = narrowToStation(rankByIdentity(stops, name), name)
-      stops = narrowed.stops
-      identified = narrowed.identified
-    } else {
-      identified = false
+      stops = narrowToStation(rankByIdentity(stops, name), name).stops
     }
     stops = stops.slice(0, MERGED_STOPS)
   }
@@ -712,22 +700,28 @@ export async function getDepartures(
   // 2. Resolve each stop to its station, so a complex is asked about once
   //    rather than once per platform, and so a name-matched neighbour's runs
   //    can be told from this station's own.
-  const stations = identified ? await resolveStations(stops) : new Map<string, Station>()
+  //
+  //    Done for every query, not just an identified one. Each board says which
+  //    stop it is for, and that has to be true even when the caller only gave a
+  //    coordinate: MOTIS answers a stoptimes query with every same-named stop's
+  //    runs, so an unfiltered board for the Chambers St J/Z platform carries the
+  //    1, 2, 3, A and C of the Chambers St 200 m away and claims they depart
+  //    from here. Merging several nearby stops is still fine — that is what a
+  //    bare coordinate asks for — but each of them keeps its own departures.
+  const stations = await resolveStations(stops)
 
-  const boards = identified
-    ? [
-        ...new Map(
-          stops.map((stop) => {
-            const station = stations.get(stationKey(stop.feedId, stop.stopId))
-            const stationId = station?.stationId ?? stop.stopId
-            return [
-              stationKey(stop.feedId, stationId),
-              { stop: { ...stop, stopId: stationId }, members: station?.members ?? null },
-            ]
-          }),
-        ).values(),
-      ]
-    : stops.map((stop) => ({ stop, members: null as Set<string> | null }))
+  const boards = [
+    ...new Map(
+      stops.map((stop) => {
+        const station = stations.get(stationKey(stop.feedId, stop.stopId))
+        const stationId = station?.stationId ?? stop.stopId
+        return [
+          stationKey(stop.feedId, stationId),
+          { stop: { ...stop, stopId: stationId }, members: station?.members ?? null },
+        ]
+      }),
+    ).values(),
+  ]
 
   // 3. Query MOTIS stoptimes for each board in parallel
   const motisResults = await Promise.allSettled(

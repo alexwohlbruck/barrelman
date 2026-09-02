@@ -471,3 +471,55 @@ describe('one board per station', () => {
     expect(result[0].hasMore).toBe(true)
   })
 })
+
+describe('a board only ever carries its own stop', () => {
+  /**
+   * MOTIS resolves a stoptimes query to every stop that shares the requested
+   * stop's name, so the Chambers St J/Z platform answers with the 1, 2, 3, A
+   * and C of the unrelated Chambers St 200 m away. A board names the stop it is
+   * for; carrying a neighbour's runs makes that name a lie. This held once the
+   * caller identified the station, and not otherwise — which is exactly the
+   * case a bare coordinate hits.
+   */
+  test('filters even when nothing identified the station', async () => {
+    STOP_ROWS = [
+      { stop_id: 'M21N', feed_id: '5', stop_name: 'Chambers St', parent_station: 'M21', stop_lat: 40.713, stop_lon: -74.003, distance: 96 },
+    ]
+    STATION_ROWS = [
+      { feed_id: '5', seed_id: 'M21N', station_id: 'M21', member_id: 'M21N' },
+      { feed_id: '5', seed_id: 'M21N', station_id: 'M21', member_id: 'M21S' },
+    ]
+
+    // No name and no routeTypes — nothing tells us which station this is, and
+    // the one candidate is too far away to claim the place.
+    const result = await getDepartures(
+      { lat: 40.7134, lng: -74.0037 },
+      motisMixed(['5_M21N', '5_137N', '5_A36S']),
+    )
+
+    expect(result).toHaveLength(1)
+    expect(result[0].departures.map((d) => d.route.shortName)).toEqual(['J'])
+  })
+
+  /** Runs at the given stops, one route each, a minute apart. */
+  function motisMixed(stopIds: string[]): FetchFn {
+    const routes: Record<string, string> = { '5_M21N': 'J', '5_137N': '1', '5_A36S': 'C' }
+    return async () =>
+      new Response(
+        JSON.stringify({
+          place: { name: 'Chambers St', stopId: '5_M21', lat: 0, lon: 0, tz: 'America/New_York' },
+          stopTimes: stopIds.map((stopId, i) => ({
+            place: {
+              name: 'Chambers St', stopId, lat: 0, lon: 0,
+              departure: `2026-08-15T10:0${i}:00Z`,
+              scheduledDeparture: `2026-08-15T10:0${i}:00Z`,
+            },
+            mode: 'SUBWAY', realTime: false,
+            routeId: `5_${routes[stopId]}`, routeShortName: routes[stopId],
+            routeType: 1, tripId: `20260815_10:0${i}_5_${i}`,
+          })),
+        }),
+        { headers: { 'content-type': 'application/json' } },
+      )
+  }
+})
