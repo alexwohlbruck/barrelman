@@ -12,6 +12,14 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ### Fixed
 
+* `/transit/routes` caps nearby lines at six, nearest train first, and takes a
+  `nearbyLimit` to change that. The radius alone never bounded the list: two
+  hundred metres of Lower Manhattan holds twenty-five distinct lines, so Rector
+  St answered with the 1 fifty metres away and then every Staten Island express
+  bus and commuter coach passing the corner — SIM1, SIM1C, SIM2, SIM4C, SIM15,
+  SIM32 and the rest. The cap runs after the sort, which is route type before
+  distance, so what survives is the nearest train rather than the nearest bus
+  stop
 * Removing data no longer triggers a full re-derivation of every search column.
   Startup compares the row count against the one recorded when enrichment last
   completed and re-enriches when they differ by more than 10%, which could not
