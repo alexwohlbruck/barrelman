@@ -25,7 +25,13 @@ let dbStatements: any[] = []
 // Mock the database so getNearbyStops returns controlled stops without a
 // real PostgreSQL connection. Each call alternates between an origin stop
 // and a destination stop, producing exactly one stop pair per test.
+// Spread the real module: a bare replacement drops `connection` and the
+// ensure*Schema helpers for every file loaded after this one. See the note in
+// motis-config.test.ts.
+const actualDb = await import('../db')
+
 mock.module('../db', () => ({
+  ...actualDb,
   db: {
     execute: async (query: any) => {
       dbStatements.push(query)

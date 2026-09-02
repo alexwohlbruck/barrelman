@@ -4,7 +4,13 @@ import { describe, test, expect, mock, beforeEach } from 'bun:test'
 
 const mockExecute = mock(async () => [{ '?column?': 1 }] as any[])
 
-mock.module('../db', () => ({ db: { execute: mockExecute } }))
+// Spread the real module: a bare replacement drops `connection` and the
+// ensure*Schema helpers for every test file loaded after this one, which
+// fails whichever suite imports them next rather than this one.
+const actualDb = await import('../db')
+
+mock.module('../db', () => ({
+  ...actualDb, db: { execute: mockExecute } }))
 
 // Dynamic import ensures mocks are registered before the module loads
 const { checkHealth, redactHealth, resetHealthCache } = await import('./health.service')

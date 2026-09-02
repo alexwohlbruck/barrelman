@@ -4,7 +4,13 @@ import { describe, test, expect, mock } from 'bun:test'
 const mockExecute = mock(async () => [
   { system_id: 'test_sys', url: 'https://example.test/pricing.json' },
 ])
-mock.module('../db', () => ({ db: { execute: mockExecute } }))
+// Spread the real module: a bare replacement drops `connection` and the
+// ensure*Schema helpers for every test file loaded after this one, which
+// fails whichever suite imports them next rather than this one.
+const actualDb = await import('../db')
+
+mock.module('../db', () => ({
+  ...actualDb, db: { execute: mockExecute } }))
 
 // Swappable fetch payload — each test sets `plansPayload`.
 let plansPayload: any = { data: { plans: [] } }
