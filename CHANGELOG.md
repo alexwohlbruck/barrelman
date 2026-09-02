@@ -12,6 +12,15 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ### Added
 
+* OSM Update, Check for GTFS Updates and Import GBFS Systems take a Regions
+  override, the same one Full OSM Import and Download GTFS Feeds already had.
+  Every script that resolves regions can now be pointed at a different set for
+  one run, from the console, without editing the server's `.env` and restarting
+  ops. That matters most when the two disagree: naming a region in `REGIONS`
+  that has been switched off in the console makes the resolver refuse — by
+  design, since silently importing a disabled region would be worse — and
+  without an override the only way out was a shell on the host
+
 * `/transit/departures` takes `complex=true` and returns a board for every
   station the agency's transfers.txt joins to the resolved one, rather than
   only that station. This is what a merged station label on a map stands for:

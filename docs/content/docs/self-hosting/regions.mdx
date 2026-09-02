@@ -211,6 +211,12 @@ Two run long for what they deliver. MOTIS OSM prep rewrites the whole extract to
 repair a handful of underground platforms — 6 minutes to synthesise 0 connectors
 in Colorado.
 
+Every script that resolves regions also takes a **Regions override** in the
+console, applied as `REGIONS` for that run only. Reach for it when the env var
+and the console disagree — a region named in `REGIONS` but switched off in the
+console makes the resolver refuse, and the override is the way to run an import
+without editing `.env` and restarting the ops container.
+
 The GBFS importer downloads **every** system in the global catalog, then keeps
 only the stations inside your bbox. It takes the same time whatever region you
 import, because it checks systems in Abu Dhabi, Zurich and Darmstadt either way.
