@@ -212,6 +212,7 @@ export const SCRIPTS: ScriptDef[] = [
     exclusive: true,
     exec: { kind: 'process', command: 'bash', args: ['scripts/update-osm.sh'] },
     params: [
+      REGIONS_PARAM,
       {
         name: 'UPDATE_MODE',
         label: 'Update mode',
@@ -344,6 +345,7 @@ export const SCRIPTS: ScriptDef[] = [
     exclusive: true,
     exec: { kind: 'process', command: 'bash', args: ['scripts/gtfs-watch.sh'] },
     params: [
+      REGIONS_PARAM,
       {
         name: 'TRANSITLAND_API_KEY',
         label: 'Transitland API key',
@@ -649,6 +651,7 @@ export const SCRIPTS: ScriptDef[] = [
     confirm: false,
     exec: { kind: 'process', command: 'bun', args: ['run', 'import/import-gbfs-systems.ts'] },
     params: [
+      REGIONS_PARAM,
       { name: 'country', label: 'Country filter', type: 'string', apply: 'flag', flag: '--country', placeholder: 'e.g. US' },
       { name: 'bbox', label: 'Bounding box', type: 'string', apply: 'flag', flag: '--bbox', placeholder: 'w,s,e,n (blank = REGIONS bbox)' },
     ],
