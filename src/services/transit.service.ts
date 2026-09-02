@@ -253,6 +253,16 @@ export interface StopRoutesResult {
   routeColor: string | null
   routeTextColor: string | null
   agencyName: string | null
+  /**
+   * How a rider reaches this line from the stop asked about.
+   *
+   * `station` — it calls at this station; a board here shows it departing.
+   * `transfer` — it calls at another station the agency's `transfers.txt`
+   * connects to this one, so it is reachable without leaving the paid area:
+   * the J and Z at Chambers St from Brooklyn Bridge–City Hall. Useful to
+   * offer, wrong to list as departing from here.
+   */
+  via: 'station' | 'transfer'
 }
 
 export type FetchFn = (url: string, init?: RequestInit) => Promise<Response>
@@ -1134,13 +1144,26 @@ export async function getNearbyStops(
 }
 
 /**
- * Get routes that serve a given stop — across its whole station complex.
+ * Get routes reachable at a given stop, each marked with how.
  *
- * "The trains at Times Sq" means N/Q/R/W/S/1/2/3/7 even though GTFS models
- * the complex as four stations (127, R16, 725, 902). Membership comes from
- * the agency's transfers.txt (one hop from the queried stop or its parent),
- * and routes are collected from every member station's child platforms,
- * since stop_times reference platform ids (127N/127S), not parents.
+ * A station and its transfer complex are not the same list, and conflating
+ * them is what puts the A and C on a Brooklyn Bridge–City Hall board. So the
+ * answer separates them:
+ *
+ *   `via: 'station'`  — the line calls here. Its trains depart from this
+ *     station's own platforms, which for a GTFS parent means every child
+ *     stop_times references (640N/640S, not 640).
+ *   `via: 'transfer'` — the line calls at a station the agency's
+ *     transfers.txt joins to this one, so a rider reaches it without leaving
+ *     the paid area. At Brooklyn Bridge–City Hall that is the J and Z, which
+ *     stop at Chambers St one connection away.
+ *
+ * Both are worth showing and they mean different things, so the caller gets to
+ * decide. Station lines sort first.
+ *
+ * Only what the agency published counts as a transfer. A free bus-to-subway
+ * ride bought by a fare rule rather than a walk between platforms is not in
+ * transfers.txt and does not appear here.
  */
 export async function getRoutesForStop(
   feedId: string,
@@ -1155,6 +1178,13 @@ export async function getRoutesForStop(
       WHERE feed_id = ${feedId} AND stop_id = ${stopId}
         AND parent_station IS NOT NULL AND parent_station <> ''
     ),
+    station AS (
+      -- this station alone: the seed and the platforms filed under it
+      SELECT sid FROM seed
+      UNION
+      SELECT s.stop_id FROM gtfs_stops s JOIN seed ON s.parent_station = seed.sid
+      WHERE s.feed_id = ${feedId}
+    ),
     complex AS (
       SELECT sid FROM seed
       UNION
@@ -1165,12 +1195,17 @@ export async function getRoutesForStop(
       WHERE t.feed_id = ${feedId} AND t.to_stop_id <> t.from_stop_id
     ),
     members AS (
-      SELECT sid FROM complex
-      UNION
-      SELECT s.stop_id FROM gtfs_stops s JOIN complex c ON s.parent_station = c.sid
-      WHERE s.feed_id = ${feedId}
+      SELECT sid, bool_or(at_station) AS at_station FROM (
+        SELECT sid, TRUE AS at_station FROM station
+        UNION ALL
+        SELECT sid, FALSE FROM complex
+        UNION ALL
+        SELECT s.stop_id, FALSE FROM gtfs_stops s JOIN complex c ON s.parent_station = c.sid
+        WHERE s.feed_id = ${feedId}
+      ) reachable
+      GROUP BY sid
     )
-    SELECT DISTINCT
+    SELECT
       r.route_id,
       r.feed_id,
       r.route_short_name,
@@ -1178,12 +1213,18 @@ export async function getRoutesForStop(
       r.route_type,
       r.route_color,
       r.route_text_color,
-      r.agency_name
+      r.agency_name,
+      -- a line calling anywhere in this station is served by it, even when it
+      -- also calls across the complex
+      bool_or(m.at_station) AS at_station
     FROM gtfs_stop_routes sr
     JOIN members m ON sr.stop_id = m.sid
     JOIN gtfs_routes r ON r.feed_id = sr.feed_id AND r.route_id = sr.route_id
     WHERE sr.feed_id = ${feedId}
-    ORDER BY r.route_type, r.route_short_name
+    GROUP BY
+      r.route_id, r.feed_id, r.route_short_name, r.route_long_name,
+      r.route_type, r.route_color, r.route_text_color, r.agency_name
+    ORDER BY bool_or(m.at_station) DESC, r.route_type, r.route_short_name
   `)
 
   return (result as any[]).map((row: any) => ({
@@ -1195,6 +1236,7 @@ export async function getRoutesForStop(
     routeColor: row.route_color,
     routeTextColor: row.route_text_color,
     agencyName: row.agency_name,
+    via: row.at_station ? 'station' : 'transfer',
   }))
 }
 

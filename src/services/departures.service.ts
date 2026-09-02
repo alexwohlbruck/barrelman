@@ -11,6 +11,7 @@
 
 import { db } from '../db'
 import { sql } from 'drizzle-orm'
+import { sameStationName } from '../lib/station-name'
 
 // ── Types ───────────────────────────────────────────────────────────
 
@@ -40,6 +41,11 @@ export interface DepartureRequest {
    *  tags. Stops served by a matching route rank first and are searched out to
    *  a wider radius — see `MODE_MATCH_RADIUS`. */
   routeTypes?: number[]
+  /** The place's own name. A station has an identity, and distance alone gets
+   *  it wrong: the Brooklyn Bridge–City Hall node is nearer the Chambers St
+   *  platforms than its own. A stop whose name folds to this one claims the
+   *  board outright — see `src/lib/station-name.ts`. */
+  name?: string
   /** Drop departures further out than this many minutes. MOTIS's `n` is a plain
    *  event count with no time bound, so the horizon it buys swings wildly with
    *  service frequency — 50 events is 45 minutes at a subway platform and five
@@ -208,6 +214,32 @@ function computeDelay(actual?: string, scheduled?: string): number | undefined {
  */
 const MODE_MATCH_RADIUS = 400
 
+/** How many stops a board merges when nothing identifies a single station. */
+const MERGED_STOPS = 5
+
+/**
+ * How many candidates to pull back when the caller named the place. The name
+ * match is decided in TypeScript — the fold is a word dictionary, not something
+ * to write twice in SQL — so the shortlist has to be long enough to still hold
+ * the right station after distance has sorted it down the list. A station
+ * complex can easily put a dozen platforms nearer than the one that shares the
+ * place's name.
+ */
+const IDENTITY_CANDIDATES = 25
+
+interface NearbyStop {
+  feedId: string
+  stopId: string
+  name: string
+  code?: string
+  lat: number
+  lng: number
+  distance?: number
+  parentStation?: string
+  /** Served by a route of the mode the caller asked for. */
+  modeMatch?: boolean
+}
+
 /**
  * Find nearby GTFS stops using PostGIS spatial index.
  *
@@ -224,7 +256,7 @@ async function findNearbyStops(
   radius: number,
   limit: number,
   routeTypes?: number[],
-): Promise<Array<{ feedId: string; stopId: string; name: string; code?: string; lat: number; lng: number; distance: number; parentStation?: string }>> {
+): Promise<NearbyStop[]> {
   const modeMatch = routeTypes?.length
     ? sql`EXISTS (
         SELECT 1 FROM gtfs_stop_routes sr
@@ -273,6 +305,7 @@ async function findNearbyStops(
     lng: row.stop_lon,
     distance: Math.round(row.distance * 10) / 10,
     parentStation: row.parent_station || undefined,
+    modeMatch: row.mode_match === true,
   }))
 }
 
@@ -295,6 +328,23 @@ function sameStation(
 }
 
 /**
+ * Promote the stop that shares the place's name, without disturbing anything
+ * else about the order.
+ *
+ * Name outranks distance but not mode: a place tagged as a subway station whose
+ * name also hangs on the bus stop outside is still the subway station. Within
+ * each (mode, name) tier the sort is stable, so SQL's distance ordering — the
+ * only thing that ranked stops before — decides as it always did. With no name
+ * to match on, every stop ties and the list comes back untouched.
+ */
+function rankByIdentity<T extends NearbyStop>(stops: T[], name?: string): T[] {
+  if (!name) return stops
+
+  const tier = (stop: T) => (stop.modeMatch ? 2 : 0) + (sameStationName(name, stop.name) ? 1 : 0)
+  return [...stops].sort((a, b) => tier(b) - tier(a))
+}
+
+/**
  * Narrow a nearby-stop list to the station the place actually *is*.
  *
  * Merging every stop within the radius is right for a bare coordinate — tell me
@@ -302,21 +352,117 @@ function sameStation(
  * Opening the Roosevelt Island Tramway and reading a board of Q32, M15 and Q60
  * buses bound for Penn Station is not a departure board for that station.
  *
- * Mode alone can't separate them: RIOC publishes the tramway as `route_type=3`,
- * the same code the buses outside carry, so a mode filter keeps all of them.
- * What does separate them is distance — 2.4 m against 43 m — so a stop sitting
- * essentially on the place claims it, and the board narrows to that stop's
- * station complex (its platforms, both directions). When the nearest stop is
- * merely nearby, nothing is dropped and the old merge stands.
+ * Two things can establish that identity. A shared name is the strong one, and
+ * it holds at any distance the search reached: the Brooklyn Bridge–City Hall
+ * platforms are 52 m from the node that names them and still theirs, even
+ * though Chambers St is nearer. Failing that, proximity — RIOC publishes the
+ * Roosevelt Island tramway as `route_type=3`, the same code as the buses
+ * underneath it, so mode cannot separate those and 2.4 m against 43 m can.
+ *
+ * When neither applies, nothing is dropped and the old merge stands.
  */
-function narrowToStation<T extends { feedId: string; name: string; distance?: number; parentStation?: string }>(
+function narrowToStation<T extends NearbyStop>(
   stops: T[],
-): T[] {
+  name?: string,
+): { stops: T[]; identified: boolean } {
   const primary = stops[0]
-  if (!primary || (primary.distance ?? Infinity) > AT_THE_PLACE_RADIUS) return stops
+  if (!primary) return { stops, identified: false }
+
+  const identified =
+    (name != null && sameStationName(name, primary.name)) ||
+    (primary.distance ?? Infinity) <= AT_THE_PLACE_RADIUS
+  if (!identified) return { stops, identified: false }
 
   const complex = stops.filter((stop) => sameStation(primary, stop))
-  return complex.length ? complex : stops
+  // Identity is about knowing which station this is, not about how many
+  // candidates that dropped: a search that only ever saw this station's own
+  // platforms has still identified it.
+  return { stops: complex.length ? complex : stops, identified: true }
+}
+
+/** A station resolved from one of its stops: what to ask MOTIS for, and which
+ *  stop ids the answer is allowed to be about. */
+interface Station {
+  /** The GTFS parent when the stop has one, otherwise the stop itself. */
+  stationId: string
+  /** The station and every platform under it, MOTIS-prefixed (`{feed}_{id}`). */
+  members: Set<string>
+}
+
+/**
+ * Resolve each stop to its station: the GTFS parent, and every platform filed
+ * under it.
+ *
+ * Two problems need this. A board built from the platforms is doubled, because
+ * MOTIS answers `640N` and `640S` with the same station-level list — that is
+ * the "Now, Now" and the repeated clock times in a reported board. And MOTIS
+ * widens a stoptimes query to every stop that *shares a name*, so asking about
+ * the Chambers St J/Z platform returns the 1/2/3 and A/C running under a
+ * different Chambers St 200 m away, which is a separate complex with no free
+ * transfer between them. Asking once per station fixes the first; knowing the
+ * station's real membership lets the caller throw out the second.
+ *
+ * A stop the GTFS tables have never heard of resolves to itself with itself as
+ * its only member — an id from a caller is not ours to assume is real.
+ */
+async function resolveStations(
+  stops: Array<{ feedId: string; stopId: string }>,
+): Promise<Map<string, Station>> {
+  const resolved = new Map<string, Station>()
+  if (stops.length === 0) return resolved
+
+  const unique = [...new Map(stops.map((s) => [stationKey(s.feedId, s.stopId), s])).values()]
+  for (const { feedId, stopId } of unique) {
+    resolved.set(stationKey(feedId, stopId), {
+      stationId: stopId,
+      members: new Set([`${feedId}_${stopId}`]),
+    })
+  }
+
+  // One parametrized row per stop — the ids reach here off a query string, so
+  // they stay bind parameters rather than being quoted into a VALUES list.
+  const seed = sql.join(
+    unique.map((s) => sql`(${s.feedId}::text, ${s.stopId}::text)`),
+    sql`, `,
+  )
+
+  try {
+    const rows = (await db.execute(sql`
+      WITH seed (feed_id, stop_id) AS (VALUES ${seed}),
+      station AS (
+        SELECT
+          seed.feed_id,
+          seed.stop_id AS seed_id,
+          COALESCE(NULLIF(s.parent_station, ''), seed.stop_id) AS station_id
+        FROM seed
+        LEFT JOIN gtfs_stops s ON s.feed_id = seed.feed_id AND s.stop_id = seed.stop_id
+      )
+      SELECT st.feed_id, st.seed_id, st.station_id, m.stop_id AS member_id
+      FROM station st
+      JOIN gtfs_stops m
+        ON m.feed_id = st.feed_id
+       AND (m.stop_id = st.station_id OR m.parent_station = st.station_id)
+    `)) as any[]
+
+    for (const row of rows) {
+      const key = stationKey(row.feed_id, row.seed_id)
+      const entry = resolved.get(key)
+      if (!entry) continue
+      entry.stationId = row.station_id
+      entry.members.add(`${row.feed_id}_${row.member_id}`)
+    }
+  } catch (err) {
+    // A board from the platforms is doubled, not wrong. Losing it entirely
+    // because a lookup failed would be the worse outcome.
+    console.error('[Departures] Failed to resolve station membership:', err)
+  }
+
+  return resolved
+}
+
+/** A separator no GTFS id contains, so ('a_b','c') and ('a','b_c') stay distinct. */
+function stationKey(feedId: string, stopId: string): string {
+  return `${feedId}\u0000${stopId}`
 }
 
 /**
@@ -383,6 +529,31 @@ async function queryMotisStopTimes(
   }
 
   return response.json() as Promise<MotisStopTimesResponse>
+}
+
+/**
+ * Drop the runs MOTIS threw in that don't call at this station.
+ *
+ * MOTIS resolves a stoptimes query to every stop sharing the requested stop's
+ * name, which is generous in a way that is usually invisible and occasionally
+ * badly wrong: New York has two unrelated "Chambers St" complexes 200 m apart,
+ * so a board for the J/Z platforms arrives carrying the 1, 2, 3, A and C from
+ * the other one — lines a rider cannot reach without paying again. Each run
+ * names the stop it actually calls at, so the ones that belong are the ones
+ * whose stop is in this station.
+ *
+ * Only applied where the station is known. A merged nearby-stops board has no
+ * single station to filter against, and answering "what can I catch here" with
+ * a neighbour's departures is not wrong there.
+ */
+function onlyAtStation(
+  result: MotisStopTimesResponse,
+  members: Set<string>,
+): MotisStopTimesResponse {
+  return {
+    ...result,
+    stopTimes: result.stopTimes.filter((st) => members.has(st.place.stopId)),
+  }
 }
 
 /**
@@ -469,6 +640,13 @@ function trimToWindow(
  * When `feedId` + `stopId` are provided, queries that stop directly.
  * Otherwise, finds nearby stops via PostGIS and queries each.
  *
+ * A query that identifies a station — by `feedId`/`stopId`, by `name`, or by a
+ * stop sitting on the place — gets one board *for that station*: asked once at
+ * the GTFS parent so its platforms aren't listed twice, and filtered to runs
+ * that actually call there. A bare coordinate is still the old merge of
+ * whatever is nearby, because "what can I catch from here" is a different
+ * question from "what does this station run".
+ *
  * Results are enriched with route colors from the GTFS database,
  * which MOTIS doesn't return in its stoptimes response.
  */
@@ -487,6 +665,7 @@ export async function getDepartures(
     routeShortNames,
     directionId,
     routeTypes,
+    name,
     windowMinutes,
   } = request
 
@@ -501,37 +680,80 @@ export async function getDepartures(
       ? new Set(routeShortNames)
       : null
 
-  // 1. Determine which stops to query
-  let stops: Array<{ feedId: string; stopId: string; name: string; code?: string; lat: number; lng: number; distance?: number }>
+  // 1. Determine which stops to query, and whether they name one station
+  let stops: NearbyStop[]
+  let identified: boolean
 
   if (feedId && stopId) {
     // Direct stop query — skip spatial search
     stops = [{ feedId, stopId, name: '', lat, lng }]
+    identified = true
   } else {
-    stops = await findNearbyStops(lat, lng, radius, 5, routeTypes)
+    stops = await findNearbyStops(
+      lat,
+      lng,
+      radius,
+      name ? IDENTITY_CANDIDATES : MERGED_STOPS,
+      routeTypes,
+    )
     if (stops.length === 0) return []
-    // Only when the caller says this place is a transit stop of a given mode —
-    // a bare coordinate still gets everything nearby.
-    if (routeTypes?.length) stops = narrowToStation(stops)
+    // Only when the caller says this place is a transit stop — by naming it, or
+    // by claiming a mode. A bare coordinate still gets everything nearby.
+    if (routeTypes?.length || name) {
+      const narrowed = narrowToStation(rankByIdentity(stops, name), name)
+      stops = narrowed.stops
+      identified = narrowed.identified
+    } else {
+      identified = false
+    }
+    stops = stops.slice(0, MERGED_STOPS)
   }
 
-  // 2. Query MOTIS stoptimes for each stop in parallel
+  // 2. Resolve each stop to its station, so a complex is asked about once
+  //    rather than once per platform, and so a name-matched neighbour's runs
+  //    can be told from this station's own.
+  const stations = identified ? await resolveStations(stops) : new Map<string, Station>()
+
+  const boards = identified
+    ? [
+        ...new Map(
+          stops.map((stop) => {
+            const station = stations.get(stationKey(stop.feedId, stop.stopId))
+            const stationId = station?.stationId ?? stop.stopId
+            return [
+              stationKey(stop.feedId, stationId),
+              { stop: { ...stop, stopId: stationId }, members: station?.members ?? null },
+            ]
+          }),
+        ).values(),
+      ]
+    : stops.map((stop) => ({ stop, members: null as Set<string> | null }))
+
+  // 3. Query MOTIS stoptimes for each board in parallel
   const motisResults = await Promise.allSettled(
-    stops.map(async stop => {
+    boards.map(async ({ stop, members }) => {
       const motisStopId = `${stop.feedId}_${stop.stopId}`
       const result = await queryMotisStopTimes(motisStopId, n, time, fetchFn)
-      return { stop, result }
+      // `page` is what MOTIS returned before this station's filter, since a
+      // full page is what says the timetable had more to give. Counting the
+      // filtered runs would report "no more" for a station whose page was
+      // mostly a same-named neighbour's.
+      return {
+        stop,
+        page: result.stopTimes.length,
+        result: members ? onlyAtStation(result, members) : result,
+      }
     }),
   )
 
-  // 3. Collect all route IDs for batch color lookup
+  // 4. Collect all route IDs for batch color lookup
   const routePairs: Array<{ feedId: string; routeId: string }> = []
-  const successResults: Array<{ stop: typeof stops[0]; result: MotisStopTimesResponse }> = []
+  const successResults: Array<{ stop: NearbyStop; page: number; result: MotisStopTimesResponse }> = []
 
   for (const outcome of motisResults) {
     if (outcome.status !== 'fulfilled') continue
-    const { stop, result } = outcome.value
-    successResults.push({ stop, result })
+    const { stop, page, result } = outcome.value
+    successResults.push({ stop, page, result })
 
     for (const st of result.stopTimes) {
       const { feedId: fid, stopId: rid } = parseMotisId(st.routeId)
@@ -541,11 +763,11 @@ export async function getDepartures(
 
   if (successResults.length === 0) return []
 
-  // 4. Batch-fetch route colors
+  // 5. Batch-fetch route colors
   const colorMap = await fetchRouteColors(routePairs)
 
-  // 5. Transform and return
-  return successResults.map(({ stop, result }) => {
+  // 6. Transform and return
+  return successResults.map(({ stop, page, result }) => {
     const motisPlace = result.place
     const timezone = motisPlace?.tz || result.stopTimes[0]?.place?.tz || 'UTC'
 
@@ -569,7 +791,7 @@ export async function getDepartures(
         windowEnd,
         // A full page means MOTIS had more to give, so more runs exist even
         // when none of what came back was trimmed.
-        result.stopTimes.length >= n,
+        page >= n,
       ),
       nextPageCursor: result.nextPageCursor,
       previousPageCursor: result.previousPageCursor,
