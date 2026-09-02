@@ -1180,7 +1180,7 @@ export async function getNearbyStops(
 export async function getRoutesForStop(
   feedId: string,
   stopId: string,
-  nearby?: { lat: number; lng: number; radius?: number },
+  nearby?: { lat: number; lng: number; radius?: number; limit?: number },
   opts?: { complex?: boolean },
 ): Promise<StopRoutesResult[]> {
   // Whether a line reached across the interchange counts as one of this
@@ -1273,6 +1273,20 @@ export async function getRoutesForStop(
 const NEARBY_RADIUS = 200
 
 /**
+ * How many nearby lines to report at most.
+ *
+ * The radius alone does not bound this. Two hundred metres of Lower Manhattan
+ * holds twenty-five distinct lines — Rector St has the 1 fifty metres away and
+ * then a wall of Staten Island express buses (SIM1, SIM1C, SIM2, SIM4C, SIM15,
+ * SIM32…) and commuter coaches, none of which a rider standing on the N/R/W
+ * platform is looking for. A list that long is not information.
+ *
+ * The cap applies after the sort, which is route type before distance, so what
+ * survives is the nearest train rather than the nearest bus stop.
+ */
+const NEARBY_LIMIT = 6
+
+/**
  * Lines calling at stops near the station that the feed does not connect to it.
  *
  * Deliberately cross-feed, which is the whole point: a subway station's bus
@@ -1284,7 +1298,12 @@ const NEARBY_RADIUS = 200
  * dropped rather than repeated.
  */
 async function routesNearby(
-  { lat, lng, radius = NEARBY_RADIUS }: { lat: number; lng: number; radius?: number },
+  {
+    lat,
+    lng,
+    radius = NEARBY_RADIUS,
+    limit = NEARBY_LIMIT,
+  }: { lat: number; lng: number; radius?: number; limit?: number },
   inSystem: StopRoutesResult[],
 ): Promise<StopRoutesResult[]> {
   const rows = (await db.execute(sql`
@@ -1333,12 +1352,14 @@ async function routesNearby(
     })
   }
 
-  return nearby.sort(
-    (a, b) =>
-      a.routeType - b.routeType ||
-      (a.distanceM ?? 0) - (b.distanceM ?? 0) ||
-      (a.routeShortName ?? '').localeCompare(b.routeShortName ?? ''),
-  )
+  return nearby
+    .sort(
+      (a, b) =>
+        a.routeType - b.routeType ||
+        (a.distanceM ?? 0) - (b.distanceM ?? 0) ||
+        (a.routeShortName ?? '').localeCompare(b.routeShortName ?? ''),
+    )
+    .slice(0, Math.max(0, limit))
 }
 
 /** What makes two rows the same line to a rider: its name and who runs it. */

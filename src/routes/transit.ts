@@ -281,7 +281,12 @@ export function createTransitRoutes(deps: {
         const lng = Number(query.lng)
         const nearby =
           Number.isFinite(lat) && Number.isFinite(lng)
-            ? { lat, lng, radius: query.radius ? Number(query.radius) : undefined }
+            ? {
+                lat,
+                lng,
+                radius: query.radius ? Number(query.radius) : undefined,
+                limit: query.nearbyLimit ? Number(query.nearbyLimit) : undefined,
+              }
             : undefined
 
         // A tap on the map's merged interchange label asks about the whole
@@ -303,6 +308,7 @@ export function createTransitRoutes(deps: {
         lat: t.Optional(t.String()),
         lng: t.Optional(t.String()),
         radius: t.Optional(t.String()),
+        nearbyLimit: t.Optional(t.String()),
         complex: t.Optional(t.String()),
       }),
       detail: {
@@ -314,6 +320,9 @@ export function createTransitRoutes(deps: {
           "at a station the agency's transfers.txt connects to this one, " +
           'reachable without leaving the paid area — the J and Z at Chambers ' +
           'St from Brooklyn Bridge–City Hall. Station lines are listed first. ' +
+          'Nearby lines are capped at six, nearest train first — two hundred ' +
+          'metres of a dense downtown holds twenty-five lines, which is not a ' +
+          'list anyone reads. Raise or lower it with `nearbyLimit`. ' +
           'Set `complex=true` to treat the whole interchange as one station, ' +
           'for a caller asking about a merged label rather than one platform ' +
           'group: every line in it comes back as `station`. ' +
