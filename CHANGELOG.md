@@ -12,6 +12,14 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ### Added
 
+* `/transit/departures` takes `complex=true` and returns a board for every
+  station the agency's transfers.txt joins to the resolved one, rather than
+  only that station. This is what a merged station label on a map stands for:
+  New York draws four separate GTFS stations named "Canal St" — Q01 (N/Q), M20
+  (J/Z), 639 (4/6/6X) and R23 (N/R/W) — as a single symbol, and tapping it asks
+  about all four rather than whichever was nearest the tap. One hop, not a
+  transitive closure, so it wanders around an interchange and not down a line;
+  capped at eight stations
 * The console sidebar shows the version of the instance it is talking to, below
   the sign-out button. `/admin/config` now reports the version from
   `package.json` — what the release pipeline tags from — rather than a hardcoded
