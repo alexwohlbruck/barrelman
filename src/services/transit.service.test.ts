@@ -615,6 +615,40 @@ describe('nearby lines', () => {
     expect(routes[0].via).toBe('station')
   })
 
+  test('caps how many nearby lines it reports, nearest train first', async () => {
+    // Two hundred metres of Lower Manhattan is twenty-five lines: the 1 fifty
+    // metres away, then a wall of Staten Island express buses. The cap runs
+    // after the sort, so the train survives it and the buses are what go.
+    const buses = Array.from({ length: 20 }, (_, i) =>
+      near(`SIM${i}`, '7', `SIM${i}`, 80 + i),
+    )
+    dbRows = (text) =>
+      text.includes('ST_DWithin')
+        ? [...buses, near('1', '5', '1', 50)]
+        : [inSystem('R')]
+
+    const routes = await getRoutesForStop('5', 'R26', { lat: 40.707, lng: -74.013 })
+    const nearby = routes.filter((r) => r.via === 'nearby')
+
+    expect(nearby).toHaveLength(6)
+    expect(nearby[0].routeShortName).toBe('1')
+  })
+
+  test('honours an explicit nearby limit', async () => {
+    dbRows = (text) =>
+      text.includes('ST_DWithin')
+        ? [near('M22', '7', 'M22', 20), near('M9', '7', 'M9', 30)]
+        : [inSystem('4')]
+
+    const routes = await getRoutesForStop('5', '640', {
+      lat: 40.71,
+      lng: -74,
+      limit: 1,
+    })
+
+    expect(routes.filter((r) => r.via === 'nearby')).toHaveLength(1)
+  })
+
   test('asks for nothing extra when no point is given', async () => {
     dbRows = []
     await getRoutesForStop('5', '640')
