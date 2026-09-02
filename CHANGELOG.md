@@ -10,6 +10,37 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-09-02
+
+### Added
+
+* `/transit/departures` takes a `name` parameter — the place's own name — and
+  uses it to identify which station a set of coordinates belongs to. A stop
+  whose name matches claims the board even when another is nearer, and the
+  board is then reported for that station alone
+* Every route from `/transit/routes` now carries `via`: `station` for a line
+  that calls there, `transfer` for one reachable at a connecting station
+  without leaving the paid area — the J and Z at Chambers St, from Brooklyn
+  Bridge–City Hall. Station lines are listed first. A transfer a fare rule buys
+  rather than a walk between platforms is not in `transfers.txt` and is not
+  reported
+
+### Fixed
+
+* A departure board opened on a subway station showed the lines of whichever
+  stop happened to be nearest, which is not always the station itself. The
+  Brooklyn Bridge–City Hall stop_position sits 37.8 m from the Chambers St
+  platforms and 52.2 m from its own, so its board filled with the 1, 2, 3, A
+  and C from an unrelated complex 200 m away and listed its own 4, 5 and 6
+  last, if at all. Naming the place now settles which station it is
+* A station's departures are no longer listed twice. The board was built by
+  asking MOTIS about each platform, and MOTIS answers every platform with the
+  same station-level list — so each train appeared once per platform ("Now,
+  Now"). It is now asked once, at the GTFS parent
+* Departures are filtered to runs that actually call at the station. MOTIS
+  resolves a stoptimes query to every stop sharing the requested stop's name,
+  and New York has two unrelated Chambers St complexes 200 m apart
+
 ## [0.2.3] - 2026-08-31
 
 ### Fixed

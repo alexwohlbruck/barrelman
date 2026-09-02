@@ -14,12 +14,20 @@ import { describe, test, expect, mock, beforeEach } from 'bun:test'
 // destination. Reset in beforeEach.
 let dbCallIndex = 0
 
+/** Rows for a test that drives one specific query; null keeps the stop-pair
+ *  behaviour every routing test relies on. Reset in beforeEach. */
+let dbRows: any[] | null = null
+/** SQL the service generated, for a test that asserts on its shape. */
+let dbStatements: any[] = []
+
 // Mock the database so getNearbyStops returns controlled stops without a
 // real PostgreSQL connection. Each call alternates between an origin stop
 // and a destination stop, producing exactly one stop pair per test.
 mock.module('../db', () => ({
   db: {
-    execute: async () => {
+    execute: async (query: any) => {
+      dbStatements.push(query)
+      if (dbRows) return dbRows
       dbCallIndex++
       const isOrigin = dbCallIndex % 2 === 1
       return [{
@@ -41,6 +49,7 @@ mock.module('../db', () => ({
 
 import {
   getTransitRoute,
+  getRoutesForStop,
   extractFare,
   MotisError,
   type TransitRouteRequest,
@@ -458,5 +467,54 @@ describe('extractFare', () => {
   test('returns undefined without fare data', () => {
     expect(extractFare({})).toBeUndefined()
     expect(extractFare({ fareTransfers: [] })).toBeUndefined()
+  })
+})
+
+describe('getRoutesForStop', () => {
+  /**
+   * A station's own lines and the ones a transfer reaches are different
+   * answers, and merging them is what put the A and C — a separate Chambers St
+   * complex, no free transfer — on a Brooklyn Bridge–City Hall board. The
+   * query decides which is which; this pins the contract it reports it under.
+   */
+  beforeEach(() => {
+    dbRows = null
+    dbStatements = []
+  })
+
+  const row = (shortName: string, atStation: boolean) => ({
+    route_id: shortName, feed_id: '5', route_short_name: shortName,
+    route_long_name: `${shortName} line`, route_type: 1,
+    route_color: '00933C', route_text_color: 'FFFFFF',
+    agency_name: 'MTA New York City Transit', at_station: atStation,
+  })
+
+  test('marks a line calling here apart from one a transfer reaches', async () => {
+    dbRows = [row('4', true), row('6', true), row('J', false)]
+
+    const routes = await getRoutesForStop('5', '640')
+
+    expect(routes.map((r) => [r.routeShortName, r.via])).toEqual([
+      ['4', 'station'],
+      ['6', 'station'],
+      ['J', 'transfer'],
+    ])
+  })
+
+  test('separates this station from the complex around it', async () => {
+    // Both halves have to be in the query: `station` is the seed and its own
+    // platforms, `complex` is what transfers.txt reaches. Collapsing them back
+    // into one set is the regression this guards.
+    dbRows = []
+    await getRoutesForStop('5', '640')
+
+    // Drizzle keeps the literal SQL in string chunks, with the bound values
+    // interleaved as parameter objects that carry no text.
+    const text = (dbStatements[0]?.queryChunks ?? [])
+      .flatMap((chunk: any) => chunk?.value ?? [])
+      .join(' ')
+    expect(text).toContain('station')
+    expect(text).toContain('gtfs_transfers')
+    expect(text).toContain('at_station')
   })
 })
