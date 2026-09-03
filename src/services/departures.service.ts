@@ -37,6 +37,11 @@ export interface DepartureRequest {
   /** Keep only departures in this GTFS direction ("0"/"1"). A platform stop
    *  can return both directions, so the board filters to the rider's way. */
   directionId?: string
+  /** Also return a board for each station `transfers.txt` joins to this one
+   *  under a DIFFERENT name — the connections, with their own departure times.
+   *  They come back marked `via: 'transfer'` so a caller can list them apart
+   *  from the station's own. */
+  transfers?: boolean
   /** GTFS route types the caller expects here, derived from the place's own
    *  tags. Stops served by a matching route rank first and are searched out to
    *  a wider radius — see `MODE_MATCH_RADIUS`. */
@@ -69,6 +74,10 @@ export interface StopDepartures {
     lng: number
     timezone: string
     distance?: number
+    /** `station` — this is the station asked about, or one merged into it.
+     *  `transfer` — a connecting station under a different name, returned
+     *  because `transfers` was set. Absent means `station`. */
+    via?: 'station' | 'transfer'
   }
   departures: Departure[]
   /** More runs exist past what was returned — either trimmed by `windowMinutes`
@@ -243,6 +252,9 @@ interface NearbyStop {
   parentStation?: string
   /** Served by a route of the mode the caller asked for. */
   modeMatch?: boolean
+  /** How this stop entered the answer. `transfer` is a connecting station
+   *  under another name, reached through transfers.txt. */
+  via?: 'station' | 'transfer'
 }
 
 /**
@@ -511,19 +523,18 @@ async function complexSiblings(
 
     const out: NearbyStop[] = []
     for (const row of rows) {
-      // Only a station of the SAME NAME is part of this one.
-      //
-      // transfers.txt joins Borough Hall to Court St — a free walk, but a
-      // different station — so folding everything it reaches into one board
-      // put the N and R under Borough Hall's name and claimed they departed
-      // from there. Same name is what "one station drawn as one symbol" means:
-      // the six Canal Sts merge, Court St stays a transfer.
-      if (!sameStationName(row.seed_name, row.sibling_name)) continue
+      // Same name means one station drawn as one symbol — the six Canal Sts
+      // merge. A different name is a free walk between two stations, and
+      // folding Court St into Borough Hall claimed the N and R departed from
+      // Borough Hall. Both are returned, tagged, and the caller decides.
+      const via = sameStationName(row.seed_name, row.sibling_name)
+        ? ('station' as const)
+        : ('transfer' as const)
 
       const key = stationKey(row.feed_id, row.sid)
       if (known.has(key)) continue
       known.add(key)
-      out.push({ feedId: row.feed_id, stopId: row.sid, name: '', lat: 0, lng: 0 })
+      out.push({ feedId: row.feed_id, stopId: row.sid, name: '', lat: 0, lng: 0, via })
       if (out.length >= MAX_COMPLEX_STATIONS - stations.length) break
     }
     return out
@@ -742,6 +753,7 @@ export async function getDepartures(
     routeTypes,
     name,
     complex,
+    transfers,
     windowMinutes,
   } = request
 
@@ -793,13 +805,18 @@ export async function getDepartures(
   let stations = await resolveStations(stops)
 
   // A complex is asked for as a whole: add the stations transfers.txt joins to
-  // the ones resolved so far, then resolve those the same way.
-  if (complex) {
-    const siblings = await complexSiblings(
+  // the ones resolved so far, then resolve those the same way. Same-named ones
+  // are this station; differently-named ones are its connections, and only
+  // come along when the caller asked for them.
+  if (complex || transfers) {
+    const found = await complexSiblings(
       [...new Map(stops.map((s) => [stationKey(s.feedId, stations.get(stationKey(s.feedId, s.stopId))?.stationId ?? s.stopId), {
         feedId: s.feedId,
         stopId: stations.get(stationKey(s.feedId, s.stopId))?.stationId ?? s.stopId,
       }])).values()],
+    )
+    const siblings = found.filter((s) =>
+      s.via === 'transfer' ? transfers === true : complex === true,
     )
     if (siblings.length) {
       stops = [...stops, ...siblings]
@@ -872,6 +889,7 @@ export async function getDepartures(
         lng: motisPlace?.lon || stop.lng,
         timezone,
         distance: stop.distance,
+        ...(stop.via === 'transfer' ? { via: 'transfer' as const } : {}),
       },
       ...trimToWindow(
         transformDepartures(result.stopTimes, colorMap).filter(
