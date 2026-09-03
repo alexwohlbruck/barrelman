@@ -361,6 +361,22 @@ route in but is not one inside a container: `.env` is in `.dockerignore`, so
 
 Compose forwards optional settings as `${VAR:-}`, which defines them as the *empty string*. Barrelman reads config through `envNumber`/`envString`, which treat empty as "not configured" — so a knob you mean to turn *off* needs an explicit `0`, not a blank.
 
+**The MOTIS rebuild stops with `Region "…" is disabled`**
+
+`scripts/rebuild-motis.sh` generates `motis/config.yml` with `docker exec
+barrelman`, so `REGIONS` is resolved in the **API** container as well as in
+`barrelman-ops`. If it is named only for ops, the API falls back to
+`DEFAULT_REGIONS` — the dev pair `north-carolina,nyc-metro` — and the rebuild
+fails as soon as either of those is disabled in the console, after the portolan
+sync it follows has already finished.
+
+```bash
+docker compose exec barrelman     env | grep REGIONS   # must not be empty
+docker compose exec barrelman-ops env | grep REGIONS   # and must match
+```
+
+Name it in both `environment:` blocks and recreate the API.
+
 ## Jobs
 
 **A console job says "Another run of this script is in progress"**
