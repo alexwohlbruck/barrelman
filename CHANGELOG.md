@@ -10,6 +10,16 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Fixed
+
+* The MOTIS rebuild no longer fails on a region the operator has switched off.
+  `scripts/rebuild-motis.sh` generates the MOTIS config inside the API
+  container, but `REGIONS` was named only for `barrelman-ops`, so the API fell
+  back to the built-in dev pair `north-carolina,nyc-metro`. That went unnoticed
+  while both were enabled and became a hard failure the moment either was
+  disabled — and it struck at the very end, after the portolan sync it follows
+  had already spent its hour. The API is given `REGIONS` too
+
 ## [0.2.13] - 2026-09-03
 
 ### Added

@@ -81,8 +81,15 @@ signatures and cannot make them, which is why it is compiled into
 | `NODE_ENV` | — | `production` makes the server warn at startup about missing secrets |
 | `COMPOSE_FILE` | — | Read by Compose, not by barrelman. `.env.example` sets it so a bare `docker compose up` picks up the dev overrides |
 
-`REGIONS` is consumed by the **importers**, which run in `barrelman-ops` — not
-by the API. It is named in that service's `environment:` block, not the API's.
+`REGIONS` is consumed by the **importers**, which run in `barrelman-ops`, and
+also by the API — `scripts/rebuild-motis.sh` generates `motis/config.yml` with
+`docker exec barrelman`, so the selection is resolved inside the API container.
+It is named in both services' `environment:` blocks, and they must agree.
+
+Leaving it unset does not mean "no regions": it falls back to
+`north-carolina,nyc-metro`, the dev pair. On a stack importing anything else
+that quietly builds the wrong extent, and on one that has since disabled either
+region the MOTIS rebuild fails part-way with `Region "…" is disabled`.
 
 ## Authentication
 
