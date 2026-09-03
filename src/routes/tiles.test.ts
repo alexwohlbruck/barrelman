@@ -312,6 +312,13 @@ describe('portolan tile routes', () => {
         'f3:2': { label: '2', color: 'D82233', shape: 'notch', mode: 'metro' },
       }),
     )
+    writeFileSync(
+      join(dir, 'embark', 'stops.json'),
+      JSON.stringify({
+        'f-9vg-embark:1234': 'node/597928315',
+        'f-9vg-embark:5678': 'way/907193903',
+      }),
+    )
   })
 
   afterAll(() => {
@@ -376,6 +383,29 @@ describe('portolan tile routes', () => {
     expect(body['f3:2'].shape).toBe('notch')
     // …and the ids are the TILES' ids, prefixes included
     expect(Object.keys(body)).toContain('f3:2')
+  })
+
+  test('serves the stop index, so a caller can name the OSM object a stop is', async () => {
+    const { app } = makeApp()
+    const res = await app.handle(get('/tiles/portolan/embark/stops.json'))
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('content-type')).toContain('application/json')
+    expect(res.headers.get('access-control-allow-origin')).toBe('*')
+    const body = await res.json()
+    // Keyed by the onestop-qualified pair, because a bare stop_id is only
+    // unique within its own feed.
+    expect(body['f-9vg-embark:1234']).toBe('node/597928315')
+    // Ways are as valid an answer as nodes — plenty of stations are areas.
+    expect(body['f-9vg-embark:5678']).toBe('way/907193903')
+  })
+
+  test('404s a stop index for an unknown feed, 400s a bad name', async () => {
+    const { app } = makeApp()
+    // A feed built before the index existed publishes no stops.json, and the
+    // client treats the 404 as "fall back", not as an error.
+    expect((await app.handle(get('/tiles/portolan/nope/stops.json'))).status).toBe(404)
+    expect((await app.handle(get('/tiles/portolan/..%2Fetc/stops.json'))).status).toBe(400)
   })
 
   test('404s a route index for an unknown feed, 400s a bad name', async () => {

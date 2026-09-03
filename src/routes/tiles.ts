@@ -185,6 +185,45 @@ export function createTileRoutes(
       },
     )
     .get(
+      '/portolan/:feed/stops.json',
+      async ({ params, set }) => {
+        const { feed } = params
+        if (!PORTOLAN_FEED_RE.test(feed)) {
+          set.status = 400
+          return { error: 'Invalid feed name' }
+        }
+        // Which OSM object each GTFS stop actually is, keyed
+        // `<feed-onestop>:<stop_id>` — the one-to-one join portolan already
+        // computed when it matched every drawn station to a real place.
+        // Nothing downstream can redo it: a name is ambiguous (New York has
+        // three stations called Chambers St) and proximity is worse, because
+        // the nearest mapped node to a platform is often a different station
+        // through a passageway. Published next to the tiles for the same
+        // reason routes.json is — the answer exists here and nowhere else.
+        const file = Bun.file(join(portolanDir, feed, 'stops.json'))
+        if (!(await file.exists())) {
+          set.status = 404
+          return { error: 'Unknown portolan feed or no stop index' }
+        }
+        set.headers['content-type'] = 'application/json'
+        set.headers['cache-control'] = 'public, max-age=60'
+        set.headers[CORS] = '*'
+        return await file.text()
+      },
+      {
+        params: t.Object({
+          feed: t.String({ description: 'Portolan feed key (e.g. "mta-subway")' }),
+        }),
+        detail: {
+          tags: ['Tiles'],
+          summary: 'Portolan feed stop index',
+          description:
+            "One feed's GTFS stops mapped to the OSM object each one is, keyed " +
+            '`<feed-onestop-id>:<stop_id>` and valued `node/123` or `way/456`.',
+        },
+      },
+    )
+    .get(
       '/portolan/:feed/style.json',
       async ({ params, set }) => {
         const { feed } = params

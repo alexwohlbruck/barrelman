@@ -10,6 +10,17 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Added
+
+* `/tiles/portolan/{feed}/stops.json` — the join from a feed's GTFS stop ids to
+  the OSM object each one actually is, keyed `<feed-onestop-id>:<stop_id>`.
+  Portolan has written this file next to every pyramid since 0.4.4, but nothing
+  served it, so the only way for a client to turn a stop id into a place was to
+  search by name and coordinates — which cannot tell New York's three Chambers
+  St stations apart, and picks the wrong one. A feed built before the index
+  existed has no file and answers 404, which callers already treat as "fall
+  back to what you did before"
+
 ### Fixed
 
 * The MOTIS rebuild no longer fails on a region the operator has switched off.
