@@ -556,10 +556,12 @@ describe('a whole complex', () => {
       { feed_id: '5', seed_id: 'M20', station_id: 'M20', member_id: 'M20N' },
       { feed_id: '5', seed_id: '639', station_id: '639', member_id: '639N' },
     ]
+    // transfers.txt carries both names, because only a same-named station is
+    // part of this one. All six Canal Sts are literally "Canal St".
     TRANSFER_ROWS = [
-      { feed_id: '5', sid: 'M20' },
-      { feed_id: '5', sid: '639' },
-      { feed_id: '5', sid: 'Q01' },
+      { feed_id: '5', sid: 'M20', seed_name: 'Canal St', sibling_name: 'Canal St' },
+      { feed_id: '5', sid: '639', seed_name: 'Canal St', sibling_name: 'Canal St' },
+      { feed_id: '5', sid: 'Q01', seed_name: 'Canal St', sibling_name: 'Canal St' },
     ]
   })
 
@@ -580,5 +582,22 @@ describe('a whole complex', () => {
 
     // The seed station is not repeated, and its siblings each get a board.
     expect(result.map((r) => r.stop.stopId).sort()).toEqual(['639', 'M20', 'Q01'])
+  })
+
+  test('leaves out a differently named station the same file joins', async () => {
+    // transfers.txt joins Borough Hall to Court St — a free walk between two
+    // stations, not one station. Folding it in put the N and R under Borough
+    // Hall's name and said they departed from there.
+    TRANSFER_ROWS = [
+      { feed_id: '5', sid: '639', seed_name: 'Canal St', sibling_name: 'Canal St' },
+      { feed_id: '5', sid: 'R28', seed_name: 'Canal St', sibling_name: 'Court St' },
+    ]
+
+    const result = await getDepartures(
+      { lat: 40.7186, lng: -74.0008, name: 'Canal Street', routeTypes: [1], complex: true },
+      fetchFn,
+    )
+
+    expect(result.map((r) => r.stop.stopId).sort()).toEqual(['639', 'Q01'])
   })
 })

@@ -492,19 +492,34 @@ async function complexSiblings(
   try {
     const rows = (await db.execute(sql`
       WITH seed (feed_id, stop_id) AS (VALUES ${seed})
-      SELECT DISTINCT t.feed_id, t.to_stop_id AS sid
+      SELECT DISTINCT t.feed_id, t.to_stop_id AS sid,
+             src.stop_name AS seed_name, dst.stop_name AS sibling_name
       FROM gtfs_transfers t
       JOIN seed ON t.feed_id = seed.feed_id AND t.from_stop_id = seed.stop_id
+      JOIN gtfs_stops src ON src.feed_id = t.feed_id AND src.stop_id = t.from_stop_id
+      JOIN gtfs_stops dst ON dst.feed_id = t.feed_id AND dst.stop_id = t.to_stop_id
       WHERE t.to_stop_id <> t.from_stop_id
       UNION
-      SELECT DISTINCT t.feed_id, t.from_stop_id AS sid
+      SELECT DISTINCT t.feed_id, t.from_stop_id AS sid,
+             src.stop_name AS seed_name, dst.stop_name AS sibling_name
       FROM gtfs_transfers t
       JOIN seed ON t.feed_id = seed.feed_id AND t.to_stop_id = seed.stop_id
+      JOIN gtfs_stops src ON src.feed_id = t.feed_id AND src.stop_id = t.to_stop_id
+      JOIN gtfs_stops dst ON dst.feed_id = t.feed_id AND dst.stop_id = t.from_stop_id
       WHERE t.to_stop_id <> t.from_stop_id
     `)) as any[]
 
     const out: NearbyStop[] = []
     for (const row of rows) {
+      // Only a station of the SAME NAME is part of this one.
+      //
+      // transfers.txt joins Borough Hall to Court St — a free walk, but a
+      // different station — so folding everything it reaches into one board
+      // put the N and R under Borough Hall's name and claimed they departed
+      // from there. Same name is what "one station drawn as one symbol" means:
+      // the six Canal Sts merge, Court St stays a transfer.
+      if (!sameStationName(row.seed_name, row.sibling_name)) continue
+
       const key = stationKey(row.feed_id, row.sid)
       if (known.has(key)) continue
       known.add(key)
