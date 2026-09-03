@@ -4,63 +4,70 @@
  * An instance with no Ollama answered every semantic search in exactly 30
  * seconds — the search finished in milliseconds and then waited for a vector
  * that was never coming, until the caller's own timeout fired and the request
- * failed outright. What is pinned here is that a query gives up quickly and
- * that a burst does not each pay for it.
+ * failed outright.
+ *
+ * These target `generateEmbeddings` and `embeddingCircuit` rather than
+ * `generateQueryEmbedding`, which `search.service.test.ts` module-mocks. Bun's
+ * `mock.module` is process-global, so the wrapper is not observable from here
+ * in a full run — the pieces it is built from are.
  */
-import { describe, test, expect, mock, beforeEach, afterEach } from 'bun:test'
+import { describe, test, expect, beforeEach } from 'bun:test'
+import {
+  generateEmbeddings,
+  embeddingCircuit,
+  QUERY_EMBED_TIMEOUT_MS,
+  type EmbeddingPoster,
+} from './embeddings'
 
 let posts: Array<{ timeout?: number }> = []
-let behaviour: 'fail' | 'ok' = 'fail'
 
-mock.module('axios', () => ({
-  default: {
-    post: async (_url: string, _body: unknown, opts: { timeout?: number }) => {
-      posts.push({ timeout: opts?.timeout })
-      if (behaviour === 'fail') throw new Error('connect ECONNREFUSED')
-      return { data: { embeddings: [[0.1, 0.2]] } }
-    },
-  },
-}))
+const record: EmbeddingPoster = async (_u, _b, opts) => {
+  posts.push({ timeout: opts?.timeout })
+  return { data: { embeddings: [[0.1, 0.2]] } }
+}
 
-const { generateQueryEmbedding, generateEmbeddings, resetEmbeddingCircuit } =
-  await import('./embeddings')
-
-describe('query embeddings', () => {
+describe('embedding timeouts', () => {
   beforeEach(() => {
     posts = []
-    behaviour = 'fail'
-    resetEmbeddingCircuit()
-  })
-  afterEach(() => resetEmbeddingCircuit())
-
-  test('gives up on a query in seconds, not half a minute', async () => {
-    await expect(generateQueryEmbedding('canal st')).rejects.toThrow()
-
-    expect(posts).toHaveLength(1)
-    expect(posts[0].timeout).toBeLessThanOrEqual(5000)
+    embeddingCircuit.reset()
   })
 
-  test('a burst after an outage does not each pay the timeout', async () => {
-    await expect(generateQueryEmbedding('one')).rejects.toThrow()
-    await expect(generateQueryEmbedding('two')).rejects.toThrow()
-    await expect(generateQueryEmbedding('three')).rejects.toThrow()
-
-    // Only the first actually reached the network; the rest short-circuited.
-    expect(posts).toHaveLength(1)
+  test('a query gives up in seconds, not half a minute', () => {
+    // The number that mattered: 30s on the request path is an outage, not a
+    // timeout, because callers give up first and the request fails outright.
+    expect(QUERY_EMBED_TIMEOUT_MS).toBeLessThanOrEqual(5000)
   })
 
-  test('batch embedding still gets the long timeout', async () => {
-    behaviour = 'ok'
-    await generateEmbeddings(['a place'])
+  test('batch embedding keeps the long timeout, which runs offline', async () => {
+    await generateEmbeddings(['a place'], undefined, record)
 
     expect(posts[0].timeout).toBe(30000)
   })
 
-  test('a working service clears the outage', async () => {
-    await expect(generateQueryEmbedding('down')).rejects.toThrow()
-    resetEmbeddingCircuit()
-    behaviour = 'ok'
+  test('passes through whatever timeout it is given', async () => {
+    await generateEmbeddings(['a place'], QUERY_EMBED_TIMEOUT_MS, record)
 
-    expect(await generateQueryEmbedding('up')).toEqual([0.1, 0.2])
+    expect(posts[0].timeout).toBe(QUERY_EMBED_TIMEOUT_MS)
+  })
+})
+
+describe('the outage memory', () => {
+  beforeEach(() => embeddingCircuit.reset())
+
+  test('is shut until something fails', () => {
+    expect(embeddingCircuit.isOpen()).toBe(false)
+  })
+
+  test('opens on a refusal, so a burst does not each pay the timeout', () => {
+    embeddingCircuit.trip()
+
+    expect(embeddingCircuit.isOpen()).toBe(true)
+  })
+
+  test('a working service closes it again', () => {
+    embeddingCircuit.trip()
+    embeddingCircuit.reset()
+
+    expect(embeddingCircuit.isOpen()).toBe(false)
   })
 })
