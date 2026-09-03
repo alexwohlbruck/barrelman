@@ -10,6 +10,18 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Fixed
+
+* The MOTIS rebuild no longer fails on a region the operator has switched off.
+  `scripts/rebuild-motis.sh` generates the MOTIS config inside the API
+  container, but `REGIONS` was named only for `barrelman-ops`, so the API fell
+  back to the built-in dev pair `north-carolina,nyc-metro`. That went unnoticed
+  while both were enabled and became a hard failure the moment either was
+  disabled — and it struck at the very end, after the portolan sync it follows
+  had already spent its hour. The API is given `REGIONS` too
+
+## [0.2.13] - 2026-09-03
+
 ### Added
 
 * Each board on `/transit/departures` reports its feed's transit.land onestop
@@ -25,6 +37,10 @@ does it — and the release pipeline turns it into the GitHub Release notes.
   position instead of being left blank for MOTIS to fill in. A connecting
   station with no departures in the window came back nameless and at 0,0 — so
   it could not be labelled in a list, let alone linked to
+
+## [0.2.12] - 2026-09-03
+
+### Fixed
 
 * A search no longer waits half a minute for an embedding service that is not
   there. The query embedding used the same 30-second timeout as the offline

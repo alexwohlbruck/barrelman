@@ -217,6 +217,13 @@ services:
       # MOTIS default 60s. Set in .env (e.g. 600) to throttle dev polling.
       MOTIS_RT_UPDATE_INTERVAL: ${MOTIS_RT_UPDATE_INTERVAL:-}
       GTFS_DATA_DIR: /gtfs-zips
+      # Read here as well as in barrelman-ops, because scripts/rebuild-motis.sh
+      # generates motis/config.yml with `docker exec barrelman` — the selection
+      # is resolved in THIS container, not in ops. Left unset the API silently
+      # falls back to DEFAULT_REGIONS, the dev pair "north-carolina,nyc-metro",
+      # which on a stack that imports anything else is wrong and on one that has
+      # since disabled a region is a hard failure mid-rebuild.
+      REGIONS: ${REGIONS:-}
       # Portolan corrected-geometry tiles: static MVT pyramids written by
       # `portolan sync` (run in barrelman-ops) into the shared workspace,
       # served by this container at /tiles/portolan/… . Missing dir → the
