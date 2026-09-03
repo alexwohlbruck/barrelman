@@ -10,6 +10,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.2.11] - 2026-09-03
+
 ### Added
 
 * `/transit/departures` takes `transfers=true` and returns a board for every
