@@ -9,7 +9,7 @@
  */
 
 import { db } from '../db'
-import { sql } from 'drizzle-orm'
+import { sql, type SQL } from 'drizzle-orm'
 import {
   ensurePricing,
   pricingForLeg,
@@ -1177,6 +1177,22 @@ export async function getNearbyStops(
  * ride bought by a fare rule rather than a walk between platforms is not in
  * transfers.txt and does not appear here.
  */
+/**
+ * Fold a station name for comparison inside one feed.
+ *
+ * Case and punctuation only — deliberately not the full `normalizeStationName`
+ * fold, which also maps "street" to "st" and expands ordinals. That one exists
+ * to reconcile names across sources (a GTFS feed against OSM), and its synonyms
+ * are what let it match loosely. Here both names come from the SAME feed's
+ * stops.txt, where an operator spells its own stations consistently, so the
+ * loose half buys nothing and could only merge two stations that are not one.
+ *
+ * Erring conservative is the right direction: a name this misses is reported
+ * as a transfer, which is the honest answer for anything that is not plainly
+ * the same station.
+ */
+const nameFold = (expr: SQL) => sql`btrim(regexp_replace(lower(${expr}), '[^a-z0-9]+', ' ', 'g'))`
+
 export async function getRoutesForStop(
   feedId: string,
   stopId: string,
@@ -1202,22 +1218,39 @@ export async function getRoutesForStop(
       SELECT s.stop_id FROM gtfs_stops s JOIN seed ON s.parent_station = seed.sid
       WHERE s.feed_id = ${feedId}
     ),
+    -- What the seed station is called, for the same-name test below.
+    seed_name AS (
+      SELECT DISTINCT s.stop_name AS nm
+      FROM gtfs_stops s JOIN seed ON s.stop_id = seed.sid
+      WHERE s.feed_id = ${feedId} AND s.stop_name IS NOT NULL
+    ),
     complex AS (
-      SELECT sid FROM seed
+      SELECT sid, TRUE AS same_name FROM seed
       UNION
-      SELECT t.to_stop_id FROM gtfs_transfers t JOIN seed ON t.from_stop_id = seed.sid
+      SELECT t.to_stop_id, EXISTS (
+        SELECT 1 FROM seed_name n WHERE ${nameFold(sql`n.nm`)} = ${nameFold(sql`d.stop_name`)}
+      )
+      FROM gtfs_transfers t
+      JOIN seed ON t.from_stop_id = seed.sid
+      JOIN gtfs_stops d ON d.feed_id = ${feedId} AND d.stop_id = t.to_stop_id
       WHERE t.feed_id = ${feedId} AND t.to_stop_id <> t.from_stop_id
       UNION
-      SELECT t.from_stop_id FROM gtfs_transfers t JOIN seed ON t.to_stop_id = seed.sid
+      SELECT t.from_stop_id, EXISTS (
+        SELECT 1 FROM seed_name n WHERE ${nameFold(sql`n.nm`)} = ${nameFold(sql`d.stop_name`)}
+      )
+      FROM gtfs_transfers t
+      JOIN seed ON t.to_stop_id = seed.sid
+      JOIN gtfs_stops d ON d.feed_id = ${feedId} AND d.stop_id = t.from_stop_id
       WHERE t.feed_id = ${feedId} AND t.to_stop_id <> t.from_stop_id
     ),
     members AS (
       SELECT sid, bool_or(at_station) AS at_station FROM (
         SELECT sid, TRUE AS at_station FROM station
         UNION ALL
-        SELECT sid, ${complexIsStation} FROM complex
+        SELECT sid, ${complexIsStation} AND same_name FROM complex
         UNION ALL
-        SELECT s.stop_id, ${complexIsStation} FROM gtfs_stops s JOIN complex c ON s.parent_station = c.sid
+        SELECT s.stop_id, ${complexIsStation} AND c.same_name
+        FROM gtfs_stops s JOIN complex c ON s.parent_station = c.sid
         WHERE s.feed_id = ${feedId}
       ) reachable
       GROUP BY sid

@@ -10,7 +10,31 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.2.10] - 2026-09-03
+
+### Fixed
+
+* A station only groups with others of the same name. `complex=true` folded in
+  everything `transfers.txt` reached, which is a free walk rather than one
+  station: Borough Hall took in Court St and reported the N and R as departing
+  from Borough Hall. Same name is what one drawn symbol over one station means
+  — the six "Canal St" stations still merge, Court St is a transfer again.
+  Names are compared within a feed on case and punctuation only, not the looser
+  fold used to reconcile a feed against OSM, so anything not plainly the same
+  station stays a transfer
+
 ## [0.2.9] - 2026-09-02
+
+### Fixed
+
+* A station only groups with others of the same name. `complex=true` folded in
+  everything `transfers.txt` reached, which is a free walk rather than one
+  station: Borough Hall took in Court St and reported the N and R as departing
+  from Borough Hall. Same name is what one drawn symbol over one station means
+  — the six "Canal St" stations still merge, Court St is a transfer again.
+  Names are compared within a feed on case and punctuation only, not the looser
+  fold used to reconcile a feed against OSM, so anything not plainly the same
+  station stays a transfer
 
 ### Fixed
 
