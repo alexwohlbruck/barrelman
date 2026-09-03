@@ -10,6 +10,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.2.9] - 2026-09-02
+
 ### Fixed
 
 * A station only groups with others of the same name. `complex=true` folded in
@@ -41,6 +43,7 @@ does it — and the release pipeline turns it into the GitHub Release notes.
   statement, so a container restart rolled the whole thing back and the next
   boot began again, holding transactions long enough to block index maintenance
   for as long as it ran. Only growth counts as a re-import now
+## [0.2.8] - 2026-09-02
 
 ### Added
 
