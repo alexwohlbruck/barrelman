@@ -26,6 +26,10 @@ does it — and the release pipeline turns it into the GitHub Release notes.
   station with no departures in the window came back nameless and at 0,0 — so
   it could not be labelled in a list, let alone linked to
 
+## [0.2.12] - 2026-09-03
+
+### Fixed
+
 * A search no longer waits half a minute for an embedding service that is not
   there. The query embedding used the same 30-second timeout as the offline
   batch importer, which on the request path is not a timeout but an outage: an
