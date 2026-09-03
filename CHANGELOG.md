@@ -10,6 +10,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.2.12] - 2026-09-03
+
 ### Fixed
 
 * A search no longer waits half a minute for an embedding service that is not
