@@ -10,6 +10,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.2.14] - 2026-09-03
+
 ### Added
 
 * `/tiles/portolan/{feed}/stops.json` — the join from a feed's GTFS stop ids to
