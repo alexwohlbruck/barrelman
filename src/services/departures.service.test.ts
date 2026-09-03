@@ -39,15 +39,20 @@ let STATION_ROWS: any[] = []
 /** What `complexSiblings` reads: the stations transfers.txt joins to these. */
 let TRANSFER_ROWS: any[] = []
 
+/** Feed → transit.land onestop id, the key the wider world uses. */
+let FEED_ROWS: any[] = [{ feed_id: '5', onestop_id: 'f-dr5r-nyctsubway' }]
+
 client.unsafe = (text: string, params: unknown[] = []) => {
   statements.push({ sql: text, params })
-  const rows = text.includes('gtfs_transfers')
-    ? TRANSFER_ROWS
-    : text.includes('station_id')
-      ? STATION_ROWS
-      : text.includes('gtfs_stops')
-        ? STOP_ROWS
-        : []
+  const rows = text.includes('onestop_id')
+    ? FEED_ROWS
+    : text.includes('gtfs_transfers')
+      ? TRANSFER_ROWS
+      : text.includes('station_id')
+        ? STATION_ROWS
+        : text.includes('gtfs_stops')
+          ? STOP_ROWS
+          : []
   const result: any = Promise.resolve(rows)
   result.values = () => Promise.resolve(rows)
   result.execute = () => Promise.resolve(rows)
@@ -558,6 +563,7 @@ describe('a whole complex', () => {
     ]
     // transfers.txt carries both names, because only a same-named station is
     // part of this one. All six Canal Sts are literally "Canal St".
+    FEED_ROWS = [{ feed_id: '5', onestop_id: 'f-dr5r-nyctsubway' }]
     TRANSFER_ROWS = [
       { feed_id: '5', sid: 'M20', seed_name: 'Canal St', sibling_name: 'Canal St' },
       { feed_id: '5', sid: '639', seed_name: 'Canal St', sibling_name: 'Canal St' },
@@ -612,6 +618,29 @@ describe('a whole complex', () => {
     // The station's own boards stay unmarked.
     expect(byId.get('Q01')).toBeUndefined()
     expect(byId.get('639')).toBeUndefined()
+  })
+
+  test('names the feed the way the rest of the world names it', async () => {
+    // Barrelman's feed ids are its own. Portolan keys its station index by
+    // "<onestop>:<stop_id>", so a caller holding ("5", "M21") and nothing else
+    // cannot look that station up anywhere outside this database.
+    const result = await getDepartures(
+      { lat: 40.7186, lng: -74.0008, name: 'Canal Street', routeTypes: [1] },
+      fetchFn,
+    )
+
+    expect(result[0]?.stop.feedOnestopId).toBe('f-dr5r-nyctsubway')
+  })
+
+  test('leaves the id off a feed that has none, rather than inventing one', async () => {
+    FEED_ROWS = []
+
+    const result = await getDepartures(
+      { lat: 40.7186, lng: -74.0008, name: 'Canal Street', routeTypes: [1] },
+      fetchFn,
+    )
+
+    expect(result[0]?.stop.feedOnestopId).toBeUndefined()
   })
 
   test('leaves out a differently named station the same file joins', async () => {

@@ -74,6 +74,14 @@ export interface StopDepartures {
     lng: number
     timezone: string
     distance?: number
+    /** The feed's transit.land onestop id, when it has one.
+     *
+     *  The bridge between this API's feed ids, which are its own, and every
+     *  artifact keyed the way the wider world keys feeds — portolan's
+     *  `stops.json` among them, whose keys are `<onestop>:<stop_id>`. Without
+     *  it a caller holding `("5", "M21")` cannot look that station up
+     *  anywhere. */
+    feedOnestopId?: string
     /** `station` — this is the station asked about, or one merged into it.
      *  `transfer` — a connecting station under a different name, returned
      *  because `transfers` was set. Absent means `station`. */
@@ -505,7 +513,8 @@ async function complexSiblings(
     const rows = (await db.execute(sql`
       WITH seed (feed_id, stop_id) AS (VALUES ${seed})
       SELECT DISTINCT t.feed_id, t.to_stop_id AS sid,
-             src.stop_name AS seed_name, dst.stop_name AS sibling_name
+             src.stop_name AS seed_name, dst.stop_name AS sibling_name,
+             dst.stop_lat AS sibling_lat, dst.stop_lon AS sibling_lon
       FROM gtfs_transfers t
       JOIN seed ON t.feed_id = seed.feed_id AND t.from_stop_id = seed.stop_id
       JOIN gtfs_stops src ON src.feed_id = t.feed_id AND src.stop_id = t.from_stop_id
@@ -513,7 +522,8 @@ async function complexSiblings(
       WHERE t.to_stop_id <> t.from_stop_id
       UNION
       SELECT DISTINCT t.feed_id, t.from_stop_id AS sid,
-             src.stop_name AS seed_name, dst.stop_name AS sibling_name
+             src.stop_name AS seed_name, dst.stop_name AS sibling_name,
+             dst.stop_lat AS sibling_lat, dst.stop_lon AS sibling_lon
       FROM gtfs_transfers t
       JOIN seed ON t.feed_id = seed.feed_id AND t.to_stop_id = seed.stop_id
       JOIN gtfs_stops src ON src.feed_id = t.feed_id AND src.stop_id = t.to_stop_id
@@ -534,7 +544,18 @@ async function complexSiblings(
       const key = stationKey(row.feed_id, row.sid)
       if (known.has(key)) continue
       known.add(key)
-      out.push({ feedId: row.feed_id, stopId: row.sid, name: '', lat: 0, lng: 0, via })
+      // Carry the name and point the query already fetched. They used to be
+      // left blank for MOTIS to fill in, which leaves a station with no
+      // departures in the window nameless and unplaceable — and a station a
+      // caller cannot name is one it cannot label or link.
+      out.push({
+        feedId: row.feed_id,
+        stopId: row.sid,
+        name: row.sibling_name ?? '',
+        lat: Number(row.sibling_lat) || 0,
+        lng: Number(row.sibling_lon) || 0,
+        via,
+      })
       if (out.length >= MAX_COMPLEX_STATIONS - stations.length) break
     }
     return out
@@ -544,6 +565,33 @@ async function complexSiblings(
     console.error('[Departures] Failed to expand the station complex:', err)
     return []
   }
+}
+
+/**
+ * The transit.land onestop id for each feed named, so a caller can key into
+ * anything the wider world publishes about these feeds.
+ *
+ * Barrelman's own feed ids are local to this database. Portolan keys its
+ * station index by `<onestop>:<stop_id>`, which is the identity a stop has
+ * outside here, and a caller with only a numeric feed id cannot join to it.
+ */
+async function feedOnestopIds(feedIds: string[]): Promise<Map<string, string>> {
+  const out = new Map<string, string>()
+  const unique = [...new Set(feedIds)].filter(Boolean)
+  if (!unique.length) return out
+
+  try {
+    const list = sql.join(unique.map((f) => sql`${f}`), sql`, `)
+    const rows = (await db.execute(sql`
+      SELECT feed_id, onestop_id FROM gtfs_feeds
+      WHERE feed_id IN (${list}) AND onestop_id IS NOT NULL AND onestop_id <> ''
+    `)) as any[]
+    for (const row of rows) out.set(row.feed_id, row.onestop_id)
+  } catch (err) {
+    // A board without it is still a board.
+    console.error('[Departures] Failed to resolve feed onestop ids:', err)
+  }
+  return out
 }
 
 /** A separator no GTFS id contains, so ('a_b','c') and ('a','b_c') stay distinct. */
@@ -871,6 +919,11 @@ export async function getDepartures(
 
   if (successResults.length === 0) return []
 
+  // The onestop ids for every feed on these boards, so a caller can join to
+  // anything keyed the way the world keys feeds rather than the way we do.
+  const onestopIds = await feedOnestopIds(successResults.map((r) => r.stop.feedId))
+
+
   // 5. Batch-fetch route colors
   const colorMap = await fetchRouteColors(routePairs)
 
@@ -889,6 +942,9 @@ export async function getDepartures(
         lng: motisPlace?.lon || stop.lng,
         timezone,
         distance: stop.distance,
+        ...(onestopIds.get(stop.feedId)
+          ? { feedOnestopId: onestopIds.get(stop.feedId) }
+          : {}),
         ...(stop.via === 'transfer' ? { via: 'transfer' as const } : {}),
       },
       ...trimToWindow(

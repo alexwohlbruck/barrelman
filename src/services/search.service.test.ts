@@ -30,11 +30,7 @@ const actualDb = await import('../db')
 
 mock.module('../db', () => ({
   ...actualDb, db: { execute: mockExecute } }))
-const actualEmbeddings = await import('../lib/embeddings')
-mock.module('../lib/embeddings', () => ({
-  ...actualEmbeddings,
-  generateQueryEmbedding: mockGenerateQueryEmbedding,
-}))
+mock.module('../lib/embeddings', () => ({ generateQueryEmbedding: mockGenerateQueryEmbedding }))
 // `mock.module` is process-global and replaces the module wholesale for every
 // test file in the run, so spread the real exports and override only what this
 // file cares about — otherwise a later file importing e.g. `isochroneCache`
