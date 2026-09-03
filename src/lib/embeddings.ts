@@ -3,22 +3,78 @@ import axios from 'axios'
 const OLLAMA_HOST = process.env.OLLAMA_HOST || 'http://localhost:11434'
 const MODEL = 'nomic-embed-text'
 
+/**
+ * How long a QUERY embedding is worth waiting for.
+ *
+ * Thirty seconds was the same timeout the batch importer uses, and on the
+ * request path it is not a timeout at all — it is an outage. An instance
+ * without Ollama running answered every semantic search in exactly 30s: the
+ * search itself finished in milliseconds and then sat waiting for a vector it
+ * was never going to get, until the caller's own timeout fired first and the
+ * request failed outright. Two seconds is past the point where a semantic
+ * result would still feel like part of the same search.
+ */
+export const QUERY_EMBED_TIMEOUT_MS = 2000
+
+/** Batch embedding runs offline and can afford to wait. */
+const BATCH_EMBED_TIMEOUT_MS = 30000
+
+/**
+ * When Ollama last refused, so a burst of searches does not each pay the
+ * timeout over again. One request per cooldown probes whether it is back.
+ */
+const OUTAGE_COOLDOWN_MS = 60_000
+let unreachableUntil = 0
+
+/**
+ * The "is it down" memory, as its own unit.
+ *
+ * Exported because `generateQueryEmbedding` cannot be observed from another
+ * suite: `search.service.test.ts` module-mocks it, and bun's `mock.module` is
+ * process-global, so any test of the real wrapper sees the mock instead.
+ */
+export const embeddingCircuit = {
+  isOpen: () => Date.now() < unreachableUntil,
+  trip: () => {
+    unreachableUntil = Date.now() + OUTAGE_COOLDOWN_MS
+  },
+  reset: () => {
+    unreachableUntil = 0
+  },
+}
+
 export interface EmbeddingResult {
   embeddings: number[][]
 }
+
+/** The POST this module makes, as a seam. Injected rather than module-mocked:
+ *  a `mock.module('axios')` would replace axios for every test file loaded
+ *  afterwards, not just this one. */
+export type EmbeddingPoster = (
+  url: string,
+  body: unknown,
+  opts: { timeout?: number },
+) => Promise<{ data: EmbeddingResult }>
+
+const defaultPoster: EmbeddingPoster = (url, body, opts) =>
+  axios.post<EmbeddingResult>(url, body, opts)
 
 /**
  * Generate embeddings for one or more texts using Ollama's nomic-embed-text model.
  * Returns an array of 512-dim float vectors.
  */
-export async function generateEmbeddings(texts: string[]): Promise<number[][]> {
-  const response = await axios.post<EmbeddingResult>(
+export async function generateEmbeddings(
+  texts: string[],
+  timeout = BATCH_EMBED_TIMEOUT_MS,
+  post: EmbeddingPoster = defaultPoster,
+): Promise<number[][]> {
+  const response = await post(
     `${OLLAMA_HOST}/api/embed`,
     {
       model: MODEL,
       input: texts,
     },
-    { timeout: 30000 },
+    { timeout },
   )
 
   return response.data.embeddings
@@ -27,9 +83,21 @@ export async function generateEmbeddings(texts: string[]): Promise<number[][]> {
 /**
  * Generate a single embedding for a query string.
  */
-export async function generateQueryEmbedding(query: string): Promise<number[]> {
-  const results = await generateEmbeddings([query])
-  return results[0]
+export async function generateQueryEmbedding(
+  query: string,
+  post: EmbeddingPoster = defaultPoster,
+): Promise<number[]> {
+  if (embeddingCircuit.isOpen()) {
+    throw new Error('Embedding service unreachable (cooling down)')
+  }
+  try {
+    const results = await generateEmbeddings([query], QUERY_EMBED_TIMEOUT_MS, post)
+    embeddingCircuit.reset()
+    return results[0]
+  } catch (err) {
+    embeddingCircuit.trip()
+    throw err
+  }
 }
 
 /**
