@@ -39,15 +39,20 @@ let STATION_ROWS: any[] = []
 /** What `complexSiblings` reads: the stations transfers.txt joins to these. */
 let TRANSFER_ROWS: any[] = []
 
+/** Nearest mapped OSM transit objects, nearest first, for `resolveOsmIds`. */
+let OSM_ROWS: any[] = []
+
 client.unsafe = (text: string, params: unknown[] = []) => {
   statements.push({ sql: text, params })
-  const rows = text.includes('gtfs_transfers')
-    ? TRANSFER_ROWS
-    : text.includes('station_id')
-      ? STATION_ROWS
-      : text.includes('gtfs_stops')
-        ? STOP_ROWS
-        : []
+  const rows = text.includes('geo_places')
+    ? OSM_ROWS
+    : text.includes('gtfs_transfers')
+      ? TRANSFER_ROWS
+      : text.includes('station_id')
+        ? STATION_ROWS
+        : text.includes('gtfs_stops')
+          ? STOP_ROWS
+          : []
   const result: any = Promise.resolve(rows)
   result.values = () => Promise.resolve(rows)
   result.execute = () => Promise.resolve(rows)
@@ -612,6 +617,49 @@ describe('a whole complex', () => {
     // The station's own boards stay unmarked.
     expect(byId.get('Q01')).toBeUndefined()
     expect(byId.get('639')).toBeUndefined()
+  })
+
+  test('gives a transfer board the OSM object it is, matched by name not just distance', async () => {
+    // Proximity alone opens the wrong station, quietly: the nearest mapped
+    // node to the Chambers St J/Z platform is Brooklyn Bridge–City Hall, 33m
+    // away through the passageway. The name has to agree too, through the same
+    // fold that reads "Chambers St" and "Chambers Street" as one place.
+    TRANSFER_ROWS = [
+      {
+        feed_id: '5', sid: 'M21', seed_name: 'Canal St', sibling_name: 'Chambers St',
+        sibling_lat: 40.71324, sibling_lon: -74.0034,
+      },
+    ]
+    OSM_ROWS = [
+      { key: '5\u0000M21', id: 'node/8410411845', name: 'Brooklyn Bridge–City Hall' },
+      { key: '5\u0000M21', id: 'node/2052618392', name: 'Chambers Street' },
+    ]
+
+    const result = await getDepartures(
+      { lat: 40.7186, lng: -74.0008, name: 'Canal Street', routeTypes: [1], transfers: true },
+      fetchFn,
+    )
+
+    const transfer = result.find((r) => r.stop.via === 'transfer')
+    expect(transfer?.stop.osm).toBe('node/2052618392')
+  })
+
+  test('leaves a station without an id rather than guessing at one', async () => {
+    TRANSFER_ROWS = [
+      {
+        feed_id: '5', sid: 'M21', seed_name: 'Canal St', sibling_name: 'Chambers St',
+        sibling_lat: 40.71324, sibling_lon: -74.0034,
+      },
+    ]
+    // Only a neighbour under another name is mapped nearby.
+    OSM_ROWS = [{ key: '5\u0000M21', id: 'node/999', name: 'Brooklyn Bridge–City Hall' }]
+
+    const result = await getDepartures(
+      { lat: 40.7186, lng: -74.0008, name: 'Canal Street', routeTypes: [1], transfers: true },
+      fetchFn,
+    )
+
+    expect(result.find((r) => r.stop.via === 'transfer')?.stop.osm).toBeUndefined()
   })
 
   test('leaves out a differently named station the same file joins', async () => {

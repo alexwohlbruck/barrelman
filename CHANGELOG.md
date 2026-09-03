@@ -10,6 +10,24 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Added
+
+* A transfer board reports the OSM object its station is, as `stop.osm`, so a
+  caller can open the station instead of searching for it by name. Searching
+  cannot tell same-named stations apart — New York has three "Chambers St", and
+  a name lookup from the J/Z platform opened the A/C/E one 428 m away. The match
+  needs both signals: proximity alone is wrong just as quietly, since the
+  nearest mapped node to that platform is Brooklyn Bridge–City Hall, 33 m away
+  through the passageway. Nearest object whose name agrees, through the same
+  fold that reads "Chambers St" and "Chambers Street" as one place; no
+  confident match leaves the field off
+
+### Fixed
+
+* A station added to a board by `transfers.txt` carries its own name and
+  position rather than being left blank for MOTIS to fill in, so one with no
+  departures in the window is still named and still locatable
+
 ### Fixed
 
 * A search no longer waits half a minute for an embedding service that is not
