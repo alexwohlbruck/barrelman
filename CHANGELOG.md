@@ -10,6 +10,15 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Added
+
+* `/transit/departures` takes `transfers=true` and returns a board for every
+  station `transfers.txt` joins to this one under a different name, each marked
+  `stop.via: 'transfer'`. A connection is more useful with its times than
+  without: a rider changing at Chambers St wants to know when the 4 actually
+  leaves Brooklyn Bridge–City Hall, not merely that it can be reached. Boards
+  for the station itself are unmarked, so the two can never be confused
+
 ## [0.2.10] - 2026-09-03
 
 ### Fixed

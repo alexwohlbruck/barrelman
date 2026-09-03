@@ -366,6 +366,7 @@ export function createTransitRoutes(deps: {
           directionId: query.directionId || undefined,
           name: query.name || undefined,
           complex: query.complex === 'true' || query.complex === '1',
+          transfers: query.transfers === 'true' || query.transfers === '1',
           routeTypes: query.routeTypes
             ? query.routeTypes
                 .split(',')
@@ -396,6 +397,7 @@ export function createTransitRoutes(deps: {
         directionId: t.Optional(t.String()),
         name: t.Optional(t.String()),
         complex: t.Optional(t.String()),
+        transfers: t.Optional(t.String()),
         routeTypes: t.Optional(t.String()),
         windowMinutes: t.Optional(t.String()),
       }),
@@ -415,6 +417,10 @@ export function createTransitRoutes(deps: {
           'for that station alone — asked once at its GTFS parent, so its ' +
           'platforms are not listed twice, and filtered to runs that call ' +
           'there. Without it the board merges whatever is nearby. Pass ' +
+          'Set `transfers=true` to additionally get a board for every station ' +
+          'transfers.txt joins to this one under a DIFFERENT name — the ' +
+          'connections, with their own times. Those boards carry ' +
+          '`stop.via: "transfer"`. ' +
           '`complex=true` to get a board for every station the agency joins ' +
           'to this one in transfers.txt rather than only the station itself — ' +
           'what a merged station label stands for, where four "Canal St" ' +
