@@ -10,6 +10,18 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Fixed
+
+* A search no longer waits half a minute for an embedding service that is not
+  there. The query embedding used the same 30-second timeout as the offline
+  batch importer, which on the request path is not a timeout but an outage: an
+  instance without Ollama running answered every semantic search in exactly 30s
+  — the search itself finished in milliseconds and then sat waiting for a vector
+  that was never coming, long enough that callers gave up first and the request
+  failed outright. A query now waits two seconds, and a refusal is remembered
+  for a minute so a burst of searches does not each pay for it. Batch embedding
+  keeps the long timeout, which is correct for work that runs offline
+
 ## [0.2.11] - 2026-09-03
 
 ### Added

@@ -3,6 +3,34 @@ import axios from 'axios'
 const OLLAMA_HOST = process.env.OLLAMA_HOST || 'http://localhost:11434'
 const MODEL = 'nomic-embed-text'
 
+/**
+ * How long a QUERY embedding is worth waiting for.
+ *
+ * Thirty seconds was the same timeout the batch importer uses, and on the
+ * request path it is not a timeout at all — it is an outage. An instance
+ * without Ollama running answered every semantic search in exactly 30s: the
+ * search itself finished in milliseconds and then sat waiting for a vector it
+ * was never going to get, until the caller's own timeout fired first and the
+ * request failed outright. Two seconds is past the point where a semantic
+ * result would still feel like part of the same search.
+ */
+const QUERY_EMBED_TIMEOUT_MS = 2000
+
+/** Batch embedding runs offline and can afford to wait. */
+const BATCH_EMBED_TIMEOUT_MS = 30000
+
+/**
+ * When Ollama last refused, so a burst of searches does not each pay the
+ * timeout over again. One request per cooldown probes whether it is back.
+ */
+const OUTAGE_COOLDOWN_MS = 60_000
+let unreachableUntil = 0
+
+/** Test seam: forget that Ollama was ever down. */
+export function resetEmbeddingCircuit(): void {
+  unreachableUntil = 0
+}
+
 export interface EmbeddingResult {
   embeddings: number[][]
 }
@@ -11,14 +39,17 @@ export interface EmbeddingResult {
  * Generate embeddings for one or more texts using Ollama's nomic-embed-text model.
  * Returns an array of 512-dim float vectors.
  */
-export async function generateEmbeddings(texts: string[]): Promise<number[][]> {
+export async function generateEmbeddings(
+  texts: string[],
+  timeout = BATCH_EMBED_TIMEOUT_MS,
+): Promise<number[][]> {
   const response = await axios.post<EmbeddingResult>(
     `${OLLAMA_HOST}/api/embed`,
     {
       model: MODEL,
       input: texts,
     },
-    { timeout: 30000 },
+    { timeout },
   )
 
   return response.data.embeddings
@@ -28,8 +59,17 @@ export async function generateEmbeddings(texts: string[]): Promise<number[][]> {
  * Generate a single embedding for a query string.
  */
 export async function generateQueryEmbedding(query: string): Promise<number[]> {
-  const results = await generateEmbeddings([query])
-  return results[0]
+  if (Date.now() < unreachableUntil) {
+    throw new Error('Embedding service unreachable (cooling down)')
+  }
+  try {
+    const results = await generateEmbeddings([query], QUERY_EMBED_TIMEOUT_MS)
+    unreachableUntil = 0
+    return results[0]
+  } catch (err) {
+    unreachableUntil = Date.now() + OUTAGE_COOLDOWN_MS
+    throw err
+  }
 }
 
 /**
