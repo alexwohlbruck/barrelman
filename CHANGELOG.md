@@ -10,6 +10,15 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Added
+
+* Each board on `/transit/departures` reports its feed's transit.land onestop
+  id as `stop.feedOnestopId`. Barrelman's feed ids are local to its own
+  database, and everything the wider world publishes about a feed is keyed the
+  way the world keys it — portolan's station index among them, whose keys are
+  `<onestop>:<stop_id>`. A caller holding `("5", "M21")` had no way to join to
+  any of it. Omitted for a feed with no onestop id, rather than invented
+
 ### Fixed
 
 * A station added to a board by `transfers.txt` carries its own name and
