@@ -78,10 +78,6 @@ export interface StopDepartures {
      *  `transfer` — a connecting station under a different name, returned
      *  because `transfers` was set. Absent means `station`. */
     via?: 'station' | 'transfer'
-    /** The OSM object this station is, as "node/123", where one could be
-     *  identified. A caller can open it directly instead of searching by
-     *  name, which cannot tell same-named stations apart. */
-    osm?: string
   }
   departures: Departure[]
   /** More runs exist past what was returned — either trimmed by `windowMinutes`
@@ -259,9 +255,6 @@ interface NearbyStop {
   /** How this stop entered the answer. `transfer` is a connecting station
    *  under another name, reached through transfers.txt. */
   via?: 'station' | 'transfer'
-  /** The OSM object this station is, as "node/123", when one can be
-   *  identified. Lets a caller link to the station rather than search for it. */
-  osm?: string
 }
 
 /**
@@ -484,11 +477,6 @@ async function resolveStations(
  * with a pathological transfer graph cannot turn one tap into thirty MOTIS
  * queries.
  */
-/** ~250m: past that a same-named node is a different station, not this one
- *  mapped loosely. 0.0025 degrees of longitude is ~210m in New York. */
-const OSM_MATCH_DEGREES = 0.0025
-/** How many neighbours to consider before giving up on a name match. */
-const OSM_MATCH_CANDIDATES = 6
 const MAX_COMPLEX_STATIONS = 8
 
 /**
@@ -548,10 +536,10 @@ async function complexSiblings(
       const key = stationKey(row.feed_id, row.sid)
       if (known.has(key)) continue
       known.add(key)
-      // Carry the name the query already fetched. It used to be left blank and
-      // filled in from whatever MOTIS said, which leaves a station that has no
-      // departures in the window nameless — and a nameless station cannot be
-      // matched to an OSM object or labelled in a list.
+      // Carry the name and point the query already fetched. They used to be
+      // left blank for MOTIS to fill in, which leaves a station with no
+      // departures in the window nameless and unplaceable — and a station a
+      // caller cannot name is one it cannot label or link.
       out.push({
         feedId: row.feed_id,
         stopId: row.sid,
@@ -569,65 +557,6 @@ async function complexSiblings(
     console.error('[Departures] Failed to expand the station complex:', err)
     return []
   }
-}
-
-/**
- * The OSM object each station is, so a caller can link to it.
- *
- * Proximity alone is wrong here and quietly so: the nearest mapped transit
- * node to the Chambers St J/Z platform is Brooklyn Bridge–City Hall, 33m away
- * across the passageway, and taking it opens a station the rider did not ask
- * about. The name has to agree too — and agree through the same fold that
- * identifies a station elsewhere in this file, because a feed writes "Chambers
- * St" where OSM writes "Chambers Street".
- *
- * One query for every station, then the name test in TypeScript: the fold maps
- * synonyms and ordinals, which SQL would have to reimplement to stay honest.
- * Nearest name-match wins; no match leaves the station without an id, and the
- * caller falls back to whatever it did before.
- */
-async function resolveOsmIds(stops: NearbyStop[]): Promise<Map<string, string>> {
-  const out = new Map<string, string>()
-  const wanted = stops.filter((s) => s.name && s.lat && s.lng)
-  if (!wanted.length) return out
-
-  try {
-    const points = sql.join(
-      wanted.map((s) => sql`(${stationKey(s.feedId, s.stopId)}, ${s.lng}::double precision, ${s.lat}::double precision)`),
-      sql`, `,
-    )
-    const rows = (await db.execute(sql`
-      WITH pt (key, lon, lat) AS (VALUES ${points})
-      SELECT pt.key, cand.id, cand.name
-      FROM pt
-      JOIN LATERAL (
-        SELECT p.id, p.name
-        FROM geo_places p
-        WHERE p.centroid && ST_Expand(ST_SetSRID(ST_MakePoint(pt.lon, pt.lat), 4326), ${OSM_MATCH_DEGREES})
-          AND p.name IS NOT NULL
-          AND (p.tags->>'railway' IN ('station', 'stop')
-               OR p.tags->>'public_transport' IN ('station', 'stop_position'))
-        ORDER BY p.centroid <-> ST_SetSRID(ST_MakePoint(pt.lon, pt.lat), 4326)
-        LIMIT ${OSM_MATCH_CANDIDATES}
-      ) cand ON TRUE
-    `)) as any[]
-
-    const byKey = new Map<string, NearbyStop>(
-      wanted.map((s) => [stationKey(s.feedId, s.stopId), s]),
-    )
-    // Rows arrive nearest-first per station, so the first name that agrees is
-    // the closest one that agrees.
-    for (const row of rows) {
-      if (out.has(row.key)) continue
-      const stop = byKey.get(row.key)
-      if (stop && sameStationName(stop.name, row.name)) out.set(row.key, row.id)
-    }
-  } catch (err) {
-    // A station without an id is still a station; the caller has its name and
-    // its point either way.
-    console.error('[Departures] Failed to resolve OSM ids:', err)
-  }
-  return out
 }
 
 /** A separator no GTFS id contains, so ('a_b','c') and ('a','b_c') stay distinct. */
@@ -955,22 +884,6 @@ export async function getDepartures(
 
   if (successResults.length === 0) return []
 
-  // A connecting station is somewhere a rider goes, so it needs to be
-  // openable. Resolved after MOTIS has answered, because that is when a
-  // sibling added by transfers.txt finally has its name — complexSiblings
-  // knows only ids.
-  const osmIds = transfers
-    ? await resolveOsmIds(
-        successResults.filter((r) => r.stop.via === 'transfer').map((r) => ({
-          ...r.stop,
-          // MOTIS's name is better when it has one — it is the name riders see
-          // — but the stop's own carries a station with an empty board.
-          name: r.result.stopTimes[0]?.place?.name || r.stop.name,
-        })),
-      )
-    : new Map<string, string>()
-
-
   // 5. Batch-fetch route colors
   const colorMap = await fetchRouteColors(routePairs)
 
@@ -990,10 +903,6 @@ export async function getDepartures(
         timezone,
         distance: stop.distance,
         ...(stop.via === 'transfer' ? { via: 'transfer' as const } : {}),
-        ...(() => {
-          const osm = osmIds.get(stationKey(stop.feedId, stop.stopId))
-          return osm ? { osm } : {}
-        })(),
       },
       ...trimToWindow(
         transformDepartures(result.stopTimes, colorMap).filter(

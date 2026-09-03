@@ -10,6 +10,13 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Fixed
+
+* A station added to a board by `transfers.txt` carries its own name and
+  position instead of being left blank for MOTIS to fill in. A connecting
+  station with no departures in the window came back nameless and at 0,0 — so
+  it could not be labelled in a list, let alone linked to
+
 ### Added
 
 * A transfer board reports the OSM object its station is, as `stop.osm`, so a
