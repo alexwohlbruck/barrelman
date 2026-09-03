@@ -10,6 +10,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.2.13] - 2026-09-03
+
 ### Added
 
 * Each board on `/transit/departures` reports its feed's transit.land onestop
