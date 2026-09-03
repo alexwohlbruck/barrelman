@@ -584,6 +584,36 @@ describe('a whole complex', () => {
     expect(result.map((r) => r.stop.stopId).sort()).toEqual(['639', 'M20', 'Q01'])
   })
 
+  test('returns the differently named station as its own transfer board', async () => {
+    // The connection needs its own times — a rider changing at Borough Hall
+    // wants to know when the N actually leaves Court St, not merely that it
+    // exists. It comes back as a separate board marked `transfer`, so it is
+    // never mistaken for a train departing from here.
+    TRANSFER_ROWS = [
+      { feed_id: '5', sid: '639', seed_name: 'Canal St', sibling_name: 'Canal St' },
+      { feed_id: '5', sid: 'R28', seed_name: 'Canal St', sibling_name: 'Court St' },
+    ]
+
+    const result = await getDepartures(
+      {
+        lat: 40.7186,
+        lng: -74.0008,
+        name: 'Canal Street',
+        routeTypes: [1],
+        complex: true,
+        transfers: true,
+      },
+      fetchFn,
+    )
+
+    const byId = new Map(result.map((r) => [r.stop.stopId, r.stop.via]))
+    expect([...byId.keys()].sort()).toEqual(['639', 'Q01', 'R28'])
+    expect(byId.get('R28')).toBe('transfer')
+    // The station's own boards stay unmarked.
+    expect(byId.get('Q01')).toBeUndefined()
+    expect(byId.get('639')).toBeUndefined()
+  })
+
   test('leaves out a differently named station the same file joins', async () => {
     // transfers.txt joins Borough Hall to Court St — a free walk between two
     // stations, not one station. Folding it in put the N and R under Borough
