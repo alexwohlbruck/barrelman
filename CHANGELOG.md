@@ -10,6 +10,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.2.16] - 2026-09-04
+
 ### Fixed
 
 * Typing a single character finds a transit line. Autocomplete used to return
