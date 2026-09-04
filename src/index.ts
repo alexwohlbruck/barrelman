@@ -31,6 +31,8 @@ import { ensureRegionsSchema } from './services/region-store.service'
 import { initJobHistory } from './services/job-history.service'
 import { ensureSearchEnrichment } from './lib/search-enrichment'
 import { ensureBrandLogos } from './lib/brand-logos'
+import { updateRouteCentroids } from './services/gtfs.service'
+import { syncPortolanStopLinks } from './services/portolan-links.service'
 import { startTransitWarmup } from './lib/warmup'
 import { flushUsage, startUsageFlush } from './services/usage.service'
 import { startOverageReporting } from './services/overage.service'
@@ -74,6 +76,12 @@ await initJobHistory()
 // it self-skips once the data is enriched. Then resolve brand logos from
 // Wikidata (needs the geo_brands catalog to exist first).
 void ensureSearchEnrichment().then(() => ensureBrandLogos())
+
+// Transit search inputs, both self-skipping/cheap once populated: route
+// centroids for proximity ranking, and portolan's stop→OSM links so search
+// can drop GTFS stops that OSM already covers.
+void updateRouteCentroids().catch((err) => console.warn('[startup] route centroids:', err))
+void syncPortolanStopLinks().catch((err) => console.warn('[startup] portolan links:', err))
 
 /**
  * CORS.
