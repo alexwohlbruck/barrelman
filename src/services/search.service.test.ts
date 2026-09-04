@@ -101,21 +101,21 @@ describe('searchPlaces — basic', () => {
 // ── Layer execution ───────────────────────────────────────────────────────────
 
 describe('searchPlaces — layer execution', () => {
-  test('runs 4 parallel layers (FTS + trigram + codes + nameAbbrev) for 5+ char queries', async () => {
+  test('runs 6 parallel layers (FTS + trigram + codes + nameAbbrev + transit routes/stops) for 5+ char queries', async () => {
     // autocomplete=true suppresses semantic so count is predictable
     await searchPlaces({ query: 'coffee', autocomplete: true })
-    expect(mockExecute).toHaveBeenCalledTimes(4)
+    expect(mockExecute).toHaveBeenCalledTimes(6)
   })
 
-  test('skips trigram for short queries (≤4 chars) — 3 layers only', async () => {
+  test('skips trigram for short queries (≤4 chars) — 5 layers only', async () => {
     await searchPlaces({ query: 'cafe', autocomplete: true })
-    expect(mockExecute).toHaveBeenCalledTimes(3)
+    expect(mockExecute).toHaveBeenCalledTimes(5)
   })
 
-  test('runs only 2 layers (FTS + trigram) for queries longer than 20 chars', async () => {
+  test('skips codes/abbrev for queries longer than 20 chars — FTS + trigram + transit', async () => {
     // abbrev layer is skipped when sanitizedQuery.length > 20
     await searchPlaces({ query: 'this is a very long query string', autocomplete: true })
-    expect(mockExecute).toHaveBeenCalledTimes(2)
+    expect(mockExecute).toHaveBeenCalledTimes(4)
   })
 })
 
@@ -180,8 +180,8 @@ describe('searchPlaces — caching', () => {
   test('different query strings produce separate cache entries', async () => {
     await searchPlaces({ query: 'coffee', autocomplete: true })
     await searchPlaces({ query: 'library', autocomplete: true })
-    // 4 layers per unique query = 8 total
-    expect(mockExecute.mock.calls.length).toBe(8)
+    // 6 db calls per unique query = 12 total
+    expect(mockExecute.mock.calls.length).toBe(12)
   })
 })
 
@@ -252,19 +252,20 @@ describe('searchPlaces — location handling', () => {
     await expect(searchPlaces({ query: 'coffee', lat: 0, lng: 0, autocomplete: true })).resolves.toBeDefined()
     // With the fix, the location point is built and the layers run. Autocomplete
     // with coordinates takes the local fast path: FTS + codes + abbrev (trigram
-    // is skipped), then — because the mocks return nothing — the global retry
-    // adds FTS + trigram. lat=0 being treated as falsy would have skipped the
-    // local path entirely and run the 4-layer global shape instead.
-    expect(mockExecute).toHaveBeenCalledTimes(5)
+    // is skipped) + the two transit layers, then — because the mocks return
+    // nothing — the global retry adds FTS + trigram. lat=0 being treated as
+    // falsy would have skipped the local path entirely and run the global
+    // shape instead.
+    expect(mockExecute).toHaveBeenCalledTimes(7)
   })
 
   test('non-autocomplete search keeps the 4-layer global shape', async () => {
     // Guards the fast path against leaking into submitted searches: those must
-    // still run FTS + trigram + codes + abbrev globally, with no local retry —
-    // plus the semantic layer, which fires here because the mocks return nothing
-    // and is suppressed for autocomplete.
+    // still run FTS + trigram + codes + abbrev + transit globally, with no
+    // local retry — plus the semantic layer, which fires here because the mocks
+    // return nothing and is suppressed for autocomplete.
     await expect(searchPlaces({ query: 'coffee', lat: 35.22, lng: -80.84 })).resolves.toBeDefined()
-    expect(mockExecute).toHaveBeenCalledTimes(5)
+    expect(mockExecute).toHaveBeenCalledTimes(7)
     expect(mockGenerateQueryEmbedding).toHaveBeenCalled()
   })
 
@@ -316,7 +317,7 @@ describe('searchPlaces — autocomplete fast path', () => {
       .mockImplementationOnce(async () => [])    // nameAbbrev
     const results = await searchPlaces({ query: 'sycamore', lat: 35.22, lng: -80.84, autocomplete: true })
     // 6 local hits clears AUTOCOMPLETE_FALLBACK_MIN, so no global retry.
-    expect(mockExecute).toHaveBeenCalledTimes(3)
+    expect(mockExecute).toHaveBeenCalledTimes(5)
     expect(results).toHaveLength(6)
   })
 
@@ -330,7 +331,7 @@ describe('searchPlaces — autocomplete fast path', () => {
       .mockImplementationOnce(async () => [])        // trigram (global retry)
     const ids = (await searchPlaces({ query: 'sycamore', lat: 35.22, lng: -80.84, autocomplete: true }))
       .map((r: any) => r.id)
-    expect(mockExecute).toHaveBeenCalledTimes(5)
+    expect(mockExecute).toHaveBeenCalledTimes(7)
     expect(ids).toContain('node/global')
   })
 
@@ -346,7 +347,7 @@ describe('searchPlaces — autocomplete fast path', () => {
       .mockImplementationOnce(async () => [])       // nameAbbrev
     const ids = (await searchPlaces({ query: 'divine barrel', lat: 35.22, lng: -80.84, autocomplete: true }))
       .map((r: any) => r.id)
-    expect(mockExecute).toHaveBeenCalledTimes(3)
+    expect(mockExecute).toHaveBeenCalledTimes(5)
     expect(ids).toEqual(['node/local'])
   })
 
@@ -359,20 +360,20 @@ describe('searchPlaces — autocomplete fast path', () => {
       .mockImplementationOnce(async () => []) // codes
       .mockImplementationOnce(async () => []) // nameAbbrev
     await searchPlaces({ query: '1600 e 7th st', lat: 35.22, lng: -80.84, autocomplete: true })
-    expect(mockExecute).toHaveBeenCalledTimes(3)
+    expect(mockExecute).toHaveBeenCalledTimes(5)
   })
 
   test('short prefixes never trigger the global retry', async () => {
     // "syc" is under AUTOCOMPLETE_FALLBACK_MIN_QUERY: matching it globally is
     // the exact scan the fast path exists to avoid.
     await searchPlaces({ query: 'syc', lat: 35.22, lng: -80.84, autocomplete: true })
-    expect(mockExecute).toHaveBeenCalledTimes(3)
+    expect(mockExecute).toHaveBeenCalledTimes(5)
   })
 
   test('autocomplete without coordinates falls back to the global shape', async () => {
     // No viewport means no box to bound the scan, so the fast path can't apply.
     await searchPlaces({ query: 'sycamore', autocomplete: true })
-    expect(mockExecute).toHaveBeenCalledTimes(4)
+    expect(mockExecute).toHaveBeenCalledTimes(6)
   })
 
   test('candidate pool is trimmed to limit after the proximity re-rank', async () => {
@@ -433,6 +434,95 @@ describe('searchPlaces — intersections', () => {
     const matches = results.filter((r: any) => r.id === 'intersection/42')
     expect(matches).toHaveLength(1)
     expect(matches[0].text_rank).toBe(0.7)
+  })
+})
+
+// ── Transit layers ────────────────────────────────────────────────────────────
+
+describe('searchPlaces — transit layers', () => {
+  // Raw SQL row shapes as the transit layer queries project them; the service
+  // adapts them into hits with a nested `transit` object.
+  const rawRouteRow = {
+    id: 'transit-route/mta:A', kind: 'transit_route', name: 'Eighth Avenue Express',
+    feed_id: 'mta', feed_onestop_id: 'f-dr5r-mta', route_id: 'A',
+    route_short_name: 'A', route_long_name: 'Eighth Avenue Express', route_type: 1,
+    route_color: '0039A6', route_text_color: 'FFFFFF', agency_name: 'MTA',
+    geometry: { type: 'Point', coordinates: [-73.98, 40.75] },
+    text_rank: 0.95, distance_m: 1200,
+  }
+  const rawStopRow = {
+    id: 'transit-stop/mta:s1', kind: 'transit_stop', name: 'Whitlock Av',
+    feed_id: 'mta', feed_onestop_id: 'f-dr5r-mta', stop_id: 's1', location_type: 1,
+    min_route_type: 1,
+    geometry: { type: 'Point', coordinates: [-73.886, 40.826] },
+    text_rank: 0.8, distance_m: 900,
+  }
+
+  // Global autocomplete-without-coords shape: FTS, trigram, codes, abbrev,
+  // transit routes, transit stops — Onces below follow that order.
+  const queue = (perLayer: Record<number, any[]>) => {
+    for (let i = 0; i < 6; i++) {
+      const rows = perLayer[i] ?? []
+      mockExecute.mockImplementationOnce(async () => rows)
+    }
+  }
+
+  test('a GTFS line hit is adapted and surfaces with its transit ids', async () => {
+    queue({ 4: [rawRouteRow] })
+    const results = await searchPlaces({ query: 'eighth avenue', autocomplete: true })
+    expect(results).toHaveLength(1)
+    const hit = results[0]
+    expect(hit.kind).toBe('transit_route')
+    expect(hit.osm_type).toBeNull()
+    expect(hit.categories).toEqual(['transit/route/subway'])
+    expect(hit.transit).toMatchObject({
+      feedId: 'mta', feedOnestopId: 'f-dr5r-mta', routeId: 'A',
+      shortName: 'A', longName: 'Eighth Avenue Express', mode: 'subway',
+      color: '0039A6', agency: 'MTA',
+    })
+  })
+
+  test('an OSM route relation duplicated by a GTFS line hit is dropped', async () => {
+    const relation = {
+      id: 'relation/9', osm_type: 'R', name: 'Eighth Avenue Express',
+      tags: { type: 'route', route: 'subway', ref: 'A' }, categories: [],
+      geometry: { type: 'Point', coordinates: [-73.97, 40.74] },
+      text_rank: 0.9, distance_m: 1100,
+    }
+    queue({ 0: [relation], 4: [rawRouteRow] })
+    const results = await searchPlaces({ query: 'eighth avenue', autocomplete: true })
+    const ids = results.map((r: any) => r.id)
+    expect(ids).toContain('transit-route/mta:A')
+    expect(ids).not.toContain('relation/9')
+  })
+
+  test('a GTFS stop hit surfaces with stop ids and a mode category', async () => {
+    queue({ 5: [rawStopRow] })
+    const results = await searchPlaces({ query: 'whitlock', autocomplete: true })
+    expect(results).toHaveLength(1)
+    expect(results[0].kind).toBe('transit_stop')
+    expect(results[0].categories).toEqual(['transit/stop/subway'])
+    expect(results[0].transit).toMatchObject({ feedId: 'mta', stopId: 's1', mode: 'subway' })
+  })
+
+  test('a GTFS stop duplicated by a same-name OSM station is dropped', async () => {
+    const station = {
+      id: 'node/5', osm_type: 'N', name: 'Whitlock Avenue',
+      categories: ['railway/station'], tags: {},
+      geometry: { type: 'Point', coordinates: [-73.8861, 40.8262] },
+      text_rank: 0.85, distance_m: 950,
+    }
+    queue({ 0: [station], 5: [rawStopRow] })
+    const results = await searchPlaces({ query: 'whitlock', autocomplete: true })
+    const ids = results.map((r: any) => r.id)
+    expect(ids).toContain('node/5')
+    expect(ids).not.toContain('transit-stop/mta:s1')
+  })
+
+  test('transit layers are skipped when category or tag filters apply', async () => {
+    await searchPlaces({ query: 'coffee', categories: ['amenity/cafe'], autocomplete: true })
+    // FTS + trigram + codes + abbrev only — no transit calls.
+    expect(mockExecute).toHaveBeenCalledTimes(4)
   })
 })
 

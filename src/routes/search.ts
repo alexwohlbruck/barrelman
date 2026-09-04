@@ -81,6 +81,8 @@ export function createSearchRoutes(deps = { searchPlaces: _searchPlaces }) {
 
 Results are deduplicated in priority order (FTS > abbreviation > trigram > semantic) then re-ranked with proximity decay when coordinates are provided.
 
+**Transit results**: Text search also matches GTFS transit lines and stops. These carry \`kind: 'transit_route' | 'transit_stop'\` (regular places have no \`kind\`), \`osm_type: null\`, and a \`transit\` object with the ids the /transit endpoints are keyed by — for a line: \`feedId\`, \`feedOnestopId\`, \`routeId\`, \`shortName\`, \`longName\`, \`routeType\`, \`mode\`, \`color\`, \`textColor\`, \`agency\`; for a stop: \`feedId\`, \`feedOnestopId\`, \`stopId\`, \`locationType\`, \`mode\`. Stops that OSM already covers are returned as their OSM place instead (via portolan's stop index), never twice. Transit results are skipped when \`categories\`, \`tags\` or \`route\` filters are set.
+
 **Browse mode** (omit \`query\`, provide \`categories\` and/or \`tags\`): Returns matching places sorted by distance. Requires a spatial constraint (lat/lng or route).
 
 **Spatial modes:**
