@@ -296,11 +296,35 @@ describe('searchPlaces — location handling', () => {
 // ── Intersection search ──────────────────────────────────────────────────────
 
 describe('searchPlaces — autocomplete fast path', () => {
-  test('single-character query short-circuits without touching the database', async () => {
+  test('single-character query runs ONLY the exact transit-line lookup', async () => {
     // A 1-char prefix matches a sizeable fraction of the tsvector index and
-    // measured ~20s uncached; its results are noise either way.
+    // measured ~20s uncached — but "7" or "q" is how a rider names a line, and
+    // an exact short-name match on gtfs_routes is indexed and instant.
     await expect(searchPlaces({ query: 'd', lat: 35.22, lng: -80.84, autocomplete: true }))
       .resolves.toEqual([])
+    expect(mockExecute).toHaveBeenCalledTimes(1)
+  })
+
+  test('single-character query surfaces a line by exact short name', async () => {
+    const rawRouteRow = {
+      id: 'transit-route/mta:7', kind: 'transit_route', name: 'Flushing Local',
+      feed_id: 'mta', feed_onestop_id: 'f-dr5r-mta', route_id: '7',
+      route_short_name: '7', route_long_name: 'Flushing Local', route_type: 1,
+      geometry: { type: 'Point', coordinates: [-73.9, 40.75] },
+      text_rank: 0.95, distance_m: 5400,
+    }
+    mockExecute.mockImplementationOnce(async () => [rawRouteRow])
+    const results = await searchPlaces({ query: '7', lat: 40.75, lng: -73.98, autocomplete: true })
+    expect(mockExecute).toHaveBeenCalledTimes(1)
+    expect(results).toHaveLength(1)
+    expect(results[0].kind).toBe('transit_route')
+    expect(results[0].transit).toMatchObject({ feedId: 'mta', routeId: '7', shortName: '7' })
+  })
+
+  test('single-character query with a category filter stays empty — no scan', async () => {
+    await expect(
+      searchPlaces({ query: 'd', categories: ['amenity/cafe'], autocomplete: true }),
+    ).resolves.toEqual([])
     expect(mockExecute).not.toHaveBeenCalled()
   })
 

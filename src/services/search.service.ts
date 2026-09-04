@@ -5,6 +5,7 @@ import { generateQueryEmbedding } from '../lib/embeddings'
 import { forwardGeocode } from './geocode.service'
 import { searchTransitRoutes, searchTransitStops } from './transit-search.service'
 import { reconcileTransitHits } from '../lib/transit-search'
+import { buildTsQueryText } from '../lib/search-query'
 
 // ── Autocomplete fast path ──────────────────────────────────────────────────
 // Typeahead fires one request per keystroke, so its budget is ~50ms — an order
@@ -118,9 +119,24 @@ export async function searchPlaces(
   const isWiden = hasPointLocation && !radius && hasCategory
   const WIDEN_BBOX_DEG = 1.35 // ~150 km — caps how far a dense category scans
 
-  // Single-character typeahead: bail before touching Postgres or Pelias.
+  // Single-character typeahead: the geo_places layers are off the table (a
+  // 1-char prefix matches ~357K rows; measured ~20s) and so is Pelias — but a
+  // single character is exactly how riders name a line ("7", "Q", "L"), and
+  // an exact short-name match on gtfs_routes costs single-digit milliseconds.
+  // Micro-queries return transit lines and nothing else.
   if (autocomplete && hasQuery && sanitizedQuery.length < AUTOCOMPLETE_MIN_QUERY) {
-    return []
+    const lines = !hasCategory && !(tags && Object.keys(tags).length > 0) && !hasRoute
+      ? await searchTransitRoutes({
+          query: sanitizedQuery,
+          lat,
+          lng,
+          autocomplete: true,
+          exactOnly: true,
+          limit: Math.min(5, limit),
+        })
+      : []
+    searchCache.set(cacheKey, lines)
+    return lines
   }
 
   // The autocomplete fast path needs a viewport to bound the scan; without
@@ -261,16 +277,15 @@ export async function searchPlaces(
     const simFloor = queryWords.length > 1 ? sql`0.5` : sql`0`
     const ftsRankExpr = sql`(1.5 * GREATEST(similarity(name, ${sanitizedQuery}), ${bestWordSim}, ${simFloor}) * ${categoryDemotion})`
 
-    // Build tsquery: in autocomplete mode, treat the last word as a prefix
-    // so "walmart indep" matches "independence" in the tsvector.
-    // In non-autocomplete mode, use exact token matching.
-    const tsQueryExpr = autocomplete && queryWords.length > 0
-      ? (() => {
-          const prefixQuery = queryWords
-            .map((w, i) => i === queryWords.length - 1 ? `${w}:*` : w)
-            .join(' & ')
-          return sql`to_tsquery('simple', unaccent(${prefixQuery}))`
-        })()
+    // Build tsquery: every word expanded to an OR-group of its spellings
+    // ("ave" ↔ "avenue", "heights" ↔ "hts", "42" ↔ "42nd" — see
+    // lib/search-query.ts), since the 'simple' config can't stem them
+    // together and FTS requires every token to match. In autocomplete mode
+    // the last word is additionally a prefix, so "walmart indep" matches
+    // "independence".
+    const tsQueryText = buildTsQueryText(queryWords, autocomplete)
+    const tsQueryExpr = tsQueryText
+      ? sql`to_tsquery('simple', unaccent(${tsQueryText}))`
       : sql`plainto_tsquery('simple', unaccent(${sanitizedQuery}))`
 
     // `local` runs the autocomplete fast path: viewport box, index-assisted KNN

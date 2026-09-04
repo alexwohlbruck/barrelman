@@ -35,6 +35,20 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ### Fixed
 
+* Typing a single character finds a transit line. Autocomplete used to return
+  nothing below two characters — a guard against 1-character prefixes scanning
+  the whole place table — but one character is exactly how riders name lines.
+  A micro-query now runs only an indexed exact short-name lookup on GTFS
+  routes, so "7" returns the 7 and "q" the Q in a couple of milliseconds,
+  ranked nearest-system first
+
+* Abbreviations match in both directions. Search demanded every query word
+  appear verbatim in a name, so "franklin ave medgar" missed Franklin
+  Avenue-Medgar Evers College and "82 st jackson heights" missed 82 St-Jackson
+  Hts. Each query word now expands to every spelling of itself — ave/av/avenue,
+  heights/hts, 42/42nd — using the same table that reconciles station names, so
+  the two folds cannot drift apart. Expansion only ever adds matches
+
 * The MOTIS rebuild no longer fails on a region the operator has switched off.
   `scripts/rebuild-motis.sh` generates the MOTIS config inside the API
   container, but `REGIONS` was named only for `barrelman-ops`, so the API fell
