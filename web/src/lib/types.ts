@@ -188,7 +188,7 @@ export interface DataMetrics {
     lastImport: string | null
   }
   gbfs: { systems: number | null; stations: number | null }
-  transit: { stopAreaMembers: number | null }
+  transit: { stopAreaMembers: number | null; portolanStopLinks: number | null }
   boundaries: { count: number | null; fetchedAt: string | null }
   accounts: {
     users: number | null

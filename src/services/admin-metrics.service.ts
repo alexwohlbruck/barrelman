@@ -38,6 +38,7 @@ const COUNTABLE_TABLES = [
   'gbfs_systems',
   'gbfs_stations',
   'stop_area_members',
+  'portolan_stop_links',
   'boundary_catalog',
   'accounts_users',
 ] as const
@@ -87,6 +88,7 @@ export interface DataMetrics {
   }
   transit: {
     stopAreaMembers: number | null
+    portolanStopLinks: number | null
   }
   /** The catalog of importable regions backing "Add region by name". */
   boundaries: {
@@ -164,6 +166,7 @@ export async function getDataMetrics(): Promise<DataMetrics> {
     gbfsSystems,
     gbfsStations,
     stopAreaMembers,
+    portolanStopLinks,
     boundaryCount,
     boundaryFetchedAt,
     accountUsers,
@@ -188,6 +191,7 @@ export async function getDataMetrics(): Promise<DataMetrics> {
     tableCount('gbfs_systems'),
     tableCount('gbfs_stations'),
     tableCount('stop_area_members'),
+    tableCount('portolan_stop_links'),
     tableCount('boundary_catalog'),
     scalar<string>(sql`SELECT max(fetched_at)::text AS s FROM boundary_catalog`),
     // Account tables are small — exact counts are cheap here, unlike geo_places.
@@ -242,7 +246,7 @@ export async function getDataMetrics(): Promise<DataMetrics> {
     geoPlaces,
     gtfs: { feeds, stops, routes, transfers, tripPatterns, shapes, feedsWithRt, lastImport },
     gbfs: { systems: gbfsSystems, stations: gbfsStations },
-    transit: { stopAreaMembers },
+    transit: { stopAreaMembers, portolanStopLinks },
     boundaries: { count: boundaryCount, fetchedAt: boundaryFetchedAt },
     accounts: {
       users: accountUsers,

@@ -81,6 +81,7 @@ const Row = (props: { label: string; value: string; hint?: string }) =>
           <Row label="Trip patterns" :value="formatNumber(metrics.gtfs.tripPatterns)" />
           <Row label="Shapes" :value="formatNumber(metrics.gtfs.shapes)" />
           <Row label="Stop-area members" :value="formatNumber(metrics.transit.stopAreaMembers)" />
+          <Row label="Stop → OSM links" :value="formatNumber(metrics.transit.portolanStopLinks)" />
           <Row label="Last feed import" :value="metrics.gtfs.lastImport ? timeAgo(metrics.gtfs.lastImport) : '—'" />
         </CardContent>
       </Card>
