@@ -10,6 +10,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.2.17] - 2026-09-04
+
 ### Fixed
 
 * Lines named sideways now match: "M60" finds M60-SBS (a decorated short name),
