@@ -10,6 +10,25 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.2.17] - 2026-09-04
+
+### Fixed
+
+* Lines named sideways now match: "M60" finds M60-SBS (a decorated short name),
+  "harlem line" finds Metro-North's "Harlem", "east river ferry" the NYC Ferry
+  "East River", and "flixbus" a carrier whose route names are all destinations —
+  short names match up to a separator, the mode-word-stripped phrase is tried
+  against long names, and agencies join the haystack
+
+* A line's own track no longer buries it. Every mapped segment of a railway
+  carries the line's name ("Hempstead Branch" ×40), and at full rank they
+  crowded out the one result a rider wants; rail infrastructure is now demoted
+  like roads, and segments or relations named after a returned line are
+  dropped as duplicates. Stations keep full rank
+
+* The same line filed in several feeds appears once — the MTA carries all 307
+  bus routes in each borough's feed, so "M60" answered twice
+
 ## [0.2.16] - 2026-09-04
 
 ### Fixed

@@ -85,11 +85,22 @@ function modeGroup(mode: string): string {
   return mode
 }
 
-/** Whether a geo_places row is an OSM transit route relation, and its mode. */
+/** railway= values that mark a way as track of a given mode. */
+const OSM_RAIL_INFRASTRUCTURE: Record<string, string> = {
+  rail: 'rail', subway: 'subway', tram: 'tram', light_rail: 'tram',
+  monorail: 'monorail', narrow_gauge: 'rail', funicular: 'funicular',
+}
+
+/**
+ * Whether a geo_places row *is* a transit line in OSM's eyes — a route
+ * relation, or a track segment named after its line (every mapped segment of
+ * the Hempstead Branch carries the name "Hempstead Branch") — and its mode.
+ */
 export function osmTransitRouteMode(row: any): string | null {
   const tags = row?.tags
-  if (!tags || tags.type !== 'route') return null
-  return OSM_TRANSIT_ROUTE_VALUES[tags.route] ?? null
+  if (!tags) return null
+  if (tags.type === 'route') return OSM_TRANSIT_ROUTE_VALUES[tags.route] ?? null
+  return OSM_RAIL_INFRASTRUCTURE[tags.railway] ?? null
 }
 
 /** Category prefixes that mark a geo_places row as a transit stop/station. */
@@ -138,38 +149,65 @@ const STOP_DEDUPE_DISTANCE_M = 250
  *    stops in SQL; this catches stops portolan hasn't indexed.
  *  - A GTFS stop duplicated by another GTFS stop (two feeds serving one
  *    station) — first one wins.
+ *  - A GTFS line duplicated by another GTFS line (the MTA files all 307 bus
+ *    routes in each of five borough feeds) — first one wins.
  */
 export function reconcileTransitHits(results: any[]): any[] {
   const routeHits = results.filter((r) => r.kind === 'transit_route')
   const osmStops = results.filter((r) => !r.kind && isOsmTransitStop(r))
 
   const seenStops: any[] = []
+  const seenRoutes: any[] = []
   return results.filter((row) => {
-    if (!row.kind) {
-      const mode = osmTransitRouteMode(row)
-      if (!mode) return true
-      const group = modeGroup(mode)
-      const refFold = foldRouteName(row.tags?.ref)
-      const nameFold = foldRouteName(row.name)
-      return !routeHits.some((hit) => {
-        if (modeGroup(hit.transit.mode) !== group) return false
-        const folds = [foldRouteName(hit.transit.shortName), foldRouteName(hit.transit.longName)]
-          .filter(Boolean)
-        if (!folds.some((f) => f === refFold || f === nameFold)) return false
-        const d = pointDistanceM(row.geometry, hit.geometry)
-        return d == null || d <= ROUTE_DEDUPE_DISTANCE_M
-      })
+    if (row.kind === 'transit_route') {
+      const duplicates = (other: any) =>
+        modeGroup(other.transit.mode) === modeGroup(row.transit.mode) &&
+        foldRouteName(other.transit.shortName) === foldRouteName(row.transit.shortName) &&
+        foldRouteName(other.transit.longName) === foldRouteName(row.transit.longName) &&
+        (pointDistanceM(row.geometry, other.geometry) ?? 0) <= ROUTE_DEDUPE_DISTANCE_M
+      if (seenRoutes.some(duplicates)) return false
+      seenRoutes.push(row)
+      return true
     }
-
-    if (row.kind !== 'transit_stop') return true
-
-    const duplicates = (other: any) => {
-      if (!sameStationName(row.name, other.name)) return false
-      const d = pointDistanceM(row.geometry, other.geometry)
-      return d != null && d <= STOP_DEDUPE_DISTANCE_M
-    }
-    if (osmStops.some(duplicates) || seenStops.some(duplicates)) return false
-    seenStops.push(row)
-    return true
+    return keepAgainstTransit(row, routeHits, osmStops, seenStops)
   })
+}
+
+/** Whether a non-transit row survives beside the transit hits — see
+ *  reconcileTransitHits, which owns the loop. */
+function keepAgainstTransit(row: any, routeHits: any[], osmStops: any[], seenStops: any[]): boolean {
+  if (!row.kind) {
+    const mode = osmTransitRouteMode(row)
+    if (!mode) return true
+    const group = modeGroup(mode)
+    const refFold = foldRouteName(row.tags?.ref)
+    const nameFold = foldRouteName(row.name)
+    // Equal folds are the same line; an OSM name may also merely CONTAIN
+    // the GTFS name ("NJ Transit Raritan Valley Line: Newark <=> High
+    // Bridge" ⊇ "Raritan Valley Line") — one direction only, and only for
+    // names long enough that containment can't be a coincidence.
+    const matches = (osmFold: string, gtfsFold: string) =>
+      !!osmFold && !!gtfsFold &&
+      (osmFold === gtfsFold ||
+        (gtfsFold.length >= 8 && osmFold.includes(gtfsFold)))
+    return !routeHits.some((hit) => {
+      if (modeGroup(hit.transit.mode) !== group) return false
+      const folds = [foldRouteName(hit.transit.shortName), foldRouteName(hit.transit.longName)]
+        .filter(Boolean)
+      if (!folds.some((f) => matches(refFold, f) || matches(nameFold, f))) return false
+      const d = pointDistanceM(row.geometry, hit.geometry)
+      return d == null || d <= ROUTE_DEDUPE_DISTANCE_M
+    })
+  }
+
+  if (row.kind !== 'transit_stop') return true
+
+  const duplicates = (other: any) => {
+    if (!sameStationName(row.name, other.name)) return false
+    const d = pointDistanceM(row.geometry, other.geometry)
+    return d != null && d <= STOP_DEDUPE_DISTANCE_M
+  }
+  if (osmStops.some(duplicates) || seenStops.some(duplicates)) return false
+  seenStops.push(row)
+  return true
 }
