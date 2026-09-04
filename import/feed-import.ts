@@ -27,6 +27,7 @@ import {
   importStops,
   importRoutes,
   importStopRoutes,
+  updateRouteCentroids,
   importShapes,
   updateRouteShapes,
   updateBikesAllowed,
@@ -85,6 +86,9 @@ export async function importFeedFile(filepath: string, feedInfo: GtfsFeedInfo) {
       const associations = deriveStopRoutes(tripRecords, stopTimeRecords, feedInfo.feedId)
       stopRoutesImported = await importStopRoutes(associations)
       console.log(`  ✓ Imported ${stopRoutesImported} stop-route associations`)
+
+      // Each route's representative point, for search proximity ranking.
+      await updateRouteCentroids(feedInfo.feedId)
 
       // Trip patterns — the ordered station sequence each route runs, powering
       // "every line that serves this board→alight directly" alternate lookups.

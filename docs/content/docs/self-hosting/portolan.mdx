@@ -71,8 +71,15 @@ Static files behind the same metered key auth as the [Martin tile proxy](/self-h
 ```
 GET /tiles/portolan/index.json                 # every feed with a pyramid: {feed, name, bounds, maxzoom}
 GET /tiles/portolan/<feed>/tiles.json          # TileJSON, tile URLs rewritten to this API
+GET /tiles/portolan/<feed>/routes.json         # route ids → resolved bullet styles (label, colour, shape)
+GET /tiles/portolan/<feed>/stops.json          # GTFS stop ids → the OSM object each one is
 GET /tiles/portolan/<feed>/<z>/<x>/<y>         # raw MVT (".mvt" suffix accepted)
 ```
+
+The stop index is also loaded into the `portolan_stop_links` table — at API
+startup and again after every sync — which is how `/search` knows a GTFS stop
+is already covered by an OSM place and returns the richer OSM result instead
+of a duplicate.
 
 The TileJSON's `tiles` template comes back as `/tiles/portolan/<feed>/{z}/{x}/{y}.mvt`, carrying your `?api_key=…` through if you fetched `tiles.json` with one — so a map library can consume the TileJSON URL directly. A `204 No Content` inside a pyramid is a valid empty tile (portolan only writes tiles a feature touches); tiles cache for an hour, the JSON documents for a minute.
 
