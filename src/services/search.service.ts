@@ -245,9 +245,17 @@ export async function searchPlaces(
   // Demotes low-interest categories (roads, surveillance cameras, etc.) so
   // they only surface when the name is a strong match or very nearby.
   // Applied as a multiplier on text_rank inside each search layer.
+  // Rail infrastructure is track, not a destination: a line's every mapped
+  // segment carries the line's name ("Hempstead Branch" ×40), and at full
+  // weight they bury the one result a rider wants — the GTFS line itself.
+  // Stations, halts and entrances are NOT in this list and keep full rank.
   const categoryDemotion = sql`CASE
     WHEN categories[1] = 'highway/intersection' THEN 0.7
     WHEN categories[1] LIKE 'highway/%' THEN 0.3
+    WHEN categories[1] IN ('railway/rail', 'railway/subway', 'railway/tram',
+      'railway/light_rail', 'railway/monorail', 'railway/narrow_gauge',
+      'railway/funicular', 'railway/disused', 'railway/abandoned',
+      'railway/construction') THEN 0.3
     WHEN categories[1] LIKE 'man_made/surveillance%' THEN 0.2
     ELSE 1.0
   END`

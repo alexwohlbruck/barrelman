@@ -77,12 +77,29 @@ export async function searchTransitRoutes(
 ): Promise<any[]> {
   const core = transitCoreQuery(query)
   const lower = query.toLowerCase()
-  const shortNameMatch = core
-    ? sql`LOWER(r.route_short_name) IN (${lower}, ${core})`
-    : sql`LOWER(r.route_short_name) = ${lower}`
+  // Exact, or the query followed by a separator — agencies decorate short
+  // names ("M60" is filed as "M60-SBS", "Q44" as "Q44-SBS"), and the
+  // boundary keeps "7" from claiming route 70. The core is alphanumeric+
+  // spaces by construction, so it is regex-safe as-is.
+  const boundary = (q: string) => `^${q}([^a-z0-9]|$)`
+  const shortNameMatch = core && core !== lower
+    ? sql`(LOWER(r.route_short_name) IN (${lower}, ${core})
+        OR LOWER(r.route_short_name) ~ ${boundary(core)}
+        OR LOWER(r.route_short_name) ~ ${boundary(lower)})`
+    : sql`(LOWER(r.route_short_name) = ${lower}
+        OR LOWER(r.route_short_name) ~ ${boundary(lower)})`
+  // The mode-word-stripped phrase reaches names the raw query overshoots:
+  // "harlem line" finds Metro-North's "Harlem", "east river ferry" the NYC
+  // Ferry "East River" — and the agency haystack finds carriers whose long
+  // names are all destinations ("flixbus", "amtrak").
+  const corePhrase = core && core !== lower ? core : null
   const rankExpr = sql`LEAST(1.0, GREATEST(
     CASE WHEN ${shortNameMatch} THEN 0.95 ELSE 0 END,
     similarity(COALESCE(r.route_long_name, ''), ${query}) * 1.1,
+    ${corePhrase
+      ? sql`CASE WHEN r.route_long_name ILIKE '%' || ${corePhrase} || '%' THEN 0.8 ELSE 0 END,`
+      : sql``}
+    CASE WHEN r.agency_name ILIKE '%' || ${lower} || '%' THEN 0.6 ELSE 0 END,
     similarity(COALESCE(r.route_short_name, '') || ' ' || COALESCE(r.route_long_name, ''), ${query})
   ))`
 
@@ -110,6 +127,12 @@ export async function searchTransitRoutes(
     JOIN gtfs_feeds f ON f.feed_id = r.feed_id
     WHERE ${shortNameMatch}
        ${exactOnly ? sql`` : sql`OR r.route_long_name ILIKE '%' || ${query} || '%'`}
+       ${!exactOnly && corePhrase
+         ? sql`OR r.route_long_name ILIKE '%' || ${corePhrase} || '%'`
+         : sql``}
+       ${exactOnly || query.length < 4
+         ? sql``
+         : sql`OR r.agency_name ILIKE '%' || ${query} || '%'`}
        ${autocomplete || exactOnly
          ? sql``
          : sql`OR (COALESCE(r.route_short_name, '') || ' ' || COALESCE(r.route_long_name, '')) % ${query}`}

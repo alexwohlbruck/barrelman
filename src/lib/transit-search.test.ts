@@ -108,6 +108,70 @@ describe('reconcileTransitHits — routes', () => {
     const cafe = { id: 'node/1', name: 'A Cafe', tags: { amenity: 'cafe' }, categories: ['amenity/cafe'] }
     expect(reconcileTransitHits([gtfsRoute(), cafe])).toHaveLength(2)
   })
+
+  test('drops track segments named after a returned line', () => {
+    const line = gtfsRoute({
+      transit: { ...gtfsRoute().transit, mode: 'rail', shortName: null, longName: 'Hempstead Branch' },
+      name: 'Hempstead Branch',
+    })
+    const segments = [1, 2, 3].map((i) => ({
+      id: `way/${i}`, osm_type: 'W', name: 'Hempstead Branch',
+      tags: { railway: 'rail' }, categories: ['railway/rail'],
+      geometry: { type: 'Point', coordinates: [-73.97, 40.74] },
+    }))
+    const out = reconcileTransitHits([line, ...segments])
+    expect(out.map((r) => r.id)).toEqual(['transit-route/mta:A'])
+  })
+
+  test('an OSM relation whose name contains the GTFS name is the same line', () => {
+    const line = gtfsRoute({
+      transit: { ...gtfsRoute().transit, mode: 'rail', longName: 'Raritan Valley Line' },
+    })
+    const relation = osmRouteRelation({
+      name: 'NJ Transit Raritan Valley Line: Newark <=> High Bridge',
+      tags: { type: 'route', route: 'train' },
+    })
+    expect(reconcileTransitHits([line, relation])).toHaveLength(1)
+  })
+
+  test('containment never applies to short names — bus 7 keeps its road', () => {
+    const hit = gtfsRoute({ transit: { ...gtfsRoute().transit, mode: 'rail', shortName: '7', longName: null } })
+    const track = {
+      id: 'way/9', name: 'Line 7 Industrial Railway Spur',
+      tags: { railway: 'rail' }, categories: ['railway/rail'],
+      geometry: { type: 'Point', coordinates: [-73.97, 40.74] },
+    }
+    expect(reconcileTransitHits([hit, track])).toHaveLength(2)
+  })
+
+  test('the same line filed in several feeds appears once', () => {
+    // The MTA carries all 307 bus routes in each borough's feed.
+    const a = gtfsRoute({
+      id: 'transit-route/6:M60', transit: { ...gtfsRoute().transit, mode: 'bus', shortName: 'M60-SBS', longName: 'West Side - LaGuardia Airport' },
+    })
+    const b = gtfsRoute({
+      id: 'transit-route/7:M60', transit: { ...gtfsRoute().transit, mode: 'bus', shortName: 'M60-SBS', longName: 'West Side - LaGuardia Airport' },
+    })
+    expect(reconcileTransitHits([a, b]).map((r) => r.id)).toEqual(['transit-route/6:M60'])
+  })
+
+  test('same short name with different long names is two lines', () => {
+    const nyc = gtfsRoute()
+    const vt = gtfsRoute({
+      id: 'transit-route/vt:7',
+      transit: { ...gtfsRoute().transit, longName: 'North-South Vermont Bus Route' },
+    })
+    expect(reconcileTransitHits([nyc, vt])).toHaveLength(2)
+  })
+
+  test('a station is never mistaken for track', () => {
+    const station = { id: 'node/2', name: 'Hempstead', tags: { railway: 'station' }, categories: ['railway/station'] }
+    const line = gtfsRoute({
+      transit: { ...gtfsRoute().transit, mode: 'rail', longName: 'Hempstead Branch' },
+      name: 'Hempstead Branch',
+    })
+    expect(reconcileTransitHits([line, station])).toHaveLength(2)
+  })
 })
 
 const gtfsStop = (overrides: any = {}) => ({
