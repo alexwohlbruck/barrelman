@@ -24,7 +24,7 @@
  * cannot hide one. That symmetry is why coarse folds like `park` → `pk` are
  * safe here and would not be in a search index.
  */
-const SYNONYMS: Record<string, string> = {
+export const SYNONYMS: Record<string, string> = {
   street: 'st',
   saint: 'st',
   avenue: 'av',

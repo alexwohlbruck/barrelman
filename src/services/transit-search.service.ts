@@ -27,6 +27,10 @@ export interface TransitLayerParams {
    *  for indexed prefix/substring matches (4-6ms). Typo tolerance returns on
    *  submit, exactly like the geo_places trigram layer. */
   autocomplete?: boolean
+  /** Routes only: match nothing but an exact short name. This is the
+   *  micro-query mode — a 1-character "7" or "q" names a line precisely but
+   *  would match half the long names as a substring. */
+  exactOnly?: boolean
   /** Autocomplete with a viewport: bound the stop scan to a box, like the
    *  FTS fast path. Routes are never bounded — the table is small and a
    *  line's centroid can sit far from the rider searching for it. */
@@ -69,7 +73,7 @@ function baseHit(row: any) {
  * local 40, not every 40 on the planet.
  */
 export async function searchTransitRoutes(
-  { query, lat, lng, autocomplete, limit }: TransitLayerParams,
+  { query, lat, lng, autocomplete, exactOnly, limit }: TransitLayerParams,
 ): Promise<any[]> {
   const core = transitCoreQuery(query)
   const lower = query.toLowerCase()
@@ -105,8 +109,8 @@ export async function searchTransitRoutes(
     FROM gtfs_routes r
     JOIN gtfs_feeds f ON f.feed_id = r.feed_id
     WHERE ${shortNameMatch}
-       OR r.route_long_name ILIKE '%' || ${query} || '%'
-       ${autocomplete
+       ${exactOnly ? sql`` : sql`OR r.route_long_name ILIKE '%' || ${query} || '%'`}
+       ${autocomplete || exactOnly
          ? sql``
          : sql`OR (COALESCE(r.route_short_name, '') || ' ' || COALESCE(r.route_long_name, '')) % ${query}`}
     ${order}
