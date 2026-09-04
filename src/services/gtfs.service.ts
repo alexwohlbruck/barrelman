@@ -1097,6 +1097,28 @@ export async function importStopRoutes(
 }
 
 /**
+ * Set each route's representative point — the centroid of the stops it
+ * serves — used by the transit search layer for proximity ranking. With a
+ * feedId, recomputes that feed's routes (after an import); without one,
+ * backfills only routes that have no centroid yet, so the startup call is
+ * a no-op once populated.
+ */
+export async function updateRouteCentroids(feedId?: string): Promise<void> {
+  await db.execute(sql`
+    UPDATE gtfs_routes r SET centroid = sub.c
+    FROM (
+      SELECT sr.feed_id, sr.route_id, ST_Centroid(ST_Collect(s.geom)) AS c
+      FROM gtfs_stop_routes sr
+      JOIN gtfs_stops s ON s.feed_id = sr.feed_id AND s.stop_id = sr.stop_id
+      ${feedId ? sql`WHERE sr.feed_id = ${feedId}` : sql``}
+      GROUP BY sr.feed_id, sr.route_id
+    ) sub
+    WHERE r.feed_id = sub.feed_id AND r.route_id = sub.route_id
+    ${feedId ? sql`` : sql`AND r.centroid IS NULL`}
+  `)
+}
+
+/**
  * Import trip patterns for a feed, replacing its existing rows. The feed is
  * cleared FIRST and unconditionally — so re-deriving to zero patterns (corrupt
  * or degenerate feed) leaves no stale rows behind, making the backfill (which,

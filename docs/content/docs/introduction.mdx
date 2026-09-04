@@ -9,7 +9,7 @@ Barrelman is the engine that powers [Parchment](https://github.com/alexwohlbruck
 
 ## Capabilities
 
-- **Search** — Fuzzy place search over an OSM extract using a hybrid pipeline (full-text, trigram, abbreviation, and optional semantic vector matching), with point-radius and route-corridor spatial modes.
+- **Search** — Fuzzy place search over an OSM extract using a hybrid pipeline (full-text, trigram, abbreviation, and optional semantic vector matching), with point-radius and route-corridor spatial modes. Transit lines and stops from imported GTFS feeds are matched too, deduplicated against their OSM counterparts.
 - **Geocoding** — Forward geocoding (address → coordinates) and reverse geocoding (coordinates → address).
 - **Brand search** — Autocomplete over a brand catalog to resolve chains and franchises (e.g. "Starbucks").
 - **Places** — Place details by OSM ID, plus spatial relationship queries: which areas *contain* a point, and the *children* of an area.

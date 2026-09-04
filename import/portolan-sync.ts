@@ -440,6 +440,17 @@ if (import.meta.main) {
       console.log('\nNothing exported — no zips to import.')
     }
 
+    // Portolan rewrote the per-feed stops.json indexes alongside the tiles;
+    // reload them into portolan_stop_links so search keeps skipping GTFS
+    // stops that OSM covers. Runs even when no zip changed — a portolan
+    // upgrade can improve matches without touching the schedules.
+    try {
+      const { syncPortolanStopLinks } = await import('../src/services/portolan-links.service')
+      await syncPortolanStopLinks(join(workspace, 'build/tiles'))
+    } catch (err) {
+      console.error(`✗ stop-link reload failed: ${err instanceof Error ? err.message : err}`)
+    }
+
     // ── 3. MOTIS ────────────────────────────────────────────────────
     let motisFailed = false
     if (imported > 0) {

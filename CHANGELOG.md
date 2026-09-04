@@ -10,6 +10,22 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.2.15] - 2026-09-04
+
+### Added
+
+* Search now returns transit lines and stops. A text query matches GTFS routes
+  by short name ("7 train", "route 40") and long name ("Flushing Local");
+  the hits carry `kind: 'transit_route'` and a `transit` object with the
+  `feedId`/`routeId` pair every `/transit` endpoint is keyed by, plus mode,
+  colours and agency. GTFS stops surface only where OSM doesn't already cover
+  them: portolan's stop→OSM index (`stops.json`) is loaded into the new
+  `portolan_stop_links` table at startup and after every portolan sync, linked
+  stops defer to their OSM place, and a same-name stop within 250 m of an OSM
+  station in the same results is dropped too. OSM `type=route` relations that
+  duplicate a returned GTFS line are removed the same way. No setup: the
+  schema, indexes and route centroids build themselves at startup
+
 ## [0.2.14] - 2026-09-03
 
 ### Added

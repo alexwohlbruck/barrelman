@@ -3,6 +3,8 @@ import { sql } from 'drizzle-orm'
 import { searchCache, embeddingCache } from '../lib/cache'
 import { generateQueryEmbedding } from '../lib/embeddings'
 import { forwardGeocode } from './geocode.service'
+import { searchTransitRoutes, searchTransitStops } from './transit-search.service'
+import { reconcileTransitHits } from '../lib/transit-search'
 
 // ── Autocomplete fast path ──────────────────────────────────────────────────
 // Typeahead fires one request per keystroke, so its budget is ~50ms — an order
@@ -407,7 +409,27 @@ export async function searchPlaces(
         `).catch(() => [] as any[])
       : Promise.resolve([] as any[])
 
-    let [ftsRows, trigramRows, codesRows, nameAbbrevRows] = await Promise.all([ftsPromise, trigramPromise, codesPromise, nameAbbrevPromise])
+    // Transit layers: GTFS routes (lines) and GTFS stops OSM doesn't cover.
+    // Category/tag filters are geo_places vocabulary and can't be applied to
+    // the GTFS tables, so a filtered search stays places-only; a route
+    // corridor search is about what's *along* the way, not lines themselves.
+    const TRANSIT_LIMIT = Math.min(5, limit)
+    const wantTransit = !hasCategory && !tagsFilterJson && !hasRoute
+    const transitParams = { query: sanitizedQuery, lat, lng, autocomplete, limit: TRANSIT_LIMIT }
+    const transitRoutesPromise = wantTransit
+      ? searchTransitRoutes(transitParams)
+      : Promise.resolve([] as any[])
+    const transitStopsPromise = wantTransit
+      ? searchTransitStops({
+          ...transitParams,
+          localBoxRadiusM: localAutocomplete
+            ? Math.max(radius ?? 0, AUTOCOMPLETE_RADIUS_M)
+            : undefined,
+        })
+      : Promise.resolve([] as any[])
+
+    let [ftsRows, trigramRows, codesRows, nameAbbrevRows, transitRouteRows, transitStopRows] =
+      await Promise.all([ftsPromise, trigramPromise, codesPromise, nameAbbrevPromise, transitRoutesPromise, transitStopsPromise])
 
     // Autocomplete retry: the local pass only sees the viewport, so a place the
     // user is deliberately reaching for in another city would come back empty.
@@ -432,19 +454,27 @@ export async function searchPlaces(
       trigramRows = globalTrigram
     }
 
-    // Merge, deduplicating in priority order: codes > abbreviation > FTS > trigram
+    // Merge, deduplicating in priority order: codes > transit routes >
+    // abbreviation > FTS > trigram > transit stops. Transit ids can't collide
+    // with OSM ids, so their position only decides who survives the cap.
     // Tag codes results so they're exempt from proximity re-ranking — an exact
     // IATA/ICAO code match is definitive regardless of distance.
     const codesIds = new Set((codesRows as any[]).map((r: any) => r.id))
     const seen = new Set<string>()
     results = []
-    for (const row of [...(codesRows as any[]), ...(nameAbbrevRows as any[]), ...(ftsRows as any[]), ...(trigramRows as any[])]) {
+    for (const row of [...(codesRows as any[]), ...(transitRouteRows as any[]), ...(nameAbbrevRows as any[]), ...(ftsRows as any[]), ...(trigramRows as any[]), ...(transitStopRows as any[])]) {
       const r = row as any
       if (!seen.has(r.id)) {
         seen.add(r.id)
         if (codesIds.has(r.id)) r._codesMatch = true
         results.push(r)
       }
+    }
+    // Cross-source dedupe: an OSM route relation duplicated by a GTFS line
+    // hit, or a GTFS stop duplicated by an OSM stop, is dropped here — before
+    // the cap, so a duplicate never costs a slot.
+    if ((transitRouteRows as any[]).length || (transitStopRows as any[]).length) {
+      results = reconcileTransitHits(results)
     }
     // The autocomplete pool is deliberately wider than `limit` — it is trimmed
     // after the proximity re-rank below, not before, so the re-rank gets to see

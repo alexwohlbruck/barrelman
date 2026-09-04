@@ -458,6 +458,33 @@ export async function ensureGtfsSchema() {
     -- bikes_allowed: 0=unknown, 1=at least one bike-allowed trip,
     -- 2=all trips allow bikes. Derived from trips.txt bikes_allowed field.
     ALTER TABLE gtfs_routes ADD COLUMN IF NOT EXISTS bikes_allowed INTEGER DEFAULT 0;
+
+    -- Representative point per route (the centroid of its stops), for
+    -- proximity ranking in the transit search layer. Written by
+    -- updateRouteCentroids() after each feed import; backfilled at startup.
+    ALTER TABLE gtfs_routes ADD COLUMN IF NOT EXISTS centroid GEOMETRY(Point, 4326);
+
+    -- The transit search layer filters stops with pg_trgm's % operator; the
+    -- geo_places layers already rely on the extension, but a fresh database
+    -- reaches this DDL first.
+    CREATE EXTENSION IF NOT EXISTS pg_trgm;
+    CREATE INDEX IF NOT EXISTS gtfs_stops_name_trgm_idx
+      ON gtfs_stops USING GIN (stop_name gin_trgm_ops);
+    -- Prefix matches for the autocomplete variant of the stop layer — the
+    -- trigram scan above costs ~90ms on common tokens, an order of magnitude
+    -- over typeahead's budget; this serves LIKE 'q%' in ~4ms.
+    CREATE INDEX IF NOT EXISTS gtfs_stops_name_lower_idx
+      ON gtfs_stops (LOWER(stop_name) text_pattern_ops);
+
+    -- GTFS stop → OSM object links, loaded from the stops.json portolan
+    -- writes next to each tile pyramid (portolan-links.service.ts). A row
+    -- means "this stop IS that OSM place", so search skips the GTFS copy.
+    CREATE TABLE IF NOT EXISTS portolan_stop_links (
+      feed_onestop_id TEXT NOT NULL,
+      stop_id TEXT NOT NULL,
+      osm_ref TEXT NOT NULL,
+      PRIMARY KEY (feed_onestop_id, stop_id)
+    );
   `)
 }
 

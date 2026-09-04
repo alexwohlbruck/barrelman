@@ -530,6 +530,12 @@ Hybrid four-layer search: full-text → abbreviation → trigram fuzzy → seman
 
 Set `autocomplete: true` for typeahead (skips the slow semantic layer). Set `semantic: true` to force vector search for concept queries like _"somewhere quiet to study"_.
 
+Text search also matches GTFS transit lines ("7 train", "Flushing Local") and
+stops OSM doesn't cover. Those hits carry `kind: 'transit_route' |
+'transit_stop'` and a `transit` object with the `feedId`/`routeId`/`stopId`
+the `/transit` endpoints are keyed by; stops that portolan has matched to an
+OSM object are returned as their OSM place instead, never twice.
+
 One endpoint, three modes:
 
 - **Text search** — pass `query`. The four-layer pipeline above.

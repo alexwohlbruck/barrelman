@@ -1,6 +1,7 @@
 import Elysia, { t } from 'elysia'
-import { join, resolve } from 'path'
+import { join } from 'path'
 import { apiAuth, apiAuthAfter } from '../middleware/api-auth'
+import { resolvePortolanTilesDir } from '../config/portolan'
 
 function getMartinUrl() {
   return process.env.MARTIN_URL || 'http://barrelman-martin:3000'
@@ -72,9 +73,7 @@ export function createTileRoutes(
    * does not exist (portolan not set up) every route answers 404 — missing
    * data is not a crash.
    */
-  const portolanDir = resolve(
-    deps.portolanTilesDir || process.env.PORTOLAN_TILES_DIR || './data/portolan/build/tiles',
-  )
+  const portolanDir = resolvePortolanTilesDir(deps.portolanTilesDir)
 
   return new Elysia({ prefix: '/tiles' })
     .onBeforeHandle(tileAuthHandler)

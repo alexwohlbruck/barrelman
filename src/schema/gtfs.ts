@@ -26,6 +26,7 @@ import {
   timestamp,
   index,
   uniqueIndex,
+  primaryKey,
 } from 'drizzle-orm/pg-core'
 import { spatialColumn, spatialIndex } from './spatial-helpers'
 
@@ -120,6 +121,8 @@ export const gtfsRoutes = pgTable(
     shapeId: text('shape_id'),
     /** 0=unknown, 1=at least one bike-allowed trip, 2=all trips allow bikes. */
     bikesAllowed: integer('bikes_allowed').default(0),
+    /** Centroid of the route's stops — proximity ranking for transit search. */
+    centroid: spatialColumn('centroid', 'POINT'),
   },
   (table) => [
     uniqueIndex('gtfs_routes_feed_route_idx').on(table.feedId, table.routeId),
@@ -254,6 +257,27 @@ export const stationBuildings = pgTable(
   },
   (table) => [index('station_buildings_stop_idx').on(table.feedId, table.stopId)],
 )
+
+// ── Portolan stop → OSM links ───────────────────────────────────────
+// Loaded from the stops.json portolan writes next to each tile pyramid
+// (portolan-links.service.ts). A row means "this GTFS stop IS that OSM
+// object", so the transit search layer can skip stops OSM already covers.
+
+export const portolanStopLinks = pgTable(
+  'portolan_stop_links',
+  {
+    feedOnestopId: text('feed_onestop_id').notNull(),
+    stopId: text('stop_id').notNull(),
+    /** `node/123`, `way/456` or `relation/789`. */
+    osmRef: text('osm_ref').notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.feedOnestopId, table.stopId] }),
+  ],
+)
+
+export type PortolanStopLink = typeof portolanStopLinks.$inferSelect
+export type NewPortolanStopLink = typeof portolanStopLinks.$inferInsert
 
 // ── OSM stop_area relations ─────────────────────────────────────────
 // Loaded by scripts/import-stop-areas.sh; absent on instances that have not
