@@ -475,6 +475,10 @@ export async function ensureGtfsSchema() {
     -- over typeahead's budget; this serves LIKE 'q%' in ~4ms.
     CREATE INDEX IF NOT EXISTS gtfs_stops_name_lower_idx
       ON gtfs_stops (LOWER(stop_name) text_pattern_ops);
+    -- Exact short-name lookups ("7", "Q") run on every 1-character keystroke
+    -- (the micro-query path in search.service.ts); indexed they cost <1ms.
+    CREATE INDEX IF NOT EXISTS gtfs_routes_short_name_lower_idx
+      ON gtfs_routes (LOWER(route_short_name));
 
     -- GTFS stop → OSM object links, loaded from the stops.json portolan
     -- writes next to each tile pyramid (portolan-links.service.ts). A row

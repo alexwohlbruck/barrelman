@@ -118,9 +118,24 @@ export async function searchPlaces(
   const isWiden = hasPointLocation && !radius && hasCategory
   const WIDEN_BBOX_DEG = 1.35 // ~150 km — caps how far a dense category scans
 
-  // Single-character typeahead: bail before touching Postgres or Pelias.
+  // Single-character typeahead: the geo_places layers are off the table (a
+  // 1-char prefix matches ~357K rows; measured ~20s) and so is Pelias — but a
+  // single character is exactly how riders name a line ("7", "Q", "L"), and
+  // an exact short-name match on gtfs_routes costs single-digit milliseconds.
+  // Micro-queries return transit lines and nothing else.
   if (autocomplete && hasQuery && sanitizedQuery.length < AUTOCOMPLETE_MIN_QUERY) {
-    return []
+    const lines = !hasCategory && !(tags && Object.keys(tags).length > 0) && !hasRoute
+      ? await searchTransitRoutes({
+          query: sanitizedQuery,
+          lat,
+          lng,
+          autocomplete: true,
+          exactOnly: true,
+          limit: Math.min(5, limit),
+        })
+      : []
+    searchCache.set(cacheKey, lines)
+    return lines
   }
 
   // The autocomplete fast path needs a viewport to bound the scan; without
