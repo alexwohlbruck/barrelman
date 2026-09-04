@@ -10,6 +10,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.2.15] - 2026-09-04
+
 ### Added
 
 * Search now returns transit lines and stops. A text query matches GTFS routes
