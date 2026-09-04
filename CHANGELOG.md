@@ -24,6 +24,10 @@ does it — and the release pipeline turns it into the GitHub Release notes.
   duplicate a returned GTFS line are removed the same way. No setup: the
   schema, indexes and route centroids build themselves at startup
 
+## [0.2.14] - 2026-09-03
+
+### Added
+
 * `/tiles/portolan/{feed}/stops.json` — the join from a feed's GTFS stop ids to
   the OSM object each one actually is, keyed `<feed-onestop-id>:<stop_id>`.
   Portolan has written this file next to every pyramid since 0.4.4, but nothing
