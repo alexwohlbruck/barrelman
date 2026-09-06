@@ -10,6 +10,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.2.18] - 2026-09-06
+
 ### Added
 
 * `GET /transit/resolve-route` turns a bare GTFS `route_id` plus a coordinate
