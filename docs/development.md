@@ -119,6 +119,39 @@ which is where this one came from:
 Both are why `Tag Release` has a manual trigger with a `force` input. Dispatch
 it to release a version whose tag already exists.
 
+## Reaching the server
+
+The release ends with a `deploy` job that pushes the new images at the host
+rather than waiting for it to notice them. It joins the tailnet as an ephemeral
+node, waits for the console's job queue to go idle, recreates `barrelman` and
+`barrelman-ops`, and fails if `/health` does not come back within five minutes.
+
+Three repository secrets turn it on. Without them the job logs a notice and does
+nothing, which is deliberate — an unconfigured deploy must not fail a release:
+
+| Secret | What it is |
+|---|---|
+| `TS_OAUTH_CLIENT_ID` | Tailscale OAuth client, `auth_keys` scope, `tag:ci` |
+| `TS_OAUTH_SECRET` | its secret |
+| `DEPLOY_SSH_KEY` | private half of a keypair in the host's `authorized_keys` |
+
+Enabling Tailscale SSH on the host (`tailscale set --ssh`, plus an ACL rule for
+`tag:ci`) removes the third: the tailnet authorises the connection and no key
+material lives in GitHub.
+
+**The queue is why this waits.** Console jobs — OSM updates, GTFS refreshes,
+MOTIS rebuilds, portolan syncs — run for minutes to hours and cannot be resumed;
+restarting a container mid-run abandons the work and usually leaves a dataset the
+next run has to repair. The deploy asks the same question the Watchtower
+pre-update hooks ask (`scripts/deploy-gate.ts` for the API, a `psql` count for
+the database and the worker), just from the other side of the connection. A run
+on 2026-08-24 died 2h19m in when an hourly poll landed mid-import; that is what
+the gates exist to prevent.
+
+Those hooks are **inert unless Watchtower runs with `--enable-lifecycle-hooks`**
+(`WATCHTOWER_LIFECYCLE_HOOKS=true`). A deployment carrying the labels but not the
+flag is unguarded and looks exactly like a guarded one.
+
 ## The marketing site
 
 It lives in its own repository, checked out alongside this one — the same layout
