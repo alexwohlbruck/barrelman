@@ -383,6 +383,11 @@ export async function ensureGtfsSchema() {
       ON gtfs_routes (feed_id, route_id);
     CREATE INDEX IF NOT EXISTS gtfs_routes_feed_id_idx
       ON gtfs_routes (feed_id);
+    -- A bare route_id, no feed: what /transit/resolve-route starts from
+    -- (a map tile knows the id and not the feed it belongs to), and the
+    -- cross-feed fallback in route detail.
+    CREATE INDEX IF NOT EXISTS gtfs_routes_route_id_idx
+      ON gtfs_routes (route_id);
 
     CREATE TABLE IF NOT EXISTS gtfs_stop_routes (
       id SERIAL PRIMARY KEY,

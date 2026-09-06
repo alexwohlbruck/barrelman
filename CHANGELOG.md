@@ -374,6 +374,14 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ### Added
 
+* `GET /transit/resolve-route` turns a bare GTFS `route_id` plus a coordinate
+  into the `(feedId, routeId)` pair every other transit endpoint is keyed by.
+  A route id is only unique within its feed — "2" is the New York subway's
+  Seventh Avenue express here and the Long Island Rail Road's Ronkonkoma
+  branch twenty miles east — so callers holding an id off a map tile pick the
+  feed whose stops lie nearest the point, with an optional mode class
+  (`metro`, `bus`, `ferry`, …) to break the remaining ties
+
 * The console sidebar shows the version of the instance it is talking to, below
   the sign-out button. `/admin/config` now reports the version from
   `package.json` — what the release pipeline tags from — rather than a hardcoded

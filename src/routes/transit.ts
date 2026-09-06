@@ -36,7 +36,9 @@ import {
 } from '../services/gtfs.service'
 import {
   getRouteDetail as _getRouteDetail,
+  resolveRoute as _resolveRoute,
 } from '../services/route-detail.service'
+import { isGtfsModeClass } from '../lib/gtfs-modes'
 import {
   getStationDetail as _getStationDetail,
   getNearestEntrance as _getNearestEntrance,
@@ -53,6 +55,7 @@ export function createTransitRoutes(deps: {
   getServiceAlerts?: typeof _getServiceAlerts
   discoverRtUrls?: typeof _discoverRtUrls
   getRouteDetail?: typeof _getRouteDetail
+  resolveRoute?: typeof _resolveRoute
   getVehiclesForRoute?: typeof _getVehiclesForRoute
   getTripStopTimes?: typeof _getTripStopTimes
   fetchFn?: FetchFn
@@ -69,6 +72,7 @@ export function createTransitRoutes(deps: {
   const getServiceAlerts = deps.getServiceAlerts || _getServiceAlerts
   const discoverRtUrls = deps.discoverRtUrls || _discoverRtUrls
   const getRouteDetail = deps.getRouteDetail || _getRouteDetail
+  const resolveRoute = deps.resolveRoute || _resolveRoute
   const getVehiclesForRoute = deps.getVehiclesForRoute || _getVehiclesForRoute
   const getTripStopTimes = deps.getTripStopTimes || _getTripStopTimes
   const fetchFn = deps.fetchFn || undefined
@@ -562,6 +566,62 @@ export function createTransitRoutes(deps: {
           'Returns route metadata, geographically ordered stops, shape ' +
           'geometry, and related route IDs (same trunk line) for rendering ' +
           'an isolated route detail view.',
+        tags: ['Transit'],
+      },
+    })
+
+    // ── GET /transit/resolve-route ────────────────────────────────────
+    .get('/resolve-route', async ({ query, set }) => {
+      try {
+        const lat = Number(query.lat)
+        const lng = Number(query.lng)
+        if (!query.routeId || isNaN(lat) || isNaN(lng)) {
+          set.status = 400
+          return { error: 'routeId, lat and lng are required' }
+        }
+        if (lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+          set.status = 400
+          return { error: 'lat must be [-90,90], lng must be [-180,180]' }
+        }
+        const mode = isGtfsModeClass(query.mode) ? query.mode : null
+
+        const result = await resolveRoute({
+          routeId: query.routeId,
+          lat,
+          lng,
+          mode,
+          radius: query.radius ? Number(query.radius) : undefined,
+        })
+        if (!result) {
+          set.status = 404
+          return { error: 'Route not found' }
+        }
+
+        set.headers['Cache-Control'] = 'public, max-age=3600'
+        return result
+      } catch (err) {
+        set.status = 500
+        return {
+          error: 'Failed to resolve route',
+          detail: err instanceof Error ? err.message : String(err),
+        }
+      }
+    }, {
+      query: t.Object({
+        routeId: t.String(),
+        lat: t.String(),
+        lng: t.String(),
+        mode: t.Optional(t.String()),
+        radius: t.Optional(t.String()),
+      }),
+      detail: {
+        summary: 'Resolve a bare GTFS route id to its feed at a location',
+        description:
+          'A GTFS route_id is only unique within its feed, so a consumer ' +
+          'holding one from a map tile cannot key route detail with it. ' +
+          'Returns the (feedId, routeId) pair whose stops lie nearest the ' +
+          'given point, preferring — but not requiring — a route of the ' +
+          'given mode class (metro, tram, regional, bus, ferry, …).',
         tags: ['Transit'],
       },
     })
