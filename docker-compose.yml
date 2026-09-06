@@ -354,6 +354,18 @@ services:
     depends_on:
       - barrelman-db
 
+    # The same gate as barrelman-db and barrelman-ops, and needed here for the
+    # same reason: `kind:'internal'` jobs run inside THIS process, and
+    # rebuild-motis.sh generates its config with `docker exec barrelman`
+    # mid-run. This image has no psql, so it asks the queue through the code
+    # that owns it. Exit 75 = skip and ask again next poll.
+    #
+    # Inert unless Watchtower itself runs with --enable-lifecycle-hooks.
+    labels:
+      com.centurylinklabs.watchtower.lifecycle.pre-update: "bun run scripts/deploy-gate.ts"
+      # Minutes, not seconds. 1 is the default and is ample for one COUNT.
+      com.centurylinklabs.watchtower.lifecycle.pre-update-timeout: "1"
+
   # Privileged operator worker: executes the console's `process` script-jobs
   # (OSM/GTFS/stop-areas/routing) which drive sibling containers. The lean
   # barrelman API only enqueues; this claims + runs them (single-flight, with

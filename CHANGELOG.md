@@ -10,6 +10,22 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Changed
+
+* A release now deploys itself. The pipeline's last job reaches the host over
+  the tailnet, waits for the console's job queue to go idle, recreates
+  `barrelman` and `barrelman-ops`, and fails if the health check does not come
+  back — so a release lands in minutes instead of whenever the hourly poll
+  happens to notice, and never in the middle of an import. It only recreates the
+  services it names, so a deploy can no longer bounce the database as a
+  dependency. Unconfigured (no deploy secrets) it does nothing and Watchtower
+  goes on doing what it did; see `docs/development.md`
+
+* The `barrelman` API carries the same Watchtower pre-update gate the database
+  and the worker already had. It was the one container an update could restart
+  mid-import: `kind:'internal'` jobs run inside it, and the MOTIS rebuild
+  generates its config with `docker exec barrelman` while the job is running
+
 ## [0.2.18] - 2026-09-06
 
 ### Added
