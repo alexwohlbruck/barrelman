@@ -12,6 +12,7 @@
 import { db } from '../db'
 import { sql } from 'drizzle-orm'
 import { getRouteShape } from './shapes.service'
+import { gtfsModeClass, type GtfsModeClass } from '../lib/gtfs-modes'
 
 /** One other line a rider can reach at a stop on this route. */
 export interface StopTransferRoute {
@@ -56,6 +57,121 @@ export interface RouteDetailResponse {
   coordinates: [number, number][] | null
   /** Related route IDs that share the same color/trunk (e.g., 1/2/3 on the red line). */
   relatedRouteIds: string[]
+}
+
+export interface RouteResolveRequest {
+  /** A feed's own GTFS `route_id`, with no feed qualifier on it. */
+  routeId: string
+  lat: number
+  lng: number
+  /** Mode class to prefer when several feeds use this route id. */
+  mode?: GtfsModeClass | null
+  /** How far from the point a stop of the route may be, in meters. */
+  radius?: number
+}
+
+export interface ResolvedRoute {
+  feedId: string
+  routeId: string
+  routeShortName: string | null
+  routeLongName: string | null
+  routeType: number | null
+  /** Meters from the point to this route's nearest stop; null when the
+   *  answer came from the id being unique rather than from proximity. */
+  distance: number | null
+}
+
+/** A stop this far from the point still counts as "this route runs here" —
+ *  wide enough for a rural rail segment between two distant stations. */
+const RESOLVE_RADIUS_M = 5_000
+
+/**
+ * Which feed's route a bare `route_id` means AT A PLACE.
+ *
+ * A GTFS route id is only unique within its feed, and the map has nothing
+ * else to offer: a rider tapping the 2 on the transit layer hands us "2",
+ * which is the IRT Seventh Avenue line here and the Long Island Rail
+ * Road's Ronkonkoma branch twenty miles east. Everything downstream —
+ * route detail, its stops, its vehicles — is keyed by (feedId, routeId),
+ * so the pair has to be resolved before any of it can be asked for.
+ *
+ * Proximity decides, because the id came from a point on the map: of the
+ * feeds using this id, the one whose stops are nearest the point is the
+ * one being pointed at. `mode` breaks the remaining ties — but as a
+ * PREFERENCE, not a filter, the same way the departure board treats it:
+ * feeds mistype their routes often enough (the Roosevelt Island tram is
+ * published as a bus) that a mode filter would return nothing where a
+ * nearest-stop answer is plainly right.
+ */
+export async function resolveRoute(
+  req: RouteResolveRequest,
+): Promise<ResolvedRoute | null> {
+  const { routeId, lat, lng, mode = null, radius = RESOLVE_RADIUS_M } = req
+  if (!routeId) return null
+
+  // One query: candidate routes carrying this id, each with the distance
+  // from the point to its nearest stop. The lateral runs per candidate,
+  // and route_id equality keeps that to a handful of rows.
+  const result = await db.execute(sql`
+    WITH pt AS (
+      SELECT ST_SetSRID(ST_MakePoint(${lng}, ${lat}), 4326)::geography AS g
+    )
+    SELECT r.feed_id, r.route_id, r.route_short_name, r.route_long_name,
+           r.route_type, d.distance
+    FROM gtfs_routes r
+    CROSS JOIN pt
+    JOIN LATERAL (
+      SELECT MIN(ST_Distance(s.geom::geography, pt.g)) AS distance
+      FROM gtfs_stop_routes sr
+      JOIN gtfs_stops s ON s.feed_id = sr.feed_id AND s.stop_id = sr.stop_id
+      WHERE sr.feed_id = r.feed_id AND sr.route_id = r.route_id
+        AND ST_DWithin(s.geom::geography, pt.g, ${radius})
+    ) d ON d.distance IS NOT NULL
+    WHERE r.route_id = ${routeId}
+    ORDER BY d.distance
+    LIMIT 25
+  `)
+
+  const nearby = (result as any[]).map(toCandidate)
+  const picked = pickRoute(nearby, mode)
+  if (picked) return picked
+
+  // Nothing within the radius. The id can still be unambiguous — a route
+  // whose stops the map draws far from any of them, or a feed imported
+  // without stop_routes rows — but only when exactly one feed claims it.
+  const fallback = await db.execute(sql`
+    SELECT feed_id, route_id, route_short_name, route_long_name, route_type
+    FROM gtfs_routes
+    WHERE route_id = ${routeId}
+    LIMIT 2
+  `)
+  const rows = (fallback as any[]).map(toCandidate)
+  return rows.length === 1 ? rows[0] : null
+}
+
+function toCandidate(row: any): ResolvedRoute {
+  return {
+    feedId: row.feed_id,
+    routeId: row.route_id,
+    routeShortName: row.route_short_name || null,
+    routeLongName: row.route_long_name || null,
+    routeType: row.route_type != null ? parseInt(String(row.route_type), 10) : null,
+    distance: row.distance != null ? Math.round(Number(row.distance) * 10) / 10 : null,
+  }
+}
+
+/** The candidate to answer with: nearest of the requested mode class,
+ *  else simply the nearest. Candidates arrive ordered by distance. */
+export function pickRoute(
+  candidates: ResolvedRoute[],
+  mode?: GtfsModeClass | null,
+): ResolvedRoute | null {
+  if (!candidates.length) return null
+  if (mode) {
+    const sameClass = candidates.find(c => gtfsModeClass(c.routeType) === mode)
+    if (sameClass) return sameClass
+  }
+  return candidates[0]
 }
 
 /**

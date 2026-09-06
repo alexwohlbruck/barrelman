@@ -293,3 +293,71 @@ describe('GET /transit/routes', () => {
     expect(res.status).toBe(422)
   })
 })
+
+// ── GET /transit/resolve-route ──────────────────────────────────────
+
+describe('GET /transit/resolve-route', () => {
+  const resolved = {
+    feedId: 'mta-subway',
+    routeId: '2',
+    routeShortName: '2',
+    routeLongName: 'Seventh Avenue Express',
+    routeType: 1,
+    distance: 84.2,
+  }
+
+  test('returns the resolved feed/route pair', async () => {
+    const resolveRoute = mock(async () => resolved)
+    const app = new Elysia().use(createTransitRoutes({ resolveRoute }))
+
+    const res = await app.handle(
+      get('/transit/resolve-route?routeId=2&lat=40.71&lng=-74.00&mode=metro'),
+    )
+
+    expect(res.status).toBe(200)
+    expect(await res.json()).toMatchObject({ feedId: 'mta-subway', routeId: '2' })
+    expect((resolveRoute as any).mock.calls[0][0]).toMatchObject({
+      routeId: '2',
+      lat: 40.71,
+      lng: -74,
+      mode: 'metro',
+    })
+  })
+
+  test('drops a mode that is not a known class rather than filtering by it', async () => {
+    const resolveRoute = mock(async () => resolved)
+    const app = new Elysia().use(createTransitRoutes({ resolveRoute }))
+
+    await app.handle(get('/transit/resolve-route?routeId=2&lat=40.71&lng=-74.00&mode=subway'))
+
+    expect((resolveRoute as any).mock.calls[0][0].mode).toBeNull()
+  })
+
+  test('returns 404 when nothing claims the id here', async () => {
+    const resolveRoute = mock(async () => null)
+    const app = new Elysia().use(createTransitRoutes({ resolveRoute }))
+
+    const res = await app.handle(get('/transit/resolve-route?routeId=zz&lat=40.71&lng=-74.00'))
+
+    expect(res.status).toBe(404)
+  })
+
+  test('rejects out-of-range coordinates', async () => {
+    const resolveRoute = mock(async () => resolved)
+    const app = new Elysia().use(createTransitRoutes({ resolveRoute }))
+
+    const res = await app.handle(get('/transit/resolve-route?routeId=2&lat=99&lng=-74.00'))
+
+    expect(res.status).toBe(400)
+    expect((resolveRoute as any).mock.calls).toHaveLength(0)
+  })
+
+  test('rejects a non-numeric coordinate', async () => {
+    const resolveRoute = mock(async () => resolved)
+    const app = new Elysia().use(createTransitRoutes({ resolveRoute }))
+
+    const res = await app.handle(get('/transit/resolve-route?routeId=2&lat=abc&lng=-74.00'))
+
+    expect(res.status).toBe(400)
+  })
+})
