@@ -10,6 +10,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.2.22] - 2026-09-07
+
 ### Fixed
 
 * `/transit/alerts` asked about a platform now matches alerts naming its
