@@ -1,17 +1,25 @@
 /**
  * Subway Position Interpolation Service
  *
- * NYC subway doesn't publish VehiclePosition data (no GPS underground).
- * Instead, we derive train positions from TripUpdate feeds by finding
- * where each train is between two consecutive stations and interpolating
- * the lat/lng based on the time fraction elapsed.
+ * The subway has no GPS underground, so no feed carries a train's lat/lng.
+ * Two things in the feed do say where a train is, and this service uses
+ * both — because either one alone loses most of the fleet:
  *
- * For each active trip:
- *   1. Find the last stop the train departed (departure < now)
- *   2. Find the next stop it's arriving at (arrival > now)
- *   3. Compute t = (now - lastDeparture) / (nextArrival - lastDeparture)
- *   4. Lerp lat/lng between the two stop positions
- *   5. Compute bearing from the direction of travel
+ *   1. The TripUpdate, when it still holds a stop the train has departed:
+ *      interpolate between that stop and the next arrival.
+ *   2. The VehiclePosition entity, which anchors a trip to a stop it is
+ *      stopped at, incoming at, or in transit to.
+ *
+ * (1) alone found 2 of the 34 4-trains running one afternoon. The MTA
+ * PRUNES passed stops from a TripUpdate, so most trips carry only future
+ * stops and have no departed stop to interpolate from; every one of those
+ * was dropped. The VehiclePosition entities the same feed publishes named
+ * 19 of them outright.
+ *
+ * Time comes from the FEED's header, never this machine's clock. A server
+ * running ten minutes slow read every arrival as further away than it was
+ * and every departure as still to come — which on its own cut those 34
+ * trains to 8. A feed that says what time it is should be believed.
  *
  * Returns TransitVehicle[] in the same format as GPS-based vehicles.
  */
@@ -21,6 +29,7 @@ import { sql } from 'drizzle-orm'
 import GtfsRealtimeBindings from 'gtfs-realtime-bindings'
 import { LRUCache } from 'lru-cache'
 import type { TransitVehicle } from './vehicles.service'
+import { stopBefore, segmentSeconds, toSeconds } from '../lib/subway-position'
 
 // Decode through the live import binding at call time rather than destructuring
 // at load, so a test mock of `gtfs-realtime-bindings` applies even when this
@@ -52,6 +61,9 @@ interface StopPosition {
   name: string
 }
 
+/** GTFS-RT names platforms ("239S"); trip patterns name stations ("239"). */
+const parentOf = (stopId: string) => stopId.replace(/[NS]$/, '')
+
 let stopPositions: Map<string, StopPosition> | null = null
 
 async function getStopPositions(): Promise<Map<string, StopPosition>> {
@@ -78,6 +90,39 @@ async function getStopPositions(): Promise<Map<string, StopPosition>> {
   return map
 }
 
+// ── Route patterns (for the stop a train has just left) ────────
+//
+// A VehiclePosition says which stop a train is heading to, not which one
+// it left — and the TripUpdate no longer carries the one it left. The
+// route's own stop order supplies it: find the pattern that runs the pair
+// the trip is about to run, and take the station before it.
+
+let routePatterns: Map<string, string[][]> | null = null
+
+async function getRoutePatterns(): Promise<Map<string, string[][]>> {
+  if (routePatterns) return routePatterns
+
+  const result = await db.execute(sql`
+    SELECT route_id, stop_seq
+    FROM gtfs_trip_patterns
+    WHERE feed_id = ${SUBWAY_FEED_ID}
+    ORDER BY trip_count DESC
+  `)
+
+  const map = new Map<string, string[][]>()
+  for (const row of result as any[]) {
+    const stops = String(row.stop_seq).split(',').filter(Boolean)
+    if (stops.length < 2) continue
+    const list = map.get(row.route_id) ?? []
+    list.push(stops)
+    map.set(row.route_id, list)
+  }
+
+  routePatterns = map
+  return map
+}
+
+
 // ── Feed cache ─────────────────────────────────────────────────
 
 interface CachedSubwayFeed {
@@ -90,14 +135,6 @@ const subwayCache = new LRUCache<string, CachedSubwayFeed>({
   ttl: 15_000, // 15 seconds — subway feeds update ~every 30s
 })
 
-// ── Protobuf timestamp helper ──────────────────────────────────
-
-function toSeconds(ts: any): number {
-  if (typeof ts === 'number') return ts
-  if (ts && typeof ts.toNumber === 'function') return ts.toNumber()
-  if (ts && typeof ts.low === 'number') return ts.low + (ts.high || 0) * 0x100000000
-  return NaN
-}
 
 // ── Bearing calculation ────────────────────────────────────────
 
@@ -129,13 +166,16 @@ export async function getSubwayVehiclePositions(
     return bounds ? filterByBounds(cached.vehicles, bounds) : cached.vehicles
   }
 
-  const stops = await getStopPositions()
+  const [stops, patterns] = await Promise.all([
+    getStopPositions(),
+    getRoutePatterns().catch(() => new Map<string, string[][]>()),
+  ])
   const now = Math.floor(Date.now() / 1000)
   const allVehicles: TransitVehicle[] = []
 
   // Fetch all subway feeds in parallel
   const results = await Promise.allSettled(
-    SUBWAY_FEEDS.map(feed => fetchAndInterpolate(feed, stops, now, fetchFn)),
+    SUBWAY_FEEDS.map(feed => fetchAndInterpolate(feed, stops, patterns, now, fetchFn)),
   )
 
   for (const result of results) {
@@ -165,6 +205,7 @@ function filterByBounds(
 async function fetchAndInterpolate(
   feed: { id: string; url: string },
   stops: Map<string, StopPosition>,
+  patterns: Map<string, string[][]>,
   nowSec: number,
   fetchFn: typeof fetch = globalThis.fetch,
 ): Promise<TransitVehicle[]> {
@@ -177,6 +218,16 @@ async function fetchAndInterpolate(
     const buffer = await response.arrayBuffer()
     const feedMessage = decodeFeedMessage(new Uint8Array(buffer))
 
+    // The feed's own clock, not ours — see the note at the top of the file.
+    const now = toSeconds(feedMessage.header?.timestamp) || nowSec
+
+    // VehiclePosition entities, by the trip they are running.
+    const anchors = new Map<string, any>()
+    for (const entity of feedMessage.entity) {
+      const v = entity.vehicle
+      if (v?.trip?.tripId && v.stopId) anchors.set(v.trip.tripId, v)
+    }
+
     const vehicles: TransitVehicle[] = []
 
     for (const entity of feedMessage.entity) {
@@ -184,7 +235,12 @@ async function fetchAndInterpolate(
       if (!tu?.stopTimeUpdate?.length) continue
       if (!tu.trip?.routeId) continue
 
-      const result = interpolateTrip(tu, stops, nowSec)
+      // Interpolation first — it places a train BETWEEN stations, which is
+      // where one usually is. The anchor catches the majority the pruned
+      // feed leaves it unable to answer for.
+      const result =
+        interpolateTrip(tu, stops, now) ??
+        anchorPosition(anchors.get(tu.trip.tripId ?? ''), tu, stops, patterns, now)
       if (!result) continue
 
       // Build a unique vehicle ID from the trip
@@ -199,7 +255,7 @@ async function fetchAndInterpolate(
         position: { lat: result.lat, lng: result.lng },
         bearing: result.bearing,
         speed: result.speed,
-        timestamp: new Date(nowSec * 1000).toISOString(),
+        timestamp: new Date(now * 1000).toISOString(),
       })
     }
 
@@ -219,6 +275,72 @@ interface InterpolationResult {
   bearing: number
   speed: number
 }
+
+/** GTFS-RT VehicleStopStatus. */
+const STOPPED_AT = 1
+
+/**
+ * Place a train from its VehiclePosition entity.
+ *
+ * The entity names one stop and the train's relationship to it. Stopped at
+ * it means exactly there. Approaching it means somewhere on the run in
+ * from the station before — which the route's stop order supplies, and the
+ * remaining time to arrival places it along.
+ */
+function anchorPosition(
+  vehicle: any,
+  tripUpdate: any,
+  stops: Map<string, StopPosition>,
+  patterns: Map<string, string[][]>,
+  nowSec: number,
+): InterpolationResult | null {
+  if (!vehicle?.stopId) return null
+  const target = stops.get(vehicle.stopId)
+  if (!target) return null
+
+  const stus = tripUpdate.stopTimeUpdate ?? []
+  const nextAfter = stus.find((s: any) => s.stopId && s.stopId !== vehicle.stopId)
+  const bearingTo = (to: StopPosition | undefined) =>
+    to ? bearing(target.lat, target.lng, to.lat, to.lng) : 0
+
+  const at = (): InterpolationResult => ({
+    lat: target.lat,
+    lng: target.lng,
+    bearing: bearingTo(nextAfter ? stops.get(nextAfter.stopId) : undefined),
+    speed: 0,
+  })
+
+  if (vehicle.currentStatus === STOPPED_AT) return at()
+
+  const routeId = tripUpdate.trip?.routeId
+  const prevId = routeId
+    ? stopBefore(
+        patterns.get(routeId) ?? [],
+        parentOf(vehicle.stopId),
+        nextAfter ? parentOf(nextAfter.stopId) : null,
+      )
+    : null
+  const prev = prevId ? stops.get(prevId) : undefined
+  if (!prev) return at()
+
+  // How far along the run in: the arrival still to come, against a typical
+  // hop for this trip. Without an arrival time, halfway is the honest
+  // answer — the train is between the two, and nothing says where.
+  const arrive = toSeconds(
+    stus.find((s: any) => s.stopId === vehicle.stopId)?.arrival?.time,
+  )
+  const hop = segmentSeconds(stus) ?? 90
+  const remaining = arrive ? Math.max(0, arrive - nowSec) : hop / 2
+  const t = Math.max(0, Math.min(1, 1 - remaining / hop))
+
+  return {
+    lat: prev.lat + (target.lat - prev.lat) * t,
+    lng: prev.lng + (target.lng - prev.lng) * t,
+    bearing: bearing(prev.lat, prev.lng, target.lat, target.lng),
+    speed: 0,
+  }
+}
+
 
 function interpolateTrip(
   tripUpdate: any,

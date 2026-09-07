@@ -10,6 +10,27 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.2.21] - 2026-09-07
+
+### Fixed
+
+* `/transit/route-vehicles` and the map's vehicle layer report the subway
+  fleet that is actually running. The MTA prunes passed stops from a
+  TripUpdate, so most trips carry nothing to interpolate a position between
+  and were dropped outright — 2 of 34 4-trains survived one afternoon. The
+  VehiclePosition entities the same feed publishes now anchor the rest,
+  placed along the run in from the station before using the route's own
+  stop order
+* Realtime positions read the time from the FEED's header rather than the
+  host clock. A server running ten minutes slow saw every arrival as further
+  off and every departure as still to come, which alone cut those 34 trains
+  to 8
+* `/transit/alerts` no longer answers with another railway's notices.
+  Metro-North numbers a route `4`, the LIRR numbers one `4`, the subway's 4
+  is the Lexington Av express, and the MTA files all three through one feed
+  — so "LIRR trains run on a weekend schedule" landed on the subway's page.
+  The agency that owns a feed's stops is now the only one whose ids count
+
 ## [0.2.20] - 2026-09-07
 
 ### Added
