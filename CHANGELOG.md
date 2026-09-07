@@ -10,6 +10,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.2.21] - 2026-09-07
+
 ### Fixed
 
 * `/transit/route-vehicles` and the map's vehicle layer report the subway
