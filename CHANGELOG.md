@@ -12,6 +12,15 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ### Fixed
 
+* `/transit/alerts` asked about a platform now matches alerts naming its
+  station, and the other way around. Agencies inform stations ("238") while
+  boards and pages hold platforms ("238N"); exact-id matching made a "trains
+  skip this stop" alert invisible on the very stop page it was about
+* `/transit/departures` names each board's GTFS parent station, so a caller
+  holding a board can join it to the alerts about its stop
+
+### Fixed
+
 * `/transit/route-vehicles` and the map's vehicle layer report the subway
   fleet that is actually running. The MTA prunes passed stops from a
   TripUpdate, so most trips carry nothing to interpolate a position between
