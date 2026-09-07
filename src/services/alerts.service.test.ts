@@ -1,4 +1,4 @@
-import { describe, test, expect, mock, beforeEach } from 'bun:test'
+import { describe, test, it, expect, mock, beforeEach } from 'bun:test'
 
 // ── Mock dependencies ───────────────────────────────────────────────
 
@@ -31,6 +31,7 @@ const {
   isAlertActive,
   alertMatches,
   alertRank,
+  agenciesOwning,
 } = await import('./alerts.service')
 
 // ── Fixtures ────────────────────────────────────────────────────────
@@ -358,5 +359,64 @@ describe('getServiceAlerts — filtering', () => {
       `${feedId()}_warning`,
       `${feedId()}_info`,
     ])
+  })
+})
+
+// ── Agency scoping ──────────────────────────────────────────────────
+// Labor Day 2026: the MTA filed "LIRR trains run on a weekend schedule"
+// and "The Hudson, Harlem and New Haven Lines run on a Sunday schedule"
+// into the same feed as the subway's, each naming a route "4" of its own.
+// Both landed on the Lexington Av express's page.
+
+describe('agenciesOwning', () => {
+  const alert = (entities: any[]): any => ({
+    id: 'a', informedEntities: entities, activePeriods: [], effect: 'UNKNOWN_EFFECT',
+    severity: 'UNKNOWN_SEVERITY', header: '',
+  })
+
+  it('claims the agency whose alerts name our stops', () => {
+    const alerts = [
+      alert([{ agencyId: 'MTASBWY', routeId: '4', stopId: '238' }]),
+      alert([{ agencyId: 'LI', routeId: '4' }]),
+    ]
+    expect(agenciesOwning(alerts, new Set(['238', '237']))).toEqual(['MTASBWY'])
+  })
+
+  it('claims nobody when no alert names a stop we hold', () => {
+    // Unknown, and unknown must filter nothing — an empty page is worse
+    // than a page with one foreign notice on it.
+    const alerts = [alert([{ agencyId: 'LI', routeId: '4' }])]
+    expect(agenciesOwning(alerts, new Set(['238']))).toEqual([])
+  })
+})
+
+describe('alertMatches agency scoping', () => {
+  const entity = (e: any) => ({
+    id: 'a', informedEntities: [e], activePeriods: [], effect: 'UNKNOWN_EFFECT',
+    severity: 'UNKNOWN_SEVERITY', header: '',
+  }) as any
+
+  it('drops another railway route numbered the same', () => {
+    expect(alertMatches(entity({ agencyId: 'LI', routeId: '4' }), {
+      routeIds: ['4'], agencyIds: ['MTASBWY'],
+    })).toBe(false)
+  })
+
+  it('keeps our own', () => {
+    expect(alertMatches(entity({ agencyId: 'MTASBWY', routeId: '4' }), {
+      routeIds: ['4'], agencyIds: ['MTASBWY'],
+    })).toBe(true)
+  })
+
+  it('keeps an entity that names no agency', () => {
+    expect(alertMatches(entity({ routeId: '4' }), {
+      routeIds: ['4'], agencyIds: ['MTASBWY'],
+    })).toBe(true)
+  })
+
+  it('filters nothing when the owning agency is unknown', () => {
+    expect(alertMatches(entity({ agencyId: 'LI', routeId: '4' }), {
+      routeIds: ['4'], agencyIds: [],
+    })).toBe(true)
   })
 })

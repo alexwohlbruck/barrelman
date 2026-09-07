@@ -382,14 +382,31 @@ export function isAlertActive(
  */
 export function alertMatches(
   alert: ServiceAlert,
-  filter: { routeIds?: string[]; stopIds?: string[]; tripIds?: string[] },
+  filter: {
+    routeIds?: string[]
+    stopIds?: string[]
+    tripIds?: string[]
+    /** Agencies whose ids the caller's ids belong to. An entity naming any
+     *  other agency is about a different railway that happens to number a
+     *  route the same way — see `agenciesOwning`. Empty means unknown, and
+     *  unknown filters nothing. */
+    agencyIds?: string[]
+  },
 ): boolean {
   const routes = filter.routeIds ?? []
   const stops = filter.stopIds ?? []
   const trips = filter.tripIds ?? []
+  const agencies = filter.agencyIds ?? []
   if (!routes.length && !stops.length && !trips.length) return true
 
   return alert.informedEntities.some(entity => {
+    // "Route 4" is the Lexington Av express here, the Hudson Line at
+    // Metro-North and a Babylon working at the LIRR — and the MTA files all
+    // three in one alert feed. An id means nothing without its railway.
+    if (entity.agencyId && agencies.length && !agencies.includes(entity.agencyId)) {
+      return false
+    }
+
     // Named by the entity, and something the caller asked about.
     const dimensions: Array<[string | undefined, string[]]> = [
       [entity.routeId, routes],
@@ -440,6 +457,52 @@ export function alertRank(alert: ServiceAlert): number {
   return rated > 0 ? rated : (EFFECT_RANK[alert.effect] ?? 0)
 }
 
+// ── Whose railway is this? ──────────────────────────────────────────
+
+/** A feed's stop ids, for deciding which agency in a shared alert feed is
+ *  the one this feed belongs to. Stable, so cached for the process. */
+const feedStopIds = new Map<string, Set<string>>()
+
+async function getFeedStopIds(feedId: string): Promise<Set<string>> {
+  const cached = feedStopIds.get(feedId)
+  if (cached) return cached
+
+  const result = await db.execute(sql`
+    SELECT stop_id FROM gtfs_stops WHERE feed_id = ${feedId}
+  `)
+  const ids = new Set((result as any[]).map(r => String(r.stop_id)))
+  feedStopIds.set(feedId, ids)
+  return ids
+}
+
+/**
+ * Which agency ids, in a feed that carries several, name THIS feed's railway.
+ *
+ * The MTA publishes subway, LIRR and Metro-North alerts through one endpoint,
+ * tagged `MTASBWY`, `LI` and `MNR`. None of those is the `agency_id` in any
+ * GTFS we hold (the subway's is `MTA NYCT`), so there is no table to look the
+ * mapping up in — but the alerts carry one: an alert that names a stop we
+ * have is, beyond argument, about our railway, and its agency tag is ours.
+ *
+ * Everything hinges on that being conservative. An empty answer — no alert
+ * named a stop we recognise — filters nothing at all, which leaves the old
+ * behaviour rather than an empty page.
+ */
+export function agenciesOwning(
+  alerts: ServiceAlert[],
+  stopIds: Set<string>,
+): string[] {
+  const owning = new Set<string>()
+  for (const alert of alerts) {
+    for (const entity of alert.informedEntities) {
+      if (entity.agencyId && entity.stopId && stopIds.has(entity.stopId)) {
+        owning.add(entity.agencyId)
+      }
+    }
+  }
+  return [...owning]
+}
+
 // ── Public API ──────────────────────────────────────────────────────
 
 /**
@@ -467,9 +530,19 @@ export async function getServiceAlerts(
   for (const { feed, data } of results) {
     if (data.feedTimestamp) feedTimestamps[feed.feedId] = data.feedTimestamp
 
+    // Which agency in this feed is this feed's own, worked out from the
+    // stops its alerts name. Only needed when ids are being matched.
+    const agencyIds =
+      request.routeIds?.length || request.stopIds?.length || request.tripIds?.length
+        ? agenciesOwning(
+            data.alerts,
+            await getFeedStopIds(feed.feedId).catch(() => new Set<string>()),
+          )
+        : []
+
     for (const alert of data.alerts) {
       if (!isAlertActive(alert, now, request.includeUpcoming)) continue
-      if (!alertMatches(alert, request)) continue
+      if (!alertMatches(alert, { ...request, agencyIds })) continue
       alerts.push(alert)
     }
   }
