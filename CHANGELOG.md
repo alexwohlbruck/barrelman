@@ -10,6 +10,24 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Fixed
+
+* `/transit/route-detail` no longer lists stops a route only reaches on a
+  reroute. A feed's `stop_times` is the union of everything the route has ever
+  been scheduled to do, so the MTA's R arrived carrying seven stations it
+  reaches on one trip out of 735 — three on Second Av, three on the West End
+  line. `gtfs_trip_patterns` now records how many trips run each pattern, and a
+  stop kept by fewer than three of them, and by under 1% of the route's
+  busiest, is dropped. Feeds imported before this ship with no counts and are
+  left untouched until re-imported or backfilled with
+  `import/backfill-trip-patterns.ts`
+
+* `/transit/route-detail` no longer drops a stop whose name is shared with
+  another station on the same route. It collapsed its stop list by name, so the
+  R lost 36 St and 86 St in Brooklyn to the Queens Blvd 36 St and the Second Av
+  86 St, and the 5 lost Gun Hill Rd and Pelham Pkwy on the Dyre Av branch to
+  the White Plains Rd stations of the same names. It now collapses by station
+
 ### Changed
 
 * A release now deploys itself. The pipeline's last job reaches the host over
