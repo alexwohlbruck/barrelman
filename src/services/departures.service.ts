@@ -82,6 +82,10 @@ export interface StopDepartures {
      *  it a caller holding `("5", "M21")` cannot look that station up
      *  anywhere. */
     feedOnestopId?: string
+    /** GTFS parent station, when this stop is a platform of one. What the
+     *  agency's alerts name — they inform stations, not platforms — so a
+     *  caller holding a board can join it to the alerts about its stop. */
+    parentStation?: string
     /** `station` — this is the station asked about, or one merged into it.
      *  `transfer` — a connecting station under a different name, returned
      *  because `transfers` was set. Absent means `station`. */
@@ -945,6 +949,7 @@ export async function getDepartures(
         ...(onestopIds.get(stop.feedId)
           ? { feedOnestopId: onestopIds.get(stop.feedId) }
           : {}),
+        ...(stop.parentStation ? { parentStation: stop.parentStation } : {}),
         ...(stop.via === 'transfer' ? { via: 'transfer' as const } : {}),
       },
       ...trimToWindow(
