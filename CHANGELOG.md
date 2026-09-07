@@ -10,6 +10,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.2.20] - 2026-09-07
+
 ### Added
 
 * Each stop on `/transit/route-detail` names its GTFS parent station. GTFS-RT
