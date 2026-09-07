@@ -10,6 +10,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.2.19] - 2026-09-07
+
 ### Fixed
 
 * `/transit/route-detail` no longer lists stops a route only reaches on a
