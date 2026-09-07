@@ -10,6 +10,16 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.2.20] - 2026-09-07
+
+### Added
+
+* Each stop on `/transit/route-detail` names its GTFS parent station. GTFS-RT
+  alerts inform stations, not platforms — the MTA's "4 runs local" names stop
+  `237` while route detail carries `237N` — and the parent is the join between
+  the two
+
+
 ## [0.2.19] - 2026-09-07
 
 ### Fixed
