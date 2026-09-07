@@ -166,8 +166,15 @@ export const gtfsTripPatterns = pgTable(
     routeId: text('route_id').notNull(),
     directionId: integer('direction_id'),
     stopSeq: text('stop_seq').notNull(),
+    /** Trips running this exact sequence. Tells a route's service from the
+     *  one-off reroutes filed alongside it — see `route-detail.service.ts`.
+     *  Zero on rows written before the column existed. */
+    tripCount: integer('trip_count').notNull().default(0),
   },
-  (table) => [index('gtfs_trip_patterns_feed_idx').on(table.feedId)],
+  (table) => [
+    index('gtfs_trip_patterns_feed_idx').on(table.feedId),
+    index('gtfs_trip_patterns_route_idx').on(table.feedId, table.routeId),
+  ],
 )
 
 export type GtfsTripPattern = typeof gtfsTripPatterns.$inferSelect

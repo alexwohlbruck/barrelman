@@ -10,6 +10,42 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.2.19] - 2026-09-07
+
+### Fixed
+
+* `/transit/route-detail` no longer lists stops a route only reaches on a
+  reroute. A feed's `stop_times` is the union of everything the route has ever
+  been scheduled to do, so the MTA's R arrived carrying seven stations it
+  reaches on one trip out of 735 — three on Second Av, three on the West End
+  line. `gtfs_trip_patterns` now records how many trips run each pattern, and a
+  stop kept by fewer than three of them, and by under 1% of the route's
+  busiest, is dropped. Feeds imported before this ship with no counts and are
+  left untouched until re-imported or backfilled with
+  `import/backfill-trip-patterns.ts`
+
+* `/transit/route-detail` no longer drops a stop whose name is shared with
+  another station on the same route. It collapsed its stop list by name, so the
+  R lost 36 St and 86 St in Brooklyn to the Queens Blvd 36 St and the Second Av
+  86 St, and the 5 lost Gun Hill Rd and Pelham Pkwy on the Dyre Av branch to
+  the White Plains Rd stations of the same names. It now collapses by station
+
+### Changed
+
+* A release now deploys itself. The pipeline's last job reaches the host over
+  the tailnet, waits for the console's job queue to go idle, recreates
+  `barrelman` and `barrelman-ops`, and fails if the health check does not come
+  back — so a release lands in minutes instead of whenever the hourly poll
+  happens to notice, and never in the middle of an import. It only recreates the
+  services it names, so a deploy can no longer bounce the database as a
+  dependency. Unconfigured (no deploy secrets) it does nothing and Watchtower
+  goes on doing what it did; see `docs/development.md`
+
+* The `barrelman` API carries the same Watchtower pre-update gate the database
+  and the worker already had. It was the one container an update could restart
+  mid-import: `kind:'internal'` jobs run inside it, and the MOTIS rebuild
+  generates its config with `docker exec barrelman` while the job is running
+
 ## [0.2.18] - 2026-09-06
 
 ### Added

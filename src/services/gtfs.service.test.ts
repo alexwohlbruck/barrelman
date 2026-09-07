@@ -377,6 +377,42 @@ describe('deriveTripPatterns', () => {
       .sort()
     expect(directExpress).toEqual(['X', 'Y'])
   })
+
+  test('counts the trips that collapsed into each pattern', () => {
+    // The shape of the R in the MTA feed: a service run by many trips, and a
+    // reroute run by one, filed side by side and otherwise indistinguishable.
+    const trips = [
+      'trip_id,route_id,direction_id',
+      'S1,R,0', 'S2,R,0', 'S3,R,0',
+      'D1,R,0',
+    ].join('\n')
+    const stopTimes = [
+      'trip_id,stop_id,stop_sequence',
+      'S1,A_N,1', 'S1,B_N,2', 'S1,C_N,3',
+      'S2,A_N,1', 'S2,B_N,2', 'S2,C_N,3',
+      'S3,A_N,1', 'S3,B_N,2', 'S3,C_N,3',
+      'D1,A_N,1', 'D1,B_N,2', 'D1,D_N,3',
+    ].join('\n')
+
+    const patterns = deriveTripPatterns(trips, stopTimes, parents, 'feed_1')
+    const counts = new Map(patterns.map((p) => [p.stopSeq, p.tripCount]))
+
+    expect(counts.get(',A,B,C,')).toBe(3)
+    expect(counts.get(',A,B,D,')).toBe(1)
+  })
+
+  test('counts trips of one route and direction separately', () => {
+    const trips = ['trip_id,route_id,direction_id', 'U1,X,0', 'U2,X,1'].join('\n')
+    const stopTimes = [
+      'trip_id,stop_id,stop_sequence',
+      'U1,A_N,1', 'U1,B_N,2',
+      'U2,A_N,1', 'U2,B_N,2',
+    ].join('\n')
+
+    const patterns = deriveTripPatterns(trips, stopTimes, parents, 'feed_1')
+    expect(patterns).toHaveLength(2)
+    expect(patterns.every((p) => p.tripCount === 1)).toBe(true)
+  })
 })
 
 // ── generateTransfersTxt ────────────────────────────────────────────

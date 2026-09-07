@@ -221,3 +221,115 @@ jobs:
           body: ${{ steps.changelog.outputs.body }}
           draft: false
           prerelease: false
+
+  # ── Deploy ────────────────────────────────────────────────────────────
+  #
+  # Push the new images at the server instead of waiting for it to notice.
+  # Watchtower polls hourly, so a release could sit unshipped for an hour and
+  # then restart the stack at whatever moment the poll happened to land; this
+  # deploys the moment the images exist, and only when the host says it is
+  # safe.
+  #
+  # Unconfigured is not failed: without the secrets the job no-ops and
+  # Watchtower's poll remains the way updates arrive. Required secrets:
+  #
+  #   TS_OAUTH_CLIENT_ID / TS_OAUTH_SECRET  Tailscale OAuth client (scope
+  #     auth_keys, tag:ci) — the runner joins the tailnet as an ephemeral
+  #     node so the host needs no public SSH port.
+  #   DEPLOY_SSH_KEY                        private half of a keypair whose
+  #     public half is in ~/.ssh/authorized_keys on the host.
+  #
+  # Tailscale SSH would remove DEPLOY_SSH_KEY entirely (the tailnet ACL
+  # authorises `tag:ci` → the host, no key material in GitHub). It needs
+  # `tailscale set --ssh` on the host, which is off there today.
+  deploy:
+    name: Deploy to production
+    needs: [push-images]
+    runs-on: ubuntu-latest
+    env:
+      # Tailnet IP, not a hostname: this tailnet has MagicDNS off, so `vega2`
+      # does not resolve from the runner.
+      DEPLOY_HOST: 100.110.246.86
+      DEPLOY_USER: alex
+      DEPLOY_PATH: /opt/barrelman
+      # barrelman-db is deliberately absent. Restarting Postgres on a 27M-row
+      # database is not a routine step, and its image changes rarely — when it
+      # does, an operator recreates it by hand.
+      DEPLOY_SERVICES: barrelman barrelman-ops
+    steps:
+      - name: Check for deploy credentials
+        id: creds
+        env:
+          TS_ID: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+        run: |
+          if [ -n "$TS_ID" ] && [ -n "$SSH_KEY" ]; then
+            echo "ready=true" >> $GITHUB_OUTPUT
+          else
+            echo "ready=false" >> $GITHUB_OUTPUT
+            echo "::notice::Deploy secrets not set — skipping. Watchtower will pick this release up on its next poll."
+          fi
+
+      - name: Join the tailnet
+        if: steps.creds.outputs.ready == 'true'
+        uses: tailscale/github-action@v4.1.3
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: tag:ci
+
+      - name: Load the deploy key
+        if: steps.creds.outputs.ready == 'true'
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+
+      - name: Wait for the job queue to drain, then update
+        if: steps.creds.outputs.ready == 'true'
+        run: |
+          ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=20 \
+            "$DEPLOY_USER@$DEPLOY_HOST" \
+            "DEPLOY_PATH='$DEPLOY_PATH' DEPLOY_SERVICES='$DEPLOY_SERVICES' bash -se" <<'REMOTE'
+            set -euo pipefail
+
+            # An import runs for minutes to hours and cannot be resumed, so the
+            # deploy waits it out rather than killing it. Same question the
+            # Watchtower pre-update hooks ask, asked from the other side.
+            running=1
+            for _ in $(seq 1 120); do
+              running=$(docker exec barrelman-db psql -U barrelman -d barrelman -tAc \
+                "SELECT count(*) FROM ops_jobs WHERE status = 'running'" 2>/dev/null || echo 1)
+              [ "$running" = "0" ] && break
+              echo "waiting: $running job(s) still running"
+              sleep 60
+            done
+            if [ "$running" != "0" ]; then
+              echo "still busy after two hours — leaving the running image in place"
+              exit 1
+            fi
+
+            cd "$DEPLOY_PATH"
+            docker compose pull $DEPLOY_SERVICES
+            # --no-deps: recreate exactly the services named. Without it compose
+            # reconciles their dependencies too, and a deploy that was meant to
+            # touch the API bounces the database.
+            docker compose up -d --no-deps $DEPLOY_SERVICES
+          REMOTE
+
+      - name: Verify
+        if: steps.creds.outputs.ready == 'true'
+        run: |
+          ssh -o ConnectTimeout=20 "$DEPLOY_USER@$DEPLOY_HOST" bash -se <<'REMOTE'
+            set -euo pipefail
+            for _ in $(seq 1 30); do
+              if curl -sf -m 10 localhost:5001/health | grep -q '"status":"ok"'; then
+                echo "healthy"
+                exit 0
+              fi
+              sleep 10
+            done
+            echo "did not come back healthy within five minutes"
+            docker logs --tail 50 barrelman
+            exit 1
+          REMOTE
