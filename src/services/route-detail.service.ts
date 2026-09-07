@@ -31,6 +31,11 @@ export interface StopTransferRoute {
 export interface RouteDetailStop {
   stopId: string
   stopName: string
+  /** The GTFS parent station, when the stop is a platform of one. GTFS-RT
+   *  alerts name stations, not platforms — the MTA's "4 runs local" names
+   *  stop `237` while this list carries `237N` — and without the parent a
+   *  caller cannot join an alert to the stop it informs. */
+  parentStation?: string
   lat: number
   lng: number
   /** Distance along the route shape in meters (for ordering). */
@@ -361,20 +366,25 @@ export async function getRouteDetail(
         AND s.stop_name IS NOT NULL
       ORDER BY 1, sr.stop_id
     )
-    SELECT m.stop_id, m.stop_name, m.lat, m.lng,
+    SELECT m.stop_id, m.stop_name, m.station, m.lat, m.lng,
            COALESCE(SUM(p.trip_count), 0)::int AS trips
     FROM members m
     LEFT JOIN gtfs_trip_patterns p
       ON p.feed_id = ${actualFeedId}
      AND p.route_id = ${routeId}
      AND position(',' || m.station || ',' IN p.stop_seq) > 0
-    GROUP BY m.stop_id, m.stop_name, m.lat, m.lng
+    GROUP BY m.stop_id, m.stop_name, m.station, m.lat, m.lng
   `)
 
   const rawStops = servedStops(
     (stopsResult as any[]).map(row => ({
       stopId: row.stop_id as string,
       stopName: row.stop_name as string,
+      // `station` falls back to the stop's own id for a stop with no parent;
+      // only a real parent is worth sending.
+      ...(row.station && row.station !== row.stop_id
+        ? { parentStation: row.station as string }
+        : {}),
       lat: parseFloat(row.lat),
       lng: parseFloat(row.lng),
       trips: Number(row.trips) || 0,
