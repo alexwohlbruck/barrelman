@@ -476,6 +476,68 @@ async function getFeedStopIds(feedId: string): Promise<Set<string>> {
 }
 
 /**
+ * A request's stop ids widened to their whole stations.
+ *
+ * The page asks about the platform it boarded from ("238N"); the agency's
+ * alert informs the station ("238"). Exact-id matching made the two never
+ * meet, so a "trains skip this stop" alert vanished from the very stop
+ * page it was about. The GTFS parent relation is the join: take each asked
+ * id, add its parent, and add every stop sharing that parent.
+ */
+export function stationFamily(
+  asked: string[],
+  stops: Array<{ stopId: string; parentStation: string | null }>,
+): string[] {
+  const family = new Set(asked)
+  const parents = new Set<string>()
+  const byId = new Map(stops.map(s => [s.stopId, s]))
+  for (const id of asked) {
+    const parent = byId.get(id)?.parentStation
+    if (parent) {
+      family.add(parent)
+      parents.add(parent)
+    }
+    // an asked id that IS a station brings its platforms
+    parents.add(id)
+  }
+  for (const s of stops) {
+    if (s.parentStation && parents.has(s.parentStation)) family.add(s.stopId)
+  }
+  return [...family]
+}
+
+async function expandStopIds(
+  feedId: string | undefined,
+  stopIds: string[] | undefined,
+): Promise<string[] | undefined> {
+  if (!stopIds?.length || !feedId) return stopIds
+  try {
+    const result = await db.execute(sql`
+      SELECT stop_id, parent_station
+      FROM gtfs_stops
+      WHERE feed_id = ${feedId}
+        AND (
+          stop_id IN (${sql.join(stopIds.map(id => sql`${id}`), sql`, `)})
+          OR parent_station IN (${sql.join(stopIds.map(id => sql`${id}`), sql`, `)})
+          OR parent_station IN (
+            SELECT parent_station FROM gtfs_stops
+            WHERE feed_id = ${feedId}
+              AND stop_id IN (${sql.join(stopIds.map(id => sql`${id}`), sql`, `)})
+              AND parent_station IS NOT NULL AND parent_station != ''
+          )
+        )
+    `)
+    const rows = (result as any[]).map(r => ({
+      stopId: String(r.stop_id),
+      parentStation: r.parent_station ? String(r.parent_station) : null,
+    }))
+    return stationFamily(stopIds, rows)
+  } catch {
+    return stopIds
+  }
+}
+
+/**
  * Which agency ids, in a feed that carries several, name THIS feed's railway.
  *
  * The MTA publishes subway, LIRR and Metro-North alerts through one endpoint,
@@ -518,6 +580,9 @@ export async function getServiceAlerts(
 ): Promise<ServiceAlertsResponse> {
   const feeds = await getFeedsWithAlerts(request.feedId)
   if (feeds.length === 0) return { alerts: [], feedTimestamps: {} }
+
+  // Widen platform ids to their stations before matching — see stationFamily.
+  request = { ...request, stopIds: await expandStopIds(request.feedId, request.stopIds) }
 
   const results = await Promise.all(
     feeds.map(async feed => ({ feed, data: await fetchFeedAlerts(feed, fetchFn) })),

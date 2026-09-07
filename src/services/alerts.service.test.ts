@@ -32,6 +32,7 @@ const {
   alertMatches,
   alertRank,
   agenciesOwning,
+  stationFamily,
 } = await import('./alerts.service')
 
 // ── Fixtures ────────────────────────────────────────────────────────
@@ -418,5 +419,32 @@ describe('alertMatches agency scoping', () => {
     expect(alertMatches(entity({ agencyId: 'LI', routeId: '4' }), {
       routeIds: ['4'], agencyIds: [],
     })).toBe(true)
+  })
+})
+
+describe('stationFamily', () => {
+  // Eastern Pkwy: platforms 238N/238S under station 238. Pages hold a
+  // platform; alerts name the station. Either must find the other.
+  const STOPS = [
+    { stopId: '238', parentStation: null },
+    { stopId: '238N', parentStation: '238' },
+    { stopId: '238S', parentStation: '238' },
+    { stopId: '239', parentStation: null },
+  ]
+
+  test('a platform brings its station and siblings', () => {
+    expect(stationFamily(['238N'], STOPS).sort()).toEqual(['238', '238N', '238S'])
+  })
+
+  test('a station brings its platforms', () => {
+    expect(stationFamily(['238'], STOPS).sort()).toEqual(['238', '238N', '238S'])
+  })
+
+  test('a stop with no family stays alone', () => {
+    expect(stationFamily(['239'], STOPS)).toEqual(['239'])
+  })
+
+  test('an unknown id passes through untouched', () => {
+    expect(stationFamily(['999'], [])).toEqual(['999'])
   })
 })
