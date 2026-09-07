@@ -174,6 +174,46 @@ export function pickRoute(
   return candidates[0]
 }
 
+/** A stop reached by fewer trips than this is only kept on its share. */
+const MIN_SERVICE_TRIPS = 3
+
+/** …and the share that keeps it: a route that only ever runs twice a day still
+ *  serves every stop it calls at. */
+const MIN_SERVICE_SHARE = 0.01
+
+/**
+ * Drop the stops a route reaches by reroute rather than by service.
+ *
+ * A feed's `stop_times` is the union of everything the route has ever been
+ * scheduled to do, planned diversions included, and nothing marks those apart:
+ * the MTA files seven stops for the R that it reaches on ONE trip out of 735 —
+ * 72 St, 86 St and 96 St on Second Av, 9 Av, 62 St and Bay Pkwy on the West End
+ * line. Listed beside the R's real stops they read as stations the train serves
+ * and is currently skipping, which is a claim about tonight's timetable made
+ * out of a construction detour last spring.
+ *
+ * Only frequency separates the two. Structure cannot: a diversion is a trunk
+ * with a foreign tail, and so is a branch. Nor can geometry — the 5's own New
+ * Lots Av sits 11 km off its canonical shape, further out than any of the R's
+ * strays.
+ *
+ * Both thresholds are needed, and the measured feed says why. Trip counts for
+ * the diversion stops above are 1; the 2's genuine late-night run to New Lots
+ * Av is 9, and the N's to Second Av is 12 — so an absolute floor tells them
+ * apart. But it would erase a rural route that runs twice a day altogether,
+ * which the share saves.
+ *
+ * A feed imported before patterns carried counts scores every stop zero. That
+ * is missing evidence, not evidence of absence, and the route keeps all of its
+ * stops until it is re-imported.
+ */
+export function servedStops<T extends { trips: number }>(stops: T[]): T[] {
+  const busiest = Math.max(0, ...stops.map((s) => s.trips))
+  if (busiest === 0) return stops
+  const floor = busiest * MIN_SERVICE_SHARE
+  return stops.filter((s) => s.trips >= MIN_SERVICE_TRIPS || s.trips >= floor)
+}
+
 /**
  * The other lines available at each of a route's stops, keyed by stop id.
  *
@@ -299,26 +339,47 @@ export async function getRouteDetail(
 
   const actualFeedId = route.feed_id || feedId
 
-  // Get stops for this route
+  // The stops this route calls at, one row per station and each carrying how
+  // much of the route's service actually reaches it.
+  //
+  // Collapsing by STATION rather than by name matters: a route that meets the
+  // same name twice used to lose one of them. `DISTINCT ON (stop_name)` dropped
+  // Brooklyn's 36 St and 86 St from the R, because Queens Blvd has a 36 St and
+  // Second Av an 86 St, and the timeline simply skipped two stops the train
+  // calls at.
   const stopsResult = await db.execute(sql`
-    SELECT DISTINCT ON (s.stop_name)
-      sr.stop_id, s.stop_name,
-      ST_Y(s.geom::geometry) as lat,
-      ST_X(s.geom::geometry) as lng
-    FROM gtfs_stop_routes sr
-    JOIN gtfs_stops s ON s.feed_id = sr.feed_id AND s.stop_id = sr.stop_id
-    WHERE sr.feed_id = ${actualFeedId}
-      AND sr.route_id = ${routeId}
-      AND s.stop_name IS NOT NULL
-    ORDER BY s.stop_name, sr.stop_id
+    WITH members AS (
+      SELECT DISTINCT ON (COALESCE(NULLIF(s.parent_station, ''), sr.stop_id))
+        COALESCE(NULLIF(s.parent_station, ''), sr.stop_id) AS station,
+        sr.stop_id, s.stop_name,
+        ST_Y(s.geom::geometry) AS lat,
+        ST_X(s.geom::geometry) AS lng
+      FROM gtfs_stop_routes sr
+      JOIN gtfs_stops s ON s.feed_id = sr.feed_id AND s.stop_id = sr.stop_id
+      WHERE sr.feed_id = ${actualFeedId}
+        AND sr.route_id = ${routeId}
+        AND s.stop_name IS NOT NULL
+      ORDER BY 1, sr.stop_id
+    )
+    SELECT m.stop_id, m.stop_name, m.lat, m.lng,
+           COALESCE(SUM(p.trip_count), 0)::int AS trips
+    FROM members m
+    LEFT JOIN gtfs_trip_patterns p
+      ON p.feed_id = ${actualFeedId}
+     AND p.route_id = ${routeId}
+     AND position(',' || m.station || ',' IN p.stop_seq) > 0
+    GROUP BY m.stop_id, m.stop_name, m.lat, m.lng
   `)
 
-  const rawStops = (stopsResult as any[]).map(row => ({
-    stopId: row.stop_id as string,
-    stopName: row.stop_name as string,
-    lat: parseFloat(row.lat),
-    lng: parseFloat(row.lng),
-  }))
+  const rawStops = servedStops(
+    (stopsResult as any[]).map(row => ({
+      stopId: row.stop_id as string,
+      stopName: row.stop_name as string,
+      lat: parseFloat(row.lat),
+      lng: parseFloat(row.lng),
+      trips: Number(row.trips) || 0,
+    })),
+  ).map(({ trips: _trips, ...stop }) => stop)
 
   // Get shape
   const shape = await getRouteShape(feedId, routeId)

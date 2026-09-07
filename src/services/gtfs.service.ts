@@ -683,7 +683,13 @@ export function deriveTripPatterns(
   stopTimesContent: string | GtfsRecord[],
   stopParent: Map<string, string>,
   feedId: string,
-): Array<{ feedId: string; routeId: string; directionId: number | null; stopSeq: string }> {
+): Array<{
+  feedId: string
+  routeId: string
+  directionId: number | null
+  stopSeq: string
+  tripCount: number
+}> {
   const trips = asRecords(tripsContent)
   const tripMeta = new Map<string, { routeId: string; directionId: number | null }>()
   for (const t of trips) {
@@ -710,9 +716,15 @@ export function deriveTripPatterns(
     arr.push({ seq: Number.isNaN(seq) ? arr.length : seq, stopId: st.stop_id })
   }
 
-  // One normalised, comma-bounded sequence per trip; dedupe identical patterns.
-  const seen = new Set<string>()
-  const out: Array<{ feedId: string; routeId: string; directionId: number | null; stopSeq: string }> = []
+  // One normalised, comma-bounded sequence per trip, collapsed to a pattern per
+  // distinct sequence. How MANY trips collapsed into each is kept: it is the
+  // only thing separating a route's service from the reroutes filed in the same
+  // feed, which are identical in every other respect. The R carries seven stops
+  // it reaches on one trip out of 735.
+  const byPattern = new Map<
+    string,
+    { feedId: string; routeId: string; directionId: number | null; stopSeq: string; tripCount: number }
+  >()
   for (const [tripId, stops] of byTrip) {
     const meta = tripMeta.get(tripId)
     if (!meta) continue
@@ -728,11 +740,18 @@ export function deriveTripPatterns(
     if (norm.length < 2 || norm.some((n) => n.includes(','))) continue
     const stopSeq = `,${norm.join(',')},`
     const key = `${meta.routeId}|${meta.directionId ?? ''}|${stopSeq}`
-    if (seen.has(key)) continue
-    seen.add(key)
-    out.push({ feedId, routeId: meta.routeId, directionId: meta.directionId, stopSeq })
+    const existing = byPattern.get(key)
+    if (existing) existing.tripCount++
+    else
+      byPattern.set(key, {
+        feedId,
+        routeId: meta.routeId,
+        directionId: meta.directionId,
+        stopSeq,
+        tripCount: 1,
+      })
   }
-  return out
+  return [...byPattern.values()]
 }
 
 /**
@@ -1142,6 +1161,7 @@ export async function importTripPatterns(
         routeId: p.routeId,
         directionId: p.directionId ?? null,
         stopSeq: p.stopSeq,
+        tripCount: p.tripCount,
       })),
     )
 

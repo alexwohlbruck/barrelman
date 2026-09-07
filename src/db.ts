@@ -416,11 +416,18 @@ export async function ensureGtfsSchema() {
       feed_id TEXT NOT NULL,
       route_id TEXT NOT NULL,
       direction_id INTEGER,
-      stop_seq TEXT NOT NULL
+      stop_seq TEXT NOT NULL,
+      trip_count INTEGER NOT NULL DEFAULT 0
     );
+
+    ALTER TABLE gtfs_trip_patterns
+      ADD COLUMN IF NOT EXISTS trip_count INTEGER NOT NULL DEFAULT 0;
 
     CREATE INDEX IF NOT EXISTS gtfs_trip_patterns_feed_idx
       ON gtfs_trip_patterns (feed_id);
+
+    CREATE INDEX IF NOT EXISTS gtfs_trip_patterns_route_idx
+      ON gtfs_trip_patterns (feed_id, route_id);
 
     -- Agency-declared transfers (transfers.txt): the authoritative
     -- definition of which stations form one complex (e.g. Times Sq
