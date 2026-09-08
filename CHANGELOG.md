@@ -10,6 +10,17 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.2.25] - 2026-09-07
+
+### Fixed
+
+* `/transit/trip-stops` searches every TripUpdate feed a GTFS feed publishes.
+  MTA New York City Transit lists nine subway line groups plus the bus feed on
+  one row, and only the first was read — so a subway trip's stop times came
+  back empty
+
+## [0.2.24] - 2026-09-07
+
 ### Fixed
 
 * A route's live vehicles are its own trains only. "Related routes" meant

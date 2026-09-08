@@ -13,6 +13,7 @@ import { db } from '../db'
 import { sql } from 'drizzle-orm'
 import GtfsRealtimeBindings from 'gtfs-realtime-bindings'
 import { LRUCache } from 'lru-cache'
+import type { RtUrlEntry } from '../schema/gtfs'
 import { existsSync, readFileSync } from 'fs'
 import { join } from 'path'
 import JSZip from 'jszip'
@@ -472,7 +473,84 @@ export interface TripStopTime {
 }
 
 /**
- * Get all stop times for a specific trip from the TripUpdate feed.
+ * Every TripUpdate feed a GTFS feed publishes.
+ *
+ * One is not enough. MTA New York City Transit's row lists nine subway line
+ * groups AND the bus feed, so taking the first — guessed from the URL, at
+ * that — asked the bus feed for a 4 train's stop times and got nothing back.
+ * The recorded `type` decides; the URL is read only for rows written before
+ * discovery recorded one.
+ */
+async function getTripUpdateFeeds(feedId: string): Promise<RtUrlEntry[]> {
+  const result = await db.execute(sql`
+    SELECT rt_urls FROM gtfs_feeds
+    WHERE feed_id = ${feedId} AND rt_urls IS NOT NULL
+  `)
+
+  const feeds: RtUrlEntry[] = []
+  for (const row of result as any[]) {
+    const rtUrls: RtUrlEntry[] =
+      typeof row.rt_urls === 'string' ? JSON.parse(row.rt_urls) : row.rt_urls
+    if (!Array.isArray(rtUrls)) continue
+    const typed = rtUrls.filter(u => u.type === 'tripUpdates')
+    feeds.push(
+      ...(typed.length
+        ? typed
+        : rtUrls.filter(u => !u.type && /trip.?update/i.test(u.url))),
+    )
+  }
+  return feeds
+}
+
+/** Decoded stop times by trip, per feed URL. Short TTL: a rider stepping
+ *  through a line's trains re-asks the same nine feeds each time. */
+const tripStopCache = new LRUCache<string, Map<string, TripStopTime[]>>({
+  max: 32,
+  ttl: 10_000,
+})
+
+async function tripStopsOfFeed(
+  entry: RtUrlEntry,
+  fetchFn: FetchFn,
+): Promise<Map<string, TripStopTime[]>> {
+  const cached = tripStopCache.get(entry.url)
+  if (cached) return cached
+
+  const byTrip = new Map<string, TripStopTime[]>()
+  try {
+    const response = await fetchFn(entry.url, {
+      headers: { ...(entry.headers ?? {}) },
+      signal: AbortSignal.timeout(8000),
+    })
+    if (response.ok) {
+      const feedMessage = decodeFeedMessage(new Uint8Array(await response.arrayBuffer()))
+      for (const entity of feedMessage.entity) {
+        const tu = entity.tripUpdate
+        if (!tu?.trip?.tripId || !tu.stopTimeUpdate?.length) continue
+        byTrip.set(
+          tu.trip.tripId,
+          tu.stopTimeUpdate.map((stu: any) => ({
+            stopId: stu.stopId || '',
+            arrivalTime: stu.arrival?.time
+              ? new Date(toSeconds(stu.arrival.time) * 1000).toISOString()
+              : undefined,
+            departureTime: stu.departure?.time
+              ? new Date(toSeconds(stu.departure.time) * 1000).toISOString()
+              : undefined,
+          })),
+        )
+      }
+    }
+  } catch {
+    // A feed that will not answer contributes nothing; the others still might.
+  }
+
+  tripStopCache.set(entry.url, byTrip)
+  return byTrip
+}
+
+/**
+ * Get all stop times for a specific trip from the feed's TripUpdates.
  * Returns past and future stop times with real-time predictions.
  */
 export async function getTripStopTimes(
@@ -480,41 +558,16 @@ export async function getTripStopTimes(
   tripId: string,
   fetchFn: FetchFn = globalThis.fetch,
 ): Promise<TripStopTime[]> {
-  const feeds = await getFeedsWithVehiclePositions(feedId)
-  const feed = feeds[0]
-  if (!feed?.tripUpdateUrl) return []
+  const entries = await getTripUpdateFeeds(feedId)
+  if (!entries.length) return []
 
-  try {
-    const headers: Record<string, string> = {}
-    if (feed.headers) Object.assign(headers, feed.headers)
-
-    const response = await fetchFn(feed.tripUpdateUrl, {
-      headers,
-      signal: AbortSignal.timeout(8000),
-    })
-    if (!response.ok) return []
-
-    const buffer = await response.arrayBuffer()
-    const feedMessage = decodeFeedMessage(new Uint8Array(buffer))
-
-    for (const entity of feedMessage.entity) {
-      const tu = entity.tripUpdate
-      if (!tu?.trip?.tripId || tu.trip.tripId !== tripId) continue
-      if (!tu.stopTimeUpdate?.length) continue
-
-      const times = tu.stopTimeUpdate.map((stu: any) => ({
-        stopId: stu.stopId || '',
-        arrivalTime: stu.arrival?.time
-          ? new Date(toSeconds(stu.arrival.time) * 1000).toISOString()
-          : undefined,
-        departureTime: stu.departure?.time
-          ? new Date(toSeconds(stu.departure.time) * 1000).toISOString()
-          : undefined,
-      }))
-      return await withParentStations(feedId, times)
-    }
-  } catch {
-    // Silently fail
+  const results = await Promise.allSettled(
+    entries.map(entry => tripStopsOfFeed(entry, fetchFn)),
+  )
+  for (const result of results) {
+    if (result.status !== 'fulfilled') continue
+    const times = result.value.get(tripId)
+    if (times?.length) return await withParentStations(feedId, times)
   }
 
   return []

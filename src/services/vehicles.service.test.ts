@@ -65,7 +65,7 @@ mock.module('./subway-interpolation.service', () => ({
 
 // ── Import under test ───────────────────────────────────────────────
 
-const { getVehiclePositions } = await import('./vehicles.service')
+const { getVehiclePositions, getTripStopTimes } = await import('./vehicles.service')
 
 // ── Test fixtures ───────────────────────────────────────────────────
 
@@ -247,5 +247,61 @@ describe('VehiclesService — getVehiclePositions', () => {
 
     // entity-3 has null position, should be skipped
     expect(result.vehicles.every(v => v.vehicleId !== '888_ghost')).toBe(true)
+  })
+})
+
+/**
+ * A feed's TripUpdates are plural. MTA New York City Transit publishes nine
+ * subway line groups plus the bus feed on one row, so a trip's times live in
+ * whichever one carries its line — searching only the first found nothing.
+ */
+describe('VehiclesService — getTripStopTimes', () => {
+  beforeEach(() => {
+    mockDbExecute.mockReset()
+    mockDecode.mockClear()
+  })
+
+  // Distinct URLs per test: the decoded feeds are cached by URL for 10s.
+  const feedRow = (n: number) => [{
+    rt_urls: JSON.stringify([
+      { url: `https://mta/${n}/gtfs-ace`, type: 'tripUpdates' },
+      { url: `https://mta/${n}/gtfs`, type: 'tripUpdates' },
+      { url: `https://mta/${n}/vehiclePositions`, type: 'vehiclePositions' },
+    ]),
+  }]
+
+  test('finds a trip in a feed that is not the first', async () => {
+    mockDbExecute.mockImplementation(async () => feedRow(1))
+    mockDecode.mockImplementation((buf: Uint8Array) => ({
+      header: {},
+      entity: buf.byteLength === 1
+        ? []                                          // the ACE feed: no 4 trains
+        : [{
+            id: 'e1',
+            tripUpdate: {
+              trip: { tripId: '126650_4..N' },
+              stopTimeUpdate: [
+                { stopId: '250N', arrival: { time: { low: 1717200000, high: 0 } } },
+                { stopId: '248N', departure: { time: { low: 1717200120, high: 0 } } },
+              ],
+            },
+          }],
+    }))
+    const fetchFn = mock(async (url: string) =>
+      new Response(new ArrayBuffer(url.endsWith('gtfs-ace') ? 1 : 2), { status: 200 }),
+    ) as any
+
+    const stops = await getTripStopTimes('5', '126650_4..N', fetchFn)
+    expect(stops.map(s => s.stopId)).toEqual(['250N', '248N'])
+    expect(stops[0].arrivalTime).toBeDefined()
+    expect(stops[1].departureTime).toBeDefined()
+  })
+
+  test('returns nothing when no feed carries the trip', async () => {
+    mockDbExecute.mockImplementation(async () => feedRow(2))
+    mockDecode.mockImplementation(() => ({ header: {}, entity: [] }))
+    const fetchFn = mock(async () => new Response(new ArrayBuffer(2), { status: 200 })) as any
+
+    expect(await getTripStopTimes('5', 'nope', fetchFn)).toEqual([])
   })
 })
