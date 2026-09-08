@@ -12,12 +12,26 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ### Fixed
 
+* A route's live vehicles are its own trains only. "Related routes" meant
+  "same colour", so asking which trains were on the 4 answered with the 5s
+  and 6s as well — a whole trunk line's fleet on one line's map. Now only a
+  line's express working counts as the same line (the `6X` for the `6`)
+* `/transit/trip-stops` names each stop's parent station, so a caller listing
+  stations can line a run's times up against a feed that predicts against
+  platforms
+
+## [0.2.23] - 2026-09-07
+
+### Fixed
+
 * Departure boards drop the runs a skip alert disowns. A station closed for
   a parade until 9pm listed 2s "in 5 minutes" — the schedule plus realtime
   never removes a planned skip, only the agency's alert says it. Each run is
   judged at its own time, so the trains after the window stay: their times
   are what tell a rider when the station reopens. Applies to every consumer
   of `/transit/departures` — widgets, transfer boards, anything
+
+## [0.2.22] - 2026-09-07
 
 ### Fixed
 
@@ -27,6 +41,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
   skip this stop" alert invisible on the very stop page it was about
 * `/transit/departures` names each board's GTFS parent station, so a caller
   holding a board can join it to the alerts about its stop
+
+## [0.2.21] - 2026-09-07
 
 ### Fixed
 

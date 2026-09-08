@@ -464,6 +464,9 @@ async function fetchTripUpdates(
 
 export interface TripStopTime {
   stopId: string
+  /** GTFS `parent_station`, when the feed's realtime names a platform.
+   *  Route views list stations, so a run's times only line up by it. */
+  parentStation?: string
   arrivalTime?: string
   departureTime?: string
 }
@@ -499,7 +502,7 @@ export async function getTripStopTimes(
       if (!tu?.trip?.tripId || tu.trip.tripId !== tripId) continue
       if (!tu.stopTimeUpdate?.length) continue
 
-      return tu.stopTimeUpdate.map((stu: any) => ({
+      const times = tu.stopTimeUpdate.map((stu: any) => ({
         stopId: stu.stopId || '',
         arrivalTime: stu.arrival?.time
           ? new Date(toSeconds(stu.arrival.time) * 1000).toISOString()
@@ -508,12 +511,40 @@ export async function getTripStopTimes(
           ? new Date(toSeconds(stu.departure.time) * 1000).toISOString()
           : undefined,
       }))
+      return await withParentStations(feedId, times)
     }
   } catch {
     // Silently fail
   }
 
   return []
+}
+
+/** Attach each stop time's parent station, so a caller listing stations can
+ *  match a feed that predicts against platforms (the MTA's `250N`/`250S`). */
+async function withParentStations(
+  feedId: string,
+  times: TripStopTime[],
+): Promise<TripStopTime[]> {
+  const ids = [...new Set(times.map(t => t.stopId).filter(Boolean))]
+  if (!ids.length) return times
+  try {
+    const rows = (await db.execute(sql`
+      SELECT stop_id, parent_station
+      FROM gtfs_stops
+      WHERE feed_id = ${feedId}
+        AND stop_id IN (${sql.join(ids.map(id => sql`${id}`), sql`, `)})
+        AND parent_station IS NOT NULL AND parent_station != ''
+    `)) as any[]
+    if (!rows.length) return times
+    const parents = new Map(rows.map(r => [String(r.stop_id), String(r.parent_station)]))
+    return times.map(t => {
+      const parent = parents.get(t.stopId)
+      return parent ? { ...t, parentStation: parent } : t
+    })
+  } catch {
+    return times
+  }
 }
 
 /**
