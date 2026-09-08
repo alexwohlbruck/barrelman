@@ -10,6 +10,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.2.24] - 2026-09-07
+
 ### Fixed
 
 * A route's live vehicles are its own trains only. "Related routes" meant
