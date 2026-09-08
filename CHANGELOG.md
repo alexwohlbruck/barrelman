@@ -10,6 +10,17 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.2.23] - 2026-09-07
+
+### Fixed
+
+* Departure boards drop the runs a skip alert disowns. A station closed for
+  a parade until 9pm listed 2s "in 5 minutes" — the schedule plus realtime
+  never removes a planned skip, only the agency's alert says it. Each run is
+  judged at its own time, so the trains after the window stay: their times
+  are what tell a rider when the station reopens. Applies to every consumer
+  of `/transit/departures` — widgets, transfer boards, anything
+
 ## [0.2.22] - 2026-09-07
 
 ### Fixed
