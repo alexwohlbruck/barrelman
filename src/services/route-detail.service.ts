@@ -60,7 +60,8 @@ export interface RouteDetailResponse {
   stops: RouteDetailStop[]
   /** Route shape as [lng, lat] pairs, or null if no shape available. */
   coordinates: [number, number][] | null
-  /** Related route IDs that share the same color/trunk (e.g., 1/2/3 on the red line). */
+  /** Other route ids running this same line — its express working, e.g. `6X`
+   *  for the `6`. Not the trunk: the 4 does not relate to the 5. */
   relatedRouteIds: string[]
 }
 
@@ -415,11 +416,10 @@ export async function getRouteDetail(
   )
   for (const stop of orderedStops) stop.routes = stopRoutes.get(stop.stopId) ?? []
 
-  // Find related routes (same color = same trunk line, e.g., 1/2/3)
   const relatedRouteIds = await findRelatedRoutes(
     actualFeedId,
     routeId,
-    route.route_color,
+    route.route_short_name,
     route.route_type,
   )
 
@@ -511,26 +511,39 @@ function haversine(lat1: number, lng1: number, lat2: number, lng2: number): numb
 }
 
 /**
- * Find routes that share the same trunk line (same color + type).
- * E.g., NYC subway 1/2/3 all share red color = same trunk.
+ * The other workings of THIS line — its express variant and nothing else.
+ *
+ * Colour used to stand in for "same line", but a colour is a trunk: the 4,
+ * 5, 6 and 6X are all MTA green, so a caller asking which trains are on the
+ * 4 got the 5s and 6s too. Two route ids are the same line when their short
+ * names differ only by an express `X`.
  */
 async function findRelatedRoutes(
   feedId: string,
   routeId: string,
-  routeColor: string | null,
+  routeShortName: string | null,
   routeType: string | number | null,
 ): Promise<string[]> {
-  if (!routeColor) return []
+  const base = expressBase(routeShortName)
+  if (!base) return []
 
   const result = await db.execute(sql`
     SELECT route_id
     FROM gtfs_routes
     WHERE feed_id = ${feedId}
-      AND route_color = ${routeColor}
       AND route_type = ${parseInt(String(routeType ?? 0), 10)}
       AND route_id != ${routeId}
+      AND regexp_replace(upper(trim(coalesce(route_short_name, ''))), '(.)X$', '\\1') = ${base}
     ORDER BY route_id
   `)
 
   return (result as any[]).map(r => r.route_id as string)
 }
+
+/** A short name with its express suffix taken off, uppercased — the key two
+ *  workings of one line share (`6` and `6X`, `SIM4` and `SIM4X`). Empty when
+ *  there is no short name to key on, which means "nothing is related". */
+export function expressBase(shortName: string | null): string {
+  return (shortName || '').trim().toUpperCase().replace(/(.)X$/, '$1')
+}
+

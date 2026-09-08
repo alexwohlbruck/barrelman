@@ -9,7 +9,7 @@
  */
 
 import { describe, test, expect } from 'bun:test'
-import { servedStops } from './route-detail.service'
+import { expressBase, servedStops } from './route-detail.service'
 
 const stop = (stopId: string, trips: number) => ({ stopId, trips })
 const ids = (stops: Array<{ stopId: string }>) => stops.map((s) => s.stopId)
@@ -57,5 +57,27 @@ describe('servedStops', () => {
 
   test('handles an empty route', () => {
     expect(servedStops([])).toEqual([])
+  })
+})
+
+describe('expressBase', () => {
+  test('groups a line with its express working', () => {
+    expect(expressBase('6X')).toBe(expressBase('6'))
+    expect(expressBase('SIM4X')).toBe(expressBase('SIM4'))
+  })
+
+  test('keeps the trunk apart — the 4 is not the 5', () => {
+    expect(expressBase('4')).not.toBe(expressBase('5'))
+    expect(expressBase('4')).not.toBe(expressBase('6'))
+  })
+
+  test('does not eat a name that merely ends in X', () => {
+    expect(expressBase('X')).toBe('X')
+    expect(expressBase('X1')).toBe('X1')
+  })
+
+  test('is empty when there is no short name to key on', () => {
+    expect(expressBase(null)).toBe('')
+    expect(expressBase('  ')).toBe('')
   })
 })
