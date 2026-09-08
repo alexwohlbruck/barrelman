@@ -10,6 +10,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.2.23] - 2026-09-07
+
 ### Fixed
 
 * Departure boards drop the runs a skip alert disowns. A station closed for
