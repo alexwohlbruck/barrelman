@@ -12,6 +12,8 @@
 import { db } from '../db'
 import { sql } from 'drizzle-orm'
 import { sameStationName } from '../lib/station-name'
+import { dropSkippedRuns } from '../lib/skipped-runs'
+import { getServiceAlerts } from './alerts.service'
 
 // ── Types ───────────────────────────────────────────────────────────
 
@@ -900,6 +902,7 @@ export async function getDepartures(
       // mostly a same-named neighbour's.
       return {
         stop,
+        members,
         page: result.stopTimes.length,
         result: members ? onlyAtStation(result, members) : result,
       }
@@ -908,12 +911,17 @@ export async function getDepartures(
 
   // 4. Collect all route IDs for batch color lookup
   const routePairs: Array<{ feedId: string; routeId: string }> = []
-  const successResults: Array<{ stop: NearbyStop; page: number; result: MotisStopTimesResponse }> = []
+  const successResults: Array<{
+    stop: NearbyStop
+    members: Set<string> | null
+    page: number
+    result: MotisStopTimesResponse
+  }> = []
 
   for (const outcome of motisResults) {
     if (outcome.status !== 'fulfilled') continue
-    const { stop, page, result } = outcome.value
-    successResults.push({ stop, page, result })
+    const { stop, members, page, result } = outcome.value
+    successResults.push({ stop, members, page, result })
 
     for (const st of result.stopTimes) {
       const { feedId: fid, stopId: rid } = parseMotisId(st.routeId)
@@ -931,8 +939,21 @@ export async function getDepartures(
   // 5. Batch-fetch route colors
   const colorMap = await fetchRouteColors(routePairs)
 
+  // The agency's in-effect skip alerts, so a run the agency has disowned
+  // never reaches a board — see dropSkippedRuns. One fetch per request;
+  // the per-feed alert feeds behind it are cached for a minute.
+  const skipAlerts = await getServiceAlerts(
+    {
+      feedId: successResults[0].stop.feedId,
+      stopIds: [...new Set(successResults.map((r) => r.stop.stopId))],
+    },
+    fetchFn,
+  )
+    .then((r) => r.alerts)
+    .catch(() => [])
+
   // 6. Transform and return
-  return successResults.map(({ stop, page, result }) => {
+  return successResults.map(({ stop, members, page, result }) => {
     const motisPlace = result.place
     const timezone = motisPlace?.tz || result.stopTimes[0]?.place?.tz || 'UTC'
 
@@ -953,10 +974,20 @@ export async function getDepartures(
         ...(stop.via === 'transfer' ? { via: 'transfer' as const } : {}),
       },
       ...trimToWindow(
-        transformDepartures(result.stopTimes, colorMap).filter(
-          (d) =>
-            (!routeFilter || routeFilter.has(d.route.shortName ?? '')) &&
-            (directionId == null || d.directionId === directionId),
+        dropSkippedRuns(
+          transformDepartures(result.stopTimes, colorMap).filter(
+            (d) =>
+              (!routeFilter || routeFilter.has(d.route.shortName ?? '')) &&
+              (directionId == null || d.directionId === directionId),
+          ),
+          skipAlerts,
+          // this station's whole family: its own id, its platforms, and
+          // its parent — whichever level the agency chose to inform
+          [
+            stop.stopId,
+            ...(stop.parentStation ? [stop.parentStation] : []),
+            ...[...(members ?? [])].map((m) => m.slice(m.indexOf('_') + 1)),
+          ],
         ),
         windowEnd,
         // A full page means MOTIS had more to give, so more runs exist even
