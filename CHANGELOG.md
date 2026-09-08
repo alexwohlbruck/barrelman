@@ -10,6 +10,16 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Fixed
+
+* A route's live vehicles are its own trains only. "Related routes" meant
+  "same colour", so asking which trains were on the 4 answered with the 5s
+  and 6s as well — a whole trunk line's fleet on one line's map. Now only a
+  line's express working counts as the same line (the `6X` for the `6`)
+* `/transit/trip-stops` names each stop's parent station, so a caller listing
+  stations can line a run's times up against a feed that predicts against
+  platforms
+
 ## [0.2.23] - 2026-09-07
 
 ### Fixed
