@@ -196,7 +196,12 @@ services:
     # reads it beyond the last few minutes of a debugging session.
     logging: *default-logging
     working_dir: /data
-    command: ["/motis", "server", "/data"]
+    # --log-level info: MOTIS defaults to debug, which logs every GTFS-RT
+    # entity it cannot resolve — "could not resolve trip_id", "unsupported:
+    # no trip_update field" — once per feed per poll. Measured at 28 GB/day
+    # in production, and nothing acts on it: unresolvable realtime ids are
+    # normal for feeds whose RT and static halves disagree.
+    command: ["/motis", "server", "/data", "--log-level", "info"]
     volumes:
       - barrelman-gtfs-data:/data
       - barrelman-osm-data:/osm-data:ro

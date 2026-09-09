@@ -304,6 +304,11 @@ nothing reads these logs beyond the last few minutes of a debugging session:
 sudo truncate -s 0 /var/lib/docker/containers/*/*-json.log
 ```
 
+MOTIS is the usual culprit. It defaults to `--log-level debug`, which logs
+every GTFS-RT entity it cannot resolve, once per feed per poll — normal noise
+for feeds whose realtime and static halves disagree. The compose file pins it
+to `info`; if you run MOTIS yourself, pass `--log-level info`.
+
 The compose file caps every service at `max-size: 50m` / `max-file: 3`, but
 **Docker applies log options when a container is created**, so a container that
 predates the cap keeps growing. Check what a running container actually has:
