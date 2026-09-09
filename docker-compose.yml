@@ -18,11 +18,28 @@ volumes:
   barrelman-osm-data:
   barrelman-gtfs-data:
 
+# Docker's json-file driver is UNBOUNDED by default, and these services log
+# forever: MOTIS writes a timer pair per realtime poll, GraphHopper narrates
+# every request. Left uncapped that reached 21.5 GB (motis) and 1.5 GB
+# (graphhopper) in production, on the disk that also holds the OSM database —
+# a slow march to a full disk that no import or query is responsible for.
+# Nothing reads these beyond the last few minutes of a debugging session.
+#
+# Log options apply at CONTAINER CREATION, so changing them here only takes
+# effect once a service is recreated (`docker compose up -d --force-recreate
+# <svc>`); a running container keeps the config it was born with.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "3"
+
 services:
   barrelman-db:
     container_name: barrelman-db
     image: alexwohlbruck/barrelman-db:latest
     restart: unless-stopped
+    logging: *default-logging
     # The stock postgres image ships shared_buffers=128MB — for a 23GB table
     # that means almost every search projection is a cold read, and it was the
     # difference between a 6.6s and a 0.2s FTS layer on an uncached query.
@@ -115,6 +132,7 @@ services:
     # release to invalidate — unlike MOTIS and GraphHopper below.
     image: ghcr.io/maplibre/martin
     restart: unless-stopped
+    logging: *default-logging
     # --on-invalid warn, because the default is abort and abort means *all*
     # tiles. Martin validates every source at startup and a single one it
     # cannot read is fatal: it exits, compose restarts it, and it exits again,
@@ -143,6 +161,7 @@ services:
     container_name: barrelman-graphhopper
     image: israelhikingmap/graphhopper:latest
     restart: unless-stopped
+    logging: *default-logging
     # -i and -o must be passed explicitly; the entrypoint script defaults
     # graph.location to /data/default-gh otherwise, ignoring our config value.
     command: ["-i", "/data/region.osm.pbf", "-o", "/data/graph-cache"]
@@ -175,11 +194,7 @@ services:
     # is unbounded by default, so that had grown to 18 GB on one dev box and
     # 7.7 GB in production, on disks that also hold the OSM database. Nothing
     # reads it beyond the last few minutes of a debugging session.
-    logging:
-      driver: json-file
-      options:
-        max-size: "50m"
-        max-file: "3"
+    logging: *default-logging
     working_dir: /data
     command: ["/motis", "server", "/data"]
     volumes:
@@ -198,6 +213,7 @@ services:
     container_name: barrelman
     image: alexwohlbruck/barrelman:latest
     restart: unless-stopped
+    logging: *default-logging
     environment:
       DATABASE_URL: postgresql://barrelman:${BARRELMAN_DB_PASSWORD:-barrelman}@barrelman-db:5432/barrelman
       # Caps runaway queries on the API query pool only — schema DDL and the
@@ -378,6 +394,7 @@ services:
       context: .
       dockerfile: Dockerfile.ops
     restart: unless-stopped
+    logging: *default-logging
     environment:
       DATABASE_URL: postgresql://barrelman:${BARRELMAN_DB_PASSWORD:-barrelman}@barrelman-db:5432/barrelman
       BARRELMAN_DB_PASSWORD: ${BARRELMAN_DB_PASSWORD:-barrelman}

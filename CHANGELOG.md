@@ -10,6 +10,19 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Fixed
+
+- Container logs are capped at 50 MB per service (three rotations). Docker's
+  `json-file` driver is unbounded by default and the engines log forever — a
+  timer pair per realtime poll from MOTIS, a line per request from GraphHopper
+  — which had grown to 21.5 GB and 1.5 GB on a production host, on the disk
+  that also holds the OSM database. Only MOTIS was capped before; every
+  long-running service is now. Docker applies log options at container
+  creation, so an existing deployment must recreate its containers
+  (`docker compose up -d --force-recreate`) for the cap to take effect, and
+  should truncate what has already accumulated. `self-hosting/troubleshooting`
+  covers both.
+
 ## [0.2.25] - 2026-09-07
 
 ### Fixed

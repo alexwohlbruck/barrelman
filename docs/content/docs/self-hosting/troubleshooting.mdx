@@ -284,6 +284,40 @@ Everything under `postgres:` in `martin-config.yaml` is queried live, so `parchm
 
 A browser holding day-old tiles looks identical to all four: `/tiles` sends `cache-control: max-age=86400`, so confirm with a hard reload or a direct `curl` before digging.
 
+**The disk fills and no import or query explains it**
+
+Container logs. Docker's `json-file` driver is unbounded by default, and the
+engines log continuously: MOTIS writes a timer pair for every realtime poll,
+GraphHopper narrates every request. On one production host the MOTIS log alone
+reached 21.5 GB, on the same disk that holds the OSM database.
+
+Find them:
+
+```bash
+sudo du -sh /var/lib/docker/containers/*/*-json.log | sort -rh | head
+```
+
+Reclaim the space immediately — truncating is safe on a running container, and
+nothing reads these logs beyond the last few minutes of a debugging session:
+
+```bash
+sudo truncate -s 0 /var/lib/docker/containers/*/*-json.log
+```
+
+The compose file caps every service at `max-size: 50m` / `max-file: 3`, but
+**Docker applies log options when a container is created**, so a container that
+predates the cap keeps growing. Check what a running container actually has:
+
+```bash
+docker inspect --format '{{.HostConfig.LogConfig.Config}}' barrelman-motis
+```
+
+An empty `map[]` means unlimited. Recreate the service to apply the cap:
+
+```bash
+docker compose up -d --force-recreate motis
+```
+
 ## Endpoints
 
 **`/geocode` returns fewer levels than expected**
