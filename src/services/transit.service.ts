@@ -113,6 +113,14 @@ export interface IntermodalRouteRequest extends TransitRouteRequest {
    * time-optimal search would Pareto-dominate away.
    */
   additionalTransferTime?: number
+  /**
+   * Restrict to trips that allow bike carriage, for riding a bike onto
+   * transit and off again at the far end.
+   *
+   * Answered from GTFS `bikes_allowed`, where "no information" counts as no —
+   * so a feed that omits it yields nothing rather than a guess.
+   */
+  requireBikeTransport?: boolean
 }
 
 export interface TransitLeg {
@@ -752,6 +760,10 @@ async function queryMotisIntermodal(
   }
   if (request.postTransitRentalFormFactors?.length) {
     params.set('postTransitRentalFormFactors', request.postTransitRentalFormFactors.join(','))
+  }
+
+  if (request.requireBikeTransport) {
+    params.set('requireBikeTransport', 'true')
   }
 
   if (request.searchWindow != null) {

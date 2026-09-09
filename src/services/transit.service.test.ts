@@ -63,6 +63,7 @@ mock.module('../db', () => ({
 
 import {
   getTransitRoute,
+  getIntermodalRoute,
   getRoutesForStop,
   checkMotisHealth,
   extractFare,
@@ -698,5 +699,35 @@ describe('checkMotisHealth', () => {
       status: 'unavailable',
       message: 'Connection refused',
     })
+  })
+})
+
+describe('getIntermodalRoute bike carriage', () => {
+  beforeEach(() => {
+    dbCallIndex = 0
+  })
+
+  const request = {
+    from: { lat: 35.23, lng: -80.84 },
+    to: { lat: 35.77, lng: -78.64 },
+    time: '2023-11-15T08:00:00Z',
+    preTransitModes: ['BIKE' as const],
+    postTransitModes: ['BIKE' as const],
+  }
+
+  const urlOf = (fetchFn: any) => String(fetchFn.mock.calls[0][0])
+
+  test('asks MOTIS for bike carriage only when required', async () => {
+    const fetchFn = mockFetch(makeMotisResponse())
+    await getIntermodalRoute({ ...request, requireBikeTransport: true }, fetchFn)
+
+    expect(urlOf(fetchFn)).toContain('requireBikeTransport=true')
+  })
+
+  test('omits the flag otherwise, so ordinary queries are unrestricted', async () => {
+    const fetchFn = mockFetch(makeMotisResponse())
+    await getIntermodalRoute(request, fetchFn)
+
+    expect(urlOf(fetchFn)).not.toContain('requireBikeTransport')
   })
 })
