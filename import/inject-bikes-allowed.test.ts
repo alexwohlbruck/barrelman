@@ -59,6 +59,48 @@ describe('defaultBikesAllowed', () => {
     expect(rows[2]).toEqual(['t2', '', '1'])
   })
 
+  test('leaves bus trips unstated, since most take only a folding bike', () => {
+    const routes = 'route_id,route_type\nbus1,3\ntrolley,11\nexpress,702\nsub,1\n'
+    const result = defaultBikesAllowed(
+      'trip_id,route_id\nt1,bus1\nt2,trolley\nt3,express\nt4,sub\n',
+      routes,
+    )
+
+    expect(result.bus).toBe(3)
+    expect(result.filled).toBe(1)
+    expect(column(result.tripsTxt!)).toEqual(['', '', '', '1'])
+  })
+
+  test('fills bus trips when the network is known to carry full-size bikes', () => {
+    const result = defaultBikesAllowed(
+      'trip_id,route_id\nt1,bus1\nt2,sub\n',
+      'route_id,route_type\nbus1,3\nsub,1\n',
+      { allowBus: true },
+    )
+
+    expect(result.bus).toBe(0)
+    expect(column(result.tripsTxt!)).toEqual(['1', '1'])
+  })
+
+  test('still honours an explicit bus policy either way', () => {
+    const result = defaultBikesAllowed(
+      'trip_id,route_id,bikes_allowed\nt1,bus1,1\nt2,bus1,2\nt3,bus1,\n',
+      'route_id,route_type\nbus1,3\n',
+    )
+
+    expect(result.declared).toBe(1)
+    expect(result.forbidden).toBe(1)
+    expect(result.bus).toBe(1)
+    expect(result.tripsTxt).toBeUndefined()
+  })
+
+  test('fills everything when the feed has no routes.txt to classify with', () => {
+    const result = defaultBikesAllowed('trip_id,route_id\nt1,bus1\n', null)
+
+    expect(result.bus).toBe(0)
+    expect(column(result.tripsTxt!)).toEqual(['1'])
+  })
+
   test('reports feeds with no trips rather than inventing any', () => {
     expect(defaultBikesAllowed(null).skipped).toBe('no-trips')
     expect(defaultBikesAllowed('trip_id,bikes_allowed\n').skipped).toBe('empty-trips')
