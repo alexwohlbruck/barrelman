@@ -51,6 +51,15 @@ export interface TransitRouteResponse {
     searchWindow: number
     nextPageCursor?: string
     prevPageCursor?: string
+    /**
+     * Echoes that bike carriage was actually enforced on this search.
+     *
+     * A caller cannot tell "no carriage data, so no results" from "this
+     * server is too old to know the flag and ignored it" — the second would
+     * hand back rides the bike may not be allowed on. Echoing lets the
+     * caller require the confirmation and fail safe without it.
+     */
+    requireBikeTransport?: boolean
   }
 }
 
@@ -809,7 +818,13 @@ async function queryMotisIntermodal(
   ]
 
   if (allItineraries.length === 0) {
-    return { itineraries: [], metadata: { searchWindow: 0 } }
+    return {
+      itineraries: [],
+      metadata: {
+        searchWindow: 0,
+        ...(request.requireBikeTransport && { requireBikeTransport: true }),
+      },
+    }
   }
 
   return {
@@ -818,6 +833,7 @@ async function queryMotisIntermodal(
       searchWindow: data.searchWindowUsed ?? data.plan?.searchWindowUsed ?? 0,
       nextPageCursor: data.nextPageCursor || undefined,
       prevPageCursor: data.previousPageCursor || undefined,
+      ...(request.requireBikeTransport && { requireBikeTransport: true }),
     },
   }
 }

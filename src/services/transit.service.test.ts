@@ -730,4 +730,30 @@ describe('getIntermodalRoute bike carriage', () => {
 
     expect(urlOf(fetchFn)).not.toContain('requireBikeTransport')
   })
+
+  test('confirms enforcement in the response, so callers can fail safe', async () => {
+    const fetchFn = mockFetch(makeMotisResponse())
+    const result = await getIntermodalRoute(
+      { ...request, requireBikeTransport: true }, fetchFn,
+    )
+
+    expect(result.metadata?.requireBikeTransport).toBe(true)
+  })
+
+  test('confirms enforcement even when nothing matched', async () => {
+    const fetchFn = mockFetch({ itineraries: [], direct: [] })
+    const result = await getIntermodalRoute(
+      { ...request, requireBikeTransport: true }, fetchFn,
+    )
+
+    expect(result.itineraries).toHaveLength(0)
+    expect(result.metadata?.requireBikeTransport).toBe(true)
+  })
+
+  test('says nothing about enforcement when it was not asked for', async () => {
+    const fetchFn = mockFetch(makeMotisResponse())
+    const result = await getIntermodalRoute(request, fetchFn)
+
+    expect(result.metadata?.requireBikeTransport).toBeUndefined()
+  })
 })
