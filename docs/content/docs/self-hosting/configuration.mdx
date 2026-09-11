@@ -286,6 +286,40 @@ Read by the scripts running in `barrelman-ops` (and, for the osm2pgsql step, in
 | `GTFS_REGION` | — | Overrides a single GTFS search area, bypassing `REGIONS` |
 | `GITHUB_TOKEN` | — | Raises the GitHub API limit when resolving a region's OpenAddresses file list (60 req/hour unauthenticated). A rate-limited lookup yields an empty address list and a warning, not a failure |
 | `DB_CONTAINER` | `barrelman-db` | Container the scripts `docker exec` into for osm2pgsql |
+| `OSM2PGSQL_FLAT_NODES` | — | Path to a flat node file. Unset keeps node coordinates in Postgres. Set it for continent- and planet-sized imports — see below |
+| `OSM2PGSQL_CACHE_MB` | osm2pgsql's own (800) | Node cache in MB. Ignored when `OSM2PGSQL_FLAT_NODES` is set |
+| `OSM2PGSQL_PROCESSES` | osm2pgsql's own | Parallel workers for the middle tables |
+
+### Node storage on large imports
+
+osm2pgsql has to remember every node's coordinates so it can assemble ways from
+them later. By default those go in the `planet_osm_nodes` middle table, and
+building a way is an index lookup per node. That is fine while the table fits in
+memory. It stops being fine somewhere around a country: the table outgrows RAM,
+every lookup becomes a disk seek, and the import goes from hours to days.
+
+`OSM2PGSQL_FLAT_NODES` moves node storage to a flat file addressed directly by
+node ID — one seek, no index — and skips `planet_osm_nodes` altogether.
+
+```dotenv
+OSM2PGSQL_FLAT_NODES=/data/flat-nodes.bin
+```
+
+<Callout type="warn" title="Not a free win below continent scale">
+The file is sized by the **highest node ID in the input**, not by how many nodes
+you keep. Any extract carrying present-day OSM IDs therefore produces a file of
+roughly 100 GB. It is sparse, so `du` reports far less than `ls` does, but plan
+disk for the full size — a filesystem that cannot hold it will fail the import
+partway through. For a city or a state the middle tables are both faster and
+very much smaller.
+</Callout>
+
+The same value is read by `update-osm.sh`, so daily diffs use the node storage
+the import created. Do not change or delete the path afterwards: the osm2pgsql
+version `barrelman-db` ships does not record it in the database, so an append
+that cannot find the file looks for coordinates in a `planet_osm_nodes` that was
+never written, resolves every way in the diff to nothing, and deletes real
+geometry rather than failing. If you need to change it, re-import from scratch.
 
 ## Scheduled jobs
 

@@ -10,6 +10,17 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Added
+
+* `OSM2PGSQL_FLAT_NODES` puts osm2pgsql's node coordinates in a flat file
+  instead of the `planet_osm_nodes` table. Past roughly a country that table no
+  longer fits in memory and every way the import assembles costs a disk seek,
+  which is what made continent- and planet-sized imports take days. The daily
+  diff apply reads the same variable, so replication keeps working. Leave it
+  unset for anything smaller — the file is sized by the highest node ID in the
+  extract rather than the nodes kept, so a city still produces ~100 GB of it.
+  `OSM2PGSQL_CACHE_MB` and `OSM2PGSQL_PROCESSES` are exposed alongside it
+
 ## [0.2.25] - 2026-09-07
 
 ### Fixed

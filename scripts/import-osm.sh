@@ -19,6 +19,11 @@ set -euo pipefail
 #   GEOFABRIK_URL         - PBF download URL (default: NC extract)
 #   IMPORT_PBF            - Path to local PBF file, overrides download
 #   BARRELMAN_DATA_DIR    - Data directory path (default: /data)
+#   OSM2PGSQL_FLAT_NODES  - Path to a flat node file. Unset (default) keeps node
+#                           storage in Postgres. Set it for continent/planet
+#                           imports — see step 2. Must match update-osm.sh.
+#   OSM2PGSQL_CACHE_MB    - Node cache in MB when NOT using a flat node file
+#   OSM2PGSQL_PROCESSES   - Parallel workers for the middle tables
 # =============================================================================
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -61,12 +66,48 @@ else
 fi
 
 # ── Step 2: osm2pgsql import ─────────────────────────────────────────────────
+# --slim keeps the middle tables so osm2pgsql-replication can apply diffs later.
+# Those tables are also where every node's coordinates live, so resolving a way
+# means one index lookup per node against a table that, past a country or so,
+# is far larger than RAM. --flat-nodes moves node storage into a flat file
+# addressed by node ID — an 8-byte seek instead of a B-tree descent — and drops
+# planet_osm_nodes entirely. On a continent-sized extract that is the difference
+# between hours and days.
+#
+# It is opt-in because the file is sized by the highest node ID in the input,
+# not by how many nodes are kept: even a city extract yields a ~100 GB (sparse)
+# file. Below roughly a country the middle tables are both faster and far
+# smaller, so small installs should leave this unset.
+#
+# Whatever is set here MUST also be set when diffs are applied — update-osm.sh
+# reads the same variable. osm2pgsql 1.8, which barrelman-db ships, does not
+# record the flat-nodes path in the database (1.9+ does), so an update that
+# omits it cannot resolve any node the file holds.
+OSM2PGSQL_ARGS=()
+if [ -n "${OSM2PGSQL_FLAT_NODES:-}" ]; then
+    mkdir -p "$(dirname "$OSM2PGSQL_FLAT_NODES")"
+    # --create rebuilds from scratch, so a file left by an earlier import is
+    # stale by definition. Reusing it would resolve ways against another
+    # extract's node IDs.
+    rm -f "$OSM2PGSQL_FLAT_NODES"
+    echo "  Node storage: flat file at $OSM2PGSQL_FLAT_NODES"
+    # --cache only ever holds nodes, which now live in the flat file, so any
+    # cache is dead weight that osm2pgsql warns about and ignores.
+    OSM2PGSQL_ARGS+=(--flat-nodes="$OSM2PGSQL_FLAT_NODES" --cache=0)
+elif [ -n "${OSM2PGSQL_CACHE_MB:-}" ]; then
+    OSM2PGSQL_ARGS+=(--cache="$OSM2PGSQL_CACHE_MB")
+fi
+if [ -n "${OSM2PGSQL_PROCESSES:-}" ]; then
+    OSM2PGSQL_ARGS+=(--number-processes="$OSM2PGSQL_PROCESSES")
+fi
+
 echo "[$(date '+%H:%M:%S')] [2/8] Running osm2pgsql import..."
 osm2pgsql \
     --create \
     --slim \
     --output=flex \
     --style="$PROJECT_DIR/import/osm2pgsql-flex.lua" \
+    ${OSM2PGSQL_ARGS[@]+"${OSM2PGSQL_ARGS[@]}"} \
     -d "$DATABASE_URL" \
     "$PBF_FILE"
 echo "  osm2pgsql complete."

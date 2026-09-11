@@ -171,6 +171,13 @@ PBF_MTIME_BEFORE=$(docker exec barrelman-db stat -c %Y "$PBF_FILE" 2>/dev/null |
 # output the binary falls back to the pgsql output and dies on the Lua style
 # with "Weird style line ...:1". osm2pgsql 1.9+ can recover the output from
 # osm2pgsql_properties, but the version in barrelman-db predates that table.
+#
+# --flat-nodes is passed for the same reason, and matters more: if the import
+# put node coordinates in a flat file, an append that omits the flag looks for
+# them in a planet_osm_nodes that was never populated. Every way in the diff
+# then resolves to no geometry, so the update quietly deletes real roads
+# instead of failing. It must stay in step with OSM2PGSQL_FLAT_NODES in
+# import-osm.sh — both read the same variable so they cannot drift.
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] [1/8] Applying OSM diffs (database + extract)..."
 docker exec \
   -e OSM_DIFF_FILE="$DIFF_FILE" \
@@ -183,7 +190,8 @@ docker exec \
     -- \
     --output=flex \
     --style /app/import/osm2pgsql-flex.lua \
-    --slim
+    --slim \
+    ${OSM2PGSQL_FLAT_NODES:+--flat-nodes=$OSM2PGSQL_FLAT_NODES}
 
 docker exec barrelman-db rm -f "$DIFF_FILE" || true
 

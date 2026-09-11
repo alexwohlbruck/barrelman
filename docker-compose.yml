@@ -404,6 +404,13 @@ services:
       UPDATE_MODE: ${UPDATE_MODE:-}
       GEOFABRIK_URL: ${GEOFABRIK_URL:-}
       GEOFABRIK_REPLICATION_URL: ${GEOFABRIK_REPLICATION_URL:-}
+      # Node storage for osm2pgsql, for continent- and planet-sized imports.
+      # run-import.sh forwards these into barrelman-db, and update-osm.sh passes
+      # the flat-nodes path to every diff apply — both must agree, so they are
+      # set once, here. See .env.example for when it is worth turning on.
+      OSM2PGSQL_FLAT_NODES: ${OSM2PGSQL_FLAT_NODES:-}
+      OSM2PGSQL_CACHE_MB: ${OSM2PGSQL_CACHE_MB:-}
+      OSM2PGSQL_PROCESSES: ${OSM2PGSQL_PROCESSES:-}
       # ── Portolan (corrected transit geometry) ───────────────────────
       # Workspace root for import/portolan-sync.ts: portolan.json + style/ +
       # data/gtfs/ (raw feeds, portolan's own copies) + build/ (tiles, exports,
