@@ -236,11 +236,17 @@ Pelias is a separate stack and takes hours — see
 
 ### Sizing
 
-`GRAPHHOPPER_JAVA_OPTS` must give the JVM more heap than the graph cache on
-disk — GraphHopper loads the graph into heap rather than memory-mapping it, and
-an undersized heap dies before it logs its version, so the failure looks like a
-crash rather than an out-of-memory. Check with `du -sh` on the `graph-cache`
-directory and raise `-Xmx` whenever `REGIONS` grows.
+`GRAPHHOPPER_JAVA_OPTS` sizes the JVM for the graph **build**, not for
+serving. The shipped config memory-maps the finished graph
+(`graph.dataaccess.default_type: MMAP` in `graphhopper-config.yml`), so at
+query time the graph lives in the kernel page cache, not in heap — a big
+graph makes serving want free RAM on the box, not a bigger `-Xmx`. The heap
+is consumed while importing the PBF and preparing landmarks, and an
+undersized heap dies before GraphHopper logs its version, so the failure
+looks like a crash rather than an out-of-memory. The on-disk `graph-cache`
+size (`du -sh`) remains a reasonable proxy for the build's heap need — raise
+`-Xmx` toward it whenever `REGIONS` grows, and take it back down after the
+build if RAM is tight.
 
 | Scale | DB size | RAM | Disk | |
 |---|---|---|---|---|
@@ -350,8 +356,9 @@ Either `pelias.openaddresses` is empty, or the Pelias `street` layer was never
 populated. See the layers note in [`pelias/README.md`](https://github.com/alexwohlbruck/barrelman/blob/main/pelias/README.md).
 
 **GraphHopper won't start after adding a region**
-The graph outgrew the heap. Raise `-Xmx` in `GRAPHHOPPER_JAVA_OPTS` above the
-on-disk `graph-cache` size and re-run `./scripts/rebuild-graphhopper.sh`.
+The graph *build* outgrew the heap (serving memory-maps the graph and is not
+the constraint). Raise `-Xmx` in `GRAPHHOPPER_JAVA_OPTS` toward the on-disk
+`graph-cache` size and re-run `./scripts/rebuild-graphhopper.sh`.
 
 **Incremental OSM updates unavailable**
 Not every extract publishes a replication feed. Set `UPDATE_MODE=full` to
