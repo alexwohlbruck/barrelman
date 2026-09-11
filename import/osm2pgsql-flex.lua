@@ -269,23 +269,52 @@ local function get_admin_level(tags)
     return nil
 end
 
--- Convert tags to JSON string for the jsonb column
-local function tags_to_json(tags)
-    local parts = {}
-    for k, v in pairs(tags) do
-        if k ~= 'created_by' and k ~= 'source' then
-            local ek = tostring(k):gsub('\\', '\\\\'):gsub('"', '\\"'):gsub('\n', '\\n'):gsub('\r', '\\r'):gsub('\t', '\\t')
-            local ev = tostring(v):gsub('\\', '\\\\'):gsub('"', '\\"'):gsub('\n', '\\n'):gsub('\r', '\\r'):gsub('\t', '\\t')
-            parts[#parts + 1] = '"' .. ek .. '":"' .. ev .. '"'
+-- Strip provenance and import-bookkeeping tags before anything is derived or
+-- stored. Nothing in the API surfaces these — they are mapper/import metadata —
+-- yet they measured ~16% of all tags bytes on the US extract (tiger:* alone
+-- rides on nearly every TIGER-imported way), and every byte here is paid again
+-- by the tags GIN index and by each enrichment rewrite downstream.
+--
+-- The list mirrors osm2pgsql's stock default.style deletions, minus keys that
+-- ARE meaningful to this API: note/fixme (mapper-visible, kept), naptan:*
+-- (UK transit stop IDs, kept for matching).
+--
+-- A predecessor of this (tags_to_json) filtered created_by/source but was dead
+-- code — the flex jsonb column serializes object.tags directly, so nothing was
+-- ever stripped.
+local JUNK_TAG_KEYS = {
+    source = true, source_ref = true, created_by = true, attribution = true,
+    odbl = true, import = true, import_uuid = true,
+}
+local JUNK_TAG_PREFIXES = {
+    'tiger:', 'gnis:', 'nhd:', 'NHD:', 'massgis:', 'canvec:', 'geobase:',
+    'KSJ2:', 'yh:', 'osak:', 'kms:', 'ngbe:', 'CLC:', '3dshapes:',
+    'source:', 'mvdgis:', 'dcgis:', 'nycdoitt:', 'chicago:', 'lacounty:',
+}
+
+local function clean_tags(tags)
+    for k in pairs(tags) do
+        if JUNK_TAG_KEYS[k] then
+            tags[k] = nil
+        else
+            for _, prefix in ipairs(JUNK_TAG_PREFIXES) do
+                if k:sub(1, #prefix) == prefix then
+                    tags[k] = nil
+                    break
+                end
+            end
         end
     end
-    return '{' .. table.concat(parts, ',') .. '}'
+    return tags
 end
 
 function osm2pgsql.process_node(object)
     if not next(object.tags) then return end
 
-    local tags = object.tags
+    -- An object whose only tags were provenance junk says nothing — treat it
+    -- exactly like an untagged one.
+    local tags = clean_tags(object.tags)
+    if not next(tags) then return end
     local geom = object:as_point()
 
     places:insert({
@@ -304,7 +333,10 @@ end
 function osm2pgsql.process_way(object)
     if not next(object.tags) then return end
 
-    local tags = object.tags
+    -- An object whose only tags were provenance junk says nothing — treat it
+    -- exactly like an untagged one.
+    local tags = clean_tags(object.tags)
+    if not next(tags) then return end
 
     if object.is_closed and tags['area'] ~= 'no' then
         -- Closed way = area (building, park, etc.)
@@ -349,7 +381,10 @@ end
 function osm2pgsql.process_relation(object)
     if not next(object.tags) then return end
 
-    local tags = object.tags
+    -- An object whose only tags were provenance junk says nothing — treat it
+    -- exactly like an untagged one.
+    local tags = clean_tags(object.tags)
+    if not next(tags) then return end
     local rtype = tags['type']
 
     if rtype == 'multipolygon' or rtype == 'boundary' then

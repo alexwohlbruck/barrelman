@@ -200,6 +200,11 @@ PBF_MTIME_AFTER=$(docker exec barrelman-db stat -c %Y "$PBF_FILE" 2>/dev/null ||
 # ── Step 2: Post-import SQL (idempotent — ensures columns + extracts new data)
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] [2/8] Running post-import SQL..."
 docker exec barrelman-db psql "$DB_URL" -f /app/import/post-import.sql
+# The query-serving indexes moved out of post-import.sql (a full import builds
+# them after enrichment — see finalize-indexes.sql). On an already-indexed
+# database every statement here is an IF NOT EXISTS no-op, so this preserves
+# the old "post-import guarantees the indexes exist" contract for updates.
+docker exec barrelman-db psql "$DB_URL" -f /app/import/finalize-indexes.sql
 
 # ── Step 3: Generate codes (incremental — only new/changed rows) ─────────────
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] [3/8] Extracting codes..."
