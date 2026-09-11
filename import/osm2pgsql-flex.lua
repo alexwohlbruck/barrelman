@@ -15,6 +15,14 @@ local places = osm2pgsql.define_table({
         { column = 'geom', type = 'geometry', projection = 4326, not_null = true },
         { column = 'geom_type', type = 'text', not_null = true },
         { column = 'admin_level', type = 'int' },
+        -- Generated column, computed by Postgres during osm2pgsql's own COPY:
+        -- deriving it post-import was a single 11-hour statement at US scale
+        -- (measured — ~30 min of ST_Area math, the rest rewriting half the
+        -- table through live indexes). create_only keeps osm2pgsql from
+        -- trying to write it, and replication re-inserts recompute it for
+        -- free. post-import.sql backfills databases imported before this
+        -- column existed (as a plain real column there).
+        { column = 'area_m2', sql_type = 'real GENERATED ALWAYS AS ((ST_Area(geom::geography))::real) STORED', create_only = true },
     },
 })
 

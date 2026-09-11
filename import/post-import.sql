@@ -114,28 +114,35 @@ WHERE
         tags->>'website', tags->>'contact:website', tags->>'url'
       ]) WHERE unnest IS NOT NULL));
 
--- Compute area for polygons.
+-- Backfill area for polygons that don't have one.
 --
--- ST_Area over 12M geographies is the expensive part of this file (planner cost
--- ~154M), so unlike the statements above this one must not evaluate it twice:
--- repeating it inline measured 311M. Materialize the computation once and join
--- it back on ctid, which is unique per row where id is not, and which is stable
--- for the length of the statement. Rows this statement updates are invisible to
--- its own snapshot, so none is processed twice.
+-- On a fresh import area_m2 is a GENERATED column (see osm2pgsql-flex.lua):
+-- Postgres computes it during osm2pgsql's COPY, so there is nothing to do
+-- here — and updating a generated column is an error, hence the guard. This
+-- backfill exists for databases imported before that change, where the DO
+-- block above added area_m2 as a plain column: measured at US scale, deriving
+-- it here for every area row was ~30 minutes of ST_Area math followed by
+-- ELEVEN HOURS of rewriting half the table through live indexes. Only NULLs
+-- are filled, so it runs once per legacy database and never again.
 --
--- The ::real cast is load-bearing. ST_Area returns double precision; comparing
--- that against a real column promotes the stored value back to double with a
--- different bit pattern, so without the cast every row looks changed and the
--- guard buys nothing.
-WITH computed AS MATERIALIZED (
-    SELECT ctid AS row_id, ST_Area(geom::geography)::real AS area_m2
-    FROM geo_places
-    WHERE geom_type = 'area'
-)
-UPDATE geo_places p SET area_m2 = computed.area_m2
-FROM computed
-WHERE p.ctid = computed.row_id
-  AND p.area_m2 IS DISTINCT FROM computed.area_m2;
+-- The ctid join (not id) is deliberate: id carries no unique index.
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'geo_places' AND column_name = 'area_m2'
+          AND is_generated = 'NEVER'
+    ) THEN
+        WITH computed AS MATERIALIZED (
+            SELECT ctid AS row_id, ST_Area(geom::geography)::real AS area_m2
+            FROM geo_places
+            WHERE geom_type = 'area' AND area_m2 IS NULL
+        )
+        UPDATE geo_places p SET area_m2 = computed.area_m2
+        FROM computed
+        WHERE p.ctid = computed.row_id;
+    END IF;
+END $$;
 
 -- NOTE: tsvector (ts column) is NOT built here — it depends on name_abbrev,
 -- codes, and parent_context which are populated in later pipeline steps.

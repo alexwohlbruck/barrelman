@@ -165,6 +165,19 @@ psql "$DATABASE_URL" -f "$PROJECT_DIR/import/create-detail-views.sql"
 echo "[$(date '+%H:%M:%S')] Building the 3D buildings view (spatial join, this takes a while)..."
 psql "$DATABASE_URL" -c "REFRESH MATERIALIZED VIEW buildings_3d;"
 
+# buildings_3d was the last consumer of geo_places' spatial indexes until the
+# API takes over: the intersections and parent-context joins below both probe
+# their own indexed temp tables, never these. Dropping them here means every
+# enrichment UPDATE maintains one btree instead of three GiSTs — measured on
+# the US import, spatial-index maintenance was the difference between ~1,800
+# and several thousand rows/s on non-HOT rewrites. finalize-indexes.sql
+# rebuilds them in bulk over the settled table.
+echo "[$(date '+%H:%M:%S')] Dropping spatial indexes for the enrichment passes (rebuilt at step 7)..."
+psql "$DATABASE_URL" -c "
+DROP INDEX IF EXISTS geo_places_geom_idx;
+DROP INDEX IF EXISTS geo_places_centroid_idx;
+DROP INDEX IF EXISTS geo_places_admin_geom_idx;"
+
 # ── Step 4: Codes and abbreviations, one pass ────────────────────────────────
 # Codes (IATA, ICAO, ref, short_name, alt_name) and multi-word-name
 # abbreviations touch heavily overlapping row sets, so they used to rewrite

@@ -237,7 +237,12 @@ Pelias is a separate stack and takes hours — see
 ### Sizing
 
 `GRAPHHOPPER_JAVA_OPTS` sizes the JVM for the graph **build**, not for
-serving. The shipped config memory-maps the finished graph
+serving. At continent scale the build is dominated by landmark preparation —
+one sequential single-threaded pass per profile (measured on the full US:
+under an hour of import, then 10+ hours of LM preparation, 4h14m of it for
+the car profile alone). `prepare.lm.threads` in `graphhopper-config.yml` runs
+the profiles concurrently if the heap can hold them simultaneously — see the
+comment there. The shipped config memory-maps the finished graph
 (`graph.dataaccess.default_type: MMAP` in `graphhopper-config.yml`), so at
 query time the graph lives in the kernel page cache, not in heap — a big
 graph makes serving want free RAM on the box, not a bigger `-Xmx`. The heap

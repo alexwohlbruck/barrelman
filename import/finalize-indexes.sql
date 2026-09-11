@@ -17,6 +17,13 @@
 -- forced higher here — the server-level setting governs (see
 -- BARRELMAN_DB_MAINT_WORKERS in docker-compose.yml).
 
+-- The spatial set first — import-osm.sh drops these for the enrichment passes
+-- (nothing between buildings_3d and here reads them), and the API needs them
+-- back before anything else.
+CREATE INDEX IF NOT EXISTS geo_places_geom_idx ON geo_places USING GIST(geom);
+CREATE INDEX IF NOT EXISTS geo_places_centroid_idx ON geo_places USING GIST(centroid);
+CREATE INDEX IF NOT EXISTS geo_places_admin_geom_idx ON geo_places USING GIST(geom) WHERE geom_type = 'area' AND (admin_level IS NOT NULL OR categories && ARRAY['place/neighbourhood', 'place/suburb', 'place/quarter', 'place/city_block']::text[]);
+
 CREATE INDEX IF NOT EXISTS geo_places_tags_idx ON geo_places USING GIN(tags jsonb_path_ops);
 CREATE INDEX IF NOT EXISTS geo_places_geom_type_idx ON geo_places(geom_type);
 

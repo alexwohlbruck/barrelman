@@ -26,6 +26,20 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 * Parent-boundary resolution subdivides admin polygons before the containment
   join, so a place is tested against a small fragment instead of its state's
   full outline. One invalid boundary geometry no longer aborts the pass
+* `area_m2` is a generated column computed by Postgres during osm2pgsql's own
+  COPY, replacing a post-import statement that at US scale spent ~30 minutes
+  computing areas and eleven hours rewriting half the table through live
+  indexes. Databases imported before the change are backfilled once, in place
+* The import drops the spatial indexes for the enrichment passes and rebuilds
+  them with the rest at the end — after the 3D-buildings view, nothing in the
+  pipeline reads them, and their per-row maintenance was most of the cost of
+  every enrichment rewrite
+* The GraphHopper rebuild skips itself when the serving graph was built from
+  the extract currently on disk (a port that answers proves the build
+  finished), so re-running an import cannot throw away a finished graph.
+  `FORCE_REBUILD=1` — also a console toggle — forces the wipe, e.g. after a
+  config change. `prepare.lm.threads` guidance documented: landmark
+  preparation, not the import, dominates the graph build at continent scale
 * The full-text document is built by one SQL function (`build_ts`) instead of
   two hand-synced copies of the same expression, and rebuilds skip rows whose
   document did not change
