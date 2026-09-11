@@ -75,9 +75,10 @@ fi
 # between hours and days.
 #
 # It is opt-in because the file is sized by the highest node ID in the input,
-# not by how many nodes are kept: even a city extract yields a ~100 GB (sparse)
-# file. Below roughly a country the middle tables are both faster and far
-# smaller, so small installs should leave this unset.
+# not by how many nodes are kept: any extract carrying present-day OSM IDs
+# yields a ~100 GB file (measured: 106 GB for North America — osm2pgsql writes
+# it dense, so budget real disk, not sparse-file hope). Below roughly a country
+# the middle tables are both faster and far smaller, so leave this unset.
 #
 # Whatever is set here MUST also be set when diffs are applied — update-osm.sh
 # reads the same variable. osm2pgsql 1.8, which barrelman-db ships, does not

@@ -308,10 +308,10 @@ OSM2PGSQL_FLAT_NODES=/data/flat-nodes.bin
 <Callout type="warn" title="Not a free win below continent scale">
 The file is sized by the **highest node ID in the input**, not by how many nodes
 you keep. Any extract carrying present-day OSM IDs therefore produces a file of
-roughly 100 GB. It is sparse, so `du` reports far less than `ls` does, but plan
-disk for the full size — a filesystem that cannot hold it will fail the import
-partway through. For a city or a state the middle tables are both faster and
-very much smaller.
+roughly 100 GB — a measured 106 GB for North America, and osm2pgsql writes it
+dense, so all of that is real disk. A filesystem that cannot hold it will fail
+the import partway through. For a city or a state the middle tables are both
+faster and very much smaller.
 </Callout>
 
 The same value is read by `update-osm.sh`, so daily diffs use the node storage
