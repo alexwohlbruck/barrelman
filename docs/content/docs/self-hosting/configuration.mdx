@@ -368,6 +368,12 @@ Elasticsearch and GraphHopper. **Production should give the database the box.**
 | `BARRELMAN_DB_SHM_SIZE` | `1gb` | `2gb` |
 | `BARRELMAN_DB_MEM_LIMIT` | `2g` | `28g` |
 | `BARRELMAN_DB_RANDOM_PAGE_COST` | `1.1` | `1.1` (SSD); raise toward `4` on spinning disks |
+| `BARRELMAN_DB_MAX_WAL_SIZE` | `4GB` | `16GB` on an import-heavy box — the stock 1GB checkpoints per gigabyte of WAL, which during an import is constant, and each checkpoint re-arms full-page writes |
+| `BARRELMAN_DB_CHECKPOINT_TIMEOUT` | `15min` | `15min` |
+| `BARRELMAN_DB_WAL_COMPRESSION` | `on` | `on` |
+| `BARRELMAN_DB_MAINT_WORKERS` | `4` | `8` — what the bulk index builds at the end of a full import scale by |
+| `BARRELMAN_DB_WAL_LEVEL` | `replica` | `minimal` if (and only if) nothing replicates from or archives WAL off this database; index builds then skip WAL entirely. Requires `BARRELMAN_DB_MAX_WAL_SENDERS=0` — set both or Postgres refuses to start |
+| `BARRELMAN_DB_MAX_WAL_SENDERS` | `10` | `0` alongside `wal_level=minimal` |
 
 Rules of thumb: ~25% of host RAM in `shared_buffers`, 50–75% in
 `effective_cache_size`.

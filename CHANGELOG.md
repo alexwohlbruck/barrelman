@@ -10,6 +10,43 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Changed
+
+* A full import overlaps its independent stages instead of running everything
+  in sequence. The GraphHopper graph build starts the moment the extract is
+  downloaded, and the basemap render runs alongside the post-processing SQL —
+  both consume only the PBF, so on a large region the old ordering added their
+  entire duration to the wall clock for nothing
+* The import's enrichment passes write far fewer row versions: address, hours,
+  phone and website extraction collapsed from four table rewrites into one,
+  codes and abbreviations from two into one, and parent context and the
+  full-text document are computed in the same pass. The query-serving indexes
+  are now built once at the end of the import over settled data instead of
+  being maintained row-by-row through every enrichment rewrite
+* Parent-boundary resolution subdivides admin polygons before the containment
+  join, so a place is tested against a small fragment instead of its state's
+  full outline. One invalid boundary geometry no longer aborts the pass
+* The full-text document is built by one SQL function (`build_ts`) instead of
+  two hand-synced copies of the same expression, and rebuilds skip rows whose
+  document did not change
+* The MOTIS extract preparation asks the database whether the extract contains
+  any underground platforms before streaming the whole PBF through the repair
+  pass — an extract with none gets a verbatim copy in seconds instead of a
+  rewrite that grows with extract size
+* The OSM import strips provenance and import-bookkeeping tags (`tiger:*`,
+  `gnis:*`, `source`, `created_by` and similar — about 16% of all tag bytes on
+  the US extract) before storing places. Objects whose only tags were such
+  bookkeeping are no longer imported at all
+* New database pacing knobs with better defaults: `max_wal_size` rises from
+  Postgres's 1GB stock (which forced a checkpoint every couple of minutes for
+  the whole of a large import) to 4GB, with `BARRELMAN_DB_MAX_WAL_SIZE`,
+  `BARRELMAN_DB_CHECKPOINT_TIMEOUT`, `BARRELMAN_DB_WAL_COMPRESSION`,
+  `BARRELMAN_DB_MAINT_WORKERS`, `BARRELMAN_DB_WAL_LEVEL` and
+  `BARRELMAN_DB_MAX_WAL_SENDERS` for import-heavy boxes
+* The self-hosting docs now describe GraphHopper's memory correctly: heap is
+  consumed by the graph build; serving memory-maps the finished graph, so it
+  needs free page cache, not `-Xmx`
+
 ### Added
 
 * `OSM2PGSQL_FLAT_NODES` puts osm2pgsql's node coordinates in a flat file

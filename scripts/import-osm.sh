@@ -19,6 +19,11 @@ set -euo pipefail
 #   GEOFABRIK_URL         - PBF download URL (default: NC extract)
 #   IMPORT_PBF            - Path to local PBF file, overrides download
 #   BARRELMAN_DATA_DIR    - Data directory path (default: /data)
+#   IMPORT_PHASE          - all (default) | download | osm2pgsql | post.
+#                           run-import.sh drives the phases separately so the
+#                           engine builds that need only the PBF can overlap
+#                           the database work; "all" keeps this script usable
+#                           standalone exactly as before.
 #   OSM2PGSQL_FLAT_NODES  - Path to a flat node file. Unset (default) keeps node
 #                           storage in Postgres. Set it for continent/planet
 #                           imports — see step 2. Must match update-osm.sh.
@@ -33,6 +38,12 @@ DATA_DIR="${BARRELMAN_DATA_DIR:-$PROJECT_DIR/data}"
 GEOFABRIK_URL="${GEOFABRIK_URL:-https://download.geofabrik.de/north-america/us/north-carolina-latest.osm.pbf}"
 PBF_FILE="${IMPORT_PBF:-${1:-$DATA_DIR/region.osm.pbf}}"
 DATABASE_URL="${DATABASE_URL:?DATABASE_URL is required}"
+PHASE="${IMPORT_PHASE:-all}"
+
+case "$PHASE" in
+  all|download|osm2pgsql|post) ;;
+  *) echo "error: IMPORT_PHASE must be all, download, osm2pgsql or post (got '$PHASE')" >&2; exit 1 ;;
+esac
 
 mkdir -p "$DATA_DIR"
 
@@ -41,6 +52,7 @@ mkdir -p "$DATA_DIR"
 # config by run-import.sh) takes precedence over the single legacy GEOFABRIK_URL.
 # Multiple extracts are downloaded and merged (deduped by OSM id) with osmium
 # into one region.osm.pbf, so dev can combine e.g. NC + NY + NJ + CT.
+if [[ "$PHASE" == "all" || "$PHASE" == "download" ]]; then
 read -ra EXTRACTS <<< "${OSM_EXTRACTS:-$GEOFABRIK_URL}"
 
 if [ -f "$PBF_FILE" ] && [ "${FORCE_DOWNLOAD:-0}" != "1" ]; then
@@ -64,6 +76,7 @@ else
     rm -f "${PARTS[@]}"
     echo "  Merged: $(du -h "$PBF_FILE" | cut -f1)"
 fi
+fi # download phase
 
 # ── Step 2: osm2pgsql import ─────────────────────────────────────────────────
 # --slim keeps the middle tables so osm2pgsql-replication can apply diffs later.
@@ -84,6 +97,12 @@ fi
 # reads the same variable. osm2pgsql 1.8, which barrelman-db ships, does not
 # record the flat-nodes path in the database (1.9+ does), so an update that
 # omits it cannot resolve any node the file holds.
+if [[ "$PHASE" == "all" || "$PHASE" == "osm2pgsql" ]]; then
+if [ ! -f "$PBF_FILE" ]; then
+    echo "error: $PBF_FILE not found — run the download phase first" >&2
+    exit 1
+fi
+
 OSM2PGSQL_ARGS=()
 if [ -n "${OSM2PGSQL_FLAT_NODES:-}" ]; then
     mkdir -p "$(dirname "$OSM2PGSQL_FLAT_NODES")"
@@ -112,8 +131,15 @@ osm2pgsql \
     -d "$DATABASE_URL" \
     "$PBF_FILE"
 echo "  osm2pgsql complete."
+fi # osm2pgsql phase
 
-# ── Step 3: Post-import SQL (columns, structured fields, indexes) ────────────
+if [[ "$PHASE" == "all" || "$PHASE" == "post" ]]; then
+
+# ── Step 3: Post-import SQL (columns, structured fields, core indexes) ───────
+# Only the four indexes the pipeline itself needs are built here; the
+# query-serving GIN/GiST set is deferred to step 7 so the enrichment UPDATEs
+# below do not pay index maintenance on every rewritten row. See the note in
+# post-import.sql.
 echo "[$(date '+%H:%M:%S')] [3/8] Running post-import SQL..."
 psql "$DATABASE_URL" -f "$PROJECT_DIR/import/post-import.sql"
 
@@ -139,81 +165,87 @@ psql "$DATABASE_URL" -f "$PROJECT_DIR/import/create-detail-views.sql"
 echo "[$(date '+%H:%M:%S')] Building the 3D buildings view (spatial join, this takes a while)..."
 psql "$DATABASE_URL" -c "REFRESH MATERIALIZED VIEW buildings_3d;"
 
-# ── Step 4: Generate codes from OSM tags ─────────────────────────────────────
-echo "[$(date '+%H:%M:%S')] [4/8] Extracting codes (IATA, ICAO, ref, short_name, alt_name)..."
+# ── Step 4: Codes and abbreviations, one pass ────────────────────────────────
+# Codes (IATA, ICAO, ref, short_name, alt_name) and multi-word-name
+# abbreviations touch heavily overlapping row sets, so they used to rewrite
+# many named rows twice. One statement, one row version. The guards keep each
+# column stable unless its own derived value moved — an abbreviation-only
+# change does not clobber codes with NULL, and vice versa.
+echo "[$(date '+%H:%M:%S')] [4/8] Extracting codes + generating abbreviations..."
 psql "$DATABASE_URL" -c "
-UPDATE geo_places
-SET codes = sub.codes
+UPDATE geo_places g
+SET codes = CASE WHEN s.codes IS NOT NULL THEN s.codes ELSE g.codes END,
+    name_abbrev = CASE WHEN s.abbrev IS NOT NULL THEN s.abbrev ELSE g.name_abbrev END
 FROM (
-  SELECT id,
-    array_agg(DISTINCT lower(trim(code))) FILTER (WHERE trim(code) <> '') AS codes
-  FROM geo_places,
-  LATERAL unnest(
-    string_to_array(coalesce(tags->>'iata', ''), ';') ||
-    string_to_array(coalesce(tags->>'icao', ''), ';') ||
-    string_to_array(coalesce(tags->>'ref', ''), ';') ||
-    string_to_array(coalesce(tags->>'short_name', ''), ';') ||
-    string_to_array(coalesce(tags->>'abbreviation', ''), ';') ||
-    string_to_array(coalesce(tags->>'alt_name', ''), ';')
-  ) AS code
-  WHERE tags IS NOT NULL
-    AND (
-      tags->>'iata' IS NOT NULL OR
-      tags->>'icao' IS NOT NULL OR
-      tags->>'ref' IS NOT NULL OR
-      tags->>'short_name' IS NOT NULL OR
-      tags->>'abbreviation' IS NOT NULL OR
-      tags->>'alt_name' IS NOT NULL
-    )
-  GROUP BY id
-) sub
-WHERE geo_places.id = sub.id
-  AND (geo_places.codes IS NULL OR geo_places.codes <> sub.codes);
-"
-
-# ── Step 5: Generate abbreviations ───────────────────────────────────────────
-echo "[$(date '+%H:%M:%S')] [5/8] Generating abbreviations for multi-word names..."
-psql "$DATABASE_URL" -c "
-UPDATE geo_places
-SET name_abbrev = sub.abbrev
-FROM (
-  SELECT id,
-    lower(string_agg(left(word, 1), '' ORDER BY ord)) AS abbrev
+  SELECT coalesce(c.id, a.id) AS id, c.codes, a.abbrev
   FROM (
-    SELECT id, word, ord
+    SELECT id,
+      array_agg(DISTINCT lower(trim(code))) FILTER (WHERE trim(code) <> '') AS codes
     FROM geo_places,
-    LATERAL unnest(regexp_split_to_array(name, '\s+')) WITH ORDINALITY AS t(word, ord)
-    WHERE name IS NOT NULL
-      AND name ~ '^[\w\s\d\-''\.&]+$'
-  ) words
-  WHERE lower(word) NOT IN (
-    'of','the','and','at','in','for','a','an',
-    'de','la','le','les','du','des','et','au',
-    'der','die','das','von','und','im','am',
-    'del','los','las','el','dos','e',
-    'di','della','dei','degli'
-  )
-  AND length(word) > 0
-  GROUP BY id
-  HAVING count(*) >= 2
-) sub
-WHERE geo_places.id = sub.id;
+    LATERAL unnest(
+      string_to_array(coalesce(tags->>'iata', ''), ';') ||
+      string_to_array(coalesce(tags->>'icao', ''), ';') ||
+      string_to_array(coalesce(tags->>'ref', ''), ';') ||
+      string_to_array(coalesce(tags->>'short_name', ''), ';') ||
+      string_to_array(coalesce(tags->>'abbreviation', ''), ';') ||
+      string_to_array(coalesce(tags->>'alt_name', ''), ';')
+    ) AS code
+    WHERE tags IS NOT NULL
+      AND (
+        tags->>'iata' IS NOT NULL OR
+        tags->>'icao' IS NOT NULL OR
+        tags->>'ref' IS NOT NULL OR
+        tags->>'short_name' IS NOT NULL OR
+        tags->>'abbreviation' IS NOT NULL OR
+        tags->>'alt_name' IS NOT NULL
+      )
+    GROUP BY id
+  ) c
+  FULL OUTER JOIN (
+    SELECT id,
+      lower(string_agg(left(word, 1), '' ORDER BY ord)) AS abbrev
+    FROM (
+      SELECT id, word, ord
+      FROM geo_places,
+      LATERAL unnest(regexp_split_to_array(name, '\s+')) WITH ORDINALITY AS t(word, ord)
+      WHERE name IS NOT NULL
+        AND name ~ '^[\w\s\d\-''\.&]+\$'
+    ) words
+    WHERE lower(word) NOT IN (
+      'of','the','and','at','in','for','a','an',
+      'de','la','le','les','du','des','et','au',
+      'der','die','das','von','und','im','am',
+      'del','los','las','el','dos','e',
+      'di','della','dei','degli'
+    )
+    AND length(word) > 0
+    GROUP BY id
+    HAVING count(*) >= 2
+  ) a ON a.id = c.id
+) s
+WHERE g.id = s.id
+  AND ((s.codes IS NOT NULL AND g.codes IS DISTINCT FROM s.codes)
+    OR (s.abbrev IS NOT NULL AND g.name_abbrev IS DISTINCT FROM s.abbrev));
 "
 
-# ── Step 6: Generate road intersections ──────────────────────────────────────
-echo "[$(date '+%H:%M:%S')] [6/8] Generating road intersections..."
+# ── Step 5: Generate road intersections ──────────────────────────────────────
+echo "[$(date '+%H:%M:%S')] [5/8] Generating road intersections..."
 psql "$DATABASE_URL" -f "$PROJECT_DIR/import/generate-intersections.sql"
 
-# ── Step 7: Resolve parent context (spatial join) ────────────────────────────
-echo "[$(date '+%H:%M:%S')] [7/8] Resolving parent boundary context (spatial join)..."
+# ── Step 6: Parent context + full-text index (one pass over named rows) ──────
+# resolve-parent-context.sql writes ts alongside parent_context, so the
+# separate whole-table tsvector rewrite this pipeline used to end with is now
+# a no-op verification and is skipped here. rebuild-tsvectors.sql still exists
+# for the daily-update path.
+echo "[$(date '+%H:%M:%S')] [6/8] Resolving parent boundary context + building tsvectors..."
 psql "$DATABASE_URL" -f "$PROJECT_DIR/import/resolve-parent-context.sql"
 
-# ── Step 8: Rebuild tsvectors (final, with all enriched data) ────────────────
-echo "[$(date '+%H:%M:%S')] [8/8] Building full-text search index..."
-psql "$DATABASE_URL" -v scope='all' -f "$PROJECT_DIR/import/rebuild-tsvectors.sql"
+# ── Step 7: Query-serving indexes, over settled data ─────────────────────────
+echo "[$(date '+%H:%M:%S')] [7/8] Building search indexes (bulk, deferred until data settled)..."
+psql "$DATABASE_URL" -f "$PROJECT_DIR/import/finalize-indexes.sql"
 
-# ── Final: ANALYZE ───────────────────────────────────────────────────────────
-echo "[$(date '+%H:%M:%S')] Running ANALYZE..."
+# ── Step 8: ANALYZE ──────────────────────────────────────────────────────────
+echo "[$(date '+%H:%M:%S')] [8/8] Running ANALYZE..."
 psql "$DATABASE_URL" -c "ANALYZE geo_places; ANALYZE bicycle_ways; ANALYZE bicycle_routes;"
 
 echo ""
@@ -221,3 +253,5 @@ echo "[$(date '+%H:%M:%S')] ✓ Import complete!"
 echo ""
 echo "  Optional: generate semantic embeddings with:"
 echo "  docker exec -e DATABASE_URL=\$DB_URL barrelman bun run import/embed-places.ts"
+
+fi # post phase
