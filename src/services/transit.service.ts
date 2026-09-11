@@ -51,6 +51,15 @@ export interface TransitRouteResponse {
     searchWindow: number
     nextPageCursor?: string
     prevPageCursor?: string
+    /**
+     * Echoes that bike carriage was actually enforced on this search.
+     *
+     * A caller cannot tell "no carriage data, so no results" from "this
+     * server is too old to know the flag and ignored it" — the second would
+     * hand back rides the bike may not be allowed on. Echoing lets the
+     * caller require the confirmation and fail safe without it.
+     */
+    requireBikeTransport?: boolean
   }
 }
 
@@ -113,6 +122,14 @@ export interface IntermodalRouteRequest extends TransitRouteRequest {
    * time-optimal search would Pareto-dominate away.
    */
   additionalTransferTime?: number
+  /**
+   * Restrict to trips that allow bike carriage, for riding a bike onto
+   * transit and off again at the far end.
+   *
+   * Answered from GTFS `bikes_allowed`, where "no information" counts as no —
+   * so a feed that omits it yields nothing rather than a guess.
+   */
+  requireBikeTransport?: boolean
 }
 
 export interface TransitLeg {
@@ -754,6 +771,10 @@ async function queryMotisIntermodal(
     params.set('postTransitRentalFormFactors', request.postTransitRentalFormFactors.join(','))
   }
 
+  if (request.requireBikeTransport) {
+    params.set('requireBikeTransport', 'true')
+  }
+
   if (request.searchWindow != null) {
     params.set('searchWindow', String(request.searchWindow))
   }
@@ -797,7 +818,13 @@ async function queryMotisIntermodal(
   ]
 
   if (allItineraries.length === 0) {
-    return { itineraries: [], metadata: { searchWindow: 0 } }
+    return {
+      itineraries: [],
+      metadata: {
+        searchWindow: 0,
+        ...(request.requireBikeTransport && { requireBikeTransport: true }),
+      },
+    }
   }
 
   return {
@@ -806,6 +833,7 @@ async function queryMotisIntermodal(
       searchWindow: data.searchWindowUsed ?? data.plan?.searchWindowUsed ?? 0,
       nextPageCursor: data.nextPageCursor || undefined,
       prevPageCursor: data.previousPageCursor || undefined,
+      ...(request.requireBikeTransport && { requireBikeTransport: true }),
     },
   }
 }
