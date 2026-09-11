@@ -689,12 +689,24 @@ export const SCRIPTS: ScriptDef[] = [
   {
     id: 'routing-graphhopper',
     name: 'Rebuild GraphHopper',
-    description: 'Wipe the GraphHopper graph cache and restart the container so it re-imports the PBF and rebuilds the routing graph.',
+    description: 'Wipe the GraphHopper graph cache and restart the container so it re-imports the PBF and rebuilds the routing graph. Skips itself when the serving graph is already built from the current extract.',
     category: 'routing',
     danger: 'caution',
     longRunning: true,
     confirm: true,
     exec: { kind: 'process', command: 'bash', args: ['scripts/rebuild-graphhopper.sh'] },
+    params: [
+      {
+        name: 'FORCE_REBUILD',
+        label: 'Force rebuild',
+        type: 'boolean',
+        apply: 'env',
+        envVar: 'FORCE_REBUILD',
+        default: false,
+        description:
+          'Wipe and rebuild even when the graph is already built from the current extract. Needed after a graphhopper-config.yml change, which the freshness check cannot see.',
+      },
+    ],
     source: 'scripts/rebuild-graphhopper.sh',
     notes: 'The script returns quickly; the actual graph build runs in the container. Watch `docker logs -f barrelman-graphhopper`.',
   },
