@@ -47,6 +47,17 @@ services:
     #   index scans. 1.1 is the SSD/NVMe value.
     # - jit: measured at ~280ms of compilation on search queries that execute in
     #   single-digit milliseconds. Pure overhead for this workload.
+    # - max_wal_size: the stock 1GB forces a checkpoint every gigabyte of WAL.
+    #   During an import that is constant: the US-scale test run logged 54
+    #   forced checkpoints against 6 timed ones, and every checkpoint re-arms
+    #   full-page writes, so the first touch of each page afterwards logs the
+    #   whole 8KB again. 4GB calms a state-sized import; give an import-heavy
+    #   box 16GB via BARRELMAN_DB_MAX_WAL_SIZE (costs only disk in pg_wal).
+    # - wal_level: replica is the safe stock default. Nothing in this compose
+    #   file replicates from the database, so an import-heavy box can set
+    #   BARRELMAN_DB_WAL_LEVEL=minimal + BARRELMAN_DB_MAX_WAL_SENDERS=0 and
+    #   every CREATE INDEX skips WAL entirely — tens of GB on a large import.
+    #   Set BOTH or Postgres refuses to start.
     command: >
       postgres
       -c shared_buffers=${BARRELMAN_DB_SHARED_BUFFERS:-1GB}
@@ -56,6 +67,12 @@ services:
       -c random_page_cost=${BARRELMAN_DB_RANDOM_PAGE_COST:-1.1}
       -c effective_io_concurrency=200
       -c jit=off
+      -c max_wal_size=${BARRELMAN_DB_MAX_WAL_SIZE:-4GB}
+      -c checkpoint_timeout=${BARRELMAN_DB_CHECKPOINT_TIMEOUT:-15min}
+      -c wal_compression=${BARRELMAN_DB_WAL_COMPRESSION:-on}
+      -c max_parallel_maintenance_workers=${BARRELMAN_DB_MAINT_WORKERS:-4}
+      -c wal_level=${BARRELMAN_DB_WAL_LEVEL:-replica}
+      -c max_wal_senders=${BARRELMAN_DB_MAX_WAL_SENDERS:-10}
     environment:
       POSTGRES_DB: barrelman
       POSTGRES_USER: barrelman
@@ -404,6 +421,13 @@ services:
       UPDATE_MODE: ${UPDATE_MODE:-}
       GEOFABRIK_URL: ${GEOFABRIK_URL:-}
       GEOFABRIK_REPLICATION_URL: ${GEOFABRIK_REPLICATION_URL:-}
+      # Node storage for osm2pgsql, for continent- and planet-sized imports.
+      # run-import.sh forwards these into barrelman-db, and update-osm.sh passes
+      # the flat-nodes path to every diff apply — both must agree, so they are
+      # set once, here. See .env.example for when it is worth turning on.
+      OSM2PGSQL_FLAT_NODES: ${OSM2PGSQL_FLAT_NODES:-}
+      OSM2PGSQL_CACHE_MB: ${OSM2PGSQL_CACHE_MB:-}
+      OSM2PGSQL_PROCESSES: ${OSM2PGSQL_PROCESSES:-}
       # ── Portolan (corrected transit geometry) ───────────────────────
       # Workspace root for import/portolan-sync.ts: portolan.json + style/ +
       # data/gtfs/ (raw feeds, portolan's own copies) + build/ (tiles, exports,

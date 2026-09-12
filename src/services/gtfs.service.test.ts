@@ -22,6 +22,7 @@ import {
   generateTransfersTxt,
   fetchFeedList,
   resolveGtfsBbox,
+  bboxCells,
   sanitizeGtfsZip,
   resolveRtUrlsForFeed,
   FLEX_EXTENSION_FILES,
@@ -1125,6 +1126,48 @@ describe('deriveBikesAllowed', () => {
     const result = deriveBikesAllowed(csv)
     expect(result.size).toBe(1)
     expect(result.get('route-1')).toBe(2)
+  })
+})
+
+// ── bboxCells (Transitland bbox tiling) ─────────────────────────────
+
+describe('bboxCells', () => {
+  test('returns a small bbox unchanged (single cell)', () => {
+    // North Carolina (~25 deg²) is under the threshold — one call, as before.
+    expect(bboxCells('-84.5,33.8,-75.4,36.6')).toEqual(['-84.5,33.8,-75.4,36.6'])
+  })
+
+  test('tiles the continental US into covering cells', () => {
+    const cells = bboxCells('-125,24,-66,50')
+    expect(cells.length).toBeGreaterThan(1)
+    // Every cell stays within the original bounds...
+    for (const c of cells) {
+      const [w, s, e, n] = c.split(',').map(Number)
+      expect(w).toBeGreaterThanOrEqual(-125)
+      expect(s).toBeGreaterThanOrEqual(24)
+      expect(e).toBeLessThanOrEqual(-66)
+      expect(n).toBeLessThanOrEqual(50)
+      expect(w).toBeLessThan(e)
+      expect(s).toBeLessThan(n)
+    }
+    // ...and the cells cover the corners of the region.
+    expect(cells.some((c) => c.startsWith('-125,24,'))).toBe(true)
+    expect(cells.some((c) => c.endsWith(',-66,50'))).toBe(true)
+  })
+
+  test('a feed straddling two cells is deduped by fetchFeedList', async () => {
+    // Two cells, both returning the same feed id → one feed after dedup.
+    const mockFetch = buildMockFetch({
+      feedList: {
+        feeds: [{
+          id: 500, onestop_id: 'f-shared', name: 'Shared', spec: 'gtfs',
+          urls: { static_current: 'https://example.com/shared.zip' },
+        }],
+      },
+    })
+    const feeds = await fetchFeedList('-125,24,-66,50', 'k', mockFetch)
+    expect(feeds).toHaveLength(1)
+    expect(feeds[0].feedId).toBe('500')
   })
 })
 

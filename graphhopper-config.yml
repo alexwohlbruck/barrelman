@@ -34,6 +34,17 @@ graphhopper:
     - profile: car
     - profile: foot
 
+  # LM preparation dominates the graph build at scale — on the US extract the
+  # import itself took under an hour while the three landmark preparations ran
+  # sequentially for 10+ hours (car alone: 4h14m). They can run concurrently:
+  #
+  #   prepare.lm.threads: 3
+  #
+  # Left at the default (1) because each preparation holds several GB of heap
+  # at continent scale (car peaked ~9.5 GB on the US graph), so three at once
+  # needs GRAPHHOPPER_JAVA_OPTS sized for the sum. Turn it up on a box with
+  # heap to spare; leave it alone on a 16 GB host.
+
   # ── Encoded values ────────────────────────────────────────────────
   # Profile values (bike_*, car_*, foot_*) must be listed explicitly
   # when graph.encoded_values is set. The rest are extras for
