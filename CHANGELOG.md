@@ -12,6 +12,13 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ### Changed
 
+* GTFS feed discovery tiles a large region's bounding box before querying
+  Transitland, which rejects an oversized bbox with `500 bbox too large` — the
+  continental US tripped it, so a country- or continent-scale import fetched no
+  feeds at all. State- and metro-sized regions are unaffected (a bbox under the
+  area threshold makes one call, as before); feeds straddling a tile edge are
+  deduplicated
+
 * A full import overlaps its independent stages instead of running everything
   in sequence. The GraphHopper graph build starts the moment the extract is
   downloaded, and the basemap render runs alongside the post-processing SQL —
