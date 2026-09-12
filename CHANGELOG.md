@@ -12,6 +12,12 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ### Changed
 
+* A full import only overlaps the GraphHopper and basemap builds with the
+  database work when the host has the RAM for it (`IMPORT_ENGINE_OVERLAP`,
+  default `auto`, threshold 48 GB). On a smaller box the engines build after
+  the import instead — GraphHopper's heap running next to Postgres during the
+  import otherwise OOM-killed the graph build mid-run
+
 * Computing GTFS walking transfers no longer runs on the API connection pool,
   whose statement timeout cancelled the all-pairs proximity join partway
   through a large import (`canceling statement due to statement timeout` after

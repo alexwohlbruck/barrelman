@@ -289,6 +289,7 @@ Read by the scripts running in `barrelman-ops` (and, for the osm2pgsql step, in
 | `OSM2PGSQL_FLAT_NODES` | — | Path to a flat node file. Unset keeps node coordinates in Postgres. Set it for continent- and planet-sized imports — see below |
 | `OSM2PGSQL_CACHE_MB` | osm2pgsql's own (800) | Node cache in MB. Ignored when `OSM2PGSQL_FLAT_NODES` is set |
 | `OSM2PGSQL_PROCESSES` | osm2pgsql's own | Parallel workers for the middle tables |
+| `IMPORT_ENGINE_OVERLAP` | `auto` | Whether the GraphHopper and basemap builds run concurrently with the database import. Both read only the PBF, so overlapping saves hours — but GraphHopper's heap alongside Postgres OOM-kills it on a small box. `auto` overlaps only at ≥48 GB RAM; `0` builds the engines after the import (GraphHopper first, then basemap); `1` forces overlap |
 
 ### Node storage on large imports
 

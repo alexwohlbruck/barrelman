@@ -67,16 +67,42 @@ db_import_phase() {
     barrelman-db bash /app/scripts/import-osm.sh
 }
 
+# ── Engine overlap vs. memory safety ─────────────────────────────────────────
+# GraphHopper builds its graph (JVM heap = -Xmx, several GB, and landmark
+# preparation holds it for hours) and planetiler renders the basemap (its own
+# heap) — both from the PBF, needing nothing the database work produces. On a
+# roomy box, starting them alongside the import removes hours from the wall
+# clock. On a small one it is how you lose the import: a US run on a 30 GB box
+# OOM-killed GraphHopper (10 GB heap) when its landmark prep ran next to
+# Postgres and a memory-heavy step, and the kernel reaped the JVM mid-build.
+#
+# IMPORT_ENGINE_OVERLAP: auto (default) | 1 (force overlap) | 0 (sequential).
+# "auto" overlaps only when the box clears a RAM threshold; below it the engines
+# build one after another, after the database import, trading wall-clock for not
+# being OOM-killed.
+TOTAL_RAM_GB=$(awk "/MemTotal/ {printf \"%d\", \$2/1024/1024}" /proc/meminfo 2>/dev/null || echo 0)
+OVERLAP="${IMPORT_ENGINE_OVERLAP:-auto}"
+if [ "$OVERLAP" = "auto" ]; then
+  # 48 GB comfortably holds GraphHopper's heap + planetiler + Postgres +
+  # osm2pgsql + headroom at once; 30 GB does not (measured).
+  if [ "${TOTAL_RAM_GB:-0}" -ge 48 ]; then OVERLAP=1; else OVERLAP=0; fi
+  echo "Engine overlap: auto -> $([ "$OVERLAP" = 1 ] && echo ON || echo OFF) (host has ${TOTAL_RAM_GB} GB RAM)"
+fi
+
 echo "[1/4] OSM download"
 db_import_phase download
 
-# The extract is on disk — everything that needs only the PBF can start now.
-# rebuild-graphhopper.sh is fire-and-forget by design (it wipes the cache and
-# restarts the container; the build runs inside GraphHopper), so this line
-# costs seconds and the graph builds concurrently with everything below.
+# The extract is on disk — the engines need only the PBF. When overlapping, the
+# GraphHopper rebuild starts now (it is fire-and-forget: wipes the cache and
+# restarts the container, the build runs inside GraphHopper) and the graph
+# builds concurrently with everything below.
 echo ""
-echo "[2/4] GraphHopper rebuild (starts now, builds in its own container)"
-"$SCRIPT_DIR/rebuild-graphhopper.sh"
+if [ "$OVERLAP" = 1 ]; then
+  echo "[2/4] GraphHopper rebuild (starts now, builds in its own container)"
+  "$SCRIPT_DIR/rebuild-graphhopper.sh"
+else
+  echo "[2/4] GraphHopper rebuild deferred (engine overlap off — runs after the import)"
+fi
 
 echo ""
 echo "[3/4] OSM import (osm2pgsql + post-processing)"
@@ -84,22 +110,51 @@ db_import_phase osm2pgsql
 
 # martin serves the DB-backed sources live, but the `basemap` source is a
 # static PMTiles archive — a full import moves everything else and leaves it
-# frozen unless it is re-rendered. Render concurrently with the SQL phase;
-# planetiler reads the PBF and writes an archive, touching nothing the SQL
-# needs. Skips itself when the install has no basemap.
+# frozen unless it is re-rendered. When overlapping, render it concurrently with
+# the SQL phase; planetiler reads the PBF and writes an archive, touching
+# nothing the SQL needs. Skips itself when the install has no basemap.
 BASEMAP_PID=""
 BASEMAP_LOG=""
-if [ "${REBUILD_BASEMAP:-1}" = "1" ]; then
+if [ "${REBUILD_BASEMAP:-1}" != "1" ]; then
+  echo "  Basemap rebuild disabled (REBUILD_BASEMAP=0) — skipping."
+elif [ "$OVERLAP" = 1 ]; then
   BASEMAP_LOG="$(mktemp /tmp/basemap-rebuild.XXXXXX.log)"
   echo ""
   echo "  Basemap render started in parallel (log: $BASEMAP_LOG)"
   "$SCRIPT_DIR/rebuild-basemap.sh" > "$BASEMAP_LOG" 2>&1 &
   BASEMAP_PID=$!
-else
-  echo "  Basemap rebuild disabled (REBUILD_BASEMAP=0) — skipping."
 fi
 
 db_import_phase post
+
+# Sequential mode: the database is done and has released its working memory, so
+# build the engines now — but one at a time. rebuild-graphhopper.sh returns as
+# soon as it restarts the container (the graph builds asynchronously inside it),
+# and a still-building GraphHopper holds its full heap; starting planetiler on
+# top of that is the very OOM this mode exists to avoid. So wait for GraphHopper
+# to finish (its main HTTP port only opens once the graph is loaded — landmark
+# prep can take hours at continent scale) before the basemap render.
+if [ "$OVERLAP" != 1 ]; then
+  echo ""
+  echo "[3b/4] GraphHopper rebuild (sequential)"
+  "$SCRIPT_DIR/rebuild-graphhopper.sh"
+  if [ "${REBUILD_BASEMAP:-1}" = "1" ]; then
+    echo "  Waiting for GraphHopper to finish before the basemap render..."
+    # Container-network probe (no docker-proxy in the way, so a successful
+    # connect is honest): 8989 only listens once the graph is built and served.
+    for _ in $(seq 1 480); do  # up to ~8h; landmark prep on a planet-scale graph is long
+      if timeout 5 bash -c "exec 3<>/dev/tcp/barrelman-graphhopper/8989" 2>/dev/null; then
+        echo "  GraphHopper is serving; starting basemap."
+        break
+      fi
+      sleep 60
+    done
+    echo "  Basemap render (sequential)"
+    BASEMAP_LOG="$(mktemp /tmp/basemap-rebuild.XXXXXX.log)"
+    "$SCRIPT_DIR/rebuild-basemap.sh" > "$BASEMAP_LOG" 2>&1 &
+    BASEMAP_PID=$!
+  fi
+fi
 
 echo ""
 echo "[4/4] Basemap"
