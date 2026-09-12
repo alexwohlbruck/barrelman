@@ -145,34 +145,48 @@ export async function fetchFeedList(
   fetchFn: FetchFn = globalThis.fetch,
 ): Promise<GtfsFeedInfo[]> {
   const feeds: GtfsFeedInfo[] = []
-  let nextUrl: string | null = buildFeedListUrl(region, apiKey)
+  const seen = new Set<string>()
 
-  while (nextUrl) {
-    const response = await fetchFn(nextUrl)
-    if (!response.ok) {
-      throw new Error(`Transitland API returned ${response.status}: ${await response.text()}`)
+  // One query per bbox cell: global (null bbox) is a single unfiltered sweep;
+  // a small region is a single call over its own bbox; a continent is tiled.
+  const bbox = resolveGtfsBbox(region)
+  const cells: (string | null)[] = bbox === null ? [null] : bboxCells(bbox)
+
+  for (const cell of cells) {
+    let nextUrl: string | null = buildFeedListUrl(apiKey, cell)
+
+    while (nextUrl) {
+      const response = await fetchFn(nextUrl)
+      if (!response.ok) {
+        throw new Error(`Transitland API returned ${response.status}: ${await response.text()}`)
+      }
+
+      const data = await response.json() as any
+      for (const feed of data.feeds || []) {
+        // Only include GTFS feeds with a download URL
+        const spec = feed.spec || ''
+        if (spec !== 'gtfs' && spec !== 'GTFS') continue
+
+        const url = feed.urls?.static_current
+        if (!url) continue
+
+        // A feed straddling two cells is returned by both — dedup by id.
+        const feedId = String(feed.id || feed.onestop_id || `feed_${feeds.length}`)
+        if (seen.has(feedId)) continue
+        seen.add(feedId)
+
+        feeds.push({
+          feedId,
+          onestopId: String(feed.onestop_id || ''),
+          name: String(feed.name || feed.onestop_id || ''),
+          url,
+          region,
+        })
+      }
+
+      // Handle pagination
+      nextUrl = data.meta?.next ? data.meta.next : null
     }
-
-    const data = await response.json() as any
-    for (const feed of data.feeds || []) {
-      // Only include GTFS feeds with a download URL
-      const spec = feed.spec || ''
-      if (spec !== 'gtfs' && spec !== 'GTFS') continue
-
-      const url = feed.urls?.static_current
-      if (!url) continue
-
-      feeds.push({
-        feedId: String(feed.id || feed.onestop_id || `feed_${feeds.length}`),
-        onestopId: String(feed.onestop_id || ''),
-        name: String(feed.name || feed.onestop_id || ''),
-        url,
-        region,
-      })
-    }
-
-    // Handle pagination
-    nextUrl = data.meta?.next ? data.meta.next : null
   }
 
   // Discover GTFS-RT feeds and associate them with static feeds
@@ -292,7 +306,7 @@ async function fetchRtFeedMap(
   return rtMap
 }
 
-function buildFeedListUrl(region: string, apiKey: string): string {
+function buildFeedListUrl(apiKey: string, bbox: string | null): string {
   const base = 'https://transit.land/api/v2/rest/feeds'
   const params = new URLSearchParams({
     apikey: apiKey,
@@ -300,12 +314,41 @@ function buildFeedListUrl(region: string, apiKey: string): string {
     limit: '100',
   })
 
-  const bbox = resolveGtfsBbox(region)
   if (bbox) {
     params.set('bbox', bbox)
   }
 
   return `${base}?${params}`
+}
+
+// Transitland rejects a feed-list query whose bbox is too large with
+// `500 {"error":"bbox too large"}`. The continental US (~1,534 deg²) trips it;
+// North Carolina (~25 deg²) does not. Rather than guess the exact server limit,
+// tile any bbox above a conservative threshold into cells and union the results.
+// A feed whose geometry straddles a cell edge comes back in both cells, so
+// fetchFeedList dedups by feed id.
+const GTFS_BBOX_MAX_DEG2 = 90
+const GTFS_BBOX_TILE_DEG = 8
+
+/**
+ * Split a "w,s,e,n" bbox into a list of sub-bboxes small enough for Transitland.
+ * Returns the bbox unchanged (single element) when it is already under the
+ * area threshold — so state- and metro-sized regions make exactly one call,
+ * as before.
+ */
+export function bboxCells(bbox: string): string[] {
+  const [w, s, e, n] = bbox.split(',').map((v) => Number(v.trim()))
+  if ((e - w) * (n - s) <= GTFS_BBOX_MAX_DEG2) return [bbox]
+
+  const cells: string[] = []
+  for (let x = w; x < e; x += GTFS_BBOX_TILE_DEG) {
+    for (let y = s; y < n; y += GTFS_BBOX_TILE_DEG) {
+      const ce = Math.min(x + GTFS_BBOX_TILE_DEG, e)
+      const cn = Math.min(y + GTFS_BBOX_TILE_DEG, n)
+      cells.push([x, y, ce, cn].join(','))
+    }
+  }
+  return cells
 }
 
 // ── RT URL discovery for existing feeds ─────────────────────────────
