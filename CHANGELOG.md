@@ -12,6 +12,12 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ### Changed
 
+* Computing GTFS walking transfers no longer runs on the API connection pool,
+  whose statement timeout cancelled the all-pairs proximity join partway
+  through a large import (`canceling statement due to statement timeout` after
+  every feed had already imported). It now uses the untimed maintenance
+  connection, like the other minutes-long batch queries
+
 * GTFS feed discovery tiles a large region's bounding box before querying
   Transitland, which rejects an oversized bbox with `500 bbox too large` — the
   continental US tripped it, so a country- or continent-scale import fetched no
