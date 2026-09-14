@@ -12,6 +12,11 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ### Changed
 
+* Street routing no longer caps waypoint spacing at 1,000 km — any two points
+  routable over the imported graph now answer (LA to NYC was rejected with
+  "Point 1 is too far from Point 0"). Landmark preparation is what makes
+  continental queries affordable, and it was already being built
+
 * A full import only overlaps the GraphHopper and basemap builds with the
   database work when the host has the RAM for it (`IMPORT_ENGINE_OVERLAP`,
   default `auto`, threshold 48 GB). On a smaller box the engines build after

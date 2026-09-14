@@ -71,8 +71,12 @@ graphhopper:
   graph.elevation.provider: srtm
   graph.elevation.cache_dir: /data/elevation-cache
 
-  # Allow long-distance routes (default is too restrictive)
-  routing.non_ch.max_waypoint_distance: 1000000
+  # No practical distance cap: 40,000 km is Earth's circumference, so any two
+  # points on the planet route. The old 1,000 km cap rejected LA->NYC with
+  # "Point 1 is too far from Point 0". Landmark routing keeps continental
+  # queries cheap — measured 0.35 s for a 756 km route on the US graph — so the
+  # cap was protecting against a cost that LM preparation already removed.
+  routing.non_ch.max_waypoint_distance: 40000000
 
 server:
   application_connectors:
