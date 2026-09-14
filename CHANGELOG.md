@@ -10,6 +10,42 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Added
+
+* Itineraries now report `farePayments` — how many separate fares a trip
+  charges, which is not the same as the number of legs. MOTIS groups legs into
+  fare transfers using the feeds' GTFS `fare_transfer_rules`, so a subway change
+  inside the gates is one payment across two legs while stepping out to another
+  operator is two. Reported only where the feeds actually publish fare data;
+  with none, MOTIS still emits one empty group per leg and reading that as "a
+  fare per leg" would be inventing a price out of a coverage gap
+* Itineraries are ordered preferring fewer fare payments where the time cost is
+  small (within ten minutes), rather than on duration alone. The router is
+  Pareto-optimal over time and transfers, and fare is neither — MOTIS prices an
+  itinerary *after* routing it — so a trip charging two fares could outrank one
+  charging one and arriving at the same minute. The ordering only chooses among
+  itineraries the router already returned, so it can never surface a slower trip
+  than before
+
+### Fixed
+
+* Computed walking transfers are now **merged** into a feed's `transfers.txt`
+  instead of replacing it. The file is the only authoritative record of which
+  station pairs sit inside fare control: the MTA declares 613 transfers and
+  connects Borough Hall to Jay St-MetroTech in none of them, because walking
+  between them means leaving the paid area and paying again. Overwriting that
+  with "every stop pair within 500m, timed by GraphHopper" asserted the very
+  transfer the agency spent the file denying. The agency's rows now win, a pair
+  the feed forbids (`transfer_type=3`) is never re-added, and computed rows only
+  fill pairs nobody has spoken about. **Re-run the GTFS import** on instances
+  that imported before this to restore the agency transfers it discarded
+* Walking transfers are no longer computed for pairs a feed forbids. A
+  `transfer_type=3` row is a fare gate, and routing the walk anyway burned a
+  GraphHopper call per pair to produce a transfer the merge then discarded.
+  Prohibitions are declared between parent stations while the pairs are
+  platforms, so both sides resolve to their parent — one prohibition covers
+  every platform pairing under it
+
 ## [0.2.25] - 2026-09-07
 
 ### Fixed

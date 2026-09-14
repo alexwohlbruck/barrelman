@@ -134,6 +134,21 @@ Downloads had nowhere to go. `./data/gtfs` must be mounted **read-write** into `
 
 The graph outgrew the heap. GraphHopper loads it into heap rather than memory-mapping it, so the failure looks like a crash rather than an out-of-memory. Check `du -sh` on the `graph-cache` directory, raise `-Xmx` in `GRAPHHOPPER_JAVA_OPTS` above it, and re-run `scripts/rebuild-graphhopper.sh`.
 
+**Phantom out-of-system transfers**
+
+A trip changes between two nearby stations that the agency deliberately does not connect, so the rider pays a second fare — and the one-fare alternative is never offered, even though it often arrives at the same minute.
+
+MOTIS builds transfers from geometry. `link_nearby_stations` connects stops from *different* feeds within 300 m, and `build_footpaths` then takes a transitive closure bounded by `max_footpath_length`. Where one operator publishes its rail and its buses as separate feeds — the MTA publishes seven — the closure walks subway station → adjacent bus stop → adjacent bus stop → *different* subway station and calls the result a free transfer. Fare gates are invisible to it.
+
+No query parameter fixes this. The phantom has *fewer* transfers than the in-system route, so it wins on both criteria the search optimises, and raising `transferTimeFactor` penalises the legitimate route harder.
+
+GTFS has the answer — `transfer_type=3`, "Transfers forbidden between routes at these stops" — but MOTIS parses those rows and discards them, so the prohibition has to be honoured by the router before it binds. Until then:
+
+- Turn on [`forbid_undeclared`](/self-hosting/portolan#transfers) for the affected feed, so the prohibitions are at least present in the data.
+- Check the feed's own `transfers.txt` survived the import. Barrelman merges its computed walking transfers into the agency's rather than replacing them; an older import replaced the file outright, which threw away the only record of which stations sit inside fare control. Re-run the GTFS import to restore it.
+
+`farePayments` on each itinerary reports how many fares a trip charges, so a client can show the cost even where the routing cannot yet avoid it.
+
 **Transit routing returns nothing, but stops exist**
 
 The MOTIS dataset was never rebuilt after the GTFS import, or was rebuilt without the street graph. Run `scripts/rebuild-motis.sh` — the config it generates must include the OSM input, or MOTIS builds only the timetable and the router cannot reach any stop.

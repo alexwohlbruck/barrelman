@@ -1330,7 +1330,23 @@ export async function clearFeed(feedId: string): Promise<void> {
 export async function findTransferPairs(
   maxDistance: number = 500,
 ): Promise<TransferPair[]> {
+  // Pairs the feed FORBIDS are excluded before any walking time is
+  // computed. GTFS transfer_type=3 means "Transfers forbidden between
+  // routes at these stops" — a fare gate, in practice — and portolan
+  // derives one for every gated station pair an agency leaves unconnected.
+  // Routing those walks would burn a GraphHopper call per pair to produce
+  // a transfer the merge then discards, and worse, would offer the agency
+  // a transfer it has explicitly denied.
+  //
+  // Prohibitions are declared between PARENT stations (the MTA forbids
+  // 423↔A41) while these pairs are platforms (423N, A41S), so both sides
+  // resolve to their parent before matching, and either direction counts.
   const result = await db.execute(sql`
+    WITH forbidden AS (
+      SELECT feed_id, from_stop_id, to_stop_id
+      FROM gtfs_transfers
+      WHERE transfer_type = 3
+    )
     SELECT
       a.stop_id AS from_stop_id,
       b.stop_id AS to_stop_id,
@@ -1346,6 +1362,18 @@ export async function findTransferPairs(
       AND ST_DWithin(a.geom::geography, b.geom::geography, ${maxDistance})
     WHERE (a.location_type = 0 OR a.location_type IS NULL)
       AND (b.location_type = 0 OR b.location_type IS NULL)
+      AND NOT EXISTS (
+        SELECT 1 FROM forbidden f
+        WHERE f.feed_id = a.feed_id
+          AND f.feed_id = b.feed_id
+          AND (
+            (f.from_stop_id = COALESCE(a.parent_station, a.stop_id)
+             AND f.to_stop_id = COALESCE(b.parent_station, b.stop_id))
+            OR
+            (f.from_stop_id = COALESCE(b.parent_station, b.stop_id)
+             AND f.to_stop_id = COALESCE(a.parent_station, a.stop_id))
+          )
+      )
   `)
 
   return (result as any[]).map((row: any) => ({

@@ -6,7 +6,7 @@ description: Corrected transit geometry — rebuilt route shapes, tile pyramids,
 [Portolan](https://github.com/alexwohlbruck/portolan) takes raw GTFS feeds and rebuilds their route geometry against real track data. It produces two things Barrelman consumes:
 
 - **Tile pyramids** — corrected geometry as static MVT tiles, one pyramid per feed, served by the API at `/tiles/portolan/…`.
-- **Corrected GTFS zips** — the same feeds with `shapes.txt` rewritten to real track geometry, re-imported into PostGIS and MOTIS so vehicle interpolation and route rendering follow actual rails.
+- **Corrected GTFS zips** — the same feeds with `shapes.txt` rewritten to real track geometry, plus any curated fares and transfers, re-imported into PostGIS and MOTIS.
 
 The integration is optional. Without a portolan workspace, the tile routes answer 404 and nothing else changes.
 
@@ -30,7 +30,7 @@ Portolan is a separate repository, so its binary is not baked into the ops image
 
 ## The three console scripts
 
-All three live under **GTFS / Transit** in the console and wrap `bun run import/portolan-sync.ts`, which runs `portolan sync`, parses its machine-readable result, and lands every corrected zip through the same per-zip pipeline the GTFS importer uses (flex sanitize → realtime trip_id alignment → PostGIS import → transfers carryover → Fares v2), then rebuilds the MOTIS dataset. MOTIS has no incremental import — even a one-feed patch needs the full rebuild before corrected schedules reach riders.
+All three live under **GTFS / Transit** in the console and wrap `bun run import/portolan-sync.ts`, which runs `portolan sync`, parses its machine-readable result, and lands every corrected zip through the same per-zip pipeline the GTFS importer uses (flex sanitize → realtime trip_id alignment → PostGIS import → transfers merge → Fares v2), then rebuilds the MOTIS dataset. MOTIS has no incremental import — even a one-feed patch needs the full rebuild before corrected schedules reach riders.
 
 | Script | What it does |
 | --- | --- |
@@ -63,6 +63,80 @@ Point a daily schedule at **Portolan Check for Updates** (console → Schedules)
 ### How feeds are matched
 
 Portolan and Barrelman name feeds differently, so the wrapper joins them on the **Transitland onestop id**: `portolan.json` carries `onestop` per feed entry, and imported feeds carry `gtfs_feeds.onestop_id`. An exported zip whose key has no onestop id, or whose onestop id no imported feed carries, is skipped with a logged reason — never guessed.
+
+## Curating fares and transfers
+
+Portolan is a preprocessor, so it is also where a feed's missing data gets
+filled in. Both blocks live in that feed's curation document,
+`style/<feed>.json`, and are written into the exported zip as ordinary GTFS —
+nothing downstream needs to know they were curated.
+
+### Fares
+
+Most agencies publish no fares at all. GTFS Fares v1 cannot express fare
+capping, free transfers between modes or rider categories, and Fares v2
+adoption is still thin, so an agency in that position ships nothing rather
+than something wrong. The MTA is the extreme case: not one of its feeds
+carries a single fare row, which means a router reading them prices a trip
+across New York at nothing.
+
+```json
+{
+  "fares": {
+    "currency": "USD",
+    "price": 3.00,
+    "transfer": { "count": 1, "minutes": 120 }
+  }
+}
+```
+
+That exports as `fare_products.txt`, `fare_leg_rules.txt` and
+`fare_transfer_rules.txt`. The transfer rule is the load-bearing one: MOTIS
+groups an itinerary's legs into *fare transfers*, so the rule decides how
+many separate fares a trip charges, which is what the API reports as
+`farePayments`.
+
+Scope is a flat fare with an optional free-transfer window. Zone, distance
+and time-of-day tariffs stay the agency's to publish.
+
+### Transfers
+
+Routers infer transfers from geometry, because most feeds' `transfers.txt`
+is incomplete. On a fare-gated railway that inference is wrong in a way that
+costs riders money — see [Phantom out-of-system transfers](/self-hosting/troubleshooting#engines).
+
+```json
+{
+  "transfers": { "forbid_undeclared": true }
+}
+```
+
+This derives GTFS `transfer_type=3` rows ("Transfers forbidden between routes
+at these stops") for every pair of **gated** stations — metro, rail,
+funicular, monorail — within walking distance that the agency's own
+`transfers.txt` does not connect. Bus, tram and ferry pairs are left alone:
+an undeclared walk between two of those is settled by the tariff's transfer
+window, not by a gate.
+
+Turn it on only for a feed whose `transfers.txt` is complete. `allow` and
+`forbid` lists state individual pairs by hand where the derivation misses
+one:
+
+```json
+{
+  "transfers": {
+    "forbid_undeclared": true,
+    "walk_radius_m": 400,
+    "allow":  [{ "from": "R28", "to": "A41", "minutes": 5 }],
+    "forbid": [{ "from": "232", "to": "A41" }]
+  }
+}
+```
+
+Barrelman's own computed walking transfers are **merged** into whatever the
+exported feed carries rather than replacing it: the agency's and portolan's
+rows win, a forbidden pair is never re-added, and computed rows only fill
+pairs nobody has spoken about.
 
 ## Tile endpoint
 
