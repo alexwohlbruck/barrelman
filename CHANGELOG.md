@@ -10,6 +10,26 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Fixed
+
+* Text search no longer stalls for the full statement timeout on a cold query.
+  The fuzzy trigram layer — typo tolerance, and the lowest-priority source in
+  the result merge — was being issued on *every* search alongside the precise
+  layers. Its KNN scan reads roughly 215 MB of trigram index per call, which is
+  fast when that index is cached and takes many seconds when it is not; on an
+  instance whose table dwarfs RAM that is the usual case, so a cold search spent
+  10 s waiting and then silently discarded the trigram result when the timeout
+  cancelled it — a slower answer with *fewer* results than not running it at
+  all. It now runs only when the precise layers come back short, so a
+  well-spelled query never pays for it and a misspelled one still gets it
+
+* A US-scale import built a second GiST trigram index on `geo_places.name` at
+  the default signature length, duplicating the `siglen=128` index that
+  supersedes it. The planner never once chose it, so it was 5 GB competing for
+  page cache against the index that actually serves fuzzy search. It is no
+  longer created, and is dropped on existing installs the next time
+  `finalize-indexes.sql` runs
+
 ## [0.3.0] - 2026-09-14
 
 ### Changed

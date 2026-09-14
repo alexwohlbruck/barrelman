@@ -379,8 +379,19 @@ export async function searchPlaces(
       LIMIT ${limit}
     `).catch(() => [] as any[])
 
+    // Trigram is typo tolerance, not a primary source: it ranks below FTS,
+    // codes and abbreviations in the merge below, so it only ever contributes
+    // rows the precise layers failed to find. It is also by far the most
+    // expensive of them — the KNN scan over the GiST trigram index touches
+    // ~215 MB of index per call, which is ~360ms when that index is warm and
+    // many seconds when it is not. On an instance whose table dwarfs RAM that
+    // is the common case, so running it on every search made each cold query
+    // burn the full statement timeout and then silently discard the result via
+    // the .catch above — a 10s wait for *fewer* results than a 300ms one.
+    //
+    // So defer it: issue the precise layers first and only reach for trigram
+    // when they came back short. A well-spelled query never pays for it.
     const runTrigram = !localAutocomplete && sanitizedQuery.length > 4
-    const trigramPromise = runTrigram ? trigramQuery() : Promise.resolve([] as any[])
 
     // Layer 3: Abbreviation + codes match
     // Split into two separate queries so codes matches (explicit identifiers like
@@ -457,8 +468,9 @@ export async function searchPlaces(
         })
       : Promise.resolve([] as any[])
 
-    let [ftsRows, trigramRows, codesRows, nameAbbrevRows, transitRouteRows, transitStopRows] =
-      await Promise.all([ftsPromise, trigramPromise, codesPromise, nameAbbrevPromise, transitRoutesPromise, transitStopsPromise])
+    let [ftsRows, codesRows, nameAbbrevRows, transitRouteRows, transitStopRows] =
+      await Promise.all([ftsPromise, codesPromise, nameAbbrevPromise, transitRoutesPromise, transitStopsPromise])
+    let trigramRows: any[] = []
 
     // Autocomplete retry: the local pass only sees the viewport, so a place the
     // user is deliberately reaching for in another city would come back empty.
@@ -480,7 +492,25 @@ export async function searchPlaces(
       // but it ranks by text_rank and so can drop a nearby hit the local pass
       // found. The dedup in the merge below collapses the overlap.
       ftsRows = [...(ftsRows as any[]), ...(globalFts as any[])]
-      trigramRows = globalTrigram
+      trigramRows = globalTrigram as any[]
+    }
+
+    // The deferred typo-tolerance pass promised above. The precise layers have
+    // answered by now, so we know whether there is anything left to fill: if
+    // they already produced `limit` distinct rows, trigram could not add one
+    // that survives the cap and the scan would be pure latency. The
+    // autocomplete retry may have run it already, hence the emptiness check.
+    if (runTrigram && trigramRows.length === 0) {
+      const precise = new Set<string>()
+      for (const row of [
+        ...(codesRows as any[]),
+        ...(transitRouteRows as any[]),
+        ...(nameAbbrevRows as any[]),
+        ...(ftsRows as any[]),
+      ]) {
+        precise.add((row as any).id)
+      }
+      if (precise.size < limit) trigramRows = (await trigramQuery()) as any[]
     }
 
     // Merge, deduplicating in priority order: codes > transit routes >
