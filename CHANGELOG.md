@@ -10,6 +10,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-09-14
+
 ### Fixed
 
 * Text search no longer stalls for the full statement timeout on a cold query.
