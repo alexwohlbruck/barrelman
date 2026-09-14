@@ -34,6 +34,34 @@ if [ ! -f "$IN" ]; then
   exit 1
 fi
 
+# ── Skip the rewrite when there is nothing to repair ─────────────────────────
+# The python pass below streams the ENTIRE extract through single-threaded
+# pyosmium to fix isolated underground platforms — measured at 6 minutes on
+# Colorado to synthesize exactly 0 connectors, and it scales with extract size,
+# not with platform count. The platforms it hunts are already queryable in
+# geo_places, so ask the database first: if the extract contains no underground
+# platform ways at all (is_underground_platform() in
+# synthesize-platform-connectors.py: platform tag + negative level/layer;
+# the LIKE '%-%' here over-matches, which only makes the skip rarer), nothing
+# can need a connector and a byte-identical copy is the correct output.
+# Any failure to answer — no docker, DB down, table missing — falls through to
+# the full rewrite, which is always safe.
+DB_CONTAINER="${DB_CONTAINER:-barrelman-db}"
+UNDERGROUND_COUNT="$(docker exec "$DB_CONTAINER" psql -U barrelman -d barrelman -tAc "
+  SELECT count(*) FROM geo_places
+  WHERE osm_type = 'W'
+    AND (tags->>'public_transport' = 'platform' OR tags->>'railway' = 'platform')
+    AND (tags->>'level' LIKE '%-%' OR tags->>'layer' LIKE '%-%')
+" 2>/dev/null || echo "unknown")"
+
+if [ "$UNDERGROUND_COUNT" = "0" ]; then
+  echo "[$(date '+%H:%M:%S')] No underground platforms in this extract — copying instead of rewriting."
+  cp -f "$IN" "$OUT"
+  echo "[$(date '+%H:%M:%S')] ✓ MOTIS OSM extract ready (verbatim copy): $(du -h "$OUT" | cut -f1)"
+  exit 0
+fi
+echo "[$(date '+%H:%M:%S')] Underground platform ways in extract: $UNDERGROUND_COUNT (running full repair pass)"
+
 echo "[$(date '+%H:%M:%S')] Synthesizing platform connectors: $IN -> $OUT"
 # pyosmium is not installed system-wide in barrelman-ops (Dockerfile.ops ships
 # python3 + uv, not the module), so fetch it on demand the same way

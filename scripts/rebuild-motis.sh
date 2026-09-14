@@ -102,13 +102,53 @@ if [ "${ZIP_COUNT:-0}" -eq 0 ]; then
   exit 1
 fi
 
+# Regenerate the config and (re)build the dataset, tolerating two real
+# continent-scale failure modes rather than aborting all transit:
+#
+#  1. Malformed feeds. One feed with a missing/invalid timezone or bad table
+#     makes MOTIS abort the WHOLE import ("failed to load gtfs/<id>.zip: ...").
+#     On the US corpus a handful of ~1,200 feeds are broken. We retry, dropping
+#     the named feed from the config each time, until it imports — and log what
+#     was dropped. (generate-motis-config also gives every dataset a
+#     default_timezone, which rescues the "no timezone" class outright.)
+#
+#  2. MOTIS's street router (osr) caps a node at 16 ways; the US street network
+#     has junctions exceeding that ("node ... has N ways, maximum is 16"), and a
+#     damaged extract trips "invalid location". Street routing improves
+#     access/egress on a city-sized import, but at continent scale it cannot
+#     load at all. So we attempt it, and if the failure is an osr/OSM one (not a
+#     feed), fall back to a timetable-only build that routes stop-to-stop over
+#     the walking transfers already baked into the feeds. MOTIS_STREET_ROUTING=0
+#     skips straight to timetable-only.
+CFG_PATH=/var/lib/postgresql # placeholder, replaced below
+GTFS_DATA_HOST="$(docker inspect "$CONTAINER" --format '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Source}}{{end}}{{end}}' 2>/dev/null)"
+CFG="${GTFS_DATA_HOST:+$GTFS_DATA_HOST/config.yml}"
+
+gen_config() { # $1 = street|timetable
+  if [ "$1" = street ]; then
+    docker exec barrelman sh -lc 'cd /app && bun run import/generate-motis-config.ts --street-routing --osm-path /osm-data/region.osm.pbf --output /gtfs-data/config.yml'
+  else
+    docker exec barrelman sh -lc 'cd /app && bun run import/generate-motis-config.ts --output /gtfs-data/config.yml'
+  fi
+}
+
+# Remove one dataset (by feed id) from the generated config, in place.
+drop_feed() {
+  docker run --rm -v "${GTFS_VOL}:/d" alpine sh -c '
+    awk -v bad="'"$1"'" '"'"'
+      /^    "[^"]+":[[:space:]]*$/ { k=$0; sub(/^    "/,"",k); sub(/":[[:space:]]*$/,"",k); skip=(k==bad) }
+      { if (!skip) print }
+    '"'"' /d/config.yml > /d/config.yml.tmp && mv /d/config.yml.tmp /d/config.yml'
+}
+
+run_import() { # returns 0 on success; writes /tmp/motis-import.log
+  docker run --rm --network "$NETWORK"     -v "${GTFS_VOL}:/data" -v "${OSM_VOL}:/osm-data:ro"     ${GTFS_ZIPS:+-v "${GTFS_ZIPS}:/data/gtfs:ro"}     -w /data "$MOTIS_IMAGE" /motis import > /tmp/motis-import.log 2>&1
+}
+
 echo "[$(date '+%H:%M:%S')] [1/3] [motis] Regenerating config from gtfs_feeds..."
-# --street-routing is REQUIRED: without it the config omits the OSM input and
-# MOTIS builds only the timetable (no street graph, no stop<->street matches),
-# so the router cannot reach any stop and returns no transit. --osm-path is the
-# merged region.osm.pbf on the shared osm-data volume (mounted at /osm-data in
-# the MOTIS container).
-docker exec barrelman sh -lc 'cd /app && bun run import/generate-motis-config.ts --street-routing --osm-path /osm-data/region.osm.pbf --output /gtfs-data/config.yml'
+MODE=street
+[ "${MOTIS_STREET_ROUTING:-1}" = "0" ] && MODE=timetable
+gen_config "$MODE"
 
 echo "[$(date '+%H:%M:%S')] [2/3] [motis] Clean-rebuilding dataset (motis import)..."
 # Move the current dataset aside so the import builds a fresh, internally
@@ -139,23 +179,44 @@ else
   fi
 fi
 
-if docker run --rm --network "$NETWORK" \
-     -v "${GTFS_VOL}:/data" \
-     -v "${OSM_VOL}:/osm-data:ro" \
-     ${GTFS_ZIPS:+-v "${GTFS_ZIPS}:/data/gtfs:ro"} \
-     -w /data "$MOTIS_IMAGE" /motis import; then
+MAX_FEED_DROPS="${MOTIS_MAX_FEED_DROPS:-50}"
+dropped=0
+import_ok=0
+while : ; do
+  if run_import; then import_ok=1; break; fi
+
+  # A named feed failed to load → drop it and retry (bounded).
+  bad="$(tr '\r' '\n' < /tmp/motis-import.log \
+        | grep -aoiE '(failed to load|unable to import[^\n]*) gtfs/[A-Za-z0-9_.:-]+\.zip' \
+        | grep -aoE 'gtfs/[A-Za-z0-9_.:-]+\.zip' | head -1 | sed 's|gtfs/||;s|\.zip||')"
+  if [ -n "$bad" ]; then
+    if [ "$dropped" -ge "$MAX_FEED_DROPS" ]; then
+      log "ERROR: dropped $dropped malformed feeds and still failing — giving up"; break
+    fi
+    log "  malformed feed '$bad' — excluding it and retrying"
+    drop_feed "$bad"; dropped=$((dropped + 1)); continue
+  fi
+
+  # Not a feed. If we were attempting street routing and MOTIS choked on the
+  # street network (osr 16-ways cap) or a damaged extract, fall back to a
+  # timetable-only build that still routes over the feeds' walking transfers.
+  if [ "$MODE" = street ] && grep -qiE 'maximum is 16|invalid location|osr' /tmp/motis-import.log; then
+    log "  street routing cannot load this extract (osr limit / invalid location)"
+    log "  → falling back to timetable-only (stop-to-stop over precomputed transfers)"
+    MODE=timetable; gen_config timetable; dropped=0; continue
+  fi
+
+  log "ERROR: motis import failed for a non-feed reason:"
+  tr '\r' '\n' < /tmp/motis-import.log | grep -aiE 'unable to import|error|VERIFY FAIL' | tail -3
+  break
+done
+
+if [ "$import_ok" = 1 ]; then
+  [ "$dropped" -gt 0 ] && log "imported with $dropped malformed feed(s) excluded (mode: $MODE)"
   echo "[$(date '+%H:%M:%S')] [3/3] [motis] Restarting server to serve fresh dataset..."
   docker start "$CONTAINER" >/dev/null
 else
-  log "ERROR: motis import failed — restoring previous dataset"
-  # `invalid location` is libosmium's error for a way referencing a node that is
-  # not in the file, so it points at the extract rather than at anything MOTIS or
-  # the feeds did. Naming it here saves bisecting the import tasks to find that
-  # out — the timetable builds fine and only the OSM-reading tasks fail.
-  log "  If the error above is 'invalid location', the OSM extract is damaged:"
-  log "  ways reference missing nodes. Confirm with 'osmium check-refs -r <extract>'"
-  log "  and rebuild it with UPDATE_MODE=full — patched diffs cannot repair it."
-  # Server is stopped; use a throwaway container to swap the dataset back.
+  log "restoring previous dataset"
   docker run --rm -v "${GTFS_VOL}:/data" alpine sh -c \
     'rm -rf /data/data; [ -d /data/data.prev ] && mv /data/data.prev /data/data || true'
   docker start "$CONTAINER" >/dev/null

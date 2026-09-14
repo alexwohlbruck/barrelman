@@ -6,6 +6,7 @@ import { forwardGeocode } from './geocode.service'
 import { searchTransitRoutes, searchTransitStops } from './transit-search.service'
 import { reconcileTransitHits } from '../lib/transit-search'
 import { buildTsQueryText } from '../lib/search-query'
+import { envNumber } from '../config/env'
 
 // ── Autocomplete fast path ──────────────────────────────────────────────────
 // Typeahead fires one request per keystroke, so its budget is ~50ms — an order
@@ -80,6 +81,11 @@ export interface SearchParams {
   semantic?: boolean
   autocomplete?: boolean
 }
+
+// How long /search will wait for Pelias address results before returning POIs
+// without them. Above Pelias's healthy latency, well below its 10s hang
+// backstop. Env-overridable for operators whose Pelias is slower.
+const SEARCH_ADDRESS_BUDGET_MS = envNumber('BARRELMAN_SEARCH_ADDRESS_BUDGET_MS', 2500)
 
 export async function searchPlaces(
   {
@@ -615,7 +621,22 @@ export async function searchPlaces(
   // address-intent query ("350 5th ave" — starts with a number) addresses lead;
   // otherwise they're appended so POIs still win. Dedup against POIs at the same
   // spot so an OSM-addressed POI isn't shown twice.
-  const addressResults = await peliasPromise
+  // Cap how long the search will wait for addresses. Pelias answers healthy
+  // queries in well under a second, but its hang-backstop is 10s (see
+  // geocode.service.ts) — and blocking the whole search on a slow-or-down
+  // geocoder made a 300ms POI query take 10s. Addresses are supplementary to
+  // POIs here, so if Pelias hasn't answered within this budget the POIs return
+  // now and the (abandoned) Pelias fetch is cancelled by its own backstop.
+  // The timer is cleared once the race settles: left dangling it would keep a
+  // live timer per search for the full budget, which at any real query rate is
+  // thousands of them outliving the requests that made them.
+  let budgetTimer: ReturnType<typeof setTimeout> | undefined
+  const addressResults = await Promise.race([
+    peliasPromise,
+    new Promise<any[]>((resolve) => {
+      budgetTimer = setTimeout(() => resolve([]), SEARCH_ADDRESS_BUDGET_MS)
+    }),
+  ]).finally(() => clearTimeout(budgetTimer))
   if (addressResults.length > 0) {
     // Dedup by id — Pelias OSM records carry the same node/way/relation id as
     // barrelman's rows, so a place already returned from PostGIS isn't repeated.

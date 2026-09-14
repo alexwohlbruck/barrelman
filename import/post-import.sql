@@ -60,123 +60,153 @@ END $$;
 -- for the repeat). Repeating a cheap expression is the better trade. area_m2 is
 -- the exception below, because its expression is not cheap.
 
--- Extract address from addr:* tags
-UPDATE geo_places SET address = jsonb_build_object(
-    'housenumber', tags->>'addr:housenumber',
-    'street', tags->>'addr:street',
-    'unit', tags->>'addr:unit',
-    'city', tags->>'addr:city',
-    'state', tags->>'addr:state',
-    'postcode', tags->>'addr:postcode',
-    'country', tags->>'addr:country'
-)
-WHERE (tags ? 'addr:street' OR tags ? 'addr:housenumber')
-  AND address IS DISTINCT FROM jsonb_build_object(
-    'housenumber', tags->>'addr:housenumber',
-    'street', tags->>'addr:street',
-    'unit', tags->>'addr:unit',
-    'city', tags->>'addr:city',
-    'state', tags->>'addr:state',
-    'postcode', tags->>'addr:postcode',
-    'country', tags->>'addr:country'
-);
-
--- Extract opening hours
-UPDATE geo_places SET hours = tags->>'opening_hours'
-WHERE tags ? 'opening_hours'
-  AND hours IS DISTINCT FROM tags->>'opening_hours';
-
--- Extract phone numbers
-UPDATE geo_places SET phones = ARRAY(
-    SELECT unnest FROM unnest(ARRAY[
-        tags->>'phone',
-        tags->>'contact:phone',
-        tags->>'contact:mobile'
-    ]) WHERE unnest IS NOT NULL
-)
-WHERE (tags ? 'phone' OR tags ? 'contact:phone' OR tags ? 'contact:mobile')
-  AND phones IS DISTINCT FROM ARRAY(
-    SELECT unnest FROM unnest(ARRAY[
-        tags->>'phone',
-        tags->>'contact:phone',
-        tags->>'contact:mobile'
-    ]) WHERE unnest IS NOT NULL
-);
-
--- Extract websites
-UPDATE geo_places SET websites = ARRAY(
-    SELECT unnest FROM unnest(ARRAY[
-        tags->>'website',
-        tags->>'contact:website',
-        tags->>'url'
-    ]) WHERE unnest IS NOT NULL
-)
-WHERE (tags ? 'website' OR tags ? 'contact:website' OR tags ? 'url')
-  AND websites IS DISTINCT FROM ARRAY(
-    SELECT unnest FROM unnest(ARRAY[
-        tags->>'website',
-        tags->>'contact:website',
-        tags->>'url'
-    ]) WHERE unnest IS NOT NULL
-);
-
--- Compute area for polygons.
+-- Extract address, hours, phones and websites in ONE pass.
 --
--- ST_Area over 12M geographies is the expensive part of this file (planner cost
--- ~154M), so unlike the statements above this one must not evaluate it twice:
--- repeating it inline measured 311M. Materialize the computation once and join
--- it back on ctid, which is unique per row where id is not, and which is stable
--- for the length of the statement. Rows this statement updates are invisible to
--- its own snapshot, so none is processed twice.
+-- These used to be four statements, which meant four full scans and — worse —
+-- up to four row versions for a place carrying all four tag families, each
+-- rewrite paying WAL and index maintenance again. One statement writes each
+-- affected row exactly once. The IS DISTINCT FROM guards keep the replication
+-- path cheap (see the note above); a row is written only if at least one of
+-- the four derived values actually moved, and the SET expressions are
+-- individually guarded so an UPDATE for one column cannot clobber another
+-- with NULL: each column keeps its old value unless its own tags changed it.
+UPDATE geo_places SET
+    address = CASE WHEN (tags ? 'addr:street' OR tags ? 'addr:housenumber')
+        THEN jsonb_build_object(
+            'housenumber', tags->>'addr:housenumber',
+            'street', tags->>'addr:street',
+            'unit', tags->>'addr:unit',
+            'city', tags->>'addr:city',
+            'state', tags->>'addr:state',
+            'postcode', tags->>'addr:postcode',
+            'country', tags->>'addr:country')
+        ELSE address END,
+    hours = CASE WHEN tags ? 'opening_hours'
+        THEN tags->>'opening_hours' ELSE hours END,
+    phones = CASE WHEN (tags ? 'phone' OR tags ? 'contact:phone' OR tags ? 'contact:mobile')
+        THEN ARRAY(SELECT unnest FROM unnest(ARRAY[
+            tags->>'phone', tags->>'contact:phone', tags->>'contact:mobile'
+        ]) WHERE unnest IS NOT NULL)
+        ELSE phones END,
+    websites = CASE WHEN (tags ? 'website' OR tags ? 'contact:website' OR tags ? 'url')
+        THEN ARRAY(SELECT unnest FROM unnest(ARRAY[
+            tags->>'website', tags->>'contact:website', tags->>'url'
+        ]) WHERE unnest IS NOT NULL)
+        ELSE websites END
+WHERE
+    ((tags ? 'addr:street' OR tags ? 'addr:housenumber')
+      AND address IS DISTINCT FROM jsonb_build_object(
+        'housenumber', tags->>'addr:housenumber',
+        'street', tags->>'addr:street',
+        'unit', tags->>'addr:unit',
+        'city', tags->>'addr:city',
+        'state', tags->>'addr:state',
+        'postcode', tags->>'addr:postcode',
+        'country', tags->>'addr:country'))
+    OR (tags ? 'opening_hours'
+      AND hours IS DISTINCT FROM tags->>'opening_hours')
+    OR ((tags ? 'phone' OR tags ? 'contact:phone' OR tags ? 'contact:mobile')
+      AND phones IS DISTINCT FROM ARRAY(SELECT unnest FROM unnest(ARRAY[
+        tags->>'phone', tags->>'contact:phone', tags->>'contact:mobile'
+      ]) WHERE unnest IS NOT NULL))
+    OR ((tags ? 'website' OR tags ? 'contact:website' OR tags ? 'url')
+      AND websites IS DISTINCT FROM ARRAY(SELECT unnest FROM unnest(ARRAY[
+        tags->>'website', tags->>'contact:website', tags->>'url'
+      ]) WHERE unnest IS NOT NULL));
+
+-- Backfill area for polygons that don't have one.
 --
--- The ::real cast is load-bearing. ST_Area returns double precision; comparing
--- that against a real column promotes the stored value back to double with a
--- different bit pattern, so without the cast every row looks changed and the
--- guard buys nothing.
-WITH computed AS MATERIALIZED (
-    SELECT ctid AS row_id, ST_Area(geom::geography)::real AS area_m2
-    FROM geo_places
-    WHERE geom_type = 'area'
-)
-UPDATE geo_places p SET area_m2 = computed.area_m2
-FROM computed
-WHERE p.ctid = computed.row_id
-  AND p.area_m2 IS DISTINCT FROM computed.area_m2;
+-- On a fresh import area_m2 is a GENERATED column (see osm2pgsql-flex.lua):
+-- Postgres computes it during osm2pgsql's COPY, so there is nothing to do
+-- here — and updating a generated column is an error, hence the guard. This
+-- backfill exists for databases imported before that change, where the DO
+-- block above added area_m2 as a plain column: measured at US scale, deriving
+-- it here for every area row was ~30 minutes of ST_Area math followed by
+-- ELEVEN HOURS of rewriting half the table through live indexes. Only NULLs
+-- are filled, so it runs once per legacy database and never again.
+--
+-- The ctid join (not id) is deliberate: id carries no unique index.
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'geo_places' AND column_name = 'area_m2'
+          AND is_generated = 'NEVER'
+    ) THEN
+        WITH computed AS MATERIALIZED (
+            SELECT ctid AS row_id, ST_Area(geom::geography)::real AS area_m2
+            FROM geo_places
+            WHERE geom_type = 'area' AND area_m2 IS NULL
+        )
+        UPDATE geo_places p SET area_m2 = computed.area_m2
+        FROM computed
+        WHERE p.ctid = computed.row_id;
+    END IF;
+END $$;
 
 -- NOTE: tsvector (ts column) is NOT built here — it depends on name_abbrev,
 -- codes, and parent_context which are populated in later pipeline steps.
 -- The tsvector is built as the final step of run-import.sh / update-osm.sh.
 
--- Create indexes
--- Primary key index (osm2pgsql doesn't create this automatically)
+-- ── The one shared tsvector builder ─────────────────────────────────────
+--
+-- The FTS document used to be written out twice — once in rebuild-tsvectors.sql
+-- and once implied by fillTsvectors() in src/lib/search-enrichment.ts — with a
+-- comment begging them to stay in sync. Now the SQL side has exactly one copy,
+-- and every statement that writes ts calls it. Keep THIS in sync with
+-- fillTsvectors() / TS_NORMALIZATION_VERSION in src/lib/search-enrichment.ts.
+--
+-- Intersection names ('X' rows) get "&" expanded to multilingual "and" tokens
+-- and road-suffix abbreviations injected so "hawthorne ln & 8th st" matches.
+CREATE OR REPLACE FUNCTION build_ts(
+    p_osm_type TEXT, p_name TEXT, p_names TEXT[],
+    p_name_abbrev TEXT, p_categories TEXT[], p_parent_context TEXT
+) RETURNS tsvector
+LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $fn$
+SELECT to_tsvector('simple', unaccent(replace(
+    (CASE WHEN p_osm_type = 'X'
+        THEN replace(replace(replace(replace(replace(replace(replace(
+             replace(replace(replace(replace(replace(replace(
+               coalesce(p_name, ''), ' & ', ' and et und y e ')
+             , 'Street', 'Street St'), 'Avenue', 'Avenue Ave')
+             , 'Boulevard', 'Boulevard Blvd'), 'Drive', 'Drive Dr')
+             , 'Lane', 'Lane Ln'), 'Road', 'Road Rd')
+             , 'Court', 'Court Ct'), 'Place', 'Place Pl')
+             , 'Circle', 'Circle Cir'), 'Parkway', 'Parkway Pkwy')
+             , 'Highway', 'Highway Hwy'), 'Trail', 'Trail Trl')
+             || ' ' || coalesce(array_to_string(p_names, ' '), '')
+        ELSE replace(coalesce(p_name, ''), ' & ', ' and et und y e ')
+    END) || ' ' || coalesce(p_name_abbrev, '') || ' ' ||
+    coalesce(array_to_string(
+        ARRAY(SELECT replace(replace(unnest(p_categories), '/', ' '), '_', ' ')),
+    ' '), '') || ' ' ||
+    coalesce(p_parent_context, '')
+, chr(39), '')))
+$fn$;
+
+-- ── Indexes the pipeline itself needs ───────────────────────────────────
+--
+-- Only these four are created here. The rest — every GIN, the trigram GIST,
+-- the search-layer btrees — moved to finalize-indexes.sql, run AFTER the
+-- enrichment steps. The reason is write amplification: codes, abbreviations,
+-- parent context and the tsvector each rewrite most named rows, every rewrite
+-- is non-HOT once indexed columns change, and each one had to maintain all
+-- fifteen indexes per row. Worst was the ts GIN index: created here on an
+-- all-NULL column, then populated through ~30M incremental inserts by the
+-- final UPDATE — the slowest possible way to build a GIN index. Deferring
+-- them turns all of that into one bulk build per index over settled data.
+--
+-- What stays, and why:
+--   id          — every enrichment UPDATE joins its computed rows back on id
+--   geom GIST   — buildings_3d containment (documented below as load-bearing:
+--                 without it the parts join planned 36 trillion pairs),
+--                 intersections' road self-join, transit views
+--   centroid GIST — parent-context probes boundaries per-POI centroid
+--   admin_geom  — the boundary side of that same join
 CREATE INDEX IF NOT EXISTS geo_places_id_idx ON geo_places(id);
-
--- Universal indexes (all rows)
-CREATE INDEX IF NOT EXISTS geo_places_centroid_idx ON geo_places USING GIST(centroid);
 CREATE INDEX IF NOT EXISTS geo_places_geom_idx ON geo_places USING GIST(geom);
-CREATE INDEX IF NOT EXISTS geo_places_tags_idx ON geo_places USING GIN(tags jsonb_path_ops);
-CREATE INDEX IF NOT EXISTS geo_places_geom_type_idx ON geo_places(geom_type);
-
--- Partial indexes (only relevant rows)
-CREATE INDEX IF NOT EXISTS geo_places_name_trgm_gist_idx ON geo_places USING GIST(name gist_trgm_ops) WHERE name IS NOT NULL;
-CREATE INDEX IF NOT EXISTS geo_places_categories_idx ON geo_places USING GIN(categories) WHERE categories != '{}';
-CREATE INDEX IF NOT EXISTS geo_places_ts_idx ON geo_places USING GIN(ts) WHERE ts IS NOT NULL;
-CREATE INDEX IF NOT EXISTS geo_places_admin_level_idx ON geo_places(admin_level) WHERE admin_level IS NOT NULL;
+CREATE INDEX IF NOT EXISTS geo_places_centroid_idx ON geo_places USING GIST(centroid);
 CREATE INDEX IF NOT EXISTS geo_places_admin_geom_idx ON geo_places USING GIST(geom) WHERE geom_type = 'area' AND (admin_level IS NOT NULL OR categories && ARRAY['place/neighbourhood', 'place/suburb', 'place/quarter', 'place/city_block']::text[]);
-
--- Search layer indexes (codes and abbreviation lookups)
-CREATE INDEX IF NOT EXISTS geo_places_codes_idx ON geo_places USING GIN(codes) WHERE codes IS NOT NULL;
-CREATE INDEX IF NOT EXISTS geo_places_name_abbrev_idx ON geo_places(name_abbrev) WHERE name_abbrev IS NOT NULL;
-CREATE INDEX IF NOT EXISTS geo_places_osm_type_idx ON geo_places(osm_type);
-
--- Semantic search index (HNSW for fast approximate nearest-neighbor)
-CREATE INDEX IF NOT EXISTS geo_places_embedding_hnsw_idx ON geo_places USING hnsw (embedding vector_cosine_ops) WHERE embedding IS NOT NULL;
-
--- ── Bicycle infrastructure indexes ──────────────────────────
-CREATE INDEX IF NOT EXISTS bicycle_ways_geom_idx ON bicycle_ways USING GIST(geom);
-CREATE INDEX IF NOT EXISTS bicycle_ways_infra_type_idx ON bicycle_ways(infra_type);
-CREATE INDEX IF NOT EXISTS bicycle_routes_geom_idx ON bicycle_routes USING GIST(geom);
-CREATE INDEX IF NOT EXISTS bicycle_routes_network_idx ON bicycle_routes(network);
 
 -- Analyze tables for query planner
 ANALYZE geo_places;

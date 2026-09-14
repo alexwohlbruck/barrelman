@@ -132,7 +132,7 @@ Downloads had nowhere to go. `./data/gtfs` must be mounted **read-write** into `
 
 **GraphHopper will not start, and dies before logging its version**
 
-The graph outgrew the heap. GraphHopper loads it into heap rather than memory-mapping it, so the failure looks like a crash rather than an out-of-memory. Check `du -sh` on the `graph-cache` directory, raise `-Xmx` in `GRAPHHOPPER_JAVA_OPTS` above it, and re-run `scripts/rebuild-graphhopper.sh`.
+The graph *build* outgrew the heap. Serving memory-maps the graph (`graph.dataaccess.default_type: MMAP`) and needs free RAM rather than heap, but importing the PBF and preparing landmarks run in heap — and an undersized `-Xmx` dies before GraphHopper logs its version, so the failure looks like a crash rather than an out-of-memory. Check `du -sh` on the `graph-cache` directory, raise `-Xmx` in `GRAPHHOPPER_JAVA_OPTS` above it, and re-run `scripts/rebuild-graphhopper.sh`.
 
 **Phantom out-of-system transfers**
 
