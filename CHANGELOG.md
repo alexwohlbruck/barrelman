@@ -98,6 +98,16 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ### Fixed
 
+* The admin console's tsvector rebuild no longer degrades search. Both console
+  paths ("Rebuild tsvectors" and the full migration) carried their own copy of
+  the full-text document expression, and it had drifted from the import's: no
+  intersection-name expansion, no alias array, no apostrophe stripping. Running
+  either after an import silently replaced good tsvectors with worse ones — an
+  intersection indexed as "Main Street & Oak Avenue" stopped matching "Main St
+  & Oak Ave". Both now call `build_ts()`, the one definition the import uses
+* `BARRELMAN_SEARCH_ADDRESS_BUDGET_MS` now actually applies. It was documented
+  in `.env.example` but never forwarded to the API container, so setting it did
+  nothing
 * Transfer prohibitions now cover every platform under a forbidden station.
   A `transfer_type=3` row is declared between the STATIONS a rider recognises
   — the MTA forbids Borough Hall to Jay St-MetroTech as `423` to `A41` — while

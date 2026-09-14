@@ -259,11 +259,15 @@ itself.
 | `MOTIS_RT_UPDATE_INTERVAL` | MOTIS default (60s) | GTFS-RT poll interval. Baked into the MOTIS config at import time, so it takes effect on the next `rebuild-motis.sh`, not on restart |
 | `MARTIN_URL` | `http://barrelman-martin:3000` | Set to point at a Martin outside this stack |
 | `PELIAS_URL` | `http://pelias_api:4000` | Address geocoder. Only used when the `pelias` profile is up |
+| `BARRELMAN_SEARCH_ADDRESS_BUDGET_MS` | `2500` | How long `/search` waits for Pelias address results before returning POIs without them. Pelias answers healthy queries in well under a second; this stops a slow or unreachable geocoder from holding the whole search up to its 10s hang backstop |
 | `ISOCHRONE_CONCURRENCY` | `8` | Parallel GraphHopper calls per isochrone. Raise only if GraphHopper is dedicated to isochrone work |
 | `TRANSITLAND_API_KEY` | — | For GTFS feed discovery. Free at [transit.land](https://transit.land/users/sign_up) |
 
-`GRAPHHOPPER_JAVA_OPTS` is the one to watch as `REGIONS` grows. GraphHopper
-loads its graph into JVM **heap** rather than memory-mapping it, so an
+`GRAPHHOPPER_JAVA_OPTS` is the one to watch as `REGIONS` grows, but it sizes the
+graph **build**, not serving. The shipped config memory-maps the finished graph
+(`graph.dataaccess.default_type: MMAP`), so a query-time graph lives in the
+kernel page cache and a big one wants free RAM on the box rather than a bigger
+`-Xmx`. Heap is consumed importing the PBF and preparing landmarks, and an
 undersized `-Xmx` dies before the process logs its version — the failure looks
 like a crash, not an out-of-memory. Check `du -sh` on the `graph-cache`
 directory and keep `-Xmx` comfortably above it.

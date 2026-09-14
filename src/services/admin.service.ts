@@ -45,18 +45,24 @@ export async function runResolveParentContextIncremental(): Promise<AdminTaskRes
   return { task: 'resolve-parent-context-incremental', steps, totalMs: Math.round(performance.now() - start) }
 }
 
-/** Rebuild tsvectors for all named places. */
+/**
+ * Rebuild tsvectors for all named places.
+ *
+ * The document comes from build_ts() (defined in post-import.sql) rather than
+ * being spelled out here. This used to carry its own copy of the expression,
+ * which had drifted: it dropped the intersection-name expansion, the alias
+ * array and the apostrophe stripping, so running this after an import
+ * silently replaced good tsvectors with worse ones. The IS DISTINCT FROM
+ * guard makes an unchanged row a read rather than a rewrite through the ts
+ * GIN index.
+ */
 export async function runRebuildTsvectors(): Promise<AdminTaskResult> {
   const start = performance.now()
   await db.execute(sql`
-    UPDATE geo_places SET ts = to_tsvector('simple', unaccent(
-        coalesce(name, '') || ' ' || coalesce(name_abbrev, '') || ' ' ||
-        coalesce(array_to_string(
-            ARRAY(SELECT replace(replace(unnest(categories), '/', ' '), '_', ' ')),
-        ' '), '') || ' ' ||
-        coalesce(parent_context, '')
-    ))
+    UPDATE geo_places
+    SET ts = build_ts(osm_type, name, names, name_abbrev, categories, parent_context)
     WHERE name IS NOT NULL
+      AND ts IS DISTINCT FROM build_ts(osm_type, name, names, name_abbrev, categories, parent_context)
   `)
   const durationMs = Math.round(performance.now() - start)
   return { task: 'rebuild-tsvectors', steps: [{ file: 'inline', durationMs, notices: [] }], totalMs: durationMs }
@@ -152,18 +158,16 @@ export async function runFullMigration(onPhase?: (msg: string) => void): Promise
   onPhase?.('[4/5] Resolve parent context')
   steps.push(await runSqlFile('resolve-parent-context.sql'))
 
-  // Rebuild tsvectors (now that codes, abbreviations, and parent_context are populated)
+  // Rebuild tsvectors (now that codes, abbreviations, and parent_context are
+  // populated). resolve-parent-context.sql already wrote ts for the rows it
+  // touched, so the guard below makes this a verification pass over those.
   onPhase?.('[5/5] Rebuild tsvectors')
   const tsStart = performance.now()
   await db.execute(sql`
-    UPDATE geo_places SET ts = to_tsvector('simple', unaccent(
-        coalesce(name, '') || ' ' || coalesce(name_abbrev, '') || ' ' ||
-        coalesce(array_to_string(
-            ARRAY(SELECT replace(replace(unnest(categories), '/', ' '), '_', ' ')),
-        ' '), '') || ' ' ||
-        coalesce(parent_context, '')
-    ))
+    UPDATE geo_places
+    SET ts = build_ts(osm_type, name, names, name_abbrev, categories, parent_context)
     WHERE name IS NOT NULL
+      AND ts IS DISTINCT FROM build_ts(osm_type, name, names, name_abbrev, categories, parent_context)
   `)
   steps.push({ file: 'rebuild-tsvectors', durationMs: Math.round(performance.now() - tsStart), notices: [] })
 
