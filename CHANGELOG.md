@@ -12,6 +12,17 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ### Changed
 
+* The MOTIS transit build survives a messy real-world feed corpus and a
+  continent-sized street network instead of aborting on the first problem. A
+  malformed feed (missing/invalid timezone, bad table) is dropped from the
+  rebuild and logged rather than taking all transit down; every dataset also
+  gets a `default_timezone` (`MOTIS_DEFAULT_TIMEZONE`) so the common
+  "no timezone" feeds load. And because MOTIS's street router caps a node at 16
+  ways — which US-scale street data exceeds — the rebuild falls back to a
+  timetable-only dataset (routing stop-to-stop over the precomputed walking
+  transfers) when street routing can't load the extract. `MOTIS_STREET_ROUTING=0`
+  skips straight to that
+
 * Street routing no longer caps waypoint spacing at 1,000 km — any two points
   routable over the imported graph now answer (LA to NYC was rejected with
   "Point 1 is too far from Point 0"). Landmark preparation is what makes
