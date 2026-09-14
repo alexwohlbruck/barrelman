@@ -13,6 +13,7 @@ import { parseArgs } from 'util'
 import { existsSync, mkdirSync, writeFileSync, readdirSync } from 'fs'
 import { join, basename } from 'path'
 import { injectFaresV2 } from './inject-fares-v2'
+import { injectBikesAllowed } from './inject-bikes-allowed'
 import { importFeedFile, injectTransfersTxt } from './feed-import'
 import { ensureGtfsSchema } from '../src/db'
 import type { GtfsRtUrl } from '../src/services/gtfs.service'
@@ -281,6 +282,21 @@ async function main() {
           console.error(`  ✗ Failed to inject into ${basename(filepath)}: ${err}`)
         }
       }
+    }
+  }
+
+  // Step 4c: Default bikes_allowed to "allowed" where a feed leaves it
+  // unstated, so bike-carriage routing isn't dead everywhere. An explicit
+  // "not allowed" is preserved.
+  console.log('\n=== Defaulting bikes_allowed ===')
+  for (const filepath of feedFiles) {
+    try {
+      const status = await injectBikesAllowed(filepath)
+      if (status.startsWith('filled')) {
+        console.log(`  ✓ ${basename(filepath)}: ${status}`)
+      }
+    } catch (err) {
+      console.error(`  ✗ ${basename(filepath)}: ${err}`)
     }
   }
 

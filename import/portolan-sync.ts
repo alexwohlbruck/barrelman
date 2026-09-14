@@ -323,6 +323,7 @@ if (import.meta.main) {
       const { alignRealtimeTripIds } = await import('./align-trip-ids')
       const { importFeedFile, injectTransfersTxt, readZipEntry } = await import('./feed-import')
       const { injectFaresV2 } = await import('./inject-fares-v2')
+      const { injectBikesAllowed } = await import('./inject-bikes-allowed')
 
       await ensureGtfsSchema()
 
@@ -432,6 +433,12 @@ if (import.meta.main) {
           if (status.startsWith('converted')) console.log(`  ✓ Fares v2: ${status}`)
         } catch (err) {
           console.error(`  ✗ Fares v2 injection failed: ${err}`)
+        }
+        try {
+          const status = await injectBikesAllowed(dest)
+          if (status.startsWith('filled')) console.log(`  ✓ bikes_allowed: ${status}`)
+        } catch (err) {
+          console.error(`  ✗ bikes_allowed default failed: ${err}`)
         }
 
         imported++

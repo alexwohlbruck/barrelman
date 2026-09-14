@@ -51,6 +51,15 @@ export interface TransitRouteResponse {
     searchWindow: number
     nextPageCursor?: string
     prevPageCursor?: string
+    /**
+     * Echoes that bike carriage was actually enforced on this search.
+     *
+     * A caller cannot tell "no carriage data, so no results" from "this
+     * server is too old to know the flag and ignored it" — the second would
+     * hand back rides the bike may not be allowed on. Echoing lets the
+     * caller require the confirmation and fail safe without it.
+     */
+    requireBikeTransport?: boolean
   }
 }
 
@@ -78,6 +87,18 @@ export interface TransitItinerary {
     currency: string
     amount: number
   }
+  /**
+   * How many separate fares this trip charges — how many times a rider
+   * reaches for their card, which is not the same as the number of legs.
+   *
+   * MOTIS groups an itinerary's legs into FARE TRANSFERS: consecutive legs
+   * joined by a matching GTFS fare_transfer_rule become one payment, legs
+   * with no rule between them become two. So a subway change inside the
+   * gates is one payment across two legs, while stepping out to another
+   * operator is two. Undefined when the feeds carry no fare data and there
+   * is nothing to group by.
+   */
+  farePayments?: number
 }
 
 /** MOTIS street modes for intermodal routing */
@@ -113,6 +134,14 @@ export interface IntermodalRouteRequest extends TransitRouteRequest {
    * time-optimal search would Pareto-dominate away.
    */
   additionalTransferTime?: number
+  /**
+   * Restrict to trips that allow bike carriage, for riding a bike onto
+   * transit and off again at the far end.
+   *
+   * Answered from GTFS `bikes_allowed`, where "no information" counts as no —
+   * so a feed that omits it yields nothing rather than a guess.
+   */
+  requireBikeTransport?: boolean
 }
 
 export interface TransitLeg {
@@ -459,8 +488,30 @@ function adaptItinerary(itin: any): TransitItinerary {
   //   2. fare.fare.regular: older OTP2 format with cents + currency
   const fare = extractFare(itin)
   if (fare) adapted.fare = fare
+  const payments = countFarePayments(itin)
+  if (payments != null) adapted.farePayments = payments
 
   return adapted
+}
+
+/**
+ * How many separate fares an itinerary charges, per MOTIS's own grouping.
+ *
+ * `fareTransfers` IS the answer: MOTIS emits one entry per fare payment,
+ * having already applied the feeds' fare_transfer_rules. We only have to
+ * refuse to report it when it means nothing — with no fare data at all
+ * MOTIS still emits one empty entry per leg, which would read as "every
+ * leg costs a fare" when the truth is that nobody knows.
+ */
+export function countFarePayments(itin: any): number | undefined {
+  if (!Array.isArray(itin?.fareTransfers) || itin.fareTransfers.length === 0) {
+    return undefined
+  }
+  const priced = itin.fareTransfers.some((ft: any) =>
+    (ft?.effectiveFareLegProducts ?? []).some((alts: any[]) => alts?.length) ||
+    (ft?.transferProducts ?? []).length > 0,
+  )
+  return priced ? itin.fareTransfers.length : undefined
 }
 
 /**
@@ -588,11 +639,49 @@ export async function getTransitRoute(
   }
 
   // Sort by duration and take the requested number
-  allItineraries.sort((a, b) => a.duration - b.duration)
+  allItineraries.sort(compareItineraries)
   const numItineraries = request.numItineraries ?? 5
   const uniqueItineraries = deduplicateItineraries(allItineraries).slice(0, numItineraries)
 
   return { itineraries: uniqueItineraries, metadata }
+}
+
+/**
+ * How much longer a trip may take before a saved fare stops being worth it.
+ *
+ * A rider asked for directions, not for the cheapest possible routing, so a
+ * one-fare trip that takes half an hour longer is not the answer to their
+ * question. Ten minutes is about where the trade turns for a city fare:
+ * below it, most riders take the cheaper trip; above it, they do not.
+ *
+ * The ordering only ever fires when the router has offered BOTH, so it
+ * cannot invent a slow trip — it picks between what already came back.
+ */
+const FARE_SAVING_TOLERANCE_SEC = 10 * 60
+
+/**
+ * Order itineraries by duration, preferring fewer fare payments where the
+ * time cost is small.
+ *
+ * Sorting on duration alone put a trip that charges two fares above one
+ * that charges one and arrives at the same minute — the router is Pareto
+ * over time and transfers, and an out-of-system walk is FEWER transfers, so
+ * it wins on both of the criteria the search actually optimises. Fare is
+ * not one of them, and cannot be: MOTIS prices an itinerary after routing
+ * it. This is where that gets corrected.
+ */
+export function compareItineraries(a: TransitItinerary, b: TransitItinerary): number {
+  const pa = a.farePayments, pb = b.farePayments
+  // Only compare when BOTH are known. One priced trip and one unpriced is
+  // a feed-coverage gap, not evidence that the unpriced one is free.
+  if (pa != null && pb != null && pa !== pb) {
+    const cheaper = pa < pb ? a : b
+    const dearer = pa < pb ? b : a
+    if (cheaper.duration - dearer.duration <= FARE_SAVING_TOLERANCE_SEC) {
+      return cheaper === a ? -1 : 1
+    }
+  }
+  return a.duration - b.duration
 }
 
 /** Deduplicate itineraries by start time + duration + number of legs */
@@ -754,6 +843,10 @@ async function queryMotisIntermodal(
     params.set('postTransitRentalFormFactors', request.postTransitRentalFormFactors.join(','))
   }
 
+  if (request.requireBikeTransport) {
+    params.set('requireBikeTransport', 'true')
+  }
+
   if (request.searchWindow != null) {
     params.set('searchWindow', String(request.searchWindow))
   }
@@ -797,7 +890,13 @@ async function queryMotisIntermodal(
   ]
 
   if (allItineraries.length === 0) {
-    return { itineraries: [], metadata: { searchWindow: 0 } }
+    return {
+      itineraries: [],
+      metadata: {
+        searchWindow: 0,
+        ...(request.requireBikeTransport && { requireBikeTransport: true }),
+      },
+    }
   }
 
   return {
@@ -806,6 +905,7 @@ async function queryMotisIntermodal(
       searchWindow: data.searchWindowUsed ?? data.plan?.searchWindowUsed ?? 0,
       nextPageCursor: data.nextPageCursor || undefined,
       prevPageCursor: data.previousPageCursor || undefined,
+      ...(request.requireBikeTransport && { requireBikeTransport: true }),
     },
   }
 }
@@ -1048,7 +1148,7 @@ async function composeTransitFromStops(
   )
 
   const all = results.flat()
-  all.sort((a, b) => a.duration - b.duration)
+  all.sort(compareItineraries)
   return {
     itineraries: deduplicateItineraries(all).slice(0, numItineraries),
     metadata: { searchWindow: 0 },
@@ -1080,7 +1180,7 @@ export async function getIntermodalRoute(
   } else {
     result = await queryMotisIntermodal(request, fetchFn)
     // Sort by duration and deduplicate
-    result.itineraries.sort((a, b) => a.duration - b.duration)
+    result.itineraries.sort(compareItineraries)
     const numItineraries = request.numItineraries ?? 5
     result.itineraries = deduplicateItineraries(result.itineraries).slice(0, numItineraries)
   }

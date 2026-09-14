@@ -1380,9 +1380,26 @@ export async function findTransferPairs(
   // already imported. maintenanceConnection() is the untimed pool the schema
   // DDL and search enrichment use for exactly this reason. The gtfs_stops
   // geography GiST index keeps the join index-assisted.
+  //
+  // Pairs the feed FORBIDS are excluded before any walking time is
+  // computed. GTFS transfer_type=3 means "Transfers forbidden between
+  // routes at these stops" — a fare gate, in practice — and portolan
+  // derives one for every gated station pair an agency leaves unconnected.
+  // Routing those walks would burn a GraphHopper call per pair to produce
+  // a transfer the merge then discards, and worse, would offer the agency
+  // a transfer it has explicitly denied.
+  //
+  // Prohibitions are declared between PARENT stations (the MTA forbids
+  // 423↔A41) while these pairs are platforms (423N, A41S), so both sides
+  // resolve to their parent before matching, and either direction counts.
   const sqlc = maintenanceConnection()
   try {
     const result = await sqlc<any[]>`
+      WITH forbidden AS (
+        SELECT feed_id, from_stop_id, to_stop_id
+        FROM gtfs_transfers
+        WHERE transfer_type = 3
+      )
       SELECT
         a.stop_id AS from_stop_id,
         b.stop_id AS to_stop_id,
@@ -1398,6 +1415,18 @@ export async function findTransferPairs(
         AND ST_DWithin(a.geom::geography, b.geom::geography, ${maxDistance})
       WHERE (a.location_type = 0 OR a.location_type IS NULL)
         AND (b.location_type = 0 OR b.location_type IS NULL)
+        AND NOT EXISTS (
+          SELECT 1 FROM forbidden f
+          WHERE f.feed_id = a.feed_id
+            AND f.feed_id = b.feed_id
+            AND (
+              (f.from_stop_id = COALESCE(a.parent_station, a.stop_id)
+               AND f.to_stop_id = COALESCE(b.parent_station, b.stop_id))
+              OR
+              (f.from_stop_id = COALESCE(b.parent_station, b.stop_id)
+               AND f.to_stop_id = COALESCE(a.parent_station, a.stop_id))
+            )
+        )
     `
 
     return result.map((row: any) => ({
@@ -1646,9 +1675,18 @@ export async function generateMotisConfig(options?: MotisConfigOptions): Promise
     lines.push('  max_matching_distance: 250')
     lines.push('  datasets:')
 
+    // A feed whose agency.txt omits agency_timezone makes MOTIS abort the entire
+    // import ("timetable dataset X: timezone not set") — one malformed feed out
+    // of a thousand takes all transit down. MOTIS's per-dataset default_timezone
+    // is used only when the feed itself supplies none, so setting it here is a
+    // no-op for well-formed feeds and a rescue for the rest. Configurable because
+    // the least-wrong default depends on where most of your feeds are.
+    const defaultTz = process.env.MOTIS_DEFAULT_TIMEZONE || 'America/New_York'
+
     for (const feed of feeds) {
       lines.push(`    "${feed.feed_id}":`)
       lines.push(`      path: "${gtfsDir}/${feed.feed_id}.zip"`)
+      lines.push(`      default_timezone: "${defaultTz}"`)
 
       // Add RT feeds if available
       const rtUrls = feed.rt_urls
