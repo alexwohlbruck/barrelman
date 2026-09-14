@@ -10,8 +10,38 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Fixed
+
+* Transfer prohibitions now cover every platform under a forbidden station.
+  A `transfer_type=3` row is declared between the STATIONS a rider recognises
+  — the MTA forbids Borough Hall to Jay St-MetroTech as `423` to `A41` — while
+  computed walking transfers are between PLATFORMS (`423N` to `A41S`). Matching
+  ids exactly let every platform pairing under a forbidden station back in,
+  which is precisely the phantom the prohibition exists to stop. Both sides now
+  resolve to their parent station, so one row covers all of them. Checked
+  against production's own feed: of the 3928 computed rows carried forward,
+  every out-of-system Borough Hall/Jay St pairing is dropped and all 613 agency
+  transfers survive
+
+## [0.2.26] - 2026-09-14
+
 ### Added
 
+* Intermodal routing takes `requireBikeTransport`, which keeps only trips that
+  allow bike carriage — for BIKE on both ends. The response metadata confirms
+  the enforcement, so a caller can tell "no bike-friendly trip exists" apart
+  from "the filter was never applied"
+* Unstated GTFS `bikes_allowed` now defaults to "allowed" at import time
+  (`import/inject-bikes-allowed.ts`). GTFS has three states — no information,
+  allowed, not allowed — but MOTIS collapses them to a boolean and reads "no
+  information" as no. Most agencies omit the column, so carriage looked
+  prohibited everywhere and `requireBikeTransport` returned nothing at all: of
+  the feeds we import, only two declared a single bike-carrying trip between
+  them. An explicit "not allowed" is left alone, so a feed that really does
+  forbid carriage stays the authority on its own services. Buses are left
+  unstated — most carry only a folding bike or a two-slot front rack, neither
+  of which GTFS can express, and guessing "allowed" routes riders onto a bus
+  that will turn them away
 * Itineraries now report `farePayments` — how many separate fares a trip
   charges, which is not the same as the number of legs. MOTIS groups legs into
   fare transfers using the feeds' GTFS `fare_transfer_rules`, so a subway change
