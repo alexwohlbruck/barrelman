@@ -27,6 +27,37 @@ if ! docker ps -a --format '{{.Names}}' | grep -q "^${CONTAINER}\$"; then
   exit 0
 fi
 
+# ── Skip when the serving graph is already built from the current extract ────
+# run-import.sh starts this rebuild the moment the PBF is downloaded, so by the
+# time an operator (or a re-run after a failed later stage) invokes it again,
+# the graph may already be exactly what a rebuild would produce. Wiping it then
+# throws away hours on a large region.
+#
+# The port probe is what makes this safe against a HALF-built graph:
+# GraphHopper only binds its HTTP port after the import finishes, so an
+# answering port means the import completed. The mtime comparison then ties
+# that finished graph to the extract on disk — apply-osm-diff.sh patches
+# region.osm.pbf in place, so a stale graph always has properties older than
+# the PBF and rebuilds as before. FORCE_REBUILD=1 overrides (e.g. after
+# changing graphhopper-config.yml, which the mtimes cannot see).
+gh_serving() {
+  # ops reaches the container by name on the compose network; a host shell
+  # reaches the published loopback port. No curl in either place — bash /dev/tcp.
+  timeout 3 bash -c "exec 3<>/dev/tcp/${CONTAINER}/8989" 2>/dev/null && return 0
+  timeout 3 bash -c 'exec 3<>/dev/tcp/127.0.0.1/5003' 2>/dev/null && return 0
+  return 1
+}
+
+if [ "${FORCE_REBUILD:-0}" != "1" ] && gh_serving; then
+  PROPS_M=$(docker exec "$CONTAINER" stat -c %Y /data/graph-cache/properties 2>/dev/null || echo 0)
+  PBF_M=$(docker exec "$CONTAINER" stat -c %Y /data/region.osm.pbf 2>/dev/null || echo 0)
+  if [ "$PBF_M" -gt 0 ] && [ "$PROPS_M" -gt "$PBF_M" ]; then
+    echo "[$(date '+%H:%M:%S')] [graphhopper] Graph already built from the current extract — skipping."
+    echo "    (FORCE_REBUILD=1 forces a wipe, e.g. after a graphhopper-config.yml change.)"
+    exit 0
+  fi
+fi
+
 echo "[$(date '+%H:%M:%S')] [1/2] [graphhopper] Wiping graph cache..."
 
 # Stop first, then wipe from OUTSIDE the container.

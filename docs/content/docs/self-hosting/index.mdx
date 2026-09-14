@@ -63,7 +63,7 @@ Measured peaks on that run: 6.4 GB resident across the whole stack (Postgres
 6.4 GB against an 8 GB cap, GraphHopper 2.5 GB, everything else under 400 MB
 combined), and 22 GB of disk including container images.
 
-The RAM figures assume everything runs on one box. GraphHopper loads its routing graph into JVM **heap** rather than memory-mapping it, so it wants several GB to itself, and MOTIS and Elasticsearch each want their own. Search latency is dominated by whether the database's working set stays resident, so give Postgres whatever is left.
+The RAM figures assume everything runs on one box. GraphHopper wants several GB of JVM heap **while building its graph** (serving memory-maps the finished graph from page cache instead — see the sizing note in [Regions](/self-hosting/regions#sizing)), and MOTIS and Elasticsearch each want their own. Search latency is dominated by whether the database's working set stays resident, so give Postgres whatever is left.
 
 Add roughly 1 GB of RAM and tens of GB of disk if you enable the Pelias address geocoder.
 
@@ -130,9 +130,10 @@ BARRELMAN_API_KEY=brm_<a long random string>
 REGIONS=north-carolina
 
 # ── Engines ───────────────────────────────────────────────────────────────
-# GraphHopper's heap must exceed the on-disk routing graph. Colorado's is
-# 654 MB, so 4g is generous; raise it as REGIONS grows. An undersized heap dies
-# before it logs its version, so the failure looks like a crash.
+# Heap for GraphHopper's graph BUILD (serving memory-maps the graph and needs
+# page cache, not heap). Colorado's graph is 654 MB, so 4g is generous; raise
+# it as REGIONS grows. An undersized heap dies before it logs its version, so
+# the failure looks like a crash.
 GRAPHHOPPER_JAVA_OPTS=-Xmx4g -Xms1g
 
 # ── Database tuning ───────────────────────────────────────────────────────

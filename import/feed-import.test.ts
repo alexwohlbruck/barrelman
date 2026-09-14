@@ -82,3 +82,42 @@ describe('mergeTransfersTxt', () => {
     expect(merged).toContain('232,423,2,300')
   })
 })
+
+describe('mergeTransfersTxt — parent station resolution', () => {
+  // Production's computed transfers are PLATFORM level (423N -> A41N) while a
+  // prohibition is declared between STATIONS (423 -> A41), because that is the
+  // pair a rider recognises and what portolan derives. Matching ids exactly
+  // lets every platform pairing under a forbidden station slip back in.
+  const STOPS =
+    'stop_id,stop_name,stop_lat,stop_lon,location_type,parent_station\n' +
+    '423,Borough Hall,40.692404,-73.990151,1,\n' +
+    '423N,Borough Hall,40.692404,-73.990151,0,423\n' +
+    '423S,Borough Hall,40.692404,-73.990151,0,423\n' +
+    'A41,Jay St-MetroTech,40.692338,-73.987342,1,\n' +
+    'A41N,Jay St-MetroTech,40.692338,-73.987342,0,A41\n' +
+    'A41S,Jay St-MetroTech,40.692338,-73.987342,0,A41\n'
+
+  it('blocks platform pairs under a forbidden station pair', () => {
+    const feed = `${HEADER}\n423,A41,3,\nA41,423,3,\n`
+    const computed =
+      `${HEADER}\n423N,A41N,2,216\n423N,A41S,2,216\n423S,A41N,2,216\n`
+
+    const merged = mergeTransfersTxt(feed, computed, STOPS)
+    expect(merged).not.toContain('423N,A41N')
+    expect(merged).not.toContain('423N,A41S')
+    expect(merged).not.toContain('423S,A41N')
+  })
+
+  it('still allows platform pairs under stations nobody forbade', () => {
+    const feed = `${HEADER}\n423,A41,3,\n`
+    const computed = `${HEADER}\n423N,423S,2,60\n`
+
+    expect(mergeTransfersTxt(feed, computed, STOPS)).toContain('423N,423S,2,60')
+  })
+
+  it('works unchanged when no stops.txt is available', () => {
+    const feed = `${HEADER}\n423,A41,3,\n`
+    const computed = `${HEADER}\n423,A41,2,216\n`
+    expect(mergeTransfersTxt(feed, computed, null)).not.toContain(',2,216')
+  })
+})

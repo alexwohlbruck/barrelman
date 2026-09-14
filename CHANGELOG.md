@@ -10,6 +10,133 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-14
+
+### Changed
+
+* Street routing no longer caps waypoint spacing at 1,000 km — any two points
+  routable over the imported graph now answer (LA to NYC was rejected with
+  "Point 1 is too far from Point 0"). Landmark preparation is what makes
+  continental queries affordable, and it was already being built
+
+* A full import only overlaps the GraphHopper and basemap builds with the
+  database work when the host has the RAM for it (`IMPORT_ENGINE_OVERLAP`,
+  default `auto`, threshold 48 GB). On a smaller box the engines build after
+  the import instead — GraphHopper's heap running next to Postgres during the
+  import otherwise OOM-killed the graph build mid-run
+
+* Computing GTFS walking transfers no longer runs on the API connection pool,
+  whose statement timeout cancelled the all-pairs proximity join partway
+  through a large import (`canceling statement due to statement timeout` after
+  every feed had already imported). It now uses the untimed maintenance
+  connection, like the other minutes-long batch queries
+
+* GTFS feed discovery tiles a large region's bounding box before querying
+  Transitland, which rejects an oversized bbox with `500 bbox too large` — the
+  continental US tripped it, so a country- or continent-scale import fetched no
+  feeds at all. State- and metro-sized regions are unaffected (a bbox under the
+  area threshold makes one call, as before); feeds straddling a tile edge are
+  deduplicated
+
+* A full import overlaps its independent stages instead of running everything
+  in sequence. The GraphHopper graph build starts the moment the extract is
+  downloaded, and the basemap render runs alongside the post-processing SQL —
+  both consume only the PBF, so on a large region the old ordering added their
+  entire duration to the wall clock for nothing
+* The import's enrichment passes write far fewer row versions: address, hours,
+  phone and website extraction collapsed from four table rewrites into one,
+  codes and abbreviations from two into one, and parent context and the
+  full-text document are computed in the same pass. The query-serving indexes
+  are now built once at the end of the import over settled data instead of
+  being maintained row-by-row through every enrichment rewrite
+* Parent-boundary resolution subdivides admin polygons before the containment
+  join, so a place is tested against a small fragment instead of its state's
+  full outline. One invalid boundary geometry no longer aborts the pass
+* `area_m2` is a generated column computed by Postgres during osm2pgsql's own
+  COPY, replacing a post-import statement that at US scale spent ~30 minutes
+  computing areas and eleven hours rewriting half the table through live
+  indexes. Databases imported before the change are backfilled once, in place
+* The import drops the spatial indexes for the enrichment passes and rebuilds
+  them with the rest at the end — after the 3D-buildings view, nothing in the
+  pipeline reads them, and their per-row maintenance was most of the cost of
+  every enrichment rewrite
+* The GraphHopper rebuild skips itself when the serving graph was built from
+  the extract currently on disk (a port that answers proves the build
+  finished), so re-running an import cannot throw away a finished graph.
+  `FORCE_REBUILD=1` — also a console toggle — forces the wipe, e.g. after a
+  config change. `prepare.lm.threads` guidance documented: landmark
+  preparation, not the import, dominates the graph build at continent scale
+* The full-text document is built by one SQL function (`build_ts`) instead of
+  two hand-synced copies of the same expression, and rebuilds skip rows whose
+  document did not change
+* The MOTIS extract preparation asks the database whether the extract contains
+  any underground platforms before streaming the whole PBF through the repair
+  pass — an extract with none gets a verbatim copy in seconds instead of a
+  rewrite that grows with extract size
+* The OSM import strips provenance and import-bookkeeping tags (`tiger:*`,
+  `gnis:*`, `source`, `created_by` and similar — about 16% of all tag bytes on
+  the US extract) before storing places. Objects whose only tags were such
+  bookkeeping are no longer imported at all
+* New database pacing knobs with better defaults: `max_wal_size` rises from
+  Postgres's 1GB stock (which forced a checkpoint every couple of minutes for
+  the whole of a large import) to 4GB, with `BARRELMAN_DB_MAX_WAL_SIZE`,
+  `BARRELMAN_DB_CHECKPOINT_TIMEOUT`, `BARRELMAN_DB_WAL_COMPRESSION`,
+  `BARRELMAN_DB_MAINT_WORKERS`, `BARRELMAN_DB_WAL_LEVEL` and
+  `BARRELMAN_DB_MAX_WAL_SENDERS` for import-heavy boxes
+* The self-hosting docs now describe GraphHopper's memory correctly: heap is
+  consumed by the graph build; serving memory-maps the finished graph, so it
+  needs free page cache, not `-Xmx`
+
+### Added
+
+* `OSM2PGSQL_FLAT_NODES` puts osm2pgsql's node coordinates in a flat file
+  instead of the `planet_osm_nodes` table. Past roughly a country that table no
+  longer fits in memory and every way the import assembles costs a disk seek,
+  which is what made continent- and planet-sized imports take days. The daily
+  diff apply reads the same variable, so replication keeps working. Leave it
+  unset for anything smaller — the file is sized by the highest node ID in the
+  extract rather than the nodes kept, so a city still produces ~100 GB of it.
+  `OSM2PGSQL_CACHE_MB` and `OSM2PGSQL_PROCESSES` are exposed alongside it
+
+### Fixed
+
+* The admin console's tsvector rebuild no longer degrades search. Both console
+  paths ("Rebuild tsvectors" and the full migration) carried their own copy of
+  the full-text document expression, and it had drifted from the import's: no
+  intersection-name expansion, no alias array, no apostrophe stripping. Running
+  either after an import silently replaced good tsvectors with worse ones — an
+  intersection indexed as "Main Street & Oak Avenue" stopped matching "Main St
+  & Oak Ave". Both now call `build_ts()`, the one definition the import uses
+* `BARRELMAN_SEARCH_ADDRESS_BUDGET_MS` now actually applies. It was documented
+  in `.env.example` but never forwarded to the API container, so setting it did
+  nothing
+* Transfer prohibitions now cover every platform under a forbidden station.
+  A `transfer_type=3` row is declared between the STATIONS a rider recognises
+  — the MTA forbids Borough Hall to Jay St-MetroTech as `423` to `A41` — while
+  computed walking transfers are between PLATFORMS (`423N` to `A41S`). Matching
+  ids exactly let every platform pairing under a forbidden station back in,
+  which is precisely the phantom the prohibition exists to stop. Both sides now
+  resolve to their parent station, so one row covers all of them. Checked
+  against production's own feed: of the 3928 computed rows carried forward,
+  every out-of-system Borough Hall/Jay St pairing is dropped and all 613 agency
+  transfers survive
+* MOTIS runs at `--log-level info` instead of its default `debug`. At debug it
+  logged every GTFS-RT entity it could not resolve — `could not resolve
+  trip_id`, `unsupported: no "trip_update" field` — once per feed per poll,
+  measured at 28 GB/day on a production host. Unresolvable realtime ids are
+  normal where a feed's realtime and static halves disagree, and nothing acts
+  on the messages
+* Container logs are capped at 50 MB per service (three rotations). Docker's
+  `json-file` driver is unbounded by default and the engines log forever — a
+  timer pair per realtime poll from MOTIS, a line per request from GraphHopper
+  — which had grown to 21.5 GB and 1.5 GB on a production host, on the disk
+  that also holds the OSM database. Only MOTIS was capped before; every
+  long-running service is now. Docker applies log options at container
+  creation, so an existing deployment must recreate its containers
+  (`docker compose up -d --force-recreate`) for the cap to take effect, and
+  should truncate what has already accumulated. `self-hosting/troubleshooting`
+  covers both
+
 ## [0.2.26] - 2026-09-14
 
 ### Added

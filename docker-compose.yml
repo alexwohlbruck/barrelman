@@ -18,11 +18,28 @@ volumes:
   barrelman-osm-data:
   barrelman-gtfs-data:
 
+# Docker's json-file driver is UNBOUNDED by default, and these services log
+# forever: MOTIS writes a timer pair per realtime poll, GraphHopper narrates
+# every request. Left uncapped that reached 21.5 GB (motis) and 1.5 GB
+# (graphhopper) in production, on the disk that also holds the OSM database —
+# a slow march to a full disk that no import or query is responsible for.
+# Nothing reads these beyond the last few minutes of a debugging session.
+#
+# Log options apply at CONTAINER CREATION, so changing them here only takes
+# effect once a service is recreated (`docker compose up -d --force-recreate
+# <svc>`); a running container keeps the config it was born with.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "3"
+
 services:
   barrelman-db:
     container_name: barrelman-db
     image: alexwohlbruck/barrelman-db:latest
     restart: unless-stopped
+    logging: *default-logging
     # The stock postgres image ships shared_buffers=128MB — for a 23GB table
     # that means almost every search projection is a cold read, and it was the
     # difference between a 6.6s and a 0.2s FTS layer on an uncached query.
@@ -47,6 +64,17 @@ services:
     #   index scans. 1.1 is the SSD/NVMe value.
     # - jit: measured at ~280ms of compilation on search queries that execute in
     #   single-digit milliseconds. Pure overhead for this workload.
+    # - max_wal_size: the stock 1GB forces a checkpoint every gigabyte of WAL.
+    #   During an import that is constant: the US-scale test run logged 54
+    #   forced checkpoints against 6 timed ones, and every checkpoint re-arms
+    #   full-page writes, so the first touch of each page afterwards logs the
+    #   whole 8KB again. 4GB calms a state-sized import; give an import-heavy
+    #   box 16GB via BARRELMAN_DB_MAX_WAL_SIZE (costs only disk in pg_wal).
+    # - wal_level: replica is the safe stock default. Nothing in this compose
+    #   file replicates from the database, so an import-heavy box can set
+    #   BARRELMAN_DB_WAL_LEVEL=minimal + BARRELMAN_DB_MAX_WAL_SENDERS=0 and
+    #   every CREATE INDEX skips WAL entirely — tens of GB on a large import.
+    #   Set BOTH or Postgres refuses to start.
     command: >
       postgres
       -c shared_buffers=${BARRELMAN_DB_SHARED_BUFFERS:-1GB}
@@ -56,6 +84,12 @@ services:
       -c random_page_cost=${BARRELMAN_DB_RANDOM_PAGE_COST:-1.1}
       -c effective_io_concurrency=200
       -c jit=off
+      -c max_wal_size=${BARRELMAN_DB_MAX_WAL_SIZE:-4GB}
+      -c checkpoint_timeout=${BARRELMAN_DB_CHECKPOINT_TIMEOUT:-15min}
+      -c wal_compression=${BARRELMAN_DB_WAL_COMPRESSION:-on}
+      -c max_parallel_maintenance_workers=${BARRELMAN_DB_MAINT_WORKERS:-4}
+      -c wal_level=${BARRELMAN_DB_WAL_LEVEL:-replica}
+      -c max_wal_senders=${BARRELMAN_DB_MAX_WAL_SENDERS:-10}
     environment:
       POSTGRES_DB: barrelman
       POSTGRES_USER: barrelman
@@ -115,6 +149,7 @@ services:
     # release to invalidate — unlike MOTIS and GraphHopper below.
     image: ghcr.io/maplibre/martin
     restart: unless-stopped
+    logging: *default-logging
     # --on-invalid warn, because the default is abort and abort means *all*
     # tiles. Martin validates every source at startup and a single one it
     # cannot read is fatal: it exits, compose restarts it, and it exits again,
@@ -143,6 +178,7 @@ services:
     container_name: barrelman-graphhopper
     image: israelhikingmap/graphhopper:latest
     restart: unless-stopped
+    logging: *default-logging
     # -i and -o must be passed explicitly; the entrypoint script defaults
     # graph.location to /data/default-gh otherwise, ignoring our config value.
     command: ["-i", "/data/region.osm.pbf", "-o", "/data/graph-cache"]
@@ -175,13 +211,14 @@ services:
     # is unbounded by default, so that had grown to 18 GB on one dev box and
     # 7.7 GB in production, on disks that also hold the OSM database. Nothing
     # reads it beyond the last few minutes of a debugging session.
-    logging:
-      driver: json-file
-      options:
-        max-size: "50m"
-        max-file: "3"
+    logging: *default-logging
     working_dir: /data
-    command: ["/motis", "server", "/data"]
+    # --log-level info: MOTIS defaults to debug, which logs every GTFS-RT
+    # entity it cannot resolve — "could not resolve trip_id", "unsupported:
+    # no trip_update field" — once per feed per poll. Measured at 28 GB/day
+    # in production, and nothing acts on it: unresolvable realtime ids are
+    # normal for feeds whose RT and static halves disagree.
+    command: ["/motis", "server", "/data", "--log-level", "info"]
     volumes:
       - barrelman-gtfs-data:/data
       - barrelman-osm-data:/osm-data:ro
@@ -198,6 +235,7 @@ services:
     container_name: barrelman
     image: alexwohlbruck/barrelman:latest
     restart: unless-stopped
+    logging: *default-logging
     environment:
       DATABASE_URL: postgresql://barrelman:${BARRELMAN_DB_PASSWORD:-barrelman}@barrelman-db:5432/barrelman
       # Caps runaway queries on the API query pool only — schema DDL and the
@@ -213,6 +251,10 @@ services:
       # or a Pelias stack on another host.
       MARTIN_URL: ${MARTIN_URL:-http://barrelman-martin:3000}
       PELIAS_URL: ${PELIAS_URL:-http://pelias_api:4000}
+      # How long /search waits on Pelias before returning POIs without
+      # addresses. Raise it only for a geocoder that is genuinely slow —
+      # the whole search blocks on this.
+      BARRELMAN_SEARCH_ADDRESS_BUDGET_MS: ${BARRELMAN_SEARCH_ADDRESS_BUDGET_MS:-}
       # GTFS-RT poll interval baked into motis/config.yml at import time. Unset →
       # MOTIS default 60s. Set in .env (e.g. 600) to throttle dev polling.
       MOTIS_RT_UPDATE_INTERVAL: ${MOTIS_RT_UPDATE_INTERVAL:-}
@@ -378,6 +420,7 @@ services:
       context: .
       dockerfile: Dockerfile.ops
     restart: unless-stopped
+    logging: *default-logging
     environment:
       DATABASE_URL: postgresql://barrelman:${BARRELMAN_DB_PASSWORD:-barrelman}@barrelman-db:5432/barrelman
       BARRELMAN_DB_PASSWORD: ${BARRELMAN_DB_PASSWORD:-barrelman}
@@ -404,6 +447,13 @@ services:
       UPDATE_MODE: ${UPDATE_MODE:-}
       GEOFABRIK_URL: ${GEOFABRIK_URL:-}
       GEOFABRIK_REPLICATION_URL: ${GEOFABRIK_REPLICATION_URL:-}
+      # Node storage for osm2pgsql, for continent- and planet-sized imports.
+      # run-import.sh forwards these into barrelman-db, and update-osm.sh passes
+      # the flat-nodes path to every diff apply — both must agree, so they are
+      # set once, here. See .env.example for when it is worth turning on.
+      OSM2PGSQL_FLAT_NODES: ${OSM2PGSQL_FLAT_NODES:-}
+      OSM2PGSQL_CACHE_MB: ${OSM2PGSQL_CACHE_MB:-}
+      OSM2PGSQL_PROCESSES: ${OSM2PGSQL_PROCESSES:-}
       # ── Portolan (corrected transit geometry) ───────────────────────
       # Workspace root for import/portolan-sync.ts: portolan.json + style/ +
       # data/gtfs/ (raw feeds, portolan's own copies) + build/ (tiles, exports,

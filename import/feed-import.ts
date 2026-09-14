@@ -172,7 +172,11 @@ export async function injectTransfersTxt(zipPath: string, transfersTxt: string):
 
   const entry = zip.file('transfers.txt') ?? zip.file(/(^|\/)transfers\.txt$/)[0]
   const existing = entry ? await entry.async('string') : null
-  zip.file('transfers.txt', mergeTransfersTxt(existing, transfersTxt))
+  // stops.txt resolves platforms to their station, which a prohibition is
+  // declared between — see mergeTransfersTxt.
+  const stopsEntry = zip.file('stops.txt') ?? zip.file(/(^|\/)stops\.txt$/)[0]
+  const stops = stopsEntry ? await stopsEntry.async('string') : null
+  zip.file('transfers.txt', mergeTransfersTxt(existing, transfersTxt, stops))
 
   // JSZip defaults to STORE, so a feed re-serialized without this lands
   // uncompressed on the volume MOTIS imports from. The subway feed goes from
@@ -188,8 +192,20 @@ export async function injectTransfersTxt(zipPath: string, transfersTxt: string):
  * (from_stop_id, to_stop_id, transfer_type, min_transfer_time); a feed
  * carrying extra columns keeps them, because its rows pass through as
  * written rather than being re-serialised.
+ *
+ * `stopsTxt` is the feed's stops.txt, used to resolve a platform to its
+ * parent station. Prohibitions are declared between the STATIONS a rider
+ * recognises (the MTA forbids 423 -> A41) while computed transfers are
+ * between PLATFORMS (423N -> A41S), so matching ids exactly would let every
+ * platform pairing under a forbidden station back in — which is precisely
+ * the phantom the prohibition exists to stop. Omit it and matching falls
+ * back to exact ids.
  */
-export function mergeTransfersTxt(existing: string | null, computed: string): string {
+export function mergeTransfersTxt(
+  existing: string | null,
+  computed: string,
+  stopsTxt?: string | null,
+): string {
   const parse = (text: string) => {
     const lines = text.split(/\r?\n/).filter(l => l.trim() !== '')
     if (!lines.length) return { header: '', rows: [] as string[][], raw: [] as string[] }
@@ -212,6 +228,24 @@ export function mergeTransfersTxt(existing: string | null, computed: string): st
   const feed = parse(existing)
   if (!feed.header) return computed
 
+  // stop_id -> parent_station, for the platform/station resolution above.
+  const parent = new Map<string, string>()
+  if (stopsTxt && stopsTxt.trim() !== '') {
+    const lines = stopsTxt.split(/\r?\n/).filter(l => l.trim() !== '')
+    const cols = (lines[0] ?? '').split(',').map(c => c.trim().replace(/^\ufeff/, ''))
+    const iId = cols.indexOf('stop_id')
+    const iParent = cols.indexOf('parent_station')
+    if (iId !== -1 && iParent !== -1) {
+      for (const line of lines.slice(1)) {
+        const cells = line.split(',')
+        const id = (cells[iId] ?? '').trim()
+        const p = (cells[iParent] ?? '').trim()
+        if (id && p) parent.set(id, p)
+      }
+    }
+  }
+  const station = (id: string) => parent.get(id) ?? id
+
   // Both directions are keyed: a feed that states A→B has said what the
   // connection is, and a computed B→A would contradict its own half.
   const known = new Set<string>()
@@ -220,8 +254,9 @@ export function mergeTransfersTxt(existing: string | null, computed: string): st
     known.add(`${from}\u0000${to}`)
     known.add(`${to}\u0000${from}`)
     if (type === TRANSFER_FORBIDDEN) {
-      forbidden.add(`${from}\u0000${to}`)
-      forbidden.add(`${to}\u0000${from}`)
+      // Keyed on stations, so one row covers every platform under it.
+      forbidden.add(`${station(from)}\u0000${station(to)}`)
+      forbidden.add(`${station(to)}\u0000${station(from)}`)
     }
   })
 
@@ -229,7 +264,8 @@ export function mergeTransfersTxt(existing: string | null, computed: string): st
   const comp = parse(computed)
   comp.rows.forEach(([from, to], i) => {
     const key = `${from}\u0000${to}`
-    if (!from || !to || known.has(key) || forbidden.has(key)) return
+    if (!from || !to || known.has(key)) return
+    if (forbidden.has(`${station(from)}\u0000${station(to)}`)) return
     known.add(key)
     added.push(comp.raw[i])
   })
