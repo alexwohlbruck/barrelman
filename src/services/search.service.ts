@@ -81,6 +81,11 @@ export interface SearchParams {
   autocomplete?: boolean
 }
 
+// How long /search will wait for Pelias address results before returning POIs
+// without them. Above Pelias's healthy latency, well below its 10s hang
+// backstop. Env-overridable for operators whose Pelias is slower.
+const SEARCH_ADDRESS_BUDGET_MS = Number(process.env.BARRELMAN_SEARCH_ADDRESS_BUDGET_MS) || 2500
+
 export async function searchPlaces(
   {
     query,
@@ -615,7 +620,16 @@ export async function searchPlaces(
   // address-intent query ("350 5th ave" — starts with a number) addresses lead;
   // otherwise they're appended so POIs still win. Dedup against POIs at the same
   // spot so an OSM-addressed POI isn't shown twice.
-  const addressResults = await peliasPromise
+  // Cap how long the search will wait for addresses. Pelias answers healthy
+  // queries in well under a second, but its hang-backstop is 10s (see
+  // geocode.service.ts) — and blocking the whole search on a slow-or-down
+  // geocoder made a 300ms POI query take 10s. Addresses are supplementary to
+  // POIs here, so if Pelias hasn't answered within this budget the POIs return
+  // now and the (abandoned) Pelias fetch is cancelled by its own backstop.
+  const addressResults = await Promise.race([
+    peliasPromise,
+    new Promise<any[]>((resolve) => setTimeout(() => resolve([]), SEARCH_ADDRESS_BUDGET_MS)),
+  ])
   if (addressResults.length > 0) {
     // Dedup by id — Pelias OSM records carry the same node/way/relation id as
     // barrelman's rows, so a place already returned from PostGIS isn't repeated.
