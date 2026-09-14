@@ -63,11 +63,15 @@ mock.module('../db', () => ({
 
 import {
   getTransitRoute,
+  getIntermodalRoute,
   getRoutesForStop,
   checkMotisHealth,
   extractFare,
+  countFarePayments,
+  compareItineraries,
   MotisError,
   type TransitRouteRequest,
+  type TransitItinerary,
 } from './transit.service'
 
 // ── Fixtures ────────────────────────────────────────────────────────
@@ -698,5 +702,137 @@ describe('checkMotisHealth', () => {
       status: 'unavailable',
       message: 'Connection refused',
     })
+  })
+})
+
+describe('getIntermodalRoute bike carriage', () => {
+  beforeEach(() => {
+    dbCallIndex = 0
+  })
+
+  const request = {
+    from: { lat: 35.23, lng: -80.84 },
+    to: { lat: 35.77, lng: -78.64 },
+    time: '2023-11-15T08:00:00Z',
+    preTransitModes: ['BIKE' as const],
+    postTransitModes: ['BIKE' as const],
+  }
+
+  const urlOf = (fetchFn: any) => String(fetchFn.mock.calls[0][0])
+
+  test('asks MOTIS for bike carriage only when required', async () => {
+    const fetchFn = mockFetch(makeMotisResponse())
+    await getIntermodalRoute({ ...request, requireBikeTransport: true }, fetchFn)
+
+    expect(urlOf(fetchFn)).toContain('requireBikeTransport=true')
+  })
+
+  test('omits the flag otherwise, so ordinary queries are unrestricted', async () => {
+    const fetchFn = mockFetch(makeMotisResponse())
+    await getIntermodalRoute(request, fetchFn)
+
+    expect(urlOf(fetchFn)).not.toContain('requireBikeTransport')
+  })
+
+  test('confirms enforcement in the response, so callers can fail safe', async () => {
+    const fetchFn = mockFetch(makeMotisResponse())
+    const result = await getIntermodalRoute(
+      { ...request, requireBikeTransport: true }, fetchFn,
+    )
+
+    expect(result.metadata?.requireBikeTransport).toBe(true)
+  })
+
+  test('confirms enforcement even when nothing matched', async () => {
+    const fetchFn = mockFetch({ itineraries: [], direct: [] })
+    const result = await getIntermodalRoute(
+      { ...request, requireBikeTransport: true }, fetchFn,
+    )
+
+    expect(result.itineraries).toHaveLength(0)
+    expect(result.metadata?.requireBikeTransport).toBe(true)
+  })
+
+  test('says nothing about enforcement when it was not asked for', async () => {
+    const fetchFn = mockFetch(makeMotisResponse())
+    const result = await getIntermodalRoute(request, fetchFn)
+
+    expect(result.metadata?.requireBikeTransport).toBeUndefined()
+  })
+})
+
+describe('countFarePayments', () => {
+  const priced = (amount: number) => [[[{ amount, currency: 'USD' }]]]
+
+  test('reports one payment when a transfer rule joins the legs', () => {
+    // MOTIS has already applied fare_transfer_rules: two subway legs inside
+    // the gates collapse to a single fareTransfers entry.
+    expect(countFarePayments({
+      fareTransfers: [{ effectiveFareLegProducts: [...priced(3), ...priced(3)] }],
+    })).toBe(1)
+  })
+
+  test('reports two payments when no rule joins them', () => {
+    // Stepping out of the paid area and back in: two entries, two fares.
+    expect(countFarePayments({
+      fareTransfers: [
+        { effectiveFareLegProducts: priced(3) },
+        { effectiveFareLegProducts: priced(3) },
+      ],
+    })).toBe(2)
+  })
+
+  test('reports nothing when the feeds carry no fare data', () => {
+    // MOTIS still emits one empty entry per leg. Reading that as "two
+    // fares" would be inventing a price out of a coverage gap — which is
+    // exactly the MTA's state before the feeds are curated.
+    expect(countFarePayments({
+      fareTransfers: [{ effectiveFareLegProducts: [[]] }, { effectiveFareLegProducts: [[]] }],
+    })).toBeUndefined()
+    expect(countFarePayments({})).toBeUndefined()
+    expect(countFarePayments({ fareTransfers: [] })).toBeUndefined()
+  })
+})
+
+describe('compareItineraries', () => {
+  const itin = (duration: number, farePayments?: number): TransitItinerary => ({
+    duration,
+    startTime: '2026-09-14T18:00:00Z',
+    endTime: '2026-09-14T18:30:00Z',
+    walkTime: 0, transitTime: duration, waitingTime: 0, walkDistance: 0,
+    transfers: 1, legs: [], farePayments,
+  })
+
+  test('prefers the one-fare trip when they arrive together', () => {
+    // The reported bug, in miniature: Borough Hall -> walk -> Jay St costs
+    // two fares and takes exactly as long as the in-system 5 -> R -> F.
+    const twoFare = itin(1140, 2)
+    const oneFare = itin(1140, 1)
+    expect([twoFare, oneFare].sort(compareItineraries)[0]).toBe(oneFare)
+  })
+
+  test('prefers the one-fare trip when it is only a little slower', () => {
+    const twoFare = itin(1140, 2)
+    const oneFare = itin(1440, 1) // 5 minutes more
+    expect([twoFare, oneFare].sort(compareItineraries)[0]).toBe(oneFare)
+  })
+
+  test('does not make a rider wait half an hour to save a fare', () => {
+    const twoFare = itin(1140, 2)
+    const oneFare = itin(3000, 1) // 31 minutes more
+    expect([oneFare, twoFare].sort(compareItineraries)[0]).toBe(twoFare)
+  })
+
+  test('falls back to duration when fares are unknown', () => {
+    // One priced trip and one unpriced is a feed-coverage gap, not
+    // evidence that the unpriced one is free.
+    const fast = itin(600)
+    const slow = itin(1800, 1)
+    expect([slow, fast].sort(compareItineraries)[0]).toBe(fast)
+    expect([itin(900), itin(600)].sort(compareItineraries)[0].duration).toBe(600)
+  })
+
+  test('orders by duration when both charge the same', () => {
+    expect([itin(1800, 2), itin(600, 2)].sort(compareItineraries)[0].duration).toBe(600)
   })
 })

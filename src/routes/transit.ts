@@ -142,7 +142,8 @@ export function createTransitRoutes(deps: {
           'Queries the MOTIS transit router for itineraries between two coordinates. ' +
           'Returns transit legs with boarding/alighting stops, route info, and ' +
           'geometry. Walking legs are straight-line estimates — the Parchment ' +
-          'server replaces them with actual GraphHopper walking routes.',
+          'server replaces them with actual GraphHopper walking routes.' +
+          'Itineraries carry `fare` and `farePayments` where the feeds publish fare data: `farePayments` is how many separate fares the trip charges, and itineraries are ordered to prefer fewer of them when the time cost is small.',
         tags: ['Transit'],
       },
     })
@@ -171,6 +172,7 @@ export function createTransitRoutes(deps: {
           maxPostTransitTime: body.maxPostTransitTime,
           preTransitRentalFormFactors: body.preTransitRentalFormFactors as RentalFormFactor[] | undefined,
           postTransitRentalFormFactors: body.postTransitRentalFormFactors as RentalFormFactor[] | undefined,
+          requireBikeTransport: body.requireBikeTransport,
         }
         return await getIntermodalRoute(request, fetchFn)
       } catch (err) {
@@ -215,6 +217,7 @@ export function createTransitRoutes(deps: {
         maxPostTransitTime: t.Optional(t.Number({ minimum: 0 })),
         preTransitRentalFormFactors: t.Optional(t.Array(t.String())),
         postTransitRentalFormFactors: t.Optional(t.Array(t.String())),
+        requireBikeTransport: t.Optional(t.Boolean()),
       }),
       detail: {
         summary: 'Intermodal routing with mode selection',
@@ -222,7 +225,12 @@ export function createTransitRoutes(deps: {
           'Coordinate-based intermodal routing via MOTIS. Supports pre/post-transit ' +
           'mode selection (WALK, BIKE, CAR_PARKING, RENTAL) and direct non-transit ' +
           'modes. Requires MOTIS to have OSM street data loaded. Returns legs with ' +
-          'real OSM geometry for walk/bike/car segments.',
+          'real OSM geometry for walk/bike/car segments. Set requireBikeTransport ' +
+          'to keep only trips that allow bike carriage, for BIKE on both ends; it ' +
+          'reads GTFS bikes_allowed, and feeds that omit it return no results. ' +
+          'Itineraries carry `fare` and `farePayments` where the feeds publish fare ' +
+          'data, and are ordered to prefer fewer fare payments when the time cost ' +
+          'is small.',
         tags: ['Transit'],
       },
     })
