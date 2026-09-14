@@ -10,6 +10,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-14
+
 ### Changed
 
 * Street routing no longer caps waypoint spacing at 1,000 km — any two points
