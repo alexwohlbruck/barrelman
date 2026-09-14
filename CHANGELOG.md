@@ -10,6 +10,19 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Fixed
+
+* Transfer prohibitions now cover every platform under a forbidden station.
+  A `transfer_type=3` row is declared between the STATIONS a rider recognises
+  — the MTA forbids Borough Hall to Jay St-MetroTech as `423` to `A41` — while
+  computed walking transfers are between PLATFORMS (`423N` to `A41S`). Matching
+  ids exactly let every platform pairing under a forbidden station back in,
+  which is precisely the phantom the prohibition exists to stop. Both sides now
+  resolve to their parent station, so one row covers all of them. Checked
+  against production's own feed: of the 3928 computed rows carried forward,
+  every out-of-system Borough Hall/Jay St pairing is dropped and all 613 agency
+  transfers survive
+
 ## [0.2.26] - 2026-09-14
 
 ### Added
