@@ -27,7 +27,15 @@ CREATE INDEX IF NOT EXISTS geo_places_admin_geom_idx ON geo_places USING GIST(ge
 CREATE INDEX IF NOT EXISTS geo_places_tags_idx ON geo_places USING GIN(tags jsonb_path_ops);
 CREATE INDEX IF NOT EXISTS geo_places_geom_type_idx ON geo_places(geom_type);
 
-CREATE INDEX IF NOT EXISTS geo_places_name_trgm_gist_idx ON geo_places USING GIST(name gist_trgm_ops) WHERE name IS NOT NULL;
+-- The GiST trigram index that serves fuzzy search is created by db.ts
+-- (ensureSchema) with siglen=128, because drizzle cannot express the opclass
+-- parameter. This file used to build a second one at the DEFAULT signature
+-- length, which is strictly worse for the same queries: the planner picked the
+-- siglen=128 index every time and left this one completely unscanned. On a US
+-- import that was 5 GB of index doing nothing but competing for page cache
+-- against the index that *is* used — which is exactly the memory the fuzzy KNN
+-- scan needs to stay fast. Dropped here so existing installs reclaim it too.
+DROP INDEX IF EXISTS geo_places_name_trgm_gist_idx;
 CREATE INDEX IF NOT EXISTS geo_places_categories_idx ON geo_places USING GIN(categories) WHERE categories != '{}';
 CREATE INDEX IF NOT EXISTS geo_places_ts_idx ON geo_places USING GIN(ts) WHERE ts IS NOT NULL;
 CREATE INDEX IF NOT EXISTS geo_places_admin_level_idx ON geo_places(admin_level) WHERE admin_level IS NOT NULL;

@@ -101,18 +101,18 @@ describe('searchPlaces — basic', () => {
 // ── Layer execution ───────────────────────────────────────────────────────────
 
 describe('searchPlaces — layer execution', () => {
-  test('runs 6 parallel layers (FTS + trigram + codes + nameAbbrev + transit routes/stops) for 5+ char queries', async () => {
+  test('runs 5 parallel layers plus the deferred trigram pass for 5+ char queries', async () => {
     // autocomplete=true suppresses semantic so count is predictable
     await searchPlaces({ query: 'coffee', autocomplete: true })
     expect(mockExecute).toHaveBeenCalledTimes(6)
   })
 
-  test('skips trigram for short queries (≤4 chars) — 5 layers only', async () => {
+  test('skips trigram entirely for short queries (≤4 chars) — 5 layers only', async () => {
     await searchPlaces({ query: 'cafe', autocomplete: true })
     expect(mockExecute).toHaveBeenCalledTimes(5)
   })
 
-  test('skips codes/abbrev for queries longer than 20 chars — FTS + trigram + transit', async () => {
+  test('skips codes/abbrev for queries longer than 20 chars — FTS + transit + trigram', async () => {
     // abbrev layer is skipped when sanitizedQuery.length > 20
     await searchPlaces({ query: 'this is a very long query string', autocomplete: true })
     expect(mockExecute).toHaveBeenCalledTimes(4)
@@ -126,9 +126,12 @@ describe('searchPlaces — deduplication', () => {
     const ftsPlace = { id: 'node/1', name: 'Library', text_rank: 0.9, distance_m: null }
     const trigramPlace = { id: 'node/1', name: 'Library', text_rank: 0.5, distance_m: null }
     mockExecute
-      .mockImplementationOnce(async () => [ftsPlace])    // FTS
-      .mockImplementationOnce(async () => [trigramPlace]) // trigram
+      .mockImplementationOnce(async () => [ftsPlace])     // FTS
+      .mockImplementationOnce(async () => [])             // codes
       .mockImplementationOnce(async () => [])             // abbrev
+      .mockImplementationOnce(async () => [])             // transit routes
+      .mockImplementationOnce(async () => [])             // transit stops
+      .mockImplementationOnce(async () => [trigramPlace]) // trigram (deferred)
     const results = await searchPlaces({ query: 'library', autocomplete: true })
     const ids = results.map((r: any) => r.id)
     expect(ids.filter((id: string) => id === 'node/1')).toHaveLength(1)
@@ -140,7 +143,7 @@ describe('searchPlaces — deduplication', () => {
     const abbrevPlace = { id: 'node/1', name: 'University', text_rank: 0.95, distance_m: null }
     mockExecute
       .mockImplementationOnce(async () => [ftsPlace])    // FTS
-      .mockImplementationOnce(async () => [])             // trigram
+      .mockImplementationOnce(async () => [])             // codes
       .mockImplementationOnce(async () => [abbrevPlace])  // abbrev
     const results = await searchPlaces({ query: 'uncc', autocomplete: true })
     const ids = results.map((r: any) => r.id)
@@ -151,11 +154,11 @@ describe('searchPlaces — deduplication', () => {
 
   test('merges unique results from all three text layers', async () => {
     const ftsPlace = { id: 'node/1', name: 'Library', text_rank: 0.9, distance_m: null }
-    const trigramPlace = { id: 'node/2', name: 'Lib Café', text_rank: 0.4, distance_m: null }
+    const codesPlace = { id: 'node/2', name: 'Lib Café', text_rank: 0.4, distance_m: null }
     const abbrevPlace = { id: 'node/3', name: 'LIB', text_rank: 0.95, distance_m: null }
     mockExecute
       .mockImplementationOnce(async () => [ftsPlace])
-      .mockImplementationOnce(async () => [trigramPlace])
+      .mockImplementationOnce(async () => [codesPlace])
       .mockImplementationOnce(async () => [abbrevPlace])
     const results = await searchPlaces({ query: 'lib', autocomplete: true })
     const ids = new Set(results.map((r: any) => r.id))
@@ -451,9 +454,11 @@ describe('searchPlaces — intersections', () => {
     }
     mockExecute
       .mockImplementationOnce(async () => [intersection])                        // FTS
-      .mockImplementationOnce(async () => [{ ...intersection, text_rank: 0.5 }]) // trigram
       .mockImplementationOnce(async () => [])                                    // codes
       .mockImplementationOnce(async () => [])                                    // nameAbbrev
+      .mockImplementationOnce(async () => [])                                    // transit routes
+      .mockImplementationOnce(async () => [])                                    // transit stops
+      .mockImplementationOnce(async () => [{ ...intersection, text_rank: 0.5 }]) // trigram (deferred)
     const results = await searchPlaces({ query: 'trade tryon', autocomplete: true })
     const matches = results.filter((r: any) => r.id === 'intersection/42')
     expect(matches).toHaveLength(1)
@@ -484,15 +489,22 @@ describe('searchPlaces — transit layers', () => {
 
   // Global autocomplete-without-coords shape: FTS, trigram, codes, abbrev,
   // transit routes, transit stops — Onces below follow that order.
+  /**
+   * The precise layers searchPlaces issues up front, in order. Trigram is NOT
+   * here: it is deferred behind a result-count check and only runs when these
+   * came back short, so it never consumes one of these slots.
+   */
+  const LAYER = { fts: 0, codes: 1, abbrev: 2, transitRoutes: 3, transitStops: 4 } as const
+
   const queue = (perLayer: Record<number, any[]>) => {
-    for (let i = 0; i < 6; i++) {
+    for (let i = 0; i < Object.keys(LAYER).length; i++) {
       const rows = perLayer[i] ?? []
       mockExecute.mockImplementationOnce(async () => rows)
     }
   }
 
   test('a GTFS line hit is adapted and surfaces with its transit ids', async () => {
-    queue({ 4: [rawRouteRow] })
+    queue({ [LAYER.transitRoutes]: [rawRouteRow] })
     const results = await searchPlaces({ query: 'eighth avenue', autocomplete: true })
     expect(results).toHaveLength(1)
     const hit = results[0]
@@ -513,7 +525,7 @@ describe('searchPlaces — transit layers', () => {
       geometry: { type: 'Point', coordinates: [-73.97, 40.74] },
       text_rank: 0.9, distance_m: 1100,
     }
-    queue({ 0: [relation], 4: [rawRouteRow] })
+    queue({ [LAYER.fts]: [relation], [LAYER.transitRoutes]: [rawRouteRow] })
     const results = await searchPlaces({ query: 'eighth avenue', autocomplete: true })
     const ids = results.map((r: any) => r.id)
     expect(ids).toContain('transit-route/mta:A')
@@ -521,7 +533,7 @@ describe('searchPlaces — transit layers', () => {
   })
 
   test('a GTFS stop hit surfaces with stop ids and a mode category', async () => {
-    queue({ 5: [rawStopRow] })
+    queue({ [LAYER.transitStops]: [rawStopRow] })
     const results = await searchPlaces({ query: 'whitlock', autocomplete: true })
     expect(results).toHaveLength(1)
     expect(results[0].kind).toBe('transit_stop')
@@ -536,7 +548,7 @@ describe('searchPlaces — transit layers', () => {
       geometry: { type: 'Point', coordinates: [-73.8861, 40.8262] },
       text_rank: 0.85, distance_m: 950,
     }
-    queue({ 0: [station], 5: [rawStopRow] })
+    queue({ [LAYER.fts]: [station], [LAYER.transitStops]: [rawStopRow] })
     const results = await searchPlaces({ query: 'whitlock', autocomplete: true })
     const ids = results.map((r: any) => r.id)
     expect(ids).toContain('node/5')
