@@ -16,6 +16,18 @@
 import { db } from '../db'
 import { sql } from 'drizzle-orm'
 import { routeTypeMode, transitCoreQuery } from '../lib/transit-search'
+import { envNumber } from '../config/env'
+
+/**
+ * Lowest match score a GTFS route may have and still be returned by search.
+ *
+ * Route matching includes a bare trigram branch, which is what lets "harlem
+ * line" reach Metro-North's "Harlem" — but with a continent's worth of feeds it
+ * also pairs unrelated phrases with whatever route shares a few trigrams.
+ * Routes outrank places in the result merge, so those accidents do not merely
+ * rank badly, they evict real answers. See the WHERE clause below.
+ */
+const MIN_ROUTE_RANK = envNumber('BARRELMAN_TRANSIT_ROUTE_MIN_RANK', 0.5)
 
 export interface TransitLayerParams {
   /** Sanitized query text (same form the geo_places layers receive). */
@@ -125,7 +137,8 @@ export async function searchTransitRoutes(
       ${distanceSelect}
     FROM gtfs_routes r
     JOIN gtfs_feeds f ON f.feed_id = r.feed_id
-    WHERE ${shortNameMatch}
+    WHERE (
+      ${shortNameMatch}
        ${exactOnly ? sql`` : sql`OR r.route_long_name ILIKE '%' || ${query} || '%'`}
        ${!exactOnly && corePhrase
          ? sql`OR r.route_long_name ILIKE '%' || ${corePhrase} || '%'`
@@ -136,6 +149,17 @@ export async function searchTransitRoutes(
        ${autocomplete || exactOnly
          ? sql``
          : sql`OR (COALESCE(r.route_short_name, '') || ' ' || COALESCE(r.route_long_name, '')) % ${query}`}
+    )
+    -- Floor on match quality. The last branch above is a bare trigram match,
+    -- which on a national feed corpus pairs almost any phrase with some route:
+    -- "Mount Rainier" matched "MOUNT ROYAL", "Mountain", "Mountaineer Route"
+    -- at ranks 0.33-0.40. That would merely be noise, except transit routes
+    -- outrank FTS places in the merge (search.service.ts), so five such
+    -- matches filled an entire limit-5 response and buried the mountain the
+    -- user asked for. Exact short-name hits score 0.95, a long-name or agency
+    -- substring 0.6-0.8, and a genuine fuzzy name 0.55+, so this floor drops
+    -- only the accidental pairings.
+    AND (${rankExpr}) >= ${MIN_ROUTE_RANK}
     ${order}
     LIMIT ${limit}
   `).catch(() => [] as any[])

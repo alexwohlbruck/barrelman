@@ -12,6 +12,19 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ### Fixed
 
+* Searching for a place no longer returns unrelated bus routes instead of the
+  place. GTFS route matching includes a loose trigram branch — the thing that
+  lets "harlem line" reach Metro-North's "Harlem" — and across a national feed
+  corpus it paired almost any phrase with some route: "Mount Rainier" matched
+  "MOUNT ROYAL", "Mountain", "Mountaineer Route" and two more, all scoring
+  0.33-0.40. Routes rank above places in the result merge, so those five
+  accidents filled an entire five-result response and the mountain never
+  appeared. Matches below `BARRELMAN_TRANSIT_ROUTE_MIN_RANK` (default 0.5) are
+  now excluded; measured against the live feed corpus, genuine route queries
+  score 0.60-1.00 and are unaffected
+
+### Fixed
+
 * A misspelled search no longer costs the full statement timeout. Deferring the
   fuzzy trigram layer (0.3.1) fixed well-spelled queries, but a query that
   actually needed it still waited the whole 10 s — the layer's KNN scan reads
