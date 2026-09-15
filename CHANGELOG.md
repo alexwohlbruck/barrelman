@@ -22,6 +22,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
   same treatment the Pelias address wait already had: a warm index still
   supplies typo tolerance, a cold one costs the budget instead of the timeout
 
+## [0.3.1] - 2026-09-14
+
 ### Fixed
 
 * Text search no longer stalls for the full statement timeout on a cold query.
