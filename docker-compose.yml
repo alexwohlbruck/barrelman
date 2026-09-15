@@ -255,6 +255,7 @@ services:
       # addresses. Raise it only for a geocoder that is genuinely slow —
       # the whole search blocks on this.
       BARRELMAN_SEARCH_ADDRESS_BUDGET_MS: ${BARRELMAN_SEARCH_ADDRESS_BUDGET_MS:-}
+      BARRELMAN_SEARCH_TRIGRAM_BUDGET_MS: ${BARRELMAN_SEARCH_TRIGRAM_BUDGET_MS:-}
       # GTFS-RT poll interval baked into motis/config.yml at import time. Unset →
       # MOTIS default 60s. Set in .env (e.g. 600) to throttle dev polling.
       MOTIS_RT_UPDATE_INTERVAL: ${MOTIS_RT_UPDATE_INTERVAL:-}
