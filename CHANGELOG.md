@@ -10,6 +10,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-09-14
+
 ### Fixed
 
 * Searching for a place no longer returns unrelated bus routes instead of the
