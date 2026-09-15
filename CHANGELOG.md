@@ -10,6 +10,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.3.5] - 2026-09-14
+
 ### Fixed
 
 * A basemap render can no longer take the rest of the stack down with it.
