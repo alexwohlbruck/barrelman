@@ -10,7 +10,7 @@
  */
 
 import { describe, test, expect } from 'bun:test'
-import { resolveFromFile, GLOBAL_KEY, DEFAULT_REGIONS, type RegionsFile } from './regions'
+import { resolveFromFile, GLOBAL_KEY, type RegionsFile } from './regions'
 
 const pelias = { openaddresses: [], wofIds: [], tigerStates: [] }
 
@@ -50,25 +50,59 @@ const FILE: RegionsFile = {
 
 const PLANET = 'https://example.test/planet-latest.osm.pbf'
 
-describe('an unspecified selection falls back to the dev regions', () => {
+describe('an unspecified selection never guesses, and never means the planet', () => {
+  // The original bug this file was written for: a blank selection resolving to
+  // the planet. It must still never do that — but it no longer silently picks
+  // the sample regions either.
   test.each([
     ['undefined', undefined],
     ['empty string', ''],
     ['whitespace', '   '],
-  ])('%s resolves to the default pair, not the planet', (_label, value) => {
-    const resolved = resolveFromFile(FILE, value)
+  ])('%s refuses rather than resolving to the planet', (_label, value) => {
+    expect(() => resolveFromFile(FILE, value)).toThrow(/REGIONS is not set/)
+  })
 
+  test.each([
+    ['undefined', undefined],
+    ['empty string', ''],
+    ['whitespace', '   '],
+  ])('%s resolves to the sole region when there is only one', (_label, value) => {
+    const single: RegionsFile = { regions: { 'north-carolina': FILE.regions['north-carolina'] } }
+    const resolved = resolveFromFile(single, value)
     expect(resolved.isGlobal).toBe(false)
-    expect(resolved.keys).toEqual(['north-carolina', 'nyc-metro'])
+    expect(resolved.keys).toEqual(['north-carolina'])
     expect(resolved.osmExtracts).not.toContain(PLANET)
   })
 
-  test('the fallback is the documented default', () => {
-    expect(resolveFromFile(FILE, '').keys.join(',')).toBe(DEFAULT_REGIONS)
+  // Blank REGIONS used to resolve to the repo's two sample states. That is a
+  // guess, and a wrong one on any instance that imports something else — so it
+  // now only resolves when there is nothing to guess between.
+  test('a blank selection refuses to guess between several regions', () => {
+    expect(() => resolveFromFile(FILE, '')).toThrow(/REGIONS is not set/)
+  })
+
+  test('a blank selection resolves when exactly one region is configured', () => {
+    const single: RegionsFile = { regions: { 'north-carolina': FILE.regions['north-carolina'] } }
+    expect(resolveFromFile(single, '').keys).toEqual(['north-carolina'])
+  })
+
+  test('a disabled region does not count as the one to fall back to', () => {
+    const single: RegionsFile = {
+      regions: { 'north-carolina': FILE.regions['north-carolina'], disabled: FILE.regions.disabled },
+    }
+    expect(resolveFromFile(single, '').keys).toEqual(['north-carolina'])
   })
 
   test('a blank selection matches an absent one exactly', () => {
-    expect(resolveFromFile(FILE, '')).toEqual(resolveFromFile(FILE, undefined))
+    const single: RegionsFile = { regions: { 'north-carolina': FILE.regions['north-carolina'] } }
+    expect(resolveFromFile(single, '')).toEqual(resolveFromFile(single, undefined))
+  })
+
+  // Deleting the global region must actually remove it, not fall through to a
+  // planet download.
+  test('REGIONS=global errors when no global region is configured', () => {
+    const noGlobal: RegionsFile = { regions: FILE.regions }
+    expect(() => resolveFromFile(noGlobal, GLOBAL_KEY)).toThrow(/no global region is configured/)
   })
 })
 

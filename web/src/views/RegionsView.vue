@@ -141,8 +141,10 @@ onMounted(load)
 
           <div class="mt-auto flex justify-end gap-1.5">
             <Button variant="ghost" size="sm" @click="openEdit(r)"><Pencil class="size-3.5" /> Edit</Button>
+            <!-- Global is deletable like any other region: an instance that
+                 will never import the planet should not have to keep it, and
+                 leaving it listed makes it a mis-clickable target on Scripts. -->
             <Button
-              v-if="!r.isGlobal"
               variant="ghost"
               size="sm"
               class="text-destructive hover:text-destructive"
