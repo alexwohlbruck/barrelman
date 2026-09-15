@@ -10,6 +10,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.3.4] - 2026-09-14
+
 ### Fixed
 
 * Searching a code or reference no longer returns unnamed features that cannot
