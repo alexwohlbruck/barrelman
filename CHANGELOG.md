@@ -10,6 +10,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-09-14
+
 ### Fixed
 
 * A misspelled search no longer costs the full statement timeout. Deferring the
