@@ -35,6 +35,7 @@ does it — and the release pipeline turns it into the GitHub Release notes.
   it has rows and `global` is simply optional, so an instance that will never
   import the planet can drop it. `REGIONS=global` without one is now a clear
   error instead of a planet download
+## [0.3.5] - 2026-09-14
 
 ### Fixed
 
