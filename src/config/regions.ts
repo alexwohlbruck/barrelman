@@ -48,13 +48,15 @@ export interface RegionDef {
 
 export interface RegionsFile {
   regions: Record<string, RegionDef>
-  global: RegionDef
+  /**
+   * Optional. An instance that will never import the planet can delete the
+   * global region outright; when it is absent, `REGIONS=global` is an error
+   * rather than a silent planet download.
+   */
+  global?: RegionDef
 }
 
 export const GLOBAL_KEY = 'global'
-
-/** Regions imported when REGIONS says nothing — the standard dev pair. */
-export const DEFAULT_REGIONS = 'north-carolina,nyc-metro'
 
 /** Read the baked config/regions.json — the seed + fallback for the DB store. */
 export function loadFile(): RegionsFile {
@@ -116,10 +118,33 @@ export function resolveFromFile(file: RegionsFile, value = process.env.REGIONS):
   // regions field blank resolved to the whole planet — an 80 GB download in
   // place of two state extracts, and reported as `isGlobal: false` while doing
   // it. Only the literal "global" selects the planet.
-  const raw = (value ?? '').trim() || DEFAULT_REGIONS
+  // Blank REGIONS used to mean "north-carolina,nyc-metro" — sample regions that
+  // ship with the repo. That is a bad default anywhere real: an operator who
+  // never set REGIONS got two US states silently, and on an instance importing
+  // something else entirely those keys are noise that only invites a mis-click.
+  // With one region configured there is no ambiguity, so use it; otherwise say
+  // what to pick rather than guessing.
+  const configured = Object.entries(file.regions).filter(([, d]) => d.enabled !== false)
+  let raw = (value ?? '').trim()
+  if (!raw) {
+    if (configured.length === 1) raw = configured[0][0]
+    else {
+      const known = configured.map(([k]) => k).join(', ') || '(none configured)'
+      throw new Error(
+        `REGIONS is not set and this instance has ${configured.length} regions to choose from. ` +
+          `Set REGIONS to one of: ${known}. Add or remove regions in the admin console (Regions).`,
+      )
+    }
+  }
 
   if (raw === GLOBAL_KEY) {
     const g = file.global
+    if (!g) {
+      throw new Error(
+        `REGIONS=global but no global region is configured. Add it back in the admin console ` +
+          `(Regions), or select one of: ${Object.keys(file.regions).join(', ') || '(none)'}.`,
+      )
+    }
     return {
       isGlobal: true,
       keys: [GLOBAL_KEY],

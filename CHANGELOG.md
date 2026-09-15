@@ -10,6 +10,33 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.3.6] - 2026-09-15
+
+### Changed
+
+* A fresh install no longer arrives with sample regions already configured.
+  `north-carolina`, `nyc-metro` and `global` were seeded into the regions store
+  on first boot — repo fixtures, not anything an operator chose. On a real
+  instance they sit in the console beside the region you actually import, and
+  each is a runnable target on the Scripts page, where picking the wrong one
+  replaces the entire dataset with one state. Onboarding is now an empty
+  Regions page and **Add by name**, which searches the Geofabrik index for the
+  region you want. `BARRELMAN_SEED_SAMPLE_REGIONS=1` restores the fixtures for
+  development
+
+* A blank `REGIONS` no longer silently means `north-carolina,nyc-metro`. With
+  exactly one region configured it resolves to that one; otherwise it fails and
+  names the choices, rather than importing two US states nobody asked for
+
+### Fixed
+
+* The global region can now be deleted. The console hid its delete button, and
+  for good reason — removing the global row made the store report itself
+  unusable, which sent every caller to the baked `config/regions.json` and
+  silently resurrected the sample regions. The store is authoritative whenever
+  it has rows and `global` is simply optional, so an instance that will never
+  import the planet can drop it. `REGIONS=global` without one is now a clear
+  error instead of a planet download
 ## [0.3.5] - 2026-09-14
 
 ### Fixed
