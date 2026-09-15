@@ -117,6 +117,32 @@ describe('searchPlaces — layer execution', () => {
     await searchPlaces({ query: 'this is a very long query string', autocomplete: true })
     expect(mockExecute).toHaveBeenCalledTimes(4)
   })
+
+  test('a hanging trigram layer cannot hold the response past its budget', async () => {
+    // The layer is supplementary, so a cold trigram index (which on a large
+    // instance runs past the statement timeout and is cancelled, contributing
+    // nothing) must not decide how long the caller waits. Regression for
+    // misspelled queries costing the full 10s statement timeout and returning
+    // only the FTS hits they would have had immediately.
+    const ftsPlace = { id: 'node/1', name: 'Brookline', text_rank: 0.8, distance_m: null }
+    mockExecute
+      .mockImplementationOnce(async () => [ftsPlace])   // FTS
+      .mockImplementationOnce(async () => [])           // codes
+      .mockImplementationOnce(async () => [])           // abbrev
+      .mockImplementationOnce(async () => [])           // transit routes
+      .mockImplementationOnce(async () => [])           // transit stops
+      .mockImplementationOnce(() => new Promise(() => {})) // trigram: never settles
+
+    const started = Date.now()
+    const results = await searchPlaces({ query: 'brookln bridg', autocomplete: true })
+    const waited = Date.now() - started
+
+    expect(results.map((r: any) => r.id)).toContain('node/1')
+    // Comfortably under BARRELMAN_STATEMENT_TIMEOUT_MS (10s), which is what the
+    // caller used to wait for. The exact budget is env-tunable, so assert the
+    // property that matters rather than the number.
+    expect(waited).toBeLessThan(5000)
+  }, 15000)
 })
 
 // ── Deduplication ─────────────────────────────────────────────────────────────

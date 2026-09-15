@@ -87,6 +87,22 @@ export interface SearchParams {
 // backstop. Env-overridable for operators whose Pelias is slower.
 const SEARCH_ADDRESS_BUDGET_MS = envNumber('BARRELMAN_SEARCH_ADDRESS_BUDGET_MS', 2500)
 
+// How long /search will wait for the fuzzy trigram layer before answering with
+// the precise layers alone.
+//
+// The trigram KNN scan is fast on a warm index (~360ms measured) and very slow
+// on a cold one — it reads ~215 MB of index, so on an instance whose table
+// dwarfs RAM it routinely exceeds BARRELMAN_STATEMENT_TIMEOUT_MS and is
+// cancelled. Cancelled means the caller waited the entire statement timeout to
+// receive *nothing extra*: the layer is a supplement, so its rows are simply
+// absent from the merge. Measured on a 229 GB / 16 GB instance, every
+// misspelled query cost exactly 10s and returned only FTS hits.
+//
+// Bounding the wait below the statement timeout turns that into a fast
+// degrade: a warm index still contributes typo tolerance, a cold one costs the
+// budget instead of the timeout. Set to 0 to wait the full statement timeout.
+const SEARCH_TRIGRAM_BUDGET_MS = envNumber('BARRELMAN_SEARCH_TRIGRAM_BUDGET_MS', 2500)
+
 export async function searchPlaces(
   {
     query,
@@ -510,7 +526,20 @@ export async function searchPlaces(
       ]) {
         precise.add((row as any).id)
       }
-      if (precise.size < limit) trigramRows = (await trigramQuery()) as any[]
+      if (precise.size < limit) {
+        // Bounded exactly like the Pelias wait below, and for the same reason:
+        // a supplementary layer must not be able to hold the whole response
+        // hostage. The abandoned query is left to its own statement timeout.
+        let trigramTimer: ReturnType<typeof setTimeout> | undefined
+        trigramRows = (await (SEARCH_TRIGRAM_BUDGET_MS > 0
+          ? Promise.race([
+              trigramQuery(),
+              new Promise<any[]>((resolve) => {
+                trigramTimer = setTimeout(() => resolve([]), SEARCH_TRIGRAM_BUDGET_MS)
+              }),
+            ]).finally(() => clearTimeout(trigramTimer))
+          : trigramQuery())) as any[]
+      }
     }
 
     // Merge, deduplicating in priority order: codes > transit routes >

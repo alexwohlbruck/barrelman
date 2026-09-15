@@ -10,6 +10,20 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-09-14
+
+### Fixed
+
+* A misspelled search no longer costs the full statement timeout. Deferring the
+  fuzzy trigram layer (0.3.1) fixed well-spelled queries, but a query that
+  actually needed it still waited the whole 10 s — the layer's KNN scan reads
+  ~215 MB of index, so on an instance whose table dwarfs RAM it is cancelled by
+  `statement_timeout` every time, meaning the caller waited 10 s to receive
+  nothing extra and got the same hits the precise layers already had. The wait
+  is now bounded by `BARRELMAN_SEARCH_TRIGRAM_BUDGET_MS` (default 2500), the
+  same treatment the Pelias address wait already had: a warm index still
+  supplies typo tolerance, a cold one costs the budget instead of the timeout
+
 ## [0.3.1] - 2026-09-14
 
 ### Fixed
