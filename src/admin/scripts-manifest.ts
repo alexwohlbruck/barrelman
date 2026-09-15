@@ -267,6 +267,17 @@ export const SCRIPTS: ScriptDef[] = [
         placeholder: '4g',
         description: 'JVM heap for the planetiler container. Raise for larger extracts.',
       },
+      {
+        name: 'PLANETILER_CONTAINER_MEMORY',
+        label: 'Render memory cap',
+        type: 'string',
+        apply: 'env',
+        envVar: 'PLANETILER_CONTAINER_MEMORY',
+        default: '',
+        placeholder: 'blank = uncapped',
+        description:
+          'Hard memory cap for the render container. The heap above does not bound direct buffers or mmapped features, so an uncapped render can push the whole host out of memory — on a 16 GB box that killed MOTIS. Set a little above the heap (heap 4g, cap 5g) on any host that also serves traffic.',
+      },
     ],
     source: 'scripts/rebuild-basemap.sh',
     notes:
