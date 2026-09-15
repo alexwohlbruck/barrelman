@@ -10,6 +10,21 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-09-14
+
+### Fixed
+
+* Searching for a place no longer returns unrelated bus routes instead of the
+  place. GTFS route matching includes a loose trigram branch — the thing that
+  lets "harlem line" reach Metro-North's "Harlem" — and across a national feed
+  corpus it paired almost any phrase with some route: "Mount Rainier" matched
+  "MOUNT ROYAL", "Mountain", "Mountaineer Route" and two more, all scoring
+  0.33-0.40. Routes rank above places in the result merge, so those five
+  accidents filled an entire five-result response and the mountain never
+  appeared. Matches below `BARRELMAN_TRANSIT_ROUTE_MIN_RANK` (default 0.5) are
+  now excluded; measured against the live feed corpus, genuine route queries
+  score 0.60-1.00 and are unaffected
+
 ## [0.3.2] - 2026-09-14
 
 ### Fixed
