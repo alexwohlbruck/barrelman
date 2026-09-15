@@ -38,6 +38,10 @@ set -euo pipefail
 #                           basemap should not silently acquire a nightly
 #                           multi-minute render.
 #   PLANETILER_MEMORY       JVM heap for the render (default: 4g)
+#   PLANETILER_CONTAINER_MEMORY
+#                           Hard cgroup cap for the render container (e.g. 5g).
+#                           Unset = uncapped. See the docker run below for why
+#                           you want this on a host that also serves traffic.
 #   PLANETILER_IMAGE        override the planetiler image
 #   BASEMAP_RESTART_MARTIN  restart martin after the swap (default: 1)
 # =============================================================================
@@ -46,6 +50,7 @@ CONTAINER="barrelman-martin"
 DB_CONTAINER="${DB_CONTAINER:-barrelman-db}"
 PLANETILER_IMAGE="${PLANETILER_IMAGE:-ghcr.io/onthegomap/planetiler:latest}"
 PLANETILER_MEMORY="${PLANETILER_MEMORY:-4g}"
+PLANETILER_CONTAINER_MEMORY="${PLANETILER_CONTAINER_MEMORY:-}"
 # Same throwaway image rebuild-graphhopper.sh and rebuild-motis.sh already use
 # for volume surgery.
 HELPER_IMAGE="${BASEMAP_HELPER_IMAGE:-alpine}"
@@ -179,7 +184,22 @@ log "      output: ${OUT_DIR}"
 # --download fetches the non-OSM sources planetiler's OpenMapTiles profile needs
 # (water polygons, Natural Earth, lake centerlines). --download-dir keeps them in
 # the volume so that happens once rather than on every nightly run.
+# A cgroup cap, not just a heap cap. The JVM's -Xmx bounds the heap, but the
+# render also holds direct buffers and mmaps its sorted features, so the
+# container's real footprint runs well above the heap. Uncapped, that is charged
+# to the host: a US render on a 16 GB box drove the machine out of memory and the
+# kernel picked the largest RSS to kill — which was MOTIS, not planetiler. The
+# transit engine died for a basemap rebuild, and the render then died too, two
+# and a half hours in. With --memory the kernel reclaims inside this cgroup
+# instead, so an over-large render kills only itself and the services keep
+# serving. Leave unset on a dedicated build host.
+MEM_ARGS=()
+if [ -n "$PLANETILER_CONTAINER_MEMORY" ]; then
+  MEM_ARGS+=(--memory="$PLANETILER_CONTAINER_MEMORY" --memory-swap="$PLANETILER_CONTAINER_MEMORY")
+fi
+
 if ! docker run --rm \
+  ${MEM_ARGS[@]+"${MEM_ARGS[@]}"} \
   -e JAVA_TOOL_OPTIONS="-Xmx${PLANETILER_MEMORY}" \
   -v "${IN_DIR}:/in:ro" \
   -v "${OUT_DIR}:/out" \
