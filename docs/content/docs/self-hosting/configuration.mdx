@@ -74,6 +74,7 @@ signatures and cannot make them, which is why it is compiled into
 | `BARRELMAN_API_BIND_ADDR` | `0.0.0.0` | Interface the API (5001) publishes on. Public by default, so a fresh server's console and sign-up are internet-reachable immediately. Set `127.0.0.1` once a reverse proxy fronts it — the proxy reaches `barrelman:5001` over the Compose network. A host firewall will not close this port: Docker DNATs published ports ahead of ufw |
 | `PORT` | `5001` | HTTP port |
 | `REGIONS` | `north-carolina,nyc-metro` | Which geographies the importers pull. `global` for everything |
+| `BARRELMAN_SEED_SAMPLE_REGIONS` | _(off)_ | Set to `1` to seed the repo's sample regions (`north-carolina`, `nyc-metro`, `global`) into the regions store on first boot. Off by default: a fresh install starts with an empty Regions page, and you add the region you want with **Add by name**, which searches the Geofabrik index. Sample regions on a real instance are clutter in the console and a mis-clickable target on the Scripts page |
 | `OLLAMA_HOST` | `http://localhost:11434` | Embeddings for semantic search (optional) |
 | `BARRELMAN_STATEMENT_TIMEOUT_MS` | `10000` | Query timeout on the API pool. `0` disables. DDL is exempt |
 | `BARRELMAN_HEALTH_CACHE_MS` | `5000` | How long `/health` reuses its dependency probes. The endpoint is public and a load balancer may hit it every second; without caching each call fans out to Postgres, GraphHopper, Martin, MOTIS and Pelias. `checkedAt` in the response reports the age. `0` disables |

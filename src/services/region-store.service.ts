@@ -12,6 +12,7 @@
  * bind a raw object, and it auto-parses jsonb back into JS values on read.
  */
 import { connection as sql } from '../db'
+import { envString } from '../config/env'
 import { loadFile, GLOBAL_KEY, type Bbox, type PeliasRegionConfig, type RegionDef, type RegionsFile } from '../config/regions'
 
 /** A region as stored/edited, i.e. a RegionDef plus its key + store metadata. */
@@ -60,14 +61,28 @@ export function ensureRegionsSchema(): Promise<void> {
   return schemaReady
 }
 
-/** One-time seed from config/regions.json so a fresh DB mirrors the shipped defaults. */
+/**
+ * Seed the sample regions from config/regions.json — OFF by default.
+ *
+ * A fresh install used to come up with north-carolina, nyc-metro and global
+ * already in the store. Those are the repo's dev fixtures, not anything an
+ * operator asked for, and they are actively harmful on a real instance: they
+ * sit in the console next to the region you actually import, and every one of
+ * them is a runnable target on the Scripts page. Picking the wrong one there
+ * replaces the whole dataset with one state.
+ *
+ * Onboarding is now: empty list, "Add by name", search the Geofabrik index for
+ * the region you want. Set BARRELMAN_SEED_SAMPLE_REGIONS=1 to get the fixtures
+ * back (the dev compose does).
+ */
 async function seedIfEmpty(): Promise<void> {
   const [{ count }] = await sql<{ count: number }[]>`SELECT count(*)::int AS count FROM import_regions`
   if (count > 0) return
+  if (String(envString('BARRELMAN_SEED_SAMPLE_REGIONS', '')) !== '1') return
   const file = loadFile()
   const seed: Array<{ key: string; def: RegionDef; isGlobal: boolean }> = [
     ...Object.entries(file.regions).map(([key, def]) => ({ key, def, isGlobal: false })),
-    { key: GLOBAL_KEY, def: file.global, isGlobal: true },
+    ...(file.global ? [{ key: GLOBAL_KEY, def: file.global, isGlobal: true }] : []),
   ]
   let order = 0
   for (const { key, def, isGlobal } of seed) {
@@ -184,6 +199,9 @@ export async function loadRegionsFromDb(): Promise<RegionsFile | null> {
     if (r.isGlobal) global = def
     else regions[r.key] = def
   }
-  if (!global) return null
-  return { regions, global }
+  // A missing global row used to make this return null, which sent the caller
+  // to the baked config/regions.json — so deleting the global region silently
+  // resurrected the shipped sample regions instead of removing anything. The
+  // store is authoritative whenever it has rows; `global` is simply optional.
+  return { regions, global: global ?? undefined }
 }
