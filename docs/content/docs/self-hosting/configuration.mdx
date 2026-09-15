@@ -260,6 +260,7 @@ itself.
 | `MARTIN_URL` | `http://barrelman-martin:3000` | Set to point at a Martin outside this stack |
 | `PELIAS_URL` | `http://pelias_api:4000` | Address geocoder. Only used when the `pelias` profile is up |
 | `BARRELMAN_SEARCH_ADDRESS_BUDGET_MS` | `2500` | How long `/search` waits for Pelias address results before returning POIs without them. Pelias answers healthy queries in well under a second; this stops a slow or unreachable geocoder from holding the whole search up to its 10s hang backstop |
+| `BARRELMAN_SEARCH_TRIGRAM_BUDGET_MS` | `2500` | How long `/search` waits for the fuzzy trigram layer before answering with the precise layers alone. That layer supplies typo tolerance and reads roughly 215 MB of index per call — fast against a warm index, and on an instance whose table dwarfs RAM slow enough that `BARRELMAN_STATEMENT_TIMEOUT_MS` cancels it, so the caller waits the whole timeout for nothing. `0` waits the full statement timeout |
 | `ISOCHRONE_CONCURRENCY` | `8` | Parallel GraphHopper calls per isochrone. Raise only if GraphHopper is dedicated to isochrone work |
 | `TRANSITLAND_API_KEY` | — | For GTFS feed discovery. Free at [transit.land](https://transit.land/users/sign_up) |
 
