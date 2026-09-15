@@ -22,8 +22,9 @@ does it — and the release pipeline turns it into the GitHub Release notes.
   `PLANETILER_CONTAINER_MEMORY` sets a hard cgroup cap so an over-large render
   kills only itself. Leave it unset on a dedicated build host
 
-### Fixed
+## [0.3.4] - 2026-09-14
 
+### Fixed
 * Searching a code or reference no longer returns unnamed features that cannot
   be displayed. The codes layer matches ref-style tags, which unnamed things
   carry freely, and it is the highest-priority source in the result merge — so
