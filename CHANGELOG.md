@@ -10,6 +10,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.3.6] - 2026-09-15
+
 ### Changed
 
 * A fresh install no longer arrives with sample regions already configured.
