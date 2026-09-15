@@ -20,8 +20,9 @@ does it — and the release pipeline turns it into the GitHub Release notes.
   nothing clickable in the response. Unnamed rows are now excluded from that
   layer, which is the only one that could surface them
 
-### Fixed
+## [0.3.3] - 2026-09-14
 
+### Fixed
 * Searching for a place no longer returns unrelated bus routes instead of the
   place. GTFS route matching includes a loose trigram branch — the thing that
   lets "harlem line" reach Metro-North's "Harlem" — and across a national feed
