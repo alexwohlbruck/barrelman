@@ -23,6 +23,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
   now excluded; measured against the live feed corpus, genuine route queries
   score 0.60-1.00 and are unaffected
 
+## [0.3.2] - 2026-09-14
+
 ### Fixed
 
 * A misspelled search no longer costs the full statement timeout. Deferring the
