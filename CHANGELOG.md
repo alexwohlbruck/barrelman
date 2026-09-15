@@ -12,6 +12,16 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ### Fixed
 
+* Searching a code or reference no longer returns unnamed features that cannot
+  be displayed. The codes layer matches ref-style tags, which unnamed things
+  carry freely, and it is the highest-priority source in the result merge — so
+  searching "m15" returned three unnamed camp pitches and a parking deck tagged
+  `ref=M15`, evicting both the named "M15" and the M15 bus route and leaving
+  nothing clickable in the response. Unnamed rows are now excluded from that
+  layer, which is the only one that could surface them
+
+### Fixed
+
 * Searching for a place no longer returns unrelated bus routes instead of the
   place. GTFS route matching includes a loose trigram branch — the thing that
   lets "harlem line" reach Metro-North's "Harlem" — and across a national feed

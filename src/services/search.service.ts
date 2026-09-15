@@ -435,6 +435,17 @@ export async function searchPlaces(
             ${distanceSelect}
           FROM geo_places
           WHERE codes @> ARRAY[${lowerQuery}]
+            -- A code match on an unnamed feature has nothing to show the user.
+            -- The codes column is built from ref-style tags, which unnamed
+            -- things carry freely: searching "m15" matched three unnamed camp
+            -- pitches and a parking deck tagged ref=M15. Because codes are the
+            -- highest priority in the merge below, those four filled the
+            -- response and evicted both the named "M15" and the M15 bus route,
+            -- so the query returned nothing a user could click. Every other
+            -- text layer is already name-bound (trigram requires a name,
+            -- abbreviations and FTS derive from one); this was the only way an
+            -- unnamed row could reach a result set.
+            AND name IS NOT NULL
           ${textSearchSpatialFilter}
           ${categoryFilter}
           ${tagsFilter}
