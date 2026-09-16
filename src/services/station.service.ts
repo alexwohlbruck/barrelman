@@ -82,9 +82,6 @@ export interface StationDetail {
 }
 
 /**
- * Get detailed station info including OSM-linked entrances and building geometry.
- */
-/**
  * Translate a feed ONESTOP id to the `gtfs_feeds.feed_id` the stop tables key
  * on, or null when it is not one.
  *
@@ -106,6 +103,11 @@ async function feedIdForOnestop(onestopId: string): Promise<string | null> {
   return row?.feedId ?? null
 }
 
+/**
+ * Get detailed station info including OSM-linked entrances and building geometry.
+ *
+ * `feedRef` is either a `feed_id` or the feed's transitland onestop id.
+ */
 export async function getStationDetail(
   feedRef: string,
   stopId: string,
