@@ -10,6 +10,21 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Added
+
+* Portolan can now draw **bus** routes, not just rail. Portolan only draws
+  buses where a feed names a `streets` extract — the highway layer it snaps bus
+  patterns onto — and without one a feed builds rail-only and its buses simply
+  never appear. Upstream, that layer comes from Overpass, which takes minutes
+  per city and rate-limits bulk callers. The new **Portolan Street Extracts**
+  script cuts it straight out of `geo_places` instead: the same OpenStreetMap
+  data Barrelman already imported, with OSM way identity preserved one-to-one,
+  which is what Portolan's matcher needs. Denver's 134,794 street ways take
+  5.8 seconds. Run it for a feed, then a Portolan patch import, and that
+  agency's bus network appears on the map. A feed whose window falls outside
+  the imported region is reported and skipped rather than drawn onto an empty
+  street layer
+
 ### Changed
 
 * A fresh install no longer arrives with sample regions already configured.
