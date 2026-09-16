@@ -811,7 +811,12 @@ export function createTransitRoutes(deps: {
       }
     }, {
       params: t.Object({
-        feedId: t.String(),
+        feedId: t.String({
+          description:
+            "Either the feed's `feed_id` or its transitland onestop id " +
+            '(`f-dr5r-nyctsubway`). The onestop form lets a client holding a ' +
+            'transitland stop key resolve a station without a second call.',
+        }),
         stopId: t.String(),
       }),
       detail: {
@@ -819,7 +824,9 @@ export function createTransitRoutes(deps: {
         description:
           'Returns a GTFS station with its OSM-linked entrances (subway/train station ' +
           'entrances within 200m) and building polygon geometry. Entrances include ' +
-          'descriptions, wheelchair accessibility, and level information.',
+          'descriptions, wheelchair accessibility, and level information. The feed may ' +
+          "be given as a `feed_id` or as the feed's transitland onestop id, so a " +
+          'transitland stop key `<feed-onestop-id>:<stop_id>` maps straight onto this route.',
         tags: ['Transit'],
       },
     })

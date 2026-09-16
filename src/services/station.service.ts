@@ -13,7 +13,7 @@
  */
 import { db } from '../db'
 import { and, eq, sql } from 'drizzle-orm'
-import { gtfsStops, stationBuildings, stationEntrances } from '../schema/gtfs'
+import { gtfsFeeds, gtfsStops, stationBuildings, stationEntrances } from '../schema/gtfs'
 import { getRoutesForStop, type StopRoutesResult } from './transit.service'
 
 /**
@@ -82,28 +82,69 @@ export interface StationDetail {
 }
 
 /**
+ * Translate a feed ONESTOP id to the `gtfs_feeds.feed_id` the stop tables key
+ * on, or null when it is not one.
+ *
+ * Callers hold either form. Barrelman's own tiles and API use `feed_id`, but a
+ * transit stop is identified across systems by its transitland stop key —
+ * `<feed-onestop-id>:<stop_id>` — and that is what portolan writes into a
+ * station's `gtfs_ids`. A client holding one of those has the onestop id and
+ * nothing else, so accepting both here saves it a round trip just to translate.
+ *
+ * Only consulted after a direct `feed_id` match misses, so the common path
+ * costs no extra query.
+ */
+async function feedIdForOnestop(onestopId: string): Promise<string | null> {
+  const [row] = await db
+    .select({ feedId: gtfsFeeds.feedId })
+    .from(gtfsFeeds)
+    .where(eq(gtfsFeeds.onestopId, onestopId))
+    .limit(1)
+  return row?.feedId ?? null
+}
+
+/**
  * Get detailed station info including OSM-linked entrances and building geometry.
+ *
+ * `feedRef` is either a `feed_id` or the feed's transitland onestop id.
  */
 export async function getStationDetail(
-  feedId: string,
+  feedRef: string,
   stopId: string,
 ): Promise<StationDetail | null> {
-  // Get the GTFS station
-  const [station] = await db
-    .select({
-      stopId: gtfsStops.stopId,
-      feedId: gtfsStops.feedId,
-      stopName: gtfsStops.stopName,
-      stopLat: gtfsStops.stopLat,
-      stopLon: gtfsStops.stopLon,
-    })
-    .from(gtfsStops)
-    .where(
-      and(eq(gtfsStops.feedId, feedId), eq(gtfsStops.stopId, stopId), eq(gtfsStops.locationType, 1)),
-    )
-    .limit(1)
+  const selectStation = (feedId: string) =>
+    db
+      .select({
+        stopId: gtfsStops.stopId,
+        feedId: gtfsStops.feedId,
+        stopName: gtfsStops.stopName,
+        stopLat: gtfsStops.stopLat,
+        stopLon: gtfsStops.stopLon,
+      })
+      .from(gtfsStops)
+      .where(
+        and(
+          eq(gtfsStops.feedId, feedId),
+          eq(gtfsStops.stopId, stopId),
+          eq(gtfsStops.locationType, 1),
+        ),
+      )
+      .limit(1)
+
+  // Get the GTFS station. The reference is tried as a feed_id first — that is
+  // what barrelman's own clients pass — and only a miss pays for the onestop
+  // translation.
+  let [station] = await selectStation(feedRef)
+  if (!station) {
+    const feedId = await feedIdForOnestop(feedRef)
+    if (!feedId) return null
+    ;[station] = await selectStation(feedId)
+  }
 
   if (!station) return null
+  // Everything downstream keys on the feed the station actually came from,
+  // which is the resolved feed_id — never the caller's onestop reference.
+  const feedId = station.feedId
 
   // Get linked entrances
   const entrances = !(await relationAvailable('station_entrances')) ? [] : await db
