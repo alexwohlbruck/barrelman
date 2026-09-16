@@ -136,6 +136,57 @@ describe('station.service on an instance without the station-link import', () =>
     __resetRelationCacheForTests()
   })
 
+  /**
+   * A station's cross-system identity is its transitland stop key,
+   * `<feed-onestop-id>:<stop_id>` — that is what portolan writes into a
+   * station's `gtfs_ids`, and therefore all a map client holding one has.
+   * The endpoint accepts it so such a client need not make a second call
+   * just to translate onestop -> feed_id.
+   */
+  test('falls back to the onestop id when the reference is not a feed_id', async () => {
+    __resetRelationCacheForTests()
+    statements.length = 0
+    // No station under the reference as given, and no feed matches it either.
+    responses = [
+      ['to_regclass', [{ ok: true }]],
+      ['gtfs_stops', []],
+    ]
+
+    const detail = await getStationDetail('f-dr5r-nyctsubway', '640')
+
+    expect(detail).toBeNull()
+    // It tried to translate, and the reference rode as a bind parameter.
+    const onestopLookup = statements.find(
+      (st) => st.sql.includes('gtfs_feeds') && st.sql.includes('onestop_id'),
+    )
+    expect(onestopLookup).toBeDefined()
+    expect(onestopLookup!.params).toContain('f-dr5r-nyctsubway')
+    expect(onestopLookup!.sql).not.toContain('f-dr5r-nyctsubway')
+
+    responses = []
+    __resetRelationCacheForTests()
+  })
+
+  test('a direct feed_id hit costs no onestop translation', async () => {
+    __resetRelationCacheForTests()
+    statements.length = 0
+    responses = [
+      ['to_regclass', [{ ok: true }]],
+      ['gtfs_stops', [['S1', 'F1', 'Test Station', 40.7, -73.9]]],
+    ]
+
+    const detail = await getStationDetail('F1', 'S1')
+
+    expect(detail).not.toBeNull()
+    // The common path must not pay for the fallback.
+    expect(
+      statements.some((st) => st.sql.includes('gtfs_feeds') && st.sql.includes('onestop_id')),
+    ).toBe(false)
+
+    responses = []
+    __resetRelationCacheForTests()
+  })
+
   test('queries the views when they are present', async () => {
     __resetRelationCacheForTests()
     statements.length = 0

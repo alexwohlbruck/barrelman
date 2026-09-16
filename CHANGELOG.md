@@ -10,6 +10,35 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.3.7] - 2026-09-16
+
+### Added
+
+* Portolan can now draw **bus** routes, not just rail. Portolan only draws
+  buses where a feed names a `streets` extract — the highway layer it snaps bus
+  patterns onto — and without one a feed builds rail-only and its buses simply
+  never appear. Upstream, that layer comes from Overpass, which takes minutes
+  per city and rate-limits bulk callers. The new **Portolan Street Extracts**
+  script cuts it straight out of `geo_places` instead: the same OpenStreetMap
+  data Barrelman already imported, with OSM way identity preserved one-to-one,
+  which is what Portolan's matcher needs. Denver's 134,794 street ways take
+  5.8 seconds. Run it for a feed, then a Portolan patch import, and that
+  agency's bus network appears on the map. A feed whose window falls outside
+  the imported region is reported and skipped rather than drawn onto an empty
+  street layer
+
+### Fixed
+
+* Clicking a station on the transit map no longer 404s. A station's identity
+  across systems is its transitland stop key — `<feed-onestop-id>:<stop_id>` —
+  and that is what the map holds when it opens a station, but
+  `/transit/station/:feedId/:stopId` only accepted a `feed_id`, so the map had
+  to resolve the station through transit.land's own API instead. That API needs
+  a key, and on an instance that gets its transit data from Barrelman there is
+  no reason to hold one — so the lookup failed and every station click 404'd.
+  The feed segment now accepts either form. A direct `feed_id` match is still
+  tried first, so the common path costs no extra query
+
 ## [0.3.6] - 2026-09-15
 
 ### Changed

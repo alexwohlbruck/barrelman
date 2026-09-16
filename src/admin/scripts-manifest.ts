@@ -486,6 +486,62 @@ export const SCRIPTS: ScriptDef[] = [
     source: 'import/generate-motis-config.ts',
   },
   // ── Portolan (corrected transit geometry) ─────────────────────────────
+  // Street extracts: what lets portolan draw BUS routes. Cut from geo_places
+  // rather than Overpass — see import/portolan-streets.ts for why that is
+  // lossless and ~60x faster.
+  {
+    id: 'portolan-streets',
+    name: 'Portolan Street Extracts',
+    description:
+      "Cut each feed's street network out of PostGIS and register it on the feed entry. Portolan draws bus routes only where a feed names a `streets` extract; without one the feed builds rail-only and its buses never appear. Run this before a patch import for any feed with bus service.",
+    category: 'transit',
+    danger: 'safe',
+    longRunning: true,
+    // "All bus feeds" can write tens of GB of extracts, so make it a deliberate act.
+    confirm: true,
+    exclusive: true,
+    exec: { kind: 'process', command: 'bun', args: ['run', 'import/portolan-streets.ts'] },
+    params: [
+      {
+        name: 'feeds',
+        label: 'Feed keys',
+        type: 'string',
+        apply: 'flag',
+        flag: '--feeds',
+        placeholder: 'rtd,trimet,metrokingcounty',
+        description: 'Comma-separated portolan feed keys. Leave blank and tick "All bus feeds" instead.',
+      },
+      {
+        name: 'all-bus',
+        label: 'All bus feeds',
+        type: 'boolean',
+        apply: 'flag',
+        flag: '--all-bus',
+        default: false,
+        description: 'Every registered feed with a window. Feeds outside the imported OSM region are reported and skipped.',
+      },
+      {
+        name: 'min-ways',
+        label: 'Minimum ways',
+        type: 'number',
+        apply: 'flag',
+        flag: '--min-ways',
+        placeholder: '1000',
+        description: 'A feed yielding fewer ways than this is treated as outside the imported region and left unregistered, rather than drawing buses onto an empty street layer.',
+      },
+      {
+        name: 'force',
+        label: 'Regenerate existing',
+        type: 'boolean',
+        apply: 'flag',
+        flag: '--force',
+        default: false,
+      },
+    ],
+    source: 'import/portolan-streets.ts',
+    notes:
+      'Reads geo_places, so the OSM import must have run for the regions these feeds cover. A metro-scale extract is 20-115 MB on disk and takes a few seconds; the whole registry is tens of GB, so watch free space when using "All bus feeds". Registering an extract changes the feed entry, which is part of portolan\'s build fingerprint — the next patch import rebuilds those feeds automatically.',
+  },
   // All three wrap `portolan sync` via import/portolan-sync.ts: rebuild
   // corrected route geometry + tile pyramids in the portolan workspace, then
   // re-import the corrected GTFS zips and rebuild the MOTIS dataset.
