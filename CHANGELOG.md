@@ -10,6 +10,18 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Fixed
+
+* Clicking a station on the transit map no longer 404s. A station's identity
+  across systems is its transitland stop key — `<feed-onestop-id>:<stop_id>` —
+  and that is what the map holds when it opens a station, but
+  `/transit/station/:feedId/:stopId` only accepted a `feed_id`, so the map had
+  to resolve the station through transit.land's own API instead. That API needs
+  a key, and on an instance that gets its transit data from Barrelman there is
+  no reason to hold one — so the lookup failed and every station click 404'd.
+  The feed segment now accepts either form. A direct `feed_id` match is still
+  tried first, so the common path costs no extra query
+
 ### Added
 
 * Portolan can now draw **bus** routes, not just rail. Portolan only draws
