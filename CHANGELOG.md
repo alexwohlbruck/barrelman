@@ -10,6 +10,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.3.7] - 2026-09-16
+
 ### Added
 
 * Portolan can now draw **bus** routes, not just rail. Portolan only draws
