@@ -22,6 +22,34 @@
 -- than being cast: OSM heights are written "12", "12 m" and "~10" alike, and a
 -- cast turns one bad value into a failed tile. The client parses leniently.
 
+-- Administrative boundaries, the one geo_places layer that genuinely belongs at
+-- LOW zoom.
+--
+-- `parchment_boundaries` used to read geo_places unfiltered from z4, which meant
+-- a tile serialised every feature inside it rather than the boundaries: at z8
+-- that measured 83.6 MB in 10.1 s, and z4/z6 died with a db error after a 10 s
+-- statement timeout. The other unfiltered sources (roads, water, landuse, pois)
+-- were given a z14 floor instead, because low-zoom roads need GENERALISATION —
+-- dropping minor features and simplifying geometry — which a live table query
+-- cannot do and which the basemap already does.
+--
+-- Boundaries are different: there are few of them, and `geo_places_admin_geom_idx`
+-- already indexes exactly this predicate, so a filter is both correct and fast
+-- where a zoom floor would simply remove the feature. The same query the tile
+-- makes, over the whole US Southwest, plans to that index and runs in 52 ms.
+DROP VIEW IF EXISTS admin_boundaries CASCADE;
+CREATE VIEW admin_boundaries AS
+SELECT (osm_id * 4 + CASE osm_type WHEN 'N' THEN 0 WHEN 'W' THEN 1 ELSE 2 END) as fid,
+       id, name, geom,
+       -- Carried because martin-config lists it as a tile property; the filter
+       -- already pins it to 'area', so it is constant, but dropping it here
+       -- would stop the source configuring at startup.
+       geom_type,
+       admin_level
+FROM geo_places
+WHERE geom_type = 'area'
+  AND admin_level IS NOT NULL;
+
 -- Parking: the paved surface, as a polygon
 DROP VIEW IF EXISTS parking_areas CASCADE;
 CREATE VIEW parking_areas AS

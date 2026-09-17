@@ -12,6 +12,22 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ### Fixed
 
+* Low-zoom tiles no longer stall the database. Five tile sources read
+  `geo_places` with no filter at all, so a tile serialised everything inside it
+  rather than the layer's namesake — `parchment_boundaries` at z8 returned
+  **83.6 MB in 10.1 seconds**, and z4 and z6 died with a db error after a ten
+  second timeout; roads and water at z10 returned 48-69 MB. Because the filter
+  was absent they also returned near-identical bytes to one another, so a client
+  drawing three of them downloaded the same data three times.
+
+  Those sources are detail overlays, and z14 is where an unfiltered table is
+  affordable, so below z14 they now answer `404` instead. Low zoom wants
+  generalisation, which a live table query cannot do and which the basemap
+  already does. `parchment_boundaries` is the exception: administrative areas
+  are few and already indexed for exactly this predicate, so it is served from a
+  filtered `admin_boundaries` view and still starts at z4 — z8 went from 83.6 MB
+  in 10.1 s to **47 KB in 0.07 s**
+
 * **Rate limiting no longer escalates a busy client into an outage.** Exceeding
   a rate limit returns 429 with a `Retry-After`, which is an instruction: wait,
   then continue. Those 429s were also being counted as abuse strikes, so a
