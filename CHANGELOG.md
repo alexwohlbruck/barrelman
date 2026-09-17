@@ -10,6 +10,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.3.8] - 2026-09-17
+
 ### Fixed
 
 * Low-zoom tiles no longer stall the database. Five tile sources read
