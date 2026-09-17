@@ -395,23 +395,32 @@ So read `distance_m`, not just the result count, and use `/geocode` as the
 region check.
 </Callout>
 
-<Callout type="warn" title="Low-zoom tiles are very large, and that is the shipped behaviour">
-`parchment_pois` and `parchment_roads` are unfiltered tables between their
-`minzoom: 10` and `maxzoom: 16`, so a low-zoom tile over a city serialises
-everything inside it. Measured over Denver on a Colorado import:
+<Callout type="info" title="The geo_places tile sources start at z14">
+`parchment_pois`, `parchment_roads`, `parchment_water`, `parchment_landuse` and
+`parchment_buildings` read `geo_places` with no filter, so a tile serialises
+everything inside it rather than the layer's namesake — and they therefore
+return near-identical bytes to one another. Measured on a US import before the
+floor was raised:
 
-| Zoom | `parchment_pois` | Time |
-|---|---|---|
-| 10 | 63 MB | 6.9 s |
-| 12 | 14 MB | 0.7 s |
-| 14 | 1.3 MB | 0.2 s |
-| 16 | 92 KB | 0.05 s |
+| Source | Zoom | Size | Time |
+|---|---|---|---|
+| `parchment_boundaries` | 8 | 83.6 MB | 10.1 s |
+| `parchment_roads` | 10 | 48 MB | 4.2 s |
+| `parchment_roads` | 14 | 1.3 MB | 0.47 s |
 
-A `200` therefore proves nothing about usability. If you are pointing a real map
-at this, either start your POI and road layers at z14, or narrow the sources in
-`martin-config.yaml` — a `minzoom` closer to 14, or a filtered view that admits
-only prominent features at low zoom. Left as-is, a zoomed-out map will pull tens
-of megabytes per tile and stall the database behind it.
+Below z14 those sources now answer `404` rather than spending ten seconds
+building a tile no client can use. They are **detail overlays**: z14 is where an
+unfiltered table is affordable.
+
+Low zoom wants *generalisation* — dropping minor features and simplifying
+geometry — which a live table query cannot do. That is what the `basemap`
+PMTiles source is for, and a zoomed-out map should read roads, water and landuse
+from it.
+
+`parchment_boundaries` is the exception and still starts at z4. There are few
+administrative areas, and `geo_places_admin_geom_idx` indexes exactly that
+predicate, so it is served from the filtered `admin_boundaries` view instead of
+a zoom floor: z8 went from 83.6 MB in 10.1 s to **47 KB in 0.07 s**.
 </Callout>
 
 ### Map detail sources

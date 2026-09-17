@@ -44,6 +44,17 @@ postgres:
   connection_string: ${DATABASE_URL}
 
   tables:
+    # The six sources below read geo_places directly, with no filter — so a
+    # tile serialises EVERYTHING inside it, not just the layer's namesake.
+    # Measured on a US import: parchment_boundaries at z8 returned 83.6 MB in
+    # 10.1 s, and z4/z6 died with a db error after a 10 s timeout; roads and
+    # water at z10 returned 48-69 MB in 3.7-6.0 s. Because the filter is
+    # absent, they also return near-identical bytes to each other.
+    #
+    # They are detail overlays, and z14 is where that is affordable (~1.3 MB).
+    # Low zoom wants GENERALISATION — dropping minor features and simplifying
+    # geometry — which a live table query cannot do and which the Planetiler
+    # basemap already does properly. Point a zoomed-out map at `basemap`.
     parchment_pois:
       schema: public
       table: geo_places
@@ -56,7 +67,7 @@ postgres:
       #   mvt_agg_transfn: Could not find column 'id' of integer type
       # The id is still carried as a property below, which is what a client
       # needs to look the place up again.
-      minzoom: 10
+      minzoom: 14
       maxzoom: 16
       properties:
         id: id
@@ -68,7 +79,7 @@ postgres:
 
     parchment_boundaries:
       schema: public
-      table: geo_places
+      table: admin_boundaries
       srid: 4326
       geometry_column: geom
       minzoom: 4
@@ -86,7 +97,7 @@ postgres:
       table: geo_places
       srid: 4326
       geometry_column: geom
-      minzoom: 6
+      minzoom: 14
       maxzoom: 16
       properties:
         id: id
@@ -114,7 +125,7 @@ postgres:
       table: geo_places
       srid: 4326
       geometry_column: geom
-      minzoom: 8
+      minzoom: 14
       maxzoom: 16
       properties:
         id: id
@@ -170,7 +181,7 @@ postgres:
       table: geo_places
       srid: 4326
       geometry_column: geom
-      minzoom: 10
+      minzoom: 14
       maxzoom: 16
       properties:
         id: id

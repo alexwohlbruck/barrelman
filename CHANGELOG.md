@@ -10,6 +10,72 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.3.8] - 2026-09-17
+
+### Fixed
+
+* Low-zoom tiles no longer stall the database. Five tile sources read
+  `geo_places` with no filter at all, so a tile serialised everything inside it
+  rather than the layer's namesake — `parchment_boundaries` at z8 returned
+  **83.6 MB in 10.1 seconds**, and z4 and z6 died with a db error after a ten
+  second timeout; roads and water at z10 returned 48-69 MB. Because the filter
+  was absent they also returned near-identical bytes to one another, so a client
+  drawing three of them downloaded the same data three times.
+
+  Those sources are detail overlays, and z14 is where an unfiltered table is
+  affordable, so below z14 they now answer `404` instead. Low zoom wants
+  generalisation, which a live table query cannot do and which the basemap
+  already does. `parchment_boundaries` is the exception: administrative areas
+  are few and already indexed for exactly this predicate, so it is served from a
+  filtered `admin_boundaries` view and still starts at z4 — z8 went from 83.6 MB
+  in 10.1 s to **47 KB in 0.07 s**
+
+* **Rate limiting no longer escalates a busy client into an outage.** Exceeding
+  a rate limit returns 429 with a `Retry-After`, which is an instruction: wait,
+  then continue. Those 429s were also being counted as abuse strikes, so a
+  client that crossed its limit collected 25 of them within seconds and was then
+  refused outright for up to half an hour — and because that refusal is *also* a
+  429, a client that simply retried kept itself locked out. Rate limiting and
+  abuse detection are now separate: only refusals a correct client cannot avoid
+  (a bad key, a scope it does not hold, exhausted credits) count towards the
+  penalty box.
+
+* **A penalty no longer blacks out an entire account.** Strikes were recorded
+  against the account, so one wedged client hammering one endpoint with a
+  credential that could not reach it refused every other caller on that account,
+  on every endpoint. For a deployment whose busiest consumer is a server-side
+  tile proxy, that meant the map went dark because something unrelated asked for
+  an admin route. Strikes are now held against the account *at the address that
+  earned them* — rotating keys still sheds nothing, which is what the account
+  keying was for.
+
+* **`BARRELMAN_IP_RPM` no longer overrides the plan an account is on.** It is a
+  backstop against a single abusive host, but at a fixed 3,000 requests a minute
+  it sat below what the larger plans sell, and every server-side integration
+  presents one address — so it quietly became the real limit. It is now the
+  greater of the configured value and the account's own per-minute allowance.
+  Anonymous callers are unaffected.
+
+* **Refusals from the penalty box are now recorded.** They return before the
+  metering path, so an account being refused every request still showed zero
+  rejections in the console — the outage that most needed to be visible was the
+  one that left no trace.
+
+* **Tiles are compressed on the way out.** Martin serves them gzipped and
+  `fetch()` transparently decompresses, taking the `Content-Encoding` header with
+  it, so every tile left the API at roughly twice the size Martin produced — a
+  242 KB buildings tile that Martin had already squeezed to 125 KB. A CDN in
+  front would re-compress it for the browser and hide the cost on the one hop
+  that actually crosses a network: the request filling the edge cache.
+
+* **Parking, tree and street-furniture tiles are no longer a full scan of the
+  tile envelope.** These views had no index matching their own predicate, so a
+  tile request read every feature in the envelope and discarded what did not
+  match: a Tucson z14 parking tile read 18,866 rows to return 436. Partial
+  spatial indexes over each view's predicate bring that down to the rows the
+  tile actually contains, which matters most on a cold cache, where those
+  discarded rows were hundreds of milliseconds of random reads.
+
 ## [0.3.7] - 2026-09-16
 
 ### Added

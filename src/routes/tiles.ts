@@ -61,6 +61,23 @@ const PORTOLAN_FEED_RE = /^[A-Za-z0-9_-]+$/
 
 const CORS = 'access-control-allow-origin'
 
+/**
+ * Whether the caller can read a gzipped tile. Deliberately lenient — this is a
+ * token list, and `gzip;q=0` means "not gzip", which is the one case a plain
+ * substring match gets wrong.
+ */
+function acceptsGzip(header: string | undefined): boolean {
+  if (!header) return false
+  return header
+    .split(',')
+    .map((token) => token.trim().toLowerCase())
+    .some((token) => {
+      const [name, ...params] = token.split(';').map((part) => part.trim())
+      if (name !== 'gzip' && name !== '*') return false
+      return !params.some((param) => param.replace(/\s/g, '') === 'q=0')
+    })
+}
+
 export function createTileRoutes(
   deps: { fetchTile?: TileFetcher; portolanTilesDir?: string } = {},
 ) {
@@ -300,7 +317,7 @@ export function createTileRoutes(
     )
     .get(
       '/:source/:z/:x/:y',
-      async ({ params, set }) => {
+      async ({ params, headers, set }) => {
         const { source, z, x, y } = params
 
         if (!SOURCE_RE.test(source) || !Z_RE.test(z) || !XY_RE.test(x) || !Y_RE.test(y)) {
@@ -317,16 +334,31 @@ export function createTileRoutes(
           return { error: `Tile fetch failed: ${response.statusText}` }
         }
 
-        // Forward the protobuf tile response.
-        // Note: fetch() automatically decompresses gzip responses, so we must
-        // NOT forward the original Content-Encoding header — the body we return
-        // is already decompressed. Elysia may re-compress if the client accepts it.
         set.headers['content-type'] =
           response.headers.get('content-type') || 'application/x-protobuf'
         set.headers['cache-control'] = 'public, max-age=86400'
         set.headers['access-control-allow-origin'] = '*'
 
-        return response.body
+        /**
+         * Compress on the way out, because nothing else does.
+         *
+         * Martin serves these gzipped and `fetch()` transparently decompresses,
+         * dropping the Content-Encoding with it — so what arrived as 125 KB was
+         * being forwarded as 242 KB, and the comment here used to say "Elysia
+         * may re-compress if the client accepts it", which it does not. Every
+         * tile left this API at twice its size; a CDN in front re-compressed it
+         * for the browser and hid the cost on the hop that actually crosses a
+         * network, the one filling the edge cache.
+         *
+         * Vary, because the answer now differs by request header and a shared
+         * cache must not hand a gzipped tile to a client that cannot read it.
+         */
+        const body = new Uint8Array(await response.arrayBuffer())
+        if (!acceptsGzip(headers['accept-encoding'])) return body
+
+        set.headers['content-encoding'] = 'gzip'
+        set.headers['vary'] = 'Accept-Encoding'
+        return Bun.gzipSync(body)
       },
       {
         params: t.Object({
