@@ -10,7 +10,7 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
-## [0.3.8] - 2026-09-17
+## [0.3.9] - 2026-09-17
 
 ### Fixed
 
@@ -23,6 +23,7 @@ does it — and the release pipeline turns it into the GitHub Release notes.
   import or by the new **Build Map Detail Tile Indexes** console task. Missing
   them costs speed, never correctness.
 
+## [0.3.8] - 2026-09-17
 
 ### Fixed
 
