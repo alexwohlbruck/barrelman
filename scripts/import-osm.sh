@@ -159,6 +159,12 @@ psql "$DATABASE_URL" -f "$PROJECT_DIR/import/create-transit-views.sql"
 # instance upgrading without a re-import.
 psql "$DATABASE_URL" -f "$PROJECT_DIR/import/create-detail-views.sql"
 
+# Their partial indexes, separately and CONCURRENTLY — each one scans the whole
+# of geo_places, which is minutes on a continental extract. They are deliberately
+# NOT in the file above: that one also runs on every API startup, and an index
+# build there holds the server off its port for the duration.
+psql "$DATABASE_URL" -f "$PROJECT_DIR/import/create-detail-indexes.sql"
+
 # The 3D buildings view holds rows rather than being a plain view, so creating
 # it is not enough — it comes into existence empty. Filled here, where the
 # building data it joins over has just changed. Minutes on a large extract.

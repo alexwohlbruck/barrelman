@@ -10,6 +10,19 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.3.9] - 2026-09-17
+
+### Fixed
+
+* **Building the map detail indexes no longer holds the API off its port.** They
+  shipped inside `create-detail-views.sql`, which the API runs synchronously on
+  every startup — and each one scans the whole of `geo_places`, so on a
+  continental import the first start after the upgrade sat there for minutes
+  with nothing answering. They now live in their own
+  `import/create-detail-indexes.sql`, built `CONCURRENTLY` out of band by the
+  import or by the new **Build Map Detail Tile Indexes** console task. Missing
+  them costs speed, never correctness.
+
 ## [0.3.8] - 2026-09-17
 
 ### Fixed

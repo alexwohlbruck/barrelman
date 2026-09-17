@@ -46,6 +46,43 @@ async function runSqlFile(log: LogFn, filename: string) {
   log(`✓ ${filename} completed in ${ms} ms`)
 }
 
+/**
+ * Run a SQL file one statement at a time, rather than as one string.
+ *
+ * `runSqlFile` above sends the whole file in a single call, and Postgres wraps a
+ * multi-statement query in an implicit transaction — which `CREATE INDEX
+ * CONCURRENTLY` refuses to run inside. A file of concurrent index builds has to
+ * arrive statement by statement, the way psql sends it.
+ *
+ * The split is deliberately naive (semicolon at end of line) because the files
+ * that use this are deliberately simple. Anything with a function body or a
+ * dollar-quoted string belongs in `runSqlFile`.
+ */
+async function runSqlStatements(log: LogFn, filename: string) {
+  const path = join(IMPORT_DIR, filename)
+  log(`Reading ${filename} …`)
+  const statements = readFileSync(path, 'utf-8')
+    .split(/;\s*$/m)
+    .map((chunk) =>
+      chunk
+        .split('\n')
+        .filter((line) => !line.trim().startsWith('--'))
+        .join('\n')
+        .trim(),
+    )
+    .filter(Boolean)
+
+  log(`Executing ${statements.length} statement(s) from ${filename} …`)
+  const start = performance.now()
+  for (const [i, statement] of statements.entries()) {
+    const label = statement.replace(/\s+/g, ' ').slice(0, 70)
+    const stepStart = performance.now()
+    await db.execute(sql.raw(statement))
+    log(`  [${i + 1}/${statements.length}] ${label} — ${Math.round(performance.now() - stepStart)} ms`)
+  }
+  log(`✓ ${filename} completed in ${Math.round(performance.now() - start)} ms`)
+}
+
 export const INTERNAL_HANDLERS: Record<string, (log: LogFn) => Promise<void>> = {
   // admin.service-backed migration tasks
   'admin:full-migration': async (log) => {
@@ -67,5 +104,6 @@ export const INTERNAL_HANDLERS: Record<string, (log: LogFn) => Promise<void>> = 
   'sql:create-station-links.sql': (log) => runSqlFile(log, 'create-station-links.sql'),
   'sql:create-transit-views.sql': (log) => runSqlFile(log, 'create-transit-views.sql'),
   'sql:create-detail-views.sql': (log) => runSqlFile(log, 'create-detail-views.sql'),
+  'sql:create-detail-indexes.sql': (log) => runSqlStatements(log, 'create-detail-indexes.sql'),
   'sql:generate-intersections.sql': (log) => runSqlFile(log, 'generate-intersections.sql'),
 }
