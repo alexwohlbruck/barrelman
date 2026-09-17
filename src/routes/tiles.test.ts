@@ -83,6 +83,54 @@ describe('GET /tiles/:source/:z/:x/:y', () => {
     expect(body).toEqual(tileData)
   })
 
+  /**
+   * Martin gzips its tiles and `fetch()` silently decompresses them, so without
+   * this every tile left the API at roughly twice the size Martin produced.
+   */
+  test('gzips the tile when the caller accepts it, and says so', async () => {
+    const tileData = new Uint8Array(4096).fill(0x42)
+    const mockFetch = mock<TileFetcher>(async () =>
+      new Response(tileData, { status: 200, headers: { 'content-type': 'application/x-protobuf' } }),
+    )
+
+    const app = new Elysia().use(createTileRoutes({ fetchTile: mockFetch }))
+    const res = await app.handle(
+      get('/tiles/basemap/10/500/300', { 'accept-encoding': 'gzip, deflate, br' }),
+    )
+
+    expect(res.headers.get('content-encoding')).toBe('gzip')
+    expect(res.headers.get('vary')).toBe('Accept-Encoding')
+
+    const sent = new Uint8Array(await res.arrayBuffer())
+    expect(sent.byteLength).toBeLessThan(tileData.byteLength)
+    expect(new Uint8Array(Bun.gunzipSync(sent))).toEqual(tileData)
+  })
+
+  test('sends the tile uncompressed to a caller that did not ask', async () => {
+    const tileData = new Uint8Array([0x1a, 0x03, 0x78, 0x79, 0x7a])
+    const mockFetch = mock<TileFetcher>(async () =>
+      new Response(tileData, { status: 200, headers: { 'content-type': 'application/x-protobuf' } }),
+    )
+
+    const app = new Elysia().use(createTileRoutes({ fetchTile: mockFetch }))
+    const res = await app.handle(get('/tiles/basemap/10/500/300'))
+
+    expect(res.headers.get('content-encoding')).toBeNull()
+    expect(new Uint8Array(await res.arrayBuffer())).toEqual(tileData)
+  })
+
+  // `gzip;q=0` is the one case a substring match gets backwards.
+  test('honours gzip;q=0 as a refusal', async () => {
+    const mockFetch = mock<TileFetcher>(async () =>
+      new Response(new Uint8Array(2048), { status: 200 }),
+    )
+
+    const app = new Elysia().use(createTileRoutes({ fetchTile: mockFetch }))
+    const res = await app.handle(get('/tiles/basemap/10/500/300', { 'accept-encoding': 'gzip;q=0' }))
+
+    expect(res.headers.get('content-encoding')).toBeNull()
+  })
+
   test('sets correct response headers (content-type, cache-control, CORS)', async () => {
     const mockFetch = mock<TileFetcher>(async () =>
       new Response('tile-data', {

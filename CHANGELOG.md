@@ -43,6 +43,13 @@ does it — and the release pipeline turns it into the GitHub Release notes.
   rejections in the console — the outage that most needed to be visible was the
   one that left no trace.
 
+* **Tiles are compressed on the way out.** Martin serves them gzipped and
+  `fetch()` transparently decompresses, taking the `Content-Encoding` header with
+  it, so every tile left the API at roughly twice the size Martin produced — a
+  242 KB buildings tile that Martin had already squeezed to 125 KB. A CDN in
+  front would re-compress it for the browser and hide the cost on the one hop
+  that actually crosses a network: the request filling the edge cache.
+
 * **Parking, tree and street-furniture tiles are no longer a full scan of the
   tile envelope.** These views had no index matching their own predicate, so a
   tile request read every feature in the envelope and discarded what did not
