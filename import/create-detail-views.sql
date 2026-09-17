@@ -269,3 +269,43 @@ CREATE INDEX IF NOT EXISTS geo_places_building_part_geom_idx
 
 CREATE UNIQUE INDEX IF NOT EXISTS buildings_3d_fid_idx ON buildings_3d (fid);
 CREATE INDEX IF NOT EXISTS buildings_3d_geom_idx ON buildings_3d USING GIST (geom);
+
+-- ─── Partial spatial indexes for the views above ─────────────────────────────
+--
+-- Same reasoning as create-transit-views.sql, and the same omission it already
+-- fixed there: without these the planner answers a tile request from the plain
+-- `geo_places_geom_idx`, gets every feature in the tile envelope, and then
+-- throws away everything that is not a car park or a tree. Measured over a
+-- Tucson z14 tile, `parking_areas` read 18,866 rows to return 436 — 11,823
+-- buffers, which is nothing once they are cached and 650 ms of random reads
+-- when they are not. A partial index over exactly the view's predicate turns
+-- that into a scan of the 436.
+--
+-- Trees and furniture are already fast at the zooms they draw at (z16-17 tiles
+-- are small), so these are about the cold case and about the planner having an
+-- honest row estimate for a jsonb predicate it cannot otherwise guess.
+--
+-- NOT CONCURRENTLY, unlike create-transit-views.sql, and that difference is
+-- deliberate: this file is executed as one multi-statement string (src/db.ts on
+-- startup, and the console task through admin-internal-handlers.ts), which
+-- Postgres runs in an implicit transaction block — and CREATE INDEX
+-- CONCURRENTLY refuses to run inside one. A concurrent index here would abort
+-- the whole file and take the views down with it. Same call the building:part
+-- index above already makes. A plain CREATE INDEX blocks writes on geo_places
+-- while it builds, not reads, so tiles keep serving throughout.
+CREATE INDEX IF NOT EXISTS geo_places_parking_geom_idx
+  ON geo_places USING gist (geom)
+  WHERE geom_type = 'area' AND tags->>'amenity' = 'parking';
+
+CREATE INDEX IF NOT EXISTS geo_places_trees_centroid_idx
+  ON geo_places USING gist (centroid)
+  WHERE geom_type = 'point' AND tags->>'natural' = 'tree';
+
+CREATE INDEX IF NOT EXISTS geo_places_tree_rows_geom_idx
+  ON geo_places USING gist (geom)
+  WHERE geom_type = 'line' AND tags->>'natural' = 'tree_row';
+
+CREATE INDEX IF NOT EXISTS geo_places_street_furniture_centroid_idx
+  ON geo_places USING gist (centroid)
+  WHERE geom_type = 'point'
+    AND tags->>'amenity' IN ('bench', 'waste_basket', 'recycling', 'waste_disposal');
