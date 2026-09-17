@@ -203,12 +203,12 @@ See [abuse controls](/self-hosting/abuse-controls) for what these mean.
 |---|---|---|
 | `BARRELMAN_TRUSTED_PROXY_HOPS` | `1` | Proxies in front of barrelman. **Read this one** — see below |
 | `BARRELMAN_ANON_RPM` | `120` | Per address when nobody is authenticated |
-| `BARRELMAN_IP_RPM` | `3000` | Ceiling on any address. Generous — NAT puts real users behind one |
+| `BARRELMAN_IP_RPM` | `3000` | Floor for the per-address ceiling. An authenticated caller gets this or its plan's own limit, whichever is higher |
 | `BARRELMAN_PER_KEY_SHARE` | `0.8` | Share of the account budget one key may spend |
 | `BARRELMAN_ISOCHRONE_CONCURRENCY_PER_ACCOUNT` | `2` | |
 | `BARRELMAN_TRANSIT_CONCURRENCY_PER_ACCOUNT` | `4` | |
 | `BARRELMAN_ROUTING_CONCURRENCY_PER_ACCOUNT` | `8` | |
-| `BARRELMAN_ABUSE_STRIKES` | `25` | Rejections before the penalty box |
+| `BARRELMAN_ABUSE_STRIKES` | `25` | Unavoidable rejections (bad key, missing scope, no credits) before the penalty box. Rate-limit 429s do not count |
 | `BARRELMAN_ABUSE_SIGNAL_STRIKES` | `100` | Strikes before a signal is raised |
 | `BARRELMAN_BURN_RATE_MULTIPLE` | `3` | Daily spend vs monthly allowance before flagging |
 | `BARRELMAN_BURN_RATE_SUSPEND_MULTIPLE` | `25` | Multiple triggering an automatic hold |

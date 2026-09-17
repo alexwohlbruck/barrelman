@@ -362,6 +362,46 @@ describe('throttling', () => {
     expect(rejections.every((c: unknown[]) => (c[0] as { credits: number }).credits === 0)).toBe(true)
   })
 
+  /**
+   * The failure this prevents: a rate-limit 429 used to count as a penalty
+   * strike, so a busy-but-legitimate client crossed 25 strikes seconds after
+   * crossing its limit and was then locked out for minutes — and because the
+   * lockout also answers 429, retrying kept it locked out. A soft limit with a
+   * Retry-After became a hard outage.
+   */
+  test('being rate-limited never escalates into the penalty box', async () => {
+    const d = deps({ resolveApiKey: mock(async () => resolved({ plan: 'free' })) })
+    const instance = app('tiles', d)
+
+    const layers = new Set<string>()
+    // Well past the 25 strikes that used to box a caller.
+    for (let i = 0; i < PER_KEY_LIMIT + 60; i += 1) {
+      const res = await instance.handle(get({ authorization: `Bearer ${LIVE_KEY}` }))
+      if (res.status === 429) layers.add((await res.json()).layer)
+    }
+
+    expect(layers.has('key')).toBe(true)
+    expect(layers.has('penalty')).toBe(false)
+  })
+
+  /**
+   * The counterpart: refusals a correct client cannot earn — a scope it does
+   * not hold — still box it. Rate limiting and abuse detection are different
+   * jobs and only this one belongs to the penalty box.
+   */
+  test('repeated scope failures still earn a penalty', async () => {
+    const d = deps({ resolveApiKey: mock(async () => resolved({ scopes: ['search'] })) })
+    const instance = app('tiles', d)
+
+    const statuses: number[] = []
+    for (let i = 0; i < 30; i += 1) {
+      statuses.push((await instance.handle(get({ authorization: `Bearer ${LIVE_KEY}` }))).status)
+    }
+
+    expect(statuses[0]).toBe(403)
+    expect(statuses.at(-1)).toBe(429)
+  })
+
   test('accounts are limited independently of each other', async () => {
     const first = deps({ resolveApiKey: mock(async () => resolved({ plan: 'free', userId: 'user-1', keyId: 'key-1' })) })
     const firstApp = app('tiles', first)

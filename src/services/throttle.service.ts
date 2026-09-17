@@ -239,11 +239,23 @@ export type ThrottleVerdict =
     }
 
 /**
- * The identity a penalty attaches to: the account when known, otherwise the
- * address. Keyed on the account so rotating keys does not shed strikes.
+ * The identity a penalty attaches to: the account *at an address* when the
+ * account is known, otherwise the address alone.
+ *
+ * Still keyed on the account, so rotating keys does not shed strikes — that is
+ * the property this exists for. But not on the account ALONE, which is what it
+ * used to be, and which made the box far blunter than intended: one caller
+ * hammering one endpoint with a credential that cannot reach it boxed every
+ * other caller on the same account, on every other endpoint. On a deployment
+ * whose busiest consumer is a server-side tile proxy that is the whole map
+ * going dark because something unrelated asked for an admin route.
+ *
+ * Including the address keeps a misbehaving client's strikes to the host it is
+ * misbehaving from. A distributed key-guesser gets a key per address either
+ * way, since that is how it was already keyed for unidentified callers.
  */
 export function penaltyKeyFor(ip: string, userId?: string): string {
-  return userId ?? `ip:${ip}`
+  return userId ? `${userId}@${ip}` : `ip:${ip}`
 }
 
 /**
@@ -282,7 +294,21 @@ export function checkThrottle(request: ThrottleRequest): ThrottleVerdict {
     return { allowed: true }
   }
 
-  const address = perIp.hit(`ip:${ip}`, IP_LIMIT)
+  const accountLimit = plan?.requestsPerMinute ?? 60
+
+  /**
+   * The address backstop, raised to the account's own limit when that is
+   * higher. It is documented as "a backstop against a single abusive host, not
+   * a per-user limit", and at a fixed 3,000 it stopped being that as soon as a
+   * plan sold more: every server-side integration presents ONE address, so the
+   * backstop silently replaced the limit the customer bought. A tile proxy on a
+   * 6,000/min plan was cut off at half that, and the map went dark while the
+   * account layer sat idle.
+   *
+   * Anonymous callers keep the fixed ceiling above — there is no plan to read.
+   */
+  const addressLimit = Math.max(IP_LIMIT, accountLimit)
+  const address = perIp.hit(`ip:${ip}`, addressLimit)
   if (!address.allowed) {
     return {
       allowed: false,
@@ -291,8 +317,6 @@ export function checkThrottle(request: ThrottleRequest): ThrottleVerdict {
       message: 'Rate limit exceeded for this address.',
     }
   }
-
-  const accountLimit = plan?.requestsPerMinute ?? 60
 
   /**
    * Per-visitor ceiling, on the plans that ask for one. Checked before the

@@ -206,12 +206,55 @@ describe('penalty box', () => {
 })
 
 describe('penaltyKeyFor', () => {
-  test('prefers the account so rotating keys does not shed strikes', () => {
-    expect(penaltyKeyFor('203.0.113.1', 'user-1')).toBe('user-1')
+  test('keeps the account so rotating keys does not shed strikes', () => {
+    expect(penaltyKeyFor('203.0.113.1', 'user-1')).toContain('user-1')
   })
 
   test('falls back to the address for anonymous callers', () => {
     expect(penaltyKeyFor('203.0.113.1')).toBe('ip:203.0.113.1')
+  })
+
+  /**
+   * The bug this exists for: keyed on the account alone, one wedged client
+   * boxed every other caller on the account. A server-side tile proxy and a
+   * misconfigured script are the same account and very different traffic.
+   */
+  test('scopes a penalty to the address that earned it', () => {
+    const wedged = penaltyKeyFor('203.0.113.1', 'user-1')
+    const innocent = penaltyKeyFor('198.51.100.7', 'user-1')
+
+    for (let i = 0; i < 40; i += 1) recordRejection(wedged)
+
+    expect(checkPenalty(wedged).allowed).toBe(false)
+    expect(checkPenalty(innocent).allowed).toBe(true)
+  })
+})
+
+describe('address backstop', () => {
+  /**
+   * `BARRELMAN_IP_RPM` is a backstop against one abusive host, not a per-user
+   * limit — so it must not land below the limit the plan sells. Every
+   * server-side integration presents one address, so when it did, the backstop
+   * quietly replaced the plan.
+   */
+  test('never caps an account below its own plan limit', () => {
+    const plan = getPlan('scale')
+    const ip = '203.0.113.42'
+    let refusedByAddress = 0
+
+    // Comfortably past the 3,000 default, still inside the plan's own ceiling.
+    for (let i = 0; i < 4_000; i += 1) {
+      const verdict = checkThrottle({
+        ip,
+        group: 'tiles',
+        userId: 'user-1',
+        keyId: 'key-1',
+        plan,
+      })
+      if (!verdict.allowed && verdict.layer === 'ip') refusedByAddress += 1
+    }
+
+    expect(refusedByAddress).toBe(0)
   })
 })
 

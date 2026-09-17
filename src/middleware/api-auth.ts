@@ -237,10 +237,23 @@ export function apiAuth(group: EndpointGroup, overrides: Partial<ApiAuthDeps> = 
      * caller: enough of them in a short window and the penalty box refuses
      * outright, which is what actually stops a key-guesser or a client wedged
      * in a retry loop — answering 401 forever is free for them and not for us.
+     *
+     * `strike: false` for the refusals a *correct* client still earns. A 429
+     * from the throttle is an instruction — here is Retry-After, come back —
+     * and a caller that obeys it succeeds. Counting those as strikes turned
+     * every burst into an escalating lockout of up to half an hour, and since
+     * the lockout answers 429 too, a client that merely retried kept itself
+     * boxed. Rate limiting and abuse detection are different jobs; only the
+     * refusals that say "this request can never work" belong to the second.
      */
-    const reject = (status: number, body: Record<string, unknown>, retryAfterSeconds?: number) => {
+    const reject = (
+      status: number,
+      body: Record<string, unknown>,
+      retryAfterSeconds?: number,
+      { strike = true }: { strike?: boolean } = {},
+    ) => {
       const penaltyKey = penaltyKeyFor(ip, caller.userId)
-      recordRejection(penaltyKey)
+      if (strike) recordRejection(penaltyKey)
       set.status = status
       if (retryAfterSeconds) set.headers['retry-after'] = String(retryAfterSeconds)
       if (caller.userId) {
@@ -254,7 +267,7 @@ export function apiAuth(group: EndpointGroup, overrides: Partial<ApiAuthDeps> = 
         // Not for an account already suspended: an operator has acted on it,
         // and its client retrying would otherwise bury the genuine signals in
         // the review queue under noise proportional to the retry rate.
-        if (!caller.suspended) void flagSustainedAbuse(penaltyKey, caller.userId, ip)
+        if (strike && !caller.suspended) void flagSustainedAbuse(penaltyKey, caller.userId, ip)
       }
       return { ...body, docs: DOCS_URL }
     }
@@ -269,6 +282,23 @@ export function apiAuth(group: EndpointGroup, overrides: Partial<ApiAuthDeps> = 
     if (!boxed.allowed) {
       set.status = 429
       set.headers['retry-after'] = String(boxed.retryAfterSeconds)
+      /**
+       * Counted, even though this path deliberately does not take a strike —
+       * being boxed is not itself a new offence. Without this the console shows
+       * an account nothing is wrong with while every one of its requests is
+       * being refused: the box returns here, before `reject()`, so a total
+       * outage used to leave `accounts_usage.rejected` sitting at zero. The
+       * refusals an operator most needs to see were the only ones not recorded.
+       */
+      if (caller.userId) {
+        deps.recordUsage({
+          userId: caller.userId,
+          apiKeyId: caller.keyId,
+          endpoint: group,
+          credits: 0,
+          rejected: true,
+        })
+      }
       return { error: boxed.message, layer: boxed.layer, docs: DOCS_URL }
     }
 
@@ -292,7 +322,12 @@ export function apiAuth(group: EndpointGroup, overrides: Partial<ApiAuthDeps> = 
     if (caller.kind !== 'account' || !caller.userId) {
       const verdict = checkThrottle({ ip, group })
       if (!verdict.allowed) {
-        return reject(429, { error: verdict.message, layer: verdict.layer }, verdict.retryAfterSeconds)
+        return reject(
+          429,
+          { error: verdict.message, layer: verdict.layer },
+          verdict.retryAfterSeconds,
+          { strike: false },
+        )
       }
       stash(context, { caller, group, credits: 0, charged: false, throttleKey: null })
       return
@@ -331,7 +366,12 @@ export function apiAuth(group: EndpointGroup, overrides: Partial<ApiAuthDeps> = 
 
     const verdict = checkThrottle({ ip, group, userId: caller.userId, keyId: caller.keyId, plan })
     if (!verdict.allowed) {
-      return reject(429, { error: verdict.message, layer: verdict.layer }, verdict.retryAfterSeconds)
+      return reject(
+        429,
+        { error: verdict.message, layer: verdict.layer },
+        verdict.retryAfterSeconds,
+        { strike: false },
+      )
     }
 
     // Past this point a concurrency slot may be held, so every exit has to
