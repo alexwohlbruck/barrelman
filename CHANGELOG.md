@@ -74,6 +74,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
   tile actually contains, which matters most on a cold cache, where those
   discarded rows were hundreds of milliseconds of random reads.
 
+## [0.3.7] - 2026-09-16
+
 ### Added
 
 * Portolan can now draw **bus** routes, not just rail. Portolan only draws
