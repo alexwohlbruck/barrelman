@@ -10,6 +10,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.3.8] - 2026-09-17
+
 ### Fixed
 
 * **Building the map detail indexes no longer holds the API off its port.** They
@@ -85,6 +87,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
   spatial indexes over each view's predicate bring that down to the rows the
   tile actually contains, which matters most on a cold cache, where those
   discarded rows were hundreds of milliseconds of random reads.
+
+## [0.3.7] - 2026-09-16
 
 ### Added
 
