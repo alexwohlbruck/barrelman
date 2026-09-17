@@ -706,6 +706,20 @@ export const SCRIPTS: ScriptDef[] = [
     source: 'import/create-detail-views.sql',
     notes: 'Uses DROP VIEW … CASCADE — dependent views are dropped and rebuilt.',
   },
+  {
+    id: 'detail-indexes',
+    name: 'Build Map Detail Tile Indexes',
+    description:
+      'Create the partial spatial indexes the map detail views read through, so a tile scans only its own features instead of everything in the envelope.',
+    category: 'osm',
+    danger: 'safe',
+    longRunning: true,
+    confirm: false,
+    exec: { kind: 'internal', handler: 'sql:create-detail-indexes.sql' },
+    source: 'import/create-detail-indexes.sql',
+    notes:
+      'Built CONCURRENTLY, so tiles keep serving throughout. Each index scans the whole of geo_places — minutes apiece on a continental import. Safe to re-run; existing indexes are skipped.',
+  },
 
   // ── GBFS ──────────────────────────────────────────────────────────────
   {

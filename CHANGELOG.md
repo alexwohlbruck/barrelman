@@ -12,6 +12,18 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ### Fixed
 
+* **Building the map detail indexes no longer holds the API off its port.** They
+  shipped inside `create-detail-views.sql`, which the API runs synchronously on
+  every startup — and each one scans the whole of `geo_places`, so on a
+  continental import the first start after the upgrade sat there for minutes
+  with nothing answering. They now live in their own
+  `import/create-detail-indexes.sql`, built `CONCURRENTLY` out of band by the
+  import or by the new **Build Map Detail Tile Indexes** console task. Missing
+  them costs speed, never correctness.
+
+
+### Fixed
+
 * Low-zoom tiles no longer stall the database. Five tile sources read
   `geo_places` with no filter at all, so a tile serialised everything inside it
   rather than the layer's namesake — `parchment_boundaries` at z8 returned
