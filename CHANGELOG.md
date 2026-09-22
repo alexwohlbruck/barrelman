@@ -10,6 +10,31 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Added
+
+* **Tile bundles: several map sources in one request.** A map view is thirty to
+  sixty tiles *per source*, and a client drawing the detail overlays was asking
+  for each of them separately — five requests for every tile of ground. Asking
+  for `/tiles/detail/{z}/{x}/{y}` now returns `buildings_3d`, `parking_areas`,
+  `bicycle_ways`, `street_trees` and `tree_rows` as one tile, each still its own
+  layer under its own name, so a style only needs its `source` changed. Martin's
+  comma syntax (`/tiles/buildings_3d,parking_areas/…`) works too, for a set that
+  has no name. Measured against the public deployment, a six-tile viewport over
+  Manhattan went from 18 requests to 6, and from 2.04 s to 1.14 s warm.
+
+  `street_furniture` is deliberately not in the bundle: it is minzoom 17, so it
+  could contribute nothing to a bundle a client reads at z≤16, and including it
+  would have taken street furniture off the map. Drop its minzoom to 16 in the
+  deployment's `martin-config.yaml` and it joins.
+
+### Changed
+
+* **Tiles are served with `stale-while-revalidate`.** They already carried a
+  day's `max-age`; the week of `stale-while-revalidate` behind it means the
+  first request after expiry is answered from the edge while the refresh
+  happens behind it, instead of making one unlucky user wait out a full origin
+  round trip for a byte-identical tile.
+
 ### Fixed
 
 * **Building the map detail indexes no longer holds the API off its port.** They
