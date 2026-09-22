@@ -358,6 +358,8 @@ export interface Plan {
   requestsPerMinute: number
   /** False on the demo plan: served without spending credits. */
   metered: boolean
+  /** True on the first-party plan: skips every rate window and concurrency cap. */
+  unthrottled?: boolean
   /** Per-minute ceiling applied to each visitor, where a plan sets one. */
   requestsPerMinutePerIp?: number
   /** Operator-assigned. Absent from every customer-facing plan list. */

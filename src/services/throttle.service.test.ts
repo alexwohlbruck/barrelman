@@ -10,7 +10,6 @@ import { describe, test, expect, beforeEach } from 'bun:test'
 import {
   acquireSlot,
   checkPenalty,
-  checkServiceThrottle,
   checkThrottle,
   clearThrottleState,
   penaltyKeyFor,
@@ -302,16 +301,52 @@ describe('the tile bucket', () => {
   })
 })
 
-describe('the service credential', () => {
+describe('an unthrottled plan', () => {
   /**
-   * `BARRELMAN_API_KEY` is the operator's own backend, not a customer. It is
-   * also the caller a per-address limit hurts most: Parchment proxies every
-   * user's map through one server, so the whole product arrives on one address.
+   * The operator's own application: not a customer to be fair to, and the
+   * caller every per-address layer punishes hardest, since its whole user base
+   * arrives from one server.
    */
-  test('is unlimited by default', () => {
+  const firstParty = getPlan('first-party')
+
+  test('passes every layer, from one address, under one key', () => {
     for (let i = 0; i < 20_000; i += 1) {
-      expect(checkServiceThrottle('198.51.100.9').allowed).toBe(true)
+      const verdict = checkThrottle({
+        ip: '198.51.100.9',
+        group: 'tiles',
+        userId: 'parchment',
+        keyId: 'k1',
+        plan: firstParty,
+      })
+      expect(verdict.allowed).toBe(true)
     }
+  })
+
+  test('takes no concurrency slot', () => {
+    for (let i = 0; i < 20; i += 1) {
+      const verdict = checkThrottle({
+        ip: '198.51.100.9',
+        group: 'isochrone',
+        userId: 'parchment',
+        keyId: 'k1',
+        plan: firstParty,
+      })
+      expect(verdict.allowed).toBe(true)
+    }
+
+    // Nothing was acquired, so an ordinary account still gets its full cap.
+    expect(acquireSlot('someone-else', 'isochrone')).toBe(true)
+    expect(acquireSlot('someone-else', 'isochrone')).toBe(true)
+    expect(acquireSlot('someone-else', 'isochrone')).toBe(false)
+  })
+
+  test('does not exempt anybody else', () => {
+    let refused = false
+    for (let i = 0; i < 500 && !refused; i += 1) {
+      refused = !checkThrottle({ ip: '198.51.100.9', group: 'search', userId: 'u2', keyId: 'k2', plan: free }).allowed
+    }
+
+    expect(refused).toBe(true)
   })
 })
 

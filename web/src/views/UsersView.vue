@@ -487,9 +487,15 @@ function describeDetail(detail: Record<string, unknown> | null) {
           class="rounded-md bg-warning/10 px-3 py-2 text-xs text-warning-foreground"
         >
           <strong>{{ chosenPlan.name }} is unmetered.</strong>
-          Requests are served without spending credits, bounded only by
-          {{ formatNumber(chosenPlan.requestsPerMinutePerIp ?? chosenPlan.requestsPerMinute) }} per minute
-          per visitor. Use it for demos you run yourself, not for customers.
+          <template v-if="chosenPlan.unthrottled">
+            Requests are served without spending credits and without any rate limit at all. Use it for
+            applications you run yourself, never for customers.
+          </template>
+          <template v-else>
+            Requests are served without spending credits, bounded only by
+            {{ formatNumber(chosenPlan.requestsPerMinutePerIp ?? chosenPlan.requestsPerMinute) }} per minute
+            per visitor. Use it for demos you run yourself, not for customers.
+          </template>
         </p>
 
         <div class="flex flex-col gap-1.5">

@@ -145,21 +145,6 @@ function bucketFor(group: EndpointGroup): RateBucket {
   return group === 'tiles' ? TILE_BUCKET : API_BUCKET
 }
 
-// ── The service credential ──────────────────────────────────────────────
-
-/**
- * Ceiling on the shared service credential, which by default has none.
- *
- * `BARRELMAN_API_KEY` is not a customer: it is the operator's own backend, it
- * is already unmetered, and the only thing a limit on it bounds is how fast
- * the product it powers is allowed to work. It also has the shape that suffers
- * most from a per-address limit — Parchment proxies every user's tiles through
- * one server, so one address and one credential carry the whole map.
- *
- * Set this to put a ceiling back; 0 leaves it unlimited.
- */
-const SERVICE_LIMIT = envNumber('BARRELMAN_SERVICE_RPM', 0)
-
 // ── Penalty box ─────────────────────────────────────────────────────────
 
 interface Penalty {
@@ -340,6 +325,14 @@ export function checkThrottle(request: ThrottleRequest): ThrottleVerdict {
     return { allowed: true }
   }
 
+  /**
+   * An operator's own application takes none of the layers below — not the
+   * windows and not the concurrency cap. See `Plan.unthrottled`; the caps
+   * are per *account*, so a first-party app would otherwise ration its whole
+   * user base to two simultaneous isochrones.
+   */
+  if (plan?.unthrottled) return { allowed: true }
+
   const accountLimit = scaled(plan?.requestsPerMinute ?? 60)
 
   /**
@@ -416,26 +409,6 @@ export function checkThrottle(request: ThrottleRequest): ThrottleVerdict {
   }
 
   return { allowed: true }
-}
-
-/**
- * The shared service credential's own check, separate because it shares
- * nothing with the layers above: no plan to derive a limit from, no account to
- * be fair to, and no reason to bound one operator-run backend against another.
- * Unlimited unless `BARRELMAN_SERVICE_RPM` says otherwise.
- */
-export function checkServiceThrottle(ip: string): ThrottleVerdict {
-  if (SERVICE_LIMIT <= 0) return { allowed: true }
-
-  const verdict = perIp.hit(`service:${ip}`, SERVICE_LIMIT)
-  if (verdict.allowed) return { allowed: true }
-
-  return {
-    allowed: false,
-    layer: 'ip',
-    retryAfterSeconds: verdict.retryAfterSeconds,
-    message: `Service credential limited to ${SERVICE_LIMIT} requests per minute.`,
-  }
 }
 
 // ── Maintenance ─────────────────────────────────────────────────────────

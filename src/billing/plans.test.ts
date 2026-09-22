@@ -188,9 +188,11 @@ describe('plan definitions', () => {
  * seen, and what still bounds it once billing does not.
  */
 describe('the demo plan', () => {
-  test('is the only unmetered plan', () => {
+  test('is unmetered, and so is the only other internal plan', () => {
     const unmetered = allPlans().filter((plan) => !plan.metered)
-    expect(unmetered.map((p) => p.id)).toEqual(['demo'])
+    expect(unmetered.map((p) => p.id)).toEqual(['first-party', 'demo'])
+    // Both are operator-assigned. Nothing a customer can reach is unmetered.
+    expect(unmetered.every((plan) => plan.internal)).toBe(true)
   })
 
   test('is invisible to every customer-facing surface', () => {
@@ -233,6 +235,42 @@ describe('the demo plan', () => {
   test('is not commercial-use, and is not the fallback for an unknown plan', () => {
     expect(PLANS.demo!.commercialUse).toBe(false)
     expect(getPlan('nonexistent').id).toBe('free')
+  })
+})
+
+/**
+ * The plan an operator's own application sits on. The tests are about the same
+ * thing the demo's are: containment — who can end up here, and what it means.
+ */
+describe('the first-party plan', () => {
+  const firstParty = PLANS['first-party']!
+
+  test('is the only unthrottled plan', () => {
+    expect(allPlans().filter((p) => p.unthrottled).map((p) => p.id)).toEqual(['first-party'])
+  })
+
+  test('cannot be bought, chosen, or landed on by a subscription', () => {
+    expect(firstParty.internal).toBe(true)
+    expect(listPlans().map((p) => p.id)).not.toContain('first-party')
+    expect(purchasablePlans().map((p) => p.id)).not.toContain('first-party')
+    expect(firstParty.polarProductEnv).toBeUndefined()
+  })
+
+  test('is not the fallback for an unknown plan', () => {
+    // Ranked below free, so nothing drifts onto unlimited access by default.
+    expect(firstParty.rank).toBeLessThan(PLANS.free!.rank)
+    expect(getPlan('nonexistent').id).toBe('free')
+    expect(getPlan(undefined).unthrottled).toBeUndefined()
+  })
+
+  test('cannot start billing by accident', () => {
+    expect(firstParty.monthlyCredits).toBe(0)
+    expect(firstParty.overageAllowed).toBe(false)
+  })
+
+  test('keeps a plausible rate limit behind the flag', () => {
+    // Clearing `unthrottled` must fall back to a sane ceiling, not to none.
+    expect(firstParty.requestsPerMinute).toBeGreaterThan(0)
   })
 })
 

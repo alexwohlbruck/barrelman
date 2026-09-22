@@ -10,6 +10,20 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Added
+
+* **A `first-party` plan, for an application the operator runs themselves.**
+  Unmetered and unthrottled — every per-minute window and the concurrency caps
+  are skipped — and, like `demo`, assigned by an operator rather than chosen,
+  so unlimited access is not something an account can grant itself. Usage is
+  still recorded at zero credits, so the traffic stays visible in the
+  dashboards and to abuse detection. Assign it at `/console/accounts` and give
+  the application an ordinary API key.
+
+  This replaces leaning on `BARRELMAN_API_KEY` for the same job. A real account
+  key is attributable, revocable on its own, scopeable, and there can be one
+  per application; the shared secret is none of those.
+
 ### Changed
 
 * **Tile requests are counted in a rate window of their own, at twenty times a
@@ -24,14 +38,6 @@ does it — and the release pipeline turns it into the GitHub Release notes.
   it with `BARRELMAN_TILE_RATE_MULTIPLIER`.
 
 ### Fixed
-
-* **The shared service credential is no longer rate limited.** `BARRELMAN_API_KEY`
-  is the operator's own backend rather than a customer, and it is already
-  unmetered — but the throttle saw no account behind it and measured it against
-  the *anonymous* per-address ceiling, 120 requests a minute, a limit meant for
-  a scraper in an open deployment. Anything proxying a map through one server
-  spent that in seconds. It now passes unthrottled; set `BARRELMAN_SERVICE_RPM`
-  to put a ceiling back.
 
 * **Building the map detail indexes no longer holds the API off its port.** They
   shipped inside `create-detail-views.sql`, which the API runs synchronously on

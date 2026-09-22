@@ -524,33 +524,65 @@ describe('tiles', () => {
   })
 })
 
-describe('the service credential', () => {
-  /**
-   * Parchment proxies every user's map through one server, so the whole
-   * product reaches barrelman on one address under one credential — and it
-   * used to be measured against the anonymous per-address ceiling, a limit
-   * sized for a scraper in an open deployment.
-   */
+/**
+ * The operator's own application. Not a customer to be fair to and not a demo
+ * to contain — it is the product this instance exists to serve.
+ */
+describe('a first-party account', () => {
+  const firstParty = () => deps({ resolveApiKey: mock(async () => resolved({ plan: 'first-party' })) })
+
   test('is not throttled', async () => {
-    const instance = app('tiles', deps())
+    const instance = app('tiles', firstParty())
 
     const statuses: number[] = []
-    for (let i = 0; i < 1_000; i += 1) {
-      statuses.push((await instance.handle(get({ authorization: 'Bearer service-secret' }))).status)
+    for (let i = 0; i < 2_000; i += 1) {
+      statuses.push((await instance.handle(get({ authorization: `Bearer ${LIVE_KEY}` }))).status)
     }
 
     expect(statuses.every((status) => status === 200)).toBe(true)
   })
 
-  test('is never boxed for refusals earned at the same address', async () => {
-    // A misconfigured script on the same host must not take the operator's own
-    // backend down with it.
-    const d = deps({ resolveApiKey: mock(async () => resolved({ scopes: ['search'] })) })
-    const failing = app('isochrone', d)
-    for (let i = 0; i < 40; i += 1) await failing.handle(get({ authorization: `Bearer ${LIVE_KEY}` }))
+  test('takes no concurrency slot, so its whole user base is not rationed to two', async () => {
+    let release: (() => void) | undefined
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve
+    })
 
-    const res = await app('tiles', deps()).handle(get({ authorization: 'Bearer service-secret' }))
-    expect(res.status).toBe(200)
+    const instance = new Elysia()
+      .onBeforeHandle(apiAuth('isochrone', firstParty()))
+      .onAfterHandle(apiAuthAfter)
+      .get('/probe', async () => {
+        await blocked
+        return { ok: true }
+      })
+
+    // The cap is 2 per account, and an operator's own app is one account.
+    const inFlight = Array.from({ length: 8 }, () => instance.handle(get({ authorization: `Bearer ${LIVE_KEY}` })))
+    await Bun.sleep(20)
+    release!()
+
+    const statuses = (await Promise.all(inFlight)).map((res) => res.status)
+    expect(statuses.every((status) => status === 200)).toBe(true)
+  })
+
+  test('is still scope-checked, and still suspendable', async () => {
+    const scoped = deps({ resolveApiKey: mock(async () => resolved({ plan: 'first-party', scopes: ['tiles'] })) })
+    expect((await app('search', scoped).handle(get({ authorization: `Bearer ${LIVE_KEY}` }))).status).toBe(403)
+
+    const held = deps({
+      resolveApiKey: mock(async () => resolved({ plan: 'first-party', suspended: true, suspensionReason: 'leaked' })),
+    })
+    expect((await app('tiles', held).handle(get({ authorization: `Bearer ${LIVE_KEY}` }))).status).toBe(403)
+  })
+
+  test('still records its usage, so it stays visible', async () => {
+    // Unlike the shared service secret, which is anonymous in every dashboard.
+    const d = firstParty()
+    await app('search', d).handle(get({ authorization: `Bearer ${LIVE_KEY}` }))
+
+    expect(d.recordUsage).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'user-1', endpoint: 'search', credits: 0 }),
+    )
   })
 })
 

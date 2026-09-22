@@ -21,8 +21,8 @@ anything on them.
 | **Per-account** | The plan's published limit | — |
 | **Concurrency** | Simultaneous isochrone / transit / routing | A caller inside their per-minute limit can still pin every engine |
 
-Two callers take none of this: the shared service credential, and — for the
-per-minute layers — tiles, which are counted separately. Both are below.
+Two callers take none of this: an account on the `first-party` plan, and — for
+the per-minute layers — tiles, which are counted separately. Both are below.
 
 A `429` names the layer that refused it, which is the difference between "slow
 down" and "spread traffic across more keys":
@@ -50,21 +50,39 @@ allowance is already the real budget for tile traffic. This ceiling only has to
 stop a scraper, not a map. Lower the multiplier if your instance serves tiles
 from somewhere that cannot take the load.
 
-### The service credential
+### Your own application
 
-`BARRELMAN_API_KEY` is not throttled at all.
+An operator's own application is not a customer. Metering it means billing
+yourself, and throttling it means rationing your own users — and it is the
+caller the layers above punish hardest, because of its shape rather than its
+volume: a server-side proxy puts every one of its users behind one address and
+one credential, which is precisely what the per-address backstop is built to
+catch.
 
-It is not a customer — it is the operator's own backend, it is already
-unmetered, and the only thing a limit on it bounds is how fast the product it
-powers may work. It is also the caller the layers above punish hardest, because
-of its shape rather than its volume: Parchment proxies every user's map through
-one server, so the whole product arrives on one address under one credential,
-and it was being measured against the anonymous per-address ceiling — a limit
-sized for a scraper in an open deployment.
+The `first-party` plan is the answer. It is `internal: true` and
+operator-assigned, exactly like `demo`, and it sets `unthrottled: true` — every
+per-minute window and the concurrency caps are skipped. Assign it from
+`/console/accounts` and give the application an ordinary `brm_live_…` key.
 
-Set `BARRELMAN_SERVICE_RPM` to put a ceiling back. It is unset by default, and
-the tradeoff to weigh is that the secret is shared: anyone holding it gets the
-same exemption.
+Everything else still applies. Scopes are enforced, origin restrictions are
+enforced, suspension is immediate, and usage is recorded at zero credits — so
+this traffic appears in the dashboards and in abuse detection like anyone
+else's. Unmetered is not invisible.
+
+<Callout type="warn">
+  Two things are deliberately *not* the mechanism here.
+
+  **Not the shared secret.** `BARRELMAN_API_KEY` could have been exempted
+  instead, and that is worse in every way that shows up when something goes
+  wrong: it is anonymous in every dashboard, it cannot be revoked without
+  breaking every other holder of it, it cannot be scoped, and there is only
+  ever one.
+
+  **Not the `Origin` header.** It is written by the caller, so granting on it
+  means `curl -H 'Origin: https://your-app'` gets unlimited access. Origins are
+  used elsewhere in barrelman only to *narrow* a key, never to grant — and a
+  server-side proxy sends none at all.
+</Callout>
 
 ### Per-visitor
 

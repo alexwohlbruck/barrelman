@@ -68,18 +68,25 @@ use. That matches how MapTiler and Stadia license theirs.
 Enterprise is `contactOnly` — checkout refuses it with a "get in touch" rather
 than sending anyone to a payment page.
 
-### The plan that is not on the ladder
+### The plans that are not on the ladder
 
-There is a sixth, `demo`, which does not appear here, in `/account/plans`, or in
-the console's plan picker, because it cannot be bought. It is `internal: true`
-and an administrator assigns it. It serves the API **unmetered**, and is what
-runs the interactive demo on the landing page.
+Two, `demo` and `first-party`, which do not appear here, in `/account/plans`, or
+in the console's plan picker, because they cannot be bought. Both are
+`internal: true` and assigned by an administrator.
+
+`first-party` is for an application the operator runs themselves — Parchment, in
+our case. It is unmetered *and* unthrottled: metering your own product means
+billing yourself, and throttling it means rationing your own users. See
+[abuse controls](/self-hosting/abuse-controls) for why that is a plan rather
+than an exemption on the shared service key.
+
+`demo` serves the API **unmetered** too, and is what runs the interactive demo
+on the landing page.
 
 A demo cannot be a normal account: metered, it eventually stops, and it stops on
 whichever afternoon the page gets attention. What bounds it instead is a
 per-visitor rate limit, 240/min per address inside a 3,000/min account ceiling
-(4,800 and 60,000 for tiles).
-That is a better fit for the actual risk — one account, thousands of strangers,
+(4,800 and 60,000 for tiles). That is a better fit for the actual risk — one account, thousands of strangers,
 where an account-wide limit means the first scraper decides everyone else's
 experience.
 

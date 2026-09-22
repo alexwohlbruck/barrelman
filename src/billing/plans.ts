@@ -77,6 +77,20 @@ export interface Plan {
    */
   metered: boolean
   /**
+   * Whether requests skip the throttle entirely — every per-minute window and
+   * the concurrency caps.
+   *
+   * Beside `metered` rather than folded into it, because the demo plan is the
+   * standing proof that they are different questions: it is unmetered and very
+   * much limited. A flag rather than `requestsPerMinute: 0`, because 0 reads
+   * as "none" everywhere else in this file and would fail in the dangerous
+   * direction if it were ever misread.
+   *
+   * True only on `first-party`, and that plan is operator-assigned, so this
+   * cannot be granted to oneself.
+   */
+  unthrottled?: boolean
+  /**
    * Per-minute ceiling applied to each *source address* using the account,
    * rather than to the account as a whole.
    *
@@ -246,6 +260,52 @@ export const PLANS: Record<string, Plan> = {
     // Uncapped: the volume is contractual, not discovered at runtime.
     overageCapMultiple: 0,
     rank: 4,
+  },
+
+  /**
+   * An application the operator runs themselves — Parchment, here.
+   *
+   * Not a customer and not a demo: it is the product this instance exists to
+   * serve, so metering it means billing yourself, and throttling it means
+   * rationing your own users. It is unmetered and unthrottled, and assigned by
+   * an operator like `demo` is, which is the property that matters — unlimited
+   * access nobody can grant themselves.
+   *
+   * The alternative was to keep leaning on `BARRELMAN_API_KEY`, the shared
+   * service secret, and exempt that instead. An ordinary account key is better
+   * in every way that shows up when something goes wrong: it is attributable
+   * in the dashboards rather than anonymous, revocable on its own without
+   * breaking every other holder of one shared string, scopeable, and there can
+   * be one per first-party app. Usage is still recorded at zero credits, so
+   * this traffic stays visible to the dashboards and to abuse detection —
+   * "we cannot see it" being strictly worse than "we do not charge for it".
+   *
+   * Recognising the caller by `Origin` was considered and is not sound: the
+   * header is written by the caller (see `lib/origins.ts`, which uses origins
+   * only to *narrow* a key, never to grant), and the traffic this is for
+   * carries none — a server-side proxy is not a browser.
+   */
+  'first-party': {
+    id: 'first-party',
+    name: 'First-party',
+    description: 'An application the operator runs themselves. Unmetered and unthrottled.',
+    // Unmetered, so never read. Zero for the same reason as demo: flipping
+    // `metered` on should fail loudly, not grant a silent allowance.
+    monthlyCredits: 0,
+    // Never consulted while `unthrottled` holds. Kept plausible rather than 0
+    // so that clearing the flag falls back to a sane limit instead of none.
+    requestsPerMinute: 30_000,
+    unthrottled: true,
+    priceCents: 0,
+    metered: false,
+    overageAllowed: false,
+    overageMicrosPerCredit: 0,
+    commercialUse: true,
+    overageCapMultiple: 0,
+    internal: true,
+    // Below demo, which is below free — neither is a rung on the ladder, and
+    // ranking either above one would make it a fallback for an unknown plan.
+    rank: -2,
   },
 
   /**
