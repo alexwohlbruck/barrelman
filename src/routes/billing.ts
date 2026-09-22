@@ -28,7 +28,7 @@ import {
 import { getBalance as _getBalance } from '../services/credits.service'
 import { resolveSession as _resolveSession, requireUser } from '../middleware/session'
 import { consoleOrigin } from '../config/accounts.config'
-import { getPlan, listPlans } from '../billing/plans'
+import { getPlan, listPlans, publicPlan } from '../billing/plans'
 
 export interface BillingDeps {
   getProducts: typeof _getProducts
@@ -84,7 +84,7 @@ export function createBillingRoutes(overrides: Partial<BillingDeps> = {}) {
     '/config',
     async () => ({
       billingEnabled: billing.enabled,
-      plans: listPlans(),
+      plans: listPlans().map(publicPlan),
       products: await deps.getProducts(),
       creditPacks: Object.entries(billing.creditPacks).map(([productId, credits]) => ({ productId, credits })),
     }),
