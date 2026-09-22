@@ -374,6 +374,8 @@ export interface Plan {
   /** Derived server-side so clients don't repeat the arithmetic. */
   overagePerThousand?: number
   includedPricePerThousand?: number
+  /** Tiles are counted in their own, far larger window — one map view is 30-60 of them. */
+  tileRequestsPerMinute?: number
 }
 
 export interface CreditBalance {

@@ -12,9 +12,10 @@
  *   - An account key (`brm_live_…`) — rate-limited, and metered unless the
  *     account is on an unmetered plan (see `Plan.metered`; only the
  *     operator-assigned `demo` plan is).
- *   - The legacy shared secret in `BARRELMAN_API_KEY` — unmetered. This is how
- *     Parchment's own server calls barrelman, and how existing deployments keep
- *     working; it is a service credential, not a customer.
+ *   - The legacy shared secret in `BARRELMAN_API_KEY` — unmetered, and not
+ *     throttled either. This is how Parchment's own server calls barrelman, and
+ *     how existing deployments keep working; it is a service credential, not a
+ *     customer.
  *   - Nobody, when no auth is configured at all — open, for local development.
  *
  * NOTE ON ATTACHMENT: these are plain handlers, attached with
@@ -27,6 +28,7 @@
 import { creditCost, scopeAllows, type EndpointGroup } from '../billing/plans'
 import {
   checkPenalty,
+  checkServiceThrottle,
   checkThrottle,
   clearThrottleState,
   penaltyKeyFor,
@@ -273,6 +275,36 @@ export function apiAuth(group: EndpointGroup, overrides: Partial<ApiAuthDeps> = 
     }
 
     /**
+     * The service credential takes none of the machinery below.
+     *
+     * Everything from here down exists to be fair between customers and to
+     * keep a stranger from costing us money. The shared secret is neither: it
+     * is the operator's own backend, it is already unmetered, and the only
+     * thing a limit on it bounds is how fast the product it powers may work.
+     *
+     * It is also the caller those limits punish hardest, because of the shape
+     * it has rather than the volume it sends. Parchment proxies every user's
+     * map through one server, so the whole product arrives on one address
+     * under one credential — and being unauthenticated as far as the throttle
+     * was concerned, it was measured against the anonymous per-address
+     * ceiling, a limit sized for a scraper in an open deployment. A few
+     * seconds of panning spent it, and the basemap went to pieces.
+     *
+     * `BARRELMAN_SERVICE_RPM` puts a ceiling back for an operator who wants
+     * one; there is none by default.
+     */
+    if (caller.kind === 'service') {
+      const verdict = checkServiceThrottle(ip)
+      if (!verdict.allowed) {
+        return reject(429, { error: verdict.message, layer: verdict.layer }, verdict.retryAfterSeconds, {
+          strike: false,
+        })
+      }
+      stash(context, { caller, group, credits: 0, charged: false, throttleKey: null })
+      return
+    }
+
+    /**
      * The penalty box runs before every other check, and again once the caller
      * is identified. Putting it last would mean a caller who only ever trips an
      * early gate — a bad scope, an unknown key — accumulates strikes that are
@@ -316,9 +348,9 @@ export function apiAuth(group: EndpointGroup, overrides: Partial<ApiAuthDeps> = 
       })
     }
 
-    // Unmetered callers still pass the throttle — an open deployment or a
-    // misbehaving internal service can hammer the upstreams just as hard — but
-    // skip scopes and credits.
+    // Anonymous traffic, which only exists in an open deployment: no scopes and
+    // no credits to check, but still throttled — it is the one caller nobody
+    // vouched for.
     if (caller.kind !== 'account' || !caller.userId) {
       const verdict = checkThrottle({ ip, group })
       if (!verdict.allowed) {

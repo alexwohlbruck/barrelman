@@ -17,6 +17,8 @@
  * tile read but nowhere near a routing solve.
  */
 
+import { envNumber } from '../config/env'
+
 /**
  * Billing groups. Deliberately coarser than the route list: callers should be
  * able to reason about cost without memorising every path, and a new endpoint
@@ -288,6 +290,26 @@ export const PLANS: Record<string, Plan> = {
 
 export const DEFAULT_PLAN = 'free'
 
+/**
+ * Multiple of a plan's per-minute limit that tile requests get, counted in a
+ * window of their own (see `throttle.service.ts`).
+ *
+ * `requestsPerMinute` is shaped for API calls — one request, one answer — and
+ * a map is not that shape: a single viewport is thirty to sixty tiles, so a
+ * limit sized for geocoding is a few seconds of panning, and the basemap
+ * arrives in patches as tiles are refused and retried.
+ *
+ * The multiple is affordable because a tile is the cheapest thing we serve, 1
+ * credit against 12–40, so the credit allowance is already the honest budget
+ * for tile traffic. This ceiling only has to stop a scraper, not a map.
+ */
+export const TILE_RATE_MULTIPLIER = envNumber('BARRELMAN_TILE_RATE_MULTIPLIER', 20)
+
+/** What a plan allows in the tile window. */
+export function tileRequestsPerMinute(plan: Plan): number {
+  return Math.max(1, Math.round(plan.requestsPerMinute * TILE_RATE_MULTIPLIER))
+}
+
 export function getPlan(id: string | null | undefined): Plan {
   return PLANS[id ?? ''] ?? PLANS[DEFAULT_PLAN]!
 }
@@ -325,6 +347,20 @@ export function planForProductId(productId: string): Plan | null {
     if (configured && configured === productId) return plan
   }
   return null
+}
+
+/**
+ * A plan as a client renders it: the stored fields plus the figures every
+ * surface would otherwise recompute — the micro-dollar arithmetic, and the
+ * tile limit, which is not a stored field at all.
+ */
+export function publicPlan(plan: Plan) {
+  return {
+    ...plan,
+    tileRequestsPerMinute: tileRequestsPerMinute(plan),
+    overagePerThousand: overagePerThousand(plan),
+    includedPricePerThousand: includedPricePerThousand(plan),
+  }
 }
 
 export function creditCost(group: EndpointGroup): number {

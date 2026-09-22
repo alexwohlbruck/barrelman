@@ -205,6 +205,8 @@ See [abuse controls](/self-hosting/abuse-controls) for what these mean.
 | `BARRELMAN_ANON_RPM` | `120` | Per address when nobody is authenticated |
 | `BARRELMAN_IP_RPM` | `3000` | Floor for the per-address ceiling. An authenticated caller gets this or its plan's own limit, whichever is higher |
 | `BARRELMAN_PER_KEY_SHARE` | `0.8` | Share of the account budget one key may spend |
+| `BARRELMAN_TILE_RATE_MULTIPLIER` | `20` | Multiple of every per-minute limit that tiles get, in a window of their own. One map view is 30–60 tiles |
+| `BARRELMAN_SERVICE_RPM` | unset | Ceiling on `BARRELMAN_API_KEY`, which has none by default — it is the operator's own backend, not a customer |
 | `BARRELMAN_ISOCHRONE_CONCURRENCY_PER_ACCOUNT` | `2` | |
 | `BARRELMAN_TRANSIT_CONCURRENCY_PER_ACCOUNT` | `4` | |
 | `BARRELMAN_ROUTING_CONCURRENCY_PER_ACCOUNT` | `8` | |

@@ -10,6 +10,7 @@ import { describe, test, expect, beforeEach } from 'bun:test'
 import {
   acquireSlot,
   checkPenalty,
+  checkServiceThrottle,
   checkThrottle,
   clearThrottleState,
   penaltyKeyFor,
@@ -61,7 +62,7 @@ describe('anonymous traffic', () => {
 
 describe('per-key and per-account layers', () => {
   const request = (userId: string, keyId: string) =>
-    checkThrottle({ ip: '198.51.100.1', group: 'tiles', userId, keyId, plan: free })
+    checkThrottle({ ip: '198.51.100.1', group: 'search', userId, keyId, plan: free })
 
   test('a single key is refused at its share of the account budget', () => {
     for (let i = 0; i < PER_KEY; i += 1) expect(request('u1', 'k1').allowed).toBe(true)
@@ -99,7 +100,7 @@ describe('per-key and per-account layers', () => {
 
   test('a bigger plan gets a bigger budget', () => {
     const big = (i: number) =>
-      checkThrottle({ ip: '198.51.100.2', group: 'tiles', userId: 'u-dev', keyId: `k${i}`, plan: developer })
+      checkThrottle({ ip: '198.51.100.2', group: 'search', userId: 'u-dev', keyId: `k${i}`, plan: developer })
 
     // Spread across keys so only the account layer is in play. The free plan's
     // whole budget must fit comfortably inside developer's.
@@ -246,7 +247,7 @@ describe('address backstop', () => {
     for (let i = 0; i < 4_000; i += 1) {
       const verdict = checkThrottle({
         ip,
-        group: 'tiles',
+        group: 'search',
         userId: 'user-1',
         keyId: 'key-1',
         plan,
@@ -255,6 +256,62 @@ describe('address backstop', () => {
     }
 
     expect(refusedByAddress).toBe(0)
+  })
+})
+
+describe('the tile bucket', () => {
+  /**
+   * A plan's per-minute limit is sized for API calls. One map view is thirty to
+   * sixty tiles, so measuring a basemap against that limit is what makes a pan
+   * stutter — tiles get their own, far larger window.
+   */
+  const tile = () =>
+    checkThrottle({ ip: '198.51.100.8', group: 'tiles', userId: 'u1', keyId: 'k1', plan: free })
+
+  test('lets a map burst well past the plan\'s per-minute limit', () => {
+    for (let i = 0; i < free.requestsPerMinute * 4; i += 1) {
+      expect(tile().allowed).toBe(true)
+    }
+  })
+
+  test('still has a ceiling', () => {
+    let refused = false
+    for (let i = 0; i < free.requestsPerMinute * 40 && !refused; i += 1) {
+      refused = !tile().allowed
+    }
+
+    expect(refused).toBe(true)
+  })
+
+  /**
+   * The reason tiles get their own window rather than a bigger shared one: on
+   * a shared window one pan spends the budget every other endpoint is then
+   * measured against, and the map takes /search down with it.
+   */
+  test('a tile burst does not spend the budget for other endpoints', () => {
+    for (let i = 0; i < free.requestsPerMinute * 4; i += 1) tile()
+
+    const other = checkThrottle({
+      ip: '198.51.100.8',
+      group: 'search',
+      userId: 'u1',
+      keyId: 'k1',
+      plan: free,
+    })
+    expect(other.allowed).toBe(true)
+  })
+})
+
+describe('the service credential', () => {
+  /**
+   * `BARRELMAN_API_KEY` is the operator's own backend, not a customer. It is
+   * also the caller a per-address limit hurts most: Parchment proxies every
+   * user's map through one server, so the whole product arrives on one address.
+   */
+  test('is unlimited by default', () => {
+    for (let i = 0; i < 20_000; i += 1) {
+      expect(checkServiceThrottle('198.51.100.9').allowed).toBe(true)
+    }
   })
 })
 

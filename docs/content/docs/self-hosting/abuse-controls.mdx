@@ -21,6 +21,9 @@ anything on them.
 | **Per-account** | The plan's published limit | — |
 | **Concurrency** | Simultaneous isochrone / transit / routing | A caller inside their per-minute limit can still pin every engine |
 
+Two callers take none of this: the shared service credential, and — for the
+per-minute layers — tiles, which are counted separately. Both are below.
+
 A `429` names the layer that refused it, which is the difference between "slow
 down" and "spread traffic across more keys":
 
@@ -28,10 +31,46 @@ down" and "spread traffic across more keys":
 { "error": "This key is limited to 240 requests per minute. …", "layer": "key" }
 ```
 
+### Tiles are counted separately
+
+Every per-minute figure above is shaped for API calls: one request, one answer.
+A map is not that shape. One viewport is thirty to sixty tiles, so a plan's
+limit is a few seconds of panning, and what the user sees is a basemap arriving
+in patches as tiles are refused and retried.
+
+So tile requests count in a window of their own, at `BARRELMAN_TILE_RATE_MULTIPLIER`
+times whatever limit is under test — 20× by default. Their own window rather
+than a bigger shared one: on a shared window a single pan spends the budget
+every other endpoint is then measured against, and the map takes `/search` down
+with it.
+
+The multiple is affordable because a tile is the cheapest thing barrelman
+serves, 1 credit against 12–40 for routing and isochrones, so the credit
+allowance is already the real budget for tile traffic. This ceiling only has to
+stop a scraper, not a map. Lower the multiplier if your instance serves tiles
+from somewhere that cannot take the load.
+
+### The service credential
+
+`BARRELMAN_API_KEY` is not throttled at all.
+
+It is not a customer — it is the operator's own backend, it is already
+unmetered, and the only thing a limit on it bounds is how fast the product it
+powers may work. It is also the caller the layers above punish hardest, because
+of its shape rather than its volume: Parchment proxies every user's map through
+one server, so the whole product arrives on one address under one credential,
+and it was being measured against the anonymous per-address ceiling — a limit
+sized for a scraper in an open deployment.
+
+Set `BARRELMAN_SERVICE_RPM` to put a ceiling back. It is unset by default, and
+the tradeoff to weigh is that the secret is shared: anyone holding it gets the
+same exemption.
+
 ### Per-visitor
 
 Only for plans that set `requestsPerMinutePerIp` — today just `demo`, the
-operator-assigned plan behind the public demo.
+operator-assigned plan behind the public demo. The tile multiplier applies here
+too, so `demo`'s 240/min per visitor is 4,800/min of tiles.
 
 Every other layer assumes an account's traffic belongs to that account. A demo
 breaks the assumption: one account, thousands of unrelated visitors. An

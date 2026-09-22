@@ -22,9 +22,11 @@ import {
   overagePerThousand,
   PLANS,
   planForProductId,
+  publicPlan,
   purchasablePlans,
   scopeAllows,
   scopeAllowsAdmin,
+  tileRequestsPerMinute,
   type EndpointGroup,
 } from './plans'
 
@@ -231,6 +233,26 @@ describe('the demo plan', () => {
   test('is not commercial-use, and is not the fallback for an unknown plan', () => {
     expect(PLANS.demo!.commercialUse).toBe(false)
     expect(getPlan('nonexistent').id).toBe('free')
+  })
+})
+
+describe('the tile limit', () => {
+  /**
+   * One map view is thirty to sixty tiles, so a ceiling shaped for API calls is
+   * a few seconds of panning. A tile is also the cheapest thing on the list, so
+   * the credit allowance — not the rate ceiling — is the real budget for it.
+   */
+  test('is a generous multiple of the plan\'s own rate limit', () => {
+    for (const plan of listPlans()) {
+      expect(tileRequestsPerMinute(plan)).toBeGreaterThanOrEqual(plan.requestsPerMinute * 10)
+    }
+  })
+
+  test('is published alongside the plan, so no client recomputes it', () => {
+    const free = publicPlan(getPlan('free'))
+
+    expect(free.tileRequestsPerMinute).toBe(tileRequestsPerMinute(getPlan('free')))
+    expect(free.overagePerThousand).toBe(0)
   })
 })
 

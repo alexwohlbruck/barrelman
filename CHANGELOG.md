@@ -10,7 +10,28 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Changed
+
+* **Tile requests are counted in a rate window of their own, at twenty times a
+  plan's per-minute limit.** Those limits are shaped for API calls, one request
+  and one answer; a map is not that shape — a single viewport is thirty to
+  sixty tiles, so a ceiling sized for geocoding was a few seconds of panning,
+  after which the basemap arrived in patches as tiles were refused and retried.
+  A tile is also the cheapest thing barrelman serves, 1 credit against 12–40,
+  so the credit allowance was already the honest budget for it. Free now draws
+  6,000 tiles a minute, Developer 18,000, Scale 120,000, and a tile burst
+  spends no part of the budget the other endpoints are measured against. Tune
+  it with `BARRELMAN_TILE_RATE_MULTIPLIER`.
+
 ### Fixed
+
+* **The shared service credential is no longer rate limited.** `BARRELMAN_API_KEY`
+  is the operator's own backend rather than a customer, and it is already
+  unmetered — but the throttle saw no account behind it and measured it against
+  the *anonymous* per-address ceiling, 120 requests a minute, a limit meant for
+  a scraper in an open deployment. Anything proxying a map through one server
+  spent that in seconds. It now passes unthrottled; set `BARRELMAN_SERVICE_RPM`
+  to put a ceiling back.
 
 * **Building the map detail indexes no longer holds the API off its port.** They
   shipped inside `create-detail-views.sql`, which the API runs synchronously on
