@@ -15,7 +15,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 * **`bicycle_ways` now includes the streets a signed bike route follows.** A
   way in a `route=bicycle` relation with no bike tagging of its own comes back
   as `infra_type=bicycle_route`, so maps can mark the whole route rather than
-  only its laned stretches. Existing databases pick it up on the next full import.
+  only its laned stretches. Routes marked proposed, under construction or
+  "(Future)" are skipped. Existing databases pick it up on the next full import.
 
 * **A `first-party` plan, for an application the operator runs themselves.**
   Unmetered and unthrottled — every per-minute window and the concurrency caps

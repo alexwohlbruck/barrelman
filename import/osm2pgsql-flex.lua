@@ -159,8 +159,19 @@ end
 -- and read in stage 2, when osm2pgsql reprocesses exactly these ways.
 local bicycle_route_ways = {}
 
+-- Planned routes are often flagged only in the name: "Briar Creek Greenway (Future)".
+local function is_unbuilt_route(tags)
+    local state = tags['state']
+    if state == 'proposed' or state == 'construction' then return true end
+    local name = (tags['name'] or ''):lower()
+    for _, marker in ipairs({ 'future', 'proposed', 'planned', 'construction' }) do
+        if name:find(marker, 1, true) then return true end
+    end
+    return false
+end
+
 local function is_bicycle_route(tags)
-    return tags['type'] == 'route' and tags['route'] == 'bicycle'
+    return tags['type'] == 'route' and tags['route'] == 'bicycle' and not is_unbuilt_route(tags)
 end
 
 -- A street a signed route rides along, with no bike tagging of its own. Mere
