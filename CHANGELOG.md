@@ -37,6 +37,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
   spends no part of the budget the other endpoints are measured against. Tune
   it with `BARRELMAN_TILE_RATE_MULTIPLIER`.
 
+## [0.3.9] - 2026-09-17
+
 ### Fixed
 
 * **Building the map detail indexes no longer holds the API off its port.** They
@@ -48,6 +50,7 @@ does it — and the release pipeline turns it into the GitHub Release notes.
   import or by the new **Build Map Detail Tile Indexes** console task. Missing
   them costs speed, never correctness.
 
+## [0.3.8] - 2026-09-17
 
 ### Fixed
 
@@ -112,6 +115,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
   spatial indexes over each view's predicate bring that down to the rows the
   tile actually contains, which matters most on a cold cache, where those
   discarded rows were hundreds of milliseconds of random reads.
+
+## [0.3.7] - 2026-09-16
 
 ### Added
 
