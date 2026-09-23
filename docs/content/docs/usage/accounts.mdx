@@ -152,20 +152,20 @@ there is no alternative.
 
 ### Unmetered keys, and why nobody can mint one
 
-A key is metered because its account's plan is. The one plan that is not is
-`demo`, which serves the API without spending credits — it is what runs the
-demo on the landing page.
+A key is metered because its account's plan is. Two plans are not: `demo`,
+which runs the demo on the landing page, and `first-party`, for an application
+the operator runs themselves.
 
-There is no way to ask for it. It is not on the pricing page, has no checkout,
-and cannot be selected when creating a key; an administrator moves an account
-onto it from the console, and that is recorded in the moderation log like a
-suspension. That constraint is the whole design. The previous answer to this
+There is no way to ask for either. Neither is on the pricing page, neither has
+a checkout, and neither can be selected when creating a key; an administrator
+moves an account onto one from the console, and that is recorded in the
+moderation log like a suspension. That constraint is the whole design. The previous answer to this
 was a `brm_test_…` key any account could mint from the key-creation form, which
 made unmetered access self-service — roughly 432,000 free requests a day on a
 free account, invisible to abuse detection because test-key usage was never
 recorded.
 
-Unmetered means *not charged*, not *unbounded*:
+On `demo`, unmetered means *not charged*, not *unbounded*:
 
 | Still applies | Skipped |
 |---|---|
@@ -173,7 +173,14 @@ Unmetered means *not charged*, not *unbounded*:
 | Every throttle layer, plus a per-visitor one | Nothing else |
 | Usage recording, at zero credits | |
 
-The per-visitor limit is what replaces the credit ceiling. On a normal account
+`first-party` is the one place both go: it sets `unthrottled`, so the rate
+windows and the concurrency caps are skipped as well. Authentication, scopes,
+origin restrictions, suspension and usage recording all still apply — that is
+the difference between "we do not charge for it" and "we cannot see it". See
+[abuse controls](/self-hosting/abuse-controls) for why this is a plan rather
+than an exemption on the shared service key.
+
+The per-visitor limit is what replaces the credit ceiling on `demo`. On a normal account
 the unit of abuse is the account, because the traffic is the customer's own; a
 public demo is one account and thousands of strangers, so the limit that
 matters bounds each of them separately. Without it the first scraper to find

@@ -21,6 +21,9 @@ anything on them.
 | **Per-account** | The plan's published limit | — |
 | **Concurrency** | Simultaneous isochrone / transit / routing | A caller inside their per-minute limit can still pin every engine |
 
+Two callers take none of this: an account on the `first-party` plan, and — for
+the per-minute layers — tiles, which are counted separately. Both are below.
+
 A `429` names the layer that refused it, which is the difference between "slow
 down" and "spread traffic across more keys":
 
@@ -28,10 +31,64 @@ down" and "spread traffic across more keys":
 { "error": "This key is limited to 240 requests per minute. …", "layer": "key" }
 ```
 
+### Tiles are counted separately
+
+Every per-minute figure above is shaped for API calls: one request, one answer.
+A map is not that shape. One viewport is thirty to sixty tiles, so a plan's
+limit is a few seconds of panning, and what the user sees is a basemap arriving
+in patches as tiles are refused and retried.
+
+So tile requests count in a window of their own, at `BARRELMAN_TILE_RATE_MULTIPLIER`
+times whatever limit is under test — 20× by default. Their own window rather
+than a bigger shared one: on a shared window a single pan spends the budget
+every other endpoint is then measured against, and the map takes `/search` down
+with it.
+
+The multiple is affordable because a tile is the cheapest thing barrelman
+serves, 1 credit against 12–40 for routing and isochrones, so the credit
+allowance is already the real budget for tile traffic. This ceiling only has to
+stop a scraper, not a map. Lower the multiplier if your instance serves tiles
+from somewhere that cannot take the load.
+
+### Your own application
+
+An operator's own application is not a customer. Metering it means billing
+yourself, and throttling it means rationing your own users — and it is the
+caller the layers above punish hardest, because of its shape rather than its
+volume: a server-side proxy puts every one of its users behind one address and
+one credential, which is precisely what the per-address backstop is built to
+catch.
+
+The `first-party` plan is the answer. It is `internal: true` and
+operator-assigned, exactly like `demo`, and it sets `unthrottled: true` — every
+per-minute window and the concurrency caps are skipped. Assign it from
+`/console/accounts` and give the application an ordinary `brm_live_…` key.
+
+Everything else still applies. Scopes are enforced, origin restrictions are
+enforced, suspension is immediate, and usage is recorded at zero credits — so
+this traffic appears in the dashboards and in abuse detection like anyone
+else's. Unmetered is not invisible.
+
+<Callout type="warn">
+  Two things are deliberately *not* the mechanism here.
+
+  **Not the shared secret.** `BARRELMAN_API_KEY` could have been exempted
+  instead, and that is worse in every way that shows up when something goes
+  wrong: it is anonymous in every dashboard, it cannot be revoked without
+  breaking every other holder of it, it cannot be scoped, and there is only
+  ever one.
+
+  **Not the `Origin` header.** It is written by the caller, so granting on it
+  means `curl -H 'Origin: https://your-app'` gets unlimited access. Origins are
+  used elsewhere in barrelman only to *narrow* a key, never to grant — and a
+  server-side proxy sends none at all.
+</Callout>
+
 ### Per-visitor
 
 Only for plans that set `requestsPerMinutePerIp` — today just `demo`, the
-operator-assigned plan behind the public demo.
+operator-assigned plan behind the public demo. The tile multiplier applies here
+too, so `demo`'s 240/min per visitor is 4,800/min of tiles.
 
 Every other layer assumes an account's traffic belongs to that account. A demo
 breaks the assumption: one account, thousands of unrelated visitors. An

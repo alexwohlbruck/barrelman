@@ -17,6 +17,8 @@
  * tile read but nowhere near a routing solve.
  */
 
+import { envNumber } from '../config/env'
+
 /**
  * Billing groups. Deliberately coarser than the route list: callers should be
  * able to reason about cost without memorising every path, and a new endpoint
@@ -74,6 +76,20 @@ export interface Plan {
    * be granted to oneself.
    */
   metered: boolean
+  /**
+   * Whether requests skip the throttle entirely — every per-minute window and
+   * the concurrency caps.
+   *
+   * Beside `metered` rather than folded into it, because the demo plan is the
+   * standing proof that they are different questions: it is unmetered and very
+   * much limited. A flag rather than `requestsPerMinute: 0`, because 0 reads
+   * as "none" everywhere else in this file and would fail in the dangerous
+   * direction if it were ever misread.
+   *
+   * True only on `first-party`, and that plan is operator-assigned, so this
+   * cannot be granted to oneself.
+   */
+  unthrottled?: boolean
   /**
    * Per-minute ceiling applied to each *source address* using the account,
    * rather than to the account as a whole.
@@ -247,6 +263,52 @@ export const PLANS: Record<string, Plan> = {
   },
 
   /**
+   * An application the operator runs themselves — Parchment, here.
+   *
+   * Not a customer and not a demo: it is the product this instance exists to
+   * serve, so metering it means billing yourself, and throttling it means
+   * rationing your own users. It is unmetered and unthrottled, and assigned by
+   * an operator like `demo` is, which is the property that matters — unlimited
+   * access nobody can grant themselves.
+   *
+   * The alternative was to keep leaning on `BARRELMAN_API_KEY`, the shared
+   * service secret, and exempt that instead. An ordinary account key is better
+   * in every way that shows up when something goes wrong: it is attributable
+   * in the dashboards rather than anonymous, revocable on its own without
+   * breaking every other holder of one shared string, scopeable, and there can
+   * be one per first-party app. Usage is still recorded at zero credits, so
+   * this traffic stays visible to the dashboards and to abuse detection —
+   * "we cannot see it" being strictly worse than "we do not charge for it".
+   *
+   * Recognising the caller by `Origin` was considered and is not sound: the
+   * header is written by the caller (see `lib/origins.ts`, which uses origins
+   * only to *narrow* a key, never to grant), and the traffic this is for
+   * carries none — a server-side proxy is not a browser.
+   */
+  'first-party': {
+    id: 'first-party',
+    name: 'First-party',
+    description: 'An application the operator runs themselves. Unmetered and unthrottled.',
+    // Unmetered, so never read. Zero for the same reason as demo: flipping
+    // `metered` on should fail loudly, not grant a silent allowance.
+    monthlyCredits: 0,
+    // Never consulted while `unthrottled` holds. Kept plausible rather than 0
+    // so that clearing the flag falls back to a sane limit instead of none.
+    requestsPerMinute: 30_000,
+    unthrottled: true,
+    priceCents: 0,
+    metered: false,
+    overageAllowed: false,
+    overageMicrosPerCredit: 0,
+    commercialUse: true,
+    overageCapMultiple: 0,
+    internal: true,
+    // Below demo, which is below free — neither is a rung on the ladder, and
+    // ranking either above one would make it a fallback for an unknown plan.
+    rank: -2,
+  },
+
+  /**
    * The public demo — the hero on barrelman.dev, and anything else we run
    * ourselves to show the API working. Not for sale and not self-assignable:
    * an operator moves an account onto it, which is the whole point.
@@ -288,6 +350,26 @@ export const PLANS: Record<string, Plan> = {
 
 export const DEFAULT_PLAN = 'free'
 
+/**
+ * Multiple of a plan's per-minute limit that tile requests get, counted in a
+ * window of their own (see `throttle.service.ts`).
+ *
+ * `requestsPerMinute` is shaped for API calls — one request, one answer — and
+ * a map is not that shape: a single viewport is thirty to sixty tiles, so a
+ * limit sized for geocoding is a few seconds of panning, and the basemap
+ * arrives in patches as tiles are refused and retried.
+ *
+ * The multiple is affordable because a tile is the cheapest thing we serve, 1
+ * credit against 12–40, so the credit allowance is already the honest budget
+ * for tile traffic. This ceiling only has to stop a scraper, not a map.
+ */
+export const TILE_RATE_MULTIPLIER = envNumber('BARRELMAN_TILE_RATE_MULTIPLIER', 20)
+
+/** What a plan allows in the tile window. */
+export function tileRequestsPerMinute(plan: Plan): number {
+  return Math.max(1, Math.round(plan.requestsPerMinute * TILE_RATE_MULTIPLIER))
+}
+
 export function getPlan(id: string | null | undefined): Plan {
   return PLANS[id ?? ''] ?? PLANS[DEFAULT_PLAN]!
 }
@@ -325,6 +407,20 @@ export function planForProductId(productId: string): Plan | null {
     if (configured && configured === productId) return plan
   }
   return null
+}
+
+/**
+ * A plan as a client renders it: the stored fields plus the figures every
+ * surface would otherwise recompute — the micro-dollar arithmetic, and the
+ * tile limit, which is not a stored field at all.
+ */
+export function publicPlan(plan: Plan) {
+  return {
+    ...plan,
+    tileRequestsPerMinute: tileRequestsPerMinute(plan),
+    overagePerThousand: overagePerThousand(plan),
+    includedPricePerThousand: includedPricePerThousand(plan),
+  }
 }
 
 export function creditCost(group: EndpointGroup): number {

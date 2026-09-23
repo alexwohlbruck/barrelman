@@ -35,15 +35,7 @@ import {
 import { describeSuspension } from '../services/moderation.service'
 import { terms as termsConfig } from '../config/accounts.config'
 import { resolveSession as _resolveSession, requireUser } from '../middleware/session'
-import {
-  ALL_SCOPES,
-  ADMIN_SCOPE,
-  CREDIT_COSTS,
-  includedPricePerThousand,
-  isValidScope,
-  listPlans,
-  overagePerThousand,
-} from '../billing/plans'
+import { ALL_SCOPES, ADMIN_SCOPE, CREDIT_COSTS, isValidScope, listPlans, publicPlan } from '../billing/plans'
 
 /** Keys per account. High enough never to bind in practice, low enough to bound abuse. */
 const MAX_KEYS_PER_ACCOUNT = 50
@@ -107,13 +99,7 @@ export function createAccountRoutes(overrides: Partial<AccountDeps> = {}) {
   const publicRoutes = new Elysia({ prefix: '/account' }).get(
     '/plans',
     () => ({
-      plans: listPlans().map((plan) => ({
-        ...plan,
-        // Derived here so the pricing page does not have to reproduce the
-        // micro-dollar arithmetic in three different clients.
-        overagePerThousand: overagePerThousand(plan),
-        includedPricePerThousand: includedPricePerThousand(plan),
-      })),
+      plans: listPlans().map(publicPlan),
       creditCosts: CREDIT_COSTS,
       scopes: ALL_SCOPES,
     }),

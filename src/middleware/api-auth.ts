@@ -11,7 +11,8 @@
  *
  *   - An account key (`brm_live_…`) — rate-limited, and metered unless the
  *     account is on an unmetered plan (see `Plan.metered`; only the
- *     operator-assigned `demo` plan is).
+ *     operator-assigned `demo` and `first-party` plans are, and `first-party`
+ *     skips the throttle too — see `Plan.unthrottled`).
  *   - The legacy shared secret in `BARRELMAN_API_KEY` — unmetered. This is how
  *     Parchment's own server calls barrelman, and how existing deployments keep
  *     working; it is a service credential, not a customer.

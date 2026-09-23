@@ -12,6 +12,18 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ### Added
 
+* **A `first-party` plan, for an application the operator runs themselves.**
+  Unmetered and unthrottled — every per-minute window and the concurrency caps
+  are skipped — and, like `demo`, assigned by an operator rather than chosen,
+  so unlimited access is not something an account can grant itself. Usage is
+  still recorded at zero credits, so the traffic stays visible in the
+  dashboards and to abuse detection. Assign it at `/console/accounts` and give
+  the application an ordinary API key.
+
+  This replaces leaning on `BARRELMAN_API_KEY` for the same job. A real account
+  key is attributable, revocable on its own, scopeable, and there can be one
+  per application; the shared secret is none of those.
+
 * **Tile bundles: several map sources in one request.** A map view is thirty to
   sixty tiles *per source*, and a client drawing the detail overlays was asking
   for each of them separately — five requests for every tile of ground. Asking
@@ -28,6 +40,17 @@ does it — and the release pipeline turns it into the GitHub Release notes.
   deployment's `martin-config.yaml` and it joins.
 
 ### Changed
+
+* **Tile requests are counted in a rate window of their own, at twenty times a
+  plan's per-minute limit.** Those limits are shaped for API calls, one request
+  and one answer; a map is not that shape — a single viewport is thirty to
+  sixty tiles, so a ceiling sized for geocoding was a few seconds of panning,
+  after which the basemap arrived in patches as tiles were refused and retried.
+  A tile is also the cheapest thing barrelman serves, 1 credit against 12–40,
+  so the credit allowance was already the honest budget for it. Free now draws
+  6,000 tiles a minute, Developer 18,000, Scale 120,000, and a tile burst
+  spends no part of the budget the other endpoints are measured against. Tune
+  it with `BARRELMAN_TILE_RATE_MULTIPLIER`.
 
 * **Tiles are served with `stale-while-revalidate`.** They already carried a
   day's `max-age`; the week of `stale-while-revalidate` behind it means the
