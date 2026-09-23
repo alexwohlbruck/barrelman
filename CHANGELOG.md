@@ -16,7 +16,11 @@ does it — and the release pipeline turns it into the GitHub Release notes.
   way in a `route=bicycle` relation with no bike tagging of its own comes back
   as `infra_type=bicycle_route`, so maps can mark the whole route rather than
   only its laned stretches. Routes marked proposed, under construction or
-  "(Future)" are skipped. Existing databases pick it up on the next full import.
+  "(Future)" are skipped.
+* **Proposed and under-construction cycleways tagged with a lifecycle prefix.**
+  `proposed:highway=cycleway` with no `highway` tag now lands in `bicycle_ways`
+  with `state=proposed`, and likewise for `construction:highway`. Existing
+  databases pick up both changes with `import/backfill-bicycle-ways.sql`.
 
 * **A `first-party` plan, for an application the operator runs themselves.**
   Unmetered and unthrottled — every per-minute window and the concurrency caps
