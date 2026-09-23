@@ -273,7 +273,7 @@ describe('unmetered plans', () => {
     // on their own, so they cannot deny the demo to everybody else.
     const perIp = getPlan('demo').requestsPerMinutePerIp!
     const d = demo()
-    const instance = app('tiles', d)
+    const instance = app('search', d)
     const from = (ip: string) =>
       instance.handle(get({ authorization: `Bearer ${LIVE_KEY}`, 'x-forwarded-for': ip }))
 
@@ -309,7 +309,7 @@ describe('throttling', () => {
 
   test('refuses a single key at its share of the account budget', async () => {
     const d = deps({ resolveApiKey: mock(async () => resolved({ plan: 'free' })) })
-    const instance = app('tiles', d)
+    const instance = app('search', d)
     const request = () => instance.handle(get({ authorization: `Bearer ${LIVE_KEY}` }))
 
     const statuses: number[] = []
@@ -321,7 +321,7 @@ describe('throttling', () => {
 
   test('reports which layer refused, and a Retry-After', async () => {
     const d = deps({ resolveApiKey: mock(async () => resolved({ plan: 'free' })) })
-    const instance = app('tiles', d)
+    const instance = app('search', d)
     for (let i = 0; i < PER_KEY_LIMIT; i += 1) await instance.handle(get({ authorization: `Bearer ${LIVE_KEY}` }))
 
     const res = await instance.handle(get({ authorization: `Bearer ${LIVE_KEY}` }))
@@ -336,7 +336,7 @@ describe('throttling', () => {
     // Two distinct keys, each under its own per-key share, together exceed the
     // account's 60/min — the account layer is what catches that.
     const instance = (keyId: string) =>
-      app('tiles', deps({ resolveApiKey: mock(async () => resolved({ plan: 'free', keyId })) }))
+      app('search', deps({ resolveApiKey: mock(async () => resolved({ plan: 'free', keyId })) }))
 
     const a = instance('key-a')
     const b = instance('key-b')
@@ -353,7 +353,7 @@ describe('throttling', () => {
 
   test('a throttled request is counted but never charged', async () => {
     const d = deps({ resolveApiKey: mock(async () => resolved({ plan: 'free' })) })
-    const instance = app('tiles', d)
+    const instance = app('search', d)
     for (let i = 0; i < PER_KEY_LIMIT + 1; i += 1) await instance.handle(get({ authorization: `Bearer ${LIVE_KEY}` }))
 
     const calls = (d.recordUsage as ReturnType<typeof mock>).mock.calls
@@ -371,7 +371,7 @@ describe('throttling', () => {
    */
   test('being rate-limited never escalates into the penalty box', async () => {
     const d = deps({ resolveApiKey: mock(async () => resolved({ plan: 'free' })) })
-    const instance = app('tiles', d)
+    const instance = app('search', d)
 
     const layers = new Set<string>()
     // Well past the 25 strikes that used to box a caller.
@@ -391,7 +391,7 @@ describe('throttling', () => {
    */
   test('repeated scope failures still earn a penalty', async () => {
     const d = deps({ resolveApiKey: mock(async () => resolved({ scopes: ['search'] })) })
-    const instance = app('tiles', d)
+    const instance = app('isochrone', d)
 
     const statuses: number[] = []
     for (let i = 0; i < 30; i += 1) {
@@ -404,18 +404,18 @@ describe('throttling', () => {
 
   test('accounts are limited independently of each other', async () => {
     const first = deps({ resolveApiKey: mock(async () => resolved({ plan: 'free', userId: 'user-1', keyId: 'key-1' })) })
-    const firstApp = app('tiles', first)
+    const firstApp = app('search', first)
     for (let i = 0; i < PER_KEY_LIMIT + 1; i += 1) await firstApp.handle(get({ authorization: `Bearer ${LIVE_KEY}` }))
 
     const second = deps({ resolveApiKey: mock(async () => resolved({ plan: 'free', userId: 'user-2', keyId: 'key-2' })) })
-    const res = await app('tiles', second).handle(get({ authorization: `Bearer ${LIVE_KEY}` }))
+    const res = await app('search', second).handle(get({ authorization: `Bearer ${LIVE_KEY}` }))
 
     expect(res.status).toBe(200)
   })
 
   test('a bigger plan gets a bigger ceiling', async () => {
     const d = deps({ resolveApiKey: mock(async () => resolved({ plan: 'developer' })) })
-    const instance = app('tiles', d)
+    const instance = app('search', d)
 
     const statuses: number[] = []
     for (let i = 0; i < FREE_RPM + 1; i += 1) {
@@ -483,12 +483,106 @@ describe('throttling', () => {
 
   test('pruneRateBuckets does not disturb a live window', async () => {
     const d = deps({ resolveApiKey: mock(async () => resolved({ plan: 'free' })) })
-    const instance = app('tiles', d)
+    const instance = app('search', d)
     for (let i = 0; i < PER_KEY_LIMIT; i += 1) await instance.handle(get({ authorization: `Bearer ${LIVE_KEY}` }))
 
     pruneRateBuckets()
 
     expect((await instance.handle(get({ authorization: `Bearer ${LIVE_KEY}` }))).status).toBe(429)
+  })
+})
+
+/**
+ * The two callers the generic limits were wrong for: a browser drawing a map,
+ * and barrelman's own operator calling it.
+ */
+describe('tiles', () => {
+  const FREE_RPM = getPlan('free').requestsPerMinute
+
+  test('are not measured against a limit sized for API calls', async () => {
+    // One map view is thirty to sixty tiles, so a plan's per-minute limit is
+    // a few seconds of panning. Tiles count in their own, far larger window.
+    const d = deps({ resolveApiKey: mock(async () => resolved({ plan: 'free' })) })
+    const instance = app('tiles', d)
+
+    const statuses: number[] = []
+    for (let i = 0; i < FREE_RPM * 2; i += 1) {
+      statuses.push((await instance.handle(get({ authorization: `Bearer ${LIVE_KEY}` }))).status)
+    }
+
+    expect(statuses.every((status) => status === 200)).toBe(true)
+  })
+
+  test('do not spend the budget the other endpoints are checked against', async () => {
+    const d = deps({ resolveApiKey: mock(async () => resolved({ plan: 'free' })) })
+    for (let i = 0; i < FREE_RPM * 2; i += 1) {
+      await app('tiles', d).handle(get({ authorization: `Bearer ${LIVE_KEY}` }))
+    }
+
+    const search = await app('search', d).handle(get({ authorization: `Bearer ${LIVE_KEY}` }))
+    expect(search.status).toBe(200)
+  })
+})
+
+/**
+ * The operator's own application. Not a customer to be fair to and not a demo
+ * to contain — it is the product this instance exists to serve.
+ */
+describe('a first-party account', () => {
+  const firstParty = () => deps({ resolveApiKey: mock(async () => resolved({ plan: 'first-party' })) })
+
+  test('is not throttled', async () => {
+    const instance = app('tiles', firstParty())
+
+    const statuses: number[] = []
+    for (let i = 0; i < 2_000; i += 1) {
+      statuses.push((await instance.handle(get({ authorization: `Bearer ${LIVE_KEY}` }))).status)
+    }
+
+    expect(statuses.every((status) => status === 200)).toBe(true)
+  })
+
+  test('takes no concurrency slot, so its whole user base is not rationed to two', async () => {
+    let release: (() => void) | undefined
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve
+    })
+
+    const instance = new Elysia()
+      .onBeforeHandle(apiAuth('isochrone', firstParty()))
+      .onAfterHandle(apiAuthAfter)
+      .get('/probe', async () => {
+        await blocked
+        return { ok: true }
+      })
+
+    // The cap is 2 per account, and an operator's own app is one account.
+    const inFlight = Array.from({ length: 8 }, () => instance.handle(get({ authorization: `Bearer ${LIVE_KEY}` })))
+    await Bun.sleep(20)
+    release!()
+
+    const statuses = (await Promise.all(inFlight)).map((res) => res.status)
+    expect(statuses.every((status) => status === 200)).toBe(true)
+  })
+
+  test('is still scope-checked, and still suspendable', async () => {
+    const scoped = deps({ resolveApiKey: mock(async () => resolved({ plan: 'first-party', scopes: ['tiles'] })) })
+    expect((await app('search', scoped).handle(get({ authorization: `Bearer ${LIVE_KEY}` }))).status).toBe(403)
+
+    const held = deps({
+      resolveApiKey: mock(async () => resolved({ plan: 'first-party', suspended: true, suspensionReason: 'leaked' })),
+    })
+    expect((await app('tiles', held).handle(get({ authorization: `Bearer ${LIVE_KEY}` }))).status).toBe(403)
+  })
+
+  test('still records its usage, so it stays visible', async () => {
+    // Unlike the shared service secret, which is anonymous in every dashboard.
+    const d = firstParty()
+    await app('search', d).handle(get({ authorization: `Bearer ${LIVE_KEY}` }))
+
+    expect(d.recordUsage).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'user-1', endpoint: 'search', credits: 0 }),
+    )
   })
 })
 

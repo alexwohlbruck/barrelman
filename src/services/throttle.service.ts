@@ -22,12 +22,16 @@
  * Plus a concurrency cap on expensive groups, which is about protecting the
  * engines behind us rather than being fair to callers.
  *
+ * Every layer is counted per *rate bucket* rather than per caller alone, so
+ * tiles cannot spend the budget the other endpoints are checked against — see
+ * `bucketFor` below.
+ *
  * All state is in memory and therefore per-replica: with N replicas the
  * effective limits are N times these. That is fine for protecting the process
  * and the upstreams — the credit ledger in Postgres remains the accurate record
  * for anything with money attached.
  */
-import type { EndpointGroup, Plan } from '../billing/plans'
+import { TILE_RATE_MULTIPLIER, type EndpointGroup, type Plan } from '../billing/plans'
 import { envNumber } from '../config/env'
 
 interface Window {
@@ -115,6 +119,31 @@ const IP_LIMIT = envNumber('BARRELMAN_IP_RPM', 3_000)
  * or runaway key then cannot starve the account's other keys.
  */
 const PER_KEY_SHARE = envNumber('BARRELMAN_PER_KEY_SHARE', 0.8)
+
+// ── Rate buckets ────────────────────────────────────────────────────────
+
+/**
+ * Tiles are counted in a window of their own, at `TILE_RATE_MULTIPLIER` times
+ * whatever limit is being checked — see the constant for why the limits above
+ * are the wrong size for a map.
+ *
+ * Their own window rather than a bigger shared one: on a shared window a
+ * single pan spends the budget every other endpoint is then measured against,
+ * and a map turns into a 429 on /search.
+ */
+interface RateBucket {
+  /** Suffixed onto every counter key, so buckets cannot spend each other. */
+  id: string
+  /** Multiple of the limit under test this bucket is allowed. */
+  multiplier: number
+}
+
+const API_BUCKET: RateBucket = { id: 'api', multiplier: 1 }
+const TILE_BUCKET: RateBucket = { id: 'tiles', multiplier: TILE_RATE_MULTIPLIER }
+
+function bucketFor(group: EndpointGroup): RateBucket {
+  return group === 'tiles' ? TILE_BUCKET : API_BUCKET
+}
 
 // ── Penalty box ─────────────────────────────────────────────────────────
 
@@ -280,9 +309,11 @@ export function checkPenalty(key: string): ThrottleVerdict {
 
 export function checkThrottle(request: ThrottleRequest): ThrottleVerdict {
   const { ip, group, userId, keyId, plan } = request
+  const bucket = bucketFor(group)
+  const scaled = (limit: number) => Math.max(1, Math.round(limit * bucket.multiplier))
 
   if (!userId) {
-    const anon = perIp.hit(`anon:${ip}`, ANONYMOUS_IP_LIMIT)
+    const anon = perIp.hit(`anon:${bucket.id}:${ip}`, scaled(ANONYMOUS_IP_LIMIT))
     if (!anon.allowed) {
       return {
         allowed: false,
@@ -294,7 +325,15 @@ export function checkThrottle(request: ThrottleRequest): ThrottleVerdict {
     return { allowed: true }
   }
 
-  const accountLimit = plan?.requestsPerMinute ?? 60
+  /**
+   * An operator's own application takes none of the layers below — not the
+   * windows and not the concurrency cap. See `Plan.unthrottled`; the caps
+   * are per *account*, so a first-party app would otherwise ration its whole
+   * user base to two simultaneous isochrones.
+   */
+  if (plan?.unthrottled) return { allowed: true }
+
+  const accountLimit = scaled(plan?.requestsPerMinute ?? 60)
 
   /**
    * The address backstop, raised to the account's own limit when that is
@@ -307,8 +346,8 @@ export function checkThrottle(request: ThrottleRequest): ThrottleVerdict {
    *
    * Anonymous callers keep the fixed ceiling above — there is no plan to read.
    */
-  const addressLimit = Math.max(IP_LIMIT, accountLimit)
-  const address = perIp.hit(`ip:${ip}`, addressLimit)
+  const addressLimit = Math.max(scaled(IP_LIMIT), accountLimit)
+  const address = perIp.hit(`ip:${bucket.id}:${ip}`, addressLimit)
   if (!address.allowed) {
     return {
       allowed: false,
@@ -324,9 +363,9 @@ export function checkThrottle(request: ThrottleRequest): ThrottleVerdict {
    * rather than by exhausting the shared budget — on a public demo those are
    * the same number of requests but very different outcomes for everyone else.
    */
-  const perIpLimit = plan?.requestsPerMinutePerIp
+  const perIpLimit = plan?.requestsPerMinutePerIp && scaled(plan.requestsPerMinutePerIp)
   if (perIpLimit) {
-    const visitor = perAccountIp.hit(`${userId}:${ip}`, perIpLimit)
+    const visitor = perAccountIp.hit(`${userId}:${bucket.id}:${ip}`, perIpLimit)
     if (!visitor.allowed) {
       return {
         allowed: false,
@@ -339,7 +378,7 @@ export function checkThrottle(request: ThrottleRequest): ThrottleVerdict {
 
   if (keyId) {
     const keyLimit = Math.max(1, Math.floor(accountLimit * PER_KEY_SHARE))
-    const key = perKey.hit(keyId, keyLimit)
+    const key = perKey.hit(`${keyId}:${bucket.id}`, keyLimit)
     if (!key.allowed) {
       return {
         allowed: false,
@@ -350,7 +389,7 @@ export function checkThrottle(request: ThrottleRequest): ThrottleVerdict {
     }
   }
 
-  const account = perAccount.hit(userId, accountLimit)
+  const account = perAccount.hit(`${userId}:${bucket.id}`, accountLimit)
   if (!account.allowed) {
     return {
       allowed: false,

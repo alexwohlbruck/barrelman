@@ -219,6 +219,10 @@ async function sync() {
                 <Check class="size-3.5 text-[var(--success)]" />
                 {{ formatNumber(plan.requestsPerMinute) }} requests / minute
               </li>
+              <li v-if="!plan.contactOnly && plan.tileRequestsPerMinute" class="flex items-center gap-2">
+                <Check class="size-3.5 text-[var(--success)]" />
+                {{ formatNumber(plan.tileRequestsPerMinute) }} tiles / minute
+              </li>
               <li v-if="!plan.contactOnly" class="flex items-center gap-2 text-muted-foreground">
                 <Check class="size-3.5" :class="plan.overageAllowed ? 'text-[var(--success)]' : 'opacity-30'" />
                 <span v-if="plan.overageAllowed">Then {{ overageLabel(plan) }} / 1k credits</span>

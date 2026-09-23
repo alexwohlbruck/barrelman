@@ -61,7 +61,7 @@ describe('anonymous traffic', () => {
 
 describe('per-key and per-account layers', () => {
   const request = (userId: string, keyId: string) =>
-    checkThrottle({ ip: '198.51.100.1', group: 'tiles', userId, keyId, plan: free })
+    checkThrottle({ ip: '198.51.100.1', group: 'search', userId, keyId, plan: free })
 
   test('a single key is refused at its share of the account budget', () => {
     for (let i = 0; i < PER_KEY; i += 1) expect(request('u1', 'k1').allowed).toBe(true)
@@ -99,7 +99,7 @@ describe('per-key and per-account layers', () => {
 
   test('a bigger plan gets a bigger budget', () => {
     const big = (i: number) =>
-      checkThrottle({ ip: '198.51.100.2', group: 'tiles', userId: 'u-dev', keyId: `k${i}`, plan: developer })
+      checkThrottle({ ip: '198.51.100.2', group: 'search', userId: 'u-dev', keyId: `k${i}`, plan: developer })
 
     // Spread across keys so only the account layer is in play. The free plan's
     // whole budget must fit comfortably inside developer's.
@@ -246,7 +246,7 @@ describe('address backstop', () => {
     for (let i = 0; i < 4_000; i += 1) {
       const verdict = checkThrottle({
         ip,
-        group: 'tiles',
+        group: 'search',
         userId: 'user-1',
         keyId: 'key-1',
         plan,
@@ -255,6 +255,98 @@ describe('address backstop', () => {
     }
 
     expect(refusedByAddress).toBe(0)
+  })
+})
+
+describe('the tile bucket', () => {
+  /**
+   * A plan's per-minute limit is sized for API calls. One map view is thirty to
+   * sixty tiles, so measuring a basemap against that limit is what makes a pan
+   * stutter — tiles get their own, far larger window.
+   */
+  const tile = () =>
+    checkThrottle({ ip: '198.51.100.8', group: 'tiles', userId: 'u1', keyId: 'k1', plan: free })
+
+  test('lets a map burst well past the plan\'s per-minute limit', () => {
+    for (let i = 0; i < free.requestsPerMinute * 4; i += 1) {
+      expect(tile().allowed).toBe(true)
+    }
+  })
+
+  test('still has a ceiling', () => {
+    let refused = false
+    for (let i = 0; i < free.requestsPerMinute * 40 && !refused; i += 1) {
+      refused = !tile().allowed
+    }
+
+    expect(refused).toBe(true)
+  })
+
+  /**
+   * The reason tiles get their own window rather than a bigger shared one: on
+   * a shared window one pan spends the budget every other endpoint is then
+   * measured against, and the map takes /search down with it.
+   */
+  test('a tile burst does not spend the budget for other endpoints', () => {
+    for (let i = 0; i < free.requestsPerMinute * 4; i += 1) tile()
+
+    const other = checkThrottle({
+      ip: '198.51.100.8',
+      group: 'search',
+      userId: 'u1',
+      keyId: 'k1',
+      plan: free,
+    })
+    expect(other.allowed).toBe(true)
+  })
+})
+
+describe('an unthrottled plan', () => {
+  /**
+   * The operator's own application: not a customer to be fair to, and the
+   * caller every per-address layer punishes hardest, since its whole user base
+   * arrives from one server.
+   */
+  const firstParty = getPlan('first-party')
+
+  test('passes every layer, from one address, under one key', () => {
+    for (let i = 0; i < 20_000; i += 1) {
+      const verdict = checkThrottle({
+        ip: '198.51.100.9',
+        group: 'tiles',
+        userId: 'parchment',
+        keyId: 'k1',
+        plan: firstParty,
+      })
+      expect(verdict.allowed).toBe(true)
+    }
+  })
+
+  test('takes no concurrency slot', () => {
+    for (let i = 0; i < 20; i += 1) {
+      const verdict = checkThrottle({
+        ip: '198.51.100.9',
+        group: 'isochrone',
+        userId: 'parchment',
+        keyId: 'k1',
+        plan: firstParty,
+      })
+      expect(verdict.allowed).toBe(true)
+    }
+
+    // Nothing was acquired, so an ordinary account still gets its full cap.
+    expect(acquireSlot('someone-else', 'isochrone')).toBe(true)
+    expect(acquireSlot('someone-else', 'isochrone')).toBe(true)
+    expect(acquireSlot('someone-else', 'isochrone')).toBe(false)
+  })
+
+  test('does not exempt anybody else', () => {
+    let refused = false
+    for (let i = 0; i < 500 && !refused; i += 1) {
+      refused = !checkThrottle({ ip: '198.51.100.9', group: 'search', userId: 'u2', keyId: 'k2', plan: free }).allowed
+    }
+
+    expect(refused).toBe(true)
   })
 })
 
