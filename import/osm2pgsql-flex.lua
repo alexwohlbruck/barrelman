@@ -90,6 +90,12 @@ local function derive_bicycle_infra_type(tags)
         return nil, nil
     end
 
+    -- Lifecycle-prefix tagging drops `highway` altogether: `proposed:highway=cycleway`.
+    if not highway then
+        if tags['proposed:highway'] == 'cycleway' then return 'cycleway', 'proposed' end
+        if tags['construction:highway'] == 'cycleway' then return 'cycleway', 'construction' end
+    end
+
     -- cycleway:*=proposed or cycleway:*=construction on existing roads
     if cycleway == 'proposed' or cycleway_left == 'proposed' or cycleway_right == 'proposed'
         or tags['proposed:cycleway'] then
