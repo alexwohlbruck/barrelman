@@ -155,9 +155,30 @@ local function derive_bicycle_infra_type(tags)
     return nil, nil
 end
 
+-- Ways carried by a signed bicycle route. Filled from the relations in stage 1
+-- and read in stage 2, when osm2pgsql reprocesses exactly these ways.
+local bicycle_route_ways = {}
+
+local function is_bicycle_route(tags)
+    return tags['type'] == 'route' and tags['route'] == 'bicycle'
+end
+
+-- A street a signed route rides along, with no bike tagging of its own. Mere
+-- permission is outranked; a street that sends bikes to a separate path is not.
+local function is_route_street(object, tags, infra_type, state)
+    if not bicycle_route_ways[object.id] or not tags['highway'] or state then return false end
+    if infra_type ~= nil and infra_type ~= 'bicycle_yes' then return false end
+    if tags['bicycle'] == 'no' or tags['bicycle'] == 'use_sidepath' then return false end
+    for _, key in ipairs({ 'cycleway', 'cycleway:both', 'cycleway:left', 'cycleway:right' }) do
+        if tags[key] == 'separate' then return false end
+    end
+    return true
+end
+
 -- Insert a way into the bicycle_ways table if it has bicycle infrastructure
 local function try_insert_bicycle_way(object, tags, linestring)
     local infra_type, state = derive_bicycle_infra_type(tags)
+    if is_route_street(object, tags, infra_type, state) then infra_type = 'bicycle_route' end
     if not infra_type then return end
 
     local oneway_val = 0
@@ -386,6 +407,12 @@ function osm2pgsql.process_way(object)
     end
 end
 
+function osm2pgsql.select_relation_members(relation)
+    if is_bicycle_route(relation.tags) then
+        return { ways = osm2pgsql.way_member_ids(relation) }
+    end
+end
+
 function osm2pgsql.process_relation(object)
     if not next(object.tags) then return end
 
@@ -427,6 +454,12 @@ function osm2pgsql.process_relation(object)
             geom_type = 'line',
             admin_level = get_admin_level(tags),
         })
+
+        if is_bicycle_route(tags) then
+            for _, member in ipairs(object.members) do
+                if member.type == 'w' then bicycle_route_ways[member.ref] = true end
+            end
+        end
 
         -- Insert bicycle/mtb route relations into bicycle_routes
         if tags['route'] == 'bicycle' or tags['route'] == 'mtb' then
