@@ -1,7 +1,7 @@
 -- Brings an existing bicycle_ways up to the import rules for lifecycle-prefix
 -- bikeways and the streets signed routes follow, without a full reimport.
 -- Mirrors `derive_bicycle_infra_type` and `is_route_street` in
--- osm2pgsql-flex.lua. Idempotent; replication replaces these rows as usual.
+-- osm2pgsql-flex.lua. Idempotent. Run through scripts/backfill-bicycle-ways.sh.
 
 BEGIN;
 
@@ -27,20 +27,8 @@ WHERE g.osm_type = 'W'
   AND (g.tags->>'proposed:highway' = 'cycleway' OR g.tags->>'construction:highway' = 'cycleway')
   AND NOT EXISTS (SELECT 1 FROM bicycle_ways b WHERE b.osm_id = g.osm_id);
 
--- Way members of built bicycle routes, from the osm2pgsql middle table.
-CREATE TEMP TABLE route_ways ON COMMIT DROP AS
-SELECT DISTINCT unnest(r.parts[r.way_off + 1 : r.rel_off]) AS osm_id
-FROM planet_osm_rels r,
-  -- The middle table stores tags as a flat key, value, key, value array.
-  LATERAL (
-    SELECT jsonb_object_agg(r.tags[i], r.tags[i + 1]) AS t
-    FROM generate_series(1, array_length(r.tags, 1), 2) i
-  ) tags
-WHERE tags.t->>'type' = 'route'
-  AND tags.t->>'route' = 'bicycle'
-  AND coalesce(tags.t->>'state', '') NOT IN ('proposed', 'construction')
-  AND lower(coalesce(tags.t->>'name', '')) !~ '(future|proposed|planned|construction)';
-
+-- `route_ways` holds the way members of built bicycle routes; see
+-- scripts/backfill-bicycle-ways.sh, which reads them from the source PBF.
 CREATE TEMP TABLE route_streets ON COMMIT DROP AS
 SELECT g.*
 FROM route_ways rw
