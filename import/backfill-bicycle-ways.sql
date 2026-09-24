@@ -24,7 +24,8 @@ FROM geo_places g
 WHERE g.osm_type = 'W'
   AND g.geom_type = 'line'
   AND NOT g.tags ? 'highway'
-  AND (g.tags->>'proposed:highway' = 'cycleway' OR g.tags->>'construction:highway' = 'cycleway')
+  -- `@>` rather than `->>`, so the tags index is used instead of a full scan.
+  AND (g.tags @> '{"proposed:highway": "cycleway"}' OR g.tags @> '{"construction:highway": "cycleway"}')
   AND NOT EXISTS (SELECT 1 FROM bicycle_ways b WHERE b.osm_id = g.osm_id);
 
 -- `route_ways` holds the way members of built bicycle routes; see

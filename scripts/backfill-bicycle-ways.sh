@@ -8,6 +8,7 @@
 set -eu
 
 PBF="${1:-/data/region.osm.pbf}"
+SQL="$(cd "$(dirname "$0")/../import" && pwd)/backfill-bicycle-ways.sql"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
@@ -44,5 +45,5 @@ echo "$(wc -l < "$TMP/route-ways.txt") way members of built bicycle routes"
 psql -v ON_ERROR_STOP=1 -U "${POSTGRES_USER:-barrelman}" -d "${POSTGRES_DB:-barrelman}" <<SQL
 CREATE TEMP TABLE route_ways (osm_id bigint PRIMARY KEY);
 \copy route_ways FROM '$TMP/route-ways.txt'
-\i /app/import/backfill-bicycle-ways.sql
+\i $SQL
 SQL
