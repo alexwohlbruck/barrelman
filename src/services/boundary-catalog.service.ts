@@ -30,8 +30,8 @@ import type { RegionInput } from './region-store.service'
 export const GEOFABRIK_INDEX_URL = 'https://download.geofabrik.de/index-v1.json'
 
 /** OpenAddresses publishes one JSON source descriptor per dataset in this repo. */
-const OA_CONTENTS_API =
-  'https://api.github.com/repos/openaddresses/openaddresses/contents/sources'
+const OA_TREE_API =
+  'https://api.github.com/repos/openaddresses/openaddresses/git/trees/master?recursive=1'
 
 export interface Boundary {
   /** Geofabrik extract id, e.g. "us/colorado" or "germany". */
@@ -258,11 +258,11 @@ export interface OaLookup {
  *
  * Pelias's `imports.openaddresses.files` wants CSV paths like
  * "us/co/denver.csv". Those map 1:1 onto source descriptors in the
- * openaddresses repo (`sources/us/co/denver.json`), so listing the directory
- * gives the exact file set — which matters because coverage is wildly uneven:
- * New York has a single `statewide` source, Colorado has 55 county-level ones
- * and no statewide file at all. Guessing "<state>/statewide.csv" silently yields
- * zero addresses for most states.
+ * openaddresses repo (`sources/us/co/denver.json`), so listing everything under
+ * the region's directory gives the exact file set — which matters because
+ * coverage is wildly uneven: New York has a single `statewide` source, Colorado
+ * has 55 county-level ones and no statewide file at all. A country's directory
+ * holds only per-state subdirectories, so the listing has to be recursive.
  *
  * Best-effort by design. GitHub's unauthenticated API allows 60 requests/hour,
  * and this is one request per region definition, but a failure here must not
@@ -295,10 +295,7 @@ export async function lookupOpenAddresses(
   if (process.env.GITHUB_TOKEN) headers.Authorization = `Bearer ${process.env.GITHUB_TOKEN}`
 
   try {
-    const res = await fetchFn(`${OA_CONTENTS_API}/${dir}`, { headers })
-    if (res.status === 404) {
-      return { files: [], warning: `OpenAddresses has no "${dir}" directory — no address data for this region.` }
-    }
+    const res = await fetchFn(OA_TREE_API, { headers })
     if (res.status === 403) {
       return {
         files: [],
@@ -310,14 +307,21 @@ export async function lookupOpenAddresses(
       return { files: [], warning: `OpenAddresses lookup failed (HTTP ${res.status}).` }
     }
 
-    const entries = (await res.json()) as Array<{ name: string; type: string }>
-    const files = entries
-      .filter((e) => e.type === 'file' && e.name.endsWith('.json'))
-      .map((e) => `${dir}/${e.name.replace(/\.json$/, '.csv')}`)
+    const { tree, truncated } = (await res.json()) as {
+      tree: Array<{ path: string; type: string }>
+      truncated: boolean
+    }
+    const prefix = `sources/${dir}/`
+    const files = tree
+      .filter((e) => e.type === 'blob' && e.path.startsWith(prefix) && e.path.endsWith('.json'))
+      .map((e) => e.path.slice('sources/'.length).replace(/\.json$/, '.csv'))
       .sort()
 
     if (!files.length) {
-      return { files: [], warning: `No OpenAddresses sources found under "${dir}".` }
+      return { files: [], warning: `No OpenAddresses sources found under "${dir}" — no address data for this region.` }
+    }
+    if (truncated) {
+      return { files, warning: 'GitHub truncated the OpenAddresses source listing, so some address files may be missing.' }
     }
     return { files }
   } catch (err) {
@@ -353,6 +357,13 @@ export function suggestRegionKey(id: string): string {
     .replace(/^-+|-+$/g, '')
 }
 
+/** FIPS codes for the US states a boundary covers — every one of them for the whole country. */
+export function tigerStatesFor(boundary: Boundary): number[] {
+  const states = boundary.iso3166_2.flatMap((iso) => US_STATES_BY_ISO[iso.toUpperCase()] ?? [])
+  if (!states.length && boundary.iso3166_1.includes('US')) return Object.values(US_STATES_BY_ISO).map((s) => s.fips)
+  return states.map((s) => s.fips)
+}
+
 /**
  * Turn a catalog entry into a ready-to-save region definition, filling every
  * field the import pipeline needs from the boundary's own metadata.
@@ -372,11 +383,7 @@ export async function deriveRegion(
   if (oa.warning) warnings.push(oa.warning)
   if (oa.files.length) sources.openaddresses = 'OpenAddresses source listing'
 
-  const tigerStates: number[] = []
-  for (const iso of boundary.iso3166_2) {
-    const state = US_STATES_BY_ISO[iso.toUpperCase()]
-    if (state) tigerStates.push(state.fips)
-  }
+  const tigerStates = tigerStatesFor(boundary)
   if (tigerStates.length) sources.tigerStates = 'US Census FIPS codes'
 
   if (!boundary.updatesUrl) {
