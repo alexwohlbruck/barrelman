@@ -10,6 +10,18 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Added
+
+* **Build the address index from the console.** "Build Address Index" builds
+  the Pelias geocoder from each region's address settings, so street-address
+  search no longer needs a hand-run provisioning script as a separate user.
+
+### Fixed
+
+* **A country-sized region now gets its address files.** Adding the United
+  States by name used to leave its OpenAddresses files and TIGER states empty,
+  so address search had nothing to import; it now lists every state's sources.
+
 ## [0.4.0] - 2026-09-23
 
 ### Added

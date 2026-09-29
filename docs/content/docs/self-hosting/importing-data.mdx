@@ -229,8 +229,8 @@ Pelias runs as a separate stack behind Compose profiles. Elasticsearch alone nee
 
 <Callout type="warn" title="This step wants the repository, not just the Compose file">
 Unlike everything above it, Pelias is driven by files the curl install does not
-fetch — `pelias/provision.sh`, `pelias/.env.example`, and the `pelias` CLI's
-expectations about the directory it runs in. Clone the repo over your install
+fetch — `pelias/docker-compose.yml`, `pelias/pelias.json` and
+`pelias/.env.example`. Clone the repo over your install
 directory before starting:
 
 ```bash
@@ -242,17 +242,19 @@ Keep your existing `.env` and `docker-compose.yml`; you only need the `pelias/`
 contents.
 </Callout>
 
-First regenerate the geocoder's coverage so it matches `REGIONS`, create the data
-directory Elasticsearch will own, then start the two lean services:
+The index is built from each selected region's address settings — its
+OpenAddresses files, Who's-on-First ids and OSM extracts — so check those in the
+console (**Regions**) first. A region added by name has them filled in; one
+typed by hand starts with none, and then only OSM addresses are indexed.
+
+Create the data directory Elasticsearch will own, then start it:
 
 ```bash
-docker compose exec barrelman-ops bun run scripts/generate-pelias-config.ts
-
 # Elasticsearch runs as uid 1000 and cannot create its own directories under a
 # root-owned bind mount.
 mkdir -p pelias/data && sudo chown -R 1000:1000 pelias/data
 
-docker compose --profile pelias up -d
+docker compose --profile pelias up -d elasticsearch
 ```
 
 <Callout type="warn" title="Skip the `chown` and Elasticsearch crash-loops">
@@ -264,72 +266,39 @@ ElasticsearchException[failed to bind service];
   nested: AccessDeniedException[/usr/share/elasticsearch/data/nodes];
 ```
 
-`pelias_api` starts fine and answers queries regardless, so the stack looks
-half-working: every geocode just returns nothing. Fix the ownership and
-`docker restart pelias_elasticsearch`.
+Fix the ownership and `docker restart pelias_elasticsearch`.
 </Callout>
 
-The generator reports exactly what it wrote and where. Check the path is the
-**host** file — that is the copy the Pelias containers bind-mount, and a stale
-one silently geocodes the wrong part of the world:
+Now build the index: run **Build Address Index** from the console's Scripts
+page, or from a shell:
 
-```
-Wrote /app/pelias/pelias.json
-  regions: colorado
-  osm extracts: 1
-  openaddresses files: 55
-  wof places: 0, tiger states: 8
+```bash
+docker compose exec -d barrelman-ops bun run scripts/build-pelias.ts
+docker compose logs -f barrelman-ops
 ```
 
-`wof places: 0` is normal — Who's-on-First IDs are one of the two fields the
-region resolver deliberately does not guess.
+It regenerates `pelias/pelias.json` from `REGIONS`, creates the schema, downloads
+the sources, prepares street polylines and imports everything, then restarts
+`pelias_api` if it exists. On Colorado that took about **25 minutes** and
+produced 7.31M documents in a 1.9 GB index; a whole country takes most of a day
+and tens of GB. Downloads are kept, so a failed run resumes where it stopped.
 
-<Callout type="warn" title="Older installs: the generator needs a Compose file from 2026-08 or later">
+Start the API once the index is built:
+
+```bash
+docker compose --profile pelias up -d api
+```
+
+Re-importing overwrites documents but never deletes them. After removing a
+region or address files, run it with **Reset index** to drop and rebuild.
+
+<Callout type="warn" title="Older installs: the build needs a Compose file from 2026-08 or later">
 `barrelman-ops` only gained its `./pelias:/app/pelias` mount recently. Without
-it the command above dies with `ENOENT … /app/pelias/pelias.json`, because
-`pelias/` is excluded from the ops image and the container has no path to the
-host's config. If you see that error, re-fetch `docker-compose.yml` and run
+it the build dies with `ENOENT … /app/pelias/pelias.json`, because `pelias/` is
+excluded from the ops image and the container has no path to the host's config.
+If you see that error, re-fetch `docker-compose.yml` and run
 `docker compose up -d barrelman-ops`.
 </Callout>
-
-Now build the index. On Colorado this took about **25 minutes** to download the
-sources, prepare polylines and import them, and produced 7.31M documents in a
-1.9 GB index. A whole country takes hours.
-
-The `pelias` CLI will not run as root. Every other step in this guide runs as
-root, so this one needs an ordinary user account. Install the CLI and create
-that account first, as root:
-
-```bash
-git clone https://github.com/pelias/docker.git /opt/pelias-docker
-ln -sf /opt/pelias-docker/pelias /usr/local/bin/pelias
-
-useradd -m -u 1000 -s /bin/bash barrelman   # uid 1000 already owns pelias/data
-usermod -aG docker barrelman
-chown -R 1000:1000 /opt/barrelman/pelias
-```
-
-Then run the build as that user:
-
-```bash
-su - barrelman -c 'cd /opt/barrelman/pelias && ./provision.sh'
-```
-
-<Callout type="warn" title="`sudo -u` does not work here">
-The CLI works out which user to run as from `id -u ${SUDO_USER-${USER}}`. When
-you use `sudo` from root, `SUDO_USER` is set to `root`, so the CLI still sees
-root and prints the same "You are running as root" error. It looks as though the
-command was ignored. Use `su -` instead.
-</Callout>
-
-`provision.sh` checks the other host requirements before it starts. If any are
-missing, it prints the commands to run as root and stops, so it will not fail
-halfway through. When it finishes, it prints the command to start the API.
-
-[`pelias/README.md`](https://github.com/alexwohlbruck/barrelman/blob/main/pelias/README.md)
-explains each step on its own. The step people most often miss is
-`pelias prepare polylines`. Skip it and the `street` layer stays empty, so
-searching for a street name returns nothing.
 
 ## Verify
 
