@@ -27,6 +27,7 @@ const PELIAS_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '../pelias')
 // Elasticsearch owns the data dir as uid 1000; importers must write as the same user.
 const DEFAULT_USER = '1000:1000'
 const INDEX = 'pelias'
+const OA_BATCH = 50
 
 const log = (msg: string) => console.log(`[${new Date().toTimeString().slice(0, 8)}] [pelias] ${msg}`)
 
@@ -135,6 +136,36 @@ async function elasticUrl(): Promise<string> {
   throw new Error('Elasticsearch is running but unreachable from here')
 }
 
+async function withRetries(attempts: number, fn: () => Promise<void>): Promise<void> {
+  for (let i = 1; ; i++) {
+    try {
+      return await fn()
+    } catch (err) {
+      if (i === attempts) throw err
+      log(`attempt ${i} of ${attempts} failed, retrying in ${i * 30}s`)
+      await Bun.sleep(i * 30_000)
+    }
+  }
+}
+
+/**
+ * The downloader resolves every file against the OpenAddresses API at once, and
+ * a single 5xx among thousands aborts the run, so fetch in batches and skip
+ * files already on disk.
+ */
+async function downloadOpenAddresses(files: string[]): Promise<void> {
+  const localData = isAbsolute(dataDir) ? null : resolve(PELIAS_DIR, dataDir)
+  const missing = files.filter(
+    (f) => !localData || !existsSync(`${localData}/openaddresses/${f.replace(/\.csv$/, '')}.geojson`),
+  )
+  log(`openaddresses: ${files.length - missing.length} of ${files.length} files already downloaded`)
+  for (let i = 0; i < missing.length; i += OA_BATCH) {
+    writePeliasConfig({ ...regions, peliasOpenaddresses: missing.slice(i, i + OA_BATCH) })
+    await withRetries(3, () => run('openaddresses', ['./bin/download']))
+  }
+  writePeliasConfig(regions)
+}
+
 async function waitForElastic(url: string): Promise<void> {
   for (let i = 0; i < 60; i++) {
     const res = await fetch(`${url}/_cluster/health`).catch(() => null)
@@ -171,7 +202,7 @@ if (!withAddresses) {
 }
 
 await run('whosonfirst', ['./bin/download'])
-if (withAddresses) await run('openaddresses', ['./bin/download'])
+if (withAddresses) await downloadOpenAddresses(regions.peliasOpenaddresses)
 await run('openstreetmap', ['./bin/download'])
 // Street names come only from this Valhalla extract; skip it and street search is empty.
 await run('polylines', ['bash', './docker_extract.sh'])
