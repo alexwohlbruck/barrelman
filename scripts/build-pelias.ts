@@ -30,6 +30,11 @@ const INDEX = 'pelias'
 const OA_BATCH = 50
 // The highway types `pbf streets` turns into street documents.
 const STREET_HIGHWAYS = 'motorway,primary,residential,road,secondary,service,tertiary,trunk'
+// `pbf streets` needs roughly ten times a file's size in memory.
+const STREET_CHUNK_BYTES = 150 * 1024 ** 2
+const STREET_MEMORY = '4g'
+
+type Bbox = [west: number, south: number, east: number, north: number]
 
 const log = (msg: string) => console.log(`[${new Date().toTimeString().slice(0, 8)}] [pelias] ${msg}`)
 
@@ -117,13 +122,18 @@ async function startElastic(): Promise<string> {
   return networks.split(' ')[0]
 }
 
-async function run(name: string, command: string[], { user }: { user?: string } = {}): Promise<void> {
+async function run(
+  name: string,
+  command: string[],
+  { user, memory }: { user?: string; memory?: string } = {},
+): Promise<void> {
   const service = services[name]
   log(`${name}: ${command.join(' ')}`)
   await docker([
     'run', '--rm',
     '--network', network,
     '--user', user ?? (interpolate(service.user ?? '') || DEFAULT_USER),
+    ...(memory ? ['--memory', memory, '--memory-swap', memory] : []),
     ...volumeArgs(service),
     service.image,
     ...command,
@@ -185,10 +195,39 @@ async function osmium(args: string[]): Promise<void> {
   if ((await proc.exited) !== 0) throw new Error(`osmium ${args[0]} failed`)
 }
 
+async function osmiumBbox(pbf: string): Promise<Bbox> {
+  const proc = Bun.spawn(['osmium', 'fileinfo', '-e', '-g', 'data.bbox', pbf], { stdout: 'pipe', stderr: 'inherit' })
+  const out = await new Response(proc.stdout).text()
+  if ((await proc.exited) !== 0) throw new Error(`osmium fileinfo failed on ${basename(pbf)}`)
+  const box = out.match(/-?[\d.]+/g)?.map(Number)
+  if (box?.length !== 4) throw new Error(`no bounding box in ${basename(pbf)}`)
+  return box as Bbox
+}
+
+/** Halve a PBF along its longer side until every piece fits `pbf streets`, deleting the parents. */
+async function splitForStreets(pbf: string, box: Bbox, pieces: string[], depth = 0): Promise<void> {
+  if (statSync(pbf).size <= STREET_CHUNK_BYTES || depth >= 12) {
+    pieces.push(pbf)
+    return
+  }
+  const [w, s, e, n] = box
+  const halves: Bbox[] =
+    e - w >= n - s
+      ? [[w, s, (w + e) / 2, n], [(w + e) / 2, s, e, n]]
+      : [[w, s, e, (s + n) / 2], [w, (s + n) / 2, e, n]]
+  for (const [i, half] of halves.entries()) {
+    const part = pbf.replace(/\.osm\.pbf$/, `${i}.osm.pbf`)
+    await osmium(['extract', '--overwrite', '--strategy', 'complete_ways', '-b', half.join(','), pbf, '-o', part])
+    await splitForStreets(part, half, pieces, depth + 1)
+  }
+  rmSync(pbf)
+}
+
 /**
  * Build the street-name extract. Pelias's docker_extract.sh refuses any PBF over
  * 1 GB because `pbf streets` holds it in memory, so cut each extract down to the
- * named highways `pbf streets` reads first — the US shrinks from 12 GB to 1.6 GB.
+ * named highways it reads, split that into small pieces, and convert them one at
+ * a time under a memory cap.
  */
 async function preparePolylines(extracts: string[]): Promise<void> {
   const localData = localDataDir()
@@ -203,22 +242,28 @@ async function preparePolylines(extracts: string[]): Promise<void> {
   }
 
   mkdirSync(dir, { recursive: true })
-  const streets = await Promise.all(
-    pbfs.map(async (pbf, i) => {
-      const typed = `${dir}/streets-${i}-typed.osm.pbf`
-      const named = `${dir}/streets-${i}.osm.pbf`
-      log(`polylines: filtering ${basename(pbf)} to named streets`)
-      await osmium(['tags-filter', '--overwrite', pbf, `w/highway=${STREET_HIGHWAYS}`, '-o', typed])
-      await osmium(['tags-filter', '--overwrite', typed, 'w/name', '-o', named])
-      rmSync(typed)
-      return `/data/polylines/${basename(named)}`
-    }),
-  )
-  const convert = streets.map((f) => `pbf streets ${f} >> /data/polylines/extract.0sv.tmp`).join(' && ')
-  await run('polylines', ['sh', '-c', `: > /data/polylines/extract.0sv.tmp && ${convert} && mv /data/polylines/extract.0sv.tmp /data/polylines/extract.0sv`], {
-    user: '0',
-  })
-  for (const f of streets) rmSync(`${dir}/${basename(f)}`)
+  const pieces: string[] = []
+  for (const [i, pbf] of pbfs.entries()) {
+    const typed = `${dir}/streets-${i}-typed.osm.pbf`
+    const named = `${dir}/streets-${i}-.osm.pbf`
+    log(`polylines: filtering ${basename(pbf)} to named streets`)
+    await osmium(['tags-filter', '--overwrite', pbf, `w/highway=${STREET_HIGHWAYS}`, '-o', typed])
+    await osmium(['tags-filter', '--overwrite', typed, 'w/name', '-o', named])
+    rmSync(typed)
+    await splitForStreets(named, await osmiumBbox(named), pieces)
+  }
+  log(`polylines: converting ${pieces.length} pieces`)
+
+  const tmp = '/data/polylines/extract.0sv.tmp'
+  await run('polylines', ['sh', '-c', `: > ${tmp}`], { user: '0' })
+  for (const piece of pieces) {
+    await run('polylines', ['sh', '-c', `pbf streets /data/polylines/${basename(piece)} >> ${tmp}`], {
+      user: '0',
+      memory: STREET_MEMORY,
+    })
+    rmSync(piece)
+  }
+  await run('polylines', ['mv', tmp, '/data/polylines/extract.0sv'], { user: '0' })
 }
 
 async function waitForElastic(url: string): Promise<void> {
