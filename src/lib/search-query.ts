@@ -74,3 +74,14 @@ export function buildTsQueryText(words: string[], prefixLast: boolean): string {
   }
   return parts.join(' & ')
 }
+
+/** Canonical street types (see SYNONYMS): "Elm Street", "Michigan Ave", "Ocean Pkwy". */
+const STREET_TYPES = new Set(['st', 'av', 'blvd', 'rd', 'dr', 'pl', 'pkwy', 'ter', 'ct', 'ln', 'hwy', 'sq', 'plz', 'way', 'cir'])
+
+/** True when the query names a street: two or more words, the last a street type. */
+export function isStreetQuery(words: string[]): boolean {
+  const cleaned = words.map((w) => w.toLowerCase().replace(/[^a-z0-9]/g, '')).filter(Boolean)
+  if (cleaned.length < 2) return false
+  const last = cleaned[cleaned.length - 1]
+  return STREET_TYPES.has(SYNONYMS[last] || last)
+}

@@ -5,7 +5,7 @@ import { generateQueryEmbedding } from '../lib/embeddings'
 import { forwardGeocode } from './geocode.service'
 import { searchTransitRoutes, searchTransitStops } from './transit-search.service'
 import { reconcileTransitHits } from '../lib/transit-search'
-import { buildTsQueryText } from '../lib/search-query'
+import { buildTsQueryText, isStreetQuery } from '../lib/search-query'
 import { envNumber } from '../config/env'
 
 // ── Autocomplete fast path ──────────────────────────────────────────────────
@@ -169,6 +169,8 @@ export async function searchPlaces(
   // global POI retry (Pelias already answers these, and it returns in <10ms
   // where the retry costs ~250ms) and to decide result ordering further down.
   const addressLike = /^\s*\d/.test(sanitizedQuery)
+  // A street name ("elm street") is answered by Pelias's street layer, so it leads too.
+  const streetLike = !addressLike && isStreetQuery(sanitizedQuery.split(/\s+/))
 
   // Address geocoding (Pelias) runs in parallel with the PostGIS layers so
   // street addresses appear alongside POIs without adding latency. Text queries
@@ -713,7 +715,7 @@ export async function searchPlaces(
     // barrelman's rows, so a place already returned from PostGIS isn't repeated.
     const seenIds = new Set(results.map((r: any) => r.id))
     const fresh = addressResults.filter((a) => !seenIds.has(a.id))
-    results = addressLike ? [...fresh, ...results] : [...results, ...fresh]
+    results = addressLike || streetLike ? [...fresh, ...results] : [...results, ...fresh]
     results = results.slice(0, limit)
   }
 

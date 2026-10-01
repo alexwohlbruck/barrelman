@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test'
-import { buildTsQueryText } from './search-query'
+import { buildTsQueryText, isStreetQuery } from './search-query'
 
 describe('buildTsQueryText', () => {
   test('expands a query-side abbreviation to every spelling', () => {
@@ -44,5 +44,19 @@ describe('buildTsQueryText', () => {
 
   test('plain words pass through unchanged', () => {
     expect(buildTsQueryText(['divine', 'barrel'], true)).toBe('divine & barrel:*')
+  })
+})
+
+describe('isStreetQuery', () => {
+  test('a name followed by a street type, in any spelling', () => {
+    expect(isStreetQuery(['elm', 'street'])).toBe(true)
+    expect(isStreetQuery(['Michigan', 'Ave'])).toBe(true)
+    expect(isStreetQuery(['ocean', 'pkwy.'])).toBe(true)
+  })
+
+  test('a lone street type, a place name or a saint is not a street', () => {
+    expect(isStreetQuery(['street'])).toBe(false)
+    expect(isStreetQuery(['jackson', 'heights'])).toBe(false)
+    expect(isStreetQuery(['blue', 'star'])).toBe(false)
   })
 })
