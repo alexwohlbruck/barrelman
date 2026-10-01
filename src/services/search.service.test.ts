@@ -107,6 +107,11 @@ describe('searchPlaces — layer execution', () => {
     expect(mockExecute).toHaveBeenCalledTimes(6)
   })
 
+  test('skips trigram for an address-shaped query, which Pelias answers', async () => {
+    await searchPlaces({ query: '12 elm st', autocomplete: true })
+    expect(mockExecute).toHaveBeenCalledTimes(5)
+  })
+
   test('skips trigram entirely for short queries (≤4 chars) — 5 layers only', async () => {
     await searchPlaces({ query: 'cafe', autocomplete: true })
     expect(mockExecute).toHaveBeenCalledTimes(5)

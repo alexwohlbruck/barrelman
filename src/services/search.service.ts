@@ -407,7 +407,8 @@ export async function searchPlaces(
     //
     // So defer it: issue the precise layers first and only reach for trigram
     // when they came back short. A well-spelled query never pays for it.
-    const runTrigram = !localAutocomplete && sanitizedQuery.length > 4
+    // An address-shaped query is answered by Pelias; fuzzy POI names add only the wait.
+    const runTrigram = !localAutocomplete && sanitizedQuery.length > 4 && !addressLike
 
     // Layer 3: Abbreviation + codes match
     // Split into two separate queries so codes matches (explicit identifiers like
