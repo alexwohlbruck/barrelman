@@ -11,7 +11,7 @@ describe('buildTsQueryText', () => {
   test('expands the expanded form to reach abbreviated names', () => {
     // "heights" must reach "82 St-Jackson Hts".
     expect(buildTsQueryText(['82', 'st', 'jackson', 'heights'], true))
-      .toBe('(82 | 82nd) & (saint | st | street) & jackson & (heights:* | hts:*)')
+      .toBe('(82 | 82nd) & (saint | st | street) & jackson & (heights | hts)')
   })
 
   test('numbers gain their ordinal and ordinals their number', () => {
@@ -27,6 +27,14 @@ describe('buildTsQueryText', () => {
     expect(buildTsQueryText(['medgar'], true)).toBe('medgar:*')
     expect(buildTsQueryText(['franklin', 'av'], false))
       .toBe('franklin & (av | ave | avenue)')
+  })
+
+  test('a known street type ending a multi-word query is matched whole', () => {
+    expect(buildTsQueryText(['353', '5th', 'ave'], true)).toBe('(353 | 353rd) & (5th | 5) & (av | ave | avenue)')
+  })
+
+  test('a lone known word stays a prefix, so "st" still reaches "starbucks"', () => {
+    expect(buildTsQueryText(['st'], true)).toMatch(/:\*/)
   })
 
   test('strips characters that would be tsquery operators', () => {
