@@ -201,9 +201,9 @@ if (!withAddresses) {
   log('no OpenAddresses files in the selected regions — skipping them; only OSM addresses will be indexed')
 }
 
-await run('whosonfirst', ['./bin/download'])
+await withRetries(3, () => run('whosonfirst', ['./bin/download']))
 if (withAddresses) await downloadOpenAddresses(regions.peliasOpenaddresses)
-await run('openstreetmap', ['./bin/download'])
+await withRetries(3, () => run('openstreetmap', ['./bin/download']))
 // Street names come only from this Valhalla extract; skip it and street search is empty.
 await run('polylines', ['bash', './docker_extract.sh'])
 
