@@ -1,6 +1,6 @@
 /**
  * Build the Pelias address index for the selected REGIONS, end to end:
- * config → schema → downloads → street polylines → imports → API restart.
+ * config → schema → downloads → street extract → imports → API restart.
  *
  *   REGIONS=united-states bun run scripts/build-pelias.ts
  *   RESET_INDEX=1         bun run scripts/build-pelias.ts   # drop and rebuild
@@ -9,7 +9,7 @@
  * `docker run` of its service in pelias/docker-compose.yml — image, user and
  * mounts are read from that file rather than restated here.
  */
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { hostname } from 'node:os'
 import { basename, dirname, isAbsolute, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -28,6 +28,8 @@ const PELIAS_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '../pelias')
 const DEFAULT_USER = '1000:1000'
 const INDEX = 'pelias'
 const OA_BATCH = 50
+// The highway types `pbf streets` turns into street documents.
+const STREET_HIGHWAYS = 'motorway,primary,residential,road,secondary,service,tertiary,trunk'
 
 const log = (msg: string) => console.log(`[${new Date().toTimeString().slice(0, 8)}] [pelias] ${msg}`)
 
@@ -178,6 +180,47 @@ async function downloadOsm(extracts: string[]): Promise<void> {
   await withRetries(3, () => run('openstreetmap', ['./bin/download']))
 }
 
+async function osmium(args: string[]): Promise<void> {
+  const proc = Bun.spawn(['osmium', ...args], { stdout: 'inherit', stderr: 'inherit' })
+  if ((await proc.exited) !== 0) throw new Error(`osmium ${args[0]} failed`)
+}
+
+/**
+ * Build the street-name extract. Pelias's docker_extract.sh refuses any PBF over
+ * 1 GB because `pbf streets` holds it in memory, so cut each extract down to the
+ * named highways `pbf streets` reads first — the US shrinks from 12 GB to 1.6 GB.
+ */
+async function preparePolylines(extracts: string[]): Promise<void> {
+  const localData = localDataDir()
+  if (!localData) return run('polylines', ['bash', './docker_extract.sh'])
+
+  const dir = `${localData}/polylines`
+  const extract = `${dir}/extract.0sv`
+  const pbfs = extracts.map((url) => `${localData}/openstreetmap/${basename(url)}`)
+  if (existsSync(extract) && statSync(extract).size > 1 && pbfs.every((p) => statSync(p).mtimeMs < statSync(extract).mtimeMs)) {
+    log('polylines: street extract is newer than the OSM data — skipping')
+    return
+  }
+
+  mkdirSync(dir, { recursive: true })
+  const streets = await Promise.all(
+    pbfs.map(async (pbf, i) => {
+      const typed = `${dir}/streets-${i}-typed.osm.pbf`
+      const named = `${dir}/streets-${i}.osm.pbf`
+      log(`polylines: filtering ${basename(pbf)} to named streets`)
+      await osmium(['tags-filter', '--overwrite', pbf, `w/highway=${STREET_HIGHWAYS}`, '-o', typed])
+      await osmium(['tags-filter', '--overwrite', typed, 'w/name', '-o', named])
+      rmSync(typed)
+      return `/data/polylines/${basename(named)}`
+    }),
+  )
+  const convert = streets.map((f) => `pbf streets ${f} >> /data/polylines/extract.0sv.tmp`).join(' && ')
+  await run('polylines', ['sh', '-c', `: > /data/polylines/extract.0sv.tmp && ${convert} && mv /data/polylines/extract.0sv.tmp /data/polylines/extract.0sv`], {
+    user: '0',
+  })
+  for (const f of streets) rmSync(`${dir}/${basename(f)}`)
+}
+
 async function waitForElastic(url: string): Promise<void> {
   for (let i = 0; i < 60; i++) {
     const res = await fetch(`${url}/_cluster/health`).catch(() => null)
@@ -216,12 +259,18 @@ if (!withAddresses) {
 await withRetries(3, () => run('whosonfirst', ['./bin/download']))
 if (withAddresses) await downloadOpenAddresses(regions.peliasOpenaddresses)
 await downloadOsm(regions.osmExtracts)
-// Street names come only from this Valhalla extract; skip it and street search is empty.
-await run('polylines', ['bash', './docker_extract.sh'])
+// Street names come only from this extract; skip it and street search is empty.
+// Only the street import needs it, so it builds alongside the others.
+const streetExtract = preparePolylines(regions.osmExtracts).then(
+  () => null,
+  (err: unknown) => err,
+)
 
 await run('whosonfirst', ['./bin/start'])
 if (withAddresses) await run('openaddresses', ['./bin/parallel', env.OPENADDRESSES_PARALLELISM || '1'])
 await run('openstreetmap', ['./bin/start'])
+const streetError = await streetExtract
+if (streetError) throw streetError
 await run('polylines', ['./bin/start'])
 
 const docs = (await (await fetch(`${es}/${INDEX}/_count`)).json()) as { count: number }
