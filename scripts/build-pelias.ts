@@ -11,7 +11,7 @@
  */
 import { existsSync, readFileSync } from 'node:fs'
 import { hostname } from 'node:os'
-import { dirname, isAbsolute, resolve } from 'node:path'
+import { basename, dirname, isAbsolute, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { resolveRegions } from '../src/config/regions'
 import { writePeliasConfig } from './generate-pelias-config'
@@ -153,8 +153,11 @@ async function withRetries(attempts: number, fn: () => Promise<void>): Promise<v
  * a single 5xx among thousands aborts the run, so fetch in batches and skip
  * files already on disk.
  */
+/** The data dir as seen from here, or null when it lives outside the mounted pelias/ directory. */
+const localDataDir = () => (isAbsolute(dataDir) ? null : resolve(PELIAS_DIR, dataDir))
+
 async function downloadOpenAddresses(files: string[]): Promise<void> {
-  const localData = isAbsolute(dataDir) ? null : resolve(PELIAS_DIR, dataDir)
+  const localData = localDataDir()
   const missing = files.filter(
     (f) => !localData || !existsSync(`${localData}/openaddresses/${f.replace(/\.csv$/, '')}.geojson`),
   )
@@ -164,6 +167,15 @@ async function downloadOpenAddresses(files: string[]): Promise<void> {
     await withRetries(3, () => run('openaddresses', ['./bin/download']))
   }
   writePeliasConfig(regions)
+}
+
+async function downloadOsm(extracts: string[]): Promise<void> {
+  const localData = localDataDir()
+  if (localData && extracts.every((url) => existsSync(`${localData}/openstreetmap/${basename(url)}`))) {
+    log('openstreetmap: extracts already downloaded — delete them to fetch fresh copies')
+    return
+  }
+  await withRetries(3, () => run('openstreetmap', ['./bin/download']))
 }
 
 async function waitForElastic(url: string): Promise<void> {
@@ -203,7 +215,7 @@ if (!withAddresses) {
 
 await withRetries(3, () => run('whosonfirst', ['./bin/download']))
 if (withAddresses) await downloadOpenAddresses(regions.peliasOpenaddresses)
-await withRetries(3, () => run('openstreetmap', ['./bin/download']))
+await downloadOsm(regions.osmExtracts)
 // Street names come only from this Valhalla extract; skip it and street search is empty.
 await run('polylines', ['bash', './docker_extract.sh'])
 
