@@ -19,6 +19,7 @@ import { adminUserRoutes } from './routes/admin-users'
 import { adminConsoleRoutes, adminConsoleConfigRoutes } from './routes/admin-console'
 import { consoleUiRoutes } from './lib/console-ui'
 import { tileRoutes } from './routes/tiles'
+import { landmarkRoutes } from './routes/landmarks'
 import { graphhopperRoutes } from './routes/graphhopper'
 import { routeRoutes } from './routes/route'
 import { isochroneRoutes } from './routes/isochrone'
@@ -28,6 +29,7 @@ import { ensureSchema, ensureGtfsSchema, ensureGbfsSchema } from './db'
 import { ensureAccountsSchema } from './services/accounts.service'
 import { ensureOpsJobsSchema } from './services/ops-job-store'
 import { ensureRegionsSchema } from './services/region-store.service'
+import { ensureLandmarksSchema, syncLandmarkCatalog } from './services/landmarks.service'
 import { initJobHistory } from './services/job-history.service'
 import { ensureSearchEnrichment } from './lib/search-enrichment'
 import { ensureBrandLogos } from './lib/brand-logos'
@@ -70,6 +72,13 @@ await ensureRegionsSchema()
 await ensureAccountsSchema()
 // Script run history, for job runtime estimates and progress bars.
 await initJobHistory()
+// 3D landmark models and placements, synced from landmarks/catalog.json. A
+// broken catalog is logged rather than fatal: it costs the landmarks layer,
+// which is no reason to take search and tiles down with it.
+await ensureLandmarksSchema()
+void syncLandmarkCatalog()
+  .then(({ models, landmarks }) => console.log(`[landmarks] ${landmarks} placements of ${models} models`))
+  .catch((err) => console.error('[landmarks] catalog sync failed:', err))
 
 // Backfill derived search columns (codes/name_abbrev/parent_context/ts) if a
 // prior import left them empty. Fire-and-forget so it never blocks startup —
@@ -124,6 +133,7 @@ const app = new Elysia()
   .use(adminConsoleConfigRoutes)
   .use(adminConsoleRoutes)
   .use(consoleUiRoutes)
+  .use(landmarkRoutes)
   .use(tileRoutes)
   .use(graphhopperRoutes)
   .use(routeRoutes)
