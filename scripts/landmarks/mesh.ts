@@ -324,3 +324,104 @@ function concat(parts: Uint8Array[], length = parts.reduce((n, p) => n + p.lengt
   }
   return out
 }
+
+/** One primitive of a GLB as read back: positions, triangle indices, material. */
+export type ReadPrimitive = {
+  position: Float32Array
+  index: Uint32Array
+  material: { name: string; color: [number, number, number, number] }
+}
+
+/**
+ * Read a static GLB back into flat arrays, applying node transforms, for
+ * normalising a model from elsewhere into the frame contract. Float positions
+ * and plain indices only — the same subset a stylised landmark needs.
+ */
+export function readGlb(glb: Uint8Array): ReadPrimitive[] {
+  const view = new DataView(glb.buffer, glb.byteOffset, glb.byteLength)
+  if (view.getUint32(0, true) !== 0x46546c67) throw new Error('not a GLB')
+  let json: any = null
+  let bin: Uint8Array | null = null
+  for (let at = 12; at + 8 <= glb.length;) {
+    const length = view.getUint32(at, true)
+    const type = view.getUint32(at + 4, true)
+    const body = glb.subarray(at + 8, at + 8 + length)
+    if (type === 0x4e4f534a) json = JSON.parse(new TextDecoder().decode(body))
+    else if (type === 0x004e4942) bin = body
+    at += 8 + length + ((4 - (length % 4)) % 4)
+  }
+  if (!json || !bin) throw new Error('GLB is missing its JSON or BIN chunk')
+
+  const read = (index: number) => {
+    const a = json.accessors[index]
+    const v = json.bufferViews[a.bufferView]
+    const per = { SCALAR: 1, VEC2: 2, VEC3: 3, VEC4: 4 }[a.type as string]!
+    const Type = ({ 5121: Uint8Array, 5123: Uint16Array, 5125: Uint32Array, 5126: Float32Array } as any)[a.componentType]
+    if (!Type || (v.byteStride && v.byteStride !== Type.BYTES_PER_ELEMENT * per))
+      throw new Error('unsupported accessor layout')
+    const bytes = bin!.slice((v.byteOffset ?? 0) + (a.byteOffset ?? 0))
+    return new Type(bytes.buffer, 0, a.count * per)
+  }
+
+  const out: ReadPrimitive[] = []
+  const visit = (i: number, parent: number[]) => {
+    const node = json.nodes[i]
+    const m = multiply(parent, nodeMatrix(node))
+    for (const p of node.mesh !== undefined ? json.meshes[node.mesh].primitives : []) {
+      const raw = read(p.attributes.POSITION) as Float32Array
+      const position = new Float32Array(raw.length)
+      for (let k = 0; k < raw.length; k += 3) {
+        const [x, y, z] = [raw[k], raw[k + 1], raw[k + 2]]
+        position[k] = m[0] * x + m[4] * y + m[8] * z + m[12]
+        position[k + 1] = m[1] * x + m[5] * y + m[9] * z + m[13]
+        position[k + 2] = m[2] * x + m[6] * y + m[10] * z + m[14]
+      }
+      const index = p.indices !== undefined
+        ? Uint32Array.from(read(p.indices))
+        : Uint32Array.from({ length: raw.length / 3 }, (_, k) => k)
+      const mat = json.materials?.[p.material]
+      out.push({
+        position,
+        index,
+        material: { name: mat?.name ?? '', color: mat?.pbrMetallicRoughness?.baseColorFactor ?? [1, 1, 1, 1] },
+      })
+    }
+    for (const child of node.children ?? []) visit(child, m)
+  }
+  const scene = json.scenes?.[json.scene ?? 0]
+  for (const root of scene?.nodes ?? []) visit(root, identity())
+  return out
+}
+
+const identity = () => [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]
+
+function multiply(a: number[], b: number[]) {
+  const out = new Array(16).fill(0)
+  for (let c = 0; c < 4; c++)
+    for (let r = 0; r < 4; r++)
+      for (let k = 0; k < 4; k++) out[c * 4 + r] += a[k * 4 + r] * b[c * 4 + k]
+  return out
+}
+
+function nodeMatrix(node: any): number[] {
+  if (node.matrix) return node.matrix.slice()
+  const [x, y, z, w] = node.rotation ?? [0, 0, 0, 1]
+  const [sx, sy, sz] = node.scale ?? [1, 1, 1]
+  const [tx, ty, tz] = node.translation ?? [0, 0, 0]
+  return [
+    (1 - 2 * (y * y + z * z)) * sx, 2 * (x * y + w * z) * sx, 2 * (x * z - w * y) * sx, 0,
+    2 * (x * y - w * z) * sy, (1 - 2 * (x * x + z * z)) * sy, 2 * (y * z + w * x) * sy, 0,
+    2 * (x * z + w * y) * sz, 2 * (y * z - w * x) * sz, (1 - 2 * (x * x + y * y)) * sz, 0,
+    tx, ty, tz, 1,
+  ]
+}
+
+/**
+ * Add a primitive's triangles to a part, in glTF space (Y up) already
+ * normalised by the caller. `Part` writes map-frame points, so this converts
+ * back: glTF (x, y, z) is map (x, -z, y).
+ */
+export function addGltfTriangles(part: Part, position: Float32Array, index: Uint32Array) {
+  const at = (i: number): V3 => [position[i * 3], -position[i * 3 + 2], position[i * 3 + 1]]
+  for (let t = 0; t < index.length; t += 3) part.tri(at(index[t]), at(index[t + 1]), at(index[t + 2]))
+}
