@@ -178,8 +178,9 @@ export async function searchPlaces(
   // chars: no address is identifiable from 1-2 chars, and such prefixes make
   // Elasticsearch grind through 10k+ candidates for nothing.
   const wantAddresses = hasQuery && sanitizedQuery.length >= 3 && !hasRoute && !(categories && categories.length)
+  // The raw text: Pelias's parser needs the comma in "3625 Ramos Dr, West Sacramento".
   const peliasPromise: Promise<any[]> = wantAddresses
-    ? forwardGeocode(sanitizedQuery, { lat, lng, limit, signal })
+    ? forwardGeocode(query!.trim(), { lat, lng, limit, signal })
     : Promise.resolve([])
 
   // ── Build spatial primitives ────────────────────────────────────────────

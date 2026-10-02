@@ -107,6 +107,22 @@ describe('searchPlaces — layer execution', () => {
     expect(mockExecute).toHaveBeenCalledTimes(6)
   })
 
+  test('hands Pelias the query with its punctuation, which its parser needs', async () => {
+    const realFetch = globalThis.fetch
+    const urls: string[] = []
+    globalThis.fetch = (async (url: string) => {
+      urls.push(String(url))
+      return Response.json({ features: [] })
+    }) as typeof fetch
+    try {
+      await searchPlaces({ query: '3625 Ramos Drive, West Sacramento', autocomplete: true })
+    } finally {
+      globalThis.fetch = realFetch
+    }
+    const text = new URL(urls.find((u) => u.includes('/v1/autocomplete'))!).searchParams.get('text')
+    expect(text).toBe('3625 Ramos Drive, West Sacramento')
+  })
+
   test('skips trigram for an address-shaped query, which Pelias answers', async () => {
     await searchPlaces({ query: '12 elm st', autocomplete: true })
     expect(mockExecute).toHaveBeenCalledTimes(5)
