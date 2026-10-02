@@ -12,6 +12,18 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ### Added
 
+* **An uncapped container log is now something you can find before it fills the
+  disk.** The 50 MB cap lives in the compose file, but Docker bakes log options
+  in at container creation — so a service that has not been recreated since the
+  cap landed goes on growing, and the release pipeline only recreates
+  `barrelman` and `barrelman-ops`. A MOTIS container four days older than the
+  cap reached 27.9 GB exactly that way, taking a dev box to a full disk and
+  unrelated services down with `ENOSPC`. `scripts/check-log-rotation.sh` — Check
+  Log Rotation in the console — lists every container in the project with its
+  cap and current log size, and prints the recreate command for the ones missing
+  it. It is read-only, and exits non-zero when anything is uncapped so a cron
+  job can gate on it.
+
 * **`bicycle_ways` now includes the streets a signed bike route follows.** A
   way in a `route=bicycle` relation with no bike tagging of its own comes back
   as `infra_type=bicycle_route`, so maps can mark the whole route rather than

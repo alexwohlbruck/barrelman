@@ -978,6 +978,20 @@ export const SCRIPTS: ScriptDef[] = [
     notes:
       'Replaces the cached catalog wholesale, so retired upstream extracts stop being offered. Safe to re-run.',
   },
+  {
+    id: 'config-check-log-rotation',
+    name: 'Check Log Rotation',
+    description:
+      'Report containers whose Docker log file is uncapped, and how large each has grown. Log options are baked in at container creation, so a service started before the cap was added keeps growing until it is recreated.',
+    category: 'config',
+    danger: 'safe',
+    longRunning: false,
+    confirm: false,
+    exec: { kind: 'process', command: 'bash', args: ['scripts/check-log-rotation.sh'] },
+    source: 'scripts/check-log-rotation.sh',
+    notes:
+      'Read-only: it prints the recreate command rather than running it, because recreating motis after a :latest pull needs a timetable re-import first. Exits non-zero when anything is uncapped, so it can gate a cron job. Sizes only show when run as root.',
+  },
 ]
 
 export function getScript(id: string): ScriptDef | undefined {
