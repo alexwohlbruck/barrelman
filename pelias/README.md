@@ -29,10 +29,19 @@ is the job below. On Colorado that took about **25 minutes** for the download,
 polylines and import together. It produced 7.31M documents and a 1.9 GB index
 from 9.2 GB of downloaded sources. A whole country takes hours.
 
-## Provisioning a fresh server
+## Building the index
 
-Everything below is codified in [`provision.sh`](./provision.sh). It is
-idempotent; safe to re-run.
+Run **Build Address Index** from the console (Scripts → Search Enrichment), or
+`docker compose exec -d barrelman-ops bun run scripts/build-pelias.ts`. It reads
+coverage from the regions defined in the console, runs every step below as a
+`docker run` of the matching service in this directory's compose file, and
+restarts `pelias_api` at the end. It needs only Elasticsearch created once:
+`docker compose --profile pelias up -d elasticsearch`.
+
+## Provisioning by hand with the `pelias` CLI
+
+The same steps, driven by the upstream CLI instead, are codified in
+[`provision.sh`](./provision.sh). It is idempotent; safe to re-run.
 
 **The `pelias` CLI will not run as root.** It works out which user to run as
 from the account that invoked it, and stops with "You are running as root" if
