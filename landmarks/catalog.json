@@ -6,6 +6,13 @@
       "license": "CC0-1.0",
       "author": "Barrelman",
       "source": "scripts/landmarks/eiffel-tower.ts"
+    },
+    {
+      "id": "statue-of-liberty",
+      "file": "models/statue-of-liberty.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/statue-of-liberty.ts"
     }
   ],
   "landmarks": [
@@ -52,6 +59,24 @@
       "scale": 0.5,
       "replaces": [
         "way/27831699"
+      ]
+    },
+    {
+      "id": "statue-of-liberty",
+      "name": "Statue of Liberty",
+      "model": "statue-of-liberty",
+      "lng": -74.0445317,
+      "lat": 40.6892527,
+      "bearing": 327,
+      "elevation": 10,
+      "minzoom": 13,
+      "wikidata": "Q9202",
+      "replaces": [
+        "way/229651143",
+        "way/229651144",
+        "way/229651145",
+        "way/229651146",
+        "way/229651147"
       ]
     }
   ]

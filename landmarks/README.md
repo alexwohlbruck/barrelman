@@ -26,7 +26,9 @@ A **landmark** places a model. It gives:
 - `replaces`: the OSM elements it stands in for
 
 The Eiffel Tower model is placed twice: in Paris, and on the Las Vegas Strip
-at `scale: 0.5`.
+at `scale: 0.5`. The Statue of Liberty is placed on Liberty Island, with
+`elevation: 10` so its pedestal rests on Fort Wood's map geometry. Its five
+`replaces` entries hide only the pedestal parts, preserving the star-shaped fort.
 
 ## The frame contract
 
@@ -73,6 +75,17 @@ models in code: lofts, slabs, swept tubes, PNG masks and a GLB writer.
 truth for its asset, so to change the tower, edit the script and regenerate:
 
     bun scripts/landmarks/eiffel-tower.ts
+
+The Statue of Liberty generator uses the same kit, with smooth, creased
+copper forms and a flat-shaded granite pedestal:
+
+    bun scripts/landmarks/statue-of-liberty.ts
+
+Its local origin is the centre of the pedestal base on top of Fort Wood. The
+heel is at model height 36.9 m and the flame tip at 83 m. Before placement she
+faces south, with the raised torch on the west side; the catalog applies the
+327° bearing. Like the Eiffel Tower generator, this is an offline asset-authoring
+script, not an operational data-refresh task in the admin console.
 
 Models from Blender or another tool work too, as long as they follow the
 frame contract and carry a licence the catalog can state.

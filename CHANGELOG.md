@@ -18,7 +18,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
   it replaces. The models are served as immutable GLBs under
   `/tiles/landmarks/models/`. The catalog lives in `landmarks/catalog.json`,
   and the database is updated from it at startup. It ships with a stylised
-  Eiffel Tower, placed in Paris and on the Las Vegas Strip. `LANDMARKS_DIR`
+  Eiffel Tower, placed in Paris and on the Las Vegas Strip, and a Statue of
+  Liberty standing on Fort Wood. `LANDMARKS_DIR`
   points the API at a catalog of your own.
 
 * **`bicycle_ways` now includes the streets a signed bike route follows.** A
