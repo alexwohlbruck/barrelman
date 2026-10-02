@@ -5,7 +5,7 @@ import { generateQueryEmbedding } from '../lib/embeddings'
 import { forwardGeocode } from './geocode.service'
 import { searchTransitRoutes, searchTransitStops } from './transit-search.service'
 import { reconcileTransitHits } from '../lib/transit-search'
-import { buildTsQueryText } from '../lib/search-query'
+import { buildTsQueryText, isStreetQuery } from '../lib/search-query'
 import { envNumber } from '../config/env'
 
 // ── Autocomplete fast path ──────────────────────────────────────────────────
@@ -169,6 +169,8 @@ export async function searchPlaces(
   // global POI retry (Pelias already answers these, and it returns in <10ms
   // where the retry costs ~250ms) and to decide result ordering further down.
   const addressLike = /^\s*\d/.test(sanitizedQuery)
+  // A street name ("elm street") is answered by Pelias's street layer, so it leads too.
+  const streetLike = !addressLike && isStreetQuery(sanitizedQuery.split(/\s+/))
 
   // Address geocoding (Pelias) runs in parallel with the PostGIS layers so
   // street addresses appear alongside POIs without adding latency. Text queries
@@ -176,8 +178,9 @@ export async function searchPlaces(
   // chars: no address is identifiable from 1-2 chars, and such prefixes make
   // Elasticsearch grind through 10k+ candidates for nothing.
   const wantAddresses = hasQuery && sanitizedQuery.length >= 3 && !hasRoute && !(categories && categories.length)
+  // The raw text: Pelias's parser needs the comma in "3625 Ramos Dr, West Sacramento".
   const peliasPromise: Promise<any[]> = wantAddresses
-    ? forwardGeocode(sanitizedQuery, { lat, lng, limit, signal })
+    ? forwardGeocode(query!.trim(), { lat, lng, limit, signal })
     : Promise.resolve([])
 
   // ── Build spatial primitives ────────────────────────────────────────────
@@ -407,7 +410,8 @@ export async function searchPlaces(
     //
     // So defer it: issue the precise layers first and only reach for trigram
     // when they came back short. A well-spelled query never pays for it.
-    const runTrigram = !localAutocomplete && sanitizedQuery.length > 4
+    // An address-shaped query is answered by Pelias; fuzzy POI names add only the wait.
+    const runTrigram = !localAutocomplete && sanitizedQuery.length > 4 && !addressLike
 
     // Layer 3: Abbreviation + codes match
     // Split into two separate queries so codes matches (explicit identifiers like
@@ -712,7 +716,7 @@ export async function searchPlaces(
     // barrelman's rows, so a place already returned from PostGIS isn't repeated.
     const seenIds = new Set(results.map((r: any) => r.id))
     const fresh = addressResults.filter((a) => !seenIds.has(a.id))
-    results = addressLike ? [...fresh, ...results] : [...results, ...fresh]
+    results = addressLike || streetLike ? [...fresh, ...results] : [...results, ...fresh]
     results = results.slice(0, limit)
   }
 

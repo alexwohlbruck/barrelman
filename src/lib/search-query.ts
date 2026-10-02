@@ -56,7 +56,8 @@ function spellingsOf(word: string): string[] {
 /**
  * The text handed to `to_tsquery('simple', unaccent(...))`: words AND-joined,
  * each expanded to an OR-group of its spellings, the last one optionally a
- * prefix (`:*`) for typeahead. Words are reduced to alphanumerics so no
+ * prefix (`:*`) for typeahead — unless it is a known abbreviation ending a
+ * multi-word query. Words are reduced to alphanumerics so no
  * tsquery operator can be injected. Returns '' when nothing survives.
  */
 export function buildTsQueryText(words: string[], prefixLast: boolean): string {
@@ -65,9 +66,22 @@ export function buildTsQueryText(words: string[], prefixLast: boolean): string {
     .map((w) => w.toLowerCase().replace(/[^a-z0-9]/g, ''))
     .filter(Boolean)
   for (let i = 0; i < cleaned.length; i++) {
-    const prefix = prefixLast && i === cleaned.length - 1
+    // A trailing "ave" or "st" after another word is a finished street type, and
+    // as a prefix it expands across millions of words: 9ms became 2.6s.
+    const prefix = prefixLast && i === cleaned.length - 1 && !(i > 0 && VARIANTS.has(cleaned[i]))
     const tokens = spellingsOf(cleaned[i]).map((s) => (prefix ? `${s}:*` : s))
     parts.push(tokens.length > 1 ? `(${tokens.join(' | ')})` : tokens[0])
   }
   return parts.join(' & ')
+}
+
+/** Canonical street types (see SYNONYMS): "Elm Street", "Michigan Ave", "Ocean Pkwy". */
+const STREET_TYPES = new Set(['st', 'av', 'blvd', 'rd', 'dr', 'pl', 'pkwy', 'ter', 'ct', 'ln', 'hwy', 'sq', 'plz', 'way', 'cir'])
+
+/** True when the query names a street: two or more words, the last a street type. */
+export function isStreetQuery(words: string[]): boolean {
+  const cleaned = words.map((w) => w.toLowerCase().replace(/[^a-z0-9]/g, '')).filter(Boolean)
+  if (cleaned.length < 2) return false
+  const last = cleaned[cleaned.length - 1]
+  return STREET_TYPES.has(SYNONYMS[last] || last)
 }

@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test'
-import { buildTsQueryText } from './search-query'
+import { buildTsQueryText, isStreetQuery } from './search-query'
 
 describe('buildTsQueryText', () => {
   test('expands a query-side abbreviation to every spelling', () => {
@@ -11,7 +11,7 @@ describe('buildTsQueryText', () => {
   test('expands the expanded form to reach abbreviated names', () => {
     // "heights" must reach "82 St-Jackson Hts".
     expect(buildTsQueryText(['82', 'st', 'jackson', 'heights'], true))
-      .toBe('(82 | 82nd) & (saint | st | street) & jackson & (heights:* | hts:*)')
+      .toBe('(82 | 82nd) & (saint | st | street) & jackson & (heights | hts)')
   })
 
   test('numbers gain their ordinal and ordinals their number', () => {
@@ -29,6 +29,14 @@ describe('buildTsQueryText', () => {
       .toBe('franklin & (av | ave | avenue)')
   })
 
+  test('a known street type ending a multi-word query is matched whole', () => {
+    expect(buildTsQueryText(['353', '5th', 'ave'], true)).toBe('(353 | 353rd) & (5th | 5) & (av | ave | avenue)')
+  })
+
+  test('a lone known word stays a prefix, so "st" still reaches "starbucks"', () => {
+    expect(buildTsQueryText(['st'], true)).toMatch(/:\*/)
+  })
+
   test('strips characters that would be tsquery operators', () => {
     expect(buildTsQueryText(['(cafe)', 'a|b'], false)).toBe('cafe & ab')
     expect(buildTsQueryText(['&', '!'], false)).toBe('')
@@ -36,5 +44,19 @@ describe('buildTsQueryText', () => {
 
   test('plain words pass through unchanged', () => {
     expect(buildTsQueryText(['divine', 'barrel'], true)).toBe('divine & barrel:*')
+  })
+})
+
+describe('isStreetQuery', () => {
+  test('a name followed by a street type, in any spelling', () => {
+    expect(isStreetQuery(['elm', 'street'])).toBe(true)
+    expect(isStreetQuery(['Michigan', 'Ave'])).toBe(true)
+    expect(isStreetQuery(['ocean', 'pkwy.'])).toBe(true)
+  })
+
+  test('a lone street type, a place name or a saint is not a street', () => {
+    expect(isStreetQuery(['street'])).toBe(false)
+    expect(isStreetQuery(['jackson', 'heights'])).toBe(false)
+    expect(isStreetQuery(['blue', 'star'])).toBe(false)
   })
 })
