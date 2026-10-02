@@ -49,15 +49,17 @@ export class Part {
     return this.pos.length / 9
   }
 
-  tri(a: V3, b: V3, c: V3, ua: number[] = [0, 0], ub: number[] = [0, 0], uc: number[] = [0, 0]) {
+  tri(a: V3, b: V3, c: V3, ua: number[] = [0, 0], ub: number[] = [0, 0], uc: number[] = [0, 0], normals?: V3[]) {
     const n = normalize(cross(sub(b, a), sub(c, a)))
-    for (const [p, t] of [[a, ua], [b, ub], [c, uc]] as [V3, number[]][]) {
+    const corners = [[a, ua], [b, ub], [c, uc]] as [V3, number[]][]
+    corners.forEach(([p, t], i) => {
+      const m = normals?.[i] ?? n
       // map frame → glTF frame: (x, y, z) → (x, z, -y). A rotation, so the
       // counter-clockwise winding survives the trip.
       this.pos.push(p[0], p[2], -p[1])
-      this.nrm.push(n[0], n[2], -n[1])
+      this.nrm.push(m[0], m[2], -m[1])
       this.uv.push(t[0], t[1])
-    }
+    })
   }
 
   /** Counter-clockwise as seen from the side the face points to. */
@@ -421,7 +423,54 @@ function nodeMatrix(node: any): number[] {
  * normalised by the caller. `Part` writes map-frame points, so this converts
  * back: glTF (x, y, z) is map (x, -z, y).
  */
-export function addGltfTriangles(part: Part, position: Float32Array, index: Uint32Array) {
+export function addGltfTriangles(
+  part: Part,
+  position: Float32Array,
+  index: Uint32Array,
+  options: { creaseDegrees?: number } = {},
+) {
   const at = (i: number): V3 => [position[i * 3], -position[i * 3 + 2], position[i * 3 + 1]]
-  for (let t = 0; t < index.length; t += 3) part.tri(at(index[t]), at(index[t + 1]), at(index[t + 2]))
+  const faces: Array<{ v: V3[]; n: V3; area: number }> = []
+  for (let t = 0; t < index.length; t += 3) {
+    const v = [at(index[t]), at(index[t + 1]), at(index[t + 2])]
+    const c = cross(sub(v[1], v[0]), sub(v[2], v[0]))
+    const area = len(c)
+    if (area > 0) faces.push({ v, n: normalize(c), area })
+  }
+  if (options.creaseDegrees === undefined) {
+    for (const f of faces) part.tri(f.v[0], f.v[1], f.v[2])
+    return
+  }
+
+  // Smooth shading with a crease: a corner averages the faces that meet at
+  // its position, weighted by area, but only those within the crease angle
+  // of its own face — so a robe reads as cloth and a pedestal keeps its
+  // edges. Positions are matched, not indices: imported meshes are often
+  // split at every material and UV seam.
+  const key = (p: V3) => p.map((x) => Math.round(x * 1e4)).join(',')
+  const around = new Map<string, number[]>()
+  faces.forEach((f, i) => f.v.forEach((p) => {
+    const k = key(p)
+    const list = around.get(k)
+    if (list) list.push(i)
+    else around.set(k, [i])
+  }))
+  const cos = Math.cos((options.creaseDegrees * Math.PI) / 180)
+  // Winding in an imported mesh is not to be trusted, so a neighbour facing
+  // the opposite way is folded onto this face's side before comparing.
+  const dot = (a: V3, b: V3) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+  for (const f of faces) {
+    const normals = f.v.map((p) => {
+      const sum: V3 = [0, 0, 0]
+      for (const j of around.get(key(p))!) {
+        const g = faces[j]
+        const d = dot(f.n, g.n)
+        const sign = d < 0 ? -1 : 1
+        if (Math.abs(d) < cos) continue
+        for (let k = 0; k < 3; k++) sum[k] += g.n[k] * g.area * sign
+      }
+      return normalize(sum)
+    })
+    part.tri(f.v[0], f.v[1], f.v[2], undefined, undefined, undefined, normals)
+  }
 }

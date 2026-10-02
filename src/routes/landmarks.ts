@@ -10,6 +10,13 @@ const Y_RE = /^\d{1,10}(\.[A-Za-z0-9]+)?$/
 const CORS = 'access-control-allow-origin'
 
 /**
+ * Placement tiles are a few hundred bytes and change whenever the catalog
+ * does — a new model is a new file name inside them — so they are kept
+ * briefly, unlike the immutable models they point at.
+ */
+const TILE_CACHE = 'public, max-age=300, stale-while-revalidate=3600'
+
+/**
  * 3D landmarks, as a tile layer plus the models it points at.
  *
  * Under /tiles, and metered as tiles: a map pulls both on the same terms as
@@ -43,13 +50,13 @@ export function createLandmarkRoutes(
         if (!bytes.length) {
           return new Response(null, {
             status: 204,
-            headers: { 'cache-control': 'public, max-age=3600', [CORS]: '*' },
+            headers: { 'cache-control': TILE_CACHE, [CORS]: '*' },
           })
         }
         return new Response(bytes as Uint8Array<ArrayBuffer>, {
           headers: {
             'content-type': 'application/x-protobuf',
-            'cache-control': 'public, max-age=3600',
+            'cache-control': TILE_CACHE,
             [CORS]: '*',
           },
         })
