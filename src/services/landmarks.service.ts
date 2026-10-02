@@ -56,6 +56,12 @@ export type CatalogModel = {
   author: string
   /** Where the model came from — a generator script, a URL. */
   source?: string
+  /**
+   * The credit a map has to show while drawing it, for licences that require
+   * one (CC-BY). Travels on every tile feature so a client can show it only
+   * when the model is actually on screen.
+   */
+  attribution?: string
 }
 
 export type CatalogLandmark = {
@@ -92,6 +98,8 @@ export function validateCatalog(catalog: Catalog): string[] {
     if (!m.file?.endsWith('.glb')) problems.push(`model "${m.id}": file must be a .glb`)
     if (m.file?.includes('..')) problems.push(`model "${m.id}": file must stay inside the landmarks dir`)
     if (!m.license) problems.push(`model "${m.id}": license is required`)
+    if (/^CC-BY/i.test(m.license ?? '') && !m.attribution)
+      problems.push(`model "${m.id}": a ${m.license} model needs an attribution`)
   }
   const ids = new Set<string>()
   for (const l of catalog.landmarks ?? []) {
@@ -168,6 +176,7 @@ export function ensureLandmarksSchema(): Promise<void> {
         origin     text NOT NULL DEFAULT 'catalog',
         updated_at timestamptz NOT NULL DEFAULT now()
       )`
+    await sql`ALTER TABLE landmark_models ADD COLUMN IF NOT EXISTS attribution text`
     await sql`
       CREATE TABLE IF NOT EXISTS landmarks (
         fid        serial UNIQUE,
@@ -226,13 +235,14 @@ export async function syncLandmarkCatalog(dir = resolveLandmarksDir()): Promise<
     const tx = rawTx as unknown as typeof sql
     for (const m of models) {
       await tx`
-        INSERT INTO landmark_models (id, file, sha256, bytes, height_m, radius_m, license, author, source, origin)
+        INSERT INTO landmark_models (id, file, sha256, bytes, height_m, radius_m, license, author, source, attribution, origin)
         VALUES (${m.id}, ${modelFileName(m.id, m.sha256)}, ${m.sha256}, ${m.bytes}, ${m.height}, ${m.radius},
-                ${m.license}, ${m.author}, ${m.source ?? null}, 'catalog')
+                ${m.license}, ${m.author}, ${m.source ?? null}, ${m.attribution ?? null}, 'catalog')
         ON CONFLICT (id) DO UPDATE SET
           file = EXCLUDED.file, sha256 = EXCLUDED.sha256, bytes = EXCLUDED.bytes,
           height_m = EXCLUDED.height_m, radius_m = EXCLUDED.radius_m, license = EXCLUDED.license,
-          author = EXCLUDED.author, source = EXCLUDED.source, updated_at = now()`
+          author = EXCLUDED.author, source = EXCLUDED.source, attribution = EXCLUDED.attribution,
+          updated_at = now()`
     }
     for (const l of catalog.landmarks) {
       const scale = l.scale ?? 1
@@ -288,7 +298,7 @@ export async function landmarkTile(z: number, x: number, y: number): Promise<Uin
     SELECT ST_AsMVT(t, ${LANDMARKS_LAYER}, 4096, 'geom', 'fid') AS mvt FROM (
       SELECT l.fid, l.id, l.name, m.file AS model, l.bearing, l.scale, l.elevation, l.min_zoom AS minzoom,
              round((m.height_m * l.scale)::numeric, 1)::real AS height,
-             array_to_string(l.replaces, ' ') AS replaces, l.wikidata,
+             array_to_string(l.replaces, ' ') AS replaces, l.wikidata, m.attribution,
              ST_AsMVTGeom(ST_Transform(l.geom, 3857), bounds.env, 4096, 4096, true) AS geom
       FROM landmarks l
       JOIN landmark_models m ON m.id = l.model_id

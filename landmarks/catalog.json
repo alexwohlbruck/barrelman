@@ -6,6 +6,14 @@
       "license": "CC0-1.0",
       "author": "Barrelman",
       "source": "scripts/landmarks/eiffel-tower.ts"
+    },
+    {
+      "id": "statue-of-liberty",
+      "file": "models/statue-of-liberty.glb",
+      "license": "CC-BY-3.0",
+      "author": "Anna M",
+      "source": "https://poly.pizza/m/ef9Yd09Doxh",
+      "attribution": "Statue of Liberty model: \"Lady Liberty\" by Anna M, CC-BY 3.0"
     }
   ],
   "landmarks": [
@@ -19,12 +27,27 @@
       "wikidata": "Q243",
       "replaces": [
         "way/5013364",
-        "way/69034127", "way/69034135", "way/69034179", "way/69034180",
+        "way/69034127",
+        "way/69034135",
+        "way/69034179",
+        "way/69034180",
         "way/308021389",
-        "way/308145239", "way/308145258", "way/308145259",
-        "way/308687744", "way/308687745", "way/308687748", "way/308687752", "way/308687753",
-        "way/308689164", "way/308689165", "way/308689166", "way/308689167",
-        "way/1462597762", "way/1462597763", "way/1462597764", "way/1462597765"
+        "way/308145239",
+        "way/308145258",
+        "way/308145259",
+        "way/308687744",
+        "way/308687745",
+        "way/308687748",
+        "way/308687752",
+        "way/308687753",
+        "way/308689164",
+        "way/308689165",
+        "way/308689166",
+        "way/308689167",
+        "way/1462597762",
+        "way/1462597763",
+        "way/1462597764",
+        "way/1462597765"
       ]
     },
     {
@@ -35,7 +58,27 @@
       "lat": 36.1124702,
       "bearing": 45,
       "scale": 0.5,
-      "replaces": ["way/27831699"]
+      "replaces": [
+        "way/27831699"
+      ]
+    },
+    {
+      "id": "statue-of-liberty",
+      "name": "Statue of Liberty",
+      "model": "statue-of-liberty",
+      "lng": -74.0445317,
+      "lat": 40.6892527,
+      "bearing": 327,
+      "elevation": 10,
+      "minzoom": 13,
+      "wikidata": "Q9202",
+      "replaces": [
+        "way/229651143",
+        "way/229651144",
+        "way/229651145",
+        "way/229651146",
+        "way/229651147"
+      ]
     }
   ]
 }

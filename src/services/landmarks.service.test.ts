@@ -64,6 +64,11 @@ describe('validateCatalog', () => {
     expect(problems).toHaveLength(8)
   })
 
+  test('refuses a CC-BY model with no credit to show', () => {
+    const problems = validateCatalog({ ...ok, models: [{ ...ok.models[0], license: 'CC-BY-3.0' }] })
+    expect(problems).toEqual(['model "tower": a CC-BY-3.0 model needs an attribution'])
+  })
+
   test('requires OSM refs with their type, since a bare number is ambiguous', () => {
     const problems = validateCatalog({ ...ok, landmarks: [{ ...ok.landmarks[0], replaces: ['5013364'] }] })
     expect(problems[0]).toContain('not an OSM ref')

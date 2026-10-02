@@ -66,7 +66,8 @@ export function createLandmarkRoutes(
           description:
             'Vector tile with one layer, `landmarks`: a point per 3D landmark whose model overhangs the tile. ' +
             'Properties: `id`, `name`, `model` (a file name under /tiles/landmarks/models), `bearing` (degrees ' +
-            'clockwise from north), `scale`, `elevation` and `height` (metres), `minzoom`, `wikidata`, and ' +
+            'clockwise from north), `scale`, `elevation` and `height` (metres), `minzoom`, `wikidata`, ' +
+            '`attribution` (a credit to show while the model is drawn, where its licence asks for one), and ' +
             '`replaces` — space-separated OSM refs (`way/5013364`) of the buildings and building parts the ' +
             'model stands in for, which a client should stop extruding. Empty below zoom 12, and 204 where ' +
             'there are no landmarks.',
