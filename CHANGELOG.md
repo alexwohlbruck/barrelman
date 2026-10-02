@@ -10,6 +10,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-01
+
 ### Added
 
 * **Build the address index from the console.** "Build Address Index" builds
@@ -21,6 +23,15 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 * **A country-sized region now gets its address files.** Adding the United
   States by name used to leave its OpenAddresses files and TIGER states empty,
   so address search had nothing to import; it now lists every state's sources.
+* **Typing a street address is fast again.** Queries like "353 5th Ave" took
+  about 4 seconds on a large instance; they now answer in a fraction of a second.
+* **Street names find the street.** Searching "Elm Street" now leads with the
+  street itself instead of roads that merely sit near one.
+* **Addresses written with a comma are found.** "3625 Ramos Drive, West
+  Sacramento" used to return nothing through `/search`.
+* **The address index builds for a whole country.** Street names no longer fail
+  on extracts over 1 GB, and a dropped download is retried instead of ending
+  the run.
 
 ## [0.4.0] - 2026-09-23
 
