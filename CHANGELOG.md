@@ -12,6 +12,14 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ### Added
 
+* **A `power/outlet` category for public power outlets.** OSM maps them as
+  `power=outlet`, `amenity=device_charging_station`, `amenity=power_supply`, or
+  as a `power_supply=*` or `socket:*` tag on a venue such as a cafe. Every one
+  of these now carries `power/outlet`, so search can browse them with a single
+  category filter. Campsite, caravan and marina hookups, vehicle chargers and
+  private outlets are left out. Existing databases pick it up by running
+  "Backfill Power Outlet Category" from the console.
+
 * **`bicycle_ways` now includes the streets a signed bike route follows.** A
   way in a `route=bicycle` relation with no bike tagging of its own comes back
   as `infra_type=bicycle_route`, so maps can mark the whole route rather than
