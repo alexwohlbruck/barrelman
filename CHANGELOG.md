@@ -12,6 +12,15 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ### Added
 
+* **3D landmarks (experimental).** Hand-made 3D models that a map draws in
+  place of a building's extrusion. `/tiles/landmarks/{z}/{x}/{y}` serves where
+  they stand, with each landmark's model, bearing, scale and the OSM buildings
+  it replaces. The models are served as immutable GLBs under
+  `/tiles/landmarks/models/`. The catalog lives in `landmarks/catalog.json`,
+  and the database is updated from it at startup. It ships with a stylised
+  Eiffel Tower, placed in Paris and on the Las Vegas Strip. `LANDMARKS_DIR`
+  points the API at a catalog of your own.
+
 * **`bicycle_ways` now includes the streets a signed bike route follows.** A
   way in a `route=bicycle` relation with no bike tagging of its own comes back
   as `infra_type=bicycle_route`, so maps can mark the whole route rather than
