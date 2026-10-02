@@ -274,6 +274,9 @@ services:
       # served by this container at /tiles/portolan/… . Missing dir → the
       # routes answer 404, so this is safe on a stack that never runs portolan.
       PORTOLAN_TILES_DIR: /portolan-data/build/tiles
+      # 3D landmark catalog + models. Defaults to the landmarks/ baked into the
+      # image; see .env.example.
+      LANDMARKS_DIR: ${LANDMARKS_DIR:-}
       # Parallel GraphHopper calls per isochrone. Documented in
       # https://docs.barrelman.dev/self-hosting/configuration; without this line it had no effect in a container.
       ISOCHRONE_CONCURRENCY: ${ISOCHRONE_CONCURRENCY:-}
