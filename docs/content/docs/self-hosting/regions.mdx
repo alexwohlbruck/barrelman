@@ -100,8 +100,8 @@ the write. Confirm with `bun run src/config/regions.ts summary` before importing
 | `osmReplication` | `.../us/colorado-updates/` | Geofabrik index |
 | `bbox` | `-109.06, 36.99, -102.04, 41.00` | Computed from the real boundary polygon |
 | `gtfsRegion` | the same bbox | Used as the Transitland feed search area |
-| `pelias.tigerStates` | `[8]` | ISO `US-CO` → Census FIPS |
-| `pelias.openaddresses` | 55 CSV paths (counties, cities, statewide) | OpenAddresses source listing |
+| `pelias.tigerStates` | `[8]` | ISO `US-CO` → Census FIPS; every state for the whole US |
+| `pelias.openaddresses` | 55 CSV paths (counties, cities, statewide) | OpenAddresses source listing — for a country, every file under it |
 
 Two things are deliberately **not** guessed:
 
@@ -153,15 +153,11 @@ bash scripts/rebuild-motis.sh               # 5. rebuild the MOTIS timetable +
 
 bun run import/import-gbfs-systems.ts       # 6. bikeshare, filtered by the region bbox
 
-bun run scripts/generate-pelias-config.ts   # 7. addresses: regenerate pelias.json…
-cd pelias && ./provision.sh                 #    …then provision the geocoder stack
-                                            #    (as a NON-root user — see below)
+bun run scripts/build-pelias.ts             # 7. addresses: the Pelias index
 ```
 
-Step 7 is the one step you cannot run as root. The `pelias` CLI refuses, and
-`sudo -u` does not help. See
-[importing data](/self-hosting/importing-data#step-4--addresses-optional-and-much-bigger-than-the-rest)
-for the user account to create first.
+Step 7 needs Elasticsearch created once first — see
+[importing data](/self-hosting/importing-data#step-4--addresses-optional-and-much-bigger-than-the-rest).
 
 For example:
 

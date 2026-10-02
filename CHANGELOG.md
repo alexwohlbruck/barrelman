@@ -17,22 +17,11 @@ does it — and the release pipeline turns it into the GitHub Release notes.
   as `infra_type=bicycle_route`, so maps can mark the whole route rather than
   only its laned stretches. Routes marked proposed, under construction or
   "(Future)" are skipped.
+
 * **Proposed and under-construction cycleways tagged with a lifecycle prefix.**
   `proposed:highway=cycleway` with no `highway` tag now lands in `bicycle_ways`
   with `state=proposed`, and likewise for `construction:highway`. Existing
   databases pick up both changes with `scripts/backfill-bicycle-ways.sh`.
-
-* **A `first-party` plan, for an application the operator runs themselves.**
-  Unmetered and unthrottled — every per-minute window and the concurrency caps
-  are skipped — and, like `demo`, assigned by an operator rather than chosen,
-  so unlimited access is not something an account can grant itself. Usage is
-  still recorded at zero credits, so the traffic stays visible in the
-  dashboards and to abuse detection. Assign it at `/console/accounts` and give
-  the application an ordinary API key.
-
-  This replaces leaning on `BARRELMAN_API_KEY` for the same job. A real account
-  key is attributable, revocable on its own, scopeable, and there can be one
-  per application; the shared secret is none of those.
 
 * **Tile bundles: several map sources in one request.** A map view is thirty to
   sixty tiles *per source*, and a client drawing the detail overlays was asking
@@ -51,6 +40,55 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ### Changed
 
+* **Tiles are served with `stale-while-revalidate`.** They already carried a
+  day's `max-age`; the week of `stale-while-revalidate` behind it means the
+  first request after expiry is answered from the edge while the refresh
+  happens behind it, instead of making one unlucky user wait out a full origin
+  round trip for a byte-identical tile.
+
+### Fixed
+
+## [0.5.0] - 2026-10-01
+
+### Added
+
+* **Build the address index from the console.** "Build Address Index" builds
+  the Pelias geocoder from each region's address settings, so street-address
+  search no longer needs a hand-run provisioning script as a separate user.
+
+### Fixed
+
+* **A country-sized region now gets its address files.** Adding the United
+  States by name used to leave its OpenAddresses files and TIGER states empty,
+  so address search had nothing to import; it now lists every state's sources.
+* **Typing a street address is fast again.** Queries like "353 5th Ave" took
+  about 4 seconds on a large instance; they now answer in a fraction of a second.
+* **Street names find the street.** Searching "Elm Street" now leads with the
+  street itself instead of roads that merely sit near one.
+* **Addresses written with a comma are found.** "3625 Ramos Drive, West
+  Sacramento" used to return nothing through `/search`.
+* **The address index builds for a whole country.** Street names no longer fail
+  on extracts over 1 GB, and a dropped download is retried instead of ending
+  the run.
+
+## [0.4.0] - 2026-09-23
+
+### Added
+
+* **A `first-party` plan, for an application the operator runs themselves.**
+  Unmetered and unthrottled — every per-minute window and the concurrency caps
+  are skipped — and, like `demo`, assigned by an operator rather than chosen,
+  so unlimited access is not something an account can grant itself. Usage is
+  still recorded at zero credits, so the traffic stays visible in the
+  dashboards and to abuse detection. Assign it at `/console/accounts` and give
+  the application an ordinary API key.
+
+  This replaces leaning on `BARRELMAN_API_KEY` for the same job. A real account
+  key is attributable, revocable on its own, scopeable, and there can be one
+  per application; the shared secret is none of those.
+
+### Changed
+
 * **Tile requests are counted in a rate window of their own, at twenty times a
   plan's per-minute limit.** Those limits are shaped for API calls, one request
   and one answer; a map is not that shape — a single viewport is thirty to
@@ -62,11 +100,7 @@ does it — and the release pipeline turns it into the GitHub Release notes.
   spends no part of the budget the other endpoints are measured against. Tune
   it with `BARRELMAN_TILE_RATE_MULTIPLIER`.
 
-* **Tiles are served with `stale-while-revalidate`.** They already carried a
-  day's `max-age`; the week of `stale-while-revalidate` behind it means the
-  first request after expiry is answered from the edge while the refresh
-  happens behind it, instead of making one unlucky user wait out a full origin
-  round trip for a byte-identical tile.
+## [0.3.9] - 2026-09-17
 
 ### Fixed
 
@@ -79,6 +113,7 @@ does it — and the release pipeline turns it into the GitHub Release notes.
   import or by the new **Build Map Detail Tile Indexes** console task. Missing
   them costs speed, never correctness.
 
+## [0.3.8] - 2026-09-17
 
 ### Fixed
 
@@ -143,6 +178,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
   spatial indexes over each view's predicate bring that down to the rows the
   tile actually contains, which matters most on a cold cache, where those
   discarded rows were hundreds of milliseconds of random reads.
+
+## [0.3.7] - 2026-09-16
 
 ### Added
 

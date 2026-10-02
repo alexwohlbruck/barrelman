@@ -765,6 +765,34 @@ export const SCRIPTS: ScriptDef[] = [
     source: 'import/generate-intersections.sql',
     notes: 'Deletes stale intersection rows (osm_type=X) then rebuilds.',
   },
+  {
+    id: 'search-addresses',
+    name: 'Build Address Index',
+    description:
+      "Build the Pelias geocoder index from each region's address settings: Who's-on-First, OpenAddresses, OSM addresses and street names. Street-address search stays unavailable until this has run.",
+    category: 'search',
+    danger: 'caution',
+    longRunning: true,
+    confirm: true,
+    exclusive: true,
+    exec: { kind: 'process', command: 'bun', args: ['run', 'scripts/build-pelias.ts'] },
+    params: [
+      REGIONS_PARAM,
+      {
+        name: 'RESET_INDEX',
+        label: 'Reset index',
+        type: 'boolean',
+        apply: 'env',
+        envVar: 'RESET_INDEX',
+        default: false,
+        description:
+          'Drop the index and rebuild from scratch. Needed after removing a region or address files, whose documents a re-import leaves in place.',
+      },
+    ],
+    source: 'scripts/build-pelias.ts',
+    notes:
+      'Needs Elasticsearch created once with `docker compose --profile pelias up -d elasticsearch`. Hours for a state, most of a day for a country; downloads are kept, so a re-run resumes.',
+  },
 
   // ── Routing Graphs ────────────────────────────────────────────────────
   {
