@@ -13,9 +13,8 @@ const recess = new Part()
 const glass = new Part()
 const metal = new Part()
 const roof = new Part()
-const mortar = new Part()
 const TAU = Math.PI * 2
-const N = 64
+const N = 48
 const MAIN: [number, number] = [0.2, -10.8]
 
 function smooth(target: Part, build: (p: Part) => void, crease = 32) {
@@ -25,16 +24,16 @@ function smooth(target: Part, build: (p: Part) => void, crease = 32) {
     Uint32Array.from({ length: p.pos.length / 3 }, (_, i) => i), { creaseDegrees: crease })
 }
 
-function ring(cx: number, cy: number, r: number, z: number, ry = r): V3[] {
-  return Array.from({ length: N }, (_, i): V3 => {
-    const a = i / N * TAU
+function ring(cx: number, cy: number, r: number, z: number, ry = r, segments = N): V3[] {
+  return Array.from({ length: segments }, (_, i): V3 => {
+    const a = i / segments * TAU
     return [cx + r * Math.cos(a), cy + ry * Math.sin(a), z]
   })
 }
 
-function round(p: Part, cx: number, cy: number, levels: [number, number][], aspect = 1) {
+function round(p: Part, cx: number, cy: number, levels: [number, number][], aspect = 1, segments = N) {
   smooth(p, s => {
-    const rings = levels.map(([z, r]) => ring(cx, cy, r, z, r * aspect))
+    const rings = levels.map(([z, r]) => ring(cx, cy, r, z, r * aspect, segments))
     s.loft(rings)
     s.cap(rings[0], false)
     s.cap(rings[rings.length - 1], true)
@@ -55,12 +54,11 @@ box(concrete, -16.7, 0, 0, 10, 23.5, 1.1)
 box(glass, -15.8, 0, 1.1, 5.8, 24, 4.5)
 box(concrete, -17.1, -0.6, 4.5, 9.5, 25, 6.4)
 box(roof, 6.8, -27.8, 7.4, 21.6, 3.7, 7.55)
-for (let y = 1; y < 24; y += 3.4) box(metal, -15.88, y, 1.1, -15.7, y + 0.13, 4.5)
 
 // The main bowl: recessed continuous shell with one uninterrupted rising ribbon.
 // Unlike separate discs, the ribbon changes height around each revolution.
 const zBase = 4.6, zRim = 26.4, pitch = 3.6
-const radius = (z: number) => 12.1 + (z - zBase) / (zRim - zBase) * 4.55
+const radius = (z: number) => 12.1 + (z - zBase) / (zRim - zBase) * 4.25
 round(concrete, ...MAIN, [[0, 11.9], [4.6, 12.1]])
 round(recess, ...MAIN, [[zBase, radius(zBase)], [zRim, radius(zRim)]])
 smooth(concrete, p => {
@@ -72,12 +70,13 @@ smooth(concrete, p => {
     const a = i / steps * end, b = (i + 1) / steps * end
     const section = (t: number): V3[] => {
       const lo = zBase + t / TAU * pitch
-      const hi = Math.min(zRim, lo + pitch - 0.46)
-      // An overhanging lower lip casts the narrow ramp joint into shade.
-      return [point(t, lo, 0), point(t, lo, 0.65), point(t, hi, 0.65), point(t, hi, 0)]
+      const hi = Math.min(zRim, lo + pitch - 1.0)
+      // Broad lips and pale, recessed joints remain legible at phone-map sizes.
+      return [point(t, lo, 0), point(t, lo, 0.95), point(t, hi, 0.95), point(t, hi, 0)]
     }
     const u = section(a), v = section(b)
-    for (let k = 0; k < 4; k++) {
+    // The fourth (inner) face is buried in the continuous shell.
+    for (let k = 0; k < 3; k++) {
       const j = (k + 1) % 4
       p.quad(u[k], v[k], v[j], u[j])
     }
@@ -91,9 +90,9 @@ round(roof, ...MAIN, [[27.1, 16.8], [27.16, 16.8]])
 // Shallow glazed skylight, with the radial structure visible from above.
 const dome: [number, number][] = [[27.17, 9.3], [27.5, 8.7], [28.05, 6.9], [28.45, 4], [28.65, 0]]
 round(glass, ...MAIN, dome)
-for (let i = 0; i < 12; i++) {
-  const a = i / 12 * TAU
-  const w = 0.09
+for (let i = 0; i < 8; i++) {
+  const a = i / 8 * TAU
+  const w = 0.16
   for (let j = 0; j < dome.length - 1; j++) {
     const [z0, r0] = dome[j], [z1, r1] = dome[j + 1]
     const v = (r: number, z: number, side: number): V3 =>
@@ -101,7 +100,7 @@ for (let i = 0; i < 12; i++) {
     metal.quad(v(r0, z0, -1), v(r0, z0, 1), v(r1, z1, 1), v(r1, z1, -1))
   }
 }
-round(metal, ...MAIN, [[28.65, 0.5], [28.73, 0.5]])
+round(metal, ...MAIN, [[28.65, 0.5], [28.73, 0.5]], 1, 16)
 
 // The Monitor is a broad, lower drum, with a strong horizontal glazed belt.
 const mx = -5.7, my = 21.3
@@ -109,47 +108,38 @@ round(concrete, mx, my, [[0, 9.6], [6.4, 9.6], [7, 10.8]])
 round(glass, mx, my, [[7, 10.3], [9.2, 10.3]])
 round(concrete, mx, my, [[9.2, 11], [11.8, 11.4], [12.3, 11.4]], 11.6 / 11.4)
 round(roof, mx, my, [[12.3, 10.85], [12.4, 10.85]])
-round(concrete, mx, my, [[12.4, 6.5], [13.25, 6.5]])
-round(glass, mx, my, [[13.25, 5.9], [13.32, 5.9]])
+round(concrete, mx, my, [[12.4, 6.5], [13.25, 6.5]], 1, 32)
+round(glass, mx, my, [[13.25, 5.9], [13.32, 5.9]], 1, 32)
 
 // Slender circulation drum at the joint between the two Wright volumes.
-round(concrete, 4.6, 7.8, [[0, 2.2], [27.1, 2.2]])
+round(concrete, 4.6, 7.8, [[0, 2.2], [27.1, 2.2]], 1, 24)
 
-// Gwathmey Siegel annex: quiet stone slab, with modest punched openings.
+// Gwathmey Siegel annex: a plain, slightly darker limestone backdrop.
+// Omit window and panel grids: subpixel repeated marks alias on the map.
 box(limestone, 7.3, 3.8, 0, 21.89, 32.89, 41.1)
-box(roof, 7.6, 4.1, 41.1, 21.6, 32.6, 41.16)
+box(limestone, 7.6, 4.1, 41.1, 21.6, 32.6, 41.16)
 box(limestone, 7.3, 3.8, 41.1, 7.6, 32.9, 41.6)
 box(limestone, 21.6, 3.8, 41.1, 21.9, 32.9, 41.6)
 box(limestone, 7.6, 3.8, 41.1, 21.6, 4.1, 41.6)
 box(limestone, 7.6, 32.6, 41.1, 21.6, 32.9, 41.6)
-for (let floor = 0; floor < 9; floor++) {
-  const z = 9.2 + floor * 3.45
-  for (const y of [7.1, 11.9, 16.7, 21.5, 26.3, 30.3]) {
-    if (y > 25) glass.quad([7.29, y, z], [7.29, y, z + 1.7], [7.29, y + 1.1, z + 1.7], [7.29, y + 1.1, z])
-    // Window planes sit a centimetre proud of stone, inside the OSM envelope.
-    // The east wall is inset below to leave room for that relief.
-    glass.quad([21.9, y, z], [21.9, y + 1.1, z], [21.9, y + 1.1, z + 1.7], [21.9, y, z + 1.7])
-  }
-  for (const x of [10, 14.5, 19]) {
-    glass.quad([x, 32.9, z], [x, 32.9, z + 1.7], [x + 1.1, 32.9, z + 1.7], [x + 1.1, 32.9, z])
-  }
+
+/**
+ * The map displays baseColorFactor directly as sRGB. The shared GLB writer
+ * converts authoring colours to linear, so compensate locally to preserve
+ * this pale display palette without changing the shared kit's contract.
+ */
+function mapColor(hex: number): number {
+  return [16, 8, 0].reduce((out, shift) =>
+    out | Math.round(255 * Math.pow(((hex >> shift) & 255) / 255, 1 / 2.2)) << shift, 0)
 }
 
-// Quiet limestone panel joints: no texture, and no competing window grid on
-// the main avenue-facing wall. Relief stays within the measured envelope.
-for (let z = 8; z < 41; z += 3.45)
-  mortar.quad([7.295, 3.81, z], [7.295, 3.81, z + 0.04], [7.295, 32.88, z + 0.04], [7.295, 32.88, z])
-for (let y = 8.65; y < 32; y += 4.85)
-  mortar.quad([7.295, y, 7.5], [7.295, y, 41.1], [7.295, y + 0.035, 41.1], [7.295, y + 0.035, 7.5])
-
 const parts = [
-  { part: concrete, material: { name: 'concrete', color: 0xeeeae0 } },
-  { part: limestone, material: { name: 'limestone', color: 0xcac7bd } },
-  { part: recess, material: { name: 'recess', color: 0xaaa89e } },
-  { part: glass, material: { name: 'glass', color: 0x839b9e, roughness: 0.38 } },
-  { part: metal, material: { name: 'steel', color: 0xd0d4cb, doubleSided: true } },
-  { part: roof, material: { name: 'roof', color: 0xd1cfc5 } },
-  { part: mortar, material: { name: 'mortar', color: 0xbab8b0 } },
+  { part: concrete, material: { name: 'concrete', color: mapColor(0xfffef9) } },
+  { part: limestone, material: { name: 'limestone', color: mapColor(0xdfddd3) } },
+  { part: recess, material: { name: 'recess', color: mapColor(0xe1e1db) } },
+  { part: glass, material: { name: 'glass', color: mapColor(0xc8d9dc), roughness: 0.5 } },
+  { part: metal, material: { name: 'steel', color: mapColor(0xe3e9e7), doubleSided: true } },
+  { part: roof, material: { name: 'roof', color: mapColor(0xf3f3ed) } },
 ]
 const triangles = parts.reduce((n, { part }) => n + part.triangles, 0)
 if (triangles > 9000) throw new Error(`Triangle budget exceeded: ${triangles}`)

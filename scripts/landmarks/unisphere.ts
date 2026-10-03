@@ -9,6 +9,7 @@ import { Part, cross, sub, len, writeGlb, type V3 } from './mesh'
 const RAD = Math.PI / 180
 const TAU = Math.PI * 2
 const RADIUS = 18.3
+const PANEL_RADIUS = RADIUS + 0.30
 const CENTRE: V3 = [0, 0, 24.5]
 const TILT = 23.5 * RAD
 const grid = new Part()
@@ -48,18 +49,19 @@ function tube(part: Part, path: V3[], radius: number, sides = 3) {
   }
 }
 
-// 24 longitude half-circles and eleven parallels, genuinely open on both sides.
-for (let lon = 0; lon < 180; lon += 15) {
+// Eighteen meridians and seven parallels retain the globe's open grid while
+// leaving more quiet space between thicker struts at phone-map distances.
+for (let lon = 0; lon < 180; lon += 20) {
   const a = lon * RAD
   tube(grid, Array.from({ length: 48 }, (_, i) => {
     const t = i / 48 * TAU
     return add(CENTRE, tilt([RADIUS * Math.cos(t) * Math.sin(a),
       -RADIUS * Math.cos(t) * Math.cos(a), RADIUS * Math.sin(t)]))
-  }), 0.105)
+  }), 0.17)
 }
-for (let lat = -75; lat <= 75; lat += 15) {
+for (let lat = -60; lat <= 60; lat += 20) {
   const steps = Math.max(16, Math.round(48 * Math.cos(lat * RAD) / 4) * 4)
-  tube(grid, Array.from({ length: steps }, (_, i) => globe([i / steps * 360, lat])), lat === 0 ? 0.14 : 0.105)
+  tube(grid, Array.from({ length: steps }, (_, i) => globe([i / steps * 360, lat])), lat === 0 ? 0.20 : 0.17)
 }
 
 // Hand-drawn geographic outlines. Bays, narrow isthmuses and the major
@@ -121,20 +123,21 @@ function panel(a: Geo, b: Geo, c: Geo) {
     panel(p, mid, r); panel(mid, q, r)
     return
   }
-  const vertices = [a, b, c].map(p => globe(p, RADIUS + 0.18))
+  // The plate's chord stays outside even the thickened equatorial strut.
+  const vertices = [a, b, c].map(p => globe(p, PANEL_RADIUS))
   const normals = vertices.map(p => unit(sub(p, CENTRE)))
   land.tri(vertices[0], vertices[1], vertices[2], undefined, undefined, undefined, normals)
 }
 for (const outline of Object.values(continents)) {
   for (const [a, b, c] of triangulate(outline)) panel(a, b, c)
-  // A narrow dark edge makes the raised panels read as cut steel, not paint.
+  // A shallow edge gives the panels a solid silhouette without dark outlines.
   for (let i = 0; i < outline.length; i++) {
     const a = outline[i], b = outline[(i + 1) % outline.length]
     const steps = Math.ceil(Math.hypot(a[0] - b[0], a[1] - b[1]) / 5)
     for (let j = 0; j < steps; j++) {
       const at = (t: number): Geo => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]
       const p = at(j / steps), q = at((j + 1) / steps)
-      land.quad(globe(p, RADIUS + 0.04), globe(q, RADIUS + 0.04), globe(q, RADIUS + 0.18), globe(p, RADIUS + 0.18))
+      land.quad(globe(p, RADIUS + 0.10), globe(q, RADIUS + 0.10), globe(q, PANEL_RADIUS), globe(p, PANEL_RADIUS))
     }
   }
 }
@@ -147,7 +150,7 @@ for (let i = 0; i < antarcticCoast.length; i++) {
   const a: Geo = [i * 15, antarcticCoast[i]]
   const b: Geo = [(i + 1) * 15, antarcticCoast[(i + 1) % antarcticCoast.length]]
   panel([i * 15 + 7.5, -90], b, a)
-  land.quad(globe(b, RADIUS + 0.04), globe(a, RADIUS + 0.04), globe(a, RADIUS + 0.18), globe(b, RADIUS + 0.18))
+  land.quad(globe(b, RADIUS + 0.10), globe(a, RADIUS + 0.10), globe(a, PANEL_RADIUS), globe(b, PANEL_RADIUS))
 }
 
 // Three satellite orbits: different inclinations and ascending nodes, with
@@ -156,19 +159,21 @@ for (const [inclination, node, radius] of [[32, -30, 20.1], [49, 20, 20.35], [63
   const i = inclination * RAD, n = node * RAD
   const u: V3 = [Math.cos(n), Math.sin(n), 0]
   const v: V3 = [-Math.sin(n) * Math.cos(i), Math.cos(n) * Math.cos(i), Math.sin(i)]
-  tube(orbits, Array.from({ length: 96 }, (_, k) => {
-    const a = k / 96 * TAU
+  // Broad orbital strokes should survive before individual grid lines do.
+  // Seventy-two arc segments stay smooth even at the largest map size.
+  tube(orbits, Array.from({ length: 72 }, (_, k) => {
+    const a = k / 72 * TAU
     return add(CENTRE, add(mul(u, radius * Math.cos(a)), mul(v, radius * Math.sin(a))))
-  }), 0.19, 4)
+  }), 0.23, 4)
 }
 
 // Three broad, tapered steel legs, curving inward into the globe's underside.
 for (let leg = 0; leg < 3; leg++) {
   const angle = (leg * 120 + 30) * RAD
-  const rings = [[0, 4.3, 0, 0.85], [0.45, 4.3, -0.1, 0.85], [2.0, 3.35, -0.6, 0.88],
-    [4.0, 2.3, -1.2, 0.77], [5.7, 1.55, -1.9, 0.65], [7.2, 1.1, -2.3, 0.5]].map(([z, r, y, w]) => {
+  const rings = [[0, 4.3, 0, 1.12], [0.45, 4.3, -0.1, 1.12], [2.0, 3.35, -0.6, 1.16],
+    [4.0, 2.3, -1.2, 1.04], [5.7, 1.55, -1.9, 0.88], [7.2, 1.1, -2.3, 0.7]].map(([z, r, y, w]) => {
     const x = Math.cos(angle) * r, yy = Math.sin(angle) * r + y
-    return [[-w, -0.65], [w, -0.65], [w, 0.65], [-w, 0.65]].map(([a, b]): V3 =>
+    return [[-w, -0.9], [w, -0.9], [w, 0.9], [-w, 0.9]].map(([a, b]): V3 =>
       [x + a * Math.cos(angle) - b * Math.sin(angle), yy + a * Math.sin(angle) + b * Math.cos(angle), z])
   })
   pedestal.loft(rings)
@@ -177,20 +182,22 @@ for (let leg = 0; leg < 3; leg++) {
 }
 // A short faceted saddle joins the legs into one conical support and meets
 // the lower globe framing, avoiding three disconnected plank-like supports.
-const saddle = [[5.4, 1.7, -1.8], [6.2, 1.45, -2.1], [7.2, 1.2, -2.3]].map(([z, r, y]) =>
+const saddle = [[4.9, 2.05, -1.6], [6.2, 1.8, -2.1], [7.2, 1.45, -2.3]].map(([z, r, y]) =>
   Array.from({ length: 12 }, (_, j): V3 => [r * Math.cos(j / 12 * TAU), y + r * Math.sin(j / 12 * TAU), z]))
 pedestal.loft(saddle)
 pedestal.cap(saddle[0], false)
 pedestal.cap(saddle[saddle.length - 1], true)
 
 const parts = [
-  { part: grid, material: { name: 'steel-grid', color: 0xa9b7bf, roughness: 0.6, doubleSided: true } },
-  { part: land, material: { name: 'steel-continents', color: 0xc9d2d7, roughness: 0.65, doubleSided: true } },
-  { part: orbits, material: { name: 'steel-orbits', color: 0xa4b1bb, roughness: 0.5, doubleSided: true } },
-  { part: pedestal, material: { name: 'steel-base', color: 0x98a6af, roughness: 0.7 } },
+  // The kit converts these to linear factors; Parchment displays the factors
+  // directly as sRGB. Lift the palette so the result remains pale steel.
+  { part: grid, material: { name: 'steel-grid', color: 0xd2d9dd, roughness: 0.6, doubleSided: true } },
+  { part: land, material: { name: 'steel-continents', color: 0xeaedef, roughness: 0.65, doubleSided: true } },
+  { part: orbits, material: { name: 'steel-orbits', color: 0xcbd4da, roughness: 0.5, doubleSided: true } },
+  { part: pedestal, material: { name: 'steel-base', color: 0xc5cdd3, roughness: 0.7 } },
 ]
 const triangles = parts.reduce((n, { part }) => n + part.triangles, 0)
-if (triangles > 12000) throw new Error(`Triangle budget exceeded: ${triangles}`)
+if (triangles > 11361) throw new Error(`Triangle budget exceeded: ${triangles}`)
 const glb = writeGlb('Unisphere', parts, {
   license: 'CC0-1.0', frame: 'Y up, -Z north, +X east, metres, origin at ground',
   globeDiameter: 36.6, axialTilt: 23.5, orbitalRings: 3, bearing: 0, elevation: 0,
