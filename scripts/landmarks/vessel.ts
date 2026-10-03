@@ -10,57 +10,28 @@ import { Part, writeGlb, type V3 } from './mesh'
 
 const bronze = new Part()
 const treads = new Part()
-const nosings = new Part()
-const rails = new Part()
 const stone = new Part()
 const TAU = Math.PI * 2
 const LEVELS = 16
 const HEIGHT = 45.7
-const RAIL = 1.05
 const FIRST = 1.1
-const TOP = HEIGHT - RAIL
+const TOP = HEIGHT
 const DEPTH = 2.8
 const HALF_ANGLE = 0.125
-const THICKNESS = 0.9
+// Broad copper edges survive the 80 px silhouette without detached rail lines.
+const THICKNESS = 1.0
 const polar = (r: number, a: number, z: number): V3 => [r * Math.cos(a), r * Math.sin(a), z]
-const mix = (a: V3, b: V3, t: number): V3 => a.map((v, i) => v + (b[i] - v) * t) as V3
 const up = (p: V3, z: number): V3 => [p[0], p[1], p[2] + z]
 const zAt = (level: number) => FIRST + (TOP - FIRST) * level / (LEVELS - 1)
 const radius = (level: number) => 7.5 + 16.1 * Math.pow(level / (LEVELS - 1), 0.7)
 const angle = (level: number, bay: number) => bay * TAU / 5 + (level % 2) * Math.PI / 5
 
 // A four-corner deck, CCW above, with outward copper sides and underside.
-function deck(corners: V3[], thickness = THICKNESS, walkingSurface = true) {
+function deck(corners: V3[], thickness = THICKNESS) {
   const lower = corners.map(p => up(p, -thickness))
   bronze.loft([lower, corners])
   bronze.cap(lower, false)
-  if (walkingSurface) treads.cap(corners, true)
-}
-
-// Narrow rectangular beams keep handrails legible without opaque glazing.
-function beam(a: V3, b: V3, width: number, height: number) {
-  const dx = b[0] - a[0], dy = b[1] - a[1]
-  const d = Math.hypot(dx, dy)
-  const side: V3 = [-dy / d * width / 2, dx / d * width / 2, 0]
-  const section = (p: V3): V3[] => [
-    [p[0] - side[0], p[1] - side[1], p[2] - height / 2],
-    [p[0] + side[0], p[1] + side[1], p[2] - height / 2],
-    [p[0] + side[0], p[1] + side[1], p[2] + height / 2],
-    [p[0] - side[0], p[1] - side[1], p[2] + height / 2],
-  ]
-  const s = section(a), e = section(b)
-  for (let k = 0; k < 4; k++) rails.quad(s[k], s[(k + 1) % 4], e[(k + 1) % 4], e[k])
-  // Ends meet adjacent rails; omit their hidden caps to spend faces on stairs.
-}
-
-function railing(a: V3, b: V3) {
-  beam(up(a, RAIL - 0.06), up(b, RAIL - 0.06), 0.12, 0.12)
-  const c = mix(a, b, 0.5)
-  const d = Math.hypot(b[0] - a[0], b[1] - a[1])
-  const dx = (b[0] - a[0]) / d * 0.06, dy = (b[1] - a[1]) / d * 0.06
-  const l: V3 = [c[0] - dx, c[1] - dy, c[2]]
-  const r: V3 = [c[0] + dx, c[1] + dy, c[2]]
-  rails.quad(l, r, up(r, RAIL), up(l, RAIL))
+  treads.cap(corners, true)
 }
 
 type Landing = { innerLeft: V3; outerLeft: V3; outerRight: V3; innerRight: V3 }
@@ -78,8 +49,6 @@ for (let level = 0; level < LEVELS; level++) {
     const outerRight = polar(r, a + HALF_ANGLE, z)
     const innerRight = polar(r - depth, a + HALF_ANGLE, z)
     deck([innerLeft, outerLeft, outerRight, innerRight])
-    railing(outerLeft, outerRight)
-    railing(innerLeft, innerRight)
     landings[level].push({ innerLeft, outerLeft, outerRight, innerRight })
   }
 }
@@ -87,27 +56,9 @@ for (let level = 0; level < LEVELS; level++) {
 let flights = 0
 function flight(aInner: V3, aOuter: V3, bInner: V3, bOuter: V3, ccw: boolean, thickness = THICKNESS) {
   const corners = [aInner, aOuter, bOuter, bInner]
-  deck(ccw ? corners : corners.reverse(), thickness, false)
-  // Six deliberately broad tread groups read at map scale. The inclined
-  // copper edge is a stringer, enclosing the tread ends below its upper lip.
-  const steps = 6
-  for (let step = 0; step < steps; step++) {
-    const a = mix(aInner, bInner, step / steps)
-    const b = mix(aOuter, bOuter, step / steps)
-    const c = mix(aOuter, bOuter, (step + 1) / steps)
-    const d = mix(aInner, bInner, (step + 1) / steps)
-    const cLow: V3 = [c[0], c[1], a[2]], dLow: V3 = [d[0], d[1], a[2]]
-    const top = [a, b, cLow, dLow], riser = [dLow, cLow, c, d]
-    treads.cap(ccw ? top : top.reverse(), true)
-    treads.cap(ccw ? riser : riser.reverse(), true)
-    if (step % 2 === 0) {
-      // A few broad nosings identify the stairs even in the top-down view.
-      const edge = [mix(dLow, a, 0.12), mix(cLow, b, 0.12), cLow, dLow].map(p => up(p, 0.008))
-      nosings.cap(ccw ? edge : edge.reverse(), true)
-    }
-  }
-  railing(aInner, bInner)
-  railing(aOuter, bOuter)
+  // At phone sizes the flight is one broad band: individual treads and
+  // detached handrails alias, while the real open diamonds carry its identity.
+  deck(ccw ? corners : corners.reverse(), thickness)
   flights++
 }
 
@@ -138,12 +89,16 @@ for (let bay = 0; bay < 5; bay++) {
   }
 }
 
+// The shared writer converts these swatches to linear RGB. Parchment sends
+// baseColorFactor directly to its sRGB framebuffer, so compensate here (not
+// in the shared kit) to retain the intended pale, warm copper on the map.
+const mapColor = (hex: number) => [16, 8, 0].reduce((value, shift) =>
+  value | Math.round(Math.pow(((hex >> shift) & 255) / 255, 1 / 2.2) * 255) << shift, 0)
+
 const parts = [
-  { part: bronze, material: { name: 'bronze', color: 0xb98158, roughness: 0.48 } },
-  { part: treads, material: { name: 'steel-stairs', color: 0x746a60 } },
-  { part: nosings, material: { name: 'steel-nosings', color: 0xac9b85 } },
-  { part: rails, material: { name: 'bronze-handrails', color: 0xd0a17b, roughness: 0.5, doubleSided: true } },
-  { part: stone, material: { name: 'stone', color: 0xb5a89a } },
+  { part: bronze, material: { name: 'bronze', color: mapColor(0xb98c6f), roughness: 0.48 } },
+  { part: treads, material: { name: 'bronze-walkways', color: mapColor(0xc39b7e), roughness: 0.6 } },
+  { part: stone, material: { name: 'stone', color: mapColor(0xc9b9a6) } },
 ]
 const triangles = parts.reduce((n, { part }) => n + part.triangles, 0)
 if (triangles > 12_000) throw new Error(`Triangle budget exceeded: ${triangles}`)
@@ -153,6 +108,7 @@ const glb = writeGlb('Vessel', parts, {
   height: HEIGHT, levels: LEVELS, landings: 80, flights,
   bearing: 0, elevation: 0, replaces: ['relation/16231018'],
 })
+if (glb.length > 300_000) throw new Error(`Landmark exceeds 300 KB: ${glb.length}`)
 const out = new URL('../../landmarks/models/vessel.glb', import.meta.url).pathname
 await Bun.write(out, glb)
 console.log(`${out}: ${triangles} triangles, ${glb.length} bytes; ${flights} flights, 80 landings`)

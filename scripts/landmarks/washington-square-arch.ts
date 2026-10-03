@@ -3,7 +3,7 @@
  * bun scripts/landmarks/washington-square-arch.ts
  * Map frame: x = v/east, y = u/Fifth Avenue/north, z up. Place at bearing 32°.
  * The supplied OSM envelope is 19.1 × 7 m; the requested real height is 23.5 m.
- * Sculpture and lettering are deliberately broad architectural reliefs.
+ * Sculpture and the blank inscription panel are broad architectural reliefs.
  */
 import { Part, addGltfTriangles, cross, sub, len, writeGlb, type V3 } from './mesh'
 
@@ -96,10 +96,10 @@ for (const s of [-1, 1]) {
       face * 2.78 - 0.1, face * 2.78 + 0.1, z, z + 0.19)
   }
   box(trim, s < 0 ? -9.07 : 4.5, s < 0 ? -4.5 : 9.07, -2.99, 2.99, 9.58, 9.8)
-  // Side elevations have the same quiet framed stone panels as the piers.
-  for (const y of [-2.12, 2.12]) box(trim, s * 9.0 - 0.075, s * 9.0 + 0.075,
+  // Same-colour side frames catch light quietly, leaving the archivolt dominant.
+  for (const y of [-2.12, 2.12]) box(stone, s * 9.0 - 0.075, s * 9.0 + 0.075,
     y - 0.13, y + 0.13, 1.58, 15.92)
-  for (const z of [2.05, 12.72, 15.72]) box(trim, s * 9.0 - 0.075, s * 9.0 + 0.075,
+  for (const z of [2.05, 15.72]) box(stone, s * 9.0 - 0.075, s * 9.0 + 0.075,
     -2.12, 2.12, z, z + 0.18)
 }
 
@@ -114,36 +114,31 @@ for (let i = 0; i < SEGMENTS; i++) {
   stone.quad([xa, 2.65, za], [xa, -2.65, za], [xb, -2.65, zb], [xb, 2.65, zb])
 }
 for (const face of [-1, 1]) {
-  archBand(trim, 4.5, 5.18, face > 0 ? 2.65 : -3.02, face > 0 ? 3.02 : -2.65)
-  archBand(stone, 4.66, 4.79, face > 0 ? 3.02 : -3.1, face > 0 ? 3.1 : -3.02)
-  // Voussoir seams are fine joints, not giant alternating coloured blocks.
-  for (let i = 1; i < 16; i++) {
-    const a = i * Math.PI / 16
-    archBand(recess, 4.81, 5.14, face * 3.025 - 0.006, face * 3.025 + 0.006, a - 0.006, a + 0.006, 1)
+  // One uninterrupted broad archivolt survives aliased phone-sized views.
+  // Matching jambs carry its bright outline down the full open passage.
+  archBand(trim, 4.5, 5.45, face > 0 ? 2.65 : -3.08, face > 0 ? 3.08 : -2.65)
+  for (const side of [-1, 1]) {
+    box(trim, side > 0 ? 4.5 : -4.98, side > 0 ? 4.98 : -4.5,
+      face > 0 ? 2.65 : -3.08, face > 0 ? 3.08 : -2.65, 1.58, SPRING)
   }
 }
 
-// Three rows of broad coffers articulate the barrel vault from street level.
-// Their frames sit slightly inside the structural soffit to avoid z-fighting.
+// A few broad, low-contrast coffer fields replace the subpixel vault grid.
 function soffit(p: Part, a: number, b: number, y0: number, y1: number, r: number) {
   const pt = (angle: number, y: number): V3 => [r * Math.cos(angle), y, SPRING + r * Math.sin(angle)]
   p.quad(pt(a, y1), pt(a, y0), pt(b, y0), pt(b, y1))
 }
-for (let k = 0; k < 8; k++) for (let row = 0; row < 3; row++) {
-  const a = k * Math.PI / 8 + 0.052, b = (k + 1) * Math.PI / 8 - 0.052
-  const y0 = -2.42 + row * 1.63, y1 = y0 + 1.42
+for (let k = 0; k < 4; k++) for (let row = 0; row < 2; row++) {
+  const a = k * Math.PI / 4 + 0.10, b = (k + 1) * Math.PI / 4 - 0.10
+  const y0 = -2.32 + row * 2.42, y1 = y0 + 2.12
   soffit(recess, a, b, y0, y1, 4.43)
-  soffit(trim, a, a + 0.035, y0, y1, 4.39)
-  soffit(trim, b - 0.035, b, y0, y1, 4.39)
-  soffit(trim, a, b, y0, y0 + 0.13, 4.39)
-  soffit(trim, a, b, y1 - 0.13, y1, 4.39)
 }
 
 // Architrave, frieze and gently projecting cornice; then the inscription attic.
 for (const [z0, z1, hx, hy, p] of [
   [16.5, 16.78, 9.12, 2.98, trim], [16.78, 17.5, 8.97, 2.82, stone],
   [17.5, 17.7, 9.22, 3.05, trim], [17.7, 18.03, 9.4, 3.22, trim],
-  [18.03, 18.25, 9.55, 3.5, trim], [18.25, 22.68, 8.94, 2.87, stone],
+  [18.03, 18.25, 9.55, 3.5, trim], [18.25, 22.68, 8.94, 2.71, stone],
   [22.68, 22.9, 9.1, 3.04, trim], [22.9, 23.15, 9.32, 3.26, trim],
   [23.15, 23.32, 9.55, 3.5, trim],
 ] as Array<[number, number, number, number, Part]>) box(p, -hx, hx, -hy, hy, z0, z1)
@@ -154,22 +149,20 @@ for (const side of [-1, 1]) {
   box(trim, side > 0 ? 9.23 : -9.55, side > 0 ? 9.55 : -9.23, -3.18, 3.18, 23.32, 23.5)
 }
 
-// Subtle tablet and stylised word marks: no text texture or high-contrast ink.
+// Actual shallow recesses instead of thin inscription marks that alias on the
+// map. Surrounding stone stays flush with the attic's original face plane.
 for (const face of [-1, 1]) {
-  box(trim, -7.68, 7.68, face * 2.9 - 0.04, face * 2.9 + 0.04, 19.22, 21.87)
-  for (let row = 0; row < 3; row++) {
-    for (let word = 0; word < 7; word++) {
-      const x = (word - 3) * 1.8
-      const half = [0.61, 0.48, 0.72, 0.55, 0.7, 0.43, 0.64][(word + row * 2) % 7]
-      box(recess, x - half, x + half, face * 2.947 - 0.006, face * 2.947 + 0.006,
-        19.72 + row * 0.66, 19.82 + row * 0.66)
-    }
-  }
+  const y0 = face > 0 ? 2.71 : -2.87, y1 = face > 0 ? 2.87 : -2.71
+  box(stone, -8.94, 8.94, y0, y1, 18.25, 19.22)
+  box(stone, -8.94, 8.94, y0, y1, 21.87, 22.68)
+  box(stone, -8.94, -7.68, y0, y1, 19.22, 21.87)
+  box(stone, 7.68, 8.94, y0, y1, 19.22, 21.87)
+  box(recess, -7.68, 7.68, face * 2.715 - 0.005, face * 2.715 + 0.005, 19.22, 21.87)
 }
 
 // A broad folded wing in the face plane; its ridge catches light as carving.
 function wing(cx: number, y: number, z: number, side: number, scale = 1) {
-  const outline = [[0, 0], [0.5, 0.85], [1.6, 1.05], [1.26, 0.47], [1.68, 0.48], [1.06, -0.1]]
+  const outline = [[0, 0], [0.5, 0.85], [1.6, 1.05], [1.06, -0.1]]
   const ridge: V3 = [cx + side * 0.65 * scale, y + Math.sign(y) * 0.18, z + 0.35 * scale]
   for (let i = 0; i < outline.length; i++) {
     const a = outline[i], b = outline[(i + 1) % outline.length]
@@ -185,9 +178,8 @@ for (const face of [-1, 1]) {
   for (const side of [-1, 1]) {
     const x = side * 5.95, y = face * 2.95
     wing(x, y, 14.3, side, 0.92)
-    egg([x, y, 14.43], [0.28, 0.18, 0.29], 8, 4)
-    limb([[x, y, 14.05], [x + side * 0.7, y, 13.72], [x + side * 1.75, y, 13.14]], [0.23, 0.31, 0.08], 0.55)
-    limb([[x, y, 14.0], [x - side * 0.63, y, 14.25]], [0.12, 0.07], 0.65, 6)
+    egg([x, y, 14.43], [0.32, 0.22, 0.32], 8, 4)
+    limb([[x, y, 14.05], [x + side * 0.7, y, 13.72], [x + side * 1.75, y, 13.14]], [0.30, 0.38, 0.16], 0.55)
   }
   wing(-0.08, face * 3.04, 16.02, -1, 0.93)
   wing(0.08, face * 3.04, 16.02, 1, 0.93)
@@ -206,37 +198,32 @@ for (const side of [-1, 1]) {
     egg([x + leg * 0.3, 3.08, 2.84], [0.23, 0.32, 0.13], 8, 4)
   }
   smooth(sculpture, p => solid(p, [
-    oval([x, y - 0.12, 3.62], 0.68, 0.31), oval([x, y - 0.14, 4.55], 0.52, 0.33),
-    oval([x, y - 0.1, 5.51], 0.62, 0.37), oval([x, y - 0.08, 5.88], 0.43, 0.29),
+    oval([x, y - 0.12, 3.62], 0.76, 0.36), oval([x, y - 0.14, 4.55], 0.61, 0.38),
+    oval([x, y - 0.1, 5.51], 0.72, 0.42), oval([x, y - 0.08, 5.88], 0.49, 0.34),
     oval([x, y - 0.07, 6.0], 0.21, 0.2),
   ]))
-  // Broad asymmetric mantle and two folds distinguish carved clothing from
-  // cylindrical limbs without spending triangles on tiny facial features.
+  // The mantle is one broad silhouette; small folds and facial relief disappear
+  // at phone sizes and are intentionally omitted.
   smooth(sculpture, p => solid(p, [
     oval([x + side * 0.4, 2.77, 3.2], 0.47, 0.30, 8),
     oval([x + side * 0.38, 2.8, 4.48], 0.43, 0.32, 8),
     oval([x + side * 0.27, 2.85, 5.78], 0.34, 0.31, 8),
   ]))
-  for (const offset of [-0.16, 0.18]) limb([
-    [x + side * 0.28 + offset, 3.15, 5.61],
-    [x + side * 0.45 + offset, 3.06, 3.38],
-  ], [0.07, 0.1], 0.5, 6)
-  egg([x, y - 0.05, 6.34], [0.31, 0.3, 0.44])
-  egg([x, 3.19, 6.32], [0.085, 0.10, 0.14], 6, 3)
-  limb([[x - 0.5, y, 5.65], [x - 0.79, y, 4.95], [x - 0.68, 3.14, 4.65]], [0.23, 0.19, 0.13], 0.85)
-  limb([[x + 0.49, y, 5.65], [x + 0.74, y, 5.04], [x + 0.46, 3.18, 4.91]], [0.23, 0.18, 0.12], 0.85)
-  // War: vertical sword; Peace: a document held across the waist.
-  if (side > 0) {
-    box(sculpture, x - 0.78, x - 0.71, 3.11, 3.21, 2.88, 4.91)
-    box(sculpture, x - 0.94, x - 0.55, 3.1, 3.22, 4.48, 4.57)
-  } else box(sculpture, x + 0.12, x + 0.62, 3.12, 3.28, 4.5, 5.04)
+  egg([x, y - 0.05, 6.34], [0.36, 0.34, 0.46], 8, 4)
+  limb([[x - 0.5, y, 5.65], [x - 0.74, y, 4.95], [x - 0.68, 3.14, 4.65]], [0.27, 0.22, 0.17], 0.85)
+  limb([[x + 0.49, y, 5.65], [x + 0.7, y, 5.04], [x + 0.46, 3.18, 4.91]], [0.27, 0.22, 0.17], 0.85)
+  // Peace holds a broad document; War's sword merges quietly into the mantle.
+  if (side < 0) box(sculpture, x + 0.12, x + 0.62, 3.12, 3.28, 4.5, 5.04)
 }
 
+// The kit linearises these colours, while the map writes baseColorFactor
+// directly to sRGB. Near-white inputs keep the resulting marble warm and
+// brighter than neighbouring pale extrusions, even on shaded faces.
 const parts = [
-  { part: stone, material: { name: 'stone', color: 0xe9e5db } },
-  { part: trim, material: { name: 'stone-mouldings', color: 0xf2eee5 } },
-  { part: recess, material: { name: 'stone-recesses', color: 0xd8d2c5 } },
-  { part: sculpture, material: { name: 'stone-sculpture', color: 0xeee9de, doubleSided: true } },
+  { part: stone, material: { name: 'stone', color: 0xfffcf6 } },
+  { part: trim, material: { name: 'stone-mouldings', color: 0xfffefb } },
+  { part: recess, material: { name: 'stone-recesses', color: 0xfcfaf5 } },
+  { part: sculpture, material: { name: 'stone-sculpture', color: 0xfffefb, doubleSided: true } },
 ]
 const triangles = parts.reduce((sum, { part }) => sum + part.triangles, 0)
 if (triangles > 5000) throw new Error(`Triangle budget exceeded: ${triangles}`)
