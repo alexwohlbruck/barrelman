@@ -9,8 +9,9 @@
  * anchor, so a client places a model with nothing but a position, a bearing
  * and a scale.
  *
- * Faces are flat-shaded (unshared vertices). At landmark sizes that is both the
- * look we want and nearly free: these models are a few thousand triangles.
+ * `Part` emits a fresh vertex per triangle corner, so a face is flat-shaded
+ * unless explicit normals are given; `writeGlb` then merges the corners that
+ * came out identical, so smooth surfaces cost what they should.
  */
 import { deflateSync } from 'node:zlib'
 
@@ -188,8 +189,8 @@ export type MaterialSpec = {
 /**
  * Write parts as a single-mesh GLB, one primitive per material.
  *
- * Indexed, even though no vertex is shared: some readers (Parchment's own
- * among them) only take indexed triangles, and the index buffer is cheap.
+ * Indexed, with identical corners merged — see `weld`. Some readers
+ * (Parchment's own among them) only take indexed triangles anyway.
  */
 export function writeGlb(
   name: string,
@@ -265,14 +266,12 @@ export function writeGlb(
     }
     materials.push(m)
 
-    const count = part.pos.length / 3
-    const index = count > 65535 ? new Uint32Array(count) : new Uint16Array(count)
-    for (let i = 0; i < count; i++) index[i] = i
+    const { pos, nrm, uv, index } = weld(part, !!material.mask)
     primitives.push({
       attributes: {
-        POSITION: accessor(new Float32Array(part.pos), 'VEC3', 34962, true),
-        NORMAL: accessor(new Float32Array(part.nrm), 'VEC3', 34962),
-        ...(material.mask ? { TEXCOORD_0: accessor(new Float32Array(part.uv), 'VEC2', 34962) } : {}),
+        POSITION: accessor(pos, 'VEC3', 34962, true),
+        NORMAL: accessor(nrm, 'VEC3', 34962),
+        ...(material.mask ? { TEXCOORD_0: accessor(uv, 'VEC2', 34962) } : {}),
       },
       indices: accessor(index, 'SCALAR', 34963),
       material: materials.length - 1,
@@ -307,6 +306,49 @@ export function writeGlb(
   view.setUint32(at + 4, 0x004e4942, true) // BIN
   glb.set(bin, at + 8)
   return glb
+}
+
+/**
+ * Share identical corners between triangles.
+ *
+ * `Part` emits three fresh vertices per triangle, which is what a flat face
+ * needs and wasteful everywhere else: across a smooth-shaded figure, and
+ * along every flat face made of two or more triangles, the same position,
+ * normal and UV is written again and again. Merging exact duplicates (to a
+ * tenth of a millimetre) changes nothing on screen and roughly halves a
+ * model, more for a smooth one.
+ */
+function weld(part: Part, withUv: boolean) {
+  const count = part.pos.length / 3
+  const key = (i: number) => {
+    const q = (v: number, k = 1e4) => Math.round(v * k)
+    const p = part.pos, n = part.nrm, t = part.uv
+    return `${q(p[i * 3])},${q(p[i * 3 + 1])},${q(p[i * 3 + 2])},${q(n[i * 3], 1e3)},${q(n[i * 3 + 1], 1e3)},${q(n[i * 3 + 2], 1e3)}` +
+      (withUv ? `,${q(t[i * 2])},${q(t[i * 2 + 1])}` : '')
+  }
+  const seen = new Map<string, number>()
+  const order: number[] = []
+  const remap = new Uint32Array(count)
+  for (let i = 0; i < count; i++) {
+    const k = key(i)
+    let at = seen.get(k)
+    if (at === undefined) {
+      at = order.length
+      seen.set(k, at)
+      order.push(i)
+    }
+    remap[i] = at
+  }
+  const pos = new Float32Array(order.length * 3)
+  const nrm = new Float32Array(order.length * 3)
+  const uv = new Float32Array(order.length * 2)
+  order.forEach((src, i) => {
+    pos.set(part.pos.slice(src * 3, src * 3 + 3), i * 3)
+    nrm.set(part.nrm.slice(src * 3, src * 3 + 3), i * 3)
+    uv.set(part.uv.slice(src * 2, src * 2 + 2), i * 2)
+  })
+  const index = order.length > 65535 ? new Uint32Array(remap) : Uint16Array.from(remap)
+  return { pos, nrm, uv, index }
 }
 
 const align4 = (n: number) => n + ((4 - (n % 4)) % 4)
