@@ -9,6 +9,8 @@ import { Part, addGltfTriangles, writeGlb, type V3 } from './mesh'
 
 const brick = new Part(), stone = new Part(), glass = new Part(), windows = new Part()
 const steel = new Part(), seams = new Part(), highlights = new Part()
+const podium = new Part(), darkBrick = new Part(), steelFolds = new Part()
+const crownSteel = new Part()
 const roof = new Part()
 const CX = -8.4, CY = 7
 type XY = [number, number]
@@ -48,10 +50,26 @@ function facade(xy: XY[], lo: number, hi: number, spacing = 6.5, width = 2.3) {
 
 function block(x0: number, y0: number, x1: number, y1: number, lo: number, hi: number) {
   const xy = rect(x0, y0, x1, y1)
-  solid(brick, xy, lo, hi)
+  solid(podium, xy, lo, hi)
   solid(stone, xy, hi - .65, hi)
   roof.cap(ring(rect(x0 + .5, y0 + .5, x1 - .5, y1 - .5), hi + .012), true)
   facade(xy, lo + (lo === 0 ? 5 : .9), hi - 1.4)
+  brickBands(xy, [hi - 4.5], 1.8, false)
+}
+
+/** Broad summaries of the dark brick courses, preserving the pale central
+ * piers visible in the reference. They sit behind the existing glazing. */
+function brickBands(xy: XY[], heights: number[], height: number, split: boolean) {
+  for (let i = 0; i < xy.length; i++) {
+    const a = xy[i], b = xy[(i + 1) % xy.length]
+    const length = Math.hypot(b[0] - a[0], b[1] - a[1])
+    const dx = (b[0] - a[0]) / length, dy = (b[1] - a[1]) / length
+    const p = (t: number, z: number): V3 => [a[0] + dx * t + dy * .018, a[1] + dy * t - dx * .018, z]
+    const spans = split ? [[.03, .29], [.71, .97]] : [[.025, .975]]
+    for (const z of heights) for (const [lo, hi] of spans) {
+      darkBrick.quad(p(lo * length, z), p(hi * length, z), p(hi * length, z + height), p(lo * length, z + height))
+    }
+  }
 }
 
 // Three interlocking podium wings preserve the asymmetric street envelope.
@@ -68,6 +86,7 @@ block(-22.6, 24.2, 6, 26, 80, 90)
 const shaft = rect(-22.7, -10.7, 6, 24.2)
 solid(brick, shaft, 0, 185)
 facade(shaft, 16, 184, 6, 2.1)
+brickBands(shaft, [105, 121, 137, 153, 169, 180], 2.2, true)
 solid(stone, shaft, 183.8, 185.5)
 
 // Four recessed corners above the 185 m shoulder; the central bays continue
@@ -121,12 +140,12 @@ for (const [half, spring, rise, bottom, lights] of tiers) {
       const taper = 1 - .18 * Math.max(0, Math.min(1, (z - spring) / rise))
       return facePoint(side, x * taper, d * taper, z)
     }
-    smooth(steel, roof => {
+    smooth(steelFolds, roof => {
       for (let j = 0; j < segments; j++) {
         const a = Math.PI * j / segments, b = Math.PI * (j + 1) / segments
         const x0 = -half * Math.cos(a), x1 = -half * Math.cos(b)
         const z0 = spring + rise * Math.sin(a), z1 = spring + rise * Math.sin(b)
-        steel.quad(p(x0, bottom), p(x1, bottom), p(x1, z1), p(x0, z0))
+        crownSteel.quad(p(x0, bottom), p(x1, bottom), p(x1, z1), p(x0, z0))
         roof.quad(p(x0, z0), p(x1, z1), p(x1, z1, Math.abs(x1)), p(x0, z0, Math.abs(x0)))
         // Rolled arch rims and a narrow shadow line make the scallops legible.
         seams.quad(p(x0 * .976, spring + rise * .976 * Math.sin(a), depth + .045),
@@ -135,6 +154,22 @@ for (const [half, spring, rise, bottom, lights] of tiers) {
           p(x0 * .992, spring + rise * .992 * Math.sin(a), depth + .045))
       }
     })
+    // The lowest sunburst frames pale masonry, not a solid silver plate.
+    // This is a colour-region overlay on the existing crown face.
+    if (half === tiers[0][0]) {
+      for (let j = 0; j < segments; j++) {
+        const a = Math.PI * j / segments, b = Math.PI * (j + 1) / segments
+        const x0 = -half * .6 * Math.cos(a), x1 = -half * .6 * Math.cos(b)
+        brick.quad(p(x0, bottom, depth + .12), p(x1, bottom, depth + .12),
+          p(x1, spring + rise * .6 * Math.sin(b), depth + .12),
+          p(x0, spring + rise * .6 * Math.sin(a), depth + .12))
+      }
+      for (const x of [-4.8, 0, 4.8]) {
+        const top = spring + rise * .53 * Math.sqrt(1 - (x / (half * .6)) ** 2)
+        windows.quad(p(x - .65, bottom + .6, depth + .16), p(x + .65, bottom + .6, depth + .16),
+          p(x + .65, top, depth + .16), p(x - .65, top, depth + .16))
+      }
+    }
     // One broad rim per arch survives map scale. Fine radial ribs and inner
     // rings only produce aliasing; the triangular lights supply the sunburst.
     for (let j = 0; j < segments; j++) {
@@ -153,11 +188,11 @@ for (const [half, spring, rise, bottom, lights] of tiers) {
   }
 }
 
-// Optical widening holds roughly one pixel through most of the needle at
-// 80 px model height, without changing its measured 319 m tip. A static GLB
-// cannot enforce screen-space thickness, so the last pointed pixel can vary.
-smooth(steel, p => {
-  const profile = [[270, 2.8], [276, 2.55], [282, 2.35], [312, 2.15], [317, 1.7]]
+// A stainless needle, 1.5 m across at the 272 m crown junction: roughly a
+// quarter of the upper terrace's 5.9 m width, tapering to the 319 m tip.
+// A pixel-width minimum must be handled by the renderer, not a fat cylinder.
+smooth(crownSteel, p => {
+  const profile = [[270, 1.25], [272, .75], [282, .55], [300, .27], [313, .10]]
   const rings = profile.map(([z, r]) => Array.from({ length: 12 }, (_, i): V3 =>
     [CX + r * Math.cos(i * Math.PI / 6), CY + r * Math.sin(i * Math.PI / 6), z]))
   p.loft(rings)
@@ -206,15 +241,29 @@ function mapColor(hex: number): number {
     value | Math.round(255 * Math.pow(((hex >> shift) & 255) / 255, 1 / 2.2)) << shift, 0)
 }
 
+// Shared visible materials stay one primitive each even when their geometry
+// was authored separately (rolled steel rims and flat masonry roof caps).
+for (const [target, source] of [[steel, highlights], [podium, roof]]) {
+  target.pos.push(...source.pos)
+  target.nrm.push(...source.nrm)
+  target.uv.push(...source.uv)
+}
+
 const parts = [
-  { part: brick, material: { name: 'brick', color: mapColor(0xe9e7df) } },
-  { part: stone, material: { name: 'stone', color: mapColor(0xdce0dc) } },
-  { part: windows, material: { name: 'window-recesses', color: mapColor(0xd0d4d2) } },
-  { part: glass, material: { name: 'crown-glass', color: mapColor(0x8c9fa8), roughness: .4, doubleSided: true } },
-  { part: steel, material: { name: 'steel', color: mapColor(0xeff5f8), roughness: .32, doubleSided: true } },
-  { part: seams, material: { name: 'steel-seams', color: mapColor(0xb4c4cd) } },
-  { part: highlights, material: { name: 'steel-ribs', color: mapColor(0xf5f8fa), roughness: .3, doubleSided: true } },
-  { part: roof, material: { name: 'roof', color: mapColor(0xd1d4d2) } },
+  // Median sRGB samples: 04.jpg supplies masonry, glazing and steel folds;
+  // 01.jpg supplies sunlit silver without its clipped specular highlights.
+  // The podium uses the lower sunlit masonry in 04: the ground-level podium
+  // itself is obscured in these references. Roofs share that masonry grey.
+  { part: brick, material: { name: 'shaft-brick', color: mapColor(0xc6bfb4) } },
+  { part: podium, material: { name: 'podium-masonry', color: mapColor(0xcecdc6) } },
+  { part: stone, material: { name: 'stone-trim', color: mapColor(0xd6d0c8) } },
+  { part: windows, material: { name: 'window-glazing', color: mapColor(0x343434) } },
+  { part: darkBrick, material: { name: 'dark-brick', color: mapColor(0x323230) } },
+  { part: glass, material: { name: 'crown-glass', color: mapColor(0x454746), roughness: .4, doubleSided: true } },
+  { part: crownSteel, material: { name: 'brushed-steel', color: mapColor(0xbdbdbe), roughness: .4, doubleSided: true } },
+  { part: steel, material: { name: 'polished-steel', color: mapColor(0xedeeee), roughness: .32, doubleSided: true } },
+  { part: steelFolds, material: { name: 'steel-folds', color: mapColor(0x9fa1a3), roughness: .32, doubleSided: true } },
+  { part: seams, material: { name: 'steel-seams', color: mapColor(0x6e6b62) } },
 ]
 const triangles = parts.reduce((sum, { part }) => sum + part.triangles, 0)
 if (triangles > 12_000) throw new Error(`Triangle budget exceeded: ${triangles}`)

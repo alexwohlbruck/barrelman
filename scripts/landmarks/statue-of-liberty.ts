@@ -11,7 +11,10 @@
 import { Part, addGltfTriangles, cross, sub, len, square, writeGlb, type V3 } from './mesh'
 
 const pedestal = new Part()
+const stoneTrim = new Part()
+const loggiaRecess = new Part()
 const copper = new Part()
+const copperFolds = new Part()
 const torch = new Part()
 const flame = new Part()
 const TAU = Math.PI * 2
@@ -99,23 +102,24 @@ for (let row = 0; row < 4; row++) {
   }
 }
 solid(pedestal, [square(7.75, 13), square(6.95, 29.5)])
-pedestal.slab(16, 16.65, 7.85)
-pedestal.slab(28.6, 29.5, 7.45)
+stoneTrim.slab(16, 16.65, 7.85)
+stoneTrim.slab(28.6, 29.5, 7.45)
 // Inset core and real open recesses between the loggia piers, on all faces.
-pedestal.slab(29.5, 34, 6.05)
+// Recess colour records the deep bays in the photo; it is not window glass.
+loggiaRecess.slab(29.5, 34, 6.05)
 for (let face = 0; face < 4; face++) {
   const a = face * Math.PI / 2
   for (let i = -2; i <= 2; i++) {
     const along = i * 3.2
-    box(pedestal, [along * Math.cos(a) - 6.8 * Math.sin(a),
+    box(stoneTrim, [along * Math.cos(a) - 6.8 * Math.sin(a),
       along * Math.sin(a) + 6.8 * Math.cos(a), 31.75], [0.42, 0.55, 2.25], a)
   }
 }
-pedestal.slab(34, 35, 7.75)
-pedestal.slab(35, 35.65, 8.45)
-pedestal.slab(35.65, 36.2, 8.05)
-pedestal.slab(36.2, 36.9, 8.45, 7.5)
-pedestal.slab(36.2, 36.9, 5.6)
+stoneTrim.slab(34, 35, 7.75)
+stoneTrim.slab(35, 35.65, 8.45)
+stoneTrim.slab(35.65, 36.2, 8.05)
+stoneTrim.slab(36.2, 36.9, 8.45, 7.5)
+stoneTrim.slab(36.2, 36.9, 5.6)
 
 // Sandals and the forward left foot: distinguish the stance below the hem.
 ellipsoid(copper, [-1.65, 0.1, 37.65], [1.35, 2.05, 0.75])
@@ -134,12 +138,34 @@ const robe = [
   [63.5, 0, 0.2, 2.7, 1.65, 0.1, 0.7],
   [64.5, 0, 0.2, 1.15, 1.05, 0.04, 0.8],
 ]
-smooth(copper, p => solid(p, robe.map(([z, x, y, rx, ry, fold, phase]) =>
+const robeSurface = new Part()
+smooth(robeSurface, p => solid(p, robe.map(([z, x, y, rx, ry, fold, phase]) =>
   Array.from({ length: 40 }, (_, i): V3 => {
     const a = i / 40 * TAU
     const f = fold * (Math.cos(a * 9 + phase) + 0.25 * Math.cos(a * 5 - phase))
     return [x + (rx + f) * Math.cos(a), y + (ry + f) * Math.sin(a), z]
   }))), 72)
+
+// Keep the original mesh and its smooth normals. Colour whole loft quads,
+// following the recessed folds and the sheltered east flank in photo 01;
+// this preserves broad, continuous regions instead of isolated dark triangles.
+const robeLevels = robe.length - 1
+const robeSideTriangles = 40 * robeLevels * 2
+for (let t = 0; t < robeSurface.triangles; t++) {
+  const column = Math.floor(t / (robeLevels * 2))
+  const level = Math.floor(t / 2) % robeLevels
+  const a = (column + 0.5) / 40 * TAU
+  const phase = (robe[level][6] + robe[level + 1][6]) / 2
+  // Only the deep lower folds receive the dark patina; shallow chest
+  // ripples keep the main copper colour rather than forming painted stripes.
+  const foldDepth = (robe[level][5] + robe[level + 1][5]) / 2
+  const valley = foldDepth >= 0.3 && Math.cos(a * 9 + phase) < -0.5
+  const shelteredFlank = Math.cos(a) > 0.65 && Math.sin(a) > -0.55
+  const target = t < robeSideTriangles && (valley || shelteredFlank) ? copperFolds : copper
+  target.pos.push(...robeSurface.pos.slice(t * 9, t * 9 + 9))
+  target.nrm.push(...robeSurface.nrm.slice(t * 9, t * 9 + 9))
+  target.uv.push(...robeSurface.uv.slice(t * 6, t * 6 + 6))
+}
 
 // The palla crosses the chest and gathers at the left elbow. Flattened
 // ridges share the robe's colour and read as a few heavy folds of cloth.
@@ -233,11 +259,29 @@ smooth(flame, p => solid(p, [
   oval([-6.25, -3.2, 83], 0, 0, 16),
 ]), 80)
 
+// Reference photos: 01.jpg (1280 × 960) and 02.jpg (1280 × 3171).
+// Colours are sRGB patch medians (copper excludes pale highlights);
+// the GLB writer converts them to linear baseColorFactor. Do not compensate
+// for the map palette. Dark verdigris follows the robe valleys and sheltered
+// flank; the loggia also has a broad dark region for its deep openings.
+// Sample rectangles are [left, top, right, bottom], with exclusive upper bounds.
 const parts = [
-  { part: pedestal, material: { name: 'pedestal', color: 0xe0d7c4 } },
-  { part: copper, material: { name: 'copper', color: 0x96cab6 } },
-  { part: torch, material: { name: 'torch', color: 0x669987 } },
-  { part: flame, material: { name: 'flame', color: 0xf4c85e } },
+  // Granite shaft, rustication, plinth and steps; photo 02 [638, 2736, 740, 2783].
+  { part: pedestal, material: { name: 'pedestal', color: 0xada89e } },
+  // Lighter granite piers, cornices, parapet and horizontal bands; photo 02 [348, 2410, 375, 2489].
+  { part: stoneTrim, material: { name: 'stone-trim', color: 0xb9aea6 } },
+  // Deep inset walls behind the loggia piers; photo 02 [565, 2385, 611, 2458].
+  { part: loggiaRecess, material: { name: 'loggia-recess', color: 0x302e29 } },
+  // Coloured sunlit robe: photo 01 [608, 265, 665, 387], median of the
+  // brightest quartile with HSV saturation >= 0.4 (excluding pale glints).
+  // Tablet [685, 251, 707, 294] gives a corroborating #50a59c.
+  { part: copper, material: { name: 'copper', color: 0x59a69f } },
+  // Deep green folds: photo 01 [643, 397, 651, 433], unfiltered median.
+  { part: copperFolds, material: { name: 'copper-folds', color: 0x076e61 } },
+  // Weathered copper torch handle and cup; photo 02 [345, 192, 356, 197].
+  { part: torch, material: { name: 'torch', color: 0x577477 } },
+  // Sunlit gold leaf on the flame; photo 02 [364, 137, 368, 140].
+  { part: flame, material: { name: 'flame', color: 0xf2dc84 } },
 ]
 const glb = writeGlb('Statue of Liberty', parts, {
   license: 'CC0-1.0',

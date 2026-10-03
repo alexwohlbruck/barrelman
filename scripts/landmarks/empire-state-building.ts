@@ -13,8 +13,9 @@ import { Part, writeGlb, type V3 } from './mesh'
 type XY = [number, number]
 type Envelope = [number, number, number, number]
 const stone = new Part()
+const granite = new Part()
 const glass = new Part()
-const trim = new Part()
+const trim = stone
 const roof = new Part()
 const steel = new Part()
 const dark = new Part()
@@ -89,7 +90,7 @@ function facade(ring: XY[], bottom: number, top: number, pitch = 11, entrance = 
     const spacing = length / count
     const width = spacing * .52
     const lo = bottom + 1.8, hi = top - 2
-    panel(stone, 0, length, bottom, lo)
+    panel(entrance ? granite : stone, 0, length, bottom, lo)
     panel(stone, 0, length, hi, top)
     let previous = 0
     for (let j = 0; j < count; j++) {
@@ -107,16 +108,16 @@ function facade(ring: XY[], bottom: number, top: number, pitch = 11, entrance = 
 }
 
 /** Raised stone coping surrounds a slightly lower, quiet grey terrace. */
-function terrace(ring: XY[], bottom: number, top: number) {
+function terrace(ring: XY[], bottom: number, top: number, coping = stone) {
   const cx = ring.reduce((s, p) => s + p[0], 0) / ring.length
   const cy = ring.reduce((s, p) => s + p[1], 0) / ring.length
   const inner: XY[] = ring.map(([x, y]) => [cx + (x - cx) * .972, cy + (y - cy) * .972])
-  trim.loft([at(ring, bottom), at(ring, top)])
-  trim.loft([at(inner, top - .45).reverse(), at(inner, top).reverse()])
+  coping.loft([at(ring, bottom), at(ring, top)])
+  coping.loft([at(inner, top - .45).reverse(), at(inner, top).reverse()])
   const a = at(ring, top), b = at(inner, top)
   for (let i = 0; i < ring.length; i++) {
     const j = (i + 1) % ring.length
-    trim.quad(a[i], a[j], b[j], b[i])
+    coping.quad(a[i], a[j], b[j], b[i])
   }
   cap(roof, inner, top - .45)
 }
@@ -130,7 +131,7 @@ function tier(ring: XY[], bottom: number, top: number) {
 // Keep its full 129.6 × 59.4 m envelope while the tower sits east of the anchor.
 const base: XY[] = [[-37.1, -25.3], [92.5, -25.3], [92.5, 30.5],
   [88.9, 34.1], [-31.8, 34.1], [-37.1, 28.8], [-37.1, 0]]
-solid(stone, base, 0, 2)
+solid(granite, base, 0, 2)
 facade(base, 2, 19.5, 12, true)
 terrace(base, 19.5, 20.5)
 
@@ -148,11 +149,11 @@ tier(chamfer([9.2, 46.5, -8.6, 12.2], 2), 320, 330)
 
 // Observatory promenade: a visible pale terrace and an inset lantern.
 solid(dark, chamfer([17.4, 39, -7, 10.7], 2), 330, 335)
-solid(trim, chamfer([16.8, 39.6, -7.6, 11.3], 2), 334.6, 335.5)
+solid(steel, chamfer([16.8, 39.6, -7.6, 11.3], 2), 334.6, 335.5)
 
 // A low pale parapet preserves the observatory silhouette; subpixel metal
 // posts would alias into a noisy dark fringe in the map's renderer.
-terrace(chamfer([10, 45.7, -7.8, 11.4], 2), 330, 331.15)
+terrace(chamfer([10, 45.7, -7.8, 11.4], 2), 330, 331.15, steel)
 
 // Faceted mooring mast: tall Art Deco ribs and gently narrowing shoulders.
 const mastSections = [
@@ -176,7 +177,7 @@ for (let k = 0; k < 3; k++) {
       const x = a[0] + (b[0] - a[0]) * t, y = a[1] + (b[1] - a[1]) * t
       return [CX + (x - CX) * 1.002, CY + (y - CY) * 1.002, a[2]]
     }
-    glass.quad(mix(lower[i], lower[j], .32), mix(lower[i], lower[j], .68),
+    dark.quad(mix(lower[i], lower[j], .32), mix(lower[i], lower[j], .68),
       mix(upper[i], upper[j], .68), mix(upper[i], upper[j], .32))
   }
 }
@@ -199,22 +200,20 @@ pole(steel, [[387, 2.6], [390, 2.6], [391, 2.05], [409, 1.55], [422, 1.1], [435,
 // Two broad antenna joints survive at map scale; finer collars do not.
 for (const z of [393, 419]) pole(steel, [[z, z < 410 ? 2.2 : 1.35], [z + 1, z < 410 ? 2.2 : 1.35]])
 
-/**
- * Parchment displays baseColorFactor directly as sRGB. Compensate locally
- * for the shared writer's linearisation so these are the actual map colours.
- */
-function mapColor(hex: number): number {
-  return [16, 8, 0].reduce((out, shift) =>
-    out | Math.round(Math.pow(((hex >> shift) & 255) / 255, 1 / 2.2) * 255) << shift, 0)
-}
-
+// Unadjusted sRGB patch means from supplied daylight reference 02.jpg
+// (1280 × 2981). Rectangles are [left, top, width, height] in source pixels:
+// limestone [719,641,3,30], bays [650,646,4,32], steel [651,384,3,20],
+// crown [669,415,5,2], terrace [700,491,7,2]. Granite is an estimate:
+// the street-level base is hidden behind other buildings in all three photos.
+// The shared writer performs the sRGB-to-linear conversion; do not brighten
+// these samples or compensate for a particular renderer's output transfer.
 const parts = [
-  { part: stone, material: { name: 'stone', color: mapColor(0xf0e6d5) } },
-  { part: glass, material: { name: 'glass', color: mapColor(0xd7dcdb), roughness: .85 } },
-  { part: trim, material: { name: 'limestone-trim', color: mapColor(0xf4ead9) } },
-  { part: roof, material: { name: 'terrace', color: mapColor(0xdfd8ca) } },
-  { part: steel, material: { name: 'steel', color: mapColor(0xdde2e1), roughness: .65 } },
-  { part: dark, material: { name: 'observatory-glass', color: mapColor(0xcbd2cf) } },
+  { part: stone, material: { name: 'limestone', color: 0xb7b2aa } },
+  { part: granite, material: { name: 'granite', color: 0x99938b } },
+  { part: glass, material: { name: 'window-bays', color: 0x828286, roughness: .85 } },
+  { part: roof, material: { name: 'terrace', color: 0x85847e } },
+  { part: steel, material: { name: 'aluminium-steel', color: 0xabafb1, roughness: .65 } },
+  { part: dark, material: { name: 'crown-glass-and-recesses', color: 0x687076 } },
 ]
 const triangles = parts.reduce((n, { part }) => n + part.triangles, 0)
 if (triangles > 10_000) throw new Error(`Triangle budget exceeded: ${triangles}`)

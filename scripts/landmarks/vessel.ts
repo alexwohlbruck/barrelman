@@ -9,7 +9,9 @@
 import { Part, writeGlb, type V3 } from './mesh'
 
 const bronze = new Part()
+const undersides = new Part()
 const treads = new Part()
+const glass = new Part()
 const stone = new Part()
 const TAU = Math.PI * 2
 const LEVELS = 16
@@ -22,16 +24,34 @@ const HALF_ANGLE = 0.125
 const THICKNESS = 1.0
 const polar = (r: number, a: number, z: number): V3 => [r * Math.cos(a), r * Math.sin(a), z]
 const up = (p: V3, z: number): V3 => [p[0], p[1], p[2] + z]
+const mix = (a: V3, b: V3, t: number): V3 => a.map((v, k) => v + (b[k] - v) * t) as V3
 const zAt = (level: number) => FIRST + (TOP - FIRST) * level / (LEVELS - 1)
 const radius = (level: number) => 7.5 + 16.1 * Math.pow(level / (LEVELS - 1), 0.7)
 const angle = (level: number, bay: number) => bay * TAU / 5 + (level % 2) * Math.PI / 5
 
-// A four-corner deck, CCW above, with outward copper sides and underside.
+// Retain the established envelope, but divide its depth into copper cladding
+// below a broad glass edge. The walking surface sits inside the balustrade;
+// no thin rails or mullions are needed to communicate the material change.
 function deck(corners: V3[], thickness = THICKNESS) {
   const lower = corners.map(p => up(p, -thickness))
-  bronze.loft([lower, corners])
-  bronze.cap(lower, false)
-  treads.cap(corners, true)
+  const walking = corners.map(p => up(p, -thickness * 0.45))
+  for (let k = 0; k < 4; k++) {
+    const next = (k + 1) % 4
+    const part = k === 3 ? treads : bronze
+    part.quad(lower[k], lower[next], walking[next], walking[k])
+    if (k === 1 || k === 3)
+      glass.quad(walking[k], walking[next], corners[next], corners[k])
+  }
+  undersides.cap(lower, false)
+  // Copper wraps over the cladding edge. These broad returns retain the
+  // warm perimeter in pitched map views without restoring thin handrails.
+  const inner0 = mix(walking[0], walking[1], 0.12)
+  const outer0 = mix(walking[0], walking[1], 0.88)
+  const inner1 = mix(walking[3], walking[2], 0.12)
+  const outer1 = mix(walking[3], walking[2], 0.88)
+  bronze.quad(walking[0], inner0, inner1, walking[3])
+  bronze.quad(outer0, walking[1], walking[2], outer1)
+  treads.quad(inner0, outer0, outer1, inner1)
 }
 
 type Landing = { innerLeft: V3; outerLeft: V3; outerRight: V3; innerRight: V3 }
@@ -89,16 +109,17 @@ for (let bay = 0; bay < 5; bay++) {
   }
 }
 
-// The shared writer converts these swatches to linear RGB. Parchment sends
-// baseColorFactor directly to its sRGB framebuffer, so compensate here (not
-// in the shared kit) to retain the intended pale, warm copper on the map.
-const mapColor = (hex: number) => [16, 8, 0].reduce((value, shift) =>
-  value | Math.round(Math.pow(((hex >> shift) & 255) / 255, 1 / 2.2) * 255) << shift, 0)
-
+// Median sRGB photo samples, passed unchanged to the shared writer. Photo 03:
+// copper (450,1076), underside (470,1092), exposed steel frame (490,872),
+// glass (450,899). Photo 01: sunlit grey paving/base finish (550,829).
+// The underside sample records its visible brown finish; it is not a
+// reconstruction of unlit reflectance from the shaded reference photograph.
 const parts = [
-  { part: bronze, material: { name: 'bronze', color: mapColor(0xb98c6f), roughness: 0.48 } },
-  { part: treads, material: { name: 'bronze-walkways', color: mapColor(0xc39b7e), roughness: 0.6 } },
-  { part: stone, material: { name: 'stone', color: mapColor(0xc9b9a6) } },
+  { part: bronze, material: { name: 'copper-cladding', color: 0xaf7a5d, roughness: 0.48 } },
+  { part: undersides, material: { name: 'bronze-undersides', color: 0x4d3b32, roughness: 0.6 } },
+  { part: treads, material: { name: 'painted-steel', color: 0x3d3f3c, roughness: 0.7 } },
+  { part: glass, material: { name: 'glass-balustrades', color: 0xcacfd0, roughness: 0.3, doubleSided: true } },
+  { part: stone, material: { name: 'stone', color: 0x939593 } },
 ]
 const triangles = parts.reduce((n, { part }) => n + part.triangles, 0)
 if (triangles > 12_000) throw new Error(`Triangle budget exceeded: ${triangles}`)

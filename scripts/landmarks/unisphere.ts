@@ -189,12 +189,14 @@ pedestal.cap(saddle[0], false)
 pedestal.cap(saddle[saddle.length - 1], true)
 
 const parts = [
-  // The kit converts these to linear factors; Parchment displays the factors
-  // directly as sRGB. Lift the palette so the result remains pale steel.
-  { part: grid, material: { name: 'steel-grid', color: 0xd2d9dd, roughness: 0.6, doubleSided: true } },
-  { part: land, material: { name: 'steel-continents', color: 0xeaedef, roughness: 0.65, doubleSided: true } },
-  { part: orbits, material: { name: 'steel-orbits', color: 0xcbd4da, roughness: 0.5, doubleSided: true } },
-  { part: pedestal, material: { name: 'steel-base', color: 0xc5cdd3, roughness: 0.7 } },
+  // Unmodified sRGB samples from reference photo 02 (1280 × 1656). Patch
+  // medians avoid steel's white specular glints; the narrow ring uses a pixel.
+  // Grid (538,797,5×5), plates (780,350,12×12), ring (700,641),
+  // base (600,1210,16×16). The writer handles conversion to glTF factors.
+  { part: grid, material: { name: 'steel-grid', color: 0x839098, roughness: 0.6, doubleSided: true } },
+  { part: land, material: { name: 'steel-continents', color: 0xc6c7cd, roughness: 0.65, doubleSided: true } },
+  { part: orbits, material: { name: 'steel-orbits', color: 0xc4c9cf, roughness: 0.5, doubleSided: true } },
+  { part: pedestal, material: { name: 'steel-base', color: 0x4f5662, roughness: 0.7 } },
 ]
 const triangles = parts.reduce((n, { part }) => n + part.triangles, 0)
 if (triangles > 11361) throw new Error(`Triangle budget exceeded: ${triangles}`)

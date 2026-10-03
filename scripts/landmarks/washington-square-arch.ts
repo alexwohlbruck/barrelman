@@ -10,7 +10,10 @@ import { Part, addGltfTriangles, cross, sub, len, writeGlb, type V3 } from './me
 const stone = new Part()
 const trim = new Part()
 const recess = new Part()
-const sculpture = new Part()
+const weathering = new Part()
+const relief = new Part()
+const statues = new Part()
+let sculpture = relief
 const SPRING = 9.8
 const RADIUS = 4.5
 const SEGMENTS = 32
@@ -89,7 +92,10 @@ for (const s of [-1, 1]) {
   // Paneled pier faces: a broad recessed centre and raised, narrow borders.
   for (const face of [-1, 1]) {
     const cx = s * 6.94
-    box(recess, cx - 1.37, cx + 1.37, face * 2.70 - 0.035, face * 2.70 + 0.035, 2.2, 12.7)
+    // Lower pier panels are clean flat marble in the references; only the
+    // ornamented upper panel takes the greyer recessed-stone colour.
+    box(stone, cx - 1.37, cx + 1.37, face * 2.70 - 0.035, face * 2.70 + 0.035, 2.2, 9.8)
+    box(recess, cx - 1.37, cx + 1.37, face * 2.70 - 0.035, face * 2.70 + 0.035, 9.8, 12.7)
     for (const edge of [-1, 1]) box(trim, cx + edge * 1.62 - 0.16, cx + edge * 1.62 + 0.16,
       face * 2.8 - 0.15, face * 2.8 + 0.15, 1.58, 15.9)
     for (const z of [2.05, 12.72]) box(trim, cx - 1.46, cx + 1.46,
@@ -115,8 +121,8 @@ for (let i = 0; i < SEGMENTS; i++) {
 }
 for (const face of [-1, 1]) {
   // One uninterrupted broad archivolt survives aliased phone-sized views.
-  // Matching jambs carry its bright outline down the full open passage.
-  archBand(trim, 4.5, 5.45, face > 0 ? 2.65 : -3.08, face > 0 ? 3.08 : -2.65)
+  // The archivolt is greyer than the adjacent flat marble in photo 01.
+  archBand(recess, 4.5, 5.45, face > 0 ? 2.65 : -3.08, face > 0 ? 3.08 : -2.65)
   for (const side of [-1, 1]) {
     box(trim, side > 0 ? 4.5 : -4.98, side > 0 ? 4.98 : -4.5,
       face > 0 ? 2.65 : -3.08, face > 0 ? 3.08 : -2.65, 1.58, SPRING)
@@ -136,8 +142,8 @@ for (let k = 0; k < 4; k++) for (let row = 0; row < 2; row++) {
 
 // Architrave, frieze and gently projecting cornice; then the inscription attic.
 for (const [z0, z1, hx, hy, p] of [
-  [16.5, 16.78, 9.12, 2.98, trim], [16.78, 17.5, 8.97, 2.82, stone],
-  [17.5, 17.7, 9.22, 3.05, trim], [17.7, 18.03, 9.4, 3.22, trim],
+  [16.5, 16.78, 9.12, 2.98, trim], [16.78, 17.5, 8.97, 2.82, weathering],
+  [17.5, 17.7, 9.22, 3.05, weathering], [17.7, 18.03, 9.4, 3.22, trim],
   [18.03, 18.25, 9.55, 3.5, trim], [18.25, 22.68, 8.94, 2.71, stone],
   [22.68, 22.9, 9.1, 3.04, trim], [22.9, 23.15, 9.32, 3.26, trim],
   [23.15, 23.32, 9.55, 3.5, trim],
@@ -189,10 +195,11 @@ for (const face of [-1, 1]) {
 
 // North only: Washington at Peace (west) and at War (east). Each has its
 // own stance, mantle and attributes, simplified to survive map distances.
+sculpture = statues
 for (const side of [-1, 1]) {
   const x = side * 6.94, y = 2.89
   box(trim, x - 1.22, x + 1.22, 2.1, 3.5, 1.58, 2.06)
-  box(stone, x - 1.05, x + 1.05, 2.15, 3.42, 2.06, 2.7)
+  box(statues, x - 1.05, x + 1.05, 2.15, 3.42, 2.06, 2.7)
   for (const leg of [-1, 1]) {
     limb([[x + leg * 0.3, y, 2.72], [x + leg * 0.3, y - 0.02, 3.7], [x + leg * 0.2, y - 0.04, 4.55]], [0.21, 0.22, 0.27], 0.8)
     egg([x + leg * 0.3, 3.08, 2.84], [0.23, 0.32, 0.13], 8, 4)
@@ -216,14 +223,25 @@ for (const side of [-1, 1]) {
   if (side < 0) box(sculpture, x + 0.12, x + 0.62, 3.12, 3.28, 4.5, 5.04)
 }
 
-// The kit linearises these colours, while the map writes baseColorFactor
-// directly to sRGB. Near-white inputs keep the resulting marble warm and
-// brighter than neighbouring pale extrusions, even on shaded faces.
+// Raw sRGB photo samples, without lightening, desaturation or map compensation.
+// Coordinates are pixel rectangles in the supplied 1280 px reference photos.
+// The writer performs its usual sRGB-to-linear conversion for baseColorFactor.
+// Photo 01 carries a cool sky cast on the lower piers; photo 02's north-facing
+// statue is more weathered and less brightly lit. Retain the recorded samples
+// rather than inventing unobserved cream paint or baking in white highlights.
 const parts = [
-  { part: stone, material: { name: 'stone', color: 0xfffcf6 } },
-  { part: trim, material: { name: 'stone-mouldings', color: 0xfffefb } },
-  { part: recess, material: { name: 'stone-recesses', color: 0xfcfaf5 } },
-  { part: sculpture, material: { name: 'stone-sculpture', color: 0xfffefb, doubleSided: true } },
+  // 01: (1005,1040,16,16), exposed right pier.
+  { part: stone, material: { name: 'marble', color: 0xcdcacf } },
+  // 01: (385,530,12,12), exposed attic moulding.
+  { part: trim, material: { name: 'marble-mouldings', color: 0xcdc5c7 } },
+  // 01: (737,480,60,15), inscription-panel stone.
+  { part: recess, material: { name: 'marble-recesses', color: 0xbeb6bb } },
+  // 01: (761,565,30,5), exposed weathered cornice lip; exclude its black shadow.
+  { part: weathering, material: { name: 'marble-weathering', color: 0xb2a7a9 } },
+  // 01: (751,637,29,24), brightest 20% of relief pixels to exclude carved shadows.
+  { part: relief, material: { name: 'marble-relief', color: 0xcec4c7, doubleSided: true } },
+  // 02: (486,780,4,4), exposed robe ridge, avoiding the adjacent stained crease.
+  { part: statues, material: { name: 'marble-statues', color: 0x9a9692, doubleSided: true } },
 ]
 const triangles = parts.reduce((sum, { part }) => sum + part.triangles, 0)
 if (triangles > 5000) throw new Error(`Triangle budget exceeded: ${triangles}`)
