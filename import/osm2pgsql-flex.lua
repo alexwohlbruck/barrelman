@@ -232,6 +232,43 @@ local POI_KEYS = {
     'club', 'gambling', 'advertising',
 }
 
+-- Public power outlets. OSM spreads them over several tags, so anything that
+-- offers one also gets the umbrella category `power/outlet` and a client can
+-- browse them all with one filter:
+--   power=outlet                     an individual socket (gets it via POI_KEYS)
+--   amenity=device_charging_station  a designated phone/laptop charging spot
+--   amenity=power_supply             a cabinet of sockets (markets, quays)
+--   power_supply=* / socket:*        a venue that has outlets, e.g. a cafe
+-- Keep this in sync with import/backfill-power-outlets.sql.
+
+-- Venues where power_supply=* means a pitch or berth hookup for paying guests,
+-- not an outlet the public can walk up to. These are ~90% of power_supply=yes.
+local HOOKUP_VENUES = {
+    tourism = { camp_site = true, camp_pitch = true, caravan_site = true },
+    leisure = { marina = true },
+}
+
+-- power_supply values that describe where a device draws power from, not a
+-- socket it offers.
+local NOT_AN_OUTLET = { no = true, wind = true, solar = true }
+
+local function offers_power_outlet(tags)
+    if tags['access'] == 'private' or tags['access'] == 'no' then return false end
+    local amenity = tags['amenity']
+    if amenity == 'device_charging_station' or amenity == 'power_supply' then return true end
+    -- Vehicle chargers carry socket:* tags for their connectors.
+    if amenity == 'charging_station' or tags['man_made'] == 'charge_point' then return false end
+    for key, values in pairs(HOOKUP_VENUES) do
+        if tags[key] and values[tags[key]] then return false end
+    end
+    local supply = tags['power_supply']
+    if supply and not NOT_AN_OUTLET[supply] then return true end
+    for key, val in pairs(tags) do
+        if key:sub(1, 7) == 'socket:' and val ~= 'no' and val ~= '0' then return true end
+    end
+    return false
+end
+
 -- Derive categories from tags following osm-tagging-schema preset IDs
 -- e.g., amenity=restaurant -> "amenity/restaurant"
 local function derive_categories(tags)
@@ -254,6 +291,12 @@ local function derive_categories(tags)
             cuisine = cuisine:match('^%s*(.-)%s*$') -- trim
             cats[#cats + 1] = 'cuisine/' .. cuisine
         end
+    end
+
+    -- Appended, never first: clients read categories[1] as the primary type,
+    -- and a cafe with outlets is still a cafe.
+    if tags['power'] ~= 'outlet' and offers_power_outlet(tags) then
+        cats[#cats + 1] = 'power/outlet'
     end
 
     return cats
