@@ -7,8 +7,8 @@
  */
 import { Part, addGltfTriangles, writeGlb, type V3 } from './mesh'
 
-const brick = new Part(), stone = new Part(), glass = new Part()
-const steel = new Part(), seams = new Part(), spandrel = new Part(), highlights = new Part()
+const brick = new Part(), stone = new Part(), glass = new Part(), windows = new Part()
+const steel = new Part(), seams = new Part(), highlights = new Part()
 const roof = new Part()
 const CX = -8.4, CY = 7
 type XY = [number, number]
@@ -29,7 +29,7 @@ function solid(p: Part, xy: XY[], lo: number, hi: number) {
 }
 
 /** Flat, outward-wound facade patches, just clear of the masonry. */
-function facade(xy: XY[], lo: number, hi: number, spacing = 2.8, width = 1.25) {
+function facade(xy: XY[], lo: number, hi: number, spacing = 6.5, width = 2.3) {
   for (let e = 0; e < xy.length; e++) {
     const a = xy[e], b = xy[(e + 1) % xy.length]
     const length = Math.hypot(b[0] - a[0], b[1] - a[1])
@@ -39,14 +39,9 @@ function facade(xy: XY[], lo: number, hi: number, spacing = 2.8, width = 1.25) {
     for (let i = 0; i < count; i++) {
       const mid = length * (i + 1) / (count + 1)
       const l = mid - width / 2, r = mid + width / 2
-      glass.quad(point(l, lo), point(r, lo), point(r, hi), point(l, hi))
-      // Muted spandrels keep the vertical bays continuous at small sizes.
-      for (let z = lo + 6.7; z < hi - .7; z += 6.7) {
-        const offset = (t: number, h: number): V3 => {
-          const p = point(t, h); return [p[0] + dy * .015, p[1] - dx * .015, p[2]]
-        }
-        spandrel.quad(offset(l, z), offset(r, z), offset(r, z + .55), offset(l, z + .55))
-      }
+      // Group adjacent real windows into broad, quiet recesses. Individual
+      // floors and mullions alias badly at phone-scale map distances.
+      windows.quad(point(l, lo), point(r, lo), point(r, hi), point(l, hi))
     }
   }
 }
@@ -72,7 +67,7 @@ block(-22.6, 24.2, 6, 26, 80, 90)
 
 const shaft = rect(-22.7, -10.7, 6, 24.2)
 solid(brick, shaft, 0, 185)
-facade(shaft, 16, 184, 2.65, 1.1)
+facade(shaft, 16, 184, 6, 2.1)
 solid(stone, shaft, 183.8, 185.5)
 
 // Four recessed corners above the 185 m shoulder; the central bays continue
@@ -81,7 +76,7 @@ const upper: XY[] = [[-17.8, -10.7], [1, -10.7], [1, -2.9], [6, -2.9],
   [6, 16.4], [.9, 16.4], [.9, 24.2], [-18.1, 24.2],
   [-18.1, 16.6], [-22.7, 16.6], [-22.7, -2.5], [-17.8, -2.5]]
 solid(brick, upper, 185, 199)
-facade(upper, 185.8, 197.9, 2.65, 1.28)
+facade(upper, 185.8, 197.9, 6, 2.1)
 solid(steel, upper, 198.1, 200)
 
 // Storefronts and restrained stone entrance frames; all sit within the OSM
@@ -103,17 +98,17 @@ function facePoint(side: number, t: number, d: number, z: number): V3 {
   return [CX + t * Math.cos(a) + d * Math.sin(a), CY + t * Math.sin(a) - d * Math.cos(a), z]
 }
 
-// Seven intersecting barrel-vault terraces, not cones. Each has four arched
+// Seven intersecting barrel-vault terraces, not cones. Each has four
 // arched faces and closed groined roofs. Larger lower terraces remain
 // visible around the smaller ones. All four faces carry the sunburst glazing.
 const tiers = [
   // half-width, spring, arch rise, underside, triangular lights per face
-  [14.35, 200, 29, 199, 11],
-  [11.1, 218, 24, 212, 9],
-  [8.65, 233, 16, 226, 9],
-  [6.95, 243, 13, 235, 7],
+  [14.35, 200, 29, 199, 9],
+  [11.1, 218, 24, 212, 7],
+  [8.65, 233, 16, 226, 7],
+  [6.95, 243, 13, 235, 5],
   [4.95, 253, 9, 246, 5],
-  [4, 259, 8, 253, 5],
+  [4, 259, 8, 253, 3],
   [2.95, 265, 7, 260, 3],
 ]
 for (const [half, spring, rise, bottom, lights] of tiers) {
@@ -140,19 +135,13 @@ for (const [half, spring, rise, bottom, lights] of tiers) {
           p(x0 * .992, spring + rise * .992 * Math.sin(a), depth + .045))
       }
     })
-    // Concentric rolled rims and radial panel ribs are shallow relief in
-    // the same steel family; their broad rhythm matters more than rivets.
+    // One broad rim per arch survives map scale. Fine radial ribs and inner
+    // rings only produce aliasing; the triangular lights supply the sunburst.
     for (let j = 0; j < segments; j++) {
       const a = Math.PI * j / segments, b = Math.PI * (j + 1) / segments
       const arc = (r: number, angle: number): V3 => p(-half * r * Math.cos(angle), spring + rise * r * Math.sin(angle), depth + .085)
-      for (const r of [.975, .62]) {
-        highlights.quad(arc(r - .012, a), arc(r - .012, b), arc(r, b), arc(r, a))
-      }
-    }
-    for (let j = 0; j <= lights; j++) {
-      const angle = .22 + (Math.PI - .44) * j / lights
-      const radial = (r: number, a: number): V3 => p(-half * r * Math.cos(a), spring + rise * r * Math.sin(a), depth + .09)
-      highlights.quad(radial(.35, angle - .006), radial(.35, angle + .006), radial(.975, angle + .006), radial(.975, angle - .006))
+      const r = .975
+      highlights.quad(arc(r - .035, a), arc(r - .035, b), arc(r, b), arc(r, a))
     }
     for (let j = 0; j < lights; j++) {
       const angle = .22 + (Math.PI - .44) * (j + .5) / lights
@@ -164,10 +153,11 @@ for (const [half, spring, rise, bottom, lights] of tiers) {
   }
 }
 
-// The tapered needle continues above the seven arches, with a small shoulder
-// at 282 m and the measured tip at exactly 319 m.
+// Optical widening holds roughly one pixel through most of the needle at
+// 80 px model height, without changing its measured 319 m tip. A static GLB
+// cannot enforce screen-space thickness, so the last pointed pixel can vary.
 smooth(steel, p => {
-  const profile = [[270, 2.2], [276, 1.35], [282, .52], [304, .29], [316, .12]]
+  const profile = [[270, 2.8], [276, 2.55], [282, 2.35], [312, 2.15], [317, 1.7]]
   const rings = profile.map(([z, r]) => Array.from({ length: 12 }, (_, i): V3 =>
     [CX + r * Math.cos(i * Math.PI / 6), CY + r * Math.sin(i * Math.PI / 6), z]))
   p.loft(rings)
@@ -209,15 +199,22 @@ for (const x of [-23.4, 6.65]) for (const y of [-14, 26.8]) {
   solid(steel, rect(x - 3.05, y - 1.15, x + 3.05, y + 1.15), 89.5, 90.2)
 }
 
+// Parchment displays baseColorFactor directly as sRGB. Invert the shared
+// writer's linearisation locally so these swatches describe map appearance.
+function mapColor(hex: number): number {
+  return [16, 8, 0].reduce((value, shift) =>
+    value | Math.round(255 * Math.pow(((hex >> shift) & 255) / 255, 1 / 2.2)) << shift, 0)
+}
+
 const parts = [
-  { part: brick, material: { name: 'brick', color: 0xe3e0d8 } },
-  { part: stone, material: { name: 'stone', color: 0xcac9c2 } },
-  { part: glass, material: { name: 'glass', color: 0x586b76, roughness: .4, doubleSided: true } },
-  { part: spandrel, material: { name: 'spandrel', color: 0x869196 } },
-  { part: steel, material: { name: 'steel', color: 0xd6e0e5, roughness: .32, doubleSided: true } },
-  { part: seams, material: { name: 'steel-seams', color: 0x8c9da7 } },
-  { part: highlights, material: { name: 'steel-ribs', color: 0xe9eff1, roughness: .3, doubleSided: true } },
-  { part: roof, material: { name: 'roof', color: 0xb0b5b5 } },
+  { part: brick, material: { name: 'brick', color: mapColor(0xe9e7df) } },
+  { part: stone, material: { name: 'stone', color: mapColor(0xdce0dc) } },
+  { part: windows, material: { name: 'window-recesses', color: mapColor(0xd0d4d2) } },
+  { part: glass, material: { name: 'crown-glass', color: mapColor(0x8c9fa8), roughness: .4, doubleSided: true } },
+  { part: steel, material: { name: 'steel', color: mapColor(0xeff5f8), roughness: .32, doubleSided: true } },
+  { part: seams, material: { name: 'steel-seams', color: mapColor(0xb4c4cd) } },
+  { part: highlights, material: { name: 'steel-ribs', color: mapColor(0xf5f8fa), roughness: .3, doubleSided: true } },
+  { part: roof, material: { name: 'roof', color: mapColor(0xd1d4d2) } },
 ]
 const triangles = parts.reduce((sum, { part }) => sum + part.triangles, 0)
 if (triangles > 12_000) throw new Error(`Triangle budget exceeded: ${triangles}`)

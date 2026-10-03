@@ -14,16 +14,11 @@ type XY = [number, number]
 type Envelope = [number, number, number, number]
 const stone = new Part()
 const glass = new Part()
-const spandrel = new Part()
 const trim = new Part()
 const roof = new Part()
 const steel = new Part()
 const dark = new Part()
 const CX = 28.2, CY = 1.85
-
-function rectangle([x0, x1, y0, y1]: Envelope): XY[] {
-  return [[x0, y0], [x1, y0], [x1, y1], [x0, y1]]
-}
 
 /** Manhattan's stair-step corner recesses, counter-clockwise from above. */
 function shoulders([a, b, c, d]: Envelope, dx: number, dy: number): XY[] {
@@ -61,8 +56,8 @@ function solid(p: Part, ring: XY[], bottom: number, top: number) {
   cap(p, ring, bottom, false)
 }
 
-/** Real inset strips: piers, headers, reveals and glass share no coplanar faces. */
-function facade(ring: XY[], bottom: number, top: number, pitch = 4.1, entrance = false) {
+/** Broad recessed bays survive unfiltered map rendering; individual windows do not. */
+function facade(ring: XY[], bottom: number, top: number, pitch = 11, entrance = false) {
   for (let i = 0; i < ring.length; i++) {
     const a = ring[i], b = ring[(i + 1) % ring.length]
     const length = Math.hypot(b[0] - a[0], b[1] - a[1])
@@ -82,34 +77,29 @@ function facade(ring: XY[], bottom: number, top: number, pitch = 4.1, entrance =
       panel(dark, left, right, bottom, 14.5, -.28)
       stone.quad(v(left, bottom), v(left, bottom, -.28), v(left, 14.5, -.28), v(left, 14.5))
       stone.quad(v(right, bottom, -.28), v(right, bottom), v(right, 14.5), v(right, 14.5, -.28))
-      for (const s of [middle - 2.15, middle + 2.15]) panel(trim, s - .22, s + .22, bottom, 14.5, -.02)
-      for (const z of [7, 12.8, 14]) panel(spandrel, left, right, z, z + .22, -.12)
-      for (let s = 2; s < length - 2; s += 4.1) {
-        if (s > left - 2 && s < right + 1) continue
-        panel(glass, s, s + 1.5, 4, 17.7, .002)
-        panel(spandrel, s, s + 1.5, 9, 9.6, .004)
+      for (const s of [middle - 2.15, middle + 2.15]) panel(trim, s - .45, s + .45, bottom, 14.5, -.02)
+      for (let s = 4; s < length - 7; s += 11) {
+        if (s + 5 > left - 2 && s < right + 2) continue
+        panel(glass, s, s + 5, 4, 16.5, .002)
       }
       continue
     }
-    const count = length < 3 ? 0 : Math.floor((length - .6) / pitch)
+    const count = length < 8 ? 0 : Math.max(1, Math.floor((length - 2) / pitch))
     if (!count) { panel(stone, 0, length, bottom, top); continue }
     const spacing = length / count
-    const width = Math.min(1.85, spacing * .48)
-    const lo = bottom + 1.3, hi = top - 1.4
+    const width = spacing * .52
+    const lo = bottom + 1.8, hi = top - 2
     panel(stone, 0, length, bottom, lo)
     panel(stone, 0, length, hi, top)
     let previous = 0
     for (let j = 0; j < count; j++) {
       const start = spacing * (j + .5) - width / 2, end = start + width
       panel(stone, previous, start, lo, hi)
-      panel(glass, start, end, lo, hi, -.22)
-      stone.quad(v(start, lo), v(start, lo, -.22), v(start, hi, -.22), v(start, hi))
-      stone.quad(v(end, lo, -.22), v(end, lo), v(end, hi), v(end, hi, -.22))
-      stone.quad(v(start, lo, -.22), v(start, lo), v(end, lo), v(end, lo, -.22))
-      stone.quad(v(start, hi), v(start, hi, -.22), v(end, hi, -.22), v(end, hi))
-      // Pair floors at map scale so horizontal detail does not overpower piers.
-      for (let z = Math.ceil((lo + 1) / 7.8) * 7.8; z < hi - .9; z += 7.8)
-        panel(spandrel, start, end, z, z + .75, -.20)
+      panel(glass, start, end, lo, hi, -.4)
+      stone.quad(v(start, lo), v(start, lo, -.4), v(start, hi, -.4), v(start, hi))
+      stone.quad(v(end, lo, -.4), v(end, lo), v(end, hi), v(end, hi, -.4))
+      stone.quad(v(start, lo, -.4), v(start, lo), v(end, lo), v(end, lo, -.4))
+      stone.quad(v(start, hi), v(start, hi, -.4), v(end, hi, -.4), v(end, hi))
       previous = end
     }
     panel(stone, previous, length, lo, hi)
@@ -141,7 +131,7 @@ function tier(ring: XY[], bottom: number, top: number) {
 const base: XY[] = [[-37.1, -25.3], [92.5, -25.3], [92.5, 30.5],
   [88.9, 34.1], [-31.8, 34.1], [-37.1, 28.8], [-37.1, 0]]
 solid(stone, base, 0, 2)
-facade(base, 2, 19.5, 4.5, true)
+facade(base, 2, 19.5, 12, true)
 terrace(base, 19.5, 20.5)
 
 const tiers = [
@@ -160,22 +150,9 @@ tier(chamfer([9.2, 46.5, -8.6, 12.2], 2), 320, 330)
 solid(dark, chamfer([17.4, 39, -7, 10.7], 2), 330, 335)
 solid(trim, chamfer([16.8, 39.6, -7.6, 11.3], 2), 334.6, 335.5)
 
-// A sparse open railing reads as the outdoor 86th-floor observatory,
-// without a solid dark belt or texture around the crown.
-const railing = chamfer([10, 45.7, -7.8, 11.4], 2)
-for (let i = 0; i < railing.length; i++) {
-  const a = railing[i], b = railing[(i + 1) % railing.length]
-  const length = Math.hypot(b[0] - a[0], b[1] - a[1])
-  const nx = -(b[1] - a[1]) / length * .075, ny = (b[0] - a[0]) / length * .075
-  const bar: XY[] = [[a[0] - nx, a[1] - ny], [b[0] - nx, b[1] - ny],
-    [b[0] + nx, b[1] + ny], [a[0] + nx, a[1] + ny]]
-  solid(steel, bar, 331.4, 331.6)
-  const count = Math.ceil(length / 5)
-  for (let j = 0; j < count; j++) {
-    const x = a[0] + (b[0] - a[0]) * j / count, y = a[1] + (b[1] - a[1]) * j / count
-    solid(steel, rectangle([x - .085, x + .085, y - .085, y + .085]), 330, 331.5)
-  }
-}
+// A low pale parapet preserves the observatory silhouette; subpixel metal
+// posts would alias into a noisy dark fringe in the map's renderer.
+terrace(chamfer([10, 45.7, -7.8, 11.4], 2), 330, 331.15)
 
 // Faceted mooring mast: tall Art Deco ribs and gently narrowing shoulders.
 const mastSections = [
@@ -219,16 +196,25 @@ function pole(p: Part, sections: [number, number][]) {
 pole(dark, [[373.5, 4.45], [376.5, 4.45]])
 pole(steel, [[376.5, 4.5], [377.5, 4.5]])
 pole(steel, [[387, 2.6], [390, 2.6], [391, 2.05], [409, 1.55], [422, 1.1], [435, .58], [443.2, .16]])
-for (const z of [393, 401, 410, 419, 428]) pole(trim, [[z, z < 410 ? 2.2 : 1.35], [z + .65, z < 410 ? 2.2 : 1.35]])
+// Two broad antenna joints survive at map scale; finer collars do not.
+for (const z of [393, 419]) pole(steel, [[z, z < 410 ? 2.2 : 1.35], [z + 1, z < 410 ? 2.2 : 1.35]])
+
+/**
+ * Parchment displays baseColorFactor directly as sRGB. Compensate locally
+ * for the shared writer's linearisation so these are the actual map colours.
+ */
+function mapColor(hex: number): number {
+  return [16, 8, 0].reduce((out, shift) =>
+    out | Math.round(Math.pow(((hex >> shift) & 255) / 255, 1 / 2.2) * 255) << shift, 0)
+}
 
 const parts = [
-  { part: stone, material: { name: 'stone', color: 0xd5cebc } },
-  { part: glass, material: { name: 'glass', color: 0x82959c, roughness: .65 } },
-  { part: spandrel, material: { name: 'aluminium-spandrels', color: 0xa5afb0 } },
-  { part: trim, material: { name: 'limestone-trim', color: 0xe1daca } },
-  { part: roof, material: { name: 'terrace', color: 0xb9b4a8 } },
-  { part: steel, material: { name: 'steel', color: 0xb6c0c0, roughness: .55 } },
-  { part: dark, material: { name: 'observatory-glass', color: 0x61727a } },
+  { part: stone, material: { name: 'stone', color: mapColor(0xf0e6d5) } },
+  { part: glass, material: { name: 'glass', color: mapColor(0xd7dcdb), roughness: .85 } },
+  { part: trim, material: { name: 'limestone-trim', color: mapColor(0xf4ead9) } },
+  { part: roof, material: { name: 'terrace', color: mapColor(0xdfd8ca) } },
+  { part: steel, material: { name: 'steel', color: mapColor(0xdde2e1), roughness: .65 } },
+  { part: dark, material: { name: 'observatory-glass', color: mapColor(0xcbd2cf) } },
 ]
 const triangles = parts.reduce((n, { part }) => n + part.triangles, 0)
 if (triangles > 10_000) throw new Error(`Triangle budget exceeded: ${triangles}`)
