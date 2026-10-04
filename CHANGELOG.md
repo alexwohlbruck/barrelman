@@ -12,6 +12,24 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ### Added
 
+* **OSM Update works on a database without osm2pgsql's middle tables.** Those
+  tables are about 13 times the size of the extract (around 155 GB for the
+  United States), so a large import usually drops them, and until now that
+  ended replication for good. Such a database now replicates through
+  `region.osm.pbf`: each run applies the new diffs to the extract, re-imports
+  only the objects they touch into a staging database, and swaps those rows
+  in. Search columns, intersections and parent context are redone for the
+  swapped rows alone, in the same transaction, instead of across the whole
+  table. Nothing to set up: the first run starts from the replication header
+  in the extract.
+
+* **"Rebuild routing graph" and "Refresh 3D buildings" switches on OSM
+  Update**, beside "Rebuild basemap". All three take hours on a country, and
+  the routing graph rebuild takes street routing down while it runs. Turn them
+  off to keep the nightly update to the database alone. A new **Refresh 3D
+  Buildings** script, also seeded as a disabled weekly schedule, covers the view
+  separately.
+
 * **A `power/outlet` category for public power outlets.** OSM maps them as
   `power=outlet`, `amenity=device_charging_station`, `amenity=power_supply`, or
   as a `power_supply=*` or `socket:*` tag on a venue such as a cafe. Every one
@@ -55,6 +73,16 @@ does it — and the release pipeline turns it into the GitHub Release notes.
   round trip for a byte-identical tile.
 
 ### Fixed
+
+* **Unticking a switch in the console turns it off.** A boolean parameter left
+  unticked used to send no value at all, and scripts that default a switch to
+  on read that as on. "Rebuild basemap" on OSM Update and on Full OSM Import
+  never actually turned off. Switches are now always sent as `1` or `0`.
+
+* **The 3D buildings view stays on the map while it refreshes.** The refresh
+  after each OSM update locked `buildings_3d`, so 3D building tiles failed for
+  as long as it ran, which is hours on a large import. It now refreshes
+  concurrently once the view has been populated.
 
 * **EV chargers are no longer listed as power outlets.** 0.6.0 gave
   `power/outlet` to anything with a `socket:*` tag, and most of those tags are
