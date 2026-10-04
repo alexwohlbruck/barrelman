@@ -168,8 +168,11 @@ const tiers = [
 for(const t of tiers) tier(shoulders(t.bounds,t.notch[0],t.notch[1]),t.z0,t.z1)
 tier(chamfer([6.2,49.5,-11.6,15.2],2.2),310,320)
 tier(chamfer([9.2,46.5,-8.6,12.2],2),320,330)
-// A single planted lower terrace, confined to the exposed western wing.
-cap(garden,[[ -17.5,-13.5],[-9.5,-13.5],[-9.5,17],[-17.5,17]],74.42)
+// Planted lower terraces on both exposed wings, mirrored about the tower's
+// long axis (x = 27.9, the centre of the 20.5–75 m stage), as on the real
+// building.
+cap(garden,[[-17.5,-13.5],[-9.5,-13.5],[-9.5,17],[-17.5,17]],74.42)
+cap(garden,[[65.3,-13.5],[73.3,-13.5],[73.3,17],[65.3,17]],74.42)
 
 // Broad observation belt with a silver coping and pale stepped cap.
 solid(steel,soften(chamfer([12.5,43.9,-6.3,10],2)),330,334.6)
