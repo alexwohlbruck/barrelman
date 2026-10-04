@@ -10,6 +10,67 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-03
+
+### Added
+
+* **A `power/outlet` category for public power outlets.** OSM maps them as
+  `power=outlet`, `amenity=device_charging_station`, `amenity=power_supply`, or
+  as a `power_supply=*` or `socket:*` tag on a venue such as a cafe. Every one
+  of these now carries `power/outlet`, so search can browse them with a single
+  category filter. Campsite, caravan and marina hookups, vehicle chargers and
+  private outlets are left out. Existing databases pick it up by running
+  "Backfill Power Outlet Category" from the console.
+
+* **`bicycle_ways` now includes the streets a signed bike route follows.** A
+  way in a `route=bicycle` relation with no bike tagging of its own comes back
+  as `infra_type=bicycle_route`, so maps can mark the whole route rather than
+  only its laned stretches. Routes marked proposed, under construction or
+  "(Future)" are skipped.
+
+* **Proposed and under-construction cycleways tagged with a lifecycle prefix.**
+  `proposed:highway=cycleway` with no `highway` tag now lands in `bicycle_ways`
+  with `state=proposed`, and likewise for `construction:highway`. Existing
+  databases pick up both changes with `scripts/backfill-bicycle-ways.sh`.
+
+* **Tile bundles: several map sources in one request.** A map view is thirty to
+  sixty tiles *per source*, and a client drawing the detail overlays was asking
+  for each of them separately — five requests for every tile of ground. Asking
+  for `/tiles/detail/{z}/{x}/{y}` now returns `buildings_3d`, `parking_areas`,
+  `bicycle_ways`, `street_trees` and `tree_rows` as one tile, each still its own
+  layer under its own name, so a style only needs its `source` changed. Martin's
+  comma syntax (`/tiles/buildings_3d,parking_areas/…`) works too, for a set that
+  has no name. Measured against the public deployment, a six-tile viewport over
+  Manhattan went from 18 requests to 6, and from 2.04 s to 1.14 s warm.
+
+  `street_furniture` is deliberately not in the bundle: it is minzoom 17, so it
+  could contribute nothing to a bundle a client reads at z≤16, and including it
+  would have taken street furniture off the map. Drop its minzoom to 16 in the
+  deployment's `martin-config.yaml` and it joins.
+
+### Changed
+
+* **Tiles are served with `stale-while-revalidate`.** They already carried a
+  day's `max-age`; the week of `stale-while-revalidate` behind it means the
+  first request after expiry is answered from the edge while the refresh
+  happens behind it, instead of making one unlucky user wait out a full origin
+  round trip for a byte-identical tile.
+
+### Fixed
+
+* **The OSM import and update jobs no longer print the database password.**
+  osm2pgsql quotes its connection string in its errors, and the scripts put the
+  password in that string, so any failure wrote it into the job log in the
+  console. It is now passed as `PGPASSWORD`. If a job of yours failed this way,
+  its log holds the password; rotate it if anyone else can read the console.
+
+* **OSM Update says what's wrong when the middle tables are gone.** On a
+  database whose `planet_osm_*` tables were dropped after import, it used to stop
+  with osm2pgsql's "Database needs to be imported in --slim mode". It now stops
+  before touching anything, says the tables are missing, and lists the ways to
+  recover: `UPDATE_MODE=full`, a re-import that keeps the tables, or disabling
+  the schedule. `init-replication.sh` does the same check.
+
 ## [0.5.0] - 2026-10-01
 
 ### Added

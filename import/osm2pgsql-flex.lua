@@ -90,6 +90,12 @@ local function derive_bicycle_infra_type(tags)
         return nil, nil
     end
 
+    -- Lifecycle-prefix tagging drops `highway` altogether: `proposed:highway=cycleway`.
+    if not highway then
+        if tags['proposed:highway'] == 'cycleway' then return 'cycleway', 'proposed' end
+        if tags['construction:highway'] == 'cycleway' then return 'cycleway', 'construction' end
+    end
+
     -- cycleway:*=proposed or cycleway:*=construction on existing roads
     if cycleway == 'proposed' or cycleway_left == 'proposed' or cycleway_right == 'proposed'
         or tags['proposed:cycleway'] then
@@ -155,9 +161,41 @@ local function derive_bicycle_infra_type(tags)
     return nil, nil
 end
 
+-- Ways carried by a signed bicycle route. Filled from the relations in stage 1
+-- and read in stage 2, when osm2pgsql reprocesses exactly these ways.
+local bicycle_route_ways = {}
+
+-- Planned routes are often flagged only in the name: "Briar Creek Greenway (Future)".
+local function is_unbuilt_route(tags)
+    local state = tags['state']
+    if state == 'proposed' or state == 'construction' then return true end
+    local name = (tags['name'] or ''):lower()
+    for _, marker in ipairs({ 'future', 'proposed', 'planned', 'construction' }) do
+        if name:find(marker, 1, true) then return true end
+    end
+    return false
+end
+
+local function is_bicycle_route(tags)
+    return tags['type'] == 'route' and tags['route'] == 'bicycle' and not is_unbuilt_route(tags)
+end
+
+-- A street a signed route rides along, with no bike tagging of its own. Mere
+-- permission is outranked; a street that sends bikes to a separate path is not.
+local function is_route_street(object, tags, infra_type, state)
+    if not bicycle_route_ways[object.id] or not tags['highway'] or state then return false end
+    if infra_type ~= nil and infra_type ~= 'bicycle_yes' then return false end
+    if tags['bicycle'] == 'no' or tags['bicycle'] == 'use_sidepath' then return false end
+    for _, key in ipairs({ 'cycleway', 'cycleway:both', 'cycleway:left', 'cycleway:right' }) do
+        if tags[key] == 'separate' then return false end
+    end
+    return true
+end
+
 -- Insert a way into the bicycle_ways table if it has bicycle infrastructure
 local function try_insert_bicycle_way(object, tags, linestring)
     local infra_type, state = derive_bicycle_infra_type(tags)
+    if is_route_street(object, tags, infra_type, state) then infra_type = 'bicycle_route' end
     if not infra_type then return end
 
     local oneway_val = 0
@@ -194,6 +232,43 @@ local POI_KEYS = {
     'club', 'gambling', 'advertising',
 }
 
+-- Public power outlets. OSM spreads them over several tags, so anything that
+-- offers one also gets the umbrella category `power/outlet` and a client can
+-- browse them all with one filter:
+--   power=outlet                     an individual socket (gets it via POI_KEYS)
+--   amenity=device_charging_station  a designated phone/laptop charging spot
+--   amenity=power_supply             a cabinet of sockets (markets, quays)
+--   power_supply=* / socket:*        a venue that has outlets, e.g. a cafe
+-- Keep this in sync with import/backfill-power-outlets.sql.
+
+-- Venues where power_supply=* means a pitch or berth hookup for paying guests,
+-- not an outlet the public can walk up to. These are ~90% of power_supply=yes.
+local HOOKUP_VENUES = {
+    tourism = { camp_site = true, camp_pitch = true, caravan_site = true },
+    leisure = { marina = true },
+}
+
+-- power_supply values that describe where a device draws power from, not a
+-- socket it offers.
+local NOT_AN_OUTLET = { no = true, wind = true, solar = true }
+
+local function offers_power_outlet(tags)
+    if tags['access'] == 'private' or tags['access'] == 'no' then return false end
+    local amenity = tags['amenity']
+    if amenity == 'device_charging_station' or amenity == 'power_supply' then return true end
+    -- Vehicle chargers carry socket:* tags for their connectors.
+    if amenity == 'charging_station' or tags['man_made'] == 'charge_point' then return false end
+    for key, values in pairs(HOOKUP_VENUES) do
+        if tags[key] and values[tags[key]] then return false end
+    end
+    local supply = tags['power_supply']
+    if supply and not NOT_AN_OUTLET[supply] then return true end
+    for key, val in pairs(tags) do
+        if key:sub(1, 7) == 'socket:' and val ~= 'no' and val ~= '0' then return true end
+    end
+    return false
+end
+
 -- Derive categories from tags following osm-tagging-schema preset IDs
 -- e.g., amenity=restaurant -> "amenity/restaurant"
 local function derive_categories(tags)
@@ -216,6 +291,12 @@ local function derive_categories(tags)
             cuisine = cuisine:match('^%s*(.-)%s*$') -- trim
             cats[#cats + 1] = 'cuisine/' .. cuisine
         end
+    end
+
+    -- Appended, never first: clients read categories[1] as the primary type,
+    -- and a cafe with outlets is still a cafe.
+    if tags['power'] ~= 'outlet' and offers_power_outlet(tags) then
+        cats[#cats + 1] = 'power/outlet'
     end
 
     return cats
@@ -386,6 +467,12 @@ function osm2pgsql.process_way(object)
     end
 end
 
+function osm2pgsql.select_relation_members(relation)
+    if is_bicycle_route(relation.tags) then
+        return { ways = osm2pgsql.way_member_ids(relation) }
+    end
+end
+
 function osm2pgsql.process_relation(object)
     if not next(object.tags) then return end
 
@@ -427,6 +514,12 @@ function osm2pgsql.process_relation(object)
             geom_type = 'line',
             admin_level = get_admin_level(tags),
         })
+
+        if is_bicycle_route(tags) then
+            for _, member in ipairs(object.members) do
+                if member.type == 'w' then bicycle_route_ways[member.ref] = true end
+            end
+        end
 
         -- Insert bicycle/mtb route relations into bicycle_routes
         if tags['route'] == 'bicycle' or tags['route'] == 'mtb' then

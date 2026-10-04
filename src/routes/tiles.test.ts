@@ -16,6 +16,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import Elysia from 'elysia'
 import { createTileRoutes, type TileFetcher } from './tiles'
+import { TILE_BUNDLES } from '../config/tile-bundles'
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -143,7 +144,9 @@ describe('GET /tiles/:source/:z/:x/:y', () => {
     const res = await app.handle(get('/tiles/basemap/10/500/300'))
 
     expect(res.headers.get('content-type')).toBe('application/x-protobuf')
-    expect(res.headers.get('cache-control')).toBe('public, max-age=86400')
+    expect(res.headers.get('cache-control')).toBe(
+      'public, max-age=86400, stale-while-revalidate=604800',
+    )
     expect(res.headers.get('access-control-allow-origin')).toBe('*')
   })
 
@@ -202,6 +205,87 @@ describe('GET /tiles/:source/:z/:x/:y', () => {
 })
 
 // ── Tile auth ────────────────────────────────────────────────────────────────
+
+describe('tile bundles', () => {
+  /**
+   * The whole point of a bundle: the client says one tidy name and Martin is
+   * addressed with the composite behind it. If this mapping breaks, the client
+   * gets a 404 from Martin for a source that does not exist.
+   */
+  test('resolves a bundle name to its Martin composite', async () => {
+    const mockFetch = mock<TileFetcher>(async () =>
+      new Response(new Uint8Array([0x1a]), {
+        status: 200,
+        headers: { 'content-type': 'application/x-protobuf' },
+      }),
+    )
+
+    const app = new Elysia().use(createTileRoutes({ fetchTile: mockFetch }))
+    const res = await app.handle(get('/tiles/detail/14/4825/6156'))
+
+    expect(res.status).toBe(200)
+    expect(mockFetch.mock.calls[0][0]).toBe(
+      'http://mock-martin:3000/buildings_3d,parking_areas,bicycle_ways,street_trees,tree_rows/14/4825/6156',
+    )
+  })
+
+  /**
+   * `street_furniture` is minzoom 17 upstream, so it can contribute nothing to
+   * a bundle a client reads at z≤16 — and including it would take furniture
+   * off the map rather than speed it up. Asserted so the reasoning in
+   * config/tile-bundles.ts cannot quietly rot.
+   */
+  test('the detail bundle excludes street_furniture', () => {
+    expect(TILE_BUNDLES.detail).not.toContain('street_furniture')
+  })
+
+  test('leaves an ordinary source name alone', async () => {
+    const mockFetch = mock<TileFetcher>(async () =>
+      new Response(new Uint8Array([0x1a]), {
+        status: 200,
+        headers: { 'content-type': 'application/x-protobuf' },
+      }),
+    )
+
+    const app = new Elysia().use(createTileRoutes({ fetchTile: mockFetch }))
+    await app.handle(get('/tiles/basemap/10/500/300'))
+
+    expect(mockFetch.mock.calls[0][0]).toBe('http://mock-martin:3000/basemap/10/500/300')
+  })
+
+  /** Martin's own comma syntax stays usable; the bundle is a convenience. */
+  test('passes a raw composite through untouched', async () => {
+    const mockFetch = mock<TileFetcher>(async () =>
+      new Response(new Uint8Array([0x1a]), {
+        status: 200,
+        headers: { 'content-type': 'application/x-protobuf' },
+      }),
+    )
+
+    const app = new Elysia().use(createTileRoutes({ fetchTile: mockFetch }))
+    await app.handle(get('/tiles/buildings_3d,parking_areas/14/4825/6156'))
+
+    expect(mockFetch.mock.calls[0][0]).toBe(
+      'http://mock-martin:3000/buildings_3d,parking_areas/14/4825/6156',
+    )
+  })
+
+  test('tiles carry stale-while-revalidate so an expiry is not a cold wait', async () => {
+    const mockFetch = mock<TileFetcher>(async () =>
+      new Response(new Uint8Array([0x1a]), {
+        status: 200,
+        headers: { 'content-type': 'application/x-protobuf' },
+      }),
+    )
+
+    const app = new Elysia().use(createTileRoutes({ fetchTile: mockFetch }))
+    const res = await app.handle(get('/tiles/detail/14/4825/6156'))
+
+    expect(res.headers.get('cache-control')).toBe(
+      'public, max-age=86400, stale-while-revalidate=604800',
+    )
+  })
+})
 
 describe('tile auth', () => {
   function makeTileApp() {

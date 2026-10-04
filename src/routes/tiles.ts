@@ -2,6 +2,7 @@ import Elysia, { t } from 'elysia'
 import { join } from 'path'
 import { apiAuth, apiAuthAfter } from '../middleware/api-auth'
 import { resolvePortolanTilesDir } from '../config/portolan'
+import { resolveTileBundle } from '../config/tile-bundles'
 
 function getMartinUrl() {
   return process.env.MARTIN_URL || 'http://barrelman-martin:3000'
@@ -325,7 +326,11 @@ export function createTileRoutes(
           return { error: 'Invalid tile source or coordinates' }
         }
 
-        const martinUrl = `${getMartinUrl()}/${source}/${z}/${x}/${y}`
+        // A bundle name stands in for a comma-joined Martin composite; every
+        // other source passes through as itself. See config/tile-bundles.ts.
+        const martinSource = resolveTileBundle(source)
+
+        const martinUrl = `${getMartinUrl()}/${martinSource}/${z}/${x}/${y}`
 
         const response = await fetchTile(martinUrl)
 
@@ -336,7 +341,12 @@ export function createTileRoutes(
 
         set.headers['content-type'] =
           response.headers.get('content-type') || 'application/x-protobuf'
-        set.headers['cache-control'] = 'public, max-age=86400'
+        // Tiles change only on an import, so a day is a safe TTL — and a week
+        // of stale-while-revalidate means the tile after expiry is served from
+        // the edge while it refreshes behind the request, rather than making a
+        // user wait out the full origin round trip for a byte-identical tile.
+        set.headers['cache-control'] =
+          'public, max-age=86400, stale-while-revalidate=604800'
         set.headers['access-control-allow-origin'] = '*'
 
         /**
@@ -362,7 +372,7 @@ export function createTileRoutes(
       },
       {
         params: t.Object({
-          source: t.String({ description: 'Tile source name (e.g. "basemap", "basemap,parchment_pois")' }),
+          source: t.String({ description: 'Tile source: one name ("basemap"), a bundle ("detail"), or a Martin composite ("buildings_3d,parking_areas")' }),
           z: t.String({ description: 'Zoom level' }),
           x: t.String({ description: 'Tile X coordinate' }),
           y: t.String({ description: 'Tile Y coordinate' }),
@@ -371,7 +381,7 @@ export function createTileRoutes(
           tags: ['Tiles'],
           summary: 'Vector tile (Martin proxy)',
           description:
-            'Proxies Mapbox Vector Tiles from the Martin tile server. Authenticates with an ordinary API key, via Bearer header or `?api_key=` for map libraries that cannot set headers.',
+            'Proxies Mapbox Vector Tiles from the Martin tile server. Authenticates with an ordinary API key, via Bearer header or `?api_key=` for map libraries that cannot set headers.\n\nSeveral sources can be served as one tile, either by naming a bundle (`detail`) or by joining source names with commas (`buildings_3d,parking_areas`). One request carrying five overlays beats five requests carrying one each: a map view is thirty to sixty tiles per source. A member below its own minzoom contributes nothing; the tile 404s only when every member is above its maxzoom.',
         },
       },
     )
