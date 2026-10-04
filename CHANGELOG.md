@@ -10,6 +10,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-10-04
+
 ### Fixed
 
 * **"Backfill Power Outlet Category" no longer runs a large database out of
@@ -18,8 +20,6 @@ does it — and the release pipeline turns it into the GitHub Release notes.
   backend reached 7.8 GB, the container's memory limit killed it, and Postgres
   restarted in recovery. It is now a single pass over the table that uses
   little memory at any size.
-
-### Added
 
 ## [0.7.0] - 2026-10-04
 
