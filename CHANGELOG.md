@@ -56,6 +56,19 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ### Fixed
 
+* **The OSM import and update jobs no longer print the database password.**
+  osm2pgsql quotes its connection string in its errors, and the scripts put the
+  password in that string, so any failure wrote it into the job log in the
+  console. It is now passed as `PGPASSWORD`. If a job of yours failed this way,
+  its log holds the password; rotate it if anyone else can read the console.
+
+* **OSM Update says what's wrong when the middle tables are gone.** On a
+  database whose `planet_osm_*` tables were dropped after import, it used to stop
+  with osm2pgsql's "Database needs to be imported in --slim mode". It now stops
+  before touching anything, says the tables are missing, and lists the ways to
+  recover: `UPDATE_MODE=full`, a re-import that keeps the tables, or disabling
+  the schedule. `init-replication.sh` does the same check.
+
 ## [0.5.0] - 2026-10-01
 
 ### Added

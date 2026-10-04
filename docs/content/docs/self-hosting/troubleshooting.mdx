@@ -94,6 +94,10 @@ The catalog is empty or stale — run `scripts/fetch-boundaries.ts`.
 
 `gtfsRegion` accepts a `w,s,e,n` bounding box, `global`, or one of the legacy tokens (`nc`, `nyc`, `southeast`, `us`). Anything else is rejected rather than falling through to an unfiltered query that would download the entire ~2,800 feed global catalog. Use the region's own bbox.
 
+**OSM Update fails with `no osm2pgsql middle tables`**
+
+Replication applies diffs through `planet_osm_ways` and `planet_osm_rels`, which only a `--slim` import keeps. `import-osm.sh` always imports that way, so the tables are missing only if they were dropped afterwards, usually to reclaim disk, since they are most of the database. Diffs can't be applied without them. Either set `UPDATE_MODE=full` on the schedule to re-import from scratch each time, or re-import once, keep the tables, and run `scripts/init-replication.sh`. If you want neither, disable the **OSM Update** schedule.
+
 **Address search returns nothing**
 
 Either `pelias.openaddresses` is empty for your region, or the Pelias `street` layer was never populated. See the layers note in [`pelias/README.md`](https://github.com/alexwohlbruck/barrelman/blob/main/pelias/README.md).

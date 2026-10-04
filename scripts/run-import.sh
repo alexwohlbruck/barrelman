@@ -40,7 +40,9 @@ if [ -f "$ENV_FILE" ]; then
 fi
 
 DB_PASS="${BARRELMAN_DB_PASSWORD:-barrelman}"
-DB_URL="postgresql://barrelman:${DB_PASS}@localhost:5432/barrelman"
+# The password goes in as PGPASSWORD, not in the URL: osm2pgsql quotes the
+# connection string in its errors, which the console saves to the job log.
+DB_URL="postgresql://barrelman@localhost:5432/barrelman"
 
 # Resolve which OSM extracts to import from the unified REGIONS config.
 # REGIONS selects the regions (default dev: north-carolina,nyc-metro; prod: global).
@@ -56,6 +58,7 @@ echo ""
 db_import_phase() {
   docker exec \
     -e DATABASE_URL="$DB_URL" \
+    -e PGPASSWORD="$DB_PASS" \
     -e IMPORT_PHASE="$1" \
     -e GEOFABRIK_URL="${GEOFABRIK_URL:-https://download.geofabrik.de/north-america/us/north-carolina-latest.osm.pbf}" \
     ${OSM_EXTRACTS:+-e OSM_EXTRACTS="$OSM_EXTRACTS"} \
