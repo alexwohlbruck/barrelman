@@ -86,13 +86,15 @@ Note that the original [containrrr/watchtower](https://github.com/containrrr/wat
 
 OSM, GTFS and GBFS all go stale, and the console can refresh them on a schedule
 so you don't have to remember to. Open **Schedules**: a fresh install is seeded
-with three entries, all **disabled** until you turn them on.
+with five entries, all **disabled** until you turn them on.
 
 | Schedule | Default | What it does |
 |---|---|---|
 | OSM Update | Daily 03:00 | Applies the Geofabrik replication diff and re-runs incremental post-processing |
 | Check for GTFS Updates | Daily 04:00 | Compares each feed's version against Transitland and re-imports only the regions that changed, then rebuilds MOTIS |
 | Import GBFS Systems | Sunday 05:30 | Re-fetches the GBFS systems catalog |
+| Rebuild Basemap | Sunday 06:00 | Re-renders the PMTiles basemap. Only needed when OSM Update has "Rebuild basemap" off |
+| Refresh 3D Buildings | Sunday 09:00 | Refreshes the `buildings_3d` view. Only needed when OSM Update has "Refresh 3D buildings" off |
 
 Any script under **Scripts** can be scheduled, with the same parameters you'd
 fill in to run it by hand. Each entry takes a standard five-field cron
@@ -180,6 +182,68 @@ that no tool can patch in place. `scripts/rebuild-basemap.sh` therefore
 re-renders it with planetiler — a few minutes for a couple of US states. Set
 `REBUILD_BASEMAP=0` on the update to skip it and enable the seeded weekly
 **Rebuild Basemap** schedule instead.
+
+### Large imports
+
+On a country-sized import, three of the things an update triggers take hours:
+
+- **Rebuild routing graph.** GraphHopper re-imports the whole extract, and street
+  routing is down until it finishes.
+- **Rebuild basemap.** planetiler re-renders the whole archive.
+- **Refresh 3D buildings.** The `buildings_3d` view is rebuilt from every
+  building in the database.
+
+Turn all three off on the OSM Update schedule so the nightly run only updates
+the database. Then enable the weekly **Rebuild Basemap** and **Refresh 3D
+Buildings** schedules, and run **Rebuild GraphHopper** when you can afford the
+routing downtime.
+
+### Without middle tables
+
+osm2pgsql-replication applies diffs through osm2pgsql's middle tables
+(`planet_osm_nodes`, `planet_osm_ways`, `planet_osm_rels`). An import keeps them
+because it runs with `--slim`, but they are large, about 13 times the size of
+the extract. For the United States that is around 155 GB. A large install often
+drops them after the import to get the disk back.
+
+OSM Update still works without them. When `planet_osm_ways` is missing, the
+update replicates through `region.osm.pbf` instead
+(`scripts/replicate-extract.sh`):
+
+1. It downloads the diffs since the last run and applies them to the extract.
+2. It lists the objects the diffs touch, plus the ways and relations that
+   contain them, and cuts those out of the patched extract with everything
+   they reference.
+3. It imports that small file with the normal flex style into a throwaway
+   staging database.
+4. In one transaction, it replaces the live rows of those objects with the
+   staged ones and re-derives their search columns, intersections and parent
+   context. Places inside a boundary that changed get new parent context too.
+
+Nothing to set up. The first run starts from the replication header Geofabrik
+writes into every extract (`osmosis_replication_sequence_number`), which is the
+point the database was imported at. Each run then applies every diff published
+since, up to 7 per transaction (**Diffs per cycle**). The cursor lives in its own
+table:
+
+```bash
+docker exec barrelman-db psql -U barrelman -d barrelman \
+  -c "SELECT base_url, sequence, data_timestamp FROM osm_replication_state;"
+```
+
+It needs memory and disk beyond a normal update:
+
+- **Memory.** The osmium steps run inside `barrelman-db` and share its limit
+  with Postgres. The update refuses to start below 4 GB
+  (`BARRELMAN_DB_MEM_LIMIT`, 2 GB by default). For a country, allow 4 GB on top
+  of what Postgres uses.
+- **Disk.** A second copy of `region.osm.pbf` while it is patched, and a small
+  staging database.
+
+A transaction that would remove at least 1,000 rows and put back fewer than half
+as many is rolled back. A normal diff mostly modifies objects, so a swap that
+shrinks the table that much points at a broken extract. If the diffs really do
+delete that much, run the update once with `REPLICATION_ALLOW_SHRINK=1`.
 
 <Callout type="warn">
 Geofabrik keeps roughly four months of diffs. A database left behind longer than

@@ -81,6 +81,9 @@ const SEEDS: Array<Pick<ScheduleInput, 'scriptId' | 'cron'> & { params?: Record<
   // REBUILD_BASEMAP off on osm-update so nightly stays quick, and enable this to
   // re-render on a slower cadence instead. Enabling both just renders twice.
   { scriptId: 'osm-basemap', cron: '0 6 * * 0' },
+  // For the same kind of setup, with "Refresh 3D buildings" off on osm-update:
+  // a country's buildings_3d takes hours to refresh, too long for every night.
+  { scriptId: 'osm-buildings-3d', cron: '0 9 * * 0' },
 ]
 
 let schemaReady: Promise<void> | null = null
