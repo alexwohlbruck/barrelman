@@ -184,6 +184,15 @@ export type MaterialSpec = {
   doubleSided?: boolean
   /** A PNG whose alpha cuts the surface — lattice, railings, glazing bars. */
   mask?: { png: Uint8Array; cutoff?: number }
+  /**
+   * A PNG painted onto the surface, multiplied by `color` (leave that white
+   * to use the image's colours as they are). How a facade carries detail too
+   * fine for geometry — a grid of punched windows, brick banding, ribs —
+   * without aliasing: the renderer mipmaps it, so a far facade averages to
+   * the right tone instead of shimmering. Uses the part's UVs; `loft` with
+   * `cell` and `quad` with explicit UVs set them.
+   */
+  texture?: { png: Uint8Array }
 }
 
 /**
@@ -257,6 +266,11 @@ export function writeGlb(
       },
     }
     if (material.doubleSided) m.doubleSided = true
+    if (material.texture && !material.mask) {
+      images.push({ bufferView: push(material.texture.png), mimeType: 'image/png' })
+      textures.push({ source: images.length - 1 })
+      m.pbrMetallicRoughness.baseColorTexture = { index: textures.length - 1 }
+    }
     if (material.mask) {
       images.push({ bufferView: push(material.mask.png), mimeType: 'image/png' })
       textures.push({ source: images.length - 1 })
@@ -266,12 +280,13 @@ export function writeGlb(
     }
     materials.push(m)
 
-    const { pos, nrm, uv, index } = weld(part, !!material.mask)
+    const textured = !!(material.mask || material.texture)
+    const { pos, nrm, uv, index } = weld(part, textured)
     primitives.push({
       attributes: {
         POSITION: accessor(pos, 'VEC3', 34962, true),
         NORMAL: accessor(nrm, 'VEC3', 34962),
-        ...(material.mask ? { TEXCOORD_0: accessor(uv, 'VEC2', 34962) } : {}),
+        ...(textured ? { TEXCOORD_0: accessor(uv, 'VEC2', 34962) } : {}),
       },
       indices: accessor(index, 'SCALAR', 34963),
       material: materials.length - 1,
