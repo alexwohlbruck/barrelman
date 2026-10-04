@@ -56,6 +56,12 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ### Fixed
 
+* **The OSM import and update jobs no longer print the database password.**
+  osm2pgsql quotes its connection string in its errors, and the scripts put the
+  password in that string, so any failure wrote it into the job log in the
+  console. It is now passed as `PGPASSWORD`. If a job of yours failed this way,
+  its log holds the password; rotate it if anyone else can read the console.
+
 ## [0.5.0] - 2026-10-01
 
 ### Added

@@ -58,7 +58,15 @@ if [ -f "$ENV_FILE" ]; then
 fi
 
 DB_PASS="${BARRELMAN_DB_PASSWORD:-barrelman}"
-DB_URL="postgresql://barrelman:${DB_PASS}@localhost:5432/barrelman"
+# The password travels as PGPASSWORD, never inside DB_URL. osm2pgsql quotes its
+# full connection string in the errors it raises, and those land in the job log
+# the console shows — so a URL carrying the password published it on every
+# failure.
+DB_URL="postgresql://barrelman@localhost:5432/barrelman"
+
+# docker exec into barrelman-db with the password set. Takes the same arguments
+# as `docker exec`, container name included.
+db_exec() { docker exec -e PGPASSWORD="$DB_PASS" "$@"; }
 
 UPDATE_MODE="${UPDATE_MODE:-replication}"
 GEOFABRIK_URL="${GEOFABRIK_URL:-https://download.geofabrik.de/north-america/us/north-carolina-latest.osm.pbf}"
@@ -95,7 +103,7 @@ if [ "$UPDATE_MODE" = "full" ]; then
   # makes this a refresh rather than a re-import of the extract on disk, so it
   # defaults on here; an operator replaying a known-good download can still
   # pass 0.
-  docker exec \
+  db_exec \
     -e DATABASE_URL="$DB_URL" \
     -e GEOFABRIK_URL="$GEOFABRIK_URL" \
     -e FORCE_DOWNLOAD="${FORCE_DOWNLOAD:-1}" \
@@ -141,19 +149,19 @@ fi
 # first import and re-applied every diff since, so each run did more work than
 # the last. Once that sequence is older than the four months or so of diffs
 # Geofabrik keeps, every run fails. Check the table this image writes first.
-INIT_CHECK=$(docker exec barrelman-db \
+INIT_CHECK=$(db_exec barrelman-db \
   psql "$DB_URL" -tAc \
   "SELECT count(*) FROM planet_osm_replication_status;" 2>/dev/null || echo "0")
 
 if [ "${INIT_CHECK:-0}" = "0" ]; then
-  INIT_CHECK=$(docker exec barrelman-db \
+  INIT_CHECK=$(db_exec barrelman-db \
     psql "$DB_URL" -tAc \
     "SELECT count(*) FROM osm2pgsql_properties WHERE property='replication_base_url';" 2>/dev/null || echo "0")
 fi
 
 if [ "$INIT_CHECK" = "0" ]; then
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] Replication not initialized — running init..."
-  docker exec barrelman-db \
+  db_exec barrelman-db \
     osm2pgsql-replication init \
       -d "$DB_URL" \
       --server "$GEOFABRIK_REPLICATION_URL"
@@ -179,7 +187,7 @@ PBF_MTIME_BEFORE=$(docker exec barrelman-db stat -c %Y "$PBF_FILE" 2>/dev/null |
 # instead of failing. It must stay in step with OSM2PGSQL_FLAT_NODES in
 # import-osm.sh — both read the same variable so they cannot drift.
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] [1/8] Applying OSM diffs (database + extract)..."
-docker exec \
+db_exec \
   -e OSM_DIFF_FILE="$DIFF_FILE" \
   -e OSM_PBF_FILE="$PBF_FILE" \
   barrelman-db \
@@ -199,16 +207,16 @@ PBF_MTIME_AFTER=$(docker exec barrelman-db stat -c %Y "$PBF_FILE" 2>/dev/null ||
 
 # ── Step 2: Post-import SQL (idempotent — ensures columns + extracts new data)
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] [2/8] Running post-import SQL..."
-docker exec barrelman-db psql "$DB_URL" -f /app/import/post-import.sql
+db_exec barrelman-db psql "$DB_URL" -f /app/import/post-import.sql
 # The query-serving indexes moved out of post-import.sql (a full import builds
 # them after enrichment — see finalize-indexes.sql). On an already-indexed
 # database every statement here is an IF NOT EXISTS no-op, so this preserves
 # the old "post-import guarantees the indexes exist" contract for updates.
-docker exec barrelman-db psql "$DB_URL" -f /app/import/finalize-indexes.sql
+db_exec barrelman-db psql "$DB_URL" -f /app/import/finalize-indexes.sql
 
 # ── Step 3: Generate codes (incremental — only new/changed rows) ─────────────
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] [3/8] Extracting codes..."
-docker exec barrelman-db psql "$DB_URL" -c "
+db_exec barrelman-db psql "$DB_URL" -c "
 UPDATE geo_places
 SET codes = sub.codes
 FROM (
@@ -240,7 +248,7 @@ WHERE geo_places.id = sub.id
 
 # ── Step 4: Generate abbreviations (incremental — only missing rows) ─────────
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] [4/8] Generating abbreviations..."
-docker exec barrelman-db psql "$DB_URL" -c "
+db_exec barrelman-db psql "$DB_URL" -c "
 UPDATE geo_places
 SET name_abbrev = sub.abbrev
 FROM (
@@ -270,15 +278,15 @@ WHERE geo_places.id = sub.id;
 
 # ── Step 5: Generate road intersections ──────────────────────────────────────
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] [5/8] Generating road intersections..."
-docker exec barrelman-db psql "$DB_URL" -f /app/import/generate-intersections.sql
+db_exec barrelman-db psql "$DB_URL" -f /app/import/generate-intersections.sql
 
 # ── Step 6: Resolve parent context (incremental — only NULL rows + cascade) ──
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] [6/8] Resolving parent context (incremental)..."
-docker exec barrelman-db psql "$DB_URL" -f /app/import/resolve-parent-context-incremental.sql
+db_exec barrelman-db psql "$DB_URL" -f /app/import/resolve-parent-context-incremental.sql
 
 # ── Step 7: Rebuild tsvectors (intersections + new/changed rows only) ────────
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] [7/8] Rebuilding tsvectors (intersections + new rows)..."
-docker exec barrelman-db psql "$DB_URL" -v scope='intersections' -f /app/import/rebuild-tsvectors.sql
+db_exec barrelman-db psql "$DB_URL" -v scope='intersections' -f /app/import/rebuild-tsvectors.sql
 
 # The 3D buildings view holds rows rather than being computed per request, so a
 # diff that adds or reshapes a building does not reach the tiles until it is
@@ -291,11 +299,11 @@ docker exec barrelman-db psql "$DB_URL" -v scope='intersections' -f /app/import/
 # because `--on-invalid warn` keeps one unreadable source from taking the rest
 # of the tile server down with it. See `martin` in docker-compose.yml.
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] Rebuilding the 3D buildings view..."
-docker exec barrelman-db psql "$DB_URL" -c "REFRESH MATERIALIZED VIEW buildings_3d;"
+db_exec barrelman-db psql "$DB_URL" -c "REFRESH MATERIALIZED VIEW buildings_3d;"
 
 # ── Step 8: ANALYZE ──────────────────────────────────────────────────────────
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] [8/8] Running ANALYZE..."
-docker exec barrelman-db psql "$DB_URL" -c "ANALYZE geo_places; ANALYZE bicycle_ways; ANALYZE bicycle_routes;"
+db_exec barrelman-db psql "$DB_URL" -c "ANALYZE geo_places; ANALYZE bicycle_ways; ANALYZE bicycle_routes;"
 
 # A graph rebuild wipes graph-cache and takes street routing down for the length
 # of the import, so it is only worth doing when the extract it reads actually
