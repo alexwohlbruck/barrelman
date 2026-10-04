@@ -4,7 +4,7 @@
  * Authoring frame: x=v, y=u, z=height, metres. Catalog bearing: 29 degrees.
  * The supplied OSM envelopes establish the footprint and setback elevations.
  */
-import { Part, writeGlb, type V3, type MaterialSpec } from './mesh'
+import { Part, writeGlb, addGltfTriangles, type V3, type MaterialSpec } from './mesh'
 
 type XY = [number, number]
 const CX = -8.4, CY = 7
@@ -221,24 +221,39 @@ for(let f=0;f<4;f++) {
   }
 }
 
-/** Upright spikes, as Apple draws them: a row of tall three-sided teeth
- * standing on each tier's arch band and pointing straight up, the way the
- * real crown's triangular windows read from a distance. Rooted just inside
- * the arch so each tier's row sits against the curve of the one above. */
-function teeth(r:number,apex:number) {
-  const d=depth(r),spring=apex-r,count=5
+/** Apple's crown teeth: a few fat, rounded cones per tier per face, each
+ * rooted on the tier's arch ledge and leaning out along the arch's radius,
+ * rising into the face of the tier above. Few and full-bodied — thin flat
+ * spikes scattered over every face read as fuzz at map scale. Kept off the
+ * arch ends, where neighbouring faces' teeth would crowd the corners, and
+ * pointing mostly up, so they stay inside the crown's outline. */
+function teeth(r:number,apex:number,next?:{r:number,apex:number}) {
+  const spring=apex-r,count=r>8?4:3
+  const gap=next?Math.max(2.5,next.apex-apex+(r-next.r)):3
+  const length=Math.min(gap*.95,r*.5),width=Math.min(1.35,r*.14)
+  const cone=new Part()
   for(let f=0;f<4;f++) for(let k=0;k<count;k++) {
-    const a=.42+(Math.PI-.84)*k/(count-1)
-    const u=Math.cos(a)*r*.86, z=spring+Math.sin(a)*r*.86
-    const half=r*.1, height=r*.45, stand=Math.min(1.8,r*.15)
-    // At the scalloped corners, follow the perpendicular barrel's return;
-    // mounting everything on the flat face would bury the outer spikes.
-    const mount=(uu:number,zz:number,offset:number):V3=>place(f,uu,Math.max(d,Math.sqrt(Math.max(0,r*r-(zz-spring)**2)))+offset,zz)
-    const v0=mount(u-half,z,.02),v1=mount(u+half,z,.02),v2=mount(u,z,stand),top=mount(u,z+height,stand*.35)
-    accent.tri(v0,v1,top);accent.tri(v1,v2,top);accent.tri(v2,v0,top);accent.tri(v0,v2,v1)
+    const a=.85+(Math.PI-1.7)*k/(count-1)
+    const radial:XY=[Math.cos(a),Math.sin(a)],tangent:XY=[-Math.sin(a),Math.cos(a)]
+    // Lean out along the radius, but more upward than the arch alone would,
+    // so the side teeth stand rather than lie flat.
+    const dir:XY=(()=>{const x=radial[0]*.4,y=radial[1]*.4+.9,l=Math.hypot(x,y);return [x/l,y/l]})()
+    const d=Math.max(depth(r),Math.sqrt(Math.max(0,r*r-(radial[1]*r)**2)))
+    const base=(u:number,z:number,out:number):V3=>place(f,u,d+width+out,z)
+    const bu=radial[0]*r*.9,bz=spring+radial[1]*r*.9
+    const ring=Array.from({length:6},(_,j)=>{
+      const t=j/6*Math.PI*2
+      // Circle in the plane across the cone's axis: one axis along the face
+      // (perpendicular to dir in elevation), the other out of the face.
+      const across=Math.cos(t)*width,outward=Math.sin(t)*width
+      return base(bu-dir[1]*across,bz+dir[0]*across,outward)
+    })
+    const tip=base(bu+dir[0]*length,bz+dir[1]*length,0)
+    for(let j=0;j<6;j++){const n=(j+1)%6;cone.tri(ring[j],ring[n],tip)}
   }
+  addGltfTriangles(accent,new Float32Array(cone.pos),Uint32Array.from({length:cone.pos.length/3},(_,i)=>i),{creaseDegrees:70})
 }
-for(let i=0;i<tiers.length;i++) {const t=tiers[i];vault(t.r,t.apex,200,i?tiers[i-1]:{r:14.3,apex:229});teeth(t.r,t.apex)}
+for(let i=0;i<tiers.length;i++) {const t=tiers[i];vault(t.r,t.apex,200,i?tiers[i-1]:{r:14.3,apex:229});if(i<tiers.length-1)teeth(t.r,t.apex,tiers[i+1])}
 
 // Bold faceted eagle/hood silhouettes; the small eyes, feathers and ribs go.
 function eagle(x:number,y:number,dx:number,dy:number,z:number,scale=1) {
