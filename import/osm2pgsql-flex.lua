@@ -238,7 +238,7 @@ local POI_KEYS = {
 --   power=outlet                     an individual socket (gets it via POI_KEYS)
 --   amenity=device_charging_station  a designated phone/laptop charging spot
 --   amenity=power_supply             a cabinet of sockets (markets, quays)
---   power_supply=* / socket:*        a venue that has outlets, e.g. a cafe
+--   power_supply=* / socket:<plug>   a venue that has outlets, e.g. a cafe
 -- Keep this in sync with import/backfill-power-outlets.sql.
 
 -- Venues where power_supply=* means a pitch or berth hookup for paying guests,
@@ -252,6 +252,15 @@ local HOOKUP_VENUES = {
 -- socket it offers.
 local NOT_AN_OUTLET = { no = true, wind = true, solar = true }
 
+-- socket:* types a phone or laptop plugs into. Most socket:* tags worldwide are
+-- EV connectors (type2, type2_combo, chademo, nacs, ...), often on a disused or
+-- removed charging station whose amenity tag is gone, so this is an allowlist.
+-- CEE and NEMA 14-50 are camping and RV hookups.
+local DEVICE_SOCKETS = {
+    schuko = true, typee = true, domestic = true, bs1363 = true,
+    nema_5_15 = true, nema_5_20 = true, as3112 = true, usb = true,
+}
+
 local function offers_power_outlet(tags)
     if tags['access'] == 'private' or tags['access'] == 'no' then return false end
     local amenity = tags['amenity']
@@ -264,7 +273,8 @@ local function offers_power_outlet(tags)
     local supply = tags['power_supply']
     if supply and not NOT_AN_OUTLET[supply] then return true end
     for key, val in pairs(tags) do
-        if key:sub(1, 7) == 'socket:' and val ~= 'no' and val ~= '0' then return true end
+        if key:sub(1, 7) == 'socket:' and DEVICE_SOCKETS[key:sub(8):lower()]
+            and val ~= 'no' and val ~= '0' then return true end
     end
     return false
 end

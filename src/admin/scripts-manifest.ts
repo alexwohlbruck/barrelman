@@ -769,7 +769,7 @@ export const SCRIPTS: ScriptDef[] = [
     id: 'search-power-outlets',
     name: 'Backfill Power Outlet Category',
     description:
-      'Tag places that offer a public power outlet (device charging stations, power supply cabinets, venues with power_supply or socket:* tags) with the power/outlet category, so they can be browsed with one filter.',
+      'Tag places that offer a public power outlet (device charging stations, power supply cabinets, venues with power_supply or household socket:* tags) with the power/outlet category, so they can be browsed with one filter. Also removes it from places that no longer qualify.',
     category: 'search',
     danger: 'safe',
     longRunning: true,
@@ -777,7 +777,7 @@ export const SCRIPTS: ScriptDef[] = [
     exec: { kind: 'internal', handler: 'sql:backfill-power-outlets.sql' },
     source: 'import/backfill-power-outlets.sql',
     notes:
-      'Only needed once, on a database imported before the category existed; imports and replication set it from then on. One full scan of geo_places. Idempotent.',
+      'Run once on a database imported before the category existed, and again on one that ran it under 0.6.0, which also tagged EV chargers. Imports and replication keep it current after that. One full scan of geo_places. Idempotent.',
   },
   {
     id: 'search-addresses',

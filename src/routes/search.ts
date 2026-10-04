@@ -43,7 +43,7 @@ export function createSearchRoutes(deps = { searchPlaces: _searchPlaces }) {
             examples: [500, 1000, 2000, 5000],
           })),
           categories: t.Optional(t.Array(t.String(), {
-            description: 'OSM preset category IDs to filter by (e.g. ["amenity/fuel", "amenity/cafe"]). Multiple values are OR\'d together. `power/outlet` matches every place offering a public power outlet: individual sockets, device charging stations, power supply cabinets, and venues tagged `power_supply` or `socket:*`.',
+            description: 'OSM preset category IDs to filter by (e.g. ["amenity/fuel", "amenity/cafe"]). Multiple values are OR\'d together. `power/outlet` matches every place offering a public power outlet: individual sockets, device charging stations, power supply cabinets, and venues tagged `power_supply` or a household or USB `socket:*` plug. EV charging connectors are not outlets.',
             examples: [['amenity/fuel'], ['amenity/cafe', 'amenity/restaurant'], ['power/outlet']],
           })),
           tags: t.Optional(t.Record(t.String(), t.String(), {
