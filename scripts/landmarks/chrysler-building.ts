@@ -8,7 +8,7 @@ import { Part, writeGlb, addGltfTriangles, type V3, type MaterialSpec } from './
 
 type XY = [number, number]
 const CX = -8.4, CY = 7
-const stone = new Part(), glazing = new Part(), roof = new Part(), silver = new Part(), accent = new Part()
+const stone = new Part(), glazing = new Part(), roof = new Part(), silver = new Part(), accent = new Part(), rims = new Part()
 const BEVEL = .4, RECESS = .65, ARC_SEGMENTS = 10
 const norm = (v: V3): V3 => { const l = Math.hypot(...v); return v.map(n => n / l) as V3 }
 const add = (a: V3, b: V3): V3 => a.map((v, i) => v + b[i]) as V3
@@ -230,7 +230,7 @@ for(let f=0;f<4;f++) {
 function teeth(r:number,apex:number,next?:{r:number,apex:number}) {
   const spring=apex-r,count=r>8?4:3
   const gap=next?Math.max(2.5,next.apex-apex+(r-next.r)):3
-  const length=Math.min(gap*.95,r*.5),width=Math.min(1.35,r*.14)
+  const length=Math.min(gap*.9,r*.5),width=Math.min(1.5,r*.15)
   const cone=new Part()
   for(let f=0;f<4;f++) for(let k=0;k<count;k++) {
     const a=.85+(Math.PI-1.7)*k/(count-1)
@@ -253,6 +253,22 @@ function teeth(r:number,apex:number,next?:{r:number,apex:number}) {
   }
   addGltfTriangles(accent,new Float32Array(cone.pos),Uint32Array.from({length:cone.pos.length/3},(_,i)=>i),{creaseDegrees:70})
 }
+/** A bright projecting rim along each tier's arch. It is what makes the
+ * crown read as seven stepped arches rather than one grey cone: the rim
+ * catches the light and throws a thin shadow on the tier below, as the
+ * stainless bands do on the real building and the ledges do in Apple's. */
+function rim(r:number,apex:number) {
+  const d=depth(r),spring=apex-r,thick=Math.min(1.5,r*.15),proud=Math.min(1.3,r*.13),SEG=8
+  for(let f=0;f<4;f++) for(let j=0;j<SEG;j++) {
+    const a=.12+(Math.PI-.24)*j/SEG,b=.12+(Math.PI-.24)*(j+1)/SEG
+    const p=(t:number,rr:number,dd:number)=>place(f,-rr*Math.cos(t),dd,spring+rr*Math.sin(t))
+    // Front face, outer top and inner underside; the back sits on the vault.
+    rims.quad(p(a,r,d+proud),p(b,r,d+proud),p(b,r-thick,d+proud),p(a,r-thick,d+proud))
+    rims.quad(p(a,r,d),p(b,r,d),p(b,r,d+proud),p(a,r,d+proud))
+    rims.quad(p(a,r-thick,d+proud),p(b,r-thick,d+proud),p(b,r-thick,d),p(a,r-thick,d))
+  }
+}
+for(let i=0;i<tiers.length;i++) {const t=tiers[i];rim(t.r,t.apex)}
 for(let i=0;i<tiers.length;i++) {const t=tiers[i];vault(t.r,t.apex,200,i?tiers[i-1]:{r:14.3,apex:229});if(i<tiers.length-1)teeth(t.r,t.apex,tiers[i+1])}
 
 // Bold faceted eagle/hood silhouettes; the small eyes, feathers and ribs go.
@@ -278,12 +294,13 @@ const parts:{part:Part;material:MaterialSpec}[]=[
   {part:stone,material:{name:'warm off-white bevelled piers',color:0xe9e6df,roughness:.65}},
   {part:glazing,material:{name:'soft grey recessed bands and eagles',color:0x929ba0,roughness:.7}},
   {part:roof,material:{name:'muted rose terraces',color:0xc8968a,roughness:.85}},
-  {part:silver,material:{name:'light silver crown and needle',color:0xd8dddf,roughness:.42}},
-  {part:accent,material:{name:'grey crown teeth',color:0x77878f,roughness:.65,doubleSided:true}},
+  {part:silver,material:{name:'light silver crown and needle',color:0xc9d0d4,roughness:.42}},
+  {part:rims,material:{name:'bright steel arch rims',color:0xf3f5f6,roughness:.35,doubleSided:true}},
+  {part:accent,material:{name:'grey crown teeth',color:0x98a4ab,roughness:.65,doubleSided:true}},
 ]
 const triangles=parts.reduce((sum,p)=>sum+p.part.triangles,0)
 const glb=writeGlb('Chrysler Building',parts,{frame:'Y up, -Z north, +X east; metres; ground anchor',anchor:[40.75151,-73.9752851],bearing:29,crown:tiers.map(t=>({radius:t.r,spring:t.apex-t.r,apex:t.apex})),style:'geometry-only, broad recessed bands and bevelled piers',recessMetres:RECESS,bevelMetres:BEVEL})
-if(triangles>5000||glb.length>250000)throw new Error(`Budget exceeded: ${triangles} triangles / ${glb.length} bytes`)
+if(triangles>6500||glb.length>250000)throw new Error(`Budget exceeded: ${triangles} triangles / ${glb.length} bytes`)
 const out=process.argv[2]??new URL('../../landmarks/models/chrysler-building.glb',import.meta.url).pathname
 await Bun.write(out,glb)
 console.log(`${out}: ${triangles} triangles, ${glb.length} bytes (${(glb.length/1024).toFixed(1)} KiB); ${walls.length} exposed facade patches`)
