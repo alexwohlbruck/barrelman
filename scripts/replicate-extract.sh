@@ -171,26 +171,33 @@ q "CREATE TABLE IF NOT EXISTS osm_replication_state (
    );" >/dev/null
 
 if [ "$(q "SELECT count(*) FROM osm_replication_state")" = "0" ]; then
-  # A database that replicated with its middle tables before they were dropped
-  # already knows where it is, and that beats the extract's header:
-  # apply-osm-diff.sh patches the extract without updating the header, so the
-  # header still names the original import's sequence.
-  INIT_FROM="osm2pgsql's replication state"
-  INIT_ROW="$(q "SELECT url || '|' || sequence || '|' || coalesce(importdate::text, '')
-                 FROM planet_osm_replication_status LIMIT 1" 2>/dev/null || true)"
-  if [ -n "$INIT_ROW" ]; then
-    IFS='|' read -r INIT_URL INIT_SEQ INIT_TS <<<"$INIT_ROW"
-  else
-    [ -f "$PBF_FILE" ] || fail "$PBF_FILE is missing, so there is nothing to start replication from."
-    INIT_FROM="the replication header of $(basename "$PBF_FILE")"
+  # Two places can say where the database is: the replication header Geofabrik
+  # writes into the extract, and osm2pgsql-replication's own state, if the
+  # database replicated with its middle tables before they were dropped. Each
+  # can lag. apply-osm-diff.sh patches the extract without touching its header,
+  # and a full re-import leaves an old replication row behind. Whichever is
+  # further along is the one that matches the data, so take the larger.
+  INIT_URL="" INIT_SEQ="" INIT_TS="" INIT_FROM=""
+  if [ -f "$PBF_FILE" ]; then
     INIT_URL="$(pbf_header osmosis_replication_base_url)"
     INIT_SEQ="$(pbf_header osmosis_replication_sequence_number)"
     INIT_TS="$(pbf_header osmosis_replication_timestamp)"
+    if [ -n "$INIT_SEQ" ]; then INIT_FROM="the replication header of $(basename "$PBF_FILE")"; fi
+  fi
+  STATUS_ROW="$(q "SELECT url || '|' || sequence || '|' || coalesce(importdate::text, '')
+                   FROM planet_osm_replication_status LIMIT 1" 2>/dev/null || true)"
+  if [ -n "$STATUS_ROW" ]; then
+    IFS='|' read -r S_URL S_SEQ S_TS <<<"$STATUS_ROW"
+    if [ -z "$INIT_SEQ" ] || [ "$S_SEQ" -gt "$INIT_SEQ" ]; then
+      INIT_URL="$S_URL" INIT_SEQ="$S_SEQ" INIT_TS="$S_TS"
+      INIT_FROM="osm2pgsql's replication state"
+    fi
   fi
   INIT_URL="${GEOFABRIK_REPLICATION_URL:-$INIT_URL}"
   if [ -z "$INIT_URL" ] || [ -z "$INIT_SEQ" ]; then
-    fail "$(basename "$PBF_FILE") carries no replication header (osmosis_replication_*), so the
-  sequence it was cut at is unknown. Re-import from a Geofabrik extract, which has one."
+    fail "the starting point is unknown: $(basename "$PBF_FILE") carries no replication header
+  (osmosis_replication_*) and the database has no osm2pgsql replication state.
+  Re-import from a Geofabrik extract, which has one."
   fi
   log "Starting replication from $INIT_FROM: sequence $INIT_SEQ ($INIT_TS)"
   q "INSERT INTO osm_replication_state (base_url, sequence, data_timestamp)
