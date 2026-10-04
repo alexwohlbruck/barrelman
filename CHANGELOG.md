@@ -56,6 +56,14 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ### Fixed
 
+* **Browsing a category within a radius is fast.** `/search` with `categories`
+  and a `radius` read every place inside the circle and kept the few that
+  matched, because the query left out the condition that lets Postgres use the
+  categories index. On a Berlin import a 20 km browse took 2–3 seconds whatever
+  the category; it now takes 10–30 ms for most categories, and the densest
+  (parking) went from 1.8 s to 1.1 s. Browsing without a radius was already
+  fast and is unchanged.
+
 * **The OSM import and update jobs no longer print the database password.**
   osm2pgsql quotes its connection string in its errors, and the scripts put the
   password in that string, so any failure wrote it into the job log in the
