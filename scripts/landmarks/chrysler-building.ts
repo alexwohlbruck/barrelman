@@ -8,7 +8,7 @@ import { Part, writeGlb, addGltfTriangles, type V3, type MaterialSpec } from './
 
 type XY = [number, number]
 const CX = -8.4, CY = 7
-const stone = new Part(), glazing = new Part(), roof = new Part(), silver = new Part(), accent = new Part(), rims = new Part()
+const stone = new Part(), glazing = new Part(), roof = new Part(), silver = new Part(), accent = new Part(), rims = new Part(), crownGlass = new Part()
 const BEVEL = .4, RECESS = .65, ARC_SEGMENTS = 10
 const norm = (v: V3): V3 => { const l = Math.hypot(...v); return v.map(n => n / l) as V3 }
 const add = (a: V3, b: V3): V3 => a.map((v, i) => v + b[i]) as V3
@@ -221,46 +221,43 @@ for(let f=0;f<4;f++) {
   }
 }
 
-/** Apple's crown teeth: a few fat, rounded cones per tier per face, each
- * rooted on the tier's arch ledge and leaning out along the arch's radius,
- * rising into the face of the tier above. Few and full-bodied — thin flat
- * spikes scattered over every face read as fuzz at map scale. Kept off the
- * arch ends, where neighbouring faces' teeth would crowd the corners, and
- * pointing mostly up, so they stay inside the crown's outline. */
-function teeth(r:number,apex:number,next?:{r:number,apex:number}) {
-  const spring=apex-r,count=r>8?4:3
-  const gap=next?Math.max(2.5,next.apex-apex+(r-next.r)):3
-  const length=Math.min(gap*.9,r*.5),width=Math.min(1.5,r*.15)
-  const cone=new Part()
+/** The crown's triangular windows, as on the real building: flush dark
+ * triangles set into each steel band between one arch and the next, base on
+ * the lower arch and apex reaching up toward the one above, tilted along the
+ * radius on the flanks. Flush, and kept inside the face's own width — an arch
+ * is wider than the face it sits on, so anything near its ends would hang
+ * past the corner. */
+function windows(t:{r:number,apex:number},prev:{r:number,apex:number}) {
+  const d=depth(t.r),count=t.r>8?5:t.r>5?4:t.r>3.5?3:2
+  // Spaced evenly across the face rather than along radii: the bands are
+  // crescents whose radii converge far below, which would pinch every
+  // triangle to a sliver.
+  const w=d-.6,du=2*w/count
   for(let f=0;f<4;f++) for(let k=0;k<count;k++) {
-    const a=.85+(Math.PI-1.7)*k/(count-1)
-    const radial:XY=[Math.cos(a),Math.sin(a)],tangent:XY=[-Math.sin(a),Math.cos(a)]
-    // Lean out along the radius, but more upward than the arch alone would,
-    // so the side teeth stand rather than lie flat.
-    const dir:XY=(()=>{const x=radial[0]*.4,y=radial[1]*.4+.9,l=Math.hypot(x,y);return [x/l,y/l]})()
-    const d=Math.max(depth(r),Math.sqrt(Math.max(0,r*r-(radial[1]*r)**2)))
-    const base=(u:number,z:number,out:number):V3=>place(f,u,d+width+out,z)
-    const bu=radial[0]*r*.9,bz=spring+radial[1]*r*.9
-    const ring=Array.from({length:6},(_,j)=>{
-      const t=j/6*Math.PI*2
-      // Circle in the plane across the cone's axis: one axis along the face
-      // (perpendicular to dir in elevation), the other out of the face.
-      const across=Math.cos(t)*width,outward=Math.sin(t)*width
-      return base(bu-dir[1]*across,bz+dir[0]*across,outward)
-    })
-    const tip=base(bu+dir[0]*length,bz+dir[1]*length,0)
-    for(let j=0;j<6;j++){const n=(j+1)%6;cone.tri(ring[j],ring[n],tip)}
+    const u=-w+du*(k+.5)
+    const lo=Math.max(arc(prev.r,prev.apex,u),t.apex-t.r),hi=arc(t.r,t.apex,u)
+    const h=hi-lo
+    if(h<.8) continue
+    const half=Math.min(h*.42,du*.4)
+    const b0=lo+h*.08,tip=hi-h*.1
+    // A slight lean outward on the flanks, as the real windows follow the arch.
+    const lean=(u/t.r)*h*.25
+    const v=[place(f,u+half,d+.05,b0),place(f,u-half,d+.05,b0),place(f,u+lean,d+.05,tip)]
+    crownGlass.tri(v[0],v[1],v[2])
   }
-  addGltfTriangles(accent,new Float32Array(cone.pos),Uint32Array.from({length:cone.pos.length/3},(_,i)=>i),{creaseDegrees:70})
 }
+
 /** A bright projecting rim along each tier's arch. It is what makes the
  * crown read as seven stepped arches rather than one grey cone: the rim
  * catches the light and throws a thin shadow on the tier below, as the
  * stainless bands do on the real building and the ledges do in Apple's. */
 function rim(r:number,apex:number) {
-  const d=depth(r),spring=apex-r,thick=Math.min(1.5,r*.15),proud=Math.min(1.3,r*.13),SEG=8
+  const d=depth(r),spring=apex-r,thick=Math.min(1.5,r*.15),proud=Math.min(.8,r*.08),SEG=8
+  // Only the part of the arch that lies over this face: beyond |u| = d it
+  // would hang off the corner.
+  const span=Math.acos(Math.min(1,d/r))
   for(let f=0;f<4;f++) for(let j=0;j<SEG;j++) {
-    const a=.12+(Math.PI-.24)*j/SEG,b=.12+(Math.PI-.24)*(j+1)/SEG
+    const a=span+(Math.PI-2*span)*j/SEG,b=span+(Math.PI-2*span)*(j+1)/SEG
     const p=(t:number,rr:number,dd:number)=>place(f,-rr*Math.cos(t),dd,spring+rr*Math.sin(t))
     // Front face, outer top and inner underside; the back sits on the vault.
     rims.quad(p(a,r,d+proud),p(b,r,d+proud),p(b,r-thick,d+proud),p(a,r-thick,d+proud))
@@ -269,7 +266,7 @@ function rim(r:number,apex:number) {
   }
 }
 for(let i=0;i<tiers.length;i++) {const t=tiers[i];rim(t.r,t.apex)}
-for(let i=0;i<tiers.length;i++) {const t=tiers[i];vault(t.r,t.apex,200,i?tiers[i-1]:{r:14.3,apex:229});if(i<tiers.length-1)teeth(t.r,t.apex,tiers[i+1])}
+for(let i=0;i<tiers.length;i++) {const t=tiers[i],prev=i?tiers[i-1]:{r:14.3,apex:229};vault(t.r,t.apex,200,prev);windows(t,prev)}
 
 // Bold faceted eagle/hood silhouettes; the small eyes, feathers and ribs go.
 function eagle(x:number,y:number,dx:number,dy:number,z:number,scale=1) {
@@ -296,7 +293,7 @@ const parts:{part:Part;material:MaterialSpec}[]=[
   {part:roof,material:{name:'muted rose terraces',color:0xc8968a,roughness:.85}},
   {part:silver,material:{name:'light silver crown and needle',color:0xc9d0d4,roughness:.42}},
   {part:rims,material:{name:'bright steel arch rims',color:0xf3f5f6,roughness:.35,doubleSided:true}},
-  {part:accent,material:{name:'grey crown teeth',color:0x98a4ab,roughness:.65,doubleSided:true}},
+  {part:crownGlass,material:{name:'crown triangular windows',color:0x4b565e,roughness:.4,doubleSided:true}},
 ]
 const triangles=parts.reduce((sum,p)=>sum+p.part.triangles,0)
 const glb=writeGlb('Chrysler Building',parts,{frame:'Y up, -Z north, +X east; metres; ground anchor',anchor:[40.75151,-73.9752851],bearing:29,crown:tiers.map(t=>({radius:t.r,spring:t.apex-t.r,apex:t.apex})),style:'geometry-only, broad recessed bands and bevelled piers',recessMetres:RECESS,bevelMetres:BEVEL})
