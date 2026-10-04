@@ -1,278 +1,329 @@
 /**
- * Chrysler Building — original procedural geometry, CC0-1.0.
- * Run: bun scripts/landmarks/chrysler-building.ts
- * Map frame: x = v, y = u, z up, metres. Placement: bearing 29°, elevation 0.
- * The supplied OSM envelopes determine the setbacks; small footprint notches
- * are stylised because the measurements supply bounds rather than vertices.
+ * Chrysler Building — procedural landmark, authored in x=v, y=u, z=height.
+ * Run: bun scripts/landmarks/chrysler-building.ts [out.glb]
+ * The catalog supplies the 29° bearing; the mesh kit writes the Y-up frame.
+ *
+ * Setbacks use the supplied OSM envelopes. Their small plan notches are
+ * approximated conservatively because the survey supplies ranges, not nodes.
+ * All facade detail is painted at metre scale; only silhouette is geometry.
  */
-import { Part, addGltfTriangles, writeGlb, type V3 } from './mesh'
+import { Part, encodePng, writeGlb, type MaterialSpec, type V3 } from './mesh'
 
-const brick = new Part(), stone = new Part(), glass = new Part(), windows = new Part()
-const steel = new Part(), seams = new Part(), highlights = new Part()
-const podium = new Part(), darkBrick = new Part(), steelFolds = new Part()
-const crownSteel = new Part()
-const roof = new Part()
 const CX = -8.4, CY = 7
+const masonry = new Part(), banded = new Part(), crown = new Part()
+const stone = new Part(), roofs = new Part(), steel = new Part(), shadow = new Part(), reflection = new Part()
 type XY = [number, number]
 const rect = (x0: number, y0: number, x1: number, y1: number): XY[] =>
   [[x0, y0], [x1, y0], [x1, y1], [x0, y1]]
 const ring = (xy: XY[], z: number): V3[] => xy.map(([x, y]) => [x, y, z])
+const mix = (a: number, b: number, t: number) => a + (b - a) * t
+const crownDepth = (r: number) => r * (r < 3 ? .39 : .82)
 
-function solid(p: Part, xy: XY[], lo: number, hi: number) {
-  p.loft([ring(xy, lo), ring(xy, hi)])
-  // All footprints are star-shaped about their centroid (including the
-  // recessed tower corners); a centre fan also caps their concave notches.
-  const c = xy.reduce((s, v) => [s[0] + v[0] / xy.length, s[1] + v[1] / xy.length], [0, 0])
-  for (let i = 0; i < xy.length; i++) {
-    const a = xy[i], b = xy[(i + 1) % xy.length]
-    p.tri([c[0], c[1], hi], [a[0], a[1], hi], [b[0], b[1], hi])
-    p.tri([c[0], c[1], lo], [b[0], b[1], lo], [a[0], a[1], lo])
+/** Ear clipping keeps roofs of the cross-shaped shaft out of its notches. */
+function cap(p: Part, xy: XY[], z: number, up = true) {
+  const ids = xy.map((_, i) => i)
+  const cross = (a: XY, b: XY, c: XY) => (b[0]-a[0])*(c[1]-a[1])-(b[1]-a[1])*(c[0]-a[0])
+  while (ids.length > 2) {
+    let clipped = false
+    for (let k = 0; k < ids.length; k++) {
+      const ia = ids[(k+ids.length-1)%ids.length], ib = ids[k], ic = ids[(k+1)%ids.length]
+      const a = xy[ia], b = xy[ib], c = xy[ic]
+      if (cross(a,b,c) <= 1e-8) continue
+      if (ids.some(i => i!==ia && i!==ib && i!==ic && cross(a,b,xy[i]) >= 0 && cross(b,c,xy[i]) >= 0 && cross(c,a,xy[i]) >= 0)) continue
+      const v = [a,b,c].map(([x,y]): V3 => [x,y,z])
+      if (up) p.tri(v[0],v[1],v[2]); else p.tri(v[2],v[1],v[0])
+      ids.splice(k,1); clipped = true; break
+    }
+    if (!clipped) throw new Error('Non-simple footprint')
   }
 }
+function plain(p: Part, xy: XY[], lo: number, hi: number) {
+  p.loft([ring(xy,lo), ring(xy,hi)])
+  cap(p,xy,hi); cap(p,xy,lo,false)
+}
 
-/** Flat, outward-wound facade patches, just clear of the masonry. */
-function facade(xy: XY[], lo: number, hi: number, spacing = 6.5, width = 2.3) {
-  for (let e = 0; e < xy.length; e++) {
-    const a = xy[e], b = xy[(e + 1) % xy.length]
-    const length = Math.hypot(b[0] - a[0], b[1] - a[1])
-    const dx = (b[0] - a[0]) / length, dy = (b[1] - a[1]) / length
-    const point = (t: number, z: number): V3 => [a[0] + dx * t + dy * .035, a[1] + dy * t - dx * .035, z]
-    const count = Math.floor((length - 1.2) / spacing)
-    for (let i = 0; i < count; i++) {
-      const mid = length * (i + 1) / (count + 1)
-      const l = mid - width / 2, r = mid + width / 2
-      // Group adjacent real windows into broad, quiet recesses. Individual
-      // floors and mullions alias badly at phone-scale map distances.
-      windows.quad(point(l, lo), point(r, lo), point(r, hi), point(l, hi))
+// Each 256px facade tile is four bays by four floors, with a consistent
+// worldwide floor datum. UVs repeat at 1.8m bays and 3.7m floors, not per wall.
+const BAY = 1.8, FLOOR = 3.7
+function walls(xy: XY[], lo: number, hi: number, striped = true) {
+  for (let e=0; e<xy.length; e++) {
+    const a=xy[e], b=xy[(e+1)%xy.length]
+    const length=Math.hypot(b[0]-a[0],b[1]-a[1])
+    const point=(t: number,z: number): V3 => [mix(a[0],b[0],t),mix(a[1],b[1],t),z]
+    const sections = striped && length>9 ? [0,.22,.78,1] : [0,1]
+    for (let k=0;k<sections.length-1;k++) {
+      const l=sections[k], r=sections[k+1]
+      const p=striped && (sections.length===2 || k!==1) ? banded : masonry
+      p.quad(point(l,lo),point(r,lo),point(r,hi),point(l,hi),
+        [[l*length/(4*BAY),-lo/(4*FLOOR)],[r*length/(4*BAY),-lo/(4*FLOOR)],
+         [r*length/(4*BAY),-hi/(4*FLOOR)],[l*length/(4*BAY),-hi/(4*FLOOR)]])
+    }
+  }
+}
+function block(x0:number,y0:number,x1:number,y1:number,lo:number,hi:number) {
+  const xy=rect(x0,y0,x1,y1)
+  walls(xy,lo,hi-.45)
+  plain(stone,xy,hi-.45,hi)
+  cap(roofs,xy,hi+.008)
+  if (lo===0) cap(stone,xy,0,false)
+}
+
+// Street podium, north/south wings and their 50/70/80/90m terraces.
+// These cover the outline and every low-rise OSM part, including the eastern
+// 15m wing and the asymmetry of the southern street frontage.
+block(-40.5,-6.6,20.5,19,0,15)
+block(-40.5,18.8,23.3,37.5,0,50)
+block(-40.5,-25.3,12.6,-6.6,0,50)
+block(-34.8,-19,12.6,-6.6,50,70)
+block(-34.8,18.8,17.4,31.7,50,70)
+block(-32,-16.5,14.1,-6.4,70,80)
+block(-32,18.8,14.7,29,70,80)
+block(-22.7,-13.4,5.8,-10.7,80,90)
+block(-22.6,24.2,6,26,80,90)
+
+const shaft=rect(-22.7,-10.7,6,24.2)
+walls(shaft,0,185)
+cap(stone,shaft,0,false)
+plain(stone,shaft,184.5,185.3)
+cap(roofs,shaft,185.31)
+const upper: XY[] = [[-17.8,-10.7],[1,-10.7],[1,-2.9],[6,-2.9],
+  [6,16.4],[.9,16.4],[.9,24.2],[-18.1,24.2],[-18.1,16.6],[-22.7,16.6],[-22.7,-2.5],[-17.8,-2.5]]
+walls(upper,185.3,199.5)
+plain(stone,upper,199.5,200)
+cap(roofs,upper,200.01)
+
+/** Four intersecting shallow circular vaults. The arch faces have exact
+ * circular elevations; the short returns meet behind their adjacent faces.
+ * The shallow returns keep each perpendicular ridge behind the next tier.
+ * Artwork crosses the returns in the adjacent face's projection. Each band
+ * starts on the preceding arch rather than an arbitrary horizontal ledge.
+ */
+function vault(r:number,apex:number,base:number,p:Part,atlas:number|null, previous?: {r:number,apex:number}) {
+  const spring=apex-r, N=32, depth=crownDepth(r)
+  for (let face=0;face<4;face++) {
+    const angle=face*Math.PI/2, c=Math.cos(angle), s=Math.sin(angle)
+    const at=(u:number,d:number,z:number): V3 => [CX+u*c-d*s,CY+u*s+d*c,z]
+    const uv=(u:number,z:number): number[] => {
+      if(atlas===null) return [(u+r)/(4*BAY),-z/(4*FLOOR)]
+      return [((atlas%2)*256+3+(u/r+1)*.5*250)/512,
+        (Math.floor(atlas/2)*256+3+(1-(z-spring)/r)*.5*250)/512]
+    }
+    const low=atlas===null?base:Math.max(base,spring-r*.96)
+    for(let j=0;j<N;j++) {
+      const u0=-r*Math.cos(j*Math.PI/N),u1=-r*Math.cos((j+1)*Math.PI/N)
+      const z0=spring+Math.sqrt(Math.max(0,r*r-u0*u0)),z1=spring+Math.sqrt(Math.max(0,r*r-u1*u1))
+      const lower=(u:number)=>previous?previous.apex-previous.r+Math.sqrt(Math.max(0,previous.r*previous.r-u*u)):low
+      const l0=Math.min(z0,lower(u0)),l1=Math.min(z1,lower(u1))
+      p.quad(at(u1,depth,l1),at(u0,depth,l0),at(u0,depth,z0),at(u1,depth,z1),
+        [uv(u1,l1),uv(u0,l0),uv(u0,z0),uv(u1,z1)])
+      // The perpendicular barrel's exposed return belongs to the adjacent
+      // sunburst: project that face's artwork across the fold as well.
+      const sign=(u0+u1)<0?1:-1
+      p.quad(at(u0,depth,z0),at(u0,0,z0),at(u1,0,z1),at(u1,depth,z1),
+        [uv(sign*depth,z0),uv(0,z0),uv(0,z1),uv(sign*depth,z1)])
+    }
+    if(atlas===null) {
+      masonry.quad(at(-r,0,base),at(-r,depth,base),at(-r,depth,spring),at(-r,0,spring))
+      masonry.quad(at(r,depth,base),at(r,0,base),at(r,0,spring),at(r,depth,spring))
     }
   }
 }
 
-function block(x0: number, y0: number, x1: number, y1: number, lo: number, hi: number) {
-  const xy = rect(x0, y0, x1, y1)
-  solid(podium, xy, lo, hi)
-  solid(stone, xy, hi - .65, hi)
-  roof.cap(ring(rect(x0 + .5, y0 + .5, x1 - .5, y1 - .5), hi + .012), true)
-  facade(xy, lo + (lo === 0 ? 5 : .9), hi - 1.4)
-  brickBands(xy, [hi - 4.5], 1.8, false)
-}
+// Arched masonry neck with nested steel mouldings; the 200m joint is the
+// same 28.6m width as the shaft. The OSM 227/228/229m roofs describe these
+// overlapping arch surrounds, not three additional steel sunburst tiers.
+vault(14.3,229,200,masonry,null)
 
-/** Broad summaries of the dark brick courses, preserving the pale central
- * piers visible in the reference. They sit behind the existing glazing. */
-function brickBands(xy: XY[], heights: number[], height: number, split: boolean) {
-  for (let i = 0; i < xy.length; i++) {
-    const a = xy[i], b = xy[(i + 1) % xy.length]
-    const length = Math.hypot(b[0] - a[0], b[1] - a[1])
-    const dx = (b[0] - a[0]) / length, dy = (b[1] - a[1]) / length
-    const p = (t: number, z: number): V3 => [a[0] + dx * t + dy * .018, a[1] + dy * t - dx * .018, z]
-    const spans = split ? [[.03, .29], [.71, .97]] : [[.025, .975]]
-    for (const z of heights) for (const [lo, hi] of spans) {
-      darkBrick.quad(p(lo * length, z), p(hi * length, z), p(hi * length, z + height), p(lo * length, z + height))
-    }
+// The central masonry arches are narrower than their steel surrounds.
+// Keeping the infill forward preserves the tall pale piers under the crown.
+for(let face=0;face<4;face++) {
+  const a=face*Math.PI/2,c=Math.cos(a),s=Math.sin(a),r=14.3,inner=8.2
+  const depth=face%2?14.3:14.9
+  const at=(u:number,z:number):V3=>[CX+u*c-depth*s,CY+u*s+depth*c,z]
+  const brickUV=(u:number,z:number)=>[(u+inner)/(4*BAY),-z/(4*FLOOR)]
+  const metalUV=(u:number,z:number)=>[(3+(u/r+1)*125)/512,(3+Math.min(.995,(1-(z-214.7)/r)*.5)*250)/512]
+  const innerTop=(u:number)=>218.8+Math.sqrt(Math.max(0,inner*inner-u*u))
+  for(let j=0;j<32;j++) {
+    const u0=-inner*Math.cos(j*Math.PI/32),u1=-inner*Math.cos((j+1)*Math.PI/32),z0=innerTop(u0),z1=innerTop(u1)
+    masonry.quad(at(u1,200),at(u0,200),at(u0,z0),at(u1,z1),[brickUV(u1,200),brickUV(u0,200),brickUV(u0,z0),brickUV(u1,z1)])
+  }
+  // Include the infill endpoints explicitly so no triangle crosses its reveal.
+  const cuts=[...Array.from({length:33},(_,j)=>-r*Math.cos(j*Math.PI/32)),-inner,inner].sort((a,b)=>a-b)
+  for(let j=0;j<cuts.length-1;j++) {
+    const u0=cuts[j],u1=cuts[j+1],inside=Math.abs((u0+u1)/2)<inner
+    const l0=inside?innerTop(u0):200,l1=inside?innerTop(u1):200
+    const h0=214.7+Math.sqrt(Math.max(0,r*r-u0*u0)),h1=214.7+Math.sqrt(Math.max(0,r*r-u1*u1))
+    crown.quad(at(u1,l1),at(u0,l0),at(u0,h0),at(u1,h1),[metalUV(u1,l1),metalUV(u0,l0),metalUV(u0,h0),metalUV(u1,h1)])
+    const inset=(u:number,z:number):V3=>[CX+u*c-crownDepth(r)*s,CY+u*s+crownDepth(r)*c,z]
+    crown.quad(at(u0,h0),inset(u0,h0),inset(u1,h1),at(u1,h1),[metalUV(u0,h0),metalUV(u0,h0),metalUV(u1,h1),metalUV(u1,h1)])
   }
 }
 
-// Three interlocking podium wings preserve the asymmetric street envelope.
-block(-40.5, -6.6, 20.5, 19, 0, 15)
-block(-40.5, 18.8, 23.3, 37.5, 0, 50)
-block(-40.5, -25.3, 12.6, -6.6, 0, 50)
-block(-34.8, -19, 12.6, -6.6, 50, 70)
-block(-34.8, 18.8, 17.4, 31.7, 50, 70)
-block(-32, -16.5, 14.1, -6.4, 70, 80)
-block(-32, 18.8, 14.7, 29, 70, 80)
-block(-22.7, -13.4, 5.8, -10.7, 80, 90)
-block(-22.6, 24.2, 6, 26, 80, 90)
-
-const shaft = rect(-22.7, -10.7, 6, 24.2)
-solid(brick, shaft, 0, 185)
-facade(shaft, 16, 184, 6, 2.1)
-brickBands(shaft, [105, 121, 137, 153, 169, 180], 2.2, true)
-solid(stone, shaft, 183.8, 185.5)
-
-// Four recessed corners above the 185 m shoulder; the central bays continue
-// through the 199 m eagle terrace, as in the individual OSM corner parts.
-const upper: XY[] = [[-17.8, -10.7], [1, -10.7], [1, -2.9], [6, -2.9],
-  [6, 16.4], [.9, 16.4], [.9, 24.2], [-18.1, 24.2],
-  [-18.1, 16.6], [-22.7, 16.6], [-22.7, -2.5], [-17.8, -2.5]]
-solid(brick, upper, 185, 199)
-facade(upper, 185.8, 197.9, 6, 2.1)
-solid(steel, upper, 198.1, 200)
-
-// Storefronts and restrained stone entrance frames; all sit within the OSM
-// outer bounds, so detail never expands the building onto the pavement.
-for (const y of [-25.3, 37.5]) {
-  const inward = y < 0 ? 1 : -1
-  solid(stone, rect(-15.8, y + Math.min(0, inward * .3), -1, y + Math.max(0, inward * .3)), 0, 9)
-}
-
-function smooth(p: Part, build: (s: Part) => void, crease = 42) {
-  const s = new Part(); build(s)
-  addGltfTriangles(p, new Float32Array(s.pos),
-    Uint32Array.from({ length: s.pos.length / 3 }, (_, i) => i), { creaseDegrees: crease })
-}
-
-/** Crown face coordinate: t left/right, d outward, z up, rotated CCW. */
-function facePoint(side: number, t: number, d: number, z: number): V3 {
-  const a = side * Math.PI / 2
-  return [CX + t * Math.cos(a) + d * Math.sin(a), CY + t * Math.sin(a) - d * Math.cos(a), z]
-}
-
-// Seven intersecting barrel-vault terraces, not cones. Each has four
-// arched faces and closed groined roofs. Larger lower terraces remain
-// visible around the smaller ones. All four faces carry the sunburst glazing.
+// Seven stainless sunbursts, from the paired round-roof OSM envelopes.
+// The four-way symmetry averages small discrepancies between opposite faces.
 const tiers = [
-  // half-width, spring, arch rise, underside, triangular lights per face
-  [14.35, 200, 29, 199, 9],
-  [11.1, 218, 24, 212, 7],
-  [8.65, 233, 16, 226, 7],
-  [6.95, 243, 13, 235, 5],
-  [4.95, 253, 9, 246, 5],
-  [4, 259, 8, 253, 3],
-  [2.95, 265, 7, 260, 3],
+  {r:11.1,apex:235,atlas:0}, {r:10.25,apex:242,atlas:0},
+  {r:8.65,apex:249,atlas:1}, {r:6.95,apex:256,atlas:1},
+  {r:4.95,apex:262,atlas:2}, {r:4.05,apex:267,atlas:2},
+  {r:2.95,apex:272,atlas:3},
 ]
-for (const [half, spring, rise, bottom, lights] of tiers) {
-  const segments = 16
-  // A modest backward lean softens the side silhouette while keeping each
-  // sunburst in front of the smaller terrace behind it.
-  const depth = half
-  for (let side = 0; side < 4; side++) {
-    const p = (x: number, z: number, d = depth): V3 => {
-      const taper = 1 - .18 * Math.max(0, Math.min(1, (z - spring) / rise))
-      return facePoint(side, x * taper, d * taper, z)
-    }
-    smooth(steelFolds, roof => {
-      for (let j = 0; j < segments; j++) {
-        const a = Math.PI * j / segments, b = Math.PI * (j + 1) / segments
-        const x0 = -half * Math.cos(a), x1 = -half * Math.cos(b)
-        const z0 = spring + rise * Math.sin(a), z1 = spring + rise * Math.sin(b)
-        crownSteel.quad(p(x0, bottom), p(x1, bottom), p(x1, z1), p(x0, z0))
-        roof.quad(p(x0, z0), p(x1, z1), p(x1, z1, Math.abs(x1)), p(x0, z0, Math.abs(x0)))
-        // Rolled arch rims and a narrow shadow line make the scallops legible.
-        seams.quad(p(x0 * .976, spring + rise * .976 * Math.sin(a), depth + .045),
-          p(x1 * .976, spring + rise * .976 * Math.sin(b), depth + .045),
-          p(x1 * .992, spring + rise * .992 * Math.sin(b), depth + .045),
-          p(x0 * .992, spring + rise * .992 * Math.sin(a), depth + .045))
-      }
-    })
-    // The lowest sunburst frames pale masonry, not a solid silver plate.
-    // This is a colour-region overlay on the existing crown face.
-    if (half === tiers[0][0]) {
-      for (let j = 0; j < segments; j++) {
-        const a = Math.PI * j / segments, b = Math.PI * (j + 1) / segments
-        const x0 = -half * .6 * Math.cos(a), x1 = -half * .6 * Math.cos(b)
-        brick.quad(p(x0, bottom, depth + .12), p(x1, bottom, depth + .12),
-          p(x1, spring + rise * .6 * Math.sin(b), depth + .12),
-          p(x0, spring + rise * .6 * Math.sin(a), depth + .12))
-      }
-      for (const x of [-4.8, 0, 4.8]) {
-        const top = spring + rise * .53 * Math.sqrt(1 - (x / (half * .6)) ** 2)
-        windows.quad(p(x - .65, bottom + .6, depth + .16), p(x + .65, bottom + .6, depth + .16),
-          p(x + .65, top, depth + .16), p(x - .65, top, depth + .16))
-      }
-    }
-    // One broad rim per arch survives map scale. Fine radial ribs and inner
-    // rings only produce aliasing; the triangular lights supply the sunburst.
-    for (let j = 0; j < segments; j++) {
-      const a = Math.PI * j / segments, b = Math.PI * (j + 1) / segments
-      const arc = (r: number, angle: number): V3 => p(-half * r * Math.cos(angle), spring + rise * r * Math.sin(angle), depth + .085)
-      const r = .975
-      highlights.quad(arc(r - .035, a), arc(r - .035, b), arc(r, b), arc(r, a))
-    }
-    for (let j = 0; j < lights; j++) {
-      const angle = .22 + (Math.PI - .44) * (j + .5) / lights
-      const spread = Math.min(.10, 1 / lights)
-      const polar = (r: number, a: number): V3 => p(-half * r * Math.cos(a), spring + rise * r * Math.sin(a), depth + .07)
-      // The triangles point outward along a fan, rather than straight up.
-      glass.tri(polar(.67, angle - spread), polar(.67, angle + spread), polar(.94, angle))
+for(let i=0;i<tiers.length;i++) {
+  const t=tiers[i]
+  vault(t.r,t.apex,200,crown,t.atlas,i?tiers[i-1]:{r:14.3,apex:229})
+}
+
+/** Circular raised mouldings are silhouette-scale, unlike the painted ribs. */
+function archRim(r:number,apex:number,width:number) {
+  const spring=apex-r
+  for(let f=0;f<4;f++) {
+    const angle=f*Math.PI/2,c=Math.cos(angle),s=Math.sin(angle)
+    const at=(u:number,d:number,z:number): V3 => [CX+u*c-d*s,CY+u*s+d*c,z]
+    for(let j=0;j<32;j++) {
+      const a=j*Math.PI/32,b=(j+1)*Math.PI/32
+      const v=(angle:number,rad:number,depth:number):V3 => at(Math.cos(angle)*rad,depth,spring+Math.sin(angle)*rad)
+      steel.quad(v(a,r,crownDepth(r)+.035),v(b,r,crownDepth(r)+.035),v(b,r-width,crownDepth(r)+.035),v(a,r-width,crownDepth(r)+.035))
     }
   }
 }
+archRim(14.3,229,.24)
+archRim(13.9,228.6,.15)
+for(const t of tiers) archRim(t.r,t.apex,.14)
 
-// A stainless needle, 1.5 m across at the 272 m crown junction: roughly a
-// quarter of the upper terrace's 5.9 m width, tapering to the 319 m tip.
-// A pixel-width minimum must be handled by the renderer, not a fat cylinder.
-smooth(crownSteel, p => {
-  const profile = [[270, 1.25], [272, .75], [282, .55], [300, .27], [313, .10]]
-  const rings = profile.map(([z, r]) => Array.from({ length: 12 }, (_, i): V3 =>
-    [CX + r * Math.cos(i * Math.PI / 6), CY + r * Math.sin(i * Math.PI / 6), z]))
-  p.loft(rings)
-  const last = rings.at(-1)!
-  for (let i = 0; i < 12; i++) p.tri(last[i], last[(i + 1) % 12], [CX, CY, 319])
-})
-
-// Eight projecting eagle heads (two at each stepped corner). Beaks are
-// hooked, with a heavy brow and a swept-back neck, rather than generic spikes.
-function eagle(x: number, y: number, angle: number) {
-  const place = (s: number, w: number, z: number): V3 =>
-    [x + Math.cos(angle) * s - Math.sin(angle) * w, y + Math.sin(angle) * s + Math.cos(angle) * w, z]
-  const sections = [[-1.3, 1.15, 198.3, 201], [1.4, .85, 199.1, 202],
-    [2.6, .62, 199.3, 201.6], [3.7, .08, 198.9, 200.5]]
-  const rings = sections.map(([s, w, lo, hi]) =>
-    [place(s, -w, lo), place(s, w, lo), place(s, w, hi), place(s, -w, hi)])
-  steel.loft(rings)
-  steel.cap(rings[0], false); steel.cap(rings.at(-1)!, true)
-  for (const sign of [-1, 1]) {
-    const eye = [place(2.05, sign * .7, 201.2), place(2.65, sign * .6, 201.12), place(2.35, sign * .66, 200.88)]
-    if (sign > 0) eye.reverse()
-    glass.tri(eye[0], eye[1], eye[2])
+/** Closed faceted forms along a direction: used for eagles and radiator caps. */
+function ornament(cx:number,cy:number,dx:number,dy:number,z:number,scale=1) {
+  const l=Math.hypot(dx,dy); dx/=l; dy/=l
+  const at=(along:number,across:number,h:number):V3 => [cx+(along*dx-across*dy)*scale,cy+(along*dy+across*dx)*scale,z+h*scale]
+  const sections = [
+    [-1.4,.82,-.65,.25],[0,.7,-.42,.7],[1.7,.48,.15,1.25],
+    [2.55,.58,.38,1.65],[3.15,.35,.42,1.42],[3.7,.08,.10,.8],
+  ]
+  const rr=sections.map(([d,w,lo,hi])=>[at(d,-w,lo),at(d,w,lo),at(d,w,hi),at(d,-w,hi)])
+  steel.loft(rr); steel.cap(rr[0],false); steel.cap(rr[rr.length-1],true)
+  // Swept-back cheek/wing blades make the diagonal bird projections legible.
+  for(const side of [-1,1]) {
+    const a=at(1.7,side*.42,.5),b=at(-1.4,side*1.4,-.15),c=at(-.5,side*.62,-1.05),d=at(.55,side*.28,-.4)
+    steel.tri(a,b,c); steel.tri(a,c,d); steel.tri(c,b,a); steel.tri(d,c,a)
+    const eye=at(2.62,side*.582,1.11)
+    const v=(dd:number,hh:number):V3=>[eye[0]+dd*dx,eye[1]+dd*dy,eye[2]+hh]
+    shadow.quad(v(-.13,-.07),v(.13,-.07),v(.13,.07),v(-.13,.07))
+    shadow.quad(v(.13,-.07),v(-.13,-.07),v(-.13,.07),v(.13,.07))
   }
 }
-for (const sx of [-1, 1]) for (const sy of [-1, 1]) {
-  eagle(CX + sx * 14.3, CY + sy * 10.1, sx > 0 ? 0 : Math.PI)
-  eagle(CX + sx * 10.1, CY + sy * 17.2, sy > 0 ? Math.PI / 2 : -Math.PI / 2)
+
+// The eight mapped eagle heads are paired around four recessed corners.
+// Together their swept steel shoulders read as four bold diagonal groups.
+for(const [x,y,dx,dy] of [
+  [-22.7,-2.5,-1,-1],[-17.8,-10.7,-1,-1], [6,-2.9,1,-1],[1,-10.7,1,-1],
+  [-22.7,16.6,-1,1],[-18.1,24.2,-1,1],[6,16.4,1,1],[.9,24.2,1,1],
+]) ornament(x,y,dx,dy,199.5,1.035)
+// Radiator-cap ornaments occupy all four 89–91m OSM envelopes.
+for(const [x0,y0,x1,y1,dx,dy] of [
+  [-26.2,23.8,-20,29.9,-1,1],[3.7,23.4,9.8,29.7,1,1],
+  [-26.5,-17.1,-20.4,-10.8,-1,-1],[3.3,-17.1,9.6,-11,1,-1],
+]) {
+  const x=(x0+x1)/2,y=(y0+y1)/2
+  plain(stone,rect(x0,y0,x1,y1),89,89.35)
+  const rings=[[89.35,2.5],[90.5,2.2],[91,1.35]].map(([z,r])=>
+    Array.from({length:16},(_,i):V3=>[x+r*Math.cos(i*Math.PI/8),y+r*Math.sin(i*Math.PI/8),z]))
+  steel.loft(rings); steel.cap(rings[2],true)
+  ornament(x,y,dx,dy,90,.64)
 }
 
-// The 31st-floor radiator caps: shallow round discs and swept metal wings.
-for (const x of [-23.4, 6.65]) for (const y of [-14, 26.8]) {
-  solid(brick, rect(x - 2.7, y - 2.5, x + 2.7, y + 2.5), 80, 89.8)
-  solid(stone, rect(x - 2.9, y - 2.7, x + 2.9, y + 2.7), 87.9, 89.4)
-  const n = 12
-  const circle = (z: number, r: number): V3[] => Array.from({ length: n }, (_, i) =>
-    [x + r * Math.cos(i * Math.PI * 2 / n), y + r * Math.sin(i * Math.PI * 2 / n), z])
-  steel.loft([circle(89, 2), circle(90.6, 2.6), circle(91, 1.6)])
-  steel.cap(circle(91, 1.6), true)
-  solid(steel, rect(x - 3.05, y - 1.15, x + 3.05, y + 1.15), 89.5, 90.2)
+// A 2.3m base tapering continuously to a sharp 319m tip; no telescoping mast.
+const needle = [[271.8,1.15],[282,.87],[301,.36],[315,.09],[319,0]]
+const nr=needle.map(([z,r])=>Array.from({length:12},(_,k):V3=>[CX+r*Math.cos(k*Math.PI/6),CY+r*Math.sin(k*Math.PI/6),z]))
+for(let j=0;j<12;j++) {
+  const p=j<6?reflection:steel,next=(j+1)%12
+  for(let k=0;k<nr.length-2;k++) p.quad(nr[k][j],nr[k][next],nr[k+1][next],nr[k+1][j])
+  p.tri(nr[nr.length-2][j],nr[nr.length-2][next],[CX,CY,319])
 }
 
-// Parchment displays baseColorFactor directly as sRGB. Invert the shared
-// writer's linearisation locally so these swatches describe map appearance.
-function mapColor(hex: number): number {
-  return [16, 8, 0].reduce((value, shift) =>
-    value | Math.round(255 * Math.pow(((hex >> shift) & 255) / 255, 1 / 2.2)) << shift, 0)
+/** Deterministic painted masonry: four-by-four small punched windows. */
+function facadeTexture(stripes:boolean) {
+  const size=256,px=new Uint8Array(size*size*4)
+  for(let y=0;y<size;y++) for(let x=0;x<size;x++) {
+    const u=(x%64)/64,v=(y%64)/64, bay=Math.floor(x/64)
+    let rgb=[228,226,220]
+    // Fine, staggered brick courses. Restrained contrast survives minification.
+    const course=Math.floor(y/3), mortar=y%3===0 || (x+(course%2)*6)%12===0
+    if(mortar) rgb=[219,219,215]
+    if(stripes && (u<.055 || u>.945)) rgb=[133,139,139]
+    if(stripes && v>.39 && v<.48) rgb=[154,158,157]
+    if(u>.23 && u<.77 && v>.14 && v<.65) {
+      rgb=[55+bay*3,69+bay*2,77+bay*2]
+      if(v<.17 || u<.26 || u>.74) rgb=[96,102,101]
+      if(v>.38 && v<.407) rgb=[182,184,179]
+      if(v>.61) rgb=[195,198,192]
+      if(bay===1 && v>.18 && v<.38) rgb=[108,122,125]
+    }
+    if(u>.20 && u<.80 && v>=.65 && v<.68) rgb=[246,244,235]
+    const i=(y*size+x)*4; px.set([...rgb,255],i)
+  }
+  return encodePng(size,size,px)
+}
+function inTriangle(x:number,y:number,a:XY,b:XY,c:XY) {
+  const cross=(a:XY,b:XY)=>(b[0]-a[0])*(y-a[1])-(b[1]-a[1])*(x-a[0])
+  const d=[cross(a,b),cross(b,c),cross(c,a)]
+  return d.every(v=>v>=0)||d.every(v=>v<=0)
+}
+/** Four circular sunburst paintings in one 512px atlas, with fewer lights
+ * toward the tip. The ribs and triangular glazing follow radii, not z rows. */
+function crownTexture() {
+  const size=512,px=new Uint8Array(size*size*4)
+  for(let y=0;y<size;y++) for(let x=0;x<size;x++) {
+    const cell=Math.floor(y/256)*2+Math.floor(x/256)
+    const u=((x%256)-3)/250*2-1, v=1-((y%256)-3)/250*2
+    const rho=Math.hypot(u,v),theta=Math.atan2(v,u)
+    const rib=theta/Math.PI*48,phase=rib-Math.floor(rib)
+    const gleam=Math.round(8*Math.cos(theta*6)+5*Math.sin(theta*19))
+    let rgb=[234+gleam,239+gleam,240+gleam]
+    if(phase<.10) rgb=[167,181,188]
+    else if(phase<.22) rgb=[253,254,254]
+    if(v>=0 && rho>.959 && rho<.997) rgb=[249,252,252]
+    if(v>=0 && rho>.927 && rho<.958) rgb=[137,151,159]
+    if(v<0) { const line=Math.abs(u*20-Math.round(u*20)); rgb=line<.09?[169,184,193]:[236,242,245] }
+    // Punched windows in the narrow steel side bays below the masonry arch.
+    if(cell===0 && v<0 && Math.abs(u)>.73 && Math.abs(u)<.82) {
+      const floor=(-v*14.3/3.7)%1
+      if(floor>.18 && floor<.72) rgb=floor>.43&&floor<.47?[183,197,201]:[62,78,89]
+    }
+    const count=[7,5,3,1][cell]
+    for(let k=0;k<count;k++) {
+      const a=(k+.5)*Math.PI/count
+      const pt=(r:number,t:number):XY=>[r*Math.cos(t),r*Math.sin(t)]
+      const spread=.87/count
+      const base=.42,tip=.92,extension=[0,.16,.42,.9][cell]
+      const basePt=(angle:number):XY=>{const v=pt(base,angle);return [v[0],v[1]-extension]}
+      const A=basePt(a-spread),B=basePt(a+spread),C=pt(tip,a)
+      if(inTriangle(u,v,A,B,C)) {
+        rgb=[63,82,94]
+        if(Math.abs(rho-.64)<.012 || Math.abs(rho-.75)<.012 || Math.abs(theta-a)<.012) rgb=[187,201,204]
+      } else if(inTriangle(u,v,[A[0]-.025,A[1]-.025],[B[0]+.025,B[1]-.025],pt(tip+.035,a))) rgb=[253,255,255]
+    }
+    const i=(y*size+x)*4; px.set([...rgb.map(c=>Math.max(0,Math.min(255,c))),255],i)
+  }
+  return encodePng(size,size,px)
 }
 
-// Shared visible materials stay one primitive each even when their geometry
-// was authored separately (rolled steel rims and flat masonry roof caps).
-for (const [target, source] of [[steel, highlights], [podium, roof]]) {
-  target.pos.push(...source.pos)
-  target.nrm.push(...source.nrm)
-  target.uv.push(...source.uv)
-}
-
-const parts = [
-  // Median sRGB samples: 04.jpg supplies masonry, glazing and steel folds;
-  // 01.jpg supplies sunlit silver without its clipped specular highlights.
-  // The podium uses the lower sunlit masonry in 04: the ground-level podium
-  // itself is obscured in these references. Roofs share that masonry grey.
-  { part: brick, material: { name: 'shaft-brick', color: mapColor(0xc6bfb4) } },
-  { part: podium, material: { name: 'podium-masonry', color: mapColor(0xcecdc6) } },
-  { part: stone, material: { name: 'stone-trim', color: mapColor(0xd6d0c8) } },
-  { part: windows, material: { name: 'window-glazing', color: mapColor(0x343434) } },
-  { part: darkBrick, material: { name: 'dark-brick', color: mapColor(0x323230) } },
-  { part: glass, material: { name: 'crown-glass', color: mapColor(0x454746), roughness: .4, doubleSided: true } },
-  { part: crownSteel, material: { name: 'brushed-steel', color: mapColor(0xbdbdbe), roughness: .4, doubleSided: true } },
-  { part: steel, material: { name: 'polished-steel', color: mapColor(0xedeeee), roughness: .32, doubleSided: true } },
-  { part: steelFolds, material: { name: 'steel-folds', color: mapColor(0x9fa1a3), roughness: .32, doubleSided: true } },
-  { part: seams, material: { name: 'steel-seams', color: mapColor(0x6e6b62) } },
+const parts: {part:Part,material:MaterialSpec}[] = [
+  {part:masonry,material:{name:'white-grey brick / small punched windows',color:0xffffff,texture:{png:facadeTexture(false)}}},
+  {part:banded,material:{name:'corner brick stripes / window courses',color:0xffffff,texture:{png:facadeTexture(true)}}},
+  {part:crown,material:{name:'stainless sunbursts / radial ribs / triangular glazing',color:0xffffff,roughness:.25,texture:{png:crownTexture()}}},
+  {part:stone,material:{name:'pale limestone copings',color:0xe4e2dc}},
+  {part:roofs,material:{name:'setback roofs',color:0xb0b8ba}},
+  {part:steel,material:{name:'bright folded stainless steel',color:0xf3f8fa,roughness:.2}},
+  {part:shadow,material:{name:'eagle eye recesses',color:0x3c4d57}},
+  {part:reflection,material:{name:'cool needle reflection',color:0xa9bdcb,roughness:.24}},
 ]
-const triangles = parts.reduce((sum, { part }) => sum + part.triangles, 0)
-if (triangles > 12_000) throw new Error(`Triangle budget exceeded: ${triangles}`)
-const glb = writeGlb('Chrysler Building', parts, {
-  license: 'CC0-1.0', anchor: [40.75151, -73.9752851], bearing: 29, elevation: 0,
-  frame: 'Y up, -Z north, +X east, metres; origin at the anchor on the ground',
-  mapBounds: { x: [-40.5, 23.3], y: [-25.3, 37.5], z: [0, 319] },
-  crownArches: 7, source: 'Procedural geometry from supplied OSM measurements; stylised Art Deco details',
+const triangles=parts.reduce((n,p)=>n+p.part.triangles,0)
+if(triangles>14000) throw new Error(`Triangle budget exceeded: ${triangles}`)
+const glb=writeGlb('Chrysler Building',parts,{
+  frame:'Y up, -Z north, +X east; metres; ground anchor; bearing supplied by catalog',
+  anchor:[40.75151,-73.9752851],bearing:29,
+  crown:tiers.map(t=>({radius:t.r,spring:t.apex-t.r,apex:t.apex})),
+  facade:{bayMetres:BAY,floorMetres:FLOOR},
 })
-const output = new URL('../../landmarks/models/chrysler-building.glb', import.meta.url).pathname
-await Bun.write(output, glb)
-console.log(`${output}: ${triangles} triangles, ${glb.length} bytes`)
+if(glb.length>500*1024) throw new Error(`GLB budget exceeded: ${glb.length}`)
+const out=process.argv[2]??new URL('../../landmarks/models/chrysler-building.glb',import.meta.url).pathname
+await Bun.write(out,glb)
+console.log(`${out}: ${triangles} triangles, ${glb.length} bytes (${(glb.length/1024).toFixed(1)} KiB)`)
