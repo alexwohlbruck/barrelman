@@ -340,7 +340,7 @@ FROM (
   SELECT pt.id, names.boundary_names
   FROM _context_points pt
   LEFT JOIN (
-    SELECT poi_id, string_agg(bname, ' ' ORDER BY barea ASC) AS boundary_names
+    SELECT poi_id, string_agg(bname, ' ' ORDER BY barea ASC, bname ASC) AS boundary_names
     FROM (
       SELECT DISTINCT pt2.id AS poi_id, b.id AS bid, b.name AS bname, b.area_m2 AS barea
       FROM _context_points pt2
