@@ -48,6 +48,17 @@ if [ "${REPLICATION_COUNT:-0}" -gt 1 ]; then
   echo "  can follow only one. The remaining regions will only move on UPDATE_MODE=full."
 fi
 
+# Same guard as update-osm.sh: replication needs the --slim middle tables, and
+# osm2pgsql's own error for their absence does not say how to recover.
+HAS_MIDDLE=$(docker exec -e PGPASSWORD="$DB_PASS" barrelman-db \
+  psql "$DB_URL" -tAc "SELECT to_regclass('planet_osm_ways') IS NOT NULL;")
+if [ "$HAS_MIDDLE" != "t" ]; then
+  echo "ERROR: this database has no osm2pgsql middle tables (planet_osm_ways)." >&2
+  echo "  Replication needs a --slim import that kept them. Re-import, then run" >&2
+  echo "  this again without dropping planet_osm_* in between." >&2
+  exit 1
+fi
+
 docker exec -e PGPASSWORD="$DB_PASS" barrelman-db \
   osm2pgsql-replication init \
     -d "$DB_URL" \

@@ -139,6 +139,25 @@ if [ "${REPLICATION_COUNT:-0}" -gt 1 ]; then
   echo "  The other regions stay at their last full import. Use UPDATE_MODE=full to refresh them all."
 fi
 
+# Replication applies diffs through osm2pgsql's middle tables, which only a
+# --slim import keeps. They are also the bulk of the database (most of it on a
+# country-sized extract), so an operator short of disk may have dropped them
+# after the import. Without them neither `init` nor `update` can run, and the
+# error osm2pgsql gives says nothing about what to do. Say it here instead, and
+# before `init`, which would otherwise be the thing that fails.
+HAS_MIDDLE=$(db_exec barrelman-db \
+  psql "$DB_URL" -tAc "SELECT to_regclass('planet_osm_ways') IS NOT NULL;")
+
+if [ "$HAS_MIDDLE" != "t" ]; then
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: this database has no osm2pgsql middle tables (planet_osm_ways)," >&2
+  echo "  so replication diffs cannot be applied to it. They exist only after a" >&2
+  echo "  --slim import and are gone if they were dropped to save disk afterwards." >&2
+  echo "  Either refresh with UPDATE_MODE=full, which re-imports from scratch, or" >&2
+  echo "  re-import once and keep the middle tables before enabling replication." >&2
+  echo "  If neither is wanted, disable the OSM Update schedule." >&2
+  exit 1
+fi
+
 # Auto-initialize replication state if missing.
 #
 # Which table holds this depends on the osm2pgsql version. Version 1.8, which
