@@ -10,6 +10,15 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Fixed
+
+* **"Backfill Power Outlet Category" no longer runs a large database out of
+  memory.** It judged every row and then joined the results back to the table,
+  and Postgres hashed the whole table for that join. On a 218M-row database one
+  backend reached 7.8 GB, the container's memory limit killed it, and Postgres
+  restarted in recovery. It is now a single pass over the table that uses
+  little memory at any size.
+
 ### Added
 
 * **OSM Update works on a database without osm2pgsql's middle tables.** Those
