@@ -14,8 +14,11 @@ BEGIN;
 -- would cut that short; LOCAL scopes the lift to this transaction.
 SET LOCAL statement_timeout = 0;
 
-WITH judged AS (
-  SELECT id, categories, (
+-- The rule as a function, so the single UPDATE below can name it in its SET
+-- and its WHERE. pg_temp keeps it to this session.
+CREATE OR REPLACE FUNCTION pg_temp.offers_power_outlet(tags jsonb)
+RETURNS boolean LANGUAGE sql IMMUTABLE AS $$
+  SELECT
     coalesce(tags->>'access', '') NOT IN ('private', 'no')
     AND (
       coalesce(tags->>'amenity', '') IN ('device_charging_station', 'power_supply')
@@ -39,24 +42,26 @@ WITH judged AS (
         )
       )
     )
-  ) AS offers
-  FROM geo_places
-  WHERE coalesce(tags->>'power', '') <> 'outlet'
-),
-fixed AS (
-  SELECT id, CASE WHEN offers THEN array_append(categories, 'power/outlet')
-                  ELSE array_remove(categories, 'power/outlet') END AS categories
-  FROM judged
-  WHERE offers <> coalesce(categories @> ARRAY['power/outlet'], false)
-)
+$$;
+
+-- One UPDATE over the table, with no join back to itself. An earlier version
+-- judged the rows in a CTE and joined them back on id. The planner could not
+-- tell how few rows that leaves, so it hashed all of geo_places for the join.
+-- On a 218M-row table that grew one backend to 7.8 GB, the container's memory
+-- limit killed it, and Postgres restarted in recovery.
 UPDATE geo_places g
-SET categories = f.categories,
-    -- categories feed the tsvector, so "power outlet" finds these by text too.
-    -- Unnamed rows carry no ts and stay without one, as fillTsvectors leaves them.
+SET categories = CASE WHEN pg_temp.offers_power_outlet(g.tags)
+                      THEN array_append(g.categories, 'power/outlet')
+                      ELSE array_remove(g.categories, 'power/outlet') END,
     ts = CASE WHEN g.name IS NULL THEN g.ts
-         ELSE build_ts(g.osm_type, g.name, g.names, g.name_abbrev, f.categories, g.parent_context)
+         ELSE build_ts(g.osm_type, g.name, g.names, g.name_abbrev,
+                       CASE WHEN pg_temp.offers_power_outlet(g.tags)
+                            THEN array_append(g.categories, 'power/outlet')
+                            ELSE array_remove(g.categories, 'power/outlet') END,
+                       g.parent_context)
          END
-FROM fixed f
-WHERE g.id = f.id;
+WHERE coalesce(g.tags->>'power', '') <> 'outlet'
+  AND pg_temp.offers_power_outlet(g.tags)
+      <> coalesce(g.categories @> ARRAY['power/outlet'], false);
 
 COMMIT;
