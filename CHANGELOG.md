@@ -10,6 +10,20 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-10-04
+
+### Fixed
+
+* **Browsing a category within a radius is fast.** `/search` with `categories`
+  and a `radius` read every place inside the circle and kept the few that
+  matched, because the query left out the condition that lets Postgres use the
+  categories index. On a Berlin import a 20 km browse took 2–3 seconds whatever
+  the category; it now takes 10–30 ms for most categories, and the densest
+  (parking) went from 1.8 s to 1.1 s. On the 218M-row US database, outlets
+  within 20 km of midtown Manhattan went from 3.5 s, often past the 10-second
+  timeout, to 0.23 s. Browsing without a radius was already fast and is
+  unchanged.
+
 ## [0.7.1] - 2026-10-04
 
 ### Fixed

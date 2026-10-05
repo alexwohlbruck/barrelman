@@ -252,12 +252,14 @@ export async function searchPlaces(
   // ── Category / tag filters ─────────────────────────────────────────────
   const categoryArray = categories && categories.length > 0
     ? `{${categories.join(',')}}` : null
+  // The categories GIN index is partial (WHERE categories <> '{}'), and the
+  // planner only considers a partial index when the query states its predicate.
+  // Without it a radius browse walks every centroid in the circle instead:
+  // measured on Berlin, 20 km for power/outlet went from 4.3s to 10ms, and for
+  // amenity/cafe from 4.0s to 32ms. Stating it only offers the index; a dense
+  // category in a small radius can still take the centroid KNN.
   const categoryFilter = categoryArray
-    ? isWiden
-      // The categories GIN index is partial (WHERE categories <> '{}'); state that
-      // predicate explicitly so the planner can actually use it for the widen scan.
-      ? sql`AND categories && ${categoryArray}::text[] AND categories <> '{}'::text[]`
-      : sql`AND categories && ${categoryArray}::text[]`
+    ? sql`AND categories && ${categoryArray}::text[] AND categories <> '{}'::text[]`
     : sql``
 
   const tagsFilterJson = tags && Object.keys(tags).length > 0
