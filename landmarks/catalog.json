@@ -62,6 +62,76 @@
       "license": "CC0-1.0",
       "author": "Barrelman",
       "source": "scripts/landmarks/unisphere.ts"
+    },
+    {
+      "id": "30-rockefeller-plaza",
+      "file": "models/30-rockefeller-plaza.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/30-rockefeller-plaza.ts"
+    },
+    {
+      "id": "flatiron-building",
+      "file": "models/flatiron-building.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/flatiron-building.ts"
+    },
+    {
+      "id": "grand-central-terminal",
+      "file": "models/grand-central-terminal.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/grand-central-terminal.ts"
+    },
+    {
+      "id": "new-york-hall-of-science",
+      "file": "models/new-york-hall-of-science.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/new-york-hall-of-science.ts"
+    },
+    {
+      "id": "new-york-state-pavilion",
+      "file": "models/new-york-state-pavilion.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/new-york-state-pavilion.ts"
+    },
+    {
+      "id": "one-world-trade-center",
+      "file": "models/one-world-trade-center.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/one-world-trade-center.ts"
+    },
+    {
+      "id": "queens-museum",
+      "file": "models/queens-museum.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/queens-museum.ts"
+    },
+    {
+      "id": "st-patricks-cathedral",
+      "file": "models/st-patricks-cathedral.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/st-patricks-cathedral.ts"
+    },
+    {
+      "id": "terrace-on-the-park",
+      "file": "models/terrace-on-the-park.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/terrace-on-the-park.ts"
+    },
+    {
+      "id": "woolworth-building",
+      "file": "models/woolworth-building.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/woolworth-building.ts"
     }
   ],
   "landmarks": [
@@ -322,6 +392,188 @@
       "minzoom": 14,
       "wikidata": "Q717956",
       "replaces": []
+    },
+    {
+      "id": "30-rockefeller-plaza",
+      "name": "30 Rockefeller Plaza",
+      "model": "30-rockefeller-plaza",
+      "lng": -73.9796355,
+      "lat": 40.7591554,
+      "bearing": 29,
+      "elevation": 0,
+      "minzoom": 13,
+      "wikidata": "Q680614",
+      "replaces": [
+        "way/487519790",
+        "way/771918436",
+        "way/145341279",
+        "way/145341265",
+        "way/145341264",
+        "way/145341294",
+        "way/145341256",
+        "way/145341286",
+        "way/145341288",
+        "way/145341276",
+        "way/145341282",
+        "way/145341268",
+        "way/145341275",
+        "way/145341266",
+        "way/145341259"
+      ]
+    },
+    {
+      "id": "flatiron-building",
+      "name": "Flatiron Building",
+      "model": "flatiron-building",
+      "lng": -73.9896529,
+      "lat": 40.7410024,
+      "bearing": 18,
+      "elevation": 0,
+      "minzoom": 14,
+      "wikidata": "Q220728",
+      "replaces": [
+        "way/264768896",
+        "way/764237515"
+      ]
+    },
+    {
+      "id": "grand-central-terminal",
+      "name": "Grand Central Terminal",
+      "model": "grand-central-terminal",
+      "lng": -73.9772833,
+      "lat": 40.7526545,
+      "bearing": 29,
+      "elevation": 0,
+      "minzoom": 14,
+      "wikidata": "Q11290",
+      "replaces": [
+        "way/265947358"
+      ]
+    },
+    {
+      "id": "new-york-hall-of-science",
+      "name": "New York Hall of Science",
+      "model": "new-york-hall-of-science",
+      "lng": -73.8516846,
+      "lat": 40.7472904,
+      "bearing": 0,
+      "elevation": 0,
+      "minzoom": 14,
+      "wikidata": "Q2306200",
+      "replaces": [
+        "way/284860788"
+      ]
+    },
+    {
+      "id": "new-york-state-pavilion",
+      "name": "New York State Pavilion",
+      "model": "new-york-state-pavilion",
+      "lng": -73.8443487,
+      "lat": 40.7435173,
+      "bearing": 336,
+      "elevation": 0,
+      "minzoom": 14,
+      "wikidata": "Q4571746",
+      "replaces": [
+        "relation/13317338",
+        "way/992130157",
+        "way/992130158",
+        "way/284856408",
+        "way/596614135",
+        "way/596614136",
+        "way/284856410"
+      ]
+    },
+    {
+      "id": "one-world-trade-center",
+      "name": "One World Trade Center",
+      "model": "one-world-trade-center",
+      "lng": -74.0131893,
+      "lat": 40.713,
+      "bearing": 27.4,
+      "elevation": 0,
+      "minzoom": 13,
+      "wikidata": "Q11245",
+      "replaces": [
+        "way/713565776",
+        "way/241029253",
+        "way/783285127",
+        "way/783285128",
+        "way/783285129",
+        "way/783285130",
+        "way/241029248",
+        "way/241029247"
+      ]
+    },
+    {
+      "id": "queens-museum",
+      "name": "Queens Museum",
+      "model": "queens-museum",
+      "lng": -73.8467451,
+      "lat": 40.7458734,
+      "bearing": 337.3,
+      "elevation": 0,
+      "minzoom": 15,
+      "wikidata": "Q1320229",
+      "replaces": [
+        "way/284856409"
+      ]
+    },
+    {
+      "id": "st-patricks-cathedral",
+      "name": "St. Patrick's Cathedral",
+      "model": "st-patricks-cathedral",
+      "lng": -73.976317,
+      "lat": 40.758574,
+      "bearing": 118.4,
+      "elevation": 0,
+      "minzoom": 14,
+      "wikidata": "Q624556",
+      "replaces": [
+        "way/266010379",
+        "way/161156112",
+        "way/161156113",
+        "way/266010403"
+      ]
+    },
+    {
+      "id": "terrace-on-the-park",
+      "name": "Terrace on the Park",
+      "model": "terrace-on-the-park",
+      "lng": -73.850749,
+      "lat": 40.7445364,
+      "bearing": 68.5,
+      "elevation": 0,
+      "minzoom": 15,
+      "wikidata": "Q7703194",
+      "replaces": [
+        "way/284860789"
+      ]
+    },
+    {
+      "id": "woolworth-building",
+      "name": "Woolworth Building",
+      "model": "woolworth-building",
+      "lng": -74.0083116,
+      "lat": 40.7124439,
+      "bearing": 31.5,
+      "elevation": 0,
+      "minzoom": 13,
+      "wikidata": "Q217652",
+      "replaces": [
+        "way/75363809",
+        "way/274782323",
+        "way/274782344",
+        "way/274782341",
+        "way/274782325",
+        "way/274782329",
+        "way/274782334",
+        "way/274782339",
+        "way/274782327",
+        "way/274782330",
+        "way/274782332",
+        "way/274782336"
+      ]
     }
   ]
 }
