@@ -63,6 +63,8 @@ doesn't cover them.
 
 ## Making a model
 
+Follow the art style in [`STYLE.md`](STYLE.md), and check every model with `scripts/landmarks/preview.ts` before adding it.
+
 Keep models stylised, simple and accurate. A few thousand triangles is plenty.
 For repeated detail like lattices, railings and window grids, use an
 alpha-masked texture (`alphaMode: MASK`) on a few quads instead of real
