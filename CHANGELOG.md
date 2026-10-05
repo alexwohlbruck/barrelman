@@ -10,6 +10,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-10-04
+
 ### Fixed
 
 * **Browsing a category within a radius is fast.** `/search` with `categories`
