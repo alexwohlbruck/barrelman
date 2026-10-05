@@ -99,7 +99,10 @@ export function buildInvocation(script: ScriptDef, params: Record<string, unknow
 
     if (p.apply === 'env') {
       if (p.type === 'boolean') {
-        if (val === true || val === 'true') env[p.envVar ?? p.name] = '1'
+        // Always set, 0 included. Scripts default some switches to on
+        // (`${REBUILD_BASEMAP:-1}`), so leaving the variable out when the
+        // box is unticked turned it on rather than off.
+        env[p.envVar ?? p.name] = val === true || val === 'true' ? '1' : '0'
       } else {
         env[p.envVar ?? p.name] = String(val)
       }

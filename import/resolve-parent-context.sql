@@ -56,7 +56,9 @@ SET parent_context = trim(
       coalesce(p.address->>'postcode', '') || ' ' ||
       coalesce(sub.boundary_names, '')))
 FROM (
-  SELECT poi_id, string_agg(bname, ' ' ORDER BY barea ASC) AS boundary_names
+  -- The name breaks ties: an extract clips a neighbouring boundary to the same
+  -- outline as its own, and equal areas otherwise come out in any order.
+  SELECT poi_id, string_agg(bname, ' ' ORDER BY barea ASC, bname ASC) AS boundary_names
   FROM (
     SELECT DISTINCT poi.id AS poi_id, b.id AS bid, b.name AS bname, b.area_m2 AS barea
     FROM geo_places poi

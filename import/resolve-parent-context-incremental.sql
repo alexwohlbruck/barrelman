@@ -17,7 +17,7 @@ SET parent_context = trim(
 FROM (
   SELECT
     poi.id,
-    string_agg(boundary.name, ' ' ORDER BY boundary.area_m2 ASC) AS boundary_names
+    string_agg(boundary.name, ' ' ORDER BY boundary.area_m2 ASC, boundary.name ASC) AS boundary_names
   FROM geo_places poi
   JOIN geo_places boundary
     ON boundary.geom_type = 'area'
@@ -71,7 +71,7 @@ SET parent_context = trim(
 FROM (
   SELECT
     poi.id,
-    string_agg(boundary.name, ' ' ORDER BY boundary.area_m2 ASC) AS boundary_names
+    string_agg(boundary.name, ' ' ORDER BY boundary.area_m2 ASC, boundary.name ASC) AS boundary_names
   FROM geo_places poi
   JOIN geo_places boundary
     ON boundary.geom_type = 'area'

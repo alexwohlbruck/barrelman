@@ -226,14 +226,70 @@ export const SCRIPTS: ScriptDef[] = [
         ],
       },
       REBUILD_BASEMAP_PARAM,
+      {
+        name: 'REBUILD_GRAPHHOPPER',
+        label: 'Rebuild routing graph',
+        type: 'boolean',
+        apply: 'env',
+        envVar: 'REBUILD_GRAPHHOPPER',
+        default: true,
+        description:
+          'Rebuild the GraphHopper graph once the extract has changed. Street routing is down until the new graph is built, which takes hours for a country. Turn off to rebuild it separately.',
+      },
+      {
+        name: 'REFRESH_BUILDINGS_3D',
+        label: 'Refresh 3D buildings',
+        type: 'boolean',
+        apply: 'env',
+        envVar: 'REFRESH_BUILDINGS_3D',
+        default: true,
+        description:
+          'Refresh the buildings_3d view after the update. Hours on a country-sized import; turn off and schedule "Refresh 3D Buildings" weekly instead.',
+      },
+      {
+        name: 'REPLICATION_MAX_DIFFS',
+        label: 'Diffs per cycle',
+        type: 'number',
+        apply: 'env',
+        envVar: 'REPLICATION_MAX_DIFFS',
+        placeholder: 'blank = 7',
+        description:
+          'Only for a database without middle tables. How many diffs are merged and applied in one transaction while catching up.',
+      },
+      {
+        name: 'REPLICATION_ALLOW_SHRINK',
+        label: 'Allow large deletions',
+        type: 'boolean',
+        apply: 'env',
+        envVar: 'REPLICATION_ALLOW_SHRINK',
+        default: false,
+        description:
+          'Only for a database without middle tables. A cycle that would remove 1,000+ rows and put back fewer than half is rolled back as a likely broken extract. Tick for one run when the diffs really do delete that much.',
+      },
     ],
     postScripts: [
-      { script: 'routing-graphhopper', when: 'only when the extract actually changed' },
+      { script: 'routing-graphhopper', when: 'only when the extract changed, and "Rebuild routing graph" is on' },
       { script: 'osm-basemap', when: 'only when the extract changed, and "Rebuild basemap" is on' },
+      { script: 'osm-buildings-3d', when: 'unless "Refresh 3D buildings" is off' },
     ],
     source: 'scripts/update-osm.sh',
     notes:
-      'Full mode is a destructive re-import. Replication requires init-replication to have been run once. Safe to run at any interval — the cursor is stored in the database — but Geofabrik only retains about four months of diffs, so a database further behind than that needs a full re-import.',
+      'Full mode is a destructive re-import. Replication works with or without osm2pgsql\'s middle tables: with them it uses osm2pgsql-replication; without them (a large import usually drops them) it patches region.osm.pbf and re-imports only the objects each diff touches (scripts/replicate-extract.sh), starting from the replication header of that extract. Safe to run at any interval, since the cursor is stored in the database, but Geofabrik only retains about four months of diffs, so a database further behind than that needs a full re-import.',
+  },
+  {
+    id: 'osm-buildings-3d',
+    name: 'Refresh 3D Buildings',
+    description:
+      'Rebuild the buildings_3d view that the 3D building tiles read, so building edits since the last refresh reach the map.',
+    category: 'osm',
+    danger: 'safe',
+    longRunning: true,
+    confirm: false,
+    exclusive: true,
+    exec: { kind: 'process', command: 'bash', args: ['scripts/refresh-buildings-3d.sh'] },
+    source: 'scripts/refresh-buildings-3d.sh',
+    notes:
+      'Refreshes concurrently, so 3D buildings keep serving the old rows until the new ones are ready. Needs free disk for a second copy of the view while it runs. Minutes for a city, hours for a country.',
   },
   {
     id: 'osm-basemap',
@@ -769,7 +825,7 @@ export const SCRIPTS: ScriptDef[] = [
     id: 'search-power-outlets',
     name: 'Backfill Power Outlet Category',
     description:
-      'Tag places that offer a public power outlet (device charging stations, power supply cabinets, venues with power_supply or socket:* tags) with the power/outlet category, so they can be browsed with one filter.',
+      'Tag places that offer a public power outlet (device charging stations, power supply cabinets, venues with power_supply or household socket:* tags) with the power/outlet category, so they can be browsed with one filter. Also removes it from places that no longer qualify.',
     category: 'search',
     danger: 'safe',
     longRunning: true,
@@ -777,7 +833,7 @@ export const SCRIPTS: ScriptDef[] = [
     exec: { kind: 'internal', handler: 'sql:backfill-power-outlets.sql' },
     source: 'import/backfill-power-outlets.sql',
     notes:
-      'Only needed once, on a database imported before the category existed; imports and replication set it from then on. One full scan of geo_places. Idempotent.',
+      'Run once on a database imported before the category existed, and again on one that ran it under 0.6.0, which also tagged EV chargers. Imports and replication keep it current after that. One full scan of geo_places. Idempotent.',
   },
   {
     id: 'search-addresses',
