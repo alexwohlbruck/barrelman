@@ -1,228 +1,348 @@
 /**
- * Soldiers' and Sailors' Memorial Arch, Brooklyn. Procedural CC0 geometry.
+ * Soldiers' and Sailors' Memorial Arch, Grand Army Plaza, Brooklyn.
+ * Procedural CC0 geometry, styled to landmarks/STYLE.md.
  * bun scripts/landmarks/soldiers-sailors-arch.ts
- * Map frame: x = v (passage / south), y = u (long facade), z = up.
- * Placement: 40.6729891, -73.9699033; bearing 81; elevation 0.
- * OSM controls the masonry envelope; sculpture is deliberately simplified.
+ *
+ * Map frame: x = passage axis (+x is the park/south face, which carries the
+ * Army and Navy groups), y = the long facade, z = up. Placement in the
+ * catalog: 40.6729891, -73.9699033; bearing 81; elevation 0.
+ *
+ * The footprint is the OSM envelope: masonry x ±3.85, y -11.7..11.8, with the
+ * paired-column bays reaching x ±5.4. That envelope is 0.05 m off-centre in
+ * y, so the model is built symmetric about y = 0 and shifted by +0.05 at the
+ * end, which keeps the bounds and origin exactly where they were.
  * Reference: https://s-media.nyc.gov/agencies/lpc/lp/0821.pdf
  */
 import { Part, addGltfTriangles, cross, sub, len, writeGlb, type V3 } from './mesh'
 
-const stone = new Part(), trim = new Part(), recess = new Part(), bronze = new Part()
-const plinth = new Part(), patina = new Part()
+const granite = new Part(), trim = new Part(), recess = new Part(), base = new Part()
+const bronze = new Part(), patina = new Part()
+/** Sculpture is gathered raw, then smoothed and split into bronze/patina. */
+const cast = new Part()
 const TAU = Math.PI * 2
+const Y_SHIFT = 0.05
+const TOP = 32.6303 // the existing model's height, kept so the bounds are unchanged
+
 const unit = (v: V3): V3 => v.map(n => n / (len(v) || 1)) as V3
 const add = (a: V3, b: V3): V3 => a.map((n, i) => n + b[i]) as V3
 const mul = (a: V3, s: number): V3 => a.map(n => n * s) as V3
+const dot = (a: V3, b: V3) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+
+/** A quad wound so its face normal points away from `inside`. */
+function face(p: Part, a: V3, b: V3, c: V3, d: V3, inside: V3) {
+  const n = cross(sub(b, a), sub(c, a))
+  const centre = mul(add(add(a, b), add(c, d)), .25)
+  if (dot(n, sub(centre, inside)) >= 0) p.quad(a, b, c, d)
+  else p.quad(d, c, b, a)
+}
+/** Copy `src` into `dst` with smooth shading inside the crease angle. */
+function smoothInto(dst: Part, src: Part, crease = 50) {
+  addGltfTriangles(dst, new Float32Array(src.pos), Uint32Array.from({ length: src.pos.length / 3 }, (_, i) => i), { creaseDegrees: crease })
+}
+function smooth(p: Part, build: (q: Part) => void, crease = 50) {
+  const q = new Part(); build(q); smoothInto(p, q, crease)
+}
 function solid(p: Part, rings: V3[][]) {
   p.loft(rings); p.cap(rings[0], false); p.cap(rings.at(-1)!, true)
 }
-function box(p: Part, x0: number, x1: number, y0: number, y1: number, z0: number, z1: number) {
-  solid(p, [z0, z1].map(z => [[x0, y0, z], [x1, y0, z], [x1, y1, z], [x0, y1, z]]))
+
+/**
+ * A box with chamfered vertical edges and, optionally, chamfered top and
+ * bottom edges, smooth-shaded so each edge catches a soft highlight.
+ */
+function block(p: Part, x0: number, x1: number, y0: number, y1: number, z0: number, z1: number,
+  b = .4, { top = true, bottom = false } = {}) {
+  const ring = (d: number, z: number): V3[] => {
+    const X0 = x0 + d, X1 = x1 - d, Y0 = y0 + d, Y1 = y1 - d
+    const c = Math.min(b, (X1 - X0) / 3, (Y1 - Y0) / 3)
+    return ([[X0 + c, Y0], [X1 - c, Y0], [X1, Y0 + c], [X1, Y1 - c], [X1 - c, Y1], [X0 + c, Y1], [X0, Y1 - c], [X0, Y0 + c]] as [number, number][])
+      .map(([x, y]) => [x, y, z])
+  }
+  const e = Math.min(b, (z1 - z0) / 2.2)
+  const rings = [
+    ...(bottom ? [ring(e, z0), ring(0, z0 + e)] : [ring(0, z0)]),
+    ...(top ? [ring(0, z1 - e), ring(e, z1)] : [ring(0, z1)]),
+  ]
+  smooth(p, q => solid(q, rings))
 }
-function smooth(p: Part, build: (q: Part) => void, crease = 65) {
-  const q = new Part(); build(q)
-  addGltfTriangles(p, new Float32Array(q.pos), Uint32Array.from({ length: q.pos.length / 3 }, (_, i) => i), { creaseDegrees: crease })
+/** Mirror a block across the passage axis (x) or the facade's centre (y). */
+const span = (s: number, a: number, b: number): [number, number] => s > 0 ? [a, b] : [-b, -a]
+
+// ---------------------------------------------------------------- masonry
+const WX = 3.6, WY = 11.5 // wall faces
+const OX = 3.85, OY = 11.75 // cornices and base course: the footprint
+const R = 5.5, ZS = 9.5 // a true semicircle: span 11 m, crown at 15 m
+const ZT = 18.4 // underside of the main cornice
+const B = .45, b = .3 // outer and passage-corner chamfers
+const N = 12 // segments per semicircle
+const arc = Array.from({ length: N + 1 }, (_, i) => {
+  const a = Math.PI * i / N
+  return [R * Math.cos(a), ZS + R * Math.sin(a)] as [number, number]
+})
+
+// The body: one mass with the passage cut through it, so the arch faces run
+// unbroken from pier to pier without a seam where a pier would meet a lintel.
+smooth(granite, q => {
+  const mid: V3 = [0, 0, 14]
+  for (const sx of [-1, 1]) {
+    const x = sx * WX
+    for (const sy of [-1, 1]) {
+      face(q, [x, sy * (R + b), 0.9], [x, sy * (WY - B), 0.9], [x, sy * (WY - B), ZT], [x, sy * (R + b), ZT], [0, sy * 8, 9])
+      face(q, [x, sy * R, ZS], [x, sy * (R + b), ZS], [x, sy * (R + b), ZT], [x, sy * R, ZT], [0, sy * 4, 14])
+      face(q, [x, sy * (WY - B), 0.9], [sx * (WX - B), sy * WY, 0.9], [sx * (WX - B), sy * WY, ZT], [x, sy * (WY - B), ZT], [0, sy * 8, 9])
+      face(q, [x, sy * (R + b), 0.9], [sx * (WX - b), sy * R, 0.9], [sx * (WX - b), sy * R, ZS], [x, sy * (R + b), ZS], [0, sy * 8.5, 5])
+    }
+    for (let i = 0; i < N; i++) {
+      const [ya, za] = arc[i], [yb, zb] = arc[i + 1]
+      face(q, [x, ya, za], [x, yb, zb], [x, yb, ZT], [x, ya, ZT], [0, (ya + yb) / 2, 17])
+    }
+  }
+  for (const sy of [-1, 1]) {
+    face(q, [-(WX - B), sy * WY, 0.9], [WX - B, sy * WY, 0.9], [WX - B, sy * WY, ZT], [-(WX - B), sy * WY, ZT], mid)
+    face(q, [-(WX - b), sy * R, 0.9], [WX - b, sy * R, 0.9], [WX - b, sy * R, ZS], [-(WX - b), sy * R, ZS], [0, sy * 8.5, 5])
+  }
+})
+// The passage vault, a shade darker than the faces so the opening reads deep.
+smooth(recess, q => {
+  for (let i = 0; i < N; i++) {
+    const [ya, za] = arc[i], [yb, zb] = arc[i + 1]
+    face(q, [-WX, ya, za], [WX, ya, za], [WX, yb, zb], [-WX, yb, zb], [0, (ya + yb) / 2 * 1.3, ZS + (za + zb - 2 * ZS) / 2 * 1.3])
+  }
+}, 40)
+
+// Dark granite base course under both piers.
+for (const sy of [-1, 1]) block(base, -OX, OX, ...span(sy, R - .15, OY), 0, 0.9, .2)
+// Impost band wrapping each pier at the arch's springing.
+for (const sy of [-1, 1]) block(trim, -3.72, 3.72, ...span(sy, R - .12, 11.62), 9.1, 9.6, .15, { bottom: true })
+
+// Archivolt: a raised moulding around the arch on both faces, with rounded
+// lips, and a keystone at the crown.
+for (const sx of [-1, 1]) {
+  const profile: [number, number][] = [[R, 0], [R, .08], [R + .12, .2], [R + .66, .2], [R + .78, .08], [R + .78, 0]]
+  smooth(trim, q => {
+    const at = (a: number, [r, d]: [number, number]): V3 => [sx * (WX + d), r * Math.cos(a), ZS + r * Math.sin(a)]
+    for (let i = 0; i < N; i++) {
+      const a0 = Math.PI * i / N, a1 = Math.PI * (i + 1) / N, am = (a0 + a1) / 2
+      const inside: V3 = [sx * (WX + .04), (R + .39) * Math.cos(am), ZS + (R + .39) * Math.sin(am)]
+      for (let k = 0; k < profile.length - 1; k++)
+        face(q, at(a0, profile[k]), at(a0, profile[k + 1]), at(a1, profile[k + 1]), at(a1, profile[k]), inside)
+    }
+  }, 50)
+  block(trim, ...span(sx, WX - .1, OX), -.5, .5, 14.75, 16.45, .14, { bottom: true })
 }
-function oval(c: V3, rx: number, ry: number, n = 10): V3[] {
-  return Array.from({ length: n }, (_, i) => [c[0] + rx * Math.cos(i * TAU / n), c[1] + ry * Math.sin(i * TAU / n), c[2]])
+
+// Main cornice, a plain attic band and the attic cornice.
+block(trim, -OX, OX, -OY, OY, 18.0, 18.9, .3, { bottom: true })
+block(granite, -WX, WX, -WY, WY, 18.9, 22.75, B, { top: false })
+block(trim, -3.8, 3.8, -11.7, 11.7, 22.75, 23.5, .26, { bottom: true })
+block(granite, -3.66, 3.66, -11.56, 11.56, 23.5, 24.0, .3)
+
+// Paired-column bays on all four pier faces.
+for (const sx of [-1, 1]) for (const sy of [-1, 1]) {
+  const [y0, y1] = span(sy, 7.0, 11.35), yc = (y0 + y1) / 2
+  block(base, ...span(sx, WX, 5.4), ...span(sy, 6.85, 11.5), 0, 0.9, .2)
+  block(granite, ...span(sx, WX - .1, 4.55), y0, y1, 0.9, 8.0, .25, { top: false })
+  block(trim, ...span(sx, WX - .1, 5.3), y0 - .05, y1 + .05, 0.9, 2.0, .2)
+  block(trim, ...span(sx, WX - .1, 5.3), y0 - .05, y1 + .05, 7.9, 8.85, .15, { bottom: true })
+  block(trim, ...span(sx, WX - .1, 5.4), ...span(sy, 6.85, 11.5), 8.85, 9.6, .25, { bottom: true })
+  // Recessed centre panel between the pairs, flush and darker.
+  const px = sx * 4.56
+  face(recess, [px, yc - .55, 2.6], [px, yc + .55, 2.6], [px, yc + .55, 7.3], [px, yc - .55, 7.3], [0, yc, 5])
+  for (const dy of [-1.725, -.925, .925, 1.725]) {
+    const c: V3 = [sx * 4.93, yc + dy, 0]
+    const rings = ([[2.0, .42], [2.42, .31], [7.45, .28], [7.9, .43]] as [number, number][])
+      .map(([z, r]) => Array.from({ length: 12 }, (_, i): V3 => [c[0] + r * Math.cos(i * TAU / 12), c[1] + r * Math.sin(i * TAU / 12), z]))
+    smooth(granite, q => q.loft(rings), 55)
+  }
 }
-/** Pole fans avoid the zero-area triangles of collapsed loft rings. */
-function ellipsoid(p: Part, c: V3, r: V3, n = 8, rows = 4, upperPatina?: Part) {
-  const point = (a: number, b: number): V3 => [c[0] + r[0] * Math.cos(b) * Math.cos(a), c[1] + r[1] * Math.cos(b) * Math.sin(a), c[2] + r[2] * Math.sin(b)]
-  const normal = (v: V3): V3 => unit(v.map((t, i) => (t - c[i]) / (r[i] * r[i])) as V3)
-  const tri = (a: V3, b: V3, d: V3) => {
-    // Oxidation covers the exposed upper mass, not alternating tiny facets.
-    const target = upperPatina && Math.min(a[2], b[2], d[2]) >= c[2] ? upperPatina : p
-    target.tri(a, b, d, undefined, undefined, undefined, [normal(a), normal(b), normal(d)])
+
+// ---------------------------------------------------------------- bronze
+type Xf = (v: V3) => V3
+function ellipsoid(p: Part, c: V3, r: V3, n = 10, rows = 5, pitch = 0) {
+  const co = Math.cos(pitch), si = Math.sin(pitch)
+  const point = (a: number, t: number): V3 => {
+    const lx = r[0] * Math.cos(t) * Math.cos(a), ly = r[1] * Math.cos(t) * Math.sin(a), lz = r[2] * Math.sin(t)
+    return [c[0] + lx * co - lz * si, c[1] + ly, c[2] + lx * si + lz * co]
   }
   for (let j = 0; j < rows; j++) for (let i = 0; i < n; i++) {
-    const a = i * TAU / n, b = (i + 1) * TAU / n, lo = -Math.PI / 2 + j * Math.PI / rows, hi = lo + Math.PI / rows
-    const v0 = point(a, lo), v1 = point(b, lo), v2 = point(b, hi), v3 = point(a, hi)
-    if (j > 0) tri(v0, v1, v2)
-    if (j < rows - 1) tri(v0, v2, v3)
+    const a = i * TAU / n, a2 = (i + 1) * TAU / n, lo = -Math.PI / 2 + j * Math.PI / rows, hi = lo + Math.PI / rows
+    const v0 = point(a, lo), v1 = point(a2, lo), v2 = point(a2, hi), v3 = point(a, hi)
+    if (j > 0) p.tri(v0, v1, v2)
+    if (j < rows - 1) p.tri(v0, v2, v3)
   }
 }
 function tube(p: Part, path: V3[], radii: number[], sides = 6) {
-  smooth(p, q => solid(q, path.map((c, i) => {
+  solid(p, path.map((c, i) => {
     const axis = unit(sub(path[Math.min(i + 1, path.length - 1)], path[Math.max(0, i - 1)]))
     const u = unit(cross(Math.abs(axis[2]) > 0.9 ? [0, 1, 0] : [0, 0, 1], axis)), v = cross(axis, u)
     return Array.from({ length: sides }, (_, j) => add(c, add(mul(u, radii[i] * Math.cos(j * TAU / sides)), mul(v, radii[i] * Math.sin(j * TAU / sides)))))
-  })))
+  }))
 }
-function column(x: number, y: number) {
-  box(trim, x - .65, x + .65, y - .65, y + .65, .65, 1.1)
-  smooth(stone, q => solid(q, [[1.1, .54], [1.45, .55], [1.65, .43], [8.85, .38], [9.12, .5], [9.5, .64]].map(([z, r]) => oval([x, y, z], r, r, 10))), 48)
-  box(trim, x - .67, x + .67, y - .67, y + .67, 9.5, 9.85)
-  // The flared shaft and broad abacus carry the capital at phone-map scale.
+/** A thick flat slab with a convex outline, given as 2D points in the (U, V) plane at `o`. */
+function slab(p: Part, o: V3, U: V3, V: V3, outline: [number, number][], thick: number) {
+  const W = mul(unit(cross(U, V)), thick / 2)
+  const at = ([u, v]: [number, number], s: number) => add(add(o, add(mul(U, u), mul(V, v))), mul(W, s))
+  const front = outline.map(q => at(q, 1)), back = outline.map(q => at(q, -1))
+  solid(p, [back, front])
 }
-
-// The asymmetric 23.5 m OSM envelope is intentional: origin is the catalog anchor.
-for (const [y0, y1] of [[-11.7, -5.5], [5.5, 11.8]]) {
-  box(stone, -3.8, 3.8, y0, y1, .52, 18.4)
-  box(plinth, -3.8, 3.8, y0, y1, 0, .52)
-  for (const side of [-1, 1]) {
-    const ym = (y0 + y1) / 2
-    const xa = side < 0 ? -5.4 : 3.8, xb = side < 0 ? -3.8 : 5.4
-    const a = ym < 0 ? -11.2 : 7.1, b = ym < 0 ? -7.1 : 11.2
-    box(plinth, xa, xb, a, b, 0, .65)
-    box(stone, side < 0 ? -4.65 : 3.8, side < 0 ? -3.8 : 4.65, a + .15, b - .15, .65, 10)
-    column(side * 4.65, a + .7); column(side * 4.65, b - .7)
-    box(trim, xa, xb, a, b, 9.85, 10.25)
-    box(stone, xa + .15, xb - .15, a + .15, b - .15, 10.25, 10.7)
-    box(trim, xa, xb, a, b, 10.7, 11)
+/** Robed figure facing +x: a tapering robe, a head, and `arms` as paths from the shoulders. */
+function figure(p: Part, c: V3, h: number, arms: V3[][]) {
+  const ring = (z: number, rx: number, ry: number) => Array.from({ length: 10 }, (_, i): V3 =>
+    [c[0] + rx * h * Math.cos(i * TAU / 10), c[1] + ry * h * Math.sin(i * TAU / 10), c[2] + z * h])
+  solid(p, [ring(0, .15, .17), ring(.42, .12, .14), ring(.74, .1, .15), ring(.8, .05, .06)])
+  ellipsoid(p, [c[0] + .01 * h, c[1], c[2] + .88 * h], [.075 * h, .07 * h, .095 * h], 8, 4)
+  for (const path of arms) tube(p, path, [.045 * h, .038 * h, .034 * h], 6)
+}
+/** Mirror the raw sculpture added since `from` across y = 0. */
+function mirrorSince(p: Part, from: number) {
+  const end = p.pos.length
+  for (let k = from; k < end; k += 9) {
+    // Part stores glTF frame (x, z, -y): negate y by negating the third axis.
+    const v = [0, 1, 2].map(j => [p.pos[k + j * 3], -(-p.pos[k + j * 3 + 2]), p.pos[k + j * 3 + 1]] as V3)
+    p.tri(v[2], v[1], v[0])
   }
 }
 
-// A genuine circular segment meets all three OSM constraints: half-span 5.5,
-// spring 12 and crown 15. A semicircle with this width would crown at 17.5.
-const radius = (5.5 * 5.5 + 3 * 3) / 6
-const centerZ = 15 - radius
-const archZ = (y: number) => centerZ + Math.sqrt(radius * radius - y * y)
-const steps = 28
-for (let i = 0; i < steps; i++) {
-  const a = -5.5 + 11 * i / steps, b = -5.5 + 11 * (i + 1) / steps
-  const za = archZ(a), zb = archZ(b)
-  // Both recessed facades and the downward-facing tunnel soffit.
-  stone.quad([2.65, a, za], [2.65, b, zb], [2.65, b, 18.4], [2.65, a, 18.4])
-  stone.quad([-2.65, b, zb], [-2.65, a, za], [-2.65, a, 18.4], [-2.65, b, 18.4])
-  stone.quad([-2.65, a, za], [-2.65, b, zb], [2.65, b, zb], [2.65, a, za])
+// Quadriga plinth: a dark bronze-clad block on the attic.
+block(patina, -2.8, 2.8, -4.75, 4.75, 24.0, 24.6, .2)
+const Z0 = 24.6
+
+/** A horse facing +x, standing on the plinth at y = hy, lifting the fore leg on `lift`'s side. */
+function horse(hy: number, lift: number) {
+  ellipsoid(cast, [.15, hy, Z0 + 2.05], [1.15, .5, .62], 10, 4)
+  tube(cast, [[.9, hy, Z0 + 2.15], [1.3, hy, Z0 + 2.85], [1.5, hy, Z0 + 3.3]], [.48, .37, .28], 8)
+  ellipsoid(cast, [1.8, hy, Z0 + 3.12], [.5, .24, .27], 8, 4, -.7)
   for (const s of [-1, 1]) {
-    const q = new Part(), x = s * 2.76
-    q.quad([x, a, za + .025], [x, b, zb + .025], [x, b, zb + .66], [x, a, za + .66])
-    if (s < 0) {
-      for (let k = 0; k < q.pos.length; k += 9) {
-        const v = [0, 1, 2].map(j => [q.pos[k + j * 3], -q.pos[k + j * 3 + 2], q.pos[k + j * 3 + 1]] as V3)
-        trim.tri(v[2], v[1], v[0])
-      }
-    } else addGltfTriangles(trim, new Float32Array(q.pos), Uint32Array.from({ length: 6 }, (_, k) => k))
+    const y = hy + s * .22
+    tube(cast, [[-.65, y, Z0 + 1.85], [-.78, y, Z0 + .95], [-.62, y, Z0]], [.3, .23, .2])
+    if (s === lift) tube(cast, [[.95, y, Z0 + 1.85], [1.45, y, Z0 + 1.35], [1.3, y, Z0 + .8]], [.3, .23, .2])
+    else tube(cast, [[.95, y, Z0 + 1.85], [1.02, y, Z0 + .95], [.98, y, Z0]], [.3, .23, .2])
+  }
+  tube(cast, [[-.95, hy, Z0 + 2.2], [-1.3, hy, Z0 + 1.7], [-1.35, hy, Z0 + .95]], [.13, .16, .09])
+}
+/** A winged Victory beside the outer horse, trumpet raised outward. */
+function victory(vy: number) {
+  const s = Math.sign(vy), h = 3.1, c: V3 = [.95, vy, Z0]
+  figure(cast, c, h, [
+    [[c[0], vy + s * .3, Z0 + 2.3], [c[0] + .35, vy + s * .55, Z0 + 2.55], [c[0] + .7, vy + s * .5, Z0 + 2.9]],
+    [[c[0], vy - s * .3, Z0 + 2.3], [c[0] + .35, vy - s * .55, Z0 + 2.2], [c[0] + .75, vy - s * .75, Z0 + 2.5]],
+  ])
+  tube(cast, [[c[0] + .65, vy + s * .5, Z0 + 2.88], [c[0] + 1.55, vy + s * .45, Z0 + 3.25]], [.07, .16], 8)
+  // Wings sweep back and outward from the shoulders.
+  for (const w of [-1, 1]) slab(cast, [c[0] - .25, vy + w * .15, Z0 + 2.25], unit([-.7, w * .7, 0]), [0, 0, 1],
+    [[0, 0], [.7, -.4], [1.6, .05], [1.85, 1.0], [1.3, 1.5], [.4, .85]], .22)
+}
+
+/** Scale what was added to `p` since `from` about `o` (map frame). */
+function scaleSince(p: Part, from: number, o: V3, k: number) {
+  const g = [o[0], o[2], -o[1]] // glTF frame
+  for (let i = from; i < p.pos.length; i++) p.pos[i] = g[i % 3] + (p.pos[i] - g[i % 3]) * k
+}
+const castStart = cast.pos.length
+for (const hy of [1.15, 2.85]) {
+  const from = cast.pos.length
+  horse(hy, 1)
+  // Colossal horses: the real team stands about as tall as the Victories' wings.
+  scaleSince(cast, from, [0, hy, Z0], 1.15)
+}
+victory(4.05)
+mirrorSince(cast, castStart)
+
+// Chariot between the inner horses, and Columbia in it, with a banner hung
+// from her standard and a laurel wreath at its head. Built on the axis, so
+// the group stays symmetrical.
+solid(cast, [[Z0 + .55, .7, .45], [Z0 + 1.15, .85, .58], [Z0 + 1.75, .95, .62]].map(([z, rx, ry]) =>
+  Array.from({ length: 12 }, (_, i): V3 => [-.1 + rx * Math.cos(i * TAU / 12), ry * Math.sin(i * TAU / 12), z])))
+tube(cast, [[-.1, 0, Z0], [-.1, 0, Z0 + .6]], [.3, .3], 8)
+// Front shield, the chariot's eagle panel, as a broad rounded boss.
+ellipsoid(cast, [.82, 0, Z0 + 1.25], [.16, .55, .55], 10, 4)
+const colH = 4.9, colC: V3 = [-.2, 0, Z0 + 1.0]
+figure(cast, colC, colH, [-1, 1].map(s => [[-.2, s * .4, Z0 + 1 + .76 * colH], [-.45, s * .75, Z0 + 1 + .85 * colH], [-.62, s * .95, Z0 + 1 + .98 * colH]]))
+const staffX = -.75, wreathR = .42, wreathT = .1, wreathZ = TOP - wreathR - wreathT
+tube(cast, [[staffX, 0, Z0 + 1.0], [staffX, 0, wreathZ - wreathR]], [.14, .13], 6)
+tube(cast, [[staffX, -1.08, Z0 + 1 + 1.08 * colH], [staffX, 1.08, Z0 + 1 + 1.08 * colH]], [.11, .11], 6)
+// The banner bows back from the crossbar, hanging to Columbia's shoulders.
+smooth(cast, q => {
+  const top = Z0 + 1 + 1.08 * colH, bottom = Z0 + 1 + .84 * colH
+  const pt = (t: number, z: number, d: number): V3 => [staffX - .1 - .5 * (1 - t * t) * (z === top ? .3 : 1) + d, 1.0 * t, z]
+  const cols = 8
+  for (let i = 0; i < cols; i++) {
+    const t0 = -1 + 2 * i / cols, t1 = -1 + 2 * (i + 1) / cols
+    const lo = (t: number) => bottom - .5 * t * t
+    face(q, pt(t0, lo(t0), .08), pt(t1, lo(t1), .08), pt(t1, top, .08), pt(t0, top, .08), [staffX - 2, 0, top - 1])
+    face(q, pt(t0, lo(t0), -.08), pt(t1, lo(t1), -.08), pt(t1, top, -.08), pt(t0, top, -.08), [staffX + 2, 0, top - 1])
+    face(q, pt(t0, lo(t0), .08), pt(t1, lo(t1), .08), pt(t1, lo(t1), -.08), pt(t0, lo(t0), -.08), [staffX, 0, top])
+  }
+  for (const t of [-1, 1]) face(q, pt(t, bottom - .5, .08), pt(t, top, .08), pt(t, top, -.08), pt(t, bottom - .5, -.08), [staffX, 0, top - 1])
+}, 60)
+// Wreath: a torus facing the park, its crown setting the model's height.
+for (let i = 0; i < 12; i++) for (let j = 0; j < 4; j++) {
+  const pt = (a: number, t: number): V3 => {
+    const r = wreathR + wreathT * Math.cos(t)
+    return [staffX + wreathT * Math.sin(t), r * Math.cos(a), wreathZ + r * Math.sin(a)]
+  }
+  const a0 = i * TAU / 12 + TAU / 4, a1 = (i + 1) * TAU / 12 + TAU / 4, t0 = j * TAU / 4, t1 = (j + 1) * TAU / 4
+  face(cast, pt(a0, t0), pt(a1, t0), pt(a1, t1), pt(a0, t1), [staffX, ((Math.cos(a0) + Math.cos(a1)) / 2) * wreathR, wreathZ + ((Math.sin(a0) + Math.sin(a1)) / 2) * wreathR])
+}
+
+// The Army and Navy groups on the south (park) bays: a broad mound of
+// figures rising to a winged Spirit, read as one bold mass.
+{
+  const from = cast.pos.length
+  const gy = 9.175, gx = 4.45, zb = 9.6
+  block(cast, 3.65, 5.3, gy - 2.0, gy + 2.0, zb, zb + .3, .12)
+  const bump = (i: number, k: number) => 1 + .1 * Math.sin(i * 2.7 + k * 1.9) + .06 * Math.cos(i * 5.1 - k * 3.3)
+  const rings = ([[zb + .3, .82, 1.95], [zb + 1.6, .86, 1.95], [zb + 3.0, .84, 1.88], [zb + 4.0, .75, 1.65], [zb + 4.7, .55, 1.15]] as [number, number, number][])
+    .map(([z, rx, ry], k) => Array.from({ length: 12 }, (_, i): V3 => {
+      const a = i * TAU / 12, f = k === 0 ? 1 : bump(i, k)
+      // Flat against the pier: the back half never passes the wall face.
+      const x = gx + rx * Math.cos(a) * (Math.cos(a) < 0 ? Math.min(1, (gx - 3.62) / rx) : Math.min(f, (5.32 - gx) / rx))
+      return [x, gy + ry * f * Math.sin(a), z]
+    }))
+  solid(cast, rings)
+  // Heads and shoulders breaking the mound's surface.
+  for (const [x, y, z, r] of [[5.0, -1.05, 11.4, .3], [5.05, .95, 11.7, .3], [5.0, -.25, 12.6, .28], [4.9, 1.1, 13.1, .26], [4.85, -1.0, 13.3, .26], [4.9, .3, 14.1, .26]])
+    ellipsoid(cast, [x, gy + y, z], [r, r, r * 1.15], 6, 3)
+  // The winged Spirit crowning the group.
+  ellipsoid(cast, [4.55, gy, zb + 5.0], [.45, .5, .8], 10, 4)
+  ellipsoid(cast, [4.7, gy, zb + 5.95], [.27, .26, .33], 8, 4)
+  for (const w of [-1, 1]) slab(cast, [4.2, gy + w * .2, zb + 4.9], [0, w, 0], [0, 0, 1],
+    [[0, -.4], [1.1, -.2], [2.0, .5], [2.05, 1.15], [1.4, 1.25], [.3, .75]], .26)
+  // Only the park face carries the groups; mirror the east group to the west.
+  mirrorSince(cast, from)
+}
+
+// Smooth the bronze, then let the upward-facing surfaces carry the patina.
+{
+  const sm = new Part(); smoothInto(sm, cast, 62)
+  for (let k = 0; k < sm.pos.length; k += 9) {
+    const v = [0, 1, 2].map(j => [sm.pos[k + j * 3], sm.pos[k + j * 3 + 1], sm.pos[k + j * 3 + 2]] as V3)
+    const n = unit(cross(sub(v[1], v[0]), sub(v[2], v[0])))
+    const target = n[1] > .3 ? patina : bronze // glTF y is up
+    target.pos.push(...sm.pos.slice(k, k + 9)); target.nrm.push(...sm.nrm.slice(k, k + 9)); target.uv.push(...sm.uv.slice((k / 3) * 2, (k / 3) * 2 + 6))
   }
 }
-for (const s of [-1, 1]) {
-  box(trim, s * 2.65 - .15, s * 2.65 + .15, -.38, .38, 14.8, 16.3)
-  for (const y of [-5.5, 5.5]) box(trim, -2.8, 2.8, y - .16, y + .16, 11.65, 12)
-}
-// Entablature, quiet tall attic, and stepped granite crown, all below 24 m.
-for (const [z0, z1, d, y0, y1, p] of [
-  [18.4, 18.8, 3.9, -11.7, 11.8, trim], [18.8, 19.45, 3.65, -11.5, 11.6, recess],
-  [19.45, 19.85, 4.15, -11.7, 11.8, trim], [19.85, 23.3, 3.45, -11.4, 11.5, recess],
-  [23.3, 23.62, 3.75, -11.65, 11.75, recess], [23.62, 24, 3.9, -11.7, 11.8, trim],
-] as [number, number, number, number, number, Part][]) box(p, -d, d, y0, y1, z0, z1)
-for (const s of [-1, 1]) {
-  box(recess, s * 3.46 - .018, s * 3.46 + .018, -7.0, 7.1, 20.65, 22.5)
-  box(stone, s * 3.5 - .02, s * 3.5 + .02, -6.83, 6.93, 20.8, 22.35)
-}
 
-
-// Keep the inscription tablet as a broad, shallow recess. Individual letters
-// and fine ashlar joints flicker at the map's usual 80–200 px model height.
-
-/** Broad sculpted wing in the yz plane, with a simple readable trailing edge. */
-function wing(p: Part, c: V3, sign: number, scale = 1) {
-  const outline = [[0, 0], [.6, .85], [1.6, 1.7], [2.3, 1.85], [1.5, .6], [.35, -.1]]
-  const front: V3 = [c[0] + .16 * scale, c[1] + .75 * sign * scale, c[2] + .7 * scale]
-  const back: V3 = [c[0] - .12 * scale, front[1], front[2]]
-  const pts: V3[] = outline.map(([y, z]) => [c[0], c[1] + y * sign * scale, c[2] + z * scale])
-  const face = p === bronze ? patina : p
-  for (let i = 0; i < pts.length; i++) {
-    const a = pts[i], b = pts[(i + 1) % pts.length]
-    if (sign > 0) { face.tri(front, a, b); p.tri(back, b, a) }
-    else { face.tri(front, b, a); p.tri(back, a, b) }
-  }
-}
-/** Robed bronze figure, facing +x. Height excludes raised arm. */
-function person(c: V3, h: number, pose: 'raised' | 'reins' | 'point', depth = 1, width = 1) {
-  const at = (x: number, y: number, z: number): V3 => [c[0] + x * h * depth, c[1] + y * h * width, c[2] + z * h]
-  smooth(bronze, p => solid(p, [[0, .2, .24], [.35, .13, .15], [.65, .12, .19], [.8, .105, .18]].map(([z, rx, ry]) => oval(at(0, 0, z), h * rx * depth, h * ry * width, 6).map((v, i) => [v[0] + (i % 2 ? .035 : -.035), v[1], v[2]] as V3))))
-  ellipsoid(patina, at(.015, 0, .91), [h * .105 * depth, h * .11 * width, h * .135], 6, 4)
-  for (const s of [-1, 1]) {
-    const end = pose === 'raised' && s > 0 ? at(.03, s * .43, 1.32) : pose === 'point' && s > 0 ? at(.27, s * .36, .84) : at(.28, s * .25, .58)
-    tube(bronze, [at(0, s * .16, .73), at(.12, s * .25, .64 + (pose === 'raised' && s > 0 ? .34 : 0)), end], [h * .085, h * .064, h * .055], 5)
-  }
-}
-
-// Quadriga: four independently legged horses face the park (+x), pulling a
-// chariot behind them. Columbia rises above two winged Victories.
-box(patina, -2.7, 3.55, -6.0, 6.0, 24, 24.45)
-box(bronze, -2.5, 3.45, -5.9, 5.9, 24.45, 24.67)
-function horse(y: number, phase: number) {
-  const starts = [bronze, patina].map(part => ({ part, first: part.pos.length }))
-  ellipsoid(bronze, [.55, y, 27.05], [1.38, .57, .7], 10, 5, patina)
-  tube(bronze, [[1.35, y, 27.15], [1.73, y, 28.1], [1.83, y, 28.95]], [.6, .5, .36], 8)
-  ellipsoid(patina, [2.08, y, 28.92], [.65, .37, .43], 8, 4)
-  ellipsoid(patina, [2.48, y, 28.7], [.43, .3, .3], 8, 3)
-  for (const s of [-1, 1]) {
-    tube(bronze, [[1.81, y + s * .19, 29.12], [1.73, y + s * .24, 29.62]], [.16, .07], 5)
-    tube(bronze, [[-.35, y + s * .42, 26.9], [-.62, y + s * .44, 25.77], [-.34, y + s * .45, 24.77]], [.26, .19, .18], 6)
-    const lift = s === phase ? .65 : 0
-    tube(bronze, [[1.2, y + s * .42, 26.95], [1.68 + lift, y + s * .44, 25.83 + lift], [1.32 + lift, y + s * .45, 24.8 + lift]], [.25, .18, .18], 6)
-  }
-  tube(bronze, [[-.7, y, 27.2], [-1.25, y, 26.6], [-1.38, y + .16, 25.5]], [.19, .21, .08], 5)
-  // Spread and splay the horses: visible air between heads survives small views.
-  const angle = y * .055, co = Math.cos(angle), si = Math.sin(angle)
-  for (const { part, first } of starts) for (let k = first; k < part.pos.length; k += 3) {
-    const x = part.pos[k], localY = -part.pos[k + 2] - y
-    part.pos[k] = x * co - localY * si
-    part.pos[k + 2] = -(y + x * si + localY * co)
-    const nx = part.nrm[k], ny = -part.nrm[k + 2]
-    part.nrm[k] = nx * co - ny * si
-    part.nrm[k + 2] = -(nx * si + ny * co)
-  }
-}
-for (const [i, y] of [-3.15, -1.05, 1.05, 3.15].entries()) horse(y, i % 2 ? 1 : -1)
-box(bronze, -2.2, -.65, -1.15, 1.15, 25.3, 26.2)
-// Curved chariot breastplate.
-smooth(bronze, p => solid(p, [oval([-1.1, 0, 25.7], .85, 1.05, 10), oval([-1.1, 0, 27.05], 1.05, 1.25, 10)]))
-function wheel(c: V3, r: number) {
-  // A real open rim, axis y, with four spokes.
-  const n = 12, m = 4
-  const pt = (a: number, b: number): V3 => [c[0] + (r + .19 * Math.cos(b)) * Math.cos(a), c[1] + .19 * Math.sin(b), c[2] + (r + .19 * Math.cos(b)) * Math.sin(a)]
-  smooth(bronze, p => { for (let i = 0; i < n; i++) for (let j = 0; j < m; j++) p.quad(pt(i * TAU / n, j * TAU / m), pt(i * TAU / n, (j + 1) * TAU / m), pt((i + 1) * TAU / n, (j + 1) * TAU / m), pt((i + 1) * TAU / n, j * TAU / m)) })
-  for (let i = 0; i < 4; i++) tube(bronze, [c, [c[0] + r * Math.cos(i * TAU / 4), c[1], c[2] + r * Math.sin(i * TAU / 4)]], [.14, .13], 4)
-}
-wheel([-1.35, -1.22, 25.7], .9); wheel([-1.35, 1.22, 25.7], .9)
-person([-1.6, 0, 26.25], 4.75, 'raised', .85, .8)
-for (const s of [-1, 1]) {
-  person([2.75, s * 5.1, 24.67], 3.75, 'reins', .8)
-  wing(bronze, [2.43, s * 5.15, 27.1], s, .95)
-  wing(bronze, [2.2, s * 5.1, 27.1], -s, .55)
-}
-
-// The Army and Navy groups sit on the SOUTH pedestals only. Broad overlapping
-// figures read as a sculptural group rather than a row of isolated figurines.
-for (const s of [-1, 1]) {
-  const y = s * 9.15
-  box(bronze, 3.82, 5.25, y - 1.65, y + 1.65, 11, 11.35)
-  person([4.24, y, 11.35], 4.7, 'raised', .48)
-  person([4.55, y - 1.12, 11.35], 2.95, 'point', .42)
-  person([4.52, y + 1.06, 11.35], 3.15, 'reins', .42)
-}
-// Winged spandrel relief on the south, seal-like medallions on the north.
-for (const s of [-1, 1]) {
-  ellipsoid(stone, [2.84, s * 4.15, 16.55], [.17, .33, .62], 8, 4)
-  wing(stone, [2.83, s * 4.05, 16.15], -s, .6)
-  ellipsoid(stone, [-2.8, s * 4.15, 16.6], [.15, .68, .72], 10, 4)
-}
-
-// Median sRGB samples from the supplied photographs; the shared GLB writer
-// performs its usual sRGB-to-linear conversion. No display compensation.
-// Rectangles are [left, top, width, height] in the original reference images.
+// Median sRGB samples from the reference photographs (sunlit faces).
 const parts = [
-  { part: stone, material: { name: 'granite', color: 0xc8c6c2 } }, // 01.jpg [634,351,20,15]
-  { part: trim, material: { name: 'granite-carving', color: 0xd0ccbe } }, // 01.jpg [700,277,28,8]
-  { part: recess, material: { name: 'granite-weathering', color: 0xb5b2aa } }, // 01.jpg [895,314,7,15]
-  { part: plinth, material: { name: 'granite-plinth', color: 0x9a928a } }, // 01.jpg [836,759,20,16]
-  { part: bronze, material: { name: 'bronze', color: 0x1d3438, roughness: .78 } }, // 02.jpg [380,663,12,12]
-  { part: patina, material: { name: 'bronze-patina', color: 0x3e5454, roughness: .78 } }, // 02.jpg [938,638,12,12]
+  { part: granite, material: { name: 'granite', color: 0xc9c3b8 } }, // 01.jpg sunlit attic, warm grey
+  { part: trim, material: { name: 'granite-trim', color: 0xd6d0c4 } }, // cornices catch the light
+  { part: recess, material: { name: 'granite-shade', color: 0xa39d94 } }, // vault and panels
+  { part: base, material: { name: 'granite-base', color: 0x666867 } }, // 01.jpg dark base course
+  { part: bronze, material: { name: 'bronze', color: 0x1c3237, roughness: .75 } }, // 02.jpg shadowed bronze
+  { part: patina, material: { name: 'bronze-patina', color: 0x46605b, roughness: .75 } }, // 02.jpg lit bronze, plinth
 ]
+// Re-centre on the OSM envelope (glTF z = -y).
+for (const { part } of parts) for (let k = 2; k < part.pos.length; k += 3) part.pos[k] -= Y_SHIFT
 const triangles = parts.reduce((n, { part }) => n + part.triangles, 0)
-if (triangles > 7000) throw new Error(`Triangle budget exceeded: ${triangles}`)
+if (triangles > 6500) throw new Error(`Triangle budget exceeded: ${triangles}`)
 const glb = writeGlb("Soldiers' and Sailors' Memorial Arch", parts, {
   license: 'CC0-1.0', bearing: 81, elevation: 0,
-  frame: 'Y up, -Z north, +X east, metres; ground anchor; map x=v, y=u',
-  masonryHeight: 24, archSpan: 11, archSpring: 12, archCrown: 15,
-  source: 'OSM envelope supplied for way/20679503 and parts; NYC LPC LP-0821',
+  frame: 'Y up, -Z north, +X east, metres; ground anchor; map x = passage axis, y = facade',
+  masonryHeight: 24, archSpan: 11, archSpring: ZS, archCrown: ZS + R,
+  source: 'OSM envelope for way/20679503 and parts; NYC LPC LP-0821',
 })
+if (glb.length > 256000) throw new Error(`File budget exceeded: ${glb.length}`)
 const out = new URL('../../landmarks/models/soldiers-sailors-arch.glb', import.meta.url).pathname
 await Bun.write(out, glb)
 console.log(`${out}: ${triangles} triangles, ${glb.length} bytes (${(glb.length / 1024).toFixed(1)} KiB)`)

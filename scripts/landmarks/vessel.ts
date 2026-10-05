@@ -2,134 +2,134 @@
  * Vessel, Hudson Yards. Procedural CC0 geometry in metres, x east/y north/z up.
  * bun scripts/landmarks/vessel.ts
  *
- * Five staggered landings on sixteen levels form the open, flaring basket.
- * The stairs are structural geometry, including their copper undersides;
- * there is no cone hidden behind the lattice and no cap across the atrium.
+ * Sixteen levels of five staggered landings, each joined to the two landings
+ * above and below by a straight flight, form the open honeycomb basket that
+ * flares from a 15 m base to a 47 m rim. Every landing and flight is one
+ * broad bevelled band: copper on its outer, inner and edge faces, dark bronze
+ * underneath, a warm deck on top. No railings, treads or glass: at map
+ * distance the see-through diamonds and the flaring silhouette are the
+ * identity, and fine detail only aliases.
  */
-import { Part, writeGlb, type V3 } from './mesh'
+import { Part, writeGlb, cross, sub, type V3 } from './mesh'
 
-const bronze = new Part()
+const copper = new Part()
 const undersides = new Part()
-const treads = new Part()
-const glass = new Part()
-const stone = new Part()
+const deck = new Part()
 const TAU = Math.PI * 2
 const LEVELS = 16
+const BAYS = 5
 const HEIGHT = 45.7
 const FIRST = 1.1
-const TOP = HEIGHT
 const DEPTH = 2.8
 const HALF_ANGLE = 0.125
-// Broad copper edges survive the 80 px silhouette without detached rail lines.
-const THICKNESS = 1.0
-const polar = (r: number, a: number, z: number): V3 => [r * Math.cos(a), r * Math.sin(a), z]
-const up = (p: V3, z: number): V3 => [p[0], p[1], p[2] + z]
-const mix = (a: V3, b: V3, t: number): V3 => a.map((v, k) => v + (b[k] - v) * t) as V3
-const zAt = (level: number) => FIRST + (TOP - FIRST) * level / (LEVELS - 1)
+// Deep enough to read as a copper stringer at phone sizes, shallow enough to
+// keep the diamonds between flights wide open.
+const THICKNESS = 1.6
+const BEVEL = 0.45
+
+const zAt = (level: number) => FIRST + (HEIGHT - FIRST) * level / (LEVELS - 1)
 const radius = (level: number) => 7.5 + 16.1 * Math.pow(level / (LEVELS - 1), 0.7)
-const angle = (level: number, bay: number) => bay * TAU / 5 + (level % 2) * Math.PI / 5
+// Alternate levels turn by half a bay, so each landing sits over a diamond.
+const angle = (level: number, bay: number) => bay * TAU / BAYS + (level % 2) * Math.PI / BAYS
+// Lower landings are deeper where the real atrium is tight and the flare fast.
+const depthAt = (level: number) => DEPTH + (level === 0 ? 0 : 0.85 * Math.max(0, 1 - Math.abs(level - 1) / 4))
+// The ground row rests on the plaza: its band stops at z = 0, never below.
+const thicknessAt = (level: number) => Math.min(THICKNESS, zAt(level))
 
-// Retain the established envelope, but divide its depth into copper cladding
-// below a broad glass edge. The walking surface sits inside the balustrade;
-// no thin rails or mullions are needed to communicate the material change.
-function deck(corners: V3[], thickness = THICKNESS) {
-  const lower = corners.map(p => up(p, -thickness))
-  const walking = corners.map(p => up(p, -thickness * 0.45))
-  for (let k = 0; k < 4; k++) {
-    const next = (k + 1) % 4
-    const part = k === 3 ? treads : bronze
-    part.quad(lower[k], lower[next], walking[next], walking[k])
-    if (k === 1 || k === 3)
-      glass.quad(walking[k], walking[next], corners[next], corners[k])
-  }
-  undersides.cap(lower, false)
-  // Copper wraps over the cladding edge. These broad returns retain the
-  // warm perimeter in pitched map views without restoring thin handrails.
-  const inner0 = mix(walking[0], walking[1], 0.12)
-  const outer0 = mix(walking[0], walking[1], 0.88)
-  const inner1 = mix(walking[3], walking[2], 0.12)
-  const outer1 = mix(walking[3], walking[2], 0.88)
-  bronze.quad(walking[0], inner0, inner1, walking[3])
-  bronze.quad(outer0, walking[1], walking[2], outer1)
-  treads.quad(inner0, outer0, outer1, inner1)
+const unit = (a: V3): V3 => { const l = Math.hypot(...a) || 1; return [a[0] / l, a[1] / l, a[2] / l] }
+const add = (a: V3, b: V3): V3 => [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
+const dot = (a: V3, b: V3) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+
+/**
+ * The band's cross-section at a landing edge: a chamfered rectangle in the
+ * vertical radial plane at `a`. The outer face stays on the original radius
+ * and the deck on the original level, so the envelope is unchanged.
+ * Order: outer, chamfer, underside, chamfer, inner, chamfer, deck, chamfer.
+ */
+function section(level: number, a: number): V3[] {
+  const r = radius(level), z = zAt(level), d = depthAt(level), t = thicknessAt(level)
+  const b = Math.min(BEVEL, t * 0.3)
+  const at = (u: number, v: number): V3 => [(r - u) * Math.cos(a), (r - u) * Math.sin(a), z - v]
+  return [at(0, b), at(0, t - b), at(b, t), at(d - b, t), at(d, t - b), at(d, b), at(d - b, 0), at(b, 0)]
 }
 
-type Landing = { innerLeft: V3; outerLeft: V3; outerRight: V3; innerRight: V3 }
-const landings: Landing[][] = []
+const MAIN: Part[] = [copper, undersides, copper, deck] // outer, underside, inner, deck
+let bands = 0
+
+/**
+ * Loft one band between two sections. Main faces are flat-shaded; each
+ * chamfer takes its neighbours' normals at its two edges, so it shades as a
+ * rounded fillet and welds to the faces either side.
+ */
+function band(A: V3[], B: V3[]) {
+  const centre = [...A, ...B].reduce(add, [0, 0, 0] as V3).map(v => v / 16) as V3
+  const faces: { q: V3[]; n: V3 }[] = []
+  for (let i = 0; i < 8; i++) {
+    const j = (i + 1) % 8
+    let q = [A[i], A[j], B[j], B[i]]
+    let n = unit(add(cross(sub(q[1], q[0]), sub(q[2], q[0])), cross(sub(q[2], q[0]), sub(q[3], q[0]))))
+    const m = q.reduce(add, [0, 0, 0] as V3).map(v => v / 4) as V3
+    if (dot(n, sub(m, centre)) < 0) { q = [q[0], q[3], q[2], q[1]]; n = n.map(v => -v) as V3 }
+    faces.push({ q, n })
+  }
+  faces.forEach(({ q, n }, i) => {
+    if (i % 2 === 0) {
+      const part = MAIN[i / 2]
+      part.tri(q[0], q[1], q[2], undefined, undefined, undefined, [n, n, n])
+      part.tri(q[0], q[2], q[3], undefined, undefined, undefined, [n, n, n])
+      return
+    }
+    // A chamfer from section point i to i+1: point i belongs to face i-1,
+    // point i+1 to face i+1. Map each corner of q back to its section index.
+    const prev = faces[i - 1].n, next = faces[(i + 1) % 8].n
+    const normalOf = (p: V3) => (p === A[i] || p === B[i]) ? prev : next
+    const ns = q.map(normalOf)
+    copper.tri(q[0], q[1], q[2], undefined, undefined, undefined, [ns[0], ns[1], ns[2]])
+    copper.tri(q[0], q[2], q[3], undefined, undefined, undefined, [ns[0], ns[2], ns[3]])
+  })
+  bands++
+}
+
+// Landings: each spans its bay between two shared edge sections.
+const left: V3[][][] = [], right: V3[][][] = []
 for (let level = 0; level < LEVELS; level++) {
-  const r = radius(level), z = zAt(level)
-  // Broader lower landings follow the tight OSM atrium while the exterior
-  // flares rapidly; upper stairs settle to a consistent walking width.
-  const depth = DEPTH + (level === 0 ? 0 : 0.85 * Math.max(0, 1 - Math.abs(level - 1) / 4))
-  landings.push([])
-  for (let bay = 0; bay < 5; bay++) {
+  left.push([]); right.push([])
+  for (let bay = 0; bay < BAYS; bay++) {
     const a = angle(level, bay)
-    const innerLeft = polar(r - depth, a - HALF_ANGLE, z)
-    const outerLeft = polar(r, a - HALF_ANGLE, z)
-    const outerRight = polar(r, a + HALF_ANGLE, z)
-    const innerRight = polar(r - depth, a + HALF_ANGLE, z)
-    deck([innerLeft, outerLeft, outerRight, innerRight])
-    landings[level].push({ innerLeft, outerLeft, outerRight, innerRight })
+    left[level].push(section(level, a - HALF_ANGLE))
+    right[level].push(section(level, a + HALF_ANGLE))
+    band(left[level][bay], right[level][bay])
   }
 }
 
-let flights = 0
-function flight(aInner: V3, aOuter: V3, bInner: V3, bOuter: V3, ccw: boolean, thickness = THICKNESS) {
-  const corners = [aInner, aOuter, bOuter, bInner]
-  // At phone sizes the flight is one broad band: individual treads and
-  // detached handrails alias, while the real open diamonds carry its identity.
-  deck(ccw ? corners : corners.reverse(), thickness)
-  flights++
-}
-
-// Each landing splits in both directions to the next staggered row. The
-// endpoints meet the landing edges, so the diagonal bands form real holes.
+// Flights: every landing climbs both ways to the staggered row above. The
+// flights start and end on the landings' own sections, so the lattice is
+// seamless and the diamonds between them are real openings.
 for (let level = 0; level < LEVELS - 1; level++) {
-  for (let bay = 0; bay < 5; bay++) {
-    const a = landings[level][bay]
-    const right = landings[level + 1][(bay + (level % 2)) % 5]
-    const left = landings[level + 1][(bay + (level % 2) + 4) % 5]
-    flight(a.innerRight, a.outerRight, right.innerLeft, right.outerLeft, true)
-    flight(a.innerLeft, a.outerLeft, left.innerRight, left.outerRight, false)
+  for (let bay = 0; bay < BAYS; bay++) {
+    const up = (bay + (level % 2)) % BAYS
+    band(right[level][bay], left[level + 1][up])
+    band(left[level][bay], right[level + 1][(up + BAYS - 1) % BAYS])
   }
 }
 
-// Four short entrance flights and modest shoes support the lower basket;
-// the central ground opening remains unfilled.
-for (let bay = 0; bay < 5; bay++) {
-  const a = angle(0, bay), r = radius(0)
-  const ring = (z: number): V3[] => [polar(r - DEPTH, a - HALF_ANGLE, z),
-    polar(r, a - HALF_ANGLE, z), polar(r, a + HALF_ANGLE, z), polar(r - DEPTH, a + HALF_ANGLE, z)]
-  stone.loft([ring(0), ring(FIRST - THICKNESS)])
-  stone.cap(ring(0), false)
-  if (bay < 4) {
-    const landing = landings[0][bay]
-    flight(polar(3.8, a - HALF_ANGLE, 0.25), polar(3.8, a + HALF_ANGLE, 0.25),
-      landing.innerLeft, landing.innerRight, false, 0.25)
-  }
-}
-
-// Median sRGB photo samples, passed unchanged to the shared writer. Photo 03:
-// copper (450,1076), underside (470,1092), exposed steel frame (490,872),
-// glass (450,899). Photo 01: sunlit grey paving/base finish (550,829).
-// The underside sample records its visible brown finish; it is not a
-// reconstruction of unlit reflectance from the shaded reference photograph.
+// sRGB from the sunlit cladding in the reference photos (Wikimedia Commons):
+// the bright copper of the stringers, the brown shadowed soffits, and the
+// darker warm walking surface seen from above.
 const parts = [
-  { part: bronze, material: { name: 'copper-cladding', color: 0xaf7a5d, roughness: 0.48 } },
-  { part: undersides, material: { name: 'bronze-undersides', color: 0x4d3b32, roughness: 0.6 } },
-  { part: treads, material: { name: 'painted-steel', color: 0x3d3f3c, roughness: 0.7 } },
-  { part: glass, material: { name: 'glass-balustrades', color: 0xcacfd0, roughness: 0.3, doubleSided: true } },
-  { part: stone, material: { name: 'stone', color: 0x939593 } },
+  { part: copper, material: { name: 'copper-cladding', color: 0xb06a45, roughness: 0.45 } },
+  { part: undersides, material: { name: 'bronze-undersides', color: 0x47302a, roughness: 0.6 } },
+  { part: deck, material: { name: 'deck', color: 0x5c4135, roughness: 0.7 } },
 ]
 const triangles = parts.reduce((n, { part }) => n + part.triangles, 0)
-if (triangles > 12_000) throw new Error(`Triangle budget exceeded: ${triangles}`)
+if (triangles > 5_000) throw new Error(`Triangle budget exceeded: ${triangles}`)
 const glb = writeGlb('Vessel', parts, {
   license: 'CC0-1.0',
   frame: 'Y up, -Z north, +X east, metres; origin at ground anchor',
-  height: HEIGHT, levels: LEVELS, landings: 80, flights,
+  height: HEIGHT, levels: LEVELS, landings: LEVELS * BAYS, flights: bands - LEVELS * BAYS,
   bearing: 0, elevation: 0, replaces: ['relation/16231018'],
 })
-if (glb.length > 300_000) throw new Error(`Landmark exceeds 300 KB: ${glb.length}`)
+if (glb.length > 250_000) throw new Error(`Landmark exceeds 250 KB: ${glb.length}`)
 const out = new URL('../../landmarks/models/vessel.glb', import.meta.url).pathname
 await Bun.write(out, glb)
-console.log(`${out}: ${triangles} triangles, ${glb.length} bytes; ${flights} flights, 80 landings`)
+console.log(`${out}: ${triangles} triangles, ${glb.length} bytes; ${bands} bands`)
