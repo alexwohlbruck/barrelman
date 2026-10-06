@@ -251,6 +251,13 @@
       "license": "CC0-1.0",
       "author": "Barrelman",
       "source": "scripts/landmarks/truist-center-charlotte.ts"
+    },
+    {
+      "id": "first-presbyterian-charlotte",
+      "file": "models/first-presbyterian-charlotte.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/first-presbyterian-charlotte.ts"
     }
   ],
   "landmarks": [
@@ -1127,6 +1134,20 @@
         "way/705306914",
         "way/705306915",
         "way/705306916"
+      ]
+    },
+    {
+      "id": "first-presbyterian-charlotte",
+      "name": "First Presbyterian Church",
+      "model": "first-presbyterian-charlotte",
+      "lng": -80.843849,
+      "lat": 35.2291133,
+      "bearing": 47.9,
+      "elevation": 0,
+      "minzoom": 15,
+      "wikidata": "Q5453546",
+      "replaces": [
+        "way/502718740"
       ]
     }
   ]
