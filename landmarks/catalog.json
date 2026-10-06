@@ -482,6 +482,13 @@
       "license": "CC0-1.0",
       "author": "Barrelman",
       "source": "scripts/landmarks/music-factory-mill.ts"
+    },
+    {
+      "id": "fillmore-charlotte",
+      "file": "models/fillmore-charlotte.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/fillmore-charlotte.ts"
     }
   ],
   "landmarks": [
@@ -1845,6 +1852,19 @@
       "replaces": [
         "way/957549179",
         "way/1202433658"
+      ]
+    },
+    {
+      "id": "fillmore-charlotte",
+      "name": "The Fillmore Charlotte",
+      "model": "fillmore-charlotte",
+      "lng": -80.8455509,
+      "lat": 35.2397597,
+      "bearing": 0,
+      "elevation": 0,
+      "minzoom": 15,
+      "replaces": [
+        "way/414800516"
       ]
     }
   ]
