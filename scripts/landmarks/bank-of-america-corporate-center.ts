@@ -1,337 +1,304 @@
 /**
- * Bank of America Corporate Center, Charlotte — original procedural geometry, CC0-1.0.
- * bun scripts/landmarks/bank-of-america-corporate-center.ts
+ * Bank of America Corporate Center (1992, Cesar Pelli), Charlotte —
+ * original procedural geometry, CC0-1.0.
+ * bun scripts/landmarks/bank-of-america-corporate-center.ts [out.glb]
  *
- * Map frame here: x = across the tower, y = along bearing 48.8°, z = metres up.
- * Anchor -80.8422257, 35.2273121 (the OSM outline's centroid); bearing 48.8°,
- * the outline's edges, which follow Uptown's rotated grid.
+ * Map frame: x east, y north, z up, metres; origin at the anchor on the
+ * ground. Placed at bearing 48.8°, so the tower's faces, which sit square to
+ * Uptown's street grid, are square to this frame.
  *
- * The shape is a rounded bullet. A podium at the OSM outline (0–42 m: a
- * low darker rose base, tower granite above, a cornice at the top) carries
- * a near-straight shaft. Every face has a broad central slab standing proud
- * of recessed, glazed corners. Above 155 m the faces curve in through six
- * shallow steps, the corners a step ahead of the slabs, to a blunt top at
- * 218 m; each step's lip carries a comb of short silver fins. On the top,
- * up to about 255 m, a broad silver crown: three stepped pale cores ringed
- * by fins in shallow steps, ragged along the top, flat-topped in the middle.
+ * Plan: a square core with a broad, slightly bowed slab standing proud of the
+ * middle of each face. The corners between the slabs are re-entrant and
+ * glazed. Going up, the core corners step in (161, 177 m) and the slabs step
+ * back (177, 208, 224 m) without narrowing, so the plan becomes a stepped
+ * cross; a silver-finned square band (224–235 m) carries a stepped crown of
+ * silver rods in three rings, ending at 264 m.
  *
- * The granite is a lattice of recessed window panels: broad glazed bays
- * between narrow piers, crossed by a spandrel every few floors, so the skin
- * reads as punched windows rather than stripes.
+ * Sources: heights are OSM's building:parts (exact). Plan dimensions are
+ * measured from Google's photorealistic 3D renders (top and elevation views),
+ * which put the slabs at ±24.6 m and 25 m wide. OSM's tier outlines trace the
+ * core corners, not the slabs, so they are used for the core steps only. The
+ * crown's ring radii are from the elevation silhouettes.
  */
-import { Part, writeGlb, type V3 } from './mesh'
+import { Part, encodePng, writeGlb, type V3 } from './mesh'
 
 type XY = [number, number]
-type Rim = { points: XY[]; normals: V3[] }
-const granite = new Part(), base = new Part(), glass = new Part()
-const ledge = new Part(), core = new Part(), silver = new Part()
-const BEVEL = .45
-const RECESS = .55
-const unit = (v: V3): V3 => { const l = Math.hypot(...v); return v.map(n => n / l) as V3 }
-const add = (a: V3, b: V3): V3 => [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
-const up: V3 = [0, 0, 1]
-const at = (ring: XY[], z: number): V3[] => ring.map(([x, y]) => [x, y, z])
 
-function quad(p: Part, a: V3, b: V3, c: V3, d: V3, na?: V3, nb?: V3, nc = nb, nd = na) {
-  if (!na) { p.quad(a, b, c, d); return }
-  p.tri(a, b, c, undefined, undefined, undefined, [na, nb!, nc!])
-  p.tri(a, c, d, undefined, undefined, undefined, [na, nc!, nd!])
+const granite = new Part(), base = new Part(), glass = new Part()
+const silver = new Part(), steel = new Part(), terrace = new Part(), notchGlass = new Part()
+
+// ---------- helpers ----------
+
+const norm2 = (v: XY): XY => { const l = Math.hypot(v[0], v[1]) || 1; return [v[0] / l, v[1] / l] }
+const add2 = (a: XY, b: XY, k = 1): XY => [a[0] + b[0] * k, a[1] + b[1] * k]
+const at = (p: XY, z: number): V3 => [p[0], p[1], z]
+const rot = (p: XY, s: number): XY => {
+  let [x, y] = p
+  for (let k = 0; k < s; k++) [x, y] = [-y, x]
+  return [x, y]
+}
+
+/** A planar convex polygon, wound to face `hint`. */
+function poly(part: Part, pts: V3[], hint: V3) {
+  const a = pts[0], b = pts[1], c = pts[2]
+  const n = [
+    (b[1] - a[1]) * (c[2] - a[2]) - (b[2] - a[2]) * (c[1] - a[1]),
+    (b[2] - a[2]) * (c[0] - a[0]) - (b[0] - a[0]) * (c[2] - a[2]),
+    (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]),
+  ]
+  const p = n[0] * hint[0] + n[1] * hint[1] + n[2] * hint[2] < 0 ? [...pts].reverse() : pts
+  for (let i = 1; i < p.length - 1; i++) part.tri(p[0], p[i], p[i + 1])
+}
+
+/** Outward normal of a counter-clockwise edge. */
+const outward = (a: XY, b: XY): XY => norm2([b[1] - a[1], -(b[0] - a[0])])
+
+/** A plain wall over a ring edge. */
+function wall(part: Part, a: XY, b: XY, z0: number, z1: number) {
+  part.quad(at(a, z0), at(b, z0), at(b, z1), at(a, z1))
 }
 
 /**
- * One tier's plan, four-fold symmetric: a central slab (|t| < c) at
- * half-width `slab`, flanks at `flank`, and a square re-entrant notch `n`
- * at each corner, which is glazed.
+ * A window band: the edge's wall with a full-height opening recessed `r`,
+ * leaving `sill` and `head` of solid wall below and above.
  */
-function plan(slab: number, flank: number, c: number, n: number): XY[] {
-  const a = flank
-  const face: XY[] = [[a, -(a - n)]]
-  if (slab - flank > .05) face.push([a, -c], [slab, -c], [slab, c], [a, c])
-  face.push([a, a - n], [a - n, a - n])
-  const ring: XY[] = []
-  for (let k = 0; k < 4; k++) for (const [x, y] of face) {
-    const r = (k * Math.PI) / 2, cs = Math.round(Math.cos(r)), sn = Math.round(Math.sin(r))
-    ring.push([x * cs - y * sn, x * sn + y * cs])
-  }
-  return ring
+function band(a: XY, b: XY, z0: number, z1: number, sill: number, head: number, headPart = granite, r = .6) {
+  const n = outward(a, b), ai = add2(a, n, -r), bi = add2(b, n, -r)
+  const lo = z0 + sill, hi = z1 - head
+  if (sill > 0) wall(granite, a, b, z0, lo)
+  if (head > 0) wall(headPart, a, b, hi, z1)
+  wall(glass, ai, bi, lo, hi)
+  const t = norm2([b[0] - a[0], b[1] - a[1]])
+  poly(granite, [at(a, lo), at(ai, lo), at(ai, hi), at(a, hi)], [t[0], t[1], 0])
+  poly(granite, [at(b, lo), at(bi, lo), at(bi, hi), at(b, hi)], [-t[0], -t[1], 0])
+  if (sill > 0) poly(granite, [at(a, lo), at(b, lo), at(bi, lo), at(ai, lo)], [0, 0, 1])
+  if (head > 0) poly(granite, [at(a, hi), at(b, hi), at(bi, hi), at(ai, hi)], [0, 0, -1])
 }
 
-/** Round the exposed convex corners of a plan, with analytic smooth normals. */
-function soften(ring: XY[], radius = BEVEL): Rim {
-  const points: XY[] = [], normals: V3[] = []
+/** A star-shaped ring capped by a fan from the origin. */
+function cap(part: Part, ring: XY[], z: number) {
   for (let i = 0; i < ring.length; i++) {
-    const a = ring[(i + ring.length - 1) % ring.length], b = ring[i], c = ring[(i + 1) % ring.length]
-    const l0 = Math.hypot(b[0] - a[0], b[1] - a[1]), l1 = Math.hypot(c[0] - b[0], c[1] - b[1])
-    const u: XY = [(b[0] - a[0]) / l0, (b[1] - a[1]) / l0], v: XY = [(c[0] - b[0]) / l1, (c[1] - b[1]) / l1]
-    const turn = u[0] * v[1] - u[1] * v[0]
-    const r = Math.min(radius, l0 * .3, l1 * .3)
-    if (turn < -1e-5) { points.push(b); normals.push(unit([u[1] + v[1], -u[0] - v[0], 0])); continue }
-    if (Math.abs(turn) < 1e-5) { points.push(b); normals.push([u[1], -u[0], 0]); continue }
-    points.push([b[0] - u[0] * r, b[1] - u[1] * r], [b[0] + v[0] * r, b[1] + v[1] * r])
-    normals.push([u[1], -u[0], 0], [v[1], -v[0], 0])
+    const a = ring[i], b = ring[(i + 1) % ring.length]
+    part.tri([0, 0, z], at(a, z), at(b, z))
   }
-  return { points, normals }
 }
 
-/** Offset a ring inward; convex and concave corners follow the bisector. */
-function inset(ring: XY[], distance: number): XY[] {
-  return ring.map((b, i) => {
-    const a = ring[(i + ring.length - 1) % ring.length], c = ring[(i + 1) % ring.length]
-    const u = unit([b[1] - a[1], a[0] - b[0], 0]), v = unit([c[1] - b[1], b[0] - c[0], 0])
-    const d = 1 + u[0] * v[0] + u[1] * v[1]
-    return [b[0] - (u[0] + v[0]) * distance / d, b[1] - (u[1] + v[1]) * distance / d]
+/**
+ * A crown rod: a slim fin of triangular section standing on the wall at `p`,
+ * facing `n`, from `z0` to `z1` and then a short point.
+ */
+function fin(part: Part, p: XY, n: XY, z0: number, z1: number, tip: number, w = .6, d = 1.1) {
+  const t: XY = [-n[1], n[0]]
+  const b1 = add2(add2(p, t, -w / 2), n, -.2), b2 = add2(add2(p, t, w / 2), n, -.2), o = add2(p, n, d)
+  const apex: V3 = [p[0] + n[0] * d * .3, p[1] + n[1] * d * .3, z1 + tip]
+  for (const [a, b] of [[b1, o], [o, b2]] as [XY, XY][]) {
+    const m = outward(a, b)
+    poly(part, [at(a, z0), at(b, z0), at(b, z1), at(a, z1)], [m[0], m[1], 0])
+    poly(part, [at(a, z1), at(b, z1), apex], [m[0], m[1], .5])
+  }
+  poly(part, [at(b1, z1), at(b2, z1), apex], [-n[0], -n[1], .5])
+}
+
+// ---------- the tower ----------
+
+const W = 12.6      // slab half-width (25 m slabs on a 49 m face)
+const BOW = .8      // how far a slab's middle stands proud of its ends
+const CH = .6       // chamfer on every convex vertical edge
+const SLAB_SEGS = 6  // facets across a bowed slab face
+
+/**
+ * The facade is a painted window grid, not geometry: one texture tile is one
+ * window module, a bay wide and a floor tall, with a dark window on granite.
+ * The renderer mipmaps it, so at map distance the grid averages to an even,
+ * light texture instead of shimmering, as a fine geometric grid would.
+ */
+const BAY = 1.5, FLOOR = 3.9
+const GRANITE: [number, number, number] = [0xc8, 0xc0, 0xb7]
+const WINDOW: [number, number, number] = [0x5d, 0x6b, 0x7c]
+const WINDOW_GRID = (() => {
+  const w = 32, h = 32, data = new Uint8Array(w * h * 4)
+  // window ≈ 45% of the bay's width and 55% of the floor's height
+  const x0 = Math.round(w * .275), x1 = Math.round(w * .725), y0 = Math.round(h * .2), y1 = Math.round(h * .75)
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++)
+    data.set([...(x >= x0 && x < x1 && y >= y0 && y < y1 ? WINDOW : GRANITE), 255], (y * w + x) * 4)
+  return encodePng(w, h, data)
+})()
+const facade = new Part()
+
+/**
+ * A run of wall edges that make one face, painted with the window grid. The
+ * module is stretched so a whole number of bays fits the face edge to edge,
+ * and v counts floors from the ground, so floors line up across every face.
+ */
+function paintedFace(pts: XY[], z0: number, z1: number) {
+  const lens = pts.slice(1).map((p, i) => Math.hypot(p[0] - pts[i][0], p[1] - pts[i][1]))
+  const total = lens.reduce((s, l) => s + l, 0)
+  const bay = total / Math.max(1, Math.round(total / BAY))
+  let u = 0
+  lens.forEach((l, i) => {
+    const a = pts[i], b = pts[i + 1], u1 = u + l / bay
+    facade.quad(at(a, z0), at(b, z0), at(b, z1), at(a, z1), [[u, z0 / FLOOR], [u1, z0 / FLOOR], [u1, z1 / FLOOR], [u, z1 / FLOOR]])
+    u = u1
   })
 }
 
-/** A fan cap from the centre; every plan here is star-shaped about it. */
-function cap(p: Part, ring: XY[], z: number) {
-  const centre: V3 = [0, 0, z]
-  const pts = at(ring, z)
-  for (let i = 0; i < ring.length; i++) p.tri(centre, pts[i], pts[(i + 1) % ring.length])
-}
-
-/** A recessed window panel with bevelled stone reveals. */
-function opening(stone: Part, v: (s: number, z: number, d?: number) => V3, normal: V3, ux: number, uy: number, s0: number, s1: number, z0: number, z1: number) {
-  const b = Math.min(.35, (s1 - s0) * .15, (z1 - z0) * .12)
-  const outer: XY[] = [[s0, z0], [s1, z0], [s1, z1], [s0, z1]]
-  const inner: XY[] = [[s0 + b, z0 + b], [s1 - b, z0 + b], [s1 - b, z1 - b], [s0 + b, z1 - b]]
-  const o = outer.map(([s, z]) => v(s, z)), i = inner.map(([s, z]) => v(s, z, -RECESS))
-  for (let k = 0; k < 4; k++) {
-    const j = (k + 1) % 4
-    const ds = outer[j][0] - outer[k][0], dz = outer[j][1] - outer[k][1], e = Math.hypot(ds, dz)
-    const inward: V3 = [-ux * dz / e, -uy * dz / e, ds / e]
-    const n = unit(add(normal, inward))
-    quad(stone, o[k], o[j], i[j], i[k], normal, normal, n, n)
-  }
-  glass.quad(i[0], i[1], i[2], i[3])
-  return b
-}
-
 /**
- * One wall of a tier. Long walls get a lattice of window panels: `cols`
- * broad bays between narrow piers, and a spandrel every `rowHeight`. The
- * returns of the corner notches are glazed full height; the short steps
- * between slab and flank stay plain stone.
+ * Tier plans. `c` is the core corner and `n` the glazed notch cut out of it.
+ * The notches are kept narrow so they read as a seam; `c` is set so that
+ * 2c − n, the corner's reach in the diagonal views, matches the renders.
  */
-function wall(rim: Rim, i: number, bottom: number, top: number, stone: Part, bay: number, rowHeight: number, solid = .4) {
-  const a = rim.points[i], b = rim.points[(i + 1) % rim.points.length]
-  const length = Math.hypot(b[0] - a[0], b[1] - a[1]), ux = (b[0] - a[0]) / length, uy = (b[1] - a[1]) / length
-  const normal: V3 = [uy, -ux, 0]
-  const v = (s: number, z: number, d = 0): V3 => [a[0] + ux * s + uy * d, a[1] + uy * s - ux * d, z]
-  const flat = (p: Part, s0: number, s1: number, z0: number, z1: number) => p.quad(v(s0, z0), v(s1, z0), v(s1, z1), v(s0, z1))
-  const diagonal = (p: XY) => Math.abs(Math.abs(p[0]) - Math.abs(p[1])) < .01
-  if (length > 1 && (diagonal(a) || diagonal(b))) { flat(glass, 0, length, bottom, top); return }
-  const cols = Math.round(length / bay), rows = Math.max(1, Math.round((top - bottom - 1.2) / rowHeight))
-  if (length < 3 || cols < 1 || top - bottom < 4) {
-    quad(stone, v(0, bottom), v(length, bottom), v(length, top), v(0, top), rim.normals[i], rim.normals[(i + 1) % rim.points.length])
-    return
-  }
-  const pitch = length / cols, pier = pitch * solid
-  const lo = bottom + .6, hi = top - .6, rh = (hi - lo) / rows, spandrel = rh * solid
-  flat(stone, 0, length, bottom, lo)
-  flat(stone, 0, length, hi, top)
-  let last = 0
-  for (let c = 0; c < cols; c++) {
-    const s0 = c * pitch + pier / 2, s1 = (c + 1) * pitch - pier / 2
-    flat(stone, last, s0, lo, hi)
-    // One recessed bay per column, crossed by stone spandrels set just
-    // behind the pier face: reads as stacked window panels for a third of
-    // the triangles of separate openings.
-    const b = opening(stone, v, normal, ux, uy, s0, s1, lo, hi)
-    for (let r = 1; r < rows; r++) {
-      const z = lo + r * rh, z0 = z - spandrel / 2, z1 = z + spandrel / 2, d = -.2
-      stone.quad(v(s0 + b, z0, d), v(s1 - b, z0, d), v(s1 - b, z1, d), v(s0 + b, z1, d))
-      stone.quad(v(s0 + b, z1, d), v(s1 - b, z1, d), v(s1 - b, z1, -RECESS), v(s0 + b, z1, -RECESS))
-    }
-    last = s1
-  }
-  flat(stone, last, length, lo, hi)
-}
-
-/** A rounded coping round a tier's top, and the ledge inside it. */
-function coping(rim: Rim, z: number, surface: Part) {
-  const inner = inset(rim.points, .45)
-  const a = at(rim.points, z - .45), b = at(inner, z)
-  for (let i = 0; i < a.length; i++) {
-    const j = (i + 1) % a.length, ni = rim.normals[i], nj = rim.normals[j]
-    quad(granite, a[i], a[j], b[j], b[i], ni, nj, up, up)
-  }
-  cap(surface, inner, z)
-}
-
-function tier(ring: XY[], bottom: number, top: number, stone: Part, bay: number, rowHeight: number, surface = ledge, solid = .4) {
-  const rim = soften(ring)
-  for (let i = 0; i < rim.points.length; i++) wall(rim, i, bottom, top - .45, stone, bay, rowHeight, solid)
-  coping(rim, top, surface)
-}
-
-// ---- Podium: the OSM outline, 48.4 × 49 m --------------------------------
-
-// The walls stand 0.6 m inside the outline, so a plain granite cornice band
-// can run round the top at the outline itself. Only the bottom 14 m are the
-// darker rose granite; above it the podium wears the tower's own granite
-// and windows, so the tower reads as coming down to a low base.
-const podium = (inner: number): XY[] => [[-24.2 + inner, -24.5 + inner], [24.2 - inner, -24.5 + inner], [24.2 - inner, 24.5 - inner], [-24.2 + inner, 24.5 - inner]]
-{
-  const rim = soften(podium(.6))
-  for (let i = 0; i < rim.points.length; i++) {
-    wall(rim, i, 0, 14, base, 8, 14, .45)
-    wall(rim, i, 14, 37.5, granite, 5.4, 12)
-  }
-  const outer = soften(podium(0))
-  for (let i = 0; i < outer.points.length; i++) wall(outer, i, 37.5, 41.55, granite, 100, 100)
-  // The cornice's underside, between the wall and the band's face.
-  const o = at(outer.points, 37.5), w = at(rim.points, 37.5)
-  for (let i = 0; i < o.length; i++) {
-    const j = (i + 1) % o.length
-    granite.quad(o[j], o[i], w[i], w[j])
-  }
-  coping(outer, 42, ledge)
-}
-
-// ---- Tower ----------------------------------------------------------------
-
-/**
- * The slab half-width up the tower: straight to 155 m, then curving in ever
- * faster along a parabola to a blunt top 13 m across at 218 m, where the
- * silver crown takes over.
- */
-const TOP = 218
-const slabAt = (z: number) => {
-  const u = Math.min(1, Math.max(0, (z - 155) / (TOP - 155)))
-  return 21 - 8 * u * u
-}
-
-// Tier boundaries: one tall shaft, then shallow, closely spaced steps.
-const levels = [42, 155, 168, 180, 191, 201, 210, TOP]
-const rings: XY[][] = []
-for (let k = 0; k < levels.length - 1; k++) {
-  const z1 = levels[k + 1]
-  const slab = k === 0 ? 21 : slabAt(z1)
-  // The corners step back one tier ahead of the slabs: the flank of this
-  // tier is set behind the slab of the next.
-  const next = slabAt(levels[Math.min(k + 2, levels.length - 1)])
-  const flank = Math.min(slab - 1.4, k === 0 ? 19.4 : next - .8)
-  const c = slab * .46, n = Math.max(1.3, Math.min(3, flank * .14))
-  rings.push(plan(slab, flank, c, n))
-}
-rings.forEach((ring, k) => tier(ring, levels[k], levels[k + 1], granite, k === 0 ? 5.4 : 10, k === 0 ? 15 : 11))
-
-// ---- Silver: fins on the setback lips and the crown -----------------------
-
-/** Points every `spacing` metres round a closed path, evenly spread. */
-function along(path: XY[], spacing: number): XY[] {
-  const lengths = path.map((p, i) => { const q = path[(i + 1) % path.length]; return Math.hypot(q[0] - p[0], q[1] - p[1]) })
-  const total = lengths.reduce((s, l) => s + l, 0), count = Math.max(4, Math.round(total / spacing / 4) * 4)
-  const out: XY[] = []
-  for (let k = 0; k < count; k++) {
-    let d = (k + .5) * total / count
-    for (let i = 0; i < path.length; i++) {
-      if (d > lengths[i]) { d -= lengths[i]; continue }
-      const p = path[i], q = path[(i + 1) % path.length]
-      out.push([p[0] + (q[0] - p[0]) * d / lengths[i], p[1] + (q[1] - p[1]) * d / lengths[i]])
-      break
-    }
-  }
-  return out
-}
-function inside([x, y]: XY, ring: XY[]) {
-  let hit = false
-  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
-    const [xi, yi] = ring[i], [xj, yj] = ring[j]
-    if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) hit = !hit
-  }
-  return hit
-}
-
-/**
- * A square silver fin. Only its sides: a 1 m top is invisible from the
- * map, and leaving it off pays for the setback combs.
- */
-function fin(x: number, y: number, z0: number, z1: number, w: number) {
-  const r = w / 2
-  const sq = (z: number): V3[] => [[x - r, y - r, z], [x + r, y - r, z], [x + r, y + r, z], [x - r, y + r, z]]
-  silver.loft([sq(z0), sq(z1)])
-}
-
-/**
- * A flat fin blade facing out from the face it stands on, both sides
- * drawn: a comb reads the same, at a third of a solid fin's triangles.
- */
-function blade([x, y]: XY, z0: number, z1: number, w: number) {
-  const r = w / 2, alongY = Math.abs(x) > Math.abs(y)
-  const a: XY = alongY ? [x, y - r] : [x - r, y], b: XY = alongY ? [x, y + r] : [x + r, y]
-  const q: V3[] = [[a[0], a[1], z0], [b[0], b[1], z0], [b[0], b[1], z1], [a[0], a[1], z1]]
-  silver.quad(q[0], q[1], q[2], q[3])
-  silver.quad(q[1], q[0], q[3], q[2])
-}
-
-// Setback lips: a comb of short fins on every step from the shaft's top
-// up, set inside the lip and only where the terrace is free of the tier
-// above, so none stands in a wall or past an edge.
-for (let k = 0; k < rings.length - 1; k++) {
-  const above = rings[k + 1]
-  for (const p of along(inset(rings[k], .75), 2.6)) {
-    const corners: XY[] = [[p[0] - .5, p[1] - .5], [p[0] + .5, p[1] - .5], [p[0] + .5, p[1] + .5], [p[0] - .5, p[1] + .5]]
-    if (corners.some(q => inside(q, above))) continue
-    blade(p, levels[k + 1], levels[k + 1] + 5, 1)
-  }
-}
-
-/** A plain pale core drum, so the crown's fins read as one silver mass. */
-function drum(ring: XY[], z0: number, z1: number) {
-  const rim = soften(ring, .3)
-  const a = at(rim.points, z0), b = at(rim.points, z1)
-  for (let i = 0; i < a.length; i++) {
-    const j = (i + 1) % a.length
-    quad(core, a[i], a[j], b[j], b[i], rim.normals[i], rim.normals[j])
-  }
-  cap(core, rim.points, z1)
-}
-const octagon = (h: number, cut: number): XY[] =>
-  [[h - cut, -h], [h, -(h - cut)], [h, h - cut], [h - cut, h], [-(h - cut), h], [-h, h - cut], [-h, -(h - cut)], [-(h - cut), -h]]
-
-// The crown, 218–256 m: three stepped pale cores, each ringed by fins that
-// rise past its top in shallow steps, with a wide flat-topped cluster in
-// the middle, so it reads as a broad, ragged silver crown rather than a
-// cone. The outer ring nearly fills the top tier; each ring stands on the
-// step below it, inside its edge.
-const cores: { ring: XY[]; z0: number; z1: number }[] = [
-  { ring: inset(rings.at(-1)!, 1.8), z0: TOP, z1: 232 },
-  { ring: octagon(9.4, 2.7), z0: 232, z1: 241 },
-  { ring: octagon(7.4, 2.2), z0: 241, z1: 248 },
+type Tier = { z0: number; z1: number; P: number; c: number; n: number }
+const tiers: Tier[] = [
+  { z0: 42, z1: 161, P: 24.6, c: 20.1, n: 2.2 },
+  { z0: 161, z1: 177, P: 24.6, c: 18.6, n: 1.8 },
+  { z0: 177, z1: 208, P: 22.3, c: 17.45, n: 1.5 },
+  { z0: 208, z1: 224, P: 19.5, c: 17.1, n: 1.2 },
 ]
-// A fixed pseudo-random sequence (Park–Miller), so the ragged top edge is
-// the same on every run.
-let seed = 48271
-const jitter = () => { seed = (seed * 16807) % 2147483647; return (seed / 2147483647 * 2 - 1) * 1.5 }
-const stands = [rings.at(-1)!, ...cores.map(c => c.ring)]
-const finTops = [236, 244, 250, 254]
-stands.forEach((ring, k) => {
-  const z0 = k === 0 ? TOP : cores[k - 1].z1
-  for (const [x, y] of along(inset(ring, .8), 2.8)) fin(x, y, z0, finTops[k] + jitter(), 1)
-})
-for (const c of cores) drum(c.ring, c.z0, c.z1)
-for (const x of [-3, 0, 3]) for (const y of [-3, 0, 3]) fin(x, y, 248, 254 + jitter(), 1)
 
-// sRGB colours from daylight photos: p4 and its crop (q1) for the granite
-// and the crown, sampled by eye from the sunlit face.
+type Kind = 'slab' | 'trim' | 'return' | 'core' | 'notch'
+type Run = { pts: XY[]; kind: Kind }
+
+/** One tier's ring as runs of edges (one run per face), counter-clockwise. */
+function outline(P: number, c: number, n: number): Run[] {
+  const yf = (x: number) => -(P - BOW * (x / W) ** 2)
+  const side: Run[] = []
+  const face: XY[] = []
+  for (let k = 0; k <= SLAB_SEGS; k++) {
+    const x = -(W - CH) + 2 * (W - CH) * k / SLAB_SEGS
+    face.push([x, yf(x)])
+  }
+  side.push({ pts: face, kind: 'slab' })
+  const end: XY = [W, yf(W) + CH]
+  side.push({ pts: [face[SLAB_SEGS], end], kind: 'trim' })
+  if (c > W + 1) {
+    side.push({ pts: [end, [W, -c]], kind: 'return' })
+    side.push({ pts: [[W, -c], [c - n, -c]], kind: 'core' })
+    side.push({ pts: [[c - n, -c], [c - n, -c + n], [c, -c + n]], kind: 'notch' })
+    side.push({ pts: [[c, -c + n], [c, -W]], kind: 'core' })
+    side.push({ pts: [[c, -W], [P - BOW - CH, -W]], kind: 'return' })
+  } else side.push({ pts: [end, [W, -W], [P - BOW - CH, -W]], kind: 'return' })
+  // the next slab's chamfer, ending at that slab's first point
+  side.push({ pts: [[P - BOW - CH, -W], rot(face[0], 1)], kind: 'trim' })
+  const runs: Run[] = []
+  for (let s = 0; s < 4; s++) for (const r of side) runs.push({ kind: r.kind, pts: r.pts.map((p) => rot(p, s)) })
+  return runs
+}
+
+function tierWalls(t: Tier, next: Tier | undefined, silverHead: boolean) {
+  const runs = outline(t.P, t.c, t.n)
+  for (const r of runs) {
+    // a slab that carries on into the next tier has no parapet here
+    const head = silverHead && !(r.kind === 'slab' && next?.P === t.P) ? 2.5 : 0
+    const top = t.z1 - head
+    if (r.kind === 'notch') r.pts.slice(1).forEach((b, i) => wall(notchGlass, r.pts[i], b, t.z0, t.z1))
+    else if (r.kind === 'trim') wall(granite, r.pts[0], r.pts[1], t.z0, top)
+    else paintedFace(r.pts, t.z0, top)
+    if (head) r.pts.slice(1).forEach((b, i) => wall(silver, r.pts[i], b, top, t.z1))
+  }
+  const ring = runs.flatMap((r) => r.pts.slice(0, -1))
+  cap(terrace, ring, t.z1)
+}
+
+tiers.forEach((t, i) => tierWalls(t, tiers[i + 1], i >= 1))
+
+// ---------- base, 0–42 m: a full square, the slabs' own width ----------
+// A 12 m plinth of the darker stone with three tall glazed openings a face,
+// then the window grid up to 42 m.
+{
+  const H = 24.4, Z1 = 42, PLINTH = 12, DOOR = 2.2
+  const ring: XY[] = []
+  for (let s = 0; s < 4; s++) {
+    const xs = [-(H - CH), -14 - DOOR, -14 + DOOR, -DOOR, DOOR, 14 - DOOR, 14 + DOOR, H - CH]
+    const pts = xs.map((x) => rot([x, -H], s))
+    pts.slice(1).forEach((b, i) => {
+      if (i % 2) band(pts[i], b, 0, PLINTH, 0, 3, base, .8)
+      else wall(base, pts[i], b, 0, PLINTH)
+    })
+    paintedFace(pts, PLINTH, Z1)
+    const corner: [XY, XY] = [rot([H - CH, -H], s), rot([H, -H + CH], s)]
+    wall(base, corner[0], corner[1], 0, PLINTH)
+    wall(granite, corner[0], corner[1], PLINTH, Z1)
+    ring.push(...pts)
+  }
+  cap(terrace, ring, Z1)
+}
+
+// ---------- the silver band, 224–235 m ----------
+// A rounded square (a superellipse, |x|³ + |y|³ = S³): the renders show it
+// ±17.3 m on the axes but only ≈19 m out on the diagonals, a curved band
+// rather than a square with corners.
+const S = 17.3, BAND_SEGS = 32
+const BAND0 = 224, GLASS1 = 228.5, BAND1 = 235
+const bandRing: XY[] = [], bandNormals: XY[] = []
+for (let i = 0; i < BAND_SEGS; i++) {
+  const a = (i + .5) / BAND_SEGS * 2 * Math.PI, c = Math.cos(a), sn = Math.sin(a)
+  const k = S / Math.cbrt(Math.abs(c) ** 3 + Math.abs(sn) ** 3)
+  const p: XY = [k * c, k * sn]
+  bandRing.push(p)
+  bandNormals.push(norm2([Math.sign(p[0]) * p[0] ** 2, Math.sign(p[1]) * p[1] ** 2]))
+}
+for (let i = 0; i < BAND_SEGS; i++) {
+  const a = bandRing[i], b = bandRing[(i + 1) % BAND_SEGS]
+  wall(glass, a, b, BAND0, GLASS1)
+  wall(steel, a, b, GLASS1, BAND1)
+}
+cap(steel, bandRing, BAND1)
+// rods at every vertex and every edge's middle; the four on the diagonals
+// stand a little taller
+bandRing.forEach((p, i) => {
+  const q = bandRing[(i + 1) % BAND_SEGS]
+  const m = norm2([p[0] + q[0], p[1] + q[1]]), k = S / Math.cbrt(Math.abs(m[0]) ** 3 + Math.abs(m[1]) ** 3)
+  const mp: XY = [m[0] * k, m[1] * k]
+  const diagonal = i % (BAND_SEGS / 4) === BAND_SEGS / 8 - 1 || i % (BAND_SEGS / 4) === BAND_SEGS / 8
+  fin(silver, p, bandNormals[i], GLASS1 - 1, BAND1 - .5 + (diagonal ? 1.5 : 0), 1.2)
+  fin(silver, mp, norm2([Math.sign(mp[0]) * mp[0] ** 2, Math.sign(mp[1]) * mp[1] ** 2]), GLASS1 - 1, BAND1 - .5, 1.2)
+})
+
+// ---------- the crown: rings of rods ----------
+function ring(r: number, z0: number, z1: number, rods: number, rodTop: number, segs = 16) {
+  const pts: XY[] = []
+  for (let i = 0; i < segs; i++) {
+    const a = (i + .5) / segs * 2 * Math.PI
+    pts.push([r * Math.cos(a), r * Math.sin(a)])
+  }
+  for (let i = 0; i < segs; i++) wall(steel, pts[i], pts[(i + 1) % segs], z0, z1)
+  cap(steel, pts, z1)
+  for (let i = 0; i < rods; i++) {
+    const a = i / rods * 2 * Math.PI, n: XY = [Math.cos(a), Math.sin(a)]
+    fin(silver, [n[0] * r * .98, n[1] * r * .98], n, z0 + 1, rodTop, 1.4)
+  }
+}
+// Rings of rods. The elevations step 14.4 m → 245, 11.4 m → 253, ≈7.5 m →
+// 256 and a 5.2 m drum → 264; the top view shows another rim at ≈12.5 m.
+const RINGS: [number, number, number, number][] = [
+  // radius, wall top, rod top, rods
+  [14.4, 241.5, 243.6, 68],
+  [12.7, 245, 246.8, 60],
+  [11.0, 249.5, 251.6, 52],
+  [7.8, 254, 255.2, 36],
+  [5.2, 261.5, 262.6, 32],
+]
+RINGS.forEach(([r, top, rod, n], i) => ring(r, i ? RINGS[i - 1][1] : BAND1, top, n, rod, i > 2 ? 12 : 16))
+
+// ---------- write ----------
 const parts = [
-  { part: granite, material: { name: 'rose-grey-granite', color: 0xc6b5ab } },
-  { part: base, material: { name: 'rose-granite-base', color: 0xb19488 } },
-  { part: glass, material: { name: 'windows', color: 0x66768a, roughness: .6 } },
-  { part: ledge, material: { name: 'stone-ledges', color: 0xab9d94 } },
-  { part: core, material: { name: 'crown-core', color: 0xc9cdd0, roughness: .6 } },
-  { part: silver, material: { name: 'silver-fins', color: 0xe8ebec, roughness: .5 } },
+  { part: facade, material: { name: 'facade-window-grid', color: 0xffffff, texture: { png: WINDOW_GRID } } },
+  { part: granite, material: { name: 'granite', color: 0xc8c0b7 } },
+  { part: base, material: { name: 'granite-base', color: 0xb3a99f } },
+  { part: glass, material: { name: 'glass', color: 0x5d6b7c } },
+  { part: notchGlass, material: { name: 'corner-notch-glass', color: 0x7d8b9a } },
+  { part: silver, material: { name: 'crown-rods', color: 0xdfe3e6, roughness: .5 } },
+  { part: steel, material: { name: 'crown-body', color: 0xa9b8c6, roughness: .6 } },
+  { part: terrace, material: { name: 'ledges', color: 0xd4cdc4 } },
 ]
 const triangles = parts.reduce((n, { part }) => n + part.triangles, 0)
 if (triangles > 6500) throw new Error(`Triangle budget exceeded: ${triangles}`)
 const glb = writeGlb('Bank of America Corporate Center', parts, {
-  license: 'CC0-1.0', bearing: 48.8, elevation: 0, anchor: [35.2273121, -80.8422257], height: 255.5,
-  frame: 'Y up, -Z north, +X east, metres; origin at the ground anchor',
-  footprint: { x: [-24.2, 24.2], y: [-24.5, 24.5] },
+  license: 'CC0-1.0', bearing: 48.8, elevation: 0, height: 264,
+  frame: 'Y up, -Z north, +X east, metres; origin at the anchor on the ground',
+  replaces: ['way/341587198', 'way/341587200', 'way/341587199', 'way/341587201', 'way/341587202', 'way/341587204', 'way/766639185', 'way/341587207', 'way/341587210', 'way/766639186', 'way/341587214'],
 })
 if (glb.length > 256000) throw new Error(`File budget exceeded: ${glb.length}`)
-const out = new URL('../../landmarks/models/bank-of-america-corporate-center.glb', import.meta.url).pathname
+const out = process.argv[2] ?? new URL('../../landmarks/models/bank-of-america-corporate-center.glb', import.meta.url).pathname
 await Bun.write(out, glb)
 console.log(`${out}: ${triangles} triangles, ${glb.length} bytes (${(glb.length / 1024).toFixed(1)} KiB)`)
