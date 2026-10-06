@@ -398,6 +398,13 @@
       "license": "CC0-1.0",
       "author": "Barrelman",
       "source": "scripts/landmarks/clt-terminal.ts"
+    },
+    {
+      "id": "clt-concourse-a",
+      "file": "models/clt-concourse-a.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/clt-concourse-a.ts"
     }
   ],
   "landmarks": [
@@ -1563,6 +1570,19 @@
         "way/1414165678",
         "way/1347416658",
         "way/1347417381"
+      ]
+    },
+    {
+      "id": "clt-concourse-a",
+      "name": "Charlotte Douglas International Airport Concourse A",
+      "model": "clt-concourse-a",
+      "lng": -80.9471865,
+      "lat": 35.2226718,
+      "bearing": 355.8,
+      "elevation": 0,
+      "minzoom": 14,
+      "replaces": [
+        "way/1414163869"
       ]
     }
   ]
