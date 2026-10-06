@@ -10,6 +10,28 @@ const Y_RE = /^\d{1,10}(\.[A-Za-z0-9]+)?$/
 const CORS = 'access-control-allow-origin'
 
 /**
+ * Gzipped models by served name. Names are content-addressed, so an entry is
+ * never stale; the cap only bounds memory. An imported detail model shrinks
+ * from about 1.3 MB to 0.4 MB, which is most of a phone's wait.
+ */
+const gzipped = new Map<string, Uint8Array>()
+const GZIP_CACHE_BYTES = 64 * 1024 * 1024
+let gzippedBytes = 0
+
+async function gzipModel(name: string, path: string): Promise<Uint8Array> {
+  const hit = gzipped.get(name)
+  if (hit) return hit
+  const bytes = Bun.gzipSync(new Uint8Array(await Bun.file(path).arrayBuffer()), { level: 9 })
+  if (gzippedBytes + bytes.length > GZIP_CACHE_BYTES) {
+    gzipped.clear()
+    gzippedBytes = 0
+  }
+  gzipped.set(name, bytes)
+  gzippedBytes += bytes.length
+  return bytes
+}
+
+/**
  * Placement tiles are a few hundred bytes and change whenever the catalog
  * does — a new model is a new file name inside them — so they are kept
  * briefly, unlike the immutable models they point at. No
@@ -74,7 +96,11 @@ export function createLandmarkRoutes(
           summary: '3D landmark placements',
           description:
             'Vector tile with one layer, `landmarks`: a point per 3D landmark whose model overhangs the tile. ' +
-            'Properties: `id`, `name`, `model` (a file name under /tiles/landmarks/models), `bearing` (degrees ' +
+            'Landmarks come from Barrelman\'s own catalog and the Open Landmarks dataset; where both model one ' +
+            'building only the higher-priority source\'s is sent. Properties: `id`, `name`, `source` ' +
+            '(`catalog` or `openlandmarks`), `model` (a file name under /tiles/landmarks/models), `detail` and ' +
+            '`detailzoom` (a finer model to switch to from that zoom, where there is one), `entrances` (JSON ' +
+            '[[x,y,z],…] in model axes: lit entrances to glow at night), `bearing` (degrees ' +
             'clockwise from north), `scale`, `elevation` and `height` (metres), `minzoom`, `wikidata`, ' +
             '`attribution` (a credit to show while the model is drawn, where its licence asks for one), and ' +
             '`replaces` — space-separated OSM refs (`way/5013364`) of the buildings and building parts the ' +
@@ -85,12 +111,23 @@ export function createLandmarkRoutes(
     )
     .get(
       '/models/:file',
-      async ({ params, set }) => {
+      async ({ params, set, request }) => {
         const path = pathFor(params.file)
         const file = path ? Bun.file(path) : null
-        if (!file || !(await file.exists())) {
+        if (!path || !file || !(await file.exists())) {
           set.status = 404
           return { error: 'Model not found' }
+        }
+        if (/\bgzip\b/.test(request.headers.get('accept-encoding') ?? '')) {
+          return new Response((await gzipModel(params.file, path)) as Uint8Array<ArrayBuffer>, {
+            headers: {
+              'content-type': 'model/gltf-binary',
+              'content-encoding': 'gzip',
+              vary: 'accept-encoding',
+              'cache-control': 'public, max-age=31536000, immutable',
+              [CORS]: '*',
+            },
+          })
         }
         // The name carries a content hash, so a URL never changes meaning and
         // can be cached for good. Elysia drops the type Bun.file() would infer
@@ -98,6 +135,7 @@ export function createLandmarkRoutes(
         return new Response(file, {
           headers: {
             'content-type': 'model/gltf-binary',
+            vary: 'accept-encoding',
             'cache-control': 'public, max-age=31536000, immutable',
             [CORS]: '*',
           },
@@ -113,7 +151,9 @@ export function createLandmarkRoutes(
           description:
             'A landmark model as binary glTF. Y up, -Z north, +X east, in metres, with the origin at the ' +
             'landmark\'s anchor on the ground — place it with the tile feature\'s position, `bearing` and ' +
-            '`scale` and nothing else. Names are content-addressed and served as immutable.',
+            '`scale` and nothing else. Names are content-addressed and served as immutable, gzipped when the ' +
+            'client accepts it. Materials named `window*` (glowing where a painted texture\'s alpha is 0), ' +
+            '`glass` and `entrance` follow the Open Landmarks lighting convention.',
         },
       },
     )

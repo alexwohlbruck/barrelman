@@ -694,6 +694,20 @@ export const SCRIPTS: ScriptDef[] = [
     notes: 'Uses DROP VIEW … CASCADE — dependent views are dropped and rebuilt.',
   },
   {
+    id: 'landmarks-import',
+    name: 'Import Open Landmarks',
+    description:
+      'Bring the 3D landmarks layer up to date with the current Open Landmarks release, beside the repo catalog. ' +
+      'Downloads only new models; an unchanged release is one request.',
+    category: 'database',
+    danger: 'safe',
+    longRunning: false,
+    confirm: false,
+    exec: { kind: 'internal', handler: 'landmarks:import-openlandmarks' },
+    source: 'src/services/openlandmarks.service.ts',
+    notes: 'Also runs at startup. OPEN_LANDMARKS_URL=off disables it; LANDMARK_SOURCE_PRIORITY sets which source wins a shared building.',
+  },
+  {
     id: 'detail-views',
     name: 'Rebuild Map Detail Tile Views',
     description:

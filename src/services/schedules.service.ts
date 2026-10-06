@@ -81,6 +81,9 @@ const SEEDS: Array<Pick<ScheduleInput, 'scriptId' | 'cron'> & { params?: Record<
   // REBUILD_BASEMAP off on osm-update so nightly stays quick, and enable this to
   // re-render on a slower cadence instead. Enabling both just renders twice.
   { scriptId: 'osm-basemap', cron: '0 6 * * 0' },
+  // Open Landmarks publishes a batch at most daily; an unchanged release costs
+  // one small request, so hourly keeps the layer fresh for free.
+  { scriptId: 'landmarks-import', cron: '17 * * * *' },
 ]
 
 let schemaReady: Promise<void> | null = null

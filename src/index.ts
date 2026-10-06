@@ -30,6 +30,7 @@ import { ensureAccountsSchema } from './services/accounts.service'
 import { ensureOpsJobsSchema } from './services/ops-job-store'
 import { ensureRegionsSchema } from './services/region-store.service'
 import { ensureLandmarksSchema, syncLandmarkCatalog } from './services/landmarks.service'
+import { importOpenLandmarks } from './services/openlandmarks.service'
 import { initJobHistory } from './services/job-history.service'
 import { ensureSearchEnrichment } from './lib/search-enrichment'
 import { ensureBrandLogos } from './lib/brand-logos'
@@ -72,13 +73,26 @@ await ensureRegionsSchema()
 await ensureAccountsSchema()
 // Script run history, for job runtime estimates and progress bars.
 await initJobHistory()
-// 3D landmark models and placements, synced from landmarks/catalog.json. A
-// broken catalog is logged rather than fatal: it costs the landmarks layer,
-// which is no reason to take search and tiles down with it.
+// 3D landmark models and placements: our catalog from landmarks/catalog.json,
+// then the Open Landmarks release (one request when it hasn't moved). In that
+// order, so conflict resolution sees both. Failures are logged rather than
+// fatal: they cost the landmarks layer, which is no reason to take search and
+// tiles down with it; the scheduled import retries the dataset later.
 await ensureLandmarksSchema()
-void syncLandmarkCatalog()
-  .then(({ models, landmarks }) => console.log(`[landmarks] ${landmarks} placements of ${models} models`))
-  .catch((err) => console.error('[landmarks] catalog sync failed:', err))
+void (async () => {
+  try {
+    const { models, landmarks } = await syncLandmarkCatalog()
+    console.log(`[landmarks] catalog: ${landmarks} placements of ${models} models`)
+  } catch (err) {
+    console.error('[landmarks] catalog sync failed:', err)
+  }
+  try {
+    const r = await importOpenLandmarks({ log: (line) => console.log(`[landmarks] ${line}`) })
+    for (const s of r.skipped) console.warn(`[landmarks] Open Landmarks skipped ${s}`)
+  } catch (err) {
+    console.error('[landmarks] Open Landmarks import failed:', err)
+  }
+})()
 
 // Backfill derived search columns (codes/name_abbrev/parent_context/ts) if a
 // prior import left them empty. Fire-and-forget so it never blocks startup —

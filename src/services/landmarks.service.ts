@@ -24,13 +24,39 @@
  * The catch is that the list has to name every `building:part` as well as the
  * outline — see `landmarks/README.md`.
  *
- * The catalog lives in the repo (`landmarks/catalog.json`) and is synced into
- * the database at startup. The database is what the tile query reads, and is
- * where placements from anywhere other than the catalog would go.
+ * Placements come from more than one source, each owning its own rows (the
+ * `origin` column), and are merged in the database:
+ *
+ *   catalog        our own, in the repo (`landmarks/catalog.json`), synced at
+ *                  startup.
+ *   openlandmarks  the Open Landmarks dataset, imported from its published
+ *                  releases — see `openlandmarks.service.ts`.
+ *
+ * Where two sources model the same building, `resolveLandmarkConflicts` keeps
+ * the one whose source ranks first in LANDMARK_SOURCE_PRIORITY and marks the
+ * other inactive, so the tiles never carry two models of one building. The
+ * losing row stays, so changing the priority or withdrawing the winner brings
+ * it back without a re-import.
  */
 import { join, resolve } from 'path'
 import { connection as sql } from '../db'
 import { envString } from '../config/env'
+
+/** Sources that own landmark rows, by the `origin` value they write. */
+export type LandmarkOrigin = 'catalog' | 'openlandmarks'
+
+/**
+ * Which source wins when two model the same building, first wins. Open
+ * Landmarks leads by default: its models are reviewed for the shared dataset,
+ * and our catalog fills the gaps until its models are contributed there.
+ */
+export function landmarkSourcePriority(): LandmarkOrigin[] {
+  const listed = envString('LANDMARK_SOURCE_PRIORITY', 'openlandmarks,catalog')
+    .split(',').map((s) => s.trim()).filter((s): s is LandmarkOrigin => s === 'catalog' || s === 'openlandmarks')
+  // A source left off the list still ranks, after the listed ones.
+  for (const origin of ['openlandmarks', 'catalog'] as const) if (!listed.includes(origin)) listed.push(origin)
+  return listed
+}
 
 export function resolveLandmarksDir(override?: string): string {
   return resolve(override || envString('LANDMARKS_DIR', './landmarks'))
@@ -177,6 +203,9 @@ export function ensureLandmarksSchema(): Promise<void> {
         updated_at timestamptz NOT NULL DEFAULT now()
       )`
     await sql`ALTER TABLE landmark_models ADD COLUMN IF NOT EXISTS attribution text`
+    // Where the GLB is on disk, so any API process can serve any source's
+    // models without that source being loaded in it.
+    await sql`ALTER TABLE landmark_models ADD COLUMN IF NOT EXISTS path text`
     await sql`
       CREATE TABLE IF NOT EXISTS landmarks (
         fid        serial UNIQUE,
@@ -197,6 +226,24 @@ export function ensureLandmarksSchema(): Promise<void> {
     // `reach` is the plan-view square the model can cover, in web mercator,
     // so the tile query is an index lookup rather than a scan.
     await sql`CREATE INDEX IF NOT EXISTS landmarks_reach_idx ON landmarks USING gist (reach)`
+    // A finer model to switch to from `detail_zoom` up, where the source has one.
+    await sql`ALTER TABLE landmarks ADD COLUMN IF NOT EXISTS detail_model_id text REFERENCES landmark_models(id)`
+    await sql`ALTER TABLE landmarks ADD COLUMN IF NOT EXISTS detail_zoom real`
+    // Points in the model's own axes where a lit entrance glows at night.
+    await sql`ALTER TABLE landmarks ADD COLUMN IF NOT EXISTS entrances jsonb`
+    // The landmark's id in its source, when that differs from ours.
+    await sql`ALTER TABLE landmarks ADD COLUMN IF NOT EXISTS source_id text`
+    await sql`ALTER TABLE landmarks ADD COLUMN IF NOT EXISTS active boolean NOT NULL DEFAULT true`
+    await sql`ALTER TABLE landmarks ADD COLUMN IF NOT EXISTS superseded_by text`
+    // What each imported source last brought in, so an unchanged release is
+    // recognised from its pointer alone.
+    await sql`
+      CREATE TABLE IF NOT EXISTS landmark_sources (
+        source      text PRIMARY KEY,
+        release     text,
+        landmarks   integer NOT NULL DEFAULT 0,
+        imported_at timestamptz NOT NULL DEFAULT now()
+      )`
   })()
   return schemaReady
 }
@@ -219,14 +266,12 @@ export async function syncLandmarkCatalog(dir = resolveLandmarksDir()): Promise<
   const problems = validateCatalog(catalog)
   if (problems.length) throw new Error(`landmarks/catalog.json:\n  ${problems.join('\n  ')}`)
 
-  const files = new Map<string, string>()
   const models: Array<CatalogModel & { sha256: string; bytes: number; height: number; radius: number; path: string }> = []
   for (const m of catalog.models) {
     const path = join(dir, m.file)
     const bytes = new Uint8Array(await Bun.file(path).arrayBuffer())
     const sha256 = new Bun.CryptoHasher('sha256').update(bytes).digest('hex')
     models.push({ ...m, path, sha256, bytes: bytes.length, ...glbBounds(bytes) })
-    files.set(modelFileName(m.id, sha256), path)
   }
 
   await sql.begin(async (rawTx) => {
@@ -235,11 +280,11 @@ export async function syncLandmarkCatalog(dir = resolveLandmarksDir()): Promise<
     const tx = rawTx as unknown as typeof sql
     for (const m of models) {
       await tx`
-        INSERT INTO landmark_models (id, file, sha256, bytes, height_m, radius_m, license, author, source, attribution, origin)
-        VALUES (${m.id}, ${modelFileName(m.id, m.sha256)}, ${m.sha256}, ${m.bytes}, ${m.height}, ${m.radius},
+        INSERT INTO landmark_models (id, file, path, sha256, bytes, height_m, radius_m, license, author, source, attribution, origin)
+        VALUES (${m.id}, ${modelFileName(m.id, m.sha256)}, ${m.path}, ${m.sha256}, ${m.bytes}, ${m.height}, ${m.radius},
                 ${m.license}, ${m.author}, ${m.source ?? null}, ${m.attribution ?? null}, 'catalog')
         ON CONFLICT (id) DO UPDATE SET
-          file = EXCLUDED.file, sha256 = EXCLUDED.sha256, bytes = EXCLUDED.bytes,
+          file = EXCLUDED.file, path = EXCLUDED.path, sha256 = EXCLUDED.sha256, bytes = EXCLUDED.bytes,
           height_m = EXCLUDED.height_m, radius_m = EXCLUDED.radius_m, license = EXCLUDED.license,
           author = EXCLUDED.author, source = EXCLUDED.source, attribution = EXCLUDED.attribution,
           updated_at = now()`
@@ -270,8 +315,40 @@ export async function syncLandmarkCatalog(dir = resolveLandmarksDir()): Promise<
         AND NOT EXISTS (SELECT 1 FROM landmarks l WHERE l.model_id = m.id)`
   })
 
-  modelFiles = files
+  await resolveLandmarkConflicts()
+  await refreshModelFiles()
   return { models: models.length, landmarks: catalog.landmarks.length }
+}
+
+/**
+ * Mark which placements are drawn. Two placements from different sources
+ * clash when they replace a building in common, share a Wikidata item, or
+ * stand within 30 m of each other; the lower-ranked one goes inactive,
+ * pointing at the one that won. Placements from the same source never clash:
+ * a source is trusted not to model its own building twice.
+ */
+export async function resolveLandmarkConflicts(): Promise<{ superseded: number }> {
+  const priority = landmarkSourcePriority()
+  return sql.begin(async (rawTx) => {
+    const tx = rawTx as unknown as typeof sql
+    await tx`UPDATE landmarks SET active = true, superseded_by = NULL WHERE NOT active OR superseded_by IS NOT NULL`
+    const rows = await tx`
+      UPDATE landmarks loser SET active = false, superseded_by = winner.id
+      FROM landmarks winner
+      WHERE winner.origin <> loser.origin
+        AND array_position(${priority}::text[], winner.origin) < array_position(${priority}::text[], loser.origin)
+        AND (winner.replaces && loser.replaces
+             OR winner.wikidata = loser.wikidata
+             OR ST_DWithin(winner.geom::geography, loser.geom::geography, 30))
+      RETURNING loser.id`
+    return { superseded: rows.length }
+  })
+}
+
+/** Rebuild the served-file lookup from the database, for every source. */
+export async function refreshModelFiles(): Promise<void> {
+  const rows = await sql<{ file: string; path: string }[]>`SELECT file, path FROM landmark_models WHERE path IS NOT NULL`
+  modelFiles = new Map(rows.map((r) => [r.file, r.path]))
 }
 
 /** Where a served model name lives on disk, or null if it is not one we serve. */
@@ -289,21 +366,25 @@ export function modelPath(name: string): string | null {
  * while its upper half filled the view — the client draws whatever the
  * visible tiles hold, and de-duplicates by feature id.
  *
- * MVT has no array type, so `replaces` travels as a space-separated string.
+ * MVT has no array type, so `replaces` travels as a space-separated string
+ * and `entrances` as JSON text.
  */
 export async function landmarkTile(z: number, x: number, y: number): Promise<Uint8Array> {
   if (z < LANDMARKS_MIN_TILE_ZOOM) return new Uint8Array()
   const [row] = await sql`
     WITH bounds AS (SELECT ST_TileEnvelope(${z}, ${x}, ${y}) AS env)
     SELECT ST_AsMVT(t, ${LANDMARKS_LAYER}, 4096, 'geom', 'fid') AS mvt FROM (
-      SELECT l.fid, l.id, l.name, m.file AS model, l.bearing, l.scale, l.elevation, l.min_zoom AS minzoom,
+      SELECT l.fid, l.id, l.name, m.file AS model, d.file AS detail, l.detail_zoom AS detailzoom,
+             l.bearing, l.scale, l.elevation, l.min_zoom AS minzoom,
              round((m.height_m * l.scale)::numeric, 1)::real AS height,
              array_to_string(l.replaces, ' ') AS replaces, l.wikidata, m.attribution,
+             l.entrances::text AS entrances, l.origin AS source,
              ST_AsMVTGeom(ST_Transform(l.geom, 3857), bounds.env, 4096, 4096, true) AS geom
       FROM landmarks l
       JOIN landmark_models m ON m.id = l.model_id
+      LEFT JOIN landmark_models d ON d.id = l.detail_model_id
       CROSS JOIN bounds
-      WHERE l.reach && bounds.env
+      WHERE l.reach && bounds.env AND l.active
     ) t
     WHERE geom IS NOT NULL`
   return new Uint8Array(row?.mvt ?? [])

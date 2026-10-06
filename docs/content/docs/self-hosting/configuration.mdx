@@ -261,6 +261,11 @@ itself.
 | `MOTIS_RT_UPDATE_INTERVAL` | MOTIS default (60s) | GTFS-RT poll interval. Baked into the MOTIS config at import time, so it takes effect on the next `rebuild-motis.sh`, not on restart |
 | `MARTIN_URL` | `http://barrelman-martin:3000` | Set to point at a Martin outside this stack |
 | `LANDMARKS_DIR` | `./landmarks` | Directory holding the 3D landmark `catalog.json` and its models, synced into the database at startup and served at `/tiles/landmarks`. The repo's own catalog is baked into the image; set this to serve one you maintain |
+| `OPEN_LANDMARKS_URL` | `https://open-landmarks.benmaps.fr` | The [Open Landmarks](https://github.com/benjamintd/open-landmarks) dataset, imported beside the catalog at startup and, once you enable its seeded schedule (*Import Open Landmarks*, hourly), on a cadence. An unchanged release costs one request. `off` serves only your own catalog |
+| `OPEN_LANDMARKS_CHANNEL` | `latest` | `latest` is reviewed models only; `preview` adds drafts |
+| `OPEN_LANDMARKS_CONCURRENCY` | `4` | Model downloads in flight during an import |
+| `LANDMARKS_CACHE_DIR` | `./data/landmarks` (Compose: `/data/landmarks`) | Where imported models are kept, by content hash; files a release no longer uses are removed |
+| `LANDMARK_SOURCE_PRIORITY` | `openlandmarks,catalog` | Which source's model is served when both model the same building (a shared OSM ref, Wikidata item, or anchors within 30 m), first wins |
 | `PELIAS_URL` | `http://pelias_api:4000` | Address geocoder. Only used when the `pelias` profile is up |
 | `BARRELMAN_SEARCH_ADDRESS_BUDGET_MS` | `2500` | How long `/search` waits for Pelias address results before returning POIs without them. Pelias answers healthy queries in well under a second; this stops a slow or unreachable geocoder from holding the whole search up to its 10s hang backstop |
 | `BARRELMAN_SEARCH_TRIGRAM_BUDGET_MS` | `2500` | How long `/search` waits for the fuzzy trigram layer before answering with the precise layers alone. That layer supplies typo tolerance and reads roughly 215 MB of index per call — fast against a warm index, and on an instance whose table dwarfs RAM slow enough that `BARRELMAN_STATEMENT_TIMEOUT_MS` cancels it, so the caller waits the whole timeout for nothing. `0` waits the full statement timeout |

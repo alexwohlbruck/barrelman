@@ -22,6 +22,18 @@ does it — and the release pipeline turns it into the GitHub Release notes.
   Liberty standing on Fort Wood. `LANDMARKS_DIR`
   points the API at a catalog of your own.
 
+  The layer also serves the [Open Landmarks](https://github.com/benjamintd/open-landmarks)
+  dataset beside the catalog. It is imported at startup and, once you enable
+  the seeded *Import Open Landmarks* schedule, hourly; an unchanged release
+  costs one request, and only new model files are downloaded, each checked
+  against its published hash. Where both sources model one building, only one
+  is served — `LANDMARK_SOURCE_PRIORITY` picks which, Open Landmarks first by
+  default. Landmarks can carry a finer model for close zooms (`detail`,
+  `detailzoom`) and lit entrances for night maps (`entrances`), and models are
+  gzipped for clients that accept it. Imported models are CC BY 4.0 and their
+  placements ODbL; each carries its credit. `OPEN_LANDMARKS_URL=off` serves
+  only your own catalog.
+
 * **`bicycle_ways` now includes the streets a signed bike route follows.** A
   way in a `route=bicycle` relation with no bike tagging of its own comes back
   as `infra_type=bicycle_route`, so maps can mark the whole route rather than
