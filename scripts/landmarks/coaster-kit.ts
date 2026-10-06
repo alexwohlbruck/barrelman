@@ -140,6 +140,17 @@ export interface CoasterSpec {
    * the spine, so they suit an inverted track best.
    */
   hubs?: { at: [number, number]; top: number; from: number; to: number; every?: number }[]
+  /**
+   * Opt-in: hand-placed bents over a stretch whose real supports are a few
+   * big frames far apart, like a giga's lift and drop, instead of one every
+   * 17 m. Between `from` and `to` (polyline s) the regular supports are left
+   * out; at each `at` (polyline s) a column stands from the ground to the
+   * spine, with one strut from the same head to a foot `spread` × the height
+   * away (default 0.35): to the `left` or `right` of the direction of travel,
+   * or raked `back` or `ahead` along it. A level tie joins column and strut
+   * at `tie` of the height (default 0.3; 0 for none).
+   */
+  bents?: { from: number; to: number; at: { s: number; strut: 'left' | 'right' | 'back' | 'ahead'; spread?: number; tie?: number }[] }[]
 }
 
 /**
@@ -798,12 +809,16 @@ export async function buildCoaster(spec: CoasterSpec) {
     return true
   }
   const supports: { s: number; legs: number }[] = []
+  // Stretches carried by hand-placed bents instead (see `bents`), in spline s.
+  const bentRuns = (spec.bents ?? []).map((b) => [splineS(b.from), splineS(b.to)])
+  const inBents = (s: number) => bentRuns.some(([a, b]) => (a <= b ? s >= a && s <= b : s >= a || s <= b))
   for (let s = 4; s < TOTAL - 4 && !spec.trestle; s += spec.supportEvery ?? 17) {
     for (const off of [0, 4, -4, 8, -8]) {
       const q = fine[Math.round((s + off) / STEP) % N]
       const zr = q.p[2] - ground(q.p[0], q.p[1])
       if (zr < (spec.supportMinZ ?? 2.2)) break
       if (inv.windows.length && inWindow(q.s)) break
+      if (bentRuns.length && inBents(q.s)) break
       if (q.s > SHUTTLE_END - 2) break
       if (spec.inverted) {
         if (zr < 3) break
@@ -849,6 +864,28 @@ export async function buildCoaster(spec: CoasterSpec) {
       if (top[2] - foot[2] < 3) continue
       tube(white, foot, top, spec.supportR[1])
       supports.push({ s: q.s, legs: 1 })
+    }
+  }
+  // Hand-placed bents: a column and one strut from the same head, tied once; see `bents`.
+  for (const run of spec.bents ?? []) {
+    for (const b of run.at) {
+      const q = fine[Math.round(splineS(b.s) / STEP) % N]
+      const top = add(q.p, mul(q.up, -DEPTH + 0.3)), g = ground(top[0], top[1]), h = top[2] - g
+      if (h < 3) continue
+      const flat = (v: V3) => unit([v[0], v[1], 0])
+      const dir = b.strut === 'left' ? flat(q.left) : b.strut === 'right' ? mul(flat(q.left), -1) : b.strut === 'ahead' ? flat(q.t) : mul(flat(q.t), -1)
+      const off = (b.spread ?? 0.35) * h, fx = top[0] + dir[0] * off, fy = top[1] + dir[1] * off
+      const col: [V3, V3] = [[top[0], top[1], g - 1], top], strut: [V3, V3] = [[fx, fy, ground(fx, fy) - 1], top]
+      const r = h < 16 ? spec.supportR[0] : h < 45 ? spec.supportR[1] : spec.supportR[2]
+      tube(white, ...col, r)
+      tube(white, ...strut, r * 0.8)
+      const tie = b.tie ?? 0.3
+      if (tie > 0) {
+        const z = g + tie * h, k = (z - strut[0][2]) / (top[2] - strut[0][2])
+        tube(white, [top[0], top[1], z], add(strut[0], mul(sub(top, strut[0]), k)), r * 0.6)
+      }
+      if (![col, strut].every(([a, c]) => legClear(a, c, q.s))) console.warn(`bent at s ${b.s} meets other track`)
+      supports.push({ s: q.s, legs: tie > 0 ? 3 : 2 })
     }
   }
   // Masts carrying a helix on spokes; see `hubs`.
