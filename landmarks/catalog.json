@@ -188,6 +188,13 @@
       "license": "CC0-1.0",
       "author": "Barrelman",
       "source": "scripts/landmarks/bank-of-america-corporate-center.ts"
+    },
+    {
+      "id": "duke-energy-center",
+      "file": "models/duke-energy-center.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/duke-energy-center.ts"
     }
   ],
   "landmarks": [
@@ -763,6 +770,44 @@
         "way/341587210",
         "way/766639186",
         "way/341587214"
+      ]
+    },
+    {
+      "id": "duke-energy-center",
+      "name": "Duke Energy Center",
+      "model": "duke-energy-center",
+      "lng": -80.84873993,
+      "lat": 35.22415675,
+      "bearing": 50.3,
+      "elevation": 0,
+      "minzoom": 13,
+      "wikidata": "Q3041087",
+      "replaces": [
+        "way/1550692284",
+        "way/1550692283",
+        "way/1556432827",
+        "way/1556432828",
+        "way/1556432829",
+        "way/1556432830",
+        "way/1556432831",
+        "way/1556432832",
+        "way/1556432833",
+        "way/1556432834",
+        "way/1556432835",
+        "way/1556432836",
+        "way/1556432837",
+        "way/1556432838",
+        "way/1556432839",
+        "way/1556432840",
+        "way/1556432841",
+        "way/1556432842",
+        "way/1556432843",
+        "way/1556432844",
+        "way/1556432845",
+        "way/1556616352",
+        "way/1556616353",
+        "way/1556616354",
+        "way/1556616355"
       ]
     }
   ]
