@@ -461,6 +461,13 @@
       "license": "CC0-1.0",
       "author": "Barrelman",
       "source": "scripts/landmarks/pnc-music-pavilion.ts"
+    },
+    {
+      "id": "knight-theater",
+      "file": "models/knight-theater.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/knight-theater.ts"
     }
   ],
   "landmarks": [
@@ -1781,6 +1788,19 @@
       "replaces": [
         "way/577606075",
         "way/577606076"
+      ]
+    },
+    {
+      "id": "knight-theater",
+      "name": "Knight Theater",
+      "model": "knight-theater",
+      "lng": -80.8478938,
+      "lat": 35.2249171,
+      "bearing": 315,
+      "elevation": 0,
+      "minzoom": 15,
+      "replaces": [
+        "way/131139733"
       ]
     }
   ]
