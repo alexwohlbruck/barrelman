@@ -377,6 +377,13 @@
       "license": "CC0-1.0",
       "author": "Barrelman",
       "source": "scripts/landmarks/carowinds-fury-325.ts"
+    },
+    {
+      "id": "carowinds-skytower",
+      "file": "models/carowinds-skytower.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/carowinds-skytower.ts"
     }
   ],
   "landmarks": [
@@ -1501,6 +1508,17 @@
       "replaces": [
         "way/543823785"
       ]
+    },
+    {
+      "id": "carowinds-skytower",
+      "name": "Carolina Skytower",
+      "model": "carowinds-skytower",
+      "lng": -80.9406908,
+      "lat": 35.1035924,
+      "bearing": 0,
+      "elevation": 0,
+      "minzoom": 14,
+      "replaces": []
     }
   ]
 }
