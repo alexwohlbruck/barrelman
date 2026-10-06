@@ -237,6 +237,13 @@
       "license": "CC0-1.0",
       "author": "Barrelman",
       "source": "scripts/landmarks/independence-square-statues.ts"
+    },
+    {
+      "id": "one-wells-fargo-center",
+      "file": "models/one-wells-fargo-center.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/one-wells-fargo-center.ts"
     }
   ],
   "landmarks": [
@@ -1017,6 +1024,20 @@
       "elevation": 0,
       "minzoom": 16,
       "replaces": []
+    },
+    {
+      "id": "one-wells-fargo-center",
+      "name": "One Wells Fargo Center",
+      "model": "one-wells-fargo-center",
+      "lng": -80.844673,
+      "lat": 35.2239253,
+      "bearing": 5,
+      "elevation": 0,
+      "minzoom": 13,
+      "wikidata": "Q3352669",
+      "replaces": [
+        "way/380092606"
+      ]
     }
   ]
 }
