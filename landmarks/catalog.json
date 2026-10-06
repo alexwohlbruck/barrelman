@@ -153,6 +153,13 @@
       "license": "CC0-1.0",
       "author": "Barrelman",
       "source": "scripts/landmarks/brooklyn-bridge-tower.ts"
+    },
+    {
+      "id": "parachute-jump",
+      "file": "models/parachute-jump.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/parachute-jump.ts"
     }
   ],
   "landmarks": [
@@ -648,6 +655,20 @@
       "wikidata": "Q125006",
       "replaces": [
         "way/317352708"
+      ]
+    },
+    {
+      "id": "parachute-jump",
+      "name": "Parachute Jump",
+      "model": "parachute-jump",
+      "lng": -73.9843968,
+      "lat": 40.5729775,
+      "bearing": 351.5,
+      "elevation": 0,
+      "minzoom": 14,
+      "wikidata": "Q3651640",
+      "replaces": [
+        "way/248474742"
       ]
     }
   ]
