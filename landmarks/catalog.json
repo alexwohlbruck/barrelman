@@ -440,6 +440,13 @@
       "license": "CC0-1.0",
       "author": "Barrelman",
       "source": "scripts/landmarks/clt-daily-deck-west.ts"
+    },
+    {
+      "id": "clt-control-tower",
+      "file": "models/clt-control-tower.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/clt-control-tower.ts"
     }
   ],
   "landmarks": [
@@ -1690,6 +1697,19 @@
       "replaces": [
         "relation/5936266",
         "relation/5936267"
+      ]
+    },
+    {
+      "id": "clt-control-tower",
+      "name": "Charlotte Douglas Air Traffic Control Tower",
+      "model": "clt-control-tower",
+      "lng": -80.9432826,
+      "lat": 35.2039381,
+      "bearing": 0,
+      "elevation": 0,
+      "minzoom": 14,
+      "replaces": [
+        "way/589068976"
       ]
     }
   ]
