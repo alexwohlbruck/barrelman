@@ -100,8 +100,10 @@ and photos. Every rule here fixes something that went wrong.
   `finish()` with the photo's hue, but pulled to the palette's lightness, so
   it reads as "the pink one" without being darker or more saturated than the
   stone beside it. A finish replaces a library colour; it doesn't add
-  contrast. Dark navy glass, dark brown brick and near-black stone are never
-  right on this map, whatever the photo says.
+  contrast. Large dark surfaces (navy glass curtain walls, dark brown
+  brick, black stone) are pulled light. A dark colour that is itself a
+  defining feature (a stadium's black towers, a dark spire against pale
+  roofs) stays dark enough to read, but no darker than charcoal `#4a4f57`.
 - **At most six materials**, each covering a broad region. One colour for
   the whole body is also wrong: walls, windows, trim and roof at least.
 - Roof gardens are muted green as a finish; real copper, slate or tile roofs
