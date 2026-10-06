@@ -328,6 +328,13 @@
       "license": "CC0-1.0",
       "author": "Barrelman",
       "source": "scripts/landmarks/freedom-park-bandshell.ts"
+    },
+    {
+      "id": "elizabeth-water-tower",
+      "file": "models/elizabeth-water-tower.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/elizabeth-water-tower.ts"
     }
   ],
   "landmarks": [
@@ -1361,6 +1368,19 @@
       "minzoom": 16,
       "replaces": [
         "way/921811959"
+      ]
+    },
+    {
+      "id": "elizabeth-water-tower",
+      "name": "Elizabeth Water Tower",
+      "model": "elizabeth-water-tower",
+      "lng": -80.8168798,
+      "lat": 35.2128295,
+      "bearing": 0,
+      "elevation": 0,
+      "minzoom": 15,
+      "replaces": [
+        "way/870467714"
       ]
     }
   ]
