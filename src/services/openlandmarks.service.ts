@@ -158,10 +158,15 @@ async function getJson<T>(url: string): Promise<T> {
  * GLB is checked against the published sha256 before it is kept, so a
  * truncated or tampered download never reaches a map.
  */
-async function cachedGlb(base: string, cacheDir: string, lod: Lod): Promise<{ path: string; bytes: Uint8Array; fetched: boolean }> {
+async function cachedGlb(
+  base: string,
+  cacheDir: string,
+  lod: Lod,
+  refetch = false,
+): Promise<{ path: string; bytes: Uint8Array; fetched: boolean }> {
   const path = join(cacheDir, `${lod.sha256}.glb`)
   const file = Bun.file(path)
-  if (await file.exists()) return { path, bytes: new Uint8Array(await file.arrayBuffer()), fetched: false }
+  if (!refetch && (await file.exists())) return { path, bytes: new Uint8Array(await file.arrayBuffer()), fetched: false }
 
   const gz = lod.gzip?.url
   const res = await fetch(base + (gz ?? lod.url), { signal: AbortSignal.timeout(120_000) })
@@ -205,11 +210,22 @@ export type ImportResult = {
 
 /**
  * Bring this source's rows in line with the current Open Landmarks release.
- * `force` re-reads the release even when its id has not moved.
+ *
+ * Two modes:
+ *
+ *   diff  (default) stops after one request when the release hasn't moved,
+ *         and downloads only model files the cache doesn't already hold.
+ *   full  re-reads the release even when its id hasn't moved, downloads
+ *         every model again and re-verifies it against its published hash,
+ *         and rewrites every row. For a cache that may be damaged or a
+ *         database that may have drifted; it costs the whole dataset's bytes.
+ *
+ * `force` alone re-reads an unchanged release but still trusts the cache.
  */
 export async function importOpenLandmarks(
-  { force = false, log = () => {} }: { force?: boolean; log?: Log } = {},
+  { force = false, full = false, log = () => {} }: { force?: boolean; full?: boolean; log?: Log } = {},
 ): Promise<ImportResult> {
+  if (full) force = true
   const config = openLandmarksConfig()
   const result: ImportResult = { release: null, unchanged: false, landmarks: 0, downloaded: 0, skipped: [], superseded: 0 }
   if (!config.base) {
@@ -251,7 +267,7 @@ export async function importOpenLandmarks(
   const lods = rows.flatMap((r) => [r.low, ...(r.detail ? [r.detail] : [])])
   const models = new Map<string, Model>()
   await mapLimit(lods, config.concurrency, async ({ modelId, lod }) => {
-    const { path, bytes, fetched } = await cachedGlb(base, config.cacheDir, lod)
+    const { path, bytes, fetched } = await cachedGlb(base, config.cacheDir, lod, full)
     if (fetched) result.downloaded++
     models.set(modelId, { modelId, sha256: lod.sha256, path, bytes: bytes.length, ...glbBounds(bytes) })
   })
