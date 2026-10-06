@@ -384,6 +384,13 @@
       "license": "CC0-1.0",
       "author": "Barrelman",
       "source": "scripts/landmarks/carowinds-skytower.ts"
+    },
+    {
+      "id": "carowinds-thunder-striker",
+      "file": "models/carowinds-thunder-striker.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/carowinds-thunder-striker.ts"
     }
   ],
   "landmarks": [
@@ -1519,6 +1526,20 @@
       "elevation": 0,
       "minzoom": 14,
       "replaces": []
+    },
+    {
+      "id": "carowinds-thunder-striker",
+      "name": "Thunder Striker",
+      "model": "carowinds-thunder-striker",
+      "lng": -80.9390471,
+      "lat": 35.1012365,
+      "bearing": 0,
+      "elevation": 0,
+      "minzoom": 15,
+      "wikidata": "Q1671491",
+      "replaces": [
+        "way/239268383"
+      ]
     }
   ]
 }
