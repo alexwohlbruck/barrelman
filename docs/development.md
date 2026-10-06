@@ -106,6 +106,17 @@ sed -i 's/"version": ".*"/"version": "0.2.0"/' package.json
 git commit -am "Release 0.2.0" && gh pr create --base main
 ```
 
+After the release merges, bring `main` back into `dev`. The release commit
+stamps `CHANGELOG.md` on `main` only, so without this `dev` keeps the released
+entries under `[Unreleased]` and the next release repeats them. A release
+branched from `dev` leaves `dev` an ancestor of `main`, so this is a
+fast-forward:
+
+```bash
+git switch -c chore/sync-main-into-dev origin/main && git push -u origin HEAD
+gh pr create --base dev --title "Sync main into dev"
+```
+
 Two failure modes are worth knowing, both inherited from Parchment's pipeline,
 which is where this one came from:
 
