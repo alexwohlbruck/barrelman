@@ -19,6 +19,12 @@ set -euo pipefail
 #     only processes changes since the last run. Auto-initializes replication
 #     state if not already set up.
 #
+#     A database that kept osm2pgsql's middle tables is updated with
+#     osm2pgsql-replication, as described below. One without them (a large
+#     import usually drops them) is updated through region.osm.pbf by
+#     replicate-extract.sh, which re-imports only the objects each diff touches
+#     and re-derives only their rows.
+#
 #     The cursor lives in the database (osm2pgsql_properties), not in a
 #     timestamp, so this can be run at any interval and still applies every
 #     diff since the last successful run. The one hard deadline is upstream
@@ -43,6 +49,12 @@ set -euo pipefail
 #   GEOFABRIK_REPLICATION_URL   Diff update server URL (replication mode only).
 #                               Defaults to the REGIONS-resolved feed.
 #   BARRELMAN_DB_PASSWORD       DB password (default: barrelman)
+#   REBUILD_GRAPHHOPPER         1 (default) rebuilds the routing graph when the
+#                               extract changed; 0 leaves it for a separate run
+#   REBUILD_BASEMAP             the same for the PMTiles basemap
+#   REFRESH_BUILDINGS_3D        1 (default) refreshes buildings_3d after the
+#                               update; 0 leaves it for refresh-buildings-3d.sh
+#   REPLICATION_MAX_DIFFS       without middle tables: diffs applied per cycle
 #
 # SCHEDULING:
 #   Console → Schedules. The seeded "OSM Update" entry runs daily at 03:00 with
@@ -58,7 +70,118 @@ if [ -f "$ENV_FILE" ]; then
 fi
 
 DB_PASS="${BARRELMAN_DB_PASSWORD:-barrelman}"
-DB_URL="postgresql://barrelman:${DB_PASS}@localhost:5432/barrelman"
+# The password travels as PGPASSWORD, never inside DB_URL. osm2pgsql quotes its
+# full connection string in the errors it raises, and those land in the job log
+# the console shows — so a URL carrying the password published it on every
+# failure.
+DB_URL="postgresql://barrelman@localhost:5432/barrelman"
+
+# docker exec into barrelman-db with the password set. Takes the same arguments
+# as `docker exec`, container name included.
+db_exec() { docker exec -e PGPASSWORD="$DB_PASS" "$@"; }
+
+# The 3D buildings view, after the database changed. See refresh-buildings-3d.sh.
+refresh_buildings() {
+  if [ "${REFRESH_BUILDINGS_3D:-1}" = "1" ]; then
+    "$SCRIPT_DIR/refresh-buildings-3d.sh"
+  else
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] 3D buildings refresh disabled (REFRESH_BUILDINGS_3D=0) — skipping."
+  fi
+}
+
+# Rebuild what reads region.osm.pbf, if the update moved it. Takes the extract's
+# mtime from before and after the update.
+rebuild_consumers() {
+  local before="$1" after="$2"
+  # A graph rebuild wipes graph-cache and takes street routing down for the length
+  # of the import, so it is only worth doing when the extract it reads actually
+  # moved. Before the extract was patched above, this ran unconditionally and
+  # rebuilt an identical graph on every replication run.
+  if [ "$after" != "$before" ] \
+    && [ "${REBUILD_GRAPHHOPPER:-1}" != "1" ] && [ "${REBUILD_BASEMAP:-1}" != "1" ]; then
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Extract changed, but the GraphHopper and basemap rebuilds are off — skipping both."
+  elif [ "$after" != "$before" ]; then
+    # A patched extract can be structurally valid and still be unusable. Geofabrik
+    # clips its diffs to one region's polygon, so a node deleted there is dropped
+    # from the merged extract while a way from a neighbouring region's extract goes
+    # on referencing it — the case apply-osm-diff.sh notes but treats as cosmetic.
+    # It is not. libosmium raises `invalid location` on the first dangling
+    # reference, so MOTIS's import dies outright. GraphHopper does not: it built a
+    # graph from an extract carrying 1571 such references without complaint, which
+    # is the worse half of this — the ways involved are simply absent from the
+    # routing graph, and nothing says so.
+    #
+    # Checked here rather than per chunk in apply-osm-diff.sh: this is a full pass
+    # over a multi-gigabyte file, and once per run — immediately before the
+    # consumers that would choke on it — is enough.
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Verifying the patched extract's referential integrity..."
+    # Two things here are load-bearing, both learned the hard way:
+    #
+    #   2>&1  — check-refs writes its whole report to stderr, not stdout. Discard
+    #           stderr and the command yields nothing at all.
+    #   || true — under `set -o pipefail` this would otherwise abort the script on
+    #           every run. check-refs exits non-zero whenever ANY reference is
+    #           missing, and a bounded extract always has missing relation members
+    #           (a healthy one here reports 924). Its exit status is useless as a
+    #           verdict; only the parsed node count decides.
+    CHECK_REFS_OUT="$(docker exec barrelman-db osmium check-refs -r "$PBF_FILE" 2>&1 || true)"
+    MISSING_NODES="$(printf '%s\n' "$CHECK_REFS_OUT" \
+      | sed -n 's/^Nodes  *in ways  *missing: *//p' | tr -cd '0-9')"
+
+    # An empty parse means the check did not run (no osmium, unreadable file) —
+    # distinct from "ran and found nothing". Failing open there would restore the
+    # exact silence this guard exists to remove, so say so and stop.
+    if [ -z "$MISSING_NODES" ]; then
+      echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: could not verify $(basename "$PBF_FILE") —" >&2
+      echo "  'osmium check-refs' produced no node count. Skipping the rebuilds rather" >&2
+      echo "  than feeding them an unverified extract." >&2
+      exit 1
+    fi
+
+    # Relations may reference objects outside the extract — that is normal for any
+    # bounded region and is not checked. Only ways with missing nodes are fatal.
+    if [ "$MISSING_NODES" -gt 0 ]; then
+      echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: $(basename "$PBF_FILE") has ${MISSING_NODES} node(s) referenced by ways" >&2
+      echo "  but absent from the file. Every consumer of the extract will fail on it:" >&2
+      echo "    MOTIS       — import aborts: unable to import: invalid location" >&2
+      echo "    GraphHopper — builds anyway, without the affected ways and without" >&2
+      echo "                  reporting it, so street routing quietly loses roads" >&2
+      echo "  Postgres is updated and consistent; only the extract is damaged." >&2
+      echo "  Rebuild it from fresh extracts with UPDATE_MODE=full, which re-downloads" >&2
+      echo "  and re-merges rather than patching. Skipping the rebuilds below." >&2
+      exit 1
+    fi
+    echo "  Extract is intact (no ways reference missing nodes)."
+
+    # A rebuild takes street routing down until the new graph is built, which
+    # is hours for a country. REBUILD_GRAPHHOPPER=0 leaves the graph for a
+    # separate, less frequent "Rebuild GraphHopper" run.
+    if [ "${REBUILD_GRAPHHOPPER:-1}" = "1" ]; then
+      echo "[$(date '+%Y-%m-%d %H:%M:%S')] Extract changed — triggering GraphHopper graph rebuild..."
+      "$SCRIPT_DIR/rebuild-graphhopper.sh"
+    else
+      echo "[$(date '+%Y-%m-%d %H:%M:%S')] GraphHopper rebuild disabled (REBUILD_GRAPHHOPPER=0) — skipping."
+    fi
+
+    # The basemap is rendered from the same extract, so the mtime guard above is
+    # exactly the right condition for it too: if region.osm.pbf did not move,
+    # planetiler would spend four minutes producing an identical archive.
+    #
+    # Without this the basemap was the one output that never tracked an update.
+    # Postgres got the diff, GraphHopper got a fresh graph, and the map still
+    # showed whatever planetiler last rendered by hand — because martin serves
+    # the DB-backed sources live but the `basemap` source is a static PMTiles
+    # file, and nothing in the pipeline rebuilt it.
+    if [ "${REBUILD_BASEMAP:-1}" = "1" ]; then
+      echo "[$(date '+%Y-%m-%d %H:%M:%S')] Extract changed — triggering basemap rebuild..."
+      "$SCRIPT_DIR/rebuild-basemap.sh"
+    else
+      echo "[$(date '+%Y-%m-%d %H:%M:%S')] Basemap rebuild disabled (REBUILD_BASEMAP=0) — skipping."
+    fi
+  else
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Extract unchanged — skipping GraphHopper and basemap rebuilds."
+  fi
+}
 
 UPDATE_MODE="${UPDATE_MODE:-replication}"
 GEOFABRIK_URL="${GEOFABRIK_URL:-https://download.geofabrik.de/north-america/us/north-carolina-latest.osm.pbf}"
@@ -76,6 +199,10 @@ OSM_EXTRACTS="$(cd "$PROJECT_DIR" && bun run src/config/regions.ts osm-extracts 
 OSM_REPLICATION="$(cd "$PROJECT_DIR" && bun run src/config/regions.ts osm-replication 2>/dev/null || true)"
 
 REPLICATION_COUNT="$(printf '%s\n' "$OSM_REPLICATION" | grep -c . || true)"
+# Kept apart from the REGIONS default below. Replication from the extract
+# (replicate-extract.sh) follows the feed recorded in the extract it patches,
+# and only an explicit setting should override that.
+REPLICATION_URL_OVERRIDE="${GEOFABRIK_REPLICATION_URL:-}"
 GEOFABRIK_REPLICATION_URL="${GEOFABRIK_REPLICATION_URL:-$(printf '%s\n' "$OSM_REPLICATION" | head -n1)}"
 GEOFABRIK_REPLICATION_URL="${GEOFABRIK_REPLICATION_URL:-https://download.geofabrik.de/north-america/us/north-carolina-updates/}"
 
@@ -95,7 +222,7 @@ if [ "$UPDATE_MODE" = "full" ]; then
   # makes this a refresh rather than a re-import of the extract on disk, so it
   # defaults on here; an operator replaying a known-good download can still
   # pass 0.
-  docker exec \
+  db_exec \
     -e DATABASE_URL="$DB_URL" \
     -e GEOFABRIK_URL="$GEOFABRIK_URL" \
     -e FORCE_DOWNLOAD="${FORCE_DOWNLOAD:-1}" \
@@ -131,6 +258,61 @@ if [ "${REPLICATION_COUNT:-0}" -gt 1 ]; then
   echo "  The other regions stay at their last full import. Use UPDATE_MODE=full to refresh them all."
 fi
 
+# osm2pgsql-replication applies diffs through osm2pgsql's middle tables, which
+# only a --slim import keeps. They are also the bulk of the database (most of
+# it on a country-sized extract), so an operator short of disk may have dropped
+# them after the import. Without them neither `init` nor `update` can run, so
+# such a database replicates through the extract instead (replicate-extract.sh).
+HAS_MIDDLE=$(db_exec barrelman-db \
+  psql "$DB_URL" -tAc "SELECT to_regclass('planet_osm_ways') IS NOT NULL;")
+
+if [ "$HAS_MIDDLE" != "t" ]; then
+  # No middle tables: follow the diffs through the extract instead. See the
+  # header of replicate-extract.sh for how, and why it needs no middle tables.
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] No osm2pgsql middle tables (planet_osm_ways) — replicating through $(basename "$PBF_FILE") instead."
+  if ! docker exec barrelman-db test -f "$PBF_FILE"; then
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: $PBF_FILE is missing too, so there is nothing to replicate from." >&2
+    echo "  Refresh with UPDATE_MODE=full, which re-imports from scratch, or disable" >&2
+    echo "  the OSM Update schedule." >&2
+    exit 1
+  fi
+
+  PBF_MTIME_BEFORE=$(docker exec barrelman-db stat -c %Y "$PBF_FILE" 2>/dev/null || echo 0)
+  REPLICATION_LOG="$(mktemp)"
+  trap 'rm -f "$REPLICATION_LOG"' EXIT
+  # A failure is held until the follow-up steps have run: cycles that
+  # committed before it are real changes, and the next run's "before" mtime
+  # would already include them, so skipping the rebuilds now would skip them
+  # for good.
+  REPLICATION_RC=0
+  db_exec \
+    -e DATABASE_URL="$DB_URL" \
+    -e OSM_PBF_FILE="$PBF_FILE" \
+    ${REPLICATION_URL_OVERRIDE:+-e GEOFABRIK_REPLICATION_URL="$REPLICATION_URL_OVERRIDE"} \
+    ${REPLICATION_MAX_DIFFS:+-e REPLICATION_MAX_DIFFS="$REPLICATION_MAX_DIFFS"} \
+    ${REPLICATION_ALLOW_SHRINK:+-e REPLICATION_ALLOW_SHRINK="$REPLICATION_ALLOW_SHRINK"} \
+    barrelman-db bash /app/scripts/replicate-extract.sh | tee "$REPLICATION_LOG" \
+    || REPLICATION_RC=$?
+  PBF_MTIME_AFTER=$(docker exec barrelman-db stat -c %Y "$PBF_FILE" 2>/dev/null || echo 0)
+
+  # The derived columns were redone inside the swap; only the stored view and
+  # the planner statistics are left.
+  if grep -q '^REPLICATION_APPLIED=1' "$REPLICATION_LOG"; then
+    refresh_buildings
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Running ANALYZE..."
+    db_exec barrelman-db psql "$DB_URL" -c "ANALYZE geo_places; ANALYZE bicycle_ways; ANALYZE bicycle_routes;"
+  fi
+
+  rebuild_consumers "$PBF_MTIME_BEFORE" "$PBF_MTIME_AFTER"
+  if [ "$REPLICATION_RC" -ne 0 ]; then
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: replication stopped partway (exit $REPLICATION_RC, see above)." >&2
+    echo "  Cycles logged as applied are committed. The next run resumes from there." >&2
+    exit "$REPLICATION_RC"
+  fi
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] OSM update complete."
+  exit 0
+fi
+
 # Auto-initialize replication state if missing.
 #
 # Which table holds this depends on the osm2pgsql version. Version 1.8, which
@@ -141,19 +323,19 @@ fi
 # first import and re-applied every diff since, so each run did more work than
 # the last. Once that sequence is older than the four months or so of diffs
 # Geofabrik keeps, every run fails. Check the table this image writes first.
-INIT_CHECK=$(docker exec barrelman-db \
+INIT_CHECK=$(db_exec barrelman-db \
   psql "$DB_URL" -tAc \
   "SELECT count(*) FROM planet_osm_replication_status;" 2>/dev/null || echo "0")
 
 if [ "${INIT_CHECK:-0}" = "0" ]; then
-  INIT_CHECK=$(docker exec barrelman-db \
+  INIT_CHECK=$(db_exec barrelman-db \
     psql "$DB_URL" -tAc \
     "SELECT count(*) FROM osm2pgsql_properties WHERE property='replication_base_url';" 2>/dev/null || echo "0")
 fi
 
 if [ "$INIT_CHECK" = "0" ]; then
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] Replication not initialized — running init..."
-  docker exec barrelman-db \
+  db_exec barrelman-db \
     osm2pgsql-replication init \
       -d "$DB_URL" \
       --server "$GEOFABRIK_REPLICATION_URL"
@@ -179,7 +361,7 @@ PBF_MTIME_BEFORE=$(docker exec barrelman-db stat -c %Y "$PBF_FILE" 2>/dev/null |
 # instead of failing. It must stay in step with OSM2PGSQL_FLAT_NODES in
 # import-osm.sh — both read the same variable so they cannot drift.
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] [1/8] Applying OSM diffs (database + extract)..."
-docker exec \
+db_exec \
   -e OSM_DIFF_FILE="$DIFF_FILE" \
   -e OSM_PBF_FILE="$PBF_FILE" \
   barrelman-db \
@@ -199,16 +381,16 @@ PBF_MTIME_AFTER=$(docker exec barrelman-db stat -c %Y "$PBF_FILE" 2>/dev/null ||
 
 # ── Step 2: Post-import SQL (idempotent — ensures columns + extracts new data)
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] [2/8] Running post-import SQL..."
-docker exec barrelman-db psql "$DB_URL" -f /app/import/post-import.sql
+db_exec barrelman-db psql "$DB_URL" -f /app/import/post-import.sql
 # The query-serving indexes moved out of post-import.sql (a full import builds
 # them after enrichment — see finalize-indexes.sql). On an already-indexed
 # database every statement here is an IF NOT EXISTS no-op, so this preserves
 # the old "post-import guarantees the indexes exist" contract for updates.
-docker exec barrelman-db psql "$DB_URL" -f /app/import/finalize-indexes.sql
+db_exec barrelman-db psql "$DB_URL" -f /app/import/finalize-indexes.sql
 
 # ── Step 3: Generate codes (incremental — only new/changed rows) ─────────────
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] [3/8] Extracting codes..."
-docker exec barrelman-db psql "$DB_URL" -c "
+db_exec barrelman-db psql "$DB_URL" -c "
 UPDATE geo_places
 SET codes = sub.codes
 FROM (
@@ -240,7 +422,7 @@ WHERE geo_places.id = sub.id
 
 # ── Step 4: Generate abbreviations (incremental — only missing rows) ─────────
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] [4/8] Generating abbreviations..."
-docker exec barrelman-db psql "$DB_URL" -c "
+db_exec barrelman-db psql "$DB_URL" -c "
 UPDATE geo_places
 SET name_abbrev = sub.abbrev
 FROM (
@@ -270,110 +452,22 @@ WHERE geo_places.id = sub.id;
 
 # ── Step 5: Generate road intersections ──────────────────────────────────────
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] [5/8] Generating road intersections..."
-docker exec barrelman-db psql "$DB_URL" -f /app/import/generate-intersections.sql
+db_exec barrelman-db psql "$DB_URL" -f /app/import/generate-intersections.sql
 
 # ── Step 6: Resolve parent context (incremental — only NULL rows + cascade) ──
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] [6/8] Resolving parent context (incremental)..."
-docker exec barrelman-db psql "$DB_URL" -f /app/import/resolve-parent-context-incremental.sql
+db_exec barrelman-db psql "$DB_URL" -f /app/import/resolve-parent-context-incremental.sql
 
 # ── Step 7: Rebuild tsvectors (intersections + new/changed rows only) ────────
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] [7/8] Rebuilding tsvectors (intersections + new rows)..."
-docker exec barrelman-db psql "$DB_URL" -v scope='intersections' -f /app/import/rebuild-tsvectors.sql
+db_exec barrelman-db psql "$DB_URL" -v scope='intersections' -f /app/import/rebuild-tsvectors.sql
 
-# The 3D buildings view holds rows rather than being computed per request, so a
-# diff that adds or reshapes a building does not reach the tiles until it is
-# rebuilt. Daily, here, for the same reason `import-osm.sh` does it after a full
-# import. Minutes on a large extract.
-#
-# Not CONCURRENTLY: that needs the view already populated, and a first run after
-# an upgrade finds it empty. A plain refresh takes an exclusive lock on the view
-# for the duration, during which Martin cannot read it — which is survivable
-# because `--on-invalid warn` keeps one unreadable source from taking the rest
-# of the tile server down with it. See `martin` in docker-compose.yml.
-echo "[$(date '+%Y-%m-%d %H:%M:%S')] Rebuilding the 3D buildings view..."
-docker exec barrelman-db psql "$DB_URL" -c "REFRESH MATERIALIZED VIEW buildings_3d;"
+refresh_buildings
 
 # ── Step 8: ANALYZE ──────────────────────────────────────────────────────────
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] [8/8] Running ANALYZE..."
-docker exec barrelman-db psql "$DB_URL" -c "ANALYZE geo_places; ANALYZE bicycle_ways; ANALYZE bicycle_routes;"
+db_exec barrelman-db psql "$DB_URL" -c "ANALYZE geo_places; ANALYZE bicycle_ways; ANALYZE bicycle_routes;"
 
-# A graph rebuild wipes graph-cache and takes street routing down for the length
-# of the import, so it is only worth doing when the extract it reads actually
-# moved. Before the extract was patched above, this ran unconditionally and
-# rebuilt an identical graph on every replication run.
-if [ "$PBF_MTIME_AFTER" != "$PBF_MTIME_BEFORE" ]; then
-  # A patched extract can be structurally valid and still be unusable. Geofabrik
-  # clips its diffs to one region's polygon, so a node deleted there is dropped
-  # from the merged extract while a way from a neighbouring region's extract goes
-  # on referencing it — the case apply-osm-diff.sh notes but treats as cosmetic.
-  # It is not. libosmium raises `invalid location` on the first dangling
-  # reference, so MOTIS's import dies outright. GraphHopper does not: it built a
-  # graph from an extract carrying 1571 such references without complaint, which
-  # is the worse half of this — the ways involved are simply absent from the
-  # routing graph, and nothing says so.
-  #
-  # Checked here rather than per chunk in apply-osm-diff.sh: this is a full pass
-  # over a multi-gigabyte file, and once per run — immediately before the
-  # consumers that would choke on it — is enough.
-  echo "[$(date '+%Y-%m-%d %H:%M:%S')] Verifying the patched extract's referential integrity..."
-  # Two things here are load-bearing, both learned the hard way:
-  #
-  #   2>&1  — check-refs writes its whole report to stderr, not stdout. Discard
-  #           stderr and the command yields nothing at all.
-  #   || true — under `set -o pipefail` this would otherwise abort the script on
-  #           every run. check-refs exits non-zero whenever ANY reference is
-  #           missing, and a bounded extract always has missing relation members
-  #           (a healthy one here reports 924). Its exit status is useless as a
-  #           verdict; only the parsed node count decides.
-  CHECK_REFS_OUT="$(docker exec barrelman-db osmium check-refs -r "$PBF_FILE" 2>&1 || true)"
-  MISSING_NODES="$(printf '%s\n' "$CHECK_REFS_OUT" \
-    | sed -n 's/^Nodes  *in ways  *missing: *//p' | tr -cd '0-9')"
-
-  # An empty parse means the check did not run (no osmium, unreadable file) —
-  # distinct from "ran and found nothing". Failing open there would restore the
-  # exact silence this guard exists to remove, so say so and stop.
-  if [ -z "$MISSING_NODES" ]; then
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: could not verify $(basename "$PBF_FILE") —" >&2
-    echo "  'osmium check-refs' produced no node count. Skipping the rebuilds rather" >&2
-    echo "  than feeding them an unverified extract." >&2
-    exit 1
-  fi
-
-  # Relations may reference objects outside the extract — that is normal for any
-  # bounded region and is not checked. Only ways with missing nodes are fatal.
-  if [ "$MISSING_NODES" -gt 0 ]; then
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: $(basename "$PBF_FILE") has ${MISSING_NODES} node(s) referenced by ways" >&2
-    echo "  but absent from the file. Every consumer of the extract will fail on it:" >&2
-    echo "    MOTIS       — import aborts: unable to import: invalid location" >&2
-    echo "    GraphHopper — builds anyway, without the affected ways and without" >&2
-    echo "                  reporting it, so street routing quietly loses roads" >&2
-    echo "  Postgres is updated and consistent; only the extract is damaged." >&2
-    echo "  Rebuild it from fresh extracts with UPDATE_MODE=full, which re-downloads" >&2
-    echo "  and re-merges rather than patching. Skipping the rebuilds below." >&2
-    exit 1
-  fi
-  echo "  Extract is intact (no ways reference missing nodes)."
-
-  echo "[$(date '+%Y-%m-%d %H:%M:%S')] Extract changed — triggering GraphHopper graph rebuild..."
-  "$SCRIPT_DIR/rebuild-graphhopper.sh"
-
-  # The basemap is rendered from the same extract, so the mtime guard above is
-  # exactly the right condition for it too: if region.osm.pbf did not move,
-  # planetiler would spend four minutes producing an identical archive.
-  #
-  # Without this the basemap was the one output that never tracked an update.
-  # Postgres got the diff, GraphHopper got a fresh graph, and the map still
-  # showed whatever planetiler last rendered by hand — because martin serves
-  # the DB-backed sources live but the `basemap` source is a static PMTiles
-  # file, and nothing in the pipeline rebuilt it.
-  if [ "${REBUILD_BASEMAP:-1}" = "1" ]; then
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Extract changed — triggering basemap rebuild..."
-    "$SCRIPT_DIR/rebuild-basemap.sh"
-  else
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Basemap rebuild disabled (REBUILD_BASEMAP=0) — skipping."
-  fi
-else
-  echo "[$(date '+%Y-%m-%d %H:%M:%S')] Extract unchanged — skipping GraphHopper and basemap rebuilds."
-fi
+rebuild_consumers "$PBF_MTIME_BEFORE" "$PBF_MTIME_AFTER"
 
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] OSM update complete."

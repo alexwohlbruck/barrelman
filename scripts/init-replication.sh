@@ -26,7 +26,10 @@ if [ -f "$ENV_FILE" ]; then
 fi
 
 DB_PASS="${BARRELMAN_DB_PASSWORD:-barrelman}"
-DB_URL="postgresql://barrelman:${DB_PASS}@localhost:5432/barrelman"
+# The password goes in as PGPASSWORD, not in the URL: osm2pgsql quotes the
+# connection string in its errors, and the console saves this script's output to
+# the job log.
+DB_URL="postgresql://barrelman@localhost:5432/barrelman"
 
 # Match update-osm.sh: derive the feed from REGIONS so init and update can never
 # seed and follow different servers.
@@ -35,11 +38,8 @@ REPLICATION_COUNT="$(printf '%s\n' "$OSM_REPLICATION" | grep -c . || true)"
 REPLICATION_URL="${GEOFABRIK_REPLICATION_URL:-$(printf '%s\n' "$OSM_REPLICATION" | head -n1)}"
 REPLICATION_URL="${REPLICATION_URL:-https://download.geofabrik.de/north-america/us/north-carolina-updates/}"
 
-# The URL contains BARRELMAN_DB_PASSWORD, and you can run this script from the
-# console, where the job runner saves its output to the database and shows it in
-# the job log. Print the connection without the password.
 echo "Initializing replication state..."
-echo "  DB:     postgresql://barrelman:***@localhost:5432/barrelman"
+echo "  DB:     $DB_URL"
 echo "  Server: $REPLICATION_URL"
 
 if [ "${REPLICATION_COUNT:-0}" -gt 1 ]; then
@@ -48,7 +48,18 @@ if [ "${REPLICATION_COUNT:-0}" -gt 1 ]; then
   echo "  can follow only one. The remaining regions will only move on UPDATE_MODE=full."
 fi
 
-docker exec barrelman-db \
+# Same guard as update-osm.sh: replication needs the --slim middle tables, and
+# osm2pgsql's own error for their absence does not say how to recover.
+HAS_MIDDLE=$(docker exec -e PGPASSWORD="$DB_PASS" barrelman-db \
+  psql "$DB_URL" -tAc "SELECT to_regclass('planet_osm_ways') IS NOT NULL;")
+if [ "$HAS_MIDDLE" != "t" ]; then
+  echo "ERROR: this database has no osm2pgsql middle tables (planet_osm_ways)." >&2
+  echo "  Replication needs a --slim import that kept them. Re-import, then run" >&2
+  echo "  this again without dropping planet_osm_* in between." >&2
+  exit 1
+fi
+
+docker exec -e PGPASSWORD="$DB_PASS" barrelman-db \
   osm2pgsql-replication init \
     -d "$DB_URL" \
     --server "$REPLICATION_URL"

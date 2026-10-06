@@ -47,6 +47,109 @@ does it — and the release pipeline turns it into the GitHub Release notes.
   `detail` names every member, and Martin fails a composite that names a
   source it does not serve, so until then the whole bundle answers 404.
 
+## [0.7.4] - 2026-10-06
+
+### Fixed
+
+* **Brand suggestions need more than one shared word.** `/brands` accepted any
+  trigram match above Postgres's 0.3 default, so "power outlet" suggested Home
+  Outlet, Sears Outlet and Grocery Outlet. A match that is not a prefix now
+  needs a similarity of 0.45, or 0.6 on word similarity. Misspellings such as
+  "starbuks" and "home depo" still find their brand.
+
+## [0.7.3] - 2026-10-06
+
+### Fixed
+
+* **Cabins and hotel rooms are no longer listed as power outlets.** A
+  `power_supply=yes` tag on lodging (`building=cabin`, and `tourism` chalet,
+  alpine and wilderness huts, hotel, motel, guest house, hostel, apartment)
+  describes the outlets in a guest's room, the same way it does on a campsite
+  pitch. Searching for outlets near Philadelphia turned up a campground's
+  cabins. A dedicated outlet or device charging station at a hotel still
+  counts. Run "Backfill Power Outlet Category" to apply this to an existing
+  database.
+
+## [0.7.2] - 2026-10-04
+
+### Fixed
+
+* **Browsing a category within a radius is fast.** `/search` with `categories`
+  and a `radius` read every place inside the circle and kept the few that
+  matched, because the query left out the condition that lets Postgres use the
+  categories index. On a Berlin import a 20 km browse took 2–3 seconds whatever
+  the category; it now takes 10–30 ms for most categories, and the densest
+  (parking) went from 1.8 s to 1.1 s. On the 218M-row US database, outlets
+  within 20 km of midtown Manhattan went from 3.5 s, often past the 10-second
+  timeout, to 0.23 s. Browsing without a radius was already fast and is
+  unchanged.
+
+## [0.7.1] - 2026-10-04
+
+### Fixed
+
+* **"Backfill Power Outlet Category" no longer runs a large database out of
+  memory.** It judged every row and then joined the results back to the table,
+  and Postgres hashed the whole table for that join. On a 218M-row database one
+  backend reached 7.8 GB, the container's memory limit killed it, and Postgres
+  restarted in recovery. It is now a single pass over the table that uses
+  little memory at any size.
+
+## [0.7.0] - 2026-10-04
+
+### Added
+
+* **OSM Update works on a database without osm2pgsql's middle tables.** Those
+  tables are about 13 times the size of the extract (around 155 GB for the
+  United States), so a large import usually drops them, and until now that
+  ended replication for good. Such a database now replicates through
+  `region.osm.pbf`: each run applies the new diffs to the extract, re-imports
+  only the objects they touch into a staging database, and swaps those rows
+  in. Search columns, intersections and parent context are redone for the
+  swapped rows alone, in the same transaction, instead of across the whole
+  table. Nothing to set up: the first run starts from the replication header
+  in the extract.
+
+* **"Rebuild routing graph" and "Refresh 3D buildings" switches on OSM
+  Update**, beside "Rebuild basemap". All three take hours on a country, and
+  the routing graph rebuild takes street routing down while it runs. Turn them
+  off to keep the nightly update to the database alone. A new **Refresh 3D
+  Buildings** script, also seeded as a disabled weekly schedule, covers the view
+  separately.
+
+### Fixed
+
+* **Unticking a switch in the console turns it off.** A boolean parameter left
+  unticked used to send no value at all, and scripts that default a switch to
+  on read that as on. "Rebuild basemap" on OSM Update and on Full OSM Import
+  never actually turned off. Switches are now always sent as `1` or `0`.
+
+* **The 3D buildings view stays on the map while it refreshes.** The refresh
+  after each OSM update locked `buildings_3d`, so 3D building tiles failed for
+  as long as it ran, which is hours on a large import. It now refreshes
+  concurrently once the view has been populated.
+
+* **EV chargers are no longer listed as power outlets.** 0.6.0 gave
+  `power/outlet` to anything with a `socket:*` tag, and most of those tags are
+  car charging connectors. A charger whose `amenity` tag had been removed or
+  marked disused slipped past the charger check. Only household and USB plugs
+  count now (`socket:schuko`, `typee`, `bs1363`, `nema_5_15`, `nema_5_20`,
+  `as3112`, `domestic`, `usb`). If you ran "Backfill Power Outlet Category" on
+  0.6.0, run it again: it now removes the category from places that no longer
+  qualify. In a Berlin extract this took 8 of 48 places off the list.
+
+## [0.6.0] - 2026-10-03
+
+### Added
+
+* **A `power/outlet` category for public power outlets.** OSM maps them as
+  `power=outlet`, `amenity=device_charging_station`, `amenity=power_supply`, or
+  as a `power_supply=*` or `socket:*` tag on a venue such as a cafe. Every one
+  of these now carries `power/outlet`, so search can browse them with a single
+  category filter. Campsite, caravan and marina hookups, vehicle chargers and
+  private outlets are left out. Existing databases pick it up by running
+  "Backfill Power Outlet Category" from the console.
+
 * **`bicycle_ways` now includes the streets a signed bike route follows.** A
   way in a `route=bicycle` relation with no bike tagging of its own comes back
   as `infra_type=bicycle_route`, so maps can mark the whole route rather than
@@ -82,6 +185,19 @@ does it — and the release pipeline turns it into the GitHub Release notes.
   round trip for a byte-identical tile.
 
 ### Fixed
+
+* **The OSM import and update jobs no longer print the database password.**
+  osm2pgsql quotes its connection string in its errors, and the scripts put the
+  password in that string, so any failure wrote it into the job log in the
+  console. It is now passed as `PGPASSWORD`. If a job of yours failed this way,
+  its log holds the password; rotate it if anyone else can read the console.
+
+* **OSM Update says what's wrong when the middle tables are gone.** On a
+  database whose `planet_osm_*` tables were dropped after import, it used to stop
+  with osm2pgsql's "Database needs to be imported in --slim mode". It now stops
+  before touching anything, says the tables are missing, and lists the ways to
+  recover: `UPDATE_MODE=full`, a re-import that keeps the tables, or disabling
+  the schedule. `init-replication.sh` does the same check.
 
 ## [0.5.0] - 2026-10-01
 

@@ -94,6 +94,22 @@ The catalog is empty or stale — run `scripts/fetch-boundaries.ts`.
 
 `gtfsRegion` accepts a `w,s,e,n` bounding box, `global`, or one of the legacy tokens (`nc`, `nyc`, `southeast`, `us`). Anything else is rejected rather than falling through to an unfiltered query that would download the entire ~2,800 feed global catalog. Use the region's own bbox.
 
+**OSM Update says `No osm2pgsql middle tables`**
+
+That line is informational. Replication normally applies diffs through `planet_osm_ways` and `planet_osm_rels`, which only a `--slim` import keeps, and they are often dropped afterwards to reclaim disk. Without them the update replicates through `region.osm.pbf` instead. See [Without middle tables](/self-hosting/operations#without-middle-tables).
+
+**OSM Update fails with `carries no replication header`**
+
+Replication without middle tables starts from the sequence number Geofabrik writes into each extract's header. An extract from elsewhere, or one rewritten by a tool that drops the header, has none. Check with `docker exec barrelman-db osmium fileinfo /data/region.osm.pbf | grep osmosis`. Re-import from a Geofabrik extract, or set `UPDATE_MODE=full` on the schedule.
+
+**OSM Update fails with `barrelman-db is limited to ... MB of memory`**
+
+Replication without middle tables runs osmium inside `barrelman-db`, next to Postgres. If the two together run out of the container's memory, the kernel can kill a Postgres backend and the database restarts in recovery, so the update refuses to run under a 4 GB limit. Set `BARRELMAN_DB_MEM_LIMIT=6g` (or more for a country) in `.env` and recreate the container with `docker compose up -d barrelman-db`.
+
+**OSM Update fails with `the swap would remove far more rows than it adds`**
+
+The transaction was rolled back and nothing changed. The guard trips when a swap would remove at least 1,000 rows and put back fewer than half as many, which usually means the patched extract is damaged. Look at the diff's size first: if it really deletes that much (a large cleanup or a revert), run the update once with `REPLICATION_ALLOW_SHRINK=1`. If not, rebuild the extract and the database with `UPDATE_MODE=full`.
+
 **Address search returns nothing**
 
 Either `pelias.openaddresses` is empty for your region, or the Pelias `street` layer was never populated. See the layers note in [`pelias/README.md`](https://github.com/alexwohlbruck/barrelman/blob/main/pelias/README.md).
