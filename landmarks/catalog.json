@@ -566,6 +566,13 @@
       "license": "CC0-1.0",
       "author": "Barrelman",
       "source": "scripts/landmarks/carolina-theatre.ts"
+    },
+    {
+      "id": "mcglohon-theater-spirit-square",
+      "file": "models/mcglohon-theater-spirit-square.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/mcglohon-theater-spirit-square.ts"
     }
   ],
   "landmarks": [
@@ -2107,6 +2114,20 @@
         "way/1410822093",
         "way/1410822094",
         "way/1410822095"
+      ]
+    },
+    {
+      "id": "mcglohon-theater-spirit-square",
+      "name": "McGlohon Theater at Spirit Square",
+      "model": "mcglohon-theater-spirit-square",
+      "lng": -80.8398834,
+      "lat": 35.2289106,
+      "bearing": 48.7,
+      "elevation": 0,
+      "minzoom": 15,
+      "wikidata": "Q22061093",
+      "replaces": [
+        "way/131139724"
       ]
     }
   ]
