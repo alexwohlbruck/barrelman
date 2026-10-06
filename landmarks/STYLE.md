@@ -179,6 +179,139 @@ animation will draw.
 The server sizes a moving node as a sphere about its pivot that holds it
 in any pose, so its `height` can come out a little over the real one.
 
+## Building a famous or intricate model
+
+Simple buildings can be modelled straight from OSM and a photo or two.
+Famous buildings, coasters, towers, rides and sculpture can't: people know
+exactly what they look like, and a guess shows. The models that worked here
+were all built this way; the ones that failed skipped a step.
+
+### Gather evidence before modelling
+
+Collect at least three kinds of evidence. Write down where each fact comes
+from, in the generator's header.
+
+- **OSM.** The footprint, the building parts and their heights, and for rides
+  the `roller_coaster=track` ways and the station. Fetch them with the OSM
+  API's map call; Overpass is unreliable. Treat OSM as exact where it is
+  tagged and suspect everywhere else:
+  - heights are often missing or wrong;
+  - names are sometimes on the wrong building;
+  - a coaster's trace can be simplified or turn the wrong way.
+- **Published dimensions.** Height, length, drop, angle, capacity, element
+  order. Sources:
+  - Wikipedia;
+  - RCDB and Coasterpedia for rides;
+  - the National Register of Historic Places and local landmark commission
+    reports for historic buildings.
+
+  Prefer a published number to a measured one.
+- **Photos from several sides.** Wikimedia Commons and Openverse
+  (CC-licensed Flickr) for licensed photos, Mapillary for street level. Aim
+  for at least one photo per side you model, plus one from above or far
+  away.
+  - Overhead shots (aerials, or the view from a nearby tower or wheel) are
+    the most valuable. They show the plan, the roof and the relative heights
+    in one picture.
+- **Public-domain aerials.** USGS NAIP orthoimagery (US) and state
+  orthophotos give the true plan and roof colours, and shadows give heights.
+- **Look-only references.** News, venue and agency photos, and historic
+  postcards, may be looked at and described but never copied. Note them
+  separately in the header: a model resting on them isn't clean for Open
+  Landmarks until licensed photos confirm it.
+- **Commercial maps (Google, Apple, Mapbox).** Their imagery and 3D tiles
+  are reference at most, and only when nothing else exists.
+  - A model shaped against them can't be contributed to Open Landmarks. Say
+    so in its header.
+  - Never copy their geometry.
+
+### Build in order: massing, then the identifying features, then the facade
+
+1. **Massing.** Block out the plain volumes only: tiers, setbacks, the crown
+   envelope, a ride's whole track. Render with `preview.ts` and put each
+   view beside a photo taken from about the same direction. Fix proportions
+   until the outline matches in every view you have evidence for. Most
+   rejected models went wrong here and were never corrected, however much
+   detail followed.
+2. **The identifying features.** List the three to five things that make
+   the landmark recognisable, from the photos, before modelling them. For
+   example:
+   - Bank of America's silver crown cage;
+   - Duke Energy's stone frames, V crown and corner slots;
+   - the Cyclone's sign;
+   - the SkyTower's flag cabin.
+
+   Model each as clean, simple geometry, then check each one against the
+   photo it came from.
+3. **The facade,** per the rules above: window bays, colour, trim.
+4. **Phone size.** Check the 200 and 80 px views. If the identifying
+   features vanish, make them bigger or bolder, not more detailed.
+
+### Compare like with like
+
+Put the photo and the render side by side at the same angle, rendering
+the model from the photo's viewpoint if `preview.ts`'s fixed views don't
+match. A render from the wrong side proves nothing. Name
+what differs before calling a model done. Every review here found something
+the builder hadn't seen.
+
+### Roller coasters and other rides
+
+Use `scripts/landmarks/coaster-kit.ts`. A coaster's generator should be
+almost all data.
+
+- **Plan.**
+  - Start from the OSM track ways, chained in ride direction, and check the
+    chain against an aerial.
+  - If the trace is simplified, too short or turns the wrong way, redraw it
+    over a public-domain orthophoto. Keep OSM's turnarounds where the photo
+    confirms them. The real track length is the check.
+- **Element list.**
+  - Write the published elements in ride order: lift, drops, hills, turns,
+    inversions, brakes.
+  - Place each at a position along the track from its shape in plan.
+    Turnarounds are the tight curves, and an airtime hill is a straight
+    stretch between them.
+  - Use published heights, measured above the local ground, which may slope.
+- **Energy check.** The kit checks that no hill is higher than the train can
+  reach, allowing for friction of 2 to 3% of the lift height per 100 m, and
+  that it never stalls. Modelled top speed and track length should land
+  within a few percent of the published figures.
+- **Smoothness.**
+  - Heights must be smooth over the track's length: crests are rounded,
+    drops have a straight steep section, and pull-outs have a large radius.
+  - Banking follows speed and curvature, and changes gradually.
+  - The kit flags kinks and sudden twists. Fix every flag: a kinked first
+    drop is the first thing anyone notices.
+- **Structure.** The track is a broad ribbon in its real rail colours, never
+  two thin rails. Supports are chunky columns or A-frames, never lattice. A
+  wooden coaster's trestle is broad walls with large regular openings.
+- **Photo matching.** Match renders to at least two photos from known
+  positions, and check the hills line up.
+
+### Towers, rides, sculpture and signs
+
+- **Small, famous objects** (sculpture, statues, signs, vehicles) can spend
+  more of their budget on detail. Keep every part a bold, simple mass that
+  reads at 200 px. Real dimensions and the real pose matter more than
+  surface detail.
+- **Moving rides** (wheels, observation cabins, rotating sculpture): build
+  the moving part as its own node from the start, even if it ships static,
+  so it can be animated later (see Animation). Give it a detail that shows
+  the motion, such as the flag stripes on the SkyTower's cabin.
+- **Famous signs** (the Cyclone, a theatre marquee) may carry their
+  lettering when the sign is the landmark. Build the letters as simple
+  extruded block shapes on a flat panel, not a texture, and note the
+  exception in the generator. Other marquees and signs are plain boxes.
+
+### Report the doubts
+
+Every generator header lists what is measured, what is published, what is
+estimated and what is invented. Name the estimates: a height from a shadow,
+a side no photo shows, an OSM tag that looked wrong. Whoever picks the model
+up next, or reviews it for Open Landmarks, needs to know which parts to
+trust.
+
 ## Checking a model
 
 Run `bun scripts/landmarks/preview.ts <model.glb> <out-dir> [photo.png ...]`.
