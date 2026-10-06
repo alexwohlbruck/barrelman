@@ -524,6 +524,13 @@
       "license": "CC0-1.0",
       "author": "Barrelman",
       "source": "scripts/landmarks/amos-southend.ts"
+    },
+    {
+      "id": "evening-muse",
+      "file": "models/evening-muse.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/evening-muse.ts"
     }
   ],
   "landmarks": [
@@ -1966,6 +1973,19 @@
       "minzoom": 16,
       "replaces": [
         "way/432937734"
+      ]
+    },
+    {
+      "id": "evening-muse",
+      "name": "The Evening Muse",
+      "model": "evening-muse",
+      "lng": -80.8048139,
+      "lat": 35.2477371,
+      "bearing": 322,
+      "elevation": 0,
+      "minzoom": 16,
+      "replaces": [
+        "way/1192512105"
       ]
     }
   ]
