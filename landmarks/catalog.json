@@ -496,6 +496,13 @@
       "license": "CC0-1.0",
       "author": "Barrelman",
       "source": "scripts/landmarks/music-factory-amphitheatre.ts"
+    },
+    {
+      "id": "ovens-auditorium",
+      "file": "models/ovens-auditorium.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/ovens-auditorium.ts"
     }
   ],
   "landmarks": [
@@ -1885,6 +1892,20 @@
       "minzoom": 15,
       "replaces": [
         "way/1202433678"
+      ]
+    },
+    {
+      "id": "ovens-auditorium",
+      "name": "Ovens Auditorium",
+      "model": "ovens-auditorium",
+      "lng": -80.7942755,
+      "lat": 35.2038475,
+      "bearing": 42,
+      "elevation": 0,
+      "minzoom": 15,
+      "wikidata": "Q7113349",
+      "replaces": [
+        "way/836535412"
       ]
     }
   ]
