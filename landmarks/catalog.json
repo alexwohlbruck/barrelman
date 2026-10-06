@@ -454,6 +454,13 @@
       "license": "CC0-1.0",
       "author": "Barrelman",
       "source": "scripts/landmarks/charlotte-transportation-center.ts"
+    },
+    {
+      "id": "pnc-music-pavilion",
+      "file": "models/pnc-music-pavilion.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/pnc-music-pavilion.ts"
     }
   ],
   "landmarks": [
@@ -1759,6 +1766,21 @@
         "way/1501143173",
         "way/1501143174",
         "way/1501143175"
+      ]
+    },
+    {
+      "id": "pnc-music-pavilion",
+      "name": "Truliant Amphitheater",
+      "model": "pnc-music-pavilion",
+      "lng": -80.7106827,
+      "lat": 35.327369,
+      "bearing": 0,
+      "elevation": 0,
+      "minzoom": 15,
+      "wikidata": "Q3023993",
+      "replaces": [
+        "way/577606075",
+        "way/577606076"
       ]
     }
   ]
