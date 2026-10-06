@@ -29,8 +29,8 @@
  * terrarium DEM (the site falls ~7 m from the boulevard to the north end).
  *
  * This file also holds the small massing kit the three Music Factory
- * generators share (site frame, DEM, zoned prisms with eaves or bevelled
- * parapets, arched window panels). Its own model is built only when it is
+ * generators share (site frame, DEM, zoned prisms with eaves or coped brick
+ * parapets, bays of arched or framed windows between brick piers). Its own model is built only when it is
  * run directly.
  *
  * Map frame: x east, y north, z up, metres; bearing 0. Everything is drawn in
@@ -202,29 +202,53 @@ export function solid(p: Part, ring: XY[], z0: number, z1: number | ((q: XY) => 
 // Zoned massing. A building is a set of zones that tile its footprint; each
 // has a planar roof. Walls on the outline run from below ground to the roof;
 // steps between zones get a wall where one roof stands above the next. Flat
-// zones get a bevelled parapet edge; gabled zones a deep eave.
+// zones get a brick parapet with a pale coping, the roof deck sunk behind
+// it; gabled zones a deep eave.
 
-export type Mats = { wall: Part; roof: Part; eave: Part; win: Part }
+export type Mats = {
+  wall: Part; roof: Part; eave: Part; win: Part
+  /** Bricked-up openings, a shade darker than the wall. Omitted: plain wall. */
+  infill?: Part
+  /** Painted window frames, for zones that ask for them. */
+  frame?: Part
+  /**
+   * Flat decks behind parapets, if not `roof`. The mills' flat roofs are pale
+   * membrane and their gables dark metal (2007 aerial), and that difference
+   * is what lets the low gables read as gables from above.
+   */
+  deck?: Part
+}
 export type Zone = {
   poly: XY[]
-  /** Roof elevation at a point (planar within the zone). */
+  /** Roof elevation at a point (planar within the zone); a parapet's top. */
   z: (p: XY) => number
-  /** Overhanging eave instead of a bevelled parapet. */
+  /** Overhanging eave instead of a parapet. */
   eave?: boolean
-  /** Window rows, absolute elevations [bottom, top], and their pitch. */
+  /** Window rows, absolute elevations [sill, head], and their pitch. */
   rows?: [number, number][]
   pitch?: number
   winW?: number
   /** Square-headed (mid-century steel) windows rather than segmental arches. */
   square?: boolean
+  /** Brick piers between the bays, as on the early mills. */
+  piers?: boolean
+  /** Which openings are bricked up: by the wall's outward normal, row and bay. */
+  infill?: (o: XY, row: number, k: number) => boolean
+  /** Which walls (by outward normal) get painted frames round their windows. */
+  frame?: (o: XY) => boolean
   wall?: Part
   roof?: Part
 }
 export const flatZ = (z: number) => () => z
 /** A gable half: ridge at t = tc, falling `k` per metre away from it. */
 export const gableZ = (ax: ReturnType<typeof axes>, tc: number, ridge: number, k: number) => (p: XY) => ridge - k * Math.abs(ax.t(p) - tc)
+/** A stable pseudo-random fraction for a point, so infill patterns don't shimmer between builds. */
+export const hash = (p: XY, k = 0) => { const x = Math.sin(p[0] * 127.1 + p[1] * 311.7 + k * 74.7) * 43758.5453; return x - Math.floor(x) }
 
-const BEVEL = 0.55, EAVE = 0.8, BURY = 3
+/** Parapet height above the roof deck, coping width, eave overhang, wall depth below ground. */
+const PARA = 0.5, CAP = 0.35, CHAMFER = 0.1, EAVE = 0.8, BURY = 3
+/** The roof deck: a flat zone's sits behind its parapet. */
+const deck = (zn: Zone, q: XY) => zn.z(q) - (zn.eave ? 0 : PARA)
 /**
  * Build zones. `party` lists outline segments shared with a neighbouring
  * model, which get no windows.
@@ -237,7 +261,7 @@ export function build(zones: Zone[], m: Mats, party: [XY, XY][] = []) {
     return d(A) < 0.6 && d(B) < 0.6
   })
   for (const zn of zones) {
-    const P = zn.poly, n = P.length, wall = zn.wall ?? m.wall, roof = zn.roof ?? m.roof
+    const P = zn.poly, n = P.length, wall = zn.wall ?? m.wall, roof = zn.roof ?? (zn.eave ? m.roof : m.deck ?? m.roof)
     // Classify each edge: outline (no zone beyond it) or a step to a neighbour.
     const edges = P.map((A, i) => {
       const B = P[(i + 1) % n], L = Math.hypot(B[0] - A[0], B[1] - A[1])
@@ -247,87 +271,153 @@ export function build(zones: Zone[], m: Mats, party: [XY, XY][] = []) {
       return { A, B, L, o, nb }
     })
     const outer = edges.map((e) => !e.nb)
-    // Bevelled parapets inset the lid along outline edges only.
-    const d = edges.map((e, i) => (!zn.eave && outer[i] ? BEVEL : 0))
-    const lid: XY[] = P.map((p, i) => {
-      const j = (i + n - 1) % n, e0 = edges[j], e1 = edges[i]
-      const n0: XY = [-e0.o[0], -e0.o[1]], n1: XY = [-e1.o[0], -e1.o[1]]
-      // Intersect the two edge lines, each moved inward by its own offset.
-      const a0: XY = [p[0] + n0[0] * d[j], p[1] + n0[1] * d[j]], a1: XY = [p[0] + n1[0] * d[i], p[1] + n1[1] * d[i]]
-      const t0: XY = [e0.B[0] - e0.A[0], e0.B[1] - e0.A[1]], t1: XY = [e1.B[0] - e1.A[0], e1.B[1] - e1.A[1]]
-      const den = t0[0] * t1[1] - t0[1] * t1[0]
-      if (Math.abs(den) < 1e-6) return a1
-      const k = ((a1[0] - a0[0]) * t1[1] - (a1[1] - a0[1]) * t1[0]) / den
-      return [a0[0] + t0[0] * k, a0[1] + t0[1] * k]
-    })
+    const para = !zn.eave
+    /** The outline moved inward by `w` along outline edges only. */
+    const inset = (w: number): XY[] => {
+      const d = edges.map((_, i) => (para && outer[i] ? w : 0))
+      return P.map((p, i) => {
+        const j = (i + n - 1) % n, e0 = edges[j], e1 = edges[i]
+        const a0: XY = [p[0] - e0.o[0] * d[j], p[1] - e0.o[1] * d[j]], a1: XY = [p[0] - e1.o[0] * d[i], p[1] - e1.o[1] * d[i]]
+        const t0: XY = [e0.B[0] - e0.A[0], e0.B[1] - e0.A[1]], t1: XY = [e1.B[0] - e1.A[0], e1.B[1] - e1.A[1]]
+        const den = t0[0] * t1[1] - t0[1] * t1[0]
+        if (Math.abs(den) < 1e-6) return a1
+        const k = ((a1[0] - a0[0]) * t1[1] - (a1[1] - a0[1]) * t1[0]) / den
+        return [a0[0] + t0[0] * k, a0[1] + t0[1] * k] as XY
+      })
+    }
+    const lid = inset(CAP), lip = inset(CHAMFER)
     for (const [i, j, k] of earcut(lid)) {
-      const V = (q: XY): V3 => [q[0], q[1], zn.z(q)]
+      const V = (q: XY): V3 => [q[0], q[1], deck(zn, q)]
       tri(roof, V(lid[i]), V(lid[j]), V(lid[k]), [0, 0, 1])
     }
     edges.forEach((e, i) => {
-      const { A, B, o } = e, top = (q: XY) => zn.z(q) - d[i] * 1
+      const { A, B, o } = e, i1 = (i + 1) % n
       if (outer[i]) {
         const base = Math.min(ground(A), ground(B)) - BURY
+        // A parapet's brick stops under its coping; an eave's at the roof.
+        const top = (q: XY) => zn.z(q) - (para ? 0.12 : 0)
         quad(wall, [A[0], A[1], base], [B[0], B[1], base], [B[0], B[1], top(B)], [A[0], A[1], top(A)], [o[0], o[1], 0])
-        if (d[i]) {
-          const a2 = lid[i], b2 = lid[(i + 1) % n]
-          // The parapet's bevel stays brick, so the walls still read red from above.
-          quad(wall, [A[0], A[1], top(A)], [B[0], B[1], top(B)], [b2[0], b2[1], zn.z(b2)], [a2[0], a2[1], zn.z(a2)], [o[0], o[1], 1])
+        if (para) {
+          // The coping: a chamfered pale cap on the parapet, the line that
+          // finishes every flat-roofed section in the photos.
+          const a1 = lip[i], b1 = lip[i1], a2 = lid[i], b2 = lid[i1], Z = (q: XY) => zn.z(q)
+          quad(m.eave, [A[0], A[1], top(A)], [B[0], B[1], top(B)], [b1[0], b1[1], Z(b1)], [a1[0], a1[1], Z(a1)], [o[0], o[1], 1])
+          quad(m.eave, [a1[0], a1[1], Z(a1)], [b1[0], b1[1], Z(b1)], [b2[0], b2[1], Z(b2)], [a2[0], a2[1], Z(a2)], [0, 0, 1])
+          // The parapet's inner face, down to the deck.
+          quad(wall, [a2[0], a2[1], Z(a2)], [b2[0], b2[1], Z(b2)], [b2[0], b2[1], deck(zn, b2)], [a2[0], a2[1], deck(zn, a2)], [-o[0], -o[1], 0])
+          // Close the parapet's ends where the outline meets a neighbour.
+          const cap = (p: XY, q: XY, f: { o: XY }) =>
+            quad(wall, [p[0], p[1], deck(zn, p)], [q[0], q[1], deck(zn, q)], [q[0], q[1], Z(q)], [p[0], p[1], Z(p)], [f.o[0], f.o[1], 0])
+          if (!outer[(i + n - 1) % n]) cap(A, a2, edges[(i + n - 1) % n])
+          if (!outer[i1]) cap(B, b2, edges[i1])
         }
         if (zn.eave) {
           // The eave: roof carried out past the wall, a fascia and a soffit.
           const ext = (q: XY, s: number): XY => [q[0] + o[0] * EAVE + (B[0] - A[0]) / e.L * s, q[1] + o[1] * EAVE + (B[1] - A[1]) / e.L * s]
           const convex = (k: number) => { const f = edges[k], g = edges[(k + 1) % n]; return f.o[0] * g.o[1] - f.o[1] * g.o[0] > 0 }
-          const sa = outer[(i + n - 1) % n] && convex((i + n - 1) % n) ? -EAVE : 0, sb = outer[(i + 1) % n] && convex(i) ? EAVE : 0
+          const sa = outer[(i + n - 1) % n] && convex((i + n - 1) % n) ? -EAVE : 0, sb = outer[i1] && convex(i) ? EAVE : 0
           const a3 = ext(A, sa), b3 = ext(B, sb)
           const za = zn.z(A) - 0.15, zb = zn.z(B) - 0.15
           quad(roof, [A[0], A[1], zn.z(A) + 0.02], [B[0], B[1], zn.z(B) + 0.02], [b3[0], b3[1], zb], [a3[0], a3[1], za], [o[0] * 0.3, o[1] * 0.3, 1])
           quad(m.eave, [a3[0], a3[1], za], [b3[0], b3[1], zb], [b3[0], b3[1], zb - 0.35], [a3[0], a3[1], za - 0.35], [o[0], o[1], 0])
           quad(m.eave, [A[0], A[1], zn.z(A) - 0.6], [B[0], B[1], zn.z(B) - 0.6], [b3[0], b3[1], zb - 0.35], [a3[0], a3[1], za - 0.35], [0, 0, -1])
         }
-        if (zn.rows && e.L > 4 && !onParty(A, B)) windows(m.win, e, zn, top)
+        // Piers and windows stop under the soffit or the coping.
+        const under = (q: XY) => zn.z(q) - (para ? 0.15 : 0.6)
+        if (zn.rows && e.L > 4 && !onParty(A, B)) windows(m, e, zn, under, base)
       } else {
-        // A step: wall only where this roof stands above the neighbour's.
-        const nb = e.nb!
-        const hA = zn.z(A) - nb.z(A), hB = zn.z(B) - nb.z(B)
-        if (hA > 0.05 || hB > 0.05)
-          quad(wall, [A[0], A[1], Math.min(nb.z(A), zn.z(A))], [B[0], B[1], Math.min(nb.z(B), zn.z(B))], [B[0], B[1], zn.z(B)], [A[0], A[1], zn.z(A)], [o[0], o[1], 0])
+        // A step: wall only where this deck stands above the neighbour's.
+        const nb = e.nb!, hi = (q: XY) => deck(zn, q), lo = (q: XY) => Math.min(deck(nb, q), hi(q))
+        if (hi(A) - deck(nb, A) > 0.05 || hi(B) - deck(nb, B) > 0.05)
+          quad(wall, [A[0], A[1], lo(A)], [B[0], B[1], lo(B)], [B[0], B[1], hi(B)], [A[0], A[1], hi(A)], [o[0], o[1], 0])
       }
     })
   }
 }
 
-/** Door positions on the outline; windows keep clear of them. */
+/**
+ * Door positions on the outline; windows keep clear of them. `r` is the
+ * door's half-width plus its margin. On a wall with a door, the bays are
+ * laid out from the door outwards, so the door sits in the run of windows
+ * rather than knocking holes in a grid.
+ */
 export const DOORS: { p: XY; r: number }[] = []
 
-/** Rooftop plant: small pale boxes, `[x, y, roof z, bearing]` each. */
+/** Rooftop plant: small pale boxes standing on the deck, `[x, y, roof z, bearing]` each. */
 export function plant(p: Part, units: [number, number, number, number][]) {
   for (const [x, y, z, deg] of units) {
     const a = axes(deg), c: XY = [x, y]
     const ring = clean([[-1.6, -1.1], [1.6, -1.1], [1.6, 1.1], [-1.6, 1.1]].map(([s, t]) => { const q = a.at(s, t); return [q[0] + c[0], q[1] + c[1]] as XY }))
-    solid(p, ring, z - 0.2, z + 1.5)
+    solid(p, ring, z - PARA - 0.2, z + 1.1)
   }
 }
 
-/** Window panels on an outline wall, each with a shallow segmental head. */
-function windows(win: Part, e: { A: XY; B: XY; L: number; o: XY }, zn: Zone, top: (q: XY) => number) {
+/**
+ * The bay rhythm of one outline wall: brick piers standing 0.22 m proud
+ * between the bays, and in each bay a window per row, its panel set on the
+ * wall between the piers. Early openings have segmental arched heads; steel
+ * ones are square, optionally in a painted frame. Bricked-up openings are
+ * drawn as darker brick panels.
+ */
+function windows(m: Mats, e: { A: XY; B: XY; L: number; o: XY }, zn: Zone, under: (q: XY) => number, base: number) {
   const pitch = zn.pitch ?? 4, w = zn.winW ?? 1.7, count = Math.floor((e.L - 1.2) / pitch)
   if (count < 1) return
   const u: XY = [(e.B[0] - e.A[0]) / e.L, (e.B[1] - e.A[1]) / e.L], start = (e.L - count * pitch) / 2
-  for (let k = 0; k < count; k++) {
-    const c = start + pitch * (k + 0.5)
-    const P = (s: number, z: number): V3 => [e.A[0] + u[0] * s + e.o[0] * 0.05, e.A[1] + u[1] * s + e.o[1] * 0.05, z]
-    const mid: XY = [e.A[0] + u[0] * c, e.A[1] + u[1] * c]
-    for (const [z0, z1] of zn.rows!) {
-      if (ground(mid) > z0 - 0.4 || z1 + 0.6 > top(mid)) continue
-      if (DOORS.some((d) => Math.hypot(mid[0] - d.p[0], mid[1] - d.p[1]) < d.r + w / 2)) continue
-      const h = z1 - 0.3, s0 = c - w / 2, s1 = c + w / 2
-      quad(win, P(s0, z0), P(s1, z0), P(s1, h), P(s0, h), [e.o[0], e.o[1], 0])
-      if (zn.square) { quad(win, P(s0, h), P(s1, h), P(s1, z1), P(s0, z1), [e.o[0], e.o[1], 0]); continue }
-      // Segmental arch: three segments rising 0.3 m.
-      const arc = [0, 1 / 3, 2 / 3, 1].map((f) => { const s = s0 + (s1 - s0) * f; return P(s, h + 0.3 * Math.sin(Math.PI * f) ** 0.6 * 1) })
-      for (let a = 0; a < 3; a++) tri(win, P(c, h), arc[a], arc[a + 1], [e.o[0], e.o[1], 0])
+  const N: V3 = [e.o[0], e.o[1], 0]
+  const P = (s: number, z: number, d = 0.05): V3 => [e.A[0] + u[0] * s + e.o[0] * d, e.A[1] + u[1] * s + e.o[1] * d, z]
+  const at = (s: number): XY => [e.A[0] + u[0] * s, e.A[1] + u[1] * s]
+  const near = (q: XY, r = 0) => DOORS.some((d) => Math.hypot(q[0] - d.p[0], q[1] - d.p[1]) < d.r + r)
+  if (zn.piers) {
+    const pw = Math.max(0.5, pitch - w - 0.5), D = 0.22
+    for (let k = 0; k <= count; k++) {
+      const c = start + pitch * k, s0 = c - pw / 2, s1 = c + pw / 2
+      // A pier never runs past the wall's ends, or across a door.
+      if (s0 < 0.2 || s1 > e.L - 0.2 || near(at(c), pw / 2)) continue
+      const z0 = under(at(s0)), z1 = under(at(s1))
+      quad(m.wall, P(s0, base, D), P(s1, base, D), P(s1, z1, D), P(s0, z0, D), N)
+      quad(m.wall, P(s0, base, 0), P(s0, base, D), P(s0, z0, D), P(s0, z0, 0), [-u[0], -u[1], 0])
+      quad(m.wall, P(s1, base, D), P(s1, base, 0), P(s1, z1, 0), P(s1, z1, D), [u[0], u[1], 0])
+      quad(m.wall, P(s0, z0, 0), P(s0, z0, D), P(s1, z1, D), P(s1, z1, 0), [0, 0, 1])
     }
+  }
+  const framed = !!(m.frame && zn.frame?.(e.o)), F = 0.22
+  // Bay centres: a grid centred on the wall, or one run out from a door on it.
+  let centres = Array.from({ length: count }, (_, k) => start + pitch * (k + 0.5))
+  const door = DOORS.find((d) => {
+    const s = (d.p[0] - e.A[0]) * u[0] + (d.p[1] - e.A[1]) * u[1], off = Math.abs((d.p[0] - e.A[0]) * u[1] - (d.p[1] - e.A[1]) * u[0])
+    return off < 1 && s > 0 && s < e.L
+  })
+  if (door) {
+    const sd = (door.p[0] - e.A[0]) * u[0] + (door.p[1] - e.A[1]) * u[1], first = door.r + w / 2 + 0.01 // just clear of the door test below
+    centres = []
+    for (let c = sd - first; c - w / 2 >= 0.3; c -= pitch) centres.push(c)
+    for (let c = sd + first; c + w / 2 <= e.L - 0.3; c += pitch) centres.push(c)
+  }
+  for (const [k, c] of centres.entries()) {
+    const mid = at(c), s0 = c - w / 2, s1 = c + w / 2
+    if (near(mid, w / 2)) continue
+    zn.rows!.forEach(([z0, z1], row) => {
+      if (ground(mid) > z0 - 0.4 || z1 + 0.25 > under(mid)) return
+      const bricked = zn.infill?.(e.o, row, k) ?? false
+      if (bricked && !m.infill) return
+      const p = bricked ? m.infill! : m.win
+      if (zn.square) {
+        if (framed && !bricked) {
+          // Painted frame round a slate panel; four strips, no overlap.
+          quad(m.frame!, P(s0, z0), P(s1, z0), P(s1, z0 + F), P(s0, z0 + F), N)
+          quad(m.frame!, P(s0, z1 - F), P(s1, z1 - F), P(s1, z1), P(s0, z1), N)
+          quad(m.frame!, P(s0, z0 + F), P(s0 + F, z0 + F), P(s0 + F, z1 - F), P(s0, z1 - F), N)
+          quad(m.frame!, P(s1 - F, z0 + F), P(s1, z0 + F), P(s1, z1 - F), P(s1 - F, z1 - F), N)
+          quad(p, P(s0 + F, z0 + F), P(s1 - F, z0 + F), P(s1 - F, z1 - F), P(s0 + F, z1 - F), N)
+        } else quad(p, P(s0, z0), P(s1, z0), P(s1, z1), P(s0, z1), N)
+        return
+      }
+      // A segmental arch: a shallow circular segment, rise a quarter of the span.
+      const rise = 0.25 * w, h = z1 - rise, R = (w * w / 4 + rise * rise) / (2 * rise)
+      quad(p, P(s0, z0), P(s1, z0), P(s1, h), P(s0, h), N)
+      const arc = [0, 0.25, 0.5, 0.75, 1].map((f) => { const x = (f - 0.5) * w; return P(c + x, h + Math.sqrt(R * R - x * x) - (R - rise)) })
+      for (let a = 0; a < 4; a++) tri(p, P(c, h), arc[a], arc[a + 1], N)
+    })
   }
 }
 
@@ -357,11 +447,13 @@ export async function write(b: Built, budget = 5000) {
   console.log(`${out}: ${triangles} triangles, ${glb.length} bytes; anchor ${lng}, ${lat}; base ${b.base.toFixed(1)} m`)
 }
 
-// The palette shared by the mill models: red brick pulled to the palette's
-// lightness (it is the complex's identity), roof grey for the low roofs, trim
-// for the eaves and copings, slate windows, and the silver of the metal
-// towers and cladding.
-export const BRICK = finish('mill-brick', 0xc27d66)
+// The palette shared by the mill models: red brick kept near the palette's
+// lightness but red rather than salmon (it is the complex's identity), roof
+// grey for the low roofs, slate windows, and the silver of the metal towers
+// and cladding, which also takes the eaves and copings.
+export const BRICK = finish('mill-brick', 0xb96652)
+/** Bricked-up openings: the same brick a shade deeper, so the bay rhythm still shows. */
+export const INFILL = finish('mill-brick-infill', 0x9e5646)
 export const SILVER = finish('mill-silver', 0xd3d6d9)
 
 // ---------------------------------------------------------------------------
@@ -369,8 +461,8 @@ export const SILVER = finish('mill-silver', 0xd3d6d9)
 
 /** way/414800516: both mills and the bridge, as one outline. */
 export const OUTLINE: XY[] = [[-21.4, 66.8], [-2.9, 68.0], [-0.3, 23.7], [11.8, 24.1], [12.2, 14.8], [15.1, 14.9], [14.0, 38.4], [55.1, 40.4], [56.4, 15.2], [46.3, 14.7], [42.8, 14.6], [43.1, 8.3], [39.4, 8.2], [36.2, 8.0], [37.4, -8.0], [16.6, -9.6], [11.3, -9.9], [11.7, -13.5], [6.3, -24.9], [-5.7, -21.0], [-5.1, -18.7], [-5.4, -18.0], [-9.3, -18.1], [-11.8, -10.4], [-13.6, -10.4], [-17.7, 3.8], [-18.0, 7.0], [-21.8, 39.0], [-30.0, 27.3], [-30.6, 27.6], [-41.0, 32.3], [-46.3, 34.7], [-54.7, 17.5], [-65.5, -5.0], [-90.5, 5.1], [-104.8, 11.0], [-99.4, 23.1], [-87.6, 17.2], [-75.7, 42.4], [-79.2, 43.9], [-73.9, 55.6], [-103.2, 68.9], [-91.3, 94.6], [-65.4, 81.9], [-58.8, 96.2], [-63.6, 98.1], [-57.2, 111.1], [-48.4, 106.7], [-46.1, 111.2], [-65.1, 120.5], [-60.6, 129.5], [-63.2, 130.8], [-58.1, 140.9], [-50.3, 157.1], [-41.9, 153.1], [-44.0, 149.0], [-41.0, 147.5], [-33.0, 163.4], [4.2, 144.9], [-3.1, 130.5], [-2.1, 125.4], [-33.9, 57.2], [-21.1, 51.9]]
-/** Mill #2's east wall runs straight on from the courtyard to the amphitheatre. */
-export const MILL2_EAST: [XY, XY] = [[-54.7, 17.5], [-33.9, 57.2]]
+/** Where Mill #2 meets the bridge; its courtyard wall south of here has windows. */
+export const MILL2_EAST: [XY, XY] = [[-46.3, 34.7], [-33.9, 57.2]]
 /** Mill #1 (east arm) with its east wing: the outline east of x ≈ −21.5. */
 export const MILL1: XY[] = OUTLINE.slice(0, 28).concat([[-21.1, 51.9]] as XY[])
 /** The bridge section between the mills, north of the courtyard. */
@@ -384,32 +476,48 @@ const STAGE_CANOPY: XY[] = [[-41.0, 32.3], [-42.2, 29.7], [-43.4, 27.0], [-32.9,
 // Mill #1 and the bridge.
 
 export function buildMill(): Built {
-  const wall = new Part(), roof = new Part(), eave = new Part(), win = new Part(), silver = new Part(), stage = new Part()
-  const m: Mats = { wall, roof, eave, win }
+  const wall = new Part(), roof = new Part(), win = new Part(), silver = new Part(), stage = new Part(), infill = new Part()
+  // Eaves and copings share the cladding's pale metal: six materials at most.
+  const m: Mats = { wall, roof, eave: silver, win, infill, deck: silver }
+  const eave = silver
   const ax = axes(-2.5)               // Mill #1 runs a little west of north
   const P = MILL1
   const zones: Zone[] = []
+  /** Which way a wall faces, in this mill's frame. */
+  const west = (o: XY) => o[0] * ax.r[0] + o[1] * ax.r[1] < -0.7, south = (o: XY) => o[0] * ax.u[0] + o[1] * ax.u[1] < -0.7
+  // Bays from the survey and the 2007 aerial: tall segmental-arched openings
+  // about half the bay wide, between brick piers, on every storey; thirteen
+  // bays on the 1904 mill's courtyard side.
   // The 1904 mill along the courtyard: one storey, low gable, deep eave, a
   // long row of segmental-arched windows; a basement row shows on the east
   // where the ground falls away.
-  const GX0 = -24, GX1 = -3.5, tc = (GX0 + GX1) / 2, ridge = 223.8, eaveZ = 222.0, k = (ridge - eaveZ) / ((GX1 - GX0) / 2)
-  const mill1904 = { rows: [[218.0, 220.6], [214.0, 216.2]] as [number, number][], pitch: 3.9 }
+  const GX0 = -24, GX1 = -3.5, tc = (GX0 + GX1) / 2, ridge = 225.0, eaveZ = 222.0, k = (ridge - eaveZ) / ((GX1 - GX0) / 2)
+  const mill1904 = { rows: [[218.0, 221.0], [214.0, 216.4]] as [number, number][], pitch: 4.1, winW: 1.9, piers: true }
   zones.push({ poly: ax.band(P, -12, 39, GX0, tc), z: gableZ(ax, tc, ridge, k), eave: true, ...mill1904 })
   zones.push({ poly: ax.band(P, -12, 39, tc, GX1), z: gableZ(ax, tc, ridge, k), eave: true, ...mill1904 })
-  // The 1920s southern L on the boulevard: flat, a short parapet.
-  zones.push({ poly: ax.band(P, -40, -12, -40, 12.5), z: flatZ(222.2), rows: [[218.2, 220.8], [214.4, 216.6]], pitch: 3.6 })
-  // The c.1955 dust-collector room: two storeys, flat.
-  zones.push({ poly: ax.band(P, -12, 40, GX1, 13), z: flatZ(224.6), rows: [[218.6, 221.0], [214.6, 216.8]], pitch: 4.2, square: true })
-  // The c.1946 wing to the east: a storey on a raised basement.
-  zones.push({ poly: ax.band(P, -40, 13, 12.5, 60), z: flatZ(221.6), rows: [[217.8, 220.2], [214.0, 216.2]], pitch: 3.6, square: true })
+  // The 1920s southern L on the boulevard: flat, a short parapet. Its south
+  // wall keeps the bricked-up originals between new openings.
+  zones.push({
+    poly: ax.band(P, -40, -12, -40, 12.5), z: flatZ(222.2), rows: [[218.2, 221.0], [214.4, 216.8]], pitch: 3.8, winW: 1.7, piers: true,
+    infill: (o, row, i) => south(o) && (row === 1 || i % 3 === 1),
+  })
+  // The c.1955 dust-collector room: two storeys, flat, few openings.
+  zones.push({ poly: ax.band(P, -12, 40, GX1, 13), z: flatZ(224.6), rows: [[218.6, 221.0], [214.6, 216.8]], pitch: 4.2, square: true, infill: (o, row, i) => row === 1 || i % 2 === 1 })
+  // The c.1946 wing to the east: a storey on a raised basement, the
+  // basement openings all bricked up and some above.
+  zones.push({ poly: ax.band(P, -40, 13, 12.5, 60), z: flatZ(221.6), rows: [[217.8, 220.2], [214.0, 216.2]], pitch: 3.6, square: true, infill: (o, row, i) => row === 1 || i % 4 === 3 })
   // The east building north of it (Comedy Zone side): two storeys, flat.
   zones.push({ poly: ax.band(P, 13, 60, 13, 60), z: flatZ(222.8), rows: [[218.6, 221.0], [214.8, 217.0]], pitch: 4.2, square: true })
-  // The 1920s–40s two-storey additions north of the 1904 block.
-  zones.push({ poly: ax.band(P, 39, 80, -40, 13), z: flatZ(223.6), rows: [[218.6, 221.2], [214.6, 217.0]], pitch: 4.0 })
+  // The 1920s–40s two-storey additions north of the 1904 block: arched
+  // openings on both storeys, mostly bricked up on the east and north.
+  zones.push({
+    poly: ax.band(P, 39, 80, -40, 13), z: flatZ(223.6), rows: [[218.8, 221.6], [214.6, 217.2]], pitch: 4.0, winW: 1.7, piers: true,
+    infill: (o, row, i) => !west(o) && hash([i, row]) < 0.75,
+  })
   // The bridge section: two storeys of brick.
   zones.push({ poly: BRIDGE, z: flatZ(224.2), rows: [[219.6, 222.0]], pitch: 4.2, square: true })
   build(zones, m, [MILL2_EAST])
-  plant(silver, [[-12, 50, 223.6, 0], [-8, 58, 223.6, 0], [3, 2, 224.6, 0], [26, 30, 222.8, 0], [40, 25, 222.8, 90], [-12, 20, 223.2, 0]])
+  plant(roof, [[-12, 50, 223.6, 0], [-8, 58, 223.6, 0], [3, 2, 224.6, 0], [26, 30, 222.8, 0], [40, 25, 222.8, 90], [-12, 20, 223.2, 0]])
 
   // The two metal dust towers between the 1904 mill and the dust-collector
   // room, standing well above it side by side (the grey box behind the seats
@@ -461,8 +569,8 @@ export function buildMill(): Built {
     id: 'music-factory-mill', name: 'AvidXchange Music Factory mill', anchor, base, height: 233.2 - base,
     parts: [
       { part: wall, material: BRICK },
+      { part: infill, material: INFILL },
       { part: roof, material: PALETTE.roof },
-      { part: eave, material: PALETTE.trim },
       { part: win, material: PALETTE.window },
       { part: silver, material: SILVER },
       { part: stage, material: finish('stage-charcoal', 0x4a4f57) },
