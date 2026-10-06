@@ -216,6 +216,13 @@
       "license": "CC0-1.0",
       "author": "Barrelman",
       "source": "scripts/landmarks/bechtler-museum.ts"
+    },
+    {
+      "id": "spectrum-center",
+      "file": "models/spectrum-center.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/spectrum-center.ts"
     }
   ],
   "landmarks": [
@@ -905,6 +912,33 @@
       "wikidata": "Q4878575",
       "replaces": [
         "way/131139728"
+      ]
+    },
+    {
+      "id": "spectrum-center",
+      "name": "Spectrum Center",
+      "model": "spectrum-center",
+      "lng": -80.839198,
+      "lat": 35.225123,
+      "bearing": 45,
+      "elevation": 0,
+      "minzoom": 14,
+      "wikidata": "Q983870",
+      "replaces": [
+        "way/773909122",
+        "way/773909123",
+        "way/773909124",
+        "way/773909125",
+        "way/773909126",
+        "way/773909127",
+        "way/773909128",
+        "way/773909129",
+        "way/984713007",
+        "way/984713008",
+        "way/984713012",
+        "way/984713013",
+        "way/1352235646",
+        "way/1352235647"
       ]
     }
   ]
