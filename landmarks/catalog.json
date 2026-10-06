@@ -370,6 +370,13 @@
       "license": "CC0-1.0",
       "author": "Barrelman",
       "source": "scripts/landmarks/ballantyne-bowl.ts"
+    },
+    {
+      "id": "carowinds-fury-325",
+      "file": "models/carowinds-fury-325.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/carowinds-fury-325.ts"
     }
   ],
   "landmarks": [
@@ -1479,6 +1486,20 @@
         "way/1271482543",
         "way/1271482544",
         "way/1271482545"
+      ]
+    },
+    {
+      "id": "carowinds-fury-325",
+      "name": "Fury 325",
+      "model": "carowinds-fury-325",
+      "lng": -80.940255,
+      "lat": 35.1052067,
+      "bearing": 0,
+      "elevation": 0,
+      "minzoom": 14,
+      "wikidata": "Q18150522",
+      "replaces": [
+        "way/543823785"
       ]
     }
   ]
