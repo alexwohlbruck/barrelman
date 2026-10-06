@@ -258,6 +258,13 @@
       "license": "CC0-1.0",
       "author": "Barrelman",
       "source": "scripts/landmarks/first-presbyterian-charlotte.ts"
+    },
+    {
+      "id": "mint-museum-randolph",
+      "file": "models/mint-museum-randolph.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/mint-museum-randolph.ts"
     }
   ],
   "landmarks": [
@@ -1148,6 +1155,20 @@
       "wikidata": "Q5453546",
       "replaces": [
         "way/502718740"
+      ]
+    },
+    {
+      "id": "mint-museum-randolph",
+      "name": "Mint Museum Randolph",
+      "model": "mint-museum-randolph",
+      "lng": -80.8146416,
+      "lat": 35.1973505,
+      "bearing": 2.4,
+      "elevation": 0,
+      "minzoom": 15,
+      "wikidata": "Q5086075",
+      "replaces": [
+        "way/784079334"
       ]
     }
   ]
