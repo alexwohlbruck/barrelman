@@ -559,6 +559,13 @@
       "license": "CC0-1.0",
       "author": "Barrelman",
       "source": "scripts/landmarks/carowinds-carolina-cyclone.ts"
+    },
+    {
+      "id": "carolina-theatre",
+      "file": "models/carolina-theatre.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/carolina-theatre.ts"
     }
   ],
   "landmarks": [
@@ -2070,6 +2077,36 @@
       "wikidata": "Q1044389",
       "replaces": [
         "way/241199374"
+      ]
+    },
+    {
+      "id": "carolina-theatre",
+      "name": "Carolina Theatre",
+      "model": "carolina-theatre",
+      "lng": -80.8407376,
+      "lat": 35.2283538,
+      "bearing": 47.3,
+      "elevation": 0,
+      "minzoom": 15,
+      "wikidata": "Q59193997",
+      "replaces": [
+        "way/502725466",
+        "way/1410822079",
+        "way/1410822080",
+        "way/1410822081",
+        "way/1410822082",
+        "way/1410822083",
+        "way/1410822084",
+        "way/1410822085",
+        "way/1410822086",
+        "way/1410822087",
+        "way/1410822088",
+        "way/1410822090",
+        "way/1410822091",
+        "way/1410822092",
+        "way/1410822093",
+        "way/1410822094",
+        "way/1410822095"
       ]
     }
   ]
