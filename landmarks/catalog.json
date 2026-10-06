@@ -314,6 +314,13 @@
       "license": "CC0-1.0",
       "author": "Barrelman",
       "source": "scripts/landmarks/beatties-ford-water-tower.ts"
+    },
+    {
+      "id": "camp-north-end-water-tower",
+      "file": "models/camp-north-end-water-tower.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/camp-north-end-water-tower.ts"
     }
   ],
   "landmarks": [
@@ -1324,6 +1331,17 @@
         "way/869290547",
         "way/869290548"
       ]
+    },
+    {
+      "id": "camp-north-end-water-tower",
+      "name": "Camp North End Water Tower",
+      "model": "camp-north-end-water-tower",
+      "lng": -80.834148,
+      "lat": 35.2477583,
+      "bearing": 0,
+      "elevation": 0,
+      "minzoom": 15,
+      "replaces": []
     }
   ]
 }
