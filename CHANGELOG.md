@@ -10,6 +10,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.7.3] - 2026-10-06
+
 ### Fixed
 
 * **Cabins and hotel rooms are no longer listed as power outlets.** A
