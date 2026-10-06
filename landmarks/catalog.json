@@ -342,6 +342,13 @@
       "license": "CC0-1.0",
       "author": "Barrelman",
       "source": "scripts/landmarks/ballantyne-hotel.ts"
+    },
+    {
+      "id": "metalmorphosis",
+      "file": "models/metalmorphosis.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/metalmorphosis.ts"
     }
   ],
   "landmarks": [
@@ -1402,6 +1409,18 @@
       "replaces": [
         "way/322618546"
       ]
+    },
+    {
+      "id": "metalmorphosis",
+      "name": "Metalmorphosis",
+      "model": "metalmorphosis",
+      "lng": -80.9480419,
+      "lat": 35.1508126,
+      "bearing": 41,
+      "elevation": 0,
+      "minzoom": 16,
+      "wikidata": "Q28455368",
+      "replaces": []
     }
   ]
 }
