@@ -10,6 +10,17 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Fixed
+
+* **Cabins and hotel rooms are no longer listed as power outlets.** A
+  `power_supply=yes` tag on lodging (`building=cabin`, and `tourism` chalet,
+  alpine and wilderness huts, hotel, motel, guest house, hostel, apartment)
+  describes the outlets in a guest's room, the same way it does on a campsite
+  pitch. Searching for outlets near Philadelphia turned up a campground's
+  cabins. A dedicated outlet or device charging station at a hotel still
+  counts. Run "Backfill Power Outlet Category" to apply this to an existing
+  database.
+
 ## [0.7.2] - 2026-10-04
 
 ### Fixed

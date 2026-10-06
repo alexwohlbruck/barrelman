@@ -29,6 +29,10 @@ RETURNS boolean LANGUAGE sql IMMUTABLE AS $$
         -- Pitch and berth hookups for paying guests, not public outlets.
         AND coalesce(tags->>'tourism', '') NOT IN ('camp_site', 'camp_pitch', 'caravan_site')
         AND coalesce(tags->>'leisure', '') <> 'marina'
+        -- Lodging: power_supply there means the outlets in a guest's room.
+        AND coalesce(tags->>'tourism', '') NOT IN ('chalet', 'alpine_hut', 'wilderness_hut', 'hotel',
+                                                   'motel', 'guest_house', 'hostel', 'apartment')
+        AND coalesce(tags->>'building', '') <> 'cabin'
         AND (
           coalesce(tags->>'power_supply', 'no') NOT IN ('no', 'wind', 'solar')
           -- Plugs a device takes; see DEVICE_SOCKETS in osm2pgsql-flex.lua.

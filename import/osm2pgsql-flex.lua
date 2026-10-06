@@ -248,6 +248,16 @@ local HOOKUP_VENUES = {
     leisure = { marina = true },
 }
 
+-- Lodging where power_supply=* means the outlets in a guest's room or cabin.
+-- A campground's cabins tagged power_supply=yes otherwise showed up as public
+-- outlets. A dedicated outlet (power=outlet, a device charging station) at a
+-- hotel still counts, since those checks come first.
+local LODGING = {
+    tourism = { chalet = true, alpine_hut = true, wilderness_hut = true, hotel = true,
+                motel = true, guest_house = true, hostel = true, apartment = true },
+    building = { cabin = true },
+}
+
 -- power_supply values that describe where a device draws power from, not a
 -- socket it offers.
 local NOT_AN_OUTLET = { no = true, wind = true, solar = true }
@@ -267,8 +277,10 @@ local function offers_power_outlet(tags)
     if amenity == 'device_charging_station' or amenity == 'power_supply' then return true end
     -- Vehicle chargers carry socket:* tags for their connectors.
     if amenity == 'charging_station' or tags['man_made'] == 'charge_point' then return false end
-    for key, values in pairs(HOOKUP_VENUES) do
-        if tags[key] and values[tags[key]] then return false end
+    for _, venues in ipairs({ HOOKUP_VENUES, LODGING }) do
+        for key, values in pairs(venues) do
+            if tags[key] and values[tags[key]] then return false end
+        end
     end
     local supply = tags['power_supply']
     if supply and not NOT_AN_OUTLET[supply] then return true end
