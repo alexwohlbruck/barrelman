@@ -349,6 +349,13 @@
       "license": "CC0-1.0",
       "author": "Barrelman",
       "source": "scripts/landmarks/metalmorphosis.ts"
+    },
+    {
+      "id": "il-grande-disco",
+      "file": "models/il-grande-disco.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/il-grande-disco.ts"
     }
   ],
   "landmarks": [
@@ -1420,6 +1427,17 @@
       "elevation": 0,
       "minzoom": 16,
       "wikidata": "Q28455368",
+      "replaces": []
+    },
+    {
+      "id": "il-grande-disco",
+      "name": "Il Grande Disco",
+      "model": "il-grande-disco",
+      "lng": -80.8431653,
+      "lat": 35.2268965,
+      "bearing": 20,
+      "elevation": 0,
+      "minzoom": 16,
       "replaces": []
     }
   ]
