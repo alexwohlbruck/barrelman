@@ -573,6 +573,13 @@
       "license": "CC0-1.0",
       "author": "Barrelman",
       "source": "scripts/landmarks/mcglohon-theater-spirit-square.ts"
+    },
+    {
+      "id": "milestone-club",
+      "file": "models/milestone-club.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/milestone-club.ts"
     }
   ],
   "landmarks": [
@@ -2128,6 +2135,20 @@
       "wikidata": "Q22061093",
       "replaces": [
         "way/131139724"
+      ]
+    },
+    {
+      "id": "milestone-club",
+      "name": "The Milestone Club",
+      "model": "milestone-club",
+      "lng": -80.8834408,
+      "lat": 35.2446744,
+      "bearing": 28,
+      "elevation": 0,
+      "minzoom": 16,
+      "wikidata": "Q138333281",
+      "replaces": [
+        "way/867520324"
       ]
     }
   ]
