@@ -601,6 +601,13 @@
       "license": "CC0-1.0",
       "author": "Barrelman",
       "source": "scripts/landmarks/coyote-joes.ts"
+    },
+    {
+      "id": "carowinds-flying-cobras",
+      "file": "models/carowinds-flying-cobras.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/carowinds-flying-cobras.ts"
     }
   ],
   "landmarks": [
@@ -2209,6 +2216,20 @@
       "minzoom": 16,
       "replaces": [
         "way/849535273"
+      ]
+    },
+    {
+      "id": "carowinds-flying-cobras",
+      "name": "The Flying Cobras",
+      "model": "carowinds-flying-cobras",
+      "lng": -80.9427914,
+      "lat": 35.1026473,
+      "bearing": 0,
+      "elevation": 0,
+      "minzoom": 15,
+      "wikidata": "Q5044796",
+      "replaces": [
+        "way/241408487"
       ]
     }
   ]
