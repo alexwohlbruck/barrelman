@@ -18,6 +18,14 @@ and photos. Every rule here fixes something that went wrong.
 
 ## Shape
 
+- **Realistic but abstract.** Keep every architectural feature that makes the
+  real building recognisable (its frame lines, setbacks, sloped or notched
+  tops, fins, corner slots, the pattern its facade makes from a distance)
+  and draw each as the simplest clean geometry that still shows it. The
+  palette and panel rules below simplify how a building is drawn; they never
+  remove what it is. If applying them makes a model look less like the
+  photo, the feature was lost: put it back in abstract form.
+
 - **Get the silhouette right first.** Overall proportions, setbacks, the
   crown and the spire are what people recognise. Match the footprint and
   heights of the OSM building and parts the model replaces, and use real
@@ -71,7 +79,9 @@ and photos. Every rule here fixes something that went wrong.
   no full-height dark stripes from base to crown; no single-floor dot grids
   that shimmer at map distance. If the real building is a glass curtain
   wall, it is a `window` wall with a few pale `trim` mullion and floor lines,
-  not a dark slab.
+  not a dark slab. Where the real glass reads light and reflective, use a
+  lighter `windowVariant` (sky grey-blue, around `#a9bfd1`) so the tower
+  reads light as it does in daylight; it still glows at night.
 - **Panels never float.** A window panel needs real wall behind it: not past
   a corner, not across a gap, not on a roof.
 - **Special windows are flush shapes.** Triangles, portholes and rosettes are
@@ -135,6 +145,37 @@ only decides what glows.
 
 Everything else is unlit. (Parchment also glows painted `window*` textures
 by their alpha, for older models; new models have no textures.)
+
+## Animation (experimental)
+
+A few landmarks really move, and the Wonder Wheel turns. This is opt-in
+and outside the Open Landmarks v1 contract. A model that moves must still
+read as itself standing still, because that is all a client without
+animation will draw.
+
+- **Rigid nodes only.** A moving part is its own glTF node, moved by one
+  standard glTF `animation` that sets the node's `rotation` or
+  `translation`, with LINEAR keyframes. No skinning, no morph targets, no
+  `scale` channels and no cubic splines.
+- **The pivot is the node's origin.** Translate the node to the axle or
+  hinge and author its vertices relative to that point. A child node moves
+  with its parent. The Wonder Wheel's cars are children of the wheel, each
+  turned back by as much as the wheel turns, so they hang plumb.
+- **Everything else stays in the root node**, untransformed, as in a static
+  model.
+- **Frame 0 is the static model.** The first keyframe matches the nodes'
+  own transforms. Previews, clients set to reduced motion and the server's
+  bounds all use that pose.
+- **One loop, a few minutes at most.** Keyframe times are in seconds, and
+  the last keyframe matches the first so the loop is seamless. A real
+  speed is often too slow to see on a map, so pick a livelier one and say
+  so in the generator. The Wonder Wheel takes 90 s a turn, against the
+  real wheel's 8 to 10 minutes.
+- **Same budget.** The triangle count is what is drawn, counting a mesh
+  shared by several nodes once per node.
+
+The server sizes a moving node as a sphere about its pivot that holds it
+in any pose, so its `height` can come out a little over the real one.
 
 ## Checking a model
 
