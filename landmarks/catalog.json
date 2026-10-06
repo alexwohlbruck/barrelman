@@ -139,6 +139,13 @@
       "license": "CC0-1.0",
       "author": "Barrelman",
       "source": "scripts/landmarks/washington-square-fountain.ts"
+    },
+    {
+      "id": "56-leonard",
+      "file": "models/56-leonard.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/56-leonard.ts"
     }
   ],
   "landmarks": [
@@ -593,6 +600,20 @@
       "minzoom": 16,
       "wikidata": "Q125016999",
       "replaces": []
+    },
+    {
+      "id": "56-leonard",
+      "name": "56 Leonard Street",
+      "model": "56-leonard",
+      "lng": -74.0062596,
+      "lat": 40.7176453,
+      "bearing": 31,
+      "elevation": 0,
+      "minzoom": 13,
+      "wikidata": "Q244358",
+      "replaces": [
+        "way/261499928"
+      ]
     }
   ]
 }

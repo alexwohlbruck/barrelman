@@ -66,7 +66,8 @@ Maps and against photos. Every rule here fixes something that went wrong.
 - **Apple's conventions:**
   - window bands are a soft mid grey or grey-blue (darker where the real
     glass reads dark);
-  - setback terraces on towers are a muted terracotta, about `#c8968a`.
+  - setback terraces on towers are a muted terracotta, about `#c8968a`,
+    unless photos show a real finish (56 Leonard's are pale concrete).
     Only the terraces: on a low building the main roof is most of what a
     phone sees, and a terracotta one swamps it;
   - a main flat roof is a pale membrane grey, about `#bdb9b1`, unless photos
