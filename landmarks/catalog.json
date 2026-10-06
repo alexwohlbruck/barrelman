@@ -650,6 +650,13 @@
       "license": "CC0-1.0",
       "author": "Barrelman",
       "source": "scripts/landmarks/carowinds-copperhead-strike.ts"
+    },
+    {
+      "id": "carowinds-afterburn",
+      "file": "models/carowinds-afterburn.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/carowinds-afterburn.ts"
     }
   ],
   "landmarks": [
@@ -2440,6 +2447,37 @@
         "way/1190952869",
         "way/1190952868",
         "way/1190952874"
+      ]
+    },
+    {
+      "id": "carowinds-afterburn",
+      "name": "Afterburn",
+      "model": "carowinds-afterburn",
+      "lng": -80.9411883,
+      "lat": 35.1001512,
+      "bearing": 0,
+      "elevation": 0,
+      "minzoom": 15,
+      "wikidata": "Q389146",
+      "replaces": [
+        "way/888529381",
+        "way/669986344",
+        "way/894788185",
+        "way/894788183",
+        "way/894788196",
+        "way/894788184",
+        "way/894788195",
+        "way/894788190",
+        "way/894788189",
+        "way/894788180",
+        "way/894788191",
+        "way/894788193",
+        "way/894788186",
+        "way/894788188",
+        "way/894788182",
+        "way/894788194",
+        "way/894788181",
+        "way/888529618"
       ]
     }
   ]
