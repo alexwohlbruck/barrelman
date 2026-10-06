@@ -272,6 +272,13 @@
       "license": "CC0-1.0",
       "author": "Barrelman",
       "source": "scripts/landmarks/truist-center-charlotte.ts"
+    },
+    {
+      "id": "bojangles-coliseum",
+      "file": "models/bojangles-coliseum.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/bojangles-coliseum.ts"
     }
   ],
   "landmarks": [
@@ -1197,6 +1204,20 @@
         "way/705306914",
         "way/705306915",
         "way/705306916"
+      ]
+    },
+    {
+      "id": "bojangles-coliseum",
+      "name": "Bojangles Coliseum",
+      "model": "bojangles-coliseum",
+      "lng": -80.7951706,
+      "lat": 35.2050538,
+      "bearing": 0,
+      "elevation": 0,
+      "minzoom": 14,
+      "wikidata": "Q4938627",
+      "replaces": [
+        "way/323383462"
       ]
     }
   ]
