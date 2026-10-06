@@ -356,6 +356,13 @@
       "license": "CC0-1.0",
       "author": "Barrelman",
       "source": "scripts/landmarks/il-grande-disco.ts"
+    },
+    {
+      "id": "ascendus",
+      "file": "models/ascendus.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/ascendus.ts"
     }
   ],
   "landmarks": [
@@ -1436,6 +1443,17 @@
       "lng": -80.8431653,
       "lat": 35.2268965,
       "bearing": 20,
+      "elevation": 0,
+      "minzoom": 16,
+      "replaces": []
+    },
+    {
+      "id": "ascendus",
+      "name": "Ascendus",
+      "model": "ascendus",
+      "lng": -80.9232622,
+      "lat": 35.2191714,
+      "bearing": 0,
       "elevation": 0,
       "minzoom": 16,
       "replaces": []
