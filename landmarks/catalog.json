@@ -160,6 +160,13 @@
       "license": "CC0-1.0",
       "author": "Barrelman",
       "source": "scripts/landmarks/parachute-jump.ts"
+    },
+    {
+      "id": "hearst-tower",
+      "file": "models/hearst-tower.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/hearst-tower.ts"
     }
   ],
   "landmarks": [
@@ -669,6 +676,21 @@
       "wikidata": "Q3651640",
       "replaces": [
         "way/248474742"
+      ]
+    },
+    {
+      "id": "hearst-tower",
+      "name": "Hearst Tower",
+      "model": "hearst-tower",
+      "lng": -73.9836231,
+      "lat": 40.7665639,
+      "bearing": 29,
+      "elevation": 0,
+      "minzoom": 13,
+      "wikidata": "Q859452",
+      "replaces": [
+        "way/265151748",
+        "way/147448071"
       ]
     }
   ]
