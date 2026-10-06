@@ -195,6 +195,13 @@
       "license": "CC0-1.0",
       "author": "Barrelman",
       "source": "scripts/landmarks/duke-energy-center.ts"
+    },
+    {
+      "id": "carillon-charlotte",
+      "file": "models/carillon-charlotte.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/carillon-charlotte.ts"
     }
   ],
   "landmarks": [
@@ -808,6 +815,20 @@
         "way/1556616353",
         "way/1556616354",
         "way/1556616355"
+      ]
+    },
+    {
+      "id": "carillon-charlotte",
+      "name": "The Carillon",
+      "model": "carillon-charlotte",
+      "lng": -80.8453018,
+      "lat": 35.2285233,
+      "bearing": 49.5,
+      "elevation": 0,
+      "minzoom": 13,
+      "wikidata": "Q5039570",
+      "replaces": [
+        "way/90480703"
       ]
     }
   ]
