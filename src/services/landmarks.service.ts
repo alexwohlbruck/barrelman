@@ -155,7 +155,10 @@ export function validateCatalog(catalog: Catalog): string[] {
  * contract) can be anywhere its clip takes it. It is bounded by a sphere
  * about its pivot that holds everything under it in any pose. Its radius
  * comes from the actual vertices, since a box corner would overstate a
- * wheel's reach by √2.
+ * wheel's reach by √2. A pivot that itself moves on LINEAR or STEP keyframes
+ * never leaves the box around them, so the sphere is swept over that box;
+ * otherwise it is centred on the parent's origin and grown by the farthest
+ * keyframe, which for a lift would turn its height into plan reach.
  */
 export function glbBounds(glb: Uint8Array): { height: number; radius: number } {
   const view = new DataView(glb.buffer, glb.byteOffset, glb.byteLength)
@@ -177,9 +180,11 @@ export function glbBounds(glb: Uint8Array): { height: number; radius: number } {
   const corners = ({ min, max }: { min: number[]; max: number[] }) =>
     [0, 1, 2, 3, 4, 5, 6, 7].map((i) => [i & 1 ? max[0] : min[0], i & 2 ? max[1] : min[1], i & 4 ? max[2] : min[2]])
 
-  // What each animated node's channels do: the farthest any translation
-  // keyframe takes it, and the largest scale any reaches.
-  const moving = new Map<number, { translation?: number; scale?: number }>()
+   // What each animated node's channels do: the farthest any translation
+  // keyframe takes it, the box its keyframes span (while every translation
+  // channel interpolates within it), and the largest scale any reaches.
+  type Motion = { translation?: number; scale?: number; path?: { min: number[]; max: number[] } | null }
+  const moving = new Map<number, Motion>()
   for (const animation of json.animations ?? [])
     for (const channel of animation.channels ?? []) {
       const node = channel.target?.node
@@ -197,6 +202,21 @@ export function glbBounds(glb: Uint8Array): { height: number; radius: number } {
         most = Math.max(most, path === 'translation' ? Math.hypot(x, y, z) : Math.max(Math.abs(x), Math.abs(y), Math.abs(z)))
       }
       entry[path] = most
+      if (path !== 'translation' || entry.path === null) continue
+      // A cubic spline can overshoot its keyframes, and its output also
+      // carries tangents, so it gets no box.
+      const interpolation = animation.samplers?.[channel.sampler]?.interpolation ?? 'LINEAR'
+      if (interpolation !== 'LINEAR' && interpolation !== 'STEP') {
+        entry.path = null
+        continue
+      }
+      const box = entry.path ?? { min: [Infinity, Infinity, Infinity], max: [-Infinity, -Infinity, -Infinity] }
+      for (let i = 0; i + 2 < values.length; i += 3)
+        for (let k = 0; k < 3; k++) {
+          box.min[k] = Math.min(box.min[k], values[i + k])
+          box.max[k] = Math.max(box.max[k], values[i + k])
+        }
+      entry.path = box
     }
 
   /**
@@ -228,15 +248,21 @@ export function glbBounds(glb: Uint8Array): { height: number; radius: number } {
     const node = nodes[index]
     const motion = moving.get(index)
     if (motion) {
-      // The sphere's centre is the node's pivot, or its parent's origin when
-      // the pivot itself moves.
+      // The sphere's centre is the node's pivot. A pivot that moves sweeps
+      // the box of its keyframes, so the sphere is placed at each corner;
+      // without a box, it is centred on the parent's origin instead and
+      // grown by the farthest keyframe.
       const own = nodeMatrix(node)
-      const pivot = motion.translation === undefined ? [own[12], own[13], own[14]] : [0, 0, 0]
-      const [cx, cy, cz] = transform(parent, pivot)
       const scale = Math.max(scaleOf(own), motion.scale ?? 0)
-      const r = scaleOf(parent) * ((motion.translation ?? 0) + scale * reach(index))
-      height = Math.max(height, cy + r)
-      radius = Math.max(radius, Math.hypot(cx, cz) + r)
+      const swept = motion.translation !== undefined && motion.path ? motion.path : null
+      const pivots = motion.translation === undefined ? [[own[12], own[13], own[14]]]
+        : swept ? corners(swept) : [[0, 0, 0]]
+      const r = scaleOf(parent) * ((swept ? 0 : motion.translation ?? 0) + scale * reach(index))
+      for (const pivot of pivots) {
+        const [cx, cy, cz] = transform(parent, pivot)
+        height = Math.max(height, cy + r)
+        radius = Math.max(radius, Math.hypot(cx, cz) + r)
+      }
       return
     }
     const world = multiply(parent, nodeMatrix(node))

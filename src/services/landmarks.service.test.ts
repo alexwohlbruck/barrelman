@@ -78,6 +78,31 @@ describe('glbBounds', () => {
     expect(radius).toBeCloseTo(tip, 5)
   })
 
+  test('keeps a lift’s reach to its car, not its travel', () => {
+    // A 10 m car whose pivot rides 60 m up an axis on LINEAR keyframes: its
+    // height is the top of the travel, but in plan it never leaves the axis.
+    const glb = writeGlb('test', [{ part: box([-1, -1, 0], [1, 1, 2]), material }], {}, {
+      nodes: [{ name: 'car', translation: [0, 0, 60], parts: [{ part: box([-5, -0.5, -0.5], [5, 0.5, 0.5]), material }] }],
+      animation: {
+        name: 'ride',
+        times: [0, 1, 2],
+        channels: [{ node: 0, path: 'translation', values: [[0, 0, 60], [0, 0, 2], [0, 0, 60]] }],
+      },
+    })
+    const tip = Math.hypot(5, 0.5, 0.5)
+    const { height, radius } = glbBounds(glb)
+    expect(height).toBeCloseTo(60 + tip, 5)
+    expect(radius).toBeCloseTo(tip, 5)
+  })
+
+  test('keeps the moving Skytower cabin within the tower’s reach', async () => {
+    const bytes = new Uint8Array(await Bun.file(join(LANDMARKS, 'models/carowinds-skytower.glb')).arrayBuffer())
+    const { height, radius } = glbBounds(bytes)
+    // Mast top at 87 m; the platform's 6.8 m ring, read as a box corner.
+    expect(height).toBeCloseTo(87, 0)
+    expect(radius).toBeLessThan(10)
+  })
+
   test('keeps the turning Wonder Wheel at its full height', async () => {
     const bytes = new Uint8Array(await Bun.file(join(LANDMARKS, 'models/wonder-wheel.glb')).arrayBuffer())
     const { height, radius } = glbBounds(bytes)
