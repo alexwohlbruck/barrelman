@@ -132,6 +132,13 @@
       "license": "CC0-1.0",
       "author": "Barrelman",
       "source": "scripts/landmarks/woolworth-building.ts"
+    },
+    {
+      "id": "washington-square-fountain",
+      "file": "models/washington-square-fountain.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/washington-square-fountain.ts"
     }
   ],
   "landmarks": [
@@ -574,6 +581,18 @@
         "way/274782332",
         "way/274782336"
       ]
+    },
+    {
+      "id": "washington-square-fountain",
+      "name": "Washington Square Fountain",
+      "model": "washington-square-fountain",
+      "lng": -73.9974517,
+      "lat": 40.7308226,
+      "bearing": 32,
+      "elevation": 0,
+      "minzoom": 16,
+      "wikidata": "Q125016999",
+      "replaces": []
     }
   ]
 }
