@@ -33,14 +33,22 @@ Maps and against photos. Every rule here fixes something that went wrong.
 ## Ground
 
 - **Build up from the lowest ground the building touches.** The model's
-  y = 0 is the lowest terrain point under its footprint, and the
-  placement's `elevation` is that height. On a slope, the walls on the
+  y = 0 is the lowest terrain point under its footprint. The map finds that
+  point itself, from its own terrain, so `elevation` stays 0: it is only
+  extra lift for a model standing on something the terrain doesn't know
+  about, like Liberty on Fort Wood. On a slope, the walls on the
   uphill side run down to y = 0 too, so they sink into the hill rather than
   leaving the downhill side floating over a gap. Never put y = 0 at the
   anchor's own ground height, or at the average.
 - **Nothing important in the bottom of the uphill walls.** Doors, plinths
   and the first band of windows on the uphill side end up below ground, so
   start the facade detail at that side's real ground level.
+
+- **Don't model the ground.** Grass, playing fields, infield dirt, sand,
+  paving and water surfaces are already on the map, and a second copy of
+  them sits a few centimetres above the terrain and flickers or floats on
+  a slope. A stadium is its stands, roofs and towers; the pitch is the
+  map's.
 
 ## Windows and facades
 
