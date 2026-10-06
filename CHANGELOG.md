@@ -10,6 +10,43 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Added
+
+* **3D landmarks (experimental).** Hand-made 3D models that a map draws in
+  place of a building's extrusion. `/tiles/landmarks/{z}/{x}/{y}` serves where
+  they stand, with each landmark's model, bearing, scale and the OSM buildings
+  it replaces. The models are served as immutable GLBs under
+  `/tiles/landmarks/models/`. The catalog lives in `landmarks/catalog.json`,
+  and the database is updated from it at startup. It ships with a stylised
+  Eiffel Tower, placed in Paris and on the Las Vegas Strip, and a Statue of
+  Liberty standing on Fort Wood. `LANDMARKS_DIR`
+  points the API at a catalog of your own.
+
+  The layer also serves the [Open Landmarks](https://github.com/benjamintd/open-landmarks)
+  dataset beside the catalog. It is imported at startup and, once you enable
+  the seeded *Import Open Landmarks* schedule, hourly; an unchanged release
+  costs one request, and only new model files are downloaded, each checked
+  against its published hash. Where both sources model one building, only one
+  is served — `LANDMARK_SOURCE_PRIORITY` picks which, Open Landmarks first by
+  default. Landmarks can carry a finer model for close zooms (`detail`,
+  `detailzoom`) and lit entrances for night maps (`entrances`), and models are
+  gzipped for clients that accept it. Imported models are CC BY 4.0 and their
+  placements ODbL; each carries its credit. `OPEN_LANDMARKS_URL=off` serves
+  only your own catalog.
+
+* **A `coaster_tracks` tile source, in the `detail` bundle.** Roller coaster
+  tracks (`roller_coaster=track`, and the older `railway=roller_coaster`) as
+  lines, with `name`, `colour` and a numeric `layer`, at z14–16. A closed track
+  comes as its ring. `id` is the OSM way, so a map can hide the tracks a 3D
+  landmark replaces, and the coaster landmarks in the catalog now list their
+  track ways in `replaces`. It is a plain view, created at startup, so it needs
+  no re-import.
+
+  To upgrade, append the `coaster_tracks` entry from `martin-config.yaml` to
+  your deployment's copy first, then restart Martin once the new API is up.
+  `detail` names every member, and Martin fails a composite that names a
+  source it does not serve, so until then the whole bundle answers 404.
+
 ## [0.7.4] - 2026-10-06
 
 ### Fixed

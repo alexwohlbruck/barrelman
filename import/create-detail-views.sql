@@ -1,5 +1,6 @@
 -- Map detail views for Martin tile serving
--- Trees, parking surfaces and street furniture, filtered out of geo_places
+-- Trees, parking surfaces, street furniture and coaster tracks, filtered out of
+-- geo_places
 -- Run after OSM import (post-import.sql), alongside create-transit-views.sql
 --
 -- These exist because our basemap is a stock OpenMapTiles build, and that
@@ -126,6 +127,41 @@ WHERE geom_type = 'point'
   -- pavement. Both are amenity=recycling, and only recycling_type separates
   -- them, so without this a civic amenity site draws as a single wheelie bin.
   AND COALESCE(tags->>'recycling_type', 'container') <> 'centre';
+
+-- Roller coaster tracks: `roller_coaster=track`, and the older
+-- `railway=roller_coaster` that some parks still carry.
+--
+-- A closed track is stored as an area, since the import turns every closed way
+-- into a polygon unless it says area=no, and nobody tags a coaster that way. It
+-- is served as its ring, so the layer is lines all the way through and a
+-- client draws the rails rather than a filled loop.
+--
+-- `id` is served because a 3D landmark lists the track ways it stands in for
+-- among its `replaces`, and a client hides exactly those, matched on `id`, the
+-- way it hides buildings.
+--
+-- Driven off the tags GIN index, not the spatial one. `@>` is what
+-- `jsonb_path_ops` can answer, where `tags->>'roller_coaster' = 'track'` would
+-- leave the planner nothing but the envelope: every feature in the tile, read
+-- and thrown away. There are only a few hundred tracks in a continent, so
+-- fetching them all and dropping those outside the tile is cheaper than any
+-- spatial index, and needs no new one. It also sidesteps the CASE below, which
+-- no index on `geom` could answer anyway. A Coney Island z14 tile: 7 ms on
+-- production, 11 features, 895 bytes.
+DROP VIEW IF EXISTS coaster_tracks CASCADE;
+CREATE VIEW coaster_tracks AS
+SELECT (osm_id * 4 + CASE osm_type WHEN 'N' THEN 0 WHEN 'W' THEN 1 ELSE 2 END) as fid,
+       id, name,
+       CASE WHEN geom_type = 'area' THEN ST_Boundary(geom) ELSE geom END as geom,
+       -- Both spellings, NULL where there is none, as in buildings_3d below.
+       NULLIF(COALESCE(tags->>'colour', tags->>'color', ''), '') as colour,
+       -- Which stretch passes over which, for draw order. A small integer or
+       -- nothing: a pattern match rather than a cast, so a stray "1;2" drops
+       -- the key instead of failing the tile.
+       substring(tags->>'layer' from '^\s*([+-]?[0-9]{1,2})\s*$')::smallint as layer
+FROM geo_places
+WHERE geom_type IN ('line', 'area')
+  AND (tags @> '{"roller_coaster": "track"}' OR tags @> '{"railway": "roller_coaster"}');
 
 -- ─── 3D buildings ────────────────────────────────────────────────────────────
 --
