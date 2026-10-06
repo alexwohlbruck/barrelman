@@ -167,6 +167,13 @@
       "license": "CC0-1.0",
       "author": "Barrelman",
       "source": "scripts/landmarks/hearst-tower.ts"
+    },
+    {
+      "id": "wonder-wheel",
+      "file": "models/wonder-wheel.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/wonder-wheel.ts"
     }
   ],
   "landmarks": [
@@ -692,6 +699,18 @@
         "way/265151748",
         "way/147448071"
       ]
+    },
+    {
+      "id": "wonder-wheel",
+      "name": "Wonder Wheel",
+      "model": "wonder-wheel",
+      "lng": -73.979145,
+      "lat": 40.5740414,
+      "bearing": 6,
+      "elevation": 0,
+      "minzoom": 15,
+      "wikidata": "Q1465377",
+      "replaces": []
     }
   ]
 }
