@@ -531,6 +531,13 @@
       "license": "CC0-1.0",
       "author": "Barrelman",
       "source": "scripts/landmarks/evening-muse.ts"
+    },
+    {
+      "id": "mint-museum-uptown",
+      "file": "models/mint-museum-uptown.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/mint-museum-uptown.ts"
     }
   ],
   "landmarks": [
@@ -1986,6 +1993,20 @@
       "minzoom": 16,
       "replaces": [
         "way/1192512105"
+      ]
+    },
+    {
+      "id": "mint-museum-uptown",
+      "name": "Mint Museum Uptown",
+      "model": "mint-museum-uptown",
+      "lng": -80.8482315,
+      "lat": 35.2244007,
+      "bearing": 318.5,
+      "elevation": 0,
+      "minzoom": 15,
+      "wikidata": "Q6869561",
+      "replaces": [
+        "way/131139755"
       ]
     }
   ]
