@@ -608,6 +608,13 @@
       "license": "CC0-1.0",
       "author": "Barrelman",
       "source": "scripts/landmarks/carowinds-flying-cobras.ts"
+    },
+    {
+      "id": "carowinds-ricochet",
+      "file": "models/carowinds-ricochet.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/carowinds-ricochet.ts"
     }
   ],
   "landmarks": [
@@ -2230,6 +2237,20 @@
       "wikidata": "Q5044796",
       "replaces": [
         "way/241408487"
+      ]
+    },
+    {
+      "id": "carowinds-ricochet",
+      "name": "Ricochet",
+      "model": "carowinds-ricochet",
+      "lng": -80.9428463,
+      "lat": 35.1042571,
+      "bearing": 0,
+      "elevation": 0,
+      "minzoom": 16,
+      "wikidata": "Q7332308",
+      "replaces": [
+        "way/668700374"
       ]
     }
   ]
