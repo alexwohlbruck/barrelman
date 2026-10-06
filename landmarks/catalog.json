@@ -419,6 +419,13 @@
       "license": "CC0-1.0",
       "author": "Barrelman",
       "source": "scripts/landmarks/clt-concourses-d-e.ts"
+    },
+    {
+      "id": "clt-hourly-deck",
+      "file": "models/clt-hourly-deck.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/clt-hourly-deck.ts"
     }
   ],
   "landmarks": [
@@ -1629,6 +1636,19 @@
       "replaces": [
         "way/1347417024",
         "way/1355079414"
+      ]
+    },
+    {
+      "id": "clt-hourly-deck",
+      "name": "CLT Hourly Parking Deck",
+      "model": "clt-hourly-deck",
+      "lng": -80.9442092,
+      "lat": 35.2222097,
+      "bearing": 355.8,
+      "elevation": 0,
+      "minzoom": 15,
+      "replaces": [
+        "relation/5933200"
       ]
     }
   ]
