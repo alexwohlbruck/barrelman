@@ -44,7 +44,9 @@
  * and the plan curvature, with the overbanked turns set by hand. Teal running
  * surface and rails over the lime box spine, as the photos show. The white
  * tubular supports are chunky columns, single where the track is low and an
- * A-frame of two splayed legs where it is high. The station is its flat
+ * A-frame of two splayed legs where it is high, except on the lift and the
+ * top of the drop: there, as in the photos, four big bents about 40 m apart,
+ * each a column and one strut with a single tie. The station is its flat
  * canopy roof on posts.
  */
 import { buildCoaster } from './coaster-kit'
@@ -165,5 +167,18 @@ await buildCoaster({
   // running surface and rails, the lime-yellow box spine, white supports.
   colours: { deck: ['fury-teal', 0x5aaac8], spine: ['fury-lime', 0xc6d566], supports: 'trim' },
   supportR: [0.95, 1.1, 1.3],
+  // The lift and the top of the drop stand on four big bents about 40 m
+  // apart, not a run of A-frames: on the lift a column with one strut
+  // splayed to the north (left of travel), and over the drop a column with
+  // a strut raked back towards the lift. Matched to the drop and flag photos.
+  bents: [{
+    from: 112, to: 296,
+    at: [
+      { s: 132, strut: 'left', tie: 0 },
+      { s: 171, strut: 'left' },
+      { s: 211, strut: 'left' },
+      { s: 274, strut: 'back', spread: 0.28, tie: 0.35 },
+    ],
+  }],
   meta: { height: 99, trackLength: 2012 },
 })
