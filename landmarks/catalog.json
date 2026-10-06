@@ -447,6 +447,13 @@
       "license": "CC0-1.0",
       "author": "Barrelman",
       "source": "scripts/landmarks/clt-control-tower.ts"
+    },
+    {
+      "id": "charlotte-transportation-center",
+      "file": "models/charlotte-transportation-center.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/charlotte-transportation-center.ts"
     }
   ],
   "landmarks": [
@@ -1710,6 +1717,48 @@
       "minzoom": 14,
       "replaces": [
         "way/589068976"
+      ]
+    },
+    {
+      "id": "charlotte-transportation-center",
+      "name": "Charlotte Transportation Center",
+      "model": "charlotte-transportation-center",
+      "lng": -80.841035,
+      "lat": 35.224522,
+      "bearing": 47,
+      "elevation": 0,
+      "minzoom": 15,
+      "wikidata": "Q5086171",
+      "replaces": [
+        "way/48908467",
+        "way/1501142072",
+        "way/1501142073",
+        "way/1501142074",
+        "way/1501142075",
+        "way/1501142076",
+        "way/1501142077",
+        "way/1501142078",
+        "way/1501142079",
+        "way/1501142080",
+        "way/1501142081",
+        "way/1501142082",
+        "way/1501142083",
+        "way/1501142084",
+        "way/1501142085",
+        "way/1501142086",
+        "way/1501142087",
+        "way/1501142088",
+        "way/1501142089",
+        "way/1501142090",
+        "way/1501142091",
+        "way/1501142092",
+        "way/1501142093",
+        "way/1501142094",
+        "way/1501142095",
+        "way/1501143172",
+        "way/1501143173",
+        "way/1501143174",
+        "way/1501143175"
       ]
     }
   ]
