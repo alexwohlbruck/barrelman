@@ -657,6 +657,13 @@
       "license": "CC0-1.0",
       "author": "Barrelman",
       "source": "scripts/landmarks/carowinds-afterburn.ts"
+    },
+    {
+      "id": "carowinds-vortex",
+      "file": "models/carowinds-vortex.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/carowinds-vortex.ts"
     }
   ],
   "landmarks": [
@@ -2478,6 +2485,37 @@
         "way/894788194",
         "way/894788181",
         "way/888529618"
+      ]
+    },
+    {
+      "id": "carowinds-vortex",
+      "name": "Vortex",
+      "model": "carowinds-vortex",
+      "lng": -80.9416824,
+      "lat": 35.1035607,
+      "bearing": 0,
+      "elevation": 0,
+      "minzoom": 15,
+      "wikidata": "Q2534606",
+      "replaces": [
+        "way/669164155",
+        "way/669205939",
+        "way/894782920",
+        "way/894782923",
+        "way/894782917",
+        "way/894782358",
+        "way/894782912",
+        "way/894782914",
+        "way/894782918",
+        "way/894782924",
+        "way/894782925",
+        "way/894782922",
+        "way/894782919",
+        "way/894782916",
+        "way/894782915",
+        "way/894782921",
+        "way/894782913",
+        "way/888642929"
       ]
     }
   ]
