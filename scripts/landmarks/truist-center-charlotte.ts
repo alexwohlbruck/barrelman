@@ -9,10 +9,10 @@
  *
  * A square tower of pale stone on the south half of the block. Each corner
  * is notched: the stone face stops short of the corner, steps back, and a
- * dark blue glazed bay turns the corner inside the notch. The step grows
+ * blue glazed bay turns the corner inside the notch. The step grows
  * going up, so the faces widen slightly towards the top. Above the notch
  * heads the middle of each face carries on as a stone block ending in a tall
- * pointed gable; around and behind the four gables a steep hip roof of dark
+ * pointed gable; around and behind the four gables a steep hip roof of pale
  * glass with pale ribs climbs to a flat square with a small lantern, and
  * silver horns flare from the notch heads. Podiums fill the rest of the
  * block north and south.
@@ -23,7 +23,8 @@
  * views, overlaid on this model at the same framing). Colours from those
  * renders and Commons photos.
  */
-import { Part, encodePng, writeGlb, type V3 } from './mesh'
+import { Part, writeGlb, type V3 } from './mesh'
+import { PALETTE, windowVariant } from './palette'
 
 type XY = [number, number]
 const at = (p: XY, z: number): V3 => [p[0], p[1], z]
@@ -34,44 +35,62 @@ const rot = (p: XY, s: number): XY => {
 }
 const L = (a: XY, b: XY, t: number): XY => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]
 
-const facade = new Part(), stone = new Part(), notch = new Part()
-const roof = new Part(), deck = new Part(), skylight = new Part()
+const stone = new Part(), notch = new Part()
+// The north podium's skylights read as one broad roof at map scale.
+const roof = new Part(), deck = new Part(), skylight = deck
 
-// ---------- textures ----------
-// The stone faces are painted, not modelled: one tile is one bay of two
-// windows between piers, a floor tall. Mipmapped, the grid averages to an
-// even tone at map distance instead of shimmering as geometry would.
-// Alpha marks the glass for night lighting (STYLE.md, Night): 0 on a window,
-// 255 on stone. The material is opaque, so by day alpha is ignored.
-const BAY = 8.25, FLOOR = 4.2
-const STONE: [number, number, number] = [0xd9, 0xcf, 0xbf]
-const WINDOW: [number, number, number] = [0x56, 0x66, 0x7a]
-const STONE_GRID = (() => {
-  const w = 64, h = 32, data = new Uint8Array(w * h * 4)
-  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
-    const win = y >= 4 && y < 29 && ((x >= 12 && x < 26) || (x >= 38 && x < 52))
-    data.set([...(win ? WINDOW : STONE), win ? 0 : 255], (y * w + x) * 4)
-  }
-  return encodePng(w, h, data)
-})()
-// The notch glazing: dark blue with a pale band at each floor. The band is
-// spandrel, not glass, so only the blue is alpha 0.
-const NOTCH_GRID = (() => {
-  const w = 8, h = 32, data = new Uint8Array(w * h * 4)
-  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++)
-    data.set(y < 4 ? [0xb9, 0xc3, 0xcc, 255] : [0x3f, 0x56, 0x70, 0], (y * w + x) * 4)
-  return encodePng(w, h, data)
-})()
+// ---------- facades ----------
+// Windows are slate panels on the stone (STYLE.md, Windows): one panel per
+// bay, three floors tall, with stone showing between bays as piers and
+// between groups as spandrels. Groups count from the ground, so they line up
+// across every face. The corner notches are blue glazing broken by pale
+// floor lines every three floors.
+const FLOOR = 4.2, GROUP = 3 * FLOOR, SPANDREL = 3, PIER = 2, BAY = 4.1, PROUD = .04
+const windows = new Part(), floorLines = new Part()
 
-/**
- * A wall from edge a0→b0 at z0 up to edge a1→b1 at z1, painted with a grid:
- * u counts `bay`s from u0 along the edge, v counts floors from the ground.
- */
-function painted(part: Part, a0: XY, b0: XY, z0: number, a1: XY, b1: XY, z1: number, u0: number, bay: number) {
-  const u1 = u0 + Math.hypot(b0[0] - a0[0], b0[1] - a0[1]) / bay
-  part.quad(at(a0, z0), at(b0, z0), at(b1, z1), at(a1, z1),
-    [[u0, z0 / FLOOR], [u1, z0 / FLOOR], [u1, z1 / FLOOR], [u0, z1 / FLOOR]])
+/** A point on the quad a0→b0 (at z0), a1→b1 (at z1): `u` along, `v` up, both 0–1. */
+function onQuad(a0: XY, b0: XY, z0: number, a1: XY, b1: XY, z1: number, u: number, v: number): V3 {
+  const lo = L(a0, b0, u), hi = L(a1, b1, u)
+  return [...L(lo, hi, v), z0 + (z1 - z0) * v] as V3
 }
+/** The quad's outward normal, horizontal. */
+function faceNormal(a: XY, b: XY): XY {
+  const l = Math.hypot(b[0] - a[0], b[1] - a[1])
+  return [(b[1] - a[1]) / l, -(b[0] - a[0]) / l]
+}
+/**
+ * Rectangles on the wall a0→b0 at z0 up to a1→b1 at z1, standing PROUD off
+ * it: `bays` across, each `pier` short of its bay, between heights lo and hi.
+ */
+function onWall(part: Part, a0: XY, b0: XY, z0: number, a1: XY, b1: XY, z1: number,
+  bays: number, pier: number, lo: number, hi: number) {
+  const n = faceNormal(a0, b0), len = Math.hypot(b0[0] - a0[0], b0[1] - a0[1])
+  const off = (p: V3): V3 => [p[0] + n[0] * PROUD, p[1] + n[1] * PROUD, p[2]]
+  const v0 = (lo - z0) / (z1 - z0), v1 = (hi - z0) / (z1 - z0)
+  for (let k = 0; k < bays; k++) {
+    const u0 = (k + pier / 2 / (len / bays)) / bays, u1 = (k + 1 - pier / 2 / (len / bays)) / bays
+    const q = (u: number, v: number) => off(onQuad(a0, b0, z0, a1, b1, z1, u, v))
+    part.quad(q(u0, v0), q(u1, v0), q(u1, v1), q(u0, v1))
+  }
+}
+/** A stone wall carrying window panels in bays about BAY wide. */
+function stoneFace(a0: XY, b0: XY, z0: number, a1: XY, b1: XY, z1: number) {
+  stone.quad(at(a0, z0), at(b0, z0), at(b1, z1), at(a1, z1))
+  const len = Math.hypot(b0[0] - a0[0], b0[1] - a0[1])
+  if (len < PIER + 2) return
+  const bays = Math.max(1, Math.round(len / BAY))
+  for (let g = Math.floor(z0 / GROUP); g * GROUP < z1; g++) {
+    const lo = Math.max(g * GROUP + SPANDREL / 2, z0 + 1), hi = Math.min((g + 1) * GROUP - SPANDREL / 2, z1 - 1)
+    if (hi - lo >= 4) onWall(windows, a0, b0, z0, a1, b1, z1, bays, PIER, lo, hi)
+  }
+}
+/** A pane of the notch glazing, with a pale floor line every group. */
+function notchPane(a0: XY, b0: XY, z0: number, a1: XY, b1: XY, z1: number) {
+  notch.quad(at(a0, z0), at(b0, z0), at(b1, z1), at(a1, z1))
+  for (let g = Math.ceil(z0 / GROUP); g * GROUP < z1 - 2; g++)
+    onWall(floorLines, a0, b0, z0, a1, b1, z1, 1, 0, g * GROUP - .35, g * GROUP + .35)
+}
+
 const wall = (part: Part, a: XY, b: XY, z0: number, z1: number) =>
   part.quad(at(a, z0), at(b, z0), at(b, z1), at(a, z1))
 /** Fan cap over a ring that is star-shaped about `c`. */
@@ -123,7 +142,7 @@ const shaftWall = (part: Part, a0: XY, b0: XY, a1: XY, b1: XY) =>
   const ring: XY[] = []
   for (let s = 0; s < 4; s++) {
     const a = T(rot([-h + CH, -h], s)), b = T(rot([h - CH, -h], s)), c = T(rot([h, -h + CH], s))
-    painted(facade, a, b, 0, a, b, Z_NOTCH0, -(h - CH) / BAY + .5, BAY)
+    stoneFace(a, b, 0, a, b, Z_NOTCH0)
     wall(stone, b, c, 0, Z_NOTCH0)
     ring.push(a, b)
   }
@@ -134,11 +153,11 @@ for (let s = 0; s < 4; s++) {
   const r = (p: XY) => T(rot(p, s))
   const lo = corner(D0).map(r), hi = corner(D1).map(r)
   const h0 = A + G + D0, h1 = A + G + D1
-  painted(facade, r([-A + CH, -h0]), r([A - CH, -h0]), Z_NOTCH0, r([-A + CH, -h1]), r([A - CH, -h1]), Z_HOOD, -(A - CH) / BAY + .5, BAY)
+  stoneFace(r([-A + CH, -h0]), r([A - CH, -h0]), Z_NOTCH0, r([-A + CH, -h1]), r([A - CH, -h1]), Z_HOOD)
   shaftWall(stone, lo[0], lo[1], hi[0], hi[1])
   shaftWall(stone, lo[1], lo[2], hi[1], hi[2])
-  painted(notch, lo[2], lo[3], Z_NOTCH0, hi[2], hi[3], Z_HOOD, 0, 2)
-  painted(notch, lo[3], lo[4], Z_NOTCH0, hi[3], hi[4], Z_HOOD, 0, 2)
+  notchPane(lo[2], lo[3], Z_NOTCH0, hi[2], hi[3], Z_HOOD)
+  notchPane(lo[3], lo[4], Z_NOTCH0, hi[3], hi[4], Z_HOOD)
   shaftWall(stone, lo[4], lo[5], hi[4], hi[5])
   shaftWall(stone, lo[5], lo[6], hi[5], hi[6])
   // the notch head, closed over at the hood
@@ -147,15 +166,16 @@ for (let s = 0; s < 4; s++) {
 
 // ---------- the crown ----------
 // The middle of each face rises past the hood as a stone block eight metres
-// deep that ends in a tall pointed gable: a pale stone frame round dark glass,
+// deep that ends in a tall pointed gable: a pale stone frame round glass,
 // with mullions converging on the apex. Around and behind the gables a hip
-// roof of dark glass with pale ribs climbs from the notch heads to a 28 m
+// roof of pale glass with stone ribs climbs from the notch heads to a 28 m
 // square and a small lantern. Silver horns flare from the notch heads.
 const BLOCK_A = 12.6, BLOCK_DEPTH = 8
 const Z_EAVE = 183, Z_APEX = 196   // the gable's springing and apex
 const SCREEN = 1
 const Z_ROOF = 196, ROOF_TOP = 14, LANTERN = 6
-const silver = new Part()
+// The horns and lantern are pale metal, drawn in the floor lines' trim.
+const silver = floorLines
 
 type V = V3
 const add = (a: V, b: V, k = 1): V => [a[0] + b[0] * k, a[1] + b[1] * k, a[2] + b[2] * k]
@@ -196,7 +216,7 @@ function rib(part: Part, a: V, b: V, n: V, w: number, t: number) {
     const fl = r([-BLOCK_A + CH, -h]), fr = r([BLOCK_A - CH, -h])
     const cl = r([-BLOCK_A, -h + CH]), cr = r([BLOCK_A, -h + CH])
     const bl = r([-BLOCK_A, yb]), br = r([BLOCK_A, yb])
-    painted(facade, fl, fr, Z_HOOD, fl, fr, zf, -(BLOCK_A - CH) / BAY + .5, BAY)
+    stoneFace(fl, fr, Z_HOOD, fl, fr, zf)
     stone.quad(at(fr, Z_HOOD), at(cr, Z_HOOD), at(cr, Z_EAVE), at(fr, zf))
     stone.quad(at(cl, Z_HOOD), at(fl, Z_HOOD), at(fl, zf), at(cl, Z_EAVE))
     wall(stone, cr, br, Z_HOOD, Z_EAVE)
@@ -218,7 +238,7 @@ function rib(part: Part, a: V, b: V, n: V, w: number, t: number) {
     triFacing(stone, r3(BLOCK_A - CH, -h + SCREEN, zf), r3(-BLOCK_A + CH, -h + SCREEN, zf), ridgeB, [-out[0], -out[1], 0])
     // and the chamfers' sloped tops, from the eave up to the gable's foot
     for (const sg of [-1, 1]) triFacing(stone, r3(sg * (BLOCK_A - CH), -h, zf), r3(sg * BLOCK_A, -h + CH, Z_EAVE), r3(sg * (BLOCK_A - CH), -h + SCREEN, zf), [0, 0, 1])
-    // the gable's face: dark glass inside a pale frame
+    // the gable's face: glass inside a pale frame
     const gl = r3(-BLOCK_A + CH, -h, zf), gr = r3(BLOCK_A - CH, -h, zf)
     triFacing(roof, gl, gr, ridgeF, out)
     const FRAME = 1.5, half = BLOCK_A - CH, rise = Z_APEX - zf
@@ -251,7 +271,7 @@ function rib(part: Part, a: V, b: V, n: V, w: number, t: number) {
       })
     }
   }
-  // the hip roof: dark glass, pale ribs fanning from the eaves up to the hips
+  // the hip roof: pale glass, stone ribs fanning from the eaves up to the hips
   const R = h - D1
   const base = [0, 1, 2, 3].map((s) => T(rot([R, -R], s)))
   const top = [0, 1, 2, 3].map((s) => T(rot([ROOF_TOP, -ROOF_TOP], s)))
@@ -283,7 +303,7 @@ function rib(part: Part, a: V, b: V, n: V, w: number, t: number) {
 function block(ring: XY[], z1: number, c: XY, top = deck) {
   ring.forEach((a, i) => {
     const b = ring[(i + 1) % ring.length]
-    painted(facade, a, b, 0, a, b, z1, 0, BAY)
+    stoneFace(a, b, 0, a, b, z1)
   })
   cap(top, ring, z1, c)
 }
@@ -292,14 +312,16 @@ block([[-27.9, -57], [8, -57], [8, -44], [-27.9, -44]], 52, [-10, -50])
 block([[8, -57], [25.8, -57], [25.8, -44], [8, -44]], 42, [17, -50])
 
 // ---------- write ----------
+// Pale stone, slate windows, and the identity colour kept muted: the blue
+// glazing of the corner notches. The crown's glass roof and gable glazing
+// are pale structural glass.
 const parts = [
-  { part: facade, material: { name: 'window', color: 0xffffff, texture: { png: STONE_GRID } } },
-  { part: notch, material: { name: 'window-2', color: 0xffffff, texture: { png: NOTCH_GRID } } },
-  { part: stone, material: { name: 'stone', color: 0xd9cfbf } },
-  { part: roof, material: { name: 'glass', color: 0x7a8ea6, roughness: .5 } },
-  { part: silver, material: { name: 'horns', color: 0xdfe3e6, roughness: .5 } },
-  { part: deck, material: { name: 'roof', color: 0xbdb9b1 } },
-  { part: skylight, material: { name: 'skylights', color: 0xc4ccd2 } },
+  { part: stone, material: PALETTE.stone },
+  { part: windows, material: PALETTE.window },
+  { part: notch, material: windowVariant(2, 0x7590ad) },
+  { part: floorLines, material: PALETTE.trim },
+  { part: roof, material: PALETTE.glass },
+  { part: deck, material: PALETTE.roof },
 ]
 const triangles = parts.reduce((n, { part }) => n + part.triangles, 0)
 if (triangles > 6500) throw new Error(`Triangle budget exceeded: ${triangles}`)

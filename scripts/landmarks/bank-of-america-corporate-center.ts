@@ -20,12 +20,16 @@
  * core corners, not the slabs, so they are used for the core steps only. The
  * crown's ring radii are from the elevation silhouettes.
  */
-import { Part, encodePng, writeGlb, type V3 } from './mesh'
+import { Part, writeGlb, type V3 } from './mesh'
+import { PALETTE, finish } from './palette'
 
 type XY = [number, number]
 
-const granite = new Part(), base = new Part(), glass = new Part()
-const silver = new Part(), steel = new Part(), terrace = new Part(), notchGlass = new Part()
+// The plinth shares the walls' material and the glazing the windows'. The
+// re-entrant corner notches are pale glass, like the crown's body, so that
+// they read as a seam rather than a dark stripe from base to crown.
+const granite = new Part(), base = granite, facade = new Part(), glass = facade
+const silver = new Part(), steel = new Part(), terrace = new Part(), notchGlass = steel
 
 // ---------- helpers ----------
 
@@ -85,7 +89,9 @@ function cap(part: Part, ring: XY[], z: number) {
 
 /**
  * A crown rod: a slim fin of triangular section standing on the wall at `p`,
- * facing `n`, from `z0` to `z1` and then a short point.
+ * facing `n`, from `z0` to `z1` and then a short point. Its back faces the
+ * crown's wall and is left open: three hundred rods' worth of hidden
+ * triangles is what keeps the file under budget.
  */
 function fin(part: Part, p: XY, n: XY, z0: number, z1: number, tip: number, w = .6, d = 1.1) {
   const t: XY = [-n[1], n[0]]
@@ -96,7 +102,6 @@ function fin(part: Part, p: XY, n: XY, z0: number, z1: number, tip: number, w = 
     poly(part, [at(a, z0), at(b, z0), at(b, z1), at(a, z1)], [m[0], m[1], 0])
     poly(part, [at(a, z1), at(b, z1), apex], [m[0], m[1], .5])
   }
-  poly(part, [at(b1, z1), at(b2, z1), apex], [-n[0], -n[1], .5])
 }
 
 // ---------- the tower ----------
@@ -107,43 +112,40 @@ const CH = .6       // chamfer on every convex vertical edge
 const SLAB_SEGS = 6  // facets across a bowed slab face
 
 /**
- * The facade is a painted window grid, not geometry: one texture tile is one
- * window module, a bay wide and a floor tall, with a dark window on granite.
- * The renderer mipmaps it, so at map distance the grid averages to an even,
- * light texture instead of shimmering, as a fine geometric grid would.
- * Alpha marks the glass for night lighting (STYLE.md, Night): 0 on a window,
- * 255 on granite. The material is opaque, so by day alpha is ignored.
+ * Windows are slate panels on the granite (STYLE.md, Windows): one panel per
+ * bay, four floors tall, with the granite left showing between bays as
+ * piers and between groups as spandrels. Groups are counted from the ground,
+ * so they line up across every face and tier.
  */
-const BAY = 1.5, FLOOR = 3.9
-const GRANITE: [number, number, number] = [0xc8, 0xc0, 0xb7]
-const WINDOW: [number, number, number] = [0x5d, 0x6b, 0x7c]
-const WINDOW_GRID = (() => {
-  const w = 32, h = 32, data = new Uint8Array(w * h * 4)
-  // window ≈ 45% of the bay's width and 55% of the floor's height
-  const x0 = Math.round(w * .275), x1 = Math.round(w * .725), y0 = Math.round(h * .2), y1 = Math.round(h * .75)
-  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
-    const win = x >= x0 && x < x1 && y >= y0 && y < y1
-    data.set([...(win ? WINDOW : GRANITE), win ? 0 : 255], (y * w + x) * 4)
+const FLOOR = 3.9, GROUP = 4 * FLOOR, SPANDREL = 2.4, PIER = 1.8, PROUD = .04
+
+/** Window panels on the wall over a→b, `bays` across, standing just proud of it. */
+function panels(a: XY, b: XY, z0: number, z1: number, bays: number, pier: number) {
+  const n = outward(a, b), L = Math.hypot(b[0] - a[0], b[1] - a[1])
+  if (L < pier + 1.5) return
+  const t: XY = [(b[0] - a[0]) / L, (b[1] - a[1]) / L], bay = L / bays
+  for (let g = Math.floor(z0 / GROUP); g * GROUP < z1; g++) {
+    const lo = Math.max(g * GROUP + SPANDREL / 2, z0 + 1), hi = Math.min((g + 1) * GROUP - SPANDREL / 2, z1 - 1)
+    if (hi - lo < 4) continue
+    for (let k = 0; k < bays; k++) {
+      const p = add2(add2(a, t, k * bay + pier / 2), n, PROUD), q = add2(add2(a, t, (k + 1) * bay - pier / 2), n, PROUD)
+      wall(facade, p, q, lo, hi)
+    }
   }
-  return encodePng(w, h, data)
-})()
-const facade = new Part()
+}
 
 /**
- * A run of wall edges that make one face, painted with the window grid. The
- * module is stretched so a whole number of bays fits the face edge to edge,
- * and v counts floors from the ground, so floors line up across every face.
+ * A run of wall edges that make one face: granite, with window panels. A
+ * straight run is one wall split into bays about 4 m wide; a bowed slab's
+ * facets take a panel each.
  */
-function paintedFace(pts: XY[], z0: number, z1: number) {
-  const lens = pts.slice(1).map((p, i) => Math.hypot(p[0] - pts[i][0], p[1] - pts[i][1]))
-  const total = lens.reduce((s, l) => s + l, 0)
-  const bay = total / Math.max(1, Math.round(total / BAY))
-  let u = 0
-  lens.forEach((l, i) => {
-    const a = pts[i], b = pts[i + 1], u1 = u + l / bay
-    facade.quad(at(a, z0), at(b, z0), at(b, z1), at(a, z1), [[u, z0 / FLOOR], [u1, z0 / FLOOR], [u1, z1 / FLOOR], [u, z1 / FLOOR]])
-    u = u1
-  })
+function windowedFace(pts: XY[], z0: number, z1: number, bayW = 4.2) {
+  pts.slice(1).forEach((b, i) => wall(granite, pts[i], b, z0, z1))
+  const a = pts[0], b = pts[pts.length - 1]
+  const L = Math.hypot(b[0] - a[0], b[1] - a[1])
+  const straight = pts.every((p) => Math.abs((p[0] - a[0]) * (b[1] - a[1]) - (p[1] - a[1]) * (b[0] - a[0])) < 1e-6 * L * L + 1e-9)
+  if (straight) panels(a, b, z0, z1, Math.max(1, Math.round(L / bayW)), PIER)
+  else pts.slice(1).forEach((q, i) => panels(pts[i], q, z0, z1, 1, PIER))
 }
 
 /**
@@ -196,7 +198,7 @@ function tierWalls(t: Tier, next: Tier | undefined, silverHead: boolean) {
     const top = t.z1 - head
     if (r.kind === 'notch') r.pts.slice(1).forEach((b, i) => wall(notchGlass, r.pts[i], b, t.z0, t.z1))
     else if (r.kind === 'trim') wall(granite, r.pts[0], r.pts[1], t.z0, top)
-    else paintedFace(r.pts, t.z0, top)
+    else windowedFace(r.pts, t.z0, top)
     if (head) r.pts.slice(1).forEach((b, i) => wall(silver, r.pts[i], b, top, t.z1))
   }
   const ring = runs.flatMap((r) => r.pts.slice(0, -1))
@@ -206,8 +208,8 @@ function tierWalls(t: Tier, next: Tier | undefined, silverHead: boolean) {
 tiers.forEach((t, i) => tierWalls(t, tiers[i + 1], i >= 1))
 
 // ---------- base, 0–42 m: a full square, the slabs' own width ----------
-// A 12 m plinth of the darker stone with three tall glazed openings a face,
-// then the window grid up to 42 m.
+// A 12 m granite plinth with three tall glazed openings a face, then
+// window panels up to 42 m.
 {
   const H = 24.4, Z1 = 42, PLINTH = 12, DOOR = 2.2
   const ring: XY[] = []
@@ -218,7 +220,7 @@ tiers.forEach((t, i) => tierWalls(t, tiers[i + 1], i >= 1))
       if (i % 2) band(pts[i], b, 0, PLINTH, 0, 3, base, .8)
       else wall(base, pts[i], b, 0, PLINTH)
     })
-    paintedFace(pts, PLINTH, Z1)
+    windowedFace(pts, PLINTH, Z1)
     const corner: [XY, XY] = [rot([H - CH, -H], s), rot([H, -H + CH], s)]
     wall(base, corner[0], corner[1], 0, PLINTH)
     wall(granite, corner[0], corner[1], PLINTH, Z1)
@@ -285,15 +287,14 @@ const RINGS: [number, number, number, number][] = [
 RINGS.forEach(([r, top, rod, n], i) => ring(r, i ? RINGS[i - 1][1] : BAND1, top, n, rod, i > 2 ? 12 : 16))
 
 // ---------- write ----------
+// Identity colours, muted to the palette's lightness: the rose-greige
+// granite and the silver crown.
 const parts = [
-  { part: facade, material: { name: 'window', color: 0xffffff, texture: { png: WINDOW_GRID } } },
-  { part: granite, material: { name: 'granite', color: 0xc8c0b7 } },
-  { part: base, material: { name: 'granite-base', color: 0xb3a99f } },
-  { part: glass, material: { name: 'window-2', color: 0x5d6b7c } },
-  { part: notchGlass, material: { name: 'window-3', color: 0x7d8b9a } },
-  { part: silver, material: { name: 'crown-rods', color: 0xdfe3e6, roughness: .5 } },
-  { part: steel, material: { name: 'crown-body', color: 0xa9b8c6, roughness: .6 } },
-  { part: terrace, material: { name: 'ledges', color: 0xd4cdc4 } },
+  { part: granite, material: finish('boa-granite', 0xe9dbd2) },
+  { part: facade, material: PALETTE.window },
+  { part: silver, material: finish('boa-silver', 0xe4e8ea, .5) },
+  { part: steel, material: PALETTE.glass },
+  { part: terrace, material: PALETTE.roof },
 ]
 const triangles = parts.reduce((n, { part }) => n + part.triangles, 0)
 if (triangles > 6500) throw new Error(`Triangle budget exceeded: ${triangles}`)

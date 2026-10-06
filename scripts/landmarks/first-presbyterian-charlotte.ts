@@ -21,12 +21,20 @@
  * (all OSM). The spire rises 64 m: 187 ft for the 1857 steeple (NRHP
  * nomination) plus the 25 ft the 1884 rebuild added (the church's history).
  * Eaves, ridge and tower stages are scaled from photos.
+ *
+ * Colours follow the shared palette (STYLE.md): the tan stucco is the one
+ * identity finish, pulled light; slate roofs and the spire are `roof`, the
+ * Sunday School's green metal roof `copper`. Windows are flush slate panels,
+ * one per arched opening.
  */
 import { Part, writeGlb, type V3 } from './mesh'
+import { PALETTE, finish } from './palette'
 
 type XY = [number, number]
 const stucco = new Part(), trim = new Part(), glass = new Part(), door = new Part()
-const slate = new Part(), spireSlate = new Part(), band = new Part()
+const slate = new Part(), green = new Part()
+// Panels sit just proud of the wall (Open Landmarks: within .06 m).
+const LIFT = .04
 const SIDES = [-1, 1] as const
 const unit = (v: V3): V3 => { const l = Math.hypot(...v) || 1; return v.map(n => n / l) as V3 }
 const cross3 = (a: V3, b: V3): V3 => [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]]
@@ -103,7 +111,7 @@ function pinnacle(cx: number, cy: number, z0: number, z1: number, half: number, 
   spike(p, sq(cx, cy, half), z1, [cx, cy, tip])
 }
 
-type Opening = { at: XY; w: number; zb: number; zs: number; depth?: number; back?: Part }
+type Opening = { at: XY; w: number; zb: number; zs: number; back?: Part }
 
 /** Equilateral pointed arch: two arcs of radius = width meeting at the apex. */
 function archOutline(s0: number, s1: number, zb: number, zs: number, n = 3): XY[] {
@@ -114,57 +122,20 @@ function archOutline(s0: number, s1: number, zb: number, zs: number, n = 3): XY[
 }
 
 /**
- * The outward face of a wall from A to B (outside on the right), with
- * pointed-arch openings recessed into it: stucco reveals, a dark back.
+ * The outward face of a wall from A to B (outside on the right), with each
+ * pointed-arch opening on it laid flush as a slate panel (or `back`).
  */
 function wallFace(p: Part, A: XY, B: XY, z0: number, z1: number, openings: Opening[]) {
   const L = Math.hypot(B[0]-A[0], B[1]-A[1]), u: V3 = [(B[0]-A[0])/L, (B[1]-A[1])/L, 0]
   const n: V3 = [u[1], -u[0], 0]
-  const v = (s: number, z: number, d = 0): V3 => [A[0] + u[0]*s - n[0]*d, A[1] + u[1]*s - n[1]*d, z]
-  const panel = (s0: number, s1: number, za: number, zb: number) => {
-    if (s1 - s0 > 1e-4 && zb - za > 1e-4) poly(p, [v(s0, za), v(s1, za), v(s1, zb), v(s0, zb)], n)
+  const v = (s: number, z: number, out = 0): V3 => [A[0] + u[0]*s + n[0]*out, A[1] + u[1]*s + n[1]*out, z]
+  poly(p, [v(0, z0), v(L, z0), v(L, z1), v(0, z1)], n)
+  for (const o of openings) {
+    const s = (o.at[0]-A[0])*u[0] + (o.at[1]-A[1])*u[1], off = (o.at[0]-A[0])*n[0] + (o.at[1]-A[1])*n[1]
+    if (Math.abs(off) > .05 || s <= 0 || s >= L) continue
+    const out = archOutline(s - o.w / 2, s + o.w / 2, o.zb, o.zs, o.w >= 3 ? 3 : 2)
+    poly(o.back ?? glass, out.map(([ss, z]) => v(ss, z, LIFT)), n)
   }
-  const mine = openings
-    .map(o => ({ o, s: (o.at[0]-A[0])*u[0] + (o.at[1]-A[1])*u[1], off: (o.at[0]-A[0])*n[0] + (o.at[1]-A[1])*n[1] }))
-    .filter(({ s, off }) => Math.abs(off) < .05 && s > 0 && s < L)
-    .sort((a, b) => a.s - b.s)
-  // Openings sharing a centre line stack into one column (a door under a
-  // window); the wall fills around each.
-  const columns: { s: number; list: Opening[] }[] = []
-  for (const m of mine) {
-    const col = columns.find(c => Math.abs(c.s - m.s) < .05)
-    if (col) col.list.push(m.o); else columns.push({ s: m.s, list: [m.o] })
-  }
-  let last = 0
-  for (const { s, list } of columns) {
-    list.sort((a, b) => a.zb - b.zb)
-    const half = Math.max(...list.map(o => o.w)) / 2, S0 = s - half, S1 = s + half
-    panel(last, S0, z0, z1)
-    let floor = z0
-    for (const o of list) {
-      const s0 = s - o.w / 2, s1 = s + o.w / 2, depth = o.depth ?? .5
-      const out = archOutline(s0, s1, o.zb, o.zs, o.w >= 3 ? 3 : 2), apex = Math.max(...out.map(q => q[1]))
-      panel(S0, S1, floor, o.zb)
-      panel(S0, s0, o.zb, apex)
-      panel(s1, S1, o.zb, apex)
-      floor = apex
-      for (let k = 2; k < out.length - 1; k++) {
-        const a = out[k], b = out[k + 1]
-        poly(p, [v(a[0], a[1]), v(a[0], apex), v(b[0], apex), v(b[0], b[1])], n)
-      }
-      for (let k = 0; k < out.length; k++) {
-        const a = out[k], b = out[(k + 1) % out.length]
-        const e: V3 = [b[0]-a[0], 0, b[1]-a[1]]
-        if (Math.hypot(...e) < 1e-5) continue
-        const inward: V3 = [u[0]*-e[2], u[1]*-e[2], e[0]]
-        poly(p, [v(a[0], a[1]), v(b[0], b[1]), v(b[0], b[1], depth), v(a[0], a[1], depth)], unit(inward))
-      }
-      poly(o.back ?? glass, out.map(([ss, z]) => v(ss, z, depth)), n)
-    }
-    panel(S0, S1, floor, z1)
-    last = S1
-  }
-  panel(last, L, z0, z1)
 }
 
 /** Walls of a convex block, with openings on whichever faces they sit on. */
@@ -262,14 +233,14 @@ for (const s of SIDES) pinnacle(s * TRX, (TR0 + TR1) / 2, RIDGE - .6, RIDGE + .8
   const h = T_HALF, cy = T_CY
   const o: Opening[] = [
     // Front door under a tall traceried window, as on Trade Street.
-    { at: [0, T_FRONT], w: 2.4, zb: 0, zs: 3.4, depth: .8, back: door },
-    { at: [0, T_FRONT], w: 2.4, zb: 5.4, zs: 10.4, depth: .6 },
+    { at: [0, T_FRONT], w: 2.4, zb: 0, zs: 3.4, back: door },
+    { at: [0, T_FRONT], w: 2.4, zb: 5.4, zs: 10.4 },
   ]
   // Louvred belfry lights on the three faces clear of the roof.
-  o.push({ at: [0, T_FRONT], w: 1.7, zb: 16.6, zs: 19.4, depth: .4 })
+  o.push({ at: [0, T_FRONT], w: 1.7, zb: 16.6, zs: 19.4 })
   for (const s of SIDES) {
-    o.push({ at: [s * h, cy], w: 1.7, zb: 16.6, zs: 19.4, depth: .4 })
-    o.push({ at: [s * h, cy], w: 1.2, zb: 4.5, zs: 8.5, depth: .4 })
+    o.push({ at: [s * h, cy], w: 1.7, zb: 16.6, zs: 19.4 })
+    o.push({ at: [s * h, cy], w: 1.2, zb: 4.5, zs: 8.5 })
   }
   block(stucco, sq(0, cy, h), 0, T_TOP, o, { skip: ([, y]) => y > T_BACK - .1 })
   // Clasping buttresses at the front corners, stepping in under the parapet.
@@ -296,6 +267,8 @@ for (const s of SIDES) pinnacle(s * TRX, (TR0 + TR1) / 2, RIDGE - .6, RIDGE + .8
 }
 
 // ---------------------------------------------------------------- spire
+// Its own darker slate: on plain `roof` it vanished against the roofs behind it.
+const spireSlate = new Part()
 {
   const cy = T_CY
   const apothem = (z: number) => SPIRE_A + (.22 - SPIRE_A) * (z - SPIRE_BASE) / (SPIRE_TOP - SPIRE_BASE)
@@ -307,15 +280,15 @@ for (const s of SIDES) pinnacle(s * TRX, (TR0 + TR1) / 2, RIDGE - .6, RIDGE + .8
     const isBand = i % 2 === 1
     if (isBand) {
       const z0 = levels[i], z1 = levels[i + 1]
-      band.loft([ring(z0, .28), ring(z1, .2)])
-      poly(band, ring(z0, .28).reverse(), [0, 0, -1])
+      trim.loft([ring(z0, .28), ring(z1, .2)])
+      poly(trim, ring(z0, .28).reverse(), [0, 0, -1])
       // Slope of the band top back to the spire face.
-      band.loft([ring(z1, .2), ring(z1 + .01, 0)])
+      trim.loft([ring(z1, .2), ring(z1 + .01, 0)])
     } else spireSlate.loft([ring(levels[i]), ring(levels[i + 1])])
   }
   // Finial: a slim pale needle above the slate.
   const top = oct(0, cy, .22)
-  spike(band, top, SPIRE_TOP, [0, cy, TIP])
+  spike(trim, top, SPIRE_TOP, [0, cy, TIP])
 
   // Four gabled lucarnes on the cardinal faces at the spire's foot, slate
   // cheeks and pale fronts, each with a dark louvred lancet.
@@ -324,14 +297,14 @@ for (const s of SIDES) pinnacle(s * TRX, (TR0 + TR1) / 2, RIDGE - .6, RIDGE + .8
     const P = (along: number, o: number, z: number): V3 => [dx * o + px * along, cy + dy * o + py * along, z]
     const nOut: V3 = [dx, dy, 0]
     // Front: wall rectangle plus gable triangle, with a flush dark lancet.
-    poly(band, [P(-half, out, z0), P(half, out, z0), P(half, out, z1), P(-half, out, z1)], nOut)
-    poly(band, [P(-half, out, z1), P(half, out, z1), P(0, out, zt)], nOut)
+    poly(trim, [P(-half, out, z0), P(half, out, z0), P(half, out, z1), P(-half, out, z1)], nOut)
+    poly(trim, [P(-half, out, z1), P(half, out, z1), P(0, out, zt)], nOut)
     const lw = .5, l0 = z0 + .7, l1 = z1 + .3
     poly(glass, [P(-lw, out + .02, l0), P(lw, out + .02, l0), P(lw, out + .02, l1), P(0, out + .02, l1 + .9), P(-lw, out + .02, l1)], nOut)
     // Cheeks and roof running back into the spire.
     for (const s of [-1, 1]) {
-      poly(spireSlate, [P(s * half, out, z0), P(s * half, 0, z0), P(s * half, 0, z1), P(s * half, out, z1)], [px * s, py * s, 0])
-      poly(spireSlate, [P(s * (half + .12), out + .1, z1 - .1), P(0, out + .1, zt), P(0, 0, zt), P(s * (half + .12), 0, z1 - .1)], [px * s, py * s, 1])
+      poly(slate, [P(s * half, out, z0), P(s * half, 0, z0), P(s * half, 0, z1), P(s * half, out, z1)], [px * s, py * s, 0])
+      poly(slate, [P(s * (half + .12), out + .1, z1 - .1), P(0, out + .1, zt), P(0, 0, zt), P(s * (half + .12), 0, z1 - .1)], [px * s, py * s, 1])
     }
   }
 }
@@ -344,7 +317,8 @@ for (const s of SIDES) pinnacle(s * TRX, (TR0 + TR1) / 2, RIDGE - .6, RIDGE + .8
 // outline's corners (model frame). Plain on purpose: a muted stucco, broad
 // recessed window bays, and the roofs the aerials show, so the church and
 // its spire stay the focus.
-const wingWall = new Part(), wingGlass = new Part(), flat = new Part(), green = new Part()
+// Wings share the church's stucco, windows and roof materials.
+const wingWall = stucco, wingGlass = glass, flat = slate
 type Rect = [number, number, number, number] // x0, y0, x1, y1
 type Wing = { rects: Rect[]; h: number }
 const inRect = ([x, y]: XY, [x0, y0, x1, y1]: Rect) => x > x0 && x < x1 && y > y0 && y < y1
@@ -369,32 +343,23 @@ const wings = [office, officePorches, hall, hallAnnex, school, schoolFront, scho
 for (const w of wings) for (const rect of w.rects) solids.push({ rect, h: w.h })
 
 /**
- * One stretch of plain wall from A to B (outside on the right) with broad
- * window bays recessed into it, one per ~5 m, running nearly its full height.
+ * One stretch of plain wall from A to B (outside on the right) with flush
+ * window panels, one column per ~5 m and one panel per floor.
  */
 function bayWall(A: XY, B: XY, h: number) {
   const L = Math.hypot(B[0]-A[0], B[1]-A[1]), u: V3 = [(B[0]-A[0])/L, (B[1]-A[1])/L, 0]
-  const n: V3 = [u[1], -u[0], 0], d = .4
-  const v = (s: number, z: number, dd = 0): V3 => [A[0] + u[0]*s - n[0]*dd, A[1] + u[1]*s - n[1]*dd, z]
-  const panel = (s0: number, s1: number, z0: number, z1: number) => {
-    if (s1 - s0 > 1e-4 && z1 - z0 > 1e-4) poly(wingWall, [v(s0, z0), v(s1, z0), v(s1, z1), v(s0, z1)], n)
-  }
+  const n: V3 = [u[1], -u[0], 0]
+  const v = (s: number, z: number, out = 0): V3 => [A[0] + u[0]*s + n[0]*out, A[1] + u[1]*s + n[1]*out, z]
+  poly(wingWall, [v(0, 0), v(L, 0), v(L, h), v(0, h)], n)
   const count = L < 3 ? 0 : Math.max(1, Math.round(L / 5))
-  const bw = Math.min(1.8, L / count - 1.4), z0 = 1.3, z1 = h - 1.5
-  let last = 0
+  const bw = Math.min(1.8, L / count - 1.4)
+  // Two floors on the taller wings; a single panel up a whole wall would
+  // read as a stripe.
+  const rows: [number, number][] = h >= 8 ? [[1.3, h / 2 - .5], [h / 2 + .5, h - 1.5]] : [[1.3, h - 1.5]]
   for (let i = 0; i < count; i++) {
     const c = (i + .5) * L / count, s0 = c - bw / 2, s1 = c + bw / 2
-    panel(last, s0, 0, h)
-    panel(s0, s1, 0, z0)
-    panel(s0, s1, z1, h)
-    poly(wingWall, [v(s0, z0), v(s0, z1), v(s0, z1, d), v(s0, z0, d)], u)
-    poly(wingWall, [v(s1, z0), v(s1, z1), v(s1, z1, d), v(s1, z0, d)], [-u[0], -u[1], 0])
-    poly(wingWall, [v(s0, z1), v(s1, z1), v(s1, z1, d), v(s0, z1, d)], [0, 0, -1])
-    poly(wingWall, [v(s0, z0), v(s1, z0), v(s1, z0, d), v(s0, z0, d)], [0, 0, 1])
-    poly(wingGlass, [v(s0, z0, d), v(s1, z0, d), v(s1, z1, d), v(s0, z1, d)], n)
-    last = s1
+    for (const [z0, z1] of rows) poly(wingGlass, [v(s0, z0, LIFT), v(s1, z0, LIFT), v(s1, z1, LIFT), v(s0, z1, LIFT)], n)
   }
-  panel(last, L, 0, h)
 }
 
 // Walls: every rectangle edge, cut wherever another footprint starts or
@@ -462,20 +427,16 @@ for (const r of corner.rects) capRect(flat, r, corner.h)
 
 // ---------------------------------------------------------------- write
 const parts = [
-  { part: stucco, material: { name: 'stucco', color: 0xd2ab84 } },
-  { part: trim, material: { name: 'stucco-trim', color: 0xdcbc98 } },
-  { part: glass, material: { name: 'window', color: 0x4b5361 } },
-  { part: door, material: { name: 'entrance', color: 0x6a3f2a } },
-  { part: slate, material: { name: 'slate-roof', color: 0x7d8086 } },
-  { part: spireSlate, material: { name: 'spire-slate', color: 0x666a72 } },
-  { part: band, material: { name: 'spire-trim', color: 0xcfcdc8 } },
-  { part: wingWall, material: { name: 'wing-stucco', color: 0xc9b096 } },
-  { part: wingGlass, material: { name: 'window-2', color: 0x7b8088 } },
-  { part: flat, material: { name: 'flat-roof', color: 0xbdb9b1 } },
-  { part: green, material: { name: 'green-roof', color: 0x94b3a7 } },
+  { part: stucco, material: finish('fpc-stucco', 0xeedbbf) },
+  { part: trim, material: PALETTE.trim },
+  { part: glass, material: PALETTE.window },
+  { part: door, material: PALETTE.entrance },
+  { part: slate, material: PALETTE.roof },
+  { part: green, material: PALETTE.copper },
+  { part: spireSlate, material: finish('fpc-spire-slate', 0x7e8791) },
 ]
 const triangles = parts.reduce((n, { part }) => n + part.triangles, 0)
-if (triangles > 5000) throw new Error(`Triangle budget exceeded: ${triangles}`)
+if (triangles > 6500) throw new Error(`Triangle budget exceeded: ${triangles}`)
 const glb = writeGlb('First Presbyterian Church, Charlotte', parts, {
   license: 'CC0-1.0', bearing: 47.9, elevation: 0, anchor: [35.2291133, -80.843849], height: TIP,
   frame: 'Y up, -Z north, +X east, metres; origin at the ground anchor',

@@ -1,7 +1,7 @@
 /**
  * Duke Energy Center (550 South Tryon), Charlotte — original procedural
  * geometry, CC0-1.0.
- * bun scripts/landmarks/duke-energy-center.ts
+ * bun scripts/landmarks/duke-energy-center.ts [out.glb]
  *
  * Anchor: the centroid of OSM way/1550692284 (-80.84874, 35.22416). Bearing
  * 50.3°, the azimuth of the tower's faces in OSM, so model x and y run along
@@ -16,10 +16,13 @@
  * parking and office podium sits on the north-west side.
  */
 import { Part, writeGlb, type V3 } from './mesh'
+import { PALETTE, finish } from './palette'
 
 type XY = [number, number]
+// The curtain walls are slate `window` glass broken by pale trim: the fins,
+// and floor lines every four floors. Tower and podium glass are one material.
 const glass = new Part(), stone = new Part(), metal = new Part()
-const slope = new Part(), roof = new Part(), garden = new Part(), podGlass = new Part()
+const slope = new Part(), roof = new Part(), garden = new Part(), podGlass = glass
 
 const unit = (v: V3): V3 => { const l = Math.hypot(...v) || 1; return v.map(n => n / l) as V3 }
 const add = (a: XY, b: XY, k = 1): XY => [a[0] + b[0] * k, a[1] + b[1] * k]
@@ -204,6 +207,33 @@ for (const [name, [i, j]] of Object.entries(faceEnds)) {
     prism(metal, strip(a, b, s - FIN / 2, s + FIN / 2, RECESS * .85, .3), flat(z0 + 4), top, { top: false })
   }
 }
+// Pale floor lines across the curtain wall every four floors, flush with the
+// stone frames and stopping under the sloped coping. Each is a front, a top
+// and a soffit; the ends butt into the next face's line.
+const LINE_EVERY = 16, LINE = .7
+for (let z = LINE_EVERY; z + LINE < TOP - COPE; z += LINE_EVERY) {
+  for (let i = 0; i < outer.length; i++) {
+    const j = (i + 1) % outer.length
+    // the west face is inside the podium up to its roof
+    if (z < PODIUM + 1 && outer[i][0] < CX - H + .1 && outer[j][0] < CX - H + .1) continue
+    const room = (t: number) => rim(lerp2(outer[i], outer[j], t)) - COPE - (z + LINE)
+    let t0 = 0, t1 = 1
+    if (room(0) < 0 && room(1) < 0) continue
+    if (room(0) < 0 || room(1) < 0) {
+      // the coping crosses this line part-way along the edge: find where
+      let lo = 0, hi = 1
+      const inside = room(0) >= 0
+      for (let k = 0; k < 30; k++) { const m = (lo + hi) / 2; if ((room(m) >= 0) === inside) lo = m; else hi = m }
+      if (inside) t1 = lo; else t0 = hi
+    }
+    const a = lerp2(outer[i], outer[j], t0), b = lerp2(outer[i], outer[j], t1)
+    const ai = lerp2(shell[i], shell[j], t0), bi = lerp2(shell[i], shell[j], t1)
+    const v = (q: XY, h: number): V3 => [q[0], q[1], h]
+    metal.quad(v(a, z), v(b, z), v(b, z + LINE), v(a, z + LINE))
+    metal.quad(v(a, z + LINE), v(b, z + LINE), v(bi, z + LINE), v(ai, z + LINE))
+    metal.quad(v(ai, z), v(bi, z), v(b, z), v(a, z))
+  }
+}
 // The beam spanning the open crown between the two high corners.
 {
   const a = ring10[2], b = ring10[7], w = 1.4
@@ -262,13 +292,14 @@ cap(garden, [[-50, -15], [2, -15], [2, 16], [-50, 16]], flat(PODIUM + .05))
 
 // ---------------------------------------------------------------- write
 const parts = [
-  { part: glass, material: { name: 'window', color: 0x88a0b7, roughness: .55 } },
-  { part: podGlass, material: { name: 'window-2', color: 0x7a8d9e, roughness: .6 } },
-  { part: stone, material: { name: 'pale-stone', color: 0xe3e1da } },
-  { part: metal, material: { name: 'fins', color: 0xc9cdd0, roughness: .6 } },
-  { part: slope, material: { name: 'crown-slopes', color: 0x6d7f91, roughness: .6, doubleSided: true } },
-  { part: roof, material: { name: 'roof', color: 0xbdb9b1 } },
-  { part: garden, material: { name: 'roof-garden', color: 0x94a77f } },
+  { part: glass, material: PALETTE.window },
+  { part: stone, material: PALETTE.stone },
+  { part: metal, material: PALETTE.trim },
+  // The crown's stepped risers and the screens' inner faces: structural
+  // glazing, seen from both sides.
+  { part: slope, material: { ...PALETTE.glass, doubleSided: true } },
+  { part: roof, material: PALETTE.roof },
+  { part: garden, material: finish('duke-roof-garden', 0xa7b593) },
 ]
 const triangles = parts.reduce((n, { part }) => n + part.triangles, 0)
 if (triangles > 5000) throw new Error(`Triangle budget exceeded: ${triangles}`)
@@ -278,6 +309,6 @@ const glb = writeGlb('Duke Energy Center', parts, {
   osm: 'way/1550692284 with its building:parts',
 })
 if (glb.length > 256000) throw new Error(`File budget exceeded: ${glb.length}`)
-const out = new URL('../../landmarks/models/duke-energy-center.glb', import.meta.url).pathname
+const out = process.argv[2] ?? new URL('../../landmarks/models/duke-energy-center.glb', import.meta.url).pathname
 await Bun.write(out, glb)
 console.log(`${out}: ${triangles} triangles, ${glb.length} bytes (${(glb.length / 1024).toFixed(1)} KiB)`)
