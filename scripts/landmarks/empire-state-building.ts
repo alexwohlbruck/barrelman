@@ -215,11 +215,11 @@ for(const z of [393,419])pole(steel,[[z,z<410?2.2:1.35],[z+1,z<410?2.2:1.35]])
 const parts=[
   {part:stone,material:{name:'limestone',color:0xe7dfcd}},
   {part:granite,material:{name:'granite',color:0xc5bcaa}},
-  {part:glass,material:{name:'window-bands',color:0x829097,roughness:.85}},
+  {part:glass,material:{name:'window',color:0x829097,roughness:.85}},
   {part:roof,material:{name:'terracotta-terraces',color:0xc8968a}},
   {part:garden,material:{name:'roof-garden',color:0x94a77f}},
   {part:steel,material:{name:'aluminium-steel',color:0xadb7bb,roughness:.65}},
-  {part:dark,material:{name:'crown-recesses',color:0x73818a}},
+  {part:dark,material:{name:'window-2',color:0x73818a}},
 ]
 const triangles=parts.reduce((n,{part})=>n+part.triangles,0)
 if(triangles>5000)throw new Error(`Triangle budget exceeded: ${triangles}`)

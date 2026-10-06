@@ -207,7 +207,7 @@ for (let k = 0; z < CROWN_TOP - 1; k++) {
 }
 
 const parts = [
-  { part: glass, material: { name: 'glass-bands', color: 0x93a8bb, roughness: 0.7 } },
+  { part: glass, material: { name: 'window', color: 0x93a8bb, roughness: 0.7 } },
   { part: slab, material: { name: 'slab-edges', color: 0xe4e1d9 } },
   { part: terrace, material: { name: 'concrete-terraces', color: 0xd3cfc6 } },
   { part: roof, material: { name: 'roof', color: 0xbdb9b1 } },

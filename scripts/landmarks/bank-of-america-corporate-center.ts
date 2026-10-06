@@ -111,6 +111,8 @@ const SLAB_SEGS = 6  // facets across a bowed slab face
  * window module, a bay wide and a floor tall, with a dark window on granite.
  * The renderer mipmaps it, so at map distance the grid averages to an even,
  * light texture instead of shimmering, as a fine geometric grid would.
+ * Alpha marks the glass for night lighting (STYLE.md, Night): 0 on a window,
+ * 255 on granite. The material is opaque, so by day alpha is ignored.
  */
 const BAY = 1.5, FLOOR = 3.9
 const GRANITE: [number, number, number] = [0xc8, 0xc0, 0xb7]
@@ -119,8 +121,10 @@ const WINDOW_GRID = (() => {
   const w = 32, h = 32, data = new Uint8Array(w * h * 4)
   // window ≈ 45% of the bay's width and 55% of the floor's height
   const x0 = Math.round(w * .275), x1 = Math.round(w * .725), y0 = Math.round(h * .2), y1 = Math.round(h * .75)
-  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++)
-    data.set([...(x >= x0 && x < x1 && y >= y0 && y < y1 ? WINDOW : GRANITE), 255], (y * w + x) * 4)
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const win = x >= x0 && x < x1 && y >= y0 && y < y1
+    data.set([...(win ? WINDOW : GRANITE), win ? 0 : 255], (y * w + x) * 4)
+  }
   return encodePng(w, h, data)
 })()
 const facade = new Part()
@@ -282,11 +286,11 @@ RINGS.forEach(([r, top, rod, n], i) => ring(r, i ? RINGS[i - 1][1] : BAND1, top,
 
 // ---------- write ----------
 const parts = [
-  { part: facade, material: { name: 'facade-window-grid', color: 0xffffff, texture: { png: WINDOW_GRID } } },
+  { part: facade, material: { name: 'window', color: 0xffffff, texture: { png: WINDOW_GRID } } },
   { part: granite, material: { name: 'granite', color: 0xc8c0b7 } },
   { part: base, material: { name: 'granite-base', color: 0xb3a99f } },
-  { part: glass, material: { name: 'glass', color: 0x5d6b7c } },
-  { part: notchGlass, material: { name: 'corner-notch-glass', color: 0x7d8b9a } },
+  { part: glass, material: { name: 'window-2', color: 0x5d6b7c } },
+  { part: notchGlass, material: { name: 'window-3', color: 0x7d8b9a } },
   { part: silver, material: { name: 'crown-rods', color: 0xdfe3e6, roughness: .5 } },
   { part: steel, material: { name: 'crown-body', color: 0xa9b8c6, roughness: .6 } },
   { part: terrace, material: { name: 'ledges', color: 0xd4cdc4 } },

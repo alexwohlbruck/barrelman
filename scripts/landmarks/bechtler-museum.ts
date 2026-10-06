@@ -280,7 +280,7 @@ for (const side of [-1, 1]) {
 // shares so the bird's red and blue each keep a material of their own.
 const parts = [
   { part: brick, material: { name: 'terracotta', color: 0xc4673f } },
-  { part: glass, material: { name: 'glass', color: 0x4f5c66 } },
+  { part: glass, material: { name: 'window', color: 0x4f5c66 } },
   { part: pale, material: { name: 'roof-and-mirror', color: 0xc9cbcc, roughness: 0.6 } },
   { part: gold, material: { name: 'gold', color: 0xdcaa2e, roughness: 0.5 } },
   { part: blue, material: { name: 'blue', color: 0x2f6cc4 } },

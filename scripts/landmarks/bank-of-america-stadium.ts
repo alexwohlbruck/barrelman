@@ -409,9 +409,9 @@ const parts = [
   { part: silver, material: { name: 'silver-seats', color: 0xa3a8ae } },
   { part: precast, material: { name: 'precast', color: 0xbdbab3 } },
   { part: black, material: { name: 'black', color: 0x26282d } },
-  { part: glass, material: { name: 'glass', color: 0x6c7e90 } },
+  { part: glass, material: { name: 'window', color: 0x6c7e90 } },
   { part: white, material: { name: 'white', color: 0xe9e7e1 } },
-  { part: cupola, material: { name: 'cupola-glass', color: 0x8fbab3 } },
+  { part: cupola, material: { name: 'glass', color: 0x8fbab3 } },
 ]
 const triangles = parts.reduce((s, { part }) => s + part.triangles, 0)
 for (const { part, material } of parts) console.log(material.name.padEnd(14), part.triangles)

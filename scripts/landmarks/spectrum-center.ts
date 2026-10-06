@@ -371,8 +371,8 @@ const SLOT = 4
 const parts = [
   { part: brick, material: { name: 'brick', color: 0x96503c } },
   { part: panel, material: { name: 'metal-panel', color: 0xa9adb2 } },
-  { part: dark, material: { name: 'windows', color: 0x58646e } },
-  { part: glass, material: { name: 'atrium-glass', color: 0x86a0aa } },
+  { part: dark, material: { name: 'window', color: 0x58646e } },
+  { part: glass, material: { name: 'glass', color: 0x86a0aa } },
   { part: roof, material: { name: 'metal-roof', color: 0xc9cbca } },
 ]
 const triangles = parts.reduce((s, { part }) => s + part.triangles, 0)

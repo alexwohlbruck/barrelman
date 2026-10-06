@@ -401,8 +401,8 @@ block(stone, sq(0, (CHOIR_END + AMB_END) / 2, NAVE, (AMB_END - CHOIR_END) / 2), 
 const parts = [
   { part: stone, material: { name: 'marble', color: 0xd9d1c0 } },
   { part: trim, material: { name: 'marble-shadow', color: 0xb5ab98 } },
-  { part: glass, material: { name: 'window-glass', color: 0x5a6672 } },
-  { part: rose, material: { name: 'rose-and-doors', color: 0x3d4757 } },
+  { part: glass, material: { name: 'window', color: 0x5a6672 } },
+  { part: rose, material: { name: 'window-2', color: 0x3d4757 } },
   { part: slate, material: { name: 'slate-roof', color: 0x565c63 } },
   { part: copper, material: { name: 'copper-roof', color: 0x7fa595 } },
 ]

@@ -287,10 +287,10 @@ lathe(dark, ...TITAN, [[30.0, 1.25], [32.6, 0.5], [33.2, 0]], 12)
 // ---------------------------------------------------------------- write
 const parts = [
   { part: concrete, material: { name: 'great-hall-concrete', color: 0xc6bcac } },
-  { part: cobalt, material: { name: 'dalle-de-verre-cobalt', color: 0x2f4c9c, roughness: 0.6 } },
+  { part: cobalt, material: { name: 'window-2', color: 0x2f4c9c, roughness: 0.6 } },
   { part: brick, material: { name: 'tan-brick', color: 0xcfb48e } },
   { part: metal, material: { name: 'pale-metal', color: 0xd3d4d0, roughness: 0.6 } },
-  { part: glass, material: { name: 'glazing', color: 0x7f939d } },
+  { part: glass, material: { name: 'window', color: 0x7f939d } },
   { part: roof, material: { name: 'roofs', color: 0xbdb9b1 } },
   { part: white, material: { name: 'rocket-white', color: 0xeeeeea, roughness: 0.5 } },
   { part: dark, material: { name: 'rocket-dark', color: 0x4a4d52 } },

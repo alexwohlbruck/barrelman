@@ -280,7 +280,7 @@ const parts = [
   { part: stripes, material: { name: 'mezzanine-stripes', color: 0xffffff, texture: { png: STRIPES } } },
   { part: paving, material: { name: 'mezzanine', color: 0xc6c0b3 } },
   { part: drum, material: { name: 'theatre-wall', color: 0xd4c9b0 } },
-  { part: glass, material: { name: 'glass', color: 0x7f93a0 } },
+  { part: glass, material: { name: 'window', color: 0x7f93a0 } },
   { part: roof, material: { name: 'roof', color: 0xbdb9b1 } },
 ]
 const glb = writeGlb('new-york-state-pavilion', parts, {

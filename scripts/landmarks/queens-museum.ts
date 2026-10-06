@@ -215,12 +215,12 @@ for (const flip of [1, -1] as const) {
 
 const parts = [
   { part: stone, material: { name: 'limestone', color: 0xd3c8b4 } },
-  { part: glass, material: { name: 'colonnade-glass', color: 0x7a8892 } },
-  { part: curtain, material: { name: 'glass-curtain', color: 0x8695a0 } },
-  { part: block, material: { name: 'glass-block', color: 0x6f7b84 } },
+  { part: glass, material: { name: 'window', color: 0x7a8892 } },
+  { part: curtain, material: { name: 'window-2', color: 0x8695a0 } },
+  { part: block, material: { name: 'window-3', color: 0x6f7b84 } },
   { part: band, material: { name: 'parapet-band', color: 0x5a524c } },
   { part: roof, material: { name: 'roof', color: 0xbdb9b1 } },
-  { part: skylight, material: { name: 'skylight', color: 0x9aabb6, roughness: .6 } },
+  { part: skylight, material: { name: 'glass', color: 0x9aabb6, roughness: .6 } },
 ]
 const triangles = parts.reduce((n, { part }) => n + part.triangles, 0)
 if (triangles > 5000) throw new Error(`Triangle budget exceeded: ${triangles}`)

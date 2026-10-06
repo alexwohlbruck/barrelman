@@ -262,8 +262,8 @@ cap(garden, [[-50, -15], [2, -15], [2, 16], [-50, 16]], flat(PODIUM + .05))
 
 // ---------------------------------------------------------------- write
 const parts = [
-  { part: glass, material: { name: 'tower-glass', color: 0x88a0b7, roughness: .55 } },
-  { part: podGlass, material: { name: 'podium-glass', color: 0x7a8d9e, roughness: .6 } },
+  { part: glass, material: { name: 'window', color: 0x88a0b7, roughness: .55 } },
+  { part: podGlass, material: { name: 'window-2', color: 0x7a8d9e, roughness: .6 } },
   { part: stone, material: { name: 'pale-stone', color: 0xe3e1da } },
   { part: metal, material: { name: 'fins', color: 0xc9cdd0, roughness: .6 } },
   { part: slope, material: { name: 'crown-slopes', color: 0x6d7f91, roughness: .6, doubleSided: true } },

@@ -213,8 +213,8 @@ function smooth(src: Part, crease = 50) {
 
 const parts = [
   { part: smooth(raw.concrete), material: { name: 'concrete', color: 0xd9d0bf } },
-  { part: smooth(raw.glass, 30), material: { name: 'window-bands', color: 0x5f6c78, roughness: .8 } },
-  { part: smooth(raw.slot, 30), material: { name: 'pylon-glazing', color: 0x4b5661, roughness: .8 } },
+  { part: smooth(raw.glass, 30), material: { name: 'window', color: 0x5f6c78, roughness: .8 } },
+  { part: smooth(raw.slot, 30), material: { name: 'window-2', color: 0x4b5661, roughness: .8 } },
   { part: smooth(raw.roof, 30), material: { name: 'roof', color: 0xbdb9b1 } },
 ]
 const triangles = parts.reduce((n, { part }) => n + part.triangles, 0)

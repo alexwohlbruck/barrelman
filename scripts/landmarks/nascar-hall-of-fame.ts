@@ -370,7 +370,7 @@ prism(STEPS_E, 0, 13, () => [{ p: stone, z0: 0, z1: 13 }], roof)
 const parts = [
   { part: ribbon, material: { name: 'stainless-ribbon', color: 0xb8bcc1, roughness: 0.5 } },
   { part: soffit, material: { name: 'ribbon-soffit', color: 0x6f757b, roughness: 0.6 } },
-  { part: glass, material: { name: 'glass', color: 0x4f5f6e } },
+  { part: glass, material: { name: 'window', color: 0x4f5f6e } },
   { part: stone, material: { name: 'limestone', color: 0xe6e0d2 } },
   { part: panels, material: { name: 'panels', color: 0xd9d5cc } },
   { part: roof, material: { name: 'flat-roof', color: 0x9a9894 } },

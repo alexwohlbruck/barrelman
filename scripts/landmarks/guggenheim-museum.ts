@@ -331,7 +331,7 @@ const parts = [
   { part: limestone, material: { name: 'buff limestone', color: 0xcec6b2 } },
   // Reveals and the shade under the avenue band: 03 at 880,192.
   { part: charcoal, material: { name: 'charcoal reveals', color: 0x3d3e3a } },
-  { part: glass, material: { name: 'grey-blue glazing', color: 0x6e7c86, roughness: 0.5 } },
+  { part: glass, material: { name: 'window', color: 0x6e7c86, roughness: 0.5 } },
   { part: metal, material: { name: 'light grey skylight cap', color: 0xb4b9ba, roughness: 0.55 } },
   { part: roof, material: { name: 'roofs', color: 0x9a9893 } },
 ]

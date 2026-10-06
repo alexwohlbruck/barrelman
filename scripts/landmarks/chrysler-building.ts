@@ -289,11 +289,11 @@ for(let i=0;i<8;i++){const j=(i+1)%8,p=i<3?glazing:silver;p.quad(nr[0][i],nr[0][
 
 const parts:{part:Part;material:MaterialSpec}[]=[
   {part:stone,material:{name:'warm off-white bevelled piers',color:0xe9e6df,roughness:.65}},
-  {part:glazing,material:{name:'soft grey recessed bands and eagles',color:0x929ba0,roughness:.7}},
+  {part:glazing,material:{name:'window',color:0x929ba0,roughness:.7}},
   {part:roof,material:{name:'muted rose terraces',color:0xc8968a,roughness:.85}},
   {part:silver,material:{name:'light silver crown and needle',color:0xc9d0d4,roughness:.42}},
   {part:rims,material:{name:'bright steel arch rims',color:0xf3f5f6,roughness:.35,doubleSided:true}},
-  {part:crownGlass,material:{name:'crown triangular windows',color:0x4b565e,roughness:.4,doubleSided:true}},
+  {part:crownGlass,material:{name:'window-2',color:0x4b565e,roughness:.4,doubleSided:true}},
 ]
 const triangles=parts.reduce((sum,p)=>sum+p.part.triangles,0)
 const glb=writeGlb('Chrysler Building',parts,{frame:'Y up, -Z north, +X east; metres; ground anchor',anchor:[40.75151,-73.9752851],bearing:29,crown:tiers.map(t=>({radius:t.r,spring:t.apex-t.r,apex:t.apex})),style:'geometry-only, broad recessed bands and bevelled piers',recessMetres:RECESS,bevelMetres:BEVEL})

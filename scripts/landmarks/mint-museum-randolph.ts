@@ -458,7 +458,7 @@ const parts = [
   { part: trim, material: { name: 'white-trim', color: 0xf1eee6 } },
   { part: roof, material: { name: 'slate-roof', color: 0x79818a } },
   { part: deck, material: { name: 'flat-roof', color: 0xbdb9b1 } },
-  { part: glass, material: { name: 'glass', color: 0x4f5b65 } },
+  { part: glass, material: { name: 'window', color: 0x4f5b65 } },
   { part: gold, material: { name: 'gilded-eagle', color: 0xc9a548 } },
 ]
 const triangles = parts.reduce((s, { part }) => s + part.triangles, 0)

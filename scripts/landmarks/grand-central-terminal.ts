@@ -439,7 +439,7 @@ corners(office, BASE, OFFICE_TOP, [3, 5])
 const parts = [
   { part: stone, material: { name: 'limestone', color: 0xd8cbb3 } },
   { part: granite, material: { name: 'granite', color: 0xbcab9a } },
-  { part: glass, material: { name: 'arched-windows', color: 0x6c7d8a } },
+  { part: glass, material: { name: 'window', color: 0x6c7d8a } },
   { part: copper, material: { name: 'copper-roof', color: 0x9dba95 } },
   { part: terrace, material: { name: 'flat-roof', color: 0xbdb9b1 } },
   { part: sculpture, material: { name: 'sculpture', color: 0x8c8374 } },

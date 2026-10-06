@@ -287,7 +287,7 @@ for (const [cx, cy] of [[3.25, -8.7], [20.75, -8.7], [20.75, 8.7], [3.25, 8.7]] 
 // bays, verdigris copper.
 const parts = [
   { part: terracotta, material: { name: 'cream-terracotta', color: 0xe6dfcb } },
-  { part: glass, material: { name: 'window-bands', color: 0x87949b } },
+  { part: glass, material: { name: 'window', color: 0x87949b } },
   { part: roof, material: { name: 'terracotta-terraces', color: 0xc8968a } },
   { part: copper, material: { name: 'green-copper', color: 0x67a08a, roughness: .7 } },
   { part: copperDark, material: { name: 'copper-shadow', color: 0x46705f } },

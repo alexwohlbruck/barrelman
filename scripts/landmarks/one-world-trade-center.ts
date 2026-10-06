@@ -223,7 +223,7 @@ cylinder(metal, [[530, .9], [537, .55], [541, .12]], 8)
 
 // sRGB colours from daylight photos.
 const parts = [
-  { part: glass, material: { name: 'blue-grey-glass', color: 0x6180a6, roughness: .4 } },
+  { part: glass, material: { name: 'window', color: 0x6180a6, roughness: .4 } },
   { part: mullion, material: { name: 'mullion-bands', color: 0x8099b6, roughness: .45 } },
   { part: arris, material: { name: 'stainless-arris', color: 0xbfc8d1, roughness: .4 } },
   { part: wall, material: { name: 'podium-core', color: 0x858d93 } },

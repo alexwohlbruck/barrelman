@@ -103,6 +103,30 @@ Parchment shades a landmark like its buildings:
 
 Shadows fall on the ground under the model.
 
+## Night
+
+The map lights a landmark at night by glTF material name, the same
+convention as Open Landmarks. Colours stay as they are by day; the name
+only decides what glows.
+
+- **`window`**: facade windows, which glow warm at night. Punched windows,
+  window bands, arched and rose windows, clerestories, and the curtain wall
+  of an office or residential tower, which is lit in reality. Names are
+  unique in a GLB, so a model with several window colours names the rest
+  `window-2`, `window-3` and so on: any name starting with `window` is a
+  window.
+- **`glass`**: structural glazing that stays dark: atria, skylights, glass
+  roofs and crowns, the Rose Center's cube.
+- **`entrance`**: a main entrance's doors or glazing, which glow at night.
+  Only where the model already has a separate material for it.
+
+Everything else is unlit. A painted window grid (`MaterialSpec.texture`)
+marks its glass in the texture's alpha: 0 on window pixels, 255 on wall,
+with the RGB unchanged. The material stays opaque, so alpha has no effect by
+day. At night a `window*` material glows where alpha is 0 and not where it
+is 255. Mipmapping averages alpha, so a distant grid glows in proportion to
+its glass.
+
 ## Checking a model
 
 Run `bun scripts/landmarks/preview.ts <model.glb> <out-dir> [photo.png ...]`.

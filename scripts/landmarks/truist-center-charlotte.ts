@@ -41,6 +41,8 @@ const roof = new Part(), deck = new Part(), skylight = new Part()
 // The stone faces are painted, not modelled: one tile is one bay of two
 // windows between piers, a floor tall. Mipmapped, the grid averages to an
 // even tone at map distance instead of shimmering as geometry would.
+// Alpha marks the glass for night lighting (STYLE.md, Night): 0 on a window,
+// 255 on stone. The material is opaque, so by day alpha is ignored.
 const BAY = 8.25, FLOOR = 4.2
 const STONE: [number, number, number] = [0xd9, 0xcf, 0xbf]
 const WINDOW: [number, number, number] = [0x56, 0x66, 0x7a]
@@ -48,15 +50,16 @@ const STONE_GRID = (() => {
   const w = 64, h = 32, data = new Uint8Array(w * h * 4)
   for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
     const win = y >= 4 && y < 29 && ((x >= 12 && x < 26) || (x >= 38 && x < 52))
-    data.set([...(win ? WINDOW : STONE), 255], (y * w + x) * 4)
+    data.set([...(win ? WINDOW : STONE), win ? 0 : 255], (y * w + x) * 4)
   }
   return encodePng(w, h, data)
 })()
-// The notch glazing: dark blue with a pale band at each floor.
+// The notch glazing: dark blue with a pale band at each floor. The band is
+// spandrel, not glass, so only the blue is alpha 0.
 const NOTCH_GRID = (() => {
   const w = 8, h = 32, data = new Uint8Array(w * h * 4)
   for (let y = 0; y < h; y++) for (let x = 0; x < w; x++)
-    data.set([...(y < 4 ? [0xb9, 0xc3, 0xcc] : [0x3f, 0x56, 0x70]), 255], (y * w + x) * 4)
+    data.set(y < 4 ? [0xb9, 0xc3, 0xcc, 255] : [0x3f, 0x56, 0x70, 0], (y * w + x) * 4)
   return encodePng(w, h, data)
 })()
 
@@ -290,10 +293,10 @@ block([[8, -57], [25.8, -57], [25.8, -44], [8, -44]], 42, [17, -50])
 
 // ---------- write ----------
 const parts = [
-  { part: facade, material: { name: 'stone-window-grid', color: 0xffffff, texture: { png: STONE_GRID } } },
-  { part: notch, material: { name: 'notch-glass', color: 0xffffff, texture: { png: NOTCH_GRID } } },
+  { part: facade, material: { name: 'window', color: 0xffffff, texture: { png: STONE_GRID } } },
+  { part: notch, material: { name: 'window-2', color: 0xffffff, texture: { png: NOTCH_GRID } } },
   { part: stone, material: { name: 'stone', color: 0xd9cfbf } },
-  { part: roof, material: { name: 'crown-glass', color: 0x7a8ea6, roughness: .5 } },
+  { part: roof, material: { name: 'glass', color: 0x7a8ea6, roughness: .5 } },
   { part: silver, material: { name: 'horns', color: 0xdfe3e6, roughness: .5 } },
   { part: deck, material: { name: 'roof', color: 0xbdb9b1 } },
   { part: skylight, material: { name: 'skylights', color: 0xc4ccd2 } },

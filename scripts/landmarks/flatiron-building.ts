@@ -272,7 +272,7 @@ const parts = [
   { part: stone, material: { name: 'terracotta-shaft', color: 0xd9ccb4 } },
   { part: base, material: { name: 'rusticated-base', color: 0xb8a98f } },
   { part: crown, material: { name: 'crown-cornice', color: 0xe4d9c4 } },
-  { part: glass, material: { name: 'window-bands', color: 0x7b8790, roughness: 0.85 } },
+  { part: glass, material: { name: 'window', color: 0x7b8790, roughness: 0.85 } },
   { part: roof, material: { name: 'roof', color: 0xbdb9b1 } },
 ]
 const triangles = parts.reduce((n, { part }) => n + part.triangles, 0)

@@ -464,13 +464,13 @@ for (const r of corner.rects) capRect(flat, r, corner.h)
 const parts = [
   { part: stucco, material: { name: 'stucco', color: 0xd2ab84 } },
   { part: trim, material: { name: 'stucco-trim', color: 0xdcbc98 } },
-  { part: glass, material: { name: 'window-glass', color: 0x4b5361 } },
-  { part: door, material: { name: 'doors', color: 0x6a3f2a } },
+  { part: glass, material: { name: 'window', color: 0x4b5361 } },
+  { part: door, material: { name: 'entrance', color: 0x6a3f2a } },
   { part: slate, material: { name: 'slate-roof', color: 0x7d8086 } },
   { part: spireSlate, material: { name: 'spire-slate', color: 0x666a72 } },
   { part: band, material: { name: 'spire-trim', color: 0xcfcdc8 } },
   { part: wingWall, material: { name: 'wing-stucco', color: 0xc9b096 } },
-  { part: wingGlass, material: { name: 'wing-windows', color: 0x7b8088 } },
+  { part: wingGlass, material: { name: 'window-2', color: 0x7b8088 } },
   { part: flat, material: { name: 'flat-roof', color: 0xbdb9b1 } },
   { part: green, material: { name: 'green-roof', color: 0x94b3a7 } },
 ]

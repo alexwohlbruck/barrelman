@@ -323,11 +323,11 @@ const cutRing = (z: number, d = 0): V3[] => {
 // sRGB colours from daylight photos.
 const parts = [
   { part: stone, material: { name: 'cast-stone', color: 0xd6c4a5 } },
-  { part: windows, material: { name: 'window-bands', color: 0x6c757c } },
-  { part: glass, material: { name: 'dark-glass', color: 0x3b5774, roughness: .45 } },
+  { part: windows, material: { name: 'window', color: 0x6c757c } },
+  { part: glass, material: { name: 'window-2', color: 0x3b5774, roughness: .45 } },
   { part: silver, material: { name: 'silver-diagrid', color: 0xd3d8dc, roughness: .5 } },
   { part: roof, material: { name: 'roof', color: 0xbdb9b1 } },
-  { part: skylight, material: { name: 'atrium-skylight', color: 0xa9b7be, roughness: .5 } },
+  { part: skylight, material: { name: 'glass', color: 0xa9b7be, roughness: .5 } },
 ]
 const triangles = parts.reduce((n, { part }) => n + part.triangles, 0)
 if (triangles > 5000) throw new Error(`Triangle budget exceeded: ${triangles}`)

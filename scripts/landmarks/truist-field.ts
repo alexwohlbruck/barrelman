@@ -443,7 +443,7 @@ for (const deg of [-62, -36, -12, 12, 36, 62]) {
 const parts = [
   { part: brick, material: { name: 'brick', color: 0xb05a43 } },
   { part: tan, material: { name: 'tan-precast', color: 0xd6bf98 } },
-  { part: glass, material: { name: 'windows', color: 0x7d8b95 } },
+  { part: glass, material: { name: 'window', color: 0x7d8b95 } },
   { part: roof, material: { name: 'roof', color: 0xbdb9b1 } },
   { part: canopyTop, material: { name: 'canopy', color: 0xd9d6ce } },
   { part: concourse, material: { name: 'concourse', color: 0xc9c2b4 } },

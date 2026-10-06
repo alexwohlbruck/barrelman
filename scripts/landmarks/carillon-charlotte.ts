@@ -242,7 +242,7 @@ pinnacle(granite, SC, Y0 + 1.2, 1, APEX - 4, APEX + 1, APEX + 3.5)
 const parts = [
   { part: granite, material: { name: 'granite', color: 0x9e8579 } },
   { part: base, material: { name: 'podium-granite', color: 0xa99488 } },
-  { part: glass, material: { name: 'window-bands', color: 0x5f7187 } },
+  { part: glass, material: { name: 'window', color: 0x5f7187 } },
   { part: terrace, material: { name: 'terracotta-terraces', color: 0xc8968a } },
   { part: roof, material: { name: 'roof', color: 0xbdb9b1 } },
   // Weathered, unpatinated copper: brown in the photos, never green.

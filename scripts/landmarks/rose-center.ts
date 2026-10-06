@@ -210,7 +210,7 @@ const parts = [
   { part: granite, material: { name: 'granite', color: 0x6e6a65 } },
   { part: deck, material: { name: 'terrace', color: 0xbdb9b1 } },
   { part: floor, material: { name: 'hall-floor', color: 0x9ea3a6 } },
-  { part: entrance, material: { name: 'entrance-glass', color: 0x4b535b } },
+  { part: entrance, material: { name: 'entrance', color: 0x4b535b } },
 ]
 const triangles = parts.reduce((sum, { part }) => sum + part.triangles, 0)
 if (triangles > 5000) throw new Error(`Triangle budget exceeded: ${triangles}`)

@@ -301,7 +301,7 @@ solids.forEach((s, i) => {
 
 const parts = [
   { part: stone, material: { name: 'indiana-limestone', color: 0xd4cab7 } },
-  { part: glass, material: { name: 'window-bands', color: 0x5c6468, roughness: 0.8 } },
+  { part: glass, material: { name: 'window', color: 0x5c6468, roughness: 0.8 } },
   { part: roof, material: { name: 'terracotta-terraces', color: 0xc8968a } },
 ]
 const triangles = parts.reduce((n, { part }) => n + part.triangles, 0)

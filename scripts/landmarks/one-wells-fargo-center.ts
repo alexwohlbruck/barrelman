@@ -252,10 +252,10 @@ for (const side of [1, -1]) {
 const parts = [
   { part: granite, material: { name: 'granite', color: 0xa87d72 } },
   { part: plinth, material: { name: 'granite-base', color: 0x8c685f } },
-  { part: windows, material: { name: 'window-bands', color: 0x617a92 } },
-  { part: bay, material: { name: 'light-glass', color: 0x8fa7bc, roughness: .6 } },
-  { part: slot, material: { name: 'slot-glass', color: 0x2c3a4b } },
-  { part: vault, material: { name: 'vault-glass', color: 0x3a5274, roughness: .5 } },
+  { part: windows, material: { name: 'window', color: 0x617a92 } },
+  { part: bay, material: { name: 'window-2', color: 0x8fa7bc, roughness: .6 } },
+  { part: slot, material: { name: 'window-3', color: 0x2c3a4b } },
+  { part: vault, material: { name: 'glass', color: 0x3a5274, roughness: .5 } },
   { part: metal, material: { name: 'arch-ring', color: 0xd3d8db, roughness: .6 } },
   { part: terraces, material: { name: 'terracotta-terraces', color: 0xc8968a } },
 ]
