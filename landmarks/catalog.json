@@ -552,6 +552,13 @@
       "license": "CC0-1.0",
       "author": "Barrelman",
       "source": "scripts/landmarks/carowinds-hurler.ts"
+    },
+    {
+      "id": "carowinds-carolina-cyclone",
+      "file": "models/carowinds-carolina-cyclone.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/carowinds-carolina-cyclone.ts"
     }
   ],
   "landmarks": [
@@ -2049,6 +2056,20 @@
       "wikidata": "Q1619573",
       "replaces": [
         "way/668700368"
+      ]
+    },
+    {
+      "id": "carowinds-carolina-cyclone",
+      "name": "Carolina Cyclone",
+      "model": "carowinds-carolina-cyclone",
+      "lng": -80.943571,
+      "lat": 35.1040581,
+      "bearing": 0,
+      "elevation": 0,
+      "minzoom": 15,
+      "wikidata": "Q1044389",
+      "replaces": [
+        "way/241199374"
       ]
     }
   ]
