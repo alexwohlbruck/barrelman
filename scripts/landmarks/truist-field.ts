@@ -12,14 +12,14 @@
  * them rather than redrawn: each part's polygon is extruded to its OSM height
  * in brick and tan precast as the photos show, the seating ring
  * (way/1553955043) becomes a raked bowl of green seats rising away from the
- * field, and the tan grandstand (way/1553955036) carries a recessed band of
+ * field, and the tan grandstand (way/1553955036) carries a band of slate
  * suite windows and a flat canopy roof reaching out over the seats. The field
- * is flat colour layers from the OSM pitch, grass and infield polygons, a
- * few decimetres up so they sit over the map's own pitch fill. Six chunky
+ * is the map's own; its layers are built but not written. Six chunky
  * light towers stand round the bowl. The outfield side stays low, as it is,
  * so the skyline view over centre field is what the shape says.
  */
 import { Part, writeGlb, type V3 } from './mesh'
+import { PALETTE, finish } from './palette'
 
 type XY = [number, number]
 // OSM geometry in the model frame (metres; +y from home plate toward centre field).
@@ -115,12 +115,17 @@ const OSM: Record<string, XY[]> = {
 const BASES = {home: [-11.1, -32.1], first: [8.3, -12.9], second: [-11.1, 6.7], third: [-30.0, -12.8], mound: [-10.7, -14.5]} as Record<string, XY>
 
 // ---------------------------------------------------------------------------
-// Materials. Colours from the daylight photos: the sunlit red brick of the
-// Mint Street front, the tan precast of the upper walls, dark green seats.
+// Materials, from the shared palette (landmarks/STYLE.md), at most six. The
+// red brick of the Mint Street front and the green seats are the park's
+// identity, so they are finishes pulled to the palette's lightness; the tan
+// precast is `stone`. Several parts share one material: the seats and the
+// padded field wall are one green; the flat roofs, concourse and light poles
+// are `roof`; the canopy and lamp banks `trim`; the scoreboard a `window`
+// screen.
 
 const brick = new Part(), tan = new Part(), glass = new Part(), roof = new Part()
-const seats = new Part(), concourse = new Part(), wallGreen = new Part()
-const canopyTop = new Part(), grass = new Part(), dirt = new Part(), metal = new Part(), lamps = new Part(), board = new Part()
+const seats = new Part(), canopyTop = new Part(), grass = new Part(), dirt = new Part()
+const wallGreen = seats, concourse = roof, metal = roof, lamps = canopyTop, board = glass
 
 // ---------------------------------------------------------------------------
 // 2D helpers
@@ -207,13 +212,13 @@ function cap(p: Part, ring: XY[], z: number | ((i: number) => number), up = true
 
 type Band = { z0: number; z1: number; mat: Part; windows?: { glass: Part; bay?: number; pier?: number; depth?: number } }
 
-/** One edge's wall band, plain or as recessed window bays between piers. */
+/** One edge's wall band, plain or as window panels set just into it between piers. */
 function wallBand(a: XY, b: XY, band: Band) {
   const L = Math.hypot(b[0] - a[0], b[1] - a[1])
   const u = unit2([b[0] - a[0], b[1] - a[1]]), n: V3 = [u[1], -u[0], 0]
   const at = (s: number, z: number, d = 0): V3 => [a[0] + u[0] * s - n[0] * d, a[1] + u[1] * s - n[1] * d, z]
   const { z0, z1, mat, windows: w } = band
-  const pier = w?.pier ?? 1.2, bay = w?.bay ?? 7, D = w?.depth ?? 0.55
+  const pier = w?.pier ?? 1.2, bay = w?.bay ?? 7, D = w?.depth ?? 0.05
   if (!w || L < pier + 3) { face(mat, [at(0, z0), at(L, z0), at(L, z1), at(0, z1)], n); return }
   const nb = Math.max(1, Math.round((L - pier) / bay)), step = (L - pier) / nb
   for (let k = 0; k <= nb; k++) {
@@ -313,7 +318,7 @@ const stand = ccw(OSM['1553955036'])
 extrude(stand, [
   { z0: 0, z1: 6.2, mat: brick },
   { z0: 6.2, z1: 7.0, mat: tan },
-  { z0: 7.0, z1: 10.6, mat: tan, windows: { glass, bay: 6.5, pier: 1.1, depth: 0.6 } },
+  { z0: 7.0, z1: 10.6, mat: tan, windows: { glass, bay: 6.5, pier: 1.1 } },
   { z0: 10.6, z1: 12, mat: tan },
 ], null)
 {
@@ -336,7 +341,7 @@ const stack: [string, Band[]][] = [
   // The brick concourse block along Mint Street, with its gates and shop fronts.
   ['1553955035', [
     { z0: 0, z1: 1.0, mat: brick },
-    { z0: 1.0, z1: 4.6, mat: brick, windows: { glass, bay: 7, pier: 1.6, depth: 0.5 } },
+    { z0: 1.0, z1: 4.6, mat: brick, windows: { glass, bay: 7, pier: 1.6 } },
     { z0: 4.6, z1: 7.2, mat: brick }, { z0: 7.2, z1: 8, mat: tan }]],
   ['1553955034', [{ z0: 0, z1: 6, mat: brick }, { z0: 6, z1: 13, mat: tan }]],
   ['1553955047', [{ z0: 0, z1: 6, mat: brick }, { z0: 6, z1: 13, mat: tan }]],
@@ -346,7 +351,7 @@ const stack: [string, Band[]][] = [
   // The right-field club: brick base and a glazed upper floor.
   ['1553955040', [
     { z0: 0, z1: 4, mat: brick },
-    { z0: 4, z1: 9.4, mat: tan, windows: { glass, bay: 6, pier: 1.2, depth: 0.5 } },
+    { z0: 4, z1: 9.4, mat: tan, windows: { glass, bay: 6, pier: 1.2 } },
     { z0: 9.4, z1: 11, mat: tan }]],
   ['1553955041', [{ z0: 0, z1: 5, mat: brick }, { z0: 5, z1: 11, mat: tan }]],
   ['1553955054', [{ z0: 0, z1: 2, mat: concourse }]],
@@ -440,20 +445,15 @@ for (const deg of [-62, -36, -12, 12, 36, 62]) {
 
 // ---------------------------------------------------------------------------
 
+// grass and dirt are built but not written: the map draws the field
+// (STYLE.md, "Don't model the ground").
 const parts = [
-  { part: brick, material: { name: 'brick', color: 0xb05a43 } },
-  { part: tan, material: { name: 'tan-precast', color: 0xd6bf98 } },
-  { part: glass, material: { name: 'window', color: 0x7d8b95 } },
-  { part: roof, material: { name: 'roof', color: 0xbdb9b1 } },
-  { part: canopyTop, material: { name: 'canopy', color: 0xd9d6ce } },
-  { part: concourse, material: { name: 'concourse', color: 0xc9c2b4 } },
-  { part: seats, material: { name: 'seats', color: 0x3e5a4c } },
-  { part: wallGreen, material: { name: 'field-wall', color: 0x2e4a3e } },
-  // grass and dirt are built but not written: the map draws the field
-  // (STYLE.md, "Don't model the ground").
-  { part: metal, material: { name: 'metal', color: 0xb5b9bc } },
-  { part: lamps, material: { name: 'lamps', color: 0xe4e4dc } },
-  { part: board, material: { name: 'scoreboard', color: 0x2b3338 } },
+  { part: brick, material: finish('truist-field-brick', 0xc98f7c) },
+  { part: tan, material: PALETTE.stone },
+  { part: glass, material: PALETTE.window },
+  { part: roof, material: PALETTE.roof },
+  { part: canopyTop, material: PALETTE.trim },
+  { part: seats, material: finish('knights-green', 0x5f8a6c) },
 ]
 const triangles = parts.reduce((sum, { part }) => sum + part.triangles, 0)
 if (triangles > 6500) throw new Error(`Triangle budget exceeded: ${triangles}`)

@@ -21,8 +21,9 @@
  * raised, a gold sun on its chest and a gold crown. It is a few smooth masses.
  */
 import { Part, cross, len, writeGlb, type V3 } from './mesh'
+import { PALETTE, finish } from './palette'
 
-const brick = new Part(), glass = new Part(), pale = new Part()
+const brick = new Part(), glass = new Part(), roof = new Part()
 const gold = new Part(), blue = new Part(), red = new Part()
 
 type XY = [number, number]
@@ -123,7 +124,7 @@ const XA = 1.5        // where the full-height back of the building ends
 
 // The upper box over the whole footprint: pale roof membrane on top, brick
 // soffit below, bevelled all round so its edges catch the light.
-block(brick, { x0: X0, x1: X1, y0: Y0, y1: Y1, c: 0.5 }, SOF, H, { bb: 0.35, bt: 0.45, top: pale, bottom: brick })
+block(brick, { x0: X0, x1: X1, y0: Y0, y1: Y1, c: 0.5 }, SOF, H, { bb: 0.35, bt: 0.45, top: roof, bottom: brick })
 // The skylight over the central atrium.
 block(glass, { x0: -7, x1: 1, y0: -3.5, y1: 3.5, c: 0.3 }, H - 0.1, H + 0.7, { bt: 0.3 })
 
@@ -137,9 +138,9 @@ block(brick, { x0: X0, x1: XA, y0: Y0, y1: Y1, c: 0.5 }, 0, SOF)
 {
   const x0 = XA, x1 = 15.9, y0 = 3.0, y1 = 12.3
   wall([x1, y0], [x1, y1], 0, SOF, [
-    { s0: 0.6, s1: y1 - y0 - 0.6, z0: 0.4, z1: 4.0, depth: 0.5, back: glass },
+    { s0: 0.6, s1: y1 - y0 - 0.6, z0: 0.4, z1: 4.0, depth: 0.05, back: glass },
     ...louvres(y1 - y0, [5.4, 7.7, 10.0], 1.0),
-    { s0: 0.6, s1: y1 - y0 - 0.6, z0: 12.0, z1: 14.3, depth: 0.5, back: glass },
+    { s0: 0.6, s1: y1 - y0 - 0.6, z0: 12.0, z1: 14.3, depth: 0.05, back: glass },
   ])
   wall([x1, y1], [x0, y1], 0, SOF, louvres(x1 - x0, [5.4, 7.7, 10.0], 1.0))
   wall([x0, y0], [x1, y0], 0, SOF, [])
@@ -237,12 +238,12 @@ function tube(p: Part, path: [number, number, number][], k = 1, seg = 10) {
     path.push([R * Math.cos(t), spring + R * Math.sin(t), 0.37])
   }
   path.push([R, spring, 0.37], [R, 0.55, 0.42], [R, 0, 0.5])
-  tube(pale, path, 1.25)
+  tube(glass, path, 1.25)
 }
 // Body, chest sun, head.
-blob(pale, [0, 0, 3.05], [0.85, 0.62, 0.92], 14, 9)
+blob(glass, [0, 0, 3.05], [0.85, 0.62, 0.92], 14, 9)
 blob(gold, [0, 0.5, 3.0], [0.42, 0.16, 0.42], 12, 6)
-blob(pale, [0, 0.04, 4.28], [0.42, 0.4, 0.46])
+blob(glass, [0, 0.04, 4.28], [0.42, 0.4, 0.46])
 blob(red, [0, 0.42, 4.18], [0.13, 0.2, 0.12], 8, 5)
 // The crown: five gold rays fanned over the head like a sun.
 for (const deg of [-64, -32, 0, 32, 64]) {
@@ -274,17 +275,20 @@ for (const side of [-1, 1]) {
 
 // ---------------------------------------------------------------------------
 
-// Colours from photos 01 and 02 in daylight: the terracotta is a warm
-// orange-red, the glazing reads dark slate, the mirror mosaic a light silver.
-// The roof (unseen in the photos) is the pale membrane grey, which the mirror
-// shares so the bird's red and blue each keep a material of their own.
+// The shared palette (landmarks/STYLE.md): the terracotta box is the
+// palette's own `terracotta`, the roof membrane `roof`. All the glazing is
+// `glass`: the museum's glass is its atrium and skylight, which the style
+// keeps unlit, and the two small windows on Tryon share it, which also lets
+// the Firebird's mirror mosaic read as sky-blue glass and leaves the bird's
+// gold, blue and red their own materials within six. Those stay saturated:
+// the bird is small sculpture, and its colours are what it is.
 const parts = [
-  { part: brick, material: { name: 'terracotta', color: 0xc4673f } },
-  { part: glass, material: { name: 'window', color: 0x4f5c66 } },
-  { part: pale, material: { name: 'roof-and-mirror', color: 0xc9cbcc, roughness: 0.6 } },
-  { part: gold, material: { name: 'gold', color: 0xdcaa2e, roughness: 0.5 } },
-  { part: blue, material: { name: 'blue', color: 0x2f6cc4 } },
-  { part: red, material: { name: 'red', color: 0xd23a2e } },
+  { part: brick, material: PALETTE.terracotta },
+  { part: glass, material: PALETTE.glass },
+  { part: roof, material: PALETTE.roof },
+  { part: gold, material: finish('firebird-gold', 0xdcaa2e, 0.5) },
+  { part: blue, material: finish('firebird-blue', 0x3a74c4) },
+  { part: red, material: finish('firebird-red', 0xd2463a) },
 ]
 const triangles = parts.reduce((sum, { part }) => sum + part.triangles, 0)
 if (triangles > 5000) throw new Error(`Triangle budget exceeded: ${triangles}`)

@@ -16,8 +16,11 @@
  * - the high core (OSM 43 m): a pale metal roof that arches along the long
  *   axis and crowns gently across it;
  * - the tall glass entrance atrium on the Trade & Caldwell corner.
+ *
+ * Windows are slate panels set 0.05 m into the wall, per landmarks/STYLE.md.
  */
 import { Part, writeGlb, type V3 } from './mesh'
+import { PALETTE, finish } from './palette'
 
 type XY = [number, number]
 const brick = new Part(), panel = new Part(), dark = new Part(), glass = new Part(), roof = new Part()
@@ -85,7 +88,7 @@ type SegStyle = { mat: Part; bands: Band[]; bays?: number } | null
  * ribbon windows between a few broad piers rather than a grid of dots.
  */
 function walls(ring: RingPt[], z0: number, z1: number, style: (i: number, a: XY, b: XY) => SegStyle,
-  pierAt: (i: number) => boolean = () => true, pier = 1.6, depth = 0.6) {
+  pierAt: (i: number) => boolean = () => true, pier = 1.6, depth = 0.05) {
   const m = ring.length
   for (let i = 0; i < m; i++) {
     const A = ring[i], B = ring[(i + 1) % m]
@@ -281,10 +284,12 @@ const SLOT = 4
     for (const [from, to] of [[A, B], [B, A]] as [RingPt, RingPt][]) {
       if (Math.abs(from.p[0] - XL) > 1e-6 && Math.abs(from.p[0] - XR) > 1e-6) continue
       const L = Math.hypot(to.p[0] - from.p[0], to.p[1] - from.p[1]), t = Math.min(0.9, SLOT / L)
-      const q = lerp2(from.p, to.p, t), sn = unit([B.p[1] - A.p[1], A.p[0] - B.p[0], 0]), e = 0.08
+      const q = lerp2(from.p, to.p, t), sn = unit([B.p[1] - A.p[1], A.p[0] - B.p[0], 0]), e = 0.04
       const P = (p: XY, z: number): V3 => [p[0] + sn[0] * e, p[1] + sn[1] * e, z]
       const [a, b] = from === A ? [from.p, q] : [q, from.p]
-      dark.quad(P(a, PODIUM + 0.6), P(b, PODIUM + 0.6), P(b, 33.4), P(a, 33.4))
+      // Broken into storey groups with panel showing between, not one stripe.
+      for (const [lo, hi] of [[PODIUM + 0.6, 17], [18.4, 25.6], [27, 33.4]])
+        dark.quad(P(a, lo), P(b, lo), P(b, hi), P(a, hi))
     }
   }
   for (let i = 1; i < m - 1; i++)
@@ -314,7 +319,9 @@ const SLOT = 4
         return [x, y, z(x, y)]
       }
       const a = pt(k, r), b = pt(k + 1, r), c = pt(k + 1, r + 1), d = pt(k, r + 1)
-      quadN(roof, a, b, c, d, [nrm(a[0], a[1]), nrm(b[0], b[1]), nrm(c[0], c[1]), nrm(d[0], d[1])])
+      // The arched metal roof is the pale silver of the panel faces it
+      // continues, the arena's crown; the flat roofs below stay `roof`.
+      quadN(panel, a, b, c, d, [nrm(a[0], a[1]), nrm(b[0], b[1]), nrm(c[0], c[1]), nrm(d[0], d[1])])
     }
   }
   // Long sides.
@@ -364,16 +371,16 @@ const SLOT = 4
   capPoly(roof, top, ATRIUM_TOP)
 }
 
-// sRGB colours read off daylight photos (Commons: TWCArena2015, Time Warner
-// Cable Arena 5810515865, CityLynx Streetcar 402, Spectrum Center 2018): the
-// sunlit red-brown brick, the silver-grey metal panels, the dark louvres and
-// ribbon windows, the green-blue entrance glass, the pale metal roof.
+// The shared palette (landmarks/STYLE.md). The red-brown brick is the
+// arena's identity, so it keeps its hue as a finish pulled up to the
+// palette's lightness; the silver panel faces and the arched roof they
+// rise into are a pale metal finish.
 const parts = [
-  { part: brick, material: { name: 'brick', color: 0x96503c } },
-  { part: panel, material: { name: 'metal-panel', color: 0xa9adb2 } },
-  { part: dark, material: { name: 'window', color: 0x58646e } },
-  { part: glass, material: { name: 'glass', color: 0x86a0aa } },
-  { part: roof, material: { name: 'metal-roof', color: 0xc9cbca } },
+  { part: brick, material: finish('spectrum-brick', 0xc98b7d) },
+  { part: panel, material: finish('spectrum-panel', 0xc9ced2, 0.6) },
+  { part: dark, material: PALETTE.window },
+  { part: glass, material: PALETTE.glass },
+  { part: roof, material: PALETTE.roof },
 ]
 const triangles = parts.reduce((s, { part }) => s + part.triangles, 0)
 if (triangles > 6500) throw new Error(`Triangle budget exceeded: ${triangles}`)

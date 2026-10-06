@@ -19,16 +19,23 @@
  * concourse podium follows the real outline (mirrored across the field's axis
  * so it stays symmetrical) at the heights of the OSM perimeter parts, 24 to
  * 32 m. Above it runs the white arcade of round arches and the upper deck's
- * grey back. Six black stair towers carry the teal glass cupolas, the two end
+ * grey back. Six charcoal stair towers carry the glass cupolas, the two end
  * video boards stand on the rim, and white arched light rigs lean over the
  * upper deck.
  */
 import { Part, cross, sub, writeGlb, type V3 } from './mesh'
+import { PALETTE, finish } from './palette'
 
 type XY = [number, number]
 
-const seats = new Part(), precast = new Part(), black = new Part(), glass = new Part()
-const white = new Part(), cupola = new Part(), turf = new Part(), silver = new Part()
+const seats = new Part(), precast = new Part(), grey = new Part(), glass = new Part()
+const charcoal = new Part(), cupola = new Part()
+// The black towers, piers, plinth, suite fascia and video boards are the
+// Panthers' look, so they stay dark, at the style's charcoal floor. The silver
+// club seats and the facade's spandrels are `roof` grey. The white arches and
+// light rigs share the pale precast, which keeps the model within six
+// materials.
+const silver = grey, white = precast
 
 const dot = (a: V3, b: V3) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
 const add = (a: V3, b: V3): V3 => [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
@@ -130,11 +137,11 @@ const FIELD = 0, WALL = 1.8, AISLE = 7, CLUB = 14, DECK = 21
 // the terrain on a slope (STYLE.md, "Don't model the ground").
 
 // Bowl, from the field outwards.
-band(black, k => ringPt(R0, k, FIELD), k => ringPt(R0, k, WALL), -1) // field wall
+band(charcoal, k => ringPt(R0, k, FIELD), k => ringPt(R0, k, WALL), -1) // field wall
 band(seats, k => ringPt(R0, k, WALL), k => ringPt(R1, k, AISLE), -1) // lower bowl
 band(precast, k => ringPt(R1, k, AISLE), k => ringPt(R1, k, AISLE, 1.8), 'up') // cross aisle
 band(silver, k => ringPt(R1, k, AISLE, 1.8), k => ringPt(R2, k, CLUB), -1) // silver club seats
-band(black, k => ringPt(R2, k, CLUB), k => ringPt(R2, k, DECK), -1) // suite fascia
+band(charcoal, k => ringPt(R2, k, CLUB), k => ringPt(R2, k, DECK), -1) // suite fascia
 band(precast, k => ringPt(R2, k, DECK), k => ringPt(R2, k, DECK, 0.6), 'up') // fascia lip
 band(seats, k => ringPt(R2, k, DECK, 0.6), k => ringPt(R3, k, rim(k) - 1.1, -1.2), -1) // upper deck
 band(precast, k => ringPt(R3, k, rim(k) - 1.1, -1.2), k => ringPt(R3, k, rim(k), -1.2), -1) // parapet
@@ -221,18 +228,22 @@ for (let k = 0; k < N; k++) {
   const nb = unit(add(out, up))
   quad(precast, [v(0, h - BEVEL), v(L, h - BEVEL), v(L, h, BEVEL), v(0, h, BEVEL)], nb, [out, out, nb, nb].map((n, i) => i < 2 ? unit(add(out, mul(nb, 0.6))) : unit(add(up, mul(nb, 0.6)))))
 
-  // Facade: a black plinth, then one recessed band of glass per bay between
-  // dark piers, under a grey precast parapet.
-  const pier = Math.min(1.8, L * 0.16), top = h - 3.2, D = 0.7
+  // Facade: a charcoal plinth, then per bay a column of slate window panels,
+  // each spanning a few floors, set just into the wall between charcoal piers
+  // and grey spandrels, under a pale precast parapet.
+  const pier = Math.min(1.8, L * 0.16), top = h - 3.2, D = 0.05, SPANDREL = 1.2
   if (L > 4) {
-    quad(black, [v(0, 0), v(L, 0), v(L, PLINTH), v(0, PLINTH)], out)
-    quad(black, [v(0, PLINTH), v(pier, PLINTH), v(pier, top), v(0, top)], out)
-    quad(black, [v(L - pier, PLINTH), v(L, PLINTH), v(L, top), v(L - pier, top)], out)
+    quad(charcoal, [v(0, 0), v(L, 0), v(L, PLINTH), v(0, PLINTH)], out)
+    quad(charcoal, [v(0, PLINTH), v(pier, PLINTH), v(pier, top), v(0, top)], out)
+    quad(charcoal, [v(L - pier, PLINTH), v(L, PLINTH), v(L, top), v(L - pier, top)], out)
     quad(precast, [v(0, top), v(L, top), v(L, h - BEVEL), v(0, h - BEVEL)], out)
-    quad(glass, [v(pier, PLINTH, D), v(L - pier, PLINTH, D), v(L - pier, top, D), v(pier, top, D)], out)
-    quad(black, [v(pier, PLINTH), v(L - pier, PLINTH), v(L - pier, PLINTH, D), v(pier, PLINTH, D)], up)
-    quad(black, [v(pier, PLINTH), v(pier, PLINTH, D), v(pier, top, D), v(pier, top)], u)
-    quad(black, [v(L - pier, PLINTH), v(L - pier, PLINTH, D), v(L - pier, top, D), v(L - pier, top)], mul(u, -1))
+    const groups = Math.max(1, Math.round((top - PLINTH) / 7))
+    const step = (top - PLINTH + SPANDREL) / groups
+    for (let g = 0; g < groups; g++) {
+      const lo = PLINTH + g * step, hi = lo + step - SPANDREL
+      quad(glass, [v(pier, lo, D), v(L - pier, lo, D), v(L - pier, hi, D), v(pier, hi, D)], out)
+      if (g < groups - 1) quad(grey, [v(pier, hi), v(L - pier, hi), v(L - pier, hi + SPANDREL), v(pier, hi + SPANDREL)], out)
+    }
   } else quad(precast, [v(0, 0), v(L, 0), v(L, h - BEVEL), v(0, h - BEVEL)], out)
 
   // A step between neighbouring blocks of different heights.
@@ -280,7 +291,7 @@ for (let k = 0; k < N; k++) {
 }
 
 // ---------------------------------------------------------------------------
-// Stair towers: black, square, each under a teal glass cupola.
+// Stair towers: charcoal, square, each under a glass cupola.
 
 const TOWERS: XY[] = [[113.5, C - 23], [113.5, C + 23], [-113.5, C - 23], [-113.5, C + 23], [23.2, -123], [-23.2, -123]]
 const TH = 33, HALF = 7.5, CH = 1.0, SEG = 12
@@ -298,11 +309,11 @@ for (const [cx, cy] of TOWERS) {
     const corner = i % 2 === 0 // edges 0,2,4,6 run round a chamfer
     const nA = corner ? unit(add(lo[i].n, lo[j].n)) : lo[i].n, nB = corner ? unit(add(lo[i].n, lo[j].n)) : lo[j].n
     const fn = unit(add(lo[i].n, lo[j].n))
-    quad(black, [lo[i].p, lo[j].p, mid[j].p, mid[i].p], fn, corner ? [lo[i].n, lo[j].n, lo[j].n, lo[i].n] : [nA, nB, nB, nA])
+    quad(charcoal, [lo[i].p, lo[j].p, mid[j].p, mid[i].p], fn, corner ? [lo[i].n, lo[j].n, lo[j].n, lo[i].n] : [nA, nB, nB, nA])
     const tA = unit(add(lo[i].n, [0, 0, 1])), tB = unit(add(lo[j].n, [0, 0, 1]))
-    quad(black, [mid[i].p, mid[j].p, hi[j].p, hi[i].p], unit(add(fn, [0, 0, 1])), [lo[i].n, lo[j].n, tB, tA])
+    quad(charcoal, [mid[i].p, mid[j].p, hi[j].p, hi[i].p], unit(add(fn, [0, 0, 1])), [lo[i].n, lo[j].n, tB, tA])
   }
-  for (let i = 1; i < 7; i++) quad(black, [hi[0].p, hi[i].p, hi[i + 1].p, hi[i + 1].p], [0, 0, 1])
+  for (let i = 1; i < 7; i++) quad(charcoal, [hi[0].p, hi[i].p, hi[i + 1].p, hi[i + 1].p], [0, 0, 1])
   // A tall Panthers-blue panel on the outward face, as on the real towers.
   const side = Math.abs(cx) > 60 ? ([Math.sign(cx), 0] as XY) : ([0, -1] as XY)
   const t: XY = [-side[1], side[0]]
@@ -328,19 +339,19 @@ for (const [cx, cy] of TOWERS) {
 }
 
 // ---------------------------------------------------------------------------
-// Video boards over both end zones, on the rim: black screens facing the
-// field, grey backs. OSM gives them 76 m wide and 58 m to the top.
+// Video boards over both end zones, on the rim: screens facing the field
+// (`window`, so they light up at night) in charcoal boxes. OSM gives them 76 m wide and 58 m to the top.
 
 for (const s of [-1, 1]) {
   const y = C + s * R3.b, k = s > 0 ? N / 4 : (3 * N) / 4
   const z0 = rim(k) - 1.0, z1 = 58, x = 38, d = 2.0
   const yIn = y - s * d, yOut = y + s * d
   const P = (xx: number, yy: number, z: number): V3 => [xx, yy, z]
-  quad(black, [P(-x, yIn, z0), P(x, yIn, z0), P(x, yIn, z1), P(-x, yIn, z1)], [0, -s, 0])
-  quad(precast, [P(-x, yOut, z0), P(x, yOut, z0), P(x, yOut, z1), P(-x, yOut, z1)], [0, s, 0])
-  quad(black, [P(-x, yIn, z1), P(x, yIn, z1), P(x, yOut, z1), P(-x, yOut, z1)], [0, 0, 1])
-  for (const e of [-1, 1]) quad(black, [P(e * x, yIn, z0), P(e * x, yOut, z0), P(e * x, yOut, z1), P(e * x, yIn, z1)], [e, 0, 0])
-  quad(black, [P(-x, yIn, z0), P(x, yIn, z0), P(x, yOut, z0), P(-x, yOut, z0)], [0, 0, -1])
+  quad(glass, [P(-x, yIn, z0), P(x, yIn, z0), P(x, yIn, z1), P(-x, yIn, z1)], [0, -s, 0])
+  quad(charcoal, [P(-x, yOut, z0), P(x, yOut, z0), P(x, yOut, z1), P(-x, yOut, z1)], [0, s, 0])
+  quad(charcoal, [P(-x, yIn, z1), P(x, yIn, z1), P(x, yOut, z1), P(-x, yOut, z1)], [0, 0, 1])
+  for (const e of [-1, 1]) quad(charcoal, [P(e * x, yIn, z0), P(e * x, yOut, z0), P(e * x, yOut, z1), P(e * x, yIn, z1)], [e, 0, 0])
+  quad(charcoal, [P(-x, yIn, z0), P(x, yIn, z0), P(x, yOut, z0), P(-x, yOut, z0)], [0, 0, -1])
 }
 
 // ---------------------------------------------------------------------------
@@ -400,18 +411,19 @@ for (const k of RIGS) {
 }
 
 // ---------------------------------------------------------------------------
-// sRGB colours read off daylight photos: the Panthers-blue seats in sun, the
-// silver club seats, the pale grey precast and podium roofs, black towers, fascia and screens, the
-// blue-grey glazing, white arches and light rigs and the teal glass cupolas;
-// the field is the map's.
+// The shared palette (landmarks/STYLE.md). The Panthers-blue seats and the
+// black towers and fascia are the stadium's identity: the blue is a clear
+// team blue, the black the style's charcoal floor. Precast, arches and light
+// rigs are `stone`, the club seats and spandrels `roof` grey, the facade
+// glazing, concourse and screens `window`, the cupolas `glass`. The field is
+// the map's.
 const parts = [
-  { part: seats, material: { name: 'seats', color: 0x2a8fd2 } },
-  { part: silver, material: { name: 'silver-seats', color: 0xa3a8ae } },
-  { part: precast, material: { name: 'precast', color: 0xbdbab3 } },
-  { part: black, material: { name: 'black', color: 0x26282d } },
-  { part: glass, material: { name: 'window', color: 0x6c7e90 } },
-  { part: white, material: { name: 'white', color: 0xe9e7e1 } },
-  { part: cupola, material: { name: 'glass', color: 0x8fbab3 } },
+  { part: seats, material: finish('panthers-blue', 0x3d8fcf) },
+  { part: charcoal, material: finish('panthers-charcoal', 0x4a4f57) },
+  { part: grey, material: PALETTE.roof },
+  { part: precast, material: PALETTE.stone },
+  { part: glass, material: PALETTE.window },
+  { part: cupola, material: PALETTE.glass },
 ]
 const triangles = parts.reduce((s, { part }) => s + part.triangles, 0)
 for (const { part, material } of parts) console.log(material.name.padEnd(14), part.triangles)

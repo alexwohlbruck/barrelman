@@ -24,9 +24,10 @@
  * and glass on the plaza front. The ballroom box (25 m) rises out of the roof.
  */
 import { Part, writeGlb, type V3 } from './mesh'
+import { PALETTE, finish } from './palette'
 
 type XY = [number, number]
-const stone = new Part(), panels = new Part(), glass = new Part()
+const stone = new Part(), trim = new Part(), glass = new Part()
 const ribbon = new Part(), soffit = new Part(), roof = new Part()
 
 // ---------------------------------------------------------------------------
@@ -120,7 +121,7 @@ function prism(poly: XY[], z0: number, z1: number, walls: (a: XY, b: XY) => Band
   const lip = inset(poly, bevel)
   const all = poly.map((a, i) => walls(a, poly[(i + 1) % n]))
   const recessed = all.map(bands => bands.some(b => b.recess))
-  const RECESS = 0.5
+  const RECESS = 0.05 // windows sit just into the wall (landmarks/STYLE.md)
   const back = inset(poly, RECESS) // mitred, so neighbouring recessed bays meet
   for (let i = 0; i < n; i++) {
     const j = (i + 1) % n, a = poly[i], b = poly[j]
@@ -286,7 +287,7 @@ function slots(sec: ReturnType<typeof sweepRibbon>, runs: [number, number, numbe
   for (const [s0, s1, z] of runs) {
     const span = sec.filter(c => c.m.s >= s0 && c.m.s <= s1 && z > c.zb + 0.5 && z + H < c.zt - 0.8)
     const at = (c: (typeof span)[0], zz: number): V3 => {
-      const d = -c.foot * (c.zt - zz) / (c.zt - c.zb) + 0.08
+      const d = -c.foot * (c.zt - zz) / (c.zt - c.zb) + 0.04
       return [c.m.p[0] + c.m.n[0] * d, c.m.p[1] + c.m.n[1] * d, zz]
     }
     for (let k = 0; k < span.length - 1; k++) {
@@ -324,7 +325,8 @@ slots(westSec, [[30, 72, 21.8], [60, 105, 17.5], [100, 150, 23.8], [140, 185, 19
 // ---------------------------------------------------------------------------
 // The stone base under the bowl: the outline with the bowl runs set back to
 // the wall line, up to the 20 m roof inside the bowl. Its walls carry square
-// bays of dark art panels between stone piers; the plaza front is glass.
+// bays of slate window panels between stone piers; the plaza front is a glass
+// curtain wall, broken by pale floor lines and mullions.
 
 const eastWall = east.filter(m => m.s <= rootS + 1e-6).map(m => off(m, -WALL))
 const westWall = west.map(m => off(m, -WALL))
@@ -333,47 +335,63 @@ const frontSet = new Set(FRONT.map(p => p.join()))
 const bayIndex = new Map<string, number>()
 eastWall.forEach((p, i) => bayIndex.set(p.join(), i))
 westWall.forEach((p, i) => bayIndex.set(p.join(), i))
+const glassEdges: [XY, XY][] = []
 prism(BODY, 0, ROOF, (a, b) => {
   const glassy = (frontSet.has(a.join()) && frontSet.has(b.join())) ||
     (a[1] > 40 && b[1] > 40 && a[0] > -2 && b[0] > -2) || (a.join() === eastWall.at(-1)!.join())
-  if (glassy) return [{ p: stone, z0: 0, z1: 2.4 }, { p: glass, z0: 2.4, z1: 17.6, recess: 0.5 }, { p: panels, z0: 17.6, z1: ROOF }]
+  if (glassy) {
+    glassEdges.push([a, b])
+    return [{ p: stone, z0: 0, z1: 2.4 }, { p: glass, z0: 2.4, z1: 17.6, recess: 0.5 }, { p: trim, z0: 17.6, z1: ROOF }]
+  }
   const i = bayIndex.get(a.join()), j = bayIndex.get(b.join())
   // Three edges of panel (about 8 m), one of pier.
   if (i !== undefined && j !== undefined && i % 4 !== 0 && i > 1 && j < Math.max(eastWall.length, westWall.length) - 1)
-    return [{ p: stone, z0: 0, z1: 3 }, { p: soffit, z0: 3, z1: 11, recess: 0.5 }, { p: stone, z0: 11, z1: ROOF }]
+    return [{ p: stone, z0: 0, z1: 3 }, { p: glass, z0: 3, z1: 11, recess: 0.5 }, { p: stone, z0: 11, z1: ROOF }]
   return [{ p: stone, z0: 0, z1: ROOF }]
 }, roof, 0.4)
+
+// A pale floor line across the Great Hall's glass, on the wall line just proud
+// of the recessed glass, and a mullion every third bay of the front.
+{
+  let run = 0
+  for (const [a, b] of glassEdges) {
+    const nm = edgeNormal(a, b), N: V3 = [nm[0], nm[1], 0]
+    for (const z of [9.8]) quad(trim, [[...a, z], [...b, z], [...b, z + 0.45], [...a, z + 0.45]], [N, N, N, N])
+    const L = Math.hypot(b[0] - a[0], b[1] - a[1]), t = 0.35 / L
+    if (run++ % 3 === 0 && L > 1) quad(trim, [[...a, 2.4], [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, 2.4],
+      [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, 17.6], [...a, 17.6]], [N, N, N, N])
+  }
+}
 
 // Pale stone block on the plaza's north-west side, where the blade ends.
 prism(BLOCK, 0, 21, () => [{ p: stone, z0: 0, z1: 21 }], roof)
 {
   // The big video screen on its plaza face: a flush dark panel.
   const a: XY = [-49.9, 71.7], b: XY = [-28.8, 73.7], nm = edgeNormal(b, a)
-  const at = (t: number, z: number): V3 => [a[0] + (b[0] - a[0]) * t + nm[0] * 0.08, a[1] + (b[1] - a[1]) * t + nm[1] * 0.08, z]
+  const at = (t: number, z: number): V3 => [a[0] + (b[0] - a[0]) * t + nm[0] * 0.04, a[1] + (b[1] - a[1]) * t + nm[1] * 0.04, z]
   const N: V3 = [nm[0], nm[1], 0]
   quad(glass, [at(0.18, 9.5), at(0.82, 9.5), at(0.82, 18), at(0.18, 18)], [N, N, N, N])
 }
 // The ballroom box rising out of the roof, and the low link beside the tower.
-prism(BALLROOM, ROOF - 0.5, 25, () => [{ p: panels, z0: 0, z1: 25 }], roof)
+prism(BALLROOM, ROOF - 0.5, 25, () => [{ p: trim, z0: 0, z1: 25 }], roof)
 prism(LINK, ROOF - 0.5, 21, () => [{ p: stone, z0: 0, z1: 21 }], roof, 0.3)
 // Stone entrance blocks at the west end's two corners.
 prism(STEPS_W, 0, 13, () => [{ p: stone, z0: 0, z1: 13 }], roof)
 prism(STEPS_E, 0, 13, () => [{ p: stone, z0: 0, z1: 13 }], roof)
 
 // ---------------------------------------------------------------------------
-// sRGB colours from daylight photos: brushed stainless in sun, its shaded
-// underside, grey-blue glass of the Great Hall, the pale limestone base, the
-// lighter grey panel drum and ballroom. The roof is a mid grey rather than the
-// pale membrane default: a big flat roof that pale swallows the silver band,
-// and the band is the building's whole identity, so ribbon, walls and roof are
-// kept three distinct values.
+// The shared palette (landmarks/STYLE.md). The brushed-stainless bowl is the
+// building's whole identity, so it must stand out from everything round it:
+// a bright silver finish, over a roof a step darker than the library `roof`
+// and a dark-grey underside that makes the band read as standing proud. The
+// limestone base is `stone`, the pale panel drum and ballroom `trim`.
 const parts = [
-  { part: ribbon, material: { name: 'stainless-ribbon', color: 0xb8bcc1, roughness: 0.5 } },
-  { part: soffit, material: { name: 'ribbon-soffit', color: 0x6f757b, roughness: 0.6 } },
-  { part: glass, material: { name: 'window', color: 0x4f5f6e } },
-  { part: stone, material: { name: 'limestone', color: 0xe6e0d2 } },
-  { part: panels, material: { name: 'panels', color: 0xd9d5cc } },
-  { part: roof, material: { name: 'flat-roof', color: 0x9a9894 } },
+  { part: ribbon, material: finish('nascar-steel', 0xdde1e5, 0.5) },
+  { part: soffit, material: finish('nascar-steel-underside', 0x6a7077, 0.6) },
+  { part: glass, material: PALETTE.window },
+  { part: stone, material: PALETTE.stone },
+  { part: trim, material: PALETTE.trim },
+  { part: roof, material: finish('nascar-roof', 0x8f969c) },
 ]
 const triangles = parts.reduce((s, { part }) => s + part.triangles, 0)
 if (triangles > 5000) throw new Error(`Triangle budget exceeded: ${triangles}`)

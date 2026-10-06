@@ -28,6 +28,7 @@
  * holding a child high over her head. There is no building to replace.
  */
 import { Part, addGltfTriangles, cross, sub, len, writeGlb, type V3 } from './mesh'
+import { finish } from './palette'
 
 const granite = new Part()
 const base = new Part()
@@ -307,17 +308,19 @@ for (const st of statues) {
   place(k.dark, dark, a, x, y)
 }
 
-// Colours: sRGB medians from the reference photos (/tmp/nyc-work/
-// independence-square-statues/photos), sunlit where the photos allow.
+// Colours, after the shared palette (landmarks/STYLE.md). The pinkish granite
+// keeps its hue from the reference photos (/tmp/nyc-work/
+// independence-square-statues/photos, p1.jpg and p2.jpg) but is pulled up to
+// the palette's stone lightness, the plinth a shade below it. The bronzes stay
+// a dark bronze: they are small sculpture, the one place the style allows a
+// colour darker than the window slate, and it is what makes them read
+// against the pale shafts and street.
 const parts = [
-  // Shaft granite, pink-grey; p1.jpg [1185, 470, 20, 30] (sunlit, Commerce).
-  { part: granite, material: { name: 'granite', color: 0xa69a96 } },
-  // The plinth, a shade darker; p2.jpg [530, 515, 25, 20] lifted to sun.
-  { part: base, material: { name: 'granite-base', color: 0x958985 } },
-  // Bronze figures; p2.jpg [518, 268, 10, 10] and [535, 270, 25, 20].
-  { part: bronze, material: { name: 'bronze', color: 0x564d47 } },
+  { part: granite, material: finish('kaskey-granite', 0xd9cac3) },
+  { part: base, material: finish('kaskey-granite-base', 0xc9b9b2) },
+  { part: bronze, material: finish('kaskey-bronze', 0x725f50) },
   // Darker patina: hair, hats, pans and the pendants.
-  { part: dark, material: { name: 'bronze-dark', color: 0x3b3531 } },
+  { part: dark, material: finish('kaskey-bronze-dark', 0x56483e) },
 ]
 const glb = writeGlb('Independence Square statues', parts, {
   license: 'CC0-1.0',
