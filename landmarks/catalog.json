@@ -629,6 +629,13 @@
       "license": "CC0-1.0",
       "author": "Barrelman",
       "source": "scripts/landmarks/carowinds-wilderness-run.ts"
+    },
+    {
+      "id": "carowinds-woodstock-express",
+      "file": "models/carowinds-woodstock-express.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/carowinds-woodstock-express.ts"
     }
   ],
   "landmarks": [
@@ -2356,6 +2363,24 @@
         "way/241559222",
         "way/669205942",
         "way/888643799"
+      ]
+    },
+    {
+      "id": "carowinds-woodstock-express",
+      "name": "Woodstock Express",
+      "model": "carowinds-woodstock-express",
+      "lng": -80.9393765,
+      "lat": 35.101137,
+      "bearing": 0,
+      "elevation": 0,
+      "minzoom": 16,
+      "wikidata": "Q8033425",
+      "replaces": [
+        "way/241559218",
+        "way/888643797",
+        "way/670967417",
+        "way/241559217",
+        "way/888643798"
       ]
     }
   ]
