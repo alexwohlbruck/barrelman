@@ -335,6 +335,13 @@
       "license": "CC0-1.0",
       "author": "Barrelman",
       "source": "scripts/landmarks/elizabeth-water-tower.ts"
+    },
+    {
+      "id": "ballantyne-hotel",
+      "file": "models/ballantyne-hotel.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/ballantyne-hotel.ts"
     }
   ],
   "landmarks": [
@@ -1381,6 +1388,19 @@
       "minzoom": 15,
       "replaces": [
         "way/870467714"
+      ]
+    },
+    {
+      "id": "ballantyne-hotel",
+      "name": "The Ballantyne Hotel",
+      "model": "ballantyne-hotel",
+      "lng": -80.8481864,
+      "lat": 35.0565504,
+      "bearing": 346,
+      "elevation": 0,
+      "minzoom": 14,
+      "replaces": [
+        "way/322618546"
       ]
     }
   ]
