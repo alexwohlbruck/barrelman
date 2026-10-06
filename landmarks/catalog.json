@@ -146,6 +146,13 @@
       "license": "CC0-1.0",
       "author": "Barrelman",
       "source": "scripts/landmarks/56-leonard.ts"
+    },
+    {
+      "id": "brooklyn-bridge-tower",
+      "file": "models/brooklyn-bridge-tower.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/brooklyn-bridge-tower.ts"
     }
   ],
   "landmarks": [
@@ -613,6 +620,34 @@
       "wikidata": "Q244358",
       "replaces": [
         "way/261499928"
+      ]
+    },
+    {
+      "id": "brooklyn-bridge-tower-manhattan",
+      "name": "Brooklyn Bridge, Manhattan tower",
+      "model": "brooklyn-bridge-tower",
+      "lng": -73.9983344,
+      "lat": 40.7072687,
+      "bearing": 316.2,
+      "elevation": 0,
+      "minzoom": 13,
+      "wikidata": "Q125006",
+      "replaces": [
+        "way/1255363983"
+      ]
+    },
+    {
+      "id": "brooklyn-bridge-tower-brooklyn",
+      "name": "Brooklyn Bridge, Brooklyn tower",
+      "model": "brooklyn-bridge-tower",
+      "lng": -73.9943541,
+      "lat": 40.7041037,
+      "bearing": 316.2,
+      "elevation": 0,
+      "minzoom": 13,
+      "wikidata": "Q125006",
+      "replaces": [
+        "way/317352708"
       ]
     }
   ]
