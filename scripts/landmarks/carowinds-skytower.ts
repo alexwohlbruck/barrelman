@@ -13,8 +13,8 @@
  *
  * - the shaft white, with red stripes that step sideways a third of the
  *   way up;
- * - the cabin a navy saucer, flared and widest at the top, under a band of
- *   dark windows and a sloped ring roof painted as a waving American flag:
+ * - the cabin a straight-walled cylinder: a navy base band, a band of dark
+ *   windows and an upper band painted as a waving American flag:
  *   red and white stripes slanting round it, and a navy canton with white
  *   stars over one section;
  * - the head a navy drum with white stars in vertical columns.
@@ -167,56 +167,48 @@ lathe([[5.15, DECK], [5.15, 0]], () => stone, 24) // inner wall, facing the pit
 lathe([[6.8, -1], [6.8, DECK - 0.25], [6.55, DECK], [5.15, DECK]], (b) => (b === 2 ? grey : stone), 24)
 
 // ---------------------------------------------------------------- cabin ----
-// Authored about the pivot: on the shaft's axis, at the cabin floor (the
-// top of the navy wall). 9.7 m across, 6 m from the saucer's foot to the
-// roof's inner edge, proportioned from the photo against the 3.2 m shaft.
+// Authored about the pivot: on the shaft's axis, at the top of the navy
+// base band. A straight-walled cylinder 9.7 m across with a flat floor and
+// a flat roof: a navy base band, the window band, then the flag band
+// wrapped round the upper wall, proportioned from the photo against the
+// 3.2 m shaft.
 const KC = 24            // segments round the cabin, so the flag gets 24 sectors
-const CAB_R = 4.85, WIN_R = 4.62, ROOF_R = 4.88, IN_R = 1.78
+const CAB_R = 4.85, IN_R = 1.78
+const BASE_Z = -1.6      // underside of the cabin
 const WIN_Z = 1.5        // top of the window band
-const ROOF_Z0 = 1.62, ROOF_Z1 = 3.25, ROOF_IN = 1.98
-// Navy saucer: flared, widest at the top, rounding into a short wall.
-lathe([
-  [IN_R, -2.7], [2.45, -2.55], [3.6, -2.0], [4.35, -1.5], [4.72, -1.12], [CAB_R, -0.8], [CAB_R, -0.08], [WIN_R + 0.05, 0],
-], () => cNavy, KC)
-lathe([[WIN_R, 0], [WIN_R, WIN_Z]], () => cWin, KC)
-// The eave: a thin underside from the windows out to the roof's edge, and
-// the roof edge's short white lip.
-lathe([[WIN_R, WIN_Z], [ROOF_R, WIN_Z + 0.02]], () => cNavy, KC)
-lathe([[ROOF_R, WIN_Z + 0.02], [ROOF_R, ROOF_Z0]], () => cWhite, KC)
-// The inner edge and the wall facing the shaft, so no slit shows through.
-lathe([[ROOF_IN, ROOF_Z1], [IN_R, ROOF_Z1], [IN_R, -2.7]], () => cNavy, KC)
+const ROOF_Z1 = 3.25     // top of the flag band, the flat roof
+// Navy base band and the flat underside.
+lathe([[IN_R, BASE_Z], [CAB_R, BASE_Z], [CAB_R, 0]], () => cNavy, KC)
+lathe([[CAB_R, 0], [CAB_R, WIN_Z]], () => cWin, KC)
+// The flat roof, and the wall facing the shaft, so no slit shows through.
+lathe([[CAB_R, ROOF_Z1], [IN_R, ROOF_Z1], [IN_R, BASE_Z]], () => cNavy, KC)
 
 /**
- * The flag roof: a cone ring from the eave up to the inner edge, cut into
- * KC sectors that slant as they climb, so the stripes run round the ring at
+ * The flag band: the upper wall from the windows to the roof, cut into KC
+ * sectors that slant as they climb, so the stripes run round the cabin at
  * an angle like the waving flag in the photo. Five sectors (75°) are the
- * navy canton; the other nineteen alternate red and white, red at both ends
- * as on the flag.
+ * navy canton; the other nineteen alternate red and white, red at both ends.
  */
-const CANTON = 5, SHEAR = (1.2 * TAU) / KC, ROOF_BANDS = 3
-const roofAt = (s: number, a: number): V3 => P(ROOF_R + (ROOF_IN - ROOF_R) * s, a + SHEAR * s, ROOF_Z0 + (ROOF_Z1 - ROOF_Z0) * s)
+const CANTON = 5, SHEAR = (1.2 * TAU) / KC, BANDS = 3
+const flagAt = (s: number, a: number): V3 => P(CAB_R, a + SHEAR * s, WIN_Z + (ROOF_Z1 - WIN_Z) * s)
 {
-  const er = ROOF_IN - ROOF_R, ez = ROOF_Z1 - ROOF_Z0, l = Math.hypot(er, ez)
-  const N = (a: number): V3 => unit([(ez / l) * Math.cos(a), (ez / l) * Math.sin(a), -er / l])
+  const N = (a: number): V3 => [Math.cos(a), Math.sin(a), 0]
   for (let k = 0; k < KC; k++) {
     const part = k < CANTON ? cNavy : (k - CANTON) % 2 === 0 ? cRed : cWhite
-    for (let b = 0; b < ROOF_BANDS; b++) {
-      const s0 = b / ROOF_BANDS, s1 = (b + 1) / ROOF_BANDS
+    for (let b = 0; b < BANDS; b++) {
+      const s0 = b / BANDS, s1 = (b + 1) / BANDS
       const a0 = (k / KC) * TAU, a1 = ((k + 1) / KC) * TAU
-      const quad = [roofAt(s0, a0), roofAt(s0, a1), roofAt(s1, a1), roofAt(s1, a0)]
-      face(part, quad, [N(a0 + SHEAR * s0), N(a1 + SHEAR * s0), N(a1 + SHEAR * s1), N(a0 + SHEAR * s1)])
+      face(part, [flagAt(s0, a0), flagAt(s0, a1), flagAt(s1, a1), flagAt(s1, a0)],
+        [N(a0 + SHEAR * s0), N(a1 + SHEAR * s0), N(a1 + SHEAR * s1), N(a0 + SHEAR * s1)])
     }
   }
-  // Stars on the canton, in two staggered rows, flat on the cone's tangent
-  // plane and lifted clear of its facets.
+  // Stars on the canton in two staggered rows, flat on the wall and lifted
+  // just clear of its facets.
   const span = (CANTON / KC) * TAU
   for (const [s, fractions] of [[0.3, [0.17, 0.5, 0.83]], [0.72, [0.3, 0.7]]] as [number, number[]][])
     for (const f of fractions) {
-      const a = f * span, c = roofAt(s, a), n = N(a + SHEAR * s)
-      // Up the slope, and across it along the slanting stripes.
-      const up = unit(sub(roofAt(s + 0.05, a), roofAt(s - 0.05, a)))
-      const right = unit(cross(up, n))
-      star(cWhite, add(c, mul(n, 0.06)), right, up, n, 0.42)
+      const a = f * span + SHEAR * s, c = flagAt(s, f * span), n = N(a)
+      star(cWhite, add(c, mul(n, 0.06)), unit(cross([0, 0, 1], n)), [0, 0, 1], n, 0.42)
     }
 }
 
