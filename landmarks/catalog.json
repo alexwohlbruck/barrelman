@@ -183,13 +183,6 @@
       "source": "scripts/landmarks/coney-island-cyclone.ts"
     },
     {
-      "id": "bank-of-america-corporate-center",
-      "file": "models/bank-of-america-corporate-center.glb",
-      "license": "CC0-1.0",
-      "author": "Barrelman",
-      "source": "scripts/landmarks/bank-of-america-corporate-center.ts"
-    },
-    {
       "id": "duke-energy-center",
       "file": "models/duke-energy-center.glb",
       "license": "CC0-1.0",
@@ -272,6 +265,13 @@
       "license": "CC0-1.0",
       "author": "Barrelman",
       "source": "scripts/landmarks/nascar-hall-of-fame.ts"
+    },
+    {
+      "id": "bank-of-america-corporate-center",
+      "file": "models/bank-of-america-corporate-center.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/bank-of-america-corporate-center.ts"
     }
   ],
   "landmarks": [
@@ -826,30 +826,6 @@
       ]
     },
     {
-      "id": "bank-of-america-corporate-center",
-      "name": "Bank of America Corporate Center",
-      "model": "bank-of-america-corporate-center",
-      "lng": -80.8422257,
-      "lat": 35.2273121,
-      "bearing": 48.8,
-      "elevation": 0,
-      "minzoom": 13,
-      "wikidata": "Q586913",
-      "replaces": [
-        "way/341587198",
-        "way/341587200",
-        "way/341587199",
-        "way/341587201",
-        "way/341587202",
-        "way/341587204",
-        "way/766639185",
-        "way/341587207",
-        "way/341587210",
-        "way/766639186",
-        "way/341587214"
-      ]
-    },
-    {
       "id": "duke-energy-center",
       "name": "Duke Energy Center",
       "model": "duke-energy-center",
@@ -1197,6 +1173,30 @@
         "way/1352128757",
         "way/1352128758",
         "way/766639184"
+      ]
+    },
+    {
+      "id": "bank-of-america-corporate-center",
+      "name": "Bank of America Corporate Center",
+      "model": "bank-of-america-corporate-center",
+      "lng": -80.8422257,
+      "lat": 35.2273121,
+      "bearing": 48.8,
+      "elevation": 0,
+      "minzoom": 13,
+      "wikidata": "Q586913",
+      "replaces": [
+        "way/341587198",
+        "way/341587200",
+        "way/341587199",
+        "way/341587201",
+        "way/341587202",
+        "way/341587204",
+        "way/766639185",
+        "way/341587207",
+        "way/341587210",
+        "way/766639186",
+        "way/341587214"
       ]
     }
   ]
