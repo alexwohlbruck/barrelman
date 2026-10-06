@@ -636,6 +636,13 @@
       "license": "CC0-1.0",
       "author": "Barrelman",
       "source": "scripts/landmarks/carowinds-woodstock-express.ts"
+    },
+    {
+      "id": "carowinds-snoopys-racing-railway",
+      "file": "models/carowinds-snoopys-racing-railway.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/carowinds-snoopys-racing-railway.ts"
     }
   ],
   "landmarks": [
@@ -2381,6 +2388,28 @@
         "way/670967417",
         "way/241559217",
         "way/888643798"
+      ]
+    },
+    {
+      "id": "carowinds-snoopys-racing-railway",
+      "name": "Snoopy's Racing Railway",
+      "model": "carowinds-snoopys-racing-railway",
+      "lng": -80.9390691,
+      "lat": 35.101969,
+      "bearing": 0,
+      "elevation": 0,
+      "minzoom": 16,
+      "wikidata": "Q129567202",
+      "replaces": [
+        "way/1495972517",
+        "way/1495972532",
+        "way/1495975650",
+        "way/1495975649",
+        "way/1495975647",
+        "way/1495975648",
+        "way/1495972533",
+        "way/1495972534",
+        "way/1495975646"
       ]
     }
   ]
