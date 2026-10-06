@@ -510,6 +510,13 @@
       "license": "CC0-1.0",
       "author": "Barrelman",
       "source": "scripts/landmarks/belk-theater.ts"
+    },
+    {
+      "id": "visulite-theatre",
+      "file": "models/visulite-theatre.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/visulite-theatre.ts"
     }
   ],
   "landmarks": [
@@ -1926,6 +1933,19 @@
       "minzoom": 15,
       "replaces": [
         "way/502718738"
+      ]
+    },
+    {
+      "id": "visulite-theatre",
+      "name": "Visulite Theatre",
+      "model": "visulite-theatre",
+      "lng": -80.8259955,
+      "lat": 35.2136047,
+      "bearing": 46,
+      "elevation": 0,
+      "minzoom": 16,
+      "replaces": [
+        "way/957552031"
       ]
     }
   ]
