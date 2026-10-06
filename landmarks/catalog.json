@@ -475,6 +475,13 @@
       "license": "CC0-1.0",
       "author": "Barrelman",
       "source": "scripts/landmarks/neighborhood-theatre.ts"
+    },
+    {
+      "id": "music-factory-mill",
+      "file": "models/music-factory-mill.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/music-factory-mill.ts"
     }
   ],
   "landmarks": [
@@ -1823,6 +1830,21 @@
       "replaces": [
         "way/967830177",
         "way/1411146348"
+      ]
+    },
+    {
+      "id": "music-factory-mill",
+      "name": "AvidXchange Music Factory",
+      "model": "music-factory-mill",
+      "lng": -80.8448839,
+      "lat": 35.2391739,
+      "bearing": 0,
+      "elevation": 0,
+      "minzoom": 15,
+      "wikidata": "Q55639242",
+      "replaces": [
+        "way/957549179",
+        "way/1202433658"
       ]
     }
   ]
