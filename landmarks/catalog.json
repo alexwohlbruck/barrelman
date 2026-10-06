@@ -307,6 +307,13 @@
       "license": "CC0-1.0",
       "author": "Barrelman",
       "source": "scripts/landmarks/usnwc-climbing-center.ts"
+    },
+    {
+      "id": "beatties-ford-water-tower",
+      "file": "models/beatties-ford-water-tower.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/beatties-ford-water-tower.ts"
     }
   ],
   "landmarks": [
@@ -1302,6 +1309,20 @@
       "replaces": [
         "way/223914924",
         "way/1456416417"
+      ]
+    },
+    {
+      "id": "beatties-ford-water-tower",
+      "name": "Vest Station Water Towers",
+      "model": "beatties-ford-water-tower",
+      "lng": -80.8557299,
+      "lat": 35.2499991,
+      "bearing": 0,
+      "elevation": 0,
+      "minzoom": 15,
+      "replaces": [
+        "way/869290547",
+        "way/869290548"
       ]
     }
   ]
