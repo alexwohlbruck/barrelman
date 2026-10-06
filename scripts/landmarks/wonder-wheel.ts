@@ -19,19 +19,22 @@
  * and the wavy tracks. The cars hang in the gap between the two faces, the
  * towers stand outside them, so nothing passes through anything else.
  *
+ * It turns (experimental; see "Animation" in STYLE.md). The wheel is a glTF
+ * node at the axle, and each car a child node at its pivot. One clip turns
+ * the wheel and turns each car back by as much, so the cars hang plumb.
+ * The sliding cars also move along their tracks. Everything else is the
+ * static root node. At t = 0 the model is exactly the static one it replaced.
+ *
  * It replaces nothing: OSM maps the wheel as a node (attraction=big_wheel).
  * The 4.3 m station building it straddles (way/248496318) stays drawn, and
  * the bottom of the wheel dips into it, as the real one does at boarding.
  * The ground is flat here (2.6–2.7 m in the terrain tiles), so elevation 0.
  */
-import { Part, cross, sub, writeGlb, type V3 } from './mesh'
+import { Part, axisAngle, cross, sub, writeGlb, type ChannelSpec, type MaterialSpec, type NodeSpec, type Quat, type V3 } from './mesh'
 
 const structure = new Part()  // mint rim bands, inner rings, tracks, hub
 const spokes = new Part()     // salmon spokes
-const towers = new Part()     // blue towers, axle ends, and the blue cars
-const red = new Part()
-const white = new Part()
-const yellow = new Part()     // door panels on the sliding cars
+const towers = new Part()     // blue towers and axle ends
 
 const TAU = Math.PI * 2
 const H = 25                  // axle height: 46 m to the rim's top
@@ -45,8 +48,11 @@ const add = (a: V3, b: V3): V3 => [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
 const mul = (a: V3, k: number): V3 => [a[0] * k, a[1] * k, a[2] * k]
 const unit = (a: V3): V3 => mul(a, 1 / (Math.hypot(...a) || 1))
 
-/** A point on the wheel at radius r, angle θ (0 = east, π/2 = up), face y. */
-const wheel = (r: number, t: number, y: number): V3 => [r * Math.cos(t), y, H + r * Math.sin(t)]
+/**
+ * A point on the wheel at radius r, angle θ (0 = east, π/2 = up), face y —
+ * relative to the axle, since the wheel is a node turning about it.
+ */
+const wheel = (r: number, t: number, y: number): V3 => [r * Math.cos(t), y, r * Math.sin(t)]
 
 /** A triangle whose winding follows its normals, whatever order it came in. */
 function tri(p: Part, v: V3[], n: V3[]) {
@@ -130,31 +136,77 @@ for (const y of [-FACE, FACE]) {
 
 // --- Hub and axle -------------------------------------------------------------
 const circle = (r: number, n: number): Profile => Array.from({ length: n }, (_, i) => [r * Math.cos(i / n * TAU), r * Math.sin(i / n * TAU)])
-beam(structure, [0, -FACE - 0.5, H], [0, FACE + 0.5, H], circle(2.7, 16), circle(2.7, 16), [1, 0, 0])
+beam(structure, [0, -FACE - 0.5, 0], [0, FACE + 0.5, 0], circle(2.7, 16), circle(2.7, 16), [1, 0, 0])
 beam(towers, [0, -3.6, H], [0, 3.6, H], circle(0.9, 12), circle(0.9, 12), [1, 0, 0])
 
 // --- Cars ---------------------------------------------------------------------
+// Colours sampled from daylight photos (Commons, 2016 and 2023): pale mint
+// lattice, salmon spokes, the towers' bright blue, and the cars' red, blue,
+// white and yellow.
+const MINT: MaterialSpec = { name: 'mint', color: 0x86c2a8, roughness: 0.6, doubleSided: true }
+const SALMON: MaterialSpec = { name: 'salmon', color: 0xe9a090, roughness: 0.6 }
+const BLUE: MaterialSpec = { name: 'blue', color: 0x2f62a8, roughness: 0.6 }
+const RED: MaterialSpec = { name: 'car-red', color: 0xbc3a3e, roughness: 0.5 }
+const WHITE: MaterialSpec = { name: 'car-white', color: 0xece9e2, roughness: 0.5 }
+const YELLOW: MaterialSpec = { name: 'car-yellow', color: 0xe8c848, roughness: 0.5 }
+
 /**
- * A car hanging from a pivot: a box with chamfered edges, 2.6 m across the
- * face of the wheel, 1.9 m deep and 2.4 m tall, so it fits between the faces.
+ * A car hanging from a pivot at the origin: a box with chamfered edges, 2.6 m
+ * across the face of the wheel, 1.9 m deep and 2.4 m tall, so it fits
+ * between the faces. Each car is a node at its pivot, so it can stay hanging
+ * upright while the wheel turns.
  */
-function car(p: Part, pivot: V3, door = false) {
-  const [x, y, z] = pivot, w = 1.3, d = 0.95, h = 2.4, c = 0.35
+function car(body: Part, door?: Part) {
+  const w = 1.3, d = 0.95, h = 2.4, c = 0.35
   const ring = (zz: number, inset: number): V3[] =>
-    rect(w - inset, d - inset, c - inset * 0.6).map(([a, b]) => [x + a, y + b, zz] as V3)
-  const top = z - 0.15, bot = top - h
+    rect(w - inset, d - inset, c - inset * 0.6).map(([a, b]) => [a, b, zz] as V3)
+  const top = -0.15, bot = top - h
   const rings = [ring(bot, 0.22), ring(bot + c, 0), ring(top - c, 0), ring(top, 0.22)]
-  p.loft(rings)
-  p.cap(rings[3], true)
-  p.cap(rings[0], false)
+  body.loft(rings)
+  body.cap(rings[3], true)
+  body.cap(rings[0], false)
   if (!door) return
   // A yellow door panel set flush into each broad face, as on the real cars.
   for (const s of [-1, 1]) {
-    const yy = y + s * (d + 0.02), x0 = x - 0.35, x1 = x + 0.55, z0 = bot + 0.45, z1 = top - 0.5
+    const yy = s * (d + 0.02), x0 = -0.35, x1 = 0.55, z0 = bot + 0.45, z1 = top - 0.5
     const n: V3 = [0, s, 0]
-    tri(yellow, [[x0, yy, z0], [x1, yy, z0], [x1, yy, z1]], [n, n, n])
-    tri(yellow, [[x0, yy, z0], [x1, yy, z1], [x0, yy, z1]], [n, n, n])
+    tri(door, [[x0, yy, z0], [x1, yy, z0], [x1, yy, z1]], [n, n, n])
+    tri(door, [[x0, yy, z0], [x1, yy, z1], [x0, yy, z1]], [n, n, n])
   }
+}
+
+// --- Motion -------------------------------------------------------------------
+/**
+ * One turn every 90 s. The real wheel takes 8 to 10 minutes a turn; at that
+ * rate the motion is invisible on a map, so this is a livelier loop.
+ * Clockwise as seen from the boardwalk, to the south.
+ */
+const LOOP = 90
+const KEYS = 48                       // 7.5° apart; LINEAR slerp is exact for a steady turn
+const times = Array.from({ length: KEYS + 1 }, (_, i) => (i / KEYS) * LOOP)
+const turned = times.map((_, i) => (i / KEYS) * TAU)
+// A right-handed turn about north (+y) carries a point's angle θ to θ − a.
+const AXLE: V3 = [0, 1, 0]
+const wheelTurn: Quat[] = turned.map((a) => axisAngle(AXLE, a))
+/** Every car turns back by as much as the wheel, so it hangs plumb. */
+const plumb: Quat[] = turned.map((a) => axisAngle(AXLE, -a))
+
+const nodes: NodeSpec[] = [{
+  name: 'wheel',
+  translation: [0, 0, H],
+  parts: [{ part: structure, material: MINT }, { part: spokes, material: SALMON }],
+}]
+const channels: ChannelSpec[] = [{ node: 0, path: 'rotation', values: wheelTurn }]
+
+// One mesh per kind of car, shared by every car of that kind.
+const whiteCar = new Part(), redCar = new Part(), blueCar = new Part(), redDoor = new Part(), blueDoor = new Part()
+car(whiteCar)
+car(redCar, redDoor)
+car(blueCar, blueDoor)
+const kinds = {
+  white: [{ part: whiteCar, material: WHITE }],
+  red: [{ part: redCar, material: RED }, { part: redDoor, material: YELLOW }],
+  blue: [{ part: blueCar, material: BLUE }, { part: blueDoor, material: YELLOW }],
 }
 
 // Twenty-four cars at 15°: every third one fixed to the rim, the rest sliding.
@@ -168,7 +220,8 @@ for (let k = 0; k < 24; k++) {
   if (k % 3 === 0) {
     // Pivoted a metre outside the rim's centre line, so a fixed car sits
     // astride the rim as in the photos, standing proud of it at the sides.
-    car(white, wheel(R_RIM + 1, base, 0))
+    nodes.push({ name: `car-${k + 1}`, parent: 0, translation: wheel(R_RIM + 1, base, 0), parts: kinds.white })
+    channels.push({ node: nodes.length - 1, path: 'rotation', values: plumb })
     continue
   }
   // The serpentine track this car slides on, one per face.
@@ -176,9 +229,15 @@ for (let k = 0; k < 24; k++) {
     const path = Array.from({ length: 6 }, (_, i) => { const { r, a } = TRACK(i / 5, base); return wheel(r, a, y) })
     sweep(structure, path, inPlane(path, false), path.map(() => rect(0.45, 0.18)), false)
   }
-  // Gravity slides a car out to the rim near the bottom and in near the top.
-  const { r, a } = TRACK((1 - Math.sin(base)) / 2, base)
-  car(sliding++ % 2 ? towers : red, wheel(r, a, 0), true)
+  // Gravity slides a car out to the rim near the bottom and in near the top,
+  // so its place on the track follows where the turn has carried it.
+  const slide = turned.map((a) => {
+    const { r, a: at } = TRACK((1 - Math.sin(base - a)) / 2, base)
+    return wheel(r, at, 0)
+  })
+  nodes.push({ name: `car-${k + 1}`, parent: 0, translation: slide[0], parts: sliding++ % 2 ? kinds.blue : kinds.red })
+  channels.push({ node: nodes.length - 1, path: 'rotation', values: plumb })
+  channels.push({ node: nodes.length - 1, path: 'translation', values: slide })
 }
 
 // --- Towers: an A-frame on each side, legs splayed in and out of the plane ----
@@ -201,22 +260,16 @@ for (const s of [-1, 1]) {
   beam(towers, [0, s * 2.4, H], [0, s * 3.8, H], rect(1.7, 1.5, 0.3), rect(1.7, 1.5, 0.3), [0, 0, 1])
 }
 
-const parts = [
-  // Colours sampled from daylight photos (Commons, 2016 and 2023): pale mint
-  // lattice, salmon spokes, the towers' bright blue, and the cars' red, blue,
-  // white and yellow.
-  { part: structure, material: { name: 'mint', color: 0x86c2a8, roughness: 0.6, doubleSided: true } },
-  { part: spokes, material: { name: 'salmon', color: 0xe9a090, roughness: 0.6 } },
-  { part: towers, material: { name: 'blue', color: 0x2f62a8, roughness: 0.6 } },
-  { part: red, material: { name: 'car-red', color: 0xbc3a3e, roughness: 0.5 } },
-  { part: white, material: { name: 'car-white', color: 0xece9e2, roughness: 0.5 } },
-  { part: yellow, material: { name: 'car-yellow', color: 0xe8c848, roughness: 0.5 } },
-]
-const triangles = parts.reduce((n, { part }) => n + part.triangles, 0)
-console.log(parts.map(({ part, material }) => `${material.name}: ${part.triangles}`).join('\n'))
+const parts = [{ part: towers, material: BLUE }]
+// Triangles drawn, counting a shared car mesh once per car.
+const drawn = new Map<string, number>()
+for (const { part, material } of [...parts, ...nodes.flatMap((n) => n.parts)])
+  drawn.set(material.name, (drawn.get(material.name) ?? 0) + part.triangles)
+const triangles = [...drawn.values()].reduce((a, b) => a + b, 0)
+console.log([...drawn].map(([name, n]) => `${name}: ${n}`).join('\n'))
 if (triangles > 5000) throw new Error(`Triangle budget exceeded: ${triangles}`)
 const glb = writeGlb('Wonder Wheel', parts, {
   license: 'CC0-1.0', frame: 'Y up, -Z north, +X east, metres, origin at ground', height: 46, bearing: 6,
-})
+}, { nodes, animation: { name: 'turn', times, channels } })
 await Bun.write(new URL('../../landmarks/models/wonder-wheel.glb', import.meta.url), glb)
-console.log(`wonder-wheel.glb: ${triangles} triangles, ${glb.length} bytes`)
+console.log(`wonder-wheel.glb: ${triangles} triangles, ${glb.length} bytes, ${LOOP} s a turn`)

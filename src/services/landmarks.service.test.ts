@@ -8,6 +8,7 @@ import {
   resolveLandmarksDir,
   type Catalog,
 } from './landmarks.service'
+import { Part, axisAngle, writeGlb, type V3 } from '../../scripts/landmarks/mesh'
 
 const LANDMARKS = join(import.meta.dir, '../../landmarks')
 
@@ -37,6 +38,54 @@ describe('glbBounds', () => {
     expect(height).toBeCloseTo(330, 0)
     // Corner of a 125 m square: half the diagonal.
     expect(radius).toBeCloseTo(62.5 * Math.SQRT2, 0)
+  })
+
+  /** A box in the map frame (x east, y north, z up) from corner a to corner b. */
+  const box = (a: V3, b: V3) => {
+    const part = new Part()
+    const ring = (z: number): V3[] => [[a[0], a[1], z], [b[0], a[1], z], [b[0], b[1], z], [a[0], b[1], z]]
+    part.loft([ring(a[2]), ring(b[2])])
+    part.cap(ring(b[2]), true)
+    part.cap(ring(a[2]), false)
+    return part
+  }
+  const material = { name: 'stone', color: 0x808080 }
+
+  test('carries a child node’s box through its translation', () => {
+    const glb = writeGlb('test', [{ part: box([-1, -1, 0], [1, 1, 2]), material }], {}, {
+      // 10 m east and 20 m up, a 2 m cube about its origin.
+      nodes: [{ name: 'lamp', translation: [10, 0, 20], parts: [{ part: box([-1, -1, -1], [1, 1, 1]), material }] }],
+    })
+    const { height, radius } = glbBounds(glb)
+    expect(height).toBeCloseTo(21, 5)
+    expect(radius).toBeCloseTo(Math.hypot(11, 1), 5)
+  })
+
+  test('bounds an animated node by a sphere about its pivot', () => {
+    // A 10 m arm on a pivot 20 m up, turning about north: at rest it is
+    // level, but its tip passes 10 m over the pivot.
+    const glb = writeGlb('test', [{ part: box([-1, -1, 0], [1, 1, 2]), material }], {}, {
+      nodes: [{ name: 'arm', translation: [0, 0, 20], parts: [{ part: box([0, -0.5, -0.5], [10, 0.5, 0.5]), material }] }],
+      animation: {
+        name: 'turn',
+        times: [0, 1, 2, 3, 4],
+        channels: [{ node: 0, path: 'rotation', values: [0, 1, 2, 3, 4].map((i) => axisAngle([0, 1, 0], (i / 4) * Math.PI * 2)) }],
+      },
+    })
+    const tip = Math.hypot(10, 0.5, 0.5)
+    const { height, radius } = glbBounds(glb)
+    expect(height).toBeCloseTo(20 + tip, 5)
+    expect(radius).toBeCloseTo(tip, 5)
+  })
+
+  test('keeps the turning Wonder Wheel at its full height', async () => {
+    const bytes = new Uint8Array(await Bun.file(join(LANDMARKS, 'models/wonder-wheel.glb')).arrayBuffer())
+    const { height, radius } = glbBounds(bytes)
+    // 46 m to the rim's top; the sphere about the axle may only overstate it.
+    expect(height).toBeGreaterThanOrEqual(46)
+    expect(height).toBeLessThan(50)
+    expect(radius).toBeGreaterThanOrEqual(22.4)
+    expect(radius).toBeLessThan(26)
   })
 
   test('refuses something that is not a GLB', () => {

@@ -21,7 +21,7 @@ mkdirSync(out,{recursive:true})
 const bytes=readFileSync(source),jlen=bytes.readUInt32LE(12)
 const gltf=JSON.parse(bytes.subarray(20,20+jlen).toString()),bin=bytes.subarray(28+jlen)
 const read=(idx:number)=> {
- const a=gltf.accessors[idx],v=gltf.bufferViews[a.bufferView],n=({SCALAR:1,VEC2:2,VEC3:3} as any)[a.type]
+ const a=gltf.accessors[idx],v=gltf.bufferViews[a.bufferView],n=({SCALAR:1,VEC2:2,VEC3:3,VEC4:4} as any)[a.type]
  const Type=({5126:Float32Array,5123:Uint16Array,5125:Uint32Array} as any)[a.componentType]
  const b=bin.subarray((v.byteOffset||0)+(a.byteOffset||0),(v.byteOffset||0)+(a.byteOffset||0)+a.count*n*Type.BYTES_PER_ELEMENT)
  return new Type(Uint8Array.from(b).buffer)
@@ -51,7 +51,31 @@ const textures:Mip[][]=(gltf.images||[]).map((im:any,i:number)=> {
  }
  return levels
 })
-const primitives=gltf.meshes[0].primitives.map((p:any)=>({p:read(p.attributes.POSITION),n:read(p.attributes.NORMAL),uv:p.attributes.TEXCOORD_0!==undefined?read(p.attributes.TEXCOORD_0):null,ix:read(p.indices),mat:gltf.materials[p.material]}))
+// Walk the scene, placing every node's mesh by its transform. A moving node is
+// drawn as it stands at t = 0: its first keyframe, where it has one, else its
+// own TRS.
+const frame0=new Map<string,number[]>()
+for(const ch of gltf.animations?.[0]?.channels||[]){
+ const s=gltf.animations[0].samplers[ch.sampler],v=read(s.output),n=ch.target.path==='rotation'?4:3
+ frame0.set(ch.target.node+'/'+ch.target.path,Array.from(v.subarray(0,n)))
+}
+const mul=(a:number[],b:number[])=>{const o=new Array(16).fill(0);for(let c=0;c<4;c++)for(let r=0;r<4;r++)for(let k=0;k<4;k++)o[c*4+r]+=a[k*4+r]*b[c*4+k];return o}
+function local(i:number):number[] {
+ const nd=gltf.nodes[i];if(nd.matrix)return nd.matrix
+ const [x,y,z,w]=frame0.get(i+'/rotation')??nd.rotation??[0,0,0,1],[sx,sy,sz]=frame0.get(i+'/scale')??nd.scale??[1,1,1],[tx,ty,tz]=frame0.get(i+'/translation')??nd.translation??[0,0,0]
+ return [(1-2*(y*y+z*z))*sx,2*(x*y+w*z)*sx,2*(x*z-w*y)*sx,0,2*(x*y-w*z)*sy,(1-2*(x*x+z*z))*sy,2*(y*z+w*x)*sy,0,2*(x*z+w*y)*sz,2*(y*z-w*x)*sz,(1-2*(x*x+y*y))*sz,0,tx,ty,tz,1]
+}
+const primitives:any[]=[]
+function visit(i:number,parent:number[]) {
+ const m=mul(parent,local(i)),nd=gltf.nodes[i]
+ for(const p of nd.mesh!==undefined?gltf.meshes[nd.mesh].primitives:[]) {
+  const P=read(p.attributes.POSITION),N=read(p.attributes.NORMAL),pp=new Float32Array(P.length),nn=new Float32Array(N.length)
+  for(let k=0;k<P.length;k+=3)for(let r=0;r<3;r++){pp[k+r]=m[r]*P[k]+m[4+r]*P[k+1]+m[8+r]*P[k+2]+m[12+r];nn[k+r]=m[r]*N[k]+m[4+r]*N[k+1]+m[8+r]*N[k+2]}
+  primitives.push({p:pp,n:nn,uv:p.attributes.TEXCOORD_0!==undefined?read(p.attributes.TEXCOORD_0):null,ix:read(p.indices),mat:gltf.materials[p.material]})
+ }
+ for(const c of nd.children||[])visit(c,m)
+}
+for(const r of gltf.scenes[gltf.scene??0].nodes)visit(r,[1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1])
 const norm=(v:number[])=>{const l=Math.hypot(...v);return v.map(x=>x/l)}
 const dot=(a:number[],b:number[])=>a[0]*b[0]+a[1]*b[1]+a[2]*b[2]
 const cross=(a:number[],b:number[])=>[a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]]

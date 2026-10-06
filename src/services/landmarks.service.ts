@@ -143,12 +143,19 @@ export function validateCatalog(catalog: Catalog): string[] {
 }
 
 /**
- * The model's extent in its own metres, from the POSITION accessors' min/max
- * — glTF requires them, so a model is sized without decoding any geometry.
+ * The model's extent in its own metres: `height` above the origin, and
+ * `radius`, the farthest it reaches from the origin in plan.
  *
- * Ignores node transforms. That is the frame contract rather than a shortcut:
- * a landmark model is authored in place, origin at its anchor, so a
- * transform on its root would be a model that does not follow it.
+ * Static geometry is sized from the POSITION accessors' min/max, which glTF
+ * requires, so no geometry is decoded. Each box's corners are carried
+ * through the node transforms above it. A model authored in place has only
+ * an untransformed root, so for almost every landmark that changes nothing.
+ *
+ * A node that an animation moves (experimental, outside the Open Landmarks
+ * contract) can be anywhere its clip takes it. It is bounded by a sphere
+ * about its pivot that holds everything under it in any pose. Its radius
+ * comes from the actual vertices, since a box corner would overstate a
+ * wheel's reach by √2.
  */
 export function glbBounds(glb: Uint8Array): { height: number; radius: number } {
   const view = new DataView(glb.buffer, glb.byteOffset, glb.byteLength)
@@ -156,22 +163,147 @@ export function glbBounds(glb: Uint8Array): { height: number; radius: number } {
   const length = view.getUint32(12, true)
   if (view.getUint32(16, true) !== 0x4e4f534a) throw new Error('GLB has no JSON chunk first')
   const json = JSON.parse(new TextDecoder().decode(glb.subarray(20, 20 + length)))
+  const binAt = 20 + length + ((4 - (length % 4)) % 4)
+  const bin = binAt + 8 <= glb.length && view.getUint32(binAt + 4, true) === 0x004e4942
+    ? glb.subarray(binAt + 8, binAt + 8 + view.getUint32(binAt, true))
+    : null
+
+  const nodes: any[] = json.nodes ?? []
+  const boxOf = (primitive: any) => {
+    const accessor = json.accessors?.[primitive.attributes?.POSITION]
+    if (!accessor?.min || !accessor?.max) throw new Error('POSITION accessor has no min/max')
+    return accessor as { min: number[]; max: number[] }
+  }
+  const corners = ({ min, max }: { min: number[]; max: number[] }) =>
+    [0, 1, 2, 3, 4, 5, 6, 7].map((i) => [i & 1 ? max[0] : min[0], i & 2 ? max[1] : min[1], i & 4 ? max[2] : min[2]])
+
+  // What each animated node's channels do: the farthest any translation
+  // keyframe takes it, and the largest scale any reaches.
+  const moving = new Map<number, { translation?: number; scale?: number }>()
+  for (const animation of json.animations ?? [])
+    for (const channel of animation.channels ?? []) {
+      const node = channel.target?.node
+      if (node === undefined) continue
+      const entry = moving.get(node) ?? {}
+      moving.set(node, entry)
+      const path: string = channel.target.path
+      if (path !== 'translation' && path !== 'scale') continue
+      const values = floats(json, bin, animation.samplers?.[channel.sampler]?.output)
+      // Keyframes it cannot read leave nothing to bound the node by.
+      if (!values) throw new Error(`animated ${path} on node ${node} is not readable`)
+      let most = entry[path] ?? 0
+      for (let i = 0; i + 2 < values.length; i += 3) {
+        const [x, y, z] = [values[i], values[i + 1], values[i + 2]]
+        most = Math.max(most, path === 'translation' ? Math.hypot(x, y, z) : Math.max(Math.abs(x), Math.abs(y), Math.abs(z)))
+      }
+      entry[path] = most
+    }
+
+  /**
+   * The farthest anything under a node reaches from its own origin, in any
+   * pose, in its own frame (before its own transform).
+   */
+  const reach = (index: number): number => {
+    const node = nodes[index]
+    let most = 0
+    for (const primitive of node.mesh !== undefined ? json.meshes?.[node.mesh]?.primitives ?? [] : []) {
+      const position = floats(json, bin, primitive.attributes?.POSITION)
+      if (position)
+        for (let i = 0; i + 2 < position.length; i += 3)
+          most = Math.max(most, Math.hypot(position[i], position[i + 1], position[i + 2]))
+      else for (const c of corners(boxOf(primitive))) most = Math.max(most, Math.hypot(c[0], c[1], c[2]))
+    }
+    for (const child of node.children ?? []) {
+      const m = nodeMatrix(nodes[child])
+      const motion = moving.get(child)
+      const shift = Math.max(Math.hypot(m[12], m[13], m[14]), motion?.translation ?? 0)
+      most = Math.max(most, shift + Math.max(scaleOf(m), motion?.scale ?? 0) * reach(child))
+    }
+    return most
+  }
 
   let height = 0
   let radius = 0
-  for (const mesh of json.meshes ?? [])
-    for (const primitive of mesh.primitives ?? []) {
-      const accessor = json.accessors?.[primitive.attributes?.POSITION]
-      if (!accessor?.min || !accessor?.max) throw new Error('POSITION accessor has no min/max')
-      const [x0, , z0] = accessor.min
-      const [x1, y1, z1] = accessor.max
-      height = Math.max(height, y1)
-      // Farthest corner of the plan box from the origin: the tile query uses
-      // it to send a landmark to every tile it overhangs, not just the one
-      // its anchor falls in.
-      for (const x of [x0, x1]) for (const z of [z0, z1]) radius = Math.max(radius, Math.hypot(x, z))
+  const visit = (index: number, parent: number[]) => {
+    const node = nodes[index]
+    const motion = moving.get(index)
+    if (motion) {
+      // The sphere's centre is the node's pivot, or its parent's origin when
+      // the pivot itself moves.
+      const own = nodeMatrix(node)
+      const pivot = motion.translation === undefined ? [own[12], own[13], own[14]] : [0, 0, 0]
+      const [cx, cy, cz] = transform(parent, pivot)
+      const scale = Math.max(scaleOf(own), motion.scale ?? 0)
+      const r = scaleOf(parent) * ((motion.translation ?? 0) + scale * reach(index))
+      height = Math.max(height, cy + r)
+      radius = Math.max(radius, Math.hypot(cx, cz) + r)
+      return
     }
+    const world = multiply(parent, nodeMatrix(node))
+    for (const primitive of node.mesh !== undefined ? json.meshes?.[node.mesh]?.primitives ?? [] : [])
+      for (const corner of corners(boxOf(primitive))) {
+        const [x, y, z] = transform(world, corner)
+        height = Math.max(height, y)
+        // Farthest corner of the plan box from the origin: the tile query
+        // uses it to send a landmark to every tile it overhangs, not just
+        // the one its anchor falls in.
+        radius = Math.max(radius, Math.hypot(x, z))
+      }
+    for (const child of node.children ?? []) visit(child, world)
+  }
+  // No scene: every node no other node claims as a child is a root.
+  const children = new Set(nodes.flatMap((n) => n.children ?? []))
+  const roots = json.scenes?.[json.scene ?? 0]?.nodes ?? nodes.map((_, i) => i).filter((i) => !children.has(i))
+  for (const root of roots) visit(root, IDENTITY)
   return { height, radius }
+}
+
+const IDENTITY = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]
+
+/** A node's local transform, column-major: its matrix, or T · R · S. */
+function nodeMatrix(node: any): number[] {
+  if (node?.matrix) return node.matrix
+  const [x, y, z, w] = node?.rotation ?? [0, 0, 0, 1]
+  const [sx, sy, sz] = node?.scale ?? [1, 1, 1]
+  const [tx, ty, tz] = node?.translation ?? [0, 0, 0]
+  return [
+    (1 - 2 * (y * y + z * z)) * sx, 2 * (x * y + w * z) * sx, 2 * (x * z - w * y) * sx, 0,
+    2 * (x * y - w * z) * sy, (1 - 2 * (x * x + z * z)) * sy, 2 * (y * z + w * x) * sy, 0,
+    2 * (x * z + w * y) * sz, 2 * (y * z - w * x) * sz, (1 - 2 * (x * x + y * y)) * sz, 0,
+    tx, ty, tz, 1,
+  ]
+}
+
+function multiply(a: number[], b: number[]): number[] {
+  const out = new Array(16).fill(0)
+  for (let c = 0; c < 4; c++)
+    for (let r = 0; r < 4; r++)
+      for (let k = 0; k < 4; k++) out[c * 4 + r] += a[k * 4 + r] * b[c * 4 + k]
+  return out
+}
+
+function transform(m: number[], [x, y, z]: number[]): number[] {
+  return [0, 1, 2].map((r) => m[r] * x + m[4 + r] * y + m[8 + r] * z + m[12 + r])
+}
+
+/** The most a matrix stretches any length: its longest basis column. */
+function scaleOf(m: number[]): number {
+  return Math.max(Math.hypot(m[0], m[1], m[2]), Math.hypot(m[4], m[5], m[6]), Math.hypot(m[8], m[9], m[10]))
+}
+
+/**
+ * A float accessor's values, or null when it is not one this can read
+ * (no BIN chunk, not float, interleaved or sparse).
+ */
+function floats(json: any, bin: Uint8Array | null, index: number | undefined): Float32Array | null {
+  const accessor = index === undefined ? undefined : json.accessors?.[index]
+  if (!bin || !accessor || accessor.componentType !== 5126 || accessor.sparse || accessor.bufferView === undefined) return null
+  const view = json.bufferViews?.[accessor.bufferView]
+  const per = ({ SCALAR: 1, VEC2: 2, VEC3: 3, VEC4: 4 } as Record<string, number>)[accessor.type]
+  if (!view || !per || (view.byteStride && view.byteStride !== 4 * per)) return null
+  const start = (view.byteOffset ?? 0) + (accessor.byteOffset ?? 0)
+  const bytes = bin.slice(start, start + accessor.count * per * 4)
+  return bytes.length === accessor.count * per * 4 ? new Float32Array(bytes.buffer) : null
 }
 
 /**

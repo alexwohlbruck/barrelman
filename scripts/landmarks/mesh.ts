@@ -195,16 +195,65 @@ export type MaterialSpec = {
   texture?: { png: Uint8Array }
 }
 
+/** A quaternion, [x, y, z, w], in the map frame like everything else here. */
+export type Quat = [number, number, number, number]
+
+/** A turn of `angle` radians about `axis` (map frame), right-handed. */
+export function axisAngle(axis: V3, angle: number): Quat {
+  const [x, y, z] = normalize(axis)
+  const s = Math.sin(angle / 2)
+  return [x * s, y * s, z * s, Math.cos(angle / 2)]
+}
+
+/**
+ * A part of a model that moves, written as its own glTF node. Its parts are
+ * authored relative to the node's origin, which is the pivot it turns about.
+ */
+export type NodeSpec = {
+  name: string
+  parts: Array<{ part: Part; material: MaterialSpec }>
+  /** The node's origin in its parent's frame (map frame, metres). */
+  translation?: V3
+  /** Index of the parent in `nodes`; the model's root node when absent. */
+  parent?: number
+}
+
+/**
+ * Keyframes for one node property, LINEAR between them. Rotations are
+ * quaternions and translations points, both in the map frame; `values` lines
+ * up with the animation's `times`.
+ */
+export type ChannelSpec =
+  | { node: number; path: 'rotation'; values: Quat[] }
+  | { node: number; path: 'translation'; values: V3[] }
+
+/** One looping clip: shared keyframe times in seconds, and its channels. */
+export type AnimationSpec = { name: string; times: number[]; channels: ChannelSpec[] }
+
+/**
+ * Moving parts, for the few landmarks that turn. Experimental and outside
+ * the Open Landmarks v1 contract; see "Animation" in `landmarks/STYLE.md`.
+ */
+export type GlbOptions = { nodes?: NodeSpec[]; animation?: AnimationSpec }
+
+/** map frame → glTF frame, the same rotation `Part.tri` applies. */
+const toGltf = (p: V3): V3 => [p[0], p[2], -p[1]]
+
 /**
  * Write parts as a single-mesh GLB, one primitive per material.
  *
  * Indexed, with identical corners merged — see `weld`. Some readers
  * (Parchment's own among them) only take indexed triangles anyway.
+ *
+ * `options.nodes` adds child nodes, each with its own mesh, and
+ * `options.animation` one clip moving them. Without options the output is
+ * exactly what it always was.
  */
 export function writeGlb(
   name: string,
   parts: Array<{ part: Part; material: MaterialSpec }>,
   extras: Record<string, unknown> = {},
+  options: GlbOptions = {},
 ): Uint8Array {
   const chunks: Uint8Array[] = []
   let byteLength = 0
@@ -223,9 +272,9 @@ export function writeGlb(
     return bufferViews.length - 1
   }
 
-  const accessor = (data: Float32Array | Uint16Array | Uint32Array, type: string, target: number, bounds = false) => {
+  const accessor = (data: Float32Array | Uint16Array | Uint32Array, type: string, target?: number, bounds = false) => {
     const view = push(new Uint8Array(data.buffer, data.byteOffset, data.byteLength), target)
-    const per = type === 'VEC3' ? 3 : type === 'VEC2' ? 2 : 1
+    const per = type === 'VEC4' ? 4 : type === 'VEC3' ? 3 : type === 'VEC2' ? 2 : 1
     const entry: any = {
       bufferView: view,
       componentType: data instanceof Float32Array ? 5126 : data instanceof Uint16Array ? 5123 : 5125,
@@ -250,13 +299,38 @@ export function writeGlb(
   const images: any[] = []
   const textures: any[] = []
   const materials: any[] = []
-  const primitives: any[] = []
 
   const linear = (hex: number) =>
     [16, 8, 0].map((shift) => Math.pow(((hex >> shift) & 255) / 255, 2.2))
 
-  for (const { part, material } of parts) {
-    if (!part.triangles) continue
+  /**
+   * One primitive per non-empty part. The root's parts each get a material of
+   * their own, as they always have; a child node's reuse the one already
+   * written under the same name — names are unique in a landmark GLB, and a
+   * turning wheel is the same mint as the rest.
+   */
+  const primitivesOf = (list: Array<{ part: Part; material: MaterialSpec }>, share: boolean) => {
+    const primitives: any[] = []
+    for (const { part, material } of list) {
+      if (!part.triangles) continue
+      const known = share ? materials.findIndex((m) => m.name === material.name) : -1
+      const index = known >= 0 ? known : addMaterial(material)
+      const textured = !!(material.mask || material.texture)
+      const { pos, nrm, uv, index: corners } = weld(part, textured)
+      primitives.push({
+        attributes: {
+          POSITION: accessor(pos, 'VEC3', 34962, true),
+          NORMAL: accessor(nrm, 'VEC3', 34962),
+          ...(textured ? { TEXCOORD_0: accessor(uv, 'VEC2', 34962) } : {}),
+        },
+        indices: accessor(corners, 'SCALAR', 34963),
+        material: index,
+      })
+    }
+    return primitives
+  }
+
+  const addMaterial = (material: MaterialSpec) => {
     const m: any = {
       name: material.name,
       pbrMetallicRoughness: {
@@ -279,31 +353,73 @@ export function writeGlb(
       m.alphaCutoff = material.mask.cutoff ?? 0.5
     }
     materials.push(m)
+    return materials.length - 1
+  }
 
-    const textured = !!(material.mask || material.texture)
-    const { pos, nrm, uv, index } = weld(part, textured)
-    primitives.push({
-      attributes: {
-        POSITION: accessor(pos, 'VEC3', 34962, true),
-        NORMAL: accessor(nrm, 'VEC3', 34962),
-        ...(textured ? { TEXCOORD_0: accessor(uv, 'VEC2', 34962) } : {}),
-      },
-      indices: accessor(index, 'SCALAR', 34963),
-      material: materials.length - 1,
+  const nodes: any[] = [{ name, mesh: 0 }]
+  const meshes: any[] = [{ name, primitives: primitivesOf(parts, false) }]
+
+  // Child nodes: node i of `options.nodes` is glTF node i + 1, the root being 0.
+  // Nodes given the same `parts` array share one mesh, so eight identical cars
+  // are written once and placed eight times.
+  const meshOf = new Map<unknown, number>()
+  for (const spec of options.nodes ?? []) {
+    const node: any = { name: spec.name }
+    let mesh = meshOf.get(spec.parts)
+    if (mesh === undefined) {
+      const primitives = primitivesOf(spec.parts, true)
+      if (primitives.length) {
+        mesh = meshes.length
+        meshes.push({ name: spec.name, primitives })
+        meshOf.set(spec.parts, mesh)
+      }
+    }
+    if (mesh !== undefined) node.mesh = mesh
+    if (spec.translation) node.translation = toGltf(spec.translation)
+    nodes.push(node)
+    const parent = nodes[spec.parent === undefined ? 0 : spec.parent + 1]
+    if (!parent || parent === node) throw new Error(`node "${spec.name}": parent must come before it`)
+    ;(parent.children ??= []).push(nodes.length - 1)
+  }
+
+  let animations: any[] | undefined
+  if (options.animation) {
+    const { name: clip, times, channels } = options.animation
+    const input = accessor(new Float32Array(times), 'SCALAR', undefined, true)
+    // A sampler per distinct keyframe list, so channels moving several nodes
+    // the same way (every car's counter-turn) share one copy.
+    const samplers: any[] = []
+    const byValues = new Map<unknown, number>()
+    const json = channels.map((c) => {
+      if (c.values.length !== times.length) throw new Error(`channel on node ${c.node}: ${c.values.length} values for ${times.length} times`)
+      if (!options.nodes?.[c.node]) throw new Error(`channel targets unknown node ${c.node}`)
+      let sampler = byValues.get(c.values)
+      if (sampler === undefined) {
+        const data = c.path === 'rotation'
+          ? new Float32Array(c.values.flatMap(([x, y, z, w]) => [...toGltf([x, y, z]), w]))
+          : new Float32Array(c.values.flatMap((v) => toGltf(v)))
+        const output = accessor(data, c.path === 'rotation' ? 'VEC4' : 'VEC3')
+        samplers.push({ input, output, interpolation: 'LINEAR' })
+        sampler = samplers.length - 1
+        byValues.set(c.values, sampler)
+      }
+      return { sampler, target: { node: c.node + 1, path: c.path } }
     })
+    animations = [{ name: clip, channels: json, samplers }]
   }
 
   const json = {
     asset: { version: '2.0', generator: 'barrelman scripts/landmarks', extras },
     scene: 0,
     scenes: [{ name, nodes: [0] }],
-    nodes: [{ name, mesh: 0 }],
-    meshes: [{ name, primitives }],
+    nodes,
+    meshes,
     materials,
     ...(textures.length ? { textures, images } : {}),
     accessors,
     bufferViews,
     buffers: [{ byteLength: align4(byteLength) }],
+    ...(animations ? { animations } : {}),
   }
 
   const bin = concat(chunks, align4(byteLength))
