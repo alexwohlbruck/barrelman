@@ -223,6 +223,13 @@
       "license": "CC0-1.0",
       "author": "Barrelman",
       "source": "scripts/landmarks/spectrum-center.ts"
+    },
+    {
+      "id": "bank-of-america-stadium",
+      "file": "models/bank-of-america-stadium.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/bank-of-america-stadium.ts"
     }
   ],
   "landmarks": [
@@ -939,6 +946,58 @@
         "way/984713013",
         "way/1352235646",
         "way/1352235647"
+      ]
+    },
+    {
+      "id": "bank-of-america-stadium",
+      "name": "Bank of America Stadium",
+      "model": "bank-of-america-stadium",
+      "lng": -80.8527852,
+      "lat": 35.2257733,
+      "bearing": 320,
+      "elevation": 0,
+      "minzoom": 14,
+      "wikidata": "Q806673",
+      "replaces": [
+        "relation/12346952",
+        "way/1245929760",
+        "way/1306253435",
+        "way/1306253436",
+        "way/1306253437",
+        "way/1306253438",
+        "way/1306253439",
+        "way/1306253440",
+        "way/1306253441",
+        "way/1306253442",
+        "way/1306253445",
+        "way/1306253446",
+        "way/1306253447",
+        "way/1306253449",
+        "way/1306253450",
+        "way/1306253451",
+        "way/1306253452",
+        "way/1306253455",
+        "way/1306253456",
+        "way/1306253457",
+        "way/1306253458",
+        "way/1306253461",
+        "way/1306253462",
+        "way/1306253463",
+        "way/1306253464",
+        "way/1306253465",
+        "way/1306253466",
+        "way/1306253467",
+        "way/1306254408",
+        "way/1306254409",
+        "relation/17145756",
+        "relation/17917759",
+        "relation/17917760",
+        "relation/17917761",
+        "relation/17917762",
+        "relation/17917763",
+        "relation/17917764",
+        "relation/17917765",
+        "relation/17917766"
       ]
     }
   ]
