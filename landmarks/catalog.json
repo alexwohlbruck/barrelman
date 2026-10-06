@@ -517,6 +517,13 @@
       "license": "CC0-1.0",
       "author": "Barrelman",
       "source": "scripts/landmarks/visulite-theatre.ts"
+    },
+    {
+      "id": "amos-southend",
+      "file": "models/amos-southend.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/amos-southend.ts"
     }
   ],
   "landmarks": [
@@ -1946,6 +1953,19 @@
       "minzoom": 16,
       "replaces": [
         "way/957552031"
+      ]
+    },
+    {
+      "id": "amos-southend",
+      "name": "Amos' Southend",
+      "model": "amos-southend",
+      "lng": -80.8551394,
+      "lat": 35.2167061,
+      "bearing": 130,
+      "elevation": 0,
+      "minzoom": 16,
+      "replaces": [
+        "way/432937734"
       ]
     }
   ]
