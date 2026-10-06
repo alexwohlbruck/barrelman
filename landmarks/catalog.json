@@ -286,6 +286,13 @@
       "license": "CC0-1.0",
       "author": "Barrelman",
       "source": "scripts/landmarks/park-expo-center.ts"
+    },
+    {
+      "id": "freedom-park-locomotive",
+      "file": "models/freedom-park-locomotive.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/freedom-park-locomotive.ts"
     }
   ],
   "landmarks": [
@@ -1243,6 +1250,17 @@
         "way/836535384",
         "way/836535385"
       ]
+    },
+    {
+      "id": "freedom-park-locomotive",
+      "name": "Gainesville Midland No. 301",
+      "model": "freedom-park-locomotive",
+      "lng": -80.8431885,
+      "lat": 35.1925923,
+      "bearing": 307,
+      "elevation": 0,
+      "minzoom": 16,
+      "replaces": []
     }
   ]
 }
