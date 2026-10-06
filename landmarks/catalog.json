@@ -230,6 +230,13 @@
       "license": "CC0-1.0",
       "author": "Barrelman",
       "source": "scripts/landmarks/bank-of-america-stadium.ts"
+    },
+    {
+      "id": "independence-square-statues",
+      "file": "models/independence-square-statues.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/independence-square-statues.ts"
     }
   ],
   "landmarks": [
@@ -999,6 +1006,17 @@
         "relation/17917765",
         "relation/17917766"
       ]
+    },
+    {
+      "id": "independence-square-statues",
+      "name": "Independence Square statues",
+      "model": "independence-square-statues",
+      "lng": -80.8430897,
+      "lat": 35.2272068,
+      "bearing": 48,
+      "elevation": 0,
+      "minzoom": 16,
+      "replaces": []
     }
   ]
 }
