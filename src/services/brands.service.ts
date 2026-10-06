@@ -34,6 +34,18 @@ function adaptRow(r: any): Brand {
 }
 
 /**
+ * How close a non-prefix match has to be. The trigram `%` operator alone
+ * accepts anything above pg_trgm's default 0.3, and one shared word gets there:
+ * "power outlet" matched Home Outlet (0.39), Sears Outlet and Grocery Outlet.
+ * Real misspellings score higher: "starbuks" 0.58, "whole food" 0.50,
+ * "bank of america" 0.48 on similarity, or at least 0.64 on word_similarity,
+ * which scores a query that is a close part of a longer name ("home depo" →
+ * The Home Depot, 0.90). Measured on the US brand catalog.
+ */
+const MIN_SIMILARITY = 0.45
+const MIN_WORD_SIMILARITY = 0.6
+
+/**
  * Autocomplete over the brand catalog. Prefix matches (ILIKE) rank above fuzzy
  * trigram matches (%), then by popularity (location_count). Returns [] on any
  * error (e.g. the geo_brands matview not yet populated) so search degrades
@@ -55,7 +67,10 @@ export async function searchBrands(
              l.logo_url, l.description
       FROM geo_brands b
       LEFT JOIN brand_logos l ON l.wikidata = b.wikidata
-      WHERE b.name ILIKE (${query} || '%') OR b.name % ${query}
+      WHERE b.name ILIKE (${query} || '%')
+         OR (b.name % ${query}
+             AND (similarity(b.name, ${query}) >= ${MIN_SIMILARITY}
+                  OR word_similarity(${query}, b.name) >= ${MIN_WORD_SIMILARITY}))
       ORDER BY (b.name ILIKE (${query} || '%')) DESC, similarity(b.name, ${query}) DESC, b.location_count DESC
       LIMIT ${limit}
     `)

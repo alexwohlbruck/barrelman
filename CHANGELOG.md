@@ -10,6 +10,16 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.7.4] - 2026-10-06
+
+### Fixed
+
+* **Brand suggestions need more than one shared word.** `/brands` accepted any
+  trigram match above Postgres's 0.3 default, so "power outlet" suggested Home
+  Outlet, Sears Outlet and Grocery Outlet. A match that is not a prefix now
+  needs a similarity of 0.45, or 0.6 on word similarity. Misspellings such as
+  "starbuks" and "home depo" still find their brand.
+
 ## [0.7.3] - 2026-10-06
 
 ### Fixed
