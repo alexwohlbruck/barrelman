@@ -1,12 +1,20 @@
 # Landmark art style
 
-Landmarks look like the 3D landmarks in Apple Maps: clean and slightly
-toy-like, but true to the real building in silhouette, proportion and
-colour. A landmark has to read as itself at a glance, from any side, on a
-phone at 80 to 600 px tall, next to the plain extruded buildings around it.
+Landmarks sit between Apple Maps' 3D landmarks and the
+[Open Landmarks](https://github.com/benjamintd/open-landmarks) dataset: clean
+and slightly toy-like, true to the real building in silhouette and
+proportion, in one calm shared palette, so that a city's landmarks look like
+one set and sit quietly among the plain extrusions around them. A landmark
+has to read as itself at a glance, from any side, on a phone at 80 to 600 px
+tall.
 
-This guide comes from reviewing the first New York models against Apple
-Maps and against photos. Every rule here fixes something that went wrong.
+From Apple: soft bevelled edges, big readable forms, a toy-like finish.
+From Open Landmarks: the shared material library and its names, windows as
+slate panels on the walls, no textures, and the asset contract, so every
+model here can be contributed there unchanged.
+
+This guide comes from reviewing models against Apple Maps, Open Landmarks
+and photos. Every rule here fixes something that went wrong.
 
 ## Shape
 
@@ -52,43 +60,48 @@ Maps and against photos. Every rule here fixes something that went wrong.
 
 ## Windows and facades
 
-- **Windows are geometry, not texture.** A facade is a few broad window
-  bands recessed 0.4 to 0.8 m between raised piers, following the real bay
-  rhythm: typically four to eight bands per face per setback stage, running
-  the stage's full height. Give them arched or flat tops where the real
-  building has them.
-- **Never a grid of dots or thin dark stripes.** Fine window grids shimmer
-  at map distance, and thin dark bars read as a cage.
-- **Special windows are flush, coloured shapes.** Triangles, portholes or
-  rosettes are flat inset geometry in a darker material, set into the band
-  they belong to. They are not spikes, cones or anything standing proud.
+- **Windows are slate panels on the walls.** Use the `window` material
+  (`#64798a`) as flat panels set on, or just into, the wall they belong to
+  (within 0.06 m of it, as Open Landmarks checks). They follow the real bay
+  rhythm and storey groups: on a tower, one panel per bay spanning two to
+  four floors, with the wall showing between bays and between groups as
+  piers and spandrels. On a low building, a panel per real window or per
+  arched opening.
+- **Not a texture, not a stripe, not a dot grid.** No painted window grids;
+  no full-height dark stripes from base to crown; no single-floor dot grids
+  that shimmer at map distance. If the real building is a glass curtain
+  wall, it is a `window` wall with a few pale `trim` mullion and floor lines,
+  not a dark slab.
+- **Panels never float.** A window panel needs real wall behind it: not past
+  a corner, not across a gap, not on a roof.
+- **Special windows are flush shapes.** Triangles, portholes and rosettes are
+  flat `window` (or `glass`) geometry set into the wall, never spikes or
+  cones standing proud.
 
 ## Colour
 
-- **Take colours from photos of the real building** in daylight: the sunlit
-  side, unmodified. Don't lighten or desaturate them to suit the map; a
-  landmark should look like the building, not like the plain buildings
-  around it.
-- **Three to six materials**, each covering a broad region: main walls,
-  window bands, trim, metal, roof. One colour for the whole body is wrong.
-- **Apple's conventions:**
-  - window bands are a soft mid grey or grey-blue (darker where the real
-    glass reads dark);
-  - setback terraces on towers are a muted terracotta, about `#c8968a`,
-    unless photos show a real finish (56 Leonard's are pale concrete).
-    Only the terraces: on a low building the main roof is most of what a
-    phone sees, and a terracotta one swamps it;
-  - a main flat roof is a pale membrane grey, about `#bdb9b1`, unless photos
-    show otherwise. A monument's roof is its own stone, a shade darker; real
-    copper, slate or tile roofs keep their colour;
-  - real roof gardens are muted green;
-  - metal is a light silver grey with darker grey accents.
+- **Start from the shared palette** in `scripts/landmarks/palette.ts`, the
+  Open Landmarks material library: `stone` `#efe4d3`, `trim` `#fff0dd`,
+  `roof` `#9da6ad`, `metal`, `window` `#64798a`, `glass` `#a4c4d9`,
+  `entrance`, `copper`, `patina`, `terracotta`. Most masonry is `stone`; most
+  roofs and setback terraces are `roof`.
+- **A landmark-specific finish only where colour is identity.** Rose granite,
+  red brick, a gold dome, painted red steel, a green copper roof: use
+  `finish()` with the photo's hue, but pulled to the palette's lightness, so
+  it reads as "the pink one" without being darker or more saturated than the
+  stone beside it. A finish replaces a library colour; it doesn't add
+  contrast. Dark navy glass, dark brown brick and near-black stone are never
+  right on this map, whatever the photo says.
+- **At most six materials**, each covering a broad region. One colour for
+  the whole body is also wrong: walls, windows, trim and roof at least.
+- Roof gardens are muted green as a finish; real copper, slate or tile roofs
+  use `copper`, `patina` or `roof`.
 
 ## Budget
 
-- At most 5,000 triangles for most landmarks; 6,500 for the most complex.
-- At most about 250 KB per GLB.
-- No textures unless geometry genuinely can't do it.
+- At most 5,000 triangles for most landmarks; 6,500 for the most complex,
+  and never over Open Landmarks' low-LOD cap of 8,000 triangles and 250 KB.
+- No textures. Open Landmarks allows none, and its validator rejects them.
 - Use 8 to 12 segments per semicircle and 12 to 16 around a full circle.
 
 ## How the map lights it
@@ -120,12 +133,8 @@ only decides what glows.
 - **`entrance`**: a main entrance's doors or glazing, which glow at night.
   Only where the model already has a separate material for it.
 
-Everything else is unlit. A painted window grid (`MaterialSpec.texture`)
-marks its glass in the texture's alpha: 0 on window pixels, 255 on wall,
-with the RGB unchanged. The material stays opaque, so alpha has no effect by
-day. At night a `window*` material glows where alpha is 0 and not where it
-is 255. Mipmapping averages alpha, so a distant grid glows in proportion to
-its glass.
+Everything else is unlit. (Parchment also glows painted `window*` textures
+by their alpha, for older models; new models have no textures.)
 
 ## Checking a model
 
