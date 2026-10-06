@@ -321,6 +321,13 @@
       "license": "CC0-1.0",
       "author": "Barrelman",
       "source": "scripts/landmarks/camp-north-end-water-tower.ts"
+    },
+    {
+      "id": "freedom-park-bandshell",
+      "file": "models/freedom-park-bandshell.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/freedom-park-bandshell.ts"
     }
   ],
   "landmarks": [
@@ -1342,6 +1349,19 @@
       "elevation": 0,
       "minzoom": 15,
       "replaces": []
+    },
+    {
+      "id": "freedom-park-bandshell",
+      "name": "Freedom Park Bandshell",
+      "model": "freedom-park-bandshell",
+      "lng": -80.8446895,
+      "lat": 35.1900072,
+      "bearing": 320,
+      "elevation": 0,
+      "minzoom": 16,
+      "replaces": [
+        "way/921811959"
+      ]
     }
   ]
 }
