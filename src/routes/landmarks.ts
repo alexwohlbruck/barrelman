@@ -12,9 +12,11 @@ const CORS = 'access-control-allow-origin'
 /**
  * Placement tiles are a few hundred bytes and change whenever the catalog
  * does — a new model is a new file name inside them — so they are kept
- * briefly, unlike the immutable models they point at.
+ * briefly, unlike the immutable models they point at. No
+ * stale-while-revalidate: it let a browser keep showing a tile from before a
+ * landmark was added for an hour, and a tile this small is cheap to refetch.
  */
-const TILE_CACHE = 'public, max-age=300, stale-while-revalidate=3600'
+const TILE_CACHE = 'public, max-age=60'
 
 /**
  * 3D landmarks, as a tile layer plus the models it points at.
