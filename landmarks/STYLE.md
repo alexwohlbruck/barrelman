@@ -30,6 +30,18 @@ Maps and against photos. Every rule here fixes something that went wrong.
   railings, fine sculpture or lettering. If it won't read at 200 px on a
   phone, leave it out.
 
+## Ground
+
+- **Build up from the lowest ground the building touches.** The model's
+  y = 0 is the lowest terrain point under its footprint, and the
+  placement's `elevation` is that height. On a slope, the walls on the
+  uphill side run down to y = 0 too, so they sink into the hill rather than
+  leaving the downhill side floating over a gap. Never put y = 0 at the
+  anchor's own ground height, or at the average.
+- **Nothing important in the bottom of the uphill walls.** Doors, plinths
+  and the first band of windows on the uphill side end up below ground, so
+  start the facade detail at that side's real ground level.
+
 ## Windows and facades
 
 - **Windows are geometry, not texture.** A facade is a few broad window
