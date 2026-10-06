@@ -643,6 +643,13 @@
       "license": "CC0-1.0",
       "author": "Barrelman",
       "source": "scripts/landmarks/carowinds-snoopys-racing-railway.ts"
+    },
+    {
+      "id": "carowinds-copperhead-strike",
+      "file": "models/carowinds-copperhead-strike.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/carowinds-copperhead-strike.ts"
     }
   ],
   "landmarks": [
@@ -2410,6 +2417,29 @@
         "way/1495972533",
         "way/1495972534",
         "way/1495975646"
+      ]
+    },
+    {
+      "id": "carowinds-copperhead-strike",
+      "name": "Copperhead Strike",
+      "model": "carowinds-copperhead-strike",
+      "lng": -80.942978,
+      "lat": 35.101146,
+      "bearing": 0,
+      "elevation": 0,
+      "minzoom": 15,
+      "wikidata": "Q59563612",
+      "replaces": [
+        "way/859068251",
+        "way/1190952871",
+        "way/1190952873",
+        "way/1190952872",
+        "way/1190952875",
+        "way/1190952867",
+        "way/1190952870",
+        "way/1190952869",
+        "way/1190952868",
+        "way/1190952874"
       ]
     }
   ]
