@@ -582,12 +582,19 @@ export async function buildCoaster(spec: CoasterSpec) {
         const K = q.length, DS = 0.5
         // Spread the bends: the points are guides, not knots. Two passes of a
         // ±2 m moving average, the ends held where the track joins.
-        for (let pass = 0; pass < 2; pass++) {
+        for (let pass = 0; pass < 3; pass++) {
           const o = q.map((p) => [...p] as V3)
-          for (let i = 6; i < K - 6; i++) {
+          // Run the window right up to the joins over ghost points on the
+          // track either side, and fade the smoothing in over the first and
+          // last 4 m, so the curve still leaves and meets the track on the
+          // Hermite's tangent; stopping the window short of the ends left a
+          // kink 3 m in from each join.
+          const at = (j: number): V3 => (j < 0 ? add(o[0], mul(A.t, j * DS)) : j >= K ? add(o[K - 1], mul(B.t, (j - K + 1) * DS)) : o[j])
+          for (let i = 1; i < K - 1; i++) {
             let c: V3 = [0, 0, 0]
-            for (let k = -4; k <= 4; k++) c = add(c, o[i + k])
-            q[i] = mul(c, 1 / 9)
+            for (let k = -4; k <= 4; k++) c = add(c, at(i + k))
+            const u = Math.min(1, Math.min(i, K - 1 - i) / 8), w = u * u * (3 - 2 * u)
+            q[i] = add(o[i], mul(sub(mul(c, 1 / 9), o[i]), w))
           }
         }
         const t = q.map((_, i) => (i === 0 ? A.t : i === K - 1 ? B.t : unit(sub(q[i + 1], q[i - 1]))))
@@ -861,12 +868,18 @@ export async function buildCoaster(spec: CoasterSpec) {
   // ----------------------------------------------------------- trestle ----
   if (spec.trestle) {
     const T = spec.trestle, EVERY = T.every ?? 5, ALONG = T.along ?? 2.4, STEPZ = T.levelStep ?? 3.8, LH = T.ledgerH ?? 1.4
-    /** A vertical box between two plan points, `w` across, from z0 to z1. */
-    const post = (a: [number, number], b: [number, number], w: number, z0: number, z1: number) => {
+    /**
+     * A vertical box between two plan points, `w` across, from z0 to z1. Its
+     * top slopes across by `slope` (rise per metre to the left, the track's
+     * bank), so it meets the underside of a banked track along its width.
+     */
+    const post = (a: [number, number], b: [number, number], w: number, z0: number, z1: number, slope = 0) => {
       const dx = b[0] - a[0], dy = b[1] - a[1], l = Math.hypot(dx, dy) || 1, nx = -dy / l, ny = dx / l
       const c: [number, number][] = [[a[0] + (nx * w) / 2, a[1] + (ny * w) / 2], [b[0] + (nx * w) / 2, b[1] + (ny * w) / 2], [b[0] - (nx * w) / 2, b[1] - (ny * w) / 2], [a[0] - (nx * w) / 2, a[1] - (ny * w) / 2]]
       const out: V3[] = [[nx, ny, 0], [dx / l, dy / l, 0], [-nx, -ny, 0], [-dx / l, -dy / l, 0]]
-      for (let i = 0; i < 4; i++) { const j = (i + 1) % 4; face(white, [[c[i][0], c[i][1], z0], [c[j][0], c[j][1], z0], [c[j][0], c[j][1], z1], [c[i][0], c[i][1], z1]], out[i]) }
+      // Corners 0 and 1 are on the left (+n) side, 2 and 3 on the right.
+      const zt = [1, 1, -1, -1].map((sg) => z1 + (sg * slope * w) / 2)
+      for (let i = 0; i < 4; i++) { const j = (i + 1) % 4; face(white, [[c[i][0], c[i][1], z0], [c[j][0], c[j][1], z0], [c[j][0], c[j][1], zt[j]], [c[i][0], c[i][1], zt[i]]], out[i]) }
     }
     /** A horizontal beam from a to b: its long sides and top. */
     const ledger = (a: [number, number], b: [number, number], w: number, z0: number, z1: number) => {
@@ -876,13 +889,18 @@ export async function buildCoaster(spec: CoasterSpec) {
       face(white, [P(a, -1, z0), P(a, -1, z1), P(b, -1, z1), P(b, -1, z0)], [-nx, -ny, 0])
       face(white, [P(a, 1, z1), P(b, 1, z1), P(b, -1, z1), P(a, -1, z1)], [0, 0, 1])
     }
-    type Bent = { x: number; y: number; top: number; floor: number; dir: [number, number]; s: number }
+    type Bent = { x: number; y: number; top: number; mid: number; slope: number; floor: number; dir: [number, number]; s: number }
     const bents: Bent[] = []
     for (let k = 0, count = Math.round(TOTAL / EVERY); k < count; k++) {
       const q = fine[Math.round((k * TOTAL) / count / STEP) % N]
-      const [x, y] = [q.p[0], q.p[1]]
-      // The deck's lowest edge, so the bent tucks under a banked track.
-      const top = Math.min(q.p[2] - DEPTH + 0.3, q.p[2] - DEPTH - (Math.abs(q.left[2]) * W) / 2 + 0.3)
+      // Stand under the middle of the track's underside where it really is: a
+      // banked track's underside moves sideways and down from the centreline.
+      // The bent's top follows the bank (`slope`) and sits 0.25 m up into the
+      // spine, so it meets the track along its whole width.
+      const u = add(q.p, mul(q.up, -DEPTH))
+      const [x, y] = [u[0], u[1]]
+      const lh = Math.hypot(q.left[0], q.left[1]) || 1, slope = q.left[2] / lh
+      const mid = u[2] + 0.25, top = mid - (Math.abs(slope) * (W - 0.4)) / 2
       // Stand on the ground, or on a lower stretch of track passing under.
       let floor = ground(x, y) - 1
       for (const o of fine) {
@@ -891,12 +909,12 @@ export async function buildCoaster(spec: CoasterSpec) {
         if (Math.hypot(o.p[0] - x, o.p[1] - y) < W * 0.8) floor = Math.max(floor, o.p[2])
       }
       const l = Math.hypot(q.t[0], q.t[1]) || 1
-      bents.push({ x, y, top, floor, dir: [q.t[0] / l, q.t[1] / l], s: q.s })
+      bents.push({ x, y, top, mid, slope, floor, dir: [q.t[0] / l, q.t[1] / l], s: q.s })
     }
     for (const b of bents) {
       if (b.top - b.floor < 0.6) continue
       const h = ALONG / 2
-      post([b.x - b.dir[0] * h, b.y - b.dir[1] * h], [b.x + b.dir[0] * h, b.y + b.dir[1] * h], W - 0.4, b.floor, b.top)
+      post([b.x - b.dir[0] * h, b.y - b.dir[1] * h], [b.x + b.dir[0] * h, b.y + b.dir[1] * h], W - 0.4, b.floor, b.mid, b.slope)
     }
     // Ledgers between neighbouring bents at common levels, clear of the deck above and the floor below.
     for (let k = 0; k < bents.length; k++) {
@@ -1111,6 +1129,8 @@ console.log(`\nenergy: lowest head off the lift and brakes ${worst.toFixed(1)} m
   if (process.env.REPORT) {
     let dp = 0, dpS = 0, db = 0, dbS = 0
     for (let i = 0; i < N; i++) {
+      // A shuttle has no track between its ends.
+      if (spec.shuttle && ((i + 2) * TOTAL) / N > SHUTTLE_END) continue
       // Per metre of track, not of plan: a steep stretch covers more track per plan metre.
       const dl = Math.hypot(STEP, zs[(i + 1) % N] - zs[i])
       const a = Math.abs(pitchDeg[(i + 1) % N] - pitchDeg[i]) / dl, b = (Math.abs(bank[(i + 1) % N] - bank[i]) * 180) / Math.PI
