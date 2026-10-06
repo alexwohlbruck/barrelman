@@ -124,14 +124,10 @@ const depth = Array.from({ length: N }, (_, k) => radius(R3, k) - radius(R2, k))
 const dMin = Math.min(...depth), dMax = Math.max(...depth)
 const rim = (k: number) => 39 + (4 * (depth[k % N] - dMin)) / (dMax - dMin)
 
-const FIELD = 0.1, WALL = 1.8, AISLE = 7, CLUB = 14, DECK = 21
+const FIELD = 0, WALL = 1.8, AISLE = 7, CLUB = 14, DECK = 21
 
-// Field: one green floor inside the wall, white goal-line bands.
-for (let k = 0; k < N; k++) quad(turf, [[0, C, FIELD], ringPt(R0, k, FIELD), ringPt(R0, k + 1, FIELD), [0, C, FIELD]], [0, 0, 1])
-for (const s of [-1, 1]) {
-  const y = C + s * 45.72, w = 0.8, x = 24.4
-  quad(white, [[-x, y - w, FIELD + 0.05], [x, y - w, FIELD + 0.05], [x, y + w, FIELD + 0.05], [-x, y + w, FIELD + 0.05]], [0, 0, 1])
-}
+// No field: the map draws the pitch, and a second copy would float above
+// the terrain on a slope (STYLE.md, "Don't model the ground").
 
 // Bowl, from the field outwards.
 band(black, k => ringPt(R0, k, FIELD), k => ringPt(R0, k, WALL), -1) // field wall
@@ -406,8 +402,8 @@ for (const k of RIGS) {
 // ---------------------------------------------------------------------------
 // sRGB colours read off daylight photos: the Panthers-blue seats in sun, the
 // silver club seats, the pale grey precast and podium roofs, black towers, fascia and screens, the
-// blue-grey glazing, white arches and light rigs, the teal glass cupolas and
-// the turf.
+// blue-grey glazing, white arches and light rigs and the teal glass cupolas;
+// the field is the map's.
 const parts = [
   { part: seats, material: { name: 'seats', color: 0x2a8fd2 } },
   { part: silver, material: { name: 'silver-seats', color: 0xa3a8ae } },
@@ -416,7 +412,6 @@ const parts = [
   { part: glass, material: { name: 'glass', color: 0x6c7e90 } },
   { part: white, material: { name: 'white', color: 0xe9e7e1 } },
   { part: cupola, material: { name: 'cupola-glass', color: 0x8fbab3 } },
-  { part: turf, material: { name: 'turf', color: 0x4d8a3d } },
 ]
 const triangles = parts.reduce((s, { part }) => s + part.triangles, 0)
 for (const { part, material } of parts) console.log(material.name.padEnd(14), part.triangles)

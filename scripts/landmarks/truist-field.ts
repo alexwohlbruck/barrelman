@@ -449,8 +449,8 @@ const parts = [
   { part: concourse, material: { name: 'concourse', color: 0xc9c2b4 } },
   { part: seats, material: { name: 'seats', color: 0x3e5a4c } },
   { part: wallGreen, material: { name: 'field-wall', color: 0x2e4a3e } },
-  { part: grass, material: { name: 'grass', color: 0x6a9444 } },
-  { part: dirt, material: { name: 'infield-dirt', color: 0xb0694a } },
+  // grass and dirt are built but not written: the map draws the field
+  // (STYLE.md, "Don't model the ground").
   { part: metal, material: { name: 'metal', color: 0xb5b9bc } },
   { part: lamps, material: { name: 'lamps', color: 0xe4e4dc } },
   { part: board, material: { name: 'scoreboard', color: 0x2b3338 } },

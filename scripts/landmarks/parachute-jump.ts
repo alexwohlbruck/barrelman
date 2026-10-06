@@ -278,7 +278,7 @@ const parts = [
   { part: pavRed, material: { name: 'pavilion-red', color: 0xa92e39, roughness: 0.8, doubleSided: true } },
   { part: blue, material: { name: 'pavilion-blue', color: 0x2a5b9e, roughness: 0.8, doubleSided: true } },
   { part: roof, material: { name: 'roof', color: 0xbdb9b1 } },
-  { part: plaza, material: { name: 'plaza', color: 0xc9c3b8 } },
+  // The plaza is built but not written: the map draws the paving.
 ]
 const triangles = parts.reduce((n, { part }) => n + part.triangles, 0)
 if (triangles > 5000) throw new Error(`Triangle budget exceeded: ${triangles}`)
