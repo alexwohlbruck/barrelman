@@ -20,8 +20,8 @@
  * so it stays symmetrical) at the heights of the OSM perimeter parts, 24 to
  * 32 m. Above it runs the white arcade of round arches and the upper deck's
  * grey back. Six charcoal stair towers carry the glass cupolas, the two end
- * video boards stand on the rim, and white arched light rigs lean over the
- * upper deck.
+ * video boards stand on the back of the rim facing the field, and at each
+ * corner three white beams carry a long lamp bar out over the upper deck.
  */
 import { Part, cross, sub, writeGlb, type V3 } from './mesh'
 import { PALETTE, finish } from './palette'
@@ -30,9 +30,9 @@ type XY = [number, number]
 
 const seats = new Part(), precast = new Part(), grey = new Part(), glass = new Part()
 const charcoal = new Part(), cupola = new Part()
-// The black towers, piers, plinth, suite fascia and video boards are the
+// The black stair towers, suite fascia, video boards and lamp bars are the
 // Panthers' look, so they stay dark, at the style's charcoal floor. The silver
-// club seats and the facade's spandrels are `roof` grey. The white arches and
+// club seats and the facade's plinth and spandrels are `roof` grey. The white arches and
 // light rigs share the pale precast, which keeps the model within six
 // materials.
 const silver = grey, white = precast
@@ -228,14 +228,15 @@ for (let k = 0; k < N; k++) {
   const nb = unit(add(out, up))
   quad(precast, [v(0, h - BEVEL), v(L, h - BEVEL), v(L, h, BEVEL), v(0, h, BEVEL)], nb, [out, out, nb, nb].map((n, i) => i < 2 ? unit(add(out, mul(nb, 0.6))) : unit(add(up, mul(nb, 0.6)))))
 
-  // Facade: a charcoal plinth, then per bay a column of slate window panels,
-  // each spanning a few floors, set just into the wall between charcoal piers
-  // and grey spandrels, under a pale precast parapet.
+  // Facade: a grey plinth, then per bay a column of slate window panels,
+  // each spanning a few floors, set just into the wall between pale precast
+  // piers and grey spandrels, under a pale precast parapet. The real podium
+  // is light precast and dark glass; only the stair towers are black.
   const pier = Math.min(1.8, L * 0.16), top = h - 3.2, D = 0.05, SPANDREL = 1.2
   if (L > 4) {
-    quad(charcoal, [v(0, 0), v(L, 0), v(L, PLINTH), v(0, PLINTH)], out)
-    quad(charcoal, [v(0, PLINTH), v(pier, PLINTH), v(pier, top), v(0, top)], out)
-    quad(charcoal, [v(L - pier, PLINTH), v(L, PLINTH), v(L, top), v(L - pier, top)], out)
+    quad(grey, [v(0, 0), v(L, 0), v(L, PLINTH), v(0, PLINTH)], out)
+    quad(precast, [v(0, PLINTH), v(pier, PLINTH), v(pier, top), v(0, top)], out)
+    quad(precast, [v(L - pier, PLINTH), v(L, PLINTH), v(L, top), v(L - pier, top)], out)
     quad(precast, [v(0, top), v(L, top), v(L, h - BEVEL), v(0, h - BEVEL)], out)
     const groups = Math.max(1, Math.round((top - PLINTH) / 7))
     const step = (top - PLINTH + SPANDREL) / groups
@@ -339,15 +340,22 @@ for (const [cx, cy] of TOWERS) {
 }
 
 // ---------------------------------------------------------------------------
-// Video boards over both end zones, on the rim: screens facing the field
-// (`window`, so they light up at night) in charcoal boxes. OSM gives them 76 m wide and 58 m to the top.
+// Video boards over both end zones: charcoal boxes on the back of the rim,
+// each carrying its 200 by 56 ft (61 by 17 m) HD screen facing the field
+// (`window`, so it lights up at night) inside a charcoal frame, under the
+// sponsor header. OSM and the 2023 imagery give the box 76 m wide, its truss
+// 2 to 3 m behind the rim line and its top at 58 m; photos from the stands
+// put its height at a third of its width, so it hangs about 6 m below the
+// end-zone rim.
 
 for (const s of [-1, 1]) {
-  const y = C + s * R3.b, k = s > 0 ? N / 4 : (3 * N) / 4
-  const z0 = rim(k) - 1.0, z1 = 58, x = 38, d = 2.0
+  const y = C + s * (R3.b + 2.5)
+  const z0 = 33, z1 = 58, x = 38, d = 2.0
   const yIn = y - s * d, yOut = y + s * d
   const P = (xx: number, yy: number, z: number): V3 => [xx, yy, z]
-  quad(glass, [P(-x, yIn, z0), P(x, yIn, z0), P(x, yIn, z1), P(-x, yIn, z1)], [0, -s, 0])
+  quad(charcoal, [P(-x, yIn, z0), P(x, yIn, z0), P(x, yIn, z1), P(-x, yIn, z1)], [0, -s, 0])
+  const sx = 30.5, s0 = 35.5, s1 = 52.5, yS = yIn - s * 0.06
+  quad(glass, [P(-sx, yS, s0), P(sx, yS, s0), P(sx, yS, s1), P(-sx, yS, s1)], [0, -s, 0])
   quad(charcoal, [P(-x, yOut, z0), P(x, yOut, z0), P(x, yOut, z1), P(-x, yOut, z1)], [0, s, 0])
   quad(charcoal, [P(-x, yIn, z1), P(x, yIn, z1), P(x, yOut, z1), P(-x, yOut, z1)], [0, 0, 1])
   for (const e of [-1, 1]) quad(charcoal, [P(e * x, yIn, z0), P(e * x, yOut, z0), P(e * x, yOut, z1), P(e * x, yIn, z1)], [e, 0, 0])
@@ -391,34 +399,62 @@ function box(p: Part, c: V3, ax: [V3, V3, V3], h: [number, number, number]) {
   }
 }
 
-const RIGS = [3, N / 8, N / 2 - N / 8, N / 2 - 3, N / 2 + 3, N / 2 + N / 8, N - N / 8, N - 3]
-for (const k of RIGS) {
-  const base = ringPt(R3, k, rim(k), -0.8)
-  const outD: V3 = [dirs[k][0], dirs[k][1], 0], t: V3 = [-dirs[k][1], dirs[k][0], 0]
-  const RC = 15, SPAN = Math.PI / 3, STEPS = 4
-  const tips: V3[] = []
-  for (const e of [-1, 1]) {
-    const root = add(base, mul(t, e * 3.2))
-    const path = Array.from({ length: STEPS + 1 }, (_, i) => {
-      const a = (i / STEPS) * SPAN
-      return add(add(root, mul(outD, -RC * (1 - Math.cos(a)))), [0, 0, RC * Math.sin(a)])
-    })
-    tube(white, path, t, 1.5)
-    tips.push(path[STEPS])
+// One rig at each corner of the upper deck, mirrored across both axes. Each
+// is a single long lamp bar, 36.5 m, parallel to the rim about 17 m inside it,
+// held by three straight white beams that rise gently from the back of the
+// rim. Measured in the first quadrant from Esri imagery of February 2023
+// (bar and beams) and checked against 2021 and 2025 photos (beam slope, bar
+// above the rim); x and y - C in metres.
+const BAR: [XY, XY] = [[78.5, 71.1], [91.3, 36.9]]
+const BEAMS: [XY, XY][] = [ // inner end at the bar, outer end at the back of the rim
+  [[81.0, 66.2], [96.2, 74.7]],
+  [[84.6, 55.8], [102.9, 60.1]],
+  [[89.5, 43.6], [106.0, 45.5]],
+]
+/** The bowl sample nearest a direction from the bowl centre, for the rim height there. */
+const nearestK = (p: XY) => {
+  const l = Math.hypot(p[0], p[1]) || 1
+  let best = 0, bd = -2
+  dirs.forEach((d, k) => { const v = (d[0] * p[0] + d[1] * p[1]) / l; if (v > bd) { bd = v; best = k } })
+  return best
+}
+const RISE = 4.5 // the bar sits this far above the rim
+for (const sx of [-1, 1]) for (const sy of [-1, 1]) {
+  const P = ([x, y]: XY, z: number): V3 => [sx * x, C + sy * y, z]
+  const zBar = rim(nearestK([sx * 85, sy * 55])) + RISE
+  // The bar: a charcoal truss box, its lit face (pale, `stone`) turned to the
+  // field and tipped down at it.
+  const a = P(BAR[0], zBar), b = P(BAR[1], zBar)
+  const along = unit(sub(b, a)), mid = mul(add(a, b), 0.5)
+  const toField: V3 = unit([-mid[0], C - mid[1], 0])
+  const perp: V3 = unit(cross(along, [0, 0, 1]))
+  const inward = dot(perp, toField) > 0 ? perp : mul(perp, -1)
+  const tilt = (28 * Math.PI) / 180
+  const nrm: V3 = add(mul(inward, Math.cos(tilt)), [0, 0, -Math.sin(tilt)])
+  const upv: V3 = add(mul(inward, Math.sin(tilt)), [0, 0, Math.cos(tilt)])
+  const L = Math.hypot(...sub(b, a)) / 2, T = 0.6, H = 1.7
+  box(charcoal, mid, [along, nrm, upv], [L, T, H]) // box() leaves the underside open
+  const U = (u: number, t: number, v: number) => add(add(add(mid, mul(along, u * L)), mul(nrm, t * T)), mul(upv, v * H))
+  quad(charcoal, [U(-1, -1, -1), U(1, -1, -1), U(1, 1, -1), U(-1, 1, -1)], mul(upv, -1))
+  const F = (u: number, v: number) => add(add(add(mid, mul(nrm, T + 0.03)), mul(along, u)), mul(upv, v))
+  quad(precast, [F(-L + 0.4, -H + 0.35), F(L - 0.4, -H + 0.35), F(L - 0.4, H - 0.35), F(-L + 0.4, H - 0.35)], nrm)
+  // The beams, white, from the back of the parapet to the back of the bar.
+  for (const [inner, outer] of BEAMS) {
+    const o = P(outer, rim(nearestK([sx * outer[0], sy * outer[1]])) + 0.2)
+    const iB = add(P(inner, zBar), mul(inward, -0.7))
+    tube(white, [o, iB], unit(cross(unit(sub(iB, o)), [0, 0, 1])), 1.6)
   }
-  const c = mul(add(tips[0], tips[1]), 0.5)
-  box(precast, add(c, [0, 0, 1.4]), [t, outD, [0, 0, 1]], [6.5, 1.0, 2.2])
 }
 
 // ---------------------------------------------------------------------------
 // The shared palette (landmarks/STYLE.md). The Panthers-blue seats and the
-// black towers and fascia are the stadium's identity: the blue is a clear
-// team blue, the black the style's charcoal floor. Precast, arches and light
-// rigs are `stone`, the club seats and spandrels `roof` grey, the facade
-// glazing, concourse and screens `window`, the cupolas `glass`. The field is
-// the map's.
+// black towers and fascia are the stadium's identity: the blue is the team
+// blue, softened towards the palette, the black the style's charcoal floor.
+// Precast, piers, arches, light-rig beams and lamp faces are `stone`, the
+// club seats, plinth and spandrels `roof` grey, the facade glazing,
+// concourse and screens `window`, the cupolas `glass`. The field is the map's.
 const parts = [
-  { part: seats, material: finish('panthers-blue', 0x3d8fcf) },
+  { part: seats, material: finish('panthers-blue', 0x5b9bcf) },
   { part: charcoal, material: finish('panthers-charcoal', 0x4a4f57) },
   { part: grey, material: PALETTE.roof },
   { part: precast, material: PALETTE.stone },

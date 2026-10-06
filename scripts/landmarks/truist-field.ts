@@ -14,9 +14,11 @@
  * (way/1553955043) becomes a raked bowl of green seats rising away from the
  * field, and the tan grandstand (way/1553955036) carries a band of slate
  * suite windows and a flat canopy roof reaching out over the seats. The field
- * is the map's own; its layers are built but not written. Six chunky
- * light towers stand round the bowl. The outfield side stays low, as it is,
- * so the skyline view over centre field is what the shape says.
+ * is the map's own; its layers are built but not written. The six light
+ * standards stand where the real ones do (see LIGHTS), slim poles with flat
+ * lamp panels aimed at the infield, and the left-centre video board stands
+ * on its lot. The outfield side stays low, as it is, so the skyline view over
+ * centre field is what the shape says.
  */
 import { Part, writeGlb, type V3 } from './mesh'
 import { PALETTE, finish } from './palette'
@@ -118,10 +120,10 @@ const BASES = {home: [-11.1, -32.1], first: [8.3, -12.9], second: [-11.1, 6.7], 
 // Materials, from the shared palette (landmarks/STYLE.md), at most six. The
 // red brick of the Mint Street front and the green seats are the park's
 // identity, so they are finishes pulled to the palette's lightness; the tan
-// precast is `stone`. Several parts share one material: the seats and the
-// padded field wall are one green; the flat roofs, concourse and light poles
-// are `roof`; the canopy and lamp banks `trim`; the scoreboard a `window`
-// screen.
+// precast is `stone`. Several parts share one material: the seats, the padded
+// field wall and the batter's eye are one green; the flat roofs, concourse,
+// light poles and lamp frames are `roof`; the canopy fascia and the lit lamp
+// faces `trim`; the video board a `window` screen.
 
 const brick = new Part(), tan = new Part(), glass = new Part(), roof = new Part()
 const seats = new Part(), canopyTop = new Part(), grass = new Part(), dirt = new Part()
@@ -261,10 +263,10 @@ function extrude(ringIn: XY[], bands: Band[], top: Part | null, bevel = 0.4, edg
 }
 
 /** A flat slab between two heights (canopies), bevelled on top. */
-function slab(ringIn: XY[], z0: number, z1: number, side: Part, top: Part, bevel = 0.3) {
+function slab(ringIn: XY[], z0: number, z1: number, side: Part, top: Part, bevel = 0.3, under: Part = side) {
   const ring = ccw(ringIn)
   extrude(ring, [{ z0, z1, mat: side }], top, bevel)
-  cap(side, ring, z0, false)
+  cap(under, ring, z0, false)
 }
 
 // ---------------------------------------------------------------------------
@@ -316,21 +318,25 @@ for (const id of ['1553955044', '1553955045'])
 
 const stand = ccw(OSM['1553955036'])
 extrude(stand, [
-  { z0: 0, z1: 6.2, mat: brick },
+  { z0: 0, z1: 3.6, mat: brick },
+  { z0: 3.6, z1: 4.1, mat: tan },            // the precast stringcourse across the brick piers
+  { z0: 4.1, z1: 6.2, mat: brick },
   { z0: 6.2, z1: 7.0, mat: tan },
   { z0: 7.0, z1: 10.6, mat: tan, windows: { glass, bay: 6.5, pier: 1.1 } },
   { z0: 10.6, z1: 12, mat: tan },
 ], null)
 {
   // The canopy: the stand's own outline with its field-side corners carried
-  // 3.5 m out over the seats, towards the nearest point of the field.
+  // 3.5 m out over the seats, towards the nearest point of the field. Thin,
+  // pale and flat as the white membrane roof is from the air, with a pale
+  // fascia and a grey underside, so it reads as a canopy and not a block.
   const nearBowl = stand.map((p) => distToRing(p, bowl).d < 2.5)
   const canopy = stand.map((p, i): XY => {
     if (!nearBowl[i]) return p
     const { at } = distToRing(p, pitch), d = unit2([at[0] - p[0], at[1] - p[1]])
     return [p[0] + d[0] * 3.5, p[1] + d[1] * 3.5]
   })
-  slab(canopy, 12, 13.1, canopyTop, canopyTop, 0.35) // white fascia, as in the photos
+  slab(canopy, 12.1, 12.9, canopyTop, canopyTop, 0.3, roof)
 }
 
 // ---------------------------------------------------------------------------
@@ -368,13 +374,17 @@ for (const [id, bands] of stack) extrude(OSM[id], bands, roof)
 
 // The plaza canopy on its posts (way/1553955048, 9–11 m).
 slab(OSM['1553955048'], 9, 11, tan, roof, 0.25)
+// Its posts are the gate's brick piers with tan precast tops (photos of the gate).
 for (const id of ['1553955060', '1553955061', '1553955062', '1553955063', '1553955064'])
-  extrude(OSM[id], [{ z0: 0, z1: 9, mat: tan }], null, 0.01)
+  extrude(OSM[id], [{ z0: 0, z1: 6.4, mat: brick }, { z0: 6.4, z1: 9, mat: tan }], null, 0.01)
 for (const id of ['1553955053', '1553955057', '1553955059'])
   extrude(OSM[id], [{ z0: 0, z1: 7, mat: brick }, { z0: 7, z1: 9, mat: tan }], null, 0.01)
 
-// The scoreboard in centre field (way/1553955052, 11 m).
-extrude(OSM['1553955052'], [{ z0: 0, z1: 11, mat: board }], board, 0.3)
+// The dark structure in centre field (way/1553955052, dark metal). OSM says
+// 11 m, but its shadow in the 2023 imagery is only about 3 m long, so it is
+// drawn 4 m tall: a low dark-green batter's eye, not a window, so it stays
+// dark at night and the outfield stays low under the skyline.
+extrude(OSM['1553955052'], [{ z0: 0, z1: 4, mat: wallGreen }], wallGreen, 0.3)
 
 // The ring over the entrance plaza (relation/21303960, 7–9 m) on its two posts.
 {
@@ -395,52 +405,93 @@ extrude(OSM['1553955052'], [{ z0: 0, z1: 11, mat: board }], board, 0.3)
 }
 
 // ---------------------------------------------------------------------------
-// Light towers: six, round the bowl, each a stout tapering pole carrying one
-// broad lamp bank tilted down at the infield.
+// Light standards. The park has six, none of them in OSM, and they are not
+// spread round the bowl: two stand on the Graham Street sidewalk behind the
+// third-base stand, one behind the left-centre video board, one in the
+// right-field corner concourse, one against the right-field club and one on
+// the grandstand roof behind first base. Positions are the pole bases in Esri
+// World Imagery of 18 February 2023, which registers on the OSM outline to
+// within a metre. Heights are the lamp banks' noon shadows on the ground at
+// that date's sun (about 43°), checked against the streetlights beside them;
+// the banks' widths are their shadows' widths, about 5 m.
+//
+// Each is a single slim pole carrying one flat, modest lamp panel, its lit
+// face turned to the infield (home plate → second base in OSM) and tilted
+// down at it, as the real banks are aimed.
 
-function rayHit(o: XY, d: XY, ring: XY[]) {
-  let best = Infinity
-  ring.forEach((a, i) => {
-    const b = ring[(i + 1) % ring.length], e: XY = [b[0] - a[0], b[1] - a[1]]
-    const den = d[0] * e[1] - d[1] * e[0]
-    if (Math.abs(den) < 1e-9) return
-    const t = ((a[0] - o[0]) * e[1] - (a[1] - o[1]) * e[0]) / den
-    const s = ((a[0] - o[0]) * d[1] - (a[1] - o[1]) * d[0]) / den
-    if (t > 0 && s >= 0 && s <= 1) best = Math.min(best, t)
+/** [x, y, height of the lamp panel's centre above the lowest ground]. */
+const LIGHTS: [number, number, number][] = [
+  [-88.5, -5.5, 22.2],  // Graham Street, behind the third-base stand
+  [-59.6, -46.8, 21.1], // Graham Street, behind third base nearer home
+  [-59.5, 81.7, 20.2],  // left-centre, behind the video board
+  [44.2, 61.5, 24.5],   // right-field corner concourse
+  [67.6, 10.5, 28.8],   // against the right-field club, above its roof
+  [29.8, -48.2, 31.3],  // grandstand roof, behind first base
+]
+const AIM: XY = [(BASES.home[0] + BASES.second[0]) / 2, (BASES.home[1] + BASES.second[1]) / 2]
+
+/** An oriented box from its centre and three half-extent axes; `mats` per face: [+a, -a, +b, -b, +c, -c]. */
+function obox(c: V3, ax: [V3, V3, V3], h: [number, number, number], mats: Part[]) {
+  const P = (a: number, b: number, d: number): V3 => [0, 1, 2].map((i) => c[i] + ax[0][i] * a * h[0] + ax[1][i] * b * h[1] + ax[2][i] * d * h[2]) as V3
+  const F: [number, number][] = [[0, 1], [0, -1], [1, 1], [1, -1], [2, 1], [2, -1]]
+  F.forEach(([i, s], f) => {
+    const o = [0, 1, 2].filter((x) => x !== i)
+    const at = (u: number, v: number) => { const q = [0, 0, 0]; q[i] = s; q[o[0]] = u; q[o[1]] = v; return P(q[0], q[1], q[2]) }
+    face(mats[f], [at(-1, -1), at(1, -1), at(1, 1), at(-1, 1)], ax[i].map((x) => x * s) as V3)
   })
-  return best
 }
-const outline = OSM['255166737'], home = BASES.home, target: XY = [BASES.mound[0], BASES.mound[1] + 10]
-function tower(base: XY, H: number) {
-  const SEG = 8, r0 = 1.4, r1 = 0.9
-  const ring = (r: number, z: number) => Array.from({ length: SEG }, (_, k): V3 => [base[0] + r * Math.cos((k + 0.5) * 2 * Math.PI / SEG), base[1] + r * Math.sin((k + 0.5) * 2 * Math.PI / SEG), z])
-  const lo = ring(r0, 0), hi = ring(r1, H - 2)
+
+function lightStandard([x, y, zc]: [number, number, number]) {
+  const f = unit2([AIM[0] - x, AIM[1] - y]), s: XY = [f[1], -f[0]]
+  const dist = Math.hypot(AIM[0] - x, AIM[1] - y)
+  // Banks are aimed a little short of the target's true depression, as real
+  // ones are, and never steeper than 35° so the face still reads from the side.
+  const tilt = Math.min(35, Math.max(12, (Math.atan2(zc, dist) * 180) / Math.PI * 0.85)) * Math.PI / 180
+  // The panel: 5.0 m across, 3.6 m tall, 0.5 m deep, its centre 0.5 m in front
+  // of the pole. Axes: across, the face normal (toward the field, tipped
+  // down), and the panel's own up (leaning toward the field at the top).
+  const nrm: V3 = [f[0] * Math.cos(tilt), f[1] * Math.cos(tilt), -Math.sin(tilt)]
+  const upv: V3 = [f[0] * Math.sin(tilt), f[1] * Math.sin(tilt), Math.cos(tilt)]
+  const acr: V3 = [s[0], s[1], 0]
+  const c: V3 = [x + f[0] * 0.5, y + f[1] * 0.5, zc]
+  const W = 2.5, H = 1.8, T = 0.25
+  // The frame, in pole grey, with the lit face set just proud of it inside a
+  // 0.25 m border, so it reads as a framed bank of lamps.
+  obox(c, [acr, nrm, upv], [W, T, H], [metal, metal, metal, metal, metal, metal])
+  const fc: V3 = [c[0] + nrm[0] * (T + 0.03), c[1] + nrm[1] * (T + 0.03), c[2] + nrm[2] * (T + 0.03)]
+  const Q = (a: number, b: number): V3 => [fc[0] + acr[0] * a + upv[0] * b, fc[1] + acr[1] * a + upv[1] * b, fc[2] + acr[2] * a + upv[2] * b]
+  face(lamps, [Q(-W + 0.25, -H + 0.25), Q(W - 0.25, -H + 0.25), Q(W - 0.25, H - 0.25), Q(-W + 0.25, H - 0.25)], nrm)
+  // The pole: octagonal, 1.1 m across at the foot tapering to 0.75 m, up the
+  // back of the panel to its centre. Smooth-shaded, so it reads as round.
+  const SEG = 8, r0 = 0.55, r1 = 0.38, top = zc
+  const ring = (r: number, z: number) => Array.from({ length: SEG }, (_, k): V3 => [x + r * Math.cos((k + 0.5) * 2 * Math.PI / SEG), y + r * Math.sin((k + 0.5) * 2 * Math.PI / SEG), z])
+  const lo = ring(r0, 0), hi = ring(r1, top)
   for (let k = 0; k < SEG; k++) {
-    const l = (k + 1) % SEG, m = (k + 0.5 + 0.5) * 2 * Math.PI / SEG
-    const na: V3 = [Math.cos((k + 0.5) * 2 * Math.PI / SEG), Math.sin((k + 0.5) * 2 * Math.PI / SEG), 0.04]
-    const nb: V3 = [Math.cos((l + 0.5) * 2 * Math.PI / SEG), Math.sin((l + 0.5) * 2 * Math.PI / SEG), 0.04]
+    const l = (k + 1) % SEG, m = (k + 1) * 2 * Math.PI / SEG
+    const na: V3 = [Math.cos((k + 0.5) * 2 * Math.PI / SEG), Math.sin((k + 0.5) * 2 * Math.PI / SEG), 0]
+    const nb: V3 = [Math.cos((l + 0.5) * 2 * Math.PI / SEG), Math.sin((l + 0.5) * 2 * Math.PI / SEG), 0]
     face(metal, [lo[k], lo[l], hi[l], hi[k]], [Math.cos(m), Math.sin(m), 0], [na, nb, nb, na])
   }
-  // The lamp bank: a broad, shallow box facing the infield, tilted 18°.
-  const f = unit2([target[0] - base[0], target[1] - base[1]]), s: XY = [f[1], -f[0]]
-  const W = 5.2, T = 1.0, Hh = 3.4, tilt = (18 * Math.PI) / 180, zc = H
-  const P = (a: number, b: number, c: number): V3 => {
-    // a across, b toward the field, c up — tilted about the across axis.
-    const bb = b * Math.cos(tilt) - c * Math.sin(tilt), cc = c * Math.cos(tilt) + b * Math.sin(tilt)
-    return [base[0] + s[0] * a + f[0] * bb, base[1] + s[1] * a + f[1] * bb, zc + cc]
-  }
-  const fn: V3 = [f[0] * Math.cos(tilt), f[1] * Math.cos(tilt), -Math.sin(tilt)]
-  face(lamps, [P(-W, T, -Hh), P(W, T, -Hh), P(W, T, Hh), P(-W, T, Hh)], fn)
-  face(metal, [P(-W, -T, -Hh), P(W, -T, -Hh), P(W, -T, Hh), P(-W, -T, Hh)], [-fn[0], -fn[1], -fn[2]])
-  face(metal, [P(-W, -T, Hh), P(W, -T, Hh), P(W, T, Hh), P(-W, T, Hh)], UP)
-  face(metal, [P(-W, -T, -Hh), P(W, -T, -Hh), P(W, T, -Hh), P(-W, T, -Hh)], DOWN)
-  face(metal, [P(-W, -T, -Hh), P(-W, T, -Hh), P(-W, T, Hh), P(-W, -T, Hh)], [-s[0], -s[1], 0])
-  face(metal, [P(W, -T, -Hh), P(W, T, -Hh), P(W, T, Hh), P(W, -T, Hh)], [s[0], s[1], 0])
 }
-for (const deg of [-62, -36, -12, 12, 36, 62]) {
-  const a = (deg * Math.PI) / 180, d: XY = [Math.sin(a), Math.cos(a)]
-  const t = rayHit(home, d, outline) - 6
-  tower([home[0] + d[0] * t, home[1] + d[1] * t], 36)
+LIGHTS.forEach(lightStandard)
+
+// ---------------------------------------------------------------------------
+// The video board in left-centre, outside the OSM outline on the lot beyond
+// the bleachers (not mapped; placed from the same imagery, its truss 25 m
+// long). A 22 m by 7.5 m screen on two legs, its face turned to the field.
+// The screen is `window`, so it lights up at night as the real one does.
+{
+  const a: XY = [-67.4, 74.8], b: XY = [-47.9, 90.9]
+  const u = unit2([b[0] - a[0], b[1] - a[1]]), mid: XY = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]
+  let n: XY = [u[1], -u[0]]
+  if (n[0] * (BASES.home[0] - mid[0]) + n[1] * (BASES.home[1] - mid[1]) < 0) n = [-n[0], -n[1]]
+  const z0 = 3.0, z1 = 10.5, W = 11, D = 0.7
+  const c: V3 = [mid[0], mid[1], (z0 + z1) / 2]
+  obox(c, [[u[0], u[1], 0], [n[0], n[1], 0], UP], [W, D, (z1 - z0) / 2], [metal, metal, board, metal, metal, metal])
+  for (const e of [-6.5, 6.5]) {
+    const p: XY = [mid[0] + u[0] * e - n[0] * 0.2, mid[1] + u[1] * e - n[1] * 0.2]
+    obox([p[0], p[1], z0 / 2], [[u[0], u[1], 0], [n[0], n[1], 0], UP], [0.45, 0.45, z0 / 2], [metal, metal, metal, metal, metal, metal])
+  }
 }
 
 // ---------------------------------------------------------------------------
