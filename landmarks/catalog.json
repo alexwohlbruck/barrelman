@@ -363,6 +363,13 @@
       "license": "CC0-1.0",
       "author": "Barrelman",
       "source": "scripts/landmarks/ascendus.ts"
+    },
+    {
+      "id": "ballantyne-bowl",
+      "file": "models/ballantyne-bowl.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/ballantyne-bowl.ts"
     }
   ],
   "landmarks": [
@@ -1457,6 +1464,22 @@
       "elevation": 0,
       "minzoom": 16,
       "replaces": []
+    },
+    {
+      "id": "ballantyne-bowl",
+      "name": "The Amp Ballantyne",
+      "model": "ballantyne-bowl",
+      "lng": -80.8474019,
+      "lat": 35.0592888,
+      "bearing": 43.3,
+      "elevation": 0,
+      "minzoom": 15,
+      "replaces": [
+        "way/1128360784",
+        "way/1271482543",
+        "way/1271482544",
+        "way/1271482545"
+      ]
     }
   ]
 }
