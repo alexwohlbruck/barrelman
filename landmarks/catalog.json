@@ -239,13 +239,6 @@
       "source": "scripts/landmarks/one-wells-fargo-center.ts"
     },
     {
-      "id": "truist-center-charlotte",
-      "file": "models/truist-center-charlotte.glb",
-      "license": "CC0-1.0",
-      "author": "Barrelman",
-      "source": "scripts/landmarks/truist-center-charlotte.ts"
-    },
-    {
       "id": "first-presbyterian-charlotte",
       "file": "models/first-presbyterian-charlotte.glb",
       "license": "CC0-1.0",
@@ -272,6 +265,13 @@
       "license": "CC0-1.0",
       "author": "Barrelman",
       "source": "scripts/landmarks/bank-of-america-corporate-center.ts"
+    },
+    {
+      "id": "truist-center-charlotte",
+      "file": "models/truist-center-charlotte.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/truist-center-charlotte.ts"
     }
   ],
   "landmarks": [
@@ -1044,6 +1044,79 @@
       ]
     },
     {
+      "id": "first-presbyterian-charlotte",
+      "name": "First Presbyterian Church",
+      "model": "first-presbyterian-charlotte",
+      "lng": -80.843849,
+      "lat": 35.2291133,
+      "bearing": 47.9,
+      "elevation": 0,
+      "minzoom": 15,
+      "wikidata": "Q5453546",
+      "replaces": [
+        "way/502718740"
+      ]
+    },
+    {
+      "id": "mint-museum-randolph",
+      "name": "Mint Museum Randolph",
+      "model": "mint-museum-randolph",
+      "lng": -80.8146416,
+      "lat": 35.1973505,
+      "bearing": 2.4,
+      "elevation": 0,
+      "minzoom": 15,
+      "wikidata": "Q5086075",
+      "replaces": [
+        "way/784079334"
+      ]
+    },
+    {
+      "id": "nascar-hall-of-fame",
+      "name": "NASCAR Hall of Fame",
+      "model": "nascar-hall-of-fame",
+      "lng": -80.8440855,
+      "lat": 35.2210919,
+      "bearing": 55,
+      "elevation": 0,
+      "minzoom": 15,
+      "wikidata": "Q1443089",
+      "replaces": [
+        "way/322278731",
+        "way/1352128750",
+        "way/1352128751",
+        "way/1352128752",
+        "way/1352128756",
+        "way/1352128757",
+        "way/1352128758",
+        "way/766639184"
+      ]
+    },
+    {
+      "id": "bank-of-america-corporate-center",
+      "name": "Bank of America Corporate Center",
+      "model": "bank-of-america-corporate-center",
+      "lng": -80.8422257,
+      "lat": 35.2273121,
+      "bearing": 48.8,
+      "elevation": 0,
+      "minzoom": 13,
+      "wikidata": "Q586913",
+      "replaces": [
+        "way/341587198",
+        "way/341587200",
+        "way/341587199",
+        "way/341587201",
+        "way/341587202",
+        "way/341587204",
+        "way/766639185",
+        "way/341587207",
+        "way/341587210",
+        "way/766639186",
+        "way/341587214"
+      ]
+    },
+    {
       "id": "truist-center-charlotte",
       "name": "Truist Center",
       "model": "truist-center-charlotte",
@@ -1124,79 +1197,6 @@
         "way/705306914",
         "way/705306915",
         "way/705306916"
-      ]
-    },
-    {
-      "id": "first-presbyterian-charlotte",
-      "name": "First Presbyterian Church",
-      "model": "first-presbyterian-charlotte",
-      "lng": -80.843849,
-      "lat": 35.2291133,
-      "bearing": 47.9,
-      "elevation": 0,
-      "minzoom": 15,
-      "wikidata": "Q5453546",
-      "replaces": [
-        "way/502718740"
-      ]
-    },
-    {
-      "id": "mint-museum-randolph",
-      "name": "Mint Museum Randolph",
-      "model": "mint-museum-randolph",
-      "lng": -80.8146416,
-      "lat": 35.1973505,
-      "bearing": 2.4,
-      "elevation": 0,
-      "minzoom": 15,
-      "wikidata": "Q5086075",
-      "replaces": [
-        "way/784079334"
-      ]
-    },
-    {
-      "id": "nascar-hall-of-fame",
-      "name": "NASCAR Hall of Fame",
-      "model": "nascar-hall-of-fame",
-      "lng": -80.8440855,
-      "lat": 35.2210919,
-      "bearing": 55,
-      "elevation": 0,
-      "minzoom": 15,
-      "wikidata": "Q1443089",
-      "replaces": [
-        "way/322278731",
-        "way/1352128750",
-        "way/1352128751",
-        "way/1352128752",
-        "way/1352128756",
-        "way/1352128757",
-        "way/1352128758",
-        "way/766639184"
-      ]
-    },
-    {
-      "id": "bank-of-america-corporate-center",
-      "name": "Bank of America Corporate Center",
-      "model": "bank-of-america-corporate-center",
-      "lng": -80.8422257,
-      "lat": 35.2273121,
-      "bearing": 48.8,
-      "elevation": 0,
-      "minzoom": 13,
-      "wikidata": "Q586913",
-      "replaces": [
-        "way/341587198",
-        "way/341587200",
-        "way/341587199",
-        "way/341587201",
-        "way/341587202",
-        "way/341587204",
-        "way/766639185",
-        "way/341587207",
-        "way/341587210",
-        "way/766639186",
-        "way/341587214"
       ]
     }
   ]
