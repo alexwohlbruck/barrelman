@@ -391,6 +391,13 @@
       "license": "CC0-1.0",
       "author": "Barrelman",
       "source": "scripts/landmarks/carowinds-thunder-striker.ts"
+    },
+    {
+      "id": "clt-terminal",
+      "file": "models/clt-terminal.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/clt-terminal.ts"
     }
   ],
   "landmarks": [
@@ -1539,6 +1546,23 @@
       "wikidata": "Q1671491",
       "replaces": [
         "way/239268383"
+      ]
+    },
+    {
+      "id": "clt-terminal",
+      "name": "Charlotte Douglas International Airport Terminal",
+      "model": "clt-terminal",
+      "lng": -80.9430854,
+      "lat": 35.2207298,
+      "bearing": 355.8,
+      "elevation": 0,
+      "minzoom": 14,
+      "wikidata": "Q597649",
+      "replaces": [
+        "way/1414163868",
+        "way/1414165678",
+        "way/1347416658",
+        "way/1347417381"
       ]
     }
   ]
