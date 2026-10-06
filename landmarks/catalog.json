@@ -664,6 +664,13 @@
       "license": "CC0-1.0",
       "author": "Barrelman",
       "source": "scripts/landmarks/carowinds-vortex.ts"
+    },
+    {
+      "id": "carowinds-windseeker",
+      "file": "models/carowinds-windseeker.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/carowinds-windseeker.ts"
     }
   ],
   "landmarks": [
@@ -2516,6 +2523,19 @@
         "way/894782921",
         "way/894782913",
         "way/888642929"
+      ]
+    },
+    {
+      "id": "carowinds-windseeker",
+      "name": "WindSeeker",
+      "model": "carowinds-windseeker",
+      "lng": -80.9413603,
+      "lat": 35.1021552,
+      "bearing": 0,
+      "elevation": 0,
+      "minzoom": 14,
+      "replaces": [
+        "way/893187005"
       ]
     }
   ]
