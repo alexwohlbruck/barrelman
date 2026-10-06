@@ -37,7 +37,10 @@ bearing and a scale alone:
 
 - **+Y is up, -Z is north, +X is east.**
 - **Units are metres.**
-- **The origin is the anchor, on the ground.** The model stands on y = 0.
+- **The origin is the anchor, on the lowest ground the footprint touches.**
+  The model stands on y = 0. With terrain on, Parchment samples the ground
+  across the footprint and puts y = 0 at the lowest point, so on a slope the
+  uphill side sinks into the hill rather than the downhill side floating.
 - **There is no transform on the root node.** The server sizes models from the
   POSITION accessors' min/max, which ignores node transforms.
 
