@@ -202,6 +202,13 @@
       "license": "CC0-1.0",
       "author": "Barrelman",
       "source": "scripts/landmarks/carillon-charlotte.ts"
+    },
+    {
+      "id": "truist-field",
+      "file": "models/truist-field.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/truist-field.ts"
     }
   ],
   "landmarks": [
@@ -829,6 +836,54 @@
       "wikidata": "Q5039570",
       "replaces": [
         "way/90480703"
+      ]
+    },
+    {
+      "id": "truist-field",
+      "name": "Truist Field",
+      "model": "truist-field",
+      "lng": -80.8487044,
+      "lat": 35.2283032,
+      "bearing": 83.2,
+      "elevation": 0,
+      "minzoom": 15,
+      "wikidata": "Q4834718",
+      "replaces": [
+        "relation/3417038",
+        "relation/21303960",
+        "way/1553955034",
+        "way/1553955035",
+        "way/1553955036",
+        "way/1553955037",
+        "way/1553955038",
+        "way/1553955039",
+        "way/1553955040",
+        "way/1553955041",
+        "way/1553955042",
+        "way/1553955043",
+        "way/1553955044",
+        "way/1553955045",
+        "way/1553955047",
+        "way/1553955048",
+        "way/1553955049",
+        "way/1553955050",
+        "way/1553955051",
+        "way/1553955052",
+        "way/1553955053",
+        "way/1553955054",
+        "way/1553955055",
+        "way/1553955056",
+        "way/1553955057",
+        "way/1553955058",
+        "way/1553955059",
+        "way/1553955060",
+        "way/1553955061",
+        "way/1553955062",
+        "way/1553955063",
+        "way/1553955064",
+        "way/1553955065",
+        "way/1553955066",
+        "way/1553955067"
       ]
     }
   ]
