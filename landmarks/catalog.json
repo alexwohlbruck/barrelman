@@ -545,6 +545,13 @@
       "license": "CC0-1.0",
       "author": "Barrelman",
       "source": "scripts/landmarks/carowinds-carolina-goldrusher.ts"
+    },
+    {
+      "id": "carowinds-hurler",
+      "file": "models/carowinds-hurler.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/carowinds-hurler.ts"
     }
   ],
   "landmarks": [
@@ -2028,6 +2035,20 @@
       "wikidata": "Q5044835",
       "replaces": [
         "way/668730923"
+      ]
+    },
+    {
+      "id": "carowinds-hurler",
+      "name": "Hurler",
+      "model": "carowinds-hurler",
+      "lng": -80.9429067,
+      "lat": 35.1057222,
+      "bearing": 0,
+      "elevation": 0,
+      "minzoom": 15,
+      "wikidata": "Q1619573",
+      "replaces": [
+        "way/668700368"
       ]
     }
   ]
