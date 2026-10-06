@@ -622,6 +622,13 @@
       "license": "CC0-1.0",
       "author": "Barrelman",
       "source": "scripts/landmarks/carowinds-kiddy-hawk.ts"
+    },
+    {
+      "id": "carowinds-wilderness-run",
+      "file": "models/carowinds-wilderness-run.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/carowinds-wilderness-run.ts"
     }
   ],
   "landmarks": [
@@ -2333,6 +2340,22 @@
         "way/894786044",
         "way/894786043",
         "way/888642923"
+      ]
+    },
+    {
+      "id": "carowinds-wilderness-run",
+      "name": "Wilderness Run",
+      "model": "carowinds-wilderness-run",
+      "lng": -80.9387836,
+      "lat": 35.1010827,
+      "bearing": 0,
+      "elevation": 0,
+      "minzoom": 16,
+      "wikidata": "Q6698139",
+      "replaces": [
+        "way/241559222",
+        "way/669205942",
+        "way/888643799"
       ]
     }
   ]
