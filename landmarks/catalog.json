@@ -594,6 +594,13 @@
       "license": "CC0-1.0",
       "author": "Barrelman",
       "source": "scripts/landmarks/petras.ts"
+    },
+    {
+      "id": "coyote-joes",
+      "file": "models/coyote-joes.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/coyote-joes.ts"
     }
   ],
   "landmarks": [
@@ -2189,6 +2196,19 @@
       "minzoom": 16,
       "replaces": [
         "way/323192880"
+      ]
+    },
+    {
+      "id": "coyote-joes",
+      "name": "Coyote Joe's",
+      "model": "coyote-joes",
+      "lng": -80.9160661,
+      "lat": 35.2275192,
+      "bearing": 26,
+      "elevation": 0,
+      "minzoom": 16,
+      "replaces": [
+        "way/849535273"
       ]
     }
   ]
