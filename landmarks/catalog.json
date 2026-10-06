@@ -426,6 +426,13 @@
       "license": "CC0-1.0",
       "author": "Barrelman",
       "source": "scripts/landmarks/clt-hourly-deck.ts"
+    },
+    {
+      "id": "clt-daily-deck-east",
+      "file": "models/clt-daily-deck-east.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/clt-daily-deck-east.ts"
     }
   ],
   "landmarks": [
@@ -1649,6 +1656,19 @@
       "minzoom": 15,
       "replaces": [
         "relation/5933200"
+      ]
+    },
+    {
+      "id": "clt-daily-deck-east",
+      "name": "CLT Daily Deck East",
+      "model": "clt-daily-deck-east",
+      "lng": -80.9435933,
+      "lat": 35.2249778,
+      "bearing": 355.8,
+      "elevation": 0,
+      "minzoom": 15,
+      "replaces": [
+        "relation/5936265"
       ]
     }
   ]
