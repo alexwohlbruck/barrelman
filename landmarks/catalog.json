@@ -538,6 +538,13 @@
       "license": "CC0-1.0",
       "author": "Barrelman",
       "source": "scripts/landmarks/mint-museum-uptown.ts"
+    },
+    {
+      "id": "carowinds-carolina-goldrusher",
+      "file": "models/carowinds-carolina-goldrusher.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/carowinds-carolina-goldrusher.ts"
     }
   ],
   "landmarks": [
@@ -2007,6 +2014,20 @@
       "wikidata": "Q6869561",
       "replaces": [
         "way/131139755"
+      ]
+    },
+    {
+      "id": "carowinds-carolina-goldrusher",
+      "name": "Carolina Goldrusher",
+      "model": "carowinds-carolina-goldrusher",
+      "lng": -80.9422424,
+      "lat": 35.1029548,
+      "bearing": 0,
+      "elevation": 0,
+      "minzoom": 16,
+      "wikidata": "Q5044835",
+      "replaces": [
+        "way/668730923"
       ]
     }
   ]
