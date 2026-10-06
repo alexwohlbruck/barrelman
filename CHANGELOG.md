@@ -10,6 +10,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.7.4] - 2026-10-06
+
 ### Fixed
 
 * **Brand suggestions need more than one shared word.** `/brands` accepted any
