@@ -10,6 +10,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-10-06
+
 ### Added
 
 * **3D landmarks (experimental).** Hand-made 3D models that a map draws in
