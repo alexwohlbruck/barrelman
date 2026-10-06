@@ -489,6 +489,13 @@
       "license": "CC0-1.0",
       "author": "Barrelman",
       "source": "scripts/landmarks/fillmore-charlotte.ts"
+    },
+    {
+      "id": "music-factory-amphitheatre",
+      "file": "models/music-factory-amphitheatre.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/music-factory-amphitheatre.ts"
     }
   ],
   "landmarks": [
@@ -1865,6 +1872,19 @@
       "minzoom": 15,
       "replaces": [
         "way/414800516"
+      ]
+    },
+    {
+      "id": "music-factory-amphitheatre",
+      "name": "Skyla Credit Union Amphitheatre",
+      "model": "music-factory-amphitheatre",
+      "lng": -80.8450652,
+      "lat": 35.2397754,
+      "bearing": 0,
+      "elevation": 0,
+      "minzoom": 15,
+      "replaces": [
+        "way/1202433678"
       ]
     }
   ]
