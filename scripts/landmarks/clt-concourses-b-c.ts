@@ -8,9 +8,13 @@
  * two-level gate concourses whose walls jog out at each gate. The OSM outlines
  * (way/1347416913, way/1347416955) are extruded to the 8 m their
  * building:parts record, with the gate-level windows as a band of slate
- * panels, a pale roof, and the glazed clerestory vault that runs down the
- * middle of each (Commons and Flickr interior photos of both concourses show
- * the arched glass roof over the central walkway).
+ * panels, a pale roof, and a low glazed vault down the middle of each over
+ * the central walkway.
+ *
+ * Mapbox's 3D buildings (tileset mapbox.mapbox-3dbuildings-v1), used only as
+ * a visual reference, put both roofs at 7.5-9.5 m and show nothing standing
+ * much above them, so the vault is kept low: a 0.6 m curb and a 1.4 m rise,
+ * rather than the 2 m clerestory and 2.6 m vault of the first version.
  *
  * Site frame and helpers: see clt-terminal.ts.
  */
@@ -29,14 +33,13 @@ for (const r of [B, C]) {
   // the clerestory: a low stone curb with a window band, under a glass vault
   const [a, b] = axis(c, 14, 8)
   const L = Math.hypot(b[0] - a[0], b[1] - a[1]), u: XY = [(b[0] - a[0]) / L, (b[1] - a[1]) / L], n: XY = [u[1], -u[0]]
-  const w = 10
+  const w = 8
   const curb: XY[] = [
     [a[0] + n[0] * w / 2, a[1] + n[1] * w / 2], [b[0] + n[0] * w / 2, b[1] + n[1] * w / 2],
     [b[0] - n[0] * w / 2, b[1] - n[1] * w / 2], [a[0] - n[0] * w / 2, a[1] - n[1] * w / 2],
   ]
-  const k = block(stone, null, curb, H - 0.2, H + 1.8, 0)
-  panels(win, k, H + 0.4, H + 1.6, { bay: 12, gap: 1.5, minLen: 6 })
-  vault(glass, a, b, w, H + 1.8, 2.6, 8)
+  block(stone, null, curb, H - 0.2, H + 0.6, 0)
+  vault(glass, a, b, w, H + 0.6, 1.4, 8)
 }
 
 await save('clt-concourses-b-c', 'Charlotte Douglas International Airport Concourses B and C', CENTRE, [

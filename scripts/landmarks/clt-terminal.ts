@@ -7,8 +7,9 @@
  * Also the small kit the other CLT models import (`clt-concourse-a`,
  * `clt-concourses-b-c`, `clt-concourses-d-e`, the parking decks and the
  * tower): footprint clean-up, ear-clipping caps, bevelled blocks, window
- * panels and banded parking floors. Importing this file builds nothing; the
- * terminal is only written when it is run directly.
+ * panels, roofs that follow a section, banded parking floors and helix
+ * drums. Importing this file builds nothing; the terminal is only written
+ * when it is run directly.
  *
  * Frame. Every CLT model is drawn in one site frame: x along the terminal's
  * long axis (bearing 85.8°), y towards 355.8°, z up, metres, so all of them
@@ -17,19 +18,31 @@
  * box) is the origin.
  *
  * The headhouse here is four OSM ways:
- * - Main Terminal (way/1414163868): ticketing and baggage claim. Its front
- *   strip, facing the curb, is the 2020s terminal lobby expansion: a glass
- *   wall under a big curved roof that rises from the old roofline to a crest
- *   and sweeps down to a deep eave over the curb.
- * - the roadway canopy (way/1414165678, building=roof): the glass canopy over
- *   the two-level roadway, about 13,600 m² (Wikipedia gives 146,000 sq ft).
- * - the Atrium (way/1347416658): the airside hall with rocking chairs, under a
- *   long glazed vault on white trusses (Commons "CLT Airport Atrium").
- * - The Plaza (way/1347417381): the three-storey 2019 east expansion.
+ * - Main Terminal (way/1414163868): the 1982 terminal, flat roofs at 13 m
+ *   with a 10 m strip between ticketing and baggage claim, a 17 m east wing
+ *   with a set-back upper storey; and along its curb front the new
+ *   Terminal Lobby Expansion. The lobby's silver roof rises out of the old
+ *   roofline towards the curb, from 14.6 m to 21 m, and stops short of the
+ *   front, where the tall glass wall carries on up to the canopy. Two stair
+ *   and lift cores stand up through its low back half.
+ * - the roadway canopy (way/1414165678, building=roof): one long silver
+ *   shell over the two-level roadway, 23.4 m just off the glass and falling
+ *   in a long curve to 17.6 m over the far curb, on a single row of columns
+ *   24 m apart (Commons, "Charlotte Airport December 2022 Pickup Zone"
+ *   shows the lower roadway under the deck; Wikipedia gives the canopy
+ *   146,000 sq ft).
+ * - the Atrium (way/1347416658): the airside hall with rocking chairs,
+ *   under a glazed barrel vault on white ribs (Commons "CLT Airport
+ *   Atrium"), between lower wings, with a square block standing at its
+ *   middle.
+ * - The Plaza (way/1347417381): the 2019 east expansion, 17 m with a set-back
+ *   upper storey and lower wings.
  *
- * OSM gives no heights. These are judged from photos and storey counts: a
- * 16 m older roofline, the lobby crest at 29 m, a 12 m atrium with its vault
- * to 19 m, an 18 m Plaza, the canopy arched from 15 to 17 m over the departures deck.
+ * OSM gives no heights. These, the lobby's and canopy's sections, the column
+ * row and which blocks stand up where were checked against renders of
+ * Mapbox's 3D buildings (tileset mapbox.mapbox-3dbuildings-v1), used only
+ * as a visual reference: every outline here is OSM's, and the geometry is
+ * our own modelling.
  */
 import { Part, writeGlb } from './mesh'
 import { PALETTE, finish, type Swatch } from './palette'
@@ -144,6 +157,26 @@ export function walls(p: Part, r: XY[], z0: number, z1: number, r1: XY[] = r) {
   }
 }
 
+/**
+ * A flat cap over a counter-clockwise ring with round holes in it. Each hole
+ * is joined to the outline by a slit to its nearest corner, which makes one
+ * simple ring that ear clipping can take.
+ */
+export function capHoles(p: Part, r: XY[], holes: XY[][], z: number) {
+  let ring = r.slice()
+  for (const h0 of holes) {
+    const h = area(h0) > 0 ? h0.slice().reverse() : h0.slice() // holes run clockwise
+    let best = [0, 0], d = Infinity
+    for (let i = 0; i < ring.length; i++) for (let k = 0; k < h.length; k++) {
+      const e = Math.hypot(ring[i][0] - h[k][0], ring[i][1] - h[k][1])
+      if (e < d) { d = e; best = [i, k] }
+    }
+    const [i, k] = best, hk = [...h.slice(k), ...h.slice(0, k), h[k]]
+    ring = [...ring.slice(0, i + 1), ...hk, ...ring.slice(i)]
+  }
+  cap(p, ring, z)
+}
+
 export function cap(p: Part, r: XY[], z: number, up = true) {
   for (const [a, b, c] of triangulate(r)) {
     const A: [number, number, number] = [r[a][0], r[a][1], z], B: [number, number, number] = [r[b][0], r[b][1], z], C: [number, number, number] = [r[c][0], r[c][1], z]
@@ -173,13 +206,13 @@ export function block(wall: Part, top: Part | null, ring: XY[], z0: number, z1: 
  * panels set 4 cm proud of the wall, in bays no wider than `bay`, with wall
  * showing between them as piers.
  */
-export function panels(p: Part, ring: XY[], z0: number, z1: number, o: { bay?: number; gap?: number; end?: number; minLen?: number; out?: number } = {}) {
+export function panels(p: Part, ring: XY[], z0: number, z1: number, o: { bay?: number; gap?: number; end?: number; minLen?: number; out?: number; keep?: (a: XY, b: XY) => boolean } = {}) {
   const bay = o.bay ?? 9, gap = o.gap ?? 1.6, end = o.end ?? 1.2, minLen = o.minLen ?? 5, out = o.out ?? 0.04
   const r = ring
   for (let i = 0; i < r.length; i++) {
     const a = r[i], b = r[(i + 1) % r.length]
     const L = Math.hypot(b[0] - a[0], b[1] - a[1])
-    if (L < minLen) continue
+    if (L < minLen || (o.keep && !o.keep(a, b))) continue
     const u: XY = [(b[0] - a[0]) / L, (b[1] - a[1]) / L], n: XY = [u[1], -u[0]]
     const usable = L - 2 * end
     const k = Math.max(1, Math.round((usable + gap) / (bay + gap)))
@@ -276,51 +309,150 @@ export function roundRect(x0: number, y0: number, x1: number, y1: number, rad: [
   return out
 }
 
+/** The centre and mean radius of a roughly round ring. */
+export function roundOf(ring: XY[]): { c: XY; r: number } {
+  const r = clean(ring, 0.3)
+  const cx = r.reduce((s, p) => s + p[0], 0) / r.length, cy = r.reduce((s, p) => s + p[1], 0) / r.length
+  return { c: [cx, cy], r: r.reduce((s, p) => s + Math.hypot(p[0] - cx, p[1] - cy), 0) / r.length }
+}
+
 /**
  * An open parking deck: a dark core set back from the edge, wrapped in
  * concrete spandrel bands at every floor, so it reads as horizontal bands of
  * concrete with dark open floors between. `floors` are the slab heights from
  * the ground up; the last is the roof deck, whose parapet band tops the deck.
+ *
+ * `wells` are the open centres of the helix ramps, as OSM maps them. The
+ * outline round each helix is drawn as the ramp's solid concrete drum, with
+ * a dark slot at each turn, its top turn standing `drumRise` above the
+ * roof deck; the well itself is a dark disc in a parapet ring. With `bands:
+ * false` the straight walls are left to the caller (the Hourly Deck's
+ * shell). Returns the cleaned outline and the test for drum edges.
  */
-export function parkingDeck(parts: { concrete: Part; gap: Part; deck: Part }, ring: XY[], floors: number[], o: { band?: number; setback?: number } = {}) {
+export function parkingDeck(
+  parts: { concrete: Part; gap: Part; deck: Part },
+  ring: XY[],
+  floors: number[],
+  o: { band?: number; setback?: number; wells?: XY[][]; bands?: boolean; drumReach?: number; drumRise?: number } = {},
+) {
   const band_ = o.band ?? 1.1, setback = o.setback ?? 0.9
   const r = clean(ring, 1.0)
-  const core = inset(r, setback)
+  const core = inset(r, setback), ins = core
   const top = floors.at(-1)!
+  const wells = (o.wells ?? []).map(roundOf), reach = o.drumReach ?? 8
   walls(parts.gap, core, 0, top)
-  cap(parts.deck, core, top)
-  for (const z of floors) ledgeBand(parts.concrete, r, Math.max(0, z - 0.35), z + band_, setback)
-  return r
+  capHoles(parts.deck, core, wells.map((w) => circle(w.c[0], w.c[1], w.r, 14)), top)
+  const isDrum = (a: XY, b: XY) => {
+    const m: XY = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]
+    return wells.some((w) => Math.hypot(m[0] - w.c[0], m[1] - w.c[1]) < w.r + reach)
+  }
+  for (let i = 0; i < r.length; i++) {
+    const j = (i + 1) % r.length, a = r[i], b = r[j]
+    if (isDrum(a, b)) {
+      const zt = top + (o.drumRise ?? 3)
+      parts.concrete.quad([a[0], a[1], 0], [b[0], b[1], 0], [b[0], b[1], zt], [a[0], a[1], zt])
+      parts.concrete.quad([a[0], a[1], zt], [b[0], b[1], zt], [ins[j][0], ins[j][1], zt], [ins[i][0], ins[i][1], zt])
+      const L = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1, n: XY = [((b[1] - a[1]) / L) * 0.05, (-(b[0] - a[0]) / L) * 0.05]
+      for (const z of floors.slice(0, -1)) {
+        const z0 = z + 1.2, z1 = z + 2.6
+        parts.gap.quad([a[0] + n[0], a[1] + n[1], z0], [b[0] + n[0], b[1] + n[1], z0], [b[0] + n[0], b[1] + n[1], z1], [a[0] + n[0], a[1] + n[1], z1])
+      }
+    } else if (o.bands !== false) {
+      for (const z of floors) ledgeEdge(parts.concrete, a, b, ins[i], ins[j], Math.max(0, z - 0.35), z + band_)
+    }
+  }
+  for (const w of o.wells ?? []) helixWell(parts, w, top, o.drumRise ?? 3)
+  return { r, isDrum }
+}
+
+/** One edge of a spandrel band: its outer face and its top ledge back to the core. */
+export function ledgeEdge(p: Part, a: XY, b: XY, ai: XY, bi: XY, z0: number, z1: number) {
+  p.quad([a[0], a[1], z0], [b[0], b[1], z0], [b[0], b[1], z1], [a[0], a[1], z1])
+  p.quad([a[0], a[1], z1], [b[0], b[1], z1], [bi[0], bi[1], z1], [ai[0], ai[1], z1])
 }
 
 /** A band's outer face and its top ledge back to the core (the underside is never seen). */
 export function ledgeBand(p: Part, r: XY[], z0: number, z1: number, depth: number) {
   const ins = inset(r, depth)
-  walls(p, r, z0, z1)
-  for (let i = 0; i < r.length; i++) {
-    const j = (i + 1) % r.length
-    p.quad([r[i][0], r[i][1], z1], [r[j][0], r[j][1], z1], [ins[j][0], ins[j][1], z1], [ins[i][0], ins[i][1], z1])
-  }
+  for (let i = 0; i < r.length; i++) ledgeEdge(p, r[i], r[(i + 1) % r.length], ins[i], ins[(i + 1) % r.length], z0, z1)
 }
 
 /**
- * The open well in the middle of a helix ramp. The deck's outline already
- * bulges round the helix, so its bands wrap it; the well is a dark disc on
- * the roof deck with a parapet ring.
+ * The open well in the middle of a helix ramp: a round hole in the roof deck
+ * (cut by `parkingDeck`) whose wall drops a turn to a dark floor, with a
+ * parapet ring round it.
  */
-export function helixWell(parts: { concrete: Part; gap: Part; deck: Part }, ring: XY[], top: number, seg = 14) {
-  const r = clean(ring, 0.3)
-  const cx = r.reduce((s, p) => s + p[0], 0) / r.length, cy = r.reduce((s, p) => s + p[1], 0) / r.length
-  const rad = r.reduce((s, p) => s + Math.hypot(p[0] - cx, p[1] - cy), 0) / r.length
-  const c = circle(cx, cy, rad, seg)
-  cap(parts.gap, c, top + 0.03)
-  // the parapet round the well, facing into it
-  const inner = circle(cx, cy, rad - 0.5, seg)
+export function helixWell(parts: { concrete: Part; gap: Part; deck: Part }, ring: XY[], top: number, rise = 1.1, seg = 14) {
+  const { c: [cx, cy], r: rad } = roundOf(ring)
+  const c = circle(cx, cy, rad, seg), inner = circle(cx, cy, rad - 0.5, seg)
+  // the well, a turn down, its wall facing in, and the parapet round it
+  const floor = top - 3.4
+  cap(parts.gap, c, floor)
   for (let i = 0; i < seg; i++) {
     const j = (i + 1) % seg
-    parts.concrete.quad([c[j][0], c[j][1], top], [c[i][0], c[i][1], top], [c[i][0], c[i][1], top + 1.1], [c[j][0], c[j][1], top + 1.1])
-    parts.concrete.quad([c[i][0], c[i][1], top + 1.1], [inner[i][0], inner[i][1], top + 1.1], [inner[j][0], inner[j][1], top + 1.1], [c[j][0], c[j][1], top + 1.1])
+    parts.concrete.quad([c[j][0], c[j][1], floor], [c[i][0], c[i][1], floor], [c[i][0], c[i][1], top + rise], [c[j][0], c[j][1], top + rise])
+    parts.concrete.quad([c[i][0], c[i][1], top + rise], [inner[i][0], inner[i][1], top + rise], [inner[j][0], inner[j][1], top + rise], [c[j][0], c[j][1], top + rise])
   }
+}
+
+/** Piecewise-linear z(s) through (s, z) samples sorted by s; clamped at both ends. */
+export function profile(pts: XY[]): (s: number) => number {
+  return (s) => {
+    if (s <= pts[0][0]) return pts[0][1]
+    for (let i = 0; i < pts.length - 1; i++)
+      if (s <= pts[i + 1][0]) return pts[i][1] + (pts[i + 1][1] - pts[i][1]) * (s - pts[i][0]) / (pts[i + 1][0] - pts[i][0])
+    return pts.at(-1)![1]
+  }
+}
+
+type Height = number | ((x: number, y: number) => number)
+const at = (h: Height, q: XY) => (typeof h === 'number' ? h : h(q[0], q[1]))
+
+/**
+ * One wall face along a→b (facing right of travel, as on a counter-clockwise
+ * ring) between two heights that may vary along it, split every `step`
+ * metres so it follows a curved roof.
+ */
+export function edgeTo(p: Part, a: XY, b: XY, bot: Height, top: Height, step = 3) {
+  const n = Math.max(1, Math.ceil(Math.hypot(b[0] - a[0], b[1] - a[1]) / step))
+  const P = (t: number): XY => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]
+  for (let k = 0; k < n; k++) {
+    const u = P(k / n), v = P((k + 1) / n)
+    p.quad([u[0], u[1], at(bot, u)], [v[0], v[1], at(bot, v)], [v[0], v[1], at(top, v)], [u[0], u[1], at(top, u)])
+  }
+}
+
+/** The walls of a counter-clockwise ring between two heights that may vary. */
+export function bandTo(p: Part, r: XY[], bot: Height, top: Height, step = 3) {
+  for (let i = 0; i < r.length; i++) edgeTo(p, r[i], r[(i + 1) % r.length], bot, top, step)
+}
+
+/**
+ * A curved roof over a ring: the ring is cut into bands at `cuts` (values of
+ * y) and each band is capped with its corners raised to `top(x, y)`. Faces
+ * up, or down for a soffit.
+ */
+export function capTo(p: Part, r: XY[], cuts: number[], top: (x: number, y: number) => number, up = true) {
+  for (let i = 0; i < cuts.length - 1; i++) {
+    const band = clean(clip(clip(r, 0, -1, -cuts[i]), 0, 1, cuts[i + 1]), 0.05)
+    if (band.length < 3 || Math.abs(area(band)) < 0.01) continue
+    for (const [a, b, c] of triangulate(band)) {
+      const V = (q: XY): [number, number, number] => [q[0], q[1], top(q[0], q[1])]
+      if (up) p.tri(V(band[a]), V(band[b]), V(band[c]))
+      else p.tri(V(band[a]), V(band[c]), V(band[b]))
+    }
+  }
+}
+
+/** Values from a to b in equal steps of about `step`, both ends included. */
+export const span = (a: number, b: number, step: number) => {
+  const n = Math.max(1, Math.round((b - a) / step))
+  return Array.from({ length: n + 1 }, (_, i) => a + ((b - a) * i) / n)
+}
+
+/** A round column from z0 to z1, smooth-shaded. */
+export function column(p: Part, x: number, y: number, r: number, z0: number, z1: number, seg = 8) {
+  lathe(p, x, y, [[r, z0], [r, z1]], seg)
 }
 
 // ---------------------------------------------------------------------------
@@ -367,148 +499,127 @@ const CENTRE: XY = [-55.28, -25.9]
 
 async function main() {
   const stone = new Part(), trim = new Part(), roof = new Part(), win = new Part(), glass = new Part(), silver = new Part()
-
-  // --- Older terminal: everything but the lobby strip, at 16 m. -----------
-  const LY = -24          // back of the lobby expansion
-  const LX0 = -266.5, LX1 = -9.5
   const main = clean(MAIN)
-  const back = clip(main, 0, 1, LY)                                   // y <= LY
-  const eastStrip = clip(clip(main, 0, -1, -LY), -1, 0, -LX1)        // y >= LY, x >= LX1
-  const westSliver = clip(clip(main, 0, -1, -LY), 1, 0, LX0)          // y >= LY, x <= LX0
-  for (const r of [back, eastStrip, westSliver]) {
-    const c = block(stone, roof, r, 0, 16, 0.5)
-    panels(win, c, 4, 13, { bay: 10 })
-  }
-
-  // --- The lobby expansion: a curved roof over a glass wall. --------------
-  // Section through the roof, from the back (y = LY) to the eave past the
-  // front wall (y = 13): it rises out of the old roofline to a crest and
-  // sweeps down to a deep eave over the departures curb.
-  const FRONT = 13.2, EAVE = FRONT + 3.5
-  const sect: XY[] = []
-  for (let i = 0; i <= 10; i++) {
-    const t = i / 10, y = LY + (EAVE - LY) * t
-    // Crest at 60% of the way out, curved on both sides.
-    const z = t < 0.62 ? 17 + 12 * Math.sin((t / 0.62) * Math.PI / 2) : 29 - 4 * (1 - Math.cos(((t - 0.62) / 0.38) * Math.PI / 2))
-    sect.push([y, z])
-  }
-  const T = 1.2 // roof thickness at the edges, shown as a silver fascia
-  const zAt = (y: number) => {
-    for (let i = 0; i < sect.length - 1; i++)
-      if (y <= sect[i + 1][0]) { const t = (y - sect[i][0]) / (sect[i + 1][0] - sect[i][0]); return sect[i][1] + (sect[i + 1][1] - sect[i][1]) * t }
-    return sect.at(-1)![1]
-  }
-  const RX0 = -271.5, RX1 = LX1 + 0.8 // roof runs the full front, a little past the walls
-  for (let i = 0; i < sect.length - 1; i++) {
-    const [y0, z0] = sect[i], [y1, z1] = sect[i + 1]
-    silver.quad([RX0, y0, z0], [RX1, y0, z0], [RX1, y1, z1], [RX0, y1, z1])
-    // the ends: a fascia band following the curve
-    trim.quad([RX0, y1, z1], [RX0, y1, z1 - T], [RX0, y0, z0 - T], [RX0, y0, z0])
-    trim.quad([RX1, y0, z0], [RX1, y0, z0 - T], [RX1, y1, z1 - T], [RX1, y1, z1])
-  }
-  // Front fascia at the eave and the soffit back to the glass.
-  const [ye, ze] = sect.at(-1)!
-  trim.quad([RX0, ye, ze - T], [RX1, ye, ze - T], [RX1, ye, ze], [RX0, ye, ze])
-  silver.quad([RX0, FRONT, zAt(FRONT) - T], [RX1, FRONT, zAt(FRONT) - T], [RX1, ye, ze - T], [RX0, ye, ze - T])
-  // The back edge meets the old roof just above it.
-  silver.quad([RX1, LY, 17 - T], [RX0, LY, 17 - T], [RX0, LY, 17], [RX1, LY, 17])
-
-  // Walls under the roof: the glass front over the curb, stone ends.
-  const yb = LY, zf = zAt(FRONT) - T
-  win.quad([LX1, FRONT, 0], [LX0 - 4.9, FRONT, 0], [LX0 - 4.9, FRONT, zf], [LX1, FRONT, zf])
-  // a few pale mullions and the departures floor line on the glass
-  const span = LX1 - (LX0 - 4.9)
-  for (let k = 1; k < 12; k++) {
-    const x = LX0 - 4.9 + (span * k) / 12
-    trim.quad([x + 0.4, FRONT + 0.05, 0], [x - 0.4, FRONT + 0.05, 0], [x - 0.4, FRONT + 0.05, zf], [x + 0.4, FRONT + 0.05, zf])
-  }
-  trim.quad([LX1, FRONT + 0.06, 7.6], [LX0 - 4.9, FRONT + 0.06, 7.6], [LX0 - 4.9, FRONT + 0.06, 8.6], [LX1, FRONT + 0.06, 8.6])
-  // End walls follow the roof's underside, from the old roof up.
-  for (const [x, dir] of [[LX1, 1], [LX0 - 4.9, -1]] as [number, number][]) {
-    for (let i = 0; i < sect.length - 1; i++) {
-      const y0 = Math.max(sect[i][0], yb), y1 = Math.min(sect[i + 1][0], FRONT)
-      if (y1 <= y0) continue
-      const a: [number, number, number] = [x, y0, 16], b: [number, number, number] = [x, y1, 16]
-      const c: [number, number, number] = [x, y1, zAt(y1) - T], d: [number, number, number] = [x, y0, zAt(y0) - T]
-      if (dir > 0) stone.quad(a, b, c, d)
-      else stone.quad(b, a, d, c)
+  const onOutline = (ring: XY[]) => (a: XY, b: XY) => {
+    // an edge is on the building's outside if its midpoint lies on the given outline
+    const m: XY = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]
+    for (let i = 0; i < ring.length; i++) {
+      const p = ring[i], q = ring[(i + 1) % ring.length], dx = q[0] - p[0], dy = q[1] - p[1], l = dx * dx + dy * dy || 1
+      const t = Math.max(0, Math.min(1, ((m[0] - p[0]) * dx + (m[1] - p[1]) * dy) / l))
+      if (Math.hypot(m[0] - p[0] - t * dx, m[1] - p[1] - t * dy) < 0.6) return true
     }
+    return false
   }
-  // Below the old roofline the west end is the sliver block's wall; the east
-  // end needs its own wall where the lobby stands proud of the east wing.
-  stone.quad([LX1, -1.6, 0], [LX1, FRONT, 0], [LX1, FRONT, 16], [LX1, -1.6, 16])
-  // A clerestory band of glass under the crest on the back slope.
-  {
-    const y0 = LY + 1, y1 = LY + 9
-    win.quad([LX1 - 2, y0, zAt(y0) + 0.05], [LX0 + 2, y0, zAt(y0) + 0.05], [LX0 + 2, y1, zAt(y1) + 0.05], [LX1 - 2, y1, zAt(y1) + 0.05])
+  /** A flat block cut from `ring` by the half-planes in `cuts`, with windows on the real outline only. */
+  const part = (ring: XY[], cuts: [number, number, number][], h: number, win0 = 3, win1 = h - 2.6) => {
+    let r = ring
+    for (const [a, b, c] of cuts) r = clip(r, a, b, c)
+    if (r.length < 3 || Math.abs(area(r)) < 1) return
+    const c = block(stone, roof, r, 0, h, 0.45)
+    panels(win, c, win0, win1, { bay: 9, keep: onOutline(ring) })
   }
 
-  // --- Roadway canopy: a glass roof arched across the roadway, on silver
-  // cross-beams and two rows of columns. ------------------------------------
+  // --- The 1982 terminal behind the lobby: flat roofs in three bands, with
+  // a lower 10 m strip between the ticketing hall and baggage claim.
+  const LB = -7, LX1 = -9.5
+  const W: [number, number, number][] = [[0, 1, LB], [1, 0, LX1]] // y <= LB, x <= LX1
+  part(main, [...W, [0, 1, -37]], 13.5)
+  part(main, [...W, [0, -1, 37], [0, 1, -25]], 10, 3, 7.6)
+  part(main, [...W, [0, -1, 25]], 13.1)
+
+  // --- East wing and The Plaza: 17 m blocks with a 20.5 m upper storey set
+  // back from every edge, and lower wings to the south and east.
+  const E: [number, number, number][] = [[-1, 0, -LX1]] // x >= LX1
+  part(main, [...E, [0, 1, -40]], 13)
+  part(main, [...E, [0, -1, 40]], 17)
+  const plaza = clean(PLAZA)
+  part(plaza, [[0, 1, -37.8]], 13)
+  part(plaza, [[0, -1, 37.8], [1, 0, 138]], 17)
+  part(plaza, [[0, -1, 37.8], [-1, 0, -138]], 11, 3, 8.4)
+  for (const r of [rect(-8, -31, 59, -19), rect(78, -31, 118, -15)]) {
+    const c = block(stone, roof, r, 16, 20.5, 0.45)
+    panels(win, c, 17.4, 19.6, { bay: 8, gap: 1.2 })
+  }
+
+  // --- The curbside lobby (2010s Terminal Lobby Expansion). Its roof rises
+  // out of the old roofline towards the curb, from 14.6 m to 21 m, and stops
+  // short of the front, where a tall glass wall carries on up to the canopy.
+  // Heights checked against the Mapbox 3D buildings; the footprint is OSM's.
+  const lobby = clean(clip(clip(main, 0, -1, -LB), 1, 0, LX1), 0.05)
+  const zl = profile([[-7, 14.6], [-2, 15.0], [0, 15.6], [2, 16.6], [4, 17.6], [6, 18.6], [8, 19.5], [10, 20.3], [12, 20.7], [13.5, 20.9]])
+  // The canopy: one long shell over the two-level roadway, highest just
+  // off the glass and falling in a long curve to the row of columns at the
+  // far curb.
+  const T = 1.0
+  const zc = profile([[13, 23.4], [22, 23.4], [26, 23.2], [30, 22.7], [34, 22.0], [38, 21.2], [42, 20.3], [46, 19.4], [50, 18.6], [54, 17.9], [58, 17.6], [64, 17.6]])
+  const FRONT = 12.5 // lobby edges north of this are the glass front
+  for (let i = 0; i < lobby.length; i++) {
+    const a = lobby[i], b = lobby[(i + 1) % lobby.length]
+    if (a[1] > FRONT && b[1] > FRONT) {
+      // the glass front, up to the canopy's underside
+      edgeTo(win, a, b, 0, (_x, y) => zc(y) - T, 12)
+      continue
+    }
+    if (a[1] <= LB + 0.3 && b[1] <= LB + 0.3) {
+      // back edge: a strip of clerestory glass between the old roof and the new
+      win.quad([a[0], a[1] - 0.05, 13.1], [b[0], b[1] - 0.05, 13.1], [b[0], b[1] - 0.05, zl(b[1])], [a[0], a[1] - 0.05, zl(a[1])])
+      continue
+    }
+    edgeTo(stone, a, b, 0, (_x, y) => zl(y), 2)
+  }
+  // a silver lip along the lobby roof's side edges
+  for (let i = 0; i < lobby.length; i++) {
+    const a = lobby[i], b = lobby[(i + 1) % lobby.length]
+    if ((a[1] > FRONT && b[1] > FRONT) || (a[1] <= LB + 0.3 && b[1] <= LB + 0.3)) continue
+    const n: XY = [(b[1] - a[1]), -(b[0] - a[0])], l = Math.hypot(n[0], n[1]) || 1
+    const o: XY = [(n[0] / l) * 0.12, (n[1] / l) * 0.12]
+    edgeTo(silver, [a[0] + o[0], a[1] + o[1]], [b[0] + o[0], b[1] + o[1]], (_x, y) => zl(y) - 0.7, (_x, y) => zl(y) + 0.2, 2)
+  }
+  capTo(silver, lobby, span(LB, 13.6, 1.5), (_x, y) => zl(y))
+
+  // Two stair and lift cores stand up through the lobby roof's low back half.
+  for (const r of [rect(-250, -7, -210, 8), rect(-80, -7, -40, 8)]) {
+    const c = block(stone, roof, r, 12, 20, 0.45)
+    panels(win, c, 15.6, 19, { bay: 8, gap: 1.4, keep: (a, b) => a[1] < -6.5 && b[1] < -6.5 })
+  }
+
+  // --- The roadway canopy (way/1414165678), on OSM's outline: a silver
+  // shell 1 m thick with a pale soffit and edge, on one row of columns 24 m
+  // apart along the outer curb.
   {
     const r = clean(CANOPY)
-    const Y0 = 13.3, Y1 = 63.4, Z = 15, RISE = 2.2, SEG = 8
-    const zOf = (y: number) => Z + RISE * Math.sin(Math.PI * Math.min(1, Math.max(0, (y - Y0) / (Y1 - Y0))))
-    // x extent of the canopy at height y, from its slanted ends
-    const xs = (y: number): [number, number] => {
-      const t = (y - Y0) / (Y1 - Y0)
-      return [-271.5 + (-276.2 + 271.5) * t, -9.5 + (-4.7 + 9.5) * t]
-    }
-    for (let i = 0; i < SEG; i++) {
-      const y0 = Y0 + ((Y1 - Y0) * i) / SEG, y1 = Y0 + ((Y1 - Y0) * (i + 1)) / SEG
-      const [a0, b0] = xs(y0), [a1, b1] = xs(y1)
-      glass.quad([a0, y0, zOf(y0)], [b0, y0, zOf(y0)], [b1, y1, zOf(y1)], [a1, y1, zOf(y1)])
-      glass.quad([a1, y1, zOf(y1) - 0.05], [b1, y1, zOf(y1) - 0.05], [b0, y0, zOf(y0) - 0.05], [a0, y0, zOf(y0) - 0.05])
-      // the end edges and the cross-beams, as silver bands over the glass
-      for (const [x0, x1, xx0, xx1] of [[a0, a0 + 1.2, a1, a1 + 1.2], [b0 - 1.2, b0, b1 - 1.2, b1]])
-        silver.quad([x0, y0, zOf(y0) + 0.12], [x1, y0, zOf(y0) + 0.12], [xx1, y1, zOf(y1) + 0.12], [xx0, y1, zOf(y1) + 0.12])
-      for (let x = -258; x <= -20; x += 16.85)
-        silver.quad([x - 0.45, y0, zOf(y0) + 0.1], [x + 0.45, y0, zOf(y0) + 0.1], [x + 0.45, y1, zOf(y1) + 0.1], [x - 0.45, y1, zOf(y1) + 0.1])
-    }
-    // the outer edge beam along the far side of the roadway
-    {
-      const [a, b] = xs(Y1)
-      silver.quad([a, Y1, Z - 1], [b, Y1, Z - 1], [b, Y1, Z + 0.15], [a, Y1, Z + 0.15])
-      silver.quad([b, Y1 - 1.2, Z + 0.15], [a, Y1 - 1.2, Z + 0.15], [a, Y1, Z + 0.15], [b, Y1, Z + 0.15])
-    }
-    for (const y of [29, 47]) for (let x = -258; x <= -22; x += 33.7) block(silver, null, rect(x - 0.6, y - 0.6, x + 0.6, y + 0.6), 0, zOf(y), 0)
+    const cuts = span(13, 63.6, 2.3)
+    capTo(silver, r, cuts, (_x, y) => zc(y))
+    capTo(trim, r, cuts, (_x, y) => zc(y) - T, false)
+    bandTo(trim, r, (_x, y) => zc(y) - T, (_x, y) => zc(y), 2.3)
+    for (let x = -268; x <= -18; x += 25) column(silver, x, 59, 0.75, 0, zc(59) - T)
   }
 
-  // --- The Atrium: glass walls under a glazed vault. ----------------------
+  // --- The Atrium: a long hall under a glazed barrel vault on white ribs,
+  // between lower wings; and the square lantern block at its middle.
   {
-    const c = block(stone, roof, ATRIUM, 0, 12, 0.5)
-    panels(win, c, 2.5, 10.5, { bay: 8, gap: 1.2 })
-    const X0 = -246, X1 = -32, Y0 = -82, Y1 = -57, RISE = 7, SEG = 10
-    const arc: XY[] = []
-    for (let i = 0; i <= SEG; i++) {
-      const t = i / SEG, y = Y0 + (Y1 - Y0) * t
-      arc.push([y, 12 + RISE * Math.sin(Math.PI * t)])
-    }
+    const atr = clean(ATRIUM)
+    part(atr, [[1, 0, -227]], 14.5)
+    part(atr, [[-1, 0, 227], [1, 0, -88]], 12.5, 2.6, 10.4)
+    part(atr, [[-1, 0, 88]], 11, 2.6, 8.6)
+    const X0 = -224, X1 = -91, Y0 = -84, Y1 = -56, RISE = 4.3, SEG = 10, Z0 = 12.5
+    const arc: XY[] = span(0, 1, 1 / SEG).map((t) => [Y0 + (Y1 - Y0) * t, Z0 + RISE * Math.sin(Math.PI * t)])
     for (let i = 0; i < SEG; i++) {
       const [y0, z0] = arc[i], [y1, z1] = arc[i + 1]
       glass.quad([X0, y0, z0], [X1, y0, z0], [X1, y1, z1], [X0, y1, z1])
-    }
-    for (let i = 1; i < SEG; i++) {
-      // end gables, as fans
-      const [y0, z0] = arc[i], [y1, z1] = arc[i + 1]
-      glass.tri([X1, Y0, 12], [X1, y0, z0], [X1, y1, z1])
-      glass.tri([X0, Y0, 12], [X0, y1, z1], [X0, y0, z0])
-    }
-    // white truss ribs across the vault, as raised bands
-    for (let x = X0 + 12; x < X1 - 6; x += 21.4) {
-      for (let i = 0; i < SEG; i++) {
-        const [y0, z0] = arc[i], [y1, z1] = arc[i + 1]
-        const n0 = 0.25
-        trim.quad([x - 0.5, y0, z0 + n0], [x + 0.5, y0, z0 + n0], [x + 0.5, y1, z1 + n0], [x - 0.5, y1, z1 + n0])
+      if (i > 0) {
+        glass.tri([X1, Y0, Z0], [X1, y0, z0], [X1, y1, z1])
+        glass.tri([X0, Y0, Z0], [X0, y1, z1], [X0, y0, z0])
       }
     }
-  }
-
-  // --- The Plaza: three storeys, two window bands. -------------------------
-  {
-    const c = block(stone, roof, PLAZA, 0, 18, 0.5)
-    panels(win, c, 2.5, 8, { bay: 8 })
-    panels(win, c, 10, 15.5, { bay: 8 })
+    for (let x = X0 + 9.5; x < X1 - 4; x += 19) {
+      for (let i = 0; i < SEG; i++) {
+        const [y0, z0] = arc[i], [y1, z1] = arc[i + 1]
+        trim.quad([x - 0.5, y0, z0 + 0.2], [x + 0.5, y0, z0 + 0.2], [x + 0.5, y1, z1 + 0.2], [x - 0.5, y1, z1 + 0.2])
+      }
+    }
+    const c = block(stone, roof, rect(-156, -70, -139, -54), 12, 25, 0.45)
+    panels(win, c, 20, 23.6, { bay: 6, gap: 1, end: 1.2 })
   }
 
   await save('clt-terminal', 'Charlotte Douglas International Airport Terminal', CENTRE, [

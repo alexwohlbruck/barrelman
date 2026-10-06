@@ -14,6 +14,11 @@
  * the drum's 22 m diameter: the shaft about half as wide, the flare from 64 to
  * 77 m, the drum to 98.5 m, the cab to 106 m, the mast to 113 m.
  *
+ * Checked against a render of Mapbox's 3D buildings (tileset
+ * mapbox.mapbox-3dbuildings-v1), used only as a visual reference: its
+ * tower stands 115 m with the same shaft, flare and drum, so the model is
+ * unchanged.
+ *
  * Unlike the terminal models it is round, so it is placed at bearing 0 with
  * its origin at the centre of the ring.
  */
