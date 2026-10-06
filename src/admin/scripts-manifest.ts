@@ -711,7 +711,7 @@ export const SCRIPTS: ScriptDef[] = [
     id: 'detail-views',
     name: 'Rebuild Map Detail Tile Views',
     description:
-      'Recreate the map detail vector-tile source views (parking surfaces, street trees, tree rows, street furniture) that Martin serves.',
+      'Recreate the map detail vector-tile source views (parking surfaces, street trees, tree rows, street furniture, coaster tracks) that Martin serves.',
     category: 'osm',
     danger: 'caution',
     longRunning: false,

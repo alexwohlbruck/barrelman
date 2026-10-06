@@ -64,6 +64,12 @@ Some parts are separate buildings that happen to sit inside the outline, such
 as the ticket booths under the Eiffel Tower. Leave those off if the model
 doesn't cover them.
 
+A roller coaster lists its track ways too, as well as its station. Clients
+draw the `coaster_tracks` layer as lines and hide the ways a landmark
+replaces, so a way left off this list draws through the model. List every way
+the model draws, including the covered and tunnel stretches. Leave off the
+spurs and sidings it doesn't draw (`service=siding`).
+
 ## Making a model
 
 Follow the art style in [`STYLE.md`](STYLE.md), and check every model with `scripts/landmarks/preview.ts` before adding it.

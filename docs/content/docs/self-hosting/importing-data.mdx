@@ -394,7 +394,7 @@ a zoom floor: z8 went from 83.6 MB in 10.1 s to **47 KB in 0.07 s**.
 
 ### Map detail sources
 
-Five sources carry detail that a standard OpenMapTiles basemap has no schema
+Six sources carry detail that a standard OpenMapTiles basemap has no schema
 for, so a client drawing them has nowhere else to get them:
 
 | Source | Geometry | Zooms | What it carries |
@@ -404,11 +404,12 @@ for, so a client drawing them has nowhere else to get them:
 | `tree_rows` | line | 16–17 | Tree-lined streets, which OSM maps as one line rather than a tree per node |
 | `street_furniture` | point | 17 | Benches, bins and recycling containers, with the bearing a bench faces |
 | `buildings_3d` | polygon | 14–16 | Building outlines and `building:part`s, with `hide_3d` marking the outlines a 3D client must not draw, plus wall and roof colour |
+| `coaster_tracks` | line | 14–16 | Roller coaster tracks (`roller_coaster=track`, and the older `railway=roller_coaster`), with `name`, `colour` and a numeric `layer`. A closed track comes as its ring, not a polygon. `id` is the OSM way (`way/123`), so a client can hide the tracks a 3D landmark replaces |
 
 #### Asking for them as one tile
 
 A map view is thirty to sixty tiles *per source*, so a client that mounts each
-of these separately pays five requests for every tile of ground it covers. Two
+of these separately pays six requests for every tile of ground it covers. Two
 ways to collapse that into one:
 
 ```bash
@@ -419,19 +420,25 @@ curl "https://api.barrelman.dev/tiles/detail/14/4825/6156" -H "Authorization: Be
 curl "https://api.barrelman.dev/tiles/buildings_3d,parking_areas/14/4825/6156" -H "Authorization: Bearer $KEY"
 ```
 
-`detail` is `buildings_3d`, `parking_areas`, `bicycle_ways`, `street_trees` and
-`tree_rows` — every overlay a client reads at z≤16. The response is one tile
+`detail` is `buildings_3d`, `parking_areas`, `bicycle_ways`, `street_trees`,
+`tree_rows` and `coaster_tracks` — every overlay a client reads at z≤16. The response is one tile
 carrying each source as its own layer, named exactly as it is above, so a style
 that already draws them needs only its `source` changed.
 
 Measured against the public deployment, a six-tile viewport over Manhattan went
 from 18 requests to 6, and from 2.04 s to 1.14 s warm.
 
-Two rules worth knowing before assembling your own composite:
+Three rules worth knowing before assembling your own composite:
 
 * A member **below its own minzoom contributes nothing** and costs nothing —
   the tile still answers 200 with the other members' layers.
 * The tile **404s only when every member is above its maxzoom**.
+* **Every member must be in Martin's catalog.** A composite naming a source
+  Martin does not serve fails as a whole, so `detail` breaks on a deployment
+  whose `martin-config.yaml` lacks one of its members. When an upgrade adds a
+  member, append its entry to your config before upgrading, then restart
+  Martin once the new API is up: the API creates the view at startup, and
+  Martin only picks up a source when it starts.
 
 So mixing minzooms is free, but mixing *maxzooms* is not: the highest one is
 what a client will request, and a member that stops below it silently vanishes

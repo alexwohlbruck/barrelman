@@ -34,6 +34,19 @@ does it — and the release pipeline turns it into the GitHub Release notes.
   placements ODbL; each carries its credit. `OPEN_LANDMARKS_URL=off` serves
   only your own catalog.
 
+* **A `coaster_tracks` tile source, in the `detail` bundle.** Roller coaster
+  tracks (`roller_coaster=track`, and the older `railway=roller_coaster`) as
+  lines, with `name`, `colour` and a numeric `layer`, at z14–16. A closed track
+  comes as its ring. `id` is the OSM way, so a map can hide the tracks a 3D
+  landmark replaces, and the coaster landmarks in the catalog now list their
+  track ways in `replaces`. It is a plain view, created at startup, so it needs
+  no re-import.
+
+  To upgrade, append the `coaster_tracks` entry from `martin-config.yaml` to
+  your deployment's copy first, then restart Martin once the new API is up.
+  `detail` names every member, and Martin fails a composite that names a
+  source it does not serve, so until then the whole bundle answers 404.
+
 * **`bicycle_ways` now includes the streets a signed bike route follows.** A
   way in a `route=bicycle` relation with no bike tagging of its own comes back
   as `infra_type=bicycle_route`, so maps can mark the whole route rather than
