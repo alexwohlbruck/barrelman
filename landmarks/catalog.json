@@ -587,6 +587,13 @@
       "license": "CC0-1.0",
       "author": "Barrelman",
       "source": "scripts/landmarks/snug-harbor.ts"
+    },
+    {
+      "id": "petras",
+      "file": "models/petras.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/petras.ts"
     }
   ],
   "landmarks": [
@@ -2169,6 +2176,19 @@
       "minzoom": 16,
       "replaces": [
         "way/323193812"
+      ]
+    },
+    {
+      "id": "petras",
+      "name": "Petra's",
+      "model": "petras",
+      "lng": -80.8125546,
+      "lat": 35.2190446,
+      "bearing": 358,
+      "elevation": 0,
+      "minzoom": 16,
+      "replaces": [
+        "way/323192880"
       ]
     }
   ]
