@@ -209,6 +209,13 @@
       "license": "CC0-1.0",
       "author": "Barrelman",
       "source": "scripts/landmarks/truist-field.ts"
+    },
+    {
+      "id": "bechtler-museum",
+      "file": "models/bechtler-museum.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/bechtler-museum.ts"
     }
   ],
   "landmarks": [
@@ -884,6 +891,20 @@
         "way/1553955065",
         "way/1553955066",
         "way/1553955067"
+      ]
+    },
+    {
+      "id": "bechtler-museum",
+      "name": "Bechtler Museum of Modern Art",
+      "model": "bechtler-museum",
+      "lng": -80.8474056,
+      "lat": 35.2245867,
+      "bearing": 50,
+      "elevation": 0,
+      "minzoom": 15,
+      "wikidata": "Q4878575",
+      "replaces": [
+        "way/131139728"
       ]
     }
   ]
