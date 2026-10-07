@@ -28,7 +28,7 @@
  * photos), CLEARANCE=1 for near-misses between stretches of track.
  */
 import { Part, cross, sub, writeGlb, type V3 } from './mesh'
-import { PALETTE, finish } from './palette'
+import { PALETTE, finish, type Swatch } from './palette'
 
 const G = 9.81
 const add = (a: V3, b: V3): V3 => [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
@@ -82,7 +82,8 @@ export interface CoasterSpec {
   liftHead?: number
   track: { W: number; RAIL: number; DEPTH: number; SPINE: number }
   station: { ring: [number, number][]; posts: [number, number][]; roofZ: number }
-  colours: { deck: [string, number]; spine: [string, number]; supports: [string, number] | 'trim' }
+  /** `spine: 'deck'` (opt-in) draws the spine in the deck's material, for a track painted one colour. */
+  colours: { deck: [string, number]; spine: [string, number] | 'deck'; supports: [string, number] | 'trim' }
   /** Support radii for low, middle and high track. */
   supportR: [number, number, number]
   meta: { height: number; trackLength: number }
@@ -151,6 +152,37 @@ export interface CoasterSpec {
    * at `tie` of the height (default 0.3; 0 for none).
    */
   bents?: { from: number; to: number; at: { s: number; strut: 'left' | 'right' | 'back' | 'ahead'; spread?: number; tie?: number }[] }[]
+  /**
+   * Opt-in: the park frame's origin as [lon, lat], for a park away from
+   * Carowinds (LAT0/LON0). The kit only uses it to print the anchor; the
+   * chain, anchor and ground are given in that frame as usual.
+   */
+  origin?: [number, number]
+  /**
+   * Opt-in: further geometry drawn with the track's frames, such as themed
+   * tunnels or a sign in a loop. Called once the track, supports and station
+   * are built; it may draw into the kit's own parts (`parts`) or return new
+   * ones, each with its own material. See `CoasterKit`.
+   */
+  extras?: (kit: CoasterKit) => { part: Part; material: Swatch }[]
+}
+
+/** A frame on the track: centreline point, tangent, the riders' left and up; model frame (origin at the anchor, z above the datum). */
+export type TrackFrame = { p: V3; t: V3; left: V3; up: V3; s: number }
+
+/** What `extras` gets to draw with. */
+export interface CoasterKit {
+  /** The frame on the drawn track (inversions included) nearest a polyline s. */
+  at: (ps: number) => TrackFrame
+  /** Ground height in the model frame at a model-frame plan point. */
+  ground: (x: number, y: number) => number
+  /** A park-frame plan point in the model frame. */
+  toModel: (q: [number, number]) => [number, number]
+  /** The kit's parts, to add to: deck (running surface), spine, supports, stone (station), roof. */
+  parts: { deck: Part; spine: Part; supports: Part; stone: Part; roof: Part }
+  /** Each inversion's dense frames, in ride order. */
+  inversions: { inv: Inversion; pts: TrackFrame[] }[]
+  track: CoasterSpec['track']
 }
 
 /**
@@ -693,7 +725,8 @@ export async function buildCoaster(spec: CoasterSpec) {
   const M = samples.length
 
   // ------------------------------------------------------------- track ----
-  const deck = new Part(), spine = new Part(), white = new Part(), roofPart = new Part(), trimPart = new Part()
+  const deck = new Part(), white = new Part(), roofPart = new Part(), trimPart = new Part()
+  const spine = spec.colours.spine === 'deck' ? deck : new Part()
   function face(p: Part, P: V3[], Nn: V3[] | V3) {
     const ns = (Array.isArray(Nn[0]) ? Nn : [Nn, Nn, Nn, Nn]) as V3[]
     const f = cross(sub(P[1], P[0]), sub(P[2], P[0]))
@@ -1034,12 +1067,24 @@ export async function buildCoaster(spec: CoasterSpec) {
   }
 
   // ------------------------------------------------------------ output ----
+  const extraParts = spec.extras?.({
+    at: (ps: number) => {
+      const s = splineS(ps)
+      return path.reduce((a, b) => (Math.min(Math.abs(b.s - s), TOTAL - Math.abs(b.s - s)) < Math.min(Math.abs(a.s - s), TOTAL - Math.abs(a.s - s)) ? b : a))
+    },
+    ground,
+    toModel: ([x, y]) => [x - AX, y - AY],
+    parts: { deck, spine, supports: white, stone: trimPart, roof: roofPart },
+    inversions: inv.windows.map((w) => ({ inv: w.inv, pts: w.pts })),
+    track: spec.track,
+  }) ?? []
   const parts = [
     { part: deck, material: finish(...spec.colours.deck) },
-    { part: spine, material: finish(...spec.colours.spine) },
+    ...(spec.colours.spine === 'deck' ? [] : [{ part: spine, material: finish(...spec.colours.spine) }]),
     { part: white, material: spec.colours.supports === 'trim' ? PALETTE.trim : finish(...spec.colours.supports) },
     { part: trimPart, material: PALETTE.stone },
     { part: roofPart, material: PALETTE.roof },
+    ...extraParts,
   ]
   const triangles = parts.reduce((sum, { part }) => sum + part.triangles, 0)
   let maxZ = 0, steep = 0
@@ -1060,7 +1105,10 @@ export async function buildCoaster(spec: CoasterSpec) {
   const out = new URL(spec.out, import.meta.url).pathname
   await Bun.write(out, glb)
   console.log(`${out}: ${triangles} triangles, ${glb.length} bytes`)
-  console.log(`anchor ${(LON0 + AX / MX).toFixed(7)}, ${(LAT0 + AY / MY).toFixed(7)}`)
+  if (spec.origin) {
+    const [lon0, lat0] = spec.origin, mx = 111320 * Math.cos((lat0 * Math.PI) / 180)
+    console.log(`anchor ${(lon0 + AX / mx).toFixed(7)}, ${(lat0 + AY / MY).toFixed(7)}`)
+  } else console.log(`anchor ${(LON0 + AX / MX).toFixed(7)}, ${(LAT0 + AY / MY).toFixed(7)}`)
 
   // ------------------------------------------------------------ report ----
   const idxOf = (s: number) => Math.round((((s % TOTAL) + TOTAL) % TOTAL) / STEP) % N
