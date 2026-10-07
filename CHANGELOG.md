@@ -10,6 +10,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-10-07
+
 ### Fixed
 
 * **Search finds cities, states, neighbourhoods and postal codes again.** A
@@ -35,6 +37,10 @@ does it — and the release pipeline turns it into the GitHub Release notes.
   Landmarks (full)*) re-reads the release, downloads and re-verifies every
   model against its published hash, and rewrites every row, for a damaged
   model cache or rows that have drifted.
+
+## [0.8.0] - 2026-10-06
+
+### Added
 
 * **3D landmarks (experimental).** Hand-made 3D models that a map draws in
   place of a building's extrusion. `/tiles/landmarks/{z}/{x}/{y}` serves where
