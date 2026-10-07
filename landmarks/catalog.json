@@ -804,6 +804,13 @@
       "license": "CC0-1.0",
       "author": "Barrelman",
       "source": "scripts/landmarks/wdw-epcot-uk.ts"
+    },
+    {
+      "id": "wdw-epcot-germany",
+      "file": "models/wdw-epcot-germany.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/wdw-epcot-germany.ts"
     }
   ],
   "landmarks": [
@@ -3034,6 +3041,20 @@
         "way/295399246",
         "way/44486036",
         "way/784025250"
+      ]
+    },
+    {
+      "id": "wdw-epcot-germany",
+      "name": "Germany Pavilion",
+      "model": "wdw-epcot-germany",
+      "lng": -81.54694,
+      "lat": 28.36816,
+      "bearing": 0,
+      "elevation": 0,
+      "minzoom": 16,
+      "wikidata": "Q2129498",
+      "replaces": [
+        "way/295593358"
       ]
     }
   ]
