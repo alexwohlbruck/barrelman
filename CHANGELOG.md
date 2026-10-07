@@ -10,6 +10,22 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Fixed
+
+* **Search finds cities, states, neighbourhoods and postal codes again.** A
+  place name is made of common words, so "New Jersey" matched hundreds of
+  thousands of rows, the query timed out, and search answered with bus stops.
+  When a city did match, nearby cafes sharing its name outranked it. Places
+  now have a search layer and index of their own and lead the results, ranked
+  by how significant a place they are, with distance counting for less the
+  larger the place. A postal-code query such as `11211` returns the postal
+  code ahead of house numbers that share its digits. The API builds the two new
+  indexes in the background on its first start, which takes several minutes on
+  a national import; search works as before until they are ready.
+
+* **Search matches names with accents.** The query was stripped to ASCII
+  letters, so "Neukölln" was searched as "Neuk lln" and matched nothing.
+
 ### Added
 
 * **Open Landmarks import, from a shell or the console, in two modes.**

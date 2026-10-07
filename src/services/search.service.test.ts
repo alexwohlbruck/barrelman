@@ -49,6 +49,7 @@ mock.module('../lib/cache', () => ({
 }))
 
 const { searchPlaces } = await import('./search.service')
+const { setLocalityIndexReady } = await import('./locality-search.service')
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -69,6 +70,9 @@ beforeEach(() => {
   mockGenerateQueryEmbedding.mockImplementation(async () => [0.1, 0.2, 0.3])
   searchCacheStore.clear()
   embeddingCacheStore.clear()
+  // Off unless a test asks for it, so the locality layer issues no query and
+  // the call order the other suites queue mocks against is unchanged.
+  setLocalityIndexReady(false)
 })
 
 // ── Basic ─────────────────────────────────────────────────────────────────────
@@ -606,6 +610,126 @@ describe('searchPlaces — transit layers', () => {
     await searchPlaces({ query: 'coffee', categories: ['amenity/cafe'], autocomplete: true })
     // FTS + trigram + codes + abbrev only — no transit calls.
     expect(mockExecute).toHaveBeenCalledTimes(4)
+  })
+})
+
+// ── Localities ────────────────────────────────────────────────────────────────
+
+describe('searchPlaces — localities', () => {
+  // With the locality index ready the layer runs after the transit layers.
+  const LAYER = { fts: 0, codes: 1, abbrev: 2, transitRoutes: 3, transitStops: 4, localities: 5 } as const
+  const queue = (perLayer: Record<number, any[]>) => {
+    for (let i = 0; i < Object.keys(LAYER).length; i++) {
+      const rows = perLayer[i] ?? []
+      mockExecute.mockImplementationOnce(async () => rows)
+    }
+  }
+  const pelias = (features: any[]) => {
+    const realFetch = globalThis.fetch
+    globalThis.fetch = (async () => Response.json({ features })) as unknown as typeof fetch
+    return () => { globalThis.fetch = realFetch }
+  }
+  const postalFeature = {
+    geometry: { coordinates: [-73.95, 40.71] },
+    properties: { gid: 'whosonfirst:postalcode:554779551', source: 'whosonfirst', layer: 'postalcode', name: '11211' },
+  }
+  const addressFeature = {
+    geometry: { coordinates: [-74.6, 40.3] },
+    properties: { gid: 'openaddresses:address:us/nj:abc', source: 'openaddresses', layer: 'address', name: '11211 Taylor Court', housenumber: '11211' },
+  }
+
+  test('a distant city stays above nearer, higher-ranked namesakes', async () => {
+    // The 50 km proximity re-rank would put the cafe first; the locality layer
+    // has already weighed the city's distance on its own scale.
+    setLocalityIndexReady(true)
+    const cafe = { id: 'node/1', name: 'Charlotte Cafe', text_rank: 1.2, distance_m: 2000 }
+    const city = { id: 'relation/177415', name: 'Charlotte', text_rank: 0.49, distance_m: 850_000 }
+    queue({ [LAYER.fts]: [cafe], [LAYER.localities]: [city] })
+    const results = await searchPlaces({ query: 'charlotte', lat: 40.7, lng: -73.95, limit: 5 })
+    expect(results.map((r: any) => r.id)).toEqual(['relation/177415', 'node/1'])
+    expect(results[0]._pinned).toBeUndefined()
+    expect(results[0]._locality).toBeUndefined()
+  })
+
+  test("a place's label node never returns through FTS once its boundary has absorbed it", async () => {
+    setLocalityIndexReady(true)
+    const labelNode = { id: 'node/262328235', name: 'Kreuzberg', text_rank: 1.5, distance_m: 900 }
+    const artwork = { id: 'node/10132455019', name: 'Kreuzberg', text_rank: 1.5, distance_m: 800 }
+    const boundary = {
+      id: 'relation/55765', name: 'Kreuzberg', text_rank: 0.69, distance_m: 1200,
+      absorbed_ids: ['node/262328235'],
+    }
+    queue({ [LAYER.fts]: [labelNode, artwork], [LAYER.localities]: [boundary] })
+    const results = await searchPlaces({ query: 'kreuzberg', lat: 52.5, lng: 13.42, limit: 5 })
+    expect(results.map((r: any) => r.id)).toEqual(['relation/55765', 'node/10132455019'])
+    expect(results[0].absorbed_ids).toBeUndefined()
+  })
+
+  test('a place named exactly as typed leads code matches; a partial name does not', async () => {
+    setLocalityIndexReady(true)
+    const pub = { id: 'node/5324065566', name: 'Zur Mitte', text_rank: 0.98, distance_m: 3000 }
+    const district = { id: 'relation/16347', name: 'Mitte', text_rank: 0.72, distance_m: 5000 }
+    queue({ [LAYER.codes]: [pub], [LAYER.localities]: [district] })
+    const exact = await searchPlaces({ query: 'mitte', lat: 52.5, lng: 13.42, limit: 5 })
+    expect(exact.map((r: any) => r.id)).toEqual(['relation/16347', 'node/5324065566'])
+
+    const airport = { id: 'way/1', name: 'Hollywood Burbank Airport', text_rank: 0.98, distance_m: 9000 }
+    const town = { id: 'relation/2', name: 'Bury', text_rank: 0.4, distance_m: 8000 }
+    queue({ [LAYER.codes]: [airport], [LAYER.localities]: [town] })
+    const partial = await searchPlaces({ query: 'bur', lat: 34.2, lng: -118.36, limit: 5 })
+    expect(partial.map((r: any) => r.id)).toEqual(['way/1', 'relation/2'])
+  })
+
+  test('the layer is skipped for category browses', async () => {
+    setLocalityIndexReady(true)
+    await searchPlaces({ query: 'coffee', categories: ['amenity/cafe'], autocomplete: true })
+    expect(mockExecute).toHaveBeenCalledTimes(4)
+  })
+
+  test('a ZIP code leads the house numbers that share its digits', async () => {
+    const restore = pelias([postalFeature, addressFeature])
+    try {
+      const results = await searchPlaces({ query: '11211', limit: 5 })
+      expect(results.map((r: any) => r.categories[0])).toEqual(['pelias/postalcode', 'pelias/address'])
+    } finally {
+      restore()
+    }
+  })
+
+  test('a Pelias postal code yields to the OSM boundary for the same code', async () => {
+    setLocalityIndexReady(true)
+    const boundary = {
+      id: 'relation/1', name: '11211', tags: { boundary: 'postal_code', postal_code: '11211' },
+      text_rank: 0.7, distance_m: 100,
+    }
+    queue({ [LAYER.localities]: [boundary] })
+    const restore = pelias([postalFeature, addressFeature])
+    try {
+      const results = await searchPlaces({ query: '11211', limit: 5 })
+      expect(results.map((r: any) => r.id)).toEqual(['relation/1', 'pelias/openaddresses:address:us/nj:abc'])
+    } finally {
+      restore()
+    }
+  })
+
+  test('asks Pelias for postal codes only when the query could be one', async () => {
+    const urls: string[] = []
+    const realFetch = globalThis.fetch
+    globalThis.fetch = (async (url: string) => {
+      urls.push(String(url))
+      return Response.json({ features: [] })
+    }) as typeof fetch
+    try {
+      await searchPlaces({ query: '11211', autocomplete: true })
+      await searchPlaces({ query: 'brooklyn', autocomplete: true })
+    } finally {
+      globalThis.fetch = realFetch
+    }
+    const layers = urls
+      .filter((u) => u.includes('/v1/autocomplete'))
+      .map((u) => new URL(u).searchParams.get('layers'))
+    expect(layers[0]).toContain('postalcode')
+    expect(layers).toContain('address,street')
   })
 })
 
