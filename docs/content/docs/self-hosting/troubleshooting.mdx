@@ -315,6 +315,10 @@ Everything under `postgres:` in `martin-config.yaml` is queried live, so `parchm
 
 A browser holding day-old tiles looks identical to all four: `/tiles` sends `cache-control: max-age=86400`, so confirm with a hard reload or a direct `curl` before digging.
 
+**`/tiles/landmarks` is empty, or the log says `landmark import failed`**
+
+The 3D landmarks are not in the image: the API downloads them at startup from `OPEN_LANDMARKS_URL` and `BARRELMAN_LANDMARKS_URL`, so a container without outbound HTTPS serves no landmarks. `docker compose logs barrelman | grep landmarks` names the source and the error. A source that fails keeps serving what it last imported, so this only empties the layer on a fresh install. Allow outbound HTTPS to both hosts, or set both URLs to `off`, or point `BARRELMAN_LANDMARKS_URL` at a release you built locally from [the landmarks repo](https://github.com/alexwohlbruck/landmarks).
+
 **The disk fills and no import or query explains it**
 
 Container logs. Docker's `json-file` driver is unbounded by default, and the
