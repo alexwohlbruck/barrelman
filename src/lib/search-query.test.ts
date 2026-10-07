@@ -42,6 +42,14 @@ describe('buildTsQueryText', () => {
     expect(buildTsQueryText(['&', '!'], false)).toBe('')
   })
 
+  test('keeps letters outside ASCII, which unaccent() folds in SQL', () => {
+    expect(buildTsQueryText(['Neukölln'], false)).toBe('neukölln')
+    expect(buildTsQueryText(['Zürich', 'straße'], true)).toBe('zürich & straße:*')
+    // Decomposed input (o + combining diaeresis) composes to the same word.
+    expect(buildTsQueryText(['Neuko\u0308lln'], false)).toBe('neukölln')
+    expect(buildTsQueryText(['हिन्दी'], false)).toBe('हिन्दी')
+  })
+
   test('plain words pass through unchanged', () => {
     expect(buildTsQueryText(['divine', 'barrel'], true)).toBe('divine & barrel:*')
   })

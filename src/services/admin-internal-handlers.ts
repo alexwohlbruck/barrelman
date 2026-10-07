@@ -106,6 +106,10 @@ export const INTERNAL_HANDLERS: Record<string, (log: LogFn) => Promise<void>> = 
     const r = await importOpenLandmarks({ log })
     for (const s of r.skipped) log(`  skipped ${s}`)
   },
+  'landmarks:import-openlandmarks-full': async (log) => {
+    const r = await importOpenLandmarks({ full: true, log })
+    for (const s of r.skipped) log(`  skipped ${s}`)
+  },
 
   // raw SQL-file tasks
   'sql:create-station-links.sql': (log) => runSqlFile(log, 'create-station-links.sql'),

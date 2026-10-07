@@ -10,6 +10,34 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-10-07
+
+### Fixed
+
+* **Search finds cities, states, neighbourhoods and postal codes again.** A
+  place name is made of common words, so "New Jersey" matched hundreds of
+  thousands of rows, the query timed out, and search answered with bus stops.
+  When a city did match, nearby cafes sharing its name outranked it. Places
+  now have a search layer and index of their own and lead the results, ranked
+  by how significant a place they are, with distance counting for less the
+  larger the place. A postal-code query such as `11211` returns the postal
+  code ahead of house numbers that share its digits. The API builds the two new
+  indexes in the background on its first start, which takes several minutes on
+  a national import; search works as before until they are ready.
+
+* **Search matches names with accents.** The query was stripped to ASCII
+  letters, so "Neukölln" was searched as "Neuk lln" and matched nothing.
+
+### Added
+
+* **Open Landmarks import, from a shell or the console, in two modes.**
+  `bun run landmarks:import` (console: *Import Open Landmarks (update)*) does
+  what startup does: one request when the release hasn't moved, and only new
+  models downloaded. `bun run landmarks:import:full` (console: *Import Open
+  Landmarks (full)*) re-reads the release, downloads and re-verifies every
+  model against its published hash, and rewrites every row, for a damaged
+  model cache or rows that have drifted.
+
 ## [0.8.0] - 2026-10-06
 
 ### Added
