@@ -797,6 +797,13 @@
       "license": "CC0-1.0",
       "author": "Barrelman",
       "source": "scripts/landmarks/wdw-epcot-morocco.ts"
+    },
+    {
+      "id": "wdw-epcot-uk",
+      "file": "models/wdw-epcot-uk.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/wdw-epcot-uk.ts"
     }
   ],
   "landmarks": [
@@ -3010,6 +3017,24 @@
       "minzoom": 16,
       "wikidata": "Q2776572",
       "replaces": []
+    },
+    {
+      "id": "wdw-epcot-uk",
+      "name": "United Kingdom Pavilion",
+      "model": "wdw-epcot-uk",
+      "lng": -81.55163,
+      "lat": 28.37038,
+      "bearing": 0,
+      "elevation": 0,
+      "minzoom": 16,
+      "wikidata": "Q2904061",
+      "replaces": [
+        "way/44486037",
+        "way/784027061",
+        "way/295399246",
+        "way/44486036",
+        "way/784025250"
+      ]
     }
   ]
 }
