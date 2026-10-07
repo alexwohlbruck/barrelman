@@ -762,6 +762,13 @@
       "license": "CC0-1.0",
       "author": "Barrelman",
       "source": "scripts/landmarks/wdw-batuu-spires.ts"
+    },
+    {
+      "id": "wdw-slinky-dog-dash",
+      "file": "models/wdw-slinky-dog-dash.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/wdw-slinky-dog-dash.ts"
     }
   ],
   "landmarks": [
@@ -2889,6 +2896,34 @@
       "elevation": 0,
       "minzoom": 16,
       "replaces": []
+    },
+    {
+      "id": "wdw-slinky-dog-dash",
+      "name": "Slinky Dog Dash",
+      "model": "wdw-slinky-dog-dash",
+      "lng": -81.5628374,
+      "lat": 28.3560478,
+      "bearing": 0,
+      "elevation": 0,
+      "minzoom": 16,
+      "wikidata": "Q35006966",
+      "replaces": [
+        "way/685092736",
+        "way/751717116",
+        "way/1294595151",
+        "way/1294595160",
+        "way/1294595158",
+        "way/798615126",
+        "way/1294595156",
+        "way/1294595155",
+        "way/1294595157",
+        "way/1294595154",
+        "way/685772990",
+        "way/1294595159",
+        "way/1294595153",
+        "way/1294595152",
+        "way/685772991"
+      ]
     }
   ]
 }
