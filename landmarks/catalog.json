@@ -720,6 +720,13 @@
       "license": "CC0-1.0",
       "author": "Barrelman",
       "source": "scripts/landmarks/wdw-chinese-theater.ts"
+    },
+    {
+      "id": "wdw-expedition-everest",
+      "file": "models/wdw-expedition-everest.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/wdw-expedition-everest.ts"
     }
   ],
   "landmarks": [
@@ -2742,6 +2749,42 @@
         "way/294898804",
         "way/607996087",
         "way/607972840"
+      ]
+    },
+    {
+      "id": "wdw-expedition-everest",
+      "name": "Expedition Everest",
+      "model": "wdw-expedition-everest",
+      "lng": -81.5862667,
+      "lat": 28.3581626,
+      "bearing": 0,
+      "elevation": 0,
+      "minzoom": 15,
+      "wikidata": "Q1341067",
+      "replaces": [
+        "way/146269361",
+        "way/146269359",
+        "relation/3937134",
+        "way/187631574",
+        "way/187631576",
+        "way/187631578",
+        "way/187631580",
+        "way/187631584",
+        "way/187631602",
+        "way/773718966",
+        "way/773718967",
+        "way/957958010",
+        "way/957958011",
+        "way/957958012",
+        "way/957958013",
+        "way/957958014",
+        "way/1228688570",
+        "way/1228688571",
+        "way/1228688572",
+        "way/1228688573",
+        "way/1228688575",
+        "way/204972538",
+        "way/1228688574"
       ]
     }
   ]
