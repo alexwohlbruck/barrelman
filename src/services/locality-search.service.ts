@@ -52,18 +52,22 @@ const IMPORTANCE = sql.raw(`CASE
   ELSE 0.3
 END`)
 
-const REACH_KM = sql.raw(`CASE
-  WHEN tags->>'place' IN ('continent', 'country') OR admin_level = 2 THEN 5000
+/**
+ * Reach follows the importance a place ends up with, not its own tags: a US
+ * city's boundary is a bare admin_level=8 (a town's 300 km) and only its label
+ * node says `place=city`. Read from its own tags, Chicago scored 0.19 from
+ * Brooklyn and never surfaced.
+ */
+const reachKm = (importance: ReturnType<typeof sql>) => sql`CASE
+  WHEN ${importance} >= 1.0 THEN 5000
   -- Not 5000 like a country: "new york" from Brooklyn is the city, not the
   -- state whose label node sits 313 km upstate.
-  WHEN tags->>'place' IN ('state', 'province', 'region') OR admin_level IN (3, 4) THEN 2000
-  WHEN tags->>'place' = 'city' THEN 1000
-  WHEN tags->>'place' IN ('county', 'municipality', 'borough', 'town', 'district')
-    OR admin_level BETWEEN 5 AND 8 THEN 300
-  WHEN tags->>'place' IN ('suburb', 'quarter', 'neighbourhood', 'village')
-    OR admin_level BETWEEN 9 AND 11 OR tags->>'boundary' = 'postal_code' THEN 50
+  WHEN ${importance} >= 0.95 THEN 2000
+  WHEN ${importance} >= 0.9 THEN 1000
+  WHEN ${importance} >= 0.8 THEN 300
+  WHEN ${importance} >= 0.7 THEN 50
   ELSE 20
-END`)
+END`
 
 /**
  * Lowest score a locality needs to be returned (and so pinned above every
@@ -117,11 +121,12 @@ async function localityIndexReady(): Promise<boolean> {
  *
  * Duplicates are collapsed, because OSM maps most places twice or more: a
  * `place=city` label node inside the city's boundary relation, or a borough
- * and the identically named locality nested inside it (Neukölln). The node is
- * dropped in favour of the area, which carries the outline, and the nested
- * area in favour of the larger one. The surviving area keeps the importance of
- * whatever it absorbed: NYC's relation is admin_level 5 (0.8), but its label
- * node is a `place=city` (0.9). Each hit lists what it absorbed in
+ * and the identically named locality nested inside it (Neukölln). A node folds
+ * into the smallest same-name area containing it, which carries the outline.
+ * A nested area folds into a larger namesake only of the same importance: the
+ * two Neuköllns are one place, but New York City is not New York State. The
+ * surviving area keeps the importance of whatever it absorbed: NYC's relation
+ * is admin_level 5 (0.8), but its label node is a `place=city` (0.9). Each hit lists what it absorbed in
  * `absorbed_ids`, so the merge can keep the other layers from bringing those
  * duplicates back.
  */
@@ -151,18 +156,18 @@ export async function searchLocalities({
       SELECT id, osm_type, osm_id, COALESCE(name, tags->>'postal_code') AS name, name_abbrev,
              categories, tags, address, hours, phones, websites, geom_type, centroid, geom, area_m2,
              length(${postalCode})::float / greatest(length(tags->>'postal_code'), 1) AS sim,
-             ${IMPORTANCE} AS importance, ${REACH_KM} AS reach_km
+             ${IMPORTANCE} AS importance
       FROM geo_places
       WHERE ${sql.raw(POSTAL_PREDICATE)} AND ${postalMatch}`
     : sql``
 
   const rows = await db.execute(sql`
-    WITH hits AS (
+    WITH RECURSIVE hits AS (
       SELECT DISTINCT ON (id) * FROM (
         SELECT id, osm_type, osm_id, name, name_abbrev, categories, tags,
                address, hours, phones, websites, geom_type, centroid, geom, area_m2,
                similarity(name, ${query}) AS sim,
-               ${IMPORTANCE} AS importance, ${REACH_KM} AS reach_km
+               ${IMPORTANCE} AS importance
         FROM geo_places
         WHERE ${sql.raw(LOCALITY_PREDICATE)}
           AND ts @@ to_tsquery('simple', unaccent(${tsQueryText}))
@@ -173,29 +178,38 @@ export async function searchLocalities({
       WHERE sim >= 0.3
       ORDER BY id, sim DESC
     ),
+    -- Which hit each duplicate folds into (see the doc comment above).
+    absorbs AS (
+      SELECT DISTINCT ON (h.id) h.id AS hit_id, o.id AS by_id, h.importance
+      FROM hits h
+      JOIN hits o ON o.id <> h.id AND lower(o.name) = lower(h.name)
+        AND o.geom_type = 'area'
+        AND (h.geom_type <> 'area' OR (o.area_m2 > h.area_m2 AND o.importance = h.importance))
+        AND ST_Intersects(o.geom, h.centroid)
+      ORDER BY h.id, o.area_m2 ASC
+    ),
+    -- Followed to the outermost: Mitte's label nodes fold into the Ortsteil,
+    -- which folds into the Bezirk, which has to end up holding all of them.
+    folded (hit_id, root_id, importance) AS (
+      SELECT hit_id, by_id, importance FROM absorbs
+      UNION ALL
+      SELECT f.hit_id, a.by_id, f.importance FROM folded f JOIN absorbs a ON a.hit_id = f.root_id
+    ),
     merged AS (
-      SELECT h.*, absorbed.ids AS absorbed_ids,
-        GREATEST(h.importance, absorbed.importance) AS rank_importance
+      SELECT h.*, a.ids AS absorbed_ids,
+        GREATEST(h.importance, a.importance) AS rank_importance
       FROM hits h
       LEFT JOIN LATERAL (
-        SELECT array_agg(p.id) AS ids, max(p.importance) AS importance FROM hits p
-        WHERE h.geom_type = 'area' AND p.id <> h.id AND lower(p.name) = lower(h.name)
-          AND (p.geom_type <> 'area' OR h.area_m2 > p.area_m2)
-          AND ST_Intersects(h.geom, p.centroid)
-      ) absorbed ON true
-      WHERE NOT EXISTS (
-        SELECT 1 FROM hits o
-        WHERE o.id <> h.id AND lower(o.name) = lower(h.name)
-          AND o.geom_type = 'area'
-          AND (h.geom_type <> 'area' OR o.area_m2 > h.area_m2)
-          AND ST_Intersects(o.geom, h.centroid)
-      )
+        SELECT array_agg(hit_id) AS ids, max(importance) AS importance
+        FROM folded WHERE root_id = h.id
+      ) a ON true
+      WHERE h.id NOT IN (SELECT hit_id FROM absorbs)
     )
     SELECT * FROM (
       SELECT id, osm_type, osm_id, name, name_abbrev, categories, tags,
              address, hours, phones, websites, geom_type,
              ST_AsGeoJSON(centroid)::jsonb AS geometry,
-             sim * rank_importance / (1 + ${distanceKm} / reach_km) AS text_rank,
+             sim * rank_importance / (1 + ${distanceKm} / ${reachKm(sql`rank_importance`)}) AS text_rank,
              ${distanceSelect} AS distance_m,
              absorbed_ids
       FROM merged
