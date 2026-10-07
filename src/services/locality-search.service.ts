@@ -126,9 +126,9 @@ async function localityIndexReady(): Promise<boolean> {
  * A nested area folds into a larger namesake only of the same importance: the
  * two Neuköllns are one place, but New York City is not New York State. The
  * surviving area keeps the importance of whatever it absorbed: NYC's relation
- * is admin_level 5 (0.8), but its label node is a `place=city` (0.9). Each hit lists what it absorbed in
- * `absorbed_ids`, so the merge can keep the other layers from bringing those
- * duplicates back.
+ * is admin_level 5 (0.8), but its label node is a `place=city` (0.9). Each
+ * hit lists what it absorbed in `absorbed_ids`, so the merge can keep the
+ * other layers from bringing those duplicates back.
  */
 export async function searchLocalities({
   query, tsQueryText, lat, lng, autocomplete = false, limit,
@@ -171,6 +171,10 @@ export async function searchLocalities({
         FROM geo_places
         WHERE ${sql.raw(LOCALITY_PREDICATE)}
           AND ts @@ to_tsquery('simple', unaccent(${tsQueryText}))
+          -- A border way tagged with its admin_level is a segment of the line
+          -- between two places, not a place: "united states" matched two of
+          -- them. Outside the index predicate so the index still applies.
+          AND geom_type <> 'line'
         ${postalBranch}
       ) matched
       -- ts also matches parent_context, so "new york" reaches every
@@ -182,8 +186,13 @@ export async function searchLocalities({
     absorbs AS (
       SELECT DISTINCT ON (h.id) h.id AS hit_id, o.id AS by_id, h.importance
       FROM hits h
-      JOIN hits o ON o.id <> h.id AND lower(o.name) = lower(h.name)
-        AND o.geom_type = 'area'
+      JOIN hits o ON o.id <> h.id AND o.geom_type = 'area'
+        AND (lower(o.name) = lower(h.name)
+          -- A US county's label node is "Mecklenburg"; its boundary is
+          -- "Mecklenburg County". A point folds into a boundary named after it
+          -- plus a word, when the two are the same kind of place.
+          OR (h.geom_type <> 'area' AND o.importance = h.importance
+            AND left(lower(o.name), length(h.name) + 1) = lower(h.name) || ' '))
         AND (h.geom_type <> 'area' OR (o.area_m2 > h.area_m2 AND o.importance = h.importance))
         AND ST_Intersects(o.geom, h.centroid)
       ORDER BY h.id, o.area_m2 ASC
@@ -204,19 +213,40 @@ export async function searchLocalities({
         FROM folded WHERE root_id = h.id
       ) a ON true
       WHERE h.id NOT IN (SELECT hit_id FROM absorbs)
+    ),
+    top AS (
+      SELECT * FROM (
+        SELECT id, osm_type, osm_id, name, name_abbrev, categories, tags,
+               address, hours, phones, websites, geom_type, centroid, rank_importance,
+               sim * rank_importance / (1 + ${distanceKm} / ${reachKm(sql`rank_importance`)}) AS text_rank,
+               ${distanceSelect} AS distance_m,
+               absorbed_ids
+        FROM merged
+      ) scored
+      WHERE text_rank >= ${MIN_SCORE}
+      ORDER BY text_rank DESC
+      LIMIT ${limit}
     )
-    SELECT * FROM (
-      SELECT id, osm_type, osm_id, name, name_abbrev, categories, tags,
-             address, hours, phones, websites, geom_type,
-             ST_AsGeoJSON(centroid)::jsonb AS geometry,
-             sim * rank_importance / (1 + ${distanceKm} / ${reachKm(sql`rank_importance`)}) AS text_rank,
-             ${distanceSelect} AS distance_m,
-             absorbed_ids
-      FROM merged
-    ) scored
-    WHERE text_rank >= ${MIN_SCORE}
-    ORDER BY text_rank DESC
-    LIMIT ${limit}
+    -- The state each place is in, as its address: three Charlottes read as
+    -- one place listed three times until they say North Carolina, Virginia
+    -- and Florida. Looked up for the returned rows only, through the admin
+    -- boundary index.
+    SELECT t.id, t.osm_type, t.osm_id, t.name, t.name_abbrev, t.categories, t.tags,
+           CASE WHEN t.address IS NULL AND st.name IS NOT NULL
+             THEN jsonb_build_object('state', st.name) ELSE t.address END AS address,
+           t.hours, t.phones, t.websites, t.geom_type,
+           ST_AsGeoJSON(t.centroid)::jsonb AS geometry,
+           t.text_rank, t.distance_m, t.absorbed_ids
+    FROM top t
+    LEFT JOIN LATERAL (
+      SELECT s.name FROM geo_places s
+      WHERE s.geom_type = 'area' AND s.admin_level IS NOT NULL AND s.admin_level = 4
+        -- Not for a state or country, which no state contains.
+        AND s.id <> t.id AND t.rank_importance < 0.95
+        AND ST_Intersects(s.geom, t.centroid)
+      ORDER BY s.area_m2 LIMIT 1
+    ) st ON true
+    ORDER BY t.text_rank DESC
   `).catch(() => [] as any[])
   return Array.from(rows as any[])
 }
