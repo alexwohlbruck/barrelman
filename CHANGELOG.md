@@ -36,6 +36,10 @@ does it — and the release pipeline turns it into the GitHub Release notes.
   model against its published hash, and rewrites every row, for a damaged
   model cache or rows that have drifted.
 
+## [0.8.0] - 2026-10-06
+
+### Added
+
 * **3D landmarks (experimental).** Hand-made 3D models that a map draws in
   place of a building's extrusion. `/tiles/landmarks/{z}/{x}/{y}` serves where
   they stand, with each landmark's model, bearing, scale and the OSM buildings
