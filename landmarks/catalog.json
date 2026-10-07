@@ -818,6 +818,13 @@
       "license": "CC0-1.0",
       "author": "Barrelman",
       "source": "scripts/landmarks/wdw-cinderella-castle.ts"
+    },
+    {
+      "id": "wdw-space-mountain",
+      "file": "models/wdw-space-mountain.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/wdw-space-mountain.ts"
     }
   ],
   "landmarks": [
@@ -3091,6 +3098,26 @@
         "way/1351675222",
         "way/1351675223",
         "way/1351675224"
+      ]
+    },
+    {
+      "id": "wdw-space-mountain",
+      "name": "Space Mountain",
+      "model": "wdw-space-mountain",
+      "lng": -81.5772341,
+      "lat": 28.4191494,
+      "bearing": 0,
+      "elevation": 0,
+      "minzoom": 15,
+      "wikidata": "Q2306317",
+      "replaces": [
+        "way/296326395",
+        "way/1106733755",
+        "way/373171485",
+        "way/373171486",
+        "way/373171487",
+        "way/373171488",
+        "way/1106733754"
       ]
     }
   ]
