@@ -776,6 +776,13 @@
       "license": "CC0-1.0",
       "author": "Barrelman",
       "source": "scripts/landmarks/wdw-tree-of-life.ts"
+    },
+    {
+      "id": "wdw-pandora-floating-mountains",
+      "file": "models/wdw-pandora-floating-mountains.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/wdw-pandora-floating-mountains.ts"
     }
   ],
   "landmarks": [
@@ -2944,6 +2951,23 @@
       "wikidata": "Q3538315",
       "replaces": [
         "way/295879946"
+      ]
+    },
+    {
+      "id": "wdw-pandora-floating-mountains",
+      "name": "Floating Mountains of Pandora",
+      "model": "wdw-pandora-floating-mountains",
+      "lng": -81.5919766,
+      "lat": 28.3554349,
+      "bearing": 0,
+      "elevation": 0,
+      "minzoom": 16,
+      "replaces": [
+        "way/668089393",
+        "way/668089395",
+        "way/668089396",
+        "way/668089397",
+        "way/668089398"
       ]
     }
   ]
