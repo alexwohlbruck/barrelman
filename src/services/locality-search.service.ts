@@ -43,7 +43,9 @@ const POSTAL_PREDICATE = `tags->>'boundary' = 'postal_code'`
 const IMPORTANCE = sql.raw(`CASE
   WHEN tags->>'place' IN ('continent', 'country') OR admin_level = 2 THEN 1.0
   WHEN tags->>'place' IN ('state', 'province', 'region') OR admin_level IN (3, 4) THEN 0.95
-  WHEN tags->>'place' = 'city' THEN 0.9
+  -- A US city's boundary often says so only in border_type (Yonkers is an
+  -- admin_level=7), and a city is a city whichever tag names it.
+  WHEN tags->>'place' = 'city' OR tags->>'border_type' = 'city' THEN 0.9
   WHEN tags->>'place' IN ('county', 'municipality', 'borough', 'town', 'district')
     OR admin_level BETWEEN 5 AND 8 THEN 0.8
   WHEN tags->>'place' IN ('suburb', 'quarter', 'neighbourhood', 'village')
@@ -187,15 +189,26 @@ export async function searchLocalities({
       SELECT DISTINCT ON (h.id) h.id AS hit_id, o.id AS by_id, h.importance
       FROM hits h
       JOIN hits o ON o.id <> h.id AND o.geom_type = 'area'
-        AND (lower(o.name) = lower(h.name)
-          -- A US county's label node is "Mecklenburg"; its boundary is
-          -- "Mecklenburg County". A point folds into a boundary named after it
-          -- plus a word, when the two are the same kind of place.
-          OR (h.geom_type <> 'area' AND o.importance = h.importance
-            AND left(lower(o.name), length(h.name) + 1) = lower(h.name) || ' '))
-        AND (h.geom_type <> 'area' OR (o.area_m2 > h.area_m2 AND o.importance = h.importance))
-        AND ST_Intersects(o.geom, h.centroid)
-      ORDER BY h.id, o.area_m2 ASC
+        AND CASE
+          -- A label node of the same name: inside its boundary, or just
+          -- outside it — Charlotte's South End node sits 140 m past its own.
+          WHEN h.geom_type <> 'area' AND lower(o.name) = lower(h.name)
+            THEN ST_DWithin(o.geom, h.centroid, 0.003)
+          -- A label node named apart from its boundary: "Mecklenburg" in
+          -- "Mecklenburg County", "Yonkers" in "City of Yonkers". Only when
+          -- the two are the same kind of place, so a village keeps its own
+          -- result beside the Wisconsin "Town of Brooklyn" around it.
+          WHEN h.geom_type <> 'area'
+            THEN o.importance = h.importance
+              AND (left(lower(o.name), length(h.name) + 1) = lower(h.name) || ' '
+                OR right(lower(o.name), length(h.name) + 4) = ' of ' || lower(h.name))
+              AND ST_Intersects(o.geom, h.centroid)
+          -- A nested area of the same name and kind: the two Neuköllns.
+          ELSE lower(o.name) = lower(h.name) AND o.area_m2 > h.area_m2
+            AND o.importance = h.importance AND ST_Intersects(o.geom, h.centroid)
+        END
+      -- The namesake before a differently named boundary, then the smallest.
+      ORDER BY h.id, lower(o.name) = lower(h.name) DESC, o.area_m2 ASC
     ),
     -- Followed to the outermost: Mitte's label nodes fold into the Ortsteil,
     -- which folds into the Bezirk, which has to end up holding all of them.
