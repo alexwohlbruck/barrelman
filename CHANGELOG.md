@@ -10,6 +10,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.8.5] - 2026-10-07
+
 ### Fixed
 
 * **A city named "City of Yonkers" in OSM is listed once.** Its label point
