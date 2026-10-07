@@ -20,8 +20,8 @@
     "import:gtfs": "bash scripts/download-gtfs.sh",
     "import:abbreviations": "bun run import/generate-abbreviations.ts",
     "import:embed": "bun run import/embed-places.ts",
-    "landmarks:import": "bun run scripts/import-open-landmarks.ts",
-    "landmarks:import:full": "bun run scripts/import-open-landmarks.ts --full"
+    "landmarks:import": "bun run scripts/import-landmarks.ts",
+    "landmarks:import:full": "bun run scripts/import-landmarks.ts --full"
   },
   "dependencies": {
     "@elysiajs/cors": "^1.2.0",

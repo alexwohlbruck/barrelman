@@ -1,62 +1,97 @@
 import { describe, test, expect } from 'bun:test'
-import { join } from 'path'
-import {
-  validateCatalog,
-  glbBounds,
-  modelFileName,
-  MODEL_FILE_RE,
-  resolveLandmarksDir,
-  type Catalog,
-} from './landmarks.service'
-import { Part, axisAngle, writeGlb, type V3 } from '../../scripts/landmarks/mesh'
+import { glbBounds, modelFileName, MODEL_FILE_RE } from './landmarks.service'
 
-const LANDMARKS = join(import.meta.dir, '../../landmarks')
+// The shipped models, and the catalog checks that went with them, now live in
+// github.com/alexwohlbruck/landmarks. These tests build the few GLBs they
+// need by hand, in glTF axes (x east, y up, z south).
 
-describe('the shipped catalog', () => {
-  test('is valid', async () => {
-    const catalog = (await Bun.file(join(LANDMARKS, 'catalog.json')).json()) as Catalog
-    expect(validateCatalog(catalog)).toEqual([])
-  })
+type Box = { min: number[]; max: number[] }
+type NodeSpec = { box?: Box; translation?: number[]; children?: number[] }
+type Channel = { node: number; path: 'translation' | 'rotation'; values: number[][] }
 
-  test('every model it lists exists and follows the frame contract', async () => {
-    const catalog = (await Bun.file(join(LANDMARKS, 'catalog.json')).json()) as Catalog
-    for (const model of catalog.models) {
-      const bytes = new Uint8Array(await Bun.file(join(LANDMARKS, model.file)).arrayBuffer())
-      const { height, radius } = glbBounds(bytes)
-      // Standing on its origin, not centred on it: a model whose bounds go
-      // well below zero has its origin somewhere other than the ground.
-      expect(height).toBeGreaterThan(0)
-      expect(radius).toBeGreaterThan(0)
+/** A GLB of boxes (8 corner vertices each) on nodes, with an optional LINEAR clip. */
+function glb(nodes: NodeSpec[], animation?: { times: number[]; channels: Channel[] }): Uint8Array {
+  const floats: number[] = []
+  const accessors: any[] = []
+  const bufferViews: any[] = []
+  const add = (values: number[], type: string, minmax = false) => {
+    const per = { SCALAR: 1, VEC3: 3, VEC4: 4 }[type]!
+    bufferViews.push({ buffer: 0, byteOffset: floats.length * 4, byteLength: values.length * 4 })
+    const accessor: any = { bufferView: bufferViews.length - 1, componentType: 5126, count: values.length / per, type }
+    if (minmax) {
+      accessor.min = [0, 1, 2].slice(0, per).map((k) => Math.min(...values.filter((_, i) => i % per === k)))
+      accessor.max = [0, 1, 2].slice(0, per).map((k) => Math.max(...values.filter((_, i) => i % per === k)))
     }
-  })
-})
+    floats.push(...values)
+    accessors.push(accessor)
+    return accessors.length - 1
+  }
+  const meshes: any[] = []
+  const json: any = {
+    asset: { version: '2.0' },
+    scene: 0,
+    scenes: [{ nodes: [0] }],
+    nodes: nodes.map((n) => {
+      const node: any = {}
+      if (n.box) {
+        const corners = [0, 1, 2, 3, 4, 5, 6, 7].flatMap((i) => [0, 1, 2].map((k) => (i & (1 << k) ? n.box!.max[k] : n.box!.min[k])))
+        meshes.push({ primitives: [{ attributes: { POSITION: add(corners, 'VEC3', true) } }] })
+        node.mesh = meshes.length - 1
+      }
+      if (n.translation) node.translation = n.translation
+      if (n.children) node.children = n.children
+      return node
+    }),
+    meshes,
+    accessors,
+    bufferViews,
+  }
+  if (animation) {
+    const input = add(animation.times, 'SCALAR', true)
+    json.animations = [{
+      channels: animation.channels.map((c, i) => ({ sampler: i, target: { node: c.node, path: c.path } })),
+      samplers: animation.channels.map((c) => ({ input, output: add(c.values.flat(), c.path === 'rotation' ? 'VEC4' : 'VEC3'), interpolation: 'LINEAR' })),
+    }]
+  }
+  const bin = new Uint8Array(new Float32Array(floats).buffer)
+  json.buffers = [{ byteLength: bin.length }]
+  let text = JSON.stringify(json)
+  while (text.length % 4) text += ' '
+  const out = new Uint8Array(20 + text.length + 8 + bin.length)
+  const view = new DataView(out.buffer)
+  view.setUint32(0, 0x46546c67, true)
+  view.setUint32(4, 2, true)
+  view.setUint32(8, out.length, true)
+  view.setUint32(12, text.length, true)
+  view.setUint32(16, 0x4e4f534a, true)
+  out.set(new TextEncoder().encode(text), 20)
+  view.setUint32(20 + text.length, bin.length, true)
+  view.setUint32(24 + text.length, 0x004e4942, true)
+  out.set(bin, 28 + text.length)
+  return out
+}
+
+const box = (min: number[], max: number[]): Box => ({ min, max })
+/** A quarter turn about north (-z), as a quaternion. */
+const turn = (i: number) => {
+  const a = (i / 4) * Math.PI
+  return [0, 0, -Math.sin(a), Math.cos(a)]
+}
 
 describe('glbBounds', () => {
-  test('reads the Eiffel Tower as 330 m tall on a 125 m base', async () => {
-    const bytes = new Uint8Array(await Bun.file(join(LANDMARKS, 'models/eiffel-tower.glb')).arrayBuffer())
-    const { height, radius } = glbBounds(bytes)
-    expect(height).toBeCloseTo(330, 0)
+  test('reads a static model from its accessor bounds', () => {
+    const { height, radius } = glbBounds(glb([{ box: box([-62.5, 0, -62.5], [62.5, 330, 62.5]) }]))
+    expect(height).toBeCloseTo(330, 5)
     // Corner of a 125 m square: half the diagonal.
-    expect(radius).toBeCloseTo(62.5 * Math.SQRT2, 0)
+    expect(radius).toBeCloseTo(62.5 * Math.SQRT2, 5)
   })
 
-  /** A box in the map frame (x east, y north, z up) from corner a to corner b. */
-  const box = (a: V3, b: V3) => {
-    const part = new Part()
-    const ring = (z: number): V3[] => [[a[0], a[1], z], [b[0], a[1], z], [b[0], b[1], z], [a[0], b[1], z]]
-    part.loft([ring(a[2]), ring(b[2])])
-    part.cap(ring(b[2]), true)
-    part.cap(ring(a[2]), false)
-    return part
-  }
-  const material = { name: 'stone', color: 0x808080 }
-
   test('carries a child node’s box through its translation', () => {
-    const glb = writeGlb('test', [{ part: box([-1, -1, 0], [1, 1, 2]), material }], {}, {
-      // 10 m east and 20 m up, a 2 m cube about its origin.
-      nodes: [{ name: 'lamp', translation: [10, 0, 20], parts: [{ part: box([-1, -1, -1], [1, 1, 1]), material }] }],
-    })
-    const { height, radius } = glbBounds(glb)
+    // A 2 m cube 10 m east and 20 m up.
+    const { height, radius } = glbBounds(glb([
+      { box: box([-1, 0, -1], [1, 2, 1]), children: [1] },
+      { box: box([-1, -1, -1], [1, 1, 1]), translation: [10, 20, 0] },
+    ]))
     expect(height).toBeCloseTo(21, 5)
     expect(radius).toBeCloseTo(Math.hypot(11, 1), 5)
   })
@@ -64,16 +99,14 @@ describe('glbBounds', () => {
   test('bounds an animated node by a sphere about its pivot', () => {
     // A 10 m arm on a pivot 20 m up, turning about north: at rest it is
     // level, but its tip passes 10 m over the pivot.
-    const glb = writeGlb('test', [{ part: box([-1, -1, 0], [1, 1, 2]), material }], {}, {
-      nodes: [{ name: 'arm', translation: [0, 0, 20], parts: [{ part: box([0, -0.5, -0.5], [10, 0.5, 0.5]), material }] }],
-      animation: {
-        name: 'turn',
-        times: [0, 1, 2, 3, 4],
-        channels: [{ node: 0, path: 'rotation', values: [0, 1, 2, 3, 4].map((i) => axisAngle([0, 1, 0], (i / 4) * Math.PI * 2)) }],
-      },
-    })
+    const { height, radius } = glbBounds(glb(
+      [
+        { box: box([-1, 0, -1], [1, 2, 1]), children: [1] },
+        { box: box([0, -0.5, -0.5], [10, 0.5, 0.5]), translation: [0, 20, 0] },
+      ],
+      { times: [0, 1, 2, 3, 4], channels: [{ node: 1, path: 'rotation', values: [0, 1, 2, 3, 4].map(turn) }] },
+    ))
     const tip = Math.hypot(10, 0.5, 0.5)
-    const { height, radius } = glbBounds(glb)
     expect(height).toBeCloseTo(20 + tip, 5)
     expect(radius).toBeCloseTo(tip, 5)
   })
@@ -81,71 +114,20 @@ describe('glbBounds', () => {
   test('keeps a lift’s reach to its car, not its travel', () => {
     // A 10 m car whose pivot rides 60 m up an axis on LINEAR keyframes: its
     // height is the top of the travel, but in plan it never leaves the axis.
-    const glb = writeGlb('test', [{ part: box([-1, -1, 0], [1, 1, 2]), material }], {}, {
-      nodes: [{ name: 'car', translation: [0, 0, 60], parts: [{ part: box([-5, -0.5, -0.5], [5, 0.5, 0.5]), material }] }],
-      animation: {
-        name: 'ride',
-        times: [0, 1, 2],
-        channels: [{ node: 0, path: 'translation', values: [[0, 0, 60], [0, 0, 2], [0, 0, 60]] }],
-      },
-    })
+    const { height, radius } = glbBounds(glb(
+      [
+        { box: box([-1, 0, -1], [1, 2, 1]), children: [1] },
+        { box: box([-5, -0.5, -0.5], [5, 0.5, 0.5]), translation: [0, 60, 0] },
+      ],
+      { times: [0, 1, 2], channels: [{ node: 1, path: 'translation', values: [[0, 60, 0], [0, 2, 0], [0, 60, 0]] }] },
+    ))
     const tip = Math.hypot(5, 0.5, 0.5)
-    const { height, radius } = glbBounds(glb)
     expect(height).toBeCloseTo(60 + tip, 5)
     expect(radius).toBeCloseTo(tip, 5)
   })
 
-  test('keeps the moving Skytower cabin within the tower’s reach', async () => {
-    const bytes = new Uint8Array(await Bun.file(join(LANDMARKS, 'models/carowinds-skytower.glb')).arrayBuffer())
-    const { height, radius } = glbBounds(bytes)
-    // Mast top at 87 m; the platform's 6.8 m ring, read as a box corner.
-    expect(height).toBeCloseTo(87, 0)
-    expect(radius).toBeLessThan(10)
-  })
-
-  test('keeps the turning Wonder Wheel at its full height', async () => {
-    const bytes = new Uint8Array(await Bun.file(join(LANDMARKS, 'models/wonder-wheel.glb')).arrayBuffer())
-    const { height, radius } = glbBounds(bytes)
-    // 46 m to the rim's top; the sphere about the axle may only overstate it.
-    expect(height).toBeGreaterThanOrEqual(46)
-    expect(height).toBeLessThan(50)
-    expect(radius).toBeGreaterThanOrEqual(22.4)
-    expect(radius).toBeLessThan(26)
-  })
-
   test('refuses something that is not a GLB', () => {
     expect(() => glbBounds(new TextEncoder().encode('not a model at all'))).toThrow('not a GLB')
-  })
-})
-
-describe('validateCatalog', () => {
-  const ok: Catalog = {
-    models: [{ id: 'tower', file: 'models/tower.glb', license: 'CC0-1.0', author: 'me' }],
-    landmarks: [{ id: 'the-tower', name: 'Tower', model: 'tower', lng: 2.29, lat: 48.86, replaces: ['way/1'] }],
-  }
-
-  test('passes a well-formed catalog', () => {
-    expect(validateCatalog(ok)).toEqual([])
-  })
-
-  test('reports every problem at once', () => {
-    const problems = validateCatalog({
-      models: [{ id: 'Tower', file: '../tower.obj', license: '', author: 'me' }],
-      landmarks: [
-        { id: 'a', name: 'A', model: 'missing', lng: 200, lat: 0, scale: 0, replaces: ['5013364'] },
-      ],
-    })
-    expect(problems).toHaveLength(8)
-  })
-
-  test('refuses a CC-BY model with no credit to show', () => {
-    const problems = validateCatalog({ ...ok, models: [{ ...ok.models[0], license: 'CC-BY-3.0' }] })
-    expect(problems).toEqual(['model "tower": a CC-BY-3.0 model needs an attribution'])
-  })
-
-  test('requires OSM refs with their type, since a bare number is ambiguous', () => {
-    const problems = validateCatalog({ ...ok, landmarks: [{ ...ok.landmarks[0], replaces: ['5013364'] }] })
-    expect(problems[0]).toContain('not an OSM ref')
   })
 })
 
@@ -160,15 +142,4 @@ describe('model file names', () => {
     expect(MODEL_FILE_RE.test('../eiffel-tower.abababababab.glb')).toBe(false)
     expect(MODEL_FILE_RE.test('eiffel-tower.abababababab.glb/x')).toBe(false)
   })
-})
-
-test('the landmarks dir defaults to the repo copy', () => {
-  const saved = process.env.LANDMARKS_DIR
-  process.env.LANDMARKS_DIR = ''
-  try {
-    expect(resolveLandmarksDir()).toEndWith('/landmarks')
-  } finally {
-    if (saved === undefined) delete process.env.LANDMARKS_DIR
-    else process.env.LANDMARKS_DIR = saved
-  }
 })

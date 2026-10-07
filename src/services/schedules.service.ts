@@ -84,8 +84,8 @@ const SEEDS: Array<Pick<ScheduleInput, 'scriptId' | 'cron'> & { params?: Record<
   // For the same kind of setup, with "Refresh 3D buildings" off on osm-update:
   // a country's buildings_3d takes hours to refresh, too long for every night.
   { scriptId: 'osm-buildings-3d', cron: '0 9 * * 0' },
-  // The update, not the full import. Open Landmarks publishes a batch at most daily; an unchanged release costs
-  // one small request, so hourly keeps the layer fresh for free.
+  // The update, not the full import, of every landmark source. Each publishes a batch at most daily; an
+  // unchanged release costs one small request, so hourly keeps the layer fresh for free.
   { scriptId: 'landmarks-import', cron: '17 * * * *' },
 ]
 
