@@ -244,12 +244,12 @@ async function getJson<T>(base: string, path: string): Promise<T> {
 const inFlight = new Map<string, Promise<{ path: string; bytes: Uint8Array; fetched: boolean }>>()
 function cachedGlb(base: string, cacheDir: string, lod: Lod, refetch: boolean) {
   const key = `${cacheDir}/${lod.sha256}`
-  let pending = inFlight.get(key)
-  if (!pending) {
-    pending = fetchGlb(base, cacheDir, lod, refetch).finally(() => inFlight.delete(key))
-    inFlight.set(key, pending)
-  }
-  return pending
+  const pending = inFlight.get(key)
+  // A second caller shares the bytes but did not download them.
+  if (pending) return pending.then((r) => ({ ...r, fetched: false }))
+  const own = fetchGlb(base, cacheDir, lod, refetch).finally(() => inFlight.delete(key))
+  inFlight.set(key, own)
+  return own
 }
 
 async function fetchGlb(base: string, cacheDir: string, lod: Lod, refetch: boolean) {
