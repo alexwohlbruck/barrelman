@@ -14,8 +14,9 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 * **Place search names the state a place is in, and lists each place once.**
   A place result with no address of its own now carries the state containing
-  it, so three Charlottes read as North Carolina, Virginia and Florida rather
-  than one place listed three times. A county's label point ("Mecklenburg") is
+  it, so three Charlottes read as NC, VA and FL rather than one place listed
+  three times. US, Canadian and Australian states are given by their postal
+  abbreviation, as addresses are; other countries' by name. A county's label point ("Mecklenburg") is
   folded into its boundary ("Mecklenburg County"), and the border lines of a
   country or state are no longer returned as places.
 

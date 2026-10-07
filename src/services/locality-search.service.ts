@@ -228,9 +228,10 @@ export async function searchLocalities({
       LIMIT ${limit}
     )
     -- The state each place is in, as its address: three Charlottes read as
-    -- one place listed three times until they say North Carolina, Virginia
-    -- and Florida. Looked up for the returned rows only, through the admin
-    -- boundary index.
+    -- one place listed three times until they say NC, VA and FL. Looked up
+    -- for the returned rows only, through the admin boundary index. The
+    -- postal code ("NC") where a country writes its states that way, as
+    -- Pelias's own addresses do; the name everywhere else ("Bavaria").
     SELECT t.id, t.osm_type, t.osm_id, t.name, t.name_abbrev, t.categories, t.tags,
            CASE WHEN t.address IS NULL AND st.name IS NOT NULL
              THEN jsonb_build_object('state', st.name) ELSE t.address END AS address,
@@ -239,7 +240,12 @@ export async function searchLocalities({
            t.text_rank, t.distance_m, t.absorbed_ids
     FROM top t
     LEFT JOIN LATERAL (
-      SELECT s.name FROM geo_places s
+      SELECT CASE
+          WHEN s.tags->>'ISO3166-2' ~ '^(US|CA|AU)-' AND length(s.tags->>'ref') BETWEEN 2 AND 3
+            THEN s.tags->>'ref'
+          ELSE s.name
+        END AS name
+      FROM geo_places s
       WHERE s.geom_type = 'area' AND s.admin_level IS NOT NULL AND s.admin_level = 4
         -- Not for a state or country, which no state contains.
         AND s.id <> t.id AND t.rank_importance < 0.95
