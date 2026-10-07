@@ -692,6 +692,13 @@
       "license": "CC0-1.0",
       "author": "Barrelman",
       "source": "scripts/landmarks/wdw-epcot-china-temple.ts"
+    },
+    {
+      "id": "wdw-epcot-japan-pagoda",
+      "file": "models/wdw-epcot-japan-pagoda.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/wdw-epcot-japan-pagoda.ts"
     }
   ],
   "landmarks": [
@@ -2641,6 +2648,20 @@
       "wikidata": "Q2681898",
       "replaces": [
         "way/383670241"
+      ]
+    },
+    {
+      "id": "wdw-epcot-japan-pagoda",
+      "name": "Goju-no-to Pagoda (Japan, EPCOT)",
+      "model": "wdw-epcot-japan-pagoda",
+      "lng": -81.5502911,
+      "lat": 28.367906,
+      "bearing": 359,
+      "elevation": 0,
+      "minzoom": 16,
+      "wikidata": "Q2162898",
+      "replaces": [
+        "way/295587740"
       ]
     }
   ]
