@@ -748,6 +748,13 @@
       "license": "CC0-1.0",
       "author": "Barrelman",
       "source": "scripts/landmarks/wdw-epcot-cosmic-rewind.ts"
+    },
+    {
+      "id": "wdw-epcot-test-track",
+      "file": "models/wdw-epcot-test-track.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/wdw-epcot-test-track.ts"
     }
   ],
   "landmarks": [
@@ -2846,6 +2853,23 @@
       "wikidata": "Q36259219",
       "replaces": [
         "way/719079634"
+      ]
+    },
+    {
+      "id": "wdw-epcot-test-track",
+      "name": "Test Track",
+      "model": "wdw-epcot-test-track",
+      "lng": -81.54721781,
+      "lat": 28.37284435,
+      "bearing": 0,
+      "elevation": 0,
+      "minzoom": 16,
+      "wikidata": "Q645233",
+      "replaces": [
+        "way/295315993",
+        "way/295949487",
+        "way/721055302",
+        "way/1539425232"
       ]
     }
   ]
