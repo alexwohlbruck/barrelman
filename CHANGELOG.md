@@ -10,6 +10,13 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Fixed
+
+* **A city named "City of Yonkers" in OSM is listed once.** Its label point
+  ("Yonkers") is now recognised as the same place, as is a label point that
+  sits just outside its own boundary. US boundaries tagged
+  `border_type=city` also rank as cities.
+
 ## [0.8.4] - 2026-10-07
 
 ### Fixed
