@@ -811,6 +811,13 @@
       "license": "CC0-1.0",
       "author": "Barrelman",
       "source": "scripts/landmarks/wdw-epcot-germany.ts"
+    },
+    {
+      "id": "wdw-cinderella-castle",
+      "file": "models/wdw-cinderella-castle.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/wdw-cinderella-castle.ts"
     }
   ],
   "landmarks": [
@@ -3055,6 +3062,35 @@
       "wikidata": "Q2129498",
       "replaces": [
         "way/295593358"
+      ]
+    },
+    {
+      "id": "wdw-cinderella-castle",
+      "name": "Cinderella Castle",
+      "model": "wdw-cinderella-castle",
+      "lng": -81.5811782,
+      "lat": 28.4195023,
+      "bearing": 0,
+      "elevation": 0,
+      "minzoom": 15,
+      "wikidata": "Q2742709",
+      "replaces": [
+        "way/121516748",
+        "way/1109167338",
+        "way/1109167339",
+        "way/1109167340",
+        "way/1109167341",
+        "way/1109167342",
+        "way/1109167343",
+        "way/1109167344",
+        "way/1109167348",
+        "way/1109167349",
+        "way/1109167350",
+        "way/1109167351",
+        "way/1109167352",
+        "way/1351675222",
+        "way/1351675223",
+        "way/1351675224"
       ]
     }
   ]
