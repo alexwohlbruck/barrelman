@@ -755,6 +755,13 @@
       "license": "CC0-1.0",
       "author": "Barrelman",
       "source": "scripts/landmarks/wdw-epcot-test-track.ts"
+    },
+    {
+      "id": "wdw-batuu-spires",
+      "file": "models/wdw-batuu-spires.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/wdw-batuu-spires.ts"
     }
   ],
   "landmarks": [
@@ -2871,6 +2878,17 @@
         "way/721055302",
         "way/1539425232"
       ]
+    },
+    {
+      "id": "wdw-batuu-spires",
+      "name": "Black Spire Outpost spires",
+      "model": "wdw-batuu-spires",
+      "lng": -81.5619811,
+      "lat": 28.3536046,
+      "bearing": 0,
+      "elevation": 0,
+      "minzoom": 16,
+      "replaces": []
     }
   ]
 }
