@@ -727,6 +727,13 @@
       "license": "CC0-1.0",
       "author": "Barrelman",
       "source": "scripts/landmarks/wdw-expedition-everest.ts"
+    },
+    {
+      "id": "wdw-millennium-falcon",
+      "file": "models/wdw-millennium-falcon.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/wdw-millennium-falcon.ts"
     }
   ],
   "landmarks": [
@@ -2786,6 +2793,17 @@
         "way/204972538",
         "way/1228688574"
       ]
+    },
+    {
+      "id": "wdw-millennium-falcon",
+      "name": "Millennium Falcon",
+      "model": "wdw-millennium-falcon",
+      "lng": -81.561814,
+      "lat": 28.353751,
+      "bearing": 322,
+      "elevation": 0,
+      "minzoom": 16,
+      "replaces": []
     }
   ]
 }
