@@ -734,6 +734,13 @@
       "license": "CC0-1.0",
       "author": "Barrelman",
       "source": "scripts/landmarks/wdw-millennium-falcon.ts"
+    },
+    {
+      "id": "wdw-rock-n-roller-coaster",
+      "file": "models/wdw-rock-n-roller-coaster.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/wdw-rock-n-roller-coaster.ts"
     }
   ],
   "landmarks": [
@@ -2804,6 +2811,21 @@
       "elevation": 0,
       "minzoom": 16,
       "replaces": []
+    },
+    {
+      "id": "wdw-rock-n-roller-coaster",
+      "name": "Rock ’n’ Roller Coaster Starring The Muppets",
+      "model": "wdw-rock-n-roller-coaster",
+      "lng": -81.5615788,
+      "lat": 28.3596178,
+      "bearing": 0,
+      "elevation": 0,
+      "minzoom": 16,
+      "wikidata": "Q1502476",
+      "replaces": [
+        "way/357021885",
+        "way/357021883"
+      ]
     }
   ]
 }
