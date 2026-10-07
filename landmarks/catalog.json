@@ -769,6 +769,13 @@
       "license": "CC0-1.0",
       "author": "Barrelman",
       "source": "scripts/landmarks/wdw-slinky-dog-dash.ts"
+    },
+    {
+      "id": "wdw-tree-of-life",
+      "file": "models/wdw-tree-of-life.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/wdw-tree-of-life.ts"
     }
   ],
   "landmarks": [
@@ -2923,6 +2930,20 @@
         "way/1294595153",
         "way/1294595152",
         "way/685772991"
+      ]
+    },
+    {
+      "id": "wdw-tree-of-life",
+      "name": "The Tree of Life",
+      "model": "wdw-tree-of-life",
+      "lng": -81.5905973,
+      "lat": 28.3579434,
+      "bearing": 0,
+      "elevation": 0,
+      "minzoom": 15,
+      "wikidata": "Q3538315",
+      "replaces": [
+        "way/295879946"
       ]
     }
   ]
