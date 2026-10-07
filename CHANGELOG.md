@@ -10,6 +10,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-10-07
+
 ### Fixed
 
 * **Search finds cities, states, neighbourhoods and postal codes again.** A
