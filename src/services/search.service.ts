@@ -108,6 +108,28 @@ const SEARCH_ADDRESS_BUDGET_MS = envNumber('BARRELMAN_SEARCH_ADDRESS_BUDGET_MS',
 // budget instead of the timeout. Set to 0 to wait the full statement timeout.
 const SEARCH_TRIGRAM_BUDGET_MS = envNumber('BARRELMAN_SEARCH_TRIGRAM_BUDGET_MS', 2500)
 
+// How long /search waits for the FTS layer once the locality layer has found
+// the place. A place name is common words — "New Jersey" matches ~350K rows —
+// so FTS ran into the 10s statement timeout on exactly the queries the locality
+// layer answers in milliseconds, and the right answer arrived 12s late (18s in
+// typeahead, which then retried). Within this budget FTS still adds what else
+// the name matches; past it, the place returns without it.
+const LOCALITY_FTS_BUDGET_MS = 2500
+
+/** Resolve to [] if `promise` hasn't settled within `ms` (0 waits forever).
+ *  The abandoned query is left to its own statement timeout. The timer is
+ *  cleared once the race settles, so it never outlives the request. */
+function withBudget(promise: Promise<any[]>, ms: number): Promise<any[]> {
+  if (ms <= 0) return promise
+  let timer: ReturnType<typeof setTimeout> | undefined
+  return Promise.race([
+    promise,
+    new Promise<any[]>((resolve) => {
+      timer = setTimeout(() => resolve([]), ms)
+    }),
+  ]).finally(() => clearTimeout(timer))
+}
+
 export async function searchPlaces(
   {
     query,
@@ -531,7 +553,11 @@ export async function searchPlaces(
       : Promise.resolve([] as any[])
 
     let [ftsRows, codesRows, nameAbbrevRows, transitRouteRows, transitStopRows, localityRows] =
-      await Promise.all([ftsPromise, codesPromise, nameAbbrevPromise, transitRoutesPromise, transitStopsPromise, localitiesPromise])
+      await Promise.all([
+        // FTS is bounded only once a place has matched; see LOCALITY_FTS_BUDGET_MS.
+        localitiesPromise.then((places) =>
+          places.length > 0 ? withBudget(ftsPromise, LOCALITY_FTS_BUDGET_MS) : ftsPromise),
+        codesPromise, nameAbbrevPromise, transitRoutesPromise, transitStopsPromise, localitiesPromise])
     let trigramRows: any[] = []
 
     // Autocomplete retry: the local pass only sees the viewport, so a place the
@@ -544,7 +570,8 @@ export async function searchPlaces(
       localAutocomplete &&
       !addressLike &&
       sanitizedQuery.length >= AUTOCOMPLETE_FALLBACK_MIN_QUERY &&
-      (ftsRows as any[]).length + (codesRows as any[]).length + (nameAbbrevRows as any[]).length < AUTOCOMPLETE_FALLBACK_MIN
+      (ftsRows as any[]).length + (codesRows as any[]).length + (nameAbbrevRows as any[]).length +
+        (localityRows as any[]).length < AUTOCOMPLETE_FALLBACK_MIN
     ) {
       const [globalFts, globalTrigram] = await Promise.all([
         ftsQuery(false),
@@ -576,16 +603,8 @@ export async function searchPlaces(
       if (precise.size < limit) {
         // Bounded exactly like the Pelias wait below, and for the same reason:
         // a supplementary layer must not be able to hold the whole response
-        // hostage. The abandoned query is left to its own statement timeout.
-        let trigramTimer: ReturnType<typeof setTimeout> | undefined
-        trigramRows = (await (SEARCH_TRIGRAM_BUDGET_MS > 0
-          ? Promise.race([
-              trigramQuery(),
-              new Promise<any[]>((resolve) => {
-                trigramTimer = setTimeout(() => resolve([]), SEARCH_TRIGRAM_BUDGET_MS)
-              }),
-            ]).finally(() => clearTimeout(trigramTimer))
-          : trigramQuery())) as any[]
+        // hostage.
+        trigramRows = await withBudget(trigramQuery(), SEARCH_TRIGRAM_BUDGET_MS)
       }
     }
 
