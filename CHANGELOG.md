@@ -10,6 +10,14 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Fixed
+
+* **US cities show up in place search from far away.** A US city's boundary
+  is tagged as a town and only its label point says it is a city, so Chicago
+  and Charlotte were weighed as towns and dropped from a search made 1,000 km
+  away. A search for "New York" also returned the state but not the city,
+  because the city was folded into the state's boundary as a duplicate.
+
 ## [0.8.2] - 2026-10-07
 
 ### Fixed
