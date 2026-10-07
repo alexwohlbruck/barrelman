@@ -134,8 +134,9 @@ export async function searchPlaces(
   // Strip apostrophes ("sal's" → "sals") to mirror the tsvector normalization,
   // then replace remaining punctuation with spaces. Letters are matched by
   // Unicode class, not \w: \w is ASCII-only, and turned "Neukölln" into
-  // "Neuk lln", which no layer could match.
-  const sanitizedQuery = query?.replace(/['’]/g, '').replace(/[^\p{L}\p{N}\s\-.]/gu, ' ').trim() || ''
+  // "Neuk lln", which no layer could match. Marks are kept too — Devanagari
+  // and Thai spell with them — and NFC folds a decomposed "o" + "¨" into "ö".
+  const sanitizedQuery = query?.normalize('NFC').replace(/['’]/g, '').replace(/[^\p{L}\p{M}\p{N}\s\-.]/gu, ' ').trim() || ''
   const hasQuery = sanitizedQuery.length > 0
   const hasPointLocation = lat != null && lng != null
   const hasRoute = route != null
@@ -588,8 +589,9 @@ export async function searchPlaces(
       }
     }
 
-    // Merge, deduplicating in priority order: codes > localities > transit
-    // routes > abbreviation > FTS > trigram > transit stops. Transit ids can't
+    // Merge, deduplicating in priority order: exact-name localities > codes >
+    // other localities > transit routes > abbreviation > FTS > trigram >
+    // transit stops. Transit ids can't
     // collide with OSM ids, so their position only decides who survives the cap.
     // Codes and locality hits are pinned — exempt from proximity re-ranking. An
     // exact IATA/ICAO code is definitive regardless of distance, and a locality
