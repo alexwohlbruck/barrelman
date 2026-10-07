@@ -680,6 +680,26 @@ describe('searchPlaces — localities', () => {
     expect(partial.map((r: any) => r.id)).toEqual(['way/1', 'relation/2'])
   })
 
+  test('a matched place does not wait out a slow FTS layer', async () => {
+    // "New Jersey" is common words: FTS ran to the 10s statement timeout while
+    // the locality layer had the state in milliseconds.
+    setLocalityIndexReady(true)
+    const state = { id: 'relation/224951', name: 'New Jersey', text_rank: 0.93, distance_m: 89_000 }
+    mockExecute
+      .mockImplementationOnce(() => new Promise(() => {})) // FTS: never settles
+      .mockImplementationOnce(async () => [])              // codes
+      .mockImplementationOnce(async () => [])              // abbrev
+      .mockImplementationOnce(async () => [])              // transit routes
+      .mockImplementationOnce(async () => [])              // transit stops
+      .mockImplementationOnce(async () => [state])         // localities
+    const started = Date.now()
+    const results = await searchPlaces({ query: 'new jersey', lat: 40.71, lng: -73.96, autocomplete: true, limit: 5 })
+    expect(results[0].id).toBe('relation/224951')
+    expect(Date.now() - started).toBeLessThan(5000)
+    // A place is a hit, so typeahead does not retry the slow query globally.
+    expect(mockExecute).toHaveBeenCalledTimes(6)
+  }, 15000)
+
   test('the layer is skipped for category browses', async () => {
     setLocalityIndexReady(true)
     await searchPlaces({ query: 'coffee', categories: ['amenity/cafe'], autocomplete: true })

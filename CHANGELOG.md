@@ -10,6 +10,14 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Fixed
+
+* **Searching for a place no longer waits 12 seconds.** Once the place itself
+  has matched, search waits at most 2.5 seconds for other names containing the
+  same words. "New Jersey" and "New York" took 6-18 seconds, because the full
+  text search over every name containing those words ran to its 10-second
+  timeout first (twice, in typeahead).
+
 ## [0.8.1] - 2026-10-07
 
 ### Fixed
