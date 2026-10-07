@@ -860,6 +860,13 @@
       "license": "CC0-1.0",
       "author": "Barrelman",
       "source": "scripts/landmarks/wdw-epcot-canada.ts"
+    },
+    {
+      "id": "wdw-big-thunder-mountain",
+      "file": "models/wdw-big-thunder-mountain.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/wdw-big-thunder-mountain.ts"
     }
   ],
   "landmarks": [
@@ -3243,6 +3250,53 @@
         "way/295396527",
         "way/295396523",
         "way/295396535"
+      ]
+    },
+    {
+      "id": "wdw-big-thunder-mountain",
+      "name": "Big Thunder Mountain Railroad",
+      "model": "wdw-big-thunder-mountain",
+      "lng": -81.5846891,
+      "lat": 28.4205673,
+      "bearing": 0,
+      "elevation": 0,
+      "minzoom": 16,
+      "wikidata": "Q859406",
+      "replaces": [
+        "way/324922573",
+        "way/310114442",
+        "way/71194272",
+        "way/820348480",
+        "way/71194300",
+        "way/71194287",
+        "way/1351939293",
+        "way/1351939292",
+        "way/71194288",
+        "way/71194279",
+        "way/1351939291",
+        "way/1351939290",
+        "way/683642206",
+        "way/1351939289",
+        "way/71194292",
+        "way/71194289",
+        "way/71194297",
+        "way/1351939288",
+        "way/71194298",
+        "way/1351939287",
+        "way/71194274",
+        "way/71194276",
+        "way/71194281",
+        "way/71194273",
+        "way/1351939284",
+        "way/1351939283",
+        "way/71194299",
+        "way/71194271",
+        "way/1228692341",
+        "way/1228692337",
+        "way/71194269",
+        "way/71194270",
+        "way/1228692340",
+        "way/1228692339"
       ]
     }
   ]
