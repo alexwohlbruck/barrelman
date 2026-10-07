@@ -127,8 +127,10 @@ export async function searchPlaces(
   if (cached) return cached
 
   // Strip apostrophes ("sal's" → "sals") to mirror the tsvector normalization,
-  // then replace remaining punctuation with spaces.
-  const sanitizedQuery = query?.replace(/['’]/g, '').replace(/[^\w\s\-.]/g, ' ').trim() || ''
+  // then replace remaining punctuation with spaces. Letters are matched by
+  // Unicode class, not \w: \w is ASCII-only, and turned "Neukölln" into
+  // "Neuk lln", which no layer could match.
+  const sanitizedQuery = query?.replace(/['’]/g, '').replace(/[^\p{L}\p{N}\s\-.]/gu, ' ').trim() || ''
   const hasQuery = sanitizedQuery.length > 0
   const hasPointLocation = lat != null && lng != null
   const hasRoute = route != null

@@ -42,6 +42,11 @@ describe('buildTsQueryText', () => {
     expect(buildTsQueryText(['&', '!'], false)).toBe('')
   })
 
+  test('keeps letters outside ASCII, which unaccent() folds in SQL', () => {
+    expect(buildTsQueryText(['Neukölln'], false)).toBe('neukölln')
+    expect(buildTsQueryText(['Zürich', 'straße'], true)).toBe('zürich & straße:*')
+  })
+
   test('plain words pass through unchanged', () => {
     expect(buildTsQueryText(['divine', 'barrel'], true)).toBe('divine & barrel:*')
   })
