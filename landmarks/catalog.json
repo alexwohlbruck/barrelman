@@ -832,6 +832,13 @@
       "license": "CC0-1.0",
       "author": "Barrelman",
       "source": "scripts/landmarks/wdw-haunted-mansion.ts"
+    },
+    {
+      "id": "wdw-main-street-station",
+      "file": "models/wdw-main-street-station.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/wdw-main-street-station.ts"
     }
   ],
   "landmarks": [
@@ -3145,6 +3152,30 @@
         "way/1107979234",
         "way/1107979235",
         "way/1107979236"
+      ]
+    },
+    {
+      "id": "wdw-main-street-station",
+      "name": "Main Street, U.S.A. Station",
+      "model": "wdw-main-street-station",
+      "lng": -81.5812004,
+      "lat": 28.4164917,
+      "bearing": 0,
+      "elevation": 0,
+      "minzoom": 16,
+      "replaces": [
+        "way/296125663",
+        "way/1107878401",
+        "way/1107878402",
+        "way/1107878403",
+        "way/1107878404",
+        "way/1107878405",
+        "way/1107878406",
+        "way/1107878407",
+        "way/1107878408",
+        "way/1107878409",
+        "way/1107878410",
+        "way/1107878411"
       ]
     }
   ]
