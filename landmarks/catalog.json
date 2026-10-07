@@ -839,6 +839,13 @@
       "license": "CC0-1.0",
       "author": "Barrelman",
       "source": "scripts/landmarks/wdw-main-street-station.ts"
+    },
+    {
+      "id": "wdw-epcot-american-adventure",
+      "file": "models/wdw-epcot-american-adventure.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/wdw-epcot-american-adventure.ts"
     }
   ],
   "landmarks": [
@@ -3176,6 +3183,21 @@
         "way/1107878409",
         "way/1107878410",
         "way/1107878411"
+      ]
+    },
+    {
+      "id": "wdw-epcot-american-adventure",
+      "name": "The American Adventure",
+      "model": "wdw-epcot-american-adventure",
+      "lng": -81.5493874,
+      "lat": 28.36722,
+      "bearing": 0,
+      "elevation": 0,
+      "minzoom": 16,
+      "wikidata": "Q2897054",
+      "replaces": [
+        "way/295592223",
+        "way/515970173"
       ]
     }
   ]
