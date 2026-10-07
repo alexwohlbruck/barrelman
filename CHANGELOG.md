@@ -12,6 +12,15 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ### Added
 
+* **Walt Disney World landmarks, and the Incredicoaster.** The catalog gains
+  27 models across the four Florida parks: Cinderella Castle, Space Mountain,
+  Big Thunder Mountain and the Haunted Mansion; Spaceship Earth, Test Track,
+  Cosmic Rewind and the World Showcase pavilions; the Tower of Terror, Rock 'n'
+  Roller Coaster, Slinky Dog Dash and Galaxy's Edge; the Tree of Life,
+  Expedition Everest and Pandora's floating mountains. The Incredicoaster at
+  Disney California Adventure joins them. Coasters list their OSM track ways,
+  so the basemap's coaster lines hide under the model.
+
 * **Open Landmarks import, from a shell or the console, in two modes.**
   `bun run landmarks:import` (console: *Import Open Landmarks (update)*) does
   what startup does: one request when the release hasn't moved, and only new
