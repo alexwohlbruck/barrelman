@@ -10,6 +10,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.8.4] - 2026-10-07
+
 ### Fixed
 
 * **Place search names the state a place is in, and lists each place once.**
