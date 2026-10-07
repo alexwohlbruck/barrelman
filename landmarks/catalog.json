@@ -846,6 +846,13 @@
       "license": "CC0-1.0",
       "author": "Barrelman",
       "source": "scripts/landmarks/wdw-epcot-american-adventure.ts"
+    },
+    {
+      "id": "wdw-epcot-mexico-pyramid",
+      "file": "models/wdw-epcot-mexico-pyramid.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/wdw-epcot-mexico-pyramid.ts"
     }
   ],
   "landmarks": [
@@ -3198,6 +3205,21 @@
       "replaces": [
         "way/295592223",
         "way/515970173"
+      ]
+    },
+    {
+      "id": "wdw-epcot-mexico-pyramid",
+      "name": "Mexico Pavilion",
+      "model": "wdw-epcot-mexico-pyramid",
+      "lng": -81.54695,
+      "lat": 28.37185,
+      "bearing": 54,
+      "elevation": 0,
+      "minzoom": 16,
+      "wikidata": "Q2776455",
+      "replaces": [
+        "way/295598769",
+        "way/529602448"
       ]
     }
   ]
