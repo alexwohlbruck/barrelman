@@ -699,6 +699,13 @@
       "license": "CC0-1.0",
       "author": "Barrelman",
       "source": "scripts/landmarks/wdw-epcot-japan-pagoda.ts"
+    },
+    {
+      "id": "wdw-epcot-france",
+      "file": "models/wdw-epcot-france.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/wdw-epcot-france.ts"
     }
   ],
   "landmarks": [
@@ -2662,6 +2669,31 @@
       "wikidata": "Q2162898",
       "replaces": [
         "way/295587740"
+      ]
+    },
+    {
+      "id": "wdw-epcot-france",
+      "name": "France Pavilion and Eiffel Tower (EPCOT)",
+      "model": "wdw-epcot-france",
+      "lng": -81.5529155,
+      "lat": 28.3687766,
+      "bearing": 47.5,
+      "elevation": 0,
+      "minzoom": 16,
+      "replaces": [
+        "way/305094683",
+        "way/295447782",
+        "way/305094845",
+        "way/305094686",
+        "way/305094846",
+        "way/305094685",
+        "way/805286022",
+        "way/173599405",
+        "way/311286680",
+        "way/311286681",
+        "way/311286682",
+        "way/311286683",
+        "way/311286684"
       ]
     }
   ]
