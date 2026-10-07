@@ -10,6 +10,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.8.2] - 2026-10-07
+
 ### Fixed
 
 * **Searching for a place no longer waits 12 seconds.** Once the place itself
