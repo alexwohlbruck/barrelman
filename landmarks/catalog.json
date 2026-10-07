@@ -825,6 +825,13 @@
       "license": "CC0-1.0",
       "author": "Barrelman",
       "source": "scripts/landmarks/wdw-space-mountain.ts"
+    },
+    {
+      "id": "wdw-haunted-mansion",
+      "file": "models/wdw-haunted-mansion.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/wdw-haunted-mansion.ts"
     }
   ],
   "landmarks": [
@@ -3118,6 +3125,26 @@
         "way/373171487",
         "way/373171488",
         "way/1106733754"
+      ]
+    },
+    {
+      "id": "wdw-haunted-mansion",
+      "name": "The Haunted Mansion",
+      "model": "wdw-haunted-mansion",
+      "lng": -81.583103,
+      "lat": 28.4204763,
+      "bearing": 8,
+      "elevation": 0,
+      "minzoom": 16,
+      "wikidata": "Q2030983",
+      "replaces": [
+        "way/41831418",
+        "way/1107979231",
+        "way/1107979232",
+        "way/1107979233",
+        "way/1107979234",
+        "way/1107979235",
+        "way/1107979236"
       ]
     }
   ]
