@@ -10,6 +10,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.8.3] - 2026-10-07
+
 ### Fixed
 
 * **US cities show up in place search from far away.** A US city's boundary
