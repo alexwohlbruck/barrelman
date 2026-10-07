@@ -741,6 +741,13 @@
       "license": "CC0-1.0",
       "author": "Barrelman",
       "source": "scripts/landmarks/wdw-rock-n-roller-coaster.ts"
+    },
+    {
+      "id": "wdw-epcot-cosmic-rewind",
+      "file": "models/wdw-epcot-cosmic-rewind.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/wdw-epcot-cosmic-rewind.ts"
     }
   ],
   "landmarks": [
@@ -2825,6 +2832,20 @@
       "replaces": [
         "way/357021885",
         "way/357021883"
+      ]
+    },
+    {
+      "id": "wdw-epcot-cosmic-rewind",
+      "name": "Guardians of the Galaxy: Cosmic Rewind",
+      "model": "wdw-epcot-cosmic-rewind",
+      "lng": -81.547025,
+      "lat": 28.3754942,
+      "bearing": 0,
+      "elevation": 0,
+      "minzoom": 16,
+      "wikidata": "Q36259219",
+      "replaces": [
+        "way/719079634"
       ]
     }
   ]
