@@ -31,6 +31,9 @@ services:
       # relies on these mounts — without this the API dies on boot with an
       # uncaughtException from loadFile().
       - ./config:/app/config
+      # The landmark catalog and its models, so an edit is live on restart
+      # rather than on the next image build.
+      - ./landmarks:/app/landmarks
       - ./data:/data
       - /app/node_modules
 

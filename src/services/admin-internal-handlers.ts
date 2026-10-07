@@ -21,6 +21,8 @@ import {
   type AdminTaskResult,
 } from './admin.service'
 
+import { importOpenLandmarks } from './openlandmarks.service'
+
 const IMPORT_DIR = join(import.meta.dir, '../../import')
 
 export type LogFn = (text: string) => void
@@ -99,6 +101,11 @@ export const INTERNAL_HANDLERS: Record<string, (log: LogFn) => Promise<void>> = 
   'admin:resolve-parent-context-incremental': async (log) =>
     reportTask(log, await runResolveParentContextIncremental()),
   'admin:rebuild-tsvectors': async (log) => reportTask(log, await runRebuildTsvectors()),
+
+  'landmarks:import-openlandmarks': async (log) => {
+    const r = await importOpenLandmarks({ log })
+    for (const s of r.skipped) log(`  skipped ${s}`)
+  },
 
   // raw SQL-file tasks
   'sql:create-station-links.sql': (log) => runSqlFile(log, 'create-station-links.sql'),

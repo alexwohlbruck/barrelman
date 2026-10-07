@@ -357,6 +357,30 @@ postgres:
       buffer: 64
       clip_geom: true
 
+    # Roller coaster tracks, from `coaster_tracks` (see
+    # import/create-detail-views.sql). Lines only: a closed track is served as
+    # its ring. `id` is there so a client can hide the tracks a 3D landmark
+    # replaces, the same way it hides buildings.
+    #
+    # 14–16 like buildings_3d, so it joins the `detail` bundle without changing
+    # its top zoom.
+    coaster_tracks:
+      schema: public
+      table: coaster_tracks
+      srid: 4326
+      geometry_column: geom
+      geometry_type: GEOMETRY
+      id_column: fid
+      minzoom: 14
+      maxzoom: 16
+      properties:
+        id: id
+        name: name
+        colour: colour
+        layer: layer
+      buffer: 64
+      clip_geom: true
+
     street_furniture:
       schema: public
       table: street_furniture
