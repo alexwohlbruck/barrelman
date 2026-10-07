@@ -678,6 +678,13 @@
       "license": "CC0-1.0",
       "author": "Barrelman",
       "source": "scripts/landmarks/wdw-spaceship-earth.ts"
+    },
+    {
+      "id": "dlr-incredicoaster",
+      "file": "models/dlr-incredicoaster.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/dlr-incredicoaster.ts"
     }
   ],
   "landmarks": [
@@ -2559,6 +2566,60 @@
         "way/146221550",
         "way/295176801",
         "way/298641632"
+      ]
+    },
+    {
+      "id": "dlr-incredicoaster",
+      "name": "Incredicoaster",
+      "model": "dlr-incredicoaster",
+      "lng": -117.9217081,
+      "lat": 33.8047468,
+      "bearing": 0,
+      "elevation": 0,
+      "minzoom": 15,
+      "wikidata": "Q1026847",
+      "replaces": [
+        "way/194882116",
+        "way/200375182",
+        "way/521998250",
+        "way/521998240",
+        "way/521998233",
+        "way/111215901",
+        "way/521998238",
+        "way/113935842",
+        "way/113935836",
+        "way/113935835",
+        "way/113935839",
+        "way/113935830",
+        "way/113935833",
+        "way/521998245",
+        "way/123412465",
+        "way/521998248",
+        "way/123412463",
+        "way/123412464",
+        "way/123412462",
+        "way/113935838",
+        "way/265898488",
+        "way/265898491",
+        "way/265898489",
+        "way/265898487",
+        "way/521998243",
+        "way/521998235",
+        "way/113935831",
+        "way/99409025",
+        "way/99409023",
+        "way/132509494",
+        "way/108039685",
+        "way/597969178",
+        "way/597969179",
+        "way/597969171",
+        "way/111215896",
+        "way/108039686",
+        "way/598399296",
+        "way/597969172",
+        "way/265898490",
+        "way/597969174",
+        "way/200375174"
       ]
     }
   ]
