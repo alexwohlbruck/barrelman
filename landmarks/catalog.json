@@ -783,6 +783,13 @@
       "license": "CC0-1.0",
       "author": "Barrelman",
       "source": "scripts/landmarks/wdw-pandora-floating-mountains.ts"
+    },
+    {
+      "id": "wdw-epcot-italy",
+      "file": "models/wdw-epcot-italy.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/wdw-epcot-italy.ts"
     }
   ],
   "landmarks": [
@@ -2968,6 +2975,21 @@
         "way/668089396",
         "way/668089397",
         "way/668089398"
+      ]
+    },
+    {
+      "id": "wdw-epcot-italy",
+      "name": "Italy Pavilion (Campanile and Doge's Palace)",
+      "model": "wdw-epcot-italy",
+      "lng": -81.5481578,
+      "lat": 28.3678284,
+      "bearing": 347,
+      "elevation": 0,
+      "minzoom": 16,
+      "wikidata": "Q2604149",
+      "replaces": [
+        "way/295592599",
+        "way/295592598"
       ]
     }
   ]
