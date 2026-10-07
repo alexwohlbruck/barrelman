@@ -671,6 +671,13 @@
       "license": "CC0-1.0",
       "author": "Barrelman",
       "source": "scripts/landmarks/carowinds-windseeker.ts"
+    },
+    {
+      "id": "wdw-spaceship-earth",
+      "file": "models/wdw-spaceship-earth.glb",
+      "license": "CC0-1.0",
+      "author": "Barrelman",
+      "source": "scripts/landmarks/wdw-spaceship-earth.ts"
     }
   ],
   "landmarks": [
@@ -2536,6 +2543,22 @@
       "minzoom": 14,
       "replaces": [
         "way/893187005"
+      ]
+    },
+    {
+      "id": "wdw-spaceship-earth",
+      "name": "Spaceship Earth",
+      "model": "wdw-spaceship-earth",
+      "lng": -81.5493963,
+      "lat": 28.3752927,
+      "bearing": 0,
+      "elevation": 0,
+      "minzoom": 15,
+      "wikidata": "Q2916749",
+      "replaces": [
+        "way/146221550",
+        "way/295176801",
+        "way/298641632"
       ]
     }
   ]
