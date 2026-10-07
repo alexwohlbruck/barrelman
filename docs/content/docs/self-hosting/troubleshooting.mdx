@@ -82,6 +82,12 @@ docker exec barrelman-db psql -U barrelman -d barrelman -c "SELECT count(*) FROM
 
 Remember the import is not clipped to the bounding box — the boundary of your data is whatever the OSM extracts cover, and the bbox narrows only bikeshare and transit feed *discovery*.
 
+**Cities, states and postal codes are missing from search after an upgrade**
+
+They come from a layer with two indexes of its own, `geo_places_locality_ts_idx` and `geo_places_postal_code_idx`. The API builds them in the background on its first start after the upgrade, once search enrichment has finished; each build scans the whole table, so on a national import it takes several minutes. The layer switches itself on within a minute of both being ready. The log shows `[schema] building geo_places_locality_ts_idx` when a build starts, and an error if one failed. A restart retries it.
+
+US ZIP codes come from Pelias rather than OSM, which maps them almost nowhere, so they also need Pelias running with its Who's on First data.
+
 **`Region "colorado" is disabled`**
 
 The console toggle is off. Enable it under **Regions**, or drop it from `REGIONS`. A disabled region named in `REGIONS` is an error, not a silent skip.
