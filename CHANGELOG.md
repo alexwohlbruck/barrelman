@@ -12,6 +12,14 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ### Added
 
+* **Open Landmarks import, from a shell or the console, in two modes.**
+  `bun run landmarks:import` (console: *Import Open Landmarks (update)*) does
+  what startup does: one request when the release hasn't moved, and only new
+  models downloaded. `bun run landmarks:import:full` (console: *Import Open
+  Landmarks (full)*) re-reads the release, downloads and re-verifies every
+  model against its published hash, and rewrites every row, for a damaged
+  model cache or rows that have drifted.
+
 * **3D landmarks (experimental).** Hand-made 3D models that a map draws in
   place of a building's extrusion. `/tiles/landmarks/{z}/{x}/{y}` serves where
   they stand, with each landmark's model, bearing, scale and the OSM buildings

@@ -751,7 +751,7 @@ export const SCRIPTS: ScriptDef[] = [
   },
   {
     id: 'landmarks-import',
-    name: 'Import Open Landmarks',
+    name: 'Import Open Landmarks (update)',
     description:
       'Bring the 3D landmarks layer up to date with the current Open Landmarks release, beside the repo catalog. ' +
       'Downloads only new models; an unchanged release is one request.',
@@ -761,7 +761,21 @@ export const SCRIPTS: ScriptDef[] = [
     confirm: false,
     exec: { kind: 'internal', handler: 'landmarks:import-openlandmarks' },
     source: 'src/services/openlandmarks.service.ts',
-    notes: 'Also runs at startup. OPEN_LANDMARKS_URL=off disables it; LANDMARK_SOURCE_PRIORITY sets which source wins a shared building.',
+    notes: 'Also runs at startup. OPEN_LANDMARKS_URL=off disables it; LANDMARK_SOURCE_PRIORITY sets which source wins a shared building. From a shell: bun run landmarks:import.',
+  },
+  {
+    id: 'landmarks-import-full',
+    name: 'Import Open Landmarks (full)',
+    description:
+      'Re-import the whole Open Landmarks release: download every model again, re-verify each against its ' +
+      'published hash, and rewrite every row, even if the release has not changed.',
+    category: 'database',
+    danger: 'safe',
+    longRunning: true,
+    confirm: true,
+    exec: { kind: 'internal', handler: 'landmarks:import-openlandmarks-full' },
+    source: 'src/services/openlandmarks.service.ts',
+    notes: 'For a damaged model cache or rows that have drifted; the update is enough otherwise. Downloads the whole dataset (tens of MB). From a shell: bun run landmarks:import:full.',
   },
   {
     id: 'detail-views',
