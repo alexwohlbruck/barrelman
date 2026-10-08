@@ -28,6 +28,17 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ### Changed
 
+* **A 3D landmark can be raised or sunk without its model being lifted.** The
+  landmark tile's `elevation` now carries the value the landmarks release
+  sends, in metres: positive for a model standing on something the map
+  doesn't draw (the Statue of Liberty on Fort Wood), negative for one whose
+  base is below the street (a stadium's field). It was always 0 before,
+  because the release baked the lift into the model, and a client that grounds
+  a model by its lowest points pulled that lift back down. Releases without
+  the field, and every Open Landmarks asset, still import at 0, and an
+  elevation beyond ±200 m skips the asset. `height` now includes the
+  elevation, so it stays the height the landmark reaches above its ground.
+
 * Street trees and tree rows are served from zoom 14, so maps can draw them before zooming all the way in.
 
 ## [0.10.0] - 2026-10-08
