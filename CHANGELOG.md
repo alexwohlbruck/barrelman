@@ -12,6 +12,16 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ### Added
 
+* **Sport pitches.** A new `sport_pitches` layer, in the `detail` bundle,
+  carries every pitch's surface plus regulation markings for tennis,
+  pickleball, basketball, volleyball, beach volleyball, soccer and American
+  football. Markings are fitted to each pitch, with a block of courts repeated
+  across it and half courts recognised. The nets, hoops and goals on them come
+  as oriented points. It is a stored view, refreshed after every import and OSM
+  update.
+
+### Added
+
 * **An uncapped container log is now something you can find before it fills the
   disk.** The 50 MB cap lives in the compose file, but Docker bakes log options
   in at container creation — so a service that has not been recreated since the

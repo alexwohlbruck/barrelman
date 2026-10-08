@@ -272,6 +272,7 @@ export const SCRIPTS: ScriptDef[] = [
       { script: 'osm-basemap', when: 'only when the extract changed, and "Rebuild basemap" is on' },
       { script: 'osm-buildings-3d', when: 'unless "Refresh 3D buildings" is off' },
       { script: 'osm-street-furniture', when: 'always' },
+      { script: 'osm-sport-pitches', when: 'always' },
     ],
     source: 'scripts/update-osm.sh',
     notes:
@@ -306,6 +307,20 @@ export const SCRIPTS: ScriptDef[] = [
     source: 'scripts/refresh-view.sh',
     notes:
       'Refreshes concurrently, so furniture keeps serving the old rows until the new ones are ready. Runs after every OSM update. Fastest once the "Map Detail Indexes" task has built the highway index it searches.',
+  },
+  {
+    id: 'osm-sport-pitches',
+    name: 'Refresh Sport Pitches',
+    description:
+      'Rebuild the sport_pitches view: every pitch surface, plus court and field markings and their nets, hoops and goals, fitted to each pitch.',
+    category: 'osm',
+    danger: 'safe',
+    longRunning: true,
+    confirm: false,
+    exclusive: true,
+    exec: { kind: 'process', command: 'bash', args: ['scripts/refresh-view.sh', 'sport_pitches'] },
+    source: 'scripts/refresh-view.sh',
+    notes: 'Refreshes concurrently, so pitches keep serving the old rows until the new ones are ready. Runs after every OSM update.',
   },
   {
     id: 'osm-basemap',

@@ -394,7 +394,7 @@ a zoom floor: z8 went from 83.6 MB in 10.1 s to **47 KB in 0.07 s**.
 
 ### Map detail sources
 
-Six sources carry detail that a standard OpenMapTiles basemap has no schema
+Seven sources carry detail that a standard OpenMapTiles basemap has no schema
 for, so a client drawing them has nowhere else to get them:
 
 | Source | Geometry | Zooms | What it carries |
@@ -405,6 +405,7 @@ for, so a client drawing them has nowhere else to get them:
 | `street_furniture` | point | 17 | Benches, bins, recycling, picnic tables, bike racks, drinking water, fountains, street lamps, bollards and billboards. `kind` names the object and `direction` is the bearing it faces |
 | `buildings_3d` | polygon | 14–16 | Building outlines and `building:part`s, with `hide_3d` marking the outlines a 3D client must not draw, plus wall and roof colour |
 | `coaster_tracks` | line | 14–16 | Roller coaster tracks (`roller_coaster=track`, and the older `railway=roller_coaster`), with `name`, `colour` and a numeric `layer`. A closed track comes as its ring, not a polygon. `id` is the OSM way (`way/123`), so a client can hide the tracks a 3D landmark replaces |
+| `sport_pitches` | mixed | 14–16 | Every `leisure=pitch`: its surface (`kind=surface`, with `sport` and `surface`), regulation markings for tennis, pickleball, basketball, volleyball, beach volleyball, soccer and American football fitted to the pitch (`kind=lines`), and the nets, hoops and goals on them as points (`kind` names the prop, with `direction` in degrees and `width` in metres) |
 
 #### Asking for them as one tile
 
@@ -421,7 +422,7 @@ curl "https://api.barrelman.dev/tiles/buildings_3d,parking_areas/14/4825/6156" -
 ```
 
 `detail` is `buildings_3d`, `parking_areas`, `bicycle_ways`, `street_trees`,
-`tree_rows` and `coaster_tracks` — every overlay a client reads at z≤16. The response is one tile
+`tree_rows`, `coaster_tracks` and `sport_pitches` — every overlay a client reads at z≤16. The response is one tile
 carrying each source as its own layer, named exactly as it is above, so a style
 that already draws them needs only its `source` changed.
 
@@ -465,7 +466,7 @@ within 14 m, and street lamps and billboards face the nearest carriageway within
 25 m and 60 m. An object standing on its way turns side-on to it. Objects with no
 way in reach, and bins and bollards, have an empty `direction`.
 
-`buildings_3d` and `street_furniture` are not plain views. OpenStreetMap maps a detailed
+`buildings_3d`, `street_furniture` and `sport_pitches` are not plain views. OpenStreetMap maps a detailed
 building twice — an outline tagged `building=*` and `building:part=*` polygons
 inside it holding the real heights — and a 3D client must draw the parts and not
 the outline, or it draws both and they z-fight. OpenMapTiles marks the outline
@@ -473,7 +474,8 @@ with `hide_3d`; working out which outlines contain a part is a spatial join, and
 a join cannot be pushed into Martin's per-tile filter, so this one is
 MATERIALIZED and computed once. It also carries `roof:colour`, which the
 OpenMapTiles schema has no field for at all. Finding each object's nearest way
-is a join too, so `street_furniture` is stored the same way.
+is a join too, so `street_furniture` is stored the same way, and so is
+`sport_pitches`, whose markings are laid out per pitch.
 
 That means both come into existence empty. `scripts/import-osm.sh` refreshes
 them after an import, OSM Update after each update, and the API in the
