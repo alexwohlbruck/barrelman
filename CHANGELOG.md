@@ -59,6 +59,16 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 * Street trees and tree rows are served from zoom 14, so maps can draw them before zooming all the way in.
 
+### Fixed
+
+* **Landmark models from a command-line import are served without restarting
+  the API.** `bun run landmarks:import` runs in its own process, so the API
+  kept its old list of model files and answered 404 for every new model until
+  `docker restart barrelman`. A request for a model the API does not know now
+  reloads the list from the database first, at most once every 10 seconds. A
+  404 for a model is also sent with `Cache-Control: no-store`, so a CDN in
+  front of the API no longer keeps serving the miss after the model appears.
+
 ## [0.10.0] - 2026-10-08
 
 ### Added

@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test'
-import { glbBounds, modelFileName, MODEL_FILE_RE } from './landmarks.service'
+import { createModelIndex, glbBounds, modelFileName, MODEL_FILE_RE } from './landmarks.service'
 
 // The shipped models, and the catalog checks that went with them, now live in
 // github.com/alexwohlbruck/landmarks. These tests build the few GLBs they
@@ -141,5 +141,94 @@ describe('model file names', () => {
   test('the pattern admits no path', () => {
     expect(MODEL_FILE_RE.test('../eiffel-tower.abababababab.glb')).toBe(false)
     expect(MODEL_FILE_RE.test('eiffel-tower.abababababab.glb/x')).toBe(false)
+  })
+})
+
+describe('model index', () => {
+  const OLD = 'eiffel-tower.aaaaaaaaaaaa.glb'
+  const NEW = 'big-ben.bbbbbbbbbbbb.glb'
+
+  /** An index over a mutable "database", counting loads, on a fake clock. */
+  function index() {
+    const db = new Map([[OLD, '/models/old.glb']])
+    const clock = { t: 0 }
+    let loads = 0
+    const idx = createModelIndex({
+      load: async () => {
+        loads++
+        return [...db]
+      },
+      reloadMs: 10_000,
+      now: () => clock.t,
+    })
+    return { idx, db, clock, loads: () => loads }
+  }
+
+  test('a model imported by another process is found on the next miss', async () => {
+    const { idx, db, clock, loads } = index()
+    await idx.refresh()
+    // A separate import process writes a new model; this one's copy is stale.
+    db.set(NEW, '/models/new.glb')
+    clock.t = 10_000
+    expect(await idx.path(NEW)).toBe('/models/new.glb')
+    expect(loads()).toBe(2)
+  })
+
+  test('a hit never touches the database', async () => {
+    const { idx, clock, loads } = index()
+    await idx.refresh()
+    clock.t = 60_000
+    expect(await idx.path(OLD)).toBe('/models/old.glb')
+    expect(loads()).toBe(1)
+  })
+
+  test('misses reload at most once per interval', async () => {
+    const { idx, db, clock, loads } = index()
+    await idx.refresh()
+    clock.t = 10_000
+    expect(await idx.path(NEW)).toBeNull()
+    expect(loads()).toBe(2)
+    // Published just after that reload: missed until the interval has passed.
+    db.set(NEW, '/models/new.glb')
+    clock.t = 15_000
+    expect(await idx.path(NEW)).toBeNull()
+    expect(loads()).toBe(2)
+    clock.t = 20_000
+    expect(await idx.path(NEW)).toBe('/models/new.glb')
+    expect(loads()).toBe(3)
+  })
+
+  test('concurrent misses share one reload', async () => {
+    const { idx, db, clock, loads } = index()
+    await idx.refresh()
+    db.set(NEW, '/models/new.glb')
+    clock.t = 10_000
+    const found = await Promise.all([idx.path(NEW), idx.path(NEW), idx.path('nope.cccccccccccc.glb')])
+    expect(found).toEqual(['/models/new.glb', '/models/new.glb', null])
+    expect(loads()).toBe(2)
+  })
+
+  test('the first miss loads an index nothing has filled yet', async () => {
+    const { idx, loads } = index()
+    expect(await idx.path(OLD)).toBe('/models/old.glb')
+    expect(loads()).toBe(1)
+  })
+
+  test('a malformed name never reloads', async () => {
+    const { idx, clock, loads } = index()
+    clock.t = 10_000
+    expect(await idx.path('../.env')).toBeNull()
+    expect(loads()).toBe(0)
+  })
+
+  test('a failed reload is a miss, not an error', async () => {
+    const idx = createModelIndex({ load: async () => { throw new Error('db down') }, now: () => 0 })
+    const err = console.error
+    console.error = () => {}
+    try {
+      expect(await idx.path(NEW)).toBeNull()
+    } finally {
+      console.error = err
+    }
   })
 })

@@ -337,8 +337,6 @@ export function ensureLandmarksSchema(): Promise<void> {
   return schemaReady
 }
 
-/** Served model files by URL name, rebuilt by every import. */
-let modelFiles = new Map<string, string>()
 
 /**
  * Mark which placements are drawn. Two placements from different sources
@@ -365,17 +363,67 @@ export async function resolveLandmarkConflicts(): Promise<{ superseded: number }
   })
 }
 
-/** Rebuild the served-file lookup from the database, for every source. */
-export async function refreshModelFiles(): Promise<void> {
-  const rows = await sql<{ file: string; path: string }[]>`SELECT file, path FROM landmark_models WHERE path IS NOT NULL`
-  modelFiles = new Map(rows.map((r) => [r.file, r.path]))
+/** How often a lookup miss may reload the model index from the database. */
+export const MODEL_INDEX_RELOAD_MS = 10_000
+
+/**
+ * Served model files by URL name, held in memory so a model request never
+ * waits on the database.
+ *
+ * An import rebuilds it, but only in its own process. `bun run
+ * landmarks:import` runs beside the API, not in it, so the API's copy went
+ * stale and every new model 404'd until a restart. A miss therefore reloads
+ * the index from the database before answering. Names are content-addressed,
+ * so a miss for a well-formed name almost always means an import added the
+ * model since the last load — there is nothing else for a stale index to get
+ * wrong. Reloads are rate-limited, and concurrent misses share one, so a
+ * client asking for names that do not exist cannot turn each request into a
+ * query.
+ */
+export function createModelIndex(opts: {
+  load: () => Promise<Iterable<[string, string]>>
+  reloadMs?: number
+  now?: () => number
+}) {
+  const reloadMs = opts.reloadMs ?? MODEL_INDEX_RELOAD_MS
+  const now = opts.now ?? Date.now
+  let files = new Map<string, string>()
+  let loadedAt = -Infinity
+  let loading: Promise<void> | null = null
+
+  async function refresh(): Promise<void> {
+    loadedAt = now()
+    files = new Map(await opts.load())
+  }
+
+  async function path(name: string): Promise<string | null> {
+    if (!MODEL_FILE_RE.test(name)) return null
+    const hit = files.get(name)
+    if (hit) return hit
+    if (!loading && now() - loadedAt >= reloadMs) {
+      loading = refresh()
+        .catch((err) => console.error('[landmarks] model index reload failed:', err))
+        .finally(() => { loading = null })
+    }
+    if (loading) await loading
+    return files.get(name) ?? null
+  }
+
+  return { refresh, path }
 }
 
+const modelIndex = createModelIndex({
+  load: async () => {
+    const rows = await sql<{ file: string; path: string }[]>`SELECT file, path FROM landmark_models WHERE path IS NOT NULL`
+    return rows.map((r) => [r.file, r.path] as [string, string])
+  },
+})
+
+/** Rebuild the served-file lookup from the database, for every source. */
+export const refreshModelFiles = modelIndex.refresh
+
 /** Where a served model name lives on disk, or null if it is not one we serve. */
-export function modelPath(name: string): string | null {
-  if (!MODEL_FILE_RE.test(name)) return null
-  return modelFiles.get(name) ?? null
-}
+export const modelPath = modelIndex.path
 
 /**
  * One vector tile of landmark placements.
