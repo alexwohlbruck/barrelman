@@ -127,15 +127,16 @@ WHERE geom_type = 'line'
 -- bump it with any change to the SELECT and startup rebuilds it empty, to be
 -- filled again in the background.
 --
--- A fountain standing in water (inside a water body, or tagged fountain=nozzle)
--- is a `fountain_jet`, a plume rather than a basin; a drinking fountain mapped
--- as amenity=fountain is `drinking_water`.
+-- A fountain standing in a pond, lake, reservoir or lagoon, or tagged
+-- fountain=nozzle, is a `fountain_jet`, a plume rather than a basin. Untyped
+-- water stays a fountain: it is as often the fountain's own pool. A drinking
+-- fountain mapped as amenity=fountain is `drinking_water`.
 DO $$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_class WHERE relname = 'street_furniture' AND relkind = 'v') THEN
     DROP VIEW street_furniture;
   ELSIF EXISTS (SELECT 1 FROM pg_class WHERE relname = 'street_furniture' AND relkind = 'm')
-    AND COALESCE(obj_description('street_furniture'::regclass, 'pg_class'), '') <> 'v2' THEN
+    AND COALESCE(obj_description(to_regclass('street_furniture'), 'pg_class'), '') <> 'v3' THEN
     DROP MATERIALIZED VIEW street_furniture;
   END IF;
 END $$;
@@ -184,7 +185,8 @@ SELECT f.fid, f.id, f.centroid,
        CASE WHEN f.kind = 'fountain' AND (f.nozzle OR EXISTS (
               SELECT 1 FROM geo_places w
               WHERE w.geom_type = 'area' AND w.geom && f.centroid
-                AND (w.tags->>'natural' = 'water' OR w.tags->>'landuse' IN ('reservoir', 'basin'))
+                AND (w.tags->>'water' IN ('pond', 'lake', 'reservoir', 'lagoon', 'oxbow')
+                     OR w.tags->>'landuse' = 'reservoir')
                 AND ST_Contains(w.geom, f.centroid)))
             THEN 'fountain_jet' ELSE f.kind END as kind,
        COALESCE(f.direction, nearest.bearing::text, '') as direction
@@ -226,7 +228,7 @@ LEFT JOIN LATERAL (
 ) nearest ON true
 WITH NO DATA;
 
-COMMENT ON MATERIALIZED VIEW street_furniture IS 'v2';
+COMMENT ON MATERIALIZED VIEW street_furniture IS 'v3';
 CREATE UNIQUE INDEX IF NOT EXISTS street_furniture_fid_idx ON street_furniture (fid);
 CREATE INDEX IF NOT EXISTS street_furniture_centroid_idx ON street_furniture USING GIST (centroid);
 
