@@ -24,6 +24,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
   it. It is read-only, and exits non-zero when anything is uncapped so a cron
   job can gate on it.
 
+* A `woods` tile source, part of the `detail` bundle, says what grows in a wood: its `leaf_type` and `genus`, keyed by the basemap landcover feature's id.
+
 * 3D building tiles carry a `group_id` shared by every part of one building, so clients can style a part-mapped building as a whole.
 
 ### Changed

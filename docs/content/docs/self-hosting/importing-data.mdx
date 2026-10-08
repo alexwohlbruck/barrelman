@@ -394,7 +394,7 @@ a zoom floor: z8 went from 83.6 MB in 10.1 s to **47 KB in 0.07 s**.
 
 ### Map detail sources
 
-Six sources carry detail that a standard OpenMapTiles basemap has no schema
+Seven sources carry detail that a standard OpenMapTiles basemap has no schema
 for, so a client drawing them has nowhere else to get them:
 
 | Source | Geometry | Zooms | What it carries |
@@ -405,6 +405,7 @@ for, so a client drawing them has nowhere else to get them:
 | `street_furniture` | point | 17 | Benches, bins, recycling, picnic tables, bike racks, drinking water, fountains, street lamps, bollards and billboards. `kind` names the object and `direction` is the bearing it faces |
 | `buildings_3d` | polygon | 14–16 | Building outlines and `building:part`s, with `hide_3d` marking the outlines a 3D client must not draw, plus wall and roof colour |
 | `coaster_tracks` | line | 14–16 | Roller coaster tracks (`roller_coaster=track`, and the older `railway=roller_coaster`), with `name`, `colour` and a numeric `layer`. A closed track comes as its ring, not a polygon. `id` is the OSM way (`way/123`), so a client can hide the tracks a 3D landmark replaces |
+| `woods` | polygon | 14–16 | Woods and forests tagged with `leaf_type` (or the legacy `wood=*`) or a genus, carrying a normalised `leaf_type` and `genus`. The feature id is the basemap landcover feature's own (OSM id × 10, plus 2 for a way and 3 for a relation), so a client looks up what a basemap wood holds by id |
 
 #### Asking for them as one tile
 
@@ -421,7 +422,7 @@ curl "https://api.barrelman.dev/tiles/buildings_3d,parking_areas/14/4825/6156" -
 ```
 
 `detail` is `buildings_3d`, `parking_areas`, `bicycle_ways`, `street_trees`,
-`tree_rows` and `coaster_tracks` — every overlay a client reads at z≤16. The response is one tile
+`tree_rows`, `coaster_tracks` and `woods` — every overlay a client reads at z≤16. The response is one tile
 carrying each source as its own layer, named exactly as it is above, so a style
 that already draws them needs only its `source` changed.
 

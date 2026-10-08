@@ -382,6 +382,24 @@ postgres:
       buffer: 64
       clip_geom: true
 
+    # Woods that carry leaf_type or a genus, from `woods` (see
+    # import/create-detail-views.sql). The feature id is the basemap landcover
+    # feature's own, so a client joins the two on it.
+    woods:
+      schema: public
+      table: woods
+      srid: 4326
+      geometry_column: geom
+      geometry_type: GEOMETRY
+      id_column: fid
+      minzoom: 14
+      maxzoom: 16
+      properties:
+        leaf_type: leaf_type
+        genus: genus
+      buffer: 64
+      clip_geom: true
+
     street_furniture:
       schema: public
       table: street_furniture
