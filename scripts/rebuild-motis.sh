@@ -161,10 +161,17 @@ echo "[$(date '+%H:%M:%S')] [2/3] [motis] Clean-rebuilding dataset (motis import
 # which is exactly the state a first-time install is in. So fall back to moving
 # the dataset from outside once the container is stopped. Same failure mode
 # rebuild-graphhopper.sh had.
-MOVE='rm -rf /data/data.prev; [ -d /data/data ] && mv /data/data /data/data.prev || true'
+#
+# Only a complete dataset (one with a timetable, tt.bin) replaces data.prev. A
+# failed import leaves a partial /data/data behind, and rotating that over the
+# last good dataset would leave nothing to restore — the next failed run would
+# then take transit down for good.
+rotate() { # $1 = the volume's mount point
+  echo "if [ -f $1/data/tt.bin ]; then rm -rf $1/data.prev && mv $1/data $1/data.prev; else rm -rf $1/data; fi"
+}
 
 if [ "$(docker inspect "$CONTAINER" --format '{{.State.Running}}' 2>/dev/null)" = "true" ] \
-   && docker exec "$CONTAINER" sh -c "$MOVE" 2>/dev/null; then
+   && docker exec "$CONTAINER" sh -c "$(rotate /data)" 2>/dev/null; then
   docker stop "$CONTAINER" >/dev/null 2>&1 || true
 else
   log "container not usable for an in-place move — stopping and moving from outside"
@@ -172,12 +179,21 @@ else
   # barrelman-ops mounts the same volume at /gtfs-data; otherwise use a
   # throwaway container holding it.
   if [ -d /gtfs-data ] && [ -w /gtfs-data ]; then
-    rm -rf /gtfs-data/data.prev
-    [ -d /gtfs-data/data ] && mv /gtfs-data/data /gtfs-data/data.prev || true
+    sh -c "$(rotate /gtfs-data)"
   else
-    docker run --rm -v "${GTFS_VOL}:/data" alpine sh -c "$MOVE"
+    docker run --rm -v "${GTFS_VOL}:/data" alpine sh -c "$(rotate /data)"
   fi
 fi
+
+# From here the server is stopped, so every way out of the script — including
+# an unexpected `set -e` abort — has to put a dataset back and start it again.
+restore_previous() {
+  log "restoring previous dataset"
+  docker run --rm -v "${GTFS_VOL}:/data" alpine sh -c \
+    'rm -rf /data/data; [ -d /data/data.prev ] && mv /data/data.prev /data/data || true' || true
+  docker start "$CONTAINER" >/dev/null || true
+}
+trap restore_previous EXIT
 
 MAX_FEED_DROPS="${MOTIS_MAX_FEED_DROPS:-50}"
 dropped=0
@@ -185,10 +201,12 @@ import_ok=0
 while : ; do
   if run_import; then import_ok=1; break; fi
 
-  # A named feed failed to load → drop it and retry (bounded).
+  # A named feed failed to load → drop it and retry (bounded). `|| true`
+  # because under pipefail a grep that matches nothing fails the assignment,
+  # and errexit would then abort before the street-routing fallback below.
   bad="$(tr '\r' '\n' < /tmp/motis-import.log \
         | grep -aoiE '(failed to load|unable to import[^\n]*) gtfs/[A-Za-z0-9_.:-]+\.zip' \
-        | grep -aoE 'gtfs/[A-Za-z0-9_.:-]+\.zip' | head -1 | sed 's|gtfs/||;s|\.zip||')"
+        | grep -aoE 'gtfs/[A-Za-z0-9_.:-]+\.zip' | head -1 | sed 's|gtfs/||;s|\.zip||' || true)"
   if [ -n "$bad" ]; then
     if [ "$dropped" -ge "$MAX_FEED_DROPS" ]; then
       log "ERROR: dropped $dropped malformed feeds and still failing — giving up"; break
@@ -211,17 +229,14 @@ while : ; do
   break
 done
 
-if [ "$import_ok" = 1 ]; then
-  [ "$dropped" -gt 0 ] && log "imported with $dropped malformed feed(s) excluded (mode: $MODE)"
-  echo "[$(date '+%H:%M:%S')] [3/3] [motis] Restarting server to serve fresh dataset..."
-  docker start "$CONTAINER" >/dev/null
-else
-  log "restoring previous dataset"
-  docker run --rm -v "${GTFS_VOL}:/data" alpine sh -c \
-    'rm -rf /data/data; [ -d /data/data.prev ] && mv /data/data.prev /data/data || true'
-  docker start "$CONTAINER" >/dev/null
-  exit 1
+if [ "$import_ok" != 1 ]; then
+  exit 1 # the EXIT trap restores the previous dataset
 fi
+
+trap - EXIT
+[ "$dropped" -gt 0 ] && log "imported with $dropped malformed feed(s) excluded (mode: $MODE)"
+echo "[$(date '+%H:%M:%S')] [3/3] [motis] Restarting server to serve fresh dataset..."
+docker start "$CONTAINER" >/dev/null
 
 sleep 6
 # Probe the container by name, not localhost: this script runs inside
