@@ -10,6 +10,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-10-08
+
 ### Added
 
 * **Street furniture faces its street.** `street_furniture` now gives benches,
