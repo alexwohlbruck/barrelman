@@ -194,9 +194,9 @@ starts AS (
 pairs AS (
   SELECT e.osm_id as prev_id, st.osm_id as next_id
   FROM ends e JOIN starts st USING (x, y)
+  JOIN (SELECT x, y FROM ends GROUP BY x, y HAVING count(*) = 1) ue USING (x, y)
+  JOIN (SELECT x, y FROM starts GROUP BY x, y HAVING count(*) = 1) us USING (x, y)
   WHERE e.osm_id <> st.osm_id
-    AND (SELECT count(*) FROM ends e2 WHERE e2.x = e.x AND e2.y = e.y) = 1
-    AND (SELECT count(*) FROM starts s2 WHERE s2.x = e.x AND s2.y = e.y) = 1
 )
 UPDATE _rm_roads b SET
   prev_left = a.left_edge, prev_right = a.right_edge, prev_split_b = a.split_b,
@@ -209,8 +209,8 @@ WHERE b.osm_id = pairs.next_id AND a.marked = b.marked
 UPDATE _rm_roads SET
   ease = least(0.6 * ST_Length(g) / s, greatest(15,
            CASE WHEN mph >= 45 THEN lane_w * 3.281 * mph ELSE lane_w * 3.281 * mph * mph / 60 END / 3.281)),
-  opens_kerb_f = COALESCE(split_part(turn_forward, '|', fwd) LIKE '%right%' AND split_part(turn_forward, '|', 1) NOT LIKE '%left%', false),
-  opens_kerb_b = COALESCE(split_part(turn_backward, '|', bwd) LIKE '%right%' AND split_part(turn_backward, '|', 1) NOT LIKE '%left%', false)
+  opens_kerb_f = COALESCE(fwd > 0 AND split_part(turn_forward, '|', greatest(fwd, 1)) LIKE '%right%' AND split_part(turn_forward, '|', 1) NOT LIKE '%left%', false),
+  opens_kerb_b = COALESCE(bwd > 0 AND split_part(turn_backward, '|', greatest(bwd, 1)) LIKE '%right%' AND split_part(turn_backward, '|', 1) NOT LIKE '%left%', false)
 FROM (SELECT osm_id as id, COALESCE(
         CASE WHEN tags->>'maxspeed' ~ 'mph' THEN substring(tags->>'maxspeed' from '^\s*([0-9]+)')::float8
              ELSE substring(tags->>'maxspeed' from '^\s*([0-9]+)\s*$')::float8 / 1.609 END,
@@ -245,13 +245,14 @@ CREATE INDEX ON _rm_nodes USING gist (p);
 ANALYZE _rm_nodes;
 
 -- Signals and stop signs near a junction earn its approaches a stop line.
+DROP TABLE IF EXISTS _rm_signals;
+CREATE TEMP TABLE _rm_signals AS
+SELECT ST_Transform(geom, 3857) as g FROM geo_places
+WHERE geom_type = 'point' AND (tags @> '{"highway": "traffic_signals"}' OR tags @> '{"highway": "stop"}');
+CREATE INDEX ON _rm_signals USING gist (g);
+ANALYZE _rm_signals;
 UPDATE _rm_nodes n SET degree = -degree
-WHERE EXISTS (
-  SELECT 1 FROM geo_places c
-  WHERE c.geom_type = 'point' AND c.tags->>'highway' IN ('traffic_signals', 'stop')
-    AND c.geom && ST_Transform(ST_Expand(n.p, 30 * n.s), 4326)
-    AND ST_DWithin(ST_Transform(c.geom, 3857), n.p, 30 * n.s)
-);
+WHERE EXISTS (SELECT 1 FROM _rm_signals c WHERE ST_DWithin(c.g, n.p, 30 * n.s));
 
 -- Painted crossings: lane lines break for them, and stop lines and arrows
 -- stand back from them. `style` is what the paint looks like: zebra bars, two
