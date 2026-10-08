@@ -10,6 +10,20 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-10-07
+
+### Fixed
+
+* **A failed MOTIS rebuild no longer leaves transit down.** When the
+  street-routing import failed, as it always does on a continent-sized extract
+  (MOTIS allows at most 16 ways per node), the rebuild aborted before it could
+  fall back to a timetable-only build. MOTIS was left stopped, and transit
+  directions, departures and vehicles came back empty until someone restarted
+  it by hand. The fallback now runs. If the rebuild fails for any reason, it
+  restores the previous dataset and starts MOTIS again. A failed import also
+  no longer replaces the saved copy of the last good dataset, so the next
+  nightly GTFS check can't delete it.
+
 ## [0.9.0] - 2026-10-07
 
 ### Changed
