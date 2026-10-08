@@ -10,6 +10,14 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Changed
+
+* **Fountains in water.** `street_furniture` marks a fountain standing in a
+  pond or lake, or tagged `fountain=nozzle`, as `fountain_jet`, so a client can
+  draw a plume rather than a basin. Drinking fountains mapped as
+  `amenity=fountain` come through as `drinking_water`. The view rebuilds itself
+  on the next startup.
+
 ### Added
 
 * **An uncapped container log is now something you can find before it fills the
