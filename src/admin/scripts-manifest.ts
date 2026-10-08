@@ -869,6 +869,21 @@ export const SCRIPTS: ScriptDef[] = [
     notes: 'Requires Ollama running. Can take hours on large datasets.',
   },
   {
+    id: 'osm-road-markings',
+    name: 'Build Road Markings',
+    description:
+      'Rebuild road_surfaces, road_markings and road_glyphs from the lane tags: true-width carriageways with rounded kerbs, lane, centre and edge lines, stop lines, crosswalks, and turn arrows and bike symbols.',
+    category: 'osm',
+    danger: 'safe',
+    longRunning: true,
+    confirm: true,
+    exclusive: true,
+    exec: { kind: 'internal', handler: 'sql:generate-road-markings.sql' },
+    source: 'import/generate-road-markings.sql',
+    notes:
+      'Builds fresh tables and swaps them in at the end, so tiles keep serving the old roads meanwhile. Not part of OSM Update yet: measured at about 5 s per 7 km² of dense downtown, which is minutes for a city and roughly a day for the whole US. Restart Martin afterwards on an instance that caches tiles.',
+  },
+  {
     id: 'search-intersections',
     name: 'Generate Intersections',
     description: 'Find points where differently-named roads cross and insert synthetic intersection rows for search.',

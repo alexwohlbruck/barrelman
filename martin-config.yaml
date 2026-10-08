@@ -382,6 +382,54 @@ postgres:
       buffer: 64
       clip_geom: true
 
+    road_surfaces:
+      schema: public
+      table: road_surfaces
+      srid: 4326
+      geometry_column: geom
+      geometry_type: MULTIPOLYGON
+      id_column: fid
+      minzoom: 16
+      maxzoom: 16
+      properties:
+        bridge: bridge
+      buffer: 64
+      clip_geom: true
+
+    road_markings:
+      schema: public
+      table: road_markings
+      srid: 4326
+      geometry_column: geom
+      geometry_type: GEOMETRY
+      id_column: fid
+      minzoom: 16
+      maxzoom: 16
+      properties:
+        kind: kind
+        pattern: pattern
+        color: color
+        style: style
+        bridge: bridge
+      buffer: 64
+      clip_geom: true
+
+    road_glyphs:
+      schema: public
+      table: road_glyphs
+      srid: 4326
+      geometry_column: geom
+      geometry_type: POINT
+      id_column: fid
+      minzoom: 16
+      maxzoom: 16
+      properties:
+        glyph: glyph
+        direction: direction
+        bridge: bridge
+      buffer: 64
+      clip_geom: true
+
     object_lines:
       schema: public
       table: object_lines

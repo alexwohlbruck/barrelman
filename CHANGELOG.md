@@ -22,6 +22,11 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 * **Fences, walls, hedges, power lines and catenary.** A new `object_lines`
   layer, in the `detail` bundle, carries the barriers, power lines and
   electrified track a client stands up as 3D objects, with any tagged height.
+* **Road surfaces and markings.** A "Build Road Markings" console task
+  produces `road_surfaces`, `road_markings` and `road_glyphs` in the `detail`
+  bundle: true-width carriageways with rounded kerbs, centre, lane, edge and
+  bike lines, stop lines, kerb-to-kerb crosswalks, and turn arrows and bike
+  symbols, with lanes easing across where their count changes.
 
 ### Added
 

@@ -730,3 +730,17 @@ WITH NO DATA;
 
 CREATE UNIQUE INDEX IF NOT EXISTS sport_pitches_fid_idx ON sport_pitches (fid);
 CREATE INDEX IF NOT EXISTS sport_pitches_geom_idx ON sport_pitches USING GIST (geom);
+
+-- ─── Road surfaces and markings ──────────────────────────────────────────────
+--
+-- Built by import/generate-road-markings.sql, which swaps fresh tables in.
+-- Created empty here so Martin always finds them: a source missing from the
+-- `detail` bundle would fail the whole bundle, not just the roads.
+CREATE TABLE IF NOT EXISTS road_surfaces (fid bigserial PRIMARY KEY, bridge boolean, geom geometry(MultiPolygon, 4326));
+CREATE TABLE IF NOT EXISTS road_markings (
+  fid bigserial PRIMARY KEY, kind text, pattern text, color text, style text, bridge boolean,
+  geom geometry(Geometry, 4326));
+CREATE TABLE IF NOT EXISTS road_glyphs (fid bigserial PRIMARY KEY, glyph text, direction int, bridge boolean, geom geometry(Point, 4326));
+CREATE INDEX IF NOT EXISTS road_surfaces_geom_idx ON road_surfaces USING gist (geom);
+CREATE INDEX IF NOT EXISTS road_markings_geom_idx ON road_markings USING gist (geom);
+CREATE INDEX IF NOT EXISTS road_glyphs_geom_idx ON road_glyphs USING gist (geom);
