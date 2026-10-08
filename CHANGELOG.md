@@ -32,6 +32,23 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ### Fixed
 
+* **Bikeshare systems that publish GBFS 3.0 now have stations.** Version 3
+  sends station names as a list of translations rather than a string, and the
+  importer failed on the first one and recorded the system with no stations
+  while still reporting it as imported. Ten US systems were affected, including
+  Pittsburgh's POGOH, Honolulu's Biki, Detroit's MoGo, Austin's CapMetro Bike
+  Share and Tucson's Tugo. Re-run *GBFS Import* to load them. An importer error
+  on a system's stations is now printed instead of swallowed.
+* **Live availability reads GBFS 3.0 correctly.** It looked for v2 field names,
+  so a v3 station would have shown no bikes, and a v3 timestamp failed to
+  parse. E-bikes and scooters are now told apart by the system's declared
+  vehicle types, which also fixes free-floating scooters being labelled as
+  bikes.
+* **`/gbfs/systems` finds a system when any of its stations is in view.** It
+  matched only the system's first station, so a viewport over Midtown
+  Manhattan returned no Citi Bike. Its `vehicleTypes` are now returned in the
+  camelCase shape the rest of the API uses.
+
 * **Landmark models from a command-line import are served without restarting
   the API.** `bun run landmarks:import` runs in its own process, so the API
   kept its old list of model files and answered 404 for every new model until
