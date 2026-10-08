@@ -10,6 +10,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-10-07
+
 ### Fixed
 
 * **A failed MOTIS rebuild no longer leaves transit down.** When the
