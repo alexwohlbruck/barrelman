@@ -10,6 +10,32 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-10-07
+
+### Changed
+
+* **3D landmark models come from their own repository.** Barrelman's own
+  models now live in [alexwohlbruck/landmarks](https://github.com/alexwohlbruck/landmarks),
+  published in the Open Landmarks release format, and are imported the same
+  way as Open Landmarks: at startup and, with the seeded *Import 3D landmarks*
+  schedule enabled, hourly. An unchanged release costs one request per
+  source, and only new model files are downloaded, each checked against its
+  published hash. None ship in the image any more.
+
+  **Upgrading:** the API needs outbound HTTPS at startup to fetch models;
+  without it the landmarks layer is empty and the rest of the API is
+  unaffected. `BARRELMAN_LANDMARKS_URL` (default: the repository's published
+  release) replaces the bundled `landmarks/` catalog and `LANDMARKS_DIR`; set
+  it to `off` to serve none, or to a directory holding a release built with
+  the repository's `bun run build`. `off` now also removes that source's
+  landmarks, as does `OPEN_LANDMARKS_URL=off`. `OPEN_LANDMARKS_CONCURRENCY` is
+  renamed `LANDMARKS_CONCURRENCY`. Landmark ids are unchanged; each model gets
+  a new file name once, because a placement's bearing and scale are now baked
+  into its own copy (sent with `bearing` 0 and `scale` 1). The tile's `source`
+  reads `barrelman` where it read `catalog`, and `catalog` in
+  `LANDMARK_SOURCE_PRIORITY` is still understood. The console's landmark tasks
+  are renamed *Import 3D landmarks (update)* and *(full)*.
+
 ## [0.8.5] - 2026-10-07
 
 ### Fixed
@@ -71,13 +97,13 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ### Added
 
-* **3D landmark import, from a shell or the console, in two modes.**
-  `bun run landmarks:import` (console: *Import 3D landmarks (update)*) does
-  what startup does: one request per source when its release hasn't moved,
-  and only new models downloaded. `bun run landmarks:import:full` (console:
-  *Import 3D landmarks (full)*) re-reads every release, downloads and
-  re-verifies every model against its published hash, and rewrites every row,
-  for a damaged model cache or rows that have drifted.
+* **Open Landmarks import, from a shell or the console, in two modes.**
+  `bun run landmarks:import` (console: *Import Open Landmarks (update)*) does
+  what startup does: one request when the release hasn't moved, and only new
+  models downloaded. `bun run landmarks:import:full` (console: *Import Open
+  Landmarks (full)*) re-reads the release, downloads and re-verifies every
+  model against its published hash, and rewrites every row, for a damaged
+  model cache or rows that have drifted.
 
 ## [0.8.0] - 2026-10-06
 
@@ -87,48 +113,29 @@ does it — and the release pipeline turns it into the GitHub Release notes.
   place of a building's extrusion. `/tiles/landmarks/{z}/{x}/{y}` serves where
   they stand, with each landmark's model, bearing, scale and the OSM buildings
   it replaces. The models are served as immutable GLBs under
-  `/tiles/landmarks/models/`, gzipped for clients that accept it.
+  `/tiles/landmarks/models/`. The catalog lives in `landmarks/catalog.json`,
+  and the database is updated from it at startup. It ships with a stylised
+  Eiffel Tower, placed in Paris and on the Las Vegas Strip, and a Statue of
+  Liberty standing on Fort Wood. `LANDMARKS_DIR`
+  points the API at a catalog of your own.
 
-  They come from two datasets, both in the
-  [Open Landmarks](https://github.com/benjamintd/open-landmarks) release
-  format and imported the same way: Open Landmarks itself, and Barrelman's own
-  models, which live in [their own repository](https://github.com/alexwohlbruck/landmarks)
-  and are published from there (a stylised Eiffel Tower in Paris and Las
-  Vegas, the Statue of Liberty, New York and Charlotte landmarks, Carowinds'
-  coasters and more). Both are imported at startup and, once you enable the
-  seeded *Import 3D landmarks* schedule, hourly; an unchanged release costs
-  one request, and only new model files are downloaded, each checked against
-  its published hash. Where both model one building, only one is served:
-  `LANDMARK_SOURCE_PRIORITY` picks which, Open Landmarks first by default.
-  Landmarks can carry a finer model for close zooms (`detail`, `detailzoom`)
-  and lit entrances for night maps (`entrances`). Open Landmarks models are
-  CC BY 4.0 and Barrelman's CC0; placements are ODbL, and each model carries
-  any credit it needs.
-
-  The API now needs outbound HTTPS at startup to fetch the models: none ship
-  in the image. Without it the landmarks layer stays empty and the rest of
-  the API is unaffected. To run without, set `OPEN_LANDMARKS_URL=off` and
-  `BARRELMAN_LANDMARKS_URL=off`; `off` also removes a source's landmarks. To
-  serve models of your own, build a release with the landmarks repository's
-  `bun run build` and point `BARRELMAN_LANDMARKS_URL` at the directory it
-  writes.
-
-  Changed during development, for anyone running `dev`: the bundled
-  `landmarks/` catalog and `LANDMARKS_DIR` are gone, replaced by
-  `BARRELMAN_LANDMARKS_URL`. `OPEN_LANDMARKS_CONCURRENCY` is now
-  `LANDMARKS_CONCURRENCY`, since it covers both sources. The tile feature's
-  `source` reads `barrelman` where it read `catalog`, and `catalog` in
-  `LANDMARK_SOURCE_PRIORITY` is still understood. Landmark ids are unchanged,
-  but every model gets a new file name once, because each placement's bearing
-  and scale are now baked into its own copy of the model (sent with `bearing`
-  0 and `scale` 1). The console's landmark tasks are renamed *Import 3D
-  landmarks*; an existing schedule keeps working.
+  The layer also serves the [Open Landmarks](https://github.com/benjamintd/open-landmarks)
+  dataset beside the catalog. It is imported at startup and, once you enable
+  the seeded *Import Open Landmarks* schedule, hourly; an unchanged release
+  costs one request, and only new model files are downloaded, each checked
+  against its published hash. Where both sources model one building, only one
+  is served — `LANDMARK_SOURCE_PRIORITY` picks which, Open Landmarks first by
+  default. Landmarks can carry a finer model for close zooms (`detail`,
+  `detailzoom`) and lit entrances for night maps (`entrances`), and models are
+  gzipped for clients that accept it. Imported models are CC BY 4.0 and their
+  placements ODbL; each carries its credit. `OPEN_LANDMARKS_URL=off` serves
+  only your own catalog.
 
 * **A `coaster_tracks` tile source, in the `detail` bundle.** Roller coaster
   tracks (`roller_coaster=track`, and the older `railway=roller_coaster`) as
   lines, with `name`, `colour` and a numeric `layer`, at z14–16. A closed track
   comes as its ring. `id` is the OSM way, so a map can hide the tracks a 3D
-  landmark replaces, and Barrelman's coaster landmarks list their
+  landmark replaces, and the coaster landmarks in the catalog now list their
   track ways in `replaces`. It is a plain view, created at startup, so it needs
   no re-import.
 
