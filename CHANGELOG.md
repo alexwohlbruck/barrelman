@@ -10,13 +10,25 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Added
+
+* **An uncapped container log is now something you can find before it fills the
+  disk.** The 50 MB cap lives in the compose file, but Docker bakes log options
+  in at container creation — so a service that has not been recreated since the
+  cap landed goes on growing, and the release pipeline only recreates
+  `barrelman` and `barrelman-ops`. A MOTIS container four days older than the
+  cap reached 27.9 GB exactly that way, taking a dev box to a full disk and
+  unrelated services down with `ENOSPC`. `scripts/check-log-rotation.sh` — Check
+  Log Rotation in the console — lists every container in the project with its
+  cap and current log size, and prints the recreate command for the ones missing
+  it. It is read-only, and exits non-zero when anything is uncapped so a cron
+  job can gate on it.
+
+* 3D building tiles carry a `group_id` shared by every part of one building, so clients can style a part-mapped building as a whole.
+
 ### Changed
 
 * Street trees and tree rows are served from zoom 14, so maps can draw them before zooming all the way in.
-
-### Added
-
-* 3D building tiles carry a `group_id` shared by every part of one building, so clients can style a part-mapped building as a whole.
 
 ## [0.10.0] - 2026-10-08
 
