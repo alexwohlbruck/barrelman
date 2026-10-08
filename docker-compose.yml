@@ -274,12 +274,11 @@ services:
       # served by this container at /tiles/portolan/… . Missing dir → the
       # routes answer 404, so this is safe on a stack that never runs portolan.
       PORTOLAN_TILES_DIR: /portolan-data/build/tiles
-      # 3D landmark catalog + models. Defaults to the landmarks/ baked into the
-      # image; see .env.example.
-      LANDMARKS_DIR: ${LANDMARKS_DIR:-}
+      # 3D landmark sources, downloaded at startup; see .env.example.
       OPEN_LANDMARKS_URL: ${OPEN_LANDMARKS_URL:-}
       OPEN_LANDMARKS_CHANNEL: ${OPEN_LANDMARKS_CHANNEL:-}
-      OPEN_LANDMARKS_CONCURRENCY: ${OPEN_LANDMARKS_CONCURRENCY:-}
+      BARRELMAN_LANDMARKS_URL: ${BARRELMAN_LANDMARKS_URL:-}
+      LANDMARKS_CONCURRENCY: ${LANDMARKS_CONCURRENCY:-}
       # On the data volume, so imported models survive a container rebuild.
       LANDMARKS_CACHE_DIR: ${LANDMARKS_CACHE_DIR:-/data/landmarks}
       LANDMARK_SOURCE_PRIORITY: ${LANDMARK_SOURCE_PRIORITY:-}

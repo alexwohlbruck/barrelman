@@ -21,11 +21,15 @@ import {
   type AdminTaskResult,
 } from './admin.service'
 
-import { importOpenLandmarks } from './openlandmarks.service'
+import { importLandmarks, type ImportResult } from './landmark-import.service'
 
 const IMPORT_DIR = join(import.meta.dir, '../../import')
 
 export type LogFn = (text: string) => void
+
+function reportSkipped(log: LogFn, result: ImportResult) {
+  for (const s of result.sources) for (const skip of s.skipped) log(`  ${s.source} skipped ${skip}`)
+}
 
 /** Report the structured result of an admin.service task into the log stream. */
 function reportTask(log: LogFn, result: AdminTaskResult) {
@@ -102,14 +106,8 @@ export const INTERNAL_HANDLERS: Record<string, (log: LogFn) => Promise<void>> = 
     reportTask(log, await runResolveParentContextIncremental()),
   'admin:rebuild-tsvectors': async (log) => reportTask(log, await runRebuildTsvectors()),
 
-  'landmarks:import-openlandmarks': async (log) => {
-    const r = await importOpenLandmarks({ log })
-    for (const s of r.skipped) log(`  skipped ${s}`)
-  },
-  'landmarks:import-openlandmarks-full': async (log) => {
-    const r = await importOpenLandmarks({ full: true, log })
-    for (const s of r.skipped) log(`  skipped ${s}`)
-  },
+  'landmarks:import': async (log) => reportSkipped(log, await importLandmarks({ log })),
+  'landmarks:import-full': async (log) => reportSkipped(log, await importLandmarks({ full: true, log })),
 
   // raw SQL-file tasks
   'sql:create-station-links.sql': (log) => runSqlFile(log, 'create-station-links.sql'),

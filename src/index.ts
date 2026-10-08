@@ -29,8 +29,8 @@ import { ensureSchema, ensureGtfsSchema, ensureGbfsSchema } from './db'
 import { ensureAccountsSchema } from './services/accounts.service'
 import { ensureOpsJobsSchema } from './services/ops-job-store'
 import { ensureRegionsSchema } from './services/region-store.service'
-import { ensureLandmarksSchema, syncLandmarkCatalog } from './services/landmarks.service'
-import { importOpenLandmarks } from './services/openlandmarks.service'
+import { ensureLandmarksSchema } from './services/landmarks.service'
+import { importLandmarks } from './services/landmark-import.service'
 import { initJobHistory } from './services/job-history.service'
 import { ensureSearchEnrichment } from './lib/search-enrichment'
 import { ensureLocalityIndexes } from './services/locality-search.service'
@@ -74,26 +74,18 @@ await ensureRegionsSchema()
 await ensureAccountsSchema()
 // Script run history, for job runtime estimates and progress bars.
 await initJobHistory()
-// 3D landmark models and placements: our catalog from landmarks/catalog.json,
-// then the Open Landmarks release (one request when it hasn't moved). In that
-// order, so conflict resolution sees both. Failures are logged rather than
-// fatal: they cost the landmarks layer, which is no reason to take search and
-// tiles down with it; the scheduled import retries the dataset later.
+// 3D landmark models and placements, from every source (Open Landmarks and
+// our own dataset; one request each when a release hasn't moved). It also
+// loads the served-model lookup, so it runs on every start. Failures are
+// logged rather than fatal: they cost the landmarks layer, which is no reason
+// to take search and tiles down with it; the scheduled import retries later,
+// and a source that failed keeps serving its last good import.
 await ensureLandmarksSchema()
-void (async () => {
-  try {
-    const { models, landmarks } = await syncLandmarkCatalog()
-    console.log(`[landmarks] catalog: ${landmarks} placements of ${models} models`)
-  } catch (err) {
-    console.error('[landmarks] catalog sync failed:', err)
-  }
-  try {
-    const r = await importOpenLandmarks({ log: (line) => console.log(`[landmarks] ${line}`) })
-    for (const s of r.skipped) console.warn(`[landmarks] Open Landmarks skipped ${s}`)
-  } catch (err) {
-    console.error('[landmarks] Open Landmarks import failed:', err)
-  }
-})()
+void importLandmarks({ log: (line) => console.log(`[landmarks] ${line}`) })
+  .then((r) => {
+    for (const s of r.sources) for (const skip of s.skipped) console.warn(`[landmarks] ${s.source} skipped ${skip}`)
+  })
+  .catch((err) => console.error('[landmarks] import failed:', err))
 
 // Backfill derived search columns (codes/name_abbrev/parent_context/ts) if a
 // prior import left them empty. Fire-and-forget so it never blocks startup —
