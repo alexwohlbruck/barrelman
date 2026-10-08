@@ -339,7 +339,7 @@ WITH shapes AS (
 -- off `parts` against the GIST index on `geo_places.geom` it is one scan and
 -- a few hundred thousand index probes.
 parts AS MATERIALIZED (
-  SELECT geom
+  SELECT id, geom
   FROM geo_places
   WHERE geom_type = 'area'
     AND COALESCE(tags->>'location', '') <> 'underground'
@@ -361,6 +361,23 @@ covered AS (
    AND (ST_Contains(o.geom, p.geom)
         OR ST_Area(ST_Intersection(o.geom, p.geom)) >= 0.99 * ST_Area(p.geom))
   GROUP BY o.id, o.geom
+),
+-- The outline each part belongs to, by the same containment rule, so the
+-- client can treat a part-mapped building as one building — one colour, not a
+-- patchwork. The smallest containing outline wins where outlines nest.
+owner AS (
+  SELECT DISTINCT ON (p.id) p.id as part_id,
+         (o.osm_id * 4 + CASE o.osm_type WHEN 'N' THEN 0 WHEN 'W' THEN 1 ELSE 2 END) as outline_fid
+  FROM parts p
+  JOIN geo_places o
+    ON o.geom && p.geom
+   AND o.geom_type = 'area'
+   AND COALESCE(o.tags->>'location', '') <> 'underground'
+   AND COALESCE(o.tags->>'building', 'no') <> 'no'
+   AND COALESCE(o.tags->>'building:part', 'no') = 'no'
+   AND (ST_Contains(o.geom, p.geom)
+        OR ST_Area(ST_Intersection(o.geom, p.geom)) >= 0.99 * ST_Area(p.geom))
+  ORDER BY p.id, ST_Area(o.geom)
 ),
 -- Heights arrive as free text — "12", "12 m", "~10", "3,5" are all in use — and
 -- a plain cast turns one bad value into a failed tile for the whole area. The
@@ -399,9 +416,13 @@ SELECT m.fid, m.id, m.geom,
        -- OpenMapTiles emits `hide_3d`, so a client's `["!has", "hide_3d"]`
        -- filter works unchanged, and the flag costs nothing on the 99% of
        -- buildings that are not part-mapped.
-       CASE WHEN c.covered_area >= 0.9 * c.outline_area THEN true END as hide_3d
+       CASE WHEN c.covered_area >= 0.9 * c.outline_area THEN true END as hide_3d,
+       -- The building this shape belongs to: its outline for a part, itself
+       -- otherwise. Shared by every part of one building.
+       COALESCE(w.outline_fid, m.fid) as group_id
 FROM measured m
 LEFT JOIN covered c ON c.id = m.id
+LEFT JOIN owner w ON w.part_id = m.id
 WITH NO DATA;
 
 -- Unique on fid so the view can be refreshed CONCURRENTLY, and GIST on geom so
