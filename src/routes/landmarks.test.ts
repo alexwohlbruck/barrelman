@@ -103,6 +103,8 @@ describe('landmark models', () => {
   test('404s a name it does not serve', async () => {
     const res = await app().app.handle(get('/tiles/landmarks/models/eiffel-tower.ffffffffffff.glb'))
     expect(res.status).toBe(404)
+    // An import may publish that name any moment; a CDN must not keep the miss.
+    expect(res.headers.get('cache-control')).toBe('no-store')
   })
 
   test('404s a traversal attempt', async () => {

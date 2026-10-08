@@ -291,7 +291,7 @@ postgres:
       geometry_column: centroid
       geometry_type: POINT
       id_column: fid
-      minzoom: 16
+      minzoom: 14
       maxzoom: 17
       properties:
         id: id
@@ -314,7 +314,7 @@ postgres:
       geometry_column: geom
       geometry_type: GEOMETRY
       id_column: fid
-      minzoom: 16
+      minzoom: 14
       maxzoom: 17
       properties:
         id: id
@@ -354,6 +354,7 @@ postgres:
         colour: colour
         roof_colour: roof_colour
         hide_3d: hide_3d
+        group_id: group_id
       buffer: 64
       clip_geom: true
 
