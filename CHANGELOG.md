@@ -10,6 +10,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.10.2] - 2026-10-08
+
 ### Fixed
 
 * **Typeahead search no longer takes seconds.** On the 218M-row US instance,
