@@ -410,7 +410,7 @@ for, so a client drawing them has nowhere else to get them:
 | `road_surfaces` | polygon | 16 | Carriageways at their real width (from `width`, else `lanes` at a lane width per class), with kerb corners rounded where roads meet. `bridge` marks the ones above ground |
 | `road_markings` | line | 16 | Paint: `kind` is `centre`, `lane`, `edge`, `bike`, `stop` or `crosswalk`; `pattern` is `solid`, `dashed` or `double`; `color` is `white` or `yellow` (yellow centre lines in the Americas); a crosswalk's `style` is `zebra`, `lines` or `ladder` |
 | `road_glyphs` | point | 16 | Turn arrows from `turn:lanes`, bike symbols on bike lanes and sharrows on shared lanes: `glyph` names the sprite icon and `direction` the bearing it reads along |
-| `object_areas` | polygon or point | 14–16 | Areas and points a client plants with objects: ground-mounted solar arrays and farms (`solar`), `flowerbed`, `scrub`, and single mapped `shrub`s. Rooftop solar is left out |
+| `object_areas` | polygon or point | 14–16 | Areas and points a client plants with objects: ground-mounted solar arrays and farms (`solar`), `flowerbed`, `scrub`, planted `shrubbery` (with its `shrubbery:shape` as `shape`), and single mapped `shrub`s. Rooftop solar is left out |
 
 #### Asking for them as one tile
 

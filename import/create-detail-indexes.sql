@@ -79,5 +79,5 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS geo_places_object_areas_geom_idx
           AND ((tags->>'power' = 'generator' AND tags->>'generator:source' = 'solar')
                OR (tags->>'power' = 'plant' AND tags->>'plant:source' = 'solar')
                OR tags->>'landuse' = 'flowerbed'
-               OR tags->>'natural' = 'scrub'))
+               OR tags->>'natural' IN ('scrub', 'shrubbery')))
          OR (geom_type = 'point' AND tags->>'natural' = 'shrub'));

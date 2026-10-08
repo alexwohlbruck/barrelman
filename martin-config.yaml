@@ -442,6 +442,7 @@ postgres:
       properties:
         id: id
         kind: kind
+        shape: shape
       buffer: 64
       clip_geom: true
 

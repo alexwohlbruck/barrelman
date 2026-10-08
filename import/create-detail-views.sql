@@ -239,8 +239,9 @@ WHERE geom_type IN ('line', 'area')
            AND COALESCE(tags->>'tunnel', 'no') = 'no'));
 
 -- Areas and points a client plants with objects: solar arrays on the ground
--- (rooftop ones have no roof height to stand on), flower beds, scrub, and
--- single mapped shrubs. `kind` names it.
+-- (rooftop ones have no roof height to stand on), flower beds, scrub, planted
+-- shrubbery, and single mapped shrubs. `kind` names it; `shape` carries a
+-- shrubbery's `shrubbery:shape`, since a clipped box reads nothing like a bush.
 DROP VIEW IF EXISTS object_areas CASCADE;
 CREATE VIEW object_areas AS
 SELECT (osm_id * 4 + CASE osm_type WHEN 'N' THEN 0 WHEN 'W' THEN 1 ELSE 2 END) as fid,
@@ -249,14 +250,16 @@ SELECT (osm_id * 4 + CASE osm_type WHEN 'N' THEN 0 WHEN 'W' THEN 1 ELSE 2 END) a
          WHEN tags->>'power' IN ('generator', 'plant') THEN 'solar'
          WHEN tags->>'landuse' = 'flowerbed' THEN 'flowerbed'
          WHEN tags->>'natural' = 'scrub' THEN 'scrub'
+         WHEN tags->>'natural' = 'shrubbery' THEN 'shrubbery'
          ELSE 'shrub'
-       END as kind
+       END as kind,
+       tags->>'shrubbery:shape' as shape
 FROM geo_places
 WHERE ((geom_type = 'area'
         AND ((tags->>'power' = 'generator' AND tags->>'generator:source' = 'solar')
              OR (tags->>'power' = 'plant' AND tags->>'plant:source' = 'solar')
              OR tags->>'landuse' = 'flowerbed'
-             OR tags->>'natural' = 'scrub'))
+             OR tags->>'natural' IN ('scrub', 'shrubbery')))
        OR (geom_type = 'point' AND tags->>'natural' = 'shrub'))
   AND COALESCE(tags->>'location', '') NOT IN ('roof', 'rooftop')
   AND COALESCE(tags->>'generator:place', '') <> 'roof';
