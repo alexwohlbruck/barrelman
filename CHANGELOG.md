@@ -10,6 +10,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-10-08
+
 ### Added
 
 * **An uncapped container log is now something you can find before it fills the
