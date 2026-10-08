@@ -10,6 +10,45 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Fixed
+
+* **Typeahead search no longer takes seconds.** On the 218M-row US instance,
+  one typeahead search in four took over a second, and one in ten waited out
+  the 10s statement timeout. The 90th percentile is now under 200ms and the
+  slowest measured search 0.8s. The causes were:
+  - The typeahead retry for a place outside the viewport ran the fuzzy
+    trigram scan with no time limit ("ocean isle beach" typed from New York).
+    It no longer runs in typeahead. Misspelled place names are matched
+    against a small trigram index of places instead.
+  - A word found everywhere near the viewport ("new york" in Manhattan,
+    "coffee") made the text search sort hundreds of thousands of rows. It now
+    checks the nearest 2,000 rows first and only uses the index when that
+    finds too little.
+  - Words common nationwide ("texas", "street", a one- or two-letter last
+    word) no longer reach the index in typeahead. Barrelman reads how common
+    each word is from Postgres's own column statistics.
+  - The place-name layer compared every candidate with every other to merge
+    duplicates. "park" took 5.4s and now takes 0.2s.
+  - Bounded layers now run under their own statement timeout, so a slow query
+    is cancelled in Postgres instead of holding a connection for 10s.
+  - A slow Pelias answer for a typed name is cut off after 400ms. Addresses,
+    streets and postal codes keep the full wait.
+  - A submitted search no longer waits for text search and then the full
+    trigram budget on top. Both share one 2.5s budget.
+
+  The place-name layer builds one more small partial index in the background
+  on startup, `geo_places_locality_name_trgm_idx`.
+
+* **Searching a city finds the city.** Population now extends how far away a
+  city is still offered, so "austin" finds Austin, Texas from anywhere, not
+  Austin, Arkansas. A city of at least 50,000 people named exactly what was
+  typed is returned even from across the country ("boulder" from Charlotte).
+  A shop whose `ref` is its branch name (a Whole Foods tagged
+  `branch=Asheville`) is no longer pinned above the city as if it were an
+  airport code. Transit routes that only mention the place in a long or
+  agency name ("Raleigh - Asheville") now rank with the other text matches
+  instead of above them.
+
 ## [0.10.1] - 2026-10-08
 
 ### Added
