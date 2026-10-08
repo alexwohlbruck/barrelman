@@ -10,6 +10,65 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.8.5] - 2026-10-07
+
+### Fixed
+
+* **A city named "City of Yonkers" in OSM is listed once.** Its label point
+  ("Yonkers") is now recognised as the same place, as is a label point that
+  sits just outside its own boundary. US boundaries tagged
+  `border_type=city` also rank as cities.
+
+## [0.8.4] - 2026-10-07
+
+### Fixed
+
+* **Place search names the state a place is in, and lists each place once.**
+  A place result with no address of its own now carries the state containing
+  it, so three Charlottes read as NC, VA and FL rather than one place listed
+  three times. US, Canadian and Australian states are given by their postal
+  abbreviation, as addresses are; other countries' by name. A county's label point ("Mecklenburg") is
+  folded into its boundary ("Mecklenburg County"), and the border lines of a
+  country or state are no longer returned as places.
+
+## [0.8.3] - 2026-10-07
+
+### Fixed
+
+* **US cities show up in place search from far away.** A US city's boundary
+  is tagged as a town and only its label point says it is a city, so Chicago
+  and Charlotte were weighed as towns and dropped from a search made 1,000 km
+  away. A search for "New York" also returned the state but not the city,
+  because the city was folded into the state's boundary as a duplicate.
+
+## [0.8.2] - 2026-10-07
+
+### Fixed
+
+* **Searching for a place no longer waits 12 seconds.** Once the place itself
+  has matched, search waits at most 2.5 seconds for other names containing the
+  same words. "New Jersey" and "New York" took 6-18 seconds, because the full
+  text search over every name containing those words ran to its 10-second
+  timeout first (twice, in typeahead).
+
+## [0.8.1] - 2026-10-07
+
+### Fixed
+
+* **Search finds cities, states, neighbourhoods and postal codes again.** A
+  place name is made of common words, so "New Jersey" matched hundreds of
+  thousands of rows, the query timed out, and search answered with bus stops.
+  When a city did match, nearby cafes sharing its name outranked it. Places
+  now have a search layer and index of their own and lead the results, ranked
+  by how significant a place they are, with distance counting for less the
+  larger the place. A postal-code query such as `11211` returns the postal
+  code ahead of house numbers that share its digits. The API builds the two new
+  indexes in the background on its first start, which takes several minutes on
+  a national import; search works as before until they are ready.
+
+* **Search matches names with accents.** The query was stripped to ASCII
+  letters, so "Neukölln" was searched as "Neuk lln" and matched nothing.
+
 ### Added
 
 * **3D landmark import, from a shell or the console, in two modes.**
@@ -19,6 +78,10 @@ does it — and the release pipeline turns it into the GitHub Release notes.
   *Import 3D landmarks (full)*) re-reads every release, downloads and
   re-verifies every model against its published hash, and rewrites every row,
   for a damaged model cache or rows that have drifted.
+
+## [0.8.0] - 2026-10-06
+
+### Added
 
 * **3D landmarks (experimental).** Hand-made 3D models that a map draws in
   place of a building's extrusion. `/tiles/landmarks/{z}/{x}/{y}` serves where

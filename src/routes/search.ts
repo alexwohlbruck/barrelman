@@ -81,6 +81,8 @@ export function createSearchRoutes(deps = { searchPlaces: _searchPlaces }) {
 
 Results are deduplicated in priority order (FTS > abbreviation > trigram > semantic) then re-ranked with proximity decay when coordinates are provided.
 
+**Places**: Countries, states, counties, cities, neighbourhoods and postal codes are matched by a dedicated layer and pinned to the top, ahead of the proximity re-rank — a city 800 km away still leads a search for its name. Their own distance weighting scales with the size of the place. A place mapped as both a label node and a boundary is returned once, as the boundary. A postal-code-shaped query (\`11211\`, \`SW1A 1AA\`) also matches postal codes from the geocoder, returned with the category \`pelias/postalcode\`.
+
 **Transit results**: Text search also matches GTFS transit lines and stops. These carry \`kind: 'transit_route' | 'transit_stop'\` (regular places have no \`kind\`), \`osm_type: null\`, and a \`transit\` object with the ids the /transit endpoints are keyed by — for a line: \`feedId\`, \`feedOnestopId\`, \`routeId\`, \`shortName\`, \`longName\`, \`routeType\`, \`mode\`, \`color\`, \`textColor\`, \`agency\`; for a stop: \`feedId\`, \`feedOnestopId\`, \`stopId\`, \`locationType\`, \`mode\`. Stops that OSM already covers are returned as their OSM place instead (via portolan's stop index), never twice. Transit results are skipped when \`categories\`, \`tags\` or \`route\` filters are set.
 
 **Browse mode** (omit \`query\`, provide \`categories\` and/or \`tags\`): Returns matching places sorted by distance. Requires a spatial constraint (lat/lng or route).

@@ -40,6 +40,12 @@ CREATE INDEX IF NOT EXISTS geo_places_categories_idx ON geo_places USING GIN(cat
 CREATE INDEX IF NOT EXISTS geo_places_ts_idx ON geo_places USING GIN(ts) WHERE ts IS NOT NULL;
 CREATE INDEX IF NOT EXISTS geo_places_admin_level_idx ON geo_places(admin_level) WHERE admin_level IS NOT NULL;
 
+-- Locality search layer (src/services/locality-search.service.ts, which also
+-- builds these on an existing install). The WHERE clauses must match its
+-- LOCALITY_PREDICATE and POSTAL_PREDICATE exactly, or the planner ignores them.
+CREATE INDEX IF NOT EXISTS geo_places_locality_ts_idx ON geo_places USING GIN (ts) WHERE ts IS NOT NULL AND name IS NOT NULL AND (admin_level IS NOT NULL OR tags->>'place' IS NOT NULL OR tags->>'boundary' = 'postal_code');
+CREATE INDEX IF NOT EXISTS geo_places_postal_code_idx ON geo_places (upper(tags->>'postal_code') text_pattern_ops) WHERE tags->>'boundary' = 'postal_code';
+
 -- Search layer (codes and abbreviation lookups)
 CREATE INDEX IF NOT EXISTS geo_places_codes_idx ON geo_places USING GIN(codes) WHERE codes IS NOT NULL;
 CREATE INDEX IF NOT EXISTS geo_places_name_abbrev_idx ON geo_places(name_abbrev) WHERE name_abbrev IS NOT NULL;

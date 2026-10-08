@@ -4,6 +4,7 @@ import { searchCache, embeddingCache } from '../lib/cache'
 import { generateQueryEmbedding } from '../lib/embeddings'
 import { forwardGeocode } from './geocode.service'
 import { searchTransitRoutes, searchTransitStops } from './transit-search.service'
+import { searchLocalities, isPostalShaped } from './locality-search.service'
 import { reconcileTransitHits } from '../lib/transit-search'
 import { buildTsQueryText, isStreetQuery } from '../lib/search-query'
 import { envNumber } from '../config/env'
@@ -67,6 +68,10 @@ const AUTOCOMPLETE_FALLBACK_MIN = 1
  *  faraway place. */
 const AUTOCOMPLETE_FALLBACK_MIN_QUERY = 4
 
+/** Most locality hits one search returns. Enough for the Springfields; any
+ *  more and pinned places crowd out what else the name matches. */
+const LOCALITY_LIMIT = 3
+
 export interface SearchParams {
   query?: string
   lat?: number
@@ -103,6 +108,28 @@ const SEARCH_ADDRESS_BUDGET_MS = envNumber('BARRELMAN_SEARCH_ADDRESS_BUDGET_MS',
 // budget instead of the timeout. Set to 0 to wait the full statement timeout.
 const SEARCH_TRIGRAM_BUDGET_MS = envNumber('BARRELMAN_SEARCH_TRIGRAM_BUDGET_MS', 2500)
 
+// How long /search waits for the FTS layer once the locality layer has found
+// the place. A place name is common words — "New Jersey" matches ~350K rows —
+// so FTS ran into the 10s statement timeout on exactly the queries the locality
+// layer answers in milliseconds, and the right answer arrived 12s late (18s in
+// typeahead, which then retried). Within this budget FTS still adds what else
+// the name matches; past it, the place returns without it.
+const LOCALITY_FTS_BUDGET_MS = 2500
+
+/** Resolve to [] if `promise` hasn't settled within `ms` (0 waits forever).
+ *  The abandoned query is left to its own statement timeout. The timer is
+ *  cleared once the race settles, so it never outlives the request. */
+function withBudget(promise: Promise<any[]>, ms: number): Promise<any[]> {
+  if (ms <= 0) return promise
+  let timer: ReturnType<typeof setTimeout> | undefined
+  return Promise.race([
+    promise,
+    new Promise<any[]>((resolve) => {
+      timer = setTimeout(() => resolve([]), ms)
+    }),
+  ]).finally(() => clearTimeout(timer))
+}
+
 export async function searchPlaces(
   {
     query,
@@ -127,8 +154,11 @@ export async function searchPlaces(
   if (cached) return cached
 
   // Strip apostrophes ("sal's" → "sals") to mirror the tsvector normalization,
-  // then replace remaining punctuation with spaces.
-  const sanitizedQuery = query?.replace(/['’]/g, '').replace(/[^\w\s\-.]/g, ' ').trim() || ''
+  // then replace remaining punctuation with spaces. Letters are matched by
+  // Unicode class, not \w: \w is ASCII-only, and turned "Neukölln" into
+  // "Neuk lln", which no layer could match. Marks are kept too — Devanagari
+  // and Thai spell with them — and NFC folds a decomposed "o" + "¨" into "ö".
+  const sanitizedQuery = query?.normalize('NFC').replace(/['’]/g, '').replace(/[^\p{L}\p{M}\p{N}\s\-.]/gu, ' ').trim() || ''
   const hasQuery = sanitizedQuery.length > 0
   const hasPointLocation = lat != null && lng != null
   const hasRoute = route != null
@@ -179,8 +209,14 @@ export async function searchPlaces(
   // Elasticsearch grind through 10k+ candidates for nothing.
   const wantAddresses = hasQuery && sanitizedQuery.length >= 3 && !hasRoute && !(categories && categories.length)
   // The raw text: Pelias's parser needs the comma in "3625 Ramos Dr, West Sacramento".
+  // A postal-code-shaped query also asks for Pelias's postalcode layer: OSM
+  // maps ZIP codes as boundaries almost nowhere in the US, but Who's on First
+  // has them all.
   const peliasPromise: Promise<any[]> = wantAddresses
-    ? forwardGeocode(query!.trim(), { lat, lng, limit, signal })
+    ? forwardGeocode(query!.trim(), {
+        lat, lng, limit, signal,
+        ...(isPostalShaped(sanitizedQuery) ? { layers: 'postalcode,address,street' } : {}),
+      })
     : Promise.resolve([])
 
   // ── Build spatial primitives ────────────────────────────────────────────
@@ -501,8 +537,27 @@ export async function searchPlaces(
         })
       : Promise.resolve([] as any[])
 
-    let [ftsRows, codesRows, nameAbbrevRows, transitRouteRows, transitStopRows] =
-      await Promise.all([ftsPromise, codesPromise, nameAbbrevPromise, transitRoutesPromise, transitStopsPromise])
+    // Locality layer: cities, states, neighbourhoods, postal codes. Global even
+    // in autocomplete — its index holds only places, so it is cheap, and a city
+    // is exactly what someone reaches for outside the viewport. Strong hits are
+    // pinned to the top alongside codes; see locality-search.service.ts.
+    const localitiesPromise = !hasCategory && !tagsFilterJson && !hasRoute
+      ? searchLocalities({
+          query: sanitizedQuery,
+          tsQueryText: tsQueryText || sanitizedQuery,
+          lat,
+          lng,
+          autocomplete,
+          limit: Math.min(LOCALITY_LIMIT, limit),
+        })
+      : Promise.resolve([] as any[])
+
+    let [ftsRows, codesRows, nameAbbrevRows, transitRouteRows, transitStopRows, localityRows] =
+      await Promise.all([
+        // FTS is bounded only once a place has matched; see LOCALITY_FTS_BUDGET_MS.
+        localitiesPromise.then((places) =>
+          places.length > 0 ? withBudget(ftsPromise, LOCALITY_FTS_BUDGET_MS) : ftsPromise),
+        codesPromise, nameAbbrevPromise, transitRoutesPromise, transitStopsPromise, localitiesPromise])
     let trigramRows: any[] = []
 
     // Autocomplete retry: the local pass only sees the viewport, so a place the
@@ -515,7 +570,8 @@ export async function searchPlaces(
       localAutocomplete &&
       !addressLike &&
       sanitizedQuery.length >= AUTOCOMPLETE_FALLBACK_MIN_QUERY &&
-      (ftsRows as any[]).length + (codesRows as any[]).length + (nameAbbrevRows as any[]).length < AUTOCOMPLETE_FALLBACK_MIN
+      (ftsRows as any[]).length + (codesRows as any[]).length + (nameAbbrevRows as any[]).length +
+        (localityRows as any[]).length < AUTOCOMPLETE_FALLBACK_MIN
     ) {
       const [globalFts, globalTrigram] = await Promise.all([
         ftsQuery(false),
@@ -537,6 +593,7 @@ export async function searchPlaces(
       const precise = new Set<string>()
       for (const row of [
         ...(codesRows as any[]),
+        ...(localityRows as any[]),
         ...(transitRouteRows as any[]),
         ...(nameAbbrevRows as any[]),
         ...(ftsRows as any[]),
@@ -546,32 +603,38 @@ export async function searchPlaces(
       if (precise.size < limit) {
         // Bounded exactly like the Pelias wait below, and for the same reason:
         // a supplementary layer must not be able to hold the whole response
-        // hostage. The abandoned query is left to its own statement timeout.
-        let trigramTimer: ReturnType<typeof setTimeout> | undefined
-        trigramRows = (await (SEARCH_TRIGRAM_BUDGET_MS > 0
-          ? Promise.race([
-              trigramQuery(),
-              new Promise<any[]>((resolve) => {
-                trigramTimer = setTimeout(() => resolve([]), SEARCH_TRIGRAM_BUDGET_MS)
-              }),
-            ]).finally(() => clearTimeout(trigramTimer))
-          : trigramQuery())) as any[]
+        // hostage.
+        trigramRows = await withBudget(trigramQuery(), SEARCH_TRIGRAM_BUDGET_MS)
       }
     }
 
-    // Merge, deduplicating in priority order: codes > transit routes >
-    // abbreviation > FTS > trigram > transit stops. Transit ids can't collide
-    // with OSM ids, so their position only decides who survives the cap.
-    // Tag codes results so they're exempt from proximity re-ranking — an exact
-    // IATA/ICAO code match is definitive regardless of distance.
-    const codesIds = new Set((codesRows as any[]).map((r: any) => r.id))
-    const seen = new Set<string>()
+    // Merge, deduplicating in priority order: exact-name localities > codes >
+    // other localities > transit routes > abbreviation > FTS > trigram >
+    // transit stops. Transit ids can't
+    // collide with OSM ids, so their position only decides who survives the cap.
+    // Codes and locality hits are pinned — exempt from proximity re-ranking. An
+    // exact IATA/ICAO code is definitive regardless of distance, and a locality
+    // hit already carries its own distance decay, scaled to the size of place.
+    const localityIds = new Set((localityRows as any[]).map((r: any) => r.id))
+    const pinnedIds = new Set([...(codesRows as any[]).map((r: any) => r.id), ...localityIds])
+    // A place's label node and nested namesakes, already folded into its
+    // locality hit, would otherwise come back through FTS as duplicates.
+    const seen = new Set<string>((localityRows as any[]).flatMap((r: any) => r.absorbed_ids ?? []))
+    for (const r of localityRows as any[]) delete r.absorbed_ids
+    // A place named exactly what was typed leads even the codes: those come
+    // from alt_name and short_name too, so "mitte" pinned a pub over the
+    // Mitte district. A partial name still yields to an exact code — "bur" is
+    // Burbank's airport, not Bury.
+    const fold = (t: string) => t.normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase()
+    const typed = fold(sanitizedQuery)
+    const exactLocalities = (localityRows as any[]).filter((r: any) => r.name && fold(r.name) === typed)
     results = []
-    for (const row of [...(codesRows as any[]), ...(transitRouteRows as any[]), ...(nameAbbrevRows as any[]), ...(ftsRows as any[]), ...(trigramRows as any[]), ...(transitStopRows as any[])]) {
+    for (const row of [...exactLocalities, ...(codesRows as any[]), ...(localityRows as any[]), ...(transitRouteRows as any[]), ...(nameAbbrevRows as any[]), ...(ftsRows as any[]), ...(trigramRows as any[]), ...(transitStopRows as any[])]) {
       const r = row as any
       if (!seen.has(r.id)) {
         seen.add(r.id)
-        if (codesIds.has(r.id)) r._codesMatch = true
+        if (pinnedIds.has(r.id)) r._pinned = true
+        if (localityIds.has(r.id)) r._locality = true
         results.push(r)
       }
     }
@@ -662,11 +725,11 @@ export async function searchPlaces(
   }
 
   // ── Proximity re-rank ───────────────────────────────────────────────────
-  // Codes matches (IATA/ICAO) are pinned at the top — they're definitive and
+  // Codes matches (IATA/ICAO) and localities are pinned at the top — they
   // should never be displaced by proximity.  Remaining results are re-ranked.
   if (results.length > 1 && (hasRoute || hasPointLocation)) {
-    const pinned = results.filter((r: any) => r._codesMatch)
-    const rest = results.filter((r: any) => !r._codesMatch)
+    const pinned = results.filter((r: any) => r._pinned)
+    const rest = results.filter((r: any) => !r._pinned)
 
     if (hasRoute) {
       const decayConstant = buffer / 3
@@ -717,14 +780,29 @@ export async function searchPlaces(
     // Dedup by id — Pelias OSM records carry the same node/way/relation id as
     // barrelman's rows, so a place already returned from PostGIS isn't repeated.
     const seenIds = new Set(results.map((r: any) => r.id))
-    const fresh = addressResults.filter((a) => !seenIds.has(a.id))
-    results = addressLike || streetLike ? [...fresh, ...results] : [...results, ...fresh]
+    // A Pelias postal code is the same place as an OSM postal boundary for
+    // that code, which carries the outline — keep the OSM one.
+    const osmPostcodes = new Set(results.map((r: any) => r.tags?.postal_code).filter(Boolean))
+    const fresh = addressResults.filter((a) =>
+      !seenIds.has(a.id) && !(a._peliasLayer === 'postalcode' && osmPostcodes.has(a.name)))
+    // Localities and postal codes lead in either order: "11211" is a ZIP code
+    // before it is a house number.
+    const localities = [
+      ...results.filter((r: any) => r._locality),
+      ...fresh.filter((a) => a._peliasLayer === 'postalcode'),
+    ]
+    const places = results.filter((r: any) => !r._locality)
+    const addresses = fresh.filter((a) => a._peliasLayer !== 'postalcode')
+    results = addressLike || streetLike
+      ? [...localities, ...addresses, ...places]
+      : [...localities, ...places, ...addresses]
     results = results.slice(0, limit)
   }
 
   // Clean up internal tags before returning
   for (const r of results) {
-    delete (r as any)._codesMatch
+    delete (r as any)._pinned
+    delete (r as any)._locality
     delete (r as any)._peliasLayer
   }
 

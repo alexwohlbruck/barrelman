@@ -57,13 +57,15 @@ function spellingsOf(word: string): string[] {
  * The text handed to `to_tsquery('simple', unaccent(...))`: words AND-joined,
  * each expanded to an OR-group of its spellings, the last one optionally a
  * prefix (`:*`) for typeahead — unless it is a known abbreviation ending a
- * multi-word query. Words are reduced to alphanumerics so no
- * tsquery operator can be injected. Returns '' when nothing survives.
+ * multi-word query. Words are reduced to letters and digits so no
+ * tsquery operator can be injected — any script's, since the query is passed
+ * through unaccent() in SQL to meet the tsvector ("Neukölln" → "neukolln").
+ * Returns '' when nothing survives.
  */
 export function buildTsQueryText(words: string[], prefixLast: boolean): string {
   const parts: string[] = []
   const cleaned = words
-    .map((w) => w.toLowerCase().replace(/[^a-z0-9]/g, ''))
+    .map((w) => w.normalize('NFC').toLowerCase().replace(/[^\p{L}\p{M}\p{N}]/gu, ''))
     .filter(Boolean)
   for (let i = 0; i < cleaned.length; i++) {
     // A trailing "ave" or "st" after another word is a finished street type, and
