@@ -205,6 +205,10 @@ Sign-in codes print to the log without SMTP:
   prose an operator would read. Releases are cut from that section — bump
   `version` in `package.json` on `main` and the pipeline tags, builds, pushes
   and writes the GitHub Release. See "Cutting a release" in `docs/development.md`.
+- 3D landmark work never warrants a major release. Barrelman is on 0.x, so
+  the middle number is the major one: landmark and model changes bump only the
+  last (0.8.5 → 0.8.6). New or changed models need no release at all — they
+  live in alexwohlbruck/landmarks and are imported at runtime.
 - `bun`, not `npm`. Commits short (5–20 words), distinct and logical.
 - Keep code modular and DRY; move code to the right module. Comment *why* for
   non-obvious choices.
