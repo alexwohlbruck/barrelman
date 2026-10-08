@@ -165,13 +165,15 @@ psql "$DATABASE_URL" -f "$PROJECT_DIR/import/create-detail-views.sql"
 # build there holds the server off its port for the duration.
 psql "$DATABASE_URL" -f "$PROJECT_DIR/import/create-detail-indexes.sql"
 
-# The 3D buildings view holds rows rather than being a plain view, so creating
-# it is not enough — it comes into existence empty. Filled here, where the
-# building data it joins over has just changed. Minutes on a large extract.
+# The materialized views hold rows rather than being plain views, so creating
+# them is not enough — they come into existence empty. Filled here, where the
+# data they join over has just changed. Minutes on a large extract.
 echo "[$(date '+%H:%M:%S')] Building the 3D buildings view (spatial join, this takes a while)..."
 psql "$DATABASE_URL" -c "REFRESH MATERIALIZED VIEW buildings_3d;"
+echo "[$(date '+%H:%M:%S')] Turning street furniture to face its nearest way..."
+psql "$DATABASE_URL" -c "REFRESH MATERIALIZED VIEW street_furniture;"
 
-# buildings_3d was the last consumer of geo_places' spatial indexes until the
+# street_furniture was the last consumer of geo_places' spatial indexes until the
 # API takes over: the intersections and parent-context joins below both probe
 # their own indexed temp tables, never these. Dropping them here means every
 # enrichment UPDATE maintains one btree instead of three GiSTs — measured on
