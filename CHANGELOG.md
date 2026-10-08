@@ -10,6 +10,10 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Changed
+
+* Street trees and tree rows are served from zoom 14, so maps can draw them before zooming all the way in.
+
 ### Added
 
 * 3D building tiles carry a `group_id` shared by every part of one building, so clients can style a part-mapped building as a whole.
