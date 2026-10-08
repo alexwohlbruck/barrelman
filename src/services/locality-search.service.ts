@@ -59,8 +59,14 @@ END`)
  * city's boundary is a bare admin_level=8 (a town's 300 km) and only its label
  * node says `place=city`. Read from its own tags, Chicago scored 0.19 from
  * Brooklyn and never surfaced.
+ *
+ * Population stretches it further, at 1 km per 100 people: a city of 100K
+ * reaches as far as its class already does, and only bigger ones go beyond.
+ * Class alone ranks every "city" alike, so Austin, Arkansas (pop. 1,037) and
+ * Austin, Texas (974,447) differed only by distance — and the Texas one was
+ * never returned anywhere but Texas.
  */
-const reachKm = (importance: ReturnType<typeof sql>) => sql`CASE
+const reachKm = (importance: ReturnType<typeof sql>, population: ReturnType<typeof sql>) => sql`GREATEST(CASE
   WHEN ${importance} >= 1.0 THEN 5000
   -- Not 5000 like a country: "new york" from Brooklyn is the city, not the
   -- state whose label node sits 313 km upstate.
@@ -69,7 +75,25 @@ const reachKm = (importance: ReturnType<typeof sql>) => sql`CASE
   WHEN ${importance} >= 0.8 THEN 300
   WHEN ${importance} >= 0.7 THEN 50
   ELSE 20
-END`
+END, COALESCE(${population}, 0) / 100.0)`
+
+/** A place's `population` tag, when it is a plain number. Free text ("approx.
+ *  5000", "1,234") is left out rather than guessed at. */
+const POPULATION = sql.raw(`CASE WHEN tags->>'population' ~ '^[0-9]{1,9}$' THEN (tags->>'population')::bigint END`)
+
+/**
+ * A place named exactly what was typed, and at least this populous, is
+ * returned when nothing clears MIN_SCORE: typing "boulder" in Charlotte means
+ * Boulder, Colorado, even though distance decays it below the threshold. The
+ * floor keeps the exemption to places worth crossing a country for — "park"
+ * must not pin Park, Kansas (pop. 120).
+ */
+const EXEMPT_POPULATION = 50_000
+
+/** Most candidates the duplicate fold compares. It is a self-join, so a short
+ *  prefix that names thousands of places ("park" matched 5,461) cost 5.4s;
+ *  only the best few hundred can ever reach the result. */
+const FOLD_CANDIDATES = 200
 
 /**
  * Lowest score a locality needs to be returned (and so pinned above every
@@ -102,21 +126,31 @@ export interface LocalityLayerParams {
 }
 
 let indexReady = false
+let fuzzyReady = false
 let indexProbedAt = 0
 
-/** The layer's index can land after startup: a first import finishes, or the
- *  background build completes. Look again at most once a minute. */
+/** The layer's indexes can land after startup: a first import finishes, or
+ *  the background build completes. Look again at most once a minute. The
+ *  trigram index only enables the misspelling fallback, so the layer runs
+ *  without it. */
 async function localityIndexReady(): Promise<boolean> {
-  if (indexReady || Date.now() - indexProbedAt < 60_000) return indexReady
+  if ((indexReady && fuzzyReady) || Date.now() - indexProbedAt < 60_000) return indexReady
   indexProbedAt = Date.now()
   const rows = await db.execute(sql`
-    SELECT count(*) FILTER (WHERE i.indisvalid) = 2 AS ready FROM pg_index i
+    SELECT count(*) FILTER (WHERE i.indisvalid AND c.relname <> 'geo_places_locality_name_trgm_idx') = 2 AS ready,
+           bool_or(i.indisvalid AND c.relname = 'geo_places_locality_name_trgm_idx') AS fuzzy
+    FROM pg_index i
     JOIN pg_class c ON c.oid = i.indexrelid
-    WHERE c.relname IN ('geo_places_locality_ts_idx', 'geo_places_postal_code_idx')
+    WHERE c.relname IN ('geo_places_locality_ts_idx', 'geo_places_postal_code_idx', 'geo_places_locality_name_trgm_idx')
   `).catch(() => [] as any[])
   indexReady = Boolean((rows as any[])[0]?.ready)
+  fuzzyReady = Boolean((rows as any[])[0]?.fuzzy)
   return indexReady
 }
+
+/** Shortest query the misspelling fallback runs for. Below this, trigram
+ *  similarity pairs a typo with too many unrelated places. */
+const FUZZY_MIN_QUERY = 5
 
 /**
  * Locality hits, best first, in the geo_places result shape.
@@ -139,6 +173,21 @@ export async function searchLocalities({
   // index and run into the very timeout this layer exists to avoid.
   if (query.length < LOCALITY_MIN_QUERY || !(await localityIndexReady())) return []
 
+  const params = { query, tsQueryText, lat, lng, autocomplete, limit }
+  const rows = await localityQuery(params, sql`ts @@ to_tsquery('simple', unaccent(${tsQueryText}))`)
+  if (rows.length > 0 || !fuzzyReady || query.length < FUZZY_MIN_QUERY || isPostalShaped(query)) return rows
+  // Nothing matched every word: try the name as a misspelling ("charlote").
+  // The trigram index holds only places (19 MB), so this costs milliseconds,
+  // where the same lookup over every name in geo_places reads a 5 GB index.
+  return localityQuery({ ...params, postal: false }, sql`name % ${query}`)
+}
+
+/** One pass of the locality layer, with `match` selecting the candidate rows
+ *  (word match, or trigram similarity for a misspelling). */
+async function localityQuery(
+  { query, lat, lng, autocomplete, limit, postal = true }: LocalityLayerParams & { postal?: boolean },
+  match: ReturnType<typeof sql>,
+): Promise<any[]> {
   const hasPoint = lat != null && lng != null
   const point = hasPoint ? sql`ST_SetSRID(ST_MakePoint(${lng!}, ${lat!}), 4326)` : null
   const distanceKm = point
@@ -152,41 +201,47 @@ export async function searchLocalities({
   const postalMatch = autocomplete
     ? sql`upper(tags->>'postal_code') LIKE ${postalCode.replace(/[\\%_]/g, '\\$&') + '%'}`
     : sql`upper(tags->>'postal_code') = ${postalCode}`
-  const postalBranch = isPostalShaped(query)
+  const postalBranch = postal && isPostalShaped(query)
     ? sql`
       UNION ALL
       SELECT id, osm_type, osm_id, COALESCE(name, tags->>'postal_code') AS name, name_abbrev,
              categories, tags, address, hours, phones, websites, geom_type, centroid, geom, area_m2,
              length(${postalCode})::float / greatest(length(tags->>'postal_code'), 1) AS sim,
-             ${IMPORTANCE} AS importance
+             ${IMPORTANCE} AS importance, ${POPULATION} AS population
       FROM geo_places
       WHERE ${sql.raw(POSTAL_PREDICATE)} AND ${postalMatch}`
     : sql``
 
   const rows = await db.execute(sql`
     WITH RECURSIVE hits AS (
-      SELECT DISTINCT ON (id) * FROM (
-        SELECT id, osm_type, osm_id, name, name_abbrev, categories, tags,
-               address, hours, phones, websites, geom_type, centroid, geom, area_m2,
-               similarity(name, ${query}) AS sim,
-               ${IMPORTANCE} AS importance
-        FROM geo_places
-        WHERE ${sql.raw(LOCALITY_PREDICATE)}
-          AND ts @@ to_tsquery('simple', unaccent(${tsQueryText}))
-          -- A border way tagged with its admin_level is a segment of the line
-          -- between two places, not a place: "united states" matched two of
-          -- them. Outside the index predicate so the index still applies.
-          AND geom_type <> 'line'
-        ${postalBranch}
-      ) matched
-      -- ts also matches parent_context, so "new york" reaches every
-      -- neighbourhood *in* New York. The name has to be what matched.
-      WHERE sim >= 0.3
-      ORDER BY id, sim DESC
+      SELECT * FROM (
+        SELECT DISTINCT ON (id) * FROM (
+          SELECT id, osm_type, osm_id, name, name_abbrev, categories, tags,
+                 address, hours, phones, websites, geom_type, centroid, geom, area_m2,
+                 similarity(name, ${query}) AS sim,
+                 ${IMPORTANCE} AS importance, ${POPULATION} AS population
+          FROM geo_places
+          WHERE ${sql.raw(LOCALITY_PREDICATE)}
+            AND ${match}
+            -- A border way tagged with its admin_level is a segment of the line
+            -- between two places, not a place: "united states" matched two of
+            -- them. Outside the index predicate so the index still applies.
+            AND geom_type <> 'line'
+          ${postalBranch}
+        ) matched
+        -- ts also matches parent_context, so "new york" reaches every
+        -- neighbourhood *in* New York. The name has to be what matched.
+        WHERE sim >= 0.3
+        ORDER BY id, sim DESC
+      ) distinct_hits
+      -- Only the best FOLD_CANDIDATES go on to the fold, ranked by their own
+      -- score; the fold can raise a place's importance, never its similarity.
+      ORDER BY sim * importance / (1 + ${distanceKm} / ${reachKm(sql`importance`, sql`population`)}) DESC
+      LIMIT ${FOLD_CANDIDATES}
     ),
     -- Which hit each duplicate folds into (see the doc comment above).
     absorbs AS (
-      SELECT DISTINCT ON (h.id) h.id AS hit_id, o.id AS by_id, h.importance
+      SELECT DISTINCT ON (h.id) h.id AS hit_id, o.id AS by_id, h.importance, h.population
       FROM hits h
       JOIN hits o ON o.id <> h.id AND o.geom_type = 'area'
         AND CASE
@@ -212,33 +267,41 @@ export async function searchLocalities({
     ),
     -- Followed to the outermost: Mitte's label nodes fold into the Ortsteil,
     -- which folds into the Bezirk, which has to end up holding all of them.
-    folded (hit_id, root_id, importance) AS (
-      SELECT hit_id, by_id, importance FROM absorbs
+    folded (hit_id, root_id, importance, population) AS (
+      SELECT hit_id, by_id, importance, population FROM absorbs
       UNION ALL
-      SELECT f.hit_id, a.by_id, f.importance FROM folded f JOIN absorbs a ON a.hit_id = f.root_id
+      SELECT f.hit_id, a.by_id, f.importance, f.population FROM folded f JOIN absorbs a ON a.hit_id = f.root_id
     ),
     merged AS (
       SELECT h.*, a.ids AS absorbed_ids,
-        GREATEST(h.importance, a.importance) AS rank_importance
+        GREATEST(h.importance, a.importance) AS rank_importance,
+        -- A city's population is as often on its label node as its boundary.
+        GREATEST(h.population, a.population) AS rank_population
       FROM hits h
       LEFT JOIN LATERAL (
-        SELECT array_agg(hit_id) AS ids, max(importance) AS importance
+        SELECT array_agg(hit_id) AS ids, max(importance) AS importance, max(population) AS population
         FROM folded WHERE root_id = h.id
       ) a ON true
       WHERE h.id NOT IN (SELECT hit_id FROM absorbs)
     ),
+    scored AS (
+      SELECT id, osm_type, osm_id, name, name_abbrev, categories, tags,
+             address, hours, phones, websites, geom_type, centroid, rank_importance,
+             sim * rank_importance / (1 + ${distanceKm} / ${reachKm(sql`rank_importance`, sql`rank_population`)}) AS text_rank,
+             ${distanceSelect} AS distance_m,
+             absorbed_ids,
+             rank_population,
+             lower(unaccent(name)) = lower(unaccent(${query})) AS exact
+      FROM merged
+    ),
     top AS (
-      SELECT * FROM (
-        SELECT id, osm_type, osm_id, name, name_abbrev, categories, tags,
-               address, hours, phones, websites, geom_type, centroid, rank_importance,
-               sim * rank_importance / (1 + ${distanceKm} / ${reachKm(sql`rank_importance`)}) AS text_rank,
-               ${distanceSelect} AS distance_m,
-               absorbed_ids
-        FROM merged
-      ) scored
-      WHERE text_rank >= ${MIN_SCORE}
-      ORDER BY text_rank DESC
-      LIMIT ${limit}
+      (SELECT * FROM scored WHERE text_rank >= ${MIN_SCORE} ORDER BY text_rank DESC LIMIT ${limit})
+      UNION ALL
+      -- See EXEMPT_POPULATION: only when nothing else qualified, and only one.
+      (SELECT * FROM scored
+       WHERE exact AND rank_population >= ${EXEMPT_POPULATION}
+         AND NOT EXISTS (SELECT 1 FROM scored WHERE text_rank >= ${MIN_SCORE})
+       ORDER BY rank_population DESC LIMIT 1)
     )
     -- The state each place is in, as its address: three Charlottes read as
     -- one place listed three times until they say NC, VA and FL. Looked up
@@ -271,7 +334,7 @@ export async function searchLocalities({
 }
 
 /**
- * Build the two small partial indexes the layer reads, in the background.
+ * Build the small partial indexes the layer reads, in the background.
  *
  * CONCURRENTLY, because each build still scans the whole table (minutes on a
  * national import) and a plain build would hold off replication writes for
@@ -286,6 +349,8 @@ export async function ensureLocalityIndexes(): Promise<void> {
     const indexes = [
       ['geo_places_locality_ts_idx', `USING GIN (ts) WHERE ${LOCALITY_PREDICATE}`],
       ['geo_places_postal_code_idx', `(upper(tags->>'postal_code') text_pattern_ops) WHERE ${POSTAL_PREDICATE}`],
+      // The misspelling fallback. Last, since the layer runs without it.
+      ['geo_places_locality_name_trgm_idx', `USING GIN (name gin_trgm_ops) WHERE ${LOCALITY_PREDICATE}`],
     ]
     for (const [name, definition] of indexes) {
       const [existing] = await client<{ valid: boolean }[]>`
@@ -298,6 +363,7 @@ export async function ensureLocalityIndexes(): Promise<void> {
       await client.unsafe(`CREATE INDEX CONCURRENTLY IF NOT EXISTS ${name} ON geo_places ${definition}`)
     }
     indexReady = true
+    fuzzyReady = true
   } catch (err) {
     // Costs the locality layer, nothing else — search still runs without it.
     // Thrown from an un-awaited task it would take the process down instead.
@@ -310,5 +376,6 @@ export async function ensureLocalityIndexes(): Promise<void> {
 /** Test hook: the layer is a no-op until its index is confirmed. */
 export function setLocalityIndexReady(ready: boolean): void {
   indexReady = ready
+  fuzzyReady = ready
   indexProbedAt = ready ? 0 : Date.now()
 }
