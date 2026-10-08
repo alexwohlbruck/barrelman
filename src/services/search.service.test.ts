@@ -793,6 +793,35 @@ describe('searchPlaces — localities', () => {
     expect(mockExecute).toHaveBeenCalledTimes(8)
   }, 15000)
 
+  // The SQL a mock call received, for answering by query rather than by order.
+  const sqlOf = (q: any): string =>
+    (q?.queryChunks ?? []).map((c: any) =>
+      c?.queryChunks ? sqlOf(c) : Array.isArray(c?.value) ? c.value.join('') : '').join('')
+
+  test('a misspelling with no namesake falls back to trigram', async () => {
+    setLocalityIndexReady(true)
+    const charlotte = { id: 'relation/177415', name: 'Charlotte', text_rank: 0.5, distance_m: 0 }
+    mockExecute.mockImplementation(async (q: any) => (sqlOf(q).includes('name %') ? [charlotte] : []))
+    const results = await searchPlaces({ query: 'charlote', lat: 35.22, lng: -80.84, autocomplete: true })
+    expect(results[0]?.id).toBe('relation/177415')
+  })
+
+  test('a correctly spelled place that scored too low gets no look-alike', async () => {
+    // "hickory" from New York matches Hickory, NC, too far away to qualify.
+    setLocalityIndexReady(true)
+    const lookalike = { id: 'relation/1', name: 'Hickory Hills', text_rank: 0.5, distance_m: 0 }
+    const calls: string[] = []
+    mockExecute.mockImplementation(async (q: any) => {
+      const text = sqlOf(q)
+      calls.push(text)
+      if (text.includes('SELECT 1 FROM geo_places')) return [{ '?column?': 1 }] // the namesake exists
+      return text.includes('name %') ? [lookalike] : []
+    })
+    const results = await searchPlaces({ query: 'hickory', lat: 40.76, lng: -73.99, autocomplete: true })
+    expect(calls.some((t) => t.includes('name %'))).toBe(false)
+    expect(results.map((r: any) => r.id)).not.toContain('relation/1')
+  })
+
   test('the layer is skipped for category browses', async () => {
     setLocalityIndexReady(true)
     await searchPlaces({ query: 'coffee', categories: ['amenity/cafe'], autocomplete: true })

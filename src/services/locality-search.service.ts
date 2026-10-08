@@ -142,9 +142,14 @@ async function localityIndexReady(): Promise<boolean> {
     FROM pg_index i
     JOIN pg_class c ON c.oid = i.indexrelid
     WHERE c.relname IN ('geo_places_locality_ts_idx', 'geo_places_postal_code_idx', 'geo_places_locality_name_trgm_idx')
-  `).catch(() => [] as any[])
-  indexReady = Boolean((rows as any[])[0]?.ready)
-  fuzzyReady = Boolean((rows as any[])[0]?.fuzzy)
+  `).catch(() => null)
+  // A failed check changes nothing. Read as "not ready", one timeout under load
+  // would switch the whole layer off until the next check a minute later.
+  const row = (rows as any[] | null)?.[0]
+  if (row) {
+    indexReady = Boolean(row.ready)
+    fuzzyReady = Boolean(row.fuzzy)
+  }
   return indexReady
 }
 
@@ -174,12 +179,28 @@ export async function searchLocalities({
   if (query.length < LOCALITY_MIN_QUERY || !(await localityIndexReady())) return []
 
   const params = { query, tsQueryText, lat, lng, autocomplete, limit }
-  const rows = await localityQuery(params, sql`ts @@ to_tsquery('simple', unaccent(${tsQueryText}))`)
+  const wordMatch = sql`ts @@ to_tsquery('simple', unaccent(${tsQueryText}))`
+  const rows = await localityQuery(params, wordMatch)
   if (rows.length > 0 || !fuzzyReady || query.length < FUZZY_MIN_QUERY || isPostalShaped(query)) return rows
-  // Nothing matched every word: try the name as a misspelling ("charlote").
-  // The trigram index holds only places (19 MB), so this costs milliseconds,
+  // A place by that name that only scored too low ("hickory" from New York)
+  // was spelled right, and a look-alike must not stand in for it.
+  if (await placeNamed(wordMatch, query)) return rows
+  // No place has that name: try it as a misspelling ("charlote"). The
+  // trigram index holds only places (19 MB), so this costs milliseconds,
   // where the same lookup over every name in geo_places reads a 5 GB index.
   return localityQuery({ ...params, postal: false }, sql`name % ${query}`)
+}
+
+/** Whether any place's name matches the words, whatever its score. Read
+ *  through the same partial index as the layer itself. */
+async function placeNamed(wordMatch: ReturnType<typeof sql>, query: string): Promise<boolean> {
+  const rows = await db.execute(sql`
+    SELECT 1 FROM geo_places
+    WHERE ${sql.raw(LOCALITY_PREDICATE)} AND ${wordMatch}
+      AND geom_type <> 'line' AND similarity(name, ${query}) >= 0.3
+    LIMIT 1
+  `).catch(() => [] as any[])
+  return (rows as any[]).length > 0
 }
 
 /** One pass of the locality layer, with `match` selecting the candidate rows
