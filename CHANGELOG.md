@@ -10,6 +10,32 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-10-07
+
+### Changed
+
+* **3D landmark models come from their own repository.** Barrelman's own
+  models now live in [alexwohlbruck/landmarks](https://github.com/alexwohlbruck/landmarks),
+  published in the Open Landmarks release format, and are imported the same
+  way as Open Landmarks: at startup and, with the seeded *Import 3D landmarks*
+  schedule enabled, hourly. An unchanged release costs one request per
+  source, and only new model files are downloaded, each checked against its
+  published hash. None ship in the image any more.
+
+  **Upgrading:** the API needs outbound HTTPS at startup to fetch models;
+  without it the landmarks layer is empty and the rest of the API is
+  unaffected. `BARRELMAN_LANDMARKS_URL` (default: the repository's published
+  release) replaces the bundled `landmarks/` catalog and `LANDMARKS_DIR`; set
+  it to `off` to serve none, or to a directory holding a release built with
+  the repository's `bun run build`. `off` now also removes that source's
+  landmarks, as does `OPEN_LANDMARKS_URL=off`. `OPEN_LANDMARKS_CONCURRENCY` is
+  renamed `LANDMARKS_CONCURRENCY`. Landmark ids are unchanged; each model gets
+  a new file name once, because a placement's bearing and scale are now baked
+  into its own copy (sent with `bearing` 0 and `scale` 1). The tile's `source`
+  reads `barrelman` where it read `catalog`, and `catalog` in
+  `LANDMARK_SOURCE_PRIORITY` is still understood. The console's landmark tasks
+  are renamed *Import 3D landmarks (update)* and *(full)*.
+
 ## [0.8.5] - 2026-10-07
 
 ### Fixed

@@ -96,9 +96,9 @@ export function createLandmarkRoutes(
           summary: '3D landmark placements',
           description:
             'Vector tile with one layer, `landmarks`: a point per 3D landmark whose model overhangs the tile. ' +
-            'Landmarks come from Barrelman\'s own catalog and the Open Landmarks dataset; where both model one ' +
+            'Landmarks come from Barrelman\'s own dataset and the Open Landmarks dataset; where both model one ' +
             'building only the higher-priority source\'s is sent. Properties: `id`, `name`, `source` ' +
-            '(`catalog` or `openlandmarks`), `model` (a file name under /tiles/landmarks/models), `detail` and ' +
+            '(`barrelman` or `openlandmarks`), `model` (a file name under /tiles/landmarks/models), `detail` and ' +
             '`detailzoom` (a finer model to switch to from that zoom, where there is one), `entrances` (JSON ' +
             '[[x,y,z],…] in model axes: lit entrances to glow at night), `bearing` (degrees ' +
             'clockwise from north), `scale`, `elevation` and `height` (metres), `minzoom`, `wikidata`, ' +

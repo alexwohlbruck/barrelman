@@ -22,15 +22,15 @@
  * geometry, which is what Mapbox does, needs the engine to intersect every
  * extrusion with every landmark footprint, which MapLibre has no hook for.
  * The catch is that the list has to name every `building:part` as well as the
- * outline — see `landmarks/README.md`.
+ * outline; see the landmarks repo's README.
  *
  * Placements come from more than one source, each owning its own rows (the
- * `origin` column), and are merged in the database:
+ * `origin` column), and are merged in the database. Every source publishes in
+ * the Open Landmarks release format and is imported the same way; see
+ * `landmark-import.service.ts`:
  *
- *   catalog        our own, in the repo (`landmarks/catalog.json`), synced at
- *                  startup.
- *   openlandmarks  the Open Landmarks dataset, imported from its published
- *                  releases — see `openlandmarks.service.ts`.
+ *   openlandmarks  the Open Landmarks dataset.
+ *   barrelman      Barrelman's own models, from github.com/alexwohlbruck/landmarks.
  *
  * Where two sources model the same building, `resolveLandmarkConflicts` keeps
  * the one whose source ranks first in LANDMARK_SOURCE_PRIORITY and marks the
@@ -38,28 +38,30 @@
  * losing row stays, so changing the priority or withdrawing the winner brings
  * it back without a re-import.
  */
-import { join, resolve } from 'path'
 import { connection as sql } from '../db'
 import { envString } from '../config/env'
 
-/** Sources that own landmark rows, by the `origin` value they write. */
-export type LandmarkOrigin = 'catalog' | 'openlandmarks'
+/** Every source that can own landmark rows, by the `origin` value it writes. */
+export const LANDMARK_SOURCE_IDS = ['openlandmarks', 'barrelman'] as const
+export type LandmarkSourceId = (typeof LANDMARK_SOURCE_IDS)[number]
 
 /**
  * Which source wins when two model the same building, first wins. Open
  * Landmarks leads by default: its models are reviewed for the shared dataset,
- * and our catalog fills the gaps until its models are contributed there.
+ * and ours fill the gaps until they are contributed there.
  */
-export function landmarkSourcePriority(): LandmarkOrigin[] {
-  const listed = envString('LANDMARK_SOURCE_PRIORITY', 'openlandmarks,catalog')
-    .split(',').map((s) => s.trim()).filter((s): s is LandmarkOrigin => s === 'catalog' || s === 'openlandmarks')
+export function landmarkSourcePriority(): LandmarkSourceId[] {
+  const listed: LandmarkSourceId[] = []
+  for (const raw of envString('LANDMARK_SOURCE_PRIORITY', 'openlandmarks,barrelman').split(',')) {
+    // `catalog` was the bundled catalog's name before it moved to its own
+    // repo; a priority written for it means the same models.
+    const name = raw.trim() === 'catalog' ? 'barrelman' : raw.trim()
+    if ((LANDMARK_SOURCE_IDS as readonly string[]).includes(name) && !listed.includes(name as LandmarkSourceId))
+      listed.push(name as LandmarkSourceId)
+  }
   // A source left off the list still ranks, after the listed ones.
-  for (const origin of ['openlandmarks', 'catalog'] as const) if (!listed.includes(origin)) listed.push(origin)
+  for (const id of LANDMARK_SOURCE_IDS) if (!listed.includes(id)) listed.push(id)
   return listed
-}
-
-export function resolveLandmarksDir(override?: string): string {
-  return resolve(override || envString('LANDMARKS_DIR', './landmarks'))
 }
 
 /** The vector tile layer name, and the source name under /tiles. */
@@ -70,77 +72,6 @@ export const LANDMARKS_LAYER = 'landmarks'
  * client can start fetching the model before it is big enough to draw.
  */
 export const LANDMARKS_MIN_TILE_ZOOM = 12
-
-const OSM_REF_RE = /^(node|way|relation)\/\d+$/
-const SLUG_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/
-
-export type CatalogModel = {
-  id: string
-  /** Relative to the landmarks dir. */
-  file: string
-  license: string
-  author: string
-  /** Where the model came from — a generator script, a URL. */
-  source?: string
-  /**
-   * The credit a map has to show while drawing it, for licences that require
-   * one (CC-BY). Travels on every tile feature so a client can show it only
-   * when the model is actually on screen.
-   */
-  attribution?: string
-}
-
-export type CatalogLandmark = {
-  id: string
-  name: string
-  model: string
-  lng: number
-  lat: number
-  /** Degrees clockwise from north that the model's -Z axis is turned to. */
-  bearing?: number
-  scale?: number
-  /** Metres above the ground the model's origin sits. */
-  elevation?: number
-  /** Smallest zoom a client should draw it at. */
-  minzoom?: number
-  replaces?: string[]
-  wikidata?: string
-}
-
-export type Catalog = { models: CatalogModel[]; landmarks: CatalogLandmark[] }
-
-/**
- * Check a catalog before any of it reaches the database. Returns the problems
- * rather than throwing on the first, so one run reports everything wrong with
- * a pull request's catalog edit.
- */
-export function validateCatalog(catalog: Catalog): string[] {
-  const problems: string[] = []
-  const models = new Set<string>()
-  for (const m of catalog.models ?? []) {
-    if (!SLUG_RE.test(m.id)) problems.push(`model "${m.id}": id must be a lowercase slug`)
-    if (models.has(m.id)) problems.push(`model "${m.id}": duplicate id`)
-    models.add(m.id)
-    if (!m.file?.endsWith('.glb')) problems.push(`model "${m.id}": file must be a .glb`)
-    if (m.file?.includes('..')) problems.push(`model "${m.id}": file must stay inside the landmarks dir`)
-    if (!m.license) problems.push(`model "${m.id}": license is required`)
-    if (/^CC-BY/i.test(m.license ?? '') && !m.attribution)
-      problems.push(`model "${m.id}": a ${m.license} model needs an attribution`)
-  }
-  const ids = new Set<string>()
-  for (const l of catalog.landmarks ?? []) {
-    const at = `landmark "${l.id}"`
-    if (!SLUG_RE.test(l.id)) problems.push(`${at}: id must be a lowercase slug`)
-    if (ids.has(l.id)) problems.push(`${at}: duplicate id`)
-    ids.add(l.id)
-    if (!models.has(l.model)) problems.push(`${at}: unknown model "${l.model}"`)
-    if (!(Math.abs(l.lng) <= 180 && Math.abs(l.lat) <= 85)) problems.push(`${at}: lng/lat out of range`)
-    if (l.scale !== undefined && !(l.scale > 0)) problems.push(`${at}: scale must be positive`)
-    for (const ref of l.replaces ?? [])
-      if (!OSM_REF_RE.test(ref)) problems.push(`${at}: "${ref}" is not an OSM ref like way/123`)
-  }
-  return problems
-}
 
 /**
  * The model's extent in its own metres: `height` above the origin, and
@@ -357,7 +288,7 @@ export function ensureLandmarksSchema(): Promise<void> {
         license    text NOT NULL,
         author     text NOT NULL,
         source     text,
-        origin     text NOT NULL DEFAULT 'catalog',
+        origin     text NOT NULL,
         updated_at timestamptz NOT NULL DEFAULT now()
       )`
     await sql`ALTER TABLE landmark_models ADD COLUMN IF NOT EXISTS attribution text`
@@ -378,7 +309,7 @@ export function ensureLandmarksSchema(): Promise<void> {
         min_zoom   real NOT NULL DEFAULT 14,
         replaces   text[] NOT NULL DEFAULT '{}',
         wikidata   text,
-        origin     text NOT NULL DEFAULT 'catalog',
+        origin     text NOT NULL,
         updated_at timestamptz NOT NULL DEFAULT now()
       )`
     // `reach` is the plan-view square the model can cover, in web mercator,
@@ -406,77 +337,8 @@ export function ensureLandmarksSchema(): Promise<void> {
   return schemaReady
 }
 
-/** Served model files by URL name, rebuilt by every sync. */
+/** Served model files by URL name, rebuilt by every import. */
 let modelFiles = new Map<string, string>()
-
-/**
- * Bring the database in line with the catalog on disk.
- *
- * Only rows the catalog owns (`origin = 'catalog'`) are touched, so a removal
- * from the file is a removal here, and anything added some other way survives.
- */
-export async function syncLandmarkCatalog(dir = resolveLandmarksDir()): Promise<{ models: number; landmarks: number }> {
-  await ensureLandmarksSchema()
-  const file = Bun.file(join(dir, 'catalog.json'))
-  if (!(await file.exists())) return { models: 0, landmarks: 0 }
-
-  const catalog = (await file.json()) as Catalog
-  const problems = validateCatalog(catalog)
-  if (problems.length) throw new Error(`landmarks/catalog.json:\n  ${problems.join('\n  ')}`)
-
-  const models: Array<CatalogModel & { sha256: string; bytes: number; height: number; radius: number; path: string }> = []
-  for (const m of catalog.models) {
-    const path = join(dir, m.file)
-    const bytes = new Uint8Array(await Bun.file(path).arrayBuffer())
-    const sha256 = new Bun.CryptoHasher('sha256').update(bytes).digest('hex')
-    models.push({ ...m, path, sha256, bytes: bytes.length, ...glbBounds(bytes) })
-  }
-
-  await sql.begin(async (rawTx) => {
-    // postgres-js types a transaction as not callable as a tagged template,
-    // though it is; see boundary-catalog.service.ts.
-    const tx = rawTx as unknown as typeof sql
-    for (const m of models) {
-      await tx`
-        INSERT INTO landmark_models (id, file, path, sha256, bytes, height_m, radius_m, license, author, source, attribution, origin)
-        VALUES (${m.id}, ${modelFileName(m.id, m.sha256)}, ${m.path}, ${m.sha256}, ${m.bytes}, ${m.height}, ${m.radius},
-                ${m.license}, ${m.author}, ${m.source ?? null}, ${m.attribution ?? null}, 'catalog')
-        ON CONFLICT (id) DO UPDATE SET
-          file = EXCLUDED.file, path = EXCLUDED.path, sha256 = EXCLUDED.sha256, bytes = EXCLUDED.bytes,
-          height_m = EXCLUDED.height_m, radius_m = EXCLUDED.radius_m, license = EXCLUDED.license,
-          author = EXCLUDED.author, source = EXCLUDED.source, attribution = EXCLUDED.attribution,
-          updated_at = now()`
-    }
-    for (const l of catalog.landmarks) {
-      const scale = l.scale ?? 1
-      await tx`
-        INSERT INTO landmarks (id, name, model_id, geom, reach, bearing, scale, elevation, min_zoom, replaces, wikidata, origin)
-        SELECT ${l.id}, ${l.name}, m.id, p.geom,
-               -- Mercator stretches a metre by 1/cos(lat), so the reach does too.
-               ST_Expand(ST_Transform(p.geom, 3857), m.radius_m * ${scale} / cos(radians(${l.lat}))),
-               ${l.bearing ?? 0}, ${scale}, ${l.elevation ?? 0}, ${l.minzoom ?? 14},
-               ${l.replaces ?? []}, ${l.wikidata ?? null}, 'catalog'
-        FROM landmark_models m, (SELECT ST_SetSRID(ST_MakePoint(${l.lng}, ${l.lat}), 4326) AS geom) p
-        WHERE m.id = ${l.model}
-        ON CONFLICT (id) DO UPDATE SET
-          name = EXCLUDED.name, model_id = EXCLUDED.model_id, geom = EXCLUDED.geom, reach = EXCLUDED.reach,
-          bearing = EXCLUDED.bearing, scale = EXCLUDED.scale, elevation = EXCLUDED.elevation,
-          min_zoom = EXCLUDED.min_zoom, replaces = EXCLUDED.replaces, wikidata = EXCLUDED.wikidata,
-          updated_at = now()`
-    }
-    const landmarkIds = catalog.landmarks.map((l) => l.id)
-    const modelIds = catalog.models.map((m) => m.id)
-    await tx`DELETE FROM landmarks WHERE origin = 'catalog' AND NOT (id = ANY(${landmarkIds}))`
-    await tx`
-      DELETE FROM landmark_models m
-      WHERE origin = 'catalog' AND NOT (id = ANY(${modelIds}))
-        AND NOT EXISTS (SELECT 1 FROM landmarks l WHERE l.model_id = m.id)`
-  })
-
-  await resolveLandmarkConflicts()
-  await refreshModelFiles()
-  return { models: models.length, landmarks: catalog.landmarks.length }
-}
 
 /**
  * Mark which placements are drawn. Two placements from different sources
