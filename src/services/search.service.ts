@@ -5,6 +5,8 @@ import { generateQueryEmbedding } from '../lib/embeddings'
 import { forwardGeocode } from './geocode.service'
 import { searchTransitRoutes, searchTransitStops } from './transit-search.service'
 import { searchLocalities, isPostalShaped } from './locality-search.service'
+import { estimateMatches } from './lexeme-stats.service'
+import { executeWithin } from '../lib/bounded-query'
 import { reconcileTransitHits } from '../lib/transit-search'
 import { buildTsQueryText, isStreetQuery } from '../lib/search-query'
 import { envNumber } from '../config/env'
@@ -67,6 +69,92 @@ const AUTOCOMPLETE_FALLBACK_MIN = 1
  *  avoid — and a 2-3 character prefix is never a deliberate search for a
  *  faraway place. */
 const AUTOCOMPLETE_FALLBACK_MIN_QUERY = 4
+
+// ── Local typeahead stages ──────────────────────────────────────────────────
+// The autocomplete FTS layer used to be one query: every ts match inside the
+// 50 km box, sorted by distance. Whether that is fast depends on how many rows
+// the words match *near the viewport*, which the planner cannot know — it
+// multiplies word frequencies as if words were independent. Measured on the
+// 218M-row US instance: "harris teeter" in Charlotte 7ms, but "new york" in
+// Manhattan (every POI's parent_context says New York) 357K rows and 8.5s, and
+// "coffee" in Manhattan 2.4s.
+//
+// Walking the centroid index nearest-first is the mirror image: instant for a
+// word that is everywhere nearby, a scan of the whole box for one that is not.
+// So the layer measures density before choosing:
+//
+//   1. Probe the LOCAL_PROBE_ROWS nearest rows and keep those that match. This
+//      costs the same 20-70ms whatever the words are, and a dense word fills
+//      the pool from it ("new york" 4.8s → 36ms, "charlotte" 478 → 19ms).
+//   2. Otherwise the word is locally sparse, which is exactly when the ts
+//      index is cheap — unless the word is common nationally ("texas",
+//      "street", a one-letter prefix), when no plan is: there the probe's hits
+//      stand alone. See lexeme-stats.service.ts.
+//   3. The index search runs inside 5 km first and widens to the full box only
+//      when that comes up short; "coffee" in Manhattan 2.4s → 73ms.
+//
+// Each index search runs under its own statement timeout, so a misjudged one
+// is cancelled in the server rather than abandoned.
+
+/** Nearest rows the density probe walks. */
+const LOCAL_PROBE_ROWS = 2000
+
+/** Statement timeout for the probe. It measures 20-70ms; this only catches a
+ *  cold disk or a starved pool. */
+const LOCAL_PROBE_TIMEOUT_MS = 300
+
+/** Probe hits that make the word dense enough to skip the index searches. At
+ *  1% of nearby rows, a 50 km box holds tens of thousands of matches. */
+const LOCAL_PROBE_ENOUGH = 20
+
+/** Rows a word may match nationally before the ts index stops being able to
+ *  narrow a local search ("pizza" 366K: 54ms; "texas" 18M: 1.4s even in 5 km). */
+const LOCAL_INDEX_MAX_ROWS = 2_000_000
+
+/** Rows a prefix word may expand to. Lower than the above, because the index
+ *  materialises a prefix in full and a statement timeout cannot stop it
+ *  meanwhile: "coffee:*" (580K) answered in 73ms, "state:*" (2M) ran 2.6s
+ *  under a 500ms timeout. See lexeme-stats.service.ts. */
+const LOCAL_PREFIX_MAX_ROWS = 1_000_000
+
+/** Whether the ts index can serve a query cheaply. Unknown (no statistics
+ *  yet) counts as yes, which is how every search behaved before. */
+function indexCanNarrow(tsQueryText: string): boolean {
+  const e = estimateMatches(tsQueryText)
+  return !e || (e.rows <= LOCAL_INDEX_MAX_ROWS && e.prefixRows <= LOCAL_PREFIX_MAX_ROWS)
+}
+
+/** Inner radius of the index search, and the hits that make it enough. */
+const LOCAL_NEAR_RADIUS_M = 5_000
+const LOCAL_NEAR_ENOUGH = 10
+
+/** Statement timeout for each local index search. */
+const LOCAL_INDEX_TIMEOUT_MS = 500
+
+/** Statement timeout for the global FTS retry when typeahead finds nothing
+ *  nearby. Rare words answer in ~150ms; past this the word is common and the
+ *  locality layer already holds what typeahead can usefully show. */
+const AUTOCOMPLETE_RETRY_TIMEOUT_MS = 800
+
+/** Statement timeout for the abbreviation layer in typeahead. An abbreviation
+ *  that names few places answers in ~20ms. */
+const AUTOCOMPLETE_ABBREV_TIMEOUT_MS = 300
+
+/** Pelias budget for typeahead that doesn't look like an address. Healthy
+ *  answers measured 15ms at the median and 67ms at p90. */
+const AUTOCOMPLETE_ADDRESS_BUDGET_MS = 400
+
+/** Below this much of the trigram budget left, a submitted search skips the
+ *  trigram layer rather than start a scan it cannot finish. */
+const TRIGRAM_MIN_REMAINING_MS = 150
+
+/** Transit routes at or above this rank matched on their short name ("7",
+ *  "M15") or nearly their whole long name; below it they matched a word in a
+ *  long or agency name
+ *  — every "Asheville Rides Transit" route for "asheville", every Greyhound
+ *  "Raleigh - Asheville". Those rank with the other text matches instead of
+ *  above them. */
+const STRONG_ROUTE_RANK = 0.9
 
 /** Most locality hits one search returns. Enough for the Springfields; any
  *  more and pinned places crowd out what else the name matches. */
@@ -152,6 +240,7 @@ export async function searchPlaces(
   const cacheKey = `search:${query || ''}:${lat}:${lng}:${radius}:${routeGeoJSON}:${buffer}:${categories?.join(',')}:${tagsCacheKey}:${limit}:${offset}:${semantic}:${autocomplete}`
   const cached = searchCache.get(cacheKey)
   if (cached) return cached
+  const startedAt = performance.now()
 
   // Strip apostrophes ("sal's" → "sals") to mirror the tsvector normalization,
   // then replace remaining punctuation with spaces. Letters are matched by
@@ -212,9 +301,13 @@ export async function searchPlaces(
   // A postal-code-shaped query also asks for Pelias's postalcode layer: OSM
   // maps ZIP codes as boundaries almost nowhere in the US, but Who's on First
   // has them all.
+  // Aborted when the address budget below runs out, so Elasticsearch stops
+  // too instead of finishing a search nobody will read.
+  const peliasAbort = new AbortController()
+  const peliasSignal = signal ? AbortSignal.any([signal, peliasAbort.signal]) : peliasAbort.signal
   const peliasPromise: Promise<any[]> = wantAddresses
     ? forwardGeocode(query!.trim(), {
-        lat, lng, limit, signal,
+        lat, lng, limit, signal: peliasSignal,
         ...(isPostalShaped(sanitizedQuery) ? { layers: 'postalcode,address,street' } : {}),
       })
     : Promise.resolve([])
@@ -363,7 +456,7 @@ export async function searchPlaces(
     // ordering, over-fetched pool. `local: false` is the original global shape.
     // Note the ORDER BY is the only thing that changes about ranking — text_rank
     // is still projected identically, and the JS re-rank below scores on it.
-    const ftsQuery = (local: boolean) => db.execute(sql`
+    const ftsSql = (local: boolean, boxFilter = autocompleteBoxFilter, tsExpr = tsQueryExpr) => sql`
       SELECT
         id, osm_type, osm_id, name, name_abbrev, categories, tags,
         address, hours, phones, websites, geom_type,
@@ -371,15 +464,52 @@ export async function searchPlaces(
         ${ftsRankExpr} AS text_rank
         ${distanceSelect}
       FROM geo_places
-      WHERE ts @@ ${tsQueryExpr}
-      ${local ? autocompleteBoxFilter : textSearchSpatialFilter}
+      WHERE ts @@ ${tsExpr}
+      ${local ? boxFilter : textSearchSpatialFilter}
       ${categoryFilter}
       ${tagsFilter}
       ${local ? sql`ORDER BY centroid <-> ${locationPoint}` : proximityDecay(ftsRankExpr)}
       LIMIT ${local ? AUTOCOMPLETE_POOL : limit}
-    `).catch(() => [] as any[])
+    `
+    const ftsQuery = (local: boolean) => db.execute(ftsSql(local)).catch(() => [] as any[])
 
-    const ftsPromise = ftsQuery(localAutocomplete)
+    // The autocomplete fast path, staged by density (see LOCAL_PROBE_ROWS).
+    const localFts = async (): Promise<any[]> => {
+      // The probe filters an index-ordered walk, so it must not carry a ts
+      // predicate the planner could turn into a bitmap instead.
+      const probe = await executeWithin(sql`
+        SELECT
+          id, osm_type, osm_id, name, name_abbrev, categories, tags,
+          address, hours, phones, websites, geom_type,
+          ST_AsGeoJSON(centroid)::jsonb AS geometry,
+          ${ftsRankExpr} AS text_rank
+          ${distanceSelect}
+        FROM (
+          SELECT * FROM geo_places
+          WHERE true ${autocompleteBoxFilter}
+          ORDER BY centroid <-> ${locationPoint}
+          LIMIT ${LOCAL_PROBE_ROWS}
+        ) nearest
+        WHERE ts @@ ${tsQueryExpr}
+        ${categoryFilter}
+        ${tagsFilter}
+        LIMIT ${AUTOCOMPLETE_POOL}
+      `, LOCAL_PROBE_TIMEOUT_MS)
+      if (probe.length >= LOCAL_PROBE_ENOUGH) return probe
+
+      if (!indexCanNarrow(tsQueryText || sanitizedQuery)) return probe
+
+      const near = await executeWithin(
+        ftsSql(true, sql`AND centroid && ST_Expand(${locationPoint}::geometry, ${LOCAL_NEAR_RADIUS_M / 111320})`),
+        LOCAL_INDEX_TIMEOUT_MS,
+      )
+      if (near.length >= LOCAL_NEAR_ENOUGH) return [...probe, ...near]
+      const wide = await executeWithin(ftsSql(true), LOCAL_INDEX_TIMEOUT_MS)
+      // Duplicates across the stages collapse in the merge's id dedupe.
+      return [...probe, ...near, ...wide]
+    }
+
+    const ftsPromise = localAutocomplete ? localFts() : ftsQuery(false)
 
     // Layer 2: Trigram fuzzy match via GiST KNN (name <-> query)
     // Uses the GiST trigram index (geo_places_name_gist_trgm_idx) for ordered
@@ -419,7 +549,7 @@ export async function searchPlaces(
     // actually needs, is already covered by the `word:*` tsquery in the FTS
     // layer; trigram's contribution is typo tolerance, which the global retry
     // below restores whenever the local pass comes up short.
-    const trigramQuery = () => db.execute(sql`
+    const trigramSql = () => sql`
       SELECT
         id, osm_type, osm_id, name, name_abbrev, categories, tags,
         address, hours, phones, websites, geom_type,
@@ -434,7 +564,7 @@ export async function searchPlaces(
       ${tagsFilter}
       ORDER BY name <-> ${sanitizedQuery}
       LIMIT ${limit}
-    `).catch(() => [] as any[])
+    `
 
     // Trigram is typo tolerance, not a primary source: it ranks below FTS,
     // codes and abbreviations in the merge below, so it only ever contributes
@@ -488,6 +618,11 @@ export async function searchPlaces(
             -- abbreviations and FTS derive from one); this was the only way an
             -- unnamed row could reach a result set.
             AND name IS NOT NULL
+            -- A chain store's ref is often just its branch name: a Whole
+            -- Foods tagged branch=Asheville, ref=asheville pinned itself above
+            -- the city of Asheville. A code that is the branch name is a name,
+            -- and the FTS layer already finds names.
+            AND lower(coalesce(tags->>'branch', '')) <> ${lowerQuery}
           ${textSearchSpatialFilter}
           ${categoryFilter}
           ${tagsFilter}
@@ -500,8 +635,11 @@ export async function searchPlaces(
         `).catch(() => [] as any[])
       : Promise.resolve([] as any[])
 
+    // Bounded in typeahead: a two-letter abbreviation is shared by thousands
+    // of names ("ha" took 1.2s to order them by distance), and the FTS layer
+    // already covers a short prefix.
     const nameAbbrevPromise = sanitizedQuery.length <= 20
-      ? db.execute(sql`
+      ? executeWithin(sql`
           SELECT
             id, osm_type, osm_id, name, name_abbrev, categories, tags,
             address, hours, phones, websites, geom_type,
@@ -515,7 +653,7 @@ export async function searchPlaces(
           ${tagsFilter}
           ${abbrevProximityOrder}
           LIMIT ${limit}
-        `).catch(() => [] as any[])
+        `, autocomplete ? AUTOCOMPLETE_ABBREV_TIMEOUT_MS : 0)
       : Promise.resolve([] as any[])
 
     // Transit layers: GTFS routes (lines) and GTFS stops OSM doesn't cover.
@@ -556,16 +694,21 @@ export async function searchPlaces(
       await Promise.all([
         // FTS is bounded only once a place has matched; see LOCALITY_FTS_BUDGET_MS.
         localitiesPromise.then((places) =>
-          places.length > 0 ? withBudget(ftsPromise, LOCALITY_FTS_BUDGET_MS) : ftsPromise),
+          places.length > 0 && !localAutocomplete ? withBudget(ftsPromise, LOCALITY_FTS_BUDGET_MS) : ftsPromise),
         codesPromise, nameAbbrevPromise, transitRoutesPromise, transitStopsPromise, localitiesPromise])
     let trigramRows: any[] = []
 
     // Autocomplete retry: the local pass only sees the viewport, so a place the
     // user is deliberately reaching for in another city would come back empty.
-    // When it finds too little, re-run FTS (and trigram, restoring typo
-    // tolerance) on the global path. Gated on query length — a 2-3 character
-    // prefix matches enormous row counts globally, and is never a deliberate
-    // search for somewhere far away.
+    // When it finds too little, re-run FTS on the global path. Gated on query
+    // length — a 2-3 character prefix matches enormous row counts globally,
+    // and is never a deliberate search for somewhere far away.
+    //
+    // Not trigram. It is the one layer whose cost no filter bounds: a KNN walk
+    // over a 5 GB index that ran into the 10s statement timeout on every
+    // retry measured ("ocean isle beach" typed anywhere but the NC coast) and
+    // then contributed nothing. Typeahead's typo tolerance comes from the
+    // locality layer's trigram fallback, over places alone, instead.
     if (
       localAutocomplete &&
       !addressLike &&
@@ -573,23 +716,32 @@ export async function searchPlaces(
       (ftsRows as any[]).length + (codesRows as any[]).length + (nameAbbrevRows as any[]).length +
         (localityRows as any[]).length < AUTOCOMPLETE_FALLBACK_MIN
     ) {
-      const [globalFts, globalTrigram] = await Promise.all([
-        ftsQuery(false),
-        sanitizedQuery.length > 4 ? trigramQuery() : Promise.resolve([] as any[]),
-      ])
-      // Append rather than replace: the global pass is a superset in principle,
-      // but it ranks by text_rank and so can drop a nearby hit the local pass
-      // found. The dedup in the merge below collapses the overlap.
-      ftsRows = [...(ftsRows as any[]), ...(globalFts as any[])]
-      trigramRows = globalTrigram as any[]
+      // A trailing one- or two-letter word ("ocean isle b") is dropped first:
+      // as a prefix it expands to millions of rows nationwide, and the words
+      // before it already say where the user is headed. If what remains is
+      // still too common for the index, there is no cheap global answer, and
+      // the locality layer's places stand alone.
+      const retryWords = queryWords.length > 1 && queryWords[queryWords.length - 1].length < 3
+        ? queryWords.slice(0, -1)
+        : queryWords
+      const retryTsText = buildTsQueryText(retryWords, retryWords === queryWords)
+      if (retryTsText && indexCanNarrow(retryTsText)) {
+        const globalFts = await executeWithin(
+          ftsSql(false, undefined, sql`to_tsquery('simple', unaccent(${retryTsText}))`),
+          AUTOCOMPLETE_RETRY_TIMEOUT_MS,
+        )
+        // Append rather than replace: the global pass is a superset in
+        // principle, but it ranks by text_rank and so can drop a nearby hit the
+        // local pass found. The dedup in the merge below collapses the overlap.
+        ftsRows = [...(ftsRows as any[]), ...globalFts]
+      }
     }
 
     // The deferred typo-tolerance pass promised above. The precise layers have
     // answered by now, so we know whether there is anything left to fill: if
     // they already produced `limit` distinct rows, trigram could not add one
-    // that survives the cap and the scan would be pure latency. The
-    // autocomplete retry may have run it already, hence the emptiness check.
-    if (runTrigram && trigramRows.length === 0) {
+    // that survives the cap and the scan would be pure latency.
+    if (runTrigram) {
       const precise = new Set<string>()
       for (const row of [
         ...(codesRows as any[]),
@@ -601,16 +753,23 @@ export async function searchPlaces(
         precise.add((row as any).id)
       }
       if (precise.size < limit) {
-        // Bounded exactly like the Pelias wait below, and for the same reason:
-        // a supplementary layer must not be able to hold the whole response
-        // hostage.
-        trigramRows = await withBudget(trigramQuery(), SEARCH_TRIGRAM_BUDGET_MS)
+        // Bounded like the Pelias wait below, and for the same reason: a
+        // supplementary layer must not be able to hold the whole response
+        // hostage. The budget is for the search, not for this layer, so time
+        // already spent waiting on FTS counts against it — "new york" used to
+        // wait 2.5s for FTS and then 2.5s more here.
+        const remaining = SEARCH_TRIGRAM_BUDGET_MS - (performance.now() - startedAt)
+        if (SEARCH_TRIGRAM_BUDGET_MS <= 0) {
+          trigramRows = await executeWithin(trigramSql(), 0)
+        } else if (remaining >= TRIGRAM_MIN_REMAINING_MS) {
+          trigramRows = await executeWithin(trigramSql(), remaining)
+        }
       }
     }
 
     // Merge, deduplicating in priority order: exact-name localities > codes >
-    // other localities > transit routes > abbreviation > FTS > trigram >
-    // transit stops. Transit ids can't
+    // other localities > short-name transit routes > abbreviation > FTS >
+    // other transit routes > trigram > transit stops. Transit ids can't
     // collide with OSM ids, so their position only decides who survives the cap.
     // Codes and locality hits are pinned — exempt from proximity re-ranking. An
     // exact IATA/ICAO code is definitive regardless of distance, and a locality
@@ -628,8 +787,12 @@ export async function searchPlaces(
     const fold = (t: string) => t.normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase()
     const typed = fold(sanitizedQuery)
     const exactLocalities = (localityRows as any[]).filter((r: any) => r.name && fold(r.name) === typed)
+    // See STRONG_ROUTE_RANK: a route named for the place typed is not the
+    // place, and goes after the places that are.
+    const strongRoutes = (transitRouteRows as any[]).filter((r: any) => (r.text_rank ?? 0) >= STRONG_ROUTE_RANK)
+    const weakRoutes = (transitRouteRows as any[]).filter((r: any) => (r.text_rank ?? 0) < STRONG_ROUTE_RANK)
     results = []
-    for (const row of [...exactLocalities, ...(codesRows as any[]), ...(localityRows as any[]), ...(transitRouteRows as any[]), ...(nameAbbrevRows as any[]), ...(ftsRows as any[]), ...(trigramRows as any[]), ...(transitStopRows as any[])]) {
+    for (const row of [...exactLocalities, ...(codesRows as any[]), ...(localityRows as any[]), ...strongRoutes, ...(nameAbbrevRows as any[]), ...(ftsRows as any[]), ...weakRoutes, ...(trigramRows as any[]), ...(transitStopRows as any[])]) {
       const r = row as any
       if (!seen.has(r.id)) {
         seen.add(r.id)
@@ -769,11 +932,24 @@ export async function searchPlaces(
   // The timer is cleared once the race settles: left dangling it would keep a
   // live timer per search for the full budget, which at any real query rate is
   // thousands of them outliving the requests that made them.
+  //
+  // The budget runs from the start of the search, since Pelias was asked in
+  // parallel with everything above. Typeahead that doesn't look like an
+  // address gets a much shorter one: there Pelias only adds streets that share
+  // a word with the query, and for a place name like "charlotte" it took up
+  // to 1.5s to find them.
+  const wantsAddressFirst = addressLike || streetLike || isPostalShaped(sanitizedQuery)
+  const addressBudget = autocomplete && !wantsAddressFirst
+    ? Math.min(SEARCH_ADDRESS_BUDGET_MS, AUTOCOMPLETE_ADDRESS_BUDGET_MS)
+    : SEARCH_ADDRESS_BUDGET_MS
   let budgetTimer: ReturnType<typeof setTimeout> | undefined
   const addressResults = await Promise.race([
     peliasPromise,
     new Promise<any[]>((resolve) => {
-      budgetTimer = setTimeout(() => resolve([]), SEARCH_ADDRESS_BUDGET_MS)
+      budgetTimer = setTimeout(() => {
+        peliasAbort.abort()
+        resolve([])
+      }, Math.max(0, addressBudget - (performance.now() - startedAt)))
     }),
   ]).finally(() => clearTimeout(budgetTimer))
   if (addressResults.length > 0) {
