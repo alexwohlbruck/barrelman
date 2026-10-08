@@ -27,6 +27,9 @@ does it — and the release pipeline turns it into the GitHub Release notes.
   bundle: true-width carriageways with rounded kerbs, centre, lane, edge and
   bike lines, stop lines, kerb-to-kerb crosswalks, and turn arrows and bike
   symbols, with lanes easing across where their count changes.
+* **Solar arrays, flower beds, scrub and shrubs.** A new `object_areas` layer
+  in the `detail` bundle carries the areas and points a client plants with
+  3D objects.
 
 ### Added
 
