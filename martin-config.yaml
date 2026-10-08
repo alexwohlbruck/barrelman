@@ -382,6 +382,22 @@ postgres:
       buffer: 64
       clip_geom: true
 
+    object_lines:
+      schema: public
+      table: object_lines
+      srid: 4326
+      geometry_column: geom
+      geometry_type: GEOMETRY
+      id_column: fid
+      minzoom: 14
+      maxzoom: 16
+      properties:
+        id: id
+        kind: kind
+        height: height
+      buffer: 64
+      clip_geom: true
+
     sport_pitches:
       schema: public
       table: sport_pitches
