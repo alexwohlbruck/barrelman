@@ -53,7 +53,7 @@ set -euo pipefail
 #                               extract changed; 0 leaves it for a separate run
 #   REBUILD_BASEMAP             the same for the PMTiles basemap
 #   REFRESH_BUILDINGS_3D        1 (default) refreshes buildings_3d after the
-#                               update; 0 leaves it for refresh-buildings-3d.sh
+#                               update; 0 leaves it for refresh-view.sh
 #   REPLICATION_MAX_DIFFS       without middle tables: diffs applied per cycle
 #
 # SCHEDULING:
@@ -80,13 +80,15 @@ DB_URL="postgresql://barrelman@localhost:5432/barrelman"
 # as `docker exec`, container name included.
 db_exec() { docker exec -e PGPASSWORD="$DB_PASS" "$@"; }
 
-# The 3D buildings view, after the database changed. See refresh-buildings-3d.sh.
-refresh_buildings() {
+# The materialized map views, after the database changed. See refresh-view.sh.
+# Only buildings can be turned off; refresh-view.sh skips furniture without its index.
+refresh_views() {
   if [ "${REFRESH_BUILDINGS_3D:-1}" = "1" ]; then
-    "$SCRIPT_DIR/refresh-buildings-3d.sh"
+    "$SCRIPT_DIR/refresh-view.sh" buildings_3d
   else
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] 3D buildings refresh disabled (REFRESH_BUILDINGS_3D=0) — skipping."
   fi
+  "$SCRIPT_DIR/refresh-view.sh" street_furniture
 }
 
 # Rebuild what reads region.osm.pbf, if the update moved it. Takes the extract's
@@ -295,10 +297,10 @@ if [ "$HAS_MIDDLE" != "t" ]; then
     || REPLICATION_RC=$?
   PBF_MTIME_AFTER=$(docker exec barrelman-db stat -c %Y "$PBF_FILE" 2>/dev/null || echo 0)
 
-  # The derived columns were redone inside the swap; only the stored view and
+  # The derived columns were redone inside the swap; only the stored views and
   # the planner statistics are left.
   if grep -q '^REPLICATION_APPLIED=1' "$REPLICATION_LOG"; then
-    refresh_buildings
+    refresh_views
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] Running ANALYZE..."
     db_exec barrelman-db psql "$DB_URL" -c "ANALYZE geo_places; ANALYZE bicycle_ways; ANALYZE bicycle_routes;"
   fi
@@ -462,7 +464,7 @@ db_exec barrelman-db psql "$DB_URL" -f /app/import/resolve-parent-context-increm
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] [7/8] Rebuilding tsvectors (intersections + new rows)..."
 db_exec barrelman-db psql "$DB_URL" -v scope='intersections' -f /app/import/rebuild-tsvectors.sql
 
-refresh_buildings
+refresh_views
 
 # ── Step 8: ANALYZE ──────────────────────────────────────────────────────────
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] [8/8] Running ANALYZE..."

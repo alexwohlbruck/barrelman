@@ -41,7 +41,21 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS geo_places_tree_rows_geom_idx
   ON geo_places USING gist (geom)
   WHERE geom_type = 'line' AND tags->>'natural' = 'tree_row';
 
-CREATE INDEX CONCURRENTLY IF NOT EXISTS geo_places_street_furniture_centroid_idx
+DROP INDEX CONCURRENTLY IF EXISTS geo_places_street_furniture_centroid_idx;
+
+CREATE INDEX CONCURRENTLY IF NOT EXISTS geo_places_furniture_centroid_idx
   ON geo_places USING gist (centroid)
   WHERE geom_type = 'point'
-    AND tags->>'amenity' IN ('bench', 'waste_basket', 'recycling', 'waste_disposal');
+    AND (tags->>'amenity' IN ('bench', 'waste_basket', 'recycling', 'waste_disposal',
+                              'drinking_water', 'bicycle_parking', 'fountain')
+         OR tags->>'leisure' = 'picnic_table'
+         OR tags->>'highway' = 'street_lamp'
+         OR tags->>'barrier' = 'bollard'
+         OR tags->>'advertising' = 'billboard');
+
+-- The ways street_furniture turns each object to face. Its nearest-neighbour
+-- search otherwise walks the full geom index past every building and landuse
+-- polygon around a bench before it reaches a road.
+CREATE INDEX CONCURRENTLY IF NOT EXISTS geo_places_highway_lines_geom_idx
+  ON geo_places USING gist (geom)
+  WHERE geom_type = 'line' AND tags ? 'highway';

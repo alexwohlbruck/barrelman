@@ -108,25 +108,110 @@ FROM geo_places
 WHERE geom_type = 'line'
   AND tags->>'natural' = 'tree_row';
 
--- Street furniture: bins, recycling containers and benches
-DROP VIEW IF EXISTS street_furniture CASCADE;
-CREATE VIEW street_furniture AS
-SELECT (osm_id * 4 + CASE osm_type WHEN 'N' THEN 0 WHEN 'W' THEN 1 ELSE 2 END) as fid,
-       id, centroid,
-       -- Which model to draw. The client maps waste_disposal onto the same
-       -- container as recycling.
-       tags->>'amenity' as kind,
-       -- The compass bearing a bench's seat faces. Only about one bench in
-       -- thirty carries it, and the client leaves the rest out — a bench
-       -- pointed the wrong way reads worse than no bench at all.
-       COALESCE(tags->>'direction', '') as direction
-FROM geo_places
-WHERE geom_type = 'point'
-  AND tags->>'amenity' IN ('bench', 'waste_basket', 'recycling', 'waste_disposal')
-  -- A recycling *centre* is a depot you drive to, not a container on the
-  -- pavement. Both are amenity=recycling, and only recycling_type separates
-  -- them, so without this a civic amenity site draws as a single wheelie bin.
-  AND COALESCE(tags->>'recycling_type', 'container') <> 'centre';
+-- ─── Street furniture ────────────────────────────────────────────────────────
+--
+-- One point per object, with the model to draw (`kind`) and the compass bearing
+-- it faces (`direction`, degrees as text, same meaning as the OSM tag).
+--
+-- OSM's own `direction` wins. Under one bench in thirty carries it, so anything
+-- with a front is otherwise turned to face its nearest way: benches, tables,
+-- racks and fountains face a road or path within 14 m; lamps and billboards
+-- face a carriageway (25 m and 60 m), lamps falling back to a path. An object
+-- standing on its way turns side-on to it. Bins and bollards have no front and
+-- no bearing.
+--
+-- MATERIALIZED for the same reason as buildings_3d below: the nearest-way
+-- lookup is a join, which Martin cannot push its tile envelope into. Created
+-- empty, filled by scripts/refresh-view.sh after an import or update and by the
+-- API on startup if still empty. A change to the SELECT needs
+--   DROP MATERIALIZED VIEW street_furniture;  -- then re-run this file
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_class WHERE relname = 'street_furniture' AND relkind = 'v') THEN
+    DROP VIEW street_furniture;
+  END IF;
+END $$;
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS street_furniture AS
+WITH furniture AS MATERIALIZED (
+  SELECT (osm_id * 4 + CASE osm_type WHEN 'N' THEN 0 WHEN 'W' THEN 1 ELSE 2 END) as fid,
+         osm_id, id, centroid,
+         CASE
+           WHEN tags->>'leisure' = 'picnic_table' THEN 'picnic_table'
+           WHEN tags->>'highway' = 'street_lamp' THEN 'street_lamp'
+           WHEN tags->>'barrier' = 'bollard' THEN 'bollard'
+           WHEN tags->>'advertising' = 'billboard' THEN 'billboard'
+           ELSE tags->>'amenity'
+         END as kind,
+         NULLIF(tags->>'direction', '') as direction
+  FROM geo_places
+  WHERE geom_type = 'point'
+    AND (tags->>'amenity' IN ('bench', 'waste_basket', 'recycling', 'waste_disposal',
+                              'drinking_water', 'bicycle_parking', 'fountain')
+         OR tags->>'leisure' = 'picnic_table'
+         OR tags->>'highway' = 'street_lamp'
+         OR tags->>'barrier' = 'bollard'
+         OR tags->>'advertising' = 'billboard')
+    -- A recycling *centre* is a depot you drive to, not a container on the
+    -- pavement; only recycling_type tells the two apart.
+    AND COALESCE(tags->>'recycling_type', 'container') <> 'centre'
+    -- Bike parking is drawn as a rack, so sheds, lockers and garages are left out.
+    AND COALESCE(tags->>'bicycle_parking', 'stands') NOT IN ('building', 'shed', 'lockers', 'floor')
+    AND COALESCE(tags->>'indoor', 'no') = 'no'
+    AND COALESCE(tags->>'location', '') NOT IN ('indoor', 'underground')
+),
+facing AS (
+  SELECT f.*,
+         CASE
+           WHEN f.direction IS NOT NULL THEN NULL
+           WHEN f.kind IN ('bench', 'picnic_table', 'bicycle_parking', 'drinking_water') THEN 'path'
+           WHEN f.kind IN ('street_lamp', 'billboard') THEN 'road'
+         END as faces,
+         CASE f.kind WHEN 'billboard' THEN 60 WHEN 'street_lamp' THEN 25 ELSE 14 END as reach
+  FROM furniture f
+)
+SELECT f.fid, f.id, f.centroid, f.kind,
+       COALESCE(f.direction, nearest.bearing::text, '') as direction
+FROM facing f
+LEFT JOIN LATERAL (
+  SELECT (round(CASE
+            WHEN m.dist < 0.5
+              THEN degrees(ST_Azimuth(m.behind, m.ahead)) + CASE WHEN f.osm_id % 2 = 0 THEN 90 ELSE 270 END
+            ELSE degrees(ST_Azimuth(g.p, m.closest))
+          END)::int + 360) % 360 as bearing
+  FROM (
+    SELECT r.geom,
+           r.tags->>'highway' IN ('motorway', 'motorway_link', 'trunk', 'trunk_link',
+             'primary', 'primary_link', 'secondary', 'secondary_link', 'tertiary',
+             'tertiary_link', 'unclassified', 'residential', 'living_street', 'service',
+             'road', 'busway') as carriageway
+    FROM geo_places r
+    WHERE f.faces IS NOT NULL
+      AND r.geom_type = 'line' AND r.tags ? 'highway'
+      AND r.tags->>'highway' NOT IN ('construction', 'proposed', 'abandoned', 'razed',
+                                     'platform', 'corridor', 'elevator', 'raceway')
+      AND ST_DWithin(r.geom, f.centroid, f.reach / 111320.0 / cos(radians(ST_Y(f.centroid))))
+    ORDER BY r.geom <-> f.centroid
+    LIMIT 8
+  ) r
+  -- Web Mercator is conformal, so bearings measured in it are true bearings.
+  CROSS JOIN LATERAL (
+    SELECT ST_Transform(r.geom, 3857) as line, ST_Transform(f.centroid, 3857) as p
+  ) g
+  CROSS JOIN LATERAL (
+    SELECT ST_ClosestPoint(g.line, g.p) as closest,
+           ST_Distance(g.line, g.p) * cos(radians(ST_Y(f.centroid))) as dist,
+           ST_LineInterpolatePoint(g.line, greatest(ST_LineLocatePoint(g.line, g.p) - 1 / ST_Length(g.line), 0)) as behind,
+           ST_LineInterpolatePoint(g.line, least(ST_LineLocatePoint(g.line, g.p) + 1 / ST_Length(g.line), 1)) as ahead
+  ) m
+  WHERE m.dist <= CASE WHEN f.faces = 'road' AND r.carriageway THEN f.reach ELSE 14 END
+  ORDER BY (f.faces = 'road' AND NOT r.carriageway), m.dist
+  LIMIT 1
+) nearest ON true
+WITH NO DATA;
+
+CREATE UNIQUE INDEX IF NOT EXISTS street_furniture_fid_idx ON street_furniture (fid);
+CREATE INDEX IF NOT EXISTS street_furniture_centroid_idx ON street_furniture USING GIST (centroid);
 
 -- Roller coaster tracks: `roller_coaster=track`, and the older
 -- `railway=roller_coaster` that some parks still carry.

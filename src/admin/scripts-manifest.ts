@@ -271,6 +271,7 @@ export const SCRIPTS: ScriptDef[] = [
       { script: 'routing-graphhopper', when: 'only when the extract changed, and "Rebuild routing graph" is on' },
       { script: 'osm-basemap', when: 'only when the extract changed, and "Rebuild basemap" is on' },
       { script: 'osm-buildings-3d', when: 'unless "Refresh 3D buildings" is off' },
+      { script: 'osm-street-furniture', when: 'always' },
     ],
     source: 'scripts/update-osm.sh',
     notes:
@@ -286,10 +287,25 @@ export const SCRIPTS: ScriptDef[] = [
     longRunning: true,
     confirm: false,
     exclusive: true,
-    exec: { kind: 'process', command: 'bash', args: ['scripts/refresh-buildings-3d.sh'] },
-    source: 'scripts/refresh-buildings-3d.sh',
+    exec: { kind: 'process', command: 'bash', args: ['scripts/refresh-view.sh', 'buildings_3d'] },
+    source: 'scripts/refresh-view.sh',
     notes:
       'Refreshes concurrently, so 3D buildings keep serving the old rows until the new ones are ready. Needs free disk for a second copy of the view while it runs. Minutes for a city, hours for a country.',
+  },
+  {
+    id: 'osm-street-furniture',
+    name: 'Refresh Street Furniture',
+    description:
+      'Rebuild the street_furniture view: benches, tables, racks, lamps and billboards, each turned to face its nearest road or path unless OSM gives a direction.',
+    category: 'osm',
+    danger: 'safe',
+    longRunning: true,
+    confirm: false,
+    exclusive: true,
+    exec: { kind: 'process', command: 'bash', args: ['scripts/refresh-view.sh', 'street_furniture'] },
+    source: 'scripts/refresh-view.sh',
+    notes:
+      'Refreshes concurrently, so furniture keeps serving the old rows until the new ones are ready. Runs after every OSM update. Fastest once the "Map Detail Indexes" task has built the highway index it searches.',
   },
   {
     id: 'osm-basemap',

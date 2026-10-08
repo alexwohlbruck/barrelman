@@ -10,6 +10,17 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Added
+
+* **Street furniture faces its street.** `street_furniture` now gives benches,
+  picnic tables, bike racks, drinking water, street lamps and billboards a
+  `direction`, turning each toward its nearest road or path when OSM has no
+  bearing. That was about 1 bench in 30 before. The layer also carries picnic
+  tables, bike racks, drinking water, fountains, street lamps, bollards and
+  billboards. It is now a stored view, refreshed after every import and OSM
+  update. The "Map Detail Indexes" task builds the highway index it needs; run
+  it before deploying.
+
 ## [0.9.1] - 2026-10-07
 
 ### Fixed
