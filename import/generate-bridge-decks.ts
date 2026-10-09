@@ -2,16 +2,23 @@
  * Build bridge_decks: every bridge way joined into decks, fitted to its
  * outline, and given a height profile from Mapterhorn terrain.
  *
- *   bun run import/generate-bridge-decks.ts                        every enabled region
+ *   bun run import/generate-bridge-decks.ts                        the REGIONS areas
  *   bun run import/generate-bridge-decks.ts --bbox w,s,e,n         one area
+ *
+ * Without --bbox it covers each area of the regions REGIONS selects (their
+ * own `bboxes`, not one box around them). REGIONS=global is refused: a planet
+ * run is days of work and should be started deliberately, area by area.
  *
  * The area is worked through in cells (`--cell`, degrees). A cell rebuilds the
  * decks whose midpoint lies in it and reads beyond its edges as far as its
  * decks run, so cells can be rebuilt one at a time, in any order, as often as
- * the map changes. Terrain tiles are fetched as needed and cached for the run.
+ * the map changes. Terrain tiles are fetched as needed and kept in a bounded cache.
  */
 import postgres from 'postgres'
+import { resolveRegions } from '../src/config/regions'
 import { dbUrl, onnotice } from '../src/db'
+import { argValue } from '../src/lib/cli-args'
+import { cellsCovering, parseBbox, regionAreas } from '../src/lib/bridge-decks/areas'
 import { buildDecks, STEP, type Crossed, type DeckInput } from '../src/lib/bridge-decks/build'
 import { Dem } from '../src/lib/bridge-decks/dem'
 import { lngLat, mercator, type Kind, type Point, type Way } from '../src/lib/bridge-decks/profile'
@@ -31,10 +38,7 @@ const metres = (value: string | null): number | null => {
 }
 
 const args = process.argv.slice(2)
-const flag = (name: string) => {
-  const i = args.indexOf(`--${name}`)
-  return i >= 0 ? args[i + 1] : undefined
-}
+const flag = (name: string) => argValue(args, name)
 const CELL = Number(flag('cell') ?? 0.25)
 
 const sql = postgres(dbUrl, { onnotice, max: 2 })
@@ -166,32 +170,30 @@ async function cell(dem: Dem, w: number, s: number, e: number, n: number) {
   return mine.length
 }
 
-async function areas(): Promise<number[][]> {
+async function areas() {
   const bbox = flag('bbox')
-  if (bbox) return [bbox.split(',').map(Number)]
-  const regions: Array<{ bbox: number[] }> = await sql`SELECT bbox FROM import_regions WHERE enabled AND NOT is_global ORDER BY sort_order`
-  return regions.map(r => r.bbox)
+  return bbox ? [parseBbox(bbox)] : regionAreas(await resolveRegions())
 }
 
 async function main() {
   const [{ ready }] = await sql`SELECT to_regclass('bridge_decks') IS NOT NULL AS ready`
   if (!ready) throw new Error('bridge_decks does not exist: start the API once, or run import/create-detail-views.sql')
+  const cells = cellsCovering(await areas(), CELL)
   const dem = new Dem()
-  const cells = new Set<string>()
-  for (const [w, s, e, n] of await areas())
-    for (let x = Math.floor(w / CELL); x * CELL < e; x++) for (let y = Math.floor(s / CELL); y * CELL < n; y++) cells.add(`${x},${y}`)
   const started = Date.now()
   let total = 0
-  let k = 0
-  for (const c of cells) {
-    const [x, y] = c.split(',').map(Number)
-    const built = await cell(dem, x * CELL, y * CELL, (x + 1) * CELL, (y + 1) * CELL)
+  for (const [k, [w, s, e, n]] of cells.entries()) {
+    const built = await cell(dem, w, s, e, n)
     total += built
-    k++
-    if (built) console.log(`[${k}/${cells.size}] cell ${x},${y}: ${built} decks (${Math.round((Date.now() - started) / 1000)} s)`)
+    if (built) console.log(`[${k + 1}/${cells.length}] cell ${w},${s}: ${built} decks (${Math.round((Date.now() - started) / 1000)} s)`)
   }
-  console.log(`Bridge decks: ${total} built in ${cells.size} cells, ${Math.round((Date.now() - started) / 1000)} s.`)
+  console.log(`Bridge decks: ${total} built in ${cells.length} cells, ${Math.round((Date.now() - started) / 1000)} s.`)
   await sql.end()
 }
 
-if (import.meta.main) await main()
+if (import.meta.main) {
+  await main()
+  // resolveRegions may have opened the shared DB handle (region store); exit
+  // rather than hang on an idle connection.
+  process.exit(0)
+}

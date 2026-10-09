@@ -895,12 +895,12 @@ export const SCRIPTS: ScriptDef[] = [
     exclusive: true,
     exec: { kind: 'process', command: 'bun', args: ['run', 'import/generate-bridge-decks.ts'] },
     params: [
-      { name: 'bbox', label: 'Area (w,s,e,n)', type: 'string', apply: 'flag', flag: '--bbox', placeholder: 'blank = every enabled region' },
+      { name: 'bbox', label: 'Area (w,s,e,n)', type: 'string', apply: 'flag', flag: '--bbox', placeholder: 'blank = the REGIONS areas' },
       { name: 'cell', label: 'Cell size (degrees)', type: 'number', apply: 'flag', flag: '--cell', default: 0.25 },
     ],
     source: 'import/generate-bridge-decks.ts',
     notes:
-      'Rebuilds the decks anchored in each cell in place, so tiles keep serving meanwhile and a run can be stopped and resumed. Fetches Mapterhorn terrain tiles (about 90 KB each, one per 1.5 km² that has bridges) from tiles.mapterhorn.com unless BRIDGE_DECKS_DEM_TILES points elsewhere. Downtown Charlotte, 166 decks, took 7 s; the whole US is estimated at 4–10 hours. Not part of OSM Update yet. Restart Martin afterwards on an instance that caches tiles.',
+      'Rebuilds the decks anchored in each cell in place, so tiles keep serving meanwhile and a run can be stopped and resumed. A blank area covers each area of the regions REGIONS selects; with REGIONS=global it refuses to start, since the planet takes days, so give an area. Fetches Mapterhorn terrain tiles (about 90 KB each, one per 1.5 km² that has bridges) from tiles.mapterhorn.com unless BRIDGE_DECKS_DEM_TILES points elsewhere. Downtown Charlotte, 166 decks, took 7 s; the whole US is estimated at 4–10 hours. Not part of OSM Update yet. Restart Martin afterwards on an instance that caches tiles.',
   },
   {
     id: 'search-intersections',
