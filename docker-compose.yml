@@ -474,6 +474,10 @@ services:
       # Terrain for Build Bridge Decks (import/generate-bridge-decks.ts), which
       # runs here. Blank reads Mapterhorn's public tiles.
       BRIDGE_DECKS_DEM_TILES: ${BRIDGE_DECKS_DEM_TILES:-}
+      # Incremental bridge decks (update-osm.sh → update-bridge-decks.ts).
+      # On unless set to 0; console and scheduled runs pass their own switch.
+      BRIDGE_DECKS_INCREMENTAL: ${BRIDGE_DECKS_INCREMENTAL:-}
+      BRIDGE_DECKS_MAX_CELLS: ${BRIDGE_DECKS_MAX_CELLS:-}
       # ── Portolan (corrected transit geometry) ───────────────────────
       # Workspace root for import/portolan-sync.ts: portolan.json + style/ +
       # data/gtfs/ (raw feeds, portolan's own copies) + build/ (tiles, exports,

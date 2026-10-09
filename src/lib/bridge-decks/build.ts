@@ -131,6 +131,29 @@ const placeKey = (p: Point, heading: number, digits: number) => {
   return `${lng.toFixed(digits)},${lat.toFixed(digits)}@${Math.round(heading / 15) % 12}`
 }
 
+/**
+ * Ids from place keys, with decks that share one numbered by exactly where
+ * they lie, then by their ways, rather than by build order. Neighbouring cells are built from
+ * different sets of ways, and an id that followed build order could name
+ * different decks in each, so one cell's write would replace the other's deck.
+ */
+export function numbered(places: string[], midpoints: Point[], ways: number[][]): string[] {
+  const groups = new Map<string, number[]>()
+  places.forEach((p, k) => groups.set(p, [...(groups.get(p) ?? []), k]))
+  const sorted = ways.map(w => [...w].sort((a, b) => a - b))
+  const byWays = (a: number[], b: number[]) => {
+    for (let i = 0; i < Math.min(a.length, b.length); i++) if (a[i] !== b[i]) return a[i] - b[i]
+    return a.length - b.length
+  }
+  const ids = [...places]
+  for (const [place, members] of groups) {
+    if (members.length < 2) continue
+    members.sort((a, b) => midpoints[a][0] - midpoints[b][0] || midpoints[a][1] - midpoints[b][1] || byWays(sorted[a], sorted[b]))
+    members.forEach((k, n) => (ids[k] = n ? `${place}/${n}` : place))
+  }
+  return ids
+}
+
 type Solved = {
   chain: Fitted
   d: number[]
@@ -287,16 +310,17 @@ export async function buildDecks(input: DeckInput, ground: Ground): Promise<Deck
   const rows = piers(solved)
 
   const wiki = (s: Solved) => s.chain.ways.map(w => input.wikidata.get(w)).find(Boolean)
-  const used = new Map<string, number>()
-  return solved.map((s, k) => {
+  const placed = solved.map(s => {
     const midpoint = s.chain.points[Math.floor(s.chain.points.length / 2)]
     const heading = bearing(s.chain.points)
-    const place = `${placeKey(midpoint, heading, 4)}/${s.chain.layer}`
-    const n = used.get(place) ?? 0
-    used.set(place, n + 1)
+    return { midpoint, heading, place: `${placeKey(midpoint, heading, 4)}/${s.chain.layer}` }
+  })
+  const ids = numbered(placed.map(p => p.place), placed.map(p => p.midpoint), solved.map(s => s.chain.ways))
+  return solved.map((s, k) => {
+    const { midpoint, heading } = placed[k]
     const round = (v: number) => Math.round(v * 100) / 100
     return {
-      id: n ? `${place}/${n}` : place,
+      id: ids[k],
       bridge: s.chain.outline ?? (wiki(s) ? `wikidata/${wiki(s)}` : `at/${placeKey(midpoint, heading, 3)}`),
       ways: s.chain.ways,
       kind: s.chain.kind,
