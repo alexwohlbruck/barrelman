@@ -4,9 +4,10 @@
  * region fetches each tile once.
  */
 import decode from '@jsquash/webp/decode.js'
+import { envString } from '../../config/env'
 import type { Point } from './profile'
 
-export const DEM_TILES = process.env.BRIDGE_DECKS_DEM_TILES ?? 'https://tiles.mapterhorn.com/{z}/{x}/{y}.webp'
+export const DEM_TILES = envString('BRIDGE_DECKS_DEM_TILES', 'https://tiles.mapterhorn.com/{z}/{x}/{y}.webp')
 /** About 2 m a pixel: lidar detail where the source has it. */
 export const DEM_ZOOM = 15
 

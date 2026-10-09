@@ -304,6 +304,7 @@ Read by the scripts running in `barrelman-ops` (and, for the osm2pgsql step, in
 | `OSM2PGSQL_CACHE_MB` | osm2pgsql's own (800) | Node cache in MB. Ignored when `OSM2PGSQL_FLAT_NODES` is set |
 | `OSM2PGSQL_PROCESSES` | osm2pgsql's own | Parallel workers for the middle tables |
 | `IMPORT_ENGINE_OVERLAP` | `auto` | Whether the GraphHopper and basemap builds run concurrently with the database import. Both read only the PBF, so overlapping saves hours — but GraphHopper's heap alongside Postgres OOM-kills it on a small box. `auto` overlaps only at ≥48 GB RAM; `0` builds the engines after the import (GraphHopper first, then basemap); `1` forces overlap |
+| `BRIDGE_DECKS_DEM_TILES` | `https://tiles.mapterhorn.com/{z}/{x}/{y}.webp` | Terrain tiles Build Bridge Decks reads its ground from, as a `{z}/{x}/{y}` template of terrarium-encoded WebP. Set it to read from a mirror. A run reads zoom 15, about one 90 KB tile per 1.5 km² that has bridges |
 
 ### Node storage on large imports
 
