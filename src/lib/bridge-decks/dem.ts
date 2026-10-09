@@ -8,6 +8,11 @@ import { envString } from '../../config/env'
 import type { Point } from './profile'
 
 export const DEM_TILES = envString('BRIDGE_DECKS_DEM_TILES', 'https://tiles.mapterhorn.com/{z}/{x}/{y}.webp')
+/** Whether a tile template names a source. `off` turns terrain, and with it bridge decks, off. */
+export function demConfigured(template: string): boolean {
+  return ['{z}', '{x}', '{y}'].every(part => template.includes(part))
+}
+
 /** About 2 m a pixel: lidar detail where the source has it. */
 export const DEM_ZOOM = 15
 
