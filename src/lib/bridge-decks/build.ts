@@ -34,6 +34,11 @@ export const CLEARANCE = { road: 6, rail: 8, path: 4, water: 4, deck: 6.5 } as c
 /** Distance between piers, and the least height of deck over ground that has them, in metres. */
 export const PIER_SPACING = 30
 export const PIER_MIN = 4
+/**
+ * Decks whose terrain is loaded at once. Few enough that their tiles fit the
+ * terrain cache, so a dense cell never holds every tile it touches.
+ */
+const GROUND_BATCH = 16
 
 export type Ground = { load(points: Point[]): Promise<void>; at(p: Point): number }
 
@@ -188,6 +193,28 @@ function piers(solved: Solved[]): number[][] {
   return out
 }
 
+/** Ground under each deck, loaded a few decks at a time and nearby decks together. */
+async function groundUnder(shaped: Chain[], edges: Array<[Point[], Point[]]>, ground: Ground): Promise<Array<number[] | null>> {
+  const out: Array<number[] | null> = shaped.map(() => null)
+  // Z-order of the midpoints at about a tile's size, so consecutive batches mostly share tiles.
+  const morton = ([x, y]: Point) => {
+    const [xi, yi] = [Math.floor(x * 2 ** 15), Math.floor(y * 2 ** 15)]
+    let m = 0
+    for (let b = 14; b >= 0; b--) m = m * 4 + ((yi >> b) & 1) * 2 + ((xi >> b) & 1)
+    return m
+  }
+  const place = shaped.map(c => morton(c.points[Math.floor(c.points.length / 2)]))
+  const order = shaped.map((_, k) => k).sort((a, b) => place[a] - place[b])
+  const read = (points: Point[]) => points.map(p => ground.at(p))
+  for (let i = 0; i < order.length; i += GROUND_BATCH) {
+    const batch = order.slice(i, i + GROUND_BATCH)
+    await ground.load(batch.flatMap(k => [...shaped[k].points, ...edges[k][0], ...edges[k][1]]))
+    for (const k of batch)
+      out[k] = filled(besideGround(read(shaped[k].points), read(edges[k][0]), read(edges[k][1]), along(shaped[k].points)))
+  }
+  return out
+}
+
 export async function buildDecks(input: DeckInput, ground: Ground): Promise<Deck[]> {
   const decks = absorbPaths(fitted(chains(input.ways), input.outlines, input.kerbs)) as Fitted[]
   // An end lands where a road on the ground meets it, rests where it meets
@@ -199,15 +226,14 @@ export async function buildDecks(input: DeckInput, ground: Ground): Promise<Deck
 
   const shaped = decks.map(c => ({ ...c, points: resample(c.points, STEP) }))
   const edges = shaped.map(edgePoints)
-  await ground.load(shaped.flatMap((c, k) => [...c.points, ...edges[k][0], ...edges[k][1]]))
+  const under = await groundUnder(shaped, edges, ground)
 
   // Lower layers first, so a deck over another clears it.
   const solved: Solved[] = []
   for (const k of shaped.map((_, k) => k).sort((a, b) => shaped[a].layer - shaped[b].layer)) {
     const chain = shaped[k]
     const d = along(chain.points)
-    const read = (points: Point[]) => points.map(p => ground.at(p))
-    const g = filled(besideGround(read(chain.points), read(edges[k][0]), read(edges[k][1]), d))
+    const g = under[k]
     if (!g) continue
     const need = needs({ chain, d, g }, input, solved.filter(o => o.chain.layer < chain.layer))
     solved.push({ chain, d, g, grounded: grounded[k], needs: need, z: solve({ ...chain, grounded: grounded[k] }, g, need) })

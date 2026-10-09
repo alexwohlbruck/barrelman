@@ -54,34 +54,52 @@ export const fetchTile: TileLoader = async (z, x, y) => {
 /**
  * Ground at mercator points, from tiles at `zoom` or, where the source has
  * none, the nearest parent down to `minZoom`. `load` fetches every tile the
- * points need, a few at a time; `at` then reads them synchronously. Tiles
- * beyond `capacity` are dropped, oldest first, when the next load starts.
+ * points need, a few at a time; `at` then reads them synchronously.
+ *
+ * A decoded tile is about 1 MB, so the cache holds `capacity` of them and
+ * drops the least recently loaded as it inserts. Tiles the current `load`
+ * needs are never dropped by it, so one call wanting more than `capacity`
+ * overshoots rather than evicting its own tiles and fetching them forever;
+ * callers keep each call to a handful of decks.
  */
 export class Dem {
   private tiles = new Map<string, Heights | null>()
 
-  constructor(private loader: TileLoader = fetchTile, private options = { zoom: DEM_ZOOM, minZoom: DEM_ZOOM - 5, capacity: 256, concurrency: 8 }) {}
+  constructor(private loader: TileLoader = fetchTile, private options = { zoom: DEM_ZOOM, minZoom: DEM_ZOOM - 5, capacity: 128, concurrency: 8 }) {}
 
   async load(points: Point[]) {
-    this.evict()
+    const pinned = new Set<string>()
     for (;;) {
-      const wanted = [...new Set(points.map(p => this.missing(p)).filter((k): k is string => !!k))]
+      const wanted = [...new Set(points.map(p => this.missing(p, pinned)).filter((k): k is string => !!k))]
       if (!wanted.length) return
       for (let i = 0; i < wanted.length; i += this.options.concurrency)
         await Promise.all(wanted.slice(i, i + this.options.concurrency).map(async k => {
           const [z, x, y] = k.split('/').map(Number)
-          this.tiles.set(k, await this.loader(z, x, y))
+          const tile = await this.loader(z, x, y)
+          pinned.add(k)
+          this.tiles.set(k, tile)
+          this.evict(pinned)
         }))
     }
   }
 
-  /** The next tile a point needs fetched, or null once it has one (or none exists). */
-  private missing([x, y]: Point): string | null {
+  /**
+   * The next tile a point needs fetched, or null once it has one (or none
+   * exists). Each tile it passes is pinned and marked as recently used.
+   */
+  private missing([x, y]: Point, pinned: Set<string>): string | null {
     for (let z = this.options.zoom; z >= this.options.minZoom; z--) {
       const n = 2 ** z
       const k = `${z}/${Math.floor(x * n)}/${Math.floor(y * n)}`
       if (!this.tiles.has(k)) return k
-      if (this.tiles.get(k)) return null
+      const tile = this.tiles.get(k)!
+      if (!pinned.has(k)) {
+        pinned.add(k)
+        // Map keeps insertion order, so re-inserting moves it to the back of the eviction queue.
+        this.tiles.delete(k)
+        this.tiles.set(k, tile)
+      }
+      if (tile) return null
     }
     return null
   }
@@ -97,10 +115,15 @@ export class Dem {
     return NaN
   }
 
-  private evict() {
+  /** Tiles held, empty ones (where the source has none) included. */
+  get size() {
+    return this.tiles.size
+  }
+
+  private evict(pinned: Set<string>) {
     for (const k of this.tiles.keys()) {
       if (this.tiles.size <= this.options.capacity) break
-      this.tiles.delete(k)
+      if (!pinned.has(k)) this.tiles.delete(k)
     }
   }
 }

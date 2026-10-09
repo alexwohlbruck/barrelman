@@ -68,6 +68,23 @@ describe('Dem', () => {
     expect(asked.map(k => k.split('/')[0])).toEqual(['15', '14'])
   })
 
+  it('keeps to its capacity as it loads, never dropping a tile the same load needs', async () => {
+    let fetched = 0
+    const dem = new Dem(async () => (fetched++, flat(7)), { zoom: 15, minZoom: 15, capacity: 2, concurrency: 2 })
+    // Three tiles in one load: more than fit, but all are kept until it ends.
+    const spread = [east(0), east(2000), east(4000)]
+    await dem.load(spread)
+    expect(fetched).toBe(3)
+    expect(spread.map(p => dem.at(p))).toEqual([7, 7, 7])
+    // The next load trims back to capacity, oldest first.
+    await dem.load([east(6000)])
+    expect(dem.size).toBe(2)
+    await dem.load([east(4000)])
+    expect(fetched).toBe(4)
+    await dem.load([east(0)])
+    expect(fetched).toBe(5)
+  })
+
   it('samples pixel corners as MapLibre does', () => {
     const ramp = { size: 4, data: Float32Array.from({ length: 16 }, (_, i) => (i % 4) * 10) }
     expect(sampleHeights(ramp, 0.5, 0.5)).toBeCloseTo(20)
