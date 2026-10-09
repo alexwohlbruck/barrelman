@@ -42,6 +42,21 @@ const ways: [number, string, Record<string, string>][] = [
   // A one-way that gains a lane well south of a cell boundary at 40.718.
   [28, line([-74.020, 40.712], [-74.020, 40.7125]), { highway: 'residential', oneway: 'yes', lanes: '2' }],
   [29, line([-74.020, 40.7125], [-74.020, 40.722]), { highway: 'residential', oneway: 'yes', lanes: '3' }],
+  // A one-way that gains a lane, then runs on as nine more ways.
+  [40, line([-74.040, 40.712], [-74.040, 40.7125]), { highway: 'residential', oneway: 'yes', lanes: '2' }],
+  [41, line([-74.040, 40.7125], [-74.040, 40.7134]), { highway: 'residential', oneway: 'yes', lanes: '3' }],
+  [42, line([-74.040, 40.7134], [-74.040, 40.7143]), { highway: 'residential', oneway: 'yes', lanes: '3' }],
+  [43, line([-74.040, 40.7143], [-74.040, 40.7152]), { highway: 'residential', oneway: 'yes', lanes: '3' }],
+  [44, line([-74.040, 40.7152], [-74.040, 40.7161]), { highway: 'residential', oneway: 'yes', lanes: '3' }],
+  [45, line([-74.040, 40.7161], [-74.040, 40.7170]), { highway: 'residential', oneway: 'yes', lanes: '3' }],
+  [46, line([-74.040, 40.7170], [-74.040, 40.7179]), { highway: 'residential', oneway: 'yes', lanes: '3' }],
+  [47, line([-74.040, 40.7179], [-74.040, 40.7188]), { highway: 'residential', oneway: 'yes', lanes: '3' }],
+  [48, line([-74.040, 40.7188], [-74.040, 40.7197]), { highway: 'residential', oneway: 'yes', lanes: '3' }],
+  [49, line([-74.040, 40.7197], [-74.040, 40.7206]), { highway: 'residential', oneway: 'yes', lanes: '3' }],
+  // The same across a cell boundary at 40.72, its first way changed below.
+  [50, line([-74.050, 40.718], [-74.050, 40.7195]), { highway: 'residential', oneway: 'yes', lanes: '2' }],
+  [51, line([-74.050, 40.7195], [-74.050, 40.7215]), { highway: 'residential', oneway: 'yes', lanes: '3' }],
+  [52, line([-74.050, 40.7215], [-74.050, 40.723]), { highway: 'residential', oneway: 'yes', lanes: '3' }],
   // A crossing that only clips the kerb of road 12, at 25° to it.
   [30, line([-74.004 + 0.9 / 84300, 40.7125], [-74.004 + (0.9 + 4.226) / 84300, 40.7125 + 9.063 / 111000]),
     { highway: 'footway', footway: 'crossing', 'crossing:markings': 'zebra' }],
@@ -161,10 +176,28 @@ run('generate-road-markings.sql', () => {
     expect(await covered(east(-74.010, 5.5), 40.7133)).toBe(true)
   })
 
-  test('keeps that kerb on the way after, which has as many lanes', async () => {
-    expect(await covered(east(-74.010, -2.5), 40.7142)).toBe(true)
-    expect(await covered(east(-74.010, -3.5), 40.7142)).toBe(false)
-    expect(await covered(east(-74.010, 5.5), 40.7142)).toBe(true)
+  test('eases the way after it back to the middle of the road', async () => {
+    expect(await covered(east(-74.010, -4), 40.7142)).toBe(true)
+    expect(await covered(east(-74.010, -5), 40.7142)).toBe(false)
+    expect(await covered(east(-74.010, 4), 40.7142)).toBe(true)
+    expect(await covered(east(-74.010, 5), 40.7142)).toBe(false)
+  })
+
+  test('runs on without a jog at any join down a long chain', async () => {
+    // Where the lane opens the left kerb holds and the right one moves out.
+    for (const y of [40.71245, 40.71255]) {
+      expect(await covered(east(-74.040, -2.5), y)).toBe(true)
+      expect(await covered(east(-74.040, -3.5), y)).toBe(false)
+    }
+    for (let k = 1; k < 8; k++) {
+      const join = 40.7125 + (k + 1) * 0.0009
+      for (const y of [join - 0.00005, join + 0.00005]) {
+        expect(await covered(east(-74.040, -4), y)).toBe(true)
+        expect(await covered(east(-74.040, -5), y)).toBe(false)
+        expect(await covered(east(-74.040, 4), y)).toBe(true)
+        expect(await covered(east(-74.040, 5), y)).toBe(false)
+      }
+    }
   })
 
   test('builds with a skewed crossing too short for one bar', async () => {
@@ -237,6 +270,42 @@ run('generate-road-markings.sql', () => {
         FROM road_markings`
       expect(inside).toBeGreaterThan(0)
       expect(outside).toBeGreaterThan(0)
+    })
+  })
+
+  describe('a diff upstream of a cell boundary', () => {
+    beforeAll(async () => {
+      await sql`UPDATE geo_places SET tags = tags || '{"lanes": "1"}' WHERE id = 'W50'`
+      await sql.unsafe(`DROP SCHEMA IF EXISTS osm_replay CASCADE; CREATE SCHEMA osm_replay;
+        CREATE TABLE osm_replay.old_places AS
+          SELECT id, 'W'::char(1) as osm_type, osm_id, NULL::text as name, '{highway/residential}'::text[] as categories, geom, geom_type, NULL::int as admin_level
+          FROM geo_places WHERE id = 'W50';
+        CREATE TABLE osm_replay.changed AS SELECT id FROM geo_places WHERE id = 'W50';`)
+      await sql.unsafe(readFileSync(join(import.meta.dir, 'detail-queue-table.sql'), 'utf8'))
+      await sql`DELETE FROM detail_dirty`
+      await sql.unsafe(readFileSync(join(import.meta.dir, 'queue-road-markings.sql'), 'utf8'))
+      const out = await sql.unsafe(readFileSync(join(import.meta.dir, 'road-markings-dirty-cells.sql'), 'utf8')
+        .replaceAll(':max_cells', '100').replaceAll(':max_attempts', '3').replaceAll(':cell', '0.02'))
+      const rows = (Array.isArray(out.at(-1)) ? out.at(-1) : out) as { kind: string; a: string; b: string }[]
+      for (const c of rows.filter(r => r.kind === 'cell')) {
+        const [cx, cy] = [Number(c.a), Number(c.b)]
+        await sql`TRUNCATE _rm_scope`
+        await sql`INSERT INTO _rm_scope VALUES (ST_MakeEnvelope(${cx * 0.02}, ${cy * 0.02}, ${(cx + 1) * 0.02}, ${(cy + 1) * 0.02}, 4326))`
+        await sql.unsafe(readFileSync(join(import.meta.dir, 'generate-road-markings.sql'), 'utf8'))
+      }
+    }, 180_000)
+
+    afterAll(async () => {
+      await sql`DELETE FROM detail_dirty`
+    })
+
+    test('rebuilds the ways downstream as well, on both sides of the boundary', async () => {
+      // One lane before: the next way's left kerb moves in to 1.5 m.
+      for (const y of [40.7198, 40.71995, 40.72005, 40.7212]) {
+        expect(await covered(east(-74.050, -1), y)).toBe(true)
+        expect(await covered(east(-74.050, -2), y)).toBe(false)
+        expect(await covered(east(-74.050, 7), y)).toBe(true)
+      }
     })
   })
 
