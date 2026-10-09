@@ -12,6 +12,12 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ### Added
 
+* **A region can be made of separate areas.** A new optional `bboxes` field,
+  editable in the console as *Separate areas*, lists the boxes a region
+  actually covers. GBFS stations, and the bikeshare systems MOTIS polls, are
+  filtered by those instead of one box around the whole region. A GTFS region
+  also takes several boxes now, separated by `;`.
+
 * **Sport pitches.** A new `sport_pitches` layer, in the `detail` bundle,
   carries every pitch's surface plus regulation markings for tennis,
   pickleball, basketball, volleyball, beach volleyball, soccer and American
@@ -46,6 +52,14 @@ does it — and the release pipeline turns it into the GitHub Release notes.
   view rebuilds itself on the next startup.
 
 ### Fixed
+
+* **The `us` GTFS region includes Alaska and Hawaii.** It covered only the
+  lower 48, though the US OSM extract has all 50 states, so feeds such as
+  Honolulu's TheBus and Anchorage's People Mover were never downloaded. It now
+  covers four boxes: the lower 48, mainland Alaska, the Alaska panhandle and
+  Hawaii. Run *Download GTFS* and then *Rebuild MOTIS* to pick them up. For
+  bikeshare in Hawaii, give a United States region the same four boxes as
+  `bboxes`.
 
 * **Brand suggestions no longer match a different word that shares its
   letters.** "charleston" suggested Charles Schwab and "columbus" suggested
