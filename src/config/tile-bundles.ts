@@ -38,6 +38,7 @@ export const TILE_BUNDLES: Record<string, readonly string[]> = {
     'tree_rows',
     'coaster_tracks',
     'sport_pitches',
+    'object_lines',
   ],
 }
 

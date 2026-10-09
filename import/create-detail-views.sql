@@ -213,6 +213,31 @@ WITH NO DATA;
 CREATE UNIQUE INDEX IF NOT EXISTS street_furniture_fid_idx ON street_furniture (fid);
 CREATE INDEX IF NOT EXISTS street_furniture_centroid_idx ON street_furniture USING GIST (centroid);
 
+-- Lines a client draws as standing objects: fences, walls, hedges and guard
+-- rails, power lines on their towers and poles, and the overhead wire over
+-- electrified track. A closed barrier is stored as an area and comes through
+-- as its polygon, so the client walks its ring; serving ST_Boundary instead
+-- would hide the geometry from the tile envelope's index. `height` is the
+-- tagged height in metres where there is one.
+DROP VIEW IF EXISTS object_lines CASCADE;
+CREATE VIEW object_lines AS
+SELECT (osm_id * 4 + CASE osm_type WHEN 'N' THEN 0 WHEN 'W' THEN 1 ELSE 2 END) as fid,
+       id, geom,
+       CASE
+         WHEN tags->>'power' = 'line' THEN 'power_line'
+         WHEN tags->>'power' = 'minor_line' THEN 'power_minor_line'
+         WHEN tags ? 'railway' THEN 'catenary'
+         ELSE tags->>'barrier'
+       END as kind,
+       substring(tags->>'height' from '^[0-9]+(?:\.[0-9]+)?')::real as height
+FROM geo_places
+WHERE geom_type IN ('line', 'area')
+  AND (tags->>'barrier' IN ('fence', 'wall', 'retaining_wall', 'hedge', 'guard_rail', 'city_wall')
+       OR (geom_type = 'line' AND tags->>'power' IN ('line', 'minor_line'))
+       OR (geom_type = 'line' AND tags->>'electrified' = 'contact_line'
+           AND tags->>'railway' IN ('rail', 'light_rail', 'tram', 'narrow_gauge', 'subway')
+           AND COALESCE(tags->>'tunnel', 'no') = 'no'));
+
 -- Roller coaster tracks: `roller_coaster=track`, and the older
 -- `railway=roller_coaster` that some parks still carry.
 --
