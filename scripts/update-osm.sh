@@ -58,6 +58,10 @@ set -euo pipefail
 #                               touches and rebuilds road markings there
 #                               (update-road-markings.sh); 0 (default) leaves
 #                               them for a "Build Road Markings" run
+#   BRIDGE_DECKS_INCREMENTAL    1 (default) queues the bridges each replication
+#                               cycle touches and rebuilds their decks
+#                               (update-bridge-decks.ts); 0 leaves them for a
+#                               "Build Bridge Decks" run
 #   REPLICATION_MAX_DIFFS       without middle tables: diffs applied per cycle
 #
 # SCHEDULING:
@@ -106,6 +110,18 @@ refresh_views() {
     }
   else
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] Incremental road markings off (ROAD_MARKINGS_INCREMENTAL=0) — skipping."
+  fi
+  # On by default: the queue only holds bridges where decks were built, so
+  # this is minutes at most. Niced, since it runs here beside the jobs ops
+  # serves. A failure is a warning, like road markings above.
+  if [ "${BRIDGE_DECKS_INCREMENTAL:-1}" = "1" ]; then
+    (cd "$PROJECT_DIR" && nice -n 10 bun run import/update-bridge-decks.ts) || {
+      echo "[$(date '+%Y-%m-%d %H:%M:%S')] WARNING: bridge decks update failed (exit $?, see above)." >&2
+      echo "  The rest of the OSM update continues. What was not rebuilt stays queued" >&2
+      echo "  for the next run, or run \"Update Bridge Decks\" on its own." >&2
+    }
+  else
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Incremental bridge decks off (BRIDGE_DECKS_INCREMENTAL=0) — skipping."
   fi
 }
 
@@ -312,6 +328,7 @@ if [ "$HAS_MIDDLE" != "t" ]; then
     ${REPLICATION_MAX_DIFFS:+-e REPLICATION_MAX_DIFFS="$REPLICATION_MAX_DIFFS"} \
     ${REPLICATION_ALLOW_SHRINK:+-e REPLICATION_ALLOW_SHRINK="$REPLICATION_ALLOW_SHRINK"} \
     -e ROAD_MARKINGS_INCREMENTAL="${ROAD_MARKINGS_INCREMENTAL:-0}" \
+    -e BRIDGE_DECKS_INCREMENTAL="${BRIDGE_DECKS_INCREMENTAL:-1}" \
     barrelman-db bash /app/scripts/replicate-extract.sh | tee "$REPLICATION_LOG" \
     || REPLICATION_RC=$?
   PBF_MTIME_AFTER=$(docker exec barrelman-db stat -c %Y "$PBF_FILE" 2>/dev/null || echo 0)

@@ -53,6 +53,8 @@ set -euo pipefail
 #   REPLICATION_MIN_MEMORY_GB    smallest container memory limit to run under (4)
 #   ROAD_MARKINGS_INCREMENTAL    1 to queue the roads each cycle touches for
 #                                update-road-markings.sh (default 0)
+#   BRIDGE_DECKS_INCREMENTAL     1 to queue the bridges each cycle touches for
+#                                update-bridge-decks.ts (default 1)
 # =============================================================================
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -316,6 +318,7 @@ apply_cycle() {
 
   # osm2pgsql writes osm_type as N/W/R; the ID file uses n/w/r.
   sed -E 's/^n/N\t/; s/^w/W\t/; s/^r/R\t/' "$dir/affected.ids" > "$dir/affected.tsv"
+  sed -E 's/^n/N\t/; s/^w/W\t/; s/^r/R\t/' "$dir/changed.ids" > "$dir/edited.tsv"
 
   local places_cols ways_cols routes_cols
   places_cols="$(common_columns geo_places)"
@@ -344,8 +347,9 @@ SQL
   [ "${REPLICATION_ALLOW_SHRINK:-0}" = "1" ] && min_ratio="0"
   # Normalised here because psql's \if refuses anything but a boolean, and an
   # error inside the transaction would roll the whole cycle back.
-  local queue_road_markings="off"
-  [ "${ROAD_MARKINGS_INCREMENTAL:-0}" = "1" ] && queue_road_markings="on"
+  local queue_road_markings="off" queue_bridge_decks="off" queue_any="off"
+  [ "${ROAD_MARKINGS_INCREMENTAL:-0}" = "1" ] && queue_road_markings="on" queue_any="on"
+  [ "${BRIDGE_DECKS_INCREMENTAL:-1}" = "1" ] && queue_bridge_decks="on" queue_any="on"
 
   # BEGIN and COMMIT are spelled out: psql's -1 only applies to -c and -f, and
   # stdin silently runs each statement in its own transaction. With
@@ -353,7 +357,8 @@ SQL
   # server rolls all of it back.
   psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q \
     -v min_ratio="$min_ratio" -v sequence="$end" -v data_ts="$end_ts" \
-    -v queue_road_markings="$queue_road_markings" <<SQL
+    -v queue_road_markings="$queue_road_markings" -v queue_bridge_decks="$queue_bridge_decks" \
+    -v queue_any="$queue_any" <<SQL
 BEGIN;
 DROP SCHEMA IF EXISTS osm_replay CASCADE;
 CREATE SCHEMA osm_replay;
@@ -362,6 +367,13 @@ CREATE TABLE osm_replay.affected (osm_type char(1) NOT NULL, osm_id bigint NOT N
 \copy osm_replay.affected FROM '$dir/affected.tsv'
 CREATE INDEX ON osm_replay.affected (osm_type, osm_id);
 ANALYZE osm_replay.affected;
+
+-- The objects the diffs themselves change, as against those only rewritten
+-- because a node of theirs changed. queue-bridge-decks.sql uses it to tell a
+-- rewritten way whose tags and shape are as they were.
+CREATE TABLE osm_replay.edited (osm_type char(1) NOT NULL, osm_id bigint NOT NULL);
+\copy osm_replay.edited FROM '$dir/edited.tsv'
+CREATE INDEX ON osm_replay.edited (osm_type, osm_id);
 
 -- The rows being replaced, as they were. replay-derive.sql compares them with
 -- their replacements to find intersections and parent context to redo.
@@ -404,9 +416,14 @@ SELECT :removed >= 1000 AND :added < :removed * :min_ratio AS shrunk \gset
 \endif
 
 \i $PROJECT_DIR/import/replay-derive.sql
+\if :queue_any
+\i $PROJECT_DIR/import/detail-queue-table.sql
+\endif
 \if :queue_road_markings
-\i $PROJECT_DIR/import/road-markings-queue-table.sql
 \i $PROJECT_DIR/import/queue-road-markings.sql
+\endif
+\if :queue_bridge_decks
+\i $PROJECT_DIR/import/queue-bridge-decks.sql
 \endif
 
 UPDATE osm_replication_state
