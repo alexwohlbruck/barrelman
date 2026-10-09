@@ -476,9 +476,14 @@ way in reach, and bins and bollards, have an empty `direction`.
 The road layers are tables built by the "Build Road Markings" console task
 (`import/generate-road-markings.sql`), which works out every road's lanes from
 `lanes`, `lanes:forward`/`backward`, `lanes:both_ways`, `turn:lanes`, `width`,
-`cycleway:*` and `lane_markings`. Where one road continues into another with a
+`cycleway:*` and `lane_markings`. `placement`, `placement:forward` and
+`placement:backward` say where the way runs across its lanes; without them the
+way is taken to run down the middle of the lanes that carry on through a
+junction, with turn bays from `turn:lanes` hanging off their own side, so
+through lanes line up across it. Where one road continues into another with a
 different lane layout, the lines ease across over the MUTCD taper length for
-the road's speed rather than jumping at the join. A full build takes minutes
+the road's speed rather than jumping at the join, and only the side that gains
+or loses a lane moves. A full build takes minutes
 for a city and about two days for the whole US, so a large install builds it
 area by area: run the script in a session that first creates `_rm_scope` with
 one box in it, and only that box is rebuilt and merged into the live tables,
