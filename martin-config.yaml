@@ -396,6 +396,31 @@ postgres:
       buffer: 64
       clip_geom: true
 
+    bridge_decks:
+      schema: public
+      table: bridge_deck_tiles
+      srid: 4326
+      geometry_column: geom
+      geometry_type: LINESTRING
+      minzoom: 14
+      maxzoom: 16
+      properties:
+        id: text
+        kind: text
+        layer: int4
+        outline: text
+        left_edge: float4
+        right_edge: float4
+        start_grounded: bool
+        end_grounded: bool
+        step: float4
+        length: float4
+        heights: text
+        ground: text
+      buffer: 64
+      # Whole decks in every tile they cross: the profile runs along the line, so a cut copy could not be read.
+      clip_geom: false
+
     road_markings:
       schema: public
       table: road_markings

@@ -817,3 +817,44 @@ CREATE TABLE IF NOT EXISTS road_glyphs (fid bigserial PRIMARY KEY, glyph text, d
 CREATE INDEX IF NOT EXISTS road_surfaces_geom_idx ON road_surfaces USING gist (geom);
 CREATE INDEX IF NOT EXISTS road_markings_geom_idx ON road_markings USING gist (geom);
 CREATE INDEX IF NOT EXISTS road_glyphs_geom_idx ON road_glyphs USING gist (geom);
+
+-- ─── Bridge decks ────────────────────────────────────────────────────────────
+--
+-- One row per deck: bridge ways joined end to end into one line per roadway,
+-- with its height every `step` metres, in metres above EGM96 (the datum of
+-- OSM's `ele`). Filled by import/generate-bridge-decks.ts; created empty here
+-- for the same reason as the road tables. `id` is the deck's lowest way, so it
+-- holds while that way does. A run rebuilds the decks whose `anchor` (the start
+-- of that way) lies in the cell it is working on.
+CREATE TABLE IF NOT EXISTS bridge_decks (
+  id text PRIMARY KEY,
+  ways bigint[] NOT NULL,
+  kind text NOT NULL,
+  layer int NOT NULL,
+  -- The man_made=bridge outline the deck was fitted to, as `way/<id>` or `relation/<id>`.
+  outline text,
+  -- Metres from the centreline to the left and right edges, in the line's direction.
+  edges real[] NOT NULL,
+  -- Whether each end lands on the ground (else it rests on another deck).
+  grounded boolean[] NOT NULL,
+  -- Metres between height samples; the last sample is the line's end.
+  step real NOT NULL,
+  length real NOT NULL,
+  heights real[] NOT NULL,
+  ground real[] NOT NULL,
+  anchor geometry(Point, 4326) NOT NULL,
+  geom geometry(LineString, 4326) NOT NULL,
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS bridge_decks_geom_idx ON bridge_decks USING gist (geom);
+CREATE INDEX IF NOT EXISTS bridge_decks_anchor_idx ON bridge_decks USING gist (anchor);
+
+-- What the tiles carry. Vector tiles have no arrays, so a profile travels as
+-- decimetres joined by commas.
+CREATE OR REPLACE VIEW bridge_deck_tiles AS
+SELECT id, kind, layer, outline, edges[1] AS left_edge, edges[2] AS right_edge,
+       grounded[1] AS start_grounded, grounded[2] AS end_grounded, step, length,
+       array_to_string(ARRAY(SELECT round(h * 10)::int FROM unnest(heights) h), ',') AS heights,
+       array_to_string(ARRAY(SELECT round(g * 10)::int FROM unnest(ground) g), ',') AS ground,
+       geom
+FROM bridge_decks;

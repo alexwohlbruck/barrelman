@@ -410,6 +410,7 @@ for, so a client drawing them has nowhere else to get them:
 | `road_surfaces` | polygon | 16 | Carriageways at their real width (from `width`, else `lanes` at a lane width per class), with kerb corners rounded where roads meet. `bridge` marks the ones above ground |
 | `road_markings` | line | 16 | Paint: `kind` is `centre`, `lane`, `edge`, `bike`, `stop` or `crosswalk`; `pattern` is `solid`, `dashed` or `double`; `color` is `white` or `yellow` (yellow centre lines in the Americas); a crosswalk's `style` is `zebra`, `lines` or `ladder` |
 | `road_glyphs` | point | 16 | Turn arrows from `turn:lanes`, bike symbols on bike lanes and sharrows on shared lanes: `glyph` names the sprite icon and `direction` the bearing it reads along |
+| `bridge_decks` | line | 14–16 | One line per bridge deck, whole in every tile it crosses: `id` (`way/<lowest way id>`, stable while that way exists), `kind` (`road`, `rail` or `path`), `layer`, the `man_made=bridge` `outline` it was fitted to, `left_edge` and `right_edge` in metres from the centreline, whether each end lands on the ground (`start_grounded`, `end_grounded`), and `heights` and `ground` every `step` metres along its `length`, as decimetres above EGM96 joined by commas |
 | `object_areas` | polygon or point | 14–16 | Areas and points a client plants with objects: ground-mounted solar arrays and farms (`solar`), `flowerbed`, `scrub`, planted `shrubbery` (with its `shrubbery:shape` as `shape`), and single mapped `shrub`s. Rooftop solar is left out |
 | `woods` | polygon | 14–16 | Woods and forests tagged with `leaf_type` (or the legacy `wood=*`) or a genus, carrying a normalised `leaf_type` and `genus`. The feature id is the basemap landcover feature's own (OSM id × 10, plus 2 for a way and 3 for a relation), so a client looks up what a basemap wood holds by id |
 
@@ -428,7 +429,7 @@ curl "https://api.barrelman.dev/tiles/buildings_3d,parking_areas/14/4825/6156" -
 ```
 
 `detail` is `buildings_3d`, `parking_areas`, `bicycle_ways`, `street_trees`,
-`tree_rows`, `coaster_tracks`, `sport_pitches`, `object_lines`, `object_areas` the three road layers and `woods` — every overlay a client reads at z≤16. The response is one tile
+`tree_rows`, `coaster_tracks`, `sport_pitches`, `object_lines`, `object_areas` the three road layers, `bridge_decks` and `woods` — every overlay a client reads at z≤16. The response is one tile
 carrying each source as its own layer, named exactly as it is above, so a style
 that already draws them needs only its `source` changed.
 
@@ -479,6 +480,23 @@ The road layers are tables built by the "Build Road Markings" console task
 different lane layout, the lines ease across over the MUTCD taper length for
 the road's speed rather than jumping at the join. It is not part of OSM Update
 yet: it takes minutes for a city and about a day for the whole US.
+
+`bridge_decks` is a table built by the "Build Bridge Decks" console task
+(`import/generate-bridge-decks.ts`). It joins bridge ways that share an end into
+one line per deck, fits road decks to their `man_made=bridge` outline (else to
+`road_surfaces`) and folds sidewalks mapped beside them in. Each end that meets a
+road or railway on the ground lands on it; one that meets another deck rests on
+that deck. Between, the deck clears the ground by 6 m per `layer`, climbs no
+steeper than 6 %, and eases into a vertical curve; side-by-side decks at about
+one height share it, while stacked decks keep their own. An `ele` mapped on the
+bridge or one of its nodes is held to. The ground is Mapterhorn terrain at
+zoom 15, read as MapLibre reads it, and everything is moved from the source's
+datum (NAVD88 in the US, EGM2008 elsewhere) onto EGM96, the datum of OSM's
+`ele`, so a client can line a deck up with whichever terrain it draws by
+comparing `ground` with its own. A run fetches about one 90 KB terrain tile per
+1.5 km² that has bridges; set `BRIDGE_DECKS_DEM_TILES` to read them from a
+mirror. It rebuilds by cell, in place, so it can be scoped with `--bbox` and
+stopped and resumed. It is not part of OSM Update yet.
 
 `buildings_3d`, `street_furniture` and `sport_pitches` are not plain views. OpenStreetMap maps a detailed
 building twice — an outline tagged `building=*` and `building:part=*` polygons

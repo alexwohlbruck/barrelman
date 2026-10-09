@@ -1,7 +1,7 @@
 {
   "name": "barrelman",
   "version": "0.10.5",
-  "description": "OSM geospatial engine \u2014 search, tiles, spatial queries, routing",
+  "description": "OSM geospatial engine — search, tiles, spatial queries, routing",
   "type": "module",
   "scripts": {
     "dev": "bun run --hot src/index.ts",
@@ -26,6 +26,7 @@
   "dependencies": {
     "@elysiajs/cors": "^1.2.0",
     "@elysiajs/swagger": "^1.2.0",
+    "@jsquash/webp": "^1.5.0",
     "@lucia-auth/adapter-drizzle": "^1.1.0",
     "@polar-sh/sdk": "^0.49.0",
     "@simplewebauthn/server": "^10.0.0",

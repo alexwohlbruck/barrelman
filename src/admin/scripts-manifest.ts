@@ -884,6 +884,25 @@ export const SCRIPTS: ScriptDef[] = [
       'Builds fresh tables and swaps them in at the end, so tiles keep serving the old roads meanwhile. Not part of OSM Update yet: measured at about 5 s per 7 km² of dense downtown, which is minutes for a city and roughly a day for the whole US. Restart Martin afterwards on an instance that caches tiles.',
   },
   {
+    id: 'osm-bridge-decks',
+    name: 'Build Bridge Decks',
+    description:
+      'Rebuild bridge_decks: bridge ways joined into decks, fitted to their man_made=bridge outlines, with a height every 5 m from Mapterhorn terrain, in metres above EGM96. Parchment draws 3D bridges from these.',
+    category: 'osm',
+    danger: 'safe',
+    longRunning: true,
+    confirm: true,
+    exclusive: true,
+    exec: { kind: 'process', command: 'bun', args: ['run', 'import/generate-bridge-decks.ts'] },
+    params: [
+      { name: 'bbox', label: 'Area (w,s,e,n)', type: 'string', apply: 'flag', flag: '--bbox', placeholder: 'blank = every enabled region' },
+      { name: 'cell', label: 'Cell size (degrees)', type: 'number', apply: 'flag', flag: '--cell', default: 0.25 },
+    ],
+    source: 'import/generate-bridge-decks.ts',
+    notes:
+      'Rebuilds the decks anchored in each cell in place, so tiles keep serving meanwhile and a run can be stopped and resumed. Fetches Mapterhorn terrain tiles (about 90 KB each, one per 1.5 km² that has bridges) from tiles.mapterhorn.com unless BRIDGE_DECKS_DEM_TILES points elsewhere. Downtown Charlotte, 173 decks, took 5 s. Not part of OSM Update yet. Restart Martin afterwards on an instance that caches tiles.',
+  },
+  {
     id: 'search-intersections',
     name: 'Generate Intersections',
     description: 'Find points where differently-named roads cross and insert synthetic intersection rows for search.',

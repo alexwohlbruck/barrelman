@@ -10,6 +10,14 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Added
+
+* **Bridge decks with their heights worked out.** A new `bridge_decks` detail
+  layer gives each bridge deck as one line with its height every 5 m above
+  sea level (EGM96), solved from the terrain, the roads it lands on and the
+  decks it joins, so a 3D map can stand bridges up without working out their
+  profiles itself. Build it with the "Build Bridge Decks" console task.
+
 ## [0.10.5] - 2026-10-08
 
 ### Changed
