@@ -931,6 +931,25 @@ export const SCRIPTS: ScriptDef[] = [
       'OSM Update runs this after each replication cycle when its "Update road markings" switch is on. The queue (road_markings_dirty) is filled by scripts/replicate-extract.sh under the same switch, so a database updated through osm2pgsql\'s middle tables has nothing to work off. A cell that fails is skipped and its entries retried later, up to three runs. Steps aside while "Build Road Markings" runs.',
   },
   {
+    id: 'osm-bridge-decks',
+    name: 'Build Bridge Decks',
+    description:
+      'Rebuild bridge_decks: bridge ways joined into decks, fitted to their man_made=bridge outlines, with a height every 6 m solved from Mapterhorn terrain and what each passes over, and pier positions. Parchment draws 3D bridges from these.',
+    category: 'osm',
+    danger: 'safe',
+    longRunning: true,
+    confirm: true,
+    exclusive: true,
+    exec: { kind: 'process', command: 'bun', args: ['run', 'import/generate-bridge-decks.ts'] },
+    params: [
+      { name: 'bbox', label: 'Area (w,s,e,n)', type: 'string', apply: 'flag', flag: '--bbox', placeholder: 'blank = the REGIONS areas' },
+      { name: 'cell', label: 'Cell size (degrees)', type: 'number', apply: 'flag', flag: '--cell', default: 0.25 },
+    ],
+    source: 'import/generate-bridge-decks.ts',
+    notes:
+      'Rebuilds the decks anchored in each cell in place, so tiles keep serving meanwhile and a run can be stopped and resumed. A blank area covers each area of the regions REGIONS selects; with REGIONS=global it refuses to start, since the planet takes days, so give an area. Fetches Mapterhorn terrain tiles (about 90 KB each, one per 1.5 km² that has bridges) from tiles.mapterhorn.com unless BRIDGE_DECKS_DEM_TILES points elsewhere. Downtown Charlotte, 166 decks, took 7 s; the whole US is estimated at 4–10 hours. Not part of OSM Update yet. Restart Martin afterwards on an instance that caches tiles.',
+  },
+  {
     id: 'search-intersections',
     name: 'Generate Intersections',
     description: 'Find points where differently-named roads cross and insert synthetic intersection rows for search.',

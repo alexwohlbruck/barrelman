@@ -296,8 +296,8 @@ docker compose exec barrelman-ops bun run src/config/regions.ts bbox           #
 | `label` | Display name |
 | `osmExtracts` | PBF URLs. Several are downloaded and `osmium merge`d into one extract |
 | `osmReplication` | Geofabrik `-updates/` URLs, for incremental OSM updates |
-| `bbox` | `[west, south, east, north]`. Filters GBFS stations; also the default GTFS search area |
-| `bboxes` | Optional list of boxes for a region made of separate areas. GBFS stations and the bikeshare systems MOTIS polls are filtered by these instead of `bbox` |
+| `bbox` | `[west, south, east, north]`. Filters GBFS stations and is the area Build Bridge Decks covers; also the default GTFS search area |
+| `bboxes` | Optional list of boxes for a region made of separate areas. GBFS stations, the bikeshare systems MOTIS polls and Build Bridge Decks use these instead of `bbox` |
 | `gtfsRegion` | Transitland feed search area: a `w,s,e,n` bbox, several separated by `;`, `global`, or a legacy named token |
 | `pelias.openaddresses` | OpenAddresses CSV paths |
 | `pelias.wofIds` | Who's-on-First place ids (optional narrowing) |

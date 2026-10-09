@@ -471,6 +471,9 @@ services:
       OSM2PGSQL_FLAT_NODES: ${OSM2PGSQL_FLAT_NODES:-}
       OSM2PGSQL_CACHE_MB: ${OSM2PGSQL_CACHE_MB:-}
       OSM2PGSQL_PROCESSES: ${OSM2PGSQL_PROCESSES:-}
+      # Terrain for Build Bridge Decks (import/generate-bridge-decks.ts), which
+      # runs here. Blank reads Mapterhorn's public tiles.
+      BRIDGE_DECKS_DEM_TILES: ${BRIDGE_DECKS_DEM_TILES:-}
       # ── Portolan (corrected transit geometry) ───────────────────────
       # Workspace root for import/portolan-sync.ts: portolan.json + style/ +
       # data/gtfs/ (raw feeds, portolan's own copies) + build/ (tiles, exports,
