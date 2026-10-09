@@ -10,6 +10,12 @@
 import { db } from '../db'
 import { sql } from 'drizzle-orm'
 import { LRUCache } from 'lru-cache'
+import {
+  normalizeVehicleTypes,
+  parseStationStatus,
+  type GbfsVehicleType,
+  type StationAvailability,
+} from '../lib/gbfs'
 
 // ── Types ───────────────────────────────────────────────────────────
 
@@ -29,12 +35,7 @@ export interface GbfsSystem {
   enabled: boolean
 }
 
-export interface GbfsVehicleType {
-  vehicleTypeId: string
-  formFactor: string // bicycle, scooter, moped, car, other
-  propulsionType: string // human, electric_assist, electric, combustion
-  name?: string
-}
+export type { GbfsVehicleType }
 
 export interface GbfsStation {
   systemId: string
@@ -90,15 +91,7 @@ const stationStatusCache = new LRUCache<string, Map<string, StationStatusEntry>>
   ttl: 60_000, // default 60s, overridden per-system at set() time
 })
 
-interface StationStatusEntry {
-  numBikesAvailable: number
-  numEbikesAvailable: number
-  numScootersAvailable: number
-  numDocksAvailable: number
-  isRenting: boolean
-  isReturning: boolean
-  lastReported: string | null
-}
+type StationStatusEntry = StationAvailability
 
 /** Per-system free-floating vehicle positions (in-memory only). */
 const vehicleCache = new LRUCache<string, GbfsFreeVehicle[]>({
@@ -256,10 +249,20 @@ export async function getSystemsInBounds(
   const rows = await db.execute(sql`
     SELECT system_id, name, operator, url, country_code, lat, lon,
            vehicle_types, has_stations, has_free_floating, feed_urls, ttl, enabled
-    FROM gbfs_systems
+    FROM gbfs_systems g
     WHERE enabled = TRUE
-      AND lat BETWEEN ${south} AND ${north}
-      AND lon BETWEEN ${west} AND ${east}
+      -- A system's lat/lon is a single point (its first station), so a city
+      -- served from a station outside the viewport would be missed. Match on
+      -- any station in bounds; the point covers systems with none imported.
+      AND (
+        EXISTS (
+          SELECT 1 FROM gbfs_stations s
+          WHERE s.system_id = g.system_id
+            AND s.lat BETWEEN ${south} AND ${north}
+            AND s.lon BETWEEN ${west} AND ${east}
+        )
+        OR (lat BETWEEN ${south} AND ${north} AND lon BETWEEN ${west} AND ${east})
+      )
     ORDER BY name
     LIMIT 100
   `) as any[]
@@ -384,32 +387,7 @@ async function refreshStationStatus(systemId: string): Promise<void> {
 
     const statusMap = new Map<string, StationStatusEntry>()
     for (const s of stationsData) {
-      const bikesAvail = s.num_bikes_available ?? 0
-      // Prefer the feed's explicit e-bike count. The vehicle_types_available
-      // heuristic only works when ids embed "electric" — Lyft/Citi Bike use
-      // numeric ids ("1", "2"), so that path would always report 0 e-bikes.
-      const ebikesAvail = typeof s.num_ebikes_available === 'number'
-        ? s.num_ebikes_available
-        : (s.vehicle_types_available
-            ?.find((vt: any) => vt.vehicle_type_id?.includes('electric'))
-            ?.count ?? 0)
-      const scootersAvail = typeof s.num_scooters_available === 'number'
-        ? s.num_scooters_available
-        : (s.vehicle_types_available
-            ?.find((vt: any) => vt.vehicle_type_id?.includes('scooter'))
-            ?.count ?? 0)
-
-      statusMap.set(s.station_id, {
-        numBikesAvailable: bikesAvail - ebikesAvail, // non-electric bikes
-        numEbikesAvailable: ebikesAvail,
-        numScootersAvailable: scootersAvail,
-        numDocksAvailable: s.num_docks_available ?? 0,
-        isRenting: s.is_renting !== false,
-        isReturning: s.is_returning !== false,
-        lastReported: s.last_reported
-          ? new Date(s.last_reported * 1000).toISOString()
-          : null,
-      })
+      statusMap.set(s.station_id, parseStationStatus(s, system.vehicleTypes))
     }
 
     // Cache with system-specific TTL
@@ -546,9 +524,9 @@ function rowToSystem(row: any): GbfsSystem {
     countryCode: row.country_code,
     lat: row.lat,
     lon: row.lon,
-    vehicleTypes: typeof row.vehicle_types === 'string'
+    vehicleTypes: normalizeVehicleTypes(typeof row.vehicle_types === 'string'
       ? JSON.parse(row.vehicle_types)
-      : (row.vehicle_types ?? []),
+      : row.vehicle_types),
     hasStations: row.has_stations ?? true,
     hasFreeFloating: row.has_free_floating ?? false,
     feedUrls: typeof row.feed_urls === 'string'
