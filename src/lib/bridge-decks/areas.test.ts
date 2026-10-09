@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'bun:test'
 import { resolveFromFile, type Bbox, type RegionDef, type RegionsFile } from '../../config/regions'
 import { cellsCovering, parseBbox, regionAreas } from './areas'
+import { degreeBox } from './grid'
 
 const pelias = { openaddresses: [], wofIds: [], tigerStates: [] }
 const region = (bbox: Bbox, extra: Partial<RegionDef> = {}): RegionDef =>
@@ -42,7 +43,8 @@ describe('regionAreas', () => {
 describe('cellsCovering', () => {
   it('covers each area with grid cells, sharing the ones areas have in common', () => {
     const cells = cellsCovering([[-80.9, 35.1, -80.6, 35.3], [-80.7, 35.2, -80.6, 35.3]], 0.25)
-    expect(cells).toEqual([[-81, 35, -80.75, 35.25], [-81, 35.25, -80.75, 35.5], [-80.75, 35, -80.5, 35.25], [-80.75, 35.25, -80.5, 35.5]])
+    expect(cells.map(degreeBox)).toEqual([[-81, 35, -80.75, 35.25], [-81, 35.25, -80.75, 35.5], [-80.75, 35, -80.5, 35.25], [-80.75, 35.25, -80.5, 35.5]])
+    expect(cells.flat().every(Number.isInteger)).toBe(true)
   })
 
   it('refuses a cell size that would never advance', () => {

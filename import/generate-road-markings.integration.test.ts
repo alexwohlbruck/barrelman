@@ -188,13 +188,13 @@ run('generate-road-markings.sql', () => {
           ('W99', 'W', 99, '{highway/footway}', ST_GeomFromText('LINESTRING(-74.0035 40.7125, -74.0035 40.7135)', 4326), 'line'),
           ('W97', 'W', 97, '{building/house}', ST_GeomFromText('POLYGON((-74.0005 40.7101, -74.0004 40.7101, -74.0004 40.7102, -74.0005 40.7101))', 4326), 'area');
         CREATE TABLE osm_replay.changed AS SELECT id FROM geo_places WHERE id IN ('W5', 'N8');`)
-      await sql.unsafe(readFileSync(join(import.meta.dir, 'road-markings-queue-table.sql'), 'utf8'))
+      await sql.unsafe(readFileSync(join(import.meta.dir, 'detail-queue-table.sql'), 'utf8'))
       await sql.unsafe(readFileSync(join(import.meta.dir, 'queue-road-markings.sql'), 'utf8'))
     })
 
     test('queues the old and new outlines of what road markings are drawn from, and nothing else', async () => {
       // W5 old and new, the signal N8, and the crossing W98.
-      const [{ n }] = await sql`SELECT count(*)::int as n FROM road_markings_dirty`
+      const [{ n }] = await sql`SELECT count(*)::int as n FROM detail_dirty WHERE layer = 'road_markings'`
       expect(n).toBe(4)
     })
 
@@ -207,23 +207,23 @@ run('generate-road-markings.sql', () => {
       const cells = out.filter(r => r.kind === 'cell')
       expect(cells.length).toBeGreaterThan(0)
       for (const c of cells) expect(Number(c.a) * 0.02).toBeLessThan(-73.98)
-      const [{ n }] = await sql`SELECT count(*)::int as n FROM road_markings_dirty`
+      const [{ n }] = await sql`SELECT count(*)::int as n FROM detail_dirty WHERE layer = 'road_markings'`
       expect(n).toBe(3)
     })
 
     test('always takes the oldest entry, however many cells it spans', async () => {
       const entries = rows(await plan(1)).find(r => r.kind === 'entries')!.a.split(',')
-      const [{ oldest }] = await sql`SELECT min(id)::text as oldest FROM road_markings_dirty`
+      const [{ oldest }] = await sql`SELECT min(id)::text as oldest FROM detail_dirty WHERE layer = 'road_markings'`
       expect(entries).toContain(oldest)
     })
 
     test('takes a failed entry last', async () => {
-      const [{ oldest }] = await sql`SELECT min(id)::text as oldest FROM road_markings_dirty`
-      await sql`UPDATE road_markings_dirty SET attempts = 1 WHERE id = ${oldest}`
-      const [{ next }] = await sql`SELECT min(id)::text as next FROM road_markings_dirty WHERE attempts = 0`
+      const [{ oldest }] = await sql`SELECT min(id)::text as oldest FROM detail_dirty WHERE layer = 'road_markings'`
+      await sql`UPDATE detail_dirty SET attempts = 1 WHERE id = ${oldest}`
+      const [{ next }] = await sql`SELECT min(id)::text as next FROM detail_dirty WHERE layer = 'road_markings' AND attempts = 0`
       const entries = rows(await plan(1)).find(r => r.kind === 'entries')!.a.split(',')
       expect(entries).toContain(next)
-      await sql`UPDATE road_markings_dirty SET attempts = 3 WHERE id = ${oldest}`
+      await sql`UPDATE detail_dirty SET attempts = 3 WHERE id = ${oldest}`
       expect(rows(await plan(100)).find(r => r.kind === 'dropped')!.b).toBe('1')
     })
   })

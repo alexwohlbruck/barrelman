@@ -257,6 +257,16 @@ export const SCRIPTS: ScriptDef[] = [
           'Queue the roads each cycle touches, then rebuild road markings around them where they have been built. Off by default; leave it off while a large area is still being built. Only a database without middle tables records which roads changed.',
       },
       {
+        name: 'BRIDGE_DECKS_INCREMENTAL',
+        label: 'Update bridge decks',
+        type: 'boolean',
+        apply: 'env',
+        envVar: 'BRIDGE_DECKS_INCREMENTAL',
+        default: true,
+        description:
+          'Queue the bridges each cycle touches, then rebuild their decks where Build Bridge Decks has run. Only a database without middle tables records which bridges changed.',
+      },
+      {
         name: 'REPLICATION_MAX_DIFFS',
         label: 'Diffs per cycle',
         type: 'number',
@@ -284,6 +294,7 @@ export const SCRIPTS: ScriptDef[] = [
       { script: 'osm-street-furniture', when: 'always' },
       { script: 'osm-sport-pitches', when: 'always' },
       { script: 'osm-road-markings-update', when: 'only when "Update road markings" is on' },
+      { script: 'osm-bridge-decks-update', when: 'unless "Update bridge decks" is off' },
     ],
     source: 'scripts/update-osm.sh',
     notes:
@@ -928,7 +939,7 @@ export const SCRIPTS: ScriptDef[] = [
     ],
     source: 'scripts/update-road-markings.sh',
     notes:
-      'OSM Update runs this after each replication cycle when its "Update road markings" switch is on. The queue (road_markings_dirty) is filled by scripts/replicate-extract.sh under the same switch, so a database updated through osm2pgsql\'s middle tables has nothing to work off. A cell that fails is skipped and its entries retried later, up to three runs. Steps aside while "Build Road Markings" runs.',
+      'OSM Update runs this after each replication cycle when its "Update road markings" switch is on. The queue (detail_dirty) is filled by scripts/replicate-extract.sh under the same switch, so a database updated through osm2pgsql\'s middle tables has nothing to work off. A cell that fails is skipped and its entries retried later, up to three runs. Steps aside while "Build Road Markings" runs.',
   },
   {
     id: 'osm-bridge-decks',
@@ -947,7 +958,33 @@ export const SCRIPTS: ScriptDef[] = [
     ],
     source: 'import/generate-bridge-decks.ts',
     notes:
-      'Rebuilds the decks anchored in each cell in place, so tiles keep serving meanwhile and a run can be stopped and resumed. A blank area covers each area of the regions REGIONS selects; with REGIONS=global it refuses to start, since the planet takes days, so give an area. Fetches Mapterhorn terrain tiles (about 90 KB each, one per 1.5 km² that has bridges) from tiles.mapterhorn.com unless BRIDGE_DECKS_DEM_TILES points elsewhere. Downtown Charlotte, 166 decks, took 7 s; the whole US is estimated at 4–10 hours. Not part of OSM Update yet. Restart Martin afterwards on an instance that caches tiles.',
+      'Rebuilds the decks anchored in each cell in place, so tiles keep serving meanwhile and a run can be stopped and resumed. A blank area covers each area of the regions REGIONS selects; with REGIONS=global it refuses to start, since the planet takes days, so give an area. Fetches Mapterhorn terrain tiles (about 90 KB each, one per 1.5 km² that has bridges) from tiles.mapterhorn.com unless BRIDGE_DECKS_DEM_TILES points elsewhere. Downtown Charlotte, 166 decks, took 7 s; the whole US is estimated at 4–10 hours. Each cell built is recorded, and OSM Update keeps the decks there current (see Update Bridge Decks). Restart Martin afterwards on an instance that caches tiles.',
+  },
+  {
+    id: 'osm-bridge-decks-update',
+    name: 'Update Bridge Decks',
+    description:
+      'Rebuild the bridge decks recent replication diffs touched: bridges added, moved, retagged or deleted, and decks whose approaches, crossings or water changed.',
+    category: 'osm',
+    danger: 'safe',
+    longRunning: true,
+    confirm: false,
+    exclusive: true,
+    exec: { kind: 'process', command: 'nice', args: ['-n', '10', 'bun', 'run', 'import/update-bridge-decks.ts'] },
+    params: [
+      {
+        name: 'BRIDGE_DECKS_MAX_CELLS',
+        label: 'Cells per run',
+        type: 'number',
+        apply: 'env',
+        envVar: 'BRIDGE_DECKS_MAX_CELLS',
+        placeholder: 'blank = 1000',
+        description: 'Cells of 0.025° (about 2.5 km) rebuilt in one run. What is left stays queued for the next.',
+      },
+    ],
+    source: 'import/update-bridge-decks.ts',
+    notes:
+      'OSM Update runs this after each replication cycle unless its "Update bridge decks" switch is off. The queue (detail_dirty) is filled by scripts/replicate-extract.sh under the same switch, so a database updated through osm2pgsql\'s middle tables has nothing to work off. Only writes inside the cells Build Bridge Decks recorded. Does nothing without bridge_decks and bridge_deck_cells, and empties the queue with BRIDGE_DECKS_DEM_TILES=off. A cell that fails is skipped and its entries retried later, up to three runs. Steps aside while "Build Bridge Decks" runs.',
   },
   {
     id: 'search-intersections',

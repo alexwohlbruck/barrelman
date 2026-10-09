@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test'
-import { buildDecks, CLEARANCE, STEP, type DeckInput } from './build'
-import { Dem, sampleHeights, type Heights } from './dem'
+import { buildDecks, CLEARANCE, numbered, STEP, type DeckInput } from './build'
+import { Dem, demConfigured, sampleHeights, type Heights } from './dem'
 import { along, mercator, type Point, type Way } from './profile'
 
 const east = (m: number, north = 0): Point =>
@@ -74,6 +74,18 @@ describe('buildDecks', () => {
     const [c] = await buildDecks(input({ ways: [way(1, 0, 100)], wikidata: new Map([[1, 'Q42']]) }), ground(0))
     expect(c.bridge).toBe('wikidata/Q42')
   })
+
+  it('numbers decks that share a place the same way whatever order a cell builds them in', () => {
+    const [a, b, c]: Point[] = [[0.3, 0.4], [0.3, 0.5], [0.2, 0.9]]
+    expect(numbered(['x', 'x', 'y'], [a, b, c], [[1], [2], [3]])).toEqual(['x', 'x/1', 'y'])
+    expect(numbered(['y', 'x', 'x'], [c, b, a], [[3], [2], [1]])).toEqual(['y', 'x/1', 'x'])
+  })
+
+  it('breaks a tie between decks at one midpoint by their ways, in any order', () => {
+    const p: Point = [0.3, 0.4]
+    expect(numbered(['x', 'x'], [p, p], [[9, 4], [5]])).toEqual(['x', 'x/1'])
+    expect(numbered(['x', 'x'], [p, p], [[5], [4, 9]])).toEqual(['x/1', 'x'])
+  })
 })
 
 describe('buildDecks in an outline', () => {
@@ -131,6 +143,11 @@ describe('Dem', () => {
     expect(fetched).toBe(4)
     await dem.load([east(0)])
     expect(fetched).toBe(5)
+  })
+
+  it('counts a source configured only as a {z}/{x}/{y} template', () => {
+    expect(demConfigured('https://tiles.mapterhorn.com/{z}/{x}/{y}.webp')).toBe(true)
+    expect(demConfigured('off')).toBe(false)
   })
 
   it('samples pixel corners as MapLibre does', () => {

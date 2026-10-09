@@ -1,5 +1,5 @@
 -- =============================================================================
--- Plan one run of scripts/update-road-markings.sh over road_markings_dirty
+-- Plan one run of scripts/update-road-markings.sh over its rows of detail_dirty
 -- =============================================================================
 -- Takes :cell (cell size in degrees), :max_cells and :max_attempts. Cuts each
 -- queued box into grid cells and keeps the cells that have road markings in
@@ -22,10 +22,10 @@ BEGIN ISOLATION LEVEL REPEATABLE READ;
 DROP TABLE IF EXISTS _rmq_cells, _rmq_rank, _rmq_order, _rmq_pick, _rmq_dropped;
 CREATE TEMP TABLE _rmq_cells AS
 SELECT d.id, d.attempts, d.queued_at, cx, cy
-FROM road_markings_dirty d,
+FROM detail_dirty d,
      generate_series(floor(ST_XMin(d.box) / :cell)::int, floor(ST_XMax(d.box) / :cell)::int) cx,
      generate_series(floor(ST_YMin(d.box) / :cell)::int, floor(ST_YMax(d.box) / :cell)::int) cy
-WHERE d.attempts < :max_attempts
+WHERE d.layer = 'road_markings' AND d.attempts < :max_attempts
   AND EXISTS (
     SELECT 1 FROM road_surfaces s
     WHERE s.geom && ST_MakeEnvelope((cx - 1) * :cell, (cy - 1) * :cell, (cx + 2) * :cell, (cy + 2) * :cell, 4326)
@@ -33,8 +33,8 @@ WHERE d.attempts < :max_attempts
 
 CREATE TEMP TABLE _rmq_dropped (unbuilt bigint, gave_up bigint);
 WITH gone AS (
-  DELETE FROM road_markings_dirty d
-  WHERE NOT EXISTS (SELECT 1 FROM _rmq_cells c WHERE c.id = d.id)
+  DELETE FROM detail_dirty d
+  WHERE d.layer = 'road_markings' AND NOT EXISTS (SELECT 1 FROM _rmq_cells c WHERE c.id = d.id)
   RETURNING d.attempts >= :max_attempts AS gave_up
 )
 INSERT INTO _rmq_dropped

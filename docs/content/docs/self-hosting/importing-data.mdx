@@ -499,7 +499,7 @@ OSM Update can keep built areas current, but does not by default: turn on its
 "Update road markings" switch, or set `ROAD_MARKINGS_INCREMENTAL=1` for runs
 started from a shell. Leave it off while a large area is still being built.
 With it on, each replication cycle queues the old and new outlines of the
-roads, crossings and signals it touched (`road_markings_dirty`), and
+roads, crossings and signals it touched (`detail_dirty`), and
 `scripts/update-road-markings.sh` rebuilds the 2 km cells they fall in where
 road markings exist, up to `ROAD_MARKINGS_MAX_CELLS` cells a run. Areas nobody
 built are dropped from the queue, and nothing is queued on a database that
@@ -540,7 +540,35 @@ in place, so it can be scoped with `--bbox` and stopped and resumed. Without
 `--bbox` it covers the areas of the regions `REGIONS` selects, each region's
 `bboxes` rather than one box around them. `REGIONS=global` is refused rather
 than read as the planet: building every bridge on Earth takes days, so start
-it deliberately, one `--bbox` at a time. It is not part of OSM Update yet.
+it deliberately, one `--bbox` at a time. Each cell a run builds is recorded in
+`bridge_deck_cells`.
+
+OSM Update keeps the decks in those cells current, unless its "Update bridge
+decks" switch is off (`BRIDGE_DECKS_INCREMENTAL=0` for runs started from a
+shell). Each replication cycle queues, in `detail_dirty`, the bridge ways and
+`man_made=bridge` outlines it touched, and every deck that something it is
+built from touched before or after the diff: its own ways, the roads its ends
+land on, what it crosses, and water under it. "Update Bridge Decks"
+(`import/update-bridge-decks.ts`) then rebuilds the 0.025° (about 2.5 km)
+cells of each entry, along with the cells its old decks were anchored in and
+any its new ones now are, so a deck that moved, grew, lost its bridge tag or
+was deleted is replaced or removed in the one cell that owns it. The cells
+divide Build Bridge Decks' default 0.25° cell, and an update writes only where
+a cell overlaps a recorded one. Cells are worked out in whole units of 1e-7°,
+so the API, the build and SQL always agree which cell a deck is in. A rebuild
+never takes over a deck id another cell holds: it rebuilds the holding cell, or the part of
+it an earlier build recorded, in the same transaction (see
+[Troubleshooting](/self-hosting/troubleshooting#data) if that does not settle
+it). It takes up to `BRIDGE_DECKS_MAX_CELLS` cells a run and leaves the rest
+queued, and drops entries outside the recorded cells. Replication queues
+nothing until Build Bridge Decks has recorded a cell. Without `bridge_decks` and
+`bridge_deck_cells` the update does nothing. With `BRIDGE_DECKS_DEM_TILES=off`,
+replication still queues, because it runs in `barrelman-db`, which never reads
+that setting, and the update empties the queue each run without building. A
+cell that fails is retried on the next two runs; while Build Bridge Decks runs,
+the update leaves the queue for the next run. A failure is reported and the rest
+of OSM Update carries on. As with road markings, only a database without
+osm2pgsql's middle tables records what changed.
 
 `buildings_3d`, `street_furniture` and `sport_pitches` are not plain views. OpenStreetMap maps a detailed
 building twice — an outline tagged `building=*` and `building:part=*` polygons

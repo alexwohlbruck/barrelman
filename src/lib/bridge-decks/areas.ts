@@ -2,6 +2,7 @@
  * Which areas a bridge deck run covers, and the cells it works through.
  */
 import type { Bbox, ResolvedRegions } from '../../config/regions'
+import { toUnits, unitBox, type UnitBox } from './grid'
 
 /** A `w,s,e,n` box, refused unless it is four numbers the right way round. */
 export function parseBbox(value: string): Bbox {
@@ -30,13 +31,20 @@ export function regionAreas(regions: Pick<ResolvedRegions, 'isGlobal' | 'boxes'>
   return regions.boxes
 }
 
-/** The `size`-degree cells, on a fixed grid, that the areas touch; each once, however many areas share it. */
-export function cellsCovering(areas: Bbox[], size: number): Bbox[] {
-  if (!(size > 0)) throw new Error(`--cell must be a positive number of degrees, got ${size}`)
-  const cells = new Map<string, Bbox>()
-  for (const [w, s, e, n] of areas)
-    for (let x = Math.floor(w / size); x * size < e; x++)
-      for (let y = Math.floor(s / size); y * size < n; y++)
-        cells.set(`${x},${y}`, [x * size, y * size, (x + 1) * size, (y + 1) * size])
+/**
+ * The `size`-degree cells, on a fixed grid, that the areas touch; each once,
+ * however many areas share it. In whole units (see grid.ts), so the cells a
+ * build records and the decks it stores agree with SQL to the last unit.
+ */
+export function cellsCovering(areas: Bbox[], size: number): UnitBox[] {
+  const unit = toUnits(size)
+  if (!(unit >= 1)) throw new Error(`--cell must be a positive number of degrees, got ${size}`)
+  const cells = new Map<string, UnitBox>()
+  for (const area of areas) {
+    const [w, s, e, n] = unitBox(area)
+    for (let x = Math.floor(w / unit); x * unit < e; x++)
+      for (let y = Math.floor(s / unit); y * unit < n; y++)
+        cells.set(`${x},${y}`, [x * unit, y * unit, (x + 1) * unit, (y + 1) * unit])
+  }
   return [...cells.values()]
 }
