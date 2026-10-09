@@ -10,6 +10,19 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Added
+
+### Changed
+
+* **Bridge decks follow their hand-drawn outlines.** Where a bridge has a
+  `man_made=bridge` area, its deck now widens and narrows with it at every
+  sample and ends where it ends, rather than standing at its widest throughout
+  with square ends; twin carriageways and ramps in one outline share it. Rows
+  carry this as `left_edges`, `right_edges` and `caps` (`format` 2); rebuild
+  bridge decks to fill them in.
+
+### Fixed
+
 ## [0.10.7] - 2026-10-09
 
 ### Added
