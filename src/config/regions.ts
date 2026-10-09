@@ -35,7 +35,15 @@ export interface RegionDef {
   label: string
   osmExtracts: string[]
   osmReplication?: string[]
+  /** One box around the whole region. With `bboxes` set, it should cover them all. */
   bbox: Bbox
+  /**
+   * The separate areas a region covers, when one box would take in too much.
+   * The US is the case this exists for: a box reaching from Hawaii to Maine
+   * also covers most of Canada and Mexico. Importers that filter by location
+   * use these; absent or empty, they use `bbox`.
+   */
+  bboxes?: Bbox[]
   gtfsRegion: string
   pelias: PeliasRegionConfig
   /**
@@ -87,6 +95,22 @@ export interface ResolvedRegions {
   peliasTigerStates: number[]
   /** Union bbox [west, south, east, north] covering all selected regions. */
   bbox: Bbox
+  /**
+   * Every area the selected regions cover, per region rather than their union,
+   * so a location filter does not take in the gap between distant regions.
+   */
+  boxes: Bbox[]
+}
+
+/** A region's own areas: its `bboxes`, or its single `bbox` when none are set. */
+export function regionBoxes(def: Pick<RegionDef, 'bbox' | 'bboxes'>): Bbox[] {
+  return def.bboxes?.length ? def.bboxes : [def.bbox]
+}
+
+/** Whether a point falls inside any of the boxes. */
+export function inBoxes(lon: number, lat: number, boxes: Bbox[]): boolean {
+  return boxes.some(([west, south, east, north]) =>
+    lon >= west && lon <= east && lat >= south && lat <= north)
 }
 
 const uniq = (xs: string[]) => Array.from(new Set(xs))
@@ -156,6 +180,7 @@ export function resolveFromFile(file: RegionsFile, value = process.env.REGIONS):
       peliasWofIds: g.pelias.wofIds,
       peliasTigerStates: g.pelias.tigerStates,
       bbox: g.bbox,
+      boxes: regionBoxes(g),
     }
   }
 
@@ -198,6 +223,7 @@ export function resolveFromFile(file: RegionsFile, value = process.env.REGIONS):
     peliasWofIds: uniq(regions.flatMap((r) => r.pelias.wofIds)),
     peliasTigerStates: Array.from(new Set(regions.flatMap((r) => r.pelias.tigerStates))),
     bbox,
+    boxes: regions.flatMap(regionBoxes),
   }
 }
 

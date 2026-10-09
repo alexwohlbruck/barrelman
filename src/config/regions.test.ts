@@ -10,7 +10,7 @@
  */
 
 import { describe, test, expect } from 'bun:test'
-import { resolveFromFile, GLOBAL_KEY, type RegionsFile } from './regions'
+import { resolveFromFile, inBoxes, GLOBAL_KEY, type RegionsFile } from './regions'
 
 const pelias = { openaddresses: [], wofIds: [], tigerStates: [] }
 
@@ -28,6 +28,14 @@ const FILE: RegionsFile = {
       osmExtracts: ['https://example.test/new-york-latest.osm.pbf'],
       bbox: [-75.4, 40.4, -71.7, 42.1],
       gtfsRegion: 'nyc',
+      pelias,
+    },
+    'united-states': {
+      label: 'United States',
+      osmExtracts: ['https://example.test/us-latest.osm.pbf'],
+      bbox: [-180, 18.5, -66, 72],
+      bboxes: [[-125, 24, -66, 50], [-180, 51, -141, 72], [-161, 18.5, -154, 22.5]],
+      gtfsRegion: 'us',
       pelias,
     },
     disabled: {
@@ -141,5 +149,30 @@ describe('explicit selections', () => {
 
   test('a disabled region is an error rather than a silent import', () => {
     expect(() => resolveFromFile(FILE, 'disabled')).toThrow(/disabled/)
+  })
+})
+
+describe('region areas', () => {
+  test('a region without bboxes covers its bbox', () => {
+    expect(resolveFromFile(FILE, 'nyc-metro').boxes).toEqual([[-75.4, 40.4, -71.7, 42.1]])
+  })
+
+  test('a region with bboxes covers each area and not the space between them', () => {
+    const { boxes } = resolveFromFile(FILE, 'united-states')
+
+    expect(boxes).toHaveLength(3)
+    expect(inBoxes(-157.86, 21.31, boxes)).toBe(true) // Honolulu
+    expect(inBoxes(-149.9, 61.22, boxes)).toBe(true) // Anchorage
+    expect(inBoxes(-79.99, 40.44, boxes)).toBe(true) // Pittsburgh
+    // Inside the union box, outside every area: the reason bboxes exist.
+    expect(inBoxes(-99.13, 19.43, boxes)).toBe(false) // Mexico City
+    expect(inBoxes(-114.07, 51.05, boxes)).toBe(false) // Calgary
+  })
+
+  test('several regions keep their own areas rather than one union', () => {
+    expect(resolveFromFile(FILE, 'north-carolina,nyc-metro').boxes).toEqual([
+      [-84.4, 33.7, -75.4, 36.6],
+      [-75.4, 40.4, -71.7, 42.1],
+    ])
   })
 })
