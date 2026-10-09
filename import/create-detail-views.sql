@@ -854,6 +854,15 @@ CREATE TABLE IF NOT EXISTS bridge_decks (
 CREATE INDEX IF NOT EXISTS bridge_decks_geom_idx ON bridge_decks USING gist (geom);
 CREATE INDEX IF NOT EXISTS bridge_decks_anchor_idx ON bridge_decks USING gist (anchor);
 
+-- The cells Build Bridge Decks has covered, keyed by their w,s,e,n. An OSM
+-- update builds a newly mapped bridge only inside one, so an instance that
+-- built one city does not grow decks wherever a diff happens to add a bridge.
+CREATE TABLE IF NOT EXISTS bridge_deck_cells (
+  cell text PRIMARY KEY,
+  box geometry(Polygon, 4326) NOT NULL
+);
+CREATE INDEX IF NOT EXISTS bridge_deck_cells_box_idx ON bridge_deck_cells USING gist (box);
+
 -- What the tiles carry. Vector tiles have no arrays, so a profile travels as
 -- decimetres joined by commas. A tile's own geometry is simplified and snapped
 -- differently at each zoom, so `line` carries the samples exactly: the first
