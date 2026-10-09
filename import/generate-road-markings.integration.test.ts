@@ -31,6 +31,8 @@ const ways: [number, string, Record<string, string>][] = [
   [6, line([SB_X, STREET_Y], [NB_X, STREET_Y]), { highway: 'residential', lanes: '2' }],
   [7, line([NB_X, STREET_Y], [-73.999, STREET_Y]), { highway: 'residential', lanes: '2' }],
   [10, line([-74.002, 40.712], [-74.002, 40.714]), { highway: 'tertiary', 'overtaking': 'yes' }],
+  [11, line([-74.003, 40.712], [-74.003, 40.714]), { highway: 'service' }],
+  [12, line([-74.004, 40.712], [-74.004, 40.714]), { highway: 'service', lanes: '1' }],
   // A crossing drawn well past both kerbs, and askew to the street.
   [9, line([-74.0006, 40.70985], [-74.0004, 40.71015]), { highway: 'footway', footway: 'crossing', 'crossing:markings': 'zebra' }],
 ]
@@ -64,6 +66,11 @@ run('generate-road-markings.sql', () => {
     expect(await covered(SB_X, 40.7105)).toBe(true)
     expect(await covered(NB_X, 40.7105)).toBe(true)
     expect(await covered((SB_X + NB_X) / 2, 40.7105)).toBe(false)
+  })
+
+  test('paves a service road only where its lanes are mapped', async () => {
+    expect(await covered(-74.003, 40.713)).toBe(false)
+    expect(await covered(-74.004, 40.713)).toBe(true)
   })
 
   test('paves the crossing street through the median', async () => {

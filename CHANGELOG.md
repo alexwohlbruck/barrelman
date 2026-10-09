@@ -16,7 +16,9 @@ does it — and the release pipeline turns it into the GitHub Release notes.
   Update now rebuilds road markings around the roads each replication cycle
   touched, wherever they have been built. "Build Road Markings" can be scoped
   to a box, which is merged into the live tables without a seam, so a country
-  can be built in chunks.
+  can be built in chunks. Service roads are paved only where their lanes or
+  width are mapped, which leaves out most alleys and keeps a national build to
+  about half the size.
 
 ## [0.10.5] - 2026-10-08
 

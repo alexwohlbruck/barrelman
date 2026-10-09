@@ -221,7 +221,9 @@ WITH raw AS (
                              'residential', 'living_street', 'service', 'busway')
     AND COALESCE(tags->>'tunnel', 'no') = 'no'
     AND COALESCE(tags->>'area', 'no') <> 'yes'
-    AND COALESCE(tags->>'service', '') NOT IN ('driveway', 'drive-through', 'parking_aisle', 'emergency_access')
+    -- Alleys and other service roads only where someone mapped their lanes:
+    -- there are more of them than of every other class together.
+    AND (tags->>'highway' <> 'service' OR tags ?| ARRAY['lanes', 'lane_markings', 'width', 'width:carriageway'])
 ),
 sided AS (
   SELECT r.*,
