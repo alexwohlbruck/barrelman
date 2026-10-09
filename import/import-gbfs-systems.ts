@@ -18,6 +18,7 @@ import { db } from '../src/db'
 import { sql } from 'drizzle-orm'
 import { ensureGbfsSchema } from '../src/db'
 import { resolveRegions } from '../src/config/regions'
+import { localizedText } from '../src/lib/gbfs'
 
 // ── CLI args ────────────────────────────────────────────────────────
 
@@ -197,6 +198,7 @@ for (const row of filtered) {
 
     // Import stations if available
     let stationCount = 0
+    let stationError: string | null = null
     if (feedUrls.station_information) {
       try {
         const stationRes = await fetch(feedUrls.station_information, {
@@ -208,7 +210,7 @@ for (const row of filtered) {
 
           for (const s of stations) {
             const safeStationId = (s.station_id || '').replace(/'/g, "''")
-            const safeStationName = (s.name || '').replace(/'/g, "''")
+            const safeStationName = localizedText(s.name).replace(/'/g, "''")
             const stLat = s.lat ?? s.latitude
             const stLon = s.lon ?? s.longitude
             if (!stLat || !stLon) continue
@@ -244,12 +246,20 @@ for (const row of filtered) {
               WHERE system_id = '${safeSysId}'
             `))
           }
+        } else {
+          stationError = `station_information ${stationRes.status}`
         }
-      } catch { /* non-fatal */ }
+      } catch (err) {
+        // Non-fatal for the system, but never silent: a parse error here once
+        // left every GBFS v3 system with zero stations, reported as success.
+        stationError = err instanceof Error ? err.message : String(err)
+      }
     }
 
     const vTypes = vehicleTypes.map((v: any) => v.form_factor || 'unknown').join(', ')
-    console.log(`✓ ${stationCount} stations${vTypes ? ` [${vTypes}]` : ''}`)
+    console.log(stationError
+      ? `⚠ ${stationCount} stations (${stationError})${vTypes ? ` [${vTypes}]` : ''}`
+      : `✓ ${stationCount} stations${vTypes ? ` [${vTypes}]` : ''}`)
     imported++
   } catch (err) {
     console.log(`✗ ${err instanceof Error ? err.message : err}`)

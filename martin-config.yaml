@@ -382,6 +382,105 @@ postgres:
       buffer: 64
       clip_geom: true
 
+    road_surfaces:
+      schema: public
+      table: road_surfaces
+      srid: 4326
+      geometry_column: geom
+      geometry_type: MULTIPOLYGON
+      id_column: fid
+      minzoom: 16
+      maxzoom: 16
+      properties:
+        bridge: bridge
+      buffer: 64
+      clip_geom: true
+
+    road_markings:
+      schema: public
+      table: road_markings
+      srid: 4326
+      geometry_column: geom
+      geometry_type: GEOMETRY
+      id_column: fid
+      minzoom: 16
+      maxzoom: 16
+      properties:
+        kind: kind
+        pattern: pattern
+        color: color
+        style: style
+        bridge: bridge
+      buffer: 64
+      clip_geom: true
+
+    road_glyphs:
+      schema: public
+      table: road_glyphs
+      srid: 4326
+      geometry_column: geom
+      geometry_type: POINT
+      id_column: fid
+      minzoom: 16
+      maxzoom: 16
+      properties:
+        glyph: glyph
+        direction: direction
+        bridge: bridge
+      buffer: 64
+      clip_geom: true
+
+    object_areas:
+      schema: public
+      table: object_areas
+      srid: 4326
+      geometry_column: geom
+      geometry_type: GEOMETRY
+      id_column: fid
+      minzoom: 14
+      maxzoom: 16
+      properties:
+        id: id
+        kind: kind
+        shape: shape
+      buffer: 64
+      clip_geom: true
+
+    object_lines:
+      schema: public
+      table: object_lines
+      srid: 4326
+      geometry_column: geom
+      geometry_type: GEOMETRY
+      id_column: fid
+      minzoom: 14
+      maxzoom: 16
+      properties:
+        id: id
+        kind: kind
+        height: height
+      buffer: 64
+      clip_geom: true
+
+    sport_pitches:
+      schema: public
+      table: sport_pitches
+      srid: 4326
+      geometry_column: geom
+      geometry_type: GEOMETRY
+      id_column: fid
+      minzoom: 14
+      maxzoom: 16
+      properties:
+        id: id
+        kind: kind
+        sport: sport
+        surface: surface
+        direction: direction
+        width: width
+      buffer: 64
+      clip_geom: true
+
     # Woods that carry leaf_type or a genus, from `woods` (see
     # import/create-detail-views.sql). The feature id is the basemap landcover
     # feature's own, so a client joins the two on it.
