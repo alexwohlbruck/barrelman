@@ -790,7 +790,9 @@ describe('searchPlaces — localities', () => {
     expect(Date.now() - started).toBeLessThan(5000)
     // The probe gives up and the index searches run (and find nothing); a
     // place is a hit, so typeahead does not retry the slow query globally.
-    expect(mockExecute).toHaveBeenCalledTimes(8)
+    // Two of the calls read "jersey" as the state "new" is in: once by name,
+    // once with "new" as an airport code.
+    expect(mockExecute).toHaveBeenCalledTimes(10)
   }, 15000)
 
   // The SQL a mock call received, for answering by query rather than by order.

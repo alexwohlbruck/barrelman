@@ -10,6 +10,22 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.10.3] - 2026-10-08
+
+### Added
+
+* **Place search understands a state after the name.** "charlotte nc",
+  "charlotte, north carolina" and "springfield missouri" return that place
+  wherever the map is, and the state can be misspelled ("charlotte nohth
+  caorinlna") or abbreviated. The name can carry a typo too ("charlote nc"),
+  and an airport code stands for its city ("clt nc").
+
+### Fixed
+
+* **"New York" from inside New York City returns the city first.** Population
+  stretched a state's reach so far that New York State outranked the city of
+  the same name. Population now widens the reach of cities and towns only.
+
 ## [0.10.2] - 2026-10-08
 
 ### Fixed
