@@ -10,6 +10,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.10.3] - 2026-10-08
+
 ### Added
 
 * **Place search understands a state after the name.** "charlotte nc",
