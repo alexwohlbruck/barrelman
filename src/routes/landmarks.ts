@@ -101,7 +101,10 @@ export function createLandmarkRoutes(
             '(`barrelman` or `openlandmarks`), `model` (a file name under /tiles/landmarks/models), `detail` and ' +
             '`detailzoom` (a finer model to switch to from that zoom, where there is one), `entrances` (JSON ' +
             '[[x,y,z],…] in model axes: lit entrances to glow at night), `bearing` (degrees ' +
-            'clockwise from north), `scale`, `elevation` and `height` (metres), `minzoom`, `wikidata`, ' +
+            'clockwise from north), `scale`, `elevation` (metres, signed: how far to raise the model, or sink ' +
+            'it when negative, from where the client stands it on its ground; apply it after grounding the ' +
+            'model, as a rigid offset, and hide what ends up below the ground; 0 for most landmarks), ' +
+            '`height` (metres the model reaches above its ground, elevation included), `minzoom`, `wikidata`, ' +
             '`attribution` (a credit to show while the model is drawn, where its licence asks for one), and ' +
             '`replaces` — space-separated OSM refs (`way/5013364`) of the buildings and building parts the ' +
             'model stands in for, which a client should stop extruding. Empty below zoom 12, and 204 where ' +
@@ -154,8 +157,8 @@ export function createLandmarkRoutes(
           summary: '3D landmark model',
           description:
             'A landmark model as binary glTF. Y up, -Z north, +X east, in metres, with the origin at the ' +
-            'landmark\'s anchor on the ground — place it with the tile feature\'s position, `bearing` and ' +
-            '`scale` and nothing else. Names are content-addressed and served as immutable, gzipped when the ' +
+            'landmark\'s anchor on the ground — place it with the tile feature\'s position, `bearing`, ' +
+            '`scale` and `elevation` and nothing else. Names are content-addressed and served as immutable, gzipped when the ' +
             'client accepts it. Materials named `window*` (glowing where a painted texture\'s alpha is 0), ' +
             '`glass` and `entrance` follow the Open Landmarks lighting convention.',
         },

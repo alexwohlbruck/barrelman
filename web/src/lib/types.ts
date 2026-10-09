@@ -216,6 +216,8 @@ export interface ImportRegion {
   osmExtracts: string[]
   osmReplication: string[]
   bbox: Bbox
+  /** Separate areas the region covers, when one box would take in too much. */
+  bboxes?: Bbox[]
   gtfsRegion: string
   pelias: RegionPelias
   isGlobal: boolean
@@ -248,6 +250,7 @@ export interface DerivedRegion {
     osmExtracts: string[]
     osmReplication: string[]
     bbox: Bbox
+    bboxes?: Bbox[]
     gtfsRegion: string
     pelias: RegionPelias
     enabled: boolean

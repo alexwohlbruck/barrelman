@@ -444,7 +444,9 @@ export async function landmarkTile(z: number, x: number, y: number): Promise<Uin
     SELECT ST_AsMVT(t, ${LANDMARKS_LAYER}, 4096, 'geom', 'fid') AS mvt FROM (
       SELECT l.fid, l.id, l.name, m.file AS model, d.file AS detail, l.detail_zoom AS detailzoom,
              l.bearing, l.scale, l.elevation, l.min_zoom AS minzoom,
-             round((m.height_m * l.scale)::numeric, 1)::real AS height,
+             -- How high it reaches above the ground it stands on: a model
+             -- raised or sunk by its elevation reaches that much higher or lower.
+             round((m.height_m * l.scale + l.elevation)::numeric, 1)::real AS height,
              array_to_string(l.replaces, ' ') AS replaces, l.wikidata, m.attribution,
              l.entrances::text AS entrances, l.origin AS source,
              ST_AsMVTGeom(ST_Transform(l.geom, 3857), bounds.env, 4096, 4096, true) AS geom

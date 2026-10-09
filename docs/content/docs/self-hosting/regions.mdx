@@ -214,7 +214,7 @@ console makes the resolver refuse, and the override is the way to run an import
 without editing `.env` and restarting the ops container.
 
 The GBFS importer downloads **every** system in the global catalog, then keeps
-only the stations inside your bbox. It takes the same time whatever region you
+only the stations inside your bbox, or inside your `bboxes` when the region has them. It takes the same time whatever region you
 import, because it checks systems in Abu Dhabi, Zurich and Darmstadt either way.
 On Colorado it took **6 min 48 s** and kept 191 stations out of 1,336 systems.
 Run it last, and skip it unless you need bikeshare. Nothing else depends on it.
@@ -297,7 +297,8 @@ docker compose exec barrelman-ops bun run src/config/regions.ts bbox           #
 | `osmExtracts` | PBF URLs. Several are downloaded and `osmium merge`d into one extract |
 | `osmReplication` | Geofabrik `-updates/` URLs, for incremental OSM updates |
 | `bbox` | `[west, south, east, north]`. Filters GBFS stations; also the default GTFS search area |
-| `gtfsRegion` | Transitland feed search area: a `w,s,e,n` bbox, `global`, or a legacy named token |
+| `bboxes` | Optional list of boxes for a region made of separate areas. GBFS stations and the bikeshare systems MOTIS polls are filtered by these instead of `bbox` |
+| `gtfsRegion` | Transitland feed search area: a `w,s,e,n` bbox, several separated by `;`, `global`, or a legacy named token |
 | `pelias.openaddresses` | OpenAddresses CSV paths |
 | `pelias.wofIds` | Who's-on-First place ids (optional narrowing) |
 | `pelias.tigerStates` | Census FIPS codes for US address interpolation |
@@ -330,13 +331,38 @@ states, while bikeshare and transit feed discovery stay focused on the metro.
 **There is no clipping step** — the boundary of your imported data is whatever
 the extracts cover.
 
+### Regions made of separate areas
+
+One box around the whole United States reaches from Hawaii to Maine, and takes
+in most of Canada and Mexico on the way. Give a region like that its areas in
+`bboxes`, and set `bbox` to a box around all of them:
+
+```json
+"united-states": {
+  "label": "United States",
+  "osmExtracts": ["https://download.geofabrik.de/north-america/us-latest.osm.pbf"],
+  "bbox": [-180, 18.5, -66, 72],
+  "bboxes": [
+    [-125, 24, -66, 50],
+    [-180, 51, -141, 72],
+    [-141, 54.5, -129.9, 60.4],
+    [-161, 18.5, -154, 22.5]
+  ],
+  "gtfsRegion": "us",
+  "pelias": { "openaddresses": [], "wofIds": [], "tigerStates": [] }
+}
+```
+
+`gtfsRegion` is separate. The `us` token already covers these four areas; any
+other region can list its boxes as `w,s,e,n;w,s,e,n`.
+
 ---
 
 ## Troubleshooting
 
 **`Unknown GTFS region "co"`**
-`gtfsRegion` accepts a `w,s,e,n` bounding box, `global`, or one of the legacy
-tokens (`nc`, `nyc`, `southeast`, `us`). Anything else is rejected rather than
+`gtfsRegion` accepts a `w,s,e,n` bounding box, several of them separated by
+`;`, `global`, or one of the legacy tokens (`nc`, `nyc`, `southeast`, `us`). Anything else is rejected rather than
 falling through to an unfiltered query that would download the entire ~2,800
 feed global catalog. Use the region's own bbox.
 

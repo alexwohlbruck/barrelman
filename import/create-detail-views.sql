@@ -108,6 +108,34 @@ FROM geo_places
 WHERE geom_type = 'line'
   AND tags->>'natural' = 'tree_row';
 
+-- Woods that say what grows in them. The basemap's landcover carries only
+-- class/subclass, so a client planting a wood joins on the feature id instead:
+-- `fid` is Planetiler's own OSM id encoding (id * 10 + 1/2/3 for node/way/
+-- relation), the id the basemap's landcover feature already has.
+--
+-- Only tagged woods are served — about one in five in the US. An untagged one
+-- has nothing to add to the basemap's polygon. `leaf_type` falls back to the
+-- legacy `wood=*`; `genus` to the first word of `species` or `taxon`.
+DROP VIEW IF EXISTS woods CASCADE;
+CREATE VIEW woods AS
+SELECT (osm_id * 10 + CASE osm_type WHEN 'N' THEN 1 WHEN 'W' THEN 2 ELSE 3 END) as fid,
+       geom,
+       CASE
+         WHEN tags->>'leaf_type' IN ('broadleaved', 'needleleaved', 'mixed', 'leafless') THEN tags->>'leaf_type'
+         WHEN tags->>'wood' = 'coniferous' THEN 'needleleaved'
+         WHEN tags->>'wood' = 'deciduous' THEN 'broadleaved'
+         WHEN tags->>'wood' = 'mixed' THEN 'mixed'
+         ELSE ''
+       END as leaf_type,
+       COALESCE(NULLIF(tags->>'genus', ''),
+                NULLIF(split_part(tags->>'species', ' ', 1), ''),
+                NULLIF(split_part(tags->>'taxon', ' ', 1), ''),
+                '') as genus
+FROM geo_places
+WHERE geom_type = 'area'
+  AND (tags->>'natural' = 'wood' OR tags->>'landuse' = 'forest')
+  AND tags ?| array['leaf_type', 'wood', 'genus', 'species', 'taxon'];
+
 -- ─── Street furniture ────────────────────────────────────────────────────────
 --
 -- One point per object, with the model to draw (`kind`) and the compass bearing

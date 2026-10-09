@@ -10,6 +10,101 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.10.5] - 2026-10-08
+
+### Changed
+
+* **A 3D landmark can be raised or sunk without its model being lifted.** The
+  landmark tile's `elevation` now carries the value the landmarks release
+  sends, in metres: positive for a model standing on something the map
+  doesn't draw (the Statue of Liberty on Fort Wood), negative for one whose
+  base is below the street (a stadium's field). It was always 0 before,
+  because the release baked the lift into the model, and a client that grounds
+  a model by its lowest points pulled that lift back down. Releases without
+  the field, and every Open Landmarks asset, still import at 0, and an
+  elevation beyond ±200 m skips the asset. `height` now includes the
+  elevation, so it stays the height the landmark reaches above its ground.
+
+### Fixed
+
+* **Brand logos are no longer lost when a Wikidata request fails.** The logo
+  loader recorded every brand in a failed request as having no logo, and never
+  asked again, so about 1,000 brands showed a generic icon — Starbucks and
+  Walmart among them. The usual cause was a brand tagged with several Wikidata
+  IDs (`Q155026;Q7771029`): one such value made Wikidata reject all 50 brands in
+  its request. The loader now asks for the first ID, backs off and retries when
+  rate-limited, records only the brands Wikidata answered for, and retries
+  failed ones a day later. Brands without a logo are re-checked monthly.
+
+## [0.10.4] - 2026-10-08
+
+### Added
+
+* **A region can be made of separate areas.** A new optional `bboxes` field,
+  editable in the console as *Separate areas*, lists the boxes a region
+  actually covers. GBFS stations, and the bikeshare systems MOTIS polls, are
+  filtered by those instead of one box around the whole region. A GTFS region
+  also takes several boxes now, separated by `;`.
+
+* **Sport pitches.** A new `sport_pitches` layer, in the `detail` bundle,
+  carries every pitch's surface plus regulation markings for tennis,
+  pickleball, basketball, volleyball, beach volleyball, soccer and American
+  football. Markings are fitted to each pitch, with a block of courts repeated
+  across it and half courts recognised. The nets, hoops and goals on them come
+  as oriented points. It is a stored view, refreshed after every import and OSM
+  update.
+* **Fences, walls, hedges, power lines and catenary.** A new `object_lines`
+  layer, in the `detail` bundle, carries the barriers, power lines and
+  electrified track a client stands up as 3D objects, with any tagged height.
+* **Road surfaces and markings.** A "Build Road Markings" console task
+  produces `road_surfaces`, `road_markings` and `road_glyphs` in the `detail`
+  bundle: true-width carriageways with rounded kerbs, centre, lane, edge and
+  bike lines, green bike and red bus lanes, stop lines, kerb-to-kerb
+  crosswalks, and turn arrows and bike symbols, with lanes easing across where
+  their count changes. Widths count parking lanes, medians between divided
+  carriageways stay unpaved, bridges end square at their abutments, and stop
+  lines stand only where signals or stop signs control the approach. All paint
+  is cut to the kerb.
+* **Solar arrays, flower beds, scrub, shrubbery and shrubs.** A new `object_areas` layer
+  in the `detail` bundle carries the areas and points a client plants with
+  3D objects.
+
+* A `woods` tile source, part of the `detail` bundle, says what grows in a wood: its `leaf_type` and `genus`, keyed by the basemap landcover feature's id.
+
+### Changed
+
+* **Fountains in water.** `street_furniture` marks a fountain standing in a
+  pond, lake, reservoir or lagoon, or tagged `fountain=nozzle`, as
+  `fountain_jet`, so a client can draw a plume rather than a basin. Drinking
+  fountains mapped as `amenity=fountain` come through as `drinking_water`. The
+  view rebuilds itself on the next startup.
+
+### Fixed
+
+* **The API starts while an OSM update is running.** On startup it ran
+  `ALTER TABLE geo_places ADD COLUMN IF NOT EXISTS …` and three
+  `CREATE INDEX IF NOT EXISTS`, which lock the table before checking whether
+  there is anything to do. During an update's long write to `geo_places`, a
+  restarted API queued behind it, never started listening, and made every other
+  query on the table queue behind it too. Startup now reads the catalogs and
+  runs only the changes that are missing, and any startup schema change waits at
+  most 5 seconds for a lock before it is left for the next start.
+
+* **The `us` GTFS region includes Alaska and Hawaii.** It covered only the
+  lower 48, though the US OSM extract has all 50 states, so feeds such as
+  Honolulu's TheBus and Anchorage's People Mover were never downloaded. It now
+  covers four boxes: the lower 48, mainland Alaska, the Alaska panhandle and
+  Hawaii. Run *Download GTFS* and then *Rebuild MOTIS* to pick them up. For
+  bikeshare in Hawaii, give a United States region the same four boxes as
+  `bboxes`.
+
+* **Brand suggestions no longer match a different word that shares its
+  letters.** "charleston" suggested Charles Schwab and "columbus" suggested
+  Columbia, because their trigram scores fell in the same range as real typos.
+  A fuzzy brand match must now be within one edit of how the brand name starts
+  (two for a query longer than 10 characters), so "starbuks", "wallmart" and
+  "chik fil a" still find their brands.
+
 ## [0.10.3] - 2026-10-08
 
 ### Added

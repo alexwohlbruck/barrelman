@@ -89,18 +89,25 @@ const REGION_BBOXES: Record<string, string> = {
   nc: '-84.5,33.8,-75.4,36.6',    // North Carolina
   nyc: '-74.3,40.45,-73.7,40.95', // NYC metro area (NJ Transit, MTA, PATH)
   southeast: '-92,24,-75,37',       // SE United States
-  us: '-125,24,-66,50',            // Continental US
+  // All 50 states, as the us-latest extract has them: the lower 48, Alaska
+  // (mainland west of the Yukon border, then the panhandle) and Hawaii. Separate
+  // boxes, because one around all of them covers most of Canada and Mexico.
+  us: '-125,24,-66,50;-180,51,-141,72;-141,54.5,-129.9,60.4;-161,18.5,-154,22.5',
 }
 
 /** "w,s,e,n" — the form a region's own bbox is passed in as. */
 const BBOX_LITERAL = /^\s*-?\d+(\.\d+)?\s*(,\s*-?\d+(\.\d+)?\s*){3}$/
 
+/** Several boxes in one region string are separated by ";". */
+const BOX_SEPARATOR = ';'
+
 /**
  * Resolve a GTFS region argument to a Transitland `bbox` parameter.
  *
  * Accepts a literal "west,south,east,north" box (what a region definition
- * supplies from its own boundary) or one of the legacy named tokens above.
- * Returns null only for 'global', which deliberately means "every feed".
+ * supplies from its own boundary), several of them separated by ";", or one of
+ * the legacy named tokens above. Returns the boxes ";"-separated, or null only
+ * for 'global', which deliberately means "every feed".
  *
  * Throws on anything else. It would be easy to fall through to an unfiltered
  * query here, but that silently downloads the entire ~2,800-feed global catalog
@@ -110,17 +117,20 @@ const BBOX_LITERAL = /^\s*-?\d+(\.\d+)?\s*(,\s*-?\d+(\.\d+)?\s*){3}$/
 export function resolveGtfsBbox(region: string): string | null {
   if (region === 'global') return null
 
-  if (BBOX_LITERAL.test(region)) {
-    const [w, s, e, n] = region.split(',').map((v) => Number(v.trim()))
-    if (w < -180 || e > 180 || s < -90 || n > 90) {
-      throw new Error(`GTFS bbox "${region}" is outside valid lon/lat ranges.`)
-    }
-    if (w >= e || s >= n) {
-      throw new Error(
-        `GTFS bbox "${region}" is malformed — expected west,south,east,north with west < east and south < north.`,
-      )
-    }
-    return [w, s, e, n].join(',')
+  const parts = region.split(BOX_SEPARATOR)
+  if (parts.every((p) => BBOX_LITERAL.test(p))) {
+    return parts.map((part) => {
+      const [w, s, e, n] = part.split(',').map((v) => Number(v.trim()))
+      if (w < -180 || e > 180 || s < -90 || n > 90) {
+        throw new Error(`GTFS bbox "${part}" is outside valid lon/lat ranges.`)
+      }
+      if (w >= e || s >= n) {
+        throw new Error(
+          `GTFS bbox "${part}" is malformed — expected west,south,east,north with west < east and south < north.`,
+        )
+      }
+      return [w, s, e, n].join(',')
+    }).join(BOX_SEPARATOR)
   }
 
   const named = REGION_BBOXES[region]
@@ -150,7 +160,8 @@ export async function fetchFeedList(
   // One query per bbox cell: global (null bbox) is a single unfiltered sweep;
   // a small region is a single call over its own bbox; a continent is tiled.
   const bbox = resolveGtfsBbox(region)
-  const cells: (string | null)[] = bbox === null ? [null] : bboxCells(bbox)
+  const cells: (string | null)[] =
+    bbox === null ? [null] : bbox.split(BOX_SEPARATOR).flatMap(bboxCells)
 
   for (const cell of cells) {
     let nextUrl: string | null = buildFeedListUrl(apiKey, cell)
@@ -1750,9 +1761,8 @@ export async function generateMotisConfig(options?: MotisConfigOptions): Promise
  * poll too much than to silently serve no shared mobility at all.
  */
 async function getGbfsFeedsForMotis(): Promise<Array<{ systemId: string; url: string }>> {
-  const { isGlobal, regions } = await resolveRegions()
-  const boxes = regions
-    .map(r => r.bbox)
+  const { isGlobal, boxes: regionBoxes } = await resolveRegions()
+  const boxes = regionBoxes
     .filter((b): b is [number, number, number, number] => Array.isArray(b) && b.length === 4)
 
   const scope =

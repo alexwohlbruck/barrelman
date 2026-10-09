@@ -123,6 +123,22 @@ describe('landmarkRow', () => {
     expect('skip' in landmarkRow(ol, asset({ lods: { low: { url: '/x', bytes: 1, sha256: 'nope' } } }))).toBe(true)
   })
 
+  it('carries a signed elevation, and stands an asset without one on the ground', () => {
+    expect(row(source('barrelman'), asset({ elevation: 10 })).elevation).toBe(10)
+    expect(row(source('barrelman'), asset({ elevation: -7 })).elevation).toBe(-7)
+    // Open Landmarks has no such field, and every release before it had none.
+    expect(row(source('openlandmarks'), asset()).elevation).toBe(0)
+  })
+
+  it('skips an elevation it could only draw wildly off the ground', () => {
+    const ours = source('barrelman')
+    expect(landmarkRow(ours, asset({ elevation: 250 }))).toEqual({
+      skip: 'arc-de-triomphe: elevation 250 is not within ±200 m',
+    })
+    expect('skip' in landmarkRow(ours, asset({ elevation: Number.NaN }))).toBe(true)
+    expect('skip' in landmarkRow(ours, asset({ elevation: '10' as unknown as number }))).toBe(true)
+  })
+
   it('keeps only well-formed entrance points', () => {
     const r = row(source('openlandmarks'), asset({ entranceLights: [[1, 0, 2], [Number.NaN, 0, 0], [1, 2]] as number[][] }))
     expect(r.entrances).toEqual([[1, 0, 2]])
