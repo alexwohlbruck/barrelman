@@ -19,7 +19,7 @@ import { resolveRegions } from '../src/config/regions'
 import { dbUrl, onnotice } from '../src/db'
 import { argValue } from '../src/lib/cli-args'
 import { cellsCovering, parseBbox, regionAreas } from '../src/lib/bridge-decks/areas'
-import { buildDecks, STEP, type Crossed, type DeckInput } from '../src/lib/bridge-decks/build'
+import { buildDecks, FORMAT, STEP, type Crossed, type DeckInput } from '../src/lib/bridge-decks/build'
 import { Dem } from '../src/lib/bridge-decks/dem'
 import { lngLat, mercator, type Kind, type Point, type Way } from '../src/lib/bridge-decks/profile'
 
@@ -162,18 +162,22 @@ async function cell(dem: Dem, w: number, s: number, e: number, n: number) {
       const batch = mine.slice(i, i + INSERT_BATCH).map(({ d, at }) => ({
         id: d.id, bridge: d.bridge, ways: d.ways, kind: d.kind, layer: d.layer, edges: d.edges, grounded: d.grounded,
         length: d.length, heights: d.heights, ground: d.ground, piers: d.piers, lng: at[0], lat: at[1],
+        left_edges: d.sides?.[0] ?? null, right_edges: d.sides?.[1] ?? null, caps: d.caps,
         line: `LINESTRING(${d.points.map(p => lngLat(p).join(' ')).join(',')})`,
       }))
       await tx`
-        INSERT INTO bridge_decks (id, bridge, ways, kind, layer, edges, grounded, step, length, heights, ground, piers, anchor, geom)
+        INSERT INTO bridge_decks (id, bridge, ways, kind, layer, edges, grounded, step, length, heights, ground, piers, anchor, geom,
+          format, left_edges, right_edges, caps)
         SELECT r.id, r.bridge, r.ways, r.kind, r.layer, r.edges, r.grounded, ${STEP}, r.length, r.heights, r.ground, r.piers,
-               ST_SetSRID(ST_MakePoint(r.lng, r.lat), 4326), ST_GeomFromText(r.line, 4326)
+               ST_SetSRID(ST_MakePoint(r.lng, r.lat), 4326), ST_GeomFromText(r.line, 4326), ${FORMAT}, r.left_edges, r.right_edges, r.caps
         FROM jsonb_to_recordset(${tx.json(batch)}::jsonb) AS r(id text, bridge text, ways bigint[], kind text, layer int,
-          edges real[], grounded boolean[], length real, heights real[], ground real[], piers real[], lng float8, lat float8, line text)
+          edges real[], grounded boolean[], length real, heights real[], ground real[], piers real[], lng float8, lat float8, line text,
+          left_edges real[], right_edges real[], caps real[])
         ON CONFLICT (id) DO UPDATE SET bridge = EXCLUDED.bridge, ways = EXCLUDED.ways, kind = EXCLUDED.kind, layer = EXCLUDED.layer,
           edges = EXCLUDED.edges, grounded = EXCLUDED.grounded, step = EXCLUDED.step, length = EXCLUDED.length,
           heights = EXCLUDED.heights, ground = EXCLUDED.ground, piers = EXCLUDED.piers, anchor = EXCLUDED.anchor,
-          geom = EXCLUDED.geom, updated_at = now()`
+          geom = EXCLUDED.geom, format = EXCLUDED.format, left_edges = EXCLUDED.left_edges, right_edges = EXCLUDED.right_edges,
+          caps = EXCLUDED.caps, updated_at = now()`
     }
   })
   return mine.length

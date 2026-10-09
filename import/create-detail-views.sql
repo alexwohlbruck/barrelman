@@ -851,6 +851,15 @@ CREATE TABLE IF NOT EXISTS bridge_decks (
   geom geometry(LineString, 4326) NOT NULL,
   updated_at timestamptz NOT NULL DEFAULT now()
 );
+-- Where a deck follows its man_made=bridge outline (format 2): each side's
+-- edge at every sample, and how far each side stops short of the start and
+-- end ([start left, start right, end left, end right], negative runs on past).
+-- Null for a deck in no outline, which keeps `edges` throughout.
+ALTER TABLE bridge_decks
+  ADD COLUMN IF NOT EXISTS format smallint NOT NULL DEFAULT 1,
+  ADD COLUMN IF NOT EXISTS left_edges real[],
+  ADD COLUMN IF NOT EXISTS right_edges real[],
+  ADD COLUMN IF NOT EXISTS caps real[];
 CREATE INDEX IF NOT EXISTS bridge_decks_geom_idx ON bridge_decks USING gist (geom);
 CREATE INDEX IF NOT EXISTS bridge_decks_anchor_idx ON bridge_decks USING gist (anchor);
 
@@ -868,5 +877,9 @@ SELECT id, bridge, kind, layer, edges[1] AS left_edge, edges[2] AS right_edge,
        array_to_string(ARRAY(SELECT round(h * 10)::int FROM unnest(heights) h), ',') AS heights,
        array_to_string(ARRAY(SELECT round(g * 10)::int FROM unnest(ground) g), ',') AS ground,
        array_to_string(ARRAY(SELECT round(p * 10)::int FROM unnest(piers) p), ',') AS piers,
-       geom
+       geom,
+       format::int AS format,
+       array_to_string(ARRAY(SELECT round(e * 10)::int FROM unnest(left_edges) e), ',') AS left_edges,
+       array_to_string(ARRAY(SELECT round(e * 10)::int FROM unnest(right_edges) e), ',') AS right_edges,
+       array_to_string(ARRAY(SELECT round(c * 10)::int FROM unnest(caps) c), ',') AS caps
 FROM bridge_decks;
