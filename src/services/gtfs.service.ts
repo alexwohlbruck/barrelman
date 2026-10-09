@@ -1383,6 +1383,7 @@ export async function clearFeed(feedId: string): Promise<void> {
  */
 export async function findTransferPairs(
   maxDistance: number = 500,
+  feedIds?: string[],
 ): Promise<TransferPair[]> {
   // This all-pairs ST_DWithin self-join over every stop is minutes of work at
   // continent scale (656K US stops), so it must NOT run on the API pool, whose
@@ -1403,7 +1404,15 @@ export async function findTransferPairs(
   // Prohibitions are declared between PARENT stations (the MTA forbids
   // 423↔A41) while these pairs are platforms (423N, A41S), so both sides
   // resolve to their parent before matching, and either direction counts.
+  //
+  // With `feedIds`, only pairs inside one of those feeds are found. That is
+  // all an import uses — generateTransfersTxt keeps a pair only when both
+  // stops are in the feed it writes — so importing a few feeds into a
+  // continent-sized database no longer walks every stop pair in it.
   const sqlc = maintenanceConnection()
+  const feedScope = feedIds
+    ? sqlc`AND a.feed_id = b.feed_id AND a.feed_id = ANY(${feedIds})`
+    : sqlc``
   try {
     const result = await sqlc<any[]>`
       WITH forbidden AS (
@@ -1426,6 +1435,7 @@ export async function findTransferPairs(
         AND ST_DWithin(a.geom::geography, b.geom::geography, ${maxDistance})
       WHERE (a.location_type = 0 OR a.location_type IS NULL)
         AND (b.location_type = 0 OR b.location_type IS NULL)
+        ${feedScope}
         AND NOT EXISTS (
           SELECT 1 FROM forbidden f
           WHERE f.feed_id = a.feed_id
@@ -1510,8 +1520,9 @@ export async function computeAllTransfers(
   concurrency: number = 8,
   fetchFn: FetchFn = globalThis.fetch,
   onProgress?: (completed: number, total: number) => void,
+  feedIds?: string[],
 ): Promise<ComputedTransfer[]> {
-  const pairs = await findTransferPairs(maxDistance)
+  const pairs = await findTransferPairs(maxDistance, feedIds)
   const transfers: ComputedTransfer[] = []
   let completed = 0
 

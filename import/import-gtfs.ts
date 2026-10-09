@@ -263,6 +263,9 @@ async function main() {
           console.log(`  ${completed}/${total} pairs computed`)
         }
       },
+      // Only the feeds this run wrote get a transfers.txt, so only their stop
+      // pairs are worth a GraphHopper call.
+      feedFiles.map((f) => basename(f, '.zip')),
     )
 
     console.log(`Computed ${transfers.length} transfer pairs`)
