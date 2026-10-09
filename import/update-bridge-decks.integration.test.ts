@@ -16,13 +16,17 @@ import postgres from 'postgres'
 import { readFileSync } from 'fs'
 import { join } from 'path'
 import { Dem } from '../src/lib/bridge-decks/dem'
-import { cellBox } from '../src/lib/bridge-decks/queue'
-import { DeckConflict, missingTables, rebuildBoxes, recordCell } from './bridge-deck-cells'
+import { grid, toUnits, type UnitPoint } from '../src/lib/bridge-decks/grid'
+import { DeckConflict, missingTables, rebuildBoxes, rebuildCells } from './bridge-deck-cells'
 import { updateDecks } from './update-bridge-decks'
 
 const DATABASE_URL = process.env.BARRELMAN_INTEGRATION_TESTS ? process.env.DATABASE_URL : undefined
 const SCHEMA = 'bridge_decks_test'
-const CELL = cellBox('-4042,1761')
+// Build cells of 0.02°, which update cells of 0.025° straddle.
+const build = grid(toUnits(0.02))
+const [A, EAST] = ['-4042,1761', '-4041,1761']
+const CELL = build.box(A)
+const BUILD = { partsOf: (key: string) => [build.box(key)], keyOf: build.at, record: true }
 const Y = 35.225
 
 const line = (...pts: [number, number][]) => `LINESTRING(${pts.map(p => p.join(' ')).join(', ')})`
@@ -50,6 +54,14 @@ const snapshot = async () => (await sql`SELECT id, ST_AsText(geom) AS geom, heig
 const ofWay = async (way: number) => (await decks()).filter(d => d.ways.includes(String(way)))
 const enqueue = (w: number, s: number, e: number, n: number) =>
   sql`INSERT INTO detail_dirty (layer, box) VALUES ('bridge_decks', ST_MakeEnvelope(${w}, ${s}, ${e}, ${n}, 4326))`
+const anchorOf = async (way: number) =>
+  (await sql<{ x: number; y: number }[]>`SELECT anchor_x AS x, anchor_y AS y FROM bridge_decks WHERE ${String(way)} = ANY(ways::text[])`)
+    .map(r => build.at([r.x, r.y]))
+const recorded = async () => (await sql<{ cell: string }[]>`SELECT cell FROM bridge_deck_cells ORDER BY cell`).map(r => r.cell)
+/** Stores a deck's anchor as if it had last been written by another cell. */
+const anchorIn = (way: number, [x, y]: UnitPoint) =>
+  sql`UPDATE bridge_decks SET anchor_x = ${x}, anchor_y = ${y}, anchor = ST_SetSRID(ST_MakePoint(${x / 1e7}, ${y / 1e7}), 4326)
+    WHERE ${String(way)} = ANY(ways::text[])`
 const queued = async () => (await sql`SELECT count(*)::int AS n FROM detail_dirty WHERE layer = 'bridge_decks'`)[0].n
 
 /**
@@ -84,8 +96,7 @@ run('incremental bridge decks', () => {
       await sql`INSERT INTO geo_places (id, osm_type, osm_id, categories, tags, geom, geom_type)
         VALUES (${'way/' + id}, 'W', ${id}, ${categories}, ${sql.json(tags)}, ST_GeomFromText(${wkt}, 4326), 'line')`
     }
-    await rebuildBoxes(sql, flat(), [CELL])
-    await recordCell(sql, CELL)
+    await rebuildCells(sql, flat(), [A], BUILD)
   }, 60_000)
 
   afterAll(async () => {
@@ -93,8 +104,9 @@ run('incremental bridge decks', () => {
     await sql?.end()
   })
 
-  test('builds one deck per bridge to start with', async () => {
-    expect((await decks()).map(d => d.ways)).toEqual(expect.arrayContaining([['2', '3'], ['5']]))
+  test('builds one deck per bridge in the cell, and records the cell', async () => {
+    expect((await decks()).map(d => d.ways).sort()).toEqual([['2', '3'], ['5']])
+    expect(await recorded()).toEqual([CELL.join(',')])
   })
 
   describe('a cycle that only rewrites a road', () => {
@@ -103,7 +115,8 @@ run('incremental bridge decks', () => {
       expect(await queued()).toBe(0)
     })
 
-    test('queues the deck it meets when the diff edited it', async () => {
+    test('queues the deck it meets when the diff edited it, once however often', async () => {
+      await replay(['way/4'], ['way/4'], 'SELECT 1')
       await replay(['way/4'], ['way/4'], 'SELECT 1')
       expect(await queued()).toBe(1)
       await sql`DELETE FROM detail_dirty`
@@ -128,67 +141,98 @@ run('incremental bridge decks', () => {
     test('rebuilds them, and drops what lies where no decks were built', async () => {
       expect(await updateDecks(sql, flat(), 100)).toBe(0)
       expect(await queued()).toBe(0)
-      const ways = (await decks()).map(d => d.ways)
-      expect(ways).toContainEqual(['2'])
-      expect(ways).toContainEqual(['6'])
-      expect(ways.flat()).not.toContain('3')
-      expect(ways.flat()).not.toContain('5')
-      expect(ways.flat()).not.toContain('7')
+      const all = (await decks()).map(d => d.ways)
+      expect(all).toContainEqual(['2'])
+      expect(all).toContainEqual(['6'])
+      expect(all.flat()).not.toContain('3')
+      expect(all.flat()).not.toContain('5')
+      expect(all.flat()).not.toContain('7')
     }, 60_000)
 
     test('leaves exactly what a full rebuild builds, with nothing doubled or left over', async () => {
       const incremental = await snapshot()
       await sql`TRUNCATE bridge_decks`
-      await rebuildBoxes(sql, flat(), [CELL])
+      await rebuildCells(sql, flat(), [A], BUILD)
       expect(await snapshot()).toEqual(incremental)
     }, 60_000)
   })
 
-  describe('which entries count as built', () => {
-    const near = () => enqueue(-80.8195, 35.2295, -80.8185, 35.2305)
-
-    test('drops an entry outside the recorded cells, however near a deck', async () => {
-      await near()
+  describe('where an update writes', () => {
+    test('drops an entry outside the recorded cells', async () => {
+      await enqueue(-80.8195, 35.2295, -80.8185, 35.2305)
       expect(await updateDecks(sql, flat(), 100)).toBe(0)
       expect(await queued()).toBe(0)
       expect(await ofWay(8)).toHaveLength(0)
     }, 60_000)
 
-    test('falls back to nearness to a deck only while no cells are recorded', async () => {
-      await sql`TRUNCATE bridge_deck_cells`
-      await near()
+    test('stores nothing past the edge of a recorded cell its own cell straddles', async () => {
+      const before = await snapshot()
+      // Crosses the built cell's east edge, into the update cell that holds bridge 8.
+      await enqueue(-80.8205, 35.2295, -80.8185, 35.2305)
       expect(await updateDecks(sql, flat(), 100)).toBe(0)
-      expect(await ofWay(8)).toHaveLength(1)
-      await sql`DELETE FROM bridge_decks WHERE '8' = ANY(ways::text[])`
-      await recordCell(sql, CELL)
+      expect(await ofWay(8)).toHaveLength(0)
+      expect(await snapshot()).toEqual(before)
     }, 60_000)
   })
 
-  describe('a deck whose id another cell still holds', () => {
-    // As if the deck had last been stored by its neighbour to the east.
-    const elsewhere = async () => {
-      const [deck] = await ofWay(2)
-      await sql`UPDATE bridge_decks SET anchor = ST_SetSRID(ST_MakePoint(-80.81, 35.23), 4326) WHERE id = ${deck.id}`
-      return deck.id
+  describe('a deck whose id another cell holds', () => {
+    test('is refused whole, recording nothing', async () => {
+      await sql`DELETE FROM bridge_deck_cells`
+      const [w, s] = build.box(EAST)
+      await anchorIn(2, [w, s])
+      const before = await snapshot()
+      const err = await rebuildBoxes(sql, flat(), [CELL], [CELL]).catch(e => e)
+      expect(err).toBeInstanceOf(DeckConflict)
+      expect(await snapshot()).toEqual(before)
+      expect(await recorded()).toEqual([])
+    }, 60_000)
+
+    test('is rebuilt together with the cell holding it', async () => {
+      const { keys } = await rebuildCells(sql, flat(), [A], BUILD)
+      expect(keys).toEqual([A, EAST])
+      expect(await anchorOf(2)).toEqual([A])
+      expect(await anchorOf(8)).toEqual([EAST])
+      expect((await recorded()).length).toBe(2)
+    }, 60_000)
+
+    // Each deck stored as if the other cell had written it last.
+    const swap = async () => {
+      const [a, b] = [build.box(A), build.box(EAST)]
+      await anchorIn(2, [b[0] + 10, b[1] + 10])
+      await anchorIn(8, [a[0] + 10, a[1] + 10])
     }
 
-    test('is refused, leaving both cells as they were', async () => {
-      const id = await elsewhere()
-      const before = await snapshot()
-      const err = await rebuildBoxes(sql, flat(), [CELL]).catch(e => e)
-      expect(err).toBeInstanceOf(DeckConflict)
-      expect(err.ids).toEqual([id])
-      expect(await snapshot()).toEqual(before)
+    test('settles two cells holding each other\'s ids, which neither can alone', async () => {
+      await swap()
+      expect(await rebuildBoxes(sql, flat(), [build.box(A)]).catch(e => e)).toBeInstanceOf(DeckConflict)
+      expect(await rebuildBoxes(sql, flat(), [build.box(EAST)]).catch(e => e)).toBeInstanceOf(DeckConflict)
+      const { keys } = await rebuildCells(sql, flat(), [EAST], BUILD)
+      expect(keys).toEqual([EAST, A])
+      expect(await anchorOf(2)).toEqual([A])
+      expect(await anchorOf(8)).toEqual([EAST])
     }, 60_000)
 
-    test('moves home once an update has rebuilt the cell holding it', async () => {
-      const [deck] = await ofWay(2)
+    test('settles them in an update too', async () => {
+      await swap()
       await enqueue(-80.8335, 35.2245, -80.8325, 35.2255)
       expect(await updateDecks(sql, flat(), 100)).toBe(0)
-      const [{ n, x }] = await sql`SELECT count(*)::int AS n, max(ST_X(anchor)) AS x FROM bridge_decks WHERE id = ${deck.id}`
-      expect(n).toBe(1)
-      expect(x).toBeLessThan(CELL[2])
+      expect(await anchorOf(2)).toEqual([A])
+      expect(await anchorOf(8)).toEqual([EAST])
+      const [{ n, ids }] = await sql`SELECT count(*)::int AS n, count(DISTINCT id)::int AS ids FROM bridge_decks`
+      expect(n).toBe(ids)
     }, 60_000)
+  })
+
+  describe('a road markings queue from before detail_dirty', () => {
+    test('moves over with the failed runs it counted', async () => {
+      await sql.unsafe(`CREATE TABLE road_markings_dirty (box geometry(Polygon, 4326), queued_at timestamptz DEFAULT now(), attempts int);
+        INSERT INTO road_markings_dirty (box, attempts) VALUES (ST_MakeEnvelope(0, 0, 1, 1, 4326), 2);`)
+      await sql.unsafe(file('detail-queue-table.sql'))
+      const rows = await sql`SELECT attempts FROM detail_dirty WHERE layer = 'road_markings'`
+      expect(rows.map(r => r.attempts)).toEqual([2])
+      expect((await sql`SELECT to_regclass('road_markings_dirty') AS t`)[0].t).toBeNull()
+      await sql`DELETE FROM detail_dirty`
+    })
   })
 
   describe('before the API has created bridge_deck_cells', () => {

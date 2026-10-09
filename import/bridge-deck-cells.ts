@@ -13,6 +13,7 @@ import type postgres from 'postgres'
 import type { Bbox } from '../src/config/regions'
 import { buildDecks, STEP, type Crossed, type Deck, type DeckInput } from '../src/lib/bridge-decks/build'
 import type { Dem } from '../src/lib/bridge-decks/dem'
+import { clip, contains, degreeBox, toDegrees, toUnits, UNITS_PER_DEGREE, type UnitBox, type UnitPoint } from '../src/lib/bridge-decks/grid'
 import type { Built } from '../src/lib/bridge-decks/queue'
 import { lngLat, mercator, type Kind, type Point, type Way } from '../src/lib/bridge-decks/profile'
 
@@ -134,10 +135,10 @@ async function inputFor(sql: Sql, rows: Row[]): Promise<DeckInput> {
 
 /**
  * A rebuilt deck whose id another box's deck holds. Nothing was written; the
- * box can be rebuilt once the boxes holding `anchors` have been.
+ * boxes can be rebuilt together with the ones holding `anchors`.
  */
 export class DeckConflict extends Error {
-  constructor(readonly ids: string[], readonly anchors: Array<[number, number]>) {
+  constructor(readonly ids: string[], readonly anchors: UnitPoint[]) {
     super(`deck id(s) ${ids.join(', ')} already belong to a deck anchored elsewhere`)
   }
 }
@@ -148,64 +149,117 @@ export async function missingTables(sql: Sql): Promise<string[]> {
   return [...(row.decks ? [] : ['bridge_decks']), ...(row.cells ? [] : ['bridge_deck_cells'])]
 }
 
-const within = ([lng, lat]: [number, number], [w, s, e, n]: Bbox) => lng >= w && lng < e && lat >= s && lat < n
+/** A box's envelope, a hair wider so the index never trims an anchor on its edge. */
+const envelope = (sql: Sql, [w, s, e, n]: UnitBox) =>
+  sql`ST_MakeEnvelope(${toDegrees(w - 1)}, ${toDegrees(s - 1)}, ${toDegrees(e + 1)}, ${toDegrees(n + 1)}, 4326)`
 
 /**
  * Rebuilds the decks anchored in `boxes`, read in one go: neighbouring boxes
  * share most of what they read, so building them together is cheaper than one
- * at a time. Returns how many decks it stored and every deck the build
- * produced, its neighbours' included, so a caller can tell which other boxes
- * a changed deck now belongs to.
+ * at a time. `record` lists build cells to mark as covered in the same
+ * transaction. Returns how many decks it stored, every deck the build
+ * produced, its neighbours' included, and where the decks it deleted but did
+ * not write back now lie, so a caller can tell which other boxes a changed
+ * deck now belongs to.
  */
-export async function rebuildBoxes(sql: Sql, dem: Dem, boxes: Bbox[]): Promise<{ stored: number; built: Built[] }> {
-  const around: Bbox = [Math.min(...boxes.map(b => b[0])), Math.min(...boxes.map(b => b[1])),
-    Math.max(...boxes.map(b => b[2])), Math.max(...boxes.map(b => b[3]))]
+export async function rebuildBoxes(sql: Sql, dem: Dem, boxes: UnitBox[], record: UnitBox[] = []): Promise<{ stored: number; built: Built[]; moved: UnitPoint[] }> {
+  const around: Bbox = degreeBox([Math.min(...boxes.map(b => b[0])), Math.min(...boxes.map(b => b[1])),
+    Math.max(...boxes.map(b => b[2])), Math.max(...boxes.map(b => b[3]))])
   const rows = await waysAround(sql, around)
   const decks: Deck[] = rows.length ? await buildDecks(await inputFor(sql, rows), dem) : []
   const placed = decks.map(d => {
     const lngLats = d.points.map(p => lngLat(p) as [number, number])
     const xs = lngLats.map(p => p[0])
     const ys = lngLats.map(p => p[1])
-    return { d, at: lngLat(d.midpoint) as [number, number], lngLats, box: [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)] as Bbox }
+    const [lng, lat] = lngLat(d.midpoint)
+    return { d, at: [toUnits(lng), toUnits(lat)] as UnitPoint, lngLats, box: [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)] as Bbox }
   })
-  const mine = placed.filter(p => boxes.some(b => within(p.at, b)))
+  const mine = placed.filter(p => boxes.some(b => contains(b, p.at)))
+  const deleted = new Set<string>()
   await sql.begin(async rawTx => {
     const tx = rawTx as unknown as Sql
-    for (const [w, s, e, n] of boxes)
-      await tx`DELETE FROM bridge_decks WHERE anchor && ST_MakeEnvelope(${w}, ${s}, ${e}, ${n}, 4326)
-        AND ST_X(anchor) >= ${w} AND ST_X(anchor) < ${e} AND ST_Y(anchor) >= ${s} AND ST_Y(anchor) < ${n}`
+    for (const box of boxes) {
+      const [w, s, e, n] = box
+      const gone: Array<{ id: string }> = await tx`DELETE FROM bridge_decks WHERE anchor && ${envelope(tx, box)}
+        AND anchor_x >= ${w} AND anchor_x < ${e} AND anchor_y >= ${s} AND anchor_y < ${n}
+        RETURNING id`
+      for (const { id } of gone) deleted.add(id)
+    }
     for (let i = 0; i < mine.length; i += INSERT_BATCH) {
       // One row per deck as JSON, unpacked by jsonb_to_recordset: a multi-row
       // VALUES list cannot carry the arrays, and unnest would flatten them.
       const batch = mine.slice(i, i + INSERT_BATCH).map(({ d, at, lngLats }) => ({
         id: d.id, bridge: d.bridge, ways: d.ways, kind: d.kind, layer: d.layer, edges: d.edges, grounded: d.grounded,
-        length: d.length, heights: d.heights, ground: d.ground, piers: d.piers, lng: at[0], lat: at[1],
+        length: d.length, heights: d.heights, ground: d.ground, piers: d.piers, x: at[0], y: at[1],
         line: `LINESTRING(${lngLats.map(p => p.join(' ')).join(',')})`,
       }))
       // The boxes' own decks are gone by now, so a clash is with a deck
       // another box owns, under the same id: refuse rather than take it over.
       const stored: Array<{ id: string }> = await tx`
-        INSERT INTO bridge_decks (id, bridge, ways, kind, layer, edges, grounded, step, length, heights, ground, piers, anchor, geom)
+        INSERT INTO bridge_decks (id, bridge, ways, kind, layer, edges, grounded, step, length, heights, ground, piers, anchor, anchor_x, anchor_y, geom)
         SELECT r.id, r.bridge, r.ways, r.kind, r.layer, r.edges, r.grounded, ${STEP}, r.length, r.heights, r.ground, r.piers,
-               ST_SetSRID(ST_MakePoint(r.lng, r.lat), 4326), ST_GeomFromText(r.line, 4326)
+               ST_SetSRID(ST_MakePoint(r.x / ${UNITS_PER_DEGREE}::float8, r.y / ${UNITS_PER_DEGREE}::float8), 4326), r.x, r.y,
+               ST_GeomFromText(r.line, 4326)
         FROM jsonb_to_recordset(${tx.json(batch)}::jsonb) AS r(id text, bridge text, ways bigint[], kind text, layer int,
-          edges real[], grounded boolean[], length real, heights real[], ground real[], piers real[], lng float8, lat float8, line text)
+          edges real[], grounded boolean[], length real, heights real[], ground real[], piers real[], x int, y int, line text)
         ON CONFLICT (id) DO NOTHING
         RETURNING id`
       if (stored.length < batch.length) {
         const kept = new Set(stored.map(r => r.id))
         const ids = batch.map(r => r.id).filter(id => !kept.has(id))
-        const held: Array<{ lng: number; lat: number }> = await tx`
-          SELECT ST_X(anchor) AS lng, ST_Y(anchor) AS lat FROM bridge_decks WHERE id = ANY(${ids})`
-        throw new DeckConflict(ids, held.map(h => [h.lng, h.lat]))
+        const held: Array<{ x: number; y: number }> = await tx`SELECT anchor_x AS x, anchor_y AS y FROM bridge_decks WHERE id = ANY(${ids})`
+        throw new DeckConflict(ids, held.map(h => [h.x, h.y]))
       }
     }
+    for (const [w, s, e, n] of record)
+      await tx`INSERT INTO bridge_deck_cells (cell, w, s, e, n, box)
+        VALUES (${[w, s, e, n].join(',')}, ${w}, ${s}, ${e}, ${n},
+                ST_MakeEnvelope(${toDegrees(w)}, ${toDegrees(s)}, ${toDegrees(e)}, ${toDegrees(n)}, 4326))
+        ON CONFLICT (cell) DO NOTHING`
   })
-  return { stored: mine.length, built: placed.map(p => ({ id: p.d.id, anchor: p.at, box: p.box })) }
+  const kept = new Set(mine.map(p => p.d.id))
+  return {
+    stored: mine.length,
+    built: placed.map(p => ({ id: p.d.id, anchor: p.at, box: p.box })),
+    moved: placed.filter(p => deleted.has(p.d.id) && !kept.has(p.d.id)).map(p => p.at),
+  }
 }
 
-/** Records a box Build Bridge Decks covered, so OSM updates build bridges added there. */
-export async function recordCell(sql: Sql, [w, s, e, n]: Bbox) {
-  await sql`INSERT INTO bridge_deck_cells (cell, box) VALUES (${[w, s, e, n].join(',')}, ST_MakeEnvelope(${w}, ${s}, ${e}, ${n}, 4326))
-    ON CONFLICT (cell) DO NOTHING`
+/** The recorded build cells a box overlaps, clipped to it: where an update may write. */
+export async function coveredParts(sql: Sql, box: UnitBox): Promise<UnitBox[]> {
+  const rows: Array<{ w: number; s: number; e: number; n: number }> = await sql`
+    SELECT w, s, e, n FROM bridge_deck_cells WHERE box && ${envelope(sql, box)}`
+  return rows.map(r => clip(box, [r.w, r.s, r.e, r.n])).filter((b): b is UnitBox => b !== null)
+}
+
+/** Rounds of taking in the cells that hold a clashing id before giving up. */
+const CLASH_ROUNDS = 4
+
+/**
+ * Rebuilds cells by key, and when a rebuilt deck's id is held by a deck in
+ * another cell, rebuilds again with that cell taken in, in one transaction.
+ * The holding cell's copy is deleted as this one is written, so two cells
+ * holding each other's ids resolve at once instead of each waiting on the
+ * other. Returns the keys finally rebuilt, which include any taken in.
+ */
+export async function rebuildCells(
+  sql: Sql,
+  dem: Dem,
+  keys: string[],
+  cell: { partsOf: (key: string) => UnitBox[] | Promise<UnitBox[]>; keyOf: (anchor: UnitPoint) => string; record?: boolean },
+): Promise<{ stored: number; built: Built[]; moved: UnitPoint[]; keys: string[] }> {
+  const taken = [...new Set(keys)]
+  for (let round = 0; ; round++) {
+    const parts = (await Promise.all(taken.map(k => cell.partsOf(k)))).flat()
+    if (!parts.length) return { stored: 0, built: [], moved: [], keys: taken }
+    try {
+      const result = await rebuildBoxes(sql, dem, parts, cell.record ? parts : [])
+      return { ...result, keys: taken }
+    } catch (err) {
+      if (!(err instanceof DeckConflict) || round + 1 >= CLASH_ROUNDS) throw err
+      const holders = [...new Set(err.anchors.map(cell.keyOf))].filter(k => !taken.includes(k))
+      if (!holders.length) throw err
+      taken.push(...holders)
+    }
+  }
 }

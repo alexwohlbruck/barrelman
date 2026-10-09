@@ -21,7 +21,8 @@
 -- osm_replay.edited lists what the diff itself changed.
 --
 -- Which ways make decks is bridge_deck_class() (create-detail-views.sql), as
--- for the build. Nothing is queued where no bridge deck was ever built. A
+-- for the build. Nothing is queued before Build Bridge Decks has recorded a
+-- cell, and Update Bridge Decks drops what lies outside them. A
 -- failure here is reported and skipped rather than raised: it would otherwise
 -- roll back the replication cycle.
 -- Needs detail_dirty (detail-queue-table.sql).
@@ -30,11 +31,12 @@ DO $$
 DECLARE
   queued bigint;
 BEGIN
-  -- The same tables Update Bridge Decks needs, so nothing piles up that it would skip.
+  -- Only where Build Bridge Decks recorded cells, which is all Update Bridge
+  -- Decks rebuilds, so nothing piles up that it would drop.
   IF to_regclass('bridge_decks') IS NULL OR to_regclass('bridge_deck_cells') IS NULL THEN
     RETURN;
   END IF;
-  IF NOT EXISTS (SELECT 1 FROM bridge_deck_cells) AND NOT EXISTS (SELECT 1 FROM bridge_decks) THEN
+  IF NOT EXISTS (SELECT 1 FROM bridge_deck_cells) THEN
     RETURN;
   END IF;
 
@@ -74,11 +76,16 @@ BEGIN
     SELECT DISTINCT b.id, b.geom
     FROM touching t
     JOIN bridge_decks b ON b.geom && ST_Expand(t.geom, 0.00002) AND ST_DWithin(b.geom, t.geom, 0.00002)
+  ),
+  boxes AS (
+    SELECT ST_Envelope(ST_Expand(geom, 0.0005)) AS box FROM bridges
+    UNION
+    SELECT ST_Envelope(ST_Expand(geom, 0.0005)) FROM decks
   )
+  -- A box already waiting, from an earlier cycle, is not queued twice.
   INSERT INTO detail_dirty (layer, box)
-  SELECT 'bridge_decks', ST_Envelope(ST_Expand(geom, 0.0005)) FROM bridges
-  UNION ALL
-  SELECT 'bridge_decks', ST_Envelope(ST_Expand(geom, 0.0005)) FROM decks;
+  SELECT 'bridge_decks', b.box FROM boxes b
+  WHERE NOT EXISTS (SELECT 1 FROM detail_dirty q WHERE q.layer = 'bridge_decks' AND q.box ~= b.box AND q.attempts = 0);
   GET DIAGNOSTICS queued = ROW_COUNT;
   RAISE NOTICE 'bridge decks: queued % box(es)', queued;
 EXCEPTION WHEN OTHERS THEN

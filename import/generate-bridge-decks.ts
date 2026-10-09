@@ -16,13 +16,14 @@
  * needed and kept in a bounded cache.
  */
 import postgres from 'postgres'
-import { resolveRegions, type Bbox } from '../src/config/regions'
+import { resolveRegions } from '../src/config/regions'
 import { dbUrl, onnotice } from '../src/db'
 import { argValue } from '../src/lib/cli-args'
 import { cellsCovering, parseBbox, regionAreas } from '../src/lib/bridge-decks/areas'
 import { Dem, DEM_TILES, demConfigured } from '../src/lib/bridge-decks/dem'
+import { degreeBox, grid, toUnits } from '../src/lib/bridge-decks/grid'
 import { missingMessage } from '../src/lib/bridge-decks/queue'
-import { DeckConflict, LOCK, missingTables, rebuildBoxes, recordCell } from './bridge-deck-cells'
+import { DeckConflict, LOCK, missingTables, rebuildCells } from './bridge-deck-cells'
 
 const args = process.argv.slice(2)
 const flag = (name: string) => argValue(args, name)
@@ -50,33 +51,21 @@ async function main() {
 
   const dem = new Dem()
   const started = Date.now()
+  const g = grid(toUnits(CELL))
+  const cell = { partsOf: (key: string) => [g.box(key)], keyOf: g.at, record: true }
   let total = 0
-  // Cells whose decks clashed with a deck another cell still holds, retried
-  // once the rest of the area has been rebuilt.
-  const deferred: Bbox[] = []
-  const build = async (cell: Bbox) => {
-    const { stored } = await rebuildBoxes(sql, dem, [cell])
-    await recordCell(sql, cell)
-    total += stored
-    return stored
-  }
-  for (const [k, cell] of cells.entries()) {
-    try {
-      const stored = await build(cell)
-      if (stored) console.log(`[${k + 1}/${cells.length}] cell ${cell[0]},${cell[1]}: ${stored} decks (${Math.round((Date.now() - started) / 1000)} s)`)
-    } catch (err) {
-      if (!(err instanceof DeckConflict)) throw err
-      deferred.push(cell)
-    }
-  }
   let clashes = 0
-  for (const cell of deferred) {
+  for (const [k, box] of cells.entries()) {
+    const key = g.at([box[0], box[1]])
     try {
-      await build(cell)
+      const { stored, keys } = await rebuildCells(sql, dem, [key], cell)
+      total += stored
+      const also = keys.length > 1 ? `, with ${keys.slice(1).join(' ')}, which held some of its ids` : ''
+      if (stored || also) console.log(`[${k + 1}/${cells.length}] cell ${degreeBox(box).slice(0, 2).join(',')}: ${stored} decks${also} (${Math.round((Date.now() - started) / 1000)} s)`)
     } catch (err) {
       if (!(err instanceof DeckConflict)) throw err
       clashes++
-      console.error(`ERROR: cell ${cell.join(',')} not rebuilt: ${err.message}, at ${err.anchors.map(a => a.join(',')).join('; ')}. Build an area that takes those in too.`)
+      console.error(`ERROR: cell ${degreeBox(box).join(',')} not rebuilt: ${err.message}. See Troubleshooting, "Bridge decks clash".`)
     }
   }
   console.log(`Bridge decks: ${total} built in ${cells.length} cells, ${Math.round((Date.now() - started) / 1000)} s.`)

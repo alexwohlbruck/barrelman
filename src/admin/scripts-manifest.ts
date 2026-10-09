@@ -979,12 +979,12 @@ export const SCRIPTS: ScriptDef[] = [
         apply: 'env',
         envVar: 'BRIDGE_DECKS_MAX_CELLS',
         placeholder: 'blank = 1000',
-        description: 'About 2 km cells rebuilt in one run. What is left stays queued for the next.',
+        description: 'Cells of 0.025° (about 2.5 km) rebuilt in one run. What is left stays queued for the next.',
       },
     ],
     source: 'import/update-bridge-decks.ts',
     notes:
-      'OSM Update runs this after each replication cycle unless its "Update bridge decks" switch is off. The queue (detail_dirty) is filled by scripts/replicate-extract.sh under the same switch, so a database updated through osm2pgsql\'s middle tables has nothing to work off. Only rebuilds inside the cells Build Bridge Decks covered, and does nothing without bridge_decks or with BRIDGE_DECKS_DEM_TILES=off. A cell that fails is skipped and its entries retried later, up to three runs. Steps aside while "Build Bridge Decks" runs.',
+      'OSM Update runs this after each replication cycle unless its "Update bridge decks" switch is off. The queue (detail_dirty) is filled by scripts/replicate-extract.sh under the same switch, so a database updated through osm2pgsql\'s middle tables has nothing to work off. Only writes inside the cells Build Bridge Decks recorded. Does nothing without bridge_decks and bridge_deck_cells, and empties the queue with BRIDGE_DECKS_DEM_TILES=off. A cell that fails is skipped and its entries retried later, up to three runs. Steps aside while "Build Bridge Decks" runs.',
   },
   {
     id: 'search-intersections',

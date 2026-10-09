@@ -14,8 +14,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 * **Bridge decks stay current with OSM.** OSM Update now rebuilds the decks
   of bridges each replication cycle added, moved, retagged or deleted, and of
-  decks whose approach roads, crossings or water changed, in about 2 km cells
-  inside the area "Build Bridge Decks" covered. It is on by default; turn off
+  decks whose approach roads, crossings or water changed, in about 2.5 km
+  cells, writing only inside the cells "Build Bridge Decks" built. It is on by default; turn off
   its "Update bridge decks" switch, or set `BRIDGE_DECKS_INCREMENTAL=0`, to
   leave decks to full builds. "Update Bridge Decks" runs it on its own, at
   most `BRIDGE_DECKS_MAX_CELLS` cells a run. A failure is a warning and the
@@ -28,10 +28,12 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 * **Bridge decks no longer go missing between neighbouring cells.** Two decks
   at the same spot were numbered in the order each cell happened to build
   them, so a rebuild of one cell could overwrite a deck owned by its
-  neighbour. Decks are now numbered by where they lie, and a rebuild refuses
-  to take over another cell's deck. **Run "Build Bridge Decks" again after
-  upgrading:** decks stored under the old numbering are dropped once when the
-  API starts.
+  neighbour, and a deck right on a cell edge could be written by one cell and
+  deleted by none. Decks are now numbered by where they lie, cells are worked
+  out in whole units so every part agrees on them, and a rebuild takes in the
+  cell holding a clashing id rather than overwrite it. **Run "Build Bridge
+  Decks" again after upgrading:** the API drops the decks stored the old way,
+  once, on its first start.
 
 ## [0.10.7] - 2026-10-09
 

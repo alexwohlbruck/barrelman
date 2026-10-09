@@ -4,38 +4,27 @@
  * now, ends up rebuilt in the one cell that owns it.
  */
 import type { Bbox } from '../../config/regions'
+import { grid, unitBox, type UnitPoint } from './grid'
 
-/** Side of a rebuilt cell, in degrees: about 2 km. */
-export const UPDATE_CELL = 0.02
+/**
+ * Side of a rebuilt cell: 0.025°, about 2.5 km. It divides Build Bridge
+ * Decks' default 0.25° cell, so an update cell lies inside one build cell.
+ */
+export const UPDATE_CELL = 250_000
+export const cells = grid(UPDATE_CELL)
 
-type LngLat = [number, number]
+/** A deck as built: its anchor in units and the box it spans in degrees. */
+export type Built = { id: string; anchor: UnitPoint; box: Bbox }
 
-/** A deck as built: where it is anchored and the box it spans, in degrees. */
-export type Built = { id: string; anchor: LngLat; box: Bbox }
+/** A queued box, in degrees, and the anchors of the stored decks that cross it. */
+export type Entry = { id: string; box: Bbox; anchors: UnitPoint[] }
 
-/** A queued box, and the anchors of the stored decks that cross it. */
-export type Entry = { id: string; box: Bbox; anchors: LngLat[] }
-
-export const cellAt = ([lng, lat]: LngLat, size = UPDATE_CELL) => `${Math.floor(lng / size)},${Math.floor(lat / size)}`
-
-export function cellBox(cell: string, size = UPDATE_CELL): Bbox {
-  const [cx, cy] = cell.split(',').map(Number)
-  return [cx * size, cy * size, (cx + 1) * size, (cy + 1) * size]
-}
-
-/** Cells per side of a block rebuilt in one go: about 6 km, sharing one read of the bridges around it. */
+/** Cells per side of a block rebuilt in one go: about 7.5 km, sharing one read of the bridges around it. */
 export const BLOCK = 3
 
 export function blockOf(cell: string): string {
   const [cx, cy] = cell.split(',').map(Number)
   return `${Math.floor(cx / BLOCK)},${Math.floor(cy / BLOCK)}`
-}
-
-export function cellsOver([w, s, e, n]: Bbox, size = UPDATE_CELL): string[] {
-  const out: string[] = []
-  for (let cx = Math.floor(w / size); cx <= Math.floor(e / size); cx++)
-    for (let cy = Math.floor(s / size); cy <= Math.floor(n / size); cy++) out.push(`${cx},${cy}`)
-  return out
 }
 
 export const meets = (a: Bbox, b: Bbox) => a[0] <= b[2] && b[0] <= a[2] && a[1] <= b[3] && b[1] <= a[3]
@@ -45,8 +34,8 @@ export const meets = (a: Bbox, b: Bbox) => a[0] <= b[2] && b[0] <= a[2] && a[1] 
  * now be anchored, and those its stored decks are anchored in, which may lie
  * well away along a long bridge and would otherwise keep the old deck.
  */
-export function entryCells(entry: Entry, size = UPDATE_CELL): Set<string> {
-  return new Set([...cellsOver(entry.box, size), ...entry.anchors.map(a => cellAt(a, size))])
+export function entryCells(entry: Entry): Set<string> {
+  return new Set([...cells.over(unitBox(entry.box)), ...entry.anchors.map(cells.at)])
 }
 
 /**
@@ -54,17 +43,34 @@ export function entryCells(entry: Entry, size = UPDATE_CELL): Set<string> {
  * entry is taken whole or not at all, and the first is always taken, however
  * many cells it needs, so the queue moves.
  */
-export function pick(entries: Entry[], maxCells: number, size = UPDATE_CELL): { picked: Entry[]; cells: Map<string, string[]> } {
-  const cells = new Map<string, string[]>()
+export function pick(entries: Entry[], maxCells: number): { picked: Entry[]; cells: Map<string, string[]> } {
+  const planned = new Map<string, string[]>()
   const picked: Entry[] = []
   for (const entry of entries) {
-    const own = entryCells(entry, size)
-    const added = [...own].filter(c => !cells.has(c)).length
-    if (picked.length && cells.size + added > maxCells) continue
+    const own = entryCells(entry)
+    let added = 0
+    for (const c of own) if (!planned.has(c)) added++
+    if (picked.length && planned.size + added > maxCells) continue
     picked.push(entry)
-    for (const c of own) cells.set(c, [...(cells.get(c) ?? []), entry.id])
+    for (const c of own) {
+      const by = planned.get(c)
+      if (by) by.push(entry.id)
+      else planned.set(c, [entry.id])
+    }
   }
-  return { picked, cells }
+  return { picked, cells: planned }
+}
+
+/** Picked entries by the cells under their boxes, for finding the ones a deck crosses. */
+export function entryIndex(picked: Entry[]): Map<string, Entry[]> {
+  const index = new Map<string, Entry[]>()
+  for (const entry of picked)
+    for (const c of cells.over(unitBox(entry.box))) {
+      const at = index.get(c)
+      if (at) at.push(entry)
+      else index.set(c, [entry])
+    }
+  return index
 }
 
 /**
@@ -73,15 +79,20 @@ export function pick(entries: Entry[], maxCells: number, size = UPDATE_CELL): { 
  * moves its midpoint, possibly far along it into a cell the change never
  * reached, and that cell has to be rebuilt to take it.
  */
-export function strays(built: Built[], picked: Entry[], planned: ReadonlyMap<string, unknown>, size = UPDATE_CELL): Map<string, string[]> {
-  const out = new Map<string, string[]>()
+export function strays(built: Built[], index: ReadonlyMap<string, Entry[]>, planned: ReadonlyMap<string, unknown>): Map<string, string[]> {
+  const out = new Map<string, Set<string>>()
   for (const deck of built) {
-    const cell = cellAt(deck.anchor, size)
+    const cell = cells.at(deck.anchor)
     if (planned.has(cell)) continue
-    const by = picked.filter(e => meets(e.box, deck.box)).map(e => e.id)
-    if (by.length) out.set(cell, [...new Set([...(out.get(cell) ?? []), ...by])])
+    for (const c of cells.over(unitBox(deck.box)))
+      for (const entry of index.get(c) ?? [])
+        if (meets(entry.box, deck.box)) {
+          const by = out.get(cell) ?? new Set<string>()
+          by.add(entry.id)
+          out.set(cell, by)
+        }
   }
-  return out
+  return new Map([...out].map(([cell, by]) => [cell, [...by]]))
 }
 
 /** The entries planned over any of `failed`, to be tried again later. */

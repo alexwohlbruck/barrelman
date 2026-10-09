@@ -1,18 +1,23 @@
 import { describe, expect, it } from 'bun:test'
-import { blockOf, cellAt, cellBox, cellsOver, entriesOver, entryCells, maxCellsFrom, pick, skipReason, strays, type Entry } from './queue'
+import { toUnits, unitBox } from './grid'
+import { blockOf, cells, entriesOver, entryCells, entryIndex, maxCellsFrom, pick, skipReason, strays, type Entry } from './queue'
 
 const entry = (id: string, box: Entry['box'], anchors: Entry['anchors'] = []): Entry => ({ id, box, anchors })
+const at = (lng: number, lat: number): [number, number] => [toUnits(lng), toUnits(lat)]
 
-describe('cells', () => {
-  it('cuts a box into the grid cells under it, edges included', () => {
-    expect(cellsOver([-80.85, 35.21, -80.83, 35.215])).toEqual(['-4043,1760', '-4042,1760'])
-    expect(cellBox('-4043,1760')[0]).toBeCloseTo(-80.86)
-    expect(cellAt([-80.8501, 35.2101])).toBe('-4043,1760')
+describe('update cells', () => {
+  it('cuts a box into the 0.025° cells under it, edges included', () => {
+    expect(cells.over(unitBox([-80.851, 35.21, -80.83, 35.215]))).toEqual(['-3235,1408', '-3234,1408'])
+    expect(cells.box('-3234,1408')).toEqual([-808500000, 352000000, -808250000, 352250000])
+  })
+
+  it('nest in the default 0.25° build cells', () => {
+    expect((toUnits(0.25) / 250_000) % 1).toBe(0)
   })
 
   it('takes the cells where the decks crossing a box are anchored, however far along them', () => {
-    const cells = entryCells(entry('1', [-80.851, 35.211, -80.85, 35.212], [[-80.79, 35.25]]))
-    expect([...cells]).toEqual(['-4043,1760', cellAt([-80.79, 35.25])])
+    const own = entryCells(entry('1', [-80.851, 35.211, -80.85, 35.212], [at(-80.79, 35.25)]))
+    expect([...own]).toEqual(['-3235,1408', '-3234,1408', cells.at(at(-80.79, 35.25))])
   })
 })
 
@@ -46,10 +51,10 @@ describe('strays', () => {
 
   it('finds the cell a changed deck is now anchored in, and only for decks the change reached', () => {
     const out = strays([
-      { id: 'grown', anchor: [0.05, 0.001], box: [0.0015, 0, 0.1, 0.002] },
-      { id: 'home', anchor: [0.001, 0.001], box: [0, 0, 0.002, 0.002] },
-      { id: 'elsewhere', anchor: [0.07, 0.001], box: [0.06, 0, 0.08, 0.002] },
-    ], picked, planned)
+      { id: 'grown', anchor: at(0.05, 0.001), box: [0.0015, 0, 0.1, 0.002] },
+      { id: 'home', anchor: at(0.001, 0.001), box: [0, 0, 0.002, 0.002] },
+      { id: 'elsewhere', anchor: at(0.07, 0.001), box: [0.06, 0, 0.08, 0.002] },
+    ], entryIndex(picked), planned)
     expect([...out]).toEqual([['2,0', ['1']]])
   })
 })

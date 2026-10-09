@@ -867,37 +867,49 @@ CREATE TABLE IF NOT EXISTS bridge_decks (
   -- Distances along the deck, in metres.
   piers real[] NOT NULL,
   anchor geometry(Point, 4326) NOT NULL,
+  -- The anchor in whole units of 1e-7°, which decides the cell that owns the
+  -- deck (src/lib/bridge-decks/grid.ts): integers compare alike in TS and SQL.
+  anchor_x int NOT NULL,
+  anchor_y int NOT NULL,
   geom geometry(LineString, 4326) NOT NULL,
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS bridge_decks_geom_idx ON bridge_decks USING gist (geom);
 CREATE INDEX IF NOT EXISTS bridge_decks_anchor_idx ON bridge_decks USING gist (anchor);
 
--- The cells Build Bridge Decks has covered, keyed by their w,s,e,n. An OSM
--- update builds a newly mapped bridge only inside one, so an instance that
--- built one city does not grow decks wherever a diff happens to add a bridge.
+-- The cells Build Bridge Decks has covered, in whole units like the anchors
+-- and keyed by them. An OSM update writes decks only inside these, so an
+-- instance that built one city does not grow decks wherever a diff happens to
+-- add a bridge.
 CREATE TABLE IF NOT EXISTS bridge_deck_cells (
   cell text PRIMARY KEY,
+  w int NOT NULL,
+  s int NOT NULL,
+  e int NOT NULL,
+  n int NOT NULL,
   box geometry(Polygon, 4326) NOT NULL
 );
 CREATE INDEX IF NOT EXISTS bridge_deck_cells_box_idx ON bridge_deck_cells USING gist (box);
 
--- Decks stored before co-located decks were numbered by position can share an
--- id with another cell's deck. They are dropped once, here; Build Bridge Decks
--- has to run again afterwards.
+-- One-shot schema changes, by name, for what IF NOT EXISTS cannot express.
+CREATE TABLE IF NOT EXISTS schema_migrations (
+  name text PRIMARY KEY,
+  applied_at timestamptz NOT NULL DEFAULT now()
+);
+
+-- Decks stored before anchors were kept in whole units, and before decks at
+-- one place were numbered by position, can share an id with another cell's
+-- deck. They are dropped, once; Build Bridge Decks has to run again after.
 DO $$
 BEGIN
-  IF obj_description('bridge_decks'::regclass, 'pg_class') IS DISTINCT FROM 'ids numbered by position' THEN
+  IF NOT EXISTS (SELECT 1 FROM schema_migrations WHERE name = 'bridge_decks_unit_anchors') THEN
     TRUNCATE bridge_decks;
-    COMMENT ON TABLE bridge_decks IS 'ids numbered by position';
+    ALTER TABLE bridge_decks ADD COLUMN IF NOT EXISTS anchor_x int NOT NULL, ADD COLUMN IF NOT EXISTS anchor_y int NOT NULL;
+    INSERT INTO schema_migrations (name) VALUES ('bridge_decks_unit_anchors');
   END IF;
 END
 $$;
 
--- What the tiles carry. Vector tiles have no arrays, so a profile travels as
--- decimetres joined by commas. A tile's own geometry is simplified and snapped
--- differently at each zoom, so `line` carries the samples exactly: the first
--- as lng,lat and each after as the step from the one before, in 1e-7 degrees.
 CREATE OR REPLACE VIEW bridge_deck_tiles AS
 SELECT id, bridge, kind, layer, edges[1] AS left_edge, edges[2] AS right_edge,
        (SELECT string_agg(CASE WHEN n = 1 THEN x || ',' || y ELSE (x - px) || ',' || (y - py) END, ';' ORDER BY n)
