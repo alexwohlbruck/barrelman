@@ -51,6 +51,8 @@ set -euo pipefail
 #   GEOFABRIK_REPLICATION_URL    overrides the feed recorded in the cursor
 #   REPLICATION_ALLOW_SHRINK     1 to skip the shrink guard (see apply_cycle)
 #   REPLICATION_MIN_MEMORY_GB    smallest container memory limit to run under (4)
+#   ROAD_MARKINGS_INCREMENTAL    1 to queue the roads each cycle touches for
+#                                update-road-markings.sh (default 0)
 # =============================================================================
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -340,13 +342,18 @@ SQL
   # mass deletions are rare enough to approve by hand.
   local min_ratio="0.5"
   [ "${REPLICATION_ALLOW_SHRINK:-0}" = "1" ] && min_ratio="0"
+  # Normalised here because psql's \if refuses anything but a boolean, and an
+  # error inside the transaction would roll the whole cycle back.
+  local queue_road_markings="off"
+  [ "${ROAD_MARKINGS_INCREMENTAL:-0}" = "1" ] && queue_road_markings="on"
 
   # BEGIN and COMMIT are spelled out: psql's -1 only applies to -c and -f, and
   # stdin silently runs each statement in its own transaction. With
   # ON_ERROR_STOP an error makes psql exit inside the open transaction, and the
   # server rolls all of it back.
   psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q \
-    -v min_ratio="$min_ratio" -v sequence="$end" -v data_ts="$end_ts" <<SQL
+    -v min_ratio="$min_ratio" -v sequence="$end" -v data_ts="$end_ts" \
+    -v queue_road_markings="$queue_road_markings" <<SQL
 BEGIN;
 DROP SCHEMA IF EXISTS osm_replay CASCADE;
 CREATE SCHEMA osm_replay;
@@ -397,7 +404,10 @@ SELECT :removed >= 1000 AND :added < :removed * :min_ratio AS shrunk \gset
 \endif
 
 \i $PROJECT_DIR/import/replay-derive.sql
+\if :queue_road_markings
+\i $PROJECT_DIR/import/road-markings-queue-table.sql
 \i $PROJECT_DIR/import/queue-road-markings.sql
+\endif
 
 UPDATE osm_replication_state
 SET sequence = :sequence, data_timestamp = NULLIF(:'data_ts', '')::timestamptz, updated_at = now();
