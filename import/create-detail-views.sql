@@ -855,9 +855,15 @@ CREATE INDEX IF NOT EXISTS bridge_decks_geom_idx ON bridge_decks USING gist (geo
 CREATE INDEX IF NOT EXISTS bridge_decks_anchor_idx ON bridge_decks USING gist (anchor);
 
 -- What the tiles carry. Vector tiles have no arrays, so a profile travels as
--- decimetres joined by commas.
+-- decimetres joined by commas. A tile's own geometry is simplified and snapped
+-- differently at each zoom, so `line` carries the samples exactly: the first
+-- as lng,lat and each after as the step from the one before, in 1e-7 degrees.
 CREATE OR REPLACE VIEW bridge_deck_tiles AS
 SELECT id, bridge, kind, layer, edges[1] AS left_edge, edges[2] AS right_edge,
+       (SELECT string_agg(CASE WHEN n = 1 THEN x || ',' || y ELSE (x - px) || ',' || (y - py) END, ';' ORDER BY n)
+        FROM (SELECT n, x, y, lag(x) OVER (ORDER BY n) AS px, lag(y) OVER (ORDER BY n) AS py
+              FROM (SELECT (dp).path[1] AS n, round(ST_X((dp).geom) * 1e7)::bigint AS x, round(ST_Y((dp).geom) * 1e7)::bigint AS y
+                    FROM ST_DumpPoints(geom) AS dp) points) steps) AS line,
        grounded[1] AS start_grounded, grounded[2] AS end_grounded, step, length,
        array_to_string(ARRAY(SELECT round(h * 10)::int FROM unnest(heights) h), ',') AS heights,
        array_to_string(ARRAY(SELECT round(g * 10)::int FROM unnest(ground) g), ',') AS ground,

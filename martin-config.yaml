@@ -415,6 +415,7 @@ postgres:
         end_grounded: bool
         step: float4
         length: float4
+        line: text
         heights: text
         ground: text
         piers: text
