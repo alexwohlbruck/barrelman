@@ -119,6 +119,9 @@ async function main() {
   mkdirSync(outputDir, { recursive: true })
 
   let feedFiles: string[] = []
+  // The feed id each file holds. A downloaded file's name is a sanitized copy
+  // of the id, so the name alone does not always match gtfs_stops.feed_id.
+  const feedIdOf = new Map<string, string>()
   // How many feeds we tried, so a run where every one failed can be told apart
   // from a region that legitimately has none.
   let attemptedFeeds = 0
@@ -183,6 +186,7 @@ async function main() {
 
         writeFileSync(filepath, Buffer.from(await alignTripIds(buffer, merged)))
         feedFiles.push(filepath)
+        feedIdOf.set(filepath, merged.feedId)
 
         // Step 3: Parse and import
         await importFeedFile(filepath, merged)
@@ -263,6 +267,9 @@ async function main() {
           console.log(`  ${completed}/${total} pairs computed`)
         }
       },
+      // Only the feeds this run wrote get a transfers.txt, so only their stop
+      // pairs are worth a GraphHopper call.
+      feedFiles.map((f) => feedIdOf.get(f) ?? basename(f, '.zip')),
     )
 
     console.log(`Computed ${transfers.length} transfer pairs`)
@@ -272,7 +279,7 @@ async function main() {
     // preventing stop ID collisions across different transit agencies.
     if (transfers.length > 0) {
       for (const filepath of feedFiles) {
-        const feedId = basename(filepath, '.zip')
+        const feedId = feedIdOf.get(filepath) ?? basename(filepath, '.zip')
         const transfersTxt = generateTransfersTxt(transfers, feedId)
         const transferCount = transfersTxt.trim().split('\n').length - 1 // minus header
         try {
