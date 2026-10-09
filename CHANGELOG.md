@@ -10,6 +10,17 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Fixed
+
+* **Brand logos are no longer lost when a Wikidata request fails.** The logo
+  loader recorded every brand in a failed request as having no logo, and never
+  asked again, so about 1,000 brands showed a generic icon — Starbucks and
+  Walmart among them. The usual cause was a brand tagged with several Wikidata
+  IDs (`Q155026;Q7771029`): one such value made Wikidata reject all 50 brands in
+  its request. The loader now asks for the first ID, backs off and retries when
+  rate-limited, records only the brands Wikidata answered for, and retries
+  failed ones a day later. Brands without a logo are re-checked monthly.
+
 ## [0.10.4] - 2026-10-08
 
 ### Added
