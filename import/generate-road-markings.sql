@@ -520,17 +520,19 @@ CREATE TABLE road_markings_next (
 
 DROP TABLE IF EXISTS _rm_lines;
 CREATE TEMP TABLE _rm_lines AS
-WITH lanes AS (SELECT * FROM _rm_roads WHERE marked),
+-- Motorways keep the long highway dash; streets take a shorter one.
+WITH lanes AS (
+  SELECT *, CASE WHEN class IN ('motorway', 'motorway_link', 'trunk', 'trunk_link') THEN 'dashed_long' ELSE 'dashed' END as dash
+  FROM _rm_roads WHERE marked
+),
 centre AS (
-  -- Two directions are kept apart by a double line wherever passing is barred:
-  -- across the Americas that is any street at town speeds, and anywhere four
-  -- lanes or a centre turn lane.
+  -- Two directions are kept apart by a double line unless passing is allowed:
+  -- in the Americas only where it is tagged, elsewhere off the main roads.
   SELECT *, CASE
     WHEN tags->>'overtaking' = 'no' OR both_ways > 0 OR fwd + bwd >= 4 THEN 'double'
-    WHEN tags->>'overtaking' = 'yes' THEN 'dashed'
-    WHEN americas THEN CASE WHEN mph >= 40 AND class NOT IN ('primary', 'trunk') THEN 'dashed' ELSE 'double' END
-    WHEN class IN ('primary', 'secondary', 'trunk') THEN 'double'
-    ELSE 'dashed' END as centre_pattern,
+    WHEN 'yes' IN (tags->>'overtaking', tags->>'overtaking:forward', tags->>'overtaking:backward') THEN dash
+    WHEN americas OR class IN ('primary', 'secondary', 'trunk') THEN 'double'
+    ELSE dash END as centre_pattern,
     CASE WHEN americas THEN 'yellow' ELSE 'white' END as centre_color
   FROM lanes
 )
@@ -548,13 +550,13 @@ UNION ALL
 -- dividers counted from the kerb where they were; one opening at the kerb
 -- keeps those counted from the centre. A divider with no counterpart on the
 -- road before emerges from the line it is clamped to.
-SELECT osm_id, g, s, bridge, ease, 'lane', 'dashed', 'white', split_f - i * lane_w,
+SELECT osm_id, g, s, bridge, ease, 'lane', dash, 'white', split_f - i * lane_w,
        CASE WHEN prev_left IS NULL THEN NULL
             WHEN opens_kerb_f THEN greatest(prev_right, least(prev_split_f, prev_split_f - i * prev_lane_w))
             ELSE greatest(prev_right, least(prev_split_f, prev_right + (fwd - i) * prev_lane_w)) END
 FROM lanes, generate_series(1, 8) i WHERE i < fwd
 UNION ALL
-SELECT osm_id, g, s, bridge, ease, 'lane', 'dashed', 'white', split_b + i * lane_w,
+SELECT osm_id, g, s, bridge, ease, 'lane', dash, 'white', split_b + i * lane_w,
        CASE WHEN prev_left IS NULL THEN NULL
             WHEN opens_kerb_b THEN least(prev_left, greatest(prev_split_b, prev_split_b + i * prev_lane_w))
             ELSE least(prev_left, greatest(prev_split_b, prev_left - (bwd - i) * prev_lane_w)) END

@@ -26,6 +26,7 @@ const ways: [number, string, Record<string, string>][] = [
   [5, line([-74.001, STREET_Y], [SB_X, STREET_Y]), { highway: 'residential', lanes: '2', 'cycleway:right': 'lane' }],
   [6, line([SB_X, STREET_Y], [NB_X, STREET_Y]), { highway: 'residential', lanes: '2' }],
   [7, line([NB_X, STREET_Y], [-73.999, STREET_Y]), { highway: 'residential', lanes: '2' }],
+  [10, line([-74.002, 40.712], [-74.002, 40.714]), { highway: 'tertiary', 'overtaking': 'yes' }],
   // A crossing drawn well past both kerbs, and askew to the street.
   [9, line([-74.0006, 40.70985], [-74.0004, 40.71015]), { highway: 'footway', footway: 'crossing', 'crossing:markings': 'zebra' }],
 ]
@@ -94,6 +95,18 @@ run('generate-road-markings.sql', () => {
   test('paints the bike lane green', async () => {
     const [{ n }] = await sql`SELECT count(*)::int as n FROM road_markings WHERE kind = 'bike_lane' AND color = 'green'`
     expect(n).toBeGreaterThan(0)
+  })
+
+  test('splits two-way streets with a double yellow unless passing is tagged', async () => {
+    const rows = await sql`
+      SELECT pattern, color, ST_X(ST_Centroid(geom)) < -74.0015 as passing FROM road_markings WHERE kind = 'centre'`
+    expect(rows.filter(r => !r.passing).every(r => r.pattern === 'double' && r.color === 'yellow')).toBe(true)
+    expect(rows.filter(r => r.passing).map(r => r.pattern)).toContain('dashed')
+  })
+
+  test('dashes lanes long on trunk roads and short on streets', async () => {
+    const [{ trunk }] = await sql`SELECT count(*) FILTER (WHERE pattern = 'dashed_long')::int as trunk FROM road_markings WHERE kind = 'lane'`
+    expect(trunk).toBeGreaterThan(0)
   })
 
   test('keeps every crosswalk bar and stop line on the carriageway', async () => {
