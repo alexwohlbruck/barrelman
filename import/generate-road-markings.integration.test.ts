@@ -34,6 +34,15 @@ const ways: [number, string, Record<string, string>][] = [
   [10, line([-74.002, 40.712], [-74.002, 40.714]), { highway: 'tertiary', 'overtaking': 'yes' }],
   [11, line([-74.003, 40.712], [-74.003, 40.714]), { highway: 'service' }],
   [12, line([-74.004, 40.712], [-74.004, 40.714]), { highway: 'service', lanes: '1' }],
+  // A one-way that gains a lane, and one drawn along its right kerb.
+  [20, line([-74.010, 40.712], [-74.010, 40.7125]), { highway: 'residential', oneway: 'yes', lanes: '2' }],
+  [21, line([-74.010, 40.7125], [-74.010, 40.7135]), { highway: 'residential', oneway: 'yes', lanes: '3' }],
+  [22, line([-74.012, 40.712], [-74.012, 40.713]), { highway: 'residential', oneway: 'yes', lanes: '2', placement: 'right_of:2' }],
+  // A street with bike lanes on both sides of a crossroads.
+  [23, line([-74.008, 40.7145], [-74.007, 40.7145]), { highway: 'residential', lanes: '2', 'cycleway:both': 'lane' }],
+  [24, line([-74.007, 40.7145], [-74.006, 40.7145]), { highway: 'residential', lanes: '2', 'cycleway:both': 'lane' }],
+  [25, line([-74.007, 40.714], [-74.007, 40.7145]), { highway: 'residential', lanes: '2' }],
+  [26, line([-74.007, 40.7145], [-74.007, 40.715]), { highway: 'residential', lanes: '2' }],
   // A crossing drawn well past both kerbs, and askew to the street.
   [9, line([-74.0006, 40.70985], [-74.0004, 40.71015]), { highway: 'footway', footway: 'crossing', 'crossing:markings': 'zebra' }],
 ]
@@ -131,6 +140,44 @@ run('generate-road-markings.sql', () => {
       FROM road_markings m WHERE m.kind IN ('crosswalk', 'stop')`
     expect(n).toBeGreaterThan(1)
     expect(outside).toBeLessThan(0.01)
+  })
+
+  // Metres east of a longitude near 40.71°N.
+  const east = (x: number, m: number) => x + m / 84300
+
+  test('widens a one-way for an added lane on its right only', async () => {
+    for (const y of [40.7122, 40.7133]) {
+      expect(await covered(east(-74.010, -2.5), y)).toBe(true)
+      expect(await covered(east(-74.010, -3.5), y)).toBe(false)
+    }
+    expect(await covered(east(-74.010, 3.5), 40.7122)).toBe(false)
+    expect(await covered(east(-74.010, 5.5), 40.7133)).toBe(true)
+  })
+
+  test('lays a way tagged placement=right_of:2 along its right kerb', async () => {
+    expect(await covered(east(-74.012, -5), 40.7125)).toBe(true)
+    expect(await covered(east(-74.012, 1), 40.7125)).toBe(false)
+  })
+
+  test('carries a bike lane across a junction to the lane beyond it', async () => {
+    // Eastbound, the lane centre is 3.8 m right of the way.
+    const [{ fill, edges }] = await sql`
+      SELECT count(*) FILTER (WHERE kind = 'bike_lane')::int as fill,
+             count(*) FILTER (WHERE kind = 'bike' AND pattern = 'dashed')::int as edges
+      FROM road_markings
+      WHERE ST_DWithin(geom::geography, ST_SetSRID(ST_MakePoint(-74.007, 40.7145 - 3.8 / 111000), 4326)::geography, 3)`
+    expect(fill).toBeGreaterThan(0)
+    expect(edges).toBeGreaterThan(0)
+  })
+
+  test('runs crosswalk bars with the traffic on the road they cross', async () => {
+    const bars = await sql`
+      SELECT (ST_XMax(b.geom) - ST_XMin(b.geom)) * 84300 as dx, (ST_YMax(b.geom) - ST_YMin(b.geom)) * 111000 as dy
+      FROM road_markings m, ST_Dump(m.geom) b
+      WHERE m.kind = 'crosswalk' AND ST_DWithin(m.geom::geography, ST_SetSRID(ST_MakePoint(-74.0005, ${STREET_Y}), 4326)::geography, 8)`
+    expect(bars.length).toBeGreaterThan(3)
+    // The street runs east-west and the crossing is drawn askew across it.
+    for (const b of bars) expect(b.dx).toBeGreaterThan(2 * b.dy)
   })
 
   test('keeps lane lines out of the crossing carriageway', async () => {
