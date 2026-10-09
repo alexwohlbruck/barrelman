@@ -10,6 +10,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.10.8] - 2026-10-09
+
 ### Added
 
 * **Bridge decks stay current with OSM.** OSM Update now rebuilds the decks
