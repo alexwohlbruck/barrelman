@@ -28,7 +28,9 @@
  *
  * The model frame is ours (X east, Y up, Z south, metres, ground at Y=0,
  * WGS84 anchor) with the heading already baked in, so a placement is the
- * anchor with bearing 0 and scale 1.
+ * anchor with bearing 0 and scale 1, plus an elevation. Elevation is the one
+ * part of a placement a release sends beside the model instead of baking it
+ * (see `LandmarkAsset.elevation`).
  *
  * Licensing travels with each model: the artistic licence of the model, and
  * ODbL for the OSM-derived placement, credited through the per-model
@@ -54,6 +56,12 @@ const SLUG_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/
 const SHA_RE = /^[0-9a-f]{64}$/
 const WIKIDATA_RE = /^Q\d+$/
 const OSM_TYPES = new Set(['node', 'way', 'relation'])
+/**
+ * The most a placement may be raised or sunk, in metres; the landmarks repo
+ * refuses more. Larger means a broken record, which is skipped rather than
+ * drawn hundreds of metres off the ground.
+ */
+export const MAX_LANDMARK_ELEVATION_M = 200
 
 export type LandmarkSource = {
   /** Written to the `origin` column and sent as the tile feature's `source`. */
@@ -142,6 +150,14 @@ export type LandmarkAsset = {
   entranceLights?: number[][]
   /** Not in Open Landmarks' schema; the Barrelman dataset sends it. */
   wikidata?: string
+  /**
+   * Not in Open Landmarks' schema; the Barrelman dataset sends it where it
+   * isn't 0. Metres the model is raised (positive) or sunk (negative) from
+   * where a client grounds it on its terrain. Not baked into the geometry:
+   * a client grounds a model by its lowest vertices, which would pull a
+   * baked lift back down. Absent means 0.
+   */
+  elevation?: number
   attribution?: string
   authors?: string[]
   artisticLicense?: string
@@ -155,6 +171,8 @@ export type LandmarkRow = {
   name: string
   lng: number
   lat: number
+  /** Metres; see `LandmarkAsset.elevation`. */
+  elevation: number
   minZoom: number
   detailZoom: number | null
   replaces: string[]
@@ -182,6 +200,9 @@ export function landmarkRow(source: LandmarkSource, asset: LandmarkAsset): Landm
   if (asset.heading !== 0) return { skip: `${id}: heading ${asset.heading} is not baked` }
   const [lng, lat] = asset.anchor ?? []
   if (!(Math.abs(lng) <= 180 && Math.abs(lat) <= 85)) return { skip: `${id}: anchor out of range` }
+  const elevation = asset.elevation ?? 0
+  if (!(typeof elevation === 'number' && Math.abs(elevation) <= MAX_LANDMARK_ELEVATION_M))
+    return { skip: `${id}: elevation ${JSON.stringify(asset.elevation)} is not within ±${MAX_LANDMARK_ELEVATION_M} m` }
   const lodOk = (lod?: Lod) => !!lod && SHA_RE.test(lod.sha256) && lod.url?.startsWith('/') && lod.bytes > 0
   if (!lodOk(asset.lods?.low)) return { skip: `${id}: no usable low LOD` }
   const detail = lodOk(asset.lods.detail) ? asset.lods.detail! : null
@@ -199,6 +220,7 @@ export function landmarkRow(source: LandmarkSource, asset: LandmarkAsset): Landm
     name: asset.name || id,
     lng,
     lat,
+    elevation,
     minZoom: asset.minZoom ?? 15,
     detailZoom: detail ? (asset.detailZoom ?? 17) : null,
     replaces,
@@ -401,20 +423,21 @@ async function importSource(source: LandmarkSource, { force, full, log }: Mode):
       // The reach covers whichever LOD is larger, so a tile carries the
       // landmark wherever either could be drawn.
       const radius = Math.max(models.get(r.low.modelId)!.radius, r.detail ? models.get(r.detail.modelId)!.radius : 0)
-      // Bearing, scale and elevation are reset, not left alone: a row taken
-      // over from the bundled catalog had its own, and here they are baked in.
+      // Bearing and scale are reset, not left alone: a row taken over from the
+      // bundled catalog had its own, and here they are baked in. Elevation is
+      // the release's own, 0 when it sends none.
       await tx`
         INSERT INTO landmarks (id, name, model_id, detail_model_id, detail_zoom, geom, reach, bearing, scale, elevation,
                                min_zoom, replaces, wikidata, entrances, source_id, origin)
         SELECT ${r.id}, ${r.name}, ${r.low.modelId}, ${r.detail?.modelId ?? null}, ${r.detailZoom}, p.geom,
                ST_Expand(ST_Transform(p.geom, 3857), ${radius} / cos(radians(${r.lat}))),
-               0, 1, 0, ${r.minZoom}, ${r.replaces}, ${r.wikidata}, ${r.entrances ? JSON.stringify(r.entrances) : null}::jsonb,
+               0, 1, ${r.elevation}, ${r.minZoom}, ${r.replaces}, ${r.wikidata}, ${r.entrances ? JSON.stringify(r.entrances) : null}::jsonb,
                ${r.sourceId}, ${source.id}
         FROM (SELECT ST_SetSRID(ST_MakePoint(${r.lng}, ${r.lat}), 4326) AS geom) p
         ON CONFLICT (id) DO UPDATE SET
           name = EXCLUDED.name, model_id = EXCLUDED.model_id, detail_model_id = EXCLUDED.detail_model_id,
           detail_zoom = EXCLUDED.detail_zoom, geom = EXCLUDED.geom, reach = EXCLUDED.reach,
-          bearing = 0, scale = 1, elevation = 0, min_zoom = EXCLUDED.min_zoom, replaces = EXCLUDED.replaces,
+          bearing = 0, scale = 1, elevation = EXCLUDED.elevation, min_zoom = EXCLUDED.min_zoom, replaces = EXCLUDED.replaces,
           wikidata = EXCLUDED.wikidata, entrances = EXCLUDED.entrances, source_id = EXCLUDED.source_id,
           origin = EXCLUDED.origin, updated_at = now()`
     }
