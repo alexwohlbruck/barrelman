@@ -28,8 +28,9 @@ does it — and the release pipeline turns it into the GitHub Release notes.
   bike lines, green bike and red bus lanes, stop lines, kerb-to-kerb
   crosswalks, and turn arrows and bike symbols, with lanes easing across where
   their count changes. Widths count parking lanes, medians between divided
-  carriageways stay unpaved, and stop lines stand only where signals or stop
-  signs control the approach.
+  carriageways stay unpaved, bridges end square at their abutments, and stop
+  lines stand only where signals or stop signs control the approach. All paint
+  is cut to the kerb.
 
 ### Added
 

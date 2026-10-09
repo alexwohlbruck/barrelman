@@ -359,6 +359,14 @@ FROM (
 CREATE INDEX ON _rm_incid (x, y);
 ANALYZE _rm_incid;
 
+-- A road ending against a bridge, or a bridge itself, ends square at the
+-- abutment rather than rounding out under or over the other.
+ALTER TABLE _rm_roads ADD COLUMN cap text NOT NULL DEFAULT 'endcap=round join=round quad_segs=4';
+UPDATE _rm_roads r SET cap = 'endcap=flat join=round quad_segs=4'
+WHERE r.bridge OR EXISTS (
+  SELECT 1 FROM _rm_incid a JOIN _rm_incid b ON b.x = a.x AND b.y = a.y AND b.bridge <> a.bridge
+  WHERE a.osm_id = r.osm_id AND a.is_end);
+
 DROP TABLE IF EXISTS _rm_vertices;
 CREATE TEMP TABLE _rm_vertices AS
 SELECT x, y, (array_agg(p))[1] as p, max(width) as width, max(s) as s,
@@ -452,7 +460,7 @@ FROM (
   SELECT i.bridge, v.p, v.s, (v.width * 0.75 + 10) * v.s as reach,
          COALESCE(ST_Intersection(r.body, ST_Expand(v.p, (v.width + 10 + r.width) * v.s)),
                   ST_Buffer(ST_Intersection(r.g, ST_Expand(v.p, (v.width + 10 + r.width) * v.s)), r.width / 2 * r.s,
-                            'endcap=round join=round quad_segs=4')) as piece
+                            r.cap)) as piece
   FROM _rm_vertices v
   JOIN _rm_incid i ON i.x = v.x AND i.y = v.y
   JOIN _rm_roads r ON r.osm_id = i.osm_id
@@ -473,7 +481,7 @@ boxes AS (
 pieces AS (
   SELECT b.cx, b.cy, b.box, r.bridge,
          COALESCE(ST_Intersection(r.body, ST_Expand(b.box, 60)),
-                  ST_Buffer(ST_Intersection(r.g, ST_Expand(b.box, 60)), r.width / 2 * r.s, 'endcap=round join=round quad_segs=4')) as g
+                  ST_Buffer(ST_Intersection(r.g, ST_Expand(b.box, 60)), r.width / 2 * r.s, r.cap)) as g
   FROM boxes b JOIN _rm_roads r ON r.g && ST_Expand(b.box, 60)
   UNION ALL
   SELECT b.cx, b.cy, b.box, f.bridge, f.g
@@ -488,6 +496,7 @@ CREATE INDEX ON _rm_surfaces USING gist (g);
 DROP TABLE IF EXISTS road_surfaces_next;
 CREATE TABLE road_surfaces_next (fid bigserial CONSTRAINT road_surfaces_next_pk PRIMARY KEY, bridge boolean, geom geometry(MultiPolygon, 4326));
 INSERT INTO road_surfaces_next (bridge, geom) SELECT bridge, ST_Multi(ST_Transform(g, 4326)) FROM _rm_surfaces;
+CREATE INDEX road_surfaces_next_geom_idx ON road_surfaces_next USING gist (geom);
 
 -- What lane lines break for besides crossing roads: the crosswalks over them,
 -- unioned once per grid cell rather than once per line.
@@ -663,9 +672,9 @@ WHERE f.back < ST_Length(e.g) / 2;
 -- lanes; at its start the backward ones, and the frame there faces the other
 -- way, so the way's offsets flip sign.
 INSERT INTO road_markings_next (kind, pattern, color, bridge, geom)
-SELECT 'stop', 'solid', 'white', bridge, ST_Transform(ST_SetSRID(ST_MakeLine(
+SELECT 'stop', 'fill', 'white', bridge, ST_Transform(ST_Buffer(ST_SetSRID(ST_MakeLine(
          ST_MakePoint(ST_X(p) - uy * a * s, ST_Y(p) + ux * a * s),
-         ST_MakePoint(ST_X(p) - uy * b * s, ST_Y(p) + ux * b * s)), 3857), 4326)
+         ST_MakePoint(ST_X(p) - uy * b * s, ST_Y(p) + ux * b * s)), 3857), 0.225 * s, 'endcap=flat'), 4326)
 FROM _rm_frames
 CROSS JOIN LATERAL (SELECT
   CASE WHEN at_end THEN split_f ELSE -split_b END as a,
@@ -735,22 +744,17 @@ WHERE side.present AND d IS NOT NULL;
 -- ─── Crosswalks ──────────────────────────────────────────────────────────────
 -- A mapped crossing way, trimmed to the kerbs it runs between; or, for a
 -- crossing mapped only as a node, a line straight across the road there.
-
-
-INSERT INTO road_markings_next (kind, pattern, color, style, bridge, geom)
-SELECT 'crosswalk', 'solid', 'white', c.style, false, ST_Transform(seg, 4326)
+-- Painted as bars: zebra stripes 0.6 m wide at 1.2 m, two edge lines, or both.
+DROP TABLE IF EXISTS _rm_walks;
+CREATE TEMP TABLE _rm_walks AS
+SELECT c.style, c.s, (ST_Dump(ST_LineMerge(ST_CollectionExtract(ST_Intersection(s.g, c.g), 2)))).geom as seg
 FROM _rm_crossings c
-CROSS JOIN LATERAL (
-  SELECT ST_Intersection(s.g, c.g) as seg
-  FROM _rm_surfaces s
-  WHERE c.geom_type = 'line' AND s.g && c.g
-) x
-WHERE c.geom_type = 'line' AND GeometryType(seg) IN ('LINESTRING', 'MULTILINESTRING') AND ST_Length(seg) > 1;
-
-INSERT INTO road_markings_next (kind, pattern, color, style, bridge, geom)
-SELECT 'crosswalk', 'solid', 'white', c.style, false, ST_Transform(ST_SetSRID(ST_MakeLine(
+JOIN _rm_surfaces s ON s.g && c.g AND NOT s.bridge
+WHERE c.geom_type = 'line'
+UNION ALL
+SELECT c.style, c.s, ST_SetSRID(ST_MakeLine(
          ST_MakePoint(ST_X(c.g) - uy * r.width / 2 * r.s, ST_Y(c.g) + ux * r.width / 2 * r.s),
-         ST_MakePoint(ST_X(c.g) + uy * r.width / 2 * r.s, ST_Y(c.g) - ux * r.width / 2 * r.s)), 3857), 4326)
+         ST_MakePoint(ST_X(c.g) + uy * r.width / 2 * r.s, ST_Y(c.g) - ux * r.width / 2 * r.s)), 3857)
 FROM _rm_crossings c
 CROSS JOIN LATERAL (
   SELECT r.* FROM _rm_roads r WHERE r.g && ST_Expand(c.g, 2) ORDER BY r.g <-> c.g LIMIT 1
@@ -763,9 +767,43 @@ CROSS JOIN LATERAL (SELECT (ST_X(b) - ST_X(a)) / nullif(ST_Distance(a, b), 0) as
 WHERE c.geom_type = 'point' AND ux IS NOT NULL
   AND ST_DWithin(r.g, c.g, 1 * r.s)
   AND NOT EXISTS (SELECT 1 FROM _rm_crossings w WHERE w.geom_type = 'line' AND ST_DWithin(w.g, c.g, 1 * r.s));
+DELETE FROM _rm_walks WHERE GeometryType(seg) <> 'LINESTRING' OR ST_Length(seg) < 1 * s;
+
+INSERT INTO road_markings_next (kind, pattern, color, style, bridge, geom)
+SELECT 'crosswalk', 'fill', 'white', w.style, false, ST_Transform(ST_Multi(ST_Union(bar)), 4326)
+FROM _rm_walks w
+CROSS JOIN LATERAL (SELECT ST_Length(w.seg) / w.s as len) l
+CROSS JOIN LATERAL (
+  SELECT ST_Buffer(ST_LineSubstring(w.seg, a / l.len, least(1, (a + 0.6) / l.len)), 1.5 * w.s, 'endcap=flat') as bar
+  FROM generate_series(0, greatest(floor((l.len - 0.6) / 1.2)::int, 0)) k,
+       LATERAL (SELECT (l.len - (floor((l.len - 0.6) / 1.2) * 1.2 + 0.6)) / 2 + k * 1.2 as a) o
+  WHERE w.style IN ('zebra', 'ladder')
+  UNION ALL
+  SELECT ST_Buffer(road_offset(w.seg, side * 1.5 * w.s), 0.15 * w.s, 'endcap=flat')
+  FROM (VALUES (1), (-1)) v(side)
+  WHERE w.style IN ('lines', 'ladder')
+) b
+GROUP BY w.style, w.seg;
+
+-- ─── Paint stays on the road ─────────────────────────────────────────────────
+-- Everything painted is cut to the carriageway it lies on, so a bar, a line or
+-- a symbol never runs past a kerb.
+UPDATE road_markings_next m SET geom = COALESCE(ST_CollectionExtract(clip.g, CASE WHEN m.pattern = 'fill' THEN 3 ELSE 2 END),
+                                                 'GEOMETRYCOLLECTION EMPTY'::geometry)
+FROM (
+  SELECT m2.fid, ST_Intersection(m2.geom, ST_Union(s.geom)) as g
+  FROM road_markings_next m2
+  JOIN road_surfaces_next s ON s.geom && m2.geom AND (s.bridge = m2.bridge OR m2.kind = 'crosswalk')
+  GROUP BY m2.fid, m2.geom
+) clip
+WHERE m.fid = clip.fid;
+DELETE FROM road_markings_next m
+WHERE ST_IsEmpty(geom)
+   OR NOT EXISTS (SELECT 1 FROM road_surfaces_next s WHERE s.geom && m.geom AND (s.bridge = m.bridge OR m.kind = 'crosswalk'));
+DELETE FROM road_glyphs_next g
+WHERE NOT EXISTS (SELECT 1 FROM road_surfaces_next s WHERE s.bridge = g.bridge AND ST_Intersects(s.geom, g.geom));
 
 -- ─── Swap ────────────────────────────────────────────────────────────────────
-CREATE INDEX road_surfaces_next_geom_idx ON road_surfaces_next USING gist (geom);
 CREATE INDEX road_markings_next_geom_idx ON road_markings_next USING gist (geom);
 CREATE INDEX road_glyphs_next_geom_idx ON road_glyphs_next USING gist (geom);
 BEGIN;
