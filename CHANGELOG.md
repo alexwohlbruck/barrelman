@@ -10,13 +10,97 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Added
+
+* **Sport pitches.** A new `sport_pitches` layer, in the `detail` bundle,
+  carries every pitch's surface plus regulation markings for tennis,
+  pickleball, basketball, volleyball, beach volleyball, soccer and American
+  football. Markings are fitted to each pitch, with a block of courts repeated
+  across it and half courts recognised. The nets, hoops and goals on them come
+  as oriented points. It is a stored view, refreshed after every import and OSM
+  update.
+* **Fences, walls, hedges, power lines and catenary.** A new `object_lines`
+  layer, in the `detail` bundle, carries the barriers, power lines and
+  electrified track a client stands up as 3D objects, with any tagged height.
+* **Road surfaces and markings.** A "Build Road Markings" console task
+  produces `road_surfaces`, `road_markings` and `road_glyphs` in the `detail`
+  bundle: true-width carriageways with rounded kerbs, centre, lane, edge and
+  bike lines, green bike and red bus lanes, stop lines, kerb-to-kerb
+  crosswalks, and turn arrows and bike symbols, with lanes easing across where
+  their count changes. Widths count parking lanes, medians between divided
+  carriageways stay unpaved, bridges end square at their abutments, and stop
+  lines stand only where signals or stop signs control the approach. All paint
+  is cut to the kerb.
+* **Solar arrays, flower beds, scrub, shrubbery and shrubs.** A new `object_areas` layer
+  in the `detail` bundle carries the areas and points a client plants with
+  3D objects.
+
 ### Changed
 
 * **Fountains in water.** `street_furniture` marks a fountain standing in a
-  pond or lake, or tagged `fountain=nozzle`, as `fountain_jet`, so a client can
-  draw a plume rather than a basin. Drinking fountains mapped as
-  `amenity=fountain` come through as `drinking_water`. The view rebuilds itself
-  on the next startup.
+  pond, lake, reservoir or lagoon, or tagged `fountain=nozzle`, as
+  `fountain_jet`, so a client can draw a plume rather than a basin. Drinking
+  fountains mapped as `amenity=fountain` come through as `drinking_water`. The
+  view rebuilds itself on the next startup.
+
+## [0.10.3] - 2026-10-08
+
+### Added
+
+* **Place search understands a state after the name.** "charlotte nc",
+  "charlotte, north carolina" and "springfield missouri" return that place
+  wherever the map is, and the state can be misspelled ("charlotte nohth
+  caorinlna") or abbreviated. The name can carry a typo too ("charlote nc"),
+  and an airport code stands for its city ("clt nc").
+
+### Fixed
+
+* **"New York" from inside New York City returns the city first.** Population
+  stretched a state's reach so far that New York State outranked the city of
+  the same name. Population now widens the reach of cities and towns only.
+
+## [0.10.2] - 2026-10-08
+
+### Fixed
+
+* **Typeahead search no longer takes seconds.** On the 218M-row US instance,
+  one typeahead search in four took over a second, and one in ten waited out
+  the 10s statement timeout. The 90th percentile is now under 200ms and the
+  slowest measured search 0.8s. The causes were:
+  - The typeahead retry for a place outside the viewport ran the fuzzy
+    trigram scan with no time limit ("ocean isle beach" typed from New York).
+    It no longer runs in typeahead. Misspelled place names are matched
+    against a small trigram index of places instead.
+  - A word found everywhere near the viewport ("new york" in Manhattan,
+    "coffee") made the text search sort hundreds of thousands of rows. It now
+    checks the nearest 2,000 rows first and only uses the index when that
+    finds too little.
+  - Words common nationwide ("texas", "street", a one- or two-letter last
+    word) no longer reach the index in typeahead. Barrelman reads how common
+    each word is from Postgres's own column statistics.
+  - The place-name layer compared every candidate with every other to merge
+    duplicates. "park" took 5.4s and now takes 0.2s.
+  - Bounded layers now run under their own statement timeout, so a slow query
+    is cancelled in Postgres instead of holding a connection for 10s.
+  - A slow Pelias answer for a typed name is cut off after 400ms. Addresses,
+    streets and postal codes keep the full wait.
+  - A submitted search no longer waits for text search and then the full
+    trigram budget on top. Both share one 2.5s budget.
+
+  The place-name layer builds one more small partial index in the background
+  on startup, `geo_places_locality_name_trgm_idx`.
+
+* **Searching a city finds the city.** Population now extends how far away a
+  city is still offered, so "austin" finds Austin, Texas from anywhere, not
+  Austin, Arkansas. A city of at least 50,000 people named exactly what was
+  typed is returned even from across the country ("boulder" from Charlotte).
+  A shop whose `ref` is its branch name (a Whole Foods tagged
+  `branch=Asheville`) is no longer pinned above the city as if it were an
+  airport code. Transit routes that only mention the place in a long or
+  agency name ("Raleigh - Asheville") now rank with the other text matches
+  instead of above them.
+
+## [0.10.1] - 2026-10-08
 
 ### Added
 
@@ -37,6 +121,33 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 ### Changed
 
 * Street trees and tree rows are served from zoom 14, so maps can draw them before zooming all the way in.
+
+### Fixed
+
+* **Bikeshare systems that publish GBFS 3.0 now have stations.** Version 3
+  sends station names as a list of translations rather than a string, and the
+  importer failed on the first one and recorded the system with no stations
+  while still reporting it as imported. Ten US systems were affected, including
+  Pittsburgh's POGOH, Honolulu's Biki, Detroit's MoGo, Austin's CapMetro Bike
+  Share and Tucson's Tugo. Re-run *GBFS Import* to load them. An importer error
+  on a system's stations is now printed instead of swallowed.
+* **Live availability reads GBFS 3.0 correctly.** It looked for v2 field names,
+  so a v3 station would have shown no bikes, and a v3 timestamp failed to
+  parse. E-bikes and scooters are now told apart by the system's declared
+  vehicle types, which also fixes free-floating scooters being labelled as
+  bikes.
+* **`/gbfs/systems` finds a system when any of its stations is in view.** It
+  matched only the system's first station, so a viewport over Midtown
+  Manhattan returned no Citi Bike. Its `vehicleTypes` are now returned in the
+  camelCase shape the rest of the API uses.
+
+* **Landmark models from a command-line import are served without restarting
+  the API.** `bun run landmarks:import` runs in its own process, so the API
+  kept its old list of model files and answered 404 for every new model until
+  `docker restart barrelman`. A request for a model the API does not know now
+  reloads the list from the database first, at most once every 10 seconds. A
+  404 for a model is also sent with `Cache-Control: no-store`, so a CDN in
+  front of the API no longer keeps serving the miss after the model appears.
 
 ## [0.10.0] - 2026-10-08
 

@@ -59,3 +59,25 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS geo_places_furniture_centroid_idx
 CREATE INDEX CONCURRENTLY IF NOT EXISTS geo_places_highway_lines_geom_idx
   ON geo_places USING gist (geom)
   WHERE geom_type = 'line' AND tags ? 'highway';
+
+CREATE INDEX CONCURRENTLY IF NOT EXISTS geo_places_pitches_geom_idx
+  ON geo_places USING gist (geom)
+  WHERE geom_type = 'area' AND tags->>'leisure' = 'pitch';
+
+CREATE INDEX CONCURRENTLY IF NOT EXISTS geo_places_object_lines_geom_idx
+  ON geo_places USING gist (geom)
+  WHERE geom_type IN ('line', 'area')
+    AND (tags->>'barrier' IN ('fence', 'wall', 'retaining_wall', 'hedge', 'guard_rail', 'city_wall')
+         OR (geom_type = 'line' AND tags->>'power' IN ('line', 'minor_line'))
+         OR (geom_type = 'line' AND tags->>'electrified' = 'contact_line'
+             AND tags->>'railway' IN ('rail', 'light_rail', 'tram', 'narrow_gauge', 'subway')
+             AND COALESCE(tags->>'tunnel', 'no') = 'no'));
+
+CREATE INDEX CONCURRENTLY IF NOT EXISTS geo_places_object_areas_geom_idx
+  ON geo_places USING gist (geom)
+  WHERE ((geom_type = 'area'
+          AND ((tags->>'power' = 'generator' AND tags->>'generator:source' = 'solar')
+               OR (tags->>'power' = 'plant' AND tags->>'plant:source' = 'solar')
+               OR tags->>'landuse' = 'flowerbed'
+               OR tags->>'natural' IN ('scrub', 'shrubbery')))
+         OR (geom_type = 'point' AND tags->>'natural' = 'shrub'));

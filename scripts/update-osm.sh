@@ -89,6 +89,7 @@ refresh_views() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] 3D buildings refresh disabled (REFRESH_BUILDINGS_3D=0) — skipping."
   fi
   "$SCRIPT_DIR/refresh-view.sh" street_furniture
+  "$SCRIPT_DIR/refresh-view.sh" sport_pitches
 }
 
 # Rebuild what reads region.osm.pbf, if the update moved it. Takes the extract's

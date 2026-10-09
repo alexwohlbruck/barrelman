@@ -115,5 +115,6 @@ export const INTERNAL_HANDLERS: Record<string, (log: LogFn) => Promise<void>> = 
   'sql:create-detail-views.sql': (log) => runSqlFile(log, 'create-detail-views.sql'),
   'sql:create-detail-indexes.sql': (log) => runSqlStatements(log, 'create-detail-indexes.sql'),
   'sql:generate-intersections.sql': (log) => runSqlFile(log, 'generate-intersections.sql'),
+  'sql:generate-road-markings.sql': (log) => runSqlFile(log, 'generate-road-markings.sql'),
   'sql:backfill-power-outlets.sql': (log) => runSqlFile(log, 'backfill-power-outlets.sql'),
 }

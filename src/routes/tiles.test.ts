@@ -225,7 +225,7 @@ describe('tile bundles', () => {
 
     expect(res.status).toBe(200)
     expect(mockFetch.mock.calls[0][0]).toBe(
-      'http://mock-martin:3000/buildings_3d,parking_areas,bicycle_ways,street_trees,tree_rows,coaster_tracks/14/4825/6156',
+      'http://mock-martin:3000/buildings_3d,parking_areas,bicycle_ways,street_trees,tree_rows,coaster_tracks,sport_pitches,object_lines,road_surfaces,road_markings,road_glyphs,object_areas/14/4825/6156',
     )
   })
 
