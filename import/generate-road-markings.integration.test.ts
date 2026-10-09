@@ -26,6 +26,8 @@ const ways: [number, string, Record<string, string>][] = [
   [5, line([-74.001, STREET_Y], [SB_X, STREET_Y]), { highway: 'residential', lanes: '2', 'cycleway:right': 'lane' }],
   [6, line([SB_X, STREET_Y], [NB_X, STREET_Y]), { highway: 'residential', lanes: '2' }],
   [7, line([NB_X, STREET_Y], [-73.999, STREET_Y]), { highway: 'residential', lanes: '2' }],
+  // A crossing drawn well past both kerbs, and askew to the street.
+  [9, line([-74.0006, 40.70985], [-74.0004, 40.71015]), { highway: 'footway', footway: 'crossing', 'crossing:markings': 'zebra' }],
 ]
 
 const run = DATABASE_URL ? describe : describe.skip
@@ -92,6 +94,15 @@ run('generate-road-markings.sql', () => {
   test('paints the bike lane green', async () => {
     const [{ n }] = await sql`SELECT count(*)::int as n FROM road_markings WHERE kind = 'bike_lane' AND color = 'green'`
     expect(n).toBeGreaterThan(0)
+  })
+
+  test('keeps every crosswalk bar and stop line on the carriageway', async () => {
+    const [{ n, outside }] = await sql`
+      SELECT count(*)::int as n,
+             COALESCE(max(ST_Area(ST_Difference(m.geom, (SELECT ST_Union(geom) FROM road_surfaces))::geography)), 0) as outside
+      FROM road_markings m WHERE m.kind IN ('crosswalk', 'stop')`
+    expect(n).toBeGreaterThan(1)
+    expect(outside).toBeLessThan(0.01)
   })
 
   test('keeps lane lines out of the crossing carriageway', async () => {
