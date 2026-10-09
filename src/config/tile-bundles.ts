@@ -43,6 +43,7 @@ export const TILE_BUNDLES: Record<string, readonly string[]> = {
     'road_markings',
     'road_glyphs',
     'object_areas',
+    'woods',
   ],
 }
 
