@@ -410,7 +410,7 @@ for, so a client drawing them has nowhere else to get them:
 | `road_surfaces` | polygon | 16 | Carriageways at their real width (from `width`, else `lanes` at a lane width per class), with kerb corners rounded where roads meet. `bridge` marks the ones above ground |
 | `road_markings` | line | 16 | Paint: `kind` is `centre`, `lane`, `edge`, `bike`, `stop` or `crosswalk`; `pattern` is `solid`, `dashed` or `double`; `color` is `white` or `yellow` (yellow centre lines in the Americas); a crosswalk's `style` is `zebra`, `lines` or `ladder` |
 | `road_glyphs` | point | 16 | Turn arrows from `turn:lanes`, bike symbols on bike lanes and sharrows on shared lanes: `glyph` names the sprite icon and `direction` the bearing it reads along |
-| `bridge_decks` | line | 14–16 | One line per bridge deck, whole in every tile it crosses: `id` (`way/<lowest way id>`, stable while that way exists), `kind` (`road`, `rail` or `path`), `layer`, the `man_made=bridge` `outline` it was fitted to, `left_edge` and `right_edge` in metres from the centreline, whether each end lands on the ground (`start_grounded`, `end_grounded`), and `heights` and `ground` every `step` metres along its `length`, as decimetres above EGM96 joined by commas |
+| `bridge_decks` | line | 14–16 | One line per bridge deck, whole in every tile it crosses: `id` (the deck, by where it lies and which way it runs), `bridge` (its `man_made=bridge` outline, its wikidata item, or where it lies), `kind` (`road`, `rail` or `path`), `layer`, `left_edge` and `right_edge` in metres from the centreline, whether each end lands on the ground (`start_grounded`, `end_grounded`), `heights` and `ground` every `step` metres along its `length`, and `piers` as distances along it, all in decimetres joined by commas. Heights are metres above sea level as Mapterhorn gives them |
 | `object_areas` | polygon or point | 14–16 | Areas and points a client plants with objects: ground-mounted solar arrays and farms (`solar`), `flowerbed`, `scrub`, planted `shrubbery` (with its `shrubbery:shape` as `shape`), and single mapped `shrub`s. Rooftop solar is left out |
 | `woods` | polygon | 14–16 | Woods and forests tagged with `leaf_type` (or the legacy `wood=*`) or a genus, carrying a normalised `leaf_type` and `genus`. The feature id is the basemap landcover feature's own (OSM id × 10, plus 2 for a way and 3 for a relation), so a client looks up what a basemap wood holds by id |
 
@@ -482,21 +482,29 @@ the road's speed rather than jumping at the join. It is not part of OSM Update
 yet: it takes minutes for a city and about a day for the whole US.
 
 `bridge_decks` is a table built by the "Build Bridge Decks" console task
-(`import/generate-bridge-decks.ts`). It joins bridge ways that share an end into
-one line per deck, fits road decks to their `man_made=bridge` outline (else to
-`road_surfaces`) and folds sidewalks mapped beside them in. Each end that meets a
-road or railway on the ground lands on it; one that meets another deck rests on
-that deck. Between, the deck clears the ground by 6 m per `layer`, climbs no
-steeper than 6 %, and eases into a vertical curve; side-by-side decks at about
-one height share it, while stacked decks keep their own. An `ele` mapped on the
-bridge or one of its nodes is held to. The ground is Mapterhorn terrain at
-zoom 15, read as MapLibre reads it, and everything is moved from the source's
-datum (NAVD88 in the US, EGM2008 elsewhere) onto EGM96, the datum of OSM's
-`ele`, so a client can line a deck up with whichever terrain it draws by
-comparing `ground` with its own. A run fetches about one 90 KB terrain tile per
-1.5 km² that has bridges; set `BRIDGE_DECKS_DEM_TILES` to read them from a
-mirror. It rebuilds by cell, in place, so it can be scoped with `--bbox` and
-stopped and resumed. It is not part of OSM Update yet.
+(`import/generate-bridge-decks.ts`), entirely by rule from OSM and the terrain,
+so it can be rebuilt whenever the map changes. It joins bridge ways that share
+an end into one line per roadway (only ways of one kind and `layer`, so stacked
+decks stay apart; where three meet, the straightest pair carries on), fits road
+decks to their `man_made=bridge` outline (else to `road_surfaces`) and folds
+sidewalks mapped beside them in. Each end that meets a road or railway on the
+ground lands on it; one that meets another deck rests on that deck. Between,
+the deck runs straight from end to end and rises over what it crosses — roads,
+railways, paths, waterways, water and lower decks, each with its own clearance
+— climbing no steeper than 6 % and eased into a vertical curve. Decks side by
+side at about one height share it, stacked decks keep their own, and piers
+stand every 30 m where a deck is 4 m up, in one row under twin carriageways.
+
+Ways are split and renumbered constantly, so a deck's `id` is where it lies
+and which way it runs, and its `bridge` the outline or wikidata item it
+belongs to, falling back to where it lies. The ground is Mapterhorn terrain at
+zoom 15, read as MapLibre reads it, in the terrain's own datum (NAVD88 in the
+US, EGM2008 elsewhere), so a deck lines up with the same terrain drawn; a
+client drawing other terrain can line a deck up by comparing `ground` with its
+own. A run fetches about one 90 KB terrain tile per 1.5 km² that has bridges;
+set `BRIDGE_DECKS_DEM_TILES` to read them from a mirror. It rebuilds by cell,
+in place, so it can be scoped with `--bbox` and stopped and resumed. It is not
+part of OSM Update yet.
 
 `buildings_3d`, `street_furniture` and `sport_pitches` are not plain views. OpenStreetMap maps a detailed
 building twice — an outline tagged `building=*` and `building:part=*` polygons

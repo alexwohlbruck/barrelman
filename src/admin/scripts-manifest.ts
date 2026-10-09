@@ -887,7 +887,7 @@ export const SCRIPTS: ScriptDef[] = [
     id: 'osm-bridge-decks',
     name: 'Build Bridge Decks',
     description:
-      'Rebuild bridge_decks: bridge ways joined into decks, fitted to their man_made=bridge outlines, with a height every 5 m from Mapterhorn terrain, in metres above EGM96. Parchment draws 3D bridges from these.',
+      'Rebuild bridge_decks: bridge ways joined into decks, fitted to their man_made=bridge outlines, with a height every 6 m solved from Mapterhorn terrain and what each passes over, and pier positions. Parchment draws 3D bridges from these.',
     category: 'osm',
     danger: 'safe',
     longRunning: true,
@@ -900,7 +900,7 @@ export const SCRIPTS: ScriptDef[] = [
     ],
     source: 'import/generate-bridge-decks.ts',
     notes:
-      'Rebuilds the decks anchored in each cell in place, so tiles keep serving meanwhile and a run can be stopped and resumed. Fetches Mapterhorn terrain tiles (about 90 KB each, one per 1.5 km² that has bridges) from tiles.mapterhorn.com unless BRIDGE_DECKS_DEM_TILES points elsewhere. Downtown Charlotte, 173 decks, took 5 s. Not part of OSM Update yet. Restart Martin afterwards on an instance that caches tiles.',
+      'Rebuilds the decks anchored in each cell in place, so tiles keep serving meanwhile and a run can be stopped and resumed. Fetches Mapterhorn terrain tiles (about 90 KB each, one per 1.5 km² that has bridges) from tiles.mapterhorn.com unless BRIDGE_DECKS_DEM_TILES points elsewhere. Downtown Charlotte, 166 decks, took 7 s; the whole US is estimated at 4–10 hours. Not part of OSM Update yet. Restart Martin afterwards on an instance that caches tiles.',
   },
   {
     id: 'search-intersections',
