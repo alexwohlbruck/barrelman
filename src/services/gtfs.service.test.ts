@@ -28,6 +28,7 @@ import {
   FLEX_EXTENSION_FILES,
 } from './gtfs.service'
 import JSZip from 'jszip'
+import { type FetchFn } from './transit.service'
 
 // ── parseStops ──────────────────────────────────────────────────────
 
@@ -512,6 +513,20 @@ describe('fetchFeedList', () => {
     expect(feeds[0].onestopId).toBe('f-dnh-cats')
     expect(feeds[0].name).toBe('CATS')
     expect(feeds[0].url).toBe('https://example.com/cats.zip')
+  })
+
+  test('queries every box of a multi-box region', async () => {
+    const urls: string[] = []
+    const fetchFn = (async (url: string) => {
+      urls.push(String(url))
+      return new Response(JSON.stringify({ feeds: [] }))
+    }) as unknown as FetchFn
+
+    await fetchFeedList('-125,24,-66,50;-161,18.5,-154,22.5', 'test-key', fetchFn)
+
+    const boxes = urls.map((u) => new URL(u).searchParams.get('bbox'))
+    expect(boxes).toContain('-161,18.5,-154,22.5') // Hawaii, small enough for one call
+    expect(boxes.length).toBeGreaterThan(2) // the lower 48 is tiled
   })
 
   test('skips feeds without download URL', async () => {
@@ -1204,6 +1219,22 @@ describe('resolveGtfsBbox', () => {
 
   test('throws on out-of-range coordinates', () => {
     expect(() => resolveGtfsBbox('-200,0,10,10')).toThrow(/valid lon\/lat ranges/)
+  })
+
+  test('accepts several ";"-separated boxes and checks each one', () => {
+    expect(resolveGtfsBbox('-125,24,-66,50; -161,18.5,-154,22.5')).toBe('-125,24,-66,50;-161,18.5,-154,22.5')
+    expect(() => resolveGtfsBbox('-125,24,-66,50;10,0,-10,20')).toThrow(/malformed/)
+  })
+
+  test('the us token covers Alaska and Hawaii as their own boxes', () => {
+    const boxes = resolveGtfsBbox('us')!.split(';').map((b) => b.split(',').map(Number))
+    const covers = (lon: number, lat: number) =>
+      boxes.some(([w, s, e, n]) => lon >= w && lon <= e && lat >= s && lat <= n)
+
+    expect(covers(-157.86, 21.31)).toBe(true) // Honolulu
+    expect(covers(-149.9, 61.22)).toBe(true) // Anchorage
+    expect(covers(-134.42, 58.3)).toBe(true) // Juneau
+    expect(covers(-99.13, 19.43)).toBe(false) // Mexico City
   })
 })
 

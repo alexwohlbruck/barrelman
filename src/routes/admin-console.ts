@@ -63,6 +63,7 @@ const regionFields = {
   osmExtracts: t.Optional(t.Array(t.String())),
   osmReplication: t.Optional(t.Array(t.String())),
   bbox: t.Tuple([t.Number(), t.Number(), t.Number(), t.Number()]),
+  bboxes: t.Optional(t.Array(t.Tuple([t.Number(), t.Number(), t.Number(), t.Number()]))),
   gtfsRegion: t.Optional(t.String()),
   pelias: t.Optional(peliasSchema),
   enabled: t.Optional(t.Boolean()),

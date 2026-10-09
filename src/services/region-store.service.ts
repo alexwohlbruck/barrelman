@@ -29,6 +29,7 @@ export interface RegionInput {
   osmExtracts?: string[]
   osmReplication?: string[]
   bbox: Bbox
+  bboxes?: Bbox[]
   gtfsRegion?: string
   pelias?: Partial<PeliasRegionConfig>
   enabled?: boolean
@@ -55,6 +56,8 @@ export function ensureRegionsSchema(): Promise<void> {
           created_at      timestamptz NOT NULL DEFAULT now(),
           updated_at      timestamptz NOT NULL DEFAULT now()
         )`
+      // Added after the table shipped. NULL means the region is just its bbox.
+      await sql`ALTER TABLE import_regions ADD COLUMN IF NOT EXISTS bboxes jsonb`
       await seedIfEmpty()
     })()
   }
@@ -88,11 +91,11 @@ async function seedIfEmpty(): Promise<void> {
   for (const { key, def, isGlobal } of seed) {
     await sql`
       INSERT INTO import_regions
-        (key, label, osm_extracts, osm_replication, bbox, gtfs_region, pelias, is_global, enabled, sort_order)
+        (key, label, osm_extracts, osm_replication, bbox, bboxes, gtfs_region, pelias, is_global, enabled, sort_order)
       VALUES
         (${key}, ${def.label}, ${JSON.stringify(def.osmExtracts)}::jsonb,
          ${JSON.stringify(def.osmReplication ?? [])}::jsonb, ${JSON.stringify(def.bbox)}::jsonb,
-         ${def.gtfsRegion}, ${JSON.stringify(def.pelias)}::jsonb, ${isGlobal}, true, ${order++})
+         ${bboxesJson(def.bboxes)}::jsonb, ${def.gtfsRegion}, ${JSON.stringify(def.pelias)}::jsonb, ${isGlobal}, true, ${order++})
       ON CONFLICT (key) DO NOTHING`
   }
 }
@@ -105,11 +108,17 @@ function rowToRegion(r: any): ImportRegion {
     osmExtracts: r.osm_extracts ?? [],
     osmReplication: r.osm_replication ?? [],
     bbox: r.bbox as Bbox,
+    ...(r.bboxes?.length ? { bboxes: r.bboxes as Bbox[] } : {}),
     gtfsRegion: r.gtfs_region ?? '',
     pelias: r.pelias as PeliasRegionConfig,
     isGlobal: r.is_global,
     enabled: r.enabled,
   }
+}
+
+/** An empty list is stored as NULL, so "no extra areas" has one representation. */
+function bboxesJson(boxes?: Bbox[] | null): string | null {
+  return boxes?.length ? JSON.stringify(boxes) : null
 }
 
 function normalizePelias(p?: Partial<PeliasRegionConfig>): PeliasRegionConfig {
@@ -138,11 +147,11 @@ export async function createRegion(input: RegionInput): Promise<ImportRegion> {
   const pelias = normalizePelias(input.pelias)
   const [row] = await sql`
     INSERT INTO import_regions
-      (key, label, osm_extracts, osm_replication, bbox, gtfs_region, pelias, is_global, enabled)
+      (key, label, osm_extracts, osm_replication, bbox, bboxes, gtfs_region, pelias, is_global, enabled)
     VALUES
       (${input.key}, ${input.label}, ${JSON.stringify(input.osmExtracts ?? [])}::jsonb,
        ${JSON.stringify(input.osmReplication ?? [])}::jsonb, ${JSON.stringify(input.bbox)}::jsonb,
-       ${input.gtfsRegion ?? ''}, ${JSON.stringify(pelias)}::jsonb, ${input.isGlobal ?? false}, ${input.enabled ?? true})
+       ${bboxesJson(input.bboxes)}::jsonb, ${input.gtfsRegion ?? ''}, ${JSON.stringify(pelias)}::jsonb, ${input.isGlobal ?? false}, ${input.enabled ?? true})
     RETURNING *`
   return rowToRegion(row)
 }
@@ -160,6 +169,7 @@ export async function updateRegion(key: string, input: RegionInput): Promise<Imp
       osm_extracts    = ${JSON.stringify(input.osmExtracts ?? [])}::jsonb,
       osm_replication = ${JSON.stringify(input.osmReplication ?? [])}::jsonb,
       bbox            = ${JSON.stringify(input.bbox)}::jsonb,
+      bboxes          = ${bboxesJson(input.bboxes)}::jsonb,
       gtfs_region     = ${input.gtfsRegion ?? ''},
       pelias          = ${JSON.stringify(pelias)}::jsonb,
       enabled         = ${input.enabled ?? true},
@@ -192,6 +202,7 @@ export async function loadRegionsFromDb(): Promise<RegionsFile | null> {
       osmExtracts: r.osmExtracts,
       osmReplication: r.osmReplication,
       bbox: r.bbox,
+      ...(r.bboxes ? { bboxes: r.bboxes } : {}),
       gtfsRegion: r.gtfsRegion,
       pelias: r.pelias,
       enabled: r.enabled,

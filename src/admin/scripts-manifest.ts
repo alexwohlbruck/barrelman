@@ -272,6 +272,7 @@ export const SCRIPTS: ScriptDef[] = [
       { script: 'osm-basemap', when: 'only when the extract changed, and "Rebuild basemap" is on' },
       { script: 'osm-buildings-3d', when: 'unless "Refresh 3D buildings" is off' },
       { script: 'osm-street-furniture', when: 'always' },
+      { script: 'osm-sport-pitches', when: 'always' },
     ],
     source: 'scripts/update-osm.sh',
     notes:
@@ -306,6 +307,20 @@ export const SCRIPTS: ScriptDef[] = [
     source: 'scripts/refresh-view.sh',
     notes:
       'Refreshes concurrently, so furniture keeps serving the old rows until the new ones are ready. Runs after every OSM update. Fastest once the "Map Detail Indexes" task has built the highway index it searches.',
+  },
+  {
+    id: 'osm-sport-pitches',
+    name: 'Refresh Sport Pitches',
+    description:
+      'Rebuild the sport_pitches view: every pitch surface, plus court and field markings and their nets, hoops and goals, fitted to each pitch.',
+    category: 'osm',
+    danger: 'safe',
+    longRunning: true,
+    confirm: false,
+    exclusive: true,
+    exec: { kind: 'process', command: 'bash', args: ['scripts/refresh-view.sh', 'sport_pitches'] },
+    source: 'scripts/refresh-view.sh',
+    notes: 'Refreshes concurrently, so pitches keep serving the old rows until the new ones are ready. Runs after every OSM update.',
   },
   {
     id: 'osm-basemap',
@@ -852,6 +867,21 @@ export const SCRIPTS: ScriptDef[] = [
     exec: { kind: 'process', command: 'bun', args: ['run', 'import/embed-places.ts'] },
     source: 'import/embed-places.ts',
     notes: 'Requires Ollama running. Can take hours on large datasets.',
+  },
+  {
+    id: 'osm-road-markings',
+    name: 'Build Road Markings',
+    description:
+      'Rebuild road_surfaces, road_markings and road_glyphs from the lane tags: true-width carriageways with rounded kerbs, lane, centre and edge lines, stop lines, crosswalks, and turn arrows and bike symbols.',
+    category: 'osm',
+    danger: 'safe',
+    longRunning: true,
+    confirm: true,
+    exclusive: true,
+    exec: { kind: 'internal', handler: 'sql:generate-road-markings.sql' },
+    source: 'import/generate-road-markings.sql',
+    notes:
+      'Builds fresh tables and swaps them in at the end, so tiles keep serving the old roads meanwhile. Not part of OSM Update yet: measured at about 5 s per 7 km² of dense downtown, which is minutes for a city and roughly a day for the whole US. Restart Martin afterwards on an instance that caches tiles.',
   },
   {
     id: 'search-intersections',
