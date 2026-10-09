@@ -4,7 +4,7 @@ set -euo pipefail
 # Rebuild road markings where the map changed
 # =============================================================================
 #
-# Works off road_markings_dirty, which replicate-extract.sh fills with the old
+# Works off its rows of detail_dirty, which replicate-extract.sh fills with the old
 # and new outlines of the roads, crossings and signals each diff touched
 # (import/queue-road-markings.sql), when ROAD_MARKINGS_INCREMENTAL=1. The queue
 # is cut into grid cells, and each cell that already has road markings, or
@@ -56,15 +56,15 @@ lock_free() {
   [ "$(q "SELECT CASE WHEN pg_try_advisory_lock($LOCK) THEN pg_advisory_unlock($LOCK) ELSE false END")" = "t" ]
 }
 
-if [ "$(q "SELECT to_regclass('road_markings_dirty') IS NOT NULL")" != "t" ]; then
+if [ "$(q "SELECT to_regclass('detail_dirty') IS NOT NULL OR to_regclass('road_markings_dirty') IS NOT NULL")" != "t" ]; then
   log "Road markings: nothing queued."
   exit 0
 fi
-# Brings a queue from before ids and attempts up to date.
-psql_db -c "SET client_min_messages = warning" -f /app/import/road-markings-queue-table.sql < /dev/null > /dev/null
+# Moves a queue from before detail_dirty over.
+psql_db -c "SET client_min_messages = warning" -f /app/import/detail-queue-table.sql < /dev/null > /dev/null
 
 if [ "$(q "SELECT to_regclass('road_surfaces') IS NOT NULL")" != "t" ]; then
-  dropped=$(q "WITH gone AS (DELETE FROM road_markings_dirty RETURNING 1) SELECT count(*) FROM gone")
+  dropped=$(q "WITH gone AS (DELETE FROM detail_dirty WHERE layer = 'road_markings' RETURNING 1) SELECT count(*) FROM gone")
   log "Road markings were never built here; emptied the queue ($dropped entries)."
   exit 0
 fi
@@ -144,7 +144,7 @@ CREATE TEMP TABLE _picked AS SELECT unnest('{$entries}'::bigint[]) AS id;
 WITH pending(cx, cy, failed) AS (VALUES $values),
 hit AS (
   SELECT d.id, bool_or(p.failed) AS failed
-  FROM road_markings_dirty d
+  FROM detail_dirty d
   JOIN _picked USING (id)
   JOIN pending p
     ON p.cx BETWEEN floor(ST_XMin(d.box) / $CELL) AND floor(ST_XMax(d.box) / $CELL)
@@ -152,12 +152,12 @@ hit AS (
   GROUP BY d.id
 ),
 retried AS (
-  UPDATE road_markings_dirty d SET attempts = d.attempts + 1
+  UPDATE detail_dirty d SET attempts = d.attempts + 1
   FROM hit WHERE hit.id = d.id AND hit.failed
   RETURNING 1
 ),
 cleared AS (
-  DELETE FROM road_markings_dirty d
+  DELETE FROM detail_dirty d
   USING _picked p
   WHERE d.id = p.id AND NOT EXISTS (SELECT 1 FROM hit WHERE hit.id = d.id)
   RETURNING 1
@@ -171,7 +171,7 @@ else
   cleared=0
   retried=0
 fi
-left=$(q "SELECT count(*) FROM road_markings_dirty")
+left=$(q "SELECT count(*) FROM detail_dirty WHERE layer = 'road_markings'")
 log "Road markings: rebuilt $built cell(s); cleared $cleared queue entries, $left left."
 if [ "$failed" -gt 0 ]; then
   log "WARNING: road markings: $failed cell(s) failed; $retried entries over them go to the back of the queue." >&2

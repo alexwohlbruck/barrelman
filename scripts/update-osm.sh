@@ -58,6 +58,10 @@ set -euo pipefail
 #                               touches and rebuilds road markings there
 #                               (update-road-markings.sh); 0 (default) leaves
 #                               them for a "Build Road Markings" run
+#   BRIDGE_DECKS_INCREMENTAL    1 (default) queues the bridges each replication
+#                               cycle touches and rebuilds their decks
+#                               (update-bridge-decks.ts); 0 leaves them for a
+#                               "Build Bridge Decks" run
 #   REPLICATION_MAX_DIFFS       without middle tables: diffs applied per cycle
 #
 # SCHEDULING:
@@ -86,6 +90,25 @@ db_exec() { docker exec -e PGPASSWORD="$DB_PASS" "$@"; }
 
 # The materialized map views, after the database changed. See refresh-view.sh.
 # Only buildings can be turned off; refresh-view.sh skips furniture without its index.
+# One layer's incremental update, when its switch (default $2) is on. A
+# failure is reported and the update goes on: ANALYZE and the routing graph
+# matter more than one detail layer, and the queue keeps what was missed.
+run_incremental() {
+  local flag="$1" default="$2" layer="$3" task="$4"
+  shift 4
+  if [ "${!flag:-$default}" != "1" ]; then
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Incremental $layer off ($flag=0) — skipping."
+    return 0
+  fi
+  local rc=0
+  "$@" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] WARNING: $layer update failed (exit $rc, see above)." >&2
+    echo "  The rest of the OSM update continues. What was not rebuilt stays queued" >&2
+    echo "  for the next run, or run \"$task\" on its own." >&2
+  fi
+}
+
 refresh_views() {
   if [ "${REFRESH_BUILDINGS_3D:-1}" = "1" ]; then
     "$SCRIPT_DIR/refresh-view.sh" buildings_3d
@@ -94,19 +117,14 @@ refresh_views() {
   fi
   "$SCRIPT_DIR/refresh-view.sh" street_furniture
   "$SCRIPT_DIR/refresh-view.sh" sport_pitches
-  # Off by default: a country's road markings are built over days, and an
-  # update rebuilding cells meanwhile would compete with that build. A failure
-  # here is reported and the update goes on: ANALYZE and the routing graph
-  # matter more than a day-old lane line, and the queue keeps what was missed.
-  if [ "${ROAD_MARKINGS_INCREMENTAL:-0}" = "1" ]; then
-    "$SCRIPT_DIR/update-road-markings.sh" || {
-      echo "[$(date '+%Y-%m-%d %H:%M:%S')] WARNING: road markings update failed (exit $?, see above)." >&2
-      echo "  The rest of the OSM update continues. What was not rebuilt stays queued" >&2
-      echo "  for the next run, or run \"Update Road Markings\" on its own." >&2
-    }
-  else
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Incremental road markings off (ROAD_MARKINGS_INCREMENTAL=0) — skipping."
-  fi
+  # Road markings are off by default: a country's are built over days, and an
+  # update rebuilding cells meanwhile would compete with that build. Bridge
+  # decks are on: their queue only holds what was built, so this is minutes,
+  # niced since it runs here beside the jobs ops serves.
+  run_incremental ROAD_MARKINGS_INCREMENTAL 0 "road markings" "Update Road Markings" \
+    "$SCRIPT_DIR/update-road-markings.sh"
+  run_incremental BRIDGE_DECKS_INCREMENTAL 1 "bridge decks" "Update Bridge Decks" \
+    bash -c "cd '$PROJECT_DIR' && exec nice -n 10 bun run import/update-bridge-decks.ts"
 }
 
 # Rebuild what reads region.osm.pbf, if the update moved it. Takes the extract's
@@ -312,6 +330,7 @@ if [ "$HAS_MIDDLE" != "t" ]; then
     ${REPLICATION_MAX_DIFFS:+-e REPLICATION_MAX_DIFFS="$REPLICATION_MAX_DIFFS"} \
     ${REPLICATION_ALLOW_SHRINK:+-e REPLICATION_ALLOW_SHRINK="$REPLICATION_ALLOW_SHRINK"} \
     -e ROAD_MARKINGS_INCREMENTAL="${ROAD_MARKINGS_INCREMENTAL:-0}" \
+    -e BRIDGE_DECKS_INCREMENTAL="${BRIDGE_DECKS_INCREMENTAL:-1}" \
     barrelman-db bash /app/scripts/replicate-extract.sh | tee "$REPLICATION_LOG" \
     || REPLICATION_RC=$?
   PBF_MTIME_AFTER=$(docker exec barrelman-db stat -c %Y "$PBF_FILE" 2>/dev/null || echo 0)
