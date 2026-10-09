@@ -28,8 +28,16 @@ const noop = { get: () => undefined, set: () => {} }
 // fails whichever suite imports them next rather than this one.
 const actualDb = await import('../db')
 
+// A bounded query (lib/bounded-query.ts) runs `SET LOCAL statement_timeout`
+// and then the query in a transaction; only the query reaches mockExecute, so
+// it counts as one layer call like any other.
+const mockTransaction = async (fn: (tx: any) => Promise<any>) => {
+  let setLocal = true
+  return fn({ execute: (q: any) => (setLocal ? ((setLocal = false), Promise.resolve([])) : mockExecute(q)) })
+}
+
 mock.module('../db', () => ({
-  ...actualDb, db: { execute: mockExecute } }))
+  ...actualDb, db: { execute: mockExecute, transaction: mockTransaction } }))
 mock.module('../lib/embeddings', () => ({ generateQueryEmbedding: mockGenerateQueryEmbedding }))
 // `mock.module` is process-global and replaces the module wholesale for every
 // test file in the run, so spread the real exports and override only what this
@@ -50,6 +58,7 @@ mock.module('../lib/cache', () => ({
 
 const { searchPlaces } = await import('./search.service')
 const { setLocalityIndexReady } = await import('./locality-search.service')
+const { setLexemeStats } = await import('./lexeme-stats.service')
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -73,6 +82,9 @@ beforeEach(() => {
   // Off unless a test asks for it, so the locality layer issues no query and
   // the call order the other suites queue mocks against is unchanged.
   setLocalityIndexReady(false)
+  // Statistics present but empty: every word counts as rare, and nothing
+  // queries pg_stats in the middle of a test's call order.
+  setLexemeStats({}, 1_000_000)
 })
 
 // ── Basic ─────────────────────────────────────────────────────────────────────
@@ -305,12 +317,12 @@ describe('searchPlaces — location handling', () => {
     // Fix: `lat != null && lng != null` correctly handles lat=0 (Gulf of Guinea).
     await expect(searchPlaces({ query: 'coffee', lat: 0, lng: 0, autocomplete: true })).resolves.toBeDefined()
     // With the fix, the location point is built and the layers run. Autocomplete
-    // with coordinates takes the local fast path: FTS + codes + abbrev (trigram
-    // is skipped) + the two transit layers, then — because the mocks return
-    // nothing — the global retry adds FTS + trigram. lat=0 being treated as
-    // falsy would have skipped the local path entirely and run the global
-    // shape instead.
-    expect(mockExecute).toHaveBeenCalledTimes(7)
+    // with coordinates takes the local fast path: the density probe + codes +
+    // abbrev (trigram is skipped) + the two transit layers, then the 5 km and
+    // full-box index searches, then — because the mocks return nothing — the
+    // global FTS retry. lat=0 being treated as falsy would have skipped the
+    // local path entirely and run the global shape instead.
+    expect(mockExecute).toHaveBeenCalledTimes(8)
   })
 
   test('non-autocomplete search keeps the 4-layer global shape', async () => {
@@ -390,26 +402,72 @@ describe('searchPlaces — autocomplete fast path', () => {
   test('local pass skips trigram; codes and abbrev layers still run', async () => {
     const local = makePlaces(6)
     mockExecute
-      .mockImplementationOnce(async () => local) // FTS (local)
+      .mockImplementationOnce(async () => local) // FTS (density probe)
       .mockImplementationOnce(async () => [])    // codes
       .mockImplementationOnce(async () => [])    // nameAbbrev
     const results = await searchPlaces({ query: 'sycamore', lat: 35.22, lng: -80.84, autocomplete: true })
-    // 6 local hits clears AUTOCOMPLETE_FALLBACK_MIN, so no global retry.
-    expect(mockExecute).toHaveBeenCalledTimes(5)
+    // Probe + codes + abbrev + two transit layers, and — 6 probe hits being
+    // sparse — the 5 km and full-box index searches. 6 local hits clear
+    // AUTOCOMPLETE_FALLBACK_MIN, so no global retry.
+    expect(mockExecute).toHaveBeenCalledTimes(7)
     expect(results).toHaveLength(6)
+  })
+
+  test('a word dense near the viewport is answered by the probe alone', async () => {
+    // "new york" in Manhattan: the index searches would sort 357K matches.
+    mockExecute.mockImplementationOnce(async () => makePlaces(25)) // FTS (density probe)
+    await searchPlaces({ query: 'new york', lat: 40.76, lng: -73.99, autocomplete: true })
+    // Probe + codes + abbrev + two transit layers; no index search.
+    expect(mockExecute).toHaveBeenCalledTimes(5)
+  })
+
+  test('a word common nationwide skips the index searches', async () => {
+    // "texas" is in 8% of all rows: even a 5 km index search reads its whole
+    // posting list (1.4s measured), so the probe's hits stand alone.
+    setLexemeStats({ texas: 0.08 }, 219_000_000)
+    mockExecute.mockImplementationOnce(async () => makePlaces(2)) // FTS (density probe)
+    await searchPlaces({ query: 'texas', lat: 35.22, lng: -80.84, autocomplete: true })
+    expect(mockExecute).toHaveBeenCalledTimes(5)
+  })
+
+  test('a word too common for the index gets no global retry either', async () => {
+    // Nothing nearby, but "texas" nationwide is 18M rows: a global scan would
+    // only hold a connection while the locality layer already has the state.
+    setLexemeStats({ texas: 0.08 }, 219_000_000)
+    await searchPlaces({ query: 'texas', lat: 35.22, lng: -80.84, autocomplete: true })
+    // Probe, codes, abbrev and the two transit layers; nothing else.
+    expect(mockExecute).toHaveBeenCalledTimes(5)
+  })
+
+  test('enough hits within 5 km skip the full-box search', async () => {
+    mockExecute
+      .mockImplementationOnce(async () => [])               // FTS (density probe)
+      .mockImplementationOnce(async () => [])               // codes
+      .mockImplementationOnce(async () => [])               // nameAbbrev
+      .mockImplementationOnce(async () => [])               // transit routes
+      .mockImplementationOnce(async () => [])               // transit stops
+      .mockImplementationOnce(async () => makePlaces(12))   // FTS (5 km)
+    const results = await searchPlaces({ query: 'harris teeter', lat: 35.22, lng: -80.84, autocomplete: true })
+    expect(mockExecute).toHaveBeenCalledTimes(6)
+    expect(results.length).toBeGreaterThan(0)
   })
 
   test('a zero-result local pass triggers a global retry', async () => {
     const faraway = { id: 'node/global', name: 'Faraway Match', text_rank: 0.95, distance_m: 900000 }
     mockExecute
-      .mockImplementationOnce(async () => [])        // FTS (local) — nothing
+      .mockImplementationOnce(async () => [])        // FTS (density probe) — nothing
       .mockImplementationOnce(async () => [])        // codes
       .mockImplementationOnce(async () => [])        // nameAbbrev
+      .mockImplementationOnce(async () => [])        // transit routes
+      .mockImplementationOnce(async () => [])        // transit stops
+      .mockImplementationOnce(async () => [])        // FTS (5 km)
+      .mockImplementationOnce(async () => [])        // FTS (full box)
       .mockImplementationOnce(async () => [faraway]) // FTS (global retry)
-      .mockImplementationOnce(async () => [])        // trigram (global retry)
     const ids = (await searchPlaces({ query: 'sycamore', lat: 35.22, lng: -80.84, autocomplete: true }))
       .map((r: any) => r.id)
-    expect(mockExecute).toHaveBeenCalledTimes(7)
+    // No trigram in the retry: on a national table it ran into the statement
+    // timeout every time and returned nothing.
+    expect(mockExecute).toHaveBeenCalledTimes(8)
     expect(ids).toContain('node/global')
   })
 
@@ -420,12 +478,13 @@ describe('searchPlaces — autocomplete fast path', () => {
     // specific query.
     const nearby = { id: 'node/local', name: 'Divine Barrel Brewing', text_rank: 0.9, distance_m: 300 }
     mockExecute
-      .mockImplementationOnce(async () => [nearby]) // FTS (local)
+      .mockImplementationOnce(async () => [nearby]) // FTS (density probe)
       .mockImplementationOnce(async () => [])       // codes
       .mockImplementationOnce(async () => [])       // nameAbbrev
     const ids = (await searchPlaces({ query: 'divine barrel', lat: 35.22, lng: -80.84, autocomplete: true }))
       .map((r: any) => r.id)
-    expect(mockExecute).toHaveBeenCalledTimes(5)
+    // The local stages (probe, 5 km, full box) and the four other layers.
+    expect(mockExecute).toHaveBeenCalledTimes(7)
     expect(ids).toEqual(['node/local'])
   })
 
@@ -438,14 +497,16 @@ describe('searchPlaces — autocomplete fast path', () => {
       .mockImplementationOnce(async () => []) // codes
       .mockImplementationOnce(async () => []) // nameAbbrev
     await searchPlaces({ query: '1600 e 7th st', lat: 35.22, lng: -80.84, autocomplete: true })
-    expect(mockExecute).toHaveBeenCalledTimes(5)
+    // The local stages and the four other layers, and no retry.
+    expect(mockExecute).toHaveBeenCalledTimes(7)
   })
 
   test('short prefixes never trigger the global retry', async () => {
     // "syc" is under AUTOCOMPLETE_FALLBACK_MIN_QUERY: matching it globally is
     // the exact scan the fast path exists to avoid.
     await searchPlaces({ query: 'syc', lat: 35.22, lng: -80.84, autocomplete: true })
-    expect(mockExecute).toHaveBeenCalledTimes(5)
+    // The local stages and the four other layers, and no retry.
+    expect(mockExecute).toHaveBeenCalledTimes(7)
   })
 
   test('autocomplete without coordinates falls back to the global shape', async () => {
@@ -554,6 +615,19 @@ describe('searchPlaces — transit layers', () => {
     }
   }
 
+  test('a route that only mentions the place yields to the places that match it', async () => {
+    // "asheville": every Asheville Rides Transit route matches on its agency
+    // name, and a Greyhound "Raleigh - Asheville" on its long name. With the
+    // response full of places, those lose their slot; a short-name match
+    // does not.
+    const weak = { ...rawRouteRow, id: 'transit-route/art:W1', route_short_name: 'W1',
+      route_long_name: 'West 1', agency_name: 'Asheville Rides Transit', text_rank: 0.6 }
+    queue({ [LAYER.fts]: makePlaces(3), [LAYER.transitRoutes]: [rawRouteRow, weak] })
+    const ids = (await searchPlaces({ query: 'asheville', autocomplete: true, limit: 4 })).map((r: any) => r.id)
+    expect(ids).toContain('transit-route/mta:A')
+    expect(ids).not.toContain('transit-route/art:W1')
+  })
+
   test('a GTFS line hit is adapted and surfaces with its transit ids', async () => {
     queue({ [LAYER.transitRoutes]: [rawRouteRow] })
     const results = await searchPlaces({ query: 'eighth avenue', autocomplete: true })
@@ -638,6 +712,24 @@ describe('searchPlaces — localities', () => {
     properties: { gid: 'openaddresses:address:us/nj:abc', source: 'openaddresses', layer: 'address', name: '11211 Taylor Court', housenumber: '11211' },
   }
 
+  test('typeahead for a name does not wait long on a slow geocoder, and cancels it', async () => {
+    // Pelias took up to 1.5s on "charlotte", looking for streets that share
+    // the word; typeahead showed nothing until it answered.
+    const realFetch = globalThis.fetch
+    let aborted = false
+    globalThis.fetch = ((_url: any, init: any) => new Promise((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => { aborted = true; reject(new Error('aborted')) })
+    })) as unknown as typeof fetch
+    try {
+      const started = Date.now()
+      await searchPlaces({ query: 'charlotte', lat: 35.22, lng: -80.84, autocomplete: true })
+      expect(Date.now() - started).toBeLessThan(1500)
+      expect(aborted).toBe(true)
+    } finally {
+      globalThis.fetch = realFetch
+    }
+  })
+
   test('a distant city stays above nearer, higher-ranked namesakes', async () => {
     // The 50 km proximity re-rank would put the cafe first; the locality layer
     // has already weighed the city's distance on its own scale.
@@ -686,7 +778,7 @@ describe('searchPlaces — localities', () => {
     setLocalityIndexReady(true)
     const state = { id: 'relation/224951', name: 'New Jersey', text_rank: 0.93, distance_m: 89_000 }
     mockExecute
-      .mockImplementationOnce(() => new Promise(() => {})) // FTS: never settles
+      .mockImplementationOnce(() => new Promise(() => {})) // FTS (density probe): never settles
       .mockImplementationOnce(async () => [])              // codes
       .mockImplementationOnce(async () => [])              // abbrev
       .mockImplementationOnce(async () => [])              // transit routes
@@ -696,9 +788,39 @@ describe('searchPlaces — localities', () => {
     const results = await searchPlaces({ query: 'new jersey', lat: 40.71, lng: -73.96, autocomplete: true, limit: 5 })
     expect(results[0].id).toBe('relation/224951')
     expect(Date.now() - started).toBeLessThan(5000)
-    // A place is a hit, so typeahead does not retry the slow query globally.
-    expect(mockExecute).toHaveBeenCalledTimes(6)
+    // The probe gives up and the index searches run (and find nothing); a
+    // place is a hit, so typeahead does not retry the slow query globally.
+    expect(mockExecute).toHaveBeenCalledTimes(8)
   }, 15000)
+
+  // The SQL a mock call received, for answering by query rather than by order.
+  const sqlOf = (q: any): string =>
+    (q?.queryChunks ?? []).map((c: any) =>
+      c?.queryChunks ? sqlOf(c) : Array.isArray(c?.value) ? c.value.join('') : '').join('')
+
+  test('a misspelling with no namesake falls back to trigram', async () => {
+    setLocalityIndexReady(true)
+    const charlotte = { id: 'relation/177415', name: 'Charlotte', text_rank: 0.5, distance_m: 0 }
+    mockExecute.mockImplementation(async (q: any) => (sqlOf(q).includes('name %') ? [charlotte] : []))
+    const results = await searchPlaces({ query: 'charlote', lat: 35.22, lng: -80.84, autocomplete: true })
+    expect(results[0]?.id).toBe('relation/177415')
+  })
+
+  test('a correctly spelled place that scored too low gets no look-alike', async () => {
+    // "hickory" from New York matches Hickory, NC, too far away to qualify.
+    setLocalityIndexReady(true)
+    const lookalike = { id: 'relation/1', name: 'Hickory Hills', text_rank: 0.5, distance_m: 0 }
+    const calls: string[] = []
+    mockExecute.mockImplementation(async (q: any) => {
+      const text = sqlOf(q)
+      calls.push(text)
+      if (text.includes('SELECT 1 FROM geo_places')) return [{ '?column?': 1 }] // the namesake exists
+      return text.includes('name %') ? [lookalike] : []
+    })
+    const results = await searchPlaces({ query: 'hickory', lat: 40.76, lng: -73.99, autocomplete: true })
+    expect(calls.some((t) => t.includes('name %'))).toBe(false)
+    expect(results.map((r: any) => r.id)).not.toContain('relation/1')
+  })
 
   test('the layer is skipped for category browses', async () => {
     setLocalityIndexReady(true)
