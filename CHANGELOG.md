@@ -43,6 +43,15 @@ does it — and the release pipeline turns it into the GitHub Release notes.
   fountains mapped as `amenity=fountain` come through as `drinking_water`. The
   view rebuilds itself on the next startup.
 
+### Fixed
+
+* **Brand suggestions no longer match a different word that shares its
+  letters.** "charleston" suggested Charles Schwab and "columbus" suggested
+  Columbia, because their trigram scores fell in the same range as real typos.
+  A fuzzy brand match must now be within one edit of how the brand name starts
+  (two for a query longer than 10 characters), so "starbuks", "wallmart" and
+  "chik fil a" still find their brands.
+
 ## [0.10.3] - 2026-10-08
 
 ### Added

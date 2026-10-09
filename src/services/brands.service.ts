@@ -46,6 +46,54 @@ const MIN_SIMILARITY = 0.45
 const MIN_WORD_SIMILARITY = 0.6
 
 /**
+ * Trigram scores can't tell a misspelt brand from a different word that shares
+ * its letters. "charleston" scored Charles Schwab 0.64 on word_similarity, and
+ * "columbus" scored Columbia 0.50/0.67, the same range as the real typos
+ * "walgren" → Walgreens (0.50/0.75) and "starbuks" → Starbucks (0.58/0.67).
+ * So a fuzzy candidate must also be a near-miss of how the brand name *starts*:
+ * at most one edit for a query of up to 10 characters, two beyond that.
+ * Measured: every typo above is one edit off; "charleston" is three edits from
+ * Charles Schwab and two from Charles Tyrwhitt, "columbus" two from Columbia.
+ */
+const FUZZY_MAX_EDITS_SHORT = 1
+const FUZZY_MAX_EDITS_LONG = 2
+const FUZZY_SHORT_QUERY = 10
+
+/** Letters and digits only, lowercased, accents and a leading "The" dropped:
+ *  "Chick-fil-A" and "chik fil a" compare as "chickfila" and "chikfila". */
+function brandKey(s: string): string {
+  return s.normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase()
+    .replace(/^the\s+/, '').replace(/[^\p{L}\p{N}]/gu, '')
+}
+
+/** Levenshtein distance, two rows. Inputs here are a few dozen characters. */
+function editDistance(a: string, b: string): number {
+  let prev = Array.from({ length: b.length + 1 }, (_, j) => j)
+  for (let i = 1; i <= a.length; i++) {
+    const cur = [i]
+    for (let j = 1; j <= b.length; j++) {
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1))
+    }
+    prev = cur
+  }
+  return prev[b.length]
+}
+
+/** Whether `query` is a misspelling of the start of `name` (see above). The
+ *  start is taken at every length the allowed edits could reach, since a typo
+ *  can add or drop letters ("wallmart", "walgren"). */
+export function isNearMissOfStart(query: string, name: string): boolean {
+  const q = brandKey(query)
+  const n = brandKey(name)
+  if (!q || !n) return false
+  const k = q.length <= FUZZY_SHORT_QUERY ? FUZZY_MAX_EDITS_SHORT : FUZZY_MAX_EDITS_LONG
+  for (let len = Math.max(1, q.length - k); len <= q.length + k; len++) {
+    if (editDistance(q, n.slice(0, len)) <= k) return true
+  }
+  return false
+}
+
+/**
  * Autocomplete over the brand catalog. Prefix matches (ILIKE) rank above fuzzy
  * trigram matches (%), then by popularity (location_count). Returns [] on any
  * error (e.g. the geo_brands matview not yet populated) so search degrades
@@ -64,7 +112,7 @@ export async function searchBrands(
   try {
     const rows = await db.execute(sql`
       SELECT b.brand_key, b.name, b.wikidata, b.location_count, b.category, b.rep_lat, b.rep_lng,
-             l.logo_url, l.description
+             l.logo_url, l.description, b.name ILIKE (${query} || '%') AS is_prefix
       FROM geo_brands b
       LEFT JOIN brand_logos l ON l.wikidata = b.wikidata
       WHERE b.name ILIKE (${query} || '%')
@@ -72,9 +120,14 @@ export async function searchBrands(
              AND (similarity(b.name, ${query}) >= ${MIN_SIMILARITY}
                   OR word_similarity(${query}, b.name) >= ${MIN_WORD_SIMILARITY}))
       ORDER BY (b.name ILIKE (${query} || '%')) DESC, similarity(b.name, ${query}) DESC, b.location_count DESC
-      LIMIT ${limit}
+      -- Over-fetched: fuzzy candidates are filtered below, and a rejected one
+      -- sorted ahead of a good one must not leave the response short.
+      LIMIT ${limit * 3}
     `)
-    const brands = Array.from(rows as any[]).map(adaptRow)
+    const brands = Array.from(rows as any[])
+      .filter((r: any) => r.is_prefix || isNearMissOfStart(query, r.name))
+      .slice(0, limit)
+      .map(adaptRow)
     brandCache.set(cacheKey, brands)
     return brands
   } catch {
