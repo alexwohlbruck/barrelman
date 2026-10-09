@@ -18,7 +18,7 @@ import { db } from '../src/db'
 import { sql } from 'drizzle-orm'
 import { ensureGbfsSchema } from '../src/db'
 import { inBoxes, resolveRegions, type Bbox } from '../src/config/regions'
-import { localizedText } from '../src/lib/gbfs'
+import { gbfsId, gbfsNumber, localizedText } from '../src/lib/gbfs'
 
 // ── CLI args ────────────────────────────────────────────────────────
 
@@ -162,23 +162,18 @@ for (const row of filtered) {
 
     const ttl = gbfsData.ttl ?? gbfsData.data?.ttl ?? 300
 
-    // UPSERT system
-    const safeSysId = systemId.replace(/'/g, "''")
-    const safeName = (name || '').replace(/'/g, "''")
-    const safeOperator = (row.Operator || '').replace(/'/g, "''")
-    const safeUrl = discoveryUrl.replace(/'/g, "''")
-    const safeCountry = (countryCode || '').replace(/'/g, "''")
-
-    await db.execute(sql.raw(`
+    // UPSERT system. Values are bound, never spliced into the SQL: everything
+    // here comes from third-party feeds and a public catalog.
+    await db.execute(sql`
       INSERT INTO gbfs_systems (system_id, name, operator, url, country_code, lat, lon,
         vehicle_types, has_stations, has_free_floating, feed_urls, ttl)
       VALUES (
-        '${safeSysId}', '${safeName}', '${safeOperator}', '${safeUrl}',
-        '${safeCountry}', ${lat ?? 'NULL'}, ${lon ?? 'NULL'},
-        '${JSON.stringify(vehicleTypes).replace(/'/g, "''")}'::jsonb,
+        ${systemId}, ${name || ''}, ${row.Operator || ''}, ${discoveryUrl},
+        ${countryCode || ''}, ${lat}, ${lon},
+        ${JSON.stringify(vehicleTypes)}::jsonb,
         ${hasStations}, ${hasFreeFloating},
-        '${JSON.stringify(feedUrls).replace(/'/g, "''")}'::jsonb,
-        ${ttl}
+        ${JSON.stringify(feedUrls)}::jsonb,
+        ${gbfsNumber(ttl) ?? 300}
       )
       ON CONFLICT (system_id) DO UPDATE SET
         name = EXCLUDED.name,
@@ -193,7 +188,7 @@ for (const row of filtered) {
         feed_urls = EXCLUDED.feed_urls,
         ttl = EXCLUDED.ttl,
         imported_at = NOW()
-    `))
+    `)
 
     // Import stations if available
     let stationCount = 0
@@ -207,41 +202,48 @@ for (const row of filtered) {
           const stationData = await stationRes.json() as any
           const stations = stationData?.data?.stations ?? []
 
+          let failed = 0
           for (const s of stations) {
-            // The spec says string, but some feeds send numbers.
-            const safeStationId = String(s.station_id ?? '').replace(/'/g, "''")
-            const safeStationName = localizedText(s.name).replace(/'/g, "''")
-            const stLat = s.lat ?? s.latitude
-            const stLon = s.lon ?? s.longitude
-            if (!stLat || !stLon) continue
+            const stationId = gbfsId(s.station_id)
+            const stLat = gbfsNumber(s.lat ?? s.latitude)
+            const stLon = gbfsNumber(s.lon ?? s.longitude)
+            // Without an id every such station would upsert into one row.
+            if (!stationId || stLat === null || stLon === null) continue
 
             // Bbox filter at station level (catalog has no system-level coords)
             if (boxes && !inBoxes(stLon, stLat, boxes)) continue
 
+            // One malformed station costs that station, not the rest of the system.
+            try {
+              await db.execute(sql`
+                INSERT INTO gbfs_stations (system_id, station_id, name, lat, lon, capacity)
+                VALUES (${systemId}, ${stationId}, ${localizedText(s.name)},
+                        ${stLat}, ${stLon}, ${gbfsNumber(s.capacity)})
+                ON CONFLICT (system_id, station_id) DO UPDATE SET
+                  name = EXCLUDED.name,
+                  lat = EXCLUDED.lat,
+                  lon = EXCLUDED.lon,
+                  capacity = EXCLUDED.capacity,
+                  updated_at = NOW()
+              `)
+            } catch (err) {
+              if (failed++ === 0) stationError = err instanceof Error ? err.message : String(err)
+              continue
+            }
+
             // Derive system center from first station
             if (lat === null) { lat = stLat; lon = stLon }
-
-            await db.execute(sql.raw(`
-              INSERT INTO gbfs_stations (system_id, station_id, name, lat, lon, capacity)
-              VALUES ('${safeSysId}', '${safeStationId}', '${safeStationName}',
-                      ${stLat}, ${stLon}, ${s.capacity ?? 'NULL'})
-              ON CONFLICT (system_id, station_id) DO UPDATE SET
-                name = EXCLUDED.name,
-                lat = EXCLUDED.lat,
-                lon = EXCLUDED.lon,
-                capacity = EXCLUDED.capacity,
-                updated_at = NOW()
-            `))
             stationCount++
           }
+          if (failed > 1) stationError = `${failed} stations failed; first: ${stationError}`
           stationsImported += stationCount
 
           // Update system coordinates (derived from first station)
           if (lat !== null && lon !== null) {
-            await db.execute(sql.raw(`
+            await db.execute(sql`
               UPDATE gbfs_systems SET lat = ${lat}, lon = ${lon}
-              WHERE system_id = '${safeSysId}'
-            `))
+              WHERE system_id = ${systemId}
+            `)
           }
         } else {
           stationError = `station_information ${stationRes.status}`
