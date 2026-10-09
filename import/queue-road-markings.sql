@@ -17,7 +17,7 @@
 -- Nothing is queued where road markings were never built. A failure here is
 -- reported and skipped rather than raised: it would otherwise roll back the
 -- replication cycle it rides in.
--- Needs road_markings_dirty (road-markings-queue-table.sql).
+-- Needs detail_dirty (detail-queue-table.sql).
 -- =============================================================================
 DO $$
 DECLARE
@@ -57,8 +57,8 @@ BEGIN
     UNION ALL
     SELECT geom FROM relevant_new
   )
-  INSERT INTO road_markings_dirty (box)
-  SELECT ST_Envelope(ST_Expand(geom, 0.0005)) FROM touched WHERE geom IS NOT NULL;
+  INSERT INTO detail_dirty (layer, box)
+  SELECT 'road_markings', ST_Envelope(ST_Expand(geom, 0.0005)) FROM touched WHERE geom IS NOT NULL;
   GET DIAGNOSTICS queued = ROW_COUNT;
   RAISE NOTICE 'road markings: queued % outline(s)', queued;
 EXCEPTION WHEN OTHERS THEN
