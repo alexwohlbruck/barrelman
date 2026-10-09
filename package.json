@@ -1,7 +1,7 @@
 {
   "name": "barrelman",
-  "version": "0.10.5",
-  "description": "OSM geospatial engine — search, tiles, spatial queries, routing",
+  "version": "0.10.6",
+  "description": "OSM geospatial engine \u2014 search, tiles, spatial queries, routing",
   "type": "module",
   "scripts": {
     "dev": "bun run --hot src/index.ts",

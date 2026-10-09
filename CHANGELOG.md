@@ -19,6 +19,28 @@ does it — and the release pipeline turns it into the GitHub Release notes.
   bridges up without working out their profiles itself. Build it with the
   "Build Bridge Decks" console task.
 
+## [0.10.6] - 2026-10-09
+
+### Fixed
+
+* **Bikeshare feeds with numeric ids import.** The GBFS spec makes ids
+  strings, but some feeds send numbers. The importer failed on numeric station
+  ids and stored no stations; live availability could never match them; and a
+  numeric vehicle type left scooters labelled as bikes. Ids are now read as
+  text everywhere. Coordinates sent as strings, and a latitude or longitude of
+  exactly 0, are accepted too.
+* **The GBFS importer binds feed values instead of pasting them into SQL.**
+  Station coordinates and capacity went into the query text unchecked, so a
+  malformed or hostile feed could break or alter the statement. One bad
+  station now costs only that station, not the rest of its system.
+
+* **Importing a few GTFS feeds no longer computes walking transfers for every
+  stop in the database.** The transfer step searched every pair of nearby stops
+  across all feeds and routed each through GraphHopper, though it only writes
+  transfers between stops of the same feed, into the feeds it just imported.
+  On a US instance that is millions of pairs for a handful of new feeds. It now
+  searches only within the imported feeds.
+
 ## [0.10.5] - 2026-10-08
 
 ### Changed
