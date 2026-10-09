@@ -123,12 +123,21 @@ WHERE geom_type = 'line'
 -- MATERIALIZED for the same reason as buildings_3d below: the nearest-way
 -- lookup is a join, which Martin cannot push its tile envelope into. Created
 -- empty, filled by scripts/refresh-view.sh after an import or update and by the
--- API on startup if still empty. A change to the SELECT needs
---   DROP MATERIALIZED VIEW street_furniture;  -- then re-run this file
+-- API on startup if still empty. The view carries a version in its comment;
+-- bump it with any change to the SELECT and startup rebuilds it empty, to be
+-- filled again in the background.
+--
+-- A fountain standing in a pond, lake, reservoir or lagoon, or tagged
+-- fountain=nozzle, is a `fountain_jet`, a plume rather than a basin. Untyped
+-- water stays a fountain: it is as often the fountain's own pool. A drinking
+-- fountain mapped as amenity=fountain is `drinking_water`.
 DO $$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_class WHERE relname = 'street_furniture' AND relkind = 'v') THEN
     DROP VIEW street_furniture;
+  ELSIF EXISTS (SELECT 1 FROM pg_class WHERE relname = 'street_furniture' AND relkind = 'm')
+    AND COALESCE(obj_description(to_regclass('street_furniture'), 'pg_class'), '') <> 'v3' THEN
+    DROP MATERIALIZED VIEW street_furniture;
   END IF;
 END $$;
 
@@ -141,9 +150,11 @@ WITH furniture AS MATERIALIZED (
            WHEN tags->>'highway' = 'street_lamp' THEN 'street_lamp'
            WHEN tags->>'barrier' = 'bollard' THEN 'bollard'
            WHEN tags->>'advertising' = 'billboard' THEN 'billboard'
+           WHEN tags->>'fountain' IN ('drinking', 'bubbler', 'bottle_refill') THEN 'drinking_water'
            ELSE tags->>'amenity'
          END as kind,
-         NULLIF(tags->>'direction', '') as direction
+         NULLIF(tags->>'direction', '') as direction,
+         COALESCE(tags->>'fountain' = 'nozzle', false) as nozzle
   FROM geo_places
   WHERE geom_type = 'point'
     AND (tags->>'amenity' IN ('bench', 'waste_basket', 'recycling', 'waste_disposal',
@@ -170,7 +181,14 @@ facing AS (
          CASE f.kind WHEN 'billboard' THEN 60 WHEN 'street_lamp' THEN 25 ELSE 14 END as reach
   FROM furniture f
 )
-SELECT f.fid, f.id, f.centroid, f.kind,
+SELECT f.fid, f.id, f.centroid,
+       CASE WHEN f.kind = 'fountain' AND (f.nozzle OR EXISTS (
+              SELECT 1 FROM geo_places w
+              WHERE w.geom_type = 'area' AND w.geom && f.centroid
+                AND (w.tags->>'water' IN ('pond', 'lake', 'reservoir', 'lagoon', 'oxbow')
+                     OR w.tags->>'landuse' = 'reservoir')
+                AND ST_Contains(w.geom, f.centroid)))
+            THEN 'fountain_jet' ELSE f.kind END as kind,
        COALESCE(f.direction, nearest.bearing::text, '') as direction
 FROM facing f
 LEFT JOIN LATERAL (
@@ -210,6 +228,7 @@ LEFT JOIN LATERAL (
 ) nearest ON true
 WITH NO DATA;
 
+COMMENT ON MATERIALIZED VIEW street_furniture IS 'v3';
 CREATE UNIQUE INDEX IF NOT EXISTS street_furniture_fid_idx ON street_furniture (fid);
 CREATE INDEX IF NOT EXISTS street_furniture_centroid_idx ON street_furniture USING GIST (centroid);
 

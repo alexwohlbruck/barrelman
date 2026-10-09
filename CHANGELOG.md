@@ -10,6 +10,39 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Added
+
+* **Sport pitches.** A new `sport_pitches` layer, in the `detail` bundle,
+  carries every pitch's surface plus regulation markings for tennis,
+  pickleball, basketball, volleyball, beach volleyball, soccer and American
+  football. Markings are fitted to each pitch, with a block of courts repeated
+  across it and half courts recognised. The nets, hoops and goals on them come
+  as oriented points. It is a stored view, refreshed after every import and OSM
+  update.
+* **Fences, walls, hedges, power lines and catenary.** A new `object_lines`
+  layer, in the `detail` bundle, carries the barriers, power lines and
+  electrified track a client stands up as 3D objects, with any tagged height.
+* **Road surfaces and markings.** A "Build Road Markings" console task
+  produces `road_surfaces`, `road_markings` and `road_glyphs` in the `detail`
+  bundle: true-width carriageways with rounded kerbs, centre, lane, edge and
+  bike lines, green bike and red bus lanes, stop lines, kerb-to-kerb
+  crosswalks, and turn arrows and bike symbols, with lanes easing across where
+  their count changes. Widths count parking lanes, medians between divided
+  carriageways stay unpaved, bridges end square at their abutments, and stop
+  lines stand only where signals or stop signs control the approach. All paint
+  is cut to the kerb.
+* **Solar arrays, flower beds, scrub, shrubbery and shrubs.** A new `object_areas` layer
+  in the `detail` bundle carries the areas and points a client plants with
+  3D objects.
+
+### Changed
+
+* **Fountains in water.** `street_furniture` marks a fountain standing in a
+  pond, lake, reservoir or lagoon, or tagged `fountain=nozzle`, as
+  `fountain_jet`, so a client can draw a plume rather than a basin. Drinking
+  fountains mapped as `amenity=fountain` come through as `drinking_water`. The
+  view rebuilds itself on the next startup.
+
 ## [0.10.3] - 2026-10-08
 
 ### Added
@@ -68,31 +101,6 @@ does it — and the release pipeline turns it into the GitHub Release notes.
   instead of above them.
 
 ## [0.10.1] - 2026-10-08
-
-### Added
-
-* **Sport pitches.** A new `sport_pitches` layer, in the `detail` bundle,
-  carries every pitch's surface plus regulation markings for tennis,
-  pickleball, basketball, volleyball, beach volleyball, soccer and American
-  football. Markings are fitted to each pitch, with a block of courts repeated
-  across it and half courts recognised. The nets, hoops and goals on them come
-  as oriented points. It is a stored view, refreshed after every import and OSM
-  update.
-* **Fences, walls, hedges, power lines and catenary.** A new `object_lines`
-  layer, in the `detail` bundle, carries the barriers, power lines and
-  electrified track a client stands up as 3D objects, with any tagged height.
-* **Road surfaces and markings.** A "Build Road Markings" console task
-  produces `road_surfaces`, `road_markings` and `road_glyphs` in the `detail`
-  bundle: true-width carriageways with rounded kerbs, centre, lane, edge and
-  bike lines, green bike and red bus lanes, stop lines, kerb-to-kerb
-  crosswalks, and turn arrows and bike symbols, with lanes easing across where
-  their count changes. Widths count parking lanes, medians between divided
-  carriageways stay unpaved, bridges end square at their abutments, and stop
-  lines stand only where signals or stop signs control the approach. All paint
-  is cut to the kerb.
-* **Solar arrays, flower beds, scrub, shrubbery and shrubs.** A new `object_areas` layer
-  in the `detail` bundle carries the areas and points a client plants with
-  3D objects.
 
 ### Added
 
