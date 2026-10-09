@@ -40,6 +40,8 @@ const metres = (value: string | null): number | null => {
 const args = process.argv.slice(2)
 const flag = (name: string) => argValue(args, name)
 const CELL = Number(flag('cell') ?? 0.25)
+/** Decks per INSERT: one statement per batch rather than a round trip per deck. */
+const INSERT_BATCH = 500
 
 const sql = postgres(dbUrl, { onnotice, max: 2 })
 
@@ -154,13 +156,20 @@ async function cell(dem: Dem, w: number, s: number, e: number, n: number) {
     const tx = rawTx as unknown as typeof sql
     await tx`DELETE FROM bridge_decks WHERE anchor && ST_MakeEnvelope(${w}, ${s}, ${e}, ${n}, 4326)
       AND ST_X(anchor) >= ${w} AND ST_X(anchor) < ${e} AND ST_Y(anchor) >= ${s} AND ST_Y(anchor) < ${n}`
-    for (const { d, at } of mine) {
-      const line = `LINESTRING(${d.points.map(p => lngLat(p).join(' ')).join(',')})`
+    for (let i = 0; i < mine.length; i += INSERT_BATCH) {
+      // One row per deck as JSON, unpacked by jsonb_to_recordset: a multi-row
+      // VALUES list cannot carry the arrays, and unnest would flatten them.
+      const batch = mine.slice(i, i + INSERT_BATCH).map(({ d, at }) => ({
+        id: d.id, bridge: d.bridge, ways: d.ways, kind: d.kind, layer: d.layer, edges: d.edges, grounded: d.grounded,
+        length: d.length, heights: d.heights, ground: d.ground, piers: d.piers, lng: at[0], lat: at[1],
+        line: `LINESTRING(${d.points.map(p => lngLat(p).join(' ')).join(',')})`,
+      }))
       await tx`
         INSERT INTO bridge_decks (id, bridge, ways, kind, layer, edges, grounded, step, length, heights, ground, piers, anchor, geom)
-        VALUES (${d.id}, ${d.bridge}, ${sql.array(d.ways)}::bigint[], ${d.kind}, ${d.layer}, ${sql.array(d.edges)}::real[],
-                ${sql.array(d.grounded)}::boolean[], ${STEP}, ${d.length}, ${sql.array(d.heights)}::real[], ${sql.array(d.ground)}::real[],
-                ${sql.array(d.piers)}::real[], ST_SetSRID(ST_MakePoint(${at[0]}, ${at[1]}), 4326), ST_GeomFromText(${line}, 4326))
+        SELECT r.id, r.bridge, r.ways, r.kind, r.layer, r.edges, r.grounded, ${STEP}, r.length, r.heights, r.ground, r.piers,
+               ST_SetSRID(ST_MakePoint(r.lng, r.lat), 4326), ST_GeomFromText(r.line, 4326)
+        FROM jsonb_to_recordset(${tx.json(batch)}::jsonb) AS r(id text, bridge text, ways bigint[], kind text, layer int,
+          edges real[], grounded boolean[], length real, heights real[], ground real[], piers real[], lng float8, lat float8, line text)
         ON CONFLICT (id) DO UPDATE SET bridge = EXCLUDED.bridge, ways = EXCLUDED.ways, kind = EXCLUDED.kind, layer = EXCLUDED.layer,
           edges = EXCLUDED.edges, grounded = EXCLUDED.grounded, step = EXCLUDED.step, length = EXCLUDED.length,
           heights = EXCLUDED.heights, ground = EXCLUDED.ground, piers = EXCLUDED.piers, anchor = EXCLUDED.anchor,
