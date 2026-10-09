@@ -394,7 +394,7 @@ a zoom floor: z8 went from 83.6 MB in 10.1 s to **47 KB in 0.07 s**.
 
 ### Map detail sources
 
-Eleven sources carry detail that a standard OpenMapTiles basemap has no schema
+Twelve sources carry detail that a standard OpenMapTiles basemap has no schema
 for, so a client drawing them has nowhere else to get them:
 
 | Source | Geometry | Zooms | What it carries |
@@ -410,6 +410,7 @@ for, so a client drawing them has nowhere else to get them:
 | `road_surfaces` | polygon | 16 | Carriageways at their real width (from `width`, else `lanes` at a lane width per class), with kerb corners rounded where roads meet. `bridge` marks the ones above ground |
 | `road_markings` | line | 16 | Paint: `kind` is `centre`, `lane`, `edge`, `bike`, `stop` or `crosswalk`; `pattern` is `solid`, `dashed` or `double`; `color` is `white` or `yellow` (yellow centre lines in the Americas); a crosswalk's `style` is `zebra`, `lines` or `ladder` |
 | `road_glyphs` | point | 16 | Turn arrows from `turn:lanes`, bike symbols on bike lanes and sharrows on shared lanes: `glyph` names the sprite icon and `direction` the bearing it reads along |
+| `object_areas` | polygon or point | 14–16 | Areas and points a client plants with objects: ground-mounted solar arrays and farms (`solar`), `flowerbed`, `scrub`, planted `shrubbery` (with its `shrubbery:shape` as `shape`), and single mapped `shrub`s. Rooftop solar is left out |
 
 #### Asking for them as one tile
 
@@ -426,7 +427,7 @@ curl "https://api.barrelman.dev/tiles/buildings_3d,parking_areas/14/4825/6156" -
 ```
 
 `detail` is `buildings_3d`, `parking_areas`, `bicycle_ways`, `street_trees`,
-`tree_rows`, `coaster_tracks`, `sport_pitches`, `object_lines` and the three road layers — every overlay a client reads at z≤16. The response is one tile
+`tree_rows`, `coaster_tracks`, `sport_pitches`, `object_lines`, `object_areas` and the three road layers — every overlay a client reads at z≤16. The response is one tile
 carrying each source as its own layer, named exactly as it is above, so a style
 that already draws them needs only its `source` changed.
 

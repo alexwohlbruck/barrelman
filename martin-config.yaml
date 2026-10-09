@@ -430,6 +430,22 @@ postgres:
       buffer: 64
       clip_geom: true
 
+    object_areas:
+      schema: public
+      table: object_areas
+      srid: 4326
+      geometry_column: geom
+      geometry_type: GEOMETRY
+      id_column: fid
+      minzoom: 14
+      maxzoom: 16
+      properties:
+        id: id
+        kind: kind
+        shape: shape
+      buffer: 64
+      clip_geom: true
+
     object_lines:
       schema: public
       table: object_lines

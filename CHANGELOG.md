@@ -90,6 +90,9 @@ does it — and the release pipeline turns it into the GitHub Release notes.
   carriageways stay unpaved, bridges end square at their abutments, and stop
   lines stand only where signals or stop signs control the approach. All paint
   is cut to the kerb.
+* **Solar arrays, flower beds, scrub, shrubbery and shrubs.** A new `object_areas` layer
+  in the `detail` bundle carries the areas and points a client plants with
+  3D objects.
 
 ### Added
 
