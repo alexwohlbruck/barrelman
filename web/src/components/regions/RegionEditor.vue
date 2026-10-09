@@ -31,6 +31,7 @@ interface Form {
   key: string
   label: string
   bbox: Bbox
+  bboxes: string
   osmExtracts: string
   osmReplication: string
   gtfsRegion: string
@@ -48,6 +49,7 @@ function blank(): Form {
     key: '',
     label: '',
     bbox: [...DEFAULT_BBOX],
+    bboxes: '',
     osmExtracts: '',
     osmReplication: '',
     gtfsRegion: '',
@@ -62,6 +64,9 @@ const lines = (arr: string[]) => arr.join('\n')
 const toLines = (s: string) => s.split('\n').map((x) => x.trim()).filter(Boolean)
 const toList = (s: string) => s.split(/[\s,]+/).map((x) => x.trim()).filter(Boolean)
 const toNums = (s: string) => toList(s).map(Number).filter((n) => Number.isFinite(n))
+/** One "west, south, east, north" per line; anything that is not four numbers is dropped. */
+const toBoxes = (s: string) =>
+  toLines(s).map(toNums).filter((b): b is Bbox => b.length === 4)
 
 /** A saved region and a catalog-derived draft populate the form identically. */
 function fromRegion(r: ImportRegion | DerivedRegion['region']): Form {
@@ -69,6 +74,7 @@ function fromRegion(r: ImportRegion | DerivedRegion['region']): Form {
     key: r.key,
     label: r.label,
     bbox: [...r.bbox] as Bbox,
+    bboxes: (r.bboxes ?? []).map((b) => b.join(', ')).join('\n'),
     osmExtracts: lines(r.osmExtracts),
     osmReplication: lines(r.osmReplication ?? []),
     gtfsRegion: r.gtfsRegion,
@@ -108,6 +114,7 @@ async function save() {
     key: form.value.key.trim(),
     label: form.value.label.trim(),
     bbox: form.value.bbox,
+    bboxes: toBoxes(form.value.bboxes),
     osmExtracts: toLines(form.value.osmExtracts),
     osmReplication: toLines(form.value.osmReplication),
     gtfsRegion: form.value.gtfsRegion.trim(),
@@ -198,6 +205,22 @@ const coordLabels = ['West', 'South', 'East', 'North']
             <Input type="number" :model-value="form.bbox[i]" @update:model-value="setCoord(i, $event)" />
           </div>
         </div>
+      </div>
+
+      <div class="flex flex-col gap-1.5">
+        <Label>Separate areas <span class="text-muted-foreground">(optional)</span></Label>
+        <Textarea
+          :model-value="form.bboxes"
+          :rows="3"
+          placeholder="-125, 24, -66, 50"
+          class="font-mono text-xs"
+          @update:model-value="form.bboxes = $event"
+        />
+        <p class="text-xs text-muted-foreground">
+          One west, south, east, north per line, for a region made of separate areas, such as the
+          United States with Alaska and Hawaii. Bikeshare then keeps only what falls in these areas
+          instead of everything in the box above. The GTFS region takes several boxes separated by ";".
+        </p>
       </div>
 
       <!-- OSM sources -->
