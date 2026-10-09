@@ -61,21 +61,29 @@ BEGIN
        OR (geom_type = 'area' AND tags->>'man_made' = 'bridge')
   ),
   touching AS (
-    SELECT geom FROM now_rows
+    SELECT geom, geom_type FROM now_rows
     WHERE (geom_type = 'line' AND (tags ? 'highway' OR tags ? 'railway' OR tags ? 'waterway'))
        OR (geom_type = 'area' AND (tags->>'man_made' = 'bridge' OR tags->>'natural' = 'water'
                                    OR tags->>'waterway' = 'riverbank' OR tags->>'landuse' = 'reservoir'))
     UNION ALL
-    SELECT o.geom FROM osm_replay.old_places o
+    SELECT o.geom, o.geom_type FROM osm_replay.old_places o
     WHERE o.geom_type IN ('line', 'area') AND o.geom IS NOT NULL AND o.id NOT IN (SELECT id FROM same)
       AND (o.categories && ARRAY['man_made/bridge', 'natural/water', 'waterway/riverbank', 'landuse/reservoir']
            OR EXISTS (SELECT 1 FROM unnest(o.categories) k
                       WHERE k LIKE 'highway/%' OR k LIKE 'railway/%' OR k LIKE 'waterway/%'))
   ),
+  -- Only what reaches a recorded cell, by box, before any exact test. An area
+  -- (a riverbank, a lake) is tested by intersection, which PostGIS prepares
+  -- once per polygon, rather than by distance, which walks it per deck.
+  near AS (
+    SELECT t.geom, t.geom_type FROM touching t
+    WHERE EXISTS (SELECT 1 FROM bridge_deck_cells c WHERE c.box && t.geom)
+  ),
   decks AS (
     SELECT DISTINCT b.id, b.geom
-    FROM touching t
-    JOIN bridge_decks b ON b.geom && ST_Expand(t.geom, 0.00002) AND ST_DWithin(b.geom, t.geom, 0.00002)
+    FROM near t
+    JOIN bridge_decks b ON b.geom && ST_Expand(t.geom, 0.00002)
+     AND CASE WHEN t.geom_type = 'area' THEN ST_Intersects(t.geom, b.geom) ELSE ST_DWithin(b.geom, t.geom, 0.00002) END
   ),
   boxes AS (
     SELECT ST_Envelope(ST_Expand(geom, 0.0005)) AS box FROM bridges
@@ -83,9 +91,11 @@ BEGIN
     SELECT ST_Envelope(ST_Expand(geom, 0.0005)) FROM decks
   )
   -- A box already waiting, from an earlier cycle, is not queued twice.
+  -- Only boxes that reach a recorded cell, which is all an update rebuilds.
   INSERT INTO detail_dirty (layer, box)
   SELECT 'bridge_decks', b.box FROM boxes b
-  WHERE NOT EXISTS (SELECT 1 FROM detail_dirty q WHERE q.layer = 'bridge_decks' AND q.box ~= b.box AND q.attempts = 0);
+  WHERE EXISTS (SELECT 1 FROM bridge_deck_cells c WHERE c.box && b.box)
+    AND NOT EXISTS (SELECT 1 FROM detail_dirty q WHERE q.layer = 'bridge_decks' AND q.box ~= b.box AND q.attempts = 0);
   GET DIAGNOSTICS queued = ROW_COUNT;
   RAISE NOTICE 'bridge decks: queued % box(es)', queued;
 EXCEPTION WHEN OTHERS THEN

@@ -240,20 +240,29 @@ const CLASH_ROUNDS = 4
  * another cell, rebuilds again with that cell taken in, in one transaction.
  * The holding cell's copy is deleted as this one is written, so two cells
  * holding each other's ids resolve at once instead of each waiting on the
- * other. Returns the keys finally rebuilt, which include any taken in.
+ * other. `partsOf` says where in a cell may be written; `record` which cells
+ * to mark as built. Returns the keys finally rebuilt, which include any taken
+ * in.
  */
 export async function rebuildCells(
   sql: Sql,
   dem: Dem,
   keys: string[],
-  cell: { partsOf: (key: string) => UnitBox[] | Promise<UnitBox[]>; keyOf: (anchor: UnitPoint) => string; record?: boolean },
+  cell: {
+    partsOf: (key: string) => UnitBox[] | Promise<UnitBox[]>
+    keyOf: (anchor: UnitPoint) => string
+    record?: (key: string) => boolean
+  },
 ): Promise<{ stored: number; built: Built[]; moved: UnitPoint[]; keys: string[] }> {
   const taken = [...new Set(keys)]
+  const parts = new Map<string, UnitBox[]>()
   for (let round = 0; ; round++) {
-    const parts = (await Promise.all(taken.map(k => cell.partsOf(k)))).flat()
-    if (!parts.length) return { stored: 0, built: [], moved: [], keys: taken }
+    for (const k of taken) if (!parts.has(k)) parts.set(k, await cell.partsOf(k))
+    const boxes = taken.flatMap(k => parts.get(k)!)
+    if (!boxes.length) return { stored: 0, built: [], moved: [], keys: taken }
+    const record = cell.record ? taken.filter(cell.record).flatMap(k => parts.get(k)!) : []
     try {
-      const result = await rebuildBoxes(sql, dem, parts, cell.record ? parts : [])
+      const result = await rebuildBoxes(sql, dem, boxes, record)
       return { ...result, keys: taken }
     } catch (err) {
       if (!(err instanceof DeckConflict) || round + 1 >= CLASH_ROUNDS) throw err

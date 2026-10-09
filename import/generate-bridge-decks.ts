@@ -21,22 +21,67 @@ import { dbUrl, onnotice } from '../src/db'
 import { argValue } from '../src/lib/cli-args'
 import { cellsCovering, parseBbox, regionAreas } from '../src/lib/bridge-decks/areas'
 import { Dem, DEM_TILES, demConfigured } from '../src/lib/bridge-decks/dem'
-import { degreeBox, grid, toUnits } from '../src/lib/bridge-decks/grid'
+import { degreeBox, grid, toUnits, type UnitBox } from '../src/lib/bridge-decks/grid'
 import { missingMessage } from '../src/lib/bridge-decks/queue'
-import { DeckConflict, LOCK, missingTables, rebuildCells } from './bridge-deck-cells'
+import { coveredParts, DeckConflict, LOCK, missingTables, rebuildCells } from './bridge-deck-cells'
 
 const args = process.argv.slice(2)
 const flag = (name: string) => argValue(args, name)
 const CELL = Number(flag('cell') ?? 0.25)
 
-const sql = postgres(dbUrl, { onnotice, max: 3 })
+type Sql = postgres.Sql
 
 async function areas() {
   const bbox = flag('bbox')
   return bbox ? [parseBbox(bbox)] : regionAreas(await resolveRegions())
 }
 
-async function main() {
+/**
+ * Rebuilds and records the `size`-degree `cells` of a run. A cell is only
+ * ever recorded when it is one of the run's own. Outside them a rebuild
+ * writes only where cells are already recorded: when a clashing id or a deck
+ * that moved takes it into a neighbouring cell, it takes in just the part of
+ * that cell an earlier build covered.
+ */
+export async function buildArea(sql: Sql, dem: Dem, cells: UnitBox[], size: number) {
+  const g = grid(toUnits(size))
+  const run = new Map(cells.map(b => [g.at([b[0], b[1]]), b]))
+  const cell = {
+    partsOf: (k: string) => (run.has(k) ? [g.box(k)] : coveredParts(sql, g.box(k))),
+    keyOf: g.at,
+    record: (k: string) => run.has(k),
+  }
+  const started = Date.now()
+  const pending = [...run.keys()]
+  const queued = new Set(pending)
+  const done = new Set<string>()
+  let total = 0
+  let clashes = 0
+  while (pending.length) {
+    const key = pending.shift()!
+    if (done.has(key)) continue
+    try {
+      const { stored, keys, moved } = await rebuildCells(sql, dem, [key], cell)
+      for (const k of keys) done.add(k)
+      total += stored
+      // A deck this cell held whose midpoint now lies elsewhere goes there.
+      for (const k of moved.map(g.at))
+        if (!done.has(k) && !queued.has(k)) {
+          queued.add(k)
+          pending.push(k)
+        }
+      const also = keys.length > 1 ? `, with ${keys.slice(1).join(' ')}, which held some of its ids` : ''
+      if (stored || also) console.log(`[${done.size}/${queued.size}] cell ${degreeBox(g.box(key)).slice(0, 2).join(',')}: ${stored} decks${also} (${Math.round((Date.now() - started) / 1000)} s)`)
+    } catch (err) {
+      if (!(err instanceof DeckConflict)) throw err
+      clashes++
+      console.error(`ERROR: cell ${degreeBox(g.box(key)).join(',')} not rebuilt: ${err.message}. See Troubleshooting, "Bridge decks clash".`)
+    }
+  }
+  return { total, clashes, built: done.size }
+}
+
+async function main(sql: Sql) {
   const missing = await missingTables(sql)
   if (missing.length) throw new Error(missingMessage(missing))
   if (!demConfigured(DEM_TILES)) throw new Error(`BRIDGE_DECKS_DEM_TILES is "${DEM_TILES}": bridge decks need a terrain source`)
@@ -49,26 +94,8 @@ async function main() {
     await lock`SELECT pg_advisory_lock(${LOCK[0]}, ${LOCK[1]})`
   }
 
-  const dem = new Dem()
-  const started = Date.now()
-  const g = grid(toUnits(CELL))
-  const cell = { partsOf: (key: string) => [g.box(key)], keyOf: g.at, record: true }
-  let total = 0
-  let clashes = 0
-  for (const [k, box] of cells.entries()) {
-    const key = g.at([box[0], box[1]])
-    try {
-      const { stored, keys } = await rebuildCells(sql, dem, [key], cell)
-      total += stored
-      const also = keys.length > 1 ? `, with ${keys.slice(1).join(' ')}, which held some of its ids` : ''
-      if (stored || also) console.log(`[${k + 1}/${cells.length}] cell ${degreeBox(box).slice(0, 2).join(',')}: ${stored} decks${also} (${Math.round((Date.now() - started) / 1000)} s)`)
-    } catch (err) {
-      if (!(err instanceof DeckConflict)) throw err
-      clashes++
-      console.error(`ERROR: cell ${degreeBox(box).join(',')} not rebuilt: ${err.message}. See Troubleshooting, "Bridge decks clash".`)
-    }
-  }
-  console.log(`Bridge decks: ${total} built in ${cells.length} cells, ${Math.round((Date.now() - started) / 1000)} s.`)
+  const { total, clashes, built } = await buildArea(sql, new Dem(), cells, CELL)
+  console.log(`Bridge decks: ${total} built in ${built} cells.`)
   if (clashes) process.exitCode = 1
   await lock`SELECT pg_advisory_unlock(${LOCK[0]}, ${LOCK[1]})`
   lock.release()
@@ -76,7 +103,7 @@ async function main() {
 }
 
 if (import.meta.main) {
-  await main()
+  await main(postgres(dbUrl, { onnotice, max: 3 }))
   // resolveRegions may have opened the shared DB handle (region store); exit
   // rather than hang on an idle connection.
   process.exit(process.exitCode ?? 0)

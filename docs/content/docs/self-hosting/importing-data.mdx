@@ -552,8 +552,8 @@ was deleted is replaced or removed in the one cell that owns it. The cells
 divide Build Bridge Decks' default 0.25° cell, and an update writes only where
 a cell overlaps a recorded one. Cells are worked out in whole units of 1e-7°,
 so the API, the build and SQL always agree which cell a deck is in. A rebuild
-never takes over a deck id another cell holds: it rebuilds the holding cell in
-the same transaction (see
+never takes over a deck id another cell holds: it rebuilds the holding cell, or the part of
+it an earlier build recorded, in the same transaction (see
 [Troubleshooting](/self-hosting/troubleshooting#data) if that does not settle
 it). It takes up to `BRIDGE_DECKS_MAX_CELLS` cells a run and leaves the rest
 queued, and drops entries outside the recorded cells. Replication queues

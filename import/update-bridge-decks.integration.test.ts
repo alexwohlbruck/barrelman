@@ -18,6 +18,7 @@ import { join } from 'path'
 import { Dem } from '../src/lib/bridge-decks/dem'
 import { grid, toUnits, type UnitPoint } from '../src/lib/bridge-decks/grid'
 import { DeckConflict, missingTables, rebuildBoxes, rebuildCells } from './bridge-deck-cells'
+import { buildArea } from './generate-bridge-decks'
 import { updateDecks } from './update-bridge-decks'
 
 const DATABASE_URL = process.env.BARRELMAN_INTEGRATION_TESTS ? process.env.DATABASE_URL : undefined
@@ -26,7 +27,7 @@ const SCHEMA = 'bridge_decks_test'
 const build = grid(toUnits(0.02))
 const [A, EAST] = ['-4042,1761', '-4041,1761']
 const CELL = build.box(A)
-const BUILD = { partsOf: (key: string) => [build.box(key)], keyOf: build.at, record: true }
+const BUILD = { partsOf: (key: string) => [build.box(key)], keyOf: build.at, record: () => true }
 const Y = 35.225
 
 const line = (...pts: [number, number][]) => `LINESTRING(${pts.map(p => p.join(' ')).join(', ')})`
@@ -57,7 +58,7 @@ const enqueue = (w: number, s: number, e: number, n: number) =>
 const anchorOf = async (way: number) =>
   (await sql<{ x: number; y: number }[]>`SELECT anchor_x AS x, anchor_y AS y FROM bridge_decks WHERE ${String(way)} = ANY(ways::text[])`)
     .map(r => build.at([r.x, r.y]))
-const recorded = async () => (await sql<{ cell: string }[]>`SELECT cell FROM bridge_deck_cells ORDER BY cell`).map(r => r.cell)
+const recorded = async () => (await sql<{ cell: string }[]>`SELECT cell FROM bridge_deck_cells`).map(r => r.cell).sort()
 /** Stores a deck's anchor as if it had last been written by another cell. */
 const anchorIn = (way: number, [x, y]: UnitPoint) =>
   sql`UPDATE bridge_decks SET anchor_x = ${x}, anchor_y = ${y}, anchor = ST_SetSRID(ST_MakePoint(${x / 1e7}, ${y / 1e7}), 4326)
@@ -96,7 +97,7 @@ run('incremental bridge decks', () => {
       await sql`INSERT INTO geo_places (id, osm_type, osm_id, categories, tags, geom, geom_type)
         VALUES (${'way/' + id}, 'W', ${id}, ${categories}, ${sql.json(tags)}, ST_GeomFromText(${wkt}, 4326), 'line')`
     }
-    await rebuildCells(sql, flat(), [A], BUILD)
+    await buildArea(sql, flat(), [CELL], 0.02)
   }, 60_000)
 
   afterAll(async () => {
@@ -133,9 +134,15 @@ run('incremental bridge decks', () => {
           ('way/7', 'W', 7, '{highway/footway}', '{"highway": "footway", "bridge": "yes"}', ST_GeomFromText('${line([-100, 40], [-99.9995, 40])}', 4326), 'line')`)
     })
 
-    test('queues the new bridges and the decks the change touched', async () => {
-      // Bridges 6 and 7 as they are now; the decks of 2+3 and of 5 as they were.
-      expect(await queued()).toBe(4)
+    test('queues the new bridge and the decks the change touched', async () => {
+      // Bridge 6 as it is now; the decks of 2+3 and of 5 as they were.
+      expect(await queued()).toBe(3)
+    })
+
+    test('queues nothing that reaches no recorded cell, like bridge 7', async () => {
+      const [{ n }] = await sql`SELECT count(*)::int AS n FROM detail_dirty d
+        WHERE NOT EXISTS (SELECT 1 FROM bridge_deck_cells c WHERE c.box && d.box)`
+      expect(n).toBe(0)
     })
 
     test('rebuilds them, and drops what lies where no decks were built', async () => {
@@ -152,7 +159,7 @@ run('incremental bridge decks', () => {
     test('leaves exactly what a full rebuild builds, with nothing doubled or left over', async () => {
       const incremental = await snapshot()
       await sql`TRUNCATE bridge_decks`
-      await rebuildCells(sql, flat(), [A], BUILD)
+      await buildArea(sql, flat(), [CELL], 0.02)
       expect(await snapshot()).toEqual(incremental)
     }, 60_000)
   })
@@ -187,12 +194,25 @@ run('incremental bridge decks', () => {
       expect(await recorded()).toEqual([])
     }, 60_000)
 
-    test('is rebuilt together with the cell holding it', async () => {
-      const { keys } = await rebuildCells(sql, flat(), [A], BUILD)
-      expect(keys).toEqual([A, EAST])
+    test('Build takes in only the recorded part of the holding cell, and records only its own', async () => {
+      // An earlier build covered only the west half of the cell holding deck 2's id.
+      const [w, s, , n] = build.box(EAST)
+      const half = [w, s, w + 100_000, n]
+      await sql`INSERT INTO bridge_deck_cells (cell, w, s, e, n, box) VALUES (${half.join(',')}, ${half[0]}, ${half[1]}, ${half[2]}, ${half[3]},
+        ST_MakeEnvelope(${half[0] / 1e7}, ${half[1] / 1e7}, ${half[2] / 1e7}, ${half[3] / 1e7}, 4326))`
+      const { clashes } = await buildArea(sql, flat(), [CELL], 0.02)
+      expect(clashes).toBe(0)
       expect(await anchorOf(2)).toEqual([A])
+      expect(await recorded()).toEqual([CELL.join(','), half.join(',')].sort())
+    }, 60_000)
+
+    test('Build carries a deck that moved out of its cell to where it lies now', async () => {
+      await buildArea(sql, flat(), [build.box(EAST)], 0.02)
+      const [w, s] = CELL
+      await anchorIn(8, [w + 10, s + 10])
+      const { built } = await buildArea(sql, flat(), [CELL], 0.02)
+      expect(built).toBe(2)
       expect(await anchorOf(8)).toEqual([EAST])
-      expect((await recorded()).length).toBe(2)
     }, 60_000)
 
     // Each deck stored as if the other cell had written it last.
@@ -232,6 +252,32 @@ run('incremental bridge decks', () => {
       expect(rows.map(r => r.attempts)).toEqual([2])
       expect((await sql`SELECT to_regclass('road_markings_dirty') AS t`)[0].t).toBeNull()
       await sql`DELETE FROM detail_dirty`
+    })
+  })
+
+  describe('setting up the queue in a replication cycle', () => {
+    let other: postgres.Sql
+    beforeAll(async () => {
+      other = postgres(DATABASE_URL!, { max: 1, onnotice: () => {}, connection: { search_path: 'detail_queue_test, public' } })
+      await other.unsafe('DROP SCHEMA IF EXISTS detail_queue_test CASCADE; CREATE SCHEMA detail_queue_test')
+    })
+    afterAll(async () => {
+      await other.unsafe('DROP SCHEMA IF EXISTS detail_queue_test CASCADE')
+      await other.end()
+    })
+    const exists = async (table: string) => (await other`SELECT to_regclass(${table}) IS NOT NULL AS t`)[0].t
+
+    test('creates nothing where no layer has been built', async () => {
+      await other.unsafe(file('detail-queue-table.sql'))
+      expect(await exists('detail_dirty')).toBe(false)
+    })
+
+    test('reports a failure rather than raising it, so the cycle commits', async () => {
+      await other.unsafe(`CREATE TABLE road_markings_dirty (box text, queued_at timestamptz DEFAULT now());
+        INSERT INTO road_markings_dirty (box) VALUES ('not a box')`)
+      await other.unsafe(file('detail-queue-table.sql'))
+      expect(await exists('detail_dirty')).toBe(false)
+      expect(await exists('road_markings_dirty')).toBe(true)
     })
   })
 

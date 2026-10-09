@@ -118,7 +118,7 @@ The transaction was rolled back and nothing changed. The guard trips when a swap
 
 **Bridge decks clash: `already belong to a deck anchored elsewhere`**
 
-Each deck is owned by the cell its midpoint lies in, and its id names where it lies. When a deck has moved into a cell since it was last stored, the cell rebuilding it finds the old copy still held by its previous cell. Build Bridge Decks and Update Bridge Decks both rebuild the holding cell in the same transaction and carry on, and the log says which cells they took in. The error means that did not settle it within a few rounds, and that cell was left as it was. Build Bridge Decks then exits 1. Update Bridge Decks reports a warning and retries the entries over that cell on the next two runs.
+Each deck is owned by the cell its midpoint lies in, and its id names where it lies. When a deck has moved into a cell since it was last stored, the cell rebuilding it finds the old copy still held by its previous cell. Build Bridge Decks and Update Bridge Decks both rebuild the holding cell in the same transaction and carry on. Outside the run's own cells they rebuild only the part an earlier build recorded, and record nothing new, and the log says which cells they took in. The error means that did not settle it within a few rounds, and that cell was left as it was. Build Bridge Decks then exits 1. Update Bridge Decks reports a warning and retries the entries over that cell on the next two runs.
 
 Nothing is lost or doubled: the failed cell is rolled back whole. To clear it, run Build Bridge Decks with a `--bbox` around both places the log names. If it keeps clashing, the two copies really are different decks with one id, so report it with the ids from the log.
 
