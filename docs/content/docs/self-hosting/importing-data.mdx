@@ -481,20 +481,33 @@ the road's speed rather than jumping at the join. A full build takes minutes
 for a city and about two days for the whole US, so a large install builds it
 area by area: run the script in a session that first creates `_rm_scope` with
 one box in it, and only that box is rebuilt and merged into the live tables,
-meeting its neighbours without a seam.
+meeting its neighbours without a seam. The first box creates the tables if
+there are none yet.
 
 ```sql
 CREATE TEMP TABLE _rm_scope AS SELECT ST_MakeEnvelope(-81.0, 35.05, -80.65, 35.40, 4326) AS box;
 \i /app/import/generate-road-markings.sql
 ```
 
-OSM Update keeps built areas current. Each replication cycle queues the old and
-new outlines of the roads it touched (`road_markings_dirty`), and
+One build runs at a time, full or scoped: each holds an advisory lock, and one
+started meanwhile waits for it. A build sent as one transaction, as the console
+sends it or `psql -1` does, holds the lock for that transaction; one run
+statement by statement, as above, holds it until the file ends or psql exits.
+
+OSM Update can keep built areas current, but does not by default: turn on its
+"Update road markings" switch, or set `ROAD_MARKINGS_INCREMENTAL=1` for runs
+started from a shell. Leave it off while a large area is still being built.
+With it on, each replication cycle queues the old and new outlines of the
+roads, crossings and signals it touched (`road_markings_dirty`), and
 `scripts/update-road-markings.sh` rebuilds the 2 km cells they fall in where
 road markings exist, up to `ROAD_MARKINGS_MAX_CELLS` cells a run. Areas nobody
-built are skipped. Only a database without osm2pgsql's middle tables records
-what changed; one updated through `osm2pgsql-replication` needs a scoped
-rebuild by hand.
+built are dropped from the queue, and nothing is queued on a database that
+never built road markings. A cell that fails to build is logged and skipped,
+and tried again on the next two runs before it is given up. While a full build
+runs, the update leaves the queue for the next run instead of waiting. A
+failure here is reported and the rest of OSM Update carries on. Only a database
+without osm2pgsql's middle tables records what changed; one updated through
+`osm2pgsql-replication` needs a scoped rebuild by hand.
 
 `buildings_3d`, `street_furniture` and `sport_pitches` are not plain views. OpenStreetMap maps a detailed
 building twice — an outline tagged `building=*` and `building:part=*` polygons
