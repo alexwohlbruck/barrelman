@@ -57,6 +57,12 @@ const ways: [number, string, Record<string, string>][] = [
   [50, line([-74.050, 40.718], [-74.050, 40.7195]), { highway: 'residential', oneway: 'yes', lanes: '2' }],
   [51, line([-74.050, 40.7195], [-74.050, 40.7215]), { highway: 'residential', oneway: 'yes', lanes: '3' }],
   [52, line([-74.050, 40.7215], [-74.050, 40.723]), { highway: 'residential', oneway: 'yes', lanes: '3' }],
+  // A left-bay approach that runs on as two lanes.
+  [60, line([-74.070, 40.712], [-74.070, 40.713]), { highway: 'residential', oneway: 'yes', lanes: '3', 'turn:lanes': 'left|through|through' }],
+  [61, line([-74.070, 40.713], [-74.070, 40.714]), { highway: 'residential', oneway: 'yes', lanes: '2' }],
+  // One unsplit two-way street with bike lanes, through a crossroads.
+  [62, line([-74.080, 40.7145], [-74.079, 40.7145], [-74.078, 40.7145]), { highway: 'residential', lanes: '2', 'cycleway:both': 'lane' }],
+  [63, line([-74.079, 40.714], [-74.079, 40.7145], [-74.079, 40.715]), { highway: 'residential', lanes: '2' }],
   // A crossing that only clips the kerb of road 12, at 25° to it.
   [30, line([-74.004 + 0.9 / 84300, 40.7125], [-74.004 + (0.9 + 4.226) / 84300, 40.7125 + 9.063 / 111000]),
     { highway: 'footway', footway: 'crossing', 'crossing:markings': 'zebra' }],
@@ -210,6 +216,22 @@ run('generate-road-markings.sql', () => {
     expect(band).toBeNull()
   })
 
+  test('lines a way up with the through lanes of a left-bay approach before it', async () => {
+    for (const [m, hit] of [[2.5, true], [3.5, false], [-2.5, true], [-3.5, false]] as const) {
+      expect(await covered(east(-74.070, m), 40.7135)).toBe(hit)
+    }
+  })
+
+  test('paints bike lanes across a crossroads in both directions of one street', async () => {
+    for (const side of [1, -1]) {
+      const [{ n }] = await sql`
+        SELECT count(*)::int as n FROM road_markings
+        WHERE kind IN ('bike_lane', 'bike') AND ST_DWithin(geom::geography,
+          ST_SetSRID(ST_MakePoint(-74.079, ${40.7145 + (side * 3.8) / 111000}), 4326)::geography, 3)`
+      expect(n).toBeGreaterThan(0)
+    }
+  })
+
   test('lays a way tagged placement=right_of:2 along its right kerb', async () => {
     expect(await covered(east(-74.012, -5), 40.7125)).toBe(true)
     expect(await covered(east(-74.012, 1), 40.7125)).toBe(false)
@@ -274,6 +296,8 @@ run('generate-road-markings.sql', () => {
   })
 
   describe('a diff upstream of a cell boundary', () => {
+    let queued = 0
+    let ownTest = false
     beforeAll(async () => {
       await sql`UPDATE geo_places SET tags = tags || '{"lanes": "1"}' WHERE id = 'W50'`
       await sql.unsafe(`DROP SCHEMA IF EXISTS osm_replay CASCADE; CREATE SCHEMA osm_replay;
@@ -283,7 +307,11 @@ run('generate-road-markings.sql', () => {
         CREATE TABLE osm_replay.changed AS SELECT id FROM geo_places WHERE id = 'W50';`)
       await sql.unsafe(readFileSync(join(import.meta.dir, 'detail-queue-table.sql'), 'utf8'))
       await sql`DELETE FROM detail_dirty`
+      // As on a database last built before the queue's road test existed.
+      await sql`DROP FUNCTION road_is_marked_way(jsonb)`
       await sql.unsafe(readFileSync(join(import.meta.dir, 'queue-road-markings.sql'), 'utf8'))
+      queued = (await sql`SELECT count(*)::int as n FROM detail_dirty`)[0].n
+      ownTest = (await sql`SELECT to_regprocedure(${SCHEMA + '.road_is_marked_way(jsonb)'}) IS NOT NULL as ok`)[0].ok
       const out = await sql.unsafe(readFileSync(join(import.meta.dir, 'road-markings-dirty-cells.sql'), 'utf8')
         .replaceAll(':max_cells', '100').replaceAll(':max_attempts', '3').replaceAll(':cell', '0.02'))
       const rows = (Array.isArray(out.at(-1)) ? out.at(-1) : out) as { kind: string; a: string; b: string }[]
@@ -299,6 +327,12 @@ run('generate-road-markings.sql', () => {
       await sql`DELETE FROM detail_dirty`
     })
 
+    test('queues it on a database whose last build had no road test of its own', async () => {
+      expect(ownTest).toBe(true)
+      // The way, its old outline, and the two ways carrying on from it.
+      expect(queued).toBe(4)
+    })
+
     test('rebuilds the ways downstream as well, on both sides of the boundary', async () => {
       // One lane before: the next way's left kerb moves in to 1.5 m.
       for (const y of [40.7198, 40.71995, 40.72005, 40.7212]) {
@@ -307,6 +341,15 @@ run('generate-road-markings.sql', () => {
         expect(await covered(east(-74.050, 7), y)).toBe(true)
       }
     })
+  })
+
+  test('keeps the queue\'s road test the same as the build\'s', () => {
+    const body = (file: string) => {
+      const text = readFileSync(join(import.meta.dir, file), 'utf8')
+      const start = text.indexOf('CREATE OR REPLACE FUNCTION road_is_marked_way')
+      return text.slice(start, text.indexOf('$$;', start))
+    }
+    expect(body('queue-road-markings.sql')).toBe(body('generate-road-markings.sql'))
   })
 
   describe('two neighbouring cells', () => {
