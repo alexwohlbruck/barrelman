@@ -10,6 +10,32 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.10.5] - 2026-10-08
+
+### Changed
+
+* **A 3D landmark can be raised or sunk without its model being lifted.** The
+  landmark tile's `elevation` now carries the value the landmarks release
+  sends, in metres: positive for a model standing on something the map
+  doesn't draw (the Statue of Liberty on Fort Wood), negative for one whose
+  base is below the street (a stadium's field). It was always 0 before,
+  because the release baked the lift into the model, and a client that grounds
+  a model by its lowest points pulled that lift back down. Releases without
+  the field, and every Open Landmarks asset, still import at 0, and an
+  elevation beyond ±200 m skips the asset. `height` now includes the
+  elevation, so it stays the height the landmark reaches above its ground.
+
+### Fixed
+
+* **Brand logos are no longer lost when a Wikidata request fails.** The logo
+  loader recorded every brand in a failed request as having no logo, and never
+  asked again, so about 1,000 brands showed a generic icon — Starbucks and
+  Walmart among them. The usual cause was a brand tagged with several Wikidata
+  IDs (`Q155026;Q7771029`): one such value made Wikidata reject all 50 brands in
+  its request. The loader now asks for the first ID, backs off and retries when
+  rate-limited, records only the brands Wikidata answered for, and retries
+  failed ones a day later. Brands without a logo are re-checked monthly.
+
 ## [0.10.4] - 2026-10-08
 
 ### Added
