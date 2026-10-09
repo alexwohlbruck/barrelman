@@ -21,10 +21,21 @@
 -- Nothing is queued where road markings were never built. A failure here is
 -- reported and skipped rather than raised: it would otherwise roll back the
 -- replication cycle it rides in.
--- Needs detail_dirty (detail-queue-table.sql), and road_is_marked_way from a
--- build with generate-road-markings.sql; without it the diff is skipped with a
--- warning, as below.
+-- Needs detail_dirty (detail-queue-table.sql).
 -- =============================================================================
+-- The same test generate-road-markings.sql builds from, kept here as well so a
+-- database whose last build predates it still queues (a test holds the two
+-- copies equal).
+CREATE OR REPLACE FUNCTION road_is_marked_way(tags jsonb) RETURNS boolean
+LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+  SELECT tags->>'highway' IN ('motorway', 'motorway_link', 'trunk', 'trunk_link', 'primary', 'primary_link',
+                              'secondary', 'secondary_link', 'tertiary', 'tertiary_link', 'unclassified',
+                              'residential', 'living_street', 'service', 'busway')
+    AND COALESCE(tags->>'tunnel', 'no') = 'no'
+    AND COALESCE(tags->>'area', 'no') <> 'yes'
+    AND (tags->>'highway' <> 'service' OR tags ?| ARRAY['lanes', 'lane_markings', 'width', 'width:carriageway'])
+$$;
+
 DO $$
 DECLARE
   queued bigint;
@@ -34,14 +45,14 @@ BEGIN
   END IF;
 
   WITH relevant_new AS (
-    SELECT g.id, g.geom
+    SELECT g.id, g.osm_id, g.geom
     FROM geo_places g
     JOIN osm_replay.changed c ON c.id = g.id
     WHERE (g.geom_type = 'line' AND (road_is_marked_way(g.tags) OR g.tags->>'footway' = 'crossing'))
        OR (g.geom_type = 'point' AND g.tags->>'highway' IN ('crossing', 'traffic_signals', 'stop'))
   ),
   touched AS (
-    SELECT o.geom
+    SELECT o.osm_id, o.geom
     FROM osm_replay.old_places o
     WHERE (o.geom_type = 'line'
            AND (o.categories && ARRAY['highway/motorway', 'highway/motorway_link', 'highway/trunk', 'highway/trunk_link',
@@ -56,21 +67,26 @@ BEGIN
        OR (o.geom_type = 'point' AND o.categories && ARRAY['highway/crossing', 'highway/traffic_signals', 'highway/stop'])
        OR o.id IN (SELECT id FROM relevant_new)
     UNION ALL
-    SELECT geom FROM relevant_new
+    SELECT osm_id, geom FROM relevant_new
   ),
-  -- A way joined end to end with exactly one other road way: the next one along.
+  -- The way carrying on from an end of a touched road, as the build pairs them:
+  -- that end meets the end of one other road way and nothing else's. The
+  -- touched way's own outline is the old one where it moved, so it is not
+  -- looked for in geo_places.
   next1 AS (
     SELECT DISTINCT n.osm_id, n.geom
     FROM touched t, LATERAL (VALUES (ST_StartPoint(t.geom)), (ST_EndPoint(t.geom))) e(pt),
          LATERAL (
            SELECT g.osm_id, g.geom FROM geo_places g
            WHERE g.geom && ST_Expand(e.pt, 1e-7) AND g.geom_type = 'line' AND road_is_marked_way(g.tags)
+             AND g.osm_id <> t.osm_id
              AND (ST_DWithin(ST_StartPoint(g.geom), e.pt, 1e-7) OR ST_DWithin(ST_EndPoint(g.geom), e.pt, 1e-7))
          ) n
-    WHERE GeometryType(t.geom) = 'LINESTRING' AND NOT ST_Equals(n.geom, t.geom)
+    WHERE GeometryType(t.geom) = 'LINESTRING'
       AND (SELECT count(*) FROM geo_places g
            WHERE g.geom && ST_Expand(e.pt, 1e-7) AND g.geom_type = 'line' AND road_is_marked_way(g.tags)
-             AND ST_DWithin(g.geom, e.pt, 1e-7)) = 2
+             AND g.osm_id <> t.osm_id
+             AND (ST_DWithin(ST_StartPoint(g.geom), e.pt, 1e-7) OR ST_DWithin(ST_EndPoint(g.geom), e.pt, 1e-7))) = 1
   ),
   next2 AS (
     SELECT DISTINCT n.osm_id, n.geom
@@ -78,12 +94,14 @@ BEGIN
          LATERAL (
            SELECT g.osm_id, g.geom FROM geo_places g
            WHERE g.geom && ST_Expand(e.pt, 1e-7) AND g.geom_type = 'line' AND road_is_marked_way(g.tags)
+             AND g.osm_id <> t.osm_id
              AND (ST_DWithin(ST_StartPoint(g.geom), e.pt, 1e-7) OR ST_DWithin(ST_EndPoint(g.geom), e.pt, 1e-7))
          ) n
-    WHERE n.osm_id <> t.osm_id AND NOT EXISTS (SELECT 1 FROM touched x WHERE ST_Equals(x.geom, n.geom))
+    WHERE NOT EXISTS (SELECT 1 FROM touched x WHERE x.osm_id = n.osm_id)
       AND (SELECT count(*) FROM geo_places g
            WHERE g.geom && ST_Expand(e.pt, 1e-7) AND g.geom_type = 'line' AND road_is_marked_way(g.tags)
-             AND ST_DWithin(g.geom, e.pt, 1e-7)) = 2
+             AND g.osm_id <> t.osm_id
+             AND (ST_DWithin(ST_StartPoint(g.geom), e.pt, 1e-7) OR ST_DWithin(ST_EndPoint(g.geom), e.pt, 1e-7))) = 1
   )
   INSERT INTO detail_dirty (layer, box)
   SELECT 'road_markings', ST_Envelope(ST_Expand(geom, 0.0005))
