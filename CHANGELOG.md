@@ -53,6 +53,15 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ### Fixed
 
+* **The API starts while an OSM update is running.** On startup it ran
+  `ALTER TABLE geo_places ADD COLUMN IF NOT EXISTS …` and three
+  `CREATE INDEX IF NOT EXISTS`, which lock the table before checking whether
+  there is anything to do. During an update's long write to `geo_places`, a
+  restarted API queued behind it, never started listening, and made every other
+  query on the table queue behind it too. Startup now reads the catalogs and
+  runs only the changes that are missing, and any startup schema change waits at
+  most 5 seconds for a lock before it is left for the next start.
+
 * **The `us` GTFS region includes Alaska and Hawaii.** It covered only the
   lower 48, though the US OSM extract has all 50 states, so feeds such as
   Honolulu's TheBus and Anchorage's People Mover were never downloaded. It now
