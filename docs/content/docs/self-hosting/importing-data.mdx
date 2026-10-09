@@ -499,7 +499,7 @@ OSM Update can keep built areas current, but does not by default: turn on its
 "Update road markings" switch, or set `ROAD_MARKINGS_INCREMENTAL=1` for runs
 started from a shell. Leave it off while a large area is still being built.
 With it on, each replication cycle queues the old and new outlines of the
-roads, crossings and signals it touched (`road_markings_dirty`), and
+roads, crossings and signals it touched (`detail_dirty`), and
 `scripts/update-road-markings.sh` rebuilds the 2 km cells they fall in where
 road markings exist, up to `ROAD_MARKINGS_MAX_CELLS` cells a run. Areas nobody
 built are dropped from the queue, and nothing is queued on a database that
@@ -536,7 +536,26 @@ in place, so it can be scoped with `--bbox` and stopped and resumed. Without
 `--bbox` it covers the areas of the regions `REGIONS` selects, each region's
 `bboxes` rather than one box around them. `REGIONS=global` is refused rather
 than read as the planet: building every bridge on Earth takes days, so start
-it deliberately, one `--bbox` at a time. It is not part of OSM Update yet.
+it deliberately, one `--bbox` at a time. Each cell a run builds is recorded in
+`bridge_deck_cells`.
+
+OSM Update keeps the decks in those cells current, unless its "Update bridge
+decks" switch is off (`BRIDGE_DECKS_INCREMENTAL=0` for runs started from a
+shell). Each replication cycle queues, in `detail_dirty`, the bridge ways and
+`man_made=bridge` outlines it touched, and every deck that something it is
+built from touched before or after the diff: its own ways, the roads its ends
+land on, what it crosses, and water under it. "Update Bridge Decks"
+(`import/update-bridge-decks.ts`) then rebuilds the 2 km cells of each entry,
+along with the cells its old decks were anchored in and any its new ones now
+are, so a deck that moved, grew, lost its bridge tag or was deleted is replaced
+or removed in the one cell that owns it. It takes up to
+`BRIDGE_DECKS_MAX_CELLS` cells a run and leaves the rest queued, drops entries
+outside the recorded cells, and does nothing on a database that never built
+decks or with `BRIDGE_DECKS_DEM_TILES=off`. A cell that fails is retried on the
+next two runs; while Build Bridge Decks runs, the update leaves the queue for
+the next run. A failure is reported and the rest of OSM Update carries on. As
+with road markings, only a database without osm2pgsql's middle tables records
+what changed.
 
 `buildings_3d`, `street_furniture` and `sport_pitches` are not plain views. OpenStreetMap maps a detailed
 building twice — an outline tagged `building=*` and `building:part=*` polygons
