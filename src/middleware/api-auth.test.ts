@@ -515,8 +515,11 @@ describe('tiles', () => {
 
   test('do not spend the budget the other endpoints are checked against', async () => {
     const d = deps({ resolveApiKey: mock(async () => resolved({ plan: 'free' })) })
+    // One app, reused: compiling a fresh one per request made this the slowest
+    // test in the suite, and it timed out on a loaded machine.
+    const tiles = app('tiles', d)
     for (let i = 0; i < FREE_RPM * 2; i += 1) {
-      await app('tiles', d).handle(get({ authorization: `Bearer ${LIVE_KEY}` }))
+      await tiles.handle(get({ authorization: `Bearer ${LIVE_KEY}` }))
     }
 
     const search = await app('search', d).handle(get({ authorization: `Bearer ${LIVE_KEY}` }))
