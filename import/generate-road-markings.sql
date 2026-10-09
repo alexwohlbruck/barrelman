@@ -16,6 +16,30 @@
 -- swapped in at the end, so tiles keep serving the old geometry meanwhile.
 -- =============================================================================
 
+-- ─── One build at a time ─────────────────────────────────────────────────────
+-- Full and scoped builds (see Scope below) write the same road_*_next tables,
+-- so every build holds advisory lock (5393739, 0), "RMK" in ASCII, and a build
+-- started during another waits for it. Run as one transaction, the way the
+-- console sends this file or `psql -1`, the lock belongs to the transaction and
+-- goes with it, failure included. Run statement by statement (psql \i), it
+-- belongs to the session and is let go at the end of this file, or when psql
+-- exits. scripts/update-road-markings.sh checks it before each cell, so a
+-- nightly update steps aside for a full build instead of queueing behind it.
+CREATE TEMP TABLE IF NOT EXISTS _rm_lock (xid xid8);
+TRUNCATE _rm_lock;
+INSERT INTO _rm_lock VALUES (pg_current_xact_id());
+DO $$
+BEGIN
+  IF (SELECT xid FROM _rm_lock) = pg_current_xact_id() THEN
+    PERFORM pg_advisory_xact_lock(5393739, 0);
+  -- An interactive session can still hold it from a run that stopped partway.
+  ELSIF NOT EXISTS (SELECT 1 FROM pg_locks WHERE locktype = 'advisory' AND pid = pg_backend_pid()
+                    AND classid = 5393739 AND objid = 0 AND objsubid = 2 AND granted) THEN
+    PERFORM pg_advisory_lock(5393739, 0);
+  END IF;
+END
+$$;
+
 -- Default lane width in metres by class.
 CREATE OR REPLACE FUNCTION road_lane_width(class text) RETURNS float8
 LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
@@ -180,12 +204,27 @@ EXCEPTION WHEN OTHERS THEN
 END
 $$;
 
+-- The part of `g` inside the box (or outside it), as `dim` (2 lines, 3
+-- polygons). A scoped build cuts live rows it did not make, and GEOS refuses
+-- some invalid polygons outright; those are repaired and cut again rather
+-- than failing the whole box.
+CREATE OR REPLACE FUNCTION road_clip(g geometry, box geometry, inside boolean, dim int) RETURNS geometry
+LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE AS $$
+BEGIN
+  RETURN ST_CollectionExtract(CASE WHEN inside THEN ST_Intersection(g, box) ELSE ST_Difference(g, box) END, dim);
+EXCEPTION WHEN OTHERS THEN
+  g := ST_MakeValid(g);
+  RETURN ST_CollectionExtract(CASE WHEN inside THEN ST_Intersection(g, box) ELSE ST_Difference(g, box) END, dim);
+END
+$$;
+
 -- ─── Scope ───────────────────────────────────────────────────────────────────
 -- To rebuild one box rather than everything, create _rm_scope in the same
 -- session first and put the box in it (EPSG:4326). Roads are read from a
 -- margin around it, so junctions at the edge come out whole; what is written
 -- is cut to the box and merged into the live tables, so neighbouring boxes
--- meet without seams. Without a scope the tables are rebuilt and swapped.
+-- meet without seams; the live tables are created if this is the first box.
+-- Without a scope the tables are rebuilt and swapped.
 CREATE TEMP TABLE IF NOT EXISTS _rm_scope (box geometry(Polygon, 4326) NOT NULL);
 DROP TABLE IF EXISTS _rm_area;
 CREATE TEMP TABLE _rm_area AS
@@ -845,20 +884,34 @@ BEGIN
     RETURN;
   END IF;
 
+  -- The first box on a database that never had a full build. Same shape as
+  -- the swapped-in tables, so a later full build replaces them cleanly.
+  CREATE TABLE IF NOT EXISTS road_surfaces (
+    fid bigserial CONSTRAINT road_surfaces_pkey PRIMARY KEY, bridge boolean, geom geometry(MultiPolygon, 4326));
+  CREATE TABLE IF NOT EXISTS road_markings (
+    fid bigserial CONSTRAINT road_markings_pkey PRIMARY KEY, kind text, pattern text, color text, style text, bridge boolean,
+    geom geometry(Geometry, 4326));
+  CREATE TABLE IF NOT EXISTS road_glyphs (
+    fid bigserial CONSTRAINT road_glyphs_pkey PRIMARY KEY, glyph text, direction int, bridge boolean, geom geometry(Point, 4326));
+  CREATE INDEX IF NOT EXISTS road_surfaces_geom_idx ON road_surfaces USING gist (geom);
+  CREATE INDEX IF NOT EXISTS road_markings_geom_idx ON road_markings USING gist (geom);
+  CREATE INDEX IF NOT EXISTS road_glyphs_geom_idx ON road_glyphs USING gist (geom);
+
   -- Live rows straddling the box keep only their part outside it; the new
-  -- rows, cut to the box, fill the inside.
-  UPDATE road_surfaces SET geom = ST_Multi(ST_CollectionExtract(ST_Difference(geom, box), 3))
-  WHERE geom && box AND NOT ST_CoveredBy(geom, box);
-  DELETE FROM road_surfaces WHERE geom && box AND (ST_IsEmpty(geom) OR ST_CoveredBy(geom, box));
-  UPDATE road_markings SET geom = ST_CollectionExtract(ST_Difference(geom, box), CASE WHEN pattern = 'fill' THEN 3 ELSE 2 END)
-  WHERE geom && box AND NOT ST_CoveredBy(geom, box);
-  DELETE FROM road_markings WHERE geom && box AND (ST_IsEmpty(geom) OR ST_CoveredBy(geom, box));
+  -- rows, cut to the box, fill the inside. The box is a rectangle, so a row
+  -- whose bounding box lies inside it (@) lies inside it, with no GEOS call.
+  UPDATE road_surfaces SET geom = ST_Multi(road_clip(geom, box, false, 3))
+  WHERE geom && box AND NOT geom @ box;
+  DELETE FROM road_surfaces WHERE geom && box AND (geom @ box OR ST_IsEmpty(geom));
+  UPDATE road_markings SET geom = road_clip(geom, box, false, CASE WHEN pattern = 'fill' THEN 3 ELSE 2 END)
+  WHERE geom && box AND NOT geom @ box;
+  DELETE FROM road_markings WHERE geom && box AND (geom @ box OR ST_IsEmpty(geom));
   DELETE FROM road_glyphs WHERE ST_Intersects(geom, box);
 
   INSERT INTO road_surfaces (bridge, geom)
-  SELECT bridge, ST_Multi(ST_CollectionExtract(ST_Intersection(geom, box), 3)) FROM road_surfaces_next WHERE geom && box;
+  SELECT bridge, ST_Multi(road_clip(geom, box, true, 3)) FROM road_surfaces_next WHERE geom && box;
   INSERT INTO road_markings (kind, pattern, color, style, bridge, geom)
-  SELECT kind, pattern, color, style, bridge, ST_CollectionExtract(ST_Intersection(geom, box), CASE WHEN pattern = 'fill' THEN 3 ELSE 2 END)
+  SELECT kind, pattern, color, style, bridge, road_clip(geom, box, true, CASE WHEN pattern = 'fill' THEN 3 ELSE 2 END)
   FROM road_markings_next WHERE geom && box;
   INSERT INTO road_glyphs (glyph, direction, bridge, geom)
   SELECT glyph, direction, bridge, geom FROM road_glyphs_next WHERE ST_Intersects(geom, box);
@@ -873,3 +926,7 @@ $$;
 ANALYZE road_surfaces;
 ANALYZE road_markings;
 ANALYZE road_glyphs;
+
+-- Let go of a session's lock (see "One build at a time"); a transaction's goes
+-- at its commit.
+SELECT pg_advisory_unlock(5393739, 0) FROM _rm_lock WHERE xid <> pg_current_xact_id();
