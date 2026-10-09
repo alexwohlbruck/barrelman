@@ -180,6 +180,17 @@ EXCEPTION WHEN OTHERS THEN
 END
 $$;
 
+-- ─── Scope ───────────────────────────────────────────────────────────────────
+-- To rebuild one box rather than everything, create _rm_scope in the same
+-- session first and put the box in it (EPSG:4326). Roads are read from a
+-- margin around it, so junctions at the edge come out whole; what is written
+-- is cut to the box and merged into the live tables, so neighbouring boxes
+-- meet without seams. Without a scope the tables are rebuilt and swapped.
+CREATE TEMP TABLE IF NOT EXISTS _rm_scope (box geometry(Polygon, 4326) NOT NULL);
+DROP TABLE IF EXISTS _rm_area;
+CREATE TEMP TABLE _rm_area AS
+SELECT COALESCE((SELECT ST_Expand(box, 0.003) FROM _rm_scope LIMIT 1), ST_MakeEnvelope(-180, -90, 180, 90, 4326)) as area;
+
 -- ─── Roads and their lanes ───────────────────────────────────────────────────
 -- A way tagged oneway=-1 is turned to run with its traffic, so its OSM left
 -- and right swap: `l` and `r` below name the sides of the geometry.
@@ -204,7 +215,7 @@ WITH raw AS (
                 WHEN tags->>'highway' IN ('primary', 'primary_link') THEN 45 WHEN tags->>'highway' IN ('secondary', 'secondary_link') THEN 40
                 WHEN tags->>'highway' IN ('tertiary', 'tertiary_link') THEN 35 ELSE 25 END) as mph
   FROM geo_places
-  WHERE geom_type = 'line'
+  WHERE geom_type = 'line' AND tags ? 'highway' AND geom && (SELECT area FROM _rm_area)
     AND tags->>'highway' IN ('motorway', 'motorway_link', 'trunk', 'trunk_link', 'primary', 'primary_link',
                              'secondary', 'secondary_link', 'tertiary', 'tertiary_link', 'unclassified',
                              'residential', 'living_street', 'service', 'busway')
@@ -420,7 +431,8 @@ SELECT ST_Transform(geom, 3857) as g, tags->>'highway' as kind,
        COALESCE(tags->>'direction', tags->>'traffic_signals:direction') as direction,
        COALESCE(tags->>'stop' = 'all', false) as all_way
 FROM geo_places
-WHERE geom_type = 'point' AND (tags @> '{"highway": "traffic_signals"}' OR tags @> '{"highway": "stop"}');
+WHERE geom && (SELECT area FROM _rm_area) AND geom_type = 'point'
+  AND (tags @> '{"highway": "traffic_signals"}' OR tags @> '{"highway": "stop"}');
 CREATE INDEX ON _rm_signals USING gist (g);
 ANALYZE _rm_signals;
 
@@ -439,8 +451,8 @@ SELECT ST_Transform(geom, 3857) as g, geom_type, 1 / cos(radians(ST_Y(ST_Centroi
          WHEN tags->>'crossing' = 'traffic_signals' THEN 'lines'
        END as style
 FROM geo_places
-WHERE (geom_type = 'line' AND tags->>'footway' = 'crossing')
-   OR (geom_type = 'point' AND tags->>'highway' = 'crossing');
+WHERE geom && (SELECT area FROM _rm_area)
+  AND ((geom_type = 'line' AND tags->>'footway' = 'crossing') OR (geom_type = 'point' AND tags->>'highway' = 'crossing'));
 DELETE FROM _rm_crossings WHERE style IS NULL;
 CREATE INDEX ON _rm_crossings USING gist (g);
 ANALYZE _rm_crossings;
@@ -808,23 +820,54 @@ WHERE NOT EXISTS (SELECT 1 FROM road_surfaces_next s WHERE s.bridge = g.bridge A
 -- ─── Swap ────────────────────────────────────────────────────────────────────
 CREATE INDEX road_markings_next_geom_idx ON road_markings_next USING gist (geom);
 CREATE INDEX road_glyphs_next_geom_idx ON road_glyphs_next USING gist (geom);
-BEGIN;
-DROP TABLE IF EXISTS road_surfaces;
-DROP TABLE IF EXISTS road_markings;
-DROP TABLE IF EXISTS road_glyphs;
-ALTER TABLE road_surfaces_next RENAME TO road_surfaces;
-ALTER TABLE road_markings_next RENAME TO road_markings;
-ALTER TABLE road_glyphs_next RENAME TO road_glyphs;
-ALTER INDEX road_surfaces_next_geom_idx RENAME TO road_surfaces_geom_idx;
-ALTER INDEX road_markings_next_geom_idx RENAME TO road_markings_geom_idx;
-ALTER INDEX road_glyphs_next_geom_idx RENAME TO road_glyphs_geom_idx;
-ALTER TABLE road_surfaces RENAME CONSTRAINT road_surfaces_next_pk TO road_surfaces_pkey;
-ALTER TABLE road_markings RENAME CONSTRAINT road_markings_next_pk TO road_markings_pkey;
-ALTER TABLE road_glyphs RENAME CONSTRAINT road_glyphs_next_pk TO road_glyphs_pkey;
-ALTER SEQUENCE road_surfaces_next_fid_seq RENAME TO road_surfaces_fid_seq;
-ALTER SEQUENCE road_markings_next_fid_seq RENAME TO road_markings_fid_seq;
-ALTER SEQUENCE road_glyphs_next_fid_seq RENAME TO road_glyphs_fid_seq;
-COMMIT;
+DO $$
+DECLARE
+  box geometry := (SELECT box FROM _rm_scope LIMIT 1);
+BEGIN
+  IF box IS NULL THEN
+    DROP TABLE IF EXISTS road_surfaces;
+    DROP TABLE IF EXISTS road_markings;
+    DROP TABLE IF EXISTS road_glyphs;
+    ALTER TABLE road_surfaces_next RENAME TO road_surfaces;
+    ALTER TABLE road_markings_next RENAME TO road_markings;
+    ALTER TABLE road_glyphs_next RENAME TO road_glyphs;
+    ALTER INDEX road_surfaces_next_geom_idx RENAME TO road_surfaces_geom_idx;
+    ALTER INDEX road_markings_next_geom_idx RENAME TO road_markings_geom_idx;
+    ALTER INDEX road_glyphs_next_geom_idx RENAME TO road_glyphs_geom_idx;
+    ALTER TABLE road_surfaces RENAME CONSTRAINT road_surfaces_next_pk TO road_surfaces_pkey;
+    ALTER TABLE road_markings RENAME CONSTRAINT road_markings_next_pk TO road_markings_pkey;
+    ALTER TABLE road_glyphs RENAME CONSTRAINT road_glyphs_next_pk TO road_glyphs_pkey;
+    ALTER SEQUENCE road_surfaces_next_fid_seq RENAME TO road_surfaces_fid_seq;
+    ALTER SEQUENCE road_markings_next_fid_seq RENAME TO road_markings_fid_seq;
+    ALTER SEQUENCE road_glyphs_next_fid_seq RENAME TO road_glyphs_fid_seq;
+    RETURN;
+  END IF;
+
+  -- Live rows straddling the box keep only their part outside it; the new
+  -- rows, cut to the box, fill the inside.
+  UPDATE road_surfaces SET geom = ST_Multi(ST_CollectionExtract(ST_Difference(geom, box), 3))
+  WHERE geom && box AND NOT ST_CoveredBy(geom, box);
+  DELETE FROM road_surfaces WHERE geom && box AND (ST_IsEmpty(geom) OR ST_CoveredBy(geom, box));
+  UPDATE road_markings SET geom = ST_CollectionExtract(ST_Difference(geom, box), CASE WHEN pattern = 'fill' THEN 3 ELSE 2 END)
+  WHERE geom && box AND NOT ST_CoveredBy(geom, box);
+  DELETE FROM road_markings WHERE geom && box AND (ST_IsEmpty(geom) OR ST_CoveredBy(geom, box));
+  DELETE FROM road_glyphs WHERE ST_Intersects(geom, box);
+
+  INSERT INTO road_surfaces (bridge, geom)
+  SELECT bridge, ST_Multi(ST_CollectionExtract(ST_Intersection(geom, box), 3)) FROM road_surfaces_next WHERE geom && box;
+  INSERT INTO road_markings (kind, pattern, color, style, bridge, geom)
+  SELECT kind, pattern, color, style, bridge, ST_CollectionExtract(ST_Intersection(geom, box), CASE WHEN pattern = 'fill' THEN 3 ELSE 2 END)
+  FROM road_markings_next WHERE geom && box;
+  INSERT INTO road_glyphs (glyph, direction, bridge, geom)
+  SELECT glyph, direction, bridge, geom FROM road_glyphs_next WHERE ST_Intersects(geom, box);
+  DELETE FROM road_surfaces WHERE geom && box AND ST_IsEmpty(geom);
+  DELETE FROM road_markings WHERE geom && box AND ST_IsEmpty(geom);
+
+  DROP TABLE road_surfaces_next;
+  DROP TABLE road_markings_next;
+  DROP TABLE road_glyphs_next;
+END
+$$;
 ANALYZE road_surfaces;
 ANALYZE road_markings;
 ANALYZE road_glyphs;
