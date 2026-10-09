@@ -26,6 +26,7 @@
   "dependencies": {
     "@elysiajs/cors": "^1.2.0",
     "@elysiajs/swagger": "^1.2.0",
+    "@jsquash/webp": "^1.5.0",
     "@lucia-auth/adapter-drizzle": "^1.1.0",
     "@polar-sh/sdk": "^0.49.0",
     "@simplewebauthn/server": "^10.0.0",

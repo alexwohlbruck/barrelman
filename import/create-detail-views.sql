@@ -817,3 +817,56 @@ CREATE TABLE IF NOT EXISTS road_glyphs (fid bigserial PRIMARY KEY, glyph text, d
 CREATE INDEX IF NOT EXISTS road_surfaces_geom_idx ON road_surfaces USING gist (geom);
 CREATE INDEX IF NOT EXISTS road_markings_geom_idx ON road_markings USING gist (geom);
 CREATE INDEX IF NOT EXISTS road_glyphs_geom_idx ON road_glyphs USING gist (geom);
+
+-- ─── Bridge decks ────────────────────────────────────────────────────────────
+--
+-- One row per deck: bridge ways joined end to end into one line per roadway,
+-- with its height every `step` metres above sea level, as Mapterhorn's terrain
+-- gives it. Filled by import/generate-bridge-decks.ts; created empty here for
+-- the same reason as the road tables.
+--
+-- Ways are split, joined and renumbered all the time, so nothing here is keyed
+-- on them: `id` is the deck by where it lies and which way it runs, and
+-- `bridge` the bridge it belongs to (its man_made=bridge outline, its wikidata
+-- item, or where it lies). A run rebuilds the decks whose `anchor`, the deck's
+-- midpoint, lies in the cell it is working on.
+CREATE TABLE IF NOT EXISTS bridge_decks (
+  id text PRIMARY KEY,
+  bridge text NOT NULL,
+  ways bigint[] NOT NULL,
+  kind text NOT NULL,
+  layer int NOT NULL,
+  -- Metres from the centreline to the left and right edges, in the line's direction.
+  edges real[] NOT NULL,
+  -- Whether each end lands on the ground (else it rests on another deck).
+  grounded boolean[] NOT NULL,
+  -- Metres between height samples; the last sample is the line's end.
+  step real NOT NULL,
+  length real NOT NULL,
+  heights real[] NOT NULL,
+  ground real[] NOT NULL,
+  -- Distances along the deck, in metres.
+  piers real[] NOT NULL,
+  anchor geometry(Point, 4326) NOT NULL,
+  geom geometry(LineString, 4326) NOT NULL,
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS bridge_decks_geom_idx ON bridge_decks USING gist (geom);
+CREATE INDEX IF NOT EXISTS bridge_decks_anchor_idx ON bridge_decks USING gist (anchor);
+
+-- What the tiles carry. Vector tiles have no arrays, so a profile travels as
+-- decimetres joined by commas. A tile's own geometry is simplified and snapped
+-- differently at each zoom, so `line` carries the samples exactly: the first
+-- as lng,lat and each after as the step from the one before, in 1e-7 degrees.
+CREATE OR REPLACE VIEW bridge_deck_tiles AS
+SELECT id, bridge, kind, layer, edges[1] AS left_edge, edges[2] AS right_edge,
+       (SELECT string_agg(CASE WHEN n = 1 THEN x || ',' || y ELSE (x - px) || ',' || (y - py) END, ';' ORDER BY n)
+        FROM (SELECT n, x, y, lag(x) OVER (ORDER BY n) AS px, lag(y) OVER (ORDER BY n) AS py
+              FROM (SELECT (dp).path[1] AS n, round(ST_X((dp).geom) * 1e7)::bigint AS x, round(ST_Y((dp).geom) * 1e7)::bigint AS y
+                    FROM ST_DumpPoints(geom) AS dp) points) steps) AS line,
+       grounded[1] AS start_grounded, grounded[2] AS end_grounded, step, length,
+       array_to_string(ARRAY(SELECT round(h * 10)::int FROM unnest(heights) h), ',') AS heights,
+       array_to_string(ARRAY(SELECT round(g * 10)::int FROM unnest(ground) g), ',') AS ground,
+       array_to_string(ARRAY(SELECT round(p * 10)::int FROM unnest(piers) p), ',') AS piers,
+       geom
+FROM bridge_decks;
