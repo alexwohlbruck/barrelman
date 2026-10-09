@@ -10,6 +10,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.10.5] - 2026-10-08
+
 ### Changed
 
 * **A 3D landmark can be raised or sunk without its model being lifted.** The
