@@ -1377,12 +1377,14 @@ export async function clearFeed(feedId: string): Promise<void> {
 /**
  * Find nearby stop pairs for transfer precomputation.
  *
- * Returns all pairs of stops within `maxDistance` meters of each other,
- * across all feeds (cross-feed transfers are important for multi-agency
- * cities). Uses PostGIS spatial index for efficiency.
+ * Returns pairs of stops within `maxDistance` meters of each other. Without
+ * `feedIds` that is every pair in the database, across feeds; with it, only
+ * pairs whose two stops are in the same one of those feeds, which is all the
+ * import writes (see generateTransfersTxt). Uses the PostGIS spatial index.
  */
 export async function findTransferPairs(
   maxDistance: number = 500,
+  feedIds?: string[],
 ): Promise<TransferPair[]> {
   // This all-pairs ST_DWithin self-join over every stop is minutes of work at
   // continent scale (656K US stops), so it must NOT run on the API pool, whose
@@ -1403,14 +1405,35 @@ export async function findTransferPairs(
   // Prohibitions are declared between PARENT stations (the MTA forbids
   // 423↔A41) while these pairs are platforms (423N, A41S), so both sides
   // resolve to their parent before matching, and either direction counts.
+  //
+  // With `feedIds`, only pairs inside one of those feeds are found. That is
+  // all an import uses — generateTransfersTxt keeps a pair only when both
+  // stops are in the feed it writes — so importing a few feeds into a
+  // continent-sized database no longer walks every stop pair in it.
+  //
+  // The scoped form materializes those feeds' stops and probes the rest only
+  // through the geography index. Written as plain `a.feed_id = ANY(...) AND
+  // b.feed_id = a.feed_id`, the planner instead ANDs the feed_id index into
+  // every spatial probe, rebuilding a bitmap of the whole feed per stop: over
+  // five minutes for 21K stops that this form does in 3s. `b.feed_id || ''`
+  // keeps that index out of the probe for the same reason.
   const sqlc = maintenanceConnection()
+  const scopedStops = feedIds
+    ? sqlc`, scoped AS MATERIALIZED (
+        SELECT * FROM gtfs_stops WHERE feed_id = ANY(${feedIds})
+      )`
+    : sqlc``
+  const outer = feedIds ? sqlc`scoped` : sqlc`gtfs_stops`
+  const sameFeed = feedIds ? sqlc`AND (b.feed_id || '') = a.feed_id` : sqlc``
+  const forbiddenScope = feedIds ? sqlc`AND feed_id = ANY(${feedIds})` : sqlc``
   try {
     const result = await sqlc<any[]>`
       WITH forbidden AS (
         SELECT feed_id, from_stop_id, to_stop_id
         FROM gtfs_transfers
         WHERE transfer_type = 3
-      )
+        ${forbiddenScope}
+      )${scopedStops}
       SELECT
         a.stop_id AS from_stop_id,
         b.stop_id AS to_stop_id,
@@ -1420,12 +1443,13 @@ export async function findTransferPairs(
         a.stop_lon AS from_lng,
         b.stop_lat AS to_lat,
         b.stop_lon AS to_lng
-      FROM gtfs_stops a
+      FROM ${outer} a
       JOIN gtfs_stops b
         ON a.id < b.id
         AND ST_DWithin(a.geom::geography, b.geom::geography, ${maxDistance})
       WHERE (a.location_type = 0 OR a.location_type IS NULL)
         AND (b.location_type = 0 OR b.location_type IS NULL)
+        ${sameFeed}
         AND NOT EXISTS (
           SELECT 1 FROM forbidden f
           WHERE f.feed_id = a.feed_id
@@ -1510,8 +1534,9 @@ export async function computeAllTransfers(
   concurrency: number = 8,
   fetchFn: FetchFn = globalThis.fetch,
   onProgress?: (completed: number, total: number) => void,
+  feedIds?: string[],
 ): Promise<ComputedTransfer[]> {
-  const pairs = await findTransferPairs(maxDistance)
+  const pairs = await findTransferPairs(maxDistance, feedIds)
   const transfers: ComputedTransfer[] = []
   let completed = 0
 
