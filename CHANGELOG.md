@@ -10,6 +10,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.10.4] - 2026-10-08
+
 ### Added
 
 * **A region can be made of separate areas.** A new optional `bboxes` field,
