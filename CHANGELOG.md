@@ -10,6 +10,14 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Added
+
+* **Road markings stay current, and can be built one area at a time.** OSM
+  Update now rebuilds road markings around the roads each replication cycle
+  touched, wherever they have been built. "Build Road Markings" can be scoped
+  to a box, which is merged into the live tables without a seam, so a country
+  can be built in chunks.
+
 ## [0.10.5] - 2026-10-08
 
 ### Changed

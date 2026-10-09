@@ -477,8 +477,24 @@ The road layers are tables built by the "Build Road Markings" console task
 `lanes`, `lanes:forward`/`backward`, `lanes:both_ways`, `turn:lanes`, `width`,
 `cycleway:*` and `lane_markings`. Where one road continues into another with a
 different lane layout, the lines ease across over the MUTCD taper length for
-the road's speed rather than jumping at the join. It is not part of OSM Update
-yet: it takes minutes for a city and about a day for the whole US.
+the road's speed rather than jumping at the join. A full build takes minutes
+for a city and about two days for the whole US, so a large install builds it
+area by area: run the script in a session that first creates `_rm_scope` with
+one box in it, and only that box is rebuilt and merged into the live tables,
+meeting its neighbours without a seam.
+
+```sql
+CREATE TEMP TABLE _rm_scope AS SELECT ST_MakeEnvelope(-81.0, 35.05, -80.65, 35.40, 4326) AS box;
+\i /app/import/generate-road-markings.sql
+```
+
+OSM Update keeps built areas current. Each replication cycle queues the old and
+new outlines of the roads it touched (`road_markings_dirty`), and
+`scripts/update-road-markings.sh` rebuilds the 2 km cells they fall in where
+road markings exist, up to `ROAD_MARKINGS_MAX_CELLS` cells a run. Areas nobody
+built are skipped. Only a database without osm2pgsql's middle tables records
+what changed; one updated through `osm2pgsql-replication` needs a scoped
+rebuild by hand.
 
 `buildings_3d`, `street_furniture` and `sport_pitches` are not plain views. OpenStreetMap maps a detailed
 building twice — an outline tagged `building=*` and `building:part=*` polygons
