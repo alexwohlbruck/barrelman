@@ -54,6 +54,8 @@ set -euo pipefail
 #   REBUILD_BASEMAP             the same for the PMTiles basemap
 #   REFRESH_BUILDINGS_3D        1 (default) refreshes buildings_3d after the
 #                               update; 0 leaves it for refresh-view.sh
+#   REBUILD_ROAD_MARKINGS       1 (default) rebuilds road markings where the
+#                               update touched roads (update-road-markings.sh)
 #   REPLICATION_MAX_DIFFS       without middle tables: diffs applied per cycle
 #
 # SCHEDULING:
@@ -90,6 +92,11 @@ refresh_views() {
   fi
   "$SCRIPT_DIR/refresh-view.sh" street_furniture
   "$SCRIPT_DIR/refresh-view.sh" sport_pitches
+  if [ "${REBUILD_ROAD_MARKINGS:-1}" = "1" ]; then
+    "$SCRIPT_DIR/update-road-markings.sh"
+  else
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Road markings update disabled (REBUILD_ROAD_MARKINGS=0) — skipping."
+  fi
 }
 
 # Rebuild what reads region.osm.pbf, if the update moved it. Takes the extract's

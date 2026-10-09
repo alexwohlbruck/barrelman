@@ -397,6 +397,7 @@ SELECT :removed >= 1000 AND :added < :removed * :min_ratio AS shrunk \gset
 \endif
 
 \i $PROJECT_DIR/import/replay-derive.sql
+\i $PROJECT_DIR/import/queue-road-markings.sql
 
 UPDATE osm_replication_state
 SET sequence = :sequence, data_timestamp = NULLIF(:'data_ts', '')::timestamptz, updated_at = now();

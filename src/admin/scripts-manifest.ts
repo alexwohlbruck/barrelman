@@ -247,6 +247,16 @@ export const SCRIPTS: ScriptDef[] = [
           'Refresh the buildings_3d view after the update. Hours on a country-sized import; turn off and schedule "Refresh 3D Buildings" weekly instead.',
       },
       {
+        name: 'REBUILD_ROAD_MARKINGS',
+        label: 'Update road markings',
+        type: 'boolean',
+        apply: 'env',
+        envVar: 'REBUILD_ROAD_MARKINGS',
+        default: true,
+        description:
+          'Rebuild road markings around the roads the update touched, where they have been built. Only a database without middle tables records which roads changed.',
+      },
+      {
         name: 'REPLICATION_MAX_DIFFS',
         label: 'Diffs per cycle',
         type: 'number',
@@ -273,6 +283,7 @@ export const SCRIPTS: ScriptDef[] = [
       { script: 'osm-buildings-3d', when: 'unless "Refresh 3D buildings" is off' },
       { script: 'osm-street-furniture', when: 'always' },
       { script: 'osm-sport-pitches', when: 'always' },
+      { script: 'osm-road-markings-update', when: 'unless "Update road markings" is off' },
     ],
     source: 'scripts/update-osm.sh',
     notes:
@@ -881,7 +892,33 @@ export const SCRIPTS: ScriptDef[] = [
     exec: { kind: 'internal', handler: 'sql:generate-road-markings.sql' },
     source: 'import/generate-road-markings.sql',
     notes:
-      'Builds fresh tables and swaps them in at the end, so tiles keep serving the old roads meanwhile. Not part of OSM Update yet: measured at about 5 s per 7 km² of dense downtown, which is minutes for a city and roughly a day for the whole US. Restart Martin afterwards on an instance that caches tiles.',
+      'Builds fresh tables and swaps them in at the end, so tiles keep serving the old roads meanwhile. Measured at 4–13 ms per road way (rural to dense downtown): minutes for a city, about two days for the whole US. To build one area, see import/generate-road-markings.sql on scoping. OSM Update keeps built areas current. Restart Martin afterwards on an instance that caches tiles.',
+  },
+  {
+    id: 'osm-road-markings-update',
+    name: 'Update Road Markings',
+    description:
+      'Rebuild road markings around the roads recent replication diffs touched, cell by cell, where road markings have been built.',
+    category: 'osm',
+    danger: 'safe',
+    longRunning: true,
+    confirm: false,
+    exclusive: true,
+    exec: { kind: 'process', command: 'bash', args: ['scripts/update-road-markings.sh'] },
+    params: [
+      {
+        name: 'ROAD_MARKINGS_MAX_CELLS',
+        label: 'Cells per run',
+        type: 'number',
+        apply: 'env',
+        envVar: 'ROAD_MARKINGS_MAX_CELLS',
+        placeholder: 'blank = 500',
+        description: 'Cells of about 2 km rebuilt in one run. What is left stays queued for the next.',
+      },
+    ],
+    source: 'scripts/update-road-markings.sh',
+    notes:
+      'OSM Update runs this after each replication cycle. The queue (road_markings_dirty) is filled by scripts/replicate-extract.sh, so a database updated through osm2pgsql\'s middle tables has nothing to work off.',
   },
   {
     id: 'search-intersections',
