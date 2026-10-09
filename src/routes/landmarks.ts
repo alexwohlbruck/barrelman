@@ -51,7 +51,7 @@ const TILE_CACHE = 'public, max-age=60'
 export function createLandmarkRoutes(
   deps: {
     tile?: (z: number, x: number, y: number) => Promise<Uint8Array>
-    modelPath?: (name: string) => string | null
+    modelPath?: (name: string) => string | null | Promise<string | null>
   } = {},
 ) {
   const tile = deps.tile ?? landmarkTile
@@ -115,10 +115,14 @@ export function createLandmarkRoutes(
     .get(
       '/models/:file',
       async ({ params, set, request }) => {
-        const path = pathFor(params.file)
+        const path = await pathFor(params.file)
         const file = path ? Bun.file(path) : null
         if (!path || !file || !(await file.exists())) {
+          // A miss can be a model an import is about to publish, and the
+          // model's URL is otherwise cached for a year: a CDN holding on to
+          // the 404 would hide it long after it exists.
           set.status = 404
+          set.headers['cache-control'] = 'no-store'
           return { error: 'Model not found' }
         }
         if (/\bgzip\b/.test(request.headers.get('accept-encoding') ?? '')) {

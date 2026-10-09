@@ -9,7 +9,7 @@
  * Usage:
  *   bun run import/import-gbfs-systems.ts [--country US] [--bbox "-74.3,40.5,-73.7,40.9"]
  *
- * When --bbox is omitted it defaults to the unified REGIONS bbox (config/
+ * When --bbox is omitted it defaults to the REGIONS areas (config/
  * regions.json via the REGIONS env var); a global selection imports worldwide.
  */
 
@@ -17,7 +17,8 @@ import { parse } from 'csv-parse/sync'
 import { db } from '../src/db'
 import { sql } from 'drizzle-orm'
 import { ensureGbfsSchema } from '../src/db'
-import { resolveRegions } from '../src/config/regions'
+import { inBoxes, resolveRegions, type Bbox } from '../src/config/regions'
+import { localizedText } from '../src/lib/gbfs'
 
 // ── CLI args ────────────────────────────────────────────────────────
 
@@ -34,22 +35,21 @@ function getArg(name: string): string | undefined {
 
 const countryFilter = getArg('country')?.toUpperCase()
 const bboxArg = getArg('bbox')
-let bbox: { north: number; south: number; east: number; west: number } | null = null
+// Stations are kept when they fall in any of these boxes; null keeps them all.
+let boxes: Bbox[] | null = null
 if (bboxArg) {
-  const [west, south, east, north] = bboxArg.split(',').map(Number)
-  bbox = { north, south, east, west }
+  boxes = [bboxArg.split(',').map(Number) as Bbox]
 } else {
-  // Default to the unified REGIONS bbox; a global selection means no bbox (all).
+  // Default to the REGIONS areas, one box per area rather than their union, so
+  // a region like the US with Alaska and Hawaii does not also take in Canada
+  // and Mexico. A global selection means no filter.
   const r = await resolveRegions()
-  if (!r.isGlobal) {
-    const [west, south, east, north] = r.bbox
-    bbox = { north, south, east, west }
-  }
+  if (!r.isGlobal) boxes = r.boxes
 }
 
 console.log('GBFS Systems Importer')
 console.log(`  Country filter: ${countryFilter || 'none (all countries)'}`)
-console.log(`  Bounding box: ${bbox ? `${bbox.south},${bbox.west} → ${bbox.north},${bbox.east}` : 'none'}`)
+console.log(`  Bounding boxes: ${boxes ? boxes.map((b) => b.join(',')).join('; ') : 'none'}`)
 
 // ── Ensure schema ───────────────────────────────────────────────────
 
@@ -91,7 +91,7 @@ if (countryFilter) {
 
 // Note: systems.csv doesn't have lat/lon columns, so bbox filtering
 // happens at the station level after import. Use --country to narrow.
-if (bbox) {
+if (boxes) {
   console.log(`  Note: bbox filtering will be applied to stations after import (catalog has no coordinates)`)
 }
 
@@ -197,6 +197,7 @@ for (const row of filtered) {
 
     // Import stations if available
     let stationCount = 0
+    let stationError: string | null = null
     if (feedUrls.station_information) {
       try {
         const stationRes = await fetch(feedUrls.station_information, {
@@ -208,16 +209,13 @@ for (const row of filtered) {
 
           for (const s of stations) {
             const safeStationId = (s.station_id || '').replace(/'/g, "''")
-            const safeStationName = (s.name || '').replace(/'/g, "''")
+            const safeStationName = localizedText(s.name).replace(/'/g, "''")
             const stLat = s.lat ?? s.latitude
             const stLon = s.lon ?? s.longitude
             if (!stLat || !stLon) continue
 
             // Bbox filter at station level (catalog has no system-level coords)
-            if (bbox) {
-              if (stLat < bbox.south || stLat > bbox.north ||
-                  stLon < bbox.west || stLon > bbox.east) continue
-            }
+            if (boxes && !inBoxes(stLon, stLat, boxes)) continue
 
             // Derive system center from first station
             if (lat === null) { lat = stLat; lon = stLon }
@@ -244,12 +242,20 @@ for (const row of filtered) {
               WHERE system_id = '${safeSysId}'
             `))
           }
+        } else {
+          stationError = `station_information ${stationRes.status}`
         }
-      } catch { /* non-fatal */ }
+      } catch (err) {
+        // Non-fatal for the system, but never silent: a parse error here once
+        // left every GBFS v3 system with zero stations, reported as success.
+        stationError = err instanceof Error ? err.message : String(err)
+      }
     }
 
     const vTypes = vehicleTypes.map((v: any) => v.form_factor || 'unknown').join(', ')
-    console.log(`✓ ${stationCount} stations${vTypes ? ` [${vTypes}]` : ''}`)
+    console.log(stationError
+      ? `⚠ ${stationCount} stations (${stationError})${vTypes ? ` [${vTypes}]` : ''}`
+      : `✓ ${stationCount} stations${vTypes ? ` [${vTypes}]` : ''}`)
     imported++
   } catch (err) {
     console.log(`✗ ${err instanceof Error ? err.message : err}`)

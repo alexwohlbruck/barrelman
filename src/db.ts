@@ -66,11 +66,37 @@ export function maintenanceConnection(max = 1) {
   return postgres(dbUrl, { max, connection: { statement_timeout: 0 }, onnotice })
 }
 
-/** Run startup DDL on an untimed connection, then release it. */
+/**
+ * How long startup DDL waits for a table lock before giving up.
+ *
+ * An OSM update holds a write lock on geo_places for hours, and DDL that wants
+ * a stronger lock queues behind it — the API then never starts listening, and
+ * every other query on the table queues behind the DDL. On 2026-10-09 that kept
+ * an API down for as long as the update's backfill ran. Waiting a few seconds
+ * and moving on costs nothing: the objects already exist on any instance that
+ * has had an import, and the next restart tries again.
+ */
+const STARTUP_LOCK_TIMEOUT = '5s'
+
+/** Postgres's code for a lock_timeout expiring. */
+const LOCK_NOT_AVAILABLE = '55P03'
+
+/**
+ * Run startup DDL on an untimed connection, then release it.
+ *
+ * A table locked by a running job defers the DDL to the next start rather
+ * than failing it: every caller runs in a top-level await, so a throw here
+ * would crash the API and restart it into the same lock. Any other error is
+ * still thrown.
+ */
 async function runDdl(statements: string): Promise<void> {
   const client = maintenanceConnection()
   try {
-    await client.unsafe(statements)
+    await client.unsafe(`SET lock_timeout = '${STARTUP_LOCK_TIMEOUT}';\n${statements}`)
+  } catch (err) {
+    if ((err as { code?: string })?.code !== LOCK_NOT_AVAILABLE) throw err
+    const first = statements.trim().split('\n')[0].slice(0, 80)
+    console.warn(`[schema] a table is locked by a running job; deferred to the next start: ${first}`)
   } finally {
     await client.end({ timeout: 5 })
   }
@@ -136,42 +162,8 @@ export async function ensureSchema() {
     return
   }
 
-  await runDdl(`
-    ALTER TABLE geo_places
-      ADD COLUMN IF NOT EXISTS name_abbrev TEXT,
-      ADD COLUMN IF NOT EXISTS codes TEXT[],
-      ADD COLUMN IF NOT EXISTS address JSONB,
-      ADD COLUMN IF NOT EXISTS hours TEXT,
-      ADD COLUMN IF NOT EXISTS phones TEXT[],
-      ADD COLUMN IF NOT EXISTS websites TEXT[],
-      ADD COLUMN IF NOT EXISTS area_m2 REAL,
-      ADD COLUMN IF NOT EXISTS parent_context TEXT,
-      ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
-
-    -- Indexes for codes and name_abbrev search layers.
-    -- Without these, the codes (@> array) and name_abbrev (= text) queries
-    -- fall back to sequential scans on the full table (~7M rows).
-    CREATE INDEX IF NOT EXISTS geo_places_codes_idx
-      ON geo_places USING GIN (codes) WHERE codes IS NOT NULL;
-    CREATE INDEX IF NOT EXISTS geo_places_name_abbrev_idx
-      ON geo_places (name_abbrev) WHERE name_abbrev IS NOT NULL;
-
-    -- GiST trigram index for the Layer-2 fuzzy search (search.service.ts).
-    -- That layer uses the KNN distance operator (name <-> query) with
-    -- ORDER BY ... <-> ... LIMIT, which ONLY a GiST trigram index can serve.
-    -- The GIN trigram index (gin_trgm_ops) supports % / ILIKE but NOT <->,
-    -- so without this GiST index every fuzzy query degrades to a parallel
-    -- sequential scan over the full table (~45s on 21M rows) — which silently
-    -- blows past the API search timeout and returns no place results.
-    --
-    -- siglen=128: the default 12-byte signatures are too lossy at ~2M named
-    -- rows — the KNN scan visits far too many pages and recomputes distances
-    -- (measured 335ms-1.3s per query). 128-byte signatures cut that to
-    -- tens of ms at the cost of a larger index. (Replaces the old
-    -- default-siglen geo_places_name_gist_trgm_idx.)
-    CREATE INDEX IF NOT EXISTS geo_places_name_gist_trgm_sig128_idx
-      ON geo_places USING gist (name gist_trgm_ops(siglen=128)) WHERE name IS NOT NULL;
-  `)
+  const missing = await missingPostImportSchema()
+  if (missing.length) await runDdl(missing.join('\n'))
 
   await ensureDetailViews()
   await ensureBrandCatalogSchema()
@@ -179,6 +171,76 @@ export async function ensureSchema() {
   // Not awaited: each view is a spatial join over the whole region and takes
   // minutes on a large extract. Startup must not wait on them.
   void populateMaterializedViews()
+}
+
+/** Columns the post-import pipeline adds to geo_places, and their types. */
+const POST_IMPORT_COLUMNS: Record<string, string> = {
+  name_abbrev: 'TEXT',
+  codes: 'TEXT[]',
+  address: 'JSONB',
+  hours: 'TEXT',
+  phones: 'TEXT[]',
+  websites: 'TEXT[]',
+  area_m2: 'REAL',
+  parent_context: 'TEXT',
+  updated_at: 'TIMESTAMPTZ DEFAULT NOW()',
+}
+
+/** Indexes on geo_places that startup ensures exist. */
+const POST_IMPORT_INDEXES: Record<string, string> = {
+  // Indexes for the codes and name_abbrev search layers. Without these, the
+  // codes (@> array) and name_abbrev (= text) queries fall back to sequential
+  // scans on the full table.
+  geo_places_codes_idx:
+    'CREATE INDEX IF NOT EXISTS geo_places_codes_idx ON geo_places USING GIN (codes) WHERE codes IS NOT NULL;',
+  geo_places_name_abbrev_idx:
+    'CREATE INDEX IF NOT EXISTS geo_places_name_abbrev_idx ON geo_places (name_abbrev) WHERE name_abbrev IS NOT NULL;',
+  // GiST trigram index for the Layer-2 fuzzy search (search.service.ts). That
+  // layer uses the KNN distance operator (name <-> query) with ORDER BY ... <->
+  // ... LIMIT, which ONLY a GiST trigram index can serve. The GIN trigram index
+  // supports % / ILIKE but NOT <->, so without this every fuzzy query degrades
+  // to a parallel sequential scan (~45s on 21M rows), which silently blows past
+  // the API search timeout and returns no place results.
+  //
+  // siglen=128: the default 12-byte signatures are too lossy at ~2M named rows
+  // (335ms-1.3s per query); 128-byte signatures cut that to tens of ms at the
+  // cost of a larger index. Replaces the old geo_places_name_gist_trgm_idx.
+  geo_places_name_gist_trgm_sig128_idx:
+    'CREATE INDEX IF NOT EXISTS geo_places_name_gist_trgm_sig128_idx ON geo_places USING gist (name gist_trgm_ops(siglen=128)) WHERE name IS NOT NULL;',
+}
+
+/**
+ * The post-import DDL geo_places still needs, as statements.
+ *
+ * Read from the catalogs, which takes no lock on the table. ALTER TABLE and
+ * CREATE INDEX both lock geo_places before they check IF NOT EXISTS, so on an
+ * instance where everything is already there, running them anyway only means
+ * queueing behind whatever job is writing to the table.
+ */
+async function missingPostImportSchema(): Promise<string[]> {
+  const client = maintenanceConnection()
+  try {
+    const columns = new Set((await client<{ name: string }[]>`
+      SELECT column_name AS name FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = 'geo_places'
+    `).map((r) => r.name))
+    const indexes = new Set((await client<{ name: string }[]>`
+      SELECT indexname AS name FROM pg_indexes
+      WHERE schemaname = 'public' AND tablename = 'geo_places'
+    `).map((r) => r.name))
+
+    const addColumns = Object.entries(POST_IMPORT_COLUMNS)
+      .filter(([name]) => !columns.has(name))
+      .map(([name, type]) => `ADD COLUMN IF NOT EXISTS ${name} ${type}`)
+    return [
+      ...(addColumns.length ? [`ALTER TABLE geo_places ${addColumns.join(', ')};`] : []),
+      ...Object.entries(POST_IMPORT_INDEXES)
+        .filter(([name]) => !indexes.has(name))
+        .map(([, ddl]) => ddl),
+    ]
+  } finally {
+    await client.end({ timeout: 5 })
+  }
 }
 
 /**
@@ -214,7 +276,8 @@ async function ensureDetailViews() {
 }
 
 /**
- * Populate the stored map views (`buildings_3d`, `street_furniture`) that are
+ * Populate the stored map views (`buildings_3d`, `street_furniture`,
+ * `sport_pitches`) that are
  * still empty.
  *
  * `create-detail-views.sql` creates them WITH NO DATA so startup stays cheap,
@@ -225,7 +288,7 @@ async function ensureDetailViews() {
 async function populateMaterializedViews() {
   const client = maintenanceConnection()
   try {
-    for (const view of ['buildings_3d', 'street_furniture']) {
+    for (const view of ['buildings_3d', 'street_furniture', 'sport_pitches']) {
       try {
         const rows = await client<{ populated: boolean }[]>`
           SELECT relispopulated AS populated FROM pg_class WHERE relname = ${view} AND relkind = 'm'

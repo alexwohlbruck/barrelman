@@ -75,9 +75,9 @@ describe('GBFS feeds in the MOTIS config', () => {
     // boxes go in one at a time.
     resolved = {
       isGlobal: false,
-      regions: [
-        { bbox: [-84.33, 33.83, -75.4, 36.59] },
-        { bbox: [-74.6, 40.3, -73.3, 41.4] },
+      boxes: [
+        [-84.33, 33.83, -75.4, 36.59],
+        [-74.6, 40.3, -73.3, 41.4],
       ],
     }
 
@@ -89,8 +89,24 @@ describe('GBFS feeds in the MOTIS config', () => {
     expect(bound(query)).toEqual([-84.33, -75.4, 33.83, 36.59, -74.6, -73.3, 40.3, 41.4])
   })
 
+  test('takes the separate areas of a multi-area region, not its outer box', async () => {
+    // What resolveRegions hands over for a US region with Hawaii: the areas,
+    // never the box around them that also covers Mexico.
+    resolved = {
+      isGlobal: false,
+      boxes: [
+        [-125, 24, -66, 50],
+        [-161, 18.5, -154, 22.5],
+      ],
+    }
+
+    await generateMotisConfig({ includeGbfs: true })
+
+    expect(bound(gbfsQuery())).toEqual([-125, -66, 24, 50, -161, -154, 18.5, 22.5])
+  })
+
   test('asks for every system on a global instance', async () => {
-    resolved = { isGlobal: true, regions: [{ bbox: [-180, -90, 180, 90] }] }
+    resolved = { isGlobal: true, boxes: [[-180, -90, 180, 90]] }
 
     await generateMotisConfig({ includeGbfs: true })
 
@@ -99,7 +115,7 @@ describe('GBFS feeds in the MOTIS config', () => {
 
   test('asks for every system when no region declares a usable box', async () => {
     // Serving no shared mobility at all is the worse failure of the two.
-    resolved = { isGlobal: false, regions: [{ bbox: undefined }, {}] }
+    resolved = { isGlobal: false, boxes: [undefined, []] }
 
     await generateMotisConfig({ includeGbfs: true })
 
@@ -107,7 +123,7 @@ describe('GBFS feeds in the MOTIS config', () => {
   })
 
   test('asks for nothing at all when GBFS is off', async () => {
-    resolved = { isGlobal: false, regions: [{ bbox: [-74.6, 40.3, -73.3, 41.4] }] }
+    resolved = { isGlobal: false, boxes: [[-74.6, 40.3, -73.3, 41.4]] }
 
     await generateMotisConfig({ includeGbfs: false })
 

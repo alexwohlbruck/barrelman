@@ -134,6 +134,7 @@ onMounted(load)
 
           <div class="flex flex-wrap gap-1.5">
             <Badge variant="secondary" class="font-mono text-[11px]">{{ fmtBbox(r.bbox) }}</Badge>
+            <Badge v-if="r.bboxes?.length" variant="outline">{{ r.bboxes.length }} separate area{{ r.bboxes.length === 1 ? '' : 's' }}</Badge>
             <Badge v-if="r.osmExtracts.length" variant="outline">{{ r.osmExtracts.length }} OSM extract{{ r.osmExtracts.length === 1 ? '' : 's' }}</Badge>
             <Badge v-if="r.gtfsRegion" variant="outline">GTFS: {{ r.gtfsRegion }}</Badge>
             <Badge v-if="r.pelias.openaddresses.length" variant="outline">{{ r.pelias.openaddresses.length }} address file{{ r.pelias.openaddresses.length === 1 ? '' : 's' }}</Badge>
