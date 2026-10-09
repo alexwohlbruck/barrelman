@@ -477,10 +477,12 @@ The road layers are tables built by the "Build Road Markings" console task
 (`import/generate-road-markings.sql`), which works out every road's lanes from
 `lanes`, `lanes:forward`/`backward`, `lanes:both_ways`, `turn:lanes`, `width`,
 `cycleway:*` and `lane_markings`. `placement`, `placement:forward` and
-`placement:backward` say where the way runs across its lanes; without them the
-way is taken to run down the middle of the lanes that carry on through a
-junction, with turn bays from `turn:lanes` hanging off their own side, so
-through lanes line up across it. Where one road continues into another with a
+`placement:backward` say where the way runs across its lanes. Without them the
+carriageway is centred on its way, except that turn bays from `turn:lanes` hang
+off their own side, so the lanes that carry on through a junction line up
+across it. A way that carries on from the one before keeps that way's kerb on
+the side that did not change, up to six ways along; a scoped build reads that
+far up each chain beyond its box, so neighbouring boxes agree. Where one road continues into another with a
 different lane layout, the lines ease across over the MUTCD taper length for
 the road's speed rather than jumping at the join, and only the side that gains
 or loses a lane moves. A full build takes minutes
