@@ -439,3 +439,269 @@ CREATE INDEX IF NOT EXISTS geo_places_building_part_geom_idx
 
 CREATE UNIQUE INDEX IF NOT EXISTS buildings_3d_fid_idx ON buildings_3d (fid);
 CREATE INDEX IF NOT EXISTS buildings_3d_geom_idx ON buildings_3d USING GIST (geom);
+
+-- ─── Sport pitches ───────────────────────────────────────────────────────────
+--
+-- Every leisure=pitch as its surface, plus regulation markings and the nets,
+-- hoops and goals that stand on them, fitted to the pitch's oriented bounding
+-- box. One row per surface, one MultiLineString of markings, and a point per
+-- prop; `kind` tells them apart. Props carry `direction` (compass degrees, as
+-- street_furniture) and `width` in metres.
+--
+-- Layouts are drawn in local metres, x along the pitch's long axis and y across
+-- it, centred on the origin, then rotated and placed by pitch_place.
+
+CREATE OR REPLACE FUNCTION pitch_seg(x0 float8, y0 float8, x1 float8, y1 float8)
+RETURNS geometry LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+  SELECT ST_MakeLine(ST_MakePoint(x0, y0), ST_MakePoint(x1, y1))
+$$;
+
+CREATE OR REPLACE FUNCTION pitch_rect(x0 float8, y0 float8, x1 float8, y1 float8)
+RETURNS geometry LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+  SELECT ST_ExteriorRing(ST_MakeEnvelope(least(x0, x1), least(y0, y1), greatest(x0, x1), greatest(y0, y1)))
+$$;
+
+-- A circle's outline, optionally kept only inside a box.
+CREATE OR REPLACE FUNCTION pitch_arc(x float8, y float8, r float8,
+  x0 float8 DEFAULT NULL, y0 float8 DEFAULT NULL, x1 float8 DEFAULT NULL, y1 float8 DEFAULT NULL)
+RETURNS geometry LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+  SELECT CASE WHEN x0 IS NULL THEN ring
+              ELSE ST_Intersection(ring, ST_MakeEnvelope(least(x0, x1), least(y0, y1), greatest(x0, x1), greatest(y0, y1))) END
+  FROM (SELECT ST_ExteriorRing(ST_Buffer(ST_MakePoint(x, y), r, 12)) AS ring) c
+$$;
+
+-- One court or field at regulation size in local metres. `prop` is NULL on
+-- marking rows; on prop rows `facing` is degrees clockwise from local +x.
+CREATE OR REPLACE FUNCTION pitch_template(sport text, len float8, wid float8, half boolean DEFAULT false)
+RETURNS TABLE(prop text, geom geometry, facing float8, size float8)
+LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE AS $$
+DECLARE
+  s float8;
+  hl float8;
+  hw float8;
+  side int;
+BEGIN
+  IF sport = 'tennis' THEN
+    RETURN QUERY VALUES
+      (NULL::text, pitch_rect(-11.885, -5.485, 11.885, 5.485), NULL::float8, NULL::float8),
+      (NULL, pitch_seg(-11.885, -4.115, 11.885, -4.115), NULL, NULL),
+      (NULL, pitch_seg(-11.885, 4.115, 11.885, 4.115), NULL, NULL),
+      (NULL, pitch_seg(-6.4, -4.115, -6.4, 4.115), NULL, NULL),
+      (NULL, pitch_seg(6.4, -4.115, 6.4, 4.115), NULL, NULL),
+      (NULL, pitch_seg(-6.4, 0, 6.4, 0), NULL, NULL),
+      (NULL, pitch_seg(-11.885, 0, -11.785, 0), NULL, NULL),
+      (NULL, pitch_seg(11.885, 0, 11.785, 0), NULL, NULL),
+      ('tennis-net', ST_MakePoint(0, 0), 0::float8, 12.8::float8);
+  ELSIF sport = 'pickleball' THEN
+    RETURN QUERY VALUES
+      (NULL::text, pitch_rect(-6.705, -3.05, 6.705, 3.05), NULL::float8, NULL::float8),
+      (NULL, pitch_seg(-2.13, -3.05, -2.13, 3.05), NULL, NULL),
+      (NULL, pitch_seg(2.13, -3.05, 2.13, 3.05), NULL, NULL),
+      (NULL, pitch_seg(-6.705, 0, -2.13, 0), NULL, NULL),
+      (NULL, pitch_seg(2.13, 0, 6.705, 0), NULL, NULL),
+      ('pickleball-net', ST_MakePoint(0, 0), 0::float8, 6.7::float8);
+  ELSIF sport = 'volleyball' THEN
+    RETURN QUERY VALUES
+      (NULL::text, pitch_rect(-9, -4.5, 9, 4.5), NULL::float8, NULL::float8),
+      (NULL, pitch_seg(0, -4.5, 0, 4.5), NULL, NULL),
+      (NULL, pitch_seg(-3, -4.5, -3, 4.5), NULL, NULL),
+      (NULL, pitch_seg(3, -4.5, 3, 4.5), NULL, NULL),
+      ('volleyball-net', ST_MakePoint(0, 0), 0::float8, 10::float8);
+  ELSIF sport = 'beachvolleyball' OR sport = 'beach_volleyball' THEN
+    RETURN QUERY VALUES
+      (NULL::text, pitch_rect(-8, -4, 8, 4), NULL::float8, NULL::float8),
+      ('volleyball-net', ST_MakePoint(0, 0), 0::float8, 9.5::float8);
+  ELSIF sport = 'basketball' THEN
+    -- A half court is 14 m long, its basket at +x and the centre circle cut
+    -- by the half-court line at -x.
+    hl := CASE WHEN half THEN 7 ELSE 14 END;
+    RETURN QUERY VALUES
+      (NULL::text, pitch_rect(-hl, -7.5, hl, 7.5), NULL::float8, NULL::float8),
+      (NULL, CASE WHEN half THEN pitch_arc(-7, 0, 1.8, -7, -2, -5, 2) ELSE pitch_seg(0, -7.5, 0, 7.5) END, NULL, NULL);
+    IF NOT half THEN
+      RETURN QUERY VALUES (NULL::text, pitch_arc(0, 0, 1.8), NULL::float8, NULL::float8);
+    END IF;
+    FOREACH side IN ARRAY CASE WHEN half THEN ARRAY[1] ELSE ARRAY[-1, 1] END LOOP
+      RETURN QUERY VALUES
+        (NULL::text, pitch_rect(side * hl, -2.45, side * (hl - 5.8), 2.45), NULL::float8, NULL::float8),
+        (NULL, pitch_arc(side * (hl - 5.8), 0, 1.8), NULL, NULL),
+        (NULL, pitch_arc(side * (hl - 1.575), 0, 6.75, side * (hl - 1.575 - 6.75), -6.6, side * (hl - 1.575 - 1.416), 6.6), NULL, NULL),
+        (NULL, pitch_seg(side * hl, -6.6, side * (hl - 2.991), -6.6), NULL, NULL),
+        (NULL, pitch_seg(side * hl, 6.6, side * (hl - 2.991), 6.6), NULL, NULL),
+        ('basketball-hoop', ST_MakePoint(side * (hl - 1.2), 0), CASE WHEN side = 1 THEN 180 ELSE 0 END::float8, NULL::float8);
+    END LOOP;
+  ELSIF sport = 'soccer' THEN
+    -- Fields vary, so the boundary is the pitch itself and the boxes and
+    -- circles scale with it, capped at regulation size.
+    hl := len / 2;
+    hw := wid / 2;
+    s := least(len / 105, wid / 68, 1);
+    RETURN QUERY VALUES
+      (NULL::text, pitch_rect(-hl, -hw, hl, hw), NULL::float8, NULL::float8),
+      (NULL, pitch_seg(0, -hw, 0, hw), NULL, NULL),
+      (NULL, pitch_arc(0, 0, 9.15 * s), NULL, NULL);
+    FOREACH side IN ARRAY ARRAY[-1, 1] LOOP
+      RETURN QUERY VALUES
+        (NULL::text, pitch_rect(side * hl, -20.16 * s, side * (hl - 16.5 * s), 20.16 * s), NULL::float8, NULL::float8),
+        (NULL, pitch_rect(side * hl, -9.16 * s, side * (hl - 5.5 * s), 9.16 * s), NULL, NULL),
+        (NULL, pitch_arc(side * (hl - 11 * s), 0, 9.15 * s, side * (hl - 16.5 * s), -hw, -side * hl, hw), NULL, NULL),
+        ('soccer-goal', ST_MakePoint(side * hl, 0), CASE WHEN side = 1 THEN 180 ELSE 0 END::float8, 7.32 * s);
+    END LOOP;
+  ELSIF sport = 'american_football' THEN
+    hl := len / 2;
+    hw := wid / 2;
+    s := len / 109.73;
+    RETURN QUERY
+      SELECT NULL::text, pitch_rect(-hl, -hw, hl, hw), NULL::float8, NULL::float8
+      UNION ALL
+      SELECT NULL, pitch_seg(i * 4.572 * s, -hw, i * 4.572 * s, hw), NULL, NULL FROM generate_series(-10, 10) i
+      UNION ALL
+      SELECT 'football-goalpost', ST_MakePoint(side_ * hl, 0), CASE WHEN side_ = 1 THEN 180 ELSE 0 END::float8, 5.64::float8
+      FROM unnest(ARRAY[-1, 1]) side_;
+  END IF;
+END
+$$;
+
+-- Courts repeat across a pitch mapped as a block of them; fields fill it.
+-- Each court is regulation size, shrunk only if its share of the pitch is
+-- smaller, and nothing is drawn below 60% of regulation.
+CREATE OR REPLACE FUNCTION pitch_layout(sport text, len float8, wid float8)
+RETURNS TABLE(prop text, geom geometry, facing float8, size float8)
+LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE AS $$
+DECLARE
+  court_len float8;
+  court_wid float8;
+  cell_len float8;
+  cell_wid float8;
+  nx int;
+  ny int;
+  s float8;
+  half boolean := false;
+BEGIN
+  IF sport IN ('soccer', 'american_football') THEN
+    IF (sport = 'soccer' AND len BETWEEN 40 AND 130 AND wid BETWEEN 25 AND 100)
+       OR (sport = 'american_football' AND len BETWEEN 80 AND 125 AND wid BETWEEN 40 AND 60) THEN
+      RETURN QUERY SELECT * FROM pitch_template(sport, len, wid);
+    END IF;
+    RETURN;
+  END IF;
+
+  SELECT c.l, c.w, c.cl, c.cw INTO court_len, court_wid, cell_len, cell_wid
+  FROM (VALUES
+    ('tennis', 23.77, 10.97, 35.0, 16.5),
+    ('pickleball', 13.41, 6.1, 18.0, 9.0),
+    ('basketball', 28.0, 15.0, 30.0, 17.0),
+    ('volleyball', 18.0, 9.0, 20.0, 11.0),
+    ('beachvolleyball', 16.0, 8.0, 22.0, 13.0),
+    ('beach_volleyball', 16.0, 8.0, 22.0, 13.0)
+  ) c(sport, l, w, cl, cw)
+  WHERE c.sport = pitch_layout.sport;
+  IF court_len IS NULL THEN
+    RETURN;
+  END IF;
+
+  nx := least(6, greatest(1, floor(len / cell_len)::int));
+  ny := least(6, greatest(1, floor(wid / cell_wid)::int));
+  IF sport = 'basketball' AND nx * ny = 1 AND len < 20 THEN
+    half := true;
+    court_len := 14;
+  END IF;
+  s := least(1, (len / nx) / court_len, (wid / ny) / court_wid);
+  IF s < 0.6 THEN
+    RETURN;
+  END IF;
+
+  RETURN QUERY
+    SELECT t.prop,
+           ST_Affine(t.geom, s, 0, 0, s, (i - (nx - 1) / 2.0) * len / nx, (j - (ny - 1) / 2.0) * wid / ny),
+           t.facing,
+           t.size * s
+    FROM generate_series(0, nx - 1) i
+    CROSS JOIN generate_series(0, ny - 1) j
+    CROSS JOIN pitch_template(sport, len, wid, half) t;
+END
+$$;
+
+-- Local metres onto a pitch: x along `azimuth` (radians clockwise from north),
+-- scaled into Web Mercator, which is conformal, so angles come through true.
+CREATE OR REPLACE FUNCTION pitch_place(local geometry, center geometry, azimuth float8)
+RETURNS geometry LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+  SELECT ST_Transform(ST_SetSRID(ST_Affine(local,
+           s * sin(azimuth), -s * cos(azimuth),
+           s * cos(azimuth), s * sin(azimuth),
+           ST_X(center), ST_Y(center)), 3857), 4326)
+  FROM (SELECT 1 / cos(radians(ST_Y(ST_Transform(center, 4326)))) AS s) k
+$$;
+
+-- MATERIALIZED like buildings_3d: the layout is computed per pitch, and its
+-- output geometry is not one Martin's tile envelope can find in geo_places.
+CREATE MATERIALIZED VIEW IF NOT EXISTS sport_pitches AS
+WITH pitch AS MATERIALIZED (
+  SELECT (osm_id * 4 + CASE osm_type WHEN 'N' THEN 0 WHEN 'W' THEN 1 ELSE 2 END) as fid,
+         id, geom,
+         NULLIF(lower(trim(split_part(tags->>'sport', ';', 1))), '') as sport,
+         NULLIF(tags->>'surface', '') as surface
+  FROM geo_places
+  WHERE geom_type = 'area' AND tags->>'leisure' = 'pitch'
+),
+fitted AS (
+  SELECT p.*, f.*
+  FROM pitch p
+  CROSS JOIN LATERAL (
+    SELECT ST_Transform(p.geom, 3857) as merc,
+           ST_OrientedEnvelope(ST_Transform(p.geom, 3857)) as box,
+           cos(radians(ST_Y(ST_Centroid(p.geom)))) as k
+  ) b
+  CROSS JOIN LATERAL (
+    SELECT ST_Centroid(b.box) as center,
+           greatest(e1, e2) as len,
+           least(e1, e2) as wid,
+           CASE WHEN e1 >= e2 THEN ST_Azimuth(c1, c2) ELSE ST_Azimuth(c2, c3) END as azimuth,
+           ST_Area(b.merc) / nullif(ST_Area(b.box), 0) as fill
+    FROM (
+      SELECT ST_PointN(ST_ExteriorRing(b.box), 1) as c1,
+             ST_PointN(ST_ExteriorRing(b.box), 2) as c2,
+             ST_PointN(ST_ExteriorRing(b.box), 3) as c3
+    ) c
+    CROSS JOIN LATERAL (
+      SELECT ST_Distance(c.c1, c.c2) * b.k as e1, ST_Distance(c.c2, c.c3) * b.k as e2
+    ) e
+  ) f
+  WHERE GeometryType(b.box) = 'POLYGON'
+),
+-- Only near-rectangular pitches get markings; a baseball diamond or a park
+-- lawn tagged as a pitch keeps just its surface. So does a pitch drawn around
+-- other pitches, a block of courts mapped both as one and one by one.
+layout AS (
+  SELECT f.fid, f.id, f.sport, f.center, f.azimuth, l.prop, l.geom, l.facing, l.size,
+         row_number() OVER (PARTITION BY f.fid ORDER BY l.prop NULLS FIRST) as n
+  FROM fitted f
+  CROSS JOIN LATERAL pitch_layout(f.sport, f.len, f.wid) l
+  WHERE f.fill >= 0.8
+    AND NOT EXISTS (
+      SELECT 1 FROM geo_places q
+      WHERE q.geom_type = 'area' AND q.tags->>'leisure' = 'pitch'
+        AND q.geom && f.geom AND q.id <> f.id
+        AND ST_Contains(f.geom, ST_PointOnSurface(q.geom))
+    )
+)
+SELECT fid * 64 as fid, id, 'surface' as kind, sport, surface,
+       NULL::text as direction, NULL::real as width, geom
+FROM pitch
+UNION ALL
+SELECT fid * 64 + 1, id, 'lines', sport, NULL, NULL, NULL,
+       pitch_place(ST_CollectionExtract(ST_Collect(geom), 2), min(center), min(azimuth))
+FROM layout
+WHERE prop IS NULL
+GROUP BY fid, id, sport
+UNION ALL
+SELECT fid * 64 + 1 + n, id, prop, sport, NULL,
+       ((round(degrees(azimuth) + facing)::int % 360 + 360) % 360)::text,
+       size::real,
+       pitch_place(geom, center, azimuth)
+FROM layout
+WHERE prop IS NOT NULL AND n < 63
+WITH NO DATA;
+
+CREATE UNIQUE INDEX IF NOT EXISTS sport_pitches_fid_idx ON sport_pitches (fid);
+CREATE INDEX IF NOT EXISTS sport_pitches_geom_idx ON sport_pitches USING GIST (geom);

@@ -59,3 +59,7 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS geo_places_furniture_centroid_idx
 CREATE INDEX CONCURRENTLY IF NOT EXISTS geo_places_highway_lines_geom_idx
   ON geo_places USING gist (geom)
   WHERE geom_type = 'line' AND tags ? 'highway';
+
+CREATE INDEX CONCURRENTLY IF NOT EXISTS geo_places_pitches_geom_idx
+  ON geo_places USING gist (geom)
+  WHERE geom_type = 'area' AND tags->>'leisure' = 'pitch';
