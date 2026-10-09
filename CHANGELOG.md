@@ -18,6 +18,39 @@ does it — and the release pipeline turns it into the GitHub Release notes.
   filtered by those instead of one box around the whole region. A GTFS region
   also takes several boxes now, separated by `;`.
 
+* **Sport pitches.** A new `sport_pitches` layer, in the `detail` bundle,
+  carries every pitch's surface plus regulation markings for tennis,
+  pickleball, basketball, volleyball, beach volleyball, soccer and American
+  football. Markings are fitted to each pitch, with a block of courts repeated
+  across it and half courts recognised. The nets, hoops and goals on them come
+  as oriented points. It is a stored view, refreshed after every import and OSM
+  update.
+* **Fences, walls, hedges, power lines and catenary.** A new `object_lines`
+  layer, in the `detail` bundle, carries the barriers, power lines and
+  electrified track a client stands up as 3D objects, with any tagged height.
+* **Road surfaces and markings.** A "Build Road Markings" console task
+  produces `road_surfaces`, `road_markings` and `road_glyphs` in the `detail`
+  bundle: true-width carriageways with rounded kerbs, centre, lane, edge and
+  bike lines, green bike and red bus lanes, stop lines, kerb-to-kerb
+  crosswalks, and turn arrows and bike symbols, with lanes easing across where
+  their count changes. Widths count parking lanes, medians between divided
+  carriageways stay unpaved, bridges end square at their abutments, and stop
+  lines stand only where signals or stop signs control the approach. All paint
+  is cut to the kerb.
+* **Solar arrays, flower beds, scrub, shrubbery and shrubs.** A new `object_areas` layer
+  in the `detail` bundle carries the areas and points a client plants with
+  3D objects.
+
+* A `woods` tile source, part of the `detail` bundle, says what grows in a wood: its `leaf_type` and `genus`, keyed by the basemap landcover feature's id.
+
+### Changed
+
+* **Fountains in water.** `street_furniture` marks a fountain standing in a
+  pond, lake, reservoir or lagoon, or tagged `fountain=nozzle`, as
+  `fountain_jet`, so a client can draw a plume rather than a basin. Drinking
+  fountains mapped as `amenity=fountain` come through as `drinking_water`. The
+  view rebuilds itself on the next startup.
+
 ### Fixed
 
 * **The `us` GTFS region includes Alaska and Hawaii.** It covered only the
@@ -27,6 +60,13 @@ does it — and the release pipeline turns it into the GitHub Release notes.
   Hawaii. Run *Download GTFS* and then *Rebuild MOTIS* to pick them up. For
   bikeshare in Hawaii, give a United States region the same four boxes as
   `bboxes`.
+
+* **Brand suggestions no longer match a different word that shares its
+  letters.** "charleston" suggested Charles Schwab and "columbus" suggested
+  Columbia, because their trigram scores fell in the same range as real typos.
+  A fuzzy brand match must now be within one edit of how the brand name starts
+  (two for a query longer than 10 characters), so "starbuks", "wallmart" and
+  "chik fil a" still find their brands.
 
 ## [0.10.3] - 2026-10-08
 

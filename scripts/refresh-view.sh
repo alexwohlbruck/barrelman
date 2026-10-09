@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # =============================================================================
-# Refresh one of the map's materialized views: buildings_3d or street_furniture
+# Refresh one of the map's materialized views
 # =============================================================================
 #
 # Usage: refresh-view.sh <view>
@@ -22,7 +22,7 @@ set -euo pipefail
 
 VIEW="${1:?usage: refresh-view.sh <view>}"
 case "$VIEW" in
-  buildings_3d|street_furniture) ;;
+  buildings_3d|street_furniture|sport_pitches) ;;
   *) echo "Unknown view: $VIEW" >&2; exit 2 ;;
 esac
 
