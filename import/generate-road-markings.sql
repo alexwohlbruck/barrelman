@@ -111,17 +111,21 @@ EXCEPTION WHEN OTHERS THEN
 END
 $$;
 
--- The carriageway between two kerb lines, rounded off at its far end; NULL if
--- the kerbs do not make a polygon.
-CREATE OR REPLACE FUNCTION road_body(left_kerb geometry, right_kerb geometry, far_end geometry, radius float8)
-RETURNS geometry LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE AS $$
+-- The area between two lines drawn the same way; NULL if they do not make a
+-- polygon.
+CREATE OR REPLACE FUNCTION road_between(l geometry, r geometry) RETURNS geometry
+LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE AS $$
 BEGIN
-  RETURN ST_Union(
-    ST_CollectionExtract(ST_MakeValid(ST_MakePolygon(ST_AddPoint(ST_MakeLine(left_kerb, ST_Reverse(right_kerb)), ST_StartPoint(left_kerb)))), 3),
-    ST_Buffer(far_end, radius, 4));
+  RETURN ST_CollectionExtract(ST_MakeValid(ST_MakePolygon(ST_AddPoint(ST_MakeLine(l, ST_Reverse(r)), ST_StartPoint(l)))), 3);
 EXCEPTION WHEN OTHERS THEN
   RETURN NULL;
 END
+$$;
+
+-- The carriageway between two kerb lines, rounded off at its far end.
+CREATE OR REPLACE FUNCTION road_body(left_kerb geometry, right_kerb geometry, far_end geometry, radius float8)
+RETURNS geometry LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+  SELECT ST_Union(road_between(left_kerb, right_kerb), ST_Buffer(far_end, radius, 4))
 $$;
 
 -- A length in metres from a width-style tag ("3.5", "3.5 m", "12 ft"), or NULL.
@@ -204,6 +208,28 @@ EXCEPTION WHEN OTHERS THEN
 END
 $$;
 
+-- The band between two lines that ease across from offsets `a0`, `b0` to `a1`,
+-- `b1` over `ease`: a lane that follows a tapering kerb.
+CREATE OR REPLACE FUNCTION road_taper_band(line geometry, a0 float8, a1 float8, b0 float8, b1 float8, ease float8)
+RETURNS geometry LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE AS $$
+BEGIN
+  RETURN road_between(road_taper(line, a0, a1, ease), road_taper(line, b0, b1, ease));
+EXCEPTION WHEN OTHERS THEN
+  RETURN NULL;
+END
+$$;
+
+-- Where lane divider `i` of `n` (0 the split, `n` the kerb-side edge) stood on
+-- the road before, lanes counted outward from `split` toward `edge` at `lw`. A
+-- lane opening at the centre keeps the dividers counted from the kerb where they
+-- were; one opening at the kerb keeps those counted from the centre.
+CREATE OR REPLACE FUNCTION road_divider_start(i int, n int, split float8, edge float8, lw float8, opens_kerb boolean)
+RETURNS float8 LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+  SELECT CASE WHEN edge <= split
+    THEN greatest(edge, least(split, CASE WHEN opens_kerb THEN split - i * lw ELSE edge + (n - i) * lw END))
+    ELSE least(edge, greatest(split, CASE WHEN opens_kerb THEN split + i * lw ELSE edge - (n - i) * lw END)) END
+$$;
+
 -- The part of `g` inside the box (or outside it), as `dim` (2 lines, 3
 -- polygons). A scoped build cuts live rows it did not make, and GEOS refuses
 -- some invalid polygons outright; those are repaired and cut again rather
@@ -216,6 +242,62 @@ EXCEPTION WHEN OTHERS THEN
   g := ST_MakeValid(g);
   RETURN ST_CollectionExtract(CASE WHEN inside THEN ST_Intersection(g, box) ELSE ST_Difference(g, box) END, dim);
 END
+$$;
+
+-- Where a `placement` value ("left_of:2", "middle_of:1", "right_of:3") puts the
+-- way, as an offset: lanes counted from `edge`, the left edge of the first lane
+-- as its traffic sees it, stepping `dir` (-1 rightward along the way, +1 for
+-- lanes running against it). NULL for "transition", a lane past the `lanes`
+-- there are, or anything else.
+CREATE OR REPLACE FUNCTION road_place(value text, edge float8, lane_w float8, dir int, lanes int) RETURNS float8
+LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+  SELECT edge + dir * lane_w * CASE split_part(v, ':', 1)
+    WHEN 'left_of' THEN n - 1 WHEN 'right_of' THEN n WHEN 'middle_of' THEN n - 0.5 END
+  FROM (SELECT trim(value) as v) t, LATERAL (SELECT road_int(split_part(t.v, ':', 2)) as n) c
+  WHERE t.v ~ '^(left_of|right_of|middle_of):[0-9]+$' AND n BETWEEN 1 AND lanes
+$$;
+
+-- Turn bays in a turn:lanes list of `n` lanes: {lanes at the left that only
+-- turn left, lanes at the right that only turn right}. Through traffic keeps
+-- to the lanes between, and those are what line up across a junction.
+CREATE OR REPLACE FUNCTION road_turn_bays(turns text, n int) RETURNS int[]
+LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+  WITH l AS (
+    SELECT i, v ~ '(^|;)\s*(left|sharp_left|slight_left|reverse)\s*(;|$)' AND v !~ 'through|right' as lo,
+              v ~ '(^|;)\s*(right|sharp_right|slight_right)\s*(;|$)' AND v !~ 'through|left|reverse' as ro
+    FROM unnest(string_to_array(turns, '|')) WITH ORDINALITY u(v, i)
+  ),
+  b AS (
+    SELECT COALESCE((SELECT min(i) FROM l WHERE NOT lo), n + 1)::int - 1 as lb,
+           n - COALESCE((SELECT max(i) FROM l WHERE NOT ro), 0)::int as rb
+  )
+  SELECT CASE WHEN turns IS NULL OR n < 2 OR array_length(string_to_array(turns, '|'), 1) <> n OR lb + rb >= n
+              THEN ARRAY[0, 0] ELSE ARRAY[lb, rb] END
+  FROM b
+$$;
+
+-- A way road markings are built from: a street or road class above a track,
+-- at grade, and a service road only where someone mapped its lanes (there are
+-- more of those than of every other class together).
+CREATE OR REPLACE FUNCTION road_is_marked_way(tags jsonb) RETURNS boolean
+LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+  SELECT tags->>'highway' IN ('motorway', 'motorway_link', 'trunk', 'trunk_link', 'primary', 'primary_link',
+                              'secondary', 'secondary_link', 'tertiary', 'tertiary_link', 'unclassified',
+                              'residential', 'living_street', 'service', 'busway')
+    AND COALESCE(tags->>'tunnel', 'no') = 'no'
+    AND COALESCE(tags->>'area', 'no') <> 'yes'
+    AND (tags->>'highway' <> 'service' OR tags ?| ARRAY['lanes', 'lane_markings', 'width', 'width:carriageway'])
+$$;
+
+-- The unit direction {x, y} of a line at fraction `t`, over `reach` units
+-- either side.
+CREATE OR REPLACE FUNCTION road_dir(line geometry, t float8, reach float8) RETURNS float8[]
+LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+  SELECT CASE WHEN d > 0 THEN ARRAY[(ST_X(b) - ST_X(a)) / d, (ST_Y(b) - ST_Y(a)) / d] END
+  FROM (SELECT ST_LineInterpolatePoint(line, greatest(0, t - reach / ST_Length(line))) as a,
+               ST_LineInterpolatePoint(line, least(1, t + reach / ST_Length(line))) as b) e,
+       LATERAL (SELECT ST_Distance(e.a, e.b) as d) dist
+  WHERE ST_Length(line) > 0
 $$;
 
 -- ─── Scope ───────────────────────────────────────────────────────────────────
@@ -233,6 +315,48 @@ SELECT COALESCE((SELECT ST_Expand(box, 0.003) FROM _rm_scope LIMIT 1), ST_MakeEn
 -- ─── Roads and their lanes ───────────────────────────────────────────────────
 -- A way tagged oneway=-1 is turned to run with its traffic, so its OSM left
 -- and right swap: `l` and `r` below name the sides of the geometry.
+-- A road's place can come from the two ways before it (see Where the way
+-- runs), so a scoped build also reads the ways meeting the ends of its roads
+-- outside the area, and the ways meeting theirs. Those only inform; nothing is
+-- drawn from them, and each way comes out the same whichever box builds it.
+-- A full build reads geo_places as it goes rather than copying it here.
+DROP TABLE IF EXISTS _rm_source;
+CREATE TEMP TABLE _rm_source AS
+SELECT osm_id, tags, geom, true as local
+FROM geo_places
+WHERE EXISTS (SELECT 1 FROM _rm_scope)
+  AND geom_type = 'line' AND tags ? 'highway' AND geom && (SELECT area FROM _rm_area) AND road_is_marked_way(tags);
+CREATE INDEX ON _rm_source (osm_id);
+DO $$
+DECLARE
+  -- The carry reads one way back, and the taper after it reads one more.
+  reach constant int := 2;
+  frontier geometry[];
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM _rm_scope) THEN RETURN; END IF;
+  SELECT array_agg(pt) INTO frontier
+  FROM _rm_source, LATERAL (VALUES (ST_StartPoint(geom)), (ST_EndPoint(geom))) e(pt)
+  WHERE NOT ST_Intersects(pt, (SELECT area FROM _rm_area));
+  FOR depth IN 1..reach LOOP
+    EXIT WHEN frontier IS NULL;
+    WITH found AS (
+      INSERT INTO _rm_source
+      SELECT DISTINCT ON (g.osm_id) g.osm_id, g.tags, g.geom, false
+      FROM unnest(frontier) f(pt)
+      JOIN geo_places g ON g.geom && ST_Expand(f.pt, 1e-7)
+       AND g.geom_type = 'line' AND g.tags ? 'highway'
+       AND (ST_DWithin(ST_StartPoint(g.geom), f.pt, 1e-7) OR ST_DWithin(ST_EndPoint(g.geom), f.pt, 1e-7))
+      WHERE road_is_marked_way(g.tags) AND NOT EXISTS (SELECT 1 FROM _rm_source x WHERE x.osm_id = g.osm_id)
+      RETURNING geom
+    )
+    -- Onward only from the far end of what was found.
+    SELECT array_agg(pt) INTO frontier
+    FROM found, LATERAL (VALUES (ST_StartPoint(geom)), (ST_EndPoint(geom))) e(pt)
+    WHERE NOT pt = ANY (frontier);
+  END LOOP;
+END
+$$;
+
 DROP TABLE IF EXISTS _rm_roads;
 CREATE TEMP TABLE _rm_roads AS
 WITH raw AS (
@@ -252,17 +376,12 @@ WITH raw AS (
                 ELSE substring(tags->>'maxspeed' from '^\s*([0-9]+)\s*$')::float8 / 1.609 END,
            CASE WHEN tags->>'highway' IN ('motorway', 'motorway_link') THEN 60 WHEN tags->>'highway' IN ('trunk', 'trunk_link') THEN 50
                 WHEN tags->>'highway' IN ('primary', 'primary_link') THEN 45 WHEN tags->>'highway' IN ('secondary', 'secondary_link') THEN 40
-                WHEN tags->>'highway' IN ('tertiary', 'tertiary_link') THEN 35 ELSE 25 END) as mph
-  FROM geo_places
-  WHERE geom_type = 'line' AND tags ? 'highway' AND geom && (SELECT area FROM _rm_area)
-    AND tags->>'highway' IN ('motorway', 'motorway_link', 'trunk', 'trunk_link', 'primary', 'primary_link',
-                             'secondary', 'secondary_link', 'tertiary', 'tertiary_link', 'unclassified',
-                             'residential', 'living_street', 'service', 'busway')
-    AND COALESCE(tags->>'tunnel', 'no') = 'no'
-    AND COALESCE(tags->>'area', 'no') <> 'yes'
-    -- Alleys and other service roads only where someone mapped their lanes:
-    -- there are more of them than of every other class together.
-    AND (tags->>'highway' <> 'service' OR tags ?| ARRAY['lanes', 'lane_markings', 'width', 'width:carriageway'])
+                WHEN tags->>'highway' IN ('tertiary', 'tertiary_link') THEN 35 ELSE 25 END) as mph,
+         local
+  FROM (SELECT osm_id, tags, geom, true as local FROM geo_places
+        WHERE NOT EXISTS (SELECT 1 FROM _rm_scope) AND geom_type = 'line' AND tags ? 'highway' AND road_is_marked_way(tags)
+        UNION ALL
+        SELECT osm_id, tags, geom, local FROM _rm_source) src
 ),
 sided AS (
   SELECT r.*,
@@ -295,7 +414,7 @@ split AS (
                             c.lanes - c.both_ways - COALESCE(road_int(c.tags->>'lanes:forward'), ceil((c.lanes - c.both_ways) / 2.0)::int)) END, 0) as bwd
   FROM counted c
 )
-SELECT osm_id, class, g, s, americas, oneway, flip, tags, both_ways, mph, fwd, bwd,
+SELECT osm_id, local, class, g, s, americas, oneway, flip, tags, both_ways, mph, fwd, bwd,
        -- Above the ground: a bridge, or anything mapped on a layer over it.
        COALESCE(tags->>'bridge', 'no') NOT IN ('no') OR COALESCE(road_int(tags->>'layer'), 0) > 0 as bridge,
        bike_rt[1] as bike_r, bike_rt[2] as buf_r, bike_rt[3] = 1 as track_r,
@@ -346,6 +465,73 @@ CREATE INDEX ON _rm_roads USING gist (g);
 CREATE INDEX ON _rm_roads (osm_id);
 ANALYZE _rm_roads;
 
+-- Ways that simply carry on into the next: one way ends where one other starts.
+DROP TABLE IF EXISTS _rm_pairs;
+CREATE TEMP TABLE _rm_pairs AS
+WITH ends AS (
+  SELECT osm_id, round(ST_X(ST_EndPoint(g))::numeric, 2) as x, round(ST_Y(ST_EndPoint(g))::numeric, 2) as y FROM _rm_roads
+),
+starts AS (
+  SELECT osm_id, round(ST_X(ST_StartPoint(g))::numeric, 2) as x, round(ST_Y(ST_StartPoint(g))::numeric, 2) as y FROM _rm_roads
+)
+SELECT e.osm_id as prev_id, st.osm_id as next_id
+FROM ends e JOIN starts st USING (x, y)
+JOIN (SELECT x, y FROM ends GROUP BY x, y HAVING count(*) = 1) ue USING (x, y)
+JOIN (SELECT x, y FROM starts GROUP BY x, y HAVING count(*) = 1) us USING (x, y)
+WHERE e.osm_id <> st.osm_id;
+CREATE INDEX ON _rm_pairs (next_id);
+
+-- ─── Where the way runs ──────────────────────────────────────────────────────
+-- The carriageway is centred on its way unless something says otherwise, and
+-- `shift` moves it across. `placement` says so outright. A turn bay hangs off
+-- its own side, so the lanes that carry on through a junction stay centred and
+-- line up with the lanes beyond it; on a two-way road the centre line steps
+-- across for a left bay, as built. A way where the lane count changes keeps the
+-- kerb of the way before on the side that did not change (a one-way its left),
+-- and the way after it eases back to centre (see Tapers): ways downstream are
+-- drawn down the middle of the road. So a way's place depends on its own tags
+-- and the way before it, and nothing further.
+ALTER TABLE _rm_roads ADD COLUMN placed boolean NOT NULL DEFAULT false, ADD COLUMN base float8 NOT NULL DEFAULT 0,
+  ADD COLUMN shift float8, ADD COLUMN kerb_l float8, ADD COLUMN kerb_r float8, ADD COLUMN axis geometry,
+  ADD COLUMN bays_f int[], ADD COLUMN bays_b int[];
+-- Lane offsets are in the geometry's direction, which for oneway=-1 runs
+-- against the OSM way: its forward lanes are the tagged backward ones.
+UPDATE _rm_roads SET bays_f = bf, bays_b = bb, placed = x IS NOT NULL, base = COALESCE(-x, CASE
+    WHEN oneway THEN (bf[1] - bf[2]) * lane_w / 2
+    ELSE (bf[1] - bf[2] - bb[1] + bb[2]) * lane_w / 2 END)
+FROM (
+  SELECT osm_id as id, road_turn_bays(turn_forward, fwd) as bf, road_turn_bays(turn_backward, bwd) as bb, CASE WHEN flip
+    THEN COALESCE(road_place(tags->>'placement:backward', left_edge, lane_w, -1, fwd),
+                  road_place(tags->>'placement', left_edge, lane_w, -1, fwd))
+    ELSE COALESCE(road_place(tags->>'placement:forward', CASE WHEN oneway THEN left_edge ELSE split_f END, lane_w, -1, fwd),
+                  road_place(tags->>'placement:backward', split_b, lane_w, 1, bwd),
+                  road_place(tags->>'placement', left_edge, lane_w, -1, fwd + bwd + both_ways)) END as x
+  FROM _rm_roads
+) p
+WHERE osm_id = p.id;
+UPDATE _rm_roads b SET shift = COALESCE(c.kept, b.base)
+FROM _rm_roads b2
+LEFT JOIN LATERAL (
+  -- The kerb of the lanes that carry on: the way before less its turn bays.
+  SELECT CASE WHEN b2.oneway THEN a.left_edge + a.base - a.bays_f[1] * a.lane_w - b2.left_edge
+              WHEN b2.bwd = a.bwd THEN a.left_edge + a.base - (a.bays_f[1] + a.bays_b[2]) * a.lane_w - b2.left_edge
+              ELSE a.right_edge + a.base + (a.bays_b[1] + a.bays_f[2]) * a.lane_w - b2.right_edge END as kept
+  FROM _rm_pairs p JOIN _rm_roads a ON a.osm_id = p.prev_id
+  WHERE p.next_id = b2.osm_id AND b2.oneway = a.oneway AND NOT b2.placed
+    AND b2.bays_f = ARRAY[0, 0] AND b2.bays_b = ARRAY[0, 0]
+    AND (b2.fwd <> a.fwd OR b2.bwd <> a.bwd) AND (b2.oneway OR b2.fwd = a.fwd OR b2.bwd = a.bwd)
+) c ON true
+WHERE b.osm_id = b2.osm_id;
+-- The carriageway's own centreline, where it is not the way; a way GEOS cannot
+-- offset stays on its way.
+UPDATE _rm_roads SET axis = road_offset(g, shift * s) WHERE abs(shift) >= 0.05;
+UPDATE _rm_roads SET shift = 0, axis = NULL WHERE abs(shift) >= 0.05 AND COALESCE(GeometryType(axis), '') <> 'LINESTRING';
+UPDATE _rm_roads SET left_edge = left_edge + shift, right_edge = right_edge + shift,
+  split_b = split_b + shift, split_f = split_f + shift,
+  br_a = br_a + shift, br_b = br_b + shift, bl_a = bl_a + shift, bl_b = bl_b + shift,
+  kerb_l = width / 2 + shift, kerb_r = -width / 2 + shift,
+  axis = CASE WHEN local THEN axis END;
+
 -- ─── Tapers ──────────────────────────────────────────────────────────────────
 -- Where one road simply continues into the next, the next starts from the
 -- first's lane layout and eases into its own: a lane opening or closing drifts
@@ -353,29 +539,17 @@ ANALYZE _rm_roads;
 -- to the MUTCD's length for the road's speed (L = WS²/60 ft up to 40 mph,
 -- WS above), short of the road's own length.
 ALTER TABLE _rm_roads
-  ADD COLUMN prev_left float8, ADD COLUMN prev_right float8, ADD COLUMN prev_width float8, ADD COLUMN prev_split_b float8,
-  ADD COLUMN prev_split_f float8, ADD COLUMN prev_lane_w float8, ADD COLUMN ease float8,
+  ADD COLUMN prev_left float8, ADD COLUMN prev_right float8, ADD COLUMN prev_kerb_l float8, ADD COLUMN prev_kerb_r float8,
+  ADD COLUMN prev_split_b float8, ADD COLUMN prev_split_f float8, ADD COLUMN prev_lane_w float8, ADD COLUMN ease float8,
   ADD COLUMN opens_kerb_f boolean, ADD COLUMN opens_kerb_b boolean, ADD COLUMN body geometry;
-WITH ends AS (
-  SELECT osm_id, round(ST_X(ST_EndPoint(g))::numeric, 2) as x, round(ST_Y(ST_EndPoint(g))::numeric, 2) as y FROM _rm_roads
-),
-starts AS (
-  SELECT osm_id, round(ST_X(ST_StartPoint(g))::numeric, 2) as x, round(ST_Y(ST_StartPoint(g))::numeric, 2) as y FROM _rm_roads
-),
-pairs AS (
-  SELECT e.osm_id as prev_id, st.osm_id as next_id
-  FROM ends e JOIN starts st USING (x, y)
-  JOIN (SELECT x, y FROM ends GROUP BY x, y HAVING count(*) = 1) ue USING (x, y)
-  JOIN (SELECT x, y FROM starts GROUP BY x, y HAVING count(*) = 1) us USING (x, y)
-  WHERE e.osm_id <> st.osm_id
-)
 UPDATE _rm_roads b SET
-  prev_left = a.left_edge, prev_right = a.right_edge, prev_width = a.width, prev_split_b = a.split_b,
-  prev_split_f = a.split_f, prev_lane_w = a.lane_w
-FROM pairs JOIN _rm_roads a ON a.osm_id = pairs.prev_id
-WHERE b.osm_id = pairs.next_id AND a.marked = b.marked
+  prev_left = a.left_edge, prev_right = a.right_edge, prev_kerb_l = a.kerb_l, prev_kerb_r = a.kerb_r,
+  prev_split_b = a.split_b, prev_split_f = a.split_f, prev_lane_w = a.lane_w
+FROM _rm_pairs p JOIN _rm_roads a ON a.osm_id = p.prev_id
+WHERE b.osm_id = p.next_id AND a.marked = b.marked
   AND NOT (a.oneway <> b.oneway)
-  AND (abs(a.width - b.width) > 0.2 OR abs(a.left_edge - b.left_edge) > 0.2 OR abs(a.right_edge - b.right_edge) > 0.2
+  AND (abs(a.kerb_l - b.kerb_l) > 0.2 OR abs(a.kerb_r - b.kerb_r) > 0.2
+       OR abs(a.left_edge - b.left_edge) > 0.2 OR abs(a.right_edge - b.right_edge) > 0.2
        OR abs(a.split_b - b.split_b) > 0.2 OR abs(a.lane_w - b.lane_w) > 0.2);
 UPDATE _rm_roads SET
   ease = least(0.6 * ST_Length(g) / s, greatest(15,
@@ -383,13 +557,18 @@ UPDATE _rm_roads SET
   opens_kerb_f = COALESCE(fwd > 0 AND split_part(turn_forward, '|', greatest(fwd, 1)) LIKE '%right%' AND split_part(turn_forward, '|', 1) NOT LIKE '%left%', false),
   opens_kerb_b = COALESCE(bwd > 0 AND split_part(turn_backward, '|', greatest(bwd, 1)) LIKE '%right%' AND split_part(turn_backward, '|', 1) NOT LIKE '%left%', false)
 WHERE prev_left IS NOT NULL;
--- A tapering road's carriageway, between its two eased kerbs.
-UPDATE _rm_roads SET body = road_body(l, r, ST_EndPoint(g), width / 2 * s)
+-- A tapering road's carriageway, between its two eased kerbs; a kerb that
+-- stays put does not move.
+UPDATE _rm_roads SET body = road_body(l, r, ST_EndPoint(COALESCE(axis, g)), width / 2 * s)
 FROM (SELECT osm_id as id,
-             road_taper(g, prev_width / 2 * s, width / 2 * s, ease * s) as l,
-             road_taper(g, -prev_width / 2 * s, -width / 2 * s, ease * s) as r
-      FROM _rm_roads WHERE prev_left IS NOT NULL) e
+             road_taper(g, prev_kerb_l * s, kerb_l * s, ease * s) as l,
+             road_taper(g, prev_kerb_r * s, kerb_r * s, ease * s) as r
+      FROM _rm_roads WHERE prev_left IS NOT NULL AND local) e
 WHERE osm_id = e.id AND e.l IS NOT NULL AND e.r IS NOT NULL;
+
+-- Ways read only to place the ones in the area have done their part.
+DELETE FROM _rm_roads WHERE NOT local;
+ANALYZE _rm_roads;
 
 -- ─── Junctions ───────────────────────────────────────────────────────────────
 -- Every road vertex shared with another road, or where a road ends into
@@ -454,7 +633,7 @@ CREATE INDEX ON _rm_approach (osm_id, x, y);
 
 DROP TABLE IF EXISTS _rm_road_cuts;
 CREATE TEMP TABLE _rm_road_cuts AS
-SELECT c.osm_id, ST_Union(ST_Buffer(ST_Intersection(o.g, ST_Expand(c.p, (r.width + 6) * r.s)),
+SELECT c.osm_id, ST_Union(ST_Buffer(ST_Intersection(COALESCE(o.axis, o.g), ST_Expand(c.p, (r.width + 6) * r.s)),
                                     (o.width / 2 + 1) * o.s, 'endcap=flat join=round quad_segs=4')) as cut
 FROM _rm_cross c
 JOIN _rm_roads r ON r.osm_id = c.osm_id
@@ -512,7 +691,7 @@ SELECT bridge, p, ST_Intersection(
 FROM (
   SELECT i.bridge, v.p, v.s, (v.width * 0.75 + 10) * v.s as reach,
          COALESCE(ST_Intersection(r.body, ST_Expand(v.p, (v.width + 10 + r.width) * v.s)),
-                  ST_Buffer(ST_Intersection(r.g, ST_Expand(v.p, (v.width + 10 + r.width) * v.s)), r.width / 2 * r.s,
+                  ST_Buffer(ST_Intersection(COALESCE(r.axis, r.g), ST_Expand(v.p, (v.width + 10 + r.width) * v.s)), r.width / 2 * r.s,
                             r.cap)) as piece
   FROM _rm_vertices v
   JOIN _rm_incid i ON i.x = v.x AND i.y = v.y
@@ -524,9 +703,14 @@ CREATE INDEX ON _rm_fillets USING gist (g);
 
 DROP TABLE IF EXISTS _rm_surfaces;
 CREATE TEMP TABLE _rm_surfaces (bridge boolean, g geometry);
+-- Every cell a carriageway reaches, not only those its centreline passes.
 WITH cells AS (
-  SELECT DISTINCT floor(ST_X(c) / 800) as cx, floor(ST_Y(c) / 800) as cy
-  FROM _rm_roads r, LATERAL (SELECT (ST_DumpPoints(ST_Segmentize(r.g, 400))).geom as c) d
+  SELECT DISTINCT cx, cy
+  FROM _rm_roads r,
+       LATERAL (SELECT (ST_DumpPoints(ST_Segmentize(r.g, 200))).geom as c) d,
+       LATERAL (SELECT (r.width / 2 + abs(r.shift) + 15) * r.s as reach) m,
+       generate_series(floor((ST_X(d.c) - m.reach) / 800)::int, floor((ST_X(d.c) + m.reach) / 800)::int) cx,
+       generate_series(floor((ST_Y(d.c) - m.reach) / 800)::int, floor((ST_Y(d.c) + m.reach) / 800)::int) cy
 ),
 boxes AS (
   SELECT cx, cy, ST_MakeEnvelope(cx * 800, cy * 800, (cx + 1) * 800, (cy + 1) * 800, 3857) as box FROM cells
@@ -534,7 +718,7 @@ boxes AS (
 pieces AS (
   SELECT b.cx, b.cy, b.box, r.bridge,
          COALESCE(ST_Intersection(r.body, ST_Expand(b.box, 60)),
-                  ST_Buffer(ST_Intersection(r.g, ST_Expand(b.box, 60)), r.width / 2 * r.s, r.cap)) as g
+                  ST_Buffer(ST_Intersection(COALESCE(r.axis, r.g), ST_Expand(b.box, 60)), r.width / 2 * r.s, r.cap)) as g
   FROM boxes b JOIN _rm_roads r ON r.g && ST_Expand(b.box, 60)
   UNION ALL
   SELECT b.cx, b.cy, b.box, f.bridge, f.g
@@ -599,20 +783,15 @@ UNION ALL
 SELECT osm_id, g, s, bridge, ease, 'centre', 'double', centre_color, split_f, prev_split_f
 FROM centre WHERE NOT oneway AND both_ways > 0
 UNION ALL
--- Lane dividers within each direction. A lane opening at the centre keeps the
--- dividers counted from the kerb where they were; one opening at the kerb
--- keeps those counted from the centre. A divider with no counterpart on the
--- road before emerges from the line it is clamped to.
+-- Lane dividers within each direction, easing in from where they stood on the
+-- road before (see road_divider_start). A divider with no counterpart there
+-- emerges from the line it is clamped to.
 SELECT osm_id, g, s, bridge, ease, 'lane', dash, 'white', split_f - i * lane_w,
-       CASE WHEN prev_left IS NULL THEN NULL
-            WHEN opens_kerb_f THEN greatest(prev_right, least(prev_split_f, prev_split_f - i * prev_lane_w))
-            ELSE greatest(prev_right, least(prev_split_f, prev_right + (fwd - i) * prev_lane_w)) END
+       CASE WHEN prev_left IS NOT NULL THEN road_divider_start(i, fwd, prev_split_f, prev_right, prev_lane_w, opens_kerb_f) END
 FROM lanes, generate_series(1, 8) i WHERE i < fwd
 UNION ALL
 SELECT osm_id, g, s, bridge, ease, 'lane', dash, 'white', split_b + i * lane_w,
-       CASE WHEN prev_left IS NULL THEN NULL
-            WHEN opens_kerb_b THEN least(prev_left, greatest(prev_split_b, prev_split_b + i * prev_lane_w))
-            ELSE least(prev_left, greatest(prev_split_b, prev_left - (bwd - i) * prev_lane_w)) END
+       CASE WHEN prev_left IS NOT NULL THEN road_divider_start(i, bwd, prev_split_b, prev_left, prev_lane_w, opens_kerb_b) END
 FROM lanes, generate_series(1, 8) i WHERE i < bwd
 UNION ALL
 -- Edge lines on roads without kerbs: motorways, trunks and their links.
@@ -623,13 +802,14 @@ SELECT osm_id, g, s, bridge, ease, 'edge', 'solid', CASE WHEN americas AND onewa
 FROM lanes WHERE class IN ('motorway', 'motorway_link', 'trunk', 'trunk_link')
 UNION ALL
 -- Bike lanes: a solid line on the traffic side of the paint, another past any
--- buffer, and one against parking on the kerb side.
-SELECT osm_id, g, s, bridge, NULL, 'bike', 'solid', 'white', o, NULL
+-- buffer, and one against parking on the kerb side. They keep their distance
+-- from a kerb that tapers.
+SELECT osm_id, g, s, bridge, ease, 'bike', 'solid', 'white', o, prev_kerb_r + o - kerb_r
 FROM _rm_roads, LATERAL (VALUES (br_b), (CASE WHEN buf_r > 0 THEN br_b + buf_r END),
                                 (CASE WHEN park_r > 0 AND NOT track_r THEN br_a END)) v(o)
 WHERE bike_r > 0 AND o IS NOT NULL
 UNION ALL
-SELECT osm_id, g, s, bridge, NULL, 'bike', 'solid', 'white', o, NULL
+SELECT osm_id, g, s, bridge, ease, 'bike', 'solid', 'white', o, prev_kerb_l + o - kerb_l
 FROM _rm_roads, LATERAL (VALUES (bl_b), (CASE WHEN buf_l > 0 THEN bl_b - buf_l END),
                                 (CASE WHEN park_l > 0 AND NOT track_l THEN bl_a END)) v(o)
 WHERE bike_l > 0 AND o IS NOT NULL;
@@ -655,21 +835,102 @@ WHERE o.line IS NOT NULL AND NOT ST_IsEmpty(c.clipped)
 INSERT INTO road_markings_next (kind, pattern, color, bridge, geom)
 SELECT b.kind, 'fill', b.color, b.bridge, ST_Transform(ST_Multi(clipped), 4326)
 FROM (
-  SELECT osm_id, g, s, bridge, 'bike_lane' as kind, 'green' as color, br_a as a, br_b as b FROM _rm_roads WHERE bike_r > 0
+  SELECT osm_id, g, s, bridge, 'bike_lane' as kind, 'green' as color, br_a as a, br_b as b,
+         prev_kerb_r - kerb_r as d, ease, NULL::float8 as d2 FROM _rm_roads WHERE bike_r > 0
   UNION ALL
-  SELECT osm_id, g, s, bridge, 'bike_lane', 'green', bl_a, bl_b FROM _rm_roads WHERE bike_l > 0
+  SELECT osm_id, g, s, bridge, 'bike_lane', 'green', bl_a, bl_b, prev_kerb_l - kerb_l, ease, NULL FROM _rm_roads WHERE bike_l > 0
   UNION ALL
-  SELECT osm_id, g, s, bridge, 'bus_lane', 'red', split_f - (i - 1) * lane_w, split_f - i * lane_w FROM _rm_roads, unnest(bus_f) i
+  -- A bus lane eases in with the dividers either side of it.
+  SELECT osm_id, g, s, bridge, 'bus_lane', 'red', split_f - (i - 1) * lane_w, split_f - i * lane_w,
+         road_divider_start(i - 1, fwd, prev_split_f, prev_right, prev_lane_w, opens_kerb_f) - (split_f - (i - 1) * lane_w),
+         ease, road_divider_start(i, fwd, prev_split_f, prev_right, prev_lane_w, opens_kerb_f) - (split_f - i * lane_w)
+  FROM _rm_roads, unnest(bus_f) i
   UNION ALL
-  SELECT osm_id, g, s, bridge, 'bus_lane', 'red', split_b + (i - 1) * lane_w, split_b + i * lane_w FROM _rm_roads, unnest(bus_b) i
+  SELECT osm_id, g, s, bridge, 'bus_lane', 'red', split_b + (i - 1) * lane_w, split_b + i * lane_w,
+         road_divider_start(i - 1, bwd, prev_split_b, prev_left, prev_lane_w, opens_kerb_b) - (split_b + (i - 1) * lane_w),
+         ease, road_divider_start(i, bwd, prev_split_b, prev_left, prev_lane_w, opens_kerb_b) - (split_b + i * lane_w)
+  FROM _rm_roads, unnest(bus_b) i
 ) b
-CROSS JOIN LATERAL (SELECT road_strip(ST_Simplify(b.g, 0.2 * b.s), b.a * b.s, b.b * b.s) as band) o
+CROSS JOIN LATERAL (SELECT COALESCE(CASE
+  WHEN abs(COALESCE(b.d, 0)) > 0.2 OR abs(COALESCE(b.d2, 0)) > 0.2
+    THEN road_taper_band(ST_Simplify(b.g, 0.2 * b.s), (b.a + b.d) * b.s, b.a * b.s, (b.b + COALESCE(b.d2, b.d)) * b.s, b.b * b.s, b.ease * b.s) END,
+  road_strip(ST_Simplify(b.g, 0.2 * b.s), b.a * b.s, b.b * b.s)) as band) o
 CROSS JOIN LATERAL (
   SELECT ST_CollectionExtract(COALESCE(ST_Difference(o.band, ST_Union(cut)), o.band), 3) as clipped
   FROM (SELECT k.cut FROM _rm_cuts k WHERE k.cut && o.band
         UNION ALL SELECT rc.cut FROM _rm_road_cuts rc WHERE rc.osm_id = b.osm_id) cuts
 ) c
 WHERE o.band IS NOT NULL AND NOT ST_IsEmpty(c.clipped) AND ST_Area(c.clipped) > 4 * b.s * b.s;
+
+-- ─── Bike lanes through junctions ────────────────────────────────────────────
+-- A bike lane arriving at a junction that carries straight on into a bike lane
+-- on the far side, on the same side of the traffic, is painted across it: green
+-- blocks between dashed lines, as US conflict markings are. Each lane is a
+-- track in its direction of travel, offset to the left of travel (a right-hand
+-- lane is negative). A lane that ends, or turns, is left alone.
+DROP TABLE IF EXISTS _rm_bike_tracks;
+CREATE TEMP TABLE _rm_bike_tracks AS
+SELECT osm_id, s, bridge, dir, line, off, w, x, y, p, node_w, arrives,
+       degrees(ST_Azimuth(
+         ST_LineInterpolatePoint(line, CASE WHEN arrives THEN greatest(0, 1 - 8 * s / ST_Length(line)) ELSE 0 END),
+         ST_LineInterpolatePoint(line, CASE WHEN arrives THEN 1 ELSE least(1, 8 * s / ST_Length(line)) END))) as bearing
+FROM (
+  -- At each junction on the lane, through the way or at its end: the stretch
+  -- arriving and the stretch leaving.
+  SELECT r.osm_id, r.s, r.bridge, t.dir, t.off, t.w, n.x, n.y, n.p, n.width as node_w, e.arrives,
+         CASE WHEN e.arrives THEN ST_LineSubstring(t.line, 0, at.f) ELSE ST_LineSubstring(t.line, at.f, 1) END as line
+  FROM _rm_roads r
+  CROSS JOIN LATERAL (VALUES
+    (r.bike_r > 0, 1, r.g, (r.br_a + r.br_b) / 2, abs(r.br_b - r.br_a)),
+    (r.bike_l > 0 AND r.oneway, 1, r.g, (r.bl_a + r.bl_b) / 2, abs(r.bl_b - r.bl_a)),
+    (r.bike_l > 0 AND NOT r.oneway, -1, ST_Reverse(r.g), -(r.bl_a + r.bl_b) / 2, abs(r.bl_b - r.bl_a))
+  ) t(present, dir, line, off, w)
+  JOIN _rm_incid i ON i.osm_id = r.osm_id
+  JOIN _rm_nodes n ON n.x = i.x AND n.y = i.y
+  CROSS JOIN LATERAL (SELECT ST_LineLocatePoint(t.line, n.p) as f) at
+  CROSS JOIN LATERAL (VALUES (true), (false)) e(arrives)
+  WHERE t.present AND ((e.arrives AND at.f > 0) OR (NOT e.arrives AND at.f < 1))
+) pieces
+WHERE ST_Length(line) > 10 * s;
+
+INSERT INTO road_markings_next (kind, pattern, color, bridge, geom)
+SELECT CASE WHEN piece.fill THEN 'bike_lane' ELSE 'bike' END, CASE WHEN piece.fill THEN 'fill' ELSE 'dashed' END,
+       CASE WHEN piece.fill THEN 'green' ELSE 'white' END, m.bridge, ST_Transform(piece.g, 4326)
+FROM (
+  SELECT DISTINCT ON (a.osm_id, a.dir, a.off, a.x, a.y) a.bridge, a.s, a.x, a.y, a.p, a.node_w,
+         least(a.w, d.w) as w, (a.off + d.off) / 2 as off,
+         ST_MakeLine(ST_LineSubstring(a.line, greatest(0, 1 - 30 * a.s / ST_Length(a.line)), 1),
+                     ST_LineSubstring(d.line, 0, least(1, 30 * a.s / ST_Length(d.line)))) as path,
+         a.osm_id as a_id, d.osm_id as d_id
+  FROM _rm_bike_tracks a
+  JOIN _rm_bike_tracks d ON d.x = a.x AND d.y = a.y AND NOT d.arrives
+                        AND sign(d.off) = sign(a.off) AND d.bridge = a.bridge
+  WHERE a.arrives AND abs(((d.bearing - a.bearing + 540)::numeric % 360) - 180) < 35
+  ORDER BY a.osm_id, a.dir, a.off, a.x, a.y, abs(((d.bearing - a.bearing + 540)::numeric % 360) - 180)
+) m
+CROSS JOIN LATERAL (SELECT road_offset(ST_RemoveRepeatedPoints(m.path), m.off * m.s) as centre) c
+-- Only across the junction itself, and not over its crosswalks.
+CROSS JOIN LATERAL (
+  SELECT ST_LineMerge(ST_CollectionExtract(ST_Difference(
+           ST_Intersection(c.centre, ST_Union(zone.g)),
+           COALESCE((SELECT ST_Union(k.cut) FROM _rm_cuts k WHERE k.cut && c.centre), ST_SetSRID('POLYGON EMPTY'::geometry, 3857))), 2)) as span
+  FROM (SELECT ST_Buffer(m.p, (m.node_w / 2 + 1) * m.s, 8) as g
+        UNION ALL SELECT ST_Intersection(rc.cut, ST_Buffer(m.p, (m.node_w / 2 + 10) * m.s, 8))
+        FROM _rm_road_cuts rc WHERE rc.osm_id IN (m.a_id, m.d_id)) zone
+) gap
+CROSS JOIN LATERAL (
+  SELECT true as fill, ST_Buffer(ST_LineSubstring(part.geom, f0, f1), m.w / 2 * m.s, 'endcap=flat') as g
+  FROM ST_Dump(gap.span) part,
+       LATERAL (SELECT ST_Length(part.geom) / m.s as len) l,
+       LATERAL generate_series(0, floor(l.len / 3)::int) k,
+       LATERAL (SELECT least(1, k * 3 / l.len) as f0, least(1, (k * 3 + 1.8) / l.len) as f1) f
+  WHERE f1 > f0
+  UNION ALL
+  SELECT false, road_offset(part.geom, side * m.w / 2 * m.s)
+  FROM ST_Dump(gap.span) part, (VALUES (1), (-1)) v(side)
+) piece
+WHERE c.centre IS NOT NULL AND gap.span IS NOT NULL AND NOT ST_IsEmpty(gap.span) AND piece.g IS NOT NULL
+  AND NOT ST_IsEmpty(piece.g);
 
 -- ─── Stop lines and turn arrows ──────────────────────────────────────────────
 -- At each end of a marked road that meets a junction: across the lanes that
@@ -800,39 +1061,65 @@ WHERE side.present AND d IS NOT NULL;
 -- A mapped crossing way, trimmed to the kerbs it runs between; or, for a
 -- crossing mapped only as a node, a line straight across the road there.
 -- Painted as bars: zebra stripes 0.6 m wide at 1.2 m, two edge lines, or both.
-DROP TABLE IF EXISTS _rm_walks;
-CREATE TEMP TABLE _rm_walks AS
+-- The band follows the crossing; each bar runs with the traffic on the road it
+-- crosses, so a crossing drawn askew gets slanted bar ends, not slanted bars.
+DROP TABLE IF EXISTS _rm_walk_segs;
+CREATE TEMP TABLE _rm_walk_segs AS
 SELECT c.style, c.s, (ST_Dump(ST_LineMerge(ST_CollectionExtract(ST_Intersection(s.g, c.g), 2)))).geom as seg
 FROM _rm_crossings c
 JOIN _rm_surfaces s ON s.g && c.g AND NOT s.bridge
 WHERE c.geom_type = 'line'
 UNION ALL
 SELECT c.style, c.s, ST_SetSRID(ST_MakeLine(
-         ST_MakePoint(ST_X(c.g) - uy * r.width / 2 * r.s, ST_Y(c.g) + ux * r.width / 2 * r.s),
-         ST_MakePoint(ST_X(c.g) + uy * r.width / 2 * r.s, ST_Y(c.g) - ux * r.width / 2 * r.s)), 3857)
+         ST_MakePoint(ST_X(c.g) - u[2] * r.kerb_l * r.s, ST_Y(c.g) + u[1] * r.kerb_l * r.s),
+         ST_MakePoint(ST_X(c.g) - u[2] * r.kerb_r * r.s, ST_Y(c.g) + u[1] * r.kerb_r * r.s)), 3857)
 FROM _rm_crossings c
 CROSS JOIN LATERAL (
   SELECT r.* FROM _rm_roads r WHERE r.g && ST_Expand(c.g, 2) ORDER BY r.g <-> c.g LIMIT 1
 ) r
-CROSS JOIN LATERAL (SELECT ST_LineLocatePoint(r.g, c.g) as t) loc
-CROSS JOIN LATERAL (SELECT ST_LineInterpolatePoint(r.g, greatest(0, loc.t - 0.5 * r.s / ST_Length(r.g))) as a,
-                           ST_LineInterpolatePoint(r.g, least(1, loc.t + 0.5 * r.s / ST_Length(r.g))) as b) e
-CROSS JOIN LATERAL (SELECT (ST_X(b) - ST_X(a)) / nullif(ST_Distance(a, b), 0) as ux,
-                           (ST_Y(b) - ST_Y(a)) / nullif(ST_Distance(a, b), 0) as uy) u
-WHERE c.geom_type = 'point' AND ux IS NOT NULL
+CROSS JOIN LATERAL (SELECT road_dir(r.g, ST_LineLocatePoint(r.g, c.g), 0.5 * r.s) as u) d
+WHERE c.geom_type = 'point' AND u IS NOT NULL
   AND ST_DWithin(r.g, c.g, 1 * r.s)
   AND NOT EXISTS (SELECT 1 FROM _rm_crossings w WHERE w.geom_type = 'line' AND ST_DWithin(w.g, c.g, 1 * r.s));
-DELETE FROM _rm_walks WHERE GeometryType(seg) <> 'LINESTRING' OR ST_Length(seg) < 1 * s;
+-- With the crossed road's direction where the crossing meets it, and the sine
+-- of the angle between the two: a bar's footprint along the band grows as
+-- 1 / sine. Nearly along the road is a crossing mapped oddly; it keeps square
+-- bars.
+DROP TABLE IF EXISTS _rm_walks;
+CREATE TEMP TABLE _rm_walks AS
+SELECT w.style, w.s, w.seg, CASE WHEN d.sine >= 0.4 THEN d.ux END as ux, CASE WHEN d.sine >= 0.4 THEN d.uy END as uy,
+       CASE WHEN d.sine >= 0.4 THEN d.sine ELSE 1 END as sine
+FROM _rm_walk_segs w
+LEFT JOIN LATERAL (
+  SELECT u[1] as ux, u[2] as uy,
+         abs(u[1] * (ST_Y(ST_EndPoint(w.seg)) - ST_Y(ST_StartPoint(w.seg))) - u[2] * (ST_X(ST_EndPoint(w.seg)) - ST_X(ST_StartPoint(w.seg))))
+           / nullif(ST_Length(w.seg), 0) as sine
+  FROM (SELECT r.g FROM _rm_roads r
+        WHERE r.g && ST_Expand(w.seg, 10 * w.s) AND ST_Intersects(r.g, ST_Buffer(w.seg, w.s))
+        ORDER BY r.g <-> ST_LineInterpolatePoint(w.seg, 0.5) LIMIT 1) r
+  CROSS JOIN LATERAL (SELECT road_dir(r.g, ST_LineLocatePoint(r.g, ST_LineInterpolatePoint(w.seg, 0.5)), w.s) as u) d
+  WHERE u IS NOT NULL
+) d ON true
+WHERE GeometryType(w.seg) = 'LINESTRING' AND ST_Length(w.seg) >= 1 * w.s;
 
 INSERT INTO road_markings_next (kind, pattern, color, style, bridge, geom)
 SELECT 'crosswalk', 'fill', 'white', w.style, false, ST_Transform(ST_Multi(ST_Union(bar)), 4326)
 FROM _rm_walks w
 CROSS JOIN LATERAL (SELECT ST_Length(w.seg) / w.s as len) l
 CROSS JOIN LATERAL (
-  SELECT ST_Buffer(ST_LineSubstring(w.seg, a / l.len, least(1, (a + 0.6) / l.len)), 1.5 * w.s, 'endcap=flat') as bar
-  FROM generate_series(0, greatest(floor((l.len - 0.6) / 1.2)::int, 0)) k,
-       LATERAL (SELECT (l.len - (floor((l.len - 0.6) / 1.2) * 1.2 + 0.6)) / 2 + k * 1.2 as a) o
-  WHERE w.style IN ('zebra', 'ladder')
+  SELECT CASE WHEN w.ux IS NULL
+           THEN ST_Buffer(ST_LineSubstring(w.seg, o.a / l.len, least(1, (o.a + sz.d) / l.len)), 1.5 * w.s, 'endcap=flat')
+           ELSE ST_MakePolygon(ST_MakeLine(ARRAY[
+             ST_Translate(p0, w.ux * sz.h, w.uy * sz.h), ST_Translate(p1, w.ux * sz.h, w.uy * sz.h),
+             ST_Translate(p1, -w.ux * sz.h, -w.uy * sz.h), ST_Translate(p0, -w.ux * sz.h, -w.uy * sz.h),
+             ST_Translate(p0, w.ux * sz.h, w.uy * sz.h)])) END as bar
+  FROM (SELECT 1.2 / w.sine as step, 0.6 / w.sine as d, 1.5 / w.sine * w.s as h) sz
+  CROSS JOIN LATERAL generate_series(0, greatest(floor((l.len - sz.d) / sz.step)::int, 0)) k
+  CROSS JOIN LATERAL (SELECT (l.len - (floor((l.len - sz.d) / sz.step) * sz.step + sz.d)) / 2 + k * sz.step as a) o
+  CROSS JOIN LATERAL (SELECT ST_LineInterpolatePoint(w.seg, greatest(0, least(1, o.a / l.len))) as p0,
+                             ST_LineInterpolatePoint(w.seg, greatest(0, least(1, (o.a + sz.d) / l.len))) as p1) pts
+  -- A crossing too short for one bar gets none.
+  WHERE w.style IN ('zebra', 'ladder') AND l.len >= sz.d
   UNION ALL
   SELECT ST_Buffer(road_offset(w.seg, side * 1.5 * w.s), 0.15 * w.s, 'endcap=flat')
   FROM (VALUES (1), (-1)) v(side)

@@ -10,6 +10,14 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Changed
+
+* **Road markings line up the way roads are painted.** Through lanes now line up
+  across a junction, with turn bays to their side. A road gaining or losing a
+  lane widens on that side only. Ways tagged `placement` sit where the tag says.
+  Crosswalk bars run with the traffic they cross. A bike lane that carries on
+  past a junction is painted across it in green dashes.
+
 ## [0.10.8] - 2026-10-09
 
 ### Added
