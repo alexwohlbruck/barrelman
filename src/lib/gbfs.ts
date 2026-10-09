@@ -15,6 +15,28 @@ export interface GbfsVehicleType {
 }
 
 /**
+ * A GBFS id as text, or null when there is none. The spec makes ids strings,
+ * but some feeds send numbers (`"station_id": 542`), and every lookup here is
+ * by the text stored in the database.
+ */
+export function gbfsId(value: unknown): string | null {
+  if (value == null) return null
+  const id = String(value).trim()
+  return id || null
+}
+
+/**
+ * A GBFS number (a coordinate, a capacity), or null. Some feeds send numbers
+ * as strings ("52.11"), and 0 is a real value, so neither a truthiness test
+ * nor the raw value will do.
+ */
+export function gbfsNumber(value: unknown): number | null {
+  if (value == null || value === '') return null
+  const n = Number(value)
+  return Number.isFinite(n) ? n : null
+}
+
+/**
  * A GBFS text field. v2 sends a plain string; v3 sends localized text,
  * `[{ text, language }]`. English is preferred, then the first entry.
  */
@@ -49,7 +71,7 @@ export function lastReportedIso(value: unknown): string | null {
 export function normalizeVehicleTypes(raw: unknown): GbfsVehicleType[] {
   if (!Array.isArray(raw)) return []
   return raw.map((vt: any) => ({
-    vehicleTypeId: String(vt?.vehicle_type_id ?? vt?.vehicleTypeId ?? ''),
+    vehicleTypeId: gbfsId(vt?.vehicle_type_id ?? vt?.vehicleTypeId) ?? '',
     formFactor: vt?.form_factor ?? vt?.formFactor ?? 'other',
     propulsionType: vt?.propulsion_type ?? vt?.propulsionType ?? 'human',
     ...(vt?.name != null ? { name: localizedText(vt.name) } : {}),
@@ -92,7 +114,7 @@ export function parseStationStatus(
 
   const countWhere = (match: (vt: GbfsVehicleType | undefined, id: string) => boolean) =>
     available.reduce((sum, a) => {
-      const id = String(a.vehicle_type_id ?? '')
+      const id = gbfsId(a.vehicle_type_id) ?? ''
       return match(types.get(id), id) ? sum + (a.count ?? 0) : sum
     }, 0)
 
