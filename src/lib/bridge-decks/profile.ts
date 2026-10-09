@@ -61,6 +61,40 @@ export function metresPerUnit(y: number): number {
   return WORLD * Math.cos(Math.atan(Math.sinh(Math.PI * (1 - 2 * y))))
 }
 
+/** A bounding box in mercator units: west, north, east, south (y grows southward). */
+export type Box = [number, number, number, number]
+
+function boxOf(points: Point[]): Box {
+  let [x0, y0, x1, y1] = [Infinity, Infinity, -Infinity, -Infinity]
+  for (const [x, y] of points) [x0, y0, x1, y1] = [Math.min(x0, x), Math.min(y0, y), Math.max(x1, x), Math.max(y1, y)]
+  return [x0, y0, x1, y1]
+}
+
+const boxes = new WeakMap<Point[], Box>()
+
+/** A line's bounding box, worked out once per points array. */
+export function box(points: Point[]): Box {
+  let b = boxes.get(points)
+  if (!b) boxes.set(points, (b = boxOf(points)))
+  return b
+}
+
+/** Whether two boxes overlap. */
+export const meet = (a: Box, b: Box) => a[0] <= b[2] && b[0] <= a[2] && a[1] <= b[3] && b[1] <= a[3]
+
+/** Whether a point lies in a box. */
+export const covers = (b: Box, [x, y]: Point) => x >= b[0] && x <= b[2] && y >= b[1] && y <= b[3]
+
+/**
+ * A box grown by `metres` on every side, at the scale of its poleward edge so
+ * it is never short: the cheap test that rules a pair of decks out before the
+ * point-by-point one.
+ */
+export function grow([x0, y0, x1, y1]: Box, metres: number): Box {
+  const u = metres / Math.min(metresPerUnit(y0), metresPerUnit(y1))
+  return [x0 - u, y0 - u, x1 + u, y1 + u]
+}
+
 /** Distances along a line in metres, from its first point. */
 export function along(points: Point[]): number[] {
   const out = [0]
@@ -349,12 +383,22 @@ export function heightAt(d: number[], z: number[], s: number): number {
  * Decks that run side by side as one: where a deck's edge meets another's
  * within `gap` metres and at about its height, both take the higher height.
  * Decks at different heights (an upper and lower deck) keep their own.
+ *
+ * An end that lands on the ground stays there: lifting it to a neighbour
+ * would leave the deck hanging over the road it lands on. Run it before
+ * smoothing, so the steps it makes where a join begins are eased out with
+ * the rest of the profile.
  */
-export function joinNeighbours(decks: Array<{ chain: Chain; z: number[] }>, gap = 1.5, step = 1.5) {
+export function joinNeighbours(decks: Array<{ chain: Chain; z: number[]; grounded?: [boolean, boolean] }>, gap = 1.5, step = 1.5) {
+  const widest = decks.map(D => Math.max(...D.chain.edges))
   for (const [a, A] of decks.entries())
     for (const [b, B] of decks.entries()) {
       if (a === b || A.chain.kind === 'rail' || B.chain.kind === 'rail') continue
+      // Farther apart than both decks' widest sides and the gap, no edge can meet the other.
+      if (!meet(grow(box(A.chain.points), widest[a] + widest[b] + gap), box(B.chain.points))) continue
+      const last = A.chain.points.length - 1
       A.chain.points.forEach((p, i) => {
+        if ((i === 0 && A.grounded?.[0]) || (i === last && A.grounded?.[1])) return
         const near = beside(B.chain.points, p)
         if (!near.alongside) return
         const [j, t] = [near.segment, near.t]

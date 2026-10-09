@@ -45,6 +45,26 @@ describe('buildDecks', () => {
     expect(joining.heights.at(-1)!).toBeGreaterThan(201)
   })
 
+  it('an end rests on the deck it joins, not a lower one it lies over', async () => {
+    // A layer-1 road runs north-south on the ground; a layer-2 deck crosses
+    // over it, and a layer-2 ramp ends on that deck right above the road.
+    const below: Way = { id: 1, points: [east(100, -300), east(100, 300)], kind: 'road', layer: 1, width: 8 }
+    const over = (id: number, from: number, to: number): Way => ({ ...way(id, from, to), layer: 2 })
+    const ramp: Way = { id: 4, points: [east(40, -80), east(100)], kind: 'road', layer: 2, width: 6 }
+    const decks = await buildDecks(input({
+      ways: [below, over(2, -100, 100), over(3, 100, 300), ramp],
+      onGround: new Set([key(east(100, -300)), key(east(100, 300)), key(east(-100)), key(east(300)), key(east(40, -80))]),
+    }), ground(200))
+    const low = decks.find(d => d.ways.includes(1))!
+    const high = decks.find(d => d.ways.includes(2))!
+    const joining = decks.find(d => d.ways.includes(4))!
+    const top = high.heights[Math.round(200 / STEP)]
+    expect(low.heights[Math.round(300 / STEP)]).toBe(200)
+    expect(top).toBeGreaterThanOrEqual(200 + CLEARANCE.deck - 0.5)
+    expect(joining.grounded).toEqual([true, false])
+    expect(joining.heights.at(-1)!).toBeCloseTo(top, 0)
+  })
+
   it('names a deck by where it lies and a bridge by its outline or wikidata item', async () => {
     const outline = [[east(-5, 10), east(105, 10), east(105, -10), east(-5, -10)]]
     const [a] = await buildDecks(input({ ways: [way(1, 0, 100)], outlines: [{ id: 'way/77', rings: outline }] }), ground(0))

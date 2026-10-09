@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { along, chains, crossings, fitEdges, MAX_GRADE, mercator, resample, solve, type Point, type Way } from './profile'
+import { along, chains, crossings, fitEdges, joinNeighbours, MAX_GRADE, mercator, resample, solve, type Chain, type Point, type Way } from './profile'
 
 // Metres east of a point in Charlotte, as mercator.
 const origin = mercator(-80.83, 35.22)
@@ -73,5 +73,30 @@ describe('crossings', () => {
     expect(at).toHaveLength(1)
     expect(at[0]).toBeCloseTo(40, 0)
     expect(crossings(line, [east(0), east(0, 30)])).toEqual([])
+  })
+})
+
+describe('joinNeighbours', () => {
+  const deck = (north: number): Chain =>
+    ({ ways: [north], points: resample([east(0, north), east(60, north)], 6), kind: 'road', layer: 1, edges: [5, 5] })
+
+  it('lifts a deck to its twin alongside, but never off the ground where it lands', () => {
+    const a = { chain: deck(0), z: deck(0).points.map(() => 100), grounded: [true, true] as [boolean, boolean] }
+    const b = { chain: deck(10), z: deck(10).points.map(() => 101) }
+    joinNeighbours([a, b])
+    expect(a.z[0]).toBe(100)
+    expect(a.z.at(-1)).toBe(100)
+    expect(a.z.slice(1, -1).every(z => z === 101)).toBe(true)
+    expect(b.z.every(z => z === 101)).toBe(true)
+
+    const loose = { chain: deck(0), z: deck(0).points.map(() => 100) }
+    joinNeighbours([loose, { chain: deck(10), z: deck(10).points.map(() => 101) }])
+    expect(loose.z[0]).toBe(101)
+  })
+
+  it('leaves decks too far apart or too far above alone', () => {
+    const a = { chain: deck(0), z: deck(0).points.map(() => 100) }
+    joinNeighbours([a, { chain: deck(40), z: deck(40).points.map(() => 101) }, { chain: deck(10), z: deck(10).points.map(() => 108) }])
+    expect(a.z.every(z => z === 100)).toBe(true)
   })
 })
