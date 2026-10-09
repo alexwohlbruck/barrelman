@@ -11,6 +11,8 @@ import { db } from '../db'
 import { sql } from 'drizzle-orm'
 import { LRUCache } from 'lru-cache'
 import {
+  gbfsId,
+  gbfsNumber,
   normalizeVehicleTypes,
   parseStationStatus,
   type GbfsVehicleType,
@@ -387,7 +389,10 @@ async function refreshStationStatus(systemId: string): Promise<void> {
 
     const statusMap = new Map<string, StationStatusEntry>()
     for (const s of stationsData) {
-      statusMap.set(s.station_id, parseStationStatus(s, system.vehicleTypes))
+      // Keyed as text, like gbfs_stations.station_id it is looked up by: a feed
+      // that sends numeric ids would otherwise never match its stations.
+      const id = gbfsId(s.station_id)
+      if (id) statusMap.set(id, parseStationStatus(s, system.vehicleTypes))
     }
 
     // Cache with system-specific TTL
@@ -435,16 +440,16 @@ async function refreshVehicleStatus(systemId: string): Promise<void> {
     const vehicles: GbfsFreeVehicle[] = []
     for (const v of rawVehicles) {
       if (v.is_reserved || v.is_disabled) continue
-      const vLat = v.lat ?? v.latitude
-      const vLon = v.lon ?? v.longitude
-      if (!vLat || !vLon) continue
+      const vLat = gbfsNumber(v.lat ?? v.latitude)
+      const vLon = gbfsNumber(v.lon ?? v.longitude)
+      if (vLat === null || vLon === null) continue
 
-      const formFactor = typeMap.get(v.vehicle_type_id) || 'bicycle'
+      const formFactor = typeMap.get(gbfsId(v.vehicle_type_id) ?? '') || 'bicycle'
       const label = formFactor.includes('scooter') ? 'Scooter' : 'Bike'
 
       vehicles.push({
         systemId,
-        vehicleId: v.vehicle_id || v.bike_id || '',
+        vehicleId: gbfsId(v.vehicle_id ?? v.bike_id) ?? '',
         type: 'free_floating',
         formFactor,
         name: `${systemName} ${label}`,

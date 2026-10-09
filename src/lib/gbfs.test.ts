@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'bun:test'
 import {
+  gbfsId,
+  gbfsNumber,
   lastReportedIso,
   localizedText,
   normalizeVehicleTypes,
@@ -83,5 +85,33 @@ describe('parseStationStatus', () => {
       numDocksAvailable: 9, isRenting: true, isReturning: true,
       lastReported: '2026-10-08T22:19:10.389Z',
     })
+  })
+})
+
+describe('gbfsId', () => {
+  it('reads numeric ids as the text they are stored and looked up by', () => {
+    // goabout sends "station_id": 542; gbfs_stations.station_id is text.
+    expect(gbfsId(542)).toBe('542')
+    expect(gbfsId('W 42 St')).toBe('W 42 St')
+  })
+
+  it('is null when there is no id, so id-less rows are skipped, not merged', () => {
+    expect(gbfsId(undefined)).toBeNull()
+    expect(gbfsId(null)).toBeNull()
+    expect(gbfsId('  ')).toBeNull()
+  })
+})
+
+describe('gbfsNumber', () => {
+  it('accepts numbers, numeric strings and zero', () => {
+    expect(gbfsNumber(52.11)).toBe(52.11)
+    expect(gbfsNumber('52.11')).toBe(52.11)
+    expect(gbfsNumber(0)).toBe(0)
+  })
+
+  it('is null for anything that is not a finite number', () => {
+    expect(gbfsNumber('')).toBeNull()
+    expect(gbfsNumber(undefined)).toBeNull()
+    expect(gbfsNumber('10); DROP TABLE gbfs_stations; --')).toBeNull()
   })
 })
