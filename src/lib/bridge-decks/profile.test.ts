@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { along, anchor, chains, fitEdges, LAYER_CLEARANCE, MAX_GRADE, mercator, resample, solve, type Point, type Way } from './profile'
+import { along, chains, crossings, fitEdges, MAX_GRADE, mercator, resample, solve, type Point, type Way } from './profile'
 
 // Metres east of a point in Charlotte, as mercator.
 const origin = mercator(-80.83, 35.22)
@@ -17,8 +17,10 @@ describe('chains', () => {
     expect(along(deck.points).at(-1)).toBeCloseTo(150, 0)
   })
 
-  it('stops at a node where three bridge ways meet, and between layers', () => {
-    expect(chains([way(1, 0, 50), way(2, 50, 100), { ...way(3, 50, 0), points: [east(50), east(50, 40)] }])).toHaveLength(3)
+  it('carries on through the straightest pair where three ways meet, and never between layers', () => {
+    const branch: Way = { ...way(3, 0, 0), points: [east(50), east(80, 40)] }
+    const decks = chains([way(1, 0, 50), way(2, 50, 100), branch])
+    expect(decks.map(d => d.ways)).toEqual([[1, 2], [3]])
     expect(chains([way(1, 0, 50), way(2, 50, 100, 2)])).toHaveLength(2)
   })
 })
@@ -42,29 +44,34 @@ describe('fitEdges', () => {
 })
 
 describe('solve', () => {
-  const deck = { points: resample([east(0), east(200)], 5), layer: 1 }
+  const deck = { points: resample([east(0), east(300)], 5), layer: 1 }
   const flat = deck.points.map(() => 100)
+  const d = along(deck.points)
 
-  it('lands on the ground at grounded ends and clears it between', () => {
-    const z = solve({ ...deck, grounded: [true, true] }, flat)
+  it('runs on the ground with nothing to clear, and lands on both ends', () => {
+    expect(solve({ ...deck, grounded: [true, true] }, flat, [])).toEqual(flat)
+  })
+
+  it('rises over what it crosses no steeper than a road may', () => {
+    const z = solve({ ...deck, grounded: [true, true] }, flat, [{ at: 150, height: 106 }])
     expect(z[0]).toBe(100)
     expect(z.at(-1)).toBe(100)
-    expect(z[20]).toBeCloseTo(100 + LAYER_CLEARANCE, 3)
-    const d = along(deck.points)
+    expect(z[30]).toBeCloseTo(106, 5)
     for (let i = 1; i < z.length; i++) expect(Math.abs(z[i] - z[i - 1]) / (d[i] - d[i - 1])).toBeLessThanOrEqual(MAX_GRADE + 1e-9)
   })
 
   it('an end resting on another deck takes its height', () => {
-    const z = solve({ ...deck, grounded: [true, false] }, flat, [null, 110])
+    const z = solve({ ...deck, grounded: [true, false] }, flat, [], [null, 110])
     expect(z.at(-1)).toBe(110)
   })
 })
 
-describe('anchor', () => {
-  it('pulls the profile through a mapped height and lets go at grounded ends', () => {
-    const d = [0, 50, 100, 150, 200]
-    const z = [100, 103, 106, 103, 100]
-    const out = anchor(z, d, d.map(() => 100), [{ at: 100, ele: 110 }], [true, true])
-    expect(out).toEqual([100, 105, 110, 105, 100])
+describe('crossings', () => {
+  it('where another line passes under, not where one meets an end', () => {
+    const line = [east(0), east(100)]
+    const at = crossings(line, [east(40, -20), east(40, 20)])
+    expect(at).toHaveLength(1)
+    expect(at[0]).toBeCloseTo(40, 0)
+    expect(crossings(line, [east(0), east(0, 30)])).toEqual([])
   })
 })

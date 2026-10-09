@@ -6,15 +6,14 @@
  *   bun run import/generate-bridge-decks.ts --bbox w,s,e,n         one area
  *
  * The area is worked through in cells (`--cell`, degrees). A cell rebuilds the
- * decks anchored in it — the start of a deck's lowest way — and reads beyond
- * its edges as far as its decks run, so cells can be rebuilt one at a time and
- * in any order. Terrain tiles are fetched as needed and cached for the run.
+ * decks whose midpoint lies in it and reads beyond its edges as far as its
+ * decks run, so cells can be rebuilt one at a time, in any order, as often as
+ * the map changes. Terrain tiles are fetched as needed and cached for the run.
  */
 import postgres from 'postgres'
 import { dbUrl, onnotice } from '../src/db'
-import { buildDecks, STEP, type DeckInput } from '../src/lib/bridge-decks/build'
+import { buildDecks, STEP, type Crossed, type DeckInput } from '../src/lib/bridge-decks/build'
 import { Dem } from '../src/lib/bridge-decks/dem'
-import { toEgm96 } from '../src/lib/bridge-decks/geoid'
 import { lngLat, mercator, type Kind, type Point, type Way } from '../src/lib/bridge-decks/profile'
 
 const ROADS = ['motorway', 'motorway_link', 'trunk', 'trunk_link', 'primary', 'primary_link', 'secondary', 'secondary_link',
@@ -41,12 +40,12 @@ const CELL = Number(flag('cell') ?? 0.25)
 const sql = postgres(dbUrl, { onnotice, max: 2 })
 
 type Row = { id: string; highway: string | null; railway: string | null; layer: string | null; width: string | null;
-  lanes: string | null; oneway: string | null; ele: string | null; coords: number[][] }
+  lanes: string | null; oneway: string | null; wikidata: string | null; coords: number[][] }
 
 const BRIDGE_WAYS = sql`
   SELECT osm_id::text AS id, tags->>'highway' AS highway, tags->>'railway' AS railway, tags->>'layer' AS layer,
          COALESCE(tags->>'width:carriageway', tags->>'width') AS width, tags->>'lanes' AS lanes, tags->>'oneway' AS oneway,
-         COALESCE(tags->>'ele:road', tags->>'ele:surface', tags->>'ele') AS ele,
+         COALESCE(tags->>'bridge:wikidata', tags->>'wikidata') AS wikidata,
          ST_AsGeoJSON(geom)::json->'coordinates' AS coords
   FROM geo_places`
 const IS_BRIDGE = sql`
@@ -118,32 +117,34 @@ async function inputFor(rows: Row[]): Promise<DeckInput> {
         SELECT ST_DumpPoints(geom) AS dp FROM road_surfaces WHERE bridge AND geom && ${box}) d`).map(r => mercator(r.lng, r.lat))
     : []
 
-  const nodeEle: Array<{ way: string; lng: number; lat: number; ele: string }> = await sql`
-    SELECT w.osm_id::text AS way, ST_X(p.geom) AS lng, ST_Y(p.geom) AS lat, p.tags->>'ele' AS ele
-    FROM geo_places p JOIN geo_places w ON w.osm_type = 'W' AND w.osm_id = ANY(${rows.map(r => r.id)}::bigint[])
-      AND w.geom && ST_Expand(p.geom, 1e-6) AND ST_DWithin(w.geom, p.geom, 1e-6)
-    WHERE p.geom_type = 'point' AND p.geom && ${box} AND p.tags ? 'ele'`
-  const anchors = [
-    ...nodeEle.flatMap(a => {
-      const ele = metres(a.ele)
-      return ele === null ? [] : [{ way: Number(a.way), point: mercator(a.lng, a.lat), ele }]
-    }),
-    ...rows.flatMap(r => {
-      const ele = metres(r.ele)
-      return ele === null ? [] : [{ way: Number(r.id), ele }]
-    }),
-  ]
-  return { ways, onGround, outlines, kerbs, anchors }
+  const crossedRows: Array<{ kind: Crossed['kind']; coords: number[][][] }> = await sql`
+    SELECT CASE WHEN tags ? 'waterway' THEN 'water' WHEN tags ? 'railway' THEN 'rail'
+                WHEN tags->>'highway' = ANY(${PATHS}) THEN 'path' ELSE 'road' END AS kind,
+           ST_AsGeoJSON(ST_Multi(geom))::json->'coordinates' AS coords
+    FROM geo_places
+    WHERE geom_type = 'line' AND geom && ${box} AND COALESCE(tags->>'bridge', 'no') = 'no' AND COALESCE(tags->>'tunnel', 'no') = 'no'
+      AND COALESCE(tags->>'location', '') NOT IN ('underground', 'underwater')
+      AND (tags->>'highway' = ANY(${[...ROADS, ...PATHS]}) OR tags->>'railway' = ANY(${RAILS})
+           OR tags->>'waterway' IN ('river', 'stream', 'canal', 'drain', 'ditch'))`
+  const crossed = crossedRows.flatMap(r => r.coords.map(line => ({ kind: r.kind, points: line.map(([lng, lat]) => mercator(lng, lat)) })))
+
+  const waterRows: Array<{ coords: number[][][][] }> = await sql`
+    SELECT ST_AsGeoJSON(ST_Multi(ST_CollectionExtract(ST_Intersection(geom, ${box}), 3)))::json->'coordinates' AS coords
+    FROM geo_places
+    WHERE geom_type = 'area' AND geom && ${box}
+      AND (tags->>'natural' = 'water' OR tags->>'waterway' = 'riverbank' OR tags->>'landuse' = 'reservoir')`
+  const water = waterRows.flatMap(r => (r.coords ?? []).map(polygon => polygon[0].map(([lng, lat]) => mercator(lng, lat))))
+
+  const wikidata = new Map(rows.flatMap(r => (r.wikidata ? [[Number(r.id), r.wikidata] as [number, string]] : [])))
+  return { ways, onGround, outlines, kerbs, crossed, water, wikidata }
 }
 
 async function cell(dem: Dem, w: number, s: number, e: number, n: number) {
   const rows = await waysAround(w, s, e, n)
-  const owned = (p: number[]) => p[0] >= w && p[0] < e && p[1] >= s && p[1] < n
-  const decks = rows.length ? await buildDecks(await inputFor(rows), dem, toEgm96) : []
-  const start = new Map(rows.map(r => [r.id, r.coords[0]]))
+  const decks = rows.length ? await buildDecks(await inputFor(rows), dem) : []
   const mine = decks.flatMap(d => {
-    const at = start.get(d.id.slice(4))!
-    return owned(at) ? [{ d, at }] : []
+    const [lng, lat] = lngLat(d.midpoint)
+    return lng >= w && lng < e && lat >= s && lat < n ? [{ d, at: [lng, lat] }] : []
   })
   await sql.begin(async rawTx => {
     const tx = rawTx as unknown as typeof sql
@@ -152,12 +153,13 @@ async function cell(dem: Dem, w: number, s: number, e: number, n: number) {
     for (const { d, at } of mine) {
       const line = `LINESTRING(${d.points.map(p => lngLat(p).join(' ')).join(',')})`
       await tx`
-        INSERT INTO bridge_decks (id, ways, kind, layer, outline, edges, grounded, step, length, heights, ground, anchor, geom)
-        VALUES (${d.id}, ${sql.array(d.ways)}::bigint[], ${d.kind}, ${d.layer}, ${d.outline}, ${sql.array(d.edges)}::real[],
-                ${sql.array(d.grounded)}::boolean[], ${STEP}, ${d.length}, ${sql.array(d.heights)}::real[], ${sql.array(d.ground)}::real[], ST_SetSRID(ST_MakePoint(${at[0]}, ${at[1]}), 4326), ST_GeomFromText(${line}, 4326))
-        ON CONFLICT (id) DO UPDATE SET ways = EXCLUDED.ways, kind = EXCLUDED.kind, layer = EXCLUDED.layer,
-          outline = EXCLUDED.outline, edges = EXCLUDED.edges, grounded = EXCLUDED.grounded, step = EXCLUDED.step,
-          length = EXCLUDED.length, heights = EXCLUDED.heights, ground = EXCLUDED.ground, anchor = EXCLUDED.anchor,
+        INSERT INTO bridge_decks (id, bridge, ways, kind, layer, edges, grounded, step, length, heights, ground, piers, anchor, geom)
+        VALUES (${d.id}, ${d.bridge}, ${sql.array(d.ways)}::bigint[], ${d.kind}, ${d.layer}, ${sql.array(d.edges)}::real[],
+                ${sql.array(d.grounded)}::boolean[], ${STEP}, ${d.length}, ${sql.array(d.heights)}::real[], ${sql.array(d.ground)}::real[],
+                ${sql.array(d.piers)}::real[], ST_SetSRID(ST_MakePoint(${at[0]}, ${at[1]}), 4326), ST_GeomFromText(${line}, 4326))
+        ON CONFLICT (id) DO UPDATE SET bridge = EXCLUDED.bridge, ways = EXCLUDED.ways, kind = EXCLUDED.kind, layer = EXCLUDED.layer,
+          edges = EXCLUDED.edges, grounded = EXCLUDED.grounded, step = EXCLUDED.step, length = EXCLUDED.length,
+          heights = EXCLUDED.heights, ground = EXCLUDED.ground, piers = EXCLUDED.piers, anchor = EXCLUDED.anchor,
           geom = EXCLUDED.geom, updated_at = now()`
     }
   })

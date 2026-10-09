@@ -1,14 +1,15 @@
 /**
  * Bridge deck geometry and height profiles.
  *
- * Positions are Web Mercator units (0-1 across the world), heights metres. The
- * rules match Parchment's client-side fallback (`web/src/lib/map-decks/decks.ts`)
- * so a deck looks the same whichever side solved it:
+ * Positions are Web Mercator units (0-1 across the world), heights metres.
+ * Parchment's client-side fallback (`web/src/lib/map-decks/decks.ts`) follows
+ * the same rules, with a layer's clearance standing in for the crossings it
+ * cannot see:
  *
  *   - an end that meets a road or railway on the ground sits on the ground
  *   - an end that meets another deck rests on that deck
- *   - between, the deck clears the ground by its layer's clearance, climbs no
- *     steeper than MAX_GRADE from a landed end, and eases into a vertical curve
+ *   - between, the deck runs straight from end to end, rising to clear what it
+ *     crosses, climbing no steeper than MAX_GRADE, eased into a vertical curve
  *   - decks side by side at about one height are joined at the higher one
  */
 
@@ -39,6 +40,8 @@ export type Chain = {
 export const MAX_GRADE = 0.06
 /** Height per OSM layer that a deck stands clear of the ground beneath it. */
 export const LAYER_CLEARANCE = 6
+/** Length of a vertical curve, and of the level stretch kept over what a deck crosses so easing it does not cut the clearance, in metres. */
+export const CURVE = 24
 /** Farthest an outline point may lie from a deck's centreline and still be its edge, in metres. */
 export const MAX_REACH = 16
 
@@ -88,9 +91,19 @@ export function resample(points: Point[], step: number): Point[] {
 
 const key = (p: Point) => `${p[0]},${p[1]}`
 
+/** Unit direction leaving a way's end at `p`, into the way. */
+function leaving(w: Way, p: Point): Point {
+  const pts = key(w.points[0]) === key(p) ? w.points : [...w.points].reverse()
+  const [a, b] = [pts[0], pts[1]]
+  const len = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1
+  return [(b[0] - a[0]) / len, (b[1] - a[1]) / len]
+}
+
 /**
- * Ways joined end to end into chains. OSM ways share their end nodes, so ends
- * match exactly; a node where three or more bridge ways meet ends them all.
+ * Ways joined end to end into chains, one per roadway. OSM ways share their
+ * end nodes, so ends match exactly. Only ways of one kind and layer join, so
+ * stacked decks never do; where three or more meet, the straightest pair
+ * carries on and the rest end there.
  */
 export function chains(ways: Way[]): Chain[] {
   const ends = new Map<string, Way[]>()
@@ -99,10 +112,18 @@ export function chains(ways: Way[]): Chain[] {
   const used = new Set<number>()
   const out: Chain[] = []
   const next = (p: Point, from: Way) => {
-    const at = ends.get(key(p)) ?? []
-    if (at.length !== 2) return null
-    const other = at[0] === from ? at[1] : at[0]
-    return other !== from && !used.has(other.id) && other.kind === from.kind && other.layer === from.layer ? other : null
+    const like = (ends.get(key(p)) ?? []).filter(o => o.kind === from.kind && o.layer === from.layer)
+    if (like.length < 2) return null
+    let best: [Way, Way] | null = null
+    let straightest = Infinity
+    for (let i = 0; i < like.length; i++)
+      for (let j = i + 1; j < like.length; j++) {
+        const [u, v] = [leaving(like[i], p), leaving(like[j], p)]
+        const dot = u[0] * v[0] + u[1] * v[1]
+        if (dot < straightest) [best, straightest] = [[like[i], like[j]], dot]
+      }
+    const other = best?.[0] === from ? best[1] : best?.[1] === from ? best[0] : null
+    return other && other !== from && !used.has(other.id) ? other : null
   }
   for (const start of [...ways].sort((a, b) => a.id - b.id)) {
     if (used.has(start.id)) continue
@@ -245,36 +266,62 @@ export function besideGround(centre: number[], left: number[], right: number[], 
   })
 }
 
+/** What a deck must stand clear of at a distance along it: an absolute height for its surface. */
+export type Need = { at: number; height: number }
+
 /**
- * Deck height at every vertex. Each grounded end sits on the ground, an end
- * resting on another deck takes the height given, and an end that is neither
- * stays a layer's clearance up. Between, the deck runs straight from end to
- * end, lifted to its clearance, and held to MAX_GRADE from each anchored end.
+ * Deck height at every vertex. Each grounded end sits on the ground and an end
+ * resting on another deck takes the height given; an end that is neither stays
+ * a layer's clearance up. Between, the deck runs straight from end to end,
+ * rises to clear what it crosses with ramps no steeper than MAX_GRADE, and is
+ * held to MAX_GRADE from each anchored end.
  */
 export function solve(
   chain: Pick<Chain, 'points' | 'layer'> & { grounded: [boolean, boolean] },
   ground: number[],
+  needs: Need[],
   resting: [number | null, number | null] = [null, null],
 ): number[] {
   const d = along(chain.points)
   const total = d[d.length - 1] || 1
-  const clearance = LAYER_CLEARANCE * Math.max(1, chain.layer)
   const n = ground.length
-  const end = (i: 0 | 1, g: number) => resting[i] ?? (chain.grounded[i] ? g : g + clearance)
+  const end = (i: 0 | 1, g: number) => resting[i] ?? (chain.grounded[i] ? g : g + LAYER_CLEARANCE * Math.max(1, chain.layer))
   const anchored = [chain.grounded[0] || resting[0] !== null, chain.grounded[1] || resting[1] !== null]
   const za = end(0, ground[0])
   const zb = end(1, ground[n - 1])
   return ground.map((g, i) => {
     const straight = za + ((zb - za) * d[i]) / total
-    let z = Math.max(straight, g + clearance)
+    let z = straight
+    for (const need of needs) z = Math.max(z, need.height - MAX_GRADE * Math.max(0, Math.abs(d[i] - need.at) - CURVE / 2))
     if (anchored[0]) z = Math.min(z, za + MAX_GRADE * d[i])
     if (anchored[1]) z = Math.min(z, zb + MAX_GRADE * (total - d[i]))
-    return Math.max(z, Math.max(straight, g))
+    return Math.max(z, straight, g)
   })
 }
 
+/** Where one line crosses another, as distances along the first; touching at the first's ends does not count. */
+export function crossings(line: Point[], other: Point[], margin = 2): number[] {
+  const d = along(line)
+  const total = d[d.length - 1]
+  const out: number[] = []
+  for (let i = 1; i < line.length; i++) {
+    const [p, r] = [line[i - 1], [line[i][0] - line[i - 1][0], line[i][1] - line[i - 1][1]]]
+    for (let j = 1; j < other.length; j++) {
+      const [q, s] = [other[j - 1], [other[j][0] - other[j - 1][0], other[j][1] - other[j - 1][1]]]
+      const den = r[0] * s[1] - r[1] * s[0]
+      if (!den) continue
+      const t = ((q[0] - p[0]) * s[1] - (q[1] - p[1]) * s[0]) / den
+      const u = ((q[0] - p[0]) * r[1] - (q[1] - p[1]) * r[0]) / den
+      if (t < 0 || t > 1 || u < 0 || u > 1) continue
+      const at = d[i - 1] + (d[i] - d[i - 1]) * t
+      if (at > margin && at < total - margin) out.push(at)
+    }
+  }
+  return out
+}
+
 /** A profile eased into a vertical curve over `span` metres, ends kept, never below the ground. */
-export function smooth(z: number[], d: number[], ground: number[], span = 24): number[] {
+export function smooth(z: number[], d: number[], ground: number[], span = CURVE): number[] {
   const n = z.length
   return z.map((_, i) => {
     if (i === 0 || i === n - 1) return z[i]
@@ -288,34 +335,6 @@ export function smooth(z: number[], d: number[], ground: number[], span = 24): n
       }
     }
     return Math.max(sum / weight, ground[i])
-  })
-}
-
-/**
- * Mapped deck heights (OSM `ele` on the bridge or its nodes) pulled into a
- * profile: the difference at each one is spread linearly to its neighbours and
- * to zero at each grounded end, and the deck never sinks below the ground.
- */
-export function anchor(z: number[], d: number[], ground: number[], anchors: Array<{ at: number; ele: number }>, grounded: [boolean, boolean]): number[] {
-  if (!anchors.length) return z
-  const total = d[d.length - 1]
-  const at = (s: number) => {
-    for (let i = 1; i < d.length; i++) if (s <= d[i]) return z[i - 1] + ((z[i] - z[i - 1]) * (s - d[i - 1])) / (d[i] - d[i - 1] || 1)
-    return z[z.length - 1]
-  }
-  const knots = anchors.map(a => ({ s: Math.max(0, Math.min(total, a.at)), r: a.ele - at(a.at) })).sort((a, b) => a.s - b.s)
-  if (grounded[0] && knots[0].s > 0) knots.unshift({ s: 0, r: 0 })
-  if (grounded[1] && knots[knots.length - 1].s < total) knots.push({ s: total, r: 0 })
-  return z.map((v, i) => {
-    let r = knots[0].r
-    if (d[i] >= knots[knots.length - 1].s) r = knots[knots.length - 1].r
-    else
-      for (let k = 1; k < knots.length; k++)
-        if (d[i] <= knots[k].s) {
-          r = knots[k - 1].r + ((knots[k].r - knots[k - 1].r) * (d[i] - knots[k - 1].s)) / (knots[k].s - knots[k - 1].s || 1)
-          break
-        }
-    return Math.max(v + r, ground[i])
   })
 }
 
