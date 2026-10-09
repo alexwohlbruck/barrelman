@@ -38,6 +38,13 @@ const ways: [number, string, Record<string, string>][] = [
   [20, line([-74.010, 40.712], [-74.010, 40.7125]), { highway: 'residential', oneway: 'yes', lanes: '2' }],
   [21, line([-74.010, 40.7125], [-74.010, 40.7135]), { highway: 'residential', oneway: 'yes', lanes: '3' }],
   [22, line([-74.012, 40.712], [-74.012, 40.713]), { highway: 'residential', oneway: 'yes', lanes: '2', placement: 'right_of:2' }],
+  [27, line([-74.010, 40.7135], [-74.010, 40.7145]), { highway: 'residential', oneway: 'yes', lanes: '3' }],
+  // A one-way that gains a lane well south of a cell boundary at 40.718.
+  [28, line([-74.020, 40.712], [-74.020, 40.7125]), { highway: 'residential', oneway: 'yes', lanes: '2' }],
+  [29, line([-74.020, 40.7125], [-74.020, 40.722]), { highway: 'residential', oneway: 'yes', lanes: '3' }],
+  // A crossing that only clips the kerb of road 12, at 25° to it.
+  [30, line([-74.004 + 0.9 / 84300, 40.7125], [-74.004 + (0.9 + 4.226) / 84300, 40.7125 + 9.063 / 111000]),
+    { highway: 'footway', footway: 'crossing', 'crossing:markings': 'zebra' }],
   // A street with bike lanes on both sides of a crossroads.
   [23, line([-74.008, 40.7145], [-74.007, 40.7145]), { highway: 'residential', lanes: '2', 'cycleway:both': 'lane' }],
   [24, line([-74.007, 40.7145], [-74.006, 40.7145]), { highway: 'residential', lanes: '2', 'cycleway:both': 'lane' }],
@@ -154,6 +161,22 @@ run('generate-road-markings.sql', () => {
     expect(await covered(east(-74.010, 5.5), 40.7133)).toBe(true)
   })
 
+  test('keeps that kerb on the way after, which has as many lanes', async () => {
+    expect(await covered(east(-74.010, -2.5), 40.7142)).toBe(true)
+    expect(await covered(east(-74.010, -3.5), 40.7142)).toBe(false)
+    expect(await covered(east(-74.010, 5.5), 40.7142)).toBe(true)
+  })
+
+  test('builds with a skewed crossing too short for one bar', async () => {
+    const [{ n }] = await sql`SELECT count(*)::int as n FROM road_surfaces`
+    expect(n).toBeGreaterThan(0)
+  })
+
+  test('gives back no band, rather than failing, for a line it cannot taper', async () => {
+    const [{ band }] = await sql`SELECT road_taper_band('POINT(0 0)'::geometry, 0, 1, 2, 3, 10) as band`
+    expect(band).toBeNull()
+  })
+
   test('lays a way tagged placement=right_of:2 along its right kerb', async () => {
     expect(await covered(east(-74.012, -5), 40.7125)).toBe(true)
     expect(await covered(east(-74.012, 1), 40.7125)).toBe(false)
@@ -214,6 +237,33 @@ run('generate-road-markings.sql', () => {
         FROM road_markings`
       expect(inside).toBeGreaterThan(0)
       expect(outside).toBeGreaterThan(0)
+    })
+  })
+
+  describe('two neighbouring cells', () => {
+    const cell = (y0: number, y1: number) => sql`ST_MakeEnvelope(-74.03, ${y0}, -74.01, ${y1}, 4326)`
+    beforeAll(async () => {
+      for (const [y0, y1] of [[40.70, 40.718], [40.718, 40.73]]) {
+        await sql`TRUNCATE _rm_scope`
+        await sql`INSERT INTO _rm_scope VALUES (${cell(y0, y1)})`
+        await sql.unsafe(readFileSync(join(import.meta.dir, 'generate-road-markings.sql'), 'utf8'))
+      }
+    }, 120_000)
+
+    test('place a way the same on both sides of the boundary, far from where it widened', async () => {
+      for (const y of [40.7179, 40.7181, 40.720]) {
+        expect(await covered(east(-74.020, -2.5), y)).toBe(true)
+        expect(await covered(east(-74.020, -3.5), y)).toBe(false)
+        expect(await covered(east(-74.020, 5.5), y)).toBe(true)
+      }
+    })
+
+    test('meet without a gap or an overlap', async () => {
+      const [{ union_m2, sum_m2 }] = await sql`
+        SELECT ST_Area(ST_Union(geom)::geography) as union_m2, sum(ST_Area(geom::geography)) as sum_m2
+        FROM road_surfaces WHERE geom && ST_MakeEnvelope(-74.021, 40.717, -74.019, 40.719, 4326)`
+      expect(Math.abs(sum_m2 - union_m2) / union_m2).toBeLessThan(0.01)
+      expect(union_m2).toBeGreaterThan(9 * 200)
     })
   })
 
