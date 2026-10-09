@@ -17,6 +17,13 @@ does it — and the release pipeline turns it into the GitHub Release notes.
   them and stored no stations, and live availability, keyed by the raw id,
   could never match a station stored as text. Both now treat the id as text.
 
+* **Importing a few GTFS feeds no longer computes walking transfers for every
+  stop in the database.** The transfer step searched every pair of nearby stops
+  across all feeds and routed each through GraphHopper, though it only writes
+  transfers between stops of the same feed, into the feeds it just imported.
+  On a US instance that is millions of pairs for a handful of new feeds. It now
+  searches only within the imported feeds.
+
 ## [0.10.5] - 2026-10-08
 
 ### Changed
