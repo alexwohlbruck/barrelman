@@ -18,12 +18,6 @@ import { lngLat, mercator, type Kind, type Point, type Way } from '../src/lib/br
 
 type Sql = postgres.Sql
 
-// queue-bridge-decks.sql repeats these lists: keep the two in step.
-export const ROADS = ['motorway', 'motorway_link', 'trunk', 'trunk_link', 'primary', 'primary_link', 'secondary', 'secondary_link',
-  'tertiary', 'tertiary_link', 'unclassified', 'residential', 'living_street', 'service', 'busway', 'track', 'road']
-export const PATHS = ['footway', 'cycleway', 'path', 'pedestrian', 'steps', 'bridleway']
-export const RAILS = ['rail', 'light_rail', 'subway', 'tram', 'narrow_gauge', 'monorail', 'preserved', 'funicular']
-
 /** Held by every run that writes bridge_decks, so two never rebuild the same box at once. */
 export const LOCK = [5393739, 1] as const
 
@@ -39,23 +33,24 @@ const metres = (value: string | null): number | null => {
   return Number(m[1]) * (m[2] === 'ft' || m[2] === "'" ? 0.3048 : 1)
 }
 
-type Row = { id: string; highway: string | null; railway: string | null; layer: string | null; width: string | null;
+type Row = { id: string; kind: Kind; highway: string | null; layer: string | null; width: string | null;
   lanes: string | null; oneway: string | null; wikidata: string | null; coords: number[][] }
 
 const bridgeWays = (sql: Sql) => sql`
-  SELECT osm_id::text AS id, tags->>'highway' AS highway, tags->>'railway' AS railway, tags->>'layer' AS layer,
+  SELECT osm_id::text AS id, bridge_deck_class(tags) AS kind, tags->>'highway' AS highway, tags->>'layer' AS layer,
          COALESCE(tags->>'width:carriageway', tags->>'width') AS width, tags->>'lanes' AS lanes, tags->>'oneway' AS oneway,
          COALESCE(tags->>'bridge:wikidata', tags->>'wikidata') AS wikidata,
          ST_AsGeoJSON(geom)::json->'coordinates' AS coords
   FROM geo_places`
+// Which ways make decks is bridge_deck_class() in create-detail-views.sql,
+// which queue-bridge-decks.sql reads too.
 const isBridge = (sql: Sql) => sql`
   osm_type = 'W' AND geom_type = 'line' AND COALESCE(tags->>'bridge', 'no') NOT IN ('no', 'abandoned')
-  AND COALESCE(tags->>'tunnel', 'no') = 'no'
-  AND (tags->>'highway' = ANY(${[...ROADS, ...PATHS]}) OR tags->>'railway' = ANY(${RAILS}))
+  AND COALESCE(tags->>'tunnel', 'no') = 'no' AND bridge_deck_class(tags) IS NOT NULL
   AND GeometryType(geom) = 'LINESTRING'`
 
 function toWay(r: Row): Way {
-  const kind: Kind = r.railway ? 'rail' : PATHS.includes(r.highway!) ? 'path' : 'road'
+  const kind = r.kind
   const lanes = Number.parseInt(r.lanes ?? '') || (r.oneway === 'yes' || r.highway?.startsWith('motorway') ? 1 : 2)
   const tagged = metres(r.width)
   const width = kind === 'rail' ? 5 : kind === 'path' ? (tagged && tagged < 12 ? tagged : 3)
@@ -118,14 +113,12 @@ async function inputFor(sql: Sql, rows: Row[]): Promise<DeckInput> {
     : []
 
   const crossedRows: Array<{ kind: Crossed['kind']; coords: number[][][] }> = await sql`
-    SELECT CASE WHEN tags ? 'waterway' THEN 'water' WHEN tags ? 'railway' THEN 'rail'
-                WHEN tags->>'highway' = ANY(${PATHS}) THEN 'path' ELSE 'road' END AS kind,
+    SELECT CASE WHEN tags ? 'waterway' THEN 'water' ELSE bridge_deck_class(tags) END AS kind,
            ST_AsGeoJSON(ST_Multi(geom))::json->'coordinates' AS coords
     FROM geo_places
     WHERE geom_type = 'line' AND geom && ${box} AND COALESCE(tags->>'bridge', 'no') = 'no' AND COALESCE(tags->>'tunnel', 'no') = 'no'
       AND COALESCE(tags->>'location', '') NOT IN ('underground', 'underwater')
-      AND (tags->>'highway' = ANY(${[...ROADS, ...PATHS]}) OR tags->>'railway' = ANY(${RAILS})
-           OR tags->>'waterway' IN ('river', 'stream', 'canal', 'drain', 'ditch'))`
+      AND (bridge_deck_class(tags) IS NOT NULL OR tags->>'waterway' IN ('river', 'stream', 'canal', 'drain', 'ditch'))`
   const crossed = crossedRows.flatMap(r => r.coords.map(line => ({ kind: r.kind, points: line.map(([lng, lat]) => mercator(lng, lat)) })))
 
   const waterRows: Array<{ coords: number[][][][] }> = await sql`
@@ -137,6 +130,22 @@ async function inputFor(sql: Sql, rows: Row[]): Promise<DeckInput> {
 
   const wikidata = new Map(rows.flatMap(r => (r.wikidata ? [[Number(r.id), r.wikidata] as [number, string]] : [])))
   return { ways, onGround, outlines, kerbs, crossed, water, wikidata }
+}
+
+/**
+ * A rebuilt deck whose id another box's deck holds. Nothing was written; the
+ * box can be rebuilt once the boxes holding `anchors` have been.
+ */
+export class DeckConflict extends Error {
+  constructor(readonly ids: string[], readonly anchors: Array<[number, number]>) {
+    super(`deck id(s) ${ids.join(', ')} already belong to a deck anchored elsewhere`)
+  }
+}
+
+/** The tables a deck build writes, by name, that do not exist yet. */
+export async function missingTables(sql: Sql): Promise<string[]> {
+  const [row] = await sql`SELECT to_regclass('bridge_decks') IS NOT NULL AS decks, to_regclass('bridge_deck_cells') IS NOT NULL AS cells`
+  return [...(row.decks ? [] : ['bridge_decks']), ...(row.cells ? [] : ['bridge_deck_cells'])]
 }
 
 const within = ([lng, lat]: [number, number], [w, s, e, n]: Bbox) => lng >= w && lng < e && lat >= s && lat < n
@@ -173,16 +182,23 @@ export async function rebuildBoxes(sql: Sql, dem: Dem, boxes: Bbox[]): Promise<{
         length: d.length, heights: d.heights, ground: d.ground, piers: d.piers, lng: at[0], lat: at[1],
         line: `LINESTRING(${lngLats.map(p => p.join(' ')).join(',')})`,
       }))
-      await tx`
+      // The boxes' own decks are gone by now, so a clash is with a deck
+      // another box owns, under the same id: refuse rather than take it over.
+      const stored: Array<{ id: string }> = await tx`
         INSERT INTO bridge_decks (id, bridge, ways, kind, layer, edges, grounded, step, length, heights, ground, piers, anchor, geom)
         SELECT r.id, r.bridge, r.ways, r.kind, r.layer, r.edges, r.grounded, ${STEP}, r.length, r.heights, r.ground, r.piers,
                ST_SetSRID(ST_MakePoint(r.lng, r.lat), 4326), ST_GeomFromText(r.line, 4326)
         FROM jsonb_to_recordset(${tx.json(batch)}::jsonb) AS r(id text, bridge text, ways bigint[], kind text, layer int,
           edges real[], grounded boolean[], length real, heights real[], ground real[], piers real[], lng float8, lat float8, line text)
-        ON CONFLICT (id) DO UPDATE SET bridge = EXCLUDED.bridge, ways = EXCLUDED.ways, kind = EXCLUDED.kind, layer = EXCLUDED.layer,
-          edges = EXCLUDED.edges, grounded = EXCLUDED.grounded, step = EXCLUDED.step, length = EXCLUDED.length,
-          heights = EXCLUDED.heights, ground = EXCLUDED.ground, piers = EXCLUDED.piers, anchor = EXCLUDED.anchor,
-          geom = EXCLUDED.geom, updated_at = now()`
+        ON CONFLICT (id) DO NOTHING
+        RETURNING id`
+      if (stored.length < batch.length) {
+        const kept = new Set(stored.map(r => r.id))
+        const ids = batch.map(r => r.id).filter(id => !kept.has(id))
+        const held: Array<{ lng: number; lat: number }> = await tx`
+          SELECT ST_X(anchor) AS lng, ST_Y(anchor) AS lat FROM bridge_decks WHERE id = ANY(${ids})`
+        throw new DeckConflict(ids, held.map(h => [h.lng, h.lat]))
+      }
     }
   })
   return { stored: mine.length, built: placed.map(p => ({ id: p.d.id, anchor: p.at, box: p.box })) }

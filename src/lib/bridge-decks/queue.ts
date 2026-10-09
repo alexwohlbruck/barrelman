@@ -14,7 +14,7 @@ type LngLat = [number, number]
 export type Built = { id: string; anchor: LngLat; box: Bbox }
 
 /** A queued box, and the anchors of the stored decks that cross it. */
-export type Entry = { id: number; box: Bbox; anchors: LngLat[] }
+export type Entry = { id: string; box: Bbox; anchors: LngLat[] }
 
 export const cellAt = ([lng, lat]: LngLat, size = UPDATE_CELL) => `${Math.floor(lng / size)},${Math.floor(lat / size)}`
 
@@ -54,8 +54,8 @@ export function entryCells(entry: Entry, size = UPDATE_CELL): Set<string> {
  * entry is taken whole or not at all, and the first is always taken, however
  * many cells it needs, so the queue moves.
  */
-export function pick(entries: Entry[], maxCells: number, size = UPDATE_CELL): { picked: Entry[]; cells: Map<string, number[]> } {
-  const cells = new Map<string, number[]>()
+export function pick(entries: Entry[], maxCells: number, size = UPDATE_CELL): { picked: Entry[]; cells: Map<string, string[]> } {
+  const cells = new Map<string, string[]>()
   const picked: Entry[] = []
   for (const entry of entries) {
     const own = entryCells(entry, size)
@@ -73,8 +73,8 @@ export function pick(entries: Entry[], maxCells: number, size = UPDATE_CELL): { 
  * moves its midpoint, possibly far along it into a cell the change never
  * reached, and that cell has to be rebuilt to take it.
  */
-export function strays(built: Built[], picked: Entry[], planned: ReadonlyMap<string, unknown>, size = UPDATE_CELL): Map<string, number[]> {
-  const out = new Map<string, number[]>()
+export function strays(built: Built[], picked: Entry[], planned: ReadonlyMap<string, unknown>, size = UPDATE_CELL): Map<string, string[]> {
+  const out = new Map<string, string[]>()
   for (const deck of built) {
     const cell = cellAt(deck.anchor, size)
     if (planned.has(cell)) continue
@@ -84,9 +84,28 @@ export function strays(built: Built[], picked: Entry[], planned: ReadonlyMap<str
   return out
 }
 
+/** The entries planned over any of `failed`, to be tried again later. */
+export function entriesOver(failed: Iterable<string>, cells: ReadonlyMap<string, string[]>): Set<string> {
+  const out = new Set<string>()
+  for (const cell of failed) for (const id of cells.get(cell) ?? []) out.add(id)
+  return out
+}
+
+/** Cells per run from BRIDGE_DECKS_MAX_CELLS: a whole number of at least one. */
+export function maxCellsFrom(raw: string | undefined, fallback: number): number {
+  if (raw === undefined || raw.trim() === '') return fallback
+  const n = Number(raw)
+  if (!Number.isInteger(n) || n < 1) throw new Error(`BRIDGE_DECKS_MAX_CELLS must be a whole number of at least 1, got "${raw}"`)
+  return n
+}
+
+export function missingMessage(missing: string[]): string {
+  return `${missing.join(' and ')} ${missing.length > 1 ? 'do' : 'does'} not exist; start the API once, or run import/create-detail-views.sql.`
+}
+
 /** Why a run has nothing to do, or null when it can go ahead. */
-export function skipReason(state: { table: boolean; queue: boolean; terrain: boolean }): string | null {
-  if (!state.table) return 'bridge_decks does not exist; start the API once to create it.'
+export function skipReason(state: { missing: string[]; queue: boolean; terrain: boolean }): string | null {
+  if (state.missing.length) return missingMessage(state.missing)
   if (!state.queue) return 'nothing queued.'
   if (!state.terrain) return 'BRIDGE_DECKS_DEM_TILES is off (or not a {z}/{x}/{y} template), so there is no terrain to build decks on.'
   return null

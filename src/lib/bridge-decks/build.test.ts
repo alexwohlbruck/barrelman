@@ -77,8 +77,14 @@ describe('buildDecks', () => {
 
   it('numbers decks that share a place the same way whatever order a cell builds them in', () => {
     const [a, b, c]: Point[] = [[0.3, 0.4], [0.3, 0.5], [0.2, 0.9]]
-    expect(numbered(['x', 'x', 'y'], [a, b, c])).toEqual(['x', 'x/1', 'y'])
-    expect(numbered(['y', 'x', 'x'], [c, b, a])).toEqual(['y', 'x/1', 'x'])
+    expect(numbered(['x', 'x', 'y'], [a, b, c], [[1], [2], [3]])).toEqual(['x', 'x/1', 'y'])
+    expect(numbered(['y', 'x', 'x'], [c, b, a], [[3], [2], [1]])).toEqual(['y', 'x/1', 'x'])
+  })
+
+  it('breaks a tie between decks at one midpoint by their ways, in any order', () => {
+    const p: Point = [0.3, 0.4]
+    expect(numbered(['x', 'x'], [p, p], [[9, 4], [5]])).toEqual(['x', 'x/1'])
+    expect(numbered(['x', 'x'], [p, p], [[5], [4, 9]])).toEqual(['x/1', 'x'])
   })
 })
 

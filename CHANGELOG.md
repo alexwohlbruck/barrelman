@@ -28,7 +28,10 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 * **Bridge decks no longer go missing between neighbouring cells.** Two decks
   at the same spot were numbered in the order each cell happened to build
   them, so a rebuild of one cell could overwrite a deck owned by its
-  neighbour.
+  neighbour. Decks are now numbered by where they lie, and a rebuild refuses
+  to take over another cell's deck. **Run "Build Bridge Decks" again after
+  upgrading:** decks stored under the old numbering are dropped once when the
+  API starts.
 
 ## [0.10.7] - 2026-10-09
 

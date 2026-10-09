@@ -4,8 +4,9 @@
  * queue (queue-bridge-decks.sql) and an Update Bridge Decks run, checked
  * against a full rebuild of the same data.
  *
- * Point it at a scratch database: the queue uses the osm_replay schema that
- * replicate-extract.sh uses.
+ * Point it at an empty scratch database with PostGIS: the queue uses the
+ * osm_replay schema that replicate-extract.sh uses, and a bridge table in
+ * public would stand in for one the test drops.
  *
  * Run: BARRELMAN_INTEGRATION_TESTS=1 DATABASE_URL=postgresql://barrelman:barrelman@localhost:5434/scratch \
  *      bun test import/update-bridge-decks.integration.test.ts
@@ -16,7 +17,7 @@ import { readFileSync } from 'fs'
 import { join } from 'path'
 import { Dem } from '../src/lib/bridge-decks/dem'
 import { cellBox } from '../src/lib/bridge-decks/queue'
-import { rebuildBoxes, recordCell } from './bridge-deck-cells'
+import { DeckConflict, missingTables, rebuildBoxes, recordCell } from './bridge-deck-cells'
 import { updateDecks } from './update-bridge-decks'
 
 const DATABASE_URL = process.env.BARRELMAN_INTEGRATION_TESTS ? process.env.DATABASE_URL : undefined
@@ -34,6 +35,8 @@ const ways: [number, string, Record<string, string>][] = [
   [4, line([-80.830, Y], [-80.828, Y]), road()],
   [5, line([-80.826, 35.23], [-80.8255, 35.23]), { highway: 'footway', ...bridge }],
   [10, line([-80.833, 35.224], [-80.833, 35.226]), { waterway: 'river' }],
+  // East of the built cell, about 1 km from its decks.
+  [8, line([-80.8193, 35.23], [-80.8188, 35.23]), { highway: 'footway', ...bridge }],
 ]
 
 const flat = () => new Dem(async () => ({ size: 4, data: new Float32Array(16).fill(200) }))
@@ -44,6 +47,9 @@ const file = (name: string) => readFileSync(join(import.meta.dir, name), 'utf8')
 const decks = async () => sql<{ id: string; ways: string[] }[]>`SELECT id, ways::text[] AS ways FROM bridge_decks ORDER BY id`
 const snapshot = async () => (await sql`SELECT id, ST_AsText(geom) AS geom, heights::text, piers::text, bridge FROM bridge_decks ORDER BY id`)
   .map(r => JSON.stringify(r))
+const ofWay = async (way: number) => (await decks()).filter(d => d.ways.includes(String(way)))
+const enqueue = (w: number, s: number, e: number, n: number) =>
+  sql`INSERT INTO detail_dirty (layer, box) VALUES ('bridge_decks', ST_MakeEnvelope(${w}, ${s}, ${e}, ${n}, 4326))`
 const queued = async () => (await sql`SELECT count(*)::int AS n FROM detail_dirty WHERE layer = 'bridge_decks'`)[0].n
 
 /**
@@ -65,8 +71,10 @@ async function replay(ids: string[], edited: string[], change: string) {
 run('incremental bridge decks', () => {
   beforeAll(async () => {
     sql = postgres(DATABASE_URL!, { max: 1, onnotice: () => {}, connection: { search_path: `${SCHEMA}, public` } })
+    const [{ shared }] = await sql`SELECT to_regclass('public.bridge_decks') IS NOT NULL OR to_regclass('public.bridge_deck_cells') IS NOT NULL AS shared`
+    if (shared) throw new Error('public has bridge tables of its own: point DATABASE_URL at an empty scratch database')
     const ddl = file('create-detail-views.sql')
-    const tables = ddl.slice(ddl.indexOf('CREATE TABLE IF NOT EXISTS bridge_decks ('), ddl.indexOf('CREATE OR REPLACE VIEW bridge_deck_tiles'))
+    const tables = ddl.slice(ddl.indexOf('CREATE OR REPLACE FUNCTION bridge_deck_class'), ddl.indexOf('CREATE OR REPLACE VIEW bridge_deck_tiles'))
     await sql.unsafe(`DROP SCHEMA IF EXISTS ${SCHEMA} CASCADE; CREATE SCHEMA ${SCHEMA};
       CREATE TABLE geo_places (id text, osm_type char(1), osm_id bigint, name text, categories text[], tags jsonb,
         geom geometry(Geometry, 4326), geom_type text, admin_level int);
@@ -134,5 +142,65 @@ run('incremental bridge decks', () => {
       await rebuildBoxes(sql, flat(), [CELL])
       expect(await snapshot()).toEqual(incremental)
     }, 60_000)
+  })
+
+  describe('which entries count as built', () => {
+    const near = () => enqueue(-80.8195, 35.2295, -80.8185, 35.2305)
+
+    test('drops an entry outside the recorded cells, however near a deck', async () => {
+      await near()
+      expect(await updateDecks(sql, flat(), 100)).toBe(0)
+      expect(await queued()).toBe(0)
+      expect(await ofWay(8)).toHaveLength(0)
+    }, 60_000)
+
+    test('falls back to nearness to a deck only while no cells are recorded', async () => {
+      await sql`TRUNCATE bridge_deck_cells`
+      await near()
+      expect(await updateDecks(sql, flat(), 100)).toBe(0)
+      expect(await ofWay(8)).toHaveLength(1)
+      await sql`DELETE FROM bridge_decks WHERE '8' = ANY(ways::text[])`
+      await recordCell(sql, CELL)
+    }, 60_000)
+  })
+
+  describe('a deck whose id another cell still holds', () => {
+    // As if the deck had last been stored by its neighbour to the east.
+    const elsewhere = async () => {
+      const [deck] = await ofWay(2)
+      await sql`UPDATE bridge_decks SET anchor = ST_SetSRID(ST_MakePoint(-80.81, 35.23), 4326) WHERE id = ${deck.id}`
+      return deck.id
+    }
+
+    test('is refused, leaving both cells as they were', async () => {
+      const id = await elsewhere()
+      const before = await snapshot()
+      const err = await rebuildBoxes(sql, flat(), [CELL]).catch(e => e)
+      expect(err).toBeInstanceOf(DeckConflict)
+      expect(err.ids).toEqual([id])
+      expect(await snapshot()).toEqual(before)
+    }, 60_000)
+
+    test('moves home once an update has rebuilt the cell holding it', async () => {
+      const [deck] = await ofWay(2)
+      await enqueue(-80.8335, 35.2245, -80.8325, 35.2255)
+      expect(await updateDecks(sql, flat(), 100)).toBe(0)
+      const [{ n, x }] = await sql`SELECT count(*)::int AS n, max(ST_X(anchor)) AS x FROM bridge_decks WHERE id = ${deck.id}`
+      expect(n).toBe(1)
+      expect(x).toBeLessThan(CELL[2])
+    }, 60_000)
+  })
+
+  describe('before the API has created bridge_deck_cells', () => {
+    beforeAll(async () => {
+      await sql`DROP TABLE bridge_deck_cells`
+      await replay(['way/9'], ['way/9'], `INSERT INTO geo_places (id, osm_type, osm_id, categories, tags, geom, geom_type) VALUES
+        ('way/9', 'W', 9, '{highway/footway}', '{"highway": "footway", "bridge": "yes"}', ST_GeomFromText('${line([-80.836, 35.23], [-80.8355, 35.23])}', 4326), 'line')`)
+    })
+
+    test('queues nothing, so nothing piles up that an update would skip', async () => {
+      expect(await missingTables(sql)).toEqual(['bridge_deck_cells'])
+      expect(await queued()).toBe(0)
+    })
   })
 })

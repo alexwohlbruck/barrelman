@@ -548,10 +548,13 @@ land on, what it crosses, and water under it. "Update Bridge Decks"
 (`import/update-bridge-decks.ts`) then rebuilds the 2 km cells of each entry,
 along with the cells its old decks were anchored in and any its new ones now
 are, so a deck that moved, grew, lost its bridge tag or was deleted is replaced
-or removed in the one cell that owns it. It takes up to
-`BRIDGE_DECKS_MAX_CELLS` cells a run and leaves the rest queued, drops entries
-outside the recorded cells, and does nothing on a database that never built
-decks or with `BRIDGE_DECKS_DEM_TILES=off`. A cell that fails is retried on the
+or removed in the one cell that owns it. A rebuild never takes over a deck id
+another cell holds: it rebuilds that cell first, or fails and is retried. It
+takes up to `BRIDGE_DECKS_MAX_CELLS` cells a run and leaves the rest queued,
+and drops entries outside the recorded cells (while none are recorded, outside
+about 5 km of a stored deck). It does nothing on a database without
+`bridge_decks` and `bridge_deck_cells`, or with `BRIDGE_DECKS_DEM_TILES=off`,
+and then nothing is queued either. A cell that fails is retried on the
 next two runs; while Build Bridge Decks runs, the update leaves the queue for
 the next run. A failure is reported and the rest of OSM Update carries on. As
 with road markings, only a database without osm2pgsql's middle tables records

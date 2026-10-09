@@ -133,17 +133,22 @@ const placeKey = (p: Point, heading: number, digits: number) => {
 
 /**
  * Ids from place keys, with decks that share one numbered by exactly where
- * they lie rather than by build order. Neighbouring cells are built from
+ * they lie, then by their ways, rather than by build order. Neighbouring cells are built from
  * different sets of ways, and an id that followed build order could name
  * different decks in each, so one cell's write would replace the other's deck.
  */
-export function numbered(places: string[], midpoints: Point[]): string[] {
+export function numbered(places: string[], midpoints: Point[], ways: number[][]): string[] {
   const groups = new Map<string, number[]>()
   places.forEach((p, k) => groups.set(p, [...(groups.get(p) ?? []), k]))
+  const sorted = ways.map(w => [...w].sort((a, b) => a - b))
+  const byWays = (a: number[], b: number[]) => {
+    for (let i = 0; i < Math.min(a.length, b.length); i++) if (a[i] !== b[i]) return a[i] - b[i]
+    return a.length - b.length
+  }
   const ids = [...places]
   for (const [place, members] of groups) {
     if (members.length < 2) continue
-    members.sort((a, b) => midpoints[a][0] - midpoints[b][0] || midpoints[a][1] - midpoints[b][1])
+    members.sort((a, b) => midpoints[a][0] - midpoints[b][0] || midpoints[a][1] - midpoints[b][1] || byWays(sorted[a], sorted[b]))
     members.forEach((k, n) => (ids[k] = n ? `${place}/${n}` : place))
   }
   return ids
@@ -310,7 +315,7 @@ export async function buildDecks(input: DeckInput, ground: Ground): Promise<Deck
     const heading = bearing(s.chain.points)
     return { midpoint, heading, place: `${placeKey(midpoint, heading, 4)}/${s.chain.layer}` }
   })
-  const ids = numbered(placed.map(p => p.place), placed.map(p => p.midpoint))
+  const ids = numbered(placed.map(p => p.place), placed.map(p => p.midpoint), solved.map(s => s.chain.ways))
   return solved.map((s, k) => {
     const { midpoint, heading } = placed[k]
     const round = (v: number) => Math.round(v * 100) / 100

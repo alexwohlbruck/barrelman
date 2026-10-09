@@ -20,25 +20,22 @@
 -- (a node gained a tag), is the same as before and queues nothing.
 -- osm_replay.edited lists what the diff itself changed.
 --
--- The tag lists repeat those in import/bridge-deck-cells.ts. Nothing is queued
--- where no bridge deck was ever built. A failure here is reported and skipped
--- rather than raised: it would otherwise roll back the replication cycle.
+-- Which ways make decks is bridge_deck_class() (create-detail-views.sql), as
+-- for the build. Nothing is queued where no bridge deck was ever built. A
+-- failure here is reported and skipped rather than raised: it would otherwise
+-- roll back the replication cycle.
 -- Needs detail_dirty (detail-queue-table.sql).
 -- =============================================================================
 DO $$
 DECLARE
   queued bigint;
 BEGIN
-  IF to_regclass('bridge_decks') IS NULL THEN
+  -- The same tables Update Bridge Decks needs, so nothing piles up that it would skip.
+  IF to_regclass('bridge_decks') IS NULL OR to_regclass('bridge_deck_cells') IS NULL THEN
     RETURN;
   END IF;
-  IF NOT EXISTS (SELECT 1 FROM bridge_decks) THEN
-    IF to_regclass('bridge_deck_cells') IS NULL THEN
-      RETURN;
-    END IF;
-    IF NOT EXISTS (SELECT 1 FROM bridge_deck_cells) THEN
-      RETURN;
-    END IF;
+  IF NOT EXISTS (SELECT 1 FROM bridge_deck_cells) AND NOT EXISTS (SELECT 1 FROM bridge_decks) THEN
+    RETURN;
   END IF;
 
   WITH same AS (
@@ -58,13 +55,7 @@ BEGIN
   bridges AS (
     SELECT geom FROM now_rows
     WHERE (geom_type = 'line' AND COALESCE(tags->>'bridge', 'no') NOT IN ('no', 'abandoned')
-           AND COALESCE(tags->>'tunnel', 'no') = 'no'
-           AND (tags->>'highway' IN ('motorway', 'motorway_link', 'trunk', 'trunk_link', 'primary', 'primary_link',
-                                     'secondary', 'secondary_link', 'tertiary', 'tertiary_link', 'unclassified',
-                                     'residential', 'living_street', 'service', 'busway', 'track', 'road',
-                                     'footway', 'cycleway', 'path', 'pedestrian', 'steps', 'bridleway')
-                OR tags->>'railway' IN ('rail', 'light_rail', 'subway', 'tram', 'narrow_gauge', 'monorail',
-                                        'preserved', 'funicular')))
+           AND COALESCE(tags->>'tunnel', 'no') = 'no' AND bridge_deck_class(tags) IS NOT NULL)
        OR (geom_type = 'area' AND tags->>'man_made' = 'bridge')
   ),
   touching AS (

@@ -830,6 +830,25 @@ CREATE INDEX IF NOT EXISTS road_glyphs_geom_idx ON road_glyphs USING gist (geom)
 -- `bridge` the bridge it belongs to (its man_made=bridge outline, its wikidata
 -- item, or where it lies). A run rebuilds the decks whose `anchor`, the deck's
 -- midpoint, lies in the cell it is working on.
+-- What kind of deck a way would make, by its tags alone ('road', 'path' or
+-- 'rail'), or null for a way no deck is built from. The one list of classes:
+-- import/bridge-deck-cells.ts and import/queue-bridge-decks.sql both read it.
+CREATE OR REPLACE FUNCTION bridge_deck_class(tags jsonb) RETURNS text
+LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+  SELECT CASE
+    WHEN NOT COALESCE(tags->>'highway' IN ('motorway', 'motorway_link', 'trunk', 'trunk_link', 'primary', 'primary_link',
+                                   'secondary', 'secondary_link', 'tertiary', 'tertiary_link', 'unclassified',
+                                   'residential', 'living_street', 'service', 'busway', 'track', 'road',
+                                   'footway', 'cycleway', 'path', 'pedestrian', 'steps', 'bridleway')
+              OR tags->>'railway' IN ('rail', 'light_rail', 'subway', 'tram', 'narrow_gauge', 'monorail',
+                                      'preserved', 'funicular'), false)
+      THEN NULL
+    WHEN tags ? 'railway' THEN 'rail'
+    WHEN tags->>'highway' IN ('footway', 'cycleway', 'path', 'pedestrian', 'steps', 'bridleway') THEN 'path'
+    ELSE 'road'
+  END
+$$;
+
 CREATE TABLE IF NOT EXISTS bridge_decks (
   id text PRIMARY KEY,
   bridge text NOT NULL,
@@ -862,6 +881,18 @@ CREATE TABLE IF NOT EXISTS bridge_deck_cells (
   box geometry(Polygon, 4326) NOT NULL
 );
 CREATE INDEX IF NOT EXISTS bridge_deck_cells_box_idx ON bridge_deck_cells USING gist (box);
+
+-- Decks stored before co-located decks were numbered by position can share an
+-- id with another cell's deck. They are dropped once, here; Build Bridge Decks
+-- has to run again afterwards.
+DO $$
+BEGIN
+  IF obj_description('bridge_decks'::regclass, 'pg_class') IS DISTINCT FROM 'ids numbered by position' THEN
+    TRUNCATE bridge_decks;
+    COMMENT ON TABLE bridge_decks IS 'ids numbered by position';
+  END IF;
+END
+$$;
 
 -- What the tiles carry. Vector tiles have no arrays, so a profile travels as
 -- decimetres joined by commas. A tile's own geometry is simplified and snapped

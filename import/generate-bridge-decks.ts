@@ -16,12 +16,13 @@
  * needed and kept in a bounded cache.
  */
 import postgres from 'postgres'
-import { resolveRegions } from '../src/config/regions'
+import { resolveRegions, type Bbox } from '../src/config/regions'
 import { dbUrl, onnotice } from '../src/db'
 import { argValue } from '../src/lib/cli-args'
 import { cellsCovering, parseBbox, regionAreas } from '../src/lib/bridge-decks/areas'
 import { Dem, DEM_TILES, demConfigured } from '../src/lib/bridge-decks/dem'
-import { LOCK, rebuildBoxes, recordCell } from './bridge-deck-cells'
+import { missingMessage } from '../src/lib/bridge-decks/queue'
+import { DeckConflict, LOCK, missingTables, rebuildBoxes, recordCell } from './bridge-deck-cells'
 
 const args = process.argv.slice(2)
 const flag = (name: string) => argValue(args, name)
@@ -35,8 +36,8 @@ async function areas() {
 }
 
 async function main() {
-  const [{ ready }] = await sql`SELECT to_regclass('bridge_decks') IS NOT NULL AND to_regclass('bridge_deck_cells') IS NOT NULL AS ready`
-  if (!ready) throw new Error('bridge_decks does not exist: start the API once, or run import/create-detail-views.sql')
+  const missing = await missingTables(sql)
+  if (missing.length) throw new Error(missingMessage(missing))
   if (!demConfigured(DEM_TILES)) throw new Error(`BRIDGE_DECKS_DEM_TILES is "${DEM_TILES}": bridge decks need a terrain source`)
   const cells = cellsCovering(await areas(), CELL)
 
@@ -50,13 +51,36 @@ async function main() {
   const dem = new Dem()
   const started = Date.now()
   let total = 0
-  for (const [k, cell] of cells.entries()) {
+  // Cells whose decks clashed with a deck another cell still holds, retried
+  // once the rest of the area has been rebuilt.
+  const deferred: Bbox[] = []
+  const build = async (cell: Bbox) => {
     const { stored } = await rebuildBoxes(sql, dem, [cell])
     await recordCell(sql, cell)
     total += stored
-    if (stored) console.log(`[${k + 1}/${cells.length}] cell ${cell[0]},${cell[1]}: ${stored} decks (${Math.round((Date.now() - started) / 1000)} s)`)
+    return stored
+  }
+  for (const [k, cell] of cells.entries()) {
+    try {
+      const stored = await build(cell)
+      if (stored) console.log(`[${k + 1}/${cells.length}] cell ${cell[0]},${cell[1]}: ${stored} decks (${Math.round((Date.now() - started) / 1000)} s)`)
+    } catch (err) {
+      if (!(err instanceof DeckConflict)) throw err
+      deferred.push(cell)
+    }
+  }
+  let clashes = 0
+  for (const cell of deferred) {
+    try {
+      await build(cell)
+    } catch (err) {
+      if (!(err instanceof DeckConflict)) throw err
+      clashes++
+      console.error(`ERROR: cell ${cell.join(',')} not rebuilt: ${err.message}, at ${err.anchors.map(a => a.join(',')).join('; ')}. Build an area that takes those in too.`)
+    }
   }
   console.log(`Bridge decks: ${total} built in ${cells.length} cells, ${Math.round((Date.now() - started) / 1000)} s.`)
+  if (clashes) process.exitCode = 1
   await lock`SELECT pg_advisory_unlock(${LOCK[0]}, ${LOCK[1]})`
   lock.release()
   await sql.end()
@@ -66,5 +90,5 @@ if (import.meta.main) {
   await main()
   // resolveRegions may have opened the shared DB handle (region store); exit
   // rather than hang on an idle connection.
-  process.exit(0)
+  process.exit(process.exitCode ?? 0)
 }
