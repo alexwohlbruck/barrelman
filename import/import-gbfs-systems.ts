@@ -19,19 +19,12 @@ import { sql } from 'drizzle-orm'
 import { ensureGbfsSchema } from '../src/db'
 import { inBoxes, resolveRegions, type Bbox } from '../src/config/regions'
 import { gbfsId, gbfsNumber, localizedText } from '../src/lib/gbfs'
+import { argValue } from '../src/lib/cli-args'
 
 // ── CLI args ────────────────────────────────────────────────────────
 
 const args = process.argv.slice(2)
-function getArg(name: string): string | undefined {
-  // Both forms: "--bbox <value>" and "--bbox=<value>". The console sends the
-  // second when the value starts with "-" (see services/job-invocation.ts),
-  // because a bbox west of Greenwich is otherwise read as another option.
-  const eq = args.find((a) => a.startsWith(`--${name}=`))
-  if (eq) return eq.slice(name.length + 3)
-  const idx = args.indexOf(`--${name}`)
-  return idx >= 0 && idx + 1 < args.length ? args[idx + 1] : undefined
-}
+const getArg = (name: string) => argValue(args, name)
 
 const countryFilter = getArg('country')?.toUpperCase()
 const bboxArg = getArg('bbox')
