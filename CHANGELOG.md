@@ -10,6 +10,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.10.6] - 2026-10-09
+
 ### Fixed
 
 * **Bikeshare feeds with numeric ids import.** The GBFS spec makes ids
