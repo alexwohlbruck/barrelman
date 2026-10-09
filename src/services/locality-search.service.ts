@@ -20,6 +20,7 @@
 
 import { db, maintenanceConnection } from '../db'
 import { sql } from 'drizzle-orm'
+import { buildTsQueryText } from '../lib/search-query'
 
 /**
  * Rows the locality layer searches. Must match the WHERE of
@@ -60,7 +61,7 @@ END`)
  * node says `place=city`. Read from its own tags, Chicago scored 0.19 from
  * Brooklyn and never surfaced.
  *
- * Population stretches it further, at 1 km per 100 people: a city of 100K
+ * Population stretches a settlement's reach further, at 1 km per 100 people: a city of 100K
  * reaches as far as its class already does, and only bigger ones go beyond.
  * Class alone ranks every "city" alike, so Austin, Arkansas (pop. 1,037) and
  * Austin, Texas (974,447) differed only by distance — and the Texas one was
@@ -75,7 +76,13 @@ const reachKm = (importance: ReturnType<typeof sql>, population: ReturnType<type
   WHEN ${importance} >= 0.8 THEN 300
   WHEN ${importance} >= 0.7 THEN 50
   ELSE 20
-END, COALESCE(${population}, 0) / 100.0)`
+END, CASE
+  -- Settlements only. A state's reach is already wide, and stretched by its
+  -- population (New York: 19.6M, so 196,000 km) it outranked the city of the
+  -- same name from inside that city.
+  WHEN ${importance} >= 0.95 THEN 0
+  ELSE COALESCE(${population}, 0) / 100.0
+END)`
 
 /** A place's `population` tag, when it is a plain number. Free text ("approx.
  *  5000", "1,234") is left out rather than guessed at. */
@@ -94,6 +101,10 @@ const EXEMPT_POPULATION = 50_000
  *  prefix that names thousands of places ("park" matched 5,461) cost 5.4s;
  *  only the best few hundred can ever reach the result. */
 const FOLD_CANDIDATES = 200
+
+/** Closest names a qualified pass checks the state of. Enough for every
+ *  Springfield in the US (about forty) with room to spare. */
+const QUALIFIED_CANDIDATES = 60
 
 /**
  * Lowest score a locality needs to be returned (and so pinned above every
@@ -180,7 +191,15 @@ export async function searchLocalities({
 
   const params = { query, tsQueryText, lat, lng, autocomplete, limit }
   const wordMatch = sql`ts @@ to_tsquery('simple', unaccent(${tsQueryText}))`
-  const rows = await localityQuery(params, wordMatch)
+  const [words, ...qualified] = await Promise.all([
+    localityQuery(params, wordMatch),
+    ...qualifiedPasses(params),
+  ])
+  // A place named exactly what was typed settles how to read it: "north
+  // carolina" is the state, not a town called North in some Carolina.
+  const fold = (t: string) => t.normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase()
+  const exact = words.some((r: any) => r.name && fold(r.name) === fold(query))
+  const rows = mergePasses(exact ? [words] : [words, ...qualified], limit)
   if (rows.length > 0 || !fuzzyReady || query.length < FUZZY_MIN_QUERY || isPostalShaped(query)) return rows
   // A place by that name that only scored too low ("hickory" from New York)
   // was spelled right, and a look-alike must not stand in for it.
@@ -189,6 +208,84 @@ export async function searchLocalities({
   // trigram index holds only places (19 MB), so this costs milliseconds,
   // where the same lookup over every name in geo_places reads a 5 GB index.
   return localityQuery({ ...params, postal: false }, sql`name % ${query}`)
+}
+
+/**
+ * The ways a query can split into a place and the state it is in: "charlotte
+ * north carolina" is "charlotte" in "north carolina", or "charlotte north" in
+ * "carolina". Up to three trailing words are tried as the state; a place name
+ * shorter than three characters is not tried at all.
+ */
+export function qualifierSplits(query: string): { name: string; qual: string }[] {
+  const words = query.split(/\s+/).filter(Boolean)
+  const splits: { name: string; qual: string }[] = []
+  for (let k = words.length - 1; k >= Math.max(1, words.length - 3); k--) {
+    const name = words.slice(0, k).join(' ')
+    if (name.length >= LOCALITY_MIN_QUERY) splits.push({ name, qual: words.slice(k).join(' ') })
+  }
+  return splits
+}
+
+/** A name that could be an airport's code standing for its city: "clt". */
+const AIRPORT_CODE = /^[a-z]{3,4}$/i
+
+/**
+ * The passes that read the end of the query as a state: "charlotte nc",
+ * "charlotte nohth caorinlna", "springfield il". One per split, each matching
+ * the leading words as a name (by trigram, so a typo there still lands) and
+ * scoring the trailing ones against the state each candidate is in.
+ *
+ * A leading word that is an airport code ("clt nc") also proposes the city
+ * the airport is in, since that is how people abbreviate cities.
+ *
+ * Without the trigram index, the name has to match word for word.
+ */
+function qualifiedPasses(params: LocalityLayerParams): Promise<any[]>[] {
+  if (isPostalShaped(params.query)) return []
+  return qualifierSplits(params.query).flatMap(({ name, qual }) => {
+    const tsName = buildTsQueryText(name.split(/\s+/), false)
+    const passes = [
+      localityQuery(
+        { ...params, query: name, qualifier: qual, postal: false },
+        fuzzyReady ? sql`name % ${name}` : sql`ts @@ to_tsquery('simple', unaccent(${tsName}))`,
+      ),
+    ]
+    if (AIRPORT_CODE.test(name)) {
+      passes.push(localityQuery(
+        { ...params, query: name, qualifier: qual, postal: false, sim: sql`0.9::real` },
+        sql`id IN (
+          SELECT c.id FROM geo_places a
+          CROSS JOIN LATERAL (
+            SELECT id FROM geo_places
+            WHERE geom_type = 'area' AND admin_level IS NOT NULL AND admin_level BETWEEN 5 AND 8
+              AND ST_Intersects(geom, a.centroid)
+            ORDER BY area_m2 LIMIT 1
+          ) c
+          WHERE a.codes IS NOT NULL AND a.codes @> ARRAY[${name.toLowerCase()}] AND a.tags ? 'iata'
+          LIMIT 3
+        )`,
+      ))
+    }
+    return passes
+  })
+}
+
+/**
+ * Rows from several passes as one list: best score per place, best first.
+ * A place one pass folded into another (Austin's label node, inside its
+ * boundary) can come back on its own from a pass that never saw the
+ * boundary, so whatever any row absorbed is dropped.
+ */
+export function mergePasses(passes: any[][], limit: number): any[] {
+  const rows = passes.flat()
+  const absorbed = new Set(rows.flatMap((r) => r.absorbed_ids ?? []))
+  const best = new Map<string, any>()
+  for (const row of rows) {
+    if (absorbed.has(row.id)) continue
+    const seen = best.get(row.id)
+    if (!seen || row.text_rank > seen.text_rank) best.set(row.id, row)
+  }
+  return [...best.values()].sort((a, b) => b.text_rank - a.text_rank).slice(0, limit)
 }
 
 /** Whether any place's name matches the words, whatever its score. Read
@@ -206,7 +303,15 @@ async function placeNamed(wordMatch: ReturnType<typeof sql>, query: string): Pro
 /** One pass of the locality layer, with `match` selecting the candidate rows
  *  (word match, or trigram similarity for a misspelling). */
 async function localityQuery(
-  { query, lat, lng, autocomplete, limit, postal = true }: LocalityLayerParams & { postal?: boolean },
+  {
+    query, lat, lng, autocomplete, limit, postal = true, qualifier, sim,
+  }: LocalityLayerParams & {
+    postal?: boolean
+    /** Trailing words naming the state the place is in ("nc"). */
+    qualifier?: string
+    /** Name similarity, when it isn't the name against the query. */
+    sim?: ReturnType<typeof sql>
+  },
   match: ReturnType<typeof sql>,
 ): Promise<any[]> {
   const hasPoint = lat != null && lng != null
@@ -217,6 +322,33 @@ async function localityQuery(
   const distanceSelect = point
     ? sql`ST_Distance(centroid::geography, ${point}::geography)`
     : sql`NULL::float`
+
+  // How well the qualifier names the state or country a place is in: by code
+  // ("NC") or by name, misspelt or not. "nohth caorinlna" is 0.24 from North
+  // Carolina and 0.15 from South Carolina, so it ranks rather than cuts.
+  //
+  // Looked up only for the closest QUALIFIED_CANDIDATES names: "springfield"
+  // has hundreds of trigram look-alikes, and testing each against a state's
+  // outline took 0.9 s where the forty actual Springfields take tens of ms.
+  const withQualSim = (candidates: ReturnType<typeof sql>) => qualifier
+    ? sql`SELECT m.*, (
+          SELECT max(GREATEST(similarity(s.name, ${qualifier}),
+                              (lower(s.tags->>'ref') = lower(${qualifier}))::int::real))
+          FROM geo_places s
+          WHERE s.geom_type = 'area' AND s.admin_level IS NOT NULL AND s.admin_level IN (2, 4)
+            AND ST_Intersects(s.geom, m.centroid)
+        ) AS qual_sim
+        FROM (SELECT * FROM (${candidates}) c WHERE sim >= 0.3
+              -- Ties go to the bigger place: there are more than sixty exact
+              -- Springfields, and the one in Missouri has to make the cut.
+              ORDER BY sim DESC, importance DESC, population DESC NULLS LAST
+              LIMIT ${QUALIFIED_CANDIDATES}) m`
+    : sql`SELECT c.*, NULL::real AS qual_sim FROM (${candidates}) c`
+  // A named state stands in for proximity: "springfield il" has said which
+  // Springfield, wherever the map is.
+  const score = (importance: ReturnType<typeof sql>, population: ReturnType<typeof sql>) => qualifier
+    ? sql`sim * ${importance} * (0.4 + 0.6 * qual_sim)`
+    : sql`sim * ${importance} / (1 + ${distanceKm} / ${reachKm(importance, population)})`
 
   const postalCode = query.toUpperCase()
   const postalMatch = autocomplete
@@ -237,9 +369,10 @@ async function localityQuery(
     WITH RECURSIVE hits AS (
       SELECT * FROM (
         SELECT DISTINCT ON (id) * FROM (
+          ${withQualSim(sql`
           SELECT id, osm_type, osm_id, name, name_abbrev, categories, tags,
                  address, hours, phones, websites, geom_type, centroid, geom, area_m2,
-                 similarity(name, ${query}) AS sim,
+                 ${sim ?? sql`similarity(name, ${query})`} AS sim,
                  ${IMPORTANCE} AS importance, ${POPULATION} AS population
           FROM geo_places
           WHERE ${sql.raw(LOCALITY_PREDICATE)}
@@ -249,15 +382,16 @@ async function localityQuery(
             -- them. Outside the index predicate so the index still applies.
             AND geom_type <> 'line'
           ${postalBranch}
+          `)}
         ) matched
         -- ts also matches parent_context, so "new york" reaches every
         -- neighbourhood *in* New York. The name has to be what matched.
-        WHERE sim >= 0.3
+        WHERE sim >= 0.3 ${qualifier ? sql`AND qual_sim >= 0.2` : sql``}
         ORDER BY id, sim DESC
       ) distinct_hits
       -- Only the best FOLD_CANDIDATES go on to the fold, ranked by their own
       -- score; the fold can raise a place's importance, never its similarity.
-      ORDER BY sim * importance / (1 + ${distanceKm} / ${reachKm(sql`importance`, sql`population`)}) DESC
+      ORDER BY ${score(sql`importance`, sql`population`)} DESC
       LIMIT ${FOLD_CANDIDATES}
     ),
     -- Which hit each duplicate folds into (see the doc comment above).
@@ -308,7 +442,7 @@ async function localityQuery(
     scored AS (
       SELECT id, osm_type, osm_id, name, name_abbrev, categories, tags,
              address, hours, phones, websites, geom_type, centroid, rank_importance,
-             sim * rank_importance / (1 + ${distanceKm} / ${reachKm(sql`rank_importance`, sql`rank_population`)}) AS text_rank,
+             ${score(sql`rank_importance`, sql`rank_population`)} AS text_rank,
              ${distanceSelect} AS distance_m,
              absorbed_ids,
              rank_population,
