@@ -247,6 +247,16 @@ export const SCRIPTS: ScriptDef[] = [
           'Refresh the buildings_3d view after the update. Hours on a country-sized import; turn off and schedule "Refresh 3D Buildings" weekly instead.',
       },
       {
+        name: 'ROAD_MARKINGS_INCREMENTAL',
+        label: 'Update road markings',
+        type: 'boolean',
+        apply: 'env',
+        envVar: 'ROAD_MARKINGS_INCREMENTAL',
+        default: false,
+        description:
+          'Queue the roads each cycle touches, then rebuild road markings around them where they have been built. Off by default; leave it off while a large area is still being built. Only a database without middle tables records which roads changed.',
+      },
+      {
         name: 'REPLICATION_MAX_DIFFS',
         label: 'Diffs per cycle',
         type: 'number',
@@ -273,6 +283,7 @@ export const SCRIPTS: ScriptDef[] = [
       { script: 'osm-buildings-3d', when: 'unless "Refresh 3D buildings" is off' },
       { script: 'osm-street-furniture', when: 'always' },
       { script: 'osm-sport-pitches', when: 'always' },
+      { script: 'osm-road-markings-update', when: 'only when "Update road markings" is on' },
     ],
     source: 'scripts/update-osm.sh',
     notes:
@@ -881,7 +892,62 @@ export const SCRIPTS: ScriptDef[] = [
     exec: { kind: 'internal', handler: 'sql:generate-road-markings.sql' },
     source: 'import/generate-road-markings.sql',
     notes:
-      'Builds fresh tables and swaps them in at the end, so tiles keep serving the old roads meanwhile. Not part of OSM Update yet: measured at about 5 s per 7 km² of dense downtown, which is minutes for a city and roughly a day for the whole US. Restart Martin afterwards on an instance that caches tiles.',
+      'Builds fresh tables and swaps them in at the end, so tiles keep serving the old roads meanwhile. Measured at 4–13 ms per road way (rural to dense downtown): minutes for a city, about two days for the whole US. To build one area, see import/generate-road-markings.sql on scoping. One build runs at a time: a scoped build or "Update Road Markings" started meanwhile waits or steps aside. With "Update road markings" on, OSM Update keeps built areas current. Restart Martin afterwards on an instance that caches tiles.',
+  },
+  {
+    id: 'osm-road-markings-update',
+    name: 'Update Road Markings',
+    description:
+      'Rebuild road markings around the roads recent replication diffs touched, cell by cell, where road markings have been built.',
+    category: 'osm',
+    danger: 'safe',
+    longRunning: true,
+    confirm: false,
+    exclusive: true,
+    exec: { kind: 'process', command: 'bash', args: ['scripts/update-road-markings.sh'] },
+    params: [
+      {
+        name: 'ROAD_MARKINGS_MAX_CELLS',
+        label: 'Cells per run',
+        type: 'number',
+        apply: 'env',
+        envVar: 'ROAD_MARKINGS_MAX_CELLS',
+        placeholder: 'blank = 500',
+        description: 'Cells rebuilt in one run. What is left stays queued for the next.',
+      },
+      {
+        name: 'ROAD_MARKINGS_CELL',
+        label: 'Cell size',
+        // Text, not number: a number field steps in whole units and flags 0.02.
+        type: 'string',
+        apply: 'env',
+        envVar: 'ROAD_MARKINGS_CELL',
+        placeholder: 'blank = 0.02',
+        description: 'Side of a rebuilt cell, in degrees. 0.02 is about 2 km.',
+      },
+    ],
+    source: 'scripts/update-road-markings.sh',
+    notes:
+      'OSM Update runs this after each replication cycle when its "Update road markings" switch is on. The queue (road_markings_dirty) is filled by scripts/replicate-extract.sh under the same switch, so a database updated through osm2pgsql\'s middle tables has nothing to work off. A cell that fails is skipped and its entries retried later, up to three runs. Steps aside while "Build Road Markings" runs.',
+  },
+  {
+    id: 'osm-bridge-decks',
+    name: 'Build Bridge Decks',
+    description:
+      'Rebuild bridge_decks: bridge ways joined into decks, fitted to their man_made=bridge outlines, with a height every 6 m solved from Mapterhorn terrain and what each passes over, and pier positions. Parchment draws 3D bridges from these.',
+    category: 'osm',
+    danger: 'safe',
+    longRunning: true,
+    confirm: true,
+    exclusive: true,
+    exec: { kind: 'process', command: 'bun', args: ['run', 'import/generate-bridge-decks.ts'] },
+    params: [
+      { name: 'bbox', label: 'Area (w,s,e,n)', type: 'string', apply: 'flag', flag: '--bbox', placeholder: 'blank = the REGIONS areas' },
+      { name: 'cell', label: 'Cell size (degrees)', type: 'number', apply: 'flag', flag: '--cell', default: 0.25 },
+    ],
+    source: 'import/generate-bridge-decks.ts',
+    notes:
+      'Rebuilds the decks anchored in each cell in place, so tiles keep serving meanwhile and a run can be stopped and resumed. A blank area covers each area of the regions REGIONS selects; with REGIONS=global it refuses to start, since the planet takes days, so give an area. Fetches Mapterhorn terrain tiles (about 90 KB each, one per 1.5 km² that has bridges) from tiles.mapterhorn.com unless BRIDGE_DECKS_DEM_TILES points elsewhere. Downtown Charlotte, 166 decks, took 7 s; the whole US is estimated at 4–10 hours. Not part of OSM Update yet. Restart Martin afterwards on an instance that caches tiles.',
   },
   {
     id: 'search-intersections',

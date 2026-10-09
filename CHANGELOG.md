@@ -10,6 +10,32 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.10.7] - 2026-10-09
+
+### Added
+
+* **Road markings can be built one area at a time, and kept current.** "Build
+  Road Markings" can be scoped to a box, which is merged into the live tables
+  without a seam, so a country can be built in chunks; the first box creates
+  the tables. Only one build runs at a time, full or scoped. OSM Update can
+  rebuild road markings around the roads each replication cycle touched,
+  wherever they have been built, but this is off by default: turn on its
+  "Update road markings" switch, or set `ROAD_MARKINGS_INCREMENTAL=1`, once
+  the area you serve is built. A cell that fails to build is skipped and
+  retried on later runs rather than failing the update, and the update steps
+  aside while a full build runs. Service roads are paved only where their
+  lanes or width are mapped, which leaves out most alleys and keeps a national
+  build to about half the size.
+
+* **Bridge decks with their heights worked out.** A new `bridge_decks` detail
+  layer gives each bridge deck as one line with its height every 6 m above
+  sea level and where its piers stand, solved from the terrain, the roads it
+  lands on, what it passes over and the decks it joins, so a 3D map can stand
+  bridges up without working out their profiles itself. Build it with the
+  "Build Bridge Decks" console task, which covers the areas `REGIONS` selects
+  or one `--bbox`; it will not start a planet-wide run on `REGIONS=global`
+  without an area. `BRIDGE_DECKS_DEM_TILES` points it at a terrain mirror.
+
 ## [0.10.6] - 2026-10-09
 
 ### Fixed

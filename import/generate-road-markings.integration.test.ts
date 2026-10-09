@@ -1,8 +1,13 @@
 /**
  * Runs generate-road-markings.sql over a synthetic junction in a throwaway
  * schema: a divided avenue with a planted median, crossed by a signalled street.
+ * Then rebuilds part of it in place, queues it as a replication diff would and
+ * plans the rebuild, and builds one box into a database that has no road tables.
  *
- * Run: BARRELMAN_INTEGRATION_TESTS=1 DATABASE_URL=postgresql://barrelman:barrelman@localhost:5434/barrelman \
+ * Point it at a scratch database: the queue test uses the osm_replay schema
+ * that replicate-extract.sh uses.
+ *
+ * Run: BARRELMAN_INTEGRATION_TESTS=1 DATABASE_URL=postgresql://barrelman:barrelman@localhost:5434/scratch \
  *      bun test import/generate-road-markings.integration.test.ts
  */
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
@@ -27,9 +32,14 @@ const ways: [number, string, Record<string, string>][] = [
   [6, line([SB_X, STREET_Y], [NB_X, STREET_Y]), { highway: 'residential', lanes: '2' }],
   [7, line([NB_X, STREET_Y], [-73.999, STREET_Y]), { highway: 'residential', lanes: '2' }],
   [10, line([-74.002, 40.712], [-74.002, 40.714]), { highway: 'tertiary', 'overtaking': 'yes' }],
+  [11, line([-74.003, 40.712], [-74.003, 40.714]), { highway: 'service' }],
+  [12, line([-74.004, 40.712], [-74.004, 40.714]), { highway: 'service', lanes: '1' }],
   // A crossing drawn well past both kerbs, and askew to the street.
   [9, line([-74.0006, 40.70985], [-74.0004, 40.71015]), { highway: 'footway', footway: 'crossing', 'crossing:markings': 'zebra' }],
 ]
+
+// Every build drops the *_next tables by bare name too, scoped ones included.
+const GUARD_NEXT = 'CREATE TABLE road_surfaces_next (); CREATE TABLE road_markings_next (); CREATE TABLE road_glyphs_next ();'
 
 const run = DATABASE_URL ? describe : describe.skip
 let sql: postgres.Sql
@@ -38,18 +48,18 @@ run('generate-road-markings.sql', () => {
   beforeAll(async () => {
     sql = postgres(DATABASE_URL!, { max: 1, onnotice: () => {} })
     await sql.unsafe(`DROP SCHEMA IF EXISTS ${SCHEMA} CASCADE; CREATE SCHEMA ${SCHEMA}; SET search_path TO ${SCHEMA}, public;
-      CREATE TABLE geo_places (osm_id bigint, tags jsonb NOT NULL, geom geometry(Geometry, 4326) NOT NULL, geom_type text NOT NULL);
+      CREATE TABLE geo_places (id text, osm_id bigint, tags jsonb NOT NULL, geom geometry(Geometry, 4326) NOT NULL, geom_type text NOT NULL);
       -- The script drops these by bare name; without them here the drop would reach public's.
-      CREATE TABLE road_surfaces (); CREATE TABLE road_markings (); CREATE TABLE road_glyphs ();`)
+      CREATE TABLE road_surfaces (); CREATE TABLE road_markings (); CREATE TABLE road_glyphs (); ${GUARD_NEXT}`)
     for (const [id, wkt, tags] of ways) {
-      await sql`INSERT INTO geo_places VALUES (${id}, ${sql.json(tags)}, ST_GeomFromText(${wkt}, 4326), 'line')`
+      await sql`INSERT INTO geo_places VALUES (${'W' + id}, ${id}, ${sql.json(tags)}, ST_GeomFromText(${wkt}, 4326), 'line')`
     }
-    await sql`INSERT INTO geo_places VALUES (8, ${sql.json({ highway: 'traffic_signals' })}, ST_SetSRID(ST_MakePoint(${SB_X}, ${STREET_Y}), 4326), 'point')`
+    await sql`INSERT INTO geo_places VALUES ('N8', 8, ${sql.json({ highway: 'traffic_signals' })}, ST_SetSRID(ST_MakePoint(${SB_X}, ${STREET_Y}), 4326), 'point')`
     await sql.unsafe(readFileSync(join(import.meta.dir, 'generate-road-markings.sql'), 'utf8'))
   }, 60_000)
 
   afterAll(async () => {
-    await sql?.unsafe(`DROP SCHEMA IF EXISTS ${SCHEMA} CASCADE`)
+    await sql?.unsafe(`DROP SCHEMA IF EXISTS ${SCHEMA} CASCADE; DROP SCHEMA IF EXISTS osm_replay CASCADE`)
     await sql?.end()
   })
 
@@ -60,6 +70,11 @@ run('generate-road-markings.sql', () => {
     expect(await covered(SB_X, 40.7105)).toBe(true)
     expect(await covered(NB_X, 40.7105)).toBe(true)
     expect(await covered((SB_X + NB_X) / 2, 40.7105)).toBe(false)
+  })
+
+  test('paves a service road only where its lanes are mapped', async () => {
+    expect(await covered(-74.003, 40.713)).toBe(false)
+    expect(await covered(-74.004, 40.713)).toBe(true)
   })
 
   test('paves the crossing street through the median', async () => {
@@ -123,5 +138,114 @@ run('generate-road-markings.sql', () => {
       SELECT count(*)::int as n FROM road_markings
       WHERE kind IN ('lane', 'centre') AND ST_DWithin(geom::geography, ST_SetSRID(ST_MakePoint(${SB_X}, ${STREET_Y}), 4326)::geography, 3)`
     expect(n).toBe(0)
+  })
+
+  describe('rebuilding one box', () => {
+    const BOX = (sql: postgres.Sql) => sql`ST_MakeEnvelope(-74.0003, 40.7095, -73.9985, 40.7105, 4326)`
+    const footprint = async () => (await sql`
+      SELECT ST_Area(ST_Union(geom)::geography) as union_m2, sum(ST_Area(geom::geography)) as sum_m2 FROM road_surfaces`)[0]
+    let before: any
+
+    beforeAll(async () => {
+      before = await footprint()
+      await sql.unsafe(GUARD_NEXT)
+      await sql`TRUNCATE _rm_scope`
+      await sql`INSERT INTO _rm_scope VALUES (${BOX(sql)})`
+      await sql.unsafe(readFileSync(join(import.meta.dir, 'generate-road-markings.sql'), 'utf8'))
+    }, 60_000)
+
+    test('leaves the road surface whole, with nothing doubled at the box edge', async () => {
+      const after = await footprint()
+      expect(Math.abs(after.union_m2 - before.union_m2) / before.union_m2).toBeLessThan(0.01)
+      expect(Math.abs(after.sum_m2 - after.union_m2) / after.union_m2).toBeLessThan(0.01)
+    })
+
+    test('keeps the paint inside and outside the box', async () => {
+      const [{ inside, outside }] = await sql`
+        SELECT count(*) FILTER (WHERE ST_CoveredBy(geom, ${BOX(sql)}))::int as inside,
+               count(*) FILTER (WHERE NOT ST_Intersects(geom, ${BOX(sql)}))::int as outside
+        FROM road_markings`
+      expect(inside).toBeGreaterThan(0)
+      expect(outside).toBeGreaterThan(0)
+    })
+  })
+
+  describe('queueing a replication diff', () => {
+    const plan = async (maxCells: number) =>
+      sql.unsafe(readFileSync(join(import.meta.dir, 'road-markings-dirty-cells.sql'), 'utf8')
+        .replaceAll(':max_cells', String(maxCells)).replaceAll(':max_attempts', '3').replaceAll(':cell', '0.02'))
+    const rows = (result: any) => (Array.isArray(result.at(-1)) ? result.at(-1) : result) as { kind: string; a: string; b: string }[]
+
+    beforeAll(async () => {
+      await sql.unsafe(`DROP SCHEMA IF EXISTS osm_replay CASCADE; CREATE SCHEMA osm_replay;
+        CREATE TABLE osm_replay.old_places AS
+          SELECT id, 'W'::char(1) as osm_type, osm_id, NULL::text as name, NULL::text[] as categories, ST_Translate(geom, 0.05, 0) as geom, geom_type, NULL::int as admin_level
+          FROM geo_places WHERE id = 'W5';
+        -- A crossing deleted where its crosswalk is painted, a sidewalk away
+        -- from any, and a building: only the first matters to road markings.
+        INSERT INTO osm_replay.old_places (id, osm_type, osm_id, categories, geom, geom_type) VALUES
+          ('W98', 'W', 98, '{highway/footway}', ST_GeomFromText('LINESTRING(-74.0006 40.70985, -74.0004 40.71015)', 4326), 'line'),
+          ('W99', 'W', 99, '{highway/footway}', ST_GeomFromText('LINESTRING(-74.0035 40.7125, -74.0035 40.7135)', 4326), 'line'),
+          ('W97', 'W', 97, '{building/house}', ST_GeomFromText('POLYGON((-74.0005 40.7101, -74.0004 40.7101, -74.0004 40.7102, -74.0005 40.7101))', 4326), 'area');
+        CREATE TABLE osm_replay.changed AS SELECT id FROM geo_places WHERE id IN ('W5', 'N8');`)
+      await sql.unsafe(readFileSync(join(import.meta.dir, 'road-markings-queue-table.sql'), 'utf8'))
+      await sql.unsafe(readFileSync(join(import.meta.dir, 'queue-road-markings.sql'), 'utf8'))
+    })
+
+    test('queues the old and new outlines of what road markings are drawn from, and nothing else', async () => {
+      // W5 old and new, the signal N8, and the crossing W98.
+      const [{ n }] = await sql`SELECT count(*)::int as n FROM road_markings_dirty`
+      expect(n).toBe(4)
+    })
+
+    test('drops what lies where nothing was built, and plans the cells of the rest', async () => {
+      const out = rows(await plan(100))
+      const dropped = out.find(r => r.kind === 'dropped')!
+      // The old outline lies 0.05° east, where nothing was built.
+      expect(dropped.a).toBe('1')
+      expect(out.find(r => r.kind === 'entries')!.a.split(',')).toHaveLength(3)
+      const cells = out.filter(r => r.kind === 'cell')
+      expect(cells.length).toBeGreaterThan(0)
+      for (const c of cells) expect(Number(c.a) * 0.02).toBeLessThan(-73.98)
+      const [{ n }] = await sql`SELECT count(*)::int as n FROM road_markings_dirty`
+      expect(n).toBe(3)
+    })
+
+    test('always takes the oldest entry, however many cells it spans', async () => {
+      const entries = rows(await plan(1)).find(r => r.kind === 'entries')!.a.split(',')
+      const [{ oldest }] = await sql`SELECT min(id)::text as oldest FROM road_markings_dirty`
+      expect(entries).toContain(oldest)
+    })
+
+    test('takes a failed entry last', async () => {
+      const [{ oldest }] = await sql`SELECT min(id)::text as oldest FROM road_markings_dirty`
+      await sql`UPDATE road_markings_dirty SET attempts = 1 WHERE id = ${oldest}`
+      const [{ next }] = await sql`SELECT min(id)::text as next FROM road_markings_dirty WHERE attempts = 0`
+      const entries = rows(await plan(1)).find(r => r.kind === 'entries')!.a.split(',')
+      expect(entries).toContain(next)
+      await sql`UPDATE road_markings_dirty SET attempts = 3 WHERE id = ${oldest}`
+      expect(rows(await plan(100)).find(r => r.kind === 'dropped')!.b).toBe('1')
+    })
+  })
+
+  describe('a first scoped build', () => {
+    const BOX = 'ST_MakeEnvelope(-74.0003, 40.7095, -73.9985, 40.7105, 4326)'
+
+    beforeAll(async () => {
+      await sql.unsafe(`DROP TABLE road_surfaces, road_markings, road_glyphs; ${GUARD_NEXT}
+        TRUNCATE _rm_scope; INSERT INTO _rm_scope VALUES (${BOX});`)
+      await sql.unsafe(readFileSync(join(import.meta.dir, 'generate-road-markings.sql'), 'utf8'))
+    }, 60_000)
+
+    test('creates the live tables and fills only the box', async () => {
+      const [{ inside, outside }] = await sql.unsafe(`
+        SELECT count(*) FILTER (WHERE ST_CoveredBy(geom, ${BOX}))::int as inside,
+               count(*) FILTER (WHERE NOT ST_CoveredBy(geom, ${BOX}))::int as outside
+        FROM road_surfaces`)
+      expect(inside).toBeGreaterThan(0)
+      expect(outside).toBe(0)
+      const [{ n }] = await sql`SELECT count(*)::int as n FROM road_markings`
+      expect(n).toBeGreaterThan(0)
+    })
   })
 })

@@ -410,6 +410,7 @@ for, so a client drawing them has nowhere else to get them:
 | `road_surfaces` | polygon | 16 | Carriageways at their real width (from `width`, else `lanes` at a lane width per class), with kerb corners rounded where roads meet. `bridge` marks the ones above ground |
 | `road_markings` | line | 16 | Paint: `kind` is `centre`, `lane`, `edge`, `bike`, `stop` or `crosswalk`; `pattern` is `solid`, `dashed` or `double`; `color` is `white` or `yellow` (yellow centre lines in the Americas); a crosswalk's `style` is `zebra`, `lines` or `ladder` |
 | `road_glyphs` | point | 16 | Turn arrows from `turn:lanes`, bike symbols on bike lanes and sharrows on shared lanes: `glyph` names the sprite icon and `direction` the bearing it reads along |
+| `bridge_decks` | line | 14–16 | One line per bridge deck, whole in every tile it crosses: `id` (the deck, by where it lies and which way it runs), `bridge` (its `man_made=bridge` outline, its wikidata item, or where it lies), `kind` (`road`, `rail` or `path`), `layer`, `left_edge` and `right_edge` in metres from the centreline, whether each end lands on the ground (`start_grounded`, `end_grounded`), `heights` and `ground` every `step` metres along its `length`, and `piers` as distances along it, all in decimetres joined by commas, and `line`, the samples' exact positions (the first as lng,lat and each after as the step from the last, in 1e-7°), since a tile's own geometry is simplified differently at each zoom. Heights are metres above sea level as Mapterhorn gives them |
 | `object_areas` | polygon or point | 14–16 | Areas and points a client plants with objects: ground-mounted solar arrays and farms (`solar`), `flowerbed`, `scrub`, planted `shrubbery` (with its `shrubbery:shape` as `shape`), and single mapped `shrub`s. Rooftop solar is left out |
 | `woods` | polygon | 14–16 | Woods and forests tagged with `leaf_type` (or the legacy `wood=*`) or a genus, carrying a normalised `leaf_type` and `genus`. The feature id is the basemap landcover feature's own (OSM id × 10, plus 2 for a way and 3 for a relation), so a client looks up what a basemap wood holds by id |
 
@@ -428,7 +429,7 @@ curl "https://api.barrelman.dev/tiles/buildings_3d,parking_areas/14/4825/6156" -
 ```
 
 `detail` is `buildings_3d`, `parking_areas`, `bicycle_ways`, `street_trees`,
-`tree_rows`, `coaster_tracks`, `sport_pitches`, `object_lines`, `object_areas` the three road layers and `woods` — every overlay a client reads at z≤16. The response is one tile
+`tree_rows`, `coaster_tracks`, `sport_pitches`, `object_lines`, `object_areas` the three road layers, `bridge_decks` and `woods` — every overlay a client reads at z≤16. The response is one tile
 carrying each source as its own layer, named exactly as it is above, so a style
 that already draws them needs only its `source` changed.
 
@@ -477,8 +478,65 @@ The road layers are tables built by the "Build Road Markings" console task
 `lanes`, `lanes:forward`/`backward`, `lanes:both_ways`, `turn:lanes`, `width`,
 `cycleway:*` and `lane_markings`. Where one road continues into another with a
 different lane layout, the lines ease across over the MUTCD taper length for
-the road's speed rather than jumping at the join. It is not part of OSM Update
-yet: it takes minutes for a city and about a day for the whole US.
+the road's speed rather than jumping at the join. A full build takes minutes
+for a city and about two days for the whole US, so a large install builds it
+area by area: run the script in a session that first creates `_rm_scope` with
+one box in it, and only that box is rebuilt and merged into the live tables,
+meeting its neighbours without a seam. The first box creates the tables if
+there are none yet.
+
+```sql
+CREATE TEMP TABLE _rm_scope AS SELECT ST_MakeEnvelope(-81.0, 35.05, -80.65, 35.40, 4326) AS box;
+\i /app/import/generate-road-markings.sql
+```
+
+One build runs at a time, full or scoped: each holds an advisory lock, and one
+started meanwhile waits for it. A build sent as one transaction, as the console
+sends it or `psql -1` does, holds the lock for that transaction; one run
+statement by statement, as above, holds it until the file ends or psql exits.
+
+OSM Update can keep built areas current, but does not by default: turn on its
+"Update road markings" switch, or set `ROAD_MARKINGS_INCREMENTAL=1` for runs
+started from a shell. Leave it off while a large area is still being built.
+With it on, each replication cycle queues the old and new outlines of the
+roads, crossings and signals it touched (`road_markings_dirty`), and
+`scripts/update-road-markings.sh` rebuilds the 2 km cells they fall in where
+road markings exist, up to `ROAD_MARKINGS_MAX_CELLS` cells a run. Areas nobody
+built are dropped from the queue, and nothing is queued on a database that
+never built road markings. A cell that fails to build is logged and skipped,
+and tried again on the next two runs before it is given up. While a full build
+runs, the update leaves the queue for the next run instead of waiting. A
+failure here is reported and the rest of OSM Update carries on. Only a database
+without osm2pgsql's middle tables records what changed; one updated through
+`osm2pgsql-replication` needs a scoped rebuild by hand.
+
+`bridge_decks` is a table built by the "Build Bridge Decks" console task
+(`import/generate-bridge-decks.ts`), entirely by rule from OSM and the terrain,
+so it can be rebuilt whenever the map changes. It joins bridge ways that share
+an end into one line per roadway (only ways of one kind and `layer`, so stacked
+decks stay apart; where three meet, the straightest pair carries on), fits road
+decks to their `man_made=bridge` outline (else to `road_surfaces`) and folds
+sidewalks mapped beside them in. Each end that meets a road or railway on the
+ground lands on it; one that meets another deck rests on that deck. Between,
+the deck runs straight from end to end and rises over what it crosses — roads,
+railways, paths, waterways, water and lower decks, each with its own clearance
+— climbing no steeper than 6 % and eased into a vertical curve. Decks side by
+side at about one height share it, stacked decks keep their own, and piers
+stand every 30 m where a deck is 4 m up, in one row under twin carriageways.
+
+Ways are split and renumbered constantly, so a deck's `id` is where it lies
+and which way it runs, and its `bridge` the outline or wikidata item it
+belongs to, falling back to where it lies. The ground is Mapterhorn terrain at
+zoom 15, read as MapLibre reads it, in the terrain's own datum (NAVD88 in the
+US, EGM2008 elsewhere), so a deck lines up with the same terrain drawn; a
+client drawing other terrain can line a deck up by comparing `ground` with its
+own. A run fetches about one 90 KB terrain tile per 1.5 km² that has bridges;
+set `BRIDGE_DECKS_DEM_TILES` to read them from a mirror. It rebuilds by cell,
+in place, so it can be scoped with `--bbox` and stopped and resumed. Without
+`--bbox` it covers the areas of the regions `REGIONS` selects, each region's
+`bboxes` rather than one box around them. `REGIONS=global` is refused rather
+than read as the planet: building every bridge on Earth takes days, so start
+it deliberately, one `--bbox` at a time. It is not part of OSM Update yet.
 
 `buildings_3d`, `street_furniture` and `sport_pitches` are not plain views. OpenStreetMap maps a detailed
 building twice — an outline tagged `building=*` and `building:part=*` polygons
