@@ -10,6 +10,13 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Fixed
+
+* **Bikeshare feeds with numeric station ids import.** The GBFS spec makes
+  `station_id` a string, but some feeds send numbers. The importer failed on
+  them and stored no stations, and live availability, keyed by the raw id,
+  could never match a station stored as text. Both now treat the id as text.
+
 ## [0.10.5] - 2026-10-08
 
 ### Changed

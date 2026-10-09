@@ -387,7 +387,9 @@ async function refreshStationStatus(systemId: string): Promise<void> {
 
     const statusMap = new Map<string, StationStatusEntry>()
     for (const s of stationsData) {
-      statusMap.set(s.station_id, parseStationStatus(s, system.vehicleTypes))
+      // Keyed as text, like gbfs_stations.station_id it is looked up by: a feed
+      // that sends numeric ids would otherwise never match its stations.
+      statusMap.set(String(s.station_id), parseStationStatus(s, system.vehicleTypes))
     }
 
     // Cache with system-specific TTL

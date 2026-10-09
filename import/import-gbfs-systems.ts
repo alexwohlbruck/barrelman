@@ -208,7 +208,8 @@ for (const row of filtered) {
           const stations = stationData?.data?.stations ?? []
 
           for (const s of stations) {
-            const safeStationId = (s.station_id || '').replace(/'/g, "''")
+            // The spec says string, but some feeds send numbers.
+            const safeStationId = String(s.station_id ?? '').replace(/'/g, "''")
             const safeStationName = localizedText(s.name).replace(/'/g, "''")
             const stLat = s.lat ?? s.latitude
             const stLon = s.lon ?? s.longitude
