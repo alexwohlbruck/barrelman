@@ -10,6 +10,16 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Changed
+
+* **Road surfaces draw smooth curves and kerbs.** Curved roads mapped as a few
+  straight pieces are now rounded between their junctions. Kerb corners and
+  traffic island ends are true arcs, and the facets and notches are gone. The
+  `road_surfaces`, `road_markings` and `road_glyphs` sources are served at tile
+  extent 8192, so the lane geometry stays crisp when drawn past z16. To pick
+  this up, add `extent: 8192` to those three entries in your deployment's
+  `martin-config.yaml`, restart Martin, and run "Generate Road Markings" again.
+
 ## [0.10.9] - 2026-10-09
 
 ### Changed
