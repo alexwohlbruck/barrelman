@@ -393,6 +393,7 @@ postgres:
       maxzoom: 16
       properties:
         bridge: bridge
+        kind: kind
       extent: 8192
       buffer: 128
       clip_geom: true

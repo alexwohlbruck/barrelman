@@ -5,7 +5,8 @@
 -- plain fill, line and symbol layers:
 --
 --   road_surfaces   carriageways at their real width, with kerb corners
---                   rounded where roads meet
+--                   rounded where roads meet, and the islands turning loops
+--                   run round (`kind` 'island')
 --   road_markings   lines: centre, lane, edge, bike lane, stop and crosswalk,
 --                   each with a colour and a pattern
 --   road_glyphs     points: turn arrows, bike symbols and sharrows, each with
@@ -476,10 +477,10 @@ FROM split;
 -- the same transaction (a console build is one) is invisible to it.
 CREATE INDEX ON _rm_roads USING gist (g);
 CREATE INDEX ON _rm_roads (osm_id);
--- Curves drawn smooth. A vertex another road shares, or a crossing, signal or
--- stop sign stands on, is where junctions and paint are matched up, so it
--- stays where it was mapped. Bridges keep their mapped line: bridge decks are
--- fitted against it.
+-- Curves drawn smooth. A vertex another road shares, or a crossing, signal,
+-- stop sign or turning circle stands on, is where junctions and paint are
+-- matched up, so it stays where it was mapped. Bridges keep their mapped line:
+-- bridge decks are fitted against it.
 DROP TABLE IF EXISTS _rm_pins;
 CREATE TEMP TABLE _rm_pins AS
 SELECT round(ST_X(dp.geom)::numeric, 2) as x, round(ST_Y(dp.geom)::numeric, 2) as y
@@ -489,7 +490,7 @@ UNION
 SELECT round(ST_X(p)::numeric, 2), round(ST_Y(p)::numeric, 2)
 FROM (SELECT ST_Transform(geom, 3857) as p FROM geo_places
       WHERE geom && (SELECT area FROM _rm_area) AND geom_type = 'point'
-        AND tags->>'highway' IN ('crossing', 'traffic_signals', 'stop')) pts;
+        AND tags->>'highway' IN ('crossing', 'traffic_signals', 'stop', 'turning_circle', 'turning_loop')) pts;
 CREATE INDEX ON _rm_pins (x, y);
 ANALYZE _rm_pins;
 UPDATE _rm_roads r SET g = road_smooth(r.g, p.pins, 20 * r.s)
@@ -735,6 +736,63 @@ DELETE FROM _rm_crossings WHERE style IS NULL;
 CREATE INDEX ON _rm_crossings USING gist (g);
 ANALYZE _rm_crossings;
 
+-- ─── Turning circles ────────────────────────────────────────────────────────
+-- A round bulb of carriageway centred on the node, its radius half the tagged
+-- `diameter` (6 to 20 m), else 11 m on a street and 8 m on a service road, and
+-- never inside the road's own kerbs. The kerb flares into it on 8 m fillets
+-- rather than meeting it at a notch. A turning loop runs round an island left
+-- unpaved, the small area mapped under its node or else a disc 5.5 m inside a
+-- 14 m kerb. Nodes on a bridge or at a junction are left as they are.
+DROP TABLE IF EXISTS _rm_turns;
+CREATE TEMP TABLE _rm_turns AS
+WITH nodes AS MATERIALIZED (
+  SELECT ST_Transform(g.geom, 3857) as p, g.tags->>'highway' = 'turning_loop' as loop, road_metres(g.tags->>'diameter') as diameter,
+         -- The part holding the node, within 25 m of it all round: a long
+         -- strip or a far-flung multipolygon would pave a field.
+         CASE WHEN g.tags->>'highway' = 'turning_loop' THEN (
+           SELECT ST_CollectionExtract(ST_MakeValid(ST_Transform(d.geom, 3857)), 3)
+           FROM geo_places a, LATERAL (SELECT geom FROM ST_Dump(a.geom) WHERE ST_Contains(geom, g.geom) LIMIT 1) d
+           WHERE a.geom && g.geom AND a.geom_type = 'area' AND NOT a.tags ?| ARRAY['building', 'highway', 'area:highway', 'amenity']
+             AND ST_XMax(a.geom) - ST_XMin(a.geom) < 0.001 AND ST_YMax(a.geom) - ST_YMin(a.geom) < 0.001
+             AND ST_Area(a.geom::geography) < 1200
+             AND ST_MaxDistance(ST_Transform(d.geom, 3857), ST_Transform(g.geom, 3857)) < 25 / cos(radians(ST_Y(g.geom)))
+           ORDER BY ST_Area(a.geom), a.osm_type, a.osm_id LIMIT 1) END as mapped_island
+  FROM geo_places g
+  WHERE g.geom && (SELECT area FROM _rm_area) AND g.geom_type = 'point' AND g.tags->>'highway' IN ('turning_circle', 'turning_loop')
+),
+sized AS (
+  SELECT t.*, r.ids, r.s, r.width, r.edged, 8.0::float8 as fillet,
+         greatest(CASE WHEN t.diameter > 0 THEN least(greatest(t.diameter / 2, 6), 20)
+                       WHEN r.class = 'service' THEN 8 WHEN t.loop THEN 14 ELSE 11 END,
+                  ST_MaxDistance(t.p, t.mapped_island) / r.s + 5.5, r.width / 2 + 2) as radius
+  FROM nodes t
+  CROSS JOIN LATERAL (
+    SELECT array_agg(r.osm_id) as ids, max(r.s) as s, max(r.width) as width, bool_or(r.bridge) as bridge,
+           (array_agg(r.class ORDER BY road_rank(r.class) DESC, r.class))[1] as class,
+           bool_or(r.marked AND r.class IN ('motorway', 'motorway_link', 'trunk', 'trunk_link')) as edged
+    FROM _rm_roads r WHERE r.g && ST_Expand(t.p, 1) AND ST_DWithin(r.g, t.p, 0.05)
+  ) r
+  WHERE r.ids IS NOT NULL AND NOT r.bridge
+    AND NOT EXISTS (SELECT 1 FROM _rm_nodes n WHERE n.x = round(ST_X(t.p)::numeric, 2) AND n.y = round(ST_Y(t.p)::numeric, 2))
+)
+-- The bulb and its road closed over the fillet, kept within reach of the node.
+-- Paint ends where the kerb starts to flare: `paint_end` from the node.
+SELECT t.p, t.ids, t.s, t.edged, t.radius, (t.radius + 2 * t.fillet) * t.s as reach,
+       (sqrt(power(t.radius + t.fillet, 2) - power(t.width / 2 + t.fillet, 2)) + 2) * t.s as paint_end,
+       COALESCE(CASE WHEN NOT ST_IsEmpty(t.mapped_island) THEN t.mapped_island END, CASE WHEN t.loop AND t.radius - 5.5 >= 2.5 THEN ST_Buffer(t.p, (t.radius - 5.5) * t.s, 16) END) as island,
+       ST_Intersection(
+         ST_Buffer(ST_Buffer(ST_Union(u.road, ST_Buffer(t.p, t.radius * t.s, 16)), t.fillet * t.s, 'quad_segs=16'), -t.fillet * t.s, 'quad_segs=16'),
+         ST_Buffer(t.p, (t.radius + 2 * t.fillet) * t.s, 32)) as g
+FROM sized t
+CROSS JOIN LATERAL (
+  SELECT ST_Union(COALESCE(ST_Intersection(r.body, box), ST_Buffer(ST_Intersection(COALESCE(r.axis, r.g), box), r.width / 2 * r.s, r.cap))) as road
+  FROM _rm_roads r, LATERAL (SELECT ST_Expand(t.p, (t.radius + 2 * t.fillet) * t.s * 2) as box) b
+  WHERE r.osm_id = ANY (t.ids)
+) u;
+DELETE FROM _rm_turns WHERE g IS NULL OR ST_IsEmpty(g);
+CREATE INDEX ON _rm_turns USING gist (g);
+ANALYZE _rm_turns;
+
 -- ─── Surfaces ────────────────────────────────────────────────────────────────
 -- Each road widened to its carriageway, and at every vertex roads share, the
 -- corners between just those roads filled to a kerb radius. Rounding only
@@ -773,6 +831,11 @@ WITH cells AS (
        LATERAL (SELECT (r.width / 2 + abs(r.shift) + 15) * r.s as reach) m,
        generate_series(floor((ST_X(d.c) - m.reach) / 800)::int, floor((ST_X(d.c) + m.reach) / 800)::int) cx,
        generate_series(floor((ST_Y(d.c) - m.reach) / 800)::int, floor((ST_Y(d.c) + m.reach) / 800)::int) cy
+  UNION
+  SELECT cx, cy
+  FROM _rm_turns t,
+       generate_series(floor(ST_XMin(t.g) / 800)::int, floor(ST_XMax(t.g) / 800)::int) cx,
+       generate_series(floor(ST_YMin(t.g) / 800)::int, floor(ST_YMax(t.g) / 800)::int) cy
 ),
 boxes AS (
   SELECT cx, cy, ST_MakeEnvelope(cx * 800, cy * 800, (cx + 1) * 800, (cy + 1) * 800, 3857) as box FROM cells
@@ -785,6 +848,9 @@ pieces AS (
   UNION ALL
   SELECT b.cx, b.cy, b.box, f.bridge, f.g
   FROM boxes b JOIN _rm_fillets f ON f.g && b.box
+  UNION ALL
+  SELECT b.cx, b.cy, b.box, false, t.g
+  FROM boxes b JOIN _rm_turns t ON t.g && b.box
 )
 -- Rounded kerbs carry far more vertices than a tile can show; 3 cm is well
 -- under a pixel at any zoom the tiles are drawn at.
@@ -793,11 +859,22 @@ SELECT bridge, ST_CollectionExtract(ST_MakeValid(ST_Intersection(ST_CollectionEx
          ST_Simplify(ST_Union(g), 0.03 / cos(radians(ST_Y(ST_Transform(ST_Centroid(box), 4326)))))), 3), box)), 3)
 FROM pieces
 GROUP BY cx, cy, box, bridge;
-DELETE FROM _rm_surfaces WHERE ST_IsEmpty(g);
+-- Indexed before the update below, so a one-transaction build can still use it.
 CREATE INDEX ON _rm_surfaces USING gist (g);
+-- Turning loops ring their islands.
+UPDATE _rm_surfaces su SET g = ST_CollectionExtract(ST_Difference(su.g, i.g), 3)
+FROM (SELECT su2.ctid as row, ST_Union(t.island) as g
+      FROM _rm_turns t JOIN _rm_surfaces su2 ON su2.g && t.island AND NOT su2.bridge
+      WHERE t.island IS NOT NULL
+      GROUP BY su2.ctid) i
+WHERE su.ctid = i.row;
+DELETE FROM _rm_surfaces WHERE ST_IsEmpty(g);
 DROP TABLE IF EXISTS road_surfaces_next;
-CREATE TABLE road_surfaces_next (fid bigserial CONSTRAINT road_surfaces_next_pk PRIMARY KEY, bridge boolean, geom geometry(MultiPolygon, 4326));
+CREATE TABLE road_surfaces_next (fid bigserial CONSTRAINT road_surfaces_next_pk PRIMARY KEY, bridge boolean, kind text, geom geometry(MultiPolygon, 4326));
 INSERT INTO road_surfaces_next (bridge, geom) SELECT bridge, ST_Multi(ST_Transform(g, 4326)) FROM _rm_surfaces;
+-- An island is drawn over whatever the basemap runs into it.
+INSERT INTO road_surfaces_next (bridge, kind, geom)
+SELECT false, 'island', ST_Multi(ST_Transform(island, 4326)) FROM _rm_turns WHERE island IS NOT NULL;
 CREATE INDEX road_surfaces_next_geom_idx ON road_surfaces_next USING gist (geom);
 
 -- What lane lines break for besides crossing roads: the crosswalks over them,
@@ -811,6 +888,14 @@ FROM (
 ) cuts
 GROUP BY cx, cy;
 CREATE INDEX ON _rm_cuts USING gist (cut);
+-- Lane and centre lines stop short of a turning circle; edge lines run on round
+-- its kerb, so theirs are cut only where the kerb line around it takes over.
+DROP TABLE IF EXISTS _rm_turn_cuts;
+CREATE TEMP TABLE _rm_turn_cuts AS
+SELECT ids, ST_Buffer(p, paint_end, 16) as cut, false as edge FROM _rm_turns
+UNION ALL
+SELECT ids, ST_Buffer(p, reach - 0.5 * s, 32), true FROM _rm_turns WHERE edged;
+CREATE INDEX ON _rm_turn_cuts USING gist (cut);
 
 -- ─── Lane lines ──────────────────────────────────────────────────────────────
 -- Offsets are to the left of the way's direction. Backward lanes run on the
@@ -890,10 +975,17 @@ CROSS JOIN LATERAL (SELECT CASE
 CROSS JOIN LATERAL (
   SELECT ST_LineMerge(ST_CollectionExtract(COALESCE(ST_Difference(o.line, ST_Union(cut)), o.line), 2)) as clipped
   FROM (SELECT k.cut FROM _rm_cuts k WHERE k.cut && o.line
-        UNION ALL SELECT rc.cut FROM _rm_road_cuts rc WHERE rc.osm_id = l.osm_id) cuts
+        UNION ALL SELECT rc.cut FROM _rm_road_cuts rc WHERE rc.osm_id = l.osm_id
+        UNION ALL SELECT tc.cut FROM _rm_turn_cuts tc WHERE l.osm_id = ANY (tc.ids) AND tc.cut && o.line AND tc.edge = (l.kind = 'edge')) cuts
 ) c
 WHERE o.line IS NOT NULL AND NOT ST_IsEmpty(c.clipped)
   AND ST_Length(c.clipped) > 2 * l.s;
+
+-- Edge lines on round a turning circle's kerb.
+INSERT INTO road_markings_next (kind, pattern, color, bridge, geom)
+SELECT 'edge', 'solid', 'white', false, ST_Transform(ST_LineMerge(ST_CollectionExtract(
+         ST_Intersection(ST_Boundary(ST_Buffer(g, -0.3 * s, 'quad_segs=8')), ST_Buffer(p, reach - 0.5 * s, 32)), 2)), 4326)
+FROM _rm_turns WHERE edged;
 
 -- Coloured lanes: bike lanes green, bus lanes red, as bands of paint that
 -- stop where lane lines do.
@@ -923,7 +1015,8 @@ CROSS JOIN LATERAL (SELECT COALESCE(CASE
 CROSS JOIN LATERAL (
   SELECT ST_CollectionExtract(COALESCE(ST_Difference(o.band, ST_Union(cut)), o.band), 3) as clipped
   FROM (SELECT k.cut FROM _rm_cuts k WHERE k.cut && o.band
-        UNION ALL SELECT rc.cut FROM _rm_road_cuts rc WHERE rc.osm_id = b.osm_id) cuts
+        UNION ALL SELECT rc.cut FROM _rm_road_cuts rc WHERE rc.osm_id = b.osm_id
+        UNION ALL SELECT tc.cut FROM _rm_turn_cuts tc WHERE b.osm_id = ANY (tc.ids) AND tc.cut && o.band AND NOT tc.edge) cuts
 ) c
 WHERE o.band IS NOT NULL AND NOT ST_IsEmpty(c.clipped) AND ST_Area(c.clipped) > 4 * b.s * b.s;
 
@@ -1195,20 +1288,26 @@ GROUP BY w.style, w.seg;
 -- ─── Paint stays on the road ─────────────────────────────────────────────────
 -- Everything painted is cut to the carriageway it lies on, so a bar, a line or
 -- a symbol never runs past a kerb.
+-- Built in Web Mercator, a sliver brought back to degrees can cross itself,
+-- which GEOS refuses to cut.
+UPDATE road_surfaces_next SET geom = ST_Multi(ST_CollectionExtract(ST_MakeValid(geom), 3)) WHERE NOT ST_IsValid(geom);
+DELETE FROM road_surfaces_next WHERE ST_IsEmpty(geom);
+UPDATE road_markings_next SET geom = ST_CollectionExtract(ST_MakeValid(geom), 3) WHERE pattern = 'fill' AND NOT ST_IsValid(geom);
 UPDATE road_markings_next m SET geom = COALESCE(ST_CollectionExtract(clip.g, CASE WHEN m.pattern = 'fill' THEN 3 ELSE 2 END),
                                                  'GEOMETRYCOLLECTION EMPTY'::geometry)
 FROM (
   SELECT m2.fid, ST_Intersection(m2.geom, ST_Union(s.geom)) as g
   FROM road_markings_next m2
-  JOIN road_surfaces_next s ON s.geom && m2.geom AND (s.bridge = m2.bridge OR m2.kind = 'crosswalk')
+  JOIN road_surfaces_next s ON s.geom && m2.geom AND s.kind IS NULL AND (s.bridge = m2.bridge OR m2.kind = 'crosswalk')
   GROUP BY m2.fid, m2.geom
 ) clip
 WHERE m.fid = clip.fid;
 DELETE FROM road_markings_next m
 WHERE ST_IsEmpty(geom)
-   OR NOT EXISTS (SELECT 1 FROM road_surfaces_next s WHERE s.geom && m.geom AND (s.bridge = m.bridge OR m.kind = 'crosswalk'));
+   OR NOT EXISTS (SELECT 1 FROM road_surfaces_next s WHERE s.geom && m.geom AND s.kind IS NULL AND (s.bridge = m.bridge OR m.kind = 'crosswalk'));
 DELETE FROM road_glyphs_next g
-WHERE NOT EXISTS (SELECT 1 FROM road_surfaces_next s WHERE s.bridge = g.bridge AND ST_Intersects(s.geom, g.geom));
+WHERE EXISTS (SELECT 1 FROM _rm_turns t WHERE t.g && ST_Transform(g.geom, 3857) AND ST_DWithin(t.p, ST_Transform(g.geom, 3857), t.radius * t.s))
+   OR NOT EXISTS (SELECT 1 FROM road_surfaces_next s WHERE s.bridge = g.bridge AND s.kind IS NULL AND ST_Intersects(s.geom, g.geom));
 
 -- ─── Swap ────────────────────────────────────────────────────────────────────
 CREATE INDEX road_markings_next_geom_idx ON road_markings_next USING gist (geom);
@@ -1239,7 +1338,14 @@ BEGIN
   -- The first box on a database that never had a full build. Same shape as
   -- the swapped-in tables, so a later full build replaces them cleanly.
   CREATE TABLE IF NOT EXISTS road_surfaces (
-    fid bigserial CONSTRAINT road_surfaces_pkey PRIMARY KEY, bridge boolean, geom geometry(MultiPolygon, 4326));
+    fid bigserial CONSTRAINT road_surfaces_pkey PRIMARY KEY, bridge boolean, kind text, geom geometry(MultiPolygon, 4326));
+  -- Altered only when it lacks the column: even a no-op ALTER would lock tile
+  -- reads out of the table until this build commits.
+  IF NOT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = 'road_surfaces'::regclass AND attname = 'kind' AND NOT attisdropped) THEN
+    -- Fails the build rather than queue tile reads behind it.
+    PERFORM set_config('lock_timeout', '5s', true);
+    ALTER TABLE road_surfaces ADD COLUMN kind text;
+  END IF;
   CREATE TABLE IF NOT EXISTS road_markings (
     fid bigserial CONSTRAINT road_markings_pkey PRIMARY KEY, kind text, pattern text, color text, style text, bridge boolean,
     geom geometry(Geometry, 4326));
@@ -1260,8 +1366,8 @@ BEGIN
   DELETE FROM road_markings WHERE geom && box AND (geom @ box OR ST_IsEmpty(geom));
   DELETE FROM road_glyphs WHERE ST_Intersects(geom, box);
 
-  INSERT INTO road_surfaces (bridge, geom)
-  SELECT bridge, ST_Multi(road_clip(geom, box, true, 3)) FROM road_surfaces_next WHERE geom && box;
+  INSERT INTO road_surfaces (bridge, kind, geom)
+  SELECT bridge, kind, ST_Multi(road_clip(geom, box, true, 3)) FROM road_surfaces_next WHERE geom && box;
   INSERT INTO road_markings (kind, pattern, color, style, bridge, geom)
   SELECT kind, pattern, color, style, bridge, road_clip(geom, box, true, CASE WHEN pattern = 'fill' THEN 3 ELSE 2 END)
   FROM road_markings_next WHERE geom && box;
