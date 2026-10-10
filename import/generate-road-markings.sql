@@ -1288,6 +1288,11 @@ GROUP BY w.style, w.seg;
 -- ─── Paint stays on the road ─────────────────────────────────────────────────
 -- Everything painted is cut to the carriageway it lies on, so a bar, a line or
 -- a symbol never runs past a kerb.
+-- Built in Web Mercator, a sliver brought back to degrees can cross itself,
+-- which GEOS refuses to cut.
+UPDATE road_surfaces_next SET geom = ST_Multi(ST_CollectionExtract(ST_MakeValid(geom), 3)) WHERE NOT ST_IsValid(geom);
+DELETE FROM road_surfaces_next WHERE ST_IsEmpty(geom);
+UPDATE road_markings_next SET geom = ST_CollectionExtract(ST_MakeValid(geom), 3) WHERE pattern = 'fill' AND NOT ST_IsValid(geom);
 UPDATE road_markings_next m SET geom = COALESCE(ST_CollectionExtract(clip.g, CASE WHEN m.pattern = 'fill' THEN 3 ELSE 2 END),
                                                  'GEOMETRYCOLLECTION EMPTY'::geometry)
 FROM (
