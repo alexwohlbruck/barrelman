@@ -393,6 +393,7 @@ postgres:
       maxzoom: 16
       properties:
         bridge: bridge
+      extent: 8192
       buffer: 64
       clip_geom: true
 
@@ -442,6 +443,7 @@ postgres:
         color: color
         style: style
         bridge: bridge
+      extent: 8192
       buffer: 64
       clip_geom: true
 
@@ -458,6 +460,7 @@ postgres:
         glyph: glyph
         direction: direction
         bridge: bridge
+      extent: 8192
       buffer: 64
       clip_geom: true
 
