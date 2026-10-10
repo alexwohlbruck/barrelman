@@ -21,6 +21,12 @@ does it — and the release pipeline turns it into the GitHub Release notes.
   migrations (or a road markings build) have added the column, restart Martin,
   and run "Build Road Markings" again.
 
+### Fixed
+
+* **Road markings build where a sliver of paint crosses itself.** Paint brought
+  back from Web Mercator could come out self-crossing, which failed the whole
+  cell's build. It is now repaired before being cut to the road.
+
 ## [0.10.10] - 2026-10-10
 
 ### Changed
