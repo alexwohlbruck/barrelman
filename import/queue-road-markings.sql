@@ -48,13 +48,13 @@ BEGIN
     SELECT g.id, g.osm_id, g.geom
     FROM geo_places g
     JOIN osm_replay.changed c ON c.id = g.id
-    WHERE (g.geom_type = 'line' AND (road_is_marked_way(g.tags) OR g.tags->>'footway' = 'crossing'))
+    WHERE (g.geom_type = 'line' AND g.osm_type = 'W' AND (road_is_marked_way(g.tags) OR g.tags->>'footway' = 'crossing'))
        OR (g.geom_type = 'point' AND g.tags->>'highway' IN ('crossing', 'traffic_signals', 'stop'))
   ),
   touched AS (
     SELECT o.osm_id, o.geom
     FROM osm_replay.old_places o
-    WHERE (o.geom_type = 'line'
+    WHERE (o.geom_type = 'line' AND o.osm_type = 'W'
            AND (o.categories && ARRAY['highway/motorway', 'highway/motorway_link', 'highway/trunk', 'highway/trunk_link',
                                       'highway/primary', 'highway/primary_link', 'highway/secondary', 'highway/secondary_link',
                                       'highway/tertiary', 'highway/tertiary_link', 'highway/unclassified',
@@ -78,13 +78,13 @@ BEGIN
     FROM touched t, LATERAL (VALUES (ST_StartPoint(t.geom)), (ST_EndPoint(t.geom))) e(pt),
          LATERAL (
            SELECT g.osm_id, g.geom FROM geo_places g
-           WHERE g.geom && ST_Expand(e.pt, 1e-7) AND g.geom_type = 'line' AND road_is_marked_way(g.tags)
+           WHERE g.geom && ST_Expand(e.pt, 1e-7) AND g.geom_type = 'line' AND g.osm_type = 'W' AND road_is_marked_way(g.tags)
              AND g.osm_id <> t.osm_id
              AND (ST_DWithin(ST_StartPoint(g.geom), e.pt, 1e-7) OR ST_DWithin(ST_EndPoint(g.geom), e.pt, 1e-7))
          ) n
     WHERE GeometryType(t.geom) = 'LINESTRING'
       AND (SELECT count(*) FROM geo_places g
-           WHERE g.geom && ST_Expand(e.pt, 1e-7) AND g.geom_type = 'line' AND road_is_marked_way(g.tags)
+           WHERE g.geom && ST_Expand(e.pt, 1e-7) AND g.geom_type = 'line' AND g.osm_type = 'W' AND road_is_marked_way(g.tags)
              AND g.osm_id <> t.osm_id
              AND (ST_DWithin(ST_StartPoint(g.geom), e.pt, 1e-7) OR ST_DWithin(ST_EndPoint(g.geom), e.pt, 1e-7))) = 1
   ),
@@ -93,13 +93,13 @@ BEGIN
     FROM next1 t, LATERAL (VALUES (ST_StartPoint(t.geom)), (ST_EndPoint(t.geom))) e(pt),
          LATERAL (
            SELECT g.osm_id, g.geom FROM geo_places g
-           WHERE g.geom && ST_Expand(e.pt, 1e-7) AND g.geom_type = 'line' AND road_is_marked_way(g.tags)
+           WHERE g.geom && ST_Expand(e.pt, 1e-7) AND g.geom_type = 'line' AND g.osm_type = 'W' AND road_is_marked_way(g.tags)
              AND g.osm_id <> t.osm_id
              AND (ST_DWithin(ST_StartPoint(g.geom), e.pt, 1e-7) OR ST_DWithin(ST_EndPoint(g.geom), e.pt, 1e-7))
          ) n
     WHERE NOT EXISTS (SELECT 1 FROM touched x WHERE x.osm_id = n.osm_id)
       AND (SELECT count(*) FROM geo_places g
-           WHERE g.geom && ST_Expand(e.pt, 1e-7) AND g.geom_type = 'line' AND road_is_marked_way(g.tags)
+           WHERE g.geom && ST_Expand(e.pt, 1e-7) AND g.geom_type = 'line' AND g.osm_type = 'W' AND road_is_marked_way(g.tags)
              AND g.osm_id <> t.osm_id
              AND (ST_DWithin(ST_StartPoint(g.geom), e.pt, 1e-7) OR ST_DWithin(ST_EndPoint(g.geom), e.pt, 1e-7))) = 1
   )

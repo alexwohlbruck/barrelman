@@ -10,6 +10,38 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.10.10] - 2026-10-10
+
+### Changed
+
+* **Road surfaces draw smooth curves and kerbs.** Curved roads mapped as a few
+  straight pieces are now rounded between their junctions. Kerb corners and
+  traffic island ends are true arcs, and the facets and notches are gone. The
+  `road_surfaces`, `road_markings` and `road_glyphs` sources are served at tile
+  extent 8192, so the lane geometry stays crisp when drawn past z16. To pick
+  this up, set `extent: 8192` and `buffer: 128` on those three entries in your
+  deployment's `martin-config.yaml`, restart Martin, and run "Build Road
+  Markings" again, then "Build Bridge Decks", which reads the road surfaces.
+* **Power lines say when they are substation wiring.** `object_lines` now
+  carries a power line's `line` tag, so a client can draw busbars and bays on
+  low gantries rather than full-height towers.
+
+### Fixed
+
+* **Long elevated roads no longer ripple.** A deck's height is now one arch
+  over the ground and everything it crosses, rising no steeper than a road
+  may from the ends that land, so a viaduct over a street grid runs level
+  instead of dipping between streets. Twin carriageways stay at one height.
+* **Interchanges draw each roadway once.** A road is carried on through a
+  junction by its class and ref or name, not by whichever ramp leaves it
+  straighter; a deck no longer takes kerbs that belong to the carriageway
+  beside it; and a short sidewalk bridge widens its road's deck only where it
+  runs beside it. Before, decks could overlap and stand a few metres apart in
+  height. Run "Build Bridge Decks" again to rebuild existing decks.
+* **Road markings build where a route relation carries a highway tag.** Such a
+  relation was read as one road, and its gaps failed the cell's build. Road
+  markings now read ways only.
+
 ## [0.10.9] - 2026-10-09
 
 ### Changed

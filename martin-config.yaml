@@ -393,7 +393,8 @@ postgres:
       maxzoom: 16
       properties:
         bridge: bridge
-      buffer: 64
+      extent: 8192
+      buffer: 128
       clip_geom: true
 
     bridge_decks:
@@ -442,7 +443,8 @@ postgres:
         color: color
         style: style
         bridge: bridge
-      buffer: 64
+      extent: 8192
+      buffer: 128
       clip_geom: true
 
     road_glyphs:
@@ -458,7 +460,8 @@ postgres:
         glyph: glyph
         direction: direction
         bridge: bridge
-      buffer: 64
+      extent: 8192
+      buffer: 128
       clip_geom: true
 
     object_areas:
@@ -490,6 +493,7 @@ postgres:
         id: id
         kind: kind
         height: height
+        line: line
       buffer: 64
       clip_geom: true
 
