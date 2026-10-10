@@ -22,6 +22,9 @@ const SB_X = -74.0
 const NB_X = -73.9997
 const STREET_Y = 40.71
 
+// Two pieces with a gap between them: (-74.100, 40.713) to (-74.102, 40.716).
+const RELATION = 'MULTILINESTRING((-74.100 40.712, -74.100 40.713, -74.1005 40.7135), (-74.102 40.716, -74.102 40.717, -74.1025 40.7175))'
+
 const line = (...pts: [number, number][]) => `LINESTRING(${pts.map(p => p.join(' ')).join(', ')})`
 const ways: [number, string, Record<string, string>][] = [
   [1, line([SB_X, 40.711], [SB_X, STREET_Y]), { highway: 'trunk', oneway: 'yes', lanes: '3', 'turn:lanes': 'left|through|through' }],
@@ -87,13 +90,17 @@ run('generate-road-markings.sql', () => {
   beforeAll(async () => {
     sql = postgres(DATABASE_URL!, { max: 1, onnotice: () => {} })
     await sql.unsafe(`DROP SCHEMA IF EXISTS ${SCHEMA} CASCADE; CREATE SCHEMA ${SCHEMA}; SET search_path TO ${SCHEMA}, public;
-      CREATE TABLE geo_places (id text, osm_id bigint, tags jsonb NOT NULL, geom geometry(Geometry, 4326) NOT NULL, geom_type text NOT NULL);
+      CREATE TABLE geo_places (id text, osm_id bigint, tags jsonb NOT NULL, geom geometry(Geometry, 4326) NOT NULL, geom_type text NOT NULL,
+        osm_type char(1) NOT NULL DEFAULT 'W');
       -- The script drops these by bare name; without them here the drop would reach public's.
       CREATE TABLE road_surfaces (); CREATE TABLE road_markings (); CREATE TABLE road_glyphs (); ${GUARD_NEXT}`)
     for (const [id, wkt, tags] of ways) {
       await sql`INSERT INTO geo_places VALUES (${'W' + id}, ${id}, ${sql.json(tags)}, ST_GeomFromText(${wkt}, 4326), 'line')`
     }
-    await sql`INSERT INTO geo_places VALUES ('N8', 8, ${sql.json({ highway: 'traffic_signals' })}, ST_SetSRID(ST_MakePoint(${SB_X}, ${STREET_Y}), 4326), 'point')`
+    await sql`INSERT INTO geo_places VALUES ('N8', 8, ${sql.json({ highway: 'traffic_signals' })}, ST_SetSRID(ST_MakePoint(${SB_X}, ${STREET_Y}), 4326), 'point', 'N')`
+    // A route relation carrying a highway tag, stored as one line of its members.
+    await sql`INSERT INTO geo_places VALUES ('R90', 90, ${sql.json({ type: 'route', route: 'road', highway: 'secondary' })},
+      ST_GeomFromText(${RELATION}, 4326), 'line', 'R')`
     await sql.unsafe(readFileSync(join(import.meta.dir, 'generate-road-markings.sql'), 'utf8'))
   }, 60_000)
 
@@ -287,6 +294,19 @@ run('generate-road-markings.sql', () => {
     expect(corner).toBeGreaterThan(2)
     expect(corner).toBeLessThan(5)
     expect(bend).toBeLessThan(0.01)
+  })
+
+  test('leaves a smoothed line as it is unless it is one line with room to bend', async () => {
+    const [{ multi, tiny }] = await sql`
+      SELECT ST_Equals(road_smooth(${RELATION}::geometry, NULL, 20), ${RELATION}::geometry) as multi,
+             ST_NPoints(road_smooth('LINESTRING(0 0, 0.001 0, 0 0)'::geometry, NULL, 20)) >= 2 as tiny`
+    expect(multi).toBe(true)
+    expect(tiny).toBe(true)
+  })
+
+  test('draws ways only, not a route relation over them', async () => {
+    expect(await covered(-74.100, 40.7125)).toBe(false)
+    expect(await covered(-74.101, 40.7145)).toBe(false)
   })
 
   test('draws kerb corners as arcs, not a few facets', async () => {

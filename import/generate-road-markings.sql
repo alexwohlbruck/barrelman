@@ -124,7 +124,7 @@ DECLARE
   run geometry[] := pts[1:1];
   i int;
 BEGIN
-  IF n IS NULL OR n < 3 THEN RETURN line; END IF;
+  IF n IS NULL OR n < 3 OR GeometryType(line) <> 'LINESTRING' THEN RETURN line; END IF;
   FOR i IN 2..n LOOP
     run := run || pts[i];
     IF i = n OR (pins IS NOT NULL AND ST_DWithin(pts[i], pins, step * 1e-4)) THEN
@@ -134,6 +134,7 @@ BEGIN
       run := pts[i:i];
     END IF;
   END LOOP;
+  IF array_length(out, 1) < 2 THEN RETURN line; END IF;
   RETURN ST_SetSRID(ST_MakeLine(out), ST_SRID(line));
 EXCEPTION WHEN OTHERS THEN
   RETURN line;
@@ -354,7 +355,7 @@ CREATE TEMP TABLE _rm_source AS
 SELECT osm_id, tags, geom, true as local
 FROM geo_places
 WHERE EXISTS (SELECT 1 FROM _rm_scope)
-  AND geom_type = 'line' AND tags ? 'highway' AND geom && (SELECT area FROM _rm_area) AND road_is_marked_way(tags);
+  AND geom_type = 'line' AND osm_type = 'W' AND tags ? 'highway' AND geom && (SELECT area FROM _rm_area) AND road_is_marked_way(tags);
 CREATE INDEX ON _rm_source (osm_id);
 DO $$
 DECLARE
@@ -373,7 +374,7 @@ BEGIN
       SELECT DISTINCT ON (g.osm_id) g.osm_id, g.tags, g.geom, false
       FROM unnest(frontier) f(pt)
       JOIN geo_places g ON g.geom && ST_Expand(f.pt, 1e-7)
-       AND g.geom_type = 'line' AND g.tags ? 'highway'
+       AND g.geom_type = 'line' AND g.osm_type = 'W' AND g.tags ? 'highway'
        AND (ST_DWithin(ST_StartPoint(g.geom), f.pt, 1e-7) OR ST_DWithin(ST_EndPoint(g.geom), f.pt, 1e-7))
       WHERE road_is_marked_way(g.tags) AND NOT EXISTS (SELECT 1 FROM _rm_source x WHERE x.osm_id = g.osm_id)
       RETURNING geom
@@ -408,7 +409,7 @@ WITH raw AS (
                 WHEN tags->>'highway' IN ('tertiary', 'tertiary_link') THEN 35 ELSE 25 END) as mph,
          local
   FROM (SELECT osm_id, tags, geom, true as local FROM geo_places
-        WHERE NOT EXISTS (SELECT 1 FROM _rm_scope) AND geom_type = 'line' AND tags ? 'highway' AND road_is_marked_way(tags)
+        WHERE NOT EXISTS (SELECT 1 FROM _rm_scope) AND geom_type = 'line' AND osm_type = 'W' AND tags ? 'highway' AND road_is_marked_way(tags)
         UNION ALL
         SELECT osm_id, tags, geom, local FROM _rm_source) src
 ),
@@ -473,7 +474,8 @@ SELECT osm_id, local, class, g, s, americas, oneway, flip, tags, both_ways, mph,
 FROM split;
 -- Curves drawn smooth. A vertex another road shares, or a crossing, signal or
 -- stop sign stands on, is where junctions and paint are matched up, so it
--- stays where it was mapped.
+-- stays where it was mapped. Bridges keep their mapped line: bridge decks are
+-- fitted against it.
 DROP TABLE IF EXISTS _rm_pins;
 CREATE TEMP TABLE _rm_pins AS
 SELECT round(ST_X(dp.geom)::numeric, 2) as x, round(ST_Y(dp.geom)::numeric, 2) as y
@@ -483,15 +485,16 @@ UNION
 SELECT round(ST_X(p)::numeric, 2), round(ST_Y(p)::numeric, 2)
 FROM (SELECT ST_Transform(geom, 3857) as p FROM geo_places
       WHERE geom && (SELECT area FROM _rm_area) AND geom_type = 'point'
-        AND tags->>'highway' IN ('crossing', 'traffic_signals', 'stop', 'give_way')) pts;
+        AND tags->>'highway' IN ('crossing', 'traffic_signals', 'stop')) pts;
 CREATE INDEX ON _rm_pins (x, y);
+ANALYZE _rm_pins;
 UPDATE _rm_roads r SET g = road_smooth(r.g, p.pins, 20 * r.s)
 FROM (
   SELECT r2.osm_id, ST_Collect(dp.geom) FILTER (WHERE k.x IS NOT NULL) as pins
   FROM _rm_roads r2
   CROSS JOIN LATERAL ST_DumpPoints(r2.g) dp
   LEFT JOIN _rm_pins k ON k.x = round(ST_X(dp.geom)::numeric, 2) AND k.y = round(ST_Y(dp.geom)::numeric, 2)
-  WHERE ST_NPoints(r2.g) > 2
+  WHERE ST_NPoints(r2.g) > 2 AND NOT r2.bridge
   GROUP BY r2.osm_id
 ) p
 WHERE r.osm_id = p.osm_id;
@@ -784,8 +787,8 @@ pieces AS (
 -- Rounded kerbs carry far more vertices than a tile can show; 3 cm is well
 -- under a pixel at any zoom the tiles are drawn at.
 INSERT INTO _rm_surfaces (bridge, g)
-SELECT bridge, ST_CollectionExtract(ST_MakeValid(ST_Intersection(
-         ST_Simplify(ST_Union(g), 0.03 / cos(radians(ST_Y(ST_Transform(ST_Centroid(box), 4326))))), box)), 3)
+SELECT bridge, ST_CollectionExtract(ST_MakeValid(ST_Intersection(ST_CollectionExtract(ST_MakeValid(
+         ST_Simplify(ST_Union(g), 0.03 / cos(radians(ST_Y(ST_Transform(ST_Centroid(box), 4326)))))), 3), box)), 3)
 FROM pieces
 GROUP BY cx, cy, box, bridge;
 DELETE FROM _rm_surfaces WHERE ST_IsEmpty(g);
