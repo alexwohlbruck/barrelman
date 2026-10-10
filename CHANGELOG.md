@@ -10,6 +10,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.10.11] - 2026-10-10
+
 ### Added
 
 * **Turning circles and loops draw as round bulbs.** A `highway=turning_circle`
