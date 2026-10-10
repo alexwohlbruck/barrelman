@@ -45,7 +45,7 @@ export const CLEARANCE = { road: 6, rail: 8, path: 4, water: 4, deck: 6.5 } as c
 export const PIER_SPACING = 30
 export const PIER_MIN = 4
 /** Rounds of settling decks against the decks they rest on and run beside. */
-const SETTLE = 3
+const SETTLE = 2
 /** Most that easing moves two joined decks apart, in metres. */
 const EASED = 0.5
 /**

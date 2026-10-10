@@ -25,6 +25,18 @@ export const LOCK = [5393739, 1] as const
 /** Carriageway width when none is tagged, by lanes at a class's lane width. */
 const LANE: Record<string, number> = { motorway: 3.6, trunk: 3.6, motorway_link: 3.4, trunk_link: 3.4, primary: 3.4, service: 2.8 }
 
+/** Railways and waterways a deck clears, by tag; bridge_deck_class() in create-detail-views.sql names the railways too. */
+const UNDER: Array<[string, string]> = [
+  ...['rail', 'light_rail', 'subway', 'tram', 'narrow_gauge', 'monorail', 'preserved', 'funicular'].map(v => ['railway', v] as [string, string]),
+  ...['river', 'stream', 'canal', 'drain', 'ditch'].map(v => ['waterway', v] as [string, string]),
+]
+/** Water areas, by tag. */
+const WATER: Array<[string, string]> = [['natural', 'water'], ['waterway', 'riverbank'], ['landuse', 'reservoir']]
+
+/** Any of the tags, as containment tests geo_places' tag index answers. */
+const anyTag = (sql: Sql, pairs: Array<[string, string]>) =>
+  pairs.map(([k, v]) => sql`g.tags @> ${sql.json({ [k]: v })}`).reduce((a, b) => sql`${a} OR ${b}`)
+
 /** Decks per INSERT: one statement per batch rather than a round trip per deck. */
 const INSERT_BATCH = 500
 
@@ -65,11 +77,14 @@ export async function waysAround(sql: Sql, [w, s, e, n]: Bbox): Promise<Row[]> {
   const margin = 0.01
   const rows: Row[] = await sql`${bridgeWays(sql)} WHERE geom && ST_MakeEnvelope(${w - margin}, ${s - margin}, ${e + margin}, ${n + margin}, 4326) AND ${isBridge(sql)}`
   const seen = new Set(rows.map(r => r.id))
+  // Ends already looked beyond: each round asks only about the ends the last one opened.
+  const asked = new Set<string>()
   for (let round = 0; round < 100; round++) {
     const degree = new Map<string, number>()
     for (const r of rows) for (const c of [r.coords[0], r.coords[r.coords.length - 1]]) degree.set(c.join(','), (degree.get(c.join(',')) ?? 0) + 1)
-    const open = [...degree].filter(([, d]) => d === 1).map(([k]) => k.split(',').map(Number))
+    const open = [...degree].filter(([k, d]) => d === 1 && !asked.has(k)).map(([k]) => k.split(',').map(Number))
     if (!open.length) break
+    for (const c of open) asked.add(c.join(','))
     const found: Row[] = await sql`
       SELECT DISTINCT ON (b.id) b.* FROM unnest(${open.map(c => c[0])}::float8[], ${open.map(c => c[1])}::float8[]) AS o(lng, lat)
       CROSS JOIN LATERAL (${bridgeWays(sql)}
@@ -102,10 +117,12 @@ export async function inputFor(sql: Sql, rows: Row[]): Promise<DeckInput> {
     return mercator(lng, lat).join(',')
   }))
 
+  // Outlines are rare: found by their tag's index, then the box.
   const outlineRows: Array<{ id: string; coords: number[][][][] }> = await sql`
     SELECT (CASE osm_type WHEN 'W' THEN 'way/' ELSE 'relation/' END) || osm_id AS id,
            ST_AsGeoJSON(ST_Multi(geom))::json->'coordinates' AS coords
-    FROM geo_places WHERE geom_type = 'area' AND geom && ${box} AND tags->>'man_made' = 'bridge'`
+    FROM geo_places WHERE tags @> '{"man_made": "bridge"}' AND geom_type = 'area' AND geom && ${box}
+    ORDER BY osm_type, osm_id`
   const outlines = outlineRows.flatMap(o => o.coords.map(rings => ({ id: o.id, rings: rings.map(ring => ring.map(([lng, lat]) => mercator(lng, lat))) })))
 
   const [{ surfaces }] = await sql`SELECT to_regclass('road_surfaces') IS NOT NULL AS surfaces`
@@ -114,20 +131,30 @@ export async function inputFor(sql: Sql, rows: Row[]): Promise<DeckInput> {
         SELECT ST_DumpPoints(geom) AS dp FROM road_surfaces WHERE bridge AND geom && ${box}) d`).map(r => mercator(r.lng, r.lat))
     : []
 
+  // Roads a deck passes over cross one of its ways, so only those are read, by
+  // each way cut into short pieces on the road lines' own index: a deck
+  // followed across a city spans a box holding tens of thousands of roads.
+  // Railways, waterways and water are few enough to find by their tags' index.
+  const ids = rows.map(r => r.id)
+  const crossable = sql`g.geom_type = 'line' AND COALESCE(g.tags->>'bridge', 'no') = 'no' AND COALESCE(g.tags->>'tunnel', 'no') = 'no'
+      AND COALESCE(g.tags->>'location', '') NOT IN ('underground', 'underwater')`
   const crossedRows: Array<{ kind: Crossed['kind']; coords: number[][][] }> = await sql`
-    SELECT CASE WHEN tags ? 'waterway' THEN 'water' ELSE bridge_deck_class(tags) END AS kind,
-           ST_AsGeoJSON(ST_Multi(geom))::json->'coordinates' AS coords
-    FROM geo_places
-    WHERE geom_type = 'line' AND geom && ${box} AND COALESCE(tags->>'bridge', 'no') = 'no' AND COALESCE(tags->>'tunnel', 'no') = 'no'
-      AND COALESCE(tags->>'location', '') NOT IN ('underground', 'underwater')
-      AND (bridge_deck_class(tags) IS NOT NULL OR tags->>'waterway' IN ('river', 'stream', 'canal', 'drain', 'ditch'))`
+    WITH pieces AS MATERIALIZED (
+      SELECT ST_Subdivide(geom, 8) AS piece FROM geo_places WHERE osm_type = 'W' AND osm_id = ANY(${ids}::bigint[]) AND geom_type = 'line')
+    SELECT DISTINCT ON (g.osm_type, g.osm_id) bridge_deck_class(g.tags) AS kind, ST_AsGeoJSON(ST_Multi(g.geom))::json->'coordinates' AS coords
+    FROM pieces JOIN geo_places g ON g.geom && piece AND ST_Intersects(g.geom, piece)
+    WHERE g.tags ? 'highway' AND ${crossable} AND bridge_deck_class(g.tags) IS NOT NULL
+    UNION ALL
+    SELECT CASE WHEN g.tags ? 'waterway' THEN 'water' ELSE bridge_deck_class(g.tags) END, ST_AsGeoJSON(ST_Multi(g.geom))::json->'coordinates'
+    FROM geo_places g
+    WHERE (${anyTag(sql, UNDER)}) AND g.geom && ${box} AND NOT g.tags ? 'highway' AND ${crossable}`
   const crossed = crossedRows.flatMap(r => r.coords.map(line => ({ kind: r.kind, points: line.map(([lng, lat]) => mercator(lng, lat)) })))
 
+  // Clipped to the box rather than intersected with it: a river is one huge
+  // polygon, and only whether a deck's samples lie in it is asked.
   const waterRows: Array<{ coords: number[][][][] }> = await sql`
-    SELECT ST_AsGeoJSON(ST_Multi(ST_CollectionExtract(ST_Intersection(geom, ${box}), 3)))::json->'coordinates' AS coords
-    FROM geo_places
-    WHERE geom_type = 'area' AND geom && ${box}
-      AND (tags->>'natural' = 'water' OR tags->>'waterway' = 'riverbank' OR tags->>'landuse' = 'reservoir')`
+    SELECT ST_AsGeoJSON(ST_Multi(ST_CollectionExtract(ST_ClipByBox2D(g.geom, ${box}), 3)))::json->'coordinates' AS coords
+    FROM geo_places g WHERE (${anyTag(sql, WATER)}) AND g.geom_type = 'area' AND g.geom && ${box}`
   const water = waterRows.flatMap(r => (r.coords ?? []).map(polygon => polygon[0].map(([lng, lat]) => mercator(lng, lat))))
 
   const wikidata = new Map(rows.flatMap(r => (r.wikidata ? [[Number(r.id), r.wikidata] as [number, string]] : [])))
