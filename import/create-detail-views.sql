@@ -265,7 +265,9 @@ CREATE INDEX IF NOT EXISTS street_furniture_centroid_idx ON street_furniture USI
 -- electrified track. A closed barrier is stored as an area and comes through
 -- as its polygon, so the client walks its ring; serving ST_Boundary instead
 -- would hide the geometry from the tile envelope's index. `height` is the
--- tagged height in metres where there is one.
+-- tagged height in metres where there is one. `line` is a power line's own
+-- `line` tag, where `busbar` and `bay` mark wiring inside a substation, which
+-- stands on low gantries rather than towers.
 DROP VIEW IF EXISTS object_lines CASCADE;
 CREATE VIEW object_lines AS
 SELECT (osm_id * 4 + CASE osm_type WHEN 'N' THEN 0 WHEN 'W' THEN 1 ELSE 2 END) as fid,
@@ -276,7 +278,8 @@ SELECT (osm_id * 4 + CASE osm_type WHEN 'N' THEN 0 WHEN 'W' THEN 1 ELSE 2 END) a
          WHEN tags ? 'railway' THEN 'catenary'
          ELSE tags->>'barrier'
        END as kind,
-       substring(tags->>'height' from '^[0-9]+(?:\.[0-9]+)?')::real as height
+       substring(tags->>'height' from '^[0-9]+(?:\.[0-9]+)?')::real as height,
+       CASE WHEN tags ? 'power' THEN tags->>'line' END as line
 FROM geo_places
 WHERE geom_type IN ('line', 'area')
   AND (tags->>'barrier' IN ('fence', 'wall', 'retaining_wall', 'hedge', 'guard_rail', 'city_wall')
