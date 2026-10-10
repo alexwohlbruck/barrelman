@@ -20,6 +20,9 @@ does it — and the release pipeline turns it into the GitHub Release notes.
   this up, set `extent: 8192` and `buffer: 128` on those three entries in your
   deployment's `martin-config.yaml`, restart Martin, and run "Build Road
   Markings" again, then "Build Bridge Decks", which reads the road surfaces.
+* **Power lines say when they are substation wiring.** `object_lines` now
+  carries a power line's `line` tag, so a client can draw busbars and bays on
+  low gantries rather than full-height towers.
 
 ### Fixed
 
