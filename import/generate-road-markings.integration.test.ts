@@ -76,6 +76,14 @@ const ways: [number, string, Record<string, string>][] = [
   [26, line([-74.007, 40.7145], [-74.007, 40.715]), { highway: 'residential', lanes: '2' }],
   // A street mapped as two straight legs meeting at a right angle.
   [70, line([-74.0907, 40.7140], [-74.0900, 40.7140], [-74.0900, 40.7145]), { highway: 'residential' }],
+  // Cul-de-sacs ending in a turning circle, one with a tagged diameter, a
+  // turning loop, and one ending on a cell boundary at 40.718.
+  [80, line([-74.120, 40.712], [-74.120, 40.713]), { highway: 'residential', lanes: '2' }],
+  [81, line([-74.125, 40.712], [-74.125, 40.713]), { highway: 'residential', lanes: '2' }],
+  [82, line([-74.130, 40.712], [-74.130, 40.713]), { highway: 'residential' }],
+  [84, line([-74.135, 40.712], [-74.135, 40.713]), { highway: 'residential' }],
+  [85, line([-74.140, 40.712], [-74.140, 40.713]), { highway: 'residential' }],
+  [83, line([-74.026, 40.717], [-74.026, 40.718]), { highway: 'residential' }],
   // A crossing drawn well past both kerbs, and askew to the street.
   [9, line([-74.0006, 40.70985], [-74.0004, 40.71015]), { highway: 'footway', footway: 'crossing', 'crossing:markings': 'zebra' }],
 ]
@@ -98,6 +106,24 @@ run('generate-road-markings.sql', () => {
       await sql`INSERT INTO geo_places VALUES (${'W' + id}, ${id}, ${sql.json(tags)}, ST_GeomFromText(${wkt}, 4326), 'line')`
     }
     await sql`INSERT INTO geo_places VALUES ('N8', 8, ${sql.json({ highway: 'traffic_signals' })}, ST_SetSRID(ST_MakePoint(${SB_X}, ${STREET_Y}), 4326), 'point', 'N')`
+    const turns: [string, number, number, Record<string, string>][] = [
+      ['N80', -74.120, 40.713, { highway: 'turning_circle' }],
+      ['N81', -74.125, 40.713, { highway: 'turning_circle', diameter: '30' }],
+      ['N82', -74.130, 40.713, { highway: 'turning_loop' }],
+      ['N83', -74.026, 40.718, { highway: 'turning_circle' }],
+      ['N84', -74.135, 40.713, { highway: 'turning_loop' }],
+      ['N85', -74.140, 40.713, { highway: 'turning_loop' }],
+    ]
+    for (const [id, x, y, tags] of turns) {
+      await sql`INSERT INTO geo_places VALUES (${id}, ${Number(id.slice(1))}, ${sql.json(tags)}, ST_SetSRID(ST_MakePoint(${x}, ${y}), 4326), 'point', 'N')`
+    }
+    // Under N84 a grass strip 3 m wide and 300 m long; under N85 a ring that crosses itself.
+    const [sx, sy] = [-74.135, 40.713]
+    await sql`INSERT INTO geo_places VALUES ('W86', 86, ${sql.json({ landuse: 'grass' })},
+      ST_MakeEnvelope(${sx - 1.5 / 84300}, ${sy - 150 / 111050}, ${sx + 1.5 / 84300}, ${sy + 150 / 111050}, 4326), 'area')`
+    const pt = (dx: number, dy: number) => `${east(-74.140, dx)} ${north(40.713, dy)}`
+    await sql`INSERT INTO geo_places VALUES ('W87', 87, ${sql.json({ landuse: 'grass' })},
+      ST_GeomFromText(${`POLYGON((${[[-6, -6], [6, -6], [6, 6], [-6, 6], [-6, 0], [-3, -9], [-6, -6]].map(([x, y]) => pt(x, y)).join(', ')}))`}, 4326), 'area')`
     // A route relation carrying a highway tag, stored as one line of its members.
     await sql`INSERT INTO geo_places VALUES ('R90', 90, ${sql.json({ type: 'route', route: 'road', highway: 'secondary' })},
       ST_GeomFromText(${RELATION}, 4326), 'line', 'R')`
@@ -110,7 +136,7 @@ run('generate-road-markings.sql', () => {
   })
 
   const covered = async (x: number, y: number) =>
-    (await sql`SELECT EXISTS (SELECT 1 FROM road_surfaces WHERE ST_Intersects(geom, ST_SetSRID(ST_MakePoint(${x}, ${y}), 4326))) as hit`)[0].hit
+    (await sql`SELECT EXISTS (SELECT 1 FROM road_surfaces WHERE kind IS NULL AND ST_Intersects(geom, ST_SetSRID(ST_MakePoint(${x}, ${y}), 4326))) as hit`)[0].hit
 
   test('paves each carriageway but leaves the median between them open', async () => {
     expect(await covered(SB_X, 40.7105)).toBe(true)
@@ -327,6 +353,89 @@ run('generate-road-markings.sql', () => {
     expect(sharpest).toBeLessThan(18)
   })
 
+  // Metres north of a latitude near 40.71°N.
+  const north = (y: number, m: number) => y + m / 111050
+  const kerbTurns = (x: number, y: number, within: number) => sql`
+    WITH ring AS (
+      SELECT d.geom as p, d.path
+      FROM (SELECT ST_Union(ST_Transform(geom, 3857)) as g FROM road_surfaces
+            WHERE ST_DWithin(geom::geography, ST_SetSRID(ST_MakePoint(${x}, ${y}), 4326)::geography, ${within + 20})) s,
+           ST_DumpPoints(ST_Boundary(s.g)) d
+    ), turns AS (
+      SELECT p, degrees(abs(atan2(sin(a2 - a1), cos(a2 - a1)))) as turn
+      FROM (SELECT p, ST_Azimuth(lag(p) OVER w, p) as a1, ST_Azimuth(p, lead(p) OVER w) as a2 FROM ring
+            WINDOW w AS (PARTITION BY path[1:array_length(path, 1) - 1] ORDER BY path[array_length(path, 1)])) t
+      WHERE a1 IS NOT NULL AND a2 IS NOT NULL
+    )
+    SELECT max(turn) as sharpest, count(*)::int as n FROM turns
+    WHERE ST_DWithin(ST_Transform(p, 4326)::geography, ST_SetSRID(ST_MakePoint(${x}, ${y}), 4326)::geography, ${within})`
+
+  describe('a turning circle', () => {
+    const [X, Y] = [-74.120, 40.713]
+
+    test('paves a round bulb 11 m across the end of the street', async () => {
+      for (const [dx, dy] of [[10.5, 0], [-10.5, 0], [0, 10.5], [7.3, 7.3], [-7.3, 7.3]]) {
+        expect(await covered(east(X, dx), north(Y, dy))).toBe(true)
+      }
+      for (const [dx, dy] of [[11.6, 0], [-11.6, 0], [0, 11.6], [8.3, 8.3]]) {
+        expect(await covered(east(X, dx), north(Y, dy))).toBe(false)
+      }
+    })
+
+    test('draws its kerb as one smooth curve, flaring into the street without a notch', async () => {
+      // Where the street's kerb meets the circle, and just outside both.
+      expect(await covered(east(X, 3.5), north(Y, -11))).toBe(true)
+      expect(await covered(east(X, -3.5), north(Y, -11))).toBe(true)
+      expect(await covered(east(X, 3.5), north(Y, -30))).toBe(false)
+      const [{ sharpest, n }] = await kerbTurns(X, Y, 25)
+      expect(n).toBeGreaterThan(40)
+      expect(sharpest).toBeLessThan(12)
+    })
+
+    test('takes its size from a tagged diameter', async () => {
+      expect(await covered(east(-74.125, 14.5), 40.713)).toBe(true)
+      expect(await covered(east(-74.125, 15.5), 40.713)).toBe(false)
+    })
+
+    test('ends the lane lines before it, and puts no stop line or arrow in it', async () => {
+      const [{ inside, before }] = await sql`
+        SELECT count(*) FILTER (WHERE ST_DWithin(geom::geography, ST_SetSRID(ST_MakePoint(${X}, ${Y}), 4326)::geography, 12))::int as inside,
+               count(*) FILTER (WHERE kind = 'centre' AND ST_DWithin(geom::geography, ST_SetSRID(ST_MakePoint(${X}, ${north(Y, -40)}), 4326)::geography, 1))::int as before
+        FROM road_markings WHERE ST_DWithin(geom::geography, ST_SetSRID(ST_MakePoint(${X}, ${Y}), 4326)::geography, 60)`
+      expect(before).toBe(1)
+      expect(inside).toBe(0)
+      const [{ glyphs }] = await sql`
+        SELECT count(*)::int as glyphs FROM road_glyphs
+        WHERE ST_DWithin(geom::geography, ST_SetSRID(ST_MakePoint(${X}, ${Y}), 4326)::geography, 12)`
+      expect(glyphs).toBe(0)
+    })
+
+    test('leaves a turning loop\'s island unpaved, and marks it to be drawn over the road running into it', async () => {
+      const [{ island }] = await sql`
+        SELECT ST_Area(geom::geography) as island FROM road_surfaces
+        WHERE kind = 'island' AND ST_Intersects(geom, ST_SetSRID(ST_MakePoint(-74.130, 40.713), 4326))`
+      expect(island).toBeGreaterThan(Math.PI * 8 * 8)
+      expect(island).toBeLessThan(Math.PI * 9 * 9)
+      expect(await covered(-74.130, 40.713)).toBe(false)
+      expect(await covered(east(-74.130, 6), 40.713)).toBe(false)
+      expect(await covered(east(-74.130, 11), 40.713)).toBe(true)
+      expect(await covered(-74.130, north(40.713, 11))).toBe(true)
+      expect(await covered(east(-74.130, 15), 40.713)).toBe(false)
+    })
+  })
+
+  test('reads a long strip under a turning loop as no island, rather than paving round it', async () => {
+    const [{ island }] = await sql`
+      SELECT ST_Area(geom::geography) as island FROM road_surfaces
+      WHERE kind = 'island' AND ST_Intersects(geom, ST_SetSRID(ST_MakePoint(-74.135, 40.713), 4326))`
+    expect(island).toBeLessThan(Math.PI * 9 * 9)
+    expect(await covered(-74.135, north(40.713, 40))).toBe(false)
+  })
+
+  test('builds round an island mapped as an invalid polygon', async () => {
+    expect(await covered(east(-74.140, 11), 40.713)).toBe(true)
+  })
+
   describe('rebuilding one box', () => {
     const BOX = (sql: postgres.Sql) => sql`ST_MakeEnvelope(-74.0003, 40.7095, -73.9985, 40.7105, 4326)`
     const footprint = async () => (await sql`
@@ -335,6 +444,8 @@ run('generate-road-markings.sql', () => {
 
     beforeAll(async () => {
       before = await footprint()
+      // As on a database last built before islands.
+      await sql`ALTER TABLE road_surfaces DROP COLUMN kind`
       await sql.unsafe(GUARD_NEXT)
       await sql`TRUNCATE _rm_scope`
       await sql`INSERT INTO _rm_scope VALUES (${BOX(sql)})`
@@ -345,6 +456,12 @@ run('generate-road-markings.sql', () => {
       const after = await footprint()
       expect(Math.abs(after.union_m2 - before.union_m2) / before.union_m2).toBeLessThan(0.01)
       expect(Math.abs(after.sum_m2 - after.union_m2) / after.union_m2).toBeLessThan(0.01)
+    })
+
+    test('gives live tables built before islands their column', async () => {
+      const [{ ok }] = await sql`SELECT to_regclass('road_surfaces') IS NOT NULL AND EXISTS (
+        SELECT 1 FROM pg_attribute WHERE attrelid = 'road_surfaces'::regclass AND attname = 'kind') as ok`
+      expect(ok).toBe(true)
     })
 
     test('keeps the paint inside and outside the box', async () => {
@@ -432,6 +549,18 @@ run('generate-road-markings.sql', () => {
       }
     })
 
+    test('build a turning circle on their boundary whole, once', async () => {
+      for (const [dx, dy] of [[10.5, 0], [-10.5, 0], [0, 10.5], [0, -5]]) {
+        expect(await covered(east(-74.026, dx), north(40.718, dy))).toBe(true)
+      }
+      const [{ union_m2, sum_m2 }] = await sql`
+        SELECT ST_Area(ST_Union(geom)::geography) as union_m2, sum(ST_Area(geom::geography)) as sum_m2
+        FROM road_surfaces WHERE geom && ST_MakeEnvelope(-74.0265, 40.7175, -74.0255, 40.7185, 4326)`
+      expect(Math.abs(sum_m2 - union_m2) / union_m2).toBeLessThan(0.01)
+      const [{ sharpest }] = await kerbTurns(-74.026, 40.718, 25)
+      expect(sharpest).toBeLessThan(12)
+    })
+
     test('meet without a gap or an overlap', async () => {
       const [{ union_m2, sum_m2 }] = await sql`
         SELECT ST_Area(ST_Union(geom)::geography) as union_m2, sum(ST_Area(geom::geography)) as sum_m2
@@ -496,6 +625,32 @@ run('generate-road-markings.sql', () => {
       expect(entries).toContain(next)
       await sql`UPDATE detail_dirty SET attempts = 3 WHERE id = ${oldest}`
       expect(rows(await plan(100)).find(r => r.kind === 'dropped')!.b).toBe('1')
+    })
+  })
+
+  describe('a turning circle moved', () => {
+    beforeAll(async () => {
+      await sql.unsafe(`DROP SCHEMA IF EXISTS osm_replay CASCADE; CREATE SCHEMA osm_replay;
+        CREATE TABLE osm_replay.old_places AS
+          SELECT id, 'N'::char(1) as osm_type, osm_id, NULL::text as name, '{highway/turning_circle}'::text[] as categories,
+                 ST_Translate(geom, 0.004, 0) as geom, geom_type, NULL::int as admin_level
+          FROM geo_places WHERE id = 'N80';
+        CREATE TABLE osm_replay.changed AS SELECT id FROM geo_places WHERE id = 'N80';`)
+      await sql`DELETE FROM detail_dirty`
+      await sql.unsafe(readFileSync(join(import.meta.dir, 'queue-road-markings.sql'), 'utf8'))
+    })
+
+    afterAll(async () => {
+      await sql`DELETE FROM detail_dirty`
+    })
+
+    test('queues where it was and where it is', async () => {
+      const [{ was, is }] = await sql`
+        SELECT count(*) FILTER (WHERE ST_Intersects(box, ST_SetSRID(ST_MakePoint(-74.116, 40.713), 4326)))::int as was,
+               count(*) FILTER (WHERE ST_Intersects(box, ST_SetSRID(ST_MakePoint(-74.120, 40.713), 4326)))::int as is
+        FROM detail_dirty WHERE layer = 'road_markings'`
+      expect(was).toBe(1)
+      expect(is).toBe(1)
     })
   })
 
