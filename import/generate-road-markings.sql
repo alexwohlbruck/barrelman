@@ -747,11 +747,16 @@ DROP TABLE IF EXISTS _rm_turns;
 CREATE TEMP TABLE _rm_turns AS
 WITH nodes AS MATERIALIZED (
   SELECT ST_Transform(g.geom, 3857) as p, g.tags->>'highway' = 'turning_loop' as loop, road_metres(g.tags->>'diameter') as diameter,
+         -- The part holding the node, within 25 m of it all round: a long
+         -- strip or a far-flung multipolygon would pave a field.
          CASE WHEN g.tags->>'highway' = 'turning_loop' THEN (
-           SELECT ST_Transform(a.geom, 3857) FROM geo_places a
-           WHERE a.geom && g.geom AND a.geom_type = 'area' AND NOT a.tags ?| ARRAY['building', 'highway', 'area:highway']
-             AND ST_XMax(a.geom) - ST_XMin(a.geom) < 0.001 AND ST_Contains(a.geom, g.geom) AND ST_Area(a.geom::geography) < 1200
-           ORDER BY ST_Area(a.geom) LIMIT 1) END as mapped_island
+           SELECT ST_CollectionExtract(ST_MakeValid(ST_Transform(d.geom, 3857)), 3)
+           FROM geo_places a, LATERAL (SELECT geom FROM ST_Dump(a.geom) WHERE ST_Contains(geom, g.geom) LIMIT 1) d
+           WHERE a.geom && g.geom AND a.geom_type = 'area' AND NOT a.tags ?| ARRAY['building', 'highway', 'area:highway', 'amenity']
+             AND ST_XMax(a.geom) - ST_XMin(a.geom) < 0.001 AND ST_YMax(a.geom) - ST_YMin(a.geom) < 0.001
+             AND ST_Area(a.geom::geography) < 1200
+             AND ST_MaxDistance(ST_Transform(d.geom, 3857), ST_Transform(g.geom, 3857)) < 25 / cos(radians(ST_Y(g.geom)))
+           ORDER BY ST_Area(a.geom), a.osm_type, a.osm_id LIMIT 1) END as mapped_island
   FROM geo_places g
   WHERE g.geom && (SELECT area FROM _rm_area) AND g.geom_type = 'point' AND g.tags->>'highway' IN ('turning_circle', 'turning_loop')
 ),
@@ -763,7 +768,7 @@ sized AS (
   FROM nodes t
   CROSS JOIN LATERAL (
     SELECT array_agg(r.osm_id) as ids, max(r.s) as s, max(r.width) as width, bool_or(r.bridge) as bridge,
-           (array_agg(r.class ORDER BY road_rank(r.class) DESC))[1] as class,
+           (array_agg(r.class ORDER BY road_rank(r.class) DESC, r.class))[1] as class,
            bool_or(r.marked AND r.class IN ('motorway', 'motorway_link', 'trunk', 'trunk_link')) as edged
     FROM _rm_roads r WHERE r.g && ST_Expand(t.p, 1) AND ST_DWithin(r.g, t.p, 0.05)
   ) r
@@ -774,7 +779,7 @@ sized AS (
 -- Paint ends where the kerb starts to flare: `paint_end` from the node.
 SELECT t.p, t.ids, t.s, t.edged, t.radius, (t.radius + 2 * t.fillet) * t.s as reach,
        (sqrt(power(t.radius + t.fillet, 2) - power(t.width / 2 + t.fillet, 2)) + 2) * t.s as paint_end,
-       COALESCE(t.mapped_island, CASE WHEN t.loop AND t.radius - 5.5 >= 2.5 THEN ST_Buffer(t.p, (t.radius - 5.5) * t.s, 16) END) as island,
+       COALESCE(CASE WHEN NOT ST_IsEmpty(t.mapped_island) THEN t.mapped_island END, CASE WHEN t.loop AND t.radius - 5.5 >= 2.5 THEN ST_Buffer(t.p, (t.radius - 5.5) * t.s, 16) END) as island,
        ST_Intersection(
          ST_Buffer(ST_Buffer(ST_Union(u.road, ST_Buffer(t.p, t.radius * t.s, 16)), t.fillet * t.s, 'quad_segs=16'), -t.fillet * t.s, 'quad_segs=16'),
          ST_Buffer(t.p, (t.radius + 2 * t.fillet) * t.s, 32)) as g
@@ -854,13 +859,16 @@ SELECT bridge, ST_CollectionExtract(ST_MakeValid(ST_Intersection(ST_CollectionEx
          ST_Simplify(ST_Union(g), 0.03 / cos(radians(ST_Y(ST_Transform(ST_Centroid(box), 4326)))))), 3), box)), 3)
 FROM pieces
 GROUP BY cx, cy, box, bridge;
+-- Indexed before the update below, so a one-transaction build can still use it.
+CREATE INDEX ON _rm_surfaces USING gist (g);
 -- Turning loops ring their islands.
 UPDATE _rm_surfaces su SET g = ST_CollectionExtract(ST_Difference(su.g, i.g), 3)
-FROM (SELECT su2.ctid as row, ST_Union(t.island) as g FROM _rm_surfaces su2 JOIN _rm_turns t ON t.island && su2.g AND NOT su2.bridge
+FROM (SELECT su2.ctid as row, ST_Union(t.island) as g
+      FROM _rm_turns t JOIN _rm_surfaces su2 ON su2.g && t.island AND NOT su2.bridge
+      WHERE t.island IS NOT NULL
       GROUP BY su2.ctid) i
 WHERE su.ctid = i.row;
 DELETE FROM _rm_surfaces WHERE ST_IsEmpty(g);
-CREATE INDEX ON _rm_surfaces USING gist (g);
 DROP TABLE IF EXISTS road_surfaces_next;
 CREATE TABLE road_surfaces_next (fid bigserial CONSTRAINT road_surfaces_next_pk PRIMARY KEY, bridge boolean, kind text, geom geometry(MultiPolygon, 4326));
 INSERT INTO road_surfaces_next (bridge, geom) SELECT bridge, ST_Multi(ST_Transform(g, 4326)) FROM _rm_surfaces;
@@ -1293,7 +1301,7 @@ DELETE FROM road_markings_next m
 WHERE ST_IsEmpty(geom)
    OR NOT EXISTS (SELECT 1 FROM road_surfaces_next s WHERE s.geom && m.geom AND s.kind IS NULL AND (s.bridge = m.bridge OR m.kind = 'crosswalk'));
 DELETE FROM road_glyphs_next g
-WHERE EXISTS (SELECT 1 FROM _rm_turns t WHERE ST_DWithin(t.p, ST_Transform(g.geom, 3857), t.radius * t.s))
+WHERE EXISTS (SELECT 1 FROM _rm_turns t WHERE t.g && ST_Transform(g.geom, 3857) AND ST_DWithin(t.p, ST_Transform(g.geom, 3857), t.radius * t.s))
    OR NOT EXISTS (SELECT 1 FROM road_surfaces_next s WHERE s.bridge = g.bridge AND s.kind IS NULL AND ST_Intersects(s.geom, g.geom));
 
 -- ─── Swap ────────────────────────────────────────────────────────────────────
@@ -1329,6 +1337,8 @@ BEGIN
   -- Altered only when it lacks the column: even a no-op ALTER would lock tile
   -- reads out of the table until this build commits.
   IF NOT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = 'road_surfaces'::regclass AND attname = 'kind' AND NOT attisdropped) THEN
+    -- Fails the build rather than queue tile reads behind it.
+    PERFORM set_config('lock_timeout', '5s', true);
     ALTER TABLE road_surfaces ADD COLUMN kind text;
   END IF;
   CREATE TABLE IF NOT EXISTS road_markings (

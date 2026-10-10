@@ -81,6 +81,8 @@ const ways: [number, string, Record<string, string>][] = [
   [80, line([-74.120, 40.712], [-74.120, 40.713]), { highway: 'residential', lanes: '2' }],
   [81, line([-74.125, 40.712], [-74.125, 40.713]), { highway: 'residential', lanes: '2' }],
   [82, line([-74.130, 40.712], [-74.130, 40.713]), { highway: 'residential' }],
+  [84, line([-74.135, 40.712], [-74.135, 40.713]), { highway: 'residential' }],
+  [85, line([-74.140, 40.712], [-74.140, 40.713]), { highway: 'residential' }],
   [83, line([-74.026, 40.717], [-74.026, 40.718]), { highway: 'residential' }],
   // A crossing drawn well past both kerbs, and askew to the street.
   [9, line([-74.0006, 40.70985], [-74.0004, 40.71015]), { highway: 'footway', footway: 'crossing', 'crossing:markings': 'zebra' }],
@@ -109,10 +111,19 @@ run('generate-road-markings.sql', () => {
       ['N81', -74.125, 40.713, { highway: 'turning_circle', diameter: '30' }],
       ['N82', -74.130, 40.713, { highway: 'turning_loop' }],
       ['N83', -74.026, 40.718, { highway: 'turning_circle' }],
+      ['N84', -74.135, 40.713, { highway: 'turning_loop' }],
+      ['N85', -74.140, 40.713, { highway: 'turning_loop' }],
     ]
     for (const [id, x, y, tags] of turns) {
       await sql`INSERT INTO geo_places VALUES (${id}, ${Number(id.slice(1))}, ${sql.json(tags)}, ST_SetSRID(ST_MakePoint(${x}, ${y}), 4326), 'point', 'N')`
     }
+    // Under N84 a grass strip 3 m wide and 300 m long; under N85 a ring that crosses itself.
+    const [sx, sy] = [-74.135, 40.713]
+    await sql`INSERT INTO geo_places VALUES ('W86', 86, ${sql.json({ landuse: 'grass' })},
+      ST_MakeEnvelope(${sx - 1.5 / 84300}, ${sy - 150 / 111050}, ${sx + 1.5 / 84300}, ${sy + 150 / 111050}, 4326), 'area')`
+    const pt = (dx: number, dy: number) => `${east(-74.140, dx)} ${north(40.713, dy)}`
+    await sql`INSERT INTO geo_places VALUES ('W87', 87, ${sql.json({ landuse: 'grass' })},
+      ST_GeomFromText(${`POLYGON((${[[-6, -6], [6, -6], [6, 6], [-6, 6], [-6, 0], [-3, -9], [-6, -6]].map(([x, y]) => pt(x, y)).join(', ')}))`}, 4326), 'area')`
     // A route relation carrying a highway tag, stored as one line of its members.
     await sql`INSERT INTO geo_places VALUES ('R90', 90, ${sql.json({ type: 'route', route: 'road', highway: 'secondary' })},
       ST_GeomFromText(${RELATION}, 4326), 'line', 'R')`
@@ -411,6 +422,18 @@ run('generate-road-markings.sql', () => {
       expect(await covered(-74.130, north(40.713, 11))).toBe(true)
       expect(await covered(east(-74.130, 15), 40.713)).toBe(false)
     })
+  })
+
+  test('reads a long strip under a turning loop as no island, rather than paving round it', async () => {
+    const [{ island }] = await sql`
+      SELECT ST_Area(geom::geography) as island FROM road_surfaces
+      WHERE kind = 'island' AND ST_Intersects(geom, ST_SetSRID(ST_MakePoint(-74.135, 40.713), 4326))`
+    expect(island).toBeLessThan(Math.PI * 9 * 9)
+    expect(await covered(-74.135, north(40.713, 40))).toBe(false)
+  })
+
+  test('builds round an island mapped as an invalid polygon', async () => {
+    expect(await covered(east(-74.140, 11), 40.713)).toBe(true)
   })
 
   describe('rebuilding one box', () => {
