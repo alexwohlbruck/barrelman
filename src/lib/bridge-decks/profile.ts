@@ -58,7 +58,7 @@ export const LAYER_CLEARANCE = 6
 /** Length of the level stretch kept over what a deck crosses, so easing it does not cut the clearance, in metres. */
 export const CURVE = 24
 /** Length of the vertical curve a deck's grades are eased into, in metres. */
-export const VERTICAL_CURVE = 60
+export const VERTICAL_CURVE = 90
 /** Metres each side of a sample whose ground is read together, so a lone tree, mast or stray pixel does not lift a deck. */
 export const GROUND_SPAN = 12
 /** Farthest an outline point may lie from a deck's centreline and still be its edge, in metres. */
