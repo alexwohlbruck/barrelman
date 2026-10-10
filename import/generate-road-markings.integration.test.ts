@@ -71,6 +71,8 @@ const ways: [number, string, Record<string, string>][] = [
   [24, line([-74.007, 40.7145], [-74.006, 40.7145]), { highway: 'residential', lanes: '2', 'cycleway:both': 'lane' }],
   [25, line([-74.007, 40.714], [-74.007, 40.7145]), { highway: 'residential', lanes: '2' }],
   [26, line([-74.007, 40.7145], [-74.007, 40.715]), { highway: 'residential', lanes: '2' }],
+  // A street mapped as two straight legs meeting at a right angle.
+  [70, line([-74.0907, 40.7140], [-74.0900, 40.7140], [-74.0900, 40.7145]), { highway: 'residential' }],
   // A crossing drawn well past both kerbs, and askew to the street.
   [9, line([-74.0006, 40.70985], [-74.0004, 40.71015]), { highway: 'footway', footway: 'crossing', 'crossing:markings': 'zebra' }],
 ]
@@ -263,6 +265,28 @@ run('generate-road-markings.sql', () => {
       SELECT count(*)::int as n FROM road_markings
       WHERE kind IN ('lane', 'centre') AND ST_DWithin(geom::geography, ST_SetSRID(ST_MakePoint(${SB_X}, ${STREET_Y}), 4326)::geography, 3)`
     expect(n).toBe(0)
+  })
+
+  test('rounds a bend mapped as a sharp corner', async () => {
+    // Just outside the corner the two legs make, and inside it.
+    expect(await covered(east(-74.0900, 1.5), 40.7140 - 1.5 / 111000)).toBe(false)
+    expect(await covered(east(-74.0900, -4), 40.7140 + 4 / 111000)).toBe(true)
+  })
+
+  test('smooths a way between the vertices it is pinned at, and keeps those', async () => {
+    const [{ ends, pinned, corner, bend }] = await sql`
+      WITH l AS (SELECT 'LINESTRING(0 0, 100 0, 100 100, 200 100)'::geometry as g),
+           s AS (SELECT road_smooth(g, 'MULTIPOINT((100 100))'::geometry, 20) as g FROM l)
+      SELECT ST_Equals(ST_StartPoint(s.g), 'POINT(0 0)') AND ST_Equals(ST_EndPoint(s.g), 'POINT(200 100)') as ends,
+             ST_Intersects(s.g, 'POINT(100 100)'::geometry) as pinned,
+             ST_Distance(s.g, 'POINT(100 0)'::geometry) as corner,
+             ST_Distance(s.g, 'POINT(50 0)'::geometry) as bend
+      FROM s`
+    expect(ends).toBe(true)
+    expect(pinned).toBe(true)
+    expect(corner).toBeGreaterThan(2)
+    expect(corner).toBeLessThan(5)
+    expect(bend).toBeLessThan(0.01)
   })
 
   describe('rebuilding one box', () => {
