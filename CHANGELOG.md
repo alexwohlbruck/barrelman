@@ -10,8 +10,6 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
-### Added
-
 ### Changed
 
 * **Bridge decks follow their hand-drawn outlines.** Where a bridge has a
@@ -21,7 +19,11 @@ does it — and the release pipeline turns it into the GitHub Release notes.
   carry this as `left_edges`, `right_edges` and `caps` (`format` 2); rebuild
   bridge decks to fill them in.
 
-### Fixed
+* **Road markings line up the way roads are painted.** Through lanes now line up
+  across a junction, with turn bays to their side. A road gaining or losing a
+  lane widens on that side only. Ways tagged `placement` sit where the tag says.
+  Crosswalk bars run with the traffic they cross. A bike lane that carries on
+  past a junction is painted across it in green dashes.
 
 ## [0.10.8] - 2026-10-09
 
