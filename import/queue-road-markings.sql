@@ -8,9 +8,10 @@
 -- moved in. scripts/update-road-markings.sh works the queue off later.
 --
 -- Only what generate-road-markings.sql reads is queued: the road classes it
--- paves, crossings, and signal and stop nodes. old_places keeps categories, not
--- tags, so an old service road or footway counts only where it was drawn: a
--- service road on a paved surface, a footway under a painted crosswalk.
+-- paves, crossings, and signal, stop and turning circle nodes. old_places
+-- keeps categories, not tags, so an old service road or footway counts only
+-- where it was drawn: a service road on a paved surface, a footway under a
+-- painted crosswalk.
 -- Without those, every alley and sidewalk edit in a built city would queue a
 -- rebuild.
 --
@@ -49,7 +50,7 @@ BEGIN
     FROM geo_places g
     JOIN osm_replay.changed c ON c.id = g.id
     WHERE (g.geom_type = 'line' AND g.osm_type = 'W' AND (road_is_marked_way(g.tags) OR g.tags->>'footway' = 'crossing'))
-       OR (g.geom_type = 'point' AND g.tags->>'highway' IN ('crossing', 'traffic_signals', 'stop'))
+       OR (g.geom_type = 'point' AND g.tags->>'highway' IN ('crossing', 'traffic_signals', 'stop', 'turning_circle', 'turning_loop'))
   ),
   touched AS (
     SELECT o.osm_id, o.geom
@@ -64,7 +65,8 @@ BEGIN
                                 WHERE s.geom && o.geom AND ST_Intersects(s.geom, ST_PointOnSurface(o.geom))))
                 OR (o.categories && ARRAY['highway/footway', 'highway/path', 'highway/cycleway']
                     AND EXISTS (SELECT 1 FROM road_markings m WHERE m.geom && o.geom AND m.kind = 'crosswalk'))))
-       OR (o.geom_type = 'point' AND o.categories && ARRAY['highway/crossing', 'highway/traffic_signals', 'highway/stop'])
+       OR (o.geom_type = 'point' AND o.categories && ARRAY['highway/crossing', 'highway/traffic_signals', 'highway/stop',
+                                                           'highway/turning_circle', 'highway/turning_loop'])
        OR o.id IN (SELECT id FROM relevant_new)
     UNION ALL
     SELECT osm_id, geom FROM relevant_new
