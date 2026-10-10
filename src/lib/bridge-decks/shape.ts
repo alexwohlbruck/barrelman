@@ -8,7 +8,7 @@
  * between them, and a deck that lands on the ground ends where its outline
  * does, at whatever skew the abutment was drawn.
  */
-import { along, beside, box, covers, inside, MAX_REACH, meet, metresPerUnit, type Box, type Chain, type Point } from './profile'
+import { along, beside, box, covers, inside, MAX_REACH, meet, metresPerUnit, nearSegments, type Box, type Chain, type Point } from './profile'
 
 export type Outline = { id: string; rings: Point[][] }
 
@@ -71,6 +71,9 @@ function cross(o: Point, dir: Point, lines: Point[][], skip?: Set<Point>): { met
 
 /** Metres along a ray to the nearest place it crosses one of the lines; Infinity if it crosses none. */
 export const rayHit = (o: Point, dir: Point, lines: Point[][], skip?: Set<Point>) => cross(o, dir, lines, skip).metres
+
+/** Farthest a neighbour's centreline may lie and still narrow a side, beyond its own half width: twice MAX_REACH. */
+const NEIGHBOUR_REACH = 2 * MAX_REACH
 
 /** Least cosine between a deck and a neighbour that shares its room: within about 35 degrees, not one crossing over or under. */
 const ALONGSIDE = 0.82
@@ -176,10 +179,15 @@ export function shapeDecks(decks: Deck[], outlines: Outline[], grounded: Array<[
         reached[side][i] = boundary >= deck.edges[side] - CORNER_INSET
         let edge = boundary
         for (const o of others) {
-          const { metres: gap, segment, start } = cross(pts[i], dir, o.lines)
-          if (!start || gap >= edge || Math.abs(segment[0] * t[0] + segment[1] * t[1]) < ALONGSIDE) continue
+          // A neighbour farther off than this can narrow no side below MAX_REACH.
+          const close = o.lines.flatMap(line => nearSegments(line, pts[i], NEIGHBOUR_REACH + Math.max(...o.edges)).map(j => [line[j - 1], line[j]]))
+          if (!close.length) continue
+          const { metres: gap, segment, start } = cross(pts[i], dir, close)
+          if (!start || Math.abs(segment[0] * t[0] + segment[1] * t[1]) < ALONGSIDE) continue
           // The neighbour's side facing this deck, so two decks' edges meet exactly between them.
           const facing = segment[0] * (pts[i][1] - start[1]) - segment[1] * (pts[i][0] - start[0]) > 0 ? 0 : 1
+          // One beyond the outline still splits the room if its own carriageway reaches back into it.
+          if (gap - o.edges[facing] >= edge) continue
           edge = Math.min(edge, (gap + deck.edges[side] - o.edges[facing]) / 2)
         }
         sides[side][i] = Math.max(deck.edges[side], Math.min(edge, MAX_REACH))

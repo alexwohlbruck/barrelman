@@ -26,6 +26,8 @@ import {
   resample,
   smooth,
   solve,
+  steady,
+  widen,
   type Chain,
   type Need,
   type Point,
@@ -42,6 +44,10 @@ export const CLEARANCE = { road: 6, rail: 8, path: 4, water: 4, deck: 6.5 } as c
 /** Distance between piers, and the least height of deck over ground that has them, in metres. */
 export const PIER_SPACING = 30
 export const PIER_MIN = 4
+/** Rounds of settling decks against the decks they rest on and run beside. */
+const SETTLE = 2
+/** Most that easing moves two joined decks apart, in metres. */
+const EASED = 0.5
 /**
  * Decks whose terrain is loaded at once. Few enough that their tiles fit the
  * terrain cache, so a dense cell never holds every tile it touches.
@@ -113,11 +119,11 @@ function fitted(decks: Chain[], outlines: Outline[], kerbs: Point[]): Fitted[] {
   for (const { id, rings } of outlines) {
     const mine = out.filter(d => d.kind === 'road' && !d.outline && inOutline(d.points, rings))
     if (!mine.length) continue
-    const fit = fitEdges(mine, rings.flat())
+    const fit = fitEdges(mine, rings.flat(), decks)
     out = out.map(d => (mine.includes(d) ? { ...d, fit: fit[mine.indexOf(d)].edges, outline: id } : d))
   }
   const loose = out.filter(d => d.kind === 'road' && !d.outline)
-  const fit = fitEdges(loose, kerbs)
+  const fit = fitEdges(loose, kerbs, decks)
   return out.map(d => (loose.includes(d) ? { ...fit[loose.indexOf(d)], outline: null } : d))
 }
 
@@ -163,6 +169,8 @@ type Solved = {
   z: number[]
   grounded: [boolean, boolean]
   needs: Need[]
+  /** The decks its ends rest on, and where. */
+  on: Array<{ deck: Solved; at: Point }>
   /** The deck's own ends and OSM nodes, before resampling, so ends that share a node can be told apart from ends that merely lie close. */
   ends: [Point, Point]
   nodes: Set<string>
@@ -175,9 +183,9 @@ function needs(s: Pick<Solved, 'chain' | 'd' | 'g'>, input: DeckInput, below: So
   const own = box(s.chain.points)
   for (const c of input.crossed)
     if (meet(own, box(c.points)))
-      for (const at of crossings(s.chain.points, c.points, reach)) out.push({ at, height: heightAt(s.d, s.g, at) + CLEARANCE[c.kind] })
+      for (const at of crossings(s.chain.points, c.points, reach, s.d)) out.push({ at, height: heightAt(s.d, s.g, at) + CLEARANCE[c.kind] })
   for (const lower of below.filter(o => meet(own, box(o.chain.points))))
-    for (const at of crossings(s.chain.points, lower.chain.points, reach)) {
+    for (const at of crossings(s.chain.points, lower.chain.points, reach, s.d)) {
       const p = s.chain.points[Math.min(s.chain.points.length - 1, Math.round(at / STEP))]
       const near = beside(lower.chain.points, p)
       const z = heightAt(lower.d, lower.z, lower.d[near.segment - 1] + (lower.d[near.segment] - lower.d[near.segment - 1]) * near.t)
@@ -251,7 +259,7 @@ async function groundUnder(shaped: Chain[], edges: Array<[Point[], Point[]]>, gr
  * whichever came first let a ramp settle on a lower deck it merely passes
  * over rather than the one it joins.
  */
-function restingOn(s: Solved, end: 0 | 1, solved: Solved[]): number | null {
+function restingOn(s: Solved, end: 0 | 1, solved: Solved[]): { height: number; on: Solved } | null {
   const p = s.chain.points[end ? s.chain.points.length - 1 : 0]
   const node = key(s.ends[end])
   let best: { o: Solved; near: ReturnType<typeof beside>; rank: number } | null = null
@@ -266,7 +274,7 @@ function restingOn(s: Solved, end: 0 | 1, solved: Solved[]): number | null {
   }
   if (!best) return null
   const { o, near } = best
-  return heightAt(o.d, o.z, o.d[near.segment - 1] + (o.d[near.segment] - o.d[near.segment - 1]) * near.t)
+  return { height: heightAt(o.d, o.z, o.d[near.segment - 1] + (o.d[near.segment] - o.d[near.segment - 1]) * near.t), on: o }
 }
 
 export async function buildDecks(input: DeckInput, ground: Ground): Promise<Deck[]> {
@@ -288,8 +296,8 @@ export async function buildDecks(input: DeckInput, ground: Ground): Promise<Deck
   // A deck in an outline that could not be shaped to it keeps the edges fitted to it.
   const shaped: Fitted[] = resampled.map(({ fit, ...c }, k) => {
     const shape = shapes[k]
-    if (!shape) return fit ? { ...c, edges: fit } : c
-    return { ...c, sides: shape.sides, caps: shape.caps, edges: [Math.max(...shape.sides[0]), Math.max(...shape.sides[1])] }
+    if (!shape) return widen(fit ? { ...c, edges: fit } : c, STEP)
+    return widen({ ...c, sides: shape.sides, caps: shape.caps, edges: [Math.max(...shape.sides[0]), Math.max(...shape.sides[1])] }, STEP)
   })
   const edges = shaped.map(edgePoints)
   const under = await groundUnder(shaped, edges, ground)
@@ -303,21 +311,31 @@ export async function buildDecks(input: DeckInput, ground: Ground): Promise<Deck
     if (!g) continue
     const need = needs({ chain, d, g }, input, solved.filter(o => o.chain.layer < chain.layer))
     const own = decks[k].points
+    const z = solve({ ...chain, grounded: grounded[k] }, g, need)
     solved.push({
-      chain, d, g, grounded: grounded[k], needs: need, z: solve({ ...chain, grounded: grounded[k] }, g, need),
+      chain, d, g, grounded: grounded[k], needs: need, z, on: [],
       ends: [own[0], own[own.length - 1]], nodes: new Set(own.map(key)),
     })
   }
-  // An end resting on another deck takes that deck's height there; twice, so
-  // a height carries through a ramp joining a ramp.
-  for (let pass = 0; pass < 2; pass++)
+  // Settle the decks against each other: an end resting on another deck takes
+  // that deck's height there, and decks side by side are joined at the higher
+  // one. Some rounds, so a height carries through a ramp joining a ramp, and a
+  // deck lifted to its neighbour can lift the next one along. A join is not
+  // arched over again: that would carry a lift along the whole deck, and from
+  // it to the next, ratcheting a whole interchange up.
+  for (let round = 0; round < SETTLE; round++) {
     for (const s of solved) {
-      const resting = ([0, 1] as const).map(i => (s.grounded[i] ? null : restingOn(s, i, solved))) as [number | null, number | null]
-      if (resting[0] !== null || resting[1] !== null) s.z = solve({ ...s.chain, grounded: s.grounded }, s.g, s.needs, resting)
+      const rests = ([0, 1] as const).map(i => (s.grounded[i] ? null : restingOn(s, i, solved)))
+      s.on = rests.flatMap((r, i) => (r ? [{ deck: r.on, at: s.chain.points[i ? s.chain.points.length - 1 : 0] }] : []))
+      if (!s.on.length) continue
+      const resting = rests.map(r => r?.height ?? null) as [number | null, number | null]
+      s.z = solve({ ...s.chain, grounded: s.grounded }, s.g, s.needs, resting)
     }
-  // Join side-by-side decks before easing, so where a join starts is eased too.
-  joinNeighbours(solved)
-  for (const s of solved) s.z = smooth(s.z, s.d, s.g)
+    for (let pass = 0; pass < SETTLE; pass++) joinNeighbours(solved)
+  }
+  for (const s of solved) s.z = smooth(s.z, s.d, steady(s.g, s.d))
+  // Easing moves twins a few centimetres apart; side by side, they meet exactly.
+  joinNeighbours(solved, undefined, EASED)
   const rows = piers(solved)
 
   const wiki = (s: Solved) => s.chain.ways.map(w => input.wikidata.get(w)).find(Boolean)

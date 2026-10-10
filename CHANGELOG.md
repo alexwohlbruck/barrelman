@@ -10,6 +10,19 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Fixed
+
+* **Long elevated roads no longer ripple.** A deck's height is now one arch
+  over the ground and everything it crosses, rising no steeper than a road
+  may from the ends that land, so a viaduct over a street grid runs level
+  instead of dipping between streets. Twin carriageways stay at one height.
+* **Interchanges draw each roadway once.** A road is carried on through a
+  junction by its class and ref or name, not by whichever ramp leaves it
+  straighter; a deck no longer takes kerbs that belong to the carriageway
+  beside it; and a short sidewalk bridge widens its road's deck only where it
+  runs beside it. Before, decks could overlap and stand a few metres apart in
+  height. Run "Build Bridge Decks" again to rebuild existing decks.
+
 ## [0.10.9] - 2026-10-09
 
 ### Changed
