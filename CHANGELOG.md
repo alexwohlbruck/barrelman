@@ -21,6 +21,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
   migrations (or a road markings build) have added the column, restart Martin,
   and run "Build Road Markings" again.
 
+## [0.10.10] - 2026-10-10
+
 ### Changed
 
 * **Road surfaces draw smooth curves and kerbs.** Curved roads mapped as a few
