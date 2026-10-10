@@ -32,8 +32,17 @@ export type Chain = {
   points: Point[]
   kind: Kind
   layer: number
-  /** Metres from the centreline to the left and right edges. */
+  /** Metres from the centreline to the left and right edges: the widest, where they vary. */
   edges: [number, number]
+  /** Metres from the centreline to the left and right edges at each point, where they vary. */
+  sides?: [number[], number[]]
+  /**
+   * A road deck's edges fitted to the bridge outline it lies in, before it is
+   * shaped to it (`edges` stays its carriageway, the least a shape may be):
+   * how far it reaches when deciding what meets it and what it takes in, and
+   * its edges if it cannot be shaped.
+   */
+  fit?: [number, number]
 }
 
 /** Steepest a deck climbs, as a grade. */
@@ -239,7 +248,12 @@ export function fitEdges(decks: Chain[], outline: Point[]): Chain[] {
  * bridge, folded into its deck: the deck widens to take them in.
  */
 export function absorbPaths(decks: Chain[]): Chain[] {
-  const roads = decks.filter(d => d.kind === 'road').map(d => ({ ...d, edges: [...d.edges] as [number, number], ways: [...d.ways] }))
+  const roads = decks.filter(d => d.kind === 'road').map(d => ({
+    ...d,
+    edges: [...d.edges] as [number, number],
+    fit: d.fit ? ([...d.fit] as [number, number]) : undefined,
+    ways: [...d.ways],
+  }))
   const kept: Chain[] = []
   for (const path of decks) {
     if (path.kind !== 'path') {
@@ -254,7 +268,7 @@ export function absorbPaths(decks: Chain[]): Chain[] {
       const side = near[0].left
       const inside = near.filter(n => n.alongside).map(n => n.distance)
       return inside.length >= near.length / 2 && Math.max(...inside) - Math.min(...inside) < 4 &&
-        near.every(n => n.left === side && n.distance < Math.max(road.edges[side ? 0 : 1], 1) + MAX_REACH / 2)
+        near.every(n => n.left === side && n.distance < Math.max((road.fit ?? road.edges)[side ? 0 : 1], 1) + MAX_REACH / 2)
     })
     if (!host) {
       kept.push(path)
@@ -262,14 +276,34 @@ export function absorbPaths(decks: Chain[]): Chain[] {
     }
     const near = samples.map(q => beside(host.points, q)).filter(n => n.alongside)
     const side = near[0].left ? 0 : 1
-    host.edges[side] = Math.max(host.edges[side], ...near.map(n => n.distance + width / 2))
+    const out = Math.max(...near.map(n => n.distance + width / 2))
+    host.edges[side] = Math.max(host.edges[side], out)
+    if (host.fit) host.fit[side] = Math.max(host.fit[side], out)
     host.ways.push(...path.ways)
   }
   return [...roads, ...kept]
 }
 
+/** Metres from a deck's centreline to one side (0 left, 1 right) at a point, or between two by `t`. */
+export function sideAt(chain: Pick<Chain, 'edges' | 'sides'>, side: 0 | 1, i: number, t = 0): number {
+  const s = chain.sides?.[side]
+  if (!s) return chain.edges[side]
+  return t ? s[i] + (s[Math.min(i + 1, s.length - 1)] - s[i]) * t : s[i]
+}
+
+/** Whether a point lies inside a ring. */
+export function inside([x, y]: Point, ring: Point[]): boolean {
+  let hit = false
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const [xi, yi] = ring[i]
+    const [xj, yj] = ring[j]
+    if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) hit = !hit
+  }
+  return hit
+}
+
 /** Each vertex's points on a deck's left and right edges. */
-export function edgePoints(chain: Pick<Chain, 'points' | 'edges'>): [Point[], Point[]] {
+export function edgePoints(chain: Pick<Chain, 'points' | 'edges' | 'sides'>): [Point[], Point[]] {
   const pts = chain.points
   const n = pts.length
   const scale = 1 / metresPerUnit(pts[Math.floor(n / 2)][1])
@@ -279,8 +313,9 @@ export function edgePoints(chain: Pick<Chain, 'points' | 'edges'>): [Point[], Po
     const [a, b] = [pts[Math.max(0, i - 1)], pts[Math.min(n - 1, i + 1)]]
     const len = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1
     const [nx, ny] = [(-(b[1] - a[1]) / len) * scale, ((b[0] - a[0]) / len) * scale]
-    left.push([p[0] + nx * chain.edges[0], p[1] + ny * chain.edges[0]])
-    right.push([p[0] - nx * chain.edges[1], p[1] - ny * chain.edges[1]])
+    const [l, r] = [sideAt(chain, 0, i), sideAt(chain, 1, i)]
+    left.push([p[0] + nx * l, p[1] + ny * l])
+    right.push([p[0] - nx * r, p[1] - ny * r])
   })
   return [left, right]
 }
@@ -409,7 +444,7 @@ export function joinNeighbours(decks: Array<{ chain: Chain; z: number[]; grounde
           B.chain.points[j - 1][1] + (B.chain.points[j][1] - B.chain.points[j - 1][1]) * t,
         ]
         const facing = beside(A.chain.points, q).left ? 0 : 1
-        if (near.distance > A.chain.edges[facing] + B.chain.edges[near.left ? 0 : 1] + gap) return
+        if (near.distance > sideAt(A.chain, facing, i) + sideAt(B.chain, near.left ? 0 : 1, j - 1, t) + gap) return
         A.z[i] = Math.max(A.z[i], zb)
       })
     }

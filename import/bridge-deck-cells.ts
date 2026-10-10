@@ -11,7 +11,7 @@
  */
 import type postgres from 'postgres'
 import type { Bbox } from '../src/config/regions'
-import { buildDecks, STEP, type Crossed, type Deck, type DeckInput } from '../src/lib/bridge-decks/build'
+import { buildDecks, FORMAT, STEP, type Crossed, type Deck, type DeckInput } from '../src/lib/bridge-decks/build'
 import type { Dem } from '../src/lib/bridge-decks/dem'
 import { clip, contains, degreeBox, toDegrees, toUnits, UNITS_PER_DEGREE, type UnitBox, type UnitPoint } from '../src/lib/bridge-decks/grid'
 import type { Built } from '../src/lib/bridge-decks/queue'
@@ -191,17 +191,20 @@ export async function rebuildBoxes(sql: Sql, dem: Dem, boxes: UnitBox[], record:
       const batch = mine.slice(i, i + INSERT_BATCH).map(({ d, at, lngLats }) => ({
         id: d.id, bridge: d.bridge, ways: d.ways, kind: d.kind, layer: d.layer, edges: d.edges, grounded: d.grounded,
         length: d.length, heights: d.heights, ground: d.ground, piers: d.piers, x: at[0], y: at[1],
+        left_edges: d.sides?.[0] ?? null, right_edges: d.sides?.[1] ?? null, caps: d.caps,
         line: `LINESTRING(${lngLats.map(p => p.join(' ')).join(',')})`,
       }))
       // The boxes' own decks are gone by now, so a clash is with a deck
       // another box owns, under the same id: refuse rather than take it over.
       const stored: Array<{ id: string }> = await tx`
-        INSERT INTO bridge_decks (id, bridge, ways, kind, layer, edges, grounded, step, length, heights, ground, piers, anchor, anchor_x, anchor_y, geom)
+        INSERT INTO bridge_decks (id, bridge, ways, kind, layer, edges, grounded, step, length, heights, ground, piers, anchor, anchor_x, anchor_y, geom,
+          format, left_edges, right_edges, caps)
         SELECT r.id, r.bridge, r.ways, r.kind, r.layer, r.edges, r.grounded, ${STEP}, r.length, r.heights, r.ground, r.piers,
                ST_SetSRID(ST_MakePoint(r.x / ${UNITS_PER_DEGREE}::float8, r.y / ${UNITS_PER_DEGREE}::float8), 4326), r.x, r.y,
-               ST_GeomFromText(r.line, 4326)
+               ST_GeomFromText(r.line, 4326), ${FORMAT}, r.left_edges, r.right_edges, r.caps
         FROM jsonb_to_recordset(${tx.json(batch)}::jsonb) AS r(id text, bridge text, ways bigint[], kind text, layer int,
-          edges real[], grounded boolean[], length real, heights real[], ground real[], piers real[], x int, y int, line text)
+          edges real[], grounded boolean[], length real, heights real[], ground real[], piers real[], x int, y int, line text,
+          left_edges real[], right_edges real[], caps real[])
         ON CONFLICT (id) DO NOTHING
         RETURNING id`
       if (stored.length < batch.length) {
