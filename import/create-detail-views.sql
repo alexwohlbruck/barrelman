@@ -931,7 +931,9 @@ SELECT id, bridge, kind, layer, edges[1] AS left_edge, edges[2] AS right_edge,
        array_to_string(ARRAY(SELECT round(p * 10)::int FROM unnest(piers) p), ',') AS piers,
        geom,
        format::int AS format,
-       array_to_string(ARRAY(SELECT round(e * 10)::int FROM unnest(left_edges) e), ',') AS left_edges,
-       array_to_string(ARRAY(SELECT round(e * 10)::int FROM unnest(right_edges) e), ',') AS right_edges,
-       array_to_string(ARRAY(SELECT round(c * 10)::int FROM unnest(caps) c), ',') AS caps
+       -- Null, not '', for a deck that follows no outline, so Martin leaves the
+       -- property out and a client tells such a deck by its absence.
+       CASE WHEN left_edges IS NOT NULL THEN array_to_string(ARRAY(SELECT round(e * 10)::int FROM unnest(left_edges) e), ',') END AS left_edges,
+       CASE WHEN right_edges IS NOT NULL THEN array_to_string(ARRAY(SELECT round(e * 10)::int FROM unnest(right_edges) e), ',') END AS right_edges,
+       CASE WHEN caps IS NOT NULL THEN array_to_string(ARRAY(SELECT round(c * 10)::int FROM unnest(caps) c), ',') END AS caps
 FROM bridge_decks;
