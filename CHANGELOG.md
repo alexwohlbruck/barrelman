@@ -10,6 +10,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.10.10] - 2026-10-10
+
 ### Changed
 
 * **Road surfaces draw smooth curves and kerbs.** Curved roads mapped as a few
