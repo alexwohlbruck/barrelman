@@ -10,6 +10,17 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Added
+
+* **Turning circles and loops draw as round bulbs.** A `highway=turning_circle`
+  at the end of a street paves a disc sized from its `diameter`, or by the
+  road's class, with the kerb flaring smoothly into it and lane lines ending
+  before it. A `highway=turning_loop` rings an island left unpaved, served as a
+  `road_surfaces` row with `kind=island`. To serve it, add `kind: kind` to the
+  `road_surfaces` properties in your `martin-config.yaml` after this release's
+  migrations (or a road markings build) have added the column, restart Martin,
+  and run "Build Road Markings" again.
+
 ### Changed
 
 * **Road surfaces draw smooth curves and kerbs.** Curved roads mapped as a few
