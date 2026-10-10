@@ -31,7 +31,7 @@ import {
   type Point,
   type Way,
 } from './profile'
-import { shapeDecks, type Outline } from './shape'
+import { inOutline, shapeDecks, type Outline } from './shape'
 
 /** Metres between height samples. */
 export const STEP = 6
@@ -104,14 +104,18 @@ function filled(values: number[]): number[] | null {
 type Fitted = Chain & { outline: string | null; caps?: [number, number, number, number] }
 
 /**
- * Each deck named for the bridge outline most of it lies in, which shapes it
- * later; a road deck in none fitted to its kerbs instead.
+ * Each road deck named for the bridge outline it lies in, which shapes it
+ * later, and fitted to that outline meanwhile (`fit`); a road deck in none
+ * fitted to its kerbs instead. Rail and path decks keep their own width.
  */
 function fitted(decks: Chain[], outlines: Outline[], kerbs: Point[]): Fitted[] {
-  const out: Fitted[] = decks.map(d => ({
-    ...d,
-    outline: outlines.find(({ rings }) => d.points.filter(p => inside(p, rings[0])).length * 2 >= d.points.length)?.id ?? null,
-  }))
+  let out: Fitted[] = decks.map(d => ({ ...d, outline: null }))
+  for (const { id, rings } of outlines) {
+    const mine = out.filter(d => d.kind === 'road' && !d.outline && inOutline(d.points, rings))
+    if (!mine.length) continue
+    const fit = fitEdges(mine, rings.flat())
+    out = out.map(d => (mine.includes(d) ? { ...d, fit: fit[mine.indexOf(d)].edges, outline: id } : d))
+  }
   const loose = out.filter(d => d.kind === 'road' && !d.outline)
   const fit = fitEdges(loose, kerbs)
   return out.map(d => (loose.includes(d) ? { ...fit[loose.indexOf(d)], outline: null } : d))
@@ -268,20 +272,23 @@ function restingOn(s: Solved, end: 0 | 1, solved: Solved[]): number | null {
 export async function buildDecks(input: DeckInput, ground: Ground): Promise<Deck[]> {
   const decks = absorbPaths(fitted(chains(input.ways), input.outlines, input.kerbs)) as Fitted[]
   // An end lands where a road on the ground meets it, rests where it meets
-  // another deck, and lands at a dead end.
+  // another deck, and lands at a dead end. A deck in an outline reaches as far
+  // as the outline fitted it, not just its carriageway: shaping comes later
+  // and needs to know which ends land.
   const grounded = decks.map((c, k) => [c.points[0], c.points[c.points.length - 1]].map(p => {
     if (input.onGround.has(key(p))) return true
     return !decks.some((o, j) => {
-      const reach = Math.max(1, ...o.edges)
+      const reach = Math.max(1, ...(o.fit ?? o.edges))
       return j !== k && covers(grow(box(o.points), reach), p) && beside(o.points, p).distance < reach
     })
   }) as [boolean, boolean])
 
   const resampled = decks.map(c => ({ ...c, points: resample(c.points, STEP) }))
   const shapes = shapeDecks(resampled, input.outlines, grounded)
-  const shaped: Fitted[] = resampled.map((c, k) => {
+  // A deck in an outline that could not be shaped to it keeps the edges fitted to it.
+  const shaped: Fitted[] = resampled.map(({ fit, ...c }, k) => {
     const shape = shapes[k]
-    if (!shape) return c
+    if (!shape) return fit ? { ...c, edges: fit } : c
     return { ...c, sides: shape.sides, caps: shape.caps, edges: [Math.max(...shape.sides[0]), Math.max(...shape.sides[1])] }
   })
   const edges = shaped.map(edgePoints)
