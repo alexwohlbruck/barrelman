@@ -19,6 +19,7 @@ import {
   fitEdges,
   grow,
   heightAt,
+  inside,
   joinNeighbours,
   lngLat,
   meet,
@@ -30,9 +31,12 @@ import {
   type Point,
   type Way,
 } from './profile'
+import { inOutline, shapeDecks, type Outline } from './shape'
 
 /** Metres between height samples. */
 export const STEP = 6
+/** What a row holds: 2 adds each side's edge at every sample, and its end caps, where a deck follows its outline. */
+export const FORMAT = 2
 /** Room a deck's underside leaves over what it crosses, plus the slab, in metres. */
 export const CLEARANCE = { road: 6, rail: 8, path: 4, water: 4, deck: 6.5 } as const
 /** Distance between piers, and the least height of deck over ground that has them, in metres. */
@@ -53,7 +57,7 @@ export type DeckInput = {
   /** Way ends (by `${x},${y}`) that meet a road or railway on the ground. */
   onGround: Set<string>
   /** man_made=bridge outlines. */
-  outlines: Array<{ id: string; rings: Point[][] }>
+  outlines: Outline[]
   /** Carriageway outline points, for a road deck with no bridge outline. */
   kerbs: Point[]
   /** Ways on the ground a deck may pass over. */
@@ -72,7 +76,11 @@ export type Deck = {
   ways: number[]
   kind: Way['kind']
   layer: number
+  /** The widest each side reaches; `sides` gives each sample's where the deck follows an outline. */
   edges: [number, number]
+  sides: [number[], number[]] | null
+  /** Metres each side stops short of the start and end, [start left, start right, end left, end right]; negative runs on past. */
+  caps: [number, number, number, number] | null
   grounded: [boolean, boolean]
   length: number
   /** Resampled every STEP metres; heights and ground per point, metres above sea level. */
@@ -86,16 +94,6 @@ export type Deck = {
 
 const key = (p: Point) => `${p[0]},${p[1]}`
 
-export function inside([x, y]: Point, ring: Point[]): boolean {
-  let hit = false
-  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
-    const [xi, yi] = ring[i]
-    const [xj, yj] = ring[j]
-    if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) hit = !hit
-  }
-  return hit
-}
-
 /** Gaps filled from the nearest known sample; null if there are none. */
 function filled(values: number[]): number[] | null {
   const known = values.flatMap((v, i) => (Number.isNaN(v) ? [] : [i]))
@@ -103,16 +101,20 @@ function filled(values: number[]): number[] | null {
   return values.map((v, i) => (Number.isNaN(v) ? values[known.reduce((b, k) => (Math.abs(k - i) < Math.abs(b - i) ? k : b))] : v))
 }
 
-type Fitted = Chain & { outline: string | null }
+type Fitted = Chain & { outline: string | null; caps?: [number, number, number, number] }
 
-/** Each road deck fitted to the bridge outline it lies in, else to its kerbs. */
-function fitted(decks: Chain[], outlines: DeckInput['outlines'], kerbs: Point[]): Fitted[] {
+/**
+ * Each road deck named for the bridge outline it lies in, which shapes it
+ * later, and fitted to that outline meanwhile (`fit`); a road deck in none
+ * fitted to its kerbs instead. Rail and path decks keep their own width.
+ */
+function fitted(decks: Chain[], outlines: Outline[], kerbs: Point[]): Fitted[] {
   let out: Fitted[] = decks.map(d => ({ ...d, outline: null }))
   for (const { id, rings } of outlines) {
-    const within = out.filter(d => d.kind === 'road' && !d.outline && d.points.filter(p => inside(p, rings[0])).length * 2 >= d.points.length)
-    if (!within.length) continue
-    const fit = fitEdges(within, rings.flat())
-    out = out.map(d => (within.includes(d) ? { ...fit[within.indexOf(d)], outline: id } : d))
+    const mine = out.filter(d => d.kind === 'road' && !d.outline && inOutline(d.points, rings))
+    if (!mine.length) continue
+    const fit = fitEdges(mine, rings.flat())
+    out = out.map(d => (mine.includes(d) ? { ...d, fit: fit[mine.indexOf(d)].edges, outline: id } : d))
   }
   const loose = out.filter(d => d.kind === 'road' && !d.outline)
   const fit = fitEdges(loose, kerbs)
@@ -270,16 +272,25 @@ function restingOn(s: Solved, end: 0 | 1, solved: Solved[]): number | null {
 export async function buildDecks(input: DeckInput, ground: Ground): Promise<Deck[]> {
   const decks = absorbPaths(fitted(chains(input.ways), input.outlines, input.kerbs)) as Fitted[]
   // An end lands where a road on the ground meets it, rests where it meets
-  // another deck, and lands at a dead end.
+  // another deck, and lands at a dead end. A deck in an outline reaches as far
+  // as the outline fitted it, not just its carriageway: shaping comes later
+  // and needs to know which ends land.
   const grounded = decks.map((c, k) => [c.points[0], c.points[c.points.length - 1]].map(p => {
     if (input.onGround.has(key(p))) return true
     return !decks.some((o, j) => {
-      const reach = Math.max(1, ...o.edges)
+      const reach = Math.max(1, ...(o.fit ?? o.edges))
       return j !== k && covers(grow(box(o.points), reach), p) && beside(o.points, p).distance < reach
     })
   }) as [boolean, boolean])
 
-  const shaped = decks.map(c => ({ ...c, points: resample(c.points, STEP) }))
+  const resampled = decks.map(c => ({ ...c, points: resample(c.points, STEP) }))
+  const shapes = shapeDecks(resampled, input.outlines, grounded)
+  // A deck in an outline that could not be shaped to it keeps the edges fitted to it.
+  const shaped: Fitted[] = resampled.map(({ fit, ...c }, k) => {
+    const shape = shapes[k]
+    if (!shape) return fit ? { ...c, edges: fit } : c
+    return { ...c, sides: shape.sides, caps: shape.caps, edges: [Math.max(...shape.sides[0]), Math.max(...shape.sides[1])] }
+  })
   const edges = shaped.map(edgePoints)
   const under = await groundUnder(shaped, edges, ground)
 
@@ -326,6 +337,8 @@ export async function buildDecks(input: DeckInput, ground: Ground): Promise<Deck
       kind: s.chain.kind,
       layer: s.chain.layer,
       edges: s.chain.edges.map(round) as [number, number],
+      sides: s.chain.sides ? (s.chain.sides.map(side => side.map(round)) as [number[], number[]]) : null,
+      caps: s.chain.caps ? (s.chain.caps.map(round) as [number, number, number, number]) : null,
       grounded: s.grounded,
       length: round(s.d[s.d.length - 1]),
       points: s.chain.points,

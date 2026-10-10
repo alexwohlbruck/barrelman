@@ -10,6 +10,26 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.10.9] - 2026-10-09
+
+### Changed
+
+* **Road bridge decks follow their hand-drawn outlines.** Where a road bridge
+  has a `man_made=bridge` area, its deck now widens and narrows with the area
+  and ends where the area ends. Before, it kept its widest width all the way
+  along and had square ends. Twin carriageways and ramps in one outline split
+  it between them. Rail and path decks are unchanged. The `bridge_decks` tile
+  layer carries the new shape as `left_edges`, `right_edges` and `caps`, on
+  rows with `format` 2. Existing decks stay `format` 1, with none of these,
+  until you run "Build Bridge Decks" again. OSM Update only reshapes the decks
+  in cells it rebuilds.
+
+* **Road markings line up the way roads are painted.** Through lanes now line up
+  across a junction, with turn bays to their side. A road gaining or losing a
+  lane widens on that side only. Ways tagged `placement` sit where the tag says.
+  Crosswalk bars run with the traffic they cross. A bike lane that carries on
+  past a junction is painted across it in green dashes.
+
 ## [0.10.8] - 2026-10-09
 
 ### Added

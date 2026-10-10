@@ -410,7 +410,7 @@ for, so a client drawing them has nowhere else to get them:
 | `road_surfaces` | polygon | 16 | Carriageways at their real width (from `width`, else `lanes` at a lane width per class), with kerb corners rounded where roads meet. `bridge` marks the ones above ground |
 | `road_markings` | line | 16 | Paint: `kind` is `centre`, `lane`, `edge`, `bike`, `stop` or `crosswalk`; `pattern` is `solid`, `dashed` or `double`; `color` is `white` or `yellow` (yellow centre lines in the Americas); a crosswalk's `style` is `zebra`, `lines` or `ladder` |
 | `road_glyphs` | point | 16 | Turn arrows from `turn:lanes`, bike symbols on bike lanes and sharrows on shared lanes: `glyph` names the sprite icon and `direction` the bearing it reads along |
-| `bridge_decks` | line | 14–16 | One line per bridge deck, whole in every tile it crosses: `id` (the deck, by where it lies and which way it runs), `bridge` (its `man_made=bridge` outline, its wikidata item, or where it lies), `kind` (`road`, `rail` or `path`), `layer`, `left_edge` and `right_edge` in metres from the centreline, whether each end lands on the ground (`start_grounded`, `end_grounded`), `heights` and `ground` every `step` metres along its `length`, and `piers` as distances along it, all in decimetres joined by commas, and `line`, the samples' exact positions (the first as lng,lat and each after as the step from the last, in 1e-7°), since a tile's own geometry is simplified differently at each zoom. Heights are metres above sea level as Mapterhorn gives them |
+| `bridge_decks` | line | 14–16 | One line per bridge deck, whole in every tile it crosses: `id` (the deck, by where it lies and which way it runs), `bridge` (its `man_made=bridge` outline, its wikidata item, or where it lies), `kind` (`road`, `rail` or `path`), `layer`, `left_edge` and `right_edge` in metres from the centreline, whether each end lands on the ground (`start_grounded`, `end_grounded`), `heights` and `ground` every `step` metres along its `length`, and `piers` as distances along it, all in decimetres joined by commas, and `line`, the samples' exact positions (the first as lng,lat and each after as the step from the last, in 1e-7°), since a tile's own geometry is simplified differently at each zoom. Heights are metres above sea level as Mapterhorn gives them. `format` is 2 from rows built since decks follow their outlines (1 before); a road deck lying in a `man_made=bridge` outline then also has `left_edges` and `right_edges`, each side's edge at every sample, and `caps`, how far each side stops short of the start and end (start left, start right, end left, end right; negative where it runs on past), all in decimetres joined by commas, and other decks leave all three out. `left_edge` and `right_edge` are then the widest each side reaches |
 | `object_areas` | polygon or point | 14–16 | Areas and points a client plants with objects: ground-mounted solar arrays and farms (`solar`), `flowerbed`, `scrub`, planted `shrubbery` (with its `shrubbery:shape` as `shape`), and single mapped `shrub`s. Rooftop solar is left out |
 | `woods` | polygon | 14–16 | Woods and forests tagged with `leaf_type` (or the legacy `wood=*`) or a genus, carrying a normalised `leaf_type` and `genus`. The feature id is the basemap landcover feature's own (OSM id × 10, plus 2 for a way and 3 for a relation), so a client looks up what a basemap wood holds by id |
 
@@ -476,9 +476,16 @@ way in reach, and bins and bollards, have an empty `direction`.
 The road layers are tables built by the "Build Road Markings" console task
 (`import/generate-road-markings.sql`), which works out every road's lanes from
 `lanes`, `lanes:forward`/`backward`, `lanes:both_ways`, `turn:lanes`, `width`,
-`cycleway:*` and `lane_markings`. Where one road continues into another with a
-different lane layout, the lines ease across over the MUTCD taper length for
-the road's speed rather than jumping at the join. A full build takes minutes
+`cycleway:*` and `lane_markings`. `placement`, `placement:forward` and
+`placement:backward` say where the way runs across its lanes. Without them the
+carriageway is centred on its way, except that turn bays from `turn:lanes` hang
+off their own side, so the lanes that carry on through a junction line up
+across it. Where the lane count changes from one way to the next, the next
+way keeps the kerb of the lanes that carry on, on the side that did not
+change, and widens or narrows on the other; the way after it eases back to the
+middle of the road. Lines ease across over the MUTCD taper length for the
+road's speed rather than jumping at the join. A scoped build reads two ways
+beyond its box along each road, so neighbouring boxes agree. A full build takes minutes
 for a city and about two days for the whole US, so a large install builds it
 area by area: run the script in a session that first creates `_rm_scope` with
 one box in it, and only that box is rebuilt and merged into the live tables,
@@ -515,8 +522,12 @@ without osm2pgsql's middle tables records what changed; one updated through
 so it can be rebuilt whenever the map changes. It joins bridge ways that share
 an end into one line per roadway (only ways of one kind and `layer`, so stacked
 decks stay apart; where three meet, the straightest pair carries on), fits road
-decks to their `man_made=bridge` outline (else to `road_surfaces`) and folds
-sidewalks mapped beside them in. Each end that meets a road or railway on the
+decks with no `man_made=bridge` outline to `road_surfaces` and folds sidewalks
+mapped beside them in. A road deck in an outline follows it: at every sample each
+side reaches to where a line square to the deck leaves the outline (never
+narrower than the carriageway, never more than 16 m), decks sharing an outline
+split the room between them, and an end that lands on the ground is cut where
+the outline ends, at the skew it was drawn with. Each end that meets a road or railway on the
 ground lands on it; one that meets another deck rests on that deck. Between,
 the deck runs straight from end to end and rises over what it crosses — roads,
 railways, paths, waterways, water and lower decks, each with its own clearance

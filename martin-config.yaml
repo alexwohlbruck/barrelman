@@ -419,6 +419,10 @@ postgres:
         heights: text
         ground: text
         piers: text
+        format: int4
+        left_edges: text
+        right_edges: text
+        caps: text
       buffer: 64
       # Whole decks in every tile they cross: the profile runs along the line, so a cut copy could not be read.
       clip_geom: false

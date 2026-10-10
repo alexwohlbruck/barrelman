@@ -88,6 +88,74 @@ describe('buildDecks', () => {
   })
 })
 
+describe('buildDecks in an outline', () => {
+  it('shapes twin carriageways to their outline, side by side and at one height', async () => {
+    const twin = (id: number, north: number): Way => ({ id, points: [east(0, north), east(120, north)], kind: 'road', layer: 1, width: 8 })
+    const outline = { id: 'way/9', rings: [[east(-10, 14), east(130, 14), east(130, -14), east(-10, -14), east(-10, 14)]] }
+    const decks = await buildDecks(input({
+      ways: [twin(1, 7), twin(2, -7)],
+      onGround: new Set([key(east(0, 7)), key(east(120, 7)), key(east(0, -7)), key(east(120, -7))]),
+      outlines: [outline],
+      crossed: [{ kind: 'road', points: [east(60, -40), east(60, 40)] }],
+    }), ground(100))
+    const [north, south] = [decks.find(d => d.ways.includes(1))!, decks.find(d => d.ways.includes(2))!]
+    expect(north.bridge).toBe('way/9')
+    // Each reaches 7 m out to the outline and 7 m in, to meet its twin.
+    expect(north.sides![0][10]).toBeCloseTo(7, 0)
+    expect(north.sides![1][10]).toBeCloseTo(7, 0)
+    expect(north.edges).toEqual([Math.max(...north.sides![0]), Math.max(...north.sides![1])])
+    // Both ends run on 10 m to the outline's.
+    expect(north.caps!.every(c => Math.abs(c + 10) < 0.6)).toBe(true)
+    expect(north.heights[10]).toBeCloseTo(south.heights[10], 1)
+  })
+
+  // A main line 0-120 m with a 10.5 m carriageway in an outline 24 m across,
+  // drawn with points alongside it so the outline fits it.
+  const wide = { id: 'way/9', rings: [[east(-10, 12), east(60, 12), east(130, 12), east(130, -12), east(60, -12), east(-10, -12), east(-10, 12)]] }
+  const main: Way = { ...way(1, 0, 120), width: 10.5 }
+  const landed = new Set([key(east(0)), key(east(120))])
+
+  it('rests a ramp ending within its outline\'s reach of the deck it meets, not only its carriageway\'s', async () => {
+    // Ends 8 m from the main line's centre: past its carriageway, inside its outline.
+    const ramp: Way = { id: 2, points: [east(60, -60), east(60, -8)], kind: 'road', layer: 1, width: 6 }
+    const decks = await buildDecks(input({ ways: [main, ramp], outlines: [wide], onGround: new Set([...landed, key(east(60, -60))]) }), ground(100))
+    expect(decks.find(d => d.ways.includes(2))!.grounded).toEqual([true, false])
+  })
+
+  it('takes in a sidewalk within its outline\'s reach, not only its carriageway\'s', async () => {
+    // 11.5 m out from a 6 m carriageway: past its reach of 3 + MAX_REACH / 2, inside the outline's 12 + MAX_REACH / 2.
+    const narrow: Way = { ...way(1, 0, 120), width: 6 }
+    const sidewalk: Way = { id: 3, points: [east(0, 11.5), east(120, 11.5)], kind: 'path', layer: 1, width: 3 }
+    const decks = await buildDecks(input({ ways: [narrow, sidewalk], outlines: [wide], onGround: landed }), ground(100))
+    expect(decks.map(d => d.ways)).toEqual([[1, 3]])
+  })
+
+  it('keeps the edges fitted to its outline where it cannot be shaped to it', async () => {
+    // Most of its points lie in a sliver of outline that no 6 m sample falls in.
+    const crossing: Way = { id: 4, points: [east(0), east(50), east(50.5), east(51), east(100)], kind: 'road', layer: 1, width: 8 }
+    const sliver = { id: 'way/5', rings: [[east(49.8, 10), east(50.5, 10), east(51.2, 10), east(51.2, -10), east(50.5, -10), east(49.8, -10), east(49.8, 10)]] }
+    const [deck] = await buildDecks(input({ ways: [crossing], outlines: [sliver], onGround: new Set([key(east(0)), key(east(100))]) }), ground(100))
+    expect(deck.bridge).toBe('way/5')
+    expect(deck.sides).toBeNull()
+    expect(deck.edges[0]).toBeCloseTo(10, 0)
+    expect(deck.edges[1]).toBeCloseTo(10, 0)
+  })
+
+  it('shapes only road decks: a railway in an outline keeps its own width and name', async () => {
+    const rail: Way = { id: 6, points: [east(0), east(120)], kind: 'rail', layer: 1, width: 3 }
+    const [deck] = await buildDecks(input({ ways: [rail], outlines: [wide], onGround: landed }), ground(100))
+    expect(deck.sides).toBeNull()
+    expect(deck.edges).toEqual([1.5, 1.5])
+    expect(deck.bridge).not.toBe('way/9')
+  })
+
+  it('leaves a deck in no outline with its edges throughout', async () => {
+    const [deck] = await buildDecks(input({ ways: [way(1, 0, 60)], onGround: new Set([key(east(0)), key(east(60))]) }), ground(100))
+    expect(deck.sides).toBeNull()
+    expect(deck.caps).toBeNull()
+  })
+})
+
 describe('Dem', () => {
   it('falls back to a parent tile where the source has none', async () => {
     const asked: string[] = []
