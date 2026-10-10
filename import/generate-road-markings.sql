@@ -472,6 +472,10 @@ SELECT osm_id, local, class, g, s, americas, oneway, flip, tags, both_ways, mph,
            bwd), '{}'),
          ARRAY(SELECT x FROM unnest(ARRAY[CASE WHEN busway_l AND NOT oneway THEN bwd END]) u(x) WHERE x > 0)) as bus_b
 FROM split;
+-- Indexed before anything is updated: an index built over rows updated in
+-- the same transaction (a console build is one) is invisible to it.
+CREATE INDEX ON _rm_roads USING gist (g);
+CREATE INDEX ON _rm_roads (osm_id);
 -- Curves drawn smooth. A vertex another road shares, or a crossing, signal or
 -- stop sign stands on, is where junctions and paint are matched up, so it
 -- stays where it was mapped. Bridges keep their mapped line: bridge decks are
@@ -517,8 +521,6 @@ UPDATE _rm_roads SET left_edge = width / 2 - bike_l - park_l, right_edge = -widt
 UPDATE _rm_roads SET br_b = br_a + bike_r - buf_r, bl_b = bl_a - bike_l + buf_l;
 UPDATE _rm_roads SET split_b = left_edge - bwd * lane_w;
 UPDATE _rm_roads SET split_f = split_b - both_ways * lane_w;
-CREATE INDEX ON _rm_roads USING gist (g);
-CREATE INDEX ON _rm_roads (osm_id);
 ANALYZE _rm_roads;
 
 -- Ways that simply carry on into the next: one way ends where one other starts.
