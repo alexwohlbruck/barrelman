@@ -177,9 +177,11 @@ export function shapeDecks(decks: Deck[], outlines: Outline[], grounded: Array<[
         let edge = boundary
         for (const o of others) {
           const { metres: gap, segment, start } = cross(pts[i], dir, o.lines)
-          if (!start || gap >= edge || Math.abs(segment[0] * t[0] + segment[1] * t[1]) < ALONGSIDE) continue
+          if (!start || Math.abs(segment[0] * t[0] + segment[1] * t[1]) < ALONGSIDE) continue
           // The neighbour's side facing this deck, so two decks' edges meet exactly between them.
           const facing = segment[0] * (pts[i][1] - start[1]) - segment[1] * (pts[i][0] - start[0]) > 0 ? 0 : 1
+          // One beyond the outline still splits the room if its own carriageway reaches back into it.
+          if (gap - o.edges[facing] >= edge) continue
           edge = Math.min(edge, (gap + deck.edges[side] - o.edges[facing]) / 2)
         }
         sides[side][i] = Math.max(deck.edges[side], Math.min(edge, MAX_REACH))

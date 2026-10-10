@@ -34,11 +34,12 @@ const metres = (value: string | null): number | null => {
   return Number(m[1]) * (m[2] === 'ft' || m[2] === "'" ? 0.3048 : 1)
 }
 
-type Row = { id: string; kind: Kind; highway: string | null; layer: string | null; width: string | null;
+type Row = { id: string; kind: Kind; highway: string | null; road: string | null; layer: string | null; width: string | null;
   lanes: string | null; oneway: string | null; wikidata: string | null; coords: number[][] }
 
 const bridgeWays = (sql: Sql) => sql`
-  SELECT osm_id::text AS id, bridge_deck_class(tags) AS kind, tags->>'highway' AS highway, tags->>'layer' AS layer,
+  SELECT osm_id::text AS id, bridge_deck_class(tags) AS kind, tags->>'highway' AS highway,
+         COALESCE(tags->>'highway', tags->>'railway') || '/' || COALESCE(tags->>'ref', tags->>'name', '') AS road, tags->>'layer' AS layer,
          COALESCE(tags->>'width:carriageway', tags->>'width') AS width, tags->>'lanes' AS lanes, tags->>'oneway' AS oneway,
          COALESCE(tags->>'bridge:wikidata', tags->>'wikidata') AS wikidata,
          ST_AsGeoJSON(geom)::json->'coordinates' AS coords
@@ -56,11 +57,11 @@ function toWay(r: Row): Way {
   const tagged = metres(r.width)
   const width = kind === 'rail' ? 5 : kind === 'path' ? (tagged && tagged < 12 ? tagged : 3)
     : tagged && tagged >= 2.5 && tagged <= 60 ? tagged : lanes * (LANE[r.highway!] ?? 3.3)
-  return { id: Number(r.id), points: r.coords.map(([lng, lat]) => mercator(lng, lat)), kind, layer: Math.max(1, Number.parseInt(r.layer ?? '') || 1), width }
+  return { id: Number(r.id), points: r.coords.map(([lng, lat]) => mercator(lng, lat)), kind, layer: Math.max(1, Number.parseInt(r.layer ?? '') || 1), width, road: r.road ?? undefined }
 }
 
 /** Bridge ways around a box, followed beyond it for as long as a deck carries on. */
-async function waysAround(sql: Sql, [w, s, e, n]: Bbox): Promise<Row[]> {
+export async function waysAround(sql: Sql, [w, s, e, n]: Bbox): Promise<Row[]> {
   const margin = 0.01
   const rows: Row[] = await sql`${bridgeWays(sql)} WHERE geom && ST_MakeEnvelope(${w - margin}, ${s - margin}, ${e + margin}, ${n + margin}, 4326) AND ${isBridge(sql)}`
   const seen = new Set(rows.map(r => r.id))
@@ -81,7 +82,7 @@ async function waysAround(sql: Sql, [w, s, e, n]: Bbox): Promise<Row[]> {
   return rows
 }
 
-async function inputFor(sql: Sql, rows: Row[]): Promise<DeckInput> {
+export async function inputFor(sql: Sql, rows: Row[]): Promise<DeckInput> {
   const ways = rows.map(toWay)
   const xs = rows.flatMap(r => r.coords.map(c => c[0]))
   const ys = rows.flatMap(r => r.coords.map(c => c[1]))
