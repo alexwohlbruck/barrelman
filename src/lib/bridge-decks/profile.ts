@@ -36,6 +36,13 @@ export type Chain = {
   edges: [number, number]
   /** Metres from the centreline to the left and right edges at each point, where they vary. */
   sides?: [number[], number[]]
+  /**
+   * A road deck's edges fitted to the bridge outline it lies in, before it is
+   * shaped to it (`edges` stays its carriageway, the least a shape may be):
+   * how far it reaches when deciding what meets it and what it takes in, and
+   * its edges if it cannot be shaped.
+   */
+  fit?: [number, number]
 }
 
 /** Steepest a deck climbs, as a grade. */
@@ -241,7 +248,12 @@ export function fitEdges(decks: Chain[], outline: Point[]): Chain[] {
  * bridge, folded into its deck: the deck widens to take them in.
  */
 export function absorbPaths(decks: Chain[]): Chain[] {
-  const roads = decks.filter(d => d.kind === 'road').map(d => ({ ...d, edges: [...d.edges] as [number, number], ways: [...d.ways] }))
+  const roads = decks.filter(d => d.kind === 'road').map(d => ({
+    ...d,
+    edges: [...d.edges] as [number, number],
+    fit: d.fit ? ([...d.fit] as [number, number]) : undefined,
+    ways: [...d.ways],
+  }))
   const kept: Chain[] = []
   for (const path of decks) {
     if (path.kind !== 'path') {
@@ -256,7 +268,7 @@ export function absorbPaths(decks: Chain[]): Chain[] {
       const side = near[0].left
       const inside = near.filter(n => n.alongside).map(n => n.distance)
       return inside.length >= near.length / 2 && Math.max(...inside) - Math.min(...inside) < 4 &&
-        near.every(n => n.left === side && n.distance < Math.max(road.edges[side ? 0 : 1], 1) + MAX_REACH / 2)
+        near.every(n => n.left === side && n.distance < Math.max((road.fit ?? road.edges)[side ? 0 : 1], 1) + MAX_REACH / 2)
     })
     if (!host) {
       kept.push(path)
@@ -264,7 +276,9 @@ export function absorbPaths(decks: Chain[]): Chain[] {
     }
     const near = samples.map(q => beside(host.points, q)).filter(n => n.alongside)
     const side = near[0].left ? 0 : 1
-    host.edges[side] = Math.max(host.edges[side], ...near.map(n => n.distance + width / 2))
+    const out = Math.max(...near.map(n => n.distance + width / 2))
+    host.edges[side] = Math.max(host.edges[side], out)
+    if (host.fit) host.fit[side] = Math.max(host.fit[side], out)
     host.ways.push(...path.ways)
   }
   return [...roads, ...kept]

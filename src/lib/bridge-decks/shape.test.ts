@@ -7,7 +7,7 @@ import { CAP_MAX, shapeDecks } from './shape'
 const at = (east: number, north = 0): Point =>
   mercator(-80.83 + east / (111320 * Math.cos((35.22 * Math.PI) / 180)), 35.22 + north / 110574)
 const deck = (from: number, to: number, north = 0, half = 4, layer = 1) =>
-  ({ points: resample([at(from, north), at(to, north)], 6), edges: [half, half] as [number, number], layer })
+  ({ points: resample([at(from, north), at(to, north)], 6), edges: [half, half] as [number, number], layer, outline: 'way/1' })
 const outline = (id: string, corners: Array<[number, number]>) => ({ id, rings: [[...corners, corners[0]].map(([e, n]) => at(e, n))] })
 
 describe('shapeDecks', () => {
@@ -31,6 +31,9 @@ describe('shapeDecks', () => {
   it('leaves a deck in no outline alone', () => {
     const far = outline('way/1', [[0, 100], [60, 100], [60, 90], [0, 90]])
     expect(shapeDecks([deck(0, 60)], [far], [[false, false]])).toEqual([null])
+    // Nor one not named for the outline it lies in, as a rail deck is not.
+    const wide = outline('way/1', [[0, 15], [60, 15], [60, -15], [0, -15]])
+    expect(shapeDecks([{ ...deck(0, 60), outline: null }], [wide], [[false, false]])).toEqual([null])
   })
 
   it('splits an outline between twin carriageways, each reaching its own side', () => {
@@ -44,9 +47,50 @@ describe('shapeDecks', () => {
     expect(south!.sides[1][middle] + north!.sides[0][middle]).toBeCloseTo(16, 0)
   })
 
+  it('splits the room between twins of different widths so their edges meet', () => {
+    const both = outline('way/1', [[0, 16], [60, 16], [60, -16], [0, -16]])
+    const north = { ...deck(0, 60, 8), edges: [4, 7] as [number, number] }
+    const [n, s] = shapeDecks([north, deck(0, 60, -8)], [both], [[false, false], [false, false]])
+    // North's left (south) side and south's right (north) side meet halfway between their carriageways.
+    expect(n!.sides[0][5]).toBeCloseTo(s!.sides[1][5], 2)
+    expect(n!.sides[0][5] + s!.sides[1][5]).toBeCloseTo(16, 0)
+  })
+
+  // A main line 0-120 m in an outline 28 m across.
+  const main = outline('way/1', [[-10, 14], [130, 14], [130, -14], [-10, -14]])
+  const slope = (from: number, metres: number, degrees: number, north = 0) => {
+    const r = (degrees * Math.PI) / 180
+    return { ...deck(0, 0), points: resample([at(from, north), at(from + metres * Math.cos(r), north - metres * Math.sin(r))], 6) }
+  }
+  const unpinched = (side: number[]) => expect(Math.min(...side)).toBeGreaterThan(13.5)
+
+  it('splits a main line with a ramp leaving it only on the ramp\'s side', () => {
+    // The ramp leaves at 60 m, heading 11 degrees south: to the main line's left.
+    const [shape] = shapeDecks([deck(0, 120), slope(60, 60, 11)], [main], [[true, true], [false, true]])
+    unpinched(shape!.sides[1])
+    unpinched(shape!.sides[0].slice(0, 10))
+    expect(shape!.sides[0][14]).toBeLessThan(8)
+  })
+
+  it('splits a main line with a ramp ending short of it only on the ramp\'s side', () => {
+    // A ramp 30 degrees off ending 4.5 m south of the main line at 70 m: run
+    // on, it would cross it 9 m on, and run 11 m past on its far side.
+    const ramp = slope(70, 50, 30, -4.5)
+    ramp.points.reverse()
+    const [shape] = shapeDecks([deck(0, 120, 0, 3), ramp], [main], [[true, true], [true, false]])
+    unpinched(shape!.sides[1])
+  })
+
+  it('is not pinched by the next deck of its road, carrying on at a bend', () => {
+    const next = { ...deck(0, 0), points: resample([at(60), at(120, 6)], 6) }
+    const [shape] = shapeDecks([deck(0, 60), next], [main], [[true, false], [false, true]])
+    unpinched(shape!.sides[0])
+    unpinched(shape!.sides[1])
+  })
+
   it('is not pinched by a deck crossing over it', () => {
     const wide = outline('way/1', [[0, 10], [60, 10], [60, -10], [0, -10]])
-    const over = { points: resample([at(10, -40), at(50, 40)], 6), edges: [4, 4] as [number, number], layer: 2 }
+    const over = { points: resample([at(10, -40), at(50, 40)], 6), edges: [4, 4] as [number, number], layer: 2, outline: null }
     const [shape] = shapeDecks([deck(0, 60), over], [wide], [[false, false], [false, false]])
     expect(Math.min(...shape!.sides[0].slice(1, -1))).toBeCloseTo(10, 0)
   })

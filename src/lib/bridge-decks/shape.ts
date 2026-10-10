@@ -8,7 +8,7 @@
  * between them, and a deck that lands on the ground ends where its outline
  * does, at whatever skew the abutment was drawn.
  */
-import { along, box, covers, inside, MAX_REACH, meet, metresPerUnit, type Box, type Chain, type Point } from './profile'
+import { along, beside, box, covers, inside, MAX_REACH, meet, metresPerUnit, type Box, type Chain, type Point } from './profile'
 
 export type Outline = { id: string; rings: Point[][] }
 
@@ -24,10 +24,14 @@ export const CAP_MAX = 20
 /** How far inside its edge a corner is tested from, so one lying on the outline's side counts as in it. */
 const CORNER_INSET = 0.5
 
-type Deck = Pick<Chain, 'points' | 'edges' | 'layer'>
+/** A deck to shape: shaped only where `outline` names the outline it was found in, by `inOutline`. */
+type Deck = Pick<Chain, 'points' | 'edges' | 'layer' | 'fit'> & { outline?: string | null }
 
 /** Inside an outline's outer ring and none of its holes. */
 export const within = (p: Point, rings: Point[][]) => inside(p, rings[0]) && !rings.slice(1).some(ring => inside(p, ring))
+
+/** Whether a deck lies in an outline: at least half its points do. The one rule for naming a deck after an outline and shaping it to one. */
+export const inOutline = (points: Point[], rings: Point[][]) => points.filter(p => within(p, rings)).length * 2 >= points.length
 
 /** Unit tangent and left normal at a sample, in mercator directions. */
 function frame(points: Point[], i: number): { t: Point; n: Point } {
@@ -76,10 +80,28 @@ const offset = (p: Point, dir: Point, metres: number): Point => {
   return [p[0] + dir[0] * u, p[1] + dir[1] * u]
 }
 
-/** A line run on straight past both ends, so the room beside a neighbour's end is still split with it. */
-function prolong(points: Point[], metres: number): Point[] {
-  const n = points.length
-  return [offset(points[0], neg(frame(points, 0).t), metres), ...points, offset(points[n - 1], frame(points, n - 1).t, metres)]
+/**
+ * A neighbour's ends run on straight, so the room beside an end is still split
+ * with it: each up to CAP_MAX, but stopping where it would cross this deck's
+ * centreline, so it never pinches the far side of the deck it meets. An end
+ * this deck carries (it rests on it, as a ramp leaving a main line or the next
+ * deck of a road does) is not run on at all. Each run is a segment in the
+ * neighbour's own direction, so the side of it a point lies on reads the same.
+ */
+function runOn(o: Point[], deck: Point[], reach: number): Point[][] {
+  const n = o.length
+  const out: Point[][] = []
+  for (const end of [0, 1] as const) {
+    const base = o[end ? n - 1 : 0]
+    if (beside(deck, base).distance <= reach) continue
+    const t = frame(o, end ? n - 1 : 0).t
+    const dir = end ? t : neg(t)
+    const metres = Math.min(CAP_MAX, rayHit(base, dir, [deck]))
+    if (metres < CORNER_INSET) continue
+    const tip = offset(base, dir, metres)
+    out.push(end ? [base, tip] : [tip, base])
+  }
+  return out
 }
 
 /**
@@ -110,19 +132,22 @@ function abutment(pts: Point[], end: 0 | 1, rings: Point[][]): Point | null {
 }
 
 /**
- * Each deck's shape where it lies in an outline; null for a deck in none.
- * Decks are resampled, with their edges at the least they may be (their
- * carriageway's), and `grounded` says which ends land on the ground: only
- * those are moved to the outline's end, so a ramp still meets the deck it
- * joins.
+ * Each deck's shape where it lies in an outline; null for one with no
+ * `outline`, or none of whose samples lie in one. Decks are resampled, with
+ * their edges at the least they may be (their carriageway's), and `grounded`
+ * says which ends land on the ground: only those are moved to the outline's
+ * end, so a ramp still meets the deck it joins.
  */
 export function shapeDecks(decks: Deck[], outlines: Outline[], grounded: Array<[boolean, boolean]>): Array<Shape | null> {
   const bounds: Box[] = outlines.map(o => box(o.rings[0]))
+  const boxes: Box[] = decks.map(d => box(d.points))
+  // Decks meeting each outline, once, rather than every deck tested against every other.
+  const meeting = bounds.map(b => boxes.flatMap((x, j) => (meet(x, b) ? [j] : [])))
   return decks.map((deck, k) => {
+    if (!deck.outline) return null
     const pts = deck.points
     const n = pts.length
-    const mine = box(pts)
-    const near = outlines.flatMap((o, j) => (meet(mine, bounds[j]) ? [j] : []))
+    const near = outlines.flatMap((_, j) => (meet(boxes[k], bounds[j]) ? [j] : []))
     if (!near.length) return null
     const home = pts.map(p => near.find(j => covers(bounds[j], p) && within(p, outlines[j].rings)) ?? -1)
     if (home.every(h => h < 0)) return null
@@ -132,9 +157,10 @@ export function shapeDecks(decks: Deck[], outlines: Outline[], grounded: Array<[
     const homeAt = (end: 0 | 1) => (end ? [...home].reverse() : home).find(h => h >= 0)!
     const abutments = ([0, 1] as const).map(end => abutment(pts, end, outlines[homeAt(end)].rings))
     // Decks in the same outlines: the room between two running alongside is split between them.
-    const others = decks
-      .filter((o, j) => j !== k && near.some(h => meet(box(o.points), bounds[h])))
-      .map(o => ({ ...o, points: prolong(o.points, CAP_MAX) }))
+    const reach = Math.max(1, ...(deck.fit ?? deck.edges)) + 1
+    const others = [...new Set(near.flatMap(j => meeting[j]))]
+      .filter(j => j !== k)
+      .map(j => ({ edges: decks[j].edges, lines: [decks[j].points, ...runOn(decks[j].points, pts, reach)] }))
     const sides: [number[], number[]] = [new Array(n).fill(NaN), new Array(n).fill(NaN)]
     // Where the outline itself reaches at least as far as the carriageway: an end's corner there lies on its side.
     const reached: [boolean[], boolean[]] = [new Array(n).fill(false), new Array(n).fill(false)]
@@ -150,9 +176,11 @@ export function shapeDecks(decks: Deck[], outlines: Outline[], grounded: Array<[
         reached[side][i] = boundary >= deck.edges[side] - CORNER_INSET
         let edge = boundary
         for (const o of others) {
-          const { metres: gap, segment } = cross(pts[i], dir, [o.points])
-          if (gap < edge && Math.abs(segment[0] * t[0] + segment[1] * t[1]) >= ALONGSIDE)
-            edge = Math.min(edge, (gap + deck.edges[side] - (o.edges[0] + o.edges[1]) / 2) / 2)
+          const { metres: gap, segment, start } = cross(pts[i], dir, o.lines)
+          if (!start || gap >= edge || Math.abs(segment[0] * t[0] + segment[1] * t[1]) < ALONGSIDE) continue
+          // The neighbour's side facing this deck, so two decks' edges meet exactly between them.
+          const facing = segment[0] * (pts[i][1] - start[1]) - segment[1] * (pts[i][0] - start[0]) > 0 ? 0 : 1
+          edge = Math.min(edge, (gap + deck.edges[side] - o.edges[facing]) / 2)
         }
         sides[side][i] = Math.max(deck.edges[side], Math.min(edge, MAX_REACH))
       }
