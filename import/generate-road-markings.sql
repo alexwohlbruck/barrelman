@@ -111,6 +111,36 @@ EXCEPTION WHEN OTHERS THEN
 END
 $$;
 
+-- A way's corners rounded off, so a curve mapped as a few straight pieces
+-- draws as a curve: each run between pinned vertices (`pins`, where something
+-- else meets the way) is cut into pieces of at most `step` and corner-cut,
+-- which bends it within half a step of each corner. Pins and ends stay put.
+CREATE OR REPLACE FUNCTION road_smooth(line geometry, pins geometry, step float8) RETURNS geometry
+LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE AS $$
+DECLARE
+  pts geometry[] := ARRAY(SELECT geom FROM ST_DumpPoints(line) ORDER BY path);
+  n int := array_length(pts, 1);
+  out geometry[] := pts[1:1];
+  run geometry[] := pts[1:1];
+  i int;
+BEGIN
+  IF n IS NULL OR n < 3 OR GeometryType(line) <> 'LINESTRING' THEN RETURN line; END IF;
+  FOR i IN 2..n LOOP
+    run := run || pts[i];
+    IF i = n OR (pins IS NOT NULL AND ST_DWithin(pts[i], pins, step * 1e-4)) THEN
+      out := out || CASE WHEN array_length(run, 1) < 3 THEN pts[i:i] ELSE (ARRAY(
+        SELECT geom FROM ST_DumpPoints(ST_Simplify(ST_ChaikinSmoothing(ST_Segmentize(ST_MakeLine(run), step), 3, true), step * 1e-3))
+        ORDER BY path))[2:] END;
+      run := pts[i:i];
+    END IF;
+  END LOOP;
+  IF array_length(out, 1) < 2 THEN RETURN line; END IF;
+  RETURN ST_SetSRID(ST_MakeLine(out), ST_SRID(line));
+EXCEPTION WHEN OTHERS THEN
+  RETURN line;
+END
+$$;
+
 -- The area between two lines drawn the same way; NULL if they do not make a
 -- polygon.
 CREATE OR REPLACE FUNCTION road_between(l geometry, r geometry) RETURNS geometry
@@ -125,7 +155,7 @@ $$;
 -- The carriageway between two kerb lines, rounded off at its far end.
 CREATE OR REPLACE FUNCTION road_body(left_kerb geometry, right_kerb geometry, far_end geometry, radius float8)
 RETURNS geometry LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
-  SELECT ST_Union(road_between(left_kerb, right_kerb), ST_Buffer(far_end, radius, 4))
+  SELECT ST_Union(road_between(left_kerb, right_kerb), ST_Buffer(far_end, radius, 8))
 $$;
 
 -- A length in metres from a width-style tag ("3.5", "3.5 m", "12 ft"), or NULL.
@@ -325,7 +355,7 @@ CREATE TEMP TABLE _rm_source AS
 SELECT osm_id, tags, geom, true as local
 FROM geo_places
 WHERE EXISTS (SELECT 1 FROM _rm_scope)
-  AND geom_type = 'line' AND tags ? 'highway' AND geom && (SELECT area FROM _rm_area) AND road_is_marked_way(tags);
+  AND geom_type = 'line' AND osm_type = 'W' AND tags ? 'highway' AND geom && (SELECT area FROM _rm_area) AND road_is_marked_way(tags);
 CREATE INDEX ON _rm_source (osm_id);
 DO $$
 DECLARE
@@ -344,7 +374,7 @@ BEGIN
       SELECT DISTINCT ON (g.osm_id) g.osm_id, g.tags, g.geom, false
       FROM unnest(frontier) f(pt)
       JOIN geo_places g ON g.geom && ST_Expand(f.pt, 1e-7)
-       AND g.geom_type = 'line' AND g.tags ? 'highway'
+       AND g.geom_type = 'line' AND g.osm_type = 'W' AND g.tags ? 'highway'
        AND (ST_DWithin(ST_StartPoint(g.geom), f.pt, 1e-7) OR ST_DWithin(ST_EndPoint(g.geom), f.pt, 1e-7))
       WHERE road_is_marked_way(g.tags) AND NOT EXISTS (SELECT 1 FROM _rm_source x WHERE x.osm_id = g.osm_id)
       RETURNING geom
@@ -379,7 +409,7 @@ WITH raw AS (
                 WHEN tags->>'highway' IN ('tertiary', 'tertiary_link') THEN 35 ELSE 25 END) as mph,
          local
   FROM (SELECT osm_id, tags, geom, true as local FROM geo_places
-        WHERE NOT EXISTS (SELECT 1 FROM _rm_scope) AND geom_type = 'line' AND tags ? 'highway' AND road_is_marked_way(tags)
+        WHERE NOT EXISTS (SELECT 1 FROM _rm_scope) AND geom_type = 'line' AND osm_type = 'W' AND tags ? 'highway' AND road_is_marked_way(tags)
         UNION ALL
         SELECT osm_id, tags, geom, local FROM _rm_source) src
 ),
@@ -442,6 +472,36 @@ SELECT osm_id, local, class, g, s, americas, oneway, flip, tags, both_ways, mph,
            bwd), '{}'),
          ARRAY(SELECT x FROM unnest(ARRAY[CASE WHEN busway_l AND NOT oneway THEN bwd END]) u(x) WHERE x > 0)) as bus_b
 FROM split;
+-- Indexed before anything is updated: an index built over rows updated in
+-- the same transaction (a console build is one) is invisible to it.
+CREATE INDEX ON _rm_roads USING gist (g);
+CREATE INDEX ON _rm_roads (osm_id);
+-- Curves drawn smooth. A vertex another road shares, or a crossing, signal or
+-- stop sign stands on, is where junctions and paint are matched up, so it
+-- stays where it was mapped. Bridges keep their mapped line: bridge decks are
+-- fitted against it.
+DROP TABLE IF EXISTS _rm_pins;
+CREATE TEMP TABLE _rm_pins AS
+SELECT round(ST_X(dp.geom)::numeric, 2) as x, round(ST_Y(dp.geom)::numeric, 2) as y
+FROM _rm_roads r, ST_DumpPoints(r.g) dp
+GROUP BY 1, 2 HAVING count(*) > 1
+UNION
+SELECT round(ST_X(p)::numeric, 2), round(ST_Y(p)::numeric, 2)
+FROM (SELECT ST_Transform(geom, 3857) as p FROM geo_places
+      WHERE geom && (SELECT area FROM _rm_area) AND geom_type = 'point'
+        AND tags->>'highway' IN ('crossing', 'traffic_signals', 'stop')) pts;
+CREATE INDEX ON _rm_pins (x, y);
+ANALYZE _rm_pins;
+UPDATE _rm_roads r SET g = road_smooth(r.g, p.pins, 20 * r.s)
+FROM (
+  SELECT r2.osm_id, ST_Collect(dp.geom) FILTER (WHERE k.x IS NOT NULL) as pins
+  FROM _rm_roads r2
+  CROSS JOIN LATERAL ST_DumpPoints(r2.g) dp
+  LEFT JOIN _rm_pins k ON k.x = round(ST_X(dp.geom)::numeric, 2) AND k.y = round(ST_Y(dp.geom)::numeric, 2)
+  WHERE ST_NPoints(r2.g) > 2 AND NOT r2.bridge
+  GROUP BY r2.osm_id
+) p
+WHERE r.osm_id = p.osm_id;
 -- A tagged width too narrow for its lanes beside parking counts the parking out.
 UPDATE _rm_roads SET park_r = 0, park_l = 0
 WHERE park_r + park_l > 0 AND (width - bike_r - bike_l - park_r - park_l) / greatest(fwd + bwd + both_ways, 1) < 2.6;
@@ -461,8 +521,6 @@ UPDATE _rm_roads SET left_edge = width / 2 - bike_l - park_l, right_edge = -widt
 UPDATE _rm_roads SET br_b = br_a + bike_r - buf_r, bl_b = bl_a - bike_l + buf_l;
 UPDATE _rm_roads SET split_b = left_edge - bwd * lane_w;
 UPDATE _rm_roads SET split_f = split_b - both_ways * lane_w;
-CREATE INDEX ON _rm_roads USING gist (g);
-CREATE INDEX ON _rm_roads (osm_id);
 ANALYZE _rm_roads;
 
 -- Ways that simply carry on into the next: one way ends where one other starts.
@@ -592,8 +650,8 @@ ANALYZE _rm_incid;
 
 -- A road ending against a bridge, or a bridge itself, ends square at the
 -- abutment rather than rounding out under or over the other.
-ALTER TABLE _rm_roads ADD COLUMN cap text NOT NULL DEFAULT 'endcap=round join=round quad_segs=4';
-UPDATE _rm_roads r SET cap = 'endcap=flat join=round quad_segs=4'
+ALTER TABLE _rm_roads ADD COLUMN cap text NOT NULL DEFAULT 'endcap=round join=round quad_segs=8';
+UPDATE _rm_roads r SET cap = 'endcap=flat join=round quad_segs=8'
 WHERE r.bridge OR EXISTS (
   SELECT 1 FROM _rm_incid a JOIN _rm_incid b ON b.x = a.x AND b.y = a.y AND b.bridge <> a.bridge
   WHERE a.osm_id = r.osm_id AND a.is_end);
@@ -686,18 +744,22 @@ ANALYZE _rm_crossings;
 DROP TABLE IF EXISTS _rm_fillets;
 CREATE TEMP TABLE _rm_fillets AS
 SELECT bridge, p, ST_Intersection(
-         ST_Buffer(ST_Buffer(ST_Union(piece), 4 * s, 'quad_segs=4'), -4 * s, 'quad_segs=4'),
-         ST_Buffer(p, reach, 8)) as g
+         -- Where the reach cuts across a corner's fill, the kerb turns off
+         -- round rather than at a notch.
+         ST_Buffer(ST_Buffer(ST_Union(u, ST_Intersection(
+           ST_Buffer(ST_Buffer(u, 4 * s, 'quad_segs=8'), -4 * s, 'quad_segs=8'),
+           ST_Buffer(p, reach, 16))), 2 * s, 'quad_segs=8'), -2 * s, 'quad_segs=8'),
+         ST_Buffer(p, reach + 4 * s, 16)) as g
 FROM (
   SELECT i.bridge, v.p, v.s, (v.width * 0.75 + 10) * v.s as reach,
-         COALESCE(ST_Intersection(r.body, ST_Expand(v.p, (v.width + 10 + r.width) * v.s)),
+         ST_Union(COALESCE(ST_Intersection(r.body, ST_Expand(v.p, (v.width + 10 + r.width) * v.s)),
                   ST_Buffer(ST_Intersection(COALESCE(r.axis, r.g), ST_Expand(v.p, (v.width + 10 + r.width) * v.s)), r.width / 2 * r.s,
-                            r.cap)) as piece
+                            r.cap))) as u
   FROM _rm_vertices v
   JOIN _rm_incid i ON i.x = v.x AND i.y = v.y
   JOIN _rm_roads r ON r.osm_id = i.osm_id
-) pieces
-GROUP BY bridge, p, s, reach;
+  GROUP BY i.bridge, v.p, v.s, v.width
+) pieces;
 DELETE FROM _rm_fillets WHERE g IS NULL OR ST_IsEmpty(g);
 CREATE INDEX ON _rm_fillets USING gist (g);
 
@@ -724,8 +786,11 @@ pieces AS (
   SELECT b.cx, b.cy, b.box, f.bridge, f.g
   FROM boxes b JOIN _rm_fillets f ON f.g && b.box
 )
+-- Rounded kerbs carry far more vertices than a tile can show; 3 cm is well
+-- under a pixel at any zoom the tiles are drawn at.
 INSERT INTO _rm_surfaces (bridge, g)
-SELECT bridge, ST_CollectionExtract(ST_MakeValid(ST_Intersection(ST_Union(g), box)), 3)
+SELECT bridge, ST_CollectionExtract(ST_MakeValid(ST_Intersection(ST_CollectionExtract(ST_MakeValid(
+         ST_Simplify(ST_Union(g), 0.03 / cos(radians(ST_Y(ST_Transform(ST_Centroid(box), 4326)))))), 3), box)), 3)
 FROM pieces
 GROUP BY cx, cy, box, bridge;
 DELETE FROM _rm_surfaces WHERE ST_IsEmpty(g);
@@ -820,8 +885,8 @@ SELECT l.kind, l.pattern, l.color, l.bridge, ST_Transform(clipped, 4326)
 FROM _rm_lines l
 CROSS JOIN LATERAL (SELECT CASE
   WHEN l.start_m IS NOT NULL AND abs(l.start_m - l.offset_m) > 0.2
-    THEN road_taper(ST_Simplify(l.g, 0.2 * l.s), l.start_m * l.s, l.offset_m * l.s, l.ease * l.s)
-  ELSE road_offset(ST_Simplify(l.g, 0.2 * l.s), l.offset_m * l.s) END as line) o
+    THEN road_taper(ST_Simplify(l.g, 0.05 * l.s), l.start_m * l.s, l.offset_m * l.s, l.ease * l.s)
+  ELSE road_offset(ST_Simplify(l.g, 0.05 * l.s), l.offset_m * l.s) END as line) o
 CROSS JOIN LATERAL (
   SELECT ST_LineMerge(ST_CollectionExtract(COALESCE(ST_Difference(o.line, ST_Union(cut)), o.line), 2)) as clipped
   FROM (SELECT k.cut FROM _rm_cuts k WHERE k.cut && o.line
@@ -853,8 +918,8 @@ FROM (
 ) b
 CROSS JOIN LATERAL (SELECT COALESCE(CASE
   WHEN abs(COALESCE(b.d, 0)) > 0.2 OR abs(COALESCE(b.d2, 0)) > 0.2
-    THEN road_taper_band(ST_Simplify(b.g, 0.2 * b.s), (b.a + b.d) * b.s, b.a * b.s, (b.b + COALESCE(b.d2, b.d)) * b.s, b.b * b.s, b.ease * b.s) END,
-  road_strip(ST_Simplify(b.g, 0.2 * b.s), b.a * b.s, b.b * b.s)) as band) o
+    THEN road_taper_band(ST_Simplify(b.g, 0.05 * b.s), (b.a + b.d) * b.s, b.a * b.s, (b.b + COALESCE(b.d2, b.d)) * b.s, b.b * b.s, b.ease * b.s) END,
+  road_strip(ST_Simplify(b.g, 0.05 * b.s), b.a * b.s, b.b * b.s)) as band) o
 CROSS JOIN LATERAL (
   SELECT ST_CollectionExtract(COALESCE(ST_Difference(o.band, ST_Union(cut)), o.band), 3) as clipped
   FROM (SELECT k.cut FROM _rm_cuts k WHERE k.cut && o.band

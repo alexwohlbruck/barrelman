@@ -22,6 +22,9 @@ const SB_X = -74.0
 const NB_X = -73.9997
 const STREET_Y = 40.71
 
+// Two pieces with a gap between them: (-74.100, 40.713) to (-74.102, 40.716).
+const RELATION = 'MULTILINESTRING((-74.100 40.712, -74.100 40.713, -74.1005 40.7135), (-74.102 40.716, -74.102 40.717, -74.1025 40.7175))'
+
 const line = (...pts: [number, number][]) => `LINESTRING(${pts.map(p => p.join(' ')).join(', ')})`
 const ways: [number, string, Record<string, string>][] = [
   [1, line([SB_X, 40.711], [SB_X, STREET_Y]), { highway: 'trunk', oneway: 'yes', lanes: '3', 'turn:lanes': 'left|through|through' }],
@@ -71,6 +74,8 @@ const ways: [number, string, Record<string, string>][] = [
   [24, line([-74.007, 40.7145], [-74.006, 40.7145]), { highway: 'residential', lanes: '2', 'cycleway:both': 'lane' }],
   [25, line([-74.007, 40.714], [-74.007, 40.7145]), { highway: 'residential', lanes: '2' }],
   [26, line([-74.007, 40.7145], [-74.007, 40.715]), { highway: 'residential', lanes: '2' }],
+  // A street mapped as two straight legs meeting at a right angle.
+  [70, line([-74.0907, 40.7140], [-74.0900, 40.7140], [-74.0900, 40.7145]), { highway: 'residential' }],
   // A crossing drawn well past both kerbs, and askew to the street.
   [9, line([-74.0006, 40.70985], [-74.0004, 40.71015]), { highway: 'footway', footway: 'crossing', 'crossing:markings': 'zebra' }],
 ]
@@ -85,13 +90,17 @@ run('generate-road-markings.sql', () => {
   beforeAll(async () => {
     sql = postgres(DATABASE_URL!, { max: 1, onnotice: () => {} })
     await sql.unsafe(`DROP SCHEMA IF EXISTS ${SCHEMA} CASCADE; CREATE SCHEMA ${SCHEMA}; SET search_path TO ${SCHEMA}, public;
-      CREATE TABLE geo_places (id text, osm_id bigint, tags jsonb NOT NULL, geom geometry(Geometry, 4326) NOT NULL, geom_type text NOT NULL);
+      CREATE TABLE geo_places (id text, osm_id bigint, tags jsonb NOT NULL, geom geometry(Geometry, 4326) NOT NULL, geom_type text NOT NULL,
+        osm_type char(1) NOT NULL DEFAULT 'W');
       -- The script drops these by bare name; without them here the drop would reach public's.
       CREATE TABLE road_surfaces (); CREATE TABLE road_markings (); CREATE TABLE road_glyphs (); ${GUARD_NEXT}`)
     for (const [id, wkt, tags] of ways) {
       await sql`INSERT INTO geo_places VALUES (${'W' + id}, ${id}, ${sql.json(tags)}, ST_GeomFromText(${wkt}, 4326), 'line')`
     }
-    await sql`INSERT INTO geo_places VALUES ('N8', 8, ${sql.json({ highway: 'traffic_signals' })}, ST_SetSRID(ST_MakePoint(${SB_X}, ${STREET_Y}), 4326), 'point')`
+    await sql`INSERT INTO geo_places VALUES ('N8', 8, ${sql.json({ highway: 'traffic_signals' })}, ST_SetSRID(ST_MakePoint(${SB_X}, ${STREET_Y}), 4326), 'point', 'N')`
+    // A route relation carrying a highway tag, stored as one line of its members.
+    await sql`INSERT INTO geo_places VALUES ('R90', 90, ${sql.json({ type: 'route', route: 'road', highway: 'secondary' })},
+      ST_GeomFromText(${RELATION}, 4326), 'line', 'R')`
     await sql.unsafe(readFileSync(join(import.meta.dir, 'generate-road-markings.sql'), 'utf8'))
   }, 60_000)
 
@@ -263,6 +272,59 @@ run('generate-road-markings.sql', () => {
       SELECT count(*)::int as n FROM road_markings
       WHERE kind IN ('lane', 'centre') AND ST_DWithin(geom::geography, ST_SetSRID(ST_MakePoint(${SB_X}, ${STREET_Y}), 4326)::geography, 3)`
     expect(n).toBe(0)
+  })
+
+  test('rounds a bend mapped as a sharp corner', async () => {
+    // Just outside the corner the two legs make, and inside it.
+    expect(await covered(east(-74.0900, 1.5), 40.7140 - 1.5 / 111000)).toBe(false)
+    expect(await covered(east(-74.0900, -4), 40.7140 + 4 / 111000)).toBe(true)
+  })
+
+  test('smooths a way between the vertices it is pinned at, and keeps those', async () => {
+    const [{ ends, pinned, corner, bend }] = await sql`
+      WITH l AS (SELECT 'LINESTRING(0 0, 100 0, 100 100, 200 100)'::geometry as g),
+           s AS (SELECT road_smooth(g, 'MULTIPOINT((100 100))'::geometry, 20) as g FROM l)
+      SELECT ST_Equals(ST_StartPoint(s.g), 'POINT(0 0)') AND ST_Equals(ST_EndPoint(s.g), 'POINT(200 100)') as ends,
+             ST_Intersects(s.g, 'POINT(100 100)'::geometry) as pinned,
+             ST_Distance(s.g, 'POINT(100 0)'::geometry) as corner,
+             ST_Distance(s.g, 'POINT(50 0)'::geometry) as bend
+      FROM s`
+    expect(ends).toBe(true)
+    expect(pinned).toBe(true)
+    expect(corner).toBeGreaterThan(2)
+    expect(corner).toBeLessThan(5)
+    expect(bend).toBeLessThan(0.01)
+  })
+
+  test('leaves a smoothed line as it is unless it is one line with room to bend', async () => {
+    const [{ multi, tiny }] = await sql`
+      SELECT ST_Equals(road_smooth(${RELATION}::geometry, NULL, 20), ${RELATION}::geometry) as multi,
+             ST_NPoints(road_smooth('LINESTRING(0 0, 0.001 0, 0 0)'::geometry, NULL, 20)) >= 2 as tiny`
+    expect(multi).toBe(true)
+    expect(tiny).toBe(true)
+  })
+
+  test('draws ways only, not a route relation over them', async () => {
+    expect(await covered(-74.100, 40.7125)).toBe(false)
+    expect(await covered(-74.101, 40.7145)).toBe(false)
+  })
+
+  test('draws kerb corners as arcs, not a few facets', async () => {
+    // Turning angles along the kerbs within 12 m of a crossroads.
+    const [{ sharpest }] = await sql`
+      WITH ring AS (
+        SELECT fid, d.geom as p, d.path
+        FROM road_surfaces s, ST_DumpPoints(ST_Boundary(ST_Transform(s.geom, 3857))) d
+        WHERE ST_DWithin(s.geom::geography, ST_SetSRID(ST_MakePoint(-74.079, 40.7145), 4326)::geography, 40)
+      ), turns AS (
+        SELECT p, degrees(abs(atan2(sin(a2 - a1), cos(a2 - a1)))) as turn
+        FROM (SELECT p, ST_Azimuth(lag(p) OVER w, p) as a1, ST_Azimuth(p, lead(p) OVER w) as a2 FROM ring
+              WINDOW w AS (PARTITION BY fid, path[1:array_length(path, 1) - 1] ORDER BY path[array_length(path, 1)])) t
+        WHERE a1 IS NOT NULL AND a2 IS NOT NULL
+      )
+      SELECT max(turn) as sharpest FROM turns
+      WHERE ST_DWithin(ST_Transform(p, 4326)::geography, ST_SetSRID(ST_MakePoint(-74.079, 40.7145), 4326)::geography, 12)`
+    expect(sharpest).toBeLessThan(18)
   })
 
   describe('rebuilding one box', () => {
