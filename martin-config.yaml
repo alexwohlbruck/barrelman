@@ -394,7 +394,7 @@ postgres:
       properties:
         bridge: bridge
       extent: 8192
-      buffer: 64
+      buffer: 128
       clip_geom: true
 
     bridge_decks:
@@ -444,7 +444,7 @@ postgres:
         style: style
         bridge: bridge
       extent: 8192
-      buffer: 64
+      buffer: 128
       clip_geom: true
 
     road_glyphs:
@@ -461,7 +461,7 @@ postgres:
         direction: direction
         bridge: bridge
       extent: 8192
-      buffer: 64
+      buffer: 128
       clip_geom: true
 
     object_areas:
