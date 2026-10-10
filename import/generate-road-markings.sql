@@ -154,7 +154,7 @@ $$;
 -- The carriageway between two kerb lines, rounded off at its far end.
 CREATE OR REPLACE FUNCTION road_body(left_kerb geometry, right_kerb geometry, far_end geometry, radius float8)
 RETURNS geometry LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
-  SELECT ST_Union(road_between(left_kerb, right_kerb), ST_Buffer(far_end, radius, 4))
+  SELECT ST_Union(road_between(left_kerb, right_kerb), ST_Buffer(far_end, radius, 8))
 $$;
 
 -- A length in metres from a width-style tag ("3.5", "3.5 m", "12 ft"), or NULL.
@@ -645,8 +645,8 @@ ANALYZE _rm_incid;
 
 -- A road ending against a bridge, or a bridge itself, ends square at the
 -- abutment rather than rounding out under or over the other.
-ALTER TABLE _rm_roads ADD COLUMN cap text NOT NULL DEFAULT 'endcap=round join=round quad_segs=4';
-UPDATE _rm_roads r SET cap = 'endcap=flat join=round quad_segs=4'
+ALTER TABLE _rm_roads ADD COLUMN cap text NOT NULL DEFAULT 'endcap=round join=round quad_segs=8';
+UPDATE _rm_roads r SET cap = 'endcap=flat join=round quad_segs=8'
 WHERE r.bridge OR EXISTS (
   SELECT 1 FROM _rm_incid a JOIN _rm_incid b ON b.x = a.x AND b.y = a.y AND b.bridge <> a.bridge
   WHERE a.osm_id = r.osm_id AND a.is_end);
@@ -739,18 +739,22 @@ ANALYZE _rm_crossings;
 DROP TABLE IF EXISTS _rm_fillets;
 CREATE TEMP TABLE _rm_fillets AS
 SELECT bridge, p, ST_Intersection(
-         ST_Buffer(ST_Buffer(ST_Union(piece), 4 * s, 'quad_segs=4'), -4 * s, 'quad_segs=4'),
-         ST_Buffer(p, reach, 8)) as g
+         -- Where the reach cuts across a corner's fill, the kerb turns off
+         -- round rather than at a notch.
+         ST_Buffer(ST_Buffer(ST_Union(u, ST_Intersection(
+           ST_Buffer(ST_Buffer(u, 4 * s, 'quad_segs=8'), -4 * s, 'quad_segs=8'),
+           ST_Buffer(p, reach, 16))), 2 * s, 'quad_segs=8'), -2 * s, 'quad_segs=8'),
+         ST_Buffer(p, reach + 4 * s, 16)) as g
 FROM (
   SELECT i.bridge, v.p, v.s, (v.width * 0.75 + 10) * v.s as reach,
-         COALESCE(ST_Intersection(r.body, ST_Expand(v.p, (v.width + 10 + r.width) * v.s)),
+         ST_Union(COALESCE(ST_Intersection(r.body, ST_Expand(v.p, (v.width + 10 + r.width) * v.s)),
                   ST_Buffer(ST_Intersection(COALESCE(r.axis, r.g), ST_Expand(v.p, (v.width + 10 + r.width) * v.s)), r.width / 2 * r.s,
-                            r.cap)) as piece
+                            r.cap))) as u
   FROM _rm_vertices v
   JOIN _rm_incid i ON i.x = v.x AND i.y = v.y
   JOIN _rm_roads r ON r.osm_id = i.osm_id
-) pieces
-GROUP BY bridge, p, s, reach;
+  GROUP BY i.bridge, v.p, v.s, v.width
+) pieces;
 DELETE FROM _rm_fillets WHERE g IS NULL OR ST_IsEmpty(g);
 CREATE INDEX ON _rm_fillets USING gist (g);
 
@@ -777,8 +781,11 @@ pieces AS (
   SELECT b.cx, b.cy, b.box, f.bridge, f.g
   FROM boxes b JOIN _rm_fillets f ON f.g && b.box
 )
+-- Rounded kerbs carry far more vertices than a tile can show; 3 cm is well
+-- under a pixel at any zoom the tiles are drawn at.
 INSERT INTO _rm_surfaces (bridge, g)
-SELECT bridge, ST_CollectionExtract(ST_MakeValid(ST_Intersection(ST_Union(g), box)), 3)
+SELECT bridge, ST_CollectionExtract(ST_MakeValid(ST_Intersection(
+         ST_Simplify(ST_Union(g), 0.03 / cos(radians(ST_Y(ST_Transform(ST_Centroid(box), 4326))))), box)), 3)
 FROM pieces
 GROUP BY cx, cy, box, bridge;
 DELETE FROM _rm_surfaces WHERE ST_IsEmpty(g);

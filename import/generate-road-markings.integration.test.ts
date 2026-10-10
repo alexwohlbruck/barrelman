@@ -289,6 +289,24 @@ run('generate-road-markings.sql', () => {
     expect(bend).toBeLessThan(0.01)
   })
 
+  test('draws kerb corners as arcs, not a few facets', async () => {
+    // Turning angles along the kerbs within 12 m of a crossroads.
+    const [{ sharpest }] = await sql`
+      WITH ring AS (
+        SELECT fid, d.geom as p, d.path
+        FROM road_surfaces s, ST_DumpPoints(ST_Boundary(ST_Transform(s.geom, 3857))) d
+        WHERE ST_DWithin(s.geom::geography, ST_SetSRID(ST_MakePoint(-74.079, 40.7145), 4326)::geography, 40)
+      ), turns AS (
+        SELECT p, degrees(abs(atan2(sin(a2 - a1), cos(a2 - a1)))) as turn
+        FROM (SELECT p, ST_Azimuth(lag(p) OVER w, p) as a1, ST_Azimuth(p, lead(p) OVER w) as a2 FROM ring
+              WINDOW w AS (PARTITION BY fid, path[1:array_length(path, 1) - 1] ORDER BY path[array_length(path, 1)])) t
+        WHERE a1 IS NOT NULL AND a2 IS NOT NULL
+      )
+      SELECT max(turn) as sharpest FROM turns
+      WHERE ST_DWithin(ST_Transform(p, 4326)::geography, ST_SetSRID(ST_MakePoint(-74.079, 40.7145), 4326)::geography, 12)`
+    expect(sharpest).toBeLessThan(18)
+  })
+
   describe('rebuilding one box', () => {
     const BOX = (sql: postgres.Sql) => sql`ST_MakeEnvelope(-74.0003, 40.7095, -73.9985, 40.7105, 4326)`
     const footprint = async () => (await sql`
