@@ -10,6 +10,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.10.9] - 2026-10-09
+
 ### Changed
 
 * **Road bridge decks follow their hand-drawn outlines.** Where a road bridge
