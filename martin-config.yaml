@@ -490,6 +490,7 @@ postgres:
         id: id
         kind: kind
         height: height
+        line: line
       buffer: 64
       clip_geom: true
 

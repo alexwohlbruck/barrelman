@@ -10,6 +10,12 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Changed
+
+* **Power lines say when they are substation wiring.** `object_lines` now
+  carries a power line's `line` tag, so a client can draw busbars and bays on
+  low gantries rather than full-height towers.
+
 ### Fixed
 
 * **Long elevated roads no longer ripple.** A deck's height is now one arch
