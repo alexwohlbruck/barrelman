@@ -745,45 +745,45 @@ ANALYZE _rm_crossings;
 -- 14 m kerb. Nodes on a bridge or at a junction are left as they are.
 DROP TABLE IF EXISTS _rm_turns;
 CREATE TEMP TABLE _rm_turns AS
-SELECT row_number() OVER () as id, t.p, t.loop, r.ids, r.s, r.width, r.edged, t.island,
-       greatest(CASE WHEN road_metres(t.diameter) > 0 THEN least(greatest(road_metres(t.diameter) / 2, 6), 20)
-                     WHEN r.class = 'service' THEN 8 WHEN t.loop THEN 14 ELSE 11 END,
-                ST_MaxDistance(t.p, t.island) / r.s + 5.5, r.width / 2 + 2) as radius,
-       8.0::float8 as fillet
-FROM (
-  SELECT ST_Transform(g.geom, 3857) as p, g.tags->>'highway' = 'turning_loop' as loop, g.tags->>'diameter' as diameter,
+WITH nodes AS MATERIALIZED (
+  SELECT ST_Transform(g.geom, 3857) as p, g.tags->>'highway' = 'turning_loop' as loop, road_metres(g.tags->>'diameter') as diameter,
          CASE WHEN g.tags->>'highway' = 'turning_loop' THEN (
            SELECT ST_Transform(a.geom, 3857) FROM geo_places a
            WHERE a.geom && g.geom AND a.geom_type = 'area' AND NOT a.tags ?| ARRAY['building', 'highway', 'area:highway']
-             AND ST_Contains(a.geom, g.geom) AND ST_Area(a.geom::geography) < 1200
-           ORDER BY ST_Area(a.geom) LIMIT 1) END as island
+             AND ST_XMax(a.geom) - ST_XMin(a.geom) < 0.001 AND ST_Contains(a.geom, g.geom) AND ST_Area(a.geom::geography) < 1200
+           ORDER BY ST_Area(a.geom) LIMIT 1) END as mapped_island
   FROM geo_places g
   WHERE g.geom && (SELECT area FROM _rm_area) AND g.geom_type = 'point' AND g.tags->>'highway' IN ('turning_circle', 'turning_loop')
-) t
-CROSS JOIN LATERAL (
-  SELECT array_agg(r.osm_id) as ids, max(r.s) as s, max(r.width) as width, bool_or(r.bridge) as bridge,
-         (array_agg(r.class ORDER BY road_rank(r.class) DESC))[1] as class,
-         bool_or(r.marked AND r.class IN ('motorway', 'motorway_link', 'trunk', 'trunk_link')) as edged
-  FROM _rm_roads r WHERE r.g && ST_Expand(t.p, 1) AND ST_DWithin(r.g, t.p, 0.05)
-) r
-WHERE r.ids IS NOT NULL AND NOT r.bridge
-  AND NOT EXISTS (SELECT 1 FROM _rm_nodes n WHERE n.x = round(ST_X(t.p)::numeric, 2) AND n.y = round(ST_Y(t.p)::numeric, 2));
-UPDATE _rm_turns SET island = ST_Buffer(p, (radius - 5.5) * s, 16) WHERE loop AND island IS NULL AND radius - 5.5 >= 2.5;
+),
+sized AS (
+  SELECT t.*, r.ids, r.s, r.width, r.edged, 8.0::float8 as fillet,
+         greatest(CASE WHEN t.diameter > 0 THEN least(greatest(t.diameter / 2, 6), 20)
+                       WHEN r.class = 'service' THEN 8 WHEN t.loop THEN 14 ELSE 11 END,
+                  ST_MaxDistance(t.p, t.mapped_island) / r.s + 5.5, r.width / 2 + 2) as radius
+  FROM nodes t
+  CROSS JOIN LATERAL (
+    SELECT array_agg(r.osm_id) as ids, max(r.s) as s, max(r.width) as width, bool_or(r.bridge) as bridge,
+           (array_agg(r.class ORDER BY road_rank(r.class) DESC))[1] as class,
+           bool_or(r.marked AND r.class IN ('motorway', 'motorway_link', 'trunk', 'trunk_link')) as edged
+    FROM _rm_roads r WHERE r.g && ST_Expand(t.p, 1) AND ST_DWithin(r.g, t.p, 0.05)
+  ) r
+  WHERE r.ids IS NOT NULL AND NOT r.bridge
+    AND NOT EXISTS (SELECT 1 FROM _rm_nodes n WHERE n.x = round(ST_X(t.p)::numeric, 2) AND n.y = round(ST_Y(t.p)::numeric, 2))
+)
 -- The bulb and its road closed over the fillet, kept within reach of the node.
 -- Paint ends where the kerb starts to flare: `paint_end` from the node.
-ALTER TABLE _rm_turns ADD COLUMN g geometry, ADD COLUMN reach float8, ADD COLUMN paint_end float8;
-UPDATE _rm_turns t SET reach = (t.radius + 2 * t.fillet) * t.s,
-  paint_end = (sqrt(power(t.radius + t.fillet, 2) - power(t.width / 2 + t.fillet, 2)) + 2) * t.s;
-UPDATE _rm_turns t SET g = ST_Intersection(
-    ST_Buffer(ST_Buffer(ST_Union(u.u, ST_Buffer(t.p, t.radius * t.s, 16)), t.fillet * t.s, 'quad_segs=16'), -t.fillet * t.s, 'quad_segs=16'),
-    ST_Buffer(t.p, t.reach, 32))
-FROM (
-  SELECT t2.id, ST_Union(COALESCE(ST_Intersection(r.body, ST_Expand(t2.p, t2.reach * 2)),
-                                 ST_Buffer(ST_Intersection(COALESCE(r.axis, r.g), ST_Expand(t2.p, t2.reach * 2)), r.width / 2 * r.s, r.cap))) as u
-  FROM _rm_turns t2 JOIN _rm_roads r ON r.osm_id = ANY (t2.ids)
-  GROUP BY t2.id
-) u
-WHERE t.id = u.id;
+SELECT t.p, t.ids, t.s, t.edged, t.radius, (t.radius + 2 * t.fillet) * t.s as reach,
+       (sqrt(power(t.radius + t.fillet, 2) - power(t.width / 2 + t.fillet, 2)) + 2) * t.s as paint_end,
+       COALESCE(t.mapped_island, CASE WHEN t.loop AND t.radius - 5.5 >= 2.5 THEN ST_Buffer(t.p, (t.radius - 5.5) * t.s, 16) END) as island,
+       ST_Intersection(
+         ST_Buffer(ST_Buffer(ST_Union(u.road, ST_Buffer(t.p, t.radius * t.s, 16)), t.fillet * t.s, 'quad_segs=16'), -t.fillet * t.s, 'quad_segs=16'),
+         ST_Buffer(t.p, (t.radius + 2 * t.fillet) * t.s, 32)) as g
+FROM sized t
+CROSS JOIN LATERAL (
+  SELECT ST_Union(COALESCE(ST_Intersection(r.body, box), ST_Buffer(ST_Intersection(COALESCE(r.axis, r.g), box), r.width / 2 * r.s, r.cap))) as road
+  FROM _rm_roads r, LATERAL (SELECT ST_Expand(t.p, (t.radius + 2 * t.fillet) * t.s * 2) as box) b
+  WHERE r.osm_id = ANY (t.ids)
+) u;
 DELETE FROM _rm_turns WHERE g IS NULL OR ST_IsEmpty(g);
 CREATE INDEX ON _rm_turns USING gist (g);
 ANALYZE _rm_turns;
