@@ -125,7 +125,7 @@ run('generate-road-markings.sql', () => {
   })
 
   const covered = async (x: number, y: number) =>
-    (await sql`SELECT EXISTS (SELECT 1 FROM road_surfaces WHERE ST_Intersects(geom, ST_SetSRID(ST_MakePoint(${x}, ${y}), 4326))) as hit`)[0].hit
+    (await sql`SELECT EXISTS (SELECT 1 FROM road_surfaces WHERE kind IS NULL AND ST_Intersects(geom, ST_SetSRID(ST_MakePoint(${x}, ${y}), 4326))) as hit`)[0].hit
 
   test('paves each carriageway but leaves the median between them open', async () => {
     expect(await covered(SB_X, 40.7105)).toBe(true)
@@ -399,7 +399,12 @@ run('generate-road-markings.sql', () => {
       expect(glyphs).toBe(0)
     })
 
-    test('leaves a turning loop\'s island unpaved', async () => {
+    test('leaves a turning loop\'s island unpaved, and marks it to be drawn over the road running into it', async () => {
+      const [{ island }] = await sql`
+        SELECT ST_Area(geom::geography) as island FROM road_surfaces
+        WHERE kind = 'island' AND ST_Intersects(geom, ST_SetSRID(ST_MakePoint(-74.130, 40.713), 4326))`
+      expect(island).toBeGreaterThan(Math.PI * 8 * 8)
+      expect(island).toBeLessThan(Math.PI * 9 * 9)
       expect(await covered(-74.130, 40.713)).toBe(false)
       expect(await covered(east(-74.130, 6), 40.713)).toBe(false)
       expect(await covered(east(-74.130, 11), 40.713)).toBe(true)
@@ -416,6 +421,8 @@ run('generate-road-markings.sql', () => {
 
     beforeAll(async () => {
       before = await footprint()
+      // As on a database last built before islands.
+      await sql`ALTER TABLE road_surfaces DROP COLUMN kind`
       await sql.unsafe(GUARD_NEXT)
       await sql`TRUNCATE _rm_scope`
       await sql`INSERT INTO _rm_scope VALUES (${BOX(sql)})`
@@ -426,6 +433,12 @@ run('generate-road-markings.sql', () => {
       const after = await footprint()
       expect(Math.abs(after.union_m2 - before.union_m2) / before.union_m2).toBeLessThan(0.01)
       expect(Math.abs(after.sum_m2 - after.union_m2) / after.union_m2).toBeLessThan(0.01)
+    })
+
+    test('gives live tables built before islands their column', async () => {
+      const [{ ok }] = await sql`SELECT to_regclass('road_surfaces') IS NOT NULL AND EXISTS (
+        SELECT 1 FROM pg_attribute WHERE attrelid = 'road_surfaces'::regclass AND attname = 'kind') as ok`
+      expect(ok).toBe(true)
     })
 
     test('keeps the paint inside and outside the box', async () => {

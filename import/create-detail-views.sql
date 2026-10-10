@@ -812,7 +812,8 @@ CREATE INDEX IF NOT EXISTS sport_pitches_geom_idx ON sport_pitches USING GIST (g
 -- Built by import/generate-road-markings.sql, which swaps fresh tables in.
 -- Created empty here so Martin always finds them: a source missing from the
 -- `detail` bundle would fail the whole bundle, not just the roads.
-CREATE TABLE IF NOT EXISTS road_surfaces (fid bigserial PRIMARY KEY, bridge boolean, geom geometry(MultiPolygon, 4326));
+CREATE TABLE IF NOT EXISTS road_surfaces (fid bigserial PRIMARY KEY, bridge boolean, kind text, geom geometry(MultiPolygon, 4326));
+ALTER TABLE road_surfaces ADD COLUMN IF NOT EXISTS kind text;
 CREATE TABLE IF NOT EXISTS road_markings (
   fid bigserial PRIMARY KEY, kind text, pattern text, color text, style text, bridge boolean,
   geom geometry(Geometry, 4326));

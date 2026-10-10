@@ -5,7 +5,8 @@
 -- plain fill, line and symbol layers:
 --
 --   road_surfaces   carriageways at their real width, with kerb corners
---                   rounded where roads meet
+--                   rounded where roads meet, and the islands turning loops
+--                   run round (`kind` 'island')
 --   road_markings   lines: centre, lane, edge, bike lane, stop and crosswalk,
 --                   each with a colour and a pattern
 --   road_glyphs     points: turn arrows, bike symbols and sharrows, each with
@@ -861,8 +862,11 @@ WHERE su.ctid = i.row;
 DELETE FROM _rm_surfaces WHERE ST_IsEmpty(g);
 CREATE INDEX ON _rm_surfaces USING gist (g);
 DROP TABLE IF EXISTS road_surfaces_next;
-CREATE TABLE road_surfaces_next (fid bigserial CONSTRAINT road_surfaces_next_pk PRIMARY KEY, bridge boolean, geom geometry(MultiPolygon, 4326));
+CREATE TABLE road_surfaces_next (fid bigserial CONSTRAINT road_surfaces_next_pk PRIMARY KEY, bridge boolean, kind text, geom geometry(MultiPolygon, 4326));
 INSERT INTO road_surfaces_next (bridge, geom) SELECT bridge, ST_Multi(ST_Transform(g, 4326)) FROM _rm_surfaces;
+-- An island is drawn over whatever the basemap runs into it.
+INSERT INTO road_surfaces_next (bridge, kind, geom)
+SELECT false, 'island', ST_Multi(ST_Transform(island, 4326)) FROM _rm_turns WHERE island IS NOT NULL;
 CREATE INDEX road_surfaces_next_geom_idx ON road_surfaces_next USING gist (geom);
 
 -- What lane lines break for besides crossing roads: the crosswalks over them,
@@ -1281,16 +1285,16 @@ UPDATE road_markings_next m SET geom = COALESCE(ST_CollectionExtract(clip.g, CAS
 FROM (
   SELECT m2.fid, ST_Intersection(m2.geom, ST_Union(s.geom)) as g
   FROM road_markings_next m2
-  JOIN road_surfaces_next s ON s.geom && m2.geom AND (s.bridge = m2.bridge OR m2.kind = 'crosswalk')
+  JOIN road_surfaces_next s ON s.geom && m2.geom AND s.kind IS NULL AND (s.bridge = m2.bridge OR m2.kind = 'crosswalk')
   GROUP BY m2.fid, m2.geom
 ) clip
 WHERE m.fid = clip.fid;
 DELETE FROM road_markings_next m
 WHERE ST_IsEmpty(geom)
-   OR NOT EXISTS (SELECT 1 FROM road_surfaces_next s WHERE s.geom && m.geom AND (s.bridge = m.bridge OR m.kind = 'crosswalk'));
+   OR NOT EXISTS (SELECT 1 FROM road_surfaces_next s WHERE s.geom && m.geom AND s.kind IS NULL AND (s.bridge = m.bridge OR m.kind = 'crosswalk'));
 DELETE FROM road_glyphs_next g
 WHERE EXISTS (SELECT 1 FROM _rm_turns t WHERE ST_DWithin(t.p, ST_Transform(g.geom, 3857), t.radius * t.s))
-   OR NOT EXISTS (SELECT 1 FROM road_surfaces_next s WHERE s.bridge = g.bridge AND ST_Intersects(s.geom, g.geom));
+   OR NOT EXISTS (SELECT 1 FROM road_surfaces_next s WHERE s.bridge = g.bridge AND s.kind IS NULL AND ST_Intersects(s.geom, g.geom));
 
 -- ─── Swap ────────────────────────────────────────────────────────────────────
 CREATE INDEX road_markings_next_geom_idx ON road_markings_next USING gist (geom);
@@ -1321,7 +1325,12 @@ BEGIN
   -- The first box on a database that never had a full build. Same shape as
   -- the swapped-in tables, so a later full build replaces them cleanly.
   CREATE TABLE IF NOT EXISTS road_surfaces (
-    fid bigserial CONSTRAINT road_surfaces_pkey PRIMARY KEY, bridge boolean, geom geometry(MultiPolygon, 4326));
+    fid bigserial CONSTRAINT road_surfaces_pkey PRIMARY KEY, bridge boolean, kind text, geom geometry(MultiPolygon, 4326));
+  -- Altered only when it lacks the column: even a no-op ALTER would lock tile
+  -- reads out of the table until this build commits.
+  IF NOT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = 'road_surfaces'::regclass AND attname = 'kind' AND NOT attisdropped) THEN
+    ALTER TABLE road_surfaces ADD COLUMN kind text;
+  END IF;
   CREATE TABLE IF NOT EXISTS road_markings (
     fid bigserial CONSTRAINT road_markings_pkey PRIMARY KEY, kind text, pattern text, color text, style text, bridge boolean,
     geom geometry(Geometry, 4326));
@@ -1342,8 +1351,8 @@ BEGIN
   DELETE FROM road_markings WHERE geom && box AND (geom @ box OR ST_IsEmpty(geom));
   DELETE FROM road_glyphs WHERE ST_Intersects(geom, box);
 
-  INSERT INTO road_surfaces (bridge, geom)
-  SELECT bridge, ST_Multi(road_clip(geom, box, true, 3)) FROM road_surfaces_next WHERE geom && box;
+  INSERT INTO road_surfaces (bridge, kind, geom)
+  SELECT bridge, kind, ST_Multi(road_clip(geom, box, true, 3)) FROM road_surfaces_next WHERE geom && box;
   INSERT INTO road_markings (kind, pattern, color, style, bridge, geom)
   SELECT kind, pattern, color, style, bridge, road_clip(geom, box, true, CASE WHEN pattern = 'fill' THEN 3 ELSE 2 END)
   FROM road_markings_next WHERE geom && box;
