@@ -34,6 +34,14 @@ describe('chains', () => {
     const decks = chains([road(way(1, 0, 50)), bend, ramp])
     expect(decks.map(d => d.ways)).toEqual([[1, 2], [3]])
   })
+
+  it('breaks a tie between pairs the same way whatever order the ways come in', () => {
+    // A crossroads: east-west and north-south run equally straight through it.
+    const arm = (id: number, to: Point): Way => ({ ...way(id, 0, 0), points: [east(50), to] })
+    const ways = [arm(1, east(100)), arm(2, east(0)), arm(3, east(50, 50)), arm(4, east(50, -50))]
+    const members = (w: Way[]) => chains(w).map(d => [...d.ways].sort()).sort((a, b) => a[0] - b[0])
+    expect(members([...ways].reverse())).toEqual(members(ways))
+  })
 })
 
 describe('resample', () => {

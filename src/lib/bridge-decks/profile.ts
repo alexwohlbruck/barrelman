@@ -55,7 +55,7 @@ export type Chain = {
 export const MAX_GRADE = 0.06
 /** Height per OSM layer that a deck stands clear of the ground beneath it. */
 export const LAYER_CLEARANCE = 6
-/** Length of the level stretch kept over what a deck crosses, so easing it does not cut the clearance, in metres. */
+/** Length of the level stretch kept over what a deck crosses, in metres. Easing over VERTICAL_CURVE rounds a lone crest a few tenths of a metre under it. */
 export const CURVE = 24
 /** Length of the vertical curve a deck's grades are eased into, in metres. */
 export const VERTICAL_CURVE = 90
@@ -163,8 +163,10 @@ const ONWARD = -0.5
  * else the straightest pair, and the rest end there.
  */
 export function chains(ways: Way[]): Chain[] {
+  // By id, so a tie between pairs goes the same way whatever order the rows came in.
+  const sorted = [...ways].sort((a, b) => a.id - b.id)
   const ends = new Map<string, Way[]>()
-  for (const w of ways)
+  for (const w of sorted)
     for (const p of [w.points[0], w.points[w.points.length - 1]]) ends.set(key(p), [...(ends.get(key(p)) ?? []), w])
   const used = new Set<number>()
   const out: Chain[] = []
@@ -183,7 +185,7 @@ export function chains(ways: Way[]): Chain[] {
     const other = best?.[0] === from ? best[1] : best?.[1] === from ? best[0] : null
     return other && other !== from && !used.has(other.id) ? other : null
   }
-  for (const start of [...ways].sort((a, b) => a.id - b.id)) {
+  for (const start of sorted) {
     if (used.has(start.id)) continue
     used.add(start.id)
     let points = [...start.points]
@@ -280,11 +282,12 @@ export function fitEdges(decks: Chain[], outline: Point[], rivals: Chain[] = [])
   const roads = decks.filter(d => d.kind === 'road')
   const others = rivals.filter(d => d.kind === 'road' && !roads.includes(d))
   const reach = new Map<Chain, [number, number]>()
+  const candidates = [...roads, ...others].map(road => ({ road, bounds: grow(box(road.points), MAX_REACH) }))
   for (const q of outline) {
     let nearest: Chain | null = null
     let near: ReturnType<typeof beside> | null = null
-    for (const road of [...roads, ...others]) {
-      if (!covers(grow(box(road.points), MAX_REACH), q)) continue
+    for (const { road, bounds } of candidates) {
+      if (!covers(bounds, q)) continue
       const b = beside(road.points, q)
       if (!near || b.distance < near.distance) [nearest, near] = [road, b]
     }
