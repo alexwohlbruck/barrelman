@@ -33,9 +33,14 @@ const UNDER: Array<[string, string]> = [
 /** Water areas, by tag. */
 const WATER: Array<[string, string]> = [['natural', 'water'], ['waterway', 'riverbank'], ['landuse', 'reservoir']]
 
-/** Any of the tags, as containment tests geo_places' tag index answers. */
+/**
+ * Any of the tags, tested by value so the planner reads the box's geometry
+ * index: streams and ponds run to millions of rows across the US, and their
+ * tag index alone costs more than everything in a cell (measured: 1.2 s vs
+ * 0.05-0.6 s a cell).
+ */
 const anyTag = (sql: Sql, pairs: Array<[string, string]>) =>
-  pairs.map(([k, v]) => sql`g.tags @> ${sql.json({ [k]: v })}`).reduce((a, b) => sql`${a} OR ${b}`)
+  pairs.map(([k, v]) => sql`g.tags->>${k} = ${v}`).reduce((a, b) => sql`${a} OR ${b}`)
 
 /** Decks per INSERT: one statement per batch rather than a round trip per deck. */
 const INSERT_BATCH = 500
@@ -134,7 +139,7 @@ export async function inputFor(sql: Sql, rows: Row[]): Promise<DeckInput> {
   // Roads a deck passes over cross one of its ways, so only those are read, by
   // each way cut into short pieces on the road lines' own index: a deck
   // followed across a city spans a box holding tens of thousands of roads.
-  // Railways, waterways and water are few enough to find by their tags' index.
+  // Railways, waterways and water are read by the box.
   const ids = rows.map(r => r.id)
   const crossable = sql`g.geom_type = 'line' AND COALESCE(g.tags->>'bridge', 'no') = 'no' AND COALESCE(g.tags->>'tunnel', 'no') = 'no'
       AND COALESCE(g.tags->>'location', '') NOT IN ('underground', 'underwater')`
