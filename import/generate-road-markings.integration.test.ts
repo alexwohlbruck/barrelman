@@ -114,6 +114,10 @@ const ways: [number, string, Record<string, string>][] = [
   [153, line([-74.2105, 40.713], [-74.210, 40.713], [-74.2095, 40.713]), { highway: 'secondary', lanes: '2' }],
   [154, line([-74.2102, 40.71295], [-74.2098, 40.71295]), { highway: 'footway', footway: 'crossing', 'crossing:markings': 'zebra' }],
   [155, line([-74.2102, 40.71282], [-74.2098, 40.71282]), { highway: 'footway', footway: 'crossing', 'crossing:markings': 'zebra' }],
+  // A street crossed twice at one spot, the crossings a few degrees apart.
+  [160, line([-74.2205, 40.713], [-74.2195, 40.713]), { highway: 'residential', lanes: '2' }],
+  [161, line([-74.2200, 40.71285], [-74.2200, 40.71315]), { highway: 'footway', footway: 'crossing', 'crossing:markings': 'zebra' }],
+  [162, line([-74.22003, 40.71285], [-74.21997, 40.71315]), { highway: 'footway', footway: 'crossing', 'crossing:markings': 'zebra' }],
   // A crossing drawn well past both kerbs, and askew to the street.
   [9, line([-74.0006, 40.70985], [-74.0004, 40.71015]), { highway: 'footway', footway: 'crossing', 'crossing:markings': 'zebra' }],
 ]
@@ -327,6 +331,15 @@ run('generate-road-markings.sql', () => {
     // stands 5.3 m back, past the crossing carriageway's own 4.8 m.
     expect(await crossing(SB_X, ahead(STREET_Y, 5), -6, 6, ['lane'])).toBe(0)
     expect(await crossing(SB_X, ahead(STREET_Y, 12), -6, 6, ['lane'])).toBeGreaterThan(0)
+  })
+
+  test('does not stack two crosswalks mapped over each other', async () => {
+    const [{ overlap }] = await sql`
+      SELECT COALESCE(sum(ST_Area(ST_Intersection(a.geom, b.geom)::geography)), 0) as overlap
+      FROM road_markings a JOIN road_markings b ON a.fid < b.fid AND a.geom && b.geom
+      WHERE a.kind = 'crosswalk' AND b.kind = 'crosswalk'
+        AND ST_DWithin(a.geom::geography, ST_SetSRID(ST_MakePoint(-74.220, 40.713), 4326)::geography, 15)`
+    expect(Number(overlap)).toBeLessThan(0.05)
   })
 
   test('builds with a skewed crossing too short for one bar', async () => {
