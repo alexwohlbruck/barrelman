@@ -1486,13 +1486,18 @@ GROUP BY w.style, w.seg;
 -- Crosswalks meeting at a skewed corner, or mapped twice, would stack their
 -- bars: the smaller gives way to the larger (then the one further west, so
 -- every box picks the same) wherever they overlap.
+-- Indexed on their own: road_markings_next has no index until the swap.
+DROP TABLE IF EXISTS _rm_walk_paint;
+CREATE TEMP TABLE _rm_walk_paint AS
+SELECT fid, geom, ST_Area(geom) as area FROM road_markings_next WHERE kind = 'crosswalk';
+CREATE INDEX ON _rm_walk_paint USING gist (geom);
+ANALYZE _rm_walk_paint;
 UPDATE road_markings_next m SET geom = ST_Multi(ST_CollectionExtract(ST_Difference(m.geom, w.cover), 3))
 FROM (
   SELECT m2.fid, ST_Union(ST_ConvexHull(o.geom)) as cover
-  FROM road_markings_next m2
-  JOIN road_markings_next o ON o.kind = 'crosswalk' AND o.fid <> m2.fid AND o.geom && m2.geom AND ST_Intersects(o.geom, m2.geom)
-   AND (ST_Area(o.geom), -ST_XMin(o.geom), -ST_YMin(o.geom)) > (ST_Area(m2.geom), -ST_XMin(m2.geom), -ST_YMin(m2.geom))
-  WHERE m2.kind = 'crosswalk'
+  FROM _rm_walk_paint m2
+  JOIN _rm_walk_paint o ON o.fid <> m2.fid AND o.geom && m2.geom AND ST_Intersects(o.geom, m2.geom)
+   AND (o.area, -ST_XMin(o.geom), -ST_YMin(o.geom)) > (m2.area, -ST_XMin(m2.geom), -ST_YMin(m2.geom))
   GROUP BY m2.fid
 ) w
 WHERE m.fid = w.fid;
