@@ -1,0 +1,67 @@
+---
+title: Road markings
+description: Which OpenStreetMap tags the lane-level road layers are built from, how well the OSM wiki backs each one, and what is drawn.
+---
+
+`import/generate-road-markings.sql` turns OSM's lane tags into three tile layers for lane-level ("HD") roads:
+
+| Layer | Geometry | Properties |
+|---|---|---|
+| `road_surfaces` | carriageways at their real width, with rounded kerb corners | `bridge`, `kind` (`island` for a turning loop's island) |
+| `road_markings` | painted lines and areas | `kind`, `pattern`, `color`, `style`, `bridge` |
+| `road_glyphs` | arrows and bike symbols | `glyph`, `direction`, `bridge` |
+
+Only tags the OSM wiki documents are read, and paint follows US conventions (MUTCD): yellow where it separates opposing traffic, white otherwise.
+
+## What is drawn
+
+| Feature | OSM tagging | Wiki status | Drawn as (`kind` / `pattern`) |
+|---|---|---|---|
+| Lane lines | `lanes`, `lanes:forward`, `lanes:backward` | de facto | `lane` / `dashed`, `dashed_long` on motorways and trunks |
+| Centre line | two-way roads; `overtaking` | de facto | `centre` / `double` yellow, `dashed` where overtaking is allowed |
+| Centre turn lane | `lanes:both_ways=1`, `turn:lanes:both_ways=left` | de facto | `centre`: solid yellow on the through side, dashed yellow on the turn-lane side, each edge; back-to-back `road-arrow-left` glyphs |
+| Lane change barred | `change:lanes[:forward\|:backward]`, `change` (`no`, `not_left`, `not_right`) | in use | `lane` / `solid` where neither lane may cross; a solid line beside a dashed one where only one may |
+| Turn arrows | `turn:lanes[:forward\|:backward]` | approved | glyphs `road-arrow-*` |
+| Lane placement | `placement[:forward\|:backward]` | de facto | shifts the carriageway |
+| Width | `width:carriageway`, `width` | de facto | carriageway width |
+| Bike lanes | `cycleway[:left\|:right\|:both]=lane\|track`, `cycleway:*:width` | de facto | `bike` lines, `bike_lane` / `fill` green |
+| Bike lane buffer | `cycleway:*:buffer=yes\|<metres>` (0.9 m for `yes`), or `cycleway:*:marking:<traffic side>=barred_area` | de facto / draft | two `bike` lines, with `hatch` bars between them where the buffer is at least 0.6 m |
+| Bus lanes | `bus:lanes`, `lanes:bus`, `psv:lanes`, `lanes:psv` | de facto | `bus_lane` / `fill` red |
+| Street parking | `parking:<side>=lane` + `:orientation` + `:markings` (also the deprecated `parking:lane:*`) | approved | `parking` stall lines: angled or perpendicular stalls unless `markings=no`, parallel stalls and the lane's edge line only with `markings=yes` |
+| Hatched areas | closed way `road_marking=restriction` + `pattern=stripes\|chevron\|crosshatch` + `colour` + `stroke` | approved (2025) | paved; `restriction` outline (`solid`, `double`, `dashed`, or `none` for `stroke=no`, which no layer draws) and `hatch` bars at 45°, chevrons pointing at the arriving traffic |
+| Hatched areas (older tagging) | `area:highway=prohibited`, `traffic_calming=painted_island` (areas) | in use | as above, `stripes` |
+| Stop lines | `highway=stop` (+ `direction`, `stop=all`), `highway=traffic_signals` | de facto | `stop` / `fill` across the arriving lanes |
+| Yield lines | `highway=give_way` (+ `direction`) | de facto | `yield` / `fill`: white triangles pointing at the traffic. A sign within 30 m of a junction, or on its node for the roads below the top one, puts them where a stop line would go; one further along the road, where it is mapped |
+| Crosswalks | `crossing:markings`, `crossing=marked\|traffic_signals` | approved | `crosswalk` / `fill`, `style` `zebra`, `lines`, `ladder`, `dashes` or `dots` (edge lines broken into 0.6 m dashes or 0.3 m dots) |
+| Speed humps | `traffic_calming=hump\|table\|cushion` (node on the road) | approved | `hump` / `fill`: one chevron per lane, pointing with the traffic, on any paved road; none on a raised crosswalk |
+| Turning circles | `highway=turning_circle\|turning_loop`, `diameter` | de facto | a round bulb in `road_surfaces` |
+
+Hatched areas are read when they are under about 200 m across, at ground level (no `bridge`, `tunnel` or `layer`), white or yellow, and on or beside a road. One without a `colour` is yellow in the Americas when a two-way road runs through it, or one-ways either side of it run opposite ways, and white otherwise. Chevrons need a one-way beside the area to know which way traffic runs; without one they are drawn as stripes.
+
+## Mapping a painted median
+
+The wiki's approved way to map a painted median or gore is its own closed way on the carriageway:
+
+```
+road_marking=restriction
+pattern=stripes          (or chevron, crosshatch)
+colour=yellow            (white for gores between lanes running the same way)
+stroke=solid             (the outline; double_solid, dashed, or no)
+```
+
+Per Key:lanes, `lanes` counts traffic lanes only: a flush median is not a lane, and a centre turn lane is (`lanes:both_ways=1`).
+
+## Not drawn
+
+| Tagging | Why |
+|---|---|
+| `road_marking=lane_divider`, `edge_line`, `solid_*` ways | The wiki asks for lines along roads to be derived from the centreline's lane tags, not traced. |
+| `road_marking=arrow`, `text`, `symbol` | Rare; turn arrows come from `turn:lanes`. |
+| `median=*`, `divider=*` on the centreline | Draft and experimental schemes. |
+| `area:highway=<road class>` | Never voted, and the wiki notes it is unsettled whether it is the whole road or parts of it; road shapes come from the centreline. |
+| `width:lanes` | Rare, and it counts bike and parking lanes in its list. |
+| `traffic_calming=bump` | Usually unpainted, and mostly off the street. |
+
+## Rebuilding
+
+A full build replaces the three tables; a scoped build rebuilds one box (see the header of the SQL file). With `ROAD_MARKINGS_INCREMENTAL=1`, replication queues a box wherever an edit touches what the build reads: the roads, crossings, signal, stop, give way, turning circle and speed hump nodes, and hatched areas.
