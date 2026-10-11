@@ -10,6 +10,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.10.12] - 2026-10-10
+
 ### Fixed
 
 * **Lane markings stay continuous where roads split, merge and change lanes.**
