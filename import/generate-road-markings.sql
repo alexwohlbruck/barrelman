@@ -1094,7 +1094,8 @@ WITH mapped AS (
          COALESCE(a.tags->>'stroke', 'solid') as stroke
   FROM geo_places a
   WHERE a.geom && (SELECT area FROM _rm_area) AND a.geom_type = 'area'
-    AND (a.tags->>'road_marking' = 'restriction' OR a.tags->>'area:highway' = 'prohibited' OR a.tags->>'traffic_calming' = 'painted_island')
+    -- Rare tags: the tags index finds them faster than the box does.
+    AND (a.tags @> '{"road_marking": "restriction"}' OR a.tags @> '{"area:highway": "prohibited"}' OR a.tags @> '{"traffic_calming": "painted_island"}')
     AND COALESCE(a.tags->>'bridge', 'no') = 'no' AND COALESCE(a.tags->>'tunnel', 'no') = 'no' AND COALESCE(road_int(a.tags->>'layer'), 0) = 0
     AND ST_XMax(a.geom) - ST_XMin(a.geom) < 0.002 AND ST_YMax(a.geom) - ST_YMin(a.geom) < 0.002
     AND COALESCE(lower(a.tags->>'colour'), 'white') IN ('white', 'yellow')
@@ -1757,7 +1758,8 @@ SELECT 'hump', 'fill', 'white', false, ST_Transform(ST_Multi(ST_Union(ST_Buffer(
 FROM (
   SELECT ST_Transform(geom, 3857) as p, osm_id
   FROM geo_places
-  WHERE geom && (SELECT area FROM _rm_area) AND geom_type = 'point' AND tags->>'traffic_calming' IN ('hump', 'table', 'cushion')
+  WHERE geom && (SELECT area FROM _rm_area) AND geom_type = 'point'
+    AND (tags @> '{"traffic_calming": "hump"}' OR tags @> '{"traffic_calming": "table"}' OR tags @> '{"traffic_calming": "cushion"}')
 ) h
 CROSS JOIN LATERAL (
   SELECT r.* FROM _rm_roads r WHERE r.g && ST_Expand(h.p, 2) ORDER BY r.g <-> h.p LIMIT 1
