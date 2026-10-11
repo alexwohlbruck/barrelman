@@ -10,6 +10,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.10.14] - 2026-10-11
+
 ### Fixed
 
 * **Ramps that gain lanes widen in one smooth flare.** A road that adds lanes
