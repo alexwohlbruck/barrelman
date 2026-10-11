@@ -105,6 +105,8 @@ DECLARE
   k float8;
 BEGIN
   IF line IS NULL OR len_m IS NULL OR len_m <= 0 OR ST_Length(line) = 0 OR GeometryType(line) <> 'LINESTRING' THEN RETURN NULL; END IF;
+  -- Arithmetic leaves 1e-16 where an offset is nil, which GEOS fails to offset by.
+  IF abs(target) < 1e-6 THEN target := 0; END IF;
   e1 := least(1, greatest(CASE WHEN d1 <> 0 THEN ease ELSE 0 END, CASE WHEN d2 <> 0 THEN res_len - res_at ELSE 0 END) / len_m);
   t0 := CASE WHEN d3 <> 0 THEN greatest(0, 1 - tail_ease / len_m) ELSE 1 END;
   step := greatest(0.5, least(CASE WHEN d1 <> 0 THEN ease ELSE 'Infinity' END, CASE WHEN d2 <> 0 THEN res_len ELSE 'Infinity' END,
@@ -165,22 +167,37 @@ $$;
 -- between the lines whose moves are known (`pos`, `disp`), and held past the
 -- outermost.
 CREATE OR REPLACE FUNCTION road_field(pos float8[], disp float8[], p float8) RETURNS float8
-LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
-  SELECT COALESCE(CASE WHEN lo.x IS NULL THEN hi.d WHEN hi.x IS NULL OR hi.x = lo.x THEN lo.d
-                       ELSE lo.d + (hi.d - lo.d) * (p - lo.x) / (hi.x - lo.x) END, 0)
-  FROM (SELECT 1) one
-  LEFT JOIN LATERAL (SELECT x, d FROM unnest(pos, disp) u(x, d) WHERE x <= p ORDER BY x DESC LIMIT 1) lo ON true
-  LEFT JOIN LATERAL (SELECT x, d FROM unnest(pos, disp) u(x, d) WHERE x >= p ORDER BY x LIMIT 1) hi ON true
+LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE AS $$
+DECLARE
+  lo int;
+  hi int;
+  i int;
+BEGIN
+  IF pos IS NULL OR p IS NULL THEN RETURN 0; END IF;
+  -- `pos` is sorted; the nearest at or below `p` and at or above it.
+  FOR i IN 1..array_length(pos, 1) LOOP
+    IF pos[i] <= p THEN lo := i; END IF;
+    IF pos[i] >= p AND hi IS NULL THEN hi := i; END IF;
+  END LOOP;
+  IF lo IS NULL THEN RETURN disp[hi]; END IF;
+  IF hi IS NULL OR pos[hi] = pos[lo] THEN RETURN disp[lo]; END IF;
+  RETURN disp[lo] + (disp[hi] - disp[lo]) * (p - pos[lo]) / (pos[hi] - pos[lo]);
+END
 $$;
 
 -- How far the tapers have the line headed for offset `p` still to go, `x`
 -- metres along a way (see road_profile), from its own and the way before's.
 CREATE OR REPLACE FUNCTION road_moved(pos float8[], disp float8[], ease float8, res_pos float8[], res_disp float8[],
                                       res_at float8, res_len float8, p float8, x float8)
-RETURNS float8 LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
-  SELECT -d * (1 - road_smoothstep(x / nullif(ease, 0)))
-         - road_field(res_pos, res_disp, p - d) * (1 - road_smoothstep((x + res_at) / nullif(res_len, 0)))
-  FROM (SELECT road_field(pos, disp, p) as d) f
+RETURNS float8 LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE AS $$
+DECLARE
+  d float8;
+BEGIN
+  IF pos IS NULL AND res_pos IS NULL THEN RETURN 0; END IF;
+  d := road_field(pos, disp, p);
+  RETURN -d * (1 - road_smoothstep(x / nullif(ease, 0)))
+         - road_field(res_pos, res_disp, p - d) * (1 - road_smoothstep((x + res_at) / nullif(res_len, 0)));
+END
 $$;
 
 -- A line cut into dashes `dash` metres long, a whole number of `period`s
@@ -189,10 +206,10 @@ $$;
 CREATE OR REPLACE FUNCTION road_dashes(line geometry, len_m float8, period float8, dash float8, from_f float8)
 RETURNS geometry LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
   SELECT ST_Collect(ST_LineSubstring(line, greatest(f0, from_f), f1) ORDER BY k)
-  FROM (SELECT greatest(1, round(len_m / period))::int as n) c,
+  FROM (SELECT greatest(1, round(len_m / period))::int as n WHERE len_m > 0 AND line IS NOT NULL) c,
        generate_series(0, c.n - 1) k,
        LATERAL (SELECT k::float8 / c.n as f0, least(1, k::float8 / c.n + dash / len_m) as f1) f
-  WHERE f1 > greatest(f0, from_f) AND len_m > 0
+  WHERE f1 > greatest(f0, from_f)
 $$;
 
 -- ST_OffsetCurve, or NULL for the self-crossing ways GEOS refuses to offset.
@@ -685,9 +702,11 @@ WITH j AS (
 ), u AS (
   SELECT prev_id, next_id, ARRAY[x / sqrt(x * x + y * y), y / sqrt(x * x + y * y)] as u FROM j WHERE x * x + y * y > 0
 )
-UPDATE _rm_roads r SET dir_s = COALESCE((SELECT u FROM u WHERE u.next_id = r.osm_id), r.dir_s),
-                       dir_e = COALESCE((SELECT u FROM u WHERE u.prev_id = r.osm_id), r.dir_e)
-WHERE r.osm_id IN (SELECT prev_id FROM _rm_pairs UNION SELECT next_id FROM _rm_pairs);
+UPDATE _rm_roads r SET dir_s = s.u, dir_e = e.u
+FROM _rm_roads r2
+LEFT JOIN u s ON s.next_id = r2.osm_id
+LEFT JOIN u e ON e.prev_id = r2.osm_id
+WHERE r.osm_id = r2.osm_id AND (s.u IS NOT NULL OR e.u IS NOT NULL);
 
 -- ─── Where the way runs ──────────────────────────────────────────────────────
 -- The carriageway is centred on its way unless something says otherwise, and
@@ -835,7 +854,7 @@ UPDATE _rm_roads a SET next_len = b.len_m, next_grows = (b.kerb_l - b.kerb_r) - 
 FROM _rm_pairs p JOIN _rm_roads b ON b.osm_id = p.next_id
 WHERE a.osm_id = p.prev_id AND b.carries;
 UPDATE _rm_roads SET
-  ease = least(len_m + COALESCE(next_len, 0), greatest(least(30, len_m + COALESCE(next_len, 0)),
+  ease = least(len_m + COALESCE(next_len, 0), greatest(least(30, CASE WHEN next_len IS NULL THEN 0.6 * len_m ELSE len_m + next_len END),
            least(0.6 * (len_m + COALESCE(next_len, 0)), t.mutcd),
            CASE WHEN sign(next_grows) = sign((kerb_l - kerb_r) - (prev_kerb_l - prev_kerb_r)) AND abs(next_grows) > 0.2
                 THEN least(t.mutcd, len_m + 0.5 * next_len) END)),
@@ -864,7 +883,15 @@ FROM (
          array_agg(p ORDER BY p) FILTER (WHERE opens) as emerge
   FROM _rm_roads r,
        LATERAL (VALUES (r.kerb_l, r.prev_kerb_l, false), (r.left_edge, r.prev_left, false), (r.split_b, r.prev_split_b, false),
-                       (r.split_f, r.prev_split_f, false), (r.right_edge, r.prev_right, false), (r.kerb_r, r.prev_kerb_r, false)
+                       (r.split_f, r.prev_split_f, false), (r.right_edge, r.prev_right, false), (r.kerb_r, r.prev_kerb_r, false),
+                       (r.left_edge - 0.3, r.prev_left - 0.3, false), (r.right_edge + 0.3, r.prev_right + 0.3, false)
+               UNION ALL
+               -- Bike lines keep their distance from their kerb.
+               SELECT o, r.prev_kerb_r + o - r.kerb_r, false
+               FROM unnest(ARRAY[r.br_b, r.br_b + r.buf_r, r.br_a]) o WHERE r.bike_r > 0
+               UNION ALL
+               SELECT o, r.prev_kerb_l + o - r.kerb_l, false
+               FROM unnest(ARRAY[r.bl_b, r.bl_b - r.buf_l, r.bl_a]) o WHERE r.bike_l > 0
                UNION ALL
                SELECT r.split_f - i * r.lane_w, st, abs(st - r.prev_split_f) < 0.05 OR abs(st - r.prev_right) < 0.05
                FROM generate_series(1, r.fwd - 1) i,
@@ -1317,21 +1344,24 @@ CROSS JOIN LATERAL (SELECT road_profile(ST_Simplify(l.g, 0.05 * l.s), l.s, r.len
                            least(1, greatest(0,
                              CASE WHEN l.kind = 'lane' AND EXISTS (SELECT 1 FROM unnest(r.emerge) e WHERE abs(e - l.offset_m) < 0.05) THEN r.ease END,
                              CASE WHEN l.kind = 'lane' AND EXISTS (SELECT 1 FROM unnest(r.res_emerge) e WHERE abs(e - ap.at_prev) < 0.05)
-                                  THEN r.res_len - r.res_at END) / r.len_m) as from_f) o
+                                  THEN r.res_len - r.res_at END) / nullif(r.len_m, 0)) as from_f) o
 CROSS JOIN LATERAL (SELECT CASE
   WHEN l.pattern = 'dashed' THEN road_dashes(o.line, r.len_m, 9, 3, o.from_f)
   WHEN l.pattern = 'dashed_long' THEN road_dashes(o.line, r.len_m, 12, 3, o.from_f)
   WHEN o.from_f > 0 AND o.from_f < 1 THEN ST_LineSubstring(o.line, o.from_f, 1)
   WHEN o.from_f < 1 THEN o.line END as paint) d
 CROSS JOIN LATERAL (
-  SELECT ST_LineMerge(ST_CollectionExtract(COALESCE(ST_Difference(d.paint, ST_Union(cut)), d.paint), 2)) as clipped
+  SELECT ST_LineMerge(ST_CollectionExtract(COALESCE(ST_Difference(d.paint, ST_Union(cut)), d.paint), 2)) as merged
   FROM (SELECT k.cut FROM _rm_cuts k WHERE k.cut && o.line
         UNION ALL SELECT k.cut FROM _rm_boxes k WHERE k.cut && o.line AND l.osm_id = ANY (k.ids)
         UNION ALL SELECT a.cut FROM _rm_approach_cuts a WHERE a.osm_id = l.osm_id
         UNION ALL SELECT rc.cut FROM _rm_road_cuts rc WHERE rc.osm_id = l.osm_id
         UNION ALL SELECT tc.cut FROM _rm_turn_cuts tc WHERE l.osm_id = ANY (tc.ids) AND tc.cut && o.line AND tc.edge = (l.kind = 'edge')) cuts
-) c
-WHERE d.paint IS NOT NULL AND NOT ST_IsEmpty(c.clipped)
+) m
+-- A dash a cut leaves a stub of is left out.
+CROSS JOIN LATERAL (SELECT CASE WHEN l.pattern LIKE 'dashed%'
+  THEN (SELECT ST_Collect(p.geom) FROM ST_Dump(m.merged) p WHERE ST_Length(p.geom) > 1 * l.s) ELSE m.merged END as clipped) c
+WHERE d.paint IS NOT NULL AND c.clipped IS NOT NULL AND NOT ST_IsEmpty(c.clipped)
   AND ST_Length(c.clipped) > CASE WHEN l.pattern LIKE 'dashed%' THEN 0.5 ELSE 2 END * l.s;
 
 -- Edge lines on round a turning circle's kerb.

@@ -123,6 +123,8 @@ const ways: [number, string, Record<string, string>][] = [
   [172, line([-74.015, 40.71748], [-74.015, 40.71780]), { highway: 'motorway_link', oneway: 'yes', lanes: '3', 'turn:lanes': 'none|none|right' }],
   [173, line([-74.015, 40.71780], [-74.015, 40.71803]), { highway: 'motorway_link', oneway: 'yes', lanes: '4' }],
   [174, line([-74.015, 40.71803], [-74.015, 40.7190]), { highway: 'motorway_link', oneway: 'yes', lanes: '5' }],
+  // A way whose two nodes were mapped at one spot.
+  [175, line([-74.015, 40.7195], [-74.015, 40.7195]), { highway: 'residential', lanes: '2' }],
   // A street crossed twice at one spot, the crossings a few degrees apart.
   [160, line([-74.2205, 40.713], [-74.2195, 40.713]), { highway: 'residential', lanes: '2' }],
   [161, line([-74.2200, 40.71285], [-74.2200, 40.71315]), { highway: 'footway', footway: 'crossing', 'crossing:markings': 'zebra' }],
@@ -330,7 +332,18 @@ run('generate-road-markings.sql', () => {
       expect(sharpest).toBeLessThan(8)
     })
 
-    test('starts the line of each lane that opens where its taper ends, in phase with the dashes before it', async () => {
+    test('runs its edge lines on unbroken where one way\'s taper carries into the next', async () => {
+      const [{ worst, joins }] = await sql`
+        WITH e AS (SELECT ST_StartPoint(geom) as s, ST_EndPoint(geom) as e, color FROM road_markings
+                   WHERE kind = 'edge' AND geom && ${sql`ST_MakeEnvelope(${east(RAMP_X, -12)}, 40.7170, ${east(RAMP_X, 12)}, 40.7192, 4326)`})
+        SELECT max(gap) as worst, count(*)::int as joins
+        FROM (SELECT (SELECT min(ST_Distance(a.e::geography, b.s::geography)) FROM e b WHERE b.color = a.color AND b.s <> a.s) as gap
+              FROM e a WHERE ST_Y(a.e) BETWEEN 40.7171 AND 40.7181) g`
+      expect(joins).toBeGreaterThanOrEqual(6)
+      expect(Number(worst)).toBeLessThan(0.05)
+    })
+
+    test('starts the line of each lane that opens where its taper ends', async () => {
       const dashes = await sql`
         SELECT ST_YMin(d.geom) as y0, ST_YMax(d.geom) as y1, (ST_X(ST_Centroid(d.geom)) - ${RAMP_X}) * 84300 as x
         FROM road_markings m, ST_Dump(m.geom) d
