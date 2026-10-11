@@ -25,18 +25,18 @@ Only tags the OSM wiki documents are read, and paint follows US conventions (MUT
 | Lane placement | `placement[:forward\|:backward]` | de facto | shifts the carriageway |
 | Width | `width:carriageway`, `width` | de facto | carriageway width |
 | Bike lanes | `cycleway[:left\|:right\|:both]=lane\|track`, `cycleway:*:width` | de facto | `bike` lines, `bike_lane` / `fill` green |
-| Bike lane buffer | `cycleway:*:buffer=yes\|<metres>`, or `cycleway:*:marking:*=barred_area` | de facto / draft | two `bike` lines with `hatch` bars between them |
+| Bike lane buffer | `cycleway:*:buffer=yes\|<metres>` (0.9 m for `yes`), or `cycleway:*:marking:<traffic side>=barred_area` | de facto / draft | two `bike` lines, with `hatch` bars between them where the buffer is at least 0.6 m |
 | Bus lanes | `bus:lanes`, `lanes:bus`, `psv:lanes`, `lanes:psv` | de facto | `bus_lane` / `fill` red |
 | Street parking | `parking:<side>=lane` + `:orientation` + `:markings` (also the deprecated `parking:lane:*`) | approved | `parking` stall lines: angled or perpendicular stalls unless `markings=no`, parallel stalls and the lane's edge line only with `markings=yes` |
-| Hatched areas | closed way `road_marking=restriction` + `pattern=stripes\|chevron\|crosshatch` + `colour` + `stroke` | approved (2025) | paved; `restriction` outline (`solid`, `double`, `dashed`) and `hatch` bars at 45°, chevrons pointing at the arriving traffic |
+| Hatched areas | closed way `road_marking=restriction` + `pattern=stripes\|chevron\|crosshatch` + `colour` + `stroke` | approved (2025) | paved; `restriction` outline (`solid`, `double`, `dashed`, or `none` for `stroke=no`, which no layer draws) and `hatch` bars at 45°, chevrons pointing at the arriving traffic |
 | Hatched areas (older tagging) | `area:highway=prohibited`, `traffic_calming=painted_island` (areas) | in use | as above, `stripes` |
 | Stop lines | `highway=stop` (+ `direction`, `stop=all`), `highway=traffic_signals` | de facto | `stop` / `fill` across the arriving lanes |
-| Yield lines | `highway=give_way` (+ `direction`) | de facto | `yield` / `fill`: white triangles pointing at the traffic, where the node is mapped |
+| Yield lines | `highway=give_way` (+ `direction`) | de facto | `yield` / `fill`: white triangles pointing at the traffic. A sign within 30 m of a junction, or on its node for the roads below the top one, puts them where a stop line would go; one further along the road, where it is mapped |
 | Crosswalks | `crossing:markings`, `crossing=marked\|traffic_signals` | approved | `crosswalk` / `fill`, `style` `zebra`, `lines` or `ladder` |
-| Speed humps | `traffic_calming=hump\|table\|cushion` (node on the road) | approved | `hump` / `fill`: one chevron per lane, pointing with the traffic |
+| Speed humps | `traffic_calming=hump\|table\|cushion` (node on the road) | approved | `hump` / `fill`: one chevron per lane, pointing with the traffic, on any paved road; none on a raised crosswalk |
 | Turning circles | `highway=turning_circle\|turning_loop`, `diameter` | de facto | a round bulb in `road_surfaces` |
 
-A hatched area without a `colour` is yellow in the Americas when a two-way road runs through it, or one-ways either side of it run opposite ways, and white otherwise. Chevrons need a one-way beside the area to know which way traffic runs; without one they are drawn as stripes.
+Hatched areas are read when they are under about 200 m across, at ground level (no `bridge`, `tunnel` or `layer`), white or yellow, and on or beside a road. One without a `colour` is yellow in the Americas when a two-way road runs through it, or one-ways either side of it run opposite ways, and white otherwise. Chevrons need a one-way beside the area to know which way traffic runs; without one they are drawn as stripes.
 
 ## Mapping a painted median
 

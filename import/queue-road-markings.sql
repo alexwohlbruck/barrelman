@@ -12,7 +12,7 @@
 -- nodes, and painted areas. old_places keeps categories, not tags, so an old
 -- service road or footway counts only where it was drawn: a service road on a
 -- paved surface, a footway under a painted crosswalk, and an area or node
--- without a category only where it was painted (a hatched area, a hump).
+-- without a category only on a painted area's outline or by a hump's paint.
 -- Without those, every alley and sidewalk edit in a built city would queue a
 -- rebuild.
 --
@@ -72,8 +72,11 @@ BEGIN
                     AND EXISTS (SELECT 1 FROM road_markings m WHERE m.geom && o.geom AND m.kind = 'crosswalk'))))
        OR (o.geom_type = 'point' AND o.categories && ARRAY['highway/crossing', 'highway/traffic_signals', 'highway/stop',
                                                            'highway/give_way', 'highway/turning_circle', 'highway/turning_loop'])
-       OR (o.geom_type IN ('area', 'point') AND o.categories = '{}'
-           AND EXISTS (SELECT 1 FROM road_markings m WHERE m.geom && o.geom AND m.kind IN ('restriction', 'hatch', 'hump')))
+       OR (o.geom_type = 'area' AND o.categories = '{}'
+           AND EXISTS (SELECT 1 FROM road_markings m WHERE m.geom && o.geom AND m.kind = 'restriction' AND ST_Intersects(m.geom, o.geom)))
+       OR (o.geom_type = 'point' AND o.categories = '{}'
+           AND EXISTS (SELECT 1 FROM road_markings m WHERE m.geom && ST_Expand(o.geom, 0.00003) AND m.kind = 'hump'
+                       AND ST_DWithin(m.geom, o.geom, 0.00003)))
        OR o.id IN (SELECT id FROM relevant_new)
     UNION ALL
     SELECT osm_id, geom FROM relevant_new

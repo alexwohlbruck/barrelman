@@ -151,6 +151,11 @@ const hdWays: [number, string, Record<string, string>][] = [
   // Angled parking on the right, marked parallel parking on the left.
   [290, line([-74.340, 40.712], [-74.340, 40.714]), { highway: 'residential', lanes: '2', 'parking:right': 'lane',
     'parking:right:orientation': 'diagonal', 'parking:left': 'lane', 'parking:left:orientation': 'parallel', 'parking:left:markings': 'yes' }],
+  // A long way with a buffered bike lane and angled parking across the cell
+  // boundary at 40.718, crossed far south of it.
+  [300, line([-74.0175, 40.705], [-74.0175, 40.728]), { highway: 'residential', lanes: '2', 'cycleway:right': 'lane',
+    'cycleway:right:buffer': 'yes', 'parking:left': 'lane', 'parking:left:orientation': 'diagonal' }],
+  [301, line([-74.0178, 40.710], [-74.0172, 40.710]), { highway: 'footway', footway: 'crossing', 'crossing:markings': 'zebra' }],
   // A painted median across the boundary of two cells at 40.718.
   [280, line([-74.015, 40.716], [-74.015, 40.720]), { highway: 'secondary', lanes: '2' }],
 ]
@@ -161,6 +166,7 @@ const hdFeatures: [string, string, Record<string, string>, string][] = [
   ['W281', rect(-74.015, 40.7175, -1.5, 1.5, 0, 111), { road_marking: 'restriction', pattern: 'stripes', colour: 'yellow' }, 'area'],
   ['N262', `POINT(-74.330 ${40.7135 - 15 / 111050})`, { highway: 'give_way', direction: 'forward' }, 'point'],
   ['N271', 'POINT(-74.335 40.713)', { traffic_calming: 'hump' }, 'point'],
+  ['N272', 'POINT(-74.335 40.7135)', { highway: 'crossing', crossing: 'marked', 'crossing:markings': 'zebra', traffic_calming: 'table' }, 'point'],
 ]
 
 // Every build drops the *_next tables by bare name too, scoped ones included.
@@ -703,6 +709,12 @@ run('generate-road-markings.sql', () => {
       expect(longest).toBeGreaterThan(100)
     })
 
+    test('leaves a raised crosswalk its crosswalk, without hump chevrons', async () => {
+      const kinds = (await sql`SELECT DISTINCT kind FROM road_markings WHERE geom && ${by(-74.335, 40.7135, 4)}`).map(r => r.kind)
+      expect(kinds).toContain('crosswalk')
+      expect(kinds).not.toContain('hump')
+    })
+
     test('marks a speed hump with a chevron in each lane, on the carriageway', async () => {
       const rows = await sql`
         SELECT ST_NumGeometries(geom) as n,
@@ -815,8 +827,14 @@ run('generate-road-markings.sql', () => {
       SELECT ST_Length(ST_Union(geom)::geography) as union_m, sum(ST_Length(geom::geography)) as sum_m
       FROM road_markings WHERE kind = 'hatch' AND geom && ST_MakeEnvelope(-74.0152, 40.7174, -74.0148, 40.7186, 4326)`
     let medianBefore: any
+    // Bars along the long bike lane and parking near the boundary.
+    const bars = () => sql`
+      SELECT ST_AsText(ST_SnapToGrid(ST_Union(geom), 0.0000001)) as g, ST_Length(ST_Union(geom)::geography) as m
+      FROM road_markings WHERE kind IN ('hatch', 'parking') AND geom && ST_MakeEnvelope(-74.0180, 40.7176, -74.0170, 40.7184, 4326)`
+    let barsBefore: any
     beforeAll(async () => {
       ;[medianBefore] = await median()
+      ;[barsBefore] = await bars()
       for (const [y0, y1] of [[40.70, 40.718], [40.718, 40.73]]) {
         await sql`TRUNCATE _rm_scope`
         await sql`INSERT INTO _rm_scope VALUES (${cell(y0, y1)})`
@@ -849,6 +867,14 @@ run('generate-road-markings.sql', () => {
       expect(medianBefore.union_m).toBeGreaterThan(20)
       expect(Math.abs(after.union_m - medianBefore.union_m)).toBeLessThan(0.05)
       expect(Math.abs(after.sum_m - after.union_m)).toBeLessThan(0.05)
+    })
+
+    test('space a long way\'s hatching and stalls as one build would, whatever each box cuts', async () => {
+      const [after] = await bars()
+      expect(barsBefore.m).toBeGreaterThan(20)
+      expect(Math.abs(after.m - barsBefore.m)).toBeLessThan(0.05)
+      const [{ moved }] = await sql`SELECT ST_HausdorffDistance(${after.g}::geometry, ${barsBefore.g}::geometry) * 84300 as moved`
+      expect(moved).toBeLessThan(0.05)
     })
 
     test('meet without a gap or an overlap', async () => {
