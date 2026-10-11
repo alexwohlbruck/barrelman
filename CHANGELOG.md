@@ -10,6 +10,15 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.10.14] - 2026-10-11
+
+### Fixed
+
+* **Ramps that gain lanes widen in one smooth flare.** A road that adds lanes
+  over several short ways no longer steps its kerbs in and out at each one,
+  and each new lane's line starts once its lane has opened.
+* **Lane dashes run on across way splits** instead of starting over at each.
+
 ## [0.10.13] - 2026-10-10
 
 ### Fixed
