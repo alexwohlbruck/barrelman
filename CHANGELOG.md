@@ -19,7 +19,7 @@ does it — and the release pipeline turns it into the GitHub Release notes.
   their solid and dashed yellow edges and paired arrows; `change:lanes` makes
   lane lines solid; bike lane buffers are hatched; marked street parking gets
   its stalls; give way signs get yield triangles; and speed humps, tables and
-  cushions get chevrons. New `road_markings` kinds: `restriction`, `hatch`,
+  cushions get chevrons; dashed and dotted crosswalks are drawn so. New `road_markings` kinds: `restriction`, `hatch`,
   `parking`, `yield`, `hump`. Replication queues edits to all of these. See
   the Road markings page in the self-hosting docs.
 
