@@ -15,9 +15,10 @@
 -- Without those, every alley and sidewalk edit in a built city would queue a
 -- rebuild.
 --
--- A road's place reads the way before it, and the way after that eases back
--- (generate-road-markings.sql, Where the way runs), so a changed road also
--- queues the ways that carry straight on from either end of it, two deep.
+-- A road's place reads the way before it, the way after that eases back, and
+-- a fork's branches line up with its stem (generate-road-markings.sql, Where
+-- the way runs, Forks), so a changed road also queues every way meeting
+-- either end of it, two deep.
 --
 -- Nothing is queued where road markings were never built. A failure here is
 -- reported and skipped rather than raised: it would otherwise roll back the
@@ -71,10 +72,8 @@ BEGIN
     UNION ALL
     SELECT osm_id, geom FROM relevant_new
   ),
-  -- The way carrying on from an end of a touched road, as the build pairs them:
-  -- that end meets the end of one other road way and nothing else's. The
-  -- touched way's own outline is the old one where it moved, so it is not
-  -- looked for in geo_places.
+  -- The ways ending where a touched road ends. The touched way's own outline
+  -- is the old one where it moved, so it is not looked for in geo_places.
   next1 AS (
     SELECT DISTINCT n.osm_id, n.geom
     FROM touched t, LATERAL (VALUES (ST_StartPoint(t.geom)), (ST_EndPoint(t.geom))) e(pt),
@@ -84,11 +83,7 @@ BEGIN
              AND g.osm_id <> t.osm_id
              AND (ST_DWithin(ST_StartPoint(g.geom), e.pt, 1e-7) OR ST_DWithin(ST_EndPoint(g.geom), e.pt, 1e-7))
          ) n
-    WHERE GeometryType(t.geom) = 'LINESTRING'
-      AND (SELECT count(*) FROM geo_places g
-           WHERE g.geom && ST_Expand(e.pt, 1e-7) AND g.geom_type = 'line' AND g.osm_type = 'W' AND road_is_marked_way(g.tags)
-             AND g.osm_id <> t.osm_id
-             AND (ST_DWithin(ST_StartPoint(g.geom), e.pt, 1e-7) OR ST_DWithin(ST_EndPoint(g.geom), e.pt, 1e-7))) = 1
+    WHERE GeometryType(t.geom) = 'LINESTRING' AND NOT EXISTS (SELECT 1 FROM touched x WHERE x.osm_id = n.osm_id)
   ),
   next2 AS (
     SELECT DISTINCT n.osm_id, n.geom
@@ -100,10 +95,7 @@ BEGIN
              AND (ST_DWithin(ST_StartPoint(g.geom), e.pt, 1e-7) OR ST_DWithin(ST_EndPoint(g.geom), e.pt, 1e-7))
          ) n
     WHERE NOT EXISTS (SELECT 1 FROM touched x WHERE x.osm_id = n.osm_id)
-      AND (SELECT count(*) FROM geo_places g
-           WHERE g.geom && ST_Expand(e.pt, 1e-7) AND g.geom_type = 'line' AND g.osm_type = 'W' AND road_is_marked_way(g.tags)
-             AND g.osm_id <> t.osm_id
-             AND (ST_DWithin(ST_StartPoint(g.geom), e.pt, 1e-7) OR ST_DWithin(ST_EndPoint(g.geom), e.pt, 1e-7))) = 1
+      AND NOT EXISTS (SELECT 1 FROM next1 x WHERE x.osm_id = n.osm_id)
   )
   INSERT INTO detail_dirty (layer, box)
   SELECT 'road_markings', ST_Envelope(ST_Expand(geom, 0.0005))
