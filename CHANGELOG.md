@@ -16,12 +16,13 @@ does it — and the release pipeline turns it into the GitHub Release notes.
   medians and gores mapped as `road_marking=restriction` areas (or the older
   `area:highway=prohibited` and `traffic_calming=painted_island`) are paved,
   outlined and hatched, yellow between opposing traffic. Centre turn lanes get
-  their solid and dashed yellow edges and paired arrows; `change:lanes` makes
-  lane lines solid; bike lane buffers are hatched; marked street parking gets
-  its stalls; give way signs get yield triangles; and speed humps, tables and
-  cushions get chevrons; crosswalks mapped as dashes or dots draw that way. New `road_markings` kinds: `restriction`, `hatch`,
-  `parking`, `yield`, `hump`. Replication queues edits to all of these. See
-  the Road markings page in the self-hosting docs.
+  their solid and dashed yellow edges and paired arrows, `change:lanes` makes
+  lane lines solid, bike lane buffers are hatched, marked street parking gets
+  its stalls, give way signs get yield triangles, speed humps, tables and
+  cushions get chevrons, and crosswalks mapped as dashes or dots draw that
+  way. New `road_markings` kinds: `restriction`, `hatch`, `parking`, `yield`,
+  `hump`. Replication queues edits to all of these. See the Road markings
+  page in the self-hosting docs.
 
 ## [0.10.13] - 2026-10-10
 
