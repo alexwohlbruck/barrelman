@@ -10,6 +10,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.10.13] - 2026-10-10
+
 ### Fixed
 
 * **Road markings build at full speed again in dense cities.** 0.10.12's check
