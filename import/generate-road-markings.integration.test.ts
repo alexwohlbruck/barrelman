@@ -186,6 +186,16 @@ const hdWays: [number, string, Record<string, string>][] = [
   [324, line([-74.369, 40.712], [-74.369, 40.714]), { highway: 'footway', width: '6' }],
   [325, line([-74.371, 40.712], [-74.371, 40.714]), { highway: 'path', lanes: '2', surface: 'gravel' }],
   [326, line([-74.373, 40.712], [-74.373, 40.714]), { highway: 'footway', footway: 'sidewalk', 'cycleway:right': 'lane' }],
+  // Prospect Park's drive, no lanes mapped, crossed by a street.
+  [327, line([-74.375, 40.712], [-74.375, 40.713], [-74.375, 40.714]), { highway: 'pedestrian', oneway: 'yes', bicycle: 'designated',
+    segregated: 'yes', cycleway: 'track' }],
+  [328, line([-74.3755, 40.713], [-74.375, 40.713], [-74.3745, 40.713]), { highway: 'residential', lanes: '2' }],
+  // A street with foot=designated, and a two-way bikeway one lane wide.
+  [329, line([-74.377, 40.712], [-74.377, 40.714]), { highway: 'residential', lanes: '2', 'cycleway:right': 'lane', foot: 'designated' }],
+  [330, line([-74.379, 40.712], [-74.379, 40.714]), { highway: 'cycleway', lanes: '1' }],
+  // A car-free drive ending on a street, the third leg of a T.
+  [331, line([-74.382, 40.7135], [-74.381, 40.7135], [-74.380, 40.7135]), { highway: 'residential', lanes: '2' }],
+  [332, line([-74.381, 40.712], [-74.381, 40.7135]), { highway: 'pedestrian', oneway: 'yes', 'cycleway:right': 'track', lanes: '1', width: '8' }],
 ]
 const hdFeatures: [string, string, Record<string, string>, string][] = [
   ['W231', rect(-74.315, 40.7130, -1.5, 1.5, 0, 66), { road_marking: 'restriction' }, 'area'],
@@ -901,6 +911,39 @@ run('generate-road-markings.sql', () => {
         SELECT EXISTS (SELECT 1 FROM road_markings WHERE kind = 'centre'
           AND ST_Intersects(geom, ST_MakeLine(ST_SetSRID(ST_MakePoint(-74.360, 40.71295), 4326), ST_SetSRID(ST_MakePoint(-74.360, 40.71305), 4326)))) as hit`
       expect(hit).toBe(true)
+    })
+
+    test('breaks the bike line of a drive with no lanes mapped where a street crosses', async () => {
+      expect(await marks(-74.375, 40.7121, 40.7124).then(rows => rows.filter(r => r.kind === 'bike'))).toHaveLength(1)
+      expect(await marks(-74.375, 40.713 - 3 / 111050, 40.713 + 3 / 111050)
+        .then(rows => rows.filter(r => r.kind === 'bike'))).toHaveLength(0)
+    })
+
+    test('paves a pedestrian street with no width as a street with its bike lane', async () => {
+      expect(await across(-74.375, 40.7125)).toBeCloseTo(7.8, 0)
+    })
+
+    const glyphs = (x: number) => sql`
+      SELECT glyph, direction, (ST_X(geom) - ${x}) * 84300 as off FROM road_glyphs
+      WHERE geom && ST_MakeEnvelope(${x - 10 / 84300}, 40.712, ${x + 10 / 84300}, 40.714, 4326)`
+
+    test('puts no walkers on a street, whatever its foot tag', async () => {
+      expect((await glyphs(-74.377)).filter(r => r.glyph === 'road-walk')).toHaveLength(0)
+    })
+
+    test('puts one bike symbol down the middle of a two-way bikeway one lane wide', async () => {
+      const rows = (await glyphs(-74.379)).filter(r => r.glyph === 'road-bike')
+      expect(rows.length).toBeGreaterThan(0)
+      expect(rows.every(r => Math.abs(r.off) < 0.1)).toBe(true)
+      expect(new Set(rows.map(r => r.direction)).size).toBe(1)
+    })
+
+    test('is no junction where it ends on a street: the street\'s lines run on and nothing stops', async () => {
+      const [{ hit }] = await sql`
+        SELECT EXISTS (SELECT 1 FROM road_markings WHERE kind = 'centre'
+          AND ST_Intersects(geom, ST_MakeLine(ST_SetSRID(ST_MakePoint(-74.381, 40.71345), 4326), ST_SetSRID(ST_MakePoint(-74.381, 40.71355), 4326)))) as hit`
+      expect(hit).toBe(true)
+      expect(await sql`SELECT 1 FROM road_markings WHERE kind = 'stop' AND geom && ST_MakeEnvelope(-74.3812, 40.7130, -74.3808, 40.7137, 4326)`).toHaveLength(0)
     })
 
     test('gives a greenway one solid yellow centre line where passing is barred', async () => {

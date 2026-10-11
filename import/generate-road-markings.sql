@@ -51,7 +51,7 @@ LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
     WHEN class IN ('motorway_link', 'trunk_link', 'primary') THEN 3.4
     WHEN class IN ('primary_link', 'secondary', 'secondary_link', 'tertiary', 'tertiary_link') THEN 3.3
     WHEN class = 'service' THEN 2.8
-    WHEN class IN ('cycleway', 'path') THEN 1.5
+    WHEN class IN ('cycleway', 'path', 'footway') THEN 1.5
     ELSE 3.0
   END
 $$;
@@ -493,14 +493,15 @@ LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
                             'residential', 'living_street', 'service', 'busway')
        AND (tags->>'highway' <> 'service' OR tags ?| ARRAY['lanes', 'lane_markings', 'width', 'width:carriageway']))
       OR (tags->>'highway' IN ('pedestrian', 'cycleway', 'path', 'footway')
-          AND COALESCE(tags->>'footway', tags->>'cycleway', tags->>'path', '') NOT IN ('sidewalk', 'crossing', 'access_aisle', 'traffic_island', 'link')
+          AND COALESCE(tags->>'footway', tags->>'cycleway', tags->>'path', '') NOT IN ('sidewalk', 'crossing', 'access_aisle', 'traffic_island', 'link', 'sidepath')
+          AND NOT tags ? 'crossing' AND COALESCE(tags->>'is_sidepath', 'no') = 'no'
           AND COALESCE(tags->>'surface', 'paved') IN ('paved', 'asphalt', 'concrete', 'concrete:plates', 'concrete:lanes', 'chipseal')
           AND ((tags ? 'lanes' AND tags->>'highway' <> 'footway')
                OR (tags->>'highway' <> 'cycleway'
                    AND ARRAY[tags->>'cycleway', tags->>'cycleway:left', tags->>'cycleway:right', tags->>'cycleway:both']
                        && ARRAY['lane', 'track', 'opposite_lane', 'opposite_track'])
                OR ((tags->>'highway' = 'cycleway' OR tags->>'bicycle' = 'designated')
-                   AND substring(tags->>'width' from '^\s*([0-9]+(?:\.[0-9]+)?)\s*m?\s*$')::float8 >= 4)))
+                   AND substring(replace(tags->>'width', ',', '.') from '^\s*([0-9]+(?:\.[0-9]+)?)\s*m?\s*$')::float8 >= 4)))
     )
 $$;
 
@@ -721,7 +722,9 @@ WITH raw AS (
          ST_X(ST_Centroid(geom)) < -30 as americas,
          COALESCE(tags->>'oneway' IN ('yes', 'true', '1', '-1')
            OR tags->>'junction' IN ('roundabout', 'circular')
-           OR (tags->>'highway' IN ('motorway', 'motorway_link') AND COALESCE(tags->>'oneway', '') <> 'no'), false) as oneway,
+           OR (tags->>'highway' IN ('motorway', 'motorway_link') AND COALESCE(tags->>'oneway', '') <> 'no'), false)
+           -- With no cars on it, a way bikes ride both ways is two-way.
+           AND NOT (road_car_free(tags->>'highway') AND COALESCE(tags->>'oneway:bicycle', '') = 'no') as oneway,
          road_int(tags->>'lanes') as lanes_tag,
          COALESCE(road_int(tags->>'lanes:both_ways'), 0) as both_ways,
          COALESCE(road_metres(tags->>'width:carriageway'), road_metres(tags->>'width')) as width_tag,
@@ -810,11 +813,11 @@ CREATE INDEX ON _rm_roads (osm_id);
 -- forks (below), which must come out the same in every box.
 DROP TABLE IF EXISTS _rm_ends_at;
 CREATE TEMP TABLE _rm_ends_at AS
-SELECT osm_id, service, at_start, pt, round(ST_X(pt)::numeric, 2) as x, round(ST_Y(pt)::numeric, 2) as y,
+SELECT osm_id, service, car_free, at_start, pt, round(ST_X(pt)::numeric, 2) as x, round(ST_Y(pt)::numeric, 2) as y,
        -- The way's heading where it meets the node, in its direction of travel.
        degrees(ST_Azimuth(a, b)) as heading
 FROM (
-  SELECT osm_id, road_minor(class) as service, e.at_start, e.pt,
+  SELECT osm_id, road_minor(class) as service, road_car_free(class) as car_free, e.at_start, e.pt,
          CASE WHEN e.at_start THEN ST_StartPoint(g) ELSE ST_LineInterpolatePoint(g, greatest(0, 1 - 10 * s / ST_Length(g))) END as a,
          CASE WHEN e.at_start THEN ST_LineInterpolatePoint(g, least(1, 10 * s / ST_Length(g))) ELSE ST_EndPoint(g) END as b
   FROM _rm_roads, LATERAL (VALUES (true, ST_StartPoint(g)), (false, ST_EndPoint(g))) e(at_start, pt)
@@ -880,7 +883,7 @@ WITH turns AS (
   SELECT e.osm_id as prev_id, st.osm_id as next_id, e.x, e.y,
          abs(((st.heading - e.heading + 540)::numeric % 360) - 180) as turn
   FROM _rm_ends_at e JOIN _rm_ends_at st ON st.x = e.x AND st.y = e.y AND st.at_start AND st.osm_id <> e.osm_id
-  WHERE NOT e.at_start AND e.service = st.service
+  WHERE NOT e.at_start AND e.service = st.service AND e.car_free = st.car_free
 )
 SELECT t.prev_id, t.next_id
 FROM turns t
@@ -1198,9 +1201,9 @@ INSERT INTO _rm_road_cuts (osm_id, cut)
 SELECT r.osm_id, ST_Union(ST_Buffer(ST_Intersection(COALESCE(o.axis, o.g), ST_Expand(x.geom, (r.width + 6) * r.s)),
                                     (o.width / 2 + 1) * o.s, 'endcap=flat join=round quad_segs=4'))
 FROM _rm_roads r
-JOIN _rm_roads o ON o.g && r.g AND NOT road_minor(o.class) AND NOT o.bridge
+JOIN _rm_roads o ON o.g && r.g AND NOT road_minor(o.class) AND NOT o.bridge AND ST_Intersects(r.g, o.g)
 CROSS JOIN LATERAL ST_Dump(ST_Intersection(r.g, o.g)) x
-WHERE r.marked AND road_car_free(r.class) AND NOT r.bridge AND GeometryType(x.geom) = 'POINT'
+WHERE road_car_free(r.class) AND NOT r.bridge AND GeometryType(x.geom) = 'POINT'
 GROUP BY r.osm_id;
 CREATE INDEX ON _rm_road_cuts (osm_id);
 
@@ -1991,14 +1994,18 @@ FROM (
   SELECT r.*, 'shared_lane' IN (COALESCE(tags->>CASE WHEN flip THEN 'cycleway:left' ELSE 'cycleway:right' END, tags->>'cycleway:both', tags->>'cycleway', '')) as sharrow_r,
               'shared_lane' IN (COALESCE(tags->>CASE WHEN flip THEN 'cycleway:right' ELSE 'cycleway:left' END, tags->>'cycleway:both',
                                          CASE WHEN NOT oneway THEN tags->>'cycleway' END, '')) as sharrow_l,
-              class = 'cycleway' as bikeway, class IN ('pedestrian', 'footway') OR tags->>'foot' = 'designated' as walkway
+              class = 'cycleway' OR (class IN ('path', 'footway') AND tags->>'bicycle' = 'designated') as bikeway,
+              class IN ('pedestrian', 'footway') OR (road_car_free(class) AND tags->>'foot' = 'designated') as walkway
   FROM _rm_roads r
 ) r
 CROSS JOIN LATERAL (VALUES
-  (true, r.bike_r > 0 OR r.bikeway, CASE WHEN r.bike_r > 0 THEN (r.br_a + r.br_b) / 2 ELSE r.right_edge + r.lane_w * 0.4 END,
+  -- A two-way bikeway one lane wide takes one symbol, down its middle.
+  (true, r.bike_r > 0 OR r.bikeway, CASE WHEN r.bike_r > 0 THEN (r.br_a + r.br_b) / 2
+                                         WHEN r.bikeway AND NOT r.oneway AND r.bwd = 0 THEN (r.left_edge + r.right_edge) / 2
+                                         ELSE r.right_edge + r.lane_w * 0.4 END,
    r.bike_r > 0 OR r.sharrow_r OR r.bikeway, false),
   (r.oneway, r.bike_l > 0 OR r.bikeway, CASE WHEN r.bike_l > 0 THEN (r.bl_a + r.bl_b) / 2 ELSE r.left_edge - r.lane_w * 0.4 END,
-   r.bike_l > 0 OR r.sharrow_l OR (r.bikeway AND NOT r.oneway), false),
+   r.bike_l > 0 OR r.sharrow_l OR (r.bikeway AND NOT r.oneway AND r.bwd > 0), false),
   (true, false, (r.left_edge + r.right_edge) / 2, r.walkway AND r.bike_r + r.bike_l > 0, true)
 ) side(forward, lane, off, present, walk)
 CROSS JOIN LATERAL generate_series(1, floor(ST_Length(r.g) / r.s / 60)::int) k
