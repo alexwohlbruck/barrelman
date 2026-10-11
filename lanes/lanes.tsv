@@ -1,0 +1,34 @@
+# Lane-marking regression set: name <TAB> bbox w,s,e,n (fl-stage area) <TAB> camera lat,lng,zoom,pitch,bearing (fl-shot) <TAB> why it is hard
+# Read by fl-stage (areas) and fl-shot (presets). Run the set:  fl-lanes run|shot ...  (see fl-lanes)
+west-st-3to4	-74.0161,40.7125,-74.0111,40.7175	40.71503,-74.01357,19.89,0,12.2	user spot 1: West St SB, 6->3->4 lanes over 3 short ways, right bay opens; lines jumped sideways
+west-chambers	-74.0155,40.7148,-74.0105,40.7198	40.71725,-74.01300,19.79,0,0	user spot 2: West St at Chambers/Reade, 2 carriageways, turn arrows vs stop bar, greenway crossing
+state-whitehall	-74.0162,40.6999,-74.0112,40.7049	40.70237,-74.01367,19.34,0,0	user spot 3: State St at Whitehall, skewed junction, centre lines offset across it
+bedford-rogers	-73.9552,40.6747,-73.9502,40.6797	40.67717,-73.95266,18.76,0,0	user spot 4: Bedford/Rogers/Dean, bike + bus lanes, ways split/merge, crosswalks
+grand-army	-73.9721,40.6717,-73.9671,40.6767	40.67423,-73.96959,18.97,0,0	user spot 5: Grand Army Plaza, curved multi-way, bus lane, lines cross each other
+fdr-lanes	-73.9786,40.7129,-73.9736,40.7179	40.71542,-73.97613,18.70,0,21	user spot 6: FDR Drive, lane count changes at ramps, diagonal edge lines
+fdr-exit-4to1	-73.9709,40.7458,-73.9659,40.7498	40.74781,-73.96836,18.0,0,20	FDR Drive NB 4 lanes -> 1 at an exit split (slight_right), motorway edge lines
+tillary-3to5	-73.9852,40.6941,-73.9802,40.6981	40.69606,-73.98273,18.6,0,0	Tillary St trunk 3 -> 5 lanes with right bay, turn:lanes through|through|||right
+fdr-49th-tunnel	-73.9692,40.7513,-73.9642,40.7553	40.75328,-73.96666,18.6,0,0	1st Ave tunnel portal 1 -> 3, 5-way junction with E 49th St
+ave11-turns	-74.0110,40.7423,-74.0060,40.7463	40.74433,-74.00852,18.6,0,0	11th Ave trunk 6 lanes left||||right|right, double right bay
+boerum-pl	-73.9932,40.6871,-73.9882,40.6911	40.68914,-73.99068,18.8,0,0	Boerum Pl left|left|through|right, double left bay
+atlantic-flatbush	-73.9800,40.6821,-73.9750,40.6861	40.68406,-73.97748,18.4,0,0	Atlantic/Flatbush/4th Ave: two-way 5 -> 4 lanes, skewed multi-way junction
+e23rd-4to5	-73.9894,40.7384,-73.9844,40.7424	40.74044,-73.98695,18.8,0,0	E 23rd St two-way 4 -> 5 lanes
+flatbush-ext-bus	-73.9859,40.6916,-73.9809,40.6956	40.69361,-73.98338,18.6,0,0	Flatbush Ave Ext bus:lanes designated|yes|yes|yes ends
+canal-bus	-74.0104,40.7218,-74.0054,40.7258	40.72376,-74.00793,18.8,0,0	Canal St bus lane |designated ends at the next way
+lex-bus	-73.9709,40.7599,-73.9659,40.7639	40.76188,-73.96844,18.8,0,0	Lexington Ave bus lane ends
+park-row-track	-74.0082,40.7101,-74.0032,40.7141	40.71213,-74.00569,18.8,0,0	Park Row protected bike track starts
+ave11-bike	-73.9939,40.7683,-73.9889,40.7723	40.77032,-73.99139,18.8,0,0	11th Ave bike lane starts
+howard-pitkin	-73.9225,40.6663,-73.9175,40.6703	40.6683,-73.91999,18.6,0,0	Howard/Pitkin/E New York Ave: 5-way skewed junction, Howard dual split
+park-circle	-73.9749,40.6495,-73.9699,40.6535	40.6515,-73.9724,18.2,0,0	Park Circle roundabout + Prospect Park SW dual carriageway split
+columbus-circle	-73.9839,40.7660,-73.9789,40.7700	40.76797,-73.98141,18.0,0,0	Columbus Circle: multi-lane circle, 5+ approaches
+ave6-lispenard	-74.0077,40.7187,-74.0027,40.7227	40.72066,-74.00522,18.8,0,0	6th Ave / West Broadway / Lispenard: 5-way skewed junction
+bqe-change	-74.0012,40.6876,-73.9962,40.6917	40.68965,-73.99873,18.0,0,0	BQE change:lanes yes|not_right|no merge
+clt-wendover	-80.7938,35.1946,-80.7888,35.1986	35.19663,-80.79126,18.4,0,0	N Wendover Rd 5 -> 2 lanes, reverse;left|left|through|through|through;right
+clt-freedom-4to2	-80.9014,35.2485,-80.8964,35.2525	35.25051,-80.8989,18.6,0,0	Freedom Dr 4 -> 2 lanes left|through|through|right
+clt-i85-4to6	-80.8966,35.2493,-80.8916,35.2533	35.25127,-80.89413,17.8,0,0	I-85 4 -> 6 lanes with slight_right exit lanes
+clt-i77-placement	-80.8495,35.2430,-80.8445,35.2470	35.245,-80.847,17.6,0,0	I-77 / Brookshire Fwy: placement left_of/middle_of across ways
+clt-graham-twltl	-80.8519,35.2268,-80.8469,35.2308	35.22884,-80.8494,18.6,0,0	S Graham St lanes:both_ways=1 centre turn lane
+clt-morehead-twltl	-80.8411,35.2052,-80.8361,35.2092	35.20724,-80.83858,18.6,0,0	E Morehead St lanes:both_ways=1 centre turn lane
+clt-tryon-dual	-80.7990,35.2556,-80.7940,35.2596	35.25756,-80.79648,18.4,0,0	N Tryon St two-way splits into a dual carriageway
+clt-trade-mint	-80.8482,35.2274,-80.8432,35.2315	35.22945,-80.84568,18.8,0,0	W Trade / Mint / Pine: 5-way uptown junction
+clt-eastway-pair	-80.7834,35.2126,-80.7784,35.2166	35.21463,-80.78089,18.4,0,0	Eastway Dr one-way pair 2 + 4 lanes (no centre yellow on outer edges)
