@@ -148,6 +148,9 @@ const hdWays: [number, string, Record<string, string>][] = [
   [261, line([-74.331, 40.7135], [-74.330, 40.7135], [-74.329, 40.7135]), { highway: 'secondary', lanes: '2' }],
   // A speed hump.
   [270, line([-74.335, 40.712], [-74.335, 40.714]), { highway: 'residential' }],
+  // Angled parking on the right, marked parallel parking on the left.
+  [290, line([-74.340, 40.712], [-74.340, 40.714]), { highway: 'residential', lanes: '2', 'parking:right': 'lane',
+    'parking:right:orientation': 'diagonal', 'parking:left': 'lane', 'parking:left:orientation': 'parallel', 'parking:left:markings': 'yes' }],
   // A painted median across the boundary of two cells at 40.718.
   [280, line([-74.015, 40.716], [-74.015, 40.720]), { highway: 'secondary', lanes: '2' }],
 ]
@@ -680,6 +683,24 @@ run('generate-road-markings.sql', () => {
         WHERE kind IN ('yield', 'stop') AND geom && ${by(-74.330, 40.7134, 15)}`
       expect(rows.map(r => r.kind)).toEqual(['yield'])
       expect(rows[0].n).toBeGreaterThanOrEqual(4)
+    })
+
+    test('angles parking stalls so a car pulls in forward', async () => {
+      const bars = await sql`
+        SELECT ST_X(ST_StartPoint(g)) as x0, ST_Y(ST_StartPoint(g)) as y0, ST_X(ST_EndPoint(g)) as x1, ST_Y(ST_EndPoint(g)) as y1
+        FROM (SELECT (ST_Dump(geom)).geom as g FROM road_markings WHERE kind = 'parking' AND geom && ${by(-74.340, 40.713, 20)}) t
+        WHERE ST_X(ST_Centroid(g)) > -74.340`
+      expect(bars.length).toBeGreaterThan(30)
+      // Northbound on the right: each stall's traffic end (west) lies south of its kerb end.
+      for (const b of bars) expect(b.x0 < b.x1 ? b.y0 < b.y1 : b.y1 < b.y0).toBe(true)
+    })
+
+    test('lines a marked parallel parking lane along the traffic side', async () => {
+      const [{ longest }] = await sql`
+        SELECT max(ST_Length(g::geography)) as longest
+        FROM (SELECT (ST_Dump(geom)).geom as g FROM road_markings WHERE kind = 'parking' AND geom && ${by(-74.340, 40.713, 20)}) t
+        WHERE ST_X(ST_Centroid(g)) < -74.340`
+      expect(longest).toBeGreaterThan(100)
     })
 
     test('marks a speed hump with a chevron in each lane, on the carriageway', async () => {
