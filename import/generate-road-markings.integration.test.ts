@@ -58,7 +58,7 @@ const ways: [number, string, Record<string, string>][] = [
   [49, line([-74.040, 40.7197], [-74.040, 40.7206]), { highway: 'residential', oneway: 'yes', lanes: '3' }],
   // The same across a cell boundary at 40.72, its first way changed below.
   [50, line([-74.050, 40.718], [-74.050, 40.7195]), { highway: 'residential', oneway: 'yes', lanes: '2' }],
-  [51, line([-74.050, 40.7195], [-74.050, 40.7215]), { highway: 'residential', oneway: 'yes', lanes: '3' }],
+  [51, line([-74.050, 40.7195], [-74.050, 40.7215]), { highway: 'residential', oneway: 'yes', lanes: '3', maxspeed: '45 mph' }],
   [52, line([-74.050, 40.7215], [-74.050, 40.723]), { highway: 'residential', oneway: 'yes', lanes: '3' }],
   // A left-bay approach that runs on as two lanes.
   [60, line([-74.070, 40.712], [-74.070, 40.713]), { highway: 'residential', oneway: 'yes', lanes: '3', 'turn:lanes': 'left|through|through' }],
@@ -116,6 +116,15 @@ const ways: [number, string, Record<string, string>][] = [
   [155, line([-74.2102, 40.71282], [-74.2098, 40.71282]), { highway: 'footway', footway: 'crossing', 'crossing:markings': 'zebra' }],
   // A motorway bridge passing over that junction.
   [156, line([-74.2115, 40.7129], [-74.2085, 40.7129]), { highway: 'motorway', oneway: 'yes', lanes: '3', bridge: 'yes', layer: '1' }],
+  // An exit ramp gaining a lane at each of four ways, three of them short,
+  // across a cell boundary at 40.718.
+  [170, line([-74.015, 40.7160], [-74.015, 40.7172]), { highway: 'motorway_link', oneway: 'yes', lanes: '1' }],
+  [171, line([-74.015, 40.7172], [-74.015, 40.71748]), { highway: 'motorway_link', oneway: 'yes', lanes: '2' }],
+  [172, line([-74.015, 40.71748], [-74.015, 40.71780]), { highway: 'motorway_link', oneway: 'yes', lanes: '3', 'turn:lanes': 'none|none|right' }],
+  [173, line([-74.015, 40.71780], [-74.015, 40.71803]), { highway: 'motorway_link', oneway: 'yes', lanes: '4' }],
+  [174, line([-74.015, 40.71803], [-74.015, 40.7190]), { highway: 'motorway_link', oneway: 'yes', lanes: '5' }],
+  // A way whose two nodes were mapped at one spot.
+  [175, line([-74.015, 40.7195], [-74.015, 40.7195]), { highway: 'residential', lanes: '2' }],
   // A street crossed twice at one spot, the crossings a few degrees apart.
   [160, line([-74.2205, 40.713], [-74.2195, 40.713]), { highway: 'residential', lanes: '2' }],
   [161, line([-74.2200, 40.71285], [-74.2200, 40.71315]), { highway: 'footway', footway: 'crossing', 'crossing:markings': 'zebra' }],
@@ -293,16 +302,18 @@ run('generate-road-markings.sql', () => {
   // Metres east of a longitude near 40.71°N.
   const east = (x: number, m: number) => x + m / 84300
 
-  test('widens a one-way for an added lane on its right only', async () => {
-    for (const y of [40.7122, 40.7133]) {
-      expect(await covered(east(-74.010, -2.5), y)).toBe(true)
-      expect(await covered(east(-74.010, -3.5), y)).toBe(false)
-    }
-    expect(await covered(east(-74.010, 3.5), 40.7122)).toBe(false)
-    expect(await covered(east(-74.010, 5.5), 40.7133)).toBe(true)
+  test('widens a one-way for an added lane by easing both kerbs out from the join', async () => {
+    expect(await covered(east(-74.010, -2.5), 40.7122)).toBe(true)
+    expect(await covered(east(-74.010, -3.5), 40.7122)).toBe(false)
+    // 5 m past the join the kerbs have barely moved; 90 m past, three lanes
+    // of 3 m sit either side of the way.
+    expect(await covered(east(-74.010, -2.9), 40.71255)).toBe(true)
+    expect(await covered(east(-74.010, -3.4), 40.71255)).toBe(false)
+    for (const m of [-4.2, 4.2]) expect(await covered(east(-74.010, m), 40.7133)).toBe(true)
+    for (const m of [-4.8, 4.8]) expect(await covered(east(-74.010, m), 40.7133)).toBe(false)
   })
 
-  test('eases the way after it back to the middle of the road', async () => {
+  test('runs the way after it down the middle of the road', async () => {
     expect(await covered(east(-74.010, -4), 40.7142)).toBe(true)
     expect(await covered(east(-74.010, -5), 40.7142)).toBe(false)
     expect(await covered(east(-74.010, 4), 40.7142)).toBe(true)
@@ -310,7 +321,7 @@ run('generate-road-markings.sql', () => {
   })
 
   test('runs on without a jog at any join down a long chain', async () => {
-    // Where the lane opens the left kerb holds and the right one moves out.
+    // Where the lane opens the kerbs have yet to move.
     for (const y of [40.71245, 40.71255]) {
       expect(await covered(east(-74.040, -2.5), y)).toBe(true)
       expect(await covered(east(-74.040, -3.5), y)).toBe(false)
@@ -328,11 +339,100 @@ run('generate-road-markings.sql', () => {
 
   // Metres north of a latitude.
   const ahead = (y: number, m: number) => y + m / 111050
-  // The lines of `kinds` crossing a probe from `w` to `e` metres east of `x`, at `y`.
-  const crossing = async (x: number, y: number, w: number, e: number, kinds: string[], color?: string) =>
+
+  // The ramp's kerbs across a probe square to it at `y`, in metres east of its way.
+  const RAMP_X = -74.015
+  const rampKerbs = async (y: number) => (await sql`
+    SELECT (ST_XMin(c) - ${RAMP_X}) * 84300 as l, (ST_XMax(c) - ${RAMP_X}) * 84300 as r
+    FROM (SELECT ST_Intersection(ST_SetSRID(ST_MakeLine(ST_MakePoint(${east(RAMP_X, -20)}, ${y}), ST_MakePoint(${east(RAMP_X, 20)}, ${y})), 4326),
+                                 ST_Union(geom)) as c
+          FROM road_surfaces
+          WHERE kind IS NULL AND geom && ST_MakeEnvelope(${east(RAMP_X, -20)}, ${y - 1e-6}, ${east(RAMP_X, 20)}, ${y + 1e-6}, 4326)) s`)[0]
+  const rampProfile = async () => {
+    const out: { l: number; r: number }[] = []
+    for (let m = -10; m <= 180; m++) out.push(await rampKerbs(ahead(40.7172, m)))
+    return out
+  }
+
+  describe('a ramp gaining a lane at each of several short ways', () => {
+    let profile: { l: number; r: number }[] = []
+    beforeAll(async () => {
+      profile = await rampProfile()
+    })
+
+    test('widens all the way to its five lanes, each kerb only ever moving out', async () => {
+      for (let i = 1; i < profile.length; i++) {
+        expect(profile[i].l).toBeLessThan(profile[i - 1].l + 0.03)
+        expect(profile[i].r).toBeGreaterThan(profile[i - 1].r - 0.03)
+      }
+      expect(profile[0].r - profile[0].l).toBeCloseTo(3.4, 0)
+      expect(profile.at(-1)!.r - profile.at(-1)!.l).toBeCloseTo(17, 0)
+    })
+
+    test('draws each kerb as one smooth flare, not a step at each way', async () => {
+      // A kerb whose lane adds each ease on their own steps out and levels off
+      // at every join; as one flare it bends a little at a time.
+      for (const side of ['l', 'r'] as const) {
+        for (let i = 1; i < profile.length - 1; i++) {
+          expect(Math.abs(profile[i + 1][side] - 2 * profile[i][side] + profile[i - 1][side])).toBeLessThan(0.06)
+        }
+      }
+      const [{ sharpest }] = await kerbTurns(RAMP_X, ahead(40.7172, 60), 70)
+      expect(sharpest).toBeLessThan(8)
+    })
+
+    test('runs its edge lines on unbroken where one way\'s taper carries into the next', async () => {
+      const [{ worst, joins }] = await sql`
+        WITH e AS (SELECT ST_StartPoint(geom) as s, ST_EndPoint(geom) as e, color FROM road_markings
+                   WHERE kind = 'edge' AND geom && ${sql`ST_MakeEnvelope(${east(RAMP_X, -12)}, 40.7170, ${east(RAMP_X, 12)}, 40.7192, 4326)`})
+        SELECT max(gap) as worst, count(*)::int as joins
+        FROM (SELECT (SELECT min(ST_Distance(a.e::geography, b.s::geography)) FROM e b WHERE b.color = a.color AND b.s <> a.s) as gap
+              FROM e a WHERE ST_Y(a.e) BETWEEN 40.7171 AND 40.7181) g`
+      expect(joins).toBeGreaterThanOrEqual(6)
+      expect(Number(worst)).toBeLessThan(0.05)
+    })
+
+    test('starts the line of each lane that opens where its taper ends', async () => {
+      const dashes = await sql`
+        SELECT ST_YMin(d.geom) as y0, ST_YMax(d.geom) as y1, (ST_X(ST_Centroid(d.geom)) - ${RAMP_X}) * 84300 as x
+        FROM road_markings m, ST_Dump(m.geom) d
+        WHERE m.kind = 'lane' AND m.geom && ST_MakeEnvelope(${east(RAMP_X, -12)}, 40.7172, ${east(RAMP_X, 12)}, 40.7190, 4326)`
+      expect(dashes.length).toBeGreaterThan(20)
+      for (const d of dashes) {
+        expect((d.y1 - d.y0) * 111050).toBeGreaterThan(2.5)
+        expect((d.y1 - d.y0) * 111050).toBeLessThan(3.5)
+      }
+      // No dash where the second lane is still opening, just past the first add.
+      expect(dashes.filter(d => d.y0 < ahead(40.7172, 25)).length).toBe(0)
+    })
+  })
+
+  test('runs the dashes on across a join without starting over', async () => {
+    // The left divider of the chain of three-lane ways, 100 m each, past where it widened.
+    const dashes = await sql`
+      SELECT ST_YMin(d.geom) as y0, ST_YMax(d.geom) as y1
+      FROM road_markings m, ST_Dump(m.geom) d
+      WHERE m.kind = 'lane' AND d.geom && ST_MakeEnvelope(${east(-74.040, -2)}, 40.7136, ${east(-74.040, -1)}, 40.7204, 4326)
+        AND ST_YMin(d.geom) > 40.7136 AND ST_YMax(d.geom) < 40.7204
+      ORDER BY 1`
+    expect(dashes.length).toBeGreaterThan(60)
+    for (const [i, d] of dashes.entries()) {
+      expect((d.y1 - d.y0) * 111050).toBeGreaterThan(2.9)
+      expect((d.y1 - d.y0) * 111050).toBeLessThan(3.1)
+      if (i > 0) {
+        expect((d.y0 - dashes[i - 1].y1) * 111050).toBeGreaterThan(5.5)
+        expect((d.y0 - dashes[i - 1].y1) * 111050).toBeLessThan(6.6)
+      }
+    }
+  })
+  // The lines of `kinds` crossing a probe from `w` to `e` metres east of `x`, at
+  // `y`; or, given `along`, a box that far either side of it, which no dash
+  // gap falls through.
+  const crossing = async (x: number, y: number, w: number, e: number, kinds: string[], color?: string, along = 0) =>
     (await sql`SELECT count(*)::int as n FROM road_markings
       WHERE kind = ANY (${kinds}) AND (${color ?? null}::text IS NULL OR color = ${color ?? null})
-        AND ST_Intersects(geom, ST_SetSRID(ST_MakeLine(ST_MakePoint(${east(x, w)}, ${y}), ST_MakePoint(${east(x, e)}, ${y})), 4326))`)[0].n
+        AND ST_Intersects(geom, CASE WHEN ${along}::float8 > 0 THEN ST_MakeEnvelope(${east(x, w)}, ${ahead(y, -along)}, ${east(x, e)}, ${ahead(y, along)}, 4326)
+                                ELSE ST_SetSRID(ST_MakeLine(ST_MakePoint(${east(x, w)}, ${y}), ST_MakePoint(${east(x, e)}, ${y})), 4326) END)`)[0].n
 
   test('opens a bay with a taper even where a driveway meets the join', async () => {
     // Three lanes of 3.6 m end 5.4 m right of the way; four with a right bay end at 9.
@@ -372,14 +472,16 @@ run('generate-road-markings.sql', () => {
 
   test('ends lane lines at the crosswalks round a junction', async () => {
     // Between the crossing street and the crosswalk past it, inside the junction.
-    expect(await crossing(-74.210, ahead(40.713, -10), -5, 5, ['lane'])).toBe(0)
+    const [{ n }] = await sql`SELECT count(*)::int as n FROM road_markings WHERE kind = 'lane' AND NOT bridge
+      AND ST_Intersects(geom, ST_MakeEnvelope(${east(-74.210, -5)}, ${ahead(40.713, -14.6)}, ${east(-74.210, 5)}, ${ahead(40.713, -5.4)}, 4326))`
+    expect(n).toBe(0)
     // and past the crosswalk they run again.
-    expect(await crossing(-74.210, ahead(40.713, -35), -5, 5, ['lane'])).toBe(2)
+    expect(await crossing(-74.210, ahead(40.713, -35), -5, 5, ['lane'], undefined, 4.6)).toBe(2)
   })
 
   test('runs a bridge\'s lines on over a junction below it', async () => {
     const [{ n }] = await sql`SELECT count(*)::int as n FROM road_markings WHERE kind = 'lane' AND bridge
-      AND ST_Intersects(geom, ST_SetSRID(ST_MakeLine(ST_MakePoint(-74.2101, 40.7128), ST_MakePoint(-74.2101, 40.7130)), 4326))`
+      AND ST_Intersects(geom, ST_MakeEnvelope(-74.2102, 40.7128, -74.2100, 40.7130, 4326))`
     expect(n).toBe(2)
   })
 
@@ -396,7 +498,7 @@ run('generate-road-markings.sql', () => {
     // The widest street crossing the southbound avenue is 7.6 m: its stop line
     // stands 5.3 m back, past the crossing carriageway's own 4.8 m.
     expect(await crossing(SB_X, ahead(STREET_Y, 5), -6, 6, ['lane'])).toBe(0)
-    expect(await crossing(SB_X, ahead(STREET_Y, 12), -6, 6, ['lane'])).toBeGreaterThan(0)
+    expect(await crossing(SB_X, ahead(STREET_Y, 12), -6, 6, ['lane'], undefined, 4.6)).toBeGreaterThan(0)
   })
 
   test('does not stack two crosswalks mapped over each other', async () => {
@@ -414,7 +516,7 @@ run('generate-road-markings.sql', () => {
   })
 
   test('gives back no band, rather than failing, for a line it cannot taper', async () => {
-    const [{ band }] = await sql`SELECT road_ease_band('POINT(0 0)'::geometry, 0, 1, 2, 3, 10, 1, 5) as band`
+    const [{ band }] = await sql`SELECT road_profile_band('POINT(0 0)'::geometry, 1, 10, 1, 0, 3, 2, 10, 0, 0, 0, 0, 1, 5) as band`
     expect(band).toBeNull()
   })
 
@@ -812,12 +914,13 @@ run('generate-road-markings.sql', () => {
     })
 
     test('rebuilds the ways downstream as well, on both sides of the boundary', async () => {
-      // One lane before: the next way's left kerb moves in to 1.5 m.
-      for (const y of [40.7198, 40.71995, 40.72005, 40.7212]) {
-        expect(await covered(east(-74.050, -1), y)).toBe(true)
-        expect(await covered(east(-74.050, -2), y)).toBe(false)
-        expect(await covered(east(-74.050, 7), y)).toBe(true)
+      // One lane before, not two: the next way's long taper is still 2.6 m
+      // either side at the boundary, and both cells draw it so.
+      for (const y of [40.71995, 40.72005]) {
+        for (const m of [-2.3, 2.3]) expect(await covered(east(-74.050, m), y)).toBe(true)
+        for (const m of [-3, 3]) expect(await covered(east(-74.050, m), y)).toBe(false)
       }
+      for (const m of [-4.2, 4.2]) expect(await covered(east(-74.050, m), 40.7212)).toBe(true)
     })
   })
 
@@ -841,9 +944,14 @@ run('generate-road-markings.sql', () => {
       SELECT ST_AsText(ST_SnapToGrid(ST_Union(geom), 0.0000001)) as g, ST_Length(ST_Union(geom)::geography) as m
       FROM road_markings WHERE kind IN ('hatch', 'parking') AND geom && ST_MakeEnvelope(-74.0180, 40.7176, -74.0170, 40.7184, 4326)`
     let barsBefore: any
+    const RAMP_BOX = (sql: postgres.Sql) => sql`ST_MakeEnvelope(${east(RAMP_X, -12)}, 40.7170, ${east(RAMP_X, 12)}, 40.7192, 4326)`
+    let rampRef: { l: number; r: number }[] = []
     beforeAll(async () => {
       ;[medianBefore] = await median()
       ;[barsBefore] = await bars()
+      // The ramp as the full build drew it.
+      rampRef = await rampProfile()
+      await sql`CREATE TABLE ramp_paint_ref AS SELECT geom FROM road_markings WHERE kind = 'lane' AND geom && ${RAMP_BOX(sql)}`
       for (const [y0, y1] of [[40.70, 40.718], [40.718, 40.73]]) {
         await sql`TRUNCATE _rm_scope`
         await sql`INSERT INTO _rm_scope VALUES (${cell(y0, y1)})`
@@ -853,10 +961,26 @@ run('generate-road-markings.sql', () => {
 
     test('place a way the same on both sides of the boundary, far from where it widened', async () => {
       for (const y of [40.7179, 40.7181, 40.720]) {
-        expect(await covered(east(-74.020, -2.5), y)).toBe(true)
-        expect(await covered(east(-74.020, -3.5), y)).toBe(false)
-        expect(await covered(east(-74.020, 5.5), y)).toBe(true)
+        expect(await covered(east(-74.020, -4.2), y)).toBe(true)
+        expect(await covered(east(-74.020, -4.8), y)).toBe(false)
+        expect(await covered(east(-74.020, 4.2), y)).toBe(true)
       }
+    })
+
+    test('flare a ramp across their boundary as one build does', async () => {
+      const after = await rampProfile()
+      for (const [i, k] of after.entries()) {
+        expect(Math.abs(k.l - rampRef[i].l)).toBeLessThan(0.05)
+        expect(Math.abs(k.r - rampRef[i].r)).toBeLessThan(0.05)
+      }
+      const [{ moved, n, ref }] = await sql`
+        SELECT ST_HausdorffDistance(ST_Union(m.geom), (SELECT ST_Union(geom) FROM ramp_paint_ref)) * 111050 as moved,
+               sum(ST_NumGeometries(m.geom))::int as n, (SELECT sum(ST_NumGeometries(geom))::int FROM ramp_paint_ref) as ref
+        FROM road_markings m WHERE m.kind = 'lane' AND m.geom && ${RAMP_BOX(sql)}`
+      expect(Number(moved)).toBeLessThan(0.05)
+      // A dash on the boundary is cut in two there, and nowhere else.
+      expect(n - ref).toBeGreaterThanOrEqual(0)
+      expect(n - ref).toBeLessThanOrEqual(4)
     })
 
     test('build a turning circle on their boundary whole, once', async () => {
