@@ -19,6 +19,7 @@ does it — and the release pipeline turns it into the GitHub Release notes.
   driveway or side street tapers in rather than jumping sideways. Lane lines
   end at the crosswalks round a junction instead of running on through it, and
   bike-lane conflict paint is no longer drawn where two ways simply merge.
+  Crosswalks mapped over each other no longer stack their bars.
 
 ## [0.10.11] - 2026-10-10
 
