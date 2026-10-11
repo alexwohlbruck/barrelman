@@ -1005,7 +1005,8 @@ CREATE TEMP TABLE _rm_crossings AS
 SELECT ST_Transform(geom, 3857) as g, geom_type, 1 / cos(radians(ST_Y(ST_Centroid(geom)))) as s,
        CASE
          WHEN tags->>'crossing:markings' IN ('zebra', 'zebra:double', 'zebra:paired', 'zebra:bicolour', 'yes') THEN 'zebra'
-         WHEN tags->>'crossing:markings' IN ('lines', 'lines:paired', 'dashes', 'dots') THEN 'lines'
+         WHEN tags->>'crossing:markings' IN ('lines', 'lines:paired') THEN 'lines'
+         WHEN tags->>'crossing:markings' IN ('dashes', 'dots') THEN tags->>'crossing:markings'
          WHEN tags->>'crossing:markings' IN ('ladder', 'ladder:paired', 'ladder:skewed') THEN 'ladder'
          WHEN tags->>'crossing:markings' IN ('no', 'surface') THEN NULL
          WHEN tags->>'crossing' IN ('zebra', 'marked', 'uncontrolled') OR tags->>'crossing_ref' = 'zebra' THEN 'zebra'
@@ -1861,9 +1862,16 @@ CROSS JOIN LATERAL (
   -- A crossing too short for one bar gets none.
   WHERE w.style IN ('zebra', 'ladder') AND l.len >= sz.d
   UNION ALL
-  SELECT ST_Buffer(road_offset(w.seg, side * 1.5 * w.s), 0.15 * w.s, 'endcap=flat')
+  -- Edge lines whole, or broken into 0.6 m dashes or 0.3 m dots.
+  SELECT ST_Buffer(CASE WHEN w.style IN ('lines', 'ladder') THEN e.line
+                        ELSE ST_LineSubstring(e.line, least(1, k * e.period / e.len), least(1, (k * e.period + e.paint) / e.len)) END,
+                   0.15 * w.s, 'endcap=flat')
   FROM (VALUES (1), (-1)) v(side)
-  WHERE w.style IN ('lines', 'ladder')
+  CROSS JOIN LATERAL (SELECT road_offset(w.seg, side * 1.5 * w.s) as line) o
+  CROSS JOIN LATERAL (SELECT o.line, ST_Length(o.line) / w.s as len, CASE WHEN w.style = 'dots' THEN 0.6 ELSE 1.2 END as period,
+                             CASE WHEN w.style = 'dots' THEN 0.3 ELSE 0.6 END as paint) e
+  CROSS JOIN LATERAL generate_series(0, CASE WHEN w.style IN ('lines', 'ladder') THEN 0 ELSE floor(e.len / e.period)::int END) k
+  WHERE w.style IN ('lines', 'ladder', 'dashes', 'dots') AND o.line IS NOT NULL AND e.len > 0 AND k * e.period < e.len
 ) b
 GROUP BY w.style, w.seg;
 

@@ -143,6 +143,7 @@ const hdWays: [number, string, Record<string, string>][] = [
   // A gore beside a one-way, and a painted island on a two-way street.
   [240, line([-74.320, 40.712], [-74.320, 40.715]), { highway: 'trunk', oneway: 'yes', lanes: '2' }],
   [250, line([-74.325, 40.712], [-74.325, 40.715]), { highway: 'tertiary', lanes: '2' }],
+  [252, line([-74.3252, 40.7145], [-74.3248, 40.7145]), { highway: 'footway', footway: 'crossing', 'crossing:markings': 'dashes' }],
   // A minor road giving way at a T junction.
   [260, line([-74.330, 40.712], [-74.330, 40.7135]), { highway: 'tertiary', lanes: '2' }],
   [261, line([-74.331, 40.7135], [-74.330, 40.7135], [-74.329, 40.7135]), { highway: 'secondary', lanes: '2' }],
@@ -707,6 +708,14 @@ run('generate-road-markings.sql', () => {
         FROM (SELECT (ST_Dump(geom)).geom as g FROM road_markings WHERE kind = 'parking' AND geom && ${by(-74.340, 40.713, 20)}) t
         WHERE ST_X(ST_Centroid(g)) < -74.340`
       expect(longest).toBeGreaterThan(100)
+    })
+
+    test('breaks the edge lines of a crossing:markings=dashes crosswalk into dashes', async () => {
+      const rows = await sql`
+        SELECT style, ST_NumGeometries(geom) as n FROM road_markings WHERE kind = 'crosswalk' AND geom && ${by(-74.325, 40.7145, 6)}`
+      expect(rows.map(r => r.style)).toEqual(['dashes'])
+      // Two edges of a 7 m road, a 0.6 m dash every 1.2 m.
+      expect(rows[0].n).toBeGreaterThanOrEqual(8)
     })
 
     test('leaves a raised crosswalk its crosswalk, without hump chevrons', async () => {
