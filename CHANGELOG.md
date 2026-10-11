@@ -10,6 +10,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.10.15] - 2026-10-11
+
 ### Added
 
 * **Road markings paint more of what the OSM wiki documents.** Hatched
