@@ -9,12 +9,13 @@
 --
 -- Only what generate-road-markings.sql reads is queued: the road classes it
 -- paves, crossings, signal, stop, give way, turning circle and speed hump
--- nodes, painted areas, and the streets beside a changed sidewalk. old_places keeps categories, not tags, so an old
--- service road or footway counts only where it was drawn: a service road on a
--- paved surface, a footway under a painted crosswalk, and an area or node
--- without a category only on a painted area's outline or by a hump's paint.
--- Without those, every alley and sidewalk edit in a built city would queue a
--- rebuild.
+-- nodes, painted areas, and the paved streets beside a changed footway, path
+-- or cycleway (their sidewalks set the kerbs). old_places keeps categories,
+-- not tags, so an old service road or footway counts only where it was
+-- drawn: a service road on a paved surface, a footway under a painted
+-- crosswalk or beside a paved street, and an area or node without a category
+-- only on a painted area's outline or by a hump's paint. Without those, every
+-- alley and park path edit in a built city would queue a rebuild.
 --
 -- A road's place reads the way before it, the way after that eases back, and
 -- a fork's branches line up with its stem (generate-road-markings.sql, Where
@@ -48,34 +49,34 @@ BEGIN
   END IF;
 
   WITH relevant_new AS (
-    SELECT g.id, g.osm_id, g.geom, COALESCE(g.tags->>'footway' = 'sidewalk', false) as walk
+    SELECT g.id, g.osm_id, g.geom
     FROM geo_places g
     JOIN osm_replay.changed c ON c.id = g.id
-    WHERE (g.geom_type = 'line' AND g.osm_type = 'W' AND (road_is_marked_way(g.tags) OR g.tags->>'footway' IN ('crossing', 'sidewalk')))
+    WHERE (g.geom_type = 'line' AND g.osm_type = 'W' AND (road_is_marked_way(g.tags) OR g.tags->>'footway' = 'crossing'))
        OR (g.geom_type = 'point' AND (g.tags->>'highway' IN ('crossing', 'traffic_signals', 'stop', 'give_way', 'turning_circle', 'turning_loop')
                                       OR g.tags->>'traffic_calming' IN ('hump', 'table', 'cushion')))
        OR (g.geom_type = 'area' AND (g.tags->>'road_marking' = 'restriction' OR g.tags->>'area:highway' = 'prohibited'
                                      OR g.tags->>'traffic_calming' = 'painted_island'))
   ),
-  -- A sidewalk sets the width of the streets it runs beside, where and as it
-  -- was and is: one added, moved or retagged, and a deleted footway that ran
-  -- along a paved street.
+  -- A street's kerbs stand back from the sidewalks beside it, and a path
+  -- between the two hides one (generate-road-markings.sql, Kerb to kerb), so
+  -- any footway, path or cycleway changed or deleted along a paved street
+  -- counts, where it was and where it is.
   walks AS (
-    SELECT geom FROM relevant_new WHERE walk
-    UNION ALL
-    SELECT o.geom FROM osm_replay.old_places o JOIN relevant_new n ON n.id = o.id AND n.walk
+    SELECT g.geom FROM geo_places g JOIN osm_replay.changed c ON c.id = g.id
+    WHERE g.geom_type = 'line' AND g.tags->>'highway' IN ('footway', 'path', 'cycleway') AND COALESCE(g.tags->>'footway', '') <> 'crossing'
     UNION ALL
     SELECT o.geom FROM osm_replay.old_places o
-    WHERE o.geom_type = 'line' AND o.osm_type = 'W' AND o.categories && ARRAY['highway/footway']
-      AND NOT EXISTS (SELECT 1 FROM geo_places g WHERE g.id = o.id)
-      AND EXISTS (SELECT 1 FROM road_surfaces s WHERE s.geom && ST_Expand(o.geom, 0.0003) AND ST_DWithin(s.geom, o.geom, 0.0003))
+    WHERE o.geom_type = 'line' AND o.categories && ARRAY['highway/footway', 'highway/path', 'highway/cycleway']
   ),
   beside AS (
-    SELECT DISTINCT g.osm_id, g.geom
+    SELECT DISTINCT g.id, g.osm_id, g.geom
     FROM walks w
-    JOIN geo_places g ON g.geom && ST_Expand(w.geom, 0.0003) AND g.geom_type = 'line' AND g.osm_type = 'W'
-     AND road_is_marked_way(g.tags) AND ST_DWithin(g.geom, w.geom, 0.0003)
-    WHERE NOT EXISTS (SELECT 1 FROM relevant_new n WHERE n.osm_id = g.osm_id AND NOT n.walk)
+    CROSS JOIN LATERAL (SELECT 0.0003 / cos(radians(ST_Y(ST_Centroid(w.geom)))) as r) m
+    JOIN geo_places g ON g.geom && ST_Expand(w.geom, m.r) AND g.geom_type = 'line' AND g.osm_type = 'W'
+     AND road_is_marked_way(g.tags) AND ST_DWithin(g.geom, w.geom, m.r)
+    WHERE EXISTS (SELECT 1 FROM road_surfaces s WHERE s.geom && g.geom AND ST_Intersects(s.geom, ST_PointOnSurface(g.geom)))
+      AND NOT EXISTS (SELECT 1 FROM relevant_new n WHERE n.id = g.id)
   ),
   touched AS (
     SELECT o.osm_id, o.geom
@@ -97,9 +98,9 @@ BEGIN
        OR (o.geom_type = 'point' AND o.categories = '{}'
            AND EXISTS (SELECT 1 FROM road_markings m WHERE m.geom && ST_Expand(o.geom, 0.00003) AND m.kind = 'hump'
                        AND ST_DWithin(m.geom, o.geom, 0.00003)))
-       OR o.id IN (SELECT id FROM relevant_new WHERE NOT walk)
+       OR o.id IN (SELECT id FROM relevant_new)
     UNION ALL
-    SELECT osm_id, geom FROM relevant_new WHERE NOT walk
+    SELECT osm_id, geom FROM relevant_new
     UNION ALL
     SELECT osm_id, geom FROM beside
   ),

@@ -784,15 +784,6 @@ CREATE INDEX ON _rm_roads (osm_id);
 -- which runs beside the traffic.
 -- Read from the mapped line, so every box gets the same width.
 ALTER TABLE _rm_roads ADD COLUMN sh float8 NOT NULL DEFAULT 0;
-DROP TABLE IF EXISTS _rm_beside;
-CREATE TEMP TABLE _rm_beside AS
-SELECT osm_id, ST_Subdivide(ST_Transform(geom, 3857), 8) as g, COALESCE(tags->>'footway' = 'sidewalk', false) as sidewalk,
-       road_metres(tags->>'width') as walk_w
-FROM geo_places
-WHERE geom && (SELECT ST_Transform(ST_Expand(ST_SetSRID(ST_Extent(g), 3857), 60), 4326) FROM _rm_roads)
-  AND geom_type = 'line' AND tags ? 'highway' AND COALESCE(tags->>'footway', '') <> 'crossing';
-CREATE INDEX ON _rm_beside USING gist (g);
-ANALYZE _rm_beside;
 -- Square across the way 20 m to each side, `side` +1 to the left.
 DROP TABLE IF EXISTS _rm_rays;
 CREATE TEMP TABLE _rm_rays AS
@@ -805,6 +796,23 @@ WHERE NOT r.bridge AND at.u IS NOT NULL
   AND COALESCE(road_metres(r.tags->>'width:carriageway'), road_metres(r.tags->>'width')) IS NULL
   AND r.class NOT IN ('motorway', 'motorway_link', 'trunk', 'trunk_link', 'service')
   AND NOT r.tags ?| ARRAY['placement', 'placement:forward', 'placement:backward'];
+ALTER TABLE _rm_rays ADD COLUMN line_ll geometry;
+UPDATE _rm_rays SET line_ll = ST_Transform(line, 4326);
+-- The ground-level paths and roads those cross, in pieces for the index.
+DROP TABLE IF EXISTS _rm_beside;
+CREATE TEMP TABLE _rm_beside AS
+SELECT c.osm_id, ST_Subdivide(ST_Transform(c.geom, 3857), 8) as g,
+       COALESCE(c.tags->>'footway' = 'sidewalk' AND c.tags->>'highway' IN ('footway', 'path', 'cycleway'), false) as sidewalk,
+       road_metres(c.tags->>'width') as walk_w
+FROM (SELECT DISTINCT h.id FROM _rm_rays y
+      CROSS JOIN LATERAL (SELECT g.id FROM geo_places g WHERE g.geom && y.line_ll AND g.geom_type = 'line' AND g.tags ? 'highway') h) hit
+JOIN geo_places c ON c.id = hit.id
+WHERE c.geom_type = 'line' AND COALESCE(c.tags->>'footway', '') <> 'crossing'
+  AND c.tags->>'highway' NOT IN ('proposed', 'construction', 'abandoned', 'razed', 'platform')
+  AND COALESCE(c.tags->>'bridge', 'no') = 'no' AND COALESCE(c.tags->>'tunnel', 'no') = 'no'
+  AND COALESCE(road_int(c.tags->>'layer'), 0) = 0;
+CREATE INDEX ON _rm_beside USING gist (g);
+ANALYZE _rm_beside;
 UPDATE _rm_roads r SET sh = (k.kerb_w - r.width) / 2, width = k.kerb_w
 FROM (
   SELECT h.osm_id, 2 * least(percentile_cont(0.5) WITHIN GROUP (ORDER BY h.d) FILTER (WHERE h.side = 1),
@@ -1412,7 +1420,8 @@ FROM (
 -- ways are the pieces of a junction, whose gaps the full radius closes, as it
 -- does a sliver under 2 m.
 LEFT JOIN LATERAL (
-  SELECT ST_Union(ST_Buffer(COALESCE(o.axis, o.g), (o.width / 2 + q.gap + 0.25) * o.s, 'quad_segs=4')) as near,
+  SELECT ST_Union(ST_Buffer(ST_Intersection(COALESCE(o.axis, o.g), ST_Expand(pieces.p, pieces.reach + 10 * o.s)),
+                            (o.width / 2 + q.gap + 0.25) * o.s, 'quad_segs=4')) as near,
          CASE WHEN count(*) > 0 THEN min(q.gap) / 2 - 0.1 END as r
   FROM _rm_roads o
   CROSS JOIN LATERAL (SELECT road_dir(o.g, ST_LineLocatePoint(o.g, pieces.p), 5 * o.s) as u,
@@ -1799,10 +1808,10 @@ CROSS JOIN LATERAL (
         UNION ALL SELECT rc.cut FROM _rm_road_cuts rc WHERE rc.osm_id = b.osm_id
         UNION ALL SELECT tc.cut FROM _rm_turn_cuts tc WHERE b.osm_id = ANY (tc.ids) AND tc.cut && o.band AND NOT tc.edge) cuts
 ) k
--- A scrap under 5 m of lane long, left between a crosswalk and the edge of a
--- junction, is left out.
+-- A scrap under 5 m of lane long, cut off between a crosswalk and the edge
+-- of a junction, is left out.
 CROSS JOIN LATERAL (SELECT ST_Collect(p.geom) as clipped FROM ST_Dump(k.cut_band) p
-                    WHERE ST_Area(p.geom) > greatest(4, 5 * abs(b.b - b.a)) * b.s * b.s) c
+                    WHERE ST_Area(p.geom) > greatest(4, CASE WHEN ST_NumGeometries(k.cut_band) > 1 THEN 5 * abs(b.b - b.a) END) * b.s * b.s) c
 WHERE o.band IS NOT NULL AND c.clipped IS NOT NULL;
 
 -- ─── Bike lanes through junctions ────────────────────────────────────────────
