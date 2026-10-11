@@ -10,6 +10,14 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Added
+
+* **Car-free roads are paved and painted.** Pedestrian streets, park drives
+  and bike paths mapped like roads (with `lanes`, a `cycleway:*=lane|track`
+  side, or a bikeway 4 m or wider) get a road surface at their width, the bike
+  side's line, a single yellow centre line on two-way bike paths, and bike and
+  walker symbols. Streets crossing them break their lines.
+
 ## [0.10.15] - 2026-10-11
 
 ### Added
