@@ -9,7 +9,7 @@
 --
 -- Only what generate-road-markings.sql reads is queued: the road classes it
 -- paves, crossings, signal, stop, give way, turning circle and speed hump
--- nodes, and painted areas. old_places keeps categories, not tags, so an old
+-- nodes, painted areas, and the streets beside a changed sidewalk. old_places keeps categories, not tags, so an old
 -- service road or footway counts only where it was drawn: a service road on a
 -- paved surface, a footway under a painted crosswalk, and an area or node
 -- without a category only on a painted area's outline or by a hump's paint.
@@ -48,14 +48,34 @@ BEGIN
   END IF;
 
   WITH relevant_new AS (
-    SELECT g.id, g.osm_id, g.geom
+    SELECT g.id, g.osm_id, g.geom, COALESCE(g.tags->>'footway' = 'sidewalk', false) as walk
     FROM geo_places g
     JOIN osm_replay.changed c ON c.id = g.id
-    WHERE (g.geom_type = 'line' AND g.osm_type = 'W' AND (road_is_marked_way(g.tags) OR g.tags->>'footway' = 'crossing'))
+    WHERE (g.geom_type = 'line' AND g.osm_type = 'W' AND (road_is_marked_way(g.tags) OR g.tags->>'footway' IN ('crossing', 'sidewalk')))
        OR (g.geom_type = 'point' AND (g.tags->>'highway' IN ('crossing', 'traffic_signals', 'stop', 'give_way', 'turning_circle', 'turning_loop')
                                       OR g.tags->>'traffic_calming' IN ('hump', 'table', 'cushion')))
        OR (g.geom_type = 'area' AND (g.tags->>'road_marking' = 'restriction' OR g.tags->>'area:highway' = 'prohibited'
                                      OR g.tags->>'traffic_calming' = 'painted_island'))
+  ),
+  -- A sidewalk sets the width of the streets it runs beside, where and as it
+  -- was and is: one added, moved or retagged, and a deleted footway that ran
+  -- along a paved street.
+  walks AS (
+    SELECT geom FROM relevant_new WHERE walk
+    UNION ALL
+    SELECT o.geom FROM osm_replay.old_places o JOIN relevant_new n ON n.id = o.id AND n.walk
+    UNION ALL
+    SELECT o.geom FROM osm_replay.old_places o
+    WHERE o.geom_type = 'line' AND o.osm_type = 'W' AND o.categories && ARRAY['highway/footway']
+      AND NOT EXISTS (SELECT 1 FROM geo_places g WHERE g.id = o.id)
+      AND EXISTS (SELECT 1 FROM road_surfaces s WHERE s.geom && ST_Expand(o.geom, 0.0003) AND ST_DWithin(s.geom, o.geom, 0.0003))
+  ),
+  beside AS (
+    SELECT DISTINCT g.osm_id, g.geom
+    FROM walks w
+    JOIN geo_places g ON g.geom && ST_Expand(w.geom, 0.0003) AND g.geom_type = 'line' AND g.osm_type = 'W'
+     AND road_is_marked_way(g.tags) AND ST_DWithin(g.geom, w.geom, 0.0003)
+    WHERE NOT EXISTS (SELECT 1 FROM relevant_new n WHERE n.osm_id = g.osm_id AND NOT n.walk)
   ),
   touched AS (
     SELECT o.osm_id, o.geom
@@ -77,9 +97,11 @@ BEGIN
        OR (o.geom_type = 'point' AND o.categories = '{}'
            AND EXISTS (SELECT 1 FROM road_markings m WHERE m.geom && ST_Expand(o.geom, 0.00003) AND m.kind = 'hump'
                        AND ST_DWithin(m.geom, o.geom, 0.00003)))
-       OR o.id IN (SELECT id FROM relevant_new)
+       OR o.id IN (SELECT id FROM relevant_new WHERE NOT walk)
     UNION ALL
-    SELECT osm_id, geom FROM relevant_new
+    SELECT osm_id, geom FROM relevant_new WHERE NOT walk
+    UNION ALL
+    SELECT osm_id, geom FROM beside
   ),
   -- The ways ending anywhere on a touched road: at its ends they carry on
   -- from it or share a fork with it, and a street running through a fork

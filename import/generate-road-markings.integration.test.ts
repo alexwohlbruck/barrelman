@@ -131,6 +131,35 @@ const ways: [number, string, Record<string, string>][] = [
   [162, line([-74.22003, 40.71285], [-74.21997, 40.71315]), { highway: 'footway', footway: 'crossing', 'crossing:markings': 'zebra' }],
   // A crossing drawn well past both kerbs, and askew to the street.
   [9, line([-74.0006, 40.70985], [-74.0004, 40.71015]), { highway: 'footway', footway: 'crossing', 'crossing:markings': 'zebra' }],
+  // One-ways between sidewalks mapped 7 m (9 m) either side of them: plain,
+  // with three lanes, with a tagged width, and with a cycle track between the
+  // street and its sidewalk on one side.
+  [400, line([-74.400, 40.712], [-74.400, 40.714]), { highway: 'residential', oneway: 'yes', lanes: '1' }],
+  [401, line([-74.400 + 7 / 84300, 40.712], [-74.400 + 7 / 84300, 40.714]), { highway: 'footway', footway: 'sidewalk' }],
+  [402, line([-74.400 - 7 / 84300, 40.712], [-74.400 - 7 / 84300, 40.714]), { highway: 'footway', footway: 'sidewalk' }],
+  [403, line([-74.403, 40.712], [-74.403, 40.714]), { highway: 'residential', oneway: 'yes', lanes: '3' }],
+  [404, line([-74.403 + 9 / 84300, 40.712], [-74.403 + 9 / 84300, 40.714]), { highway: 'footway', footway: 'sidewalk' }],
+  [405, line([-74.403 - 9 / 84300, 40.712], [-74.403 - 9 / 84300, 40.714]), { highway: 'footway', footway: 'sidewalk' }],
+  [406, line([-74.406, 40.712], [-74.406, 40.714]), { highway: 'residential', oneway: 'yes', lanes: '1', width: '6' }],
+  [407, line([-74.406 + 7 / 84300, 40.712], [-74.406 + 7 / 84300, 40.714]), { highway: 'footway', footway: 'sidewalk' }],
+  [408, line([-74.406 - 7 / 84300, 40.712], [-74.406 - 7 / 84300, 40.714]), { highway: 'footway', footway: 'sidewalk' }],
+  [409, line([-74.409, 40.712], [-74.409, 40.714]), { highway: 'residential', oneway: 'yes', lanes: '1' }],
+  [410, line([-74.409 - 7 / 84300, 40.712], [-74.409 - 7 / 84300, 40.714]), { highway: 'footway', footway: 'sidewalk' }],
+  [411, line([-74.409 + 5 / 84300, 40.712], [-74.409 + 5 / 84300, 40.714]), { highway: 'cycleway' }],
+  [412, line([-74.409 + 7 / 84300, 40.712], [-74.409 + 7 / 84300, 40.714]), { highway: 'footway', footway: 'sidewalk' }],
+  // A divided avenue with a 4 m median, crossed by a street.
+  [420, line([-74.420, 40.713], [-74.420, 40.712]), { highway: 'primary', oneway: 'yes', lanes: '2' }],
+  [421, line([-74.420, 40.712], [-74.420, 40.711]), { highway: 'primary', oneway: 'yes', lanes: '2' }],
+  [422, line([-74.420 + 10.8 / 84300, 40.711], [-74.420 + 10.8 / 84300, 40.712]), { highway: 'primary', oneway: 'yes', lanes: '2' }],
+  [423, line([-74.420 + 10.8 / 84300, 40.712], [-74.420 + 10.8 / 84300, 40.713]), { highway: 'primary', oneway: 'yes', lanes: '2' }],
+  [424, line([-74.4207, 40.712], [-74.420, 40.712], [-74.420 + 10.8 / 84300, 40.712], [-74.4192, 40.712]), { highway: 'residential', lanes: '2' }],
+  // A signalled approach whose crosswalk runs 30° askew, its south end
+  // furthest from the junction.
+  [430, line([-74.441, 40.712], [-74.440, 40.712]), { highway: 'residential', lanes: '2' }],
+  [431, line([-74.440, 40.712], [-74.439, 40.712]), { highway: 'residential', lanes: '2' }],
+  [432, line([-74.440, 40.711], [-74.440, 40.712], [-74.440, 40.713]), { highway: 'residential', lanes: '2' }],
+  [434, line([-74.440 - 12.3 / 84300, 40.712 - 4 / 111050], [-74.440 - 7.7 / 84300, 40.712 + 4 / 111050]),
+    { highway: 'footway', footway: 'crossing', 'crossing:markings': 'zebra' }],
 ]
 
 // Painted areas, nodes on roads, and the roads they lie on (OSM wiki schemes).
@@ -206,6 +235,7 @@ run('generate-road-markings.sql', () => {
       await sql`INSERT INTO geo_places VALUES (${id}, ${Number(id.slice(1))}, ${sql.json(tags)}, ST_GeomFromText(${wkt}, 4326), ${type}, ${id[0]})`
     }
     await sql`INSERT INTO geo_places VALUES ('N8', 8, ${sql.json({ highway: 'traffic_signals' })}, ST_SetSRID(ST_MakePoint(${SB_X}, ${STREET_Y}), 4326), 'point', 'N')`
+    await sql`INSERT INTO geo_places VALUES ('N433', 433, ${sql.json({ highway: 'traffic_signals' })}, ST_SetSRID(ST_MakePoint(-74.440, 40.712), 4326), 'point', 'N')`
     const turns: [string, number, number, Record<string, string>][] = [
       ['N80', -74.120, 40.713, { highway: 'turning_circle' }],
       ['N81', -74.125, 40.713, { highway: 'turning_circle', diameter: '30' }],
@@ -566,6 +596,49 @@ run('generate-road-markings.sql', () => {
     expect(bars.length).toBeGreaterThan(3)
     // The street runs east-west and the crossing is drawn askew across it.
     for (const b of bars) expect(b.dx).toBeGreaterThan(2 * b.dy)
+  })
+
+  test('runs a street out to the kerbs its mapped sidewalks stand back from', async () => {
+    // Sidewalks 7 m out, their middles 2.25 m from the kerb.
+    for (const m of [-4.5, 4.5]) expect(await covered(east(-74.400, m), 40.713)).toBe(true)
+    for (const m of [-5.0, 5.0]) expect(await covered(east(-74.400, m), 40.713)).toBe(false)
+    // A tagged width wins, and a cycle track between street and sidewalk
+    // leaves that side unread, so the lane keeps its own width.
+    expect(await covered(east(-74.406, 3.3), 40.713)).toBe(false)
+    expect(await covered(east(-74.409, 2), 40.713)).toBe(false)
+    expect(await covered(east(-74.409, -2), 40.713)).toBe(false)
+  })
+
+  test('keeps its lanes their width in a street widened to its kerbs', async () => {
+    // Three 3 m lanes down the middle of 13.5 m: dividers 1.5 m either side.
+    const lines = await sql`
+      SELECT (ST_X(ST_Centroid(geom)) - -74.403) * 84300 as dx FROM road_markings
+      WHERE kind = 'lane' AND ST_Intersects(geom, ST_MakeEnvelope(-74.4032, 40.7125, -74.4028, 40.7135, 4326))`
+    expect(lines.length).toBeGreaterThan(1)
+    for (const l of lines) expect(Math.abs(Math.abs(l.dx) - 1.5)).toBeLessThan(0.2)
+  })
+
+  test('rounds the nose of a narrow median rather than drawing it to a point', async () => {
+    // Cross street kerb 3 m north of its line; the median runs 3.4 to 7.4 m
+    // east of the southbound way.
+    const x = (m: number) => east(-74.420, m)
+    expect(await covered(x(5.4), north(40.712, 3.3))).toBe(false)
+    expect(await covered(x(3.9), north(40.712, 4.0))).toBe(false)
+    expect(await covered(x(6.9), north(40.712, 4.0))).toBe(false)
+    expect(await covered(x(5.4), north(40.712, 10))).toBe(false)
+    // The corners on the far kerbs keep their full radius.
+    expect(await covered(x(-3.9), north(40.712, 3.4))).toBe(true)
+  })
+
+  test('stands a stop line clear of an askew crosswalk across all its lanes', async () => {
+    const [{ stops, gap }] = await sql`
+      SELECT count(*)::int as stops, min(ST_Distance(s.geom::geography, c.geom::geography)) as gap
+      FROM road_markings s, road_markings c
+      WHERE s.kind = 'stop' AND c.kind = 'crosswalk'
+        AND ST_Intersects(s.geom, ST_MakeEnvelope(-74.4405, 40.7118, -74.4400, 40.7122, 4326))
+        AND ST_Intersects(c.geom, ST_MakeEnvelope(-74.4405, 40.7118, -74.4400, 40.7122, 4326))`
+    expect(stops).toBeGreaterThan(0)
+    expect(gap).toBeGreaterThan(0.3)
   })
 
   test('keeps lane lines out of the crossing carriageway', async () => {
@@ -1142,6 +1215,35 @@ run('generate-road-markings.sql', () => {
       expect(await at(-74.315, 40.7133)).toBe(1)
       expect(await at(-74.325, 40.7132)).toBe(1)
       expect(await at(-74.36, 40.712)).toBe(0)
+    })
+  })
+
+  describe('a sidewalk moved, and footways deleted', () => {
+    beforeAll(async () => {
+      await sql.unsafe(`DROP SCHEMA IF EXISTS osm_replay CASCADE; CREATE SCHEMA osm_replay;
+        CREATE TABLE osm_replay.old_places AS
+          SELECT id, 'W'::char(1) as osm_type, osm_id, NULL::text as name, '{highway/footway}'::text[] as categories,
+                 ST_Translate(geom, 0.00004, 0) as geom, geom_type, NULL::int as admin_level
+          FROM geo_places WHERE id = 'W401';
+        -- Deleted: one beside a paved street, one nowhere near a street.
+        INSERT INTO osm_replay.old_places (id, osm_type, osm_id, categories, geom, geom_type) VALUES
+          ('W497', 'W', 497, '{highway/footway}', ST_GeomFromText('LINESTRING(-74.40310 40.712, -74.40310 40.714)', 4326), 'line'),
+          ('W498', 'W', 498, '{highway/footway}', ST_GeomFromText('LINESTRING(-74.38 40.712, -74.38 40.714)', 4326), 'line');
+        CREATE TABLE osm_replay.changed AS SELECT id FROM geo_places WHERE id = 'W401';`)
+      await sql`DELETE FROM detail_dirty`
+      await sql.unsafe(readFileSync(join(import.meta.dir, 'queue-road-markings.sql'), 'utf8'))
+    })
+
+    afterAll(async () => {
+      await sql`DELETE FROM detail_dirty`
+    })
+
+    test('queues the streets beside them', async () => {
+      const at = async (x: number, y: number) => (await sql`
+        SELECT count(*)::int as n FROM detail_dirty WHERE layer = 'road_markings' AND ST_Intersects(box, ST_SetSRID(ST_MakePoint(${x}, ${y}), 4326))`)[0].n
+      expect(await at(-74.400, 40.7139)).toBeGreaterThan(0)
+      expect(await at(-74.403, 40.7139)).toBeGreaterThan(0)
+      expect(await at(-74.38, 40.713)).toBe(0)
     })
   })
 
