@@ -17,8 +17,8 @@
 --
 -- A road's place reads the way before it, the way after that eases back, and
 -- a fork's branches line up with its stem (generate-road-markings.sql, Where
--- the way runs, Forks), so a changed road also queues every way meeting
--- either end of it, two deep.
+-- the way runs, Forks), so a changed road also queues the ways ending on it,
+-- and round the far ends of those as far as a taper reaches.
 --
 -- Nothing is queued where road markings were never built. A failure here is
 -- reported and skipped rather than raised: it would otherwise roll back the
@@ -72,11 +72,13 @@ BEGIN
     UNION ALL
     SELECT osm_id, geom FROM relevant_new
   ),
-  -- The ways ending where a touched road ends. The touched way's own outline
-  -- is the old one where it moved, so it is not looked for in geo_places.
+  -- The ways ending anywhere on a touched road: at its ends they carry on
+  -- from it or share a fork with it, and a street running through a fork
+  -- decides whether it is one. The touched way's own outline is the old one
+  -- where it moved, so it is not looked for in geo_places.
   next1 AS (
     SELECT DISTINCT n.osm_id, n.geom
-    FROM touched t, LATERAL (VALUES (ST_StartPoint(t.geom)), (ST_EndPoint(t.geom))) e(pt),
+    FROM touched t, LATERAL (SELECT (ST_DumpPoints(t.geom)).geom) e(pt),
          LATERAL (
            SELECT g.osm_id, g.geom FROM geo_places g
            WHERE g.geom && ST_Expand(e.pt, 1e-7) AND g.geom_type = 'line' AND g.osm_type = 'W' AND road_is_marked_way(g.tags)
@@ -85,11 +87,13 @@ BEGIN
          ) n
     WHERE GeometryType(t.geom) = 'LINESTRING' AND NOT EXISTS (SELECT 1 FROM touched x WHERE x.osm_id = n.osm_id)
   ),
+  -- The ways meeting those ends change only as far as a taper reaches from
+  -- the shared node (a few hundred metres at most).
   next2 AS (
-    SELECT DISTINCT n.osm_id, n.geom
+    SELECT DISTINCT n.osm_id, ST_Expand(e.pt, 0.003) as box
     FROM next1 t, LATERAL (VALUES (ST_StartPoint(t.geom)), (ST_EndPoint(t.geom))) e(pt),
          LATERAL (
-           SELECT g.osm_id, g.geom FROM geo_places g
+           SELECT g.osm_id FROM geo_places g
            WHERE g.geom && ST_Expand(e.pt, 1e-7) AND g.geom_type = 'line' AND g.osm_type = 'W' AND road_is_marked_way(g.tags)
              AND g.osm_id <> t.osm_id
              AND (ST_DWithin(ST_StartPoint(g.geom), e.pt, 1e-7) OR ST_DWithin(ST_EndPoint(g.geom), e.pt, 1e-7))
@@ -98,9 +102,10 @@ BEGIN
       AND NOT EXISTS (SELECT 1 FROM next1 x WHERE x.osm_id = n.osm_id)
   )
   INSERT INTO detail_dirty (layer, box)
-  SELECT 'road_markings', ST_Envelope(ST_Expand(geom, 0.0005))
-  FROM (SELECT geom FROM touched UNION ALL SELECT geom FROM next1 UNION ALL SELECT geom FROM next2) q
-  WHERE geom IS NOT NULL;
+  SELECT 'road_markings', box
+  FROM (SELECT ST_Envelope(ST_Expand(geom, 0.0005)) as box FROM touched WHERE geom IS NOT NULL
+        UNION ALL SELECT ST_Envelope(ST_Expand(geom, 0.0005)) FROM next1
+        UNION ALL SELECT box FROM next2) q;
   GET DIAGNOSTICS queued = ROW_COUNT;
   RAISE NOTICE 'road markings: queued % outline(s)', queued;
 EXCEPTION WHEN OTHERS THEN

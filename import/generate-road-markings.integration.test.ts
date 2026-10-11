@@ -91,7 +91,7 @@ const ways: [number, string, Record<string, string>][] = [
   [102, line([-74.1605, 40.7125], [-74.160, 40.7125]), { highway: 'service', lanes: '1' }],
   // Bedford Ave and Rogers Ave, one lane and three, merging into four.
   [110, line([-74.1703, 40.7120], [-74.170, 40.713]), { highway: 'secondary', oneway: 'yes', lanes: '1' }],
-  [111, line([-74.1697, 40.7120], [-74.170, 40.713]), { highway: 'secondary', oneway: 'yes', lanes: '3' }],
+  [111, line([-74.1697, 40.7120], [-74.170, 40.713]), { highway: 'secondary', oneway: 'yes', lanes: '3', 'turn:lanes': 'through|through|through' }],
   [112, line([-74.170, 40.713], [-74.170, 40.7145]), { highway: 'secondary', oneway: 'yes', lanes: '4' }],
   // The FDR losing a lane to an exit ramp that peels off to the right.
   [120, line([-74.180, 40.7115], [-74.180, 40.713]), { highway: 'motorway', oneway: 'yes', lanes: '4' }],
@@ -114,6 +114,8 @@ const ways: [number, string, Record<string, string>][] = [
   [153, line([-74.2105, 40.713], [-74.210, 40.713], [-74.2095, 40.713]), { highway: 'secondary', lanes: '2' }],
   [154, line([-74.2102, 40.71295], [-74.2098, 40.71295]), { highway: 'footway', footway: 'crossing', 'crossing:markings': 'zebra' }],
   [155, line([-74.2102, 40.71282], [-74.2098, 40.71282]), { highway: 'footway', footway: 'crossing', 'crossing:markings': 'zebra' }],
+  // A motorway bridge passing over that junction.
+  [156, line([-74.2115, 40.7129], [-74.2085, 40.7129]), { highway: 'motorway', oneway: 'yes', lanes: '3', bridge: 'yes', layer: '1' }],
   // A street crossed twice at one spot, the crossings a few degrees apart.
   [160, line([-74.2205, 40.713], [-74.2195, 40.713]), { highway: 'residential', lanes: '2' }],
   [161, line([-74.2200, 40.71285], [-74.2200, 40.71315]), { highway: 'footway', footway: 'crossing', 'crossing:markings': 'zebra' }],
@@ -326,6 +328,21 @@ run('generate-road-markings.sql', () => {
     expect(await crossing(-74.210, ahead(40.713, -35), -5, 5, ['lane'])).toBe(2)
   })
 
+  test('runs a bridge\'s lines on over a junction below it', async () => {
+    const [{ n }] = await sql`SELECT count(*)::int as n FROM road_markings WHERE kind = 'lane' AND bridge
+      AND ST_Intersects(geom, ST_SetSRID(ST_MakeLine(ST_MakePoint(-74.2101, 40.7128), ST_MakePoint(-74.2101, 40.7130)), 4326))`
+    expect(n).toBe(2)
+  })
+
+  test('keeps the arrows of a merging way in its lanes as they ease over', async () => {
+    const arrows = await sql`
+      SELECT (SELECT min(ST_Distance(g.geom::geography, m.geom::geography)) FROM road_markings m
+              WHERE m.kind = 'lane' AND m.geom && ST_Expand(g.geom, 0.0002)) as gap
+      FROM road_glyphs g WHERE g.glyph LIKE 'road-arrow%' AND g.geom && ST_MakeEnvelope(-74.1705, 40.7115, -74.1695, 40.713, 4326)`
+    expect(arrows.length).toBe(6)
+    for (const a of arrows) expect(Number(a.gap)).toBeGreaterThan(1)
+  })
+
   test('ends lane lines at the stop line where the approach has no crosswalk', async () => {
     // The widest street crossing the southbound avenue is 7.6 m: its stop line
     // stands 5.3 m back, past the crossing carriageway's own 4.8 m.
@@ -348,7 +365,7 @@ run('generate-road-markings.sql', () => {
   })
 
   test('gives back no band, rather than failing, for a line it cannot taper', async () => {
-    const [{ band }] = await sql`SELECT road_taper_band('POINT(0 0)'::geometry, 0, 1, 2, 3, 10) as band`
+    const [{ band }] = await sql`SELECT road_ease_band('POINT(0 0)'::geometry, 0, 1, 2, 3, 10, 1, 5) as band`
     expect(band).toBeNull()
   })
 
