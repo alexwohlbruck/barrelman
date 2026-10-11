@@ -7,8 +7,10 @@
 --   road_surfaces   carriageways at their real width, with kerb corners
 --                   rounded where roads meet, and the islands turning loops
 --                   run round (`kind` 'island')
---   road_markings   lines: centre, lane, edge, bike lane, stop and crosswalk,
---                   each with a colour and a pattern
+--   road_markings   lines and areas of paint: centre, lane, edge, bike, bus,
+--                   parking, stop, yield, crosswalk, hump, and the outline and
+--                   hatching of painted areas, each with a colour and a pattern
+--                   (docs/content/docs/self-hosting/road-markings.mdx)
 --   road_glyphs     points: turn arrows, bike symbols and sharrows, each with
 --                   the bearing it reads along
 --
