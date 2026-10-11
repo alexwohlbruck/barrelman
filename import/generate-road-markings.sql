@@ -1049,6 +1049,55 @@ UNION ALL
 SELECT ids, ST_Buffer(p, reach - 0.5 * s, 32), true FROM _rm_turns WHERE edged;
 CREATE INDEX ON _rm_turn_cuts USING gist (cut);
 
+-- ─── Junction approaches ─────────────────────────────────────────────────────
+-- At each end of a marked road that meets a junction: where its stop line
+-- stands (`setback`), whether one is painted, and the lanes that arrive. Lane
+-- lines end there too, wherever a road crosses.
+DROP TABLE IF EXISTS _rm_ends;
+CREATE TEMP TABLE _rm_ends AS
+SELECT r.osm_id, r.g, r.s, r.americas, r.bridge, e.at_end, e.pt, n.x, n.y, n.top_rank, road_rank(r.class) as rank,
+       r.split_b + f.d as split_b, r.split_f + f.d as split_f, r.left_edge + f.d as left_edge, r.right_edge + f.d as right_edge,
+       r.lane_w, r.fwd, r.bwd,
+       CASE WHEN e.at_end THEN r.turn_forward ELSE r.turn_backward END as turns,
+       -- Back from the junction centre to the stop line: clear of the widest
+       -- road crossing here, and of any crosswalk across the approach.
+       greatest((COALESCE(a.cross_w, 0) / 2 / greatest(COALESCE(a.sine, 1), 0.5) + 1.5) * r.s, COALESCE((
+         SELECT max(abs(CASE WHEN e.at_end THEN 1 - ST_LineLocatePoint(r.g, ST_ClosestPoint(c.g, e.pt))
+                                              ELSE ST_LineLocatePoint(r.g, ST_ClosestPoint(c.g, e.pt)) END) * ST_Length(r.g))
+         FROM _rm_crossings c
+         WHERE c.g && ST_Expand(e.pt, 30 * r.s) AND ST_DWithin(c.g, r.g, 0.5 * r.s)
+           AND ST_DWithin(c.g, e.pt, 30 * r.s)
+       ) + 2.5 * r.s, 0)) as setback,
+       COALESCE(a.cross_w, 0) as cross_w
+FROM _rm_roads r
+CROSS JOIN LATERAL (VALUES (true, ST_EndPoint(r.g)), (false, ST_StartPoint(r.g))) e(at_end, pt)
+CROSS JOIN LATERAL (SELECT CASE WHEN e.at_end THEN r.fork_e ELSE r.fork_s END as d) f
+JOIN _rm_nodes n ON n.x = round(ST_X(e.pt)::numeric, 2) AND n.y = round(ST_Y(e.pt)::numeric, 2)
+LEFT JOIN _rm_approach a ON a.osm_id = r.osm_id AND a.x = n.x AND a.y = n.y
+WHERE r.marked AND ST_Length(r.g) > 25 * r.s;
+
+ALTER TABLE _rm_ends ADD COLUMN controlled boolean;
+UPDATE _rm_ends e SET controlled =
+  -- A signal at or just off the junction.
+  EXISTS (SELECT 1 FROM _rm_signals c WHERE c.kind = 'traffic_signals' AND ST_DWithin(c.g, e.pt, (e.cross_w / 2 + 20) * e.s))
+  -- A stop sign on the node: an all-way stop, or a minor road meeting a bigger one.
+  OR EXISTS (SELECT 1 FROM _rm_signals c WHERE c.kind = 'stop' AND ST_DWithin(c.g, e.pt, 0.5 * e.s)
+             AND (c.all_way OR e.rank < e.top_rank))
+  -- A stop sign on this approach, facing the traffic arriving here.
+  OR EXISTS (SELECT 1 FROM _rm_signals c WHERE c.kind = 'stop' AND ST_DWithin(c.g, e.pt, 30 * e.s)
+             AND NOT ST_DWithin(c.g, e.pt, 0.5 * e.s) AND ST_DWithin(c.g, e.g, 0.5 * e.s)
+             AND COALESCE(c.direction, '') <> CASE WHEN e.at_end THEN 'backward' ELSE 'forward' END);
+
+-- The stretch of each approach between its stop line and the junction.
+DROP TABLE IF EXISTS _rm_approach_cuts;
+CREATE TEMP TABLE _rm_approach_cuts AS
+SELECT e.osm_id, ST_Buffer(ST_LineSubstring(e.g, CASE WHEN e.at_end THEN 1 - least(1, e.setback / ST_Length(e.g)) ELSE 0 END,
+                                                  CASE WHEN e.at_end THEN 1 ELSE least(1, e.setback / ST_Length(e.g)) END),
+                           (r.width / 2 + abs(r.shift) + greatest(abs(r.fork_s), abs(r.fork_e)) + 2) * r.s, 'endcap=flat') as cut
+FROM _rm_ends e JOIN _rm_roads r ON r.osm_id = e.osm_id
+WHERE e.cross_w > 0;
+CREATE INDEX ON _rm_approach_cuts (osm_id);
+
 -- ─── Lane lines ──────────────────────────────────────────────────────────────
 -- Offsets are to the left of the way's direction. Backward lanes run on the
 -- left and forward lanes on the right; `split` is the line between them.
@@ -1127,6 +1176,7 @@ CROSS JOIN LATERAL (
   SELECT ST_LineMerge(ST_CollectionExtract(COALESCE(ST_Difference(o.line, ST_Union(cut)), o.line), 2)) as clipped
   FROM (SELECT k.cut FROM _rm_cuts k WHERE k.cut && o.line
         UNION ALL SELECT k.cut FROM _rm_boxes k WHERE k.cut && o.line
+        UNION ALL SELECT a.cut FROM _rm_approach_cuts a WHERE a.osm_id = l.osm_id
         UNION ALL SELECT rc.cut FROM _rm_road_cuts rc WHERE rc.osm_id = l.osm_id
         UNION ALL SELECT tc.cut FROM _rm_turn_cuts tc WHERE l.osm_id = ANY (tc.ids) AND tc.cut && o.line AND tc.edge = (l.kind = 'edge')) cuts
 ) c
@@ -1170,6 +1220,7 @@ CROSS JOIN LATERAL (
   SELECT ST_CollectionExtract(COALESCE(ST_Difference(o.band, ST_Union(cut)), o.band), 3) as clipped
   FROM (SELECT k.cut FROM _rm_cuts k WHERE k.cut && o.band
         UNION ALL SELECT k.cut FROM _rm_boxes k WHERE k.cut && o.band
+        UNION ALL SELECT a.cut FROM _rm_approach_cuts a WHERE a.osm_id = b.osm_id
         UNION ALL SELECT rc.cut FROM _rm_road_cuts rc WHERE rc.osm_id = b.osm_id
         UNION ALL SELECT tc.cut FROM _rm_turn_cuts tc WHERE b.osm_id = ANY (tc.ids) AND tc.cut && o.band AND NOT tc.edge) cuts
 ) c
@@ -1251,41 +1302,6 @@ WHERE c.centre IS NOT NULL AND gap.span IS NOT NULL AND NOT ST_IsEmpty(gap.span)
 -- At each end of a marked road that meets a junction: across the lanes that
 -- arrive there, a stop line if the junction is controlled, and an arrow in
 -- each lane its turn:lanes describes.
-DROP TABLE IF EXISTS _rm_ends;
-CREATE TEMP TABLE _rm_ends AS
-SELECT r.osm_id, r.g, r.s, r.americas, r.bridge, e.at_end, e.pt, n.x, n.y, n.top_rank, road_rank(r.class) as rank,
-       r.split_b + f.d as split_b, r.split_f + f.d as split_f, r.left_edge + f.d as left_edge, r.right_edge + f.d as right_edge,
-       r.lane_w, r.fwd, r.bwd,
-       CASE WHEN e.at_end THEN r.turn_forward ELSE r.turn_backward END as turns,
-       -- Back from the junction centre to the stop line: clear of the widest
-       -- road crossing here, and of any crosswalk across the approach.
-       greatest((COALESCE(a.cross_w, 0) / 2 / greatest(COALESCE(a.sine, 1), 0.5) + 1.5) * r.s, COALESCE((
-         SELECT max(abs(CASE WHEN e.at_end THEN 1 - ST_LineLocatePoint(r.g, ST_ClosestPoint(c.g, e.pt))
-                                              ELSE ST_LineLocatePoint(r.g, ST_ClosestPoint(c.g, e.pt)) END) * ST_Length(r.g))
-         FROM _rm_crossings c
-         WHERE c.g && ST_Expand(e.pt, 30 * r.s) AND ST_DWithin(c.g, r.g, 0.5 * r.s)
-           AND ST_DWithin(c.g, e.pt, 30 * r.s)
-       ) + 2.5 * r.s, 0)) as setback,
-       COALESCE(a.cross_w, 0) as cross_w
-FROM _rm_roads r
-CROSS JOIN LATERAL (VALUES (true, ST_EndPoint(r.g)), (false, ST_StartPoint(r.g))) e(at_end, pt)
-CROSS JOIN LATERAL (SELECT CASE WHEN e.at_end THEN r.fork_e ELSE r.fork_s END as d) f
-JOIN _rm_nodes n ON n.x = round(ST_X(e.pt)::numeric, 2) AND n.y = round(ST_Y(e.pt)::numeric, 2)
-LEFT JOIN _rm_approach a ON a.osm_id = r.osm_id AND a.x = n.x AND a.y = n.y
-WHERE r.marked AND ST_Length(r.g) > 25 * r.s;
-
-ALTER TABLE _rm_ends ADD COLUMN controlled boolean;
-UPDATE _rm_ends e SET controlled =
-  -- A signal at or just off the junction.
-  EXISTS (SELECT 1 FROM _rm_signals c WHERE c.kind = 'traffic_signals' AND ST_DWithin(c.g, e.pt, (e.cross_w / 2 + 20) * e.s))
-  -- A stop sign on the node: an all-way stop, or a minor road meeting a bigger one.
-  OR EXISTS (SELECT 1 FROM _rm_signals c WHERE c.kind = 'stop' AND ST_DWithin(c.g, e.pt, 0.5 * e.s)
-             AND (c.all_way OR e.rank < e.top_rank))
-  -- A stop sign on this approach, facing the traffic arriving here.
-  OR EXISTS (SELECT 1 FROM _rm_signals c WHERE c.kind = 'stop' AND ST_DWithin(c.g, e.pt, 30 * e.s)
-             AND NOT ST_DWithin(c.g, e.pt, 0.5 * e.s) AND ST_DWithin(c.g, e.g, 0.5 * e.s)
-             AND COALESCE(c.direction, '') <> CASE WHEN e.at_end THEN 'backward' ELSE 'forward' END);
-
 -- A frame at a point `back` units from a road end: the point, and the unit
 -- vectors along the arriving traffic and to its left.
 DROP TABLE IF EXISTS _rm_frames;

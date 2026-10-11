@@ -322,6 +322,13 @@ run('generate-road-markings.sql', () => {
     expect(await crossing(-74.210, ahead(40.713, -35), -5, 5, ['lane'])).toBe(2)
   })
 
+  test('ends lane lines at the stop line where the approach has no crosswalk', async () => {
+    // The widest street crossing the southbound avenue is 7.6 m: its stop line
+    // stands 5.3 m back, past the crossing carriageway's own 4.8 m.
+    expect(await crossing(SB_X, ahead(STREET_Y, 5), -6, 6, ['lane'])).toBe(0)
+    expect(await crossing(SB_X, ahead(STREET_Y, 12), -6, 6, ['lane'])).toBeGreaterThan(0)
+  })
+
   test('builds with a skewed crossing too short for one bar', async () => {
     const [{ n }] = await sql`SELECT count(*)::int as n FROM road_surfaces`
     expect(n).toBeGreaterThan(0)
