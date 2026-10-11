@@ -84,6 +84,42 @@ const ways: [number, string, Record<string, string>][] = [
   [84, line([-74.135, 40.712], [-74.135, 40.713]), { highway: 'residential' }],
   [85, line([-74.140, 40.712], [-74.140, 40.713]), { highway: 'residential' }],
   [83, line([-74.026, 40.717], [-74.026, 40.718]), { highway: 'residential' }],
+  // West St southbound at Murray St, mirrored north: three lanes into four
+  // with a right bay, and a driveway meeting the join.
+  [100, line([-74.160, 40.712], [-74.160, 40.7125]), { highway: 'trunk', oneway: 'yes', lanes: '3' }],
+  [101, line([-74.160, 40.7125], [-74.160, 40.714]), { highway: 'trunk', oneway: 'yes', lanes: '4', 'turn:lanes': 'through|through|through|right' }],
+  [102, line([-74.1605, 40.7125], [-74.160, 40.7125]), { highway: 'service', lanes: '1' }],
+  // Bedford Ave and Rogers Ave, one lane and three, merging into four.
+  [110, line([-74.1703, 40.7120], [-74.170, 40.713]), { highway: 'secondary', oneway: 'yes', lanes: '1' }],
+  [111, line([-74.1697, 40.7120], [-74.170, 40.713]), { highway: 'secondary', oneway: 'yes', lanes: '3', 'turn:lanes': 'through|through|through' }],
+  [112, line([-74.170, 40.713], [-74.170, 40.7145]), { highway: 'secondary', oneway: 'yes', lanes: '4' }],
+  // The FDR losing a lane to an exit ramp that peels off to the right.
+  [120, line([-74.180, 40.7115], [-74.180, 40.713]), { highway: 'motorway', oneway: 'yes', lanes: '4' }],
+  [121, line([-74.180, 40.713], [-74.180, 40.715]), { highway: 'motorway', oneway: 'yes', lanes: '3' }],
+  [122, line([-74.180, 40.713], [-74.17965, 40.715]), { highway: 'motorway_link', oneway: 'yes', lanes: '1' }],
+  // A two-way street dividing into a pair of one-ways.
+  [130, line([-74.190, 40.7115], [-74.190, 40.713]), { highway: 'primary', lanes: '4' }],
+  [131, line([-74.190, 40.713], [-74.1898, 40.715]), { highway: 'primary', oneway: 'yes', lanes: '2' }],
+  [132, line([-74.1902, 40.715], [-74.190, 40.713]), { highway: 'primary', oneway: 'yes', lanes: '2' }],
+  // Grand Army Plaza: four lanes splitting three ways.
+  [140, line([-74.200, 40.7115], [-74.200, 40.713]), { highway: 'primary', oneway: 'yes', lanes: '4' }],
+  [141, line([-74.200, 40.713], [-74.2004, 40.715]), { highway: 'primary_link', oneway: 'yes', lanes: '1' }],
+  [142, line([-74.200, 40.713], [-74.200, 40.715]), { highway: 'primary', oneway: 'yes', lanes: '3' }],
+  [143, line([-74.200, 40.713], [-74.1996, 40.715]), { highway: 'secondary_link', oneway: 'yes', lanes: '1' }],
+  // West St at Chambers St: a short way between a junction and the crosswalk
+  // past it, all inside the junction.
+  [150, line([-74.210, 40.714], [-74.210, 40.713]), { highway: 'trunk', oneway: 'yes', lanes: '3' }],
+  [151, line([-74.210, 40.713], [-74.210, 40.71285]), { highway: 'trunk', oneway: 'yes', lanes: '3' }],
+  [152, line([-74.210, 40.71285], [-74.210, 40.711]), { highway: 'trunk', oneway: 'yes', lanes: '3' }],
+  [153, line([-74.2105, 40.713], [-74.210, 40.713], [-74.2095, 40.713]), { highway: 'secondary', lanes: '2' }],
+  [154, line([-74.2102, 40.71295], [-74.2098, 40.71295]), { highway: 'footway', footway: 'crossing', 'crossing:markings': 'zebra' }],
+  [155, line([-74.2102, 40.71282], [-74.2098, 40.71282]), { highway: 'footway', footway: 'crossing', 'crossing:markings': 'zebra' }],
+  // A motorway bridge passing over that junction.
+  [156, line([-74.2115, 40.7129], [-74.2085, 40.7129]), { highway: 'motorway', oneway: 'yes', lanes: '3', bridge: 'yes', layer: '1' }],
+  // A street crossed twice at one spot, the crossings a few degrees apart.
+  [160, line([-74.2205, 40.713], [-74.2195, 40.713]), { highway: 'residential', lanes: '2' }],
+  [161, line([-74.2200, 40.71285], [-74.2200, 40.71315]), { highway: 'footway', footway: 'crossing', 'crossing:markings': 'zebra' }],
+  [162, line([-74.22003, 40.71285], [-74.21997, 40.71315]), { highway: 'footway', footway: 'crossing', 'crossing:markings': 'zebra' }],
   // A crossing drawn well past both kerbs, and askew to the street.
   [9, line([-74.0006, 40.70985], [-74.0004, 40.71015]), { highway: 'footway', footway: 'crossing', 'crossing:markings': 'zebra' }],
 ]
@@ -241,13 +277,95 @@ run('generate-road-markings.sql', () => {
     }
   })
 
+  // Metres north of a latitude.
+  const ahead = (y: number, m: number) => y + m / 111050
+  // The lines of `kinds` crossing a probe from `w` to `e` metres east of `x`, at `y`.
+  const crossing = async (x: number, y: number, w: number, e: number, kinds: string[], color?: string) =>
+    (await sql`SELECT count(*)::int as n FROM road_markings
+      WHERE kind = ANY (${kinds}) AND (${color ?? null}::text IS NULL OR color = ${color ?? null})
+        AND ST_Intersects(geom, ST_SetSRID(ST_MakeLine(ST_MakePoint(${east(x, w)}, ${y}), ST_MakePoint(${east(x, e)}, ${y})), 4326))`)[0].n
+
+  test('opens a bay with a taper even where a driveway meets the join', async () => {
+    // Three lanes of 3.6 m end 5.4 m right of the way; four with a right bay end at 9.
+    expect(await covered(east(-74.160, 7), ahead(40.7125, 3))).toBe(false)
+    expect(await covered(east(-74.160, 8.5), ahead(40.7125, 120))).toBe(true)
+  })
+
+  test('lines two merging ways up with the kerbs of the road they become', async () => {
+    // The four lanes run 6.6 m either side; 3 m short of the merge the one-lane
+    // way holds the left kerb and the three-lane way the right.
+    expect(await covered(east(-74.170, -6), ahead(40.713, -3))).toBe(true)
+    expect(await covered(east(-74.170, 6.2), ahead(40.713, -3))).toBe(true)
+    // Nothing paints green across a merge, as it would across a junction.
+    const [{ g }] = await sql`SELECT count(*)::int as g FROM road_markings WHERE kind = 'bike_lane'
+      AND ST_DWithin(geom::geography, ST_SetSRID(ST_MakePoint(-74.170, 40.713), 4326)::geography, 20)`
+    expect(g).toBe(0)
+  })
+
+  test('peels an exit ramp off the right kerb, not across the through lanes', async () => {
+    // Just past the split the ramp's yellow left edge stays out of the middle of the road.
+    expect(await crossing(-74.180, ahead(40.713, 5), -3, 3, ['edge'], 'yellow')).toBe(0)
+    // and the through lanes keep the left kerb: no yellow edge jumps inward.
+    expect(await crossing(-74.180, ahead(40.713, 5), -7.4, -6.4, ['edge'], 'yellow')).toBe(1)
+  })
+
+  test('divides a two-way street into one-ways that each keep their own kerb', async () => {
+    // Four lanes of 3.4 m: 6.8 m either side of the way at the split.
+    expect(await covered(east(-74.190, -6.3), ahead(40.713, 4))).toBe(true)
+    expect(await covered(east(-74.190, 6.3), ahead(40.713, 4))).toBe(true)
+  })
+
+  test('spreads a three-way split across the road it leaves', async () => {
+    // Four lanes of 3.4 m, 6.8 m either side: the outer links take the kerbs.
+    expect(await covered(east(-74.200, -6.4), ahead(40.713, 3))).toBe(true)
+    expect(await covered(east(-74.200, 6.4), ahead(40.713, 3))).toBe(true)
+  })
+
+  test('ends lane lines at the crosswalks round a junction', async () => {
+    // Between the crossing street and the crosswalk past it, inside the junction.
+    expect(await crossing(-74.210, ahead(40.713, -10), -5, 5, ['lane'])).toBe(0)
+    // and past the crosswalk they run again.
+    expect(await crossing(-74.210, ahead(40.713, -35), -5, 5, ['lane'])).toBe(2)
+  })
+
+  test('runs a bridge\'s lines on over a junction below it', async () => {
+    const [{ n }] = await sql`SELECT count(*)::int as n FROM road_markings WHERE kind = 'lane' AND bridge
+      AND ST_Intersects(geom, ST_SetSRID(ST_MakeLine(ST_MakePoint(-74.2101, 40.7128), ST_MakePoint(-74.2101, 40.7130)), 4326))`
+    expect(n).toBe(2)
+  })
+
+  test('keeps the arrows of a merging way in its lanes as they ease over', async () => {
+    const arrows = await sql`
+      SELECT (SELECT min(ST_Distance(g.geom::geography, m.geom::geography)) FROM road_markings m
+              WHERE m.kind = 'lane' AND m.geom && ST_Expand(g.geom, 0.0002)) as gap
+      FROM road_glyphs g WHERE g.glyph LIKE 'road-arrow%' AND g.geom && ST_MakeEnvelope(-74.1705, 40.7115, -74.1695, 40.713, 4326)`
+    expect(arrows.length).toBe(6)
+    for (const a of arrows) expect(Number(a.gap)).toBeGreaterThan(1)
+  })
+
+  test('ends lane lines at the stop line where the approach has no crosswalk', async () => {
+    // The widest street crossing the southbound avenue is 7.6 m: its stop line
+    // stands 5.3 m back, past the crossing carriageway's own 4.8 m.
+    expect(await crossing(SB_X, ahead(STREET_Y, 5), -6, 6, ['lane'])).toBe(0)
+    expect(await crossing(SB_X, ahead(STREET_Y, 12), -6, 6, ['lane'])).toBeGreaterThan(0)
+  })
+
+  test('does not stack two crosswalks mapped over each other', async () => {
+    const [{ overlap }] = await sql`
+      SELECT COALESCE(sum(ST_Area(ST_Intersection(a.geom, b.geom)::geography)), 0) as overlap
+      FROM road_markings a JOIN road_markings b ON a.fid < b.fid AND a.geom && b.geom
+      WHERE a.kind = 'crosswalk' AND b.kind = 'crosswalk'
+        AND ST_DWithin(a.geom::geography, ST_SetSRID(ST_MakePoint(-74.220, 40.713), 4326)::geography, 15)`
+    expect(Number(overlap)).toBeLessThan(0.05)
+  })
+
   test('builds with a skewed crossing too short for one bar', async () => {
     const [{ n }] = await sql`SELECT count(*)::int as n FROM road_surfaces`
     expect(n).toBeGreaterThan(0)
   })
 
   test('gives back no band, rather than failing, for a line it cannot taper', async () => {
-    const [{ band }] = await sql`SELECT road_taper_band('POINT(0 0)'::geometry, 0, 1, 2, 3, 10) as band`
+    const [{ band }] = await sql`SELECT road_ease_band('POINT(0 0)'::geometry, 0, 1, 2, 3, 10, 1, 5) as band`
     expect(band).toBeNull()
   })
 
@@ -593,9 +711,10 @@ run('generate-road-markings.sql', () => {
     })
 
     test('queues the old and new outlines of what road markings are drawn from, and nothing else', async () => {
-      // W5 old and new, the signal N8, and the crossing W98.
+      // W5 old and new, the signal N8, and the crossing W98; then the ways
+      // meeting W5's end (W1, W2, W6) and those meeting theirs (W3, W4, W7).
       const [{ n }] = await sql`SELECT count(*)::int as n FROM detail_dirty WHERE layer = 'road_markings'`
-      expect(n).toBe(4)
+      expect(n).toBe(10)
     })
 
     test('drops what lies where nothing was built, and plans the cells of the rest', async () => {
@@ -603,12 +722,12 @@ run('generate-road-markings.sql', () => {
       const dropped = out.find(r => r.kind === 'dropped')!
       // The old outline lies 0.05° east, where nothing was built.
       expect(dropped.a).toBe('1')
-      expect(out.find(r => r.kind === 'entries')!.a.split(',')).toHaveLength(3)
+      expect(out.find(r => r.kind === 'entries')!.a.split(',')).toHaveLength(9)
       const cells = out.filter(r => r.kind === 'cell')
       expect(cells.length).toBeGreaterThan(0)
       for (const c of cells) expect(Number(c.a) * 0.02).toBeLessThan(-73.98)
       const [{ n }] = await sql`SELECT count(*)::int as n FROM detail_dirty WHERE layer = 'road_markings'`
-      expect(n).toBe(3)
+      expect(n).toBe(9)
     })
 
     test('always takes the oldest entry, however many cells it spans', async () => {

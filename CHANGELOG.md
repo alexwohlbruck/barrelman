@@ -10,6 +10,19 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.10.12] - 2026-10-10
+
+### Fixed
+
+* **Lane markings stay continuous where roads split, merge and change lanes.**
+  An exit ramp now peels off the mainline's kerb instead of drawing its lines
+  across the through lanes, merging ways line up with the road they become, a
+  street dividing into one-ways keeps both kerbs, and a lane opening beside a
+  driveway or side street tapers in rather than jumping sideways. Lane lines
+  end at the crosswalks round a junction instead of running on through it, and
+  bike-lane conflict paint is no longer drawn where two ways simply merge.
+  Crosswalks mapped over each other no longer stack their bars.
+
 ## [0.10.11] - 2026-10-10
 
 ### Added
