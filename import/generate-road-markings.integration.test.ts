@@ -124,6 +124,42 @@ const ways: [number, string, Record<string, string>][] = [
   [9, line([-74.0006, 40.70985], [-74.0004, 40.71015]), { highway: 'footway', footway: 'crossing', 'crossing:markings': 'zebra' }],
 ]
 
+// Painted areas, nodes on roads, and the roads they lie on (OSM wiki schemes).
+const rect = (x: number, y: number, west: number, east: number, south: number, north: number) => {
+  const [x0, x1, y0, y1] = [x + west / 84300, x + east / 84300, y + south / 111050, y + north / 111050]
+  return `POLYGON((${x0} ${y0}, ${x1} ${y0}, ${x1} ${y1}, ${x0} ${y1}, ${x0} ${y0}))`
+}
+const hdWays: [number, string, Record<string, string>][] = [
+  // A two-way left-turn lane.
+  [200, line([-74.300, 40.712], [-74.300, 40.715]), { highway: 'secondary', lanes: '3', 'lanes:forward': '1', 'lanes:backward': '1',
+    'lanes:both_ways': '1', 'turn:lanes:both_ways': 'left' }],
+  // Lane changes barred: out of the left lane only, and across the left divider entirely.
+  [210, line([-74.305, 40.712], [-74.305, 40.714]), { highway: 'primary', oneway: 'yes', lanes: '3', 'change:lanes': 'not_right|yes|yes' }],
+  [211, line([-74.307, 40.712], [-74.307, 40.714]), { highway: 'primary', oneway: 'yes', lanes: '3', 'change:lanes': 'no|no|yes' }],
+  // A buffered bike lane.
+  [220, line([-74.310, 40.712], [-74.310, 40.714]), { highway: 'residential', lanes: '2', 'cycleway:right': 'lane', 'cycleway:right:buffer': 'yes' }],
+  // E 7th St, Charlotte: a painted median down a two-way street.
+  [230, line([-74.315, 40.712], [-74.315, 40.715]), { highway: 'secondary', lanes: '2' }],
+  // A gore beside a one-way, and a painted island on a two-way street.
+  [240, line([-74.320, 40.712], [-74.320, 40.715]), { highway: 'trunk', oneway: 'yes', lanes: '2' }],
+  [250, line([-74.325, 40.712], [-74.325, 40.715]), { highway: 'tertiary', lanes: '2' }],
+  // A minor road giving way at a T junction.
+  [260, line([-74.330, 40.712], [-74.330, 40.7135]), { highway: 'tertiary', lanes: '2' }],
+  [261, line([-74.331, 40.7135], [-74.330, 40.7135], [-74.329, 40.7135]), { highway: 'secondary', lanes: '2' }],
+  // A speed hump.
+  [270, line([-74.335, 40.712], [-74.335, 40.714]), { highway: 'residential' }],
+  // A painted median across the boundary of two cells at 40.718.
+  [280, line([-74.015, 40.716], [-74.015, 40.720]), { highway: 'secondary', lanes: '2' }],
+]
+const hdFeatures: [string, string, Record<string, string>, string][] = [
+  ['W231', rect(-74.315, 40.7130, -1.5, 1.5, 0, 66), { road_marking: 'restriction' }, 'area'],
+  ['W241', rect(-74.320, 40.7130, 4, 9, 0, 66), { road_marking: 'restriction', pattern: 'chevron' }, 'area'],
+  ['W251', rect(-74.325, 40.7130, -1.2, 1.2, 0, 40), { traffic_calming: 'painted_island' }, 'area'],
+  ['W281', rect(-74.015, 40.7175, -1.5, 1.5, 0, 111), { road_marking: 'restriction', pattern: 'stripes', colour: 'yellow' }, 'area'],
+  ['N262', `POINT(-74.330 ${40.7135 - 15 / 111050})`, { highway: 'give_way', direction: 'forward' }, 'point'],
+  ['N271', 'POINT(-74.335 40.713)', { traffic_calming: 'hump' }, 'point'],
+]
+
 // Every build drops the *_next tables by bare name too, scoped ones included.
 const GUARD_NEXT = 'CREATE TABLE road_surfaces_next (); CREATE TABLE road_markings_next (); CREATE TABLE road_glyphs_next ();'
 
@@ -138,8 +174,11 @@ run('generate-road-markings.sql', () => {
         osm_type char(1) NOT NULL DEFAULT 'W');
       -- The script drops these by bare name; without them here the drop would reach public's.
       CREATE TABLE road_surfaces (); CREATE TABLE road_markings (); CREATE TABLE road_glyphs (); ${GUARD_NEXT}`)
-    for (const [id, wkt, tags] of ways) {
+    for (const [id, wkt, tags] of [...ways, ...hdWays]) {
       await sql`INSERT INTO geo_places VALUES (${'W' + id}, ${id}, ${sql.json(tags)}, ST_GeomFromText(${wkt}, 4326), 'line')`
+    }
+    for (const [id, wkt, tags, type] of hdFeatures) {
+      await sql`INSERT INTO geo_places VALUES (${id}, ${Number(id.slice(1))}, ${sql.json(tags)}, ST_GeomFromText(${wkt}, 4326), ${type}, ${id[0]})`
     }
     await sql`INSERT INTO geo_places VALUES ('N8', 8, ${sql.json({ highway: 'traffic_signals' })}, ST_SetSRID(ST_MakePoint(${SB_X}, ${STREET_Y}), 4326), 'point', 'N')`
     const turns: [string, number, number, Record<string, string>][] = [
@@ -199,7 +238,7 @@ run('generate-road-markings.sql', () => {
   })
 
   test('draws the left-turn arrow in the lane on the driver\'s left', async () => {
-    const arrows = await sql`SELECT ST_X(geom) as x FROM road_glyphs WHERE glyph = 'road-arrow-left'`
+    const arrows = await sql`SELECT ST_X(geom) as x FROM road_glyphs WHERE glyph = 'road-arrow-left' AND ST_X(geom) > -74.01`
     expect(arrows.length).toBeGreaterThan(0)
     // Southbound, the driver's left is east of the centreline.
     for (const a of arrows) expect(a.x).toBeGreaterThan(SB_X)
@@ -554,6 +593,106 @@ run('generate-road-markings.sql', () => {
     expect(await covered(east(-74.140, 11), 40.713)).toBe(true)
   })
 
+  describe('paint from the OSM wiki\'s lane and marking tags', () => {
+    // Rows within `m` metres of a point.
+    const by = (x: number, y: number, m: number) => sql`ST_Expand(ST_SetSRID(ST_MakePoint(${x}, ${y}), 4326), ${m / 84300})`
+
+    test('edges a two-way left-turn lane with solid yellow outside and dashed yellow inside', async () => {
+      const rows = await sql`
+        SELECT pattern, color, abs(ST_X(ST_Centroid(geom)) + 74.300) * 84300 as off
+        FROM road_markings WHERE kind = 'centre' AND geom && ${by(-74.300, 40.7135, 50)}`
+      expect(rows.every(r => r.color === 'yellow')).toBe(true)
+      expect(rows.some(r => r.pattern === 'double')).toBe(false)
+      const solid = rows.filter(r => r.pattern === 'solid').map(r => r.off)
+      const dashed = rows.filter(r => r.pattern === 'dashed').map(r => r.off)
+      expect(solid.length).toBeGreaterThanOrEqual(2)
+      expect(dashed.length).toBeGreaterThanOrEqual(2)
+      expect(Math.min(...solid)).toBeGreaterThan(Math.max(...dashed))
+    })
+
+    test('puts left arrows for both directions down its middle', async () => {
+      const arrows = await sql`
+        SELECT direction FROM road_glyphs WHERE glyph = 'road-arrow-left'
+          AND geom && ST_MakeEnvelope(${-74.300 - 1 / 84300}, 40.712, ${-74.300 + 1 / 84300}, 40.715, 4326)`
+      expect(arrows.map(a => a.direction)).toContain(0)
+      expect(arrows.map(a => a.direction)).toContain(180)
+    })
+
+    const lanes = (x: number) => sql`
+      SELECT pattern, (ST_X(ST_Centroid(geom)) - ${x}) * 84300 as off
+      FROM road_markings WHERE kind = 'lane' AND geom && ${by(x, 40.713, 20)} ORDER BY off`
+
+    test('draws a solid line beside the dashed one where only the left lane may not change', async () => {
+      const rows = await lanes(-74.305)
+      expect(rows.map(r => r.pattern)).toEqual(['solid', 'dashed', 'dashed'])
+      // Northbound, the left lane is west: its solid line lies west of the dashed one beside it.
+      expect(rows[1].off - rows[0].off).toBeCloseTo(0.2, 1)
+    })
+
+    test('makes a lane line solid where neither lane may change across it', async () => {
+      expect((await lanes(-74.307)).map(r => r.pattern)).toEqual(['solid', 'solid', 'dashed'])
+    })
+
+    test('hatches a bike lane\'s buffer', async () => {
+      const [{ n, x }] = await sql`
+        SELECT sum(ST_NumGeometries(geom))::int as n, avg(ST_X(ST_Centroid(geom))) as x
+        FROM road_markings WHERE kind = 'hatch' AND geom && ${by(-74.310, 40.713, 20)}`
+      expect(n).toBeGreaterThan(30)
+      expect(x).toBeGreaterThan(-74.310)
+    })
+
+    test('hatches a painted median on a two-way street in yellow, and ends the centre line at it', async () => {
+      const [{ hatch, outline }] = await sql`
+        SELECT count(*) FILTER (WHERE kind = 'hatch' AND color = 'yellow')::int as hatch,
+               count(*) FILTER (WHERE kind = 'restriction' AND color = 'yellow' AND pattern = 'solid')::int as outline
+        FROM road_markings WHERE geom && ${by(-74.315, 40.7133, 40)}`
+      expect(hatch).toBeGreaterThan(0)
+      expect(outline).toBeGreaterThan(0)
+      const [{ inside }] = await sql`
+        SELECT COALESCE(sum(ST_Length(ST_Intersection(m.geom, ST_Buffer(a.geom, -0.00001))::geography)), 0) as inside
+        FROM road_markings m, geo_places a WHERE a.id = 'W231' AND m.kind = 'centre' AND m.geom && a.geom`
+      expect(inside).toBeLessThan(0.5)
+    })
+
+    test('paves a gore beside a one-way and fills it with white chevrons pointing at the traffic', async () => {
+      expect(await covered(-74.320 + 7 / 84300, 40.7133)).toBe(true)
+      const bars = await sql`
+        SELECT color, (d).geom as g FROM (SELECT color, ST_Dump(geom) as d FROM road_markings
+          WHERE kind = 'hatch' AND geom && ${by(-74.320 + 6.5 / 84300, 40.7133, 10)}) t`
+      expect(bars.length).toBeGreaterThan(0)
+      expect(bars.every(b => b.color === 'white')).toBe(true)
+      // A whole chevron is a V: its middle vertex is its southernmost, toward the northbound traffic.
+      const [{ apex }] = await sql`
+        SELECT count(*) FILTER (WHERE ST_NPoints(g) = 3 AND ST_Y(ST_PointN(g, 2)) < least(ST_Y(ST_PointN(g, 1)), ST_Y(ST_PointN(g, 3))))::int as apex
+        FROM (SELECT (ST_Dump(geom)).geom as g FROM road_markings WHERE kind = 'hatch' AND geom && ${by(-74.320 + 6.5 / 84300, 40.7133, 10)}) t`
+      expect(apex).toBeGreaterThan(0)
+    })
+
+    test('reads a traffic_calming=painted_island area as a painted median', async () => {
+      const [{ n }] = await sql`
+        SELECT count(*)::int as n FROM road_markings WHERE kind = 'hatch' AND color = 'yellow' AND geom && ${by(-74.325, 40.7132, 25)}`
+      expect(n).toBeGreaterThan(0)
+    })
+
+    test('paints a yield line of triangles, not a stop line, where the minor road gives way', async () => {
+      const rows = await sql`
+        SELECT kind, ST_NumGeometries(geom) as n FROM road_markings
+        WHERE kind IN ('yield', 'stop') AND geom && ${by(-74.330, 40.7134, 15)}`
+      expect(rows.map(r => r.kind)).toEqual(['yield'])
+      expect(rows[0].n).toBeGreaterThanOrEqual(4)
+    })
+
+    test('marks a speed hump with a chevron in each lane, on the carriageway', async () => {
+      const rows = await sql`
+        SELECT ST_NumGeometries(geom) as n,
+               ST_Area(ST_Difference(geom, (SELECT ST_Union(geom) FROM road_surfaces WHERE geom && ${by(-74.335, 40.713, 20)}))::geography) as outside
+        FROM road_markings WHERE kind = 'hump' AND geom && ${by(-74.335, 40.713, 5)}`
+      expect(rows).toHaveLength(1)
+      expect(rows[0].n).toBe(2)
+      expect(rows[0].outside).toBeLessThan(0.01)
+    })
+  })
+
   describe('rebuilding one box', () => {
     const BOX = (sql: postgres.Sql) => sql`ST_MakeEnvelope(-74.0003, 40.7095, -73.9985, 40.7105, 4326)`
     const footprint = async () => (await sql`
@@ -651,7 +790,12 @@ run('generate-road-markings.sql', () => {
 
   describe('two neighbouring cells', () => {
     const cell = (y0: number, y1: number) => sql`ST_MakeEnvelope(-74.03, ${y0}, -74.01, ${y1}, 4326)`
+    const median = () => sql`
+      SELECT ST_Length(ST_Union(geom)::geography) as union_m, sum(ST_Length(geom::geography)) as sum_m
+      FROM road_markings WHERE kind = 'hatch' AND geom && ST_MakeEnvelope(-74.0152, 40.7174, -74.0148, 40.7186, 4326)`
+    let medianBefore: any
     beforeAll(async () => {
+      ;[medianBefore] = await median()
       for (const [y0, y1] of [[40.70, 40.718], [40.718, 40.73]]) {
         await sql`TRUNCATE _rm_scope`
         await sql`INSERT INTO _rm_scope VALUES (${cell(y0, y1)})`
@@ -677,6 +821,13 @@ run('generate-road-markings.sql', () => {
       expect(Math.abs(sum_m2 - union_m2) / union_m2).toBeLessThan(0.01)
       const [{ sharpest }] = await kerbTurns(-74.026, 40.718, 25)
       expect(sharpest).toBeLessThan(12)
+    })
+
+    test('hatch a painted area across their boundary as one build would', async () => {
+      const [after] = await median()
+      expect(medianBefore.union_m).toBeGreaterThan(20)
+      expect(Math.abs(after.union_m - medianBefore.union_m)).toBeLessThan(0.05)
+      expect(Math.abs(after.sum_m - after.union_m)).toBeLessThan(0.05)
     })
 
     test('meet without a gap or an overlap', async () => {
@@ -770,6 +921,33 @@ run('generate-road-markings.sql', () => {
         FROM detail_dirty WHERE layer = 'road_markings'`
       expect(was).toBe(1)
       expect(is).toBe(1)
+    })
+  })
+
+  describe('a painted area deleted, and one added', () => {
+    beforeAll(async () => {
+      await sql.unsafe(`DROP SCHEMA IF EXISTS osm_replay CASCADE; CREATE SCHEMA osm_replay;
+        CREATE TABLE osm_replay.old_places AS
+          SELECT id, 'W'::char(1) as osm_type, osm_id, NULL::text as name, '{}'::text[] as categories, geom, geom_type, NULL::int as admin_level
+          FROM geo_places WHERE id = 'W231';
+        -- An untagged area nowhere near paint.
+        INSERT INTO osm_replay.old_places (id, osm_type, osm_id, categories, geom, geom_type) VALUES
+          ('W96', 'W', 96, '{}', ST_GeomFromText('POLYGON((-74.36 40.712, -74.3599 40.712, -74.3599 40.7121, -74.36 40.712))', 4326), 'area');
+        CREATE TABLE osm_replay.changed AS SELECT id FROM geo_places WHERE id = 'W251';`)
+      await sql`DELETE FROM detail_dirty`
+      await sql.unsafe(readFileSync(join(import.meta.dir, 'queue-road-markings.sql'), 'utf8'))
+    })
+
+    afterAll(async () => {
+      await sql`DELETE FROM detail_dirty`
+    })
+
+    test('queues where each lies', async () => {
+      const at = async (x: number, y: number) => (await sql`
+        SELECT count(*)::int as n FROM detail_dirty WHERE layer = 'road_markings' AND ST_Intersects(box, ST_SetSRID(ST_MakePoint(${x}, ${y}), 4326))`)[0].n
+      expect(await at(-74.315, 40.7133)).toBe(1)
+      expect(await at(-74.325, 40.7132)).toBe(1)
+      expect(await at(-74.36, 40.712)).toBe(0)
     })
   })
 
