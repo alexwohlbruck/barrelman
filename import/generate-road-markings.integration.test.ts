@@ -158,13 +158,13 @@ const hdWays: [number, string, Record<string, string>][] = [
     'cycleway:right:buffer': 'yes', 'parking:left': 'lane', 'parking:left:orientation': 'diagonal' }],
   [301, line([-74.0178, 40.710], [-74.0172, 40.710]), { highway: 'footway', footway: 'crossing', 'crossing:markings': 'zebra' }],
   // A painted median across the boundary of two cells at 40.718.
-  [280, line([-74.015, 40.716], [-74.015, 40.720]), { highway: 'secondary', lanes: '2' }],
+  [280, line([-74.0225, 40.716], [-74.0225, 40.720]), { highway: 'secondary', lanes: '2' }],
 ]
 const hdFeatures: [string, string, Record<string, string>, string][] = [
   ['W231', rect(-74.315, 40.7130, -1.5, 1.5, 0, 66), { road_marking: 'restriction' }, 'area'],
   ['W241', rect(-74.320, 40.7130, 4, 9, 0, 66), { road_marking: 'restriction', pattern: 'chevron' }, 'area'],
   ['W251', rect(-74.325, 40.7130, -1.2, 1.2, 0, 40), { traffic_calming: 'painted_island' }, 'area'],
-  ['W281', rect(-74.015, 40.7175, -1.5, 1.5, 0, 111), { road_marking: 'restriction', pattern: 'stripes', colour: 'yellow' }, 'area'],
+  ['W281', rect(-74.0225, 40.7175, -1.5, 1.5, 0, 111), { road_marking: 'restriction', pattern: 'stripes', colour: 'yellow' }, 'area'],
   ['N262', `POINT(-74.330 ${40.7135 - 15 / 111050})`, { highway: 'give_way', direction: 'forward' }, 'point'],
   ['N271', 'POINT(-74.335 40.713)', { traffic_calming: 'hump' }, 'point'],
   ['N272', 'POINT(-74.335 40.7135)', { highway: 'crossing', crossing: 'marked', 'crossing:markings': 'zebra', traffic_calming: 'table' }, 'point'],
@@ -834,7 +834,7 @@ run('generate-road-markings.sql', () => {
     const cell = (y0: number, y1: number) => sql`ST_MakeEnvelope(-74.03, ${y0}, -74.01, ${y1}, 4326)`
     const median = () => sql`
       SELECT ST_Length(ST_Union(geom)::geography) as union_m, sum(ST_Length(geom::geography)) as sum_m
-      FROM road_markings WHERE kind = 'hatch' AND geom && ST_MakeEnvelope(-74.0152, 40.7174, -74.0148, 40.7186, 4326)`
+      FROM road_markings WHERE kind = 'hatch' AND geom && ST_MakeEnvelope(-74.0227, 40.7174, -74.0223, 40.7186, 4326)`
     let medianBefore: any
     // Bars along the long bike lane and parking near the boundary.
     const bars = () => sql`
