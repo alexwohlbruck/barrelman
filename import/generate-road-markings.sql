@@ -179,9 +179,9 @@ BEGIN
     IF pos[i] <= p THEN lo := i; END IF;
     IF pos[i] >= p AND hi IS NULL THEN hi := i; END IF;
   END LOOP;
-  IF lo IS NULL THEN RETURN disp[hi]; END IF;
-  IF hi IS NULL OR pos[hi] = pos[lo] THEN RETURN disp[lo]; END IF;
-  RETURN disp[lo] + (disp[hi] - disp[lo]) * (p - pos[lo]) / (pos[hi] - pos[lo]);
+  IF lo IS NULL THEN RETURN COALESCE(disp[hi], 0); END IF;
+  IF hi IS NULL OR pos[hi] = pos[lo] THEN RETURN COALESCE(disp[lo], 0); END IF;
+  RETURN COALESCE(disp[lo] + (disp[hi] - disp[lo]) * (p - pos[lo]) / (pos[hi] - pos[lo]), 0);
 END
 $$;
 
