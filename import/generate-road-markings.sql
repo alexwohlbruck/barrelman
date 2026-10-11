@@ -331,7 +331,6 @@ $$;
 -- A bike lane on one side (OSM's left/right): {metres including any painted
 -- buffer, metres of buffer, 1 if a track}. In the Americas a track on a street
 -- is a parking-protected lane on the carriageway, so it is paved and painted.
--- A buffer is cycleway:*:buffer, or a barred area marked beside the lane.
 CREATE OR REPLACE FUNCTION road_bike(tags jsonb, side text, oneway boolean, americas boolean) RETURNS float8[]
 LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
   SELECT CASE
@@ -345,12 +344,27 @@ LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
     FROM (SELECT COALESCE(tags->>('cycleway:' || side), tags->>'cycleway:both',
                    CASE WHEN side = 'right' AND tags->>'cycleway' NOT IN ('opposite_lane', 'opposite_track') THEN tags->>'cycleway'
                         WHEN side = 'left' AND (NOT oneway OR tags->>'cycleway' IN ('opposite_lane', 'opposite_track')) THEN tags->>'cycleway' END) as v,
-                 COALESCE(tags->>('cycleway:' || side || ':buffer'), tags->>'cycleway:both:buffer', tags->>'cycleway:buffer',
-                          -- marked on the lane's traffic side: its left, or its right where it runs with a one-way on the left
-                          CASE WHEN 'barred_area' IN (tags->>('cycleway:' || side || ':marking:' || t.traffic), tags->>('cycleway:both:marking:' || t.traffic))
-                               THEN 'yes' END) as bv
-          FROM (SELECT CASE WHEN side = 'left' AND oneway THEN 'right' ELSE 'left' END as traffic) t) a
+                 COALESCE(tags->>('cycleway:' || side || ':buffer'), tags->>'cycleway:both:buffer', tags->>'cycleway:buffer') as bv) a
   ) t
+$$;
+
+-- A bike lane's tags with a buffer added where none is tagged but a barred
+-- area is marked on its traffic side as its rider sees it: the right when the
+-- kerb is on their left. The rider runs against the way in a contraflow lane,
+-- and on the left of a two-way street.
+CREATE OR REPLACE FUNCTION road_bike_barred(tags jsonb, side text, oneway boolean) RETURNS jsonb
+LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+  SELECT CASE WHEN NOT tags ?| ARRAY['cycleway:' || side || ':marking:left', 'cycleway:' || side || ':marking:right',
+                                     'cycleway:both:marking:left', 'cycleway:both:marking:right']
+                OR tags ?| ARRAY['cycleway:' || side || ':buffer', 'cycleway:both:buffer', 'cycleway:buffer'] THEN tags
+              WHEN CASE WHEN (side = 'left') = NOT (COALESCE(COALESCE(tags->>('cycleway:' || side), tags->>'cycleway:both', tags->>'cycleway')
+                                                               IN ('opposite_lane', 'opposite_track'), false)
+                                                   OR COALESCE(tags->>('cycleway:' || side || ':oneway'), '') = '-1'
+                                                   OR (side = 'left' AND NOT oneway AND COALESCE(tags->>'cycleway:left:oneway', '-1') = '-1'))
+                        THEN 'barred_area' IN (tags->>('cycleway:' || side || ':marking:right'), tags->>'cycleway:both:marking:right')
+                        ELSE 'barred_area' IN (tags->>('cycleway:' || side || ':marking:left'), tags->>'cycleway:both:marking:left') END
+                THEN tags || jsonb_build_object('cycleway:' || side || ':buffer', 'yes')
+              ELSE tags END
 $$;
 
 -- The bus lanes among `n` lanes, numbered left to right as traffic sees them:
@@ -509,14 +523,36 @@ $$;
 -- leaning `lean` times `half` forward on its left: a hatched buffer at 1, the
 -- stalls of a parking lane at their angle's cotangent.
 CREATE OR REPLACE FUNCTION road_hatch(line geometry, half float8, step float8, lean float8) RETURNS geometry
-LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
-  SELECT ST_SetSRID(ST_Collect(ST_MakeLine(
-           ST_MakePoint(ST_X(p) - (u[1] * lean - u[2]) * half, ST_Y(p) - (u[2] * lean + u[1]) * half),
-           ST_MakePoint(ST_X(p) + (u[1] * lean - u[2]) * half, ST_Y(p) + (u[2] * lean + u[1]) * half))), ST_SRID(line))
-  FROM generate_series(0, floor(ST_Length(line) / step)::int - 1) k,
-       LATERAL (SELECT (k + 0.5) * step / ST_Length(line) as f) t,
-       LATERAL (SELECT ST_LineInterpolatePoint(line, t.f) as p, road_dir(line, t.f, step / 2) as u) d
-  WHERE GeometryType(line) = 'LINESTRING' AND ST_Length(line) >= step AND d.u IS NOT NULL
+LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE AS $$
+DECLARE
+  len float8 := ST_Length(line);
+  -- Points every half step from the start: bars stand on the odd ones, and
+  -- the even ones either side give the way's direction there.
+  pts geometry[];
+  bars geometry[] := '{}';
+  p geometry;
+  dx float8;
+  dy float8;
+  d float8;
+  i int;
+BEGIN
+  IF GeometryType(line) <> 'LINESTRING' OR len < step THEN RETURN NULL; END IF;
+  pts := ST_StartPoint(line) || ARRAY(SELECT geom FROM ST_Dump(ST_LineInterpolatePoints(line, least(1, step / 2 / len), true)) ORDER BY path);
+  i := 2;
+  WHILE i + 1 <= array_length(pts, 1) LOOP
+    p := pts[i];
+    dx := ST_X(pts[i + 1]) - ST_X(pts[i - 1]);
+    dy := ST_Y(pts[i + 1]) - ST_Y(pts[i - 1]);
+    d := sqrt(dx * dx + dy * dy);
+    IF d > 0 THEN
+      dx := dx / d; dy := dy / d;
+      bars := bars || ST_MakeLine(ST_MakePoint(ST_X(p) - (dx * lean - dy) * half, ST_Y(p) - (dy * lean + dx) * half),
+                                  ST_MakePoint(ST_X(p) + (dx * lean - dy) * half, ST_Y(p) + (dy * lean + dx) * half));
+    END IF;
+    i := i + 2;
+  END LOOP;
+  RETURN ST_SetSRID(ST_Collect(bars), ST_SRID(line));
+END
 $$;
 
 -- The bars painted across an area, `step` apart along its length and kept
@@ -673,8 +709,8 @@ WITH raw AS (
 ),
 sided AS (
   SELECT r.*,
-         road_bike(tags, CASE WHEN flip THEN 'left' ELSE 'right' END, oneway, americas) as bike_rt,
-         road_bike(tags, CASE WHEN flip THEN 'right' ELSE 'left' END, oneway, americas) as bike_lt,
+         road_bike(road_bike_barred(tags, CASE WHEN flip THEN 'left' ELSE 'right' END, oneway), CASE WHEN flip THEN 'left' ELSE 'right' END, oneway, americas) as bike_rt,
+         road_bike(road_bike_barred(tags, CASE WHEN flip THEN 'right' ELSE 'left' END, oneway), CASE WHEN flip THEN 'right' ELSE 'left' END, oneway, americas) as bike_lt,
          road_parking_width(tags, CASE WHEN flip THEN 'left' ELSE 'right' END) as park_r,
          road_parking_width(tags, CASE WHEN flip THEN 'right' ELSE 'left' END) as park_l,
          COALESCE(tags->>CASE WHEN flip THEN 'busway:left' ELSE 'busway:right' END, tags->>'busway:both', tags->>'busway') = 'lane' as busway_r,
@@ -1247,6 +1283,7 @@ WHERE a.geom && (SELECT area FROM _rm_area) AND a.geom_type = 'area'
   AND COALESCE(lower(a.tags->>'colour'), 'white') IN ('white', 'yellow');
 DELETE FROM _rm_paint_mapped WHERE ST_IsEmpty(g);
 CREATE INDEX ON _rm_paint_mapped (osm_type, osm_id);
+ANALYZE _rm_paint_mapped;
 -- The roads each area lies on or beside, and their direction there.
 DROP TABLE IF EXISTS _rm_paint_near;
 CREATE TEMP TABLE _rm_paint_near AS
@@ -1256,6 +1293,7 @@ FROM _rm_paint_mapped m
 JOIN _rm_roads r ON r.g && ST_Expand(m.g, 50 * m.s)
  AND ST_DWithin(r.g, m.g, (r.width / 2 + abs(r.shift) + 2) * r.s) AND NOT r.bridge;
 CREATE INDEX ON _rm_paint_near (osm_type, osm_id);
+ANALYZE _rm_paint_near;
 -- The nearest one-way's direction (the lowest id among equals), and whether
 -- the area lies between opposing traffic.
 DROP TABLE IF EXISTS _rm_paint_flow;
@@ -1265,6 +1303,7 @@ SELECT osm_type, osm_id, bool_or(NOT oneway AND through) as two_way,
        (array_agg(u[2] ORDER BY dist, road) FILTER (WHERE oneway AND u IS NOT NULL))[1] as uy
 FROM _rm_paint_near GROUP BY osm_type, osm_id;
 CREATE INDEX ON _rm_paint_flow (osm_type, osm_id);
+ANALYZE _rm_paint_flow;
 DROP TABLE IF EXISTS _rm_paint_areas;
 CREATE TEMP TABLE _rm_paint_areas AS
 SELECT m.g, m.s, m.stroke,
@@ -1277,8 +1316,9 @@ SELECT m.g, m.s, m.stroke,
 FROM _rm_paint_mapped m
 JOIN _rm_paint_flow f ON f.osm_type = m.osm_type AND f.osm_id = m.osm_id
 CROSS JOIN LATERAL (
-  SELECT COALESCE(bool_or(n.u[1] * f.ux + n.u[2] * f.uy < -0.5), false) as opposed
-  FROM _rm_paint_near n WHERE n.osm_type = m.osm_type AND n.osm_id = m.osm_id AND n.oneway
+  SELECT EXISTS (SELECT 1 FROM _rm_paint_near a JOIN _rm_paint_near b ON b.osm_type = a.osm_type AND b.osm_id = a.osm_id
+                 WHERE a.osm_type = m.osm_type AND a.osm_id = m.osm_id AND a.oneway AND b.oneway
+                   AND a.u[1] * b.u[1] + a.u[2] * b.u[2] < -0.5) as opposed
 ) o;
 CREATE INDEX ON _rm_paint_areas USING gist (g);
 ANALYZE _rm_paint_areas;
@@ -1533,11 +1573,11 @@ UNION ALL
 -- emerges from the line it is clamped to.
 SELECT osm_id, g, s, bridge, ease, 'lane', v.pattern, 'white', split_f - i * lane_w + v.d,
        CASE WHEN prev_left IS NOT NULL THEN road_divider_start(i, fwd, prev_split_f, prev_right, prev_lane_w, opens_kerb_f) + v.d END
-FROM lanes, generate_series(1, 8) i, LATERAL road_lane_divider(change_f, i, dash, 1) v WHERE i < fwd
+FROM lanes, generate_series(1, least(fwd, 9) - 1) i, LATERAL road_lane_divider(change_f, i, dash, 1) v
 UNION ALL
 SELECT osm_id, g, s, bridge, ease, 'lane', v.pattern, 'white', split_b + i * lane_w + v.d,
        CASE WHEN prev_left IS NOT NULL THEN road_divider_start(i, bwd, prev_split_b, prev_left, prev_lane_w, opens_kerb_b) + v.d END
-FROM lanes, generate_series(1, 8) i, LATERAL road_lane_divider(change_b, i, dash, -1) v WHERE i < bwd
+FROM lanes, generate_series(1, least(bwd, 9) - 1) i, LATERAL road_lane_divider(change_b, i, dash, -1) v
 UNION ALL
 -- Edge lines on roads without kerbs: motorways, trunks and their links.
 SELECT osm_id, g, s, bridge, ease, 'edge', 'solid', 'white', right_edge + 0.3, prev_right + 0.3
@@ -1613,7 +1653,7 @@ CROSS JOIN LATERAL (SELECT CASE
   WHEN o.from_f > 0 AND o.from_f < 1 THEN ST_LineSubstring(o.line, o.from_f, 1)
   WHEN o.from_f < 1 THEN o.line END as paint) d
 CROSS JOIN LATERAL (
-  SELECT ST_LineMerge(ST_CollectionExtract(COALESCE(ST_Difference(d.paint, ST_Union(cut)), d.paint), 2)) as merged
+  SELECT ST_LineMerge(ST_CollectionExtract(COALESCE(ST_Difference(d.paint, ST_Union(cut)), d.paint), 2)) as merged, ST_Union(cut) as cuts
   FROM (SELECT k.cut FROM _rm_cuts k WHERE k.cut && o.line
         UNION ALL SELECT k.cut FROM _rm_boxes k WHERE k.cut && o.line AND l.osm_id = ANY (k.ids)
         UNION ALL SELECT a.cut FROM _rm_approach_cuts a WHERE a.osm_id = l.osm_id
@@ -1625,10 +1665,10 @@ CROSS JOIN LATERAL (
 CROSS JOIN LATERAL (SELECT CASE WHEN l.pattern LIKE 'dashed%'
   THEN (SELECT ST_Collect(p.geom) FROM ST_Dump(m.merged) p WHERE ST_Length(p.geom) > 1 * l.s) ELSE m.merged END as clipped) c
 -- Bars are spaced along the whole line, which every box draws alike, and kept
--- where the line is.
+-- where the line is not cut.
 CROSS JOIN LATERAL (SELECT CASE WHEN l.hatch IS NULL THEN c.clipped
   ELSE (SELECT ST_CollectionExtract(ST_Collect(b.geom), 2) FROM ST_Dump(road_hatch(o.line, l.hatch * l.s, l.step * l.s, l.lean)) b
-        WHERE ST_DWithin(ST_LineInterpolatePoint(b.geom, 0.5), c.clipped, 0.01 * l.s)) END as paint) h
+        WHERE m.cuts IS NULL OR NOT ST_Intersects(ST_LineInterpolatePoint(b.geom, 0.5), m.cuts)) END as paint) h
 WHERE d.paint IS NOT NULL AND c.clipped IS NOT NULL AND NOT ST_IsEmpty(c.clipped)
   AND ST_Length(c.clipped) > CASE WHEN l.pattern LIKE 'dashed%' THEN 0.5 ELSE 2 END * l.s
   AND h.paint IS NOT NULL AND NOT ST_IsEmpty(h.paint);
@@ -1822,7 +1862,8 @@ CROSS JOIN LATERAL (SELECT o.a + k0.side * ((abs(o.b - o.a) - k0.n * 0.65) / 2 +
 WHERE c.kind = 'give_way' AND d.u IS NOT NULL AND k0.n > 0 AND ST_DWithin(r.g, c.g, 0.5 * r.s)
   AND ((o.dir = 1 AND r.fwd > 0) OR (o.dir = -1 AND r.bwd > 0))
   AND NOT EXISTS (SELECT 1 FROM _rm_nodes n WHERE n.x = round(ST_X(c.g)::numeric, 2) AND n.y = round(ST_Y(c.g)::numeric, 2))
-  AND NOT EXISTS (SELECT 1 FROM _rm_ends e WHERE e.osm_id = r.osm_id AND e.yields AND ST_DWithin(c.g, e.pt, 30 * e.s))
+  AND NOT EXISTS (SELECT 1 FROM _rm_ends e WHERE e.osm_id = r.osm_id AND e.yields AND ST_DWithin(c.g, e.pt, 30 * e.s)
+                  AND ST_DWithin(c.g, e.g, 0.5 * e.s) AND COALESCE(c.direction, '') <> CASE WHEN e.at_end THEN 'backward' ELSE 'forward' END)
 GROUP BY c.g, r.bridge;
 INSERT INTO road_markings_next (kind, pattern, color, bridge, geom)
 SELECT 'yield', 'fill', 'white', f.bridge, ST_Transform(ST_Multi(ST_Collect(ST_SetSRID(ST_MakePolygon(ST_MakeLine(ARRAY[
@@ -1923,7 +1964,7 @@ WHERE side.present AND d IS NOT NULL;
 INSERT INTO road_markings_next (kind, pattern, color, bridge, geom)
 -- Unstroked, it is still written, in a pattern no layer draws, so the queue can
 -- find where it was.
-SELECT 'restriction', CASE WHEN a.stroke IN ('no', 'none') THEN 'none' WHEN a.stroke = 'double_solid' THEN 'double'
+SELECT 'restriction', CASE WHEN a.stroke IN ('no', 'none') OR ST_IsEmpty(i.g) THEN 'none' WHEN a.stroke = 'double_solid' THEN 'double'
                            WHEN a.stroke = 'dashed' THEN 'dashed' ELSE 'solid' END, a.color, false,
        ST_Transform(ST_Boundary(CASE WHEN ST_IsEmpty(i.g) THEN a.g ELSE i.g END), 4326)
 FROM _rm_paint_areas a
@@ -1965,7 +2006,7 @@ CROSS JOIN LATERAL (SELECT ST_SetSRID(ST_MakePoint(ST_X(d.at) - d.u[2] * l.o * r
                            d.u[1] * l.dir as tx, d.u[2] * l.dir as ty, least(1.8, 0.75 * r.lane_w) as w) c
 WHERE NOT r.bridge AND d.u IS NOT NULL AND ST_DWithin(r.g, h.p, 0.5 * r.s)
   -- A raised crosswalk keeps its crosswalk.
-  AND NOT EXISTS (SELECT 1 FROM _rm_crossings x WHERE x.g && ST_Expand(h.p, 4 * r.s) AND ST_DWithin(x.g, h.p, 4 * r.s))
+  AND NOT EXISTS (SELECT 1 FROM _rm_crossings x WHERE x.g && ST_Expand(h.p, 4 * r.s) AND ST_DWithin(x.g, h.p, 4 * r.s) AND ST_DWithin(x.g, r.g, 0.5 * r.s))
 GROUP BY h.osm_id;
 
 -- ─── Crosswalks ──────────────────────────────────────────────────────────────
@@ -2041,7 +2082,8 @@ CROSS JOIN LATERAL (
   CROSS JOIN LATERAL (SELECT o.line, ST_Length(o.line) / w.s as len, CASE WHEN w.style = 'dots' THEN 0.6 ELSE 1.2 END as period,
                              CASE WHEN w.style = 'dots' THEN 0.3 ELSE 0.6 END as paint) e
   CROSS JOIN LATERAL generate_series(0, CASE WHEN w.style IN ('lines', 'ladder') THEN 0 ELSE floor(e.len / e.period)::int END) k
-  WHERE w.style IN ('lines', 'ladder', 'dashes', 'dots') AND o.line IS NOT NULL AND e.len > 0 AND k * e.period < e.len
+  WHERE w.style IN ('lines', 'ladder', 'dashes', 'dots') AND o.line IS NOT NULL AND e.len > 0
+    AND (w.style IN ('lines', 'ladder') OR k * e.period + e.paint <= e.len)
 ) b
 GROUP BY w.style, w.seg;
 

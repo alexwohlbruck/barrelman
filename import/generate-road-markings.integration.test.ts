@@ -161,6 +161,12 @@ const hdWays: [number, string, Record<string, string>][] = [
   // Angled parking on the right, marked parallel parking on the left.
   [290, line([-74.340, 40.712], [-74.340, 40.714]), { highway: 'residential', lanes: '2', 'parking:right': 'lane',
     'parking:right:orientation': 'diagonal', 'parking:left': 'lane', 'parking:left:orientation': 'parallel', 'parking:left:markings': 'yes' }],
+  // Barred areas beside left-kerb bike lanes: on a two-way street and in a
+  // contraflow lane the traffic is on the rider's left; beside a with-flow lane
+  // on a one-way, the rider's left is the kerb.
+  [310, line([-74.345, 40.712], [-74.345, 40.714]), { highway: 'residential', lanes: '2', 'cycleway:left': 'lane', 'cycleway:left:marking:left': 'barred_area' }],
+  [311, line([-74.347, 40.712], [-74.347, 40.714]), { highway: 'residential', oneway: 'yes', lanes: '1', 'cycleway:left': 'opposite_lane', 'cycleway:left:marking:left': 'barred_area' }],
+  [312, line([-74.349, 40.712], [-74.349, 40.714]), { highway: 'residential', oneway: 'yes', lanes: '1', 'cycleway:left': 'lane', 'cycleway:left:marking:left': 'barred_area' }],
   // A long way with a buffered bike lane and angled parking across the cell
   // boundary at 40.718, crossed far south of it.
   [300, line([-74.0175, 40.705], [-74.0175, 40.728]), { highway: 'residential', lanes: '2', 'cycleway:right': 'lane',
@@ -792,6 +798,14 @@ run('generate-road-markings.sql', () => {
         WHERE kind IN ('yield', 'stop') AND geom && ${by(-74.330, 40.7134, 15)}`
       expect(rows.map(r => r.kind)).toEqual(['yield'])
       expect(rows[0].n).toBeGreaterThanOrEqual(4)
+    })
+
+    test('reads a barred area as a buffer only on the side of the rider\'s traffic', async () => {
+      const hatched = async (x: number) => (await sql`
+        SELECT count(*)::int as n FROM road_markings WHERE kind = 'hatch' AND geom && ${by(x, 40.713, 8)}`)[0].n > 0
+      expect(await hatched(-74.345)).toBe(true)
+      expect(await hatched(-74.347)).toBe(true)
+      expect(await hatched(-74.349)).toBe(false)
     })
 
     test('angles parking stalls so a car pulls in forward', async () => {
