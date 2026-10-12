@@ -812,13 +812,19 @@ WHERE NOT r.bridge AND at.u IS NOT NULL
 ALTER TABLE _rm_rays ADD COLUMN line_ll geometry;
 UPDATE _rm_rays SET line_ll = ST_Transform(line, 4326);
 -- The ground-level paths and roads those cross, in pieces for the index.
+-- The ids first: the filters below hide how many rows match, and joined in one
+-- go the planner scans geo_places once per hit.
+DROP TABLE IF EXISTS _rm_hits;
+CREATE TEMP TABLE _rm_hits AS
+SELECT DISTINCT h.id FROM _rm_rays y
+CROSS JOIN LATERAL (SELECT g.id FROM geo_places g WHERE g.geom && y.line_ll AND g.geom_type = 'line' AND g.tags ? 'highway') h;
+ANALYZE _rm_hits;
 DROP TABLE IF EXISTS _rm_beside;
 CREATE TEMP TABLE _rm_beside AS
 SELECT c.osm_id, ST_Subdivide(ST_Transform(c.geom, 3857), 8) as g,
        COALESCE(c.tags->>'footway' = 'sidewalk' AND c.tags->>'highway' IN ('footway', 'path', 'cycleway'), false) as sidewalk,
        road_metres(c.tags->>'width') as walk_w
-FROM (SELECT DISTINCT h.id FROM _rm_rays y
-      CROSS JOIN LATERAL (SELECT g.id FROM geo_places g WHERE g.geom && y.line_ll AND g.geom_type = 'line' AND g.tags ? 'highway') h) hit
+FROM _rm_hits hit
 JOIN geo_places c ON c.id = hit.id
 WHERE c.geom_type = 'line' AND COALESCE(c.tags->>'footway', '') <> 'crossing'
   AND c.tags->>'highway' NOT IN ('proposed', 'construction', 'abandoned', 'razed', 'platform')
