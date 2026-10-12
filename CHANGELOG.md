@@ -27,6 +27,9 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 * **Stop lines stand clear of crosswalks drawn askew** across the arriving
   lanes, and scraps of bus or bike lane paint under 5 m long are no longer left
   inside a junction.
+* **Stop lines follow askew crosswalks.** A stop line stands 1.2 m short of the
+  crosswalk ahead and parallel to it; past 40° askew, each lane gets its own
+  square line, stepped along the crosswalk.
 
 ## [0.10.15] - 2026-10-11
 
