@@ -874,7 +874,8 @@ FROM (
 CREATE INDEX ON _rm_ends_at (x, y);
 ANALYZE _rm_ends_at;
 -- Ways that carry on into the next: one way ends where another starts, within
--- 35° of straight on, and nothing else leaving or arriving there is within 50°
+-- 35° of straight on (70° where no other street meets them, a bend between
+-- two ways), and nothing else leaving or arriving there is within 50°
 -- of either (that is a fork; see Forks). Side streets and driveways meeting
 -- the join do not break it, nor does a one-way ramp leaving or joining a
 -- two-way road, but where streets cross there, two legs or more of them at
@@ -905,7 +906,10 @@ SELECT t.a_id, t.a_start, t.b_id, t.b_start, COALESCE((
            -- crossing, as the streets that cut its lines do (see Junctions), not a ramp alongside
            AND abs(d.u[1] * cos(radians(t.heading)) - d.u[2] * sin(radians(t.heading))) > 0.42), 0) >= 2 as junction
 FROM _rm_turns_at t
-WHERE t.turn < 35
+WHERE (t.turn < 35
+       -- or round a bend, where nothing else but service roads meets them
+       OR (t.turn < 70 AND NOT EXISTS (SELECT 1 FROM _rm_roads o WHERE o.class <> 'service' AND o.osm_id <> t.a_id AND o.osm_id <> t.b_id
+                                       AND o.g && ST_Expand(t.pt, 0.05) AND ST_DWithin(o.g, t.pt, 0.05))))
   AND NOT EXISTS (SELECT 1 FROM _rm_turns_at o WHERE o.x = t.x AND o.y = t.y AND o.turn < 50 AND (o.two_way OR NOT t.two_way)
                   AND NOT (o.a_id IN (t.a_id, t.b_id) AND o.b_id IN (t.a_id, t.b_id))
                   AND ((o.a_id, o.a_start) IN ((t.a_id, t.a_start), (t.b_id, t.b_start))
@@ -1803,25 +1807,31 @@ FROM centre WHERE res_close IS NOT NULL AND NOT oneway AND fwd > 0 AND bwd > 0 A
 UNION ALL
 -- A two-way left-turn lane is edged on each side by a solid line toward the
 -- through lanes and a dashed one toward the turn lane.
-SELECT osm_id, g, s, bridge, ease, 'centre', v.pattern, centre_color, v.o, v.start, v.fin, 'whole', false, NULL
-FROM centre, LATERAL (VALUES ('solid', split_b + 0.14, prev_split_b + 0.14, nxt_split_b + 0.14), (dash, split_b - 0.14, prev_split_b - 0.14, nxt_split_b - 0.14),
-                             ('solid', split_f - 0.14, prev_split_f - 0.14, nxt_split_f - 0.14), (dash, split_f + 0.14, prev_split_f + 0.14, nxt_split_f + 0.14)) v(pattern, o, start, fin)
+-- Each pair moves as the line it stands either side of.
+SELECT osm_id, g, s, bridge, ease, 'centre', v.pattern, centre_color, v.o, v.start, v.fin, 'whole', false,
+       road_field(res_pos, res_disp, v.anchor)
+FROM centre, LATERAL (VALUES ('solid', split_b + 0.14, prev_split_b + 0.14, nxt_split_b + 0.14, COALESCE(prev_split_b, split_b)),
+                             (dash, split_b - 0.14, prev_split_b - 0.14, nxt_split_b - 0.14, COALESCE(prev_split_b, split_b)),
+                             ('solid', split_f - 0.14, prev_split_f - 0.14, nxt_split_f - 0.14, COALESCE(prev_split_f, split_f)),
+                             (dash, split_f + 0.14, prev_split_f + 0.14, nxt_split_f + 0.14, COALESCE(prev_split_f, split_f))) v(pattern, o, start, fin, anchor)
 WHERE twltl
 UNION ALL
 -- Lane dividers within each direction, easing in from where they stood on the
 -- road before (see road_divider_start), and out to where they stand on the
 -- one after. A divider with no counterpart there emerges from, or closes
 -- into, the line it is clamped to.
-SELECT osm_id, g, s, bridge, ease, 'lane', v.pattern, 'white', split_f - i * lane_w + v.d,
-       CASE WHEN prev_left IS NOT NULL THEN road_divider_start(i, fwd, prev_split_f, prev_right, prev_lane_w, opens_kerb_f) + v.d END,
-       e.fin + v.d, 'whole', COALESCE(abs(e.fin - nxt_split_f) < 0.05 OR abs(e.fin - nxt_right) < 0.05, false), NULL
+SELECT osm_id, g, s, bridge, ease, 'lane', v.pattern, 'white', split_f - i * lane_w + v.d, st.at + v.d,
+       e.fin + v.d, 'whole', COALESCE(abs(e.fin - nxt_split_f) < 0.05 OR abs(e.fin - nxt_right) < 0.05, false),
+       CASE WHEN v.d <> 0 THEN road_field(res_pos, res_disp, COALESCE(st.at, split_f - i * lane_w)) END
 FROM lanes, generate_series(1, least(fwd, 9) - 1) i, LATERAL road_lane_divider(change_f, i, dash, 1) v,
+     LATERAL (SELECT CASE WHEN prev_left IS NOT NULL THEN road_divider_start(i, fwd, prev_split_f, prev_right, prev_lane_w, opens_kerb_f) END as at) st,
      LATERAL (SELECT road_divider_start(i, fwd, nxt_split_f, nxt_right, nxt_lane_w, opens_kerb_f) as fin) e
 UNION ALL
-SELECT osm_id, g, s, bridge, ease, 'lane', v.pattern, 'white', split_b + i * lane_w + v.d,
-       CASE WHEN prev_left IS NOT NULL THEN road_divider_start(i, bwd, prev_split_b, prev_left, prev_lane_w, opens_kerb_b) + v.d END,
-       e.fin + v.d, 'whole', COALESCE(abs(e.fin - nxt_split_b) < 0.05 OR abs(e.fin - nxt_left) < 0.05, false), NULL
+SELECT osm_id, g, s, bridge, ease, 'lane', v.pattern, 'white', split_b + i * lane_w + v.d, st.at + v.d,
+       e.fin + v.d, 'whole', COALESCE(abs(e.fin - nxt_split_b) < 0.05 OR abs(e.fin - nxt_left) < 0.05, false),
+       CASE WHEN v.d <> 0 THEN road_field(res_pos, res_disp, COALESCE(st.at, split_b + i * lane_w)) END
 FROM lanes, generate_series(1, least(bwd, 9) - 1) i, LATERAL road_lane_divider(change_b, i, dash, -1) v,
+     LATERAL (SELECT CASE WHEN prev_left IS NOT NULL THEN road_divider_start(i, bwd, prev_split_b, prev_left, prev_lane_w, opens_kerb_b) END as at) st,
      LATERAL (SELECT road_divider_start(i, bwd, nxt_split_b, nxt_left, nxt_lane_w, opens_kerb_b) as fin) e
 UNION ALL
 -- Edge lines on roads without kerbs: motorways, trunks and their links.
