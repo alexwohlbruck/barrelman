@@ -175,6 +175,15 @@ const ways: [number, string, Record<string, string>][] = [
     'parking:both': 'lane', 'parking:both:orientation': 'parallel' }],
   [511, line([-74.460, 40.7130], [-74.460, 40.7140]), { highway: 'secondary', lanes: '2', 'cycleway:both': 'lane',
     'parking:right': 'lane', 'parking:right:orientation': 'parallel' }],
+  // Parking opening on both sides beside bike lanes, mid-block; and a street
+  // widening for parking past a T junction, whose one leg leaves it tapering.
+  [515, line([-74.470, 40.7120], [-74.470, 40.7123]), { highway: 'secondary', lanes: '2', 'cycleway:both': 'lane' }],
+  [516, line([-74.470, 40.7123], [-74.470, 40.7145]), { highway: 'secondary', lanes: '2', 'cycleway:both': 'lane',
+    'parking:both': 'lane', 'parking:both:orientation': 'parallel' }],
+  [517, line([-74.475, 40.7120], [-74.475, 40.7123]), { highway: 'secondary', lanes: '2' }],
+  [518, line([-74.475, 40.7123], [-74.475, 40.7145]), { highway: 'secondary', lanes: '2', 'parking:both': 'lane',
+    'parking:both:orientation': 'parallel' }],
+  [519, line([-74.4755, 40.7123], [-74.475, 40.7123]), { highway: 'residential', lanes: '2' }],
   // Chrystie St: a block of short ways sharing out four lanes, then three, then
   // four, with left bays, between two crossroads.
   [520, line([-74.465, 40.7115], [-74.465, 40.7120]), { highway: 'secondary', lanes: '2' }],
@@ -677,7 +686,7 @@ run('generate-road-markings.sql', () => {
     for (const side of [-1, 1] as const) expect(await bikeInner(-74.450, north(40.7123, 12), side)).toBeGreaterThan(3.2)
   })
 
-  test('opens bike lanes and parking beside the traffic lanes, never across them', async () => {
+  test('opens bike lanes beside the traffic lanes, never across them', async () => {
     // The join has no street crossing it, so the kerbs ease out; the bike
     // lanes widen out of the kerbs as they do, and the two traffic lanes keep
     // their 3.3 m.
@@ -688,6 +697,26 @@ run('generate-road-markings.sql', () => {
       }
     }
     expect((await kerbsAt(-74.455, north(40.7123, 5))).r).toBeLessThan(6)
+  })
+
+  test('paints a parking lane that opens beside a bike lane only once it has opened', async () => {
+    const [{ n, into_lanes, on_green }] = await sql`
+      WITH p AS (SELECT (ST_Dump(geom)).geom as g FROM road_markings WHERE kind = 'parking'
+                 AND geom && ST_MakeEnvelope(${east(-74.470, -12)}, 40.7123, ${east(-74.470, 12)}, 40.7145, 4326))
+      SELECT count(*)::int as n,
+             count(*) FILTER (WHERE ST_DWithin(p.g::geography, ST_SetSRID(ST_MakeLine(ST_MakePoint(-74.470, 40.7123), ST_MakePoint(-74.470, 40.7145)), 4326)::geography, 3.3))::int as into_lanes,
+             count(*) FILTER (WHERE EXISTS (SELECT 1 FROM road_markings b WHERE b.kind = 'bike_lane' AND b.geom && p.g
+                                                    AND ST_Length(ST_Intersection(b.geom, p.g)::geography) > 0.05))::int as on_green
+      FROM p`
+    expect(n).toBeGreaterThan(20)
+    expect(into_lanes).toBe(0)
+    expect(on_green).toBe(0)
+  })
+
+  test('still tapers a street widening past a T junction', async () => {
+    const k = await kerbsAt(-74.475, north(40.7123, 12))
+    expect(k.r).toBeLessThan(5)
+    expect(k.r).toBeGreaterThan(3.2)
   })
 
   test('keeps a bike lane beside the traffic where the parking outside it ends', async () => {
