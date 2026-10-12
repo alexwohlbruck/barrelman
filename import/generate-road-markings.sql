@@ -1693,8 +1693,7 @@ FROM (
   CROSS JOIN LATERAL (SELECT d.d - least(road_stop_at(o.a, o.a, o.b, f.n, f.g0, k.k, f.slant, f.lim),
                                          road_stop_at(o.b, o.a, o.b, f.n, f.g0, k.k, f.slant, f.lim)) as back) b
   CROSS JOIN LATERAL (SELECT ST_Translate(x.x, -t.tx * g.off * e.s, -t.ty * g.off * e.s) as q) q
-  -- Only crosswalks on the nearer half of the way.
-  WHERE d.u IS NOT NULL AND k.k IS NOT NULL AND o.n > 0 AND d.d <= least(30, ST_Length(e.g) / e.s / 2)
+  WHERE d.u IS NOT NULL AND k.k IS NOT NULL AND o.n > 0 AND d.d <= 30
   ORDER BY e.osm_id, e.at_end, b.back DESC
 ) w
 WHERE w.osm_id = e.osm_id AND w.at_end = e.at_end;
