@@ -18,9 +18,18 @@ does it — and the release pipeline turns it into the GitHub Release notes.
   their real width rather than one lane wide. Lanes keep their own width; the
   rest is unmarked kerbside. Replication queues the streets beside an edited
   sidewalk.
+* **Parallel parking lanes show stall ticks** about a car length apart, unless
+  tagged `markings=no`.
 
 ### Fixed
 
+* **Streets change width at the junction, not across the next block.** A
+  street that widens for parking and bike lanes past a crossroads no longer
+  funnels to a point, and bike lanes never squeeze the traffic lanes while a
+  road tapers.
+* **Bike lanes run on straight where the parking beside them starts or
+  ends**, and a street's kerbs hold down a block whose lanes are shared out
+  differently from way to way, rather than wobbling with each turn lane.
 * **Median ends are round.** A narrow median's nose takes half its width as
   its kerb radius, so it ends round at the crosswalk instead of drawn to a point
   well short of it.

@@ -160,6 +160,42 @@ const ways: [number, string, Record<string, string>][] = [
   [432, line([-74.440, 40.711], [-74.440, 40.712], [-74.440, 40.713]), { highway: 'residential', lanes: '2' }],
   [434, line([-74.440 - 12.3 / 84300, 40.712 - 4 / 111050], [-74.440 - 7.7 / 84300, 40.712 + 4 / 111050]),
     { highway: 'footway', footway: 'crossing', 'crossing:markings': 'zebra' }],
+  // East Broadway at Catherine St: a plain two-lane way carrying on into one
+  // with parallel parking and bike lanes both sides, across a crossroads, and
+  // the same with no street crossing at the join.
+  [500, line([-74.450, 40.7120], [-74.450, 40.7123]), { highway: 'secondary', lanes: '2' }],
+  [501, line([-74.450, 40.7123], [-74.450, 40.7145]), { highway: 'secondary', lanes: '2', 'cycleway:both': 'lane',
+    'parking:both': 'lane', 'parking:both:orientation': 'parallel' }],
+  [502, line([-74.4505, 40.7123], [-74.450, 40.7123], [-74.4495, 40.7123]), { highway: 'residential', lanes: '2' }],
+  [505, line([-74.455, 40.7120], [-74.455, 40.7123]), { highway: 'secondary', lanes: '2' }],
+  [506, line([-74.455, 40.7123], [-74.455, 40.7145]), { highway: 'secondary', lanes: '2', 'cycleway:both': 'lane',
+    'parking:both': 'lane', 'parking:both:orientation': 'parallel', 'parking:both:markings': 'no' }],
+  // Parking on both sides, then on the right only, bike lanes throughout.
+  [510, line([-74.460, 40.7120], [-74.460, 40.7130]), { highway: 'secondary', lanes: '2', 'cycleway:both': 'lane',
+    'parking:both': 'lane', 'parking:both:orientation': 'parallel' }],
+  [511, line([-74.460, 40.7130], [-74.460, 40.7140]), { highway: 'secondary', lanes: '2', 'cycleway:both': 'lane',
+    'parking:right': 'lane', 'parking:right:orientation': 'parallel' }],
+  // Chrystie St: a block of short ways sharing out four lanes, then three, then
+  // four, with left bays, between two crossroads.
+  [520, line([-74.465, 40.7115], [-74.465, 40.7120]), { highway: 'secondary', lanes: '2' }],
+  [521, line([-74.465, 40.7120], [-74.465, 40.71255]), { highway: 'secondary', lanes: '4', 'lanes:forward': '1', 'lanes:backward': '3',
+    'turn:lanes:backward': 'left|left|' }],
+  [522, line([-74.465, 40.71255], [-74.465, 40.71295]), { highway: 'secondary', lanes: '3', 'lanes:forward': '1', 'lanes:backward': '2' }],
+  [523, line([-74.465, 40.71295], [-74.465, 40.71325]), { highway: 'secondary', lanes: '4', 'lanes:forward': '2', 'lanes:backward': '2',
+    'turn:lanes:forward': 'left|' }],
+  [524, line([-74.465, 40.71325], [-74.465, 40.7140]), { highway: 'secondary', lanes: '3', 'lanes:forward': '1', 'lanes:backward': '2' }],
+  [525, line([-74.4655, 40.7120], [-74.465, 40.7120], [-74.4645, 40.7120]), { highway: 'residential', lanes: '2' }],
+  [526, line([-74.4655, 40.71325], [-74.465, 40.71325], [-74.4645, 40.71325]), { highway: 'residential', lanes: '2' }],
+  // The same block across the cell boundary at 40.718.
+  [530, line([-74.028, 40.7165], [-74.028, 40.7170]), { highway: 'secondary', lanes: '2' }],
+  [531, line([-74.028, 40.7170], [-74.028, 40.71755]), { highway: 'secondary', lanes: '4', 'lanes:forward': '1', 'lanes:backward': '3',
+    'turn:lanes:backward': 'left|left|' }],
+  [532, line([-74.028, 40.71755], [-74.028, 40.71795]), { highway: 'secondary', lanes: '3', 'lanes:forward': '1', 'lanes:backward': '2' }],
+  [533, line([-74.028, 40.71795], [-74.028, 40.71825]), { highway: 'secondary', lanes: '4', 'lanes:forward': '2', 'lanes:backward': '2',
+    'turn:lanes:forward': 'left|' }],
+  [534, line([-74.028, 40.71825], [-74.028, 40.7190]), { highway: 'secondary', lanes: '3', 'lanes:forward': '1', 'lanes:backward': '2' }],
+  [535, line([-74.0285, 40.7170], [-74.028, 40.7170], [-74.0275, 40.7170]), { highway: 'residential', lanes: '2' }],
+  [536, line([-74.0285, 40.71825], [-74.028, 40.71825], [-74.0275, 40.71825]), { highway: 'residential', lanes: '2' }],
 ]
 
 // Painted areas, nodes on roads, and the roads they lie on (OSM wiki schemes).
@@ -618,6 +654,75 @@ run('generate-road-markings.sql', () => {
     for (const l of lines) expect(Math.abs(Math.abs(l.dx) - 1.5)).toBeLessThan(0.2)
   })
 
+  // A road's kerbs across a probe at `y`, in metres east of its way at `x`.
+  const kerbsAt = async (x: number, y: number) => (await sql`
+    SELECT (ST_XMin(c) - ${x}) * 84300 as l, (ST_XMax(c) - ${x}) * 84300 as r
+    FROM (SELECT ST_Intersection(ST_SetSRID(ST_MakeLine(ST_MakePoint(${east(x, -20)}, ${y}), ST_MakePoint(${east(x, 20)}, ${y})), 4326),
+                                 ST_Union(geom)) as c
+          FROM road_surfaces
+          WHERE kind IS NULL AND geom && ST_MakeEnvelope(${east(x, -20)}, ${y - 1e-6}, ${east(x, 20)}, ${y + 1e-6}, 4326)) s`)[0]
+  // How far the green of a bike lane comes in toward the way at `x`, at `y`.
+  const bikeInner = async (x: number, y: number, side: -1 | 1) => (await sql`
+    SELECT min(abs(ST_X(p) - ${x})) * 84300 as m
+    FROM (SELECT (ST_DumpPoints(ST_Intersection(geom, ST_SetSRID(ST_MakeLine(ST_MakePoint(${east(x, side * 0.01)}, ${y}),
+                                                                             ST_MakePoint(${east(x, side * 12)}, ${y})), 4326)))).geom as p
+          FROM road_markings WHERE kind = 'bike_lane' AND geom && ST_MakeEnvelope(${east(x, -12)}, ${y - 1e-6}, ${east(x, 12)}, ${y + 1e-6}, 4326)) t`)[0].m
+
+  test('changes width inside a crossroads rather than tapering across the block beyond it', async () => {
+    // Two 3.3 m lanes, 1.6 m bike lanes and 2.4 m of parking each side, all of
+    // it from the crosswalk on.
+    const k = await kerbsAt(-74.450, north(40.7123, 12))
+    expect(k.l).toBeCloseTo(-7.3, 0)
+    expect(k.r).toBeCloseTo(7.3, 0)
+    for (const side of [-1, 1] as const) expect(await bikeInner(-74.450, north(40.7123, 12), side)).toBeGreaterThan(3.2)
+  })
+
+  test('opens bike lanes and parking beside the traffic lanes, never across them', async () => {
+    // The join has no street crossing it, so the kerbs ease out; the bike
+    // lanes widen out of the kerbs as they do, and the two traffic lanes keep
+    // their 3.3 m.
+    for (let m = 0; m <= 60; m += 5) {
+      for (const side of [-1, 1] as const) {
+        const inner = await bikeInner(-74.455, north(40.7123, m), side)
+        if (inner != null) expect(inner).toBeGreaterThan(3.2)
+      }
+    }
+    expect((await kerbsAt(-74.455, north(40.7123, 5))).r).toBeLessThan(6)
+  })
+
+  test('keeps a bike lane beside the traffic where the parking outside it ends', async () => {
+    for (const side of [-1, 1] as const) {
+      const before = await bikeInner(-74.460, north(40.7130, -1), side)
+      const after = await bikeInner(-74.460, north(40.7130, 1), side)
+      expect(Math.abs(after - before)).toBeLessThan(0.15)
+    }
+  })
+
+  test('keeps a street\'s kerbs down a block whose lanes are shared out differently from way to way', async () => {
+    const ref = await kerbsAt(-74.465, north(40.7120, 30))
+    for (const y of [north(40.7120, 15), north(40.71255, 20), north(40.71295, 15), north(40.71295, 25)]) {
+      const k = await kerbsAt(-74.465, y)
+      expect(Math.abs(k.l - ref.l)).toBeLessThan(0.1)
+      expect(Math.abs(k.r - ref.r)).toBeLessThan(0.1)
+    }
+    // Centred on the way, though the left bays move the lanes across.
+    expect(Math.abs(ref.l + ref.r)).toBeLessThan(0.1)
+  })
+
+  test('ticks a parallel parking lane a car length apart, unless tagged unmarked', async () => {
+    const ticks = await sql`
+      SELECT ST_Length(g::geography) as m, ST_Y(ST_Centroid(g)) as y
+      FROM (SELECT (ST_Dump(geom)).geom as g FROM road_markings WHERE kind = 'parking'
+            AND geom && ST_MakeEnvelope(${east(-74.450, -8)}, 40.7130, ${east(-74.450, -4)}, 40.7140, 4326)) t ORDER BY y`
+    expect(ticks.length).toBeGreaterThan(12)
+    for (const t of ticks) expect(t.m).toBeLessThan(1.2)
+    const gaps = ticks.slice(1).map((t, i) => (t.y - ticks[i].y) * 111050)
+    for (const g of gaps) expect(Math.abs(g - 6.1)).toBeLessThan(0.3)
+    const [{ n }] = await sql`SELECT count(*)::int as n FROM road_markings WHERE kind = 'parking'
+      AND geom && ST_MakeEnvelope(${east(-74.455, -8)}, 40.7130, ${east(-74.455, 8)}, 40.7140, 4326)`
+    expect(n).toBe(0)
+  })
+
   test('rounds the nose of a narrow median rather than drawing it to a point', async () => {
     // Cross street kerb 3 m north of its line; the median runs 3.4 to 7.4 m
     // east of the southbound way.
@@ -1033,7 +1138,14 @@ run('generate-road-markings.sql', () => {
     let barsBefore: any
     const RAMP_BOX = (sql: postgres.Sql) => sql`ST_MakeEnvelope(${east(RAMP_X, -12)}, 40.7170, ${east(RAMP_X, 12)}, 40.7192, 4326)`
     let rampRef: { l: number; r: number }[] = []
+    const blockProfile = async () => {
+      const out: { l: number; r: number }[] = []
+      for (let m = 12; m <= 128; m += 4) out.push(await kerbsAt(-74.028, north(40.7170, m)))
+      return out
+    }
+    let blockRef: { l: number; r: number }[] = []
     beforeAll(async () => {
+      blockRef = await blockProfile()
       ;[medianBefore] = await median()
       ;[barsBefore] = await bars()
       // The ramp as the full build drew it.
@@ -1068,6 +1180,15 @@ run('generate-road-markings.sql', () => {
       // A dash on the boundary is cut in two there, and nowhere else.
       expect(n - ref).toBeGreaterThanOrEqual(0)
       expect(n - ref).toBeLessThanOrEqual(4)
+    })
+
+    test('hold a street\'s kerbs down a block across their boundary as one build does', async () => {
+      const after = await blockProfile()
+      for (const [i, k] of after.entries()) {
+        expect(Math.abs(k.l - blockRef[i].l)).toBeLessThan(0.05)
+        expect(Math.abs(k.r - blockRef[i].r)).toBeLessThan(0.05)
+      }
+      expect(Math.max(...blockRef.map(k => k.r)) - Math.min(...blockRef.map(k => k.r))).toBeLessThan(0.1)
     })
 
     test('build a turning circle on their boundary whole, once', async () => {
