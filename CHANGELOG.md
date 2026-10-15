@@ -10,6 +10,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.10.18] - 2026-10-15
+
 ### Fixed
 
 * **New York transit has realtime again.** The GTFS import now finds realtime
