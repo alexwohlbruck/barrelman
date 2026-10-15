@@ -61,6 +61,8 @@ export const CURVE = 24
 export const VERTICAL_CURVE = 90
 /** Metres each side of a sample whose ground is read together, so a lone tree, mast or stray pixel does not lift a deck. */
 export const GROUND_SPAN = 12
+/** Metres a deck may run below the ground under it, which the client draws it over, rather than kink over a bump. */
+export const TERRAIN_SLACK = 0.5
 /** Farthest an outline point may lie from a deck's centreline and still be its edge, in metres. */
 export const MAX_REACH = 16
 
@@ -442,7 +444,7 @@ export function besideGround(centre: number[], left: number[], right: number[], 
  * stretch fitted for its level, how far below that level the end's own ground
  * must lie to be a hole, and the most a deck runs on to cross one.
  */
-export const LANDING = { step: 2, reach: 40, from: 16, to: 36, hole: 1.5, run: 25 }
+export const LANDING = { step: 2, reach: 40, from: 16, to: 36, hole: 0.6, run: 25 }
 
 /**
  * The road a grounded end lands on, read from the ground `beyond` it (one
@@ -548,7 +550,7 @@ export function solve(
   }
   const anchored = [chain.grounded[0] || resting[0] !== null, chain.grounded[1] || resting[1] !== null]
   const [za, zb] = [end(0, ground[0]), end(1, ground[n - 1])]
-  const lower = steady(ground, d)
+  const lower = steady(ground, d).map(g => g - TERRAIN_SLACK)
   for (const need of needs)
     for (let i = 0; i < n; i++) if (Math.abs(d[i] - need.at) <= CURVE / 2) lower[i] = Math.max(lower[i], need.height)
   lower[0] = za
@@ -586,7 +588,7 @@ export function smooth(z: number[], d: number[], ground: number[], span = VERTIC
   const total = d[n - 1] ?? 0
   let lo = 0
   return z.map((_, i) => {
-    const half = Math.min(span / 2, d[i], total - d[i])
+    const half = Math.min(span / 2, d[i] - d[0], total - d[i])
     if (half <= 0) return z[i]
     while (d[i] - d[lo] >= half) lo++
     let sum = 0
