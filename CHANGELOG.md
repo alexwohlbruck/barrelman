@@ -10,7 +10,7 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
-## [0.10.18] - 2026-10-15
+## [0.10.19] - 2026-10-15
 
 ### Fixed
 
@@ -18,6 +18,11 @@ does it — and the release pipeline turns it into the GitHub Release notes.
   looks up every feed's operator, which outruns Transitland's per-minute
   quota; refused lookups were read as "no realtime feed", so feeds like New
   York's kept schedules only. Lookups now wait out the limit and retry.
+
+## [0.10.18] - 2026-10-15
+
+### Fixed
+
 * **New York transit has realtime again.** The GTFS import now finds realtime
   feeds through each feed's operator, so the subway, buses, LIRR and
   Metro-North get live trip updates instead of schedules only. Realtime feeds
