@@ -10,6 +10,19 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.10.16] - 2026-10-15
+
+### Fixed
+
+* **Incremental road markings no longer stall replication.** With
+  `ROAD_MARKINGS_INCREMENTAL` on, queueing the roads a diff touched could run
+  for days on a large extract, holding the swap transaction open and every
+  queued job behind it. Postgres misjudged how many roads carry markings and
+  checked each changed road's points against every marked road in the
+  database. The lookup now goes through the road-lines index one point at a
+  time: a sample that ran past three minutes on the US extract now takes
+  about two seconds.
+
 ## [0.10.15] - 2026-10-11
 
 ### Added
