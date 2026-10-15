@@ -97,3 +97,7 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS geo_places_golf_geom_idx
                                'driving_range'))
      OR (geom_type = 'line' AND tags->>'golf' = 'hole')
      OR (geom_type = 'point' AND tags->>'golf' IN ('pin', 'tee'));
+
+CREATE INDEX CONCURRENTLY IF NOT EXISTS geo_places_golf_tee_idx
+  ON geo_places USING gist (ST_StartPoint(geom))
+  WHERE geom_type = 'line' AND tags->>'golf' = 'hole' AND tags ? 'ref';

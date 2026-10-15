@@ -316,22 +316,32 @@ WHERE ((geom_type = 'area'
 
 -- Golf course features (`golf=*`): playing surfaces as areas, each hole's line
 -- from tee to green, and the pins. `kind` is the golf value (`heavy_rough` folds
--- into `rough`); `ref` and `par` label a hole. Cart paths and water hazards are
--- left out: nearly all carry `highway=*` or `natural=water`, which the basemap
--- already draws.
+-- into `rough`). A hole also comes as a point at its tee, carrying `ref` and
+-- `par`, so a client labels it once rather than once per tile the line crosses;
+-- `geo_places_golf_tee_idx` is what lets the tile envelope find those points.
+-- Cart paths and water hazards are left out: nearly all carry `highway=*` or
+-- `natural=water`, which the basemap already draws.
 DROP VIEW IF EXISTS golf_features CASCADE;
 CREATE VIEW golf_features AS
 SELECT (osm_id * 4 + CASE osm_type WHEN 'N' THEN 0 WHEN 'W' THEN 1 ELSE 2 END) as fid,
        id, geom,
        CASE WHEN tags->>'golf' = 'heavy_rough' THEN 'rough' ELSE tags->>'golf' END as kind,
-       NULLIF(tags->>'ref', '') as ref,
-       NULLIF(tags->>'par', '') as par
+       NULL::text as ref,
+       NULL::text as par
 FROM geo_places
 WHERE (geom_type = 'area'
        AND tags->>'golf' IN ('tee', 'fairway', 'green', 'rough', 'heavy_rough', 'bunker',
                              'driving_range'))
    OR (geom_type = 'line' AND tags->>'golf' = 'hole')
-   OR (geom_type = 'point' AND tags->>'golf' IN ('pin', 'tee'));
+   OR (geom_type = 'point' AND tags->>'golf' IN ('pin', 'tee'))
+UNION ALL
+SELECT osm_id * 4 + 3 as fid,
+       id, ST_StartPoint(geom) as geom,
+       'hole' as kind,
+       NULLIF(tags->>'ref', '') as ref,
+       NULLIF(tags->>'par', '') as par
+FROM geo_places
+WHERE geom_type = 'line' AND tags->>'golf' = 'hole' AND tags ? 'ref';
 
 -- Roller coaster tracks: `roller_coaster=track`, and the older
 -- `railway=roller_coaster` that some parks still carry.
