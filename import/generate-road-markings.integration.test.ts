@@ -1905,7 +1905,7 @@ run('generate-road-markings.sql', () => {
         -- Deleted: one beside a paved street, one nowhere near a street.
         INSERT INTO osm_replay.old_places (id, osm_type, osm_id, categories, geom, geom_type) VALUES
           ('W497', 'W', 497, '{highway/footway}', ST_GeomFromText('LINESTRING(-74.40310 40.712, -74.40310 40.714)', 4326), 'line'),
-          ('W498', 'W', 498, '{highway/footway}', ST_GeomFromText('LINESTRING(-74.38 40.712, -74.38 40.714)', 4326), 'line');
+          ('W498', 'W', 498, '{highway/footway}', ST_GeomFromText('LINESTRING(-74.39 40.712, -74.39 40.714)', 4326), 'line');
         CREATE TABLE osm_replay.changed AS SELECT id FROM geo_places WHERE id = 'W401';`)
       await sql`DELETE FROM detail_dirty`
       await sql.unsafe(readFileSync(join(import.meta.dir, 'queue-road-markings.sql'), 'utf8'))
@@ -1920,7 +1920,7 @@ run('generate-road-markings.sql', () => {
         SELECT count(*)::int as n FROM detail_dirty WHERE layer = 'road_markings' AND ST_Intersects(box, ST_SetSRID(ST_MakePoint(${x}, ${y}), 4326))`)[0].n
       expect(await at(-74.400, 40.7139)).toBeGreaterThan(0)
       expect(await at(-74.403, 40.7139)).toBeGreaterThan(0)
-      expect(await at(-74.38, 40.713)).toBe(0)
+      expect(await at(-74.39, 40.713)).toBe(0)
     })
   })
 
