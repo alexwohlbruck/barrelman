@@ -8,6 +8,7 @@
  */
 import {
   absorbPaths,
+  absorbTracks,
   along,
   beside,
   besideGround,
@@ -202,7 +203,7 @@ function needs(s: Pick<Solved, 'chain' | 'd' | 'g'>, input: DeckInput, below: So
 /**
  * Piers every PIER_SPACING metres where a deck stands high. A deck running
  * beside one that already has piers takes the same row, so twin carriageways
- * stand on shared bents rather than two staggered sets.
+ * and twin tracks stand on shared bents rather than two staggered sets.
  */
 function piers(solved: Solved[]): number[][] {
   const out = solved.map(() => [] as number[])
@@ -214,7 +215,7 @@ function piers(solved: Solved[]): number[][] {
     const shared: number[] = []
     for (const j of order.slice(0, n)) {
       const o = solved[j]
-      if (o.chain.kind === 'rail' || s.chain.kind === 'rail' || !out[j].length) continue
+      if ((o.chain.kind === 'rail') !== (s.chain.kind === 'rail') || !out[j].length) continue
       if (!meet(grow(box(o.chain.points), Math.max(...s.chain.edges) + Math.max(...o.chain.edges) + 3), box(s.chain.points))) continue
       for (const at of out[j]) {
         const p = o.chain.points[Math.min(o.chain.points.length - 1, Math.round(at / STEP))]
@@ -278,7 +279,7 @@ function restingOn(s: Solved, end: 0 | 1, solved: Solved[]): { height: number; o
 }
 
 export async function buildDecks(input: DeckInput, ground: Ground): Promise<Deck[]> {
-  const decks = absorbPaths(fitted(chains(input.ways), input.outlines, input.kerbs)) as Fitted[]
+  const decks = absorbTracks(absorbPaths(fitted(chains(input.ways), input.outlines, input.kerbs))) as Fitted[]
   // An end lands where a road on the ground meets it, rests where it meets
   // another deck, and lands at a dead end. A deck in an outline reaches as far
   // as the outline fitted it, not just its carriageway: shaping comes later

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test'
 import {
-  absorbPaths, along, arch, chains, crossings, fitEdges, joinNeighbours, MAX_GRADE, mercator, resample, smooth, solve, steady, widen,
+  absorbPaths, absorbTracks, along, arch, chains, crossings, fitEdges, joinNeighbours, MAX_GRADE, mercator, resample, smooth, solve, steady, widen,
   type Chain, type Point, type Way,
 } from './profile'
 
@@ -41,6 +41,13 @@ describe('chains', () => {
     const ways = [arm(1, east(100)), arm(2, east(0)), arm(3, east(50, 50)), arm(4, east(50, -50))]
     const members = (w: Way[]) => chains(w).map(d => [...d.ways].sort()).sort((a, b) => a[0] - b[0])
     expect(members([...ways].reverse())).toEqual(members(ways))
+  })
+
+  it('never folds a carriageway back onto the slip road it meets at a gore', () => {
+    // Both bridge ways leave the gore heading west; the road beyond it is on the ground.
+    const main: Way = { ...way(1, 0, 0), points: [east(60), east(0)] }
+    const slip: Way = { ...way(2, 0, 0), points: [east(60), east(0, 12)] }
+    expect(chains([main, slip]).map(d => d.ways)).toEqual([[1], [2]])
   })
 })
 
@@ -83,6 +90,25 @@ describe('absorbPaths', () => {
     expect(left[3]).toBeCloseTo(7.5, 1)
     expect(left[50]).toBe(4)
     expect(Math.max(...wide.edges)).toBeCloseTo(7.5, 1)
+  })
+})
+
+describe('absorbTracks', () => {
+  const road: Chain = { ways: [1], points: resample([east(0), east(80)], 6), kind: 'road', layer: 1, edges: [6, 6] }
+  const track = (north: number, from = 0, to = 80, layer = 1): Chain =>
+    ({ ways: [2], points: [east(from, north), east(to, north)], kind: 'rail', layer, edges: [2.5, 2.5] })
+
+  it('folds a tram running in the carriageway into the road deck', () => {
+    const decks = absorbTracks([road, track(2)])
+    expect(decks).toHaveLength(1)
+    expect(decks[0].ways).toEqual([1, 2])
+    expect(decks[0].edges).toEqual([6, 6])
+  })
+
+  it('keeps a track of its own beside the road, on another layer, or running on past it', () => {
+    expect(absorbTracks([road, track(9)])).toHaveLength(2)
+    expect(absorbTracks([road, track(2, 0, 80, 2)])).toHaveLength(2)
+    expect(absorbTracks([road, track(2, 0, 120)])).toHaveLength(2)
   })
 })
 
@@ -193,6 +219,17 @@ describe('joinNeighbours', () => {
     const ramp = { chain: deck(10), z: deck(10).points.map(() => 101), on: [{ deck: main, at: deck(10).points[0] }] }
     joinNeighbours([main, ramp])
     expect(main.z.every(z => z === 100)).toBe(true)
+  })
+
+  it('joins twin tracks, but never a track to a road', () => {
+    const rail = (north: number): Chain => ({ ...deck(north), kind: 'rail', edges: [2.5, 2.5] })
+    const a = { chain: rail(0), z: rail(0).points.map(() => 100) }
+    const b = { chain: rail(4), z: rail(4).points.map(() => 100.5) }
+    joinNeighbours([a, b])
+    expect(a.z.every(z => z === 100.5)).toBe(true)
+    const road = { chain: { ...deck(7.5), edges: [2.5, 2.5] as [number, number] }, z: deck(7.5).points.map(() => 101) }
+    joinNeighbours([b, road])
+    expect(b.z.every(z => z === 100.5)).toBe(true)
   })
 
   it('leaves decks too far apart or too far above alone', () => {

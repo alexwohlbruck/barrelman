@@ -154,13 +154,16 @@ function leaving(w: Way, p: Point): Point {
 
 /** Least turn, as the cosine between the two ways leaving a node, at which a road counts as carrying straight on. */
 const ONWARD = -0.5
+/** Most a chain may turn at a node, as that cosine: two ways leaving it within a right angle of each other fold back, not run on. */
+const FOLD = 0
 
 /**
  * Ways joined end to end into chains, one per roadway. OSM ways share their
  * end nodes, so ends match exactly. Only ways of one kind and layer join, so
  * stacked decks never do; where three or more meet, the pair that carries one
  * road on (same class and ref or name, turning no sharper than ONWARD) joins,
- * else the straightest pair, and the rest end there.
+ * else the straightest pair, and the rest end there. A pair that folds back
+ * on itself (a carriageway meeting its own slip road at a gore) never joins.
  */
 export function chains(ways: Way[]): Chain[] {
   // By id, so a tie between pairs goes the same way whatever order the rows came in.
@@ -179,6 +182,7 @@ export function chains(ways: Way[]): Chain[] {
       for (let j = i + 1; j < like.length; j++) {
         const [u, v] = [leaving(like[i], p), leaving(like[j], p)]
         const dot = u[0] * v[0] + u[1] * v[1]
+        if (dot > FOLD) continue
         const same = like[i].road !== undefined && like[i].road === like[j].road && dot <= ONWARD
         if ((same ? 2 : 0) - dot > score) [best, score] = [[like[i], like[j]], (same ? 2 : 0) - dot]
       }
@@ -338,6 +342,37 @@ export function absorbPaths(decks: Chain[]): Chain[] {
   }
   return [...roads, ...kept]
 }
+
+/**
+ * Tracks laid in a road bridge's carriageway (a street-running tram) folded
+ * into its deck: they are drawn on the road, not as a deck of their own
+ * inside it. A track counts as in the road where it lies within the road's
+ * reach on either side along all of it, running no more than RUN_PAST beyond
+ * either end.
+ */
+export function absorbTracks(decks: Chain[]): Chain[] {
+  const roads = decks.filter(d => d.kind === 'road').map(d => ({ ...d, ways: [...d.ways] }))
+  const kept: Chain[] = []
+  for (const deck of decks) {
+    if (deck.kind === 'road') continue
+    if (deck.kind !== 'rail') {
+      kept.push(deck)
+      continue
+    }
+    const samples = deck.points.flatMap((p, i) => (i ? [[(p[0] + deck.points[i - 1][0]) / 2, (p[1] + deck.points[i - 1][1]) / 2] as Point, p] : [p]))
+    const host = roads.find(road => road.layer === deck.layer && samples.every(q => {
+      const near = beside(road.points, q)
+      const reach = (road.fit ?? road.edges)[near.left ? 0 : 1]
+      return near.alongside ? near.distance <= reach : near.distance <= RUN_PAST
+    }))
+    if (host) host.ways.push(...deck.ways)
+    else kept.push(deck)
+  }
+  return [...roads, ...kept]
+}
+
+/** Farthest a track folded into a road may run on past the road's end, in metres. */
+export const RUN_PAST = 3
 
 /** A resampled deck widened to take in its sidewalks, one sample beyond each end of where they run beside it. */
 export function widen<C extends Pick<Chain, 'points' | 'edges' | 'sides' | 'paths'>>(chain: C, step: number): C {
@@ -547,7 +582,7 @@ export const LEAVING = 200
 /**
  * Decks that run side by side as one: where a deck's edge meets another's
  * within `gap` metres and at most `step` from its height, both take the
- * higher height. Decks farther apart in height (an upper and lower deck) keep
+ * higher height. Track joins track, and road or path the others. Decks farther apart in height (an upper and lower deck) keep
  * their own.
  *
  * An end that lands on the ground stays there: lifting it to a neighbour
@@ -564,7 +599,7 @@ export function joinNeighbours(
   const widest = decks.map(D => Math.max(...D.chain.edges))
   for (const [a, A] of decks.entries())
     for (const [b, B] of decks.entries()) {
-      if (a === b || A.chain.kind === 'rail' || B.chain.kind === 'rail') continue
+      if (a === b || (A.chain.kind === 'rail') !== (B.chain.kind === 'rail')) continue
       const leaves = (B.on ?? []).filter(r => r.deck === A).map(r => r.at)
       // Farther apart than both decks' widest sides and the gap, no edge can meet the other.
       if (!meet(grow(box(A.chain.points), widest[a] + widest[b] + gap), box(B.chain.points))) continue
