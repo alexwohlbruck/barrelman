@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test'
 import {
-  absorbPaths, absorbTracks, along, arch, chains, crossings, fitEdges, joinNeighbours, MAX_GRADE, mercator, resample, smooth, solve, steady, widen,
+  absorbPaths, absorbTracks, along, landing, LANDING, arch, chains, crossings, fitEdges, joinNeighbours, MAX_GRADE, mercator, resample, smooth, solve, steady, widen,
   type Chain, type Point, type Way,
 } from './profile'
 
@@ -125,6 +125,22 @@ describe('absorbTracks', () => {
     expect(absorbTracks([road, track(9)])).toHaveLength(2)
     expect(absorbTracks([road, track(2, 0, 80, 2)])).toHaveLength(2)
     expect(absorbTracks([road, track(2, 0, 120)])).toHaveLength(2)
+  })
+})
+
+describe('landing', () => {
+  const road = (f: (s: number) => number) => Array.from({ length: LANDING.reach / LANDING.step }, (_, j) => f((j + 1) * LANDING.step))
+
+  it('finds the road beyond a hollow the terrain leaves at a bridge end', () => {
+    // E 7th St over I-277: the way ends 7 m down in the hollow, the road runs on 12 m out.
+    const land = landing(road(s => (s < 12 ? 198.5 + s * 0.5 : 205.3)), 198.5)
+    expect(land?.height).toBeCloseTo(205.3, 1)
+    expect(land?.run).toBeLessThanOrEqual(14)
+  })
+
+  it('leaves an end alone where the road beyond carries on at its height, or a long way down', () => {
+    expect(landing(road(s => 200 + s * 0.03), 200)).toBeNull()
+    expect(landing(road(s => (s < 30 ? 195 : 205)), 195)).toBeNull()
   })
 })
 
