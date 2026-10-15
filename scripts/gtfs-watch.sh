@@ -52,10 +52,12 @@ run_watch() { # args passed through to gtfs-watch.ts (e.g. --record)
 
 log "Checking upstream feed versions..."
 OUT="$(run_watch --check)"
-echo "$OUT" | grep -v '^BASELINE=\|^CHANGED_REGIONS=' || true
+echo "$OUT" | grep -v '^BASELINE=\|^CHANGED_REGION=' || true
 
 BASELINE="$(echo "$OUT" | sed -n 's/^BASELINE=//p' | tail -1)"
-CHANGED="$(echo "$OUT" | sed -n 's/^CHANGED_REGIONS=//p' | tail -1)"
+# One line per region: a region can be a bbox ("w,s,e,n") or several joined
+# by ";", so no separator inside a single line is safe to split on.
+mapfile -t REGION_LIST < <(echo "$OUT" | sed -n 's/^CHANGED_REGION=//p')
 
 if [ "${BASELINE:-0}" = "1" ]; then
   log "First run — recording current feed versions as baseline (no re-import)."
@@ -64,13 +66,12 @@ if [ "${BASELINE:-0}" = "1" ]; then
   exit 0
 fi
 
-if [ -z "${CHANGED:-}" ]; then
+if [ "${#REGION_LIST[@]}" -eq 0 ]; then
   log "No feed updates. Nothing to do."
   exit 0
 fi
 
-log "Updated regions: $CHANGED — re-importing."
-IFS=',' read -ra REGION_LIST <<< "$CHANGED"
+log "Updated regions: ${REGION_LIST[*]} — re-importing."
 for region in "${REGION_LIST[@]}"; do
   [ -z "$region" ] && continue
   log "Re-importing GTFS for region: $region"

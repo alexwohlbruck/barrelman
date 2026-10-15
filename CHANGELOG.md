@@ -10,6 +10,16 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.10.17] - 2026-10-15
+
+### Fixed
+
+* **The nightly GTFS check re-imports updated feeds again.** When a feed in a
+  region defined by a bounding box changed upstream (the US region's Alaska
+  and Hawaii boxes, for one), Check for GTFS Updates split the box at its
+  commas and failed on the first number, so no updated schedule reached
+  transit routing. Changed regions are now passed along whole.
+
 ## [0.10.16] - 2026-10-15
 
 ### Fixed
