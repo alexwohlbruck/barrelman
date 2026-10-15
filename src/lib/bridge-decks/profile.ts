@@ -437,6 +437,37 @@ export function besideGround(centre: number[], left: number[], right: number[], 
   })
 }
 
+/**
+ * Where a grounded end's road is read beyond it (metres out, every `step`), the
+ * stretch fitted for its level, how far below that level the end's own ground
+ * must lie to be a hole, and the most a deck runs on to cross one.
+ */
+export const LANDING = { step: 2, reach: 40, from: 16, to: 36, hole: 1.5, run: 25 }
+
+/**
+ * The road a grounded end lands on, read from the ground `beyond` it (one
+ * sample every LANDING.step metres out). Lidar terrain has its bridges taken
+ * out, and often the abutments with them: the end of the way then lies in a
+ * hollow while the road a little farther out runs on at deck level. Null where
+ * the end's own ground is the road's; else the road's height and how far out
+ * the hollow ends, where the deck runs on to.
+ */
+export function landing(beyond: number[], end: number): { height: number; run: number } | null {
+  const fit = beyond.flatMap((z, j) => {
+    const s = (j + 1) * LANDING.step
+    return s >= LANDING.from && s <= LANDING.to && !Number.isNaN(z) ? [[s, z]] : []
+  })
+  if (fit.length < 3) return null
+  const [ms, mz] = [fit.reduce((a, [s]) => a + s, 0) / fit.length, fit.reduce((a, [, z]) => a + z, 0) / fit.length]
+  const grade = Math.max(-MAX_GRADE, Math.min(MAX_GRADE,
+    fit.reduce((a, [s, z]) => a + (s - ms) * (z - mz), 0) / (fit.reduce((a, [s]) => a + (s - ms) ** 2, 0) || 1)))
+  const level = (s: number) => mz + grade * (s - ms)
+  if (level(0) - end < LANDING.hole) return null
+  const out = beyond.findIndex((z, j) => z >= level((j + 1) * LANDING.step) - 0.5)
+  const run = out < 0 ? Infinity : (out + 1) * LANDING.step
+  return run > LANDING.run ? null : { height: level(run), run }
+}
+
 /** What a deck must stand clear of at a distance along it: an absolute height for its surface. */
 export type Need = { at: number; height: number }
 

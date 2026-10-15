@@ -22,6 +22,9 @@ import {
   heightAt,
   inside,
   joinNeighbours,
+  landing,
+  LANDING,
+  metresPerUnit,
   lngLat,
   meet,
   resample,
@@ -172,6 +175,8 @@ type Solved = {
   needs: Need[]
   /** The decks its ends rest on, and where. */
   on: Array<{ deck: Solved; at: Point }>
+  /** The road each grounded end lands on, where it lies beyond a hollow in the ground. */
+  lands: [Landing, Landing]
   /** The deck's own ends and OSM nodes, before resampling, so ends that share a node can be told apart from ends that merely lie close. */
   ends: [Point, Point]
   nodes: Set<string>
@@ -232,9 +237,37 @@ function piers(solved: Solved[]): number[][] {
   return out
 }
 
-/** Ground under each deck, loaded a few decks at a time and nearby decks together. */
-async function groundUnder(shaped: Chain[], edges: Array<[Point[], Point[]]>, ground: Ground): Promise<Array<number[] | null>> {
+type Landing = ReturnType<typeof landing>
+
+/** Points on the road beyond an end, every LANDING.step metres out along the deck's last segment. */
+function beyond(points: Point[], end: 0 | 1): Point[] {
+  const [a, b] = end ? [points[points.length - 2], points[points.length - 1]] : [points[1], points[0]]
+  const len = Math.hypot(b[0] - a[0], b[1] - a[1]) * metresPerUnit(b[1]) || 1
+  const out: Point[] = []
+  for (let s = LANDING.step; s <= LANDING.reach; s += LANDING.step) out.push([b[0] + ((b[0] - a[0]) * s) / len, b[1] + ((b[1] - a[1]) * s) / len])
+  return out
+}
+
+/**
+ * A deck's sides and end caps as stored. A grounded end reaches at least to
+ * its way's end, where the road on the ground takes over, and runs on over a
+ * hollow to the road it lands on.
+ */
+function endsOf(s: Solved, round: (v: number) => number): Pick<Deck, 'sides' | 'caps'> {
+  const run = s.lands.map(l => l?.run ?? 0)
+  const caps = s.chain.caps ?? [0, 0, 0, 0]
+  const ends = caps.map((c, k) => (s.grounded[k >> 1] ? Math.min(c, -run[k >> 1]) : c)) as Deck['caps'] & {}
+  const sides = s.chain.sides ?? (ends.some(Boolean) ? (s.chain.edges.map(e => s.chain.points.map(() => e)) as [number[], number[]]) : null)
+  return {
+    sides: sides ? (sides.map(side => side.map(round)) as [number[], number[]]) : null,
+    caps: sides ? (ends.map(c => round(c) || 0) as [number, number, number, number]) : null,
+  }
+}
+
+/** Ground under each deck, and the road each grounded end lands on, loaded a few decks at a time and nearby decks together. */
+async function groundUnder(shaped: Chain[], edges: Array<[Point[], Point[]]>, grounded: Array<[boolean, boolean]>, ground: Ground) {
   const out: Array<number[] | null> = shaped.map(() => null)
+  const lands: Array<[Landing, Landing]> = shaped.map(() => [null, null])
   // Z-order of the midpoints at about a tile's size, so consecutive batches mostly share tiles.
   const morton = ([x, y]: Point) => {
     const [xi, yi] = [Math.floor(x * 2 ** 15), Math.floor(y * 2 ** 15)]
@@ -247,11 +280,15 @@ async function groundUnder(shaped: Chain[], edges: Array<[Point[], Point[]]>, gr
   const read = (points: Point[]) => points.map(p => ground.at(p))
   for (let i = 0; i < order.length; i += GROUND_BATCH) {
     const batch = order.slice(i, i + GROUND_BATCH)
-    await ground.load(batch.flatMap(k => [...shaped[k].points, ...edges[k][0], ...edges[k][1]]))
-    for (const k of batch)
-      out[k] = filled(besideGround(read(shaped[k].points), read(edges[k][0]), read(edges[k][1]), along(shaped[k].points)))
+    const out_ = (k: number) => ([0, 1] as const).map(end => (grounded[k][end] ? beyond(shaped[k].points, end) : []))
+    await ground.load(batch.flatMap(k => [...shaped[k].points, ...edges[k][0], ...edges[k][1], ...out_(k).flat()]))
+    for (const k of batch) {
+      const g = filled(besideGround(read(shaped[k].points), read(edges[k][0]), read(edges[k][1]), along(shaped[k].points)))
+      out[k] = g
+      if (g) lands[k] = out_(k).map((pts, end) => (pts.length ? landing(read(pts), g[end ? g.length - 1 : 0]) : null)) as [Landing, Landing]
+    }
   }
-  return out
+  return { under: out, lands }
 }
 
 /**
@@ -301,7 +338,7 @@ export async function buildDecks(input: DeckInput, ground: Ground): Promise<Deck
     return widen({ ...c, sides: shape.sides, caps: shape.caps, edges: [Math.max(...shape.sides[0]), Math.max(...shape.sides[1])] }, STEP)
   })
   const edges = shaped.map(edgePoints)
-  const under = await groundUnder(shaped, edges, ground)
+  const { under, lands } = await groundUnder(shaped, edges, grounded, ground)
 
   // Lower layers first, so a deck over another clears it.
   const solved: Solved[] = []
@@ -312,9 +349,10 @@ export async function buildDecks(input: DeckInput, ground: Ground): Promise<Deck
     if (!g) continue
     const need = needs({ chain, d, g }, input, solved.filter(o => o.chain.layer < chain.layer))
     const own = decks[k].points
-    const z = solve({ ...chain, grounded: grounded[k] }, g, need)
+    const landed = lands[k].map(l => l?.height ?? null) as [number | null, number | null]
+    const z = solve({ ...chain, grounded: grounded[k] }, g, need, landed)
     solved.push({
-      chain, d, g, grounded: grounded[k], needs: need, z, on: [],
+      chain, d, g, grounded: grounded[k], needs: need, z, on: [], lands: lands[k],
       ends: [own[0], own[own.length - 1]], nodes: new Set(own.map(key)),
     })
   }
@@ -329,7 +367,7 @@ export async function buildDecks(input: DeckInput, ground: Ground): Promise<Deck
       const rests = ([0, 1] as const).map(i => (s.grounded[i] ? null : restingOn(s, i, solved)))
       s.on = rests.flatMap((r, i) => (r ? [{ deck: r.on, at: s.chain.points[i ? s.chain.points.length - 1 : 0] }] : []))
       if (!s.on.length) continue
-      const resting = rests.map(r => r?.height ?? null) as [number | null, number | null]
+      const resting = rests.map((r, i) => r?.height ?? s.lands[i]?.height ?? null) as [number | null, number | null]
       s.z = solve({ ...s.chain, grounded: s.grounded }, s.g, s.needs, resting)
     }
     for (let pass = 0; pass < SETTLE; pass++) joinNeighbours(solved)
@@ -356,8 +394,7 @@ export async function buildDecks(input: DeckInput, ground: Ground): Promise<Deck
       kind: s.chain.kind,
       layer: s.chain.layer,
       edges: s.chain.edges.map(round) as [number, number],
-      sides: s.chain.sides ? (s.chain.sides.map(side => side.map(round)) as [number[], number[]]) : null,
-      caps: s.chain.caps ? (s.chain.caps.map(round) as [number, number, number, number]) : null,
+      ...endsOf(s, round),
       grounded: s.grounded,
       length: round(s.d[s.d.length - 1]),
       points: s.chain.points,
