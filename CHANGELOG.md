@@ -18,6 +18,10 @@ does it — and the release pipeline turns it into the GitHub Release notes.
   side's line, a single yellow centre line on two-way bike paths, and bike and
   walker symbols. Their lines stop where a street crosses; the street's own
   lines run on.
+* **Golf courses.** A new `golf_features` detail source, also in the `detail`
+  bundle, serves tees, fairways, greens, rough, bunkers and driving ranges,
+  each hole's line, a point at its tee with the hole number and par, and the
+  pins.
 
 ### Changed
 

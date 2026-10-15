@@ -89,3 +89,15 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS geo_places_object_areas_geom_idx
                OR tags->>'landuse' = 'flowerbed'
                OR tags->>'natural' IN ('scrub', 'shrubbery')))
          OR (geom_type = 'point' AND tags->>'natural' = 'shrub'));
+
+CREATE INDEX CONCURRENTLY IF NOT EXISTS geo_places_golf_geom_idx
+  ON geo_places USING gist (geom)
+  WHERE (geom_type = 'area'
+         AND tags->>'golf' IN ('tee', 'fairway', 'green', 'rough', 'heavy_rough', 'bunker',
+                               'driving_range'))
+     OR (geom_type = 'line' AND tags->>'golf' = 'hole')
+     OR (geom_type = 'point' AND tags->>'golf' = 'pin');
+
+CREATE INDEX CONCURRENTLY IF NOT EXISTS geo_places_golf_tee_idx
+  ON geo_places USING gist (ST_StartPoint(geom))
+  WHERE geom_type = 'line' AND tags->>'golf' = 'hole' AND tags->>'ref' <> '';

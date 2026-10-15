@@ -481,6 +481,24 @@ postgres:
       buffer: 64
       clip_geom: true
 
+    # Golf course surfaces, hole lines, hole numbers and pins, from
+    # `golf_features` (see import/create-detail-views.sql).
+    golf_features:
+      schema: public
+      table: golf_features
+      srid: 4326
+      geometry_column: geom
+      geometry_type: GEOMETRY
+      id_column: fid
+      minzoom: 14
+      maxzoom: 16
+      properties:
+        kind: kind
+        ref: ref
+        par: par
+      buffer: 64
+      clip_geom: true
+
     object_lines:
       schema: public
       table: object_lines
