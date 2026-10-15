@@ -10,6 +10,19 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Added
+
+* **Signals and level crossings beside the road.** `road_glyphs` now carries
+  a point for each traffic signal mast, off the far right corner of every
+  approach to a signalled junction, and for each railway crossing gate,
+  flashing light post and crossbuck, clear of the tracks. Each is read from
+  OSM's signal and `crossing:*` tags.
+
+### Fixed
+
+* **Give way signs mapped along a two-way road face the right way.** A
+  `direction=forward` on a way with no `oneway` tag was read as backward.
+
 ## [0.10.17] - 2026-10-15
 
 ### Fixed
