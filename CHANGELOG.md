@@ -10,6 +10,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.10.17] - 2026-10-15
+
 ### Fixed
 
 * **The nightly GTFS check re-imports updated feeds again.** When a feed in a
