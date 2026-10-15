@@ -69,12 +69,17 @@ BEGIN
     SELECT o.geom FROM osm_replay.old_places o
     WHERE o.geom_type = 'line' AND o.categories && ARRAY['highway/footway', 'highway/path', 'highway/cycleway']
   ),
-  beside AS (
+  -- Same road-lines index probe per path as the lookups below (OFFSET 0).
+  beside AS MATERIALIZED (
     SELECT DISTINCT g.id, g.osm_id, g.geom
-    FROM walks w
-    CROSS JOIN LATERAL (SELECT 0.0003 / cos(radians(ST_Y(ST_Centroid(w.geom)))) as r) m
-    JOIN geo_places g ON g.geom && ST_Expand(w.geom, m.r) AND g.geom_type = 'line' AND g.osm_type = 'W'
-     AND road_is_marked_way(g.tags) AND ST_DWithin(g.geom, w.geom, m.r)
+    FROM walks w,
+         LATERAL (SELECT 0.0003 / cos(radians(ST_Y(ST_Centroid(w.geom)))) as r) m,
+         LATERAL (
+           SELECT g.id, g.osm_id, g.geom FROM geo_places g
+           WHERE g.geom && ST_Expand(w.geom, m.r) AND g.geom_type = 'line' AND g.tags ? 'highway' AND g.osm_type = 'W'
+             AND road_is_marked_way(g.tags) AND ST_DWithin(g.geom, w.geom, m.r)
+           OFFSET 0
+         ) g
     WHERE EXISTS (SELECT 1 FROM road_surfaces s WHERE s.geom && g.geom AND ST_Intersects(s.geom, ST_PointOnSurface(g.geom)))
       AND NOT EXISTS (SELECT 1 FROM relevant_new n WHERE n.id = g.id)
   ),
