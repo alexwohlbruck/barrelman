@@ -149,7 +149,7 @@ function abutment(pts: Point[], end: 0 | 1, rings: Point[][]): Point[] {
   const side = [at]
   for (const step of [1, -1])
     for (let k = at + step; Math.abs(k - at) < n; k += step) {
-      const [u, v] = [dir(k), dir(k - step)]
+      const [u, v] = [dir(k), dir(at)]
       if (u[0] * v[0] + u[1] * v[1] < STRAIGHT_ON) break
       side.push(k)
     }
@@ -199,7 +199,7 @@ export function shapeDecks(decks: Deck[], outlines: Outline[], grounded: Array<[
         // On the outline's side, which a way often ends on, or out past a skewed end: no reading.
         if (boundary === Infinity) continue
         // A skewed corner cutting into the carriageway near an end: the end's cap shapes it, not a notch in the side.
-        if (boundary < deck.edges[side] - CORNER_INSET && Math.min(fromEnd(i, 0), fromEnd(i, 1)) <= CAP_MAX) continue
+        if (boundary < deck.edges[side] - CORNER_INSET && Math.min(fromEnd(i, 0), fromEnd(i, 1)) <= CAP_MAX / 2 && d[n - 1] > CAP_MAX * 2) continue
         reached[side][i] = boundary >= deck.edges[side] - CORNER_INSET
         let edge = boundary
         for (const o of others) {

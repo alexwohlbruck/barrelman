@@ -138,6 +138,10 @@ describe('landing', () => {
     expect(land?.run).toBeLessThanOrEqual(14)
   })
 
+  it('never takes a road climbing steeper than a deck may for a hollow', () => {
+    for (const grade of [0.07, 0.1, 0.15]) expect(landing(road(s => 200 + s * grade), 200)).toBeNull()
+  })
+
   it('leaves an end alone where the road beyond carries on at its height, or a long way down', () => {
     expect(landing(road(s => 200 + s * 0.03), 200)).toBeNull()
     expect(landing(road(s => (s < 30 ? 195 : 205)), 195)).toBeNull()

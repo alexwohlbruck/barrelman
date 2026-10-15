@@ -246,7 +246,10 @@ type Landing = ReturnType<typeof landing>
  * Points on the road beyond an end, every LANDING.step metres out: along the
  * way on the ground that carries on from it, or straight on where none does.
  */
-export function beyond(points: Point[], end: 0 | 1, roads: Point[][] = []): Point[] {
+/** Least cosine between a deck's end and the way it reads the road beyond along. */
+const ONWARD_COS = Math.SQRT1_2
+
+export function beyond(points: Point[], end: 0 | 1, roads: Point[][] = [], road = true): Point[] {
   const [a, b] = end ? [points[points.length - 2], points[points.length - 1]] : [points[1], points[0]]
   const out: [number, number] = [b[0] - a[0], b[1] - a[1]]
   const scale = metresPerUnit(b[1])
@@ -262,6 +265,9 @@ export function beyond(points: Point[], end: 0 | 1, roads: Point[][] = []): Poin
       if (cos > best) [best, path] = [cos, run]
     }
   }
+  // A road's end reads only a way carrying on within about 45 degrees, and nothing at a junction with none; a path reads straight on.
+  if (road && best < ONWARD_COS && (best > 0 || roads.some(r => r.some(p => Math.hypot(p[0] - b[0], p[1] - b[1]) * scale < 0.05)))) return []
+  if (best < ONWARD_COS) path = [b, [b[0] + out[0] * 1e3, b[1] + out[1] * 1e3]]
   // A way that ends before the reach runs on straight.
   const [p, q] = [path[path.length - 2], path[path.length - 1]]
   path = [...path, [q[0] + (q[0] - p[0]) * 1e3, q[1] + (q[1] - p[1]) * 1e3]]
@@ -280,6 +286,17 @@ export function beyond(points: Point[], end: 0 | 1, roads: Point[][] = []): Poin
     samples.push([path[k - 1][0] + (path[k][0] - path[k - 1][0]) * t, path[k - 1][1] + (path[k][1] - path[k - 1][1]) * t])
   }
   return samples
+}
+
+/** Farthest, in metres, the road a deck runs on to may stray from the deck's own line before it is not where the deck runs. */
+const OFF_LINE = 2
+
+/** Metres the farthest of some points beyond an end lies off the deck's line run on straight. */
+function offLine(points: Point[], end: 0 | 1, beyondPts: Point[]): number {
+  const [a, b] = end ? [points[points.length - 2], points[points.length - 1]] : [points[1], points[0]]
+  const len = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1
+  const scale = metresPerUnit(b[1])
+  return Math.max(0, ...beyondPts.map(p => Math.abs(((p[0] - b[0]) * (b[1] - a[1]) - (p[1] - b[1]) * (b[0] - a[0])) / len) * scale))
 }
 
 /**
@@ -303,10 +320,10 @@ function endsOf(s: Solved, round: (v: number) => number): Pick<Deck, 'sides' | '
  * grounded end, so it meets the road at the road's own grade rather than
  * turning at the end. Over a hollow the road is taken at the level it lands on.
  */
-function eased(s: Solved): number[] {
+function eased(s: Solved, onGround: Set<string>): number[] {
   const n = s.z.length
   const road = (end: 0 | 1) => {
-    if (!s.grounded[end] || !s.roads[end].length) return []
+    if (!s.grounded[end] || !s.roads[end].length || !onGround.has(key(s.ends[end]))) return []
     const land = s.lands[end]
     return s.roads[end].map((g, j) => ({ at: (j + 1) * LANDING.step, z: land && (j + 1) * LANDING.step <= land.run ? land.height : g }))
       .filter(p => !Number.isNaN(p.z))
@@ -324,7 +341,8 @@ function eased(s: Solved): number[] {
     return from < SETTLE_RUN ? by * (1 - from / SETTLE_RUN) ** 2 : 0
   }
   const [by0, by1] = [s.z[0] - out[0], s.z[n - 1] - out[n - 1]]
-  return out.map((v, i) => v + fade(i, 0, by0) + fade(i, 1, by1))
+  const under = steady(s.g, s.d)
+  return out.map((v, i) => Math.max(v + fade(i, 0, by0) + fade(i, 1, by1), under[i] - TERRAIN_SLACK))
 }
 
 /** Metres over which an eased end is brought back onto the road it lands on. */
@@ -347,14 +365,18 @@ async function groundUnder(shaped: Chain[], edges: Array<[Point[], Point[]]>, gr
   const read = (points: Point[]) => points.map(p => ground.at(p))
   for (let i = 0; i < order.length; i += GROUND_BATCH) {
     const batch = order.slice(i, i + GROUND_BATCH)
-    const out_ = (k: number) => ([0, 1] as const).map(end => (grounded[k][end] ? beyond(shaped[k].points, end, onward) : []))
+    const out_ = (k: number) => ([0, 1] as const).map(end => (grounded[k][end] ? beyond(shaped[k].points, end, onward, shaped[k].kind === 'road') : []))
     await ground.load(batch.flatMap(k => [...shaped[k].points, ...edges[k][0], ...edges[k][1], ...out_(k).flat()]))
     for (const k of batch) {
       const g = filled(besideGround(read(shaped[k].points), read(edges[k][0]), read(edges[k][1]), along(shaped[k].points)))
       out[k] = g
       if (!g) continue
-      roads[k] = out_(k).map(read) as [number[], number[]]
-      lands[k] = roads[k].map((r, end) => (r.length ? landing(r, g[end ? g.length - 1 : 0]) : null)) as [Landing, Landing]
+      const pts = out_(k)
+      roads[k] = pts.map(read) as [number[], number[]]
+      lands[k] = roads[k].map((r, end) => {
+        const land = r.length ? landing(r, g[end ? g.length - 1 : 0]) : null
+        return land && offLine(shaped[k].points, end as 0 | 1, pts[end].slice(0, Math.round(land.run / LANDING.step))) <= OFF_LINE ? land : null
+      }) as [Landing, Landing]
     }
   }
   return { under: out, lands, roads }
@@ -442,7 +464,7 @@ export async function buildDecks(input: DeckInput, ground: Ground): Promise<Deck
     }
     for (let pass = 0; pass < SETTLE; pass++) joinNeighbours(solved)
   }
-  for (const s of solved) s.z = eased(s)
+  for (const s of solved) s.z = eased(s, input.onGround)
   // Easing moves twins a few centimetres apart; side by side, they meet exactly.
   joinNeighbours(solved, undefined, EASED)
   const rows = piers(solved)

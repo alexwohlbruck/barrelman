@@ -461,13 +461,17 @@ export function landing(beyond: number[], end: number): { height: number; run: n
   })
   if (fit.length < 3) return null
   const [ms, mz] = [fit.reduce((a, [s]) => a + s, 0) / fit.length, fit.reduce((a, [, z]) => a + z, 0) / fit.length]
-  const grade = Math.max(-MAX_GRADE, Math.min(MAX_GRADE,
-    fit.reduce((a, [s, z]) => a + (s - ms) * (z - mz), 0) / (fit.reduce((a, [s]) => a + (s - ms) ** 2, 0) || 1)))
+  const grade = fit.reduce((a, [s, z]) => a + (s - ms) * (z - mz), 0) / (fit.reduce((a, [s]) => a + (s - ms) ** 2, 0) || 1)
+  // A road climbing steeper than a deck may is a hill, not a hollow.
+  if (Math.abs(grade) > MAX_GRADE) return null
   const level = (s: number) => mz + grade * (s - ms)
+  if (fit.some(([s, z]) => Math.abs(z - level(s)) > LANDING.hole)) return null
   if (level(0) - end < LANDING.hole) return null
   const out = beyond.findIndex((z, j) => z >= level((j + 1) * LANDING.step) - 0.5)
   const run = out < 0 ? Infinity : (out + 1) * LANDING.step
-  return run > LANDING.run ? null : { height: level(run), run }
+  // A hollow dips below the road it lies in, between the end and the road coming back up.
+  const dipped = beyond.slice(0, Math.max(0, out)).some((z, j) => z < level((j + 1) * LANDING.step) - LANDING.hole)
+  return run > LANDING.run || !(dipped || out === 0) ? null : { height: level(run), run }
 }
 
 /** What a deck must stand clear of at a distance along it: an absolute height for its surface. */
