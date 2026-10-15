@@ -1,6 +1,6 @@
 /**
  * Builds bridge decks for structures that carry more than one way, in a
- * throwaway schema on flat terrain: a street with a tram running in each
+ * throwaway schema on ground falling 1 in 10 to the south: a street with a tram running in each
  * carriageway, twin tracks on one viaduct, and a carriageway meeting its slip
  * road at a gore on the bridge.
  *
@@ -40,7 +40,8 @@ const ways: [number, string, Record<string, string>][] = [
   [21, line([-80.826, 35.235], [-80.8275, 35.235 + 14 * M]), { highway: 'secondary_link', oneway: 'yes', ...bridge }],
 ]
 
-const flat = () => new Dem(async () => ({ size: 4, data: new Float32Array(16).fill(200) }))
+// Each 250 m pixel row 25 m lower than the one north of it, so twin tracks 4 m apart stand on ground 0.4 m apart.
+const sloped = () => new Dem(async () => ({ size: 4, data: Float32Array.from({ length: 16 }, (_, i) => 200 - 25 * Math.floor(i / 4)) }))
 const run = DATABASE_URL ? describe : describe.skip
 let sql: postgres.Sql
 
@@ -65,7 +66,7 @@ run('bridge decks for shared structures', () => {
       await sql`INSERT INTO geo_places (id, osm_type, osm_id, categories, tags, geom, geom_type)
         VALUES (${'way/' + id}, 'W', ${id}, ${categories}, ${sql.json(tags)}, ST_GeomFromText(${wkt}, 4326), 'line')`
     }
-    await buildArea(sql, flat(), [CELL], 0.02)
+    await buildArea(sql, sloped(), [CELL], 0.02)
   }, 60_000)
 
   afterAll(async () => {
@@ -83,11 +84,13 @@ run('bridge decks for shared structures', () => {
   })
 
   test('twin tracks on one viaduct stand at one height', async () => {
-    const [a] = await holding(10)
-    const [b] = await holding(11)
-    expect(a.id).not.toBe(b.id)
-    expect(Math.max(...a.heights)).toBeGreaterThan(205)
-    expect(Math.max(...a.heights)).toBeCloseTo(Math.max(...b.heights), 1)
+    const at = async (way: number, lng: number) => {
+      const [{ z }] = await sql<{ z: number }[]>`
+        SELECT heights[round(ST_LineLocatePoint(geom, ST_SetSRID(ST_MakePoint(${lng}, 35.23), 4326)) * length / step)::int + 1] AS z
+        FROM bridge_decks WHERE ${String(way)} = ANY(ways::text[])`
+      return z
+    }
+    for (const lng of [-80.8311, -80.8305, -80.8295]) expect(Math.abs((await at(10, lng)) - (await at(11, lng)))).toBeLessThan(0.05)
   })
 
   test('a carriageway is never folded back onto its slip road', async () => {
