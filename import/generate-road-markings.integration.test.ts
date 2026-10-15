@@ -224,6 +224,48 @@ const ways: [number, string, Record<string, string>][] = [
   [640, line([-74.640, 40.711], [-74.640, 40.712]), { highway: 'secondary', oneway: 'yes', lanes: '2' }],
   [641, line([-74.6405, 40.712], [-74.640, 40.712], [-74.6395, 40.712]), { highway: 'residential', lanes: '2' }],
   [642, line([-74.640, 40.7114], [-74.640, 40.7117]), { highway: 'footway', footway: 'crossing', 'crossing:markings': 'zebra' }],
+  // Two-way streets drawn head to head, tail to tail, past ramps joining and
+  // leaving at the join, and out of a two-way left-turn lane, each with its lanes shared
+  // out differently either side.
+  [800, line([-74.480, 40.7140], [-74.480, 40.7120]), { highway: 'secondary', lanes: '2', 'cycleway:right': 'lane' }],
+  [801, line([-74.480, 40.7140], [-74.480, 40.7165]), { highway: 'secondary', lanes: '3', 'lanes:forward': '2', 'lanes:backward': '1' }],
+  [810, line([-74.485, 40.7120], [-74.485, 40.7140]), { highway: 'secondary', lanes: '3', 'lanes:forward': '1', 'lanes:backward': '2' }],
+  [811, line([-74.485, 40.7165], [-74.485, 40.7140]), { highway: 'secondary', lanes: '2' }],
+  [820, line([-74.490, 40.7120], [-74.490, 40.7140]), { highway: 'primary', lanes: '4', 'lanes:forward': '1', 'lanes:backward': '3' }],
+  [821, line([-74.490, 40.7140], [-74.490, 40.7165]), { highway: 'primary', lanes: '5', 'lanes:forward': '2', 'lanes:backward': '3' }],
+  [822, line([-74.4897, 40.7125], [-74.490, 40.7140]), { highway: 'primary_link', oneway: 'yes', lanes: '1' }],
+  [823, line([-74.490, 40.7140], [-74.4897, 40.7155]), { highway: 'primary_link', oneway: 'yes', lanes: '1' }],
+  [830, line([-74.495, 40.7120], [-74.495, 40.7140]), { highway: 'secondary', lanes: '3', 'lanes:forward': '1', 'lanes:backward': '1',
+    'lanes:both_ways': '1', 'turn:lanes:both_ways': 'left' }],
+  [831, line([-74.495, 40.7140], [-74.495, 40.7165]), { highway: 'secondary', lanes: '2' }],
+  // A street bending 45° at the join, with nothing else meeting it there.
+  [850, line([-74.500, 40.7120], [-74.500, 40.7140]), { highway: 'secondary', lanes: '3', 'lanes:forward': '2', 'lanes:backward': '1' }],
+  [851, line([-74.500, 40.7140], [-74.4985, 40.7151]), { highway: 'secondary', lanes: '2' }],
+  // A short way whose lanes are still moving over as it opens into a two-way
+  // left-turn lane.
+  [860, line([-74.505, 40.7120], [-74.505, 40.7135]), { highway: 'primary', lanes: '4', 'lanes:forward': '1', 'lanes:backward': '3', maxspeed: '45 mph' }],
+  [861, line([-74.505, 40.7135], [-74.505, 40.71395]), { highway: 'primary', lanes: '6', 'lanes:forward': '2', 'lanes:backward': '4', maxspeed: '45 mph' }],
+  [862, line([-74.505, 40.71395], [-74.505, 40.7165]), { highway: 'primary', lanes: '5', 'lanes:forward': '2', 'lanes:backward': '2',
+    'lanes:both_ways': '1', 'turn:lanes:both_ways': 'left', maxspeed: '45 mph' }],
+  // A centre turn lane ending into a short way whose taper runs on into the
+  // next; one ending into a way drawn tail to tail with it; and a four-lane
+  // street with bike lanes meeting a plain two-lane one tail to tail.
+  [870, line([-74.510, 40.7120], [-74.510, 40.7140]), { highway: 'secondary', lanes: '3', 'lanes:forward': '1', 'lanes:backward': '1',
+    'lanes:both_ways': '1', 'turn:lanes:both_ways': 'left' }],
+  [871, line([-74.510, 40.7140], [-74.510, 40.71418]), { highway: 'secondary', lanes: '2' }],
+  [872, line([-74.510, 40.71418], [-74.510, 40.7165]), { highway: 'secondary', lanes: '3', 'lanes:forward': '2', 'lanes:backward': '1' }],
+  [880, line([-74.515, 40.7120], [-74.515, 40.7140]), { highway: 'secondary', lanes: '3', 'lanes:forward': '1', 'lanes:backward': '1',
+    'lanes:both_ways': '1', 'turn:lanes:both_ways': 'left' }],
+  [881, line([-74.515, 40.7165], [-74.515, 40.7140]), { highway: 'secondary', lanes: '2' }],
+  [890, line([-74.520, 40.7120], [-74.520, 40.7140]), { highway: 'secondary', lanes: '2' }],
+  [891, line([-74.520, 40.7165], [-74.520, 40.7140]), { highway: 'secondary', lanes: '4', 'cycleway:both': 'lane' }],
+  // Tail to tail at a signalled side street.
+  [900, line([-74.525, 40.7120], [-74.525, 40.7140]), { highway: 'secondary', lanes: '2' }],
+  [901, line([-74.525, 40.7165], [-74.525, 40.7140]), { highway: 'secondary', lanes: '3', 'lanes:forward': '2', 'lanes:backward': '1' }],
+  [902, line([-74.5255, 40.7140], [-74.525, 40.7140]), { highway: 'residential', lanes: '2' }],
+  // The same tail to tail, 22 m short of the cell boundary at 40.718.
+  [840, line([-74.012, 40.7155], [-74.012, 40.7178]), { highway: 'secondary', lanes: '3', 'lanes:forward': '1', 'lanes:backward': '2' }],
+  [841, line([-74.012, 40.7205], [-74.012, 40.7178]), { highway: 'secondary', lanes: '2' }],
 ]
 
 // Painted areas, nodes on roads, and the roads they lie on (OSM wiki schemes).
@@ -299,6 +341,7 @@ run('generate-road-markings.sql', () => {
       await sql`INSERT INTO geo_places VALUES (${id}, ${Number(id.slice(1))}, ${sql.json(tags)}, ST_GeomFromText(${wkt}, 4326), ${type}, ${id[0]})`
     }
     await sql`INSERT INTO geo_places VALUES ('N8', 8, ${sql.json({ highway: 'traffic_signals' })}, ST_SetSRID(ST_MakePoint(${SB_X}, ${STREET_Y}), 4326), 'point', 'N')`
+    await sql`INSERT INTO geo_places VALUES ('N903', 903, ${sql.json({ highway: 'traffic_signals' })}, ST_SetSRID(ST_MakePoint(-74.525, 40.714), 4326), 'point', 'N')`
     await sql`INSERT INTO geo_places VALUES ('N433', 433, ${sql.json({ highway: 'traffic_signals' })}, ST_SetSRID(ST_MakePoint(-74.440, 40.712), 4326), 'point', 'N')`
     for (const [id, x] of [[604, -74.600], [614, -74.610], [634, -74.630], [644, -74.640]]) {
       await sql`INSERT INTO geo_places VALUES (${'N' + id}, ${id}, ${sql.json({ highway: 'traffic_signals' })}, ST_SetSRID(ST_MakePoint(${x}, 40.712), 4326), 'point', 'N')`
@@ -621,7 +664,7 @@ run('generate-road-markings.sql', () => {
   })
 
   test('gives back no band, rather than failing, for a line it cannot taper', async () => {
-    const [{ band }] = await sql`SELECT road_profile_band('POINT(0 0)'::geometry, 1, 10, 1, 0, 3, 2, 10, 0, 0, 0, 0, 1, 5) as band`
+    const [{ band }] = await sql`SELECT road_profile_band('POINT(0 0)'::geometry, 1, 10, 1, 0, 3, 2, 10, 0, 0, 0, 0, 1, 1, 5) as band`
     expect(band).toBeNull()
   })
 
@@ -749,6 +792,117 @@ run('generate-road-markings.sql', () => {
       const after = await bikeInner(-74.460, north(40.7130, 1), side)
       expect(Math.abs(after - before)).toBeLessThan(0.15)
     }
+  })
+
+  // Centre paint crossing a probe square across a north-south street at `y`,
+  // in metres east of its way.
+  const centreAt = async (x: number, y: number) => (await sql`
+    SELECT array_agg((ST_X(p.geom) - ${x}) * 84300 ORDER BY ST_X(p.geom)) as at
+    FROM road_markings m,
+         LATERAL ST_Dump(ST_Intersection(m.geom, ST_SetSRID(ST_MakeLine(ST_MakePoint(${east(x, -10)}, ${y}), ST_MakePoint(${east(x, 10)}, ${y})), 4326))) p
+    WHERE m.kind = 'centre' AND GeometryType(p.geom) = 'POINT'`)[0].at as number[] | null ?? []
+  // Every centre line a metre on has one within `step` of it a metre back, and
+  // the other way round: none jumps across, starts or stops along the way.
+  const centreRunsOn = async (x: number, y0: number, y1: number, step = 0.3) => {
+    let before = await centreAt(x, y0)
+    expect(before.length).toBeGreaterThan(0)
+    for (let m = 1; north(y0, m) <= y1; m++) {
+      const here = await centreAt(x, north(y0, m))
+      for (const o of here) expect(Math.min(...before.map(b => Math.abs(b - o)))).toBeLessThan(step)
+      for (const b of before) expect(Math.min(...here.map(o => Math.abs(b - o)))).toBeLessThan(step)
+      before = here
+    }
+  }
+
+  describe('a centre line across a join', () => {
+    test('runs on where two two-way ways are drawn head to head', async () => {
+      await centreRunsOn(-74.480, north(40.7140, -40), north(40.7140, 100))
+    })
+
+    test('runs on where two two-way ways are drawn tail to tail', async () => {
+      await centreRunsOn(-74.485, north(40.7140, -100), north(40.7140, 40))
+    })
+
+    test('runs on past ramps joining and leaving at the join', async () => {
+      await centreRunsOn(-74.490, north(40.7140, -20), north(40.7140, 100))
+    })
+
+    test('closes the far side of a two-way left-turn lane in on it where the lane ends', async () => {
+      await centreRunsOn(-74.495, north(40.7140, -40), north(40.7140, 100), 0.4)
+      expect((await centreAt(-74.495, north(40.7140, 100))).length).toBe(1)
+    })
+
+    test('opens a left-turn lane\'s edges either side of the centre line, as the lanes beside move over', async () => {
+      await centreRunsOn(-74.505, north(40.71395, -10), north(40.71395, 10), 0.25)
+      // Its edges' solid and dashed lines stand either side of where the double was.
+      const [double] = await centreAt(-74.505, north(40.71395, -0.5))
+      const edges = await centreAt(-74.505, north(40.71395, 0.5))
+      expect(Math.abs(Math.min(...edges) - (double - 0.14))).toBeLessThan(0.03)
+      expect(Math.abs(Math.max(...edges) - (double + 0.14))).toBeLessThan(0.03)
+    })
+
+    test('closes a centre turn lane\'s far side in on the centre line through a short way and on', async () => {
+      await centreRunsOn(-74.510, north(40.7140, -40), north(40.7140, 100), 0.4)
+      expect((await centreAt(-74.510, north(40.7140, 100))).length).toBe(1)
+    })
+
+    test('closes a centre turn lane\'s far side in on the centre line of a way drawn tail to tail', async () => {
+      await centreRunsOn(-74.515, north(40.7140, -40), north(40.7140, 100), 0.4)
+      expect((await centreAt(-74.515, north(40.7140, 100))).length).toBe(1)
+    })
+
+    test('ends the lanes and bike lanes of a way drawn tail to tail where they have closed', async () => {
+      await centreRunsOn(-74.520, north(40.7140, -40), north(40.7140, 100))
+      const lanes = (m0: number, m1: number) => sql`
+        SELECT count(*)::int as n FROM road_markings
+        WHERE kind = 'lane' AND ST_Intersects(geom, ST_MakeEnvelope(${east(-74.520, -12)}, ${north(40.7140, m0)}, ${east(-74.520, 12)}, ${north(40.7140, m1)}, 4326))`
+      expect((await lanes(80, 110))[0].n).toBeGreaterThan(0)
+      expect((await lanes(0, 15))[0].n).toBe(0)
+      // The bike lanes narrow to nothing at the kerbs of the way they meet.
+      const [{ w }] = await sql`
+        SELECT coalesce(max(ST_Length(ST_Intersection(geom, ST_SetSRID(ST_MakeLine(ST_MakePoint(${east(-74.520, -12)}, ${north(40.7140, 1)}),
+                                                                           ST_MakePoint(${east(-74.520, 12)}, ${north(40.7140, 1)})), 4326))) * 84300), 0) as w
+        FROM road_markings WHERE kind = 'bike_lane'`
+      expect(w).toBeLessThan(0.3)
+      // and halfway along their taper they stand halfway in.
+      for (const side of [-1, 1] as const) {
+        const inner = await bikeInner(-74.520, north(40.7140, 17), side)
+        expect(inner).toBeGreaterThan(3.6)
+        expect(inner).toBeLessThan(6.3)
+      }
+      const k = await kerbsAt(-74.520, north(40.7140, 1))
+      expect(Math.abs(k.l + 3.3)).toBeLessThan(0.3)
+      expect(Math.abs(k.r - 3.3)).toBeLessThan(0.3)
+    })
+
+    test('stands a stop line across the lanes where a taper at the way\'s end has them', async () => {
+      const [stop] = await sql`
+        SELECT (ST_XMin(geom) - ${-74.525}) * 84300 as l, (ST_XMax(geom) - ${-74.525}) * 84300 as r, ST_Y(ST_Centroid(geom)) as y
+        FROM road_markings WHERE kind = 'stop' AND geom && ST_MakeEnvelope(${east(-74.525, -10)}, ${north(40.7140, 2)}, ${east(-74.525, 10)}, ${north(40.7140, 30)}, 4326)`
+      expect(stop).toBeDefined()
+      const [centre] = await centreAt(-74.525, north(stop.y, 0.6))
+      expect(Math.min(Math.abs(stop.l - centre), Math.abs(stop.r - centre))).toBeLessThan(0.4)
+    })
+
+    test('runs on round a bend at the join', async () => {
+      // Each end there meets another piece's end.
+      const ends = await sql`
+        WITH p AS (SELECT row_number() OVER () as id, d.geom FROM road_markings m, ST_Dump(m.geom) d
+                   WHERE m.kind = 'centre' AND ST_DWithin(m.geom, ST_SetSRID(ST_MakePoint(-74.500, 40.7140), 4326), 0.0003)),
+             e AS (SELECT id, pt FROM p, LATERAL (VALUES (ST_StartPoint(geom)), (ST_EndPoint(geom))) v(pt)
+                   WHERE ST_DWithin(pt, ST_SetSRID(ST_MakePoint(-74.500, 40.7140), 4326), 0.00005))
+        SELECT a.id, min(ST_Distance(a.pt::geography, b.pt::geography)) as gap FROM e a JOIN e b ON b.id <> a.id GROUP BY a.id`
+      expect(ends.length).toBe(2)
+      for (const e of ends) expect(e.gap).toBeLessThan(0.05)
+    })
+
+    test('shifts over a taper, not at once', async () => {
+      // 1.65 m across: a 25 mph taper, at least 30 m
+      const at = async (m: number) => (await centreAt(-74.480, north(40.7140, m)))[0]
+      expect(Math.abs((await at(-1)) - (await at(1)))).toBeLessThan(0.15)
+      expect(Math.abs((await at(60)) - (await at(1)))).toBeGreaterThan(1.5)
+      for (let m = 1; m < 40; m += 5) expect(Math.abs((await at(m + 5)) - (await at(m)))).toBeLessThan(0.5)
+    })
   })
 
   test('keeps a street\'s kerbs down a block whose lanes are shared out differently from way to way', async () => {
@@ -1287,8 +1441,10 @@ run('generate-road-markings.sql', () => {
       return out
     }
     let blockRef: { l: number; r: number }[] = []
+    const centreRef: number[][] = []
     beforeAll(async () => {
       blockRef = await blockProfile()
+      for (let m = -60; m <= 40; m += 4) centreRef.push(await centreAt(-74.012, north(40.7178, m)))
       ;[medianBefore] = await median()
       ;[barsBefore] = await bars()
       // The ramp as the full build drew it.
@@ -1359,6 +1515,16 @@ run('generate-road-markings.sql', () => {
       expect(Math.abs(after.m - barsBefore.m)).toBeLessThan(0.05)
       const [{ moved }] = await sql`SELECT ST_HausdorffDistance(${after.g}::geometry, ${barsBefore.g}::geometry) * 84300 as moved`
       expect(moved).toBeLessThan(0.05)
+    })
+
+    test('ease a centre line into a way drawn tail to tail across their boundary as one build does', async () => {
+      const after: number[][] = []
+      for (let m = -60; m <= 40; m += 4) after.push(await centreAt(-74.012, north(40.7178, m)))
+      for (const [i, a] of after.entries()) {
+        expect(a.length).toBe(centreRef[i].length)
+        for (const [k, o] of a.entries()) expect(Math.abs(o - centreRef[i][k])).toBeLessThan(0.05)
+      }
+      await centreRunsOn(-74.012, north(40.7178, -60), north(40.7178, 40))
     })
 
     test('meet without a gap or an overlap', async () => {

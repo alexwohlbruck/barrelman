@@ -46,6 +46,10 @@ does it — and the release pipeline turns it into the GitHub Release notes.
   square line, stepped along the crosswalk.
 * Scraps of bus or bike lane paint under 5 m long are no longer left inside a
   junction.
+* **Centre lines run on unbroken where a two-way road is split into ways.**
+  The double yellow no longer jumps sideways where two ways were drawn in
+  opposite directions or a ramp joins at the split; it shifts over a taper,
+  and where a centre turn lane ends its far edge closes in on the centre line.
 
 ## [0.10.17] - 2026-10-15
 
