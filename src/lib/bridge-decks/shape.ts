@@ -122,16 +122,38 @@ function despike(values: number[]): number[] {
   })
 }
 
+/** Most an abutment's side may bend between its segments, as a cosine: within about 25 degrees it is one side drawn in pieces. */
+const STRAIGHT_ON = 0.9
+
 /**
  * The side of an outline a deck's end crosses (or would, run on CAP_MAX past
- * it), by its first point: its abutment, which a square line near a skewed end
- * would otherwise leave through instead of the deck's side.
+ * it), as the first points of its segments: the one crossed and those running
+ * on straight from it either way, since a side is often drawn in pieces. A
+ * square line near a skewed end would otherwise leave through the next piece
+ * instead of the deck's side.
  */
-function abutment(pts: Point[], end: 0 | 1, rings: Point[][]): Point | null {
+function abutment(pts: Point[], end: 0 | 1, rings: Point[][]): Point[] {
   const i = end ? pts.length - 1 : 0
   const out = end ? frame(pts, i).t : neg(frame(pts, i).t)
   const hit = cross(pts[i], within(pts[i], rings) ? out : neg(out), rings)
-  return hit.metres <= CAP_MAX ? hit.start : null
+  if (hit.metres > CAP_MAX || !hit.start) return []
+  const ring = rings.find(r => r.includes(hit.start!))
+  if (!ring) return [hit.start]
+  const n = ring.length - 1
+  const dir = (k: number) => {
+    const [a, b] = [ring[((k % n) + n) % n], ring[(((k + 1) % n) + n) % n]]
+    const len = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1
+    return [(b[0] - a[0]) / len, (b[1] - a[1]) / len]
+  }
+  const at = ring.indexOf(hit.start)
+  const side = [at]
+  for (const step of [1, -1])
+    for (let k = at + step; Math.abs(k - at) < n; k += step) {
+      const [u, v] = [dir(k), dir(k - step)]
+      if (u[0] * v[0] + u[1] * v[1] < STRAIGHT_ON) break
+      side.push(k)
+    }
+  return side.map(k => ring[((k % n) + n) % n])
 }
 
 /**
@@ -169,7 +191,7 @@ export function shapeDecks(decks: Deck[], outlines: Outline[], grounded: Array<[
     const reached: [boolean[], boolean[]] = [new Array(n).fill(false), new Array(n).fill(false)]
     for (let i = 0; i < n; i++) {
       if (home[i] < 0) continue
-      const skip = new Set(([0, 1] as const).flatMap(end => (abutments[end] && fromEnd(i, end) <= CAP_MAX ? [abutments[end]!] : [])))
+      const skip = new Set(([0, 1] as const).flatMap(end => (fromEnd(i, end) <= CAP_MAX ? abutments[end] : [])))
       const { t, n: left } = frame(pts, i)
       for (const side of [0, 1] as const) {
         const dir = side ? neg(left) : left
