@@ -154,18 +154,15 @@ function leaving(w: Way, p: Point): Point {
 
 /** Least turn, as the cosine between the two ways leaving a node, at which a road counts as carrying straight on. */
 const ONWARD = -0.5
-/** Most a road may turn at a node into a road of another class, as that cosine: sharper, it is a gore, not the road running on. */
+/** Most a chain may turn at a node, as that cosine: sharper, two roads or tracks part at a gore or a turnout. A path may double back at a landing. */
 const FOLD = 0
-
-const roadClass = (w: Way) => w.road?.split('/')[0]
 
 /**
  * Ways joined end to end into chains, one per roadway. OSM ways share their
  * end nodes, so ends match exactly. Only ways of one kind and layer join, so
  * stacked decks never do; where three or more meet, the pair that carries one
  * road on (same class and ref or name, turning no sharper than ONWARD) joins,
- * else the straightest pair, and the rest end there. A carriageway never
- * folds back onto the slip road it meets at a gore.
+ * else the straightest pair, and the rest end there. Only a path folds back.
  */
 export function chains(ways: Way[]): Chain[] {
   // By id, so a tie between pairs goes the same way whatever order the rows came in.
@@ -184,8 +181,7 @@ export function chains(ways: Way[]): Chain[] {
       for (let j = i + 1; j < like.length; j++) {
         const [u, v] = [leaving(like[i], p), leaving(like[j], p)]
         const dot = u[0] * v[0] + u[1] * v[1]
-        const [ci, cj] = [roadClass(like[i]), roadClass(like[j])]
-        if (dot > FOLD && from.kind === 'road' && ci && cj && ci !== cj) continue
+        if (dot > FOLD && from.kind !== 'path') continue
         const same = like[i].road !== undefined && like[i].road === like[j].road && dot <= ONWARD
         if ((same ? 2 : 0) - dot > score) [best, score] = [[like[i], like[j]], (same ? 2 : 0) - dot]
       }
@@ -346,12 +342,7 @@ export function absorbPaths(decks: Chain[]): Chain[] {
   return [...roads, ...kept]
 }
 
-/**
- * Tracks laid in a road bridge's carriageway (a street-running tram) folded
- * into its deck, drawn on the road rather than as a deck inside it: most of
- * the track within the road's reach, none of it off to one side, and no more
- * than RUN_PAST beyond either end, where OSM splits the two ways apart.
- */
+/** Tracks in a road bridge's carriageway (a street-running tram) folded into its deck: mostly in its reach, never off to one side, at most RUN_PAST past its ends. */
 export function absorbTracks(decks: Chain[]): Chain[] {
   const roads = decks.filter(d => d.kind === 'road').map(d => ({ ...d, ways: [...d.ways] }))
   const kept: Chain[] = []

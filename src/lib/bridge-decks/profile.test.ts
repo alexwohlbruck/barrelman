@@ -50,6 +50,12 @@ describe('chains', () => {
     expect(chains([main, slip]).map(d => d.ways)).toEqual([[1], [2]])
   })
 
+  it('never chains two tracks parting at a turnout', () => {
+    const main: Way = { ...way(1, 0, 0, 1, 'rail'), points: [east(60), east(0)] }
+    const branch: Way = { ...way(2, 0, 0, 1, 'rail'), points: [east(60), east(0, 6)] }
+    expect(chains([main, branch])).toHaveLength(2)
+  })
+
   it('still chains a footbridge that doubles back at a landing', () => {
     const up: Way = { ...way(1, 0, 0, 1, 'path'), points: [east(0), east(40)], road: 'footway/' }
     const back: Way = { ...way(2, 0, 0, 1, 'path'), points: [east(40), east(0, 4)], road: 'steps/' }
