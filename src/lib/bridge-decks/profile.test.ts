@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test'
 import {
-  absorbPaths, along, arch, chains, crossings, fitEdges, joinNeighbours, MAX_GRADE, mercator, resample, smooth, solve, steady, widen,
+  absorbPaths, absorbTracks, along, landing, LANDING, arch, chains, crossings, fitEdges, joinNeighbours, MAX_GRADE, mercator, resample, smooth, solve, steady, widen,
   type Chain, type Point, type Way,
 } from './profile'
 
@@ -41,6 +41,25 @@ describe('chains', () => {
     const ways = [arm(1, east(100)), arm(2, east(0)), arm(3, east(50, 50)), arm(4, east(50, -50))]
     const members = (w: Way[]) => chains(w).map(d => [...d.ways].sort()).sort((a, b) => a[0] - b[0])
     expect(members([...ways].reverse())).toEqual(members(ways))
+  })
+
+  it('never folds a carriageway back onto the slip road it meets at a gore', () => {
+    // Both bridge ways leave the gore heading west; the road beyond it is on the ground.
+    const main: Way = { ...way(1, 0, 0), points: [east(60), east(0)], road: 'secondary/North Davidson Street' }
+    const slip: Way = { ...way(2, 0, 0), points: [east(60), east(0, 12)], road: 'secondary_link/' }
+    expect(chains([main, slip]).map(d => d.ways)).toEqual([[1], [2]])
+  })
+
+  it('never chains two tracks parting at a turnout', () => {
+    const main: Way = { ...way(1, 0, 0, 1, 'rail'), points: [east(60), east(0)] }
+    const branch: Way = { ...way(2, 0, 0, 1, 'rail'), points: [east(60), east(0, 6)] }
+    expect(chains([main, branch])).toHaveLength(2)
+  })
+
+  it('still chains a footbridge that doubles back at a landing', () => {
+    const up: Way = { ...way(1, 0, 0, 1, 'path'), points: [east(0), east(40)], road: 'footway/' }
+    const back: Way = { ...way(2, 0, 0, 1, 'path'), points: [east(40), east(0, 4)], road: 'steps/' }
+    expect(chains([up, back]).map(d => d.ways)).toEqual([[1, 2]])
   })
 })
 
@@ -83,6 +102,49 @@ describe('absorbPaths', () => {
     expect(left[3]).toBeCloseTo(7.5, 1)
     expect(left[50]).toBe(4)
     expect(Math.max(...wide.edges)).toBeCloseTo(7.5, 1)
+  })
+})
+
+describe('absorbTracks', () => {
+  const road: Chain = { ways: [1], points: resample([east(0), east(80)], 6), kind: 'road', layer: 1, edges: [6, 6] }
+  const track = (north: number, from = 0, to = 80, layer = 1): Chain =>
+    ({ ways: [2], points: [east(from, north), east(to, north)], kind: 'rail', layer, edges: [2.5, 2.5] })
+
+  it('folds a tram running in the carriageway into the road deck', () => {
+    const decks = absorbTracks([road, track(2)])
+    expect(decks).toHaveLength(1)
+    expect(decks[0].ways).toEqual([1, 2])
+    expect(decks[0].edges).toEqual([6, 6])
+  })
+
+  it('folds in a tram whose way runs a little past the road\'s', () => {
+    expect(absorbTracks([road, track(2, -8, 88)])).toHaveLength(1)
+  })
+
+  it('keeps a track of its own beside the road, on another layer, or running far past it', () => {
+    expect(absorbTracks([road, track(9)])).toHaveLength(2)
+    expect(absorbTracks([road, track(2, 0, 80, 2)])).toHaveLength(2)
+    expect(absorbTracks([road, track(2, 0, 120)])).toHaveLength(2)
+  })
+})
+
+describe('landing', () => {
+  const road = (f: (s: number) => number) => Array.from({ length: LANDING.reach / LANDING.step }, (_, j) => f((j + 1) * LANDING.step))
+
+  it('finds the road beyond a hollow the terrain leaves at a bridge end', () => {
+    // E 7th St over I-277: the way ends 7 m down in the hollow, the road runs on 12 m out.
+    const land = landing(road(s => (s < 12 ? 198.5 + s * 0.5 : 205.3)), 198.5)
+    expect(land?.height).toBeCloseTo(205.3, 1)
+    expect(land?.run).toBeLessThanOrEqual(14)
+  })
+
+  it('never takes a road climbing steeper than a deck may for a hollow', () => {
+    for (const grade of [0.07, 0.1, 0.15]) expect(landing(road(s => 200 + s * grade), 200)).toBeNull()
+  })
+
+  it('leaves an end alone where the road beyond carries on at its height, or a long way down', () => {
+    expect(landing(road(s => 200 + s * 0.03), 200)).toBeNull()
+    expect(landing(road(s => (s < 30 ? 195 : 205)), 195)).toBeNull()
   })
 })
 
@@ -193,6 +255,17 @@ describe('joinNeighbours', () => {
     const ramp = { chain: deck(10), z: deck(10).points.map(() => 101), on: [{ deck: main, at: deck(10).points[0] }] }
     joinNeighbours([main, ramp])
     expect(main.z.every(z => z === 100)).toBe(true)
+  })
+
+  it('joins twin tracks, but never a track to a road', () => {
+    const rail = (north: number): Chain => ({ ...deck(north), kind: 'rail', edges: [2.5, 2.5] })
+    const a = { chain: rail(0), z: rail(0).points.map(() => 100) }
+    const b = { chain: rail(4), z: rail(4).points.map(() => 100.5) }
+    joinNeighbours([a, b])
+    expect(a.z.every(z => z === 100.5)).toBe(true)
+    const road = { chain: { ...deck(7.5), edges: [2.5, 2.5] as [number, number] }, z: deck(7.5).points.map(() => 101) }
+    joinNeighbours([b, road])
+    expect(b.z.every(z => z === 100.5)).toBe(true)
   })
 
   it('leaves decks too far apart or too far above alone', () => {

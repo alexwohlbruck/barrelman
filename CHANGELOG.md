@@ -76,6 +76,11 @@ does it — and the release pipeline turns it into the GitHub Release notes.
   and where a centre turn lane ends its far edge closes in on the centre line.
 * **Give way signs mapped along a two-way road face the right way.** A
   `direction=forward` on a way with no `oneway` tag was read as backward.
+* **Bridge decks for structures that carry several ways.** A tram or light
+  rail track running in a road bridge's carriageway is carried on the road's
+  deck rather than standing inside it as a deck of its own, twin tracks on one
+  viaduct are joined at one height and share their piers, and a carriageway is
+  no longer chained back onto the slip road it meets at a gore.
 
 ## [0.10.17] - 2026-10-15
 
