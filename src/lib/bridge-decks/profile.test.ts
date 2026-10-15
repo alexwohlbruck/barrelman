@@ -45,9 +45,15 @@ describe('chains', () => {
 
   it('never folds a carriageway back onto the slip road it meets at a gore', () => {
     // Both bridge ways leave the gore heading west; the road beyond it is on the ground.
-    const main: Way = { ...way(1, 0, 0), points: [east(60), east(0)] }
-    const slip: Way = { ...way(2, 0, 0), points: [east(60), east(0, 12)] }
+    const main: Way = { ...way(1, 0, 0), points: [east(60), east(0)], road: 'secondary/North Davidson Street' }
+    const slip: Way = { ...way(2, 0, 0), points: [east(60), east(0, 12)], road: 'secondary_link/' }
     expect(chains([main, slip]).map(d => d.ways)).toEqual([[1], [2]])
+  })
+
+  it('still chains a footbridge that doubles back at a landing', () => {
+    const up: Way = { ...way(1, 0, 0, 1, 'path'), points: [east(0), east(40)], road: 'footway/' }
+    const back: Way = { ...way(2, 0, 0, 1, 'path'), points: [east(40), east(0, 4)], road: 'steps/' }
+    expect(chains([up, back]).map(d => d.ways)).toEqual([[1, 2]])
   })
 })
 
@@ -105,7 +111,11 @@ describe('absorbTracks', () => {
     expect(decks[0].edges).toEqual([6, 6])
   })
 
-  it('keeps a track of its own beside the road, on another layer, or running on past it', () => {
+  it('folds in a tram whose way runs a little past the road\'s', () => {
+    expect(absorbTracks([road, track(2, -8, 88)])).toHaveLength(1)
+  })
+
+  it('keeps a track of its own beside the road, on another layer, or running far past it', () => {
     expect(absorbTracks([road, track(9)])).toHaveLength(2)
     expect(absorbTracks([road, track(2, 0, 80, 2)])).toHaveLength(2)
     expect(absorbTracks([road, track(2, 0, 120)])).toHaveLength(2)
