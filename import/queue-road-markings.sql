@@ -55,9 +55,7 @@ BEGIN
        OR (g.geom_type = 'point' AND (g.tags->>'highway' IN ('crossing', 'traffic_signals', 'stop', 'give_way', 'turning_circle', 'turning_loop')
                                       OR g.tags->>'traffic_calming' IN ('hump', 'table', 'cushion')
                                       OR g.tags->>'railway' IN ('level_crossing', 'tram_level_crossing')))
-       OR (g.geom_type = 'line' AND g.tags->>'railway' IN ('rail', 'light_rail', 'tram', 'narrow_gauge', 'subway', 'preserved')
-           AND EXISTS (SELECT 1 FROM road_glyphs r WHERE r.geom && ST_Expand(g.geom, 0.0005) AND r.glyph LIKE 'cross%'
-                       AND ST_DWithin(r.geom, g.geom, 0.0005)))
+
        OR (g.geom_type = 'area' AND (g.tags->>'road_marking' = 'restriction' OR g.tags->>'area:highway' = 'prohibited'
                                      OR g.tags->>'traffic_calming' = 'painted_island'))
   ),
@@ -77,10 +75,6 @@ BEGIN
        OR (o.geom_type = 'point' AND o.categories && ARRAY['highway/crossing', 'highway/traffic_signals', 'highway/stop',
                                                            'highway/give_way', 'highway/turning_circle', 'highway/turning_loop',
                                                            'railway/level_crossing', 'railway/tram_level_crossing'])
-       OR (o.geom_type = 'line' AND o.categories && ARRAY['railway/rail', 'railway/light_rail', 'railway/tram', 'railway/narrow_gauge',
-                                                          'railway/subway', 'railway/preserved']
-           AND EXISTS (SELECT 1 FROM road_glyphs r WHERE r.geom && ST_Expand(o.geom, 0.0005) AND r.glyph LIKE 'cross%'
-                       AND ST_DWithin(r.geom, o.geom, 0.0005)))
        OR (o.geom_type = 'area' AND o.categories = '{}'
            AND EXISTS (SELECT 1 FROM road_markings m WHERE m.geom && o.geom AND m.kind = 'restriction' AND ST_Intersects(m.geom, o.geom)))
        OR (o.geom_type = 'point' AND o.categories = '{}'
@@ -89,6 +83,18 @@ BEGIN
        OR o.id IN (SELECT id FROM relevant_new)
     UNION ALL
     SELECT osm_id, geom FROM relevant_new
+    UNION ALL
+    -- Track by crossing gear, old outline or new, as the gear's own points: a
+    -- mainline way runs for kilometres, and only where it meets a road matters.
+    SELECT NULL, ST_Collect(r.geom)
+    FROM (SELECT o.geom FROM osm_replay.old_places o
+          WHERE o.geom_type = 'line' AND o.categories && ARRAY['railway/rail', 'railway/light_rail', 'railway/tram',
+                                                             'railway/narrow_gauge', 'railway/subway', 'railway/preserved']
+          UNION ALL
+          SELECT g.geom FROM geo_places g JOIN osm_replay.changed c ON c.id = g.id
+          WHERE g.geom_type = 'line' AND g.tags->>'railway' IN ('rail', 'light_rail', 'tram', 'narrow_gauge', 'subway', 'preserved')) t
+    JOIN road_glyphs r ON r.geom && ST_Expand(t.geom, 0.0005) AND r.glyph LIKE 'cross%' AND ST_DWithin(r.geom, t.geom, 0.0005)
+    GROUP BY t.geom
   ),
   -- Both lookups below name tags ? 'highway' so they can use the road-lines
   -- index (create-detail-indexes.sql), and end in OFFSET 0 so each stays one

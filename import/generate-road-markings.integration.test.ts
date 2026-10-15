@@ -196,6 +196,14 @@ const hdWays: [number, string, Record<string, string>][] = [
   // A pedestrian signal 15 m along from a side street's T junction.
   [390, line([-74.440, 40.712], [-74.440, 40.714]), { highway: 'secondary', lanes: '2' }],
   [391, line([-74.441, 40.713], [-74.440, 40.713]), { highway: 'residential' }],
+  // A crossing on a road whose track is not one drawn (disused).
+  [395, line([-74.450, 40.712], [-74.450, 40.714]), { highway: 'secondary', lanes: '2' }],
+  // A signalled divided road with a 12 m median, its link a way of its own.
+  [400, line([-74.455, 40.714], [-74.455, 40.713], [-74.455, 40.712]), { highway: 'trunk', oneway: 'yes', lanes: '2' }],
+  [401, line([-74.455 + 12 / 84300, 40.712], [-74.455 + 12 / 84300, 40.713], [-74.455 + 12 / 84300, 40.714]), { highway: 'trunk', oneway: 'yes', lanes: '2' }],
+  [402, line([-74.456, 40.713], [-74.455, 40.713]), { highway: 'secondary', lanes: '2' }],
+  [403, line([-74.455, 40.713], [-74.455 + 12 / 84300, 40.713]), { highway: 'secondary', lanes: '2' }],
+  [404, line([-74.455 + 12 / 84300, 40.713], [-74.454, 40.713]), { highway: 'secondary', lanes: '2' }],
 ]
 const hdFeatures: [string, string, Record<string, string>, string][] = [
   ['W231', rect(-74.315, 40.7130, -1.5, 1.5, 0, 66), { road_marking: 'restriction' }, 'area'],
@@ -216,6 +224,9 @@ const hdFeatures: [string, string, Record<string, string>, string][] = [
   ['N374', `POINT(-74.430 ${40.713 + 4 / 111050})`, { railway: 'level_crossing' }, 'point'],
   ['N383', 'POINT(-74.435 40.713)', { railway: 'level_crossing', 'crossing:barrier': 'half' }, 'point'],
   ['N384', `POINT(${-74.435 + 10 / 84300} 40.713)`, { railway: 'level_crossing' }, 'point'],
+  ['N396', 'POINT(-74.450 40.713)', { railway: 'level_crossing', 'crossing:barrier': 'half' }, 'point'],
+  ['N405', 'POINT(-74.455 40.713)', { highway: 'traffic_signals' }, 'point'],
+  ['N406', `POINT(${-74.455 + 12 / 84300} 40.713)`, { highway: 'traffic_signals' }, 'point'],
   ['N392', `POINT(-74.440 ${40.713 + 15 / 111050})`, { highway: 'traffic_signals', crossing: 'traffic_signals' }, 'point'],
 ]
 
@@ -710,6 +721,17 @@ run('generate-road-markings.sql', () => {
       const masts = await near(-74.440, 40.713)
       expect(masts.length).toBe(2)
       expect(masts.every(m => m.y > 40.713 + 10 / 111050)).toBe(true)
+    })
+
+    test('builds through a crossing with no track drawn near it', async () => {
+      const gates = await near(-74.450, 40.713)
+      expect(gates.map(g => g.glyph)).toEqual(['crossing-gate-1', 'crossing-gate-1'])
+    })
+
+    test('gives traffic over a short median link its mast past the far carriageway', async () => {
+      const east = (await near(-74.455 + 6 / 84300, 40.713)).filter(m => m.direction === 90)
+      expect(east.length).toBe(1)
+      expect(east[0].x).toBeGreaterThan(-74.455 + 12 / 84300)
     })
 
     test('treats a road over two tracks as one crossing, clear of both', async () => {

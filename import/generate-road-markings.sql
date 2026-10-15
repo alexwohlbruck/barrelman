@@ -1970,19 +1970,19 @@ WHERE side.present AND d IS NOT NULL;
 -- metres from the way to the kerb on its right, as eased in from the way
 -- before, and `run` metres of way behind.
 CREATE OR REPLACE FUNCTION pg_temp.road_legs(at geometry)
-RETURNS TABLE (osm_id bigint, g geometry, dir int, s float8, pt geometry, tx float8, ty float8, kerb float8, lanes int,
+RETURNS TABLE (osm_id bigint, dir int, s float8, pt geometry, tx float8, ty float8, kerb float8, lanes int,
                all_lanes int, run float8, flip boolean)
 LANGUAGE sql STABLE AS $$
-  SELECT r.osm_id, r.g, l.dir, r.s, ST_ClosestPoint(r.g, at), l.dir * d.u[1], l.dir * d.u[2],
-         CASE WHEN f.f * r.len_m < COALESCE(r.ease, 0)
-              THEN CASE WHEN l.dir = 1 THEN -COALESCE(r.prev_kerb_r, r.kerb_r) ELSE COALESCE(r.prev_kerb_l, r.kerb_l) END
-              ELSE CASE WHEN l.dir = 1 THEN -r.kerb_r ELSE r.kerb_l END END,
+  SELECT r.osm_id, l.dir, r.s, ST_ClosestPoint(r.g, at), l.dir * d.u[1], l.dir * d.u[2],
+         CASE WHEN l.dir = 1 THEN -1 ELSE 1 END * (k.now + (k.was - k.now) * (1 - road_smoothstep(least(1, f.f * r.len_m / nullif(r.ease, 0))))),
          CASE WHEN l.dir = 1 THEN r.fwd ELSE r.bwd END, r.fwd + r.bwd + r.both_ways,
          CASE WHEN l.dir = 1 THEN f.f ELSE 1 - f.f END * ST_Length(r.g) / r.s, r.flip
   FROM _rm_roads r
   CROSS JOIN LATERAL (SELECT ST_LineLocatePoint(r.g, at) as f) f
   CROSS JOIN LATERAL (SELECT road_dir(r.g, f.f, 3 * r.s) as u) d
   CROSS JOIN (VALUES (1), (-1)) l(dir)
+  CROSS JOIN LATERAL (SELECT CASE WHEN l.dir = 1 THEN r.kerb_r ELSE r.kerb_l END as now,
+                             CASE WHEN l.dir = 1 THEN COALESCE(r.prev_kerb_r, r.kerb_r) ELSE COALESCE(r.prev_kerb_l, r.kerb_l) END as was) k
   -- A constant reach, so the lookup stays an index probe: no road's `s` is 4.
   WHERE r.g && ST_Expand(at, 4) AND ST_DWithin(r.g, at, r.s) AND NOT r.bridge AND d.u IS NOT NULL
     AND CASE WHEN l.dir = 1 THEN r.fwd > 0 AND f.f > 0.001 ELSE r.bwd > 0 AND f.f < 0.999 END
@@ -2001,7 +2001,8 @@ DROP TABLE IF EXISTS _rm_vehicle_signals;
 CREATE TEMP TABLE _rm_vehicle_signals AS
 SELECT ST_Transform(geom, 3857) as g, 1 / cos(radians(ST_Y(geom))) as s,
        COALESCE(tags->>'traffic_signals:direction', tags->>'direction') as direction,
-       COALESCE(tags->>'crossing', 'no') NOT IN ('no', 'separate') as pedestrian
+       COALESCE(tags->>'crossing', 'no') NOT IN ('no', 'separate')
+         AND NOT tags ?| ARRAY['traffic_signals:direction', 'direction'] as pedestrian
 FROM geo_places
 WHERE geom && (SELECT area FROM _rm_area) AND geom_type = 'point' AND tags @> '{"highway": "traffic_signals"}'
   AND COALESCE(tags->>'traffic_signals', 'signal') NOT IN ('ramp_meter', 'emergency', 'blinker', 'stop', 'hawk');
@@ -2028,7 +2029,12 @@ SELECT 'signal-' || least(l.lanes, 4), ((round(degrees(atan2(l.tx, l.ty)))::int 
 FROM _rm_signalled n
 CROSS JOIN LATERAL pg_temp.road_legs(n.p) l
 LEFT JOIN _rm_approach a ON a.osm_id = l.osm_id AND a.x = n.x AND a.y = n.y
-WHERE l.run >= 20
+WHERE (l.run >= 20 OR EXISTS (
+         -- A short link between a divided road's carriageways still carries the traffic that crossed the first.
+         SELECT 1 FROM _rm_signalled m
+         CROSS JOIN LATERAL (SELECT (ST_X(m.p) - ST_X(n.p)) / n.s as dx, (ST_Y(m.p) - ST_Y(n.p)) / n.s as dy) v
+         WHERE m.p && ST_Expand(n.p, 35 * n.s) AND (m.x, m.y) <> (n.x, n.y)
+           AND -(v.dx * l.tx + v.dy * l.ty) BETWEEN 1 AND 35 AND abs(v.dx * l.ty - v.dy * l.tx) < 6))
   AND NOT EXISTS (SELECT 1 FROM _rm_signalled m
                   CROSS JOIN LATERAL (SELECT (ST_X(m.p) - ST_X(n.p)) / n.s as dx, (ST_Y(m.p) - ST_Y(n.p)) / n.s as dy) v
                   WHERE m.p && ST_Expand(n.p, 35 * n.s) AND (m.x, m.y) <> (n.x, n.y)
@@ -2060,7 +2066,7 @@ CREATE INDEX ON _rm_rails USING gist (g);
 DROP TABLE IF EXISTS _rm_level_crossings;
 CREATE TEMP TABLE _rm_level_crossings AS
 WITH nodes AS (
-  SELECT ST_Transform(geom, 3857) as g, cos(radians(ST_Y(geom))) as k, tags->>'crossing:barrier' as barrier,
+  SELECT ST_Transform(geom, 3857) as g, cos(radians(round(ST_Y(geom)::numeric, 1))) as k, tags->>'crossing:barrier' as barrier,
          CASE WHEN tags->>'crossing:barrier' IN ('yes', 'half', 'double_half', 'full', 'gate', 'gates', 'lift_gate') THEN 3
               WHEN 'yes' IN (tags->>'crossing:light', tags->>'crossing:bell') THEN 2
               WHEN tags @> '{"railway": "level_crossing"}' AND COALESCE(tags->>'crossing:saltire', 'yes') <> 'no' THEN 1
@@ -2069,7 +2075,7 @@ WITH nodes AS (
   WHERE geom && (SELECT area FROM _rm_area) AND geom_type = 'point'
     AND (tags @> '{"railway": "level_crossing"}' OR tags @> '{"railway": "tram_level_crossing"}')
 ), clustered AS (
-  -- Mercator stretches by 1/cos(latitude); shrunk back, eps is in metres.
+  -- Mercator stretches by 1/cos(latitude); shrunk back by its band's, eps is in metres.
   SELECT *, ST_ClusterDBSCAN(ST_Scale(g, k, k), eps := 12, minpoints := 1) OVER () as cluster FROM nodes WHERE rank IS NOT NULL
 )
 SELECT g, cluster,
@@ -2095,8 +2101,8 @@ CROSS JOIN LATERAL (
 ) path
 CROSS JOIN LATERAL (
   SELECT ST_ClosestPoint(free, path.near) as p FROM (
-    SELECT ST_Difference(path.post, COALESCE(ST_Union(ST_Buffer(r.g, 4.2 * l.s, 2)), 'GEOMETRYCOLLECTION EMPTY'::geometry)) as free
-    FROM _rm_rails r WHERE r.g && ST_Expand(c.g, 40 * l.s)
+    SELECT COALESCE(ST_Difference(path.post, ST_Union(ST_Buffer(r.g, 4.2 * l.s, 2))), path.post) as free
+    FROM _rm_rails r WHERE r.g && ST_Expand(c.g, 50 * l.s)
   ) f WHERE NOT ST_IsEmpty(free)
 ) clear
 WHERE l.lanes IS NOT NULL
@@ -2108,11 +2114,11 @@ WITH placed AS (
   SELECT g.fid, ST_Transform(g.geom, 3857) as p, radians(g.direction) as b, 1 / cos(radians(ST_Y(g.geom))) as s
   FROM road_glyphs_next g
   WHERE g.glyph NOT LIKE 'road-%' AND g.glyph <> 'traffic-signals'
-    AND EXISTS (SELECT 1 FROM road_surfaces_next r WHERE r.kind IS NULL AND r.geom && g.geom AND ST_Intersects(r.geom, g.geom))
+    AND EXISTS (SELECT 1 FROM road_surfaces_next r WHERE r.kind IS NULL AND NOT r.bridge AND r.geom && g.geom AND ST_Intersects(r.geom, g.geom))
 ), moved AS (
   SELECT p.*, (SELECT min(m) FROM generate_series(0.5, 15, 0.5) m
                WHERE NOT EXISTS (SELECT 1 FROM road_surfaces_next r
-                                 WHERE r.kind IS NULL AND ST_Intersects(r.geom, ST_Transform(ST_SetSRID(ST_MakePoint(
+                                 WHERE r.kind IS NULL AND NOT r.bridge AND ST_Intersects(r.geom, ST_Transform(ST_SetSRID(ST_MakePoint(
                                    ST_X(p.p) + cos(p.b) * m * p.s, ST_Y(p.p) - sin(p.b) * m * p.s), 3857), 4326)))) as m
   FROM placed p
 ), stepped AS (
