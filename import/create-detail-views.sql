@@ -435,7 +435,7 @@ SELECT (osm_id * 4 + CASE osm_type WHEN 'N' THEN 0 WHEN 'W' THEN 1 ELSE 2 END) a
        id, ST_Boundary(ST_ForcePolygonCCW(geom)) as geom,
        'oval' as kind,
        CASE WHEN tags->>'lanes' ~ '^[1-9][0-9]?$' THEN (tags->>'lanes')::int END as lanes,
-       round((cos(radians(36)) / cos(radians(ST_Y(centroid))))::numeric, 2) as scale
+       round((cos(radians(36)) / cos(radians(ST_Y(centroid))))::numeric, 2)::real as scale
 FROM geo_places
 WHERE geom_type = 'area' AND tags->>'leisure' = 'track'
   AND area_m2 > 2000 AND ST_NRings(geom) = ST_NumGeometries(geom)
@@ -445,7 +445,7 @@ SELECT (osm_id * 4 + CASE osm_type WHEN 'N' THEN 0 WHEN 'W' THEN 1 ELSE 2 END) a
        id, geom,
        CASE WHEN geom_type = 'line' THEN 'line' ELSE 'surface' END as kind,
        CASE WHEN tags->>'lanes' ~ '^[1-9][0-9]?$' THEN (tags->>'lanes')::int END as lanes,
-       round((cos(radians(36)) / cos(radians(ST_Y(centroid))))::numeric, 2) as scale
+       round((cos(radians(36)) / cos(radians(ST_Y(centroid))))::numeric, 2)::real as scale
 FROM geo_places
 WHERE geom_type IN ('area', 'line') AND tags->>'leisure' = 'track'
   AND NOT (geom_type = 'area' AND area_m2 > 2000 AND ST_NRings(geom) = ST_NumGeometries(geom))
