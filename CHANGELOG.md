@@ -15,7 +15,12 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 * **Golf courses.** A new `golf_features` detail source, also in the `detail`
   bundle, serves tees, fairways, greens, rough, bunkers and driving ranges,
   each hole's line, a point at its tee with the hole number and par, and the
-  pins.
+  pins. Disc golf holes and baskets come in the same source.
+* **Ski areas.** A new `ski_features` detail source, in the `detail` bundle
+  from z13, serves resort outlines, pistes with their type, difficulty,
+  grooming, name and the region's signage convention, and lift pylons.
+* **Running tracks.** A new `sport_tracks` detail source, in the `detail`
+  bundle, serves running and athletics tracks with their shape and lane count.
 
 ## [0.10.15] - 2026-10-11
 

@@ -499,6 +499,44 @@ postgres:
       buffer: 64
       clip_geom: true
 
+    # Ski area outlines, pistes and lift pylons, from `ski_features` (see
+    # import/create-detail-views.sql). From z13, where parking already has the
+    # client reading the detail bundle, so a resort is legible zoomed out.
+    ski_features:
+      schema: public
+      table: ski_features
+      srid: 4326
+      geometry_column: geom
+      geometry_type: GEOMETRY
+      id_column: fid
+      minzoom: 13
+      maxzoom: 16
+      properties:
+        kind: kind
+        piste: piste
+        difficulty: difficulty
+        grooming: grooming
+        scheme: scheme
+        name: name
+      buffer: 64
+      clip_geom: true
+
+    # Running tracks, from `sport_tracks` (see import/create-detail-views.sql).
+    sport_tracks:
+      schema: public
+      table: sport_tracks
+      srid: 4326
+      geometry_column: geom
+      geometry_type: GEOMETRY
+      id_column: fid
+      minzoom: 14
+      maxzoom: 16
+      properties:
+        kind: kind
+        lanes: lanes
+      buffer: 64
+      clip_geom: true
+
     object_lines:
       schema: public
       table: object_lines

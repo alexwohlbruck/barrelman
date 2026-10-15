@@ -101,3 +101,22 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS geo_places_golf_geom_idx
 CREATE INDEX CONCURRENTLY IF NOT EXISTS geo_places_golf_tee_idx
   ON geo_places USING gist (ST_StartPoint(geom))
   WHERE geom_type = 'line' AND tags->>'golf' = 'hole' AND tags->>'ref' <> '';
+
+CREATE INDEX CONCURRENTLY IF NOT EXISTS geo_places_disc_golf_geom_idx
+  ON geo_places USING gist (geom)
+  WHERE (geom_type = 'line' AND tags->>'disc_golf' = 'hole')
+     OR (geom_type = 'point' AND tags->>'disc_golf' = 'basket');
+
+CREATE INDEX CONCURRENTLY IF NOT EXISTS geo_places_disc_golf_tee_idx
+  ON geo_places USING gist (ST_StartPoint(geom))
+  WHERE geom_type = 'line' AND tags->>'disc_golf' = 'hole' AND tags->>'ref' <> '';
+
+CREATE INDEX CONCURRENTLY IF NOT EXISTS geo_places_ski_geom_idx
+  ON geo_places USING gist (geom)
+  WHERE (tags ? 'piste:type' AND geom_type IN ('line', 'area'))
+     OR (geom_type = 'area' AND tags->>'landuse' = 'winter_sports')
+     OR (geom_type = 'point' AND tags->>'aerialway' = 'pylon');
+
+CREATE INDEX CONCURRENTLY IF NOT EXISTS geo_places_track_geom_idx
+  ON geo_places USING gist (geom)
+  WHERE geom_type IN ('area', 'line') AND tags->>'leisure' = 'track';
