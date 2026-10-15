@@ -30,6 +30,8 @@ import {
 import { parse } from 'csv-parse/sync'
 import { type FetchFn } from './transit.service'
 import { resolveRegions } from '../config/regions'
+import { selectRtUrls } from './rt-url-selection'
+import { envRaw } from '../config/env'
 
 // ── Types ───────────────────────────────────────────────────────────
 
@@ -155,6 +157,7 @@ export async function fetchFeedList(
   fetchFn: FetchFn = globalThis.fetch,
 ): Promise<GtfsFeedInfo[]> {
   const feeds: GtfsFeedInfo[] = []
+  const records = new Map<string, any>()
   const seen = new Set<string>()
 
   // One query per bbox cell: global (null bbox) is a single unfiltered sweep;
@@ -186,13 +189,15 @@ export async function fetchFeedList(
         if (seen.has(feedId)) continue
         seen.add(feedId)
 
+        const onestopId = String(feed.onestop_id || '')
         feeds.push({
           feedId,
-          onestopId: String(feed.onestop_id || ''),
+          onestopId,
           name: String(feed.name || feed.onestop_id || ''),
-          url,
+          url: STATIC_URL_OVERRIDES[onestopId] ?? url,
           region,
         })
+        records.set(feedId, feed)
       }
 
       // Handle pagination
@@ -200,30 +205,52 @@ export async function fetchFeedList(
     }
   }
 
-  // Discover GTFS-RT feeds and associate them with static feeds
   console.log(`Discovering GTFS-RT feeds for ${feeds.length} static feeds...`)
-  const rtMap = await fetchRtFeedMap(feeds, apiKey, fetchFn)
-  for (const feed of feeds) {
-    const rtUrls = rtMap.get(feed.onestopId) || rtMap.get(feed.feedId)
-    if (rtUrls?.length) {
-      feed.rtUrls = rtUrls
-    }
+  const rtRecords: RtRecordCache = new Map()
+  const BATCH_SIZE = 10
+  for (let i = 0; i < feeds.length; i += BATCH_SIZE) {
+    await Promise.allSettled(
+      feeds.slice(i, i + BATCH_SIZE).map(async feed => {
+        const record = records.get(feed.feedId)
+        if (!record?.onestop_id) return
+        const rtUrls = await rtUrlsForStaticRecord(record, apiKey, fetchFn, rtRecords)
+        if (rtUrls.length) feed.rtUrls = rtUrls
+      }),
+    )
   }
 
   return feeds
 }
 
 /**
- * Fetch GTFS-RT feeds from Transitland and build a map from
- * static feed onestop_id → RT URLs.
+ * Static feeds whose publisher offers a better download than the one
+ * Transitland catalogues. Keyed by onestop id.
  *
- * Transitland stores GTFS-RT as separate feed entries with
- * `spec: 'GTFS_RT'`. They follow the naming convention
- * `f-xxx-agency~rt` where the static feed is `f-xxx-agency`.
- *
- * We look up each static feed's expected RT onestop_id directly,
- * avoiding a full global scan of all RT feeds.
+ * MTA's supplemented subway feed is the regular schedule plus the planned
+ * service changes of the next seven days, and it is what the subway's realtime
+ * trip ids are drawn from. Past that window it is identical to gtfs_subway.zip,
+ * so a stale copy degrades to the regular feed rather than to nothing.
  */
+export const STATIC_URL_OVERRIDES: Readonly<Record<string, string>> = {
+  'f-dr5r-nyctsubway': 'https://rrgtfsfeeds.s3.amazonaws.com/gtfs_supplemented.zip',
+}
+
+/**
+ * Secrets for realtime feeds that require one, keyed by the RT feed's onestop
+ * id: `GTFS_RT_CREDENTIALS={"f-mta~nyc~rt~bustime":"…"}`.
+ */
+function rtCredentials(): Record<string, string> {
+  const raw = envRaw('GTFS_RT_CREDENTIALS')
+  if (!raw) return {}
+  try {
+    const parsed = JSON.parse(raw)
+    return parsed && typeof parsed === 'object' ? parsed : {}
+  } catch {
+    console.warn('[config] GTFS_RT_CREDENTIALS is not a JSON object; ignoring it')
+    return {}
+  }
+}
+
 /**
  * Pull the realtime URLs off a Transitland feed record.
  *
@@ -234,17 +261,19 @@ export async function fetchFeedList(
 function extractRtUrls(feed: any): GtfsRtUrl[] {
   const urls = feed?.urls || {}
   const auth = feed?.authorization || {}
+  // Transitland names the parameter but never publishes the secret.
+  const secret = auth.param_value || rtCredentials()[feed?.onestop_id] || ''
 
   const headers: Record<string, string> = {}
   if (auth.type === 'header' && auth.param_name) {
-    headers[auth.param_name] = auth.param_value || ''
+    headers[auth.param_name] = secret
   }
 
   /** Query-param auth is baked into the URL — the RT fetchers only carry headers. */
   const withAuth = (url: string): string => {
-    if (auth.type !== 'query_param' || !auth.param_name || !auth.param_value) return url
+    if (auth.type !== 'query_param' || !auth.param_name || !secret) return url
     const separator = url.includes('?') ? '&' : '?'
-    return `${url}${separator}${encodeURIComponent(auth.param_name)}=${encodeURIComponent(auth.param_value)}`
+    return `${url}${separator}${encodeURIComponent(auth.param_name)}=${encodeURIComponent(secret)}`
   }
 
   const KINDS: Array<[string, RtUrlType]> = [
@@ -262,59 +291,6 @@ function extractRtUrls(feed: any): GtfsRtUrl[] {
     rtUrls.push(entry)
   }
   return rtUrls
-}
-
-async function fetchRtFeedMap(
-  staticFeeds: GtfsFeedInfo[],
-  apiKey: string,
-  fetchFn: FetchFn = globalThis.fetch,
-): Promise<Map<string, GtfsRtUrl[]>> {
-  const rtMap = new Map<string, GtfsRtUrl[]>()
-
-  // Build candidate RT onestop_ids from static feeds
-  const candidates = staticFeeds
-    .filter(f => f.onestopId)
-    .map(f => ({ staticOnestopId: f.onestopId, rtOnestopId: `${f.onestopId}~rt` }))
-
-  if (!candidates.length) return rtMap
-
-  // Batch lookup: query Transitland for each candidate RT feed.
-  // Use small batches to avoid too many parallel requests.
-  const BATCH_SIZE = 10
-  for (let i = 0; i < candidates.length; i += BATCH_SIZE) {
-    const batch = candidates.slice(i, i + BATCH_SIZE)
-    const results = await Promise.allSettled(
-      batch.map(async ({ staticOnestopId, rtOnestopId }) => {
-        // The feed's own record first: Transitland publishes realtime_* URLs
-        // on the GTFS feed itself. The separate `~rt` record is the older
-        // convention and no longer exists for most feeds.
-        for (const url of [
-          `https://transit.land/api/v2/rest/feeds?apikey=${apiKey}&onestop_id=${encodeURIComponent(staticOnestopId)}&limit=1`,
-          `https://transit.land/api/v2/rest/feeds?apikey=${apiKey}&spec=GTFS_RT&onestop_id=${encodeURIComponent(rtOnestopId)}&limit=1`,
-        ]) {
-          const response = await fetchFn(url)
-          if (!response.ok) continue
-
-          const data = await response.json() as any
-          const feed = data.feeds?.[0]
-          if (feed && extractRtUrls(feed).length) return { staticOnestopId, feed }
-        }
-        return null
-      }),
-    )
-
-    for (const result of results) {
-      if (result.status !== 'fulfilled' || !result.value) continue
-      const { staticOnestopId, feed } = result.value
-
-      const rtUrls = extractRtUrls(feed)
-      if (rtUrls.length) {
-        rtMap.set(staticOnestopId, rtUrls)
-      }
-    }
-  }
-
-  return rtMap
 }
 
 function buildFeedListUrl(apiKey: string, bbox: string | null): string {
@@ -365,17 +341,8 @@ export function bboxCells(bbox: string): string[] {
 // ── RT URL discovery for existing feeds ─────────────────────────────
 
 /**
- * Discover GTFS-RT URLs for feeds already in the database.
- *
- * The `gtfs_feeds` table stores Transitland's numeric feed ID as
- * `onestop_id` (e.g. "886"), but RT feed lookups require the full
- * `f-{geohash}-{agency}` onestop_id. This function:
- *
- *   1. Queries Transitland by numeric ID to resolve the real onestop_id
- *   2. Queries for the corresponding `{onestop_id}~rt` RT feed
- *   3. Extracts RT URLs and updates the database
- *
- * Returns a summary of how many feeds were checked / updated.
+ * Discover GTFS-RT URLs for feeds already in the database that have none,
+ * keeping only those that serve the feed's imported routes.
  */
 export async function discoverRtUrls(
   feedId?: string,
@@ -404,7 +371,10 @@ export async function discoverRtUrls(
 
   for (const feed of feeds) {
     try {
-      const rtUrls = await resolveRtUrlsForFeed(feed.onestop_id, key, fetchFn)
+      const discovered = await resolveRtUrlsForFeed(feed.onestop_id, key, fetchFn)
+      const { kept: rtUrls } = discovered.length
+        ? await selectRtUrls(discovered, await importedRouteIds(feed.feed_id), fetchFn)
+        : { kept: discovered }
       checked++
 
       if (rtUrls.length > 0) {
@@ -437,6 +407,14 @@ export async function discoverRtUrls(
   return { checked, updated, errors }
 }
 
+async function importedRouteIds(feedId: string): Promise<Set<string>> {
+  const rows = await db
+    .select({ routeId: gtfsRoutes.routeId })
+    .from(gtfsRoutes)
+    .where(eq(gtfsRoutes.feedId, feedId))
+  return new Set(rows.map(r => r.routeId))
+}
+
 /**
  * A Transitland onestop id, e.g. `f-dr5r-nyctsubway` — as opposed to the
  * numeric feed id (`"886"`) the same API also accepts.
@@ -448,17 +426,24 @@ export async function discoverRtUrls(
  */
 const ONESTOP_ID = /^[a-z]-/i
 
+/** Feed records by onestop id, shared across one discovery run. */
+type RtRecordCache = Map<string, Promise<any | null>>
+
 /** Fetch one Transitland feed record by onestop id. */
-async function fetchFeedRecord(
+function fetchFeedRecord(
   onestopId: string,
   apiKey: string,
   fetchFn: FetchFn,
+  cache: RtRecordCache = new Map(),
 ): Promise<any | null> {
+  const cached = cache.get(onestopId)
+  if (cached) return cached
   const url = `https://transit.land/api/v2/rest/feeds?apikey=${apiKey}&onestop_id=${encodeURIComponent(onestopId)}&limit=1`
-  const response = await fetchFn(url)
-  if (!response.ok) return null
-  const data = await response.json() as any
-  return data.feeds?.[0] ?? null
+  const record = fetchFn(url)
+    .then(async response => (response.ok ? ((await response.json()) as any).feeds?.[0] ?? null : null))
+    .catch(() => null)
+  cache.set(onestopId, record)
+  return record
 }
 
 /**
@@ -497,6 +482,16 @@ export async function resolveRtUrlsForFeed(
   const staticFeed = feedData.feeds?.[0]
   if (!staticFeed?.onestop_id) return []
 
+  return rtUrlsForStaticRecord(staticFeed, apiKey, fetchFn)
+}
+
+/** Realtime URLs for a static feed whose Transitland record is in hand. */
+async function rtUrlsForStaticRecord(
+  staticFeed: any,
+  apiKey: string,
+  fetchFn: FetchFn,
+  cache: RtRecordCache = new Map(),
+): Promise<GtfsRtUrl[]> {
   const onestopId = staticFeed.onestop_id as string
 
   // Step 2: The operator that runs this feed lists its realtime feeds.
@@ -517,7 +512,7 @@ export async function resolveRtUrlsForFeed(
     const found: GtfsRtUrl[] = []
     const seen = new Set<string>()
     for (const rtId of rtIds) {
-      const record = await fetchFeedRecord(rtId, apiKey, fetchFn)
+      const record = await fetchFeedRecord(rtId, apiKey, fetchFn, cache)
       for (const entry of record ? extractRtUrls(record) : []) {
         if (seen.has(entry.url)) continue
         seen.add(entry.url)
@@ -532,7 +527,7 @@ export async function resolveRtUrlsForFeed(
   if (own.length) return own
 
   // Step 4: The older `{onestopId}~rt` companion record, still used by some.
-  const rtFeed = await fetchFeedRecord(`${onestopId}~rt`, apiKey, fetchFn)
+  const rtFeed = await fetchFeedRecord(`${onestopId}~rt`, apiKey, fetchFn, cache)
   return rtFeed ? extractRtUrls(rtFeed) : []
 }
 
@@ -1728,7 +1723,9 @@ export async function generateMotisConfig(options?: MotisConfigOptions): Promise
       const rtUrls = feed.rt_urls
       if (rtUrls && Array.isArray(rtUrls) && rtUrls.length > 0) {
         lines.push('      rt:')
-        for (const rt of rtUrls) {
+        // One URL often serves trip updates and vehicle positions both.
+        const unique = rtUrls.filter((rt, i) => rtUrls.findIndex(o => o.url === rt.url) === i)
+        for (const rt of unique) {
           lines.push(`        - url: "${rt.url}"`)
           if (rt.headers && Object.keys(rt.headers).length > 0) {
             lines.push('          headers:')

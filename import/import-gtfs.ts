@@ -26,6 +26,9 @@ import {
   loadFeedIdentities,
 } from '../src/services/gtfs.service'
 import { alignRealtimeTripIds } from './align-trip-ids'
+import { selectRtUrls } from '../src/services/rt-url-selection'
+import { parseCsvRows, headerIndex } from './csv'
+import JSZip from 'jszip'
 
 // ── CLI args ────────────────────────────────────────────────────────
 
@@ -101,6 +104,32 @@ async function alignTripIds(
   }
 
   return out
+}
+
+async function staticRouteIds(buffer: ArrayBuffer): Promise<Set<string>> {
+  const file = (await JSZip.loadAsync(buffer)).file('routes.txt')
+  if (!file) return new Set()
+  const rows = parseCsvRows(await file.async('string'))
+  const col = rows.length ? headerIndex(rows[0]!).get('route_id') : undefined
+  if (col === undefined) return new Set()
+  return new Set(rows.slice(1).map(cells => cells[col]?.trim() ?? '').filter(Boolean))
+}
+
+/**
+ * Drop the discovered realtime URLs that don't serve this feed, so neither the
+ * alignment sample nor MOTIS sees another agency's trips.
+ */
+async function selectRealtime(
+  buffer: ArrayBuffer,
+  feed: { feedId: string; onestopId?: string; name?: string; rtUrls?: GtfsRtUrl[] },
+): Promise<GtfsRtUrl[] | undefined> {
+  if (!feed.rtUrls?.length) return feed.rtUrls
+  const { kept, dropped } = await selectRtUrls(feed.rtUrls, await staticRouteIds(buffer))
+  const label = feed.name || feed.onestopId || feed.feedId
+  for (const { url, reason } of dropped) {
+    console.log(`  ⚠ ${label}: dropped realtime ${url.split('?')[0]} (${reason})`)
+  }
+  return kept
 }
 
 async function main() {
@@ -183,6 +212,7 @@ async function main() {
           ...feed,
           rtUrls: feed.rtUrls?.length ? feed.rtUrls : (stored.get(feed.feedId)?.rtUrls ?? undefined),
         }
+        merged.rtUrls = await selectRealtime(buffer, merged)
 
         writeFileSync(filepath, Buffer.from(await alignTripIds(buffer, merged)))
         feedFiles.push(filepath)
@@ -230,6 +260,7 @@ async function main() {
         if (removedFiles.length > 0) {
           console.log(`  ⚠ Stripped ${removedFiles.length} GTFS-Flex files from ${basename(filepath)}`)
         }
+        feed.rtUrls = await selectRealtime(cleanBuffer, feed)
         const aligned = await alignTripIds(cleanBuffer, feed)
         if (aligned !== existingBuffer) {
           writeFileSync(filepath, Buffer.from(aligned))
