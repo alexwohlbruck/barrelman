@@ -10,6 +10,15 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Changed
+
+* **Streets are paved out to their kerbs.** Where a street has no `width` but
+  its sidewalks are mapped as separate ways, the carriageway now runs to about
+  2.25 m inside them (half a tagged sidewalk `width`), so side streets draw at
+  their real width rather than one lane wide. Lanes keep their own width; the
+  rest is unmarked kerbside. Replication queues the streets beside an edited
+  sidewalk.
+
 ### Fixed
 
 * **New York transit has realtime again.** The GTFS import now finds realtime
@@ -17,6 +26,12 @@ does it — and the release pipeline turns it into the GitHub Release notes.
   Metro-North get live trip updates instead of schedules only. Realtime feeds
   that serve another agency's routes, or refuse requests without a key, are
   left out rather than polled.
+* **Median ends are round.** A narrow median's nose takes half its width as
+  its kerb radius, so it ends round at the crosswalk instead of drawn to a point
+  well short of it.
+* **Stop lines stand clear of crosswalks drawn askew** across the arriving
+  lanes, and scraps of bus or bike lane paint under 5 m long are no longer left
+  inside a junction.
 
 ## [0.10.17] - 2026-10-15
 

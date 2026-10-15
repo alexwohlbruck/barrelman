@@ -773,6 +773,66 @@ FROM split;
 -- the same transaction (a console build is one) is invisible to it.
 CREATE INDEX ON _rm_roads USING gist (g);
 CREATE INDEX ON _rm_roads (osm_id);
+-- Kerb to kerb from the sidewalks mapped either side, where no width is
+-- tagged: a sidewalk's line runs down its middle, `inset` (half its tagged
+-- width, else 2.25 m) from the kerb. Read square across the way at a quarter,
+-- half and three quarters along, each side needs a sidewalk as the nearest
+-- path or road at two of the three, and the nearer side sets both kerbs. Only
+-- ever wider than the lanes and their bike lanes and parking, by at most 8 m:
+-- the rest is unmarked `sh` either side, so lanes keep their width. It lies
+-- outside a track and any parking, where a car parks, and inside a bike lane,
+-- which runs beside the traffic.
+-- Read from the mapped line, so every box gets the same width.
+ALTER TABLE _rm_roads ADD COLUMN sh float8 NOT NULL DEFAULT 0;
+-- Square across the way 20 m to each side, `side` +1 to the left.
+DROP TABLE IF EXISTS _rm_rays;
+CREATE TEMP TABLE _rm_rays AS
+SELECT r.osm_id, r.s, v.side, at.p, ST_MakeLine(at.p, ST_Translate(at.p, -v.side * at.u[2] * 20 * r.s, v.side * at.u[1] * 20 * r.s)) as line
+FROM _rm_roads r
+CROSS JOIN LATERAL (VALUES (0.25), (0.5), (0.75)) f(t)
+CROSS JOIN LATERAL (SELECT ST_LineInterpolatePoint(r.g, f.t) as p, road_dir(r.g, f.t, 5 * r.s) as u) at
+CROSS JOIN LATERAL (VALUES (1), (-1)) v(side)
+WHERE NOT r.bridge AND at.u IS NOT NULL
+  AND COALESCE(road_metres(r.tags->>'width:carriageway'), road_metres(r.tags->>'width')) IS NULL
+  AND r.class NOT IN ('motorway', 'motorway_link', 'trunk', 'trunk_link', 'service')
+  AND NOT r.tags ?| ARRAY['placement', 'placement:forward', 'placement:backward'];
+ALTER TABLE _rm_rays ADD COLUMN line_ll geometry;
+UPDATE _rm_rays SET line_ll = ST_Transform(line, 4326);
+-- The ground-level paths and roads those cross, in pieces for the index.
+DROP TABLE IF EXISTS _rm_beside;
+CREATE TEMP TABLE _rm_beside AS
+SELECT c.osm_id, ST_Subdivide(ST_Transform(c.geom, 3857), 8) as g,
+       COALESCE(c.tags->>'footway' = 'sidewalk' AND c.tags->>'highway' IN ('footway', 'path', 'cycleway'), false) as sidewalk,
+       road_metres(c.tags->>'width') as walk_w
+FROM (SELECT DISTINCT h.id FROM _rm_rays y
+      CROSS JOIN LATERAL (SELECT g.id FROM geo_places g WHERE g.geom && y.line_ll AND g.geom_type = 'line' AND g.tags ? 'highway') h) hit
+JOIN geo_places c ON c.id = hit.id
+WHERE c.geom_type = 'line' AND COALESCE(c.tags->>'footway', '') <> 'crossing'
+  AND c.tags->>'highway' NOT IN ('proposed', 'construction', 'abandoned', 'razed', 'platform')
+  AND COALESCE(c.tags->>'bridge', 'no') = 'no' AND COALESCE(c.tags->>'tunnel', 'no') = 'no'
+  AND COALESCE(road_int(c.tags->>'layer'), 0) = 0;
+CREATE INDEX ON _rm_beside USING gist (g);
+ANALYZE _rm_beside;
+UPDATE _rm_roads r SET sh = (k.kerb_w - r.width) / 2, width = k.kerb_w
+FROM (
+  SELECT h.osm_id, 2 * least(percentile_cont(0.5) WITHIN GROUP (ORDER BY h.d) FILTER (WHERE h.side = 1),
+                             percentile_cont(0.5) WITHIN GROUP (ORDER BY h.d) FILTER (WHERE h.side = -1)) as kerb_w
+  FROM (
+    -- The nearest path or road along each, if it is a sidewalk.
+    SELECT y.osm_id, y.side, hit.d - least(3, greatest(0.75, COALESCE(hit.walk_w / 2, 2.25))) as d
+    FROM _rm_rays y
+    CROSS JOIN LATERAL (
+      SELECT ST_Distance(y.p, ST_Intersection(c.g, y.line)) / y.s as d, c.sidewalk, c.walk_w
+      FROM _rm_beside c
+      WHERE c.g && y.line AND c.osm_id <> y.osm_id AND ST_Intersects(c.g, y.line)
+      ORDER BY 1 LIMIT 1
+    ) hit
+    WHERE hit.sidewalk
+  ) h
+  GROUP BY h.osm_id
+  HAVING count(*) FILTER (WHERE h.side = 1) >= 2 AND count(*) FILTER (WHERE h.side = -1) >= 2
+) k
+WHERE r.osm_id = k.osm_id AND k.kerb_w > r.width + 0.5 AND k.kerb_w <= r.width + 8;
 -- Where each way ends, and its heading there, read from the line as mapped:
 -- smoothing depends on what else a build read, and these decide pairs and
 -- forks (below), which must come out the same in every box.
@@ -818,7 +878,7 @@ FROM (
 WHERE r.osm_id = p.osm_id;
 -- A tagged width too narrow for its lanes beside parking counts the parking out.
 UPDATE _rm_roads SET park_r = 0, park_l = 0
-WHERE park_r + park_l > 0 AND (width - bike_r - bike_l - park_r - park_l) / greatest(fwd + bwd + both_ways, 1) < 2.6;
+WHERE park_r + park_l > 0 AND (width - 2 * sh - bike_r - bike_l - park_r - park_l) / greatest(fwd + bwd + both_ways, 1) < 2.6;
 -- Across the carriageway, left of the way's direction is positive: the left
 -- kerb, its parking and bike lane, the backward lanes, any centre turn lane,
 -- the forward lanes, then the right side's bike lane, parking and kerb.
@@ -828,10 +888,10 @@ WHERE park_r + park_l > 0 AND (width - bike_r - bike_l - park_r - park_l) / grea
 ALTER TABLE _rm_roads ADD COLUMN lane_w float8, ADD COLUMN left_edge float8, ADD COLUMN right_edge float8,
   ADD COLUMN split_b float8, ADD COLUMN split_f float8,
   ADD COLUMN br_a float8, ADD COLUMN br_b float8, ADD COLUMN bl_a float8, ADD COLUMN bl_b float8;
-UPDATE _rm_roads SET lane_w = (width - bike_r - bike_l - park_r - park_l) / greatest(fwd + bwd + both_ways, 1);
-UPDATE _rm_roads SET left_edge = width / 2 - bike_l - park_l, right_edge = -width / 2 + bike_r + park_r,
-  br_a = -width / 2 + CASE WHEN track_r THEN 0 ELSE park_r END,
-  bl_a = width / 2 - CASE WHEN track_l THEN 0 ELSE park_l END;
+UPDATE _rm_roads SET lane_w = (width - 2 * sh - bike_r - bike_l - park_r - park_l) / greatest(fwd + bwd + both_ways, 1);
+UPDATE _rm_roads SET left_edge = width / 2 - sh - bike_l - park_l, right_edge = -width / 2 + sh + bike_r + park_r,
+  br_a = -width / 2 + CASE WHEN track_r THEN 0 ELSE park_r + sh END,
+  bl_a = width / 2 - CASE WHEN track_l THEN 0 ELSE park_l + sh END;
 UPDATE _rm_roads SET br_b = br_a + bike_r - buf_r, bl_b = bl_a - bike_l + buf_l;
 UPDATE _rm_roads SET split_b = left_edge - bwd * lane_w;
 UPDATE _rm_roads SET split_f = split_b - both_ways * lane_w;
@@ -1327,19 +1387,25 @@ ANALYZE _rm_paint_areas;
 -- Each road widened to its carriageway, and at every vertex roads share, the
 -- corners between just those roads filled to a kerb radius. Rounding only
 -- what meets keeps a median, an island or a plaza between two roads that
--- never join open. Unioned per grid cell, each keeping only its own square,
--- so the seams between cells match.
+-- never join open. A median's end is rounded off from both of its sides, so
+-- beside one (another carriageway running alongside, `gap` metres of kerb
+-- apart) its corner takes half the gap rather than the full radius, and the
+-- nose comes out round rather than drawn to a point. Unioned per grid cell,
+-- each keeping only its own square, so the seams between cells match.
 DROP TABLE IF EXISTS _rm_fillets;
 CREATE TEMP TABLE _rm_fillets AS
 SELECT bridge, p, ST_Intersection(
          -- Where the reach cuts across a corner's fill, the kerb turns off
          -- round rather than at a notch.
          ST_Buffer(ST_Buffer(ST_Union(u, ST_Intersection(
-           ST_Buffer(ST_Buffer(u, 4 * s, 'quad_segs=8'), -4 * s, 'quad_segs=8'),
-           ST_Buffer(p, reach, 16))), 2 * s, 'quad_segs=8'), -2 * s, 'quad_segs=8'),
+           CASE WHEN m.near IS NULL THEN ST_Buffer(ST_Buffer(u, 4 * s, 'quad_segs=8'), -4 * s, 'quad_segs=8')
+                ELSE ST_Union(ST_Difference(ST_Buffer(ST_Buffer(u, 4 * s, 'quad_segs=8'), -4 * s, 'quad_segs=8'), m.near),
+                              ST_Buffer(ST_Buffer(u, m.r * s, 'quad_segs=8'), -m.r * s, 'quad_segs=8')) END,
+           ST_Buffer(p, reach, 16))), least(2, COALESCE(m.r, 2)) * s, 'quad_segs=8'), -least(2, COALESCE(m.r, 2)) * s, 'quad_segs=8'),
          ST_Buffer(p, reach + 4 * s, 16)) as g
 FROM (
-  SELECT i.bridge, v.p, v.s, (v.width * 0.75 + 10) * v.s as reach,
+  SELECT i.bridge, v.p, v.s, (v.width * 0.75 + 10) * v.s as reach, array_agg(i.osm_id) as ids,
+         array_agg(i.bearing) as bearings, array_agg(r.width) as widths, array_agg(r.len_m) as lens,
          ST_Union(COALESCE(ST_Intersection(r.body, ST_Expand(v.p, (v.width + 10 + r.width) * v.s)),
                   ST_Buffer(ST_Intersection(COALESCE(r.axis, r.g), ST_Expand(v.p, (v.width + 10 + r.width) * v.s)), r.width / 2 * r.s,
                             r.cap))) as u
@@ -1347,7 +1413,29 @@ FROM (
   JOIN _rm_incid i ON i.x = v.x AND i.y = v.y
   JOIN _rm_roads r ON r.osm_id = i.osm_id
   GROUP BY i.bridge, v.p, v.s, v.width
-) pieces;
+) pieces
+-- The carriageways alongside, 2 to 8 m of kerb away from one of the roads
+-- here running the same line, and the median between: from each one's
+-- middle out to the near kerb of ours. Both run on for a block (40 m): short
+-- ways are the pieces of a junction, whose gaps the full radius closes, as it
+-- does a sliver under 2 m.
+LEFT JOIN LATERAL (
+  SELECT ST_Union(ST_Buffer(ST_Intersection(COALESCE(o.axis, o.g), ST_Expand(pieces.p, pieces.reach + 10 * o.s)),
+                            (o.width / 2 + q.gap + 0.25) * o.s, 'quad_segs=4')) as near,
+         CASE WHEN count(*) > 0 THEN min(q.gap) / 2 - 0.1 END as r
+  FROM _rm_roads o
+  CROSS JOIN LATERAL (SELECT road_dir(o.g, ST_LineLocatePoint(o.g, pieces.p), 5 * o.s) as u,
+                             ST_ClosestPoint(COALESCE(o.axis, o.g), pieces.p) as c) d
+  CROSS JOIN LATERAL (
+    SELECT ST_Distance(pieces.p, COALESCE(o.axis, o.g)) / o.s - o.width / 2 - max(w.width) / 2 as gap
+    FROM unnest(pieces.bearings, pieces.widths, pieces.lens) w(bearing, width, len)
+    WHERE abs(d.u[1] * sin(radians(w.bearing)) + d.u[2] * cos(radians(w.bearing))) > 0.9 AND w.len > 40
+  ) q
+  WHERE o.g && ST_Expand(pieces.p, 25 * pieces.s) AND o.bridge = pieces.bridge AND o.osm_id <> ALL (pieces.ids) AND o.len_m > 40
+    AND d.u IS NOT NULL AND q.gap > 2 AND q.gap < 8
+    -- square across from here, not further along the same line
+    AND abs((ST_X(d.c) - ST_X(pieces.p)) * d.u[1] + (ST_Y(d.c) - ST_Y(pieces.p)) * d.u[2]) < 0.5 * ST_Distance(d.c, pieces.p)
+) m ON true;
 DELETE FROM _rm_fillets WHERE g IS NULL OR ST_IsEmpty(g);
 CREATE INDEX ON _rm_fillets USING gist (g);
 
@@ -1473,13 +1561,17 @@ SELECT r.osm_id, r.g, r.s, r.americas, r.bridge, e.at_end, e.pt, n.x, n.y, n.top
        r.len_m, r.ease, r.pos, r.disp, r.res_pos, r.res_disp, r.res_at, r.res_len,
        CASE WHEN e.at_end THEN r.turn_forward ELSE r.turn_backward END as turns,
        -- Back from the junction centre to the stop line: clear of the widest
-       -- road crossing here, and of any crosswalk across the approach.
+       -- road crossing here, and of any crosswalk across the approach, all
+       -- the way across the lanes arriving where the crosswalk runs askew.
        greatest((COALESCE(a.cross_w, 0) / 2 / greatest(COALESCE(a.sine, 1), 0.5) + 1.5) * r.s, COALESCE((
-         SELECT max(abs(CASE WHEN e.at_end THEN 1 - ST_LineLocatePoint(r.g, ST_ClosestPoint(c.g, e.pt))
-                                              ELSE ST_LineLocatePoint(r.g, ST_ClosestPoint(c.g, e.pt)) END) * ST_Length(r.g))
+         SELECT max(abs(CASE WHEN e.at_end THEN 1 - ST_LineLocatePoint(r.g, dp.geom)
+                                              ELSE ST_LineLocatePoint(r.g, dp.geom) END) * ST_Length(r.g))
          FROM _rm_crossings c
+         CROSS JOIN LATERAL ST_DumpPoints(ST_Collect(ST_ClosestPoint(c.g, e.pt),
+                                                     ST_Intersection(c.g, road_strip(r.g, CASE WHEN e.at_end THEN r.right_edge ELSE r.split_b END * r.s,
+                                                                                     CASE WHEN e.at_end THEN r.split_f ELSE r.left_edge END * r.s)))) dp
          WHERE c.g && ST_Expand(e.pt, 30 * r.s) AND ST_DWithin(c.g, r.g, 0.5 * r.s)
-           AND ST_DWithin(c.g, e.pt, 30 * r.s)
+           AND ST_DWithin(c.g, e.pt, 30 * r.s) AND ST_DWithin(dp.geom, e.pt, (30 + r.width / 2) * r.s)
        ) + 2.5 * r.s, 0)) as setback,
        COALESCE(a.cross_w, 0) as cross_w
 FROM _rm_roads r
@@ -1709,14 +1801,18 @@ CROSS JOIN LATERAL (SELECT COALESCE(CASE
                            r.res_at, r.res_len, r.fork_e, r.ease_e, r.dir_s, r.dir_e) END,
   road_strip(ST_Simplify(b.g, 0.05 * b.s), b.a * b.s, b.b * b.s)) as band) o
 CROSS JOIN LATERAL (
-  SELECT ST_CollectionExtract(COALESCE(ST_Difference(o.band, ST_Union(cut)), o.band), 3) as clipped
+  SELECT ST_CollectionExtract(COALESCE(ST_Difference(o.band, ST_Union(cut)), o.band), 3) as cut_band
   FROM (SELECT k.cut FROM _rm_cuts k WHERE k.cut && o.band
         UNION ALL SELECT k.cut FROM _rm_boxes k WHERE k.cut && o.band AND b.osm_id = ANY (k.ids)
         UNION ALL SELECT a.cut FROM _rm_approach_cuts a WHERE a.osm_id = b.osm_id
         UNION ALL SELECT rc.cut FROM _rm_road_cuts rc WHERE rc.osm_id = b.osm_id
         UNION ALL SELECT tc.cut FROM _rm_turn_cuts tc WHERE b.osm_id = ANY (tc.ids) AND tc.cut && o.band AND NOT tc.edge) cuts
-) c
-WHERE o.band IS NOT NULL AND NOT ST_IsEmpty(c.clipped) AND ST_Area(c.clipped) > 4 * b.s * b.s;
+) k
+-- A scrap under 5 m of lane long, cut off between a crosswalk and the edge
+-- of a junction, is left out.
+CROSS JOIN LATERAL (SELECT ST_Collect(p.geom) as clipped FROM ST_Dump(k.cut_band) p
+                    WHERE ST_Area(p.geom) > greatest(4, CASE WHEN ST_NumGeometries(k.cut_band) > 1 THEN 5 * abs(b.b - b.a) END) * b.s * b.s) c
+WHERE o.band IS NOT NULL AND c.clipped IS NOT NULL;
 
 -- ─── Bike lanes through junctions ────────────────────────────────────────────
 -- A bike lane arriving at a junction that carries straight on into a bike lane

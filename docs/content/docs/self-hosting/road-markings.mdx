@@ -23,7 +23,7 @@ Only tags the OSM wiki documents are read, and paint follows US conventions (MUT
 | Lane change barred | `change:lanes[:forward\|:backward]`, `change` (`no`, `not_left`, `not_right`) | in use | `lane` / `solid` where neither lane may cross; a solid line beside a dashed one where only one may |
 | Turn arrows | `turn:lanes[:forward\|:backward]` | approved | glyphs `road-arrow-*` |
 | Lane placement | `placement[:forward\|:backward]` | de facto | shifts the carriageway |
-| Width | `width:carriageway`, `width` | de facto | carriageway width |
+| Width | `width:carriageway`, `width`; else separately mapped `footway=sidewalk` ways either side | de facto | carriageway width. Untagged, the kerbs stand 2.25 m (half the sidewalk's `width`) inside the nearer sidewalk, up to 8 m wider than the lanes; the extra is unmarked kerbside |
 | Bike lanes | `cycleway[:left\|:right\|:both]=lane\|track`, `cycleway:*:width` | de facto | `bike` lines, `bike_lane` / `fill` green |
 | Bike lane buffer | `cycleway:*:buffer=yes\|<metres>` (0.9 m for `yes`), or `cycleway:*:marking:<traffic side>=barred_area` | de facto / draft | two `bike` lines, with `hatch` bars between them where the buffer is at least 0.6 m |
 | Bus lanes | `bus:lanes`, `lanes:bus`, `psv:lanes`, `lanes:psv` | de facto | `bus_lane` / `fill` red |
@@ -64,4 +64,4 @@ Per Key:lanes, `lanes` counts traffic lanes only: a flush median is not a lane, 
 
 ## Rebuilding
 
-A full build replaces the three tables; a scoped build rebuilds one box (see the header of the SQL file). With `ROAD_MARKINGS_INCREMENTAL=1`, replication queues a box wherever an edit touches what the build reads: the roads, crossings, signal, stop, give way, turning circle and speed hump nodes, and hatched areas.
+A full build replaces the three tables; a scoped build rebuilds one box (see the header of the SQL file). With `ROAD_MARKINGS_INCREMENTAL=1`, replication queues a box wherever an edit touches what the build reads: the roads, crossings, signal, stop, give way, turning circle and speed hump nodes, hatched areas, and the sidewalks beside a road.
