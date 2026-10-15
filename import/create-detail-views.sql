@@ -314,11 +314,13 @@ WHERE ((geom_type = 'area'
   AND COALESCE(tags->>'location', '') NOT IN ('roof', 'rooftop')
   AND COALESCE(tags->>'generator:place', '') <> 'roof';
 
--- Golf course features (`golf=*`): playing surfaces as areas, each hole's line
--- from tee to green, and the pins. `kind` is the golf value (`heavy_rough` folds
--- into `rough`). A hole also comes as a point at its tee, carrying `ref` and
--- `par`, so a client labels it once rather than once per tile the line crosses;
--- `geo_places_golf_tee_idx` is what lets the tile envelope find those points.
+-- Golf course features (`golf=*`, and `disc_golf=*` holes and baskets):
+-- playing surfaces as areas, each hole's line from tee to green, and the pins.
+-- `kind` is the golf value (`heavy_rough` folds into `rough`). A hole also
+-- comes as a point at its tee, carrying `ref` and `par`, so a client labels it
+-- once rather than once per tile the line crosses; `geo_places_golf_tee_idx`
+-- and `geo_places_disc_golf_tee_idx` are what let the tile envelope find those
+-- points. Disc golf tee pads are left out: the hole's start is its tee.
 -- Cart paths and water hazards are left out: nearly all carry `highway=*` or
 -- `natural=water`, which the basemap already draws.
 DROP VIEW IF EXISTS golf_features CASCADE;
@@ -341,7 +343,113 @@ SELECT osm_id * 4 + 3 as fid,
        NULLIF(tags->>'ref', '') as ref,
        NULLIF(tags->>'par', '') as par
 FROM geo_places
-WHERE geom_type = 'line' AND tags->>'golf' = 'hole' AND tags->>'ref' <> '';
+WHERE geom_type = 'line' AND tags->>'golf' = 'hole' AND tags->>'ref' <> ''
+UNION ALL
+SELECT (osm_id * 4 + CASE osm_type WHEN 'N' THEN 0 WHEN 'W' THEN 1 ELSE 2 END) as fid,
+       id, geom,
+       tags->>'disc_golf' as kind,
+       NULL::text as ref,
+       NULL::text as par
+FROM geo_places
+WHERE (geom_type = 'line' AND tags->>'disc_golf' = 'hole')
+   OR (geom_type = 'point' AND tags->>'disc_golf' = 'basket')
+UNION ALL
+SELECT osm_id * 4 + 3 as fid,
+       id, ST_StartPoint(geom) as geom,
+       'hole' as kind,
+       NULLIF(tags->>'ref', '') as ref,
+       NULLIF(tags->>'par', '') as par
+FROM geo_places
+WHERE geom_type = 'line' AND tags->>'disc_golf' = 'hole' AND tags->>'ref' <> '';
+
+-- Ski areas: `landuse=winter_sports` outlines, pistes and lift pylons. The
+-- lifts themselves are in the basemap's `transportation` layer already.
+--
+-- `piste` is the first `piste:type` (`nordic;hike;snowshoe` is a nordic trail).
+-- A piste is `piste_area` only when it says so (`area=yes`, or a multipolygon).
+-- The import makes a closed way a polygon unless it says `area=no`, and a closed
+-- nordic loop is a line, so it comes as `piste` with its polygon for the client
+-- to stroke. A `route=piste` relation is `route` when none of its ways carry
+-- piste tags of their own, so it is the only thing drawing that trail, and
+-- `route_name` when they do, for its name alone.
+--
+-- `scheme` is the signage convention where the piste lies, since one
+-- `piste:difficulty` is a different colour on each continent: `na` (green
+-- circle, blue square, black diamond) across North America, Oceania and China,
+-- Korea and Mongolia, `jp` in Japan, `eu` everywhere else, South America
+-- included.
+DROP VIEW IF EXISTS ski_features CASCADE;
+CREATE VIEW ski_features AS
+SELECT (osm_id * 4 + CASE osm_type WHEN 'N' THEN 0 WHEN 'W' THEN 1 ELSE 2 END) as fid,
+       id, geom,
+       CASE WHEN tags->>'type' = 'route' THEN
+                 CASE WHEN EXISTS (SELECT 1 FROM geo_places w
+                                   WHERE w.tags ? 'piste:type' AND w.geom_type = 'line'
+                                     AND w.osm_type = 'W' AND w.geom && p.geom
+                                     AND ST_Covers(p.geom, w.geom))
+                      THEN 'route_name' ELSE 'route' END
+            WHEN geom_type = 'area' AND (osm_type = 'R' OR tags->>'area' = 'yes') THEN 'piste_area'
+            ELSE 'piste' END as kind,
+       NULLIF(NULLIF(lower(trim(split_part(tags->>'piste:type', ';', 1))), ''), 'yes') as piste,
+       CASE WHEN lower(tags->>'piste:difficulty') IN
+                 ('novice', 'easy', 'intermediate', 'advanced', 'expert', 'freeride', 'extreme')
+            THEN lower(tags->>'piste:difficulty') END as difficulty,
+       CASE WHEN tags->>'piste:grooming' ILIKE '%classic%' AND tags->>'piste:grooming' ILIKE '%skating%'
+            THEN 'classic+skating'
+            ELSE NULLIF(lower(trim(tags->>'piste:grooming')), '') END as grooming,
+       CASE WHEN ST_X(centroid) BETWEEN 129.5 AND 146 AND ST_Y(centroid) BETWEEN 30 AND 41.5
+              OR ST_X(centroid) BETWEEN 139 AND 146 AND ST_Y(centroid) BETWEEN 41.5 AND 46 THEN 'jp'
+            WHEN (ST_X(centroid) BETWEEN -170 AND -50 AND ST_Y(centroid) > 15)
+              OR (ST_X(centroid) > 110 AND ST_Y(centroid) < -10)
+              OR (ST_X(centroid) BETWEEN 100 AND 129.5 AND ST_Y(centroid) BETWEEN 18 AND 49.5)
+              OR (ST_X(centroid) BETWEEN 80 AND 100 AND ST_Y(centroid) BETWEEN 35 AND 49.5) THEN 'na'
+            ELSE 'eu' END as scheme,
+       COALESCE(NULLIF(tags->>'piste:name', ''), NULLIF(tags->>'name', '')) as name
+FROM geo_places p
+WHERE tags ? 'piste:type' AND geom_type IN ('line', 'area')
+  AND (tags->>'type' IS DISTINCT FROM 'route' OR tags->>'route' = 'piste')
+UNION ALL
+SELECT (osm_id * 4 + CASE osm_type WHEN 'N' THEN 0 WHEN 'W' THEN 1 ELSE 2 END) as fid,
+       id, geom,
+       CASE WHEN geom_type = 'area' THEN 'ski_area' ELSE 'pylon' END as kind,
+       NULL, NULL, NULL, NULL, NULL
+FROM geo_places
+WHERE ((geom_type = 'area' AND tags->>'landuse' = 'winter_sports')
+       OR (geom_type = 'point' AND tags->>'aerialway' = 'pylon'))
+  AND NOT tags ? 'piste:type';
+
+-- Running tracks: `leisure=track` for running or athletics, or with no sport,
+-- which is nearly always one. `kind` says how to draw it:
+--
+--  - `oval`: a closed track mapped with its infield inside. It comes as its
+--    outline, wound clockwise on screen, so the lanes lie at a positive line
+--    offset; a polygon would be stroked along its tile clip edges too.
+--  - `surface`: a ring with its infield cut out, or too small to hold one.
+--  - `line`: a lane, a straight or a runway.
+--
+-- `lanes` is the tag where it is a plain count. `scale` is how many times
+-- longer a metre is on screen here than at 36°N, where clients size in metres.
+DROP VIEW IF EXISTS sport_tracks CASCADE;
+CREATE VIEW sport_tracks AS
+SELECT (osm_id * 4 + CASE osm_type WHEN 'N' THEN 0 WHEN 'W' THEN 1 ELSE 2 END) as fid,
+       id, ST_Boundary(ST_ForcePolygonCCW(geom)) as geom,
+       'oval' as kind,
+       CASE WHEN tags->>'lanes' ~ '^[1-9][0-9]?$' THEN (tags->>'lanes')::int END as lanes,
+       round((cos(radians(36)) / cos(radians(ST_Y(centroid))))::numeric, 2)::real as scale
+FROM geo_places
+WHERE geom_type = 'area' AND tags->>'leisure' = 'track'
+  AND area_m2 > 2000 AND ST_NRings(geom) = ST_NumGeometries(geom)
+  AND COALESCE(split_part(tags->>'sport', ';', 1), 'running') IN ('running', 'athletics')
+UNION ALL
+SELECT (osm_id * 4 + CASE osm_type WHEN 'N' THEN 0 WHEN 'W' THEN 1 ELSE 2 END) as fid,
+       id, geom,
+       CASE WHEN geom_type = 'line' THEN 'line' ELSE 'surface' END as kind,
+       CASE WHEN tags->>'lanes' ~ '^[1-9][0-9]?$' THEN (tags->>'lanes')::int END as lanes,
+       round((cos(radians(36)) / cos(radians(ST_Y(centroid))))::numeric, 2)::real as scale
+FROM geo_places
+WHERE geom_type IN ('area', 'line') AND tags->>'leisure' = 'track'
+  AND NOT (geom_type = 'area' AND area_m2 > 2000 AND ST_NRings(geom) = ST_NumGeometries(geom))
+  AND COALESCE(split_part(tags->>'sport', ';', 1), 'running') IN ('running', 'athletics');
 
 -- Roller coaster tracks: `roller_coaster=track`, and the older
 -- `railway=roller_coaster` that some parks still carry.
