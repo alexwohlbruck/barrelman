@@ -25,7 +25,6 @@ import {
   bboxCells,
   sanitizeGtfsZip,
   resolveRtUrlsForFeed,
-  STATIC_URL_OVERRIDES,
   FLEX_EXTENSION_FILES,
 } from './gtfs.service'
 import JSZip from 'jszip'
@@ -852,7 +851,6 @@ describe('fetchFeedList', () => {
     const [feed] = await fetchFeedList('nyc', 'test-key', mockFetch)
 
     expect(feed.rtUrls?.map(r => r.url)).toEqual(['https://mta.example/gtfs-bdfm'])
-    expect(feed.url).toBe(STATIC_URL_OVERRIDES['f-dr5r-nyctsubway'])
   })
 
   test('fills a credential Transitland names but does not publish from GTFS_RT_CREDENTIALS', async () => {

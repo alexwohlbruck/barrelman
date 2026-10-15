@@ -194,7 +194,7 @@ export async function fetchFeedList(
           feedId,
           onestopId,
           name: String(feed.name || feed.onestop_id || ''),
-          url: STATIC_URL_OVERRIDES[onestopId] ?? url,
+          url,
           region,
         })
         records.set(feedId, feed)
@@ -220,19 +220,6 @@ export async function fetchFeedList(
   }
 
   return feeds
-}
-
-/**
- * Static feeds whose publisher offers a better download than the one
- * Transitland catalogues. Keyed by onestop id.
- *
- * MTA's supplemented subway feed is the regular schedule plus the planned
- * service changes of the next seven days, and it is what the subway's realtime
- * trip ids are drawn from. Past that window it is identical to gtfs_subway.zip,
- * so a stale copy degrades to the regular feed rather than to nothing.
- */
-export const STATIC_URL_OVERRIDES: Readonly<Record<string, string>> = {
-  'f-dr5r-nyctsubway': 'https://rrgtfsfeeds.s3.amazonaws.com/gtfs_supplemented.zip',
 }
 
 /**

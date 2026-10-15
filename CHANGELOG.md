@@ -17,9 +17,6 @@ does it — and the release pipeline turns it into the GitHub Release notes.
   Metro-North get live trip updates instead of schedules only. Realtime feeds
   that serve another agency's routes, or refuse requests without a key, are
   left out rather than polled.
-* **Subway routing follows planned service changes.** The subway imports MTA's
-  supplemented schedule, which carries the coming week's reroutes and
-  suspensions and matches far more live trains.
 
 ## [0.10.17] - 2026-10-15
 
