@@ -198,6 +198,8 @@ export function shapeDecks(decks: Deck[], outlines: Outline[], grounded: Array<[
         const boundary = rayHit(pts[i], dir, outlines[home[i]].rings, skip)
         // On the outline's side, which a way often ends on, or out past a skewed end: no reading.
         if (boundary === Infinity) continue
+        // A skewed corner cutting into the carriageway near an end: the end's cap shapes it, not a notch in the side.
+        if (boundary < deck.edges[side] - CORNER_INSET && Math.min(fromEnd(i, 0), fromEnd(i, 1)) <= CAP_MAX) continue
         reached[side][i] = boundary >= deck.edges[side] - CORNER_INSET
         let edge = boundary
         for (const o of others) {
