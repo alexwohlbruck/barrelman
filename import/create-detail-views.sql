@@ -333,7 +333,7 @@ WHERE (geom_type = 'area'
        AND tags->>'golf' IN ('tee', 'fairway', 'green', 'rough', 'heavy_rough', 'bunker',
                              'driving_range'))
    OR (geom_type = 'line' AND tags->>'golf' = 'hole')
-   OR (geom_type = 'point' AND tags->>'golf' IN ('pin', 'tee'))
+   OR (geom_type = 'point' AND tags->>'golf' = 'pin')
 UNION ALL
 SELECT osm_id * 4 + 3 as fid,
        id, ST_StartPoint(geom) as geom,
@@ -341,7 +341,7 @@ SELECT osm_id * 4 + 3 as fid,
        NULLIF(tags->>'ref', '') as ref,
        NULLIF(tags->>'par', '') as par
 FROM geo_places
-WHERE geom_type = 'line' AND tags->>'golf' = 'hole' AND tags ? 'ref';
+WHERE geom_type = 'line' AND tags->>'golf' = 'hole' AND tags->>'ref' <> '';
 
 -- Roller coaster tracks: `roller_coaster=track`, and the older
 -- `railway=roller_coaster` that some parks still carry.
