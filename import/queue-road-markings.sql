@@ -9,7 +9,7 @@
 --
 -- Only what generate-road-markings.sql reads is queued: the road classes it
 -- paves, crossings, signal, stop, give way, turning circle and speed hump
--- nodes, and painted areas. old_places keeps categories, not tags, so an old
+-- nodes, painted areas, level crossings, and track by crossing gear. old_places keeps categories, not tags, so an old
 -- service road or footway counts only where it was drawn: a service road on a
 -- paved surface, a footway under a painted crosswalk, and an area or node
 -- without a category only on a painted area's outline or by a hump's paint.
@@ -53,7 +53,11 @@ BEGIN
     JOIN osm_replay.changed c ON c.id = g.id
     WHERE (g.geom_type = 'line' AND g.osm_type = 'W' AND (road_is_marked_way(g.tags) OR g.tags->>'footway' = 'crossing'))
        OR (g.geom_type = 'point' AND (g.tags->>'highway' IN ('crossing', 'traffic_signals', 'stop', 'give_way', 'turning_circle', 'turning_loop')
-                                      OR g.tags->>'traffic_calming' IN ('hump', 'table', 'cushion')))
+                                      OR g.tags->>'traffic_calming' IN ('hump', 'table', 'cushion')
+                                      OR g.tags->>'railway' IN ('level_crossing', 'tram_level_crossing')))
+       OR (g.geom_type = 'line' AND g.tags->>'railway' IN ('rail', 'light_rail', 'tram', 'narrow_gauge', 'subway', 'preserved')
+           AND EXISTS (SELECT 1 FROM road_glyphs r WHERE r.geom && ST_Expand(g.geom, 0.0005) AND r.glyph LIKE 'cross%'
+                       AND ST_DWithin(r.geom, g.geom, 0.0005)))
        OR (g.geom_type = 'area' AND (g.tags->>'road_marking' = 'restriction' OR g.tags->>'area:highway' = 'prohibited'
                                      OR g.tags->>'traffic_calming' = 'painted_island'))
   ),
@@ -71,7 +75,12 @@ BEGIN
                 OR (o.categories && ARRAY['highway/footway', 'highway/path', 'highway/cycleway']
                     AND EXISTS (SELECT 1 FROM road_markings m WHERE m.geom && o.geom AND m.kind = 'crosswalk'))))
        OR (o.geom_type = 'point' AND o.categories && ARRAY['highway/crossing', 'highway/traffic_signals', 'highway/stop',
-                                                           'highway/give_way', 'highway/turning_circle', 'highway/turning_loop'])
+                                                           'highway/give_way', 'highway/turning_circle', 'highway/turning_loop',
+                                                           'railway/level_crossing', 'railway/tram_level_crossing'])
+       OR (o.geom_type = 'line' AND o.categories && ARRAY['railway/rail', 'railway/light_rail', 'railway/tram', 'railway/narrow_gauge',
+                                                          'railway/subway', 'railway/preserved']
+           AND EXISTS (SELECT 1 FROM road_glyphs r WHERE r.geom && ST_Expand(o.geom, 0.0005) AND r.glyph LIKE 'cross%'
+                       AND ST_DWithin(r.geom, o.geom, 0.0005)))
        OR (o.geom_type = 'area' AND o.categories = '{}'
            AND EXISTS (SELECT 1 FROM road_markings m WHERE m.geom && o.geom AND m.kind = 'restriction' AND ST_Intersects(m.geom, o.geom)))
        OR (o.geom_type = 'point' AND o.categories = '{}'

@@ -894,7 +894,7 @@ export const SCRIPTS: ScriptDef[] = [
     id: 'osm-road-markings',
     name: 'Build Road Markings',
     description:
-      'Rebuild road_surfaces, road_markings and road_glyphs from the lane tags: true-width carriageways with rounded kerbs, lane, centre and edge lines, stop lines, crosswalks, and turn arrows and bike symbols.',
+      'Rebuild road_surfaces, road_markings and road_glyphs from the lane tags: true-width carriageways with rounded kerbs, lane, centre and edge lines, stop lines, crosswalks, turn arrows and bike symbols, and the signal masts and crossing gear beside the road.',
     category: 'osm',
     danger: 'safe',
     longRunning: true,

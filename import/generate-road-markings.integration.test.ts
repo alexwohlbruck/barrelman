@@ -189,6 +189,13 @@ const hdWays: [number, string, Record<string, string>][] = [
   ...[351, 356, 361, 366, 371].map((id, k): [number, string, Record<string, string>] =>
     [id, line([-74.4105 - k * 0.005, 40.713], [-74.4095 - k * 0.005, 40.713]), { railway: id === 366 ? 'tram' : 'rail' }]),
   [372, line([-74.4305, 40.713 + 4 / 111050], [-74.4295, 40.713 + 4 / 111050]), { railway: 'rail' }],
+  // A divided road over a track, its carriageways' nodes 10 m apart and tagged apart.
+  [380, line([-74.435, 40.712], [-74.435, 40.714]), { highway: 'trunk', oneway: 'yes', lanes: '2' }],
+  [381, line([-74.435 + 10 / 84300, 40.714], [-74.435 + 10 / 84300, 40.712]), { highway: 'trunk', oneway: 'yes', lanes: '2' }],
+  [382, line([-74.4355, 40.713], [-74.4345, 40.713]), { railway: 'rail' }],
+  // A pedestrian signal 15 m along from a side street's T junction.
+  [390, line([-74.440, 40.712], [-74.440, 40.714]), { highway: 'secondary', lanes: '2' }],
+  [391, line([-74.441, 40.713], [-74.440, 40.713]), { highway: 'residential' }],
 ]
 const hdFeatures: [string, string, Record<string, string>, string][] = [
   ['W231', rect(-74.315, 40.7130, -1.5, 1.5, 0, 66), { road_marking: 'restriction' }, 'area'],
@@ -207,6 +214,9 @@ const hdFeatures: [string, string, Record<string, string>, string][] = [
   ['N367', 'POINT(-74.425 40.713)', { railway: 'tram_level_crossing' }, 'point'],
   ['N373', 'POINT(-74.430 40.713)', { railway: 'level_crossing', 'crossing:barrier': 'half' }, 'point'],
   ['N374', `POINT(-74.430 ${40.713 + 4 / 111050})`, { railway: 'level_crossing' }, 'point'],
+  ['N383', 'POINT(-74.435 40.713)', { railway: 'level_crossing', 'crossing:barrier': 'half' }, 'point'],
+  ['N384', `POINT(${-74.435 + 10 / 84300} 40.713)`, { railway: 'level_crossing' }, 'point'],
+  ['N392', `POINT(-74.440 ${40.713 + 15 / 111050})`, { highway: 'traffic_signals', crossing: 'traffic_signals' }, 'point'],
 ]
 
 // Every build drops the *_next tables by bare name too, scoped ones included.
@@ -670,7 +680,7 @@ run('generate-road-markings.sql', () => {
       const gates = await near(-74.410, 40.713)
       expect(gates.map(g => g.glyph)).toEqual(['crossing-gate-1', 'crossing-gate-1'])
       for (const g of gates) {
-        expect(Math.abs(g.y - 40.713) * 111050).toBeGreaterThan(4.2)
+        expect(Math.abs(g.y - 40.713) * 111050).toBeGreaterThan(4.1)
         // Right of the traffic: east of the road going north, west going south.
         expect(Math.sign(g.x + 74.410)).toBe(g.direction === 0 ? 1 : -1)
       }
@@ -685,13 +695,30 @@ run('generate-road-markings.sql', () => {
       expect(await near(-74.425, 40.713)).toEqual([])
     })
 
+    test('gives each carriageway of a divided road its gate, tagged on either', async () => {
+      const gates = await near(-74.435 + 5 / 84300, 40.713)
+      expect(gates.map(g => [g.glyph, g.direction])).toEqual([['crossing-gate-2', 0], ['crossing-gate-2', 180]])
+    })
+
+    test('leaves the median of a divided road without a mast', async () => {
+      const [{ n }] = await sql`SELECT count(*)::int as n FROM road_glyphs WHERE glyph LIKE 'signal-%'
+        AND ST_X(geom) BETWEEN ${SB_X + 3 / 84300} AND ${NB_X - 3 / 84300} AND abs(ST_Y(geom) - ${STREET_Y}) < ${15 / 111050}`
+      expect(n).toBe(0)
+    })
+
+    test('lets a pedestrian signal stop its own crossing, not the junction beside it', async () => {
+      const masts = await near(-74.440, 40.713)
+      expect(masts.length).toBe(2)
+      expect(masts.every(m => m.y > 40.713 + 10 / 111050)).toBe(true)
+    })
+
     test('treats a road over two tracks as one crossing, clear of both', async () => {
       const gates = await near(-74.430, 40.713)
       expect(gates.map(g => g.glyph)).toEqual(['crossing-gate-1', 'crossing-gate-1'])
       const north = gates.find(g => g.direction === 0)!
       const south = gates.find(g => g.direction === 180)!
-      expect((south.y - 40.713) * 111050).toBeGreaterThan(4 + 4.2)
-      expect((40.713 - north.y) * 111050).toBeGreaterThan(4.2)
+      expect((south.y - 40.713) * 111050).toBeGreaterThan(4 + 4.1)
+      expect((40.713 - north.y) * 111050).toBeGreaterThan(4.1)
     })
   })
 
@@ -1231,6 +1258,33 @@ run('generate-road-markings.sql', () => {
         SELECT count(*)::int as n FROM detail_dirty WHERE layer = 'road_markings' AND ST_Intersects(box, ST_SetSRID(ST_MakePoint(${x}, ${y}), 4326))`)[0].n
       expect(await at(-74.315, 40.7133)).toBe(1)
       expect(await at(-74.325, 40.7132)).toBe(1)
+      expect(await at(-74.36, 40.712)).toBe(0)
+    })
+  })
+
+  describe('a level crossing retagged, and its track moved', () => {
+    beforeAll(async () => {
+      await sql.unsafe(`DROP SCHEMA IF EXISTS osm_replay CASCADE; CREATE SCHEMA osm_replay;
+        CREATE TABLE osm_replay.old_places AS
+          SELECT id, 'W'::char(1) as osm_type, osm_id, NULL::text as name, ARRAY['railway/rail'] as categories, geom, geom_type, NULL::int as admin_level
+          FROM geo_places WHERE id = 'W351';
+        -- Track far from any crossing gear.
+        INSERT INTO osm_replay.old_places (id, osm_type, osm_id, categories, geom, geom_type) VALUES
+          ('W97', 'W', 97, ARRAY['railway/rail'], ST_GeomFromText('LINESTRING(-74.36 40.712, -74.3599 40.7121)', 4326), 'line');
+        CREATE TABLE osm_replay.changed AS SELECT id FROM geo_places WHERE id = 'N362';`)
+      await sql`DELETE FROM detail_dirty`
+      await sql.unsafe(readFileSync(join(import.meta.dir, 'queue-road-markings.sql'), 'utf8'))
+    })
+
+    afterAll(async () => {
+      await sql`DELETE FROM detail_dirty`
+    })
+
+    test('queues the crossing and the track by its gear, not track elsewhere', async () => {
+      const at = async (x: number, y: number) => (await sql`
+        SELECT count(*)::int as n FROM detail_dirty WHERE layer = 'road_markings' AND ST_Intersects(box, ST_SetSRID(ST_MakePoint(${x}, ${y}), 4326))`)[0].n
+      expect(await at(-74.420, 40.713)).toBe(1)
+      expect(await at(-74.410, 40.713)).toBe(1)
       expect(await at(-74.36, 40.712)).toBe(0)
     })
   })

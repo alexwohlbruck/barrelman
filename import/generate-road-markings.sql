@@ -1961,77 +1961,88 @@ WHERE side.present AND d IS NOT NULL;
 
 -- ─── Signals and level crossings ─────────────────────────────────────────────
 -- What stands beside the road at a signal or a railway crossing, as glyphs a
--- client stands models on. Each faces the traffic it controls, whose bearing
+-- client stands models on: each faces the traffic it controls, whose bearing
 -- is its `direction`, from off the right kerb of the lanes that traffic
--- arrives in (see docs/content/docs/self-hosting/road-markings.mdx):
---
---   signal-1 .. signal-4         a mast arm over that many arriving lanes
---   traffic-signals              the signal as mapped, for a map symbol
---   crossing-gate-1 .. -4        a gate arm across that many lanes, with lights
---                                and a crossbuck, clear of the nearest track
---   crossing-lights, crossbuck   no gate; no gate and no lights
---
--- A signal mapped on a junction, or on a way within reach of one, controls
--- every approach to it, and each has a mast on its far right corner, past the
--- road it crosses. One mapped between junctions stands just past its node for
--- the way its direction names, else both ways. Crossing gear follows
--- crossing:barrier, crossing:light, crossing:bell and crossing:saltire, whose
--- default is a crossbuck alone; a tram crossing has none unless tagged.
+-- arrives in (docs/content/docs/self-hosting/road-markings.mdx).
 
 -- The ways through a point as the legs traffic arrives on: `dir` +1 along the
--- way's line and -1 against it, `t` the unit direction of travel there, `kerb`
--- metres from the way to the kerb on its right, the lanes it arrives in, and
--- `run` metres of way behind it.
+-- way's line and -1 against it, `t` the unit direction of travel, `kerb`
+-- metres from the way to the kerb on its right, as eased in from the way
+-- before, and `run` metres of way behind.
 CREATE OR REPLACE FUNCTION pg_temp.road_legs(at geometry)
-RETURNS TABLE (osm_id bigint, dir int, s float8, pt geometry, tx float8, ty float8, kerb float8, lanes int, all_lanes int, run float8, flip boolean)
+RETURNS TABLE (osm_id bigint, g geometry, dir int, s float8, pt geometry, tx float8, ty float8, kerb float8, lanes int,
+               all_lanes int, run float8, flip boolean)
 LANGUAGE sql STABLE AS $$
-  SELECT r.osm_id, l.dir, r.s, ST_ClosestPoint(r.g, at), l.dir * d.u[1], l.dir * d.u[2],
-         CASE WHEN l.dir = 1 THEN -r.kerb_r ELSE r.kerb_l END,
+  SELECT r.osm_id, r.g, l.dir, r.s, ST_ClosestPoint(r.g, at), l.dir * d.u[1], l.dir * d.u[2],
+         CASE WHEN f.f * r.len_m < COALESCE(r.ease, 0)
+              THEN CASE WHEN l.dir = 1 THEN -COALESCE(r.prev_kerb_r, r.kerb_r) ELSE COALESCE(r.prev_kerb_l, r.kerb_l) END
+              ELSE CASE WHEN l.dir = 1 THEN -r.kerb_r ELSE r.kerb_l END END,
          CASE WHEN l.dir = 1 THEN r.fwd ELSE r.bwd END, r.fwd + r.bwd + r.both_ways,
          CASE WHEN l.dir = 1 THEN f.f ELSE 1 - f.f END * ST_Length(r.g) / r.s, r.flip
   FROM _rm_roads r
   CROSS JOIN LATERAL (SELECT ST_LineLocatePoint(r.g, at) as f) f
   CROSS JOIN LATERAL (SELECT road_dir(r.g, f.f, 3 * r.s) as u) d
   CROSS JOIN (VALUES (1), (-1)) l(dir)
-  WHERE r.g && ST_Expand(at, 2 * r.s) AND ST_DWithin(r.g, at, r.s) AND NOT r.bridge AND d.u IS NOT NULL
+  -- A constant reach, so the lookup stays an index probe: no road's `s` is 4.
+  WHERE r.g && ST_Expand(at, 4) AND ST_DWithin(r.g, at, r.s) AND NOT r.bridge AND d.u IS NOT NULL
     AND CASE WHEN l.dir = 1 THEN r.fwd > 0 AND f.f > 0.001 ELSE r.bwd > 0 AND f.f < 0.999 END
 $$;
 
--- A point `ahead` metres along a leg from its point and `right` metres right of it, back in 4326.
+-- `ahead` metres along a leg from `pt`, and `right_m` to its right, in 3857.
 CREATE OR REPLACE FUNCTION pg_temp.road_leg_at(pt geometry, tx float8, ty float8, s float8, ahead float8, right_m float8)
 RETURNS geometry LANGUAGE sql IMMUTABLE AS $$
-  SELECT ST_Transform(ST_SetSRID(ST_MakePoint(ST_X(pt) + (tx * ahead + ty * right_m) * s,
-                                              ST_Y(pt) + (ty * ahead - tx * right_m) * s), 3857), 4326)
+  SELECT ST_SetSRID(ST_MakePoint(ST_X(pt) + (tx * ahead + ty * right_m) * s, ST_Y(pt) + (ty * ahead - tx * right_m) * s), 3857)
 $$;
 
+-- Signals that control a junction: a vehicle signal, or any on the junction
+-- node itself. A pedestrian signal beside one stops its own crossing only,
+-- and ramp meters, emergency signals and flashing beacons stand no masts.
+DROP TABLE IF EXISTS _rm_vehicle_signals;
+CREATE TEMP TABLE _rm_vehicle_signals AS
+SELECT ST_Transform(geom, 3857) as g, 1 / cos(radians(ST_Y(geom))) as s,
+       COALESCE(tags->>'traffic_signals:direction', tags->>'direction') as direction,
+       COALESCE(tags->>'crossing', 'no') NOT IN ('no', 'separate') as pedestrian
+FROM geo_places
+WHERE geom && (SELECT area FROM _rm_area) AND geom_type = 'point' AND tags @> '{"highway": "traffic_signals"}'
+  AND COALESCE(tags->>'traffic_signals', 'signal') NOT IN ('ramp_meter', 'emergency', 'blinker', 'stop', 'hawk');
+CREATE INDEX ON _rm_vehicle_signals USING gist (g);
+
+-- The signal itself, on a road at grade, for a map symbol.
 INSERT INTO road_glyphs_next (glyph, direction, bridge, geom)
-SELECT 'traffic-signals', 0, false, ST_Transform(g, 4326) FROM _rm_signals WHERE kind = 'traffic_signals';
+SELECT 'traffic-signals', 0, false, ST_Transform(c.g, 4326) FROM _rm_vehicle_signals c
+WHERE EXISTS (SELECT 1 FROM _rm_roads r WHERE r.g && ST_Expand(c.g, 4) AND ST_DWithin(r.g, c.g, c.s) AND NOT r.bridge);
 
 DROP TABLE IF EXISTS _rm_signalled;
 CREATE TEMP TABLE _rm_signalled AS
 SELECT n.x, n.y, n.p, n.s FROM _rm_nodes n
-WHERE EXISTS (SELECT 1 FROM _rm_signals c WHERE c.kind = 'traffic_signals' AND c.g && ST_Expand(n.p, (n.width / 2 + 20) * n.s)
-              AND ST_DWithin(c.g, n.p, (n.width / 2 + 20) * n.s));
+WHERE EXISTS (SELECT 1 FROM _rm_vehicle_signals c WHERE c.g && ST_Expand(n.p, (n.width / 2 + 20) * n.s)
+              AND ST_DWithin(c.g, n.p, CASE WHEN c.pedestrian THEN 0.5 ELSE n.width / 2 + 20 END * n.s));
 CREATE INDEX ON _rm_signalled USING gist (p);
 
--- Short legs are the links between a divided road's carriageways.
+-- A mast on the far right corner of every approach, past the road it
+-- crosses, as in US practice. Where the approach goes on to cross the other
+-- carriageway of a divided road, its mast stands past that one instead.
 INSERT INTO road_glyphs_next (glyph, direction, bridge, geom)
 SELECT 'signal-' || least(l.lanes, 4), ((round(degrees(atan2(l.tx, l.ty)))::int % 360) + 360) % 360, false,
-       pg_temp.road_leg_at(l.pt, l.tx, l.ty, l.s, COALESCE(a.cross_w, 0) / 2 / greatest(COALESCE(a.sine, 1), 0.5) + 1.5, l.kerb + 1)
+       ST_Transform(pg_temp.road_leg_at(l.pt, l.tx, l.ty, l.s, COALESCE(a.cross_w, 0) / 2 / greatest(COALESCE(a.sine, 1), 0.5) + 1.5, l.kerb + 1), 4326)
 FROM _rm_signalled n
 CROSS JOIN LATERAL pg_temp.road_legs(n.p) l
 LEFT JOIN _rm_approach a ON a.osm_id = l.osm_id AND a.x = n.x AND a.y = n.y
-WHERE l.run >= 20;
+WHERE l.run >= 20
+  AND NOT EXISTS (SELECT 1 FROM _rm_signalled m
+                  CROSS JOIN LATERAL (SELECT (ST_X(m.p) - ST_X(n.p)) / n.s as dx, (ST_Y(m.p) - ST_Y(n.p)) / n.s as dy) v
+                  WHERE m.p && ST_Expand(n.p, 35 * n.s) AND (m.x, m.y) <> (n.x, n.y)
+                    AND v.dx * l.tx + v.dy * l.ty BETWEEN 1 AND 35 AND abs(v.dx * l.ty - v.dy * l.tx) < 6);
 
--- Signals between junctions: a mast just past the node.
+-- A signal between junctions stands just past its node, for the way its
+-- direction names (`forward` is along the way as mapped), else both ways.
 INSERT INTO road_glyphs_next (glyph, direction, bridge, geom)
 SELECT 'signal-' || least(l.lanes, 4), ((round(degrees(atan2(l.tx, l.ty)))::int % 360) + 360) % 360, false,
-       pg_temp.road_leg_at(l.pt, l.tx, l.ty, l.s, 4, l.kerb + 1)
-FROM _rm_signals c
+       ST_Transform(pg_temp.road_leg_at(l.pt, l.tx, l.ty, l.s, 4, l.kerb + 1), 4326)
+FROM _rm_vehicle_signals c
 CROSS JOIN LATERAL pg_temp.road_legs(c.g) l
-WHERE c.kind = 'traffic_signals'
-  AND NOT EXISTS (SELECT 1 FROM _rm_signalled n WHERE n.p && ST_Expand(c.g, 60 * n.s) AND ST_DWithin(n.p, c.g, 60 * n.s))
-  -- `forward` runs along the way as mapped, which a oneway=-1 is drawn against.
+WHERE NOT EXISTS (SELECT 1 FROM _rm_signalled n WHERE n.p && ST_Expand(c.g, 60 * c.s) AND ST_DWithin(n.p, c.g, 60 * c.s)
+                  AND (NOT c.pedestrian OR ST_DWithin(n.p, c.g, 0.5 * c.s)))
   AND (c.direction IS NULL OR c.direction NOT IN ('forward', 'backward')
        OR l.dir = CASE WHEN (c.direction = 'forward') <> l.flip THEN 1 ELSE -1 END);
 
@@ -2039,45 +2050,78 @@ DROP TABLE IF EXISTS _rm_rails;
 CREATE TEMP TABLE _rm_rails AS
 SELECT ST_Transform(geom, 3857) as g FROM geo_places
 WHERE geom && (SELECT area FROM _rm_area) AND geom_type = 'line'
-  AND tags->>'railway' IN ('rail', 'light_rail', 'tram', 'narrow_gauge', 'subway', 'preserved')
+  AND (tags @> '{"railway": "rail"}' OR tags @> '{"railway": "light_rail"}' OR tags @> '{"railway": "tram"}'
+       OR tags @> '{"railway": "narrow_gauge"}' OR tags @> '{"railway": "subway"}' OR tags @> '{"railway": "preserved"}')
   AND COALESCE(tags->>'tunnel', 'no') = 'no' AND COALESCE(tags->>'bridge', 'no') = 'no';
 CREATE INDEX ON _rm_rails USING gist (g);
 
--- A road over several tracks crosses each at its own node: they are one
--- crossing, with the most its nodes are tagged with.
+-- A road over several tracks crosses each at its own node; nodes within 12 m
+-- are one crossing, and each takes the most any of them is tagged with.
 DROP TABLE IF EXISTS _rm_level_crossings;
 CREATE TEMP TABLE _rm_level_crossings AS
 WITH nodes AS (
-  SELECT ST_Transform(geom, 3857) as g, tags->>'crossing:barrier' as barrier,
+  SELECT ST_Transform(geom, 3857) as g, cos(radians(ST_Y(geom))) as k, tags->>'crossing:barrier' as barrier,
          CASE WHEN tags->>'crossing:barrier' IN ('yes', 'half', 'double_half', 'full', 'gate', 'gates', 'lift_gate') THEN 3
               WHEN 'yes' IN (tags->>'crossing:light', tags->>'crossing:bell') THEN 2
-              WHEN tags->>'railway' = 'level_crossing' AND COALESCE(tags->>'crossing:saltire', 'yes') <> 'no' THEN 1 END as rank
+              WHEN tags @> '{"railway": "level_crossing"}' AND COALESCE(tags->>'crossing:saltire', 'yes') <> 'no' THEN 1
+              WHEN tags->>'crossing:saltire' = 'yes' THEN 1 END as rank
   FROM geo_places
   WHERE geom && (SELECT area FROM _rm_area) AND geom_type = 'point'
-    AND tags->>'railway' IN ('level_crossing', 'tram_level_crossing')
+    AND (tags @> '{"railway": "level_crossing"}' OR tags @> '{"railway": "tram_level_crossing"}')
 ), clustered AS (
-  SELECT *, ST_ClusterDBSCAN(g, eps := 15, minpoints := 1) OVER () as cluster FROM nodes WHERE rank IS NOT NULL
+  -- Mercator stretches by 1/cos(latitude); shrunk back, eps is in metres.
+  SELECT *, ST_ClusterDBSCAN(ST_Scale(g, k, k), eps := 12, minpoints := 1) OVER () as cluster FROM nodes WHERE rank IS NOT NULL
 )
-SELECT DISTINCT ON (cluster) g, barrier, CASE rank WHEN 3 THEN 'gate' WHEN 2 THEN 'lights' ELSE 'crossbuck' END as gear
-FROM clustered ORDER BY cluster, rank DESC;
+SELECT g, cluster,
+       first_value(barrier) OVER (PARTITION BY cluster ORDER BY rank DESC, barrier = 'double_half' DESC, barrier = 'full' DESC, barrier) as barrier,
+       max(rank) OVER (PARTITION BY cluster) as rank
+FROM clustered;
 
 -- Gear stands where its kerbside post clears the nearest track by 4.2 m: a
--- gate arm 3.7 m from the rail, as US practice has it. A double gate closes
--- the lanes leaving the crossing too.
+-- gate arm 3.7 m from the rail, as US practice has it, before the first
+-- track the traffic meets; a double gate also past the last.
 INSERT INTO road_glyphs_next (glyph, direction, bridge, geom)
-SELECT CASE c.gear WHEN 'gate' THEN 'crossing-gate-' || least(CASE WHEN c.barrier = 'full' THEN l.all_lanes ELSE l.lanes END, 4)
-                   WHEN 'lights' THEN 'crossing-lights' ELSE 'crossbuck' END,
-       ((round(degrees(atan2(l.tx, l.ty)))::int % 360) + 360) % 360, false,
-       pg_temp.road_leg_at(l.pt, l.tx, l.ty, l.s, side.sign * b.m, l.kerb + 0.8)
+SELECT DISTINCT ON (c.cluster, l.osm_id, l.dir, side.sign)
+       CASE c.rank WHEN 3 THEN 'crossing-gate-' || least(CASE WHEN c.barrier = 'full' THEN l.all_lanes ELSE l.lanes END, 3)
+                   WHEN 2 THEN 'crossing-lights' ELSE 'crossbuck' END,
+       ((round(degrees(atan2(l.tx, l.ty)))::int % 360) + 360) % 360, false, ST_Transform(clear.p, 4326)
 FROM _rm_level_crossings c
+CROSS JOIN LATERAL (SELECT * FROM (VALUES (-1), (1)) v(sign) WHERE v.sign = -1 OR c.barrier = 'double_half') side
 CROSS JOIN LATERAL pg_temp.road_legs(c.g) l
-CROSS JOIN LATERAL (VALUES (-1), (1)) side(sign)
 CROSS JOIN LATERAL (
-  SELECT min(m) as m FROM generate_series(3.0, 30.0, 0.5) m
-  WHERE NOT EXISTS (SELECT 1 FROM _rm_rails r
-                    WHERE ST_DWithin(r.g, ST_Transform(pg_temp.road_leg_at(l.pt, l.tx, l.ty, l.s, side.sign * m, l.kerb + 0.8), 3857), 4.2 * l.s))
-) b
-WHERE b.m IS NOT NULL AND (side.sign = -1 OR c.barrier = 'double_half');
+  SELECT ST_MakeLine(pg_temp.road_leg_at(l.pt, l.tx, l.ty, l.s, side.sign * 3, l.kerb + 0.8),
+                     pg_temp.road_leg_at(l.pt, l.tx, l.ty, l.s, side.sign * 30, l.kerb + 0.8)) as post,
+         pg_temp.road_leg_at(l.pt, l.tx, l.ty, l.s, side.sign * 3, l.kerb + 0.8) as near
+) path
+CROSS JOIN LATERAL (
+  SELECT ST_ClosestPoint(free, path.near) as p FROM (
+    SELECT ST_Difference(path.post, COALESCE(ST_Union(ST_Buffer(r.g, 4.2 * l.s, 2)), 'GEOMETRYCOLLECTION EMPTY'::geometry)) as free
+    FROM _rm_rails r WHERE r.g && ST_Expand(c.g, 40 * l.s)
+  ) f WHERE NOT ST_IsEmpty(free)
+) clear
+WHERE l.lanes IS NOT NULL
+ORDER BY c.cluster, l.osm_id, l.dir, side.sign, CASE WHEN side.sign = -1 THEN l.run ELSE -l.run END;
+
+-- Gear placed on the asphalt, by a corner's rounded kerb or a road wider
+-- than its tags say, steps out to its right until it stands clear, or goes.
+WITH placed AS (
+  SELECT g.fid, ST_Transform(g.geom, 3857) as p, radians(g.direction) as b, 1 / cos(radians(ST_Y(g.geom))) as s
+  FROM road_glyphs_next g
+  WHERE g.glyph NOT LIKE 'road-%' AND g.glyph <> 'traffic-signals'
+    AND EXISTS (SELECT 1 FROM road_surfaces_next r WHERE r.kind IS NULL AND r.geom && g.geom AND ST_Intersects(r.geom, g.geom))
+), moved AS (
+  SELECT p.*, (SELECT min(m) FROM generate_series(0.5, 15, 0.5) m
+               WHERE NOT EXISTS (SELECT 1 FROM road_surfaces_next r
+                                 WHERE r.kind IS NULL AND ST_Intersects(r.geom, ST_Transform(ST_SetSRID(ST_MakePoint(
+                                   ST_X(p.p) + cos(p.b) * m * p.s, ST_Y(p.p) - sin(p.b) * m * p.s), 3857), 4326)))) as m
+  FROM placed p
+), stepped AS (
+  UPDATE road_glyphs_next g
+  SET geom = ST_Transform(ST_SetSRID(ST_MakePoint(ST_X(m.p) + cos(m.b) * (m.m + 0.8) * m.s, ST_Y(m.p) - sin(m.b) * (m.m + 0.8) * m.s), 3857), 4326)
+  FROM moved m WHERE g.fid = m.fid AND m.m IS NOT NULL
+  RETURNING g.fid
+)
+DELETE FROM road_glyphs_next g USING moved m WHERE g.fid = m.fid AND m.m IS NULL;
 
 -- ─── Painted areas: paint ────────────────────────────────────────────────────
 -- Each painted area's outline, as its `stroke` says, and the bars across it.

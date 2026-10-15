@@ -16,7 +16,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
   a point for each traffic signal mast, off the far right corner of every
   approach to a signalled junction, and for each railway crossing gate,
   flashing light post and crossbuck, clear of the tracks. Each is read from
-  OSM's signal and `crossing:*` tags.
+  OSM's signal and `crossing:*` tags. These glyphs don't start with `road-`;
+  clients that paint glyphs should draw only the `road-` ones.
 
 ### Fixed
 
