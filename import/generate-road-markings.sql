@@ -685,7 +685,7 @@ DROP TABLE IF EXISTS _rm_roads;
 CREATE TEMP TABLE _rm_roads AS
 WITH raw AS (
   SELECT osm_id, tags, tags->>'highway' as class,
-         tags->>'oneway' = '-1' as flip,
+         COALESCE(tags->>'oneway' = '-1', false) as flip,
          CASE WHEN tags->>'oneway' = '-1' THEN ST_Reverse(ST_Transform(geom, 3857)) ELSE ST_Transform(geom, 3857) END as g,
          1 / cos(radians(ST_Y(ST_Centroid(geom)))) as s,
          ST_X(ST_Centroid(geom)) < -30 as americas,
