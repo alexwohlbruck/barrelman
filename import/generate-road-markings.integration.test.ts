@@ -205,6 +205,25 @@ const ways: [number, string, Record<string, string>][] = [
   [534, line([-74.028, 40.71825], [-74.028, 40.7190]), { highway: 'secondary', lanes: '3', 'lanes:forward': '1', 'lanes:backward': '2' }],
   [535, line([-74.0285, 40.7170], [-74.028, 40.7170], [-74.0275, 40.7170]), { highway: 'residential', lanes: '2' }],
   [536, line([-74.0285, 40.71825], [-74.028, 40.71825], [-74.0275, 40.71825]), { highway: 'residential', lanes: '2' }],
+  // Four lanes north into a signalled crossroads over a crosswalk 20° askew,
+  // over one 50° askew (solid dividers), and giving way over one 20° askew;
+  // and a two-way street, three lanes each way, over one -50° askew.
+  ...([[600, -74.600, 20, 12, {}], [610, -74.610, 50, 20, { 'change:lanes': 'no|no|no|no' }], [620, -74.620, 20, 12, {}],
+       [630, -74.630, -50, 20, { oneway: 'no', lanes: '6', 'lanes:forward': '3', 'lanes:backward': '3' }]] as const)
+    .flatMap(([id, x, skew, back, extra]) => {
+    const t = Math.tan((skew * Math.PI) / 180)
+    return [
+      [id, line([x, 40.711], [x, 40.712]), { highway: 'secondary', oneway: 'yes', lanes: '4', ...extra }],
+      [id + 1, line([x, 40.712], [x, 40.713]), { highway: 'secondary', oneway: 'yes', lanes: '4' }],
+      [id + 2, line([x - 0.001, 40.712], [x, 40.712], [x + 0.001, 40.712]), { highway: 'residential', lanes: '2' }],
+      [id + 3, line([x - 10 / 84300, 40.712 - (back + 10 * t) / 111050], [x + 10 / 84300, 40.712 - (back - 10 * t) / 111050]),
+        { highway: 'footway', footway: 'crossing', 'crossing:markings': 'zebra' }],
+    ] as [number, string, Record<string, string>][]
+  }),
+  // A crossing drawn along a signalled approach rather than across it.
+  [640, line([-74.640, 40.711], [-74.640, 40.712]), { highway: 'secondary', oneway: 'yes', lanes: '2' }],
+  [641, line([-74.6405, 40.712], [-74.640, 40.712], [-74.6395, 40.712]), { highway: 'residential', lanes: '2' }],
+  [642, line([-74.640, 40.7114], [-74.640, 40.7117]), { highway: 'footway', footway: 'crossing', 'crossing:markings': 'zebra' }],
 ]
 
 // Painted areas, nodes on roads, and the roads they lie on (OSM wiki schemes).
@@ -281,6 +300,11 @@ run('generate-road-markings.sql', () => {
     }
     await sql`INSERT INTO geo_places VALUES ('N8', 8, ${sql.json({ highway: 'traffic_signals' })}, ST_SetSRID(ST_MakePoint(${SB_X}, ${STREET_Y}), 4326), 'point', 'N')`
     await sql`INSERT INTO geo_places VALUES ('N433', 433, ${sql.json({ highway: 'traffic_signals' })}, ST_SetSRID(ST_MakePoint(-74.440, 40.712), 4326), 'point', 'N')`
+    for (const [id, x] of [[604, -74.600], [614, -74.610], [634, -74.630], [644, -74.640]]) {
+      await sql`INSERT INTO geo_places VALUES (${'N' + id}, ${id}, ${sql.json({ highway: 'traffic_signals' })}, ST_SetSRID(ST_MakePoint(${x}, 40.712), 4326), 'point', 'N')`
+    }
+    await sql`INSERT INTO geo_places VALUES ('N624', 624, ${sql.json({ highway: 'give_way', direction: 'forward' })},
+      ST_SetSRID(ST_MakePoint(-74.620, ${40.712 - 25 / 111050}), 4326), 'point', 'N')`
     const turns: [string, number, number, Record<string, string>][] = [
       ['N80', -74.120, 40.713, { highway: 'turning_circle' }],
       ['N81', -74.125, 40.713, { highway: 'turning_circle', diameter: '30' }],
@@ -773,6 +797,96 @@ run('generate-road-markings.sql', () => {
         AND ST_Intersects(c.geom, ST_MakeEnvelope(-74.4405, 40.7118, -74.4400, 40.7122, 4326))`
     expect(stops).toBeGreaterThan(0)
     expect(gap).toBeGreaterThan(0.3)
+  })
+
+  // The stop line south of the crossroads at `x`, its parts, the crosswalk
+  // past it, and what lies between the two.
+  const skewedStop = async (x: number) => (await sql`
+    WITH box AS (SELECT ST_MakeEnvelope(${east(x, -12)}, ${north(40.712, -45)}, ${east(x, 12)}, ${north(40.712, -4)}, 4326) as b),
+    stop AS (SELECT geom FROM road_markings, box WHERE kind = 'stop' AND ST_Intersects(geom, box.b)),
+    walk AS (SELECT ST_Union(geom) as geom FROM road_markings, box WHERE kind = 'crosswalk' AND ST_Intersects(geom, box.b))
+    SELECT (SELECT count(*)::int FROM stop) as stops,
+           (SELECT ST_NumGeometries(geom) FROM stop LIMIT 1) as parts,
+           (SELECT bool_or(ST_Intersects(s.geom, w.geom)) FROM stop s, walk w) as overlaps,
+           (SELECT min(ST_Distance(p.geom::geography, w.geom::geography)) FROM stop s, walk w, ST_Dump(s.geom) p) as gap,
+           (SELECT max(ST_Distance(p.geom::geography, w.geom::geography)) FROM stop s, walk w, ST_Dump(s.geom) p) as widest,
+           -- Each part's long side, in degrees east of north.
+           (SELECT array_agg(degrees(ST_Azimuth(ST_PointN(r, 1), ST_PointN(r, 2)))::numeric(6, 1) ORDER BY p.path)
+            FROM stop s, ST_Dump(s.geom) p,
+                 LATERAL (SELECT ST_ExteriorRing(ST_OrientedEnvelope(ST_Transform(p.geom, 3857))) as e) o,
+                 LATERAL (SELECT CASE WHEN ST_Length(ST_MakeLine(ST_PointN(o.e, 1), ST_PointN(o.e, 2))) > ST_Length(ST_MakeLine(ST_PointN(o.e, 2), ST_PointN(o.e, 3)))
+                                      THEN ST_MakeLine(ST_PointN(o.e, 1), ST_PointN(o.e, 2)) ELSE ST_MakeLine(ST_PointN(o.e, 2), ST_PointN(o.e, 3)) END as r) l) as sides,
+           (SELECT count(*)::int FROM road_markings m, stop s, walk w
+            WHERE m.kind IN ('lane', 'centre', 'edge') AND m.geom && ST_Expand(w.geom, 0.0003)
+              AND ST_Intersects(m.geom, ST_Difference(ST_ConvexHull(ST_Collect(s.geom, w.geom)), ST_Buffer(s.geom::geography, 0.05)::geometry))) as lines_past,
+           (SELECT min(ST_Distance(m.geom::geography, w.geom::geography)) FROM road_markings m, walk w
+            WHERE m.kind IN ('lane', 'centre', 'edge') AND m.geom && ST_Expand(w.geom, 0.0003)) as lines_gap
+  `)[0]
+  // Azimuth of a line, folded into 0..180.
+  const fold = (deg: number) => ((deg % 180) + 180) % 180
+
+  test('slants a stop line parallel to a crosswalk 20° askew, 1.2 m short of it', async () => {
+    const r = await skewedStop(-74.600)
+    expect(r.stops).toBe(1)
+    expect(r.parts).toBe(1)
+    expect(r.overlaps).toBe(false)
+    expect(r.gap).toBeGreaterThan(1.0)
+    expect(r.gap).toBeLessThan(1.4)
+    // Parallel to the crosswalk all the way across: as close at both ends.
+    expect(r.widest - r.gap).toBeLessThan(0.3)
+    // The crosswalk runs 20° north of east.
+    expect(Math.abs(fold(Number(r.sides[0])) - 70)).toBeLessThan(2)
+    expect(r.lines_past).toBe(0)
+  })
+
+  test('steps square stop lines lane by lane along a crosswalk 50° askew', async () => {
+    const r = await skewedStop(-74.610)
+    expect(r.stops).toBe(1)
+    expect(r.parts).toBe(4)
+    expect(r.overlaps).toBe(false)
+    expect(r.gap).toBeGreaterThan(1.0)
+    expect(r.gap).toBeLessThan(1.4)
+    for (const side of r.sides) expect(Math.abs(fold(Number(side)) - 90)).toBeLessThan(2)
+    expect(r.lines_gap).toBeGreaterThan(1.0)
+    // Each line between two lanes runs on to the forward one's stop line, the
+    // one to its east here.
+    const ends = await Promise.all([-3.3, 0, 3.3].map(async m => (await sql`
+      SELECT (SELECT max(ST_YMax(geom)) FROM road_markings
+              WHERE kind = 'lane' AND geom && ST_MakeEnvelope(${east(-74.610, m - 0.2)}, 40.7115, ${east(-74.610, m + 0.2)}, 40.712, 4326)) as line_end,
+             (SELECT ST_Y(ST_Centroid(p.geom)) FROM road_markings s, ST_Dump(s.geom) p
+              WHERE s.kind = 'stop' AND ST_Intersects(p.geom, ST_MakeEnvelope(${east(-74.610, m + 1)}, 40.7115, ${east(-74.610, m + 1.01)}, 40.712, 4326))) as bar`)[0]))
+    expect(ends.length).toBe(3)
+    for (const e of ends) expect(Math.abs(e.line_end - e.bar) * 111050).toBeLessThan(0.3)
+  })
+
+  test('builds with a crossing drawn along a signalled approach', async () => {
+    const [{ n }] = await sql`SELECT count(*)::int as n FROM road_markings WHERE kind = 'stop' AND geom && ST_MakeEnvelope(-74.6402, 40.711, -74.6398, 40.712, 4326)`
+    expect(n).toBeLessThanOrEqual(1)
+  })
+
+  test('runs the departing lanes on to a crosswalk 50° askew past a stepped stop line', async () => {
+    // Southbound lanes are left of the way; the crosswalk is furthest north on that side.
+    const [{ gap, parts }] = await sql`
+      SELECT (SELECT min(ST_Distance(m.geom::geography, w.geom::geography)) FROM road_markings m,
+                (SELECT ST_Union(geom) as geom FROM road_markings WHERE kind = 'crosswalk' AND geom && ST_MakeEnvelope(${east(-74.630, -12)}, 40.7115, ${east(-74.630, 12)}, 40.7119, 4326)) w
+              WHERE m.kind = 'lane' AND m.geom && ST_MakeEnvelope(${east(-74.630, -12)}, 40.7115, ${east(-74.630, -0.5)}, 40.7119, 4326)) as gap,
+             (SELECT ST_NumGeometries(geom) FROM road_markings WHERE kind = 'stop' AND geom && ST_MakeEnvelope(${east(-74.630, 0)}, 40.7115, ${east(-74.630, 12)}, 40.7119, 4326)) as parts`
+    expect(parts).toBe(3)
+    expect(gap).toBeLessThan(3)
+  })
+
+  test('lines yield triangles up along a crosswalk 20° askew, clear of it', async () => {
+    const [r] = await sql`
+      WITH t AS (SELECT p.geom FROM road_markings m, ST_Dump(m.geom) p
+                 WHERE m.kind = 'yield' AND m.geom && ST_MakeEnvelope(${east(-74.620, -12)}, 40.7116, ${east(-74.620, 12)}, 40.7120, 4326)),
+      walk AS (SELECT ST_Union(geom) as geom FROM road_markings WHERE kind = 'crosswalk' AND geom && ST_MakeEnvelope(${east(-74.620, -12)}, 40.7116, ${east(-74.620, 12)}, 40.7120, 4326))
+      SELECT count(*)::int as n, bool_or(ST_Intersects(t.geom, w.geom)) as overlaps, min(ST_Distance(t.geom::geography, w.geom::geography)) as gap,
+             max(ST_Distance(t.geom::geography, w.geom::geography)) as widest
+      FROM t, walk w`
+    expect(r.n).toBeGreaterThanOrEqual(12)
+    expect(r.overlaps).toBe(false)
+    expect(r.gap).toBeGreaterThan(1.0)
+    expect(r.widest - r.gap).toBeLessThan(0.5)
   })
 
   test('keeps lane lines out of the crossing carriageway', async () => {

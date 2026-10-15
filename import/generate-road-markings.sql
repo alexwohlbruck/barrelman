@@ -625,6 +625,84 @@ EXCEPTION WHEN OTHERS THEN
 END
 $$;
 
+-- Stop lines are laid out in a frame at `p`: `al` metres along the arriving
+-- traffic (unit {ux, uy}), `o` to its left.
+CREATE OR REPLACE FUNCTION road_frame_point(p geometry, ux float8, uy float8, s float8, o float8, al float8) RETURNS geometry
+LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+  SELECT ST_SetSRID(ST_MakePoint(ST_X(p) + (ux * al - uy * o) * s, ST_Y(p) + (uy * al + ux * o) * s), ST_SRID(p))
+$$;
+CREATE OR REPLACE FUNCTION road_frame_quad(p geometry, ux float8, uy float8, s float8, o0 float8, o1 float8,
+                                           al00 float8, al10 float8, al11 float8, al01 float8)
+RETURNS geometry LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+  SELECT ST_MakePolygon(ST_MakeLine(ARRAY[road_frame_point(p, ux, uy, s, o0, al00), road_frame_point(p, ux, uy, s, o1, al10),
+                                          road_frame_point(p, ux, uy, s, o1, al11), road_frame_point(p, ux, uy, s, o0, al01),
+                                          road_frame_point(p, ux, uy, s, o0, al00)]))
+$$;
+
+-- A crosswalk's slope across the traffic: metres further along per metre to
+-- the left. NULL for one within 24° of the road, which _rm_walks calls odd.
+CREATE OR REPLACE FUNCTION road_walk_slope(wx float8, wy float8, ux float8, uy float8) RETURNS float8
+LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+  SELECT CASE WHEN abs(wy * ux - wx * uy) >= 0.4 THEN (wx * ux + wy * uy) / (wy * ux - wx * uy) END
+$$;
+
+-- The `n` lanes `a`..`b` arriving at a stop line, left to right as offsets.
+CREATE OR REPLACE FUNCTION road_stop_lanes(a float8, b float8, n int) RETURNS TABLE (j int, o0 float8, o1 float8)
+LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+  SELECT j, least(a, b) + j * abs(b - a) / greatest(n, 1), least(a, b) + (j + 1) * abs(b - a) / greatest(n, 1)
+  FROM generate_series(0, greatest(n, 1) - 1) j
+$$;
+
+-- Where a stop line's middle stands along the frame at offset `o`: behind `g0 + k * o`
+-- (parallel to the crosswalk) and `lim`, slanted along it or square per lane.
+CREATE OR REPLACE FUNCTION road_stop_at(o float8, a float8, b float8, n int, g0 float8, k float8, slant boolean, lim float8)
+RETURNS float8 LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+  SELECT CASE WHEN slant THEN g0 + k * o - greatest(0, g0 + greatest(k * a, k * b) - lim)
+    ELSE (SELECT least(g0 + k * l.o0, g0 + k * l.o1, lim) FROM road_stop_lanes(a, b, n) l
+          ORDER BY (o < l.o1 OR l.j = greatest(n, 1) - 1) DESC, l.j LIMIT 1) END
+$$;
+
+-- The stop line, 0.45 m deep: one bar, or one per lane.
+CREATE OR REPLACE FUNCTION road_stop_bar(p geometry, ux float8, uy float8, s float8, a float8, b float8, n int,
+                                         g0 float8, k float8, slant boolean, lim float8)
+RETURNS geometry LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+  SELECT CASE WHEN slant THEN (
+    SELECT road_frame_quad(p, ux, uy, s, a, b, ca - d, cb - d, cb + d, ca + d)
+    FROM (SELECT road_stop_at(a, a, b, n, g0, k, true, lim) as ca, road_stop_at(b, a, b, n, g0, k, true, lim) as cb,
+                 0.225 * sqrt(1 + k * k) as d) c)
+  ELSE (
+    SELECT ST_Union(road_frame_quad(p, ux, uy, s, l.o0, l.o1, c - 0.225, c - 0.225, c + 0.225, c + 0.225))
+    FROM road_stop_lanes(a, b, n) l, LATERAL (SELECT road_stop_at((l.o0 + l.o1) / 2, a, b, n, g0, k, false, lim) as c) c) END
+$$;
+
+-- What the approach's paint stops at: the stop line on to `ahead`, `reach`
+-- either side of the way. Past the arriving lanes it follows the crosswalk.
+-- With a `nudge`, a line between two stepped lanes runs on to the forward one.
+CREATE OR REPLACE FUNCTION road_stop_cut(p geometry, ux float8, uy float8, s float8, a float8, b float8, n int,
+                                         g0 float8, k float8, slant boolean, lim float8, reach float8, ahead float8, nudge float8)
+RETURNS geometry LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+  WITH edge AS (SELECT least(a, b) as lo, greatest(a, b) as hi,
+                       least(g0 + k * -reach, lim) as c0, least(g0 + k * reach, lim) as c1),
+  top AS (SELECT greatest(ahead, g0 + abs(k) * greatest(reach, abs(a), abs(b)), lim) + 1 as t)
+  SELECT CASE WHEN slant THEN (
+    SELECT road_frame_quad(p, ux, uy, s, -reach, reach, road_stop_at(-reach, a, b, n, g0, k, true, lim),
+                           road_stop_at(reach, a, b, n, g0, k, true, lim), t.t, t.t) FROM top t)
+  ELSE (
+    SELECT ST_Union(q) FROM (
+      SELECT road_frame_quad(p, ux, uy, s, l.o0 + CASE WHEN l.j = 0 THEN -nudge WHEN cp > c THEN nudge ELSE -nudge END,
+                             l.o1 + CASE WHEN l.j = greatest(n, 1) - 1 THEN nudge WHEN cn > c THEN -nudge ELSE nudge END,
+                             c, c, t.t, t.t) as q
+      FROM road_stop_lanes(a, b, n) l, top t,
+           LATERAL (SELECT road_stop_at((l.o0 + l.o1) / 2, a, b, n, g0, k, false, lim) as c,
+                           road_stop_at(l.o0 - 0.01, a, b, n, g0, k, false, lim) as cp,
+                           road_stop_at(l.o1 + 0.01, a, b, n, g0, k, false, lim) as cn) c
+      UNION ALL
+      SELECT road_frame_quad(p, ux, uy, s, -reach, e.lo, e.c0, least(g0 + k * e.lo, lim), t.t, t.t) FROM edge e, top t WHERE e.lo > -reach
+      UNION ALL
+      SELECT road_frame_quad(p, ux, uy, s, e.hi, reach, least(g0 + k * e.hi, lim), e.c1, t.t, t.t) FROM edge e, top t WHERE e.hi < reach
+    ) r) END
+$$;
+
 -- ─── Scope ───────────────────────────────────────────────────────────────────
 -- To rebuild one box rather than everything, create _rm_scope in the same
 -- session first and put the box in it (EPSG:4326). Roads are read from a
@@ -1622,18 +1700,9 @@ SELECT r.osm_id, r.g, r.s, r.americas, r.bridge, e.at_end, e.pt, n.x, n.y, n.top
        r.len_m, r.ease, r.pos, r.disp, r.res_pos, r.res_disp, r.res_at, r.res_len,
        CASE WHEN e.at_end THEN r.turn_forward ELSE r.turn_backward END as turns,
        -- Back from the junction centre to the stop line: clear of the widest
-       -- road crossing here, and of any crosswalk across the approach, all
-       -- the way across the lanes arriving where the crosswalk runs askew.
-       greatest((COALESCE(a.cross_w, 0) / 2 / greatest(COALESCE(a.sine, 1), 0.5) + 1.5) * r.s, COALESCE((
-         SELECT max(abs(CASE WHEN e.at_end THEN 1 - ST_LineLocatePoint(r.g, dp.geom)
-                                              ELSE ST_LineLocatePoint(r.g, dp.geom) END) * ST_Length(r.g))
-         FROM _rm_crossings c
-         CROSS JOIN LATERAL ST_DumpPoints(ST_Collect(ST_ClosestPoint(c.g, e.pt),
-                                                     ST_Intersection(c.g, road_strip(r.g, CASE WHEN e.at_end THEN r.right_edge ELSE r.split_b END * r.s,
-                                                                                     CASE WHEN e.at_end THEN r.split_f ELSE r.left_edge END * r.s)))) dp
-         WHERE c.g && ST_Expand(e.pt, 30 * r.s) AND ST_DWithin(c.g, r.g, 0.5 * r.s)
-           AND ST_DWithin(c.g, e.pt, 30 * r.s) AND ST_DWithin(dp.geom, e.pt, (30 + r.width / 2) * r.s)
-       ) + 2.5 * r.s, 0)) as setback,
+       -- road crossing here, and of a crosswalk across the approach (below).
+       (COALESCE(a.cross_w, 0) / 2 / greatest(COALESCE(a.sine, 1), 0.5) + 1.5) * r.s as setback,
+       (COALESCE(a.cross_w, 0) / 2 / greatest(COALESCE(a.sine, 1), 0.5) + 1.5) * r.s as road_back,
        COALESCE(a.cross_w, 0) as cross_w
 FROM _rm_roads r
 CROSS JOIN LATERAL (VALUES (true, ST_EndPoint(r.g)), (false, ST_StartPoint(r.g))) e(at_end, pt)
@@ -1642,6 +1711,53 @@ CROSS JOIN LATERAL (SELECT CASE WHEN e.at_end THEN r.fork_e ELSE r.fork_s END as
 JOIN _rm_nodes n ON n.x = round(ST_X(e.pt)::numeric, 2) AND n.y = round(ST_Y(e.pt)::numeric, 2)
 LEFT JOIN _rm_approach a ON a.osm_id = r.osm_id AND a.x = n.x AND a.y = n.y
 WHERE r.marked AND ST_Length(r.g) > 25 * r.s;
+
+-- A stop line stands 1.2 m short of the crosswalk across its approach and
+-- parallel to it; past 40° askew, square across each lane, stepped along it.
+ALTER TABLE _rm_ends ADD COLUMN walk_mode text, ADD COLUMN walk_q geometry, ADD COLUMN walk_wx float8, ADD COLUMN walk_wy float8;
+UPDATE _rm_ends e SET setback = w.back * e.s, walk_mode = w.mode, walk_q = w.q, walk_wx = w.wx, walk_wy = w.wy
+FROM (
+  SELECT DISTINCT ON (e.osm_id, e.at_end) e.osm_id, e.at_end, b.back, m.mode, q.q, w0.wx, w0.wy
+  FROM _rm_ends e
+  JOIN _rm_crossings c ON c.g && ST_Expand(e.pt, 30 * e.s) AND ST_DWithin(c.g, e.g, 0.5 * e.s) AND ST_DWithin(c.g, e.pt, 30 * e.s)
+   -- A crossing node on a mapped crossing way is that crossing.
+   AND NOT (c.geom_type = 'point' AND EXISTS (SELECT 1 FROM _rm_crossings w WHERE w.geom_type = 'line' AND ST_DWithin(w.g, c.g, 1 * e.s)))
+  -- Where the crosswalk crosses the way, and the traffic's direction there.
+  CROSS JOIN LATERAL (SELECT ST_ClosestPoint(c.g, e.g) as x) x
+  CROSS JOIN LATERAL (SELECT ST_LineLocatePoint(e.g, x.x) as f) l
+  CROSS JOIN LATERAL (SELECT road_dir(e.g, l.f, 2 * e.s) as u, ST_LineInterpolatePoint(e.g, l.f) as p,
+                             CASE WHEN e.at_end THEN 1 - l.f ELSE l.f END * ST_Length(e.g) / e.s as d,
+                             CASE WHEN e.at_end THEN 1 ELSE -1 END as dir) d
+  CROSS JOIN LATERAL (SELECT d.dir * d.u[1] as tx, d.dir * d.u[2] as ty) t
+  -- The crosswalk's direction over 4 m either side; a crossing node runs square across the road.
+  CROSS JOIN LATERAL (SELECT CASE WHEN c.geom_type = 'line' THEN ST_LineLocatePoint(c.g, x.x) END as cf,
+                             CASE WHEN c.geom_type = 'line' THEN 4 * e.s / nullif(ST_Length(c.g), 0) END as h) cl
+  CROSS JOIN LATERAL (SELECT CASE WHEN cl.h IS NOT NULL THEN ST_LineInterpolatePoint(c.g, greatest(0, cl.cf - cl.h)) END as c0,
+                             CASE WHEN cl.h IS NOT NULL THEN ST_LineInterpolatePoint(c.g, least(1, cl.cf + cl.h)) END as c1) cc
+  CROSS JOIN LATERAL (SELECT COALESCE(ST_Distance(cc.c0, cc.c1), 0) as len) cd
+  CROSS JOIN LATERAL (SELECT CASE WHEN cd.len > 0.5 * e.s THEN (ST_X(cc.c1) - ST_X(cc.c0)) / cd.len ELSE -t.ty END as wx,
+                             CASE WHEN cd.len > 0.5 * e.s THEN (ST_Y(cc.c1) - ST_Y(cc.c0)) / cd.len ELSE t.tx END as wy) w0
+  CROSS JOIN LATERAL (SELECT road_walk_slope(w0.wx, w0.wy, t.tx, t.ty) as k, CASE WHEN c.style = 'zebra' THEN 1.5 ELSE 1.65 END as half) k
+  CROSS JOIN LATERAL (SELECT CASE WHEN e.at_end THEN e.split_f ELSE -e.split_b END as a,
+                             CASE WHEN e.at_end THEN e.right_edge ELSE -e.left_edge END as b,
+                             CASE WHEN e.at_end THEN e.fwd ELSE e.bwd END as n,
+                             ((ST_X(x.x) - ST_X(d.p)) * -t.ty + (ST_Y(x.x) - ST_Y(d.p)) * t.tx) / e.s as lat) o
+  CROSS JOIN LATERAL (SELECT CASE WHEN degrees(atan(abs(k.k))) < 5 THEN 'square'
+                                  WHEN degrees(atan(abs(k.k))) <= 40 THEN 'slant'
+                                  WHEN o.n > 1 THEN 'stagger' ELSE 'square' END as mode,
+                             sqrt(1 + k.k * k.k) as sq) m
+  -- How far short of the crosswalk's middle the stop line's middle stands.
+  CROSS JOIN LATERAL (SELECT (k.half + 1.2) * m.sq + 0.225 * CASE WHEN m.mode = 'slant' THEN m.sq ELSE 1 END as off) g
+  -- Back from the end to the rearmost part of the stop line, laid out in a frame at the crosswalk.
+  CROSS JOIN LATERAL (SELECT m.mode = 'slant' as slant, CASE WHEN m.mode = 'stagger' THEN o.n ELSE 1 END as n,
+                             -g.off - k.k * o.lat as g0, d.d - e.road_back / e.s as lim) f
+  CROSS JOIN LATERAL (SELECT d.d - least(road_stop_at(o.a, o.a, o.b, f.n, f.g0, k.k, f.slant, f.lim),
+                                         road_stop_at(o.b, o.a, o.b, f.n, f.g0, k.k, f.slant, f.lim)) as back) b
+  CROSS JOIN LATERAL (SELECT ST_Translate(x.x, -t.tx * g.off * e.s, -t.ty * g.off * e.s) as q) q
+  WHERE d.u IS NOT NULL AND k.k IS NOT NULL AND o.n > 0 AND d.d <= 30
+  ORDER BY e.osm_id, e.at_end, b.back DESC
+) w
+WHERE w.osm_id = e.osm_id AND w.at_end = e.at_end;
 
 ALTER TABLE _rm_ends ADD COLUMN controlled boolean;
 UPDATE _rm_ends e SET controlled =
@@ -1663,14 +1779,61 @@ UPDATE _rm_ends e SET yields = NOT e.controlled AND (
              AND NOT ST_DWithin(c.g, e.pt, 0.5 * e.s) AND ST_DWithin(c.g, e.g, 0.5 * e.s)
              AND COALESCE(c.direction, '') <> CASE WHEN e.at_end THEN 'backward' ELSE 'forward' END));
 
--- The stretch of each approach between its stop line and the junction.
+-- A frame at a point `back` units from a road end: the point, the unit vectors
+-- along the arriving traffic and to its left, and the stop line's layout there.
+DROP TABLE IF EXISTS _rm_frames;
+CREATE TEMP TABLE _rm_frames AS
+SELECT f.*,
+       CASE WHEN f.at_end THEN f.split_f + f.shift_here + road_moved(f.pos, f.disp, f.ease, f.res_pos, f.res_disp, f.res_at, f.res_len, f.split_f, f.x_m)
+            ELSE -(f.split_b + f.shift_here + road_moved(f.pos, f.disp, f.ease, f.res_pos, f.res_disp, f.res_at, f.res_len, f.split_b, f.x_m)) END as stop_a,
+       CASE WHEN f.at_end THEN f.right_edge + f.shift_here + road_moved(f.pos, f.disp, f.ease, f.res_pos, f.res_disp, f.res_at, f.res_len, f.right_edge, f.x_m)
+            ELSE -(f.left_edge + f.shift_here + road_moved(f.pos, f.disp, f.ease, f.res_pos, f.res_disp, f.res_at, f.res_len, f.left_edge, f.x_m)) END as stop_b,
+       CASE WHEN f.walk_mode = 'stagger' THEN CASE WHEN f.at_end THEN f.fwd ELSE f.bwd END ELSE 1 END as stop_n,
+       COALESCE(f.walk_mode = 'slant', false) as stop_slant,
+       COALESCE(w.al - w.lat * w.k, 0) as stop_g0, COALESCE(w.k, 0) as stop_k, (f.back - f.road_back) / f.s as stop_lim
+FROM (
+  SELECT e.*, f.back, p,
+         CASE WHEN e.at_end THEN e.len_m - f.back / e.s ELSE f.back / e.s END as x_m,
+         -- How far a fork at this end still holds the lanes off the way here.
+         CASE WHEN abs(e.fork_d) > 0.05 AND e.fork_ease > 0
+              THEN e.fork_d * (1 - t * t * (3 - 2 * t)) ELSE 0 END as shift_here,
+         (ST_X(ahead) - ST_X(p)) / nullif(ST_Distance(ahead, p), 0) as ux,
+         (ST_Y(ahead) - ST_Y(p)) / nullif(ST_Distance(ahead, p), 0) as uy
+  FROM _rm_ends e
+  CROSS JOIN LATERAL (VALUES (e.setback), (e.setback + 6 * e.s), (e.setback + 36 * e.s)) f(back)
+  CROSS JOIN LATERAL (SELECT least(1, f.back / e.s / nullif(e.fork_ease, 0)) as t) ft
+  CROSS JOIN LATERAL (
+    SELECT ST_LineInterpolatePoint(e.g, CASE WHEN e.at_end THEN greatest(0, 1 - f.back / ST_Length(e.g)) ELSE least(1, f.back / ST_Length(e.g)) END) as p,
+           ST_LineInterpolatePoint(e.g, CASE WHEN e.at_end THEN greatest(0, 1 - (f.back - e.s) / ST_Length(e.g)) ELSE least(1, (f.back - e.s) / ST_Length(e.g)) END) as ahead
+  ) pts
+  WHERE f.back < ST_Length(e.g) / 2
+) f
+LEFT JOIN LATERAL (
+  SELECT ((ST_X(f.walk_q) - ST_X(f.p)) * f.ux + (ST_Y(f.walk_q) - ST_Y(f.p)) * f.uy) / f.s as al,
+         ((ST_Y(f.walk_q) - ST_Y(f.p)) * f.ux - (ST_X(f.walk_q) - ST_X(f.p)) * f.uy) / f.s as lat,
+         road_walk_slope(f.walk_wx, f.walk_wy, f.ux, f.uy) as k
+  WHERE f.walk_q IS NOT NULL AND f.ux IS NOT NULL
+) w ON true;
+
+-- The stretch of each approach between its stop line and the junction. Lane
+-- lines between stepped lanes run on to the forward stop line; fills do not.
 DROP TABLE IF EXISTS _rm_approach_cuts;
 CREATE TEMP TABLE _rm_approach_cuts AS
-SELECT e.osm_id, ST_Buffer(ST_LineSubstring(e.g, CASE WHEN e.at_end THEN 1 - least(1, e.setback / ST_Length(e.g)) ELSE 0 END,
-                                                  CASE WHEN e.at_end THEN 1 ELSE least(1, e.setback / ST_Length(e.g)) END),
-                           (r.width / 2 + abs(r.kshift) + greatest(abs(r.fork_s), abs(r.fork_e)) + 2) * r.s, 'endcap=flat') as cut
+SELECT e.osm_id, COALESCE(ST_Union(sub.cut, CASE WHEN f.p IS NOT NULL THEN road_stop_cut(f.p, f.ux, f.uy, f.s, f.stop_a, f.stop_b, f.stop_n, f.stop_g0, f.stop_k, f.stop_slant,
+                                                          f.stop_lim, w.reach, f.back / f.s + 1, 0.15) END), sub.cut) as cut,
+       COALESCE(ST_Union(sub.cut, CASE WHEN f.p IS NOT NULL THEN road_stop_cut(f.p, f.ux, f.uy, f.s, f.stop_a, f.stop_b, f.stop_n, f.stop_g0, f.stop_k, f.stop_slant,
+                                                f.stop_lim, w.reach, f.back / f.s + 1, 0) END), sub.cut) as band_cut
 FROM _rm_ends e JOIN _rm_roads r ON r.osm_id = e.osm_id
-WHERE e.cross_w > 0;
+LEFT JOIN _rm_frames f ON f.osm_id = e.osm_id AND f.at_end = e.at_end AND f.back = e.setback AND e.walk_mode IN ('slant', 'stagger')
+CROSS JOIN LATERAL (SELECT r.width / 2 + abs(r.kshift) + greatest(abs(r.fork_s), abs(r.fork_e)) + 2 as reach,
+                           CASE WHEN f.p IS NULL THEN e.setback
+                                ELSE greatest(0, e.setback - greatest(road_stop_at(f.stop_a, f.stop_a, f.stop_b, f.stop_n, f.stop_g0, f.stop_k, f.stop_slant, f.stop_lim),
+                                                                      road_stop_at(f.stop_b, f.stop_a, f.stop_b, f.stop_n, f.stop_g0, f.stop_k, f.stop_slant, f.stop_lim),
+                                                                      least(f.stop_g0 + abs(f.stop_k) * (r.width / 2 + abs(r.kshift) + 2), f.stop_lim)) * e.s) END as upto) w
+CROSS JOIN LATERAL (SELECT ST_Buffer(ST_LineSubstring(e.g, CASE WHEN e.at_end THEN 1 - least(1, w.upto / ST_Length(e.g)) ELSE 0 END,
+                                                           CASE WHEN e.at_end THEN 1 ELSE least(1, w.upto / ST_Length(e.g)) END),
+                                     w.reach * r.s, 'endcap=flat') as cut) sub
+WHERE e.cross_w > 0 OR (e.walk_mode IS NOT NULL AND (e.controlled OR e.yields));
 CREATE INDEX ON _rm_approach_cuts (osm_id);
 
 -- ─── Lane lines ──────────────────────────────────────────────────────────────
@@ -1873,7 +2036,7 @@ CROSS JOIN LATERAL (
   SELECT ST_CollectionExtract(COALESCE(ST_Difference(o.band, ST_Union(cut)), o.band), 3) as cut_band
   FROM (SELECT k.cut FROM _rm_cuts k WHERE k.cut && o.band
         UNION ALL SELECT k.cut FROM _rm_boxes k WHERE k.cut && o.band AND b.osm_id = ANY (k.ids)
-        UNION ALL SELECT a.cut FROM _rm_approach_cuts a WHERE a.osm_id = b.osm_id
+        UNION ALL SELECT a.band_cut FROM _rm_approach_cuts a WHERE a.osm_id = b.osm_id
         UNION ALL SELECT rc.cut FROM _rm_road_cuts rc WHERE rc.osm_id = b.osm_id
         UNION ALL SELECT tc.cut FROM _rm_turn_cuts tc WHERE b.osm_id = ANY (tc.ids) AND tc.cut && o.band AND NOT tc.edge) cuts
 ) k
@@ -1958,40 +2121,14 @@ WHERE c.centre IS NOT NULL AND gap.span IS NOT NULL AND NOT ST_IsEmpty(gap.span)
 -- ─── Stop lines and turn arrows ──────────────────────────────────────────────
 -- At each end of a marked road that meets a junction: across the lanes that
 -- arrive there, a stop line if the junction is controlled, and an arrow in
--- each lane its turn:lanes describes.
--- A frame at a point `back` units from a road end: the point, and the unit
--- vectors along the arriving traffic and to its left.
-DROP TABLE IF EXISTS _rm_frames;
-CREATE TEMP TABLE _rm_frames AS
-SELECT e.*, f.back, p,
-       CASE WHEN e.at_end THEN e.len_m - f.back / e.s ELSE f.back / e.s END as x_m,
-       -- How far a fork at this end still holds the lanes off the way here.
-       CASE WHEN abs(e.fork_d) > 0.05 AND e.fork_ease > 0
-            THEN e.fork_d * (1 - t * t * (3 - 2 * t)) ELSE 0 END as shift_here,
-       (ST_X(ahead) - ST_X(p)) / nullif(ST_Distance(ahead, p), 0) as ux,
-       (ST_Y(ahead) - ST_Y(p)) / nullif(ST_Distance(ahead, p), 0) as uy
-FROM _rm_ends e
-CROSS JOIN LATERAL (VALUES (e.setback), (e.setback + 6 * e.s), (e.setback + 36 * e.s)) f(back)
-CROSS JOIN LATERAL (SELECT least(1, f.back / e.s / nullif(e.fork_ease, 0)) as t) ft
-CROSS JOIN LATERAL (
-  SELECT ST_LineInterpolatePoint(e.g, CASE WHEN e.at_end THEN greatest(0, 1 - f.back / ST_Length(e.g)) ELSE least(1, f.back / ST_Length(e.g)) END) as p,
-         ST_LineInterpolatePoint(e.g, CASE WHEN e.at_end THEN greatest(0, 1 - (f.back - e.s) / ST_Length(e.g)) ELSE least(1, (f.back - e.s) / ST_Length(e.g)) END) as ahead
-) pts
-WHERE f.back < ST_Length(e.g) / 2;
-
+-- each lane its turn:lanes describes (frames: see Junction approaches).
 -- Stop lines span the arriving lanes. At a way's end those are the forward
 -- lanes; at its start the backward ones, and the frame there faces the other
 -- way, so the way's offsets flip sign.
 INSERT INTO road_markings_next (kind, pattern, color, bridge, geom)
-SELECT 'stop', 'fill', 'white', bridge, ST_Transform(ST_Buffer(ST_SetSRID(ST_MakeLine(
-         ST_MakePoint(ST_X(p) - uy * a * s, ST_Y(p) + ux * a * s),
-         ST_MakePoint(ST_X(p) - uy * b * s, ST_Y(p) + ux * b * s)), 3857), 0.225 * s, 'endcap=flat'), 4326)
+SELECT 'stop', 'fill', 'white', bridge,
+       ST_Transform(road_stop_bar(p, ux, uy, s, stop_a, stop_b, stop_n, stop_g0, stop_k, stop_slant, stop_lim), 4326)
 FROM _rm_frames
-CROSS JOIN LATERAL (SELECT
-  CASE WHEN at_end THEN split_f + shift_here + road_moved(pos, disp, ease, res_pos, res_disp, res_at, res_len, split_f, x_m)
-       ELSE -(split_b + shift_here + road_moved(pos, disp, ease, res_pos, res_disp, res_at, res_len, split_b, x_m)) END as a,
-  CASE WHEN at_end THEN right_edge + shift_here + road_moved(pos, disp, ease, res_pos, res_disp, res_at, res_len, right_edge, x_m)
-       ELSE -(left_edge + shift_here + road_moved(pos, disp, ease, res_pos, res_disp, res_at, res_len, left_edge, x_m)) END as b) o
 WHERE controlled AND back = setback AND ux IS NOT NULL
   AND ((at_end AND fwd > 0) OR (NOT at_end AND bwd > 0));
 
@@ -2031,19 +2168,18 @@ WHERE c.kind = 'give_way' AND d.u IS NOT NULL AND k0.n > 0 AND ST_DWithin(r.g, c
                   AND ST_DWithin(c.g, e.g, 0.5 * e.s) AND COALESCE(c.direction, '') <> CASE WHEN e.at_end THEN 'backward' ELSE 'forward' END)
 GROUP BY c.g, r.bridge;
 INSERT INTO road_markings_next (kind, pattern, color, bridge, geom)
-SELECT 'yield', 'fill', 'white', f.bridge, ST_Transform(ST_Multi(ST_Collect(ST_SetSRID(ST_MakePolygon(ST_MakeLine(ARRAY[
-         ST_MakePoint(ST_X(f.p) - f.uy * t.o0 * f.s, ST_Y(f.p) + f.ux * t.o0 * f.s),
-         ST_MakePoint(ST_X(f.p) - f.uy * t.o1 * f.s, ST_Y(f.p) + f.ux * t.o1 * f.s),
-         ST_MakePoint(ST_X(f.p) - (f.uy * (t.o0 + t.o1) / 2 + f.ux * 0.68) * f.s, ST_Y(f.p) + (f.ux * (t.o0 + t.o1) / 2 - f.uy * 0.68) * f.s),
-         ST_MakePoint(ST_X(f.p) - f.uy * t.o0 * f.s, ST_Y(f.p) + f.ux * t.o0 * f.s)])), 3857))), 4326)
+SELECT 'yield', 'fill', 'white', f.bridge, ST_Transform(ST_Multi(ST_Collect(ST_MakePolygon(ST_MakeLine(ARRAY[
+         road_frame_point(f.p, f.ux, f.uy, f.s, t.o0, t.at), road_frame_point(f.p, f.ux, f.uy, f.s, t.o1, t.at),
+         road_frame_point(f.p, f.ux, f.uy, f.s, (t.o0 + t.o1) / 2, t.at - 0.68), road_frame_point(f.p, f.ux, f.uy, f.s, t.o0, t.at)])))), 4326)
 FROM _rm_frames f
-CROSS JOIN LATERAL (SELECT
-  CASE WHEN f.at_end THEN f.split_f + f.shift_here ELSE -(f.split_b + f.shift_here) END as a,
-  CASE WHEN f.at_end THEN f.right_edge + f.shift_here ELSE -(f.left_edge + f.shift_here) END as b) o
+CROSS JOIN LATERAL (SELECT f.stop_a as a, f.stop_b as b) o
 CROSS JOIN LATERAL (SELECT floor(abs(o.b - o.a) / 0.65)::int as n, sign(o.b - o.a) as dir) c
 CROSS JOIN LATERAL generate_series(0, c.n - 1) k
 CROSS JOIN LATERAL (SELECT o.a + c.dir * ((abs(o.b - o.a) - c.n * 0.65) / 2 + 0.1 + k * 0.65) as o0,
-                           o.a + c.dir * ((abs(o.b - o.a) - c.n * 0.65) / 2 + 0.55 + k * 0.65) as o1) t
+                           o.a + c.dir * ((abs(o.b - o.a) - c.n * 0.65) / 2 + 0.55 + k * 0.65) as o1) t0
+-- Each triangle where the stop line would stand across it.
+CROSS JOIN LATERAL (SELECT t0.o0, t0.o1, road_stop_at((t0.o0 + t0.o1) / 2, f.stop_a, f.stop_b, f.stop_n, f.stop_g0, f.stop_k,
+                                                      f.stop_slant, f.stop_lim) as at) t
 WHERE f.yields AND f.back = f.setback AND f.ux IS NOT NULL AND c.n > 0
   AND ((f.at_end AND f.fwd > 0) OR (NOT f.at_end AND f.bwd > 0))
 GROUP BY f.osm_id, f.at_end, f.x, f.y, f.bridge;
@@ -2271,6 +2407,9 @@ FROM (
 ) w
 WHERE m.fid = w.fid;
 DELETE FROM road_markings_next WHERE kind = 'crosswalk' AND ST_IsEmpty(geom);
+-- A stop or yield line that would still touch a crosswalk is left out.
+DELETE FROM road_markings_next m
+WHERE m.kind IN ('stop', 'yield') AND EXISTS (SELECT 1 FROM _rm_walk_paint w WHERE w.geom && m.geom AND ST_Intersects(w.geom, m.geom));
 
 -- ─── Paint stays on the road ─────────────────────────────────────────────────
 -- Everything painted is cut to the carriageway it lies on, so a bar, a line or

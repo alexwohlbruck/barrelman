@@ -41,6 +41,11 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 * **Bike lanes run on straight where the parking beside them starts or
   ends**, and a street's kerbs hold down a block whose lanes are shared out
   differently from way to way, rather than wobbling with each turn lane.
+* **Stop lines never cross a crosswalk.** They stand 1.2 m short of the
+  crosswalk ahead and parallel to it; past 40° askew, each lane gets its own
+  square line, stepped along the crosswalk.
+* Scraps of bus or bike lane paint under 5 m long are no longer left inside a
+  junction.
 
 ## [0.10.17] - 2026-10-15
 
