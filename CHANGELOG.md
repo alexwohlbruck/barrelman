@@ -10,6 +10,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.10.16] - 2026-10-15
+
 ### Fixed
 
 * **Incremental road markings no longer stall replication.** With
