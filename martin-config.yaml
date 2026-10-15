@@ -481,6 +481,25 @@ postgres:
       buffer: 64
       clip_geom: true
 
+    # Golf course surfaces, hole lines and pins, from `golf_features` (see
+    # import/create-detail-views.sql). Unclipped, so a hole crossing a tile
+    # edge is one line in each tile and a client labels it once.
+    golf_features:
+      schema: public
+      table: golf_features
+      srid: 4326
+      geometry_column: geom
+      geometry_type: GEOMETRY
+      id_column: fid
+      minzoom: 14
+      maxzoom: 16
+      properties:
+        kind: kind
+        ref: ref
+        par: par
+      buffer: 64
+      clip_geom: false
+
     object_lines:
       schema: public
       table: object_lines

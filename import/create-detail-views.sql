@@ -314,6 +314,24 @@ WHERE ((geom_type = 'area'
   AND COALESCE(tags->>'location', '') NOT IN ('roof', 'rooftop')
   AND COALESCE(tags->>'generator:place', '') <> 'roof';
 
+-- Golf course features (`golf=*`): playing surfaces as areas, each hole's line
+-- from tee to green, and the pins. `kind` is the golf value (`heavy_rough` folds
+-- into `rough`); `ref` and `par` label a hole. Cart paths are left out: nearly
+-- all carry `highway=*`, so the basemap already draws them.
+DROP VIEW IF EXISTS golf_features CASCADE;
+CREATE VIEW golf_features AS
+SELECT (osm_id * 4 + CASE osm_type WHEN 'N' THEN 0 WHEN 'W' THEN 1 ELSE 2 END) as fid,
+       id, geom,
+       CASE WHEN tags->>'golf' = 'heavy_rough' THEN 'rough' ELSE tags->>'golf' END as kind,
+       NULLIF(tags->>'ref', '') as ref,
+       NULLIF(tags->>'par', '') as par
+FROM geo_places
+WHERE (geom_type = 'area'
+       AND tags->>'golf' IN ('tee', 'fairway', 'green', 'rough', 'heavy_rough', 'bunker',
+                             'water_hazard', 'lateral_water_hazard', 'driving_range'))
+   OR (geom_type = 'line' AND tags->>'golf' = 'hole')
+   OR (geom_type = 'point' AND tags->>'golf' IN ('pin', 'tee'));
+
 -- Roller coaster tracks: `roller_coaster=track`, and the older
 -- `railway=roller_coaster` that some parks still carry.
 --
