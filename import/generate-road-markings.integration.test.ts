@@ -331,6 +331,36 @@ const hdWays: [number, string, Record<string, string>][] = [
   // A car-free drive ending on a street, the third leg of a T.
   [331, line([-74.382, 40.7135], [-74.381, 40.7135], [-74.380, 40.7135]), { highway: 'residential', lanes: '2' }],
   [332, line([-74.381, 40.712], [-74.381, 40.7135]), { highway: 'pedestrian', oneway: 'yes', 'cycleway:right': 'track', lanes: '1', width: '8' }],
+  // A signalled crossroads, and a signal between junctions for the northbound lane only.
+  [1330, line([-74.900, 40.712], [-74.900, 40.713]), { highway: 'secondary', lanes: '2' }],
+  [1331, line([-74.900, 40.713], [-74.900, 40.714]), { highway: 'secondary', lanes: '2' }],
+  [1332, line([-74.901, 40.713], [-74.900, 40.713]), { highway: 'secondary', lanes: '2' }],
+  [1333, line([-74.900, 40.713], [-74.899, 40.713]), { highway: 'secondary', lanes: '2' }],
+  [1340, line([-74.905, 40.712], [-74.905, 40.714]), { highway: 'secondary', lanes: '2' }],
+  // A give way sign mid-way, for the northbound lane.
+  [1345, line([-74.9075, 40.712], [-74.9075, 40.714]), { highway: 'secondary', lanes: '2' }],
+  // Level crossings: half gates, double gates, a crossbuck alone, an untagged
+  // tram crossing, and a road over two tracks whose nodes are tagged apart.
+  ...[1350, 1355, 1360, 1365, 1370].map((id, k): [number, string, Record<string, string>] =>
+    [id, line([-74.910 - k * 0.005, 40.712], [-74.910 - k * 0.005, 40.714]), { highway: 'secondary', lanes: '2' }]),
+  ...[1351, 1356, 1361, 1366, 1371].map((id, k): [number, string, Record<string, string>] =>
+    [id, line([-74.9105 - k * 0.005, 40.713], [-74.9095 - k * 0.005, 40.713]), { railway: id === 1366 ? 'tram' : 'rail' }]),
+  [1372, line([-74.9305, 40.713 + 4 / 111050], [-74.9295, 40.713 + 4 / 111050]), { railway: 'rail' }],
+  // A divided road over a track, its carriageways' nodes 10 m apart and tagged apart.
+  [1380, line([-74.935, 40.712], [-74.935, 40.714]), { highway: 'trunk', oneway: 'yes', lanes: '2' }],
+  [1381, line([-74.935 + 10 / 84300, 40.714], [-74.935 + 10 / 84300, 40.712]), { highway: 'trunk', oneway: 'yes', lanes: '2' }],
+  [1382, line([-74.9355, 40.713], [-74.9345, 40.713]), { railway: 'rail' }],
+  // A pedestrian signal 15 m along from a side street's T junction.
+  [1390, line([-74.940, 40.712], [-74.940, 40.714]), { highway: 'secondary', lanes: '2' }],
+  [1391, line([-74.941, 40.713], [-74.940, 40.713]), { highway: 'residential' }],
+  // A crossing on a road whose track is not one drawn (disused).
+  [1395, line([-74.950, 40.712], [-74.950, 40.714]), { highway: 'secondary', lanes: '2' }],
+  // A signalled divided road with a 12 m median, its link a way of its own.
+  [1400, line([-74.955, 40.714], [-74.955, 40.713], [-74.955, 40.712]), { highway: 'trunk', oneway: 'yes', lanes: '2' }],
+  [1401, line([-74.955 + 12 / 84300, 40.712], [-74.955 + 12 / 84300, 40.713], [-74.955 + 12 / 84300, 40.714]), { highway: 'trunk', oneway: 'yes', lanes: '2' }],
+  [1402, line([-74.956, 40.713], [-74.955, 40.713]), { highway: 'secondary', lanes: '2' }],
+  [1403, line([-74.955, 40.713], [-74.955 + 12 / 84300, 40.713]), { highway: 'secondary', lanes: '2' }],
+  [1404, line([-74.955 + 12 / 84300, 40.713], [-74.954, 40.713]), { highway: 'secondary', lanes: '2' }],
 ]
 const hdFeatures: [string, string, Record<string, string>, string][] = [
   ['W231', rect(-74.315, 40.7130, -1.5, 1.5, 0, 66), { road_marking: 'restriction' }, 'area'],
@@ -340,6 +370,21 @@ const hdFeatures: [string, string, Record<string, string>, string][] = [
   ['N262', `POINT(-74.330 ${40.7135 - 15 / 111050})`, { highway: 'give_way', direction: 'forward' }, 'point'],
   ['N271', 'POINT(-74.335 40.713)', { traffic_calming: 'hump' }, 'point'],
   ['N272', 'POINT(-74.335 40.7135)', { highway: 'crossing', crossing: 'marked', 'crossing:markings': 'zebra', traffic_calming: 'table' }, 'point'],
+  ['N1334', 'POINT(-74.900 40.713)', { highway: 'traffic_signals' }, 'point'],
+  ['N1346', 'POINT(-74.9075 40.713)', { highway: 'give_way', direction: 'forward' }, 'point'],
+  ['N1341', 'POINT(-74.905 40.713)', { highway: 'traffic_signals', 'traffic_signals:direction': 'forward' }, 'point'],
+  ['N1352', 'POINT(-74.910 40.713)', { railway: 'level_crossing', 'crossing:barrier': 'half' }, 'point'],
+  ['N1357', 'POINT(-74.915 40.713)', { railway: 'level_crossing', 'crossing:barrier': 'double_half' }, 'point'],
+  ['N1362', 'POINT(-74.920 40.713)', { railway: 'level_crossing' }, 'point'],
+  ['N1367', 'POINT(-74.925 40.713)', { railway: 'tram_level_crossing' }, 'point'],
+  ['N1373', 'POINT(-74.930 40.713)', { railway: 'level_crossing', 'crossing:barrier': 'half' }, 'point'],
+  ['N1374', `POINT(-74.930 ${40.713 + 4 / 111050})`, { railway: 'level_crossing' }, 'point'],
+  ['N1383', 'POINT(-74.935 40.713)', { railway: 'level_crossing', 'crossing:barrier': 'half' }, 'point'],
+  ['N1384', `POINT(${-74.935 + 10 / 84300} 40.713)`, { railway: 'level_crossing' }, 'point'],
+  ['N1396', 'POINT(-74.950 40.713)', { railway: 'level_crossing', 'crossing:barrier': 'half' }, 'point'],
+  ['N1405', 'POINT(-74.955 40.713)', { highway: 'traffic_signals' }, 'point'],
+  ['N1406', `POINT(${-74.955 + 12 / 84300} 40.713)`, { highway: 'traffic_signals' }, 'point'],
+  ['N1392', `POINT(-74.940 ${40.713 + 15 / 111050})`, { highway: 'traffic_signals', crossing: 'traffic_signals' }, 'point'],
 ]
 
 // Every build drops the *_next tables by bare name too, scoped ones included.
@@ -1102,6 +1147,100 @@ run('generate-road-markings.sql', () => {
     expect(tiny).toBe(true)
   })
 
+  describe('signals and level crossings', () => {
+    const near = (x: number, y: number) =>
+      sql`SELECT glyph, direction, ST_X(geom) as x, ST_Y(geom) as y FROM road_glyphs
+          WHERE glyph NOT LIKE 'road-%' AND glyph <> 'traffic-signals' AND ST_DWithin(geom, ST_SetSRID(ST_MakePoint(${x}, ${y}), 4326), 0.0003)
+          ORDER BY glyph, direction`
+
+    test('stands a mast on the far right corner of each approach to a signalled junction', async () => {
+      const masts = await near(-74.900, 40.713)
+      expect(masts.map(m => m.glyph)).toEqual(['signal-1', 'signal-1', 'signal-1', 'signal-1'])
+      // Northbound traffic finds its mast past the junction, on its right.
+      const north = masts.find(m => m.direction === 0)!
+      expect(north.x).toBeGreaterThan(-74.900)
+      expect(north.y).toBeGreaterThan(40.713)
+      // Eastbound traffic finds it past the junction on the south side.
+      const east = masts.find(m => m.direction === 90)!
+      expect(east.x).toBeGreaterThan(-74.900)
+      expect(east.y).toBeLessThan(40.713)
+    })
+
+    test('marks the signal itself for the map', async () => {
+      const [{ n }] = await sql`SELECT count(*)::int as n FROM road_glyphs WHERE glyph = 'traffic-signals'
+        AND ST_DWithin(geom, ST_SetSRID(ST_MakePoint(-74.900, 40.713), 4326), 0.00001)`
+      expect(n).toBe(1)
+    })
+
+    test('stands a signal between junctions for the way it faces only', async () => {
+      const masts = await near(-74.905, 40.713)
+      expect(masts.map(m => [m.glyph, m.direction])).toEqual([['signal-1', 0]])
+      expect(masts[0].y).toBeGreaterThan(40.713)
+    })
+
+    test('reads a direction on a two-way way as along it, for a give way sign too', async () => {
+      const [yieldLine] = await sql`SELECT ST_X(ST_Centroid(geom)) as x FROM road_markings
+        WHERE kind = 'yield' AND ST_DWithin(geom, ST_SetSRID(ST_MakePoint(-74.9075, 40.713), 4326), 0.0001)`
+      expect(yieldLine.x).toBeGreaterThan(-74.9075)
+    })
+
+    test('puts a half gate on each approach, on its right and clear of the track', async () => {
+      const gates = await near(-74.910, 40.713)
+      expect(gates.map(g => g.glyph)).toEqual(['crossing-gate-1', 'crossing-gate-1'])
+      for (const g of gates) {
+        expect(Math.abs(g.y - 40.713) * 111050).toBeGreaterThan(4.1)
+        // Right of the traffic: east of the road going north, west going south.
+        expect(Math.sign(g.x + 74.910)).toBe(g.direction === 0 ? 1 : -1)
+      }
+    })
+
+    test('closes the lanes leaving a crossing too where its gates are doubled', async () => {
+      expect((await near(-74.915, 40.713)).length).toBe(4)
+    })
+
+    test('gives an untagged crossing a crossbuck, and an untagged tram crossing nothing', async () => {
+      expect((await near(-74.920, 40.713)).map(g => g.glyph)).toEqual(['crossbuck', 'crossbuck'])
+      expect(await near(-74.925, 40.713)).toEqual([])
+    })
+
+    test('gives each carriageway of a divided road its gate, tagged on either', async () => {
+      const gates = await near(-74.935 + 5 / 84300, 40.713)
+      expect(gates.map(g => [g.glyph, g.direction])).toEqual([['crossing-gate-2', 0], ['crossing-gate-2', 180]])
+    })
+
+    test('leaves the median of a divided road without a mast', async () => {
+      const [{ n }] = await sql`SELECT count(*)::int as n FROM road_glyphs WHERE glyph LIKE 'signal-%'
+        AND ST_X(geom) BETWEEN ${SB_X + 3 / 84300} AND ${NB_X - 3 / 84300} AND abs(ST_Y(geom) - ${STREET_Y}) < ${15 / 111050}`
+      expect(n).toBe(0)
+    })
+
+    test('lets a pedestrian signal stop its own crossing, not the junction beside it', async () => {
+      const masts = await near(-74.940, 40.713)
+      expect(masts.length).toBe(2)
+      expect(masts.every(m => m.y > 40.713 + 10 / 111050)).toBe(true)
+    })
+
+    test('builds through a crossing with no track drawn near it', async () => {
+      const gates = await near(-74.950, 40.713)
+      expect(gates.map(g => g.glyph)).toEqual(['crossing-gate-1', 'crossing-gate-1'])
+    })
+
+    test('gives traffic over a short median link its mast past the far carriageway', async () => {
+      const east = (await near(-74.955 + 6 / 84300, 40.713)).filter(m => m.direction === 90)
+      expect(east.length).toBe(1)
+      expect(east[0].x).toBeGreaterThan(-74.955 + 12 / 84300)
+    })
+
+    test('treats a road over two tracks as one crossing, clear of both', async () => {
+      const gates = await near(-74.930, 40.713)
+      expect(gates.map(g => g.glyph)).toEqual(['crossing-gate-1', 'crossing-gate-1'])
+      const north = gates.find(g => g.direction === 0)!
+      const south = gates.find(g => g.direction === 180)!
+      expect((south.y - 40.713) * 111050).toBeGreaterThan(4 + 4.1)
+      expect((40.713 - north.y) * 111050).toBeGreaterThan(4.1)
+    })
+  })
+
   test('draws ways only, not a route relation over them', async () => {
     expect(await covered(-74.100, 40.7125)).toBe(false)
     expect(await covered(-74.101, 40.7145)).toBe(false)
@@ -1782,6 +1921,33 @@ run('generate-road-markings.sql', () => {
       expect(await at(-74.400, 40.7139)).toBeGreaterThan(0)
       expect(await at(-74.403, 40.7139)).toBeGreaterThan(0)
       expect(await at(-74.38, 40.713)).toBe(0)
+    })
+  })
+
+  describe('a level crossing retagged, and its track moved', () => {
+    beforeAll(async () => {
+      await sql.unsafe(`DROP SCHEMA IF EXISTS osm_replay CASCADE; CREATE SCHEMA osm_replay;
+        CREATE TABLE osm_replay.old_places AS
+          SELECT id, 'W'::char(1) as osm_type, osm_id, NULL::text as name, ARRAY['railway/rail'] as categories, geom, geom_type, NULL::int as admin_level
+          FROM geo_places WHERE id = 'W1351';
+        -- Track far from any crossing gear.
+        INSERT INTO osm_replay.old_places (id, osm_type, osm_id, categories, geom, geom_type) VALUES
+          ('W1097', 'W', 1097, ARRAY['railway/rail'], ST_GeomFromText('LINESTRING(-74.86 40.712, -74.8599 40.7121)', 4326), 'line');
+        CREATE TABLE osm_replay.changed AS SELECT id FROM geo_places WHERE id = 'N1362';`)
+      await sql`DELETE FROM detail_dirty`
+      await sql.unsafe(readFileSync(join(import.meta.dir, 'queue-road-markings.sql'), 'utf8'))
+    })
+
+    afterAll(async () => {
+      await sql`DELETE FROM detail_dirty`
+    })
+
+    test('queues the crossing and the track by its gear, not track elsewhere', async () => {
+      const at = async (x: number, y: number) => (await sql`
+        SELECT count(*)::int as n FROM detail_dirty WHERE layer = 'road_markings' AND ST_Intersects(box, ST_SetSRID(ST_MakePoint(${x}, ${y}), 4326))`)[0].n
+      expect(await at(-74.920, 40.713)).toBe(1)
+      expect(await at(-74.910, 40.713)).toBe(1)
+      expect(await at(-74.86, 40.712)).toBe(0)
     })
   })
 

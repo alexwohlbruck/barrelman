@@ -27,6 +27,12 @@ does it — and the release pipeline turns it into the GitHub Release notes.
   grooming, name and the region's signage convention, and lift pylons.
 * **Running tracks.** A new `sport_tracks` detail source, in the `detail`
   bundle, serves running and athletics tracks with their shape and lane count.
+* **Signals and level crossings beside the road.** `road_glyphs` now carries
+  a point for each traffic signal mast, off the far right corner of every
+  approach to a signalled junction, and for each railway crossing gate,
+  flashing light post and crossbuck, clear of the tracks. Each is read from
+  OSM's signal and `crossing:*` tags. These glyphs don't start with `road-`;
+  clients that paint glyphs should draw only the `road-` ones.
 
 ### Changed
 
@@ -68,6 +74,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
   The double yellow no longer jumps sideways where two ways were drawn in
   opposite directions or a ramp joins at the split; it shifts over a taper,
   and where a centre turn lane ends its far edge closes in on the centre line.
+* **Give way signs mapped along a two-way road face the right way.** A
+  `direction=forward` on a way with no `oneway` tag was read as backward.
 
 ## [0.10.17] - 2026-10-15
 
