@@ -18,6 +18,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
   their real width rather than one lane wide. Lanes keep their own width; the
   rest is unmarked kerbside. Replication queues the streets beside an edited
   sidewalk.
+* **Parallel parking lanes show stall ticks** about a car length apart, unless
+  tagged `markings=no`.
 
 ### Fixed
 
@@ -32,6 +34,13 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 * **Stop lines stand clear of crosswalks drawn askew** across the arriving
   lanes, and scraps of bus or bike lane paint under 5 m long are no longer left
   inside a junction.
+* **Streets change width at the junction, not across the next block.** A
+  street that widens for parking and bike lanes past a crossroads no longer
+  funnels to a point, and bike lanes never squeeze the traffic lanes while a
+  road tapers.
+* **Bike lanes run on straight where the parking beside them starts or
+  ends**, and a street's kerbs hold down a block whose lanes are shared out
+  differently from way to way, rather than wobbling with each turn lane.
 
 ## [0.10.17] - 2026-10-15
 
