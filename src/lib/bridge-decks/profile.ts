@@ -591,8 +591,8 @@ export const LEAVING = 200
 /**
  * Decks that run side by side as one: where a deck's edge meets another's
  * within `gap` metres and at most `step` from its height, both take the
- * higher height. Tracks join only tracks. Decks farther apart in height (an upper and lower deck) keep
- * their own.
+ * higher height. Decks farther apart in height (an upper and lower deck)
+ * keep their own, and tracks join only tracks.
  *
  * An end that lands on the ground stays there: lifting it to a neighbour
  * would leave the deck hanging over the road it lands on. Nor is a deck
