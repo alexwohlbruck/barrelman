@@ -534,6 +534,7 @@ postgres:
       properties:
         kind: kind
         lanes: lanes
+        scale: scale
       buffer: 64
       clip_geom: true
 
