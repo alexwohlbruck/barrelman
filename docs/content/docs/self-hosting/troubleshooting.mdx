@@ -242,9 +242,10 @@ docker exec barrelman-db psql -U barrelman -d barrelman -tAc \
   "SELECT count(*), count(*) FILTER (WHERE jsonb_array_length(rt_urls) > 0) FROM gtfs_feeds"
 ```
 
-A second number of zero means `gtfs_feeds.rt_urls` was emptied. RT URLs are
-populated by `import/backfill-rt-urls.ts` rather than by the import, and
-versions before 0.3.0 dropped them on every re-import. Recovery is three steps
+A second number of zero means `gtfs_feeds.rt_urls` was emptied. The import
+discovers RT URLs through each feed's operator, and
+`import/backfill-rt-urls.ts` fills in feeds that have none; versions before
+0.3.0 dropped them on every re-import. Recovery is three steps
 in order, and the last one has to be a full rebuild:
 
 ```bash
@@ -292,6 +293,18 @@ schedules.
 A feed whose realtime is unreachable at import time is left alone rather than
 guessed at, so check that `gtfs_feeds.rt_urls` is populated before reading too
 much into a skip.
+
+Discovery takes every realtime feed the feed's operator publishes, then drops
+the ones that don't serve it, and logs each drop:
+
+```
+⚠ f-dr5r-nyctsubway: dropped realtime https://gtfsrt.prod.obanyc.com/tripUpdates (foreign-routes)
+```
+
+`foreign-routes` means none of its trips run on this feed's routes, and is
+expected wherever one operator publishes several feeds. `unauthorized` means
+the URL answered 401 or 403: set its secret in `GTFS_RT_CREDENTIALS`, keyed by
+the realtime feed's onestop id, and re-import.
 
 Some realtime trips never resolve no matter what. Added and unscheduled trips
 appear in no published schedule. And a feed can differ in more than one way at

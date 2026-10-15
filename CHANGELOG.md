@@ -10,6 +10,16 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.10.18] - 2026-10-15
+
+### Fixed
+
+* **New York transit has realtime again.** The GTFS import now finds realtime
+  feeds through each feed's operator, so the subway, buses, LIRR and
+  Metro-North get live trip updates instead of schedules only. Realtime feeds
+  that serve another agency's routes, or refuse requests without a key, are
+  left out rather than polled.
+
 ## [0.10.17] - 2026-10-15
 
 ### Fixed

@@ -464,12 +464,18 @@ describe('generateTransfersTxt', () => {
 function buildMockFetch(handlers: {
   feedList?: any
   rtFeeds?: Record<string, any>  // keyed by RT onestop_id
+  operators?: Record<string, any[]>  // keyed by static onestop_id
 }) {
   return async (url: string | URL | Request, _init?: RequestInit) => {
     const urlStr = typeof url === 'string' ? url : url instanceof URL ? url.toString() : url.url
 
-    // RT feed lookup — matches spec=GTFS_RT&onestop_id=...
-    if (urlStr.includes('spec=GTFS_RT') && urlStr.includes('&onestop_id=')) {
+    if (urlStr.includes('/operators?')) {
+      const staticId = new URL(urlStr).searchParams.get('feed_onestop_id') || ''
+      return new Response(JSON.stringify({ operators: handlers.operators?.[staticId] ?? [] }), { status: 200 })
+    }
+
+    // Single feed record lookup by onestop_id
+    if (urlStr.includes('&onestop_id=')) {
       const parsed = new URL(urlStr)
       const onestopId = parsed.searchParams.get('onestop_id') || ''
       const rtFeed = handlers.rtFeeds?.[onestopId]
@@ -748,7 +754,7 @@ describe('fetchFeedList', () => {
     const mockFetch = async (url: string | URL | Request) => {
       const urlStr = typeof url === 'string' ? url : url instanceof URL ? url.toString() : url.url
 
-      if (urlStr.includes('spec=GTFS_RT')) {
+      if (!urlStr.includes('spec=gtfs')) {
         callCount++
         // Simulate network error on RT lookup
         throw new Error('Network timeout')
@@ -813,6 +819,64 @@ describe('fetchFeedList', () => {
 
     // Feed 3: has 2 RT URLs
     expect(feeds[2].rtUrls).toHaveLength(2)
+  })
+
+  test('walks the operator to realtime feeds named unlike the static feed', async () => {
+    const mockFetch = buildMockFetch({
+      feedList: {
+        feeds: [{
+          id: 5,
+          onestop_id: 'f-dr5r-nyctsubway',
+          spec: 'gtfs',
+          urls: { static_current: 'https://rrgtfsfeeds.s3.amazonaws.com/gtfs_subway.zip' },
+        }],
+      },
+      operators: {
+        'f-dr5r-nyctsubway': [{
+          onestop_id: 'o-dr5r-nyct',
+          feeds: [
+            { onestop_id: 'f-dr5r-nyctsubway', spec: 'GTFS' },
+            { onestop_id: 'f-mta~nyc~rt~subway~b~d~f~m', spec: 'GTFS_RT' },
+          ],
+        }],
+      },
+      rtFeeds: {
+        'f-mta~nyc~rt~subway~b~d~f~m': {
+          onestop_id: 'f-mta~nyc~rt~subway~b~d~f~m',
+          urls: { realtime_trip_updates: 'https://mta.example/gtfs-bdfm' },
+        },
+      },
+    })
+
+    const [feed] = await fetchFeedList('nyc', 'test-key', mockFetch)
+
+    expect(feed.rtUrls?.map(r => r.url)).toEqual(['https://mta.example/gtfs-bdfm'])
+  })
+
+  test('fills a credential Transitland names but does not publish from GTFS_RT_CREDENTIALS', async () => {
+    const previous = process.env.GTFS_RT_CREDENTIALS
+    process.env.GTFS_RT_CREDENTIALS = JSON.stringify({ 'f-bus~rt': 'k3y' })
+    try {
+      const mockFetch = buildMockFetch({
+        feedList: {
+          feeds: [{ id: 1, onestop_id: 'f-bus', spec: 'gtfs', urls: { static_current: 'https://example.com/bus.zip' } }],
+        },
+        rtFeeds: {
+          'f-bus~rt': {
+            onestop_id: 'f-bus~rt',
+            urls: { realtime_trip_updates: 'https://bus.example/tripUpdates' },
+            authorization: { type: 'query_param', param_name: 'key' },
+          },
+        },
+      })
+
+      const [feed] = await fetchFeedList('nc', 'test-key', mockFetch)
+
+      expect(feed.rtUrls?.[0].url).toBe('https://bus.example/tripUpdates?key=k3y')
+    } finally {
+      if (previous === undefined) delete process.env.GTFS_RT_CREDENTIALS
+      else process.env.GTFS_RT_CREDENTIALS = previous
+    }
   })
 
   test('ignores non-header authorization types', async () => {

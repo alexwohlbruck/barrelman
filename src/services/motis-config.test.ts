@@ -11,6 +11,8 @@ import { describe, test, expect, mock, beforeEach } from 'bun:test'
 
 /** SQL the generator issued, in order. */
 let statements: any[] = []
+/** What the gtfs_feeds query answers. */
+let feedRows: any[] = []
 
 /**
  * Replace only `db`, keeping every other export.
@@ -29,7 +31,7 @@ mock.module('../db', () => ({
   db: {
     execute: async (query: any) => {
       statements.push(query)
-      return []
+      return sqlText(query).includes('FROM gtfs_feeds') ? feedRows : []
     },
   },
 }))
@@ -128,5 +130,25 @@ describe('GBFS feeds in the MOTIS config', () => {
     await generateMotisConfig({ includeGbfs: false })
 
     expect(gbfsQuery()).toBeUndefined()
+  })
+})
+
+describe('GTFS-RT feeds in the MOTIS config', () => {
+  test('polls a URL serving several realtime types once', async () => {
+    resolved = { isGlobal: true, boxes: [] }
+    feedRows = [{
+      feed_id: '5',
+      rt_urls: [
+        { url: 'https://mta.example/bdfm', type: 'tripUpdates' },
+        { url: 'https://mta.example/bdfm', type: 'vehiclePositions' },
+        { url: 'https://mta.example/alerts', type: 'alerts' },
+      ],
+    }]
+
+    const yaml = await generateMotisConfig()
+
+    expect(yaml.match(/- url: "https:\/\/mta\.example\/bdfm"/g)).toHaveLength(1)
+    expect(yaml).toContain('- url: "https://mta.example/alerts"')
+    feedRows = []
   })
 })
