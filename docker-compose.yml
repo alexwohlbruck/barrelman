@@ -439,6 +439,7 @@ services:
       GRAPHHOPPER_URL: http://barrelman-graphhopper:8989
       MOTIS_URL: http://barrelman-motis:8080
       TRANSITLAND_API_KEY: ${TRANSITLAND_API_KEY:-}
+      GTFS_RT_CREDENTIALS: ${GTFS_RT_CREDENTIALS:-}
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
       # The one variable that decides coverage. Read by the importers that run
       # here, not by the API — see https://docs.barrelman.dev/self-hosting/regions.

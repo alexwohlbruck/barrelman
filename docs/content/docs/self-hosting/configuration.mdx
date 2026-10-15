@@ -57,7 +57,7 @@ The variables worth keeping there rather than in a file:
 | `BARRELMAN_LICENSE` | Unlocks billing |
 | `LICENSE_PRIVATE_KEY` | Signs licenses. Never deployed — only used to mint tokens |
 | `POLAR_ACCESS_TOKEN`, `POLAR_WEBHOOK_SECRET` | Payments and webhook verification |
-| `TRANSITLAND_API_KEY`, `GITHUB_TOKEN` | Import-time API access |
+| `TRANSITLAND_API_KEY`, `GTFS_RT_CREDENTIALS`, `GITHUB_TOKEN` | Import-time API access |
 | `GOOGLE_CLIENT_SECRET`, `GITHUB_CLIENT_SECRET`, `GITLAB_CLIENT_SECRET` | OAuth sign-in |
 
 `BARRELMAN_LICENSE_PUBLIC_KEY` is deliberately not among them — it verifies
@@ -272,6 +272,7 @@ itself.
 | `BARRELMAN_TRANSIT_ROUTE_MIN_RANK` | `0.5` | Lowest match score a GTFS route may have and still be returned by `/search`. Route matching includes a loose trigram branch so phrases like "harlem line" reach Metro-North's "Harlem"; across a large feed corpus that branch also pairs unrelated queries with whatever route shares a few trigrams, and routes outrank places in the result merge, so those accidents evict real answers. Exact short-name hits score 0.95, substring matches 0.6-0.8 |
 | `ISOCHRONE_CONCURRENCY` | `8` | Parallel GraphHopper calls per isochrone. Raise only if GraphHopper is dedicated to isochrone work |
 | `TRANSITLAND_API_KEY` | — | For GTFS feed discovery. Free at [transit.land](https://transit.land/users/sign_up) |
+| `GTFS_RT_CREDENTIALS` | — | JSON object of secrets for realtime feeds that require one, keyed by the realtime feed's Transitland onestop id (`{"f-example~rt":"…"}`). Transitland names the parameter but never publishes the value. A realtime URL that answers 401 or 403 is dropped at import rather than polled |
 
 `GRAPHHOPPER_JAVA_OPTS` is the one to watch as `REGIONS` grows, but it sizes the
 graph **build**, not serving. The shipped config memory-maps the finished graph
