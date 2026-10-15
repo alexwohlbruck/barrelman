@@ -81,32 +81,50 @@ BEGIN
     UNION ALL
     SELECT osm_id, geom FROM relevant_new
   ),
+  -- Both lookups below name tags ? 'highway' so they can use the road-lines
+  -- index (create-detail-indexes.sql), and end in OFFSET 0 so each stays one
+  -- index probe per point. Without them the planner, which guesses a few
+  -- thousand marked roads where there are millions, flattens the laterals
+  -- into a join of every marked road against every point: on the full US
+  -- extract one cycle ran for days inside the swap transaction. What was
+  -- already queued is dropped after the lookups (the *_found steps), so it is
+  -- hashed once rather than rescanned for every point.
+  --
   -- The ways ending anywhere on a touched road: at its ends they carry on
   -- from it or share a fork with it, and a street running through a fork
   -- decides whether it is one. The touched way's own outline is the old one
   -- where it moved, so it is not looked for in geo_places.
-  next1 AS (
+  next1_found AS MATERIALIZED (
     SELECT DISTINCT n.osm_id, n.geom
     FROM touched t, LATERAL (SELECT (ST_DumpPoints(t.geom)).geom) e(pt),
          LATERAL (
            SELECT g.osm_id, g.geom FROM geo_places g
-           WHERE g.geom && ST_Expand(e.pt, 1e-7) AND g.geom_type = 'line' AND g.osm_type = 'W' AND road_is_marked_way(g.tags)
-             AND g.osm_id <> t.osm_id
+           WHERE g.geom && ST_Expand(e.pt, 1e-7) AND g.geom_type = 'line' AND g.tags ? 'highway' AND g.osm_type = 'W'
+             AND road_is_marked_way(g.tags) AND g.osm_id <> t.osm_id
              AND (ST_DWithin(ST_StartPoint(g.geom), e.pt, 1e-7) OR ST_DWithin(ST_EndPoint(g.geom), e.pt, 1e-7))
+           OFFSET 0
          ) n
-    WHERE GeometryType(t.geom) = 'LINESTRING' AND NOT EXISTS (SELECT 1 FROM touched x WHERE x.osm_id = n.osm_id)
+    WHERE GeometryType(t.geom) = 'LINESTRING'
+  ),
+  next1 AS (
+    SELECT n.osm_id, n.geom FROM next1_found n
+    WHERE NOT EXISTS (SELECT 1 FROM touched x WHERE x.osm_id = n.osm_id)
   ),
   -- The ways meeting those ends change only as far as a taper reaches from
   -- the shared node (a few hundred metres at most).
-  next2 AS (
+  next2_found AS MATERIALIZED (
     SELECT DISTINCT n.osm_id, ST_Expand(e.pt, 0.003) as box
     FROM next1 t, LATERAL (VALUES (ST_StartPoint(t.geom)), (ST_EndPoint(t.geom))) e(pt),
          LATERAL (
            SELECT g.osm_id FROM geo_places g
-           WHERE g.geom && ST_Expand(e.pt, 1e-7) AND g.geom_type = 'line' AND g.osm_type = 'W' AND road_is_marked_way(g.tags)
-             AND g.osm_id <> t.osm_id
+           WHERE g.geom && ST_Expand(e.pt, 1e-7) AND g.geom_type = 'line' AND g.tags ? 'highway' AND g.osm_type = 'W'
+             AND road_is_marked_way(g.tags) AND g.osm_id <> t.osm_id
              AND (ST_DWithin(ST_StartPoint(g.geom), e.pt, 1e-7) OR ST_DWithin(ST_EndPoint(g.geom), e.pt, 1e-7))
+           OFFSET 0
          ) n
+  ),
+  next2 AS (
+    SELECT n.osm_id, n.box FROM next2_found n
     WHERE NOT EXISTS (SELECT 1 FROM touched x WHERE x.osm_id = n.osm_id)
       AND NOT EXISTS (SELECT 1 FROM next1 x WHERE x.osm_id = n.osm_id)
   )
