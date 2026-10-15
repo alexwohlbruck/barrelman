@@ -17,7 +17,10 @@
  *   --check    (default) Compare stored vs upstream sha. Prints a human summary
  *              plus machine-readable lines the host wrapper parses:
  *                 BASELINE=1                 (no feed has a stored sha yet)
- *                 CHANGED_REGIONS=nyc,nc     (regions with >=1 updated feed)
+ *                 CHANGED_REGION=nyc         (one line per region with >=1
+ *                                             updated feed)
+ *              One line each, not a joined list: a region can be a bbox, which
+ *              holds commas, or several boxes, which hold semicolons too.
  *              Does NOT modify the database.
  *   --record   Fetch current upstream shas and write them to gtfs_feeds. Used to
  *              establish the baseline on first run, and to commit the new state
@@ -71,7 +74,6 @@ async function main() {
     if (feeds.length === 0) {
       console.log('gtfs-watch: no feeds with an onestop_id to watch')
       console.log('BASELINE=0')
-      console.log('CHANGED_REGIONS=')
       return
     }
 
@@ -128,7 +130,7 @@ async function main() {
 
     // Machine-readable lines for the host wrapper.
     console.log(`BASELINE=${isBaseline ? 1 : 0}`)
-    console.log(`CHANGED_REGIONS=${regions.join(',')}`)
+    for (const region of regions) console.log(`CHANGED_REGION=${region}`)
   } finally {
     await sql.end({ timeout: 5 })
   }
