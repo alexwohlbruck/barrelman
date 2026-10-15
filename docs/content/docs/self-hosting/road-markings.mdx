@@ -35,6 +35,7 @@ Only tags the OSM wiki documents are read, and paint follows US conventions (MUT
 | Crosswalks | `crossing:markings`, `crossing=marked\|traffic_signals` | approved | `crosswalk` / `fill`, `style` `zebra`, `lines`, `ladder`, `dashes` or `dots` (edge lines broken into 0.6 m dashes or 0.3 m dots) |
 | Speed humps | `traffic_calming=hump\|table\|cushion` (node on the road) | approved | `hump` / `fill`: one chevron per lane, pointing with the traffic, on any paved road; none on a raised crosswalk |
 | Turning circles | `highway=turning_circle\|turning_loop`, `diameter` | de facto | a round bulb in `road_surfaces` |
+| Car-free roads | paved `highway=pedestrian\|cycleway\|path\|footway` mapped like a road: with `lanes` (not on a footway), with `cycleway[:left\|:right\|:both]=lane\|track` (not on a cycleway), or a bikeway (`highway=cycleway` or `bicycle=designated`) with `width` of 4 m or more. Sidewalks, crossings and `is_sidepath=yes` are left out; `segregated`, `overtaking`, `oneway:bicycle` | de facto | paved at `width`, else a street's two lanes for a pedestrian street and 1.5 m lanes otherwise; the bike side set off by a `bike` line, unfilled; a single `centre` line, yellow in the Americas, `solid` for `overtaking=no` and `dashed` otherwise; `road-bike` glyphs along bikeways and `road-walk` glyphs on the walkers' side. A car-free way never makes a junction: a street crossing or meeting it keeps its lines, and the car-free way's lines stop at the street |
 
 Where a way carries on into the next with a different width or layout, the kerbs and lines ease across over a taper (MUTCD length for the speed, at most 150 m). Ways drawn in opposite directions, or with a ramp joining where they meet, ease the same way, so the centre line never steps sideways at a join; where a centre turn lane ends, the lines either side of it close in on the centre line. Where streets cross at the join, the change happens inside the junction instead. Bike lanes keep to the traffic lanes' side and tracks and parking to the kerb's while they ease, so neither cuts into the traffic lanes.
 
@@ -52,6 +53,22 @@ stroke=solid             (the outline; double_solid, dashed, or no)
 ```
 
 Per Key:lanes, `lanes` counts traffic lanes only: a flush median is not a lane, and a centre turn lane is (`lanes:both_ways=1`).
+
+## Mapping a car-free park drive
+
+A drive closed to cars with a walkers' side and a bike lane (Central Park's and Prospect Park's loops, for example) draws from the tags its way already carries:
+
+```
+highway=pedestrian
+bicycle=designated
+segregated=yes
+cycleway:right=track     (the side the bike lane is on, as the way runs)
+oneway=yes + oneway:foot=no   (where bikes ride one way)
+width=10                 (kerb to kerb; without it a pedestrian street is 6 m plus the bike lane)
+cycleway:right:width=3   (optional: the bike lane's share, else 1.8 m)
+```
+
+A greenway or bike path with a centre line is `highway=cycleway` + `lanes=2` (+ `overtaking=no` where the line is solid) + `width`.
 
 ## Not drawn
 

@@ -11,11 +11,11 @@
 -- paves, crossings, signal, stop, give way, turning circle and speed hump
 -- nodes, painted areas, and the paved streets beside a changed footway, path
 -- or cycleway (their sidewalks set the kerbs). old_places keeps categories,
--- not tags, so an old service road or footway counts only where it was
--- drawn: a service road on a paved surface, a footway under a painted
--- crosswalk or beside a paved street, and an area or node without a category
--- only on a painted area's outline or by a hump's paint. Without those, every
--- alley and park path edit in a built city would queue a rebuild.
+-- not tags, so an old service road or car-free way counts only where it was
+-- drawn: one on a paved surface, a footway under a painted crosswalk or beside
+-- a paved street, and an area or node without a category only on a painted
+-- area's outline or by a hump's paint. Without those, every alley and park
+-- path edit in a built city would queue a rebuild.
 --
 -- A road's place reads the way before it, the way after that eases back, and
 -- a fork's branches line up with its stem (generate-road-markings.sql, Where
@@ -32,12 +32,24 @@
 -- copies equal).
 CREATE OR REPLACE FUNCTION road_is_marked_way(tags jsonb) RETURNS boolean
 LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
-  SELECT tags->>'highway' IN ('motorway', 'motorway_link', 'trunk', 'trunk_link', 'primary', 'primary_link',
-                              'secondary', 'secondary_link', 'tertiary', 'tertiary_link', 'unclassified',
-                              'residential', 'living_street', 'service', 'busway')
-    AND COALESCE(tags->>'tunnel', 'no') = 'no'
+  SELECT COALESCE(tags->>'tunnel', 'no') = 'no'
     AND COALESCE(tags->>'area', 'no') <> 'yes'
-    AND (tags->>'highway' <> 'service' OR tags ?| ARRAY['lanes', 'lane_markings', 'width', 'width:carriageway'])
+    AND (
+      (tags->>'highway' IN ('motorway', 'motorway_link', 'trunk', 'trunk_link', 'primary', 'primary_link',
+                            'secondary', 'secondary_link', 'tertiary', 'tertiary_link', 'unclassified',
+                            'residential', 'living_street', 'service', 'busway')
+       AND (tags->>'highway' <> 'service' OR tags ?| ARRAY['lanes', 'lane_markings', 'width', 'width:carriageway']))
+      OR (tags->>'highway' IN ('pedestrian', 'cycleway', 'path', 'footway')
+          AND COALESCE(tags->>'footway', tags->>'cycleway', tags->>'path', '') NOT IN ('sidewalk', 'crossing', 'access_aisle', 'traffic_island', 'link', 'sidepath')
+          AND NOT tags ? 'crossing' AND COALESCE(tags->>'is_sidepath', 'no') = 'no'
+          AND COALESCE(tags->>'surface', 'paved') IN ('paved', 'asphalt', 'concrete', 'concrete:plates', 'concrete:lanes', 'chipseal')
+          AND ((tags ? 'lanes' AND tags->>'highway' <> 'footway')
+               OR (tags->>'highway' <> 'cycleway'
+                   AND ARRAY[tags->>'cycleway', tags->>'cycleway:left', tags->>'cycleway:right', tags->>'cycleway:both']
+                       && ARRAY['lane', 'track', 'opposite_lane', 'opposite_track'])
+               OR ((tags->>'highway' = 'cycleway' OR tags->>'bicycle' = 'designated')
+                   AND substring(replace(tags->>'width', ',', '.') from '^\s*([0-9]+(?:\.[0-9]+)?)\s*m?\s*$')::float8 >= 4)))
+    )
 $$;
 
 DO $$
@@ -94,6 +106,13 @@ BEGIN
                 OR (o.categories && ARRAY['highway/service']
                     AND EXISTS (SELECT 1 FROM road_surfaces s
                                 WHERE s.geom && o.geom AND ST_Intersects(s.geom, ST_PointOnSurface(o.geom))))
+                -- A sidewalk can graze a kerb; a paved car-free way runs down its surface.
+                OR (o.categories && ARRAY['highway/pedestrian', 'highway/cycleway', 'highway/path', 'highway/footway']
+                    AND GeometryType(o.geom) = 'LINESTRING'
+                    AND EXISTS (SELECT 1 FROM road_surfaces s
+                                WHERE s.geom && o.geom AND ST_Intersects(s.geom, ST_LineInterpolatePoint(o.geom, 0.25)))
+                    AND EXISTS (SELECT 1 FROM road_surfaces s
+                                WHERE s.geom && o.geom AND ST_Intersects(s.geom, ST_LineInterpolatePoint(o.geom, 0.75))))
                 OR (o.categories && ARRAY['highway/footway', 'highway/path', 'highway/cycleway']
                     AND EXISTS (SELECT 1 FROM road_markings m WHERE m.geom && o.geom AND m.kind = 'crosswalk'))))
        OR (o.geom_type = 'point' AND o.categories && ARRAY['highway/crossing', 'highway/traffic_signals', 'highway/stop',
