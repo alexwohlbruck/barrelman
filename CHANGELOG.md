@@ -51,11 +51,6 @@ does it — and the release pipeline turns it into the GitHub Release notes.
   looks up every feed's operator, which outruns Transitland's per-minute
   quota; refused lookups were read as "no realtime feed", so feeds like New
   York's kept schedules only. Lookups now wait out the limit and retry.
-* **New York transit has realtime again.** The GTFS import now finds realtime
-  feeds through each feed's operator, so the subway, buses, LIRR and
-  Metro-North get live trip updates instead of schedules only. Realtime feeds
-  that serve another agency's routes, or refuse requests without a key, are
-  left out rather than polled.
 * **Median ends are round.** A narrow median's nose takes half its width as
   its kerb radius, so it ends round at the crosswalk instead of drawn to a point
   well short of it.
@@ -82,6 +77,16 @@ does it — and the release pipeline turns it into the GitHub Release notes.
   deck rather than standing inside it as a deck of its own, twin tracks on one
   viaduct are joined at one height and share their piers, and a carriageway is
   no longer chained back onto the slip road it meets at a gore.
+
+## [0.10.18] - 2026-10-15
+
+### Fixed
+
+* **New York transit has realtime again.** The GTFS import now finds realtime
+  feeds through each feed's operator, so the subway, buses, LIRR and
+  Metro-North get live trip updates instead of schedules only. Realtime feeds
+  that serve another agency's routes, or refuse requests without a key, are
+  left out rather than polled.
 
 ## [0.10.17] - 2026-10-15
 
