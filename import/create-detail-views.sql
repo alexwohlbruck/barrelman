@@ -316,8 +316,9 @@ WHERE ((geom_type = 'area'
 
 -- Golf course features (`golf=*`): playing surfaces as areas, each hole's line
 -- from tee to green, and the pins. `kind` is the golf value (`heavy_rough` folds
--- into `rough`); `ref` and `par` label a hole. Cart paths are left out: nearly
--- all carry `highway=*`, so the basemap already draws them.
+-- into `rough`); `ref` and `par` label a hole. Cart paths and water hazards are
+-- left out: nearly all carry `highway=*` or `natural=water`, which the basemap
+-- already draws.
 DROP VIEW IF EXISTS golf_features CASCADE;
 CREATE VIEW golf_features AS
 SELECT (osm_id * 4 + CASE osm_type WHEN 'N' THEN 0 WHEN 'W' THEN 1 ELSE 2 END) as fid,
@@ -328,7 +329,7 @@ SELECT (osm_id * 4 + CASE osm_type WHEN 'N' THEN 0 WHEN 'W' THEN 1 ELSE 2 END) a
 FROM geo_places
 WHERE (geom_type = 'area'
        AND tags->>'golf' IN ('tee', 'fairway', 'green', 'rough', 'heavy_rough', 'bunker',
-                             'water_hazard', 'lateral_water_hazard', 'driving_range'))
+                             'driving_range'))
    OR (geom_type = 'line' AND tags->>'golf' = 'hole')
    OR (geom_type = 'point' AND tags->>'golf' IN ('pin', 'tee'));
 

@@ -94,6 +94,6 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS geo_places_golf_geom_idx
   ON geo_places USING gist (geom)
   WHERE (geom_type = 'area'
          AND tags->>'golf' IN ('tee', 'fairway', 'green', 'rough', 'heavy_rough', 'bunker',
-                               'water_hazard', 'lateral_water_hazard', 'driving_range'))
+                               'driving_range'))
      OR (geom_type = 'line' AND tags->>'golf' = 'hole')
      OR (geom_type = 'point' AND tags->>'golf' IN ('pin', 'tee'));
