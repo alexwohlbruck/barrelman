@@ -47,15 +47,6 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ### Fixed
 
-* **Live times on the L and 7 trains.** Realtime trip ids are matched per
-  route, so a line whose live feed shortens its trip ids resolves while the
-  rest of the feed keeps the form it already matched. A rewrite that would
-  give two trips running the same day one id now holds back just those trips
-  instead of skipping the whole feed.
-* **Subway realtime follows planned service changes.** Where an operator
-  publishes a second static feed for the same routes, the import takes it when
-  it matches clearly more live trips; for the subway that is MTA's
-  supplemented schedule, which carries the coming week's reroutes.
 * **Median ends are round.** A narrow median's nose takes half its width as
   its kerb radius, so it ends round at the crosswalk instead of drawn to a point
   well short of it.
@@ -82,6 +73,20 @@ does it — and the release pipeline turns it into the GitHub Release notes.
   deck rather than standing inside it as a deck of its own, twin tracks on one
   viaduct are joined at one height and share their piers, and a carriageway is
   no longer chained back onto the slip road it meets at a gore.
+
+## [0.10.20] - 2026-10-16
+
+### Fixed
+
+* **Live times on the L and 7 trains.** Realtime trip ids are matched per
+  route, so a line whose live feed shortens its trip ids resolves while the
+  rest of the feed keeps the form it already matched. A rewrite that would
+  give two trips running the same day one id now holds back just those trips
+  instead of skipping the whole feed.
+* **Subway realtime follows planned service changes.** Where an operator
+  publishes a second static feed for the same routes, the import takes it when
+  it matches clearly more live trips; for the subway that is MTA's
+  supplemented schedule, which carries the coming week's reroutes.
 
 ## [0.10.19] - 2026-10-15
 
@@ -1344,7 +1349,6 @@ does it — and the release pipeline turns it into the GitHub Release notes.
   alerts inform stations, not platforms — the MTA's "4 runs local" names stop
   `237` while route detail carries `237N` — and the parent is the join between
   the two
-
 
 ## [0.2.19] - 2026-09-07
 
