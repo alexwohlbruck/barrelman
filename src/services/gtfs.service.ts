@@ -146,6 +146,25 @@ export function resolveGtfsBbox(region: string): string | null {
 }
 
 /**
+ * Transitland answers 429 once a key passes its per-minute quota. Waiting out
+ * the window keeps a busy sweep from reading the refusal as "no realtime feed".
+ */
+export function retryingTransitlandLimits(
+  fetchFn: FetchFn,
+  sleep: (ms: number) => Promise<void> = ms => new Promise(resolve => setTimeout(resolve, ms)),
+  maxRetries = 5,
+): FetchFn {
+  return async (url, init) => {
+    for (let attempt = 0; ; attempt++) {
+      const response = await fetchFn(url, init)
+      if (response.status !== 429 || attempt >= maxRetries || !url.includes('transit.land')) return response
+      const waitSec = Number(response.headers.get('retry-after') ?? response.headers.get('ratelimit-reset'))
+      await sleep(Math.min(Number.isFinite(waitSec) && waitSec > 0 ? waitSec : 30, 60) * 1000)
+    }
+  }
+}
+
+/**
  * Fetch GTFS feed list from Transitland API.
  *
  * Returns feed download URLs filtered by region. For 'global', returns
@@ -156,6 +175,7 @@ export async function fetchFeedList(
   apiKey: string,
   fetchFn: FetchFn = globalThis.fetch,
 ): Promise<GtfsFeedInfo[]> {
+  fetchFn = retryingTransitlandLimits(fetchFn)
   const feeds: GtfsFeedInfo[] = []
   const records = new Map<string, any>()
   const seen = new Set<string>()
@@ -340,6 +360,7 @@ export async function discoverRtUrls(
 ): Promise<{ checked: number; updated: number; errors: number }> {
   const key = apiKey || process.env.TRANSITLAND_API_KEY
   if (!key) throw new Error('TRANSITLAND_API_KEY is required')
+  fetchFn = retryingTransitlandLimits(fetchFn)
 
   // Get feeds that need RT URL discovery
   const result = await db.execute(sql`
