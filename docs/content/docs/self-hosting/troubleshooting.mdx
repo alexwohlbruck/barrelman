@@ -281,6 +281,20 @@ read its output:
   495/705 sampled realtime trips now resolve; 2660 id(s) shared by more than one trip
 ```
 
+One feed can mix conventions, so after the feed-wide choice each route the
+realtime sample names is measured again over its own trips, and keeps a
+further transform only if it clears the same bar. On the subway that cuts the
+L and 7 to the shorter id their realtime publishes (`079550_L..N` for
+`079550_L..N01R`) while every other line keeps its path suffix:
+
+```
+✓ Realtime trip_ids did not match static. Rewrote to keep the first 11 characters on route 7; keep the first 11 characters on route L
+```
+
+Where a transform would give two trips running on the same day one id — two
+trains leaving one terminal in the same minute on different paths — those
+trips keep their previous ids and the rest of the feed is still rewritten.
+
 It declines in four cases, and says which. `sample-too-small` means the feed
 published too few trip updates to judge — likely a late-night or holiday run,
 so try again during service hours. `already-resolving` means the ids match and
@@ -306,11 +320,24 @@ expected wherever one operator publishes several feeds. `unauthorized` means
 the URL answered 401 or 403: set its secret in `GTFS_RT_CREDENTIALS`, keyed by
 the realtime feed's onestop id, and re-import.
 
+Where the feed's operator also publishes another static feed that Transitland
+keeps out of regional queries, the import tries it in the feed's place. It is
+kept only if it serves exactly the same routes and, aligned against the same
+realtime sample, resolves clearly more trips that are running that day. MTA's
+hourly `gtfs_supplemented.zip`, which adds the coming week's planned service
+changes, wins this way over the base subway schedule:
+
+```
+✓ https://rrgtfsfeeds.s3.amazonaws.com/gtfs_supplemented.zip serves the same routes and resolves 650/748 sampled realtime trips against 556; importing it instead
+```
+
 Some realtime trips never resolve no matter what. Added and unscheduled trips
-appear in no published schedule. And a feed can differ in more than one way at
-once: MTA's L train is published with a shorter id in realtime than in the
-schedule (`079550_L..N` against `079550_L..N01R`) on top of the prefix, so it
-stays schedule-only.
+appear in no published schedule. A trip update whose `start_time` is the
+train's actual departure rather than the scheduled one fails MOTIS's
+start-time check even though its id matches. A route whose realtime publishes
+some trips with the full id and some with a shorter one keeps the id its
+schedule already matches, so the shortened trips stay schedule-only. And a feed whose realtime ids follow another scheme
+entirely, such as Metro-North's, stays schedule-only.
 
 **`pelias_elasticsearch` restarts forever with `AccessDeniedException[/usr/share/elasticsearch/data/nodes]`**
 

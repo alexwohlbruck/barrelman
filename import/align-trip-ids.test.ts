@@ -4,11 +4,16 @@ import {
   alignRealtimeTripIds,
   chooseTransform,
   candidateTransforms,
+  chooseRouteTransforms,
   derivedAffixTransforms,
+  truncationTransforms,
   expandServiceDates,
   findDateOverlaps,
-  sampleRealtimeTripIds,
+  resolvesClearlyMore,
+  sampleRealtimeTrips,
   MIN_SAMPLE,
+  MIN_ROUTE_SAMPLE,
+  type RtSample,
 } from './align-trip-ids'
 
 // ── Fixtures ────────────────────────────────────────────────────────
@@ -46,6 +51,10 @@ async function read(buffer: ArrayBuffer, name: string): Promise<string> {
 }
 
 const FEED = { feedId: '5', onestopId: 'f-dr5r-nyctsubway' }
+
+/** A realtime sample from trip_id → route_id pairs, undated. */
+const sampleOf = (pairs: Iterable<readonly [string, string]>): RtSample =>
+  new Map([...pairs].map(([id, routeId]) => [id, { routeId, startDate: '' }]))
 
 // ── Choosing a transform ────────────────────────────────────────────
 
@@ -165,9 +174,82 @@ describe('derivedAffixTransforms', () => {
   })
 })
 
+describe('truncationTransforms', () => {
+  test('cuts static ids to the length realtime publishes, whatever the tail', () => {
+    // Realtime drops a path suffix that differs from trip to trip.
+    const staticIds = Array.from({ length: 30 }, (_, i) => `${String(i).padStart(6, '0')}_L..S0${i % 3}R`)
+    const rtIds = new Set(staticIds.map(id => id.slice(0, 11)))
+    const [cut] = truncationTransforms(staticIds, rtIds)
+
+    expect(cut!.id).toBe('truncate-to:11')
+    expect(cut!.apply('000007_L..S01R')).toBe('000007_L..S')
+    expect(cut!.apply('short')).toBe('short')
+  })
+
+  test('learns nothing when realtime ids are not heads of static ids', () => {
+    expect(truncationTransforms(['abc1', 'abc2', 'abc3'], new Set(['zz', 'yy', 'xx']))).toEqual([])
+  })
+
+  test('wins the feed-wide choice where no fixed suffix fits', () => {
+    const staticIds = Array.from({ length: 40 }, (_, i) => `${String(i).padStart(6, '0')}_7..N9${i % 4}R`)
+    const choice = chooseTransform(staticIds, new Set(staticIds.map(id => id.slice(0, 11))))
+
+    expect(choice.transform!.id).toBe('truncate-to:11')
+    expect(choice.best!.matched).toBe(40)
+  })
+
+  test('loses a tie to a separator, which also covers days the sample missed', () => {
+    // Friday ids in the sample are 11 characters; Monday ids are 12.
+    const staticIds = [
+      ...Array.from({ length: 30 }, (_, i) => `Fri_${String(i).padStart(7, 'a')}-5`),
+      ...Array.from({ length: 30 }, (_, i) => `M-Th_${String(i).padStart(7, 'a')}-2`),
+    ]
+    const rtIds = new Set(staticIds.slice(0, 30).map(id => id.slice(0, -2)))
+    const choice = chooseTransform(staticIds, rtIds)
+
+    expect(choice.transform!.id).toBe('drop-from-last:-')
+    expect(choice.transform!.apply('M-Th_aaaaaa1-2')).toBe('M-Th_aaaaaa1')
+  })
+})
+
+describe('chooseRouteTransforms', () => {
+  const route = (routeId: string, n: number, tail: string) =>
+    Array.from({ length: n }, (_, i) => ({
+      id: `${String(i).padStart(6, '0')}_${routeId}..S${tail}`,
+      serviceId: 'Weekday',
+      routeId,
+    }))
+
+  test('refines only the route whose realtime ids still miss', () => {
+    const trips = [...route('A', 20, '03R'), ...route('L', 20, '01R')]
+    const rtTrips = sampleOf([
+      ...trips.filter(t => t.routeId === 'A').map(t => [t.id, 'A'] as [string, string]),
+      ...trips.filter(t => t.routeId === 'L').map(t => [t.id.slice(0, 11), 'L'] as [string, string]),
+    ])
+    const choices = chooseRouteTransforms(trips, new Map(), rtTrips)
+
+    expect([...choices.keys()]).toEqual(['L'])
+    expect(choices.get('L')!.best!.matched).toBe(20)
+  })
+
+  test('leaves a route that mostly resolves, even if some ids are short', () => {
+    const trips = route('G', 20, '14R')
+    const rtTrips = sampleOf(
+      trips.map((t, i) => [i < 12 ? t.id : t.id.slice(0, 11), 'G'] as [string, string]),
+    )
+    expect(chooseRouteTransforms(trips, new Map(), rtTrips).size).toBe(0)
+  })
+
+  test('waits for a route seen too rarely to judge', () => {
+    const trips = route('L', MIN_ROUTE_SAMPLE - 1, '01R')
+    const rtTrips = sampleOf(trips.map(t => [t.id.slice(0, 11), 'L'] as [string, string]))
+    expect(chooseRouteTransforms(trips, new Map(), rtTrips).size).toBe(0)
+  })
+})
+
 // ── Sampling ────────────────────────────────────────────────────────
 
-describe('sampleRealtimeTripIds', () => {
+describe('sampleRealtimeTrips', () => {
   const encoded = new Uint8Array([1, 2, 3])
 
   test('unions trip ids across a feed’s realtime URLs', async () => {
@@ -177,7 +259,7 @@ describe('sampleRealtimeTripIds', () => {
           FeedMessage: {
             decode: () => ({
               entity: [
-                { tripUpdate: { trip: { tripId: 'a' } } },
+                { tripUpdate: { trip: { tripId: 'a', routeId: 'L' } } },
                 { tripUpdate: { trip: { tripId: 'b' } } },
                 { vehicle: { trip: { tripId: 'ignored' } } },
               ],
@@ -187,7 +269,7 @@ describe('sampleRealtimeTripIds', () => {
       },
     }))
     const fetchFn = mock(async () => new Response(encoded, { status: 200 }))
-    const ids = await sampleRealtimeTripIds(
+    const ids = await sampleRealtimeTrips(
       [
         { url: 'https://example.test/a', type: 'tripUpdates' },
         { url: 'https://example.test/b', type: 'tripUpdates' },
@@ -196,12 +278,14 @@ describe('sampleRealtimeTripIds', () => {
     )
 
     expect(fetchFn).toHaveBeenCalledTimes(2)
-    expect([...ids].sort()).toEqual(['a', 'b'])
+    expect([...ids.keys()].sort()).toEqual(['a', 'b'])
+    expect(ids.get('a')).toEqual({ routeId: 'L', startDate: '' })
+    expect(ids.get('b')).toEqual({ routeId: '', startDate: '' })
   })
 
   test('ignores vehicle-position and alert URLs', async () => {
     const fetchFn = mock(async () => new Response(encoded, { status: 200 }))
-    await sampleRealtimeTripIds(
+    await sampleRealtimeTrips(
       [
         { url: 'https://example.test/vp', type: 'vehiclePositions' },
         { url: 'https://example.test/al', type: 'alerts' },
@@ -213,7 +297,7 @@ describe('sampleRealtimeTripIds', () => {
 
   test('returns nothing rather than throwing when realtime is unreachable', async () => {
     const warnings: string[] = []
-    const ids = await sampleRealtimeTripIds(
+    const ids = await sampleRealtimeTrips(
       [{ url: 'https://example.test/a', type: 'tripUpdates' }],
       (async () => { throw new Error('ECONNREFUSED') }) as never,
       m => warnings.push(m),
@@ -225,7 +309,7 @@ describe('sampleRealtimeTripIds', () => {
 
   test('reports a non-200 without failing the import', async () => {
     const warnings: string[] = []
-    const ids = await sampleRealtimeTripIds(
+    const ids = await sampleRealtimeTrips(
       [{ url: 'https://example.test/a', type: 'tripUpdates' }],
       (async () => new Response('nope', { status: 429 })) as never,
       m => warnings.push(m),
@@ -236,14 +320,14 @@ describe('sampleRealtimeTripIds', () => {
   })
 
   test('handles a feed with no realtime URLs at all', async () => {
-    expect((await sampleRealtimeTripIds(undefined)).size).toBe(0)
+    expect((await sampleRealtimeTrips(undefined)).size).toBe(0)
   })
 })
 
 // ── End to end ──────────────────────────────────────────────────────
 
 describe('alignRealtimeTripIds', () => {
-  const withSample = (rtIds: string[]) => ({ rtTripIds: new Set(rtIds) })
+  const withSample = (rtIds: string[], routeId = '') => ({ rtTrips: sampleOf(rtIds.map(id => [id, routeId] as const)) })
 
   test('rewrites every trip_id-bearing file', async () => {
     const { text, rtIds } = mtaTrips(40)
@@ -361,7 +445,7 @@ describe('alignRealtimeTripIds', () => {
   test('does nothing when the realtime feed yields no sample', async () => {
     const { text } = mtaTrips(40)
     const zip = await buildZip({ 'trips.txt': text, 'calendar.txt': CALENDAR })
-    const { buffer, result } = await alignRealtimeTripIds(zip, FEED, { rtTripIds: new Set() })
+    const { buffer, result } = await alignRealtimeTripIds(zip, FEED, { rtTrips: sampleOf([]) })
 
     expect(result.skipReason).toBe('no-realtime')
     expect(buffer).toBe(zip)
@@ -379,6 +463,89 @@ describe('alignRealtimeTripIds', () => {
     await expect(
       alignRealtimeTripIds(zip, FEED, { ...withSample(rtIds), extendCalendar: true }),
     ).rejects.toThrow(/extend_calendar/)
+  })
+
+  /** A subway-shaped feed: route A matches after the prefix strip, route L also loses its path suffix. */
+  function twoConventions(extraL: string[] = []) {
+    const rows: string[] = []
+    const rt: Array<[string, string]> = []
+    for (let i = 0; i < 25; i++) {
+      const origin = String(i * 100).padStart(6, '0')
+      rows.push(`A,ASP26GEN-Weekday-00_${origin}_A..S03R,Weekday`)
+      rows.push(`L,ASP26GEN-Weekday-00_${origin}_L..N0${i % 2}R,Weekday`)
+      rt.push([`${origin}_A..S03R`, 'A'], [`${origin}_L..N`, 'L'])
+    }
+    rows.push(...extraL)
+    const trips = 'route_id,trip_id,service_id\n' + rows.join('\n') + '\n'
+    const stopTimes =
+      'trip_id,stop_id,departure_time,stop_sequence\n' +
+      rows.map(r => `${r.split(',')[1]},S1,08:00:00,1`).join('\n') + '\n'
+    return { trips, stopTimes, rtTrips: sampleOf(rt) }
+  }
+
+  test('applies a route transform on top of the feed-wide one', async () => {
+    const { trips, stopTimes, rtTrips } = twoConventions()
+    const zip = await buildZip({ 'trips.txt': trips, 'stop_times.txt': stopTimes, 'calendar.txt': CALENDAR })
+    const { buffer, result } = await alignRealtimeTripIds(zip, FEED, { rtTrips })
+
+    expect(result.applied).toBe(true)
+    expect(result.transform).toBe('drop-through-first:_')
+    expect(Object.keys(result.routeTransforms)).toEqual(['L'])
+    expect(result.matched).toBe(50)
+    const rewritten = await read(buffer, 'trips.txt')
+    expect(rewritten).toContain('L,000100_L..N,Weekday')
+    expect(rewritten).toContain('A,000100_A..S03R,Weekday')
+    expect(await read(buffer, 'stop_times.txt')).toContain('000100_L..N,S1')
+  })
+
+  test('holds back trips a route transform would merge, and rewrites the rest', async () => {
+    // A second L train leaves the same terminal at the same minute on another path.
+    const { trips, rtTrips } = twoConventions(['L,ASP26GEN-Weekday-00_000300_L..N05R,Weekday'])
+    const zip = await buildZip({ 'trips.txt': trips, 'calendar.txt': CALENDAR })
+    const { buffer, result } = await alignRealtimeTripIds(zip, FEED, { rtTrips })
+
+    expect(result.applied).toBe(true)
+    expect(result.heldTrips).toBe(2)
+    const rewritten = await read(buffer, 'trips.txt')
+    expect(rewritten).toContain('000300_L..N01R')
+    expect(rewritten).toContain('000300_L..N05R')
+    expect(rewritten).not.toContain('000300_L..N,')
+    expect(rewritten).toContain('000500_L..N,')
+  })
+
+  test('holds back the few trips a feed-wide transform would merge', async () => {
+    // Most ids carry a "-<service>" tail realtime drops; three carry none, so
+    // the cut lands inside them and merges them onto one id.
+    const rows = [
+      ...Array.from({ length: 30 }, (_, i) => `R1,Fri_trip${i}-5,Weekday`),
+      'R1,M-Th_a,Weekday',
+      'R1,M-Th_b,Weekday',
+      'R1,M-Th_c,Weekday',
+    ]
+    const zip = await buildZip({
+      'trips.txt': 'route_id,trip_id,service_id\n' + rows.join('\n') + '\n',
+      'calendar.txt': CALENDAR,
+    })
+    const rtTrips = sampleOf(Array.from({ length: 30 }, (_, i) => [`Fri_trip${i}`, '']))
+    const { buffer, result } = await alignRealtimeTripIds(zip, FEED, { rtTrips })
+
+    expect(result.applied).toBe(true)
+    expect(result.heldTrips).toBe(3)
+    expect(result.matched).toBe(30)
+    const rewritten = await read(buffer, 'trips.txt')
+    expect(rewritten).toContain('R1,Fri_trip7,Weekday')
+    expect(rewritten).toContain('R1,M-Th_a,Weekday')
+  })
+
+  test('a route transform is idempotent too', async () => {
+    const { trips, rtTrips } = twoConventions()
+    const zip = await buildZip({ 'trips.txt': trips, 'calendar.txt': CALENDAR })
+    const once = await alignRealtimeTripIds(zip, FEED, { rtTrips })
+    const twice = await alignRealtimeTripIds(once.buffer, FEED, { rtTrips })
+
+    expect(twice.result.applied).toBe(false)
+    expect(twice.result.skipReason).toBe('already-resolving')
+    expect(twice.buffer).toBe(once.buffer)
   })
 
   test('compresses the rewritten zip instead of storing it', async () => {
@@ -432,5 +599,40 @@ describe('expandServiceDates', () => {
   test('handles a feed with no calendar.txt', () => {
     const dates = expandServiceDates(null, 'service_id,date,exception_type\nOnce,20260704,1\n')
     expect([...dates.get('Once')!]).toEqual(['20260704'])
+  })
+})
+
+describe('resolvesClearlyMore', () => {
+  const result = (resolving: number, sampleSize = 100) => ({
+    applied: true, rewrittenRows: {}, collidingTripIds: 0, overlaps: [], routeTransforms: {}, heldTrips: 0,
+    sampleSize, matched: resolving, resolving,
+  })
+
+  test('takes an alternate that reaches clearly more of the sample', () => {
+    expect(resolvesClearlyMore(result(80), result(69))).toBe(true)
+  })
+
+  test('keeps the catalogued feed on a near tie', () => {
+    expect(resolvesClearlyMore(result(71), result(69))).toBe(false)
+  })
+
+  test('never decides on a sample too small to judge', () => {
+    expect(resolvesClearlyMore(result(10, MIN_SAMPLE - 1), result(0, MIN_SAMPLE - 1))).toBe(false)
+  })
+
+  test('a feed whose ids match but whose calendar has lapsed resolves nothing', async () => {
+    const { text, rtIds } = mtaTrips(40)
+    const zip = await buildZip({ 'trips.txt': text, 'calendar.txt': CALENDAR })
+    const dated = (startDate: string) => ({
+      rtTrips: new Map(rtIds.map(id => [id, { routeId: 'A', startDate }])) as RtSample,
+    })
+
+    const running = await alignRealtimeTripIds(zip, FEED, dated('20260603'))
+    const lapsed = await alignRealtimeTripIds(zip, FEED, dated('20261016'))
+
+    expect(running.result.resolving).toBe(40)
+    expect(lapsed.result.matched).toBe(40)
+    expect(lapsed.result.resolving).toBe(0)
+    expect(resolvesClearlyMore(lapsed.result, running.result)).toBe(false)
   })
 })
