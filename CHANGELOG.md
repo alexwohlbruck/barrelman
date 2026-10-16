@@ -10,6 +10,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.10.20] - 2026-10-16
+
 ### Fixed
 
 * **Live times on the L and 7 trains.** Realtime trip ids are matched per
