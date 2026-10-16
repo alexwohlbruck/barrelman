@@ -25,7 +25,13 @@ import {
   sanitizeGtfsZip,
   loadFeedIdentities,
 } from '../src/services/gtfs.service'
-import { alignRealtimeTripIds, describeAlignment } from './align-trip-ids'
+import {
+  alignRealtimeTripIds,
+  describeAlignment,
+  resolvesClearlyMore,
+  sampleRealtimeTrips,
+  type AlignmentResult,
+} from './align-trip-ids'
 import { selectRtUrls } from '../src/services/rt-url-selection'
 import { parseCsvRows, headerIndex } from './csv'
 import JSZip from 'jszip'
@@ -72,9 +78,10 @@ if (!apiKey && !skipDownload) {
 async function alignTripIds(
   buffer: ArrayBuffer,
   feed: { feedId: string; onestopId?: string; name?: string; rtUrls?: GtfsRtUrl[] },
+  aligned?: { buffer: ArrayBuffer; result: AlignmentResult },
 ): Promise<ArrayBuffer> {
   const label = feed.name || feed.onestopId || feed.feedId
-  const { buffer: out, result } = await alignRealtimeTripIds(buffer, feed, {
+  const { buffer: out, result } = aligned ?? await alignRealtimeTripIds(buffer, feed, {
     onWarn: message => console.error(`  ⚠ ${label}: ${message}`),
   })
 
@@ -104,6 +111,61 @@ async function alignTripIds(
   }
 
   return out
+}
+
+/** Downloads of alternate static feeds, shared by every feed of one operator. */
+const alternateDownloads = new Map<string, Promise<ArrayBuffer | null>>()
+
+function downloadAlternate(url: string): Promise<ArrayBuffer | null> {
+  let pending = alternateDownloads.get(url)
+  if (!pending) {
+    pending = fetch(url)
+      .then(async response => (response.ok ? (await sanitizeGtfsZip(await response.arrayBuffer())).buffer : null))
+      .catch(() => null)
+    alternateDownloads.set(url, pending)
+  }
+  return pending
+}
+
+/**
+ * Align the feed, or one of its operator's other static feeds in its place.
+ *
+ * An alternate is taken only when it serves exactly the same routes — so it is
+ * the same service, not an aggregate that would duplicate another feed — and,
+ * aligned against the same realtime sample, reaches clearly more of it. That
+ * is how a schedule that also carries the coming week's planned changes wins
+ * over the base timetable, without the import knowing which agencies publish
+ * one.
+ */
+async function alignBestStatic(
+  buffer: ArrayBuffer,
+  feed: { feedId: string; onestopId?: string; name?: string; url: string; rtUrls?: GtfsRtUrl[]; alternateUrls?: string[] },
+): Promise<{ buffer: ArrayBuffer; url: string }> {
+  if (!feed.alternateUrls?.length || !feed.rtUrls?.length) {
+    return { buffer: await alignTripIds(buffer, feed), url: feed.url }
+  }
+
+  const label = feed.name || feed.onestopId || feed.feedId
+  const rtTrips = await sampleRealtimeTrips(feed.rtUrls, fetch, message => console.error(`  ⚠ ${label}: ${message}`))
+  let best = { url: feed.url, source: buffer, ...await alignRealtimeTripIds(buffer, feed, { rtTrips }) }
+  const routes = await staticRouteIds(buffer)
+
+  for (const url of feed.alternateUrls) {
+    const alternate = await downloadAlternate(url)
+    if (!alternate) continue
+    const alternateRoutes = await staticRouteIds(alternate)
+    if (alternateRoutes.size !== routes.size || [...routes].some(r => !alternateRoutes.has(r))) continue
+
+    const aligned = await alignRealtimeTripIds(alternate, feed, { rtTrips })
+    if (!resolvesClearlyMore(aligned.result, best.result)) continue
+    console.log(
+      `  ✓ ${url} serves the same routes and resolves ${aligned.result.resolving}/${aligned.result.sampleSize} ` +
+        `sampled realtime trips against ${best.result.resolving}; importing it instead`,
+    )
+    best = { url, source: alternate, ...aligned }
+  }
+
+  return { buffer: await alignTripIds(best.source, feed, best), url: best.url }
 }
 
 async function staticRouteIds(buffer: ArrayBuffer): Promise<Set<string>> {
@@ -214,7 +276,9 @@ async function main() {
         }
         merged.rtUrls = await selectRealtime(buffer, merged)
 
-        writeFileSync(filepath, Buffer.from(await alignTripIds(buffer, merged)))
+        const chosen = await alignBestStatic(buffer, merged)
+        merged.url = chosen.url
+        writeFileSync(filepath, Buffer.from(chosen.buffer))
         feedFiles.push(filepath)
         feedIdOf.set(filepath, merged.feedId)
 
