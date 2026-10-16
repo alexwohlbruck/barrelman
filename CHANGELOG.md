@@ -10,6 +10,18 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Fixed
+
+* **Live times on the L and 7 trains.** Realtime trip ids are matched per
+  route, so a line whose live feed shortens its trip ids resolves while the
+  rest of the feed keeps the form it already matched. A rewrite that would
+  give two trips running the same day one id now holds back just those trips
+  instead of skipping the whole feed.
+* **Subway realtime follows planned service changes.** Where an operator
+  publishes a second static feed for the same routes, the import takes it when
+  it matches clearly more live trips; for the subway that is MTA's
+  supplemented schedule, which carries the coming week's reroutes.
+
 ## [0.10.19] - 2026-10-15
 
 ### Fixed
