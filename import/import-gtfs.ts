@@ -25,7 +25,7 @@ import {
   sanitizeGtfsZip,
   loadFeedIdentities,
 } from '../src/services/gtfs.service'
-import { alignRealtimeTripIds } from './align-trip-ids'
+import { alignRealtimeTripIds, describeAlignment } from './align-trip-ids'
 import { selectRtUrls } from '../src/services/rt-url-selection'
 import { parseCsvRows, headerIndex } from './csv'
 import JSZip from 'jszip'
@@ -82,7 +82,7 @@ async function alignTripIds(
     const counts = Object.entries(result.rewrittenRows)
       .map(([file, n]) => `${file} ${n}`)
       .join(', ')
-    console.log(`  ✓ Realtime trip_ids did not match static. Rewrote to ${result.describe} (${counts})`)
+    console.log(`  ✓ Realtime trip_ids did not match static. Rewrote to ${describeAlignment(result)} (${counts})`)
     console.log(
       `    ${result.matched}/${result.sampleSize} sampled realtime trips now resolve; ` +
         `${result.collidingTripIds} id(s) shared by more than one trip, none running the same day`,
