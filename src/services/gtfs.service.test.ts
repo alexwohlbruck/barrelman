@@ -26,6 +26,7 @@ import {
   sanitizeGtfsZip,
   resolveRtUrlsForFeed,
   FLEX_EXTENSION_FILES,
+  retryingTransitlandLimits,
 } from './gtfs.service'
 import JSZip from 'jszip'
 import { type FetchFn } from './transit.service'
@@ -1450,5 +1451,43 @@ describe('resolveRtUrlsForFeed', () => {
     const { fetchFn } = trackingFetch({ '&onestop_id=f-nowhere&': { feeds: [{ onestop_id: 'f-nowhere', urls: {} }] } })
 
     expect(await resolveRtUrlsForFeed('f-nowhere', 'key', fetchFn)).toEqual([])
+  })
+})
+
+describe('retryingTransitlandLimits', () => {
+  const limited = (headers: Record<string, string> = {}) => new Response('slow down', { status: 429, headers })
+
+  test('waits out a Transitland 429 and returns the retried answer', async () => {
+    const replies = [limited({ 'ratelimit-reset': '12' }), new Response('{}', { status: 200 })]
+    const waits: number[] = []
+    const fetchFn = retryingTransitlandLimits(
+      async () => replies.shift()!,
+      async ms => { waits.push(ms) },
+    )
+
+    const response = await fetchFn('https://transit.land/api/v2/rest/operators?feed_onestop_id=f-x')
+
+    expect(response.status).toBe(200)
+    expect(waits).toEqual([12_000])
+  })
+
+  test('passes a 429 from any other host straight through', async () => {
+    let calls = 0
+    const fetchFn = retryingTransitlandLimits(async () => { calls++; return limited() }, async () => {})
+
+    const response = await fetchFn('https://agency.example/tripUpdates')
+
+    expect(response.status).toBe(429)
+    expect(calls).toBe(1)
+  })
+
+  test('gives up after the retry budget', async () => {
+    let calls = 0
+    const fetchFn = retryingTransitlandLimits(async () => { calls++; return limited() }, async () => {}, 2)
+
+    const response = await fetchFn('https://transit.land/api/v2/rest/feeds?onestop_id=f-x')
+
+    expect(response.status).toBe(429)
+    expect(calls).toBe(3)
   })
 })
