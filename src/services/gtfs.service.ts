@@ -50,6 +50,12 @@ export interface GtfsFeedInfo {
   region?: string
   /** GTFS-RT feed URLs discovered from Transitland (trip updates + vehicle positions) */
   rtUrls?: GtfsRtUrl[]
+  /**
+   * Static downloads of the operator's other GTFS feeds that the region query
+   * did not return. The import tries each in this feed's place and keeps one
+   * only if it carries the same routes and matches clearly more realtime trips.
+   */
+  alternateUrls?: string[]
 }
 
 export interface ImportResult {
@@ -227,14 +233,23 @@ export async function fetchFeedList(
 
   console.log(`Discovering GTFS-RT feeds for ${feeds.length} static feeds...`)
   const rtRecords: RtRecordCache = new Map()
+  const listed = new Set(feeds.map(f => f.onestopId))
   const BATCH_SIZE = 10
   for (let i = 0; i < feeds.length; i += BATCH_SIZE) {
     await Promise.allSettled(
       feeds.slice(i, i + BATCH_SIZE).map(async feed => {
         const record = records.get(feed.feedId)
         if (!record?.onestop_id) return
-        const rtUrls = await rtUrlsForStaticRecord(record, apiKey, fetchFn, rtRecords)
-        if (rtUrls.length) feed.rtUrls = rtUrls
+        const { rtUrls, siblingStaticIds } = await realtimeForStaticRecord(record, apiKey, fetchFn, rtRecords)
+        if (!rtUrls.length) return
+        feed.rtUrls = rtUrls
+        const alternates = await alternateStaticUrls(
+          siblingStaticIds.filter(id => !listed.has(id)),
+          apiKey,
+          fetchFn,
+          rtRecords,
+        )
+        if (alternates.length) feed.alternateUrls = alternates
       }),
     )
   }
@@ -490,17 +505,22 @@ export async function resolveRtUrlsForFeed(
   const staticFeed = feedData.feeds?.[0]
   if (!staticFeed?.onestop_id) return []
 
-  return rtUrlsForStaticRecord(staticFeed, apiKey, fetchFn)
+  return (await realtimeForStaticRecord(staticFeed, apiKey, fetchFn)).rtUrls
 }
 
-/** Realtime URLs for a static feed whose Transitland record is in hand. */
-async function rtUrlsForStaticRecord(
+/**
+ * Realtime URLs for a static feed whose Transitland record is in hand, and the
+ * operator's other static feeds, which the same listing names.
+ */
+async function realtimeForStaticRecord(
   staticFeed: any,
   apiKey: string,
   fetchFn: FetchFn,
   cache: RtRecordCache = new Map(),
-): Promise<GtfsRtUrl[]> {
+): Promise<{ rtUrls: GtfsRtUrl[]; siblingStaticIds: string[] }> {
   const onestopId = staticFeed.onestop_id as string
+  const siblings = new Set<string>()
+  const result = (rtUrls: GtfsRtUrl[]) => ({ rtUrls, siblingStaticIds: [...siblings] })
 
   // Step 2: The operator that runs this feed lists its realtime feeds.
   const operatorUrl = `https://transit.land/api/v2/rest/operators?apikey=${apiKey}&feed_onestop_id=${encodeURIComponent(onestopId)}&limit=10`
@@ -511,7 +531,9 @@ async function rtUrlsForStaticRecord(
     const rtIds = new Set<string>()
     for (const operator of operatorData.operators ?? []) {
       for (const feed of operator.feeds ?? []) {
-        if (feed?.spec === 'GTFS_RT' && feed.onestop_id) rtIds.add(feed.onestop_id)
+        if (!feed?.onestop_id) continue
+        if (feed.spec === 'GTFS_RT') rtIds.add(feed.onestop_id)
+        else if (feed.spec === 'GTFS' && feed.onestop_id !== onestopId) siblings.add(feed.onestop_id)
       }
     }
 
@@ -527,16 +549,39 @@ async function rtUrlsForStaticRecord(
         found.push(entry)
       }
     }
-    if (found.length) return found
+    if (found.length) return result(found)
   }
 
   // Step 3: Some feeds carry their realtime URLs inline.
   const own = extractRtUrls(staticFeed)
-  if (own.length) return own
+  if (own.length) return result(own)
 
   // Step 4: The older `{onestopId}~rt` companion record, still used by some.
   const rtFeed = await fetchFeedRecord(`${onestopId}~rt`, apiKey, fetchFn, cache)
-  return rtFeed ? extractRtUrls(rtFeed) : []
+  return result(rtFeed ? extractRtUrls(rtFeed) : [])
+}
+
+/**
+ * Current static downloads for an operator's other GTFS feeds.
+ *
+ * Transitland keeps some feeds out of its regional queries — an agency's
+ * hourly "supplemented" build of the same schedule, say — while the operator
+ * listing still names them. Which of them is worth importing is not decided
+ * here; the import measures each against the realtime feed.
+ */
+async function alternateStaticUrls(
+  onestopIds: string[],
+  apiKey: string,
+  fetchFn: FetchFn,
+  cache: RtRecordCache,
+): Promise<string[]> {
+  const urls: string[] = []
+  for (const id of onestopIds) {
+    const record = await fetchFeedRecord(id, apiKey, fetchFn, cache)
+    const url = record?.urls?.static_current
+    if (url && String(record.spec).toLowerCase() === 'gtfs') urls.push(url)
+  }
+  return urls
 }
 
 // ── GTFS ZIP parsing ────────────────────────────────────────────────

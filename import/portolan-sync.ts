@@ -320,7 +320,7 @@ if (import.meta.main) {
       const { db } = await import('../src/db')
       const { gtfsFeeds } = await import('../src/schema/gtfs')
       const { sanitizeGtfsZip } = await import('../src/services/gtfs.service')
-      const { alignRealtimeTripIds } = await import('./align-trip-ids')
+      const { alignRealtimeTripIds, describeAlignment } = await import('./align-trip-ids')
       const { importFeedFile, injectTransfersTxt, readZipEntry } = await import('./feed-import')
       const { injectFaresV2 } = await import('./inject-fares-v2')
       const { injectBikesAllowed } = await import('./inject-bikes-allowed')
@@ -391,7 +391,7 @@ if (import.meta.main) {
         const { buffer, result: alignment } = await alignRealtimeTripIds(sanitized, feedInfo)
         if (alignment.applied) {
           console.log(
-            `  ✓ Realtime trip_ids did not match static. Rewrote to ${alignment.describe} ` +
+            `  ✓ Realtime trip_ids did not match static. Rewrote to ${describeAlignment(alignment)} ` +
               `(${alignment.matched}/${alignment.sampleSize} sampled trips now resolve)`,
           )
         } else if (alignment.skipReason === 'date-overlap' || alignment.skipReason === 'no-improvement') {

@@ -854,6 +854,41 @@ describe('fetchFeedList', () => {
     expect(feed.rtUrls?.map(r => r.url)).toEqual(['https://mta.example/gtfs-bdfm'])
   })
 
+  test("offers the operator's unlisted static feeds as alternates", async () => {
+    const mockFetch = buildMockFetch({
+      feedList: {
+        feeds: [
+          { id: 5, onestop_id: 'f-subway', spec: 'gtfs', urls: { static_current: 'https://x.example/subway.zip' } },
+          { id: 6, onestop_id: 'f-bus', spec: 'gtfs', urls: { static_current: 'https://x.example/bus.zip' } },
+        ],
+      },
+      operators: {
+        'f-subway': [{
+          onestop_id: 'o-x',
+          feeds: [
+            { onestop_id: 'f-subway', spec: 'GTFS' },
+            { onestop_id: 'f-bus', spec: 'GTFS' },
+            { onestop_id: 'f-subway-supplemented', spec: 'GTFS' },
+            { onestop_id: 'f-x~rt', spec: 'GTFS_RT' },
+          ],
+        }],
+      },
+      rtFeeds: {
+        'f-x~rt': { onestop_id: 'f-x~rt', urls: { realtime_trip_updates: 'https://x.example/rt' } },
+        'f-subway-supplemented': {
+          onestop_id: 'f-subway-supplemented',
+          spec: 'gtfs',
+          urls: { static_current: 'https://x.example/supplemented.zip' },
+        },
+      },
+    })
+
+    const [subway] = await fetchFeedList('nyc', 'test-key', mockFetch)
+
+    // The bus feed is imported in its own right, so it is never an alternate.
+    expect(subway.alternateUrls).toEqual(['https://x.example/supplemented.zip'])
+  })
+
   test('fills a credential Transitland names but does not publish from GTFS_RT_CREDENTIALS', async () => {
     const previous = process.env.GTFS_RT_CREDENTIALS
     process.env.GTFS_RT_CREDENTIALS = JSON.stringify({ 'f-bus~rt': 'k3y' })
