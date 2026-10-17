@@ -23,6 +23,10 @@ export type Shape = { sides: [number[], number[]]; caps: [number, number, number
 export const CAP_MAX = 20
 /** How far inside its edge a corner is tested from, so one lying on the outline's side counts as in it. */
 const CORNER_INSET = 0.5
+/** Most a side may stand out of its outline, in metres: outlines are traced by hand. */
+const OUTSIDE_SLACK = 0.5
+/** How far in from an end its sides are read against the outline, in metres. */
+const END_STEP = 1
 
 /** A deck to shape: shaped only where `outline` names the outline it was found in, by `inOutline`. */
 type Deck = Pick<Chain, 'points' | 'edges' | 'layer' | 'fit'> & { outline?: string | null }
@@ -227,6 +231,24 @@ export function shapeDecks(decks: Deck[], outlines: Outline[], grounded: Array<[
       const from = i < first ? first : i > last ? last : -1
       return from >= 0 && Math.abs(d[i] - d[from]) <= CAP_MAX ? s[from] : deck.edges[side]
     }))) as [number[], number[]]
+    // A side standing out of its outline is cut back to it, but never inside the carriageway. Near a grounded
+    // end, whose square end meets the road beyond however the abutment is skewed, only a side at the most a
+    // deck may reach: one that found no side of its own across a junction the bridge carries.
+    for (let i = 0; i < n; i++) {
+      if (home[i] < 0) continue
+      const { t, n: left } = frame(pts, i)
+      const landing = ([0, 1] as const).some(end => grounded[k][end] && fromEnd(i, end) <= CAP_MAX)
+      const rings = outlines[home[i]].rings
+      for (const side of [0, 1] as const) {
+        const v = shaped[side][i]
+        const dir = side ? neg(left) : left
+        if (v <= deck.edges[side] || (landing && v < MAX_REACH)) continue
+        if (within(offset(pts[i], dir, v - OUTSIDE_SLACK), rings)) continue
+        // An end often lies on the outline's side: read a step in from it.
+        const from = i === 0 ? offset(pts[i], t, END_STEP) : i === n - 1 ? offset(pts[i], neg(t), END_STEP) : pts[i]
+        shaped[side][i] = Math.max(deck.edges[side], Math.min(v, rayHit(from, dir, rings)))
+      }
+    }
     const caps: Shape['caps'] = [0, 0, 0, 0]
     for (const end of [0, 1] as const) {
       const nearEnd = home.flatMap((h, i) => (h >= 0 && fromEnd(i, end) <= CAP_MAX ? [i] : []))

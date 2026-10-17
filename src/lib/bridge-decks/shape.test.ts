@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test'
-import { mercator, resample, type Point } from './profile'
-import { CAP_MAX, shapeDecks } from './shape'
+import { edgePoints, mercator, resample, type Point } from './profile'
+import { CAP_MAX, shapeDecks, within } from './shape'
 
 // Metres east and north of a point in Charlotte. A deck running east has its
 // left side to the south: left is the side `edgePoints` offsets toward.
@@ -114,5 +114,20 @@ describe('shapeDecks', () => {
     expect(shapeDecks([deck(0, 60)], [skew], [[false, false]])[0]!.caps).toEqual([0, 0, 0, 0])
     const long = outline('way/1', [[-CAP_MAX - 30, 6], [60, 6], [60, -6], [-CAP_MAX - 30, -6]])
     expect(shapeDecks([deck(0, 60)], [long], [[true, false]])[0]!.caps).toEqual([0, 0, 0, 0])
+  })
+
+  it('keeps every member of a junction carried on a bridge inside its outline', () => {
+    // A diamond 60 m across carrying a crossroads: no square line from either road may reach out of it.
+    const diamond = outline('way/1', [[30, 0], [0, 30], [-30, 0], [0, -30]])
+    // The same, a metre out all round: outlines are traced by hand.
+    const slack = outline('way/1', [[31.5, 0], [0, 31.5], [-31.5, 0], [0, -31.5]])
+    const northward = { points: resample([at(3, -24), at(3, 24)], 6), edges: [4, 4] as [number, number], layer: 1, outline: 'way/1' }
+    const eastward = { ...deck(-24, 24, 3), outline: 'way/1' }
+    const shapes = shapeDecks([northward, eastward], [diamond], [[true, true], [true, true]])
+    for (const [k, d] of [northward, eastward].entries()) {
+      const shape = shapes[k]!
+      for (const side of edgePoints({ points: d.points, edges: d.edges, sides: shape.sides }))
+        for (const p of side.slice(1, -1)) expect(within(p, slack.rings)).toBe(true)
+    }
   })
 })
