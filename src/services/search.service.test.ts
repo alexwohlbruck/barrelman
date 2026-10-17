@@ -39,6 +39,11 @@ const mockTransaction = async (fn: (tx: any) => Promise<any>) => {
 mock.module('../db', () => ({
   ...actualDb, db: { execute: mockExecute, transaction: mockTransaction } }))
 mock.module('../lib/embeddings', () => ({ generateQueryEmbedding: mockGenerateQueryEmbedding }))
+// No corrections unless a test supplies some: the lookup is a query of its
+// own, and the call counts below are of the search layers.
+const actualLexicon = await import('./search-lexicon.service')
+const mockCorrections = mock(async (_words: string[]) => new Map<string, string[]>())
+mock.module('./search-lexicon.service', () => ({ ...actualLexicon, correctionsFor: mockCorrections }))
 // `mock.module` is process-global and replaces the module wholesale for every
 // test file in the run, so spread the real exports and override only what this
 // file cares about — otherwise a later file importing e.g. `isochroneCache`
@@ -77,6 +82,8 @@ beforeEach(() => {
   mockExecute.mockImplementation(async () => [])
   mockGenerateQueryEmbedding.mockReset()
   mockGenerateQueryEmbedding.mockImplementation(async () => [0.1, 0.2, 0.3])
+  mockCorrections.mockReset()
+  mockCorrections.mockImplementation(async () => new Map())
   searchCacheStore.clear()
   embeddingCacheStore.clear()
   // Off unless a test asks for it, so the locality layer issues no query and
@@ -887,5 +894,45 @@ describe('searchPlaces — resilience', () => {
       .mockImplementationOnce(async () => []) // abbrev
     const results = await searchPlaces({ query: 'library', autocomplete: true })
     expect(Array.isArray(results)).toBe(true)
+  })
+})
+
+describe('searchPlaces — corrected spellings', () => {
+  // Every bound value in a query, nested fragments included. Drizzle keeps
+  // them as bare values among the text chunks.
+  const paramsOf = (q: any): unknown[] =>
+    (q?.queryChunks ?? []).flatMap((c: any) =>
+      c?.queryChunks ? paramsOf(c) : typeof c === 'object' && c !== null ? [] : [c])
+  const mentions = (q: any, word: string) => paramsOf(q).some((v) => typeof v === 'string' && v.includes(word))
+
+  const store = { id: 'node/14003842716', name: "Men's Wearhouse", text_rank: 1, distance_m: 300 }
+  const fixes = new Map([['warehouse', ['wearhouse']]])
+
+  test('typeahead finds a place through the spelling the index uses', async () => {
+    // The store is "Men's Wearhouse"; every exact pass misses it.
+    mockCorrections.mockImplementation(async () => fixes)
+    mockExecute.mockImplementation(async (q: any) => (mentions(q, 'wearhouse') ? [store] : []))
+    const results = await searchPlaces({ query: "men's warehouse flatbush", lat: 40.684, lng: -73.976, autocomplete: true })
+    expect(results.map((r: any) => r.id)).toEqual(['node/14003842716'])
+  })
+
+  test('typeahead that found something never looks for corrections', async () => {
+    mockExecute.mockImplementationOnce(async () => [store]) // FTS (density probe)
+    await searchPlaces({ query: "men's wearhouse", lat: 40.684, lng: -73.976, autocomplete: true })
+    expect(mockCorrections).not.toHaveBeenCalled()
+  })
+
+  test('a submitted search runs the corrected pass beside trigram when short of results', async () => {
+    mockCorrections.mockImplementation(async () => fixes)
+    mockExecute.mockImplementation(async (q: any) => (mentions(q, 'wearhouse') ? [store] : []))
+    const results = await searchPlaces({ query: "men's warehouse flatbush", lat: 40.684, lng: -73.976 })
+    expect(results.map((r: any) => r.id)).toContain('node/14003842716')
+  })
+
+  test('a submitted search that filled its limit looks for no corrections', async () => {
+    const full = Array.from({ length: 5 }, (_, i) => ({ id: `node/${i}`, name: `Warehouse ${i}`, text_rank: 1, distance_m: 100 }))
+    mockExecute.mockImplementationOnce(async () => full) // FTS
+    await searchPlaces({ query: 'warehouse', lat: 40.684, lng: -73.976, limit: 5 })
+    expect(mockCorrections).not.toHaveBeenCalled()
   })
 })
