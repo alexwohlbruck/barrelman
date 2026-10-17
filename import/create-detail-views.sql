@@ -606,7 +606,7 @@ covered AS (
 owner AS (
   SELECT DISTINCT ON (p.id) p.id as part_id,
          (o.osm_id * 4 + CASE o.osm_type WHEN 'N' THEN 0 WHEN 'W' THEN 1 ELSE 2 END) as outline_fid,
-         COALESCE(NULLIF(o.tags->>'building:use', ''), NULLIF(o.tags->>'building', 'yes')) as outline_kind
+         COALESCE(NULLIF(o.tags->>'building:use', ''), NULLIF(NULLIF(o.tags->>'building', ''), 'yes')) as outline_kind
   FROM parts p
   JOIN geo_places o
     ON o.geom && p.geom
