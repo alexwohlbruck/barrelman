@@ -307,22 +307,24 @@ function carriedOn(points: Point[], end: 0 | 1, roads: Point[][], road: boolean)
 }
 
 /**
- * Metres from a deck's end, along the road carrying on from it, to the first
- * node another road or path meets it at, within LANDING.reach; Infinity where
- * none does. A single way carrying straight on at a node is the same road.
+ * Metres from a deck's end, along the way carrying on from it, to the first
+ * point another of `others` comes within JUNCTION_NEAR of it, within
+ * LANDING.reach; Infinity where none does. A single way carrying straight on
+ * from the end of the one followed is the same road.
  */
-export function junctionAhead(points: Point[], end: 0 | 1, roads: Point[][] = [], road = true): number {
+export function junctionAhead(points: Point[], end: 0 | 1, roads: Point[][] = [], road = true, others: Point[][] = roads): number {
   const run = carriedOn(points, end, roads, road)
-  if (!run?.way) return Infinity
+  if (!run) return Infinity
   const scale = metresPerUnit(run.path[0][1])
-  const near = (x: Point, q: Point) => Math.hypot(x[0] - q[0], x[1] - q[1]) * scale < 0.05
+  const touch = 0.05 / scale
   let [path, way, travelled] = [run.path, run.way, 0]
-  for (let k = 1; k < path.length && travelled < LANDING.reach; k++) {
-    const [p, q] = [path[k - 1], path[k]]
-    travelled += Math.hypot(q[0] - p[0], q[1] - p[1]) * scale
-    const others = roads.filter(r => r !== way && r.some(x => near(x, q)))
-    if (!others.length) continue
-    const next = k === path.length - 1 && others.length === 1 ? carriedOn([p, q], 1, others, road) : null
+  for (let k = 0; k < path.length && travelled < LANDING.reach; k++) {
+    const q = path[k]
+    if (k) travelled += Math.hypot(q[0] - path[k - 1][0], q[1] - path[k - 1][1]) * scale
+    const met = others.filter(r => r !== way && covers(grow(box(r), JUNCTION_NEAR), q) && beside(r, q).distance < JUNCTION_NEAR)
+    if (!met.length) continue
+    const next = k && k === path.length - 1 && met.length === 1 && met[0].some(x => Math.hypot(x[0] - q[0], x[1] - q[1]) < touch)
+      ? carriedOn([path[k - 1], q], 1, met, road) : null
     if (!next?.way) return travelled
     ;[path, way, k] = [next.path, next.way, 0]
   }
@@ -356,6 +358,8 @@ export function beyond(points: Point[], end: 0 | 1, roads: Point[][] = [], road 
 
 /** Metres a deck's run-on must stop short of a junction on the road beyond, about half a crossing street. */
 const JUNCTION_ROOM = 5
+/** How near another road or path must come to the way beyond a deck's end to meet it there, in metres. */
+const JUNCTION_NEAR = 3
 
 /** Farthest, in metres, the road a deck runs on to may stray from the deck's own line before it is not where the deck runs. */
 const OFF_LINE = 2
@@ -418,7 +422,7 @@ function eased(s: Solved, onGround: Set<string>): number[] {
 const SETTLE_RUN = 30
 
 /** Ground under each deck, and the road each grounded end lands on, loaded a few decks at a time and nearby decks together. */
-async function groundUnder(shaped: Chain[], edges: Array<[Point[], Point[]]>, grounded: Array<[boolean, boolean]>, onward: Point[][], ground: Ground) {
+async function groundUnder(shaped: Chain[], edges: Array<[Point[], Point[]]>, grounded: Array<[boolean, boolean]>, onward: Point[][], ground: Ground, roadsOnly: Point[][]) {
   const out: Array<number[] | null> = shaped.map(() => null)
   const lands: Array<[Landing, Landing]> = shaped.map(() => [null, null])
   const roads: Array<[number[], number[]]> = shaped.map(() => [[], []])
@@ -446,7 +450,8 @@ async function groundUnder(shaped: Chain[], edges: Array<[Point[], Point[]]>, gr
         const land = r.length ? landing(r, g[end ? g.length - 1 : 0]) : null
         if (!land || offLine(shaped[k].points, end as 0 | 1, pts[end].slice(0, Math.round(land.run / LANDING.step))) > OFF_LINE) return null
         // A hollow reaching past the road's next junction is the junction's ground: the deck comes down to it rather than run on over it.
-        const junction = junctionAhead(shaped[k].points, end as 0 | 1, onward, shaped[k].kind === 'road') - JUNCTION_ROOM
+        const road = shaped[k].kind === 'road'
+        const junction = junctionAhead(shaped[k].points, end as 0 | 1, onward, road, road ? roadsOnly : onward) - JUNCTION_ROOM
         return land.run <= junction ? land : null
       }) as [Landing, Landing]
     }
@@ -502,7 +507,7 @@ export async function buildDecks(input: DeckInput, ground: Ground): Promise<Deck
   })
   const edges = shaped.map(edgePoints)
   const onward = input.crossed.filter(c => c.kind === 'road' || c.kind === 'path').map(c => c.points)
-  const { under, lands, roads } = await groundUnder(shaped, edges, grounded, onward, ground)
+  const { under, lands, roads } = await groundUnder(shaped, edges, grounded, onward, ground, input.crossed.filter(c => c.kind === 'road').map(c => c.points))
 
   // Lower layers first, so a deck over another clears it.
   const solved: Solved[] = []
