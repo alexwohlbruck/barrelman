@@ -43,6 +43,9 @@ const WATER: Array<[string, string]> = [['natural', 'water'], ['waterway', 'rive
 const anyTag = (sql: Sql, pairs: Array<[string, string]>) =>
   pairs.map(([k, v]) => sql`g.tags->>${k} = ${v}`).reduce((a, b) => sql`${a} OR ${b}`)
 
+/** How far round a bridge way's ends the roads on the ground are read, in degrees: LANDING.reach and a little more. */
+const END_REACH_DEG = 0.0005
+
 /** How far from a deck's way a carriageway on the ground is read for its supports to keep off, in degrees (about 20 m). */
 const SURFACE_REACH_DEG = 0.0002
 
@@ -149,7 +152,12 @@ export async function inputFor(sql: Sql, rows: Row[]): Promise<DeckInput> {
       AND COALESCE(g.tags->>'location', '') NOT IN ('underground', 'underwater')`
   const crossedRows: Array<{ kind: Crossed['kind']; coords: number[][][]; width: string | null; lanes: string | null }> = await sql`
     WITH pieces AS MATERIALIZED (
-      SELECT ST_Subdivide(geom, 8) AS piece FROM geo_places WHERE osm_type = 'W' AND osm_id = ANY(${ids}::bigint[]) AND geom_type = 'line')
+      SELECT ST_Subdivide(geom, 8) AS piece FROM geo_places WHERE osm_type = 'W' AND osm_id = ANY(${ids}::bigint[]) AND geom_type = 'line'
+      -- and round each end as far as a deck reads the road beyond it, for the junctions there.
+      UNION ALL
+      SELECT ST_Buffer(e, ${END_REACH_DEG}) FROM geo_places,
+        LATERAL (VALUES (ST_StartPoint(geom)), (ST_EndPoint(geom))) v(e)
+      WHERE osm_type = 'W' AND osm_id = ANY(${ids}::bigint[]) AND geom_type = 'line')
     SELECT DISTINCT ON (g.osm_type, g.osm_id) bridge_deck_class(g.tags) AS kind, ST_AsGeoJSON(ST_Multi(g.geom))::json->'coordinates' AS coords,
            g.tags->>'width' AS width, g.tags->>'lanes' AS lanes
     FROM pieces JOIN geo_places g ON g.geom && piece AND ST_Intersects(g.geom, piece)
