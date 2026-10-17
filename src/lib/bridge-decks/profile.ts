@@ -622,33 +622,46 @@ export const GORE_GAP = 4
 export const GORE_RISE = 0.5
 /** Farthest apart two ramps may leave the same deck and still be one split, in metres. */
 const SPLIT_REACH = 15
+/** Least cosine between two ramps leaving one deck for them to share a gore: within about 35 degrees. */
+const SPLIT_ALIKE = 0.82
 /** Nearest a held ramp may come to an end it lands on, in metres: the hold gives way rather than meet the ground too steeply. */
 const HOLD_CLEAR = 30
 
-type GoreDeck = { chain: Chain & { outline?: string | null }; z: number[]; on?: Array<{ deck: unknown; at: Point }>; grounded?: [boolean, boolean] }
+type GoreDeck = { chain: Chain & { outline?: string | null }; z: number[]; on?: Array<{ deck: unknown; at: Point }>; grounded?: [boolean, boolean]; needs?: Need[]; g?: number[] }
 
 /**
  * Pairs of road decks that split apart within one bridge: a ramp and the deck
  * it leaves, and two ramps leaving the same deck at about the same place. Each
  * pair walks from where the first deck leaves (`order`, its sample indices).
  */
-function gorePairs(decks: GoreDeck[]): Array<{ A: GoreDeck; B: GoreDeck; order: number[] }> {
+function gorePairs(decks: GoreDeck[]): Array<{ A: GoreDeck; B: GoreDeck; order: number[]; parent: boolean }> {
   const same = (A: GoreDeck, B: GoreDeck) => B.chain.kind === 'road' && B.chain.layer === A.chain.layer && (A.chain.outline ?? null) === (B.chain.outline ?? null)
   const fromRest = (A: GoreDeck, at: Point) => {
     const n = A.chain.points.length
     const start = A.chain.points[0] === at || (A.chain.points[0][0] === at[0] && A.chain.points[0][1] === at[1])
     return start ? A.chain.points.map((_, i) => i) : A.chain.points.map((_, i) => n - 1 - i)
   }
-  const out: Array<{ A: GoreDeck; B: GoreDeck; order: number[] }> = []
+  // A deck's heading away from where it leaves, over its first two samples.
+  const leaving = (D: GoreDeck, order: number[]): Point => {
+    const [a, b] = [D.chain.points[order[0]], D.chain.points[order[Math.min(2, order.length - 1)]]]
+    const len = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1
+    return [(b[0] - a[0]) / len, (b[1] - a[1]) / len]
+  }
+  const out: Array<{ A: GoreDeck; B: GoreDeck; order: number[]; parent: boolean }> = []
   for (const A of decks) {
     if (A.chain.kind !== 'road') continue
     for (const { deck, at } of A.on ?? []) {
       const B = decks.find(D => D === deck)
       // Two bridges are two structures, with the ground between them: only one bridge's decks share a gore.
-      if (B && same(A, B)) out.push({ A, B, order: fromRest(A, at) })
-      for (const C of decks)
-        if (C !== A && same(A, C) && (C.on ?? []).some(r => r.deck === deck && Math.hypot(r.at[0] - at[0], r.at[1] - at[1]) * metresPerUnit(at[1]) <= SPLIT_REACH))
-          out.push({ A, B: C, order: fromRest(A, at) })
+      const order = fromRest(A, at)
+      if (B && same(A, B)) out.push({ A, B, order, parent: true })
+      // Two ramps leaving one deck at about the same place and the same way, not off its two sides.
+      for (const C of decks) {
+        const rest = (C.on ?? []).find(r => r.deck === deck && Math.hypot(r.at[0] - at[0], r.at[1] - at[1]) * metresPerUnit(at[1]) <= SPLIT_REACH)
+        if (C === A || !rest || !same(A, C)) continue
+        const [u, v] = [leaving(A, order), leaving(C, fromRest(C, rest.at))]
+        if (u[0] * v[0] + u[1] * v[1] >= SPLIT_ALIKE) out.push({ A, B: C, order, parent: false })
+      }
     }
   }
   return out
@@ -672,12 +685,14 @@ const sidesNow = (D: GoreDeck) => [0, 1].map(s => D.chain.points.map((_, i) => s
 /**
  * Ramps held at the height of the deck they split from until the gore's nose,
  * where the two have parted by GORE_GAP, then eased onto their own profile no
- * steeper than MAX_GRADE: so the gore lies level and can be paved. A hold that
- * would leave the ramp short of what it must clear (`needs`), under its
- * ground, or changed near an end it lands on, is not made.
+ * steeper than MAX_GRADE: so the gore lies level and can be paved. A hold is
+ * not made where the ramp would not rejoin its own profile, fall short of what
+ * it must clear (`needs`), go under its ground, or change near its far end or
+ * where another deck crosses or rests on it.
  */
-export function holdGores(decks: Array<GoreDeck & { needs?: Need[]; g?: number[] }>) {
-  for (const { A, B, order } of gorePairs(decks)) {
+export function holdGores(decks: GoreDeck[]) {
+  for (const { A, B, order, parent } of gorePairs(decks)) {
+    if (!parent) continue
     const d = along(A.chain.points)
     const z = A.z.slice()
     let held = -1
@@ -688,18 +703,28 @@ export function holdGores(decks: Array<GoreDeck & { needs?: Need[]; g?: number[]
       held = i
     }
     if (held < 0) continue
+    let rejoined = false
     for (const i of order.slice(order.indexOf(held) + 1)) {
       const run = MAX_GRADE * Math.abs(d[i] - d[held])
       const eased = Math.min(Math.max(z[i], z[held] - run), z[held] + run)
-      if (eased === z[i]) break
+      if (eased === z[i]) {
+        rejoined = true
+        break
+      }
       z[i] = eased
     }
-    const n = z.length
-    const moved = (i: number) => Math.abs(z[i] - A.z[i]) > 0.01
-    const nearEnd = z.some((_, i) => moved(i) && ([0, 1] as const).some(end => A.grounded?.[end] && Math.abs(d[i] - d[end ? n - 1 : 0]) < HOLD_CLEAR))
-    const short = (A as { needs?: Need[] }).needs?.some(need => heightAt(d, z, need.at) < Math.min(need.height, heightAt(d, A.z, need.at)) - 0.05)
-    const buried = (A as { g?: number[] }).g?.some((g, i) => moved(i) && z[i] < g - TERRAIN_SLACK)
-    if (!nearEnd && !short && !buried) A.z = z
+    const moved = z.flatMap((v, i) => (Math.abs(v - A.z[i]) > 0.01 ? [d[i]] : []))
+    if (!rejoined || !moved.length) continue
+    const [from, to] = [Math.min(...moved), Math.max(...moved)]
+    const farEnd = d[order[order.length - 1]]
+    const short = A.needs?.some(need => heightAt(d, z, need.at) < Math.min(need.height, heightAt(d, A.z, need.at)) - 0.05)
+    const buried = A.g?.some((g, i) => Math.abs(z[i] - A.z[i]) > 0.01 && z[i] < g - TERRAIN_SLACK)
+    // Nor near its far end, nor where another deck crosses it or rests on it: their heights were settled against this one's.
+    const nearFar = Math.abs(farEnd - from) < HOLD_CLEAR || Math.abs(farEnd - to) < HOLD_CLEAR
+    const crossed = decks.some(D => D !== A && D !== B && meet(box(D.chain.points), box(A.chain.points)) &&
+      (crossings(A.chain.points, D.chain.points, 0, d).some(at => at >= from - HOLD_CLEAR && at <= to + HOLD_CLEAR) ||
+       (D.on ?? []).some(r => r.deck === A)))
+    if (!short && !buried && !nearFar && !crossed) A.z = z
   }
 }
 

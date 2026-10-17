@@ -315,27 +315,31 @@ describe('paveGores', () => {
 
 describe('holdGores', () => {
   const main = (): Chain => ({ ways: [1], points: resample([east(0), east(120)], 6), kind: 'road', layer: 1, edges: [4, 4] })
-  const ramp = (): Chain => ({ ways: [2], points: resample([east(0), east(120, 20)], 6), kind: 'road', layer: 1, edges: [4, 4] })
-
-  it('holds a climbing ramp level with the deck it leaves to the gore nose, then lets it climb no steeper than MAX_GRADE', () => {
+  const ramp = (): Chain => ({ ways: [2], points: resample([east(0), east(120, 40)], 6), kind: 'road', layer: 1, edges: [4, 4] })
+  const pair = (grade: number) => {
     const [m, r] = [main(), ramp()]
     const d = along(r.points)
     const M = { chain: m, z: m.points.map(() => 100) }
-    const R = { chain: r, z: d.map(x => 100 + x * 0.1), on: [{ deck: M, at: r.points[0] }], grounded: [false, false] as [boolean, boolean] }
+    const R = { chain: r, z: d.map(x => 100 + x * grade), on: [{ deck: M, at: r.points[0] }] }
+    return { M, R, d, own: R.z.slice() }
+  }
+
+  it('holds a climbing ramp level with the deck it leaves to the gore nose, then eases it back onto its own profile', () => {
+    const { M, R, d, own } = pair(0.03)
     holdGores([M, R])
     expect(R.z[1]).toBeCloseTo(100, 1)
+    expect(R.z[1]).toBeLessThan(own[1] - 0.1)
     for (let i = 1; i < d.length; i++) expect(R.z[i] - R.z[i - 1]).toBeLessThanOrEqual(MAX_GRADE * (d[i] - d[i - 1]) + 1e-6)
-    expect(R.z.at(-1)).toBeGreaterThan(100)
+    expect(R.z.at(-1)).toBe(own.at(-1))
   })
 
-  it('makes no hold that would leave a ramp short of what it must clear', () => {
-    const [m, r] = [main(), ramp()]
-    const d = along(r.points)
-    const z = d.map(x => 100 + x * 0.1)
-    const M = { chain: m, z: m.points.map(() => 100) }
-    const R = { chain: r, z: z.slice(), on: [{ deck: M, at: r.points[0] }], needs: [{ at: 20, height: 101.9 }] }
-    holdGores([M, R])
-    expect(R.z).toEqual(z)
+  it('makes no hold a ramp could not climb back from, nor one leaving it short of what it must clear', () => {
+    const steep = pair(0.1)
+    holdGores([steep.M, steep.R])
+    expect(steep.R.z).toEqual(steep.own)
+    const cleared = pair(0.03)
+    holdGores([cleared.M, Object.assign(cleared.R, { needs: [{ at: 12, height: 100.3 }] })])
+    expect(cleared.R.z).toEqual(cleared.own)
   })
 })
 
