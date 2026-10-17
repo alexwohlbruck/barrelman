@@ -33,6 +33,13 @@ describe('estimateMatches', () => {
     expect(estimateMatches('harris & t:*')).toEqual({ rows: Math.round(0.0117 * ROWS), prefixRows: ROWS })
   })
 
+  test('a phrase counts as its rarest word, not as rare', () => {
+    // "nyc" expands to the phrase new <-> york, which is in 1.2M rows. Read as
+    // an unknown word it would send typeahead to the 8.5s index search.
+    setLexemeStats({ new: 0.07, york: 0.04 }, ROWS)
+    expect(estimateMatches('(nyc | new <-> york)')!.rows).toBe(Math.round(0.04 * ROWS))
+  })
+
   test('spelling alternatives add up', () => {
     setLexemeStats({ st: 0.05, street: 0.2 }, ROWS)
     expect(estimateMatches('(saint | st | street)')!.rows).toBe(Math.round(0.25 * ROWS))

@@ -894,7 +894,7 @@ export const SCRIPTS: ScriptDef[] = [
     id: 'osm-road-markings',
     name: 'Build Road Markings',
     description:
-      'Rebuild road_surfaces, road_markings and road_glyphs from the lane tags: true-width carriageways with rounded kerbs, lane, centre and edge lines, stop lines, crosswalks, and turn arrows and bike symbols.',
+      'Rebuild road_surfaces, road_markings and road_glyphs from the lane tags: true-width carriageways with rounded kerbs, lane, centre and edge lines, stop lines, crosswalks, turn arrows and bike symbols, and the signal masts and crossing gear beside the road.',
     category: 'osm',
     danger: 'safe',
     longRunning: true,
@@ -1186,6 +1186,18 @@ export const SCRIPTS: ScriptDef[] = [
     confirm: true,
     exec: { kind: 'internal', handler: 'admin:rebuild-tsvectors' },
     source: 'src/services/admin.service.ts',
+  },
+  {
+    id: 'db-build-search-lexicon',
+    name: 'Rebuild Search Lexicon',
+    description:
+      'Rebuild the word list search corrects misspellings against ("warehouse" → "Wearhouse"). Imports build it; run this after OSM updates so new names can be corrected towards. One pass over the named places, then an atomic swap, so search keeps working throughout.',
+    category: 'database',
+    danger: 'safe',
+    longRunning: true,
+    confirm: false,
+    exec: { kind: 'internal', handler: 'admin:build-search-lexicon' },
+    source: 'import/build-search-lexicon.sql',
   },
 
   // ── Config Generation ─────────────────────────────────────────────────

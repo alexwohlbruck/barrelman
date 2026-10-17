@@ -1,4 +1,5 @@
-import { db } from '../db'
+import { db, maintenanceConnection } from '../db'
+import { buildSearchLexicon } from '../lib/search-enrichment'
 import { sql } from 'drizzle-orm'
 import { readFileSync } from 'fs'
 import { join } from 'path'
@@ -60,12 +61,29 @@ export async function runRebuildTsvectors(): Promise<AdminTaskResult> {
   const start = performance.now()
   await db.execute(sql`
     UPDATE geo_places
-    SET ts = build_ts(osm_type, name, names, name_abbrev, categories, parent_context)
+    SET ts = build_ts(osm_type, name, names, name_abbrev, categories, parent_context, tags)
     WHERE name IS NOT NULL
-      AND ts IS DISTINCT FROM build_ts(osm_type, name, names, name_abbrev, categories, parent_context)
+      AND ts IS DISTINCT FROM build_ts(osm_type, name, names, name_abbrev, categories, parent_context, tags)
   `)
   const durationMs = Math.round(performance.now() - start)
   return { task: 'rebuild-tsvectors', steps: [{ file: 'inline', durationMs, notices: [] }], totalMs: durationMs }
+}
+
+/**
+ * Rebuild search_lexicon, the word list search corrects misspellings against.
+ * On its own connection: on a country it runs for minutes, past the API pool's
+ * statement timeout.
+ */
+export async function runBuildSearchLexicon(): Promise<AdminTaskResult> {
+  const start = performance.now()
+  const conn = maintenanceConnection()
+  try {
+    await buildSearchLexicon(conn)
+  } finally {
+    await conn.end({ timeout: 5 })
+  }
+  const durationMs = Math.round(performance.now() - start)
+  return { task: 'build-search-lexicon', steps: [{ file: 'build-search-lexicon.sql', durationMs, notices: [] }], totalMs: durationMs }
 }
 
 /** Generate codes from OSM tags (IATA, ICAO, ref, short_name, abbreviation, alt_name). */
@@ -165,9 +183,9 @@ export async function runFullMigration(onPhase?: (msg: string) => void): Promise
   const tsStart = performance.now()
   await db.execute(sql`
     UPDATE geo_places
-    SET ts = build_ts(osm_type, name, names, name_abbrev, categories, parent_context)
+    SET ts = build_ts(osm_type, name, names, name_abbrev, categories, parent_context, tags)
     WHERE name IS NOT NULL
-      AND ts IS DISTINCT FROM build_ts(osm_type, name, names, name_abbrev, categories, parent_context)
+      AND ts IS DISTINCT FROM build_ts(osm_type, name, names, name_abbrev, categories, parent_context, tags)
   `)
   steps.push({ file: 'rebuild-tsvectors', durationMs: Math.round(performance.now() - tsStart), notices: [] })
 

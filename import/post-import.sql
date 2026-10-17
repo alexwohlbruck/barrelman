@@ -158,9 +158,21 @@ END $$;
 --
 -- Intersection names ('X' rows) get "&" expanded to multilingual "and" tokens
 -- and road-suffix abbreviations injected so "hawthorne ln & 8th st" matches.
+--
+-- A few tags say what a place sells or is for in words people search with,
+-- and no category carries them: a suit shop is shop=clothes + clothes=suits,
+-- so "suits" matched nothing but shops with it in their name. Their values
+-- join the document ("suits", "basketball", "orthodontics"), and so does the
+-- brand, which a branch's name often leaves out ("Walmart Supercenter").
+--
+-- The six-argument form that predates the tags argument is dropped, so a
+-- caller that was missed fails loudly instead of quietly writing documents
+-- without the tag words.
+DROP FUNCTION IF EXISTS build_ts(TEXT, TEXT, TEXT[], TEXT, TEXT[], TEXT);
 CREATE OR REPLACE FUNCTION build_ts(
     p_osm_type TEXT, p_name TEXT, p_names TEXT[],
-    p_name_abbrev TEXT, p_categories TEXT[], p_parent_context TEXT
+    p_name_abbrev TEXT, p_categories TEXT[], p_parent_context TEXT,
+    p_tags JSONB
 ) RETURNS tsvector
 LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $fn$
 SELECT to_tsvector('simple', unaccent(replace(
@@ -180,6 +192,9 @@ SELECT to_tsvector('simple', unaccent(replace(
     coalesce(array_to_string(
         ARRAY(SELECT replace(replace(unnest(p_categories), '/', ' '), '_', ' ')),
     ' '), '') || ' ' ||
+    replace(replace(concat_ws(' ',
+        p_tags->>'brand', p_tags->>'clothes', p_tags->>'sport', p_tags->>'healthcare:speciality'
+    ), ';', ' '), '_', ' ') || ' ' ||
     coalesce(p_parent_context, '')
 , chr(39), '')))
 $fn$;

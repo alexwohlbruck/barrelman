@@ -217,6 +217,11 @@ psql "$DATABASE_URL" -f "$PROJECT_DIR/import/finalize-indexes.sql"
 echo "[$(date '+%H:%M:%S')] [8/8] Running ANALYZE..."
 psql "$DATABASE_URL" -c "ANALYZE geo_places; ANALYZE bicycle_ways; ANALYZE bicycle_routes;"
 
+# The word list search corrects misspellings against. Last, because it reads
+# the finished tsvectors.
+echo "[$(date '+%H:%M:%S')] Building search lexicon..."
+psql "$DATABASE_URL" -f "$PROJECT_DIR/import/build-search-lexicon.sql"
+
 echo ""
 echo "[$(date '+%H:%M:%S')] ✓ Import complete!"
 echo ""

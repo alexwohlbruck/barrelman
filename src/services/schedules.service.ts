@@ -87,6 +87,10 @@ const SEEDS: Array<Pick<ScheduleInput, 'scriptId' | 'cron'> & { params?: Record<
   // The update, not the full import, of every landmark source. Each publishes a batch at most daily; an
   // unchanged release costs one small request, so hourly keeps the layer fresh for free.
   { scriptId: 'landmarks-import', cron: '17 * * * *' },
+  // Nightly updates add names the typo-correction word list hasn't seen. A
+  // week's delay only means a brand-new name isn't offered as a correction
+  // yet; it is still found when spelled right.
+  { scriptId: 'db-build-search-lexicon', cron: '0 12 * * 0' },
 ]
 
 let schemaReady: Promise<void> | null = null

@@ -9,7 +9,7 @@ description: Which OpenStreetMap tags the lane-level road layers are built from,
 |---|---|---|
 | `road_surfaces` | carriageways at their real width, with rounded kerb corners | `bridge`, `kind` (`island` for a turning loop's island) |
 | `road_markings` | painted lines and areas | `kind`, `pattern`, `color`, `style`, `bridge` |
-| `road_glyphs` | arrows and bike symbols | `glyph`, `direction`, `bridge` |
+| `road_glyphs` | arrows and bike symbols, and what stands beside the road at signals and railway crossings | `glyph`, `direction`, `bridge` |
 
 Only tags the OSM wiki documents are read, and paint follows US conventions (MUTCD): yellow where it separates opposing traffic, white otherwise.
 
@@ -22,19 +22,31 @@ Only tags the OSM wiki documents are read, and paint follows US conventions (MUT
 | Centre turn lane | `lanes:both_ways=1`, `turn:lanes:both_ways=left` | de facto | `centre`: solid yellow on the through side, dashed yellow on the turn-lane side, each edge; back-to-back `road-arrow-left` glyphs |
 | Lane change barred | `change:lanes[:forward\|:backward]`, `change` (`no`, `not_left`, `not_right`) | in use | `lane` / `solid` where neither lane may cross; a solid line beside a dashed one where only one may |
 | Turn arrows | `turn:lanes[:forward\|:backward]` | approved | glyphs `road-arrow-*` |
-| Lane placement | `placement[:forward\|:backward]` | de facto | shifts the carriageway |
-| Width | `width:carriageway`, `width` | de facto | carriageway width |
+| Lane placement | `placement[:forward\|:backward]` | de facto | shifts the carriageway. A turn bay shifts it too on highways and ramps; on a street the kerbs stay put and the lanes step across only as far as there is unmarked room |
+| Width | `width:carriageway`, `width`; else separately mapped `footway=sidewalk` ways either side | de facto | carriageway width. Untagged, the kerbs stand 2.25 m (half the sidewalk's `width`) inside the nearer sidewalk, up to 8 m wider than the lanes; the extra is unmarked kerbside. A short street way narrower than the ways either side of it on the block takes their width, so the kerbs hold while the lanes are shared out differently |
 | Bike lanes | `cycleway[:left\|:right\|:both]=lane\|track`, `cycleway:*:width` | de facto | `bike` lines, `bike_lane` / `fill` green |
 | Bike lane buffer | `cycleway:*:buffer=yes\|<metres>` (0.9 m for `yes`), or `cycleway:*:marking:<traffic side>=barred_area` | de facto / draft | two `bike` lines, with `hatch` bars between them where the buffer is at least 0.6 m |
 | Bus lanes | `bus:lanes`, `lanes:bus`, `psv:lanes`, `lanes:psv` | de facto | `bus_lane` / `fill` red |
-| Street parking | `parking:<side>=lane` + `:orientation` + `:markings` (also the deprecated `parking:lane:*`) | approved | `parking` stall lines: angled or perpendicular stalls unless `markings=no`, parallel stalls and the lane's edge line only with `markings=yes` |
+| Street parking | `parking:<side>=lane` + `:orientation` + `:markings` (also the deprecated `parking:lane:*`) | approved | `parking` stall lines: angled or perpendicular stalls unless `markings=no`, parallel stalls and the lane's edge line with `markings=yes`, and otherwise short ticks 6.1 m apart along a parallel lane |
 | Hatched areas | closed way `road_marking=restriction` + `pattern=stripes\|chevron\|crosshatch` + `colour` + `stroke` | approved (2025) | paved; `restriction` outline (`solid`, `double`, `dashed`, or `none` for `stroke=no`, which no layer draws) and `hatch` bars at 45°, chevrons pointing at the arriving traffic |
 | Hatched areas (older tagging) | `area:highway=prohibited`, `traffic_calming=painted_island` (areas) | in use | as above, `stripes` |
-| Stop lines | `highway=stop` (+ `direction`, `stop=all`), `highway=traffic_signals` | de facto | `stop` / `fill` across the arriving lanes |
+| Stop lines | `highway=stop` (+ `direction`, `stop=all`), `highway=traffic_signals` | de facto | `stop` / `fill` across the arriving lanes, 1.2 m short of the crosswalk ahead and parallel to it; past 40° askew, one square line per lane, stepped along it |
 | Yield lines | `highway=give_way` (+ `direction`) | de facto | `yield` / `fill`: white triangles pointing at the traffic. A sign within 30 m of a junction, or on its node for the roads below the top one, puts them where a stop line would go; one further along the road, where it is mapped |
 | Crosswalks | `crossing:markings`, `crossing=marked\|traffic_signals` | approved | `crosswalk` / `fill`, `style` `zebra`, `lines`, `ladder`, `dashes` or `dots` (edge lines broken into 0.6 m dashes or 0.3 m dots) |
 | Speed humps | `traffic_calming=hump\|table\|cushion` (node on the road) | approved | `hump` / `fill`: one chevron per lane, pointing with the traffic, on any paved road; none on a raised crosswalk |
 | Turning circles | `highway=turning_circle\|turning_loop`, `diameter` | de facto | a round bulb in `road_surfaces` |
+| Car-free roads | paved `highway=pedestrian\|cycleway\|path\|footway` mapped like a road: with `lanes` (not on a footway), with `cycleway[:left\|:right\|:both]=lane\|track` (not on a cycleway), or a bikeway (`highway=cycleway` or `bicycle=designated`) with `width` of 4 m or more. Sidewalks, crossings and `is_sidepath=yes` are left out; `segregated`, `overtaking`, `oneway:bicycle` | de facto | paved at `width`, else a street's two lanes for a pedestrian street and 1.5 m lanes otherwise; the bike side set off by a `bike` line, unfilled; a single `centre` line, yellow in the Americas, `solid` for `overtaking=no` and `dashed` otherwise; `road-bike` glyphs along bikeways and `road-walk` glyphs on the walkers' side. A car-free way never makes a junction: a street crossing or meeting it keeps its lines, and the car-free way's lines stop at the street |
+| Traffic signals | `highway=traffic_signals` (+ `traffic_signals:direction` or `direction`, `traffic_signals`, `crossing`) | de facto | glyph `traffic-signals` on the node; a `signal-1` to `signal-4` mast per approach (see below) |
+| Level crossings | `railway=level_crossing\|tram_level_crossing` + `crossing:barrier`, `crossing:light`, `crossing:bell`, `crossing:saltire` | de facto / in use | glyphs `crossing-gate-1` to `-3`, `crossing-lights` or `crossbuck` per approach (see below) |
+
+Where a way carries on into the next with a different width or layout, the kerbs and lines ease across over a taper (MUTCD length for the speed, at most 150 m). Ways drawn in opposite directions, or with a ramp joining where they meet, ease the same way, so the centre line never steps sideways at a join; where a centre turn lane ends, the lines either side of it close in on the centre line. Where streets cross at the join, the change happens inside the junction instead. Bike lanes keep to the traffic lanes' side and tracks and parking to the kerb's while they ease, so neither cuts into the traffic lanes.
+
+### Signals and crossings
+
+Glyphs that do not start with `road-` stand beside the road rather than on it, so a client painting glyphs should draw only the `road-` ones. Each is a point off the right kerb of the traffic it controls, and its `direction` is that traffic's bearing, so a client stands a model there facing back along it.
+
+- **Signals.** A vehicle signal on a junction, or on a way within 20 m of one, controls every approach to it, as the wiki's junction-node tagging intends; a pedestrian signal (`crossing=*`) does only on the junction node itself. Each approach gets a mast on its far right corner, past the road it crosses, as in US practice; the number is the lanes it arrives in, up to four. An approach that goes on to cross a divided road's other carriageway has its mast past that one. A signal further from a junction stands 4 m past its node, for the way its direction names (`forward` is along the way as drawn) and otherwise both ways. Ramp meters, emergency signals and flashing beacons (`traffic_signals=ramp_meter|emergency|blinker`) stand none. Gear that lands on the asphalt steps out to its right until it is clear.
+- **Crossings.** `crossing:barrier` (`yes`, `half`, `full`, `double_half`, `gate`) gives a gate, its number the lanes its arm crosses (the arriving lanes, or all of them for `full`, up to three). `double_half` also closes the lanes leaving the crossing. `crossing:light` or `crossing:bell` without a barrier gives lights. An untagged `railway=level_crossing` gets a crossbuck unless `crossing:saltire=no`, the wiki's default; a tram crossing gets one only where tagged. Gear stands before the first track the traffic meets, where its post clears the nearest track by 4.2 m. A road crossing several tracks has a node on each; nodes within 12 m are one crossing, and each takes the most any of them is tagged with.
 
 Hatched areas are read when they are under about 200 m across, at ground level (no `bridge`, `tunnel` or `layer`), white or yellow, and on or beside a road. One without a `colour` is yellow in the Americas when a two-way road runs through it, or one-ways either side of it run opposite ways, and white otherwise. Chevrons need a one-way beside the area to know which way traffic runs; without one they are drawn as stripes.
 
@@ -51,6 +63,22 @@ stroke=solid             (the outline; double_solid, dashed, or no)
 
 Per Key:lanes, `lanes` counts traffic lanes only: a flush median is not a lane, and a centre turn lane is (`lanes:both_ways=1`).
 
+## Mapping a car-free park drive
+
+A drive closed to cars with a walkers' side and a bike lane (Central Park's and Prospect Park's loops, for example) draws from the tags its way already carries:
+
+```
+highway=pedestrian
+bicycle=designated
+segregated=yes
+cycleway:right=track     (the side the bike lane is on, as the way runs)
+oneway=yes + oneway:foot=no   (where bikes ride one way)
+width=10                 (kerb to kerb; without it a pedestrian street is 6 m plus the bike lane)
+cycleway:right:width=3   (optional: the bike lane's share, else 1.8 m)
+```
+
+A greenway or bike path with a centre line is `highway=cycleway` + `lanes=2` (+ `overtaking=no` where the line is solid) + `width`.
+
 ## Not drawn
 
 | Tagging | Why |
@@ -64,4 +92,4 @@ Per Key:lanes, `lanes` counts traffic lanes only: a flush median is not a lane, 
 
 ## Rebuilding
 
-A full build replaces the three tables; a scoped build rebuilds one box (see the header of the SQL file). With `ROAD_MARKINGS_INCREMENTAL=1`, replication queues a box wherever an edit touches what the build reads: the roads, crossings, signal, stop, give way, turning circle and speed hump nodes, and hatched areas.
+A full build replaces the three tables; a scoped build rebuilds one box (see the header of the SQL file). With `ROAD_MARKINGS_INCREMENTAL=1`, replication queues a box wherever an edit touches what the build reads: the roads, crossings, signal, stop, give way, turning circle and speed hump nodes, hatched areas, and the sidewalks beside a road.

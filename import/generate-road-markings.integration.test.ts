@@ -131,6 +131,141 @@ const ways: [number, string, Record<string, string>][] = [
   [162, line([-74.22003, 40.71285], [-74.21997, 40.71315]), { highway: 'footway', footway: 'crossing', 'crossing:markings': 'zebra' }],
   // A crossing drawn well past both kerbs, and askew to the street.
   [9, line([-74.0006, 40.70985], [-74.0004, 40.71015]), { highway: 'footway', footway: 'crossing', 'crossing:markings': 'zebra' }],
+  // One-ways between sidewalks mapped 7 m (9 m) either side of them: plain,
+  // with three lanes, with a tagged width, and with a cycle track between the
+  // street and its sidewalk on one side.
+  [400, line([-74.400, 40.712], [-74.400, 40.714]), { highway: 'residential', oneway: 'yes', lanes: '1' }],
+  [401, line([-74.400 + 7 / 84300, 40.712], [-74.400 + 7 / 84300, 40.714]), { highway: 'footway', footway: 'sidewalk' }],
+  [402, line([-74.400 - 7 / 84300, 40.712], [-74.400 - 7 / 84300, 40.714]), { highway: 'footway', footway: 'sidewalk' }],
+  [403, line([-74.403, 40.712], [-74.403, 40.714]), { highway: 'residential', oneway: 'yes', lanes: '3' }],
+  [404, line([-74.403 + 9 / 84300, 40.712], [-74.403 + 9 / 84300, 40.714]), { highway: 'footway', footway: 'sidewalk' }],
+  [405, line([-74.403 - 9 / 84300, 40.712], [-74.403 - 9 / 84300, 40.714]), { highway: 'footway', footway: 'sidewalk' }],
+  [406, line([-74.406, 40.712], [-74.406, 40.714]), { highway: 'residential', oneway: 'yes', lanes: '1', width: '6' }],
+  [407, line([-74.406 + 7 / 84300, 40.712], [-74.406 + 7 / 84300, 40.714]), { highway: 'footway', footway: 'sidewalk' }],
+  [408, line([-74.406 - 7 / 84300, 40.712], [-74.406 - 7 / 84300, 40.714]), { highway: 'footway', footway: 'sidewalk' }],
+  [409, line([-74.409, 40.712], [-74.409, 40.714]), { highway: 'residential', oneway: 'yes', lanes: '1' }],
+  [410, line([-74.409 - 7 / 84300, 40.712], [-74.409 - 7 / 84300, 40.714]), { highway: 'footway', footway: 'sidewalk' }],
+  [411, line([-74.409 + 5 / 84300, 40.712], [-74.409 + 5 / 84300, 40.714]), { highway: 'cycleway' }],
+  [412, line([-74.409 + 7 / 84300, 40.712], [-74.409 + 7 / 84300, 40.714]), { highway: 'footway', footway: 'sidewalk' }],
+  // A divided avenue with a 4 m median, crossed by a street.
+  [420, line([-74.420, 40.713], [-74.420, 40.712]), { highway: 'primary', oneway: 'yes', lanes: '2' }],
+  [421, line([-74.420, 40.712], [-74.420, 40.711]), { highway: 'primary', oneway: 'yes', lanes: '2' }],
+  [422, line([-74.420 + 10.8 / 84300, 40.711], [-74.420 + 10.8 / 84300, 40.712]), { highway: 'primary', oneway: 'yes', lanes: '2' }],
+  [423, line([-74.420 + 10.8 / 84300, 40.712], [-74.420 + 10.8 / 84300, 40.713]), { highway: 'primary', oneway: 'yes', lanes: '2' }],
+  [424, line([-74.4207, 40.712], [-74.420, 40.712], [-74.420 + 10.8 / 84300, 40.712], [-74.4192, 40.712]), { highway: 'residential', lanes: '2' }],
+  // A signalled approach whose crosswalk runs 30° askew, its south end
+  // furthest from the junction.
+  [430, line([-74.441, 40.712], [-74.440, 40.712]), { highway: 'residential', lanes: '2' }],
+  [431, line([-74.440, 40.712], [-74.439, 40.712]), { highway: 'residential', lanes: '2' }],
+  [432, line([-74.440, 40.711], [-74.440, 40.712], [-74.440, 40.713]), { highway: 'residential', lanes: '2' }],
+  [434, line([-74.440 - 12.3 / 84300, 40.712 - 4 / 111050], [-74.440 - 7.7 / 84300, 40.712 + 4 / 111050]),
+    { highway: 'footway', footway: 'crossing', 'crossing:markings': 'zebra' }],
+  // East Broadway at Catherine St: a plain two-lane way carrying on into one
+  // with parallel parking and bike lanes both sides, across a crossroads, and
+  // the same with no street crossing at the join.
+  [500, line([-74.450, 40.7120], [-74.450, 40.7123]), { highway: 'secondary', lanes: '2' }],
+  [501, line([-74.450, 40.7123], [-74.450, 40.7145]), { highway: 'secondary', lanes: '2', 'cycleway:both': 'lane',
+    'parking:both': 'lane', 'parking:both:orientation': 'parallel' }],
+  [502, line([-74.4505, 40.7123], [-74.450, 40.7123], [-74.4495, 40.7123]), { highway: 'residential', lanes: '2' }],
+  [505, line([-74.455, 40.7120], [-74.455, 40.7123]), { highway: 'secondary', lanes: '2' }],
+  [506, line([-74.455, 40.7123], [-74.455, 40.7145]), { highway: 'secondary', lanes: '2', 'cycleway:both': 'lane',
+    'parking:both': 'lane', 'parking:both:orientation': 'parallel', 'parking:both:markings': 'no' }],
+  // Parking on both sides, then on the right only, bike lanes throughout.
+  [510, line([-74.460, 40.7120], [-74.460, 40.7130]), { highway: 'secondary', lanes: '2', 'cycleway:both': 'lane',
+    'parking:both': 'lane', 'parking:both:orientation': 'parallel' }],
+  [511, line([-74.460, 40.7130], [-74.460, 40.7140]), { highway: 'secondary', lanes: '2', 'cycleway:both': 'lane',
+    'parking:right': 'lane', 'parking:right:orientation': 'parallel' }],
+  // Parking opening on both sides beside bike lanes, mid-block; and a street
+  // widening for parking past a T junction, whose one leg leaves it tapering.
+  [515, line([-74.470, 40.7120], [-74.470, 40.7123]), { highway: 'secondary', lanes: '2', 'cycleway:both': 'lane' }],
+  [516, line([-74.470, 40.7123], [-74.470, 40.7145]), { highway: 'secondary', lanes: '2', 'cycleway:both': 'lane',
+    'parking:both': 'lane', 'parking:both:orientation': 'parallel' }],
+  [517, line([-74.475, 40.7120], [-74.475, 40.7123]), { highway: 'secondary', lanes: '2' }],
+  [518, line([-74.475, 40.7123], [-74.475, 40.7145]), { highway: 'secondary', lanes: '2', 'parking:both': 'lane',
+    'parking:both:orientation': 'parallel' }],
+  [519, line([-74.4755, 40.7123], [-74.475, 40.7123]), { highway: 'residential', lanes: '2' }],
+  // Chrystie St: a block of short ways sharing out four lanes, then three, then
+  // four, with left bays, between two crossroads.
+  [520, line([-74.465, 40.7115], [-74.465, 40.7120]), { highway: 'secondary', lanes: '2' }],
+  [521, line([-74.465, 40.7120], [-74.465, 40.71255]), { highway: 'secondary', lanes: '4', 'lanes:forward': '1', 'lanes:backward': '3',
+    'turn:lanes:backward': 'left|left|' }],
+  [522, line([-74.465, 40.71255], [-74.465, 40.71295]), { highway: 'secondary', lanes: '3', 'lanes:forward': '1', 'lanes:backward': '2' }],
+  [523, line([-74.465, 40.71295], [-74.465, 40.71325]), { highway: 'secondary', lanes: '4', 'lanes:forward': '2', 'lanes:backward': '2',
+    'turn:lanes:forward': 'left|' }],
+  [524, line([-74.465, 40.71325], [-74.465, 40.7140]), { highway: 'secondary', lanes: '3', 'lanes:forward': '1', 'lanes:backward': '2' }],
+  [525, line([-74.4655, 40.7120], [-74.465, 40.7120], [-74.4645, 40.7120]), { highway: 'residential', lanes: '2' }],
+  [526, line([-74.4655, 40.71325], [-74.465, 40.71325], [-74.4645, 40.71325]), { highway: 'residential', lanes: '2' }],
+  // The same block across the cell boundary at 40.718.
+  [530, line([-74.028, 40.7165], [-74.028, 40.7170]), { highway: 'secondary', lanes: '2' }],
+  [531, line([-74.028, 40.7170], [-74.028, 40.71755]), { highway: 'secondary', lanes: '4', 'lanes:forward': '1', 'lanes:backward': '3',
+    'turn:lanes:backward': 'left|left|' }],
+  [532, line([-74.028, 40.71755], [-74.028, 40.71795]), { highway: 'secondary', lanes: '3', 'lanes:forward': '1', 'lanes:backward': '2' }],
+  [533, line([-74.028, 40.71795], [-74.028, 40.71825]), { highway: 'secondary', lanes: '4', 'lanes:forward': '2', 'lanes:backward': '2',
+    'turn:lanes:forward': 'left|' }],
+  [534, line([-74.028, 40.71825], [-74.028, 40.7190]), { highway: 'secondary', lanes: '3', 'lanes:forward': '1', 'lanes:backward': '2' }],
+  [535, line([-74.0285, 40.7170], [-74.028, 40.7170], [-74.0275, 40.7170]), { highway: 'residential', lanes: '2' }],
+  [536, line([-74.0285, 40.71825], [-74.028, 40.71825], [-74.0275, 40.71825]), { highway: 'residential', lanes: '2' }],
+  // Four lanes north into a signalled crossroads over a crosswalk 20° askew,
+  // over one 50° askew (solid dividers), and giving way over one 20° askew;
+  // and a two-way street, three lanes each way, over one -50° askew.
+  ...([[600, -74.600, 20, 12, {}], [610, -74.610, 50, 20, { 'change:lanes': 'no|no|no|no' }], [620, -74.620, 20, 12, {}],
+       [630, -74.630, -50, 20, { oneway: 'no', lanes: '6', 'lanes:forward': '3', 'lanes:backward': '3' }]] as const)
+    .flatMap(([id, x, skew, back, extra]) => {
+    const t = Math.tan((skew * Math.PI) / 180)
+    return [
+      [id, line([x, 40.711], [x, 40.712]), { highway: 'secondary', oneway: 'yes', lanes: '4', ...extra }],
+      [id + 1, line([x, 40.712], [x, 40.713]), { highway: 'secondary', oneway: 'yes', lanes: '4' }],
+      [id + 2, line([x - 0.001, 40.712], [x, 40.712], [x + 0.001, 40.712]), { highway: 'residential', lanes: '2' }],
+      [id + 3, line([x - 10 / 84300, 40.712 - (back + 10 * t) / 111050], [x + 10 / 84300, 40.712 - (back - 10 * t) / 111050]),
+        { highway: 'footway', footway: 'crossing', 'crossing:markings': 'zebra' }],
+    ] as [number, string, Record<string, string>][]
+  }),
+  // A crossing drawn along a signalled approach rather than across it.
+  [640, line([-74.640, 40.711], [-74.640, 40.712]), { highway: 'secondary', oneway: 'yes', lanes: '2' }],
+  [641, line([-74.6405, 40.712], [-74.640, 40.712], [-74.6395, 40.712]), { highway: 'residential', lanes: '2' }],
+  [642, line([-74.640, 40.7114], [-74.640, 40.7117]), { highway: 'footway', footway: 'crossing', 'crossing:markings': 'zebra' }],
+  // Two-way streets drawn head to head, tail to tail, past ramps joining and
+  // leaving at the join, and out of a two-way left-turn lane, each with its lanes shared
+  // out differently either side.
+  [800, line([-74.480, 40.7140], [-74.480, 40.7120]), { highway: 'secondary', lanes: '2', 'cycleway:right': 'lane' }],
+  [801, line([-74.480, 40.7140], [-74.480, 40.7165]), { highway: 'secondary', lanes: '3', 'lanes:forward': '2', 'lanes:backward': '1' }],
+  [810, line([-74.485, 40.7120], [-74.485, 40.7140]), { highway: 'secondary', lanes: '3', 'lanes:forward': '1', 'lanes:backward': '2' }],
+  [811, line([-74.485, 40.7165], [-74.485, 40.7140]), { highway: 'secondary', lanes: '2' }],
+  [820, line([-74.490, 40.7120], [-74.490, 40.7140]), { highway: 'primary', lanes: '4', 'lanes:forward': '1', 'lanes:backward': '3' }],
+  [821, line([-74.490, 40.7140], [-74.490, 40.7165]), { highway: 'primary', lanes: '5', 'lanes:forward': '2', 'lanes:backward': '3' }],
+  [822, line([-74.4897, 40.7125], [-74.490, 40.7140]), { highway: 'primary_link', oneway: 'yes', lanes: '1' }],
+  [823, line([-74.490, 40.7140], [-74.4897, 40.7155]), { highway: 'primary_link', oneway: 'yes', lanes: '1' }],
+  [830, line([-74.495, 40.7120], [-74.495, 40.7140]), { highway: 'secondary', lanes: '3', 'lanes:forward': '1', 'lanes:backward': '1',
+    'lanes:both_ways': '1', 'turn:lanes:both_ways': 'left' }],
+  [831, line([-74.495, 40.7140], [-74.495, 40.7165]), { highway: 'secondary', lanes: '2' }],
+  // A street bending 45° at the join, with nothing else meeting it there.
+  [850, line([-74.500, 40.7120], [-74.500, 40.7140]), { highway: 'secondary', lanes: '3', 'lanes:forward': '2', 'lanes:backward': '1' }],
+  [851, line([-74.500, 40.7140], [-74.4985, 40.7151]), { highway: 'secondary', lanes: '2' }],
+  // A short way whose lanes are still moving over as it opens into a two-way
+  // left-turn lane.
+  [860, line([-74.505, 40.7120], [-74.505, 40.7135]), { highway: 'primary', lanes: '4', 'lanes:forward': '1', 'lanes:backward': '3', maxspeed: '45 mph' }],
+  [861, line([-74.505, 40.7135], [-74.505, 40.71395]), { highway: 'primary', lanes: '6', 'lanes:forward': '2', 'lanes:backward': '4', maxspeed: '45 mph' }],
+  [862, line([-74.505, 40.71395], [-74.505, 40.7165]), { highway: 'primary', lanes: '5', 'lanes:forward': '2', 'lanes:backward': '2',
+    'lanes:both_ways': '1', 'turn:lanes:both_ways': 'left', maxspeed: '45 mph' }],
+  // A centre turn lane ending into a short way whose taper runs on into the
+  // next; one ending into a way drawn tail to tail with it; and a four-lane
+  // street with bike lanes meeting a plain two-lane one tail to tail.
+  [870, line([-74.510, 40.7120], [-74.510, 40.7140]), { highway: 'secondary', lanes: '3', 'lanes:forward': '1', 'lanes:backward': '1',
+    'lanes:both_ways': '1', 'turn:lanes:both_ways': 'left' }],
+  [871, line([-74.510, 40.7140], [-74.510, 40.71418]), { highway: 'secondary', lanes: '2' }],
+  [872, line([-74.510, 40.71418], [-74.510, 40.7165]), { highway: 'secondary', lanes: '3', 'lanes:forward': '2', 'lanes:backward': '1' }],
+  [880, line([-74.515, 40.7120], [-74.515, 40.7140]), { highway: 'secondary', lanes: '3', 'lanes:forward': '1', 'lanes:backward': '1',
+    'lanes:both_ways': '1', 'turn:lanes:both_ways': 'left' }],
+  [881, line([-74.515, 40.7165], [-74.515, 40.7140]), { highway: 'secondary', lanes: '2' }],
+  [890, line([-74.520, 40.7120], [-74.520, 40.7140]), { highway: 'secondary', lanes: '2' }],
+  [891, line([-74.520, 40.7165], [-74.520, 40.7140]), { highway: 'secondary', lanes: '4', 'cycleway:both': 'lane' }],
+  // Tail to tail at a signalled side street.
+  [900, line([-74.525, 40.7120], [-74.525, 40.7140]), { highway: 'secondary', lanes: '2' }],
+  [901, line([-74.525, 40.7165], [-74.525, 40.7140]), { highway: 'secondary', lanes: '3', 'lanes:forward': '2', 'lanes:backward': '1' }],
+  [902, line([-74.5255, 40.7140], [-74.525, 40.7140]), { highway: 'residential', lanes: '2' }],
+  // The same tail to tail, 22 m short of the cell boundary at 40.718.
+  [840, line([-74.012, 40.7155], [-74.012, 40.7178]), { highway: 'secondary', lanes: '3', 'lanes:forward': '1', 'lanes:backward': '2' }],
+  [841, line([-74.012, 40.7205], [-74.012, 40.7178]), { highway: 'secondary', lanes: '2' }],
 ]
 
 // Painted areas, nodes on roads, and the roads they lie on (OSM wiki schemes).
@@ -174,6 +309,58 @@ const hdWays: [number, string, Record<string, string>][] = [
   [301, line([-74.0178, 40.710], [-74.0172, 40.710]), { highway: 'footway', footway: 'crossing', 'crossing:markings': 'zebra' }],
   // A painted median across the boundary of two cells at 40.718.
   [280, line([-74.0225, 40.716], [-74.0225, 40.720]), { highway: 'secondary', lanes: '2' }],
+  // Central Park's drive: a one-way car-free road, walkers on the left and a
+  // bike lane on the right, crossed by a street.
+  [320, line([-74.360, 40.712], [-74.360, 40.713], [-74.360, 40.714]), { highway: 'pedestrian', oneway: 'yes', 'oneway:foot': 'no',
+    bicycle: 'designated', segregated: 'yes', 'cycleway:right': 'track', lanes: '1', width: '10', surface: 'asphalt' }],
+  [321, line([-74.3605, 40.713], [-74.360, 40.713], [-74.3595, 40.713]), { highway: 'residential', lanes: '2' }],
+  // A two-way greenway where passing is barred, a wide bikeway with no
+  // lanes, and car-free ways not mapped like roads.
+  [322, line([-74.365, 40.712], [-74.365, 40.714]), { highway: 'cycleway', lanes: '2', oneway: 'no', overtaking: 'no' }],
+  [323, line([-74.367, 40.712], [-74.367, 40.714]), { highway: 'cycleway', width: '5' }],
+  [324, line([-74.369, 40.712], [-74.369, 40.714]), { highway: 'footway', width: '6' }],
+  [325, line([-74.371, 40.712], [-74.371, 40.714]), { highway: 'path', lanes: '2', surface: 'gravel' }],
+  [326, line([-74.373, 40.712], [-74.373, 40.714]), { highway: 'footway', footway: 'sidewalk', 'cycleway:right': 'lane' }],
+  // Prospect Park's drive, no lanes mapped, crossed by a street.
+  [327, line([-74.375, 40.712], [-74.375, 40.713], [-74.375, 40.714]), { highway: 'pedestrian', oneway: 'yes', bicycle: 'designated',
+    segregated: 'yes', cycleway: 'track' }],
+  [328, line([-74.3755, 40.713], [-74.375, 40.713], [-74.3745, 40.713]), { highway: 'residential', lanes: '2' }],
+  // A street with foot=designated, and a two-way bikeway one lane wide.
+  [329, line([-74.377, 40.712], [-74.377, 40.714]), { highway: 'residential', lanes: '2', 'cycleway:right': 'lane', foot: 'designated' }],
+  [330, line([-74.379, 40.712], [-74.379, 40.714]), { highway: 'cycleway', lanes: '1' }],
+  // A car-free drive ending on a street, the third leg of a T.
+  [331, line([-74.382, 40.7135], [-74.381, 40.7135], [-74.380, 40.7135]), { highway: 'residential', lanes: '2' }],
+  [332, line([-74.381, 40.712], [-74.381, 40.7135]), { highway: 'pedestrian', oneway: 'yes', 'cycleway:right': 'track', lanes: '1', width: '8' }],
+  // A signalled crossroads, and a signal between junctions for the northbound lane only.
+  [1330, line([-74.900, 40.712], [-74.900, 40.713]), { highway: 'secondary', lanes: '2' }],
+  [1331, line([-74.900, 40.713], [-74.900, 40.714]), { highway: 'secondary', lanes: '2' }],
+  [1332, line([-74.901, 40.713], [-74.900, 40.713]), { highway: 'secondary', lanes: '2' }],
+  [1333, line([-74.900, 40.713], [-74.899, 40.713]), { highway: 'secondary', lanes: '2' }],
+  [1340, line([-74.905, 40.712], [-74.905, 40.714]), { highway: 'secondary', lanes: '2' }],
+  // A give way sign mid-way, for the northbound lane.
+  [1345, line([-74.9075, 40.712], [-74.9075, 40.714]), { highway: 'secondary', lanes: '2' }],
+  // Level crossings: half gates, double gates, a crossbuck alone, an untagged
+  // tram crossing, and a road over two tracks whose nodes are tagged apart.
+  ...[1350, 1355, 1360, 1365, 1370].map((id, k): [number, string, Record<string, string>] =>
+    [id, line([-74.910 - k * 0.005, 40.712], [-74.910 - k * 0.005, 40.714]), { highway: 'secondary', lanes: '2' }]),
+  ...[1351, 1356, 1361, 1366, 1371].map((id, k): [number, string, Record<string, string>] =>
+    [id, line([-74.9105 - k * 0.005, 40.713], [-74.9095 - k * 0.005, 40.713]), { railway: id === 1366 ? 'tram' : 'rail' }]),
+  [1372, line([-74.9305, 40.713 + 4 / 111050], [-74.9295, 40.713 + 4 / 111050]), { railway: 'rail' }],
+  // A divided road over a track, its carriageways' nodes 10 m apart and tagged apart.
+  [1380, line([-74.935, 40.712], [-74.935, 40.714]), { highway: 'trunk', oneway: 'yes', lanes: '2' }],
+  [1381, line([-74.935 + 10 / 84300, 40.714], [-74.935 + 10 / 84300, 40.712]), { highway: 'trunk', oneway: 'yes', lanes: '2' }],
+  [1382, line([-74.9355, 40.713], [-74.9345, 40.713]), { railway: 'rail' }],
+  // A pedestrian signal 15 m along from a side street's T junction.
+  [1390, line([-74.940, 40.712], [-74.940, 40.714]), { highway: 'secondary', lanes: '2' }],
+  [1391, line([-74.941, 40.713], [-74.940, 40.713]), { highway: 'residential' }],
+  // A crossing on a road whose track is not one drawn (disused).
+  [1395, line([-74.950, 40.712], [-74.950, 40.714]), { highway: 'secondary', lanes: '2' }],
+  // A signalled divided road with a 12 m median, its link a way of its own.
+  [1400, line([-74.955, 40.714], [-74.955, 40.713], [-74.955, 40.712]), { highway: 'trunk', oneway: 'yes', lanes: '2' }],
+  [1401, line([-74.955 + 12 / 84300, 40.712], [-74.955 + 12 / 84300, 40.713], [-74.955 + 12 / 84300, 40.714]), { highway: 'trunk', oneway: 'yes', lanes: '2' }],
+  [1402, line([-74.956, 40.713], [-74.955, 40.713]), { highway: 'secondary', lanes: '2' }],
+  [1403, line([-74.955, 40.713], [-74.955 + 12 / 84300, 40.713]), { highway: 'secondary', lanes: '2' }],
+  [1404, line([-74.955 + 12 / 84300, 40.713], [-74.954, 40.713]), { highway: 'secondary', lanes: '2' }],
 ]
 const hdFeatures: [string, string, Record<string, string>, string][] = [
   ['W231', rect(-74.315, 40.7130, -1.5, 1.5, 0, 66), { road_marking: 'restriction' }, 'area'],
@@ -183,6 +370,21 @@ const hdFeatures: [string, string, Record<string, string>, string][] = [
   ['N262', `POINT(-74.330 ${40.7135 - 15 / 111050})`, { highway: 'give_way', direction: 'forward' }, 'point'],
   ['N271', 'POINT(-74.335 40.713)', { traffic_calming: 'hump' }, 'point'],
   ['N272', 'POINT(-74.335 40.7135)', { highway: 'crossing', crossing: 'marked', 'crossing:markings': 'zebra', traffic_calming: 'table' }, 'point'],
+  ['N1334', 'POINT(-74.900 40.713)', { highway: 'traffic_signals' }, 'point'],
+  ['N1346', 'POINT(-74.9075 40.713)', { highway: 'give_way', direction: 'forward' }, 'point'],
+  ['N1341', 'POINT(-74.905 40.713)', { highway: 'traffic_signals', 'traffic_signals:direction': 'forward' }, 'point'],
+  ['N1352', 'POINT(-74.910 40.713)', { railway: 'level_crossing', 'crossing:barrier': 'half' }, 'point'],
+  ['N1357', 'POINT(-74.915 40.713)', { railway: 'level_crossing', 'crossing:barrier': 'double_half' }, 'point'],
+  ['N1362', 'POINT(-74.920 40.713)', { railway: 'level_crossing' }, 'point'],
+  ['N1367', 'POINT(-74.925 40.713)', { railway: 'tram_level_crossing' }, 'point'],
+  ['N1373', 'POINT(-74.930 40.713)', { railway: 'level_crossing', 'crossing:barrier': 'half' }, 'point'],
+  ['N1374', `POINT(-74.930 ${40.713 + 4 / 111050})`, { railway: 'level_crossing' }, 'point'],
+  ['N1383', 'POINT(-74.935 40.713)', { railway: 'level_crossing', 'crossing:barrier': 'half' }, 'point'],
+  ['N1384', `POINT(${-74.935 + 10 / 84300} 40.713)`, { railway: 'level_crossing' }, 'point'],
+  ['N1396', 'POINT(-74.950 40.713)', { railway: 'level_crossing', 'crossing:barrier': 'half' }, 'point'],
+  ['N1405', 'POINT(-74.955 40.713)', { highway: 'traffic_signals' }, 'point'],
+  ['N1406', `POINT(${-74.955 + 12 / 84300} 40.713)`, { highway: 'traffic_signals' }, 'point'],
+  ['N1392', `POINT(-74.940 ${40.713 + 15 / 111050})`, { highway: 'traffic_signals', crossing: 'traffic_signals' }, 'point'],
 ]
 
 // Every build drops the *_next tables by bare name too, scoped ones included.
@@ -206,6 +408,13 @@ run('generate-road-markings.sql', () => {
       await sql`INSERT INTO geo_places VALUES (${id}, ${Number(id.slice(1))}, ${sql.json(tags)}, ST_GeomFromText(${wkt}, 4326), ${type}, ${id[0]})`
     }
     await sql`INSERT INTO geo_places VALUES ('N8', 8, ${sql.json({ highway: 'traffic_signals' })}, ST_SetSRID(ST_MakePoint(${SB_X}, ${STREET_Y}), 4326), 'point', 'N')`
+    await sql`INSERT INTO geo_places VALUES ('N903', 903, ${sql.json({ highway: 'traffic_signals' })}, ST_SetSRID(ST_MakePoint(-74.525, 40.714), 4326), 'point', 'N')`
+    await sql`INSERT INTO geo_places VALUES ('N433', 433, ${sql.json({ highway: 'traffic_signals' })}, ST_SetSRID(ST_MakePoint(-74.440, 40.712), 4326), 'point', 'N')`
+    for (const [id, x] of [[604, -74.600], [614, -74.610], [634, -74.630], [644, -74.640]]) {
+      await sql`INSERT INTO geo_places VALUES (${'N' + id}, ${id}, ${sql.json({ highway: 'traffic_signals' })}, ST_SetSRID(ST_MakePoint(${x}, 40.712), 4326), 'point', 'N')`
+    }
+    await sql`INSERT INTO geo_places VALUES ('N624', 624, ${sql.json({ highway: 'give_way', direction: 'forward' })},
+      ST_SetSRID(ST_MakePoint(-74.620, ${40.712 - 25 / 111050}), 4326), 'point', 'N')`
     const turns: [string, number, number, Record<string, string>][] = [
       ['N80', -74.120, 40.713, { highway: 'turning_circle' }],
       ['N81', -74.125, 40.713, { highway: 'turning_circle', diameter: '30' }],
@@ -522,7 +731,7 @@ run('generate-road-markings.sql', () => {
   })
 
   test('gives back no band, rather than failing, for a line it cannot taper', async () => {
-    const [{ band }] = await sql`SELECT road_profile_band('POINT(0 0)'::geometry, 1, 10, 1, 0, 3, 2, 10, 0, 0, 0, 0, 1, 5) as band`
+    const [{ band }] = await sql`SELECT road_profile_band('POINT(0 0)'::geometry, 1, 10, 1, 0, 3, 2, 10, 0, 0, 0, 0, 1, 1, 5) as band`
     expect(band).toBeNull()
   })
 
@@ -568,6 +777,339 @@ run('generate-road-markings.sql', () => {
     for (const b of bars) expect(b.dx).toBeGreaterThan(2 * b.dy)
   })
 
+  test('runs a street out to the kerbs its mapped sidewalks stand back from', async () => {
+    // Sidewalks 7 m out, their middles 2.25 m from the kerb.
+    for (const m of [-4.5, 4.5]) expect(await covered(east(-74.400, m), 40.713)).toBe(true)
+    for (const m of [-5.0, 5.0]) expect(await covered(east(-74.400, m), 40.713)).toBe(false)
+    // A tagged width wins, and a cycle track between street and sidewalk
+    // leaves that side unread, so the lane keeps its own width.
+    expect(await covered(east(-74.406, 3.3), 40.713)).toBe(false)
+    expect(await covered(east(-74.409, 2), 40.713)).toBe(false)
+    expect(await covered(east(-74.409, -2), 40.713)).toBe(false)
+  })
+
+  test('keeps its lanes their width in a street widened to its kerbs', async () => {
+    // Three 3 m lanes down the middle of 13.5 m: dividers 1.5 m either side.
+    const lines = await sql`
+      SELECT (ST_X(ST_Centroid(geom)) - -74.403) * 84300 as dx FROM road_markings
+      WHERE kind = 'lane' AND ST_Intersects(geom, ST_MakeEnvelope(-74.4032, 40.7125, -74.4028, 40.7135, 4326))`
+    expect(lines.length).toBeGreaterThan(1)
+    for (const l of lines) expect(Math.abs(Math.abs(l.dx) - 1.5)).toBeLessThan(0.2)
+  })
+
+  // A road's kerbs across a probe at `y`, in metres east of its way at `x`.
+  const kerbsAt = async (x: number, y: number) => (await sql`
+    SELECT (ST_XMin(c) - ${x}) * 84300 as l, (ST_XMax(c) - ${x}) * 84300 as r
+    FROM (SELECT ST_Intersection(ST_SetSRID(ST_MakeLine(ST_MakePoint(${east(x, -20)}, ${y}), ST_MakePoint(${east(x, 20)}, ${y})), 4326),
+                                 ST_Union(geom)) as c
+          FROM road_surfaces
+          WHERE kind IS NULL AND geom && ST_MakeEnvelope(${east(x, -20)}, ${y - 1e-6}, ${east(x, 20)}, ${y + 1e-6}, 4326)) s`)[0]
+  // How far the green of a bike lane comes in toward the way at `x`, at `y`.
+  const bikeInner = async (x: number, y: number, side: -1 | 1) => (await sql`
+    SELECT min(abs(ST_X(p) - ${x})) * 84300 as m
+    FROM (SELECT (ST_DumpPoints(ST_Intersection(geom, ST_SetSRID(ST_MakeLine(ST_MakePoint(${east(x, side * 0.01)}, ${y}),
+                                                                             ST_MakePoint(${east(x, side * 12)}, ${y})), 4326)))).geom as p
+          FROM road_markings WHERE kind = 'bike_lane' AND geom && ST_MakeEnvelope(${east(x, -12)}, ${y - 1e-6}, ${east(x, 12)}, ${y + 1e-6}, 4326)) t`)[0].m
+
+  test('changes width inside a crossroads rather than tapering across the block beyond it', async () => {
+    // Two 3.3 m lanes, 1.6 m bike lanes and 2.4 m of parking each side, all of
+    // it from the crosswalk on.
+    const k = await kerbsAt(-74.450, north(40.7123, 12))
+    expect(k.l).toBeCloseTo(-7.3, 0)
+    expect(k.r).toBeCloseTo(7.3, 0)
+    for (const side of [-1, 1] as const) expect(await bikeInner(-74.450, north(40.7123, 12), side)).toBeGreaterThan(3.2)
+  })
+
+  test('opens bike lanes beside the traffic lanes, never across them', async () => {
+    // The join has no street crossing it, so the kerbs ease out; the bike
+    // lanes widen out of the kerbs as they do, and the two traffic lanes keep
+    // their 3.3 m.
+    for (let m = 0; m <= 60; m += 5) {
+      for (const side of [-1, 1] as const) {
+        const inner = await bikeInner(-74.455, north(40.7123, m), side)
+        if (inner != null) expect(inner).toBeGreaterThan(3.2)
+      }
+    }
+    expect((await kerbsAt(-74.455, north(40.7123, 5))).r).toBeLessThan(6)
+  })
+
+  test('paints a parking lane that opens beside a bike lane only once it has opened', async () => {
+    const [{ n, into_lanes, on_green }] = await sql`
+      WITH p AS (SELECT (ST_Dump(geom)).geom as g FROM road_markings WHERE kind = 'parking'
+                 AND geom && ST_MakeEnvelope(${east(-74.470, -12)}, 40.7123, ${east(-74.470, 12)}, 40.7145, 4326))
+      SELECT count(*)::int as n,
+             count(*) FILTER (WHERE ST_DWithin(p.g::geography, ST_SetSRID(ST_MakeLine(ST_MakePoint(-74.470, 40.7123), ST_MakePoint(-74.470, 40.7145)), 4326)::geography, 3.3))::int as into_lanes,
+             count(*) FILTER (WHERE EXISTS (SELECT 1 FROM road_markings b WHERE b.kind = 'bike_lane' AND b.geom && p.g
+                                                    AND ST_Length(ST_Intersection(b.geom, p.g)::geography) > 0.05))::int as on_green
+      FROM p`
+    expect(n).toBeGreaterThan(20)
+    expect(into_lanes).toBe(0)
+    expect(on_green).toBe(0)
+  })
+
+  test('still tapers a street widening past a T junction', async () => {
+    const k = await kerbsAt(-74.475, north(40.7123, 12))
+    expect(k.r).toBeLessThan(5)
+    expect(k.r).toBeGreaterThan(3.2)
+  })
+
+  test('keeps a bike lane beside the traffic where the parking outside it ends', async () => {
+    for (const side of [-1, 1] as const) {
+      const before = await bikeInner(-74.460, north(40.7130, -1), side)
+      const after = await bikeInner(-74.460, north(40.7130, 1), side)
+      expect(Math.abs(after - before)).toBeLessThan(0.15)
+    }
+  })
+
+  // Centre paint crossing a probe square across a north-south street at `y`,
+  // in metres east of its way.
+  const centreAt = async (x: number, y: number) => (await sql`
+    SELECT array_agg((ST_X(p.geom) - ${x}) * 84300 ORDER BY ST_X(p.geom)) as at
+    FROM road_markings m,
+         LATERAL ST_Dump(ST_Intersection(m.geom, ST_SetSRID(ST_MakeLine(ST_MakePoint(${east(x, -10)}, ${y}), ST_MakePoint(${east(x, 10)}, ${y})), 4326))) p
+    WHERE m.kind = 'centre' AND GeometryType(p.geom) = 'POINT'`)[0].at as number[] | null ?? []
+  // Every centre line a metre on has one within `step` of it a metre back, and
+  // the other way round: none jumps across, starts or stops along the way.
+  const centreRunsOn = async (x: number, y0: number, y1: number, step = 0.3) => {
+    let before = await centreAt(x, y0)
+    expect(before.length).toBeGreaterThan(0)
+    for (let m = 1; north(y0, m) <= y1; m++) {
+      const here = await centreAt(x, north(y0, m))
+      for (const o of here) expect(Math.min(...before.map(b => Math.abs(b - o)))).toBeLessThan(step)
+      for (const b of before) expect(Math.min(...here.map(o => Math.abs(b - o)))).toBeLessThan(step)
+      before = here
+    }
+  }
+
+  describe('a centre line across a join', () => {
+    test('runs on where two two-way ways are drawn head to head', async () => {
+      await centreRunsOn(-74.480, north(40.7140, -40), north(40.7140, 100))
+    })
+
+    test('runs on where two two-way ways are drawn tail to tail', async () => {
+      await centreRunsOn(-74.485, north(40.7140, -100), north(40.7140, 40))
+    })
+
+    test('runs on past ramps joining and leaving at the join', async () => {
+      await centreRunsOn(-74.490, north(40.7140, -20), north(40.7140, 100))
+    })
+
+    test('closes the far side of a two-way left-turn lane in on it where the lane ends', async () => {
+      await centreRunsOn(-74.495, north(40.7140, -40), north(40.7140, 100), 0.4)
+      expect((await centreAt(-74.495, north(40.7140, 100))).length).toBe(1)
+    })
+
+    test('opens a left-turn lane\'s edges either side of the centre line, as the lanes beside move over', async () => {
+      await centreRunsOn(-74.505, north(40.71395, -10), north(40.71395, 10), 0.25)
+      // Its edges' solid and dashed lines stand either side of where the double was.
+      const [double] = await centreAt(-74.505, north(40.71395, -0.5))
+      const edges = await centreAt(-74.505, north(40.71395, 0.5))
+      expect(Math.abs(Math.min(...edges) - (double - 0.14))).toBeLessThan(0.03)
+      expect(Math.abs(Math.max(...edges) - (double + 0.14))).toBeLessThan(0.03)
+    })
+
+    test('closes a centre turn lane\'s far side in on the centre line through a short way and on', async () => {
+      await centreRunsOn(-74.510, north(40.7140, -40), north(40.7140, 100), 0.4)
+      expect((await centreAt(-74.510, north(40.7140, 100))).length).toBe(1)
+    })
+
+    test('closes a centre turn lane\'s far side in on the centre line of a way drawn tail to tail', async () => {
+      await centreRunsOn(-74.515, north(40.7140, -40), north(40.7140, 100), 0.4)
+      expect((await centreAt(-74.515, north(40.7140, 100))).length).toBe(1)
+    })
+
+    test('ends the lanes and bike lanes of a way drawn tail to tail where they have closed', async () => {
+      await centreRunsOn(-74.520, north(40.7140, -40), north(40.7140, 100))
+      const lanes = (m0: number, m1: number) => sql`
+        SELECT count(*)::int as n FROM road_markings
+        WHERE kind = 'lane' AND ST_Intersects(geom, ST_MakeEnvelope(${east(-74.520, -12)}, ${north(40.7140, m0)}, ${east(-74.520, 12)}, ${north(40.7140, m1)}, 4326))`
+      expect((await lanes(80, 110))[0].n).toBeGreaterThan(0)
+      expect((await lanes(0, 15))[0].n).toBe(0)
+      // The bike lanes narrow to nothing at the kerbs of the way they meet.
+      const [{ w }] = await sql`
+        SELECT coalesce(max(ST_Length(ST_Intersection(geom, ST_SetSRID(ST_MakeLine(ST_MakePoint(${east(-74.520, -12)}, ${north(40.7140, 1)}),
+                                                                           ST_MakePoint(${east(-74.520, 12)}, ${north(40.7140, 1)})), 4326))) * 84300), 0) as w
+        FROM road_markings WHERE kind = 'bike_lane'`
+      expect(w).toBeLessThan(0.3)
+      // and halfway along their taper they stand halfway in.
+      for (const side of [-1, 1] as const) {
+        const inner = await bikeInner(-74.520, north(40.7140, 17), side)
+        expect(inner).toBeGreaterThan(3.6)
+        expect(inner).toBeLessThan(6.3)
+      }
+      const k = await kerbsAt(-74.520, north(40.7140, 1))
+      expect(Math.abs(k.l + 3.3)).toBeLessThan(0.3)
+      expect(Math.abs(k.r - 3.3)).toBeLessThan(0.3)
+    })
+
+    test('stands a stop line across the lanes where a taper at the way\'s end has them', async () => {
+      const [stop] = await sql`
+        SELECT (ST_XMin(geom) - ${-74.525}) * 84300 as l, (ST_XMax(geom) - ${-74.525}) * 84300 as r, ST_Y(ST_Centroid(geom)) as y
+        FROM road_markings WHERE kind = 'stop' AND geom && ST_MakeEnvelope(${east(-74.525, -10)}, ${north(40.7140, 2)}, ${east(-74.525, 10)}, ${north(40.7140, 30)}, 4326)`
+      expect(stop).toBeDefined()
+      const [centre] = await centreAt(-74.525, north(stop.y, 0.6))
+      expect(Math.min(Math.abs(stop.l - centre), Math.abs(stop.r - centre))).toBeLessThan(0.4)
+    })
+
+    test('runs on round a bend at the join', async () => {
+      // Each end there meets another piece's end.
+      const ends = await sql`
+        WITH p AS (SELECT row_number() OVER () as id, d.geom FROM road_markings m, ST_Dump(m.geom) d
+                   WHERE m.kind = 'centre' AND ST_DWithin(m.geom, ST_SetSRID(ST_MakePoint(-74.500, 40.7140), 4326), 0.0003)),
+             e AS (SELECT id, pt FROM p, LATERAL (VALUES (ST_StartPoint(geom)), (ST_EndPoint(geom))) v(pt)
+                   WHERE ST_DWithin(pt, ST_SetSRID(ST_MakePoint(-74.500, 40.7140), 4326), 0.00005))
+        SELECT a.id, min(ST_Distance(a.pt::geography, b.pt::geography)) as gap FROM e a JOIN e b ON b.id <> a.id GROUP BY a.id`
+      expect(ends.length).toBe(2)
+      for (const e of ends) expect(e.gap).toBeLessThan(0.05)
+    })
+
+    test('shifts over a taper, not at once', async () => {
+      // 1.65 m across: a 25 mph taper, at least 30 m
+      const at = async (m: number) => (await centreAt(-74.480, north(40.7140, m)))[0]
+      expect(Math.abs((await at(-1)) - (await at(1)))).toBeLessThan(0.15)
+      expect(Math.abs((await at(60)) - (await at(1)))).toBeGreaterThan(1.5)
+      for (let m = 1; m < 40; m += 5) expect(Math.abs((await at(m + 5)) - (await at(m)))).toBeLessThan(0.5)
+    })
+  })
+
+  test('keeps a street\'s kerbs down a block whose lanes are shared out differently from way to way', async () => {
+    const ref = await kerbsAt(-74.465, north(40.7120, 30))
+    for (const y of [north(40.7120, 15), north(40.71255, 20), north(40.71295, 15), north(40.71295, 25)]) {
+      const k = await kerbsAt(-74.465, y)
+      expect(Math.abs(k.l - ref.l)).toBeLessThan(0.1)
+      expect(Math.abs(k.r - ref.r)).toBeLessThan(0.1)
+    }
+    // Centred on the way, though the left bays move the lanes across.
+    expect(Math.abs(ref.l + ref.r)).toBeLessThan(0.1)
+  })
+
+  test('ticks a parallel parking lane a car length apart, unless tagged unmarked', async () => {
+    const ticks = await sql`
+      SELECT ST_Length(g::geography) as m, ST_Y(ST_Centroid(g)) as y
+      FROM (SELECT (ST_Dump(geom)).geom as g FROM road_markings WHERE kind = 'parking'
+            AND geom && ST_MakeEnvelope(${east(-74.450, -8)}, 40.7130, ${east(-74.450, -4)}, 40.7140, 4326)) t ORDER BY y`
+    expect(ticks.length).toBeGreaterThan(12)
+    for (const t of ticks) expect(t.m).toBeLessThan(1.2)
+    const gaps = ticks.slice(1).map((t, i) => (t.y - ticks[i].y) * 111050)
+    for (const g of gaps) expect(Math.abs(g - 6.1)).toBeLessThan(0.3)
+    const [{ n }] = await sql`SELECT count(*)::int as n FROM road_markings WHERE kind = 'parking'
+      AND geom && ST_MakeEnvelope(${east(-74.455, -8)}, 40.7130, ${east(-74.455, 8)}, 40.7140, 4326)`
+    expect(n).toBe(0)
+  })
+
+  test('rounds the nose of a narrow median rather than drawing it to a point', async () => {
+    // Cross street kerb 3 m north of its line; the median runs 3.4 to 7.4 m
+    // east of the southbound way.
+    const x = (m: number) => east(-74.420, m)
+    expect(await covered(x(5.4), north(40.712, 3.3))).toBe(false)
+    expect(await covered(x(3.9), north(40.712, 4.0))).toBe(false)
+    expect(await covered(x(6.9), north(40.712, 4.0))).toBe(false)
+    expect(await covered(x(5.4), north(40.712, 10))).toBe(false)
+    // The corners on the far kerbs keep their full radius.
+    expect(await covered(x(-3.9), north(40.712, 3.4))).toBe(true)
+  })
+
+  test('stands a stop line clear of an askew crosswalk across all its lanes', async () => {
+    const [{ stops, gap }] = await sql`
+      SELECT count(*)::int as stops, min(ST_Distance(s.geom::geography, c.geom::geography)) as gap
+      FROM road_markings s, road_markings c
+      WHERE s.kind = 'stop' AND c.kind = 'crosswalk'
+        AND ST_Intersects(s.geom, ST_MakeEnvelope(-74.4405, 40.7118, -74.4400, 40.7122, 4326))
+        AND ST_Intersects(c.geom, ST_MakeEnvelope(-74.4405, 40.7118, -74.4400, 40.7122, 4326))`
+    expect(stops).toBeGreaterThan(0)
+    expect(gap).toBeGreaterThan(0.3)
+  })
+
+  // The stop line south of the crossroads at `x`, its parts, the crosswalk
+  // past it, and what lies between the two.
+  const skewedStop = async (x: number) => (await sql`
+    WITH box AS (SELECT ST_MakeEnvelope(${east(x, -12)}, ${north(40.712, -45)}, ${east(x, 12)}, ${north(40.712, -4)}, 4326) as b),
+    stop AS (SELECT geom FROM road_markings, box WHERE kind = 'stop' AND ST_Intersects(geom, box.b)),
+    walk AS (SELECT ST_Union(geom) as geom FROM road_markings, box WHERE kind = 'crosswalk' AND ST_Intersects(geom, box.b))
+    SELECT (SELECT count(*)::int FROM stop) as stops,
+           (SELECT ST_NumGeometries(geom) FROM stop LIMIT 1) as parts,
+           (SELECT bool_or(ST_Intersects(s.geom, w.geom)) FROM stop s, walk w) as overlaps,
+           (SELECT min(ST_Distance(p.geom::geography, w.geom::geography)) FROM stop s, walk w, ST_Dump(s.geom) p) as gap,
+           (SELECT max(ST_Distance(p.geom::geography, w.geom::geography)) FROM stop s, walk w, ST_Dump(s.geom) p) as widest,
+           -- Each part's long side, in degrees east of north.
+           (SELECT array_agg(degrees(ST_Azimuth(ST_PointN(r, 1), ST_PointN(r, 2)))::numeric(6, 1) ORDER BY p.path)
+            FROM stop s, ST_Dump(s.geom) p,
+                 LATERAL (SELECT ST_ExteriorRing(ST_OrientedEnvelope(ST_Transform(p.geom, 3857))) as e) o,
+                 LATERAL (SELECT CASE WHEN ST_Length(ST_MakeLine(ST_PointN(o.e, 1), ST_PointN(o.e, 2))) > ST_Length(ST_MakeLine(ST_PointN(o.e, 2), ST_PointN(o.e, 3)))
+                                      THEN ST_MakeLine(ST_PointN(o.e, 1), ST_PointN(o.e, 2)) ELSE ST_MakeLine(ST_PointN(o.e, 2), ST_PointN(o.e, 3)) END as r) l) as sides,
+           (SELECT count(*)::int FROM road_markings m, stop s, walk w
+            WHERE m.kind IN ('lane', 'centre', 'edge') AND m.geom && ST_Expand(w.geom, 0.0003)
+              AND ST_Intersects(m.geom, ST_Difference(ST_ConvexHull(ST_Collect(s.geom, w.geom)), ST_Buffer(s.geom::geography, 0.05)::geometry))) as lines_past,
+           (SELECT min(ST_Distance(m.geom::geography, w.geom::geography)) FROM road_markings m, walk w
+            WHERE m.kind IN ('lane', 'centre', 'edge') AND m.geom && ST_Expand(w.geom, 0.0003)) as lines_gap
+  `)[0]
+  // Azimuth of a line, folded into 0..180.
+  const fold = (deg: number) => ((deg % 180) + 180) % 180
+
+  test('slants a stop line parallel to a crosswalk 20° askew, 1.2 m short of it', async () => {
+    const r = await skewedStop(-74.600)
+    expect(r.stops).toBe(1)
+    expect(r.parts).toBe(1)
+    expect(r.overlaps).toBe(false)
+    expect(r.gap).toBeGreaterThan(1.0)
+    expect(r.gap).toBeLessThan(1.4)
+    // Parallel to the crosswalk all the way across: as close at both ends.
+    expect(r.widest - r.gap).toBeLessThan(0.3)
+    // The crosswalk runs 20° north of east.
+    expect(Math.abs(fold(Number(r.sides[0])) - 70)).toBeLessThan(2)
+    expect(r.lines_past).toBe(0)
+  })
+
+  test('steps square stop lines lane by lane along a crosswalk 50° askew', async () => {
+    const r = await skewedStop(-74.610)
+    expect(r.stops).toBe(1)
+    expect(r.parts).toBe(4)
+    expect(r.overlaps).toBe(false)
+    expect(r.gap).toBeGreaterThan(1.0)
+    expect(r.gap).toBeLessThan(1.4)
+    for (const side of r.sides) expect(Math.abs(fold(Number(side)) - 90)).toBeLessThan(2)
+    expect(r.lines_gap).toBeGreaterThan(1.0)
+    // Each line between two lanes runs on to the forward one's stop line, the
+    // one to its east here.
+    const ends = await Promise.all([-3.3, 0, 3.3].map(async m => (await sql`
+      SELECT (SELECT max(ST_YMax(geom)) FROM road_markings
+              WHERE kind = 'lane' AND geom && ST_MakeEnvelope(${east(-74.610, m - 0.2)}, 40.7115, ${east(-74.610, m + 0.2)}, 40.712, 4326)) as line_end,
+             (SELECT ST_Y(ST_Centroid(p.geom)) FROM road_markings s, ST_Dump(s.geom) p
+              WHERE s.kind = 'stop' AND ST_Intersects(p.geom, ST_MakeEnvelope(${east(-74.610, m + 1)}, 40.7115, ${east(-74.610, m + 1.01)}, 40.712, 4326))) as bar`)[0]))
+    expect(ends.length).toBe(3)
+    for (const e of ends) expect(Math.abs(e.line_end - e.bar) * 111050).toBeLessThan(0.3)
+  })
+
+  test('builds with a crossing drawn along a signalled approach', async () => {
+    const [{ n }] = await sql`SELECT count(*)::int as n FROM road_markings WHERE kind = 'stop' AND geom && ST_MakeEnvelope(-74.6402, 40.711, -74.6398, 40.712, 4326)`
+    expect(n).toBeLessThanOrEqual(1)
+  })
+
+  test('runs the departing lanes on to a crosswalk 50° askew past a stepped stop line', async () => {
+    // Southbound lanes are left of the way; the crosswalk is furthest north on that side.
+    const [{ gap, parts }] = await sql`
+      SELECT (SELECT min(ST_Distance(m.geom::geography, w.geom::geography)) FROM road_markings m,
+                (SELECT ST_Union(geom) as geom FROM road_markings WHERE kind = 'crosswalk' AND geom && ST_MakeEnvelope(${east(-74.630, -12)}, 40.7115, ${east(-74.630, 12)}, 40.7119, 4326)) w
+              WHERE m.kind = 'lane' AND m.geom && ST_MakeEnvelope(${east(-74.630, -12)}, 40.7115, ${east(-74.630, -0.5)}, 40.7119, 4326)) as gap,
+             (SELECT ST_NumGeometries(geom) FROM road_markings WHERE kind = 'stop' AND geom && ST_MakeEnvelope(${east(-74.630, 0)}, 40.7115, ${east(-74.630, 12)}, 40.7119, 4326)) as parts`
+    expect(parts).toBe(3)
+    expect(gap).toBeLessThan(3)
+  })
+
+  test('lines yield triangles up along a crosswalk 20° askew, clear of it', async () => {
+    const [r] = await sql`
+      WITH t AS (SELECT p.geom FROM road_markings m, ST_Dump(m.geom) p
+                 WHERE m.kind = 'yield' AND m.geom && ST_MakeEnvelope(${east(-74.620, -12)}, 40.7116, ${east(-74.620, 12)}, 40.7120, 4326)),
+      walk AS (SELECT ST_Union(geom) as geom FROM road_markings WHERE kind = 'crosswalk' AND geom && ST_MakeEnvelope(${east(-74.620, -12)}, 40.7116, ${east(-74.620, 12)}, 40.7120, 4326))
+      SELECT count(*)::int as n, bool_or(ST_Intersects(t.geom, w.geom)) as overlaps, min(ST_Distance(t.geom::geography, w.geom::geography)) as gap,
+             max(ST_Distance(t.geom::geography, w.geom::geography)) as widest
+      FROM t, walk w`
+    expect(r.n).toBeGreaterThanOrEqual(12)
+    expect(r.overlaps).toBe(false)
+    expect(r.gap).toBeGreaterThan(1.0)
+    expect(r.widest - r.gap).toBeLessThan(0.5)
+  })
+
   test('keeps lane lines out of the crossing carriageway', async () => {
     const [{ n }] = await sql`
       SELECT count(*)::int as n FROM road_markings
@@ -603,6 +1145,100 @@ run('generate-road-markings.sql', () => {
              ST_NPoints(road_smooth('LINESTRING(0 0, 0.001 0, 0 0)'::geometry, NULL, 20)) >= 2 as tiny`
     expect(multi).toBe(true)
     expect(tiny).toBe(true)
+  })
+
+  describe('signals and level crossings', () => {
+    const near = (x: number, y: number) =>
+      sql`SELECT glyph, direction, ST_X(geom) as x, ST_Y(geom) as y FROM road_glyphs
+          WHERE glyph NOT LIKE 'road-%' AND glyph <> 'traffic-signals' AND ST_DWithin(geom, ST_SetSRID(ST_MakePoint(${x}, ${y}), 4326), 0.0003)
+          ORDER BY glyph, direction`
+
+    test('stands a mast on the far right corner of each approach to a signalled junction', async () => {
+      const masts = await near(-74.900, 40.713)
+      expect(masts.map(m => m.glyph)).toEqual(['signal-1', 'signal-1', 'signal-1', 'signal-1'])
+      // Northbound traffic finds its mast past the junction, on its right.
+      const north = masts.find(m => m.direction === 0)!
+      expect(north.x).toBeGreaterThan(-74.900)
+      expect(north.y).toBeGreaterThan(40.713)
+      // Eastbound traffic finds it past the junction on the south side.
+      const east = masts.find(m => m.direction === 90)!
+      expect(east.x).toBeGreaterThan(-74.900)
+      expect(east.y).toBeLessThan(40.713)
+    })
+
+    test('marks the signal itself for the map', async () => {
+      const [{ n }] = await sql`SELECT count(*)::int as n FROM road_glyphs WHERE glyph = 'traffic-signals'
+        AND ST_DWithin(geom, ST_SetSRID(ST_MakePoint(-74.900, 40.713), 4326), 0.00001)`
+      expect(n).toBe(1)
+    })
+
+    test('stands a signal between junctions for the way it faces only', async () => {
+      const masts = await near(-74.905, 40.713)
+      expect(masts.map(m => [m.glyph, m.direction])).toEqual([['signal-1', 0]])
+      expect(masts[0].y).toBeGreaterThan(40.713)
+    })
+
+    test('reads a direction on a two-way way as along it, for a give way sign too', async () => {
+      const [yieldLine] = await sql`SELECT ST_X(ST_Centroid(geom)) as x FROM road_markings
+        WHERE kind = 'yield' AND ST_DWithin(geom, ST_SetSRID(ST_MakePoint(-74.9075, 40.713), 4326), 0.0001)`
+      expect(yieldLine.x).toBeGreaterThan(-74.9075)
+    })
+
+    test('puts a half gate on each approach, on its right and clear of the track', async () => {
+      const gates = await near(-74.910, 40.713)
+      expect(gates.map(g => g.glyph)).toEqual(['crossing-gate-1', 'crossing-gate-1'])
+      for (const g of gates) {
+        expect(Math.abs(g.y - 40.713) * 111050).toBeGreaterThan(4.1)
+        // Right of the traffic: east of the road going north, west going south.
+        expect(Math.sign(g.x + 74.910)).toBe(g.direction === 0 ? 1 : -1)
+      }
+    })
+
+    test('closes the lanes leaving a crossing too where its gates are doubled', async () => {
+      expect((await near(-74.915, 40.713)).length).toBe(4)
+    })
+
+    test('gives an untagged crossing a crossbuck, and an untagged tram crossing nothing', async () => {
+      expect((await near(-74.920, 40.713)).map(g => g.glyph)).toEqual(['crossbuck', 'crossbuck'])
+      expect(await near(-74.925, 40.713)).toEqual([])
+    })
+
+    test('gives each carriageway of a divided road its gate, tagged on either', async () => {
+      const gates = await near(-74.935 + 5 / 84300, 40.713)
+      expect(gates.map(g => [g.glyph, g.direction])).toEqual([['crossing-gate-2', 0], ['crossing-gate-2', 180]])
+    })
+
+    test('leaves the median of a divided road without a mast', async () => {
+      const [{ n }] = await sql`SELECT count(*)::int as n FROM road_glyphs WHERE glyph LIKE 'signal-%'
+        AND ST_X(geom) BETWEEN ${SB_X + 3 / 84300} AND ${NB_X - 3 / 84300} AND abs(ST_Y(geom) - ${STREET_Y}) < ${15 / 111050}`
+      expect(n).toBe(0)
+    })
+
+    test('lets a pedestrian signal stop its own crossing, not the junction beside it', async () => {
+      const masts = await near(-74.940, 40.713)
+      expect(masts.length).toBe(2)
+      expect(masts.every(m => m.y > 40.713 + 10 / 111050)).toBe(true)
+    })
+
+    test('builds through a crossing with no track drawn near it', async () => {
+      const gates = await near(-74.950, 40.713)
+      expect(gates.map(g => g.glyph)).toEqual(['crossing-gate-1', 'crossing-gate-1'])
+    })
+
+    test('gives traffic over a short median link its mast past the far carriageway', async () => {
+      const east = (await near(-74.955 + 6 / 84300, 40.713)).filter(m => m.direction === 90)
+      expect(east.length).toBe(1)
+      expect(east[0].x).toBeGreaterThan(-74.955 + 12 / 84300)
+    })
+
+    test('treats a road over two tracks as one crossing, clear of both', async () => {
+      const gates = await near(-74.930, 40.713)
+      expect(gates.map(g => g.glyph)).toEqual(['crossing-gate-1', 'crossing-gate-1'])
+      const north = gates.find(g => g.direction === 0)!
+      const south = gates.find(g => g.direction === 180)!
+      expect((south.y - 40.713) * 111050).toBeGreaterThan(4 + 4.1)
+      expect((40.713 - north.y) * 111050).toBeGreaterThan(4.1)
+    })
   })
 
   test('draws ways only, not a route relation over them', async () => {
@@ -851,6 +1487,92 @@ run('generate-road-markings.sql', () => {
     })
   })
 
+  describe('a car-free drive', () => {
+    // Metres of road surface across a line east-west through y.
+    const across = async (x: number, y: number) => (await sql`
+      SELECT ST_Length(ST_Intersection(ST_Union(geom), ST_SetSRID(ST_MakeLine(ST_MakePoint(${x - 20 / 84300}, ${y}), ST_MakePoint(${x + 20 / 84300}, ${y})), 4326))::geography) as m
+      FROM road_surfaces WHERE kind IS NULL AND geom && ST_MakeEnvelope(${x - 20 / 84300}, ${y - 0.0001}, ${x + 20 / 84300}, ${y + 0.0001}, 4326)`)[0].m ?? 0
+    const marks = (x: number, y0: number, y1: number) => sql`
+      SELECT kind, pattern, color, (ST_X(ST_Centroid(geom)) - ${x}) * 84300 as off
+      FROM road_markings WHERE ST_Intersects(geom, ST_MakeEnvelope(${x - 8 / 84300}, ${y0}, ${x + 8 / 84300}, ${y1}, 4326))`
+
+    test('is paved at its tagged width', async () => {
+      expect(await across(-74.360, 40.7125)).toBeCloseTo(10, 0)
+    })
+
+    test('sets the bike lane off with a line on its right, unpainted and unbuffered', async () => {
+      const rows = await marks(-74.360, 40.7121, 40.7124)
+      expect(rows.map(r => `${r.kind} ${r.pattern}`)).toEqual(['bike solid'])
+      expect(rows[0].off).toBeCloseTo(5 - 1.8, 0)
+    })
+
+    test('puts a walker on the left and a bike on the right, both heading along it', async () => {
+      const rows = await sql`
+        SELECT glyph, direction, (ST_X(geom) + 74.360) * 84300 as off FROM road_glyphs
+        WHERE geom && ST_MakeEnvelope(-74.3601, 40.712, -74.3599, 40.714, 4326) AND glyph IN ('road-walk', 'road-bike')`
+      const walk = rows.filter(r => r.glyph === 'road-walk')
+      const bike = rows.filter(r => r.glyph === 'road-bike')
+      expect(walk.length).toBeGreaterThan(0)
+      expect(bike.length).toBeGreaterThan(0)
+      expect(walk.every(r => r.off < 0 && r.direction === 0)).toBe(true)
+      expect(bike.every(r => r.off > 3.2 && r.direction === 0)).toBe(true)
+    })
+
+    test('breaks its line where a street crosses, and leaves the street\'s lines whole', async () => {
+      expect(await marks(-74.360, 40.713 - 3 / 111050, 40.713 + 3 / 111050)
+        .then(rows => rows.filter(r => r.kind === 'bike'))).toHaveLength(0)
+      const [{ hit }] = await sql`
+        SELECT EXISTS (SELECT 1 FROM road_markings WHERE kind = 'centre'
+          AND ST_Intersects(geom, ST_MakeLine(ST_SetSRID(ST_MakePoint(-74.360, 40.71295), 4326), ST_SetSRID(ST_MakePoint(-74.360, 40.71305), 4326)))) as hit`
+      expect(hit).toBe(true)
+    })
+
+    test('breaks the bike line of a drive with no lanes mapped where a street crosses', async () => {
+      expect(await marks(-74.375, 40.7121, 40.7124).then(rows => rows.filter(r => r.kind === 'bike'))).toHaveLength(1)
+      expect(await marks(-74.375, 40.713 - 3 / 111050, 40.713 + 3 / 111050)
+        .then(rows => rows.filter(r => r.kind === 'bike'))).toHaveLength(0)
+    })
+
+    test('paves a pedestrian street with no width as a street with its bike lane', async () => {
+      expect(await across(-74.375, 40.7125)).toBeCloseTo(7.8, 0)
+    })
+
+    const glyphs = (x: number) => sql`
+      SELECT glyph, direction, (ST_X(geom) - ${x}) * 84300 as off FROM road_glyphs
+      WHERE geom && ST_MakeEnvelope(${x - 10 / 84300}, 40.712, ${x + 10 / 84300}, 40.714, 4326)`
+
+    test('puts no walkers on a street, whatever its foot tag', async () => {
+      expect((await glyphs(-74.377)).filter(r => r.glyph === 'road-walk')).toHaveLength(0)
+    })
+
+    test('puts one bike symbol down the middle of a two-way bikeway one lane wide', async () => {
+      const rows = (await glyphs(-74.379)).filter(r => r.glyph === 'road-bike')
+      expect(rows.length).toBeGreaterThan(0)
+      expect(rows.every(r => Math.abs(r.off) < 0.1)).toBe(true)
+      expect(new Set(rows.map(r => r.direction)).size).toBe(1)
+    })
+
+    test('is no junction where it ends on a street: the street\'s lines run on and nothing stops', async () => {
+      const [{ hit }] = await sql`
+        SELECT EXISTS (SELECT 1 FROM road_markings WHERE kind = 'centre'
+          AND ST_Intersects(geom, ST_MakeLine(ST_SetSRID(ST_MakePoint(-74.381, 40.71345), 4326), ST_SetSRID(ST_MakePoint(-74.381, 40.71355), 4326)))) as hit`
+      expect(hit).toBe(true)
+      expect(await sql`SELECT 1 FROM road_markings WHERE kind = 'stop' AND geom && ST_MakeEnvelope(-74.3812, 40.7130, -74.3808, 40.7137, 4326)`).toHaveLength(0)
+    })
+
+    test('gives a greenway one solid yellow centre line where passing is barred', async () => {
+      const rows = await marks(-74.365, 40.7125, 40.7135)
+      expect(rows.map(r => `${r.kind} ${r.pattern} ${r.color}`)).toEqual(['centre solid yellow'])
+      expect(await across(-74.365, 40.713)).toBeCloseTo(3, 0)
+    })
+
+    test('paves a wide bikeway without paint, and leaves footways, gravel and sidewalks to the basemap', async () => {
+      expect(await across(-74.367, 40.713)).toBeCloseTo(5, 0)
+      expect(await marks(-74.367, 40.7125, 40.7135)).toHaveLength(0)
+      for (const x of [-74.369, -74.371, -74.373]) expect(await across(x, 40.713)).toBe(0)
+    })
+  })
+
   describe('rebuilding one box', () => {
     const BOX = (sql: postgres.Sql) => sql`ST_MakeEnvelope(-74.0003, 40.7095, -73.9985, 40.7105, 4326)`
     const footprint = async () => (await sql`
@@ -960,7 +1682,16 @@ run('generate-road-markings.sql', () => {
     let barsBefore: any
     const RAMP_BOX = (sql: postgres.Sql) => sql`ST_MakeEnvelope(${east(RAMP_X, -12)}, 40.7170, ${east(RAMP_X, 12)}, 40.7192, 4326)`
     let rampRef: { l: number; r: number }[] = []
+    const blockProfile = async () => {
+      const out: { l: number; r: number }[] = []
+      for (let m = 12; m <= 128; m += 4) out.push(await kerbsAt(-74.028, north(40.7170, m)))
+      return out
+    }
+    let blockRef: { l: number; r: number }[] = []
+    const centreRef: number[][] = []
     beforeAll(async () => {
+      blockRef = await blockProfile()
+      for (let m = -60; m <= 40; m += 4) centreRef.push(await centreAt(-74.012, north(40.7178, m)))
       ;[medianBefore] = await median()
       ;[barsBefore] = await bars()
       // The ramp as the full build drew it.
@@ -997,6 +1728,15 @@ run('generate-road-markings.sql', () => {
       expect(n - ref).toBeLessThanOrEqual(4)
     })
 
+    test('hold a street\'s kerbs down a block across their boundary as one build does', async () => {
+      const after = await blockProfile()
+      for (const [i, k] of after.entries()) {
+        expect(Math.abs(k.l - blockRef[i].l)).toBeLessThan(0.05)
+        expect(Math.abs(k.r - blockRef[i].r)).toBeLessThan(0.05)
+      }
+      expect(Math.max(...blockRef.map(k => k.r)) - Math.min(...blockRef.map(k => k.r))).toBeLessThan(0.1)
+    })
+
     test('build a turning circle on their boundary whole, once', async () => {
       for (const [dx, dy] of [[10.5, 0], [-10.5, 0], [0, 10.5], [0, -5]]) {
         expect(await covered(east(-74.026, dx), north(40.718, dy))).toBe(true)
@@ -1022,6 +1762,16 @@ run('generate-road-markings.sql', () => {
       expect(Math.abs(after.m - barsBefore.m)).toBeLessThan(0.05)
       const [{ moved }] = await sql`SELECT ST_HausdorffDistance(${after.g}::geometry, ${barsBefore.g}::geometry) * 84300 as moved`
       expect(moved).toBeLessThan(0.05)
+    })
+
+    test('ease a centre line into a way drawn tail to tail across their boundary as one build does', async () => {
+      const after: number[][] = []
+      for (let m = -60; m <= 40; m += 4) after.push(await centreAt(-74.012, north(40.7178, m)))
+      for (const [i, a] of after.entries()) {
+        expect(a.length).toBe(centreRef[i].length)
+        for (const [k, o] of a.entries()) expect(Math.abs(o - centreRef[i][k])).toBeLessThan(0.05)
+      }
+      await centreRunsOn(-74.012, north(40.7178, -60), north(40.7178, 40))
     })
 
     test('meet without a gap or an overlap', async () => {
@@ -1142,6 +1892,62 @@ run('generate-road-markings.sql', () => {
       expect(await at(-74.315, 40.7133)).toBe(1)
       expect(await at(-74.325, 40.7132)).toBe(1)
       expect(await at(-74.36, 40.712)).toBe(0)
+    })
+  })
+
+  describe('a sidewalk moved, and footways deleted', () => {
+    beforeAll(async () => {
+      await sql.unsafe(`DROP SCHEMA IF EXISTS osm_replay CASCADE; CREATE SCHEMA osm_replay;
+        CREATE TABLE osm_replay.old_places AS
+          SELECT id, 'W'::char(1) as osm_type, osm_id, NULL::text as name, '{highway/footway}'::text[] as categories,
+                 ST_Translate(geom, 0.00004, 0) as geom, geom_type, NULL::int as admin_level
+          FROM geo_places WHERE id = 'W401';
+        -- Deleted: one beside a paved street, one nowhere near a street.
+        INSERT INTO osm_replay.old_places (id, osm_type, osm_id, categories, geom, geom_type) VALUES
+          ('W497', 'W', 497, '{highway/footway}', ST_GeomFromText('LINESTRING(-74.40310 40.712, -74.40310 40.714)', 4326), 'line'),
+          ('W498', 'W', 498, '{highway/footway}', ST_GeomFromText('LINESTRING(-74.39 40.712, -74.39 40.714)', 4326), 'line');
+        CREATE TABLE osm_replay.changed AS SELECT id FROM geo_places WHERE id = 'W401';`)
+      await sql`DELETE FROM detail_dirty`
+      await sql.unsafe(readFileSync(join(import.meta.dir, 'queue-road-markings.sql'), 'utf8'))
+    })
+
+    afterAll(async () => {
+      await sql`DELETE FROM detail_dirty`
+    })
+
+    test('queues the streets beside them', async () => {
+      const at = async (x: number, y: number) => (await sql`
+        SELECT count(*)::int as n FROM detail_dirty WHERE layer = 'road_markings' AND ST_Intersects(box, ST_SetSRID(ST_MakePoint(${x}, ${y}), 4326))`)[0].n
+      expect(await at(-74.400, 40.7139)).toBeGreaterThan(0)
+      expect(await at(-74.403, 40.7139)).toBeGreaterThan(0)
+      expect(await at(-74.39, 40.713)).toBe(0)
+    })
+  })
+
+  describe('a level crossing retagged, and its track moved', () => {
+    beforeAll(async () => {
+      await sql.unsafe(`DROP SCHEMA IF EXISTS osm_replay CASCADE; CREATE SCHEMA osm_replay;
+        CREATE TABLE osm_replay.old_places AS
+          SELECT id, 'W'::char(1) as osm_type, osm_id, NULL::text as name, ARRAY['railway/rail'] as categories, geom, geom_type, NULL::int as admin_level
+          FROM geo_places WHERE id = 'W1351';
+        -- Track far from any crossing gear.
+        INSERT INTO osm_replay.old_places (id, osm_type, osm_id, categories, geom, geom_type) VALUES
+          ('W1097', 'W', 1097, ARRAY['railway/rail'], ST_GeomFromText('LINESTRING(-74.86 40.712, -74.8599 40.7121)', 4326), 'line');
+        CREATE TABLE osm_replay.changed AS SELECT id FROM geo_places WHERE id = 'N1362';`)
+      await sql`DELETE FROM detail_dirty`
+      await sql.unsafe(readFileSync(join(import.meta.dir, 'queue-road-markings.sql'), 'utf8'))
+    })
+
+    afterAll(async () => {
+      await sql`DELETE FROM detail_dirty`
+    })
+
+    test('queues the crossing and the track by its gear, not track elsewhere', async () => {
+      const at = async (x: number, y: number) => (await sql`
+        SELECT count(*)::int as n FROM detail_dirty WHERE layer = 'road_markings' AND ST_Intersects(box, ST_SetSRID(ST_MakePoint(${x}, ${y}), 4326))`)[0].n
+      expect(await at(-74.920, 40.713)).toBe(1)
+      expect(await at(-74.910, 40.713)).toBe(1)
+      expect(await at(-74.86, 40.712)).toBe(0)
     })
   })
 

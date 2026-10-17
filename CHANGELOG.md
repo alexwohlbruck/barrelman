@@ -10,6 +10,90 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.10.21] - 2026-10-17
+
+### Added
+
+* **Search corrects misspellings.** When the words as typed find too little,
+  each one is matched against the words the index actually holds, one edit
+  away (a letter dropped, added, changed, swapped or moved), and the search
+  runs again with those spellings. "men's warehouse flatbush" now finds Men's
+  Wearhouse, "prospect prak" Prospect Park and "starbuks" Starbucks, in
+  typeahead too. Well-spelled searches never reach this step, so they cost
+  what they did. The word list is a new table, `search_lexicon`, built at the
+  end of an import, by the API on first start where it is missing, and on
+  demand with the **Rebuild Search Lexicon** console task (also a seeded
+  weekly schedule, off by default).
+* **Search understands everyday words for what a place is.** "store" matches
+  shops, "clothing" matches `shop=clothes`, "grocery" supermarkets, "nyc" New
+  York, and a word matches its plural and singular ("suit" finds `suits`).
+  The `brand`, `clothes`, `sport` and `healthcare:speciality` tags are now
+  searchable too, so "suits store nyc" finds a shop tagged `clothes=suits`.
+  On upgrade, the API rewrites the search text of the rows carrying those
+  tags in the background (about 2% of named places, found in one pass).
+
+* **Car-free roads are paved and painted.** Pedestrian streets, park drives
+  and bike paths mapped like roads (with `lanes`, a `cycleway:*=lane|track`
+  side, or a bikeway 4 m or wider) get a road surface at their width, the bike
+  side's line, a single yellow centre line on two-way bike paths, and bike and
+  walker symbols. Their lines stop where a street crosses; the street's own
+  lines run on.
+* **Golf courses.** A new `golf_features` detail source, also in the `detail`
+  bundle, serves tees, fairways, greens, rough, bunkers and driving ranges,
+  each hole's line, a point at its tee with the hole number and par, and the
+  pins. Disc golf holes and baskets come in the same source.
+* **Ski areas.** A new `ski_features` detail source, in the `detail` bundle
+  from z13, serves resort outlines, pistes with their type, difficulty,
+  grooming, name and the region's signage convention, and lift pylons.
+* **Running tracks.** A new `sport_tracks` detail source, in the `detail`
+  bundle, serves running and athletics tracks with their shape and lane count.
+* **Signals and level crossings beside the road.** `road_glyphs` now carries
+  a point for each traffic signal mast, off the far right corner of every
+  approach to a signalled junction, and for each railway crossing gate,
+  flashing light post and crossbuck, clear of the tracks. Each is read from
+  OSM's signal and `crossing:*` tags. These glyphs don't start with `road-`;
+  clients that paint glyphs should draw only the `road-` ones.
+
+### Changed
+
+* **Streets are paved out to their kerbs.** Where a street has no `width` but
+  its sidewalks are mapped as separate ways, the carriageway now runs to about
+  2.25 m inside them (half a tagged sidewalk `width`), so side streets draw at
+  their real width rather than one lane wide. Lanes keep their own width; the
+  rest is unmarked kerbside. Replication queues the streets beside an edited
+  sidewalk.
+* **Parallel parking lanes show stall ticks** about a car length apart, unless
+  tagged `markings=no`.
+
+### Fixed
+
+* **Median ends are round.** A narrow median's nose takes half its width as
+  its kerb radius, so it ends round at the crosswalk instead of drawn to a point
+  well short of it.
+* **Streets change width at the junction, not across the next block.** A
+  street that widens for parking and bike lanes past a crossroads no longer
+  funnels to a point, and bike lanes never squeeze the traffic lanes while a
+  road tapers.
+* **Bike lanes run on straight where the parking beside them starts or
+  ends**, and a street's kerbs hold down a block whose lanes are shared out
+  differently from way to way, rather than wobbling with each turn lane.
+* **Stop lines never cross a crosswalk.** They stand 1.2 m short of the
+  crosswalk ahead and parallel to it; past 40° askew, each lane gets its own
+  square line, stepped along the crosswalk.
+* Scraps of bus or bike lane paint under 5 m long are no longer left inside a
+  junction.
+* **Centre lines run on unbroken where a two-way road is split into ways.**
+  The double yellow no longer jumps sideways where two ways were drawn in
+  opposite directions or a ramp joins at the split; it shifts over a taper,
+  and where a centre turn lane ends its far edge closes in on the centre line.
+* **Give way signs mapped along a two-way road face the right way.** A
+  `direction=forward` on a way with no `oneway` tag was read as backward.
+* **Bridge decks for structures that carry several ways.** A tram or light
+  rail track running in a road bridge's carriageway is carried on the road's
+  deck rather than standing inside it as a deck of its own, twin tracks on one
+  viaduct are joined at one height and share their piers, and a carriageway is
+  no longer chained back onto the slip road it meets at a gore.
+
 ## [0.10.20] - 2026-10-16
 
 ### Fixed
@@ -1285,7 +1369,6 @@ does it — and the release pipeline turns it into the GitHub Release notes.
   alerts inform stations, not platforms — the MTA's "4 runs local" names stop
   `237` while route detail carries `237N` — and the parent is the join between
   the two
-
 
 ## [0.2.19] - 2026-09-07
 

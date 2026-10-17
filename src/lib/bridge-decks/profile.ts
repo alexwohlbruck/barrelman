@@ -61,6 +61,8 @@ export const CURVE = 24
 export const VERTICAL_CURVE = 90
 /** Metres each side of a sample whose ground is read together, so a lone tree, mast or stray pixel does not lift a deck. */
 export const GROUND_SPAN = 12
+/** Metres a deck may run below the ground under it, which the client draws it over, rather than kink over a bump. */
+export const TERRAIN_SLACK = 0.5
 /** Farthest an outline point may lie from a deck's centreline and still be its edge, in metres. */
 export const MAX_REACH = 16
 
@@ -154,13 +156,15 @@ function leaving(w: Way, p: Point): Point {
 
 /** Least turn, as the cosine between the two ways leaving a node, at which a road counts as carrying straight on. */
 const ONWARD = -0.5
+/** Most a chain may turn at a node, as that cosine: sharper, two roads or tracks part at a gore or a turnout. A path may double back at a landing. */
+const FOLD = 0
 
 /**
  * Ways joined end to end into chains, one per roadway. OSM ways share their
  * end nodes, so ends match exactly. Only ways of one kind and layer join, so
  * stacked decks never do; where three or more meet, the pair that carries one
  * road on (same class and ref or name, turning no sharper than ONWARD) joins,
- * else the straightest pair, and the rest end there.
+ * else the straightest pair, and the rest end there. Only a path folds back.
  */
 export function chains(ways: Way[]): Chain[] {
   // By id, so a tie between pairs goes the same way whatever order the rows came in.
@@ -179,6 +183,7 @@ export function chains(ways: Way[]): Chain[] {
       for (let j = i + 1; j < like.length; j++) {
         const [u, v] = [leaving(like[i], p), leaving(like[j], p)]
         const dot = u[0] * v[0] + u[1] * v[1]
+        if (dot > FOLD && from.kind !== 'path') continue
         const same = like[i].road !== undefined && like[i].road === like[j].road && dot <= ONWARD
         if ((same ? 2 : 0) - dot > score) [best, score] = [[like[i], like[j]], (same ? 2 : 0) - dot]
       }
@@ -339,6 +344,38 @@ export function absorbPaths(decks: Chain[]): Chain[] {
   return [...roads, ...kept]
 }
 
+/** Tracks in a road bridge's carriageway (a street-running tram) folded into its deck: mostly in its reach, never off to one side, at most RUN_PAST past its ends. */
+export function absorbTracks(decks: Chain[]): Chain[] {
+  const roads = decks.filter(d => d.kind === 'road').map(d => ({ ...d, ways: [...d.ways] }))
+  const kept: Chain[] = []
+  for (const deck of decks) {
+    if (deck.kind === 'road') continue
+    if (deck.kind !== 'rail') {
+      kept.push(deck)
+      continue
+    }
+    const samples = resample(deck.points, TRACK_SAMPLE)
+    const host = roads.find(road => {
+      if (road.layer !== deck.layer) return false
+      let within = 0
+      for (const q of samples) {
+        const near = beside(road.points, q)
+        if (near.alongside && near.distance <= (road.fit ?? road.edges)[near.left ? 0 : 1]) within++
+        else if (near.alongside || near.distance > RUN_PAST) return false
+      }
+      return within >= samples.length * IN_ROAD
+    })
+    if (host) host.ways.push(...deck.ways)
+    else kept.push(deck)
+  }
+  return [...roads, ...kept]
+}
+
+/** Metres a folded track may run on past the road's end, the share of it that must lie in the road, and metres between its tested points. */
+export const RUN_PAST = 15
+const IN_ROAD = 0.8
+const TRACK_SAMPLE = 3
+
 /** A resampled deck widened to take in its sidewalks, one sample beyond each end of where they run beside it. */
 export function widen<C extends Pick<Chain, 'points' | 'edges' | 'sides' | 'paths'>>(chain: C, step: number): C {
   if (!chain.paths?.length) return chain
@@ -400,6 +437,41 @@ export function besideGround(centre: number[], left: number[], right: number[], 
     if (Number.isNaN(base) || !edges.length) return base
     return Math.max(base, Math.min(Math.max(...edges), base + MAX_GRADE * Math.min(d[i], total - d[i])))
   })
+}
+
+/**
+ * Where a grounded end's road is read beyond it (metres out, every `step`), the
+ * stretch fitted for its level, how far below that level the end's own ground
+ * must lie to be a hole, and the most a deck runs on to cross one.
+ */
+export const LANDING = { step: 2, reach: 40, from: 16, to: 36, hole: 0.6, run: 25 }
+
+/**
+ * The road a grounded end lands on, read from the ground `beyond` it (one
+ * sample every LANDING.step metres out). Lidar terrain has its bridges taken
+ * out, and often the abutments with them: the end of the way then lies in a
+ * hollow while the road a little farther out runs on at deck level. Null where
+ * the end's own ground is the road's; else the road's height and how far out
+ * the hollow ends, where the deck runs on to.
+ */
+export function landing(beyond: number[], end: number): { height: number; run: number } | null {
+  const fit = beyond.flatMap((z, j) => {
+    const s = (j + 1) * LANDING.step
+    return s >= LANDING.from && s <= LANDING.to && !Number.isNaN(z) ? [[s, z]] : []
+  })
+  if (fit.length < 3) return null
+  const [ms, mz] = [fit.reduce((a, [s]) => a + s, 0) / fit.length, fit.reduce((a, [, z]) => a + z, 0) / fit.length]
+  const grade = fit.reduce((a, [s, z]) => a + (s - ms) * (z - mz), 0) / (fit.reduce((a, [s]) => a + (s - ms) ** 2, 0) || 1)
+  // A road climbing steeper than a deck may is a hill, not a hollow.
+  if (Math.abs(grade) > MAX_GRADE) return null
+  const level = (s: number) => mz + grade * (s - ms)
+  if (fit.some(([s, z]) => Math.abs(z - level(s)) > LANDING.hole)) return null
+  if (level(0) - end < LANDING.hole) return null
+  const out = beyond.findIndex((z, j) => z >= level((j + 1) * LANDING.step) - 0.5)
+  const run = out < 0 ? Infinity : (out + 1) * LANDING.step
+  // A hollow dips below the road it lies in, between the end and the road coming back up.
+  const dipped = beyond.slice(0, Math.max(0, out)).some((z, j) => z < level((j + 1) * LANDING.step) - LANDING.hole)
+  return run > LANDING.run || !(dipped || out === 0) ? null : { height: level(run), run }
 }
 
 /** What a deck must stand clear of at a distance along it: an absolute height for its surface. */
@@ -482,7 +554,7 @@ export function solve(
   }
   const anchored = [chain.grounded[0] || resting[0] !== null, chain.grounded[1] || resting[1] !== null]
   const [za, zb] = [end(0, ground[0]), end(1, ground[n - 1])]
-  const lower = steady(ground, d)
+  const lower = steady(ground, d).map(g => g - TERRAIN_SLACK)
   for (const need of needs)
     for (let i = 0; i < n; i++) if (Math.abs(d[i] - need.at) <= CURVE / 2) lower[i] = Math.max(lower[i], need.height)
   lower[0] = za
@@ -520,7 +592,7 @@ export function smooth(z: number[], d: number[], ground: number[], span = VERTIC
   const total = d[n - 1] ?? 0
   let lo = 0
   return z.map((_, i) => {
-    const half = Math.min(span / 2, d[i], total - d[i])
+    const half = Math.min(span / 2, d[i] - d[0], total - d[i])
     if (half <= 0) return z[i]
     while (d[i] - d[lo] >= half) lo++
     let sum = 0
@@ -547,8 +619,8 @@ export const LEAVING = 200
 /**
  * Decks that run side by side as one: where a deck's edge meets another's
  * within `gap` metres and at most `step` from its height, both take the
- * higher height. Decks farther apart in height (an upper and lower deck) keep
- * their own.
+ * higher height. Decks farther apart in height (an upper and lower deck)
+ * keep their own, and tracks join only tracks.
  *
  * An end that lands on the ground stays there: lifting it to a neighbour
  * would leave the deck hanging over the road it lands on. Nor is a deck
@@ -564,7 +636,7 @@ export function joinNeighbours(
   const widest = decks.map(D => Math.max(...D.chain.edges))
   for (const [a, A] of decks.entries())
     for (const [b, B] of decks.entries()) {
-      if (a === b || A.chain.kind === 'rail' || B.chain.kind === 'rail') continue
+      if (a === b || (A.chain.kind === 'rail') !== (B.chain.kind === 'rail')) continue
       const leaves = (B.on ?? []).filter(r => r.deck === A).map(r => r.at)
       // Farther apart than both decks' widest sides and the gap, no edge can meet the other.
       if (!meet(grow(box(A.chain.points), widest[a] + widest[b] + gap), box(B.chain.points))) continue

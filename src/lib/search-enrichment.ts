@@ -1,4 +1,6 @@
 import postgres from 'postgres'
+import { readFileSync } from 'fs'
+import { join } from 'path'
 import { maintenanceConnection } from '../db'
 
 /**
@@ -41,7 +43,10 @@ const REIMPORT_DRIFT = 0.1
 //   v2: strip apostrophes ("Sal's"→"sals") + expand "&" to a multilingual "and"
 //       for ALL names (was intersections only), so "joe and sals" matches
 //       "Joe & Sal's Pizzeria".
-const TS_NORMALIZATION_VERSION = 2
+//   v3: the values of TAG_WORD_KEYS join the document, so "suits" reaches a
+//       shop tagged clothes=suits. Only rows carrying one of them change, so
+//       a v2 database rewrites those rather than every row (fillTagWords).
+const TS_NORMALIZATION_VERSION = 3
 // Bump when the geo_brands materialized view definition changes (see
 // ensureBrandCatalogSchema in db.ts), so an already-enriched database rebuilds
 // its brand catalog on the next startup.
@@ -227,6 +232,9 @@ async function fillParentContext(sql: Sql): Promise<void> {
  *     so a query of "joe and sals" matches "Joe & Sal's Pizzeria"
  * Intersections (osm_type 'X') additionally get road-suffix expansion.
  */
+/** Tags whose values join the document. Keep in sync with build_ts(). */
+const TAG_WORD_KEYS = ['brand', 'clothes', 'sport', 'healthcare:speciality']
+
 function tsExpr(sql: Sql) {
   return sql`to_tsvector('simple', unaccent(replace(
     (CASE WHEN osm_type = 'X'
@@ -245,6 +253,7 @@ function tsExpr(sql: Sql) {
     coalesce(array_to_string(
         ARRAY(SELECT replace(replace(unnest(categories), '/', ' '), '_', ' ')),
     ' '), '') || ' ' ||
+    replace(replace(concat_ws(' ', ${sql.unsafe(TAG_WORD_KEYS.map((k) => `tags->>'${k}'`).join(', '))}), ';', ' '), '_', ' ') || ' ' ||
     coalesce(parent_context, '')
   , chr(39), '')))`
 }
@@ -280,6 +289,53 @@ async function fillTsvectors(sql: Sql, force = false): Promise<void> {
 }
 
 /**
+ * The v2 → v3 upgrade: rewrite the documents of rows that carry a tag word —
+ * about 2% of named rows, nearly all of them for `brand`.
+ *
+ * The tags index is jsonb_path_ops, which can't answer `?`, so finding them
+ * takes a scan either way. One sequential scan collects their ids; walking the
+ * table in id order instead, as the full rebuild does, is a random read of the
+ * whole heap twice over, hours on a country. The rewrite then goes in batches
+ * with a commit each, so live searches never wait on one long transaction.
+ */
+async function fillTagWords(sql: Sql): Promise<void> {
+  const expr = tsExpr(sql)
+  const hasTag = sql.unsafe(TAG_WORD_KEYS.map((k) => `tags ? '${k}'`).join(' OR '))
+  await sql`DROP TABLE IF EXISTS pg_temp.tag_word_rows`
+  await sql`CREATE TEMP TABLE tag_word_rows AS SELECT id FROM geo_places WHERE name IS NOT NULL AND (${hasTag})`
+  for (;;) {
+    const done = await sql`
+      WITH batch AS (
+        DELETE FROM tag_word_rows WHERE id IN (SELECT id FROM tag_word_rows LIMIT ${TS_BATCH})
+        RETURNING id
+      ), rewritten AS (
+        UPDATE geo_places SET ts = ${expr}
+        FROM batch WHERE geo_places.id = batch.id
+      )
+      SELECT count(*)::int AS n FROM batch
+    `
+    if (!done[0]?.n) break
+  }
+  await sql`DROP TABLE tag_word_rows`
+}
+
+const IMPORT_DIR = join(import.meta.dir, '../../import')
+
+/**
+ * Build search_lexicon, the word list typo correction draws from (see
+ * import/build-search-lexicon.sql). One pass over the named rows: seconds on
+ * a city, several minutes on a country.
+ */
+export async function buildSearchLexicon(sql: Sql): Promise<void> {
+  await sql.unsafe(readFileSync(join(IMPORT_DIR, 'build-search-lexicon.sql'), 'utf-8'))
+}
+
+async function lexiconMissing(sql: Sql): Promise<boolean> {
+  const [row] = await sql<{ missing: boolean }[]>`SELECT to_regclass('search_lexicon') IS NULL AS missing`
+  return Boolean(row?.missing)
+}
+
+/**
  * Fill any missing search-enrichment columns. Safe to call on every startup —
  * skips instantly when already done. Intended to be fired without awaiting so it
  * never delays server boot.
@@ -294,8 +350,10 @@ export async function ensureSearchEnrichment(): Promise<void> {
     const estimate = await rowEstimate(sql)
     if (estimate === 0) return // table empty / not imported yet
     let marker = await readMarker(sql, estimate)
-    // Already fully enriched at the current ts + brand-catalog versions → nothing to do.
-    if (marker.fresh && marker.tsVersion >= TS_NORMALIZATION_VERSION && marker.brandsVersion >= BRAND_CATALOG_VERSION) return
+    // Already fully enriched at the current ts + brand-catalog versions, with a
+    // lexicon → nothing to do.
+    if (marker.fresh && marker.tsVersion >= TS_NORMALIZATION_VERSION && marker.brandsVersion >= BRAND_CATALOG_VERSION
+      && !(await lexiconMissing(sql))) return
 
     const [{ locked }] = await sql<{ locked: boolean }[]>`
       SELECT pg_try_advisory_lock(${ENRICHMENT_LOCK_KEY}) AS locked
@@ -305,11 +363,15 @@ export async function ensureSearchEnrichment(): Promise<void> {
     try {
       // Re-check under the lock in case another instance just finished.
       marker = await readMarker(sql, estimate)
-      if (marker.fresh && marker.tsVersion >= TS_NORMALIZATION_VERSION && marker.brandsVersion >= BRAND_CATALOG_VERSION) return
+      if (marker.fresh && marker.tsVersion >= TS_NORMALIZATION_VERSION && marker.brandsVersion >= BRAND_CATALOG_VERSION
+        && !(await lexiconMissing(sql))) return
 
       const t0 = Date.now()
       const tsStale = marker.tsVersion < TS_NORMALIZATION_VERSION
-      const didColumnBackfill = !marker.fresh || tsStale
+      // The v2 → v3 upgrade rewrites a few thousand rows, which needs none of
+      // the clean-up a full rewrite does below.
+      const tagWordsOnly = marker.fresh && tsStale && marker.tsVersion === 2
+      const didColumnBackfill = (!marker.fresh || tsStale) && !tagWordsOnly
       if (!marker.fresh) {
         // Full backfill (fresh / re-imported database).
         console.log('[search-enrichment] Backfilling derived search columns (one-time)…')
@@ -321,6 +383,9 @@ export async function ensureSearchEnrichment(): Promise<void> {
         await fillParentContext(sql)
         console.log('[search-enrichment] tsvectors…')
         await fillTsvectors(sql)
+      } else if (tagWordsOnly) {
+        console.log('[search-enrichment] Adding tag words to tsvectors…')
+        await fillTagWords(sql)
       } else if (tsStale) {
         // Data is enriched but the tsvector normalization changed — rebuild ts.
         console.log(`[search-enrichment] Rebuilding tsvectors for normalization v${TS_NORMALIZATION_VERSION}…`)
@@ -341,6 +406,12 @@ export async function ensureSearchEnrichment(): Promise<void> {
       if (didColumnBackfill || marker.brandsVersion < BRAND_CATALOG_VERSION) {
         console.log('[search-enrichment] brand catalog…')
         await refreshBrandCatalog(sql)
+      }
+
+      // After any ts rewrite above, so the lexicon holds the words it wrote.
+      if (didColumnBackfill || tagWordsOnly || await lexiconMissing(sql)) {
+        console.log('[search-enrichment] search lexicon…')
+        await buildSearchLexicon(sql)
       }
 
       await markEnriched(sql, estimate)

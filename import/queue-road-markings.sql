@@ -9,12 +9,14 @@
 --
 -- Only what generate-road-markings.sql reads is queued: the road classes it
 -- paves, crossings, signal, stop, give way, turning circle and speed hump
--- nodes, and painted areas. old_places keeps categories, not tags, so an old
--- service road or footway counts only where it was drawn: a service road on a
--- paved surface, a footway under a painted crosswalk, and an area or node
--- without a category only on a painted area's outline or by a hump's paint.
--- Without those, every alley and sidewalk edit in a built city would queue a
--- rebuild.
+-- nodes, painted areas, level crossings, track by crossing gear, and the
+-- paved streets beside a changed footway, path or cycleway (their sidewalks
+-- set the kerbs). old_places keeps categories, not tags, so an old service
+-- road or car-free way counts only where it was drawn: one on a paved
+-- surface, a footway under a painted crosswalk or beside a paved street, and
+-- an area or node without a category only on a painted area's outline or by a
+-- hump's paint. Without those, every alley and park path edit in a built city
+-- would queue a rebuild.
 --
 -- A road's place reads the way before it, the way after that eases back, and
 -- a fork's branches line up with its stem (generate-road-markings.sql, Where
@@ -31,12 +33,24 @@
 -- copies equal).
 CREATE OR REPLACE FUNCTION road_is_marked_way(tags jsonb) RETURNS boolean
 LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
-  SELECT tags->>'highway' IN ('motorway', 'motorway_link', 'trunk', 'trunk_link', 'primary', 'primary_link',
-                              'secondary', 'secondary_link', 'tertiary', 'tertiary_link', 'unclassified',
-                              'residential', 'living_street', 'service', 'busway')
-    AND COALESCE(tags->>'tunnel', 'no') = 'no'
+  SELECT COALESCE(tags->>'tunnel', 'no') = 'no'
     AND COALESCE(tags->>'area', 'no') <> 'yes'
-    AND (tags->>'highway' <> 'service' OR tags ?| ARRAY['lanes', 'lane_markings', 'width', 'width:carriageway'])
+    AND (
+      (tags->>'highway' IN ('motorway', 'motorway_link', 'trunk', 'trunk_link', 'primary', 'primary_link',
+                            'secondary', 'secondary_link', 'tertiary', 'tertiary_link', 'unclassified',
+                            'residential', 'living_street', 'service', 'busway')
+       AND (tags->>'highway' <> 'service' OR tags ?| ARRAY['lanes', 'lane_markings', 'width', 'width:carriageway']))
+      OR (tags->>'highway' IN ('pedestrian', 'cycleway', 'path', 'footway')
+          AND COALESCE(tags->>'footway', tags->>'cycleway', tags->>'path', '') NOT IN ('sidewalk', 'crossing', 'access_aisle', 'traffic_island', 'link', 'sidepath')
+          AND NOT tags ? 'crossing' AND COALESCE(tags->>'is_sidepath', 'no') = 'no'
+          AND COALESCE(tags->>'surface', 'paved') IN ('paved', 'asphalt', 'concrete', 'concrete:plates', 'concrete:lanes', 'chipseal')
+          AND ((tags ? 'lanes' AND tags->>'highway' <> 'footway')
+               OR (tags->>'highway' <> 'cycleway'
+                   AND ARRAY[tags->>'cycleway', tags->>'cycleway:left', tags->>'cycleway:right', tags->>'cycleway:both']
+                       && ARRAY['lane', 'track', 'opposite_lane', 'opposite_track'])
+               OR ((tags->>'highway' = 'cycleway' OR tags->>'bicycle' = 'designated')
+                   AND substring(replace(tags->>'width', ',', '.') from '^\s*([0-9]+(?:\.[0-9]+)?)\s*m?\s*$')::float8 >= 4)))
+    )
 $$;
 
 DO $$
@@ -53,9 +67,36 @@ BEGIN
     JOIN osm_replay.changed c ON c.id = g.id
     WHERE (g.geom_type = 'line' AND g.osm_type = 'W' AND (road_is_marked_way(g.tags) OR g.tags->>'footway' = 'crossing'))
        OR (g.geom_type = 'point' AND (g.tags->>'highway' IN ('crossing', 'traffic_signals', 'stop', 'give_way', 'turning_circle', 'turning_loop')
-                                      OR g.tags->>'traffic_calming' IN ('hump', 'table', 'cushion')))
+                                      OR g.tags->>'traffic_calming' IN ('hump', 'table', 'cushion')
+                                      OR g.tags->>'railway' IN ('level_crossing', 'tram_level_crossing')))
+
        OR (g.geom_type = 'area' AND (g.tags->>'road_marking' = 'restriction' OR g.tags->>'area:highway' = 'prohibited'
                                      OR g.tags->>'traffic_calming' = 'painted_island'))
+  ),
+  -- A street's kerbs stand back from the sidewalks beside it, and a path
+  -- between the two hides one (generate-road-markings.sql, Kerb to kerb), so
+  -- any footway, path or cycleway changed or deleted along a paved street
+  -- counts, where it was and where it is.
+  walks AS (
+    SELECT g.geom FROM geo_places g JOIN osm_replay.changed c ON c.id = g.id
+    WHERE g.geom_type = 'line' AND g.tags->>'highway' IN ('footway', 'path', 'cycleway') AND COALESCE(g.tags->>'footway', '') <> 'crossing'
+    UNION ALL
+    SELECT o.geom FROM osm_replay.old_places o
+    WHERE o.geom_type = 'line' AND o.categories && ARRAY['highway/footway', 'highway/path', 'highway/cycleway']
+  ),
+  -- Same road-lines index probe per path as the lookups below (OFFSET 0).
+  beside AS MATERIALIZED (
+    SELECT DISTINCT g.id, g.osm_id, g.geom
+    FROM walks w,
+         LATERAL (SELECT 0.0003 / cos(radians(ST_Y(ST_Centroid(w.geom)))) as r) m,
+         LATERAL (
+           SELECT g.id, g.osm_id, g.geom FROM geo_places g
+           WHERE g.geom && ST_Expand(w.geom, m.r) AND g.geom_type = 'line' AND g.tags ? 'highway' AND g.osm_type = 'W'
+             AND road_is_marked_way(g.tags) AND ST_DWithin(g.geom, w.geom, m.r)
+           OFFSET 0
+         ) g
+    WHERE EXISTS (SELECT 1 FROM road_surfaces s WHERE s.geom && g.geom AND ST_Intersects(s.geom, ST_PointOnSurface(g.geom)))
+      AND NOT EXISTS (SELECT 1 FROM relevant_new n WHERE n.id = g.id)
   ),
   touched AS (
     SELECT o.osm_id, o.geom
@@ -68,10 +109,18 @@ BEGIN
                 OR (o.categories && ARRAY['highway/service']
                     AND EXISTS (SELECT 1 FROM road_surfaces s
                                 WHERE s.geom && o.geom AND ST_Intersects(s.geom, ST_PointOnSurface(o.geom))))
+                -- A sidewalk can graze a kerb; a paved car-free way runs down its surface.
+                OR (o.categories && ARRAY['highway/pedestrian', 'highway/cycleway', 'highway/path', 'highway/footway']
+                    AND GeometryType(o.geom) = 'LINESTRING'
+                    AND EXISTS (SELECT 1 FROM road_surfaces s
+                                WHERE s.geom && o.geom AND ST_Intersects(s.geom, ST_LineInterpolatePoint(o.geom, 0.25)))
+                    AND EXISTS (SELECT 1 FROM road_surfaces s
+                                WHERE s.geom && o.geom AND ST_Intersects(s.geom, ST_LineInterpolatePoint(o.geom, 0.75))))
                 OR (o.categories && ARRAY['highway/footway', 'highway/path', 'highway/cycleway']
                     AND EXISTS (SELECT 1 FROM road_markings m WHERE m.geom && o.geom AND m.kind = 'crosswalk'))))
        OR (o.geom_type = 'point' AND o.categories && ARRAY['highway/crossing', 'highway/traffic_signals', 'highway/stop',
-                                                           'highway/give_way', 'highway/turning_circle', 'highway/turning_loop'])
+                                                           'highway/give_way', 'highway/turning_circle', 'highway/turning_loop',
+                                                           'railway/level_crossing', 'railway/tram_level_crossing'])
        OR (o.geom_type = 'area' AND o.categories = '{}'
            AND EXISTS (SELECT 1 FROM road_markings m WHERE m.geom && o.geom AND m.kind = 'restriction' AND ST_Intersects(m.geom, o.geom)))
        OR (o.geom_type = 'point' AND o.categories = '{}'
@@ -80,6 +129,20 @@ BEGIN
        OR o.id IN (SELECT id FROM relevant_new)
     UNION ALL
     SELECT osm_id, geom FROM relevant_new
+    UNION ALL
+    SELECT osm_id, geom FROM beside
+    UNION ALL
+    -- Track by crossing gear, old outline or new, as the gear's own points: a
+    -- mainline way runs for kilometres, and only where it meets a road matters.
+    SELECT NULL, ST_Collect(r.geom)
+    FROM (SELECT o.geom FROM osm_replay.old_places o
+          WHERE o.geom_type = 'line' AND o.categories && ARRAY['railway/rail', 'railway/light_rail', 'railway/tram',
+                                                             'railway/narrow_gauge', 'railway/subway', 'railway/preserved']
+          UNION ALL
+          SELECT g.geom FROM geo_places g JOIN osm_replay.changed c ON c.id = g.id
+          WHERE g.geom_type = 'line' AND g.tags->>'railway' IN ('rail', 'light_rail', 'tram', 'narrow_gauge', 'subway', 'preserved')) t
+    JOIN road_glyphs r ON r.geom && ST_Expand(t.geom, 0.0005) AND r.glyph LIKE 'cross%' AND ST_DWithin(r.geom, t.geom, 0.0005)
+    GROUP BY t.geom
   ),
   -- Both lookups below name tags ? 'highway' so they can use the road-lines
   -- index (create-detail-indexes.sql), and end in OFFSET 0 so each stays one

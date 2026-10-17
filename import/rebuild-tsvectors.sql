@@ -11,7 +11,7 @@
 -- GIN index. On a full import after resolve-parent-context.sql (which already
 -- writes ts alongside parent_context) this pass verifies instead of
 -- re-writing, so running it twice costs a scan, not 30M row versions.
-UPDATE geo_places SET ts = build_ts(osm_type, name, names, name_abbrev, categories, parent_context)
+UPDATE geo_places SET ts = build_ts(osm_type, name, names, name_abbrev, categories, parent_context, tags)
 WHERE name IS NOT NULL
   AND (:'scope' = 'all' OR osm_type = 'X' OR ts IS NULL)
-  AND ts IS DISTINCT FROM build_ts(osm_type, name, names, name_abbrev, categories, parent_context);
+  AND ts IS DISTINCT FROM build_ts(osm_type, name, names, name_abbrev, categories, parent_context, tags);
