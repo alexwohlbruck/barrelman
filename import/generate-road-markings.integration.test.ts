@@ -120,6 +120,12 @@ const ways: [number, string, Record<string, string>][] = [
   [185, line([-74.2450, 40.713], [-74.2440, 40.713]), { highway: 'tertiary', lanes: '2', 'cycleway:right': 'lane' }],
   [186, line([-74.2440, 40.713], [-74.2430, 40.713]), { highway: 'tertiary', lanes: '2', 'cycleway:right': 'lane', bridge: 'yes', layer: '1' }],
   [187, line([-74.2430, 40.713], [-74.2420, 40.713]), { highway: 'tertiary', lanes: '2', 'cycleway:right': 'lane' }],
+  // A side street ending at that bridge's west end; a flyover approach on a layer but untagged as a bridge; a one-way drawn backwards.
+  [188, line([-74.2440, 40.7130], [-74.2440, 40.7120]), { highway: 'residential', lanes: '2' }],
+  [189, line([-74.2480, 40.713], [-74.2470, 40.713]), { highway: 'tertiary', lanes: '2' }],
+  [190, line([-74.2470, 40.713], [-74.2460, 40.713]), { highway: 'tertiary', lanes: '2', layer: '1' }],
+  [191, line([-74.2500, 40.713], [-74.2490, 40.713]), { highway: 'tertiary', oneway: 'yes', lanes: '2', bridge: 'yes', layer: '1' }],
+  [192, line([-74.2480, 40.7131], [-74.2490, 40.713]), { highway: 'tertiary', oneway: '-1', lanes: '2' }],
   // An exit ramp gaining a lane at each of four ways, three of them short,
   // across a cell boundary at 40.718.
   [170, line([-74.015, 40.7160], [-74.015, 40.7172]), { highway: 'motorway_link', oneway: 'yes', lanes: '1' }],
@@ -719,6 +725,15 @@ run('generate-road-markings.sql', () => {
       SELECT ST_Distance(ST_Union(geom) FILTER (WHERE bridge)::geography, ST_Union(geom) FILTER (WHERE NOT bridge)::geography) as gap
       FROM road_markings WHERE kind = 'centre' AND geom && ST_MakeEnvelope(-74.2460, 40.7125, -74.2440, 40.7135, 4326)`
     expect(gap).toBeLessThan(0.05)
+  })
+
+  test('leaves the paint of a side street, a street off an untagged flyover, and gives a backwards one-way\'s', async () => {
+    const owned = async (w: number, s: number, e: number, n: number) => (await sql<{ bridge: boolean }[]>`
+      SELECT DISTINCT bridge FROM road_markings WHERE kind IN ('centre', 'lane', 'edge')
+        AND ST_Intersects(geom, ST_MakeEnvelope(${w}, ${s}, ${e}, ${n}, 4326))`).map(r => r.bridge)
+    expect(await owned(-74.24405, ahead(40.713, -13), -74.24395, ahead(40.713, -6))).toEqual([false])
+    expect(await owned(east(-74.2470, -12), 40.7129, east(-74.2470, -4), 40.7131)).toEqual([false])
+    expect(await owned(east(-74.2490, 4), 40.71295, east(-74.2490, 12), 40.71315)).toEqual([true])
   })
 
   test('keeps the arrows of a merging way in its lanes as they ease over', async () => {

@@ -11,6 +11,8 @@ description: Which OpenStreetMap tags the lane-level road layers are built from,
 | `road_markings` | painted lines and areas | `kind`, `pattern`, `color`, `style`, `bridge` |
 | `road_glyphs` | arrows and bike symbols, and what stands beside the road at signals and railway crossings | `glyph`, `direction`, `bridge` |
 
+`bridge` is true for paint a 3D bridge deck draws: paint on the bridge, and the first 15 m of the road carrying on from each end of a way tagged `bridge`. A client drawing decks draws those rows on the deck and on the ground just past its ends, and leaves them out of its flat road layers, so the paint at a deck's end is drawn once. A client without decks draws them as the rest.
+
 Only tags the OSM wiki documents are read, and paint follows US conventions (MUTCD): yellow where it separates opposing traffic, white otherwise.
 
 ## What is drawn

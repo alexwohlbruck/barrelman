@@ -2814,17 +2814,25 @@ WHERE g.glyph LIKE 'road-%'
 -- Without decks they draw as any bridge paint does, where they lie.
 DROP TABLE IF EXISTS _rm_deck_ends;
 CREATE TEMP TABLE _rm_deck_ends AS
+WITH tagged AS (
+  SELECT r.osm_id, COALESCE(r.tags->>'bridge', 'no') <> 'no' as deck FROM _rm_roads r
+),
+-- The way carrying on from a bridge tagged as one, and which of its ends meets it.
+onward AS (
+  SELECT j.b_id as osm_id, j.b_start as at_start FROM _rm_joins j
+  JOIN tagged a ON a.osm_id = j.a_id AND a.deck JOIN _rm_roads b ON b.osm_id = j.b_id AND NOT b.bridge
+  UNION
+  SELECT j.a_id, j.a_start FROM _rm_joins j
+  JOIN _rm_roads a ON a.osm_id = j.a_id AND NOT a.bridge JOIN tagged b ON b.osm_id = j.b_id AND b.deck
+)
 SELECT e.osm_id, ST_Union(ST_Transform(ST_Buffer(ST_LineSubstring(r.g,
-         CASE WHEN e.at_start THEN 0 ELSE greatest(0, 1 - 15 / nullif(r.len_m, 0)) END,
-         CASE WHEN e.at_start THEN least(1, 15 / nullif(r.len_m, 0)) ELSE 1 END),
-       (greatest(abs(COALESCE(r.kerb_l, r.width / 2)), abs(COALESCE(r.kerb_r, r.width / 2))) + 1) * r.s, 'endcap=flat'), 4326)) as zone
-FROM (
-  SELECT DISTINCT a.osm_id, ST_Equals(a.p, ST_StartPoint(r0.g)) as at_start
-  FROM _rm_incid a
-  JOIN _rm_incid b ON b.x = a.x AND b.y = a.y AND b.osm_id <> a.osm_id AND b.bridge AND b.is_end
-  JOIN _rm_roads r0 ON r0.osm_id = a.osm_id
-  WHERE a.is_end AND NOT a.bridge
-) e
+         CASE WHEN e.at_start THEN 0 ELSE greatest(0, 1 - 15 / r.len_m) END,
+         CASE WHEN e.at_start THEN least(1, 15 / r.len_m) ELSE 1 END),
+       -- As wide as its own lanes or those it eases from, whichever is wider.
+       (greatest(abs(COALESCE(r.kerb_l, r.width / 2)), abs(COALESCE(r.kerb_r, r.width / 2)), abs(COALESCE(r.prev_kerb_l, 0)),
+                 abs(COALESCE(r.prev_kerb_r, 0)), abs(COALESCE(r.nxt_kerb_l, 0)), abs(COALESCE(r.nxt_kerb_r, 0))) + 1) * r.s,
+       'endcap=flat'), 4326)) as zone
+FROM onward e
 JOIN _rm_roads r ON r.osm_id = e.osm_id AND r.len_m > 0
 GROUP BY e.osm_id;
 CREATE INDEX ON _rm_deck_ends (osm_id);
@@ -2846,7 +2854,7 @@ SELECT m.kind, m.pattern, m.color, m.style, true, p.inside
 FROM _rm_deck_paint p JOIN road_markings_next m ON m.fid = p.fid
 WHERE NOT ST_IsEmpty(p.inside);
 UPDATE road_markings_next m SET geom = p.outside FROM _rm_deck_paint p WHERE m.fid = p.fid;
-DELETE FROM road_markings_next WHERE ST_IsEmpty(geom);
+DELETE FROM road_markings_next WHERE fid IN (SELECT fid FROM _rm_deck_paint) AND ST_IsEmpty(geom);
 ALTER TABLE road_markings_next DROP COLUMN way;
 
 -- ─── Swap ────────────────────────────────────────────────────────────────────
