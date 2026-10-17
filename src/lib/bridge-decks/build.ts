@@ -22,6 +22,7 @@ import {
   heightAt,
   inside,
   joinNeighbours,
+  paveGores,
   landing,
   LANDING,
   TERRAIN_SLACK,
@@ -544,6 +545,7 @@ export async function buildDecks(input: DeckInput, ground: Ground): Promise<Deck
   for (const s of solved) s.z = eased(s, input.onGround)
   // Easing moves twins a few centimetres apart; side by side, they meet exactly.
   joinNeighbours(solved, undefined, EASED)
+  paveGores(solved)
   const rows = piers(solved, input)
 
   const wiki = (s: Solved) => s.chain.ways.map(w => input.wikidata.get(w)).find(Boolean)
