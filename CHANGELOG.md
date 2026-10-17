@@ -10,6 +10,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.10.22] - 2026-10-17
+
 ### Fixed
 
 * **Search corrections work on a national import.** 0.10.21's corrections
