@@ -43,6 +43,25 @@ describe('buildDecks', () => {
     }
   })
 
+  it('runs on over a hollow at its end only as far as the next junction on the road beyond', async () => {
+    const hollow = { async load() {}, at: ([x]: Point) => (x > east(97)[0] && x < east(112)[0] ? 193 : 200) }
+    const build = (cross: boolean) => buildDecks(input({
+      ways: [way(1, 0, 100), { id: 2, points: [east(100), east(114)], kind: 'road', layer: 0, width: 8 }],
+      onGround: new Set([key(east(0)), key(east(100))]),
+      crossed: [
+        { kind: 'road', points: [east(-60), east(0)] },
+        { kind: 'road', points: [east(100), east(114)] },
+        { kind: 'road', points: [east(114), east(160)] },
+        ...(cross ? [{ kind: 'road' as const, points: [east(114, -40), east(114), east(114, 40)] }] : []),
+      ],
+    }), hollow)
+    const runOn = (deck: { caps: number[] | null }) => -Math.min(...(deck.caps ?? [0, 0, 0, 0]).slice(2))
+    const [open] = (await build(false)).filter(d => d.ways.includes(1))
+    const [junction] = (await build(true)).filter(d => d.ways.includes(1))
+    expect(runOn(open)).toBeGreaterThan(10)
+    expect(runOn(junction)).toBeLessThanOrEqual(14 - 5 + 0.5)
+  })
+
   it('a deck over another clears it, and a ramp rests on the deck it joins', async () => {
     const upper: Way = { id: 3, points: [east(100, -300), east(100, 300)], kind: 'road', layer: 2, width: 8 }
     const ramp: Way = { id: 9, points: [east(60, -80), east(60, -1)], kind: 'road', layer: 1, width: 6 }

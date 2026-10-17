@@ -281,25 +281,59 @@ type Landing = ReturnType<typeof landing>
 /** Least cosine between a deck's end and the way it reads the road beyond along. */
 const ONWARD_COS = Math.SQRT1_2
 
-export function beyond(points: Point[], end: 0 | 1, roads: Point[][] = [], road = true): Point[] {
+/**
+ * The way carrying on from a deck's end, from the end out: within about 45
+ * degrees of it, else straight on. Null for a road whose end meets ways but
+ * none carrying on, which is a junction.
+ */
+function carriedOn(points: Point[], end: 0 | 1, roads: Point[][], road: boolean): { path: Point[]; way: Point[] | null } | null {
   const [a, b] = end ? [points[points.length - 2], points[points.length - 1]] : [points[1], points[0]]
   const out: [number, number] = [b[0] - a[0], b[1] - a[1]]
   const scale = metresPerUnit(b[1])
-  let path: Point[] = [b, [b[0] + out[0] * 1e3, b[1] + out[1] * 1e3]]
-  let best = 0
-  for (const road of roads) {
-    const at = road.findIndex(p => Math.hypot(p[0] - b[0], p[1] - b[1]) * scale < 0.05)
+  const straight: Point[] = [b, [b[0] + out[0] * 1e3, b[1] + out[1] * 1e3]]
+  let [best, path, way] = [0, straight, null as Point[] | null]
+  for (const r of roads) {
+    const at = r.findIndex(p => Math.hypot(p[0] - b[0], p[1] - b[1]) * scale < 0.05)
     if (at < 0) continue
-    for (const run of [road.slice(at), road.slice(0, at + 1).reverse()]) {
+    for (const run of [r.slice(at), r.slice(0, at + 1).reverse()]) {
       if (run.length < 2) continue
       const [dx, dy] = [run[1][0] - b[0], run[1][1] - b[1]]
       const cos = (dx * out[0] + dy * out[1]) / ((Math.hypot(dx, dy) * Math.hypot(...out)) || 1)
-      if (cos > best) [best, path] = [cos, run]
+      if (cos > best) [best, path, way] = [cos, run, r]
     }
   }
-  // A road's end reads only a way carrying on within about 45 degrees, and nothing at a junction with none; a path reads straight on.
-  if (road && best < ONWARD_COS && (best > 0 || roads.some(r => r.some(p => Math.hypot(p[0] - b[0], p[1] - b[1]) * scale < 0.05)))) return []
-  if (best < ONWARD_COS) path = [b, [b[0] + out[0] * 1e3, b[1] + out[1] * 1e3]]
+  if (road && best < ONWARD_COS && (best > 0 || roads.some(r => r.some(p => Math.hypot(p[0] - b[0], p[1] - b[1]) * scale < 0.05)))) return null
+  return best < ONWARD_COS ? { path: straight, way: null } : { path, way }
+}
+
+/**
+ * Metres from a deck's end, along the road carrying on from it, to the first
+ * node another road or path meets it at, within LANDING.reach; Infinity where
+ * none does. A single way carrying straight on at a node is the same road.
+ */
+export function junctionAhead(points: Point[], end: 0 | 1, roads: Point[][] = [], road = true): number {
+  const run = carriedOn(points, end, roads, road)
+  if (!run?.way) return Infinity
+  const scale = metresPerUnit(run.path[0][1])
+  const near = (x: Point, q: Point) => Math.hypot(x[0] - q[0], x[1] - q[1]) * scale < 0.05
+  let [path, way, travelled] = [run.path, run.way, 0]
+  for (let k = 1; k < path.length && travelled < LANDING.reach; k++) {
+    const [p, q] = [path[k - 1], path[k]]
+    travelled += Math.hypot(q[0] - p[0], q[1] - p[1]) * scale
+    const others = roads.filter(r => r !== way && r.some(x => near(x, q)))
+    if (!others.length) continue
+    const next = k === path.length - 1 && others.length === 1 ? carriedOn([p, q], 1, others, road) : null
+    if (!next?.way) return travelled
+    ;[path, way, k] = [next.path, next.way, 0]
+  }
+  return Infinity
+}
+
+export function beyond(points: Point[], end: 0 | 1, roads: Point[][] = [], road = true): Point[] {
+  const run = carriedOn(points, end, roads, road)
+  if (!run) return []
+  const scale = metresPerUnit(run.path[0][1])
+  let path = run.path
   // A way that ends before the reach runs on straight.
   const [p, q] = [path[path.length - 2], path[path.length - 1]]
   path = [...path, [q[0] + (q[0] - p[0]) * 1e3, q[1] + (q[1] - p[1]) * 1e3]]
@@ -319,6 +353,9 @@ export function beyond(points: Point[], end: 0 | 1, roads: Point[][] = [], road 
   }
   return samples
 }
+
+/** Metres a deck's run-on stops short of a junction on the road beyond, about half a crossing street. */
+const JUNCTION_ROOM = 5
 
 /** Farthest, in metres, the road a deck runs on to may stray from the deck's own line before it is not where the deck runs. */
 const OFF_LINE = 2
@@ -407,7 +444,10 @@ async function groundUnder(shaped: Chain[], edges: Array<[Point[], Point[]]>, gr
       roads[k] = pts.map(read) as [number[], number[]]
       lands[k] = roads[k].map((r, end) => {
         const land = r.length ? landing(r, g[end ? g.length - 1 : 0]) : null
-        return land && offLine(shaped[k].points, end as 0 | 1, pts[end].slice(0, Math.round(land.run / LANDING.step))) <= OFF_LINE ? land : null
+        if (!land || offLine(shaped[k].points, end as 0 | 1, pts[end].slice(0, Math.round(land.run / LANDING.step))) > OFF_LINE) return null
+        // A deck runs on over a hollow only as far as the road's next junction: past it the ground is the junction's.
+        const junction = junctionAhead(shaped[k].points, end as 0 | 1, onward, shaped[k].kind === 'road') - JUNCTION_ROOM
+        return { ...land, run: Math.max(0, Math.min(land.run, junction)) }
       }) as [Landing, Landing]
     }
   }
