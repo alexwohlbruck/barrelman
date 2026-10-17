@@ -176,7 +176,14 @@ services:
 
   graphhopper:
     container_name: barrelman-graphhopper
-    image: israelhikingmap/graphhopper:latest
+    # Pinned, unlike MOTIS below. israelhikingmap/graphhopper:latest is a
+    # nightly 12.0-SNAPSHOT, and the 2026-10-16 build cannot build a graph at
+    # all — the import dies in "sort graph for fixed ordering" with
+    # ArrayIndexOutOfBoundsException: Index -1 — so a pull that moves :latest
+    # takes routing down with no re-import to recover it. This is the June
+    # snapshot the public deployment runs with graphhopper-config.yml. Move it
+    # after a test rebuild, never by pulling.
+    image: israelhikingmap/graphhopper@sha256:3e79eb33862028cfc58f9d6c162630b68638d6aad790b5a698c854dbbaa7fe32
     restart: unless-stopped
     logging: *default-logging
     # -i and -o must be passed explicitly; the entrypoint script defaults

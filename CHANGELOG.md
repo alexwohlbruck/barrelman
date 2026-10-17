@@ -10,6 +10,15 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Fixed
+
+* **GraphHopper is pinned to a build that works.** Its `:latest` image moved
+  to a nightly on 2026-10-16 that crashes while building the graph, so any
+  install that pulled it (or ran Watchtower) lost street routing with no way
+  back but an older image. `docker-compose.yml` now names the June build by
+  digest. To recover: `docker compose pull graphhopper`, then
+  `FORCE_REBUILD=1 scripts/rebuild-graphhopper.sh`.
+
 ## [0.10.21] - 2026-10-17
 
 ### Added
