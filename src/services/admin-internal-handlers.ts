@@ -17,6 +17,7 @@ import {
   runResolveParentContext,
   runResolveParentContextIncremental,
   runRebuildTsvectors,
+  runBuildSearchLexicon,
   runFullMigration,
   type AdminTaskResult,
 } from './admin.service'
@@ -105,6 +106,7 @@ export const INTERNAL_HANDLERS: Record<string, (log: LogFn) => Promise<void>> = 
   'admin:resolve-parent-context-incremental': async (log) =>
     reportTask(log, await runResolveParentContextIncremental()),
   'admin:rebuild-tsvectors': async (log) => reportTask(log, await runRebuildTsvectors()),
+  'admin:build-search-lexicon': async (log) => reportTask(log, await runBuildSearchLexicon()),
 
   'landmarks:import': async (log) => reportSkipped(log, await importLandmarks({ log })),
   'landmarks:import-full': async (log) => reportSkipped(log, await importLandmarks({ full: true, log })),

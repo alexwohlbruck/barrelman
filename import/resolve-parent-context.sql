@@ -54,7 +54,7 @@ SET parent_context = trim(
       coalesce(p.address->>'city', '') || ' ' ||
       coalesce(p.address->>'state', '') || ' ' ||
       coalesce(p.address->>'postcode', '') || ' ' ||
-      coalesce(sub.boundary_names, '')))
+      coalesce(sub.boundary_names, '')), p.tags)
 FROM (
   -- The name breaks ties: an extract clips a neighbouring boundary to the same
   -- outline as its own, and equal areas otherwise come out in any order.
@@ -82,7 +82,7 @@ SET parent_context = trim(
       coalesce(address->>'street', '') || ' ' ||
       coalesce(address->>'city', '') || ' ' ||
       coalesce(address->>'state', '') || ' ' ||
-      coalesce(address->>'postcode', '')))
+      coalesce(address->>'postcode', '')), tags)
 WHERE name IS NOT NULL
   AND parent_context IS NULL
   AND address IS NOT NULL;
@@ -92,7 +92,7 @@ WHERE name IS NOT NULL
 -- and categories). Only rows still NULL, so the three passes write each named
 -- row exactly once between them.
 UPDATE geo_places
-SET ts = build_ts(osm_type, name, names, name_abbrev, categories, parent_context)
+SET ts = build_ts(osm_type, name, names, name_abbrev, categories, parent_context, tags)
 WHERE name IS NOT NULL
   AND ts IS NULL;
 

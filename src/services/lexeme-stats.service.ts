@@ -93,7 +93,10 @@ export function estimateMatches(tsQueryText: string): MatchEstimate | null {
       const term = fold(prefix ? raw.slice(0, -2) : raw).trim()
       if (!term) continue
       let f = 0
-      if (prefix && term.length < 3) f = 1
+      // A phrase ("new <-> york") matches no more rows than its rarest word,
+      // and no fewer: the words of a place name travel together.
+      if (term.includes('<->')) f = Math.min(...term.split('<->').map((w) => s.freq.get(w.trim()) ?? 0))
+      else if (prefix && term.length < 3) f = 1
       else if (prefix) { for (const [lexeme, lf] of s.freq) if (lexeme.startsWith(term)) f += lf }
       // Not among the most common words, so rarer than all of them.
       else f = s.freq.get(term) ?? 0

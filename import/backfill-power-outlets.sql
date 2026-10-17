@@ -62,7 +62,7 @@ SET categories = CASE WHEN pg_temp.offers_power_outlet(g.tags)
                        CASE WHEN pg_temp.offers_power_outlet(g.tags)
                             THEN array_append(g.categories, 'power/outlet')
                             ELSE array_remove(g.categories, 'power/outlet') END,
-                       g.parent_context)
+                       g.parent_context, g.tags)
          END
 WHERE coalesce(g.tags->>'power', '') <> 'outlet'
   AND pg_temp.offers_power_outlet(g.tags)

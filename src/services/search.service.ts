@@ -9,6 +9,7 @@ import { estimateMatches } from './lexeme-stats.service'
 import { executeWithin } from '../lib/bounded-query'
 import { reconcileTransitHits } from '../lib/transit-search'
 import { buildTsQueryText, isStreetQuery } from '../lib/search-query'
+import { correctionsFor } from './search-lexicon.service'
 import { envNumber } from '../config/env'
 
 // ── Autocomplete fast path ──────────────────────────────────────────────────
@@ -139,6 +140,13 @@ const AUTOCOMPLETE_RETRY_TIMEOUT_MS = 800
 /** Statement timeout for the abbreviation layer in typeahead. An abbreviation
  *  that names few places answers in ~20ms. */
 const AUTOCOMPLETE_ABBREV_TIMEOUT_MS = 300
+
+/** Statement timeout for the corrected FTS pass (see search-lexicon.service).
+ *  It is the same query as the first pass with a few rare spellings added. */
+const CORRECTED_FTS_TIMEOUT_MS = 800
+
+/** A match that needed a corrected spelling ranks below one that didn't. */
+const CORRECTED_RANK = 0.8
 
 /** Pelias budget for typeahead that doesn't look like an address. Healthy
  *  answers measured 15ms at the median and 67ms at p90. */
@@ -456,25 +464,27 @@ export async function searchPlaces(
     // ordering, over-fetched pool. `local: false` is the original global shape.
     // Note the ORDER BY is the only thing that changes about ranking — text_rank
     // is still projected identically, and the JS re-rank below scores on it.
-    const ftsSql = (local: boolean, boxFilter = autocompleteBoxFilter, tsExpr = tsQueryExpr) => sql`
+    const ftsSql = (local: boolean, boxFilter = autocompleteBoxFilter, tsExpr = tsQueryExpr, rankExpr = ftsRankExpr) => sql`
       SELECT
         id, osm_type, osm_id, name, name_abbrev, categories, tags,
         address, hours, phones, websites, geom_type,
         ST_AsGeoJSON(centroid)::jsonb AS geometry,
-        ${ftsRankExpr} AS text_rank
+        ${rankExpr} AS text_rank
         ${distanceSelect}
       FROM geo_places
       WHERE ts @@ ${tsExpr}
       ${local ? boxFilter : textSearchSpatialFilter}
       ${categoryFilter}
       ${tagsFilter}
-      ${local ? sql`ORDER BY centroid <-> ${locationPoint}` : proximityDecay(ftsRankExpr)}
+      ${local ? sql`ORDER BY centroid <-> ${locationPoint}` : proximityDecay(rankExpr)}
       LIMIT ${local ? AUTOCOMPLETE_POOL : limit}
     `
     const ftsQuery = (local: boolean) => db.execute(ftsSql(local)).catch(() => [] as any[])
 
     // The autocomplete fast path, staged by density (see LOCAL_PROBE_ROWS).
-    const localFts = async (): Promise<any[]> => {
+    const localFts = async (
+      tsText = tsQueryText, tsExpr = tsQueryExpr, rankExpr = ftsRankExpr,
+    ): Promise<any[]> => {
       // The probe filters an index-ordered walk, so it must not carry a ts
       // predicate the planner could turn into a bitmap instead.
       const probe = await executeWithin(sql`
@@ -482,7 +492,7 @@ export async function searchPlaces(
           id, osm_type, osm_id, name, name_abbrev, categories, tags,
           address, hours, phones, websites, geom_type,
           ST_AsGeoJSON(centroid)::jsonb AS geometry,
-          ${ftsRankExpr} AS text_rank
+          ${rankExpr} AS text_rank
           ${distanceSelect}
         FROM (
           SELECT * FROM geo_places
@@ -490,21 +500,21 @@ export async function searchPlaces(
           ORDER BY centroid <-> ${locationPoint}
           LIMIT ${LOCAL_PROBE_ROWS}
         ) nearest
-        WHERE ts @@ ${tsQueryExpr}
+        WHERE ts @@ ${tsExpr}
         ${categoryFilter}
         ${tagsFilter}
         LIMIT ${AUTOCOMPLETE_POOL}
       `, LOCAL_PROBE_TIMEOUT_MS)
       if (probe.length >= LOCAL_PROBE_ENOUGH) return probe
 
-      if (!indexCanNarrow(tsQueryText || sanitizedQuery)) return probe
+      if (!indexCanNarrow(tsText || sanitizedQuery)) return probe
 
       const near = await executeWithin(
-        ftsSql(true, sql`AND centroid && ST_Expand(${locationPoint}::geometry, ${LOCAL_NEAR_RADIUS_M / 111320})`),
+        ftsSql(true, sql`AND centroid && ST_Expand(${locationPoint}::geometry, ${LOCAL_NEAR_RADIUS_M / 111320})`, tsExpr, rankExpr),
         LOCAL_INDEX_TIMEOUT_MS,
       )
       if (near.length >= LOCAL_NEAR_ENOUGH) return [...probe, ...near]
-      const wide = await executeWithin(ftsSql(true), LOCAL_INDEX_TIMEOUT_MS)
+      const wide = await executeWithin(ftsSql(true, autocompleteBoxFilter, tsExpr, rankExpr), LOCAL_INDEX_TIMEOUT_MS)
       // Duplicates across the stages collapse in the merge's id dedupe.
       return [...probe, ...near, ...wide]
     }
@@ -697,6 +707,39 @@ export async function searchPlaces(
           places.length > 0 && !localAutocomplete ? withBudget(ftsPromise, LOCALITY_FTS_BUDGET_MS) : ftsPromise),
         codesPromise, nameAbbrevPromise, transitRoutesPromise, transitStopsPromise, localitiesPromise])
     let trigramRows: any[] = []
+    let correctedRows: any[] = []
+
+    // A trailing one- or two-letter word ("ocean isle b") is dropped from a
+    // second pass: as a prefix it expands to millions of rows nationwide, and
+    // the words before it already say where the user is headed.
+    const retryWords = queryWords.length > 1 && queryWords[queryWords.length - 1].length < 3
+      ? queryWords.slice(0, -1)
+      : queryWords
+    const retryPrefix = retryWords === queryWords
+    // Submitted words are finished, so a short last word stays: "pier 17"
+    // corrected without its 17 would match every pier.
+    const correctedWords = autocomplete ? retryWords : queryWords
+
+    // The FTS pass again with each word's near-spellings from the index added
+    // ("warehouse" → also "wearhouse"; see search-lexicon.service.ts), ranked
+    // a notch below an exact match. Empty when no word has a correction, so a
+    // query of correctly spelled words costs only the (cached) lookup.
+    const correctedFts = async (local: boolean): Promise<any[]> => {
+      const fixes = await correctionsFor(correctedWords)
+      if (fixes.size === 0) return []
+      const text = buildTsQueryText(correctedWords, autocomplete && correctedWords === queryWords, fixes)
+      if (!text) return []
+      const expr = sql`to_tsquery('simple', unaccent(${text}))`
+      const rank = sql`(${ftsRankExpr} * ${CORRECTED_RANK})`
+      if (indexCanNarrow(text)) {
+        // One index search, not localFts's staged probe → 5 km → box: the
+        // stages are for words dense near the viewport, and the exact pass
+        // has just shown these aren't. Saves two round trips.
+        return executeWithin(ftsSql(local, undefined, expr, rank), local ? LOCAL_INDEX_TIMEOUT_MS : CORRECTED_FTS_TIMEOUT_MS)
+      }
+      // A correction to a common word: only the nearest rows are affordable.
+      return local ? localFts(text, expr, rank) : []
+    }
 
     // Autocomplete retry: the local pass only sees the viewport, so a place the
     // user is deliberately reaching for in another city would come back empty.
@@ -716,32 +759,34 @@ export async function searchPlaces(
       (ftsRows as any[]).length + (codesRows as any[]).length + (nameAbbrevRows as any[]).length +
         (localityRows as any[]).length < AUTOCOMPLETE_FALLBACK_MIN
     ) {
-      // A trailing one- or two-letter word ("ocean isle b") is dropped first:
-      // as a prefix it expands to millions of rows nationwide, and the words
-      // before it already say where the user is headed. If what remains is
-      // still too common for the index, there is no cheap global answer, and
-      // the locality layer's places stand alone.
-      const retryWords = queryWords.length > 1 && queryWords[queryWords.length - 1].length < 3
-        ? queryWords.slice(0, -1)
-        : queryWords
-      const retryTsText = buildTsQueryText(retryWords, retryWords === queryWords)
-      if (retryTsText && indexCanNarrow(retryTsText)) {
-        const globalFts = await executeWithin(
-          ftsSql(false, undefined, sql`to_tsquery('simple', unaccent(${retryTsText}))`),
-          AUTOCOMPLETE_RETRY_TIMEOUT_MS,
-        )
-        // Append rather than replace: the global pass is a superset in
-        // principle, but it ranks by text_rank and so can drop a nearby hit the
-        // local pass found. The dedup in the merge below collapses the overlap.
-        ftsRows = [...(ftsRows as any[]), ...globalFts]
-      }
+      // Two passes side by side: the same words everywhere, for a place in
+      // another city, and corrected spellings nearby, for a typo. If the words
+      // are too common for the index there is no cheap global answer, and the
+      // locality layer's places stand alone.
+      const retryTsText = buildTsQueryText(retryWords, retryPrefix)
+      const [globalFts, corrected] = await Promise.all([
+        retryTsText && indexCanNarrow(retryTsText)
+          ? executeWithin(
+              ftsSql(false, undefined, sql`to_tsquery('simple', unaccent(${retryTsText}))`),
+              AUTOCOMPLETE_RETRY_TIMEOUT_MS,
+            )
+          : Promise.resolve([] as any[]),
+        correctedFts(true),
+      ])
+      // Append rather than replace: the global pass is a superset in
+      // principle, but it ranks by text_rank and so can drop a nearby hit the
+      // local pass found. The dedup in the merge below collapses the overlap.
+      ftsRows = [...(ftsRows as any[]), ...globalFts]
+      correctedRows = corrected
     }
 
-    // The deferred typo-tolerance pass promised above. The precise layers have
-    // answered by now, so we know whether there is anything left to fill: if
-    // they already produced `limit` distinct rows, trigram could not add one
-    // that survives the cap and the scan would be pure latency.
-    if (runTrigram) {
+    // The deferred typo-tolerance passes promised above. The precise layers
+    // have answered by now, so we know whether there is anything left to fill:
+    // if they already produced `limit` distinct rows, neither pass could add
+    // one that survives the cap and would be pure latency. Corrected spellings
+    // run alongside trigram, which takes longer, so they add no wait.
+    const runCorrected = !localAutocomplete && !addressLike
+    if (runTrigram || runCorrected) {
       const precise = new Set<string>()
       for (const row of [
         ...(codesRows as any[]),
@@ -759,17 +804,17 @@ export async function searchPlaces(
         // already spent waiting on FTS counts against it — "new york" used to
         // wait 2.5s for FTS and then 2.5s more here.
         const remaining = SEARCH_TRIGRAM_BUDGET_MS - (performance.now() - startedAt)
-        if (SEARCH_TRIGRAM_BUDGET_MS <= 0) {
-          trigramRows = await executeWithin(trigramSql(), 0)
-        } else if (remaining >= TRIGRAM_MIN_REMAINING_MS) {
-          trigramRows = await executeWithin(trigramSql(), remaining)
-        }
+        const trigram = !runTrigram ? Promise.resolve([] as any[])
+          : SEARCH_TRIGRAM_BUDGET_MS <= 0 ? executeWithin(trigramSql(), 0)
+          : remaining >= TRIGRAM_MIN_REMAINING_MS ? executeWithin(trigramSql(), remaining)
+          : Promise.resolve([] as any[])
+        ;[trigramRows, correctedRows] = await Promise.all([trigram, runCorrected ? correctedFts(false) : []])
       }
     }
 
     // Merge, deduplicating in priority order: exact-name localities > codes >
     // other localities > short-name transit routes > abbreviation > FTS >
-    // other transit routes > trigram > transit stops. Transit ids can't
+    // corrected FTS > other transit routes > trigram > transit stops. Transit ids can't
     // collide with OSM ids, so their position only decides who survives the cap.
     // Codes and locality hits are pinned — exempt from proximity re-ranking. An
     // exact IATA/ICAO code is definitive regardless of distance, and a locality
@@ -792,7 +837,7 @@ export async function searchPlaces(
     const strongRoutes = (transitRouteRows as any[]).filter((r: any) => (r.text_rank ?? 0) >= STRONG_ROUTE_RANK)
     const weakRoutes = (transitRouteRows as any[]).filter((r: any) => (r.text_rank ?? 0) < STRONG_ROUTE_RANK)
     results = []
-    for (const row of [...exactLocalities, ...(codesRows as any[]), ...(localityRows as any[]), ...strongRoutes, ...(nameAbbrevRows as any[]), ...(ftsRows as any[]), ...weakRoutes, ...(trigramRows as any[]), ...(transitStopRows as any[])]) {
+    for (const row of [...exactLocalities, ...(codesRows as any[]), ...(localityRows as any[]), ...strongRoutes, ...(nameAbbrevRows as any[]), ...(ftsRows as any[]), ...correctedRows, ...weakRoutes, ...(trigramRows as any[]), ...(transitStopRows as any[])]) {
       const r = row as any
       if (!seen.has(r.id)) {
         seen.add(r.id)

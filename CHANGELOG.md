@@ -12,6 +12,24 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ### Added
 
+* **Search corrects misspellings.** When the words as typed find too little,
+  each one is matched against the words the index actually holds, one edit
+  away (a letter dropped, added, changed, swapped or moved), and the search
+  runs again with those spellings. "men's warehouse flatbush" now finds Men's
+  Wearhouse, "prospect prak" Prospect Park and "starbuks" Starbucks, in
+  typeahead too. Well-spelled searches never reach this step, so they cost
+  what they did. The word list is a new table, `search_lexicon`, built at the
+  end of an import, by the API on first start where it is missing, and on
+  demand with the **Rebuild Search Lexicon** console task (also a seeded
+  weekly schedule, off by default).
+* **Search understands everyday words for what a place is.** "store" matches
+  shops, "clothing" matches `shop=clothes`, "grocery" supermarkets, "nyc" New
+  York, and a word matches its plural and singular ("suit" finds `suits`).
+  The `brand`, `clothes`, `sport` and `healthcare:speciality` tags are now
+  searchable too, so "suits store nyc" finds a shop tagged `clothes=suits`.
+  On upgrade, the API rewrites the search text of the rows carrying those
+  tags in the background (about 2% of named places, found in one pass).
+
 * **Car-free roads are paved and painted.** Pedestrian streets, park drives
   and bike paths mapped like roads (with `lanes`, a `cycleway:*=lane|track`
   side, or a bikeway 4 m or wider) get a road surface at their width, the bike
