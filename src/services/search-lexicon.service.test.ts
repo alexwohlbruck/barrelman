@@ -39,13 +39,18 @@ describe('editDistance', () => {
 })
 
 describe('pickCorrections', () => {
-  test('nearest first, then the most used, within the length budget', () => {
+  test('the most used first, so the data\'s own typos do not crowd out the word meant', () => {
+    // Counts from the US lexicon: one-edit misspellings in the data outnumbered
+    // the slots, and "wearhouse" (two edits) was never tried.
     const candidates = [
-      { word: 'warehouses', n: 50 },
-      { word: 'wearhouse', n: 600 },
-      { word: 'warehouse', n: 9000 },
+      { word: 'warehouse', n: 10645 },
+      { word: 'wearhouse', n: 505 },
+      { word: 'warehouses', n: 89 },
+      { word: 'warhouse', n: 8 },
+      { word: 'wharehouse', n: 8 },
+      { word: 'warehous', n: 3 },
     ]
-    expect(pickCorrections('warehouse', candidates)).toEqual(['warehouses', 'wearhouse'])
+    expect(pickCorrections('warehouse', candidates)).toEqual(['wearhouse', 'warehouses', 'warhouse'])
   })
 
   test('a short word may not stray two edits', () => {
