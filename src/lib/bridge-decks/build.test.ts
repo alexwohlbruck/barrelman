@@ -43,7 +43,7 @@ describe('buildDecks', () => {
     }
   })
 
-  it('runs on over a hollow at its end only as far as the next junction on the road beyond', async () => {
+  it('runs on over a hollow at its end only where the road beyond reaches no junction first', async () => {
     const hollow = { async load() {}, at: ([x]: Point) => (x > east(97)[0] && x < east(112)[0] ? 193 : 200) }
     const build = (cross: boolean) => buildDecks(input({
       ways: [way(1, 0, 100), { id: 2, points: [east(100), east(114)], kind: 'road', layer: 0, width: 8 }],
@@ -59,7 +59,7 @@ describe('buildDecks', () => {
     const [open] = (await build(false)).filter(d => d.ways.includes(1))
     const [junction] = (await build(true)).filter(d => d.ways.includes(1))
     expect(runOn(open)).toBeGreaterThan(10)
-    expect(runOn(junction)).toBeLessThanOrEqual(14 - 5 + 0.5)
+    expect(runOn(junction)).toBeLessThan(1)
   })
 
   it('a deck over another clears it, and a ramp rests on the deck it joins', async () => {

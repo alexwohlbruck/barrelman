@@ -354,7 +354,7 @@ export function beyond(points: Point[], end: 0 | 1, roads: Point[][] = [], road 
   return samples
 }
 
-/** Metres a deck's run-on stops short of a junction on the road beyond, about half a crossing street. */
+/** Metres a deck's run-on must stop short of a junction on the road beyond, about half a crossing street. */
 const JUNCTION_ROOM = 5
 
 /** Farthest, in metres, the road a deck runs on to may stray from the deck's own line before it is not where the deck runs. */
@@ -445,9 +445,9 @@ async function groundUnder(shaped: Chain[], edges: Array<[Point[], Point[]]>, gr
       lands[k] = roads[k].map((r, end) => {
         const land = r.length ? landing(r, g[end ? g.length - 1 : 0]) : null
         if (!land || offLine(shaped[k].points, end as 0 | 1, pts[end].slice(0, Math.round(land.run / LANDING.step))) > OFF_LINE) return null
-        // A deck runs on over a hollow only as far as the road's next junction: past it the ground is the junction's.
+        // A hollow reaching past the road's next junction is the junction's ground: the deck comes down to it rather than run on over it.
         const junction = junctionAhead(shaped[k].points, end as 0 | 1, onward, shaped[k].kind === 'road') - JUNCTION_ROOM
-        return { ...land, run: Math.max(0, Math.min(land.run, junction)) }
+        return land.run <= junction ? land : null
       }) as [Landing, Landing]
     }
   }
