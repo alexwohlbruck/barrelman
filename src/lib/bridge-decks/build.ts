@@ -39,7 +39,7 @@ import {
   type Way,
 } from './profile'
 import { inOutline, shapeDecks, type Outline } from './shape'
-import { bentPoints, blocked, nearestFree, WAY_HALF, type Obstacles } from './supports'
+import { bentPoints, blocked, nearestFree, obstacles, wayHalf, type Obstacles } from './supports'
 
 /** Metres between height samples. */
 export const STEP = 6
@@ -76,8 +76,8 @@ export type DeckInput = {
   crossed: Crossed[]
   /** Water areas, as outer rings. */
   water: Point[][]
-  /** Outlines of the carriageways on the ground the decks pass over, which supports keep off. */
-  surfaces?: Point[][]
+  /** Carriageways on the ground the decks pass over, outer ring then holes, which supports keep off. */
+  surfaces?: Point[][][]
   /** A wikidata id per way, where the bridge is tagged with one. */
   wikidata: Map<number, string>
 }
@@ -222,15 +222,15 @@ function piers(solved: Solved[], input: DeckInput): number[][] {
   const out = solved.map(() => [] as number[])
   const order = solved.map((_, k) => k).sort((a, b) => solved[b].d[solved[b].d.length - 1] - solved[a].d[solved[a].d.length - 1])
   const high = (s: Solved, at: number) => heightAt(s.d, s.z, at) - heightAt(s.d, s.g, at) >= PIER_MIN
-  const ways = input.crossed.flatMap(c => (c.kind === 'water' ? [] : [{ kind: c.kind, points: c.points, half: c.half ?? WAY_HALF[c.kind] }]))
+  const ground = obstacles(
+    input.crossed.flatMap(c => (c.kind === 'water' ? [] : [{ kind: c.kind, points: c.points, half: c.half ?? wayHalf(c.kind, null) }])),
+    input.surfaces ?? [],
+    solved.map(o => ({ points: o.chain.points, half: Math.max(...o.chain.edges) })),
+  )
   for (const [n, k] of order.entries()) {
     const s = solved[k]
     const total = s.d[s.d.length - 1]
-    const below: Obstacles = {
-      ways,
-      surfaces: input.surfaces ?? [],
-      decks: solved.filter(o => o.chain.layer < s.chain.layer).map(o => ({ points: o.chain.points, half: Math.max(...o.chain.edges) })),
-    }
+    const below: Obstacles = { ...ground, decks: ground.decks.filter((_, j) => solved[j].chain.layer < s.chain.layer) }
     const fits = (at: number) => high(s, at) && !blocked(bentPoints(s.chain, s.d, at), below)
     const shared: number[] = []
     for (const j of order.slice(0, n)) {
@@ -250,9 +250,26 @@ function piers(solved: Solved[], input: DeckInput): number[][] {
       const free = nearestFree(at, total, PIER_SPACING / 2 - 1, fits)
       if (free !== null && !shared.some(x => Math.abs(x - free) < PIER_SPACING / 2)) shared.push(free)
     }
+    // A long span left without piers where everything below was taken gets one wherever its middle allows.
+    for (let gap = longestGap(shared, total); gap && gap.length > 2 * PIER_SPACING; gap = longestGap(shared, total)) {
+      const free = nearestFree(gap.middle, total, gap.length / 2 - PIER_SPACING / 2, fits)
+      if (free === null) break
+      shared.push(free)
+    }
     out[k] = shared.sort((a, b) => a - b).map(x => Math.round(x * 10) / 10)
   }
   return out
+}
+
+/** The longest stretch of a deck between its piers or its ends, and its middle, in metres along it. */
+function longestGap(piers: number[], total: number): { length: number; middle: number } | null {
+  const marks = [0, ...[...piers].sort((a, b) => a - b), total]
+  let best: { length: number; middle: number } | null = null
+  for (let i = 1; i < marks.length; i++) {
+    const length = marks[i] - marks[i - 1]
+    if (!best || length > best.length) best = { length, middle: (marks[i] + marks[i - 1]) / 2 }
+  }
+  return best
 }
 
 type Landing = ReturnType<typeof landing>

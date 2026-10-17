@@ -33,7 +33,7 @@ describe('buildDecks', () => {
       ways: [way(7, 0, 300)],
       onGround: new Set([key(east(0)), key(east(300))]),
       crossed: [{ kind: 'road', points: [east(135, -30), east(135, 30)], half: 4 }, { kind: 'rail', points: [east(75, -30), east(75, 30)] }],
-      surfaces: [[east(193, -20), east(197, -20), east(197, 20), east(193, 20), east(193, -20)]],
+      surfaces: [[[east(193, -20), east(197, -20), east(197, 20), east(193, 20), east(193, -20)]]],
     }), ground(200))
     expect(deck.piers.length).toBeGreaterThan(3)
     for (const at of deck.piers) {

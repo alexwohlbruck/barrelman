@@ -8,7 +8,7 @@ import { beside, box, covers, grow, inside, meet, metresPerUnit, sideAt, type Bo
 /** Room a support keeps from the edge of what it stands beside, in metres. */
 export const SUPPORT_ROOM = { road: 1, rail: 2.5, path: 0.5 } as const
 /** Half the width of a way below when its tags do not say, in metres. */
-export const WAY_HALF = { road: 4, rail: 2, path: 1.5 } as const
+const WAY_HALF = { road: 4, rail: 2, path: 1.5 } as const
 /** Metres between the points a bent is tested at, across and along. */
 const PROBE = 1
 /** How far a bent reaches along the deck either side of its line: its cap, and the columns under it. */
@@ -19,14 +19,29 @@ const END_ROOM = 3
 /** A way on the ground under the decks, with half its width. */
 export type Below = { kind: keyof typeof SUPPORT_ROOM; points: Point[]; half: number }
 
-/** What supports keep clear of: ways below, carriageway outlines on the ground, and the decks beneath. */
-export type Obstacles = { ways: Below[]; surfaces: Point[][]; decks: Array<{ points: Point[]; half: number }> }
+/** What supports keep clear of, each with the box within which it reaches: ways below, carriageways on the ground (outer ring, then holes), and the decks beneath. */
+export type Obstacles = {
+  ways: Array<Below & { reach: Box }>
+  surfaces: Array<{ rings: Point[][]; reach: Box }>
+  decks: Array<{ points: Point[]; half: number; reach: Box }>
+}
 
-/** Half a way's width from its tags: `width`, else its lanes, else its kind's usual. */
-export function wayHalf(kind: Below['kind'], tags: { width?: string | null; lanes?: string | null }): number {
-  const width = Number.parseFloat(tags.width ?? '')
-  if (Number.isFinite(width) && width > 0) return width / 2
-  const lanes = Number.parseInt(tags.lanes ?? '', 10)
+/** Obstacles with their boxes worked out once. */
+export function obstacles(ways: Below[], surfaces: Point[][][], decks: Array<{ points: Point[]; half: number }>): Obstacles {
+  return {
+    ways: ways.map(w => ({ ...w, reach: grow(box(w.points), w.half + SUPPORT_ROOM[w.kind]) })),
+    surfaces: surfaces.map(rings => ({ rings, reach: grow(box(rings[0]), SUPPORT_ROOM.road) })),
+    decks: decks.map(d => ({ ...d, reach: grow(box(d.points), d.half + SUPPORT_ROOM.road) })),
+  }
+}
+
+/** Whether a point lies in a polygon: inside its outer ring and none of its holes. */
+const inPolygon = (q: Point, rings: Point[][]) => inside(q, rings[0]) && !rings.slice(1).some(h => inside(q, h))
+
+/** Half a way's width: its tagged width in metres, else its lanes, else its kind's usual. */
+export function wayHalf(kind: Below['kind'], width: number | null, lanesTag: string | null = null): number {
+  if (width !== null && width > 0) return width / 2
+  const lanes = Number.parseInt(lanesTag ?? '', 10)
   if (kind === 'road' && Number.isFinite(lanes) && lanes > 0) return lanes * 1.75 + 0.5
   return WAY_HALF[kind]
 }
@@ -54,19 +69,12 @@ export function bentPoints(chain: Pick<Chain, 'points' | 'edges' | 'sides'>, d: 
 export function blocked(points: Point[], obstacles: Obstacles): boolean {
   if (!points.length) return false
   const own: Box = box(points)
-  for (const w of obstacles.ways) {
-    const reach = w.half + SUPPORT_ROOM[w.kind]
-    if (!meet(grow(box(w.points), reach), own)) continue
-    if (points.some(q => beside(w.points, q).distance < reach)) return true
-  }
-  for (const ring of obstacles.surfaces) {
-    const b = grow(box(ring), SUPPORT_ROOM.road)
-    if (meet(b, own) && points.some(q => covers(b, q) && inside(q, ring))) return true
-  }
-  for (const deck of obstacles.decks) {
-    const reach = deck.half + SUPPORT_ROOM.road
-    if (meet(grow(box(deck.points), reach), own) && points.some(q => beside(deck.points, q).distance < reach)) return true
-  }
+  for (const w of obstacles.ways)
+    if (meet(w.reach, own) && points.some(q => beside(w.points, q).distance < w.half + SUPPORT_ROOM[w.kind])) return true
+  for (const s of obstacles.surfaces)
+    if (meet(s.reach, own) && points.some(q => covers(s.reach, q) && inPolygon(q, s.rings))) return true
+  for (const d of obstacles.decks)
+    if (meet(d.reach, own) && points.some(q => beside(d.points, q).distance < d.half + SUPPORT_ROOM.road)) return true
   return false
 }
 

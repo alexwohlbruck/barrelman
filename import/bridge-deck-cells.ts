@@ -43,6 +43,9 @@ const WATER: Array<[string, string]> = [['natural', 'water'], ['waterway', 'rive
 const anyTag = (sql: Sql, pairs: Array<[string, string]>) =>
   pairs.map(([k, v]) => sql`g.tags->>${k} = ${v}`).reduce((a, b) => sql`${a} OR ${b}`)
 
+/** How far from a deck's way a carriageway on the ground is read for its supports to keep off, in degrees (about 20 m). */
+const SURFACE_REACH_DEG = 0.0002
+
 /** Decks per INSERT: one statement per batch rather than a round trip per deck. */
 const INSERT_BATCH = 500
 
@@ -159,19 +162,20 @@ export async function inputFor(sql: Sql, rows: Row[]): Promise<DeckInput> {
   const crossed: Crossed[] = crossedRows.flatMap(r => r.coords.map(line => ({
     kind: r.kind,
     points: line.map(([lng, lat]) => mercator(lng, lat)),
-    ...(r.kind === 'water' ? {} : { half: wayHalf(r.kind, r) }),
+    ...(r.kind === 'water' ? {} : { half: wayHalf(r.kind, metres(r.width), r.lanes) }),
   })))
   // Carriageways on the ground a deck's way passes over, which its supports keep off.
-  const surfaceRows: Array<{ coords: number[][] }> = surfaces
+  // Within a wide deck's half width of its way, so a road under one edge is found too; holes kept, as medians.
+  const surfaceRows: Array<{ coords: number[][][] }> = surfaces
     ? await sql`
       WITH pieces AS MATERIALIZED (
         SELECT ST_Subdivide(geom, 8) AS piece FROM geo_places WHERE osm_type = 'W' AND osm_id = ANY(${ids}::bigint[]) AND geom_type = 'line'),
       met AS (
-        SELECT DISTINCT ON (s.ctid) s.geom FROM pieces JOIN road_surfaces s ON s.geom && piece AND ST_Intersects(s.geom, piece)
+        SELECT DISTINCT ON (s.fid) s.geom FROM pieces JOIN road_surfaces s ON ST_DWithin(s.geom, piece, ${SURFACE_REACH_DEG})
         WHERE NOT s.bridge AND COALESCE(s.kind, '') <> 'island')
-      SELECT ST_AsGeoJSON(ST_ExteriorRing((ST_Dump(geom)).geom))::json->'coordinates' AS coords FROM met`
+      SELECT ST_AsGeoJSON((ST_Dump(geom)).geom)::json->'coordinates' AS coords FROM met`
     : []
-  const groundSurfaces = surfaceRows.map(r => r.coords.map(([lng, lat]) => mercator(lng, lat)))
+  const groundSurfaces = surfaceRows.map(r => r.coords.map(ring => ring.map(([lng, lat]) => mercator(lng, lat))))
 
   // Clipped to the box rather than intersected with it: a river is one huge
   // polygon, and only whether a deck's samples lie in it is asked.
