@@ -10,6 +10,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.10.21] - 2026-10-17
+
 ### Added
 
 * **Search corrects misspellings.** When the words as typed find too little,
