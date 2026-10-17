@@ -377,3 +377,33 @@ describe('closeVerges', () => {
   })
 })
 
+describe('gores between ramps', () => {
+  const main = (): Chain => ({ ways: [1], points: resample([east(0), east(120)], 6), kind: 'road', layer: 1, edges: [4, 4] })
+  const off = (north: number, ways: number): Chain => ({ ways: [ways], points: resample([east(30), east(120, north)], 6), kind: 'road', layer: 1, edges: [4, 4] })
+
+  it('never pairs ramps leaving a deck off its two sides', () => {
+    const [m, l, r] = [main(), off(15, 2), off(-15, 3)]
+    const M = { chain: m, z: m.points.map(() => 100) }
+    const L = { chain: l, z: l.points.map(() => 100), on: [{ deck: M, at: l.points[0] }] }
+    const alone = off(15, 2)
+    paveGores([M, L, { chain: r, z: r.points.map(() => 100), on: [{ deck: M, at: r.points[0] }] }])
+    const M2 = { chain: main(), z: m.points.map(() => 100) }
+    paveGores([M2, { chain: alone, z: alone.points.map(() => 100), on: [{ deck: M2, at: alone.points[0] }] }])
+    expect(l.sides ?? null).toEqual(alone.sides ?? null)
+  })
+
+  it('holds the ramps of a split together or not at all', () => {
+    // Two ramps leaving the same side of one deck: the steep one cannot be held, so neither is.
+    const m = main()
+    const M = { chain: m, z: m.points.map(() => 100) }
+    const [a, b] = [off(30, 2), off(24, 3)]
+    const da = along(a.points), db = along(b.points)
+    const A = { chain: a, z: da.map(x => 100 + x * 0.1), on: [{ deck: M, at: a.points[0] }] }
+    const B = { chain: b, z: db.map(x => 100 + x * 0.02), on: [{ deck: M, at: b.points[0] }] }
+    const [za, zb] = [A.z.slice(), B.z.slice()]
+    holdGores([M, A, B])
+    expect(A.z).toEqual(za)
+    expect(B.z).toEqual(zb)
+  })
+})
+

@@ -1702,7 +1702,7 @@ CROSS JOIN LATERAL (
            ST_Buffer(b.pt, nose.at * b.s, 16)), ST_Union(b.ca, b.cb))) as g
 ) w
 WHERE nose.at IS NOT NULL AND ST_Length(b.lb) > 0 AND NOT ST_IsEmpty(w.g) AND ST_Area(ST_CollectionExtract(w.g, 3)) > 4 * b.s * b.s
-  AND NOT EXISTS (SELECT 1 FROM _rm_paint_areas m WHERE m.g && w.g AND ST_Intersects(m.g, w.g));
+  AND NOT EXISTS (SELECT 1 FROM _rm_paint_areas m WHERE m.bridge = b.bridge AND m.g && w.g AND ST_Intersects(m.g, ST_PointOnSurface(w.g)));
 CREATE INDEX ON _rm_paint_areas USING gist (g);
 ANALYZE _rm_paint_areas;
 

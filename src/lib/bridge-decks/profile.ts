@@ -647,6 +647,14 @@ function gorePairs(decks: GoreDeck[]): Array<{ A: GoreDeck; B: GoreDeck; order: 
     const len = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1
     return [(b[0] - a[0]) / len, (b[1] - a[1]) / len]
   }
+  // Which side of the deck it leaves a ramp heads off to, by its sample beyond the rest point; at the deck's end, where it divides, either.
+  const sideOf = (deck: unknown, at: Point, D: GoreDeck, order: number[]) => {
+    const B = decks.find(X => X === deck)
+    if (!B) return true
+    const ends = [B.chain.points[0], B.chain.points[B.chain.points.length - 1]]
+    if (ends.some(e => Math.hypot(e[0] - at[0], e[1] - at[1]) * metresPerUnit(at[1]) <= SPLIT_REACH)) return true
+    return beside(B.chain.points, D.chain.points[order[Math.min(2, order.length - 1)]]).left
+  }
   const out: Array<{ A: GoreDeck; B: GoreDeck; order: number[]; parent: boolean }> = []
   for (const A of decks) {
     if (A.chain.kind !== 'road') continue
@@ -660,7 +668,8 @@ function gorePairs(decks: GoreDeck[]): Array<{ A: GoreDeck; B: GoreDeck; order: 
         const rest = (C.on ?? []).find(r => r.deck === deck && Math.hypot(r.at[0] - at[0], r.at[1] - at[1]) * metresPerUnit(at[1]) <= SPLIT_REACH)
         if (C === A || !rest || !same(A, C)) continue
         const [u, v] = [leaving(A, order), leaving(C, fromRest(C, rest.at))]
-        if (u[0] * v[0] + u[1] * v[1] >= SPLIT_ALIKE) out.push({ A, B: C, order, parent: false })
+        if (u[0] * v[0] + u[1] * v[1] >= SPLIT_ALIKE && sideOf(deck, at, A, order) === sideOf(deck, rest.at, C, fromRest(C, rest.at)))
+          out.push({ A, B: C, order, parent: false })
       }
     }
   }
@@ -691,41 +700,58 @@ const sidesNow = (D: GoreDeck) => [0, 1].map(s => D.chain.points.map((_, i) => s
  * where another deck crosses or rests on it.
  */
 export function holdGores(decks: GoreDeck[]) {
-  for (const { A, B, order, parent } of gorePairs(decks)) {
+  const pairs = gorePairs(decks)
+  const held = new Map<GoreDeck, number[] | null>()
+  for (const { A, B, order, parent } of pairs) {
     if (!parent) continue
-    const d = along(A.chain.points)
-    const z = A.z.slice()
-    let held = -1
-    for (const i of order) {
-      const g = gapAt(A, i, B, sidesNow)
-      if (!g || g.gap > GORE_GAP) break
-      z[i] = g.z
-      held = i
-    }
-    if (held < 0) continue
-    let rejoined = false
-    for (const i of order.slice(order.indexOf(held) + 1)) {
-      const run = MAX_GRADE * Math.abs(d[i] - d[held])
-      const eased = Math.min(Math.max(z[i], z[held] - run), z[held] + run)
-      if (eased === z[i]) {
-        rejoined = true
-        break
-      }
-      z[i] = eased
-    }
-    const moved = z.flatMap((v, i) => (Math.abs(v - A.z[i]) > 0.01 ? [d[i]] : []))
-    if (!rejoined || !moved.length) continue
-    const [from, to] = [Math.min(...moved), Math.max(...moved)]
-    const farEnd = d[order[order.length - 1]]
-    const short = A.needs?.some(need => heightAt(d, z, need.at) < Math.min(need.height, heightAt(d, A.z, need.at)) - 0.05)
-    const buried = A.g?.some((g, i) => Math.abs(z[i] - A.z[i]) > 0.01 && z[i] < g - TERRAIN_SLACK)
-    // Nor near its far end, nor where another deck crosses it or rests on it: their heights were settled against this one's.
-    const nearFar = Math.abs(farEnd - from) < HOLD_CLEAR || Math.abs(farEnd - to) < HOLD_CLEAR
-    const crossed = decks.some(D => D !== A && D !== B && meet(box(D.chain.points), box(A.chain.points)) &&
-      (crossings(A.chain.points, D.chain.points, 0, d).some(at => at >= from - HOLD_CLEAR && at <= to + HOLD_CLEAR) ||
-       (D.on ?? []).some(r => r.deck === A)))
-    if (!short && !buried && !nearFar && !crossed) A.z = z
+    held.set(A, holdOf(decks, A, B, order))
   }
+  // A split's ramps are held together or not at all: they were joined at one height beside each other.
+  for (const [A, z] of held) {
+    const split = pairs.filter(p => !p.parent && (p.A === A || p.B === A)).map(p => (p.A === A ? p.B : p.A))
+    if (z && split.every(C => held.get(C) ?? !held.has(C))) A.z = z
+  }
+}
+
+/** The heights a ramp would be held at against the deck it leaves, or null where the hold is not made. */
+function holdOf(decks: GoreDeck[], A: GoreDeck, B: GoreDeck, order: number[]): number[] | null {
+  const d = along(A.chain.points)
+  const z = A.z.slice()
+  let held = -1
+  for (const i of order) {
+    const g = gapAt(A, i, B, sidesNow)
+    if (!g || g.gap > GORE_GAP) break
+    z[i] = g.z
+    held = i
+  }
+  if (held < 0) return null
+  let rejoined = false
+  for (const i of order.slice(order.indexOf(held) + 1)) {
+    const run = MAX_GRADE * Math.abs(d[i] - d[held])
+    const eased = Math.min(Math.max(z[i], z[held] - run), z[held] + run)
+    if (eased === z[i]) {
+      rejoined = true
+      break
+    }
+    z[i] = eased
+  }
+  const moved = z.flatMap((v, i) => (Math.abs(v - A.z[i]) > 0.01 ? [d[i]] : []))
+  if (!rejoined || !moved.length) return null
+  const [from, to] = [Math.min(...moved) - HOLD_CLEAR, Math.max(...moved) + HOLD_CLEAR]
+  const farEnd = d[order[order.length - 1]]
+  const short = A.needs?.some(need => heightAt(d, z, need.at) < Math.min(need.height, heightAt(d, A.z, need.at)) - 0.05)
+  const buried = A.g?.some((g, i) => Math.abs(z[i] - A.z[i]) > 0.01 && z[i] < g - TERRAIN_SLACK)
+  // Nor near its far end, nor where another deck crosses it or rests on it: their heights were settled against this one's.
+  const nearFar = farEnd >= from && farEnd <= to
+  const within = (p: Point) => {
+    const at = beside(A.chain.points, p)
+    const x = d[at.segment - 1] + (d[at.segment] - d[at.segment - 1]) * at.t
+    return x >= from && x <= to
+  }
+  const crossed = decks.some(D => D !== A && D !== B && meet(box(D.chain.points), box(A.chain.points)) &&
+    (crossings(A.chain.points, D.chain.points, 0, d).some(at => at >= from && at <= to) ||
+     (D.on ?? []).some(r => r.deck === A && within(r.at))))
+  return short || buried || nearFar || crossed ? null : z
 }
 
 /**
