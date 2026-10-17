@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test'
 import {
-  absorbPaths, absorbTracks, along, beside, GORE_GAP, holdGores, landing, LANDING, arch, chains, crossings, fitEdges, joinNeighbours, MAX_GRADE, mercator, paveGores, resample, sideAt, smooth, solve, steady, widen,
+  absorbPaths, absorbTracks, along, beside, GORE_GAP, closeVerges, holdGores, landing, LANDING, arch, chains, crossings, fitEdges, joinNeighbours, MAX_GRADE, mercator, paveGores, resample, sideAt, smooth, solve, steady, widen,
   type Chain, type Point, type Way,
 } from './profile'
 
@@ -352,3 +352,24 @@ describe('paveGores between two ramps', () => {
     expect(Math.max(...(right.sides ?? [[0], [0]]).flat())).toBeGreaterThan(4)
   })
 })
+
+describe('closeVerges', () => {
+  const road: Chain = { ways: [1], points: resample([east(0), east(60)], 6), kind: 'road', layer: 1, edges: [4, 4] }
+  // A sidewalk 1.5 m either side of its line, 7.5 m from the road's: a 2 m verge between.
+  const walk = (): Chain => ({ ways: [2], points: resample([east(0, 7.5), east(60, 7.5)], 6), kind: 'path', layer: 1, edges: [1.5, 1.5] })
+
+  it('widens a sidewalk deck across the verge to the road deck beside it on one bridge', () => {
+    const w = walk()
+    closeVerges([{ chain: road, z: road.points.map(() => 100) }, { chain: w, z: w.points.map(() => 100) }], () => true)
+    expect(Math.max(...w.edges)).toBeCloseTo(3.5, 1)
+  })
+
+  it('leaves one on another bridge, or at another height', () => {
+    const [a, b] = [walk(), walk()]
+    closeVerges([{ chain: road, z: road.points.map(() => 100) }, { chain: a, z: a.points.map(() => 100) }], () => false)
+    closeVerges([{ chain: road, z: road.points.map(() => 100) }, { chain: b, z: b.points.map(() => 103) }], () => true)
+    expect(a.sides ?? null).toBeNull()
+    expect(b.sides ?? null).toBeNull()
+  })
+})
+

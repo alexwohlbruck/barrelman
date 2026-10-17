@@ -22,6 +22,7 @@ import {
   heightAt,
   inside,
   joinNeighbours,
+  closeVerges,
   holdGores,
   paveGores,
   landing,
@@ -550,6 +551,10 @@ export async function buildDecks(input: DeckInput, ground: Ground): Promise<Deck
   const rows = piers(solved, input)
   // After the piers, which keep off what lies under a deck's carriageway, not under its gore.
   paveGores(solved)
+  closeVerges(solved, (path, road) => {
+    const outline = road.outline ? input.outlines.find(o => o.id === road.outline) : null
+    return !!outline && inOutline(path.points, outline.rings)
+  })
 
   const wiki = (s: Solved) => s.chain.ways.map(w => input.wikidata.get(w)).find(Boolean)
   const placed = solved.map(s => {

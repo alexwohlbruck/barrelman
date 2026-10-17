@@ -746,6 +746,36 @@ export function paveGores(decks: GoreDeck[]) {
   }
 }
 
+/** Widest a gap between a sidewalk deck and the road deck beside it is closed across, in metres: a verge, not a separate structure. */
+export const VERGE_GAP = 3
+
+/**
+ * A footway or cycle track deck running beside a road deck on the same bridge
+ * (`sameBridge`: one outline holds both), at its height, widened across the verge between them, so the two meet and
+ * read as one deck with no walls between.
+ */
+export function closeVerges(decks: GoreDeck[], sameBridge: (path: Chain, road: GoreDeck['chain']) => boolean) {
+  const roads = decks.filter(D => D.chain.kind === 'road')
+  const before = new Map(decks.map(D => [D, sidesNow(D)]))
+  for (const P of decks) {
+    if (P.chain.kind !== 'path') continue
+    const near = roads.filter(R => R.chain.layer === P.chain.layer && sameBridge(P.chain, R.chain) &&
+      meet(grow(box(R.chain.points), Math.max(...R.chain.edges) + VERGE_GAP + Math.max(...P.chain.edges)), box(P.chain.points)))
+    if (!near.length) continue
+    const reach: [number[], number[]] = [P.chain.points.map(() => 0), P.chain.points.map(() => 0)]
+    P.chain.points.forEach((_, i) => {
+      for (const R of near) {
+        const g = gapAt(P, i, R, D => before.get(D)!)
+        if (g && g.gap > 0 && g.gap <= VERGE_GAP && Math.abs(g.z - P.z[i]) <= GORE_RISE) reach[g.side][i] = Math.max(reach[g.side][i], g.gap)
+      }
+    })
+    if (!reach.flat().some(Boolean)) continue
+    const s = (P.chain.sides ??= [P.chain.points.map(() => P.chain.edges[0]), P.chain.points.map(() => P.chain.edges[1])])
+    for (const side of [0, 1] as const) reach[side].forEach((r, i) => (s[side][i] += r))
+    P.chain.edges = [Math.max(...s[0]), Math.max(...s[1])]
+  }
+}
+
 /**
  * Decks that run side by side as one: where a deck's edge meets another's
  * within `gap` metres and at most `step` from its height, both take the
