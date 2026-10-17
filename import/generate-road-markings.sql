@@ -2831,11 +2831,15 @@ CREATE INDEX ON _rm_deck_ends (osm_id);
 
 DROP TABLE IF EXISTS _rm_deck_paint;
 CREATE TEMP TABLE _rm_deck_paint AS
-SELECT m.fid, ST_CollectionExtract(ST_Intersection(m.geom, z.zone), d.dim) as inside,
-       ST_CollectionExtract(ST_Difference(m.geom, z.zone), d.dim) as outside
+-- A scrap of line under a metre long, where the zone's edge grazes it, is left out.
+SELECT m.fid, i.g as inside, o.g as outside
 FROM road_markings_next m
 JOIN _rm_deck_ends z ON z.osm_id = m.way AND m.geom && z.zone
 CROSS JOIN LATERAL (SELECT CASE WHEN m.pattern = 'fill' THEN 3 ELSE 2 END as dim) d
+CROSS JOIN LATERAL (SELECT COALESCE(ST_Collect(p.geom), 'GEOMETRYCOLLECTION EMPTY'::geometry) as g
+  FROM ST_Dump(ST_CollectionExtract(ST_Intersection(m.geom, z.zone), d.dim)) p WHERE d.dim = 3 OR ST_Length(p.geom::geography) >= 1) i
+CROSS JOIN LATERAL (SELECT COALESCE(ST_Collect(p.geom), 'GEOMETRYCOLLECTION EMPTY'::geometry) as g
+  FROM ST_Dump(ST_CollectionExtract(ST_Difference(m.geom, z.zone), d.dim)) p WHERE d.dim = 3 OR ST_Length(p.geom::geography) >= 1) o
 WHERE NOT m.bridge AND ST_Intersects(m.geom, z.zone);
 INSERT INTO road_markings_next (kind, pattern, color, style, bridge, geom)
 SELECT m.kind, m.pattern, m.color, m.style, true, p.inside
