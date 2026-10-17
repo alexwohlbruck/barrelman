@@ -121,13 +121,16 @@ describe('shapeDecks', () => {
     const diamond = outline('way/1', [[30, 0], [0, 30], [-30, 0], [0, -30]])
     // The same, a metre out all round: outlines are traced by hand.
     const slack = outline('way/1', [[31.5, 0], [0, 31.5], [-31.5, 0], [0, -31.5]])
-    const northward = { points: resample([at(3, -24), at(3, 24)], 6), edges: [4, 4] as [number, number], layer: 1, outline: 'way/1' }
-    const eastward = { ...deck(-24, 24, 3), outline: 'way/1' }
+    // Its ends run a little past the diamond's tips, onto the roads beyond, as wide as their carriageways.
+    const tips = outline('way/2', [[-5, -33], [11, -33], [11, 33], [-5, 33]])
+    const northward = { points: resample([at(3, -31), at(3, 31)], 6), edges: [4, 4] as [number, number], layer: 1, outline: 'way/1' }
+    const eastward = { ...deck(-31, 31, 3), outline: 'way/1' }
+    const eastTips = outline('way/3', [[-33, -5], [33, -5], [33, 11], [-33, 11]])
     const shapes = shapeDecks([northward, eastward], [diamond], [[true, true], [true, true]])
     for (const [k, d] of [northward, eastward].entries()) {
       const shape = shapes[k]!
       for (const side of edgePoints({ points: d.points, edges: d.edges, sides: shape.sides }))
-        for (const p of side.slice(1, -1)) expect(within(p, slack.rings)).toBe(true)
+        for (const p of side) expect(within(p, slack.rings) || within(p, (k ? eastTips : tips).rings)).toBe(true)
     }
   })
 })
