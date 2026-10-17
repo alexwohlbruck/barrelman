@@ -39,6 +39,7 @@ import {
   type Way,
 } from './profile'
 import { inOutline, shapeDecks, type Outline } from './shape'
+import { bentPoints, blocked, nearestFree, WAY_HALF, type Obstacles } from './supports'
 
 /** Metres between height samples. */
 export const STEP = 6
@@ -61,7 +62,7 @@ const GROUND_BATCH = 16
 
 export type Ground = { load(points: Point[]): Promise<void>; at(p: Point): number }
 
-export type Crossed = { kind: 'road' | 'rail' | 'path' | 'water'; points: Point[] }
+export type Crossed = { kind: 'road' | 'rail' | 'path' | 'water'; points: Point[]; half?: number }
 
 export type DeckInput = {
   ways: Way[]
@@ -75,6 +76,8 @@ export type DeckInput = {
   crossed: Crossed[]
   /** Water areas, as outer rings. */
   water: Point[][]
+  /** Outlines of the carriageways on the ground the decks pass over, which supports keep off. */
+  surfaces?: Point[][]
   /** A wikidata id per way, where the bridge is tagged with one. */
   wikidata: Map<number, string>
 }
@@ -211,15 +214,24 @@ function needs(s: Pick<Solved, 'chain' | 'd' | 'g'>, input: DeckInput, below: So
 /**
  * Piers every PIER_SPACING metres where a deck stands high. A deck running
  * beside one that already has piers takes the same row, so twin carriageways
- * and twin tracks stand on shared bents rather than two staggered sets.
+ * and twin tracks stand on shared bents rather than two staggered sets. A
+ * pier that would stand on a way or a deck below moves to the nearest clear
+ * place, or is left out.
  */
-function piers(solved: Solved[]): number[][] {
+function piers(solved: Solved[], input: DeckInput): number[][] {
   const out = solved.map(() => [] as number[])
   const order = solved.map((_, k) => k).sort((a, b) => solved[b].d[solved[b].d.length - 1] - solved[a].d[solved[a].d.length - 1])
   const high = (s: Solved, at: number) => heightAt(s.d, s.z, at) - heightAt(s.d, s.g, at) >= PIER_MIN
+  const ways = input.crossed.flatMap(c => (c.kind === 'water' ? [] : [{ kind: c.kind, points: c.points, half: c.half ?? WAY_HALF[c.kind] }]))
   for (const [n, k] of order.entries()) {
     const s = solved[k]
     const total = s.d[s.d.length - 1]
+    const below: Obstacles = {
+      ways,
+      surfaces: input.surfaces ?? [],
+      decks: solved.filter(o => o.chain.layer < s.chain.layer).map(o => ({ points: o.chain.points, half: Math.max(...o.chain.edges) })),
+    }
+    const fits = (at: number) => high(s, at) && !blocked(bentPoints(s.chain, s.d, at), below)
     const shared: number[] = []
     for (const j of order.slice(0, n)) {
       const o = solved[j]
@@ -229,12 +241,15 @@ function piers(solved: Solved[]): number[][] {
         const p = o.chain.points[Math.min(o.chain.points.length - 1, Math.round(at / STEP))]
         const near = beside(s.chain.points, p)
         if (!near.alongside || near.distance > Math.max(...s.chain.edges) + Math.max(...o.chain.edges) + 3) continue
-        const mine = s.d[near.segment - 1] + (s.d[near.segment] - s.d[near.segment - 1]) * near.t
-        if (high(s, mine)) shared.push(mine)
+        const mine = nearestFree(s.d[near.segment - 1] + (s.d[near.segment] - s.d[near.segment - 1]) * near.t, total, PIER_SPACING / 4, fits)
+        if (mine !== null) shared.push(mine)
       }
     }
-    for (let at = PIER_SPACING / 2; at < total; at += PIER_SPACING)
-      if (high(s, at) && !shared.some(x => Math.abs(x - at) < PIER_SPACING * 0.75)) shared.push(at)
+    for (let at = PIER_SPACING / 2; at < total; at += PIER_SPACING) {
+      if (shared.some(x => Math.abs(x - at) < PIER_SPACING * 0.75)) continue
+      const free = nearestFree(at, total, PIER_SPACING / 2 - 1, fits)
+      if (free !== null && !shared.some(x => Math.abs(x - free) < PIER_SPACING / 2)) shared.push(free)
+    }
     out[k] = shared.sort((a, b) => a - b).map(x => Math.round(x * 10) / 10)
   }
   return out
@@ -467,7 +482,7 @@ export async function buildDecks(input: DeckInput, ground: Ground): Promise<Deck
   for (const s of solved) s.z = eased(s, input.onGround)
   // Easing moves twins a few centimetres apart; side by side, they meet exactly.
   joinNeighbours(solved, undefined, EASED)
-  const rows = piers(solved)
+  const rows = piers(solved, input)
 
   const wiki = (s: Solved) => s.chain.ways.map(w => input.wikidata.get(w)).find(Boolean)
   const placed = solved.map(s => {

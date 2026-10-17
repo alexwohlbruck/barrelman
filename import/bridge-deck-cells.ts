@@ -12,6 +12,7 @@
 import type postgres from 'postgres'
 import type { Bbox } from '../src/config/regions'
 import { buildDecks, FORMAT, STEP, type Crossed, type Deck, type DeckInput } from '../src/lib/bridge-decks/build'
+import { wayHalf } from '../src/lib/bridge-decks/supports'
 import type { Dem } from '../src/lib/bridge-decks/dem'
 import { clip, contains, degreeBox, toDegrees, toUnits, UNITS_PER_DEGREE, type UnitBox, type UnitPoint } from '../src/lib/bridge-decks/grid'
 import type { Built } from '../src/lib/bridge-decks/queue'
@@ -143,17 +144,34 @@ export async function inputFor(sql: Sql, rows: Row[]): Promise<DeckInput> {
   const ids = rows.map(r => r.id)
   const crossable = sql`g.geom_type = 'line' AND COALESCE(g.tags->>'bridge', 'no') = 'no' AND COALESCE(g.tags->>'tunnel', 'no') = 'no'
       AND COALESCE(g.tags->>'location', '') NOT IN ('underground', 'underwater')`
-  const crossedRows: Array<{ kind: Crossed['kind']; coords: number[][][] }> = await sql`
+  const crossedRows: Array<{ kind: Crossed['kind']; coords: number[][][]; width: string | null; lanes: string | null }> = await sql`
     WITH pieces AS MATERIALIZED (
       SELECT ST_Subdivide(geom, 8) AS piece FROM geo_places WHERE osm_type = 'W' AND osm_id = ANY(${ids}::bigint[]) AND geom_type = 'line')
-    SELECT DISTINCT ON (g.osm_type, g.osm_id) bridge_deck_class(g.tags) AS kind, ST_AsGeoJSON(ST_Multi(g.geom))::json->'coordinates' AS coords
+    SELECT DISTINCT ON (g.osm_type, g.osm_id) bridge_deck_class(g.tags) AS kind, ST_AsGeoJSON(ST_Multi(g.geom))::json->'coordinates' AS coords,
+           g.tags->>'width' AS width, g.tags->>'lanes' AS lanes
     FROM pieces JOIN geo_places g ON g.geom && piece AND ST_Intersects(g.geom, piece)
     WHERE g.tags ? 'highway' AND ${crossable} AND bridge_deck_class(g.tags) IS NOT NULL
     UNION ALL
-    SELECT CASE WHEN g.tags ? 'waterway' THEN 'water' ELSE bridge_deck_class(g.tags) END, ST_AsGeoJSON(ST_Multi(g.geom))::json->'coordinates'
+    SELECT CASE WHEN g.tags ? 'waterway' THEN 'water' ELSE bridge_deck_class(g.tags) END, ST_AsGeoJSON(ST_Multi(g.geom))::json->'coordinates',
+           g.tags->>'width', g.tags->>'lanes'
     FROM geo_places g
     WHERE (${anyTag(sql, UNDER)}) AND g.geom && ${box} AND NOT g.tags ? 'highway' AND ${crossable}`
-  const crossed = crossedRows.flatMap(r => r.coords.map(line => ({ kind: r.kind, points: line.map(([lng, lat]) => mercator(lng, lat)) })))
+  const crossed: Crossed[] = crossedRows.flatMap(r => r.coords.map(line => ({
+    kind: r.kind,
+    points: line.map(([lng, lat]) => mercator(lng, lat)),
+    ...(r.kind === 'water' ? {} : { half: wayHalf(r.kind, r) }),
+  })))
+  // Carriageways on the ground a deck's way passes over, which its supports keep off.
+  const surfaceRows: Array<{ coords: number[][] }> = surfaces
+    ? await sql`
+      WITH pieces AS MATERIALIZED (
+        SELECT ST_Subdivide(geom, 8) AS piece FROM geo_places WHERE osm_type = 'W' AND osm_id = ANY(${ids}::bigint[]) AND geom_type = 'line'),
+      met AS (
+        SELECT DISTINCT ON (s.ctid) s.geom FROM pieces JOIN road_surfaces s ON s.geom && piece AND ST_Intersects(s.geom, piece)
+        WHERE NOT s.bridge AND COALESCE(s.kind, '') <> 'island')
+      SELECT ST_AsGeoJSON(ST_ExteriorRing((ST_Dump(geom)).geom))::json->'coordinates' AS coords FROM met`
+    : []
+  const groundSurfaces = surfaceRows.map(r => r.coords.map(([lng, lat]) => mercator(lng, lat)))
 
   // Clipped to the box rather than intersected with it: a river is one huge
   // polygon, and only whether a deck's samples lie in it is asked.
@@ -163,7 +181,7 @@ export async function inputFor(sql: Sql, rows: Row[]): Promise<DeckInput> {
   const water = waterRows.flatMap(r => (r.coords ?? []).map(polygon => polygon[0].map(([lng, lat]) => mercator(lng, lat))))
 
   const wikidata = new Map(rows.flatMap(r => (r.wikidata ? [[Number(r.id), r.wikidata] as [number, string]] : [])))
-  return { ways, onGround, outlines, kerbs, crossed, water, wikidata }
+  return { ways, onGround, outlines, kerbs, crossed, water, wikidata, surfaces: groundSurfaces }
 }
 
 /**
