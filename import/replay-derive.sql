@@ -354,7 +354,7 @@ WHERE p.id = sub.id;
 -- ── Search document (rebuild-tsvectors.sql) ───────────────────────────────
 -- Last, because it reads name_abbrev and parent_context.
 UPDATE geo_places g
-SET ts = build_ts(g.osm_type, g.name, g.names, g.name_abbrev, g.categories, g.parent_context)
+SET ts = build_ts(g.osm_type, g.name, g.names, g.name_abbrev, g.categories, g.parent_context, g.tags)
 FROM _recontext r
 WHERE g.id = r.id AND g.name IS NOT NULL;
 

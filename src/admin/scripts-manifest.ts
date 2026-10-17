@@ -1187,6 +1187,18 @@ export const SCRIPTS: ScriptDef[] = [
     exec: { kind: 'internal', handler: 'admin:rebuild-tsvectors' },
     source: 'src/services/admin.service.ts',
   },
+  {
+    id: 'db-build-search-lexicon',
+    name: 'Rebuild Search Lexicon',
+    description:
+      'Rebuild the word list search corrects misspellings against ("warehouse" → "Wearhouse"). Imports build it; run this after OSM updates so new names can be corrected towards. One pass over the named places, then an atomic swap, so search keeps working throughout.',
+    category: 'database',
+    danger: 'safe',
+    longRunning: true,
+    confirm: false,
+    exec: { kind: 'internal', handler: 'admin:build-search-lexicon' },
+    source: 'import/build-search-lexicon.sql',
+  },
 
   // ── Config Generation ─────────────────────────────────────────────────
   {
