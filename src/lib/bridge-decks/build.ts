@@ -22,6 +22,7 @@ import {
   heightAt,
   inside,
   joinNeighbours,
+  holdGores,
   paveGores,
   landing,
   LANDING,
@@ -545,6 +546,7 @@ export async function buildDecks(input: DeckInput, ground: Ground): Promise<Deck
   for (const s of solved) s.z = eased(s, input.onGround)
   // Easing moves twins a few centimetres apart; side by side, they meet exactly.
   joinNeighbours(solved, undefined, EASED)
+  holdGores(solved)
   const rows = piers(solved, input)
   // After the piers, which keep off what lies under a deck's carriageway, not under its gore.
   paveGores(solved)
