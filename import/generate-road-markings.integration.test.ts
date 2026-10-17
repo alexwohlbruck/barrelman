@@ -116,6 +116,10 @@ const ways: [number, string, Record<string, string>][] = [
   [155, line([-74.2102, 40.71282], [-74.2098, 40.71282]), { highway: 'footway', footway: 'crossing', 'crossing:markings': 'zebra' }],
   // A motorway bridge passing over that junction.
   [156, line([-74.2115, 40.7129], [-74.2085, 40.7129]), { highway: 'motorway', oneway: 'yes', lanes: '3', bridge: 'yes', layer: '1' }],
+  // A street with a bike lane, carried over a creek on a bridge between two ways on the ground.
+  [185, line([-74.2450, 40.713], [-74.2440, 40.713]), { highway: 'tertiary', lanes: '2', 'cycleway:right': 'lane' }],
+  [186, line([-74.2440, 40.713], [-74.2430, 40.713]), { highway: 'tertiary', lanes: '2', 'cycleway:right': 'lane', bridge: 'yes', layer: '1' }],
+  [187, line([-74.2430, 40.713], [-74.2420, 40.713]), { highway: 'tertiary', lanes: '2', 'cycleway:right': 'lane' }],
   // An exit ramp gaining a lane at each of four ways, three of them short,
   // across a cell boundary at 40.718.
   [170, line([-74.015, 40.7160], [-74.015, 40.7172]), { highway: 'motorway_link', oneway: 'yes', lanes: '1' }],
@@ -698,6 +702,23 @@ run('generate-road-markings.sql', () => {
     const [{ n }] = await sql`SELECT count(*)::int as n FROM road_markings WHERE kind = 'lane' AND bridge
       AND ST_Intersects(geom, ST_MakeEnvelope(-74.2102, 40.7128, -74.2100, 40.7130, 4326))`
     expect(n).toBe(2)
+  })
+
+  test('gives a street\'s paint within 15 m of a bridge\'s end to the bridge, and the rest to the ground', async () => {
+    const owner = async (from: number, to: number) => (await sql<{ bridge: boolean; kind: string }[]>`
+      SELECT DISTINCT bridge, kind FROM road_markings WHERE kind IN ('centre', 'bike_lane')
+        AND ST_Intersects(geom, ST_MakeEnvelope(${east(-74.2440, from)}, 40.7129, ${east(-74.2440, to)}, 40.7131, 4326))`)
+    const kinds = (rows: { bridge: boolean; kind: string }[], bridge: boolean) => rows.filter(r => r.bridge === bridge).map(r => r.kind).sort()
+    const near = await owner(-13, -3)
+    expect(kinds(near, true)).toEqual(['bike_lane', 'centre'])
+    expect(kinds(near, false)).toEqual([])
+    const far = await owner(-40, -20)
+    expect(kinds(far, false)).toEqual(['bike_lane', 'centre'])
+    expect(kinds(far, true)).toEqual([])
+    const [{ gap }] = await sql<{ gap: number }[]>`
+      SELECT ST_Distance(ST_Union(geom) FILTER (WHERE bridge)::geography, ST_Union(geom) FILTER (WHERE NOT bridge)::geography) as gap
+      FROM road_markings WHERE kind = 'centre' AND geom && ST_MakeEnvelope(-74.2460, 40.7125, -74.2440, 40.7135, 4326)`
+    expect(gap).toBeLessThan(0.05)
   })
 
   test('keeps the arrows of a merging way in its lanes as they ease over', async () => {
