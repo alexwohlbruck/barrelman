@@ -1,8 +1,8 @@
 /**
  * Builds bridge decks for structures that carry more than one way, in a
  * throwaway schema on ground falling 1 in 10 to the south: a street with a tram running in each
- * carriageway, twin tracks on one viaduct, and a carriageway meeting its slip
- * road at a gore on the bridge.
+ * carriageway, twin tracks on one viaduct, whose piers keep off the road under it, and a
+ * carriageway meeting its slip road at a gore on the bridge.
  *
  * Run: BARRELMAN_INTEGRATION_TESTS=1 DATABASE_URL=postgresql://barrelman:barrelman@localhost:5434/scratch \
  *      bun test import/bridge-deck-structures.integration.test.ts
@@ -98,5 +98,15 @@ run('bridge decks for shared structures', () => {
     const [slip] = await holding(21)
     expect(main.id).not.toBe(slip.id)
     expect(main.ways).toEqual(['20'])
+  })
+
+  test('a viaduct stands no pier on the road under it', async () => {
+    const rows = await sql<{ piers: number[]; road: number }[]>`
+      SELECT piers, ST_LineLocatePoint(geom, ST_SetSRID(ST_MakePoint(-80.8305, 35.23), 4326)) * length AS road
+      FROM bridge_decks WHERE '10' = ANY(ways::text[])`
+    expect(rows.length).toBe(1)
+    const [{ piers, road }] = rows
+    expect(piers.length).toBeGreaterThan(0)
+    for (const at of piers) expect(Math.abs(at - road)).toBeGreaterThan(4 + 1)
   })
 })
