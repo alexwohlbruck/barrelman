@@ -297,6 +297,13 @@ describe('paveGores', () => {
     expect(open.some(g => g > 0.5 && g <= GORE_GAP)).toBe(true)
   })
 
+  it('leaves the ground between a ramp and a deck on two bridges of their own', () => {
+    const [m, r] = [{ ...main(), outline: 'way/1' }, { ...ramp(), outline: 'way/2' }]
+    const M = { chain: m, z: m.points.map(() => 100) }
+    paveGores([M, { chain: r, z: r.points.map(() => 100), on: [{ deck: M, at: r.points[0] }] }])
+    expect(r.sides ?? null).toBeNull()
+  })
+
   it('leaves a ramp that has already climbed away from the deck it leaves', () => {
     const [m, r] = [main(), ramp()]
     const M = { chain: m, z: m.points.map(() => 100) }

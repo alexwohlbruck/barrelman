@@ -260,14 +260,7 @@ export function shapeDecks(decks: Deck[], outlines: Outline[], grounded: Array<[
     // deck may reach, unless the deck is one of a junction the bridge carries, whose ends meet no single road.
     const junction = meetingIn(k).some(j => across(pts, decks[j].points))
     for (let i = 0; i < n; i++) {
-      if (home[i] < 0) {
-        // Past its outline a junction's deck is just its carriageway; any other keeps no more than where it left it.
-        const inner = [i - 1, i + 1].find(j => j >= 0 && j < n && home[j] >= 0)
-        for (const side of [0, 1] as const)
-          if (junction) shaped[side][i] = Math.min(shaped[side][i], deck.edges[side])
-          else if (inner !== undefined) shaped[side][i] = Math.min(shaped[side][i], shaped[side][inner])
-        continue
-      }
+      if (home[i] < 0) continue
       const { t, n: left } = frame(pts, i)
       const landing = !junction && ([0, 1] as const).some(end => grounded[k][end] && fromEnd(i, end) <= CAP_MAX)
       const rings = outlines[home[i]].rings
@@ -280,6 +273,14 @@ export function shapeDecks(decks: Deck[], outlines: Outline[], grounded: Array<[
         const from = i === 0 ? offset(pts[i], t, END_STEP) : i === n - 1 ? offset(pts[i], neg(t), END_STEP) : pts[i]
         shaped[side][i] = Math.max(deck.edges[side], Math.min(v, rayHit(from, dir, rings)))
       }
+    }
+    // Past its outline a junction's deck is just its carriageway; any other keeps no more than where it left the outline.
+    for (let i = 0; i < n; i++) {
+      if (home[i] >= 0) continue
+      const inner = [i - 1, i + 1].find(j => j >= 0 && j < n && home[j] >= 0)
+      for (const side of [0, 1] as const)
+        if (junction) shaped[side][i] = Math.min(shaped[side][i], deck.edges[side])
+        else if (inner !== undefined) shaped[side][i] = Math.min(shaped[side][i], shaped[side][inner])
     }
     const caps: Shape['caps'] = [0, 0, 0, 0]
     for (const end of [0, 1] as const) {

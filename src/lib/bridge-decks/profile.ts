@@ -627,7 +627,7 @@ export const GORE_RISE = 0.5
  * ground showing between their facing sides is closed, each side reaching half
  * way across, until the gap has widened to GORE_GAP. Sides are widened in place.
  */
-export function paveGores(decks: Array<{ chain: Chain; z: number[]; on?: Array<{ deck: unknown; at: Point }> }>) {
+export function paveGores(decks: Array<{ chain: Chain & { outline?: string | null }; z: number[]; on?: Array<{ deck: unknown; at: Point }> }>) {
   const sides = (c: Chain) => (c.sides ??= [c.points.map(() => c.edges[0]), c.points.map(() => c.edges[1])])
   // Gaps are read from the sides as they were, so the order decks are paved in changes nothing.
   const before = new Map(decks.map(D => [D, [0, 1].map(s => D.chain.points.map((_, i) => sideAt(D.chain, s as 0 | 1, i)))]))
@@ -654,7 +654,8 @@ export function paveGores(decks: Array<{ chain: Chain; z: number[]; on?: Array<{
     if (A.chain.kind !== 'road') continue
     for (const { deck, at } of A.on ?? []) {
       const B = decks.find(D => D === deck)
-      if (!B || B.chain.kind !== 'road' || B.chain.layer !== A.chain.layer) continue
+      // Two bridges are two structures, with the ground between them: only one bridge's decks share a gore.
+      if (!B || B.chain.kind !== 'road' || B.chain.layer !== A.chain.layer || (A.chain.outline ?? null) !== (B.chain.outline ?? null)) continue
       const n = A.chain.points.length
       const start = A.chain.points[0] === at || (A.chain.points[0][0] === at[0] && A.chain.points[0][1] === at[1])
       const order = start ? A.chain.points.map((_, i) => i) : A.chain.points.map((_, i) => n - 1 - i)
