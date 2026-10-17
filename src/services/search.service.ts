@@ -731,14 +731,14 @@ export async function searchPlaces(
       if (!text) return []
       const expr = sql`to_tsquery('simple', unaccent(${text}))`
       const rank = sql`(${ftsRankExpr} * ${CORRECTED_RANK})`
-      if (indexCanNarrow(text)) {
-        // One index search, not localFts's staged probe → 5 km → box: the
-        // stages are for words dense near the viewport, and the exact pass
-        // has just shown these aren't. Saves two round trips.
-        return executeWithin(ftsSql(local, undefined, expr, rank), local ? LOCAL_INDEX_TIMEOUT_MS : CORRECTED_FTS_TIMEOUT_MS)
-      }
-      // A correction to a common word: only the nearest rows are affordable.
-      return local ? localFts(text, expr, rank) : []
+      // Typeahead goes through the same density stages as the exact pass. A
+      // single index search over the whole box looked cheaper, and was on a
+      // city extract, but on the 218M-row national table it ran into its
+      // timeout: a correction is usually a common word ("starbucks"), which
+      // is exactly what the probe of the nearest rows exists for.
+      if (local) return localFts(text, expr, rank)
+      if (!indexCanNarrow(text)) return []
+      return executeWithin(ftsSql(false, undefined, expr, rank), CORRECTED_FTS_TIMEOUT_MS)
     }
 
     // Autocomplete retry: the local pass only sees the viewport, so a place the
@@ -808,7 +808,17 @@ export async function searchPlaces(
           : SEARCH_TRIGRAM_BUDGET_MS <= 0 ? executeWithin(trigramSql(), 0)
           : remaining >= TRIGRAM_MIN_REMAINING_MS ? executeWithin(trigramSql(), remaining)
           : Promise.resolve([] as any[])
-        ;[trigramRows, correctedRows] = await Promise.all([trigram, runCorrected ? correctedFts(false) : []])
+        const corrected = runCorrected ? correctedFts(false) : Promise.resolve([] as any[])
+        // Once a corrected spelling has matched, the typo is answered, and
+        // trigram, the slower guess at the same thing, isn't waited for: it
+        // held "men's warehouse flatbush" for its whole 2.5s budget after the
+        // corrected pass had found the store in 80ms. It still wins if it
+        // finishes first, and its statement timeout ends the query either way.
+        const trigramUnlessCorrected = Promise.race([
+          trigram,
+          corrected.then((rows) => (rows.length ? [] : trigram)),
+        ])
+        ;[trigramRows, correctedRows] = await Promise.all([trigramUnlessCorrected, corrected])
       }
     }
 

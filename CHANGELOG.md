@@ -10,6 +10,17 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Fixed
+
+* **Search corrections work on a national import.** 0.10.21's corrections
+  picked the nearest spellings first, and a country's data has its own typos
+  one edit from every common word, so "warehouse" was corrected to "warhouse"
+  instead of "wearhouse". The most used spelling now comes first. Typeahead's
+  corrected pass also timed out on a national table and found nothing; it now
+  runs in the same stages as the exact pass, about 40-100 ms. A submitted
+  search a correction answers no longer waits out the trigram layer: 2.5 s to
+  about 100 ms.
+
 ## [0.10.21] - 2026-10-17
 
 ### Added
