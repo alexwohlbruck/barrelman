@@ -97,6 +97,8 @@ const ways: [number, string, Record<string, string>][] = [
   [120, line([-74.180, 40.7115], [-74.180, 40.713]), { highway: 'motorway', oneway: 'yes', lanes: '4' }],
   [121, line([-74.180, 40.713], [-74.180, 40.715]), { highway: 'motorway', oneway: 'yes', lanes: '3' }],
   [122, line([-74.180, 40.713], [-74.17965, 40.715]), { highway: 'motorway_link', oneway: 'yes', lanes: '1' }],
+  // and a street bridge crossing over its gore.
+  [123, line([-74.1806, 40.7136], [-74.1792, 40.7136]), { highway: 'tertiary', lanes: '2', bridge: 'yes', layer: '1' }],
   // A two-way street dividing into a pair of one-ways.
   [130, line([-74.190, 40.7115], [-74.190, 40.713]), { highway: 'primary', lanes: '4' }],
   [131, line([-74.190, 40.713], [-74.1898, 40.715]), { highway: 'primary', oneway: 'yes', lanes: '2' }],
@@ -1466,6 +1468,16 @@ run('generate-road-markings.sql', () => {
       expect(bars.every(b => b.color === 'white')).toBe(true)
       // Not where the two carriageways still share the stem, nor past the nose.
       expect(bars.every(b => b.y > 40.7133 && b.y < 40.7145)).toBe(true)
+      // The bridge over it keeps its centre line unbroken across the gore below.
+      const [{ over, span }] = await sql`
+        WITH gore AS (SELECT ST_Envelope(ST_Collect(geom)) as g FROM road_markings
+                      WHERE kind = 'hatch' AND NOT bridge AND geom && ST_MakeEnvelope(-74.1802, 40.7131, -74.1796, 40.7145, 4326))
+        SELECT COALESCE((SELECT sum(ST_Length(ST_Intersection(m.geom, gore.g)::geography)) FROM road_markings m
+                         WHERE m.kind = 'centre' AND m.bridge AND m.geom && gore.g), 0) as over,
+               ST_Length(ST_Intersection(ST_GeomFromText('LINESTRING(-74.1806 40.7136, -74.1792 40.7136)', 4326), gore.g)::geography) as span
+        FROM gore`
+      expect(span).toBeGreaterThan(1)
+      expect(over).toBeGreaterThan(span - 0.5)
     })
 
     test('reads a traffic_calming=painted_island area as a painted median', async () => {

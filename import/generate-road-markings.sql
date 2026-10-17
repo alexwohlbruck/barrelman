@@ -1692,16 +1692,17 @@ FROM (
 CROSS JOIN LATERAL (
   SELECT min(t) as at FROM generate_series(2, 150, 2) t
   WHERE t * b.s < ST_Length(b.la)
-    AND ST_Distance(ST_LineInterpolatePoint(b.la, t * b.s / ST_Length(b.la)), b.cb) - b.wa / 2 * b.s >= 4 * b.s
+    AND ST_Distance(ST_LineInterpolatePoint(b.la, least(1, t * b.s / nullif(ST_Length(b.la), 0))), b.cb) - b.wa / 2 * b.s >= 4 * b.s
 ) nose
 CROSS JOIN LATERAL (
   SELECT ST_MakeValid(ST_Difference(ST_Intersection(
-           ST_MakeValid(ST_MakePolygon(ST_AddPoint(ST_MakeLine(ST_LineSubstring(b.la, 0, least(1, (nose.at + 20) * b.s / ST_Length(b.la))),
-                                                              ST_Reverse(ST_LineSubstring(b.lb, 0, least(1, (nose.at + 20) * b.s / ST_Length(b.lb))))),
+           ST_MakeValid(ST_MakePolygon(ST_AddPoint(ST_MakeLine(ST_LineSubstring(b.la, 0, least(1, (nose.at + 20) * b.s / nullif(ST_Length(b.la), 0))),
+                                                              ST_Reverse(ST_LineSubstring(b.lb, 0, least(1, (nose.at + 20) * b.s / nullif(ST_Length(b.lb), 0))))),
                                                   ST_StartPoint(b.la)))),
            ST_Buffer(b.pt, nose.at * b.s, 16)), ST_Union(b.ca, b.cb))) as g
 ) w
-WHERE nose.at IS NOT NULL AND ST_Length(b.lb) > 0 AND NOT ST_IsEmpty(w.g) AND ST_Area(ST_CollectionExtract(w.g, 3)) > 4 * b.s * b.s;
+WHERE nose.at IS NOT NULL AND ST_Length(b.lb) > 0 AND NOT ST_IsEmpty(w.g) AND ST_Area(ST_CollectionExtract(w.g, 3)) > 4 * b.s * b.s
+  AND NOT EXISTS (SELECT 1 FROM _rm_paint_areas m WHERE m.g && w.g AND ST_Intersects(m.g, w.g));
 CREATE INDEX ON _rm_paint_areas USING gist (g);
 ANALYZE _rm_paint_areas;
 
@@ -1833,10 +1834,6 @@ SELECT ST_Union(cut) as cut
 FROM (
   SELECT floor(ST_X(c.cxy) / 400) as cx, floor(ST_Y(c.cxy) / 400) as cy, ST_Buffer(c.g, 2 * c.s, 2) as cut
   FROM (SELECT g, s, ST_PointOnSurface(g) as cxy FROM _rm_crossings) c
-  -- and painted areas, inside their outline: a line along one's edge runs on.
-  UNION ALL
-  SELECT floor(ST_X(ST_PointOnSurface(g)) / 400), floor(ST_Y(ST_PointOnSurface(g)) / 400), ST_Buffer(g, -0.5 * s)
-  FROM _rm_paint_areas
 ) cuts
 GROUP BY cx, cy;
 -- And the inside of a junction: the hull of the crosswalks round a node some
@@ -1861,8 +1858,12 @@ CREATE INDEX ON _rm_cuts USING gist (cut);
 CREATE INDEX ON _rm_boxes USING gist (cut);
 -- Centre and lane lines never run on inside a painted area's outline.
 DROP TABLE IF EXISTS _rm_paint_cuts;
-CREATE TEMP TABLE _rm_paint_cuts AS SELECT ST_Buffer(g, -0.15 * s) as cut FROM _rm_paint_areas;
+CREATE TEMP TABLE _rm_paint_cuts AS SELECT ST_Buffer(g, -0.15 * s) as cut, bridge FROM _rm_paint_areas;
 CREATE INDEX ON _rm_paint_cuts USING gist (cut);
+-- Every line breaks for a painted area inside its outline, on its own level only: a line along its edge runs on.
+DROP TABLE IF EXISTS _rm_paint_inner;
+CREATE TEMP TABLE _rm_paint_inner AS SELECT ST_Buffer(g, -0.5 * s) as cut, bridge FROM _rm_paint_areas;
+CREATE INDEX ON _rm_paint_inner USING gist (cut);
 -- Lane and centre lines stop short of a turning circle; edge lines run on round
 -- its kerb, so theirs are cut only where the kerb line around it takes over.
 DROP TABLE IF EXISTS _rm_turn_cuts;
@@ -2203,7 +2204,8 @@ CROSS JOIN LATERAL (
         UNION ALL SELECT a.cut FROM _rm_approach_cuts a WHERE a.osm_id = l.osm_id
         UNION ALL SELECT rc.cut FROM _rm_road_cuts rc WHERE rc.osm_id = l.osm_id
         UNION ALL SELECT tc.cut FROM _rm_turn_cuts tc WHERE l.osm_id = ANY (tc.ids) AND tc.cut && o.line AND tc.edge = (l.kind = 'edge')
-        UNION ALL SELECT pc.cut FROM _rm_paint_cuts pc WHERE pc.cut && o.line AND l.kind IN ('centre', 'lane')) cuts
+        UNION ALL SELECT pi.cut FROM _rm_paint_inner pi WHERE pi.cut && o.line AND pi.bridge = l.bridge
+        UNION ALL SELECT pc.cut FROM _rm_paint_cuts pc WHERE pc.cut && o.line AND pc.bridge = l.bridge AND l.kind IN ('centre', 'lane')) cuts
 ) m
 -- A dash a cut leaves a stub of is left out.
 CROSS JOIN LATERAL (SELECT CASE WHEN l.pattern LIKE 'dashed%'
@@ -2269,7 +2271,8 @@ CROSS JOIN LATERAL (
         UNION ALL SELECT k.cut FROM _rm_boxes k WHERE k.cut && o.band AND b.osm_id = ANY (k.ids)
         UNION ALL SELECT a.band_cut FROM _rm_approach_cuts a WHERE a.osm_id = b.osm_id
         UNION ALL SELECT rc.cut FROM _rm_road_cuts rc WHERE rc.osm_id = b.osm_id
-        UNION ALL SELECT tc.cut FROM _rm_turn_cuts tc WHERE b.osm_id = ANY (tc.ids) AND tc.cut && o.band AND NOT tc.edge) cuts
+        UNION ALL SELECT tc.cut FROM _rm_turn_cuts tc WHERE b.osm_id = ANY (tc.ids) AND tc.cut && o.band AND NOT tc.edge
+        UNION ALL SELECT pi.cut FROM _rm_paint_inner pi WHERE pi.cut && o.band AND pi.bridge = b.bridge) cuts
 ) k
 -- A scrap under 5 m of lane long, cut off between a crosswalk and the edge
 -- of a junction, is left out.
