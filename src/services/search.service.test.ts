@@ -936,7 +936,7 @@ describe('searchPlaces — corrected spellings', () => {
       (q?.queryChunks ?? []).map((c: any) => (c?.queryChunks ? textOf(c) : Array.isArray(c?.value) ? c.value.join('') : '')).join('')
     mockCorrections.mockImplementation(async () => fixes)
     mockExecute.mockImplementation(async (q: any) => {
-      if (textOf(q).includes('name %')) return new Promise((r) => setTimeout(() => r([]), 2000))
+      if (textOf(q).includes('AND name %')) return new Promise((r) => setTimeout(() => r([]), 2000))
       return mentions(q, 'wearhouse') ? [store] : []
     })
     const started = performance.now()
