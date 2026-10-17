@@ -355,6 +355,7 @@ postgres:
         roof_colour: roof_colour
         hide_3d: hide_3d
         group_id: group_id
+        kind: kind
       buffer: 64
       clip_geom: true
 

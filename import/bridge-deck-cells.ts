@@ -12,6 +12,7 @@
 import type postgres from 'postgres'
 import type { Bbox } from '../src/config/regions'
 import { buildDecks, FORMAT, STEP, type Crossed, type Deck, type DeckInput } from '../src/lib/bridge-decks/build'
+import { wayHalf } from '../src/lib/bridge-decks/supports'
 import type { Dem } from '../src/lib/bridge-decks/dem'
 import { clip, contains, degreeBox, toDegrees, toUnits, UNITS_PER_DEGREE, type UnitBox, type UnitPoint } from '../src/lib/bridge-decks/grid'
 import type { Built } from '../src/lib/bridge-decks/queue'
@@ -41,6 +42,12 @@ const WATER: Array<[string, string]> = [['natural', 'water'], ['waterway', 'rive
  */
 const anyTag = (sql: Sql, pairs: Array<[string, string]>) =>
   pairs.map(([k, v]) => sql`g.tags->>${k} = ${v}`).reduce((a, b) => sql`${a} OR ${b}`)
+
+/** How far round a bridge way's ends the roads on the ground are read, in degrees: LANDING.reach and a little more. */
+const END_REACH_DEG = 0.0005
+
+/** How far from a deck's way a carriageway on the ground is read for its supports to keep off, in degrees (about 20 m). */
+const SURFACE_REACH_DEG = 0.0002
 
 /** Decks per INSERT: one statement per batch rather than a round trip per deck. */
 const INSERT_BATCH = 500
@@ -143,17 +150,40 @@ export async function inputFor(sql: Sql, rows: Row[]): Promise<DeckInput> {
   const ids = rows.map(r => r.id)
   const crossable = sql`g.geom_type = 'line' AND COALESCE(g.tags->>'bridge', 'no') = 'no' AND COALESCE(g.tags->>'tunnel', 'no') = 'no'
       AND COALESCE(g.tags->>'location', '') NOT IN ('underground', 'underwater')`
-  const crossedRows: Array<{ kind: Crossed['kind']; coords: number[][][] }> = await sql`
+  const crossedRows: Array<{ kind: Crossed['kind']; coords: number[][][]; width: string | null; lanes: string | null }> = await sql`
     WITH pieces AS MATERIALIZED (
-      SELECT ST_Subdivide(geom, 8) AS piece FROM geo_places WHERE osm_type = 'W' AND osm_id = ANY(${ids}::bigint[]) AND geom_type = 'line')
-    SELECT DISTINCT ON (g.osm_type, g.osm_id) bridge_deck_class(g.tags) AS kind, ST_AsGeoJSON(ST_Multi(g.geom))::json->'coordinates' AS coords
+      SELECT ST_Subdivide(geom, 8) AS piece FROM geo_places WHERE osm_type = 'W' AND osm_id = ANY(${ids}::bigint[]) AND geom_type = 'line'
+      -- and round each end as far as a deck reads the road beyond it, for the junctions there.
+      UNION ALL
+      SELECT ST_Buffer(e, ${END_REACH_DEG}) FROM geo_places,
+        LATERAL (VALUES (ST_StartPoint(geom)), (ST_EndPoint(geom))) v(e)
+      WHERE osm_type = 'W' AND osm_id = ANY(${ids}::bigint[]) AND geom_type = 'line')
+    SELECT DISTINCT ON (g.osm_type, g.osm_id) bridge_deck_class(g.tags) AS kind, ST_AsGeoJSON(ST_Multi(g.geom))::json->'coordinates' AS coords,
+           g.tags->>'width' AS width, g.tags->>'lanes' AS lanes
     FROM pieces JOIN geo_places g ON g.geom && piece AND ST_Intersects(g.geom, piece)
     WHERE g.tags ? 'highway' AND ${crossable} AND bridge_deck_class(g.tags) IS NOT NULL
     UNION ALL
-    SELECT CASE WHEN g.tags ? 'waterway' THEN 'water' ELSE bridge_deck_class(g.tags) END, ST_AsGeoJSON(ST_Multi(g.geom))::json->'coordinates'
+    SELECT CASE WHEN g.tags ? 'waterway' THEN 'water' ELSE bridge_deck_class(g.tags) END, ST_AsGeoJSON(ST_Multi(g.geom))::json->'coordinates',
+           g.tags->>'width', g.tags->>'lanes'
     FROM geo_places g
     WHERE (${anyTag(sql, UNDER)}) AND g.geom && ${box} AND NOT g.tags ? 'highway' AND ${crossable}`
-  const crossed = crossedRows.flatMap(r => r.coords.map(line => ({ kind: r.kind, points: line.map(([lng, lat]) => mercator(lng, lat)) })))
+  const crossed: Crossed[] = crossedRows.flatMap(r => r.coords.map(line => ({
+    kind: r.kind,
+    points: line.map(([lng, lat]) => mercator(lng, lat)),
+    ...(r.kind === 'water' ? {} : { half: wayHalf(r.kind, metres(r.width), r.lanes) }),
+  })))
+  // Carriageways on the ground a deck's way passes over, which its supports keep off.
+  // Within a wide deck's half width of its way, so a road under one edge is found too; holes kept, as medians.
+  const surfaceRows: Array<{ coords: number[][][] }> = surfaces
+    ? await sql`
+      WITH pieces AS MATERIALIZED (
+        SELECT ST_Subdivide(geom, 8) AS piece FROM geo_places WHERE osm_type = 'W' AND osm_id = ANY(${ids}::bigint[]) AND geom_type = 'line'),
+      met AS (
+        SELECT DISTINCT ON (s.fid) s.geom FROM pieces JOIN road_surfaces s ON ST_DWithin(s.geom, piece, ${SURFACE_REACH_DEG})
+        WHERE NOT s.bridge AND COALESCE(s.kind, '') <> 'island')
+      SELECT ST_AsGeoJSON((ST_Dump(geom)).geom)::json->'coordinates' AS coords FROM met`
+    : []
+  const groundSurfaces = surfaceRows.map(r => r.coords.map(ring => ring.map(([lng, lat]) => mercator(lng, lat))))
 
   // Clipped to the box rather than intersected with it: a river is one huge
   // polygon, and only whether a deck's samples lie in it is asked.
@@ -163,7 +193,7 @@ export async function inputFor(sql: Sql, rows: Row[]): Promise<DeckInput> {
   const water = waterRows.flatMap(r => (r.coords ?? []).map(polygon => polygon[0].map(([lng, lat]) => mercator(lng, lat))))
 
   const wikidata = new Map(rows.flatMap(r => (r.wikidata ? [[Number(r.id), r.wikidata] as [number, string]] : [])))
-  return { ways, onGround, outlines, kerbs, crossed, water, wikidata }
+  return { ways, onGround, outlines, kerbs, crossed, water, wikidata, surfaces: groundSurfaces }
 }
 
 /**

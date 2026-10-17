@@ -605,7 +605,8 @@ covered AS (
 -- patchwork. The smallest containing outline wins where outlines nest.
 owner AS (
   SELECT DISTINCT ON (p.id) p.id as part_id,
-         (o.osm_id * 4 + CASE o.osm_type WHEN 'N' THEN 0 WHEN 'W' THEN 1 ELSE 2 END) as outline_fid
+         (o.osm_id * 4 + CASE o.osm_type WHEN 'N' THEN 0 WHEN 'W' THEN 1 ELSE 2 END) as outline_fid,
+         COALESCE(NULLIF(o.tags->>'building:use', ''), NULLIF(NULLIF(o.tags->>'building', ''), 'yes')) as outline_kind
   FROM parts p
   JOIN geo_places o
     ON o.geom && p.geom
@@ -657,7 +658,15 @@ SELECT m.fid, m.id, m.geom,
        CASE WHEN c.covered_area >= 0.9 * c.outline_area THEN true END as hide_3d,
        -- The building this shape belongs to: its outline for a part, itself
        -- otherwise. Shared by every part of one building.
-       COALESCE(w.outline_fid, m.fid) as group_id
+       COALESCE(w.outline_fid, m.fid) as group_id,
+       -- What the building is used for, which decides the facade a client
+       -- draws on it: `building:use` where mapped, else `building` unless it
+       -- says only `yes`, else a part's outline's. NULL, so absent, when unknown.
+       lower(COALESCE(
+         NULLIF(m.tags->>'building:use', ''),
+         NULLIF(NULLIF(m.tags->>'building', ''), 'yes'),
+         w.outline_kind,
+         CASE WHEN m.tags->>'amenity' = 'parking' THEN 'parking' END)) as kind
 FROM measured m
 LEFT JOIN covered c ON c.id = m.id
 LEFT JOIN owner w ON w.part_id = m.id

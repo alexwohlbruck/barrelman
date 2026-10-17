@@ -22,6 +22,8 @@ import {
   heightAt,
   inside,
   joinNeighbours,
+  holdGores,
+  paveGores,
   landing,
   LANDING,
   TERRAIN_SLACK,
@@ -39,6 +41,7 @@ import {
   type Way,
 } from './profile'
 import { inOutline, shapeDecks, type Outline } from './shape'
+import { bentPoints, blocked, nearestFree, obstacles, wayHalf, type Obstacles } from './supports'
 
 /** Metres between height samples. */
 export const STEP = 6
@@ -61,7 +64,7 @@ const GROUND_BATCH = 16
 
 export type Ground = { load(points: Point[]): Promise<void>; at(p: Point): number }
 
-export type Crossed = { kind: 'road' | 'rail' | 'path' | 'water'; points: Point[] }
+export type Crossed = { kind: 'road' | 'rail' | 'path' | 'water'; points: Point[]; half?: number }
 
 export type DeckInput = {
   ways: Way[]
@@ -75,6 +78,8 @@ export type DeckInput = {
   crossed: Crossed[]
   /** Water areas, as outer rings. */
   water: Point[][]
+  /** Carriageways on the ground the decks pass over, outer ring then holes, which supports keep off. */
+  surfaces?: Point[][][]
   /** A wikidata id per way, where the bridge is tagged with one. */
   wikidata: Map<number, string>
 }
@@ -211,15 +216,24 @@ function needs(s: Pick<Solved, 'chain' | 'd' | 'g'>, input: DeckInput, below: So
 /**
  * Piers every PIER_SPACING metres where a deck stands high. A deck running
  * beside one that already has piers takes the same row, so twin carriageways
- * and twin tracks stand on shared bents rather than two staggered sets.
+ * and twin tracks stand on shared bents rather than two staggered sets. A
+ * pier that would stand on a way or a deck below moves to the nearest clear
+ * place, or is left out.
  */
-function piers(solved: Solved[]): number[][] {
+function piers(solved: Solved[], input: DeckInput): number[][] {
   const out = solved.map(() => [] as number[])
   const order = solved.map((_, k) => k).sort((a, b) => solved[b].d[solved[b].d.length - 1] - solved[a].d[solved[a].d.length - 1])
   const high = (s: Solved, at: number) => heightAt(s.d, s.z, at) - heightAt(s.d, s.g, at) >= PIER_MIN
+  const ground = obstacles(
+    input.crossed.flatMap(c => (c.kind === 'water' ? [] : [{ kind: c.kind, points: c.points, half: c.half ?? wayHalf(c.kind, null) }])),
+    input.surfaces ?? [],
+    solved.map(o => ({ points: o.chain.points, half: Math.max(...o.chain.edges) })),
+  )
   for (const [n, k] of order.entries()) {
     const s = solved[k]
     const total = s.d[s.d.length - 1]
+    const below: Obstacles = { ...ground, decks: ground.decks.filter((_, j) => solved[j].chain.layer < s.chain.layer) }
+    const fits = (at: number) => high(s, at) && !blocked(bentPoints(s.chain, s.d, at), below)
     const shared: number[] = []
     for (const j of order.slice(0, n)) {
       const o = solved[j]
@@ -229,15 +243,35 @@ function piers(solved: Solved[]): number[][] {
         const p = o.chain.points[Math.min(o.chain.points.length - 1, Math.round(at / STEP))]
         const near = beside(s.chain.points, p)
         if (!near.alongside || near.distance > Math.max(...s.chain.edges) + Math.max(...o.chain.edges) + 3) continue
-        const mine = s.d[near.segment - 1] + (s.d[near.segment] - s.d[near.segment - 1]) * near.t
-        if (high(s, mine)) shared.push(mine)
+        const mine = nearestFree(s.d[near.segment - 1] + (s.d[near.segment] - s.d[near.segment - 1]) * near.t, total, PIER_SPACING / 4, fits)
+        if (mine !== null) shared.push(mine)
       }
     }
-    for (let at = PIER_SPACING / 2; at < total; at += PIER_SPACING)
-      if (high(s, at) && !shared.some(x => Math.abs(x - at) < PIER_SPACING * 0.75)) shared.push(at)
+    for (let at = PIER_SPACING / 2; at < total; at += PIER_SPACING) {
+      if (shared.some(x => Math.abs(x - at) < PIER_SPACING * 0.75)) continue
+      const free = nearestFree(at, total, PIER_SPACING / 2 - 1, fits)
+      if (free !== null && !shared.some(x => Math.abs(x - free) < PIER_SPACING / 2)) shared.push(free)
+    }
+    // A long span left without piers where everything below was taken gets one wherever its middle allows.
+    for (let gap = longestGap(shared, total); gap && gap.length > 2 * PIER_SPACING; gap = longestGap(shared, total)) {
+      const free = nearestFree(gap.middle, total, gap.length / 2 - PIER_SPACING / 2, fits)
+      if (free === null) break
+      shared.push(free)
+    }
     out[k] = shared.sort((a, b) => a - b).map(x => Math.round(x * 10) / 10)
   }
   return out
+}
+
+/** The longest stretch of a deck between its piers or its ends, and its middle, in metres along it. */
+function longestGap(piers: number[], total: number): { length: number; middle: number } | null {
+  const marks = [0, ...[...piers].sort((a, b) => a - b), total]
+  let best: { length: number; middle: number } | null = null
+  for (let i = 1; i < marks.length; i++) {
+    const length = marks[i] - marks[i - 1]
+    if (!best || length > best.length) best = { length, middle: (marks[i] + marks[i - 1]) / 2 }
+  }
+  return best
 }
 
 type Landing = ReturnType<typeof landing>
@@ -249,25 +283,61 @@ type Landing = ReturnType<typeof landing>
 /** Least cosine between a deck's end and the way it reads the road beyond along. */
 const ONWARD_COS = Math.SQRT1_2
 
-export function beyond(points: Point[], end: 0 | 1, roads: Point[][] = [], road = true): Point[] {
+/**
+ * The way carrying on from a deck's end, from the end out: within about 45
+ * degrees of it, else straight on. Null for a road whose end meets ways but
+ * none carrying on, which is a junction.
+ */
+function carriedOn(points: Point[], end: 0 | 1, roads: Point[][], road: boolean): { path: Point[]; way: Point[] | null } | null {
   const [a, b] = end ? [points[points.length - 2], points[points.length - 1]] : [points[1], points[0]]
   const out: [number, number] = [b[0] - a[0], b[1] - a[1]]
   const scale = metresPerUnit(b[1])
-  let path: Point[] = [b, [b[0] + out[0] * 1e3, b[1] + out[1] * 1e3]]
-  let best = 0
-  for (const road of roads) {
-    const at = road.findIndex(p => Math.hypot(p[0] - b[0], p[1] - b[1]) * scale < 0.05)
+  const straight: Point[] = [b, [b[0] + out[0] * 1e3, b[1] + out[1] * 1e3]]
+  let [best, path, way] = [0, straight, null as Point[] | null]
+  for (const r of roads) {
+    const at = r.findIndex(p => Math.hypot(p[0] - b[0], p[1] - b[1]) * scale < 0.05)
     if (at < 0) continue
-    for (const run of [road.slice(at), road.slice(0, at + 1).reverse()]) {
+    for (const run of [r.slice(at), r.slice(0, at + 1).reverse()]) {
       if (run.length < 2) continue
       const [dx, dy] = [run[1][0] - b[0], run[1][1] - b[1]]
       const cos = (dx * out[0] + dy * out[1]) / ((Math.hypot(dx, dy) * Math.hypot(...out)) || 1)
-      if (cos > best) [best, path] = [cos, run]
+      if (cos > best) [best, path, way] = [cos, run, r]
     }
   }
-  // A road's end reads only a way carrying on within about 45 degrees, and nothing at a junction with none; a path reads straight on.
-  if (road && best < ONWARD_COS && (best > 0 || roads.some(r => r.some(p => Math.hypot(p[0] - b[0], p[1] - b[1]) * scale < 0.05)))) return []
-  if (best < ONWARD_COS) path = [b, [b[0] + out[0] * 1e3, b[1] + out[1] * 1e3]]
+  if (road && best < ONWARD_COS && (best > 0 || roads.some(r => r.some(p => Math.hypot(p[0] - b[0], p[1] - b[1]) * scale < 0.05)))) return null
+  return best < ONWARD_COS ? { path: straight, way: null } : { path, way }
+}
+
+/**
+ * Metres from a deck's end, along the way carrying on from it, to the first
+ * point another of `others` comes within JUNCTION_NEAR of it, within
+ * LANDING.reach; Infinity where none does. A single way carrying straight on
+ * from the end of the one followed is the same road.
+ */
+export function junctionAhead(points: Point[], end: 0 | 1, roads: Point[][] = [], road = true, others: Point[][] = roads): number {
+  const run = carriedOn(points, end, roads, road)
+  if (!run) return Infinity
+  const scale = metresPerUnit(run.path[0][1])
+  const touch = 0.05 / scale
+  let [path, way, travelled] = [run.path, run.way, 0]
+  for (let k = 0; k < path.length && travelled < LANDING.reach; k++) {
+    const q = path[k]
+    if (k) travelled += Math.hypot(q[0] - path[k - 1][0], q[1] - path[k - 1][1]) * scale
+    const met = others.filter(r => r !== way && covers(grow(box(r), JUNCTION_NEAR), q) && beside(r, q).distance < JUNCTION_NEAR)
+    if (!met.length) continue
+    const next = k && k === path.length - 1 && met.length === 1 && met[0].some(x => Math.hypot(x[0] - q[0], x[1] - q[1]) < touch)
+      ? carriedOn([path[k - 1], q], 1, met, road) : null
+    if (!next?.way) return travelled
+    ;[path, way, k] = [next.path, next.way, 0]
+  }
+  return Infinity
+}
+
+export function beyond(points: Point[], end: 0 | 1, roads: Point[][] = [], road = true): Point[] {
+  const run = carriedOn(points, end, roads, road)
+  if (!run) return []
+  const scale = metresPerUnit(run.path[0][1])
+  let path = run.path
   // A way that ends before the reach runs on straight.
   const [p, q] = [path[path.length - 2], path[path.length - 1]]
   path = [...path, [q[0] + (q[0] - p[0]) * 1e3, q[1] + (q[1] - p[1]) * 1e3]]
@@ -287,6 +357,11 @@ export function beyond(points: Point[], end: 0 | 1, roads: Point[][] = [], road 
   }
   return samples
 }
+
+/** Metres a deck's run-on must stop short of a junction on the road beyond, about half a crossing street. */
+const JUNCTION_ROOM = 5
+/** How near another road or path must come to the way beyond a deck's end to meet it there, in metres. */
+const JUNCTION_NEAR = 3
 
 /** Farthest, in metres, the road a deck runs on to may stray from the deck's own line before it is not where the deck runs. */
 const OFF_LINE = 2
@@ -349,7 +424,7 @@ function eased(s: Solved, onGround: Set<string>): number[] {
 const SETTLE_RUN = 30
 
 /** Ground under each deck, and the road each grounded end lands on, loaded a few decks at a time and nearby decks together. */
-async function groundUnder(shaped: Chain[], edges: Array<[Point[], Point[]]>, grounded: Array<[boolean, boolean]>, onward: Point[][], ground: Ground) {
+async function groundUnder(shaped: Chain[], edges: Array<[Point[], Point[]]>, grounded: Array<[boolean, boolean]>, onward: Point[][], ground: Ground, roadsOnly: Point[][]) {
   const out: Array<number[] | null> = shaped.map(() => null)
   const lands: Array<[Landing, Landing]> = shaped.map(() => [null, null])
   const roads: Array<[number[], number[]]> = shaped.map(() => [[], []])
@@ -375,7 +450,11 @@ async function groundUnder(shaped: Chain[], edges: Array<[Point[], Point[]]>, gr
       roads[k] = pts.map(read) as [number[], number[]]
       lands[k] = roads[k].map((r, end) => {
         const land = r.length ? landing(r, g[end ? g.length - 1 : 0]) : null
-        return land && offLine(shaped[k].points, end as 0 | 1, pts[end].slice(0, Math.round(land.run / LANDING.step))) <= OFF_LINE ? land : null
+        if (!land || offLine(shaped[k].points, end as 0 | 1, pts[end].slice(0, Math.round(land.run / LANDING.step))) > OFF_LINE) return null
+        // A hollow reaching past the road's next junction is the junction's ground: the deck comes down to it rather than run on over it.
+        const road = shaped[k].kind === 'road'
+        const junction = junctionAhead(shaped[k].points, end as 0 | 1, onward, road, road ? roadsOnly : onward) - JUNCTION_ROOM
+        return land.run <= junction ? land : null
       }) as [Landing, Landing]
     }
   }
@@ -430,7 +509,7 @@ export async function buildDecks(input: DeckInput, ground: Ground): Promise<Deck
   })
   const edges = shaped.map(edgePoints)
   const onward = input.crossed.filter(c => c.kind === 'road' || c.kind === 'path').map(c => c.points)
-  const { under, lands, roads } = await groundUnder(shaped, edges, grounded, onward, ground)
+  const { under, lands, roads } = await groundUnder(shaped, edges, grounded, onward, ground, input.crossed.filter(c => c.kind === 'road').map(c => c.points))
 
   // Lower layers first, so a deck over another clears it.
   const solved: Solved[] = []
@@ -467,7 +546,10 @@ export async function buildDecks(input: DeckInput, ground: Ground): Promise<Deck
   for (const s of solved) s.z = eased(s, input.onGround)
   // Easing moves twins a few centimetres apart; side by side, they meet exactly.
   joinNeighbours(solved, undefined, EASED)
-  const rows = piers(solved)
+  holdGores(solved)
+  const rows = piers(solved, input)
+  // After the piers, which keep off what lies under a deck's carriageway, not under its gore.
+  paveGores(solved)
 
   const wiki = (s: Solved) => s.chain.ways.map(w => input.wikidata.get(w)).find(Boolean)
   const placed = solved.map(s => {

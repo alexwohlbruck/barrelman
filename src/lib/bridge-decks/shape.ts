@@ -8,7 +8,7 @@
  * between them, and a deck that lands on the ground ends where its outline
  * does, at whatever skew the abutment was drawn.
  */
-import { along, beside, box, covers, inside, MAX_REACH, meet, metresPerUnit, nearSegments, type Box, type Chain, type Point } from './profile'
+import { along, beside, box, covers, crossings, inside, MAX_REACH, meet, metresPerUnit, nearSegments, type Box, type Chain, type Point } from './profile'
 
 export type Outline = { id: string; rings: Point[][] }
 
@@ -23,6 +23,12 @@ export type Shape = { sides: [number[], number[]]; caps: [number, number, number
 export const CAP_MAX = 20
 /** How far inside its edge a corner is tested from, so one lying on the outline's side counts as in it. */
 const CORNER_INSET = 0.5
+/** Most a side may stand out of its outline, in metres: outlines are traced by hand. */
+const OUTSIDE_SLACK = 0.5
+/** How far in from an end its sides are read against the outline, in metres. */
+const END_STEP = 1
+/** Farthest a deck's end may lie from another's centreline and still meet it, in metres. */
+const JUNCTION_GAP = 1
 
 /** A deck to shape: shaped only where `outline` names the outline it was found in, by `inOutline`. */
 type Deck = Pick<Chain, 'points' | 'edges' | 'layer' | 'fit'> & { outline?: string | null }
@@ -77,6 +83,25 @@ const NEIGHBOUR_REACH = 2 * MAX_REACH
 
 /** Least cosine between a deck and a neighbour that shares its room: within about 35 degrees, not one crossing over or under. */
 const ALONGSIDE = 0.82
+
+/** Unit direction of a line's segment. */
+const heading = (line: Point[], i: number): Point => {
+  const [a, b] = [line[i - 1], line[i]]
+  const len = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1
+  return [(b[0] - a[0]) / len, (b[1] - a[1]) / len]
+}
+
+/** Whether two decks meet across each other, as roads at a junction do: one crosses the other, or ends on it at an angle. */
+function across(a: Point[], b: Point[]): boolean {
+  if (crossings(a, b, 0).length) return true
+  return [[a, b], [b, a]].some(([line, other]) =>
+    [0, other.length - 1].some(e => {
+      const at = beside(line, other[e])
+      if (at.distance > JUNCTION_GAP) return false
+      const [u, v] = [heading(line, at.segment), heading(other, e ? other.length - 1 : 1)]
+      return Math.abs(u[0] * v[0] + u[1] * v[1]) < ALONGSIDE
+    }))
+}
 
 const offset = (p: Point, dir: Point, metres: number): Point => {
   const u = metres / metresPerUnit(p[1])
@@ -168,6 +193,9 @@ export function shapeDecks(decks: Deck[], outlines: Outline[], grounded: Array<[
   const boxes: Box[] = decks.map(d => box(d.points))
   // Decks meeting each outline, once, rather than every deck tested against every other.
   const meeting = bounds.map(b => boxes.flatMap((x, j) => (meet(x, b) ? [j] : [])))
+  // Road decks in the same outline as one.
+  const meetingIn = (k: number) => [...new Set(bounds.flatMap((b, j) => (meet(boxes[k], b) ? meeting[j] : [])))]
+    .filter(j => j !== k && decks[j].outline === decks[k].outline)
   return decks.map((deck, k) => {
     if (!deck.outline) return null
     const pts = deck.points
@@ -227,6 +255,33 @@ export function shapeDecks(decks: Deck[], outlines: Outline[], grounded: Array<[
       const from = i < first ? first : i > last ? last : -1
       return from >= 0 && Math.abs(d[i] - d[from]) <= CAP_MAX ? s[from] : deck.edges[side]
     }))) as [number[], number[]]
+    // A side standing out of its outline is cut back to it, but never inside the carriageway. Near a grounded
+    // end, whose square end meets the road beyond however the abutment is skewed, only a side at the most a
+    // deck may reach, unless the deck is one of a junction the bridge carries, whose ends meet no single road.
+    const junction = meetingIn(k).some(j => across(pts, decks[j].points))
+    for (let i = 0; i < n; i++) {
+      if (home[i] < 0) continue
+      const { t, n: left } = frame(pts, i)
+      const landing = !junction && ([0, 1] as const).some(end => grounded[k][end] && fromEnd(i, end) <= CAP_MAX)
+      const rings = outlines[home[i]].rings
+      for (const side of [0, 1] as const) {
+        const v = shaped[side][i]
+        const dir = side ? neg(left) : left
+        if (v <= deck.edges[side] || (landing && v < MAX_REACH)) continue
+        if (within(offset(pts[i], dir, v - OUTSIDE_SLACK), rings)) continue
+        // An end often lies on the outline's side: read a step in from it.
+        const from = i === 0 ? offset(pts[i], t, END_STEP) : i === n - 1 ? offset(pts[i], neg(t), END_STEP) : pts[i]
+        shaped[side][i] = Math.max(deck.edges[side], Math.min(v, rayHit(from, dir, rings)))
+      }
+    }
+    // Past its outline a junction's deck is just its carriageway; any other keeps no more than where it left the outline.
+    for (let i = 0; i < n; i++) {
+      if (home[i] >= 0) continue
+      const inner = [i - 1, i + 1].find(j => j >= 0 && j < n && home[j] >= 0)
+      for (const side of [0, 1] as const)
+        if (junction) shaped[side][i] = Math.min(shaped[side][i], deck.edges[side])
+        else if (inner !== undefined) shaped[side][i] = Math.min(shaped[side][i], shaped[side][inner])
+    }
     const caps: Shape['caps'] = [0, 0, 0, 0]
     for (const end of [0, 1] as const) {
       const nearEnd = home.flatMap((h, i) => (h >= 0 && fromEnd(i, end) <= CAP_MAX ? [i] : []))
