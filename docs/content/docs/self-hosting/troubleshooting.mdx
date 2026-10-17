@@ -88,6 +88,12 @@ They come from a layer with two indexes of its own, `geo_places_locality_ts_idx`
 
 US ZIP codes come from Pelias rather than OSM, which maps them almost nowhere, so they also need Pelias running with its Who's on First data.
 
+**Misspelt searches find nothing after an upgrade**
+
+Search corrects a misspelt word against `search_lexicon`, a list of every word in the search index. An import builds it; on an instance imported before it existed, the API builds it in the background on its first start, after search enrichment. That is one pass over the named places, several minutes on a national import, and the log shows `[search-enrichment] search lexicon…` while it runs. Until it exists, well-spelled searches work as before and misspelt ones simply aren't corrected.
+
+The list is a snapshot. A place added by a later OSM update is still found by its exact name, but isn't offered as a correction until the list is rebuilt: run **Rebuild Search Lexicon** in the console, or enable its seeded weekly schedule. The rebuild swaps the new list in at the end, so search keeps working throughout.
+
 **`Region "colorado" is disabled`**
 
 The console toggle is off. Enable it under **Regions**, or drop it from `REGIONS`. A disabled region named in `REGIONS` is an error, not a silent skip.
