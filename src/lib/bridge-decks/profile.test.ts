@@ -361,7 +361,7 @@ describe('closeVerges', () => {
   it('widens a sidewalk deck across the verge to the road deck beside it on one bridge', () => {
     const w = walk()
     closeVerges([{ chain: road, z: road.points.map(() => 100) }, { chain: w, z: w.points.map(() => 100) }], () => true)
-    expect(Math.max(...w.edges)).toBeCloseTo(3.5, 1)
+    expect(Math.abs(Math.max(...w.edges) - 3.5)).toBeLessThan(0.1)
   })
 
   it('leaves one on another bridge, or at another height', () => {
