@@ -784,8 +784,8 @@ export function closeVerges(decks: GoreDeck[], sameBridge: (path: Chain, road: G
   const before = new Map(decks.map(D => [D, sidesNow(D)]))
   for (const P of decks) {
     if (P.chain.kind !== 'path') continue
-    const near = roads.filter(R => R.chain.layer === P.chain.layer && sameBridge(P.chain, R.chain) &&
-      meet(grow(box(R.chain.points), Math.max(...R.chain.edges) + VERGE_GAP + Math.max(...P.chain.edges)), box(P.chain.points)))
+    const near = roads.filter(R => R.chain.layer === P.chain.layer &&
+      meet(grow(box(R.chain.points), Math.max(...R.chain.edges) + VERGE_GAP + Math.max(...P.chain.edges)), box(P.chain.points)) && sameBridge(P.chain, R.chain))
     if (!near.length) continue
     const reach: [number[], number[]] = [P.chain.points.map(() => 0), P.chain.points.map(() => 0)]
     P.chain.points.forEach((_, i) => {
