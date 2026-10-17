@@ -10,6 +10,19 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Added
+
+* **Gores are paved and hatched.** Where a ramp leaves a road, or two ramps
+  part, the wedge between their carriageways is paved with white chevrons out
+  to the nose, on the ground and on bridges, with no area mapped for it.
+
+### Changed
+
+* **Bridge decks at junctions and splits.** A deck stays inside its bridge's
+  outline, so a junction carried on a bridge is no longer a slab reaching over
+  the ground beside it, and a ramp stays level with the road it leaves until
+  the gore's nose, which its deck paves.
+
 ## [0.10.21] - 2026-10-17
 
 ### Added

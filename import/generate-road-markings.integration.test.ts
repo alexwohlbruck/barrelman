@@ -1458,6 +1458,16 @@ run('generate-road-markings.sql', () => {
       expect(apex).toBeGreaterThan(0)
     })
 
+    test('hatches the gore an exit ramp leaves as it peels off a motorway, out to its nose', async () => {
+      const bars = await sql`
+        SELECT color, ST_Y(ST_Centroid(geom)) as y FROM road_markings
+        WHERE kind = 'hatch' AND NOT bridge AND geom && ST_MakeEnvelope(-74.1802, 40.7131, -74.1796, 40.7145, 4326)`
+      expect(bars.length).toBeGreaterThan(0)
+      expect(bars.every(b => b.color === 'white')).toBe(true)
+      // Not where the two carriageways still share the stem, nor past the nose.
+      expect(bars.every(b => b.y > 40.7133 && b.y < 40.7145)).toBe(true)
+    })
+
     test('reads a traffic_calming=painted_island area as a painted median', async () => {
       const [{ n }] = await sql`
         SELECT count(*)::int as n FROM road_markings WHERE kind = 'hatch' AND color = 'yellow' AND geom && ${by(-74.325, 40.7132, 25)}`

@@ -1230,6 +1230,9 @@ WHERE NOT EXISTS (SELECT 1 FROM _rm_roads o WHERE NOT road_minor(o.class) AND o.
                   AND ST_DWithin(o.g, n.pt, 0.05) AND o.osm_id <> ALL (n.ids));
 CREATE INDEX ON _rm_fork_members (x, y);
 ANALYZE _rm_fork_members;
+-- Each branch of a fork, ranked left to right across `u` (k), kept for the gores between them.
+DROP TABLE IF EXISTS _rm_fork_sides;
+CREATE TEMP TABLE _rm_fork_sides AS
 WITH fork AS (
   -- The stem: the one way whose traffic all the others divide or join. `u`
   -- points from the node along the branches; kl, kr are the stem's kerbs to
@@ -1249,13 +1252,14 @@ side AS (
          sum(b.width) OVER w - b.width as wl, sum(b.width) OVER (PARTITION BY f.x, f.y) as wt
   FROM fork f JOIN _rm_fork_members b ON b.x = f.x AND b.y = f.y AND b.osm_id <> f.stem
   WINDOW w AS (PARTITION BY f.x, f.y ORDER BY f.ux * b.uy - f.uy * b.ux DESC)
-),
-place AS (
+)
+SELECT * FROM side;
+WITH place AS (
   -- Where each branch's middle belongs across `u`, left positive; branches
   -- side by side only (no two at one bearing).
   SELECT *, CASE WHEN k = 1 THEN kl - width / 2 WHEN k = n THEN kr + width / 2
                  ELSE kl - (wl + width / 2) * stem_w / wt END as c
-  FROM (SELECT *, max(k) OVER (PARTITION BY x, y) as top FROM side) t
+  FROM (SELECT *, max(k) OVER (PARTITION BY x, y) as top FROM _rm_fork_sides) t
   WHERE n >= 2 AND top = n
 ),
 delta AS (
@@ -1648,7 +1652,7 @@ CREATE INDEX ON _rm_paint_flow (osm_type, osm_id);
 ANALYZE _rm_paint_flow;
 DROP TABLE IF EXISTS _rm_paint_areas;
 CREATE TEMP TABLE _rm_paint_areas AS
-SELECT m.g, m.s, m.stroke,
+SELECT m.g, m.s, m.stroke, false as bridge,
        CASE WHEN m.pattern = 'chevron' AND f.ux IS NULL THEN 'stripes' ELSE m.pattern END as pattern,
        COALESCE(m.colour, CASE WHEN m.americas AND (f.two_way OR o.opposed) THEN 'yellow' ELSE 'white' END) as color,
        f.ux, f.uy,
@@ -1662,6 +1666,42 @@ CROSS JOIN LATERAL (
                  WHERE a.osm_type = m.osm_type AND a.osm_id = m.osm_id AND a.oneway AND b.oneway
                    AND a.u[1] * b.u[1] + a.u[2] * b.u[2] < -0.5) as opposed
 ) o;
+-- Gores: between two branches side by side where a fork divides or joins,
+-- the wedge their carriageways leave until they stand 4 m apart (the nose,
+-- as a bridge deck paves it) is paved and hatched with chevrons pointing back
+-- at the traffic. Few gores are mapped (above). On a bridge where both are.
+INSERT INTO _rm_paint_areas (g, s, stroke, bridge, pattern, color, ux, uy, step)
+SELECT ST_CollectionExtract(w.g, 3), b.s, 'none', b.bridge, 'chevron', 'white', b.ux, b.uy, 4
+FROM (
+  SELECT ra.s, ra.bridge AND rb.bridge as bridge, n.pt,
+         CASE WHEN a.at_start THEN ra.g ELSE ST_Reverse(ra.g) END as la,
+         CASE WHEN b.at_start THEN rb.g ELSE ST_Reverse(rb.g) END as lb,
+         ST_Buffer(ST_OffsetCurve(ra.g, ra.kshift * ra.s), ra.width / 2 * ra.s, 'endcap=flat') as ca,
+         ST_Buffer(ST_OffsetCurve(rb.g, rb.kshift * rb.s), rb.width / 2 * rb.s, 'endcap=flat') as cb,
+         ra.width as wa,
+         -- The traffic's direction: away from the node where the branches divide, toward it where they join.
+         (a.ux + b.ux) / 2 * CASE WHEN a.at_start THEN 1 ELSE -1 END as ux,
+         (a.uy + b.uy) / 2 * CASE WHEN a.at_start THEN 1 ELSE -1 END as uy
+  FROM _rm_fork_sides a
+  JOIN _rm_fork_sides b ON b.x = a.x AND b.y = a.y AND b.k = a.k + 1 AND b.at_start = a.at_start
+  JOIN _rm_roads ra ON ra.osm_id = a.osm_id
+  JOIN _rm_roads rb ON rb.osm_id = b.osm_id
+  CROSS JOIN LATERAL (SELECT CASE WHEN a.at_start THEN ST_StartPoint(ra.g) ELSE ST_EndPoint(ra.g) END as pt) n
+) b
+-- The nose: the first point along the one branch, every 2 m out to 150 m, where the other's carriageway stands 4 m off its own.
+CROSS JOIN LATERAL (
+  SELECT min(t) as at FROM generate_series(2, 150, 2) t
+  WHERE t * b.s < ST_Length(b.la)
+    AND ST_Distance(ST_LineInterpolatePoint(b.la, t * b.s / ST_Length(b.la)), b.cb) - b.wa / 2 * b.s >= 4 * b.s
+) nose
+CROSS JOIN LATERAL (
+  SELECT ST_MakeValid(ST_Difference(ST_Intersection(
+           ST_MakeValid(ST_MakePolygon(ST_AddPoint(ST_MakeLine(ST_LineSubstring(b.la, 0, least(1, (nose.at + 20) * b.s / ST_Length(b.la))),
+                                                              ST_Reverse(ST_LineSubstring(b.lb, 0, least(1, (nose.at + 20) * b.s / ST_Length(b.lb))))),
+                                                  ST_StartPoint(b.la)))),
+           ST_Buffer(b.pt, nose.at * b.s, 16)), ST_Union(b.ca, b.cb))) as g
+) w
+WHERE nose.at IS NOT NULL AND ST_Length(b.lb) > 0 AND NOT ST_IsEmpty(w.g) AND ST_Area(ST_CollectionExtract(w.g, 3)) > 4 * b.s * b.s;
 CREATE INDEX ON _rm_paint_areas USING gist (g);
 ANALYZE _rm_paint_areas;
 
@@ -1757,7 +1797,7 @@ pieces AS (
   SELECT b.cx, b.cy, b.box, false, t.g
   FROM boxes b JOIN _rm_turns t ON t.g && b.box
   UNION ALL
-  SELECT b.cx, b.cy, b.box, false, a.g
+  SELECT b.cx, b.cy, b.box, a.bridge, a.g
   FROM boxes b JOIN _rm_paint_areas a ON a.g && b.box
 )
 -- Rounded kerbs carry far more vertices than a tile can show; 3 cm is well
@@ -2636,12 +2676,12 @@ INSERT INTO road_markings_next (kind, pattern, color, bridge, geom)
 -- Unstroked, it is still written, in a pattern no layer draws, so the queue can
 -- find where it was.
 SELECT 'restriction', CASE WHEN a.stroke IN ('no', 'none') OR ST_IsEmpty(i.g) THEN 'none' WHEN a.stroke = 'double_solid' THEN 'double'
-                           WHEN a.stroke = 'dashed' THEN 'dashed' ELSE 'solid' END, a.color, false,
+                           WHEN a.stroke = 'dashed' THEN 'dashed' ELSE 'solid' END, a.color, a.bridge,
        ST_Transform(ST_Boundary(CASE WHEN ST_IsEmpty(i.g) THEN a.g ELSE i.g END), 4326)
 FROM _rm_paint_areas a
 CROSS JOIN LATERAL (SELECT ST_Buffer(a.g, (CASE WHEN a.stroke = 'double_solid' THEN -0.3 ELSE -0.15 END) * a.s) as g) i;
 INSERT INTO road_markings_next (kind, pattern, color, bridge, geom)
-SELECT 'hatch', 'solid', a.color, false, ST_Transform(h.bars, 4326)
+SELECT 'hatch', 'solid', a.color, a.bridge, ST_Transform(h.bars, 4326)
 FROM _rm_paint_areas a
 CROSS JOIN LATERAL (SELECT road_area_hatch(a.g, a.pattern, a.step * a.s, a.ux, a.uy,
                                            (CASE WHEN a.stroke IN ('no', 'none') THEN 0.1 ELSE 0.45 END) * a.s) as bars) h
