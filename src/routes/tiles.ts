@@ -67,7 +67,7 @@ const CORS = 'access-control-allow-origin'
  * token list, and `gzip;q=0` means "not gzip", which is the one case a plain
  * substring match gets wrong.
  */
-function acceptsGzip(header: string | undefined): boolean {
+export function acceptsGzip(header: string | undefined): boolean {
   if (!header) return false
   return header
     .split(',')

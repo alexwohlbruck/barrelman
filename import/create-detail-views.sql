@@ -1031,7 +1031,8 @@ ALTER TABLE bridge_decks
   ADD COLUMN IF NOT EXISTS format smallint NOT NULL DEFAULT 1,
   ADD COLUMN IF NOT EXISTS left_edges real[],
   ADD COLUMN IF NOT EXISTS right_edges real[],
-  ADD COLUMN IF NOT EXISTS caps real[];
+  ADD COLUMN IF NOT EXISTS caps real[],
+  ADD COLUMN IF NOT EXISTS mesh text;
 CREATE INDEX IF NOT EXISTS bridge_decks_geom_idx ON bridge_decks USING gist (geom);
 CREATE INDEX IF NOT EXISTS bridge_decks_anchor_idx ON bridge_decks USING gist (anchor);
 
@@ -1084,5 +1085,6 @@ SELECT id, bridge, kind, layer, edges[1] AS left_edge, edges[2] AS right_edge,
        -- property out and a client tells such a deck by its absence.
        CASE WHEN left_edges IS NOT NULL THEN array_to_string(ARRAY(SELECT round(e * 10)::int FROM unnest(left_edges) e), ',') END AS left_edges,
        CASE WHEN right_edges IS NOT NULL THEN array_to_string(ARRAY(SELECT round(e * 10)::int FROM unnest(right_edges) e), ',') END AS right_edges,
-       CASE WHEN caps IS NOT NULL THEN array_to_string(ARRAY(SELECT round(c * 10)::int FROM unnest(caps) c), ',') END AS caps
+       CASE WHEN caps IS NOT NULL THEN array_to_string(ARRAY(SELECT round(c * 10)::int FROM unnest(caps) c), ',') END AS caps,
+       mesh
 FROM bridge_decks;

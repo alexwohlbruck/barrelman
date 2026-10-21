@@ -10,6 +10,7 @@
  * written, in one transaction. Any box works, on any grid, as often as wanted.
  */
 import type postgres from 'postgres'
+import { bakeDeckFiles } from './bridge-meshes'
 import type { Bbox } from '../src/config/regions'
 import { buildDecks, FORMAT, STEP, type Crossed, type Deck, type DeckInput } from '../src/lib/bridge-decks/build'
 import type { Dem } from '../src/lib/bridge-decks/dem'
@@ -208,6 +209,7 @@ export async function rebuildBoxes(sql: Sql, dem: Dem, boxes: UnitBox[], record:
     return { d, at: [toUnits(lng), toUnits(lat)] as UnitPoint, lngLats, box: [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)] as Bbox }
   })
   const mine = placed.filter(p => boxes.some(b => contains(b, p.at)))
+  const meshes = await bakeDeckFiles(sql, dem, mine.map(p => p.d), decks)
   const deleted = new Set<string>()
   await sql.begin(async rawTx => {
     const tx = rawTx as unknown as Sql
@@ -247,6 +249,7 @@ export async function rebuildBoxes(sql: Sql, dem: Dem, boxes: UnitBox[], record:
         throw new DeckConflict(ids, held.map(h => [h.x, h.y]))
       }
     }
+    for (const [id, mesh] of meshes) await tx`UPDATE bridge_decks SET mesh = ${mesh} WHERE id = ${id}`
     for (const [w, s, e, n] of record)
       await tx`INSERT INTO bridge_deck_cells (cell, w, s, e, n, box)
         VALUES (${[w, s, e, n].join(',')}, ${w}, ${s}, ${e}, ${n},

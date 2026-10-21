@@ -945,7 +945,7 @@ export const SCRIPTS: ScriptDef[] = [
     id: 'osm-bridge-decks',
     name: 'Build Bridge Decks',
     description:
-      'Rebuild bridge_decks: bridge ways joined into decks, fitted to their man_made=bridge outlines, with a height every 6 m solved from Mapterhorn terrain and what each passes over, and pier positions. Parchment draws 3D bridges from these.',
+      'Rebuild bridge_decks: bridge ways joined into decks, fitted to their man_made=bridge outlines, with a height every 6 m solved from Mapterhorn terrain and what each passes over, pier positions, and precomputed deck and road-marking meshes. Mesh files are written to BRIDGE_MESH_DIR for the tile API.',
     category: 'osm',
     danger: 'safe',
     longRunning: true,
