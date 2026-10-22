@@ -17,7 +17,7 @@ import type { Dem } from '../src/lib/bridge-decks/dem'
 import { clip, contains, degreeBox, toDegrees, toUnits, UNITS_PER_DEGREE, type UnitBox, type UnitPoint } from '../src/lib/bridge-decks/grid'
 import type { Built } from '../src/lib/bridge-decks/queue'
 import { deckLevel, metres, type Support } from '../src/lib/bridge-decks/elevation'
-import { inside, lngLat, mercator, type Kind, type Point, type Way } from '../src/lib/bridge-decks/profile'
+import { inside, lngLat, mercator, metresPerUnit, type Kind, type Point, type Way } from '../src/lib/bridge-decks/profile'
 
 type Sql = postgres.Sql
 
@@ -43,6 +43,9 @@ const WATER: Array<[string, string]> = [['natural', 'water'], ['waterway', 'rive
  */
 const anyTag = (sql: Sql, pairs: Array<[string, string]>) =>
   pairs.map(([k, v]) => sql`g.tags->>${k} = ${v}`).reduce((a, b) => sql`${a} OR ${b}`)
+
+/** Metres beyond its outline a bridge's tower or anchorage may stand, drawn as a building of its own: an anchorage often abuts the outline's end. */
+const SUPPORT_NEAR = 60
 
 /** Decks per INSERT: one statement per batch rather than a round trip per deck. */
 const INSERT_BATCH = 500
@@ -133,7 +136,8 @@ export async function inputFor(sql: Sql, rows: Row[]): Promise<DeckInput> {
   const supports: Support[] = supportRows.flatMap(r => r.coords.map(rings => ({ kind: r.kind, height: metres(r.height), ring: rings[0].map(([lng, lat]) => mercator(lng, lat)) })))
   const outlines = outlineRows.flatMap(o => o.coords.map(rings => {
     const shape = rings.map(ring => ring.map(([lng, lat]) => mercator(lng, lat)))
-    const mine = supports.filter(s => s.ring.some(p => inside(p, shape[0])))
+    const near = SUPPORT_NEAR / metresPerUnit(shape[0][0][1])
+    const mine = supports.filter(s => s.ring.some(p => inside(p, shape[0]) || shape[0].some(q => Math.hypot(q[0] - p[0], q[1] - p[1]) < near)))
     return { id: o.id, rings: shape, ...deckLevel(o.tags, mine) }
   }))
 

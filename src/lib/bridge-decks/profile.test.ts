@@ -20,11 +20,17 @@ describe('chains', () => {
     expect(along(deck.points).at(-1)).toBeCloseTo(150, 0)
   })
 
-  it('carries on through the straightest pair where three ways meet, and never between layers', () => {
+  it('carries on through the straightest pair where three ways meet, and never between layers there', () => {
     const branch: Way = { ...way(3, 0, 0), points: [east(50), east(80, 40)] }
     const decks = chains([way(1, 0, 50), way(2, 50, 100), branch])
     expect(decks.map(d => d.ways)).toEqual([[1, 2], [3]])
-    expect(chains([way(1, 0, 50), way(2, 50, 100, 2)])).toHaveLength(2)
+    expect(chains([way(1, 0, 50), way(2, 50, 100, 2), branch]).map(d => d.ways)).toEqual([[1, 3], [2]])
+  })
+
+  it('carries one deck on where two ways meet alone, whatever their layers', () => {
+    const [deck] = chains([way(1, 0, 50), way(2, 50, 100, 3)])
+    expect(deck.ways).toEqual([1, 2])
+    expect(deck.layer).toBe(3)
   })
 
   it('carries a road on through a junction rather than the ramp that leaves it straighter', () => {

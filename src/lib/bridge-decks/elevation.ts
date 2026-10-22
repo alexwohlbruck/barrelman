@@ -117,7 +117,7 @@ export function levelNeeds(points: Point[], within: boolean[], level: OutlineLev
   return points.flatMap((p, i) => {
     if (!within[i]) return []
     const u = ((p[0] - a[0]) * v[0] + (p[1] - a[1]) * v[1]) / (v[0] * v[0] + v[1] * v[1])
-    return u >= 0 && u <= 1 ? [{ at: d[i], height: base + level.deck! - sag * (2 * u - 1) ** 2 }] : []
+    return u >= 0 && u <= 1 ? [{ at: d[i], height: base + level.deck! - sag * (2 * u - 1) ** 2, exact: level.suspended }] : []
   })
 }
 

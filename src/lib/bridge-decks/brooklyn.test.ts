@@ -1,0 +1,92 @@
+/**
+ * The Brooklyn Bridge and the interchange at its Manhattan end, recorded from
+ * OSM with its terrain: the suspended span, its anchorages and approaches, the
+ * elevated promenade, and the ramps to the FDR Drive crossing under and over
+ * one another.
+ */
+import { describe, expect, it } from 'bun:test'
+import { buildDecks, type Deck } from './build'
+import { along, beside, crossings, mercator, type Point } from './profile'
+import { recorded } from './recorded'
+
+const { input, ground } = await recorded('brooklyn-bridge')
+const decks = await buildDecks(input, ground)
+const carrying = (way: number) => decks.find(d => d.ways.includes(way))!
+const heightAt = (deck: Deck, p: Point) => {
+  const near = beside(deck.points, p)
+  const j = near.segment
+  return deck.heights[j - 1] + (deck.heights[j] - deck.heights[j - 1]) * near.t
+}
+/** The river's surface on the terrain, which OSM's bridge height is measured from. */
+const water = Math.min(...carrying(432550255).ground)
+const towers = { manhattan: mercator(-73.9983344, 40.7072687), brooklyn: mercator(-73.9943541, 40.7041037) }
+const midspan = mercator(-73.99634, 40.70570)
+const roadways = [carrying(432550255), carrying(46177152)]
+
+describe('the Brooklyn Bridge', () => {
+  it('carries its roadways at the height OSM records over the river, cambered to its towers', () => {
+    for (const roadway of roadways) {
+      expect(heightAt(roadway, midspan) - water).toBeCloseTo(41, 0)
+      // The tower model's roadway band stands 36.5 m over the water.
+      for (const tower of Object.values(towers)) expect(Math.abs(heightAt(roadway, tower) - water - 36.5)).toBeLessThan(1.5)
+    }
+  })
+
+  it('hangs its suspended span from anchorage to anchorage on no piers', () => {
+    const anchorages = [mercator(-74.00091, 40.70931), mercator(-73.99171, 40.70201)]
+    for (const roadway of roadways) {
+      const d = along(roadway.points)
+      const [from, to] = anchorages.map(p => { const n = beside(roadway.points, p); return d[n.segment - 1] + (d[n.segment] - d[n.segment - 1]) * n.t }).sort((a, b) => a - b)
+      expect(roadway.piers.filter(at => at > from + 20 && at < to - 20)).toEqual([])
+      expect(roadway.piers.length).toBeGreaterThan(0)
+    }
+  })
+
+  it('carries the promenade above its roadways between the towers', () => {
+    const promenade = carrying(439842783)
+    expect(heightAt(promenade, midspan)).toBeGreaterThan(heightAt(roadways[0], midspan) + 3)
+  })
+
+  it('keeps the promenade up between the roadways where it runs on over the anchorage', () => {
+    const promenade = carrying(439842790)
+    expect(Math.min(promenade.heights[0], promenade.heights[promenade.heights.length - 1]) - water).toBeGreaterThan(20)
+  })
+
+  it('runs each roadway as one deck from its Manhattan approach to its Brooklyn one, without a dip', () => {
+    for (const roadway of roadways) {
+      expect(roadway.length).toBeGreaterThan(1600)
+      const h = roadway.heights
+      // Joints between a dozen ways may ripple by a few tenths of a metre, no more.
+      for (let i = 1; i < h.length - 1; i++) expect(Math.min(Math.max(...h.slice(0, i + 1)), Math.max(...h.slice(i))) - h[i]).toBeLessThan(0.5)
+    }
+    // Where it crosses the Manhattan anchorage.
+    expect(carrying(808611020)).toBe(carrying(122660460))
+  })
+})
+
+describe('the interchange at its Manhattan end', () => {
+  const near = (d: Deck) => d.points.some(([x, y]) => x > mercator(-74.004, 40.712)[0] && x < mercator(-73.996, 40.705)[0] && y > mercator(-74.004, 40.712)[1] && y < mercator(-73.996, 40.705)[1])
+
+  it('carries each deck over the decks OSM puts below it, with room between', () => {
+    const gaps: number[] = []
+    for (const a of decks.filter(near))
+      for (const b of decks.filter(near)) {
+        if (a.layer <= b.layer) continue
+        const d = along(a.points)
+        for (const at of crossings(a.points, b.points, 2, d)) {
+          const i = Math.min(a.points.length - 1, Math.round(at / 6))
+          gaps.push(a.heights[i] - heightAt(b, a.points[i]))
+        }
+      }
+    expect(gaps.length).toBeGreaterThan(10)
+    expect(Math.min(...gaps)).toBeGreaterThan(5)
+  })
+
+  it('dips a ramp under one climbing from the street to cross it, rather than run them through each other', () => {
+    const over = carrying(32922459), under = carrying(5672337)
+    const d = along(over.points)
+    const [at] = crossings(over.points, under.points, 2, d)
+    const p = over.points[Math.round(at / 6)]
+    expect(heightAt(over, p) - heightAt(under, p)).toBeGreaterThan(5)
+  })
+})

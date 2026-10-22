@@ -161,8 +161,8 @@ const FOLD = 0
 
 /**
  * Ways joined end to end into chains, one per roadway. OSM ways share their
- * end nodes, so ends match exactly. Only ways of one kind and layer join, so
- * stacked decks never do; where three or more meet, the pair that carries one
+ * end nodes, so ends match exactly. Two ways meeting alone join; where more
+ * meet, only ways of one kind and layer join, so stacked decks never do, and the pair that carries one
  * road on (same class and ref or name, turning no sharper than ONWARD) joins,
  * else the straightest pair, and the rest end there. Only a path folds back.
  */
@@ -175,7 +175,9 @@ export function chains(ways: Way[]): Chain[] {
   const used = new Set<number>()
   const out: Chain[] = []
   const next = (p: Point, from: Way) => {
-    const like = (ends.get(key(p)) ?? []).filter(o => o.kind === from.kind && o.layer === from.layer)
+    const kin = (ends.get(key(p)) ?? []).filter(o => o.kind === from.kind)
+    // Two ways meeting alone carry one deck on whatever their layers: mappers often leave a bridge's anchorage stretch untagged.
+    const like = kin.length === 2 ? kin : kin.filter(o => o.layer === from.layer)
     if (like.length < 2) return null
     let best: [Way, Way] | null = null
     let score = -Infinity
@@ -210,7 +212,7 @@ export function chains(ways: Way[]): Chain[] {
       }
     }
     const width = Math.max(...members.map(m => m.width))
-    out.push({ ways: members.map(m => m.id), points, kind: start.kind, layer: start.layer, edges: [width / 2, width / 2] })
+    out.push({ ways: members.map(m => m.id), points, kind: start.kind, layer: Math.max(...members.map(m => m.layer)), edges: [width / 2, width / 2] })
   }
   return out
 }
@@ -475,7 +477,8 @@ export function landing(beyond: number[], end: number): { height: number; run: n
 }
 
 /** What a deck must stand clear of at a distance along it: an absolute height for its surface. */
-export type Need = { at: number; height: number }
+/** A height a deck must reach at a distance along it; `exact` holds it there once settled, as a suspended span's camber. */
+export type Need = { at: number; height: number; exact?: boolean }
 
 /**
  * Ground with lone spikes taken out: at each sample, the median of those
@@ -555,11 +558,41 @@ export function solve(
   const anchored = [chain.grounded[0] || resting[0] !== null, chain.grounded[1] || resting[1] !== null]
   const [za, zb] = [end(0, ground[0]), end(1, ground[n - 1])]
   const lower = steady(ground, d).map(g => g - TERRAIN_SLACK)
+  // A need out of reach of an anchored end within MAX_GRADE is cut to what it can reach: left whole, it would lift the deck far from it.
+  const reach = (at: number) => Math.min(anchored[0] ? za + MAX_GRADE * at : Infinity, anchored[1] ? zb + MAX_GRADE * (d[n - 1] - at) : Infinity)
   for (const need of needs)
-    for (let i = 0; i < n; i++) if (Math.abs(d[i] - need.at) <= CURVE / 2) lower[i] = Math.max(lower[i], need.height)
+    for (let i = 0; i < n; i++) if (Math.abs(d[i] - need.at) <= CURVE / 2) lower[i] = Math.max(lower[i], Math.min(need.height, reach(d[i])))
   lower[0] = za
   lower[n - 1] = zb
   return align(d, lower, [anchored[0] ? za : null, anchored[1] ? zb : null])
+}
+
+/** Metres over which a deck eases back from a held camber to its own grade line. */
+const CAMBER_BLEND = 150
+
+/**
+ * A deck held to its exact needs, sample by sample, as a suspended span hangs
+ * on its cables whatever the approaches do; the difference at each end of the
+ * held stretch fades out over CAMBER_BLEND beyond it.
+ */
+export function cambered(z: number[], d: number[], needs: Need[]): number[] {
+  const at = new Map<number, number>()
+  for (const need of needs) {
+    if (!need.exact) continue
+    const i = d.findIndex(v => Math.abs(v - need.at) < 0.5)
+    if (i >= 0) at.set(i, Math.max(at.get(i) ?? -Infinity, need.height))
+  }
+  if (!at.size) return z
+  const held = [...at.keys()].sort((a, b) => a - b)
+  const [first, last] = [held[0], held[held.length - 1]]
+  const [before, after] = [at.get(first)! - z[first], at.get(last)! - z[last]]
+  return z.map((v, i) => {
+    if (at.has(i)) return at.get(i)!
+    const fade = (m: number) => { const u = Math.max(0, 1 - m / CAMBER_BLEND); return u * u * (3 - 2 * u) }
+    if (i < first) return v + before * fade(d[first] - d[i])
+    if (i > last) return v + after * fade(d[i] - d[last])
+    return v
+  })
 }
 
 /** Where one line crosses another, as distances along the first; touching at the first's ends does not count. */
