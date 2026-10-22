@@ -1,13 +1,30 @@
 import type postgres from 'postgres'
 import type { Deck } from '../src/lib/bridge-decks/build'
 import type { Dem } from '../src/lib/bridge-decks/dem'
-import { lngLat, mercator } from '../src/lib/bridge-decks/profile'
+import { lngLat, mercator, type Point } from '../src/lib/bridge-decks/profile'
 import { bakeBridges, type MeshFeature } from '../src/lib/bridge-mesh/bake'
 import { encodeBridge, MATERIAL_PALETTE } from '../src/lib/bridge-mesh/encode'
 import { writeBridgeMesh } from '../src/lib/bridge-mesh/files'
 
+/**
+ * Outlines of the bridges a landmark model stands in for, by its `replaces`:
+ * the model draws their structure, so their decks drop their own.
+ */
+export async function modelledBridges(sql: postgres.Sql, decks: Deck[]): Promise<Point[][]> {
+  const [{ present }] = await sql`SELECT to_regclass('landmarks') IS NOT NULL AS present`
+  if (!present || !decks.length) return []
+  const coords = decks.flatMap(d => d.points.map(lngLat))
+  const box = sql`ST_MakeEnvelope(${Math.min(...coords.map(c => c[0]))}, ${Math.min(...coords.map(c => c[1]))}, ${Math.max(...coords.map(c => c[0]))}, ${Math.max(...coords.map(c => c[1]))}, 4326)`
+  const rows: Array<{ coords: number[][][][] }> = await sql`
+    SELECT ST_AsGeoJSON(ST_Multi(g.geom))::json->'coordinates' AS coords FROM geo_places g
+    WHERE g.tags @> '{"man_made": "bridge"}' AND g.geom_type = 'area' AND g.geom && ${box}
+      AND (CASE g.osm_type WHEN 'W' THEN 'way/' ELSE 'relation/' END) || g.osm_id IN (SELECT unnest(replaces) FROM landmarks WHERE active)`
+  return rows.flatMap(r => r.coords.map(polygon => polygon[0].map(([lng, lat]) => mercator(lng, lat))))
+}
+
 export async function bakeDeckFiles(sql: postgres.Sql, dem: Dem, decks: Deck[], context: Deck[] = decks): Promise<Map<string, string>> {
   const files = new Map<string, string>()
+  const structures = await modelledBridges(sql, decks)
   for (const deck of decks) {
     const coords = deck.points.map(lngLat)
     const w = Math.min(...coords.map(p => p[0])) - 0.001
@@ -35,7 +52,7 @@ export async function bakeDeckFiles(sql: postgres.Sql, dem: Dem, decks: Deck[], 
       brunnel: r.tags.bridge && r.tags.bridge !== 'no' ? 'bridge' : r.tags.tunnel && r.tags.tunnel !== 'no' ? 'tunnel' : null,
     } }))
     const mesh = bakeBridges({ decks: context.filter(d => d.points.some(p => p[0] >= nw[0] && p[0] <= se[0] && p[1] >= nw[1] && p[1] <= se[1]) || d.id === deck.id), own: [deck.id], outlines: [], roads: ways, surfaces, paint,
-      ground: p => { const h = dem.at(p); return Number.isFinite(h) ? h : null } }, MATERIAL_PALETTE)
+      ground: p => { const h = dem.at(p); return Number.isFinite(h) ? h : null }, structures }, MATERIAL_PALETTE)
     files.set(deck.id, await writeBridgeMesh(encodeBridge(mesh, p => { const h = dem.at(p); return Number.isFinite(h) ? h : null })))
   }
   return files

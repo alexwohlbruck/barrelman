@@ -110,6 +110,8 @@ export type BakeInput = {
   surfaces: MeshFeature[]
   paint: MeshFeature[]
   ground: (point: Point) => number | null
+  /** Bridge outlines (outer rings) whose structure a landmark model draws: decks there keep their surfaces and drop their own piers and parapets. */
+  structures?: Point[][]
 }
 export type BakedBridge = { mesh: Mesh; ranges: Ranges; origin: Point; under: UnderWay[]; tracks: UnderWay[]; stands: Array<{ chain: Chain; surface: DeckSurface }> }
 
@@ -205,8 +207,11 @@ class MeshBaker {
       chain.kind === 'rail' ? { surface: p.track, low: p.track } : chain.kind === 'path' ? { surface: p.walkway, low: p.lowPath }
       : { surface: concreteAt.get(chain) ? p.deck : p.surface, low: lowRoad(p, chain.road) }
     const tops = solved.map(() => [] as Top[])
-    for (const [k, { chain, groundAt, z, piers }] of solved.entries())
-      deckMesh(chain, z, groundAt, this.origin, { ...colors(chain), concrete: p.concrete, parapet: p.parapet }, own.has(k) ? mesh : deckMeshOut(), open[k], piers, tops[k], biasGround[k], onDecks[k])
+    const structures = (this.input.structures ?? []).map(ring => ({ ring, bounds: boundsOf(ring) }))
+    for (const [k, { chain, groundAt, z, piers }] of solved.entries()) {
+      const modelled = chain.points.map(q => structures.some(s => holds(s.bounds, q) && inside(q, [s.ring])))
+      deckMesh(chain, z, groundAt, this.origin, { ...colors(chain), concrete: p.concrete, parapet: p.parapet }, own.has(k) ? mesh : deckMeshOut(), open[k], piers, tops[k], biasGround[k], onDecks[k], modelled)
+    }
 
     const surfaces: DeckSurface[] = solved.map(({ chain, z, groundAt }, k) => {
       const width = 2 * Math.max(...chain.edges) + 1

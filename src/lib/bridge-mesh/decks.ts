@@ -857,6 +857,7 @@ export function deckMesh(
   tops?: Top[],
   biasGround: number[] = groundAt,
   covered: Sides = [[], []],
+  modelled: boolean[] = [],
 ): Mesh {
   const pts = chain.points
   const n = pts.length
@@ -949,9 +950,9 @@ export function deckMesh(
     quad(at(r0.p, r0.z), at(r0.p, r0.z - SLAB), at(r1.p, r1.z - SLAB), at(r1.p, r1.z), colors.concrete)
     quad(at(l1.p, l1.z), at(l1.p, l1.z - SLAB), at(l0.p, l0.z - SLAB), at(l0.p, l0.z), colors.concrete)
     quad(at(l0.p, l0.z - SLAB), at(l1.p, l1.z - SLAB), at(r1.p, r1.z - SLAB), at(r0.p, r0.z - SLAB), colors.concrete)
-    // Parapets along both edges.
+    // Parapets along both edges, where no landmark model draws the bridge's own.
     for (const side of ['left', 'right'] as const) {
-      if (bare[side === 'left' ? 0 : 1][i]) continue
+      if (bare[side === 'left' ? 0 : 1][i] || (modelled[i - 1] && modelled[i])) continue
       const [s0, s1] = side === 'left' ? [l0, l1] : [r0, r1]
       const [i0, i1] = [inset(i - 1, side, 0.3), inset(i, side, 0.3)]
       const flip = side === 'left'
@@ -973,6 +974,7 @@ export function deckMesh(
     if (top - bottom < (piers ? FOOTING + CAP : PIER_MIN + FOOTING)) continue
     let k = 1
     while (k < n - 1 && d[k] < at_) k++
+    if (modelled[k - 1] || modelled[k]) continue
     const t = (at_ - d[k - 1]) / (d[k] - d[k - 1] || 1)
     const [tx, ty] = tangents[k]
     const [l, r] = [sideAt(chain, 0, k - 1, t), sideAt(chain, 1, k - 1, t)]
@@ -1261,7 +1263,7 @@ export function subtractConvex(poly: Point[], hole: Point[]): Point[][] {
  * A solved deck as things are laid on it; `bias` per point and `low` as in `Mesh`, `ground` beneath each point,
  * `sidewalks` where its top beside its carriageway is already drawn as walkway.
  */
-export type DeckSurface = { points: Point[]; z: number[]; d: number[]; width: number; bounds?: Bounds; bias?: number[]; low?: number[]; ground?: number[]; kind?: Piece['kind']; edges?: [Point[], Point[]]; tops?: Top[]; sidewalks?: boolean }
+export type DeckSurface = { points: Point[]; z: number[]; d: number[]; width: number; bounds?: Bounds; bias?: number[]; low?: number[]; ground?: number[]; lift?: number[]; kind?: Piece['kind']; edges?: [Point[], Point[]]; tops?: Top[]; sidewalks?: boolean }
 
 /** A point over a deck: which deck, how far off its centreline, its height there, and the segment beneath. */
 export type Hit = { deck: number; distance: number; z: number; segment: number; t: number }
@@ -1571,11 +1573,11 @@ export function tileBounds(feature: any): Bounds | null {
 }
 
 export const polygonsOf = (geometry: any): number[][][][] =>
-  geometry?.type === 'Polygon' ? [geometry.coordinates]
+  (geometry?.type === 'Polygon' ? [geometry.coordinates]
   : geometry?.type === 'MultiPolygon' ? geometry.coordinates
-  : []
+  : []).filter((rings: number[][][]) => rings[0]?.length > 3)
 
 export const linesOf = (geometry: any): number[][][] =>
-  geometry?.type === 'LineString' ? [geometry.coordinates]
+  (geometry?.type === 'LineString' ? [geometry.coordinates]
   : geometry?.type === 'MultiLineString' ? geometry.coordinates
-  : []
+  : []).filter((line: number[][]) => line.length > 1)
