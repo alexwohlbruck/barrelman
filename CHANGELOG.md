@@ -14,6 +14,12 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 * Bridge imports now precompute deck and road-marking meshes for clients to download and draw without rebuilding geometry.
 
+### Changed
+
+* Bridge decks stand at the height OSM records for the bridge (`height` on its outline, or its charted clearance), with suspended spans cambered between their towers and no piers under them.
+* Each roadway runs as one deck through anchorages and other joints mapped without a layer, without dips; ramps dip under ramps that climb over them, and piers stand clear of roads and decks below.
+* Decks under a landmark model of their bridge leave its structure to the model.
+
 ## [0.10.22] - 2026-10-17
 
 ### Fixed
