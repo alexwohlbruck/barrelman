@@ -193,6 +193,8 @@ type Solved = {
   hung: [number, number] | null
   /** Heights its ends are held at where they meet ways on an embankment, which stand above the bare-earth terrain. */
   held?: [number | null, number | null]
+  /** Where it dips under a road climbing over it, and how low it goes there. */
+  dips?: Need[]
   /** The decks its ends rest on, and where. */
   on: Array<{ deck: Solved; at: Point }>
   /** The road each grounded end lands on, where it lies beyond a hollow in the ground. */
@@ -206,37 +208,67 @@ type Solved = {
 
 /** What a deck passes over, as heights its surface must reach. */
 function needs(s: Pick<Solved, 'chain' | 'd' | 'g'>, input: DeckInput, below: Solved[], bases: Map<string, Base>): Need[] {
-  const out: Need[] = []
+  const own = box(s.chain.points)
+  const out = [...fixedNeeds(s, input, bases)]
+  for (const lower of below) {
+    if (!meet(own, box(lower.chain.points))) continue
+    for (const { at, segment, t, clear } of over(s, lower)) {
+      const z = heightAt(lower.d, lower.z, lower.d[segment - 1] + (lower.d[segment] - lower.d[segment - 1]) * t)
+      out.push({ at, height: z + clear })
+    }
+  }
+  return out
+}
+
+/** The needs that do not move as decks settle: the ways and water crossed, and the outline's recorded level. Worked out once per deck. */
+const fixed = new WeakMap<Chain, Need[]>()
+function fixedNeeds(s: Pick<Solved, 'chain' | 'd' | 'g'>, input: DeckInput, bases: Map<string, Base>): Need[] {
+  let out = fixed.get(s.chain)
+  if (out) return out
+  out = []
   const reach = Math.max(...s.chain.edges)
   const own = box(s.chain.points)
   for (const c of input.crossed)
     if (meet(own, box(c.points)))
       for (const at of crossings(s.chain.points, c.points, reach, s.d)) out.push({ at, height: heightAt(s.d, s.g, at) + CLEARANCE[c.kind] })
-  for (const lower of below.filter(o => meet(own, box(o.chain.points))))
-    for (const at of crossings(s.chain.points, lower.chain.points, reach, s.d)) {
-      const p = s.chain.points[Math.min(s.chain.points.length - 1, Math.round(at / STEP))]
-      const near = beside(lower.chain.points, p)
-      const z = heightAt(lower.d, lower.z, lower.d[near.segment - 1] + (lower.d[near.segment] - lower.d[near.segment - 1]) * near.t)
-      out.push({ at, height: z + CLEARANCE.deck })
-    }
-  // A deck carried over a lower one along its length, as a promenade over a
-  // bridge's roadways, clears it there. Near its own ends it may be merging.
-  const total = s.d[s.d.length - 1]
-  for (const lower of below.filter(o => meet(own, box(o.chain.points))))
-    s.chain.points.forEach((p, i) => {
-      if (s.d[i] < OVER_FROM_END || total - s.d[i] < OVER_FROM_END) return
-      const near = beside(lower.chain.points, p)
-      if (!near.alongside || near.distance >= sideAt(lower.chain, near.left ? 0 : 1, near.segment - 1, near.t)) return
-      out.push({ at: s.d[i], height: heightAt(lower.d, lower.z, lower.d[near.segment - 1] + (lower.d[near.segment] - lower.d[near.segment - 1]) * near.t) + CLEARANCE.deck })
-    })
   const water = input.water.filter(ring => meet(own, box(ring)))
   if (water.length)
     s.chain.points.forEach((p, i) => {
-      if (water.some(ring => inside(p, ring))) out.push({ at: s.d[i], height: s.g[i] + CLEARANCE.water })
+      if (water.some(ring => inside(p, ring))) out!.push({ at: s.d[i], height: s.g[i] + CLEARANCE.water })
     })
   const outline = outlineOf(s.chain, input.outlines)
   const base = outline && bases.get(outline.id)
   if (base) out.push(...levelNeeds(s.chain.points, s.chain.points.map(p => within(p, outline!.rings)), outline!, base.ground).map(n => ({ ...n, exact: n.exact && s.chain.layer === base.layer })))
+  fixed.set(s.chain, out)
+  return out
+}
+
+/**
+ * Where a deck passes over a lower one, and where on the lower one: at each
+ * crossing, and along any stretch it is carried over it, as a promenade over
+ * a bridge's roadways (near its own ends it may be merging, so not there).
+ * Worked out once per pair; only the heights change as decks settle.
+ */
+const overs = new WeakMap<Chain, Map<Chain, Array<{ at: number; segment: number; t: number; clear: number }>>>()
+function over(s: Pick<Solved, 'chain' | 'd'>, lower: Solved) {
+  let mine = overs.get(s.chain)
+  if (!mine) overs.set(s.chain, (mine = new Map()))
+  let out = mine.get(lower.chain)
+  if (out) return out
+  out = []
+  const reach = Math.max(...s.chain.edges)
+  for (const at of crossings(s.chain.points, lower.chain.points, reach, s.d)) {
+    const near = beside(lower.chain.points, s.chain.points[Math.min(s.chain.points.length - 1, Math.round(at / STEP))])
+    out.push({ at, segment: near.segment, t: near.t, clear: CLEARANCE.deck })
+  }
+  const total = s.d[s.d.length - 1]
+  s.chain.points.forEach((p, i) => {
+    if (s.d[i] < OVER_FROM_END || total - s.d[i] < OVER_FROM_END) return
+    const near = beside(lower.chain.points, p)
+    if (near.alongside && near.distance < sideAt(lower.chain, near.left ? 0 : 1, near.segment - 1, near.t))
+      out!.push({ at: s.d[i], segment: near.segment, t: near.t, clear: CLEARANCE.deck })
+  })
+  mine.set(lower.chain, out)
   return out
 }
 
@@ -458,40 +490,56 @@ function resolve(s: Solved, solved: Solved[]) {
   s.on = rests.flatMap((r, i) => (r ? [{ deck: r.on, at: s.chain.points[i ? s.chain.points.length - 1 : 0] }] : []))
   const resting = rests.map((r, i) => (r ? Math.max(r.height, continued(s, i as 0 | 1, r.on)) : s.held?.[i] ?? s.lands[i]?.height ?? null)) as [number | null, number | null]
   s.z = solve({ ...s.chain, grounded: s.grounded }, s.g, s.needs, resting)
+  dipped(s)
 }
 
 /** Least height over the ground a deck dips to under another, and the least dip worth making, in metres. */
 const DIP_FLOOR = 1
 const DIP_MIN = 1
+/** Road classes by rank: a road never dips under one of lower rank. */
+const RANK = ['motorway', 'trunk', 'primary', 'secondary', 'tertiary']
+const rank = (s: Solved) => {
+  const road = s.chain.road?.split('/')[0] ?? ''
+  const k = RANK.indexOf(road.replace(/_link$/, ''))
+  return k < 0 ? 0 : (RANK.length - k) * 2 - (road.endsWith('_link') ? 1 : 0)
+}
+
+/** Each sample's floor: its ground and what it must clear there. */
+function floors(s: Solved): number[] {
+  return s.d.map((d, i) => Math.max(s.g[i] - TERRAIN_SLACK, ...s.needs.filter(n => !n.exact && Math.abs(n.at - d) <= CURVE / 2).map(n => n.height)))
+}
+
+/** A deck pressed down under the dips it has taken, never below its floors. */
+function dipped(s: Solved) {
+  if (!s.dips?.length) return
+  const floor = floors(s)
+  s.z = s.z.map((v, i) => Math.max(floor[i], Math.min(v, ...s.dips!.map(dip => dip.height + MAX_GRADE * Math.abs(s.d[i] - dip.at)))))
+}
 
 /**
- * The decks lowered so a deck crossing over them can clear them. A deck
- * climbing from the ground may not reach the clearance over another within
- * MAX_GRADE, where the other, solved as an arch, runs level across between
- * what it must clear on either side. OSM says which is over: there the lower
- * one dips, a sag curve on each side, no lower than what it clears itself.
+ * Decks lowered so a road climbing from the ground can clear them where OSM
+ * puts it over them: each dips under it on sag curves, above its own floors.
  */
 function dipUnder(solved: Solved[]): Solved[] {
   const lowered = new Set<Solved>()
-  // A footway or cycle track never presses a road down: it can climb, or be mapped wrong.
-  for (const s of solved.filter(x => x.chain.kind !== 'path')) {
+  // A footway can climb or be mapped wrong; a railway or a greater road does not dip for it.
+  for (const s of solved.filter(x => x.chain.kind === 'road')) {
     const n = s.d.length
     const total = s.d[n - 1]
-    // As high as it can climb at each point from its ends.
-    const cap = (at: number) => Math.min(s.z[0] + MAX_GRADE * at, s.z[n - 1] + MAX_GRADE * (total - at))
+    const anchored = ([0, 1] as const).map(i => s.grounded[i] || s.held?.[i] != null || s.on.some(r => r.at === s.chain.points[i ? n - 1 : 0]))
+    const cap = (at: number) => Math.min(anchored[0] ? s.z[0] + MAX_GRADE * at : Infinity, anchored[1] ? s.z[n - 1] + MAX_GRADE * (total - at) : Infinity)
     for (const o of solved) {
-      if (o.chain.layer >= s.chain.layer || !meet(box(s.chain.points), box(o.chain.points))) continue
-      for (const at of crossings(s.chain.points, o.chain.points, Math.max(...s.chain.edges), s.d)) {
-        const p = s.chain.points[Math.min(n - 1, Math.round(at / STEP))]
-        const near = beside(o.chain.points, p)
-        const there = o.d[near.segment - 1] + (o.d[near.segment] - o.d[near.segment - 1]) * near.t
+      if (o.chain.layer >= s.chain.layer || o.chain.kind !== 'road' || rank(o) > rank(s) || !meet(box(s.chain.points), box(o.chain.points))) continue
+      for (const { at, segment, t } of over(s, o)) {
+        const there = o.d[segment - 1] + (o.d[segment] - o.d[segment - 1]) * t
         const z = heightAt(o.d, o.z, there)
         const room = Math.min(heightAt(s.d, s.z, at), cap(at)) - CLEARANCE.deck
-        if (z <= room + 0.1) continue
-        const floor = Math.max(heightAt(o.d, o.g, there) + DIP_FLOOR, ...o.needs.filter(nd => Math.abs(nd.at - there) <= CURVE).map(nd => nd.height))
-        const ceiling = Math.max(room, floor)
-        if (ceiling >= z - DIP_MIN) continue
-        o.z = o.z.map((v, i) => Math.min(v, Math.max(ceiling + MAX_GRADE * Math.abs(o.d[i] - there), o.g[i] - TERRAIN_SLACK)))
+        const floor = Math.max(heightAt(o.d, o.g, there) + DIP_FLOOR, floors(o)[Math.min(o.d.length - 1, Math.round(there / STEP))])
+        // Not worth it, or not enough to clear it.
+        if (z - room < DIP_MIN || floor > room + 0.1) continue
+        // A metre under, so the sag curves eased in later still leave the room.
+        ;(o.dips ??= []).push({ at: there, height: Math.max(floor, room - 1) })
+        dipped(o)
         lowered.add(o)
       }
     }
@@ -499,39 +547,26 @@ function dipUnder(solved: Solved[]): Solved[] {
   return [...lowered]
 }
 
-/** Metres each side of a joint between two decks, end to end, over which a sag between them is filled. */
-const JOINT_RUN = 200
-/** Least cosine between two decks' headings across a joint for one to carry straight on into the other. */
-const STRAIGHT_ON = Math.cos(Math.PI / 9)
+/** Metres over which an end is brought onto the deck it rests on, at most. */
+const MEET_RUN = 60
 
-/**
- * Where a deck carries straight on into another, end to end, the grade line
- * across the joint takes no sag, as within one deck: each solved against its
- * own ends, a short deck between two longer ones can be left lower than both.
- */
-function unsag(s: Solved, end: 0 | 1, solved: Solved[]) {
-  if (s.grounded[end]) return
-  const n = s.chain.points.length
-  const p = s.chain.points[end ? n - 1 : 0]
-  const node = key(s.ends[end])
-  const meeting = solved.flatMap(o => (o === s ? [] : ([0, 1] as const).flatMap(e => (key(o.ends[e]) === node ? [{ o, other: e }] : []))))
-  // Only one deck carrying straight on: at a fork each branch keeps its own grade.
-  if (meeting.length !== 1) return
-  for (const { o, other } of meeting) {
-    if (o.grounded[other]) continue
-    const m = o.chain.points.length
-    const [a, b] = [s.chain.points[end ? n - 2 : 1], o.chain.points[other ? m - 2 : 1]]
-    const [u, v] = [[p[0] - a[0], p[1] - a[1]], [b[0] - p[0], b[1] - p[1]]]
-    if (u[0] * v[0] + u[1] * v[1] < STRAIGHT_ON * Math.hypot(u[0], u[1]) * Math.hypot(v[0], v[1])) continue
-    // Distances out from the joint, this deck's negative and the other's positive.
-    const total = (x: Solved) => x.d[x.d.length - 1]
-    const mine = s.d.map((d, i) => ({ i, at: -(end ? total(s) - d : d) })).filter(v => v.at >= -JOINT_RUN).sort((a, b) => a.at - b.at)
-    const theirs = o.d.map((d, i) => ({ i, at: other ? total(o) - d : d })).filter(v => v.at <= JOINT_RUN && v.at > 0).sort((a, b) => a.at - b.at)
-    if (mine.length < 2 || !theirs.length) continue
-    const d = [...mine.map(v => v.at), ...theirs.map(v => v.at)]
-    const z = arch(d, [...mine.map(v => s.z[v.i]), ...theirs.map(v => o.z[v.i])])
-    mine.forEach((v, k) => (s.z[v.i] = Math.max(s.z[v.i], z[k])))
-    theirs.forEach((v, k) => (o.z[v.i] = Math.max(o.z[v.i], z[mine.length + k])))
+/** Each end resting on another deck brought onto it, the difference faded out along this one: the last word, after easing and camber. */
+function meetRests(s: Solved) {
+  const n = s.z.length
+  const total = s.d[n - 1]
+  for (const end of [0, 1] as const) {
+    const p = s.chain.points[end ? n - 1 : 0]
+    const rest = s.on.find(r => r.at === p)
+    if (!rest) continue
+    const o = rest.deck
+    const near = beside(o.chain.points, p)
+    const by = heightAt(o.d, o.z, o.d[near.segment - 1] + (o.d[near.segment] - o.d[near.segment - 1]) * near.t) - s.z[end ? n - 1 : 0]
+    if (Math.abs(by) < 0.01) continue
+    const run = Math.min(MEET_RUN, total / 2)
+    s.z = s.z.map((v, i) => {
+      const u = Math.max(0, 1 - (end ? total - s.d[i] : s.d[i]) / run)
+      return v + by * u * u * (3 - 2 * u)
+    })
   }
 }
 
@@ -613,12 +648,6 @@ export async function buildDecks(input: DeckInput, ground: Ground): Promise<Deck
       ends: [own[0], own[own.length - 1]], nodes: new Set(own.map(key)),
     })
   }
-  // Settle the decks against each other: an end resting on another deck takes
-  // that deck's height there, and decks side by side are joined at the higher
-  // one. Some rounds, so a height carries through a ramp joining a ramp, and a
-  // deck lifted to its neighbour can lift the next one along. A join is not
-  // arched over again: that would carry a lift along the whole deck, and from
-  // it to the next, ratcheting a whole interchange up.
   // An end meeting only ways on an embankment is on fill the bare-earth terrain
   // leaves out: it starts as high as it must to clear what it crosses just beyond.
   for (const s of solved) {
@@ -627,6 +656,12 @@ export async function buildDecks(input: DeckInput, ground: Ground): Promise<Deck
     s.held = held
     s.grounded = s.grounded.map((g, i) => g && held[i] === null) as [boolean, boolean]
   }
+  // Settle the decks against each other: an end resting on another deck takes
+  // that deck's height there, and decks side by side are joined at the higher
+  // one. Some rounds, so a height carries through a ramp joining a ramp, and a
+  // deck lifted to its neighbour can lift the next one along. A join is not
+  // arched over again: that would carry a lift along the whole deck, and from
+  // it to the next, ratcheting a whole interchange up.
   for (let round = 0; round < SETTLE; round++) {
     for (const s of solved) {
       // What it clears below may have settled higher since it was solved.
@@ -635,18 +670,23 @@ export async function buildDecks(input: DeckInput, ground: Ground): Promise<Deck
     }
     for (let pass = 0; pass < SETTLE; pass++) joinNeighbours(solved)
   }
-  for (let pass = 0; pass < SETTLE; pass++) for (const s of solved) for (const end of [0, 1] as const) unsag(s, end, solved)
   // Where a deck cannot climb clear of one it crosses over, the lower one dips under it instead.
-  if (dipUnder(solved).length)
-    for (const s of solved) {
-      const was = JSON.stringify(s.needs)
-      s.needs = needs(s, input, solved.filter(o => o.chain.layer < s.chain.layer), bases)
-      if (JSON.stringify(s.needs) !== was) resolve(s, solved)
-    }
+  const lowered = new Set(dipUnder(solved))
+  // The roads over a lowered deck clear it as it is now, and the decks resting on it follow it down.
+  if (lowered.size)
+    for (let pass = 0; pass < SETTLE; pass++)
+      for (const s of solved) {
+        const over = solved.some(o => lowered.has(o) && o.chain.layer < s.chain.layer && meet(box(s.chain.points), box(o.chain.points)))
+        if (!over && !s.on.some(r => lowered.has(r.deck))) continue
+        s.needs = needs(s, input, solved.filter(o => o.chain.layer < s.chain.layer), bases)
+        resolve(s, solved)
+        if (s.on.some(r => lowered.has(r.deck))) lowered.add(s)
+      }
   for (const s of solved) s.z = eased(s, input.onGround)
   // Easing moves twins a few centimetres apart; side by side, they meet exactly.
   joinNeighbours(solved, undefined, EASED)
   for (const s of solved) s.z = cambered(s.z, s.d, s.needs)
+  for (let pass = 0; pass < SETTLE; pass++) for (const s of solved) meetRests(s)
   const rows = piers(solved)
 
   const wiki = (s: Solved) => s.chain.ways.map(w => input.wikidata.get(w)).find(Boolean)

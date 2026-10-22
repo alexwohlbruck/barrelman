@@ -176,9 +176,11 @@ class MeshBaker {
       const boxes = placing.map(({ chain }) => boundsOf(chain.points, Math.max(...chain.edges)))
       const beneath = this.carriageways(false, boxes).flatMap(c => c.areas.map(rings => ({ rings, bounds: boundsOf(rings[0]) })))
       const ways = this.waysNear(boxes)
-      const decks = solved.map(({ chain, z }) => ({ chain, z, bounds: boundsOf(chain.points, Math.max(...chain.edges)) }))
+      const decks = solved.map(({ chain, z }) => ({ chain, z, d: along(chain.points), bounds: boundsOf(chain.points, Math.max(...chain.edges)) }))
       for (const s of placing) {
-        const clear = (at: number) => this.bentClear(s.chain, at, ways, beneath, decks.filter(o => o.chain !== s.chain), heightAt(along(s.chain.points), s.z, at))
+        const own = decks.find(o => o.chain === s.chain)!
+        const others = decks.filter(o => o !== own)
+        const clear = (at: number) => this.bentClear(s.chain, at, ways, beneath, others, heightAt(own.d, s.z, at), own.d)
         s.piers = s.piers ? movedPiers(s.chain, s.z, s.groundAt, s.piers, clear) : placedPiers(s.chain, s.z, s.groundAt, clear)
       }
     }
@@ -307,8 +309,7 @@ class MeshBaker {
   /** The terrain as drawn at a point; where none is drawn yet, the fixed-zoom ground stretched as the terrain is. */
 
   private bentClear(chain: Chain, at: number, ways: UnderWay[], beneath: Array<{ rings: Point[][]; bounds: Bounds }>,
-    decks: Array<{ chain: Chain; z: number[]; bounds: Bounds }> = [], top = Infinity): boolean {
-    const d = along(chain.points)
+    decks: Array<{ chain: Chain; z: number[]; d: number[]; bounds: Bounds }> = [], top = Infinity, d = along(chain.points)): boolean {
     let k = 1
     while (k < chain.points.length - 1 && d[k] < at) k++
     const t = Math.max(0, Math.min(1, (at - d[k - 1]) / (d[k] - d[k - 1] || 1)))
@@ -326,8 +327,7 @@ class MeshBaker {
         if (!holds(o.bounds, q)) return false
         const near = beside(o.chain.points, q)
         if (!near.alongside || near.distance > sideAt(o.chain, near.left ? 0 : 1, near.segment - 1, near.t) + ABUTMENT_ROOM) return false
-        const od = along(o.chain.points)
-        return heightAt(od, o.z, od[near.segment - 1] + (od[near.segment] - od[near.segment - 1]) * near.t) < top - SLAB
+        return heightAt(o.d, o.z, o.d[near.segment - 1] + (o.d[near.segment] - o.d[near.segment - 1]) * near.t) < top - SLAB
       }))
   }
 

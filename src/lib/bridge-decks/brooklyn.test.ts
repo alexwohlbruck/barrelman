@@ -82,6 +82,19 @@ describe('the interchange at its Manhattan end', () => {
     expect(Math.min(...gaps)).toBeGreaterThan(5)
   })
 
+  it('meets every deck an end rests on at its own height', () => {
+    const steps: number[] = []
+    for (const a of decks)
+      for (const end of [0, 1]) {
+        if (a.grounded[end]) continue
+        const i = end ? a.points.length - 1 : 0
+        for (const b of decks)
+          if (b !== a && (b.kind === a.kind || b.layer === a.layer) && beside(b.points, a.points[i]).distance < 1) steps.push(Math.abs(heightAt(b, a.points[i]) - a.heights[i]))
+      }
+    expect(steps.length).toBeGreaterThan(20)
+    expect(Math.max(...steps)).toBeLessThan(0.3)
+  })
+
   it('dips a ramp under one climbing from the street to cross it, rather than run them through each other', () => {
     const over = carrying(32922459), under = carrying(5672337)
     const d = along(over.points)

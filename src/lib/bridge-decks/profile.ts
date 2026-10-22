@@ -23,8 +23,9 @@ export type Way = {
   id: number
   points: Point[]
   kind: Kind
-  /** OSM `layer`, at least 1. */
+  /** OSM `layer`, at least 1; `untagged` where the way has none and 1 is assumed. */
   layer: number
+  untagged?: boolean
   /** Carriageway width in metres. */
   width: number
   /** The road it carries, by class and ref or name, so a junction carries the road on rather than a ramp that happens to run straighter. */
@@ -47,6 +48,8 @@ export type Chain = {
    * its edges if it cannot be shaped.
    */
   fit?: [number, number]
+  /** The road it carries, by class and ref or name, as its first way's. */
+  road?: string
   /** Sidewalks folded in: the side, how far out from the centreline, and the stretch along the deck in metres. */
   paths?: Array<{ side: 0 | 1; out: number; from: number; to: number }>
 }
@@ -161,10 +164,11 @@ const FOLD = 0
 
 /**
  * Ways joined end to end into chains, one per roadway. OSM ways share their
- * end nodes, so ends match exactly. Two ways meeting alone join; where more
- * meet, only ways of one kind and layer join, so stacked decks never do, and the pair that carries one
- * road on (same class and ref or name, turning no sharper than ONWARD) joins,
- * else the straightest pair, and the rest end there. Only a path folds back.
+ * end nodes, so ends match exactly. Only ways of one kind and layer join, so
+ * stacked decks never do, but for two meeting alone where one has no layer.
+ * Where three or more meet, the pair that carries one road on (same class and
+ * ref or name, turning no sharper than ONWARD) joins, else the straightest
+ * pair, and the rest end there. Only a path folds back.
  */
 export function chains(ways: Way[]): Chain[] {
   // By id, so a tie between pairs goes the same way whatever order the rows came in.
@@ -176,8 +180,8 @@ export function chains(ways: Way[]): Chain[] {
   const out: Chain[] = []
   const next = (p: Point, from: Way) => {
     const kin = (ends.get(key(p)) ?? []).filter(o => o.kind === from.kind)
-    // Two ways meeting alone carry one deck on whatever their layers: mappers often leave a bridge's anchorage stretch untagged.
-    const like = kin.length === 2 ? kin : kin.filter(o => o.layer === from.layer)
+    // Two ways meeting alone carry one deck on where one has no layer: mappers often leave a bridge's anchorage stretch untagged.
+    const like = kin.length === 2 && kin.some(o => o.untagged) ? kin : kin.filter(o => o.layer === from.layer)
     if (like.length < 2) return null
     let best: [Way, Way] | null = null
     let score = -Infinity
@@ -212,7 +216,7 @@ export function chains(ways: Way[]): Chain[] {
       }
     }
     const width = Math.max(...members.map(m => m.width))
-    out.push({ ways: members.map(m => m.id), points, kind: start.kind, layer: Math.max(...members.map(m => m.layer)), edges: [width / 2, width / 2] })
+    out.push({ ways: members.map(m => m.id), points, kind: start.kind, layer: Math.max(...members.map(m => m.layer)), edges: [width / 2, width / 2], road: members.find(m => m.road)?.road })
   }
   return out
 }
@@ -580,17 +584,25 @@ export function cambered(z: number[], d: number[], needs: Need[]): number[] {
   for (const need of needs) {
     if (!need.exact) continue
     const i = d.findIndex(v => Math.abs(v - need.at) < 0.5)
-    if (i >= 0) at.set(i, Math.max(at.get(i) ?? -Infinity, need.height))
+    if (i < 0) continue
+    // No lower than anything else it must clear there.
+    const clear = needs.filter(n => !n.exact && Math.abs(n.at - d[i]) <= CURVE / 2).map(n => n.height)
+    at.set(i, Math.max(at.get(i) ?? -Infinity, need.height, ...clear))
   }
   if (!at.size) return z
   const held = [...at.keys()].sort((a, b) => a - b)
   const [first, last] = [held[0], held[held.length - 1]]
   const [before, after] = [at.get(first)! - z[first], at.get(last)! - z[last]]
+  // Faded out by each end, so the deck still meets what it rests on there.
+  const fade = (m: number, run: number) => {
+    const u = Math.max(0, 1 - m / Math.max(run, 1e-9))
+    return u * u * (3 - 2 * u)
+  }
+  const [runBefore, runAfter] = [Math.min(CAMBER_BLEND, d[first]), Math.min(CAMBER_BLEND, d[d.length - 1] - d[last])]
   return z.map((v, i) => {
     if (at.has(i)) return at.get(i)!
-    const fade = (m: number) => { const u = Math.max(0, 1 - m / CAMBER_BLEND); return u * u * (3 - 2 * u) }
-    if (i < first) return v + before * fade(d[first] - d[i])
-    if (i > last) return v + after * fade(d[i] - d[last])
+    if (i < first) return v + before * fade(d[first] - d[i], runBefore)
+    if (i > last) return v + after * fade(d[i] - d[last], runAfter)
     return v
   })
 }

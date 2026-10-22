@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'bun:test'
 import {
+  cambered,
   absorbPaths, absorbTracks, along, landing, LANDING, arch, chains, crossings, fitEdges, joinNeighbours, MAX_GRADE, mercator, resample, smooth, solve, steady, widen,
   type Chain, type Point, type Way,
 } from './profile'
@@ -27,10 +28,11 @@ describe('chains', () => {
     expect(chains([way(1, 0, 50), way(2, 50, 100, 2), branch]).map(d => d.ways)).toEqual([[1, 3], [2]])
   })
 
-  it('carries one deck on where two ways meet alone, whatever their layers', () => {
-    const [deck] = chains([way(1, 0, 50), way(2, 50, 100, 3)])
+  it('carries one deck on where two ways meet alone and one has no layer', () => {
+    const [deck] = chains([{ ...way(1, 0, 50), untagged: true }, way(2, 50, 100, 3)])
     expect(deck.ways).toEqual([1, 2])
     expect(deck.layer).toBe(3)
+    expect(chains([way(1, 0, 50), way(2, 50, 100, 3)])).toHaveLength(2)
   })
 
   it('carries a road on through a junction rather than the ramp that leaves it straighter', () => {
@@ -278,5 +280,23 @@ describe('joinNeighbours', () => {
     const a = { chain: deck(0), z: deck(0).points.map(() => 100) }
     joinNeighbours([a, { chain: deck(40), z: deck(40).points.map(() => 101) }, { chain: deck(10), z: deck(10).points.map(() => 108) }])
     expect(a.z.every(z => z === 100)).toBe(true)
+  })
+})
+
+describe('cambered', () => {
+  const d = Array.from({ length: 41 }, (_, i) => i * 6)
+  const z = d.map(() => 30)
+  const camber = (from: number, to: number, height: number) => d.filter(x => x >= from && x <= to).map(at => ({ at, height, exact: true }))
+
+  it('holds a suspended span to its camber and fades back to its own grade line beyond', () => {
+    const out = cambered(z, d, camber(60, 180, 28))
+    expect(out[d.indexOf(120)]).toBe(28)
+    expect(out[0]).toBeCloseTo(30)
+    expect(out[d.length - 1]).toBeCloseTo(30)
+  })
+
+  it('never holds a span below something else it must clear there', () => {
+    const out = cambered(z, d, [...camber(60, 180, 28), { at: 120, height: 29 }])
+    expect(out[d.indexOf(120)]).toBe(29)
   })
 })

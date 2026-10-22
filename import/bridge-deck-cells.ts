@@ -74,7 +74,8 @@ function toWay(r: Row): Way {
   const tagged = metres(r.width)
   const width = kind === 'rail' ? 5 : kind === 'path' ? (tagged && tagged < 12 ? tagged : 3)
     : tagged && tagged >= 2.5 && tagged <= 60 ? tagged : lanes * (LANE[r.highway!] ?? 3.3)
-  return { id: Number(r.id), points: r.coords.map(([lng, lat]) => mercator(lng, lat)), kind, layer: Math.max(1, Number.parseInt(r.layer ?? '') || 1), width, road: r.road ?? undefined }
+  const layer = Number.parseInt(r.layer ?? '')
+  return { id: Number(r.id), points: r.coords.map(([lng, lat]) => mercator(lng, lat)), kind, layer: Math.max(1, layer || 1), untagged: Number.isNaN(layer), width, road: r.road ?? undefined }
 }
 
 /** Bridge ways around a box, followed beyond it for as long as a deck carries on. */
@@ -111,7 +112,7 @@ export async function inputFor(sql: Sql, rows: Row[]): Promise<DeckInput> {
 
   const ends = [...new Map(rows.flatMap(r => [r.coords[0], r.coords[r.coords.length - 1]]).map(c => [c.join(','), c])).values()]
   const landed: Array<{ i: number; raised: boolean }> = await sql`
-    SELECT o.i, bool_and(g.tags->>'embankment' = 'yes') AS raised
+    SELECT o.i, bool_and(COALESCE(g.tags->>'embankment', 'no') = 'yes') AS raised
     FROM unnest(${ends.map(c => c[0])}::float8[], ${ends.map(c => c[1])}::float8[]) WITH ORDINALITY AS o(lng, lat, i)
     JOIN geo_places g ON g.geom_type = 'line' AND g.geom && ST_Expand(ST_SetSRID(ST_MakePoint(o.lng, o.lat), 4326), 1e-7)
       AND (g.tags ? 'highway' OR g.tags ? 'railway') AND COALESCE(g.tags->>'bridge', 'no') = 'no'
