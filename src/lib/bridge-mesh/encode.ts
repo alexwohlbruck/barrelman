@@ -5,8 +5,8 @@ export const MATERIALS = ['surface', 'concrete', 'parapet', 'track', 'deck', 'lo
 export const MATERIAL_PALETTE = Object.fromEntries(MATERIALS.map((name, i) => [name, [i, 0, 0]])) as DeckPalette
 const STREAMS = ['position', 'normal', 'color', 'low', 'bias', 'spread'] as const
 
-/** Metres between the nodes of the smoothed ground a deck is lifted with, and how far each node reads around it. */
-const DATUM_CELL = 25
+/** Mercator units between the nodes of the smoothed ground a deck is lifted with (25 m at the equator, 19 m at 40°), and how far each node reads around it. */
+const DATUM_CELL = 25 / 40075016.686
 /** Metres above the ground over which a structure goes from following it, foot on the ground, to the smoothed ground. */
 const LIFT_BLEND = 6
 
@@ -14,25 +14,27 @@ const LIFT_BLEND = 6
  * The ground a structure is lifted with as the map exaggerates terrain: the
  * terrain itself at its feet, and higher up the terrain smoothed over
  * DATUM_CELL, so a deck keeps its true height above the ground it spans as
- * buildings and landmarks do, without copying every bump beneath it. A
+ * buildings and landmarks do, without copying every cutting beneath it (a
+ * median, so a narrow road or stream below does not pull it down). A
  * function of position alone, so decks that meet are lifted alike.
  */
 export function liftField(at: (point: Point) => number | null) {
   const nodes = new Map<string, number | null>()
-  const node = (i: number, j: number, cell: number): number | null => {
+  const node = (i: number, j: number): number | null => {
     const key = `${i},${j}`
     if (!nodes.has(key)) {
-      const heights = [-1, 0, 1].flatMap(dx => [-1, 0, 1].map(dy => at([(i + dx) * cell, (j + dy) * cell]))).filter((h): h is number => h !== null && Number.isFinite(h))
-      nodes.set(key, heights.length ? heights.reduce((a, b) => a + b, 0) / heights.length : null)
+      const offsets = [-1, -0.5, 0, 0.5, 1]
+      const heights = offsets.flatMap(dx => offsets.map(dy => at([(i + dx) * DATUM_CELL, (j + dy) * DATUM_CELL])))
+        .filter((h): h is number => h !== null && Number.isFinite(h)).sort((a, b) => a - b)
+      nodes.set(key, heights.length ? heights[heights.length >> 1] : null)
     }
     return nodes.get(key)!
   }
   const datum = ([x, y]: Point): number | null => {
-    const cell = DATUM_CELL / metresPerUnit(y)
-    const [fx, fy] = [x / cell, y / cell]
+    const [fx, fy] = [x / DATUM_CELL, y / DATUM_CELL]
     const [i, j] = [Math.floor(fx), Math.floor(fy)]
     const [tx, ty] = [fx - i, fy - j]
-    const corners = [node(i, j, cell), node(i + 1, j, cell), node(i, j + 1, cell), node(i + 1, j + 1, cell)]
+    const corners = [node(i, j), node(i + 1, j), node(i, j + 1), node(i + 1, j + 1)]
     if (corners.some(c => c === null)) return null
     const [a, b, c, d] = corners as number[]
     return (a * (1 - tx) + b * tx) * (1 - ty) + (c * (1 - tx) + d * tx) * ty
