@@ -7,6 +7,12 @@ const square = (east: number, half: number): Point[] => {
   const deg = (m: number) => m / 84_300
   return [[-1, -1], [1, -1], [1, 1], [-1, 1], [-1, -1]].map(([x, y]) => mercator(-74 + deg(east + x * half), 40.7 + (y * half) / 111_000))
 }
+/** A point moved `north` metres. */
+const lngLatOf = ([x, y]: Point, north: number): [number, number] => {
+  const lng = x * 360 - 180
+  const lat = (Math.atan(Math.sinh(Math.PI * (1 - 2 * y))) * 180) / Math.PI
+  return [lng, lat + north / 111_000]
+}
 const tower = (east: number, height = 84): Support => ({ kind: 'pylon', ring: square(east, 8), height })
 const anchorage = (east: number): Support => ({ kind: 'abutment', ring: square(east, 15), height: 12 })
 /** A deck running east along the parallel every 6 m. */
@@ -57,6 +63,12 @@ describe('a suspended span between its towers', () => {
     const [from, to] = hungStretch(points, within, level)!
     expect(from).toBeLessThan(20)
     expect(to).toBeGreaterThan(1066)
+  })
+
+  it('finds towers mapped as a leg either side of the roadway', () => {
+    const leg = (east: number, north: number): Support => ({ kind: 'pylon', ring: square(east, 4).map(p => mercator(...lngLatOf(p, north))), height: 84 })
+    const legs = [leg(300, 12), leg(300, -12), leg(786, 12), leg(786, -12)]
+    expect(hungStretch(points, within, { ...level, supports: [anchorage(0), ...legs, anchorage(1086)] })).not.toBeNull()
   })
 
   it('stands on piers when it is not hung from towers', () => {

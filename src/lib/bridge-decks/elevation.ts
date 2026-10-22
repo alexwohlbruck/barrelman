@@ -23,7 +23,7 @@
  * deck height by the bridge's Wikidata item; see that file.
  */
 import { readFileSync } from 'node:fs'
-import { along, inside, metresPerUnit, type Need, type Point } from './profile'
+import { along, beside, metresPerUnit, type Need, type Point } from './profile'
 
 /** Metres from a bridge's charted clearance to its roadway: the depth of its deck. */
 export const DECK_DEPTH = 2
@@ -77,11 +77,15 @@ export function deckLevel(tags: Record<string, string>, supports: Support[], ove
   return { ...level, deck: height, source: 'height' }
 }
 
-/** Distances along a deck where it passes over or through the supports of a kind, in order: the middle of its samples on each. */
-function supportsAlong(points: Point[], d: number[], supports: Support[], kinds: Support['kind'][]): number[] {
-  return supports.filter(s => kinds.includes(s.kind)).flatMap(s => {
-    const on = d.filter((_, i) => inside(points[i], s.ring))
-    return on.length ? [(on[0] + on[on.length - 1]) / 2] : []
+/** Farthest a support may stand to the side of a deck and still carry it, in metres: a tower's legs flank the roadway. */
+const SUPPORT_REACH = 40
+
+/** Distances along a deck level with the supports of a kind beside or over it, in order. */
+function supportsAlong(points: Point[], d: number[], supports: Support[], kind: Support['kind']): number[] {
+  return supports.filter(s => s.kind === kind).flatMap(s => {
+    const near = beside(points, centre(s.ring))
+    if (!near.alongside || near.distance > SUPPORT_REACH) return []
+    return [d[near.segment - 1] + (d[near.segment] - d[near.segment - 1]) * near.t]
   }).sort((a, b) => a - b)
 }
 
@@ -105,7 +109,7 @@ export function levelNeeds(points: Point[], within: boolean[], level: OutlineLev
   let axis: [Point, Point] | null = null
   for (const a of towers) for (const b of towers)
     if (!axis || Math.hypot(b[0] - a[0], b[1] - a[1]) > Math.hypot(axis[1][0] - axis[0][0], axis[1][1] - axis[0][1])) axis = [a, b]
-  if (!axis || axis[0] === axis[1]) return [{ at: (d[within.indexOf(true)] + d[within.lastIndexOf(true)]) / 2, height: base + level.deck }]
+  if (!axis || Math.hypot(axis[1][0] - axis[0][0], axis[1][1] - axis[0][1]) * metresPerUnit(axis[0][1]) < 1) return [{ at: (d[within.indexOf(true)] + d[within.lastIndexOf(true)]) / 2, height: base + level.deck }]
   const [a, b] = axis
   const v: Point = [b[0] - a[0], b[1] - a[1]]
   const span = Math.hypot(v[0], v[1]) * metresPerUnit((a[1] + b[1]) / 2)
@@ -119,16 +123,17 @@ export function levelNeeds(points: Point[], within: boolean[], level: OutlineLev
 
 /**
  * The stretch of a deck hung from its outline's towers, where it stands on no
- * piers: between its outermost anchorages, or where it has none on one side,
- * to the end of its run inside the outline there.
+ * piers: out from its outer towers to the anchorage just beyond each, or
+ * where there is none, to the end of its run inside the outline there.
  */
 export function hungStretch(points: Point[], within: boolean[], level: OutlineLevel): [number, number] | null {
   if (!level.suspended) return null
   const d = along(points)
-  const towers = supportsAlong(points, d, level.supports ?? [], ['pylon'])
+  const towers = supportsAlong(points, d, level.supports ?? [], 'pylon')
   if (!towers.length) return null
-  const anchorages = supportsAlong(points, d, level.supports ?? [], ['abutment'])
+  const anchorages = supportsAlong(points, d, level.supports ?? [], 'abutment')
   const before = anchorages.filter(a => a < towers[0])
   const after = anchorages.filter(a => a > towers[towers.length - 1])
-  return [before.length ? before[0] : d[Math.max(0, within.indexOf(true))], after.length ? after[after.length - 1] : d[within.lastIndexOf(true) < 0 ? d.length - 1 : within.lastIndexOf(true)]]
+  const first = within.indexOf(true), last = within.lastIndexOf(true)
+  return [before.length ? before[before.length - 1] : d[Math.max(0, first)], after.length ? after[0] : d[last < 0 ? d.length - 1 : last]]
 }
