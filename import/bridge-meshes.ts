@@ -2,25 +2,29 @@ import type postgres from 'postgres'
 import type { Deck } from '../src/lib/bridge-decks/build'
 import type { Dem } from '../src/lib/bridge-decks/dem'
 import { lngLat, mercator, type Point } from '../src/lib/bridge-decks/profile'
-import { bakeBridges, type MeshFeature } from '../src/lib/bridge-mesh/bake'
+import { bakeBridges, type MeshFeature, type Structure } from '../src/lib/bridge-mesh/bake'
 import { encodeBridge, MATERIAL_PALETTE } from '../src/lib/bridge-mesh/encode'
 import { writeBridgeMesh } from '../src/lib/bridge-mesh/files'
 
 /**
- * Outlines of the bridges a landmark model stands in for, by its `replaces`:
- * the model draws their structure, so their decks drop their own.
+ * Outlines of the bridges a landmark model stands in for, by its `replaces`,
+ * and how far the model reaches from its anchor: the model draws their
+ * structure there, so their decks drop their own. An outline often runs on
+ * over the approaches past the model's anchorages, which keep theirs.
  */
-export async function modelledBridges(sql: postgres.Sql, decks: Deck[]): Promise<Point[][]> {
+export async function modelledBridges(sql: postgres.Sql, decks: Deck[]): Promise<Structure[]> {
   const [{ present }] = await sql`SELECT to_regclass('landmarks') IS NOT NULL AS present`
   if (!present || !decks.length) return []
   let [w, s, e, n] = [Infinity, Infinity, -Infinity, -Infinity]
   for (const d of decks) for (const [lng, lat] of d.points.map(lngLat)) [w, s, e, n] = [Math.min(w, lng), Math.min(s, lat), Math.max(e, lng), Math.max(n, lat)]
   const box = sql`ST_MakeEnvelope(${w}, ${s}, ${e}, ${n}, 4326)`
-  const rows: Array<{ coords: number[][][][] }> = await sql`
-    SELECT ST_AsGeoJSON(ST_Multi(g.geom))::json->'coordinates' AS coords FROM geo_places g
-    WHERE g.tags @> '{"man_made": "bridge"}' AND g.geom_type = 'area' AND g.geom && ${box}
-      AND (CASE g.osm_type WHEN 'W' THEN 'way/' ELSE 'relation/' END) || g.osm_id IN (SELECT unnest(replaces) FROM landmarks WHERE active)`
-  return rows.flatMap(r => r.coords.map(polygon => polygon[0].map(([lng, lat]) => mercator(lng, lat))))
+  const rows: Array<{ coords: number[][][][]; lng: number; lat: number; radius: number }> = await sql`
+    SELECT ST_AsGeoJSON(ST_Multi(g.geom))::json->'coordinates' AS coords, ST_X(l.geom) AS lng, ST_Y(l.geom) AS lat,
+           (ST_XMax(l.reach) - ST_X(ST_Transform(l.geom, 3857))) * cos(radians(ST_Y(l.geom))) AS radius
+    FROM geo_places g JOIN landmarks l ON l.active
+      AND (CASE g.osm_type WHEN 'W' THEN 'way/' ELSE 'relation/' END) || g.osm_id = ANY(l.replaces)
+    WHERE g.tags @> '{"man_made": "bridge"}' AND g.geom_type = 'area' AND g.geom && ${box}`
+  return rows.flatMap(r => r.coords.map(polygon => ({ ring: polygon[0].map(([lng, lat]) => mercator(lng, lat)), centre: mercator(r.lng, r.lat), radius: r.radius })))
 }
 
 export async function bakeDeckFiles(sql: postgres.Sql, dem: Dem, decks: Deck[], context: Deck[] = decks): Promise<Map<string, string>> {

@@ -63,7 +63,7 @@ test('leaves a structure over unknown ground exaggerated as a whole', () => {
 })
 
 test('a deck under a landmark that models its bridge keeps its surface and drops its own piers and parapets', () => {
-  const materialCount = (structures?: Array<Array<[number, number]>>) => {
+  const materialCount = (structures?: Array<{ ring: Array<[number, number]>; centre: [number, number]; radius: number }>) => {
     const { mesh } = bakeBridges({ ...input, structures }, MATERIAL_PALETTE)
     const counts = new Map<number, number>()
     for (let i = 0; i < mesh.color.length; i += 3) counts.set(mesh.color[i], (counts.get(mesh.color[i]) ?? 0) + 1)
@@ -71,7 +71,9 @@ test('a deck under a landmark that models its bridge keeps its surface and drops
   }
   const [x0, y0] = mercator(-74.01, 40.71), [x1, y1] = mercator(-73.99, 40.69)
   const around: Array<[number, number]> = [[x0, y0], [x1, y0], [x1, y1], [x0, y1], [x0, y0]]
-  const plain = materialCount(), modelled = materialCount([around])
+  const plain = materialCount(), modelled = materialCount([{ ring: around, centre: points[1], radius: 200 }])
+  // A model reaching only 30 m from its anchor leaves the deck's far stretches their own parapets.
+  expect(materialCount([{ ring: around, centre: points[1], radius: 30 }]).get(2)).toBeGreaterThan(0)
   const [surface, concrete, parapet] = [0, 1, 2]
   expect(plain.get(parapet)).toBeGreaterThan(0)
   expect(modelled.get(parapet) ?? 0).toBe(0)
