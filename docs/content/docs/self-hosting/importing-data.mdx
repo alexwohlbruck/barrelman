@@ -528,7 +528,9 @@ API and ops must share `BRIDGE_MESH_DIR`. Existing rows have no mesh until rebui
 (`import/generate-bridge-decks.ts`), entirely by rule from OSM and the terrain,
 so it can be rebuilt whenever the map changes. It joins bridge ways that share
 an end into one line per roadway (only ways of one kind and `layer`, so stacked
-decks stay apart; where three meet, the straightest pair carries on), fits road
+decks stay apart, but for two meeting alone where one has no `layer`, as a
+bridge's anchorage stretch often has none; where three meet, the straightest
+pair carries on), fits road
 decks with no `man_made=bridge` outline to `road_surfaces` and folds sidewalks
 mapped beside them in. A road deck in an outline follows it: at every sample each
 side reaches to where a line square to the deck leaves the outline (never
@@ -541,6 +543,26 @@ railways, paths, waterways, water and lower decks, each with its own clearance
 — climbing no steeper than 6 % and eased into a vertical curve. Decks side by
 side at about one height share it, stacked decks keep their own, and piers
 stand every 30 m where a deck is 4 m up, in one row under twin carriageways.
+Where a road climbing from the ground cannot clear a lesser road it crosses
+within that grade, the lesser road dips under it. An end meeting only ways on
+an `embankment` starts as high as it must, since the bare-earth terrain leaves
+the fill out.
+
+A bridge's own height sets its deck where OSM records it:
+`seamark:bridge:clearance_height` (the clearance; the deck is 2 m above it), or
+`height` on the `man_made=bridge` outline, taken as the deck over the water or
+ground under the span (on a suspension or cable-stayed bridge only when well
+short of its towers' `height`, which it may otherwise be). Towers and
+anchorages mapped as `bridge:support=pylon` and `abutment` areas hang a
+suspended span between them, cambered 1 % of the span down to each tower, on
+no piers. `ele` and `layer` are not deck heights. Where OSM has none of this,
+`config/bridge-elevations.json` may give a deck height by the bridge's
+Wikidata item; adding the tag to OSM is better.
+
+A landmark whose `replaces` lists a bridge's `man_made=bridge` outline draws
+that bridge's structure within its reach, so the decks there are baked
+without their own piers and parapets. Rebuild bridges after adding or
+changing such a landmark.
 
 Ways are split and renumbered constantly, so a deck's `id` is where it lies
 and which way it runs, and its `bridge` the outline or wikidata item it
