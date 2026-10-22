@@ -16,7 +16,8 @@ import { buildDecks, FORMAT, STEP, type Crossed, type Deck, type DeckInput } fro
 import type { Dem } from '../src/lib/bridge-decks/dem'
 import { clip, contains, degreeBox, toDegrees, toUnits, UNITS_PER_DEGREE, type UnitBox, type UnitPoint } from '../src/lib/bridge-decks/grid'
 import type { Built } from '../src/lib/bridge-decks/queue'
-import { lngLat, mercator, type Kind, type Point, type Way } from '../src/lib/bridge-decks/profile'
+import { deckLevel, metres, type Support } from '../src/lib/bridge-decks/elevation'
+import { inside, lngLat, mercator, type Kind, type Point, type Way } from '../src/lib/bridge-decks/profile'
 
 type Sql = postgres.Sql
 
@@ -46,11 +47,6 @@ const anyTag = (sql: Sql, pairs: Array<[string, string]>) =>
 /** Decks per INSERT: one statement per batch rather than a round trip per deck. */
 const INSERT_BATCH = 500
 
-const metres = (value: string | null): number | null => {
-  const m = value?.match(/^\s*(-?[0-9]+(?:\.[0-9]+)?)\s*(m|ft|')?\s*$/)
-  if (!m) return null
-  return Number(m[1]) * (m[2] === 'ft' || m[2] === "'" ? 0.3048 : 1)
-}
 
 type Row = { id: string; kind: Kind; highway: string | null; road: string | null; layer: string | null; width: string | null;
   lanes: string | null; oneway: string | null; wikidata: string | null; coords: number[][] }
@@ -124,12 +120,20 @@ export async function inputFor(sql: Sql, rows: Row[]): Promise<DeckInput> {
   }))
 
   // Outlines are rare: found by their tag's index, then the box.
-  const outlineRows: Array<{ id: string; coords: number[][][][] }> = await sql`
-    SELECT (CASE osm_type WHEN 'W' THEN 'way/' ELSE 'relation/' END) || osm_id AS id,
+  const outlineRows: Array<{ id: string; tags: Record<string, string>; coords: number[][][][] }> = await sql`
+    SELECT (CASE osm_type WHEN 'W' THEN 'way/' ELSE 'relation/' END) || osm_id AS id, tags,
            ST_AsGeoJSON(ST_Multi(geom))::json->'coordinates' AS coords
     FROM geo_places WHERE tags @> '{"man_made": "bridge"}' AND geom_type = 'area' AND geom && ${box}
     ORDER BY osm_type, osm_id`
-  const outlines = outlineRows.flatMap(o => o.coords.map(rings => ({ id: o.id, rings: rings.map(ring => ring.map(([lng, lat]) => mercator(lng, lat))) })))
+  const supportRows: Array<{ kind: Support['kind']; height: string | null; coords: number[][][][] }> = outlineRows.length ? await sql`
+    SELECT tags->>'bridge:support' AS kind, tags->>'height' AS height, ST_AsGeoJSON(ST_Multi(geom))::json->'coordinates' AS coords
+    FROM geo_places WHERE tags->>'bridge:support' IN ('pylon', 'abutment') AND geom_type = 'area' AND geom && ${box}` : []
+  const supports: Support[] = supportRows.flatMap(r => r.coords.map(rings => ({ kind: r.kind, height: metres(r.height), ring: rings[0].map(([lng, lat]) => mercator(lng, lat)) })))
+  const outlines = outlineRows.flatMap(o => o.coords.map(rings => {
+    const shape = rings.map(ring => ring.map(([lng, lat]) => mercator(lng, lat)))
+    const mine = supports.filter(s => s.ring.some(p => inside(p, shape[0])))
+    return { id: o.id, rings: shape, ...deckLevel(o.tags, mine) }
+  }))
 
   const [{ surfaces }] = await sql`SELECT to_regclass('road_surfaces') IS NOT NULL AS surfaces`
   const kerbs: Point[] = surfaces

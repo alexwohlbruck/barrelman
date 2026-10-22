@@ -24,11 +24,13 @@ import {
   joinNeighbours,
   landing,
   LANDING,
+  MAX_GRADE,
   TERRAIN_SLACK,
   metresPerUnit,
   lngLat,
   meet,
   resample,
+  sideAt,
   smooth,
   solve,
   steady,
@@ -38,7 +40,8 @@ import {
   type Point,
   type Way,
 } from './profile'
-import { inOutline, shapeDecks, type Outline } from './shape'
+import { hungStretch, levelNeeds } from './elevation'
+import { inOutline, shapeDecks, within, type Outline } from './shape'
 
 /** Metres between height samples. */
 export const STEP = 6
@@ -46,6 +49,8 @@ export const STEP = 6
 export const FORMAT = 2
 /** Room a deck's underside leaves over what it crosses, plus the slab, in metres. */
 export const CLEARANCE = { road: 6, rail: 8, path: 4, water: 4, deck: 6.5 } as const
+/** Metres from its ends within which a deck over a lower one may be merging with it rather than clearing it. */
+const OVER_FROM_END = 60
 /** Distance between piers, and the least height of deck over ground that has them, in metres. */
 export const PIER_SPACING = 30
 export const PIER_MIN = 4
@@ -174,6 +179,8 @@ type Solved = {
   z: number[]
   grounded: [boolean, boolean]
   needs: Need[]
+  /** Where it hangs from its bridge's towers, clear of piers, in metres along it. */
+  hung: [number, number] | null
   /** The decks its ends rest on, and where. */
   on: Array<{ deck: Solved; at: Point }>
   /** The road each grounded end lands on, where it lies beyond a hollow in the ground. */
@@ -186,7 +193,7 @@ type Solved = {
 }
 
 /** What a deck passes over, as heights its surface must reach. */
-function needs(s: Pick<Solved, 'chain' | 'd' | 'g'>, input: DeckInput, below: Solved[]): Need[] {
+function needs(s: Pick<Solved, 'chain' | 'd' | 'g'>, input: DeckInput, below: Solved[], bases: Map<string, number>): Need[] {
   const out: Need[] = []
   const reach = Math.max(...s.chain.edges)
   const own = box(s.chain.points)
@@ -200,12 +207,29 @@ function needs(s: Pick<Solved, 'chain' | 'd' | 'g'>, input: DeckInput, below: So
       const z = heightAt(lower.d, lower.z, lower.d[near.segment - 1] + (lower.d[near.segment] - lower.d[near.segment - 1]) * near.t)
       out.push({ at, height: z + CLEARANCE.deck })
     }
+  // A deck carried over a lower one along its length, as a promenade over a
+  // bridge's roadways, clears it there. Near its own ends it may be merging.
+  const total = s.d[s.d.length - 1]
+  for (const lower of below.filter(o => meet(own, box(o.chain.points))))
+    s.chain.points.forEach((p, i) => {
+      if (s.d[i] < OVER_FROM_END || total - s.d[i] < OVER_FROM_END) return
+      const near = beside(lower.chain.points, p)
+      if (!near.alongside || near.distance >= sideAt(lower.chain, near.left ? 0 : 1, near.segment - 1, near.t)) return
+      out.push({ at: s.d[i], height: heightAt(lower.d, lower.z, lower.d[near.segment - 1] + (lower.d[near.segment] - lower.d[near.segment - 1]) * near.t) + CLEARANCE.deck })
+    })
   const water = input.water.filter(ring => meet(own, box(ring)))
   if (water.length)
     s.chain.points.forEach((p, i) => {
       if (water.some(ring => inside(p, ring))) out.push({ at: s.d[i], height: s.g[i] + CLEARANCE.water })
     })
+  const outline = outlineOf(s.chain, input.outlines)
+  if (outline && bases.has(outline.id)) out.push(...levelNeeds(s.chain.points, s.chain.points.map(p => within(p, outline.rings)), outline, bases.get(outline.id)!))
   return out
+}
+
+/** The outline a deck lies in: the one it was named for, or for a deck not shaped to one, any that holds most of it. */
+function outlineOf(chain: Fitted, outlines: Outline[]): Outline | undefined {
+  return outlines.find(o => o.id === chain.outline) ?? outlines.find(o => inOutline(chain.points, o.rings))
 }
 
 /**
@@ -235,7 +259,8 @@ function piers(solved: Solved[]): number[][] {
     }
     for (let at = PIER_SPACING / 2; at < total; at += PIER_SPACING)
       if (high(s, at) && !shared.some(x => Math.abs(x - at) < PIER_SPACING * 0.75)) shared.push(at)
-    out[k] = shared.sort((a, b) => a - b).map(x => Math.round(x * 10) / 10)
+    const hung = (at: number) => s.hung !== null && at > s.hung[0] && at < s.hung[1]
+    out[k] = shared.filter(at => !hung(at)).sort((a, b) => a - b).map(x => Math.round(x * 10) / 10)
   }
   return out
 }
@@ -406,6 +431,27 @@ function restingOn(s: Solved, end: 0 | 1, solved: Solved[]): { height: number; o
   return { height: heightAt(o.d, o.z, o.d[near.segment - 1] + (o.d[near.segment] - o.d[near.segment - 1]) * near.t), on: o }
 }
 
+/** The least height an end must start from to reach every need along its deck within MAX_GRADE. */
+function reaching(s: Solved, end: 0 | 1): number {
+  const total = s.d[s.d.length - 1]
+  return Math.max(-Infinity, ...s.needs.map(n => n.height - MAX_GRADE * (end ? total - n.at : n.at)))
+}
+
+/**
+ * Where a deck carries straight on into another, end to end, the joint stands
+ * high enough for both to reach what they must clear: a promenade passing
+ * through a tower into its approach is not held down to the approach's
+ * height. An end resting partway along another deck takes that deck's height.
+ */
+function continued(s: Solved, end: 0 | 1, on: Solved): number {
+  const p = s.chain.points[end ? s.chain.points.length - 1 : 0]
+  const scale = metresPerUnit(p[1])
+  const ends = [on.chain.points[0], on.chain.points[on.chain.points.length - 1]]
+  const other = ends.findIndex(q => Math.hypot(q[0] - p[0], q[1] - p[1]) * scale <= Math.max(...on.chain.edges) + 1)
+  if (other < 0 || on.grounded[other]) return -Infinity
+  return Math.max(reaching(s, end), reaching(on, other as 0 | 1))
+}
+
 export async function buildDecks(input: DeckInput, ground: Ground): Promise<Deck[]> {
   const decks = absorbTracks(absorbPaths(fitted(chains(input.ways), input.outlines, input.kerbs))) as Fitted[]
   // An end lands where a road on the ground meets it, rests where it meets
@@ -432,6 +478,15 @@ export async function buildDecks(input: DeckInput, ground: Ground): Promise<Deck
   const onward = input.crossed.filter(c => c.kind === 'road' || c.kind === 'path').map(c => c.points)
   const { under, lands, roads } = await groundUnder(shaped, edges, grounded, onward, ground)
 
+  // The lowest ground under each outline that records a deck height, which that height is measured from.
+  const bases = new Map<string, number>()
+  shaped.forEach((chain, k) => {
+    const outline = outlineOf(chain, input.outlines)
+    if (outline?.deck === undefined || !under[k]) return
+    for (const [i, p] of chain.points.entries())
+      if (within(p, outline.rings)) bases.set(outline.id, Math.min(bases.get(outline.id) ?? Infinity, under[k]![i]))
+  })
+
   // Lower layers first, so a deck over another clears it.
   const solved: Solved[] = []
   for (const k of shaped.map((_, k) => k).sort((a, b) => shaped[a].layer - shaped[b].layer)) {
@@ -439,12 +494,14 @@ export async function buildDecks(input: DeckInput, ground: Ground): Promise<Deck
     const d = along(chain.points)
     const g = under[k]
     if (!g) continue
-    const need = needs({ chain, d, g }, input, solved.filter(o => o.chain.layer < chain.layer))
+    const need = needs({ chain, d, g }, input, solved.filter(o => o.chain.layer < chain.layer), bases)
     const own = decks[k].points
     const landed = lands[k].map(l => l?.height ?? null) as [number | null, number | null]
     const z = solve({ ...chain, grounded: grounded[k] }, g, need, landed)
+    const outline = outlineOf(chain, input.outlines)
+    const hung = outline ? hungStretch(chain.points, chain.points.map(p => within(p, outline.rings)), outline) : null
     solved.push({
-      chain, d, g, grounded: grounded[k], needs: need, z, on: [], lands: lands[k], roads: roads[k],
+      chain, d, g, grounded: grounded[k], needs: need, hung, z, on: [], lands: lands[k], roads: roads[k],
       ends: [own[0], own[own.length - 1]], nodes: new Set(own.map(key)),
     })
   }
@@ -459,7 +516,7 @@ export async function buildDecks(input: DeckInput, ground: Ground): Promise<Deck
       const rests = ([0, 1] as const).map(i => (s.grounded[i] ? null : restingOn(s, i, solved)))
       s.on = rests.flatMap((r, i) => (r ? [{ deck: r.on, at: s.chain.points[i ? s.chain.points.length - 1 : 0] }] : []))
       if (!s.on.length) continue
-      const resting = rests.map((r, i) => r?.height ?? s.lands[i]?.height ?? null) as [number | null, number | null]
+      const resting = rests.map((r, i) => (r ? Math.max(r.height, continued(s, i as 0 | 1, r.on)) : s.lands[i]?.height ?? null)) as [number | null, number | null]
       s.z = solve({ ...s.chain, grounded: s.grounded }, s.g, s.needs, resting)
     }
     for (let pass = 0; pass < SETTLE; pass++) joinNeighbours(solved)

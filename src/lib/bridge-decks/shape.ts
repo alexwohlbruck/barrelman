@@ -8,9 +8,10 @@
  * between them, and a deck that lands on the ground ends where its outline
  * does, at whatever skew the abutment was drawn.
  */
+import type { OutlineLevel } from './elevation'
 import { along, beside, box, covers, inside, MAX_REACH, meet, metresPerUnit, nearSegments, type Box, type Chain, type Point } from './profile'
 
-export type Outline = { id: string; rings: Point[][] }
+export type Outline = { id: string; rings: Point[][] } & OutlineLevel
 
 /**
  * Metres from the centreline to each edge at every sample, and how far each
