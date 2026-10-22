@@ -7,6 +7,9 @@ import {
   endsMade,
   landedOn,
   placedPiers,
+  movedPiers,
+  heightAt,
+  SLAB,
   sideAt,
   smoothstep,
   touchdown,
@@ -166,13 +169,17 @@ class MeshBaker {
     const inner = innerSides(solved, bridgeAreas)
     const mouths = mouthSides(solved)
     const onDecks = coveredSides(solved).map((sides, k) => sides.map((side, s) => side.map((c, i) => c || inner[k][s][i] || mouths[k][s][i])) as Sides)
-    // Decks built here stand their piers clear of the roads, railways and paths beneath.
-    const unplaced = solved.filter(s => !s.piers)
-    if (unplaced.length) {
-      const beneath = this.carriageways(false, unplaced.map(({ chain }) => boundsOf(chain.points, Math.max(...chain.edges))))
-        .flatMap(c => c.areas.map(rings => ({ rings, bounds: boundsOf(rings[0]) })))
-      const ways = this.waysNear(unplaced.map(({ chain }) => boundsOf(chain.points, Math.max(...chain.edges))))
-      for (const s of unplaced) s.piers = placedPiers(s.chain, s.z, s.groundAt, at => this.bentClear(s.chain, at, ways, beneath))
+    // Piers stand clear of the roads, railways and paths beneath, and of the decks below: each moved off them, or left out.
+    const placing = solved.filter((_, k) => own.has(k))
+    if (placing.length) {
+      const boxes = placing.map(({ chain }) => boundsOf(chain.points, Math.max(...chain.edges)))
+      const beneath = this.carriageways(false, boxes).flatMap(c => c.areas.map(rings => ({ rings, bounds: boundsOf(rings[0]) })))
+      const ways = this.waysNear(boxes)
+      const decks = solved.map(({ chain, z }) => ({ chain, z, bounds: boundsOf(chain.points, Math.max(...chain.edges)) }))
+      for (const s of placing) {
+        const clear = (at: number) => this.bentClear(s.chain, at, ways, beneath, decks.filter(o => o.chain !== s.chain), heightAt(along(s.chain.points), s.z, at))
+        s.piers = s.piers ? movedPiers(s.chain, s.z, s.groundAt, s.piers, clear) : placedPiers(s.chain, s.z, s.groundAt, clear)
+      }
     }
     // Solved in true metres; drawn over terrain that is stretched.
     const exaggeration = 1
@@ -296,7 +303,8 @@ class MeshBaker {
 
   /** The terrain as drawn at a point; where none is drawn yet, the fixed-zoom ground stretched as the terrain is. */
 
-  private bentClear(chain: Chain, at: number, ways: UnderWay[], beneath: Array<{ rings: Point[][]; bounds: Bounds }>): boolean {
+  private bentClear(chain: Chain, at: number, ways: UnderWay[], beneath: Array<{ rings: Point[][]; bounds: Bounds }>,
+    decks: Array<{ chain: Chain; z: number[]; bounds: Bounds }> = [], top = Infinity): boolean {
     const d = along(chain.points)
     let k = 1
     while (k < chain.points.length - 1 && d[k] < at) k++
@@ -310,7 +318,14 @@ class MeshBaker {
       bent.push([a[0] + (b[0] - a[0]) * t - ((b[1] - a[1]) / len) * across * scale, a[1] + (b[1] - a[1]) * t + ((b[0] - a[0]) / len) * across * scale])
     return !bent.some(q =>
       ways.some(w => holds(w.bounds, q) && beside(w.points, q).distance < w.half + ABUTMENT_ROOM) ||
-      beneath.some(r => holds(r.bounds, q) && inside(q, r.rings)))
+      beneath.some(r => holds(r.bounds, q) && inside(q, r.rings)) ||
+      decks.some(o => {
+        if (!holds(o.bounds, q)) return false
+        const near = beside(o.chain.points, q)
+        if (!near.alongside || near.distance > sideAt(o.chain, near.left ? 0 : 1, near.segment - 1, near.t) + ABUTMENT_ROOM) return false
+        const od = along(o.chain.points)
+        return heightAt(od, o.z, od[near.segment - 1] + (od[near.segment] - od[near.segment - 1]) * near.t) < top - SLAB
+      }))
   }
 
   /** Whether an abutment's footprint keeps off the ways and carriageways on the ground, but for the road carrying on from its way's end. */

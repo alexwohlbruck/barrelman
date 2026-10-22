@@ -38,15 +38,24 @@ test('encodes aligned GPU streams with a versioned header', () => {
 })
 
 test('lifts a structure with the terrain at its feet and with the smoothed terrain overhead', () => {
-  // A 40 m ridge every other 10 m: what a deck spans, not what it should follow.
-  const ridged = ([x]: [number, number]) => (Math.floor(x * 4e6) % 2 ? 40 : 0)
-  const lift = liftField(ridged)
-  const p = points[1]
-  expect(lift(p, ridged(p), ridged(p))).toBe(ridged(p))
-  const overhead = [0, 1, 2, 3].map(k => lift([p[0] + k * 2.5e-7, p[1]], 80, ridged([p[0] + k * 2.5e-7, p[1]])))
-  for (const h of overhead) expect(h).toBeGreaterThan(5)
-  for (const h of overhead) expect(h).toBeLessThan(35)
-  expect(Math.max(...overhead) - Math.min(...overhead)).toBeLessThan(10)
+  // An 8 m wide cutting 40 m deep, as a road or stream the deck spans.
+  const metre = 1 / 30_400_000
+  const cutting = ([x]: [number, number]) => (Math.abs(x - points[1][0]) < 4 * metre ? -40 : 0)
+  const lift = liftField(cutting)
+  const across = [-30, -10, 0, 10, 30].map(m => [points[1][0] + m * metre, points[1][1]] as [number, number])
+  expect(lift(across[2], -40, -40)).toBe(-40)
+  const overhead = across.map(p => lift(p, 20, cutting(p)))
+  expect(Math.max(...overhead) - Math.min(...overhead)).toBeLessThan(8)
+  expect(Math.min(...overhead)).toBeGreaterThan(-10)
+})
+
+test('lifts a point alike however the meshes around it were sampled, so decks that meet are lifted alike', () => {
+  const hilly = ([x, y]: [number, number]) => 30 * Math.sin(x * 2e5) + 20 * Math.cos(y * 3e5)
+  const near = Array.from({ length: 40 }, (_, k) => [points[0][0] + k * 3e-7, points[0][1] + (k % 7) * 2e-7] as [number, number])
+  const forward = liftField(hilly), backward = liftField(hilly)
+  const a = near.map(p => forward(p, 60, hilly(p)))
+  const b = near.slice().reverse().map(p => backward(p, 60, hilly(p))).reverse()
+  expect(a).toEqual(b)
 })
 
 test('leaves a structure over unknown ground exaggerated as a whole', () => {
@@ -68,4 +77,23 @@ test('a deck under a landmark that models its bridge keeps its surface and drops
   expect(modelled.get(parapet) ?? 0).toBe(0)
   expect(modelled.get(concrete)!).toBeLessThan(plain.get(concrete)!)
   expect(modelled.get(surface)).toBe(plain.get(surface))
+})
+
+test('a pier never stands through a deck below: it moves along to clear it, or is left out', () => {
+  const metre = 1 / 30_400_000
+  const across = [[-73.999, 40.6995], [-73.999, 40.7], [-73.999, 40.7005]].map(([x, y]) => mercator(x, y))
+  const low: Deck = { ...deck, id: 'low', ways: [2], points: across, heights: [3, 3, 3], ground: [0, 0, 0], piers: [], length: 111, midpoint: across[1], edges: [5, 5] }
+  // The high deck's middle pier is given right over the low deck.
+  const high: Deck = { ...deck, id: 'high', heights: [12, 12, 12], piers: [42.5, 84.5, 126.5], grounded: [false, false] }
+  const { mesh, origin } = bakeBridges({ ...input, decks: [high, low], own: ['high'] }, MATERIAL_PALETTE)
+  const [x0, y0] = [across[1][0] - origin[0], across[1][1] - origin[1]]
+  // A column's foot: a vertex at the ground, under the low deck.
+  const feet = (x0: number) => {
+    let n = 0
+    for (let i = 0; i < mesh.position.length; i += 3)
+      if (Math.abs(mesh.position[i] - x0) < 4.5 * metre && Math.abs(mesh.position[i + 1] - y0) < 20 * metre && mesh.position[i + 2] / metre < 1) n++
+    return n
+  }
+  expect(feet(x0)).toBe(0)
+  expect(feet(x0 + 42 * metre)).toBeGreaterThan(0)
 })

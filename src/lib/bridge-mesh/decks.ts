@@ -113,6 +113,26 @@ export function placedPiers(chain: Chain, z: number[], groundAt: number[], clear
   return out
 }
 
+/**
+ * Piers given for a deck, each moved to the nearest place within a quarter
+ * span where `clear` allows its bent, or left out: a pier never stands in a
+ * road, or through a deck, below.
+ */
+export function movedPiers(chain: Chain, z: number[], groundAt: number[], piers: number[], clear: (at: number) => boolean): number[] {
+  const d = along(chain.points)
+  const total = d[d.length - 1]
+  const out: number[] = []
+  for (const s of piers)
+    for (let shift = 0; shift <= PIER_SPACING / 4; shift++) {
+      const at = [s - shift, s + shift].find(a => a > 0 && a < total && heightAt(d, z, a) - heightAt(d, groundAt, a) >= PIER_MIN && clear(a))
+      if (at !== undefined) {
+        if (!out.some(o => Math.abs(o - at) < 1)) out.push(at)
+        break
+      }
+    }
+  return out
+}
+
 /** 0 at 0, 1 at 1, level at both. */
 export const smoothstep = (u: number) => u * u * (3 - 2 * u)
 

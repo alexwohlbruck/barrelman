@@ -13,8 +13,9 @@ import { writeBridgeMesh } from '../src/lib/bridge-mesh/files'
 export async function modelledBridges(sql: postgres.Sql, decks: Deck[]): Promise<Point[][]> {
   const [{ present }] = await sql`SELECT to_regclass('landmarks') IS NOT NULL AS present`
   if (!present || !decks.length) return []
-  const coords = decks.flatMap(d => d.points.map(lngLat))
-  const box = sql`ST_MakeEnvelope(${Math.min(...coords.map(c => c[0]))}, ${Math.min(...coords.map(c => c[1]))}, ${Math.max(...coords.map(c => c[0]))}, ${Math.max(...coords.map(c => c[1]))}, 4326)`
+  let [w, s, e, n] = [Infinity, Infinity, -Infinity, -Infinity]
+  for (const d of decks) for (const [lng, lat] of d.points.map(lngLat)) [w, s, e, n] = [Math.min(w, lng), Math.min(s, lat), Math.max(e, lng), Math.max(n, lat)]
+  const box = sql`ST_MakeEnvelope(${w}, ${s}, ${e}, ${n}, 4326)`
   const rows: Array<{ coords: number[][][][] }> = await sql`
     SELECT ST_AsGeoJSON(ST_Multi(g.geom))::json->'coordinates' AS coords FROM geo_places g
     WHERE g.tags @> '{"man_made": "bridge"}' AND g.geom_type = 'area' AND g.geom && ${box}
