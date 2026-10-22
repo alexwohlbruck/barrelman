@@ -10,6 +10,7 @@ import {
   absorbPaths,
   absorbTracks,
   along,
+  arch,
   beside,
   besideGround,
   box,
@@ -72,6 +73,8 @@ export type DeckInput = {
   ways: Way[]
   /** Way ends (by `${x},${y}`) that meet a road or railway on the ground. */
   onGround: Set<string>
+  /** Those of them where every way met is on an embankment: raised on fill, so not at the bare-earth terrain. */
+  raised?: Set<string>
   /** man_made=bridge outlines. */
   outlines: Outline[]
   /** Carriageway outline points, for a road deck with no bridge outline. */
@@ -181,6 +184,8 @@ type Solved = {
   needs: Need[]
   /** Where it hangs from its bridge's towers, clear of piers, in metres along it. */
   hung: [number, number] | null
+  /** Heights its ends are held at where they meet ways on an embankment, which stand above the bare-earth terrain. */
+  held?: [number | null, number | null]
   /** The decks its ends rest on, and where. */
   on: Array<{ deck: Solved; at: Point }>
   /** The road each grounded end lands on, where it lies beyond a hollow in the ground. */
@@ -227,11 +232,16 @@ function needs(s: Pick<Solved, 'chain' | 'd' | 'g'>, input: DeckInput, below: So
   return out
 }
 
-/** The outline a deck lies in: the one it was named for, or for a deck not shaped to one, any that holds most of it. */
-function outlineOf(chain: Fitted, outlines: Outline[]): Outline | undefined {
-  return outlines.find(o => o.id === chain.outline) ?? outlines.find(o => inOutline(chain.points, o.rings))
+/** The outline a deck lies in: the one it was named for, or for a deck not shaped to one, any that holds most of it. Worked out once per deck. */
+const outlines = new WeakMap<Chain, Outline | null>()
+function outlineOf(chain: Fitted, all: Outline[]): Outline | undefined {
+  if (!outlines.has(chain)) {
+    const own = box(chain.points)
+    const fits = (o: Outline) => meet(own, box(o.rings[0])) && inOutline(chain.points, o.rings)
+    outlines.set(chain, all.find(o => o.id === chain.outline && fits(o)) ?? all.find(fits) ?? null)
+  }
+  return outlines.get(chain) ?? undefined
 }
-
 /**
  * Piers every PIER_SPACING metres where a deck stands high. A deck running
  * beside one that already has piers takes the same row, so twin carriageways
@@ -431,6 +441,42 @@ function restingOn(s: Solved, end: 0 | 1, solved: Solved[]): { height: number; o
   return { height: heightAt(o.d, o.z, o.d[near.segment - 1] + (o.d[near.segment] - o.d[near.segment - 1]) * near.t), on: o }
 }
 
+/** Metres each side of a joint between two decks, end to end, over which a sag between them is filled. */
+const JOINT_RUN = 200
+/** Least cosine between two decks' headings across a joint for one to carry straight on into the other. */
+const STRAIGHT_ON = Math.cos(Math.PI / 9)
+
+/**
+ * Where a deck carries straight on into another, end to end, the grade line
+ * across the joint takes no sag, as within one deck: each solved against its
+ * own ends, a short deck between two longer ones can be left lower than both.
+ */
+function unsag(s: Solved, end: 0 | 1, solved: Solved[]) {
+  if (s.grounded[end]) return
+  const n = s.chain.points.length
+  const p = s.chain.points[end ? n - 1 : 0]
+  const node = key(s.ends[end])
+  const meeting = solved.flatMap(o => (o === s ? [] : ([0, 1] as const).flatMap(e => (key(o.ends[e]) === node ? [{ o, other: e }] : []))))
+  // Only one deck carrying straight on: at a fork each branch keeps its own grade.
+  if (meeting.length !== 1) return
+  for (const { o, other } of meeting) {
+    if (o.grounded[other]) continue
+    const m = o.chain.points.length
+    const [a, b] = [s.chain.points[end ? n - 2 : 1], o.chain.points[other ? m - 2 : 1]]
+    const [u, v] = [[p[0] - a[0], p[1] - a[1]], [b[0] - p[0], b[1] - p[1]]]
+    if (u[0] * v[0] + u[1] * v[1] < STRAIGHT_ON * Math.hypot(u[0], u[1]) * Math.hypot(v[0], v[1])) continue
+    // Distances out from the joint, this deck's negative and the other's positive.
+    const total = (x: Solved) => x.d[x.d.length - 1]
+    const mine = s.d.map((d, i) => ({ i, at: -(end ? total(s) - d : d) })).filter(v => v.at >= -JOINT_RUN).sort((a, b) => a.at - b.at)
+    const theirs = o.d.map((d, i) => ({ i, at: other ? total(o) - d : d })).filter(v => v.at <= JOINT_RUN && v.at > 0).sort((a, b) => a.at - b.at)
+    if (mine.length < 2 || !theirs.length) continue
+    const d = [...mine.map(v => v.at), ...theirs.map(v => v.at)]
+    const z = arch(d, [...mine.map(v => s.z[v.i]), ...theirs.map(v => o.z[v.i])])
+    mine.forEach((v, k) => (s.z[v.i] = Math.max(s.z[v.i], z[k])))
+    theirs.forEach((v, k) => (o.z[v.i] = Math.max(o.z[v.i], z[mine.length + k])))
+  }
+}
+
 /** The least height an end must start from to reach every need along its deck within MAX_GRADE. */
 function reaching(s: Solved, end: 0 | 1): number {
   const total = s.d[s.d.length - 1]
@@ -511,16 +557,26 @@ export async function buildDecks(input: DeckInput, ground: Ground): Promise<Deck
   // deck lifted to its neighbour can lift the next one along. A join is not
   // arched over again: that would carry a lift along the whole deck, and from
   // it to the next, ratcheting a whole interchange up.
+  // An end meeting only ways on an embankment is on fill the bare-earth terrain
+  // leaves out: it starts as high as it must to clear what it crosses just beyond.
+  for (const s of solved) {
+    const held = ([0, 1] as const).map(i => (s.grounded[i] && input.raised?.has(key(s.ends[i])) ? Math.max(s.g[i ? s.g.length - 1 : 0], reaching(s, i)) : null)) as [number | null, number | null]
+    if (held.every(h => h === null)) continue
+    s.held = held
+    s.grounded = s.grounded.map((g, i) => g && held[i] === null) as [boolean, boolean]
+  }
   for (let round = 0; round < SETTLE; round++) {
     for (const s of solved) {
+      // What it clears below may have settled higher since it was solved.
+      s.needs = needs(s, input, solved.filter(o => o.chain.layer < s.chain.layer), bases)
       const rests = ([0, 1] as const).map(i => (s.grounded[i] ? null : restingOn(s, i, solved)))
       s.on = rests.flatMap((r, i) => (r ? [{ deck: r.on, at: s.chain.points[i ? s.chain.points.length - 1 : 0] }] : []))
-      if (!s.on.length) continue
-      const resting = rests.map((r, i) => (r ? Math.max(r.height, continued(s, i as 0 | 1, r.on)) : s.lands[i]?.height ?? null)) as [number | null, number | null]
+      const resting = rests.map((r, i) => (r ? Math.max(r.height, continued(s, i as 0 | 1, r.on)) : s.held?.[i] ?? s.lands[i]?.height ?? null)) as [number | null, number | null]
       s.z = solve({ ...s.chain, grounded: s.grounded }, s.g, s.needs, resting)
     }
     for (let pass = 0; pass < SETTLE; pass++) joinNeighbours(solved)
   }
+  for (let pass = 0; pass < SETTLE; pass++) for (const s of solved) for (const end of [0, 1] as const) unsag(s, end, solved)
   for (const s of solved) s.z = eased(s, input.onGround)
   // Easing moves twins a few centimetres apart; side by side, they meet exactly.
   joinNeighbours(solved, undefined, EASED)

@@ -107,17 +107,19 @@ export async function inputFor(sql: Sql, rows: Row[]): Promise<DeckInput> {
   const box = sql`ST_MakeEnvelope(${w}, ${s}, ${e}, ${n}, 4326)`
 
   const ends = [...new Map(rows.flatMap(r => [r.coords[0], r.coords[r.coords.length - 1]]).map(c => [c.join(','), c])).values()]
-  const landed: Array<{ i: number }> = await sql`
-    SELECT o.i FROM unnest(${ends.map(c => c[0])}::float8[], ${ends.map(c => c[1])}::float8[]) WITH ORDINALITY AS o(lng, lat, i)
-    WHERE EXISTS (
-      SELECT 1 FROM geo_places g
-      WHERE g.geom_type = 'line' AND g.geom && ST_Expand(ST_SetSRID(ST_MakePoint(o.lng, o.lat), 4326), 1e-7)
-        AND (g.tags ? 'highway' OR g.tags ? 'railway') AND COALESCE(g.tags->>'bridge', 'no') = 'no'
-        AND ST_DWithin(g.geom, ST_SetSRID(ST_MakePoint(o.lng, o.lat), 4326), 1e-7))`
-  const onGround = new Set(landed.map(({ i }) => {
+  const landed: Array<{ i: number; raised: boolean }> = await sql`
+    SELECT o.i, bool_and(g.tags->>'embankment' = 'yes') AS raised
+    FROM unnest(${ends.map(c => c[0])}::float8[], ${ends.map(c => c[1])}::float8[]) WITH ORDINALITY AS o(lng, lat, i)
+    JOIN geo_places g ON g.geom_type = 'line' AND g.geom && ST_Expand(ST_SetSRID(ST_MakePoint(o.lng, o.lat), 4326), 1e-7)
+      AND (g.tags ? 'highway' OR g.tags ? 'railway') AND COALESCE(g.tags->>'bridge', 'no') = 'no'
+      AND ST_DWithin(g.geom, ST_SetSRID(ST_MakePoint(o.lng, o.lat), 4326), 1e-7)
+    GROUP BY o.i`
+  const at = ({ i }: { i: number }) => {
     const [lng, lat] = ends[Number(i) - 1]
     return mercator(lng, lat).join(',')
-  }))
+  }
+  const onGround = new Set(landed.map(at))
+  const raised = new Set(landed.filter(l => l.raised).map(at))
 
   // Outlines are rare: found by their tag's index, then the box.
   const outlineRows: Array<{ id: string; tags: Record<string, string>; coords: number[][][][] }> = await sql`
@@ -168,7 +170,7 @@ export async function inputFor(sql: Sql, rows: Row[]): Promise<DeckInput> {
   const water = waterRows.flatMap(r => (r.coords ?? []).map(polygon => polygon[0].map(([lng, lat]) => mercator(lng, lat))))
 
   const wikidata = new Map(rows.flatMap(r => (r.wikidata ? [[Number(r.id), r.wikidata] as [number, string]] : [])))
-  return { ways, onGround, outlines, kerbs, crossed, water, wikidata }
+  return { ways, onGround, raised, outlines, kerbs, crossed, water, wikidata }
 }
 
 /**
