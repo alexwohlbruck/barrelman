@@ -46,6 +46,9 @@ import {
 import { hungStretch, levelNeeds } from './elevation'
 import { inOutline, shapeDecks, within, type Outline } from './shape'
 
+/** How far past its lanes' half width a deck fitted to its kerbs may reach: by this factor, plus this many metres. */
+const KERB_STRETCH = 1.5
+const KERB_ROOM = 2
 /** Metres between height samples. */
 export const STEP = 6
 /** What a row holds: 2 adds each side's edge at every sample, and its end caps, where a deck follows its outline. */
@@ -139,7 +142,9 @@ function fitted(decks: Chain[], outlines: Outline[], kerbs: Point[]): Fitted[] {
   }
   const loose = out.filter(d => d.kind === 'road' && !d.outline)
   const fit = fitEdges(loose, kerbs, decks)
-  return out.map(d => (loose.includes(d) ? { ...fit[loose.indexOf(d)], outline: null } : d))
+  // A carriageway outline reaches into gores and merges; a deck it fits is held near its own lanes' width.
+  const held = (d: Chain, k: number) => fit[k].edges.map((e, side) => Math.min(e, d.edges[side] * KERB_STRETCH + KERB_ROOM)) as [number, number]
+  return out.map(d => (loose.includes(d) ? { ...fit[loose.indexOf(d)], edges: held(d, loose.indexOf(d)), outline: null } : d))
 }
 
 const bearing = (points: Point[]) => {
