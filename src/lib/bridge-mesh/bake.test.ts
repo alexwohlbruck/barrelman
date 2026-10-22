@@ -99,3 +99,13 @@ test('a pier never stands through a deck below: it moves along to clear it, or i
   expect(feet(x0)).toBe(0)
   expect(feet(x0 + 42 * metre)).toBeGreaterThan(0)
 })
+
+test('a walkway under a landmark that models its bridge is left to the model entirely', () => {
+  const [x0, y0] = mercator(-74.01, 40.71), [x1, y1] = mercator(-73.99, 40.69)
+  const around: Array<[number, number]> = [[x0, y0], [x1, y0], [x1, y1], [x0, y1], [x0, y0]]
+  const walkway: Deck = { ...deck, kind: 'path', edges: [1.5, 1.5] }
+  const plain = bakeBridges({ ...input, decks: [walkway] }, MATERIAL_PALETTE).mesh.position.length
+  const modelled = bakeBridges({ ...input, decks: [walkway], structures: [{ ring: around, centre: points[1], radius: 200 }] }, MATERIAL_PALETTE).mesh.position.length
+  expect(plain).toBeGreaterThan(0)
+  expect(modelled).toBe(0)
+})

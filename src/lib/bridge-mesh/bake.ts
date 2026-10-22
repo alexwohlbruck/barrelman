@@ -113,7 +113,7 @@ export type BakeInput = {
   surfaces: MeshFeature[]
   paint: MeshFeature[]
   ground: (point: Point) => number | null
-  /** Bridge outlines (outer rings) whose structure a landmark model draws, within `radius` metres of its anchor: decks there keep their surfaces and drop their own piers and parapets. */
+  /** Bridge outlines (outer rings) whose structure a landmark model draws, within `radius` metres of its anchor: road decks there keep their surfaces and drop their own piers and parapets; walkways and tracks are the model's. */
   structures?: Structure[]
 }
 export type Structure = { ring: Point[]; centre: Point; radius: number }

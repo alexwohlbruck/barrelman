@@ -953,6 +953,8 @@ export function deckMesh(
     return [p[0] + (other[0] - p[0]) * k, p[1] + (other[1] - p[1]) * k]
   }
   for (let i = 1; i < n; i++) {
+    // A walkway or track a landmark model carries is the model's, surface and all.
+    if (chain.kind !== 'road' && modelled[i - 1] && modelled[i]) continue
     const [l0, l1, r0, r1] = [lefts[i - 1], lefts[i], rights[i - 1], rights[i]]
     const [b0, b1] = [touchdown(z[i - 1] - biasGround[i - 1]), touchdown(z[i] - biasGround[i])]
     quad(at(l0.p, l0.z), at(r0.p, r0.z), at(r1.p, r1.z), at(l1.p, l1.z), colors.surface, colors.low ?? colors.surface, [b0, b0, b1, b1])
