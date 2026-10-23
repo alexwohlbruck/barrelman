@@ -19,7 +19,7 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 * Bridge decks stand at the height OSM records for the bridge (`height` on its outline, or its charted clearance), with suspended spans cambered between their towers and no piers under them.
 * Each roadway runs as one deck through anchorages and other joints mapped without a layer, without dips; ramps dip under ramps that climb over them, and piers stand clear of roads and decks below.
 * Decks under a landmark model of their bridge leave its structure to the model.
-* Bridge deck profiles run on smooth vertical curves, without bumps where a suspended span's camber meets its approaches or where decks join.
+* Bridge decks run on smooth vertical curves, without bumps where a suspended span's camber meets its approaches, where decks meet, or where a high deck crosses a shoreline.
 
 ## [0.10.22] - 2026-10-17
 
