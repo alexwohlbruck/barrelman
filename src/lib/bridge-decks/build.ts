@@ -16,6 +16,7 @@ import {
   besideGround,
   box,
   chains,
+  clearOfWalkways,
   covers,
   crossings,
   CURVE,
@@ -58,6 +59,8 @@ export const STEP = 6
 export const FORMAT = 2
 /** Room a deck's underside leaves over what it crosses, plus the slab, in metres. */
 export const CLEARANCE = { road: 6, rail: 8, path: 4, water: 4, deck: 6.5 } as const
+/** Metres past a lower roadway's edge within which a walkway on a higher layer is carried above it. */
+const RIDE = 2
 /** Metres from its ends within which a deck over a lower one may be merging with it rather than clearing it. */
 const OVER_FROM_END = 60
 /** Distance between piers, and the least height of deck over ground that has them, in metres. */
@@ -128,7 +131,7 @@ function filled(values: number[]): number[] | null {
   return values.map((v, i) => (Number.isNaN(v) ? values[known.reduce((b, k) => (Math.abs(k - i) < Math.abs(b - i) ? k : b))] : v))
 }
 
-type Fitted = Chain & { outline: string | null; caps?: [number, number, number, number] }
+type Fitted = Chain & { outline: string | null; caps?: [number, number, number, number]; lanes?: [number, number] }
 
 /**
  * Each road deck named for the bridge outline it lies in, which shapes it
@@ -136,7 +139,7 @@ type Fitted = Chain & { outline: string | null; caps?: [number, number, number, 
  * fitted to its kerbs instead. Rail and path decks keep their own width.
  */
 function fitted(decks: Chain[], outlines: Outline[], kerbs: Point[]): Fitted[] {
-  let out: Fitted[] = decks.map(d => ({ ...d, outline: null }))
+  let out: Fitted[] = decks.map(d => ({ ...d, outline: null, lanes: d.edges }))
   for (const { id, rings } of outlines) {
     const mine = out.filter(d => d.kind === 'road' && !d.outline && inOutline(d.points, rings))
     if (!mine.length) continue
@@ -147,7 +150,7 @@ function fitted(decks: Chain[], outlines: Outline[], kerbs: Point[]): Fitted[] {
   const fit = fitEdges(loose, kerbs, decks)
   // A carriageway outline reaches into gores and merges; a deck it fits is held near its own lanes' width.
   const held = (d: Chain, k: number) => fit[k].edges.map((e, side) => Math.min(e, d.edges[side] * KERB_STRETCH + KERB_ROOM)) as [number, number]
-  return out.map(d => (loose.includes(d) ? { ...fit[loose.indexOf(d)], edges: held(d, loose.indexOf(d)), outline: null } : d))
+  return out.map(d => (loose.includes(d) ? { ...fit[loose.indexOf(d)], edges: held(d, loose.indexOf(d)), outline: null, lanes: d.lanes } : d))
 }
 
 const bearing = (points: Point[]) => {
@@ -268,7 +271,8 @@ function over(s: Pick<Solved, 'chain' | 'd'>, lower: Solved) {
   s.chain.points.forEach((p, i) => {
     if (s.d[i] < OVER_FROM_END || total - s.d[i] < OVER_FROM_END) return
     const near = beside(lower.chain.points, p)
-    if (near.alongside && near.distance < sideAt(lower.chain, near.left ? 0 : 1, near.segment - 1, near.t))
+    // A walkway OSM puts above roadways is carried over them wherever it runs within RIDE of their edge, as a promenade between them is.
+    if (near.alongside && near.distance < sideAt(lower.chain, near.left ? 0 : 1, near.segment - 1, near.t) + (s.chain.kind === 'path' ? reach + RIDE : 0))
       out!.push({ at: s.d[i], segment: near.segment, t: near.t, clear: CLEARANCE.deck })
   })
   mine.set(lower.chain, out)
@@ -691,6 +695,8 @@ function dipUnder(solved: Solved[]): Solved[] {
 
 /** Metres over which an end is brought onto the deck it rests on, at most. */
 const MEET_RUN = 60
+/** Metres over which a deck running within the one it rests on eases onto its height, and its vertical curve. */
+const MERGE_EASE = 60
 
 /** Each end resting on another deck brought onto it, the difference faded out along this one: the last word, after easing and camber. */
 function meetRests(s: Solved) {
@@ -710,6 +716,46 @@ function meetRests(s: Solved) {
       return v + by * u * u * (3 - 2 * u)
     })
   }
+}
+
+/**
+ * Where a deck runs within the one an end rests on for a stretch, as a ramp
+ * merging into a main line does, it takes that deck's height along the
+ * stretch, so neither shows through the other: the difference, eased in over
+ * MERGE_EASE before the stretch and smoothed into a vertical curve, added on.
+ */
+function merged(s: Solved) {
+  const n = s.z.length
+  const total = s.d[n - 1]
+  const delta = new Array<number>(n).fill(0)
+  for (const end of [0, 1] as const) {
+    const rest = s.on.find(r => r.at === s.chain.points[end ? n - 1 : 0])
+    if (!rest) continue
+    const o = rest.deck
+    const under = (i: number, inside: boolean) => {
+      const near = beside(o.chain.points, s.chain.points[i])
+      if (!near.alongside || (inside && near.distance > sideAt(o.chain, near.left ? 0 : 1, near.segment - 1, near.t))) return null
+      return heightAt(o.d, o.z, o.d[near.segment - 1] + (o.d[near.segment] - o.d[near.segment - 1]) * near.t)
+    }
+    const from = (i: number) => (end ? total - s.d[i] : s.d[i])
+    const order = end ? [...Array(n).keys()].reverse() : [...Array(n).keys()]
+    let stretch = -1
+    for (const i of order) {
+      if (from(i) > total / 2 || under(i, true) === null) break
+      stretch = from(i)
+    }
+    if (stretch <= 0) continue
+    for (const i of order) {
+      const past = from(i) - stretch
+      const z = past < MERGE_EASE && from(i) <= total / 2 ? under(i, false) : null
+      if (z === null) break
+      const u = past <= 0 ? 1 : 1 - past / MERGE_EASE
+      delta[i] = (z - s.z[i]) * u * u * (3 - 2 * u)
+    }
+  }
+  if (delta.every(v => Math.abs(v) < 0.01)) return
+  const eased = smooth(delta, s.d, delta.map(() => -Infinity), MERGE_EASE)
+  s.z = s.z.map((v, i) => v + eased[i])
 }
 
 /** The least height an end must start from to reach every need along its deck within MAX_GRADE. */
@@ -733,6 +779,27 @@ function continued(s: Solved, end: 0 | 1, on: Solved): number {
   return Math.max(reaching(s, end), reaching(on, other as 0 | 1))
 }
 
+/** Shortest a deck may be that meets nothing at either end, and the most a landed end may stand over the ground, in metres. */
+const SCRAP = 30
+const LANDED = 1.5
+
+/** Whether a deck is short and at neither end lands on the ground or carries on onto another deck's surface at its height. */
+function scrap(s: Solved, solved: Solved[]): boolean {
+  const n = s.z.length
+  if (s.d[n - 1] >= SCRAP) return false
+  return ([0, 1] as const).every(end => {
+    const i = end ? n - 1 : 0
+    const p = s.chain.points[i]
+    if (s.grounded[end] && s.z[i] - s.g[i] <= LANDED) return false
+    return !solved.some(o => {
+      if (o === s || !covers(grow(box(o.chain.points), Math.max(...o.chain.edges) + 1), p)) return false
+      const near = beside(o.chain.points, p)
+      if (!near.alongside || near.distance > sideAt(o.chain, near.left ? 0 : 1, near.segment - 1, near.t) + 0.5) return false
+      return Math.abs(heightAt(o.d, o.z, o.d[near.segment - 1] + (o.d[near.segment] - o.d[near.segment - 1]) * near.t) - s.z[i]) <= 0.3
+    })
+  })
+}
+
 export async function buildDecks(input: DeckInput, ground: Ground): Promise<Deck[]> {
   const decks = absorbTracks(absorbPaths(fitted(chains(input.ways), input.outlines, input.kerbs))) as Fitted[]
   // An end lands where a road on the ground meets it, rests where it meets
@@ -750,11 +817,11 @@ export async function buildDecks(input: DeckInput, ground: Ground): Promise<Deck
   const resampled = decks.map(c => ({ ...c, points: resample(c.points, STEP) }))
   const shapes = shapeDecks(resampled, input.outlines, grounded)
   // A deck in an outline that could not be shaped to it keeps the edges fitted to it.
-  const shaped: Fitted[] = resampled.map(({ fit, ...c }, k) => {
+  const shaped: Fitted[] = clearOfWalkways(resampled.map(({ fit, ...c }, k) => {
     const shape = shapes[k]
     if (!shape) return widen(fit ? { ...c, edges: fit } : c, STEP)
     return widen({ ...c, sides: shape.sides, caps: shape.caps, edges: [Math.max(...shape.sides[0]), Math.max(...shape.sides[1])] }, STEP)
-  })
+  }))
   const edges = shaped.map(edgePoints)
   const onward = input.crossed.filter(c => c.kind === 'road' || c.kind === 'path').map(c => c.points)
   const { under, lands, roads } = await groundUnder(shaped, edges, grounded, onward, ground)
@@ -832,6 +899,10 @@ export async function buildDecks(input: DeckInput, ground: Ground): Promise<Deck
   faired(solved, input, bases)
   liftedBeside(solved)
   for (let pass = 0; pass < SETTLE; pass++) for (const s of solved) meetRests(s)
+  for (const s of solved) merged(s)
+  // A scrap of deck meeting nothing at either end, as a few metres of footbridge mapped between untagged stretches, would stand alone in mid air.
+  const scraps = solved.filter(s => scrap(s, solved))
+  for (const s of scraps.filter(s => !solved.some(o => !scraps.includes(o) && o.on.some(r => r.deck === s)))) solved.splice(solved.indexOf(s), 1)
   const rows = piers(solved)
 
   const wiki = (s: Solved) => s.chain.ways.map(w => input.wikidata.get(w)).find(Boolean)

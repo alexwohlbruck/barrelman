@@ -78,6 +78,13 @@ function toWay(r: Row): Way {
   return { id: Number(r.id), points: r.coords.map(([lng, lat]) => mercator(lng, lat)), kind, layer: Math.max(1, layer || 1), untagged: Number.isNaN(layer), width, road: r.road ?? undefined }
 }
 
+/** Longest untagged stretch between two footbridges that is carried on as one deck: shorter than coming down a layer and climbing back. */
+const GAP_MAX = 200
+const isGap = (sql: Sql) => sql`
+  osm_type = 'W' AND geom_type = 'line' AND COALESCE(tags->>'bridge', 'no') = 'no' AND COALESCE(tags->>'tunnel', 'no') = 'no'
+  AND COALESCE(tags->>'layer', '0') = '0' AND bridge_deck_class(tags) = 'path' AND GeometryType(geom) = 'LINESTRING'
+  AND ST_Length(geom::geography) < ${GAP_MAX}`
+
 /** Bridge ways around a box, followed beyond it for as long as a deck carries on. */
 export async function waysAround(sql: Sql, [w, s, e, n]: Bbox): Promise<Row[]> {
   const margin = 0.01
@@ -95,6 +102,19 @@ export async function waysAround(sql: Sql, [w, s, e, n]: Bbox): Promise<Row[]> {
       SELECT DISTINCT ON (b.id) b.* FROM unnest(${open.map(c => c[0])}::float8[], ${open.map(c => c[1])}::float8[]) AS o(lng, lat)
       CROSS JOIN LATERAL (${bridgeWays(sql)}
         WHERE geom && ST_Expand(ST_SetSRID(ST_MakePoint(o.lng, o.lat), 4326), 1e-7) AND ${isBridge(sql)}) b`
+    // A walkway mapped as short bridges over each street with the stretches between them left untagged runs on
+    // across those stretches as one deck: too short to come down to the ground and climb back up, they are structure too.
+    const pathEnds = open.filter(c => rows.some(r => r.kind === 'path' && [r.coords[0], r.coords[r.coords.length - 1]].some(e => e[0] === c[0] && e[1] === c[1])))
+    const gaps: Row[] = pathEnds.length ? await sql`
+      SELECT DISTINCT ON (g.id) g.* FROM unnest(${pathEnds.map(c => c[0])}::float8[], ${pathEnds.map(c => c[1])}::float8[]) AS o(lng, lat)
+      CROSS JOIN LATERAL (${bridgeWays(sql)}
+        WHERE geom && ST_Expand(ST_SetSRID(ST_MakePoint(o.lng, o.lat), 4326), 1e-7) AND ${isGap(sql)}) g
+      CROSS JOIN LATERAL (SELECT CASE WHEN abs((g.coords->0->>0)::float8 - o.lng) + abs((g.coords->0->>1)::float8 - o.lat) < 1e-9
+        THEN ST_SetSRID(ST_MakePoint((g.coords->-1->>0)::float8, (g.coords->-1->>1)::float8), 4326)
+        ELSE ST_SetSRID(ST_MakePoint((g.coords->0->>0)::float8, (g.coords->0->>1)::float8), 4326) END AS far) f
+      WHERE EXISTS (SELECT 1 FROM geo_places b WHERE b.geom && ST_Expand(f.far, 1e-7) AND ST_DWithin(b.geom, f.far, 1e-7)
+        AND b.geom_type = 'line' AND ${isBridge(sql)} AND bridge_deck_class(b.tags) = 'path')` : []
+    found.push(...gaps)
     const fresh = found.filter(r => !seen.has(r.id))
     if (!fresh.length) break
     for (const r of fresh) seen.add(r.id)

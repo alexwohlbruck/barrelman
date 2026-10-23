@@ -114,6 +114,12 @@ describe('absorbPaths', () => {
     expect(left[50]).toBe(4)
     expect(Math.max(...wide.edges)).toBeCloseTo(7.5, 1)
   })
+
+  it('keeps a walkway of its own that runs apart from the road, rather than widen the road out to it', () => {
+    const road: Chain = { ways: [1], points: resample([east(0), east(600)], 6), kind: 'road', layer: 1, edges: [4, 4] }
+    const walkway: Chain = { ways: [2], points: [east(0, 11), east(40, 11)], kind: 'path', layer: 1, edges: [1.5, 1.5] }
+    expect(absorbPaths([road, walkway])).toHaveLength(2)
+  })
 })
 
 describe('absorbTracks', () => {
@@ -266,6 +272,13 @@ describe('joinNeighbours', () => {
     const ramp = { chain: deck(10), z: deck(10).points.map(() => 101), on: [{ deck: main, at: deck(10).points[0] }] }
     joinNeighbours([main, ramp])
     expect(main.z.every(z => z === 100)).toBe(true)
+  })
+
+  it('never lifts a roadway to a walkway beside it, which may climb away over it', () => {
+    const road = { chain: deck(0), z: deck(0).points.map(() => 100) }
+    const walkway = { chain: { ...deck(7), kind: 'path' as const, edges: [1.5, 1.5] as [number, number] }, z: deck(7).points.map(() => 101) }
+    joinNeighbours([road, walkway])
+    expect(road.z.every(z => z === 100)).toBe(true)
   })
 
   it('joins twin tracks, but never a track to a road', () => {
