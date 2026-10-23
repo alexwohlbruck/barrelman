@@ -661,6 +661,10 @@ SELECT m.fid, m.id, m.geom,
 FROM measured m
 LEFT JOIN covered c ON c.id = m.id
 LEFT JOIN owner w ON w.part_id = m.id
+-- A bridge's abutments and piers under its deck are the deck's to draw (bridge_decks):
+-- extruded from the ground their flat tops stand through it where the ground slopes.
+-- Anchorages and towers, standing well above any deck, stay.
+WHERE NOT (COALESCE(m.tags->>'bridge:support', '') IN ('abutment', 'pier') AND COALESCE(m.h, m.levels * 3.66, 5) < 20)
 WITH NO DATA;
 
 -- Unique on fid so the view can be refreshed CONCURRENTLY, and GIST on geom so
