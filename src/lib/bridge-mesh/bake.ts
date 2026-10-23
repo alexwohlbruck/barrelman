@@ -215,7 +215,7 @@ class MeshBaker {
       chain.points.filter(q => outlines.some(o => holds(o.bounds, q) && inside(q, o.rings))).length >= chain.points.length * PAVED
     const concreteAt = new Map(solved.map(({ chain }) => [chain, concrete(chain)]))
     const cycleways = new Set(this.input.roads.filter(r => r.properties.cycle).map(r => Number(r.properties.id)))
-    const cycleDecks = new Set(solved.flatMap(({ chain }, k) => (chain.kind === 'path' && this.input.decks[k].ways.every(w => cycleways.has(Number(w))) ? [chain] : [])))
+    const cycleDecks = new Set(solved.flatMap(({ chain }, k) => (chain.kind === 'path' && this.input.decks[k].ways.length > 0 && this.input.decks[k].ways.every(w => cycleways.has(Number(w))) ? [chain] : [])))
     const colors = (chain: Chain) =>
       chain.kind === 'rail' ? { surface: p.track, low: p.track } : chain.kind === 'path' ? { surface: cycleDecks.has(chain) ? p.green : p.walkway, low: p.lowPath }
       : { surface: concreteAt.get(chain) ? p.deck : p.surface, low: lowRoad(p, chain.road) }
