@@ -10,6 +10,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.10.23] - 2026-10-23
+
 ### Added
 
 * **Rate limits can be turned off for one key.** In the console, an
