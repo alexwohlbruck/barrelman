@@ -121,6 +121,12 @@ export function ensureAccountsSchema(): Promise<void> {
       await sql`
         ALTER TABLE accounts_api_keys
           ADD COLUMN IF NOT EXISTS allowed_origins text[] NOT NULL DEFAULT ARRAY[]::text[]`
+      // Operator-set: lifts the throttle for one key without moving its whole
+      // account onto `first-party`. False for every existing key, so adding the
+      // column changes nothing until an administrator flips one.
+      await sql`
+        ALTER TABLE accounts_api_keys
+          ADD COLUMN IF NOT EXISTS rate_limit_exempt boolean NOT NULL DEFAULT false`
       await sql`CREATE UNIQUE INDEX IF NOT EXISTS accounts_api_keys_hash_idx ON accounts_api_keys (hash)`
       await sql`CREATE INDEX IF NOT EXISTS accounts_api_keys_user_idx ON accounts_api_keys (user_id)`
 

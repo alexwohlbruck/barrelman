@@ -29,7 +29,17 @@ import {
   unsuspendUser,
   warnUser,
 } from '../services/moderation.service'
-import { listApiKeys, invalidateUserKeys, resolveApiKey } from '../services/api-keys.service'
+import {
+  invalidateUserKeys,
+  keyPatchError,
+  listApiKeys,
+  renameApiKey,
+  resolveApiKey,
+  revokeApiKey,
+  setKeyRateLimitExempt,
+  updateApiKeyOrigins,
+  updateApiKeyScopes,
+} from '../services/api-keys.service'
 import { getBalance, setPlan } from '../services/credits.service'
 import { usageByDay, usageByKey, usageTotals, currentCycleStart, utcDay } from '../services/usage.service'
 import {
@@ -67,6 +77,12 @@ export interface AdminUserDeps {
   findUserById: typeof findUserById
   resolveSession: typeof resolveSession
   guard: typeof adminAuthHandler
+  listApiKeys: typeof listApiKeys
+  renameApiKey: typeof renameApiKey
+  updateApiKeyScopes: typeof updateApiKeyScopes
+  updateApiKeyOrigins: typeof updateApiKeyOrigins
+  setKeyRateLimitExempt: typeof setKeyRateLimitExempt
+  revokeApiKey: typeof revokeApiKey
 }
 
 const defaultDeps: AdminUserDeps = {
@@ -85,6 +101,12 @@ const defaultDeps: AdminUserDeps = {
   findUserById,
   resolveSession,
   guard: adminAuthHandler,
+  listApiKeys,
+  renameApiKey,
+  updateApiKeyScopes,
+  updateApiKeyOrigins,
+  setKeyRateLimitExempt,
+  revokeApiKey,
 }
 
 export function createAdminUserRoutes(overrides: Partial<AdminUserDeps> = {}) {
@@ -478,6 +500,107 @@ export function createAdminUserRoutes(overrides: Partial<AdminUserDeps> = {}) {
     {
       body: t.Object({ note: t.String({ minLength: 1, maxLength: 1000 }) }),
       detail: { summary: 'Attach an internal note to an account', tags: ['Admin'] },
+    },
+  )
+
+  // ── Keys ────────────────────────────────────────────────────────────
+  /**
+   * An operator's edit of a customer's key. Every change is written to the
+   * account's moderation log: the customer sees their key behave differently
+   * and the console is the only place that says who changed it and why.
+   */
+  .patch(
+    '/users/:id/keys/:keyId',
+    async ({ params, body, request, set }) => {
+      const account = await deps.findUserById(params.id)
+      if (!account) {
+        set.status = 404
+        return { error: 'Account not found' }
+      }
+      const key = (await deps.listApiKeys(params.id, true)).find((k) => k.id === params.keyId)
+      if (!key) {
+        set.status = 404
+        return { error: 'API key not found' }
+      }
+
+      const invalid = keyPatchError(body, account.role === 'admin')
+      if (invalid) {
+        set.status = invalid.status
+        return invalid.body
+      }
+
+      const changes: string[] = []
+      if (body.name !== undefined && body.name.trim() !== key.name) {
+        await deps.renameApiKey(params.id, key.id, body.name)
+        changes.push(`renamed to "${body.name.trim()}"`)
+      }
+      if (body.scopes !== undefined) {
+        await deps.updateApiKeyScopes(params.id, key.id, body.scopes)
+        changes.push(`scopes set to ${body.scopes.length ? body.scopes.join(', ') : '*'}`)
+      }
+      if (body.allowedOrigins !== undefined) {
+        await deps.updateApiKeyOrigins(params.id, key.id, body.allowedOrigins)
+        changes.push(
+          body.allowedOrigins.length ? `origins set to ${body.allowedOrigins.join(', ')}` : 'origin restriction lifted',
+        )
+      }
+      if (body.rateLimitExempt !== undefined && body.rateLimitExempt !== key.rateLimitExempt) {
+        await deps.setKeyRateLimitExempt(params.id, key.id, body.rateLimitExempt)
+        changes.push(body.rateLimitExempt ? 'rate limits disabled' : 'rate limits restored')
+      }
+
+      if (changes.length) {
+        await deps.addNote(
+          params.id,
+          `Key "${key.name}" (${key.prefix}…): ${changes.join('; ')}${body.reason ? ` — ${body.reason.trim()}` : ''}`,
+          await actorFor(request),
+        )
+      }
+
+      const updated = (await deps.listApiKeys(params.id, true)).find((k) => k.id === key.id)
+      return { key: updated }
+    },
+    {
+      body: t.Object({
+        name: t.Optional(t.String({ minLength: 1, maxLength: 80 })),
+        scopes: t.Optional(t.Array(t.String())),
+        allowedOrigins: t.Optional(t.Array(t.String(), { maxItems: 20 })),
+        rateLimitExempt: t.Optional(t.Boolean()),
+        reason: t.Optional(t.String({ maxLength: 500 })),
+      }),
+      detail: {
+        summary: "Change a customer's API key",
+        description:
+          'Rename, rescope or re-origin a key, or exempt it from rate limiting. An exempt key skips every ' +
+          'per-minute window and the concurrency cap — the same exemption the first-party plan gives a whole ' +
+          'account — but is still metered, scoped and subject to the abuse penalty box. Logged to the account.',
+        tags: ['Admin'],
+      },
+    },
+  )
+
+  .delete(
+    '/users/:id/keys/:keyId',
+    async ({ params, body, request, set }) => {
+      const key = (await deps.listApiKeys(params.id, true)).find((k) => k.id === params.keyId)
+      if (!key || !(await deps.revokeApiKey(params.id, key.id))) {
+        set.status = 404
+        return { error: 'API key not found or already revoked' }
+      }
+      await deps.addNote(
+        params.id,
+        `Key "${key.name}" (${key.prefix}…) revoked${body?.reason ? ` — ${body.reason.trim()}` : ''}`,
+        await actorFor(request),
+      )
+      return { ok: true }
+    },
+    {
+      body: t.Optional(t.Object({ reason: t.Optional(t.String({ maxLength: 500 })) })),
+      detail: {
+        summary: "Revoke a customer's API key",
+        description: 'Takes effect immediately. Logged to the account.',
+        tags: ['Admin'],
+      },
     },
   )
 

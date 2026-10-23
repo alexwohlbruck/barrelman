@@ -64,6 +64,8 @@ export interface ApiCaller {
   /** The account is disabled — the guard turns this into a 403 with the reason. */
   suspended?: boolean
   suspensionReason?: string | null
+  /** Operator-granted exemption from the throttle, for this key only. */
+  rateLimitExempt?: boolean
 }
 
 /** Per-request billing state, carried from the guard to the after-handler. */
@@ -205,6 +207,7 @@ function toCaller(resolved: ResolvedKey): ApiCaller {
     allowedOrigins: resolved.allowedOrigins,
     suspended: resolved.suspended,
     suspensionReason: resolved.suspensionReason,
+    rateLimitExempt: resolved.rateLimitExempt,
   }
 }
 
@@ -365,7 +368,14 @@ export function apiAuth(group: EndpointGroup, overrides: Partial<ApiAuthDeps> = 
       }
     }
 
-    const verdict = checkThrottle({ ip, group, userId: caller.userId, keyId: caller.keyId, plan })
+    const verdict = checkThrottle({
+      ip,
+      group,
+      userId: caller.userId,
+      keyId: caller.keyId,
+      plan,
+      exempt: caller.rateLimitExempt,
+    })
     if (!verdict.allowed) {
       return reject(
         429,
@@ -377,7 +387,9 @@ export function apiAuth(group: EndpointGroup, overrides: Partial<ApiAuthDeps> = 
 
     // Past this point a concurrency slot may be held, so every exit has to
     // release it — that is what `throttleKey` in the metering context is for.
-    const throttleKey = caller.userId
+    // Null when none was taken (an exempt key, an unthrottled plan, a group
+    // with no cap): releasing anyway would free a slot another request holds.
+    const throttleKey = verdict.holdsSlot ? caller.userId : null
 
     /**
      * Unmetered plans — the operator-run demo — skip the balance check and
@@ -401,7 +413,7 @@ export function apiAuth(group: EndpointGroup, overrides: Partial<ApiAuthDeps> = 
 
     const decision = await deps.checkQuota(caller.userId, cost)
     if (!decision.allowed) {
-      releaseSlot(throttleKey, group)
+      if (throttleKey) releaseSlot(throttleKey, group)
       return reject(402, {
         error:
           decision.reason === 'overage-cap-reached'

@@ -383,3 +383,35 @@ describe('maintenance', () => {
     expect(strikeCount('u1')).toBe(0)
   })
 })
+
+describe('an exempt key', () => {
+  test('passes every window and takes no slot', () => {
+    for (let i = 0; i < 5_000; i += 1) {
+      const verdict = checkThrottle({ ip: '198.51.100.7', group: 'isochrone', userId: 'u1', keyId: 'k1', plan: free, exempt: true })
+      expect(verdict).toEqual({ allowed: true })
+    }
+    expect(acquireSlot('u1', 'isochrone')).toBe(true)
+  })
+
+  test('leaves the rest of its account limited', () => {
+    for (let i = 0; i < 500; i += 1) {
+      checkThrottle({ ip: '198.51.100.7', group: 'search', userId: 'u1', keyId: 'k1', plan: free, exempt: true })
+    }
+    let refused = false
+    for (let i = 0; i < 500 && !refused; i += 1) {
+      refused = !checkThrottle({ ip: '198.51.100.7', group: 'search', userId: 'u1', keyId: 'k2', plan: free }).allowed
+    }
+    expect(refused).toBe(true)
+  })
+
+  test('a throttled request reports whether it holds a slot', () => {
+    expect(checkThrottle({ ip: '198.51.100.7', group: 'isochrone', userId: 'u1', keyId: 'k1', plan: free })).toEqual({
+      allowed: true,
+      holdsSlot: true,
+    })
+    expect(checkThrottle({ ip: '198.51.100.7', group: 'search', userId: 'u1', keyId: 'k1', plan: free })).toEqual({
+      allowed: true,
+      holdsSlot: false,
+    })
+  })
+})
