@@ -598,7 +598,14 @@ export function cambered(z: number[], d: number[], needs: Need[]): number[] {
     const u = Math.max(0, 1 - m / Math.max(run, 1e-9))
     return u * u * (3 - 2 * u)
   }
-  const [runBefore, runAfter] = [Math.min(CAMBER_BLEND, d[first]), Math.min(CAMBER_BLEND, d[d.length - 1] - d[last])]
+  // Long enough that a span held below its approaches never climbs back up to them where they fall away from it: smoothstep climbs 1.5 × its height over its run at most.
+  const run = (from: number, by: number, away: 1 | -1) => {
+    const room = away > 0 ? d[d.length - 1] - d[from] : d[from]
+    const k = d.findIndex(v => away * (v - d[from]) >= Math.min(CAMBER_BLEND, room))
+    const fall = (z[from] - z[k < 0 ? (away > 0 ? d.length - 1 : 0) : k]) / Math.max(Math.min(CAMBER_BLEND, room), 1e-9)
+    return Math.min(room, by < 0 && fall > 0 ? Math.max(CAMBER_BLEND, (1.5 * -by) / fall) : CAMBER_BLEND)
+  }
+  const [runBefore, runAfter] = [run(first, before, -1), run(last, after, 1)]
   return z.map((v, i) => {
     if (at.has(i)) return at.get(i)!
     if (i < first) return v + before * fade(d[first] - d[i], runBefore)

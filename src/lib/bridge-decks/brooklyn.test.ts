@@ -64,6 +64,21 @@ describe('the Brooklyn Bridge', () => {
     for (const deck of [...roadways, carrying(439842783)]) expect(bend(deck)).toBeLessThan(0.004)
   })
 
+  it('falls away from each tower to the ends of its roadways, never climbing back up', () => {
+    for (const roadway of roadways) {
+      const d = along(roadway.points)
+      for (const tower of Object.values(towers)) {
+        const near = beside(roadway.points, tower)
+        const at = d[near.segment - 1] + (d[near.segment] - d[near.segment - 1]) * near.t
+        const outward = at < roadway.length / 2 ? -1 : 1
+        const kept = roadway.heights.filter((_, i) => outward * (d[i] - at) >= 0)
+        const run = outward < 0 ? kept.reverse() : kept
+        const climbs = run.slice(1).map((v, i) => v - run[i])
+        expect(Math.max(...climbs)).toBeLessThan(0.02)
+      }
+    }
+  })
+
   it('runs each roadway as one deck from its Manhattan approach to its Brooklyn one, without a dip', () => {
     for (const roadway of roadways) {
       expect(roadway.length).toBeGreaterThan(1600)
