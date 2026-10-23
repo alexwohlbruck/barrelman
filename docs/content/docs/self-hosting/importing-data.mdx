@@ -532,16 +532,23 @@ decks stay apart, but for two meeting alone where one has no `layer`, as a
 bridge's anchorage stretch often has none; where three meet, the straightest
 pair carries on), fits road
 decks with no `man_made=bridge` outline to `road_surfaces` and folds sidewalks
-mapped beside them in. A road deck in an outline follows it: at every sample each
+mapped against them in (a walkway running apart from the road stays its own
+deck, and the road stops short of it). A footway mapped as short footbridges
+with untagged stretches under 200 m between them is one deck across those
+stretches. A road deck in an outline follows it: at every sample each
 side reaches to where a line square to the deck leaves the outline (never
-narrower than the carriageway, never more than 16 m), decks sharing an outline
-split the room between them, and an end that lands on the ground is cut where
+narrower than the carriageway, never more than 16 m), the outline being the
+one that holds most of the deck where it passes under another bridge's, decks
+sharing an outline split the room between them, short tabs where a side strays
+into a landing or gore are dropped, and an end that lands on the ground is cut where
 the outline ends, at the skew it was drawn with. Each end that meets a road or railway on the
 ground lands on it; one that meets another deck rests on that deck. Between,
 the deck runs straight from end to end and rises over what it crosses — roads,
 railways, paths, waterways, water and lower decks, each with its own clearance
 — climbing no steeper than 6 % and eased into a vertical curve. Decks side by
-side at about one height share it, stacked decks keep their own, and piers
+side at about one height share it, stacked decks keep their own, a ramp
+running into the deck it rests on takes that deck's height along the merge, a
+deck under 30 m meeting nothing at either end is left out, and piers
 stand every 30 m where a deck is 4 m up, in one row under twin carriageways.
 Where a road climbing from the ground cannot clear a lesser road it crosses
 within that grade, the lesser road dips under it. An end meeting only ways on
@@ -606,6 +613,10 @@ cell that fails is retried on the next two runs; while Build Bridge Decks runs,
 the update leaves the queue for the next run. A failure is reported and the rest
 of OSM Update carries on. As with road markings, only a database without
 osm2pgsql's middle tables records what changed.
+
+`buildings_3d` leaves out a bridge's `bridge:support=abutment` or `pier`
+buildings under 20 m: the deck stands in for them. Taller ones, an anchorage or
+a tower, stay.
 
 `buildings_3d`, `street_furniture` and `sport_pitches` are not plain views. OpenStreetMap maps a detailed
 building twice — an outline tagged `building=*` and `building:part=*` polygons
