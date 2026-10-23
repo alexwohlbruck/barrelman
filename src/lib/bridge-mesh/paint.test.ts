@@ -1,6 +1,6 @@
 import { describe, expect, test, mock } from 'bun:test'
 import { boundsOf, deckMeshOut, metresPerUnit, type Point } from './decks'
-import { layPaint, layWays } from './paint'
+import { isCycleway, layPaint, layWays } from './paint'
 import { testSurface } from './test-surface'
 
 const M = 1 / 32780000
@@ -10,7 +10,7 @@ const line = (...xs: number[]): Point[] => xs.map(x => [0.2789 + x * M, y0])
 describe('layWays', () => {
   const points = line(0, 50, 100)
   const deck = testSurface(points, [100, 106, 100], undefined, 7, { bias: [1.5, 0, 1.5], low: [0.9, 0.9, 0.9] })
-  const colors = { walkway: [0.95, 0.94, 0.9], rail: [0.5, 0.5, 0.5] }
+  const colors = { walkway: [0.95, 0.94, 0.9], rail: [0.5, 0.5, 0.5], green: [0.45, 0.71, 0.58] }
 
   test('a sidewalk on a deck is drawn at its height, fading to the deck below street zoom', () => {
     const mesh = deckMeshOut()
@@ -20,6 +20,16 @@ describe('layWays', () => {
     expect(mesh.color.slice(0, 3)).toEqual(colors.walkway)
     expect(mesh.low.slice(0, 3)).toEqual(deck.low!)
     expect(mesh.bias[0]).toBeCloseTo(1.5, 1)
+  })
+
+  test('a cycleway is laid green, as a bike lane is painted', () => {
+    const mesh = deckMeshOut()
+    layWays(mesh, [{ kind: 'path', points: line(0, 100), cycle: true }], [deck], colors, points[0])
+    expect(mesh.color.slice(0, 3)).toEqual(colors.green)
+    expect(isCycleway({ highway: 'cycleway' })).toBe(true)
+    expect(isCycleway({ highway: 'path', bicycle: 'designated' })).toBe(true)
+    expect(isCycleway({ highway: 'path', bicycle: 'designated', foot: 'designated' })).toBe(false)
+    expect(isCycleway({ highway: 'footway', bicycle: 'yes' })).toBe(false)
   })
 
   test('a track is two rails, and nothing is laid off the deck', () => {

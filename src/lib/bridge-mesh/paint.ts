@@ -189,21 +189,25 @@ export function layRoute(mesh: Mesh, lines: Point[][], surfaces: DeckSurface[], 
   }
 }
 
-export type WayColors = { walkway: number[]; rail: number[] }
+export type WayColors = { walkway: number[]; rail: number[]; green: number[] }
+
+/** A way for bikes rather than walkers, painted green as a bike lane is. */
+export const isCycleway = (tags: Record<string, string | undefined>) =>
+  tags.highway === 'cycleway' || (tags.highway === 'path' && tags.bicycle === 'designated' && tags.foot !== 'designated')
 
 /**
  * A bridge's own sidewalks, footpaths and cycle tracks, and its rails, laid on
  * the deck that carries them, so they run on from the ground across it.
  */
-export function layWays(mesh: Mesh, ways: Array<{ kind: 'path' | 'rail'; points: Point[] }>, surfaces: DeckSurface[], colors: WayColors, origin: Point, on?: (deck: DeckSurface) => boolean) {
-  for (const { kind, points } of ways) {
+export function layWays(mesh: Mesh, ways: Array<{ kind: 'path' | 'rail'; points: Point[]; cycle?: boolean }>, surfaces: DeckSurface[], colors: WayColors, origin: Point, on?: (deck: DeckSurface) => boolean) {
+  for (const { kind, points, cycle } of ways) {
     const line = densify(points, PAINT_SAMPLE)
     const under = onOwnDeck([line], [], surfaces).under.lines[0].map(h => h && (!on || on(surfaces[h.deck])) ? h : null)
     // A footbridge, or a street deck's top beside its carriageway, is walkway already.
     // A path crossing a street deck's carriageway is laid on it still.
     const walkway = (h: Hit | null, i: number) => !!h && (surfaces[h.deck].kind === 'path' || (!!surfaces[h.deck].sidewalks && runsAlong(surfaces, h, line, i)))
     const laid = { under: kind === 'path' ? under.map((h, i) => (walkway(h, i) ? null : h)) : under, surfaces }
-    if (kind === 'path') strip(mesh, line, laid, WALKWAY, colors.walkway, 0.005, 0, null, origin)
+    if (kind === 'path') strip(mesh, line, laid, WALKWAY, cycle ? colors.green : colors.walkway, 0.005, 0, null, origin)
     else for (const side of [-1, 1]) strip(mesh, line, laid, RAIL, colors.rail, 0.03, (side * GAUGE) / 2, null, origin)
   }
 }

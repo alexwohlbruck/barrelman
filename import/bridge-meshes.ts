@@ -5,6 +5,7 @@ import { lngLat, mercator, type Point } from '../src/lib/bridge-decks/profile'
 import { bakeBridges, type MeshFeature, type Structure } from '../src/lib/bridge-mesh/bake'
 import { encodeBridge, MATERIAL_PALETTE } from '../src/lib/bridge-mesh/encode'
 import { writeBridgeMesh } from '../src/lib/bridge-mesh/files'
+import { isCycleway } from '../src/lib/bridge-mesh/paint'
 
 /**
  * Outlines of the bridges a landmark model stands in for, by its `replaces`,
@@ -55,6 +56,7 @@ export async function bakeDeckFiles(sql: postgres.Sql, dem: Dem, decks: Deck[], 
     const ways = roads.map(r => ({ geometry: r.geometry, properties: {
       id: r.id, class: r.tags.railway ? 'rail' : ['footway', 'cycleway', 'path', 'pedestrian', 'steps'].includes(r.tags.highway) ? 'path' : r.tags.highway,
       brunnel: r.tags.bridge && r.tags.bridge !== 'no' ? 'bridge' : r.tags.tunnel && r.tags.tunnel !== 'no' ? 'tunnel' : null,
+      cycle: isCycleway(r.tags),
     } }))
     const mesh = bakeBridges({ decks: context.filter(d => d.points.some(p => p[0] >= nw[0] && p[0] <= se[0] && p[1] >= nw[1] && p[1] <= se[1]) || d.id === deck.id), own: [deck.id], outlines: [], roads: ways, surfaces, paint,
       ground: p => { const h = dem.at(p); return Number.isFinite(h) ? h : null }, structures }, MATERIAL_PALETTE)

@@ -156,7 +156,7 @@ class MeshBaker {
     const ways = this.input.roads.filter(f => f.properties.brunnel === 'bridge').flatMap(f => {
       const kind = f.properties.class === 'rail' ? 'rail' as const : 'path' as const
       return f.properties.class === 'rail' || f.properties.class === 'path'
-        ? linesOf(f.geometry).map(line => ({ kind, points: line.map(mercator) })) : []
+        ? linesOf(f.geometry).map(line => ({ kind, points: line.map(mercator), cycle: !!f.properties.cycle })) : []
     })
     for (const s of solved) {
       Object.assign(s, rounded(s.chain, s.z, s.groundAt))
@@ -214,8 +214,10 @@ class MeshBaker {
     const concrete = (chain: Chain) => chain.kind === 'road' && !HIGHWAY.test(chain.road ?? '') &&
       chain.points.filter(q => outlines.some(o => holds(o.bounds, q) && inside(q, o.rings))).length >= chain.points.length * PAVED
     const concreteAt = new Map(solved.map(({ chain }) => [chain, concrete(chain)]))
+    const cycleways = new Set(this.input.roads.filter(r => r.properties.cycle).map(r => Number(r.properties.id)))
+    const cycleDecks = new Set(solved.flatMap(({ chain }, k) => (chain.kind === 'path' && this.input.decks[k].ways.every(w => cycleways.has(Number(w))) ? [chain] : [])))
     const colors = (chain: Chain) =>
-      chain.kind === 'rail' ? { surface: p.track, low: p.track } : chain.kind === 'path' ? { surface: p.walkway, low: p.lowPath }
+      chain.kind === 'rail' ? { surface: p.track, low: p.track } : chain.kind === 'path' ? { surface: cycleDecks.has(chain) ? p.green : p.walkway, low: p.lowPath }
       : { surface: concreteAt.get(chain) ? p.deck : p.surface, low: lowRoad(p, chain.road) }
     const tops = solved.map(() => [] as Top[])
     const structures = (this.input.structures ?? []).map(s => ({ ...s, bounds: boundsOf(s.ring) }))
