@@ -4,7 +4,7 @@ import {
   fair,
   VERTICAL_CURVE,
   PINNED,
-  absorbPaths, absorbTracks, along, landing, LANDING, arch, chains, crossings, fitEdges, joinNeighbours, MAX_GRADE, mercator, resample, smooth, solve, steady, widen,
+  absorbPaths, absorbTracks, along, clearOfWalkways, detab, landing, LANDING, arch, chains, crossings, fitEdges, joinNeighbours, MAX_GRADE, mercator, resample, smooth, solve, steady, widen,
   type Chain, type Point, type Way,
 } from './profile'
 
@@ -344,5 +344,36 @@ describe('fair', () => {
     const sag = level.map(z => 12 - z)
     const ceiling = d.map(s => (Math.abs(s - 300) <= 12 ? 0 : Infinity))
     expect(Math.max(...fair(sag, d, { ceiling }).map((z, i) => z - ceiling[i]))).toBeLessThan(0.01)
+  })
+})
+
+describe('detab', () => {
+  it('puts a short tab back to the width around it, but keeps a longer widening and a flared end', () => {
+    const side = [5, 5, 5, 5, 5, 5, 13, 13, 5, 5, 5, 5, 5, 5, 5, 5, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 12]
+    const out = detab(side)
+    expect(out.slice(6, 8)).toEqual([5, 5])
+    expect(out.slice(16, 26).every(v => v === 9)).toBe(true)
+    expect(out.at(-1)).toBe(12)
+  })
+})
+
+describe('clearOfWalkways', () => {
+  type Deck = Pick<Chain, 'points' | 'kind' | 'layer' | 'edges' | 'sides'> & { lanes?: [number, number] }
+  const road = (layer = 1): Deck => ({ points: resample([east(0), east(120)], 6), kind: 'road', layer, edges: [9, 9], lanes: [5, 5] })
+  const walkway = (north: number, layer = 2): Deck => ({ points: resample([east(30, north), east(90, north)], 6), kind: 'path', layer, edges: [1.5, 1.5] })
+
+  it('draws a roadway in short of a walkway alongside it, easing off either side, never inside its lanes', () => {
+    const [deck] = clearOfWalkways([road(), walkway(-8)])
+    const left = deck.sides![1][10] < 9 ? deck.sides![1] : deck.sides![0]
+    expect(left[10]).toBeCloseTo(6.5, 0)
+    expect(left[0]).toBe(9)
+    expect(Math.min(...left)).toBeGreaterThanOrEqual(5)
+    const [tight] = clearOfWalkways([road(), walkway(-4)])
+    expect(Math.min(...tight.sides![0], ...tight.sides![1])).toBe(5)
+  })
+
+  it('leaves a roadway alone over a walkway on a lower layer', () => {
+    const [deck] = clearOfWalkways([road(2), walkway(-8, 1)])
+    expect(deck.sides).toBeUndefined()
   })
 })

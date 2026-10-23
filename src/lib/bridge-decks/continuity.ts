@@ -27,7 +27,7 @@ const WIDTH = { jump: 1.5, bulge: 3 }
 /** Two decks stacked closer than this read as one with a ledge, in metres, over at least this length; and the most they may diverge to count as stacked, in degrees. */
 const STACKED = { gap: 2.5, length: 6, angle: 30 }
 /** Shortest a deck may be that meets nothing at either end. */
-const SCRAP = 20
+const SCRAP = 30
 
 type Indexed = { deck: Deck; bounds: Box; d: number[] }
 

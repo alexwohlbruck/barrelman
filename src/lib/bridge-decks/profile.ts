@@ -385,16 +385,10 @@ export const RUN_PAST = 15
 const IN_ROAD = 0.8
 const TRACK_SAMPLE = 3
 
-/** Samples each side of one a tab is measured against, the most a tab stands proud of them, in metres, and the longest a tab may run, in samples. */
-const TAB = { window: 5, proud: 3, run: 4 }
+/** Samples each side of one a tab is measured against, the most a tab stands proud of them in metres, the longest it runs, and samples at each end left alone (an end may flare). */
+const TAB = { window: 5, proud: 3, run: 4, ends: 1 }
 
-/**
- * Short tabs taken out of a side: a few samples standing well proud of the
- * width around them, where a square line strays into a landing, a gore or a
- * notch in the outline beside the deck rather than following its side. Each
- * goes back to the median width around it. A side that widens for longer is
- * the outline's shape, and kept.
- */
+/** A side with short tabs standing well proud of the width around it, where it strays into a landing or a notch in the outline, put back to that width. */
 export function detab(values: number[]): number[] {
   const n = values.length
   const local = values.map((_, i) => {
@@ -403,9 +397,9 @@ export function detab(values: number[]): number[] {
   })
   const out = values.slice()
   for (let i = 0; i < n; ) {
-    if (values[i] <= local[i] + TAB.proud) { i++; continue }
+    if (i < TAB.ends || i >= n - TAB.ends || values[i] <= local[i] + TAB.proud) { i++; continue }
     let j = i
-    while (j < n && values[j] > local[j] + TAB.proud) j++
+    while (j < n - TAB.ends && values[j] > local[j] + TAB.proud) j++
     if (j - i <= TAB.run) for (let k = i; k < j; k++) out[k] = local[k]
     i = j
   }
@@ -425,54 +419,51 @@ export function widen<C extends Pick<Chain, 'points' | 'edges' | 'sides' | 'path
   return { ...chain, sides: kept, edges: [Math.max(...kept[0]), Math.max(...kept[1])] }
 }
 
-/** Least cosine between a roadway and a walkway running alongside it, about 35 degrees; and the most a side drawn in for one widens again a sample. */
-const TAPER = 0.6
+/** Least cosine between a roadway and a walkway running alongside it, about 35 degrees. */
 const ALONGSIDE = 0.82
+/** Most a cut for a walkway eases off a sample, in metres, so the edge bends rather than steps. */
+const TAPER = 0.6
 
-/**
- * Roadway sides drawn in short of the walkways running alongside them, so a
- * deck fitted out to a kerb or outline beyond its lanes does not reach under
- * a walkway of its own, as a promenade between two roadways is: never in
- * past `lanes`, each side's carriageway.
- */
-export function clearOfWalkways<C extends Pick<Chain, 'points' | 'edges' | 'sides' | 'kind'>>(decks: Array<C & { lanes?: [number, number] }>): C[] {
-  const walkways = decks.filter(d => d.kind === 'path').map(d => ({ d, bounds: grow(box(d.points), Math.max(...d.edges)), half: Math.max(...d.edges) }))
+/** Roadway sides drawn in clear of walkways alongside on their own layer or above, as a promenade between roadways: never inside `lanes`. */
+export function clearOfWalkways<C extends Pick<Chain, 'points' | 'edges' | 'sides' | 'kind' | 'layer'>>(decks: Array<C & { lanes?: [number, number] }>): C[] {
+  const walkways = decks.filter(d => d.kind === 'path').map(d => ({ d, box: box(d.points), half: Math.max(...d.edges) }))
   return decks.map(deck => {
     if (deck.kind !== 'road' || !walkways.length) return deck
-    const near = walkways.filter(w => meet(w.bounds, grow(box(deck.points), Math.max(...deck.edges))))
+    const reach = Math.max(...deck.edges)
+    const near = walkways.filter(w => w.d.layer >= deck.layer && meet(grow(w.box, reach + w.half), box(deck.points))).map(w => ({ ...w, bounds: grow(w.box, reach + w.half) }))
     if (!near.length) return deck
     const n = deck.points.length
     const sides = ([0, 1] as const).map(side => deck.sides?.[side].slice() ?? deck.points.map(() => deck.edges[side])) as [number[], number[]]
     const lanes = deck.lanes ?? deck.edges
-    let changed = false
+    const cuts: [number[], number[]] = [new Array(n).fill(0), new Array(n).fill(0)]
     for (let i = 0; i < n; i++) {
       const p = deck.points[i]
       const [a, b] = [deck.points[Math.max(0, i - 1)], deck.points[Math.min(n - 1, i + 1)]]
-      const t = norm2([b[0] - a[0], b[1] - a[1]])
+      const t = unit([b[0] - a[0], b[1] - a[1]])
       for (const w of near) {
         if (!covers(w.bounds, p)) continue
-        const at = beside(w.d.points, p, nearSegments(w.d.points, p, Math.max(...deck.edges) + w.half))
+        const at = beside(w.d.points, p, nearSegments(w.d.points, p, reach + w.half))
         if (!at.alongside) continue
         const [q0, q1] = [w.d.points[at.segment - 1], w.d.points[at.segment]]
-        const u = norm2([q1[0] - q0[0], q1[1] - q0[1]])
+        const u = unit([q1[0] - q0[0], q1[1] - q0[1]])
         if (Math.abs(t[0] * u[0] + t[1] * u[1]) < ALONGSIDE) continue
-        // The walkway's side of the roadway: its nearest point, seen from the roadway's own line.
         const q: Point = [q0[0] + (q1[0] - q0[0]) * at.t, q0[1] + (q1[1] - q0[1]) * at.t]
         const side = (q[0] - p[0]) * -t[1] + (q[1] - p[1]) * t[0] > 0 ? 0 : 1
         const room = Math.max(lanes[side], at.distance - w.half)
-        if (room < sides[side][i]) [sides[side][i], changed] = [room, true]
+        cuts[side][i] = Math.max(cuts[side][i], sides[side][i] - room)
       }
     }
-    if (!changed) return deck
-    // Drawn in gradually, TAPER a sample, so the edge bends rather than steps.
-    for (const side of sides)
-      for (const order of [[...side.keys()], [...side.keys()].reverse()])
-        for (let k = 1; k < order.length; k++) side[order[k]] = Math.min(side[order[k]], side[order[k - 1]] + TAPER)
-    return { ...deck, sides, edges: [Math.max(...sides[0]), Math.max(...sides[1])] as [number, number] }
+    if (cuts.every(c => c.every(v => v <= 0))) return deck
+    // The cut eases off along the deck; the side beyond it keeps its own shape.
+    for (const cut of cuts)
+      for (const order of [[...cut.keys()], [...cut.keys()].reverse()])
+        for (let k = 1; k < order.length; k++) cut[order[k]] = Math.max(cut[order[k]], cut[order[k - 1]] - TAPER)
+    const cut = sides.map((side, s) => side.map((v, i) => Math.max(Math.min(v, lanes[s]), v - cuts[s][i]))) as [number[], number[]]
+    return { ...deck, sides: cut, edges: [Math.max(...cut[0]), Math.max(...cut[1])] as [number, number] }
   })
 }
 
-const norm2 = ([x, y]: Point): Point => {
+const unit = ([x, y]: Point): Point => {
   const l = Math.hypot(x, y) || 1
   return [x / l, y / l]
 }

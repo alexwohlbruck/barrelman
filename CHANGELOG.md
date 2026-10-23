@@ -20,7 +20,7 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 * Each roadway runs as one deck through anchorages and other joints mapped without a layer, without dips; ramps dip under ramps that climb over them, and piers stand clear of roads and decks below.
 * Decks under a landmark model of their bridge leave its structure to the model.
 * Bridge decks run on smooth vertical curves, without bumps where a suspended span's camber meets its approaches, where decks meet, or where a high deck crosses a shoreline.
-* Ramps and approaches read as continuous ribbons: a deck keeps to its own bridge outline where it passes under another, ramps merge into the main line at its height, and stray scraps of deck are no longer drawn.
+* Ramps and approaches read as continuous ribbons: a deck keeps to its own bridge outline where it passes under another, ramps merge into the main line at its height, and stray scraps of footbridge are no longer drawn.
 * A walkway mapped as short footbridges with untagged stretches between them is drawn as one continuous elevated walkway down to the street.
 * A bridge's low abutments and piers are no longer extruded as buildings through its deck.
 

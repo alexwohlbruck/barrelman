@@ -35,6 +35,7 @@ import {
   metresPerUnit,
   lngLat,
   meet,
+  nearSegments,
   PINNED,
   resample,
   sideAt,
@@ -695,7 +696,9 @@ function dipUnder(solved: Solved[]): Solved[] {
 
 /** Metres over which an end is brought onto the deck it rests on, at most. */
 const MEET_RUN = 60
-/** Metres over which a deck running within the one it rests on eases onto its height, and its vertical curve. */
+/** Metres over which a deck running within the one it rests on eases onto its height, and its vertical curve; the least such stretch, in metres; and the least cosine between them along it. */
+const MERGE_MIN = 12
+const MERGING = 0.9
 const MERGE_EASE = 60
 
 /** Each end resting on another deck brought onto it, the difference faded out along this one: the last word, after easing and camber. */
@@ -732,9 +735,18 @@ function merged(s: Solved) {
     const rest = s.on.find(r => r.at === s.chain.points[end ? n - 1 : 0])
     if (!rest) continue
     const o = rest.deck
+    const reach = Math.max(...o.chain.edges) + Math.max(...s.chain.edges)
     const under = (i: number, inside: boolean) => {
-      const near = beside(o.chain.points, s.chain.points[i])
-      if (!near.alongside || (inside && near.distance > sideAt(o.chain, near.left ? 0 : 1, near.segment - 1, near.t))) return null
+      const p = s.chain.points[i]
+      const near = beside(o.chain.points, p, nearSegments(o.chain.points, p, reach))
+      if (!near.alongside) return null
+      if (inside) {
+        // Within it and running with it, as a merge does, not meeting it square at a junction.
+        const [a, b] = [s.chain.points[Math.max(0, i - 1)], s.chain.points[Math.min(n - 1, i + 1)]]
+        const [q0, q1] = [o.chain.points[near.segment - 1], o.chain.points[near.segment]]
+        const cos = ((b[0] - a[0]) * (q1[0] - q0[0]) + (b[1] - a[1]) * (q1[1] - q0[1])) / (Math.hypot(b[0] - a[0], b[1] - a[1]) * Math.hypot(q1[0] - q0[0], q1[1] - q0[1]) || 1)
+        if (near.distance > sideAt(o.chain, near.left ? 0 : 1, near.segment - 1, near.t) || Math.abs(cos) < MERGING) return null
+      }
       return heightAt(o.d, o.z, o.d[near.segment - 1] + (o.d[near.segment] - o.d[near.segment - 1]) * near.t)
     }
     const from = (i: number) => (end ? total - s.d[i] : s.d[i])
@@ -744,7 +756,7 @@ function merged(s: Solved) {
       if (from(i) > total / 2 || under(i, true) === null) break
       stretch = from(i)
     }
-    if (stretch <= 0) continue
+    if (stretch < MERGE_MIN) continue
     for (const i of order) {
       const past = from(i) - stretch
       const z = past < MERGE_EASE && from(i) <= total / 2 ? under(i, false) : null
@@ -783,10 +795,10 @@ function continued(s: Solved, end: 0 | 1, on: Solved): number {
 const SCRAP = 30
 const LANDED = 1.5
 
-/** Whether a deck is short and at neither end lands on the ground or carries on onto another deck's surface at its height. */
+/** Whether a footbridge is short and at neither end lands on the ground or carries on onto another deck's surface at its height. */
 function scrap(s: Solved, solved: Solved[]): boolean {
   const n = s.z.length
-  if (s.d[n - 1] >= SCRAP) return false
+  if (s.chain.kind !== 'path' || s.d[n - 1] >= SCRAP) return false
   return ([0, 1] as const).every(end => {
     const i = end ? n - 1 : 0
     const p = s.chain.points[i]
@@ -899,8 +911,11 @@ export async function buildDecks(input: DeckInput, ground: Ground): Promise<Deck
   faired(solved, input, bases)
   liftedBeside(solved)
   for (let pass = 0; pass < SETTLE; pass++) for (const s of solved) meetRests(s)
-  for (const s of solved) merged(s)
-  // A scrap of deck meeting nothing at either end, as a few metres of footbridge mapped between untagged stretches, would stand alone in mid air.
+  // Decks rested on first, so one resting on a merged deck meets it as it ends up.
+  const depth = (s: Solved, seen = new Set<Solved>()): number => (seen.has(s) ? 0 : (seen.add(s), Math.max(0, ...s.on.map(r => 1 + depth(r.deck, seen)))))
+  for (const s of [...solved].sort((a, b) => depth(a) - depth(b))) merged(s)
+  for (let pass = 0; pass < SETTLE; pass++) for (const s of solved) meetRests(s)
+  // A scrap of footbridge meeting nothing at either end would stand alone in mid air.
   const scraps = solved.filter(s => scrap(s, solved))
   for (const s of scraps.filter(s => !solved.some(o => !scraps.includes(o) && o.on.some(r => r.deck === s)))) solved.splice(solved.indexOf(s), 1)
   const rows = piers(solved)
