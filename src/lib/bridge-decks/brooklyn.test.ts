@@ -6,7 +6,7 @@
  */
 import { describe, expect, it } from 'bun:test'
 import { buildDecks, type Deck } from './build'
-import { along, beside, crossings, mercator, type Point } from './profile'
+import { along, beside, crossings, VERTICAL_CURVE, heightAt as profileAt, mercator, type Point } from './profile'
 import { recorded } from './recorded'
 
 const { input, ground } = await recorded('brooklyn-bridge')
@@ -22,6 +22,14 @@ const water = Math.min(...carrying(432550255).ground)
 const towers = { manhattan: mercator(-73.9983344, 40.7072687), brooklyn: mercator(-73.9943541, 40.7041037) }
 const midspan = mercator(-73.99634, 40.70570)
 const roadways = [carrying(432550255), carrying(46177152)]
+/** Most a deck's grade changes per metre, over 6 m each side of every metre at least `from` metres in from its ends. */
+const bend = (deck: Deck, from = 6) => {
+  const d = along(deck.points)
+  const at = (s: number) => profileAt(d, deck.heights, s)
+  let most = 0
+  for (let s = from; s <= deck.length - from; s++) most = Math.max(most, Math.abs(at(s + 6) - 2 * at(s) + at(s - 6)) / 36)
+  return most
+}
 
 describe('the Brooklyn Bridge', () => {
   it('carries its roadways at the height OSM records over the river, cambered to its towers', () => {
@@ -50,6 +58,10 @@ describe('the Brooklyn Bridge', () => {
   it('keeps the promenade up between the roadways where it runs on over the anchorage', () => {
     const promenade = carrying(439842790)
     expect(Math.min(promenade.heights[0], promenade.heights[promenade.heights.length - 1]) - water).toBeGreaterThan(20)
+  })
+
+  it('carries its roadways and promenade on vertical curves, with no bump where the camber meets the approaches or a neighbour', () => {
+    for (const deck of [...roadways, carrying(439842783)]) expect(bend(deck)).toBeLessThan(0.004)
   })
 
   it('runs each roadway as one deck from its Manhattan approach to its Brooklyn one, without a dip', () => {
@@ -93,6 +105,10 @@ describe('the interchange at its Manhattan end', () => {
       }
     expect(steps.length).toBeGreaterThan(20)
     expect(Math.max(...steps)).toBeLessThan(0.3)
+  })
+
+  it('eases every long deck into vertical curves away from its ends', () => {
+    for (const deck of decks.filter(d => d.length >= 2 * VERTICAL_CURVE)) expect(bend(deck, VERTICAL_CURVE / 2)).toBeLessThan(0.004)
   })
 
   it('dips a ramp under one climbing from the street to cross it, rather than run them through each other', () => {

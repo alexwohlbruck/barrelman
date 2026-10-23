@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'bun:test'
 import {
   cambered,
+  fair,
+  VERTICAL_CURVE,
+  PINNED,
   absorbPaths, absorbTracks, along, landing, LANDING, arch, chains, crossings, fitEdges, joinNeighbours, MAX_GRADE, mercator, resample, smooth, solve, steady, widen,
   type Chain, type Point, type Way,
 } from './profile'
@@ -298,5 +301,35 @@ describe('cambered', () => {
   it('never holds a span below something else it must clear there', () => {
     const out = cambered(z, d, [...camber(60, 180, 28), { at: 120, height: 29 }])
     expect(out[d.indexOf(120)]).toBe(29)
+  })
+})
+
+describe('fair', () => {
+  const d = Array.from({ length: 101 }, (_, i) => i * 6)
+  const crest = d.map(s => (s < 300 ? 0.04 * s : 12 - 0.04 * (s - 300)))
+  const bend = (z: number[]) => Math.max(...z.slice(1, -1).map((v, k) => Math.abs(z[k + 2] - 2 * v + z[k]) / 36))
+
+  it('eases a change of grade into a parabolic vertical curve VERTICAL_CURVE long', () => {
+    expect(bend(fair(crest, d))).toBeCloseTo(0.08 / VERTICAL_CURVE, 4)
+  })
+
+  it('takes out a lone bump and leaves a parabola, as a camber, as it is', () => {
+    const grade = d.map(s => 10 + 0.01 * s)
+    const bumped = fair(grade.map((z, i) => z + (i === 50 ? 0.4 : 0)), d)
+    expect(Math.max(...bumped.map((z, i) => Math.abs(z - grade[i])))).toBeLessThan(0.05)
+    const camber = d.map(s => 41 - 4.85 * (s / 300 - 1) ** 2)
+    expect(fair(camber, d).slice(25, 76).every((z, i) => Math.abs(z - camber[i + 25]) < 0.01)).toBe(true)
+  })
+
+  it('keeps over a floor it must clear and under a ceiling, and holds a pinned end', () => {
+    // Level over what it crosses, as `solve` leaves it.
+    const level = d.map(s => Math.min(12, 12.48 - 0.04 * Math.abs(s - 300)))
+    const floor = d.map(s => (Math.abs(s - 300) <= 12 ? 12 : -Infinity))
+    const raised = fair(level, d, { floor, weight: d.map((_, i) => (i ? 1 : PINNED)) })
+    expect(Math.min(...raised.map((z, i) => z - floor[i]))).toBeGreaterThan(-0.01)
+    expect(raised[0]).toBeCloseTo(level[0], 3)
+    const sag = level.map(z => 12 - z)
+    const ceiling = d.map(s => (Math.abs(s - 300) <= 12 ? 0 : Infinity))
+    expect(Math.max(...fair(sag, d, { ceiling }).map((z, i) => z - ceiling[i]))).toBeLessThan(0.01)
   })
 })
