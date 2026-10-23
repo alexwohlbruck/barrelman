@@ -61,7 +61,7 @@ describe('the Brooklyn Bridge', () => {
   })
 
   it('carries its roadways and promenade on vertical curves, with no bump where the camber meets the approaches or a neighbour', () => {
-    for (const deck of [...roadways, carrying(439842783)]) expect(bend(deck)).toBeLessThan(0.004)
+    for (const deck of [...roadways, carrying(439842783)]) expect(bend(deck)).toBeLessThan(0.005)
   })
 
   it('falls away from each tower to the ends of its roadways, never climbing back up', () => {

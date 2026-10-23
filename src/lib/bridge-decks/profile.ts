@@ -598,12 +598,12 @@ export function cambered(z: number[], d: number[], needs: Need[]): number[] {
     const u = Math.max(0, 1 - m / Math.max(run, 1e-9))
     return u * u * (3 - 2 * u)
   }
-  // Long enough that a span held below its approaches never climbs back up to them where they fall away from it: smoothstep climbs 1.5 × its height over its run at most.
+  // Long enough that a span held below its approaches never climbs back up to them where they fall away from it: smoothstep climbs 1.5 × its height over its run at most, and the side span keeps falling.
   const run = (from: number, by: number, away: 1 | -1) => {
     const room = away > 0 ? d[d.length - 1] - d[from] : d[from]
     const k = d.findIndex(v => away * (v - d[from]) >= Math.min(CAMBER_BLEND, room))
     const fall = (z[from] - z[k < 0 ? (away > 0 ? d.length - 1 : 0) : k]) / Math.max(Math.min(CAMBER_BLEND, room), 1e-9)
-    return Math.min(room, by < 0 && fall > 0 ? Math.max(CAMBER_BLEND, (1.5 * -by) / fall) : CAMBER_BLEND)
+    return Math.min(room, by < 0 && fall > 0 ? Math.max(CAMBER_BLEND, (2 * -by) / fall) : CAMBER_BLEND)
   }
   const [runBefore, runAfter] = [run(first, before, -1), run(last, after, 1)]
   return z.map((v, i) => {
@@ -670,10 +670,10 @@ export type Fairing = {
 }
 
 /**
- * A profile faired into parabolic vertical curves about `curve` metres long
- * at every change of grade, kink or lone bump, within its bounds: the
- * smoothest heights near the given ones (a penalised spline). A straight
- * grade or a parabola, as a suspended span's camber, comes through unchanged.
+ * A profile faired into vertical curves about `curve` metres long at every
+ * change of grade, kink or lone bump, within its bounds: the smoothest
+ * heights near the given ones (a penalised spline). A straight grade or a
+ * parabola, as a suspended span's camber, comes through unchanged.
  */
 export function fair(z: number[], d: number[], { floor, ceiling, weight }: Fairing = {}, curve = VERTICAL_CURVE): number[] {
   const n = z.length
@@ -686,18 +686,20 @@ export function fair(z: number[], d: number[], { floor, ceiling, weight }: Fairi
   const ceilings = z.map((v, i) => Math.max(ceiling?.[i] ?? Infinity, v))
   // Nor does it rise above, or sink below, what the profile and its floors reach within half a curve: easing rounds, it never bulges.
   const lo = z.map((_, i) => Math.max(floors[i], reach(z, d, i, curve / 2, Math.min)))
-  const hi = z.map((_, i) => Math.min(ceilings[i], reach(z.map((v, k) => Math.max(v, floors[k])), d, i, curve / 2, Math.max)))
+  const hi = z.map((_, i) => Math.min(ceilings[i], reach(z, d, i, curve / 2, Math.max)))
   // Active set: bounds the curve breaks are held, and let go again where holding pulls the curve back toward its data.
   const held = new Map<number, 'floor' | 'ceiling'>()
   let out = z
-  for (let round = 0; round <= 4 * n; round++) {
+  for (let round = 0; ; round++) {
+    // The given profile keeps within every bound: where the bounds will not settle, it stands.
+    if (round > 4 * n) return z.slice()
     const a = base.a.slice()
     const r = rhs.slice()
     for (const [i, bound] of held) {
-      a[i] += PINNED
-      r[i] += PINNED * (bound === 'floor' ? lo[i] : hi[i])
+      a[i] += PINNED * base.share[i]
+      r[i] += PINNED * base.share[i] * (bound === 'floor' ? lo[i] : hi[i])
     }
-    out = banded(a, base.b, base.c, r)
+    out = solveBanded(a, base.b, base.c, r)
     let changed = false
     for (const [i, bound] of held) {
       const pull = base.a[i] * out[i] + (i > 0 ? base.b[i - 1] * out[i - 1] : 0) + (i < n - 1 ? base.b[i] * out[i + 1] : 0) +
@@ -730,31 +732,36 @@ function reach(z: number[], d: number[], i: number, half: number, pick: (...v: n
 /**
  * The symmetric five-banded system whose solution minimises
  * Σ w·h·(z − target)² + stiffness·Σ h·(z″)², h each sample's share of the
- * length: its diagonal `a` (and `a0`, the data's part of it) and the two
- * bands above, b[i] = A[i][i+1] and c[i] = A[i][i+2].
+ * length: its diagonal `a` (and `a0`, the data's part of it), the two bands
+ * above, b[i] = A[i][i+1] and c[i] = A[i][i+2], and each sample's share.
  */
 function bands(d: number[], w: (i: number) => number, stiffness: number) {
   const n = d.length
-  const share = (i: number) => (d[Math.min(n - 1, i + 1)] - d[Math.max(0, i - 1)]) / 2 || 1e-6
-  const a0 = d.map((_, i) => w(i) * share(i))
+  // Samples closer than this are taken this far apart, so a stub at a deck's end does not swamp the system.
+  const gap = (i: number) => Math.max(MIN_GAP, d[i] - d[i - 1])
+  const share = d.map((_, i) => ((i > 0 ? gap(i) : 0) + (i < n - 1 ? gap(i + 1) : 0)) / 2)
+  const a0 = d.map((_, i) => w(i) * share[i])
   const a = a0.slice()
   const b = new Array<number>(n).fill(0)
   const c = new Array<number>(n).fill(0)
   for (let i = 1; i < n - 1; i++) {
-    const [h0, h1] = [d[i] - d[i - 1] || 1e-6, d[i + 1] - d[i] || 1e-6]
+    const [h0, h1] = [gap(i), gap(i + 1)]
     const k = [2 / (h0 * (h0 + h1)), -2 / (h0 * h1), 2 / (h1 * (h0 + h1))]
-    const s = stiffness * share(i)
+    const s = stiffness * share[i]
     for (let p = 0; p < 3; p++) {
       a[i - 1 + p] += s * k[p] * k[p]
       if (p < 2) b[i - 1 + p] += s * k[p] * k[p + 1]
     }
     c[i - 1] += s * k[0] * k[2]
   }
-  return { a0, a, b, c }
+  return { a0, a, b, c, share }
 }
 
+/** Least spacing of samples a fairing works with, in metres. */
+const MIN_GAP = 0.5
+
 /** A symmetric five-banded system solved by LDLᵀ. */
-function banded(a: number[], b: number[], c: number[], rhs: number[]): number[] {
+function solveBanded(a: number[], b: number[], c: number[], rhs: number[]): number[] {
   const n = a.length
   const D = new Array<number>(n).fill(0)
   const l1 = new Array<number>(n).fill(0)
