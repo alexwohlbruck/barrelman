@@ -50,7 +50,7 @@ import {
 } from '../services/accounts.service'
 import { throttleStats } from '../services/throttle.service'
 import { trafficReport } from '../services/request-metrics.service'
-import { allPlans, getPlan, isPlanId } from '../billing/plans'
+import { ALL_SCOPES, allPlans, getPlan, isPlanId } from '../billing/plans'
 
 /**
  * Recorded as the actor when a caller somehow reaches these routes without a
@@ -251,6 +251,8 @@ export function createAdminUserRoutes(overrides: Partial<AdminUserDeps> = {}) {
         // Every plan, internal ones included: this is the operator's picker,
         // and `demo` exists precisely to be assigned from here.
         plans: allPlans(),
+        // For the key editor's scope picker.
+        scopes: ALL_SCOPES,
       }
     },
     { detail: { summary: 'Account detail with usage, keys and moderation history', tags: ['Admin'] } },
