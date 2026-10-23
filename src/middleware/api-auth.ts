@@ -48,6 +48,8 @@ import { originAllowed, presentedOrigin } from '../lib/origins'
 import { safeEqual } from '../lib/crypto'
 import { hashIp } from '../services/accounts.service'
 import { envNumber } from '../config/env'
+import { attribute, refusalFor } from './request-metrics'
+import { ANONYMOUS_SUBJECT, SERVICE_SUBJECT } from '../services/request-metrics.service'
 
 /** Prefix that marks a customer key, as opposed to the shared service secret. */
 const KEY_PREFIX = 'brm_'
@@ -211,6 +213,12 @@ function toCaller(resolved: ResolvedKey): ApiCaller {
   }
 }
 
+/** Who a request is recorded against in the request metrics. */
+function metricsSubject(caller: ApiCaller): string {
+  if (caller.userId) return caller.userId
+  return caller.kind === 'service' ? SERVICE_SUBJECT : ANONYMOUS_SUBJECT
+}
+
 // ── The guard ───────────────────────────────────────────────────────────
 
 interface GuardContext {
@@ -235,6 +243,7 @@ export function apiAuth(group: EndpointGroup, overrides: Partial<ApiAuthDeps> = 
     const ip = clientIp(request)
 
     const { caller, error } = await identifyCaller(headers, request, deps)
+    attribute(request, { subject: metricsSubject(caller), apiKeyId: caller.keyId, endpoint: group })
 
     /**
      * Every refusal runs through here. A rejection is a strike against the
@@ -258,6 +267,7 @@ export function apiAuth(group: EndpointGroup, overrides: Partial<ApiAuthDeps> = 
     ) => {
       const penaltyKey = penaltyKeyFor(ip, caller.userId)
       if (strike) recordRejection(penaltyKey)
+      attribute(request, { refusal: refusalFor(status, body.layer as string | undefined) })
       set.status = status
       if (retryAfterSeconds) set.headers['retry-after'] = String(retryAfterSeconds)
       if (caller.userId) {
@@ -284,6 +294,7 @@ export function apiAuth(group: EndpointGroup, overrides: Partial<ApiAuthDeps> = 
      */
     const boxed = checkPenalty(penaltyKeyFor(ip, caller.userId))
     if (!boxed.allowed) {
+      attribute(request, { refusal: 'penalty' })
       set.status = 429
       set.headers['retry-after'] = String(boxed.retryAfterSeconds)
       /**

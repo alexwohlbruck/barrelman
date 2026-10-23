@@ -49,6 +49,7 @@ import {
   setUserRole,
 } from '../services/accounts.service'
 import { throttleStats } from '../services/throttle.service'
+import { trafficReport } from '../services/request-metrics.service'
 import { allPlans, getPlan, isPlanId } from '../billing/plans'
 
 /**
@@ -83,6 +84,7 @@ export interface AdminUserDeps {
   updateApiKeyOrigins: typeof updateApiKeyOrigins
   setKeyRateLimitExempt: typeof setKeyRateLimitExempt
   revokeApiKey: typeof revokeApiKey
+  trafficReport: typeof trafficReport
 }
 
 const defaultDeps: AdminUserDeps = {
@@ -107,6 +109,7 @@ const defaultDeps: AdminUserDeps = {
   updateApiKeyOrigins,
   setKeyRateLimitExempt,
   revokeApiKey,
+  trafficReport,
 }
 
 export function createAdminUserRoutes(overrides: Partial<AdminUserDeps> = {}) {
@@ -599,6 +602,31 @@ export function createAdminUserRoutes(overrides: Partial<AdminUserDeps> = {}) {
       detail: {
         summary: "Revoke a customer's API key",
         description: 'Takes effect immediately. Logged to the account.',
+        tags: ['Admin'],
+      },
+    },
+  )
+
+  // ── Traffic ─────────────────────────────────────────────────────────
+  .get(
+    '/traffic',
+    async ({ query }) => ({
+      ...(await deps.trafficReport(query.range ?? '24h', query.userId || undefined)),
+      // Live, in-memory and per-replica — what the throttle is holding right
+      // now, beside the persisted history above.
+      throttle: throttleStats(),
+    }),
+    {
+      query: t.Object({
+        range: t.Optional(t.Union([t.Literal('24h'), t.Literal('7d'), t.Literal('30d')])),
+        userId: t.Optional(t.String()),
+      }),
+      detail: {
+        summary: 'Request outcomes, rate limiting and latency',
+        description:
+          'Hourly request metrics for the whole instance, or one account with `userId`: how many requests were ' +
+          'served, refused by which throttle layer, refused for quota or credentials, and latency percentiles ' +
+          'estimated from a histogram. Service-key and anonymous traffic appears under `@service` and `@anonymous`.',
         tags: ['Admin'],
       },
     },

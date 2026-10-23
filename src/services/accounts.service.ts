@@ -169,6 +169,34 @@ export function ensureAccountsSchema(): Promise<void> {
         )`
       await sql`CREATE INDEX IF NOT EXISTS accounts_usage_user_day_idx ON accounts_usage (user_id, day)`
 
+      // Operational counterpart to accounts_usage: hourly, and recording how
+      // requests were answered — which layer refused them, how long the served
+      // ones took — rather than what they cost. No foreign key on user_id,
+      // because service and anonymous traffic is recorded under sentinels
+      // (see services/request-metrics.service.ts); rows age out instead.
+      await sql`
+        CREATE TABLE IF NOT EXISTS accounts_request_metrics (
+          hour           timestamptz NOT NULL,
+          user_id        text NOT NULL,
+          api_key_id     text NOT NULL DEFAULT '-',
+          endpoint       text NOT NULL,
+          requests       integer NOT NULL DEFAULT 0,
+          served         integer NOT NULL DEFAULT 0,
+          client_errors  integer NOT NULL DEFAULT 0,
+          server_errors  integer NOT NULL DEFAULT 0,
+          limited_ip     integer NOT NULL DEFAULT 0,
+          limited_key    integer NOT NULL DEFAULT 0,
+          limited_account integer NOT NULL DEFAULT 0,
+          limited_concurrency integer NOT NULL DEFAULT 0,
+          penalised      integer NOT NULL DEFAULT 0,
+          quota_refused  integer NOT NULL DEFAULT 0,
+          denied         integer NOT NULL DEFAULT 0,
+          latency_ms_sum bigint NOT NULL DEFAULT 0,
+          latency_hist   integer[] NOT NULL,
+          PRIMARY KEY (hour, user_id, api_key_id, endpoint)
+        )`
+      await sql`CREATE INDEX IF NOT EXISTS accounts_request_metrics_user_idx ON accounts_request_metrics (user_id, hour)`
+
       await sql`
         CREATE TABLE IF NOT EXISTS accounts_credit_ledger (
           id          text PRIMARY KEY,
