@@ -127,3 +127,34 @@ test('a walkway under a landmark that models its bridge is left to the model ent
   expect(plain).toBeGreaterThan(0)
   expect(modelled).toBe(0)
 })
+
+test('lays a street deck\'s carriageway beside a low walkway the model draws', () => {
+  const north = (m: number) => m / 30_400_000
+  const walkway: Deck = { ...deck, id: 'walk', kind: 'path', edges: [1.5, 1.5], grounded: [false, false], heights: [0.5, 1, 0.5], ground: [0, 0, 0],
+    points: points.map(([x, y]) => [x, y - north(5)] as [number, number]) }
+  // The road deck's own carriageway, laid on it as on a street deck, and on the ground just past its ends.
+  const street = { properties: { bridge: true, kind: 'carriageway' }, geometry: { type: 'Polygon', coordinates: [[[-74.0003, 40.69997], [-73.9977, 40.69997], [-73.9977, 40.70003], [-74.0003, 40.70003], [-74.0003, 40.69997]]] } }
+  const past = { ...street, geometry: { type: 'Polygon', coordinates: [[[-74.0002, 40.69997], [-74.0001, 40.69997], [-74.0001, 40.70003], [-74.0002, 40.70003], [-74.0002, 40.69997]]] } }
+  const [x0, y0] = mercator(-74.01, 40.71), [x1, y1] = mercator(-73.99, 40.69)
+  const around: Array<[number, number]> = [[x0, y0], [x1, y0], [x1, y1], [x0, y1], [x0, y0]]
+  const baked = bakeBridges({ ...input, decks: [deck, walkway], surfaces: [street, past], structures: [{ ring: around, centre: walkway.points[1], radius: 200 }] }, MATERIAL_PALETTE)
+  expect(baked.mesh.position.length).toBeGreaterThan(0)
+  expect(baked.mesh.position.every(Number.isFinite)).toBe(true)
+})
+
+test('lays no other bridge\'s carriageway on the ground beside a deck\'s end', () => {
+  const metre = 1 / 30_400_000
+  // A street deck sampled every 5 m, its carriageway laid on it; 12 m in from its west end, another bridge's carriageway crosses overhead with no deck here.
+  const dense = Array.from({ length: 35 }, (_, k) => mercator(-74 + (k * 0.002) / 34, 40.7))
+  const street: Deck = { ...deck, points: dense, heights: dense.map((_, k) => 8 * Math.sin((Math.PI * k) / 34)), ground: dense.map(() => 0), midpoint: dense[17] }
+  const own = { properties: { bridge: true, kind: 'carriageway' }, geometry: { type: 'Polygon', coordinates: [[[-74.0003, 40.69997], [-73.9977, 40.69997], [-73.9977, 40.70003], [-74.0003, 40.70003], [-74.0003, 40.69997]]] } }
+  const across = { properties: { bridge: true, kind: 'carriageway' }, geometry: { type: 'Polygon', coordinates: [[[-73.99989, 40.6998], [-73.99981, 40.6998], [-73.99981, 40.7002], [-73.99989, 40.7002], [-73.99989, 40.6998]]] } }
+  const { mesh, origin } = bakeBridges({ ...input, decks: [street], surfaces: [own, across] }, MATERIAL_PALETTE)
+  const [x, y] = mercator(-73.99985, 40.7)
+  let stray = 0
+  for (let i = 0; i < mesh.position.length; i += 3) {
+    const [dx, dy, z] = [(mesh.position[i] + origin[0] - x) / metre, (y - mesh.position[i + 1] - origin[1]) / metre, mesh.position[i + 2] / metre]
+    if (mesh.color[i] === 0 && Math.abs(dx) < 5 && Math.abs(dy) > 4.5 && Math.abs(dy) < 12 && z < 0.5) stray++
+  }
+  expect(stray).toBe(0)
+})

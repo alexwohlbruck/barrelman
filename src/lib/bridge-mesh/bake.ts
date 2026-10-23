@@ -258,8 +258,9 @@ class MeshBaker {
       return boundsOf([at, [at[0] + (out[0] * PAST_END) / scale, at[1] + (out[1] * PAST_END) / scale]], half)
     })
     const onward = { ...ground, near: [...ends, ...past] }
-    // An asphalt deck is its carriageway already; only a concrete one, and the ground past the ends, need it laid on.
-    paintMesh(mesh, paved, surfaces, tar, this.origin, { ground, on: deck => !!deck.sidewalks })
+    // An asphalt deck is its carriageway already; only a concrete one, and the ground just past its own road ends, need it laid on.
+    // Not the ground anywhere near an end: another bridge's carriageway passing overhead there would be laid under it as a stray plate.
+    paintMesh(mesh, paved, surfaces, tar, this.origin, { ground: { ...ground, near: past }, on: deck => !!deck.sidewalks })
     const atGrade = this.carriageways(false, ends)
     // Laid as one area, less the bridge's own, so pieces mapped apart leave no bars or notches on a deck's end.
     const joined = closedAreas(atGrade.flatMap(c => c.areas), paved.flatMap(c => c.areas), ends)
