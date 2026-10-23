@@ -49,6 +49,15 @@ test('lifts a structure with the terrain at its feet and with the smoothed terra
   expect(Math.min(...overhead)).toBeGreaterThan(-10)
 })
 
+test('lifts a high deck on a smooth curve where it passes from water to a bank', () => {
+  const metre = 1 / 30_400_000
+  const bank = ([x]: [number, number]) => (x < points[1][0] ? -2 : 8)
+  const lift = liftField(bank)
+  const z = Array.from({ length: 201 }, (_, k) => [points[1][0] + (k - 100) * metre, points[1][1]] as [number, number]).map(p => lift(p, 40, bank(p)))
+  const bends = z.slice(6, -6).map((v, k) => Math.abs(z[k + 12] - 2 * v + z[k]) / 36)
+  expect(Math.max(...bends)).toBeLessThan(0.04)
+})
+
 test('lifts a point alike however the meshes around it were sampled, so decks that meet are lifted alike', () => {
   const hilly = ([x, y]: [number, number]) => 30 * Math.sin(x * 2e5) + 20 * Math.cos(y * 3e5)
   const near = Array.from({ length: 40 }, (_, k) => [points[0][0] + k * 3e-7, points[0][1] + (k % 7) * 2e-7] as [number, number])

@@ -5,25 +5,30 @@ export const MATERIALS = ['surface', 'concrete', 'parapet', 'track', 'deck', 'lo
 export const MATERIAL_PALETTE = Object.fromEntries(MATERIALS.map((name, i) => [name, [i, 0, 0]])) as DeckPalette
 const STREAMS = ['position', 'normal', 'color', 'low', 'bias', 'spread'] as const
 
-/** Mercator units between the nodes of the smoothed ground a deck is lifted with (25 m at the equator, 19 m at 40°), and how far each node reads around it. */
+/** Mercator units between the nodes of the smoothed ground a deck is lifted with (25 m at the equator, 19 m at 40°), and how many of them each node reads around it. */
 const DATUM_CELL = 25 / 40075016.686
+const DATUM_READ = 2
 /** Metres above the ground over which a structure goes from following it, foot on the ground, to the smoothed ground. */
 const LIFT_BLEND = 6
 
+/** Uniform cubic B-spline weights at t in [0, 1) for the four nodes around it. */
+const spline = (t: number) => [(1 - t) ** 3 / 6, (3 * t ** 3 - 6 * t ** 2 + 4) / 6, (-3 * t ** 3 + 3 * t ** 2 + 3 * t + 1) / 6, t ** 3 / 6]
+
 /**
  * The ground a structure is lifted with as the map exaggerates terrain: the
- * terrain itself at its feet, and higher up the terrain smoothed over
- * DATUM_CELL, so a deck keeps its true height above the ground it spans as
+ * terrain itself at its feet, and higher up the terrain smoothed over a few
+ * DATUM_CELLs, so a deck keeps its true height above the ground it spans as
  * buildings and landmarks do, without copying every cutting beneath it (a
- * median, so a narrow road or stream below does not pull it down). A
+ * median, so a narrow road or stream below does not pull it down) or kinking
+ * where it passes from water to a bank (a cubic spline over the medians). A
  * function of position alone, so decks that meet are lifted alike.
  */
 export function liftField(at: (point: Point) => number | null) {
   const nodes = new Map<string, number | null>()
+  const offsets = Array.from({ length: 4 * DATUM_READ + 1 }, (_, k) => k / 2 - DATUM_READ)
   const node = (i: number, j: number): number | null => {
     const key = `${i},${j}`
     if (!nodes.has(key)) {
-      const offsets = [-1, -0.5, 0, 0.5, 1]
       const heights = offsets.flatMap(dx => offsets.map(dy => at([(i + dx) * DATUM_CELL, (j + dy) * DATUM_CELL])))
         .filter((h): h is number => h !== null && Number.isFinite(h)).sort((a, b) => a - b)
       nodes.set(key, heights.length ? heights[heights.length >> 1] : null)
@@ -33,11 +38,15 @@ export function liftField(at: (point: Point) => number | null) {
   const datum = ([x, y]: Point): number | null => {
     const [fx, fy] = [x / DATUM_CELL, y / DATUM_CELL]
     const [i, j] = [Math.floor(fx), Math.floor(fy)]
-    const [tx, ty] = [fx - i, fy - j]
-    const corners = [node(i, j), node(i + 1, j), node(i, j + 1), node(i + 1, j + 1)]
-    if (corners.some(c => c === null)) return null
-    const [a, b, c, d] = corners as number[]
-    return (a * (1 - tx) + b * tx) * (1 - ty) + (c * (1 - tx) + d * tx) * ty
+    const [wx, wy] = [spline(fx - i), spline(fy - j)]
+    let sum = 0
+    for (let a = 0; a < 4; a++)
+      for (let b = 0; b < 4; b++) {
+        const h = node(i + a - 1, j + b - 1)
+        if (h === null) return null
+        sum += h * wx[a] * wy[b]
+      }
+    return sum
   }
   /** Metres a point `z` metres up, over `ground`, rises per unit of exaggeration past 1; z itself where the ground is unknown. */
   return (p: Point, z: number, ground: number | null): number => {
