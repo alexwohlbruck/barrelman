@@ -538,3 +538,79 @@ describe('DELETE /admin/users/:id', () => {
     expect(d.deleteAccount).not.toHaveBeenCalled()
   })
 })
+
+describe('PATCH /admin/users/:id/keys/:keyId', () => {
+  const KEY = {
+    id: 'key-9',
+    userId: TARGET_ID,
+    name: 'Production',
+    prefix: 'brm_live_abc1234',
+    last4: 'wxyz',
+    scopes: ['*'],
+    allowedOrigins: [],
+    rateLimitExempt: false,
+    lastUsedAt: null,
+    revokedAt: null,
+    expiresAt: null,
+    createdAt: new Date(),
+  }
+
+  function keyDeps(overrides: Partial<AdminUserDeps> = {}) {
+    return deps({
+      listApiKeys: mock(async () => [KEY]) as never,
+      renameApiKey: mock(async () => true),
+      updateApiKeyScopes: mock(async () => true),
+      updateApiKeyOrigins: mock(async () => true),
+      setKeyRateLimitExempt: mock(async () => true),
+      ...overrides,
+    })
+  }
+
+  function patch(body: unknown) {
+    return new Request(`${BASE}/admin/users/${TARGET_ID}/keys/${KEY.id}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+  }
+
+  test('lifts the rate limit and logs who did it', async () => {
+    const d = keyDeps()
+    const res = await createAdminUserRoutes(d).handle(patch({ rateLimitExempt: true, reason: 'launch week' }))
+
+    expect(res.status).toBe(200)
+    expect(d.setKeyRateLimitExempt).toHaveBeenCalledWith(TARGET_ID, KEY.id, true)
+    expect(d.addNote).toHaveBeenCalledWith(
+      TARGET_ID,
+      expect.stringContaining('rate limits disabled — launch week'),
+      ADMIN_ID,
+    )
+  })
+
+  test('will not give a non-admin customer the admin scope', async () => {
+    // An operator editing someone else's key is still bound by the rule that
+    // only an administrator's own keys reach /admin/*.
+    const d = keyDeps()
+    const res = await createAdminUserRoutes(d).handle(patch({ scopes: ['*', 'admin'] }))
+
+    expect(res.status).toBe(403)
+    expect(d.updateApiKeyScopes).not.toHaveBeenCalled()
+  })
+
+  test('refuses a key that belongs to a different account', async () => {
+    const d = keyDeps({ listApiKeys: mock(async () => []) as never })
+    const res = await createAdminUserRoutes(d).handle(patch({ rateLimitExempt: true }))
+
+    expect(res.status).toBe(404)
+    expect(d.setKeyRateLimitExempt).not.toHaveBeenCalled()
+  })
+
+  test('revoking logs the key it revoked', async () => {
+    const d = keyDeps({ revokeApiKey: mock(async () => true) })
+    const res = await createAdminUserRoutes(d).handle(del(`/admin/users/${TARGET_ID}/keys/${KEY.id}`, {}))
+
+    expect(res.status).toBe(200)
+    expect(d.revokeApiKey).toHaveBeenCalledWith(TARGET_ID, KEY.id)
+    expect(d.addNote).toHaveBeenCalledWith(TARGET_ID, expect.stringContaining('"Production"'), ADMIN_ID)
+  })
+})

@@ -340,6 +340,8 @@ export interface ApiKeySummary {
   scopes: string[]
   /** Origins the key may be used from; empty means unrestricted. */
   allowedOrigins: string[]
+  /** Operator-set: the throttle does not apply to this key. */
+  rateLimitExempt: boolean
   lastUsedAt: string | null
   revokedAt: string | null
   expiresAt: string | null
@@ -535,6 +537,8 @@ export interface AdminUserDetail {
   lifetime: UsageTotals | null
   history: ModerationEntry[]
   plans: Plan[]
+  /** Every grantable scope, `admin` included. */
+  scopes: string[]
 }
 
 export type AbuseSignalKind =
@@ -562,4 +566,59 @@ export interface ThrottleStats {
   trackedAccounts: number
   penalised: number
   inFlight: number
+}
+
+// ── Traffic (mirrors services/request-metrics.service.ts) ─────────────
+
+export type TrafficRange = '24h' | '7d' | '30d'
+
+export interface TrafficStats {
+  requests: number
+  served: number
+  clientErrors: number
+  serverErrors: number
+  /** Refused by any throttle layer, penalty box included. */
+  rateLimited: number
+  limitedBy: { ip: number; key: number; account: number; concurrency: number; penalty: number }
+  quotaRefused: number
+  denied: number
+  avgMs: number | null
+  p50Ms: number | null
+  p95Ms: number | null
+  p99Ms: number | null
+}
+
+export interface TrafficPoint extends TrafficStats {
+  t: string
+}
+
+export interface CallerTraffic extends TrafficStats {
+  /** Account id, or `@service` / `@anonymous` / `@unidentified`. */
+  subject: string
+  apiKeyId: string | null
+  email: string | null
+  plan: string | null
+  keyName: string | null
+  keyPrefix: string | null
+  rateLimitExempt: boolean
+  revoked: boolean
+}
+
+export interface TrafficReport {
+  range: TrafficRange
+  from: string
+  bucket: 'hour' | 'day'
+  latencyBoundsMs: number[]
+  totals: TrafficStats
+  series: TrafficPoint[]
+  byEndpoint: (TrafficStats & { endpoint: string })[]
+  byCaller: CallerTraffic[]
+  throttle: {
+    trackedAddresses: number
+    trackedKeys: number
+    trackedAccounts: number
+    trackedVisitors: number
+    penalised: number
+    inFlight: number
+  }
 }
