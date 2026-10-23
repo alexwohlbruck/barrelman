@@ -8,6 +8,7 @@ import { describe, expect, it } from 'bun:test'
 import { buildDecks, type Deck } from './build'
 import { along, beside, crossings, VERTICAL_CURVE, heightAt as profileAt, mercator, type Point } from './profile'
 import { recorded } from './recorded'
+import { deckDefects } from './continuity'
 
 const { input, ground } = await recorded('brooklyn-bridge')
 const decks = await buildDecks(input, ground)
@@ -55,9 +56,22 @@ describe('the Brooklyn Bridge', () => {
     expect(heightAt(promenade, midspan)).toBeGreaterThan(heightAt(roadways[0], midspan) + 3)
   })
 
-  it('keeps the promenade up between the roadways where it runs on over the anchorage', () => {
-    const promenade = carrying(439842790)
-    expect(Math.min(promenade.heights[0], promenade.heights[promenade.heights.length - 1]) - water).toBeGreaterThan(20)
+  it('keeps the promenade up between the roadways where it runs on over the anchorages', () => {
+    for (const [lng, lat] of [[-74.00091, 40.70931], [-73.99171, 40.70201]]) {
+      const anchorage = mercator(lng, lat)
+      const promenade = decks.filter(d => d.kind === 'path').sort((a, b) => beside(a.points, anchorage).distance - beside(b.points, anchorage).distance)[0]
+      expect(heightAt(promenade, anchorage) - water).toBeGreaterThan(20)
+    }
+  })
+
+  it('runs the promenade as one walkway from the span down to its entrance at each end', () => {
+    // Mapped as short footbridges over each street with untagged stretches between them.
+    const brooklyn = carrying(439842769)
+    expect(brooklyn).toBe(carrying(808611029))
+    expect(brooklyn.grounded.filter(Boolean)).toHaveLength(1)
+    const manhattan = carrying(439842783)
+    expect(manhattan).toBe(carrying(808611022))
+    expect(manhattan.grounded.filter(Boolean)).toHaveLength(1)
   })
 
   it('carries its roadways and promenade on vertical curves, with no bump where the camber meets the approaches or a neighbour', () => {
@@ -132,5 +146,30 @@ describe('the interchange at its Manhattan end', () => {
     const [at] = crossings(over.points, under.points, 2, d)
     const p = over.points[Math.round(at / 6)]
     expect(heightAt(over, p) - heightAt(under, p)).toBeGreaterThan(5)
+  })
+})
+
+describe('the decks around the bridge, end to end', () => {
+  const [w, sth, e, n] = [-74.005, 40.6995, -73.987, 40.713]
+  const defects = deckDefects(decks).filter(({ at: [lng, lat] }) => lng >= w && lng <= e && lat >= sth && lat <= n)
+  const of = (kind: string) => defects.filter(d => d.kind === kind)
+
+  it('leaves no scrap of deck standing alone, meeting nothing at either end', () => {
+    expect(of('orphan')).toEqual([])
+  })
+
+  it('keeps each deck to its own lanes and outline: no plates where it passes under another bridge or a walkway lands beside it', () => {
+    expect(Math.max(0, ...of('bulge').map(d => d.size))).toBeLessThan(6)
+    expect(Math.max(0, ...of('width').map(d => d.size))).toBeLessThan(5)
+  })
+
+  it('stops a deck in mid air only where OSM leaves it so', () => {
+    // The Brooklyn-Queens Expressway's short bridges between embankment stretches, and a ramp into the Brooklyn anchorage.
+    expect(of('dangling').length).toBeLessThanOrEqual(3)
+  })
+
+  it('carries a ramp merging into a main line at the main line\'s height along the merge', () => {
+    expect(of('overlap').length).toBeLessThanOrEqual(4)
+    expect(Math.max(0, ...of('overlap').map(d => d.size))).toBeLessThan(2)
   })
 })
