@@ -165,7 +165,8 @@ class MeshBaker {
       const { shift, ...made } = endsMade(s.chain, s.z, s.groundAt, this.input.ground)
       Object.assign(s, made, { piers: s.piers.map(at => at + shift) })
     }
-    const open = joinNeighbours(solved)
+    // Joined and faired where they were solved: only the parapets between them come out here.
+    const open = joinNeighbours(solved.map(s => ({ ...s, fixed: true })))
     const bridgeAreas = this.input.outlines.map(rings => ({ rings, bounds: boundsOf(rings[0]) }))
     const inner = innerSides(solved, bridgeAreas)
     const mouths = mouthSides(solved)

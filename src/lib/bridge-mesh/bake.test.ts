@@ -37,6 +37,15 @@ test('encodes aligned GPU streams with a versioned header', () => {
   expect(positions.length).toBeLessThan(result.mesh.position.length)
 })
 
+test('keeps the heights decks were solved and faired at where they run side by side', () => {
+  const beside = (id: string, north: number, height: number): Deck => {
+    const line = [[-74, 40.7], [-73.999, 40.7], [-73.998, 40.7]].map(([x, y]) => mercator(x, y + north / 111_000))
+    return { ...deck, id, points: line, heights: [height, height, height], grounded: [false, false], midpoint: line[1] }
+  }
+  const { stands } = bakeBridges({ ...input, decks: [beside('low', 0, 10), beside('high', 9, 11)] }, MATERIAL_PALETTE)
+  expect(Math.max(...stands[0].surface.z)).toBeCloseTo(10, 1)
+})
+
 test('lifts a structure with the terrain at its feet and with the smoothed terrain overhead', () => {
   // An 8 m wide cutting 40 m deep, as a road or stream the deck spans.
   const metre = 1 / 30_400_000
