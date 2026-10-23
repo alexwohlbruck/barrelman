@@ -8,6 +8,7 @@ import {
   CreditCard,
   Database,
   FlaskConical,
+  Gauge,
   KeyRound,
   LayoutDashboard,
   ListChecks,
@@ -36,6 +37,7 @@ const accountNav = [
 const adminNav = [
   { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { to: '/accounts', label: 'Accounts', icon: Users },
+  { to: '/traffic', label: 'Traffic', icon: Gauge },
   { to: '/regions', label: 'Regions', icon: MapPin },
   { to: '/scripts', label: 'Scripts', icon: TerminalSquare },
   { to: '/schedules', label: 'Schedules', icon: CalendarClock },

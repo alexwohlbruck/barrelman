@@ -39,6 +39,8 @@ import { updateRouteCentroids } from './services/gtfs.service'
 import { syncPortolanStopLinks } from './services/portolan-links.service'
 import { startTransitWarmup } from './lib/warmup'
 import { flushUsage, startUsageFlush } from './services/usage.service'
+import { flushRequestMetrics, startRequestMetricsFlush } from './services/request-metrics.service'
+import { requestMetrics } from './middleware/request-metrics'
 import { startOverageReporting } from './services/overage.service'
 import { startAccountSweep } from './services/account-maintenance.service'
 import { startScheduler } from './services/scheduler.service'
@@ -125,6 +127,8 @@ void syncPortolanStopLinks().catch((err) => console.warn('[startup] portolan lin
  * silently become an account-takeover bug.
  */
 const app = new Elysia()
+  // First, so its onRequest timestamp is taken before anything else runs.
+  .use(requestMetrics)
   .use(cors({ credentials: false }))
   .use(swagger(swaggerConfig))
   .use(healthRoutes)
@@ -166,6 +170,7 @@ startTransitWarmup()
 // Metered usage is buffered in memory and written periodically — see
 // services/usage.service.ts for why a write per request is not viable here.
 startUsageFlush()
+startRequestMetricsFlush()
 
 // Metered overage is batched to the billing provider on a timer — see
 // services/overage.service.ts. No-op unless Polar is configured.
@@ -187,7 +192,7 @@ assertAuthConfigured()
 // doesn't discard the last few seconds of billing counters.
 for (const signal of ['SIGTERM', 'SIGINT'] as const) {
   process.on(signal, () => {
-    void flushUsage().finally(() => process.exit(0))
+    void Promise.allSettled([flushUsage(), flushRequestMetrics()]).finally(() => process.exit(0))
   })
 }
 

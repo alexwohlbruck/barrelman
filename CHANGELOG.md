@@ -10,6 +10,27 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.10.23] - 2026-10-23
+
+### Added
+
+* **Rate limits can be turned off for one key.** In the console, an
+  administrator can switch off rate limiting for a single API key. It works
+  like the `first-party` plan, but only for that key: the per-minute limits
+  and concurrency caps no longer apply to it, while credits, scopes, origins
+  and suspension still do. The account's other keys stay limited.
+* **A Traffic page** at `/console/traffic` shows how many requests were
+  rate-limited and by which limit, how many were refused for credits or bad
+  keys, server errors, and p50/p95/p99 response times per endpoint group. Data
+  is hourly, kept for 90 days by default
+  (`BARRELMAN_REQUEST_METRICS_RETENTION_DAYS`). It ranks the accounts and keys
+  that hit limits most, with each key's rate-limit switch beside it. Service
+  key and anonymous traffic is included.
+* **Clicking an account in the console opens a detail pane** with its usage,
+  that account's traffic, and its keys. An administrator can rename a key,
+  change its scopes or allowed origins, or revoke it from the pane, and every
+  change is logged to the account's history.
+
 ## [0.10.22] - 2026-10-17
 
 ### Fixed
