@@ -46,3 +46,35 @@ test('requires tile authentication when configured', async () => {
     expect(res.status).toBe(401)
   } finally { if (old === undefined) delete process.env.BARRELMAN_API_KEY; else process.env.BARRELMAN_API_KEY = old }
 })
+
+test('bundles the meshes a tile meets, revalidated by ETag', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'bridge-mesh-'))
+  directories.push(dir)
+  const a = new Uint8Array([66, 82, 77, 49, 9]), b = new Uint8Array([66, 82, 77, 49, 1, 2, 3, 4])
+  const byName = new Map([[await writeBridgeMesh(a, dir), a], [await writeBridgeMesh(b, dir), b]])
+  const names = [...byName.keys()].sort()
+  const asked: number[][] = []
+  const app = createBridgeMeshRoutes(dir, async (z, x, y) => { asked.push([z, x, y]); return names })
+  const res = await app.handle(new Request('http://localhost/tiles/bridges/tiles/14/4823/6160', { headers: { 'accept-encoding': 'gzip' } }))
+  expect(res.status).toBe(200)
+  expect(asked).toEqual([[14, 4823, 6160]])
+  expect(res.headers.get('content-encoding')).toBe('gzip')
+  const bytes = Bun.gunzipSync(new Uint8Array(await res.arrayBuffer()))
+  const view = new DataView(bytes.buffer, bytes.byteOffset)
+  expect(view.getUint32(0, true)).toBe(0x31545242)
+  expect(view.getUint32(4, true)).toBe(2)
+  const first = Buffer.from(bytes.subarray(8, 40)).toString('hex')
+  expect(`${first}.brm`).toBe(names[0])
+  expect(bytes.subarray(44, 44 + view.getUint32(40, true))).toEqual(byName.get(names[0])!)
+  const tag = res.headers.get('etag')!
+  const again = await app.handle(new Request('http://localhost/tiles/bridges/tiles/14/4823/6160', { headers: { 'if-none-match': tag } }))
+  expect(again.status).toBe(304)
+})
+
+test('bundles only at their zoom', async () => {
+  const app = createBridgeMeshRoutes('/nonexistent', async () => [])
+  expect((await app.handle(new Request('http://localhost/tiles/bridges/tiles/15/1/1'))).status).toBe(400)
+  const empty = await app.handle(new Request('http://localhost/tiles/bridges/tiles/14/1/1'))
+  expect(empty.status).toBe(200)
+  expect(new Uint8Array(await empty.arrayBuffer()).byteLength).toBe(8)
+})
