@@ -187,7 +187,7 @@ export function decodeBridge(bytes: Uint8Array) {
   const header = JSON.parse(new TextDecoder().decode(bytes.subarray(12, 12 + view.getUint32(4, true))))
   let offset = start
   const read = ({ type, delta = 0, scale = 1 }: Layout, length: number) => {
-    const raw = new type(bytes.buffer.slice(bytes.byteOffset + offset, bytes.byteOffset + offset + length * type.BYTES_PER_ELEMENT))
+    const raw = new type((bytes.buffer as ArrayBuffer).slice(bytes.byteOffset + offset, bytes.byteOffset + offset + length * type.BYTES_PER_ELEMENT))
     offset = align(offset + raw.byteLength)
     const out = new Float64Array(length)
     for (let i = 0; i < length; i++) out[i] = raw[i] + (delta && i >= delta ? out[i - delta] : 0)
