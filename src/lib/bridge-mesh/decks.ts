@@ -1276,10 +1276,23 @@ export function subtractConvex(poly: Point[], hole: Point[]): Point[][] {
   for (const [a, n] of insides(hole)) {
     if (rest.length < 3) break
     const outside = halfPlane(rest, a, [-n[0], -n[1]])
-    if (outside.length >= 3) out.push(outside)
+    // A cut along an edge the polygon only touches leaves a sliver with no area, which every later cut would split again.
+    if (outside.length >= 3 && areaOf(outside) > SLIVER) out.push(outside)
     rest = halfPlane(rest, a, n)
   }
   return out
+}
+
+/** Mercator units squared below which a piece is a sliver: about a thousandth of a square metre. */
+const SLIVER = 1e-18
+
+/** A polygon's unsigned area, taken about its first point so small pieces far from the origin keep their precision. */
+export function areaOf(poly: Point[]): number {
+  const [x0, y0] = poly[0]
+  let twice = 0
+  for (let i = 1; i < poly.length - 1; i++)
+    twice += (poly[i][0] - x0) * (poly[i + 1][1] - y0) - (poly[i + 1][0] - x0) * (poly[i][1] - y0)
+  return Math.abs(twice) / 2
 }
 
 /**

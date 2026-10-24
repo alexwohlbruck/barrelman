@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test'
-import { absorbPaths, absorbTracks, deckMeshOut, standing, touchdown, underWay, runsWith, TOUCHDOWN, SEAM, UNDER_SLACK, metresPerUnit, arch, beside, besideGround, boundsOf, chains, covered, dedupe, clip, cutOut, parseLine, parseProfile, parseShape, deckMesh, densify, fitEdges, joinNeighbours, onDeck, onOwnDeck, rounded, smooth, solve, steady, along, COLUMN_SIDES, LAYER_CLEARANCE, MAX_GRADE, ROUND_TURN, type Chain, type Point } from './decks'
+import { absorbPaths, absorbTracks, deckMeshOut, standing, touchdown, underWay, subtractConvex, areaOf, runsWith, TOUCHDOWN, SEAM, UNDER_SLACK, metresPerUnit, arch, beside, besideGround, boundsOf, chains, covered, dedupe, clip, cutOut, parseLine, parseProfile, parseShape, deckMesh, densify, fitEdges, joinNeighbours, onDeck, onOwnDeck, rounded, smooth, solve, steady, along, COLUMN_SIDES, LAYER_CLEARANCE, MAX_GRADE, ROUND_TURN, type Chain, type Point } from './decks'
 
 // About a metre in mercator units at Charlotte's latitude.
 const M = 1 / 32780000
@@ -589,3 +589,17 @@ describe('rounded', () => {
     expect(rounded(straight, [1, 2, 3], [0, 0, 0]).chain).toBe(straight)
   })
 })
+
+describe('subtracting convex pieces', () => {
+  test('a long sliver cut by a run of quads sharing edges stays a handful of pieces', () => {
+    const sliver: Point[] = [line(0)[0], line(420)[0], offset(4, 420)[0]]
+    const quads = Array.from({ length: 80 }, (_, i): Point[] => [offset(-2, i * 5)[0], offset(-2, i * 5 + 5)[0], offset(1, i * 5 + 5)[0], offset(1, i * 5)[0]])
+    let rest = [sliver]
+    for (const quad of quads) rest = rest.flatMap(piece => subtractConvex(piece, quad))
+    expect(rest.length).toBeLessThan(200)
+    const kept = rest.reduce((a, p) => a + areaOf(p), 0)
+    expect(kept).toBeGreaterThan(0)
+    expect(kept).toBeLessThan(areaOf(sliver))
+  })
+})
+
