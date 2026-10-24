@@ -10,6 +10,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.10.24] - 2026-10-23
+
 ### Changed
 
 * **The API keys page has the same key controls as the admin account pane.**
