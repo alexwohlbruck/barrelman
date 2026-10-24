@@ -1,5 +1,5 @@
 import { test, expect, afterEach } from 'bun:test'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, readdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createBridgeMeshRoutes } from './bridge-meshes'
@@ -8,12 +8,13 @@ import { writeBridgeMesh } from '../lib/bridge-mesh/files'
 const directories: string[] = []
 afterEach(async () => { for (const dir of directories.splice(0)) await rm(dir, { recursive: true, force: true }) })
 
-test('serves immutable precomputed bytes and their precompressed version', async () => {
+test('stores meshes gzipped and serves them immutable, inflated for a client that refuses gzip', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'bridge-mesh-'))
   directories.push(dir)
   const bytes = new Uint8Array([66, 82, 77, 49, 1, 2, 3])
   const file = await writeBridgeMesh(bytes, dir)
   expect(await writeBridgeMesh(bytes, dir)).toBe(file)
+  expect(await readdir(dir)).toEqual([`${file}.gz`])
   const app = createBridgeMeshRoutes(dir)
   const res = await app.handle(new Request(`http://localhost/tiles/bridges/models/${file}`))
   expect(res.status).toBe(200)
