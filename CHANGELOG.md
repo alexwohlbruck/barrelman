@@ -10,6 +10,10 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Added
+
+* Detail tiles asked with `?decks=1` (z14–16) carry the 3D bridge decks drawn over them, cut to the tile, so a client draws decks with the tile instead of fetching each deck's mesh after it. Below z16 the pieces leave out paint and rails.
+
 ## [0.10.26] - 2026-10-24
 
 ### Added
