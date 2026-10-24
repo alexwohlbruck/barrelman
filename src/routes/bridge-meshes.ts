@@ -43,7 +43,8 @@ export function createBridgeMeshRoutes(directory = bridgeMeshDirectory(), lookup
       set.headers.etag = tag
       set.headers['cache-control'] = INDEX_CACHE_CONTROL
       set.headers['access-control-allow-origin'] = '*'
-      if (headers['if-none-match'] === tag) {
+      // A CDN that compresses the body weakens the tag it passes back (W/"…").
+      if (headers['if-none-match']?.split(',').some(t => t.trim().replace(/^W\//, '') === tag)) {
         set.status = 304
         return ''
       }

@@ -58,6 +58,8 @@ test('indexes the meshes a tile meets with their bounds, revalidated by ETag', a
   expect(await res.json()).toEqual({ decks: [[file, -74.0012346, 40.7, -73.99, 40.71]] })
   const again = await app.handle(new Request('http://localhost/tiles/bridges/index/14/4824/6159', { headers: { 'if-none-match': res.headers.get('etag')! } }))
   expect(again.status).toBe(304)
+  const weak = await app.handle(new Request('http://localhost/tiles/bridges/index/14/4824/6159', { headers: { 'if-none-match': `"other", W/${res.headers.get('etag')}` } }))
+  expect(weak.status).toBe(304)
 })
 
 test('indexes only at their zoom', async () => {
