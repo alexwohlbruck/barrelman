@@ -121,9 +121,13 @@ export function encodeBridge(built: BakedBridge, at: (point: [number, number]) =
   const unique = arrays.map(() => [] as number[])
   const seen = new Map<string, number>()
   const indices = new Uint32Array(ground.length)
+  // A vertex is keyed by the bits of its values, read as UTF-16 units: far cheaper than printing them.
+  const values = new Float32Array(strides.reduce((a, b) => a + b, 0))
+  const bits = new Uint16Array(values.buffer)
   for (let i = 0; i < ground.length; i++) {
-    const values = arrays.flatMap((array, stream) => Array.from(array.subarray(i * strides[stream], (i + 1) * strides[stream])))
-    const key = values.join(',')
+    for (let stream = 0, at = 0; stream < strides.length; stream++)
+      for (let k = 0; k < strides[stream]; k++) values[at++] = arrays[stream][i * strides[stream] + k]
+    const key = String.fromCharCode(...bits)
     let index = seen.get(key)
     if (index === undefined) {
       index = seen.size
