@@ -12,7 +12,7 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ### Added
 
-* `GET /tiles/bridges/tiles/14/{x}/{y}` serves every deck mesh a tile meets in one bundle, so clients load decks alongside their map tiles.
+* `GET /tiles/bridges/index/14/{x}/{y}` lists the deck meshes a tile meets with their bounds, so clients fetch a view's meshes alongside its map tiles.
 * Build Bridge Decks takes `--from w,s` to resume a run at a cell.
 
 ### Changed
