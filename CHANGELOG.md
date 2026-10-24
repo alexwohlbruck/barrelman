@@ -10,6 +10,22 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.10.26] - 2026-10-24
+
+### Added
+
+* `GET /tiles/bridges/index/14/{x}/{y}` lists the deck meshes a tile meets with their bounds, so clients fetch a view's meshes alongside its map tiles.
+* Build Bridge Decks takes `--from w,s` to resume a run at a cell.
+
+### Changed
+
+* Deck meshes carry only the stretches of ground roads that pass under them, cutting dense downtown meshes by up to half.
+* Paving laid on decks takes about an eighth of the triangles it did, so deck meshes are about a third smaller and quicker to draw.
+
+### Fixed
+
+* Build Bridge Decks no longer runs out of memory on narrow side-by-side decks, which stopped a US-wide run in Albuquerque.
+
 ## [0.10.25] - 2026-10-24
 
 ### Added

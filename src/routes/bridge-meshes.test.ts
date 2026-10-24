@@ -46,3 +46,24 @@ test('requires tile authentication when configured', async () => {
     expect(res.status).toBe(401)
   } finally { if (old === undefined) delete process.env.BARRELMAN_API_KEY; else process.env.BARRELMAN_API_KEY = old }
 })
+
+test('indexes the meshes a tile meets with their bounds, revalidated by ETag', async () => {
+  const file = `${'a'.repeat(64)}.brm`
+  const asked: number[][] = []
+  const app = createBridgeMeshRoutes('/nonexistent', async (z, x, y) => { asked.push([z, x, y]); return [[file, -74.00123456789, 40.7, -73.99, 40.71], ['../secret', 0, 0, 1, 1]] })
+  const res = await app.handle(new Request('http://localhost/tiles/bridges/index/14/4824/6159'))
+  expect(res.status).toBe(200)
+  expect(asked).toEqual([[14, 4824, 6159]])
+  expect(res.headers.get('cache-control')).toContain('stale-while-revalidate')
+  expect(await res.json()).toEqual({ decks: [[file, -74.0012346, 40.7, -73.99, 40.71]] })
+  const again = await app.handle(new Request('http://localhost/tiles/bridges/index/14/4824/6159', { headers: { 'if-none-match': res.headers.get('etag')! } }))
+  expect(again.status).toBe(304)
+  const weak = await app.handle(new Request('http://localhost/tiles/bridges/index/14/4824/6159', { headers: { 'if-none-match': `"other", W/${res.headers.get('etag')}` } }))
+  expect(weak.status).toBe(304)
+})
+
+test('indexes only at their zoom', async () => {
+  const app = createBridgeMeshRoutes('/nonexistent', async () => [])
+  expect((await app.handle(new Request('http://localhost/tiles/bridges/index/15/1/1'))).status).toBe(400)
+  expect(await (await app.handle(new Request('http://localhost/tiles/bridges/index/14/1/1'))).json()).toEqual({ decks: [] })
+})
