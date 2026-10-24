@@ -10,12 +10,14 @@
  * written, in one transaction. Any box works, on any grid, as often as wanted.
  */
 import type postgres from 'postgres'
+import { bakeDeckFiles } from './bridge-meshes'
 import type { Bbox } from '../src/config/regions'
 import { buildDecks, FORMAT, STEP, type Crossed, type Deck, type DeckInput } from '../src/lib/bridge-decks/build'
 import type { Dem } from '../src/lib/bridge-decks/dem'
 import { clip, contains, degreeBox, toDegrees, toUnits, UNITS_PER_DEGREE, type UnitBox, type UnitPoint } from '../src/lib/bridge-decks/grid'
 import type { Built } from '../src/lib/bridge-decks/queue'
-import { lngLat, mercator, type Kind, type Point, type Way } from '../src/lib/bridge-decks/profile'
+import { deckLevel, metres, type Support } from '../src/lib/bridge-decks/elevation'
+import { inside, lngLat, mercator, metresPerUnit, type Kind, type Point, type Way } from '../src/lib/bridge-decks/profile'
 
 type Sql = postgres.Sql
 
@@ -42,14 +44,12 @@ const WATER: Array<[string, string]> = [['natural', 'water'], ['waterway', 'rive
 const anyTag = (sql: Sql, pairs: Array<[string, string]>) =>
   pairs.map(([k, v]) => sql`g.tags->>${k} = ${v}`).reduce((a, b) => sql`${a} OR ${b}`)
 
+/** Metres beyond its outline a bridge's tower or anchorage may stand, drawn as a building of its own: an anchorage often abuts the outline's end. */
+const SUPPORT_NEAR = 60
+
 /** Decks per INSERT: one statement per batch rather than a round trip per deck. */
 const INSERT_BATCH = 500
 
-const metres = (value: string | null): number | null => {
-  const m = value?.match(/^\s*(-?[0-9]+(?:\.[0-9]+)?)\s*(m|ft|')?\s*$/)
-  if (!m) return null
-  return Number(m[1]) * (m[2] === 'ft' || m[2] === "'" ? 0.3048 : 1)
-}
 
 type Row = { id: string; kind: Kind; highway: string | null; road: string | null; layer: string | null; width: string | null;
   lanes: string | null; oneway: string | null; wikidata: string | null; coords: number[][] }
@@ -74,8 +74,17 @@ function toWay(r: Row): Way {
   const tagged = metres(r.width)
   const width = kind === 'rail' ? 5 : kind === 'path' ? (tagged && tagged < 12 ? tagged : 3)
     : tagged && tagged >= 2.5 && tagged <= 60 ? tagged : lanes * (LANE[r.highway!] ?? 3.3)
-  return { id: Number(r.id), points: r.coords.map(([lng, lat]) => mercator(lng, lat)), kind, layer: Math.max(1, Number.parseInt(r.layer ?? '') || 1), width, road: r.road ?? undefined }
+  const layer = Number.parseInt(r.layer ?? '')
+  return { id: Number(r.id), points: r.coords.map(([lng, lat]) => mercator(lng, lat)), kind, layer: Math.max(1, layer || 1), untagged: Number.isNaN(layer), width, road: r.road ?? undefined }
 }
+
+/** Longest untagged stretch of a walkway between two of its footbridges carried on as one deck: shorter than coming down and climbing back. */
+const GAP_MAX = 200
+const isGap = (sql: Sql) => sql`
+  osm_type = 'W' AND geom_type = 'line' AND COALESCE(tags->>'bridge', 'no') = 'no' AND COALESCE(tags->>'tunnel', 'no') = 'no'
+  AND COALESCE(tags->>'layer', '0') = '0' AND bridge_deck_class(tags) = 'path' AND GeometryType(geom) = 'LINESTRING'
+  AND COALESCE(tags->>'footway', '') NOT IN ('sidewalk', 'crossing')
+  AND ST_Length(geom::geography) < ${GAP_MAX}`
 
 /** Bridge ways around a box, followed beyond it for as long as a deck carries on. */
 export async function waysAround(sql: Sql, [w, s, e, n]: Bbox): Promise<Row[]> {
@@ -84,6 +93,7 @@ export async function waysAround(sql: Sql, [w, s, e, n]: Bbox): Promise<Row[]> {
   const seen = new Set(rows.map(r => r.id))
   // Ends already looked beyond: each round asks only about the ends the last one opened.
   const asked = new Set<string>()
+  const gapIds = new Set<string>()
   for (let round = 0; round < 100; round++) {
     const degree = new Map<string, number>()
     for (const r of rows) for (const c of [r.coords[0], r.coords[r.coords.length - 1]]) degree.set(c.join(','), (degree.get(c.join(',')) ?? 0) + 1)
@@ -94,6 +104,25 @@ export async function waysAround(sql: Sql, [w, s, e, n]: Bbox): Promise<Row[]> {
       SELECT DISTINCT ON (b.id) b.* FROM unnest(${open.map(c => c[0])}::float8[], ${open.map(c => c[1])}::float8[]) AS o(lng, lat)
       CROSS JOIN LATERAL (${bridgeWays(sql)}
         WHERE geom && ST_Expand(ST_SetSRID(ST_MakePoint(o.lng, o.lat), 4326), 1e-7) AND ${isBridge(sql)}) b`
+    // A named walkway mapped as footbridges over each street with untagged stretches between is one deck across them.
+    const pathEnds = open.flatMap(c => {
+      const r = rows.find(r => r.kind === 'path' && !gapIds.has(r.id) && r.road && !r.road.endsWith('/') &&
+        [r.coords[0], r.coords[r.coords.length - 1]].some(e => e[0] === c[0] && e[1] === c[1]))
+      return r ? [{ c, road: r.road!, id: r.id }] : []
+    })
+    const gaps: Row[] = pathEnds.length ? await sql`
+      SELECT DISTINCT ON (g.id) g.* FROM unnest(${pathEnds.map(e => e.c[0])}::float8[], ${pathEnds.map(e => e.c[1])}::float8[],
+        ${pathEnds.map(e => e.road)}::text[], ${pathEnds.map(e => e.id)}::text[]) AS o(lng, lat, road, id)
+      CROSS JOIN LATERAL (${bridgeWays(sql)}
+        WHERE geom && ST_Expand(ST_SetSRID(ST_MakePoint(o.lng, o.lat), 4326), 1e-7) AND ${isGap(sql)}) g
+      CROSS JOIN LATERAL (SELECT CASE WHEN abs((g.coords->0->>0)::float8 - o.lng) + abs((g.coords->0->>1)::float8 - o.lat) < 1e-9
+        THEN ST_SetSRID(ST_MakePoint((g.coords->-1->>0)::float8, (g.coords->-1->>1)::float8), 4326)
+        ELSE ST_SetSRID(ST_MakePoint((g.coords->0->>0)::float8, (g.coords->0->>1)::float8), 4326) END AS far) f
+      WHERE g.road = o.road AND EXISTS (SELECT 1 FROM geo_places b WHERE b.geom && ST_Expand(f.far, 1e-7) AND ST_DWithin(b.geom, f.far, 1e-7)
+        AND b.geom_type = 'line' AND ${isBridge(sql)} AND b.osm_id::text <> o.id
+        AND COALESCE(b.tags->>'highway', b.tags->>'railway') || '/' || COALESCE(b.tags->>'ref', b.tags->>'name', '') = o.road)` : []
+    for (const g of gaps) gapIds.add(g.id)
+    found.push(...gaps)
     const fresh = found.filter(r => !seen.has(r.id))
     if (!fresh.length) break
     for (const r of fresh) seen.add(r.id)
@@ -110,25 +139,37 @@ export async function inputFor(sql: Sql, rows: Row[]): Promise<DeckInput> {
   const box = sql`ST_MakeEnvelope(${w}, ${s}, ${e}, ${n}, 4326)`
 
   const ends = [...new Map(rows.flatMap(r => [r.coords[0], r.coords[r.coords.length - 1]]).map(c => [c.join(','), c])).values()]
-  const landed: Array<{ i: number }> = await sql`
-    SELECT o.i FROM unnest(${ends.map(c => c[0])}::float8[], ${ends.map(c => c[1])}::float8[]) WITH ORDINALITY AS o(lng, lat, i)
-    WHERE EXISTS (
-      SELECT 1 FROM geo_places g
-      WHERE g.geom_type = 'line' AND g.geom && ST_Expand(ST_SetSRID(ST_MakePoint(o.lng, o.lat), 4326), 1e-7)
-        AND (g.tags ? 'highway' OR g.tags ? 'railway') AND COALESCE(g.tags->>'bridge', 'no') = 'no'
-        AND ST_DWithin(g.geom, ST_SetSRID(ST_MakePoint(o.lng, o.lat), 4326), 1e-7))`
-  const onGround = new Set(landed.map(({ i }) => {
+  const landed: Array<{ i: number; raised: boolean }> = await sql`
+    SELECT o.i, bool_and(COALESCE(g.tags->>'embankment', 'no') = 'yes') AS raised
+    FROM unnest(${ends.map(c => c[0])}::float8[], ${ends.map(c => c[1])}::float8[]) WITH ORDINALITY AS o(lng, lat, i)
+    JOIN geo_places g ON g.geom_type = 'line' AND g.geom && ST_Expand(ST_SetSRID(ST_MakePoint(o.lng, o.lat), 4326), 1e-7)
+      AND (g.tags ? 'highway' OR g.tags ? 'railway') AND COALESCE(g.tags->>'bridge', 'no') = 'no'
+      AND ST_DWithin(g.geom, ST_SetSRID(ST_MakePoint(o.lng, o.lat), 4326), 1e-7)
+      AND g.osm_id <> ALL(${rows.map(r => r.id)}::bigint[])
+    GROUP BY o.i`
+  const at = ({ i }: { i: number }) => {
     const [lng, lat] = ends[Number(i) - 1]
     return mercator(lng, lat).join(',')
-  }))
+  }
+  const onGround = new Set(landed.map(at))
+  const raised = new Set(landed.filter(l => l.raised).map(at))
 
   // Outlines are rare: found by their tag's index, then the box.
-  const outlineRows: Array<{ id: string; coords: number[][][][] }> = await sql`
-    SELECT (CASE osm_type WHEN 'W' THEN 'way/' ELSE 'relation/' END) || osm_id AS id,
+  const outlineRows: Array<{ id: string; tags: Record<string, string>; coords: number[][][][] }> = await sql`
+    SELECT (CASE osm_type WHEN 'W' THEN 'way/' ELSE 'relation/' END) || osm_id AS id, tags,
            ST_AsGeoJSON(ST_Multi(geom))::json->'coordinates' AS coords
     FROM geo_places WHERE tags @> '{"man_made": "bridge"}' AND geom_type = 'area' AND geom && ${box}
     ORDER BY osm_type, osm_id`
-  const outlines = outlineRows.flatMap(o => o.coords.map(rings => ({ id: o.id, rings: rings.map(ring => ring.map(([lng, lat]) => mercator(lng, lat))) })))
+  const supportRows: Array<{ kind: Support['kind']; height: string | null; coords: number[][][][] }> = outlineRows.length ? await sql`
+    SELECT tags->>'bridge:support' AS kind, tags->>'height' AS height, ST_AsGeoJSON(ST_Multi(geom))::json->'coordinates' AS coords
+    FROM geo_places WHERE tags->>'bridge:support' IN ('pylon', 'abutment') AND geom_type = 'area' AND geom && ${box}` : []
+  const supports: Support[] = supportRows.flatMap(r => r.coords.map(rings => ({ kind: r.kind, height: metres(r.height), ring: rings[0].map(([lng, lat]) => mercator(lng, lat)) })))
+  const outlines = outlineRows.flatMap(o => o.coords.map(rings => {
+    const shape = rings.map(ring => ring.map(([lng, lat]) => mercator(lng, lat)))
+    const near = SUPPORT_NEAR / metresPerUnit(shape[0][0][1])
+    const mine = supports.filter(s => s.ring.some(p => inside(p, shape[0]) || shape[0].some(q => Math.hypot(q[0] - p[0], q[1] - p[1]) < near)))
+    return { id: o.id, rings: shape, ...deckLevel(o.tags, mine) }
+  }))
 
   const [{ surfaces }] = await sql`SELECT to_regclass('road_surfaces') IS NOT NULL AS surfaces`
   const kerbs: Point[] = surfaces
@@ -163,7 +204,7 @@ export async function inputFor(sql: Sql, rows: Row[]): Promise<DeckInput> {
   const water = waterRows.flatMap(r => (r.coords ?? []).map(polygon => polygon[0].map(([lng, lat]) => mercator(lng, lat))))
 
   const wikidata = new Map(rows.flatMap(r => (r.wikidata ? [[Number(r.id), r.wikidata] as [number, string]] : [])))
-  return { ways, onGround, outlines, kerbs, crossed, water, wikidata }
+  return { ways, onGround, raised, outlines, kerbs, crossed, water, wikidata }
 }
 
 /**
@@ -208,6 +249,7 @@ export async function rebuildBoxes(sql: Sql, dem: Dem, boxes: UnitBox[], record:
     return { d, at: [toUnits(lng), toUnits(lat)] as UnitPoint, lngLats, box: [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)] as Bbox }
   })
   const mine = placed.filter(p => boxes.some(b => contains(b, p.at)))
+  const meshes = await bakeDeckFiles(sql, dem, mine.map(p => p.d), decks)
   const deleted = new Set<string>()
   await sql.begin(async rawTx => {
     const tx = rawTx as unknown as Sql
@@ -247,6 +289,7 @@ export async function rebuildBoxes(sql: Sql, dem: Dem, boxes: UnitBox[], record:
         throw new DeckConflict(ids, held.map(h => [h.x, h.y]))
       }
     }
+    for (const [id, mesh] of meshes) await tx`UPDATE bridge_decks SET mesh = ${mesh} WHERE id = ${id}`
     for (const [w, s, e, n] of record)
       await tx`INSERT INTO bridge_deck_cells (cell, w, s, e, n, box)
         VALUES (${[w, s, e, n].join(',')}, ${w}, ${s}, ${e}, ${n},

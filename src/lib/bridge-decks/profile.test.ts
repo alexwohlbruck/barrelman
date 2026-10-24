@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'bun:test'
 import {
-  absorbPaths, absorbTracks, along, landing, LANDING, arch, chains, crossings, fitEdges, joinNeighbours, MAX_GRADE, mercator, resample, smooth, solve, steady, widen,
+  cambered,
+  fair,
+  VERTICAL_CURVE,
+  PINNED,
+  absorbPaths, absorbTracks, along, clearOfWalkways, detab, landing, LANDING, arch, chains, crossings, fitEdges, joinNeighbours, MAX_GRADE, mercator, resample, smooth, solve, steady, widen,
   type Chain, type Point, type Way,
 } from './profile'
 
@@ -20,11 +24,18 @@ describe('chains', () => {
     expect(along(deck.points).at(-1)).toBeCloseTo(150, 0)
   })
 
-  it('carries on through the straightest pair where three ways meet, and never between layers', () => {
+  it('carries on through the straightest pair where three ways meet, and never between layers there', () => {
     const branch: Way = { ...way(3, 0, 0), points: [east(50), east(80, 40)] }
     const decks = chains([way(1, 0, 50), way(2, 50, 100), branch])
     expect(decks.map(d => d.ways)).toEqual([[1, 2], [3]])
-    expect(chains([way(1, 0, 50), way(2, 50, 100, 2)])).toHaveLength(2)
+    expect(chains([way(1, 0, 50), way(2, 50, 100, 2), branch]).map(d => d.ways)).toEqual([[1, 3], [2]])
+  })
+
+  it('carries one deck on where two ways meet alone and one has no layer', () => {
+    const [deck] = chains([{ ...way(1, 0, 50), untagged: true }, way(2, 50, 100, 3)])
+    expect(deck.ways).toEqual([1, 2])
+    expect(deck.layer).toBe(3)
+    expect(chains([way(1, 0, 50), way(2, 50, 100, 3)])).toHaveLength(2)
   })
 
   it('carries a road on through a junction rather than the ramp that leaves it straighter', () => {
@@ -102,6 +113,12 @@ describe('absorbPaths', () => {
     expect(left[3]).toBeCloseTo(7.5, 1)
     expect(left[50]).toBe(4)
     expect(Math.max(...wide.edges)).toBeCloseTo(7.5, 1)
+  })
+
+  it('keeps a walkway of its own that runs apart from the road, rather than widen the road out to it', () => {
+    const road: Chain = { ways: [1], points: resample([east(0), east(600)], 6), kind: 'road', layer: 1, edges: [4, 4] }
+    const walkway: Chain = { ways: [2], points: [east(0, 11), east(40, 11)], kind: 'path', layer: 1, edges: [1.5, 1.5] }
+    expect(absorbPaths([road, walkway])).toHaveLength(2)
   })
 })
 
@@ -257,6 +274,13 @@ describe('joinNeighbours', () => {
     expect(main.z.every(z => z === 100)).toBe(true)
   })
 
+  it('never lifts a roadway to a walkway beside it, which may climb away over it', () => {
+    const road = { chain: deck(0), z: deck(0).points.map(() => 100) }
+    const walkway = { chain: { ...deck(7), kind: 'path' as const, edges: [1.5, 1.5] as [number, number] }, z: deck(7).points.map(() => 101) }
+    joinNeighbours([road, walkway])
+    expect(road.z.every(z => z === 100)).toBe(true)
+  })
+
   it('joins twin tracks, but never a track to a road', () => {
     const rail = (north: number): Chain => ({ ...deck(north), kind: 'rail', edges: [2.5, 2.5] })
     const a = { chain: rail(0), z: rail(0).points.map(() => 100) }
@@ -272,5 +296,84 @@ describe('joinNeighbours', () => {
     const a = { chain: deck(0), z: deck(0).points.map(() => 100) }
     joinNeighbours([a, { chain: deck(40), z: deck(40).points.map(() => 101) }, { chain: deck(10), z: deck(10).points.map(() => 108) }])
     expect(a.z.every(z => z === 100)).toBe(true)
+  })
+})
+
+describe('cambered', () => {
+  const d = Array.from({ length: 41 }, (_, i) => i * 6)
+  const z = d.map(() => 30)
+  const camber = (from: number, to: number, height: number) => d.filter(x => x >= from && x <= to).map(at => ({ at, height, exact: true }))
+
+  it('holds a suspended span to its camber and fades back to its own grade line beyond', () => {
+    const out = cambered(z, d, camber(60, 180, 28))
+    expect(out[d.indexOf(120)]).toBe(28)
+    expect(out[0]).toBeCloseTo(30)
+    expect(out[d.length - 1]).toBeCloseTo(30)
+  })
+
+  it('never holds a span below something else it must clear there', () => {
+    const out = cambered(z, d, [...camber(60, 180, 28), { at: 120, height: 29 }])
+    expect(out[d.indexOf(120)]).toBe(29)
+  })
+})
+
+describe('fair', () => {
+  const d = Array.from({ length: 101 }, (_, i) => i * 6)
+  const crest = d.map(s => (s < 300 ? 0.04 * s : 12 - 0.04 * (s - 300)))
+  const bend = (z: number[]) => Math.max(...z.slice(1, -1).map((v, k) => Math.abs(z[k + 2] - 2 * v + z[k]) / 36))
+
+  it('eases a change of grade into a parabolic vertical curve VERTICAL_CURVE long', () => {
+    expect(bend(fair(crest, d))).toBeCloseTo(0.08 / VERTICAL_CURVE, 4)
+  })
+
+  it('takes out a lone bump and leaves a parabola, as a camber, as it is', () => {
+    const grade = d.map(s => 10 + 0.01 * s)
+    const bumped = fair(grade.map((z, i) => z + (i === 50 ? 0.4 : 0)), d)
+    expect(Math.max(...bumped.map((z, i) => Math.abs(z - grade[i])))).toBeLessThan(0.05)
+    const camber = d.map(s => 41 - 4.85 * (s / 300 - 1) ** 2)
+    expect(fair(camber, d).slice(25, 76).every((z, i) => Math.abs(z - camber[i + 25]) < 0.01)).toBe(true)
+  })
+
+  it('keeps over a floor it must clear and under a ceiling, and holds a pinned end', () => {
+    // Level over what it crosses, as `solve` leaves it.
+    const level = d.map(s => Math.min(12, 12.48 - 0.04 * Math.abs(s - 300)))
+    const floor = d.map(s => (Math.abs(s - 300) <= 12 ? 12 : -Infinity))
+    const raised = fair(level, d, { floor, weight: d.map((_, i) => (i ? 1 : PINNED)) })
+    expect(Math.min(...raised.map((z, i) => z - floor[i]))).toBeGreaterThan(-0.01)
+    expect(raised[0]).toBeCloseTo(level[0], 3)
+    const sag = level.map(z => 12 - z)
+    const ceiling = d.map(s => (Math.abs(s - 300) <= 12 ? 0 : Infinity))
+    expect(Math.max(...fair(sag, d, { ceiling }).map((z, i) => z - ceiling[i]))).toBeLessThan(0.01)
+  })
+})
+
+describe('detab', () => {
+  it('puts a short tab back to the width around it, but keeps a longer widening and a flared end', () => {
+    const side = [5, 5, 5, 5, 5, 5, 13, 13, 5, 5, 5, 5, 5, 5, 5, 5, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 12]
+    const out = detab(side)
+    expect(out.slice(6, 8)).toEqual([5, 5])
+    expect(out.slice(16, 26).every(v => v === 9)).toBe(true)
+    expect(out.at(-1)).toBe(12)
+  })
+})
+
+describe('clearOfWalkways', () => {
+  type Deck = Pick<Chain, 'points' | 'kind' | 'layer' | 'edges' | 'sides'> & { lanes?: [number, number] }
+  const road = (layer = 1): Deck => ({ points: resample([east(0), east(120)], 6), kind: 'road', layer, edges: [9, 9], lanes: [5, 5] })
+  const walkway = (north: number, layer = 2): Deck => ({ points: resample([east(30, north), east(90, north)], 6), kind: 'path', layer, edges: [1.5, 1.5] })
+
+  it('draws a roadway in short of a walkway alongside it, easing off either side, never inside its lanes', () => {
+    const [deck] = clearOfWalkways([road(), walkway(-8)])
+    const left = deck.sides![1][10] < 9 ? deck.sides![1] : deck.sides![0]
+    expect(left[10]).toBeCloseTo(6.5, 0)
+    expect(left[0]).toBe(9)
+    expect(Math.min(...left)).toBeGreaterThanOrEqual(5)
+    const [tight] = clearOfWalkways([road(), walkway(-4)])
+    expect(Math.min(...tight.sides![0], ...tight.sides![1])).toBe(5)
+  })
+
+  it('leaves a roadway alone over a walkway on a lower layer', () => {
+    const [deck] = clearOfWalkways([road(2), walkway(-8, 1)])
+    expect(deck.sides).toBeUndefined()
   })
 })

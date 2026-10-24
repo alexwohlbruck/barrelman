@@ -23,8 +23,9 @@ export type Way = {
   id: number
   points: Point[]
   kind: Kind
-  /** OSM `layer`, at least 1. */
+  /** OSM `layer`, at least 1; `untagged` where the way has none and 1 is assumed. */
   layer: number
+  untagged?: boolean
   /** Carriageway width in metres. */
   width: number
   /** The road it carries, by class and ref or name, so a junction carries the road on rather than a ramp that happens to run straighter. */
@@ -47,6 +48,8 @@ export type Chain = {
    * its edges if it cannot be shaped.
    */
   fit?: [number, number]
+  /** The road it carries, by class and ref or name, as its first way's. */
+  road?: string
   /** Sidewalks folded in: the side, how far out from the centreline, and the stretch along the deck in metres. */
   paths?: Array<{ side: 0 | 1; out: number; from: number; to: number }>
 }
@@ -162,9 +165,10 @@ const FOLD = 0
 /**
  * Ways joined end to end into chains, one per roadway. OSM ways share their
  * end nodes, so ends match exactly. Only ways of one kind and layer join, so
- * stacked decks never do; where three or more meet, the pair that carries one
- * road on (same class and ref or name, turning no sharper than ONWARD) joins,
- * else the straightest pair, and the rest end there. Only a path folds back.
+ * stacked decks never do, but for two meeting alone where one has no layer.
+ * Where three or more meet, the pair that carries one road on (same class and
+ * ref or name, turning no sharper than ONWARD) joins, else the straightest
+ * pair, and the rest end there. Only a path folds back.
  */
 export function chains(ways: Way[]): Chain[] {
   // By id, so a tie between pairs goes the same way whatever order the rows came in.
@@ -175,7 +179,9 @@ export function chains(ways: Way[]): Chain[] {
   const used = new Set<number>()
   const out: Chain[] = []
   const next = (p: Point, from: Way) => {
-    const like = (ends.get(key(p)) ?? []).filter(o => o.kind === from.kind && o.layer === from.layer)
+    const kin = (ends.get(key(p)) ?? []).filter(o => o.kind === from.kind)
+    // Two ways meeting alone carry one deck on where one has no layer: mappers often leave a bridge's anchorage stretch untagged.
+    const like = kin.length === 2 && kin.some(o => o.untagged) ? kin : kin.filter(o => o.layer === from.layer)
     if (like.length < 2) return null
     let best: [Way, Way] | null = null
     let score = -Infinity
@@ -210,7 +216,7 @@ export function chains(ways: Way[]): Chain[] {
       }
     }
     const width = Math.max(...members.map(m => m.width))
-    out.push({ ways: members.map(m => m.id), points, kind: start.kind, layer: start.layer, edges: [width / 2, width / 2] })
+    out.push({ ways: members.map(m => m.id), points, kind: start.kind, layer: Math.max(...members.map(m => m.layer)), edges: [width / 2, width / 2], road: members.find(m => m.road)?.road })
   }
   return out
 }
@@ -308,6 +314,9 @@ export function fitEdges(decks: Chain[], outline: Point[], rivals: Chain[] = [])
   })
 }
 
+/** Farthest a sidewalk's near edge may lie past a road deck's edge and still be part of its deck, in metres: beyond, it is a walkway of its own. */
+const ABUTTING = 2
+
 /**
  * Sidewalks and cycle tracks mapped as bridges of their own beside a road
  * bridge, folded into its deck (`paths`): the deck widens to take them in
@@ -329,7 +338,7 @@ export function absorbPaths(decks: Chain[]): Chain[] {
       const side = near[0].left
       const inside = near.filter(n => n.alongside).map(n => n.distance)
       return inside.length >= near.length / 2 && Math.max(...inside) - Math.min(...inside) < 4 &&
-        near.every(n => n.left === side && n.distance < Math.max((road.fit ?? road.edges)[side ? 0 : 1], 1) + MAX_REACH / 2)
+        near.every(n => n.left === side && n.distance - width / 2 < Math.max((road.fit ?? road.edges)[side ? 0 : 1], 1) + ABUTTING)
     })
     if (!host) {
       kept.push(path)
@@ -376,6 +385,27 @@ export const RUN_PAST = 15
 const IN_ROAD = 0.8
 const TRACK_SAMPLE = 3
 
+/** Samples each side of one a tab is measured against, the most a tab stands proud of them in metres, the longest it runs, and samples at each end left alone (an end may flare). */
+const TAB = { window: 5, proud: 3, run: 4, ends: 1 }
+
+/** A side with short tabs standing well proud of the width around it, where it strays into a landing or a notch in the outline, put back to that width. */
+export function detab(values: number[]): number[] {
+  const n = values.length
+  const local = values.map((_, i) => {
+    const around = values.slice(Math.max(0, i - TAB.window), i + TAB.window + 1).sort((a, b) => a - b)
+    return around[around.length >> 1]
+  })
+  const out = values.slice()
+  for (let i = 0; i < n; ) {
+    if (i < TAB.ends || i >= n - TAB.ends || values[i] <= local[i] + TAB.proud) { i++; continue }
+    let j = i
+    while (j < n - TAB.ends && values[j] > local[j] + TAB.proud) j++
+    if (j - i <= TAB.run) for (let k = i; k < j; k++) out[k] = local[k]
+    i = j
+  }
+  return out
+}
+
 /** A resampled deck widened to take in its sidewalks, one sample beyond each end of where they run beside it. */
 export function widen<C extends Pick<Chain, 'points' | 'edges' | 'sides' | 'paths'>>(chain: C, step: number): C {
   if (!chain.paths?.length) return chain
@@ -385,7 +415,57 @@ export function widen<C extends Pick<Chain, 'points' | 'edges' | 'sides' | 'path
     d.forEach((s, i) => {
       if (s >= from - step && s <= to + step) sides[side][i] = Math.max(sides[side][i], out)
     })
-  return { ...chain, sides, edges: [Math.max(...sides[0]), Math.max(...sides[1])] }
+  const kept = sides.map(detab) as [number[], number[]]
+  return { ...chain, sides: kept, edges: [Math.max(...kept[0]), Math.max(...kept[1])] }
+}
+
+/** Least cosine between a roadway and a walkway running alongside it, about 35 degrees. */
+const ALONGSIDE = 0.82
+/** Most a cut for a walkway eases off a sample, in metres, so the edge bends rather than steps. */
+const TAPER = 0.6
+
+/** Roadway sides drawn in clear of walkways alongside on their own layer or above, as a promenade between roadways: never inside `lanes`. */
+export function clearOfWalkways<C extends Pick<Chain, 'points' | 'edges' | 'sides' | 'kind' | 'layer'>>(decks: Array<C & { lanes?: [number, number] }>): C[] {
+  const walkways = decks.filter(d => d.kind === 'path').map(d => ({ d, box: box(d.points), half: Math.max(...d.edges) }))
+  return decks.map(deck => {
+    if (deck.kind !== 'road' || !walkways.length) return deck
+    const reach = Math.max(...deck.edges)
+    const near = walkways.filter(w => w.d.layer >= deck.layer && meet(grow(w.box, reach + w.half), box(deck.points))).map(w => ({ ...w, bounds: grow(w.box, reach + w.half) }))
+    if (!near.length) return deck
+    const n = deck.points.length
+    const sides = ([0, 1] as const).map(side => deck.sides?.[side].slice() ?? deck.points.map(() => deck.edges[side])) as [number[], number[]]
+    const lanes = deck.lanes ?? deck.edges
+    const cuts: [number[], number[]] = [new Array(n).fill(0), new Array(n).fill(0)]
+    for (let i = 0; i < n; i++) {
+      const p = deck.points[i]
+      const [a, b] = [deck.points[Math.max(0, i - 1)], deck.points[Math.min(n - 1, i + 1)]]
+      const t = unit([b[0] - a[0], b[1] - a[1]])
+      for (const w of near) {
+        if (!covers(w.bounds, p)) continue
+        const at = beside(w.d.points, p, nearSegments(w.d.points, p, reach + w.half))
+        if (!at.alongside) continue
+        const [q0, q1] = [w.d.points[at.segment - 1], w.d.points[at.segment]]
+        const u = unit([q1[0] - q0[0], q1[1] - q0[1]])
+        if (Math.abs(t[0] * u[0] + t[1] * u[1]) < ALONGSIDE) continue
+        const q: Point = [q0[0] + (q1[0] - q0[0]) * at.t, q0[1] + (q1[1] - q0[1]) * at.t]
+        const side = (q[0] - p[0]) * -t[1] + (q[1] - p[1]) * t[0] > 0 ? 0 : 1
+        const room = Math.max(lanes[side], at.distance - w.half)
+        cuts[side][i] = Math.max(cuts[side][i], sides[side][i] - room)
+      }
+    }
+    if (cuts.every(c => c.every(v => v <= 0))) return deck
+    // The cut eases off along the deck; the side beyond it keeps its own shape.
+    for (const cut of cuts)
+      for (const order of [[...cut.keys()], [...cut.keys()].reverse()])
+        for (let k = 1; k < order.length; k++) cut[order[k]] = Math.max(cut[order[k]], cut[order[k - 1]] - TAPER)
+    const cut = sides.map((side, s) => side.map((v, i) => Math.max(Math.min(v, lanes[s]), v - cuts[s][i]))) as [number[], number[]]
+    return { ...deck, sides: cut, edges: [Math.max(...cut[0]), Math.max(...cut[1])] as [number, number] }
+  })
+}
+
+const unit = ([x, y]: Point): Point => {
+  const l = Math.hypot(x, y) || 1
+  return [x / l, y / l]
 }
 
 /** Metres from a deck's centreline to one side (0 left, 1 right) at a point, or between two by `t`. */
@@ -475,7 +555,8 @@ export function landing(beyond: number[], end: number): { height: number; run: n
 }
 
 /** What a deck must stand clear of at a distance along it: an absolute height for its surface. */
-export type Need = { at: number; height: number }
+/** A height a deck must reach at a distance along it; `exact` holds it there once settled, as a suspended span's camber. */
+export type Need = { at: number; height: number; exact?: boolean }
 
 /**
  * Ground with lone spikes taken out: at each sample, the median of those
@@ -555,11 +636,56 @@ export function solve(
   const anchored = [chain.grounded[0] || resting[0] !== null, chain.grounded[1] || resting[1] !== null]
   const [za, zb] = [end(0, ground[0]), end(1, ground[n - 1])]
   const lower = steady(ground, d).map(g => g - TERRAIN_SLACK)
+  // A need out of reach of an anchored end within MAX_GRADE is cut to what it can reach: left whole, it would lift the deck far from it.
+  const reach = (at: number) => Math.min(anchored[0] ? za + MAX_GRADE * at : Infinity, anchored[1] ? zb + MAX_GRADE * (d[n - 1] - at) : Infinity)
   for (const need of needs)
-    for (let i = 0; i < n; i++) if (Math.abs(d[i] - need.at) <= CURVE / 2) lower[i] = Math.max(lower[i], need.height)
+    for (let i = 0; i < n; i++) if (Math.abs(d[i] - need.at) <= CURVE / 2) lower[i] = Math.max(lower[i], Math.min(need.height, reach(d[i])))
   lower[0] = za
   lower[n - 1] = zb
   return align(d, lower, [anchored[0] ? za : null, anchored[1] ? zb : null])
+}
+
+/** Metres over which a deck eases back from a held camber to its own grade line. */
+const CAMBER_BLEND = 150
+
+/**
+ * A deck held to its exact needs, sample by sample, as a suspended span hangs
+ * on its cables whatever the approaches do; the difference at each end of the
+ * held stretch fades out over CAMBER_BLEND beyond it.
+ */
+export function cambered(z: number[], d: number[], needs: Need[]): number[] {
+  const at = new Map<number, number>()
+  for (const need of needs) {
+    if (!need.exact) continue
+    const i = d.findIndex(v => Math.abs(v - need.at) < 0.5)
+    if (i < 0) continue
+    // No lower than anything else it must clear there.
+    const clear = needs.filter(n => !n.exact && Math.abs(n.at - d[i]) <= CURVE / 2).map(n => n.height)
+    at.set(i, Math.max(at.get(i) ?? -Infinity, need.height, ...clear))
+  }
+  if (!at.size) return z
+  const held = [...at.keys()].sort((a, b) => a - b)
+  const [first, last] = [held[0], held[held.length - 1]]
+  const [before, after] = [at.get(first)! - z[first], at.get(last)! - z[last]]
+  // Faded out by each end, so the deck still meets what it rests on there.
+  const fade = (m: number, run: number) => {
+    const u = Math.max(0, 1 - m / Math.max(run, 1e-9))
+    return u * u * (3 - 2 * u)
+  }
+  // Long enough that a span held below its approaches never climbs back up to them where they fall away from it: smoothstep climbs 1.5 × its height over its run at most, and the side span keeps falling.
+  const run = (from: number, by: number, away: 1 | -1) => {
+    const room = away > 0 ? d[d.length - 1] - d[from] : d[from]
+    const k = d.findIndex(v => away * (v - d[from]) >= Math.min(CAMBER_BLEND, room))
+    const fall = (z[from] - z[k < 0 ? (away > 0 ? d.length - 1 : 0) : k]) / Math.max(Math.min(CAMBER_BLEND, room), 1e-9)
+    return Math.min(room, by < 0 && fall > 0 ? Math.max(CAMBER_BLEND, (2 * -by) / fall) : CAMBER_BLEND)
+  }
+  const [runBefore, runAfter] = [run(first, before, -1), run(last, after, 1)]
+  return z.map((v, i) => {
+    if (at.has(i)) return at.get(i)!
+    if (i < first) return v + before * fade(d[first] - d[i], runBefore)
+    if (i > last) return v + after * fade(d[i] - d[last], runAfter)
+    return v
+  })
 }
 
 /** Where one line crosses another, as distances along the first; touching at the first's ends does not count. */
@@ -606,6 +732,126 @@ export function smooth(z: number[], d: number[], ground: number[], span = VERTIC
   })
 }
 
+/** Relative weight of a height a fairing holds, as an end or a bound it has reached. */
+export const PINNED = 1e6
+
+export type Fairing = {
+  /** Least height at each sample, and most. */
+  floor?: number[]
+  ceiling?: number[]
+  /** Weight of each sample's own height against the curve: 1 by default, 0 for none, PINNED to hold it. */
+  weight?: number[]
+}
+
+/**
+ * A profile faired into vertical curves about `curve` metres long at every
+ * change of grade, kink or lone bump, within its bounds: the smoothest
+ * heights near the given ones (a penalised spline). A straight grade or a
+ * parabola, as a suspended span's camber, comes through unchanged.
+ */
+export function fair(z: number[], d: number[], { floor, ceiling, weight }: Fairing = {}, curve = VERTICAL_CURVE): number[] {
+  const n = z.length
+  if (n < 3) return z.slice()
+  // A kink of grade g eases into curvature g / curve: a spline this stiff spreads it over 2√2 of its length scale.
+  const base = bands(d, i => weight?.[i] ?? 1, (curve / (2 * Math.SQRT2)) ** 4)
+  const rhs = z.map((v, i) => base.a0[i] * v)
+  // Where the given profile already breaks a bound, it goes no farther past it.
+  const floors = z.map((v, i) => Math.min(floor?.[i] ?? -Infinity, v))
+  const ceilings = z.map((v, i) => Math.max(ceiling?.[i] ?? Infinity, v))
+  // Nor does it rise above, or sink below, what the profile and its floors reach within half a curve: easing rounds, it never bulges.
+  const lo = z.map((_, i) => Math.max(floors[i], reach(z, d, i, curve / 2, Math.min)))
+  const hi = z.map((_, i) => Math.min(ceilings[i], reach(z, d, i, curve / 2, Math.max)))
+  // Active set: bounds the curve breaks are held, and let go again where holding pulls the curve back toward its data.
+  const held = new Map<number, 'floor' | 'ceiling'>()
+  let out = z
+  for (let round = 0; ; round++) {
+    // The given profile keeps within every bound: where the bounds will not settle, it stands.
+    if (round > 4 * n) return z.slice()
+    const a = base.a.slice()
+    const r = rhs.slice()
+    for (const [i, bound] of held) {
+      a[i] += PINNED * base.share[i]
+      r[i] += PINNED * base.share[i] * (bound === 'floor' ? lo[i] : hi[i])
+    }
+    out = solveBanded(a, base.b, base.c, r)
+    let changed = false
+    for (const [i, bound] of held) {
+      const pull = base.a[i] * out[i] + (i > 0 ? base.b[i - 1] * out[i - 1] : 0) + (i < n - 1 ? base.b[i] * out[i + 1] : 0) +
+        (i > 1 ? base.c[i - 2] * out[i - 2] : 0) + (i < n - 2 ? base.c[i] * out[i + 2] : 0) - rhs[i]
+      // Held at a floor, the curve would rather sink; at a ceiling, rise. Otherwise the bound no longer bears on it.
+      if (bound === 'floor' ? pull < 0 : pull > 0) {
+        held.delete(i)
+        changed = true
+      }
+    }
+    out.forEach((v, i) => {
+      const bound = held.has(i) ? null : v < lo[i] - 1e-3 ? 'floor' : v > hi[i] + 1e-3 ? 'ceiling' : null
+      if (!bound) return
+      held.set(i, bound)
+      changed = true
+    })
+    if (!changed) break
+  }
+  return out
+}
+
+/** The least or greatest of some heights within `half` metres of sample i. */
+function reach(z: number[], d: number[], i: number, half: number, pick: (...v: number[]) => number): number {
+  let out = z[i]
+  for (let k = i - 1; k >= 0 && d[i] - d[k] <= half; k--) out = pick(out, z[k])
+  for (let k = i + 1; k < z.length && d[k] - d[i] <= half; k++) out = pick(out, z[k])
+  return out
+}
+
+/**
+ * The symmetric five-banded system whose solution minimises
+ * Σ w·h·(z − target)² + stiffness·Σ h·(z″)², h each sample's share of the
+ * length: its diagonal `a` (and `a0`, the data's part of it), the two bands
+ * above, b[i] = A[i][i+1] and c[i] = A[i][i+2], and each sample's share.
+ */
+function bands(d: number[], w: (i: number) => number, stiffness: number) {
+  const n = d.length
+  // Samples closer than this are taken this far apart, so a stub at a deck's end does not swamp the system.
+  const gap = (i: number) => Math.max(MIN_GAP, d[i] - d[i - 1])
+  const share = d.map((_, i) => ((i > 0 ? gap(i) : 0) + (i < n - 1 ? gap(i + 1) : 0)) / 2)
+  const a0 = d.map((_, i) => w(i) * share[i])
+  const a = a0.slice()
+  const b = new Array<number>(n).fill(0)
+  const c = new Array<number>(n).fill(0)
+  for (let i = 1; i < n - 1; i++) {
+    const [h0, h1] = [gap(i), gap(i + 1)]
+    const k = [2 / (h0 * (h0 + h1)), -2 / (h0 * h1), 2 / (h1 * (h0 + h1))]
+    const s = stiffness * share[i]
+    for (let p = 0; p < 3; p++) {
+      a[i - 1 + p] += s * k[p] * k[p]
+      if (p < 2) b[i - 1 + p] += s * k[p] * k[p + 1]
+    }
+    c[i - 1] += s * k[0] * k[2]
+  }
+  return { a0, a, b, c, share }
+}
+
+/** Least spacing of samples a fairing works with, in metres. */
+const MIN_GAP = 0.5
+
+/** A symmetric five-banded system solved by LDLᵀ. */
+function solveBanded(a: number[], b: number[], c: number[], rhs: number[]): number[] {
+  const n = a.length
+  const D = new Array<number>(n).fill(0)
+  const l1 = new Array<number>(n).fill(0)
+  const l2 = new Array<number>(n).fill(0)
+  for (let i = 0; i < n; i++) {
+    l2[i] = i >= 2 ? c[i - 2] / D[i - 2] : 0
+    l1[i] = i >= 1 ? (b[i - 1] - (i >= 2 ? l1[i - 1] * l2[i] * D[i - 2] : 0)) / D[i - 1] : 0
+    D[i] = a[i] - (i >= 1 ? l1[i] * l1[i] * D[i - 1] : 0) - (i >= 2 ? l2[i] * l2[i] * D[i - 2] : 0)
+  }
+  const y = new Array<number>(n).fill(0)
+  for (let i = 0; i < n; i++) y[i] = rhs[i] - (i >= 1 ? l1[i] * y[i - 1] : 0) - (i >= 2 ? l2[i] * y[i - 2] : 0)
+  const x = new Array<number>(n).fill(0)
+  for (let i = n - 1; i >= 0; i--) x[i] = y[i] / D[i] - (i + 1 < n ? l1[i + 1] * x[i + 1] : 0) - (i + 2 < n ? l2[i + 2] * x[i + 2] : 0)
+  return x
+}
+
 /** Height at a distance along a profile. */
 export function heightAt(d: number[], z: number[], s: number): number {
   if (s <= 0) return z[0]
@@ -620,7 +866,8 @@ export const LEAVING = 200
  * Decks that run side by side as one: where a deck's edge meets another's
  * within `gap` metres and at most `step` from its height, both take the
  * higher height. Decks farther apart in height (an upper and lower deck)
- * keep their own, and tracks join only tracks.
+ * keep their own, tracks join only tracks, and a roadway is not lifted to a
+ * walkway.
  *
  * An end that lands on the ground stays there: lifting it to a neighbour
  * would leave the deck hanging over the road it lands on. Nor is a deck
@@ -636,7 +883,8 @@ export function joinNeighbours(
   const widest = decks.map(D => Math.max(...D.chain.edges))
   for (const [a, A] of decks.entries())
     for (const [b, B] of decks.entries()) {
-      if (a === b || (A.chain.kind === 'rail') !== (B.chain.kind === 'rail')) continue
+      // A walkway beside a roadway may climb away over it; the roadway is never lifted after it.
+      if (a === b || (A.chain.kind === 'rail') !== (B.chain.kind === 'rail') || (A.chain.kind === 'road' && B.chain.kind === 'path')) continue
       const leaves = (B.on ?? []).filter(r => r.deck === A).map(r => r.at)
       // Farther apart than both decks' widest sides and the gap, no edge can meet the other.
       if (!meet(grow(box(A.chain.points), widest[a] + widest[b] + gap), box(B.chain.points))) continue

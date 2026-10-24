@@ -661,6 +661,10 @@ SELECT m.fid, m.id, m.geom,
 FROM measured m
 LEFT JOIN covered c ON c.id = m.id
 LEFT JOIN owner w ON w.part_id = m.id
+-- A bridge's abutments and piers under its deck are the deck's to draw (bridge_decks):
+-- extruded from the ground their flat tops stand through it where the ground slopes.
+-- Anchorages and towers, standing well above any deck, stay.
+WHERE NOT (COALESCE(m.tags->>'bridge:support', '') IN ('abutment', 'pier') AND COALESCE(m.h, m.levels * 3.66, 5) < 20)
 WITH NO DATA;
 
 -- Unique on fid so the view can be refreshed CONCURRENTLY, and GIST on geom so
@@ -1031,7 +1035,8 @@ ALTER TABLE bridge_decks
   ADD COLUMN IF NOT EXISTS format smallint NOT NULL DEFAULT 1,
   ADD COLUMN IF NOT EXISTS left_edges real[],
   ADD COLUMN IF NOT EXISTS right_edges real[],
-  ADD COLUMN IF NOT EXISTS caps real[];
+  ADD COLUMN IF NOT EXISTS caps real[],
+  ADD COLUMN IF NOT EXISTS mesh text;
 CREATE INDEX IF NOT EXISTS bridge_decks_geom_idx ON bridge_decks USING gist (geom);
 CREATE INDEX IF NOT EXISTS bridge_decks_anchor_idx ON bridge_decks USING gist (anchor);
 
@@ -1084,5 +1089,6 @@ SELECT id, bridge, kind, layer, edges[1] AS left_edge, edges[2] AS right_edge,
        -- property out and a client tells such a deck by its absence.
        CASE WHEN left_edges IS NOT NULL THEN array_to_string(ARRAY(SELECT round(e * 10)::int FROM unnest(left_edges) e), ',') END AS left_edges,
        CASE WHEN right_edges IS NOT NULL THEN array_to_string(ARRAY(SELECT round(e * 10)::int FROM unnest(right_edges) e), ',') END AS right_edges,
-       CASE WHEN caps IS NOT NULL THEN array_to_string(ARRAY(SELECT round(c * 10)::int FROM unnest(caps) c), ',') END AS caps
+       CASE WHEN caps IS NOT NULL THEN array_to_string(ARRAY(SELECT round(c * 10)::int FROM unnest(caps) c), ',') END AS caps,
+       mesh
 FROM bridge_decks;
