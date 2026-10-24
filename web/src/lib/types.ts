@@ -293,7 +293,8 @@ export type EndpointGroup =
   | 'routing'
   | 'isochrone'
   | 'transit'
-export type Scope = EndpointGroup | '*'
+/** Mirrors billing/plans.ts. `admin` sits outside `*` and only an administrator may grant it. */
+export type Scope = EndpointGroup | '*' | 'admin'
 
 export interface PublicUser {
   id: string

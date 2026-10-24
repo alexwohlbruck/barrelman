@@ -10,6 +10,20 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Changed
+
+* **The API keys page has the same key controls as the admin account pane.**
+  Each key can be renamed, rescoped, restricted to origins or revoked from one
+  edit panel. Administrators also get the rate-limit switch on their own keys.
+  Customers see a key's exemption but cannot change it: `PATCH
+  /account/keys/:id` now refuses `rateLimitExempt` with a 403 rather than
+  ignoring it.
+
+### Fixed
+
+* The create-key dialog no longer offers the `admin` scope to accounts that
+  cannot be granted it, which ended in a 403.
+
 ## [0.10.23] - 2026-10-23
 
 ### Added
