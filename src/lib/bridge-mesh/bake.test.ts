@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import { bakeBridges } from './bake'
-import { encodeBridge, liftField, MATERIAL_PALETTE } from './encode'
+import { decodeBridge, encodeBridge, liftField, MATERIAL_PALETTE } from './encode'
 import { mercator } from '../bridge-decks/profile'
 import type { Deck } from '../bridge-decks/build'
 
@@ -19,22 +19,22 @@ test('bakes solved bridge geometry without a map or browser', () => {
   expect(bakeBridges(input, MATERIAL_PALETTE)).toEqual(result)
 })
 
-test('encodes aligned GPU streams with a versioned header', () => {
+test('encodes compact streams that decode to the baked mesh within 3 mm', () => {
   const result = bakeBridges(input, MATERIAL_PALETTE)
   const bytes = encodeBridge(result)
   const view = new DataView(bytes.buffer)
   expect(view.getUint32(0, true)).toBe(0x314d5242)
-  const start = view.getUint32(8, true)
-  expect(start % 4).toBe(0)
-  const header = JSON.parse(new TextDecoder().decode(bytes.subarray(12, 12 + view.getUint32(4, true))))
-  expect(header.version).toBe(2)
+  expect(view.getUint32(8, true) % 4).toBe(0)
+  const { header, position, color, normal, indices } = decodeBridge(bytes)
+  expect(header.version).toBe(3)
   expect(header.lengths).toHaveLength(9)
   expect(header.ranges).toEqual(result.ranges)
-  const positions = new Float32Array(bytes.buffer, start, header.lengths[0])
-  const indexOffset = start + header.lengths.slice(0, -1).reduce((a: number, b: number) => a + b * 4, 0)
-  const indices = new Uint32Array(bytes.buffer, indexOffset, header.lengths.at(-1))
-  expect(Array.from(indices).flatMap(i => Array.from(positions.subarray(i * 3, i * 3 + 3)))).toEqual(Array.from(new Float32Array(result.mesh.position)))
-  expect(positions.length).toBeLessThan(result.mesh.position.length)
+  expect(header.origin).toEqual(result.origin)
+  const drawn = indices.flatMap(i => position.slice(i * 3, i * 3 + 3))
+  drawn.forEach((v, k) => expect(Math.abs(v - result.mesh.position[k])).toBeLessThan(1.1e-10))
+  expect(indices.flatMap(i => color.slice(i * 3, i * 3 + 3))).toEqual(result.mesh.color)
+  indices.flatMap(i => normal.slice(i * 3, i * 3 + 3)).forEach((v, k) => expect(v).toBeCloseTo(result.mesh.normal[k], 2))
+  expect(position.length).toBeLessThan(result.mesh.position.length)
 })
 
 test('keeps the heights decks were solved and faired at where they run side by side', () => {
@@ -171,12 +171,7 @@ test('lifts paint as the deck top under it is lifted, so bumpy ground beneath do
     mesh.bias!.push(mesh.bias![top])
   }
   const bumpy = (p: [number, number]) => 3 * Math.sin(p[0] * 4e6) * Math.cos(p[1] * 3e6)
-  const bytes = encodeBridge(result, bumpy)
-  const view = new DataView(bytes.buffer)
-  const header = JSON.parse(new TextDecoder().decode(bytes.subarray(12, 12 + view.getUint32(4, true))))
-  const offsets = header.lengths.reduce((out: number[], n: number) => [...out, out.at(-1)! + n * 4], [view.getUint32(8, true)])
-  const lift = new Float32Array(bytes.buffer, offsets[7], header.lengths[7])
-  const indices = new Uint32Array(bytes.buffer, offsets[8], header.lengths[8])
+  const { lift, indices } = decodeBridge(encodeBridge(result, bumpy))
   const liftOf = (v: number) => lift[indices[v]]
   const painted = mesh.position.length / 3 - 3
   weights.forEach((w, k) => expect(liftOf(painted + k)).toBeCloseTo(w.reduce((sum, wk, j) => sum + wk * liftOf(top + j), 0), 9))

@@ -98,7 +98,7 @@ function onTops(built: BakedBridge, lift: Float32Array) {
 }
 
 export function encodeBridge(built: BakedBridge, at: (point: [number, number]) => number | null = () => null): Uint8Array {
-  let arrays: Array<Float32Array | Uint32Array> = STREAMS.map(name => new Float32Array(built.mesh[name] ?? []))
+  const arrays = STREAMS.map(name => new Float32Array(built.mesh[name] ?? []))
   const ground = new Float32Array(built.mesh.position.length / 3)
   const lift = new Float32Array(ground.length)
   const lifted = liftField(at)
@@ -133,22 +133,62 @@ export function encodeBridge(built: BakedBridge, at: (point: [number, number]) =
     }
     indices[i] = index
   }
-  arrays = [...unique.map(values => new Float32Array(values)), indices]
+  const geometry = JSON.parse(JSON.stringify({ stands: built.stands, under: built.under, tracks: built.tracks }, rounded))
   const header = new TextEncoder().encode(JSON.stringify({
-    version: 2, origin: built.origin, ranges: built.ranges, stands: built.stands, under: built.under, tracks: built.tracks,
-    lengths: arrays.map(a => a.length),
+    version: 3, quantum: QUANTUM, origin: built.origin, ranges: built.ranges, ...geometry,
+    lengths: [...unique.map(values => values.length), indices.length],
   }))
-  const start = 12 + Math.ceil(header.length / 4) * 4
-  const bytes = new Uint8Array(start + arrays.reduce((n, a) => n + a.byteLength, 0))
+  const streams = [...unique.map((values, i) => pack(LAYOUT[i], values)), pack(INDEX_LAYOUT, Array.from(indices))]
+  const start = align(12 + header.length)
+  const bytes = new Uint8Array(streams.reduce((n, s) => align(n + s.byteLength), start))
   const view = new DataView(bytes.buffer)
   view.setUint32(0, 0x314d5242, true)
   view.setUint32(4, header.length, true)
   view.setUint32(8, start, true)
   bytes.set(header, 12)
-  let offset = start
-  for (const array of arrays) {
-    bytes.set(new Uint8Array(array.buffer), offset)
-    offset += array.byteLength
-  }
+  streams.reduce((offset, s) => { bytes.set(new Uint8Array(s.buffer, s.byteOffset, s.byteLength), offset); return align(offset + s.byteLength) }, start)
   return bytes
+}
+
+/** Mercator units per step of the integer streams: 3 mm at 40°. */
+const QUANTUM = 1e-10
+type Layout = { type: Int32ArrayConstructor | Int8ArrayConstructor | Uint8ArrayConstructor | Float32ArrayConstructor; delta?: number; scale?: number }
+/**
+ * How each vertex stream is stored: spatial ones as QUANTUM steps, each
+ * component the difference from the vertex before (`delta` is the stride), so
+ * gzip finds the repeats a float hides; unit normals as bytes; palette slots as
+ * the integers they are.
+ */
+const LAYOUT: Layout[] = [
+  { type: Int32Array, delta: 3, scale: QUANTUM }, { type: Int8Array, scale: 1 / 127 }, { type: Uint8Array }, { type: Uint8Array },
+  { type: Float32Array }, { type: Float32Array }, { type: Int32Array, delta: 1, scale: QUANTUM }, { type: Int32Array, delta: 1, scale: QUANTUM },
+]
+const INDEX_LAYOUT: Layout = { type: Int32Array, delta: 1 }
+/** Header numbers to 3 mm: mercator coordinates (all under 1) to 10 places, metres to 3. */
+const rounded = (_: string, value: unknown) => typeof value === 'number' && !Number.isInteger(value) ? +value.toFixed(Math.abs(value) < 1 ? 10 : 3) : value
+const align = (n: number) => Math.ceil(n / 4) * 4
+
+function pack({ type, delta = 0, scale = 1 }: Layout, values: number[]) {
+  const out = new type(values.length)
+  const steps = values.map(v => type === Float32Array ? v : Math.round(v / scale))
+  if (type === Uint8Array && steps.some(v => v < 0 || v > 255)) throw new Error('Palette slot out of byte range')
+  for (let i = 0; i < steps.length; i++) out[i] = steps[i] - (delta && i >= delta ? steps[i - delta] : 0)
+  return out
+}
+
+/** Reads an encoded mesh back into float streams and indices, as the client draws them. */
+export function decodeBridge(bytes: Uint8Array) {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+  const start = view.getUint32(8, true)
+  const header = JSON.parse(new TextDecoder().decode(bytes.subarray(12, 12 + view.getUint32(4, true))))
+  let offset = start
+  const read = ({ type, delta = 0, scale = 1 }: Layout, length: number) => {
+    const raw = new type(bytes.buffer.slice(bytes.byteOffset + offset, bytes.byteOffset + offset + length * type.BYTES_PER_ELEMENT))
+    offset = align(offset + raw.byteLength)
+    const out = new Float64Array(length)
+    for (let i = 0; i < length; i++) out[i] = raw[i] + (delta && i >= delta ? out[i - delta] : 0)
+    return type === Float32Array ? Array.from(raw) : Array.from(out, v => v * scale)
+  }
+  const streams = [...STREAMS, 'ground', 'lift'].map((name, i) => [name, read(LAYOUT[i], header.lengths[i])] as const)
+  return { header, ...Object.fromEntries(streams), indices: read(INDEX_LAYOUT, header.lengths.at(-1)) } as Record<typeof STREAMS[number] | 'ground' | 'lift' | 'indices', number[]> & { header: any }
 }
