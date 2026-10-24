@@ -15,7 +15,7 @@ import Sheet from '@/components/ui/Sheet.vue'
 import Spinner from '@/components/ui/Spinner.vue'
 import Tabs from '@/components/ui/Tabs.vue'
 import StatTile from '@/components/StatTile.vue'
-import AdminKeyRow from '@/components/AdminKeyRow.vue'
+import ApiKeyRow from '@/components/ApiKeyRow.vue'
 import TrafficPanel from '@/components/traffic/TrafficPanel.vue'
 import { getAdminUser } from '@/lib/api'
 import { toast } from '@/lib/toast'
@@ -258,13 +258,14 @@ function actionVariant(action: string): BadgeVariant {
         </p>
         <p v-if="!detail.keys.length" class="text-sm text-muted-foreground">No keys.</p>
         <ul v-else class="flex flex-col gap-2">
-          <AdminKeyRow
+          <ApiKeyRow
             v-for="key in detail.keys"
             :key="key.id"
             :api-key="key"
-            :user-id="detail.user.id"
+            mode="admin"
             :scopes="detail.scopes"
             :owner-is-admin="detail.user.role === 'admin'"
+            viewer-is-admin
             @changed="onKeyChanged"
           />
         </ul>

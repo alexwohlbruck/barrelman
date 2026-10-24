@@ -614,3 +614,41 @@ describe('PATCH /admin/users/:id/keys/:keyId', () => {
     expect(d.addNote).toHaveBeenCalledWith(TARGET_ID, expect.stringContaining('"Production"'), ADMIN_ID)
   })
 })
+
+describe('the guard on key and traffic routes', () => {
+  // The same guard as moderation, but these routes postdate that suite. A
+  // refusal has to stop the side effect, not just change the status code.
+  const refuse = async ({ set }: { set: { status?: number } }) => {
+    set.status = 403
+    return { error: 'Administrator access required' }
+  }
+
+  test('a refusing guard stops key edits, revocation and the traffic report', async () => {
+    const d = deps({
+      guard: refuse as never,
+      listApiKeys: mock(async () => []) as never,
+      setKeyRateLimitExempt: mock(async () => true),
+      revokeApiKey: mock(async () => true),
+      trafficReport: mock(async () => ({}) as never),
+    })
+    const app = createAdminUserRoutes(d)
+
+    const responses = await Promise.all([
+      app.handle(
+        new Request(`${BASE}/admin/users/${TARGET_ID}/keys/key-1`, {
+          method: 'PATCH',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ rateLimitExempt: true }),
+        }),
+      ),
+      app.handle(del(`/admin/users/${TARGET_ID}/keys/key-1`, {})),
+      app.handle(new Request(`${BASE}/admin/traffic`)),
+    ])
+
+    expect(responses.map((r) => r.status)).toEqual([403, 403, 403])
+    expect(d.listApiKeys).not.toHaveBeenCalled()
+    expect(d.setKeyRateLimitExempt).not.toHaveBeenCalled()
+    expect(d.revokeApiKey).not.toHaveBeenCalled()
+    expect(d.trafficReport).not.toHaveBeenCalled()
+  })
+})
