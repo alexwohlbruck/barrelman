@@ -219,8 +219,13 @@ function needs(s: Pick<Solved, 'chain' | 'd' | 'g'>, input: DeckInput, below: So
   const out = [...fixedNeeds(s, input, bases)]
   for (const lower of below) {
     if (!meet(own, box(lower.chain.points))) continue
+    // A lower deck resting on this one forks off it at its own level: it is not cleared near where it rests.
+    const total = lower.d[lower.d.length - 1]
+    const rests = lower.on.filter(r => r.deck === s).map(r => (r.at === lower.chain.points[0] ? 0 : total))
     for (const { at, segment, t, clear } of over(s, lower)) {
-      const z = heightAt(lower.d, lower.z, lower.d[segment - 1] + (lower.d[segment] - lower.d[segment - 1]) * t)
+      const there = lower.d[segment - 1] + (lower.d[segment] - lower.d[segment - 1]) * t
+      if (rests.some(end => Math.abs(there - end) < OVER_FROM_END)) continue
+      const z = heightAt(lower.d, lower.z, there)
       out.push({ at, height: z + clear })
     }
   }
@@ -751,15 +756,17 @@ function merged(s: Solved) {
     }
     const from = (i: number) => (end ? total - s.d[i] : s.d[i])
     const order = end ? [...Array(n).keys()].reverse() : [...Array(n).keys()]
+    // Resting at one end only, it may merge along its whole length; resting at both, each end takes its half.
+    const half = s.on.length > 1 ? total / 2 : total
     let stretch = -1
     for (const i of order) {
-      if (from(i) > total / 2 || under(i, true) === null) break
+      if (from(i) > half || under(i, true) === null) break
       stretch = from(i)
     }
     if (stretch < MERGE_MIN) continue
     for (const i of order) {
       const past = from(i) - stretch
-      const z = past < MERGE_EASE && from(i) <= total / 2 ? under(i, false) : null
+      const z = past < MERGE_EASE && from(i) <= half ? under(i, false) : null
       if (z === null) break
       const u = past <= 0 ? 1 : 1 - past / MERGE_EASE
       delta[i] = (z - s.z[i]) * u * u * (3 - 2 * u)

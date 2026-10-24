@@ -103,6 +103,18 @@ describe('the Brooklyn Bridge', () => {
     // Where it crosses the Manhattan anchorage.
     expect(carrying(808611020)).toBe(carrying(122660460))
   })
+
+  it('keeps its two roadways level with each other over the Brooklyn approach, not lifted over a lane splitting off one', () => {
+    // A short trunk_link on layer 1 rests on the Brooklyn-bound roadway at both ends; clearing it lifted that roadway 3 m over the other.
+    const [west, east] = [carrying(46116280), carrying(808611034)]
+    const d = along(west.points)
+    const near = beside(west.points, mercator(-73.99171, 40.70201))
+    const from = d[near.segment - 1] + (d[near.segment] - d[near.segment - 1]) * near.t
+    // From the Brooklyn anchorage to where the two part for their own ends.
+    const apart = west.points.map((p, i) => ({ p, i })).filter(({ i }) => d[i] > from && d[i] < west.length - 60)
+    expect(apart.length).toBeGreaterThan(25)
+    for (const { p, i } of apart) expect(Math.abs(west.heights[i] - heightAt(east, p))).toBeLessThan(1)
+  })
 })
 
 describe('the interchange at its Manhattan end', () => {
