@@ -247,6 +247,15 @@ export function createAccountRoutes(overrides: Partial<AccountDeps> = {}) {
     .patch(
       '/keys/:id',
       async ({ user, params, body, set }) => {
+        // Refused for everyone here, administrators included: the exemption is
+        // only ever set through /admin/users/:id/keys, behind the admin guard
+        // and into the account's moderation log. Accepting it on this route —
+        // even gated on role — would be a second door to keep in step.
+        if (body.rateLimitExempt !== undefined) {
+          set.status = 403
+          return { error: 'Rate-limit exemptions are set by an administrator from the admin console.' }
+        }
+
         const invalid = keyPatchError(body, user!.role === 'admin')
         if (invalid) {
           set.status = invalid.status
@@ -275,6 +284,8 @@ export function createAccountRoutes(overrides: Partial<AccountDeps> = {}) {
           name: t.Optional(t.String({ minLength: 1, maxLength: 80 })),
           scopes: t.Optional(t.Array(t.String())),
           allowedOrigins: t.Optional(t.Array(t.String(), { maxItems: MAX_ORIGINS_PER_KEY })),
+          // Declared so it is refused with a reason rather than silently dropped.
+          rateLimitExempt: t.Optional(t.Boolean()),
         }),
         detail: {
           summary: 'Rename an API key or change its scopes and origins',
