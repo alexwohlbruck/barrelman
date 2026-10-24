@@ -5,7 +5,7 @@
  * as lines.
  */
 import earcut from 'earcut'
-import { atHit, beside, boundsOf, smoothstep, clip, convexClip, holds, planeOf, meets, TOUCHDOWN, type Bounds, densify, linesOf, mercator, metresPerUnit, onDeck, onOwnDeck, subtractConvex, topZ, polygonsOf, tileBounds, vertex, type DeckSurface, type Hit, type Mesh, type Point } from './decks'
+import { atHit, beside, boundsOf, smoothstep, clip, convexClip, holds, planeOf, meets, TOUCHDOWN, type Bounds, densify, linesOf, mercator, metresPerUnit, onDeck, onOwnDeck, subtractConvex, areaOf, topZ, polygonsOf, tileBounds, vertex, type DeckSurface, type Hit, type Mesh, type Point } from './decks'
 
 export type Paint = { props: Record<string, any>; runs: Point[][]; areas: Point[][][] }
 
@@ -232,16 +232,26 @@ function fill(mesh: Mesh, rings: Point[][], laid: Laid, color: number[], lift: n
   const levelNear = (q: Point) => onAny.length
     ? onAny.reduce((a, b) => (Math.hypot(b.p[0] - q[0], b.p[1] - q[1]) < Math.hypot(a.p[0] - q[0], a.p[1] - q[1]) ? b : a)).z
     : null
+  // Cut to each road deck at the mark's level, top triangle by top triangle and never subdivided, so neighbouring pieces meet exactly.
+  // A piece's level is that of the area's own triangle around it, taken at that triangle's centre.
+  if (onAny.length) {
+    const own = Array.from({ length: index.length / 3 }, (_, t) => {
+      const tri = [flat[index[t * 3]], flat[index[t * 3 + 1]], flat[index[t * 3 + 2]]]
+      const centre = centroidOf(tri)
+      return { tri, box: boundsOf(tri), centre, level: levelNear(centre)! }
+    })
+    for (const [k, d] of laid.surfaces.entries())
+      if (d.kind === 'road' && d.tops && d.bounds && (!laid.on || laid.on(d)) && meets(d.bounds, extent))
+        onTops(mesh, rings, k, laid, color, lift, origin, at => {
+          const around = own.find(o => holds(o.box, at) && inTriangle(at, o.tri))
+          return !!around && Math.abs(hitOn(laid, k, around.centre)!.z - around.level) <= LEVEL
+        })
+  }
   for (let t = 0; t < index.length; t += 3) {
     const corners = [index[t], index[t + 1], index[t + 2]]
     const tri = corners.map(k => flat[k])
     const box = boundsOf(tri)
     const centre = centroidOf(tri)
-    // Cut to each road deck at the mark's level, top triangle by top triangle and never subdivided, so neighbouring pieces meet exactly.
-    const level = levelNear(centre)
-    if (level !== null)
-      for (const [k, d] of laid.surfaces.entries())
-        if (d.kind === 'road' && d.tops && d.bounds && (!laid.on || laid.on(d)) && meets(d.bounds, box) && Math.abs(hitOn(laid, k, centre)!.z - level) <= LEVEL) onTops(mesh, tri, k, laid, color, lift, origin)
     // Beside a deck's end the rest lies on the ground: the triangle less every stretch of deck lying low.
     if (laid.ground?.near.some(b => meets(b, box)) && onGround(laid, centre, false)) {
       let rest = [tri]
@@ -263,11 +273,22 @@ function fill(mesh: Mesh, rings: Point[][], laid: Laid, color: number[], lift: n
   }
 }
 
-/** A triangle laid on a deck's drawn top: cut to each of its top triangles, each piece at that triangle's plane. */
-function onTops(mesh: Mesh, triangle: Point[], k: number, laid: Laid, color: number[], lift: number, origin: Point) {
+/** Whether a point lies in a triangle, its edges included. */
+function inTriangle([x, y]: Point, [a, b, c]: Point[]): boolean {
+  const side = (p: Point, q: Point) => (q[0] - p[0]) * (y - p[1]) - (q[1] - p[1]) * (x - p[0])
+  const [d1, d2, d3] = [side(a, b), side(b, c), side(c, a)]
+  return !((d1 < 0 || d2 < 0 || d3 < 0) && (d1 > 0 || d2 > 0 || d3 > 0))
+}
+
+/**
+ * An area laid on a deck's drawn top: cut whole to each of its top triangles and triangulated there, each piece at that
+ * triangle's plane, where `level` says the piece is at the mark's level. Cutting the area rather than its triangles keeps
+ * a long carriageway to a few triangles a top triangle, not one for every sliver of it crossing there.
+ */
+function onTops(mesh: Mesh, rings: Point[][], k: number, laid: Laid, color: number[], lift: number, origin: Point, level: (centre: Point) => boolean) {
   const deck = laid.surfaces[k]
-  const scale = 1 / metresPerUnit(triangle[0][1])
-  const box = boundsOf(triangle)
+  const scale = 1 / metresPerUnit(rings[0][0][1])
+  const box = boundsOf(rings[0])
   for (let i = 1; i < deck.points.length; i++) {
     if (laid.grounded && !atGradeAt(deck, i, 0) && !atGradeAt(deck, i, 1)) continue
     const top = deck.tops![i - 1]
@@ -275,15 +296,27 @@ function onTops(mesh: Mesh, triangle: Point[], k: number, laid: Laid, color: num
     if (!meets(bounds!, box)) continue
     const outline = quad!
     for (const [a, b, c] of [[0, 1, 2], [0, 2, 3]]) {
-      const piece = convexClip(triangle, [outline[a], outline[b], outline[c]])
-      if (piece.length < 3) continue
+      const clipper = [outline[a], outline[b], outline[c]]
+      const [outer, ...holes] = rings.map(ring => convexClip(ring, clipper))
+      if (outer.length < 3) continue
+      const cut = [outer, ...holes.filter(h => h.length >= 3)]
+      const points = cut.flat()
+      const starts: number[] = []
+      for (let h = 1, at = outer.length; h < cut.length; at += cut[h++].length) starts.push(at)
+      const index = earcut(points.flat(), starts)
       const plane = planeOf(top[a], top[b], top[c])
       // The deck's top is drawn toward the eye by its corners' bias; what lies on it must be too, or terrain shows through at its ends.
       const bias = deck.bias ? [deck.bias[i - 1], deck.bias[i - 1], deck.bias[i], deck.bias[i]] : [0, 0, 0, 0]
       const biasAt = planeOf([...top[a].slice(0, 2), bias[a]], [...top[b].slice(0, 2), bias[b]], [...top[c].slice(0, 2), bias[c]])
-      const hits = piece.map(p => ({ deck: k, distance: 0, z: onTop(laid.ground, deck, i, 0.5, p, plane(p)), segment: i, t: biasT(deck, i, biasAt(p)) }))
-      for (let v = 1; v < piece.length - 1; v++)
-        for (const j of [0, v, v + 1]) laidVertex(mesh, [piece[j][0] - origin[0], piece[j][1] - origin[1], (hits[j].z + lift) * scale], hits[j], laid, color)
+      const hitAt = (p: Point) => ({ deck: k, distance: 0, z: onTop(laid.ground, deck, i, 0.5, p, plane(p)), segment: i, t: biasT(deck, i, biasAt(p)) })
+      for (let t = 0; t < index.length; t += 3) {
+        const tri = [points[index[t]], points[index[t + 1]], points[index[t + 2]]]
+        if (areaOf(tri) <= 0 || !level(centroidOf(tri))) continue
+        for (const p of tri) {
+          const hit = hitAt(p)
+          laidVertex(mesh, [p[0] - origin[0], p[1] - origin[1], (hit.z + lift) * scale], hit, laid, color)
+        }
+      }
     }
   }
 }

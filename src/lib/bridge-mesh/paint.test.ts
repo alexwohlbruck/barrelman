@@ -71,6 +71,22 @@ describe('the road\'s paint over a deck end', () => {
   })
 })
 
+describe('painted areas on a deck', () => {
+  test('a long area mapped with many corners is cut to a few triangles a top triangle, keeping its area', () => {
+    const points = line(...Array.from({ length: 21 }, (_, k) => k * 6))
+    const deck = testSurface(points, points.map(() => 100), undefined, 7)
+    const side = line(...Array.from({ length: 41 }, (_, k) => k * 3))
+    const lane = [[...side, ...[...side].reverse().map(([x, y]) => [x, y + 1.5 * M] as Point)]]
+    const mesh = deckMeshOut()
+    layPaint(mesh, [{ props: { kind: 'bike_lane', pattern: 'fill', color: 'green' }, runs: [], areas: [lane] }], [deck], { white: [1, 1, 1], yellow: [1, 1, 0], green: [0, 1, 0], red: [1, 0, 0] }, points[0])
+    const p = mesh.position, triangles = p.length / 9
+    let area = 0
+    for (let t = 0; t < p.length; t += 9) area += Math.abs((p[t + 3] - p[t]) * (p[t + 7] - p[t + 1]) - (p[t + 6] - p[t]) * (p[t + 4] - p[t + 1])) / 2
+    expect(triangles).toBeLessThan(20 * 2 * 4)
+    expect(area / (M * M)).toBeCloseTo(120 * 1.5, 0)
+  })
+})
+
 describe('painted areas on an arched deck', () => {
   test('never dip under the surface between their corners', () => {
     const points = line(...Array.from({ length: 21 }, (_, k) => k * 6))
