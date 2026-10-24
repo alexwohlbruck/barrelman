@@ -10,6 +10,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.10.25] - 2026-10-24
+
 ### Added
 
 * Bridge imports now precompute deck and road-marking meshes for clients to download and draw without rebuilding geometry.
