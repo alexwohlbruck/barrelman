@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test'
-import { absorbPaths, absorbTracks, deckMeshOut, standing, touchdown, underWay, runsWith, TOUCHDOWN, SEAM, UNDER_SLACK, metresPerUnit, arch, beside, besideGround, boundsOf, chains, covered, dedupe, clip, cutOut, parseLine, parseProfile, parseShape, deckMesh, densify, fitEdges, joinNeighbours, onDeck, onOwnDeck, rounded, smooth, solve, steady, along, COLUMN_SIDES, LAYER_CLEARANCE, MAX_GRADE, ROUND_TURN, type Chain, type Point } from './decks'
+import { absorbPaths, absorbTracks, deckMeshOut, standing, touchdown, underWay, waysUnder, subtractConvex, areaOf, runsWith, TOUCHDOWN, SEAM, UNDER_SLACK, metresPerUnit, arch, beside, besideGround, boundsOf, chains, covered, dedupe, clip, cutOut, parseLine, parseProfile, parseShape, deckMesh, densify, fitEdges, joinNeighbours, onDeck, onOwnDeck, rounded, smooth, solve, steady, along, COLUMN_SIDES, LAYER_CLEARANCE, MAX_GRADE, ROUND_TURN, type Chain, type Point } from './decks'
 
 // About a metre in mercator units at Charlotte's latitude.
 const M = 1 / 32780000
@@ -446,6 +446,18 @@ describe('ways under a deck', () => {
     expect(underWay([road], offset(1, 50)[0], [0, 1])).toBe(false)
   })
 
+  test('only the stretches of ways passing under a deck go with it', () => {
+    const deck = { points: line(0, 50, 100), z: [10, 12, 10], d: [0, 50, 100], width: 10 }
+    const across = Array.from({ length: 41 }, (_, i) => offset(-1000 + i * 50, 50)[0])
+    const crossing = { points: across, half: 5, bounds: boundsOf(across, 5 + UNDER_SLACK) }
+    const far = { points: offset(400, 0, 100), half: 5, bounds: boundsOf(offset(400, 0, 100), 5 + UNDER_SLACK) }
+    const under = waysUnder([crossing, far, road], [deck])
+    expect(under).toHaveLength(2)
+    expect(under[0].points.length).toBeLessThan(5)
+    expect(under[1]).toEqual(road)
+    for (const at of [-8, 0, 6.5, 8]) expect(underWay(under, offset(at, 50)[0])).toBe(underWay([crossing, far, road], offset(at, 50)[0]))
+  })
+
   test('a wire runs with the track it hangs over', () => {
     const track = { points: line(0, 100), half: 1, bounds: boundsOf(line(0, 100), 3) }
     expect(runsWith([track], offset(0.5, 50)[0], [1, 0], 1)).toBe(true)
@@ -589,3 +601,17 @@ describe('rounded', () => {
     expect(rounded(straight, [1, 2, 3], [0, 0, 0]).chain).toBe(straight)
   })
 })
+
+describe('subtracting convex pieces', () => {
+  test('a long sliver cut by a run of quads sharing edges stays a handful of pieces', () => {
+    const sliver: Point[] = [line(0)[0], line(420)[0], offset(4, 420)[0]]
+    const quads = Array.from({ length: 80 }, (_, i): Point[] => [offset(-2, i * 5)[0], offset(-2, i * 5 + 5)[0], offset(1, i * 5 + 5)[0], offset(1, i * 5)[0]])
+    let rest = [sliver]
+    for (const quad of quads) rest = rest.flatMap(piece => subtractConvex(piece, quad))
+    expect(rest.length).toBeLessThan(200)
+    const kept = rest.reduce((a, p) => a + areaOf(p), 0)
+    expect(kept).toBeGreaterThan(0)
+    expect(kept).toBeLessThan(areaOf(sliver))
+  })
+})
+
