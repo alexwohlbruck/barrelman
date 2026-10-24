@@ -18,7 +18,7 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 ### Changed
 
 * Deck meshes carry only the stretches of ground roads that pass under them, cutting dense downtown meshes by up to half.
-* Paving laid on decks takes a tenth of the triangles it did, so deck meshes are about a third smaller and quicker to draw.
+* Paving laid on decks takes about an eighth of the triangles it did, so deck meshes are about a third smaller and quicker to draw.
 
 ### Fixed
 
