@@ -15,6 +15,22 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 * `POST /match` snaps a GPS trace to the roads it followed and returns the path with elevation, path details and each input point's snapped position. It takes JSON points or a GPX file, and copes with sparse traces such as photo geotags minutes apart: wide gaps are routed instead of matched, so a three-point trace answers in well under a second where GraphHopper's own matcher could stall. Billed as routing.
 * `GRAPHHOPPER_TIMEOUT_MS` (default 30 s) caps each GraphHopper call. The `/graphhopper/*` proxy now answers 504 past it instead of holding the request open, and drops the upstream call when the client disconnects.
 
+## [0.10.26] - 2026-10-24
+
+### Added
+
+* `GET /tiles/bridges/index/14/{x}/{y}` lists the deck meshes a tile meets with their bounds, so clients fetch a view's meshes alongside its map tiles.
+* Build Bridge Decks takes `--from w,s` to resume a run at a cell.
+
+### Changed
+
+* Deck meshes carry only the stretches of ground roads that pass under them, cutting dense downtown meshes by up to half.
+* Paving laid on decks takes about an eighth of the triangles it did, so deck meshes are about a third smaller and quicker to draw.
+
+### Fixed
+
+* Build Bridge Decks no longer runs out of memory on narrow side-by-side decks, which stopped a US-wide run in Albuquerque.
+
 ## [0.10.25] - 2026-10-24
 
 ### Added

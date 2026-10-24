@@ -1276,10 +1276,23 @@ export function subtractConvex(poly: Point[], hole: Point[]): Point[][] {
   for (const [a, n] of insides(hole)) {
     if (rest.length < 3) break
     const outside = halfPlane(rest, a, [-n[0], -n[1]])
-    if (outside.length >= 3) out.push(outside)
+    // A cut along an edge the polygon only touches leaves a sliver with no area, which every later cut would split again.
+    if (outside.length >= 3 && areaOf(outside) > SLIVER) out.push(outside)
     rest = halfPlane(rest, a, n)
   }
   return out
+}
+
+/** Mercator units squared below which a piece is a sliver: about a thousandth of a square metre. */
+const SLIVER = 1e-18
+
+/** A polygon's unsigned area, taken about its first point so small pieces far from the origin keep their precision. */
+export function areaOf(poly: Point[]): number {
+  const [x0, y0] = poly[0]
+  let twice = 0
+  for (let i = 1; i < poly.length - 1; i++)
+    twice += (poly[i][0] - x0) * (poly[i + 1][1] - y0) - (poly[i + 1][0] - x0) * (poly[i][1] - y0)
+  return Math.abs(twice) / 2
 }
 
 /**
@@ -1478,6 +1491,42 @@ export function underWay(ways: UnderWay[], p: Point, along?: [number, number]): 
 
 /** Metres beside a way under a deck that are its, not the deck's. */
 export const UNDER_SLACK = 3
+
+/** Deck points boxed together when finding the ways under a deck, and metres past its width a deck following its outline may reach. */
+const UNDER_RUN = 8
+const UNDER_REACH = 15
+
+/**
+ * The stretches of ways that pass under the decks, each with its own bounds:
+ * a client only asks whether a point on a deck lies over one, so a long deck
+ * need not carry every street its bounding box takes in.
+ */
+export function waysUnder(ways: UnderWay[], decks: DeckSurface[]): UnderWay[] {
+  const boxes = decks.flatMap(deck => {
+    const out: Bounds[] = []
+    for (let i = 0; i < deck.points.length - 1; i += UNDER_RUN)
+      out.push(boundsOf(deck.points.slice(i, i + UNDER_RUN + 1), deck.width / 2 + UNDER_REACH))
+    return out
+  })
+  return ways.flatMap(way => {
+    if (!boxes.some(b => meets(b, way.bounds))) return []
+    const pad = way.half + UNDER_SLACK
+    const runs: UnderWay[] = []
+    let run: Point[] = []
+    const close = () => {
+      if (run.length > 1) runs.push({ points: run, half: way.half, bounds: boundsOf(run, pad) })
+      run = []
+    }
+    for (let i = 1; i < way.points.length; i++) {
+      const segment = boundsOf([way.points[i - 1], way.points[i]], pad)
+      if (!boxes.some(b => meets(b, segment))) { close(); continue }
+      if (!run.length) run.push(way.points[i - 1])
+      run.push(way.points[i])
+    }
+    close()
+    return runs
+  })
+}
 
 /** A key that changes when the decks things stand on do. */
 export const standKey = (decks: Array<{ surface: DeckSurface }>) =>

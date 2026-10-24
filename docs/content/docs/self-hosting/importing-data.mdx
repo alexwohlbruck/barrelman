@@ -522,6 +522,8 @@ without osm2pgsql's middle tables records what changed; one updated through
 
 Bridge builds also bake indexed deck, parapet, pier and road-marking meshes. The tile layer's optional `mesh` property names a SHA-256-addressed `.brm` file served at `/tiles/bridges/models/{file}` under the same authentication and metering as other tiles. Files include a versioned header, material roles and placement surfaces, and are immutable. Version 3 stores positions, ground and lift as 3 mm integer steps coded as differences, normals as bytes and palette slots as integers, so a gzipped mesh is under half the size of a float one. They are stored gzipped only; a client that refuses gzip gets an inflated copy.
 
+`/tiles/bridges/index/14/{x}/{y}` lists the meshes a zoom-14 tile meets (within a tenth of a tile of its edge) as `{ decks: [[file, west, south, east, north], ...] }`, each deck's bounds in degrees. A client fetches the index for a view's tiles alongside its vector tiles and starts on the meshes the view needs straight away, instead of once those tiles have loaded. Indexes carry an `ETag` and `stale-while-revalidate`.
+
 API and ops must share `BRIDGE_MESH_DIR`. Existing rows have no mesh until rebuilt. Deploy the schema/API before rebuilding and switching clients; older profile-based clients remain compatible. Rebuild bridges after rebuilding road markings. Failed database transactions may leave unreferenced immutable files, which are safe to retain; do not remove files referenced by active clients during rollout.
 
 `bridge_decks` is a table built by the "Build Bridge Decks" console task
@@ -580,7 +582,8 @@ US, EGM2008 elsewhere), so a deck lines up with the same terrain drawn; a
 client drawing other terrain can line a deck up by comparing `ground` with its
 own. A run fetches about one 90 KB terrain tile per 1.5 km² that has bridges;
 set `BRIDGE_DECKS_DEM_TILES` to read them from a mirror. It rebuilds by cell,
-in place, so it can be scoped with `--bbox` and stopped and resumed. Without
+in place, so it can be scoped with `--bbox` and stopped and resumed: `--from w,s`
+starts a run at the cell whose south-west corner that is, leaving the cells before it in the run's order as they are. Without
 `--bbox` it covers the areas of the regions `REGIONS` selects, each region's
 `bboxes` rather than one box around them. `REGIONS=global` is refused rather
 than read as the planet: building every bridge on Earth takes days, so start
