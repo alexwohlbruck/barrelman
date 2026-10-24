@@ -26,7 +26,7 @@ const LAYOUT: Layout[] = [
 const align = (n: number) => Math.ceil(n / 4) * 4
 
 /** A BRM v3 mesh as its header and raw streams: integers summed out of their deltas, the rest as stored. */
-export type Streams = { header: any; streams: Array<Int32Array | Int8Array | Uint8Array | Float32Array>; indices: Int32Array }
+export type Streams = { header: any; streams: Array<Int32Array | Int8Array | Uint8Array | Float32Array>; indices: Int32Array; headerBytes?: number; cells?: Map<string, number[]> }
 
 export function readStreams(bytes: Uint8Array): Streams {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
@@ -43,7 +43,7 @@ export function readStreams(bytes: Uint8Array): Streams {
   }
   const streams = LAYOUT.map((layout, i) => read(layout, header.lengths[i]))
   const indices = read({ type: Int32Array, delta: 1 }, header.lengths[LAYOUT.length]) as Int32Array
-  return { header, streams, indices }
+  return { header, streams, indices, headerBytes: view.getUint32(4, true) }
 }
 
 function writeStreams(header: object, streams: Streams['streams'], indices: Int32Array): Uint8Array {
@@ -67,6 +67,25 @@ function deltas<T extends Streams['streams'][number]>(values: T, delta: number):
   return out
 }
 
+/** The zoom triangles are bucketed at once per mesh, so a cut at or above it reads only its own. */
+const CELL_ZOOM = 16
+
+/** Each triangle (by its first index) under the zoom-CELL_ZOOM tile its centroid lies in, worked out once per mesh. */
+function cellsOf(mesh: Streams): Map<string, number[]> {
+  if (mesh.cells) return mesh.cells
+  const { header, indices } = mesh, position = mesh.streams[0] as Int32Array
+  const [ox, oy] = header.origin as [number, number], q = header.quantum as number, n = 2 ** CELL_ZOOM
+  const cells = new Map<string, number[]>()
+  for (let t = 0; t < indices.length; t += 3) {
+    const a = indices[t] * 3, b = indices[t + 1] * 3, c = indices[t + 2] * 3
+    const key = `${Math.floor((ox + ((position[a] + position[b] + position[c]) / 3) * q) * n)}/${Math.floor((oy + ((position[a + 1] + position[b + 1] + position[c + 1]) / 3) * q) * n)}`
+    const list = cells.get(key)
+    if (list) list.push(t)
+    else cells.set(key, [t])
+  }
+  return (mesh.cells = cells)
+}
+
 /** The triangles of a mesh whose centroid lies in tile z/x/y, as a mesh of their own; null when there are none. */
 export function cutPiece(mesh: Streams, z: number, x: number, y: number): Uint8Array | null {
   const { header, streams, indices } = mesh
@@ -79,13 +98,22 @@ export function cutPiece(mesh: Streams, z: number, x: number, y: number): Uint8A
   const detail = z >= DETAIL_ZOOM
   const keep: number[] = []
   const counts = [0, 0, 0, 0]
-  for (let t = 0; t < indices.length; t += 3) {
-    if (!detail && t >= paintFrom && t < routesFrom) continue
-    const [a, b, c] = [indices[t] * 3, indices[t + 1] * 3, indices[t + 2] * 3]
-    const cx = (position[a] + position[b] + position[c]) / 3, cy = (position[a + 1] + position[b + 1] + position[c + 1]) / 3
-    if (cx < minX || cx >= maxX || cy < minY || cy >= maxY) continue
+  const take = (t: number) => {
+    if (!detail && t >= paintFrom && t < routesFrom) return
     keep.push(t)
     counts[t < paintFrom ? 0 : t < railsFrom ? 1 : t < routesFrom ? 2 : 3]++
+  }
+  if (z <= CELL_ZOOM) {
+    const cells = cellsOf(mesh), up = CELL_ZOOM - z, found: number[] = []
+    for (let i = x << up; i < (x + 1) << up; i++)
+      for (let j = y << up; j < (y + 1) << up; j++) for (const t of cells.get(`${i}/${j}`) ?? []) found.push(t)
+    found.sort((a, b) => a - b).forEach(take)
+  } else {
+    for (let t = 0; t < indices.length; t += 3) {
+      const [a, b, c] = [indices[t] * 3, indices[t + 1] * 3, indices[t + 2] * 3]
+      const cx = (position[a] + position[b] + position[c]) / 3, cy = (position[a + 1] + position[b + 1] + position[c + 1]) / 3
+      if (cx >= minX && cx < maxX && cy >= minY && cy < maxY) take(t)
+    }
   }
   if (!keep.length) return null
   const remap = new Int32Array(position.length / 3).fill(-1)
@@ -146,15 +174,19 @@ export function cutStand(stand: Stand, area: Box): Stand[] {
   const slice = (v: unknown, len: number, a: number, b: number) => (Array.isArray(v) && v.length === len ? v.slice(a, b) : v)
   const cut = Object.fromEntries(Object.entries(surface).map(([k, v]) => [k, k === 'tops' ? slice(v, n - 1, i0, i1) : slice(v, n, i0, i1 + 1)]))
   if (surface.edges) cut.edges = surface.edges.map(e => slice(e, n, i0, i1 + 1))
-  const kept = cut.points as Pt[]
-  cut.bounds = grow({ minX: Math.min(...kept.map(p => p[0])), minY: Math.min(...kept.map(p => p[1])), maxX: Math.max(...kept.map(p => p[0])), maxY: Math.max(...kept.map(p => p[1])) }, surface.bounds ? (surface.width / 2) / metres(area.minY) : 0)
+  if (surface.bounds) {
+    let box = { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity }
+    for (const [px, py] of cut.points as Pt[]) box = { minX: Math.min(box.minX, px), minY: Math.min(box.minY, py), maxX: Math.max(box.maxX, px), maxY: Math.max(box.maxY, py) }
+    // As the bake bounds a surface: its points grown by its width.
+    cut.bounds = grow(box, surface.width / metres((cut.points as Pt[])[0][1]))
+  }
   const cutChain = { ...chain, points: chain.points.slice(i0, i1 + 1), ...(chain.sides ? { sides: chain.sides.map(s => s.slice(i0, i1 + 1)) as [number[], number[]] } : {}) }
   return [{ chain: cutChain, surface: cut as Stand['surface'] }]
 }
 
 /** A tile's pieces: `BDT1`, a JSON header naming each piece's deck mesh and its length, then the pieces, 4-byte aligned. */
-export function encodeDeckTile(pieces: Array<{ file: string; bytes: Uint8Array }>): Uint8Array {
-  const text = new TextEncoder().encode(JSON.stringify({ decks: pieces.map(p => p.file), lengths: pieces.map(p => p.bytes.byteLength) }))
+export function encodeDeckTile(pieces: Array<{ file: string; bytes: Uint8Array }>, failed: string[] = []): Uint8Array {
+  const text = new TextEncoder().encode(JSON.stringify({ decks: pieces.map(p => p.file), lengths: pieces.map(p => p.bytes.byteLength), ...(failed.length ? { failed } : {}) }))
   const start = align(8 + text.length)
   const out = new Uint8Array(pieces.reduce((n, p) => align(n + p.bytes.byteLength), start))
   const view = new DataView(out.buffer)
@@ -180,11 +212,17 @@ export function withDeckField(mvt: Uint8Array, payload: Uint8Array): Uint8Array<
 /** Deck mesh files that may have triangles in a tile. */
 export type DeckFilesIn = (z: number, x: number, y: number) => Promise<string[]>
 
+/** A tile's deck payload, and whether every deck in it could be read: one that could not is not cached, anywhere. */
+export type DeckTile = { bytes: Uint8Array; complete: boolean }
+
 /** Builds and caches deck tiles from the mesh files a tile's decks name. */
 export function createDeckTiles(directory: string, filesIn: DeckFilesIn, { meshBytes = 384 << 20, tileBytes = 256 << 20 } = {}) {
-  const meshes = new LRUCache<string, Streams>({ maxSize: meshBytes, sizeCalculation: m => m.streams.reduce((n, s) => n + s.byteLength, m.indices.byteLength) + 1 })
+  // A parsed header weighs about three times its JSON as objects.
+  const meshes = new LRUCache<string, Streams>({ maxSize: meshBytes, sizeCalculation: m => m.streams.reduce((n, s) => n + s.byteLength, m.indices.byteLength) + 3 * (m.headerBytes ?? 0) + 1 })
   const tiles = new LRUCache<string, Uint8Array>({ maxSize: tileBytes, sizeCalculation: b => b.byteLength + 1 })
+  const lists = new LRUCache<string, string[]>({ max: 20_000, ttl: 60_000 })
   const reading = new Map<string, Promise<Streams | null>>()
+  const building = new Map<string, Promise<DeckTile>>()
   const mesh = (file: string) => {
     const hit = meshes.get(file)
     if (hit) return Promise.resolve(hit)
@@ -193,27 +231,47 @@ export function createDeckTiles(directory: string, filesIn: DeckFilesIn, { meshB
       pending = (async () => {
         const gz = Bun.file(join(directory, `${file}.gz`)), plain = Bun.file(join(directory, file))
         const bytes = await gz.exists() ? Bun.gunzipSync(new Uint8Array(await gz.arrayBuffer())) : await plain.exists() ? new Uint8Array(await plain.arrayBuffer()) : null
-        const read = bytes && readStreams(bytes)
-        if (read) meshes.set(file, read)
+        if (!bytes) return null
+        const read = readStreams(bytes)
+        meshes.set(file, read)
         return read
-      })().catch(() => null).finally(() => reading.delete(file))
+      })().catch(error => {
+        console.warn(`[deck tiles] ${file}:`, error)
+        return null
+      }).finally(() => reading.delete(file))
       reading.set(file, pending)
     }
     return pending
   }
-  return async function deckTile(z: number, x: number, y: number): Promise<Uint8Array> {
-    const files = (await filesIn(z, x, y)).sort()
-    const key = `${z}/${x}/${y}/${createHash('sha1').update(files.join()).digest('hex')}`
-    const hit = tiles.get(key)
-    if (hit) return hit
+  const build = async (z: number, x: number, y: number, files: string[]): Promise<DeckTile> => {
     const pieces: Array<{ file: string; bytes: Uint8Array }> = []
+    const failed: string[] = []
     for (const file of files) {
       const read = await mesh(file)
-      const bytes = read && cutPiece(read, z, x, y)
+      if (!read) { failed.push(file); continue }
+      const bytes = cutPiece(read, z, x, y)
       if (bytes) pieces.push({ file, bytes })
     }
-    const out = encodeDeckTile(pieces)
-    tiles.set(key, out)
-    return out
+    return { bytes: encodeDeckTile(pieces, failed), complete: !failed.length }
+  }
+  return async function deckTile(z: number, x: number, y: number): Promise<DeckTile> {
+    const at = `${z}/${x}/${y}`
+    let files = lists.get(at)
+    if (!files) {
+      files = [...new Set(await filesIn(z, x, y))].sort()
+      lists.set(at, files)
+    }
+    const key = `${at}/${createHash('sha1').update(files.join()).digest('hex')}`
+    const hit = tiles.get(key)
+    if (hit) return { bytes: hit, complete: true }
+    let pending = building.get(key)
+    if (!pending) {
+      pending = build(z, x, y, files).then(tile => {
+        if (tile.complete) tiles.set(key, tile.bytes)
+        return tile
+      }).finally(() => building.delete(key))
+      building.set(key, pending)
+    }
+    return pending
   }
 }

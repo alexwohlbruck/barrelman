@@ -62,3 +62,13 @@ test('the deck tile rides in an MVT field that readers skip', () => {
   expect(view.getUint32(0, true)).toBe(0x31544442)
   expect(tile.byteLength).toBeGreaterThan(payload.byteLength + layer.byteLength)
 })
+
+test('a deck whose mesh cannot be read is named, and the tile is not cached', async () => {
+  const { createDeckTiles } = await import('./tile-pieces')
+  const deckTile = createDeckTiles('/nonexistent', async () => [`${'b'.repeat(64)}.brm`])
+  const first = await deckTile(16, 1, 1)
+  expect(first.complete).toBe(false)
+  const view = new DataView(first.bytes.buffer)
+  expect(JSON.parse(new TextDecoder().decode(first.bytes.subarray(8, 8 + view.getUint32(4, true)))).failed).toEqual([`${'b'.repeat(64)}.brm`])
+  expect((await deckTile(16, 1, 1)).complete).toBe(false)
+})

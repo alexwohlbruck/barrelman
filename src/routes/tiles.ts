@@ -3,7 +3,7 @@ import { join } from 'path'
 import { apiAuth, apiAuthAfter } from '../middleware/api-auth'
 import { resolvePortolanTilesDir } from '../config/portolan'
 import { resolveTileBundle } from '../config/tile-bundles'
-import { createDeckTiles, DECK_TILE_ZOOMS, withDeckField } from '../lib/bridge-mesh/tile-pieces'
+import { createDeckTiles, DECK_TILE_ZOOMS, encodeDeckTile, withDeckField, type DeckTile } from '../lib/bridge-mesh/tile-pieces'
 import { bridgeMeshDirectory } from '../lib/bridge-mesh/files'
 import { deckFilesIn } from '../lib/bridge-mesh/deck-lookup'
 
@@ -83,7 +83,7 @@ export function acceptsGzip(header: string | undefined): boolean {
 }
 
 export function createTileRoutes(
-  deps: { fetchTile?: TileFetcher; portolanTilesDir?: string; deckTile?: (z: number, x: number, y: number) => Promise<Uint8Array> } = {},
+  deps: { fetchTile?: TileFetcher; portolanTilesDir?: string; deckTile?: (z: number, x: number, y: number) => Promise<DeckTile> } = {},
 ) {
   const fetchTile: TileFetcher = deps.fetchTile || ((url: string) => fetch(url))
   const deckTile = deps.deckTile ?? createDeckTiles(bridgeMeshDirectory(), deckFilesIn)
@@ -371,11 +371,16 @@ export function createTileRoutes(
         // Deck meshes ride in the tile they are drawn with, for a client that asks: see lib/bridge-mesh/tile-pieces.ts.
         const zoom = Number(z)
         if (query.decks === '1' && zoom >= DECK_TILE_ZOOMS.min && zoom <= DECK_TILE_ZOOMS.max && martinSource.split(',').includes('bridge_decks')) {
+          let decks: DeckTile
           try {
-            body = withDeckField(body, await deckTile(zoom, Number(x), Number(y.replace(/\..*$/, ''))))
+            decks = await deckTile(zoom, Number(x), Number(y.replace(/\..*$/, '')))
           } catch (error) {
             console.warn(`[deck tiles] ${z}/${x}/${y}:`, error)
+            decks = { bytes: encodeDeckTile([], ['*']), complete: false }
           }
+          body = withDeckField(body, decks.bytes)
+          // A tile missing some of its decks must not stand in for the whole one in any cache.
+          if (!decks.complete) set.headers['cache-control'] = 'no-store'
         }
         if (!acceptsGzip(headers['accept-encoding'])) return body
 
