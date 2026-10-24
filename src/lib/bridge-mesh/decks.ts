@@ -1492,6 +1492,42 @@ export function underWay(ways: UnderWay[], p: Point, along?: [number, number]): 
 /** Metres beside a way under a deck that are its, not the deck's. */
 export const UNDER_SLACK = 3
 
+/** Deck points boxed together when finding the ways under a deck, and metres past its width a deck following its outline may reach. */
+const UNDER_RUN = 8
+const UNDER_REACH = 15
+
+/**
+ * The stretches of ways that pass under the decks, each with its own bounds:
+ * a client only asks whether a point on a deck lies over one, so a long deck
+ * need not carry every street its bounding box takes in.
+ */
+export function waysUnder(ways: UnderWay[], decks: DeckSurface[]): UnderWay[] {
+  const boxes = decks.flatMap(deck => {
+    const out: Bounds[] = []
+    for (let i = 0; i < deck.points.length - 1; i += UNDER_RUN)
+      out.push(boundsOf(deck.points.slice(i, i + UNDER_RUN + 1), deck.width / 2 + UNDER_REACH))
+    return out
+  })
+  return ways.flatMap(way => {
+    if (!boxes.some(b => meets(b, way.bounds))) return []
+    const pad = way.half + UNDER_SLACK
+    const runs: UnderWay[] = []
+    let run: Point[] = []
+    const close = () => {
+      if (run.length > 1) runs.push({ points: run, half: way.half, bounds: boundsOf(run, pad) })
+      run = []
+    }
+    for (let i = 1; i < way.points.length; i++) {
+      const segment = boundsOf([way.points[i - 1], way.points[i]], pad)
+      if (!boxes.some(b => meets(b, segment))) { close(); continue }
+      if (!run.length) run.push(way.points[i - 1])
+      run.push(way.points[i])
+    }
+    close()
+    return runs
+  })
+}
+
 /** A key that changes when the decks things stand on do. */
 export const standKey = (decks: Array<{ surface: DeckSurface }>) =>
   decks.map(({ surface: s }) => `${s.points.length}:${s.points[0]}:${s.z.reduce((a, b) => a + b, 0).toFixed(1)}`).join('|')

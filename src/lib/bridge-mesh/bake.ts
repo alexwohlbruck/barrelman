@@ -15,6 +15,7 @@ import {
   touchdown,
   type UnderWay,
   UNDER_SLACK,
+  waysUnder,
   edgePoints,
   joinNeighbours,
   coveredSides,
@@ -298,7 +299,7 @@ class MeshBaker {
     ranges.railsFrom = mesh.position.length / 3
     layWays(mesh, ways.filter(w => w.kind === 'rail'), surfaces, p, this.origin, d => owned.has(d))
     ranges.routesFrom = mesh.position.length / 3
-    return { mesh, ranges, origin: this.origin, stands: this.stands, under: this.groundWays(), tracks: this.tracks }
+    return { mesh, ranges, origin: this.origin, stands: this.stands, under: waysUnder(this.groundWays(), this.stands.map(s => s.surface)), tracks: this.tracks }
   }
   private groundWays(): UnderWay[] {
     this.under ??= this.waysNear(this.stands.flatMap(s => (s.surface.bounds ? [s.surface.bounds] : [])))
