@@ -4,6 +4,7 @@
  *
  *   bun run import/generate-bridge-decks.ts                        the REGIONS areas
  *   bun run import/generate-bridge-decks.ts --bbox w,s,e,n         one area
+ *   bun run import/generate-bridge-decks.ts --from w,s             resume a run at the cell whose corner is w,s
  *
  * Without --bbox it covers each area of the regions REGIONS selects (their
  * own `bboxes`, not one box around them). REGIONS=global is refused: a planet
@@ -43,9 +44,11 @@ async function areas() {
  * that moved takes it into a neighbouring cell, it takes in just the part of
  * that cell an earlier build covered.
  */
-export async function buildArea(sql: Sql, dem: Dem, cells: UnitBox[], size: number) {
+export async function buildArea(sql: Sql, dem: Dem, cells: UnitBox[], size: number, from?: [number, number]) {
   const g = grid(toUnits(size))
-  const run = new Map(cells.map(b => [g.at([b[0], b[1]]), b]))
+  const start = from ? cells.findIndex(b => b[0] === toUnits(from[0]) && b[1] === toUnits(from[1])) : 0
+  if (start < 0) throw new Error(`--from ${from!.join(',')} is not the corner of one of this run's cells`)
+  const run = new Map(cells.slice(start).map(b => [g.at([b[0], b[1]]), b]))
   const cell = {
     partsOf: (k: string) => (run.has(k) ? [g.box(k)] : coveredParts(sql, g.box(k))),
     keyOf: g.at,
@@ -94,7 +97,9 @@ async function main(sql: Sql) {
     await lock`SELECT pg_advisory_lock(${LOCK[0]}, ${LOCK[1]})`
   }
 
-  const { total, clashes, built } = await buildArea(sql, new Dem(), cells, CELL)
+  const from = flag('from')?.split(',').map(Number) as [number, number] | undefined
+  if (from && (from.length !== 2 || !from.every(Number.isFinite))) throw new Error('--from must be the west,south corner of a cell')
+  const { total, clashes, built } = await buildArea(sql, new Dem(), cells, CELL, from)
   console.log(`Bridge decks: ${total} built in ${built} cells.`)
   if (clashes) process.exitCode = 1
   await lock`SELECT pg_advisory_unlock(${LOCK[0]}, ${LOCK[1]})`
