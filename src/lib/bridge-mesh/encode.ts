@@ -57,6 +57,49 @@ export function liftField(at: (point: Point) => number | null) {
   }
 }
 
+/** Metres a mark may lie off the deck top under it and still take that top's lift. */
+const ON_TOP = 0.5
+
+/**
+ * Paint, rails and routes lifted as the deck top under them is: interpolated
+ * across its triangle, as the GPU draws it, rather than read off the field at
+ * each mark's own corner, which near the ground follows bumps the top's
+ * sparser corners do not, and sinks the mark into the deck in places.
+ */
+function onTops(built: BakedBridge, lift: Float32Array) {
+  const { position, normal } = built.mesh
+  const from = built.ranges.paintFrom
+  const cell = 4 / metresPerUnit(built.origin[1])
+  const grid = new Map<string, number[]>()
+  for (let t = 0; t < from; t += 3) {
+    if (normal[t * 3 + 2] < 0.3) continue
+    const xs = [0, 1, 2].map(k => position[(t + k) * 3]), ys = [0, 1, 2].map(k => position[(t + k) * 3 + 1])
+    for (let i = Math.floor(Math.min(...xs) / cell); i <= Math.floor(Math.max(...xs) / cell); i++)
+      for (let j = Math.floor(Math.min(...ys) / cell); j <= Math.floor(Math.max(...ys) / cell); j++) {
+        const key = `${i},${j}`
+        grid.set(key, [...(grid.get(key) ?? []), t])
+      }
+  }
+  const tolerance = ON_TOP / metresPerUnit(built.origin[1])
+  for (let v = from; v < lift.length; v++) {
+    const [x, y, z] = [position[v * 3], position[v * 3 + 1], position[v * 3 + 2]]
+    let best: { off: number; lift: number } | null = null
+    for (const t of grid.get(`${Math.floor(x / cell)},${Math.floor(y / cell)}`) ?? []) {
+      const [a, b, c] = [t, t + 1, t + 2].map(k => [position[k * 3], position[k * 3 + 1], position[k * 3 + 2]])
+      const det = (b[1] - c[1]) * (a[0] - c[0]) + (c[0] - b[0]) * (a[1] - c[1])
+      if (!det) continue
+      const w0 = ((b[1] - c[1]) * (x - c[0]) + (c[0] - b[0]) * (y - c[1])) / det
+      const w1 = ((c[1] - a[1]) * (x - c[0]) + (a[0] - c[0]) * (y - c[1])) / det
+      const w2 = 1 - w0 - w1
+      if (w0 < -1e-6 || w1 < -1e-6 || w2 < -1e-6) continue
+      const off = Math.abs(z - (w0 * a[2] + w1 * b[2] + w2 * c[2]))
+      if (off > tolerance || (best && off >= best.off)) continue
+      best = { off, lift: w0 * lift[t] + w1 * lift[t + 1] + w2 * lift[t + 2] }
+    }
+    if (best) lift[v] = best.lift
+  }
+}
+
 export function encodeBridge(built: BakedBridge, at: (point: [number, number]) => number | null = () => null): Uint8Array {
   let arrays: Array<Float32Array | Uint32Array> = STREAMS.map(name => new Float32Array(built.mesh[name] ?? []))
   const ground = new Float32Array(built.mesh.position.length / 3)
@@ -73,6 +116,7 @@ export function encodeBridge(built: BakedBridge, at: (point: [number, number]) =
     ground[i] = h === null ? z : h / scale
     lift[i] = lifted(p, z * scale, h) / scale
   }
+  onTops(built, lift)
   arrays.push(ground, lift)
   for (const { surface } of built.stands)
     surface.lift = surface.points.map((p, i) => Math.round(lifted(p, surface.z[i], at(p)) * 100) / 100)

@@ -158,3 +158,38 @@ test('lays no other bridge\'s carriageway on the ground beside a deck\'s end', (
   }
   expect(stray).toBe(0)
 })
+
+test('lifts paint as the deck top under it is lifted, so bumpy ground beneath does not sink it into the deck', () => {
+  const result = bakeBridges(input, MATERIAL_PALETTE)
+  const { mesh } = result
+  const top = Array.from({ length: result.ranges.paintFrom / 3 }, (_, k) => k * 3).find(t => mesh.normal[t * 3 + 2] > 0.9 && mesh.position[t * 3 + 2] > 0)!
+  const corner = (k: number) => mesh.position.slice((top + k) * 3, (top + k) * 3 + 3)
+  const weights = [[0.6, 0.2, 0.2], [0.2, 0.6, 0.2], [0.2, 0.2, 0.6]]
+  for (const w of weights) {
+    for (let axis = 0; axis < 3; axis++) mesh.position.push(w.reduce((sum, wk, k) => sum + wk * corner(k)[axis], 0))
+    for (const stream of ['normal', 'color', 'low', 'spread'] as const) mesh[stream]!.push(...mesh[stream]!.slice(top * 3, top * 3 + 3))
+    mesh.bias!.push(mesh.bias![top])
+  }
+  const bumpy = (p: [number, number]) => 3 * Math.sin(p[0] * 4e6) * Math.cos(p[1] * 3e6)
+  const bytes = encodeBridge(result, bumpy)
+  const view = new DataView(bytes.buffer)
+  const header = JSON.parse(new TextDecoder().decode(bytes.subarray(12, 12 + view.getUint32(4, true))))
+  const offsets = header.lengths.reduce((out: number[], n: number) => [...out, out.at(-1)! + n * 4], [view.getUint32(8, true)])
+  const lift = new Float32Array(bytes.buffer, offsets[7], header.lengths[7])
+  const indices = new Uint32Array(bytes.buffer, offsets[8], header.lengths[8])
+  const liftOf = (v: number) => lift[indices[v]]
+  const painted = mesh.position.length / 3 - 3
+  weights.forEach((w, k) => expect(liftOf(painted + k)).toBeCloseTo(w.reduce((sum, wk, j) => sum + wk * liftOf(top + j), 0), 9))
+})
+
+test('runs a cycle track on over the deck past the end of the bridge way it starts on', () => {
+  const way = (id: string, from: number, to: number, brunnel: string | null) => ({
+    properties: { id, class: 'path', brunnel, cycle: true },
+    geometry: { type: 'LineString', coordinates: [[from, 40.7], [to, 40.7]] },
+  })
+  const roads = [way('1', -73.9995, -73.999, 'bridge'), way('2', -73.999, -73.9985, null)]
+  const { mesh } = bakeBridges({ ...input, decks: [{ ...deck, heights: [8, 8, 8], grounded: [false, false] }], roads }, MATERIAL_PALETTE)
+  const green = MATERIAL_PALETTE.green[0]
+  const xs = mesh.position.filter((_, k) => k % 3 === 0 && mesh.color[k] === green).map(x => x + points[1][0])
+  expect(Math.max(...xs)).toBeGreaterThan(mercator(-73.9986, 40.7)[0])
+})

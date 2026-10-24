@@ -1,5 +1,5 @@
 import { describe, expect, test, mock } from 'bun:test'
-import { boundsOf, deckMeshOut, metresPerUnit, type Point } from './decks'
+import { boundsOf, deckMeshOut, metresPerUnit, topZ, type Point } from './decks'
 import { isCycleway, layPaint, layWays } from './paint'
 import { testSurface } from './test-surface'
 
@@ -30,6 +30,20 @@ describe('layWays', () => {
     expect(isCycleway({ highway: 'path', bicycle: 'designated' })).toBe(true)
     expect(isCycleway({ highway: 'path', bicycle: 'designated', foot: 'designated' })).toBe(false)
     expect(isCycleway({ highway: 'footway', bicycle: 'yes' })).toBe(false)
+  })
+
+  test('a strip lies on a deck that slopes across under it, not half sunk into it', () => {
+    const tilted = testSurface(points, [100, 106, 100], undefined, 7)
+    // 0.2 m higher per metre toward +y.
+    tilted.tops = tilted.tops!.map(q => q.map(([x, y, z]) => [x, y, z + ((y - y0) / M) * 0.2]) as typeof q)
+    const mesh = deckMeshOut()
+    layWays(mesh, [{ kind: 'path', points: line(10, 90), cycle: true }], [tilted], colors, points[0])
+    const scale = metresPerUnit(y0)
+    for (let k = 0; k < mesh.position.length; k += 3) {
+      const p: Point = [mesh.position[k] + points[0][0], mesh.position[k + 1] + points[0][1]]
+      const segment = p[0] < points[1][0] ? 1 : 2
+      expect(mesh.position[k + 2] * scale).toBeGreaterThanOrEqual(topZ(tilted, segment, p)! - 1e-6)
+    }
   })
 
   test('a track is two rails, and nothing is laid off the deck', () => {

@@ -153,7 +153,14 @@ class MeshBaker {
     const local = 0
     const joints = solved.flatMap(({ chain }) => wayEnds(chain))
     const paint = this.input.paint.filter(f => f.properties.bridge).map(paintOf)
-    const ways = this.input.roads.filter(f => f.properties.brunnel === 'bridge').flatMap(f => {
+    // A deck's own ways are laid on it too where OSM tags a stretch embankment rather than bridge, and so is a cycle
+    // track running on from one of them over the rest of the deck, so it runs on unbroken to the deck's end.
+    const deckWays = new Set(this.input.decks.flatMap(d => d.ways.map(Number)))
+    const carried = (f: MeshFeature) => f.properties.brunnel === 'bridge' || deckWays.has(Number(f.properties.id))
+    const lineEnds = (f: MeshFeature) => linesOf(f.geometry).flatMap(line => [line[0], line[line.length - 1]].map(p => p.join(',')))
+    const cycleEnds = new Set(this.input.roads.filter(f => f.properties.cycle && carried(f)).flatMap(lineEnds))
+    const runsOn = (f: MeshFeature) => !!f.properties.cycle && lineEnds(f).some(e => cycleEnds.has(e))
+    const ways = this.input.roads.filter(f => carried(f) || runsOn(f)).flatMap(f => {
       const kind = f.properties.class === 'rail' ? 'rail' as const : 'path' as const
       return f.properties.class === 'rail' || f.properties.class === 'path'
         ? linesOf(f.geometry).map(line => ({ kind, points: line.map(mercator), cycle: !!f.properties.cycle })) : []

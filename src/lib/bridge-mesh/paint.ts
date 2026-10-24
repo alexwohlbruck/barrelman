@@ -374,13 +374,15 @@ function strip(mesh: Mesh, points: Point[], laid: Laid, width: number, color: nu
     } else pieces.push([0, metres])
     for (const [s0, s1] of pieces) {
       if (s1 <= s0) continue
+      // Each corner on the deck's own top, kept as far over it as the line's ends are, so a strip does not sink into a deck that bends or slopes under it.
+      const topAt = (hit: Hit, p: Point) => (hit.deck >= 0 ? topZ(laid.surfaces[hit.deck], hit.segment, p) : null)
+      const [ta, tb] = [topAt(ha, a), topAt(hb, b)]
       const at = (s: number, side: number) => {
         const t = s / metres
-        return [
-          a[0] + (b[0] - a[0]) * t + nx * (offset + side * width / 2) - origin[0],
-          a[1] + (b[1] - a[1]) * t + ny * (offset + side * width / 2) - origin[1],
-          (za + (zb - za) * t) * scale,
-        ]
+        const p: Point = [a[0] + (b[0] - a[0]) * t + nx * (offset + side * width / 2), a[1] + (b[1] - a[1]) * t + ny * (offset + side * width / 2)]
+        const top = ta !== null && tb !== null ? topAt(t < 0.5 ? ha : hb, p) : null
+        const z = top !== null ? top + (za - ta!) + (zb - tb! - (za - ta!)) * t : za + (zb - za) * t
+        return [p[0] - origin[0], p[1] - origin[1], z * scale]
       }
       const corners = [at(s0, 1), at(s0, -1), at(s1, -1), at(s1, 1)]
       const hits = [ha, ha, hb, hb]
