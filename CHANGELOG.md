@@ -21,6 +21,7 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 * Decks under a landmark model of their bridge leave its structure to the model.
 * Bridge decks run on smooth vertical curves, without bumps where a suspended span's camber meets its approaches, where decks meet, or where a high deck crosses a shoreline.
 * Ramps and approaches read as continuous ribbons: a deck keeps to its own bridge outline where it passes under another, ramps merge into the main line at its height, and stray scraps of footbridge are no longer drawn.
+* Bridge mesh downloads are under half their former size.
 * A walkway mapped as short footbridges with untagged stretches between them is drawn as one continuous elevated walkway down to the street.
 * A bridge's low abutments and piers are no longer extruded as buildings through its deck.
 * Cycleways on bridge decks are painted green, as bike lanes are, unbroken to the deck's end where OSM maps stretches as embankment or ends the bridge way early.
