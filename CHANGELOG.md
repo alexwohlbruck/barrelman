@@ -10,6 +10,19 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Added
+
+* `GET /tiles/bridges/tiles/14/{x}/{y}` serves every deck mesh a tile meets in one bundle, so clients load decks alongside their map tiles.
+* Build Bridge Decks takes `--from w,s` to resume a run at a cell.
+
+### Changed
+
+* Deck meshes carry only the stretches of ground roads that pass under them, cutting dense downtown meshes by up to half.
+
+### Fixed
+
+* Build Bridge Decks no longer runs out of memory on narrow side-by-side decks, which stopped a US-wide run in Albuquerque.
+
 ## [0.10.25] - 2026-10-24
 
 ### Added
