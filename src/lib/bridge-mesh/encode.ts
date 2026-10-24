@@ -60,12 +60,7 @@ export function liftField(at: (point: Point) => number | null) {
 /** Metres a mark may lie off the deck top under it and still take that top's lift. */
 const ON_TOP = 0.5
 
-/**
- * Paint, rails and routes lifted as the deck top under them is: interpolated
- * across its triangle, as the GPU draws it, rather than read off the field at
- * each mark's own corner, which near the ground follows bumps the top's
- * sparser corners do not, and sinks the mark into the deck in places.
- */
+/** Paint, rails and routes take the lift of the deck-top triangle under them, as the GPU interpolates it there. */
 function onTops(built: BakedBridge, lift: Float32Array) {
   const { position, normal } = built.mesh
   const from = built.ranges.paintFrom
@@ -77,7 +72,9 @@ function onTops(built: BakedBridge, lift: Float32Array) {
     for (let i = Math.floor(Math.min(...xs) / cell); i <= Math.floor(Math.max(...xs) / cell); i++)
       for (let j = Math.floor(Math.min(...ys) / cell); j <= Math.floor(Math.max(...ys) / cell); j++) {
         const key = `${i},${j}`
-        grid.set(key, [...(grid.get(key) ?? []), t])
+        const bucket = grid.get(key)
+        if (bucket) bucket.push(t)
+        else grid.set(key, [t])
       }
   }
   const tolerance = ON_TOP / metresPerUnit(built.origin[1])
