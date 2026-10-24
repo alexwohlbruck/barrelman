@@ -10,6 +10,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.10.26] - 2026-10-24
+
 ### Added
 
 * `GET /tiles/bridges/index/14/{x}/{y}` lists the deck meshes a tile meets with their bounds, so clients fetch a view's meshes alongside its map tiles.
