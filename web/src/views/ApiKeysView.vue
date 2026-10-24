@@ -7,9 +7,9 @@
  * plainly that it will not be shown again.
  */
 import { computed, onMounted, ref } from 'vue'
-import { Check, Copy, Globe, KeyRound, Plus, Trash2 } from 'lucide-vue-next'
+import { Check, Copy, KeyRound, Plus } from 'lucide-vue-next'
 import PageHeader from '@/components/PageHeader.vue'
-import Badge from '@/components/ui/Badge.vue'
+import ApiKeyRow from '@/components/ApiKeyRow.vue'
 import Button from '@/components/ui/Button.vue'
 import Card from '@/components/ui/Card.vue'
 import CardContent from '@/components/ui/CardContent.vue'
@@ -18,9 +18,10 @@ import Input from '@/components/ui/Input.vue'
 import Label from '@/components/ui/Label.vue'
 import Spinner from '@/components/ui/Spinner.vue'
 import Textarea from '@/components/ui/Textarea.vue'
-import { createApiKey, getApiKeys, getPlans, revokeApiKey, updateApiKey } from '@/lib/api'
+import { createApiKey, getApiKeys, getPlans } from '@/lib/api'
+import { isAdmin } from '@/lib/auth'
 import { toast } from '@/lib/toast'
-import type { ApiKeySummary, CreatedApiKey, EndpointGroup, Scope } from '@/lib/types'
+import type { ApiKeySummary, CreatedApiKey, Scope } from '@/lib/types'
 
 function message(err: unknown) {
   return err instanceof Error ? err.message : undefined
@@ -37,11 +38,6 @@ const newName = ref('')
 const newScopes = ref<Set<string>>(new Set())
 const newOrigins = ref('')
 
-/** The key whose origins are being edited, and the textarea backing that edit. */
-const editing = ref<ApiKeySummary | null>(null)
-const editOrigins = ref('')
-const savingOrigins = ref(false)
-
 /**
  * One origin per line is the only sane input here: origins contain commas
  * nowhere but a person typing a list will use them anyway, so splitting on both
@@ -57,7 +53,11 @@ function parseOrigins(text: string): string[] {
 const created = ref<CreatedApiKey | null>(null)
 const copied = ref(false)
 
-const groupScopes = computed(() => scopes.value.filter((s): s is EndpointGroup => s !== '*'))
+/**
+ * The server lists `admin` among the scopes, but only an administrator may
+ * grant it (and is refused otherwise), so nobody else is offered it.
+ */
+const groupScopes = computed(() => scopes.value.filter((s) => s !== '*' && (s !== 'admin' || isAdmin.value)))
 /** No explicit selection means full access, which matches the server default. */
 const scopeSummary = computed(() => (newScopes.value.size === 0 ? 'Full access' : `${newScopes.value.size} selected`))
 
@@ -91,26 +91,6 @@ function openCreate() {
   showCreate.value = true
 }
 
-function openOrigins(key: ApiKeySummary) {
-  editing.value = key
-  editOrigins.value = key.allowedOrigins.join('\n')
-}
-
-async function saveOrigins() {
-  if (!editing.value || savingOrigins.value) return
-  savingOrigins.value = true
-  try {
-    await updateApiKey(editing.value.id, { allowedOrigins: parseOrigins(editOrigins.value) })
-    toast({ title: 'Origins updated', variant: 'success' })
-    editing.value = null
-    await load()
-  } catch (err) {
-    toast({ title: 'Could not update origins', description: message(err), variant: 'error' })
-  } finally {
-    savingOrigins.value = false
-  }
-}
-
 async function submitCreate() {
   if (!newName.value.trim() || creating.value) return
   creating.value = true
@@ -142,20 +122,6 @@ async function copyKey() {
   }
 }
 
-async function revoke(key: ApiKeySummary) {
-  if (!confirm(`Revoke "${key.name}"? Any application using it will start failing immediately.`)) return
-  try {
-    await revokeApiKey(key.id)
-    toast({ title: `Revoked ${key.name}`, variant: 'success' })
-    await load()
-  } catch (err) {
-    toast({ title: 'Could not revoke the key', description: message(err), variant: 'error' })
-  }
-}
-
-function formatDate(value: string | null) {
-  return value ? new Date(value).toLocaleDateString(undefined, { dateStyle: 'medium' }) : '—'
-}
 </script>
 
 <template>
@@ -187,36 +153,19 @@ function formatDate(value: string | null) {
       </CardContent>
     </Card>
 
-    <div v-else class="flex flex-col gap-3">
-      <Card v-for="key in keys" :key="key.id">
-        <CardContent class="flex items-center gap-4 py-4">
-          <div class="min-w-0 flex-1">
-            <div class="flex items-center gap-2">
-              <span class="truncate font-medium">{{ key.name }}</span>
-              <Badge v-if="key.revokedAt" variant="destructive">revoked</Badge>
-            </div>
-            <div class="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
-              <code class="font-mono">{{ key.prefix }}…{{ key.last4 }}</code>
-              <span>Created {{ formatDate(key.createdAt) }}</span>
-              <span>Last used {{ formatDate(key.lastUsedAt) }}</span>
-            </div>
-            <div v-if="!key.scopes.includes('*')" class="mt-2 flex flex-wrap gap-1">
-              <Badge v-for="scope in key.scopes" :key="scope" variant="secondary">{{ scope }}</Badge>
-            </div>
-            <div v-if="key.allowedOrigins.length" class="mt-2 flex flex-wrap items-center gap-1">
-              <Globe class="size-3 text-muted-foreground" />
-              <Badge v-for="origin in key.allowedOrigins" :key="origin" variant="outline">{{ origin }}</Badge>
-            </div>
-          </div>
-          <Button v-if="!key.revokedAt" variant="ghost" size="sm" title="Origin restrictions" @click="openOrigins(key)">
-            <Globe class="size-4" />
-          </Button>
-          <Button v-if="!key.revokedAt" variant="ghost" size="sm" @click="revoke(key)">
-            <Trash2 class="size-4 text-destructive" />
-          </Button>
-        </CardContent>
-      </Card>
-    </div>
+    <ul v-else class="flex flex-col gap-3">
+      <ApiKeyRow
+        v-for="key in keys"
+        :key="key.id"
+        :api-key="key"
+        mode="self"
+        :scopes="scopes"
+        :owner-is-admin="isAdmin"
+        :viewer-is-admin="isAdmin"
+        :credit-costs="creditCosts"
+        @changed="load"
+      />
+    </ul>
 
     <!-- Create -->
     <Dialog v-model:open="showCreate" title="Create an API key">
@@ -250,7 +199,7 @@ function formatDate(value: string | null) {
               @click="toggleScope(scope)"
             >
               {{ scope }}
-              <span class="opacity-60">· {{ creditCosts[scope] }}cr</span>
+              <span v-if="creditCosts[scope] !== undefined" class="opacity-60">· {{ creditCosts[scope] }}cr</span>
             </button>
           </div>
         </div>
@@ -277,34 +226,6 @@ function formatDate(value: string | null) {
         <Button :disabled="creating || !newName.trim()" @click="submitCreate">
           <Spinner v-if="creating" class="size-4" />
           <template v-else>Create key</template>
-        </Button>
-      </div>
-    </Dialog>
-
-    <!-- Origin restrictions on an existing key -->
-    <Dialog
-      :open="editing !== null"
-      :title="`Origin restrictions — ${editing?.name ?? ''}`"
-      @update:open="editing = null"
-    >
-      <div class="flex flex-col gap-1.5">
-        <Textarea
-          v-model="editOrigins"
-          :rows="4"
-          placeholder="https://example.com&#10;https://*.netlify.app"
-          class="font-mono text-xs"
-        />
-        <p class="text-xs text-muted-foreground">
-          One per line; empty allows any origin. A restricted key only works from a browser on a matching
-          site — requests with no <code>Origin</code> or <code>Referer</code>, including anything sent with
-          curl or from a server, are refused.
-        </p>
-      </div>
-      <div class="mt-2 flex justify-end gap-2">
-        <Button variant="outline" @click="editing = null">Cancel</Button>
-        <Button :disabled="savingOrigins" @click="saveOrigins">
-          <Spinner v-if="savingOrigins" class="size-4" />
-          <template v-else>Save</template>
         </Button>
       </div>
     </Dialog>

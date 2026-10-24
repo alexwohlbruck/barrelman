@@ -13,8 +13,8 @@ import {
   revokeApiKey as _revokeApiKey,
   updateApiKeyOrigins as _updateApiKeyOrigins,
   updateApiKeyScopes as _updateApiKeyScopes,
+  keyPatchError,
 } from '../services/api-keys.service'
-import { invalidOrigins } from '../lib/origins'
 import {
   getBalance as _getBalance,
   listLedger as _listLedger,
@@ -35,7 +35,7 @@ import {
 import { describeSuspension } from '../services/moderation.service'
 import { terms as termsConfig } from '../config/accounts.config'
 import { resolveSession as _resolveSession, requireUser } from '../middleware/session'
-import { ALL_SCOPES, ADMIN_SCOPE, CREDIT_COSTS, isValidScope, listPlans, publicPlan } from '../billing/plans'
+import { ALL_SCOPES, CREDIT_COSTS, listPlans, publicPlan } from '../billing/plans'
 
 /** Keys per account. High enough never to bind in practice, low enough to bound abuse. */
 const MAX_KEYS_PER_ACCOUNT = 50
@@ -43,8 +43,6 @@ const MAX_KEYS_PER_ACCOUNT = 50
 /** Origins per key. Generous for deploy previews, bounded so the array stays sane. */
 const MAX_ORIGINS_PER_KEY = 20
 
-/** Shown alongside a rejected origin, since the accepted forms are not obvious. */
-const ORIGIN_EXAMPLE = 'https://example.com, http://localhost:5200, https://*.netlify.app'
 
 export interface AccountDeps {
   createApiKey: typeof _createApiKey
@@ -205,24 +203,13 @@ export function createAccountRoutes(overrides: Partial<AccountDeps> = {}) {
           return { error: `You can have at most ${MAX_KEYS_PER_ACCOUNT} active keys. Revoke one first.` }
         }
 
-        const invalid = (body.scopes ?? []).filter((s) => !isValidScope(s))
-        if (invalid.length > 0) {
-          set.status = 400
-          return { error: `Unknown scope(s): ${invalid.join(', ')}`, validScopes: ALL_SCOPES }
-        }
-
         // `admin` reaches /admin/* — full re-imports, DROP/TRUNCATE, moderation.
         // Minting it has to be gated on the requester already being an admin,
         // or self-service key creation becomes a privilege-escalation route.
-        if ((body.scopes ?? []).includes(ADMIN_SCOPE) && user!.role !== 'admin') {
-          set.status = 403
-          return { error: `Only an administrator may create a key with the "${ADMIN_SCOPE}" scope.` }
-        }
-
-        const badOrigins = invalidOrigins(body.allowedOrigins ?? [])
-        if (badOrigins.length > 0) {
-          set.status = 400
-          return { error: `Not valid origin(s): ${badOrigins.join(', ')}`, example: ORIGIN_EXAMPLE }
+        const invalid = keyPatchError(body, user!.role === 'admin')
+        if (invalid) {
+          set.status = invalid.status
+          return invalid.body
         }
 
         const created = await deps.createApiKey({
@@ -260,31 +247,29 @@ export function createAccountRoutes(overrides: Partial<AccountDeps> = {}) {
     .patch(
       '/keys/:id',
       async ({ user, params, body, set }) => {
-        let changed = false
+        // Refused for everyone here, administrators included: the exemption is
+        // only ever set through /admin/users/:id/keys, behind the admin guard
+        // and into the account's moderation log. Accepting it on this route —
+        // even gated on role — would be a second door to keep in step.
+        if (body.rateLimitExempt !== undefined) {
+          set.status = 403
+          return { error: 'Rate-limit exemptions are set by an administrator from the admin console.' }
+        }
 
+        const invalid = keyPatchError(body, user!.role === 'admin')
+        if (invalid) {
+          set.status = invalid.status
+          return invalid.body
+        }
+
+        let changed = false
         if (body.name !== undefined) {
           changed = (await deps.renameApiKey(user!.id, params.id, body.name)) || changed
         }
         if (body.scopes !== undefined) {
-          // Same escalation guard as creation — otherwise a non-admin could
-          // mint a plain key and then widen it to `admin`.
-          if (body.scopes.includes(ADMIN_SCOPE) && user!.role !== 'admin') {
-            set.status = 403
-            return { error: `Only an administrator may grant the "${ADMIN_SCOPE}" scope.` }
-          }
-          const invalid = body.scopes.filter((s) => !isValidScope(s))
-          if (invalid.length > 0) {
-            set.status = 400
-            return { error: `Unknown scope(s): ${invalid.join(', ')}`, validScopes: ALL_SCOPES }
-          }
           changed = (await deps.updateApiKeyScopes(user!.id, params.id, body.scopes)) || changed
         }
         if (body.allowedOrigins !== undefined) {
-          const badOrigins = invalidOrigins(body.allowedOrigins)
-          if (badOrigins.length > 0) {
-            set.status = 400
-            return { error: `Not valid origin(s): ${badOrigins.join(', ')}`, example: ORIGIN_EXAMPLE }
-          }
           changed = (await deps.updateApiKeyOrigins(user!.id, params.id, body.allowedOrigins)) || changed
         }
 
@@ -299,6 +284,8 @@ export function createAccountRoutes(overrides: Partial<AccountDeps> = {}) {
           name: t.Optional(t.String({ minLength: 1, maxLength: 80 })),
           scopes: t.Optional(t.Array(t.String())),
           allowedOrigins: t.Optional(t.Array(t.String(), { maxItems: MAX_ORIGINS_PER_KEY })),
+          // Declared so it is refused with a reason rather than silently dropped.
+          rateLimitExempt: t.Optional(t.Boolean()),
         }),
         detail: {
           summary: 'Rename an API key or change its scopes and origins',

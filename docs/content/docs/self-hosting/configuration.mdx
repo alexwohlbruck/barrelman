@@ -191,6 +191,7 @@ endpoint would let anyone who guesses the URL grant themselves a plan.
 | Variable | Default | Description |
 |---|---|---|
 | `BARRELMAN_USAGE_FLUSH_MS` | `5000` | Buffer flush interval. A crash loses at most this much, in the customer's favour |
+| `BARRELMAN_REQUEST_METRICS_RETENTION_DAYS` | `90` | Days of hourly request metrics kept for `/console/traffic` |
 | `BARRELMAN_BALANCE_CACHE_MS` | `15000` | Balance cache TTL. Bounds how far an account can overshoot |
 | `BARRELMAN_OVERAGE_REPORT_MS` | `900000` | How often overage is batched to the provider |
 | `BARRELMAN_ACCOUNT_SWEEP_MS` | `3600000` | Expired sessions, lifted suspensions, abuse detection |

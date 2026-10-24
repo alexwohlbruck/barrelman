@@ -15,7 +15,6 @@ import { computed, onMounted, ref } from 'vue'
 import {
   AlertTriangle,
   Ban,
-  BarChart3,
   CreditCard,
   RefreshCw,
   Search,
@@ -25,7 +24,7 @@ import {
   User,
 } from 'lucide-vue-next'
 import PageHeader from '@/components/PageHeader.vue'
-import UserDetailDialog from '@/components/UserDetailDialog.vue'
+import UserDetailPane from '@/components/UserDetailPane.vue'
 import Badge from '@/components/ui/Badge.vue'
 import Button from '@/components/ui/Button.vue'
 import Card from '@/components/ui/Card.vue'
@@ -311,7 +310,12 @@ function describeDetail(detail: Record<string, unknown> | null) {
       </Card>
 
       <div v-else class="flex flex-col gap-2">
-        <Card v-for="account in users" :key="account.id">
+        <Card
+          v-for="account in users"
+          :key="account.id"
+          class="cursor-pointer transition-colors hover:border-foreground/20"
+          @click="detailTarget = account"
+        >
           <CardContent class="flex items-center gap-4 py-4">
             <div
               class="flex size-9 shrink-0 items-center justify-center rounded-lg"
@@ -342,11 +346,8 @@ function describeDetail(detail: Record<string, unknown> | null) {
               <p v-else class="mt-1 text-xs text-muted-foreground">Joined {{ formatDate(account.createdAt) }}</p>
             </div>
 
-            <Button variant="ghost" size="sm" @click="detailTarget = account">
-              <BarChart3 class="size-4" />
-              Usage
-            </Button>
-
+            <!-- Row actions act on the account directly; the row itself opens the pane. -->
+            <div class="flex items-center gap-1" @click.stop>
             <Button variant="ghost" size="sm" :disabled="busy === account.id" @click="openPlan(account)">
               <CreditCard class="size-4" />
               Plan
@@ -395,6 +396,7 @@ function describeDetail(detail: Record<string, unknown> | null) {
             >
               <Trash2 class="size-4 text-destructive" />
             </Button>
+            </div>
           </CardContent>
         </Card>
       </div>
@@ -435,7 +437,7 @@ function describeDetail(detail: Record<string, unknown> | null) {
       </div>
     </template>
 
-    <UserDetailDialog :account="detailTarget" @close="detailTarget = null" />
+    <UserDetailPane :user-id="detailTarget?.id ?? null" :email="detailTarget?.email" @close="detailTarget = null" />
 
     <!-- Delete -->
     <Dialog :open="deleteTarget !== null" title="Delete account" @update:open="deleteTarget = null">

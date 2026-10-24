@@ -28,6 +28,43 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 * Twin roadways of a bridge approach stay level with each other where a lane splits off one of them; the Brooklyn Bridge's were 3 m apart.
 * Lane lines and painted lanes stay on a deck that runs close over bumpy ground instead of sinking into it in patches under exaggerated terrain.
 
+## [0.10.24] - 2026-10-23
+
+### Changed
+
+* **The API keys page has the same key controls as the admin account pane.**
+  Each key can be renamed, rescoped, restricted to origins or revoked from one
+  edit panel. Administrators also get the rate-limit switch on their own keys.
+  Customers see a key's exemption but cannot change it: `PATCH
+  /account/keys/:id` now refuses `rateLimitExempt` with a 403 rather than
+  ignoring it.
+
+### Fixed
+
+* The create-key dialog no longer offers the `admin` scope to accounts that
+  cannot be granted it, which ended in a 403.
+
+## [0.10.23] - 2026-10-23
+
+### Added
+
+* **Rate limits can be turned off for one key.** In the console, an
+  administrator can switch off rate limiting for a single API key. It works
+  like the `first-party` plan, but only for that key: the per-minute limits
+  and concurrency caps no longer apply to it, while credits, scopes, origins
+  and suspension still do. The account's other keys stay limited.
+* **A Traffic page** at `/console/traffic` shows how many requests were
+  rate-limited and by which limit, how many were refused for credits or bad
+  keys, server errors, and p50/p95/p99 response times per endpoint group. Data
+  is hourly, kept for 90 days by default
+  (`BARRELMAN_REQUEST_METRICS_RETENTION_DAYS`). It ranks the accounts and keys
+  that hit limits most, with each key's rate-limit switch beside it. Service
+  key and anonymous traffic is included.
+* **Clicking an account in the console opens a detail pane** with its usage,
+  that account's traffic, and its keys. An administrator can rename a key,
+  change its scopes or allowed origins, or revoke it from the pane, and every
+  change is logged to the account's history.
+
 ## [0.10.22] - 2026-10-17
 
 ### Fixed

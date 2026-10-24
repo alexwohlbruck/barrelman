@@ -15,8 +15,8 @@ import { LRUCache } from 'lru-cache'
 import { db } from '../db'
 import { apiKeys, users, type ApiKey } from '../schema/accounts'
 import { generateId, randomBase62, sha256Hex } from '../lib/crypto'
-import { normalizeOrigins } from '../lib/origins'
-import { ADMIN_SCOPE, isValidScope, type Scope } from '../billing/plans'
+import { invalidOrigins, normalizeOrigins } from '../lib/origins'
+import { ADMIN_SCOPE, ALL_SCOPES, isValidScope, type Scope } from '../billing/plans'
 
 const KEY_PREFIX = 'brm'
 /** 40 base62 characters ≈ 238 bits — far beyond guessing range. */
@@ -43,6 +43,8 @@ export interface ResolvedKey {
    */
   suspended: boolean
   suspensionReason: string | null
+  /** Operator-granted: the throttle does not apply to this key. */
+  rateLimitExempt: boolean
 }
 
 const cache = new LRUCache<string, ResolvedKey>({ max: CACHE_MAX, ttl: CACHE_TTL_MS })
@@ -140,6 +142,7 @@ export async function resolveApiKey(presented: string): Promise<ResolvedKey | nu
       userId: apiKeys.userId,
       scopes: apiKeys.scopes,
       allowedOrigins: apiKeys.allowedOrigins,
+      rateLimitExempt: apiKeys.rateLimitExempt,
       revokedAt: apiKeys.revokedAt,
       expiresAt: apiKeys.expiresAt,
       plan: users.plan,
@@ -168,6 +171,7 @@ export async function resolveApiKey(presented: string): Promise<ResolvedKey | nu
     role: row.role,
     suspended: Boolean(row.suspendedAt),
     suspensionReason: row.suspendedReason,
+    rateLimitExempt: row.rateLimitExempt,
   }
 
   cache.set(hash, resolved)
@@ -203,6 +207,7 @@ export async function listApiKeys(userId: string, includeRevoked = false): Promi
       last4: apiKeys.last4,
       scopes: apiKeys.scopes,
       allowedOrigins: apiKeys.allowedOrigins,
+      rateLimitExempt: apiKeys.rateLimitExempt,
       lastUsedAt: apiKeys.lastUsedAt,
       revokedAt: apiKeys.revokedAt,
       expiresAt: apiKeys.expiresAt,
@@ -254,6 +259,70 @@ export async function updateApiKeyOrigins(
   // a cache TTL later, or the console reports a restriction that is not live.
   cache.delete(row.hash)
   return true
+}
+
+/**
+ * Lift or restore the throttle for one key. Operator-only — the route that
+ * calls this is behind the admin guard, and nothing on the account side does.
+ */
+export async function setKeyRateLimitExempt(userId: string, keyId: string, exempt: boolean): Promise<boolean> {
+  const [row] = await db
+    .update(apiKeys)
+    .set({ rateLimitExempt: exempt })
+    .where(and(eq(apiKeys.id, keyId), eq(apiKeys.userId, userId)))
+    .returning({ hash: apiKeys.hash })
+  if (!row) return false
+  // Both directions have to be immediate: an operator lifting a limit is
+  // usually doing it because a customer is being refused right now.
+  cache.delete(row.hash)
+  return true
+}
+
+/** The parts of a key either its owner or an operator may change. */
+export interface KeyPatch {
+  name?: string
+  scopes?: string[]
+  allowedOrigins?: string[]
+}
+
+export interface KeyPatchError {
+  status: number
+  body: Record<string, unknown>
+}
+
+/** Shown alongside a rejected origin, since the accepted forms are not obvious. */
+export const ORIGIN_EXAMPLE = 'https://example.com, http://localhost:5200, https://*.netlify.app'
+
+/**
+ * Validate a patch before any of it is applied. Shared by the account and
+ * admin routes so the `admin`-scope escalation guard cannot be present on one
+ * and missing on the other.
+ *
+ * `ownerIsAdmin` is about the key's OWNER, not whoever is editing it. On the
+ * account side those are the same person; from the console it is what stops an
+ * operator handing a customer's key `admin`, which would reach /admin/* the
+ * moment that customer was promoted for any other reason.
+ */
+export function keyPatchError(patch: KeyPatch, ownerIsAdmin: boolean): KeyPatchError | null {
+  if (patch.scopes !== undefined) {
+    if (patch.scopes.includes(ADMIN_SCOPE) && !ownerIsAdmin) {
+      return {
+        status: 403,
+        body: { error: `Only an administrator's own keys may hold the "${ADMIN_SCOPE}" scope.` },
+      }
+    }
+    const invalid = patch.scopes.filter((s) => !isValidScope(s))
+    if (invalid.length > 0) {
+      return { status: 400, body: { error: `Unknown scope(s): ${invalid.join(', ')}`, validScopes: ALL_SCOPES } }
+    }
+  }
+  if (patch.allowedOrigins !== undefined) {
+    const bad = invalidOrigins(patch.allowedOrigins)
+    if (bad.length > 0) {
+      return { status: 400, body: { error: `Not valid origin(s): ${bad.join(', ')}`, example: ORIGIN_EXAMPLE } }
+    }
+  }
+  return null
 }
 
 /**
