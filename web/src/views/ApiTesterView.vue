@@ -41,6 +41,13 @@ const presets: Preset[] = [
   { label: 'Search', method: 'POST', path: '/search', body: '{\n  "query": "starbucks",\n  "limit": 5\n}', auth: 'api' },
   { label: 'Reverse geocode', method: 'GET', path: '/geocode', query: 'lat=40.7484&lng=-73.9857', auth: 'api' },
   { label: 'Contains', method: 'GET', path: '/contains', query: 'lat=40.7484&lng=-73.9857', auth: 'api' },
+  {
+    label: 'Map match',
+    method: 'POST',
+    path: '/match',
+    body: '{\n  "profile": "bike",\n  "points": [\n    { "lat": 40.7359, "lon": -73.9903 },\n    { "lat": 40.7484, "lon": -73.9857 },\n    { "lat": 40.7644, "lon": -73.9730 }\n  ]\n}',
+    auth: 'api',
+  },
   // Public-API surface. Only the unauthenticated endpoints are listed: this
   // tester replays requests from the server, which carries no session cookie,
   // so a preset for /account/keys or /account/credits would only ever 401.

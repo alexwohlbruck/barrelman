@@ -117,4 +117,25 @@ curl -X POST https://api.barrelman.dev/transit/route \
   }'
 ```
 
+### Match a GPS trace to the road
+
+`POST /match` snaps a trace to the road network and returns the path it most likely took, with elevation and path details. Points may be seconds apart (a GPS log) or many minutes apart (photo geotags): gaps wider than `max_gap_meters` (400 m) or `max_gap_seconds` (60 s) are routed rather than matched, and the `segments` array says which stretches were which. A GPX file works too — send it as `application/gpx+xml` with `?profile=bike`.
+
+```bash
+curl -X POST https://api.barrelman.dev/match \
+  -H "Authorization: Bearer $BARRELMAN_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "profile": "bike",
+    "snap_prevention": ["bridge", "motorway"],
+    "points": [
+      { "lat": 35.2272, "lon": -80.8431, "time": "2026-05-01T10:00:00Z" },
+      { "lat": 35.2100, "lon": -80.8098, "time": "2026-05-01T10:20:00Z" },
+      { "lat": 35.2146, "lon": -80.7800, "time": "2026-05-01T10:40:00Z" }
+    ]
+  }'
+```
+
+`snap_prevention` keeps a point taken under an overpass from landing on the road above it. `snapped_points` gives each input point's position on the returned path.
+
 See the [API Reference](/api) for the full parameter list on every endpoint.

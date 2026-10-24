@@ -9,6 +9,8 @@
  * separate trace_attributes call like Valhalla required.
  */
 
+import { graphHopperUrl } from '../lib/graphhopper'
+
 // ── Types ───────────────────────────────────────────────────────────
 
 export interface RouteEdgeSegment {
@@ -72,7 +74,7 @@ const DEG_TO_RAD = Math.PI / 180
 const EARTH_RADIUS = 6371000 // meters
 
 /** Haversine distance between two points in meters */
-function haversine(
+export function haversine(
   lat1: number, lon1: number,
   lat2: number, lon2: number,
 ): number {
@@ -87,7 +89,7 @@ function haversine(
 }
 
 /** Build cumulative distance array for coordinate array */
-function buildCumulativeDistances(
+export function buildCumulativeDistances(
   coordinates: number[][],
 ): number[] {
   const distances = [0]
@@ -102,7 +104,7 @@ function buildCumulativeDistances(
 
 // ── Elevation stats ─────────────────────────────────────────────────
 
-function computeElevationStats(coordinates: number[][]): ElevationStats {
+export function computeElevationStats(coordinates: number[][]): ElevationStats {
   let totalGain = 0
   let totalLoss = 0
   let maxElevation = -Infinity
@@ -139,7 +141,7 @@ function computeElevationStats(coordinates: number[][]): ElevationStats {
  * GraphHopper returns details as arrays of [fromIndex, toIndex, value].
  * Merge all detail types into unified edge segments keyed by distance ranges.
  */
-function buildEdgeSegments(
+export function buildEdgeSegments(
   details: Record<string, any[]>,
   cumulativeDistances: number[],
 ): RouteEdgeSegment[] {
@@ -233,12 +235,8 @@ function buildEdgeSegments(
 
 // ── Main service function ───────────────────────────────────────────
 
-function getGraphHopperUrl(): string {
-  return process.env.GRAPHHOPPER_URL || 'http://barrelman-graphhopper:8989'
-}
-
 /** All path details we request from GraphHopper for enriched responses */
-const DETAIL_KEYS = [
+export const DETAIL_KEYS = [
   'surface',
   'road_class',
   'road_environment',
@@ -259,7 +257,7 @@ export async function getEnrichedRoute(
   requestBody: any,
   fetchFn: FetchFn = (url, init) => fetch(url, init),
 ): Promise<EnrichedRouteResponse> {
-  const ghUrl = getGraphHopperUrl()
+  const ghUrl = graphHopperUrl()
 
   // Build the GraphHopper route request with all enrichment details
   const routeRequest = {

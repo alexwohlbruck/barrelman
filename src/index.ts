@@ -23,6 +23,7 @@ import { bridgeMeshRoutes } from './routes/bridge-meshes'
 import { landmarkRoutes } from './routes/landmarks'
 import { graphhopperRoutes } from './routes/graphhopper'
 import { routeRoutes } from './routes/route'
+import { matchRoutes } from './routes/match'
 import { isochroneRoutes } from './routes/isochrone'
 import { transitRoutes } from './routes/transit'
 import { gbfsRoutes } from './routes/gbfs'
@@ -154,6 +155,7 @@ const app = new Elysia()
   .use(tileRoutes)
   .use(graphhopperRoutes)
   .use(routeRoutes)
+  .use(matchRoutes)
   .use(isochroneRoutes)
   .use(transitRoutes)
   .use(gbfsRoutes)
