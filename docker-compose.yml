@@ -280,6 +280,7 @@ services:
       BARRELMAN_LANDMARKS_URL: ${BARRELMAN_LANDMARKS_URL:-}
       LANDMARKS_CONCURRENCY: ${LANDMARKS_CONCURRENCY:-}
       # On the data volume, so imported models survive a container rebuild.
+      BRIDGE_MESH_DIR: ${BRIDGE_MESH_DIR:-/data/bridge-meshes}
       LANDMARKS_CACHE_DIR: ${LANDMARKS_CACHE_DIR:-/data/landmarks}
       LANDMARK_SOURCE_PRIORITY: ${LANDMARK_SOURCE_PRIORITY:-}
       # Parallel GraphHopper calls per isochrone. Documented in
@@ -475,6 +476,7 @@ services:
       OSM2PGSQL_PROCESSES: ${OSM2PGSQL_PROCESSES:-}
       # Terrain for Build Bridge Decks (import/generate-bridge-decks.ts), which
       # runs here. Blank reads Mapterhorn's public tiles.
+      BRIDGE_MESH_DIR: ${BRIDGE_MESH_DIR:-/data/bridge-meshes}
       BRIDGE_DECKS_DEM_TILES: ${BRIDGE_DECKS_DEM_TILES:-}
       # Incremental bridge decks (update-osm.sh → update-bridge-decks.ts).
       # On unless set to 0; console and scheduled runs pass their own switch.

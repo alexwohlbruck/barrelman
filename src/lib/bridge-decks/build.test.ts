@@ -45,6 +45,34 @@ describe('buildDecks', () => {
     expect(joining.heights.at(-1)!).toBeGreaterThan(201)
   })
 
+  it('a ramp merging alongside a main line takes its height along the merge; one meeting it square keeps its own grade', async () => {
+    const main: Way = { id: 1, points: [east(0), east(400)], kind: 'road', layer: 1, width: 14 }
+    // Runs in beside the main line's carriageway for its last 60 m, ending on it.
+    const merging: Way = { id: 2, points: [east(60, -40), east(140, -4), east(200, -3)], kind: 'road', layer: 1, width: 4 }
+    const square: Way = { id: 3, points: [east(300, -120), east(300, -1)], kind: 'road', layer: 1, width: 6 }
+    const decks = await buildDecks(input({
+      ways: [main, merging, square],
+      onGround: new Set([key(east(0)), key(east(400)), key(east(60, -40)), key(east(300, -120))]),
+      crossed: [{ kind: 'road', points: [east(200, -60), east(200, 60)] }],
+    }), ground(200))
+    const [m, r, t] = [1, 2, 3].map(w => decks.find(d => d.ways.includes(w))!)
+    const zAt = (d: typeof m, p: Point) => { const k = d.points.reduce((b, q, i) => (Math.hypot(q[0] - p[0], q[1] - p[1]) < Math.hypot(d.points[b][0] - p[0], d.points[b][1] - p[1]) ? i : b), 0); return d.heights[k] }
+    for (const x of [160, 180]) expect(Math.abs(zAt(r, east(x, -3.5)) - zAt(m, east(x)))).toBeLessThan(0.15)
+    // Square to the main line the ramp is nowhere within it but its end, and climbs straight to it.
+    const climb = t.heights.slice(1).map((z, i) => z - t.heights[i])
+    expect(Math.max(...climb) - Math.min(...climb.slice(2, -2))).toBeLessThan(0.5)
+  })
+
+  it('leaves out a scrap of footbridge meeting nothing at either end, but keeps a short road bridge', async () => {
+    const decks = await buildDecks(input({
+      ways: [{ id: 1, points: [east(0), east(20)], kind: 'path', layer: 1, width: 3 }, { id: 2, points: [east(0, 50), east(20, 50)], kind: 'road', layer: 1, width: 8 }],
+      raised: new Set([key(east(0)), key(east(20)), key(east(0, 50)), key(east(20, 50))]),
+      onGround: new Set([key(east(0)), key(east(20)), key(east(0, 50)), key(east(20, 50))]),
+      crossed: [{ kind: 'road', points: [east(10, -30), east(10, 80)] }],
+    }), ground(200))
+    expect(decks.map(d => d.kind)).toEqual(['road'])
+  })
+
   it('an end rests on the deck it joins, not a lower one it lies over', async () => {
     // A layer-1 road runs north-south on the ground; a layer-2 deck crosses
     // over it, and a layer-2 ramp ends on that deck right above the road.

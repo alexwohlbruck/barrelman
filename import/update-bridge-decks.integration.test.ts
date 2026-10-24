@@ -13,7 +13,8 @@
  */
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import postgres from 'postgres'
-import { readFileSync } from 'fs'
+import { readFileSync, mkdtempSync, rmSync } from 'fs'
+import { tmpdir } from 'os'
 import { join } from 'path'
 import { Dem } from '../src/lib/bridge-decks/dem'
 import { grid, toUnits, type UnitPoint } from '../src/lib/bridge-decks/grid'
@@ -47,6 +48,8 @@ const ways: [number, string, Record<string, string>][] = [
 const flat = () => new Dem(async () => ({ size: 4, data: new Float32Array(16).fill(200) }))
 const run = DATABASE_URL ? describe : describe.skip
 let sql: postgres.Sql
+let meshDirectory: string
+const savedMeshDirectory = process.env.BRIDGE_MESH_DIR
 
 const file = (name: string) => readFileSync(join(import.meta.dir, name), 'utf8')
 const decks = async () => sql<{ id: string; ways: string[] }[]>`SELECT id, ways::text[] AS ways FROM bridge_decks ORDER BY id`
@@ -83,11 +86,13 @@ async function replay(ids: string[], edited: string[], change: string) {
 
 run('incremental bridge decks', () => {
   beforeAll(async () => {
+    meshDirectory = mkdtempSync(join(tmpdir(), 'bridge-import-test-'))
+    process.env.BRIDGE_MESH_DIR = meshDirectory
     sql = postgres(DATABASE_URL!, { max: 1, onnotice: () => {}, connection: { search_path: `${SCHEMA}, public` } })
     const [{ shared }] = await sql`SELECT to_regclass('public.bridge_decks') IS NOT NULL OR to_regclass('public.bridge_deck_cells') IS NOT NULL AS shared`
     if (shared) throw new Error('public has bridge tables of its own: point DATABASE_URL at an empty scratch database')
     const ddl = file('create-detail-views.sql')
-    const tables = ddl.slice(ddl.indexOf('CREATE OR REPLACE FUNCTION bridge_deck_class'), ddl.indexOf('CREATE OR REPLACE VIEW bridge_deck_tiles'))
+    const tables = ddl.slice(ddl.indexOf('CREATE TABLE IF NOT EXISTS road_surfaces'), ddl.indexOf('CREATE OR REPLACE VIEW bridge_deck_tiles'))
     await sql.unsafe(`DROP SCHEMA IF EXISTS ${SCHEMA} CASCADE; CREATE SCHEMA ${SCHEMA};
       CREATE TABLE geo_places (id text, osm_type char(1), osm_id bigint, name text, categories text[], tags jsonb,
         geom geometry(Geometry, 4326), geom_type text, admin_level int);
@@ -103,6 +108,9 @@ run('incremental bridge decks', () => {
   afterAll(async () => {
     await sql?.unsafe(`DROP SCHEMA IF EXISTS ${SCHEMA} CASCADE; DROP SCHEMA IF EXISTS osm_replay CASCADE`)
     await sql?.end()
+    if (meshDirectory) rmSync(meshDirectory, { recursive: true, force: true })
+    if (savedMeshDirectory === undefined) delete process.env.BRIDGE_MESH_DIR
+    else process.env.BRIDGE_MESH_DIR = savedMeshDirectory
   })
 
   test('builds one deck per bridge in the cell, and records the cell', async () => {

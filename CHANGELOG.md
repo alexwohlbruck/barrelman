@@ -10,6 +10,24 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Added
+
+* Bridge imports now precompute deck and road-marking meshes for clients to download and draw without rebuilding geometry.
+
+### Changed
+
+* Bridge decks stand at the height OSM records for the bridge (`height` on its outline, or its charted clearance), with suspended spans cambered between their towers and no piers under them.
+* Each roadway runs as one deck through anchorages and other joints mapped without a layer, without dips; ramps dip under ramps that climb over them, and piers stand clear of roads and decks below.
+* Decks under a landmark model of their bridge leave its structure to the model.
+* Bridge decks run on smooth vertical curves, without bumps where a suspended span's camber meets its approaches, where decks meet, or where a high deck crosses a shoreline.
+* Ramps and approaches read as continuous ribbons: a deck keeps to its own bridge outline where it passes under another, ramps merge into the main line at its height, and stray scraps of footbridge are no longer drawn.
+* Bridge mesh downloads are under half their former size.
+* A walkway mapped as short footbridges with untagged stretches between them is drawn as one continuous elevated walkway down to the street.
+* A bridge's low abutments and piers are no longer extruded as buildings through its deck.
+* Cycleways on bridge decks are painted green, as bike lanes are, unbroken to the deck's end where OSM maps stretches as embankment or ends the bridge way early.
+* Twin roadways of a bridge approach stay level with each other where a lane splits off one of them; the Brooklyn Bridge's were 3 m apart.
+* Lane lines and painted lanes stay on a deck that runs close over bumpy ground instead of sinking into it in patches under exaggerated terrain.
+
 ## [0.10.24] - 2026-10-23
 
 ### Changed

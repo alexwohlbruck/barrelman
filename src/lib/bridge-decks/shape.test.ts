@@ -22,6 +22,14 @@ describe('shapeDecks', () => {
     expect(left[0]).toBeLessThan(left[9])
   })
 
+  it('keeps to its own outline where it passes under another bridge\'s', () => {
+    // A ramp 5 m either side in its own outline, crossing under a bridge whose outline runs 40 m across it.
+    const own = outline('way/1', [[0, 5], [120, 5], [120, -5], [0, -5]])
+    const over = outline('way/2', [[50, 40], [70, 40], [70, -40], [50, -40]])
+    const [shape] = shapeDecks([deck(0, 120)], [over, own], [[false, false]])
+    expect(Math.max(...shape!.sides[0], ...shape!.sides[1])).toBeCloseTo(5, 0)
+  })
+
   it('never narrows a deck below its carriageway', () => {
     const tight = outline('way/1', [[0, 2], [60, 2], [60, -2], [0, -2]])
     const [shape] = shapeDecks([deck(0, 60, 0, 4)], [tight], [[false, false]])
