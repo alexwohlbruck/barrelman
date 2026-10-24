@@ -3,6 +3,9 @@ import { join } from 'path'
 import { apiAuth, apiAuthAfter } from '../middleware/api-auth'
 import { resolvePortolanTilesDir } from '../config/portolan'
 import { resolveTileBundle } from '../config/tile-bundles'
+import { createDeckTiles, DECK_TILE_ZOOMS, withDeckField } from '../lib/bridge-mesh/tile-pieces'
+import { bridgeMeshDirectory } from '../lib/bridge-mesh/files'
+import { deckFilesIn } from '../lib/bridge-mesh/deck-lookup'
 
 function getMartinUrl() {
   return process.env.MARTIN_URL || 'http://barrelman-martin:3000'
@@ -80,9 +83,10 @@ export function acceptsGzip(header: string | undefined): boolean {
 }
 
 export function createTileRoutes(
-  deps: { fetchTile?: TileFetcher; portolanTilesDir?: string } = {},
+  deps: { fetchTile?: TileFetcher; portolanTilesDir?: string; deckTile?: (z: number, x: number, y: number) => Promise<Uint8Array> } = {},
 ) {
   const fetchTile: TileFetcher = deps.fetchTile || ((url: string) => fetch(url))
+  const deckTile = deps.deckTile ?? createDeckTiles(bridgeMeshDirectory(), deckFilesIn)
 
   /**
    * Portolan tiles are static files, not Martin: `portolan sync` writes MVT
@@ -318,7 +322,7 @@ export function createTileRoutes(
     )
     .get(
       '/:source/:z/:x/:y',
-      async ({ params, headers, set }) => {
+      async ({ params, query, headers, set }) => {
         const { source, z, x, y } = params
 
         if (!SOURCE_RE.test(source) || !Z_RE.test(z) || !XY_RE.test(x) || !Y_RE.test(y)) {
@@ -363,7 +367,16 @@ export function createTileRoutes(
          * Vary, because the answer now differs by request header and a shared
          * cache must not hand a gzipped tile to a client that cannot read it.
          */
-        const body = new Uint8Array(await response.arrayBuffer())
+        let body = new Uint8Array(await response.arrayBuffer())
+        // Deck meshes ride in the tile they are drawn with, for a client that asks: see lib/bridge-mesh/tile-pieces.ts.
+        const zoom = Number(z)
+        if (query.decks === '1' && zoom >= DECK_TILE_ZOOMS.min && zoom <= DECK_TILE_ZOOMS.max && martinSource.split(',').includes('bridge_decks')) {
+          try {
+            body = withDeckField(body, await deckTile(zoom, Number(x), Number(y.replace(/\..*$/, ''))))
+          } catch (error) {
+            console.warn(`[deck tiles] ${z}/${x}/${y}:`, error)
+          }
+        }
         if (!acceptsGzip(headers['accept-encoding'])) return body
 
         set.headers['content-encoding'] = 'gzip'
