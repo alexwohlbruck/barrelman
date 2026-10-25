@@ -93,3 +93,9 @@ A greenway or bike path with a centre line is `highway=cycleway` + `lanes=2` (+ 
 ## Rebuilding
 
 A full build replaces the three tables; a scoped build rebuilds one box (see the header of the SQL file). With `ROAD_MARKINGS_INCREMENTAL=1`, replication queues a box wherever an edit touches what the build reads: the roads, crossings, signal, stop, give way, turning circle and speed hump nodes, hatched areas, and the sidewalks beside a road.
+
+## Lanes along a route
+
+`POST /route/lanes` applies the same rules to the ways a route drives, at request time: lane count and split, lane width, parking and bike lanes, bus lanes, turn arrows and `placement`. It needs the way each stretch of a route drives, which `/route` returns as `osmWayId` on its edge segments once GraphHopper's graph encodes `osm_way_id` (in `graph.encoded_values` in `graphhopper-config.yml`). A graph built before that has no way ids; rebuild it with `scripts/rebuild-graphhopper.sh`. Nothing is stored, so lanes follow OSM edits as soon as the database has them.
+
+The kerb room read from sidewalks and the tapers between ways are left out at request time: they move kerbs rather than lanes.
