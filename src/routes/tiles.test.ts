@@ -644,3 +644,34 @@ describe('portolan tile routes', () => {
     }
   })
 })
+
+describe('deck pieces in detail tiles', () => {
+  const payload = Uint8Array.of(0x42, 0x44, 0x54, 0x31, 0, 0, 0, 0)
+  function app() {
+    const fetchTile = mock<TileFetcher>(async () => new Response(Uint8Array.of(0x1a, 0)))
+    const deckTile = mock(async (z: number) => ({ bytes: payload, complete: z !== 15 }))
+    return { app: new Elysia().use(createTileRoutes({ fetchTile, deckTile })), deckTile }
+  }
+
+  test('come in the tile when asked, at the deck zooms', async () => {
+    const { app: a, deckTile } = app()
+    const body = new Uint8Array(await (await a.handle(get('/tiles/detail/16/19296/24640?decks=1'))).arrayBuffer())
+    expect(deckTile).toHaveBeenCalledWith(16, 19296, 24640)
+    expect([...body.subarray(0, 2)]).toEqual([0x1a, 0])
+    expect([...body.subarray(-payload.length)]).toEqual([...payload])
+  })
+
+  test('keep a tile out of every cache when a deck in it could not be read', async () => {
+    const { app: a } = app()
+    expect((await a.handle(get('/tiles/detail/15/9648/12320?decks=1'))).headers.get('cache-control')).toBe('no-store')
+    expect((await a.handle(get('/tiles/detail/16/19296/24640?decks=1'))).headers.get('cache-control')).toContain('max-age')
+  })
+
+  test('stay out when not asked, below the deck zooms, or for another source', async () => {
+    const { app: a, deckTile } = app()
+    for (const path of ['/tiles/detail/16/19296/24640', '/tiles/detail/13/2412/3080?decks=1', '/tiles/basemap/16/19296/24640?decks=1']) {
+      expect((await (await a.handle(get(path))).arrayBuffer()).byteLength).toBe(2)
+    }
+    expect(deckTile).not.toHaveBeenCalled()
+  })
+})
