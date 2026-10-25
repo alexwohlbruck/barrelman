@@ -88,3 +88,21 @@ export function recommendedLane(lanes: CrossSectionLane[], plan: PlanLane[] | nu
   const i = plan?.findIndex(l => l.recommended) ?? -1
   return i >= 0 ? lanes.filter(l => !l.bike)[i] ?? null : null
 }
+
+/** A cyclist keeps this far inside the kerb-side edge of the outer traffic lane where no bike lane is painted. */
+const RIDE_IN_LANE_METERS = 1
+
+/**
+ * Where a cyclist rides, metres right of the route, given the lanes running
+ * their way (offsets right of the route too): down the middle of the bike lane
+ * on the kerb side, else just inside the outer traffic lane. Null without lanes.
+ */
+export function bikeOffset(lanes: { offset: number; width: number; bike: boolean }[], side: DrivingSide): number | null {
+  const kerbward = (a: { offset: number }, b: { offset: number }) => (side === 'right' ? b.offset - a.offset : a.offset - b.offset)
+  const bike = lanes.filter(l => l.bike).sort(kerbward)[0]
+  if (bike) return bike.offset
+  const outer = lanes.filter(l => !l.bike).sort(kerbward)[0]
+  if (!outer) return null
+  const inside = Math.max(0, outer.width / 2 - RIDE_IN_LANE_METERS)
+  return outer.offset + (side === 'right' ? inside : -inside)
+}

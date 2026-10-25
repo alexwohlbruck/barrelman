@@ -34,6 +34,13 @@ the line keeps to the route's centreline. \`lanePlan\` has one entry per maneuve
 whose approach has tagged turn arrows on two lanes or more: its lanes left to
 right, which lead on (\`valid\`) and the one to take (\`recommended\`).
 
+With \`profile: "bike"\` the line runs down the middle of the bike lane on the
+side of travel (\`cycleway\`, \`cycleway:right|left|both\`, with their \`:width\` and
+\`:buffer\`; \`opposite_lane\` for riding against a one-way), else about a metre
+inside the kerb-side edge of the outer traffic lane, clear of any parking.
+Cycleways, paths and footways mapped on their own keep their own line. A bike
+route has no \`lanePlan\`.
+
 Traffic keeps to the side \`drivingSide\` gives, else the one for \`country\`
 (ISO 3166-1 alpha-3, as \`edge_segments\` carry it), else the right.
 At most ${MAX_COORDINATES} coordinates and ${MAX_WAYS} ways.
@@ -52,6 +59,7 @@ const laneRequestBody = t.Object({
   }))),
   country: t.Optional(t.String({ description: 'ISO 3166-1 alpha-3' })),
   drivingSide: t.Optional(t.Union([t.Literal('right'), t.Literal('left')])),
+  profile: t.Optional(t.Union([t.Literal('car'), t.Literal('bike')], { default: 'car' })),
 })
 
 /**

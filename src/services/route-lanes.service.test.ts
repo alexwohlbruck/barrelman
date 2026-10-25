@@ -130,3 +130,50 @@ describe('getRouteLanes', () => {
     expect(distanceAlong(avenue.coordinates, at(200, -50))).toBeCloseTo(150, 0)
   })
 })
+
+describe('getRouteLanes for bikes', () => {
+  // 200 m east down a one-way street with a buffered bike lane on its right, then a separate cycleway.
+  const street: WayRecord = {
+    tags: { highway: 'secondary', oneway: 'yes', lanes: '2', 'cycleway:right': 'lane', 'cycleway:right:buffer': 'yes' },
+    coordinates: [at(0, 0), at(200, 0)],
+  }
+  const path: WayRecord = { tags: { highway: 'cycleway' }, coordinates: [at(200, 0), at(400, 0)] }
+  const plain: WayRecord = { tags: { highway: 'residential', oneway: 'yes', lanes: '1', 'parking:right': 'lane' }, coordinates: [at(0, 0), at(200, 0)] }
+  const contraflow: WayRecord = {
+    tags: { highway: 'residential', oneway: 'yes', 'oneway:bicycle': 'no', 'cycleway:left': 'opposite_lane' },
+    coordinates: [at(200, 0), at(0, 0)],
+  }
+  const straight = [at(0, 0), at(200, 0), at(400, 0)]
+  const ways = [{ from: 0, to: 200, osmWayId: 1 }, { from: 200, to: 400, osmWayId: 2 }]
+  const lanes = (map: Record<number, WayRecord>) => async () => new Map(Object.entries(map).map(([k, v]) => [Number(k), v]))
+  const north = (res: Awaited<ReturnType<typeof getRouteLanes>>, metres: number) => {
+    const g = res.laneGeometry!
+    const i = g.measures.findIndex(m => m >= metres)
+    return local(g.coordinates[i])[1]
+  }
+
+  test('rides down the middle of the bike lane, then the cycleway on its own line', async () => {
+    const res = await getRouteLanes({ coordinates: straight, ways, profile: 'bike' }, lanes({ 1: street, 2: path }))
+    // A 9.1 m carriageway (two 3.3 m lanes, a 0.9 m buffer, a 1.6 m bike lane at the kerb), centred on the way.
+    expect(north(res, 100)).toBeCloseTo(-(4.55 - 0.8), 1)
+    expect(north(res, 300)).toBeCloseTo(0, 1)
+    expect(res.lanePlan).toEqual([])
+  })
+
+  test('without a bike lane, keeps a metre inside the outer traffic lane, clear of parking', async () => {
+    const res = await getRouteLanes({ coordinates: straight.slice(0, 2), ways: ways.slice(0, 1), profile: 'bike' }, lanes({ 1: plain }))
+    // A 3 m lane beside 2.4 m of parking, centred together: the lane's kerb-side edge is 0.3 m right of the way.
+    expect(north(res, 100)).toBeCloseTo(0.7, 1)
+  })
+
+  test('rides a contraflow lane against a one-way', async () => {
+    const res = await getRouteLanes({ coordinates: straight.slice(0, 2), ways: ways.slice(0, 1), profile: 'bike' }, lanes({ 1: contraflow }))
+    expect(res.ways[0].direction).toBe('backward')
+    expect(north(res, 100)).toBeLessThan(-1)
+  })
+
+  test('keeps left where traffic does', async () => {
+    const res = await getRouteLanes({ coordinates: straight, ways, profile: 'bike', drivingSide: 'left' }, lanes({ 1: { ...street, tags: { ...street.tags, 'cycleway:right': undefined, 'cycleway:left': 'lane' } }, 2: path }))
+    expect(north(res, 100)).toBeGreaterThan(3)
+  })
+})

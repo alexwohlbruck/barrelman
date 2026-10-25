@@ -9,7 +9,7 @@ import { sql } from 'drizzle-orm'
 import { db } from '../db'
 import { crossSection, type CrossSectionLane, type DrivingSide, type Tags } from '../lib/lanes/cross-section'
 import { drivingSideFor } from '../lib/lanes/driving-side'
-import { laneFor, lanePlan, recommendedLane, turnFromAngle, type PlanLane, type Turn } from '../lib/lanes/lane-plan'
+import { bikeOffset, laneFor, lanePlan, recommendedLane, turnFromAngle, type PlanLane, type Turn } from '../lib/lanes/lane-plan'
 import {
   cumulativeDistances,
   distanceAlong,
@@ -29,7 +29,11 @@ export interface RouteLanesRequest {
   /** ISO 3166-1 alpha-3, for the side of the road traffic keeps to. */
   country?: string
   drivingSide?: DrivingSide
+  /** `bike` draws the line in the bike lane, or beside the traffic; it has no lane plan. */
+  profile?: LanesProfile
 }
+
+export type LanesProfile = 'car' | 'bike'
 
 export interface RouteLane extends Omit<CrossSectionLane, 'offset'> {
   /** Metres right of the route to the lane's middle. */
@@ -82,6 +86,11 @@ const AT_JOIN_METERS = 3
 /** A lane change is done this far before the stop line. */
 const SETTLE_METERS = 8
 const STOP_LINE_BACK_METERS = 1.5
+/** Streets, as against paths mapped on their own, which keep to their own line. */
+const STREETS = new Set([
+  'motorway', 'motorway_link', 'trunk', 'trunk_link', 'primary', 'primary_link', 'secondary', 'secondary_link',
+  'tertiary', 'tertiary_link', 'unclassified', 'residential', 'living_street', 'service', 'busway',
+])
 
 export const loadWaysFromDb: LoadWays = async (ids) => {
   if (ids.length === 0) return new Map()
@@ -145,15 +154,15 @@ function pointAlong(route: [number, number][], cumulative: number[], s: number):
 }
 
 /** A way's lanes as the route meets them, offsets right of the route. */
-function driven(stretch: Stretch, way: WayRecord | undefined, route: [number, number][], cumulative: number[], side: DrivingSide): Driven | null {
-  if (!way || way.coordinates.length < 2) return null
+function driven(stretch: Stretch, way: WayRecord | undefined, route: [number, number][], cumulative: number[], side: DrivingSide, profile: LanesProfile): Driven | null {
+  if (!way || way.coordinates.length < 2 || !STREETS.has(way.tags.highway ?? '')) return null
   const pointAt = (s: number) => pointAlong(route, cumulative, s)
   const inset = Math.min(1, (stretch.to - stretch.from) / 4)
   const start = pointAt(stretch.from + inset)
   const along = distanceAlong(way.coordinates, pointAt(stretch.to - inset)) >= distanceAlong(way.coordinates, start)
   const section = crossSection(way.tags, { americas: start[0] < -30, side })
-  // A one-way's traffic runs its own way; the route can only follow it.
-  const withTraffic = section.oneway || along !== section.flip
+  // A car can only follow a one-way's traffic; a bike may ride a contraflow lane.
+  const withTraffic = (section.oneway && profile === 'car') || along !== section.flip
   const lanes = (withTraffic ? section.forward : section.backward).map(l => ({ ...l, offset: withTraffic ? -l.offset : l.offset }))
   const kerbs = withTraffic ? [-section.kerbLeft, -section.kerbRight] : [section.kerbRight, section.kerbLeft]
   return {
@@ -174,12 +183,13 @@ export async function getRouteLanes(request: RouteLanesRequest, loadWays: LoadWa
   if (request.ways.length > MAX_WAYS) throw new RouteLanesRequestError(`At most ${MAX_WAYS} ways`)
 
   const side = request.drivingSide ?? drivingSideFor(request.country)
+  const profile = request.profile ?? 'car'
   const cumulative = cumulativeDistances(coords)
   const length = cumulative.at(-1)!
   const parts = stretches(request.ways, length)
   const ids = [...new Set(parts.flatMap(p => (p.osmWayId == null ? [] : [p.osmWayId])))]
   const records = await loadWays(ids)
-  const roads = parts.map(p => (p.osmWayId == null ? null : driven(p, records.get(p.osmWayId), coords, cumulative, side)))
+  const roads = parts.map(p => (p.osmWayId == null ? null : driven(p, records.get(p.osmWayId), coords, cumulative, side, profile)))
 
   // Each maneuver at the join it turns at, with the stretch it leaves.
   const maneuvers = (request.maneuvers ?? [])
@@ -193,6 +203,8 @@ export async function getRouteLanes(request: RouteLanesRequest, loadWays: LoadWa
     const at = join >= 0 ? parts[i].to : m.distance
     atJoin.set(i, { index: m.index, distance: at, turn: m.turn ?? turnFromAngle(headingChange(coords, at)) })
   }
+
+  if (profile === 'bike') return bikeLanes(parts, roads, atJoin, coords, side)
 
   const lanePlans: ManeuverLanePlan[] = []
   const runs: LaneRun[] = []
@@ -247,4 +259,40 @@ export async function getRouteLanes(request: RouteLanesRequest, loadWays: LoadWa
 
   const laneGeometry = ways.length > 0 ? { type: 'LineString' as const, ...laneLine(coords, runs, corners) } : null
   return { drivingSide: side, lanePlan: lanePlans, laneGeometry, ways }
+}
+
+/** A cycling route: in each street's bike lane or beside its traffic, on paths along their own line. */
+function bikeLanes(
+  parts: Stretch[],
+  roads: (Driven | null)[],
+  atJoin: Map<number, { distance: number; turn: Turn }>,
+  coords: [number, number][],
+  side: DrivingSide,
+): RouteLanesResponse {
+  const runs: LaneRun[] = []
+  const corners: Corner[] = []
+  const ways: RouteLanesWay[] = []
+  parts.forEach((part, i) => {
+    const road = roads[i]
+    const offset = road ? bikeOffset(road.lanes, side) : null
+    runs.push({ from: part.from, to: part.to, entry: offset ?? 0, exit: offset ?? 0, settleBefore: 0, laneWidth: road?.laneWidth ?? 3 })
+    const maneuver = atJoin.get(i)
+    if (maneuver && maneuver.turn !== 'through' && road && offset != null) {
+      const inner = maneuver.turn.includes('right') ? road.kerbRight - offset : offset - road.kerbLeft
+      corners.push({ at: maneuver.distance, radius: KERB_RADIUS_METERS + Math.max(1, inner) })
+    }
+    if (!road || offset == null) return
+    const lane = road.lanes.reduce((best, l) => (Math.abs(l.offset - offset) < Math.abs(best.offset - offset) ? l : best))
+    ways.push({
+      osmWayId: part.osmWayId!,
+      from: part.from,
+      to: part.to,
+      direction: road.direction,
+      lanes: road.lanes,
+      entryLane: lane.index,
+      exitLane: lane.index,
+    })
+  })
+  const laneGeometry = ways.length > 0 ? { type: 'LineString' as const, ...laneLine(coords, runs, corners) } : null
+  return { drivingSide: side, lanePlan: [], laneGeometry, ways }
 }
