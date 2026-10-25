@@ -3,6 +3,9 @@ import { join } from 'path'
 import { apiAuth, apiAuthAfter } from '../middleware/api-auth'
 import { resolvePortolanTilesDir } from '../config/portolan'
 import { resolveTileBundle } from '../config/tile-bundles'
+import { createDeckTiles, DECK_TILE_ZOOMS, encodeDeckTile, withDeckField, workerDeckTileBuilder, type DeckTile } from '../lib/bridge-mesh/tile-pieces'
+import { bridgeMeshDirectory } from '../lib/bridge-mesh/files'
+import { deckFilesIn } from '../lib/bridge-mesh/deck-lookup'
 
 function getMartinUrl() {
   return process.env.MARTIN_URL || 'http://barrelman-martin:3000'
@@ -80,9 +83,10 @@ export function acceptsGzip(header: string | undefined): boolean {
 }
 
 export function createTileRoutes(
-  deps: { fetchTile?: TileFetcher; portolanTilesDir?: string } = {},
+  deps: { fetchTile?: TileFetcher; portolanTilesDir?: string; deckTile?: (z: number, x: number, y: number) => Promise<DeckTile> } = {},
 ) {
   const fetchTile: TileFetcher = deps.fetchTile || ((url: string) => fetch(url))
+  const deckTile = deps.deckTile ?? createDeckTiles(deckFilesIn, workerDeckTileBuilder(bridgeMeshDirectory()))
 
   /**
    * Portolan tiles are static files, not Martin: `portolan sync` writes MVT
@@ -318,7 +322,7 @@ export function createTileRoutes(
     )
     .get(
       '/:source/:z/:x/:y',
-      async ({ params, headers, set }) => {
+      async ({ params, query, headers, set }) => {
         const { source, z, x, y } = params
 
         if (!SOURCE_RE.test(source) || !Z_RE.test(z) || !XY_RE.test(x) || !Y_RE.test(y)) {
@@ -363,7 +367,21 @@ export function createTileRoutes(
          * Vary, because the answer now differs by request header and a shared
          * cache must not hand a gzipped tile to a client that cannot read it.
          */
-        const body = new Uint8Array(await response.arrayBuffer())
+        let body = new Uint8Array(await response.arrayBuffer())
+        // Deck meshes ride in the tile they are drawn with, for a client that asks: see lib/bridge-mesh/tile-pieces.ts.
+        const zoom = Number(z)
+        if (query.decks === '1' && zoom >= DECK_TILE_ZOOMS.min && zoom <= DECK_TILE_ZOOMS.max && martinSource.split(',').includes('bridge_decks')) {
+          let decks: DeckTile
+          try {
+            decks = await deckTile(zoom, Number(x), Number(y.replace(/\..*$/, '')))
+          } catch (error) {
+            console.warn(`[deck tiles] ${z}/${x}/${y}:`, error)
+            decks = { bytes: encodeDeckTile([], ['*']), complete: false }
+          }
+          body = withDeckField(body, decks.bytes)
+          // A tile missing some of its decks must not stand in for the whole one in any cache.
+          if (!decks.complete) set.headers['cache-control'] = 'no-store'
+        }
         if (!acceptsGzip(headers['accept-encoding'])) return body
 
         set.headers['content-encoding'] = 'gzip'
@@ -381,7 +399,7 @@ export function createTileRoutes(
           tags: ['Tiles'],
           summary: 'Vector tile (Martin proxy)',
           description:
-            'Proxies Mapbox Vector Tiles from the Martin tile server. Authenticates with an ordinary API key, via Bearer header or `?api_key=` for map libraries that cannot set headers.\n\nSeveral sources can be served as one tile, either by naming a bundle (`detail`) or by joining source names with commas (`buildings_3d,parking_areas`). One request carrying five overlays beats five requests carrying one each: a map view is thirty to sixty tiles per source. A member below its own minzoom contributes nothing; the tile 404s only when every member is above its maxzoom.',
+            'Proxies Mapbox Vector Tiles from the Martin tile server. Authenticates with an ordinary API key, via Bearer header or `?api_key=` for map libraries that cannot set headers.\n\nWith `?decks=1`, a tile at zoom 14–16 that includes `bridge_decks` also carries the 3D bridge deck meshes drawn over it, cut to the tile, in protobuf field 20 (skipped by MVT readers).\n\nSeveral sources can be served as one tile, either by naming a bundle (`detail`) or by joining source names with commas (`buildings_3d,parking_areas`). One request carrying five overlays beats five requests carrying one each: a map view is thirty to sixty tiles per source. A member below its own minzoom contributes nothing; the tile 404s only when every member is above its maxzoom.',
         },
       },
     )
