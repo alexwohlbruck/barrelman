@@ -37,7 +37,7 @@ test('a piece keeps its ranges and the stretch of surface over its tile', () => 
   }
 })
 
-test('at zoom 14 a piece leaves out the paint, rails, parapets and the ways under it', () => {
+test('at zoom 14 a piece leaves out the paint, rails and parapets', () => {
   const whole = decodeBridge(encodeBridge(baked))
   const { paintFrom, railsFrom, routesFrom } = whole.header.ranges
   expect(railsFrom).toBeGreaterThan(paintFrom)
@@ -50,7 +50,6 @@ test('at zoom 14 a piece leaves out the paint, rails, parapets and the ways unde
   expect(parapets).toBeGreaterThan(0)
   expect(far.indices.length / 3).toBe((paintFrom + whole.indices.length - routesFrom) / 3 - parapets)
   expect(far.header.stands).toHaveLength(1)
-  expect(far.header.under).toEqual([])
 })
 
 test('a stand away from a tile is left out, and one wholly inside is kept whole', () => {

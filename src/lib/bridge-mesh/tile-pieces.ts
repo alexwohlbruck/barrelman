@@ -10,8 +10,7 @@ import { MATERIALS } from './encode'
  * A piece is a BRM v3 mesh holding the triangles of one deck whose centroid
  * lies in the tile, so the pieces of one zoom's tiles partition every deck.
  * At the lowest zoom, drawn only far off or zoomed out, the paint, rails and
- * parapets are left out, and the ground ways under each deck (which tell
- * objects on it from those below).
+ * parapets are left out.
  */
 export const DECK_TILE_ZOOMS = { min: 14, max: 16 } as const
 const PARAPET = MATERIALS.indexOf('parapet')
@@ -137,8 +136,7 @@ export function cutPiece(mesh: Streams, z: number, x: number, y: number): Uint8A
   })
   const ranges = { paintFrom: counts[0] * 3, railsFrom: (counts[0] + counts[1]) * 3, routesFrom: (counts[0] + counts[1] + counts[2]) * 3 }
   const area = { minX: x / n, minY: y / n, maxX: (x + 1) / n, maxY: (y + 1) / n }
-  const stands = header.stands.flatMap((s: Stand) => cutStand(s, area))
-  const geometry = coarse ? { stands, under: [], tracks: [] } : { stands, under: cutWays(header.under, area), tracks: cutWays(header.tracks, area) }
+  const geometry = { stands: header.stands.flatMap((s: Stand) => cutStand(s, area)), under: cutWays(header.under, area), tracks: cutWays(header.tracks, area) }
   return writeStreams({ ...header, ...geometry, ranges, lengths: [...picked.map(p => p.length), out.length] }, picked, out)
 }
 
@@ -266,22 +264,31 @@ export function deckTileBuilder(directory: string, { meshBytes = 384 << 20 } = {
  */
 export function workerDeckTileBuilder(directory: string): DeckTileBuilder {
   let worker: Worker | null = null
+  let here: DeckTileBuilder | null = null
   let next = 0
-  const jobs = new Map<number, { resolve: (tile: DeckTile) => void; reject: (error: Error) => void }>()
-  const here = deckTileBuilder(directory)
+  const jobs = new Map<number, { resolve: (tile: DeckTile) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>()
+  const settle = (id: number) => {
+    const job = jobs.get(id)
+    if (job) clearTimeout(job.timer)
+    jobs.delete(id)
+    return job
+  }
+  // A worker that dies, by a throw or an exit, fails what it holds; the next request starts another.
+  const lost = (w: Worker, why: string) => {
+    if (worker !== w) return
+    worker = null
+    for (const id of [...jobs.keys()]) settle(id)?.reject(new Error(`Deck tile worker: ${why}`))
+  }
   const start = () => {
     const w = new Worker(new URL('./tile-pieces.worker.ts', import.meta.url))
     w.onmessage = ({ data }: MessageEvent<{ id: number; bytes?: Uint8Array; complete?: boolean; error?: string }>) => {
-      const job = jobs.get(data.id)
-      jobs.delete(data.id)
+      const job = settle(data.id)
       if (data.error !== undefined || !data.bytes) job?.reject(new Error(data.error ?? 'Deck tile worker failed'))
       else job?.resolve({ bytes: data.bytes, complete: !!data.complete })
     }
-    w.onerror = event => {
-      for (const job of jobs.values()) job.reject(new Error(`Deck tile worker: ${event.message}`))
-      jobs.clear()
-      worker = null
-    }
+    w.onerror = event => lost(w, event.message)
+    w.addEventListener('close', () => lost(w, 'closed'))
+    w.unref()
     w.postMessage({ directory })
     return w
   }
@@ -289,15 +296,24 @@ export function workerDeckTileBuilder(directory: string): DeckTileBuilder {
     try {
       worker ??= start()
     } catch {
+      here ??= deckTileBuilder(directory)
       return here(z, x, y, files)
     }
     const id = next++
     return new Promise((resolve, reject) => {
-      jobs.set(id, { resolve, reject })
-      worker!.postMessage({ id, z, x, y, files })
+      const timer = setTimeout(() => settle(id)?.reject(new Error('Deck tile worker timed out')), JOB_TIMEOUT_MS)
+      jobs.set(id, { resolve, reject, timer })
+      try {
+        worker!.postMessage({ id, z, x, y, files })
+      } catch (error) {
+        settle(id)?.reject(error as Error)
+      }
     })
   }
 }
+
+/** Milliseconds a deck tile may take to cut before it is answered as failed. */
+const JOB_TIMEOUT_MS = 15_000
 
 /** Caches deck tiles by the decks they hold, building each once however many ask at the same time. */
 export function createDeckTiles(filesIn: DeckFilesIn, build: DeckTileBuilder, { tileBytes = 256 << 20 } = {}) {
