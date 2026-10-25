@@ -524,6 +524,8 @@ Bridge builds also bake indexed deck, parapet, pier and road-marking meshes. The
 
 `/tiles/bridges/index/14/{x}/{y}` lists the meshes a zoom-14 tile meets (within a tenth of a tile of its edge) as `{ decks: [[file, west, south, east, north], ...] }`, each deck's bounds in degrees. A client fetches the index for a view's tiles alongside its vector tiles and starts on the meshes the view needs straight away, instead of once those tiles have loaded. Indexes carry an `ETag` and `stale-while-revalidate`.
 
+A detail tile asked with `?decks=1` at zoom 14–16 carries the decks drawn over it as an extra protobuf field (number 20, which MVT readers skip): `BDT1`, a JSON header naming each deck's mesh file and length, then one version-3 mesh per deck holding the triangles whose centroid lies in the tile, with that deck's surface and the ground ways under it cut to the tile. Below zoom 16 the pieces leave out paint and rails. A deck whose mesh cannot be read is named under `failed`, and that tile is sent `no-store`. Pieces are cut from the mesh files when first asked for and cached in memory, so no rebuild is needed.
+
 API and ops must share `BRIDGE_MESH_DIR`. Existing rows have no mesh until rebuilt. Deploy the schema/API before rebuilding and switching clients; older profile-based clients remain compatible. Rebuild bridges after rebuilding road markings. Failed database transactions may leave unreferenced immutable files, which are safe to retain; do not remove files referenced by active clients during rollout.
 
 `bridge_decks` is a table built by the "Build Bridge Decks" console task

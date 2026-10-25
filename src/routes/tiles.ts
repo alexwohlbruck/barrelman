@@ -399,7 +399,7 @@ export function createTileRoutes(
           tags: ['Tiles'],
           summary: 'Vector tile (Martin proxy)',
           description:
-            'Proxies Mapbox Vector Tiles from the Martin tile server. Authenticates with an ordinary API key, via Bearer header or `?api_key=` for map libraries that cannot set headers.\n\nSeveral sources can be served as one tile, either by naming a bundle (`detail`) or by joining source names with commas (`buildings_3d,parking_areas`). One request carrying five overlays beats five requests carrying one each: a map view is thirty to sixty tiles per source. A member below its own minzoom contributes nothing; the tile 404s only when every member is above its maxzoom.',
+            'Proxies Mapbox Vector Tiles from the Martin tile server. Authenticates with an ordinary API key, via Bearer header or `?api_key=` for map libraries that cannot set headers.\n\nWith `?decks=1`, a tile at zoom 14–16 that includes `bridge_decks` also carries the 3D bridge deck meshes drawn over it, cut to the tile, in protobuf field 20 (skipped by MVT readers).\n\nSeveral sources can be served as one tile, either by naming a bundle (`detail`) or by joining source names with commas (`buildings_3d,parking_areas`). One request carrying five overlays beats five requests carrying one each: a map view is thirty to sixty tiles per source. A member below its own minzoom contributes nothing; the tile 404s only when every member is above its maxzoom.',
         },
       },
     )
