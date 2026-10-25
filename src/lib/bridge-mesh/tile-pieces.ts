@@ -217,8 +217,10 @@ export type DeckTile = { bytes: Uint8Array; complete: boolean }
 
 /** Builds and caches deck tiles from the mesh files a tile's decks name. */
 export function createDeckTiles(directory: string, filesIn: DeckFilesIn, { meshBytes = 384 << 20, tileBytes = 256 << 20 } = {}) {
-  // A parsed header weighs about three times its JSON as objects.
-  const meshes = new LRUCache<string, Streams>({ maxSize: meshBytes, sizeCalculation: m => m.streams.reduce((n, s) => n + s.byteLength, m.indices.byteLength) + 3 * (m.headerBytes ?? 0) + 1 })
+  // A parsed header weighs about three times its JSON as objects; a triangle's cell entry about 8 bytes.
+  const meshes = new LRUCache<string, Streams>({ maxSize: meshBytes, sizeCalculation: m => m.streams.reduce((n, s) => n + s.byteLength, m.indices.byteLength) + 3 * (m.headerBytes ?? 0) + (8 * m.indices.length) / 3 + 1 })
+  // An unreadable mesh is not tried again on every request for a while.
+  const unreadable = new LRUCache<string, true>({ max: 10_000, ttl: 300_000 })
   const tiles = new LRUCache<string, Uint8Array>({ maxSize: tileBytes, sizeCalculation: b => b.byteLength + 1 })
   const lists = new LRUCache<string, string[]>({ max: 20_000, ttl: 60_000 })
   const reading = new Map<string, Promise<Streams | null>>()
@@ -226,17 +228,20 @@ export function createDeckTiles(directory: string, filesIn: DeckFilesIn, { meshB
   const mesh = (file: string) => {
     const hit = meshes.get(file)
     if (hit) return Promise.resolve(hit)
+    if (unreadable.has(file)) return Promise.resolve(null)
     let pending = reading.get(file)
     if (!pending) {
       pending = (async () => {
         const gz = Bun.file(join(directory, `${file}.gz`)), plain = Bun.file(join(directory, file))
         const bytes = await gz.exists() ? Bun.gunzipSync(new Uint8Array(await gz.arrayBuffer())) : await plain.exists() ? new Uint8Array(await plain.arrayBuffer()) : null
-        if (!bytes) return null
+        if (!bytes) throw new Error('no such mesh file')
         const read = readStreams(bytes)
+        cellsOf(read)
         meshes.set(file, read)
         return read
       })().catch(error => {
         console.warn(`[deck tiles] ${file}:`, error)
+        unreadable.set(file, true)
         return null
       }).finally(() => reading.delete(file))
       reading.set(file, pending)
