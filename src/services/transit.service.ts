@@ -15,6 +15,20 @@ import {
   pricingForLeg,
   type RentalPricing,
 } from './rental-pricing.service'
+import {
+  ACCESS_PROFILES,
+  RENTAL_PROFILE,
+  accessRadius,
+  estimateLeg,
+  haversineM,
+  legsDuration,
+  routeLeg,
+  streetLeg,
+  type AccessMode,
+  type LatLng,
+  type StreetLeg,
+} from './transit-access'
+import { getNearbyStations, type GbfsStation, type NearbyResult } from './gbfs.service'
 
 // ── Types ───────────────────────────────────────────────────────────
 
@@ -727,6 +741,9 @@ async function queryMotis(
   if (request.wheelchair) {
     params.set('wheelchair', 'true')
   }
+  if ((request as IntermodalRouteRequest).requireBikeTransport) {
+    params.set('requireBikeTransport', 'true')
+  }
 
   const response = await fetchFn(`${motisUrl}/api/v1/plan?${params}`, {
     signal: AbortSignal.timeout(20_000),
@@ -761,8 +778,7 @@ async function queryMotis(
  * Query MOTIS with coordinate-based intermodal routing.
  *
  * Unlike queryMotis() which uses stop IDs, this uses lat,lng coordinates
- * directly. Requires MOTIS to have OSM street data loaded (street_routing: true).
- * Supports pre/post-transit mode selection (WALK, BIKE, CAR_PARKING, RENTAL).
+ * directly, so it needs MOTIS street routing; only direct rides use it.
  */
 async function queryMotisIntermodal(
   request: IntermodalRouteRequest,
@@ -921,13 +937,10 @@ async function queryMotisIntermodal(
 //
 // Instead we own access ourselves: find nearby boarding STATIONS by PostGIS
 // distance, route the transit stop-to-stop in MOTIS (which still handles
-// transfers internally), and emit straight-line WALK access/egress legs that
-// the caller (parchment) re-routes on the FULL street graph via GraphHopper.
-// MOTIS never touches a sidewalk, so the OSM-topology bug class is gone.
-
-/** Portal-to-portal walk speed (m/s) incl. detour — for access feasibility /
- *  ranking only; real geometry + timing come from GraphHopper downstream. */
-const COMPOSE_WALK_MPS = 1.25
+// transfers internally), and attach the street legs ourselves: walks as
+// straight-line estimates parchment re-routes, bikes and cars routed here on
+// GraphHopper. MOTIS never touches a street, so neither the OSM-topology bug
+// class nor its street graph's continent-scale limits apply.
 
 interface BoardingStation {
   feedId: string
@@ -940,14 +953,6 @@ interface BoardingStation {
   routeType: number | null
 }
 
-function haversineM(a: { lat: number; lng: number }, b: { lat: number; lng: number }): number {
-  const R = 6371000, toRad = Math.PI / 180
-  const dLat = (b.lat - a.lat) * toRad, dLng = (b.lng - a.lng) * toRad
-  const s =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos(a.lat * toRad) * Math.cos(b.lat * toRad) * Math.sin(dLng / 2) ** 2
-  return 2 * R * Math.asin(Math.sqrt(s))
-}
 
 /** Distinct boarding stations near a point, nearest first, with the best
  *  (lowest) route_type each serves so callers can prefer rail over bus. */
@@ -996,8 +1001,9 @@ async function getNearbyBoardingStations(
 /** Rail/subway/tram/ferry rank ahead of bus (and unknown) for a given trip —
  *  on a multi-km trip we must not let three nearby bus stops crowd out the
  *  subway 600 m away. Within a tier, nearest wins. */
+const isBusish = (routeType: number | null) => routeType == null || routeType === 3
+
 function rankStations(stations: BoardingStation[], keep: number): BoardingStation[] {
-  const isBusish = (rt: number | null) => rt == null || rt === 3
   return [...stations]
     .sort((a, b) => {
       const ab = isBusish(a.routeType) ? 1 : 0
@@ -1007,62 +1013,209 @@ function rankStations(stations: BoardingStation[], keep: number): BoardingStatio
     .slice(0, keep)
 }
 
-/** Prepend an access WALK leg (origin → boarding stop) and append an egress
- *  WALK leg (alighting stop → destination), adjusting the itinerary totals.
- *  Geometry is a straight line and durations are estimates — parchment
- *  re-routes both via GraphHopper and re-times them against the schedule. */
-function withAccessEgressWalks(
-  it: TransitItinerary,
-  from: { lat: number; lng: number },
-  to: { lat: number; lng: number },
-  accessSec: number,
-  egressSec: number,
-): TransitItinerary {
+/** A way to reach (or leave) one boarding station from the trip's end point. */
+interface AccessOption {
+  station: BoardingStation
+  legs: StreetLeg[]
+  /** Street legs plus any buffer (locking, parking, unlocking). */
+  seconds: number
+}
+
+const stationPlace = (station: BoardingStation) => ({
+  name: station.name,
+  lat: station.lat,
+  lng: station.lng,
+  stopId: `${station.feedId}_${station.stationId}`,
+})
+
+async function stationsWithin(point: LatLng, radius: number, railOnly: boolean): Promise<BoardingStation[]> {
+  const all = await getNearbyBoardingStations(point.lat, point.lng, radius, 12)
+  const pool = railOnly ? all.filter((s) => !isBusish(s.routeType)) : all
+  return rankStations(pool, 4)
+}
+
+async function streetAccessOptions(
+  end: 'access' | 'egress',
+  mode: AccessMode,
+  point: LatLng,
+  maxSec: number,
+  fetchFn: FetchFn,
+): Promise<AccessOption[]> {
+  const profile = ACCESS_PROFILES[mode]
+  const stations = await stationsWithin(point, accessRadius(profile, maxSec), profile.railOnly)
+  const tripEnd = { name: end === 'access' ? 'Origin' : 'Destination', ...point }
+  const options = await Promise.all(
+    stations.map(async (station) => {
+      const leg = end === 'access'
+        ? await streetLeg(mode, tripEnd, stationPlace(station), fetchFn)
+        : await streetLeg(mode, stationPlace(station), tripEnd, fetchFn)
+      return { station, legs: [leg], seconds: leg.duration + profile.bufferSec }
+    }),
+  )
+  return options.filter((o) => o.seconds <= maxSec + profile.bufferSec)
+}
+
+type DockRole = 'pickup' | 'dropoff'
+
+function isDockFor(result: NearbyResult, role: DockRole): result is GbfsStation & { type: 'station' } {
+  if (!('type' in result) || result.type !== 'station') return false
+  return role === 'pickup'
+    ? result.isRenting && result.numBikesAvailable + result.numEbikesAvailable > 0
+    : result.isReturning && result.numDocksAvailable > 0
+}
+
+async function docksNear(point: LatLng, role: DockRole) {
+  const { stations, systems } = await getNearbyStations({
+    lat: point.lat,
+    lng: point.lng,
+    radius: RENTAL_PROFILE.dockWalkRadius,
+    limit: 8,
+  })
+  const names = new Map(systems.map((s) => [s.systemId, s.name || s.operator || s.systemId]))
+  return stations
+    .filter((s): s is GbfsStation & { type: 'station' } => isDockFor(s, role))
+    .map((dock) => ({ dock, provider: names.get(dock.systemId) ?? dock.systemId }))
+}
+
+/**
+ * Shared bike between a trip end and a station: walk to a dock with bikes,
+ * ride to a dock with free spaces, walk on. Only docks of the same system pair up.
+ */
+async function rentalAccessOptions(
+  end: 'access' | 'egress',
+  point: LatLng,
+  maxSec: number,
+  fetchFn: FetchFn,
+): Promise<AccessOption[]> {
+  const stations = await stationsWithin(point, accessRadius(RENTAL_PROFILE, maxSec), false)
+  if (stations.length === 0) return []
+  const endDocks = await docksNear(point, end === 'access' ? 'pickup' : 'dropoff')
+  if (endDocks.length === 0) return []
+  const tripEnd = { name: end === 'access' ? 'Origin' : 'Destination', ...point }
+
+  const options = await Promise.all(
+    stations.map(async (station): Promise<AccessOption | null> => {
+      const stationDocks = await docksNear(station, end === 'access' ? 'dropoff' : 'pickup')
+      const pair = stationDocks
+        .map((near) => ({ near, far: endDocks.find((e) => e.dock.systemId === near.dock.systemId) }))
+        .find((p) => p.far)
+      if (!pair?.far) return null
+      const [pickup, dropoff] = end === 'access' ? [pair.far, pair.near] : [pair.near, pair.far]
+      const pickupPlace = { name: pickup.dock.name, lat: pickup.dock.lat, lng: pickup.dock.lon }
+      const dropoffPlace = { name: dropoff.dock.name, lat: dropoff.dock.lat, lng: dropoff.dock.lon }
+      const ride = await routeLeg('bike', RENTAL_PROFILE.speedMps, pickupPlace, dropoffPlace, fetchFn)
+      const rentalLeg: StreetLeg = {
+        mode: 'RENTAL',
+        from: { ...pickupPlace, stopId: pickup.dock.stationId },
+        to: dropoffPlace,
+        ...ride,
+        rental: {
+          provider: pickup.provider,
+          systemId: pickup.dock.systemId,
+          stationId: pickup.dock.stationId,
+          stationName: pickup.dock.name,
+          toStationName: dropoff.dock.name,
+          formFactor: 'BICYCLE',
+        },
+      }
+      const walk = (from: StreetLeg['from'], to: StreetLeg['to']): StreetLeg => ({
+        mode: 'WALK',
+        from,
+        to,
+        ...estimateLeg(ACCESS_PROFILES.WALK.speedMps, from, to),
+      })
+      const legs = end === 'access'
+        ? [walk(tripEnd, pickupPlace), rentalLeg, walk(dropoffPlace, stationPlace(station))]
+        : [walk(stationPlace(station), pickupPlace), rentalLeg, walk(dropoffPlace, tripEnd)]
+      return { station, legs, seconds: legsDuration(legs, RENTAL_PROFILE.unlockSec) }
+    }),
+  )
+  return options.filter((o): o is AccessOption => o != null && o.seconds <= maxSec + RENTAL_PROFILE.unlockSec)
+}
+
+function accessOptions(
+  end: 'access' | 'egress',
+  mode: MotisStreetMode,
+  point: LatLng,
+  maxSec: number,
+  fetchFn: FetchFn,
+): Promise<AccessOption[]> {
+  if (mode === 'RENTAL') return rentalAccessOptions(end, point, maxSec, fetchFn)
+  return streetAccessOptions(end, mode, point, maxSec, fetchFn)
+}
+
+function toTransitLeg(leg: StreetLeg, start: number): TransitLeg {
+  const adapted: TransitLeg = {
+    mode: leg.mode,
+    transitLeg: false,
+    from: leg.from,
+    to: leg.to,
+    startTime: new Date(start).toISOString(),
+    endTime: new Date(start + leg.duration * 1000).toISOString(),
+    duration: leg.duration,
+    distance: leg.distance,
+    geometry: leg.geometry,
+  }
+  if (leg.rental) {
+    adapted.rentalProvider = leg.rental.provider
+    adapted.rentalStationName = leg.rental.stationName
+    adapted.rentalToStationName = leg.rental.toStationName
+    adapted.rentalStationId = leg.rental.stationId
+    adapted.rentalSystemId = leg.rental.systemId
+    adapted.rentalFormFactor = leg.rental.formFactor
+    adapted.rentalPricing = pricingForLeg(leg.rental.systemId, leg.duration, leg.distance)
+  }
+  return adapted
+}
+
+/** Walks are re-estimated against the platform MOTIS actually boards at. */
+function snapWalk(leg: StreetLeg, platform: TransitLegPlace, side: 'to' | 'from'): StreetLeg {
+  if (leg.mode !== 'WALK') return leg
+  const moved = { ...leg, [side]: { ...leg[side], lat: platform.lat, lng: platform.lng, stopId: platform.stopId } }
+  return { ...moved, ...estimateLeg(ACCESS_PROFILES.WALK.speedMps, moved.from, moved.to) }
+}
+
+/**
+ * Wrap a stop-to-stop itinerary in its street legs. Access legs run back from
+ * boarding with their buffer just before it; egress legs run on from alighting.
+ */
+function withAccessEgress(it: TransitItinerary, access: AccessOption, egress: AccessOption): TransitItinerary {
   const firstLeg = it.legs[0]
   const lastLeg = it.legs[it.legs.length - 1]
   if (!firstLeg || !lastLeg) return it
 
-  const boardAt = { lat: firstLeg.from.lat, lng: firstLeg.from.lng }
-  const alightAt = { lat: lastLeg.to.lat, lng: lastLeg.to.lng }
-  const accessDist = Math.round(haversineM(from, boardAt))
-  const egressDist = Math.round(haversineM(alightAt, to))
+  const accessLegs = access.legs.map((leg, i) => (i === access.legs.length - 1 ? snapWalk(leg, firstLeg.from, 'to') : leg))
+  const egressLegs = egress.legs.map((leg, i) => (i === 0 ? snapWalk(leg, lastLeg.to, 'from') : leg))
+  const accessBuffer = access.seconds - legsDuration(access.legs)
+  const egressBuffer = egress.seconds - legsDuration(egress.legs)
 
-  const accessEnd = new Date(firstLeg.startTime)
-  const accessStart = new Date(accessEnd.getTime() - accessSec * 1000)
-  const egressStart = new Date(lastLeg.endTime)
-  const egressEnd = new Date(egressStart.getTime() + egressSec * 1000)
+  const boardAt = new Date(firstLeg.startTime).getTime()
+  const accessSec = legsDuration(accessLegs, accessBuffer)
+  let cursor = boardAt - accessSec * 1000
+  const startTime = cursor
+  const before = accessLegs.map((leg) => {
+    const adapted = toTransitLeg(leg, cursor)
+    cursor += leg.duration * 1000
+    return adapted
+  })
 
-  const accessLeg: TransitLeg = {
-    mode: 'WALK',
-    transitLeg: false,
-    from: { name: 'Origin', lat: from.lat, lng: from.lng },
-    to: { name: firstLeg.from.name, lat: boardAt.lat, lng: boardAt.lng, stopId: firstLeg.from.stopId },
-    startTime: accessStart.toISOString(),
-    endTime: accessEnd.toISOString(),
-    duration: accessSec,
-    distance: accessDist,
-    geometry: { type: 'LineString', coordinates: [[from.lng, from.lat], [boardAt.lng, boardAt.lat]] },
-  }
-  const egressLeg: TransitLeg = {
-    mode: 'WALK',
-    transitLeg: false,
-    from: { name: lastLeg.to.name, lat: alightAt.lat, lng: alightAt.lng, stopId: lastLeg.to.stopId },
-    to: { name: 'Destination', lat: to.lat, lng: to.lng },
-    startTime: egressStart.toISOString(),
-    endTime: egressEnd.toISOString(),
-    duration: egressSec,
-    distance: egressDist,
-    geometry: { type: 'LineString', coordinates: [[alightAt.lng, alightAt.lat], [to.lng, to.lat]] },
-  }
+  cursor = new Date(lastLeg.endTime).getTime()
+  const after = egressLegs.map((leg) => {
+    const adapted = toTransitLeg(leg, cursor)
+    cursor += leg.duration * 1000
+    return adapted
+  })
+  const endTime = cursor + egressBuffer * 1000
 
+  const walks = [...accessLegs, ...egressLegs].filter((leg) => leg.mode === 'WALK')
   return {
     ...it,
-    legs: [accessLeg, ...it.legs, egressLeg],
-    startTime: accessStart.toISOString(),
-    endTime: egressEnd.toISOString(),
-    duration: it.duration + accessSec + egressSec,
-    walkTime: (it.walkTime || 0) + accessSec + egressSec,
-    walkDistance: (it.walkDistance || 0) + accessDist + egressDist,
+    legs: [...before, ...it.legs, ...after],
+    startTime: new Date(startTime).toISOString(),
+    endTime: new Date(endTime).toISOString(),
+    duration: Math.round((endTime - startTime) / 1000),
+    walkTime: (it.walkTime || 0) + walks.reduce((t, leg) => t + leg.duration, 0),
+    walkDistance: (it.walkDistance || 0) + walks.reduce((d, leg) => d + leg.distance, 0),
   }
 }
 
@@ -1073,72 +1226,72 @@ const COMPOSE_MAX_PAIRS = 12
 const motis404Warned = new Set<string>()
 
 /**
- * Plan transit by composing GraphHopper-owned access/egress walks around a
- * MOTIS stop-to-stop search. Replaces MOTIS coordinate-intermodal for pure
- * WALK access/egress (the path that was breaking on underground stations).
+ * Transit with any access and egress mode, composed around MOTIS's
+ * stop-to-stop search: walk, bike (parked or carried), park-and-ride and
+ * shared bikes, each leg routed here rather than on MOTIS's street graph.
  */
 async function composeTransitFromStops(
   request: IntermodalRouteRequest,
   fetchFn: FetchFn,
 ): Promise<TransitRouteResponse> {
   const numItineraries = request.numItineraries ?? 5
-  const accessRadius = Math.min(Math.max((request.maxPreTransitTime ?? 900) * COMPOSE_WALK_MPS, 500), 2500)
-  const egressRadius = Math.min(Math.max((request.maxPostTransitTime ?? 900) * COMPOSE_WALK_MPS, 500), 2500)
+  const pre = request.preTransitModes?.[0] ?? 'WALK'
+  const post = request.postTransitModes?.[0] ?? 'WALK'
+  const metadata = {
+    searchWindow: 0,
+    ...(request.requireBikeTransport && { requireBikeTransport: true }),
+  }
 
-  const [originAll, destAll] = await Promise.all([
-    getNearbyBoardingStations(request.from.lat, request.from.lng, accessRadius, 12),
-    getNearbyBoardingStations(request.to.lat, request.to.lng, egressRadius, 12),
+  const [origins, dests] = await Promise.all([
+    accessOptions('access', pre, request.from, request.maxPreTransitTime ?? 900, fetchFn),
+    accessOptions('egress', post, request.to, request.maxPostTransitTime ?? 900, fetchFn),
   ])
-  const origins = rankStations(originAll, 4)
-  const dests = rankStations(destAll, 4)
   if (origins.length === 0 || dests.length === 0) {
-    return { itineraries: [], metadata: { searchWindow: 0 } }
+    return { itineraries: [], metadata }
   }
 
   const baseTime = request.time ? new Date(request.time) : new Date()
   const arriveBy = request.arriveBy ?? false
 
-  const pairs: Array<{ o: BoardingStation; d: BoardingStation }> = []
+  const pairs: Array<{ o: AccessOption; d: AccessOption }> = []
   for (const o of origins) {
     for (const d of dests) {
-      if (o.feedId === d.feedId && o.stationId === d.stationId) continue
+      if (o.station.feedId === d.station.feedId && o.station.stationId === d.station.stationId) continue
       pairs.push({ o, d })
     }
   }
 
   const results = await Promise.all(
     pairs.slice(0, COMPOSE_MAX_PAIRS).map(async ({ o, d }) => {
-      const accessSec = Math.max(1, Math.round(haversineM(request.from, o) / COMPOSE_WALK_MPS))
-      const egressSec = Math.max(1, Math.round(haversineM(d, request.to) / COMPOSE_WALK_MPS))
       // Shift the query so the schedule we get back is actually catchable:
-      // depart-by → be at the stop after the access walk; arrive-by → leave
-      // the egress stop early enough to finish the last walk by `time`.
+      // depart-by → be at the stop after the access leg; arrive-by → leave
+      // the egress stop early enough to finish by `time`.
       const queryTime = arriveBy
-        ? new Date(baseTime.getTime() - egressSec * 1000)
-        : new Date(baseTime.getTime() + accessSec * 1000)
+        ? new Date(baseTime.getTime() - d.seconds * 1000)
+        : new Date(baseTime.getTime() + o.seconds * 1000)
       try {
         const resp = await queryMotis(
           {
             ...request,
-            fromStopId: `${o.feedId}_${o.stationId}`,
-            toStopId: `${d.feedId}_${d.stationId}`,
+            fromStopId: `${o.station.feedId}_${o.station.stationId}`,
+            toStopId: `${d.station.feedId}_${d.station.stationId}`,
             time: queryTime.toISOString(),
           },
           fetchFn,
         )
-        return resp.itineraries.map((it) => withAccessEgressWalks(it, request.from, request.to, accessSec, egressSec))
+        return resp.itineraries.map((it) => withAccessEgress(it, o, d))
       } catch (err) {
         // One bad pair must not sink the rest of the fan-out. A 404 here
         // means the stop exists in PostGIS but not in the baked MOTIS
         // timetable (stale GTFS vs. bake) — warn once per feed pair so that
         // drift is visible instead of surfacing as silently-empty results.
         if (err instanceof MotisError && err.statusCode === 404) {
-          const key = `${o.feedId}:${d.feedId}`
+          const key = `${o.station.feedId}:${d.station.feedId}`
           if (!motis404Warned.has(key)) {
             motis404Warned.add(key)
             console.warn(
-              `[transit] MOTIS has no timetable location for ${o.feedId}_${o.stationId} → ` +
-              `${d.feedId}_${d.stationId} — GTFS DB is ahead of the MOTIS bake for these feeds`,
+              `[transit] MOTIS has no timetable location for ${o.station.feedId}_${o.station.stationId} → ` +
+              `${d.station.feedId}_${d.station.stationId} — GTFS DB is ahead of the MOTIS bake for these feeds`,
             )
           }
         }
@@ -1147,35 +1300,31 @@ async function composeTransitFromStops(
     }),
   )
 
+  const rentalSystemIds = [...origins, ...dests].flatMap((o) => o.legs.flatMap((l) => (l.rental ? [l.rental.systemId] : [])))
+  if (rentalSystemIds.length) ensurePricing(rentalSystemIds).catch(() => {})
+
   const all = results.flat()
   all.sort(compareItineraries)
   return {
     itineraries: deduplicateItineraries(all).slice(0, numItineraries),
-    metadata: { searchWindow: 0 },
+    metadata,
   }
 }
 
 /**
  * Intermodal routing using coordinates with mode selection.
  *
- * For pure-WALK transit we compose around a stop-to-stop search (access/egress
- * owned by us, not MOTIS's fragile OSR — see composeTransitFromStops). Street
- * modes that genuinely need MOTIS's graph (RENTAL/BIKE/CAR access) keep the
- * coordinate-intermodal path.
+ * Transit is composed around a stop-to-stop search for every access mode
+ * (see composeTransitFromStops): MOTIS's own street graph can't load at
+ * continent scale. Only direct, transit-free rides still ask MOTIS by
+ * coordinate.
  */
 export async function getIntermodalRoute(
   request: IntermodalRouteRequest,
   fetchFn: FetchFn = globalThis.fetch,
 ): Promise<TransitRouteResponse> {
-  const pre = request.preTransitModes ?? ['WALK']
-  const post = request.postTransitModes ?? ['WALK']
-  const pureWalkTransit =
-    !request.directModes?.length &&
-    pre.every((m) => m === 'WALK') &&
-    post.every((m) => m === 'WALK')
-
   let result: TransitRouteResponse
-  if (pureWalkTransit) {
+  if (!request.directModes?.length) {
     result = await composeTransitFromStops(request, fetchFn)
   } else {
     result = await queryMotisIntermodal(request, fetchFn)

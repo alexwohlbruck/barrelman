@@ -10,6 +10,10 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Fixed
+
+* Transit trips that start or end by bike, by car at a park-and-ride, or on a shared bike no longer come back empty when MOTIS runs without street routing, which is the case for any continent-scale region. Those trips are now built around MOTIS's stop-to-stop search, with bike and car legs routed on GraphHopper and shared bikes paired to docks of one system that have bikes and free spaces.
+
 ## [0.10.28] - 2026-10-24
 
 ### Added

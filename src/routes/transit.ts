@@ -222,15 +222,18 @@ export function createTransitRoutes(deps: {
       detail: {
         summary: 'Intermodal routing with mode selection',
         description:
-          'Coordinate-based intermodal routing via MOTIS. Supports pre/post-transit ' +
-          'mode selection (WALK, BIKE, CAR_PARKING, RENTAL) and direct non-transit ' +
-          'modes. Requires MOTIS to have OSM street data loaded. Returns legs with ' +
-          'real OSM geometry for walk/bike/car segments. Set requireBikeTransport ' +
-          'to keep only trips that allow bike carriage, for BIKE on both ends; it ' +
-          'reads GTFS bikes_allowed, and feeds that omit it return no results. ' +
-          'Itineraries carry `fare` and `farePayments` where the feeds publish fare ' +
-          'data, and are ordered to prefer fewer fare payments when the time cost ' +
-          'is small.',
+          'Intermodal routing with pre/post-transit mode selection (WALK, BIKE, ' +
+          'CAR_PARKING, RENTAL). Access and egress are composed around a ' +
+          'stop-to-stop MOTIS search: bike and car legs are routed on GraphHopper ' +
+          'to nearby stations (park-and-ride targets rail and ferry only), and ' +
+          'RENTAL pairs docks of one bike-share system with bikes at the start and ' +
+          'free docks at the end. Walk legs are straight-line estimates for the ' +
+          'caller to route. Direct non-transit modes still need MOTIS street ' +
+          'routing. Set requireBikeTransport to keep only trips that allow bike ' +
+          'carriage, for BIKE on both ends; it reads GTFS bikes_allowed, and feeds ' +
+          'that omit it return no results. Itineraries carry `fare` and ' +
+          '`farePayments` where the feeds publish fare data, and are ordered to ' +
+          'prefer fewer fare payments when the time cost is small.',
         tags: ['Transit'],
       },
     })
