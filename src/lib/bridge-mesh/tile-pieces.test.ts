@@ -37,19 +37,18 @@ test('a piece keeps its ranges and the stretch of surface over its tile', () => 
   }
 })
 
-test('below zoom 16 a piece leaves out the paint and rails, and at zoom 14 the parapets and the ways under it', () => {
+test('at zoom 14 a piece leaves out the paint, rails, parapets and the ways under it', () => {
   const whole = decodeBridge(encodeBridge(baked))
   const { paintFrom, railsFrom, routesFrom } = whole.header.ranges
   expect(railsFrom).toBeGreaterThan(paintFrom)
   const at = (z: number) => decodeBridge(cutPiece(mesh, z, Math.floor(points[17][0] * 2 ** z), Math.floor(points[17][1] * 2 ** z))!)
   const mid = at(15)
-  expect(mid.header.ranges.paintFrom).toBe(mid.header.ranges.routesFrom)
-  expect(mid.indices.length).toBe(paintFrom + whole.indices.length - routesFrom)
-  expect(mid.header.stands).toHaveLength(1)
+  expect(mid.header.ranges).toEqual(whole.header.ranges)
+  const far = at(14)
+  expect(far.header.ranges.paintFrom).toBe(far.header.ranges.routesFrom)
   const parapets = whole.indices.slice(0, paintFrom).filter((_, k) => k % 3 === 0).filter(i => whole.color[i * 3] === 2).length
   expect(parapets).toBeGreaterThan(0)
-  const far = at(14)
-  expect(far.indices.length / 3).toBe(mid.indices.length / 3 - parapets)
+  expect(far.indices.length / 3).toBe((paintFrom + whole.indices.length - routesFrom) / 3 - parapets)
   expect(far.header.stands).toHaveLength(1)
   expect(far.header.under).toEqual([])
 })

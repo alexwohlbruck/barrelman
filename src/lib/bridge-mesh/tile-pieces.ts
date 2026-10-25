@@ -9,13 +9,11 @@ import { MATERIALS } from './encode'
  *
  * A piece is a BRM v3 mesh holding the triangles of one deck whose centroid
  * lies in the tile, so the pieces of one zoom's tiles partition every deck.
- * Below DETAIL_ZOOM the paint and rails are left out: the client draws them
- * only from that zoom, and a lower tile is only drawn in the distance there.
- * At the lowest zoom, drawn only far off or zoomed out, parapets and the
- * ground ways under each deck (which tell objects on it from those below) are left out too.
+ * At the lowest zoom, drawn only far off or zoomed out, the paint, rails and
+ * parapets are left out, and the ground ways under each deck (which tell
+ * objects on it from those below).
  */
 export const DECK_TILE_ZOOMS = { min: 14, max: 16 } as const
-const DETAIL_ZOOM = 16
 const PARAPET = MATERIALS.indexOf('parapet')
 /** The protobuf field of an MVT `Tile` the pieces travel in: an extension number, skipped by every MVT reader. */
 export const DECK_TILE_FIELD = 20
@@ -99,13 +97,12 @@ export function cutPiece(mesh: Streams, z: number, x: number, y: number): Uint8A
   const q = header.quantum as number
   const [minX, minY, maxX, maxY] = [x / n - ox, y / n - oy, (x + 1) / n - ox, (y + 1) / n - oy].map(v => v / q)
   const { paintFrom, railsFrom, routesFrom } = header.ranges
-  const detail = z >= DETAIL_ZOOM, coarse = z <= DECK_TILE_ZOOMS.min
+  const coarse = z <= DECK_TILE_ZOOMS.min
   const color = streams[2] as Uint8Array
   const keep: number[] = []
   const counts = [0, 0, 0, 0]
   const take = (t: number) => {
-    if (!detail && t >= paintFrom && t < routesFrom) return
-    if (coarse && t < paintFrom && color[indices[t] * 3] === PARAPET) return
+    if (coarse && ((t >= paintFrom && t < routesFrom) || (t < paintFrom && color[indices[t] * 3] === PARAPET))) return
     keep.push(t)
     counts[t < paintFrom ? 0 : t < railsFrom ? 1 : t < routesFrom ? 2 : 3]++
   }
