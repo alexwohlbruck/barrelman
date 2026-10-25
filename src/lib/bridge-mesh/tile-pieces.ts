@@ -288,7 +288,7 @@ export function workerDeckTileBuilder(directory: string): DeckTileBuilder {
     }
     w.onerror = event => lost(w, event.message)
     w.addEventListener('close', () => lost(w, 'closed'))
-    w.unref()
+    ;(w as Worker & { unref?: () => void }).unref?.()
     w.postMessage({ directory })
     return w
   }
