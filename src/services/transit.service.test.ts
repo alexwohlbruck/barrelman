@@ -61,6 +61,18 @@ mock.module('../db', () => ({
   },
 }))
 
+/** Shared-bike docks the GBFS mock serves, by position. Reset in beforeEach. */
+let gbfsStations: any[] = []
+const actualGbfs = await import('./gbfs.service')
+const { haversineM } = await import('./transit-access')
+mock.module('./gbfs.service', () => ({
+  ...actualGbfs,
+  getNearbyStations: async (req: { lat: number; lng: number; radius?: number }) => ({
+    stations: gbfsStations.filter((s) => haversineM(req, { lat: s.lat, lng: s.lon }) <= (req.radius ?? 500)),
+    systems: [{ systemId: 'citi', name: 'Citi Bike', operator: null }],
+  }),
+}))
+
 import {
   getTransitRoute,
   getIntermodalRoute,
@@ -707,7 +719,14 @@ describe('checkMotisHealth', () => {
 
 describe('getIntermodalRoute bike carriage', () => {
   beforeEach(() => {
-    dbCallIndex = 0
+    let lookups = 0
+    dbRows = () => {
+      const origin = lookups++ % 2 === 0
+      return [{
+        feed_id: 'mock_feed', station_id: origin ? 'origin' : 'dest', stop_name: 'Stop',
+        stop_lat: origin ? 35.23 : 35.77, stop_lon: origin ? -80.84 : -78.64, distance: 50, route_type: 2,
+      }]
+    }
   })
 
   const request = {
@@ -718,7 +737,8 @@ describe('getIntermodalRoute bike carriage', () => {
     postTransitModes: ['BIKE' as const],
   }
 
-  const urlOf = (fetchFn: any) => String(fetchFn.mock.calls[0][0])
+  const urlOf = (fetchFn: any) =>
+    fetchFn.mock.calls.map((call: any[]) => String(call[0])).find((url: string) => url.includes('/api/v1/plan'))
 
   test('asks MOTIS for bike carriage only when required', async () => {
     const fetchFn = mockFetch(makeMotisResponse())
@@ -834,5 +854,114 @@ describe('compareItineraries', () => {
 
   test('orders by duration when both charge the same', () => {
     expect([itin(1800, 2), itin(600, 2)].sort(compareItineraries)[0].duration).toBe(600)
+  })
+})
+
+describe('composed access and egress', () => {
+  const ORIGIN = { lat: 40.7000, lng: -73.9900 }
+  const DEST = { lat: 40.7600, lng: -73.9800 }
+  const BOARD_AT = { lat: 40.7100, lng: -73.9900 }
+  const ALIGHT_AT = { lat: 40.7550, lng: -73.9800 }
+  const BOARD_MS = Date.parse('2026-10-25T13:00:00Z')
+
+  const station = (id: string, at: { lat: number; lng: number }, routeType: number) => ({
+    feed_id: 'nyc', station_id: id, stop_name: `Station ${id}`,
+    stop_lat: at.lat, stop_lon: at.lng, distance: 100, route_type: routeType,
+  })
+
+  /** One transit leg between the two stations the test sets up. */
+  const motisRide = {
+    itineraries: [{
+      duration: 1200,
+      startTime: BOARD_MS,
+      endTime: BOARD_MS + 1_200_000,
+      transfers: 0,
+      legs: [{
+        mode: 'SUBWAY',
+        from: { name: 'Station A', lat: BOARD_AT.lat, lon: BOARD_AT.lng, stopId: 'nyc_A', departure: BOARD_MS },
+        to: { name: 'Station B', lat: ALIGHT_AT.lat, lon: ALIGHT_AT.lng, stopId: 'nyc_B', arrival: BOARD_MS + 1_200_000 },
+        startTime: BOARD_MS,
+        endTime: BOARD_MS + 1_200_000,
+        duration: 1200,
+        distance: 5000,
+        routeShortName: '1',
+        legGeometry: { points: '_p~iF~ps|U_ulLnnqC', length: 3 },
+      }],
+    }],
+  }
+
+  /** GraphHopper answers every routed leg with a 7-minute, 2 km path. */
+  function routedFetch(): any {
+    return mock(async (url: string) => {
+      const body = String(url).includes('/route')
+        ? { paths: [{ time: 420_000, distance: 2000, points: { coordinates: [[-73.99, 40.70], [-73.991, 40.705], [-73.99, 40.71]] } }] }
+        : motisRide
+      return { ok: true, status: 200, text: async () => JSON.stringify(body), json: async () => body }
+    })
+  }
+
+  const motisUrl = (fetchFn: any) =>
+    fetchFn.mock.calls.map((call: any[]) => String(call[0])).find((url: string) => url.includes('/api/v1/plan'))!
+
+  beforeEach(() => {
+    gbfsStations = []
+    // Access is looked up before egress: the first station query is the origin's.
+    let lookups = 0
+    dbRows = () =>
+      lookups++ % 2 === 0
+        ? [station('busA', ORIGIN, 3), station('A', BOARD_AT, 1)]
+        : [station('B', ALIGHT_AT, 1)]
+  })
+
+  test('bike access is routed on GraphHopper and parks before boarding', async () => {
+    const fetchFn = routedFetch()
+    const result = await getIntermodalRoute(
+      { from: ORIGIN, to: DEST, preTransitModes: ['BIKE'], postTransitModes: ['WALK'], maxPreTransitTime: 1800 },
+      fetchFn,
+    )
+    const legs = result.itineraries[0].legs
+    expect(legs.map((l) => l.mode)).toEqual(['BIKE', 'SUBWAY', 'WALK'])
+    expect(legs[0].geometry?.coordinates).toHaveLength(3)
+    expect(legs[0].duration).toBe(420)
+    expect(Date.parse(legs[0].endTime)).toBe(BOARD_MS - 60_000)
+  })
+
+  test('park and ride drives only to rail, never to a bus stop', async () => {
+    const fetchFn = routedFetch()
+    await getIntermodalRoute(
+      { from: ORIGIN, to: DEST, preTransitModes: ['CAR_PARKING'], postTransitModes: ['WALK'], maxPreTransitTime: 1800 },
+      fetchFn,
+    )
+    expect(motisUrl(fetchFn)).toContain('fromPlace=nyc_A')
+    expect(motisUrl(fetchFn)).not.toContain('busA')
+  })
+
+  test('shared bike egress walks to a dock, rides, and walks on', async () => {
+    gbfsStations = [
+      { type: 'station', systemId: 'citi', stationId: 'pick', name: 'W 52 St', lat: 40.7552, lon: -73.9802, isRenting: true, isReturning: true, numBikesAvailable: 4, numEbikesAvailable: 0, numDocksAvailable: 10 },
+      { type: 'station', systemId: 'citi', stationId: 'drop', name: 'W 56 St', lat: 40.7598, lon: -73.9801, isRenting: true, isReturning: true, numBikesAvailable: 0, numEbikesAvailable: 0, numDocksAvailable: 3 },
+    ]
+    const result = await getIntermodalRoute(
+      { from: ORIGIN, to: DEST, preTransitModes: ['WALK'], postTransitModes: ['RENTAL'], maxPostTransitTime: 1800 },
+      routedFetch(),
+    )
+    const legs = result.itineraries[0].legs
+    expect(legs.map((l) => l.mode)).toEqual(['WALK', 'SUBWAY', 'WALK', 'RENTAL', 'WALK'])
+    const ride = legs[3]
+    expect(ride.rentalProvider).toBe('Citi Bike')
+    expect(ride.rentalStationName).toBe('W 52 St')
+    expect(ride.rentalToStationName).toBe('W 56 St')
+  })
+
+  test('shared bike needs both docks in the same system', async () => {
+    gbfsStations = [
+      { type: 'station', systemId: 'citi', stationId: 'pick', name: 'W 52 St', lat: 40.7552, lon: -73.9802, isRenting: true, isReturning: true, numBikesAvailable: 4, numEbikesAvailable: 0, numDocksAvailable: 10 },
+      { type: 'station', systemId: 'other', stationId: 'drop', name: 'W 56 St', lat: 40.7598, lon: -73.9801, isRenting: true, isReturning: true, numBikesAvailable: 0, numEbikesAvailable: 0, numDocksAvailable: 3 },
+    ]
+    const result = await getIntermodalRoute(
+      { from: ORIGIN, to: DEST, preTransitModes: ['WALK'], postTransitModes: ['RENTAL'], maxPostTransitTime: 1800 },
+      routedFetch(),
+    )
+    expect(result.itineraries).toHaveLength(0)
   })
 })
