@@ -10,6 +10,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.10.27] - 2026-10-24
+
 ### Added
 
 * `POST /match` snaps a GPS trace to the roads it followed and returns the path with elevation, path details and each input point's snapped position. It takes JSON points or a GPX file, and copes with sparse traces such as photo geotags minutes apart: wide gaps are routed instead of matched, so a three-point trace answers in well under a second where GraphHopper's own matcher could stall. Billed as routing.
