@@ -105,7 +105,11 @@ const ENDPOINT_DEPENDENCIES: Record<
     enhancedBy: ['pelias'],
     partialMessage: 'Forward geocoding and place-level reverse are unavailable; coordinate reverse still works',
   },
-  routing: { dependsOn: ['graphhopper'] },
+  routing: {
+    dependsOn: ['graphhopper'],
+    enhancedBy: ['database'],
+    partialMessage: 'Lane geometry (/route/lanes) is unavailable; routes are unaffected',
+  },
   isochrone: {
     dependsOn: ['graphhopper'],
     enhancedBy: ['motis'],
