@@ -1,6 +1,7 @@
 import { LRUCache } from 'lru-cache'
 import { createHash } from 'node:crypto'
 import { join } from 'node:path'
+import { MATERIALS } from './encode'
 
 /**
  * Deck meshes cut to vector tiles, so a client gets the decks of a tile in the
@@ -10,9 +11,12 @@ import { join } from 'node:path'
  * lies in the tile, so the pieces of one zoom's tiles partition every deck.
  * Below DETAIL_ZOOM the paint and rails are left out: the client draws them
  * only from that zoom, and a lower tile is only drawn in the distance there.
+ * At the lowest zoom, drawn only far off or zoomed out, parapets and the
+ * ground ways under each deck (which tell objects on it from those below) are left out too.
  */
 export const DECK_TILE_ZOOMS = { min: 14, max: 16 } as const
 const DETAIL_ZOOM = 16
+const PARAPET = MATERIALS.indexOf('parapet')
 /** The protobuf field of an MVT `Tile` the pieces travel in: an extension number, skipped by every MVT reader. */
 export const DECK_TILE_FIELD = 20
 const MAGIC = 0x31544442
@@ -95,11 +99,13 @@ export function cutPiece(mesh: Streams, z: number, x: number, y: number): Uint8A
   const q = header.quantum as number
   const [minX, minY, maxX, maxY] = [x / n - ox, y / n - oy, (x + 1) / n - ox, (y + 1) / n - oy].map(v => v / q)
   const { paintFrom, railsFrom, routesFrom } = header.ranges
-  const detail = z >= DETAIL_ZOOM
+  const detail = z >= DETAIL_ZOOM, coarse = z <= DECK_TILE_ZOOMS.min
+  const color = streams[2] as Uint8Array
   const keep: number[] = []
   const counts = [0, 0, 0, 0]
   const take = (t: number) => {
     if (!detail && t >= paintFrom && t < routesFrom) return
+    if (coarse && t < paintFrom && color[indices[t] * 3] === PARAPET) return
     keep.push(t)
     counts[t < paintFrom ? 0 : t < railsFrom ? 1 : t < routesFrom ? 2 : 3]++
   }
@@ -134,7 +140,8 @@ export function cutPiece(mesh: Streams, z: number, x: number, y: number): Uint8A
   })
   const ranges = { paintFrom: counts[0] * 3, railsFrom: (counts[0] + counts[1]) * 3, routesFrom: (counts[0] + counts[1] + counts[2]) * 3 }
   const area = { minX: x / n, minY: y / n, maxX: (x + 1) / n, maxY: (y + 1) / n }
-  const geometry = { stands: header.stands.flatMap((s: Stand) => cutStand(s, area)), under: cutWays(header.under, area), tracks: cutWays(header.tracks, area) }
+  const stands = header.stands.flatMap((s: Stand) => cutStand(s, area))
+  const geometry = coarse ? { stands, under: [], tracks: [] } : { stands, under: cutWays(header.under, area), tracks: cutWays(header.tracks, area) }
   return writeStreams({ ...header, ...geometry, ranges, lengths: [...picked.map(p => p.length), out.length] }, picked, out)
 }
 
@@ -215,40 +222,34 @@ export type DeckFilesIn = (z: number, x: number, y: number) => Promise<string[]>
 /** A tile's deck payload, and whether every deck in it could be read: one that could not is not cached, anywhere. */
 export type DeckTile = { bytes: Uint8Array; complete: boolean }
 
-/** Builds and caches deck tiles from the mesh files a tile's decks name. */
-export function createDeckTiles(directory: string, filesIn: DeckFilesIn, { meshBytes = 384 << 20, tileBytes = 256 << 20 } = {}) {
+/** Builds a deck tile from the mesh files of the decks it meets. */
+export type DeckTileBuilder = (z: number, x: number, y: number, files: string[]) => Promise<DeckTile>
+
+/** Cuts deck tiles from the mesh files in `directory`, keeping the meshes it has read. */
+export function deckTileBuilder(directory: string, { meshBytes = 384 << 20 } = {}): DeckTileBuilder {
   // A parsed header weighs about three times its JSON as objects; a triangle's cell entry about 8 bytes.
   const meshes = new LRUCache<string, Streams>({ maxSize: meshBytes, sizeCalculation: m => m.streams.reduce((n, s) => n + s.byteLength, m.indices.byteLength) + 3 * (m.headerBytes ?? 0) + (8 * m.indices.length) / 3 + 1 })
   // An unreadable mesh is not tried again on every request for a while.
   const unreadable = new LRUCache<string, true>({ max: 10_000, ttl: 300_000 })
-  const tiles = new LRUCache<string, Uint8Array>({ maxSize: tileBytes, sizeCalculation: b => b.byteLength + 1 })
-  const lists = new LRUCache<string, string[]>({ max: 20_000, ttl: 60_000 })
-  const reading = new Map<string, Promise<Streams | null>>()
-  const building = new Map<string, Promise<DeckTile>>()
-  const mesh = (file: string) => {
+  const mesh = async (file: string) => {
     const hit = meshes.get(file)
-    if (hit) return Promise.resolve(hit)
-    if (unreadable.has(file)) return Promise.resolve(null)
-    let pending = reading.get(file)
-    if (!pending) {
-      pending = (async () => {
-        const gz = Bun.file(join(directory, `${file}.gz`)), plain = Bun.file(join(directory, file))
-        const bytes = await gz.exists() ? Bun.gunzipSync(new Uint8Array(await gz.arrayBuffer())) : await plain.exists() ? new Uint8Array(await plain.arrayBuffer()) : null
-        if (!bytes) throw new Error('no such mesh file')
-        const read = readStreams(bytes)
-        cellsOf(read)
-        meshes.set(file, read)
-        return read
-      })().catch(error => {
-        console.warn(`[deck tiles] ${file}:`, error)
-        unreadable.set(file, true)
-        return null
-      }).finally(() => reading.delete(file))
-      reading.set(file, pending)
+    if (hit) return hit
+    if (unreadable.has(file)) return null
+    try {
+      const gz = Bun.file(join(directory, `${file}.gz`)), plain = Bun.file(join(directory, file))
+      const bytes = await gz.exists() ? Bun.gunzipSync(new Uint8Array(await gz.arrayBuffer())) : await plain.exists() ? new Uint8Array(await plain.arrayBuffer()) : null
+      if (!bytes) throw new Error('no such mesh file')
+      const read = readStreams(bytes)
+      cellsOf(read)
+      meshes.set(file, read)
+      return read
+    } catch (error) {
+      console.warn(`[deck tiles] ${file}:`, error)
+      unreadable.set(file, true)
+      return null
     }
-    return pending
   }
-  const build = async (z: number, x: number, y: number, files: string[]): Promise<DeckTile> => {
+  return async (z, x, y, files) => {
     const pieces: Array<{ file: string; bytes: Uint8Array }> = []
     const failed: string[] = []
     for (const file of files) {
@@ -259,6 +260,53 @@ export function createDeckTiles(directory: string, filesIn: DeckFilesIn, { meshB
     }
     return { bytes: encodeDeckTile(pieces, failed), complete: !failed.length }
   }
+}
+
+/**
+ * Deck tiles off the request thread: one worker reads and cuts, so a cold
+ * downtown tile (hundreds of meshes) does not stall the API. Falls back to
+ * cutting here where workers are unavailable.
+ */
+export function workerDeckTileBuilder(directory: string): DeckTileBuilder {
+  let worker: Worker | null = null
+  let next = 0
+  const jobs = new Map<number, { resolve: (tile: DeckTile) => void; reject: (error: Error) => void }>()
+  const here = deckTileBuilder(directory)
+  const start = () => {
+    const w = new Worker(new URL('./tile-pieces.worker.ts', import.meta.url))
+    w.onmessage = ({ data }: MessageEvent<{ id: number; bytes?: Uint8Array; complete?: boolean; error?: string }>) => {
+      const job = jobs.get(data.id)
+      jobs.delete(data.id)
+      if (data.error !== undefined || !data.bytes) job?.reject(new Error(data.error ?? 'Deck tile worker failed'))
+      else job?.resolve({ bytes: data.bytes, complete: !!data.complete })
+    }
+    w.onerror = event => {
+      for (const job of jobs.values()) job.reject(new Error(`Deck tile worker: ${event.message}`))
+      jobs.clear()
+      worker = null
+    }
+    w.postMessage({ directory })
+    return w
+  }
+  return (z, x, y, files) => {
+    try {
+      worker ??= start()
+    } catch {
+      return here(z, x, y, files)
+    }
+    const id = next++
+    return new Promise((resolve, reject) => {
+      jobs.set(id, { resolve, reject })
+      worker!.postMessage({ id, z, x, y, files })
+    })
+  }
+}
+
+/** Caches deck tiles by the decks they hold, building each once however many ask at the same time. */
+export function createDeckTiles(filesIn: DeckFilesIn, build: DeckTileBuilder, { tileBytes = 256 << 20 } = {}) {
+  const tiles = new LRUCache<string, Uint8Array>({ maxSize: tileBytes, sizeCalculation: b => b.byteLength + 1 })
+  const lists = new LRUCache<string, string[]>({ max: 20_000, ttl: 60_000 })
+  const building = new Map<string, Promise<DeckTile>>()
   return async function deckTile(z: number, x: number, y: number): Promise<DeckTile> {
     const at = `${z}/${x}/${y}`
     let files = lists.get(at)

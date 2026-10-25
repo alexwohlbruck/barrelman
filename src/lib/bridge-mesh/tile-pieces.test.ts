@@ -37,13 +37,21 @@ test('a piece keeps its ranges and the stretch of surface over its tile', () => 
   }
 })
 
-test('below zoom 16 a piece leaves out the paint and rails', () => {
-  const whole = decodeBridge(encodeBridge(baked)).header.ranges
-  expect(whole.railsFrom).toBeGreaterThan(whole.paintFrom)
-  const low = cutPiece(mesh, 14, Math.floor(points[17][0] * 2 ** 14), Math.floor(points[17][1] * 2 ** 14))!
-  const { header } = decodeBridge(low)
-  expect(header.ranges.paintFrom).toBe(header.ranges.routesFrom)
-  expect(triangles(low)).toBe(whole.paintFrom / 3 + (mesh.indices.length - whole.routesFrom) / 3)
+test('below zoom 16 a piece leaves out the paint and rails, and at zoom 14 the parapets and the ways under it', () => {
+  const whole = decodeBridge(encodeBridge(baked))
+  const { paintFrom, railsFrom, routesFrom } = whole.header.ranges
+  expect(railsFrom).toBeGreaterThan(paintFrom)
+  const at = (z: number) => decodeBridge(cutPiece(mesh, z, Math.floor(points[17][0] * 2 ** z), Math.floor(points[17][1] * 2 ** z))!)
+  const mid = at(15)
+  expect(mid.header.ranges.paintFrom).toBe(mid.header.ranges.routesFrom)
+  expect(mid.indices.length).toBe(paintFrom + whole.indices.length - routesFrom)
+  expect(mid.header.stands).toHaveLength(1)
+  const parapets = whole.indices.slice(0, paintFrom).filter((_, k) => k % 3 === 0).filter(i => whole.color[i * 3] === 2).length
+  expect(parapets).toBeGreaterThan(0)
+  const far = at(14)
+  expect(far.indices.length / 3).toBe(mid.indices.length / 3 - parapets)
+  expect(far.header.stands).toHaveLength(1)
+  expect(far.header.under).toEqual([])
 })
 
 test('a stand away from a tile is left out, and one wholly inside is kept whole', () => {
@@ -64,11 +72,18 @@ test('the deck tile rides in an MVT field that readers skip', () => {
 })
 
 test('a deck whose mesh cannot be read is named, and the tile is not cached', async () => {
-  const { createDeckTiles } = await import('./tile-pieces')
-  const deckTile = createDeckTiles('/nonexistent', async () => [`${'b'.repeat(64)}.brm`])
+  const { createDeckTiles, deckTileBuilder } = await import('./tile-pieces')
+  const deckTile = createDeckTiles(async () => [`${'b'.repeat(64)}.brm`], deckTileBuilder('/nonexistent'))
   const first = await deckTile(16, 1, 1)
   expect(first.complete).toBe(false)
   const view = new DataView(first.bytes.buffer)
   expect(JSON.parse(new TextDecoder().decode(first.bytes.subarray(8, 8 + view.getUint32(4, true)))).failed).toEqual([`${'b'.repeat(64)}.brm`])
   expect((await deckTile(16, 1, 1)).complete).toBe(false)
+})
+
+test('a worker cuts deck tiles off the request thread', async () => {
+  const { workerDeckTileBuilder } = await import('./tile-pieces')
+  const tile = await workerDeckTileBuilder('/nonexistent')(16, 1, 1, [`${'c'.repeat(64)}.brm`])
+  expect(tile.complete).toBe(false)
+  expect(new DataView(tile.bytes.buffer, tile.bytes.byteOffset).getUint32(0, true)).toBe(0x31544442)
 })

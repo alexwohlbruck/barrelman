@@ -3,7 +3,7 @@ import { join } from 'path'
 import { apiAuth, apiAuthAfter } from '../middleware/api-auth'
 import { resolvePortolanTilesDir } from '../config/portolan'
 import { resolveTileBundle } from '../config/tile-bundles'
-import { createDeckTiles, DECK_TILE_ZOOMS, encodeDeckTile, withDeckField, type DeckTile } from '../lib/bridge-mesh/tile-pieces'
+import { createDeckTiles, DECK_TILE_ZOOMS, encodeDeckTile, withDeckField, workerDeckTileBuilder, type DeckTile } from '../lib/bridge-mesh/tile-pieces'
 import { bridgeMeshDirectory } from '../lib/bridge-mesh/files'
 import { deckFilesIn } from '../lib/bridge-mesh/deck-lookup'
 
@@ -86,7 +86,7 @@ export function createTileRoutes(
   deps: { fetchTile?: TileFetcher; portolanTilesDir?: string; deckTile?: (z: number, x: number, y: number) => Promise<DeckTile> } = {},
 ) {
   const fetchTile: TileFetcher = deps.fetchTile || ((url: string) => fetch(url))
-  const deckTile = deps.deckTile ?? createDeckTiles(bridgeMeshDirectory(), deckFilesIn)
+  const deckTile = deps.deckTile ?? createDeckTiles(deckFilesIn, workerDeckTileBuilder(bridgeMeshDirectory()))
 
   /**
    * Portolan tiles are static files, not Martin: `portolan sync` writes MVT
