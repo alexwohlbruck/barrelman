@@ -6,7 +6,7 @@
  *   - GET passthrough with query string
  *   - POST passthrough with JSON body and content-type
  *   - Upstream status codes flow through unchanged
- *   - 502 when fetcher throws (GraphHopper unreachable)
+ *   - 502 when fetcher throws (GraphHopper unreachable), 504 when it times out
  *   - Auth: BARRELMAN_API_KEY required, inbound Bearer never leaks upstream
  */
 
@@ -121,6 +121,29 @@ describe('GET /graphhopper/*', () => {
     const body = await json(res)
     expect(body.error).toContain('unreachable')
     expect(body.detail).toContain('ECONNREFUSED')
+  })
+})
+
+describe('upstream timeout', () => {
+  const savedTimeout = process.env.GRAPHHOPPER_TIMEOUT_MS
+  afterEach(() => {
+    if (savedTimeout === undefined) delete process.env.GRAPHHOPPER_TIMEOUT_MS
+    else process.env.GRAPHHOPPER_TIMEOUT_MS = savedTimeout
+  })
+
+  test('returns 504 instead of hanging when GraphHopper never answers', async () => {
+    process.env.GRAPHHOPPER_TIMEOUT_MS = '50'
+    // An upstream that only ever ends by being aborted, like a stuck /match.
+    const hang: GraphHopperFetcher = (_url, init) =>
+      new Promise((_, reject) => init.signal!.addEventListener('abort', () => reject(init.signal!.reason)))
+
+    const app = new Elysia().use(createGraphHopperRoutes({ fetchGraphHopper: hang }))
+    const started = Date.now()
+    const res = await app.handle(req('/graphhopper/match?profile=bike', { method: 'POST', body: '<gpx/>' }))
+
+    expect(res.status).toBe(504)
+    expect(Date.now() - started).toBeLessThan(2000)
+    expect((await json(res)).error).toContain('timed out')
   })
 })
 

@@ -56,7 +56,7 @@ of routing calls.
 | \`spatial\` | 3 | \`/contains\`, \`/children\` |
 | \`geocode\` | 5 | \`/geocode/*\` |
 | \`search\` | 6 | \`/search\`, \`/autocomplete\` |
-| \`routing\` | 12 | \`/route\`, \`/graphhopper/*\` |
+| \`routing\` | 12 | \`/route\`, \`/match\`, \`/graphhopper/*\` |
 | \`transit\` | 20 | \`/transit/*\`, \`/gbfs/*\` |
 | \`isochrone\` | 40 | \`/isochrone\` |
 
@@ -77,6 +77,38 @@ the overage. Rate limits are per plan and answer \`429\` with \`Retry-After\`.
 See \`GET /account/plans\` for the current pricing table.
 `.trim()
 
+// The GraphHopper passthrough is one `.all('/graphhopper/*')` route, and
+// @elysiajs/swagger drops every path containing `*`, so it never reached the
+// spec or the docs. Declared by hand here; keep in step with routes/graphhopper.ts.
+const graphhopperOperation = (method: 'get' | 'post') => ({
+  tags: ['GraphHopper'],
+  summary: method === 'get' ? 'GraphHopper passthrough (GET)' : 'GraphHopper passthrough (POST)',
+  description:
+    'Forwards the request to the GraphHopper engine unchanged — method, query string, body and content type ' +
+    'are preserved, and the response is GraphHopper\'s own. Any GraphHopper endpoint works under this prefix ' +
+    '(`route`, `isochrone`, `matrix`, `match`, `info`, `health`); see the ' +
+    '[GraphHopper API docs](https://docs.graphhopper.com/) for their parameters. Prefer `POST /route` and ' +
+    '`POST /match` for enriched, stable responses. Each call is capped by `GRAPHHOPPER_TIMEOUT_MS` and answers ' +
+    '`504` past it. Billed as `routing`.',
+  parameters: [
+    {
+      name: 'endpoint',
+      in: 'path',
+      required: true,
+      description: 'GraphHopper endpoint, e.g. `route` or `info`.',
+      schema: { type: 'string', example: 'route' },
+    },
+  ],
+  ...(method === 'post'
+    ? { requestBody: { description: 'Passed through as-is (JSON, or GPX for `match`).', content: { 'application/json': { schema: { type: 'object' } } } } }
+    : {}),
+  responses: {
+    '200': { description: 'GraphHopper\'s response, unmodified.' },
+    '502': { description: 'GraphHopper is unreachable.' },
+    '504': { description: 'GraphHopper did not answer within `GRAPHHOPPER_TIMEOUT_MS`.' },
+  },
+})
+
 const swaggerConfig = {
   path: '/docs',
   documentation: {
@@ -87,6 +119,9 @@ const swaggerConfig = {
       contact: { name: 'Parchment', url: 'https://parchment.app' },
     },
     servers,
+    paths: {
+      '/graphhopper/{endpoint}': { get: graphhopperOperation('get'), post: graphhopperOperation('post') },
+    },
     components: {
       securitySchemes: {
         bearerAuth: {
@@ -96,22 +131,26 @@ const swaggerConfig = {
         },
       },
     },
+    // These descriptions open each page of the public API reference
+    // (docs/content/docs/api/*.mdx is generated from them), so write them for
+    // a reader there. `x-displayName` overrides fumadocs' title-casing of the
+    // tag name, which turns GBFS into "G B F S".
     tags: [
-      { name: 'Health', description: 'Liveness and dependency (DB, MOTIS) health checks.' },
-      { name: 'Search', description: 'Fuzzy place and category search over the OSM geo_places catalog.' },
-      { name: 'Geocoding', description: 'Forward and reverse geocoding (Pelias-backed).' },
-      { name: 'Places', description: 'Place details, enrichment, and lookups by OSM id.' },
-      { name: 'Brands', description: 'Brand catalog — chains, logos, and their locations.' },
-      { name: 'Tiles', description: 'Mapbox Vector Tiles served via the Martin tile server.' },
-      { name: 'Routing', description: 'Point-to-point route planning across travel profiles.' },
+      { name: 'Health', description: 'Liveness and dependency checks. `GET /health/` is public and safe for load-balancer probes, and reports each endpoint group\'s status; `GET /health/auth` also validates your bearer token.' },
+      { name: 'Search', description: 'Fuzzy place and category search over the OSM catalog, plus spatial relationship queries — which areas contain a point, and the children of an area.' },
+      { name: 'Geocoding', description: 'Reverse geocode a coordinate to addresses and places, and fetch a geocoder (Pelias) place by its gid.' },
+      { name: 'Places', description: 'Full place detail by OSM identity (type + id), with enrichment.' },
+      { name: 'Brands', description: 'Autocomplete over the brand catalog to resolve chains and franchises, and fetch a single brand by key.' },
+      { name: 'Tiles', description: 'Mapbox Vector Tiles served by Martin, plus precomputed bridge deck meshes, 3D landmark placements and models, and corrected transit geometry. Tile URLs accept `?api_key=` because map libraries fetch tiles themselves and cannot set a header.' },
+      { name: 'Routing', description: 'Turn-by-turn routing enriched with elevation and path details, and map matching: snapping a GPS trace — dense or sparse — to the roads it followed.' },
       { name: 'Isochrone', description: 'Reachability polygons — how far you get in N minutes, per travel mode.' },
-      { name: 'GraphHopper', description: 'GraphHopper routing engine passthrough and status.' },
-      { name: 'Transit', description: 'GTFS schedules and GTFS-RT live vehicles, trips, and departures.' },
-      { name: 'GBFS', description: 'Shared-mobility (bike/scooter) systems and stations via GBFS.' },
-      { name: 'Auth', description: 'Sign-in: email codes, passkeys and OAuth. Used by the console, not by API clients.' },
-      { name: 'Account', description: 'API keys, usage and credit balance for the signed-in account.' },
-      { name: 'Billing', description: 'Plans, checkout and the metered-usage webhook.' },
-      { name: 'Admin', description: 'Operator console API — scripts, jobs, and metrics. Admin access required.' },
+      { name: 'GraphHopper', 'x-displayName': 'GraphHopper', description: 'Raw passthrough to the GraphHopper routing engine, for its endpoints that barrelman does not wrap. Responses are GraphHopper\'s own.' },
+      { name: 'Transit', description: 'Trip planning via MOTIS plus live GTFS-RT data — vehicle positions, departures, alerts, stops, route detail, and station geometry.' },
+      { name: 'GBFS', 'x-displayName': 'GBFS', description: 'Shared-mobility (bikeshare and scooter) systems and real-time station availability from GBFS feeds.' },
+      { name: 'Auth', description: 'Sign-in: email codes, passkeys and OAuth. Used by the console, not by API clients, which authenticate with an API key.' },
+      { name: 'Account', description: 'The signed-in account: profile, terms, API keys and their scopes, usage and credit balance.' },
+      { name: 'Billing', description: 'Plans, checkout, the customer portal and the metered-usage webhook. Only where billing is enabled (the hosted service); elsewhere these answer that billing is not enabled.' },
+      { name: 'Admin', description: 'Operator console API — data migrations, runnable scripts and jobs, schedules, regions, accounts, metrics and downstream service health. Admin access required; not part of the public query surface.' },
     ],
   },
 }

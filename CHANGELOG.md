@@ -14,6 +14,17 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 * Detail tiles asked with `?decks=1` (z14–16) carry the 3D bridge decks drawn over them, cut to the tile, so a client draws decks with the tile instead of fetching each deck's mesh after it. At z14 the pieces leave out paint, rails and parapets.
 
+## [0.10.27] - 2026-10-24
+
+### Added
+
+* `POST /match` snaps a GPS trace to the roads it followed and returns the path with elevation, path details and each input point's snapped position. It takes JSON points or a GPX file, and copes with sparse traces such as photo geotags minutes apart: wide gaps are routed instead of matched, so a three-point trace answers in well under a second where GraphHopper's own matcher could stall. Billed as routing.
+* `GRAPHHOPPER_TIMEOUT_MS` (default 30 s) caps each GraphHopper call. The `/graphhopper/*` proxy now answers 504 past it instead of holding the request open, and drops the upstream call when the client disconnects.
+
+### Fixed
+
+* The API reference covers every endpoint again: it had stopped picking up new ones, so isochrones, map matching, the GraphHopper passthrough, accounts and API keys, sign-in, billing, and the newer tile and transit endpoints were missing from docs.barrelman.dev.
+
 ## [0.10.26] - 2026-10-24
 
 ### Added

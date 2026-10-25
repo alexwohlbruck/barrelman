@@ -1,8 +1,102 @@
 ---
 title: Tiles
 full: true
+_openapi:
+  toc:
+    - depth: 2
+      title: Portolan corrected-geometry tile
+      url: '#portolan-corrected-geometry-tile'
+    - depth: 2
+      title: Vector tile (Martin proxy)
+      url: '#vector-tile-martin-proxy'
+    - depth: 2
+      title: Bridge deck mesh index by tile
+      url: '#bridge-deck-mesh-index-by-tile'
+    - depth: 2
+      title: Precomputed bridge mesh
+      url: '#precomputed-bridge-mesh'
+    - depth: 2
+      title: 3D landmark placements
+      url: '#3d-landmark-placements'
+    - depth: 2
+      title: 3D landmark model
+      url: '#3d-landmark-model'
+  structuredData:
+    headings:
+      - content: Portolan corrected-geometry tile
+        id: portolan-corrected-geometry-tile
+      - content: Vector tile (Martin proxy)
+        id: vector-tile-martin-proxy
+      - content: Bridge deck mesh index by tile
+        id: bridge-deck-mesh-index-by-tile
+      - content: Precomputed bridge mesh
+        id: precomputed-bridge-mesh
+      - content: 3D landmark placements
+        id: 3d-landmark-placements
+      - content: 3D landmark model
+        id: 3d-landmark-model
+    contents:
+      - content: >-
+          Serves a static MVT tile from the portolan pyramid. 204 for tiles
+          inside the pyramid with no features.
+        heading: portolan-corrected-geometry-tile
+      - content: >-
+          Proxies Mapbox Vector Tiles from the Martin tile server. Authenticates
+          with an ordinary API key, via Bearer header or `?api_key=` for map
+          libraries that cannot set headers.
+
+
+          Several sources can be served as one tile, either by naming a bundle
+          (`detail`) or by joining source names with commas
+          (`buildings_3d,parking_areas`). One request carrying five overlays
+          beats five requests carrying one each: a map view is thirty to sixty
+          tiles per source. A member below its own minzoom contributes nothing;
+          the tile 404s only when every member is above its maxzoom.
+        heading: vector-tile-martin-proxy
+      - content: >-
+          The precomputed deck meshes a zoom-14 tile meets, as `{ decks: [[file,
+          west, south, east, north], ...] }` with each deck's bounds in degrees.
+          Lets a client fetch the meshes a view needs alongside its vector tiles
+          rather than after them. Revalidate with the ETag.
+        heading: bridge-deck-mesh-index-by-tile
+      - content: >-
+          Downloads a versioned BRM1 binary mesh, including deck structure and
+          road markings. Referenced by the mesh property of bridge_decks tiles.
+          Built during bridge imports; no geometry is generated at request time.
+        heading: precomputed-bridge-mesh
+      - content: >-
+          Vector tile with one layer, `landmarks`: a point per 3D landmark whose
+          model overhangs the tile. Landmarks come from Barrelman's own dataset
+          and the Open Landmarks dataset; where both model one building only the
+          higher-priority source's is sent. Properties: `id`, `name`, `source`
+          (`barrelman` or `openlandmarks`), `model` (a file name under
+          /tiles/landmarks/models), `detail` and `detailzoom` (a finer model to
+          switch to from that zoom, where there is one), `entrances` (JSON
+          [[x,y,z],…] in model axes: lit entrances to glow at night), `bearing`
+          (degrees clockwise from north), `scale`, `elevation` (metres, signed:
+          how far to raise the model, or sink it when negative, from where the
+          client stands it on its ground; apply it after grounding the model, as
+          a rigid offset, and hide what ends up below the ground; 0 for most
+          landmarks), `height` (metres the model reaches above its ground,
+          elevation included), `minzoom`, `wikidata`, `attribution` (a credit to
+          show while the model is drawn, where its licence asks for one), and
+          `replaces` — space-separated OSM refs (`way/5013364`) of the buildings
+          and building parts the model stands in for, which a client should stop
+          extruding. Empty below zoom 12, and 204 where there are no landmarks.
+        heading: 3d-landmark-placements
+      - content: >-
+          A landmark model as binary glTF. Y up, -Z north, +X east, in metres,
+          with the origin at the landmark's anchor on the ground — place it with
+          the tile feature's position, `bearing`, `scale` and `elevation` and
+          nothing else. Names are content-addressed and served as immutable,
+          gzipped when the client accepts it. Materials named `window*` (glowing
+          where a painted texture's alpha is 0), `glass` and `entrance` follow
+          the Open Landmarks lighting convention.
+        heading: 3d-landmark-model
 ---
 
-Immutable bridge meshes are generated during bridge imports. Download the filename in the `mesh` property of a `bridge_decks` tile feature. Requests require a tiles API key.
+{/* This file was generated by Fumadocs. Do not edit this file directly. Any changes should be made by running the generation command again. */}
 
-<APIPage document={"./openapi.json"} operations={[{"path":"/tiles/bridges/models/{file}","method":"get"}]} hasHead={true} />
+Mapbox Vector Tiles served by Martin, plus precomputed bridge deck meshes, 3D landmark placements and models, and corrected transit geometry. Tile URLs accept `?api_key=` because map libraries fetch tiles themselves and cannot set a header.
+
+<APIPage document={"openapi.json"} operations={[{"path":"/tiles/portolan/{feed}/{z}/{x}/{y}","method":"get"},{"path":"/tiles/{source}/{z}/{x}/{y}","method":"get"},{"path":"/tiles/bridges/index/{z}/{x}/{y}","method":"get"},{"path":"/tiles/bridges/models/{file}","method":"get"},{"path":"/tiles/landmarks/{z}/{x}/{y}","method":"get"},{"path":"/tiles/landmarks/models/{file}","method":"get"}]} webhooks={[]} hasHead={true} />
