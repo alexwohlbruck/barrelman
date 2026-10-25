@@ -30,6 +30,8 @@ export interface RouteEdgeSegment {
   speedLimit?: number     // km/h — OSM max_speed tag (often undefined on US urban roads)
   bikePriority?: number   // 0–1 — GraphHopper's bike_priority encoded value (higher = friendlier for cycling)
   crossing?: string       // GH Crossing EV: MISSING | TRAFFIC_SIGNALS | MARKED | UNMARKED | UNCONTROLLED | RAILWAY | RAILWAY_BARRIER
+  osmWayId?: number       // the OSM way the edge belongs to, for POST /route/lanes
+  country?: string        // ISO 3166-1 alpha-3
 }
 
 export interface ElevationStats {
@@ -199,6 +201,12 @@ export function buildEdgeSegments(
             case 'crossing':
               if (typeof value === 'string') seg.crossing = value
               break
+            case 'osm_way_id':
+              if (typeof value === 'number') seg.osmWayId = value
+              break
+            case 'country':
+              if (typeof value === 'string' && value !== 'MISSING') seg.country = value
+              break
           }
           break
         }
@@ -223,6 +231,8 @@ export function buildEdgeSegments(
         prev.speedLimit === seg.speedLimit &&
         prev.bikePriority === seg.bikePriority &&
         prev.crossing === seg.crossing &&
+        prev.osmWayId === seg.osmWayId &&
+        prev.country === seg.country &&
         prev.getOffBike === seg.getOffBike) {
       prev.endDistance = seg.endDistance
     } else {
@@ -253,11 +263,37 @@ export const DETAIL_KEYS = [
   'crossing',
 ]
 
+/** Details asked for only where the graph was built with them: an older graph rejects the whole request. */
+export const OPTIONAL_DETAIL_KEYS = ['osm_way_id', 'country']
+
+const INFO_TTL_MS = 10 * 60_000
+let encodedValues: { at: number; keys: Set<string> } | null = null
+
+/** The encoded values GraphHopper's graph carries, from /info; empty when it can't say. */
+export async function graphEncodedValues(fetchFn: FetchFn = (url, init) => fetch(url, init)): Promise<Set<string>> {
+  if (encodedValues && Date.now() - encodedValues.at < INFO_TTL_MS) return encodedValues.keys
+  try {
+    const res = await fetchFn(`${graphHopperUrl()}/info`, { signal: AbortSignal.timeout(3000) })
+    const info = res.ok ? ((await res.json()) as { encoded_values?: Record<string, unknown> }) : null
+    const keys = new Set(Object.keys(info?.encoded_values ?? {}))
+    encodedValues = { at: Date.now(), keys }
+    return keys
+  } catch {
+    return new Set()
+  }
+}
+
+/** Forget the cached /info, after a graph rebuild or in tests. */
+export function resetEncodedValues(): void {
+  encodedValues = null
+}
+
 export async function getEnrichedRoute(
   requestBody: any,
   fetchFn: FetchFn = (url, init) => fetch(url, init),
 ): Promise<EnrichedRouteResponse> {
   const ghUrl = graphHopperUrl()
+  const available = await graphEncodedValues(fetchFn)
 
   // Build the GraphHopper route request with all enrichment details
   const routeRequest = {
@@ -265,7 +301,11 @@ export async function getEnrichedRoute(
     elevation: true,
     points_encoded: false,
     instructions: requestBody.instructions ?? true,
-    details: [...new Set([...(requestBody.details || []), ...DETAIL_KEYS])],
+    details: [...new Set([
+      ...(requestBody.details || []),
+      ...DETAIL_KEYS,
+      ...OPTIONAL_DETAIL_KEYS.filter(key => available.has(key)),
+    ])],
   }
 
   if (!routeRequest.points || !Array.isArray(routeRequest.points) || routeRequest.points.length < 2) {
