@@ -448,6 +448,25 @@ A required query parameter is missing. `/gbfs/systems` needs a full bbox (`north
 
 `/route` passes its body to GraphHopper, so it takes `profile` (`car`, `bike`, `foot`), not the `mode` that `/isochrone` uses.
 
+**`/match` comes back with `"fallback": "match_timeout"` or `"match_failed"` segments**
+
+The path is still complete, but those stretches were routed through the trace's
+points instead of map-matched. `match_failed` is GraphHopper rejecting the
+stretch, usually because the points are off the road network or too noisy for
+`gps_accuracy` ("Sequence is broken"). `match_timeout` means a chunk didn't
+match within 10 s, or the request's `GRAPHHOPPER_TIMEOUT_MS` budget ran out.
+Matching cost grows steeply with `gps_accuracy`: on bike and foot profiles, a
+2 km trace takes about 1 s at 5 m, 13 s at 20 m and a minute at 50 m. Lower
+it before you raise the timeout.
+
+**`504` from `/graphhopper/*`**
+
+The proxy waited `GRAPHHOPPER_TIMEOUT_MS` (default 30 s) and gave up. The usual
+cause is a raw `/graphhopper/match` on a sparse trace or with GraphHopper's
+default 40 m `gps_accuracy`. Use `POST /match`, which handles both. GraphHopper
+keeps working on an abandoned request until it finishes, so a client retrying
+in a loop piles load onto the engine.
+
 ## Admin access
 
 **An API key created with the `admin` scope gets `403` from every `/admin/*` route**
