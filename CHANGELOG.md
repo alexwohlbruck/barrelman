@@ -10,6 +10,10 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Changed
+
+* `tunnel_cuts` is served on its own (`/tiles/tunnel_cuts/{z}/{x}/{y}`, a few kilobytes at z14) rather than in the `detail` bundle, so a client asks for it once per 2 km of street and has a view's tunnel entrances before its heavy detail tiles.
+
 ### Fixed
 
 * Build Tunnel Cuts and Build Bridge Decks runs longer than about half an hour now exit when they finish, instead of hanging and keeping their console task running.
