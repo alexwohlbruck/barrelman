@@ -10,6 +10,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.10.32] - 2026-10-26
+
 ### Fixed
 
 * Transit routing tries every pairing of the four stations nearest each end. It used to stop at twelve of the sixteen pairs, which dropped the fourth station near the origin, so a direct train from that station never came back.
