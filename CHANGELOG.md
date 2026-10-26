@@ -10,6 +10,10 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Fixed
+
+* Build Tunnel Cuts and Build Bridge Decks runs longer than about half an hour now exit when they finish, instead of hanging and keeping their console task running.
+
 ## [0.10.29] - 2026-10-25
 
 ### Added
