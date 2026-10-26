@@ -421,7 +421,9 @@ describe('alignRealtimeTripIds', () => {
     expect(buffer).toBe(zip)
   })
 
-  test('allows collisions between services that never share a date', async () => {
+  test('never writes a shared id: the variant running soonest takes it', async () => {
+    // MOTIS drops every trip whose id is shared, even across days that never
+    // overlap — MTA's supplemented subway feed lost 88% of its trips this way.
     const rows: string[] = []
     const rtIds: string[] = []
     for (let i = 0; i < 40; i++) {
@@ -435,11 +437,21 @@ describe('alignRealtimeTripIds', () => {
       'calendar.txt': CALENDAR,
     })
 
-    const { result } = await alignRealtimeTripIds(zip, FEED, withSample(rtIds))
+    // Saturday 2026-06-13: Saturday's variant runs first.
+    const sat = await alignRealtimeTripIds(zip, FEED, { ...withSample(rtIds), now: Date.UTC(2026, 5, 13) })
+    expect(sat.result.applied).toBe(true)
+    expect(sat.result.collidingTripIds).toBe(0)
+    expect(sat.result.heldTrips).toBe(40)
+    const satTrips = (await read(sat.buffer, 'trips.txt')).trim().split('\n').slice(1)
+    expect(new Set(satTrips.map(r => r.split(',')[1])).size).toBe(80)
+    expect(satTrips).toContain('A,000007_A..S03R,Saturday')
+    expect(satTrips).toContain('A,BSP26GEN_000007_A..S03R,Sunday')
 
-    expect(result.applied).toBe(true)
-    expect(result.collidingTripIds).toBe(40)
-    expect(result.overlaps).toEqual([])
+    // Sunday 2026-06-14: the id moves to Sunday's variant.
+    const sun = await alignRealtimeTripIds(zip, FEED, { ...withSample(rtIds), now: Date.UTC(2026, 5, 14) })
+    const sunTrips = await read(sun.buffer, 'trips.txt')
+    expect(sunTrips).toContain('A,000007_A..S03R,Sunday')
+    expect(sunTrips).toContain('A,ASP26GEN_000007_A..S03R,Saturday')
   })
 
   test('does nothing when the realtime feed yields no sample', async () => {

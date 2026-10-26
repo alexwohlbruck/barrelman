@@ -10,6 +10,10 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Fixed
+
+* Transit routing has the whole New York City subway timetable again. Since MTA's August 26 subway feed, aligning its trip ids with realtime gave up to nine service variants of one run the same id, and MOTIS drops every trip whose id is shared. That removed about 88% of subway trips, so routes walked to buses instead of a station a few minutes away. The import now never writes a shared trip id. The variant running soonest takes the realtime id and the others keep their published ids.
+
 ## [0.10.30] - 2026-10-26
 
 ### Changed
