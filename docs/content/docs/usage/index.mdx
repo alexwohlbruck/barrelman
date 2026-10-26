@@ -104,7 +104,7 @@ curl "https://api.barrelman.dev/geocode?lat=35.2271&lng=-80.8431" \
 
 ### Plan a transit trip
 
-`POST /transit/route` plans a trip between two coordinates. `from` and `to` are `{ lat, lng }` objects.
+`POST /transit/route` plans a trip between two coordinates. `from` and `to` are `{ lat, lng }` objects. Each itinerary walks from `from` to a station within `maxWalkDistance` (default 1000 m), rides, and walks on to `to`. Itineraries come back in order of arrival.
 
 ```bash
 curl -X POST https://api.barrelman.dev/transit/route \

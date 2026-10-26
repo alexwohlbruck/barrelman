@@ -7,7 +7,6 @@ import {
   getRoutesForStop as _getRoutesForStop,
   markTransitActivity,
   MotisError,
-  ALL_TRANSIT_MODES,
   type TransitRouteRequest,
   type IntermodalRouteRequest,
   type TransitMode,
@@ -139,11 +138,12 @@ export function createTransitRoutes(deps: {
       detail: {
         summary: 'Get transit route between two points',
         description:
-          'Queries the MOTIS transit router for itineraries between two coordinates. ' +
-          'Returns transit legs with boarding/alighting stops, route info, and ' +
-          'geometry. Walking legs are straight-line estimates — the Parchment ' +
-          'server replaces them with actual GraphHopper walking routes.' +
-          'Itineraries carry `fare` and `farePayments` where the feeds publish fare data: `farePayments` is how many separate fares the trip charges, and itineraries are ordered to prefer fewer of them when the time cost is small.',
+          'Walk-and-transit itineraries between two coordinates, reaching stations ' +
+          'within `maxWalkDistance` (default 1000 m). Each itinerary starts and ends ' +
+          'with a walk leg; walking legs are straight-line estimates. Itineraries are ' +
+          'ordered by arrival time (latest departure for `arriveBy`), list each ride ' +
+          'once, and carry `fare` and `farePayments` where the feeds publish fare ' +
+          'data. An extra fare payment counts as ten minutes in the ordering.',
         tags: ['Transit'],
       },
     })
@@ -172,6 +172,7 @@ export function createTransitRoutes(deps: {
           maxPostTransitTime: body.maxPostTransitTime,
           preTransitRentalFormFactors: body.preTransitRentalFormFactors as RentalFormFactor[] | undefined,
           postTransitRentalFormFactors: body.postTransitRentalFormFactors as RentalFormFactor[] | undefined,
+          additionalTransferTime: body.additionalTransferTime,
           requireBikeTransport: body.requireBikeTransport,
         }
         return await getIntermodalRoute(request, fetchFn)
@@ -217,20 +218,22 @@ export function createTransitRoutes(deps: {
         maxPostTransitTime: t.Optional(t.Number({ minimum: 0 })),
         preTransitRentalFormFactors: t.Optional(t.Array(t.String())),
         postTransitRentalFormFactors: t.Optional(t.Array(t.String())),
+        additionalTransferTime: t.Optional(t.Number({ minimum: 0, description: 'Minutes reserved per interchange (default 3). Raise it to favour trips with fewer transfers.' })),
         requireBikeTransport: t.Optional(t.Boolean()),
       }),
       detail: {
         summary: 'Intermodal routing with mode selection',
         description:
-          'Coordinate-based intermodal routing via MOTIS. Supports pre/post-transit ' +
-          'mode selection (WALK, BIKE, CAR_PARKING, RENTAL) and direct non-transit ' +
-          'modes. Requires MOTIS to have OSM street data loaded. Returns legs with ' +
-          'real OSM geometry for walk/bike/car segments. Set requireBikeTransport ' +
+          'Transit routing with access mode selection. Walking at both ends is ' +
+          'routed between nearby stations, with straight-line walk legs. BIKE, ' +
+          'CAR_PARKING, RENTAL and direct modes need MOTIS to have OSM street data ' +
+          'loaded, and return real OSM geometry for those legs. Set requireBikeTransport ' +
           'to keep only trips that allow bike carriage, for BIKE on both ends; it ' +
           'reads GTFS bikes_allowed, and feeds that omit it return no results. ' +
           'Itineraries carry `fare` and `farePayments` where the feeds publish fare ' +
-          'data, and are ordered to prefer fewer fare payments when the time cost ' +
-          'is small.',
+          'data. Itineraries are ordered by arrival time (latest departure for ' +
+          '`arriveBy`) and list each ride once; an extra fare payment counts as ' +
+          'ten minutes in the ordering.',
         tags: ['Transit'],
       },
     })
