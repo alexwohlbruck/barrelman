@@ -46,6 +46,7 @@ mock.module('../db', () => ({
       const isOrigin = dbCallIndex % 2 === 1
       return [{
         stop_id: isOrigin ? 'mock_stop_origin' : 'mock_stop_dest',
+        station_id: isOrigin ? 'mock_stop_origin' : 'mock_stop_dest',
         feed_id: 'mock_feed',
         stop_name: isOrigin ? 'Mock Origin Stop' : 'Mock Dest Stop',
         stop_code: null,
@@ -68,7 +69,7 @@ import {
   checkMotisHealth,
   extractFare,
   countFarePayments,
-  compareItineraries,
+  rankItineraries,
   MotisError,
   type TransitRouteRequest,
   type TransitItinerary,
@@ -79,8 +80,6 @@ import {
 /** Minimal MOTIS OTPAPI response with one itinerary */
 function makeMotisResponse(overrides: any = {}) {
   return {
-    plan: {
-      date: 1700000000000,
       from: { name: 'Origin', lat: 35.23, lon: -80.84 },
       to: { name: 'Destination', lat: 35.77, lon: -78.64 },
       itineraries: [
@@ -150,7 +149,6 @@ function makeMotisResponse(overrides: any = {}) {
           ...overrides,
         },
       ],
-    },
   }
 }
 
@@ -170,11 +168,28 @@ describe('getTransitRoute', () => {
     dbCallIndex = 0
   })
 
+  // The MOTIS fixture's trip leaves at 22:13:20.
   const baseRequest: TransitRouteRequest = {
     from: { lat: 35.23, lng: -80.84 },
     to: { lat: 35.77, lng: -78.64 },
-    time: '2023-11-15T08:00:00Z',
+    time: '2023-11-14T22:00:00Z',
   }
+
+  test('drops a train the rider cannot walk to in time', async () => {
+    // Asked for 22:13:20 exactly, but the walk to the platform takes time.
+    const fetchFn = mockFetch(makeMotisResponse())
+    const late = await getTransitRoute({ ...baseRequest, time: '2023-11-14T22:13:20Z' }, fetchFn)
+    expect(late.itineraries).toHaveLength(0)
+  })
+
+  test('drops a train that arrives too late to walk to the destination by the asked time', async () => {
+    // The trip ends at 23:13:20; the egress walk takes longer than zero.
+    const fetchFn = mockFetch(makeMotisResponse())
+    const result = await getTransitRoute(
+      { ...baseRequest, time: '2023-11-14T23:13:20Z', arriveBy: true }, fetchFn,
+    )
+    expect(result.itineraries).toHaveLength(0)
+  })
 
   test('parses a standard MOTIS response into our format', async () => {
     const fetchFn = mockFetch(makeMotisResponse())
@@ -183,20 +198,35 @@ describe('getTransitRoute', () => {
     expect(result.itineraries).toHaveLength(1)
 
     const itin = result.itineraries[0]
-    expect(itin.duration).toBe(3600)
-    expect(itin.walkTime).toBe(300)
     expect(itin.transitTime).toBe(3000)
     expect(itin.waitingTime).toBe(300)
-    expect(itin.walkDistance).toBe(400)
     expect(itin.transfers).toBe(0)
-    expect(itin.legs).toHaveLength(3)
+    // MOTIS's three legs, wrapped in walks to and from the stations
+    expect(itin.legs).toHaveLength(5)
+  })
+
+  test('walks from the origin to the station and from the station to the destination', async () => {
+    const fetchFn = mockFetch(makeMotisResponse())
+    const [itin] = (await getTransitRoute(baseRequest, fetchFn)).itineraries
+    const [access, motisFirst] = itin.legs
+    const egress = itin.legs[itin.legs.length - 1]
+
+    expect(access.mode).toBe('WALK')
+    expect(access.from).toMatchObject({ name: 'Origin', lat: 35.23, lng: -80.84 })
+    expect(access.to.lat).toBe(motisFirst.from.lat)
+    expect(access.endTime).toBe(motisFirst.startTime)
+    expect(egress.to).toMatchObject({ name: 'Destination', lat: 35.77, lng: -78.64 })
+    expect(itin.startTime).toBe(access.startTime)
+    expect(itin.endTime).toBe(egress.endTime)
+    expect(itin.duration).toBe(3600 + access.duration + egress.duration)
+    expect(itin.walkTime).toBe(300 + access.duration + egress.duration)
   })
 
   test('adapts walking legs correctly', async () => {
     const fetchFn = mockFetch(makeMotisResponse())
     const result = await getTransitRoute(baseRequest, fetchFn)
 
-    const walkLeg = result.itineraries[0].legs[0]
+    const walkLeg = result.itineraries[0].legs[1]
     expect(walkLeg.mode).toBe('WALK')
     expect(walkLeg.transitLeg).toBe(false)
     expect(walkLeg.from.name).toBe('Origin')
@@ -217,7 +247,7 @@ describe('getTransitRoute', () => {
     const fetchFn = mockFetch(makeMotisResponse())
     const result = await getTransitRoute(baseRequest, fetchFn)
 
-    const busLeg = result.itineraries[0].legs[1]
+    const busLeg = result.itineraries[0].legs[2]
     expect(busLeg.mode).toBe('BUS')
     expect(busLeg.transitLeg).toBe(true)
     expect(busLeg.routeShortName).toBe('9')
@@ -239,12 +269,8 @@ describe('getTransitRoute', () => {
     const fetchFn = mockFetch(makeMotisResponse())
     const result = await getTransitRoute(baseRequest, fetchFn)
 
-    const itin = result.itineraries[0]
     // 1700000000000 = 2023-11-14T22:13:20.000Z
-    expect(itin.startTime).toBe(new Date(1700000000000).toISOString())
-    expect(itin.endTime).toBe(new Date(1700003600000).toISOString())
-
-    const leg = itin.legs[0]
+    const leg = result.itineraries[0].legs[1]
     expect(leg.startTime).toBe(new Date(1700000000000).toISOString())
     expect(leg.from.departure).toBe(new Date(1700000000000).toISOString())
   })
@@ -253,7 +279,7 @@ describe('getTransitRoute', () => {
     const fetchFn = mockFetch(makeMotisResponse())
     const result = await getTransitRoute(baseRequest, fetchFn)
 
-    const walkLeg = result.itineraries[0].legs[0]
+    const walkLeg = result.itineraries[0].legs[1]
     expect(walkLeg.geometry).toBeDefined()
     expect(walkLeg.geometry!.type).toBe('LineString')
     expect(walkLeg.geometry!.coordinates.length).toBeGreaterThan(0)
@@ -267,7 +293,7 @@ describe('getTransitRoute', () => {
   })
 
   test('handles empty itineraries response', async () => {
-    const fetchFn = mockFetch({ plan: { itineraries: [] } })
+    const fetchFn = mockFetch({ itineraries: [] })
     const result = await getTransitRoute(baseRequest, fetchFn)
 
     expect(result.itineraries).toHaveLength(0)
@@ -280,19 +306,15 @@ describe('getTransitRoute', () => {
     expect(result.itineraries).toHaveLength(0)
   })
 
-  test('returns empty itineraries when all MOTIS queries fail', async () => {
+  test('reports a MOTIS outage instead of passing it off as no route', async () => {
     const fetchFn = mockFetch({ error: 'Internal error' }, 500)
-    const result = await getTransitRoute(baseRequest, fetchFn)
-
-    // Per-pair errors are caught — returns empty results instead of throwing
-    expect(result.itineraries).toHaveLength(0)
+    await expect(getTransitRoute(baseRequest, fetchFn)).rejects.toBeInstanceOf(MotisError)
   })
 
-  test('gracefully handles MOTIS errors without throwing', async () => {
-    const fetchFn = mockFetch({ error: 'Bad request' }, 400)
+  test('treats a station missing from the timetable as no route', async () => {
+    // 404: the stop is in PostGIS but not in the baked MOTIS timetable.
+    const fetchFn = mockFetch({ error: 'unknown stop' }, 404)
     const result = await getTransitRoute(baseRequest, fetchFn)
-
-    // All pairs failed — returns empty, does not throw
     expect(result.itineraries).toHaveLength(0)
   })
 
@@ -309,6 +331,7 @@ describe('getTransitRoute', () => {
         numItineraries: 3,
         maxTransfers: 2,
         wheelchair: true,
+        transitModes: ['SUBWAY', 'RAIL'],
       }, fetchFn)
 
       // 1 origin stop × 1 dest stop = 1 pair = 1 MOTIS call
@@ -322,10 +345,35 @@ describe('getTransitRoute', () => {
       expect(calledUrl).toContain('numItineraries=3')
       expect(calledUrl).toContain('maxTransfers=2')
       expect(calledUrl).toContain('wheelchair=true')
+      // Mode filters and transfer padding apply to station searches too
+      expect(calledUrl).toContain('transitModes=SUBWAY%2CRAIL')
+      expect(calledUrl).toContain('additionalTransferTime=3')
     } finally {
       if (oldUrl === undefined) delete process.env.MOTIS_URL
       else process.env.MOTIS_URL = oldUrl
     }
+  })
+
+  test('pairs every origin station with every destination station', async () => {
+    // The fourth station is as likely as the first to have the direct line;
+    // a pair cap used to drop it.
+    let call = 0
+    dbRows = () => {
+      const end = call++ === 0 ? 'o' : 'd'
+      return [1, 2, 3, 4].map(i => ({
+        feed_id: 'f', station_id: `${end}${i}`, stop_lat: 35, stop_lon: -80,
+      }))
+    }
+    const fetchFn = mockFetch({ itineraries: [] })
+    await getTransitRoute(baseRequest, fetchFn)
+
+    const pairs = (fetchFn as any).mock.calls.map((c: any[]) => {
+      const url = new URL(c[0])
+      return `${url.searchParams.get('fromPlace')}>${url.searchParams.get('toPlace')}`
+    })
+    expect(new Set(pairs).size).toBe(16)
+    expect(pairs).toContain('f_o4>f_d4')
+    dbRows = null
   })
 
   test('queries MOTIS with stop IDs, not raw coordinates', async () => {
@@ -342,7 +390,6 @@ describe('getTransitRoute', () => {
 
   test('handles legs with missing optional fields gracefully', async () => {
     const sparseResponse = {
-      plan: {
         itineraries: [{
           duration: 1800,
           startTime: 1700000000000,
@@ -356,13 +403,12 @@ describe('getTransitRoute', () => {
             // No name, no route info, no geometry, no intermediate stops
           }],
         }],
-      },
     }
 
     const fetchFn = mockFetch(sparseResponse)
     const result = await getTransitRoute(baseRequest, fetchFn)
 
-    const leg = result.itineraries[0].legs[0]
+    const leg = result.itineraries[0].legs[1]
     expect(leg.mode).toBe('BUS')
     expect(leg.from.name).toBe('')
     expect(leg.geometry).toBeUndefined()
@@ -373,7 +419,7 @@ describe('getTransitRoute', () => {
   test('handles multi-transfer itinerary', async () => {
     const multiTransferResponse = makeMotisResponse({ transfers: 2 })
     // Add more legs
-    multiTransferResponse.plan.itineraries[0].legs.splice(2, 0,
+    multiTransferResponse.itineraries[0].legs.splice(2, 0,
       {
         mode: 'WALK',
         from: { name: 'Stop B', lat: 35.50, lon: -79.50, departure: 1700003300000 },
@@ -401,13 +447,8 @@ describe('getTransitRoute', () => {
     const fetchFn = mockFetch(multiTransferResponse)
     const result = await getTransitRoute(baseRequest, fetchFn)
 
-    const legs = result.itineraries[0].legs
-    expect(legs).toHaveLength(5)
-    expect(legs[0].mode).toBe('WALK')
-    expect(legs[1].mode).toBe('BUS')
-    expect(legs[2].mode).toBe('WALK')
-    expect(legs[3].mode).toBe('RAIL')
-    expect(legs[4].mode).toBe('WALK')
+    const legs = result.itineraries[0].legs.slice(1, -1)
+    expect(legs.map(l => l.mode)).toEqual(['WALK', 'BUS', 'WALK', 'RAIL', 'WALK'])
 
     // RAIL leg should have its own route info
     expect(legs[3].routeShortName).toBe('Blue')
@@ -794,45 +835,94 @@ describe('countFarePayments', () => {
   })
 })
 
-describe('compareItineraries', () => {
-  const itin = (duration: number, farePayments?: number): TransitItinerary => ({
-    duration,
-    startTime: '2026-09-14T18:00:00Z',
-    endTime: '2026-09-14T18:30:00Z',
-    walkTime: 0, transitTime: duration, waitingTime: 0, walkDistance: 0,
-    transfers: 1, legs: [], farePayments,
+describe('rankItineraries', () => {
+  /** A trip leaving `depart` minutes after 18:00 and taking `minutes`. */
+  const itin = (
+    depart: number,
+    minutes: number,
+    opts: { farePayments?: number; trip?: string } = {},
+  ): TransitItinerary => {
+    const start = Date.UTC(2026, 8, 14, 18, depart)
+    return {
+      duration: minutes * 60,
+      startTime: new Date(start).toISOString(),
+      endTime: new Date(start + minutes * 60_000).toISOString(),
+      walkTime: 0, transitTime: minutes * 60, waitingTime: 0, walkDistance: 0,
+      transfers: 0,
+      farePayments: opts.farePayments,
+      legs: [{
+        mode: 'SUBWAY', transitLeg: true, tripId: opts.trip ?? `${depart}-${minutes}`,
+        from: { name: 'A', lat: 0, lng: 0, stopId: 'a' },
+        to: { name: 'B', lat: 0, lng: 0, stopId: 'b' },
+        startTime: new Date(start).toISOString(),
+        endTime: new Date(start + minutes * 60_000).toISOString(),
+        duration: minutes * 60, distance: 0,
+      }],
+    }
+  }
+
+  test('ranks by arrival, so the first train is not pushed out by quicker later ones', () => {
+    // The 18:00 takes 30 min; later trains are a little quicker but arrive later.
+    const first = itin(0, 30)
+    const later = [itin(5, 28), itin(10, 27), itin(15, 26)]
+    const ranked = rankItineraries([...later, first], 2)
+    expect(ranked[0]).toBe(first)
+    expect(ranked).toHaveLength(2)
+  })
+
+  test('ranks arrive-by searches by latest departure', () => {
+    const early = itin(0, 20)
+    const late = itin(10, 15)
+    expect(rankItineraries([early, late], 2, true)[0]).toBe(late)
   })
 
   test('prefers the one-fare trip when they arrive together', () => {
-    // The reported bug, in miniature: Borough Hall -> walk -> Jay St costs
-    // two fares and takes exactly as long as the in-system 5 -> R -> F.
-    const twoFare = itin(1140, 2)
-    const oneFare = itin(1140, 1)
-    expect([twoFare, oneFare].sort(compareItineraries)[0]).toBe(oneFare)
+    // Borough Hall -> walk -> Jay St costs two fares and takes exactly as
+    // long as the in-system 5 -> R -> F.
+    const twoFare = itin(0, 19, { farePayments: 2 })
+    const oneFare = itin(0, 19, { farePayments: 1 })
+    expect(rankItineraries([twoFare, oneFare], 1)[0]).toBe(oneFare)
   })
 
   test('prefers the one-fare trip when it is only a little slower', () => {
-    const twoFare = itin(1140, 2)
-    const oneFare = itin(1440, 1) // 5 minutes more
-    expect([twoFare, oneFare].sort(compareItineraries)[0]).toBe(oneFare)
+    const twoFare = itin(0, 19, { farePayments: 2 })
+    const oneFare = itin(0, 24, { farePayments: 1 })
+    expect(rankItineraries([twoFare, oneFare], 1)[0]).toBe(oneFare)
   })
 
   test('does not make a rider wait half an hour to save a fare', () => {
-    const twoFare = itin(1140, 2)
-    const oneFare = itin(3000, 1) // 31 minutes more
-    expect([oneFare, twoFare].sort(compareItineraries)[0]).toBe(twoFare)
+    const twoFare = itin(0, 19, { farePayments: 2 })
+    const oneFare = itin(0, 50, { farePayments: 1 })
+    expect(rankItineraries([oneFare, twoFare], 1)[0]).toBe(twoFare)
   })
 
-  test('falls back to duration when fares are unknown', () => {
-    // One priced trip and one unpriced is a feed-coverage gap, not
-    // evidence that the unpriced one is free.
-    const fast = itin(600)
-    const slow = itin(1800, 1)
-    expect([slow, fast].sort(compareItineraries)[0]).toBe(fast)
-    expect([itin(900), itin(600)].sort(compareItineraries)[0].duration).toBe(600)
+  test('treats an unknown fare as no evidence either way', () => {
+    // A gap in fare coverage is not evidence that the unpriced trip is free.
+    const unpriced = itin(0, 10)
+    const priced = itin(0, 30, { farePayments: 1 })
+    expect(rankItineraries([priced, unpriced], 1)[0]).toBe(unpriced)
   })
 
-  test('orders by duration when both charge the same', () => {
-    expect([itin(1800, 2), itin(600, 2)].sort(compareItineraries)[0].duration).toBe(600)
+  test('keeps the same train with different rental pickups apart', () => {
+    const withBike = (station: string, minutes: number) => {
+      const it = itin(0, minutes, { trip: 'the-4' })
+      it.legs.push({
+        ...it.legs[0], mode: 'RENTAL', transitLeg: false, tripId: undefined,
+        rentalSystemId: 'citibike', rentalStationId: station,
+      })
+      return it
+    }
+    expect(rankItineraries([withBike('dock-1', 30), withBike('dock-2', 32)], 5)).toHaveLength(2)
+  })
+
+  test('lists each ride once, in its best form', () => {
+    // The station fan-out finds one train once per station pair; the copy
+    // reached by walking further to the platform arrives no earlier.
+    const direct = itin(0, 20, { trip: 'the-4' })
+    const roundabout = { ...itin(0, 25, { trip: 'the-4' }), startTime: itin(-5, 25).startTime }
+    roundabout.endTime = direct.endTime
+    const ranked = rankItineraries([roundabout, direct, itin(3, 20)], 5)
+    expect(ranked).toHaveLength(2)
+    expect(ranked[0]).toBe(direct)
   })
 })

@@ -10,6 +10,20 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.10.32] - 2026-10-26
+
+### Fixed
+
+* Transit routing tries every pairing of the four stations nearest each end. It used to stop at twelve of the sixteen pairs, which dropped the fourth station near the origin, so a direct train from that station never came back.
+* A transit search returns trips in order of arrival, so the first train is listed. It used to rank by ride length, which let later trains with slightly quicker rides fill the list and push out the train leaving now.
+* `transitModes` and `additionalTransferTime` now apply to walk-and-transit searches. Both were ignored there, so a rider who excluded buses still got buses, and the transfer padding that discourages one-stop bus hops never ran on the most common search.
+* A station served by extended GTFS bus types (700-899) or trolleybuses counts as a bus stop when choosing stations, and a station served by both buses and rail counts as rail.
+* When MOTIS is down, transit routing returns a 502 instead of an empty list of itineraries.
+
+### Changed
+
+* `POST /transit/route` uses the same planner as `/transit/intermodal-route`. Its itineraries now start and end with a walk leg, are ordered by arrival time, and list each ride once.
+
 ## [0.10.31] - 2026-10-26
 
 ### Fixed
