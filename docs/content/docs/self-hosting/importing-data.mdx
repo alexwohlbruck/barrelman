@@ -411,6 +411,7 @@ for, so a client drawing them has nowhere else to get them:
 | `road_markings` | line | 16 | Paint: `kind` is `centre`, `lane`, `edge`, `bike`, `stop` or `crosswalk`; `pattern` is `solid`, `dashed` or `double`; `color` is `white` or `yellow` (yellow centre lines in the Americas); a crosswalk's `style` is `zebra`, `lines` or `ladder` |
 | `road_glyphs` | point | 16 | Turn arrows from `turn:lanes`, bike symbols on bike lanes and sharrows on shared lanes: `glyph` names the sprite icon and `direction` the bearing it reads along |
 | `bridge_decks` | line | 14–16 | One line per bridge deck, whole in every tile it crosses: `id` (the deck, by where it lies and which way it runs), `bridge` (its `man_made=bridge` outline, its wikidata item, or where it lies), `kind` (`road`, `rail` or `path`), `layer`, `left_edge` and `right_edge` in metres from the centreline, whether each end lands on the ground (`start_grounded`, `end_grounded`), `heights` and `ground` every `step` metres along its `length`, and `piers` as distances along it, all in decimetres joined by commas, and `line`, the samples' exact positions (the first as lng,lat and each after as the step from the last, in 1e-7°), since a tile's own geometry is simplified differently at each zoom. Heights are metres above sea level as Mapterhorn gives them. `format` is 2 from rows built since decks follow their outlines (1 before); a road deck lying in a `man_made=bridge` outline then also has `left_edges` and `right_edges`, each side's edge at every sample, and `caps`, how far each side stops short of the start and end (start left, start right, end left, end right; negative where it runs on past), all in decimetres joined by commas, and other decks leave all three out. `left_edge` and `right_edge` are then the widest each side reaches |
+| `tunnel_cuts` | line | 14–16 | The cut dug down to each tunnel portal, whole in every tile it nears: `id` (the portal, by where it lies), `kind` (`road`, `rail` or `path`), and `line`, its samples' exact positions every 3 m from just before the cut opens, through the portal, into the bore (as `bridge_decks` gives them). `at` is the portal's sample and `open` the one the cut opens at, out from which the road is at grade. `floor`, `wall_left` and `wall_right` are the road's height and each retaining wall's top at every sample, in decimetres joined by commas; `left_edge` and `right_edge` are the carriageway's half-widths in metres, running in; `crown` is the headwall's top, `headroom` the bore's clear height and `base` the lowest ground beside the portal, in metres; `face` is the direction a headwall mapped across the bore runs, and `piers` the walls between carriageways' bores (from, to, in decimetres left of the centreline), where there are any. Heights are in the terrain's own datum, like `bridge_decks` |
 | `object_areas` | polygon or point | 14–16 | Areas and points a client plants with objects: ground-mounted solar arrays and farms (`solar`), `flowerbed`, `scrub`, planted `shrubbery` (with its `shrubbery:shape` as `shape`), and single mapped `shrub`s. Rooftop solar is left out |
 | `golf_features` | mixed | 14–16 | Golf courses: tees, fairways, greens, rough, bunkers and driving ranges as polygons, each hole's line from tee to green, and pins as points. `kind` is the `golf` value (`heavy_rough` is `rough`). A numbered hole also comes as a point at its tee (`kind=hole`, with `ref` and `par`), for labelling it once. Disc golf holes come the same way, and its baskets as `kind=basket`. Cart paths and water hazards are left to the basemap, which draws them as paths and water |
 | `ski_features` | mixed | 13–16 | Ski areas: `landuse=winter_sports` outlines (`kind=ski_area`), lift pylons (`pylon`), and pistes: `piste` lines, `piste_area` polygons where the way says `area=yes` or is a multipolygon, `route` for a `route=piste` relation whose ways carry no piste tags (so it alone draws the trail) and `route_name` for one whose ways do (for its name). A closed piste way without `area=yes` comes as its polygon with `kind=piste`, for the client to stroke. Pistes carry `piste` (the first `piste:type`), `difficulty`, `grooming` (`classic+skating` where both), `name` (`piste:name`, else `name`) and `scheme`, the signage convention where the piste lies: `na` (North America, Oceania, China, Korea, Mongolia), `jp` or `eu` (everywhere else, South America included). The lifts themselves are the basemap's `class=aerialway` |
@@ -432,7 +433,7 @@ curl "https://api.barrelman.dev/tiles/buildings_3d,parking_areas/14/4825/6156" -
 ```
 
 `detail` is `buildings_3d`, `parking_areas`, `bicycle_ways`, `street_trees`,
-`tree_rows`, `coaster_tracks`, `sport_pitches`, `object_lines`, `object_areas`, `golf_features`, `ski_features`, `sport_tracks`, the three road layers, `bridge_decks` and `woods` — every overlay a client reads at z≤16. The response is one tile
+`tree_rows`, `coaster_tracks`, `sport_pitches`, `object_lines`, `object_areas`, `golf_features`, `ski_features`, `sport_tracks`, the three road layers, `bridge_decks`, `tunnel_cuts` and `woods` — every overlay a client reads at z≤16. The response is one tile
 carrying each source as its own layer, named exactly as it is above, so a style
 that already draws them needs only its `source` changed.
 
@@ -618,6 +619,35 @@ cell that fails is retried on the next two runs; while Build Bridge Decks runs,
 the update leaves the queue for the next run. A failure is reported and the rest
 of OSM Update carries on. As with road markings, only a database without
 osm2pgsql's middle tables records what changed.
+
+`tunnel_cuts` is a table built by the "Build Tunnel Cuts" console task
+(`import/generate-tunnel-cuts.ts`), by rule from OSM and the terrain, so a
+client draws each portal's walls and carves its floor into the terrain straight
+from the tile, solving nothing. A portal is where a highway or railway tunnel
+mapped below ground (a negative `layer`; a passage under a building has none)
+ends without running on into another. Its cut follows the road it opens onto
+until that road reaches a junction or turns off, at most 160 m for a road,
+100 m for a path and 300 m for a railway; is as wide as the carriageway
+surfaced there in `road_surfaces` (else a width by class); and opens at a
+building's face where the road runs under one first, or at a wall mapped across
+the bore. The portal sits low enough to keep headroom under the ground over the
+bore, and the floor climbs from it no steeper than the road may until it meets
+the ground, more steeply where it must meet a junction first. A road going in at
+grade, with no ground standing over it, gets no cut. Side-by-side bores, such as
+a road and its sidewalks mapped as tunnels of their own, share one portal, with
+a pier between separate carriageways. The ground is Mapterhorn terrain at zoom
+15, as for bridge decks. A run reads the area's tunnels once, by their tag, and
+rebuilds in place only the 0.05° cells their ends lie in, each owning the cuts
+whose portal lies in it.
+
+OSM Update keeps the cuts current, unless its "Update tunnel cuts" switch is off
+(`TUNNEL_CUTS_INCREMENTAL=0` for runs started from a shell). Each replication
+cycle queues, in `detail_dirty`, the box around each tunnel it touched and
+around each cut something it is fitted to touched before or after the diff: its
+tunnel, the roads it opens onto, the buildings and walls around it. "Update
+Tunnel Cuts" (`import/update-tunnel-cuts.ts`) rebuilds those boxes, at most
+`TUNNEL_CUTS_MAX_BOXES` a run. Replication queues nothing until Build Tunnel
+Cuts has stored a cut.
 
 `buildings_3d` leaves out a bridge's `bridge:support=abutment` or `pier`
 buildings under 20 m: the deck stands in for them. Taller ones, an anchorage or
