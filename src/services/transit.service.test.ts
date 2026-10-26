@@ -168,11 +168,28 @@ describe('getTransitRoute', () => {
     dbCallIndex = 0
   })
 
+  // The MOTIS fixture's trip leaves at 22:13:20.
   const baseRequest: TransitRouteRequest = {
     from: { lat: 35.23, lng: -80.84 },
     to: { lat: 35.77, lng: -78.64 },
-    time: '2023-11-15T08:00:00Z',
+    time: '2023-11-14T22:00:00Z',
   }
+
+  test('drops a train the rider cannot walk to in time', async () => {
+    // Asked for 22:13:20 exactly, but the walk to the platform takes time.
+    const fetchFn = mockFetch(makeMotisResponse())
+    const late = await getTransitRoute({ ...baseRequest, time: '2023-11-14T22:13:20Z' }, fetchFn)
+    expect(late.itineraries).toHaveLength(0)
+  })
+
+  test('drops a train that arrives too late to walk to the destination by the asked time', async () => {
+    // The trip ends at 23:13:20; the egress walk takes longer than zero.
+    const fetchFn = mockFetch(makeMotisResponse())
+    const result = await getTransitRoute(
+      { ...baseRequest, time: '2023-11-14T23:13:20Z', arriveBy: true }, fetchFn,
+    )
+    expect(result.itineraries).toHaveLength(0)
+  })
 
   test('parses a standard MOTIS response into our format', async () => {
     const fetchFn = mockFetch(makeMotisResponse())
@@ -884,6 +901,18 @@ describe('rankItineraries', () => {
     const unpriced = itin(0, 10)
     const priced = itin(0, 30, { farePayments: 1 })
     expect(rankItineraries([priced, unpriced], 1)[0]).toBe(unpriced)
+  })
+
+  test('keeps the same train with different rental pickups apart', () => {
+    const withBike = (station: string, minutes: number) => {
+      const it = itin(0, minutes, { trip: 'the-4' })
+      it.legs.push({
+        ...it.legs[0], mode: 'RENTAL', transitLeg: false, tripId: undefined,
+        rentalSystemId: 'citibike', rentalStationId: station,
+      })
+      return it
+    }
+    expect(rankItineraries([withBike('dock-1', 30), withBike('dock-2', 32)], 5)).toHaveLength(2)
   })
 
   test('lists each ride once, in its best form', () => {

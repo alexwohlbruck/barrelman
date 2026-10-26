@@ -842,7 +842,15 @@ async function planViaStations(request: IntermodalRouteRequest, fetchFn: FetchFn
       )
       try {
         const { itineraries } = await motisPlan(params, request, fetchFn)
-        return itineraries.map((it) => withAccessEgressWalks(it, request.from, request.to))
+        return itineraries
+          .map((it) => withAccessEgressWalks(it, request.from, request.to))
+          // The shift above walks to the station's nearest platform, but
+          // MOTIS may board at another one further off. Drop a trip whose
+          // walk would have to start before the asked time (or, arriving
+          // by, end after it), rather than offer a train the rider misses.
+          .filter((it) => request.arriveBy
+            ? new Date(it.endTime).getTime() <= baseMs
+            : new Date(it.startTime).getTime() >= baseMs)
       } catch (err) {
         // A 404 means the stop is in PostGIS but not in the baked MOTIS
         // timetable (GTFS ahead of the bake). That pair has no answer, which
@@ -856,7 +864,7 @@ async function planViaStations(request: IntermodalRouteRequest, fetchFn: FetchFn
               `${d.feedId}_${d.stationId} — GTFS DB is ahead of the MOTIS bake for these feeds`,
             )
           }
-          return []
+          return null
         }
         throw err
       }
@@ -865,24 +873,36 @@ async function planViaStations(request: IntermodalRouteRequest, fetchFn: FetchFn
 
   // One bad pair must not sink the rest. But if no pair answered and some
   // failed for real, MOTIS is down, and an empty 200 would pass that off as
-  // "no route".
-  const answered = settled.filter((s) => s.status === 'fulfilled')
-  const failure = settled.find((s): s is PromiseRejectedResult => s.status === 'rejected')
-  if (!answered.length && failure) throw failure.reason
+  // "no route". A 404 pair (null) is not an answer either way.
+  const answered = settled.flatMap((s) => (s.status === 'fulfilled' && s.value ? [s.value] : []))
+  const failures = settled.filter((s): s is PromiseRejectedResult => s.status === 'rejected')
+  if (failures.length) {
+    if (!answered.length) throw failures[0].reason
+    console.warn(`[transit] ${failures.length}/${settled.length} station pairs failed: ${failures[0].reason}`)
+  }
 
   return {
-    itineraries: answered.flatMap((s) => (s as PromiseFulfilledResult<TransitItinerary[]>).value),
-    metadata: { searchWindow: 0 },
+    itineraries: answered.flat(),
+    metadata: {
+      searchWindow: 0,
+      ...(request.requireBikeTransport && { requireBikeTransport: true }),
+    },
   }
 }
 
-/** What a rider sees as "the same trip": the vehicles boarded and where. */
+/**
+ * What a rider sees as "the same trip": the vehicles boarded and where, and
+ * the rental picked up, if any. Walks don't count, so the same train reached
+ * from two stations is one trip; a different dock or operator is not.
+ */
 function rideSignature(it: TransitItinerary): string {
-  const rides = it.legs.filter((l) => l.transitLeg)
-  if (!rides.length) {
-    return `direct|${it.legs.map((l) => l.mode).join(',')}|${it.startTime}|${it.duration}`
-  }
-  return rides.map((l) => `${l.tripId ?? l.routeId}:${l.from.stopId}>${l.to.stopId}`).join('|')
+  const parts = it.legs.flatMap((l) => {
+    if (l.transitLeg) return [`${l.tripId ?? l.routeId}:${l.from.stopId}>${l.to.stopId}`]
+    if (l.mode === 'RENTAL') return [`rental:${l.rentalSystemId}:${l.rentalStationId}>${l.to.name}`]
+    return []
+  })
+  if (!it.legs.some((l) => l.transitLeg)) parts.push(it.startTime, String(it.duration))
+  return parts.join('|')
 }
 
 /**
@@ -898,7 +918,9 @@ function rideSignature(it: TransitItinerary): string {
  * Pareto over time and transfers, and an out-of-system walk is fewer
  * transfers, so without this it ranks a two-fare walk-between-stations trip
  * ahead of the one-fare trip arriving at the same minute. Unknown payment
- * counts cost nothing: a gap in fare coverage is not evidence of a price.
+ * counts as one payment: a gap in fare coverage is not evidence of a
+ * price, and a fixed value keeps the ordering consistent, which comparing
+ * fares only when both are known did not.
  *
  * The same ride reached from different stations (the station fan-out finds
  * it once per pair) is kept once, in its best-ranked form.
