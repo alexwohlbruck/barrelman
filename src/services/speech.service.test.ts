@@ -4,7 +4,7 @@ import { SpeechService } from './speech.service'
 function setup() {
   const synthesize = mock(async (_url: string, _init?: RequestInit) => new Response(new Uint8Array([1, 2, 3]), { headers: { 'Content-Type': 'audio/mpeg' } }))
   const fetchFn = mock(async (url: string | URL | Request, init?: RequestInit) => {
-    if (String(url).endsWith('/voices')) return Response.json({ voices: ['af_heart', 'bf_emma', 'ef_dora', 'ff_siwis', 'unknown'] })
+    if (String(url).endsWith('/voices')) return Response.json({ voices: [{ id: 'af_alloy', name: 'af_alloy' }, { id: 'af_heart', name: 'af_heart' }, { id: 'bf_emma' }, { id: 'ef_dora' }, { id: 'ff_siwis' }, { id: 'unknown' }, null, 42], default_voice: 'af_heart' })
     return synthesize(String(url), init)
   }) as unknown as typeof fetch
   return { service: new SpeechService(() => 'http://tts:8880', fetchFn), synthesize, fetchFn }
@@ -14,7 +14,8 @@ describe('speech synthesis', () => {
   test('discovers real locale voices and advertises native rate without inflection', async () => {
     const { service } = setup()
     const catalog = await service.getCatalog()
-    expect(catalog.voices.map(v => v.language)).toEqual(['en-US', 'en-GB', 'es', 'fr'])
+    expect(catalog.voices.map(v => v.language)).toEqual(['en-US', 'en-US', 'en-GB', 'es', 'fr'])
+    expect(catalog.voices[0]!.id).toBe('af_heart')
     expect(catalog.rate.native).toBe(true)
     expect(catalog.inflection).toBe(false)
   })

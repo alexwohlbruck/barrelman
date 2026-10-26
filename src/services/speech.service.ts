@@ -50,10 +50,13 @@ export class SpeechService {
 
   private async loadCatalog(): Promise<SpeechCatalog> {
     const response = await this.upstream('/v1/audio/voices')
-    const data = await response.json() as { voices?: unknown }
+    const data = await response.json() as { voices?: unknown; default_voice?: unknown }
     if (!Array.isArray(data.voices)) throw new SpeechError('Invalid speech voice catalog')
-    const voices = data.voices.filter((id): id is string => typeof id === 'string' && /^[a-z]{2}_[a-z0-9_]+$/.test(id) && !!LANGUAGES[id[0]])
+    const ids = data.voices.map(voice => typeof voice === 'object' && voice !== null && 'id' in voice ? voice.id : voice)
+    const voices = ids.filter((id): id is string => typeof id === 'string' && /^[a-z]{2}_[a-z0-9_]+$/.test(id) && !!LANGUAGES[id[0]])
       .map(id => ({ id, name: id.slice(3).replaceAll('_', ' '), language: LANGUAGES[id[0]]! }))
+    const defaultIndex = voices.findIndex(voice => voice.id === data.default_voice)
+    if (defaultIndex > 0) voices.unshift(...voices.splice(defaultIndex, 1))
     if (!voices.length) throw new SpeechError('No speech voices available')
     const value: SpeechCatalog = {
       model: `kokoro:${envString('TTS_MODEL_REVISION', 'v1.0')}`,

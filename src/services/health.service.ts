@@ -32,9 +32,9 @@ import { db } from '../db'
 import { sql } from 'drizzle-orm'
 import { checkMotisHealth as _checkMotisHealth } from './transit.service'
 import { CREDIT_COSTS, GROUP_PREFIXES, type EndpointGroup } from '../billing/plans'
-import { envNumber } from '../config/env'
+import { envNumber, envString } from '../config/env'
 
-export type DependencyKey = 'database' | 'graphhopper' | 'martin' | 'motis' | 'pelias'
+export type DependencyKey = 'database' | 'graphhopper' | 'martin' | 'motis' | 'pelias' | 'tts'
 export type DependencyStatus = 'ok' | 'unavailable'
 export type EndpointStatus = 'ok' | 'degraded' | 'unavailable'
 
@@ -115,7 +115,7 @@ const ENDPOINT_DEPENDENCIES: Record<
 }
 
 /** Services an instance may legitimately not run. These never fail the instance. */
-const OPTIONAL: ReadonlySet<DependencyKey> = new Set(['pelias'])
+const OPTIONAL: ReadonlySet<DependencyKey> = new Set(['pelias', 'tts'])
 
 const PROBE_TIMEOUT_MS = 3000
 
@@ -126,6 +126,7 @@ export const dependencyUrls = (): Record<Exclude<DependencyKey, 'database'>, str
   martin: process.env.MARTIN_URL || 'http://barrelman-martin:3000',
   motis: process.env.MOTIS_URL || 'http://barrelman-motis:8080',
   pelias: process.env.PELIAS_URL || 'http://pelias_api:4000',
+  tts: envString('TTS_URL', ''),
 })
 
 /**
@@ -174,16 +175,17 @@ async function probeAll(deps: HealthDeps): Promise<Record<DependencyKey, Depende
     return { status: r.status, latencyMs: Math.round(performance.now() - start), message: r.message }
   }
 
-  const [database, graphhopper, martin, motis, pelias] = await Promise.all([
+  const [database, graphhopper, martin, motis, pelias, tts] = await Promise.all([
     probeDatabase(),
     probeHttp(urls.graphhopper, '/health', deps.fetchFn),
     probeHttp(urls.martin, '/health', deps.fetchFn),
     motisProbe(),
     // /status is the only unauthenticated 200 Pelias offers — /v1/status is a 404.
     probeHttp(urls.pelias, '/status', deps.fetchFn),
+    urls.tts ? probeHttp(urls.tts, '/health', deps.fetchFn) : Promise.resolve<DependencyHealth>({ status: 'unavailable', message: 'Speech synthesis is disabled' }),
   ])
 
-  return { database, graphhopper, martin, motis, pelias: { ...pelias, optional: true } }
+  return { database, graphhopper, martin, motis, pelias: { ...pelias, optional: true }, tts: { ...tts, optional: true } }
 }
 
 /** Resolve each billing group's status from the probe results. */
