@@ -430,6 +430,35 @@ postgres:
       # Whole decks in every tile they cross: the profile runs along the line, so a cut copy could not be read.
       clip_geom: false
 
+    # The cut down to each tunnel portal (Build Tunnel Cuts), whole in every
+    # tile it nears: the buffer reaches the ground carved beside it.
+    tunnel_cuts:
+      schema: public
+      table: tunnel_cut_tiles
+      srid: 4326
+      geometry_column: geom
+      geometry_type: LINESTRING
+      minzoom: 14
+      maxzoom: 16
+      properties:
+        id: text
+        kind: text
+        line: text
+        at: int4
+        open: int4
+        left_edge: float4
+        right_edge: float4
+        floor: text
+        wall_left: text
+        wall_right: text
+        crown: float4
+        headroom: float4
+        base: float4
+        face: text
+        piers: text
+      buffer: 256
+      clip_geom: false
+
     road_markings:
       schema: public
       table: road_markings

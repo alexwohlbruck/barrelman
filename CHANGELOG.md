@@ -10,6 +10,10 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Added
+
+* Detail tiles carry `tunnel_cuts`: the cut dug down to each tunnel portal, with its floor, retaining walls and headwall solved from OSM and the terrain, so a client draws tunnel entrances as soon as their tile arrives instead of working them out itself. Built by the new "Build Tunnel Cuts" task and kept current by OSM Update.
+
 ## [0.10.28] - 2026-10-24
 
 ### Added

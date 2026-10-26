@@ -1092,3 +1092,56 @@ SELECT id, bridge, kind, layer, edges[1] AS left_edge, edges[2] AS right_edge,
        CASE WHEN caps IS NOT NULL THEN array_to_string(ARRAY(SELECT round(c * 10)::int FROM unnest(caps) c), ',') END AS caps,
        mesh
 FROM bridge_decks;
+
+-- Tunnel cuts: the cut dug down to each portal where a tunnel comes out of the
+-- ground, solved by Build Tunnel Cuts (import/generate-tunnel-cuts.ts) from the
+-- tunnels, the roads and surfaces they open onto and the terrain. A client
+-- stands the walls and carves the floor into its terrain from these alone.
+-- `geom` runs from just before the cut opens, through the portal (vertex `at`),
+-- into the bore, sampled every few metres; the arrays hold a value per vertex.
+CREATE TABLE IF NOT EXISTS tunnel_cuts (
+  id text PRIMARY KEY,
+  kind text NOT NULL,
+  at int NOT NULL,
+  -- The vertex the cut opens at: out from it the road is at grade.
+  open int NOT NULL,
+  -- Metres from the centreline to the carriageway's left and right edges, running in.
+  edges real[] NOT NULL,
+  -- Metres in the terrain's datum, before exaggeration.
+  floor real[] NOT NULL,
+  wall_left real[] NOT NULL,
+  wall_right real[] NOT NULL,
+  crown real NOT NULL,
+  headroom real NOT NULL,
+  base real NOT NULL,
+  -- A headwall's direction where a wall is mapped across the bore, in mercator units.
+  face real[],
+  -- Walls between carriageways' bores: [from, to] metres left of the centreline, flattened.
+  piers real[],
+  -- The portal, in whole units of 1e-7° too, which decides the box that owns the cut.
+  anchor geometry(Point, 4326) NOT NULL,
+  anchor_x int NOT NULL,
+  anchor_y int NOT NULL,
+  geom geometry(LineString, 4326) NOT NULL,
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS tunnel_cuts_geom_idx ON tunnel_cuts USING gist (geom);
+CREATE INDEX IF NOT EXISTS tunnel_cuts_anchor_idx ON tunnel_cuts USING gist (anchor);
+
+-- Served in the `detail` bundle: the line as steps in 1e-7°, as bridge_deck_tiles
+-- gives it, and heights and piers in decimetres.
+CREATE OR REPLACE VIEW tunnel_cut_tiles AS
+SELECT id, kind,
+       (SELECT string_agg(CASE WHEN n = 1 THEN x || ',' || y ELSE (x - px) || ',' || (y - py) END, ';' ORDER BY n)
+        FROM (SELECT n, x, y, lag(x) OVER (ORDER BY n) AS px, lag(y) OVER (ORDER BY n) AS py
+              FROM (SELECT (dp).path[1] AS n, round(ST_X((dp).geom) * 1e7)::bigint AS x, round(ST_Y((dp).geom) * 1e7)::bigint AS y
+                    FROM ST_DumpPoints(geom) AS dp) points) steps) AS line,
+       at, open, edges[1] AS left_edge, edges[2] AS right_edge,
+       array_to_string(ARRAY(SELECT round(h * 10)::int FROM unnest(floor) h), ',') AS floor,
+       array_to_string(ARRAY(SELECT round(h * 10)::int FROM unnest(wall_left) h), ',') AS wall_left,
+       array_to_string(ARRAY(SELECT round(h * 10)::int FROM unnest(wall_right) h), ',') AS wall_right,
+       crown, headroom, base,
+       CASE WHEN face IS NOT NULL THEN array_to_string(face, ',') END AS face,
+       CASE WHEN piers IS NOT NULL THEN array_to_string(ARRAY(SELECT round(p * 10)::int FROM unnest(piers) p), ',') END AS piers,
+       geom
+FROM tunnel_cuts;
