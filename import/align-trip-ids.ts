@@ -506,19 +506,17 @@ export function expandServiceDates(
 /**
  * Trip_id groups a transform would merge, and whether any of them run together.
  *
- * A transform that drops part of an id makes some ids collide. MOTIS tolerates
- * duplicate trip_ids: nigiri's `trip_id_to_idx_` is a sorted vector with no
- * uniqueness constraint, `resolve_static_trip_id` walks every id match, and
- * `resolve_trip` picks between them with `is_transport_active` against the
- * traffic-day bitfield using the realtime `start_date`. The subway feed
- * collapses 20,621 trips onto 17,327 ids and resolves correctly, because the
- * colliding pairs are Saturday-versus-Sunday variants of the same run.
- *
- * It stops being safe the moment two colliding trips run on the same date.
- * nigiri's trip-update path applies the update inside the `resolve_static`
- * callback and returns `kContinue` without breaking, so the update lands on
- * every match — including a transport that is not running — and counts a
- * success for each. Nothing in the match-rate metric would show it.
+ * A transform that drops part of an id makes some ids collide, and MOTIS cannot
+ * load a feed with duplicate trip_ids. nigiri's GTFS loader keys trips by id,
+ * so every stop_times row of every duplicate lands on the one trip that kept
+ * the id, its times run backwards, and the loader drops it ("invalid event
+ * times, skipping"). Every trip sharing the id is lost from the timetable,
+ * not just the extras. MTA's 2026-08-26 subway feed reuses one run id across
+ * up to nine service variants. Stripping its prefix put 71,786 of 81,850
+ * trips on shared ids, and MOTIS routed around a subway that had mostly
+ * vanished. So `holdApart` never writes a shared id. This reports the groups
+ * a rewrite would create, and which of them run on the same date, where not
+ * even realtime could tell the trips apart.
  */
 export function findDateOverlaps(
   tripsToServices: Map<string, string[]>,
@@ -604,36 +602,77 @@ export function chooseRouteTransforms(
   return choices
 }
 
+/** The first date, as YYYYMMDD, on or after `today` that a service runs. */
+function nextServiceDate(
+  serviceId: string,
+  serviceDates: Map<string, Set<string>>,
+  today: string,
+): string | undefined {
+  let next: string | undefined
+  for (const d of serviceDates.get(serviceId) ?? []) {
+    if (d >= today && (next === undefined || d < next)) next = d
+  }
+  return next
+}
+
 /**
- * Each trip's proposed id, except where that id would be shared by trips
- * running on the same day.
+ * Each trip's proposed id, where no other trip would share it.
  *
- * A transform can merge two trips that run together — two trains leaving one
- * terminal at the same minute on different paths, or ids that lack the part a
- * separator transform expects. Those trips keep their fallback id instead, so
- * the shared id matches neither of them rather than both, and the rest of the
- * feed is still rewritten. Overlaps left among fallback ids are returned for
- * the caller to refuse.
+ * A shared id is never written, because MOTIS drops every trip that carries
+ * one (see `findDateOverlaps`). Trips that would share an id are settled two
+ * ways:
+ *
+ * - If they never run on the same date (the Saturday and Sunday variants of
+ *   one run), the trip running soonest takes the proposed id and the rest
+ *   keep their fallback id. Realtime then resolves for the variant running
+ *   now. MOTIS rebuilds nightly, so the id moves with the service day.
+ * - If two of them run on the same date (two trains leaving one terminal at
+ *   the same minute on different paths, or ids lacking the part a separator
+ *   transform expects), no trip may take the id, because realtime could not
+ *   tell them apart. All of them keep their fallback id.
+ *
+ * Overlaps left among fallback ids are returned for the caller to refuse.
  */
 function holdApart(
   trips: StaticTrip[],
   fallback: Map<string, string>,
   proposed: (trip: StaticTrip) => string,
   serviceDates: Map<string, Set<string>>,
+  today: string,
 ) {
   const held = new Set<string>()
   for (;;) {
     const rewrite = new Map(trips.map(t => [t.id, held.has(t.id) ? fallback.get(t.id)! : proposed(t)]))
-    const check = findDateOverlaps(servicesByKey(trips, rewrite), serviceDates)
-    if (!check.overlaps.length) return { rewrite, held, check }
-
-    const clashing = new Set(check.overlaps.map(o => o.tripId))
-    const before = held.size
+    const groups = new Map<string, StaticTrip[]>()
     for (const t of trips) {
-      const id = rewrite.get(t.id)!
-      if (clashing.has(id) && id !== fallback.get(t.id)) held.add(t.id)
+      const key = rewrite.get(t.id)!
+      const group = groups.get(key)
+      if (group) group.push(t)
+      else groups.set(key, [t])
     }
-    if (held.size === before) return { rewrite, held, check }
+
+    const overlapping = new Set(
+      findDateOverlaps(servicesByKey(trips, rewrite), serviceDates).overlaps.map(o => o.tripId),
+    )
+    const before = held.size
+    for (const [key, group] of groups) {
+      if (group.length < 2) continue
+      // A trip already on its fallback id owns it; nothing else can move it.
+      const claimant = overlapping.has(key)
+        ? undefined
+        : (group.find(t => fallback.get(t.id) === key) ??
+          group.reduce((best, t) => {
+            const a = nextServiceDate(t.serviceId, serviceDates, today) ?? '99999999'
+            const b = nextServiceDate(best.serviceId, serviceDates, today) ?? '99999999'
+            return a < b ? t : best
+          }))
+      for (const t of group) {
+        if (t !== claimant && key !== fallback.get(t.id)) held.add(t.id)
+      }
+    }
+    if (held.size === before) {
+      return { rewrite, held, check: findDateOverlaps(servicesByKey(trips, rewrite), serviceDates) }
+    }
   }
 }
 
@@ -734,6 +773,8 @@ export async function alignRealtimeTripIds(
     /** Pre-sampled realtime trips, for callers that already have them. */
     rtTrips?: RtSample
     onWarn?: (message: string) => void
+    /** Decides which variant of a shared run takes its realtime id. */
+    now?: number
   } = {},
 ): Promise<{ buffer: ArrayBuffer; result: AlignmentResult }> {
   const skip = (
@@ -800,6 +841,7 @@ export async function alignRealtimeTripIds(
     return file ? await file.async('string') : null
   }
   const serviceDates = expandServiceDates(await read('calendar.txt'), await read('calendar_dates.txt'))
+  const today = new Date(options.now ?? Date.now()).toISOString().slice(0, 10).replace(/-/g, '')
 
   const choice = chooseTransform(trips.map(t => t.id), rtIds)
   const feedTransform = choice.transform
@@ -823,7 +865,7 @@ export async function alignRealtimeTripIds(
   let base = original
   let held = 0
   if (feedTransform) {
-    const settled = holdApart(trips, original, t => feedTransform.apply(t.id), serviceDates)
+    const settled = holdApart(trips, original, t => feedTransform.apply(t.id), serviceDates, today)
     if (settled.check.overlaps.length) return refuse(settled.check)
     if (!clearsBar(countMatched(settled.rewrite, rtTrips), choice.baselineMatched, choice.sampleSize)) {
       return refuse(findDateOverlaps(servicesByKey(trips, rewriteAll(trips, feedTransform)), serviceDates))
@@ -847,6 +889,7 @@ export async function alignRealtimeTripIds(
       base,
       t => current.get(t.routeId)?.transform!.apply(base.get(t.id)!) ?? base.get(t.id)!,
       serviceDates,
+      today,
     )
     const kept = new Map([...current].filter(([route, c]) =>
       clearsBar(countMatched(settled.rewrite, rtTrips, route), c.baselineMatched, c.sampleSize),

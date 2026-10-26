@@ -92,7 +92,7 @@ async function alignTripIds(
     console.log(`  ✓ Realtime trip_ids did not match static. Rewrote to ${describeAlignment(result)} (${counts})`)
     console.log(
       `    ${result.matched}/${result.sampleSize} sampled realtime trips now resolve; ` +
-        `${result.collidingTripIds} id(s) shared by more than one trip, none running the same day`,
+        `${result.heldTrips} trip(s) kept their published id so no two trips share one`,
     )
   } else if (result.skipReason === 'date-overlap') {
     console.error(
