@@ -1,8 +1,9 @@
 -- The rebuild queue for the detail layers built from OSM: the boxes each
 -- replication diff touched, as replicate-extract.sh queues them, one row per
 -- box and layer. Each layer queues only what it is built from
--- (queue-road-markings.sql, queue-bridge-decks.sql) and its own update script
--- works off its own rows (update-road-markings.sh, update-bridge-decks.ts).
+-- (queue-road-markings.sql, queue-bridge-decks.sql, queue-tunnel-cuts.sql) and
+-- its own update script works off its own rows (update-road-markings.sh,
+-- update-bridge-decks.ts, update-tunnel-cuts.ts).
 -- `attempts` counts runs in which part of an entry failed to build, so a box
 -- that cannot be built moves to the back of the queue, and is dropped after a
 -- few tries, instead of holding up the rest.
@@ -11,13 +12,19 @@
 -- once some layer has been built, and a failure is reported and skipped
 -- rather than raised, which would roll back the replication cycle.
 DO $$
+DECLARE
+  built boolean := false;
 BEGIN
   IF to_regclass('detail_dirty') IS NULL AND to_regclass('road_markings_dirty') IS NULL
      AND NOT (to_regclass('road_surfaces') IS NOT NULL AND to_regclass('road_markings') IS NOT NULL) THEN
-    IF to_regclass('bridge_deck_cells') IS NULL THEN
-      RETURN;
+    -- Each statement is only planned when it runs, so a table is read only once it is known to exist.
+    IF to_regclass('bridge_deck_cells') IS NOT NULL THEN
+      built := EXISTS (SELECT 1 FROM bridge_deck_cells);
     END IF;
-    IF NOT EXISTS (SELECT 1 FROM bridge_deck_cells) THEN
+    IF NOT built AND to_regclass('tunnel_cuts') IS NOT NULL THEN
+      built := EXISTS (SELECT 1 FROM tunnel_cuts);
+    END IF;
+    IF NOT built THEN
       RETURN;
     END IF;
   END IF;

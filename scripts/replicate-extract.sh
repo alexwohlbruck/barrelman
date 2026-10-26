@@ -55,6 +55,8 @@ set -euo pipefail
 #                                update-road-markings.sh (default 0)
 #   BRIDGE_DECKS_INCREMENTAL     1 to queue the bridges each cycle touches for
 #                                update-bridge-decks.ts (default 1)
+#   TUNNEL_CUTS_INCREMENTAL      1 to queue the tunnels each cycle touches for
+#                                update-tunnel-cuts.ts (default 1)
 # =============================================================================
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -347,9 +349,10 @@ SQL
   [ "${REPLICATION_ALLOW_SHRINK:-0}" = "1" ] && min_ratio="0"
   # Normalised here because psql's \if refuses anything but a boolean, and an
   # error inside the transaction would roll the whole cycle back.
-  local queue_road_markings="off" queue_bridge_decks="off" queue_any="off"
+  local queue_road_markings="off" queue_bridge_decks="off" queue_tunnel_cuts="off" queue_any="off"
   [ "${ROAD_MARKINGS_INCREMENTAL:-0}" = "1" ] && queue_road_markings="on" queue_any="on"
   [ "${BRIDGE_DECKS_INCREMENTAL:-1}" = "1" ] && queue_bridge_decks="on" queue_any="on"
+  [ "${TUNNEL_CUTS_INCREMENTAL:-1}" = "1" ] && queue_tunnel_cuts="on" queue_any="on"
 
   # BEGIN and COMMIT are spelled out: psql's -1 only applies to -c and -f, and
   # stdin silently runs each statement in its own transaction. With
@@ -358,6 +361,7 @@ SQL
   psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q \
     -v min_ratio="$min_ratio" -v sequence="$end" -v data_ts="$end_ts" \
     -v queue_road_markings="$queue_road_markings" -v queue_bridge_decks="$queue_bridge_decks" \
+    -v queue_tunnel_cuts="$queue_tunnel_cuts" \
     -v queue_any="$queue_any" <<SQL
 BEGIN;
 DROP SCHEMA IF EXISTS osm_replay CASCADE;
@@ -424,6 +428,9 @@ SELECT :removed >= 1000 AND :added < :removed * :min_ratio AS shrunk \gset
 \endif
 \if :queue_bridge_decks
 \i $PROJECT_DIR/import/queue-bridge-decks.sql
+\endif
+\if :queue_tunnel_cuts
+\i $PROJECT_DIR/import/queue-tunnel-cuts.sql
 \endif
 
 UPDATE osm_replication_state

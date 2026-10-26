@@ -62,6 +62,10 @@ set -euo pipefail
 #                               cycle touches and rebuilds their decks
 #                               (update-bridge-decks.ts); 0 leaves them for a
 #                               "Build Bridge Decks" run
+#   TUNNEL_CUTS_INCREMENTAL     1 (default) queues the tunnels each replication
+#                               cycle touches and rebuilds their cuts
+#                               (update-tunnel-cuts.ts); 0 leaves them for a
+#                               "Build Tunnel Cuts" run
 #   REPLICATION_MAX_DIFFS       without middle tables: diffs applied per cycle
 #
 # SCHEDULING:
@@ -125,6 +129,8 @@ refresh_views() {
     "$SCRIPT_DIR/update-road-markings.sh"
   run_incremental BRIDGE_DECKS_INCREMENTAL 1 "bridge decks" "Update Bridge Decks" \
     bash -c "cd '$PROJECT_DIR' && exec nice -n 10 bun run import/update-bridge-decks.ts"
+  run_incremental TUNNEL_CUTS_INCREMENTAL 1 "tunnel cuts" "Update Tunnel Cuts" \
+    bash -c "cd '$PROJECT_DIR' && exec nice -n 10 bun run import/update-tunnel-cuts.ts"
 }
 
 # Rebuild what reads region.osm.pbf, if the update moved it. Takes the extract's
@@ -331,6 +337,7 @@ if [ "$HAS_MIDDLE" != "t" ]; then
     ${REPLICATION_ALLOW_SHRINK:+-e REPLICATION_ALLOW_SHRINK="$REPLICATION_ALLOW_SHRINK"} \
     -e ROAD_MARKINGS_INCREMENTAL="${ROAD_MARKINGS_INCREMENTAL:-0}" \
     -e BRIDGE_DECKS_INCREMENTAL="${BRIDGE_DECKS_INCREMENTAL:-1}" \
+    -e TUNNEL_CUTS_INCREMENTAL="${TUNNEL_CUTS_INCREMENTAL:-1}" \
     barrelman-db bash /app/scripts/replicate-extract.sh | tee "$REPLICATION_LOG" \
     || REPLICATION_RC=$?
   PBF_MTIME_AFTER=$(docker exec barrelman-db stat -c %Y "$PBF_FILE" 2>/dev/null || echo 0)

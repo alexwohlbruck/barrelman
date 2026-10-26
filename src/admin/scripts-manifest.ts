@@ -267,6 +267,16 @@ export const SCRIPTS: ScriptDef[] = [
           'Queue the bridges each cycle touches, then rebuild their decks where Build Bridge Decks has run. Only a database without middle tables records which bridges changed.',
       },
       {
+        name: 'TUNNEL_CUTS_INCREMENTAL',
+        label: 'Update tunnel cuts',
+        type: 'boolean',
+        apply: 'env',
+        envVar: 'TUNNEL_CUTS_INCREMENTAL',
+        default: true,
+        description:
+          'Queue the tunnels each cycle touches, and the cuts whose roads, buildings or walls changed, then rebuild them once Build Tunnel Cuts has run. Only a database without middle tables records which ways changed.',
+      },
+      {
         name: 'REPLICATION_MAX_DIFFS',
         label: 'Diffs per cycle',
         type: 'number',
@@ -985,6 +995,51 @@ export const SCRIPTS: ScriptDef[] = [
     source: 'import/update-bridge-decks.ts',
     notes:
       'OSM Update runs this after each replication cycle unless its "Update bridge decks" switch is off. The queue (detail_dirty) is filled by scripts/replicate-extract.sh under the same switch, so a database updated through osm2pgsql\'s middle tables has nothing to work off. Only writes inside the cells Build Bridge Decks recorded. Does nothing without bridge_decks and bridge_deck_cells, and empties the queue with BRIDGE_DECKS_DEM_TILES=off. A cell that fails is skipped and its entries retried later, up to three runs. Steps aside while "Build Bridge Decks" runs.',
+  },
+  {
+    id: 'osm-tunnel-cuts',
+    name: 'Build Tunnel Cuts',
+    description:
+      'Rebuild tunnel_cuts: the cut dug down to every portal where a tunnel comes out of the ground, with its floor, retaining walls and headwall solved from the tunnel, the roads and surfaces it opens onto, the buildings and walls around it, and Mapterhorn terrain. Served in the detail tiles, so a map draws and carves each cut without solving it.',
+    category: 'osm',
+    danger: 'safe',
+    longRunning: true,
+    confirm: true,
+    exclusive: true,
+    exec: { kind: 'process', command: 'nice', args: ['-n', '10', 'bun', 'run', 'import/generate-tunnel-cuts.ts'] },
+    params: [
+      { name: 'bbox', label: 'Area (w,s,e,n)', type: 'string', apply: 'flag', flag: '--bbox', placeholder: 'blank = the REGIONS areas' },
+      { name: 'cell', label: 'Cell size (degrees)', type: 'number', apply: 'flag', flag: '--cell', default: 0.05 },
+    ],
+    source: 'import/generate-tunnel-cuts.ts',
+    notes:
+      'Reads the area\'s tunnels once by their tag, then rebuilds in place only the cells a tunnel ends in, so tiles keep serving meanwhile and a run can be stopped and started again. A blank area covers each area of the regions REGIONS selects; with REGIONS=global it refuses to start, so give an area. Fetches Mapterhorn terrain tiles around each portal unless BRIDGE_DECKS_DEM_TILES points elsewhere. OSM Update keeps the cuts current afterwards (see Update Tunnel Cuts). Restart Martin afterwards on an instance that caches tiles.',
+  },
+  {
+    id: 'osm-tunnel-cuts-update',
+    name: 'Update Tunnel Cuts',
+    description:
+      'Rebuild the tunnel cuts recent replication diffs touched: tunnels added, moved, retagged or deleted, and cuts whose roads, surfaces, buildings or walls changed.',
+    category: 'osm',
+    danger: 'safe',
+    longRunning: true,
+    confirm: false,
+    exclusive: true,
+    exec: { kind: 'process', command: 'nice', args: ['-n', '10', 'bun', 'run', 'import/update-tunnel-cuts.ts'] },
+    params: [
+      {
+        name: 'TUNNEL_CUTS_MAX_BOXES',
+        label: 'Boxes per run',
+        type: 'number',
+        apply: 'env',
+        envVar: 'TUNNEL_CUTS_MAX_BOXES',
+        placeholder: 'blank = 500',
+        description: 'Queued boxes rebuilt in one run. What is left stays queued for the next.',
+      },
+    ],
+    source: 'import/update-tunnel-cuts.ts',
+    notes:
+      'OSM Update runs this after each replication cycle unless its "Update tunnel cuts" switch is off. The queue (detail_dirty) is filled by scripts/replicate-extract.sh under the same switch, and only once Build Tunnel Cuts has stored a cut. Empties the queue with BRIDGE_DECKS_DEM_TILES=off. A box that fails is skipped and retried later, up to three runs. Steps aside while "Build Tunnel Cuts" runs.',
   },
   {
     id: 'search-intersections',
