@@ -26,7 +26,7 @@ export const LOCK = [5393739, 2] as const
  * the approach leaves the buildings over it, at most a cut's length, and the
  * approach then runs on that far again.
  */
-const READ_PAST = 2 * CUT_MAX + 60
+export const READ_PAST = 2 * CUT_MAX + 60
 /** Metres read around each tunnel end for what its cut is fitted to. */
 const AROUND_END = CUT_MAX + 40
 

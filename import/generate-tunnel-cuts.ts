@@ -6,7 +6,7 @@
  *   bun run import/generate-tunnel-cuts.ts --bbox w,s,e,n   one area
  *
  * The area's tunnels are read once, by their tag's index, and only the cells
- * holding a tunnel's end are rebuilt, each in place (see tunnel-cut-cells.ts),
+ * a tunnel's portals can lie in are rebuilt, each in place (see tunnel-cut-cells.ts),
  * so a run can be stopped and started again. Update Tunnel Cuts keeps them in
  * step with OSM afterwards.
  */
@@ -19,10 +19,11 @@ import { Dem, DEM_TILES, demConfigured } from '../src/lib/bridge-decks/dem'
 import { degreeBox, grid, toUnits, type UnitBox } from '../src/lib/bridge-decks/grid'
 import { unprojected } from '../src/lib/bridge-mesh/decks'
 import type { Way } from '../src/lib/tunnel-cuts/build'
-import { LOCK, rebuildBoxes, tableMissing, tunnelsIn } from './tunnel-cut-cells'
+import { CUT_MAX } from '../src/lib/tunnel-cuts/tunnels'
+import { LOCK, READ_PAST, rebuildBoxes, tableMissing, tunnelsIn } from './tunnel-cut-cells'
 
 const args = process.argv.slice(2)
-const CELL = Number(argValue(args, 'cell') ?? 0.05)
+const CELL = Number(argValue(args, 'cell') ?? 0.25)
 
 type Sql = postgres.Sql
 
@@ -33,35 +34,23 @@ type Sql = postgres.Sql
 export async function buildArea(sql: Sql, dem: Dem, area: [number, number, number, number], size = CELL): Promise<{ total: number; built: number }> {
   const g = grid(toUnits(size))
   const tunnels = (await tunnelsIn(sql, area)).filter(t => t.layer < 0)
-  const cellOf = (p: [number, number]) => {
+  const cellsAround = (p: [number, number], metres: number) => {
     const [lng, lat] = unprojected(p)
-    return g.at([toUnits(lng), toUnits(lat)])
+    const [dx, dy] = [metres / (111320 * Math.cos((lat * Math.PI) / 180)), metres / 111320]
+    return [-1, 0, 1].flatMap(i => [-1, 0, 1].map(j => g.at([toUnits(lng + i * dx), toUnits(lat + j * dy)])))
   }
-  // A portal lies within a cut's length of its tunnel's end, and may be in the cell beside it.
-  const near = new Map<string, Way[]>()
-  const ends = new Set<string>()
-  for (const t of tunnels) {
-    const cells = new Set(t.points.map(cellOf))
-    for (const end of [t.points[0], t.points.at(-1)!]) ends.add(cellOf(end))
-    for (const c of cells) {
-      const [cx, cy] = c.split(',').map(Number)
-      for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) {
-        const k = `${cx + dx},${cy + dy}`
-        near.set(k, [...(near.get(k) ?? []), t])
-      }
-    }
-  }
-  const wanted = new Set<string>()
-  for (const c of ends) {
-    const [cx, cy] = c.split(',').map(Number)
-    for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) wanted.add(`${cx + dx},${cy + dy}`)
-  }
+  // A portal lies within a cut's length of its tunnel's end, so in the end's cell or, near its edge, the one beside.
+  const wanted = new Set(tunnels.flatMap(t => [t.points[0], t.points.at(-1)!].flatMap(p => cellsAround(p, 2 * CUT_MAX))))
+  // Each cell is handed every tunnel within what it reads, so one running on into another is known to.
+  const reading = new Map<string, Set<Way>>()
+  for (const t of tunnels)
+    for (const c of new Set(t.points.flatMap(p => cellsAround(p, READ_PAST * 1.1)))) if (wanted.has(c)) reading.set(c, (reading.get(c) ?? new Set()).add(t))
   const [w, s, e, n] = area.map(toUnits)
   const cells = [...wanted].map(k => [k, g.box(k)] as [string, UnitBox]).filter(([, b]) => b[0] < e && b[2] > w && b[1] < n && b[3] > s)
   const started = Date.now()
   let total = 0
   for (const [i, [key, box]] of cells.entries()) {
-    const stored = await rebuildBoxes(sql, dem, [box], [...new Set(near.get(key) ?? [])])
+    const stored = await rebuildBoxes(sql, dem, [box], [...(reading.get(key) ?? [])])
     total += stored
     if (stored) console.log(`[${i + 1}/${cells.length}] cell ${degreeBox(box).slice(0, 2).join(',')}: ${stored} cuts (${Math.round((Date.now() - started) / 1000)} s)`)
   }
