@@ -484,6 +484,10 @@ services:
       # On unless set to 0; console and scheduled runs pass their own switch.
       BRIDGE_DECKS_INCREMENTAL: ${BRIDGE_DECKS_INCREMENTAL:-}
       BRIDGE_DECKS_MAX_CELLS: ${BRIDGE_DECKS_MAX_CELLS:-}
+      # Incremental tunnel cuts (update-osm.sh → update-tunnel-cuts.ts), on
+      # unless set to 0, and the queued boxes each run rebuilds.
+      TUNNEL_CUTS_INCREMENTAL: ${TUNNEL_CUTS_INCREMENTAL:-}
+      TUNNEL_CUTS_MAX_BOXES: ${TUNNEL_CUTS_MAX_BOXES:-}
       # ── Portolan (corrected transit geometry) ───────────────────────
       # Workspace root for import/portolan-sync.ts: portolan.json + style/ +
       # data/gtfs/ (raw feeds, portolan's own copies) + build/ (tiles, exports,
