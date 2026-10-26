@@ -13,7 +13,7 @@ import type postgres from 'postgres'
 import type { Dem } from '../src/lib/bridge-decks/dem'
 import { contains, toDegrees, toUnits, UNITS_PER_DEGREE, type UnitBox, type UnitPoint } from '../src/lib/bridge-decks/grid'
 import { mercator, unprojected, type Bounds, type Point } from '../src/lib/bridge-mesh/decks'
-import { classOf, groundPoints, openings, solveCuts, type Surroundings, type TunnelCut, type Way } from '../src/lib/tunnel-cuts/build'
+import { classOf, groundPoints, openings, portalsOf, solveCuts, type Surroundings, type TunnelCut, type Way } from '../src/lib/tunnel-cuts/build'
 import { CUT_MAX } from '../src/lib/tunnel-cuts/tunnels'
 
 type Sql = postgres.Sql
@@ -78,13 +78,22 @@ function bounds([w, s, e, n]: [number, number, number, number]): Bounds {
   return { minX, minY, maxX, maxY }
 }
 
-/** Everything a cut around these tunnels is fitted to, read in boxes around the tunnels' ends. */
-export async function surroundings(sql: Sql, tunnels: Way[]): Promise<Surroundings> {
-  const ends = tunnels.flatMap(t => [t.points[0], t.points.at(-1)!]).map(p => unprojected(p))
-  const boxes = ends.map(([lng, lat]) => grown([lng, lat, lng, lat], AROUND_END))
-  const [ws, ss, es, ns] = [0, 1, 2, 3].map(k => boxes.map(b => b[k]))
-  const near = sql`unnest(${ws}::float8[], ${ss}::float8[], ${es}::float8[], ${ns}::float8[]) AS b(w, s, e, n)`
-  const hit = sql`g.geom && ST_MakeEnvelope(b.w, b.s, b.e, b.n, 4326)`
+/** Degrees a side of the grid the ground around portals is read in, so neighbouring portals share their reads. */
+const READ_CELL = 0.005
+
+/** Everything a cut at these portals is fitted to, read in grid cells around each. */
+export async function surroundings(sql: Sql, portals: Point[]): Promise<Surroundings> {
+  const cells = new Set<string>()
+  for (const p of portals) {
+    const [lng, lat] = unprojected(p)
+    const [w, s, e, n] = grown([lng, lat, lng, lat], AROUND_END)
+    for (let x = Math.floor(w / READ_CELL); x <= Math.floor(e / READ_CELL); x++)
+      for (let y = Math.floor(s / READ_CELL); y <= Math.floor(n / READ_CELL); y++) cells.add(`${x},${y}`)
+  }
+  const boxes = [...cells].map(c => c.split(',').map(Number))
+  const [ws, ss] = [boxes.map(b => b[0] * READ_CELL), boxes.map(b => b[1] * READ_CELL)]
+  const near = sql`unnest(${ws}::float8[], ${ss}::float8[]) AS b(w, s)`
+  const hit = sql`g.geom && ST_MakeEnvelope(b.w, b.s, b.w + ${READ_CELL}, b.s + ${READ_CELL}, 4326)`
   const ways: WayRow[] = await sql`
     SELECT DISTINCT ON (g.osm_type, g.osm_id) ${wayColumns(sql)} FROM ${near} JOIN geo_places g ON ${hit} WHERE ${isWay(sql)}`
   const [{ hasSurfaces }] = await sql`SELECT to_regclass('road_surfaces') IS NOT NULL AS "hasSurfaces"`
@@ -103,7 +112,7 @@ export async function surroundings(sql: Sql, tunnels: Way[]): Promise<Surroundin
     WHERE g.geom_type = 'line' AND g.tags->>'barrier' IN ('wall', 'retaining_wall', 'city_wall') AND GeometryType(g.geom) = 'LINESTRING'`
   const project = (ring: number[][]) => ring.map(([lng, lat]) => mercator([lng, lat]))
   return {
-    ways: [...tunnels, ...ways.map(toWay).filter((x): x is Way => x !== null && x.brunnel !== 'tunnel')],
+    ways: ways.map(toWay).filter((x): x is Way => x !== null && x.brunnel !== 'tunnel'),
     surfaces: surfaceRows.flatMap(r => r.coords.flatMap(polygon => polygon.map(project))),
     buildings: buildingRows.flatMap(r => r.coords.map(polygon => polygon.map(project))),
     walls: wallRows.map(r => project(r.coords)),
@@ -119,8 +128,11 @@ export async function cutsIn(sql: Sql, dem: Dem, boxes: UnitBox[], tunnels?: Way
   const read = grown(around, READ_PAST)
   const readBounds = bounds(read)
   const found = (tunnels ?? (await tunnelsIn(sql, read))).filter(t => t.points.some(p => p[0] >= readBounds.minX && p[0] <= readBounds.maxX && p[1] >= readBounds.minY && p[1] <= readBounds.maxY))
-  if (!found.some(t => t.layer < 0)) return []
-  const portals = openings(await surroundings(sql, found.filter(t => t.layer < 0)), readBounds)
+  // Only portals that can open into the boxes are read around.
+  const reach = bounds(grown(around, 2 * CUT_MAX))
+  const ends = portalsOf(found, readBounds).filter(({ line: [p] }) => p[0] >= reach.minX && p[0] <= reach.maxX && p[1] >= reach.minY && p[1] <= reach.maxY)
+  if (!ends.length) return []
+  const portals = openings(ends, await surroundings(sql, ends.map(p => p.line[0])), readBounds)
   if (!portals.length) return []
   await dem.load(groundPoints(portals))
   const anchor = (p: Point): UnitPoint => {

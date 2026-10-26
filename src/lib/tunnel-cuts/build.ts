@@ -37,8 +37,9 @@ export const kindOf = (c: RoadClass): BoreKind => (c === 'path' ? 'path' : c ===
 /** A highway or railway way, in mercator units. `layer` is OSM's, 0 where untagged. */
 export type Way = { points: Point[]; cls: RoadClass; layer: number; brunnel: 'tunnel' | 'bridge' | 'ford' | null }
 
-/** What is read around an area. Buildings are outlines whose faces a covered portal opens at. */
+/** What is read around the portals. Buildings are outlines whose faces a covered portal opens at. */
 export type Surroundings = {
+  /** Highways and railways, of which those at grade are what a portal opens onto. */
   ways: Way[]
   /** Outlines of the carriageways at grade, which a cut is fitted to. */
   surfaces: Point[][]
@@ -66,12 +67,15 @@ export type TunnelCut = {
 /** The tunnels mapped underground: a passage under a building is a tunnel with no layer, so only a negative one counts. */
 const underground = (w: Way) => w.brunnel === 'tunnel' && w.layer < 0
 
-/** Each portal's opening, before the ground is read: its approach, bore, measured edges and headwall. `read` is the area whose ways were read. */
-export function openings({ ways, surfaces, buildings, walls }: Surroundings, read: Bounds): Opening[] {
+/** Where a tunnel comes out of the ground: its line from the portal inward, and how far in its bore is drawn. */
+export type Portal = { line: Point[]; reach: number; width: number; kind: BoreKind; layer: number }
+
+const toleranceIn = (read: Bounds) => 1.5 / metresPerUnit((read.minY + read.maxY) / 2)
+
+/** The portals of the tunnels mapped underground: each end that runs on into no other tunnel. `read` is the area whose tunnels were read. */
+export function portalsOf(ways: Way[], read: Bounds): Portal[] {
   const tunnels: Piece[] = ways.filter(underground).map(w => ({ points: w.points, layer: w.layer, width: WIDTH[w.cls], kind: kindOf(w.cls) }))
-  if (!tunnels.length) return []
-  const mid = (read.minY + read.maxY) / 2
-  const tolerance = 1.5 / metresPerUnit(mid)
+  const tolerance = toleranceIn(read)
   // One tunnel's ways may step between layers; each portal reads its own way's layer.
   const layerAt = (q: Point, kind: BoreKind) => {
     let best = { layer: -1, apart: tolerance }
@@ -84,13 +88,18 @@ export function openings({ ways, surfaces, buildings, walls }: Surroundings, rea
   }
   // An end outside what was read may run on into another tunnel.
   const bores = chains(tunnels.map(t => ({ ...t, layer: -1 })), p => !holds(read, p), tolerance)
-  const portals = bores.flatMap(bore => [0, 1].filter(e => bore.grounded[e]).map(e => {
+  return bores.flatMap(bore => [0, 1].filter(e => bore.grounded[e]).map(e => {
     const line = e ? [...bore.points].reverse() : bore.points
     // Where both ends open, each draws its bore halfway, so the two never overlap.
     const reach = bore.grounded[0] && bore.grounded[1] ? Math.min(BORE, along(line).at(-1)! / 2) : BORE
     return { line, reach, width: bore.width, kind: bore.kind, layer: layerAt(line[0], bore.kind) }
   }))
+}
+
+/** Each portal's opening, before the ground is read: its approach, bore, measured edges and headwall, from what lies around it. */
+export function openings(portals: Portal[], { ways, surfaces, buildings, walls }: Surroundings, read: Bounds): Opening[] {
   if (!portals.length) return []
+  const tolerance = toleranceIn(read)
   // Each portal reads only what lies within a cut's length of it.
   const boxed = <T>(items: T[], points: (t: T) => Point[]) => items.map(item => ({ item, bounds: boundsOf(points(item)) }))
   const lines = (kind: BoreKind) => boxed(ways.filter(w => w.brunnel === null && kindOf(w.cls) === kind).map(w => w.points), l => l)

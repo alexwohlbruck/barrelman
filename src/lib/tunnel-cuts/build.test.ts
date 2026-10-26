@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { along, boundsOf, type Point } from '../bridge-mesh/decks'
-import { classOf, groundPoints, openings, solveCuts, type Surroundings, type Way } from './build'
+import { classOf, groundPoints, openings, portalsOf, solveCuts, type Surroundings, type Way } from './build'
 import { HEADROOM, ROOF } from './tunnels'
 
 // About a metre in mercator units at Charlotte's latitude.
@@ -17,7 +17,8 @@ const way = (points: Point[], extra: Partial<Way> = {}): Way => ({ points, cls: 
 const tunnel = (points: Point[], extra: Partial<Way> = {}) => way(points, { brunnel: 'tunnel', layer: -1, ...extra })
 const scene = (ways: Way[], extra: Partial<Surroundings> = {}): Surroundings => ({ ways, surfaces: [], buildings: [], walls: [], ...extra })
 
-const solved = (s: Surroundings, owns = (_: Point) => true) => solveCuts(openings(s, WORLD), hill, owns)
+const opened = (s: Surroundings, read = WORLD) => openings(portalsOf(s.ways, read), s, read)
+const solved = (s: Surroundings, owns = (_: Point) => true) => solveCuts(opened(s), hill, owns)
 
 describe('solveCuts', () => {
   const road = scene([way([at(-200), at(0)]), tunnel([at(0), at(150)])])
@@ -57,9 +58,9 @@ describe('solveCuts', () => {
 
   test('takes no portal where a tunnel runs on past what was read', () => {
     const read = boundsOf([at(-250), at(100)])
-    expect(solveCuts(openings(road, read), hill, () => true)).toHaveLength(1)
+    expect(solveCuts(opened(road, read), hill, () => true)).toHaveLength(1)
     const inward = scene([way([at(250), at(150)]), tunnel([at(150), at(0)])])
-    expect(solveCuts(openings(inward, read), hill, () => true)).toHaveLength(0)
+    expect(solveCuts(opened(inward, read), hill, () => true)).toHaveLength(0)
   })
 
   test('fits the cut to the carriageway surfaced around the road', () => {
@@ -72,7 +73,7 @@ describe('solveCuts', () => {
 
 describe('groundPoints', () => {
   test('spans every vertex a cut is solved along', () => {
-    const found = openings(scene([way([at(-200), at(0)]), tunnel([at(0), at(150)])]), WORLD)
+    const found = opened(scene([way([at(-200), at(0)]), tunnel([at(0), at(150)])]))
     const box = boundsOf(groundPoints(found))
     for (const p of [at(-150), at(0), at(40)]) {
       expect(p[0]).toBeGreaterThan(box.minX)
