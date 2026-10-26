@@ -80,10 +80,11 @@ async function main(sql: Sql) {
   console.log(`Tunnel cuts: ${total} built in ${built} cells.`)
   await lock`SELECT pg_advisory_unlock(${LOCK[0]}, ${LOCK[1]})`
   lock.release()
-  await sql.end()
+  await sql.end({ timeout: 5 })
 }
 
 if (import.meta.main) {
-  await main(postgres(dbUrl, { onnotice, max: 3 }))
+  // A connection past its lifetime keeps `end()` waiting forever once a reserved one has been released: the lock's session lasts the run.
+  await main(postgres(dbUrl, { onnotice, max: 3, max_lifetime: null }))
   process.exit(process.exitCode ?? 0)
 }
