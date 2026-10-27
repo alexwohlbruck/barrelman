@@ -18,6 +18,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ### Fixed
 
+* Restore missing 3D landmark models at startup even when their published release has not changed.
+
 ## [0.10.32] - 2026-10-26
 
 ### Fixed
