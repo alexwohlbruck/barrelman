@@ -40,6 +40,7 @@ import { join, resolve } from 'path'
 import { mkdir, readdir, rename, unlink } from 'fs/promises'
 import { connection as sql } from '../db'
 import { envNumber, envRaw, envString } from '../config/env'
+import { landmarkCacheAvailable } from '../lib/landmark-cache'
 import {
   ensureLandmarksSchema,
   glbBounds,
@@ -355,9 +356,14 @@ async function importSource(source: LandmarkSource, { force, full, log }: Mode):
   result.release = pointer.release
   const [state] = await sql<{ release: string | null }[]>`SELECT release FROM landmark_sources WHERE source = ${source.id}`
   if (!force && state && state.release === pointer.release) {
-    log(`${label} ${source.channel}: release ${pointer.release} already imported`)
-    result.unchanged = true
-    return result
+    const models = await sql<{ path: string | null; sha256: string }[]>`
+      SELECT path, sha256 FROM landmark_models WHERE origin = ${source.id}`
+    if (await landmarkCacheAvailable(models, cacheDir)) {
+      log(`${label} ${source.channel}: release ${pointer.release} already imported`)
+      result.unchanged = true
+      return result
+    }
+    log(`${label}: restoring model cache for release ${pointer.release}`)
   }
 
   // A channel with nothing published is a real answer, not an error: it
