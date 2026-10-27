@@ -10,6 +10,7 @@
 
 import { writeFileSync } from 'fs'
 import JSZip from 'jszip'
+import { db } from '../src/db'
 import {
   parseStops,
   parseRoutes,
@@ -39,102 +40,62 @@ import {
 /**
  * Parse a GTFS ZIP on disk and import stops, routes, stop-route associations,
  * trip patterns, agency transfers, and shapes into PostGIS, then record the
- * feed in gtfs_feeds. Clears any existing rows for the feed first.
+ * feed in gtfs_feeds. Validates before replacing existing rows in one transaction.
  */
 export async function importFeedFile(filepath: string, feedInfo: GtfsFeedInfo) {
-  try {
-    const buffer = await Bun.file(filepath).arrayBuffer()
-    const zip = await JSZip.loadAsync(buffer)
-
-    // Read required files from ZIP
-    const stopsContent = await readZipEntry(zip, 'stops.txt')
-    const routesContent = await readZipEntry(zip, 'routes.txt')
-    const agencyContent = await readZipEntry(zip, 'agency.txt')
-
-    if (!stopsContent) {
-      console.log(`  ⚠ No stops.txt found, skipping`)
-      return
-    }
-
-    // Clear existing data for this feed
-    await clearFeed(feedInfo.feedId)
-
-    // Parse and import stops
-    const stops = parseStops(stopsContent, feedInfo.feedId)
-    const stopsImported = await importStops(stops)
-    console.log(`  ✓ Imported ${stopsImported} stops`)
-
-    // Parse and import routes
-    let routesImported = 0
-    if (routesContent) {
-      const agencyMap = agencyContent ? parseAgencies(agencyContent) : new Map()
-      const routes = parseRoutes(routesContent, feedInfo.feedId, agencyMap)
-      routesImported = await importRoutes(routes)
-      console.log(`  ✓ Imported ${routesImported} routes`)
-    }
-
-    // Derive and import stop→route associations
-    let stopRoutesImported = 0
-    const tripsContent = await readZipEntry(zip, 'trips.txt')
-    const stopTimesContent = await readZipEntry(zip, 'stop_times.txt')
-    if (tripsContent && stopTimesContent) {
-      // Parse the (large) files once and share the records across both
-      // derivers, rather than re-parsing stop_times.txt per call.
-      const tripRecords = parseGtfsRecords(tripsContent)
-      const stopTimeRecords = parseGtfsRecords(stopTimesContent)
-
-      const associations = deriveStopRoutes(tripRecords, stopTimeRecords, feedInfo.feedId)
-      stopRoutesImported = await importStopRoutes(associations)
-      console.log(`  ✓ Imported ${stopRoutesImported} stop-route associations`)
-
-      // Each route's representative point, for search proximity ranking.
-      await updateRouteCentroids(feedInfo.feedId)
-
-      // Trip patterns — the ordered station sequence each route runs, powering
-      // "every line that serves this board→alight directly" alternate lookups.
-      const stopParents = parseStopParents(stopsContent)
-      const patterns = deriveTripPatterns(tripRecords, stopTimeRecords, stopParents, feedInfo.feedId)
-      const patternsImported = await importTripPatterns(feedInfo.feedId, patterns)
-      console.log(`  ✓ Imported ${patternsImported} trip patterns`)
-    }
-
-    // Agency transfers — station-complex membership + min connection times
-    const transfersContent = await readZipEntry(zip, 'transfers.txt')
-    if (transfersContent) {
-      const transfers = parseTransfers(transfersContent, feedInfo.feedId)
-      const transfersImported = await importTransfers(transfers)
-      if (transfersImported > 0) {
-        console.log(`  ✓ Imported ${transfersImported} agency transfers`)
-      }
-    }
-
-    // Parse and import shapes (for route-snapped vehicle interpolation)
-    const shapesContent = await readZipEntry(zip, 'shapes.txt')
-    if (shapesContent) {
-      const shapes = parseShapes(shapesContent)
-      const shapesImported = await importShapes(shapes, feedInfo.feedId)
-      console.log(`  ✓ Imported ${shapesImported} shapes`)
-
-      // Link routes to their canonical shape_id and bikes_allowed
-      if (tripsContent) {
-        const routeShapes = deriveRouteShapes(tripsContent)
-        await updateRouteShapes(routeShapes, feedInfo.feedId)
-        console.log(`  ✓ Linked ${routeShapes.size} routes to shapes`)
-
-        const bikesAllowed = deriveBikesAllowed(tripsContent)
-        const bikeRoutes = [...bikesAllowed.values()].filter(v => v > 0).length
-        if (bikeRoutes > 0) {
-          await updateBikesAllowed(bikesAllowed, feedInfo.feedId)
-          console.log(`  ✓ ${bikeRoutes} routes with bikes allowed`)
-        }
-      }
-    }
-
-    // Record feed in tracking table
-    await recordFeed(feedInfo, stopsImported, routesImported)
-  } catch (err) {
-    console.error(`  ✗ Import error: ${err instanceof Error ? err.message : err}`)
+  const zip = await JSZip.loadAsync(await Bun.file(filepath).arrayBuffer())
+  // Do all parsing before replacing a working feed. Stops without a timetable
+  // look valid on the map but disappear from the router's station candidates.
+  const required = async (name: string) => {
+    const content = await readZipEntry(zip, name)
+    if (!content?.trim()) throw new Error(`${filepath}: missing or empty ${name}`)
+    return content
   }
+  const [stopsContent, routesContent, tripsContent, stopTimesContent, agencyContent, transfersContent, shapesContent] = await Promise.all([
+    required('stops.txt'), required('routes.txt'), required('trips.txt'), required('stop_times.txt'),
+    readZipEntry(zip, 'agency.txt'), readZipEntry(zip, 'transfers.txt'), readZipEntry(zip, 'shapes.txt'),
+  ])
+  const stops = parseStops(stopsContent, feedInfo.feedId)
+  const routes = parseRoutes(routesContent, feedInfo.feedId, agencyContent ? parseAgencies(agencyContent) : new Map())
+  const trips = parseGtfsRecords(tripsContent)
+  const stopTimes = parseGtfsRecords(stopTimesContent)
+  const tripIds = new Set(trips.map(t => t.trip_id))
+  if (stopTimes.some(st => !tripIds.has(st.trip_id))) {
+    throw new Error(`${filepath}: stop_times.txt references unknown trips`)
+  }
+  const associations = deriveStopRoutes(trips, stopTimes, feedInfo.feedId)
+  if (!stops.length || !routes.length || !associations.length) {
+    throw new Error(`${filepath}: feed must contain stops, routes, and stop-route associations`)
+  }
+  const stopIds = new Set(stops.map(s => s.stopId))
+  const routeIds = new Set(routes.map(r => r.routeId))
+  if (associations.some(a => !stopIds.has(a.stopId) || !routeIds.has(a.routeId))) {
+    throw new Error(`${filepath}: timetable references unknown stops or routes`)
+  }
+  const patterns = deriveTripPatterns(trips, stopTimes, parseStopParents(stopsContent), feedInfo.feedId)
+  const transfers = transfersContent ? parseTransfers(transfersContent, feedInfo.feedId) : []
+  const shapes = shapesContent ? parseShapes(shapesContent) : new Map<string, [number, number][]>()
+  const routeShapes = deriveRouteShapes(tripsContent)
+  const bikesAllowed = deriveBikesAllowed(tripsContent)
+
+  // Readers see either the previous complete feed or the new complete feed.
+  // A failed batch rolls back every table, including the feed's import marker.
+  const counts = await db.transaction(async tx => {
+    await clearFeed(feedInfo.feedId, tx)
+    const stopsImported = await importStops(stops, tx)
+    const routesImported = await importRoutes(routes, tx)
+    const stopRoutesImported = await importStopRoutes(associations, tx)
+    await updateRouteCentroids(feedInfo.feedId, tx)
+    const patternsImported = await importTripPatterns(feedInfo.feedId, patterns, tx)
+    const transfersImported = await importTransfers(transfers, tx)
+    const shapesImported = await importShapes(shapes, feedInfo.feedId, tx)
+    await updateRouteShapes(routeShapes, feedInfo.feedId, tx)
+    await updateBikesAllowed(bikesAllowed, feedInfo.feedId, tx)
+    await recordFeed(feedInfo, stopsImported, routesImported, tx)
+    return { stopsImported, routesImported, stopRoutesImported, patternsImported, transfersImported, shapesImported }
+  })
+  console.log(`  ✓ Imported ${counts.stopsImported} stops, ${counts.routesImported} routes, ${counts.stopRoutesImported} stop-route associations`)
+  console.log(`  ✓ Imported ${counts.patternsImported} trip patterns, ${counts.transfersImported} agency transfers, ${counts.shapesImported} shapes`)
 }
 
 export async function readZipEntry(zip: JSZip, filename: string): Promise<string | null> {
