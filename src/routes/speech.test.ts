@@ -1,14 +1,14 @@
 import { beforeEach, describe, expect, mock, test } from 'bun:test'
 import { Elysia } from 'elysia'
+import { createSpeechRoutes } from './speech'
 let caller: 'service' | 'account' | 'anonymous' = 'service'
 let authorized = true
-mock.module('../middleware/api-auth', () => ({ identifyCaller: async () => ({ caller: { kind: caller }, ...(authorized ? {} : { error: { status: 401, body: { error: 'Unauthorized' } } }) }) }))
-const getCatalog = mock(async () => ({ model: 'kokoro:v1.0', voices: [] }))
+const getCatalog = mock(async () => ({ model: 'kokoro:v1.0', voices: [], rate: { min: 0.75, max: 1.5, default: 1, native: true as const }, inflection: false as const }))
 const synthesize = mock(async () => new Uint8Array([1, 2, 3]))
-const { SpeechError } = await import('../services/speech.service')
-mock.module('../services/speech.service', () => ({ SpeechError, speechService: { getCatalog, synthesize } }))
-const { speechRoutes } = await import('./speech')
-const app = new Elysia().use(speechRoutes)
+const app = new Elysia().use(createSpeechRoutes({
+  identifyCaller: async () => ({ caller: { kind: caller }, ...(authorized ? {} : { error: { status: 401, body: { error: 'Unauthorized' } } }) }),
+  service: { getCatalog, synthesize },
+}))
 const request = (method = 'GET', body?: unknown) => app.handle(new Request('http://localhost/speech', { method, ...(body ? { body: JSON.stringify(body), headers: { 'Content-Type': 'application/json' } } : {}) }))
 beforeEach(() => { caller = 'service'; authorized = true; synthesize.mockClear() })
 describe('speech service access', () => {
