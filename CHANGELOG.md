@@ -10,6 +10,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.10.33] - 2026-10-27
+
 ### Added
 
 * Generate navigation speech with selectable voices, languages and speed using an optional self-hosted Kokoro container.
