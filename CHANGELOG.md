@@ -10,6 +10,12 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.10.34] - 2026-10-27
+
+### Fixed
+
+* Restore missing 3D landmark models at startup even when their published release has not changed.
+
 ## [0.10.33] - 2026-10-27
 
 ### Added
