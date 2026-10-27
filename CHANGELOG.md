@@ -10,6 +10,18 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.10.33] - 2026-10-27
+
+### Added
+
+* Generate navigation speech with selectable voices, languages and speed using an optional self-hosted Kokoro container.
+
+### Changed
+
+### Fixed
+
+* Restore missing 3D landmark models at startup even when their published release has not changed.
+
 ## [0.10.32] - 2026-10-26
 
 ### Fixed

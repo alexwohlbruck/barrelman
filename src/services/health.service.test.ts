@@ -1,4 +1,4 @@
-import { describe, test, expect, mock, beforeEach } from 'bun:test'
+import { describe, test, expect, mock, beforeEach, afterEach } from 'bun:test'
 
 // ── Mocks ─────────────────────────────────────────────────────────────────────
 
@@ -16,7 +16,7 @@ mock.module('../db', () => ({
 const { checkHealth, redactHealth, resetHealthCache } = await import('./health.service')
 
 // Mock MOTIS health check — returns ok by default
-const mockCheckMotisHealth = mock(async () => ({ status: 'ok' as const, message: undefined as string | undefined }))
+const mockCheckMotisHealth = mock(async () => ({ status: 'ok' as 'ok' | 'unavailable', message: undefined as string | undefined }))
 
 /**
  * Every HTTP probe (GraphHopper, Martin, Pelias) goes through this. Default is
@@ -29,9 +29,9 @@ const mockFetch = mock(async (url: string | URL | Request) => {
   const href = String(url)
   if (failingHosts.some((host) => href.includes(host))) throw new Error(`connect ECONNREFUSED ${href}`)
   return okResponse()
-}) as unknown as typeof fetch
+})
 
-const deps = () => ({ checkMotisHealth: mockCheckMotisHealth, fetchFn: mockFetch })
+const deps = () => ({ checkMotisHealth: mockCheckMotisHealth, fetchFn: mockFetch as unknown as typeof fetch })
 
 // ── Setup ─────────────────────────────────────────────────────────────────────
 
@@ -218,4 +218,28 @@ describe('redactHealth', () => {
     // Messages we author ourselves carry no internals and are the useful part.
     expect(publicView.endpoints.find((e) => e.group === 'transit')?.message).toMatch(/motis/)
   })
+})
+
+const originalTtsUrl = process.env.TTS_URL
+afterEach(() => {
+  if (originalTtsUrl === undefined) delete process.env.TTS_URL
+  else process.env.TTS_URL = originalTtsUrl
+})
+
+test('disabled speech is optional and does not probe an empty URL', async () => {
+  process.env.TTS_URL = ''
+  const before = mockFetch.mock.calls.length
+  const result = await checkHealth(deps())
+  expect(result.dependencies.tts).toMatchObject({ status: 'unavailable', optional: true })
+  expect(result.status).toBe('ok')
+  expect(mockFetch.mock.calls.slice(before).some(([url]) => String(url).includes('tts'))).toBe(false)
+})
+
+test('speech health is reported without degrading routing', async () => {
+  process.env.TTS_URL = 'http://tts:8880'
+  failingHosts = ['tts:8880']
+  const result = await checkHealth(deps())
+  expect(result.dependencies.tts).toMatchObject({ status: 'unavailable', optional: true })
+  expect(result.status).toBe('ok')
+  expect(endpoint(result, 'routing').status).toBe('ok')
 })
