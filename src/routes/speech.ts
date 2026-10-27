@@ -2,9 +2,15 @@ import { Elysia, t } from 'elysia'
 import { identifyCaller } from '../middleware/api-auth'
 import { SpeechError, speechService } from '../services/speech.service'
 
-export const speechRoutes = new Elysia({ prefix: '/speech' })
+export function createSpeechRoutes(deps: {
+  identifyCaller?: typeof identifyCaller
+  service?: Pick<typeof speechService, 'getCatalog' | 'synthesize'>
+} = {}) {
+  const identify = deps.identifyCaller ?? identifyCaller
+  const service = deps.service ?? speechService
+  return new Elysia({ prefix: '/speech' })
   .onBeforeHandle(async ({ headers, request, set }) => {
-    const { caller, error } = await identifyCaller(headers, request)
+    const { caller, error } = await identify(headers, request)
     if (error) { set.status = error.status; return error.body }
     if (caller.kind === 'account') {
       set.status = 403
@@ -12,14 +18,14 @@ export const speechRoutes = new Elysia({ prefix: '/speech' })
     }
   })
   .get('/', async ({ set }) => {
-    try { return await speechService.getCatalog() } catch {
+    try { return await service.getCatalog() } catch {
       set.status = 503
       return { error: 'Speech synthesis unavailable' }
     }
   }, { detail: { tags: ['Speech'], summary: 'List available speech voices and controls', description: 'Optional self-hosted TTS. Requires the instance service key; customer billing is not enabled for speech.' } })
   .post('/', async ({ body, set }) => {
     try {
-      const audio = await speechService.synthesize(body)
+      const audio = await service.synthesize(body)
       return new Response(new Uint8Array(audio).buffer, { headers: { 'Content-Type': 'audio/mpeg', 'Cache-Control': 'private, no-store' } })
     } catch (error) {
       set.status = error instanceof SpeechError ? error.status : 503
@@ -32,3 +38,7 @@ export const speechRoutes = new Elysia({ prefix: '/speech' })
     }),
     detail: { tags: ['Speech'], summary: 'Synthesize a short instruction as MP3', description: 'Plain text only. Native rate multiplier 0.75–1.5. Unsupported voices/locales return 422; busy returns 429; unavailable returns 503. Requires the instance service key.', responses: { 200: { description: 'MP3 audio', content: { 'audio/mpeg': { schema: { type: 'string', format: 'binary' } } } } } },
   })
+
+}
+
+export const speechRoutes = createSpeechRoutes()
