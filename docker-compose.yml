@@ -35,6 +35,18 @@ x-logging: &default-logging
     max-file: "3"
 
 services:
+  tts:
+    profiles: ["tts"]
+    image: ${TTS_IMAGE:-ghcr.io/remsky/kokoro-fastapi-cpu:v0.9.0}
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      WEB_CONCURRENCY: "1"
+      DEFAULT_VOICE: af_heart
+      MODEL_AUTO_UNLOAD_TIMEOUT_SECONDS: "0"
+    expose:
+      - "8880"
+
   barrelman-db:
     container_name: barrelman-db
     image: alexwohlbruck/barrelman-db:latest
@@ -242,6 +254,8 @@ services:
       # enrichment backfill get their own untimed connections (see src/db.ts).
       BARRELMAN_STATEMENT_TIMEOUT_MS: ${BARRELMAN_STATEMENT_TIMEOUT_MS:-10000}
       OLLAMA_HOST: ${OLLAMA_HOST:-http://ollama:11434}
+      TTS_URL: ${TTS_URL:-}
+      TTS_MODEL_REVISION: ${TTS_MODEL_REVISION:-v1.0}
       PORT: 5001
       BARRELMAN_API_KEY: ${BARRELMAN_API_KEY:-brm_dev_changeme}
       GRAPHHOPPER_URL: http://barrelman-graphhopper:8989

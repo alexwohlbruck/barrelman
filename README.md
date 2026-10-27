@@ -833,3 +833,27 @@ Barrelman is source-available under the **Apache License 2.0 with the Commons Cl
 In short: **free to self-host and use, including inside your business — but you may not sell it.** You can run it for yourself or your company's internal use (for example, an on-prem GIS API for your own business), fork it, and contribute back. You may not resell it, or host it as a paid service, where the value comes substantially from Barrelman. See [LICENSING.md](LICENSING.md) for a plain-language explanation with examples.
 
 Commercial and enterprise licensing — including a managed, enterprise-grade GIS REST API, dedicated support, and SLAs — is available. Reach out to Alex Wohlbruck to discuss.
+
+
+## Navigation speech
+
+Speech is optional and runs in a separate [Kokoro-FastAPI](https://github.com/remsky/Kokoro-FastAPI) container. It does not block routing startup.
+
+Set `TTS_URL=http://tts:8880` in `.env`, then run:
+
+```sh
+docker compose --profile tts up -d tts barrelman
+```
+
+Recreate only Barrelman when changing its environment; ordinary `src/` edits still hot reload in development. The CPU image is pinned to `v0.9.0` and supports amd64/arm64. To use NVIDIA, install the NVIDIA Container Toolkit and include `docker-compose.tts-gpu.yml` with the base Compose file (and the dev override in development). That override selects the GPU image and reserves one NVIDIA device. Apple Silicon Docker uses CPU; this override does not enable Apple MPS.
+
+The service is private to the Compose network. Configure Parchment's Barrelman integration with this instance's host and **instance service key** (`BARRELMAN_API_KEY`), and enable **Speech synthesis**. Customer account keys are not accepted for speech; it is not a metered customer endpoint in this release. With no configured authentication, local development follows the other endpoints' anonymous mode.
+
+* `GET /speech`: model revision, available voices/languages, native rate limits, and whether inflection is supported.
+* `POST /speech`: `{ "text": "Turn left", "language": "en-US", "voice": "af_heart", "rate": 1.25 }`, returning MP3.
+
+Rate 1 is normal, larger values are faster; the application exposes 0.75–1.5 as a conservative initial product range, not a verified acoustic guarantee. Text is limited to 500 characters. Voice tags/SSML are disabled. Kokoro has no arbitrary inflection control in this adapter; `inflection` is false. The voice catalog determines supported locales; do not promise multiple voices in every language.
+
+Inference has a three-second upstream deadline and two concurrent slots. Generated audio is held only in a bounded in-memory cache (128 entries / 8 MiB, maximum 2 MiB per clip), keyed by text, locale, model revision, voice and rate. Set `TTS_MODEL_REVISION` when changing weights to invalidate cache identity; restart after replacing assets. Model residency is separate from generated-audio caching. No routing dependency is added. Turning off the container, leaving `TTS_URL` blank, or unsupported speech causes Parchment to fall back to browser speech where available.
+
+The server, official inference code and weights declare Apache-2.0; preserve their notices and review selected voice/dependency terms. No paid inference API is used; hosting still consumes CPU/RAM or GPU resources. Audition short prompts, street names and faster rates in every intended locale before production. No host capacity or end-to-end latency benchmark has been established.

@@ -145,6 +145,7 @@ const swaggerConfig = {
       { name: 'Routing', description: 'Turn-by-turn routing enriched with elevation and path details, and map matching: snapping a GPS trace — dense or sparse — to the roads it followed.' },
       { name: 'Isochrone', description: 'Reachability polygons — how far you get in N minutes, per travel mode.' },
       { name: 'GraphHopper', 'x-displayName': 'GraphHopper', description: 'Raw passthrough to the GraphHopper routing engine, for its endpoints that barrelman does not wrap. Responses are GraphHopper\'s own.' },
+      { name: 'Speech', description: 'Optional self-hosted navigation speech. Requires the instance service credential; account API keys cannot access inference.' },
       { name: 'Transit', description: 'Trip planning via MOTIS plus live GTFS-RT data — vehicle positions, departures, alerts, stops, route detail, and station geometry.' },
       { name: 'GBFS', 'x-displayName': 'GBFS', description: 'Shared-mobility (bikeshare and scooter) systems and real-time station availability from GBFS feeds.' },
       { name: 'Auth', description: 'Sign-in: email codes, passkeys and OAuth. Used by the console, not by API clients, which authenticate with an API key.' },

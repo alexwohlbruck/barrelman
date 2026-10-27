@@ -429,3 +429,17 @@ the parallel worker count, so raise the two together.
 
 Search latency is dominated by whether the working set stays resident, so these
 matter more than they look.
+
+## Navigation speech
+
+Speech is optional and requires the instance service credential. Customer account keys cannot call `/speech`.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `TTS_URL` | empty (disabled) | Private Kokoro URL, usually `http://tts:8880` |
+| `TTS_MODEL_REVISION` | `v1.0` | Cache identity; change when replacing model assets |
+| `TTS_IMAGE` | `ghcr.io/remsky/kokoro-fastapi-cpu:v0.9.0` | CPU container image |
+
+Set `TTS_URL`, then run `docker compose --profile tts up -d tts barrelman`. For NVIDIA, include `-f docker-compose.yml -f docker-compose.tts-gpu.yml` before `--profile tts`; install NVIDIA Container Toolkit first. The service has no public port. `/health` and the console report speech as an optional dependency, so its absence never degrades routing.
+
+`GET /speech` lists voices and native speed controls; `POST /speech` accepts plain text, language, optional voice and a rate from 0.75 to 1.5, returning MP3. Text is limited to 500 characters. Inflection is unsupported. Parchment falls back to browser speech on failure or unsupported languages. See the [Parchment speech setup](https://docs.parchment.app/barrelman/speech) for user controls and device checks.
