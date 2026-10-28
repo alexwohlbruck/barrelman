@@ -6,6 +6,8 @@ import { resolveTileBundle } from '../config/tile-bundles'
 import { createDeckTiles, DECK_TILE_ZOOMS, encodeDeckTile, withDeckField, workerDeckTileBuilder, type DeckTile } from '../lib/bridge-mesh/tile-pieces'
 import { bridgeMeshDirectory } from '../lib/bridge-mesh/files'
 import { deckFilesIn } from '../lib/bridge-mesh/deck-lookup'
+import { cachedLineSources, readLineSources, type LineSources } from '../lib/line-elevation/lookup'
+import { ELEVATION_MIN_ZOOM, elevateTile } from '../lib/line-elevation/tile'
 
 function getMartinUrl() {
   return process.env.MARTIN_URL || 'http://barrelman-martin:3000'
@@ -83,10 +85,11 @@ export function acceptsGzip(header: string | undefined): boolean {
 }
 
 export function createTileRoutes(
-  deps: { fetchTile?: TileFetcher; portolanTilesDir?: string; deckTile?: (z: number, x: number, y: number) => Promise<DeckTile> } = {},
+  deps: { fetchTile?: TileFetcher; portolanTilesDir?: string; deckTile?: (z: number, x: number, y: number) => Promise<DeckTile>; lineSources?: LineSources } = {},
 ) {
   const fetchTile: TileFetcher = deps.fetchTile || ((url: string) => fetch(url))
   const deckTile = deps.deckTile ?? createDeckTiles(deckFilesIn, workerDeckTileBuilder(bridgeMeshDirectory()))
+  const lineSources = deps.lineSources ?? cachedLineSources(readLineSources)
 
   /**
    * Portolan tiles are static files, not Martin: `portolan sync` writes MVT
@@ -303,7 +306,11 @@ export function createTileRoutes(
         set.headers['content-type'] = 'application/x-protobuf'
         set.headers['cache-control'] = 'public, max-age=3600'
         set.headers[CORS] = '*'
-        return file
+        const zoom = Number(z)
+        if (zoom < ELEVATION_MIN_ZOOM) return file
+        const elevated = await elevateTile(new Uint8Array(await file.arrayBuffer()), 'ribbons', zoom, Number(x), Number(yBase), lineSources)
+        if (!elevated.complete) set.headers['cache-control'] = 'no-store'
+        return elevated.bytes
       },
       {
         params: t.Object({
@@ -316,7 +323,7 @@ export function createTileRoutes(
           tags: ['Tiles'],
           summary: 'Portolan corrected-geometry tile',
           description:
-            'Serves a static MVT tile from the portolan pyramid. 204 for tiles inside the pyramid with no features.',
+            'Serves a static MVT tile from the portolan pyramid. 204 for tiles inside the pyramid with no features.\n\nFrom zoom 13, a `ribbons` feature riding a bridge deck or running through a tunnel carries an `elevation` property, in the format the Martin proxy describes for `bicycle_ways`.',
         },
       },
     )
@@ -368,8 +375,13 @@ export function createTileRoutes(
          * cache must not hand a gzipped tile to a client that cannot read it.
          */
         let body = new Uint8Array(await response.arrayBuffer())
-        // Deck meshes ride in the tile they are drawn with, for a client that asks: see lib/bridge-mesh/tile-pieces.ts.
         const zoom = Number(z)
+        if (zoom >= ELEVATION_MIN_ZOOM && martinSource.split(',').includes('bicycle_ways')) {
+          const elevated = await elevateTile(body, 'bicycle_ways', zoom, Number(x), Number(y.replace(/\..*$/, '')), lineSources)
+          body = elevated.bytes as Uint8Array<ArrayBuffer>
+          if (!elevated.complete) set.headers['cache-control'] = 'no-store'
+        }
+        // Deck meshes ride in the tile they are drawn with, for a client that asks: see lib/bridge-mesh/tile-pieces.ts.
         if (query.decks === '1' && zoom >= DECK_TILE_ZOOMS.min && zoom <= DECK_TILE_ZOOMS.max && martinSource.split(',').includes('bridge_decks')) {
           let decks: DeckTile
           try {
@@ -399,7 +411,7 @@ export function createTileRoutes(
           tags: ['Tiles'],
           summary: 'Vector tile (Martin proxy)',
           description:
-            'Proxies Mapbox Vector Tiles from the Martin tile server. Authenticates with an ordinary API key, via Bearer header or `?api_key=` for map libraries that cannot set headers.\n\nWith `?decks=1`, a tile at zoom 14–16 that includes `bridge_decks` also carries the 3D bridge deck meshes drawn over it, cut to the tile, in protobuf field 20 (skipped by MVT readers).\n\nSeveral sources can be served as one tile, either by naming a bundle (`detail`) or by joining source names with commas (`buildings_3d,parking_areas`). One request carrying five overlays beats five requests carrying one each: a map view is thirty to sixty tiles per source. A member below its own minzoom contributes nothing; the tile 404s only when every member is above its maxzoom.',
+            'Proxies Mapbox Vector Tiles from the Martin tile server. Authenticates with an ordinary API key, via Bearer header or `?api_key=` for map libraries that cannot set headers.\n\nWith `?decks=1`, a tile at zoom 14–16 that includes `bridge_decks` also carries the 3D bridge deck meshes drawn over it, cut to the tile, in protobuf field 20 (skipped by MVT readers).\n\nFrom zoom 13, a `bicycle_ways` feature on a bridge deck or in a tunnel carries an `elevation` property: its height above or below the terrain along that stretch, for drawing it in 3D. Runs are separated by `;`; each is comma-separated integer triples: the first `lng×1e7,lat×1e7,decimetres`, each later one the change in `lng×1e7,lat×1e7` from the point before and its own height in decimetres. Points lie on the feature line; heights are interpolated between the points of a run, and the line is on the ground outside every run.\n\nSeveral sources can be served as one tile, either by naming a bundle (`detail`) or by joining source names with commas (`buildings_3d,parking_areas`). One request carrying five overlays beats five requests carrying one each: a map view is thirty to sixty tiles per source. A member below its own minzoom contributes nothing; the tile 404s only when every member is above its maxzoom.',
         },
       },
     )
