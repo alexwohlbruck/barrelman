@@ -20,7 +20,8 @@ import { degreeBox, grid, toUnits, type UnitBox } from '../src/lib/bridge-decks/
 import { unprojected } from '../src/lib/bridge-mesh/decks'
 import type { Way } from '../src/lib/tunnel-cuts/build'
 import { CUT_MAX } from '../src/lib/tunnel-cuts/tunnels'
-import { LOCK, READ_PAST, rebuildBoxes, tableMissing, tunnelsIn } from './tunnel-cut-cells'
+import { LOCK, READ_PAST, rebuildBoxes, tableMissing } from './tunnel-cut-cells'
+import { tunnelsIn } from '../src/lib/tunnel-cuts/way-rows'
 
 const args = process.argv.slice(2)
 const CELL = Number(argValue(args, 'cell') ?? 0.25)
