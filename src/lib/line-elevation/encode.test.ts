@@ -40,6 +40,13 @@ describe('thin', () => {
     expect(thin(run([0, 3, 6, 6, 6, 3, 0])).map(p => p.d)).toEqual([0, 12, 24, 36])
   })
 
+  test('keeps the points a curve needs for its path to stay on the line', () => {
+    const curve = Array.from({ length: 21 }, (_, i) => ({ p: at(Math.sin(i / 20 * Math.PI / 2) * 200, (1 - Math.cos(i / 20 * Math.PI / 2)) * 200), d: i * 15.7, height: -9 }))
+    const kept = thin(curve)
+    expect(kept.length).toBeGreaterThan(4)
+    expect(thin(curve.map((c, i) => ({ ...c, p: at(i * 15.7, 0) }))).length).toBe(2)
+  })
+
   test('keeps a bump above the tolerance only', () => {
     expect(thin(run([0, 0.1, 0])).length).toBe(2)
     expect(thin(run([0, 0.5, 0])).length).toBe(3)

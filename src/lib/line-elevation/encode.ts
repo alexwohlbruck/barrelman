@@ -6,11 +6,13 @@
  * above the terrain for a run prefixed `~`. Heights between a run's points are
  * interpolated; off any run a line lies on the ground.
  */
-import { unprojected, type Point } from '../bridge-mesh/decks'
+import { metresPerUnit, unprojected, type Point } from '../bridge-mesh/decks'
 import type { Sample } from './match'
 
-/** Metres a dropped point may stand off the line between the points kept around it. */
+/** Metres a dropped point's height may differ from that interpolated between the points kept around it. */
 export const THIN_TOLERANCE = 0.2
+/** Metres a dropped point may stand off the straight path between the points kept around it, which a map follows where it has neither. */
+export const THIN_PATH_TOLERANCE = 1
 /** Metres of a line a run carries on across where it rides nothing, as where a deck's match briefly fails between tracks. */
 export const GAP = 60
 
@@ -45,18 +47,29 @@ export function runsOf(samples: Sample[]): Run[] {
   return runs
 }
 
-/** A run with every point dropped that interpolating its kept neighbours puts within `tolerance` of its height. */
-export function thin(run: RunPoint[], tolerance = THIN_TOLERANCE): RunPoint[] {
+/** How far a point stands off the straight path from `a` to `b`, in metres. */
+function offPath(p: Point, a: Point, b: Point): number {
+  const dx = b[0] - a[0], dy = b[1] - a[1]
+  const length = dx * dx + dy * dy
+  const t = length ? Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / length)) : 0
+  return Math.hypot(a[0] + dx * t - p[0], a[1] + dy * t - p[1]) * metresPerUnit(p[1])
+}
+
+/** A run with every point dropped that its kept neighbours put within `tolerance` of its height and the path tolerance of its place. */
+export function thin(run: RunPoint[], tolerance = THIN_TOLERANCE, pathTolerance = THIN_PATH_TOLERANCE): RunPoint[] {
   if (run.length < 3) return run
   const keep = new Array<boolean>(run.length).fill(false)
   keep[0] = keep[run.length - 1] = true
   const stack: Array<[number, number]> = [[0, run.length - 1]]
   while (stack.length) {
     const [a, b] = stack.pop()!
-    let worst = -1, off = tolerance
+    let worst = -1, off = 1
     for (let i = a + 1; i < b; i++) {
       const t = (run[i].d - run[a].d) / (run[b].d - run[a].d || 1)
-      const error = Math.abs(run[i].height - (run[a].height + (run[b].height - run[a].height) * t))
+      const error = Math.max(
+        Math.abs(run[i].height - (run[a].height + (run[b].height - run[a].height) * t)) / tolerance,
+        offPath(run[i].p, run[a].p, run[b].p) / pathTolerance,
+      )
       if (error > off) [worst, off] = [i, error]
     }
     if (worst < 0) continue
