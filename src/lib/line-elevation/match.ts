@@ -15,7 +15,10 @@ const ALIGNED = Math.cos((30 * Math.PI) / 180)
 /** Which sources a line may ride: those holding its own OSM way, or any of some kinds that run alongside it. */
 export type Rides = { way: number } | { kinds: SourceKind[] }
 
-export type Sample = { p: Point; d: number; height: number | null }
+/** A point of a line, with the height of what it rides there, if anything, and whether that height is over the terrain. */
+export type Sample = { p: Point; d: number; height: number | null; relative?: boolean }
+
+type Ride = { height: number; relative: boolean }
 
 type Segment = { source: HeightSource; i: number }
 
@@ -67,8 +70,8 @@ function onSegment(a: Point, b: Point, q: Point): { distance: number; t: number 
 }
 
 /** The height at `p` of the nearest segment it rides, or null; `direction` (unit) is the line's there, checked when given. */
-export function heightAt(segments: Segment[], p: Point, direction?: Point): number | null {
-  let best: { distance: number; height: number } | null = null
+export function heightAt(segments: Segment[], p: Point, direction?: Point): Ride | null {
+  let best: { distance: number; height: number; relative: boolean } | null = null
   for (const { source, i } of segments) {
     const [a, b] = [source.points[i - 1], source.points[i]]
     const hit = onSegment(a, b, p)
@@ -77,9 +80,9 @@ export function heightAt(segments: Segment[], p: Point, direction?: Point): numb
       const l = Math.hypot(b[0] - a[0], b[1] - a[1])
       if (Math.abs((direction[0] * (b[0] - a[0]) + direction[1] * (b[1] - a[1])) / l) < ALIGNED) continue
     }
-    best = { distance: hit.distance, height: source.heights[i - 1] + (source.heights[i] - source.heights[i - 1]) * hit.t }
+    best = { distance: hit.distance, height: source.heights[i - 1] + (source.heights[i] - source.heights[i - 1]) * hit.t, relative: source.relative }
   }
-  return best?.height ?? null
+  return best && { height: best.height, relative: best.relative }
 }
 
 /** A line read every SAMPLE_STEP metres, its own vertices included, with the height each point rides at. */
@@ -90,10 +93,11 @@ export function sampleLine(line: Point[], index: SourceIndex, rides: Rides): Sam
   if (own && !own.length) return points.map((p, i) => ({ p, d: d[i], height: null }))
   const kinds = 'kinds' in rides ? rides.kinds : []
   return points.map((p, i) => {
-    if (own) return { p, d: d[i], height: heightAt(own, p) }
+    const sample = (ride: Ride | null): Sample => ({ p, d: d[i], height: ride?.height ?? null, relative: ride?.relative })
+    if (own) return sample(heightAt(own, p))
     const [a, b] = i < points.length - 1 ? [p, points[i + 1]] : [points[i - 1], p]
     const l = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1
     const near = index.segmentsNear(p, kinds)
-    return { p, d: d[i], height: near.length ? heightAt(near, p, [(b[0] - a[0]) / l, (b[1] - a[1]) / l]) : null }
+    return sample(near.length ? heightAt(near, p, [(b[0] - a[0]) / l, (b[1] - a[1]) / l]) : null)
   })
 }

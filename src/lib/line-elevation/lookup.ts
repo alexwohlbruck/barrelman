@@ -23,14 +23,19 @@ export function tileBox(z: number, x: number, y: number, metres: number): { boun
 export const readLineSources: LineSources = async (z, x, y) => {
   const decks = tileBox(z, x, y, DECK_MARGIN).degrees
   const tunnels = tileBox(z, x, y, TUNNEL_MARGIN)
-  const [deckRows, ways] = await Promise.all([
+  const [w, s, e, n] = tunnels.degrees
+  const [deckRows, ways, cuts] = await Promise.all([
     connection<DeckRow[]>`
       SELECT ways::text[] AS ways, kind, edges, heights, ground, step, ST_AsGeoJSON(geom)::json->'coordinates' AS coords
       FROM bridge_decks WHERE geom && ST_MakeEnvelope(${decks[0]}, ${decks[1]}, ${decks[2]}, ${decks[3]}, 4326)`,
     tunnelsIn(connection, tunnels.degrees, { underground: true }),
+    connection<Array<{ portal: number[] }>>`
+      SELECT ST_AsGeoJSON(ST_PointN(geom, at + 1))::json->'coordinates' AS portal
+      FROM tunnel_cuts WHERE geom && ST_MakeEnvelope(${w}, ${s}, ${e}, ${n}, 4326)`,
   ])
   const fromDecks = deckRows.map(row => deckSource(row, mercator)).filter((s): s is HeightSource => s !== null)
-  return [...fromDecks, ...tunnelSources(ways, tunnels.bounds)]
+  const portals = cuts.flatMap(c => (c.portal ? [mercator(c.portal)] : []))
+  return [...fromDecks, ...tunnelSources(ways, tunnels.bounds, portals)]
 }
 
 /** Sources by tile, read once however many ask at the same time, and kept a while. */

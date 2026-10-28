@@ -2,26 +2,45 @@
  * The `elevation` feature property: runs separated by `;`, each a list of
  * integer triples. The first is lng×1e7, lat×1e7 and height in decimetres; each
  * later one the change in lng×1e7 and lat×1e7 from the point before, and that
- * point's own height. Heights between a run's points are interpolated; off any
- * run a line lies on the ground.
+ * point's own height. Heights are above sea level in the terrain's datum, or
+ * above the terrain for a run prefixed `~`. Heights between a run's points are
+ * interpolated; off any run a line lies on the ground.
  */
 import { unprojected, type Point } from '../bridge-mesh/decks'
 import type { Sample } from './match'
 
 /** Metres a dropped point may stand off the line between the points kept around it. */
 export const THIN_TOLERANCE = 0.2
+/** Metres of a line a run carries on across where it rides nothing, as where a deck's match briefly fails between tracks. */
+export const GAP = 60
+
+export const RELATIVE_PREFIX = '~'
 
 export type RunPoint = { p: Point; d: number; height: number }
+export type Run = { points: RunPoint[]; relative: boolean }
 
-/** The stretches of a sampled line that ride something, each with the ground point either side of it to climb from. */
-export function runsOf(samples: Sample[]): RunPoint[][] {
-  const runs: RunPoint[][] = []
+/**
+ * The stretches of a sampled line that ride something, carried across short
+ * gaps. A run over the terrain takes the ground point either side of it to
+ * climb from; one at a deck's own heights meets the ground at the deck's ends.
+ */
+export function runsOf(samples: Sample[]): Run[] {
+  const runs: Run[] = []
+  const rides = (s: Sample, relative: boolean) => s.height !== null && !!s.relative === relative
   for (let i = 0; i < samples.length; i++) {
     if (samples[i].height === null) continue
+    const relative = !!samples[i].relative
     const start = i
-    while (i + 1 < samples.length && samples[i + 1].height !== null) i++
-    const from = Math.max(0, start - 1), to = Math.min(samples.length - 1, i + 1)
-    runs.push(samples.slice(from, to + 1).map(s => ({ p: s.p, d: s.d, height: s.height ?? 0 })))
+    let end = i
+    for (let j = i + 1; j < samples.length && samples[j].d - samples[end].d <= GAP; j++) {
+      if (rides(samples[j], relative)) end = j
+      else if (samples[j].height !== null) break
+    }
+    i = end
+    const from = relative ? Math.max(0, start - 1) : start
+    const to = relative ? Math.min(samples.length - 1, end + 1) : end
+    const points = samples.slice(from, to + 1).filter((s, k) => rides(s, relative) || from + k < start || from + k > end)
+    runs.push({ relative, points: points.map(s => ({ p: s.p, d: s.d, height: rides(s, relative) ? s.height! : 0 })) })
   }
   return runs
 }
@@ -47,30 +66,30 @@ export function thin(run: RunPoint[], tolerance = THIN_TOLERANCE): RunPoint[] {
   return run.filter((_, i) => keep[i])
 }
 
-/** A run as its triples, or null when it is too short or never leaves the ground. */
-export function encodeRun(run: RunPoint[]): string | null {
+/** A run as its triples, or null when it is too short or, over the terrain, never leaves it. */
+export function encodeRun({ points, relative }: Run): string | null {
   const triples: number[][] = []
-  for (const { p, height } of run) {
+  for (const { p, height } of points) {
     const [lng, lat] = unprojected(p)
     const point = [Math.round(lng * 1e7), Math.round(lat * 1e7), Math.round(height * 10)]
     const last = triples.at(-1)
     if (last && last[0] === point[0] && last[1] === point[1]) continue
     triples.push(point)
   }
-  if (triples.length < 2 || triples.every(t => t[2] === 0)) return null
-  return triples.map((t, i) => (i ? [t[0] - triples[i - 1][0], t[1] - triples[i - 1][1], t[2]] : t).join(',')).join(',')
+  if (triples.length < 2 || (relative && triples.every(t => t[2] === 0))) return null
+  return (relative ? RELATIVE_PREFIX : '') + triples.map((t, i) => (i ? [t[0] - triples[i - 1][0], t[1] - triples[i - 1][1], t[2]] : t).join(',')).join(',')
 }
 
 /** The property for a line's sampled parts, or null when none of it leaves the ground. */
 export function encodeElevation(parts: Sample[][]): string | null {
-  const runs = parts.flatMap(runsOf).map(run => encodeRun(thin(run))).filter((r): r is string => r !== null)
+  const runs = parts.flatMap(runsOf).map(run => encodeRun({ ...run, points: thin(run.points) })).filter((r): r is string => r !== null)
   return runs.length ? runs.join(';') : null
 }
 
 /** The runs of a property, as [lng, lat, metres] points. */
 export function decodeElevation(text: string): Array<Array<[number, number, number]>> {
   return text.split(';').map(run => {
-    const n = run.split(',').map(Number)
+    const n = run.replace(RELATIVE_PREFIX, '').split(',').map(Number)
     const out: Array<[number, number, number]> = []
     let lng = 0, lat = 0
     for (let i = 0; i + 2 < n.length; i += 3) {

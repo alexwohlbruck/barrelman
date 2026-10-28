@@ -4,7 +4,7 @@ import type { HeightSource } from './sources'
 import { at } from './test-geometry'
 
 const deck = (extra: Partial<HeightSource> = {}): HeightSource => ({
-  points: [at(100, 0), at(200, 0)], heights: [0, 10], half: 5, kind: 'rail', ways: [42], ...extra,
+  points: [at(100, 0), at(200, 0)], heights: [0, 10], relative: false, half: 5, kind: 'rail', ways: [42], ...extra,
 })
 
 describe('sampleLine', () => {
