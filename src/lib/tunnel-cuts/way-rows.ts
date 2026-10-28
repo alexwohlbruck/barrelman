@@ -29,7 +29,7 @@ export function toWay(r: WayRow): Way | null {
   return { ...(id === undefined ? {} : { id }), cls, brunnel, layer: Number.parseInt(r.layer ?? '') || 0, points: r.coords.map(([lng, lat]) => mercator([lng, lat])) }
 }
 
-const tunnelTag = (sql: Sql) => TUNNEL_VALUES.map(v => sql`g.tags @> ${sql.json({ tunnel: v })}`).reduce((a, b) => sql`${a} OR ${b}`)
+const tunnelTag = (sql: Sql) => TUNNEL_VALUES.map(v => sql`g.tags @> ${JSON.stringify({ tunnel: v })}::jsonb`).reduce((a, b) => sql`${a} OR ${b}`)
 
 /** Tunnel ways in a box, in degrees, found by their tag's index; with `underground`, only OSM ways on a negative layer. */
 export async function tunnelsIn(sql: Sql, [w, s, e, n]: [number, number, number, number], { underground = false } = {}): Promise<Way[]> {
