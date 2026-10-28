@@ -684,7 +684,7 @@ describe('line elevation in tiles', () => {
   const [X, Y] = [Math.floor(ORIGIN[0] * N), Math.floor(ORIGIN[1] * N)]
   const local = ([mx, my]: [number, number]): [number, number] => [Math.round((mx * N - X) * 4096), Math.round((my * N - Y) * 4096)]
   const line = [at(0, 0), at(200, 0)].map(local)
-  const deck = { points: [at(40, 0), at(160, 0)], heights: [0, 6], half: 5, kind: 'rail' as const, ways: [42] }
+  const deck = { points: [at(40, 0), at(160, 0)], heights: [0, 6], relative: false, lifts: [0, 6], half: 5, kind: 'rail' as const, ways: [42] }
   const bikes = encodeLayer('bicycle_ways', [{ id: 42, properties: { bridge: true }, lines: [line] }])
   const ribbons = encodeLayer('ribbons', [{ id: 1, properties: { route_type: 1 }, lines: [line] }])
   const elevationOf = async (res: Response, layer: string) => readLayer(new Uint8Array(await res.arrayBuffer()), layer)!.features[0].properties.elevation

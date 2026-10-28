@@ -4,7 +4,7 @@ import type { HeightSource } from './sources'
 import { at } from './test-geometry'
 
 const deck = (extra: Partial<HeightSource> = {}): HeightSource => ({
-  points: [at(100, 0), at(200, 0)], heights: [0, 10], relative: false, half: 5, kind: 'rail', ways: [42], ...extra,
+  points: [at(100, 0), at(200, 0)], heights: [0, 10], relative: false, lifts: [0, 10], half: 5, kind: 'rail', ways: [42], ...extra,
 })
 
 describe('sampleLine', () => {
@@ -22,7 +22,7 @@ describe('sampleLine', () => {
   })
 
   test('a line alongside within the deck plus slack rides it, in either direction', () => {
-    const index = new SourceIndex([deck()])
+    const index = new SourceIndex([deck({ lifts: [0, 0] })])
     for (const line of [[at(0, 8), at(300, 8)], [at(300, 8), at(0, 8)]]) {
       const samples = sampleLine(line, index, { kinds: ['rail'] })
       expect(samples.some(s => s.height !== null)).toBe(true)
@@ -36,9 +36,15 @@ describe('sampleLine', () => {
     expect(sampleLine([at(0, 0), at(300, 0)], index, { kinds: ['road'] }).every(s => s.height === null)).toBe(true)
   })
 
-  test('the nearest of two sources wins', () => {
-    const index = new SourceIndex([deck({ heights: [5, 5] }), deck({ points: [at(100, 6), at(200, 6)], heights: [9, 9] })])
-    const samples = sampleLine([at(120, 5), at(180, 5)], index, { kinds: ['rail'] })
-    expect(samples.every(s => s.height === 9)).toBe(true)
+  test('keeps to the tunnel it arrives in where a viaduct runs over it', () => {
+    const tunnel = deck({ points: [at(0, 0), at(600, 0)], heights: [-9, -9], lifts: [-9, -9], relative: true, ways: [1] })
+    const viaduct = deck({ points: [at(200, 1), at(400, 1)], heights: [30, 30], lifts: [12, 12], ways: [2] })
+    const samples = sampleLine([at(0, 0), at(600, 0)], new SourceIndex([tunnel, viaduct]), { kinds: ['rail'] })
+    expect(samples.every(s => s.height === -9 && s.relative)).toBe(true)
+  })
+
+  test('does not climb onto a deck it only grazes', () => {
+    const graze = deck({ points: [at(100, 0), at(118, 0)], heights: [20, 20], lifts: [8, 8] })
+    expect(sampleLine([at(0, 0), at(300, 0)], new SourceIndex([graze]), { kinds: ['rail'] }).every(s => s.height === null)).toBe(true)
   })
 })

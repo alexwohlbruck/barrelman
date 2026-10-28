@@ -14,6 +14,8 @@ export type HeightSource = {
   /** Metres at each point: above sea level in the terrain's datum, or for a relative source above the terrain. */
   heights: number[]
   relative: boolean
+  /** Metres above the terrain at each point, to weigh a line's climb from one source to another. */
+  lifts: number[]
   /** Metres from the line to the edge of what it carries. */
   half: number
   kind: SourceKind
@@ -30,13 +32,14 @@ export function deckSource(row: DeckRow, project: (lngLat: number[]) => Point): 
   const points = row.coords.map(project)
   const d = along(points)
   const last = row.heights.length - 1
-  const z = row.heights
-  const heights = d.map(at => {
+  const sampled = (z: number[]) => d.map(at => {
     const s = row.step > 0 ? Math.min(at / row.step, last) : 0
     const i = Math.min(Math.floor(s), last - 1)
     return i < 0 ? z[0] : z[i] + (z[i + 1] - z[i]) * (s - i)
   })
-  return { points, heights, relative: false, half: Math.max(...row.edges, 0), kind: row.kind as SourceKind, ways: row.ways.map(Number) }
+  const heights = sampled(row.heights)
+  const ground = sampled(row.ground)
+  return { points, heights, relative: false, lifts: heights.map((h, i) => h - ground[i]), half: Math.max(...row.edges, 0), kind: row.kind as SourceKind, ways: row.ways.map(Number) }
 }
 
 /** Metres a tunnel lies below the ground, by what runs through it. One depth, whatever its layer, keeps a line from stepping where its tunnel's layer changes. */
@@ -98,10 +101,12 @@ export function tunnelSources(ways: Way[], read: Bounds, portals: Point[]): Heig
   return tunnels.map(({ way, kind, points }, t) => {
     const d = along(points), depth = DEPTH[kind], { grade } = PROFILES[kind]
     const [a, b] = ends[t]
+    const heights = d.map(at => -Math.min(depth, grade * Math.min(reach[a] + at, reach[b] + lengths[t] - at)))
     return {
       points,
-      heights: d.map(at => -Math.min(depth, grade * Math.min(reach[a] + at, reach[b] + lengths[t] - at))),
+      heights,
       relative: true,
+      lifts: heights,
       half: WIDTH[way.cls] / 2,
       kind,
       ways: way.id === undefined ? [] : [way.id],

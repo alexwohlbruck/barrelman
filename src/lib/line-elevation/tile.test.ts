@@ -15,7 +15,7 @@ const concat = (...parts: Uint8Array[]) => {
   return out
 }
 
-const deck: HeightSource = { points: [at(40, 0), at(160, 0)], heights: [6, 6], relative: false, half: 5, kind: 'rail', ways: [42] }
+const deck: HeightSource = { points: [at(40, 0), at(160, 0)], heights: [6, 6], relative: false, lifts: [6, 6], half: 5, kind: 'rail', ways: [42] }
 const line = [at(0, 0), at(200, 0)].map(local)
 const other = encodeLayer('buildings', [{ id: 1, properties: { height: 12 }, lines: [[[0, 0], [10, 10]]] }])
 const tile = concat(
