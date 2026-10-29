@@ -47,4 +47,12 @@ describe('sampleLine', () => {
     const graze = deck({ points: [at(100, 0), at(118, 0)], heights: [20, 20], lifts: [8, 8] })
     expect(sampleLine([at(0, 0), at(300, 0)], new SourceIndex([graze]), { kinds: ['rail'] }).every(s => s.height === null)).toBe(true)
   })
+
+  test('a line drawn along its ways rides their deck even where its drawing strays off it, and nothing else', () => {
+    const own = deck({ ways: [9], heights: [20, 20], lifts: [10, 10] })
+    const other = deck({ points: [at(100, 15), at(200, 15)], ways: [5], heights: [40, 40], lifts: [30, 30] })
+    const samples = sampleLine([at(100, 15), at(200, 15)], new SourceIndex([own, other]), { ways: [9] })
+    expect(samples.every(s => s.height === 20)).toBe(true)
+  })
 })
+

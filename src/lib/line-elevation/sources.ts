@@ -138,3 +138,38 @@ function nearestPortal(portals: boolean[], edges: Array<[number, number, number]
   }
   return reach
 }
+
+/** Metres around a tunnel's point the ground over it is averaged across, so the tunnel runs smooth under bumps, banks and joints. */
+export const TUNNEL_SMOOTHING = 100
+
+/**
+ * Tunnels at the smoothed ground over them less their depth, as heights in the terrain's datum: the ground under a
+ * line drawn on the map has every bump of the terrain in it, a bore has none. A tunnel the ground is unknown over
+ * stays relative to it.
+ */
+export function settledTunnels(tunnels: HeightSource[], groundAt: (p: Point) => number): HeightSource[] {
+  const samples = tunnels.flatMap(t => t.points.map(p => ({ p, ground: groundAt(p) }))).filter(s => Number.isFinite(s.ground))
+  if (!samples.length) return tunnels
+  const radius = TUNNEL_SMOOTHING / metresPerUnit(samples[0].p[1])
+  const cells = new Map<string, typeof samples>()
+  const key = (x: number, y: number) => `${x},${y}`
+  for (const s of samples) {
+    const k = key(Math.floor(s.p[0] / radius), Math.floor(s.p[1] / radius))
+    cells.set(k, [...(cells.get(k) ?? []), s])
+  }
+  const smoothed = (p: Point) => {
+    const [cx, cy] = [Math.floor(p[0] / radius), Math.floor(p[1] / radius)]
+    let sum = 0, count = 0
+    for (let dx = -1; dx <= 1; dx++)
+      for (let dy = -1; dy <= 1; dy++)
+        for (const s of cells.get(key(cx + dx, cy + dy)) ?? [])
+          if (Math.hypot(s.p[0] - p[0], s.p[1] - p[1]) <= radius) [sum, count] = [sum + s.ground, count + 1]
+    return count ? sum / count : NaN
+  }
+  return tunnels.map(t => {
+    const ground = t.points.map(smoothed)
+    if (ground.some(g => !Number.isFinite(g))) return t
+    return { ...t, relative: false, heights: t.heights.map((depth, i) => ground[i] + depth), lifts: t.heights }
+  })
+}
+

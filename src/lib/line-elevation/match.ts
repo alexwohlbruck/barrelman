@@ -12,8 +12,14 @@ export const SLACK = 4
 /** Sharpest angle between a line and a source it rides, as its cosine. */
 const ALIGNED = Math.cos((30 * Math.PI) / 180)
 
-/** Which sources a line may ride: those holding its own OSM way, or any of some kinds that run alongside it. */
-export type Rides = { way: number } | { kinds: SourceKind[] }
+/**
+ * Which sources a line may ride: those holding its own OSM way; those holding any of the ways it was drawn along,
+ * reached across the distance its drawing strays from them; or any of some kinds that run alongside it.
+ */
+export type Rides = { way: number } | { ways: number[] } | { kinds: SourceKind[] }
+
+/** Metres past a source's edge a line drawn along its ways, smoothed and offset from them, may lie and still ride it. */
+export const WAYS_SLACK = 25
 
 /** A point of a line, with the height of what it rides there, if anything, and whether that height is over the terrain. */
 export type Sample = { p: Point; d: number; height: number | null; relative?: boolean }
@@ -73,12 +79,12 @@ function onSegment(a: Point, b: Point, q: Point): { distance: number; t: number 
 type Candidate = { source: HeightSource; off: number; height: number; lift: number }
 
 /** The nearest place on each source a point rides, one per source; `direction` (unit) is the line's there, checked when given. */
-export function candidatesAt(segments: Segment[], p: Point, direction?: Point): Candidate[] {
+export function candidatesAt(segments: Segment[], p: Point, direction?: Point, slack = SLACK): Candidate[] {
   const best = new Map<HeightSource, Candidate>()
   for (const { source, i } of segments) {
     const [a, b] = [source.points[i - 1], source.points[i]]
     const hit = onSegment(a, b, p)
-    if (!hit || hit.distance > source.half + SLACK) continue
+    if (!hit || hit.distance > source.half + slack) continue
     if (direction) {
       const l = Math.hypot(b[0] - a[0], b[1] - a[1])
       if (Math.abs((direction[0] * (b[0] - a[0]) + direction[1] * (b[1] - a[1])) / l) < ALIGNED) continue
@@ -92,7 +98,7 @@ export function candidatesAt(segments: Segment[], p: Point, direction?: Point): 
 }
 
 /** What riding the ground costs a point, against riding a source it lies on by the metres it stands off it: more than any it rides. */
-const GROUND_COST = SLACK + 1
+const groundCost = (slack: number) => slack + 1
 /** What moving from one source to another, or to or from the ground, costs, and what each metre it climbs or drops does. */
 const SWITCH_COST = 10
 const CLIMB_COST = 2
@@ -105,29 +111,30 @@ const CLIMB_COST = 2
 export function sampleLine(line: Point[], index: SourceIndex, rides: Rides): Sample[] {
   const points = densify(line, SAMPLE_STEP)
   const d = along(points)
-  const own = 'way' in rides ? index.segmentsOf(rides.way) : null
+  const own = 'way' in rides ? index.segmentsOf(rides.way) : 'ways' in rides ? rides.ways.flatMap(way => index.segmentsOf(way)) : null
   if (own && !own.length) return points.map((p, i) => ({ p, d: d[i], height: null }))
   const kinds = 'kinds' in rides ? rides.kinds : []
+  const slack = 'ways' in rides ? WAYS_SLACK : SLACK
   const options = points.map((p, i): Array<Candidate | null> => {
-    if (own) return [null, ...candidatesAt(own, p)]
+    if (own && 'way' in rides) return [null, ...candidatesAt(own, p)]
     const [a, b] = i < points.length - 1 ? [p, points[i + 1]] : [points[i - 1], p]
     const l = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1
-    return [null, ...candidatesAt(index.segmentsNear(p, kinds), p, [(b[0] - a[0]) / l, (b[1] - a[1]) / l])]
+    return [null, ...candidatesAt(own ?? index.segmentsNear(p, kinds), p, [(b[0] - a[0]) / l, (b[1] - a[1]) / l], slack)]
   })
-  const chosen = cheapestRide(options)
+  const chosen = cheapestRide(options, groundCost(slack))
   return points.map((p, i) => {
     const ride = chosen[i]
     return { p, d: d[i], height: ride?.height ?? null, relative: ride?.source.relative }
   })
 }
 
-const emit = (c: Candidate | null) => (c ? c.off : GROUND_COST)
 const move = (from: Candidate | null, to: Candidate | null) =>
   from?.source === to?.source ? 0 : SWITCH_COST + CLIMB_COST * Math.abs((from?.lift ?? 0) - (to?.lift ?? 0))
 
 /** The cheapest choice of one option per point, by the costs above. */
-function cheapestRide(options: Array<Array<Candidate | null>>): Array<Candidate | null> {
+function cheapestRide(options: Array<Array<Candidate | null>>, ground: number): Array<Candidate | null> {
   if (!options.length) return []
+  const emit = (c: Candidate | null) => (c ? c.off : ground)
   let cost = options[0].map(emit)
   const back: number[][] = []
   for (let i = 1; i < options.length; i++) {

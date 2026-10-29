@@ -18,8 +18,10 @@ export type RidesOf = (feature: MvtFeature) => Rides | null
 /** A cycle way rides only the decks and tunnels of its own OSM way. */
 export const bicycleRides: RidesOf = f => (f.id === undefined ? null : { way: f.id })
 
-/** A transit ribbon rides what its mode runs on: rail on track decks and rail tunnels, a bus on roads. */
+/** A transit ribbon rides the ways it was drawn along, where its tile names them; otherwise what its mode runs on: rail on track decks and rail tunnels, a bus on roads. */
 export const ribbonRides: RidesOf = f => {
+  const ways = typeof f.properties.ways === 'string' ? f.properties.ways.split(',').map(Number).filter(Number.isFinite) : []
+  if (ways.length) return { ways }
   const mode = gtfsModeClass(typeof f.properties.route_type === 'number' ? f.properties.route_type : null) ?? (isGtfsModeClass(f.properties.mode) ? f.properties.mode : null)
   if (mode === 'bus') return { kinds: ['road'] }
   if (mode && ['metro', 'tram', 'regional', 'monorail', 'funicular', 'cable'].includes(mode)) return { kinds: ['rail'] }

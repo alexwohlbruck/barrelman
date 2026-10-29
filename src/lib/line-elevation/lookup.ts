@@ -1,8 +1,12 @@
 import { LRUCache } from 'lru-cache'
 import { connection } from '../../db'
 import { mercator, metresPerUnit, unprojected, type Bounds } from '../bridge-mesh/decks'
+import { Dem, DEM_ZOOM } from '../bridge-decks/dem'
 import { tunnelsIn } from '../tunnel-cuts/way-rows'
-import { deckSource, tunnelSources, TUNNEL_MARGIN, type DeckRow, type HeightSource } from './sources'
+import { deckSource, settledTunnels, tunnelSources, TUNNEL_MARGIN, type DeckRow, type HeightSource } from './sources'
+
+/** The terrain tunnels are settled under, kept across tiles: a decoded tile is about 1 MB. */
+const dem = new Dem(undefined, { zoom: DEM_ZOOM, minZoom: DEM_ZOOM - 5, capacity: 48, concurrency: 8 })
 
 /** The decks and tunnels lines in a tile may ride. */
 export type LineSources = (z: number, x: number, y: number) => Promise<HeightSource[]>
@@ -35,7 +39,10 @@ export const readLineSources: LineSources = async (z, x, y) => {
   ])
   const fromDecks = deckRows.map(row => deckSource(row, mercator)).filter((s): s is HeightSource => s !== null)
   const portals = cuts.flatMap(c => (c.portal ? [mercator(c.portal)] : []))
-  return [...fromDecks, ...tunnelSources(ways, tunnels.bounds, portals)]
+  const sunk = tunnelSources(ways, tunnels.bounds, portals)
+  const points = sunk.flatMap(t => t.points)
+  const loaded = await dem.load(points).then(() => true, error => (console.warn('[line elevation] terrain:', error), false))
+  return [...fromDecks, ...(loaded ? settledTunnels(sunk, p => dem.at(p)) : sunk)]
 }
 
 /** Sources by tile, read once however many ask at the same time, and kept a while. */

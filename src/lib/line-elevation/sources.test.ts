@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { along, mercator, unprojected } from '../bridge-mesh/decks'
 import type { Way } from '../tunnel-cuts/build'
 import { PROFILES } from '../tunnel-cuts/tunnels'
-import { deckSource, DEPTH, tunnelSources, TUNNEL_MARGIN } from './sources'
+import { deckSource, DEPTH, settledTunnels, tunnelSources, TUNNEL_MARGIN } from './sources'
 import { at } from './test-geometry'
 
 const portals = [at(0, 0), at(600, 0), at(-100, 0), at(400, 0)]
@@ -73,3 +73,19 @@ describe('tunnelSources', () => {
     expect(TUNNEL_MARGIN).toBeGreaterThanOrEqual(DEPTH.rail / PROFILES.rail.grade)
   })
 })
+
+describe('settledTunnels', () => {
+  test('lays a tunnel at its depth under the smoothed ground, not under each bump', () => {
+    const [source] = settledTunnels(tunnelSources([tunnel(1, -1500, 1500)], read, []), p => (Math.abs(p[0] - at(0, 0)[0]) < at(3, 0)[0] - at(0, 0)[0] ? 30 : 10))
+    expect(source.relative).toBe(false)
+    expect(Math.max(...source.heights) - Math.min(...source.heights)).toBeLessThan(2)
+    expect(source.heights[0]).toBeCloseTo(10 - DEPTH.rail, 0)
+    expect(source.lifts[0]).toBeCloseTo(-DEPTH.rail, 5)
+  })
+
+  test('leaves a tunnel over unknown ground relative to it', () => {
+    const [source] = settledTunnels(tunnelSources([tunnel(1, 0, 600)], read, portals), () => NaN)
+    expect(source.relative).toBe(true)
+  })
+})
+
