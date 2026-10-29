@@ -165,6 +165,9 @@ psql "$DATABASE_URL" -f "$PROJECT_DIR/import/create-detail-views.sql"
 # build there holds the server off its port for the duration.
 psql "$DATABASE_URL" -f "$PROJECT_DIR/import/create-detail-indexes.sql"
 
+# The same, for the nodes and ways POST /route/hazards reads.
+psql "$DATABASE_URL" -f "$PROJECT_DIR/import/create-route-hazard-indexes.sql"
+
 # The materialized views hold rows rather than being plain views, so creating
 # them is not enough — they come into existence empty. Filled here, where the
 # data they join over has just changed. Minutes on a large extract.

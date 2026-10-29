@@ -867,6 +867,20 @@ export const SCRIPTS: ScriptDef[] = [
     notes:
       'Built CONCURRENTLY, so tiles keep serving throughout. Each index scans the whole of geo_places — minutes apiece on a continental import. Safe to re-run; existing indexes are skipped.',
   },
+  {
+    id: 'route-hazard-indexes',
+    name: 'Build Route Hazard Indexes',
+    description:
+      'Create the partial spatial indexes POST /route/hazards reads signals, signs, tram rails and hazard-tagged ways through, so a route request scans only those.',
+    category: 'osm',
+    danger: 'safe',
+    longRunning: true,
+    confirm: false,
+    exec: { kind: 'internal', handler: 'sql:create-route-hazard-indexes.sql' },
+    source: 'import/create-route-hazard-indexes.sql',
+    notes:
+      'Built CONCURRENTLY; the endpoint keeps answering, only slower, until they exist. Each index scans the whole of geo_places. Safe to re-run.',
+  },
 
   // ── GBFS ──────────────────────────────────────────────────────────────
   {

@@ -165,8 +165,8 @@ describe('checkHealth — per-endpoint status', () => {
     for (const group of ['places', 'spatial', 'search', 'geocode', 'tiles', 'transit']) {
       expect(endpoint(result, group).status).toBe('unavailable')
     }
-    // /route proxies GraphHopper and touches no table, so it survives.
-    expect(endpoint(result, 'routing').status).toBe('ok')
+    // /route proxies GraphHopper and touches no table, so it survives; only /route/hazards goes.
+    expect(endpoint(result, 'routing').status).toBe('degraded')
   })
 })
 
