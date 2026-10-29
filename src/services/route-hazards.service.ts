@@ -105,10 +105,16 @@ export interface HazardSource {
 const piecesJson = (pieces: RoutePiece[]) =>
   JSON.stringify({ type: 'MultiLineString', coordinates: pieces.map(p => p.coordinates) })
 
-const piecesCte = (pieces: RoutePiece[]) => sql`
+/**
+ * The pieces as a `pieces (piece, line)` CTE, `piece` 1-based. The LIMIT only
+ * tells the planner how many there are: guessing ST_Dump's default 1000, it
+ * sizes hash tables for hundreds of thousands of matches.
+ */
+export const piecesCte = (pieces: RoutePiece[]) => sql`
   WITH pieces AS (
     SELECT d.path[1] AS piece, d.geom AS line
     FROM ST_Dump(ST_SetSRID(ST_GeomFromGeoJSON(${piecesJson(pieces)}), 4326)) AS d
+    LIMIT ${pieces.length}
   )`
 
 export const dbHazardSource: HazardSource = {

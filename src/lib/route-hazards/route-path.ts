@@ -129,6 +129,9 @@ export interface RoutePiece {
   /** The route segments the piece covers. */
   firstSegment: number
   lastSegment: number
+  /** Metres along the route where the piece starts and ends. */
+  startDistance: number
+  endDistance: number
 }
 
 /**
@@ -152,11 +155,13 @@ export function routePieces(path: RoutePath, size: number): RoutePiece[] {
         current = null
       }
       if (!current) {
-        current = { coordinates: [start], firstSegment: i, lastSegment: i }
+        const from = cumulative[i] + step * (k - 1)
+        current = { coordinates: [start], firstSegment: i, lastSegment: i, startDistance: from, endDistance: from }
         run = 0
       }
       current.coordinates.push(lerp(coordinates[i], coordinates[i + 1], k / steps))
       current.lastSegment = i
+      current.endDistance = cumulative[i] + step * k
       run += step
     }
   }
