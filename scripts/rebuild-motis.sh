@@ -112,57 +112,52 @@ fi
 #     was dropped. (generate-motis-config also gives every dataset a
 #     default_timezone, which rescues the "no timezone" class outright.)
 #
-#  2. MOTIS's street router (osr) caps a node at 16 ways; the US street network
-#     has junctions exceeding that ("node ... has N ways, maximum is 16"), and a
-#     damaged extract trips "invalid location". Street routing improves
-#     access/egress on a city-sized import, but at continent scale it cannot
-#     load at all. So we attempt it, and if the failure is an osr/OSM one (not a
-#     feed), fall back to a timetable-only build that routes stop-to-stop over
-#     the walking transfers already baked into the feeds. MOTIS_STREET_ROUTING=0
-#     skips straight to timetable-only.
+#  2. Street routing. MOTIS's street router (osr) aborts on a way with a
+#     missing node ("invalid location") or a node on more than 16 ways. Both
+#     are repaired up front (prepare_street_extract below). If street routing
+#     still won't build, fall back to a timetable-only build that routes
+#     stop-to-stop over the walking transfers baked into the feeds, so transit
+#     stays up, and exit 2 so the job shows as failed: that build answers no
+#     bikeshare, bike or park-and-ride trip. MOTIS_STREET_ROUTING=0 skips
+#     straight to timetable-only, deliberately.
 CFG_PATH=/var/lib/postgresql # placeholder, replaced below
 GTFS_DATA_HOST="$(docker inspect "$CONTAINER" --format '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Source}}{{end}}{{end}}' 2>/dev/null)"
 CFG="${GTFS_DATA_HOST:+$GTFS_DATA_HOST/config.yml}"
 
-DB_CONTAINER="${DB_CONTAINER:-barrelman-db}"
-STREET_PBF=region.osm.pbf
+# The extract MOTIS builds its street graph from, as the import container sees
+# it. osr aborts the whole import on a way with a missing node ("invalid
+# location", which replication leaves in a merged extract) or a node on more
+# than 16 ways (the US has a few), and the rebuild then falls back to
+# timetable-only. scripts/repair-motis-extract.sh writes a copy without those
+# ways into the gtfs-data volume, which the import mounts at /data;
+# region.osm.pbf itself is left alone for GraphHopper, osm2pgsql and tiles.
+# Runs from barrelman-ops, which mounts both volumes and carries osmium.
+STREET_OSM=/osm-data/region.osm.pbf
+REPAIRED=/gtfs-data/region-motis-repaired.osm.pbf
+# Ways dropped at over-full nodes, kept between runs: finding them is a full
+# count of the extract, and the junctions don't move.
+EXCESS_IDS=/gtfs-data/motis-osr-excess-ways.ids
 
-# MOTIS's street router (libosmium) aborts the whole import with `invalid
-# location` on the first way that references a node absent from the file. A
-# merged multi-region extract gets those from replication: Geofabrik clips each
-# region's diffs to its polygon, so a node deleted from one region's view is
-# dropped while a neighbouring region's way still uses it (update-osm.sh has the
-# long version). That used to send every rebuild to timetable-only, silently
-# taking out bikeshare, bike and park-and-ride trips until someone noticed.
-#
-# Rather than refuse the extract, give MOTIS a copy without the broken ways.
-# They are unroutable anyway — GraphHopper drops them too — and a UPDATE_MODE=full
-# osm-update restores them. barrelman-db carries osmium and mounts the OSM
-# volume read-write at /data; the import container sees it at /osm-data.
-prepare_street_extract() {
-  local broken
-  broken="$(docker exec "$DB_CONTAINER" sh -c '
-    osmium check-refs -i /data/region.osm.pbf 2>/dev/null \
-      | sed -n "s/^n[0-9]* in \(w[0-9]*\)\$/\1/p" | sort -u > /tmp/motis-broken-ways.txt
-    wc -l < /tmp/motis-broken-ways.txt' | tr -cd '0-9')"
-  if [ -z "$broken" ]; then
-    log "WARNING: could not check region.osm.pbf for dangling node references — using it as is"
+prepare_street_extract() { # $1 = --recount to redo the over-full node count
+  local src="${OSM_DATA_DIR:-/data}/region.osm.pbf" dropped
+  if ! command -v osmium >/dev/null || [ ! -d /gtfs-data ] || [ ! -f "$src" ]; then
+    log "not running in barrelman-ops — using region.osm.pbf without repair"
     return
   fi
-  if [ "$broken" -eq 0 ]; then
-    docker exec "$DB_CONTAINER" rm -f /data/region-motis-repaired.osm.pbf
-    return
+  log "checking region.osm.pbf for ways osr can't load${1:+ (recounting over-full nodes — slow)}..."
+  dropped="$(bash "$BARRELMAN_DIR/scripts/repair-motis-extract.sh" "$src" "$REPAIRED" "$EXCESS_IDS" ${1:-})"
+  if [ "${dropped:-0}" -gt 0 ]; then
+    log "  building MOTIS from region-motis-repaired.osm.pbf ($dropped way(s) left out)"
+    STREET_OSM=/data/region-motis-repaired.osm.pbf
+  else
+    rm -f "$REPAIRED"
+    STREET_OSM=/osm-data/region.osm.pbf
   fi
-  log "region.osm.pbf has $broken way(s) referencing missing nodes (a patched merged extract);"
-  log "  building region-motis-repaired.osm.pbf without them for MOTIS's street graph"
-  docker exec "$DB_CONTAINER" osmium removeid --overwrite -f pbf -i /tmp/motis-broken-ways.txt \
-    -o /data/region-motis-repaired.osm.pbf /data/region.osm.pbf
-  STREET_PBF=region-motis-repaired.osm.pbf
 }
 
 gen_config() { # $1 = street|timetable
   if [ "$1" = street ]; then
-    docker exec barrelman sh -lc "cd /app && bun run import/generate-motis-config.ts --street-routing --osm-path /osm-data/$STREET_PBF --output /gtfs-data/config.yml"
+    docker exec barrelman sh -lc "cd /app && bun run import/generate-motis-config.ts --street-routing --osm-path $STREET_OSM --output /gtfs-data/config.yml"
   else
     docker exec barrelman sh -lc 'cd /app && bun run import/generate-motis-config.ts --output /gtfs-data/config.yml'
   fi
@@ -185,6 +180,7 @@ echo "[$(date '+%H:%M:%S')] [1/3] [motis] Regenerating config from gtfs_feeds...
 MODE=street
 [ "${MOTIS_STREET_ROUTING:-1}" = "0" ] && MODE=timetable
 WANTED_MODE="$MODE"
+RECOUNTED=0
 FALLBACK_REASON=""
 [ "$MODE" = street ] && prepare_street_extract
 gen_config "$MODE"
@@ -265,8 +261,13 @@ while : ; do
   if [ "$MODE" = street ]; then
     if [ "$rc" = 137 ]; then
       FALLBACK_REASON="the street import was killed (exit 137 — out of memory?)"
+    elif grep -qaE 'maximum is 16' /tmp/motis-import.log && [ "$RECOUNTED" = 0 ]; then
+      # New over-full junctions since the saved list (or no list yet). Count
+      # again and retry once with those ways left out too.
+      log "  $(tr '\r' '\n' < /tmp/motis-import.log | grep -aoE 'node [0-9]+ \(osm=[0-9]+\) has [0-9]+ ways, maximum is 16' | head -1)"
+      RECOUNTED=1; prepare_street_extract --recount; gen_config street; continue
     elif grep -qaE 'maximum is 16' /tmp/motis-import.log; then
-      FALLBACK_REASON="a junction exceeds osr's 16-ways-per-node cap (continent-scale extract)"
+      FALLBACK_REASON="a junction still exceeds osr's 16-ways-per-node cap after recounting ($(tr '\r' '\n' < /tmp/motis-import.log | grep -aoE 'node [0-9]+ \(osm=[0-9]+\) has [0-9]+ ways' | head -1))"
     else
       FALLBACK_REASON="$(tr '\r' '\n' < /tmp/motis-import.log \
         | grep -aiE 'unable to import|VERIFY FAIL|what\(\)|error' | tail -1 || true)"
@@ -274,6 +275,7 @@ while : ; do
     fi
     log "  street routing failed: $FALLBACK_REASON"
     log "  → falling back to timetable-only (stop-to-stop over precomputed transfers)"
+    rm -f "$REPAIRED"
     MODE=timetable; gen_config timetable; dropped=0; continue
   fi
 
