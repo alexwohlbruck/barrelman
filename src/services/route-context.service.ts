@@ -73,11 +73,12 @@ export const dbRouteContextSource: RouteContextSource = {
   async structures(pieces) {
     const rows: { osm_id: string | number; first: number; last: number; tags: Record<string, string>; coordinates: LonLat[] }[] = await executeWithin(sql`
       ${piecesCte(pieces)},
+      -- Not GROUP BY: Postgres sizes its hash table from the index's estimate of millions of matches, ~100 MB a request.
       matched AS (
-        SELECT g.osm_type, g.osm_id, min(p.piece) AS first, max(p.piece) AS last
+        SELECT DISTINCT ON (g.osm_type, g.osm_id) g.osm_type, g.osm_id, min(p.piece) OVER w AS first, max(p.piece) OVER w AS last
         FROM pieces p
         JOIN geo_places g ON ${sql.raw(OVERPASS_PREDICATE)} AND ST_Intersects(g.geom, p.line)
-        GROUP BY g.osm_type, g.osm_id
+        WINDOW w AS (PARTITION BY g.osm_type, g.osm_id)
       )
       SELECT m.osm_id, m.first, m.last,
              jsonb_strip_nulls(jsonb_build_object(
