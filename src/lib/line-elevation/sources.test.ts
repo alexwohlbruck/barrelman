@@ -75,12 +75,15 @@ describe('tunnelSources', () => {
 })
 
 describe('settledTunnels', () => {
-  test('lays a tunnel at its depth under the smoothed ground, not under each bump', () => {
-    const [source] = settledTunnels(tunnelSources([tunnel(1, -1500, 1500)], read, []), p => (Math.abs(p[0] - at(0, 0)[0]) < at(3, 0)[0] - at(0, 0)[0] ? 30 : 10))
+  test('runs a bore smooth under an island, no steeper than its grade, and up to the ground at its portals', () => {
+    const island = (p: number[]) => (Math.abs(p[0] - at(0, 0)[0]) < at(120, 0)[0] - at(0, 0)[0] ? 6 : 0)
+    const [source] = settledTunnels(tunnelSources([tunnel(1, -1500, 1500)], read, [at(-1500, 0), at(1500, 0)]), island)
+    const d = along(source.points)
     expect(source.relative).toBe(false)
-    expect(Math.max(...source.heights) - Math.min(...source.heights)).toBeLessThan(2)
-    expect(source.heights[0]).toBeCloseTo(10 - DEPTH.rail, 0)
-    expect(source.lifts[0]).toBeCloseTo(-DEPTH.rail, 5)
+    expect(source.heights[0]).toBeCloseTo(0, 0)
+    expect(heightAtMetre(source, 1500)).toBeLessThan(-DEPTH.rail + 4)
+    for (let i = 1; i < d.length; i++) expect(Math.abs(source.heights[i] - source.heights[i - 1]) / (d[i] - d[i - 1])).toBeLessThanOrEqual(PROFILES.rail.grade + 1e-6)
+    expect(source.lifts[0]).toBeCloseTo(0, 5)
   })
 
   test('leaves a tunnel over unknown ground relative to it', () => {

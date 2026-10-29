@@ -139,37 +139,57 @@ function nearestPortal(portals: boolean[], edges: Array<[number, number, number]
   return reach
 }
 
-/** Metres around a tunnel's point the ground over it is averaged across, so the tunnel runs smooth under bumps, banks and joints. */
-export const TUNNEL_SMOOTHING = 100
+/** Metres around a tunnel's point the ground over it is averaged across. */
+export const TUNNEL_SMOOTHING = 200
 
 /**
- * Tunnels at the smoothed ground over them less their depth, as heights in the terrain's datum: the ground under a
- * line drawn on the map has every bump of the terrain in it, a bore has none. A tunnel the ground is unknown over
- * stays relative to it.
+ * Tunnels as bores in the terrain's datum: each point as low as the smoothed ground less its depth anywhere near,
+ * climbing from there no steeper than its grade. A bore runs smooth under the bumps, banks and islands a line drawn
+ * on the terrain would follow, and still meets the ground at its portals. A tunnel the ground is unknown over stays
+ * relative to it.
  */
 export function settledTunnels(tunnels: HeightSource[], groundAt: (p: Point) => number): HeightSource[] {
   const samples = tunnels.flatMap(t => t.points.map(p => ({ p, ground: groundAt(p) }))).filter(s => Number.isFinite(s.ground))
   if (!samples.length) return tunnels
-  const radius = TUNNEL_SMOOTHING / metresPerUnit(samples[0].p[1])
-  const cells = new Map<string, typeof samples>()
-  const key = (x: number, y: number) => `${x},${y}`
-  for (const s of samples) {
-    const k = key(Math.floor(s.p[0] / radius), Math.floor(s.p[1] / radius))
-    cells.set(k, [...(cells.get(k) ?? []), s])
-  }
+  const unit = metresPerUnit(samples[0].p[1])
+  const near = grid(samples, TUNNEL_SMOOTHING / unit)
   const smoothed = (p: Point) => {
-    const [cx, cy] = [Math.floor(p[0] / radius), Math.floor(p[1] / radius)]
     let sum = 0, count = 0
-    for (let dx = -1; dx <= 1; dx++)
-      for (let dy = -1; dy <= 1; dy++)
-        for (const s of cells.get(key(cx + dx, cy + dy)) ?? [])
-          if (Math.hypot(s.p[0] - p[0], s.p[1] - p[1]) <= radius) [sum, count] = [sum + s.ground, count + 1]
+    for (const s of near(p)) [sum, count] = [sum + s.ground, count + 1]
     return count ? sum / count : NaN
   }
-  return tunnels.map(t => {
+  const sunk = tunnels.map(t => {
     const ground = t.points.map(smoothed)
-    if (ground.some(g => !Number.isFinite(g))) return t
-    return { ...t, relative: false, heights: t.heights.map((depth, i) => ground[i] + depth), lifts: t.heights }
+    return ground.some(g => !Number.isFinite(g)) ? null : t.points.map((p, i) => ({ p, height: ground[i] + t.heights[i], grade: PROFILES[t.kind].grade }))
+  })
+  const floor = grid(sunk.flatMap(s => s ?? []), Math.max(...(Object.keys(DEPTH) as SourceKind[]).map(k => DEPTH[k] / PROFILES[k].grade)) / unit)
+  return tunnels.map((t, k) => {
+    if (!sunk[k]) return t
+    const heights = t.points.map((p, i) => {
+      let low = sunk[k]![i].height
+      for (const q of floor(p)) low = Math.min(low, q.height + q.grade * Math.hypot(q.p[0] - p[0], q.p[1] - p[1]) * unit)
+      return low
+    })
+    return { ...t, relative: false, heights, lifts: t.heights }
   })
 }
 
+/** The items within `radius` of a point, found through a grid of that size. */
+function grid<T extends { p: Point }>(items: T[], radius: number): (p: Point) => T[] {
+  const cells = new Map<string, T[]>()
+  const key = (x: number, y: number) => `${x},${y}`
+  for (const item of items) {
+    const k = key(Math.floor(item.p[0] / radius), Math.floor(item.p[1] / radius))
+    const list = cells.get(k)
+    if (list) list.push(item)
+    else cells.set(k, [item])
+  }
+  return p => {
+    const [cx, cy] = [Math.floor(p[0] / radius), Math.floor(p[1] / radius)]
+    const out: T[] = []
+    for (let dx = -1; dx <= 1; dx++)
+      for (let dy = -1; dy <= 1; dy++)
+        for (const item of cells.get(key(cx + dx, cy + dy)) ?? []) if (Math.hypot(item.p[0] - p[0], item.p[1] - p[1]) <= radius) out.push(item)
+    return out
+  }
+}
