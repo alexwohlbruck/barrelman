@@ -157,4 +157,6 @@ of a duplicate.
 
 The TileJSON's `tiles` template comes back as `/tiles/portolan/<feed>/{z}/{x}/{y}.mvt`, carrying your `?api_key=…` through if you fetched `tiles.json` with one — so a map library can consume the TileJSON URL directly. A `204 No Content` inside a pyramid is a valid empty tile (portolan only writes tiles a feature touches); tiles cache for an hour, the JSON documents for a minute.
 
+From zoom 13 the API adds an `elevation` property to each `ribbons` feature that rides a bridge deck or runs through an underground tunnel, read from the `bridge_decks` table and the tunnel ways in `geo_places` as the tile is served. It holds the line's height above (or below) the terrain along those stretches, so a 3D map can draw transit at deck level and sunk through tunnels. The same property is added to `bicycle_ways` in Martin tiles; the format is described on the vector tile endpoint in the API reference. Rail modes ride rail decks and railway tunnels, buses ride road decks and road tunnels, and a ribbon is matched to them by position and direction. The pyramid files on disk are not changed.
+
 `PORTOLAN_TILES_DIR` points the API at the pyramids (compose sets it to `/portolan-data/build/tiles`).

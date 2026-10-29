@@ -35,7 +35,7 @@ export const classOf = (highway: string | null, railway: string | null): RoadCla
 export const kindOf = (c: RoadClass): BoreKind => (c === 'path' ? 'path' : c === 'rail' || c === 'transit' ? 'rail' : 'road')
 
 /** A highway or railway way, in mercator units. `layer` is OSM's, 0 where untagged. */
-export type Way = { points: Point[]; cls: RoadClass; layer: number; brunnel: 'tunnel' | 'bridge' | 'ford' | null }
+export type Way = { id?: number; points: Point[]; cls: RoadClass; layer: number; brunnel: 'tunnel' | 'bridge' | 'ford' | null }
 
 /** What is read around the portals. Buildings are outlines whose faces a covered portal opens at. */
 export type Surroundings = {
@@ -65,7 +65,7 @@ export type TunnelCut = {
 }
 
 /** The tunnels mapped underground: a passage under a building is a tunnel with no layer, so only a negative one counts. */
-const underground = (w: Way) => w.brunnel === 'tunnel' && w.layer < 0
+export const underground = (w: Way) => w.brunnel === 'tunnel' && w.layer < 0
 
 /** Where a tunnel comes out of the ground: its line from the portal inward, and how far in its bore is drawn. */
 export type Portal = { line: Point[]; reach: number; width: number; kind: BoreKind; layer: number }
