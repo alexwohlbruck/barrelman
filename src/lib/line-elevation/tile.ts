@@ -56,7 +56,6 @@ function sampledFeatures(tile: Uint8Array, layer: string, z: number, x: number, 
 
 /** The tile with `elevation` on every feature of `layer` that rides one of `sources`. */
 export function elevateLayer(tile: Uint8Array, layer: string, z: number, x: number, y: number, sources: HeightSource[], rides: RidesOf): Uint8Array {
-  if (!sources.length) return tile
   const sampled = sampledFeatures(tile, layer, z, x, y, new SourceIndex(sources), rides)
   let i = 0
   return withProperty(tile, layer, ELEVATION_PROPERTY, () => {
@@ -70,7 +69,6 @@ export function elevateLayer(tile: Uint8Array, layer: string, z: number, x: numb
  * the ribbon of one of its own routes beside it: metres in the terrain's datum, or over the terrain after `~`.
  */
 export function elevateRibbonTile(tile: Uint8Array, z: number, x: number, y: number, sources: HeightSource[]): Uint8Array {
-  if (!sources.length) return tile
   const sampled = sampledFeatures(tile, 'ribbons', z, x, y, new SourceIndex(sources), ribbonRides)
   let i = 0
   let out = withProperty(tile, 'ribbons', ELEVATION_PROPERTY, () => {
@@ -106,36 +104,4 @@ export function pointHeight(p: Point, routes: Set<string>, riding: Array<{ sampl
   }
   if (best?.height == null) return null
   return `${best.relative ? RELATIVE_PREFIX : ''}${Math.round(best.height * 10) / 10}`
-}
-
-/**
- * A tile's lines in `layer` raised and sunk, or the tile as it came where that
- * fails. `complete` is false only when the sources could not be read, as a
- * tile that cannot be elevated at all is as good as it will get.
- */
-export async function elevateTile(
-  tile: Uint8Array, layer: keyof typeof ELEVATED_LAYERS, z: number, x: number, y: number,
-  sources: (z: number, x: number, y: number) => Promise<HeightSource[]>,
-): Promise<{ bytes: Uint8Array; complete: boolean }> {
-  const fallback = (error: unknown, complete: boolean) => {
-    console.warn(`[line elevation] ${layer} ${z}/${x}/${y}:`, error)
-    return { bytes: tile, complete }
-  }
-  if (z < ELEVATION_MIN_ZOOM) return { bytes: tile, complete: true }
-  try {
-    if (!hasLines(tile, layer)) return { bytes: tile, complete: true }
-  } catch (error) {
-    return fallback(error, true)
-  }
-  let read: HeightSource[]
-  try {
-    read = await sources(z, x, y)
-  } catch (error) {
-    return fallback(error, false)
-  }
-  try {
-    return { bytes: layer === 'ribbons' ? elevateRibbonTile(tile, z, x, y, read) : elevateLayer(tile, layer, z, x, y, read, ELEVATED_LAYERS[layer]), complete: true }
-  } catch (error) {
-    return fallback(error, true)
-  }
 }

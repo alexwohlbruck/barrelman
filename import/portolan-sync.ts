@@ -97,6 +97,9 @@ export function parseResultLine(stdout: string): PortolanSyncResult | null {
   return null
 }
 
+/** Run on each new pyramid before portolan swaps it in, so it goes live with its ribbons' heights. Needs portolan 0.5.2. */
+export const TILE_HOOK = `nice -n 10 bun run ${join(import.meta.dir, 'elevate-portolan.ts')} --dir "$PORTOLAN_TILES"`
+
 /** The three sync modes, mapped to portolan subcommands. */
 export type SyncMode = 'global' | 'patch' | 'check'
 
@@ -121,6 +124,7 @@ export function buildSyncArgs(
     `--export-gtfs=${join(workspace, 'build/export')}`,
     `--state=${join(workspace, 'build/sync-state.json')}`,
     `--style-dir=${join(workspace, 'style')}`,
+    `--tile-hook=${TILE_HOOK}`,
     '--json',
   ]
   if (mode === 'patch') args.push(`--feeds=${opts.feeds ?? ''}`)

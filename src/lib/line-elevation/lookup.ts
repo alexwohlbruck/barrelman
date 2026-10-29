@@ -14,19 +14,24 @@ export type LineSources = (z: number, x: number, y: number) => Promise<HeightSou
 /** Metres past a tile its decks are read: as far as a line in its buffer reaches. */
 const DECK_MARGIN = 60
 
-/** A tile's mercator bounds grown by `metres`, and the same box in degrees. */
-export function tileBox(z: number, x: number, y: number, metres: number): { bounds: Bounds; degrees: [number, number, number, number] } {
-  const n = 2 ** z
-  const pad = metres / metresPerUnit((y + 0.5) / n)
-  const bounds = { minX: x / n - pad, minY: y / n - pad, maxX: (x + 1) / n + pad, maxY: (y + 1) / n + pad }
-  const [w, north] = unprojected([bounds.minX, bounds.minY])
-  const [e, south] = unprojected([bounds.maxX, bounds.maxY])
-  return { bounds, degrees: [w, south, e, north] }
+/** Mercator `bounds` grown by `metres`, and the same box in degrees. */
+export function grown(bounds: Bounds, metres: number): { bounds: Bounds; degrees: [number, number, number, number] } {
+  const pad = metres / metresPerUnit((bounds.minY + bounds.maxY) / 2)
+  const out = { minX: bounds.minX - pad, minY: bounds.minY - pad, maxX: bounds.maxX + pad, maxY: bounds.maxY + pad }
+  const [w, north] = unprojected([out.minX, out.minY])
+  const [e, south] = unprojected([out.maxX, out.maxY])
+  return { bounds: out, degrees: [w, south, e, north] }
 }
 
-export const readLineSources: LineSources = async (z, x, y) => {
-  const decks = tileBox(z, x, y, DECK_MARGIN).degrees
-  const tunnels = tileBox(z, x, y, TUNNEL_MARGIN)
+export function tileBounds(z: number, x: number, y: number): Bounds {
+  const n = 2 ** z
+  return { minX: x / n, minY: y / n, maxX: (x + 1) / n, maxY: (y + 1) / n }
+}
+
+/** The decks and tunnels a line within `box` may ride. */
+export async function sourcesIn(box: Bounds): Promise<HeightSource[]> {
+  const decks = grown(box, DECK_MARGIN).degrees
+  const tunnels = grown(box, TUNNEL_MARGIN)
   const [w, s, e, n] = tunnels.degrees
   const [deckRows, ways, cuts] = await Promise.all([
     connection<DeckRow[]>`
@@ -44,6 +49,8 @@ export const readLineSources: LineSources = async (z, x, y) => {
   const loaded = await dem.load(points).then(() => true, error => (console.warn('[line elevation] terrain:', error), false))
   return [...fromDecks, ...(loaded ? settledTunnels(sunk, p => dem.at(p)) : sunk)]
 }
+
+export const readLineSources: LineSources = (z, x, y) => sourcesIn(tileBounds(z, x, y))
 
 /** Sources by tile, read once however many ask at the same time, and kept a while. */
 export function cachedLineSources(read: LineSources, { max = 2000, ttl = 600_000 } = {}): LineSources {
