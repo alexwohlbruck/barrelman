@@ -46,6 +46,8 @@ local bicycle_ways = osm2pgsql.define_table({
         { column = 'oneway', type = 'int' },
         { column = 'bridge', type = 'bool' },
         { column = 'tunnel', type = 'bool' },
+        -- Heights on decks and through tunnels, written by import/elevate-bicycle-ways.ts.
+        { column = 'elevation', type = 'text' },
         { column = 'geom', type = 'linestring', projection = 4326, not_null = true },
     },
 })
