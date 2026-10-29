@@ -17,10 +17,16 @@ import { elevatePyramid } from '../src/lib/line-elevation/pyramid'
 
 const args = process.argv.slice(2)
 const dir = argValue(args, 'dir')
-const tilesDir = resolvePortolanTilesDir()
-const feeds = argValue(args, 'feeds')?.split(',').filter(Boolean)
-  ?? readdirSync(tilesDir, { withFileTypes: true }).filter(e => e.isDirectory() && !e.name.startsWith('.')).map(e => e.name).sort()
-const pyramids = dir ? [dir] : feeds.map(f => join(tilesDir, f)).filter(existsSync)
+
+function livePyramids(): string[] {
+  const workspace = process.env.PORTOLAN_WORKSPACE
+  const tilesDir = resolvePortolanTilesDir(process.env.PORTOLAN_TILES_DIR ? undefined : workspace && join(workspace, 'build/tiles'))
+  const feeds = argValue(args, 'feeds')?.split(',').filter(Boolean)
+    ?? readdirSync(tilesDir, { withFileTypes: true }).filter(e => e.isDirectory() && !e.name.startsWith('.')).map(e => e.name).sort()
+  return feeds.map(f => join(tilesDir, f)).filter(existsSync)
+}
+
+const pyramids = dir ? [dir] : livePyramids()
 
 const sources = cachedLineSources(readLineSources, { max: 256, ttl: 3_600_000 })
 const started = Date.now()
