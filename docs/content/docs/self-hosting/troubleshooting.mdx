@@ -158,6 +158,12 @@ The script is looking in the repo directory rather than the mounted volume. `bar
 
 `barrelman-ops` ships `python3` and `uv`, not pyosmium. The scripts fetch it on demand with `uv run --with osmium`; that requires `uv` on `PATH`.
 
+**Stations appear on the map but their lines are missing**
+
+MOTIS serves a separately built GTFS timetable; station discovery reads the GTFS tables in PostGIS. A partial older feed import can leave those two views inconsistent. Check `/transit/routes?feedId=<feed-id>&stopId=<stop-id>` for a platform with known service. If it returns no routes while MOTIS still routes trains there, inspect that feed's import logs and re-import its complete GTFS ZIP through the normal import job, then rebuild MOTIS if the timetable changed.
+
+Feed replacements are atomic: missing required files, unresolved timetable references, or database failures preserve the previous feed and fail the import. Fix the reported feed error before retrying; widening walking limits cannot restore missing stop-to-route associations.
+
 **GTFS finishes with `Processed 0 feeds`**
 
 Downloads had nowhere to go. `./data/gtfs` must be mounted **read-write** into `barrelman-ops` — read-only is correct only for the API. Look for `EROFS: read-only file system` above the summary. If every feed failed, the import now exits non-zero rather than reporting an empty success, so "Check for GTFS Updates" stops before recording the upstream versions and will retry on its next run.
