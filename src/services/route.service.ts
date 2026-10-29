@@ -12,6 +12,10 @@
 import { graphHopperUrl } from '../lib/graphhopper'
 import { nameSegments } from '../lib/sidewalk-names/stretches'
 import { pathStreetStretches, lookupWays, type WayLookup } from './sidewalk-names.service'
+import { dbRouteContextSource, getRouteContext, type RouteContextSource } from './route-context.service'
+import type { CrossingName } from '../lib/route-context/crossing-names'
+import type { Overpass } from '../lib/route-context/overpasses'
+import type { AreaStretch } from '../lib/route-context/area-stretches'
 
 // ── Types ───────────────────────────────────────────────────────────
 
@@ -36,6 +40,7 @@ export interface RouteEdgeSegment {
   country?: string        // ISO 3166-1 alpha-3
   streetName?: string     // the street an unnamed sidewalk runs beside, from sidewalk_street_names
   streetNameSource?: 'tag' | 'geometry'
+  crossingName?: string   // the road a crossing crosses, where the crossing way has no name
 }
 
 export interface ElevationStats {
@@ -69,7 +74,25 @@ export interface EnrichedRouteResponse {
     elevation_stats: ElevationStats
     bbox: number[]
     details: Record<string, any[]>
+    overpasses: Overpass[]
+    states: RouteState[]
+    parks: RoutePark[]
   }>
+}
+
+/** A stretch inside one state or province (admin_level 4). */
+export interface RouteState {
+  startDistance: number
+  endDistance: number
+  name?: string
+  code?: string   // ISO 3166-2, e.g. US-NC
+}
+
+/** A stretch inside a park, on a walking route. */
+export interface RoutePark {
+  startDistance: number
+  endDistance: number
+  name?: string
 }
 
 export type FetchFn = (url: string, init: RequestInit) => Promise<Response>
@@ -247,6 +270,19 @@ export function buildEdgeSegments(
   return merged
 }
 
+/** Names the crossing segments with the road each crosses. */
+export function nameCrossingSegments(segments: RouteEdgeSegment[], names: CrossingName[]): RouteEdgeSegment[] {
+  if (!names.length) return segments
+  return segments.map(seg => {
+    if (!seg.crossing) return seg
+    const mid = (seg.startDistance + seg.endDistance) / 2
+    const named = names.find(n => n.startDistance - 0.1 <= mid && mid <= n.endDistance + 0.1)
+    return named ? { ...seg, crossingName: named.name } : seg
+  })
+}
+
+const stretch = ({ startDistance, endDistance, name }: AreaStretch) => ({ startDistance, endDistance, ...(name && { name }) })
+
 // ── Main service function ───────────────────────────────────────────
 
 /** All path details we request from GraphHopper for enriched responses */
@@ -296,6 +332,7 @@ export async function getEnrichedRoute(
   requestBody: any,
   fetchFn: FetchFn = (url, init) => fetch(url, init),
   lookup: WayLookup = lookupWays,
+  context: RouteContextSource = dbRouteContextSource,
 ): Promise<EnrichedRouteResponse> {
   const ghUrl = graphHopperUrl()
   const available = await graphEncodedValues(fetchFn)
@@ -335,13 +372,22 @@ export async function getEnrichedRoute(
     const coordinates: number[][] = path.points?.coordinates || []
     const cumulativeDistances = buildCumulativeDistances(coordinates)
     const elevationStats = computeElevationStats(coordinates)
-    const stretches = await pathStreetStretches(coordinates, cumulativeDistances, path.details, lookup)
-    const edgeSegments = nameSegments(buildEdgeSegments(path.details || {}, cumulativeDistances), stretches)
+    const [stretches, around] = await Promise.all([
+      pathStreetStretches(coordinates, cumulativeDistances, path.details, lookup),
+      getRouteContext({ coordinates, distances: cumulativeDistances, details: path.details, profile: requestBody.profile }, context),
+    ])
+    const edgeSegments = nameCrossingSegments(
+      nameSegments(buildEdgeSegments(path.details || {}, cumulativeDistances), stretches),
+      around.crossingNames,
+    )
 
     return {
       ...path,
       edge_segments: edgeSegments,
       elevation_stats: elevationStats,
+      overpasses: around.overpasses,
+      states: around.states.map(s => ({ ...stretch(s), ...(s.code && { code: s.code }) })),
+      parks: around.parks.map(stretch),
     }
   }))
 
