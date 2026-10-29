@@ -108,7 +108,7 @@ const ENDPOINT_DEPENDENCIES: Record<
   routing: {
     dependsOn: ['graphhopper'],
     enhancedBy: ['database'],
-    partialMessage: 'Route hazards (/route/hazards) are unavailable; routes are unaffected',
+    partialMessage: 'Route hazards (/route/hazards) and sidewalk street names are unavailable; routes are unaffected',
   },
   isochrone: {
     dependsOn: ['graphhopper'],
