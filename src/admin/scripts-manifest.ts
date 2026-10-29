@@ -905,6 +905,20 @@ export const SCRIPTS: ScriptDef[] = [
     notes:
       'Built CONCURRENTLY; routes keep answering throughout. Until they exist, crosswalk names, overpasses and parks may run out of their time budget and be left off. Each index scans the whole of geo_places. Safe to re-run.',
   },
+  {
+    id: 'route-state-parts',
+    name: 'Build Route State Parts',
+    description:
+      'Cut every state and province boundary into small indexed parts (state_parts), which /route reads to list the states a route runs through.',
+    category: 'osm',
+    danger: 'safe',
+    longRunning: false,
+    confirm: false,
+    exec: { kind: 'internal', handler: 'sql:build-state-parts.sql' },
+    source: 'import/build-state-parts.sql',
+    notes:
+      'The API builds it at startup when it is empty, and the OSM import and update rebuild it, so this is only for a boundary edit that should show before the next update. Seconds on a continental import; routes keep their states throughout.',
+  },
 
   // ── GBFS ──────────────────────────────────────────────────────────────
   {

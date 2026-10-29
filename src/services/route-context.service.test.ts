@@ -15,7 +15,8 @@ function source(overrides: Partial<RouteContextSource> = {}): RouteContextSource
     crossedRoads: async () => (asked.push('crossedRoads'), []),
     structures: async () => (asked.push('structures'), []),
     wayLevels: async () => (asked.push('wayLevels'), new Map()),
-    areas: async predicate => (asked.push(predicate === PARK_PREDICATE ? 'parks' : 'states'), []),
+    states: async () => (asked.push('states'), []),
+    parks: async () => (asked.push('parks'), []),
     ...overrides,
   }
 }
@@ -44,7 +45,7 @@ describe('getRouteContext', () => {
   test('a failing lookup leaves only its own part out', async () => {
     const { overpasses, states } = await getRouteContext({ coordinates, distances }, source({
       structures: async () => { throw new Error('timeout') },
-      areas: async () => [{ id: 'relation/1', name: 'New York', code: 'US-NY', piece: 0, covers: true }],
+      states: async () => [{ id: 'relation/1', name: 'New York', code: 'US-NY', piece: 0, covers: true }],
     }))
     expect(overpasses).toEqual([])
     expect(states[0]).toMatchObject({ name: 'New York', code: 'US-NY' })

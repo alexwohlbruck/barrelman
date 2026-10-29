@@ -3,8 +3,8 @@
 -- A crosswalk's road is read from named roads, overpasses from bridges and
 -- raised ways along the route, parks from park polygons. Through the plain
 -- geo_places_geom_idx each probe reads every building, sidewalk and polygon in
--- its box; over these predicates it reads only the candidates. States go
--- through geo_places_admin_geom_idx, which the import already builds.
+-- its box; over these predicates it reads only the candidates. States are
+-- read from state_parts (build-state-parts.sql) instead.
 --
 -- The WHERE clauses must stay identical to NAMED_ROAD_PREDICATE,
 -- OVERPASS_PREDICATE and PARK_PREDICATE in src/services/route-context.service.ts;
