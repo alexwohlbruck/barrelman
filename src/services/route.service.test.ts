@@ -7,7 +7,8 @@ const nothing: RouteContextSource = {
   crossedRoads: async () => [],
   structures: async () => [],
   wayLevels: async () => new Map(),
-  areas: async () => [],
+  states: async () => [],
+  parks: async () => [],
 }
 
 /** A GraphHopper whose graph carries `encoded`, recording the details each route asks for. */
@@ -77,7 +78,7 @@ describe('route context', () => {
     const { paths } = await getEnrichedRoute({ ...request, profile: 'foot' }, fetchFn, async () => new Map(), {
       ...nothing,
       crossedRoads: async () => [{ span: 0, name: '7th Avenue', at: [-73.99, 40.7501] }],
-      areas: async () => [{ id: 'relation/61320', name: 'New York', code: 'US-NY', piece: 0, covers: true }],
+      states: async () => [{ id: 'relation/61320', name: 'New York', code: 'US-NY', piece: 0, covers: true }],
     })
     expect(paths[0].edge_segments.map(s => [s.crossing, s.crossingName])).toEqual([['traffic_signals', '7th Avenue'], ['missing', undefined]])
     expect(paths[0].states).toEqual([{ startDistance: 0, endDistance: expect.any(Number), name: 'New York', code: 'US-NY' }])

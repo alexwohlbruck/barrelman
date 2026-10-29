@@ -4,11 +4,11 @@
  * pass over it, the states and parks it runs through.
  *
  * Read straight from geo_places through partial indexes
- * (import/create-route-context-indexes.sql, and the admin one the import
- * builds), so replication keeps it current and nothing is stored.
+ * (import/create-route-context-indexes.sql), so replication keeps it current;
+ * states from state_parts (import/build-state-parts.sql), rebuilt with it.
  * Every query runs under a budget and answers nothing rather than late.
  */
-import { sql } from 'drizzle-orm'
+import { sql, type SQL } from 'drizzle-orm'
 import { executeWithin } from '../lib/bounded-query'
 import { crossingSpans, nameCrossings, type CrossedRoad, type CrossingName, type CrossingSpan } from '../lib/route-context/crossing-names'
 import { overpassesOver, structureCrossings, wayLevel, type LevelAt, type Overpass, type Structure } from '../lib/route-context/overpasses'
@@ -36,9 +36,6 @@ export const OVERPASS_PREDICATE = `geom_type = 'line'
 /** Must match the predicate of geo_places_route_park_idx. */
 export const PARK_PREDICATE = `geom_type = 'area' AND tags->>'leisure' = 'park'`
 
-/** Read through geo_places_admin_geom_idx, whose predicate this implies. */
-export const STATE_PREDICATE = `geom_type = 'area' AND admin_level IS NOT NULL AND admin_level = 4`
-
 /** Named ways a crosswalk can cross: roads, not the paths beside them. Must match geo_places_route_named_road_idx. */
 export const NAMED_ROAD_PREDICATE = `geom_type = 'line' AND name IS NOT NULL AND tags ? 'highway'
     AND tags->>'highway' NOT IN ('footway', 'path', 'cycleway', 'steps', 'pedestrian', 'corridor', 'bridleway', 'platform', 'proposed', 'construction', 'elevator')`
@@ -48,15 +45,34 @@ export interface RouteContextSource {
   structures(pieces: RoutePiece[]): Promise<Structure[]>
   /** OSM layer of each way, by id. */
   wayLevels(ids: number[]): Promise<Map<number, number>>
-  areas(predicate: string, pieces: RoutePiece[]): Promise<AreaHit[]>
+  states(pieces: RoutePiece[]): Promise<AreaHit[]>
+  parks(pieces: RoutePiece[]): Promise<AreaHit[]>
 }
 
 const multiLine = (lines: LonLat[][]) => JSON.stringify({ type: 'MultiLineString', coordinates: lines })
 const bigints = (ids: number[]) => `{${ids.join(',')}}`
 
-export const dbRouteContextSource: RouteContextSource = {
+/** The lines of a piece inside an area, unless the area covers it whole. */
+const PARTS = sql`CASE WHEN k.covers THEN NULL
+  ELSE ST_AsGeoJSON(ST_Multi(ST_CollectionExtract(ST_Intersection(a.geom, p.line), 2)))::jsonb -> 'coordinates' END`
+
+type AreaRow = { id: string; name: string | null; code: string | null; piece: number; covers: boolean; parts: LonLat[][] | null }
+
+const areaHits = (rows: AreaRow[]): AreaHit[] => rows.map(r => ({
+  id: r.id,
+  ...(r.name && { name: r.name }),
+  ...(r.code && { code: r.code }),
+  piece: r.piece - 1,
+  covers: r.covers,
+  ...(r.parts && { parts: r.parts }),
+}))
+
+/** Runs a read query under a budget in ms, answering no rows rather than late. */
+export type Execute = (query: SQL, ms: number) => Promise<any[]>
+
+export const routeContextSource = (execute: Execute): RouteContextSource => ({
   async crossedRoads(spans) {
-    const rows: { span: number; name: string; lon: number; lat: number }[] = await executeWithin(sql`
+    const rows: { span: number; name: string; lon: number; lat: number }[] = await execute(sql`
       WITH x AS (
         SELECT d.path[1] AS span, d.geom AS line
         FROM ST_Dump(ST_SetSRID(ST_GeomFromGeoJSON(${multiLine(spans.map(s => s.line))}), 4326)) AS d
@@ -71,13 +87,14 @@ export const dbRouteContextSource: RouteContextSource = {
   },
 
   async structures(pieces) {
-    const rows: { osm_id: string | number; first: number; last: number; tags: Record<string, string>; coordinates: LonLat[] }[] = await executeWithin(sql`
+    const rows: { osm_id: string | number; first: number; last: number; tags: Record<string, string>; coordinates: LonLat[] }[] = await execute(sql`
       ${piecesCte(pieces)},
+      -- Not GROUP BY: Postgres sizes its hash table from the index's estimate of millions of matches, ~100 MB a request.
       matched AS (
-        SELECT g.osm_type, g.osm_id, min(p.piece) AS first, max(p.piece) AS last
+        SELECT DISTINCT ON (g.osm_type, g.osm_id) g.osm_type, g.osm_id, min(p.piece) OVER w AS first, max(p.piece) OVER w AS last
         FROM pieces p
         JOIN geo_places g ON ${sql.raw(OVERPASS_PREDICATE)} AND ST_Intersects(g.geom, p.line)
-        GROUP BY g.osm_type, g.osm_id
+        WINDOW w AS (PARTITION BY g.osm_type, g.osm_id)
       )
       SELECT m.osm_id, m.first, m.last,
              jsonb_strip_nulls(jsonb_build_object(
@@ -98,7 +115,7 @@ export const dbRouteContextSource: RouteContextSource = {
 
   async wayLevels(ids) {
     if (!ids.length) return new Map()
-    const rows: { osm_id: string | number; layer?: string; bridge?: string; tunnel?: string }[] = await executeWithin(sql`
+    const rows: { osm_id: string | number; layer?: string; bridge?: string; tunnel?: string }[] = await execute(sql`
       SELECT osm_id, tags->>'layer' AS layer, tags->>'bridge' AS bridge, tags->>'tunnel' AS tunnel
       FROM geo_places
       WHERE osm_type = 'W' AND osm_id = ANY(${bigints(ids)}::bigint[]) AND geom_type = 'line'
@@ -106,36 +123,33 @@ export const dbRouteContextSource: RouteContextSource = {
     return new Map(rows.map(r => [Number(r.osm_id), wayLevel(r)]))
   },
 
-  async areas(predicate, pieces) {
-    const rows: { id: string; name: string | null; code: string | null; piece: number; covers: boolean; parts: LonLat[][] | null }[] = await executeWithin(sql`
-      ${piecesCte(pieces)},
-      -- Each area read once, through the partial index, then tested against the pieces it boxes.
-      areas AS MATERIALIZED (
-        SELECT DISTINCT ON (g.id) g.id, g.name, g.tags->>'ISO3166-2' AS code, g.geom
-        FROM pieces p JOIN geo_places g ON ${sql.raw(predicate)} AND g.geom && p.line
-      )
-      SELECT a.id, a.name, a.code, x.piece, x.covers, x.parts
-      FROM areas a
-      CROSS JOIN LATERAL (
-        SELECT p.piece, k.covers,
-               CASE WHEN k.covers THEN NULL
-                    ELSE ST_AsGeoJSON(ST_Multi(ST_CollectionExtract(ST_Intersection(a.geom, p.line), 2)))::jsonb -> 'coordinates'
-               END AS parts
-        FROM pieces p
-        CROSS JOIN LATERAL (SELECT ST_Covers(a.geom, p.line) AS covers) k
-        WHERE a.geom && p.line AND ST_Intersects(a.geom, p.line)
-      ) x
-    `, BUDGET_MS)
-    return rows.map(r => ({
-      id: r.id,
-      ...(r.name && { name: r.name }),
-      ...(r.code && { code: r.code }),
-      piece: r.piece - 1,
-      covers: r.covers,
-      ...(r.parts && { parts: r.parts }),
-    }))
+  async states(pieces) {
+    return areaHits(await execute(sql`
+      ${piecesCte(pieces)}
+      SELECT a.id, a.name, a.code, p.piece, k.covers, ${PARTS} AS parts
+      FROM pieces p
+      JOIN state_parts a ON a.geom && p.line AND ST_Intersects(a.geom, p.line)
+      CROSS JOIN LATERAL (SELECT ST_Covers(a.geom, p.line) AS covers) k
+    `, BUDGET_MS))
   },
-}
+
+  async parks(pieces) {
+    return areaHits(await execute(sql`
+      ${piecesCte(pieces)},
+      -- Each park read once, through the partial index, then tested against the pieces it boxes.
+      areas AS MATERIALIZED (
+        SELECT DISTINCT ON (g.id) g.id, g.name, NULL::text AS code, g.geom
+        FROM pieces p JOIN geo_places g ON ${sql.raw(PARK_PREDICATE)} AND g.geom && p.line
+      )
+      SELECT a.id, a.name, a.code, p.piece, k.covers, ${PARTS} AS parts
+      FROM areas a
+      JOIN pieces p ON a.geom && p.line AND ST_Intersects(a.geom, p.line)
+      CROSS JOIN LATERAL (SELECT ST_Covers(a.geom, p.line) AS covers) k
+    `, BUDGET_MS))
+  },
+})
+
+export const dbRouteContextSource = routeContextSource(executeWithin)
 
 export interface RouteContext {
   crossingNames: CrossingName[]
@@ -197,14 +211,13 @@ async function overpasses(path: RoutePath, input: RouteContextInput, source: Rou
 
 async function states(path: RoutePath, source: RouteContextSource): Promise<AreaStretch[]> {
   const pieces = routePieces(path, Math.max(STATE_PIECE_METERS, path.length / MAX_STATE_PIECES))
-  return areaStretches(pieces, await source.areas(STATE_PREDICATE, pieces))
+  return areaStretches(pieces, await source.states(pieces))
 }
 
 async function parks(path: RoutePath, input: RouteContextInput, source: RouteContextSource): Promise<AreaStretch[]> {
   if (input.profile !== 'foot' || path.length > MAX_PARK_METERS) return []
   const pieces = routePieces(path, PARK_PIECE_METERS)
-  return areaStretches(pieces, await source.areas(PARK_PREDICATE, pieces), { joinMeters: PARK_JOIN_METERS, minMeters: PARK_MIN_METERS })
-    .map(({ code: _code, ...park }) => park)
+  return areaStretches(pieces, await source.parks(pieces), { joinMeters: PARK_JOIN_METERS, minMeters: PARK_MIN_METERS })
 }
 
 async function crossingNames(input: RouteContextInput, source: RouteContextSource): Promise<CrossingName[]> {

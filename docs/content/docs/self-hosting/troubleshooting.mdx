@@ -432,7 +432,9 @@ It reads signals, signs and hazard-tagged ways through two partial indexes, `geo
 
 **`/route` paths have no `overpasses`, `parks` or crosswalk names**
 
-They come from named roads, bridges and parks read through three partial indexes, `geo_places_route_named_road_idx`, `geo_places_route_overpass_idx` and `geo_places_route_park_idx`. An import builds them; an instance imported before they existed needs **Build Route Context Indexes** run once in the console. Until then each lookup reads every feature near the route, runs out of its time budget, and is left off — the route itself is unaffected. `states` needs state or province polygons in the extract (see below).
+They come from named roads, bridges and parks read through three partial indexes, `geo_places_route_named_road_idx`, `geo_places_route_overpass_idx` and `geo_places_route_park_idx`. An import builds them; an instance imported before they existed needs **Build Route Context Indexes** run once in the console. Until then each lookup reads every feature near the route, runs out of its time budget, and is left off — the route itself is unaffected.
+
+`states` reads `state_parts`, the extract's state and province polygons cut into small indexed parts. The API builds it at startup when it is empty and every OSM import and update rebuilds it; **Build Route State Parts** rebuilds it on demand in seconds. An empty `state_parts` usually means the extract has no state polygons (see below).
 
 **`/geocode` returns fewer levels than expected**
 
