@@ -13,7 +13,8 @@ import type postgres from 'postgres'
 import type { Dem } from '../src/lib/bridge-decks/dem'
 import { contains, toDegrees, toUnits, UNITS_PER_DEGREE, type UnitBox, type UnitPoint } from '../src/lib/bridge-decks/grid'
 import { mercator, unprojected, type Bounds, type Point } from '../src/lib/bridge-mesh/decks'
-import { classOf, groundPoints, openings, portalsOf, solveCuts, type Surroundings, type TunnelCut, type Way } from '../src/lib/tunnel-cuts/build'
+import { groundPoints, openings, portalsOf, solveCuts, type Surroundings, type TunnelCut, type Way } from '../src/lib/tunnel-cuts/build'
+import { isWay, toWay, tunnelsIn, wayColumns, type WayRow } from '../src/lib/tunnel-cuts/way-rows'
 import { CUT_MAX } from '../src/lib/tunnel-cuts/tunnels'
 
 type Sql = postgres.Sql
@@ -29,39 +30,6 @@ export const LOCK = [5393739, 2] as const
 export const READ_PAST = 2 * CUT_MAX + 60
 /** Metres read around each tunnel end for what its cut is fitted to. */
 const AROUND_END = CUT_MAX + 40
-
-/** The values of `tunnel` the basemap draws as one, found by the tag's index rather than the box's. */
-const TUNNEL_VALUES = ['yes', 'building_passage', 'covered', 'avalanche_protector']
-const truthy = (v: string | null) => v !== null && !['no', 'false', '0'].includes(v)
-
-type WayRow = { highway: string | null; railway: string | null; tunnel: string | null; bridge: string | null; ford: string | null; layer: string | null; coords: number[][] }
-
-// A closed way is stored as an area, but unless it is tagged area=yes the basemap draws it as a line, as a roundabout or a loop in a garage.
-const wayColumns = (sql: Sql) => sql`
-  g.tags->>'highway' AS highway, g.tags->>'railway' AS railway, g.tags->>'tunnel' AS tunnel, g.tags->>'bridge' AS bridge,
-  g.tags->>'ford' AS ford, g.tags->>'layer' AS layer,
-  ST_AsGeoJSON(CASE WHEN g.geom_type = 'area' THEN ST_ExteriorRing(g.geom) ELSE g.geom END)::json->'coordinates' AS coords`
-
-const isWay = (sql: Sql) => sql`(g.tags ? 'highway' OR g.tags ? 'railway') AND (
-  (g.geom_type = 'line' AND GeometryType(g.geom) = 'LINESTRING')
-  OR (g.geom_type = 'area' AND GeometryType(g.geom) = 'POLYGON' AND COALESCE(g.tags->>'area', 'no') <> 'yes'))`
-
-function toWay(r: WayRow): Way | null {
-  const cls = classOf(r.highway, r.railway)
-  if (!cls) return null
-  const brunnel = truthy(r.bridge) ? 'bridge' : truthy(r.tunnel) ? 'tunnel' : r.ford === 'yes' ? 'ford' : null
-  return { cls, brunnel, layer: Number.parseInt(r.layer ?? '') || 0, points: r.coords.map(([lng, lat]) => mercator([lng, lat])) }
-}
-
-const tunnelTag = (sql: Sql) => TUNNEL_VALUES.map(v => sql`g.tags @> ${sql.json({ tunnel: v })}`).reduce((a, b) => sql`${a} OR ${b}`)
-
-/** Tunnel ways in a box, in degrees, found by their tag's index. */
-export async function tunnelsIn(sql: Sql, [w, s, e, n]: [number, number, number, number]): Promise<Way[]> {
-  const rows: WayRow[] = await sql`
-    SELECT ${wayColumns(sql)} FROM geo_places g
-    WHERE (${tunnelTag(sql)}) AND ${isWay(sql)} AND g.geom && ST_MakeEnvelope(${w}, ${s}, ${e}, ${n}, 4326)`
-  return rows.map(toWay).filter((x): x is Way => x !== null)
-}
 
 const degreesPer = (metres: number, lat: number): [number, number] => [metres / (111320 * Math.cos((lat * Math.PI) / 180)), metres / 111320]
 
