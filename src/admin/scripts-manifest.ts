@@ -891,6 +891,20 @@ export const SCRIPTS: ScriptDef[] = [
     notes:
       'Built CONCURRENTLY; the endpoint keeps answering, only slower, until they exist. Each index scans the whole of geo_places. Safe to re-run.',
   },
+  {
+    id: 'route-context-indexes',
+    name: 'Build Route Context Indexes',
+    description:
+      'Create the partial spatial indexes /route reads named roads, bridges, raised ways and parks through, to tell voice guidance which road a crosswalk crosses and which overpasses and parks a route passes.',
+    category: 'osm',
+    danger: 'safe',
+    longRunning: true,
+    confirm: false,
+    exec: { kind: 'internal', handler: 'sql:create-route-context-indexes.sql' },
+    source: 'import/create-route-context-indexes.sql',
+    notes:
+      'Built CONCURRENTLY; routes keep answering throughout. Until they exist, crosswalk names, overpasses and parks may run out of their time budget and be left off. Each index scans the whole of geo_places. Safe to re-run.',
+  },
 
   // ── GBFS ──────────────────────────────────────────────────────────────
   {
