@@ -10,9 +10,11 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.10.35] - 2026-10-28
+
 ### Added
 
-* Cycle ways and transit ribbons from zoom 13 carry an `elevation` property with their height on bridge decks and depth through tunnels, so a 3D map can draw them at the right level.
+* Cycle ways and transit ribbons from zoom 13 carry an `elevation` property with their height on bridge decks and depth through tunnels, and transit stations and route bullets the height of their line, so a 3D map can draw them at the right level.
 
 ## [0.10.34] - 2026-10-27
 
