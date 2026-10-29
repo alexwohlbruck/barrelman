@@ -195,6 +195,16 @@ The MOTIS dataset was never rebuilt after the GTFS import, or was rebuilt withou
 
 Stops live in PostGIS while routing comes from MOTIS's own baked dataset, so the two can disagree.
 
+**Bikeshare, scooter, bike or park-and-ride trips return nothing, but walking transit works**
+
+MOTIS is serving a timetable-only dataset. Those trips need its street graph; walking transit doesn't, because barrelman routes the walks to stations itself. Check the dataset MOTIS actually serves:
+
+```bash
+docker exec barrelman-motis grep -n '^street_routing' /data/data/config.yml
+```
+
+`false` confirms it. When a street-routing build fails, `scripts/rebuild-motis.sh` falls back to timetable-only so transit stays up, then exits 2 so the job shows as failed. The cause is in that job's log, on the line `street routing failed: …`. The usual causes are a damaged extract (below), the import running out of memory, and on a continent-scale extract, osr's 16-ways-per-node cap. If street routing can't build on your instance, set `MOTIS_STREET_ROUTING=0` to accept timetable-only.
+
 **`motis import` fails with `unable to import: invalid location`**
 
 The OSM extract has ways referencing nodes that are not in the file. `invalid location` is libosmium's error for a dangling node reference, so it points at the extract rather than at MOTIS or the feeds — the timetable builds fine and only the tasks that read OSM (`osr`, `adr`) fail. Confirm it:
@@ -206,6 +216,8 @@ osmium check-refs -r data/region.osm.pbf
 `Nodes in ways missing` above zero is the fault; non-zero counts for relations are normal for any bounded extract and are harmless.
 
 Replication is how it happens. Geofabrik clips its diffs to one region's polygon, so on a merged multi-region extract a node deleted in the followed region is dropped while a neighbouring region's ways still reference it. Patching cannot repair that — the nodes are simply gone. Re-run `scripts/update-osm.sh` with `UPDATE_MODE=full`, which re-downloads and re-merges the extracts instead of patching.
+
+`scripts/rebuild-motis.sh` works around it in the meantime: it runs the same check before the import and, if any way is broken, builds MOTIS from `region-motis-repaired.osm.pbf`, a copy without those ways. The log says how many it dropped. Run the full update anyway; the dropped ways are missing from GraphHopper too.
 
 MOTIS is the loud symptom, not the only one. GraphHopper builds a graph from a damaged extract without complaining, leaving the affected ways out of the routing graph, so street routing loses roads with nothing in the logs to say why. Since `update-osm.sh` checks the extract before triggering either rebuild, a failure here means neither ran.
 

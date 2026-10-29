@@ -480,6 +480,9 @@ services:
       GEOFABRIK_REPLICATION_URL: ${GEOFABRIK_REPLICATION_URL:-}
       # Incremental road markings (update-osm.sh → update-road-markings.sh).
       # Off unless set; console and scheduled runs pass their own switch.
+      # 0 builds MOTIS timetable-only on purpose (scripts/rebuild-motis.sh).
+      # Unset, a street-routing build that fails falls back AND fails the job.
+      MOTIS_STREET_ROUTING: ${MOTIS_STREET_ROUTING:-}
       ROAD_MARKINGS_INCREMENTAL: ${ROAD_MARKINGS_INCREMENTAL:-}
       ROAD_MARKINGS_MAX_CELLS: ${ROAD_MARKINGS_MAX_CELLS:-}
       ROAD_MARKINGS_CELL: ${ROAD_MARKINGS_CELL:-}

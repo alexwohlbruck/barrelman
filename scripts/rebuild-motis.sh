@@ -124,9 +124,45 @@ CFG_PATH=/var/lib/postgresql # placeholder, replaced below
 GTFS_DATA_HOST="$(docker inspect "$CONTAINER" --format '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Source}}{{end}}{{end}}' 2>/dev/null)"
 CFG="${GTFS_DATA_HOST:+$GTFS_DATA_HOST/config.yml}"
 
+DB_CONTAINER="${DB_CONTAINER:-barrelman-db}"
+STREET_PBF=region.osm.pbf
+
+# MOTIS's street router (libosmium) aborts the whole import with `invalid
+# location` on the first way that references a node absent from the file. A
+# merged multi-region extract gets those from replication: Geofabrik clips each
+# region's diffs to its polygon, so a node deleted from one region's view is
+# dropped while a neighbouring region's way still uses it (update-osm.sh has the
+# long version). That used to send every rebuild to timetable-only, silently
+# taking out bikeshare, bike and park-and-ride trips until someone noticed.
+#
+# Rather than refuse the extract, give MOTIS a copy without the broken ways.
+# They are unroutable anyway — GraphHopper drops them too — and a UPDATE_MODE=full
+# osm-update restores them. barrelman-db carries osmium and mounts the OSM
+# volume read-write at /data; the import container sees it at /osm-data.
+prepare_street_extract() {
+  local broken
+  broken="$(docker exec "$DB_CONTAINER" sh -c '
+    osmium check-refs -i /data/region.osm.pbf 2>/dev/null \
+      | sed -n "s/^n[0-9]* in \(w[0-9]*\)\$/\1/p" | sort -u > /tmp/motis-broken-ways.txt
+    wc -l < /tmp/motis-broken-ways.txt' | tr -cd '0-9')"
+  if [ -z "$broken" ]; then
+    log "WARNING: could not check region.osm.pbf for dangling node references — using it as is"
+    return
+  fi
+  if [ "$broken" -eq 0 ]; then
+    docker exec "$DB_CONTAINER" rm -f /data/region-motis-repaired.osm.pbf
+    return
+  fi
+  log "region.osm.pbf has $broken way(s) referencing missing nodes (a patched merged extract);"
+  log "  building region-motis-repaired.osm.pbf without them for MOTIS's street graph"
+  docker exec "$DB_CONTAINER" osmium removeid --overwrite -f pbf -i /tmp/motis-broken-ways.txt \
+    -o /data/region-motis-repaired.osm.pbf /data/region.osm.pbf
+  STREET_PBF=region-motis-repaired.osm.pbf
+}
+
 gen_config() { # $1 = street|timetable
   if [ "$1" = street ]; then
-    docker exec barrelman sh -lc 'cd /app && bun run import/generate-motis-config.ts --street-routing --osm-path /osm-data/region.osm.pbf --output /gtfs-data/config.yml'
+    docker exec barrelman sh -lc "cd /app && bun run import/generate-motis-config.ts --street-routing --osm-path /osm-data/$STREET_PBF --output /gtfs-data/config.yml"
   else
     docker exec barrelman sh -lc 'cd /app && bun run import/generate-motis-config.ts --output /gtfs-data/config.yml'
   fi
@@ -148,6 +184,9 @@ run_import() { # returns 0 on success; writes /tmp/motis-import.log
 echo "[$(date '+%H:%M:%S')] [1/3] [motis] Regenerating config from gtfs_feeds..."
 MODE=street
 [ "${MOTIS_STREET_ROUTING:-1}" = "0" ] && MODE=timetable
+WANTED_MODE="$MODE"
+FALLBACK_REASON=""
+[ "$MODE" = street ] && prepare_street_extract
 gen_config "$MODE"
 
 echo "[$(date '+%H:%M:%S')] [2/3] [motis] Clean-rebuilding dataset (motis import)..."
@@ -199,7 +238,8 @@ MAX_FEED_DROPS="${MOTIS_MAX_FEED_DROPS:-50}"
 dropped=0
 import_ok=0
 while : ; do
-  if run_import; then import_ok=1; break; fi
+  rc=0; run_import || rc=$?
+  [ "$rc" = 0 ] && { import_ok=1; break; }
 
   # A named feed failed to load → drop it and retry (bounded). `|| true`
   # because under pipefail a grep that matches nothing fails the assignment,
@@ -215,11 +255,24 @@ while : ; do
     drop_feed "$bad"; dropped=$((dropped + 1)); continue
   fi
 
-  # Not a feed. If we were attempting street routing and MOTIS choked on the
-  # street network (osr 16-ways cap) or a damaged extract, fall back to a
-  # timetable-only build that still routes over the feeds' walking transfers.
-  if [ "$MODE" = street ] && grep -qiE 'maximum is 16|invalid location|osr' /tmp/motis-import.log; then
-    log "  street routing cannot load this extract (osr limit / invalid location)"
+  # Not a feed. If we were attempting street routing, keep transit up with a
+  # timetable-only build that routes stop to stop over the feeds' walking
+  # transfers — but name the cause, and fail the job at the end (below), since
+  # that build silently drops every bikeshare, bike and park-and-ride trip.
+  # This used to match any log line mentioning "osr", which is most of a street
+  # import's progress output, so an out-of-memory kill or a damaged extract
+  # read as "the 16-ways cap" and nobody looked.
+  if [ "$MODE" = street ]; then
+    if [ "$rc" = 137 ]; then
+      FALLBACK_REASON="the street import was killed (exit 137 — out of memory?)"
+    elif grep -qaE 'maximum is 16' /tmp/motis-import.log; then
+      FALLBACK_REASON="a junction exceeds osr's 16-ways-per-node cap (continent-scale extract)"
+    else
+      FALLBACK_REASON="$(tr '\r' '\n' < /tmp/motis-import.log \
+        | grep -aiE 'unable to import|VERIFY FAIL|what\(\)|error' | tail -1 || true)"
+      FALLBACK_REASON="${FALLBACK_REASON:-the street import failed with exit $rc}"
+    fi
+    log "  street routing failed: $FALLBACK_REASON"
     log "  → falling back to timetable-only (stop-to-stop over precomputed transfers)"
     MODE=timetable; gen_config timetable; dropped=0; continue
   fi
@@ -247,5 +300,14 @@ code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "http://${CONTAINER}
 log "server responding: HTTP ${code:-000} (404 at / is expected — the API lives under /api/v1)"
 if [ "${code:-000}" = "000" ]; then
   log "WARNING: could not reach ${CONTAINER}:8080 — the dataset was rebuilt but the server is not answering"
+fi
+
+if [ "$WANTED_MODE" = street ] && [ "$MODE" = timetable ]; then
+  log "WARNING: MOTIS is serving a timetable-only dataset because $FALLBACK_REASON."
+  log "  Walking transit works; bikeshare, scooter, bike-to-station, bike-on-board and"
+  log "  park-and-ride trips return nothing until street routing builds again."
+  log "  Exiting non-zero so this shows as a failed job. Set MOTIS_STREET_ROUTING=0"
+  log "  to choose timetable-only deliberately."
+  exit 2
 fi
 log "Rebuild complete."
