@@ -10,6 +10,10 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Added
+
+* `POST /route/hazards` lists the hazards along a route from OSM tags the routing graph doesn't carry: traffic lights, stop and give-way signs facing the route, tram rails and shallow tram crossings, unlit, flood-prone and sidewalk-less ways, low clearances, tolls, speed cameras, traffic calming, movable bridges and posted hazards. Run the "Build Route Hazard Indexes" task after upgrading to keep it fast. Billed as routing.
+
 ### Changed
 
 * Line heights on bridge decks and through tunnels are written when the data is built, not on each tile request: into each transit pyramid as portolan builds it, and into `bicycle_ways.elevation` by Elevate Bicycle Ways. Serving tiles costs nothing extra.
