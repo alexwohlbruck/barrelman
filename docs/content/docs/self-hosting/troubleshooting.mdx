@@ -430,6 +430,10 @@ docker compose up -d --force-recreate motis
 
 It reads signals, signs and hazard-tagged ways through two partial indexes, `geo_places_route_hazard_points_idx` and `geo_places_route_hazard_ways_idx`. An import builds them; an instance imported before they existed needs **Build Route Hazard Indexes** run once in the console. They are built concurrently, so nothing stops answering meanwhile. Without them a 20 km city route takes about a second; with them, tens of milliseconds.
 
+**`/route` paths have no `overpasses`, `parks` or crosswalk names**
+
+They come from named roads, bridges and parks read through three partial indexes, `geo_places_route_named_road_idx`, `geo_places_route_overpass_idx` and `geo_places_route_park_idx`. An import builds them; an instance imported before they existed needs **Build Route Context Indexes** run once in the console. Until then each lookup reads every feature near the route, runs out of its time budget, and is left off — the route itself is unaffected. `states` needs state or province polygons in the extract (see below).
+
 **`/geocode` returns fewer levels than expected**
 
 It returns what the imported extract actually contains. A single-state extract usually has no state polygon — Geofabrik clips the boundary relation, so it imports as lines, and only closed areas can contain a point:
