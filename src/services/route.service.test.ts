@@ -43,3 +43,18 @@ describe('buildEdgeSegments', () => {
     ])
   })
 })
+
+describe('sidewalk street names', () => {
+  test('edge segments along a named sidewalk carry its street', async () => {
+    const coordinates = [[-73.99, 40.74, 10], [-73.9888, 40.74, 10]]
+    const fetchFn: FetchFn = async url => url.endsWith('/info')
+      ? Response.json({ encoded_values: { osm_way_id: [] } })
+      : Response.json({ paths: [{ points: { coordinates }, details: { osm_way_id: [[0, 1, 42]], road_class: [[0, 1, 'footway']] } }] })
+    const lookup = async (ids: number[]) => new Map(ids.filter(id => id === 42).map(id => [id, {
+      coords: coordinates.map(([lon, lat]) => [lon, lat] as [number, number]),
+      zones: [{ from: 0, to: 1, name: 'W 3rd St', source: 'geometry' as const }],
+    }]))
+    const { paths } = await getEnrichedRoute(request, fetchFn, lookup)
+    expect(paths[0].edge_segments.map(s => [s.osmWayId, s.streetName, s.streetNameSource])).toEqual([[42, 'W 3rd St', 'geometry']])
+  })
+})

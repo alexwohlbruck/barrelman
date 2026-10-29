@@ -10,6 +10,8 @@
  */
 
 import { graphHopperUrl } from '../lib/graphhopper'
+import { nameSegments } from '../lib/sidewalk-names/stretches'
+import { pathStreetStretches, lookupWays, type WayLookup } from './sidewalk-names.service'
 
 // ── Types ───────────────────────────────────────────────────────────
 
@@ -32,6 +34,8 @@ export interface RouteEdgeSegment {
   crossing?: string       // GH Crossing EV: MISSING | TRAFFIC_SIGNALS | MARKED | UNMARKED | UNCONTROLLED | RAILWAY | RAILWAY_BARRIER
   osmWayId?: number       // the OSM way the edge belongs to, for POST /route/lanes
   country?: string        // ISO 3166-1 alpha-3
+  streetName?: string     // the street an unnamed sidewalk runs beside, from sidewalk_street_names
+  streetNameSource?: 'tag' | 'geometry'
 }
 
 export interface ElevationStats {
@@ -291,6 +295,7 @@ export function resetEncodedValues(): void {
 export async function getEnrichedRoute(
   requestBody: any,
   fetchFn: FetchFn = (url, init) => fetch(url, init),
+  lookup: WayLookup = lookupWays,
 ): Promise<EnrichedRouteResponse> {
   const ghUrl = graphHopperUrl()
   const available = await graphEncodedValues(fetchFn)
@@ -326,18 +331,19 @@ export async function getEnrichedRoute(
   const routeData = await routeResponse.json() as any
 
   // Enrich each path with edge segments and elevation stats
-  const enrichedPaths = (routeData.paths || []).map((path: any) => {
+  const enrichedPaths = await Promise.all((routeData.paths || []).map(async (path: any) => {
     const coordinates: number[][] = path.points?.coordinates || []
     const cumulativeDistances = buildCumulativeDistances(coordinates)
     const elevationStats = computeElevationStats(coordinates)
-    const edgeSegments = buildEdgeSegments(path.details || {}, cumulativeDistances)
+    const stretches = await pathStreetStretches(coordinates, cumulativeDistances, path.details, lookup)
+    const edgeSegments = nameSegments(buildEdgeSegments(path.details || {}, cumulativeDistances), stretches)
 
     return {
       ...path,
       edge_segments: edgeSegments,
       elevation_stats: elevationStats,
     }
-  })
+  }))
 
   return {
     paths: enrichedPaths,
