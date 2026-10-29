@@ -277,6 +277,16 @@ export const SCRIPTS: ScriptDef[] = [
           'Queue the tunnels each cycle touches, and the cuts whose roads, buildings or walls changed, then rebuild them once Build Tunnel Cuts has run. Only a database without middle tables records which ways changed.',
       },
       {
+        name: 'SIDEWALK_STREET_NAMES_INCREMENTAL',
+        label: 'Update sidewalk street names',
+        type: 'boolean',
+        apply: 'env',
+        envVar: 'SIDEWALK_STREET_NAMES_INCREMENTAL',
+        default: true,
+        description:
+          'Queue the box around each highway a cycle touches, then rename the sidewalks there once Build Sidewalk Street Names has run. Only a database without middle tables records which ways changed.',
+      },
+      {
         name: 'REPLICATION_MAX_DIFFS',
         label: 'Diffs per cycle',
         type: 'number',
@@ -1054,6 +1064,51 @@ export const SCRIPTS: ScriptDef[] = [
     source: 'import/update-tunnel-cuts.ts',
     notes:
       'OSM Update runs this after each replication cycle unless its "Update tunnel cuts" switch is off. The queue (detail_dirty) is filled by scripts/replicate-extract.sh under the same switch, and only once Build Tunnel Cuts has stored a cut. Empties the queue with BRIDGE_DECKS_DEM_TILES=off. A box that fails is skipped and retried later, up to three runs. Steps aside while "Build Tunnel Cuts" runs.',
+  },
+  {
+    id: 'osm-sidewalk-street-names',
+    name: 'Build Sidewalk Street Names',
+    description:
+      'Rebuild sidewalk_street_names: the street each unnamed sidewalk, footway, path or cycleway runs beside, along its length, found from the named roads parallel to it. /route names walking stretches from it, so directions say "Continue on W 3rd St" rather than "Continue".',
+    category: 'osm',
+    danger: 'safe',
+    longRunning: true,
+    confirm: true,
+    exclusive: true,
+    exec: { kind: 'process', command: 'nice', args: ['-n', '10', 'bun', 'run', 'import/generate-sidewalk-street-names.ts'] },
+    params: [
+      { name: 'bbox', label: 'Area (w,s,e,n)', type: 'string', apply: 'flag', flag: '--bbox', placeholder: 'blank = the REGIONS areas' },
+      { name: 'cell', label: 'Cell size (degrees)', type: 'number', apply: 'flag', flag: '--cell', default: 0.02 },
+    ],
+    source: 'import/generate-sidewalk-street-names.ts',
+    notes:
+      'Rebuilds cell by cell, in place, so routes keep their names meanwhile and a run can be stopped and started again. Costs a little over a second per thousand pedestrian ways. A blank area covers each area of the regions REGIONS selects; with REGIONS=global it refuses to start, so give an area. OSM Update keeps the names current afterwards (see Update Sidewalk Street Names). Street names along routes need the routing graph built with osm_way_id (Rebuild GraphHopper).',
+  },
+  {
+    id: 'osm-sidewalk-street-names-update',
+    name: 'Update Sidewalk Street Names',
+    description:
+      'Rename the sidewalks around the highways recent replication diffs touched: sidewalks added, moved or deleted, and streets beside them renamed, moved or deleted.',
+    category: 'osm',
+    danger: 'safe',
+    longRunning: true,
+    confirm: false,
+    exclusive: true,
+    exec: { kind: 'process', command: 'nice', args: ['-n', '10', 'bun', 'run', 'import/update-sidewalk-street-names.ts'] },
+    params: [
+      {
+        name: 'SIDEWALK_STREET_NAMES_MAX_BOXES',
+        label: 'Boxes per run',
+        type: 'number',
+        apply: 'env',
+        envVar: 'SIDEWALK_STREET_NAMES_MAX_BOXES',
+        placeholder: 'blank = 2000',
+        description: 'Queued boxes renamed in one run. What is left stays queued for the next.',
+      },
+    ],
+    source: 'import/update-sidewalk-street-names.ts',
+    notes:
+      'OSM Update runs this after each replication cycle unless its "Update sidewalk street names" switch is off. The queue (detail_dirty) is filled by scripts/replicate-extract.sh under the same switch, and only once Build Sidewalk Street Names has stored a row. A box that fails is skipped and retried later, up to three runs. Steps aside while "Build Sidewalk Street Names" runs.',
   },
   {
     id: 'osm-elevate-bicycle-ways',
