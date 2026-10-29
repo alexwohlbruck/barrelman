@@ -83,6 +83,7 @@ describe('buildSyncArgs', () => {
     expect(args).toContain('--state=/ws/build/sync-state.json')
     expect(args).toContain('--style-dir=/ws/style')
     expect(args).toContain('--json')
+    expect(args.find(a => a.startsWith('--tile-hook='))).toContain('elevate-portolan.ts --dir "$PORTOLAN_TILES"')
     // every value-carrying flag uses = form (the parseArgs/leading-minus
     // footgun documented in scripts/download-gtfs.sh)
     for (const a of args) {

@@ -1042,6 +1042,37 @@ export const SCRIPTS: ScriptDef[] = [
       'OSM Update runs this after each replication cycle unless its "Update tunnel cuts" switch is off. The queue (detail_dirty) is filled by scripts/replicate-extract.sh under the same switch, and only once Build Tunnel Cuts has stored a cut. Empties the queue with BRIDGE_DECKS_DEM_TILES=off. A box that fails is skipped and retried later, up to three runs. Steps aside while "Build Tunnel Cuts" runs.',
   },
   {
+    id: 'osm-elevate-bicycle-ways',
+    name: 'Elevate Bicycle Ways',
+    description:
+      'Write each cycle way\'s heights along its bridge decks and through its tunnels into bicycle_ways.elevation, which its tiles serve, so a 3D map draws it on the deck or underground.',
+    category: 'osm',
+    danger: 'safe',
+    longRunning: true,
+    confirm: true,
+    exclusive: true,
+    exec: { kind: 'process', command: 'nice', args: ['-n', '10', 'bun', 'run', 'import/elevate-bicycle-ways.ts'] },
+    params: [{ name: 'bbox', label: 'Area (w,s,e,n)', type: 'string', apply: 'flag', flag: '--bbox', placeholder: 'blank = everywhere' }],
+    source: 'import/elevate-bicycle-ways.ts',
+    notes:
+      'Run after Build Bridge Decks and Build Tunnel Cuts, and again after either rebuilds. Reads the decks, tunnels and portals around each batch of ways and Mapterhorn terrain, and writes only values that changed. Restart Martin afterwards on an instance that caches tiles.',
+  },
+  {
+    id: 'portolan-elevate',
+    name: 'Elevate Transit Tiles',
+    description:
+      'Write the heights of transit ribbons, stations and stop marks on bridge decks and in tunnels into the portolan tile pyramids. Portolan Sync does this for each pyramid it builds; run this after the decks or tunnels change.',
+    category: 'transit',
+    danger: 'safe',
+    longRunning: true,
+    confirm: true,
+    exclusive: true,
+    exec: { kind: 'process', command: 'nice', args: ['-n', '10', 'bun', 'run', 'import/elevate-portolan.ts'] },
+    params: [{ name: 'feeds', label: 'Feeds', type: 'string', apply: 'flag', flag: '--feeds', placeholder: 'blank = every pyramid' }],
+    source: 'import/elevate-portolan.ts',
+    notes: 'Replaces each tile whole, so the map keeps serving throughout. Tiles at zoom 13 and above only.',
+  },
+  {
     id: 'search-intersections',
     name: 'Generate Intersections',
     description: 'Find points where differently-named roads cross and insert synthetic intersection rows for search.',

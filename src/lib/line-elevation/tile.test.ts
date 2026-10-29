@@ -4,7 +4,7 @@ import { decodeElevation } from './encode'
 import { encodeLayer, layerNames, readLayer, withProperty } from './mvt'
 import type { HeightSource } from './sources'
 import { at, ORIGIN } from './test-geometry'
-import { elevateLayer, elevateRibbonTile, elevateTile, ribbonRides } from './tile'
+import { elevateLayer, elevateRibbonTile, ribbonRides } from './tile'
 
 const Z = 16, N = 2 ** Z
 const [X, Y] = [Math.floor(ORIGIN[0] * N), Math.floor(ORIGIN[1] * N)]
@@ -35,6 +35,14 @@ describe('withProperty', () => {
     expect(features[0].lines).toEqual([line])
     expect(layerNames(out)).toEqual(['bicycle_ways', 'buildings'])
     expect(out.subarray(out.length - other.length)).toEqual(other)
+  })
+
+  test('replaces a value the layer already has, dropping the one it held', () => {
+    const once = withProperty(tile, 'bicycle_ways', 'elevation', f => (f.id === 42 ? 'x' : null))
+    const twice = withProperty(once, 'bicycle_ways', 'elevation', f => (f.id === 42 ? null : 'y'))
+    const { features } = readLayer(twice, 'bicycle_ways')!
+    expect(features.map(f => f.properties)).toEqual([{ name: 'Bridge path', bridge: true }, { name: 'Elsewhere', elevation: 'y' }])
+    expect(withProperty(twice, 'bicycle_ways', 'elevation', f => (f.id === 42 ? 'x' : null))).toEqual(once)
   })
 
   test('returns the very tile when nothing changes', () => {
@@ -75,21 +83,6 @@ describe('elevateRibbonTile', () => {
     expect(readLayer(out, 'ribbons')!.features[0].properties.elevation).toBeDefined()
     expect(readLayer(out, 'stations')!.features.map(f => f.properties.elevation as string | undefined)).toEqual(['6', undefined])
     expect(readLayer(out, 'cat')!.features[0].properties.elevation).toBe('6')
-  })
-})
-
-describe('elevateTile', () => {
-  test('falls back to the tile as it came when its sources cannot be read', async () => {
-    const out = await elevateTile(tile, 'bicycle_ways', Z, X, Y, async () => { throw new Error('down') })
-    expect(out).toEqual({ bytes: tile, complete: false })
-  })
-
-  test('reads no sources below its zoom, or for a tile without the layer', async () => {
-    let asked = 0
-    const sources = async () => (asked++, [deck])
-    await elevateTile(tile, 'bicycle_ways', 12, X >> 4, Y >> 4, sources)
-    await elevateTile(other, 'bicycle_ways', Z, X, Y, sources)
-    expect(asked).toBe(0)
   })
 })
 

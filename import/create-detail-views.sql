@@ -1145,3 +1145,13 @@ SELECT id, kind,
        CASE WHEN piers IS NOT NULL THEN array_to_string(ARRAY(SELECT round(p * 10)::int FROM unnest(piers) p), ',') END AS piers,
        geom
 FROM tunnel_cuts;
+
+-- A cycle way's heights on decks and through tunnels, written by Elevate
+-- Bicycle Ways (import/elevate-bicycle-ways.ts). Martin serves the column, so
+-- it must exist before Martin starts, even on a database imported without it.
+DO $$
+BEGIN
+  IF to_regclass('public.bicycle_ways') IS NOT NULL THEN
+    ALTER TABLE bicycle_ways ADD COLUMN IF NOT EXISTS elevation text;
+  END IF;
+END $$;
