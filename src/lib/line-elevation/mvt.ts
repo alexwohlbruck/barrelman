@@ -90,8 +90,8 @@ class Writer {
 
 const zigzag = (n: number) => (n % 2 ? -(n + 1) / 2 : n / 2)
 
-/** A feature's lines in tile units: one per MoveTo. */
-function decodeLines(geometry: number[]): Array<Array<[number, number]>> {
+/** A feature's lines in tile units: one per MoveTo, a point's of that point alone. */
+function decodeLines(geometry: number[], type: number): Array<Array<[number, number]>> {
   const lines: Array<Array<[number, number]>> = []
   let x = 0, y = 0
   for (let i = 0; i < geometry.length;) {
@@ -105,7 +105,7 @@ function decodeLines(geometry: number[]): Array<Array<[number, number]>> {
       else lines.at(-1)?.push([x, y])
     }
   }
-  return lines.filter(line => line.length > 1)
+  return type === 1 ? lines : lines.filter(line => line.length > 1)
 }
 
 /** One feature as read from a layer: its id, decoded properties and geometry in tile units. */
@@ -159,7 +159,7 @@ function decodeLayer(layer: Uint8Array) {
       else if (f.field === 2 && f.body) {
         const tags = packed(f.body)
         for (let i = 0; i + 1 < tags.length; i += 2) feature.properties[keys[tags[i]]] = values[tags[i + 1]]
-      } else if (f.field === 4 && f.body) feature.lines = decodeLines(packed(f.body))
+      } else if (f.field === 4 && f.body) feature.lines = decodeLines(packed(f.body), feature.type)
     }
     return feature
   })

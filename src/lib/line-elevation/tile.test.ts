@@ -4,7 +4,7 @@ import { decodeElevation } from './encode'
 import { encodeLayer, layerNames, readLayer, withProperty } from './mvt'
 import type { HeightSource } from './sources'
 import { at, ORIGIN } from './test-geometry'
-import { elevateLayer, elevateTile, ribbonRides } from './tile'
+import { elevateLayer, elevateRibbonTile, elevateTile, ribbonRides } from './tile'
 
 const Z = 16, N = 2 ** Z
 const [X, Y] = [Math.floor(ORIGIN[0] * N), Math.floor(ORIGIN[1] * N)]
@@ -60,6 +60,21 @@ describe('elevateLayer', () => {
     const [metro, ferry] = readLayer(elevateLayer(ribbons, 'ribbons', Z, X, Y, [deck], ribbonRides), 'ribbons')!.features
     expect(typeof metro.properties.elevation).toBe('string')
     expect(ferry.properties.elevation).toBeUndefined()
+  })
+})
+
+describe('elevateRibbonTile', () => {
+  test('gives a station the height of its own route\'s ribbon beside it, and leaves one of another route on the ground', () => {
+    const ribbons = encodeLayer('ribbons', [{ id: 1, properties: { routes: 'N,W', ways: '42' }, lines: [line] }])
+    const stations = encodeLayer('stations', [
+      { id: 2, type: 1, properties: { routes: 'W,7', name: 'Up' }, lines: [[local(at(100, 10))]] },
+      { id: 3, type: 1, properties: { routes: 'R', name: 'Down' }, lines: [[local(at(100, 10))]] },
+    ])
+    const cat = encodeLayer('cat', [{ id: 4, type: 1, properties: { route: 'N' }, lines: [[local(at(100, 0))]] }])
+    const out = elevateRibbonTile(concat(ribbons, stations, cat), Z, X, Y, [deck])
+    expect(readLayer(out, 'ribbons')!.features[0].properties.elevation).toBeDefined()
+    expect(readLayer(out, 'stations')!.features.map(f => f.properties.elevation as string | undefined)).toEqual(['6', undefined])
+    expect(readLayer(out, 'cat')!.features[0].properties.elevation).toBe('6')
   })
 })
 
