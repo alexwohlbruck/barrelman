@@ -43,6 +43,26 @@ in rain, on ice) is the caller's to judge. At most ${MAX_COORDINATES} coordinate
 and ${MAX_LENGTH_METERS / 1000} km.
 `.trim()
 
+const ROUTE_DESCRIPTION = `
+Accepts a GraphHopper-compatible route request and returns the route response
+enriched with per-edge surface, road class, bike network, smoothness and slope
+attributes (\`edge_segments\`) and elevation statistics. Internally calls
+GraphHopper /route with details and elevation enabled.
+
+Each path also describes what it passes, for voice guidance, read from OSM:
+
+- \`edge_segments[].crossingName\`: on a crosswalk segment, the named road it crosses.
+- \`overpasses\`: roads (\`kind: "road"\`) and railways (\`"rail"\`) that pass over the
+  route at a higher layer, at \`distance\` metres along it. Twin carriageways and
+  parallel tracks crossed together are one, ending at \`endDistance\`. Nothing is
+  reported inside a tunnel. Not computed beyond 300 km.
+- \`states\`: stretches inside a state or province (admin_level 4), with its \`name\`
+  and ISO 3166-2 \`code\`, where the extract holds its polygon.
+- \`parks\`: on a \`foot\` route, stretches inside a \`leisure=park\`, with its \`name\`.
+
+Each is looked up under a time budget and comes back empty rather than late.
+`.trim()
+
 const hazardRequestBody = t.Object({
   coordinates: t.Array(t.Tuple([t.Number(), t.Number()]), { description: '[lon, lat]', maxItems: MAX_COORDINATES }),
   profile: t.Union(PROFILES.map(p => t.Literal(p))),
@@ -98,11 +118,7 @@ export function createRouteRoutes(deps: {
     }, {
       detail: {
         summary: 'Get enriched route with elevation and path detail data',
-        description:
-          'Accepts a GraphHopper-compatible route request and returns the route ' +
-          'response enriched with per-edge surface/road class/bike network/' +
-          'smoothness/slope attributes and elevation statistics. Internally ' +
-          'calls GraphHopper /route with details and elevation enabled.',
+        description: ROUTE_DESCRIPTION,
         tags: ['Routing'],
       },
     })

@@ -14,6 +14,7 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 * `POST /route/hazards` lists the hazards along a route from OSM tags the routing graph doesn't carry: traffic lights, stop and give-way signs facing the route, tram rails and shallow tram crossings, unlit, flood-prone and sidewalk-less ways, low clearances, tolls, speed cameras, traffic calming, movable bridges and posted hazards. Run the "Build Route Hazard Indexes" task after upgrading to keep it fast. Billed as routing.
 * Walking routes name the street a separately mapped sidewalk runs beside, so directions can say "Turn left onto W 3rd St" instead of "Turn left". Run Build Sidewalk Street Names, and rebuild the routing graph once, to turn it on.
+* `/route` describes what a route passes for voice guidance: each crosswalk segment names the road it crosses (`crossingName`), and each path lists the roads and railways passing over it (`overpasses`), the states or provinces it runs through (`states`), and, on foot, the parks it enters (`parks`). Run the "Build Route Context Indexes" task after upgrading to turn it on.
 
 ### Changed
 

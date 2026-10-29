@@ -168,6 +168,9 @@ psql "$DATABASE_URL" -f "$PROJECT_DIR/import/create-detail-indexes.sql"
 # The same, for the nodes and ways POST /route/hazards reads.
 psql "$DATABASE_URL" -f "$PROJECT_DIR/import/create-route-hazard-indexes.sql"
 
+# And for the roads, bridges and parks /route reads to describe a route.
+psql "$DATABASE_URL" -f "$PROJECT_DIR/import/create-route-context-indexes.sql"
+
 # The materialized views hold rows rather than being plain views, so creating
 # them is not enough — they come into existence empty. Filled here, where the
 # data they join over has just changed. Minutes on a large extract.
