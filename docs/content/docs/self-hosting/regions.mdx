@@ -175,6 +175,8 @@ config or feeds change, so a plain restart keeps serving the old schedules and
 the new feeds never reach riders. Re-run it after every GTFS refresh, and after
 any MOTIS version bump.
 
+Each GTFS feed replaces its PostGIS data in one transaction after its timetable is validated. A failed replacement preserves the previous feed and fails the job; it does not publish stops without their route associations. MOTIS remains a separate dataset build, as described above.
+
 ### Measured timings
 
 Colorado — a 360 MB PBF yielding 6.04M objects and 75 transit feeds — on a

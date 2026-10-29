@@ -216,6 +216,7 @@ async function main() {
   // How many feeds we tried, so a run where every one failed can be told apart
   // from a region that legitimately has none.
   let attemptedFeeds = 0
+  let failedFeeds = 0
 
   // Read before anything is imported: importFeedFile clears each feed's row,
   // so whatever a caller doesn't carry forward is gone. rt_urls in particular
@@ -285,6 +286,7 @@ async function main() {
         // Step 3: Parse and import
         await importFeedFile(filepath, merged)
       } catch (err) {
+        failedFeeds++
         console.error(`  ✗ Error: ${err instanceof Error ? err.message : err}`)
       }
     }
@@ -335,6 +337,10 @@ async function main() {
 
       await importFeedFile(filepath, feed)
     }
+  }
+
+  if (failedFeeds > 0) {
+    throw new Error(`${failedFeeds} GTFS feed(s) failed; keeping their previous database contents`)
   }
 
   // Step 4: Compute walking transfers
