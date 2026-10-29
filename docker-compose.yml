@@ -502,6 +502,10 @@ services:
       # unless set to 0, and the queued boxes each run rebuilds.
       TUNNEL_CUTS_INCREMENTAL: ${TUNNEL_CUTS_INCREMENTAL:-}
       TUNNEL_CUTS_MAX_BOXES: ${TUNNEL_CUTS_MAX_BOXES:-}
+      # Incremental sidewalk street names (update-osm.sh →
+      # update-sidewalk-street-names.ts), on unless set to 0.
+      SIDEWALK_STREET_NAMES_INCREMENTAL: ${SIDEWALK_STREET_NAMES_INCREMENTAL:-}
+      SIDEWALK_STREET_NAMES_MAX_BOXES: ${SIDEWALK_STREET_NAMES_MAX_BOXES:-}
       # ── Portolan (corrected transit geometry) ───────────────────────
       # Workspace root for import/portolan-sync.ts: portolan.json + style/ +
       # data/gtfs/ (raw feeds, portolan's own copies) + build/ (tiles, exports,

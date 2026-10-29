@@ -1146,6 +1146,19 @@ SELECT id, kind,
        geom
 FROM tunnel_cuts;
 
+-- Sidewalk street names: the street each unnamed footway, path or cycleway
+-- runs beside, solved by Build Sidewalk Street Names
+-- (import/generate-sidewalk-street-names.ts). `zones` is ordered along `geom`:
+-- [{ "from": 0, "to": 0.62, "name": "W 3rd St", "source": "geometry" }, ...],
+-- `from` and `to` as fractions of its length. /route names its walking stretches from it.
+CREATE TABLE IF NOT EXISTS sidewalk_street_names (
+  way_id bigint PRIMARY KEY,
+  geom geometry(LineString, 4326) NOT NULL,
+  zones jsonb NOT NULL,
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS sidewalk_street_names_geom_idx ON sidewalk_street_names USING gist (geom);
+
 -- A cycle way's heights on decks and through tunnels, written by Elevate
 -- Bicycle Ways (import/elevate-bicycle-ways.ts). Martin serves the column, so
 -- it must exist before Martin starts, even on a database imported without it.

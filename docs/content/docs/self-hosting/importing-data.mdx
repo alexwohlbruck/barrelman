@@ -300,6 +300,43 @@ If you see that error, re-fetch `docker-compose.yml` and run
 `docker compose up -d barrelman-ops`.
 </Callout>
 
+### Sidewalk street names (optional)
+
+Separately mapped sidewalks (`footway=sidewalk`) are rarely named, so a walk
+along one has no street to mention: "Turn left" rather than "Turn left onto
+W 3rd St". **Build Sidewalk Street Names**
+(`import/generate-sidewalk-street-names.ts`, `--bbox w,s,e,n` for one area)
+works out the street each unnamed footway, path or cycleway runs beside and
+stores it, along the way's length, in `sidewalk_street_names`:
+
+```bash
+docker compose exec barrelman-ops bun run import/generate-sidewalk-street-names.ts --bbox -74.03,40.69,-73.90,40.88
+```
+
+Each way is sampled every 7.5 m. At each sample the named roads within 25 m and
+within 25° of parallel compete, the nearest winning and a bigger road taking a
+near tie, so the cross street at a corner never does; footways, paths,
+cycleways and pedestrian streets never name a sidewalk, and neither does a road
+on another layer. A change of street that holds for three samples or more ends
+one zone and starts the next, so one sidewalk can wrap a corner onto a second
+street. A way tagged `is_sidepath:of:name` or `street:name` takes that name
+whole. The build costs a little over a second per thousand pedestrian ways (New
+York City, about 220,000 of them, takes under five minutes) and rewrites each
+cell in place.
+
+`/route` then sets `streetName` and `streetNameSource` (`tag` or `geometry`) on
+the `edge_segments` that follow a named sidewalk, splitting a segment where the
+street changes. It finds the ways by GraphHopper's `osm_way_id` path detail, so
+the graph must be built with `osm_way_id` in `graph.encoded_values`
+(`graphhopper-config.yml` has it; run Rebuild GraphHopper once after
+upgrading). Without the table or the way ids, routes are unchanged.
+
+OSM Update keeps the names current, unless its "Update sidewalk street names"
+switch is off (`SIDEWALK_STREET_NAMES_INCREMENTAL=0` for runs started from a
+shell): each replication cycle queues the box around every highway it touched,
+and "Update Sidewalk Street Names" renames the sidewalks there, at most
+`SIDEWALK_STREET_NAMES_MAX_BOXES` boxes a run.
+
 ## Verify
 
 Run all of these. Each one exercises a different layer, and a stack can pass the first and fail the rest.
