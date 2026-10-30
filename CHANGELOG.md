@@ -18,6 +18,7 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ### Changed
 
+* Vector tiles leave `/tiles` as Martin compressed them instead of being unzipped and compressed again, which took about 10 ms of API time per dense tile. Every tile now carries an `ETag`, so a browser or CDN holding an expired tile revalidates with a `304` instead of downloading it again.
 * Line heights on bridge decks and through tunnels are written when the data is built, not on each tile request: into each transit pyramid as portolan builds it, and into `bicycle_ways.elevation` by Elevate Bicycle Ways. Serving tiles costs nothing extra.
 
 ### Fixed

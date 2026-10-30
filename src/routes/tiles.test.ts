@@ -120,6 +120,48 @@ describe('GET /tiles/:source/:z/:x/:y', () => {
     expect(new Uint8Array(await res.arrayBuffer())).toEqual(tileData)
   })
 
+  test("forwards Martin's gzip byte for byte rather than zipping it again", async () => {
+    const zipped = Bun.gzipSync(new Uint8Array(4096).fill(0x1a))
+    const mockFetch = mock<TileFetcher>(async () =>
+      new Response(zipped, { status: 200, headers: { 'content-type': 'application/x-protobuf' } }),
+    )
+    const app = new Elysia().use(createTileRoutes({ fetchTile: mockFetch }))
+    const res = await app.handle(get('/tiles/basemap/10/500/300', { 'accept-encoding': 'gzip' }))
+
+    expect(res.headers.get('content-encoding')).toBe('gzip')
+    expect(new Uint8Array(await res.arrayBuffer())).toEqual(zipped)
+  })
+
+  test("unzips Martin's gzip for a caller that cannot read it", async () => {
+    const tileData = new Uint8Array(4096).fill(0x1a)
+    const mockFetch = mock<TileFetcher>(async () =>
+      new Response(Bun.gzipSync(tileData), { status: 200, headers: { 'content-type': 'application/x-protobuf' } }),
+    )
+    const app = new Elysia().use(createTileRoutes({ fetchTile: mockFetch }))
+    const res = await app.handle(get('/tiles/basemap/10/500/300'))
+
+    expect(res.headers.get('content-encoding')).toBeNull()
+    expect(res.headers.get('vary')).toBe('Accept-Encoding')
+    expect(new Uint8Array(await res.arrayBuffer())).toEqual(tileData)
+  })
+
+  test('revalidates an unchanged tile with a 304 and no body', async () => {
+    const mockFetch = mock<TileFetcher>(async () =>
+      new Response(new Uint8Array([0x1a, 0x01, 0x02]), { status: 200, headers: { 'content-type': 'application/x-protobuf' } }),
+    )
+    const app = new Elysia().use(createTileRoutes({ fetchTile: mockFetch }))
+    const first = await app.handle(get('/tiles/basemap/10/500/300'))
+    const etag = first.headers.get('etag')
+    expect(etag).toMatch(/^W\/"/)
+
+    const again = await app.handle(get('/tiles/basemap/10/500/300', { 'if-none-match': etag! }))
+    expect(again.status).toBe(304)
+    expect((await again.arrayBuffer()).byteLength).toBe(0)
+
+    const other = await app.handle(get('/tiles/basemap/10/500/300', { 'if-none-match': 'W/"nope"' }))
+    expect(other.status).toBe(200)
+  })
+
   // `gzip;q=0` is the one case a substring match gets backwards.
   test('honours gzip;q=0 as a refusal', async () => {
     const mockFetch = mock<TileFetcher>(async () =>
