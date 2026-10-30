@@ -105,7 +105,11 @@ const ENDPOINT_DEPENDENCIES: Record<
     enhancedBy: ['pelias'],
     partialMessage: 'Forward geocoding and place-level reverse are unavailable; coordinate reverse still works',
   },
-  routing: { dependsOn: ['graphhopper'] },
+  routing: {
+    dependsOn: ['graphhopper'],
+    enhancedBy: ['database'],
+    partialMessage: 'Route hazards (/route/hazards), sidewalk street names and route context (crosswalk names, overpasses, states, parks) are unavailable; routes are unaffected',
+  },
   isochrone: {
     dependsOn: ['graphhopper'],
     enhancedBy: ['motis'],

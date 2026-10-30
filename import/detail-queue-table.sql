@@ -1,9 +1,10 @@
 -- The rebuild queue for the detail layers built from OSM: the boxes each
 -- replication diff touched, as replicate-extract.sh queues them, one row per
 -- box and layer. Each layer queues only what it is built from
--- (queue-road-markings.sql, queue-bridge-decks.sql, queue-tunnel-cuts.sql) and
--- its own update script works off its own rows (update-road-markings.sh,
--- update-bridge-decks.ts, update-tunnel-cuts.ts).
+-- (queue-road-markings.sql, queue-bridge-decks.sql, queue-tunnel-cuts.sql,
+-- queue-sidewalk-street-names.sql) and its own update script works off its own
+-- rows (update-road-markings.sh, update-bridge-decks.ts, update-tunnel-cuts.ts,
+-- update-sidewalk-street-names.ts).
 -- `attempts` counts runs in which part of an entry failed to build, so a box
 -- that cannot be built moves to the back of the queue, and is dropped after a
 -- few tries, instead of holding up the rest.
@@ -23,6 +24,9 @@ BEGIN
     END IF;
     IF NOT built AND to_regclass('tunnel_cuts') IS NOT NULL THEN
       built := EXISTS (SELECT 1 FROM tunnel_cuts);
+    END IF;
+    IF NOT built AND to_regclass('sidewalk_street_names') IS NOT NULL THEN
+      built := EXISTS (SELECT 1 FROM sidewalk_street_names);
     END IF;
     IF NOT built THEN
       RETURN;

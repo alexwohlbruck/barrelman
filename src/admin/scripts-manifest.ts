@@ -277,6 +277,16 @@ export const SCRIPTS: ScriptDef[] = [
           'Queue the tunnels each cycle touches, and the cuts whose roads, buildings or walls changed, then rebuild them once Build Tunnel Cuts has run. Only a database without middle tables records which ways changed.',
       },
       {
+        name: 'SIDEWALK_STREET_NAMES_INCREMENTAL',
+        label: 'Update sidewalk street names',
+        type: 'boolean',
+        apply: 'env',
+        envVar: 'SIDEWALK_STREET_NAMES_INCREMENTAL',
+        default: true,
+        description:
+          'Queue the box around each highway a cycle touches, then rename the sidewalks there once Build Sidewalk Street Names has run. Only a database without middle tables records which ways changed.',
+      },
+      {
         name: 'REPLICATION_MAX_DIFFS',
         label: 'Diffs per cycle',
         type: 'number',
@@ -867,6 +877,48 @@ export const SCRIPTS: ScriptDef[] = [
     notes:
       'Built CONCURRENTLY, so tiles keep serving throughout. Each index scans the whole of geo_places — minutes apiece on a continental import. Safe to re-run; existing indexes are skipped.',
   },
+  {
+    id: 'route-hazard-indexes',
+    name: 'Build Route Hazard Indexes',
+    description:
+      'Create the partial spatial indexes POST /route/hazards reads signals, signs, tram rails and hazard-tagged ways through, so a route request scans only those.',
+    category: 'osm',
+    danger: 'safe',
+    longRunning: true,
+    confirm: false,
+    exec: { kind: 'internal', handler: 'sql:create-route-hazard-indexes.sql' },
+    source: 'import/create-route-hazard-indexes.sql',
+    notes:
+      'Built CONCURRENTLY; the endpoint keeps answering, only slower, until they exist. Each index scans the whole of geo_places. Safe to re-run.',
+  },
+  {
+    id: 'route-context-indexes',
+    name: 'Build Route Context Indexes',
+    description:
+      'Create the partial spatial indexes /route reads named roads, bridges, raised ways and parks through, to tell voice guidance which road a crosswalk crosses and which overpasses and parks a route passes.',
+    category: 'osm',
+    danger: 'safe',
+    longRunning: true,
+    confirm: false,
+    exec: { kind: 'internal', handler: 'sql:create-route-context-indexes.sql' },
+    source: 'import/create-route-context-indexes.sql',
+    notes:
+      'Built CONCURRENTLY; routes keep answering throughout. Until they exist, crosswalk names, overpasses and parks may run out of their time budget and be left off. Each index scans the whole of geo_places. Safe to re-run.',
+  },
+  {
+    id: 'route-state-parts',
+    name: 'Build Route State Parts',
+    description:
+      'Cut every state and province boundary into small indexed parts (state_parts), which /route reads to list the states a route runs through.',
+    category: 'osm',
+    danger: 'safe',
+    longRunning: false,
+    confirm: false,
+    exec: { kind: 'internal', handler: 'sql:build-state-parts.sql' },
+    source: 'import/build-state-parts.sql',
+    notes:
+      'The API builds it at startup when it is empty, and the OSM import and update rebuild it, so this is only for a boundary edit that should show before the next update. Seconds on a continental import; routes keep their states throughout.',
+  },
 
   // ── GBFS ──────────────────────────────────────────────────────────────
   {
@@ -1040,6 +1092,82 @@ export const SCRIPTS: ScriptDef[] = [
     source: 'import/update-tunnel-cuts.ts',
     notes:
       'OSM Update runs this after each replication cycle unless its "Update tunnel cuts" switch is off. The queue (detail_dirty) is filled by scripts/replicate-extract.sh under the same switch, and only once Build Tunnel Cuts has stored a cut. Empties the queue with BRIDGE_DECKS_DEM_TILES=off. A box that fails is skipped and retried later, up to three runs. Steps aside while "Build Tunnel Cuts" runs.',
+  },
+  {
+    id: 'osm-sidewalk-street-names',
+    name: 'Build Sidewalk Street Names',
+    description:
+      'Rebuild sidewalk_street_names: the street each unnamed sidewalk, footway, path or cycleway runs beside, along its length, found from the named roads parallel to it. /route names walking stretches from it, so directions say "Continue on W 3rd St" rather than "Continue".',
+    category: 'osm',
+    danger: 'safe',
+    longRunning: true,
+    confirm: true,
+    exclusive: true,
+    exec: { kind: 'process', command: 'nice', args: ['-n', '10', 'bun', 'run', 'import/generate-sidewalk-street-names.ts'] },
+    params: [
+      { name: 'bbox', label: 'Area (w,s,e,n)', type: 'string', apply: 'flag', flag: '--bbox', placeholder: 'blank = the REGIONS areas' },
+      { name: 'cell', label: 'Cell size (degrees)', type: 'number', apply: 'flag', flag: '--cell', default: 0.02 },
+    ],
+    source: 'import/generate-sidewalk-street-names.ts',
+    notes:
+      'Rebuilds cell by cell, in place, so routes keep their names meanwhile and a run can be stopped and started again. Costs a little over a second per thousand pedestrian ways. A blank area covers each area of the regions REGIONS selects; with REGIONS=global it refuses to start, so give an area. OSM Update keeps the names current afterwards (see Update Sidewalk Street Names). Street names along routes need the routing graph built with osm_way_id (Rebuild GraphHopper).',
+  },
+  {
+    id: 'osm-sidewalk-street-names-update',
+    name: 'Update Sidewalk Street Names',
+    description:
+      'Rename the sidewalks around the highways recent replication diffs touched: sidewalks added, moved or deleted, and streets beside them renamed, moved or deleted.',
+    category: 'osm',
+    danger: 'safe',
+    longRunning: true,
+    confirm: false,
+    exclusive: true,
+    exec: { kind: 'process', command: 'nice', args: ['-n', '10', 'bun', 'run', 'import/update-sidewalk-street-names.ts'] },
+    params: [
+      {
+        name: 'SIDEWALK_STREET_NAMES_MAX_BOXES',
+        label: 'Boxes per run',
+        type: 'number',
+        apply: 'env',
+        envVar: 'SIDEWALK_STREET_NAMES_MAX_BOXES',
+        placeholder: 'blank = 2000',
+        description: 'Queued boxes renamed in one run. What is left stays queued for the next.',
+      },
+    ],
+    source: 'import/update-sidewalk-street-names.ts',
+    notes:
+      'OSM Update runs this after each replication cycle unless its "Update sidewalk street names" switch is off. The queue (detail_dirty) is filled by scripts/replicate-extract.sh under the same switch, and only once Build Sidewalk Street Names has stored a row. A box that fails is skipped and retried later, up to three runs. Steps aside while "Build Sidewalk Street Names" runs.',
+  },
+  {
+    id: 'osm-elevate-bicycle-ways',
+    name: 'Elevate Bicycle Ways',
+    description:
+      'Write each cycle way\'s heights along its bridge decks and through its tunnels into bicycle_ways.elevation, which its tiles serve, so a 3D map draws it on the deck or underground.',
+    category: 'osm',
+    danger: 'safe',
+    longRunning: true,
+    confirm: true,
+    exclusive: true,
+    exec: { kind: 'process', command: 'nice', args: ['-n', '10', 'bun', 'run', 'import/elevate-bicycle-ways.ts'] },
+    params: [{ name: 'bbox', label: 'Area (w,s,e,n)', type: 'string', apply: 'flag', flag: '--bbox', placeholder: 'blank = everywhere' }],
+    source: 'import/elevate-bicycle-ways.ts',
+    notes:
+      'Run after Build Bridge Decks and Build Tunnel Cuts, and again after either rebuilds. Reads the decks, tunnels and portals around each batch of ways and Mapterhorn terrain, and writes only values that changed. Restart Martin afterwards on an instance that caches tiles.',
+  },
+  {
+    id: 'portolan-elevate',
+    name: 'Elevate Transit Tiles',
+    description:
+      'Write the heights of transit ribbons, stations and stop marks on bridge decks and in tunnels into the portolan tile pyramids. Portolan Sync does this for each pyramid it builds; run this after the decks or tunnels change.',
+    category: 'transit',
+    danger: 'safe',
+    longRunning: true,
+    confirm: true,
+    exclusive: true,
+    exec: { kind: 'process', command: 'nice', args: ['-n', '10', 'bun', 'run', 'import/elevate-portolan.ts'] },
+    params: [{ name: 'feeds', label: 'Feeds', type: 'string', apply: 'flag', flag: '--feeds', placeholder: 'blank = every pyramid' }],
+    source: 'import/elevate-portolan.ts',
+    notes: 'Replaces each tile whole, so the map keeps serving throughout. Tiles at zoom 13 and above only.',
   },
   {
     id: 'search-intersections',

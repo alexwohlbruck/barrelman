@@ -169,7 +169,7 @@ function decodeLayer(layer: Uint8Array) {
 /**
  * The tile with a string property `key` added to features of layer `name`:
  * `value` is asked for each feature in order, and null leaves it as it was.
- * Returns the tile itself when nothing changes, or the layer already has `key`.
+ * A value the layer already has for `key` is replaced. Returns the tile itself when nothing changes.
  */
 export function withProperty(
   tile: Uint8Array,
@@ -197,50 +197,64 @@ export function withProperty(
 
 function rewriteLayer(layer: Uint8Array, key: string, value: (feature: MvtFeature, extent: number) => string | null): Uint8Array | null {
   const { extent, keys, features } = decodeLayer(layer)
-  if (keys.includes(key)) return null
   const added = features.map(feature => value(feature, extent))
-  if (added.every(v => v === null)) return null
-  const keyIndex = keys.length
-  let valueIndex = 0
-  for (const f of fields(layer)) if (f.field === 4) valueIndex++
+  const existing = keys.indexOf(key)
+  if (existing < 0 && added.every(v => v === null)) return null
+  const parts = [...fields(layer)]
+  const tagLists = parts.flatMap(f => (f.field === 2 && f.body ? [tagsOf(f.body)] : []))
+  const stale = staleValues(tagLists, existing)
+  const valueCount = parts.filter(f => f.field === 4).length
+  const shifted: number[] = []
+  for (let v = 0, gone = 0; v < valueCount; v++) stale.has(v) ? gone++ : (shifted[v] = v - gone)
+  const keyIndex = existing < 0 ? keys.length : existing
+  const kept = valueCount - stale.size
   const strings: string[] = []
   const out = new Writer()
-  let feature = 0
-  for (const f of fields(layer)) {
+  let feature = 0, valueAt = 0
+  for (const f of parts) {
+    if (f.field === 4 && stale.has(valueAt++)) continue
     if (f.field !== 2 || !f.body) {
       out.raw(layer.subarray(f.start, f.end))
       continue
     }
-    const text = added[feature++]
-    if (text === null) {
-      out.raw(layer.subarray(f.start, f.end))
-      continue
-    }
-    const tag = [keyIndex, valueIndex + strings.length]
-    strings.push(text)
-    out.bytes(2, retagged(f.body, tag))
+    const text = added[feature]
+    const tags: number[] = []
+    const old = tagLists[feature++]
+    for (let i = 0; i + 1 < old.length; i += 2) if (old[i] !== existing) tags.push(old[i], shifted[old[i + 1]])
+    if (text !== null) tags.push(keyIndex, kept + strings.push(text) - 1)
+    out.bytes(2, withTags(f.body, tags))
   }
-  out.bytes(3, new TextEncoder().encode(key))
+  if (existing < 0) out.bytes(3, new TextEncoder().encode(key))
   for (const s of strings) out.bytes(4, new Writer().bytes(1, new TextEncoder().encode(s)).done())
   return out.done()
 }
 
-function retagged(feature: Uint8Array, tag: number[]): Uint8Array {
+function tagsOf(feature: Uint8Array): number[] {
+  for (const f of fields(feature)) if (f.field === 2 && f.body) return packed(f.body)
+  return []
+}
+
+/** The values only key `key` points at, which go with it. */
+function staleValues(tagLists: number[][], key: number): Set<number> {
+  if (key < 0) return new Set()
+  const theirs = new Set<number>(), shared = new Set<number>()
+  for (const tags of tagLists) for (let i = 0; i + 1 < tags.length; i += 2) (tags[i] === key ? theirs : shared).add(tags[i + 1])
+  return new Set([...theirs].filter(v => !shared.has(v)))
+}
+
+function withTags(feature: Uint8Array, tags: number[]): Uint8Array {
+  const packedTags = new Writer()
+  for (const t of tags) packedTags.varint(t)
   const out = new Writer()
   let tagged = false
   for (const f of fields(feature)) {
-    if (f.field === 2 && f.body && !tagged) {
-      const tags = new Writer().raw(f.body)
-      for (const t of tag) tags.varint(t)
-      out.bytes(2, tags.done())
+    if (f.field !== 2) out.raw(feature.subarray(f.start, f.end))
+    else if (!tagged) {
+      out.bytes(2, packedTags.done())
       tagged = true
-    } else out.raw(feature.subarray(f.start, f.end))
+    }
   }
-  if (!tagged) {
-    const tags = new Writer()
-    for (const t of tag) tags.varint(t)
-    out.bytes(2, tags.done())
-  }
+  if (!tagged) out.bytes(2, packedTags.done())
   return out.done()
 }
 

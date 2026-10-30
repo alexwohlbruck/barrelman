@@ -6,8 +6,6 @@ import { resolveTileBundle } from '../config/tile-bundles'
 import { createDeckTiles, DECK_TILE_ZOOMS, encodeDeckTile, withDeckField, workerDeckTileBuilder, type DeckTile } from '../lib/bridge-mesh/tile-pieces'
 import { bridgeMeshDirectory } from '../lib/bridge-mesh/files'
 import { deckFilesIn } from '../lib/bridge-mesh/deck-lookup'
-import { cachedLineSources, readLineSources, type LineSources } from '../lib/line-elevation/lookup'
-import { ELEVATION_MIN_ZOOM, elevateTile } from '../lib/line-elevation/tile'
 
 function getMartinUrl() {
   return process.env.MARTIN_URL || 'http://barrelman-martin:3000'
@@ -84,12 +82,27 @@ export function acceptsGzip(header: string | undefined): boolean {
     })
 }
 
+/** Whether an If-None-Match header names this ETag (or `*`), compared weakly. */
+export function etagMatches(ifNoneMatch: string | undefined, etag: string): boolean {
+  if (!ifNoneMatch) return false
+  const bare = etag.replace(/^W\//, '')
+  return ifNoneMatch
+    .split(',')
+    .map((tag) => tag.trim())
+    .some((tag) => tag === '*' || tag.replace(/^W\//, '') === bare)
+}
+
 export function createTileRoutes(
-  deps: { fetchTile?: TileFetcher; portolanTilesDir?: string; deckTile?: (z: number, x: number, y: number) => Promise<DeckTile>; lineSources?: LineSources } = {},
+  deps: { fetchTile?: TileFetcher; portolanTilesDir?: string; deckTile?: (z: number, x: number, y: number) => Promise<DeckTile> } = {},
 ) {
-  const fetchTile: TileFetcher = deps.fetchTile || ((url: string) => fetch(url))
+  // `decompress: false` keeps Martin's gzip as it arrived, so the common case can
+  // forward it untouched; see the tile route. Bun honours it at runtime, and
+  // bun-types does not declare it.
+  const fetchTile: TileFetcher =
+    deps.fetchTile ||
+    ((url: string) =>
+      fetch(url, { headers: { 'accept-encoding': 'gzip' }, decompress: false } as RequestInit & { decompress: false }))
   const deckTile = deps.deckTile ?? createDeckTiles(deckFilesIn, workerDeckTileBuilder(bridgeMeshDirectory()))
-  const lineSources = deps.lineSources ?? cachedLineSources(readLineSources)
 
   /**
    * Portolan tiles are static files, not Martin: `portolan sync` writes MVT
@@ -306,11 +319,7 @@ export function createTileRoutes(
         set.headers['content-type'] = 'application/x-protobuf'
         set.headers['cache-control'] = 'public, max-age=3600'
         set.headers[CORS] = '*'
-        const zoom = Number(z)
-        if (zoom < ELEVATION_MIN_ZOOM) return file
-        const elevated = await elevateTile(new Uint8Array(await file.arrayBuffer()), 'ribbons', zoom, Number(x), Number(yBase), lineSources)
-        if (!elevated.complete) set.headers['cache-control'] = 'no-store'
-        return elevated.bytes
+        return file
       },
       {
         params: t.Object({
@@ -323,7 +332,7 @@ export function createTileRoutes(
           tags: ['Tiles'],
           summary: 'Portolan corrected-geometry tile',
           description:
-            'Serves a static MVT tile from the portolan pyramid. 204 for tiles inside the pyramid with no features.\n\nFrom zoom 13, a `ribbons` feature riding a bridge deck or running through a tunnel carries an `elevation` property, in the format the Martin proxy describes for `bicycle_ways`.',
+            'Serves a static MVT tile from the portolan pyramid. 204 for tiles inside the pyramid with no features.\n\nFrom zoom 13, a `ribbons` feature riding a bridge deck or running through a tunnel carries an `elevation` property, in the format the Martin proxy describes for `bicycle_ways`, and a station, stop mark or route bullet on one carries its height. Heights are written into the pyramid when it is built.',
         },
       },
     )
@@ -361,44 +370,63 @@ export function createTileRoutes(
         set.headers['access-control-allow-origin'] = '*'
 
         /**
-         * Compress on the way out, because nothing else does.
+         * Forward Martin's gzip as it came whenever nothing has to change.
          *
-         * Martin serves these gzipped and `fetch()` transparently decompresses,
-         * dropping the Content-Encoding with it — so what arrived as 125 KB was
-         * being forwarded as 242 KB, and the comment here used to say "Elysia
-         * may re-compress if the client accepts it", which it does not. Every
-         * tile left this API at twice its size; a CDN in front re-compressed it
-         * for the browser and hid the cost on the hop that actually crosses a
-         * network, the one filling the edge cache.
+         * This route used to read the body through `fetch()`'s transparent
+         * unzip and gzip it again on the way out: ~10 ms of synchronous CPU for
+         * a dense tile, on the one thread serving every request, to rebuild
+         * bytes Martin had already produced. Now only a tile that has to be
+         * edited (decks spliced in) or sent plain is unzipped, and only a tile
+         * Martin sent plain is zipped here.
          *
-         * Vary, because the answer now differs by request header and a shared
-         * cache must not hand a gzipped tile to a client that cannot read it.
+         * Judged by the gzip magic number, never the header: an MVT opens with
+         * 0x1a, so the two cannot be confused.
+         *
+         * Vary on every answer, because the bytes differ by Accept-Encoding and
+         * a shared cache must not hand a gzipped tile to a client that cannot
+         * read it.
          */
-        let body = new Uint8Array(await response.arrayBuffer())
-        const zoom = Number(z)
-        if (zoom >= ELEVATION_MIN_ZOOM && martinSource.split(',').includes('bicycle_ways')) {
-          const elevated = await elevateTile(body, 'bicycle_ways', zoom, Number(x), Number(y.replace(/\..*$/, '')), lineSources)
-          body = elevated.bytes as Uint8Array<ArrayBuffer>
-          if (!elevated.complete) set.headers['cache-control'] = 'no-store'
-        }
-        // Deck meshes ride in the tile they are drawn with, for a client that asks: see lib/bridge-mesh/tile-pieces.ts.
-        if (query.decks === '1' && zoom >= DECK_TILE_ZOOMS.min && zoom <= DECK_TILE_ZOOMS.max && martinSource.split(',').includes('bridge_decks')) {
-          let decks: DeckTile
-          try {
-            decks = await deckTile(zoom, Number(x), Number(y.replace(/\..*$/, '')))
-          } catch (error) {
-            console.warn(`[deck tiles] ${z}/${x}/${y}:`, error)
-            decks = { bytes: encodeDeckTile([], ['*']), complete: false }
-          }
-          body = withDeckField(body, decks.bytes)
-          // A tile missing some of its decks must not stand in for the whole one in any cache.
-          if (!decks.complete) set.headers['cache-control'] = 'no-store'
-        }
-        if (!acceptsGzip(headers['accept-encoding'])) return body
-
-        set.headers['content-encoding'] = 'gzip'
         set.headers['vary'] = 'Accept-Encoding'
-        return Bun.gzipSync(body)
+        const raw = new Uint8Array(await response.arrayBuffer())
+        const arrivedGzipped = raw[0] === 0x1f && raw[1] === 0x8b
+        const gzipOk = acceptsGzip(headers['accept-encoding'])
+        const zoom = Number(z)
+        // Deck meshes ride in the tile they are drawn with, for a client that asks: see lib/bridge-mesh/tile-pieces.ts.
+        const withDecks =
+          query.decks === '1' && zoom >= DECK_TILE_ZOOMS.min && zoom <= DECK_TILE_ZOOMS.max && martinSource.split(',').includes('bridge_decks')
+
+        let sent: Uint8Array
+        if (!withDecks && arrivedGzipped && gzipOk) {
+          sent = raw
+        } else {
+          let body = arrivedGzipped ? new Uint8Array(Bun.gunzipSync(raw)) : raw
+          if (withDecks) {
+            let decks: DeckTile
+            try {
+              decks = await deckTile(zoom, Number(x), Number(y.replace(/\..*$/, '')))
+            } catch (error) {
+              console.warn(`[deck tiles] ${z}/${x}/${y}:`, error)
+              decks = { bytes: encodeDeckTile([], ['*']), complete: false }
+            }
+            body = withDeckField(body, decks.bytes)
+            // A tile missing some of its decks must not stand in for the whole one in any cache.
+            if (!decks.complete) set.headers['cache-control'] = 'no-store'
+          }
+          sent = gzipOk ? Bun.gzipSync(body) : body
+        }
+        if (gzipOk) set.headers['content-encoding'] = 'gzip'
+
+        // A validator, so a browser or edge holding an expired tile revalidates
+        // with a 304 instead of fetching it again. Weak, because it is taken
+        // over the encoded bytes.
+        const etag = `W/"${Bun.hash(sent).toString(36)}"`
+        set.headers['etag'] = etag
+        if (etagMatches(headers['if-none-match'], etag)) {
+          set.status = 304
+          delete set.headers['content-encoding']
+          return null
+        }
+        return sent
       },
       {
         params: t.Object({
@@ -411,7 +439,7 @@ export function createTileRoutes(
           tags: ['Tiles'],
           summary: 'Vector tile (Martin proxy)',
           description:
-            'Proxies Mapbox Vector Tiles from the Martin tile server. Authenticates with an ordinary API key, via Bearer header or `?api_key=` for map libraries that cannot set headers.\n\nWith `?decks=1`, a tile at zoom 14–16 that includes `bridge_decks` also carries the 3D bridge deck meshes drawn over it, cut to the tile, in protobuf field 20 (skipped by MVT readers).\n\nFrom zoom 13, a `bicycle_ways` feature on a bridge deck or in a tunnel carries an `elevation` property: its height above or below the terrain along that stretch, for drawing it in 3D. Runs are separated by `;`; each is comma-separated integer triples: the first `lng×1e7,lat×1e7,decimetres`, each later one the change in `lng×1e7,lat×1e7` from the point before and its own height in decimetres. Points lie on the feature line; heights are interpolated between the points of a run, and the line is on the ground outside every run.\n\nSeveral sources can be served as one tile, either by naming a bundle (`detail`) or by joining source names with commas (`buildings_3d,parking_areas`). One request carrying five overlays beats five requests carrying one each: a map view is thirty to sixty tiles per source. A member below its own minzoom contributes nothing; the tile 404s only when every member is above its maxzoom.',
+            'Proxies Mapbox Vector Tiles from the Martin tile server. Authenticates with an ordinary API key, via Bearer header or `?api_key=` for map libraries that cannot set headers.\n\nWith `?decks=1`, a tile at zoom 14–16 that includes `bridge_decks` also carries the 3D bridge deck meshes drawn over it, cut to the tile, in protobuf field 20 (skipped by MVT readers).\n\nA `bicycle_ways` feature on a bridge deck or in a tunnel carries an `elevation` property, computed at import: its heights along that stretch, for drawing it in 3D. Runs are separated by `;`; each is comma-separated integer triples: the first `lng×1e7,lat×1e7,decimetres`, each later one the change in `lng×1e7,lat×1e7` from the point before and its own height in decimetres. Heights are metres in the terrain datum, or over the terrain for a run prefixed `~`. Points lie on the feature line; heights are interpolated between the points of a run, and the line is on the ground outside every run.\n\nSeveral sources can be served as one tile, either by naming a bundle (`detail`) or by joining source names with commas (`buildings_3d,parking_areas`). One request carrying five overlays beats five requests carrying one each: a map view is thirty to sixty tiles per source. A member below its own minzoom contributes nothing; the tile 404s only when every member is above its maxzoom.\n\nTiles are gzipped for a caller that accepts it and cacheable for a day, with a week of `stale-while-revalidate`. Each carries a weak `ETag`; send it back as `If-None-Match` to get a bodyless `304` while the tile is unchanged.',
         },
       },
     )

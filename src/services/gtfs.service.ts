@@ -17,7 +17,7 @@
 
 import { db, maintenanceConnection } from '../db'
 import type { RtUrlType } from '../schema/gtfs'
-import { and, eq, sql } from 'drizzle-orm'
+import { and, eq, sql, type SQL } from 'drizzle-orm'
 import {
   gtfsFeeds,
   gtfsRoutes,
@@ -993,11 +993,12 @@ export function deriveBikesAllowed(
 export async function importShapes(
   shapes: Map<string, [number, number][]>,
   feedId: string,
+  writer: GtfsWriter = db,
 ): Promise<number> {
   if (shapes.size === 0) return 0
 
   // Clear existing shapes for this feed
-  await db.delete(gtfsShapes).where(eq(gtfsShapes.feedId, feedId))
+  await writer.delete(gtfsShapes).where(eq(gtfsShapes.feedId, feedId))
 
   // Batch insert in chunks of 100 (shapes can be large)
   const entries = Array.from(shapes.entries())
@@ -1007,7 +1008,7 @@ export async function importShapes(
   for (let i = 0; i < entries.length; i += chunkSize) {
     const chunk = entries.slice(i, i + chunkSize)
 
-    await db
+    await writer
       .insert(gtfsShapes)
       .values(chunk.map(([shapeId, coordinates]) => ({ feedId, shapeId, coordinates })))
       .onConflictDoUpdate({
@@ -1026,9 +1027,10 @@ export async function importShapes(
 export async function updateRouteShapes(
   routeShapes: Map<string, string>,
   feedId: string,
+  writer: GtfsWriter = db,
 ): Promise<void> {
   for (const [routeId, shapeId] of routeShapes) {
-    await db
+    await writer
       .update(gtfsRoutes)
       .set({ shapeId })
       .where(and(eq(gtfsRoutes.feedId, feedId), eq(gtfsRoutes.routeId, routeId)))
@@ -1075,14 +1077,18 @@ export async function getBikesAllowed(
 export async function updateBikesAllowed(
   bikesAllowed: Map<string, number>,
   feedId: string,
+  writer: GtfsWriter = db,
 ): Promise<void> {
   for (const [routeId, bikesAllowedValue] of bikesAllowed) {
-    await db
+    await writer
       .update(gtfsRoutes)
       .set({ bikesAllowed: bikesAllowedValue })
       .where(and(eq(gtfsRoutes.feedId, feedId), eq(gtfsRoutes.routeId, routeId)))
   }
 }
+
+/** The write operations shared by the database and a feed-import transaction. */
+export type GtfsWriter = Pick<typeof db, 'insert' | 'update' | 'delete' | 'execute'>
 
 // ── Database import ─────────────────────────────────────────────────
 
@@ -1092,6 +1098,7 @@ export async function updateBikesAllowed(
  */
 export async function importStops(
   stops: ReturnType<typeof parseStops>,
+  writer: GtfsWriter = db,
 ): Promise<number> {
   if (stops.length === 0) return 0
 
@@ -1105,7 +1112,7 @@ export async function importStops(
     const validBatch = batch.filter(s => s.stopId && s.feedId)
     if (validBatch.length === 0) continue
 
-    await db
+    await writer
       .insert(gtfsStops)
       .values(
         validBatch.map(s => ({
@@ -1147,6 +1154,7 @@ export async function importStops(
  */
 export async function importRoutes(
   routes: ReturnType<typeof parseRoutes>,
+  writer: GtfsWriter = db,
 ): Promise<number> {
   if (routes.length === 0) return 0
 
@@ -1156,7 +1164,7 @@ export async function importRoutes(
   for (let i = 0; i < routes.length; i += BATCH_SIZE) {
     const batch = routes.slice(i, i + BATCH_SIZE)
 
-    await db
+    await writer
       .insert(gtfsRoutes)
       .values(
         batch.map(r => ({
@@ -1197,6 +1205,7 @@ export async function importRoutes(
  */
 export async function importStopRoutes(
   associations: ReturnType<typeof deriveStopRoutes>,
+  writer: GtfsWriter = db,
 ): Promise<number> {
   if (associations.length === 0) return 0
 
@@ -1206,7 +1215,7 @@ export async function importStopRoutes(
   for (let i = 0; i < associations.length; i += BATCH_SIZE) {
     const batch = associations.slice(i, i + BATCH_SIZE)
 
-    await db
+    await writer
       .insert(gtfsStopRoutes)
       .values(batch.map(a => ({ feedId: a.feedId, stopId: a.stopId, routeId: a.routeId })))
       .onConflictDoNothing()
@@ -1224,8 +1233,8 @@ export async function importStopRoutes(
  * backfills only routes that have no centroid yet, so the startup call is
  * a no-op once populated.
  */
-export async function updateRouteCentroids(feedId?: string): Promise<void> {
-  await db.execute(sql`
+export async function updateRouteCentroids(feedId?: string, writer: GtfsWriter = db): Promise<void> {
+  await writer.execute(sql`
     UPDATE gtfs_routes r SET centroid = sub.c
     FROM (
       SELECT sr.feed_id, sr.route_id, ST_Centroid(ST_Collect(s.geom)) AS c
@@ -1248,8 +1257,9 @@ export async function updateRouteCentroids(feedId?: string): Promise<void> {
 export async function importTripPatterns(
   feedId: string,
   patterns: ReturnType<typeof deriveTripPatterns>,
+  writer: GtfsWriter = db,
 ): Promise<number> {
-  await db.delete(gtfsTripPatterns).where(eq(gtfsTripPatterns.feedId, feedId))
+  await writer.delete(gtfsTripPatterns).where(eq(gtfsTripPatterns.feedId, feedId))
   if (patterns.length === 0) return 0
 
   const BATCH_SIZE = 500
@@ -1257,7 +1267,7 @@ export async function importTripPatterns(
   for (let i = 0; i < patterns.length; i += BATCH_SIZE) {
     const batch = patterns.slice(i, i + BATCH_SIZE)
 
-    await db.insert(gtfsTripPatterns).values(
+    await writer.insert(gtfsTripPatterns).values(
       batch.map(p => ({
         feedId: p.feedId,
         routeId: p.routeId,
@@ -1307,15 +1317,16 @@ export function parseTransfers(
  */
 export async function importTransfers(
   transfers: ReturnType<typeof parseTransfers>,
+  writer: GtfsWriter = db,
 ): Promise<number> {
   if (transfers.length === 0) return 0
-  await db.delete(gtfsTransfers).where(eq(gtfsTransfers.feedId, transfers[0].feedId))
+  await writer.delete(gtfsTransfers).where(eq(gtfsTransfers.feedId, transfers[0].feedId))
 
   const BATCH_SIZE = 500
   let imported = 0
   for (let i = 0; i < transfers.length; i += BATCH_SIZE) {
     const batch = transfers.slice(i, i + BATCH_SIZE)
-    await db
+    await writer
       .insert(gtfsTransfers)
       .values(
         batch.map(t => ({
@@ -1381,8 +1392,8 @@ export interface StoredFeedIdentity {
  * first, so the ON CONFLICT branch below only covers callers that write
  * without clearing — see `loadFeedIdentities`.
  */
-export async function recordFeed(feed: GtfsFeedInfo, stopCount: number, routeCount: number): Promise<void> {
-  await db
+export async function recordFeed(feed: GtfsFeedInfo, stopCount: number, routeCount: number, writer: GtfsWriter = db): Promise<void> {
+  await writer
     .insert(gtfsFeeds)
     .values({
       feedId: feed.feedId,
@@ -1411,13 +1422,14 @@ export async function recordFeed(feed: GtfsFeedInfo, stopCount: number, routeCou
 /**
  * Remove all data for a specific feed (for re-import).
  */
-export async function clearFeed(feedId: string): Promise<void> {
-  await db.delete(gtfsTransfers).where(eq(gtfsTransfers.feedId, feedId))
-  await db.delete(gtfsTripPatterns).where(eq(gtfsTripPatterns.feedId, feedId))
-  await db.delete(gtfsStopRoutes).where(eq(gtfsStopRoutes.feedId, feedId))
-  await db.delete(gtfsRoutes).where(eq(gtfsRoutes.feedId, feedId))
-  await db.delete(gtfsStops).where(eq(gtfsStops.feedId, feedId))
-  await db.delete(gtfsFeeds).where(eq(gtfsFeeds.feedId, feedId))
+export async function clearFeed(feedId: string, writer: GtfsWriter = db): Promise<void> {
+  await writer.delete(gtfsShapes).where(eq(gtfsShapes.feedId, feedId))
+  await writer.delete(gtfsTransfers).where(eq(gtfsTransfers.feedId, feedId))
+  await writer.delete(gtfsTripPatterns).where(eq(gtfsTripPatterns.feedId, feedId))
+  await writer.delete(gtfsStopRoutes).where(eq(gtfsStopRoutes.feedId, feedId))
+  await writer.delete(gtfsRoutes).where(eq(gtfsRoutes.feedId, feedId))
+  await writer.delete(gtfsStops).where(eq(gtfsStops.feedId, feedId))
+  await writer.delete(gtfsFeeds).where(eq(gtfsFeeds.feedId, feedId))
 }
 
 // ── Transfer precomputation ─────────────────────────────────────────
@@ -1836,21 +1848,7 @@ export async function generateMotisConfig(options?: MotisConfigOptions): Promise
  * poll too much than to silently serve no shared mobility at all.
  */
 async function getGbfsFeedsForMotis(): Promise<Array<{ systemId: string; url: string }>> {
-  const { isGlobal, boxes: regionBoxes } = await resolveRegions()
-  const boxes = regionBoxes
-    .filter((b): b is [number, number, number, number] => Array.isArray(b) && b.length === 4)
-
-  const scope =
-    isGlobal || boxes.length === 0
-      ? sql`TRUE`
-      : sql`lat IS NOT NULL AND lon IS NOT NULL AND (${sql.join(
-          boxes.map(
-            ([west, south, east, north]) =>
-              sql`(lon BETWEEN ${west} AND ${east} AND lat BETWEEN ${south} AND ${north})`,
-          ),
-          sql` OR `,
-        )})`
-
+  const scope = await gbfsRegionScope(sql`lat`, sql`lon`)
   const result = await db.execute(sql`
     SELECT system_id, url
     FROM gbfs_systems
@@ -1861,6 +1859,67 @@ async function getGbfsFeedsForMotis(): Promise<Array<{ systemId: string; url: st
     systemId: row.system_id,
     url: row.url,
   }))
+}
+
+/** A WHERE clause keeping points inside this instance's region boxes. */
+async function gbfsRegionScope(lat: SQL, lon: SQL): Promise<SQL> {
+  const { isGlobal, boxes: regionBoxes } = await resolveRegions()
+  const boxes = regionBoxes
+    .filter((b): b is [number, number, number, number] => Array.isArray(b) && b.length === 4)
+  if (isGlobal || boxes.length === 0) return sql`TRUE`
+  return sql`${lat} IS NOT NULL AND ${lon} IS NOT NULL AND (${sql.join(
+    boxes.map(
+      ([west, south, east, north]) =>
+        sql`(${lon} BETWEEN ${west} AND ${east} AND ${lat} BETWEEN ${south} AND ${north})`,
+    ),
+    sql` OR `,
+  )})`
+}
+
+/** How far past its outermost dock a system's street graph reaches, in degrees (~2 km). */
+const GBFS_STATION_MARGIN_DEG = 0.02
+/** The box around a system with a location but no docks (free-floating), in degrees (~10 km). */
+const GBFS_FREE_FLOATING_MARGIN_DEG = 0.1
+
+/**
+ * The area MOTIS needs a street graph for to serve shared-mobility trips: the
+ * systems getGbfsFeedsForMotis hands it, each as the box around its docks (or
+ * its location, when it has none), merged. A GeoJSON (Multi)Polygon, or null
+ * when no system qualifies.
+ *
+ * MOTIS walks and rides rentals over its own street graph, so it needs one
+ * wherever there is a rental, and nowhere else: barrelman composes every other
+ * walk, bike and drive to a station itself, over GraphHopper. A continent's
+ * street graph doesn't fit beside the rest of the stack, while the areas
+ * bikeshare actually covers are a few percent of it.
+ */
+export async function getGbfsStreetArea(): Promise<object | null> {
+  const systemScope = await gbfsRegionScope(sql`sys.lat`, sql`sys.lon`)
+  const stationScope = await gbfsRegionScope(sql`st.lat`, sql`st.lon`)
+  const result = await db.execute(sql`
+    WITH sys AS (
+      SELECT system_id, lat, lon FROM gbfs_systems sys
+      WHERE enabled = TRUE AND (${systemScope})
+    ),
+    docks AS (
+      SELECT st.system_id,
+             ST_Expand(ST_Envelope(ST_Collect(ST_MakePoint(st.lon, st.lat))), ${GBFS_STATION_MARGIN_DEG}) AS g
+      FROM gbfs_stations st JOIN sys USING (system_id)
+      WHERE st.lat <> 0 AND st.lon <> 0 AND (${stationScope})
+      GROUP BY st.system_id
+    ),
+    areas AS (
+      SELECT g FROM docks
+      UNION ALL
+      SELECT ST_Expand(ST_MakePoint(sys.lon, sys.lat), ${GBFS_FREE_FLOATING_MARGIN_DEG})
+      FROM sys
+      WHERE sys.lat IS NOT NULL AND sys.lon IS NOT NULL
+        AND sys.system_id NOT IN (SELECT system_id FROM docks)
+    )
+    SELECT ST_AsGeoJSON(ST_Union(g), 5) AS geojson FROM areas
+  `)
+  const geojson = (result as any[])[0]?.geojson
+  return geojson ? JSON.parse(geojson) : null
 }
 
 // ── GTFS-Flex sanitization ────────────────────────────────────────

@@ -10,6 +10,24 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.10.36] - 2026-10-30
+
+### Added
+
+* `POST /route/hazards` lists the hazards along a route from OSM tags the routing graph doesn't carry: traffic lights, stop and give-way signs facing the route, tram rails and shallow tram crossings, unlit, flood-prone and sidewalk-less ways, low clearances, tolls, speed cameras, traffic calming, movable bridges and posted hazards. Run the "Build Route Hazard Indexes" task after upgrading to keep it fast. Billed as routing.
+* Walking routes name the street a separately mapped sidewalk runs beside, so directions can say "Turn left onto W 3rd St" instead of "Turn left". Run Build Sidewalk Street Names, and rebuild the routing graph once, to turn it on.
+* `/route` describes what a route passes for voice guidance: each crosswalk segment names the road it crosses (`crossingName`), and each path lists the roads and railways passing over it (`overpasses`), the states or provinces it runs through (`states`), and, on foot, the parks it enters (`parks`). Run the "Build Route Context Indexes" task after upgrading to turn it on.
+
+### Changed
+
+* Vector tiles leave `/tiles` as Martin compressed them instead of being unzipped and compressed again, which took about 10 ms of API time per dense tile. Every tile now carries an `ETag`, so a browser or CDN holding an expired tile revalidates with a `304` instead of downloading it again.
+* Line heights on bridge decks and through tunnels are written when the data is built, not on each tile request: into each transit pyramid as portolan builds it, and into `bicycle_ways.elevation` by Elevate Bicycle Ways. Serving tiles costs nothing extra.
+
+### Fixed
+
+* Bikeshare, scooter, bike and park-and-ride trips no longer vanish after a MOTIS rebuild. MOTIS's street import fails on a way whose node is missing, which replication leaves behind in a merged extract, and on a junction with more than 16 ways, which the United States has a few of. The rebuild then quietly fell back to a timetable-only dataset that answers none of those trips. It now builds MOTIS from a copy of the extract without those ways, and the extract itself is untouched. If street routing still can't build, the log names the cause and the job fails rather than reporting success. Set `MOTIS_STREET_ROUTING=0` to choose timetable-only deliberately, or `MOTIS_STREET_ROUTING=gbfs` to build MOTIS's street graph only around your bikeshare systems. That is the setting for a region too large to build whole, like the United States on a 32 GB host.
+* GTFS feed replacements now commit stops, routes, stop-route associations, transfers, and shapes together. Incomplete timetables and failed database writes retain the previous feed and report an import failure instead of leaving stations with missing service data.
+
 ## [0.10.35] - 2026-10-28
 
 ### Added

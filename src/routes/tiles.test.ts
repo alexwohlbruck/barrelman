@@ -17,9 +17,6 @@ import { join } from 'path'
 import Elysia from 'elysia'
 import { createTileRoutes, type TileFetcher } from './tiles'
 import { TILE_BUNDLES } from '../config/tile-bundles'
-import type { LineSources } from '../lib/line-elevation/lookup'
-import { encodeLayer, readLayer } from '../lib/line-elevation/mvt'
-import { at, ORIGIN } from '../lib/line-elevation/test-geometry'
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -121,6 +118,48 @@ describe('GET /tiles/:source/:z/:x/:y', () => {
 
     expect(res.headers.get('content-encoding')).toBeNull()
     expect(new Uint8Array(await res.arrayBuffer())).toEqual(tileData)
+  })
+
+  test("forwards Martin's gzip byte for byte rather than zipping it again", async () => {
+    const zipped = Bun.gzipSync(new Uint8Array(4096).fill(0x1a))
+    const mockFetch = mock<TileFetcher>(async () =>
+      new Response(zipped, { status: 200, headers: { 'content-type': 'application/x-protobuf' } }),
+    )
+    const app = new Elysia().use(createTileRoutes({ fetchTile: mockFetch }))
+    const res = await app.handle(get('/tiles/basemap/10/500/300', { 'accept-encoding': 'gzip' }))
+
+    expect(res.headers.get('content-encoding')).toBe('gzip')
+    expect(new Uint8Array(await res.arrayBuffer())).toEqual(zipped)
+  })
+
+  test("unzips Martin's gzip for a caller that cannot read it", async () => {
+    const tileData = new Uint8Array(4096).fill(0x1a)
+    const mockFetch = mock<TileFetcher>(async () =>
+      new Response(Bun.gzipSync(tileData), { status: 200, headers: { 'content-type': 'application/x-protobuf' } }),
+    )
+    const app = new Elysia().use(createTileRoutes({ fetchTile: mockFetch }))
+    const res = await app.handle(get('/tiles/basemap/10/500/300'))
+
+    expect(res.headers.get('content-encoding')).toBeNull()
+    expect(res.headers.get('vary')).toBe('Accept-Encoding')
+    expect(new Uint8Array(await res.arrayBuffer())).toEqual(tileData)
+  })
+
+  test('revalidates an unchanged tile with a 304 and no body', async () => {
+    const mockFetch = mock<TileFetcher>(async () =>
+      new Response(new Uint8Array([0x1a, 0x01, 0x02]), { status: 200, headers: { 'content-type': 'application/x-protobuf' } }),
+    )
+    const app = new Elysia().use(createTileRoutes({ fetchTile: mockFetch }))
+    const first = await app.handle(get('/tiles/basemap/10/500/300'))
+    const etag = first.headers.get('etag')
+    expect(etag).toMatch(/^W\/"/)
+
+    const again = await app.handle(get('/tiles/basemap/10/500/300', { 'if-none-match': etag! }))
+    expect(again.status).toBe(304)
+    expect((await again.arrayBuffer()).byteLength).toBe(0)
+
+    const other = await app.handle(get('/tiles/basemap/10/500/300', { 'if-none-match': 'W/"nope"' }))
+    expect(other.status).toBe(200)
   })
 
   // `gzip;q=0` is the one case a substring match gets backwards.
@@ -676,57 +715,5 @@ describe('deck pieces in detail tiles', () => {
       expect((await (await a.handle(get(path))).arrayBuffer()).byteLength).toBe(2)
     }
     expect(deckTile).not.toHaveBeenCalled()
-  })
-})
-
-describe('line elevation in tiles', () => {
-  const Z = 16, N = 2 ** Z
-  const [X, Y] = [Math.floor(ORIGIN[0] * N), Math.floor(ORIGIN[1] * N)]
-  const local = ([mx, my]: [number, number]): [number, number] => [Math.round((mx * N - X) * 4096), Math.round((my * N - Y) * 4096)]
-  const line = [at(0, 0), at(200, 0)].map(local)
-  const deck = { points: [at(40, 0), at(160, 0)], heights: [0, 6], relative: false, lifts: [0, 6], half: 5, kind: 'rail' as const, ways: [42] }
-  const bikes = encodeLayer('bicycle_ways', [{ id: 42, properties: { bridge: true }, lines: [line] }])
-  const ribbons = encodeLayer('ribbons', [{ id: 1, properties: { route_type: 1 }, lines: [line] }])
-  const elevationOf = async (res: Response, layer: string) => readLayer(new Uint8Array(await res.arrayBuffer()), layer)!.features[0].properties.elevation
-
-  function app(lineSources: LineSources, portolanTilesDir?: string) {
-    const fetchTile = mock<TileFetcher>(async () => new Response(bikes))
-    const deckTile = async () => ({ bytes: Uint8Array.of(0x42), complete: true })
-    return new Elysia().use(createTileRoutes({ fetchTile, deckTile, lineSources, portolanTilesDir }))
-  }
-
-  test('a cycle way on a deck carries its heights, with or without deck pieces', async () => {
-    const lineSources = mock<LineSources>(async () => [deck])
-    for (const query of ['', '?decks=1']) {
-      const res = await app(lineSources).handle(get(`/tiles/detail/${Z}/${X}/${Y}${query}`))
-      expect(typeof (await elevationOf(res, 'bicycle_ways'))).toBe('string')
-    }
-    expect(lineSources).toHaveBeenCalledWith(Z, X, Y)
-  })
-
-  test('a tile whose sources cannot be read is served as it came, and not cached', async () => {
-    const res = await app(async () => { throw new Error('db down') }).handle(get(`/tiles/bicycle_ways/${Z}/${X}/${Y}`))
-    expect(res.status).toBe(200)
-    expect(res.headers.get('cache-control')).toBe('no-store')
-    expect(new Uint8Array(await res.arrayBuffer())).toEqual(bikes)
-  })
-
-  test('no sources are read below zoom 13', async () => {
-    const lineSources = mock<LineSources>(async () => [deck])
-    await app(lineSources).handle(get(`/tiles/detail/12/${X >> 4}/${Y >> 4}`))
-    expect(lineSources).not.toHaveBeenCalled()
-  })
-
-  test('a portolan ribbon on a rail deck carries its heights', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'portolan-elevation-'))
-    try {
-      mkdirSync(join(dir, 'metro', String(Z), String(X)), { recursive: true })
-      writeFileSync(join(dir, 'metro', String(Z), String(X), `${Y}.mvt`), ribbons)
-      const res = await app(async () => [deck], dir).handle(get(`/tiles/portolan/metro/${Z}/${X}/${Y}.mvt`))
-      expect(res.headers.get('content-type')).toBe('application/x-protobuf')
-      expect(typeof (await elevationOf(res, 'ribbons'))).toBe('string')
-    } finally {
-      rmSync(dir, { recursive: true, force: true })
-    }
   })
 })

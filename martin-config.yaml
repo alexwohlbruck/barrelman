@@ -156,6 +156,7 @@ postgres:
         oneway: oneway
         bridge: bridge
         tunnel: tunnel
+        elevation: elevation
       buffer: 64
       clip_geom: true
 
