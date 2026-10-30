@@ -119,7 +119,9 @@ fi
 #     stop-to-stop over the walking transfers baked into the feeds, so transit
 #     stays up, and exit 2 so the job shows as failed: that build answers no
 #     bikeshare, bike or park-and-ride trip. MOTIS_STREET_ROUTING=0 skips
-#     straight to timetable-only, deliberately.
+#     straight to timetable-only, deliberately. MOTIS_STREET_ROUTING=gbfs
+#     builds the street graph only around the bikeshare systems MOTIS polls,
+#     for an extract too large to build whole beside the rest of the stack.
 CFG_PATH=/var/lib/postgresql # placeholder, replaced below
 GTFS_DATA_HOST="$(docker inspect "$CONTAINER" --format '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Source}}{{end}}{{end}}' 2>/dev/null)"
 CFG="${GTFS_DATA_HOST:+$GTFS_DATA_HOST/config.yml}"
@@ -134,6 +136,13 @@ CFG="${GTFS_DATA_HOST:+$GTFS_DATA_HOST/config.yml}"
 # Runs from barrelman-ops, which mounts both volumes and carries osmium.
 STREET_OSM=/osm-data/region.osm.pbf
 REPAIRED=/gtfs-data/region-motis-repaired.osm.pbf
+# MOTIS_STREET_ROUTING=gbfs: the extract cut down to the bikeshare areas first.
+# MOTIS only routes over its own street graph for rentals (barrelman composes
+# every other walk, bike and drive to a station over GraphHopper), so outside
+# those areas the graph is dead weight, and a continent's worth of it needs
+# more memory than a box running the rest of the stack has spare.
+CLIPPED=/gtfs-data/region-motis-clipped.osm.pbf
+STREET_AREA=/gtfs-data/motis-street-area.geojson
 # Ways dropped at over-full nodes, kept between runs: finding them is a full
 # count of the extract, and the junctions don't move.
 EXCESS_IDS=/gtfs-data/motis-osr-excess-ways.ids
@@ -141,10 +150,31 @@ EXCESS_IDS=/gtfs-data/motis-osr-excess-ways.ids
 prepare_street_extract() { # $1 = --recount to redo the over-full node count
   local src="${OSM_DATA_DIR:-/data}/region.osm.pbf" dropped
   if ! command -v osmium >/dev/null || [ ! -d /gtfs-data ] || [ ! -f "$src" ]; then
+    [ "$CLIP" = 1 ] && { log "ERROR: MOTIS_STREET_ROUTING=gbfs needs osmium — run this from barrelman-ops"; exit 1; }
     log "not running in barrelman-ops — using region.osm.pbf without repair"
     return
   fi
-  log "checking region.osm.pbf for ways osr can't load${1:+ (recounting over-full nodes — slow)}..."
+  if [ "$CLIP" = 1 ] && [ -n "${1:-}" ] && [ -f "$CLIPPED" ]; then
+    src="$CLIPPED" # recounting: the cut from this run is still current
+  elif [ "$CLIP" = 1 ]; then
+    local rc=0
+    docker exec barrelman sh -lc "cd /app && bun run import/generate-motis-config.ts --street-area $STREET_AREA" || rc=$?
+    if [ "$rc" = 3 ]; then
+      # No bikeshare to serve, so no street graph to build.
+      log "  no bikeshare system in this region — building timetable-only"
+      MODE=timetable; WANTED_MODE=timetable; return
+    fi
+    [ "$rc" = 0 ] || { log "ERROR: could not compute the bikeshare street area"; exit 1; }
+    log "cutting region.osm.pbf down to the bikeshare areas..."
+    # complete_ways keeps every node of a way that crosses the edge, so the cut
+    # itself leaves no way pointing at a missing node.
+    osmium extract --overwrite -s complete_ways -p "$STREET_AREA" -o "$CLIPPED.partial" -f pbf "$src" \
+      || { log "ERROR: osmium extract failed"; exit 1; }
+    mv -f "$CLIPPED.partial" "$CLIPPED"
+    log "  $(du -h "$CLIPPED" | cut -f1) of $(du -h "$src" | cut -f1)"
+    src="$CLIPPED"
+  fi
+  log "checking $(basename "$src") for ways osr can't load${1:+ (recounting over-full nodes — slow)}..."
   dropped="$(bash "$BARRELMAN_DIR/scripts/repair-motis-extract.sh" "$src" "$REPAIRED" "$EXCESS_IDS" ${1:-})"
   if [ "${dropped:-0}" -gt 0 ]; then
     log "  building MOTIS from region-motis-repaired.osm.pbf ($dropped way(s) left out)"
@@ -152,6 +182,7 @@ prepare_street_extract() { # $1 = --recount to redo the over-full node count
   else
     rm -f "$REPAIRED"
     STREET_OSM=/osm-data/region.osm.pbf
+    if [ "$CLIP" = 1 ]; then STREET_OSM=/data/region-motis-clipped.osm.pbf; fi
   fi
 }
 
@@ -178,11 +209,15 @@ run_import() { # returns 0 on success; writes /tmp/motis-import.log
 
 echo "[$(date '+%H:%M:%S')] [1/3] [motis] Regenerating config from gtfs_feeds..."
 MODE=street
-[ "${MOTIS_STREET_ROUTING:-1}" = "0" ] && MODE=timetable
+CLIP=0
+case "${MOTIS_STREET_ROUTING:-1}" in
+  0) MODE=timetable ;;
+  gbfs) CLIP=1 ;;
+esac
 WANTED_MODE="$MODE"
 RECOUNTED=0
 FALLBACK_REASON=""
-[ "$MODE" = street ] && prepare_street_extract
+if [ "$MODE" = street ]; then prepare_street_extract; fi
 gen_config "$MODE"
 
 echo "[$(date '+%H:%M:%S')] [2/3] [motis] Clean-rebuilding dataset (motis import)..."
@@ -275,7 +310,7 @@ while : ; do
     fi
     log "  street routing failed: $FALLBACK_REASON"
     log "  → falling back to timetable-only (stop-to-stop over precomputed transfers)"
-    rm -f "$REPAIRED"
+    rm -f "$REPAIRED" "$CLIPPED"
     MODE=timetable; gen_config timetable; dropped=0; continue
   fi
 
