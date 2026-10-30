@@ -175,7 +175,7 @@ config or feeds change, so a plain restart keeps serving the old schedules and
 the new feeds never reach riders. Re-run it after every GTFS refresh, and after
 any MOTIS version bump.
 
-Each GTFS feed replaces its PostGIS data in one transaction after its timetable is validated. A failed replacement preserves the previous feed and fails the job; it does not publish stops without their route associations. MOTIS remains a separate dataset build, as described above.
+Each GTFS feed replaces its PostGIS data in one transaction after its timetable is validated. A failed replacement preserves the previous feed; it does not publish stops without their route associations. A feed with no fixed-route service, such as a GTFS-Flex-only feed, is skipped. The job fails only when more than 15% of feeds fail, because out of hundreds of upstream feeds a few are always broken. Below that it lists the failed feeds and carries on, so the rest still reach MOTIS. MOTIS remains a separate dataset build, as described above.
 
 ### Measured timings
 

@@ -14,7 +14,7 @@ import { existsSync, mkdirSync, writeFileSync, readdirSync } from 'fs'
 import { join, basename } from 'path'
 import { injectFaresV2 } from './inject-fares-v2'
 import { injectBikesAllowed } from './inject-bikes-allowed'
-import { importFeedFile, injectTransfersTxt } from './feed-import'
+import { importFeedFile, injectTransfersTxt, NoFixedRouteService } from './feed-import'
 import { ensureGtfsSchema } from '../src/db'
 import type { GtfsRtUrl } from '../src/services/gtfs.service'
 import {
@@ -216,7 +216,19 @@ async function main() {
   // How many feeds we tried, so a run where every one failed can be told apart
   // from a region that legitimately has none.
   let attemptedFeeds = 0
-  let failedFeeds = 0
+  // Feed ids that failed, and how many had nothing to import. A failed feed
+  // keeps its previous database contents (importFeedFile is all-or-nothing).
+  const failedFeeds: string[] = []
+  let skippedFeeds = 0
+  const recordFailure = (feedId: string, err: unknown) => {
+    if (err instanceof NoFixedRouteService) {
+      skippedFeeds++
+      console.log(`  – Skipped: ${err.message}`)
+      return
+    }
+    failedFeeds.push(feedId)
+    console.error(`  ✗ Error: ${err instanceof Error ? err.message : err}`)
+  }
 
   // Read before anything is imported: importFeedFile clears each feed's row,
   // so whatever a caller doesn't carry forward is gone. rt_urls in particular
@@ -286,8 +298,7 @@ async function main() {
         // Step 3: Parse and import
         await importFeedFile(filepath, merged)
       } catch (err) {
-        failedFeeds++
-        console.error(`  ✗ Error: ${err instanceof Error ? err.message : err}`)
+        recordFailure(feed.feedId, err)
       }
     }
   } else {
@@ -335,12 +346,12 @@ async function main() {
         console.error(`  ⚠ Zip preparation failed for ${basename(filepath)}: ${err}`)
       }
 
-      await importFeedFile(filepath, feed)
+      try {
+        await importFeedFile(filepath, feed)
+      } catch (err) {
+        recordFailure(feedId, err)
+      }
     }
-  }
-
-  if (failedFeeds > 0) {
-    throw new Error(`${failedFeeds} GTFS feed(s) failed; keeping their previous database contents`)
   }
 
   // Step 4: Compute walking transfers
@@ -443,6 +454,7 @@ async function main() {
 
   console.log('\n=== Import Complete ===')
   console.log(`Processed ${feedFiles.length} feeds`)
+  if (skippedFeeds > 0) console.log(`  ${skippedFeeds} feed(s) had no fixed-route service to import`)
   console.log(`Output directory: ${outputDir}`)
   console.log(`MOTIS config: ${motisConfigPath}`)
   console.log('')
@@ -454,8 +466,32 @@ async function main() {
   console.log('     bash scripts/rebuild-motis.sh   (a restart alone keeps the old timetable)')
   console.log('')
 
+  // Out of a region's worth of upstream feeds, some are always broken: a dead
+  // URL, a malformed CSV. Each keeps its previous contents, and failing the
+  // run for one of them stops every other feed reaching riders, since
+  // gtfs-watch only rebuilds MOTIS after a clean import. So only a failure
+  // rate that looks like our bug rather than theirs fails the run. A parser
+  // that misread every BOM-prefixed file failed a quarter of the US.
+  const attempted = skipDownload ? feedFiles.length : attemptedFeeds
+  if (failedFeeds.length > 0) {
+    const share = failedFeeds.length / Math.max(attempted, 1)
+    console.error(
+      `${failedFeeds.length} of ${attempted} feed(s) failed and kept their previous contents: ` +
+        failedFeeds.join(', '),
+    )
+    if (share > MAX_FAILED_FEED_SHARE) {
+      console.error(
+        `✗ More than ${MAX_FAILED_FEED_SHARE * 100}% of feeds failed — that looks systemic, not upstream.`,
+      )
+      process.exit(1)
+    }
+  }
+
   process.exit(0)
 }
+
+/** Above this share of failed feeds, the import fails the run (see the end of main). */
+const MAX_FAILED_FEED_SHARE = 0.15
 
 main().catch((err) => {
   console.error('Fatal error:', err)
