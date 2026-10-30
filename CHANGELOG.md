@@ -22,6 +22,7 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ### Fixed
 
+* A small town far away no longer takes the top search result from a closer match. A town's search reach now follows its population when OSM records one, so "jamaica" from Brooklyn finds the Jamaica LIRR station instead of Jamaica, Vermont (pop. 1,005, 285 km away).
 * GTFS feed replacements now commit stops, routes, stop-route associations, transfers, and shapes together. Incomplete timetables and failed database writes retain the previous feed and report an import failure instead of leaving stations with missing service data.
 
 ## [0.10.35] - 2026-10-28
