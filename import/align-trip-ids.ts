@@ -32,7 +32,7 @@
  */
 import JSZip from 'jszip'
 import GtfsRealtimeBindings from 'gtfs-realtime-bindings'
-import { parseCsvRows, serializeCsvRows, headerIndex } from './csv'
+import { parseCsvRows, serializeCsvRows, headerIndex, rewriteCsvColumn } from './csv'
 
 // Decoded through the live binding at call time so a test mock of
 // `gtfs-realtime-bindings` applies regardless of import order — same reason as
@@ -915,7 +915,16 @@ export async function alignRealtimeTripIds(
     const file = zip.file(name)
     if (!file && !rows) return
 
-    const parsed = rows ?? parseCsvRows(await file!.async('string'))
+    // Streamed rather than parsed into rows: stop_times.txt is millions of
+    // rows, and holding them as arrays ran the US import out of memory.
+    if (!rows) {
+      const { text, changed } = rewriteCsvColumn(await file!.async('string'), 'trip_id', id => rewrite.get(id))
+      if (changed) zip.file(name, text)
+      rewrittenRows[name] = changed
+      return
+    }
+
+    const parsed = rows
     if (!parsed.length) return
     const col = headerIndex(parsed[0]!).get('trip_id')
     if (col === undefined) return

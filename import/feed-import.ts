@@ -18,6 +18,7 @@ import {
   parseShapes,
   deriveStopRoutes,
   parseGtfsRecords,
+  groupStopTimes,
   parseStopParents,
   deriveTripPatterns,
   importTripPatterns,
@@ -94,9 +95,11 @@ export async function prepareFeedFile(filepath: string, feedInfo: GtfsFeedInfo) 
   const stops = parseStops(stopsContent, feedInfo.feedId)
   const routes = parseRoutes(routesContent, feedInfo.feedId, agencyContent ? parseAgencies(agencyContent) : new Map())
   const trips = parseGtfsRecords(tripsContent)
-  const stopTimes = parseGtfsRecords(stopTimesContent)
+  // Grouped by trip as it is read: a record per row of a large stop_times.txt
+  // is what ran the US import out of memory.
+  const stopTimes = groupStopTimes(stopTimesContent)
   const tripIds = new Set(trips.map(t => t.trip_id))
-  if (stopTimes.some(st => !tripIds.has(st.trip_id))) {
+  if ([...stopTimes.keys()].some(id => !tripIds.has(id))) {
     throw new Error(`${filepath}: stop_times.txt references unknown trips`)
   }
   const associations = deriveStopRoutes(trips, stopTimes, feedInfo.feedId)
