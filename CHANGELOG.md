@@ -22,6 +22,7 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ### Fixed
 
+* Bikeshare, scooter, bike and park-and-ride trips no longer vanish after a MOTIS rebuild. MOTIS's street import fails on a way whose node is missing, which replication leaves behind in a merged extract, and on a junction with more than 16 ways, which the United States has a few of. The rebuild then quietly fell back to a timetable-only dataset that answers none of those trips. It now builds MOTIS from a copy of the extract without those ways, and the extract itself is untouched. If street routing still can't build, the log names the cause and the job fails rather than reporting success. Set `MOTIS_STREET_ROUTING=0` to choose timetable-only deliberately, or `MOTIS_STREET_ROUTING=gbfs` to build MOTIS's street graph only around your bikeshare systems. That is the setting for a region too large to build whole, like the United States on a 32 GB host.
 * GTFS feed replacements now commit stops, routes, stop-route associations, transfers, and shapes together. Incomplete timetables and failed database writes retain the previous feed and report an import failure instead of leaving stations with missing service data.
 
 ## [0.10.35] - 2026-10-28

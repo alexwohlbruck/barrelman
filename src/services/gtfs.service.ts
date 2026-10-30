@@ -17,7 +17,7 @@
 
 import { db, maintenanceConnection } from '../db'
 import type { RtUrlType } from '../schema/gtfs'
-import { and, eq, sql } from 'drizzle-orm'
+import { and, eq, sql, type SQL } from 'drizzle-orm'
 import {
   gtfsFeeds,
   gtfsRoutes,
@@ -1848,21 +1848,7 @@ export async function generateMotisConfig(options?: MotisConfigOptions): Promise
  * poll too much than to silently serve no shared mobility at all.
  */
 async function getGbfsFeedsForMotis(): Promise<Array<{ systemId: string; url: string }>> {
-  const { isGlobal, boxes: regionBoxes } = await resolveRegions()
-  const boxes = regionBoxes
-    .filter((b): b is [number, number, number, number] => Array.isArray(b) && b.length === 4)
-
-  const scope =
-    isGlobal || boxes.length === 0
-      ? sql`TRUE`
-      : sql`lat IS NOT NULL AND lon IS NOT NULL AND (${sql.join(
-          boxes.map(
-            ([west, south, east, north]) =>
-              sql`(lon BETWEEN ${west} AND ${east} AND lat BETWEEN ${south} AND ${north})`,
-          ),
-          sql` OR `,
-        )})`
-
+  const scope = await gbfsRegionScope(sql`lat`, sql`lon`)
   const result = await db.execute(sql`
     SELECT system_id, url
     FROM gbfs_systems
@@ -1873,6 +1859,67 @@ async function getGbfsFeedsForMotis(): Promise<Array<{ systemId: string; url: st
     systemId: row.system_id,
     url: row.url,
   }))
+}
+
+/** A WHERE clause keeping points inside this instance's region boxes. */
+async function gbfsRegionScope(lat: SQL, lon: SQL): Promise<SQL> {
+  const { isGlobal, boxes: regionBoxes } = await resolveRegions()
+  const boxes = regionBoxes
+    .filter((b): b is [number, number, number, number] => Array.isArray(b) && b.length === 4)
+  if (isGlobal || boxes.length === 0) return sql`TRUE`
+  return sql`${lat} IS NOT NULL AND ${lon} IS NOT NULL AND (${sql.join(
+    boxes.map(
+      ([west, south, east, north]) =>
+        sql`(${lon} BETWEEN ${west} AND ${east} AND ${lat} BETWEEN ${south} AND ${north})`,
+    ),
+    sql` OR `,
+  )})`
+}
+
+/** How far past its outermost dock a system's street graph reaches, in degrees (~2 km). */
+const GBFS_STATION_MARGIN_DEG = 0.02
+/** The box around a system with a location but no docks (free-floating), in degrees (~10 km). */
+const GBFS_FREE_FLOATING_MARGIN_DEG = 0.1
+
+/**
+ * The area MOTIS needs a street graph for to serve shared-mobility trips: the
+ * systems getGbfsFeedsForMotis hands it, each as the box around its docks (or
+ * its location, when it has none), merged. A GeoJSON (Multi)Polygon, or null
+ * when no system qualifies.
+ *
+ * MOTIS walks and rides rentals over its own street graph, so it needs one
+ * wherever there is a rental, and nowhere else: barrelman composes every other
+ * walk, bike and drive to a station itself, over GraphHopper. A continent's
+ * street graph doesn't fit beside the rest of the stack, while the areas
+ * bikeshare actually covers are a few percent of it.
+ */
+export async function getGbfsStreetArea(): Promise<object | null> {
+  const systemScope = await gbfsRegionScope(sql`sys.lat`, sql`sys.lon`)
+  const stationScope = await gbfsRegionScope(sql`st.lat`, sql`st.lon`)
+  const result = await db.execute(sql`
+    WITH sys AS (
+      SELECT system_id, lat, lon FROM gbfs_systems sys
+      WHERE enabled = TRUE AND (${systemScope})
+    ),
+    docks AS (
+      SELECT st.system_id,
+             ST_Expand(ST_Envelope(ST_Collect(ST_MakePoint(st.lon, st.lat))), ${GBFS_STATION_MARGIN_DEG}) AS g
+      FROM gbfs_stations st JOIN sys USING (system_id)
+      WHERE st.lat <> 0 AND st.lon <> 0 AND (${stationScope})
+      GROUP BY st.system_id
+    ),
+    areas AS (
+      SELECT g FROM docks
+      UNION ALL
+      SELECT ST_Expand(ST_MakePoint(sys.lon, sys.lat), ${GBFS_FREE_FLOATING_MARGIN_DEG})
+      FROM sys
+      WHERE sys.lat IS NOT NULL AND sys.lon IS NOT NULL
+        AND sys.system_id NOT IN (SELECT system_id FROM docks)
+    )
+    SELECT ST_AsGeoJSON(ST_Union(g), 5) AS geojson FROM areas
+  `)
+  const geojson = (result as any[])[0]?.geojson
+  return geojson ? JSON.parse(geojson) : null
 }
 
 // ── GTFS-Flex sanitization ────────────────────────────────────────
