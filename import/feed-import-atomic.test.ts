@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import JSZip from 'jszip'
 import { getTableName } from 'drizzle-orm'
 import { db } from '../src/db'
-import { importFeedFile } from './feed-import'
+import { importFeedFile, NoFixedRouteService } from './feed-import'
 
 const dirs: string[] = []
 afterEach(() => {
@@ -42,7 +42,9 @@ describe('complete GTFS feed replacement', () => {
   it('rejects a timetable with no stop-route associations before writing', async () => {
     const transaction = spyOn(db, 'transaction')
     try {
-      await expect(importFeedFile(await fixture({ 'stop_times.txt': 'trip_id,stop_id\n' }), feed)).rejects.toThrow('stop-route associations')
+      // Skipped as having nothing to import, not failed: GTFS-Flex-only feeds
+      // look like this, and failing the run on them blocked every other feed.
+      await expect(importFeedFile(await fixture({ 'stop_times.txt': 'trip_id,stop_id\n' }), feed)).rejects.toBeInstanceOf(NoFixedRouteService)
       expect(transaction).not.toHaveBeenCalled()
     } finally { transaction.mockRestore() }
   })
@@ -58,6 +60,19 @@ describe('complete GTFS feed replacement', () => {
         await expect(importFeedFile(await fixture(overrides), feed)).rejects.toThrow(error)
       }
       expect(transaction).not.toHaveBeenCalled()
+    } finally { transaction.mockRestore() }
+  })
+
+  it('reads files that open with a UTF-8 byte-order mark', async () => {
+    // Windows-written feeds do. Unstripped, the first column's key became
+    // "\ufefftrip_id", every stop_time lost its trip, and 122 US feeds were
+    // rejected as referencing unknown trips.
+    const bom = '\ufeff'
+    const transaction = spyOn(db, 'transaction').mockImplementation(async () => ({}) as any)
+    try {
+      const withBom = Object.fromEntries(Object.entries(files).map(([name, content]) => [name, bom + content]))
+      await importFeedFile(await fixture(withBom), feed)
+      expect(transaction).toHaveBeenCalled()
     } finally { transaction.mockRestore() }
   })
 

@@ -48,6 +48,65 @@ export function serializeCsvRows(rows: string[][]): string {
   return rows.map(r => r.map(escapeCsvField).join(',')).join('\n') + '\n'
 }
 
+/**
+ * Rewrite one column of a CSV file a line at a time.
+ *
+ * For files too large to hold as rows: stop_times.txt for a New York bus
+ * borough is 2.4 million rows, and parseCsvRows + serializeCsvRows on it
+ * peaked at 6.5 GB. Lines whose value doesn't change are copied through
+ * verbatim, so their quoting and line endings survive untouched.
+ *
+ * `next` maps a trimmed value to its replacement, or undefined to leave it.
+ * Returns the text unchanged (same string) when the column is absent.
+ */
+export function rewriteCsvColumn(
+  text: string,
+  column: string,
+  next: (value: string) => string | undefined,
+): { text: string; changed: number } {
+  let pos = 0
+  // One record from pos, as [start, end) of the source; quoted fields may span lines.
+  const nextRecord = (): [number, number] | null => {
+    if (pos >= text.length) return null
+    const start = pos
+    let quoted = false
+    while (pos < text.length) {
+      const c = text.charCodeAt(pos++)
+      if (c === 34) quoted = !quoted // a "" escape toggles twice
+      else if (c === 10 && !quoted) return [start, pos - 1]
+    }
+    return [start, pos]
+  }
+  const cellsOf = (line: string) => (line.includes('"') ? parseCsvRows(line)[0] ?? [] : line.split(','))
+
+  const head = nextRecord()
+  if (!head) return { text, changed: 0 }
+  const col = headerIndex(cellsOf(text.slice(head[0], head[1]).replace(/\r$/, ''))).get(column)
+  if (col === undefined) return { text, changed: 0 }
+
+  const parts: string[] = []
+  let copiedTo = 0
+  let changed = 0
+  for (let rec = nextRecord(); rec; rec = nextRecord()) {
+    let line = text.slice(rec[0], rec[1])
+    const cr = line.endsWith('\r')
+    if (cr) line = line.slice(0, -1)
+    if (!line) continue
+    const cells = cellsOf(line)
+    const value = cells[col]
+    if (value === undefined) continue
+    const replacement = next(value.trim())
+    if (replacement === undefined || replacement === value) continue
+    cells[col] = replacement
+    parts.push(text.slice(copiedTo, rec[0]), cells.map(escapeCsvField).join(',') + (cr ? '\r' : ''))
+    copiedTo = rec[1]
+    changed++
+  }
+  if (!changed) return { text, changed: 0 }
+  parts.push(text.slice(copiedTo))
+  return { text: parts.join(''), changed }
+}
+
 /** Column index lookup for a header row, tolerating whitespace and a BOM. */
 export function headerIndex(header: string[]): Map<string, number> {
   const index = new Map<string, number>()

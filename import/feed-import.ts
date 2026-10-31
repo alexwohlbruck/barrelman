@@ -18,6 +18,7 @@ import {
   parseShapes,
   deriveStopRoutes,
   parseGtfsRecords,
+  groupStopTimes,
   parseStopParents,
   deriveTripPatterns,
   importTripPatterns,
@@ -38,45 +39,21 @@ import {
 } from '../src/services/gtfs.service'
 
 /**
+ * A feed with no fixed-route timetable for the router: GTFS-Flex-only feeds,
+ * whose stop_times point at service areas rather than stops, and zips with
+ * nothing at their root. Not an error in the feed's own terms, and nothing to
+ * import, so the run skips it rather than counting it as a failure.
+ */
+export class NoFixedRouteService extends Error {}
+
+/**
  * Parse a GTFS ZIP on disk and import stops, routes, stop-route associations,
  * trip patterns, agency transfers, and shapes into PostGIS, then record the
  * feed in gtfs_feeds. Validates before replacing existing rows in one transaction.
  */
 export async function importFeedFile(filepath: string, feedInfo: GtfsFeedInfo) {
-  const zip = await JSZip.loadAsync(await Bun.file(filepath).arrayBuffer())
-  // Do all parsing before replacing a working feed. Stops without a timetable
-  // look valid on the map but disappear from the router's station candidates.
-  const required = async (name: string) => {
-    const content = await readZipEntry(zip, name)
-    if (!content?.trim()) throw new Error(`${filepath}: missing or empty ${name}`)
-    return content
-  }
-  const [stopsContent, routesContent, tripsContent, stopTimesContent, agencyContent, transfersContent, shapesContent] = await Promise.all([
-    required('stops.txt'), required('routes.txt'), required('trips.txt'), required('stop_times.txt'),
-    readZipEntry(zip, 'agency.txt'), readZipEntry(zip, 'transfers.txt'), readZipEntry(zip, 'shapes.txt'),
-  ])
-  const stops = parseStops(stopsContent, feedInfo.feedId)
-  const routes = parseRoutes(routesContent, feedInfo.feedId, agencyContent ? parseAgencies(agencyContent) : new Map())
-  const trips = parseGtfsRecords(tripsContent)
-  const stopTimes = parseGtfsRecords(stopTimesContent)
-  const tripIds = new Set(trips.map(t => t.trip_id))
-  if (stopTimes.some(st => !tripIds.has(st.trip_id))) {
-    throw new Error(`${filepath}: stop_times.txt references unknown trips`)
-  }
-  const associations = deriveStopRoutes(trips, stopTimes, feedInfo.feedId)
-  if (!stops.length || !routes.length || !associations.length) {
-    throw new Error(`${filepath}: feed must contain stops, routes, and stop-route associations`)
-  }
-  const stopIds = new Set(stops.map(s => s.stopId))
-  const routeIds = new Set(routes.map(r => r.routeId))
-  if (associations.some(a => !stopIds.has(a.stopId) || !routeIds.has(a.routeId))) {
-    throw new Error(`${filepath}: timetable references unknown stops or routes`)
-  }
-  const patterns = deriveTripPatterns(trips, stopTimes, parseStopParents(stopsContent), feedInfo.feedId)
-  const transfers = transfersContent ? parseTransfers(transfersContent, feedInfo.feedId) : []
-  const shapes = shapesContent ? parseShapes(shapesContent) : new Map<string, [number, number][]>()
-  const routeShapes = deriveRouteShapes(tripsContent)
-  const bikesAllowed = deriveBikesAllowed(tripsContent)
+  const { stops, routes, associations, patterns, transfers, shapes, routeShapes, bikesAllowed } =
+    await prepareFeedFile(filepath, feedInfo)
 
   // Readers see either the previous complete feed or the new complete feed.
   // A failed batch rolls back every table, including the feed's import marker.
@@ -96,6 +73,51 @@ export async function importFeedFile(filepath: string, feedInfo: GtfsFeedInfo) {
   })
   console.log(`  ✓ Imported ${counts.stopsImported} stops, ${counts.routesImported} routes, ${counts.stopRoutesImported} stop-route associations`)
   console.log(`  ✓ Imported ${counts.patternsImported} trip patterns, ${counts.transfersImported} agency transfers, ${counts.shapesImported} shapes`)
+}
+
+/**
+ * Parse and validate a GTFS ZIP without touching the database. Throws on a feed
+ * that would replace a working one with something the router can't use.
+ */
+export async function prepareFeedFile(filepath: string, feedInfo: GtfsFeedInfo) {
+  const zip = await JSZip.loadAsync(await Bun.file(filepath).arrayBuffer())
+  // Do all parsing before replacing a working feed. Stops without a timetable
+  // look valid on the map but disappear from the router's station candidates.
+  const required = async (name: string) => {
+    const content = await readZipEntry(zip, name)
+    if (!content?.trim()) throw new NoFixedRouteService(`${filepath}: missing or empty ${name}`)
+    return content
+  }
+  const [stopsContent, routesContent, tripsContent, stopTimesContent, agencyContent, transfersContent, shapesContent] = await Promise.all([
+    required('stops.txt'), required('routes.txt'), required('trips.txt'), required('stop_times.txt'),
+    readZipEntry(zip, 'agency.txt'), readZipEntry(zip, 'transfers.txt'), readZipEntry(zip, 'shapes.txt'),
+  ])
+  const stops = parseStops(stopsContent, feedInfo.feedId)
+  const routes = parseRoutes(routesContent, feedInfo.feedId, agencyContent ? parseAgencies(agencyContent) : new Map())
+  const trips = parseGtfsRecords(tripsContent)
+  // Grouped by trip as it is read: a record per row of a large stop_times.txt
+  // is what ran the US import out of memory.
+  const stopTimes = groupStopTimes(stopTimesContent)
+  const tripIds = new Set(trips.map(t => t.trip_id))
+  if ([...stopTimes.keys()].some(id => !tripIds.has(id))) {
+    throw new Error(`${filepath}: stop_times.txt references unknown trips`)
+  }
+  const associations = deriveStopRoutes(trips, stopTimes, feedInfo.feedId)
+  if (!stops.length || !routes.length || !associations.length) {
+    throw new NoFixedRouteService(`${filepath}: no stop served by a route (stops, routes or stop_times referencing them)`)
+  }
+  const stopIds = new Set(stops.map(s => s.stopId))
+  const routeIds = new Set(routes.map(r => r.routeId))
+  if (associations.some(a => !stopIds.has(a.stopId) || !routeIds.has(a.routeId))) {
+    throw new Error(`${filepath}: timetable references unknown stops or routes`)
+  }
+  const patterns = deriveTripPatterns(trips, stopTimes, parseStopParents(stopsContent), feedInfo.feedId)
+  const transfers = transfersContent ? parseTransfers(transfersContent, feedInfo.feedId) : []
+  const shapes = shapesContent ? parseShapes(shapesContent) : new Map<string, [number, number][]>()
+  const routeShapes = deriveRouteShapes(tripsContent)
+  const bikesAllowed = deriveBikesAllowed(tripsContent)
+
+  return { stops, routes, associations, patterns, transfers, shapes, routeShapes, bikesAllowed }
 }
 
 export async function readZipEntry(zip: JSZip, filename: string): Promise<string | null> {
