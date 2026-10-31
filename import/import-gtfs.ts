@@ -10,7 +10,7 @@
  */
 
 import { parseArgs } from 'util'
-import { existsSync, mkdirSync, writeFileSync, readdirSync } from 'fs'
+import { existsSync, mkdirSync, writeFileSync, readdirSync, renameSync, rmSync } from 'fs'
 import { join, basename } from 'path'
 import { injectFaresV2 } from './inject-fares-v2'
 import { injectBikesAllowed } from './inject-bikes-allowed'
@@ -291,12 +291,25 @@ async function main() {
 
         const chosen = await alignBestStatic(buffer, merged)
         merged.url = chosen.url
-        writeFileSync(filepath, Buffer.from(chosen.buffer))
+
+        // Step 3: Parse and import. Staged beside the feed's zip and moved
+        // into place only once the import commits, so a feed that fails or is
+        // skipped keeps the zip that matches its previous database contents.
+        // MOTIS builds from every zip gtfs_feeds names, and a broken download
+        // left in place (one night: a near-empty zip that later steps padded
+        // with only transfers.txt) aborts its whole import. The `.part`
+        // suffix keeps a leftover out of --skip-download's *.zip listing.
+        const staged = `${filepath}.part`
+        writeFileSync(staged, Buffer.from(chosen.buffer))
+        try {
+          await importFeedFile(staged, merged)
+        } catch (err) {
+          rmSync(staged, { force: true })
+          throw err
+        }
+        renameSync(staged, filepath)
         feedFiles.push(filepath)
         feedIdOf.set(filepath, merged.feedId)
-
-        // Step 3: Parse and import
-        await importFeedFile(filepath, merged)
       } catch (err) {
         recordFailure(feed.feedId, err)
       }
