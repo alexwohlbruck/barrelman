@@ -275,8 +275,11 @@ while : ; do
   # A named feed failed to load → drop it and retry (bounded). `|| true`
   # because under pipefail a grep that matches nothing fails the assignment,
   # and errexit would then abort before the street-routing fallback below.
+  # `.*`, not `[^\n]*`: inside a bracket that excludes the letter n, so
+  # "unable to import: no loader for gtfs/67.zip found" (a zip with no GTFS
+  # tables) never matched and read as a street-routing failure.
   bad="$(tr '\r' '\n' < /tmp/motis-import.log \
-        | grep -aoiE '(failed to load|unable to import[^\n]*) gtfs/[A-Za-z0-9_.:-]+\.zip' \
+        | grep -aoiE '(failed to load|unable to import.*) gtfs/[A-Za-z0-9_.:-]+\.zip' \
         | grep -aoE 'gtfs/[A-Za-z0-9_.:-]+\.zip' | head -1 | sed 's|gtfs/||;s|\.zip||' || true)"
   if [ -n "$bad" ]; then
     if [ "$dropped" -ge "$MAX_FEED_DROPS" ]; then
