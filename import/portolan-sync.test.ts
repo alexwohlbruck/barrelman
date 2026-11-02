@@ -52,7 +52,13 @@ describe('parseResultLine', () => {
     expect(r).not.toBeNull()
     expect(r!.changed).toEqual([])
     expect(r!.exported).toEqual([])
+    expect(r!.undrawn).toEqual([])
     expect(r!.errors).toEqual([])
+  })
+
+  test('carries the feeds the index leaves off the map', () => {
+    const r = parseResultLine('RESULT {"undrawn":["metra","chicago-cta"],"errors":[]}')
+    expect(r!.undrawn).toEqual(['metra', 'chicago-cta'])
   })
 
   test('returns null for malformed JSON', () => {

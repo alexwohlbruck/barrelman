@@ -162,7 +162,7 @@ The script is looking in the repo directory rather than the mounted volume. `bar
 
 MOTIS serves a separately built GTFS timetable; station discovery reads the GTFS tables in PostGIS. A partial older feed import can leave those two views inconsistent. Check `/transit/routes?feedId=<feed-id>&stopId=<stop-id>` for a platform with known service. If it returns no routes while MOTIS still routes trains there, inspect that feed's import logs and re-import its complete GTFS ZIP through the normal import job, then rebuild MOTIS if the timetable changed.
 
-Feed replacements are atomic: missing required files, unresolved timetable references, or database failures preserve the previous feed and fail the import. Fix the reported feed error before retrying; widening walking limits cannot restore missing stop-to-route associations.
+Feed replacements are atomic: unresolved timetable references, malformed CSV, or database failures preserve the previous feed. The import names it in `N of M feed(s) failed and kept their previous contents: …` at the end of the log, and fails the job only when more than 15% of feeds failed. Fix the reported feed error before retrying; widening walking limits cannot restore missing stop-to-route associations.
 
 **GTFS finishes with `Processed 0 feeds`**
 
@@ -587,6 +587,23 @@ again the moment the worker returns. Cancel it before restarting anything:
 ```sql
 UPDATE ops_jobs SET status='canceled' WHERE id='<job id>';
 ```
+
+**A city's transit is missing from the portolan layer**
+
+Look for the `undrawn` line in the last portolan sync's output (portolan 0.5.3
+or later). It names every feed that has GTFS on disk but that no pyramid in
+`index.json` draws. Bus feeds without a streets extract and flex-only feeds
+appear there routinely; a rail operator does not.
+
+Metro areas are built as **groups**, and a group draws its members. Before
+portolan 0.5.3 the index left the members out even when the group's own build
+had failed, so one failed group removed a whole city. Chicago lost the L, Metra
+and the South Shore Line this way. Search the sync output for the group's key
+(`chicago`, `greater-boston`, …): `preflight:` names a missing extract, and
+`signal: killed` means the chart ran out of memory. Groups built before 0.5.3
+may still carry a merged rail extract covering the whole country. Delete
+`build/<group>-rail.geojson` and `build/<group>-stops.geojson` and patch one of
+the group's members, and the group is re-cut to its own window.
 
 **A console job sits in `queued`**
 

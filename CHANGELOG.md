@@ -10,6 +10,14 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.10.37] - 2026-11-02
+
+### Fixed
+
+* 3D buildings no longer flicker in a checkerboard where a tall building part rises out of a shorter one drawn round its base, as the GM Building's tower does from its podium. Each part now has the footprints of overlapping parts that span at least its whole height cut out of it. The `buildings_3d` view is rebuilt on the first start after upgrading, and the 3D buildings layer is empty until that finishes, which takes hours on a country-sized import.
+* Portolan syncs print the feeds that have GTFS but are on no map (needs portolan 0.5.3). Portolan 0.5.3 also stops a failed metro-area group from hiding its members. That failure took Chicago's L, Metra and South Shore Line, and transit in Boston, St. Louis, San Diego, Denver and Toronto, off the transit layer.
+* Transit trips that their feed publishes without a shape no longer draw as straight lines between stops. The GTFS import lends each one the shape of a trip on the same route that runs past all of its stops; in New York that fixes about 6,000 subway trips, mostly short-turn and local runs. Run the "Fill Trip Shapes" task and rebuild MOTIS to apply it to feeds already imported.
+
 ## [0.10.36] - 2026-10-30
 
 ### Added
@@ -25,6 +33,9 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ### Fixed
 
+* The nightly GTFS import no longer fails, so the MOTIS rebuild after it runs again. It misread every feed file that opens with a UTF-8 byte-order mark, as many Windows-written feeds do. Those feeds looked like timetables with no trips: 122 US feeds were rejected outright, and before that they imported without any lines at their stops. Any one failed feed also failed the whole run, which skipped the walking transfers and the MOTIS rebuild for every other feed. GTFS-Flex-only feeds are now skipped as having nothing to import. The run fails only when more than 15% of feeds fail, and otherwise lists the ones that did.
+* A GTFS feed that fails or is skipped now keeps its previous ZIP, matching the database contents it keeps. Its new download used to overwrite that ZIP before the import was checked. One night a near-empty download (later padded with only `transfers.txt`) then made the MOTIS rebuild abort with "no loader for gtfs/67.zip found". The MOTIS rebuild now also drops a feed named in that error and retries, instead of reading it as a street-routing failure.
+* The GTFS import uses about half the memory on large feeds, and no longer gets OOM-killed partway through the United States. It used to hold all of `stop_times.txt` as one record per row, both to derive each stop's lines and to rewrite trip ids for realtime matching. For New York's Brooklyn bus feed alone, the rewrite peaked at 6.8 GB; it now streams the file and peaks at 1.6 GB.
 * Bikeshare, scooter, bike and park-and-ride trips no longer vanish after a MOTIS rebuild. MOTIS's street import fails on a way whose node is missing, which replication leaves behind in a merged extract, and on a junction with more than 16 ways, which the United States has a few of. The rebuild then quietly fell back to a timetable-only dataset that answers none of those trips. It now builds MOTIS from a copy of the extract without those ways, and the extract itself is untouched. If street routing still can't build, the log names the cause and the job fails rather than reporting success. Set `MOTIS_STREET_ROUTING=0` to choose timetable-only deliberately, or `MOTIS_STREET_ROUTING=gbfs` to build MOTIS's street graph only around your bikeshare systems. That is the setting for a region too large to build whole, like the United States on a 32 GB host.
 * GTFS feed replacements now commit stops, routes, stop-route associations, transfers, and shapes together. Incomplete timetables and failed database writes retain the previous feed and report an import failure instead of leaving stations with missing service data.
 

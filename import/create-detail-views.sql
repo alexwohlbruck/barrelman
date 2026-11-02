@@ -517,9 +517,9 @@ WHERE geom_type IN ('line', 'area')
 -- after an import, and the API refreshes it in the background on startup if it
 -- is still empty. Same shape as the brand catalog in `src/db.ts`.
 --
--- Changing the SELECT below therefore needs the view dropped by hand, since
--- IF NOT EXISTS will not redefine one that is already there:
---   DROP MATERIALIZED VIEW buildings_3d;  -- then re-run this file
+-- IF NOT EXISTS will not redefine a view that is already there, so the view
+-- carries a version in its comment, as street_furniture does: bump it with any
+-- change to the SELECT and startup rebuilds it empty, to be filled again.
 --
 -- Order matters on a deployment that does not have this view yet. Reading a
 -- materialized view that has never been refreshed raises rather than returning
@@ -528,11 +528,38 @@ WHERE geom_type IN ('line', 'area')
 -- refresh it, and only then let Martin see it; `--on-invalid warn` in
 -- docker-compose.yml is what keeps a mistake here from taking the whole tile
 -- server down rather than just this layer.
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_class WHERE relname = 'buildings_3d' AND relkind = 'm')
+    AND COALESCE(obj_description(to_regclass('buildings_3d'), 'pg_class'), '') <> 'v2' THEN
+    DROP MATERIALIZED VIEW buildings_3d;
+  END IF;
+END $$;
+
+-- Heights arrive as free text — "12", "12 m", "~10", "3,5" are all in use — and
+-- a plain cast turns one bad value into a failed tile for the whole area. The
+-- leading number is taken where there is one and the row falls through to the
+-- level count otherwise, which is what OpenMapTiles does, as are 3.66m a storey
+-- and 5m for a building that records neither: a building served from here and
+-- one served from the basemap stand the same height.
+CREATE OR REPLACE FUNCTION building_render_height(tags jsonb) RETURNS real
+LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+  SELECT COALESCE(NULLIF(substring(tags->>'height' from '^\s*([0-9]+(?:\.[0-9]+)?)'), '')::real,
+                  NULLIF(substring(tags->>'building:levels' from '^\s*([0-9]+(?:\.[0-9]+)?)'), '')::real * 3.66,
+                  5)::real
+$$;
+
+CREATE OR REPLACE FUNCTION building_render_min_height(tags jsonb) RETURNS real
+LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+  SELECT COALESCE(NULLIF(substring(tags->>'min_height' from '^\s*([0-9]+(?:\.[0-9]+)?)'), '')::real,
+                  NULLIF(substring(tags->>'building:min_level' from '^\s*([0-9]+(?:\.[0-9]+)?)'), '')::real * 3.66,
+                  0)::real
+$$;
+
 CREATE MATERIALIZED VIEW IF NOT EXISTS buildings_3d AS
 WITH shapes AS (
   SELECT (osm_id * 4 + CASE osm_type WHEN 'N' THEN 0 WHEN 'W' THEN 1 ELSE 2 END) as fid,
-         id, geom, tags,
-         COALESCE(tags->>'building:part', 'no') <> 'no' as is_part
+         id, geom, tags
   FROM geo_places
   WHERE geom_type = 'area'
     -- A basement or a subway concourse is not something you can see from above.
@@ -577,7 +604,7 @@ WITH shapes AS (
 -- off `parts` against the GIST index on `geo_places.geom` it is one scan and
 -- a few hundred thousand index probes.
 parts AS MATERIALIZED (
-  SELECT id, geom
+  SELECT id, geom, building_render_height(tags) as top, building_render_min_height(tags) as base
   FROM geo_places
   WHERE geom_type = 'area'
     AND COALESCE(tags->>'location', '') <> 'underground'
@@ -617,34 +644,46 @@ owner AS (
         OR ST_Area(ST_Intersection(o.geom, p.geom)) >= 0.99 * ST_Area(p.geom))
   ORDER BY p.id, ST_Area(o.geom)
 ),
--- Heights arrive as free text — "12", "12 m", "~10", "3,5" are all in use — and
--- a plain cast turns one bad value into a failed tile for the whole area. The
--- leading number is taken where there is one and the row falls through to the
--- level count otherwise, which is what OpenMapTiles does and what keeps these
--- columns numeric like the basemap's own.
-measured AS (
-  SELECT s.*,
-         NULLIF(substring(s.tags->>'height'            from '^\s*([0-9]+(?:\.[0-9]+)?)'), '')::real as h,
-         NULLIF(substring(s.tags->>'min_height'        from '^\s*([0-9]+(?:\.[0-9]+)?)'), '')::real as min_h,
-         NULLIF(substring(s.tags->>'building:levels'   from '^\s*([0-9]+(?:\.[0-9]+)?)'), '')::real as levels,
-         NULLIF(substring(s.tags->>'building:min_level' from '^\s*([0-9]+(?:\.[0-9]+)?)'), '')::real as min_levels
-  FROM shapes s
+-- A part standing inside a taller one that spans its whole height, a podium
+-- around its tower, is hidden there anyway, but its walls lie in the taller
+-- part's walls and z-fight with them. Cut the taller parts out of it. Only
+-- parts that reach down at least as far, so the cut never opens a gap, and
+-- only real overlaps: a shared wall drawn a little off is not one. Shrinking
+-- and regrowing the remainder by ~10cm drops the slivers left along walls that
+-- nearly but not quite coincide.
+cut AS (
+  SELECT p.id,
+         ST_CollectionExtract(ST_MakeValid(ST_Buffer(ST_Buffer(
+           ST_Difference(ST_MakeValid(p.geom), ST_Union(ST_MakeValid(q.geom))),
+           -1e-6, 'join=mitre'), 1e-6, 'join=mitre')), 3) as geom,
+         ST_Area(p.geom) as area
+  FROM parts p
+  JOIN geo_places q
+    ON q.geom && p.geom
+   AND q.id <> p.id
+   AND q.geom_type = 'area'
+   AND COALESCE(q.tags->>'location', '') <> 'underground'
+   AND COALESCE(q.tags->>'building:part', 'no') <> 'no'
+  WHERE building_render_min_height(q.tags) <= p.base
+    AND building_render_height(q.tags) >= p.top
+    -- Two parts spanning the same range: the later id gives way.
+    AND (building_render_min_height(q.tags) < p.base OR building_render_height(q.tags) > p.top OR q.id < p.id)
+    AND ST_Intersects(q.geom, p.geom)
+    AND ST_Area(ST_Intersection(q.geom, p.geom)) >= 0.05 * LEAST(ST_Area(q.geom), ST_Area(p.geom))
+  GROUP BY p.id, p.geom
 )
-SELECT m.fid, m.id, m.geom,
-       -- 3.66m a storey and 5m for a building that records neither, both
-       -- OpenMapTiles' numbers, so a building served from here and one served
-       -- from the basemap stand the same height.
-       COALESCE(m.h, m.levels * 3.66, 5)::real          as render_height,
-       COALESCE(m.min_h, m.min_levels * 3.66, 0)::real  as render_min_height,
+SELECT s.fid, s.id, COALESCE(k.geom, s.geom) as geom,
+       building_render_height(s.tags)     as render_height,
+       building_render_min_height(s.tags) as render_min_height,
        -- Both spellings: OSM accepts either and both are in the data. NULL
        -- rather than '' where there is none, for the same reason as `hide_3d`
        -- below — a vector tile has no null, so the key is simply absent and a
        -- client can ask `["has", "colour"]` rather than testing for an empty
        -- string it would otherwise have to know about.
-       NULLIF(COALESCE(m.tags->>'building:colour', m.tags->>'building:color', ''), '') as colour,
+       NULLIF(COALESCE(s.tags->>'building:colour', s.tags->>'building:color', ''), '') as colour,
        -- The roof, separately. OpenMapTiles has no field for this at all, which
        -- is half the reason for serving buildings ourselves.
-       NULLIF(COALESCE(m.tags->>'roof:colour', m.tags->>'roof:color', ''), '')         as roof_colour,
+       NULLIF(COALESCE(s.tags->>'roof:colour', s.tags->>'roof:color', ''), '')         as roof_colour,
        -- An outline its parts have replaced is the one thing that must not draw;
        -- see `covered` above for when that is and is not the case.
        --
@@ -657,14 +696,17 @@ SELECT m.fid, m.id, m.geom,
        CASE WHEN c.covered_area >= 0.9 * c.outline_area THEN true END as hide_3d,
        -- The building this shape belongs to: its outline for a part, itself
        -- otherwise. Shared by every part of one building.
-       COALESCE(w.outline_fid, m.fid) as group_id
-FROM measured m
-LEFT JOIN covered c ON c.id = m.id
-LEFT JOIN owner w ON w.part_id = m.id
+       COALESCE(w.outline_fid, s.fid) as group_id
+FROM shapes s
+LEFT JOIN covered c ON c.id = s.id
+LEFT JOIN owner w ON w.part_id = s.id
+LEFT JOIN cut k ON k.id = s.id
 -- A bridge's abutments and piers under its deck are the deck's to draw (bridge_decks):
 -- extruded from the ground their flat tops stand through it where the ground slopes.
 -- Anchorages and towers, standing well above any deck, stay.
-WHERE NOT (COALESCE(m.tags->>'bridge:support', '') IN ('abutment', 'pier') AND COALESCE(m.h, m.levels * 3.66, 5) < 20)
+WHERE NOT (COALESCE(s.tags->>'bridge:support', '') IN ('abutment', 'pier') AND building_render_height(s.tags) < 20)
+  -- A part its taller neighbours cover entirely has nothing left to draw.
+  AND (k.id IS NULL OR ST_Area(k.geom) >= 0.01 * k.area)
 WITH NO DATA;
 
 -- Unique on fid so the view can be refreshed CONCURRENTLY, and GIST on geom so
@@ -679,6 +721,7 @@ CREATE INDEX IF NOT EXISTS geo_places_building_part_geom_idx
   ON geo_places USING GIST (geom)
   WHERE COALESCE(tags->>'building:part', 'no') <> 'no';
 
+COMMENT ON MATERIALIZED VIEW buildings_3d IS 'v2';
 CREATE UNIQUE INDEX IF NOT EXISTS buildings_3d_fid_idx ON buildings_3d (fid);
 CREATE INDEX IF NOT EXISTS buildings_3d_geom_idx ON buildings_3d USING GIST (geom);
 
