@@ -17,7 +17,7 @@
 
 import { db, maintenanceConnection } from '../db'
 import type { RtUrlType } from '../schema/gtfs'
-import { and, eq, sql } from 'drizzle-orm'
+import { and, eq, sql, type SQL } from 'drizzle-orm'
 import {
   gtfsFeeds,
   gtfsRoutes,
@@ -587,6 +587,20 @@ async function alternateStaticUrls(
 // ── GTFS ZIP parsing ────────────────────────────────────────────────
 
 /**
+ * How every GTFS table is read. `bom` matters: plenty of feeds are written by
+ * Windows tools that open each file with a UTF-8 byte-order mark, and without
+ * it the first column's key is "\ufefftrip_id", so every row reads as having
+ * no trip_id. That made 122 US feeds look like timetables with no trips.
+ */
+const GTFS_CSV = {
+  bom: true,
+  columns: true,
+  skip_empty_lines: true,
+  trim: true,
+  relax_column_count: true,
+} as const
+
+/**
  * Parse stops.txt from a GTFS ZIP buffer.
  * Returns an array of stop records ready for DB insert.
  */
@@ -605,12 +619,7 @@ export function parseStops(
   wheelchairBoarding: number
   platformCode: string | null
 }> {
-  const records = parse(csvContent, {
-    columns: true,
-    skip_empty_lines: true,
-    trim: true,
-    relax_column_count: true,
-  })
+  const records = parse(csvContent, GTFS_CSV)
 
   return records
     .filter((r: any) => r.stop_lat && r.stop_lon)
@@ -647,12 +656,7 @@ export function parseRoutes(
   routeTextColor: string | null
   routeUrl: string | null
 }> {
-  const records = parse(csvContent, {
-    columns: true,
-    skip_empty_lines: true,
-    trim: true,
-    relax_column_count: true,
-  })
+  const records = parse(csvContent, GTFS_CSV)
 
   return records.map((r: any) => ({
     routeId: r.route_id,
@@ -675,12 +679,7 @@ export function parseRoutes(
  * Parse agency.txt to build agency_id → agency_name map.
  */
 export function parseAgencies(csvContent: string): Map<string, string> {
-  const records = parse(csvContent, {
-    columns: true,
-    skip_empty_lines: true,
-    trim: true,
-    relax_column_count: true,
-  })
+  const records = parse(csvContent, GTFS_CSV)
 
   const map = new Map<string, string>()
   for (const r of records) {
@@ -701,12 +700,97 @@ type GtfsRecord = Record<string, string>
 
 /** Parse a GTFS CSV file into row records. */
 export function parseGtfsRecords(content: string): GtfsRecord[] {
-  return parse(content, {
-    columns: true,
-    skip_empty_lines: true,
-    trim: true,
-    relax_column_count: true,
-  })
+  return parse(content, GTFS_CSV)
+}
+
+/** Split one CSV record that contains quotes: commas inside quotes, "" for a quote. */
+function splitQuotedCsvLine(line: string): string[] {
+  const cells: string[] = []
+  let field = ''
+  let quoted = false
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i]
+    if (quoted) {
+      if (c === '"') {
+        if (line[i + 1] === '"') { field += '"'; i++ } else quoted = false
+      } else field += c
+    } else if (c === '"') quoted = true
+    else if (c === ',') { cells.push(field); field = '' }
+    else field += c
+  }
+  cells.push(field)
+  return cells
+}
+
+/** Each trip's stops, in file order, from stop_times.txt: all either deriver reads. */
+export type StopTimesByTrip = Map<string, Array<{ seq: number; stopId: string }>>
+
+/**
+ * Group stop_times.txt by trip without building a record per row.
+ *
+ * stop_times is most of a feed: 5.9 million rows in one 69 MB zip. Parsed into
+ * an object per row it cost about 3 GB, and the US import was OOM-killed on
+ * New York's bus feeds. Read a record at a time instead, keeping only trip_id,
+ * stop_id and stop_sequence. Rows without a trip or a stop (GTFS-Flex rows
+ * point at a location_id instead) carry nothing either deriver can use.
+ */
+export function groupStopTimes(content: string | GtfsRecord[] | StopTimesByTrip): StopTimesByTrip {
+  if (content instanceof Map) return content
+  const byTrip: StopTimesByTrip = new Map()
+  const add = (tripId: string | undefined, stopId: string | undefined, rawSeq: string | undefined) => {
+    if (!tripId || !stopId) return
+    let arr = byTrip.get(tripId)
+    if (!arr) byTrip.set(tripId, (arr = []))
+    const seq = parseInt(rawSeq ?? '', 10)
+    arr.push({ seq: Number.isNaN(seq) ? arr.length : seq, stopId })
+  }
+  if (Array.isArray(content)) {
+    for (const st of content) add(st.trip_id, st.stop_id, st.stop_sequence)
+    return byTrip
+  }
+
+  // Line by line, slicing fields rather than building them: stop_times is
+  // mostly unquoted, and a quote-aware split is only needed where a line has
+  // one. Stop ids repeat on every trip, so each is kept once.
+  const interned = new Map<string, string>()
+  const intern = (v: string) => {
+    let hit = interned.get(v)
+    if (hit === undefined) interned.set(v, (hit = v))
+    return hit
+  }
+  let pos = content.charCodeAt(0) === 0xfeff ? 1 : 0
+  const nextLine = (): string | null => {
+    if (pos >= content.length) return null
+    let end = content.indexOf('\n', pos)
+    if (end === -1) end = content.length
+    let line = content.slice(pos, end)
+    pos = end + 1
+    // A quoted field can hold a newline: keep reading until quotes balance.
+    while ((line.split('"').length - 1) % 2 === 1 && pos < content.length) {
+      let next = content.indexOf('\n', pos)
+      if (next === -1) next = content.length
+      line += '\n' + content.slice(pos, next)
+      pos = next + 1
+    }
+    return line.endsWith('\r') ? line.slice(0, -1) : line
+  }
+  const cellsOf = (line: string): string[] =>
+    (line.includes('"') ? splitQuotedCsvLine(line) : line.split(',')).map(c => c.trim())
+
+  const headerLine = nextLine()
+  if (headerLine == null) return byTrip
+  const header = cellsOf(headerLine)
+  const iTrip = header.indexOf('trip_id')
+  const iStop = header.indexOf('stop_id')
+  const iSeq = header.indexOf('stop_sequence')
+  if (iTrip === -1 || iStop === -1) return byTrip
+  for (let line = nextLine(); line != null; line = nextLine()) {
+    if (!line) continue
+    const cells = cellsOf(line)
+    const stopId = cells[iStop]
+    add(cells[iTrip], stopId ? intern(stopId) : stopId, iSeq === -1 ? undefined : cells[iSeq])
+  }
+  return byTrip
 }
 
 /** Accept either raw CSV text or already-parsed records, so the importer can
@@ -717,7 +801,7 @@ function asRecords(content: string | GtfsRecord[]): GtfsRecord[] {
 
 export function deriveStopRoutes(
   tripsContent: string | GtfsRecord[],
-  stopTimesContent: string | GtfsRecord[],
+  stopTimesContent: string | GtfsRecord[] | StopTimesByTrip,
   feedId: string,
 ): Array<{ feedId: string; stopId: string; routeId: string }> {
   // Build trip → route map
@@ -732,17 +816,15 @@ export function deriveStopRoutes(
   const seen = new Set<string>()
   const result: Array<{ feedId: string; stopId: string; routeId: string }> = []
 
-  const stopTimes = asRecords(stopTimesContent)
-
-  for (const st of stopTimes) {
-    const routeId = tripToRoute.get(st.trip_id)
-    if (!routeId || !st.stop_id) continue
-
-    const key = `${st.stop_id}|${routeId}`
-    if (seen.has(key)) continue
-    seen.add(key)
-
-    result.push({ feedId, stopId: st.stop_id, routeId })
+  for (const [tripId, stops] of groupStopTimes(stopTimesContent)) {
+    const routeId = tripToRoute.get(tripId)
+    if (!routeId) continue
+    for (const { stopId } of stops) {
+      const key = `${stopId}|${routeId}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      result.push({ feedId, stopId, routeId })
+    }
   }
 
   return result
@@ -756,12 +838,7 @@ export function deriveStopRoutes(
  * boards/alights a parent station) matches the platform ids in stop_times.
  */
 export function parseStopParents(stopsContent: string): Map<string, string> {
-  const records = parse(stopsContent, {
-    columns: true,
-    skip_empty_lines: true,
-    trim: true,
-    relax_column_count: true,
-  })
+  const records = parse(stopsContent, GTFS_CSV)
   const map = new Map<string, string>()
   for (const r of records) {
     if (!r.stop_id) continue
@@ -782,7 +859,7 @@ export function parseStopParents(stopsContent: string): Map<string, string> {
  */
 export function deriveTripPatterns(
   tripsContent: string | GtfsRecord[],
-  stopTimesContent: string | GtfsRecord[],
+  stopTimesContent: string | GtfsRecord[] | StopTimesByTrip,
   stopParent: Map<string, string>,
   feedId: string,
 ): Array<{
@@ -804,19 +881,8 @@ export function deriveTripPatterns(
     })
   }
 
-  // Group stop_times by trip, preserving order via stop_sequence.
-  const stopTimes = asRecords(stopTimesContent)
-  const byTrip = new Map<string, Array<{ seq: number; stopId: string }>>()
-  for (const st of stopTimes) {
-    if (!st.trip_id || !st.stop_id) continue
-    let arr = byTrip.get(st.trip_id)
-    if (!arr) {
-      arr = []
-      byTrip.set(st.trip_id, arr)
-    }
-    const seq = parseInt(st.stop_sequence ?? '', 10)
-    arr.push({ seq: Number.isNaN(seq) ? arr.length : seq, stopId: st.stop_id })
-  }
+  // Group stop_times by trip; ordered by stop_sequence below.
+  const byTrip = groupStopTimes(stopTimesContent)
 
   // One normalised, comma-bounded sequence per trip, collapsed to a pattern per
   // distinct sequence. How MANY trips collapsed into each is kept: it is the
@@ -866,12 +932,7 @@ export function deriveTripPatterns(
 export function parseShapes(
   csvContent: string,
 ): Map<string, [number, number][]> {
-  const records = parse(csvContent, {
-    columns: true,
-    skip_empty_lines: true,
-    trim: true,
-    relax_column_count: true,
-  })
+  const records = parse(csvContent, GTFS_CSV)
 
   // Group points by shape_id, then sort by sequence
   const raw = new Map<string, Array<{ seq: number; lat: number; lng: number }>>()
@@ -904,12 +965,7 @@ export function parseShapes(
 export function deriveRouteShapes(
   tripsContent: string,
 ): Map<string, string> {
-  const records = parse(tripsContent, {
-    columns: true,
-    skip_empty_lines: true,
-    trim: true,
-    relax_column_count: true,
-  })
+  const records = parse(tripsContent, GTFS_CSV)
 
   // Count shape_id occurrences per route_id
   const routeShapeCounts = new Map<string, Map<string, number>>()
@@ -954,12 +1010,7 @@ export function deriveRouteShapes(
 export function deriveBikesAllowed(
   tripsContent: string,
 ): Map<string, number> {
-  const records = parse(tripsContent, {
-    columns: true,
-    skip_empty_lines: true,
-    trim: true,
-    relax_column_count: true,
-  })
+  const records = parse(tripsContent, GTFS_CSV)
 
   // Track per-route: total trips, trips with bikes_allowed=1
   const routeStats = new Map<string, { total: number; allowed: number }>()
@@ -993,11 +1044,12 @@ export function deriveBikesAllowed(
 export async function importShapes(
   shapes: Map<string, [number, number][]>,
   feedId: string,
+  writer: GtfsWriter = db,
 ): Promise<number> {
   if (shapes.size === 0) return 0
 
   // Clear existing shapes for this feed
-  await db.delete(gtfsShapes).where(eq(gtfsShapes.feedId, feedId))
+  await writer.delete(gtfsShapes).where(eq(gtfsShapes.feedId, feedId))
 
   // Batch insert in chunks of 100 (shapes can be large)
   const entries = Array.from(shapes.entries())
@@ -1007,7 +1059,7 @@ export async function importShapes(
   for (let i = 0; i < entries.length; i += chunkSize) {
     const chunk = entries.slice(i, i + chunkSize)
 
-    await db
+    await writer
       .insert(gtfsShapes)
       .values(chunk.map(([shapeId, coordinates]) => ({ feedId, shapeId, coordinates })))
       .onConflictDoUpdate({
@@ -1026,9 +1078,10 @@ export async function importShapes(
 export async function updateRouteShapes(
   routeShapes: Map<string, string>,
   feedId: string,
+  writer: GtfsWriter = db,
 ): Promise<void> {
   for (const [routeId, shapeId] of routeShapes) {
-    await db
+    await writer
       .update(gtfsRoutes)
       .set({ shapeId })
       .where(and(eq(gtfsRoutes.feedId, feedId), eq(gtfsRoutes.routeId, routeId)))
@@ -1075,14 +1128,18 @@ export async function getBikesAllowed(
 export async function updateBikesAllowed(
   bikesAllowed: Map<string, number>,
   feedId: string,
+  writer: GtfsWriter = db,
 ): Promise<void> {
   for (const [routeId, bikesAllowedValue] of bikesAllowed) {
-    await db
+    await writer
       .update(gtfsRoutes)
       .set({ bikesAllowed: bikesAllowedValue })
       .where(and(eq(gtfsRoutes.feedId, feedId), eq(gtfsRoutes.routeId, routeId)))
   }
 }
+
+/** The write operations shared by the database and a feed-import transaction. */
+export type GtfsWriter = Pick<typeof db, 'insert' | 'update' | 'delete' | 'execute'>
 
 // ── Database import ─────────────────────────────────────────────────
 
@@ -1092,6 +1149,7 @@ export async function updateBikesAllowed(
  */
 export async function importStops(
   stops: ReturnType<typeof parseStops>,
+  writer: GtfsWriter = db,
 ): Promise<number> {
   if (stops.length === 0) return 0
 
@@ -1105,7 +1163,7 @@ export async function importStops(
     const validBatch = batch.filter(s => s.stopId && s.feedId)
     if (validBatch.length === 0) continue
 
-    await db
+    await writer
       .insert(gtfsStops)
       .values(
         validBatch.map(s => ({
@@ -1147,6 +1205,7 @@ export async function importStops(
  */
 export async function importRoutes(
   routes: ReturnType<typeof parseRoutes>,
+  writer: GtfsWriter = db,
 ): Promise<number> {
   if (routes.length === 0) return 0
 
@@ -1156,7 +1215,7 @@ export async function importRoutes(
   for (let i = 0; i < routes.length; i += BATCH_SIZE) {
     const batch = routes.slice(i, i + BATCH_SIZE)
 
-    await db
+    await writer
       .insert(gtfsRoutes)
       .values(
         batch.map(r => ({
@@ -1197,6 +1256,7 @@ export async function importRoutes(
  */
 export async function importStopRoutes(
   associations: ReturnType<typeof deriveStopRoutes>,
+  writer: GtfsWriter = db,
 ): Promise<number> {
   if (associations.length === 0) return 0
 
@@ -1206,7 +1266,7 @@ export async function importStopRoutes(
   for (let i = 0; i < associations.length; i += BATCH_SIZE) {
     const batch = associations.slice(i, i + BATCH_SIZE)
 
-    await db
+    await writer
       .insert(gtfsStopRoutes)
       .values(batch.map(a => ({ feedId: a.feedId, stopId: a.stopId, routeId: a.routeId })))
       .onConflictDoNothing()
@@ -1224,8 +1284,8 @@ export async function importStopRoutes(
  * backfills only routes that have no centroid yet, so the startup call is
  * a no-op once populated.
  */
-export async function updateRouteCentroids(feedId?: string): Promise<void> {
-  await db.execute(sql`
+export async function updateRouteCentroids(feedId?: string, writer: GtfsWriter = db): Promise<void> {
+  await writer.execute(sql`
     UPDATE gtfs_routes r SET centroid = sub.c
     FROM (
       SELECT sr.feed_id, sr.route_id, ST_Centroid(ST_Collect(s.geom)) AS c
@@ -1248,8 +1308,9 @@ export async function updateRouteCentroids(feedId?: string): Promise<void> {
 export async function importTripPatterns(
   feedId: string,
   patterns: ReturnType<typeof deriveTripPatterns>,
+  writer: GtfsWriter = db,
 ): Promise<number> {
-  await db.delete(gtfsTripPatterns).where(eq(gtfsTripPatterns.feedId, feedId))
+  await writer.delete(gtfsTripPatterns).where(eq(gtfsTripPatterns.feedId, feedId))
   if (patterns.length === 0) return 0
 
   const BATCH_SIZE = 500
@@ -1257,7 +1318,7 @@ export async function importTripPatterns(
   for (let i = 0; i < patterns.length; i += BATCH_SIZE) {
     const batch = patterns.slice(i, i + BATCH_SIZE)
 
-    await db.insert(gtfsTripPatterns).values(
+    await writer.insert(gtfsTripPatterns).values(
       batch.map(p => ({
         feedId: p.feedId,
         routeId: p.routeId,
@@ -1282,12 +1343,7 @@ export function parseTransfers(
   csvContent: string,
   feedId: string,
 ): Array<{ feedId: string; fromStopId: string; toStopId: string; transferType: number; minTransferTime: number | null }> {
-  const records = parse(csvContent, {
-    columns: true,
-    skip_empty_lines: true,
-    trim: true,
-    relax_column_count: true,
-  })
+  const records = parse(csvContent, GTFS_CSV)
   const out: Array<{ feedId: string; fromStopId: string; toStopId: string; transferType: number; minTransferTime: number | null }> = []
   for (const r of records) {
     if (!r.from_stop_id || !r.to_stop_id) continue
@@ -1307,15 +1363,16 @@ export function parseTransfers(
  */
 export async function importTransfers(
   transfers: ReturnType<typeof parseTransfers>,
+  writer: GtfsWriter = db,
 ): Promise<number> {
   if (transfers.length === 0) return 0
-  await db.delete(gtfsTransfers).where(eq(gtfsTransfers.feedId, transfers[0].feedId))
+  await writer.delete(gtfsTransfers).where(eq(gtfsTransfers.feedId, transfers[0].feedId))
 
   const BATCH_SIZE = 500
   let imported = 0
   for (let i = 0; i < transfers.length; i += BATCH_SIZE) {
     const batch = transfers.slice(i, i + BATCH_SIZE)
-    await db
+    await writer
       .insert(gtfsTransfers)
       .values(
         batch.map(t => ({
@@ -1381,8 +1438,8 @@ export interface StoredFeedIdentity {
  * first, so the ON CONFLICT branch below only covers callers that write
  * without clearing — see `loadFeedIdentities`.
  */
-export async function recordFeed(feed: GtfsFeedInfo, stopCount: number, routeCount: number): Promise<void> {
-  await db
+export async function recordFeed(feed: GtfsFeedInfo, stopCount: number, routeCount: number, writer: GtfsWriter = db): Promise<void> {
+  await writer
     .insert(gtfsFeeds)
     .values({
       feedId: feed.feedId,
@@ -1411,13 +1468,14 @@ export async function recordFeed(feed: GtfsFeedInfo, stopCount: number, routeCou
 /**
  * Remove all data for a specific feed (for re-import).
  */
-export async function clearFeed(feedId: string): Promise<void> {
-  await db.delete(gtfsTransfers).where(eq(gtfsTransfers.feedId, feedId))
-  await db.delete(gtfsTripPatterns).where(eq(gtfsTripPatterns.feedId, feedId))
-  await db.delete(gtfsStopRoutes).where(eq(gtfsStopRoutes.feedId, feedId))
-  await db.delete(gtfsRoutes).where(eq(gtfsRoutes.feedId, feedId))
-  await db.delete(gtfsStops).where(eq(gtfsStops.feedId, feedId))
-  await db.delete(gtfsFeeds).where(eq(gtfsFeeds.feedId, feedId))
+export async function clearFeed(feedId: string, writer: GtfsWriter = db): Promise<void> {
+  await writer.delete(gtfsShapes).where(eq(gtfsShapes.feedId, feedId))
+  await writer.delete(gtfsTransfers).where(eq(gtfsTransfers.feedId, feedId))
+  await writer.delete(gtfsTripPatterns).where(eq(gtfsTripPatterns.feedId, feedId))
+  await writer.delete(gtfsStopRoutes).where(eq(gtfsStopRoutes.feedId, feedId))
+  await writer.delete(gtfsRoutes).where(eq(gtfsRoutes.feedId, feedId))
+  await writer.delete(gtfsStops).where(eq(gtfsStops.feedId, feedId))
+  await writer.delete(gtfsFeeds).where(eq(gtfsFeeds.feedId, feedId))
 }
 
 // ── Transfer precomputation ─────────────────────────────────────────
@@ -1836,21 +1894,7 @@ export async function generateMotisConfig(options?: MotisConfigOptions): Promise
  * poll too much than to silently serve no shared mobility at all.
  */
 async function getGbfsFeedsForMotis(): Promise<Array<{ systemId: string; url: string }>> {
-  const { isGlobal, boxes: regionBoxes } = await resolveRegions()
-  const boxes = regionBoxes
-    .filter((b): b is [number, number, number, number] => Array.isArray(b) && b.length === 4)
-
-  const scope =
-    isGlobal || boxes.length === 0
-      ? sql`TRUE`
-      : sql`lat IS NOT NULL AND lon IS NOT NULL AND (${sql.join(
-          boxes.map(
-            ([west, south, east, north]) =>
-              sql`(lon BETWEEN ${west} AND ${east} AND lat BETWEEN ${south} AND ${north})`,
-          ),
-          sql` OR `,
-        )})`
-
+  const scope = await gbfsRegionScope(sql`lat`, sql`lon`)
   const result = await db.execute(sql`
     SELECT system_id, url
     FROM gbfs_systems
@@ -1861,6 +1905,67 @@ async function getGbfsFeedsForMotis(): Promise<Array<{ systemId: string; url: st
     systemId: row.system_id,
     url: row.url,
   }))
+}
+
+/** A WHERE clause keeping points inside this instance's region boxes. */
+async function gbfsRegionScope(lat: SQL, lon: SQL): Promise<SQL> {
+  const { isGlobal, boxes: regionBoxes } = await resolveRegions()
+  const boxes = regionBoxes
+    .filter((b): b is [number, number, number, number] => Array.isArray(b) && b.length === 4)
+  if (isGlobal || boxes.length === 0) return sql`TRUE`
+  return sql`${lat} IS NOT NULL AND ${lon} IS NOT NULL AND (${sql.join(
+    boxes.map(
+      ([west, south, east, north]) =>
+        sql`(${lon} BETWEEN ${west} AND ${east} AND ${lat} BETWEEN ${south} AND ${north})`,
+    ),
+    sql` OR `,
+  )})`
+}
+
+/** How far past its outermost dock a system's street graph reaches, in degrees (~2 km). */
+const GBFS_STATION_MARGIN_DEG = 0.02
+/** The box around a system with a location but no docks (free-floating), in degrees (~10 km). */
+const GBFS_FREE_FLOATING_MARGIN_DEG = 0.1
+
+/**
+ * The area MOTIS needs a street graph for to serve shared-mobility trips: the
+ * systems getGbfsFeedsForMotis hands it, each as the box around its docks (or
+ * its location, when it has none), merged. A GeoJSON (Multi)Polygon, or null
+ * when no system qualifies.
+ *
+ * MOTIS walks and rides rentals over its own street graph, so it needs one
+ * wherever there is a rental, and nowhere else: barrelman composes every other
+ * walk, bike and drive to a station itself, over GraphHopper. A continent's
+ * street graph doesn't fit beside the rest of the stack, while the areas
+ * bikeshare actually covers are a few percent of it.
+ */
+export async function getGbfsStreetArea(): Promise<object | null> {
+  const systemScope = await gbfsRegionScope(sql`sys.lat`, sql`sys.lon`)
+  const stationScope = await gbfsRegionScope(sql`st.lat`, sql`st.lon`)
+  const result = await db.execute(sql`
+    WITH sys AS (
+      SELECT system_id, lat, lon FROM gbfs_systems sys
+      WHERE enabled = TRUE AND (${systemScope})
+    ),
+    docks AS (
+      SELECT st.system_id,
+             ST_Expand(ST_Envelope(ST_Collect(ST_MakePoint(st.lon, st.lat))), ${GBFS_STATION_MARGIN_DEG}) AS g
+      FROM gbfs_stations st JOIN sys USING (system_id)
+      WHERE st.lat <> 0 AND st.lon <> 0 AND (${stationScope})
+      GROUP BY st.system_id
+    ),
+    areas AS (
+      SELECT g FROM docks
+      UNION ALL
+      SELECT ST_Expand(ST_MakePoint(sys.lon, sys.lat), ${GBFS_FREE_FLOATING_MARGIN_DEG})
+      FROM sys
+      WHERE sys.lat IS NOT NULL AND sys.lon IS NOT NULL
+        AND sys.system_id NOT IN (SELECT system_id FROM docks)
+    )
+    SELECT ST_AsGeoJSON(ST_Union(g), 5) AS geojson FROM areas
+  `)
+  const geojson = (result as any[])[0]?.geojson
+  return geojson ? JSON.parse(geojson) : null
 }
 
 // ── GTFS-Flex sanitization ────────────────────────────────────────

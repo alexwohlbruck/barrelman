@@ -171,6 +171,21 @@ export async function ensureSchema() {
   // Not awaited: each view is a spatial join over the whole region and takes
   // minutes on a large extract. Startup must not wait on them.
   void populateMaterializedViews()
+  void buildStatePartsIfEmpty()
+}
+
+/** Cut the states /route lists into state_parts, once, where it is missing or empty. The OSM import and update keep it current. */
+async function buildStatePartsIfEmpty() {
+  const client = maintenanceConnection()
+  try {
+    const [{ present }] = await client`SELECT to_regclass('state_parts') IS NOT NULL AS present`
+    if (present && (await client`SELECT 1 FROM state_parts LIMIT 1`).length) return
+    await client.unsafe(readFileSync(join(import.meta.dir, '../import/build-state-parts.sql'), 'utf-8'))
+  } catch (err) {
+    console.error('[schema] could not build state_parts:', err)
+  } finally {
+    await client.end({ timeout: 5 })
+  }
 }
 
 /** Columns the post-import pipeline adds to geo_places, and their types. */

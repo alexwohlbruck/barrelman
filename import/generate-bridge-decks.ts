@@ -104,11 +104,12 @@ async function main(sql: Sql) {
   if (clashes) process.exitCode = 1
   await lock`SELECT pg_advisory_unlock(${LOCK[0]}, ${LOCK[1]})`
   lock.release()
-  await sql.end()
+  await sql.end({ timeout: 5 })
 }
 
 if (import.meta.main) {
-  await main(postgres(dbUrl, { onnotice, max: 3 }))
+  // A connection past its lifetime keeps `end()` waiting forever once a reserved one has been released: the lock's session lasts the run.
+  await main(postgres(dbUrl, { onnotice, max: 3, max_lifetime: null }))
   // resolveRegions may have opened the shared DB handle (region store); exit
   // rather than hang on an idle connection.
   process.exit(process.exitCode ?? 0)

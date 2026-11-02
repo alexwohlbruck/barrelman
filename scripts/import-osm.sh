@@ -165,6 +165,15 @@ psql "$DATABASE_URL" -f "$PROJECT_DIR/import/create-detail-views.sql"
 # build there holds the server off its port for the duration.
 psql "$DATABASE_URL" -f "$PROJECT_DIR/import/create-detail-indexes.sql"
 
+# The same, for the nodes and ways POST /route/hazards reads.
+psql "$DATABASE_URL" -f "$PROJECT_DIR/import/create-route-hazard-indexes.sql"
+
+# And for the roads, bridges and parks /route reads to describe a route.
+psql "$DATABASE_URL" -f "$PROJECT_DIR/import/create-route-context-indexes.sql"
+
+# The states it reads, cut into small parts. Seconds.
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -c "SET client_min_messages = warning" -f "$PROJECT_DIR/import/build-state-parts.sql"
+
 # The materialized views hold rows rather than being plain views, so creating
 # them is not enough — they come into existence empty. Filled here, where the
 # data they join over has just changed. Minutes on a large extract.

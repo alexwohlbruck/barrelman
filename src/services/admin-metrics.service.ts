@@ -277,10 +277,11 @@ const SERVICE_NAMES: Record<DependencyKey, string> = {
   // Optional: only runs under the `pelias` compose profile, so "unavailable"
   // here often means "not started" rather than "broken".
   pelias: 'Pelias (addresses)',
+  tts: 'Kokoro (speech)',
 }
 
 /** Order the console renders them in — most fundamental first. */
-const SERVICE_ORDER: DependencyKey[] = ['database', 'motis', 'graphhopper', 'martin', 'pelias']
+const SERVICE_ORDER: DependencyKey[] = ['database', 'motis', 'graphhopper', 'martin', 'pelias', 'tts']
 
 /**
  * Decorate the health service's probes with the names and URLs the console

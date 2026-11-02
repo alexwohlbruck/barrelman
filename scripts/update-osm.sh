@@ -62,6 +62,15 @@ set -euo pipefail
 #                               cycle touches and rebuilds their decks
 #                               (update-bridge-decks.ts); 0 leaves them for a
 #                               "Build Bridge Decks" run
+#   TUNNEL_CUTS_INCREMENTAL     1 (default) queues the tunnels each replication
+#                               cycle touches and rebuilds their cuts
+#                               (update-tunnel-cuts.ts); 0 leaves them for a
+#                               "Build Tunnel Cuts" run
+#   SIDEWALK_STREET_NAMES_INCREMENTAL
+#                               1 (default) queues the highways each replication
+#                               cycle touches and renames the sidewalks around
+#                               them (update-sidewalk-street-names.ts); 0 leaves
+#                               them for a "Build Sidewalk Street Names" run
 #   REPLICATION_MAX_DIFFS       without middle tables: diffs applied per cycle
 #
 # SCHEDULING:
@@ -117,6 +126,9 @@ refresh_views() {
   fi
   "$SCRIPT_DIR/refresh-view.sh" street_furniture
   "$SCRIPT_DIR/refresh-view.sh" sport_pitches
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] Cutting states into parts for /route..."
+  db_exec barrelman-db psql "$DB_URL" -v ON_ERROR_STOP=1 -q -c "SET client_min_messages = warning" -f /app/import/build-state-parts.sql \
+    || echo "[$(date '+%Y-%m-%d %H:%M:%S')] WARNING: state_parts rebuild failed; /route keeps the previous states. Run \"Build Route State Parts\"." >&2
   # Road markings are off by default: a country's are built over days, and an
   # update rebuilding cells meanwhile would compete with that build. Bridge
   # decks are on: their queue only holds what was built, so this is minutes,
@@ -125,6 +137,10 @@ refresh_views() {
     "$SCRIPT_DIR/update-road-markings.sh"
   run_incremental BRIDGE_DECKS_INCREMENTAL 1 "bridge decks" "Update Bridge Decks" \
     bash -c "cd '$PROJECT_DIR' && exec nice -n 10 bun run import/update-bridge-decks.ts"
+  run_incremental TUNNEL_CUTS_INCREMENTAL 1 "tunnel cuts" "Update Tunnel Cuts" \
+    bash -c "cd '$PROJECT_DIR' && exec nice -n 10 bun run import/update-tunnel-cuts.ts"
+  run_incremental SIDEWALK_STREET_NAMES_INCREMENTAL 1 "sidewalk street names" "Update Sidewalk Street Names" \
+    bash -c "cd '$PROJECT_DIR' && exec nice -n 10 bun run import/update-sidewalk-street-names.ts"
 }
 
 # Rebuild what reads region.osm.pbf, if the update moved it. Takes the extract's
@@ -331,6 +347,8 @@ if [ "$HAS_MIDDLE" != "t" ]; then
     ${REPLICATION_ALLOW_SHRINK:+-e REPLICATION_ALLOW_SHRINK="$REPLICATION_ALLOW_SHRINK"} \
     -e ROAD_MARKINGS_INCREMENTAL="${ROAD_MARKINGS_INCREMENTAL:-0}" \
     -e BRIDGE_DECKS_INCREMENTAL="${BRIDGE_DECKS_INCREMENTAL:-1}" \
+    -e TUNNEL_CUTS_INCREMENTAL="${TUNNEL_CUTS_INCREMENTAL:-1}" \
+    -e SIDEWALK_STREET_NAMES_INCREMENTAL="${SIDEWALK_STREET_NAMES_INCREMENTAL:-1}" \
     barrelman-db bash /app/scripts/replicate-extract.sh | tee "$REPLICATION_LOG" \
     || REPLICATION_RC=$?
   PBF_MTIME_AFTER=$(docker exec barrelman-db stat -c %Y "$PBF_FILE" 2>/dev/null || echo 0)

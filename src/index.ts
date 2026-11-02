@@ -26,6 +26,7 @@ import { routeRoutes } from './routes/route'
 import { matchRoutes } from './routes/match'
 import { isochroneRoutes } from './routes/isochrone'
 import { transitRoutes } from './routes/transit'
+import { speechRoutes } from './routes/speech'
 import { gbfsRoutes } from './routes/gbfs'
 import { ensureSchema, ensureGtfsSchema, ensureGbfsSchema } from './db'
 import { ensureAccountsSchema } from './services/accounts.service'
@@ -159,6 +160,7 @@ const app = new Elysia()
   .use(isochroneRoutes)
   .use(transitRoutes)
   .use(gbfsRoutes)
+  .use(speechRoutes)
   .listen(port)
 
 // Give the rate limiters a real peer address to fall back on when no proxy has
