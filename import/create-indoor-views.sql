@@ -23,7 +23,7 @@
 
 -- `level` and `repeat_on` values as a sorted list of levels. Handles lists
 -- ("0;1"), ranges ("0-2", "-4--2"), decimals ("-0.5") and any order. Junk is
--- skipped rather than failing the row.
+-- skipped rather than failing the row, as is anything past 200 floors either way.
 CREATE OR REPLACE FUNCTION indoor_levels(spec text) RETURNS real[]
 LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE AS $$
 DECLARE
@@ -36,7 +36,7 @@ BEGIN
   IF spec IS NULL THEN RETURN NULL; END IF;
   FOREACH part IN ARRAY string_to_array(replace(spec, ' ', ''), ';') LOOP
     m := regexp_match(part, '^(-?\d{1,3}(?:\.\d+)?)(?:-(-?\d{1,3}(?:\.\d+)?))?$');
-    CONTINUE WHEN m IS NULL;
+    CONTINUE WHEN m IS NULL OR abs(m[1]::real) > 200 OR abs(COALESCE(m[2], m[1])::real) > 200;
     lo := least(m[1]::real, COALESCE(m[2], m[1])::real);
     hi := greatest(m[1]::real, COALESCE(m[2], m[1])::real);
     found := found || lo || hi;
@@ -60,7 +60,7 @@ $$;
 DO $$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_class WHERE relname = 'indoor_features' AND relkind = 'm')
-    AND COALESCE(obj_description(to_regclass('indoor_features'), 'pg_class'), '') <> 'v4' THEN
+    AND COALESCE(obj_description(to_regclass('indoor_features'), 'pg_class'), '') <> 'v7' THEN
     DROP MATERIALIZED VIEW indoor_features CASCADE;
   END IF;
 END $$;
@@ -218,7 +218,7 @@ venue_levels AS (
   GROUP BY ml.venue
 ),
 venues AS MATERIALIZED (
-  SELECT vl.venue, vl.levels, vl.default_level, vb.buildings,
+  SELECT vl.venue, row_number() OVER (ORDER BY vl.venue) AS ord, vl.levels, vl.default_level, vb.buildings,
          COALESCE(vb.building_name, st.name) AS name,
          vs.hull,
          (SELECT string_agg(ln.level::text || '=' || ln.label, ';' ORDER BY ln.level)
@@ -282,11 +282,16 @@ walls AS (
   LEFT JOIN gaps g USING (venue, level)
   GROUP BY w.venue, w.level, g.geom
 ),
+-- A point inside two venues' outlines belongs to the smaller, so it is drawn once.
 points AS (
-  SELECT l.*, v.venue, lvl AS level
+  SELECT l.*, own.venue, lvl AS level
   FROM leveled l
-  JOIN venue_shapes v ON l.geom && v.hull AND ST_Intersects(l.geom, v.hull)
-  JOIN venue_levels vl ON vl.venue = v.venue
+  CROSS JOIN LATERAL (
+    SELECT v.venue FROM venue_shapes v
+    WHERE l.geom && v.hull AND ST_Intersects(l.geom, v.hull)
+    ORDER BY ST_Area(v.hull), v.venue LIMIT 1
+  ) own
+  JOIN venue_levels vl ON vl.venue = own.venue
   CROSS JOIN LATERAL unnest(COALESCE(l.levels, ARRAY[vl.default_level])) WITH ORDINALITY AS u(lvl, n)
   WHERE l.geom_type = 'point' AND n <= 64
 ),
@@ -309,18 +314,18 @@ poi_kinds AS (
 -- Feature ids: even for a shape's own rows (its id, level and whether it is a
 -- room's label), odd for what is derived per venue. A tile id cannot be negative.
 rows AS MATERIALIZED (
-  SELECT (v.venue * 4096) * 2 + 1 AS fid, v.venue, NULL::real AS level, 'venue' AS kind, NULL AS class, NULL AS subclass,
+  SELECT (v.ord * 1048576) * 2 + 1 AS fid, v.venue, NULL::real AS level, 'venue' AS kind, NULL AS class, NULL AS subclass,
          v.name, NULL AS ref, NULL AS id, v.hull AS geom,
          array_to_string(v.levels, ';') AS levels, v.level_names, v.buildings
   FROM venues v
   UNION ALL
-  SELECT (f.venue * 4096 + 1024 + round(f.level * 4)::int) * 2 + 1, f.venue, f.level, 'floor', NULL, NULL,
+  SELECT (v.ord * 1048576 + 262144 + round(f.level * 100)::int) * 2 + 1, f.venue, f.level, 'floor', NULL, NULL,
          NULL, NULL, NULL, f.geom, NULL, NULL, NULL
-  FROM floors_with_buildings f
+  FROM floors_with_buildings f JOIN venues v USING (venue)
   UNION ALL
-  SELECT (w.venue * 4096 + 3072 + round(w.level * 4)::int) * 2 + 1, w.venue, w.level, 'wall', NULL, NULL,
+  SELECT (v.ord * 1048576 + 786432 + round(w.level * 100)::int) * 2 + 1, w.venue, w.level, 'wall', NULL, NULL,
          NULL, NULL, NULL, w.geom, NULL, NULL, NULL
-  FROM walls w
+  FROM walls w JOIN venues v USING (venue)
   WHERE NOT ST_IsEmpty(w.geom)
   UNION ALL
   SELECT (ml.osm_fid * 256 + n * 2) * 2, ml.venue, ml.level,
@@ -375,7 +380,7 @@ FROM rows r
 JOIN venues v USING (venue)
 WITH NO DATA;
 
-COMMENT ON MATERIALIZED VIEW indoor_features IS 'v4';
+COMMENT ON MATERIALIZED VIEW indoor_features IS 'v7';
 CREATE UNIQUE INDEX IF NOT EXISTS indoor_features_fid_idx ON indoor_features (fid);
 CREATE INDEX IF NOT EXISTS indoor_features_geom_idx ON indoor_features USING GIST (geom);
 
