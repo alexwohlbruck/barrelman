@@ -10,8 +10,11 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.10.37] - 2026-11-02
+
 ### Fixed
 
+* 3D buildings no longer flicker in a checkerboard where a tall building part rises out of a shorter one drawn round its base, as the GM Building's tower does from its podium. Each part now has the footprints of overlapping parts that span at least its whole height cut out of it. The `buildings_3d` view is rebuilt on the first start after upgrading, and the 3D buildings layer is empty until that finishes, which takes hours on a country-sized import.
 * Portolan syncs print the feeds that have GTFS but are on no map (needs portolan 0.5.3). Portolan 0.5.3 also stops a failed metro-area group from hiding its members. That failure took Chicago's L, Metra and South Shore Line, and transit in Boston, St. Louis, San Diego, Denver and Toronto, off the transit layer.
 * Transit trips that their feed publishes without a shape no longer draw as straight lines between stops. The GTFS import lends each one the shape of a trip on the same route that runs past all of its stops; in New York that fixes about 6,000 subway trips, mostly short-turn and local runs. Run the "Fill Trip Shapes" task and rebuild MOTIS to apply it to feeds already imported.
 
