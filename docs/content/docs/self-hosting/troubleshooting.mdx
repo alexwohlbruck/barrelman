@@ -588,6 +588,23 @@ again the moment the worker returns. Cancel it before restarting anything:
 UPDATE ops_jobs SET status='canceled' WHERE id='<job id>';
 ```
 
+**A city's transit is missing from the portolan layer**
+
+Look for the `undrawn` line in the last portolan sync's output (portolan 0.5.3
+or later). It names every feed that has GTFS on disk but that no pyramid in
+`index.json` draws. Bus feeds without a streets extract and flex-only feeds
+appear there routinely; a rail operator does not.
+
+Metro areas are built as **groups**, and a group draws its members. Before
+portolan 0.5.3 the index left the members out even when the group's own build
+had failed, so one failed group removed a whole city. Chicago lost the L, Metra
+and the South Shore Line this way. Search the sync output for the group's key
+(`chicago`, `greater-boston`, …): `preflight:` names a missing extract, and
+`signal: killed` means the chart ran out of memory. Groups built before 0.5.3
+may still carry a merged rail extract covering the whole country. Delete
+`build/<group>-rail.geojson` and `build/<group>-stops.geojson` and patch one of
+the group's members, and the group is re-cut to its own window.
+
 **A console job sits in `queued`**
 
 Normal, up to a point: the ops worker runs one job at a time, so a queued job is waiting its turn. The job's page names the job ahead of it and links there — if it names one, nothing is wrong and it will start on its own.
