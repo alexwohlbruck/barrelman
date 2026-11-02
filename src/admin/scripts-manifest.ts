@@ -365,6 +365,20 @@ export const SCRIPTS: ScriptDef[] = [
     notes: 'Refreshes concurrently, so pitches keep serving the old rows until the new ones are ready. Runs after every OSM update.',
   },
   {
+    id: 'osm-indoor',
+    name: 'Refresh Indoor Maps',
+    description:
+      'Rebuild the indoor_features view: every indoor venue with its levels, floors, walls with door openings, rooms, stairs and points of interest, one row per level.',
+    category: 'osm',
+    danger: 'safe',
+    longRunning: true,
+    confirm: false,
+    exclusive: true,
+    exec: { kind: 'process', command: 'bash', args: ['scripts/refresh-view.sh', 'indoor_features'] },
+    source: 'scripts/refresh-view.sh',
+    notes: 'Refreshes concurrently, so floor plans keep serving the old rows until the new ones are ready. Runs after every OSM update.',
+  },
+  {
     id: 'osm-basemap',
     name: 'Rebuild Basemap',
     description:

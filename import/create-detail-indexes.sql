@@ -128,3 +128,11 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS geo_places_track_oval_idx
   ON geo_places USING gist (ST_Boundary(ST_ForcePolygonCCW(geom)))
   WHERE geom_type = 'area' AND tags->>'leisure' = 'track'
     AND area_m2 > 2000 AND ST_NRings(geom) = ST_NumGeometries(geom);
+
+-- indoor_features (create-indoor-views.sql) starts from these: a few hundred
+-- thousand shapes of tens of millions, so its refresh is not a full scan.
+CREATE INDEX CONCURRENTLY IF NOT EXISTS geo_places_indoor_geom_idx ON geo_places USING GIST (geom)
+  WHERE (tags ? 'level' OR tags ? 'repeat_on' OR tags ? 'indoor'
+         OR tags->>'railway' = 'platform' OR tags->>'public_transport' = 'platform'
+         OR tags->>'aeroway' = 'gate')
+    AND COALESCE(tags->>'indoor', '') <> 'no';
