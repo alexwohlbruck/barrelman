@@ -14,6 +14,7 @@ import { existsSync, mkdirSync, writeFileSync, readdirSync, renameSync, rmSync }
 import { join, basename } from 'path'
 import { injectFaresV2 } from './inject-fares-v2'
 import { injectBikesAllowed } from './inject-bikes-allowed'
+import { injectTripShapesAll } from './inject-trip-shapes'
 import { importFeedFile, injectTransfersTxt, NoFixedRouteService } from './feed-import'
 import { ensureGtfsSchema } from '../src/db'
 import type { GtfsRtUrl } from '../src/services/gtfs.service'
@@ -431,6 +432,11 @@ async function main() {
       console.error(`  ✗ ${basename(filepath)}: ${err}`)
     }
   }
+
+  // Step 4d: Lend shapeless trips a sibling's shape, or MOTIS draws them as
+  // straight lines between stops.
+  console.log('\n=== Filling trip shapes ===')
+  await injectTripShapesAll(feedFiles)
 
   // Step 4b: Synthesize GTFS Fares v2 from v1 fare data so MOTIS (which
   // reads v2 only) can price itineraries from the agency's own feed.
