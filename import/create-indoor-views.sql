@@ -60,7 +60,7 @@ $$;
 DO $$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_class WHERE relname = 'indoor_features' AND relkind = 'm')
-    AND COALESCE(obj_description(to_regclass('indoor_features'), 'pg_class'), '') <> 'v3' THEN
+    AND COALESCE(obj_description(to_regclass('indoor_features'), 'pg_class'), '') <> 'v4' THEN
     DROP MATERIALIZED VIEW indoor_features CASCADE;
   END IF;
 END $$;
@@ -336,6 +336,15 @@ rows AS MATERIALIZED (
   CROSS JOIN LATERAL (SELECT array_position(ml.levels, ml.level) AS n) pos
   WHERE ml.class <> 'wall' OR ml.geom_type = 'area'
   UNION ALL
+  -- Each flight's middle, for its icon: a line is too short to carry one along it.
+  SELECT (ml.osm_fid * 256 + n * 2 + 1) * 2, ml.venue, ml.level, 'poi', ml.class,
+         CASE WHEN ml.class = 'escalator' THEN ml.tags->>'conveying' END,
+         NULL, NULL, ml.id, ST_LineInterpolatePoint(ST_LineMerge(ml.geom), 0.5), NULL, NULL, NULL
+  FROM member_levels ml
+  CROSS JOIN LATERAL (SELECT array_position(ml.levels, ml.level) AS n) pos
+  WHERE ml.geom_type = 'line' AND ml.class IN ('steps', 'escalator')
+    AND ST_GeometryType(ST_LineMerge(ml.geom)) = 'ST_LineString'
+  UNION ALL
   -- Named rooms get a label point; one carrying shop or amenity tags is that
   -- place, so it is iconed and tappable like a mapped point.
   SELECT (ml.osm_fid * 256 + n * 2 + 1) * 2, ml.venue, ml.level, 'poi',
@@ -366,7 +375,7 @@ FROM rows r
 JOIN venues v USING (venue)
 WITH NO DATA;
 
-COMMENT ON MATERIALIZED VIEW indoor_features IS 'v3';
+COMMENT ON MATERIALIZED VIEW indoor_features IS 'v4';
 CREATE UNIQUE INDEX IF NOT EXISTS indoor_features_fid_idx ON indoor_features (fid);
 CREATE INDEX IF NOT EXISTS indoor_features_geom_idx ON indoor_features USING GIST (geom);
 
