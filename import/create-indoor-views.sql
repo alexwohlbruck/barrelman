@@ -60,7 +60,7 @@ $$;
 DO $$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_class WHERE relname = 'indoor_features' AND relkind = 'm')
-    AND COALESCE(obj_description(to_regclass('indoor_features'), 'pg_class'), '') <> 'v7' THEN
+    AND COALESCE(obj_description(to_regclass('indoor_features'), 'pg_class'), '') <> 'v8' THEN
     DROP MATERIALIZED VIEW indoor_features CASCADE;
   END IF;
 END $$;
@@ -331,10 +331,13 @@ rows AS MATERIALIZED (
   SELECT (ml.osm_fid * 256 + n * 2) * 2, ml.venue, ml.level,
          CASE WHEN ml.geom_type = 'area' THEN 'area' ELSE 'line' END,
          ml.class,
-         CASE ml.class
-           WHEN 'escalator' THEN ml.tags->>'conveying'
+         CASE
+           -- A screening checkpoint, however it is tagged, draws as one hatched zone.
+           WHEN ml.tags->>'amenity' = 'security_control' OR ml.tags->>'police' = 'checkpoint'
+             OR ml.tags->>'room' IN ('security_check', 'security') OR ml.tags->>'aeroway' = 'security_checkpoint' THEN 'security'
+           WHEN ml.class = 'escalator' THEN ml.tags->>'conveying'
            -- What a room is for, for its tint: any shop is just `shop`.
-           WHEN 'room' THEN COALESCE(CASE WHEN ml.tags ? 'shop' THEN 'shop' END, ml.tags->>'amenity', ml.tags->>'room')
+           WHEN ml.class = 'room' THEN COALESCE(CASE WHEN ml.tags ? 'shop' THEN 'shop' END, ml.tags->>'amenity', ml.tags->>'room')
          END,
          ml.name, ml.tags->>'ref', ml.id, ml.geom, NULL, NULL, NULL
   FROM member_levels ml
@@ -380,7 +383,7 @@ FROM rows r
 JOIN venues v USING (venue)
 WITH NO DATA;
 
-COMMENT ON MATERIALIZED VIEW indoor_features IS 'v7';
+COMMENT ON MATERIALIZED VIEW indoor_features IS 'v8';
 CREATE UNIQUE INDEX IF NOT EXISTS indoor_features_fid_idx ON indoor_features (fid);
 CREATE INDEX IF NOT EXISTS indoor_features_geom_idx ON indoor_features USING GIST (geom);
 
