@@ -158,6 +158,7 @@ psql "$DATABASE_URL" -f "$PROJECT_DIR/import/create-transit-views.sql"
 # OSM import. The API also creates them at startup, which is what covers an
 # instance upgrading without a re-import.
 psql "$DATABASE_URL" -f "$PROJECT_DIR/import/create-detail-views.sql"
+psql "$DATABASE_URL" -f "$PROJECT_DIR/import/create-indoor-views.sql"
 
 # Their partial indexes, separately and CONCURRENTLY — each one scans the whole
 # of geo_places, which is minutes on a continental extract. They are deliberately
@@ -183,6 +184,8 @@ echo "[$(date '+%H:%M:%S')] Turning street furniture to face its nearest way..."
 psql "$DATABASE_URL" -c "REFRESH MATERIALIZED VIEW street_furniture;"
 echo "[$(date '+%H:%M:%S')] Laying out sport pitches..."
 psql "$DATABASE_URL" -c "REFRESH MATERIALIZED VIEW sport_pitches;"
+echo "[$(date '+%H:%M:%S')] Drawing indoor floor plans..."
+psql "$DATABASE_URL" -c "REFRESH MATERIALIZED VIEW indoor_features;"
 
 # street_furniture was the last consumer of geo_places' spatial indexes until the
 # API takes over: the intersections and parent-context joins below both probe

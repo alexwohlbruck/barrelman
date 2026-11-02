@@ -126,6 +126,7 @@ refresh_views() {
   fi
   "$SCRIPT_DIR/refresh-view.sh" street_furniture
   "$SCRIPT_DIR/refresh-view.sh" sport_pitches
+  "$SCRIPT_DIR/refresh-view.sh" indoor_features
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] Cutting states into parts for /route..."
   db_exec barrelman-db psql "$DB_URL" -v ON_ERROR_STOP=1 -q -c "SET client_min_messages = warning" -f /app/import/build-state-parts.sql \
     || echo "[$(date '+%Y-%m-%d %H:%M:%S')] WARNING: state_parts rebuild failed; /route keeps the previous states. Run \"Build Route State Parts\"." >&2
