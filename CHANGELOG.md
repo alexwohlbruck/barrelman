@@ -10,6 +10,10 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Fixed
+
+* Transit trips that their feed publishes without a shape no longer draw as straight lines between stops. The GTFS import lends each one the shape of a trip on the same route that runs past all of its stops; in New York that fixes about 6,000 subway trips, mostly short-turn and local runs. Run the "Fill Trip Shapes" task and rebuild MOTIS to apply it to feeds already imported.
+
 ## [0.10.36] - 2026-10-30
 
 ### Added

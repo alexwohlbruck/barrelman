@@ -328,6 +328,7 @@ if (import.meta.main) {
       const { importFeedFile, injectTransfersTxt, readZipEntry } = await import('./feed-import')
       const { injectFaresV2 } = await import('./inject-fares-v2')
       const { injectBikesAllowed } = await import('./inject-bikes-allowed')
+      const { injectTripShapesAll } = await import('./inject-trip-shapes')
 
       await ensureGtfsSchema()
 
@@ -444,6 +445,7 @@ if (import.meta.main) {
         } catch (err) {
           console.error(`  ✗ bikes_allowed default failed: ${err}`)
         }
+        await injectTripShapesAll([dest])
 
         imported++
       }

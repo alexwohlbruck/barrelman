@@ -584,6 +584,21 @@ export const SCRIPTS: ScriptDef[] = [
     source: 'import/backfill-trip-patterns.ts',
   },
   {
+    id: 'gtfs-inject-trip-shapes',
+    name: 'Fill Trip Shapes',
+    description: 'Give GTFS trips without a shape the shape of a sibling trip on the same route, so MOTIS draws them along the line instead of straight between stops. Rewrites local ZIPs; rebuild MOTIS afterwards.',
+    category: 'transit',
+    danger: 'caution',
+    longRunning: false,
+    confirm: true,
+    exec: { kind: 'process', command: 'bun', args: ['run', 'import/inject-trip-shapes.ts'] },
+    params: [
+      { name: 'dir', label: 'GTFS dir', type: 'string', apply: 'flag', flag: '--dir', default: './data/gtfs' },
+      { name: 'dry-run', label: 'Dry run (preview only)', type: 'boolean', apply: 'flag', flag: '--dry-run', default: true },
+    ],
+    source: 'import/inject-trip-shapes.ts',
+  },
+  {
     id: 'gtfs-inject-fares',
     name: 'Inject Fares v2',
     description: 'Convert GTFS Fares v1 → v2 inside feed ZIPs so MOTIS can compute fares. Rewrites local ZIPs.',
