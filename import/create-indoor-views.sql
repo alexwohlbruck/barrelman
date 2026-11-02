@@ -60,7 +60,7 @@ $$;
 DO $$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_class WHERE relname = 'indoor_features' AND relkind = 'm')
-    AND COALESCE(obj_description(to_regclass('indoor_features'), 'pg_class'), '') <> 'v8' THEN
+    AND COALESCE(obj_description(to_regclass('indoor_features'), 'pg_class'), '') <> 'v9' THEN
     DROP MATERIALIZED VIEW indoor_features CASCADE;
   END IF;
 END $$;
@@ -165,17 +165,32 @@ above_ground AS MATERIALIZED (
     AND levels[array_length(levels, 1)] >= 0
   GROUP BY venue
 ),
-venue_buildings AS MATERIALIZED (
-  SELECT ag.venue,
-         string_agg(DISTINCT b.id, ';') AS buildings,
-         (array_agg(b.name ORDER BY ST_Area(b.geom) DESC) FILTER (WHERE b.name IS NOT NULL))[1] AS building_name
+outlines AS MATERIALIZED (
+  SELECT ag.venue, b.id, b.name, ST_MakeValid(b.geom) AS geom, b.tags->>'building' = 'roof' AS canopy,
+         ST_Area(ST_Intersection(ST_MakeValid(b.geom), ag.geom)) / NULLIF(ST_Area(b.geom), 0) AS covered
   FROM above_ground ag
   JOIN geo_places b
     ON b.geom_type = 'area' AND b.geom && ag.geom
-   AND COALESCE(b.tags->>'building', 'no') <> 'no'
+   AND (COALESCE(b.tags->>'building', 'no') <> 'no' OR COALESCE(b.tags->>'building:part', 'no') <> 'no')
    AND COALESCE(b.tags->>'location', '') <> 'underground'
-   AND ST_Area(ST_Intersection(ST_MakeValid(b.geom), ag.geom)) > 0.3 * ST_Area(b.geom)
-  GROUP BY ag.venue
+),
+-- The outlines its rooms fill a fair share of, then every part, roof or annex
+-- standing mostly inside those or the rooms, and every canopy touching them.
+primary_buildings AS MATERIALIZED (
+  SELECT venue, ST_Union(geom) AS geom FROM outlines WHERE covered > 0.3 GROUP BY venue
+),
+venue_buildings AS MATERIALIZED (
+  SELECT o.venue,
+         string_agg(DISTINCT o.id, ';') AS buildings,
+         (array_agg(o.name ORDER BY ST_Area(o.geom) DESC) FILTER (WHERE o.name IS NOT NULL AND o.covered > 0.3))[1] AS building_name
+  FROM outlines o
+  JOIN above_ground ag USING (venue)
+  LEFT JOIN primary_buildings pb USING (venue)
+  WHERE o.covered > 0.3
+     OR ST_Area(ST_Intersection(o.geom, ST_Union(ag.geom, COALESCE(pb.geom, ag.geom)))) > 0.5 * ST_Area(o.geom)
+     -- A canopy over the drive outside is the building's too, and makes no sense standing alone.
+     OR (o.canopy AND ST_Intersects(o.geom, pb.geom))
+  GROUP BY o.venue
 ),
 -- A station's name for a venue with no building: a station complex underground.
 venue_stations AS MATERIALIZED (
@@ -383,7 +398,7 @@ FROM rows r
 JOIN venues v USING (venue)
 WITH NO DATA;
 
-COMMENT ON MATERIALIZED VIEW indoor_features IS 'v8';
+COMMENT ON MATERIALIZED VIEW indoor_features IS 'v9';
 CREATE UNIQUE INDEX IF NOT EXISTS indoor_features_fid_idx ON indoor_features (fid);
 CREATE INDEX IF NOT EXISTS indoor_features_geom_idx ON indoor_features USING GIST (geom);
 
