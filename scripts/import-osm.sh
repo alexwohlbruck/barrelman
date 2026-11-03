@@ -158,12 +158,22 @@ psql "$DATABASE_URL" -f "$PROJECT_DIR/import/create-transit-views.sql"
 # OSM import. The API also creates them at startup, which is what covers an
 # instance upgrading without a re-import.
 psql "$DATABASE_URL" -f "$PROJECT_DIR/import/create-detail-views.sql"
+psql "$DATABASE_URL" -f "$PROJECT_DIR/import/create-indoor-views.sql"
 
 # Their partial indexes, separately and CONCURRENTLY — each one scans the whole
 # of geo_places, which is minutes on a continental extract. They are deliberately
 # NOT in the file above: that one also runs on every API startup, and an index
 # build there holds the server off its port for the duration.
 psql "$DATABASE_URL" -f "$PROJECT_DIR/import/create-detail-indexes.sql"
+
+# The same, for the nodes and ways POST /route/hazards reads.
+psql "$DATABASE_URL" -f "$PROJECT_DIR/import/create-route-hazard-indexes.sql"
+
+# And for the roads, bridges and parks /route reads to describe a route.
+psql "$DATABASE_URL" -f "$PROJECT_DIR/import/create-route-context-indexes.sql"
+
+# The states it reads, cut into small parts. Seconds.
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -c "SET client_min_messages = warning" -f "$PROJECT_DIR/import/build-state-parts.sql"
 
 # The materialized views hold rows rather than being plain views, so creating
 # them is not enough — they come into existence empty. Filled here, where the
@@ -174,6 +184,10 @@ echo "[$(date '+%H:%M:%S')] Turning street furniture to face its nearest way..."
 psql "$DATABASE_URL" -c "REFRESH MATERIALIZED VIEW street_furniture;"
 echo "[$(date '+%H:%M:%S')] Laying out sport pitches..."
 psql "$DATABASE_URL" -c "REFRESH MATERIALIZED VIEW sport_pitches;"
+echo "[$(date '+%H:%M:%S')] Drawing indoor floor plans..."
+psql "$DATABASE_URL" -c "REFRESH MATERIALIZED VIEW indoor_features;"
+echo "[$(date '+%H:%M:%S')] Gathering entrances and lifts..."
+psql "$DATABASE_URL" -c "REFRESH MATERIALIZED VIEW fixtures;"
 
 # street_furniture was the last consumer of geo_places' spatial indexes until the
 # API takes over: the intersections and parent-context joins below both probe

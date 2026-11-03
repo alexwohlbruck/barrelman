@@ -156,6 +156,7 @@ postgres:
         oneway: oneway
         bridge: bridge
         tunnel: tunnel
+        elevation: elevation
       buffer: 64
       clip_geom: true
 
@@ -426,8 +427,38 @@ postgres:
         left_edges: text
         right_edges: text
         caps: text
+        mesh: text
       buffer: 64
       # Whole decks in every tile they cross: the profile runs along the line, so a cut copy could not be read.
+      clip_geom: false
+
+    # The cut down to each tunnel portal (Build Tunnel Cuts), whole in every
+    # tile it nears: the buffer reaches the ground carved beside it.
+    tunnel_cuts:
+      schema: public
+      table: tunnel_cut_tiles
+      srid: 4326
+      geometry_column: geom
+      geometry_type: LINESTRING
+      minzoom: 14
+      maxzoom: 16
+      properties:
+        id: text
+        kind: text
+        line: text
+        at: int4
+        open: int4
+        left_edge: float4
+        right_edge: float4
+        floor: text
+        wall_left: text
+        wall_right: text
+        crown: float4
+        headroom: float4
+        base: float4
+        face: text
+        piers: text
+      buffer: 256
       clip_geom: false
 
     road_markings:
@@ -556,6 +587,53 @@ postgres:
       buffer: 64
       clip_geom: true
 
+    # Indoor maps, from `indoor_features` (see import/create-indoor-views.sql),
+    # served together as the `indoor` bundle. Venues come in a zoom early so a
+    # client knows a floor plan is there before it draws one.
+    indoor_venues:
+      schema: public
+      table: indoor_venues
+      srid: 4326
+      geometry_column: geom
+      geometry_type: GEOMETRY
+      id_column: fid
+      minzoom: 15
+      maxzoom: 17
+      properties:
+        venue: venue
+        default_level: default_level
+        name: name
+        levels: levels
+        level_names: level_names
+        buildings: buildings
+      buffer: 64
+      clip_geom: true
+
+    indoor_map:
+      schema: public
+      table: indoor_map
+      srid: 4326
+      geometry_column: geom
+      geometry_type: GEOMETRY
+      id_column: fid
+      minzoom: 16
+      maxzoom: 17
+      properties:
+        venue: venue
+        level: level
+        default_level: default_level
+        kind: kind
+        class: class
+        subclass: subclass
+        name: name
+        ref: ref
+        id: id
+        width: width
+        length: length
+        bearing: bearing
+      buffer: 64
+      clip_geom: true
+
     sport_pitches:
       schema: public
       table: sport_pitches
@@ -572,6 +650,8 @@ postgres:
         surface: surface
         direction: direction
         width: width
+        length: length
+        bearing: bearing
       buffer: 64
       clip_geom: true
 
@@ -590,6 +670,22 @@ postgres:
       properties:
         leaf_type: leaf_type
         genus: genus
+      buffer: 64
+      clip_geom: true
+
+    fixtures:
+      schema: public
+      table: fixtures
+      srid: 4326
+      geometry_column: centroid
+      geometry_type: POINT
+      id_column: fid
+      minzoom: 16
+      maxzoom: 17
+      properties:
+        id: id
+        kind: kind
+        ref: ref
       buffer: 64
       clip_geom: true
 

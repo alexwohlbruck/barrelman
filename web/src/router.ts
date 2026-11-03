@@ -34,6 +34,7 @@ const router = createRouter({
     // Operator
     { path: '/dashboard', name: 'dashboard', component: () => import('@/views/DashboardView.vue'), meta: { admin: true } },
     { path: '/accounts', name: 'accounts', component: () => import('@/views/UsersView.vue'), meta: { admin: true } },
+    { path: '/traffic', name: 'traffic', component: () => import('@/views/TrafficView.vue'), meta: { admin: true } },
     { path: '/regions', name: 'regions', component: () => import('@/views/RegionsView.vue'), meta: { admin: true } },
     { path: '/scripts', name: 'scripts', component: () => import('@/views/ScriptsView.vue'), meta: { admin: true } },
     { path: '/schedules', name: 'schedules', component: () => import('@/views/SchedulesView.vue'), meta: { admin: true } },

@@ -199,6 +199,12 @@ export const apiKeys = pgTable(
      * what every key predating the column has and what a server-side key wants.
      */
     allowedOrigins: text('allowed_origins').array().notNull().default([]),
+    /**
+     * Skips the throttle for this key — every per-minute window and the
+     * concurrency cap — the way the `first-party` plan does for a whole
+     * account. Set only from the admin console; customers cannot reach it.
+     */
+    rateLimitExempt: boolean('rate_limit_exempt').notNull().default(false),
     lastUsedAt: timestamp('last_used_at', { withTimezone: true }),
     revokedAt: timestamp('revoked_at', { withTimezone: true }),
     expiresAt: timestamp('expires_at', { withTimezone: true }),

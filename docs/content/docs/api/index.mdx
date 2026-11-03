@@ -3,7 +3,12 @@ title: API Reference
 description: Reference for the Barrelman REST API, grouped by capability.
 ---
 
-This section documents the Barrelman REST API. Endpoints are grouped by capability — Health, Search, Places, Geocoding, Routing, Transit, GBFS, Brands, and Admin.
+This section documents the Barrelman REST API. Endpoints are grouped by capability:
+
+- **Querying the map** — Search, Places, Geocoding, Brands, Tiles.
+- **Getting around** — Routing (including map matching), Isochrone, Transit, GBFS, and the raw GraphHopper passthrough.
+- **Your account** — Auth, Account and Billing, which the console uses; API clients only need a key.
+- **Operating an instance** — Health, and Admin for the operator console.
 
 Every request (except the public `GET /health/`) requires a bearer token; see [Getting Started](/usage) for the base URL and authentication.
 
@@ -17,4 +22,6 @@ curl -sSf https://api.barrelman.dev/docs/json -o openapi.json
 bun run generate:api
 ```
 
-`generate:api` reads the local `./openapi.json` and regenerates one page per tag under `content/docs/api/`.
+`generate:api` reads the local `./openapi.json` and regenerates one page per tag under `content/docs/api/`. It stops with an error if the spec has no top-level `tags` or an operation uses a tag missing from them, because either would silently leave endpoints without a page.
+
+An endpoint that has not shipped yet is not in the production spec. To document it before release, take the spec from that branch's own API at `/docs/json` instead.

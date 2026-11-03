@@ -1,0 +1,4 @@
+{
+  "$comment": "Deck heights for bridges whose OSM outline records none to trust (see src/lib/bridge-decks/elevation.ts). Keyed by the bridge's Wikidata item, which survives its ways being split, joined or redrawn. deck: metres from the water or ground under the main span to the top of the roadway at its crest. Prefer fixing OSM: add seamark:bridge:clearance_height or a deck height to the man_made=bridge outline, then remove the entry here.",
+  "bridges": {}
+}

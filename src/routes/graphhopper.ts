@@ -1,9 +1,6 @@
 import Elysia from 'elysia'
 import { apiAuth, apiAuthAfter } from '../middleware/api-auth'
-
-function getGraphHopperUrl() {
-  return process.env.GRAPHHOPPER_URL || 'http://barrelman-graphhopper:8989'
-}
+import { graphHopperTimeoutMs, graphHopperUrl, isTimeoutError } from '../lib/graphhopper'
 
 export interface GraphHopperFetcher {
   (url: string, init: RequestInit): Promise<Response>
@@ -18,8 +15,12 @@ export interface GraphHopperFetcher {
  * inbound Authorization header is stripped before upstreaming.
  *
  * Standard GraphHopper endpoints supported via this proxy:
- *   /route, /isochrone, /route-optimization, /matrix, /geocode, /map-matching,
+ *   /route, /isochrone, /route-optimization, /matrix, /geocode, /match,
  *   /health, /info
+ *
+ * Each call is cut off after GRAPHHOPPER_TIMEOUT_MS (504), or as soon as the
+ * caller disconnects. For map matching prefer POST /match, which copes with
+ * sparse traces that make the raw matcher grind.
  */
 export function createGraphHopperRoutes(deps: { fetchGraphHopper?: GraphHopperFetcher } = {}) {
   const fetchGraphHopper: GraphHopperFetcher =
@@ -33,7 +34,7 @@ export function createGraphHopperRoutes(deps: { fetchGraphHopper?: GraphHopperFe
       async ({ request, params, set, body }) => {
         const subPath = (params as Record<string, string>)['*'] || ''
         const url = new URL(request.url)
-        const target = `${getGraphHopperUrl()}/${subPath}${url.search}`
+        const target = `${graphHopperUrl()}/${subPath}${url.search}`
 
         // Forward only the headers GraphHopper cares about. Do NOT forward
         // the inbound Authorization header — API keys must not leak upstream.
@@ -43,7 +44,14 @@ export function createGraphHopperRoutes(deps: { fetchGraphHopper?: GraphHopperFe
         const accept = request.headers.get('accept')
         if (accept) headers['accept'] = accept
 
-        const init: RequestInit = { method: request.method, headers }
+        const init: RequestInit = {
+          method: request.method,
+          headers,
+          // GraphHopper has no deadline of its own: a raw /match on a sparse
+          // trace can run for minutes. Give up after the timeout, or when the
+          // caller hangs up, rather than holding the request open.
+          signal: AbortSignal.any([request.signal, AbortSignal.timeout(graphHopperTimeoutMs())]),
+        }
         if (request.method !== 'GET' && request.method !== 'HEAD') {
           // From the `parse` hook below, not `request.arrayBuffer()`: Elysia
           // consumes the request stream before the handler runs, so reading it
@@ -55,6 +63,10 @@ export function createGraphHopperRoutes(deps: { fetchGraphHopper?: GraphHopperFe
         try {
           response = await fetchGraphHopper(target, init)
         } catch (err) {
+          if (isTimeoutError(err)) {
+            set.status = 504
+            return { error: 'GraphHopper upstream timed out', timeoutMs: graphHopperTimeoutMs() }
+          }
           set.status = 502
           return { error: 'GraphHopper upstream unreachable', detail: String(err) }
         }
@@ -64,7 +76,7 @@ export function createGraphHopperRoutes(deps: { fetchGraphHopper?: GraphHopperFe
         if (respCt) set.headers['content-type'] = respCt
         set.headers['cache-control'] = 'no-store'
         set.headers['access-control-allow-origin'] = '*'
-          return response.body
+        return response.body
       },
       {
         // Keep the body as raw bytes rather than letting Elysia decode it to

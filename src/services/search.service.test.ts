@@ -929,6 +929,22 @@ describe('searchPlaces — corrected spellings', () => {
     expect(results.map((r: any) => r.id)).toContain('node/14003842716')
   })
 
+  test('a submitted search answered by a correction does not wait out trigram', async () => {
+    // Trigram used to hold the response for its whole budget after the
+    // corrected pass had already found the place.
+    const textOf = (q: any): string =>
+      (q?.queryChunks ?? []).map((c: any) => (c?.queryChunks ? textOf(c) : Array.isArray(c?.value) ? c.value.join('') : '')).join('')
+    mockCorrections.mockImplementation(async () => fixes)
+    mockExecute.mockImplementation(async (q: any) => {
+      if (textOf(q).includes('AND name %')) return new Promise((r) => setTimeout(() => r([]), 2000))
+      return mentions(q, 'wearhouse') ? [store] : []
+    })
+    const started = performance.now()
+    const results = await searchPlaces({ query: "men's warehouse flatbush", lat: 40.684, lng: -73.976 })
+    expect(results.map((r: any) => r.id)).toContain('node/14003842716')
+    expect(performance.now() - started).toBeLessThan(1000)
+  })
+
   test('a submitted search that filled its limit looks for no corrections', async () => {
     const full = Array.from({ length: 5 }, (_, i) => ({ id: `node/${i}`, name: `Warehouse ${i}`, text_rank: 1, distance_m: 100 }))
     mockExecute.mockImplementationOnce(async () => full) // FTS

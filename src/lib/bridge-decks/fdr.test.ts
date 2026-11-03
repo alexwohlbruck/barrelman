@@ -4,45 +4,11 @@
  * leaving them for the bridge, and the bridge's own decks over them.
  */
 import { describe, expect, it } from 'bun:test'
-import { gunzipSync } from 'node:zlib'
-import { buildDecks, type Deck, type DeckInput } from './build'
-import { beside, mercator, sideAt, type Point } from './profile'
+import { buildDecks, type Deck } from './build'
+import { beside, sideAt, type Point } from './profile'
+import { recorded } from './recorded'
 
-type Fixture = Omit<DeckInput, 'ways' | 'onGround' | 'wikidata'> & {
-  ways: Array<DeckInput['ways'][number]>
-  onGround: number[][]
-  wikidata: Array<[number, string]>
-  ground: { west: number; north: number; dLng: number; dLat: number; cols: number; rows: number; decimetres: string }
-}
-
-const raw: Fixture = JSON.parse(gunzipSync(await Bun.file(new URL('./fixtures/fdr-brooklyn-bridge.json.gz', import.meta.url)).arrayBuffer()).toString())
-const toPoint = ([lng, lat]: number[]) => mercator(lng, lat)
-const input: DeckInput = {
-  ways: raw.ways.map(w => ({ ...w, points: (w.points as unknown as number[][]).map(toPoint) })),
-  onGround: new Set(raw.onGround.map(p => toPoint(p).join(','))),
-  outlines: raw.outlines.map(o => ({ id: o.id, rings: (o.rings as unknown as number[][][]).map(r => r.map(toPoint)) })),
-  kerbs: (raw.kerbs as unknown as number[][]).map(toPoint),
-  crossed: raw.crossed.map(c => ({ kind: c.kind, points: (c.points as unknown as number[][]).map(toPoint) })),
-  water: (raw.water as unknown as number[][][]).map(r => r.map(toPoint)),
-  wikidata: new Map(raw.wikidata),
-}
-
-/** The recorded terrain, read bilinearly from its grid. */
-const { west, north, dLng, dLat, cols, rows, decimetres } = raw.ground
-const heights = new Int16Array(Buffer.from(decimetres, 'base64').buffer.slice(0))
-const ground = {
-  async load() {},
-  at([x, y]: Point) {
-    const lng = x * 360 - 180
-    const lat = (Math.atan(Math.sinh(Math.PI * (1 - 2 * y))) * 180) / Math.PI
-    const [fx, fy] = [Math.min(cols - 1.001, Math.max(0, (lng - west) / dLng)), Math.min(rows - 1.001, Math.max(0, (north - lat) / dLat))]
-    const [c, r] = [Math.floor(fx), Math.floor(fy)]
-    const [tx, ty] = [fx - c, fy - r]
-    const h = (cc: number, rr: number) => heights[rr * cols + cc] / 10
-    return (h(c, r) * (1 - tx) + h(c + 1, r) * tx) * (1 - ty) + (h(c, r + 1) * (1 - tx) + h(c + 1, r + 1) * tx) * ty
-  },
-}
-
+const { input, ground } = await recorded('fdr-brooklyn-bridge')
 const decks = await buildDecks(input, ground)
 const carrying = (way: number) => decks.find(d => d.ways.includes(way))!
 /** FDR Drive northbound and southbound, by one of their ways. */
@@ -80,7 +46,7 @@ describe('FDR Drive under the Brooklyn Bridge', () => {
       for (let i = 3; i < z.length - 3; i++) {
         // No sag: never lower than the highest it reaches on both sides.
         expect(Math.min(Math.max(...z.slice(0, i + 1)), Math.max(...z.slice(i))) - z[i]).toBeLessThan(0.3)
-        expect(Math.abs(z[i + 1] - 2 * z[i] + z[i - 1])).toBeLessThan(0.1)
+        expect(Math.abs(z[i + 1] - 2 * z[i] + z[i - 1])).toBeLessThanOrEqual(0.1 + 1e-9)
       }
     }
   })

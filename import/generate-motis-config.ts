@@ -9,13 +9,18 @@
  * Usage:
  *   bun run import/generate-motis-config.ts [--output ./motis/config.yml]
  *   bun run import/generate-motis-config.ts --street-routing --osm-path /osm-data/region.osm.pbf
+ *   bun run import/generate-motis-config.ts --street-area /gtfs-data/motis-street-area.geojson
+ *
+ * --street-area writes only the GeoJSON area the bikeshare systems MOTIS polls
+ * cover (see getGbfsStreetArea), for rebuild-motis.sh to clip its street
+ * extract to, and exits 3 when there is none.
  */
 
 import { parseArgs } from 'util'
 import { writeFileSync, mkdirSync } from 'fs'
 import { join } from 'path'
 import { ensureGtfsSchema } from '../src/db'
-import { generateMotisConfig } from '../src/services/gtfs.service'
+import { generateMotisConfig, getGbfsStreetArea } from '../src/services/gtfs.service'
 
 const { values: args } = parseArgs({
   options: {
@@ -26,13 +31,27 @@ const { values: args } = parseArgs({
     'no-gbfs': { type: 'boolean', default: false },
     // GTFS-RT poll interval (seconds). Omitted → MOTIS_RT_UPDATE_INTERVAL env, else 60.
     'rt-update-interval': { type: 'string', default: undefined },
+    'street-area': { type: 'string', default: undefined },
   },
 })
 
 const outputPath = args.output!
 
+async function writeStreetArea(path: string) {
+  const geometry = await getGbfsStreetArea()
+  if (!geometry) {
+    console.log('No GBFS system with a location in this instance\'s regions — no street area')
+    process.exit(3)
+  }
+  mkdirSync(join(path, '..'), { recursive: true })
+  writeFileSync(path, JSON.stringify({ type: 'Feature', properties: {}, geometry }))
+  console.log(`✓ Wrote the GBFS street area to ${path}`)
+  process.exit(0)
+}
+
 async function main() {
   await ensureGtfsSchema()
+  if (args['street-area']) return writeStreetArea(args['street-area'])
 
   const enableStreetRouting = args['street-routing'] ?? false
   const osmPath = args['osm-path']!

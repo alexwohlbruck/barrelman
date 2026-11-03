@@ -107,6 +107,12 @@ const perAccountIp = new WindowCounter(60_000)
 const ANONYMOUS_IP_LIMIT = envNumber('BARRELMAN_ANON_RPM', 120)
 
 /**
+ * Requests per minute from one address presenting the shared service key: the
+ * operator's own backend, which fans one user action out into dozens of calls.
+ */
+const SERVICE_IP_LIMIT = envNumber('BARRELMAN_SERVICE_RPM', 6_000)
+
+/**
  * Ceiling on any single source address, regardless of how many accounts or keys
  * it presents. Generous, because a corporate NAT or a mobile carrier can put
  * many legitimate users behind one address — this is a backstop against a
@@ -255,10 +261,22 @@ export interface ThrottleRequest {
   userId?: string
   keyId?: string
   plan?: Plan
+  /** The key is operator-exempt — see `ApiKey.rateLimitExempt`. */
+  exempt?: boolean
+  /** Authenticated with the shared service key rather than an account's. */
+  service?: boolean
 }
 
 export type ThrottleVerdict =
-  | { allowed: true }
+  | {
+      allowed: true
+      /**
+       * Whether this request took a concurrency slot, which the caller must
+       * release when it finishes. Releasing one that was never taken would
+       * hand back a slot some other request on the account is holding.
+       */
+      holdsSlot?: boolean
+    }
   | {
       allowed: false
       /** Which layer refused, for the message and for metrics. */
@@ -308,12 +326,14 @@ export function checkPenalty(key: string): ThrottleVerdict {
 }
 
 export function checkThrottle(request: ThrottleRequest): ThrottleVerdict {
-  const { ip, group, userId, keyId, plan } = request
+  const { ip, group, userId, keyId, plan, exempt, service } = request
   const bucket = bucketFor(group)
   const scaled = (limit: number) => Math.max(1, Math.round(limit * bucket.multiplier))
 
   if (!userId) {
-    const anon = perIp.hit(`anon:${bucket.id}:${ip}`, scaled(ANONYMOUS_IP_LIMIT))
+    const anon = service
+      ? perIp.hit(`service:${bucket.id}:${ip}`, scaled(SERVICE_IP_LIMIT))
+      : perIp.hit(`anon:${bucket.id}:${ip}`, scaled(ANONYMOUS_IP_LIMIT))
     if (!anon.allowed) {
       return {
         allowed: false,
@@ -330,8 +350,12 @@ export function checkThrottle(request: ThrottleRequest): ThrottleVerdict {
    * windows and not the concurrency cap. See `Plan.unthrottled`; the caps
    * are per *account*, so a first-party app would otherwise ration its whole
    * user base to two simultaneous isochrones.
+   *
+   * An exempt key is the same exemption narrowed to one credential, for an
+   * operator who wants to lift a single integration without moving the
+   * account's billing onto an internal plan.
    */
-  if (plan?.unthrottled) return { allowed: true }
+  if (plan?.unthrottled || exempt) return { allowed: true }
 
   const accountLimit = scaled(plan?.requestsPerMinute ?? 60)
 
@@ -408,7 +432,7 @@ export function checkThrottle(request: ThrottleRequest): ThrottleVerdict {
     }
   }
 
-  return { allowed: true }
+  return { allowed: true, holdsSlot: Boolean(CONCURRENCY_LIMITS[group]) }
 }
 
 // ── Maintenance ─────────────────────────────────────────────────────────

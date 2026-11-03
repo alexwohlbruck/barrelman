@@ -1,8 +1,132 @@
 ---
 title: Search
 full: true
+_openapi:
+  toc:
+    - depth: 2
+      title: Search places
+      url: '#search-places'
+    - depth: 2
+      title: Find areas containing a point
+      url: '#find-areas-containing-a-point'
+    - depth: 2
+      title: Find children of an area
+      url: '#find-children-of-an-area'
+  structuredData:
+    headings:
+      - content: Search places
+        id: search-places
+      - content: Find areas containing a point
+        id: find-areas-containing-a-point
+      - content: Find children of an area
+        id: find-children-of-an-area
+    contents:
+      - content: >-
+          Unified search endpoint supporting text search, category browsing, and
+          route corridor search.
+
+
+          **Text search** (provide `query`): Runs a hybrid four-layer pipeline:
+
+          1. Full-text search (FTS) via `tsvector` GIN index
+
+          2. Trigram fuzzy match via `pg_trgm` GIN index
+
+          3. Abbreviation match on pre-computed `name_abbrev`
+
+          4. Semantic vector search via `pgvector` (conditional)
+
+
+          Results are deduplicated in priority order (FTS > abbreviation >
+          trigram > semantic) then re-ranked with proximity decay when
+          coordinates are provided.
+
+
+          **Places**: Countries, states, counties, cities, neighbourhoods and
+          postal codes are matched by a dedicated layer and pinned to the top,
+          ahead of the proximity re-rank — a city 800 km away still leads a
+          search for its name. Their own distance weighting scales with the size
+          of the place. A place mapped as both a label node and a boundary is
+          returned once, as the boundary. A postal-code-shaped query (`11211`,
+          `SW1A 1AA`) also matches postal codes from the geocoder, returned with
+          the category `pelias/postalcode`.
+
+
+          **Transit results**: Text search also matches GTFS transit lines and
+          stops. These carry `kind: 'transit_route' | 'transit_stop'` (regular
+          places have no `kind`), `osm_type: null`, and a `transit` object with
+          the ids the /transit endpoints are keyed by — for a line: `feedId`,
+          `feedOnestopId`, `routeId`, `shortName`, `longName`, `routeType`,
+          `mode`, `color`, `textColor`, `agency`; for a stop: `feedId`,
+          `feedOnestopId`, `stopId`, `locationType`, `mode`. Stops that OSM
+          already covers are returned as their OSM place instead (via portolan's
+          stop index), never twice. Transit results are skipped when
+          `categories`, `tags` or `route` filters are set.
+
+
+          **Browse mode** (omit `query`, provide `categories` and/or `tags`):
+          Returns matching places sorted by distance. Requires a spatial
+          constraint (lat/lng or route).
+
+
+          **Spatial modes:**
+
+          - **Point**: `lat` + `lng` + optional `radius` — search within a
+          circular area
+
+          - **Route corridor**: `route` (GeoJSON LineString) + optional `buffer`
+          — search along a path with exponential proximity decay
+
+
+          Both modes can be combined with text search and/or category/tag
+          filters.
+        heading: search-places
+      - content: >-
+          Returns all named area geometries whose polygons contain the given
+          coordinate point. Results are ordered smallest-first (innermost area
+          first), so the most specific containing region appears at index 0.
+
+
+          Typical use: reverse-geocode a coordinate to its administrative
+          hierarchy (building → neighbourhood → city → county → state → country)
+          or find which venue/campus a point is inside.
+
+
+          Only areas with names are returned. `building:part` features are
+          excluded. Both centroid and full GeoJSON geometry are included in the
+          response.
+        heading: find-areas-containing-a-point
+      - content: >-
+          Returns places whose centroids fall within the geometry of the given
+          parent area (e.g. all shops inside a mall, all POIs inside a
+          university campus).
+
+
+          **Sorting priority:**
+
+          1. Named places first (unnamed amenities ranked lower)
+
+          2. Places with recognized categories before unclassified features
+
+          3. Proximity to `lat`/`lng` if provided, otherwise proximity to the
+          parent area's centroid
+
+          4. Alphabetical by name as a tiebreaker
+
+
+          **Category filtering** applies only to *unnamed* children — named
+          places inside the area are always returned, allowing landmark
+          buildings and venues to appear even when filtering for a specific
+          type.
+
+
+          `building:part` features are always excluded to avoid surfacing
+          architectural sub-elements.
+        heading: find-children-of-an-area
 ---
 
-Fuzzy place search over the OSM extract, plus spatial relationship queries — which areas contain a point, and the children of an area.
+{/* This file was generated by Fumadocs. Do not edit this file directly. Any changes should be made by running the generation command again. */}
 
-<APIPage document={"./openapi.json"} operations={[{"path":"/search","method":"post"},{"path":"/contains","method":"get"},{"path":"/children","method":"get"}]} hasHead={true} />
+Fuzzy place and category search over the OSM catalog, plus spatial relationship queries — which areas contain a point, and the children of an area.
+
+<APIPage document={"openapi.json"} operations={[{"path":"/search","method":"post"},{"path":"/contains","method":"get"},{"path":"/children","method":"get"}]} webhooks={[]} hasHead={true} />

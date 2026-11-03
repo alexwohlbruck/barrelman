@@ -44,7 +44,7 @@ mock.module('../config/regions', () => ({
   resolveRegions: async () => resolved,
 }))
 
-const { generateMotisConfig } = await import('./gtfs.service')
+const { generateMotisConfig, getGbfsStreetArea } = await import('./gtfs.service')
 
 /**
  * Split a drizzle statement into its literal SQL and its bound values.
@@ -130,6 +130,32 @@ describe('GBFS feeds in the MOTIS config', () => {
     await generateMotisConfig({ includeGbfs: false })
 
     expect(gbfsQuery()).toBeUndefined()
+  })
+})
+
+describe('the GBFS street area', () => {
+  beforeEach(() => {
+    statements = []
+  })
+
+  test('covers the same systems MOTIS polls, and only their docks inside the region', async () => {
+    // A street graph around a system MOTIS never polls is memory spent on
+    // nothing; one missing around a system it does poll answers no rental.
+    // A stray dock geocoded to another continent would stretch the box over it.
+    resolved = { isGlobal: false, boxes: [[-74.6, 40.3, -73.3, 41.4]] }
+
+    await getGbfsStreetArea()
+
+    const box = [-74.6, -73.3, 40.3, 41.4]
+    expect(sqlText(statements[0])).toContain('enabled = TRUE')
+    // Systems, then the docks margin, then docks, then the free-floating margin.
+    expect(bound(statements[0])).toEqual([...box, 0.02, ...box, 0.1])
+  })
+
+  test('is null when no system qualifies, so the rebuild builds no street graph', async () => {
+    resolved = { isGlobal: false, boxes: [[-74.6, 40.3, -73.3, 41.4]] }
+
+    expect(await getGbfsStreetArea()).toBeNull()
   })
 })
 

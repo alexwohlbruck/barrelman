@@ -171,6 +171,21 @@ export async function ensureSchema() {
   // Not awaited: each view is a spatial join over the whole region and takes
   // minutes on a large extract. Startup must not wait on them.
   void populateMaterializedViews()
+  void buildStatePartsIfEmpty()
+}
+
+/** Cut the states /route lists into state_parts, once, where it is missing or empty. The OSM import and update keep it current. */
+async function buildStatePartsIfEmpty() {
+  const client = maintenanceConnection()
+  try {
+    const [{ present }] = await client`SELECT to_regclass('state_parts') IS NOT NULL AS present`
+    if (present && (await client`SELECT 1 FROM state_parts LIMIT 1`).length) return
+    await client.unsafe(readFileSync(join(import.meta.dir, '../import/build-state-parts.sql'), 'utf-8'))
+  } catch (err) {
+    console.error('[schema] could not build state_parts:', err)
+  } finally {
+    await client.end({ timeout: 5 })
+  }
 }
 
 /** Columns the post-import pipeline adds to geo_places, and their types. */
@@ -265,19 +280,22 @@ async function missingPostImportSchema(): Promise<string[]> {
  * import script and the console task run, rather than restating it here.
  */
 async function ensureDetailViews() {
-  try {
-    const path = join(import.meta.dir, '../import/create-detail-views.sql')
-    await runDdl(readFileSync(path, 'utf-8'))
-  } catch (err) {
-    // Never block startup on this. A failure here costs the detail layers;
-    // throwing would cost the whole API.
-    console.error('[schema] could not create map detail views:', err)
+  // Each file on its own, so a failure in one costs only its layers.
+  for (const file of ['create-detail-views.sql', 'create-indoor-views.sql']) {
+    try {
+      const path = join(import.meta.dir, '../import', file)
+      await runDdl(readFileSync(path, 'utf-8'))
+    } catch (err) {
+      // Never block startup on this. A failure here costs the detail layers;
+      // throwing would cost the whole API.
+      console.error(`[schema] could not create map views from ${file}:`, err)
+    }
   }
 }
 
 /**
  * Populate the stored map views (`buildings_3d`, `street_furniture`,
- * `sport_pitches`) that are
+ * `sport_pitches`, `indoor_features`, `fixtures`) that are
  * still empty.
  *
  * `create-detail-views.sql` creates them WITH NO DATA so startup stays cheap,
@@ -288,7 +306,7 @@ async function ensureDetailViews() {
 async function populateMaterializedViews() {
   const client = maintenanceConnection()
   try {
-    for (const view of ['buildings_3d', 'street_furniture', 'sport_pitches']) {
+    for (const view of ['buildings_3d', 'street_furniture', 'sport_pitches', 'indoor_features', 'fixtures']) {
       try {
         const rows = await client<{ populated: boolean }[]>`
           SELECT relispopulated AS populated FROM pg_class WHERE relname = ${view} AND relkind = 'm'

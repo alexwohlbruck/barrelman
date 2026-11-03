@@ -1,8 +1,325 @@
 ---
 title: Admin
 full: true
+_openapi:
+  toc:
+    - depth: 2
+      title: Migration status
+      url: '#migration-status'
+    - depth: 2
+      title: Run full migration
+      url: '#run-full-migration'
+    - depth: 2
+      title: Run post-import SQL
+      url: '#run-post-import-sql'
+    - depth: 2
+      title: Generate codes
+      url: '#generate-codes'
+    - depth: 2
+      title: Generate abbreviations
+      url: '#generate-abbreviations'
+    - depth: 2
+      title: Resolve parent context (full)
+      url: '#resolve-parent-context-full'
+    - depth: 2
+      title: Resolve parent context (incremental)
+      url: '#resolve-parent-context-incremental'
+    - depth: 2
+      title: Rebuild tsvectors
+      url: '#rebuild-tsvectors'
+    - depth: 2
+      title: List and search accounts
+      url: '#list-and-search-accounts'
+    - depth: 2
+      title: Account detail with usage, keys and moderation history
+      url: '#account-detail-with-usage-keys-and-moderation-history'
+    - depth: 2
+      title: Delete an account permanently
+      url: '#delete-an-account-permanently'
+    - depth: 2
+      title: Suspend an account
+      url: '#suspend-an-account'
+    - depth: 2
+      title: Reinstate a suspended account
+      url: '#reinstate-a-suspended-account'
+    - depth: 2
+      title: Change an account's plan
+      url: '#change-an-accounts-plan'
+    - depth: 2
+      title: Change an account's role
+      url: '#change-an-accounts-role'
+    - depth: 2
+      title: Record a warning
+      url: '#record-a-warning'
+    - depth: 2
+      title: Attach an internal note to an account
+      url: '#attach-an-internal-note-to-an-account'
+    - depth: 2
+      title: Change a customer's API key
+      url: '#change-a-customers-api-key'
+    - depth: 2
+      title: Revoke a customer's API key
+      url: '#revoke-a-customers-api-key'
+    - depth: 2
+      title: Request outcomes, rate limiting and latency
+      url: '#request-outcomes-rate-limiting-and-latency'
+    - depth: 2
+      title: Automated abuse signals awaiting review
+      url: '#automated-abuse-signals-awaiting-review'
+    - depth: 2
+      title: Dismiss an abuse signal
+      url: '#dismiss-an-abuse-signal'
+    - depth: 2
+      title: Admin console config
+      url: '#admin-console-config'
+    - depth: 2
+      title: Verify admin credentials
+      url: '#verify-admin-credentials'
+    - depth: 2
+      title: List import regions
+      url: '#list-import-regions'
+    - depth: 2
+      title: Create an import region
+      url: '#create-an-import-region'
+    - depth: 2
+      title: Get an import region
+      url: '#get-an-import-region'
+    - depth: 2
+      title: Delete an import region
+      url: '#delete-an-import-region'
+    - depth: 2
+      title: Update an import region
+      url: '#update-an-import-region'
+    - depth: 2
+      title: Search the boundary catalog
+      url: '#search-the-boundary-catalog'
+    - depth: 2
+      title: Refresh the boundary catalog from Geofabrik
+      url: '#refresh-the-boundary-catalog-from-geofabrik'
+    - depth: 2
+      title: Derive a region definition from a boundary
+      url: '#derive-a-region-definition-from-a-boundary'
+    - depth: 2
+      title: List runnable scripts
+      url: '#list-runnable-scripts'
+    - depth: 2
+      title: Run a script
+      url: '#run-a-script'
+    - depth: 2
+      title: List job schedules
+      url: '#list-job-schedules'
+    - depth: 2
+      title: Create a job schedule
+      url: '#create-a-job-schedule'
+    - depth: 2
+      title: Delete a job schedule
+      url: '#delete-a-job-schedule'
+    - depth: 2
+      title: Update a job schedule
+      url: '#update-a-job-schedule'
+    - depth: 2
+      title: Enable or disable a schedule
+      url: '#enable-or-disable-a-schedule'
+    - depth: 2
+      title: Run a schedule immediately
+      url: '#run-a-schedule-immediately'
+    - depth: 2
+      title: Preview a cron expression
+      url: '#preview-a-cron-expression'
+    - depth: 2
+      title: List jobs
+      url: '#list-jobs'
+    - depth: 2
+      title: Get job detail + logs
+      url: '#get-job-detail--logs'
+    - depth: 2
+      title: Cancel a running job
+      url: '#cancel-a-running-job'
+    - depth: 2
+      title: Stream job logs (SSE)
+      url: '#stream-job-logs-sse'
+    - depth: 2
+      title: Data metrics
+      url: '#data-metrics'
+    - depth: 2
+      title: Downstream service health
+      url: '#downstream-service-health'
+    - depth: 2
+      title: Proxy a request to the running API for testing
+      url: '#proxy-a-request-to-the-running-api-for-testing'
+  structuredData:
+    headings:
+      - content: Migration status
+        id: migration-status
+      - content: Run full migration
+        id: run-full-migration
+      - content: Run post-import SQL
+        id: run-post-import-sql
+      - content: Generate codes
+        id: generate-codes
+      - content: Generate abbreviations
+        id: generate-abbreviations
+      - content: Resolve parent context (full)
+        id: resolve-parent-context-full
+      - content: Resolve parent context (incremental)
+        id: resolve-parent-context-incremental
+      - content: Rebuild tsvectors
+        id: rebuild-tsvectors
+      - content: List and search accounts
+        id: list-and-search-accounts
+      - content: Account detail with usage, keys and moderation history
+        id: account-detail-with-usage-keys-and-moderation-history
+      - content: Delete an account permanently
+        id: delete-an-account-permanently
+      - content: Suspend an account
+        id: suspend-an-account
+      - content: Reinstate a suspended account
+        id: reinstate-a-suspended-account
+      - content: Change an account's plan
+        id: change-an-accounts-plan
+      - content: Change an account's role
+        id: change-an-accounts-role
+      - content: Record a warning
+        id: record-a-warning
+      - content: Attach an internal note to an account
+        id: attach-an-internal-note-to-an-account
+      - content: Change a customer's API key
+        id: change-a-customers-api-key
+      - content: Revoke a customer's API key
+        id: revoke-a-customers-api-key
+      - content: Request outcomes, rate limiting and latency
+        id: request-outcomes-rate-limiting-and-latency
+      - content: Automated abuse signals awaiting review
+        id: automated-abuse-signals-awaiting-review
+      - content: Dismiss an abuse signal
+        id: dismiss-an-abuse-signal
+      - content: Admin console config
+        id: admin-console-config
+      - content: Verify admin credentials
+        id: verify-admin-credentials
+      - content: List import regions
+        id: list-import-regions
+      - content: Create an import region
+        id: create-an-import-region
+      - content: Get an import region
+        id: get-an-import-region
+      - content: Delete an import region
+        id: delete-an-import-region
+      - content: Update an import region
+        id: update-an-import-region
+      - content: Search the boundary catalog
+        id: search-the-boundary-catalog
+      - content: Refresh the boundary catalog from Geofabrik
+        id: refresh-the-boundary-catalog-from-geofabrik
+      - content: Derive a region definition from a boundary
+        id: derive-a-region-definition-from-a-boundary
+      - content: List runnable scripts
+        id: list-runnable-scripts
+      - content: Run a script
+        id: run-a-script
+      - content: List job schedules
+        id: list-job-schedules
+      - content: Create a job schedule
+        id: create-a-job-schedule
+      - content: Delete a job schedule
+        id: delete-a-job-schedule
+      - content: Update a job schedule
+        id: update-a-job-schedule
+      - content: Enable or disable a schedule
+        id: enable-or-disable-a-schedule
+      - content: Run a schedule immediately
+        id: run-a-schedule-immediately
+      - content: Preview a cron expression
+        id: preview-a-cron-expression
+      - content: List jobs
+        id: list-jobs
+      - content: Get job detail + logs
+        id: get-job-detail--logs
+      - content: Cancel a running job
+        id: cancel-a-running-job
+      - content: Stream job logs (SSE)
+        id: stream-job-logs-sse
+      - content: Data metrics
+        id: data-metrics
+      - content: Downstream service health
+        id: downstream-service-health
+      - content: Proxy a request to the running API for testing
+        id: proxy-a-request-to-the-running-api-for-testing
+    contents:
+      - content: Check if parent_context is populated and coverage stats.
+        heading: migration-status
+      - content: >-
+          Run post-import → codes → abbreviations → parent context → tsvectors.
+          This may take several minutes on large datasets.
+        heading: run-full-migration
+      - content: Add columns, extract structured fields, build indexes.
+        heading: run-post-import-sql
+      - content: >-
+          Extract IATA, ICAO, ref, short_name, abbreviation, alt_name codes from
+          OSM tags.
+        heading: generate-codes
+      - content: Generate first-letter abbreviations for multi-word Latin-script names.
+        heading: generate-abbreviations
+      - content: Spatial join to populate parent_context for all named places.
+        heading: resolve-parent-context-full
+      - content: >-
+          Resolve parent_context for new/changed POIs and cascade for changed
+          boundaries.
+        heading: resolve-parent-context-incremental
+      - content: >-
+          Rebuild full-text search vectors for all named places (includes
+          parent_context).
+        heading: rebuild-tsvectors
+      - content: >-
+          Erases the account and everything attached to it — API keys, usage,
+          the credit ledger, abuse signals and its moderation history — with no
+          way back. Suspending is the reversible option, and the one that keeps
+          a record of the decision. The request body must repeat the account's
+          email address. Refuses your own account and the last administrator.
+        heading: delete-an-account-permanently
+      - content: >-
+          Ends every session and disables every API key immediately. The reason
+          is shown to the user, both at sign-in and on API responses.
+        heading: suspend-an-account
+      - content: >-
+          Operator override, independent of the billing provider. This is how an
+          account is moved onto an internal plan such as `demo`, which serves
+          the API unmetered — so it is recorded in the moderation log like any
+          other privileged action.
+        heading: change-an-accounts-plan
+      - content: >-
+          Promote an account to administrator or demote it. Refuses to remove
+          the last administrator — with no shared admin secret, an instance with
+          zero admins can only be recovered from the database.
+        heading: change-an-accounts-role
+      - content: >-
+          Logged against the account without restricting it — the step before a
+          suspension.
+        heading: record-a-warning
+      - content: >-
+          Rename, rescope or re-origin a key, or exempt it from rate limiting.
+          An exempt key skips every per-minute window and the concurrency cap —
+          the same exemption the first-party plan gives a whole account — but is
+          still metered, scoped and subject to the abuse penalty box. Logged to
+          the account.
+        heading: change-a-customers-api-key
+      - content: Takes effect immediately. Logged to the account.
+        heading: revoke-a-customers-api-key
+      - content: >-
+          Hourly request metrics for the whole instance, or one account with
+          `userId`: how many requests were served, refused by which throttle
+          layer, refused for quota or credentials, and latency percentiles
+          estimated from a histogram. Service-key and anonymous traffic appears
+          under `@service` and `@anonymous`.
+        heading: request-outcomes-rate-limiting-and-latency
+      - content: >-
+          Detections raised by the periodic sweep. A signal is an observation,
+          not a judgement.
+        heading: automated-abuse-signals-awaiting-review
 ---
 
-Operational endpoints backing the admin console — data migrations, runnable scripts and jobs, metrics, and downstream service health. These power the import and maintenance workflow and are not part of the public query surface.
+{/* This file was generated by Fumadocs. Do not edit this file directly. Any changes should be made by running the generation command again. */}
 
-<APIPage document={"./openapi.json"} operations={[{"path":"/admin/migration/status","method":"get"},{"path":"/admin/migration/run","method":"post"},{"path":"/admin/migration/post-import","method":"post"},{"path":"/admin/migration/generate-codes","method":"post"},{"path":"/admin/migration/generate-abbreviations","method":"post"},{"path":"/admin/migration/resolve-parent-context","method":"post"},{"path":"/admin/migration/resolve-parent-context-incremental","method":"post"},{"path":"/admin/migration/rebuild-tsvectors","method":"post"},{"path":"/admin/config","method":"get"},{"path":"/admin/verify","method":"get"},{"path":"/admin/scripts","method":"get"},{"path":"/admin/scripts/{id}/run","method":"post"},{"path":"/admin/jobs","method":"get"},{"path":"/admin/jobs/{id}","method":"get"},{"path":"/admin/jobs/{id}/cancel","method":"post"},{"path":"/admin/jobs/{id}/stream","method":"get"},{"path":"/admin/metrics","method":"get"},{"path":"/admin/services","method":"get"},{"path":"/admin/test-endpoint","method":"post"}]} hasHead={true} />
+Operator console API — data migrations, runnable scripts and jobs, schedules, regions, accounts, metrics and downstream service health. Admin access required; not part of the public query surface.
+
+<APIPage document={"openapi.json"} operations={[{"path":"/admin/migration/status","method":"get"},{"path":"/admin/migration/run","method":"post"},{"path":"/admin/migration/post-import","method":"post"},{"path":"/admin/migration/generate-codes","method":"post"},{"path":"/admin/migration/generate-abbreviations","method":"post"},{"path":"/admin/migration/resolve-parent-context","method":"post"},{"path":"/admin/migration/resolve-parent-context-incremental","method":"post"},{"path":"/admin/migration/rebuild-tsvectors","method":"post"},{"path":"/admin/users","method":"get"},{"path":"/admin/users/{id}","method":"get"},{"path":"/admin/users/{id}","method":"delete"},{"path":"/admin/users/{id}/suspend","method":"post"},{"path":"/admin/users/{id}/unsuspend","method":"post"},{"path":"/admin/users/{id}/plan","method":"post"},{"path":"/admin/users/{id}/role","method":"post"},{"path":"/admin/users/{id}/warn","method":"post"},{"path":"/admin/users/{id}/note","method":"post"},{"path":"/admin/users/{id}/keys/{keyId}","method":"patch"},{"path":"/admin/users/{id}/keys/{keyId}","method":"delete"},{"path":"/admin/traffic","method":"get"},{"path":"/admin/abuse","method":"get"},{"path":"/admin/abuse/{id}/resolve","method":"post"},{"path":"/admin/config","method":"get"},{"path":"/admin/verify","method":"get"},{"path":"/admin/regions","method":"get"},{"path":"/admin/regions","method":"post"},{"path":"/admin/regions/{key}","method":"get"},{"path":"/admin/regions/{key}","method":"delete"},{"path":"/admin/regions/{key}","method":"put"},{"path":"/admin/boundaries","method":"get"},{"path":"/admin/boundaries/refresh","method":"post"},{"path":"/admin/boundaries/resolve","method":"post"},{"path":"/admin/scripts","method":"get"},{"path":"/admin/scripts/{id}/run","method":"post"},{"path":"/admin/schedules","method":"get"},{"path":"/admin/schedules","method":"post"},{"path":"/admin/schedules/{id}","method":"delete"},{"path":"/admin/schedules/{id}","method":"put"},{"path":"/admin/schedules/{id}/enabled","method":"post"},{"path":"/admin/schedules/{id}/run","method":"post"},{"path":"/admin/schedules/preview","method":"post"},{"path":"/admin/jobs","method":"get"},{"path":"/admin/jobs/{id}","method":"get"},{"path":"/admin/jobs/{id}/cancel","method":"post"},{"path":"/admin/jobs/{id}/stream","method":"get"},{"path":"/admin/metrics","method":"get"},{"path":"/admin/services","method":"get"},{"path":"/admin/test-endpoint","method":"post"}]} webhooks={[]} hasHead={true} />

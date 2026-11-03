@@ -40,6 +40,7 @@ export function healthFixture(overrides: Partial<HealthResult> = {}): HealthResu
       martin: HEALTHY,
       motis: HEALTHY,
       pelias: { ...HEALTHY, optional: true },
+      tts: { ...HEALTHY, optional: true },
     },
     endpoints: GROUP_PREFIXES.map(({ group, prefixes }) => ({
       group,

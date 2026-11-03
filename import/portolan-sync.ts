@@ -50,7 +50,7 @@ import JSZip from 'jszip'
 //
 //   RESULT {"changed":[…],"affected":[…],"rebuilt":[…],"groups_rewritten":false,
 //           "tiles":{"written":N,"unchanged":N,"removed":N},
-//           "exported":["<feedkey>.zip",…],"errors":[…]}
+//           "exported":["<feedkey>.zip",…],"undrawn":[…],"errors":[…]}
 //
 // Exit 0 on success, 1 if any feed errored (with everything else completed —
 // a single feed's failure lands in `errors` and does not abort the run).
@@ -63,6 +63,13 @@ export interface PortolanSyncResult {
   tiles?: { written: number; unchanged: number; removed: number }
   /** Corrected GTFS zips written this run, named `<portolan feed key>.zip`. */
   exported: string[]
+  /**
+   * Feeds with GTFS on disk that the written index leaves off the map (portolan
+   * 0.5.3+). A report, not a failure: flex-only feeds and bus feeds without a
+   * streets extract have nothing to draw. Listed so a whole city dropping out —
+   * Chicago did, behind a failed group build — is seen on the next run.
+   */
+  undrawn: string[]
   errors: unknown[]
 }
 
@@ -88,6 +95,7 @@ export function parseResultLine(stdout: string): PortolanSyncResult | null {
         groups_rewritten: parsed.groups_rewritten,
         tiles: parsed.tiles,
         exported: parsed.exported ?? [],
+        undrawn: parsed.undrawn ?? [],
         errors: parsed.errors ?? [],
       }
     } catch {
@@ -96,6 +104,9 @@ export function parseResultLine(stdout: string): PortolanSyncResult | null {
   }
   return null
 }
+
+/** Run on each new pyramid before portolan swaps it in, so it goes live with its ribbons' heights. Needs portolan 0.5.2. */
+export const TILE_HOOK = `nice -n 10 bun run ${join(import.meta.dir, 'elevate-portolan.ts')} --dir "$PORTOLAN_TILES"`
 
 /** The three sync modes, mapped to portolan subcommands. */
 export type SyncMode = 'global' | 'patch' | 'check'
@@ -121,6 +132,7 @@ export function buildSyncArgs(
     `--export-gtfs=${join(workspace, 'build/export')}`,
     `--state=${join(workspace, 'build/sync-state.json')}`,
     `--style-dir=${join(workspace, 'style')}`,
+    `--tile-hook=${TILE_HOOK}`,
     '--json',
   ]
   if (mode === 'patch') args.push(`--feeds=${opts.feeds ?? ''}`)
@@ -303,6 +315,9 @@ if (import.meta.main) {
       console.log(`  tiles:    ${result.tiles.written} written, ${result.tiles.unchanged} unchanged, ${result.tiles.removed} removed`)
     }
     console.log(`  exported: ${result.exported.join(', ') || '(none)'}`)
+    if (result.undrawn.length > 0) {
+      console.warn(`  ⚠ undrawn: ${result.undrawn.length} feeds have GTFS but are on no map: ${result.undrawn.join(', ')}`)
+    }
     for (const err of result.errors) {
       console.error(`  ✗ error: ${typeof err === 'string' ? err : JSON.stringify(err)}`)
     }
@@ -324,6 +339,7 @@ if (import.meta.main) {
       const { importFeedFile, injectTransfersTxt, readZipEntry } = await import('./feed-import')
       const { injectFaresV2 } = await import('./inject-fares-v2')
       const { injectBikesAllowed } = await import('./inject-bikes-allowed')
+      const { injectTripShapesAll } = await import('./inject-trip-shapes')
 
       await ensureGtfsSchema()
 
@@ -440,6 +456,7 @@ if (import.meta.main) {
         } catch (err) {
           console.error(`  ✗ bikes_allowed default failed: ${err}`)
         }
+        await injectTripShapesAll([dest])
 
         imported++
       }

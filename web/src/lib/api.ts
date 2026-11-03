@@ -24,6 +24,8 @@ import type {
   AbuseSignal,
   AdminUser,
   AdminUserDetail,
+  TrafficRange,
+  TrafficReport,
   SuspensionInfo,
   SuspensionKind,
   TermsState,
@@ -481,4 +483,35 @@ export function getAbuseSignals(
 
 export function resolveAbuseSignal(id: string): Promise<{ ok: boolean }> {
   return request<{ ok: boolean }>(`/admin/abuse/${id}/resolve`, { method: 'POST' })
+}
+
+// ── Admin: customer keys and traffic ──────────────────────────────────
+export interface AdminKeyPatch {
+  name?: string
+  scopes?: string[]
+  allowedOrigins?: string[]
+  rateLimitExempt?: boolean
+  reason?: string
+}
+
+export function updateAdminKey(userId: string, keyId: string, patch: AdminKeyPatch): Promise<{ key: ApiKeySummary }> {
+  return request<{ key: ApiKeySummary }>(`/admin/users/${userId}/keys/${keyId}`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(patch),
+  })
+}
+
+export function revokeAdminKey(userId: string, keyId: string, reason?: string): Promise<{ ok: boolean }> {
+  return request<{ ok: boolean }>(`/admin/users/${userId}/keys/${keyId}`, {
+    method: 'DELETE',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ reason }),
+  })
+}
+
+export function getTraffic(range: TrafficRange, userId?: string): Promise<TrafficReport> {
+  const params = new URLSearchParams({ range })
+  if (userId) params.set('userId', userId)
+  return request<TrafficReport>(`/admin/traffic?${params}`)
 }

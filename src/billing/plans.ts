@@ -465,7 +465,7 @@ export const GROUP_PREFIXES: ReadonlyArray<{ group: EndpointGroup; prefixes: rea
   { group: 'geocode', prefixes: ['/geocode'] },
   { group: 'isochrone', prefixes: ['/isochrone'] },
   { group: 'transit', prefixes: ['/transit', '/gbfs'] },
-  { group: 'routing', prefixes: ['/route', '/graphhopper', '/directions'] },
+  { group: 'routing', prefixes: ['/route', '/graphhopper', '/directions', '/match'] },
   { group: 'spatial', prefixes: ['/contains', '/children'] },
   { group: 'places', prefixes: ['/place', '/brands'] },
 ]

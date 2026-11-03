@@ -84,6 +84,20 @@ else's. Unmetered is not invisible.
   server-side proxy sends none at all.
 </Callout>
 
+### One key
+
+To lift the throttle for a single key without moving its account to
+`first-party`, open the account at `/console/accounts`, go to **Keys** and turn
+**Rate limits** off. The same switch sits beside every key in
+`/console/traffic`. It is the same exemption as `unthrottled`, narrowed to that
+credential: the per-minute windows and the concurrency caps are skipped, and
+the account's other keys stay limited. Credits, scopes, origins, suspension and
+the penalty box all still apply.
+
+Only an administrator can set it (`PATCH /admin/users/:id/keys/:keyId` with
+`rateLimitExempt`). Each change is written to the account's history, with the
+reason if you give one.
+
 ### Per-visitor
 
 Only for plans that set `requestsPerMinutePerIp` — today just `demo`, the
@@ -163,6 +177,30 @@ in Postgres and remains the accurate record for anything with money attached.
 If barrelman ever runs horizontally and you need exact limits, this is the piece
 to move behind Redis — `src/services/throttle.service.ts`.
 
+### Seeing who is limited
+
+`/console/traffic` shows how metered requests were answered over the last
+24 hours, 7 days or 30 days:
+
+* how many were served
+* how many were refused, and by which layer: per key, per account, per address,
+  concurrency or the penalty box
+* how many were refused for credits, or for keys and scopes
+* server errors
+* p50, p95 and p99 latency for each endpoint group
+
+The table below ranks accounts and keys by how often they were rate-limited.
+Opening an account shows the same view for that account alone.
+
+The figures come from `accounts_request_metrics`: one row per hour per account,
+key and endpoint group, written in batches like the usage counters. Unlike the
+throttle itself, these rows are in Postgres, so they add up across replicas.
+Latency is kept as a histogram, which makes the percentiles estimates accurate
+to their bucket. Traffic on the service key appears as *Service key*, and
+requests with no credential as *Anonymous*. Rows older than
+`BARRELMAN_REQUEST_METRICS_RETENTION_DAYS` (90 by default) are deleted by the
+hourly sweep.
+
 ## Detection
 
 A periodic sweep raises **abuse signals** for an administrator to review at
@@ -192,11 +230,13 @@ indefensible.
 
 ## Moderation
 
-An administrator can suspend an account from `/console/accounts`. Opening an
-account there shows what it has spent — the current cycle broken down by
+An administrator can suspend an account from `/console/accounts`. Clicking an
+account opens a pane showing what it has spent — the current cycle broken down by
 endpoint group and by key, plus a lifetime total, because an account that was
 abusive last month reads as spotless through a cycle window — along with its
-keys and everything ever recorded against it.
+traffic, its keys and everything ever recorded against it. Keys can be renamed,
+rescoped, restricted to origins, exempted from rate limits or revoked from
+there, and each change is logged to the account.
 
 Suspension takes effect **immediately**, not whenever a cache expires. Three
 things hold access open and all three are torn down together:

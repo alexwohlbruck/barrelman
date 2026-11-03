@@ -730,3 +730,69 @@ describe('refund on server error', () => {
     expect(d.recordUsage).toHaveBeenCalledWith(expect.objectContaining({ credits: CREDIT_COSTS.routing }))
   })
 })
+
+describe('a rate-limit-exempt key', () => {
+  const EXEMPT_KEY = 'brm_live_exemptexemptexemptexemptexemptexem'
+
+  /** Two keys on one developer account; only the second is exempt. */
+  function twoKeys(): Partial<ApiAuthDeps> {
+    return deps({
+      resolveApiKey: mock(async (presented: string) =>
+        presented === EXEMPT_KEY
+          ? resolved({ keyId: 'key-exempt', rateLimitExempt: true })
+          : resolved({ keyId: 'key-1' }),
+      ),
+    })
+  }
+
+  test('passes the per-minute windows its account is held to', async () => {
+    const instance = app('search', twoKeys())
+    const statuses: number[] = []
+    for (let i = 0; i < 2_000; i += 1) {
+      statuses.push((await instance.handle(get({ authorization: `Bearer ${EXEMPT_KEY}` }))).status)
+    }
+    expect(statuses.every((status) => status === 200)).toBe(true)
+  })
+
+  test('is still metered', async () => {
+    const d = twoKeys()
+    await app('search', d).handle(get({ authorization: `Bearer ${EXEMPT_KEY}` }))
+    expect(d.recordUsage).toHaveBeenCalledWith(
+      expect.objectContaining({ apiKeyId: 'key-exempt', credits: CREDIT_COSTS.search }),
+    )
+  })
+
+  test("does not hand back the concurrency slots its account's other keys hold", async () => {
+    // The after-handler releases a slot for every request that took one. An
+    // exempt request takes none, so releasing on its way out would free a slot
+    // that a sibling key is still occupying — and the cap would quietly erode.
+    let release: (() => void) | undefined
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const instance = new Elysia()
+      .onBeforeHandle(apiAuth('isochrone', twoKeys()))
+      .onAfterHandle(apiAuthAfter)
+      .get('/probe', async ({ request }) => {
+        if (!request.headers.get('authorization')?.includes(EXEMPT_KEY)) await blocked
+        return { ok: true }
+      })
+
+    const held = [
+      instance.handle(get({ authorization: `Bearer ${LIVE_KEY}` })),
+      instance.handle(get({ authorization: `Bearer ${LIVE_KEY}` })),
+    ]
+    await Bun.sleep(20)
+
+    for (let i = 0; i < 5; i += 1) {
+      expect((await instance.handle(get({ authorization: `Bearer ${EXEMPT_KEY}` }))).status).toBe(200)
+    }
+
+    const third = await instance.handle(get({ authorization: `Bearer ${LIVE_KEY}` }))
+    expect(third.status).toBe(429)
+    expect((await third.json()).layer).toBe('concurrency')
+
+    release!()
+    await Promise.all(held)
+  })
+})

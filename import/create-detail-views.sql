@@ -260,6 +260,40 @@ COMMENT ON MATERIALIZED VIEW street_furniture IS 'v3';
 CREATE UNIQUE INDEX IF NOT EXISTS street_furniture_fid_idx ON street_furniture (fid);
 CREATE INDEX IF NOT EXISTS street_furniture_centroid_idx ON street_furniture USING GIST (centroid);
 
+-- Fixtures: what a person finds their way by at street level, drawn as small
+-- square signs. A building's entrances, a station's stairs down, a lift up to
+-- the street. Indoor ones belong to floor plans (indoor_features).
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_class WHERE relname = 'fixtures' AND relkind = 'm')
+    AND COALESCE(obj_description(to_regclass('fixtures'), 'pg_class'), '') <> 'v1' THEN
+    DROP MATERIALIZED VIEW fixtures;
+  END IF;
+END $$;
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS fixtures AS
+SELECT (osm_id * 4 + CASE osm_type WHEN 'N' THEN 0 WHEN 'W' THEN 1 ELSE 2 END) AS fid,
+       id, centroid,
+       CASE
+         WHEN tags->>'railway' IN ('subway_entrance', 'train_station_entrance') THEN 'station_entrance'
+         WHEN tags->>'highway' = 'elevator' THEN 'elevator'
+         ELSE 'entrance'
+       END AS kind,
+       NULLIF(tags->>'ref', '') AS ref
+FROM geo_places
+WHERE geom_type = 'point'
+  AND (tags->>'railway' IN ('subway_entrance', 'train_station_entrance')
+       OR tags->>'highway' = 'elevator'
+       OR tags->>'entrance' IN ('main', 'yes'))
+  AND COALESCE(tags->>'indoor', 'no') = 'no'
+  AND COALESCE(tags->>'location', '') NOT IN ('indoor', 'underground')
+  AND COALESCE(tags->>'access', '') NOT IN ('private', 'no')
+WITH NO DATA;
+
+COMMENT ON MATERIALIZED VIEW fixtures IS 'v1';
+CREATE UNIQUE INDEX IF NOT EXISTS fixtures_fid_idx ON fixtures (fid);
+CREATE INDEX IF NOT EXISTS fixtures_centroid_idx ON fixtures USING GIST (centroid);
+
 -- Lines a client draws as standing objects: fences, walls, hedges and guard
 -- rails, power lines on their towers and poles, and the overhead wire over
 -- electrified track. A closed barrier is stored as an area and comes through
@@ -517,9 +551,9 @@ WHERE geom_type IN ('line', 'area')
 -- after an import, and the API refreshes it in the background on startup if it
 -- is still empty. Same shape as the brand catalog in `src/db.ts`.
 --
--- Changing the SELECT below therefore needs the view dropped by hand, since
--- IF NOT EXISTS will not redefine one that is already there:
---   DROP MATERIALIZED VIEW buildings_3d;  -- then re-run this file
+-- IF NOT EXISTS will not redefine a view that is already there, so the view
+-- carries a version in its comment, as street_furniture does: bump it with any
+-- change to the SELECT and startup rebuilds it empty, to be filled again.
 --
 -- Order matters on a deployment that does not have this view yet. Reading a
 -- materialized view that has never been refreshed raises rather than returning
@@ -528,11 +562,38 @@ WHERE geom_type IN ('line', 'area')
 -- refresh it, and only then let Martin see it; `--on-invalid warn` in
 -- docker-compose.yml is what keeps a mistake here from taking the whole tile
 -- server down rather than just this layer.
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_class WHERE relname = 'buildings_3d' AND relkind = 'm')
+    AND COALESCE(obj_description(to_regclass('buildings_3d'), 'pg_class'), '') <> 'v3' THEN
+    DROP MATERIALIZED VIEW buildings_3d;
+  END IF;
+END $$;
+
+-- Heights arrive as free text — "12", "12 m", "~10", "3,5" are all in use — and
+-- a plain cast turns one bad value into a failed tile for the whole area. The
+-- leading number is taken where there is one and the row falls through to the
+-- level count otherwise, which is what OpenMapTiles does, as are 3.66m a storey
+-- and 5m for a building that records neither: a building served from here and
+-- one served from the basemap stand the same height.
+CREATE OR REPLACE FUNCTION building_render_height(tags jsonb) RETURNS real
+LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+  SELECT COALESCE(NULLIF(substring(tags->>'height' from '^\s*([0-9]+(?:\.[0-9]+)?)'), '')::real,
+                  NULLIF(substring(tags->>'building:levels' from '^\s*([0-9]+(?:\.[0-9]+)?)'), '')::real * 3.66,
+                  5)::real
+$$;
+
+CREATE OR REPLACE FUNCTION building_render_min_height(tags jsonb) RETURNS real
+LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+  SELECT COALESCE(NULLIF(substring(tags->>'min_height' from '^\s*([0-9]+(?:\.[0-9]+)?)'), '')::real,
+                  NULLIF(substring(tags->>'building:min_level' from '^\s*([0-9]+(?:\.[0-9]+)?)'), '')::real * 3.66,
+                  0)::real
+$$;
+
 CREATE MATERIALIZED VIEW IF NOT EXISTS buildings_3d AS
 WITH shapes AS (
   SELECT (osm_id * 4 + CASE osm_type WHEN 'N' THEN 0 WHEN 'W' THEN 1 ELSE 2 END) as fid,
-         id, geom, tags,
-         COALESCE(tags->>'building:part', 'no') <> 'no' as is_part
+         id, geom, tags
   FROM geo_places
   WHERE geom_type = 'area'
     -- A basement or a subway concourse is not something you can see from above.
@@ -577,7 +638,7 @@ WITH shapes AS (
 -- off `parts` against the GIST index on `geo_places.geom` it is one scan and
 -- a few hundred thousand index probes.
 parts AS MATERIALIZED (
-  SELECT id, geom
+  SELECT id, geom, building_render_height(tags) as top, building_render_min_height(tags) as base
   FROM geo_places
   WHERE geom_type = 'area'
     AND COALESCE(tags->>'location', '') <> 'underground'
@@ -618,34 +679,46 @@ owner AS (
         OR ST_Area(ST_Intersection(o.geom, p.geom)) >= 0.99 * ST_Area(p.geom))
   ORDER BY p.id, ST_Area(o.geom)
 ),
--- Heights arrive as free text — "12", "12 m", "~10", "3,5" are all in use — and
--- a plain cast turns one bad value into a failed tile for the whole area. The
--- leading number is taken where there is one and the row falls through to the
--- level count otherwise, which is what OpenMapTiles does and what keeps these
--- columns numeric like the basemap's own.
-measured AS (
-  SELECT s.*,
-         NULLIF(substring(s.tags->>'height'            from '^\s*([0-9]+(?:\.[0-9]+)?)'), '')::real as h,
-         NULLIF(substring(s.tags->>'min_height'        from '^\s*([0-9]+(?:\.[0-9]+)?)'), '')::real as min_h,
-         NULLIF(substring(s.tags->>'building:levels'   from '^\s*([0-9]+(?:\.[0-9]+)?)'), '')::real as levels,
-         NULLIF(substring(s.tags->>'building:min_level' from '^\s*([0-9]+(?:\.[0-9]+)?)'), '')::real as min_levels
-  FROM shapes s
+-- A part standing inside a taller one that spans its whole height, a podium
+-- around its tower, is hidden there anyway, but its walls lie in the taller
+-- part's walls and z-fight with them. Cut the taller parts out of it. Only
+-- parts that reach down at least as far, so the cut never opens a gap, and
+-- only real overlaps: a shared wall drawn a little off is not one. Shrinking
+-- and regrowing the remainder by ~10cm drops the slivers left along walls that
+-- nearly but not quite coincide.
+cut AS (
+  SELECT p.id,
+         ST_CollectionExtract(ST_MakeValid(ST_Buffer(ST_Buffer(
+           ST_Difference(ST_MakeValid(p.geom), ST_Union(ST_MakeValid(q.geom))),
+           -1e-6, 'join=mitre'), 1e-6, 'join=mitre')), 3) as geom,
+         ST_Area(p.geom) as area
+  FROM parts p
+  JOIN geo_places q
+    ON q.geom && p.geom
+   AND q.id <> p.id
+   AND q.geom_type = 'area'
+   AND COALESCE(q.tags->>'location', '') <> 'underground'
+   AND COALESCE(q.tags->>'building:part', 'no') <> 'no'
+  WHERE building_render_min_height(q.tags) <= p.base
+    AND building_render_height(q.tags) >= p.top
+    -- Two parts spanning the same range: the later id gives way.
+    AND (building_render_min_height(q.tags) < p.base OR building_render_height(q.tags) > p.top OR q.id < p.id)
+    AND ST_Intersects(q.geom, p.geom)
+    AND ST_Area(ST_Intersection(q.geom, p.geom)) >= 0.05 * LEAST(ST_Area(q.geom), ST_Area(p.geom))
+  GROUP BY p.id, p.geom
 )
-SELECT m.fid, m.id, m.geom,
-       -- 3.66m a storey and 5m for a building that records neither, both
-       -- OpenMapTiles' numbers, so a building served from here and one served
-       -- from the basemap stand the same height.
-       COALESCE(m.h, m.levels * 3.66, 5)::real          as render_height,
-       COALESCE(m.min_h, m.min_levels * 3.66, 0)::real  as render_min_height,
+SELECT s.fid, s.id, COALESCE(k.geom, s.geom) as geom,
+       building_render_height(s.tags)     as render_height,
+       building_render_min_height(s.tags) as render_min_height,
        -- Both spellings: OSM accepts either and both are in the data. NULL
        -- rather than '' where there is none, for the same reason as `hide_3d`
        -- below — a vector tile has no null, so the key is simply absent and a
        -- client can ask `["has", "colour"]` rather than testing for an empty
        -- string it would otherwise have to know about.
-       NULLIF(COALESCE(m.tags->>'building:colour', m.tags->>'building:color', ''), '') as colour,
+       NULLIF(COALESCE(s.tags->>'building:colour', s.tags->>'building:color', ''), '') as colour,
        -- The roof, separately. OpenMapTiles has no field for this at all, which
        -- is half the reason for serving buildings ourselves.
-       NULLIF(COALESCE(m.tags->>'roof:colour', m.tags->>'roof:color', ''), '')         as roof_colour,
+       NULLIF(COALESCE(s.tags->>'roof:colour', s.tags->>'roof:color', ''), '')         as roof_colour,
        -- An outline its parts have replaced is the one thing that must not draw;
        -- see `covered` above for when that is and is not the case.
        --
@@ -658,18 +731,25 @@ SELECT m.fid, m.id, m.geom,
        CASE WHEN c.covered_area >= 0.9 * c.outline_area THEN true END as hide_3d,
        -- The building this shape belongs to: its outline for a part, itself
        -- otherwise. Shared by every part of one building.
-       COALESCE(w.outline_fid, m.fid) as group_id,
+       COALESCE(w.outline_fid, s.fid) as group_id,
        -- What the building is used for, which decides the facade a client
        -- draws on it: `building:use` where mapped, else `building` unless it
        -- says only `yes`, else a part's outline's. NULL, so absent, when unknown.
        lower(COALESCE(
-         NULLIF(m.tags->>'building:use', ''),
-         NULLIF(NULLIF(m.tags->>'building', ''), 'yes'),
+         NULLIF(s.tags->>'building:use', ''),
+         NULLIF(NULLIF(s.tags->>'building', ''), 'yes'),
          w.outline_kind,
-         CASE WHEN m.tags->>'amenity' = 'parking' THEN 'parking' END)) as kind
-FROM measured m
-LEFT JOIN covered c ON c.id = m.id
-LEFT JOIN owner w ON w.part_id = m.id
+         CASE WHEN s.tags->>'amenity' = 'parking' THEN 'parking' END)) as kind
+FROM shapes s
+LEFT JOIN covered c ON c.id = s.id
+LEFT JOIN owner w ON w.part_id = s.id
+LEFT JOIN cut k ON k.id = s.id
+-- A bridge's abutments and piers under its deck are the deck's to draw (bridge_decks):
+-- extruded from the ground their flat tops stand through it where the ground slopes.
+-- Anchorages and towers, standing well above any deck, stay.
+WHERE NOT (COALESCE(s.tags->>'bridge:support', '') IN ('abutment', 'pier') AND building_render_height(s.tags) < 20)
+  -- A part its taller neighbours cover entirely has nothing left to draw.
+  AND (k.id IS NULL OR ST_Area(k.geom) >= 0.01 * k.area)
 WITH NO DATA;
 
 -- Unique on fid so the view can be refreshed CONCURRENTLY, and GIST on geom so
@@ -684,6 +764,7 @@ CREATE INDEX IF NOT EXISTS geo_places_building_part_geom_idx
   ON geo_places USING GIST (geom)
   WHERE COALESCE(tags->>'building:part', 'no') <> 'no';
 
+COMMENT ON MATERIALIZED VIEW buildings_3d IS 'v3';
 CREATE UNIQUE INDEX IF NOT EXISTS buildings_3d_fid_idx ON buildings_3d (fid);
 CREATE INDEX IF NOT EXISTS buildings_3d_geom_idx ON buildings_3d USING GIST (geom);
 
@@ -1040,7 +1121,8 @@ ALTER TABLE bridge_decks
   ADD COLUMN IF NOT EXISTS format smallint NOT NULL DEFAULT 1,
   ADD COLUMN IF NOT EXISTS left_edges real[],
   ADD COLUMN IF NOT EXISTS right_edges real[],
-  ADD COLUMN IF NOT EXISTS caps real[];
+  ADD COLUMN IF NOT EXISTS caps real[],
+  ADD COLUMN IF NOT EXISTS mesh text;
 CREATE INDEX IF NOT EXISTS bridge_decks_geom_idx ON bridge_decks USING gist (geom);
 CREATE INDEX IF NOT EXISTS bridge_decks_anchor_idx ON bridge_decks USING gist (anchor);
 
@@ -1093,5 +1175,82 @@ SELECT id, bridge, kind, layer, edges[1] AS left_edge, edges[2] AS right_edge,
        -- property out and a client tells such a deck by its absence.
        CASE WHEN left_edges IS NOT NULL THEN array_to_string(ARRAY(SELECT round(e * 10)::int FROM unnest(left_edges) e), ',') END AS left_edges,
        CASE WHEN right_edges IS NOT NULL THEN array_to_string(ARRAY(SELECT round(e * 10)::int FROM unnest(right_edges) e), ',') END AS right_edges,
-       CASE WHEN caps IS NOT NULL THEN array_to_string(ARRAY(SELECT round(c * 10)::int FROM unnest(caps) c), ',') END AS caps
+       CASE WHEN caps IS NOT NULL THEN array_to_string(ARRAY(SELECT round(c * 10)::int FROM unnest(caps) c), ',') END AS caps,
+       mesh
 FROM bridge_decks;
+
+-- Tunnel cuts: the cut dug down to each portal where a tunnel comes out of the
+-- ground, solved by Build Tunnel Cuts (import/generate-tunnel-cuts.ts) from the
+-- tunnels, the roads and surfaces they open onto and the terrain. A client
+-- stands the walls and carves the floor into its terrain from these alone.
+-- `geom` runs from just before the cut opens, through the portal (vertex `at`),
+-- into the bore, sampled every few metres; the arrays hold a value per vertex.
+CREATE TABLE IF NOT EXISTS tunnel_cuts (
+  id text PRIMARY KEY,
+  kind text NOT NULL,
+  at int NOT NULL,
+  -- The vertex the cut opens at: out from it the road is at grade.
+  open int NOT NULL,
+  -- Metres from the centreline to the carriageway's left and right edges, running in.
+  edges real[] NOT NULL,
+  -- Metres in the terrain's datum, before exaggeration.
+  floor real[] NOT NULL,
+  wall_left real[] NOT NULL,
+  wall_right real[] NOT NULL,
+  crown real NOT NULL,
+  headroom real NOT NULL,
+  base real NOT NULL,
+  -- A headwall's direction where a wall is mapped across the bore, in mercator units.
+  face real[],
+  -- Walls between carriageways' bores: [from, to] metres left of the centreline, flattened.
+  piers real[],
+  -- The portal, in whole units of 1e-7° too, which decides the box that owns the cut.
+  anchor geometry(Point, 4326) NOT NULL,
+  anchor_x int NOT NULL,
+  anchor_y int NOT NULL,
+  geom geometry(LineString, 4326) NOT NULL,
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS tunnel_cuts_geom_idx ON tunnel_cuts USING gist (geom);
+CREATE INDEX IF NOT EXISTS tunnel_cuts_anchor_idx ON tunnel_cuts USING gist (anchor);
+
+-- Served in the `detail` bundle: the line as steps in 1e-7°, as bridge_deck_tiles
+-- gives it, and heights and piers in decimetres.
+CREATE OR REPLACE VIEW tunnel_cut_tiles AS
+SELECT id, kind,
+       (SELECT string_agg(CASE WHEN n = 1 THEN x || ',' || y ELSE (x - px) || ',' || (y - py) END, ';' ORDER BY n)
+        FROM (SELECT n, x, y, lag(x) OVER (ORDER BY n) AS px, lag(y) OVER (ORDER BY n) AS py
+              FROM (SELECT (dp).path[1] AS n, round(ST_X((dp).geom) * 1e7)::bigint AS x, round(ST_Y((dp).geom) * 1e7)::bigint AS y
+                    FROM ST_DumpPoints(geom) AS dp) points) steps) AS line,
+       at, open, edges[1] AS left_edge, edges[2] AS right_edge,
+       array_to_string(ARRAY(SELECT round(h * 10)::int FROM unnest(floor) h), ',') AS floor,
+       array_to_string(ARRAY(SELECT round(h * 10)::int FROM unnest(wall_left) h), ',') AS wall_left,
+       array_to_string(ARRAY(SELECT round(h * 10)::int FROM unnest(wall_right) h), ',') AS wall_right,
+       crown, headroom, base,
+       CASE WHEN face IS NOT NULL THEN array_to_string(face, ',') END AS face,
+       CASE WHEN piers IS NOT NULL THEN array_to_string(ARRAY(SELECT round(p * 10)::int FROM unnest(piers) p), ',') END AS piers,
+       geom
+FROM tunnel_cuts;
+
+-- Sidewalk street names: the street each unnamed footway, path or cycleway
+-- runs beside, solved by Build Sidewalk Street Names
+-- (import/generate-sidewalk-street-names.ts). `zones` is ordered along `geom`:
+-- [{ "from": 0, "to": 0.62, "name": "W 3rd St", "source": "geometry" }, ...],
+-- `from` and `to` as fractions of its length. /route names its walking stretches from it.
+CREATE TABLE IF NOT EXISTS sidewalk_street_names (
+  way_id bigint PRIMARY KEY,
+  geom geometry(LineString, 4326) NOT NULL,
+  zones jsonb NOT NULL,
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS sidewalk_street_names_geom_idx ON sidewalk_street_names USING gist (geom);
+
+-- A cycle way's heights on decks and through tunnels, written by Elevate
+-- Bicycle Ways (import/elevate-bicycle-ways.ts). Martin serves the column, so
+-- it must exist before Martin starts, even on a database imported without it.
+DO $$
+BEGIN
+  IF to_regclass('public.bicycle_ways') IS NOT NULL THEN
+    ALTER TABLE bicycle_ways ADD COLUMN IF NOT EXISTS elevation text;
+  END IF;
+END $$;

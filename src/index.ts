@@ -19,11 +19,14 @@ import { adminUserRoutes } from './routes/admin-users'
 import { adminConsoleRoutes, adminConsoleConfigRoutes } from './routes/admin-console'
 import { consoleUiRoutes } from './lib/console-ui'
 import { tileRoutes } from './routes/tiles'
+import { bridgeMeshRoutes } from './routes/bridge-meshes'
 import { landmarkRoutes } from './routes/landmarks'
 import { graphhopperRoutes } from './routes/graphhopper'
 import { routeRoutes } from './routes/route'
+import { matchRoutes } from './routes/match'
 import { isochroneRoutes } from './routes/isochrone'
 import { transitRoutes } from './routes/transit'
+import { speechRoutes } from './routes/speech'
 import { gbfsRoutes } from './routes/gbfs'
 import { ensureSchema, ensureGtfsSchema, ensureGbfsSchema } from './db'
 import { ensureAccountsSchema } from './services/accounts.service'
@@ -39,6 +42,8 @@ import { updateRouteCentroids } from './services/gtfs.service'
 import { syncPortolanStopLinks } from './services/portolan-links.service'
 import { startTransitWarmup } from './lib/warmup'
 import { flushUsage, startUsageFlush } from './services/usage.service'
+import { flushRequestMetrics, startRequestMetricsFlush } from './services/request-metrics.service'
+import { requestMetrics } from './middleware/request-metrics'
 import { startOverageReporting } from './services/overage.service'
 import { startAccountSweep } from './services/account-maintenance.service'
 import { startScheduler } from './services/scheduler.service'
@@ -125,6 +130,8 @@ void syncPortolanStopLinks().catch((err) => console.warn('[startup] portolan lin
  * silently become an account-takeover bug.
  */
 const app = new Elysia()
+  // First, so its onRequest timestamp is taken before anything else runs.
+  .use(requestMetrics)
   .use(cors({ credentials: false }))
   .use(swagger(swaggerConfig))
   .use(healthRoutes)
@@ -144,13 +151,16 @@ const app = new Elysia()
   .use(adminConsoleConfigRoutes)
   .use(adminConsoleRoutes)
   .use(consoleUiRoutes)
+  .use(bridgeMeshRoutes)
   .use(landmarkRoutes)
   .use(tileRoutes)
   .use(graphhopperRoutes)
   .use(routeRoutes)
+  .use(matchRoutes)
   .use(isochroneRoutes)
   .use(transitRoutes)
   .use(gbfsRoutes)
+  .use(speechRoutes)
   .listen(port)
 
 // Give the rate limiters a real peer address to fall back on when no proxy has
@@ -166,6 +176,7 @@ startTransitWarmup()
 // Metered usage is buffered in memory and written periodically — see
 // services/usage.service.ts for why a write per request is not viable here.
 startUsageFlush()
+startRequestMetricsFlush()
 
 // Metered overage is batched to the billing provider on a timer — see
 // services/overage.service.ts. No-op unless Polar is configured.
@@ -187,7 +198,7 @@ assertAuthConfigured()
 // doesn't discard the last few seconds of billing counters.
 for (const signal of ['SIGTERM', 'SIGINT'] as const) {
   process.on(signal, () => {
-    void flushUsage().finally(() => process.exit(0))
+    void Promise.allSettled([flushUsage(), flushRequestMetrics()]).finally(() => process.exit(0))
   })
 }
 

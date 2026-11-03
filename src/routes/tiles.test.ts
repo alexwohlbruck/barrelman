@@ -120,6 +120,48 @@ describe('GET /tiles/:source/:z/:x/:y', () => {
     expect(new Uint8Array(await res.arrayBuffer())).toEqual(tileData)
   })
 
+  test("forwards Martin's gzip byte for byte rather than zipping it again", async () => {
+    const zipped = Bun.gzipSync(new Uint8Array(4096).fill(0x1a))
+    const mockFetch = mock<TileFetcher>(async () =>
+      new Response(zipped, { status: 200, headers: { 'content-type': 'application/x-protobuf' } }),
+    )
+    const app = new Elysia().use(createTileRoutes({ fetchTile: mockFetch }))
+    const res = await app.handle(get('/tiles/basemap/10/500/300', { 'accept-encoding': 'gzip' }))
+
+    expect(res.headers.get('content-encoding')).toBe('gzip')
+    expect(new Uint8Array(await res.arrayBuffer())).toEqual(zipped)
+  })
+
+  test("unzips Martin's gzip for a caller that cannot read it", async () => {
+    const tileData = new Uint8Array(4096).fill(0x1a)
+    const mockFetch = mock<TileFetcher>(async () =>
+      new Response(Bun.gzipSync(tileData), { status: 200, headers: { 'content-type': 'application/x-protobuf' } }),
+    )
+    const app = new Elysia().use(createTileRoutes({ fetchTile: mockFetch }))
+    const res = await app.handle(get('/tiles/basemap/10/500/300'))
+
+    expect(res.headers.get('content-encoding')).toBeNull()
+    expect(res.headers.get('vary')).toBe('Accept-Encoding')
+    expect(new Uint8Array(await res.arrayBuffer())).toEqual(tileData)
+  })
+
+  test('revalidates an unchanged tile with a 304 and no body', async () => {
+    const mockFetch = mock<TileFetcher>(async () =>
+      new Response(new Uint8Array([0x1a, 0x01, 0x02]), { status: 200, headers: { 'content-type': 'application/x-protobuf' } }),
+    )
+    const app = new Elysia().use(createTileRoutes({ fetchTile: mockFetch }))
+    const first = await app.handle(get('/tiles/basemap/10/500/300'))
+    const etag = first.headers.get('etag')
+    expect(etag).toMatch(/^W\/"/)
+
+    const again = await app.handle(get('/tiles/basemap/10/500/300', { 'if-none-match': etag! }))
+    expect(again.status).toBe(304)
+    expect((await again.arrayBuffer()).byteLength).toBe(0)
+
+    const other = await app.handle(get('/tiles/basemap/10/500/300', { 'if-none-match': 'W/"nope"' }))
+    expect(other.status).toBe(200)
+  })
+
   // `gzip;q=0` is the one case a substring match gets backwards.
   test('honours gzip;q=0 as a refusal', async () => {
     const mockFetch = mock<TileFetcher>(async () =>
@@ -642,5 +684,36 @@ describe('portolan tile routes', () => {
       if (saved === undefined) delete process.env.BARRELMAN_API_KEY
       else process.env.BARRELMAN_API_KEY = saved
     }
+  })
+})
+
+describe('deck pieces in detail tiles', () => {
+  const payload = Uint8Array.of(0x42, 0x44, 0x54, 0x31, 0, 0, 0, 0)
+  function app() {
+    const fetchTile = mock<TileFetcher>(async () => new Response(Uint8Array.of(0x1a, 0)))
+    const deckTile = mock(async (z: number) => ({ bytes: payload, complete: z !== 15 }))
+    return { app: new Elysia().use(createTileRoutes({ fetchTile, deckTile })), deckTile }
+  }
+
+  test('come in the tile when asked, at the deck zooms', async () => {
+    const { app: a, deckTile } = app()
+    const body = new Uint8Array(await (await a.handle(get('/tiles/detail/16/19296/24640?decks=1'))).arrayBuffer())
+    expect(deckTile).toHaveBeenCalledWith(16, 19296, 24640)
+    expect([...body.subarray(0, 2)]).toEqual([0x1a, 0])
+    expect([...body.subarray(-payload.length)]).toEqual([...payload])
+  })
+
+  test('keep a tile out of every cache when a deck in it could not be read', async () => {
+    const { app: a } = app()
+    expect((await a.handle(get('/tiles/detail/15/9648/12320?decks=1'))).headers.get('cache-control')).toBe('no-store')
+    expect((await a.handle(get('/tiles/detail/16/19296/24640?decks=1'))).headers.get('cache-control')).toContain('max-age')
+  })
+
+  test('stay out when not asked, below the deck zooms, or for another source', async () => {
+    const { app: a, deckTile } = app()
+    for (const path of ['/tiles/detail/16/19296/24640', '/tiles/detail/13/2412/3080?decks=1', '/tiles/basemap/16/19296/24640?decks=1']) {
+      expect((await (await a.handle(get(path))).arrayBuffer()).byteLength).toBe(2)
+    }
+    expect(deckTile).not.toHaveBeenCalled()
   })
 })

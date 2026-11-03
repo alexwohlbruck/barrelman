@@ -1,29 +1,44 @@
 <script setup lang="ts">
 /**
- * One account, as an operator sees it: what it has spent, what keys it holds
- * and what has been decided about it.
+ * One account, as an operator sees it: what it has spent, how its requests
+ * are being answered, what keys it holds and what has been decided about it.
+ * Opened from the accounts list and from the Traffic page.
  *
  * The same numbers a customer gets on `/console/usage`, plus a lifetime total —
  * an account that was abusive last month reads as spotless through a cycle
  * window, and the cycle is the only window the customer-facing view has.
  */
 import { computed, ref, watch } from 'vue'
-import { Ban, KeyRound, ShieldCheck } from 'lucide-vue-next'
+import { Ban, ShieldCheck } from 'lucide-vue-next'
 import Badge from '@/components/ui/Badge.vue'
-import Dialog from '@/components/ui/Dialog.vue'
+import Sheet from '@/components/ui/Sheet.vue'
 import Spinner from '@/components/ui/Spinner.vue'
+import Tabs from '@/components/ui/Tabs.vue'
 import StatTile from '@/components/StatTile.vue'
+import ApiKeyRow from '@/components/ApiKeyRow.vue'
+import TrafficPanel from '@/components/traffic/TrafficPanel.vue'
 import { getAdminUser } from '@/lib/api'
 import { toast } from '@/lib/toast'
 import { creditsPerDay, formatCycleDate, keyLabel, shortDay, totalsByEndpoint } from '@/lib/usage'
 import { formatNumber } from '@/lib/utils'
-import type { AdminUser, AdminUserDetail } from '@/lib/types'
+import type { AdminUserDetail } from '@/lib/types'
 
-const props = defineProps<{ account: AdminUser | null }>()
+/** `email` is only for the heading while the detail loads. */
+const props = defineProps<{ userId: string | null; email?: string | null }>()
 const emit = defineEmits<{ close: [] }>()
 
 const detail = ref<AdminUserDetail | null>(null)
 const loading = ref(false)
+const tab = ref('overview')
+/** Bumped when a key changes, so the traffic tables re-read exemption state. */
+const trafficRefresh = ref(0)
+
+const TABS = [
+  { value: 'overview', label: 'Overview' },
+  { value: 'traffic', label: 'Traffic' },
+  { value: 'keys', label: 'Keys' },
+  { value: 'history', label: 'History' },
+]
 
 const byDay = computed(() => creditsPerDay(detail.value?.usage.daily ?? []))
 const byEndpoint = computed(() => totalsByEndpoint(detail.value?.usage.daily ?? []))
@@ -40,16 +55,28 @@ const usedPercent = computed(() => {
   return Math.min(100, Math.round((balance.used / balance.monthlyCredits) * 100))
 })
 
-// Refetch whenever a different row is opened; the dialog is reused, so the
+async function reload() {
+  if (!props.userId) return
+  detail.value = await getAdminUser(props.userId)
+}
+
+/** A key editor saved: refresh the list, and the traffic tables beside it. */
+async function onKeyChanged() {
+  trafficRefresh.value += 1
+  await reload().catch(() => undefined)
+}
+
+// Refetch whenever a different row is opened; the pane is reused, so the
 // previous account's numbers would otherwise flash up under the new heading.
 watch(
-  () => props.account?.id,
+  () => props.userId,
   async (id) => {
     detail.value = null
+    tab.value = 'overview'
     if (!id) return
     loading.value = true
     try {
-      detail.value = await getAdminUser(id)
+      await reload()
     } catch (err) {
       toast({
         title: 'Could not load the account',
@@ -79,11 +106,10 @@ function actionVariant(action: string): BadgeVariant {
 </script>
 
 <template>
-  <Dialog
-    :open="account !== null"
-    :title="account?.email"
-    :description="account?.name || undefined"
-    class="max-w-3xl max-h-[85vh] overflow-y-auto"
+  <Sheet
+    :open="userId !== null"
+    :title="detail?.user.email ?? email ?? 'Account'"
+    :description="detail?.user.name || undefined"
     @update:open="emit('close')"
   >
     <div v-if="loading" class="flex justify-center py-16"><Spinner class="size-6" /></div>
@@ -104,6 +130,9 @@ function actionVariant(action: string): BadgeVariant {
         <span v-if="detail.suspension.until"> · lifts {{ formatDateTime(detail.suspension.until) }}</span>
       </p>
 
+      <Tabs v-model="tab" :tabs="TABS">
+      <template #overview>
+      <div class="flex flex-col gap-5">
       <!-- This cycle -->
       <section class="flex flex-col gap-3">
         <h3 class="text-sm font-medium">This billing cycle</h3>
@@ -215,38 +244,36 @@ function actionVariant(action: string): BadgeVariant {
         </div>
       </section>
 
-      <!-- Keys -->
+      </div>
+      </template>
+
+      <template #traffic>
+        <TrafficPanel :user-id="detail.user.id" :refresh-key="trafficRefresh" @keys-changed="onKeyChanged" />
+      </template>
+
+      <template #keys>
       <section>
-        <h3 class="mb-2 text-sm font-medium">
-          API keys
-          <span class="text-muted-foreground">({{ liveKeys.length }} active of {{ detail.keys.length }})</span>
-        </h3>
+        <p class="mb-3 text-sm text-muted-foreground">
+          {{ liveKeys.length }} active of {{ detail.keys.length }}. Changes are logged to this account's history.
+        </p>
         <p v-if="!detail.keys.length" class="text-sm text-muted-foreground">No keys.</p>
-        <ul v-else class="flex flex-col gap-1.5">
-          <li
+        <ul v-else class="flex flex-col gap-2">
+          <ApiKeyRow
             v-for="key in detail.keys"
             :key="key.id"
-            class="flex items-center gap-3 rounded-lg border border-border px-3 py-2 text-sm"
-          >
-            <KeyRound class="size-4 shrink-0 text-muted-foreground" />
-            <div class="min-w-0 flex-1">
-              <div class="flex flex-wrap items-center gap-2">
-                <span class="truncate font-medium">{{ key.name }}</span>
-                <code class="text-xs text-muted-foreground">{{ key.prefix }}…{{ key.last4 }}</code>
-                <Badge v-if="key.revokedAt" variant="muted">revoked</Badge>
-                <Badge v-for="scope in key.scopes" :key="scope" variant="secondary">{{ scope }}</Badge>
-              </div>
-              <p class="mt-0.5 text-xs text-muted-foreground">
-                Last used {{ formatDateTime(key.lastUsedAt) }}
-              </p>
-            </div>
-          </li>
+            :api-key="key"
+            mode="admin"
+            :scopes="detail.scopes"
+            :owner-is-admin="detail.user.role === 'admin'"
+            viewer-is-admin
+            @changed="onKeyChanged"
+          />
         </ul>
       </section>
+      </template>
 
-      <!-- Audit trail -->
+      <template #history>
       <section>
-        <h3 class="mb-2 text-sm font-medium">Moderation history</h3>
         <p v-if="!detail.history.length" class="text-sm text-muted-foreground">
           Nothing has been recorded against this account.
         </p>
@@ -271,6 +298,8 @@ function actionVariant(action: string): BadgeVariant {
           </li>
         </ul>
       </section>
+      </template>
+      </Tabs>
     </div>
-  </Dialog>
+  </Sheet>
 </template>

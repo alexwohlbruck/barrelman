@@ -72,7 +72,8 @@ the data key an administrator.
 
 ## API keys
 
-Created in the console at `/console/keys`.
+Created in the console at `/console/keys`, where the pencil on each key renames
+it, changes its scopes and origins, or revokes it.
 
 - **Shown once.** Only a SHA-256 digest is stored. A lost key is rolled, not
   recovered.
@@ -91,7 +92,8 @@ bill if it leaks.
 tiles  places  spatial  geocode  search  routing  transit  isochrone
 ```
 
-`['*']` means every group, and is the default. A key holding `*` alongside
+`['*']` means every group, and is the default. A separate `admin` scope reaches
+`/admin/*`; it is outside `*` and only an administrator's own keys may hold it. A key holding `*` alongside
 narrower scopes is stored as just `*` — keeping both would suggest the narrow
 ones constrain something.
 
@@ -134,7 +136,7 @@ URL restrictions, and the same reason both still meter. Refusals are recorded as
 rejected usage and count toward the penalty box, so a key being hammered from
 the wrong origin is visible rather than merely blocked.
 
-Set them when creating a key, or on an existing key from the globe button in
+Set them when creating a key, or on an existing key from its edit panel in
 `/console/keys`. Changes take effect immediately — the verification cache is
 evicted directly, as with revocation.
 
@@ -179,6 +181,10 @@ origin restrictions, suspension and usage recording all still apply — that is
 the difference between "we do not charge for it" and "we cannot see it". See
 [abuse controls](/self-hosting/abuse-controls) for why this is a plan rather
 than an exemption on the shared service key.
+
+An administrator can also lift the throttle for one key rather than a whole
+account. A key that has it shows **no rate limits** on its card. Only an
+administrator can change it; `PATCH /account/keys/:id` refuses the field.
 
 The per-visitor limit is what replaces the credit ceiling on `demo`. On a normal account
 the unit of abuse is the account, because the traffic is the customer's own; a

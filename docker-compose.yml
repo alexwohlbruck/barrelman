@@ -35,6 +35,18 @@ x-logging: &default-logging
     max-file: "3"
 
 services:
+  tts:
+    profiles: ["tts"]
+    image: ${TTS_IMAGE:-ghcr.io/remsky/kokoro-fastapi-cpu:v0.9.0}
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      WEB_CONCURRENCY: "1"
+      DEFAULT_VOICE: af_heart
+      MODEL_AUTO_UNLOAD_TIMEOUT_SECONDS: "0"
+    expose:
+      - "8880"
+
   barrelman-db:
     container_name: barrelman-db
     image: alexwohlbruck/barrelman-db:latest
@@ -242,9 +254,13 @@ services:
       # enrichment backfill get their own untimed connections (see src/db.ts).
       BARRELMAN_STATEMENT_TIMEOUT_MS: ${BARRELMAN_STATEMENT_TIMEOUT_MS:-10000}
       OLLAMA_HOST: ${OLLAMA_HOST:-http://ollama:11434}
+      TTS_URL: ${TTS_URL:-}
+      TTS_MODEL_REVISION: ${TTS_MODEL_REVISION:-v1.0}
       PORT: 5001
       BARRELMAN_API_KEY: ${BARRELMAN_API_KEY:-brm_dev_changeme}
       GRAPHHOPPER_URL: http://barrelman-graphhopper:8989
+      # Per-call deadline on GraphHopper (the /graphhopper proxy and /match).
+      GRAPHHOPPER_TIMEOUT_MS: ${GRAPHHOPPER_TIMEOUT_MS:-}
       MOTIS_URL: http://barrelman-motis:8080
       # Both default to the compose service names in code, so they only need
       # naming here so an operator CAN point them elsewhere — a shared Martin,
@@ -280,6 +296,7 @@ services:
       BARRELMAN_LANDMARKS_URL: ${BARRELMAN_LANDMARKS_URL:-}
       LANDMARKS_CONCURRENCY: ${LANDMARKS_CONCURRENCY:-}
       # On the data volume, so imported models survive a container rebuild.
+      BRIDGE_MESH_DIR: ${BRIDGE_MESH_DIR:-/data/bridge-meshes}
       LANDMARKS_CACHE_DIR: ${LANDMARKS_CACHE_DIR:-/data/landmarks}
       LANDMARK_SOURCE_PRIORITY: ${LANDMARK_SOURCE_PRIORITY:-}
       # Parallel GraphHopper calls per isochrone. Documented in
@@ -366,11 +383,13 @@ services:
 
       # ── Metering and abuse controls ──────────────────────────────────
       BARRELMAN_USAGE_FLUSH_MS: ${BARRELMAN_USAGE_FLUSH_MS:-}
+      BARRELMAN_REQUEST_METRICS_RETENTION_DAYS: ${BARRELMAN_REQUEST_METRICS_RETENTION_DAYS:-}
       BARRELMAN_BALANCE_CACHE_MS: ${BARRELMAN_BALANCE_CACHE_MS:-}
       BARRELMAN_OVERAGE_REPORT_MS: ${BARRELMAN_OVERAGE_REPORT_MS:-}
       BARRELMAN_ACCOUNT_SWEEP_MS: ${BARRELMAN_ACCOUNT_SWEEP_MS:-}
       BARRELMAN_TRUSTED_PROXY_HOPS: ${BARRELMAN_TRUSTED_PROXY_HOPS:-}
       BARRELMAN_ANON_RPM: ${BARRELMAN_ANON_RPM:-}
+      BARRELMAN_SERVICE_RPM: ${BARRELMAN_SERVICE_RPM:-}
       BARRELMAN_IP_RPM: ${BARRELMAN_IP_RPM:-}
       BARRELMAN_PER_KEY_SHARE: ${BARRELMAN_PER_KEY_SHARE:-}
       BARRELMAN_TILE_RATE_MULTIPLIER: ${BARRELMAN_TILE_RATE_MULTIPLIER:-}
@@ -462,6 +481,10 @@ services:
       GEOFABRIK_REPLICATION_URL: ${GEOFABRIK_REPLICATION_URL:-}
       # Incremental road markings (update-osm.sh → update-road-markings.sh).
       # Off unless set; console and scheduled runs pass their own switch.
+      # 0 builds MOTIS timetable-only on purpose (scripts/rebuild-motis.sh);
+      # gbfs builds its street graph only around the bikeshare areas.
+      # Unset, a street-routing build that fails falls back AND fails the job.
+      MOTIS_STREET_ROUTING: ${MOTIS_STREET_ROUTING:-}
       ROAD_MARKINGS_INCREMENTAL: ${ROAD_MARKINGS_INCREMENTAL:-}
       ROAD_MARKINGS_MAX_CELLS: ${ROAD_MARKINGS_MAX_CELLS:-}
       ROAD_MARKINGS_CELL: ${ROAD_MARKINGS_CELL:-}
@@ -474,11 +497,20 @@ services:
       OSM2PGSQL_PROCESSES: ${OSM2PGSQL_PROCESSES:-}
       # Terrain for Build Bridge Decks (import/generate-bridge-decks.ts), which
       # runs here. Blank reads Mapterhorn's public tiles.
+      BRIDGE_MESH_DIR: ${BRIDGE_MESH_DIR:-/data/bridge-meshes}
       BRIDGE_DECKS_DEM_TILES: ${BRIDGE_DECKS_DEM_TILES:-}
       # Incremental bridge decks (update-osm.sh → update-bridge-decks.ts).
       # On unless set to 0; console and scheduled runs pass their own switch.
       BRIDGE_DECKS_INCREMENTAL: ${BRIDGE_DECKS_INCREMENTAL:-}
       BRIDGE_DECKS_MAX_CELLS: ${BRIDGE_DECKS_MAX_CELLS:-}
+      # Incremental tunnel cuts (update-osm.sh → update-tunnel-cuts.ts), on
+      # unless set to 0, and the queued boxes each run rebuilds.
+      TUNNEL_CUTS_INCREMENTAL: ${TUNNEL_CUTS_INCREMENTAL:-}
+      TUNNEL_CUTS_MAX_BOXES: ${TUNNEL_CUTS_MAX_BOXES:-}
+      # Incremental sidewalk street names (update-osm.sh →
+      # update-sidewalk-street-names.ts), on unless set to 0.
+      SIDEWALK_STREET_NAMES_INCREMENTAL: ${SIDEWALK_STREET_NAMES_INCREMENTAL:-}
+      SIDEWALK_STREET_NAMES_MAX_BOXES: ${SIDEWALK_STREET_NAMES_MAX_BOXES:-}
       # ── Portolan (corrected transit geometry) ───────────────────────
       # Workspace root for import/portolan-sync.ts: portolan.json + style/ +
       # data/gtfs/ (raw feeds, portolan's own copies) + build/ (tiles, exports,

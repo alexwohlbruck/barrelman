@@ -92,7 +92,13 @@ export function editDistance(a: string, b: string, limit: number): number {
 
 /**
  * The corrections worth trying for `word` among `candidates` (word, number of
- * places containing it): within maxEdits, nearest first, then the most used.
+ * places containing it): within maxEdits, the most used first.
+ *
+ * Not nearest first. The data has its own misspellings, and on a country they
+ * sit one edit from every common word: "warehouse" has "warhouse" (8 places)
+ * and "wharehouse" (8) at one edit, which crowded out "wearhouse" (505 — the
+ * Men's Wearhouse chain) at two. How many places use a word is what says it is
+ * the one meant.
  */
 export function pickCorrections(word: string, candidates: Array<{ word: string; n: number }>): string[] {
   const limit = maxEdits(word.length)
@@ -100,7 +106,7 @@ export function pickCorrections(word: string, candidates: Array<{ word: string; 
     .filter((c) => c.word !== word)
     .map((c) => ({ ...c, d: editDistance(word, c.word, limit) }))
     .filter((c) => c.d <= limit)
-    .sort((x, y) => x.d - y.d || y.n - x.n)
+    .sort((x, y) => y.n - x.n || x.d - y.d)
     .slice(0, MAX_CORRECTIONS)
     .map((c) => c.word)
 }

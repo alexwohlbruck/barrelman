@@ -9,9 +9,19 @@
  * separate trace_attributes call like Valhalla required.
  */
 
+import { graphHopperUrl } from '../lib/graphhopper'
+import { nameSegments } from '../lib/sidewalk-names/stretches'
+import { pathStreetStretches, lookupWays, type WayLookup } from './sidewalk-names.service'
+import { dbRouteContextSource, getRouteContext, type RouteContextSource } from './route-context.service'
+import type { CrossingName } from '../lib/route-context/crossing-names'
+import type { Overpass } from '../lib/route-context/overpasses'
+import type { AreaStretch } from '../lib/route-context/area-stretches'
+import { tagEdgeSegments, type EdgeTags } from '../lib/route-context/edge-tags'
+
 // ── Types ───────────────────────────────────────────────────────────
 
-export interface RouteEdgeSegment {
+/** EdgeTags: on foot or by bike, what the edge's OSM ways and nodes are tagged, for guidance. */
+export interface RouteEdgeSegment extends EdgeTags {
   startDistance: number  // meters from leg start
   endDistance: number    // meters from leg start
   surface?: string
@@ -28,6 +38,11 @@ export interface RouteEdgeSegment {
   speedLimit?: number     // km/h — OSM max_speed tag (often undefined on US urban roads)
   bikePriority?: number   // 0–1 — GraphHopper's bike_priority encoded value (higher = friendlier for cycling)
   crossing?: string       // GH Crossing EV: MISSING | TRAFFIC_SIGNALS | MARKED | UNMARKED | UNCONTROLLED | RAILWAY | RAILWAY_BARRIER
+  osmWayId?: number       // the OSM way the edge belongs to, for POST /route/lanes
+  country?: string        // ISO 3166-1 alpha-3
+  streetName?: string     // the street an unnamed sidewalk runs beside, from sidewalk_street_names
+  streetNameSource?: 'tag' | 'geometry'
+  crossingName?: string   // the road a crossing crosses, where the crossing way has no name
 }
 
 export interface ElevationStats {
@@ -61,7 +76,25 @@ export interface EnrichedRouteResponse {
     elevation_stats: ElevationStats
     bbox: number[]
     details: Record<string, any[]>
+    overpasses: Overpass[]
+    states: RouteState[]
+    parks: RoutePark[]
   }>
+}
+
+/** A stretch inside one state or province (admin_level 4). */
+export interface RouteState {
+  startDistance: number
+  endDistance: number
+  name?: string
+  code?: string   // ISO 3166-2, e.g. US-NC
+}
+
+/** A stretch inside a park, on a walking route. */
+export interface RoutePark {
+  startDistance: number
+  endDistance: number
+  name?: string
 }
 
 export type FetchFn = (url: string, init: RequestInit) => Promise<Response>
@@ -72,7 +105,7 @@ const DEG_TO_RAD = Math.PI / 180
 const EARTH_RADIUS = 6371000 // meters
 
 /** Haversine distance between two points in meters */
-function haversine(
+export function haversine(
   lat1: number, lon1: number,
   lat2: number, lon2: number,
 ): number {
@@ -87,7 +120,7 @@ function haversine(
 }
 
 /** Build cumulative distance array for coordinate array */
-function buildCumulativeDistances(
+export function buildCumulativeDistances(
   coordinates: number[][],
 ): number[] {
   const distances = [0]
@@ -102,7 +135,7 @@ function buildCumulativeDistances(
 
 // ── Elevation stats ─────────────────────────────────────────────────
 
-function computeElevationStats(coordinates: number[][]): ElevationStats {
+export function computeElevationStats(coordinates: number[][]): ElevationStats {
   let totalGain = 0
   let totalLoss = 0
   let maxElevation = -Infinity
@@ -139,7 +172,7 @@ function computeElevationStats(coordinates: number[][]): ElevationStats {
  * GraphHopper returns details as arrays of [fromIndex, toIndex, value].
  * Merge all detail types into unified edge segments keyed by distance ranges.
  */
-function buildEdgeSegments(
+export function buildEdgeSegments(
   details: Record<string, any[]>,
   cumulativeDistances: number[],
 ): RouteEdgeSegment[] {
@@ -197,6 +230,12 @@ function buildEdgeSegments(
             case 'crossing':
               if (typeof value === 'string') seg.crossing = value
               break
+            case 'osm_way_id':
+              if (typeof value === 'number') seg.osmWayId = value
+              break
+            case 'country':
+              if (typeof value === 'string' && value !== 'MISSING') seg.country = value
+              break
           }
           break
         }
@@ -221,6 +260,8 @@ function buildEdgeSegments(
         prev.speedLimit === seg.speedLimit &&
         prev.bikePriority === seg.bikePriority &&
         prev.crossing === seg.crossing &&
+        prev.osmWayId === seg.osmWayId &&
+        prev.country === seg.country &&
         prev.getOffBike === seg.getOffBike) {
       prev.endDistance = seg.endDistance
     } else {
@@ -231,14 +272,23 @@ function buildEdgeSegments(
   return merged
 }
 
-// ── Main service function ───────────────────────────────────────────
-
-function getGraphHopperUrl(): string {
-  return process.env.GRAPHHOPPER_URL || 'http://barrelman-graphhopper:8989'
+/** Names the crossing segments with the road each crosses. */
+export function nameCrossingSegments(segments: RouteEdgeSegment[], names: CrossingName[]): RouteEdgeSegment[] {
+  if (!names.length) return segments
+  return segments.map(seg => {
+    if (!seg.crossing) return seg
+    const mid = (seg.startDistance + seg.endDistance) / 2
+    const named = names.find(n => n.startDistance - 0.1 <= mid && mid <= n.endDistance + 0.1)
+    return named ? { ...seg, crossingName: named.name } : seg
+  })
 }
 
+const stretch = ({ startDistance, endDistance, name }: AreaStretch) => ({ startDistance, endDistance, ...(name && { name }) })
+
+// ── Main service function ───────────────────────────────────────────
+
 /** All path details we request from GraphHopper for enriched responses */
-const DETAIL_KEYS = [
+export const DETAIL_KEYS = [
   'surface',
   'road_class',
   'road_environment',
@@ -255,11 +305,39 @@ const DETAIL_KEYS = [
   'crossing',
 ]
 
+/** Details asked for only where the graph was built with them: an older graph rejects the whole request. */
+export const OPTIONAL_DETAIL_KEYS = ['osm_way_id', 'country']
+
+const INFO_TTL_MS = 10 * 60_000
+let encodedValues: { at: number; keys: Set<string> } | null = null
+
+/** The encoded values GraphHopper's graph carries, from /info; empty when it can't say. */
+export async function graphEncodedValues(fetchFn: FetchFn = (url, init) => fetch(url, init)): Promise<Set<string>> {
+  if (encodedValues && Date.now() - encodedValues.at < INFO_TTL_MS) return encodedValues.keys
+  try {
+    const res = await fetchFn(`${graphHopperUrl()}/info`, { signal: AbortSignal.timeout(3000) })
+    const info = res.ok ? ((await res.json()) as { encoded_values?: Record<string, unknown> }) : null
+    const keys = new Set(Object.keys(info?.encoded_values ?? {}))
+    encodedValues = { at: Date.now(), keys }
+    return keys
+  } catch {
+    return new Set()
+  }
+}
+
+/** Forget the cached /info, after a graph rebuild or in tests. */
+export function resetEncodedValues(): void {
+  encodedValues = null
+}
+
 export async function getEnrichedRoute(
   requestBody: any,
   fetchFn: FetchFn = (url, init) => fetch(url, init),
+  lookup: WayLookup = lookupWays,
+  context: RouteContextSource = dbRouteContextSource,
 ): Promise<EnrichedRouteResponse> {
-  const ghUrl = getGraphHopperUrl()
+  const ghUrl = graphHopperUrl()
+  const available = await graphEncodedValues(fetchFn)
 
   // Build the GraphHopper route request with all enrichment details
   const routeRequest = {
@@ -267,7 +345,11 @@ export async function getEnrichedRoute(
     elevation: true,
     points_encoded: false,
     instructions: requestBody.instructions ?? true,
-    details: [...new Set([...(requestBody.details || []), ...DETAIL_KEYS])],
+    details: [...new Set([
+      ...(requestBody.details || []),
+      ...DETAIL_KEYS,
+      ...OPTIONAL_DETAIL_KEYS.filter(key => available.has(key)),
+    ])],
   }
 
   if (!routeRequest.points || !Array.isArray(routeRequest.points) || routeRequest.points.length < 2) {
@@ -288,18 +370,29 @@ export async function getEnrichedRoute(
   const routeData = await routeResponse.json() as any
 
   // Enrich each path with edge segments and elevation stats
-  const enrichedPaths = (routeData.paths || []).map((path: any) => {
+  const enrichedPaths = await Promise.all((routeData.paths || []).map(async (path: any) => {
     const coordinates: number[][] = path.points?.coordinates || []
     const cumulativeDistances = buildCumulativeDistances(coordinates)
     const elevationStats = computeElevationStats(coordinates)
-    const edgeSegments = buildEdgeSegments(path.details || {}, cumulativeDistances)
+    const [stretches, around] = await Promise.all([
+      pathStreetStretches(coordinates, cumulativeDistances, path.details, lookup),
+      getRouteContext({ coordinates, distances: cumulativeDistances, details: path.details, profile: requestBody.profile }, context),
+    ])
+    const edgeSegments = tagEdgeSegments(
+      nameCrossingSegments(nameSegments(buildEdgeSegments(path.details || {}, cumulativeDistances), stretches), around.crossingNames),
+      around.edgeTags,
+      around.edgeMarks,
+    )
 
     return {
       ...path,
       edge_segments: edgeSegments,
       elevation_stats: elevationStats,
+      overpasses: around.overpasses,
+      states: around.states.map(s => ({ ...stretch(s), ...(s.code && { code: s.code }) })),
+      parks: around.parks.map(stretch),
     }
-  })
+  }))
 
   return {
     paths: enrichedPaths,

@@ -8,9 +8,10 @@
  * between them, and a deck that lands on the ground ends where its outline
  * does, at whatever skew the abutment was drawn.
  */
-import { along, beside, box, covers, crossings, inside, MAX_REACH, meet, metresPerUnit, nearSegments, type Box, type Chain, type Point } from './profile'
+import type { OutlineLevel } from './elevation'
+import { along, beside, box, covers, crossings, detab, inside, MAX_REACH, meet, metresPerUnit, nearSegments, type Box, type Chain, type Point } from './profile'
 
-export type Outline = { id: string; rings: Point[][] }
+export type Outline = { id: string; rings: Point[][] } & OutlineLevel
 
 /**
  * Metres from the centreline to each edge at every sample, and how far each
@@ -202,7 +203,11 @@ export function shapeDecks(decks: Deck[], outlines: Outline[], grounded: Array<[
     const n = pts.length
     const near = outlines.flatMap((_, j) => (meet(boxes[k], bounds[j]) ? [j] : []))
     if (!near.length) return null
-    const home = pts.map(p => near.find(j => covers(bounds[j], p) && within(p, outlines[j].rings)) ?? -1)
+    const holding = pts.map(p => near.filter(j => covers(bounds[j], p) && within(p, outlines[j].rings)))
+    // Where outlines overlap, as where a ramp passes under another bridge, a sample keeps to the one holding most of the deck.
+    const held = new Map<number, number>()
+    for (const js of holding) for (const j of js) held.set(j, (held.get(j) ?? 0) + 1)
+    const home = holding.map(js => (js.length ? js.reduce((a, b) => (held.get(b)! > held.get(a)! ? b : a)) : -1))
     if (home.every(h => h < 0)) return null
     const d = along(pts)
     const fromEnd = (i: number, end: 0 | 1) => Math.abs(d[end ? n - 1 : 0] - d[i])
@@ -250,11 +255,11 @@ export function shapeDecks(decks: Deck[], outlines: Outline[], grounded: Array<[
     if (first < 0) return null
     const last = read.lastIndexOf(true)
     // An end running on past its outline keeps the outline's last width for as far as its cap may reach; a gap between outlines has the deck's own.
-    const shaped = sides.map((s, side) => despike(s.map((v, i) => {
+    const shaped = sides.map((s, side) => detab(despike(s.map((v, i) => {
       if (!Number.isNaN(v)) return v
       const from = i < first ? first : i > last ? last : -1
       return from >= 0 && Math.abs(d[i] - d[from]) <= CAP_MAX ? s[from] : deck.edges[side]
-    }))) as [number[], number[]]
+    })))) as [number[], number[]]
     // A side standing out of its outline is cut back to it, but never inside the carriageway. Near a grounded
     // end, whose square end meets the road beyond however the abutment is skewed, only a side at the most a
     // deck may reach, unless the deck is one of a junction the bridge carries, whose ends meet no single road.
