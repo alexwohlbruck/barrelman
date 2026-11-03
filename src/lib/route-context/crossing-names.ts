@@ -82,6 +82,8 @@ export function nameCrossings(spans: CrossingSpan[], roads: CrossedRoad[]): Cros
 
 /** Steeper than this to a road is crossing it straight over, not cutting a corner. */
 const MAX_DIAGONAL_DEG = 65
+/** Shallower than this is running along the road, as a crosswalk does beside the street it carries on. */
+const MIN_DIAGONAL_DEG = 25
 /** Roads nearer parallel than this are one street's carriageways, not two streets meeting. */
 const MIN_JUNCTION_DEG = 30
 
@@ -92,7 +94,8 @@ export function diagonalCrossings(spans: CrossingSpan[], roads: CrossedRoad[]): 
     const span = spans[road.span]
     if (!span || road.bearing == null || span.line.length < 2) continue
     const heading = bearing(span.line[0], span.line[span.line.length - 1])
-    if (lineAngle(heading, road.bearing) > MAX_DIAGONAL_DEG) continue
+    const angle = lineAngle(heading, road.bearing)
+    if (angle < MIN_DIAGONAL_DEG || angle > MAX_DIAGONAL_DEG) continue
     oblique.set(road.span, [...(oblique.get(road.span) ?? []), road])
   }
   return [...oblique].filter(([, met]) => met.some(a => met.some(b =>

@@ -56,4 +56,13 @@ describe('diagonalCrossings', () => {
     ]
     expect(diagonalCrossings([diagonal, straight], [...renamed, ...carriageways])).toEqual([])
   })
+
+  test('not one straight across an avenue, in line with the street it carries on', () => {
+    const roads = [
+      { span: 1, name: 'Madison Avenue', at: centre, bearing: 0 },
+      { span: 1, name: 'East 41st Street', at: centre, bearing: 90 },
+    ]
+    const across: CrossingSpan = { ...straight, line: [at(-10, 0), at(10, 0)] }
+    expect(diagonalCrossings([across], roads)).toEqual([])
+  })
 })
