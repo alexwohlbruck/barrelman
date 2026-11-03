@@ -12,17 +12,46 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ### Added
 
+* `POST /route/lanes` draws a driving route in its lanes and says which lanes lead on at each turn, from the ways' OSM lane tags read by the road markings' rules. Lane changes curve in before the stop line and turns follow an arc; left-hand traffic is supported. With `profile: "bike"` the line runs down the bike lane, or just inside the outer traffic lane, and separately mapped paths keep their own line. Billed as routing.
+* `/route` edge segments carry `osmWayId` and `country` where the routing graph has them. `graphhopper-config.yml` now encodes `osm_way_id`; run `scripts/rebuild-graphhopper.sh` after upgrading for lane geometry.
+* Walking and cycling `/route` edge segments say more for turn-by-turn guidance: crosswalk islands, push-button signals and diagonal crossings, passages through buildings, which side the bike lane is on, station entrances, levels, escalators and elevators. Run the "Build Route Context Indexes" task after upgrading for entrances, elevators and push buttons on nodes.
+
+### Changed
+
+* `indoor_map` flights are one point per escalator or stair at its middle, with `width`, `length` and uphill `bearing`, in place of per-tread polygons and the `height` column. A `down` flight beside an `up` one climbs the same way. Stairwells and lift shafts no longer get walls.
+
+### Fixed
+
+* Requests made with the service key (`BARRELMAN_API_KEY`) get their own per-address ceiling, `BARRELMAN_SERVICE_RPM` (default 6000/min), instead of the anonymous 120/min, which a backend fanning out one trip plan's calls hit at once.
+
+## [0.10.37] - 2026-11-02
+
+### Fixed
+
+* 3D buildings no longer flicker in a checkerboard where a tall building part rises out of a shorter one drawn round its base, as the GM Building's tower does from its podium. Each part now has the footprints of overlapping parts that span at least its whole height cut out of it. The `buildings_3d` view is rebuilt on the first start after upgrading, and the 3D buildings layer is empty until that finishes, which takes hours on a country-sized import.
+* Portolan syncs print the feeds that have GTFS but are on no map (needs portolan 0.5.3). Portolan 0.5.3 also stops a failed metro-area group from hiding its members. That failure took Chicago's L, Metra and South Shore Line, and transit in Boston, St. Louis, San Diego, Denver and Toronto, off the transit layer.
+* Transit trips that their feed publishes without a shape no longer draw as straight lines between stops. The GTFS import lends each one the shape of a trip on the same route that runs past all of its stops; in New York that fixes about 6,000 subway trips, mostly short-turn and local runs. Run the "Fill Trip Shapes" task and rebuild MOTIS to apply it to feeds already imported.
+
+## [0.10.36] - 2026-10-30
+
+### Added
+
 * `POST /route/hazards` lists the hazards along a route from OSM tags the routing graph doesn't carry: traffic lights, stop and give-way signs facing the route, tram rails and shallow tram crossings, unlit, flood-prone and sidewalk-less ways, low clearances, tolls, speed cameras, traffic calming, movable bridges and posted hazards. Run the "Build Route Hazard Indexes" task after upgrading to keep it fast. Billed as routing.
 * Walking routes name the street a separately mapped sidewalk runs beside, so directions can say "Turn left onto W 3rd St" instead of "Turn left". Run Build Sidewalk Street Names, and rebuild the routing graph once, to turn it on.
 * `/route` describes what a route passes for voice guidance: each crosswalk segment names the road it crosses (`crossingName`), and each path lists the roads and railways passing over it (`overpasses`), the states or provinces it runs through (`states`), and, on foot, the parks it enters (`parks`). Run the "Build Route Context Indexes" task after upgrading to turn it on.
 
 ### Changed
 
+* Vector tiles leave `/tiles` as Martin compressed them instead of being unzipped and compressed again, which took about 10 ms of API time per dense tile. Every tile now carries an `ETag`, so a browser or CDN holding an expired tile revalidates with a `304` instead of downloading it again.
 * Line heights on bridge decks and through tunnels are written when the data is built, not on each tile request: into each transit pyramid as portolan builds it, and into `bicycle_ways.elevation` by Elevate Bicycle Ways. Serving tiles costs nothing extra.
 
 ### Fixed
 
 * A small town far away no longer takes the top search result from a closer match. A town's search reach now follows its population when OSM records one, so "jamaica" from Brooklyn finds the Jamaica LIRR station instead of Jamaica, Vermont (pop. 1,005, 285 km away).
+* The nightly GTFS import no longer fails, so the MOTIS rebuild after it runs again. It misread every feed file that opens with a UTF-8 byte-order mark, as many Windows-written feeds do. Those feeds looked like timetables with no trips: 122 US feeds were rejected outright, and before that they imported without any lines at their stops. Any one failed feed also failed the whole run, which skipped the walking transfers and the MOTIS rebuild for every other feed. GTFS-Flex-only feeds are now skipped as having nothing to import. The run fails only when more than 15% of feeds fail, and otherwise lists the ones that did.
+* A GTFS feed that fails or is skipped now keeps its previous ZIP, matching the database contents it keeps. Its new download used to overwrite that ZIP before the import was checked. One night a near-empty download (later padded with only `transfers.txt`) then made the MOTIS rebuild abort with "no loader for gtfs/67.zip found". The MOTIS rebuild now also drops a feed named in that error and retries, instead of reading it as a street-routing failure.
+* The GTFS import uses about half the memory on large feeds, and no longer gets OOM-killed partway through the United States. It used to hold all of `stop_times.txt` as one record per row, both to derive each stop's lines and to rewrite trip ids for realtime matching. For New York's Brooklyn bus feed alone, the rewrite peaked at 6.8 GB; it now streams the file and peaks at 1.6 GB.
+* Bikeshare, scooter, bike and park-and-ride trips no longer vanish after a MOTIS rebuild. MOTIS's street import fails on a way whose node is missing, which replication leaves behind in a merged extract, and on a junction with more than 16 ways, which the United States has a few of. The rebuild then quietly fell back to a timetable-only dataset that answers none of those trips. It now builds MOTIS from a copy of the extract without those ways, and the extract itself is untouched. If street routing still can't build, the log names the cause and the job fails rather than reporting success. Set `MOTIS_STREET_ROUTING=0` to choose timetable-only deliberately, or `MOTIS_STREET_ROUTING=gbfs` to build MOTIS's street graph only around your bikeshare systems. That is the setting for a region too large to build whole, like the United States on a 32 GB host.
 * GTFS feed replacements now commit stops, routes, stop-route associations, transfers, and shapes together. Incomplete timetables and failed database writes retain the previous feed and report an import failure instead of leaving stations with missing service data.
 
 ## [0.10.35] - 2026-10-28

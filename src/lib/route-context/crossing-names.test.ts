@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { crossingSpans, nameCrossings } from './crossing-names'
+import { crossingSpans, diagonalCrossings, nameCrossings, type CrossingSpan } from './crossing-names'
 import type { LonLat } from '../route-hazards/route-path'
 
 const at = (east: number, north = 0): LonLat => [-73.99 + east / (111_320 * Math.cos(40.75 * Math.PI / 180)), 40.75 + north / 111_320]
@@ -28,5 +28,44 @@ describe('nameCrossings', () => {
       { startDistance: 0, endDistance: 20, name: 'West 34th Street' },
       { startDistance: 120, endDistance: 140, name: '7th Avenue' },
     ])
+  })
+})
+
+describe('diagonalCrossings', () => {
+  /** North-east across a junction of a north-south and an east-west street. */
+  const diagonal: CrossingSpan = { from: 0, to: 1, line: [at(-10, -10), at(10, 10)], startDistance: 0, endDistance: 28 }
+  const straight: CrossingSpan = { from: 2, to: 3, line: [at(0, 100), at(0, 120)], startDistance: 100, endDistance: 120 }
+  const centre = at(0, 0)
+
+  test('a crossing cutting obliquely through two streets where they meet', () => {
+    const roads = [
+      { span: 0, name: 'Broadway', at: centre, bearing: 0 },
+      { span: 0, name: 'Main Street', at: centre, bearing: 90 },
+    ]
+    expect(diagonalCrossings([diagonal], roads)).toEqual([0])
+  })
+
+  test('not one straight across a street whose name changes there, nor one street\'s two carriageways', () => {
+    const renamed = [
+      { span: 1, name: 'Main Street', at: centre, bearing: 90 },
+      { span: 1, name: 'Main Avenue', at: centre, bearing: 270 },
+    ]
+    const carriageways = [
+      { span: 0, name: 'North Boulevard', at: centre, bearing: 0 },
+      { span: 0, name: 'South Boulevard', at: centre, bearing: 185 },
+    ]
+    expect(diagonalCrossings([diagonal, straight], [...renamed, ...carriageways])).toEqual([])
+  })
+
+  test('not two crossings round a corner, from one corner to the opposite one', () => {
+    const corner: CrossingSpan = {
+      from: 0, to: 4, startDistance: 372, endDistance: 401,
+      line: [[-73.980109, 40.751547], [-73.980141, 40.751501], [-73.980222, 40.751535], [-73.980312, 40.751564], [-73.980349, 40.751513]],
+    }
+    const roads = [
+      { span: 0, name: 'East 40th Street', at: corner.line[2], bearing: 119 },
+      { span: 0, name: 'Madison Avenue', at: corner.line[2], bearing: 30 },
+    ]
+    expect(diagonalCrossings([corner], roads)).toEqual([])
   })
 })

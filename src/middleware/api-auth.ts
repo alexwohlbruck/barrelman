@@ -335,7 +335,7 @@ export function apiAuth(group: EndpointGroup, overrides: Partial<ApiAuthDeps> = 
     // misbehaving internal service can hammer the upstreams just as hard — but
     // skip scopes and credits.
     if (caller.kind !== 'account' || !caller.userId) {
-      const verdict = checkThrottle({ ip, group })
+      const verdict = checkThrottle({ ip, group, service: caller.kind === 'service' })
       if (!verdict.allowed) {
         return reject(
           429,

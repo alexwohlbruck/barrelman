@@ -48,7 +48,10 @@ export const TILE_BUNDLES: Record<string, readonly string[]> = {
     'ski_features',
     'sport_tracks',
     'woods',
+    'fixtures',
   ],
+  /** Building and station interiors: venues and their floor plans. */
+  indoor: ['indoor_venues', 'indoor_map'],
 }
 
 /**
