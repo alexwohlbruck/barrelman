@@ -2,10 +2,12 @@
  * The road a route crosses on a crosswalk. A crossing way carries no name of
  * its own, so it is read off the named road its line cuts through.
  */
-import { haversine, type LonLat } from '../route-hazards/route-path'
+import { bearing, haversine, lineAngle, type LonLat } from '../route-hazards/route-path'
 
 /** GraphHopper crossing values where a road is crossed on foot or by bike; railway crossings have no road to name. */
 const ROAD_CROSSINGS = new Set(['traffic_signals', 'marked', 'unmarked', 'uncontrolled'])
+
+export const isRoadCrossing = (value: unknown) => typeof value === 'string' && ROAD_CROSSINGS.has(value.toLowerCase())
 /** Longer than this is a stretch the route rides, not a road it crosses. */
 const MAX_CROSSING_METERS = 80
 /** A route of more crossings than this is not named at all, rather than named slowly. */
@@ -26,6 +28,8 @@ export interface CrossedRoad {
   name: string
   /** The point of the road nearest the crossing's middle. */
   at: LonLat
+  /** The road's compass bearing there. */
+  bearing?: number
 }
 
 export interface CrossingName {
@@ -44,7 +48,7 @@ export function crossingSpans(
   for (const entry of details?.crossing ?? []) {
     if (!Array.isArray(entry)) continue
     const [from, to, value] = entry as [number, number, unknown]
-    if (typeof value !== 'string' || !ROAD_CROSSINGS.has(value.toLowerCase()) || to <= from) continue
+    if (!isRoadCrossing(value) || to <= from) continue
     const startDistance = distances[from] ?? 0
     const endDistance = distances[to] ?? startDistance
     if (endDistance - startDistance > MAX_CROSSING_METERS) continue
@@ -74,4 +78,24 @@ export function nameCrossings(spans: CrossingSpan[], roads: CrossedRoad[]): Cros
     endDistance: spans[i].endDistance,
     name,
   }))
+}
+
+/** Steeper than this to a road is crossing it straight over, not cutting a corner. */
+const MAX_DIAGONAL_DEG = 65
+/** Roads nearer parallel than this are one street's carriageways, not two streets meeting. */
+const MIN_JUNCTION_DEG = 30
+
+/** Indexes of the spans that cut obliquely through two different streets where they meet, as an all-way walk's diagonal does. */
+export function diagonalCrossings(spans: CrossingSpan[], roads: CrossedRoad[]): number[] {
+  const oblique = new Map<number, CrossedRoad[]>()
+  for (const road of roads) {
+    const span = spans[road.span]
+    if (!span || road.bearing == null || span.line.length < 2) continue
+    const heading = bearing(span.line[0], span.line[span.line.length - 1])
+    if (lineAngle(heading, road.bearing) > MAX_DIAGONAL_DEG) continue
+    oblique.set(road.span, [...(oblique.get(road.span) ?? []), road])
+  }
+  return [...oblique].filter(([, met]) => met.some(a => met.some(b =>
+    a.name !== b.name && lineAngle(a.bearing!, b.bearing!) >= MIN_JUNCTION_DEG,
+  ))).map(([span]) => span).sort((a, b) => a - b)
 }
