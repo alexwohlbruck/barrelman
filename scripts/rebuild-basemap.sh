@@ -43,7 +43,23 @@ set -euo pipefail
 #                           Unset = uncapped. See the docker run below for why
 #                           you want this on a host that also serves traffic.
 #   PLANETILER_IMAGE        override the planetiler image
+#   BASEMAP_MAXZOOM         deepest zoom rendered (default: 15, planetiler's
+#                           limit). Each zoom past the last is drawn by
+#                           stretching its tiles, and MapLibre lays a stretched
+#                           tile out again for every deeper tile it covers — a
+#                           z14 tile of a city centre, 300-450 KB, once per
+#                           z15 tile and four times per z16 one. A z15 tile
+#                           holds a quarter of that. 14 is the OpenMapTiles
+#                           default, and what clients predating 15 expect.
 #   BASEMAP_RESTART_MARTIN  restart martin after the swap (default: 1)
+#   BASEMAP_TMP_DIR         where planetiler sorts its features, as a path the
+#                           Docker daemon can mount (a host path). Default: a
+#                           tmp/ beside the archive. A US render needs tens of
+#                           gigabytes there on top of the new archive; point
+#                           this at a roomier disk when the data volume is the
+#                           tight one. Running out mid-render does not fail
+#                           cleanly — planetiler reads its own truncated files
+#                           and crashes with ArrayIndexOutOfBounds and SIGSEGV.
 # =============================================================================
 
 CONTAINER="barrelman-martin"
@@ -51,6 +67,11 @@ DB_CONTAINER="${DB_CONTAINER:-barrelman-db}"
 PLANETILER_IMAGE="${PLANETILER_IMAGE:-ghcr.io/onthegomap/planetiler:latest}"
 PLANETILER_MEMORY="${PLANETILER_MEMORY:-4g}"
 PLANETILER_CONTAINER_MEMORY="${PLANETILER_CONTAINER_MEMORY:-}"
+BASEMAP_MAXZOOM="${BASEMAP_MAXZOOM:-15}"
+case "$BASEMAP_MAXZOOM" in
+  14|15) ;;
+  *) echo "BASEMAP_MAXZOOM must be 14 or 15 (planetiler renders no deeper), got: ${BASEMAP_MAXZOOM}" >&2; exit 2 ;;
+esac
 # Same throwaway image rebuild-graphhopper.sh and rebuild-motis.sh already use
 # for volume surgery.
 HELPER_IMAGE="${BASEMAP_HELPER_IMAGE:-alpine}"
@@ -64,7 +85,8 @@ BASEMAP_NAME="basemap.pmtiles"
 STAGING_NAME="${BASEMAP_NAME%.pmtiles}.next.pmtiles"
 LOCK_NAME=".basemap-rebuild.lock"
 # Older than this and the lock cannot belong to a live render, so it is reclaimed
-# rather than obeyed. Well above the longest observed render (~45 min).
+# rather than obeyed. Above the longest observed render (a US extract to z14
+# took 2h45m, and z15 takes somewhat longer).
 STALE_LOCK_HOURS="${BASEMAP_STALE_LOCK_HOURS:-6}"
 
 log() { echo "[$(date '+%H:%M:%S')] [basemap] $*"; }
@@ -176,8 +198,27 @@ fi
 
 OLD_SIZE=$(io_sh "stat -c %s /out/${BASEMAP_NAME} 2>/dev/null || echo 0" | tr -cd '0-9')
 io_sh "rm -f /out/${STAGING_NAME}" >/dev/null 2>&1 || true
+# The archive from two renders ago, gone before the new one is written rather
+# than after: the volume then holds one rollback copy instead of two while the
+# render needs room for its own output. The current archive becomes .prev at
+# the swap, so a bad render can still be rolled back.
+if io_sh "test -f /out/${BASEMAP_NAME} && test -f /out/${BASEMAP_NAME}.prev" >/dev/null 2>&1; then
+  log "Removing ${BASEMAP_NAME}.prev to make room (the current archive becomes .prev)"
+  io_sh "rm -f /out/${BASEMAP_NAME}.prev" >/dev/null 2>&1 || true
+fi
 
-log "[1/3] Rendering from ${PBF_NAME} (heap ${PLANETILER_MEMORY})..."
+TMP_ARGS=(-v "${OUT_DIR}:/out")
+TMP_PATH=/out/tmp
+if [ -n "${BASEMAP_TMP_DIR:-}" ]; then
+  TMP_ARGS+=(-v "${BASEMAP_TMP_DIR}:/work")
+  TMP_PATH=/work/planetiler-tmp
+fi
+# A crashed render leaves its sorted features behind, tens of gigabytes of them.
+clean_tmp() {
+  docker run --rm "${TMP_ARGS[@]}" "$HELPER_IMAGE" rm -rf "${TMP_PATH}" >/dev/null 2>&1 || true
+}
+
+log "[1/3] Rendering from ${PBF_NAME} to z${BASEMAP_MAXZOOM} (heap ${PLANETILER_MEMORY})..."
 log "      input:  ${IN_DIR}"
 log "      output: ${OUT_DIR}"
 
@@ -202,18 +243,21 @@ if ! docker run --rm \
   ${MEM_ARGS[@]+"${MEM_ARGS[@]}"} \
   -e JAVA_TOOL_OPTIONS="-Xmx${PLANETILER_MEMORY}" \
   -v "${IN_DIR}:/in:ro" \
-  -v "${OUT_DIR}:/out" \
+  "${TMP_ARGS[@]}" \
   "$PLANETILER_IMAGE" \
   --osm-path="/in/${PBF_NAME}" \
   --output="/out/${STAGING_NAME}" \
   --download \
   --download-dir=/out/sources \
-  --tmpdir=/out/tmp \
+  --tmpdir="${TMP_PATH}" \
+  --maxzoom="${BASEMAP_MAXZOOM}" \
   --force; then
   log "ERROR: planetiler failed — leaving the current basemap in place" >&2
   io_sh "rm -f /out/${STAGING_NAME}" >/dev/null 2>&1 || true
+  clean_tmp
   exit 1
 fi
+clean_tmp
 
 NEW_SIZE=$(io_sh "stat -c %s /out/${STAGING_NAME} 2>/dev/null || echo 0" | tr -cd '0-9')
 if [ "${NEW_SIZE:-0}" -eq 0 ]; then
