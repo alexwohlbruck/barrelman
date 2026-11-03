@@ -178,21 +178,21 @@ outlines AS MATERIALIZED (
    AND (COALESCE(b.tags->>'building', 'no') <> 'no' OR COALESCE(b.tags->>'building:part', 'no') <> 'no')
    AND COALESCE(b.tags->>'location', '') <> 'underground'
 ),
--- The outlines its rooms fill a fair share of, then every part, roof or annex
+-- The outlines its rooms fill a fair share of (a terminal's, any real share), then every part, roof or annex
 -- standing largely inside those or the rooms, and every canopy touching them.
 primary_buildings AS MATERIALIZED (
-  SELECT venue, ST_Union(geom) AS geom FROM outlines WHERE covered > 0.3 GROUP BY venue
+  SELECT venue, ST_Union(geom) AS geom FROM outlines WHERE covered > 0.3 OR (terminal AND covered > 0.1) GROUP BY venue
 ),
 venue_buildings AS MATERIALIZED (
   SELECT o.venue,
          string_agg(DISTINCT o.id, ';') AS buildings,
          -- Named for its biggest building, a car park only failing all else.
-         (array_agg(o.name ORDER BY o.parking, ST_Area(o.geom) DESC) FILTER (WHERE o.name IS NOT NULL AND o.covered > 0.3))[1] AS building_name,
-         count(DISTINCT o.name) FILTER (WHERE o.terminal AND o.covered > 0.3) AS terminals
+         (array_agg(o.name ORDER BY o.parking, ST_Area(o.geom) DESC) FILTER (WHERE o.name IS NOT NULL AND (o.covered > 0.3 OR (o.terminal AND o.covered > 0.1))))[1] AS building_name,
+         count(DISTINCT o.name) FILTER (WHERE o.terminal AND o.covered > 0.1) AS terminals
   FROM outlines o
   JOIN above_ground ag USING (venue)
   LEFT JOIN primary_buildings pb USING (venue)
-  WHERE o.covered > 0.3
+  WHERE (o.covered > 0.3 OR (o.terminal AND o.covered > 0.1))
      OR ST_Area(ST_Intersection(o.geom, ST_Union(ag.geom, COALESCE(pb.geom, ag.geom)))) > 0.4 * ST_Area(o.geom)
      -- A canopy over the drive outside is the building's too, and makes no sense standing alone.
      OR (o.canopy AND ST_Intersects(o.geom, pb.geom))
