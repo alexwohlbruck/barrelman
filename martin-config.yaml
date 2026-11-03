@@ -627,7 +627,9 @@ postgres:
         name: name
         ref: ref
         id: id
-        height: height
+        width: width
+        length: length
+        bearing: bearing
       buffer: 64
       clip_geom: true
 
@@ -647,6 +649,8 @@ postgres:
         surface: surface
         direction: direction
         width: width
+        length: length
+        bearing: bearing
       buffer: 64
       clip_geom: true
 

@@ -11,7 +11,8 @@
 --   wall    walls with real thickness, door openings cut out, per level
 --   area    rooms, areas, corridors, platforms, columns, stairs and lift shafts
 --   line    steps, escalators and indoor footways
---   flight  a stair or escalator's treads, each with its `height` as a share of a storey
+--   flight  a stair or escalator climbing from its level, at its middle: `width` and `length`
+--           in metres, `bearing` uphill in degrees
 --   poi     shops, amenities, gates, doors, lifts, and named rooms' labels
 --
 -- Every row carries `venue` and the venue's `default_level`, so a style can
@@ -61,7 +62,7 @@ $$;
 DO $$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_class WHERE relname = 'indoor_features' AND relkind = 'm')
-    AND COALESCE(obj_description(to_regclass('indoor_features'), 'pg_class'), '') <> 'v10' THEN
+    AND COALESCE(obj_description(to_regclass('indoor_features'), 'pg_class'), '') <> 'v12' THEN
     DROP MATERIALIZED VIEW indoor_features CASCADE;
   END IF;
 END $$;
@@ -341,7 +342,7 @@ gaps AS (
 wall_lines AS (
   SELECT venue, level, ST_Boundary(geom) AS geom, 0.3 AS half
   FROM member_levels
-  WHERE geom_type = 'area' AND class IN ('room', 'wall', 'stairs', 'elevator')
+  WHERE geom_type = 'area' AND class IN ('room', 'wall')
   UNION ALL
   SELECT venue, level, geom, 0.3 FROM member_levels WHERE geom_type = 'line' AND class = 'wall'
   UNION ALL
@@ -384,47 +385,51 @@ poi_kinds AS (
          END AS poi_key
   FROM points p
 ),
--- Each flight climbing from the level it starts on, as treads rising to the
--- floor above: only where `incline` says which way is up. A metre and a half
--- wide unless tagged, and never more steps than a storey has.
+-- Each flight climbing from the level it starts on, with its line drawn uphill:
+-- only where `incline` says which way is up. A metre and a half wide unless tagged.
 flight_lines AS (
-  SELECT ml.venue, ml.level, ml.class, ml.id,
-         CASE WHEN ml.class = 'escalator' THEN ml.tags->>'conveying' END AS subclass,
-         CASE WHEN ml.tags->>'incline' ~ '^down' THEN ST_Reverse(ST_LineMerge(ml.geom)) ELSE ST_LineMerge(ml.geom) END AS line,
-         least(greatest(COALESCE(substring(ml.tags->>'width' from '^[0-9]+(?:\.[0-9]+)?')::float8,
-                                 CASE WHEN ml.class = 'escalator' THEN 1.2 ELSE 1.5 END), 0.8), 6) / 2 AS half,
-         row_number() OVER (PARTITION BY ml.venue ORDER BY ml.osm_fid, ml.level) AS flight
+  SELECT ml.venue, ml.level, ml.class, ml.id, ml.osm_fid, ml.tags, ST_LineMerge(ml.geom) AS drawn,
+         ml.tags->>'incline' = 'up' AS up
   FROM member_levels ml
   WHERE ml.geom_type = 'line' AND ml.class IN ('steps', 'escalator')
     AND ml.tags->>'incline' ~ '^(up|down)$'
     AND array_length(ml.levels, 1) > 1 AND ml.level = ml.levels[1]
     AND ST_GeometryType(ST_LineMerge(ml.geom)) = 'ST_LineString'
 ),
-flight_steps AS (
-  SELECT fl.*, least(greatest(round(ST_Length(fl.line::geography) / 0.3)::int, 4), 20) AS steps
-  FROM flight_lines fl
-  WHERE fl.flight < 14000
-),
 flights AS (
-  SELECT fs.venue, fs.level, fs.class, fs.subclass, fs.id, fs.flight, i AS step,
-         (i + 1)::real / fs.steps AS height,
-         indoor_buffer(ST_LineSubstring(fs.line, i::float8 / fs.steps, (i + 1)::float8 / fs.steps), fs.half, 'endcap=flat join=mitre') AS geom
-  FROM flight_steps fs, generate_series(0, fs.steps - 1) i
+  SELECT fl.venue, fl.level, fl.class, fl.id,
+         CASE WHEN fl.class = 'escalator' THEN fl.tags->>'conveying' END AS subclass,
+         CASE WHEN COALESCE(beside.same_way, fl.up) THEN fl.drawn ELSE ST_Reverse(fl.drawn) END AS line,
+         least(greatest(COALESCE(substring(fl.tags->>'width' from '^[0-9]+(?:\.[0-9]+)?')::float8,
+                                 CASE WHEN fl.class = 'escalator' THEN 1.2 ELSE 1.5 END), 0.8), 6) AS width,
+         row_number() OVER (PARTITION BY fl.venue ORDER BY fl.osm_fid, fl.level) AS flight
+  FROM flight_lines fl
+  -- A `down` flight beside an `up` one climbs the same way: `down` is often
+  -- tagged for where an escalator carries you rather than how its way slopes.
+  LEFT JOIN LATERAL (
+    SELECT cos(ST_Azimuth(ST_StartPoint(n.drawn), ST_EndPoint(n.drawn)) - ST_Azimuth(ST_StartPoint(fl.drawn), ST_EndPoint(fl.drawn))) > 0 AS same_way
+    FROM flight_lines n
+    WHERE NOT fl.up AND n.up AND n.venue = fl.venue AND n.level = fl.level
+      AND ST_DWithin(n.drawn::geography, fl.drawn::geography, 6)
+      AND abs(sin(ST_Azimuth(ST_StartPoint(n.drawn), ST_EndPoint(n.drawn)) - ST_Azimuth(ST_StartPoint(fl.drawn), ST_EndPoint(fl.drawn)))) < 0.35
+    ORDER BY n.drawn <-> fl.drawn
+    LIMIT 1
+  ) beside ON true
 ),
 -- Feature ids: even for a shape's own rows (its id, level and whether it is a
 -- room's label), odd for what is derived per venue. A tile id cannot be negative.
 rows AS MATERIALIZED (
   SELECT (v.ord * 1048576) * 2 + 1 AS fid, v.venue, NULL::real AS level, 'venue' AS kind, NULL AS class, NULL AS subclass,
          v.name, NULL AS ref, NULL AS id, v.hull AS geom,
-         array_to_string(v.levels, ';') AS levels, v.level_names, v.buildings, NULL::real AS height
+         array_to_string(v.levels, ';') AS levels, v.level_names, v.buildings, NULL::real AS width, NULL::real AS length, NULL::real AS bearing
   FROM venues v
   UNION ALL
   SELECT (v.ord * 1048576 + 262144 + round(f.level * 100)::int) * 2 + 1, f.venue, f.level, 'floor', NULL, NULL,
-         NULL, NULL, NULL, f.geom, NULL, NULL, NULL, NULL
+         NULL, NULL, NULL, f.geom, NULL, NULL, NULL, NULL, NULL, NULL
   FROM floors_with_buildings f JOIN venues v USING (venue)
   UNION ALL
   SELECT (v.ord * 1048576 + 786432 + round(w.level * 100)::int) * 2 + 1, w.venue, w.level, 'wall', NULL, NULL,
-         NULL, NULL, NULL, w.geom, NULL, NULL, NULL, NULL
+         NULL, NULL, NULL, w.geom, NULL, NULL, NULL, NULL, NULL, NULL
   FROM walls w JOIN venues v USING (venue)
   WHERE NOT ST_IsEmpty(w.geom)
   UNION ALL
@@ -440,21 +445,23 @@ rows AS MATERIALIZED (
            -- What a room is for, for its tint: any shop is just `shop`.
            WHEN ml.class = 'room' THEN COALESCE(CASE WHEN ml.tags ? 'shop' THEN 'shop' END, ml.tags->>'amenity', ml.tags->>'room')
          END,
-         ml.name, ml.tags->>'ref', ml.id, ml.geom, NULL, NULL, NULL, NULL
+         ml.name, ml.tags->>'ref', ml.id, ml.geom, NULL, NULL, NULL, NULL, NULL, NULL
   FROM member_levels ml
   CROSS JOIN LATERAL (SELECT array_position(ml.levels, ml.level) AS n) pos
   WHERE (ml.class <> 'wall' OR ml.geom_type = 'area')
     -- A jet bridge's line is drawn as the corridor it stands for, below.
     AND (ml.geom_type <> 'line' OR ml.tags->>'aeroway' IS DISTINCT FROM 'jet_bridge')
+    -- A flight is drawn as itself on the level it climbs from.
+    AND NOT EXISTS (SELECT 1 FROM flight_lines fl WHERE fl.id = ml.id AND fl.venue = ml.venue AND fl.level = ml.level)
   UNION ALL
   SELECT (jb.osm_fid * 256 + jb.n * 2) * 2, jb.venue, jb.level, 'area', 'corridor', 'jet_bridge',
-         NULL, NULL, jb.id, jb.geom, NULL, NULL, NULL, NULL
+         NULL, NULL, jb.id, jb.geom, NULL, NULL, NULL, NULL, NULL, NULL
   FROM jet_bridge_levels jb
   UNION ALL
   -- Each flight's middle, for its icon: a line is too short to carry one along it.
   SELECT (ml.osm_fid * 256 + n * 2 + 1) * 2, ml.venue, ml.level, 'poi', ml.class,
          CASE WHEN ml.class = 'escalator' THEN ml.tags->>'conveying' END,
-         NULL, NULL, ml.id, ST_LineInterpolatePoint(ST_LineMerge(ml.geom), 0.5), NULL, NULL, NULL, NULL
+         NULL, NULL, ml.id, ST_LineInterpolatePoint(ST_LineMerge(ml.geom), 0.5), NULL, NULL, NULL, NULL, NULL, NULL
   FROM member_levels ml
   CROSS JOIN LATERAL (SELECT array_position(ml.levels, ml.level) AS n) pos
   WHERE ml.geom_type = 'line' AND ml.class IN ('steps', 'escalator')
@@ -466,7 +473,7 @@ rows AS MATERIALIZED (
          CASE WHEN ml.tags ? 'shop' THEN 'shop' WHEN ml.tags ? 'amenity' THEN 'amenity'
               WHEN ml.tags ? 'aeroway' THEN 'aeroway' ELSE 'room' END,
          COALESCE(ml.tags->>'shop', ml.tags->>'amenity', ml.tags->>'aeroway', ml.tags->>'room'),
-         ml.name, ml.tags->>'ref', ml.id, ST_PointOnSurface(ml.geom), NULL, NULL, NULL, NULL
+         ml.name, ml.tags->>'ref', ml.id, ST_PointOnSurface(ml.geom), NULL, NULL, NULL, NULL, NULL, NULL
   FROM member_levels ml
   CROSS JOIN LATERAL (SELECT array_position(ml.levels, ml.level) AS n) pos
   WHERE ml.geom_type = 'area' AND ml.class IN ('room', 'area', 'platform')
@@ -479,22 +486,24 @@ rows AS MATERIALIZED (
            WHEN p.class = 'elevator' THEN 'elevator'
            ELSE p.tags->>p.poi_key
          END,
-         p.name, p.tags->>'ref', p.id, p.geom, NULL, NULL, NULL, NULL
+         p.name, p.tags->>'ref', p.id, p.geom, NULL, NULL, NULL, NULL, NULL, NULL
   FROM poi_kinds p
   CROSS JOIN LATERAL (SELECT COALESCE(array_position(p.levels, p.level), 1) AS n) pos
   UNION ALL
-  SELECT (v.ord * 1048576 + 300000 + f.flight * 32 + f.step) * 2 + 1, f.venue, f.level, 'flight', f.class, f.subclass,
-         NULL, NULL, f.id, f.geom, NULL, NULL, NULL, f.height
+  SELECT (v.ord * 1048576 + 300000 + f.flight) * 2 + 1, f.venue, f.level, 'flight', f.class, f.subclass,
+         NULL, NULL, f.id, ST_LineInterpolatePoint(f.line, 0.5), NULL, NULL, NULL,
+         f.width, ST_Distance(ST_StartPoint(f.line)::geography, ST_EndPoint(f.line)::geography),
+         degrees(ST_Azimuth(ST_StartPoint(f.line)::geography, ST_EndPoint(f.line)::geography))
   FROM flights f JOIN venues v USING (venue)
 )
 SELECT r.fid, r.venue, r.level, v.default_level, r.kind, r.class, r.subclass,
-       r.name, r.ref, r.id, r.levels, r.level_names, r.buildings, r.height,
-       ST_Multi(CASE WHEN r.kind IN ('poi') THEN r.geom ELSE ST_CollectionExtract(ST_MakeValid(r.geom)) END) AS geom
+       r.name, r.ref, r.id, r.levels, r.level_names, r.buildings, r.width, r.length, r.bearing,
+       ST_Multi(CASE WHEN r.kind IN ('poi', 'flight') THEN r.geom ELSE ST_CollectionExtract(ST_MakeValid(r.geom)) END) AS geom
 FROM rows r
 JOIN venues v USING (venue)
 WITH NO DATA;
 
-COMMENT ON MATERIALIZED VIEW indoor_features IS 'v10';
+COMMENT ON MATERIALIZED VIEW indoor_features IS 'v12';
 CREATE UNIQUE INDEX IF NOT EXISTS indoor_features_fid_idx ON indoor_features (fid);
 CREATE INDEX IF NOT EXISTS indoor_features_geom_idx ON indoor_features USING GIST (geom);
 
@@ -505,5 +514,5 @@ SELECT fid, venue, default_level, name, levels, level_names, buildings, geom
 FROM indoor_features WHERE kind = 'venue';
 
 CREATE OR REPLACE VIEW indoor_map AS
-SELECT fid, venue, level, default_level, kind, class, subclass, name, ref, id, height, geom
+SELECT fid, venue, level, default_level, kind, class, subclass, name, ref, id, width, length, bearing, geom
 FROM indoor_features WHERE kind <> 'venue';
