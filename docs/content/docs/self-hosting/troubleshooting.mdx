@@ -390,6 +390,7 @@ Everything under `postgres:` in `martin-config.yaml` is queried live, so `parchm
 - `REBUILD_BASEMAP=0` is set on the update.
 - The update ran but the extract did not move, so the render was correctly skipped — the log says so.
 - Martin was never restarted after the swap. The rename replaces the directory entry, not the inode Martin already has open, so it goes on serving the old archive. The script restarts Martin unless `BASEMAP_RESTART_MARTIN=0`.
+- The render ran out of disk. planetiler does not fail cleanly when its sort files fill the disk: the job log fills with `ArrayIndexOutOfBoundsException` from `osm_pass2` and ends in a JVM `SIGSEGV`. The render needs room for the new archive beside the data volume's current one, plus tens of gigabytes of sort files for a US extract. Point `BASEMAP_TMP_DIR` at a roomier disk (see [configuration](/self-hosting/configuration#import-pipeline)).
 
 A browser holding day-old tiles looks identical to all four: `/tiles` sends `cache-control: max-age=86400`, so confirm with a hard reload or a direct `curl` before digging.
 

@@ -495,6 +495,10 @@ services:
       OSM2PGSQL_FLAT_NODES: ${OSM2PGSQL_FLAT_NODES:-}
       OSM2PGSQL_CACHE_MB: ${OSM2PGSQL_CACHE_MB:-}
       OSM2PGSQL_PROCESSES: ${OSM2PGSQL_PROCESSES:-}
+      # Basemap render (scripts/rebuild-basemap.sh). The tmp dir is a HOST path:
+      # the script hands it to `docker run -v`, so it is the daemon that mounts it.
+      BASEMAP_MAXZOOM: ${BASEMAP_MAXZOOM:-}
+      BASEMAP_TMP_DIR: ${BASEMAP_TMP_DIR:-}
       # Terrain for Build Bridge Decks (import/generate-bridge-decks.ts), which
       # runs here. Blank reads Mapterhorn's public tiles.
       BRIDGE_MESH_DIR: ${BRIDGE_MESH_DIR:-/data/bridge-meshes}
