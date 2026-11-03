@@ -15,10 +15,17 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 * `POST /route/lanes` draws a driving route in its lanes and says which lanes lead on at each turn, from the ways' OSM lane tags read by the road markings' rules. Lane changes curve in before the stop line and turns follow an arc; left-hand traffic is supported. With `profile: "bike"` the line runs down the bike lane, or just inside the outer traffic lane, and separately mapped paths keep their own line. Billed as routing.
 * `/route` edge segments carry `osmWayId` and `country` where the routing graph has them. `graphhopper-config.yml` now encodes `osm_way_id`; run `scripts/rebuild-graphhopper.sh` after upgrading for lane geometry.
 * Walking and cycling `/route` edge segments say more for turn-by-turn guidance: crosswalk islands, push-button signals and diagonal crossings, passages through buildings, which side the bike lane is on, station entrances, levels, escalators and elevators. Run the "Build Route Context Indexes" task after upgrading for entrances, elevators and push buttons on nodes.
+* **Gores are paved and hatched.** Where a ramp leaves a road, or two ramps
+  part, the wedge between their carriageways is paved with white chevrons out
+  to the nose, on the ground and on bridges, with no area mapped for it.
 
 ### Changed
 
 * `indoor_map` flights are one point per escalator or stair at its middle, with `width`, `length` and uphill `bearing`, in place of per-tread polygons and the `height` column. A `down` flight beside an `up` one climbs the same way. Stairwells and lift shafts no longer get walls.
+* **Bridge decks at junctions and splits.** A deck stays inside its bridge's
+  outline, so a junction carried on a bridge is no longer a slab reaching over
+  the ground beside it, and a ramp stays level with the road it leaves until
+  the gore's nose, which its deck paves.
 
 ### Fixed
 

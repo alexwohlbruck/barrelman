@@ -1230,6 +1230,9 @@ WHERE NOT EXISTS (SELECT 1 FROM _rm_roads o WHERE NOT road_minor(o.class) AND o.
                   AND ST_DWithin(o.g, n.pt, 0.05) AND o.osm_id <> ALL (n.ids));
 CREATE INDEX ON _rm_fork_members (x, y);
 ANALYZE _rm_fork_members;
+-- Each branch of a fork, ranked left to right across `u` (k), kept for the gores between them.
+DROP TABLE IF EXISTS _rm_fork_sides;
+CREATE TEMP TABLE _rm_fork_sides AS
 WITH fork AS (
   -- The stem: the one way whose traffic all the others divide or join. `u`
   -- points from the node along the branches; kl, kr are the stem's kerbs to
@@ -1249,13 +1252,14 @@ side AS (
          sum(b.width) OVER w - b.width as wl, sum(b.width) OVER (PARTITION BY f.x, f.y) as wt
   FROM fork f JOIN _rm_fork_members b ON b.x = f.x AND b.y = f.y AND b.osm_id <> f.stem
   WINDOW w AS (PARTITION BY f.x, f.y ORDER BY f.ux * b.uy - f.uy * b.ux DESC)
-),
-place AS (
+)
+SELECT * FROM side;
+WITH place AS (
   -- Where each branch's middle belongs across `u`, left positive; branches
   -- side by side only (no two at one bearing).
   SELECT *, CASE WHEN k = 1 THEN kl - width / 2 WHEN k = n THEN kr + width / 2
                  ELSE kl - (wl + width / 2) * stem_w / wt END as c
-  FROM (SELECT *, max(k) OVER (PARTITION BY x, y) as top FROM side) t
+  FROM (SELECT *, max(k) OVER (PARTITION BY x, y) as top FROM _rm_fork_sides) t
   WHERE n >= 2 AND top = n
 ),
 delta AS (
@@ -1648,7 +1652,7 @@ CREATE INDEX ON _rm_paint_flow (osm_type, osm_id);
 ANALYZE _rm_paint_flow;
 DROP TABLE IF EXISTS _rm_paint_areas;
 CREATE TEMP TABLE _rm_paint_areas AS
-SELECT m.g, m.s, m.stroke,
+SELECT m.g, m.s, m.stroke, false as bridge,
        CASE WHEN m.pattern = 'chevron' AND f.ux IS NULL THEN 'stripes' ELSE m.pattern END as pattern,
        COALESCE(m.colour, CASE WHEN m.americas AND (f.two_way OR o.opposed) THEN 'yellow' ELSE 'white' END) as color,
        f.ux, f.uy,
@@ -1662,6 +1666,43 @@ CROSS JOIN LATERAL (
                  WHERE a.osm_type = m.osm_type AND a.osm_id = m.osm_id AND a.oneway AND b.oneway
                    AND a.u[1] * b.u[1] + a.u[2] * b.u[2] < -0.5) as opposed
 ) o;
+-- Gores: between two branches side by side where a fork divides or joins,
+-- the wedge their carriageways leave until they stand 4 m apart (the nose,
+-- as a bridge deck paves it) is paved and hatched with chevrons pointing back
+-- at the traffic. Few gores are mapped (above). On a bridge where both are.
+INSERT INTO _rm_paint_areas (g, s, stroke, bridge, pattern, color, ux, uy, step)
+SELECT ST_CollectionExtract(w.g, 3), b.s, 'none', b.bridge, 'chevron', 'white', b.ux, b.uy, 4
+FROM (
+  SELECT ra.s, ra.bridge AND rb.bridge as bridge, n.pt,
+         CASE WHEN a.at_start THEN ra.g ELSE ST_Reverse(ra.g) END as la,
+         CASE WHEN b.at_start THEN rb.g ELSE ST_Reverse(rb.g) END as lb,
+         ST_Buffer(ST_OffsetCurve(ra.g, ra.kshift * ra.s), ra.width / 2 * ra.s, 'endcap=flat') as ca,
+         ST_Buffer(ST_OffsetCurve(rb.g, rb.kshift * rb.s), rb.width / 2 * rb.s, 'endcap=flat') as cb,
+         ra.width as wa,
+         -- The traffic's direction: away from the node where the branches divide, toward it where they join.
+         (a.ux + b.ux) / 2 * CASE WHEN a.at_start THEN 1 ELSE -1 END as ux,
+         (a.uy + b.uy) / 2 * CASE WHEN a.at_start THEN 1 ELSE -1 END as uy
+  FROM _rm_fork_sides a
+  JOIN _rm_fork_sides b ON b.x = a.x AND b.y = a.y AND b.k = a.k + 1 AND b.at_start = a.at_start
+  JOIN _rm_roads ra ON ra.osm_id = a.osm_id
+  JOIN _rm_roads rb ON rb.osm_id = b.osm_id
+  CROSS JOIN LATERAL (SELECT CASE WHEN a.at_start THEN ST_StartPoint(ra.g) ELSE ST_EndPoint(ra.g) END as pt) n
+) b
+-- The nose: the first point along the one branch, every 2 m out to 150 m, where the other's carriageway stands 4 m off its own.
+CROSS JOIN LATERAL (
+  SELECT min(t) as at FROM generate_series(2, 150, 2) t
+  WHERE t * b.s < ST_Length(b.la)
+    AND ST_Distance(ST_LineInterpolatePoint(b.la, least(1, t * b.s / nullif(ST_Length(b.la), 0))), b.cb) - b.wa / 2 * b.s >= 4 * b.s
+) nose
+CROSS JOIN LATERAL (
+  SELECT ST_MakeValid(ST_Difference(ST_Intersection(
+           ST_MakeValid(ST_MakePolygon(ST_AddPoint(ST_MakeLine(ST_LineSubstring(b.la, 0, least(1, (nose.at + 20) * b.s / nullif(ST_Length(b.la), 0))),
+                                                              ST_Reverse(ST_LineSubstring(b.lb, 0, least(1, (nose.at + 20) * b.s / nullif(ST_Length(b.lb), 0))))),
+                                                  ST_StartPoint(b.la)))),
+           ST_Buffer(b.pt, nose.at * b.s, 16)), ST_Union(b.ca, b.cb))) as g
+) w
+WHERE nose.at IS NOT NULL AND ST_Length(b.lb) > 0 AND NOT ST_IsEmpty(w.g) AND ST_Area(ST_CollectionExtract(w.g, 3)) > 4 * b.s * b.s
+  AND NOT EXISTS (SELECT 1 FROM _rm_paint_areas m WHERE m.bridge = b.bridge AND m.g && w.g AND ST_Intersects(m.g, ST_PointOnSurface(w.g)));
 CREATE INDEX ON _rm_paint_areas USING gist (g);
 ANALYZE _rm_paint_areas;
 
@@ -1757,7 +1798,7 @@ pieces AS (
   SELECT b.cx, b.cy, b.box, false, t.g
   FROM boxes b JOIN _rm_turns t ON t.g && b.box
   UNION ALL
-  SELECT b.cx, b.cy, b.box, false, a.g
+  SELECT b.cx, b.cy, b.box, a.bridge, a.g
   FROM boxes b JOIN _rm_paint_areas a ON a.g && b.box
 )
 -- Rounded kerbs carry far more vertices than a tile can show; 3 cm is well
@@ -1793,10 +1834,6 @@ SELECT ST_Union(cut) as cut
 FROM (
   SELECT floor(ST_X(c.cxy) / 400) as cx, floor(ST_Y(c.cxy) / 400) as cy, ST_Buffer(c.g, 2 * c.s, 2) as cut
   FROM (SELECT g, s, ST_PointOnSurface(g) as cxy FROM _rm_crossings) c
-  -- and painted areas, inside their outline: a line along one's edge runs on.
-  UNION ALL
-  SELECT floor(ST_X(ST_PointOnSurface(g)) / 400), floor(ST_Y(ST_PointOnSurface(g)) / 400), ST_Buffer(g, -0.5 * s)
-  FROM _rm_paint_areas
 ) cuts
 GROUP BY cx, cy;
 -- And the inside of a junction: the hull of the crosswalks round a node some
@@ -1821,8 +1858,12 @@ CREATE INDEX ON _rm_cuts USING gist (cut);
 CREATE INDEX ON _rm_boxes USING gist (cut);
 -- Centre and lane lines never run on inside a painted area's outline.
 DROP TABLE IF EXISTS _rm_paint_cuts;
-CREATE TEMP TABLE _rm_paint_cuts AS SELECT ST_Buffer(g, -0.15 * s) as cut FROM _rm_paint_areas;
+CREATE TEMP TABLE _rm_paint_cuts AS SELECT ST_Buffer(g, -0.15 * s) as cut, bridge FROM _rm_paint_areas;
 CREATE INDEX ON _rm_paint_cuts USING gist (cut);
+-- Every line breaks for a painted area inside its outline, on its own level only: a line along its edge runs on.
+DROP TABLE IF EXISTS _rm_paint_inner;
+CREATE TEMP TABLE _rm_paint_inner AS SELECT ST_Buffer(g, -0.5 * s) as cut, bridge FROM _rm_paint_areas;
+CREATE INDEX ON _rm_paint_inner USING gist (cut);
 -- Lane and centre lines stop short of a turning circle; edge lines run on round
 -- its kerb, so theirs are cut only where the kerb line around it takes over.
 DROP TABLE IF EXISTS _rm_turn_cuts;
@@ -1983,9 +2024,10 @@ CREATE INDEX ON _rm_approach_cuts (osm_id);
 -- Offsets are to the left of the way's direction. Backward lanes run on the
 -- left and forward lanes on the right; `split` is the line between them.
 DROP TABLE IF EXISTS road_markings_next;
+-- `way` says whose lane a line or band is, for Deck ends below; dropped before the swap.
 CREATE TABLE road_markings_next (
   fid bigserial CONSTRAINT road_markings_next_pk PRIMARY KEY, kind text, pattern text, color text, style text, bridge boolean,
-  geom geometry(Geometry, 4326));
+  geom geometry(Geometry, 4326), way bigint);
 
 DROP TABLE IF EXISTS _rm_lines;
 CREATE TEMP TABLE _rm_lines AS
@@ -2133,8 +2175,8 @@ WHERE o.park > 0 AND m.marks IS NOT NULL AND v.at IS NOT NULL;
 -- stalls of a parking lane that moves over. Dashes are cut
 -- here rather than by the client, a whole number to each way, so they run on
 -- across a join without starting over.
-INSERT INTO road_markings_next (kind, pattern, color, bridge, geom)
-SELECT l.kind, l.pattern, l.color, l.bridge, ST_Transform(h.paint, 4326)
+INSERT INTO road_markings_next (kind, pattern, color, bridge, geom, way)
+SELECT l.kind, l.pattern, l.color, l.bridge, ST_Transform(h.paint, 4326), l.osm_id
 FROM (SELECT *, NULL::float8 as hatch, NULL::float8 as step, NULL::float8 as lean FROM _rm_lines UNION ALL SELECT * FROM _rm_side_lines) l
 JOIN _rm_roads r ON r.osm_id = l.osm_id
 CROSS JOIN LATERAL (SELECT COALESCE(l.start_m, l.offset_m) as at_prev) ap
@@ -2162,7 +2204,8 @@ CROSS JOIN LATERAL (
         UNION ALL SELECT a.cut FROM _rm_approach_cuts a WHERE a.osm_id = l.osm_id
         UNION ALL SELECT rc.cut FROM _rm_road_cuts rc WHERE rc.osm_id = l.osm_id
         UNION ALL SELECT tc.cut FROM _rm_turn_cuts tc WHERE l.osm_id = ANY (tc.ids) AND tc.cut && o.line AND tc.edge = (l.kind = 'edge')
-        UNION ALL SELECT pc.cut FROM _rm_paint_cuts pc WHERE pc.cut && o.line AND l.kind IN ('centre', 'lane')) cuts
+        UNION ALL SELECT pi.cut FROM _rm_paint_inner pi WHERE pi.cut && o.line AND pi.bridge = l.bridge
+        UNION ALL SELECT pc.cut FROM _rm_paint_cuts pc WHERE pc.cut && o.line AND pc.bridge = l.bridge AND l.kind IN ('centre', 'lane')) cuts
 ) m
 -- A dash a cut leaves a stub of is left out.
 CROSS JOIN LATERAL (SELECT CASE WHEN l.pattern LIKE 'dashed%'
@@ -2185,8 +2228,8 @@ FROM _rm_turns WHERE edged;
 
 -- Coloured lanes: bike lanes green, bus lanes red, as bands of paint that
 -- stop where lane lines do.
-INSERT INTO road_markings_next (kind, pattern, color, bridge, geom)
-SELECT b.kind, 'fill', b.color, b.bridge, ST_Transform(ST_Multi(clipped), 4326)
+INSERT INTO road_markings_next (kind, pattern, color, bridge, geom, way)
+SELECT b.kind, 'fill', b.color, b.bridge, ST_Transform(ST_Multi(clipped), 4326), b.osm_id
 FROM (
   SELECT osm_id, g, s, bridge, 'bike_lane' as kind, 'green' as color, br_a as a, br_b as b,
          road_side_start(br_a, kerb_r, right_edge, prev_kerb_r, prev_right, track_r) - br_a as d, ease,
@@ -2228,7 +2271,8 @@ CROSS JOIN LATERAL (
         UNION ALL SELECT k.cut FROM _rm_boxes k WHERE k.cut && o.band AND b.osm_id = ANY (k.ids)
         UNION ALL SELECT a.band_cut FROM _rm_approach_cuts a WHERE a.osm_id = b.osm_id
         UNION ALL SELECT rc.cut FROM _rm_road_cuts rc WHERE rc.osm_id = b.osm_id
-        UNION ALL SELECT tc.cut FROM _rm_turn_cuts tc WHERE b.osm_id = ANY (tc.ids) AND tc.cut && o.band AND NOT tc.edge) cuts
+        UNION ALL SELECT tc.cut FROM _rm_turn_cuts tc WHERE b.osm_id = ANY (tc.ids) AND tc.cut && o.band AND NOT tc.edge
+        UNION ALL SELECT pi.cut FROM _rm_paint_inner pi WHERE pi.cut && o.band AND pi.bridge = b.bridge) cuts
 ) k
 -- A scrap under 5 m of lane long, cut off between a crosswalk and the edge
 -- of a junction, is left out.
@@ -2635,12 +2679,12 @@ INSERT INTO road_markings_next (kind, pattern, color, bridge, geom)
 -- Unstroked, it is still written, in a pattern no layer draws, so the queue can
 -- find where it was.
 SELECT 'restriction', CASE WHEN a.stroke IN ('no', 'none') OR ST_IsEmpty(i.g) THEN 'none' WHEN a.stroke = 'double_solid' THEN 'double'
-                           WHEN a.stroke = 'dashed' THEN 'dashed' ELSE 'solid' END, a.color, false,
+                           WHEN a.stroke = 'dashed' THEN 'dashed' ELSE 'solid' END, a.color, a.bridge,
        ST_Transform(ST_Boundary(CASE WHEN ST_IsEmpty(i.g) THEN a.g ELSE i.g END), 4326)
 FROM _rm_paint_areas a
 CROSS JOIN LATERAL (SELECT ST_Buffer(a.g, (CASE WHEN a.stroke = 'double_solid' THEN -0.3 ELSE -0.15 END) * a.s) as g) i;
 INSERT INTO road_markings_next (kind, pattern, color, bridge, geom)
-SELECT 'hatch', 'solid', a.color, false, ST_Transform(h.bars, 4326)
+SELECT 'hatch', 'solid', a.color, a.bridge, ST_Transform(h.bars, 4326)
 FROM _rm_paint_areas a
 CROSS JOIN LATERAL (SELECT road_area_hatch(a.g, a.pattern, a.step * a.s, a.ux, a.uy,
                                            (CASE WHEN a.stroke IN ('no', 'none') THEN 0.1 ELSE 0.45 END) * a.s) as bars) h
@@ -2805,6 +2849,56 @@ DELETE FROM road_glyphs_next g
 WHERE g.glyph LIKE 'road-%'
   AND (EXISTS (SELECT 1 FROM _rm_turns t WHERE t.g && ST_Transform(g.geom, 3857) AND ST_DWithin(t.p, ST_Transform(g.geom, 3857), t.radius * t.s))
        OR NOT EXISTS (SELECT 1 FROM road_surfaces_next s WHERE s.bridge = g.bridge AND s.kind IS NULL AND ST_Intersects(s.geom, g.geom)));
+
+-- ─── Deck ends ───────────────────────────────────────────────────────────────
+-- A road's own lines and lanes within DECK_END metres of the node where a
+-- bridge ends on it go with the bridge: the 3D deck draws them there, laid on
+-- its end and on the ground beyond, so the ground never draws them as well.
+-- Without decks they draw as any bridge paint does, where they lie.
+DROP TABLE IF EXISTS _rm_deck_ends;
+CREATE TEMP TABLE _rm_deck_ends AS
+WITH tagged AS (
+  SELECT r.osm_id, COALESCE(r.tags->>'bridge', 'no') <> 'no' as deck FROM _rm_roads r
+),
+-- The way carrying on from a bridge tagged as one, and which of its ends meets it.
+onward AS (
+  SELECT j.b_id as osm_id, j.b_start as at_start FROM _rm_joins j
+  JOIN tagged a ON a.osm_id = j.a_id AND a.deck JOIN _rm_roads b ON b.osm_id = j.b_id AND NOT b.bridge
+  UNION
+  SELECT j.a_id, j.a_start FROM _rm_joins j
+  JOIN _rm_roads a ON a.osm_id = j.a_id AND NOT a.bridge JOIN tagged b ON b.osm_id = j.b_id AND b.deck
+)
+SELECT e.osm_id, ST_Union(ST_Transform(ST_Buffer(ST_LineSubstring(r.g,
+         CASE WHEN e.at_start THEN 0 ELSE greatest(0, 1 - 15 / r.len_m) END,
+         CASE WHEN e.at_start THEN least(1, 15 / r.len_m) ELSE 1 END),
+       -- As wide as its own lanes or those it eases from, whichever is wider.
+       (greatest(abs(COALESCE(r.kerb_l, r.width / 2)), abs(COALESCE(r.kerb_r, r.width / 2)), abs(COALESCE(r.prev_kerb_l, 0)),
+                 abs(COALESCE(r.prev_kerb_r, 0)), abs(COALESCE(r.nxt_kerb_l, 0)), abs(COALESCE(r.nxt_kerb_r, 0))) + 1) * r.s,
+       'endcap=flat'), 4326)) as zone
+FROM onward e
+JOIN _rm_roads r ON r.osm_id = e.osm_id AND r.len_m > 0
+GROUP BY e.osm_id;
+CREATE INDEX ON _rm_deck_ends (osm_id);
+
+DROP TABLE IF EXISTS _rm_deck_paint;
+CREATE TEMP TABLE _rm_deck_paint AS
+-- A scrap of line under a metre long, where the zone's edge grazes it, is left out.
+SELECT m.fid, i.g as inside, o.g as outside
+FROM road_markings_next m
+JOIN _rm_deck_ends z ON z.osm_id = m.way AND m.geom && z.zone
+CROSS JOIN LATERAL (SELECT CASE WHEN m.pattern = 'fill' THEN 3 ELSE 2 END as dim) d
+CROSS JOIN LATERAL (SELECT COALESCE(ST_Collect(p.geom), 'GEOMETRYCOLLECTION EMPTY'::geometry) as g
+  FROM ST_Dump(ST_CollectionExtract(ST_Intersection(m.geom, z.zone), d.dim)) p WHERE d.dim = 3 OR ST_Length(p.geom::geography) >= 1) i
+CROSS JOIN LATERAL (SELECT COALESCE(ST_Collect(p.geom), 'GEOMETRYCOLLECTION EMPTY'::geometry) as g
+  FROM ST_Dump(ST_CollectionExtract(ST_Difference(m.geom, z.zone), d.dim)) p WHERE d.dim = 3 OR ST_Length(p.geom::geography) >= 1) o
+WHERE NOT m.bridge AND ST_Intersects(m.geom, z.zone);
+INSERT INTO road_markings_next (kind, pattern, color, style, bridge, geom)
+SELECT m.kind, m.pattern, m.color, m.style, true, p.inside
+FROM _rm_deck_paint p JOIN road_markings_next m ON m.fid = p.fid
+WHERE NOT ST_IsEmpty(p.inside);
+UPDATE road_markings_next m SET geom = p.outside FROM _rm_deck_paint p WHERE m.fid = p.fid;
+DELETE FROM road_markings_next WHERE fid IN (SELECT fid FROM _rm_deck_paint) AND ST_IsEmpty(geom);
+ALTER TABLE road_markings_next DROP COLUMN way;
 
 -- ─── Swap ────────────────────────────────────────────────────────────────────
 CREATE INDEX road_markings_next_geom_idx ON road_markings_next USING gist (geom);
