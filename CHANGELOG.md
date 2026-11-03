@@ -19,6 +19,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ### Fixed
 
+* Requests made with the service key (`BARRELMAN_API_KEY`) get their own per-address ceiling, `BARRELMAN_SERVICE_RPM` (default 6000/min), instead of the anonymous 120/min, which a backend fanning out one trip plan's calls hit at once.
+
 ## [0.10.37] - 2026-11-02
 
 ### Fixed

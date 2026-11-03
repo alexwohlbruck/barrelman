@@ -45,6 +45,15 @@ describe('anonymous traffic', () => {
     expect(checkThrottle({ ip: '203.0.113.2', group: 'search' }).allowed).toBe(true)
   })
 
+  test('the service key gets a ceiling of its own, far above an anonymous one', () => {
+    for (let i = 0; i < 200; i += 1) checkThrottle({ ip: '203.0.113.3', group: 'search' })
+    let refused = 0
+    for (let i = 0; i < 500; i += 1) {
+      if (!checkThrottle({ ip: '203.0.113.3', group: 'search', service: true }).allowed) refused += 1
+    }
+    expect(refused).toBe(0)
+  })
+
   test('reports the ip layer and a positive Retry-After', () => {
     let verdict = checkThrottle({ ip: '203.0.113.9', group: 'search' })
     for (let i = 0; i < 200 && verdict.allowed; i += 1) {
