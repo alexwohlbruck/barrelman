@@ -43,14 +43,17 @@ set -euo pipefail
 #                           Unset = uncapped. See the docker run below for why
 #                           you want this on a host that also serves traffic.
 #   PLANETILER_IMAGE        override the planetiler image
-#   BASEMAP_MAXZOOM         deepest zoom rendered (default: 15, planetiler's
-#                           limit). Each zoom past the last is drawn by
-#                           stretching its tiles, and MapLibre lays a stretched
-#                           tile out again for every deeper tile it covers — a
-#                           z14 tile of a city centre, 300-450 KB, once per
-#                           z15 tile and four times per z16 one. A z15 tile
-#                           holds a quarter of that. 14 is the OpenMapTiles
-#                           default, and what clients predating 15 expect.
+#   BASEMAP_MAXZOOM         deepest zoom rendered: 14 (default, the
+#                           OpenMapTiles one) or 15 (planetiler's limit). Each
+#                           zoom past the last is drawn by stretching its
+#                           tiles, and MapLibre lays a stretched tile out again
+#                           for every deeper tile it covers — a z14 tile of a
+#                           city centre, 300-450 KB, once per z15 tile and four
+#                           times per z16 one. A z15 tile holds a quarter of
+#                           that, but the archive doubles and the render's sort
+#                           files more than double: a US render to z15 passed
+#                           46 GB of them seven minutes in, and needs more
+#                           memory than a box serving traffic can spare.
 #   BASEMAP_RESTART_MARTIN  restart martin after the swap (default: 1)
 #   BASEMAP_TMP_DIR         where planetiler sorts its features, as a path the
 #                           Docker daemon can mount (a host path). Default: a
@@ -67,7 +70,7 @@ DB_CONTAINER="${DB_CONTAINER:-barrelman-db}"
 PLANETILER_IMAGE="${PLANETILER_IMAGE:-ghcr.io/onthegomap/planetiler:latest}"
 PLANETILER_MEMORY="${PLANETILER_MEMORY:-4g}"
 PLANETILER_CONTAINER_MEMORY="${PLANETILER_CONTAINER_MEMORY:-}"
-BASEMAP_MAXZOOM="${BASEMAP_MAXZOOM:-15}"
+BASEMAP_MAXZOOM="${BASEMAP_MAXZOOM:-14}"
 case "$BASEMAP_MAXZOOM" in
   14|15) ;;
   *) echo "BASEMAP_MAXZOOM must be 14 or 15 (planetiler renders no deeper), got: ${BASEMAP_MAXZOOM}" >&2; exit 2 ;;

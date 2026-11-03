@@ -21,7 +21,7 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ### Changed
 
-* The basemap is rendered to zoom 15 instead of 14 (`BASEMAP_MAXZOOM`, default 15). Close-in views stop stretching zoom-14 tiles that clients lay out again for every deeper tile, so a city centre lays out about a third as much basemap per close-in view (DC: a 360–410 KB zoom-14 tile against 75–160 KB zoom-15 ones); the archive is about twice the size. Clients keep working against it unchanged, and can raise their basemap maxzoom to 15 to benefit.
+* The basemap can be rendered to zoom 15 (`BASEMAP_MAXZOOM=15`; the default stays 14). Close-in views stop stretching zoom-14 tiles that clients lay out again for every deeper tile, so a city centre lays out about a third as much basemap per close-in view (DC: a 360–410 KB zoom-14 tile against 75–160 KB zoom-15 ones); the archive is about twice the size, and the render needs far more sort space and memory. Clients keep working against a z15 archive unchanged, and can raise their basemap maxzoom to 15 to benefit.
 
 * `indoor_map` flights are one point per escalator or stair at its middle, with `width`, `length` and uphill `bearing`, in place of per-tread polygons and the `height` column. A `down` flight beside an `up` one climbs the same way. Stairwells and lift shafts no longer get walls.
 * **Bridge decks at junctions and splits.** A deck stays inside its bridge's

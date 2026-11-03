@@ -419,13 +419,13 @@ export const SCRIPTS: ScriptDef[] = [
         type: 'select',
         apply: 'env',
         envVar: 'BASEMAP_MAXZOOM',
-        default: '15',
+        default: '14',
         options: [
-          { label: '15 — quick close-in views', value: '15' },
-          { label: '14 — OpenMapTiles default, smaller archive', value: '14' },
+          { label: '14 — OpenMapTiles default', value: '14' },
+          { label: '15 — quicker close-in views, twice the archive', value: '15' },
         ],
         description:
-          'Deepest zoom rendered: 15 (planetiler\'s limit) or 14. Clients draw deeper zooms by stretching these tiles, and a stretched tile is laid out again for every deeper tile it covers, so 15 keeps close-in views quick. 14 is the OpenMapTiles default.',
+          'Deepest zoom rendered: 14 or 15 (planetiler\'s limit). Clients draw deeper zooms by stretching these tiles, and a stretched tile is laid out again for every deeper tile it covers, so 15 keeps close-in views quick. It doubles the archive and needs far more sort space and memory: a US render passed 46 GB of sort files seven minutes in. Set BASEMAP_TMP_DIR to a roomy disk first.',
       },
       {
         name: 'PLANETILER_MEMORY',
