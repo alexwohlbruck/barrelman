@@ -136,3 +136,7 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS geo_places_indoor_geom_idx ON geo_places
          OR tags->>'railway' = 'platform' OR tags->>'public_transport' = 'platform'
          OR tags->>'aeroway' = 'gate')
     AND COALESCE(tags->>'indoor', '') <> 'no';
+
+-- Jet bridges join the indoor venue at their gate; most carry no indoor tags.
+CREATE INDEX CONCURRENTLY IF NOT EXISTS geo_places_jet_bridge_geom_idx ON geo_places USING GIST (geom)
+  WHERE tags->>'aeroway' = 'jet_bridge';

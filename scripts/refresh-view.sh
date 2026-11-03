@@ -22,7 +22,7 @@ set -euo pipefail
 
 VIEW="${1:?usage: refresh-view.sh <view>}"
 case "$VIEW" in
-  buildings_3d|street_furniture|sport_pitches|indoor_features) ;;
+  buildings_3d|street_furniture|sport_pitches|indoor_features|fixtures) ;;
   *) echo "Unknown view: $VIEW" >&2; exit 2 ;;
 esac
 

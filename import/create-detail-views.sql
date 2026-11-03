@@ -260,6 +260,40 @@ COMMENT ON MATERIALIZED VIEW street_furniture IS 'v3';
 CREATE UNIQUE INDEX IF NOT EXISTS street_furniture_fid_idx ON street_furniture (fid);
 CREATE INDEX IF NOT EXISTS street_furniture_centroid_idx ON street_furniture USING GIST (centroid);
 
+-- Fixtures: what a person finds their way by at street level, drawn as small
+-- square signs. A building's entrances, a station's stairs down, a lift up to
+-- the street. Indoor ones belong to floor plans (indoor_features).
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_class WHERE relname = 'fixtures' AND relkind = 'm')
+    AND COALESCE(obj_description(to_regclass('fixtures'), 'pg_class'), '') <> 'v1' THEN
+    DROP MATERIALIZED VIEW fixtures;
+  END IF;
+END $$;
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS fixtures AS
+SELECT (osm_id * 4 + CASE osm_type WHEN 'N' THEN 0 WHEN 'W' THEN 1 ELSE 2 END) AS fid,
+       id, centroid,
+       CASE
+         WHEN tags->>'railway' IN ('subway_entrance', 'train_station_entrance') THEN 'station_entrance'
+         WHEN tags->>'highway' = 'elevator' THEN 'elevator'
+         ELSE 'entrance'
+       END AS kind,
+       NULLIF(tags->>'ref', '') AS ref
+FROM geo_places
+WHERE geom_type = 'point'
+  AND (tags->>'railway' IN ('subway_entrance', 'train_station_entrance')
+       OR tags->>'highway' = 'elevator'
+       OR tags->>'entrance' IN ('main', 'yes'))
+  AND COALESCE(tags->>'indoor', 'no') = 'no'
+  AND COALESCE(tags->>'location', '') NOT IN ('indoor', 'underground')
+  AND COALESCE(tags->>'access', '') NOT IN ('private', 'no')
+WITH NO DATA;
+
+COMMENT ON MATERIALIZED VIEW fixtures IS 'v1';
+CREATE UNIQUE INDEX IF NOT EXISTS fixtures_fid_idx ON fixtures (fid);
+CREATE INDEX IF NOT EXISTS fixtures_centroid_idx ON fixtures USING GIST (centroid);
+
 -- Lines a client draws as standing objects: fences, walls, hedges and guard
 -- rails, power lines on their towers and poles, and the overhead wire over
 -- electrified track. A closed barrier is stored as an area and comes through

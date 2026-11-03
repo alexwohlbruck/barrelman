@@ -379,6 +379,19 @@ export const SCRIPTS: ScriptDef[] = [
     notes: 'Refreshes concurrently, so floor plans keep serving the old rows until the new ones are ready. Runs after every OSM update.',
   },
   {
+    id: 'osm-fixtures',
+    name: 'Refresh Fixtures',
+    description: 'Rebuild the fixtures view: building entrances, station entrances and street lifts, drawn as small square signs.',
+    category: 'osm',
+    danger: 'safe',
+    longRunning: true,
+    confirm: false,
+    exclusive: true,
+    exec: { kind: 'process', command: 'bash', args: ['scripts/refresh-view.sh', 'fixtures'] },
+    source: 'scripts/refresh-view.sh',
+    notes: 'Runs after every OSM update.',
+  },
+  {
     id: 'osm-basemap',
     name: 'Rebuild Basemap',
     description:
