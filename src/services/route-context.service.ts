@@ -1,7 +1,8 @@
 /**
  * What a route passes that voice guidance can name and the routing graph
  * doesn't carry: the road each crosswalk crosses, the roads and railways that
- * pass over it, the states and parks it runs through.
+ * pass over it, the states and parks it runs through, and on foot or by bike
+ * what each edge's ways and nodes are tagged (edge-tags.ts).
  *
  * Read straight from geo_places through partial indexes
  * (import/create-route-context-indexes.sql), so replication keeps it current;
@@ -10,10 +11,20 @@
  */
 import { sql, type SQL } from 'drizzle-orm'
 import { executeWithin } from '../lib/bounded-query'
-import { crossingSpans, nameCrossings, type CrossedRoad, type CrossingName, type CrossingSpan } from '../lib/route-context/crossing-names'
+import { crossingSpans, diagonalCrossings, nameCrossings, type CrossedRoad, type CrossingName, type CrossingSpan } from '../lib/route-context/crossing-names'
+import {
+  crossingStretches,
+  nodeMarks,
+  routeWays,
+  wayStretches,
+  type EdgeTagMark,
+  type EdgeTagStretch,
+  type Tags,
+  type WayRecord,
+} from '../lib/route-context/edge-tags'
 import { overpassesOver, structureCrossings, wayLevel, type LevelAt, type Overpass, type Structure } from '../lib/route-context/overpasses'
 import { areaStretches, type AreaHit, type AreaStretch } from '../lib/route-context/area-stretches'
-import { routePath, routePieces, type LonLat, type RoutePath, type RoutePiece } from '../lib/route-hazards/route-path'
+import { bearing, routePath, routePieces, toleranceDegrees, type LonLat, type RoutePath, type RoutePiece } from '../lib/route-hazards/route-path'
 import { piecesCte } from './route-hazards.service'
 
 const BUDGET_MS = 600
@@ -27,6 +38,12 @@ const MAX_PARK_METERS = 50_000
 /** Shorter visits are a path clipping a park's corner; shorter gaps a path stepping out and back. */
 const PARK_MIN_METERS = 20
 const PARK_JOIN_METERS = 15
+const EDGE_TAG_PROFILES = new Set(['foot', 'bike'])
+const MAX_EDGE_TAG_METERS = 100_000
+const MAX_EDGE_WAYS = 5_000
+const NODE_PIECE_METERS = 150
+/** GraphHopper's simplified line stays within a metre of the nodes it runs through. */
+const NODE_METERS = 1.5
 
 /** Must match the predicate of geo_places_route_overpass_idx. */
 export const OVERPASS_PREDICATE = `geom_type = 'line'
@@ -40,6 +57,25 @@ export const PARK_PREDICATE = `geom_type = 'area' AND tags->>'leisure' = 'park'`
 export const NAMED_ROAD_PREDICATE = `geom_type = 'line' AND name IS NOT NULL AND tags ? 'highway'
     AND tags->>'highway' NOT IN ('footway', 'path', 'cycleway', 'steps', 'pedestrian', 'corridor', 'bridleway', 'platform', 'proposed', 'construction', 'elevator')`
 
+/** Nodes that start or mark an edge: station entrances, elevators, crossing islands and push buttons. Must match geo_places_route_edge_node_idx. */
+export const EDGE_NODE_PREDICATE = `geom_type = 'point'
+    AND (tags->>'railway' IN ('subway_entrance', 'train_station_entrance')
+         OR tags->>'public_transport' = 'entrance'
+         OR tags->>'highway' = 'elevator'
+         OR tags->>'crossing' = 'traffic_island'
+         OR tags->>'crossing:island' = 'yes'
+         OR tags->>'button_operated' = 'yes')`
+
+/** Way tags edge-tags.ts reads, besides every cycleway:* key. */
+const EDGE_WAY_KEYS = ['highway', 'footway', 'cycleway', 'path', 'crossing', 'crossing:island', 'crossing:scramble', 'button_operated',
+  'tunnel', 'covered', 'indoor', 'level', 'conveying', 'oneway', 'junction']
+const EDGE_NODE_KEYS = ['railway', 'public_transport', 'highway', 'crossing', 'crossing:island', 'button_operated', 'ref', 'local_ref']
+
+export interface EdgeNodeRow {
+  tags: Tags
+  coordinate: LonLat
+}
+
 export interface RouteContextSource {
   crossedRoads(spans: CrossingSpan[]): Promise<CrossedRoad[]>
   structures(pieces: RoutePiece[]): Promise<Structure[]>
@@ -47,10 +83,14 @@ export interface RouteContextSource {
   wayLevels(ids: number[]): Promise<Map<number, number>>
   states(pieces: RoutePiece[]): Promise<AreaHit[]>
   parks(pieces: RoutePiece[]): Promise<AreaHit[]>
+  /** Way tags for edge-tags.ts, by id, with the line of each way that has a bike lane. */
+  edgeWays(ids: number[]): Promise<Map<number, WayRecord>>
+  edgeNodes(pieces: RoutePiece[], tolerance: number): Promise<EdgeNodeRow[]>
 }
 
 const multiLine = (lines: LonLat[][]) => JSON.stringify({ type: 'MultiLineString', coordinates: lines })
 const bigints = (ids: number[]) => `{${ids.join(',')}}`
+const texts = (values: string[]) => `{${values.map(v => `"${v}"`).join(',')}}`
 
 /** The lines of a piece inside an area, unless the area covers it whole. */
 const PARTS = sql`CASE WHEN k.covers THEN NULL
@@ -72,18 +112,31 @@ export type Execute = (query: SQL, ms: number) => Promise<any[]>
 
 export const routeContextSource = (execute: Execute): RouteContextSource => ({
   async crossedRoads(spans) {
-    const rows: { span: number; name: string; lon: number; lat: number }[] = await execute(sql`
+    const rows: { span: number; name: string; lon: number; lat: number; run: LonLat[] | null }[] = await execute(sql`
       WITH x AS (
         SELECT d.path[1] AS span, d.geom AS line
         FROM ST_Dump(ST_SetSRID(ST_GeomFromGeoJSON(${multiLine(spans.map(s => s.line))}), 4326)) AS d
         LIMIT ${spans.length}
       )
-      SELECT x.span, g.name, ST_X(i.pt) AS lon, ST_Y(i.pt) AS lat
+      SELECT x.span, g.name, ST_X(i.pt) AS lon, ST_Y(i.pt) AS lat,
+             -- About 5 m of the road either side of the crossing, for its bearing there.
+             CASE WHEN ST_GeometryType(g.geom) = 'ST_LineString' THEN
+               ST_AsGeoJSON(ST_MakeLine(
+                 ST_LineInterpolatePoint(g.geom, greatest(0, f.at - f.reach)),
+                 ST_LineInterpolatePoint(g.geom, least(1, f.at + f.reach))))::jsonb -> 'coordinates'
+             END AS run
       FROM x
       JOIN geo_places g ON ${sql.raw(NAMED_ROAD_PREDICATE)} AND ST_Intersects(g.geom, x.line)
       CROSS JOIN LATERAL (SELECT ST_ClosestPoint(g.geom, ST_LineInterpolatePoint(x.line, 0.5)) AS pt) i
+      CROSS JOIN LATERAL (
+        SELECT CASE WHEN ST_GeometryType(g.geom) = 'ST_LineString' THEN ST_LineLocatePoint(g.geom, i.pt) END AS at,
+               0.00005 / greatest(ST_Length(g.geom), 0.00005) AS reach
+      ) f
     `, BUDGET_MS)
-    return rows.map(r => ({ span: r.span - 1, name: r.name, at: [r.lon, r.lat] }))
+    return rows.map(r => {
+      const run = r.run && r.run.length === 2 && (r.run[0][0] !== r.run[1][0] || r.run[0][1] !== r.run[1][1]) ? r.run : null
+      return { span: r.span - 1, name: r.name, at: [r.lon, r.lat], ...(run && { bearing: bearing(run[0], run[1]) }) }
+    })
   },
 
   async structures(pieces) {
@@ -147,6 +200,34 @@ export const routeContextSource = (execute: Execute): RouteContextSource => ({
       CROSS JOIN LATERAL (SELECT ST_Covers(a.geom, p.line) AS covers) k
     `, BUDGET_MS))
   },
+
+  async edgeWays(ids) {
+    const rows: { osm_id: string | number; tags: Tags | null; coordinates: LonLat[] | null }[] = await execute(sql`
+      SELECT g.osm_id, t.tags,
+             CASE WHEN g.geom_type = 'line' AND t.lanes THEN ST_AsGeoJSON(g.geom)::jsonb -> 'coordinates' END AS coordinates
+      FROM geo_places g
+      CROSS JOIN LATERAL (
+        SELECT jsonb_object_agg(key, value) AS tags, bool_or(key LIKE 'cycleway%') AS lanes
+        FROM jsonb_each_text(g.tags)
+        WHERE key = ANY(${texts(EDGE_WAY_KEYS)}::text[]) OR key LIKE 'cycleway:%'
+      ) t
+      WHERE g.osm_type = 'W' AND g.osm_id = ANY(${bigints(ids)}::bigint[]) AND t.tags IS NOT NULL
+    `, BUDGET_MS)
+    return new Map(rows.map(r => [Number(r.osm_id), { tags: r.tags ?? {}, ...(r.coordinates && { coordinates: r.coordinates }) }]))
+  },
+
+  async edgeNodes(pieces, tolerance) {
+    const rows: { tags: Tags; lon: number; lat: number }[] = await execute(sql`
+      ${piecesCte(pieces)}
+      SELECT DISTINCT ON (g.osm_id) t.tags || jsonb_strip_nulls(jsonb_build_object('name', g.name)) AS tags, ST_X(g.geom) AS lon, ST_Y(g.geom) AS lat
+      FROM pieces p
+      JOIN geo_places g ON ${sql.raw(EDGE_NODE_PREDICATE)} AND ST_DWithin(g.geom, p.line, ${tolerance})
+      CROSS JOIN LATERAL (
+        SELECT jsonb_object_agg(key, value) AS tags FROM jsonb_each_text(g.tags) WHERE key = ANY(${texts(EDGE_NODE_KEYS)}::text[])
+      ) t
+    `, BUDGET_MS)
+    return rows.map(r => ({ tags: r.tags, coordinate: [r.lon, r.lat] }))
+  },
 })
 
 export const dbRouteContextSource = routeContextSource(executeWithin)
@@ -156,6 +237,8 @@ export interface RouteContext {
   overpasses: Overpass[]
   states: AreaStretch[]
   parks: AreaStretch[]
+  edgeTags: EdgeTagStretch[]
+  edgeMarks: EdgeTagMark[]
 }
 
 export interface RouteContextInput {
@@ -165,7 +248,7 @@ export interface RouteContextInput {
   profile?: string
 }
 
-const NONE: RouteContext = { crossingNames: [], overpasses: [], states: [], parks: [] }
+const NONE: RouteContext = { crossingNames: [], overpasses: [], states: [], parks: [], edgeTags: [], edgeMarks: [] }
 
 /** The value of a GraphHopper detail over the coordinate interval holding `index`. */
 function detailAt<T>(entries: unknown[] | undefined, index: number): T | undefined {
@@ -220,20 +303,60 @@ async function parks(path: RoutePath, input: RouteContextInput, source: RouteCon
   return areaStretches(pieces, await source.parks(pieces), { joinMeters: PARK_JOIN_METERS, minMeters: PARK_MIN_METERS })
 }
 
-async function crossingNames(input: RouteContextInput, source: RouteContextSource): Promise<CrossingName[]> {
+interface Crossings {
+  names: CrossingName[]
+  diagonals: EdgeTagStretch[]
+}
+
+async function crossings(input: RouteContextInput, source: RouteContextSource): Promise<Crossings> {
   const spans = crossingSpans(input.coordinates, input.distances, input.details)
-  return spans.length ? nameCrossings(spans, await source.crossedRoads(spans)) : []
+  if (!spans.length) return { names: [], diagonals: [] }
+  const roads = await source.crossedRoads(spans)
+  return {
+    names: nameCrossings(spans, roads),
+    diagonals: diagonalCrossings(spans, roads).map(i => ({ startDistance: spans[i].startDistance, endDistance: spans[i].endDistance, crossingDiagonal: true })),
+  }
+}
+
+interface EdgeTagging {
+  stretches: EdgeTagStretch[]
+  marks: EdgeTagMark[]
+}
+
+async function edgeTags(path: RoutePath, input: RouteContextInput, source: RouteContextSource): Promise<EdgeTagging> {
+  if (!EDGE_TAG_PROFILES.has(input.profile ?? '') || path.length > MAX_EDGE_TAG_METERS) return { stretches: [], marks: [] }
+  const ways = routeWays(input.distances, input.details)
+  const ids = [...new Set(ways.map(w => w.osmWayId))]
+  const pieces = routePieces(path, NODE_PIECE_METERS)
+  const [records, rows] = await Promise.all([
+    ids.length && ids.length <= MAX_EDGE_WAYS ? source.edgeWays(ids).catch(() => new Map<number, WayRecord>()) : new Map<number, WayRecord>(),
+    source.edgeNodes(pieces, toleranceDegrees(NODE_METERS, path.coordinates[0][1])).catch(() => [] as EdgeNodeRow[]),
+  ])
+  const nodes = rows.flatMap(r => path.project(r.coordinate, NODE_METERS).map(p => ({ distance: p.distance, tags: r.tags })))
+  const spans = crossingSpans(input.coordinates, input.distances, input.details)
+  return {
+    stretches: [...wayStretches(ways, records, path), ...crossingStretches(spans, nodes, ways, records)],
+    marks: nodeMarks(nodes),
+  }
 }
 
 export async function getRouteContext(input: RouteContextInput, source: RouteContextSource = dbRouteContextSource): Promise<RouteContext> {
   if (input.coordinates.length < 2) return NONE
   const path = routePath(input.coordinates.map(c => [c[0], c[1]] as LonLat))
   const settle = <T>(p: Promise<T[]>) => p.catch(() => [] as T[])
-  const [names, over, inStates, inParks] = await Promise.all([
-    settle(crossingNames(input, source)),
+  const [crossed, over, inStates, inParks, tagged] = await Promise.all([
+    crossings(input, source).catch((): Crossings => ({ names: [], diagonals: [] })),
     settle(overpasses(path, input, source)),
     settle(states(path, source)),
     settle(parks(path, input, source)),
+    edgeTags(path, input, source).catch((): EdgeTagging => ({ stretches: [], marks: [] })),
   ])
-  return { crossingNames: names, overpasses: over, states: inStates, parks: inParks }
+  return {
+    crossingNames: crossed.names,
+    overpasses: over,
+    states: inStates,
+    parks: inParks,
+    edgeTags: [...tagged.stretches, ...(EDGE_TAG_PROFILES.has(input.profile ?? '') ? crossed.diagonals : [])],
+    edgeMarks: tagged.marks,
+  }
 }

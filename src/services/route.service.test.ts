@@ -9,6 +9,8 @@ const nothing: RouteContextSource = {
   wayLevels: async () => new Map(),
   states: async () => [],
   parks: async () => [],
+  edgeWays: async () => new Map(),
+  edgeNodes: async () => [],
 }
 
 /** A GraphHopper whose graph carries `encoded`, recording the details each route asks for. */
@@ -82,5 +84,21 @@ describe('route context', () => {
     })
     expect(paths[0].edge_segments.map(s => [s.crossing, s.crossingName])).toEqual([['traffic_signals', '7th Avenue'], ['missing', undefined]])
     expect(paths[0].states).toEqual([{ startDistance: 0, endDistance: expect.any(Number), name: 'New York', code: 'US-NY' }])
+  })
+
+  test('the edge leaving a subway entrance carries it, and indoor ways their passage and level', async () => {
+    const coordinates = [[-73.99, 40.75, 10], [-73.99, 40.7502, 10], [-73.99, 40.7504, 10]]
+    const details = { osm_way_id: [[0, 1, 1], [1, 2, 2]], road_class: [[0, 1, 'footway'], [1, 2, 'steps']] }
+    const fetchFn: FetchFn = async url => url.endsWith('/info')
+      ? Response.json({ encoded_values: {} })
+      : Response.json({ paths: [{ points: { coordinates }, details }] })
+    const { paths } = await getEnrichedRoute({ ...request, profile: 'foot' }, fetchFn, async () => new Map(), {
+      ...nothing,
+      edgeWays: async () => new Map([[2, { tags: { highway: 'steps', indoor: 'yes', level: '-1' } }]]),
+      edgeNodes: async () => [{ tags: { railway: 'subway_entrance', name: 'Times Sq', ref: 'S2' }, coordinate: [-73.99, 40.7502] }],
+    })
+    const [sidewalk, stairs] = paths[0].edge_segments
+    expect(sidewalk.entrance).toBeUndefined()
+    expect(stairs).toMatchObject({ entrance: { name: 'Times Sq', ref: 'S2' }, passage: 'indoor', level: '-1' })
   })
 })

@@ -13,7 +13,7 @@ import { drizzle } from 'drizzle-orm/postgres-js'
 import { readFileSync } from 'fs'
 import { join } from 'path'
 import { getRouteContext, routeContextSource } from './route-context.service'
-import { haversine, routePath, routePieces, type LonLat } from '../lib/route-hazards/route-path'
+import { haversine, routePath, routePieces, toleranceDegrees, type LonLat } from '../lib/route-hazards/route-path'
 
 const DATABASE_URL = process.env.BARRELMAN_INTEGRATION_TESTS ? process.env.DATABASE_URL : undefined
 const SCHEMA = 'route_context_test'
@@ -52,7 +52,13 @@ run('route context queries', () => {
         ('relation/2', 'R', 2, 'Eastland', '{"ISO3166-2": "XX-E"}', ST_GeomFromText('${polygon(-79)}', 4326), 'area', 4),
         ('relation/3', 'R', 3, 'Not a state', '{}', ST_GeomFromText('${polygon(-79)}', 4326), 'area', 6),
         ('way/10', 'W', 10, 'Crossing Bridge', '{"highway": "primary", "bridge": "yes", "layer": "1"}', ST_GeomFromText('${line([[-80.86, 35.0005], [-80.84, 35.0005]])}', 4326), 'line', NULL),
-        ('way/11', 'W', 11, 'Viaduct', '{"highway": "motorway", "bridge": "viaduct", "layer": "1"}', ST_GeomFromText('${line([[-80.85, 35.105], [-80.85, 35.195]])}', 4326), 'line', NULL);
+        ('way/11', 'W', 11, 'Viaduct', '{"highway": "motorway", "bridge": "viaduct", "layer": "1"}', ST_GeomFromText('${line([[-80.85, 35.105], [-80.85, 35.195]])}', 4326), 'line', NULL),
+        ('way/20', 'W', 20, 'Broadway', '{"highway": "secondary", "cycleway:right": "lane", "surface": "asphalt"}', ST_GeomFromText('${line([[-80.5, 34.499], [-80.5, 34.501]])}', 4326), 'line', NULL),
+        ('way/21', 'W', 21, 'Main Street', '{"highway": "residential"}', ST_GeomFromText('${line([[-80.501, 34.5], [-80.499, 34.5]])}', 4326), 'line', NULL),
+        ('way/22', 'W', 22, NULL, '{"highway": "footway", "tunnel": "building_passage", "level": "1"}', ST_GeomFromText('${line([[-80.6, 34.5], [-80.6, 34.501]])}', 4326), 'line', NULL),
+        ('node/30', 'N', 30, '125 St', '{"railway": "subway_entrance", "ref": "B", "wheelchair": "no"}', ST_SetSRID(ST_MakePoint(-80.6, 34.5005), 4326), 'point', NULL),
+        ('node/31', 'N', 31, 'Not on the route', '{"railway": "subway_entrance"}', ST_SetSRID(ST_MakePoint(-80.5999, 34.5005), 4326), 'point', NULL),
+        ('node/32', 'N', 32, 'Cafe', '{"amenity": "cafe"}', ST_SetSRID(ST_MakePoint(-80.6, 34.5006), 4326), 'point', NULL);
     `)
     await client.unsafe(readFileSync(join(import.meta.dir, '../../import/build-state-parts.sql'), 'utf8'))
     const db = drizzle(client)
@@ -95,5 +101,25 @@ run('route context queries', () => {
     expect(structures).toHaveLength(2)
     expect(byId.get(10)).toMatchObject({ firstSegment: 80, lastSegment: 80 })
     expect(byId.get(11)).toMatchObject({ firstSegment: 90, lastSegment: 99 })
+  })
+
+  test('each road a crossing cuts carries its bearing there', async () => {
+    const diagonal: LonLat[] = [[-80.5002, 34.4998], [-80.4998, 34.5002]]
+    const roads = await source.crossedRoads([{ from: 0, to: 1, line: diagonal, startDistance: 0, endDistance: 57 }])
+    const byName = new Map(roads.map(r => [r.name, r.bearing!]))
+    expect(Math.min(byName.get('Broadway')!, 360 - byName.get('Broadway')!)).toBeLessThan(1)
+    expect(byName.get('Main Street')).toBeCloseTo(90, 0)
+  })
+
+  test('edge ways come with only the tags guidance reads, and a line only where a bike lane needs a direction', async () => {
+    const ways = await source.edgeWays([20, 21, 22])
+    expect(ways.get(20)).toEqual({ tags: { highway: 'secondary', 'cycleway:right': 'lane' }, coordinates: [[-80.5, 34.499], [-80.5, 34.501]] })
+    expect(ways.get(22)).toEqual({ tags: { highway: 'footway', tunnel: 'building_passage', level: '1' } })
+  })
+
+  test('edge nodes are the tagged ones the route runs through', async () => {
+    const along = routePath([[-80.6, 34.5], [-80.6, 34.501]])
+    const nodes = await source.edgeNodes(routePieces(along, 150), toleranceDegrees(1.5, 34.5))
+    expect(nodes).toEqual([{ tags: { railway: 'subway_entrance', name: '125 St', ref: 'B' }, coordinate: [-80.6, 34.5005] }])
   })
 })
