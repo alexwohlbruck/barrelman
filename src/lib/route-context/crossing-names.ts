@@ -84,6 +84,11 @@ export function nameCrossings(spans: CrossingSpan[], roads: CrossedRoad[]): Cros
 const MAX_DIAGONAL_DEG = 65
 /** Shallower than this is running along the road, as a crosswalk does beside the street it carries on. */
 const MIN_DIAGONAL_DEG = 25
+/** A diagonal crosswalk runs straight; a longer path than this over its chord turns a corner as two crossings. */
+const MAX_DIAGONAL_DETOUR = 1.15
+
+const pathLength = (line: LonLat[]) => line.slice(1).reduce((sum, p, i) => sum + haversine(line[i], p), 0)
+const straight = (line: LonLat[]) => pathLength(line) <= haversine(line[0], line[line.length - 1]) * MAX_DIAGONAL_DETOUR
 /** Roads nearer parallel than this are one street's carriageways, not two streets meeting. */
 const MIN_JUNCTION_DEG = 30
 
@@ -92,7 +97,7 @@ export function diagonalCrossings(spans: CrossingSpan[], roads: CrossedRoad[]): 
   const oblique = new Map<number, CrossedRoad[]>()
   for (const road of roads) {
     const span = spans[road.span]
-    if (!span || road.bearing == null || span.line.length < 2) continue
+    if (!span || road.bearing == null || span.line.length < 2 || !straight(span.line)) continue
     const heading = bearing(span.line[0], span.line[span.line.length - 1])
     const angle = lineAngle(heading, road.bearing)
     if (angle < MIN_DIAGONAL_DEG || angle > MAX_DIAGONAL_DEG) continue

@@ -57,12 +57,15 @@ describe('diagonalCrossings', () => {
     expect(diagonalCrossings([diagonal, straight], [...renamed, ...carriageways])).toEqual([])
   })
 
-  test('not one straight across an avenue, in line with the street it carries on', () => {
+  test('not two crossings round a corner, from one corner to the opposite one', () => {
+    const corner: CrossingSpan = {
+      from: 0, to: 4, startDistance: 372, endDistance: 401,
+      line: [[-73.980109, 40.751547], [-73.980141, 40.751501], [-73.980222, 40.751535], [-73.980312, 40.751564], [-73.980349, 40.751513]],
+    }
     const roads = [
-      { span: 1, name: 'Madison Avenue', at: centre, bearing: 0 },
-      { span: 1, name: 'East 41st Street', at: centre, bearing: 90 },
+      { span: 0, name: 'East 40th Street', at: corner.line[2], bearing: 119 },
+      { span: 0, name: 'Madison Avenue', at: corner.line[2], bearing: 30 },
     ]
-    const across: CrossingSpan = { ...straight, line: [at(-10, 0), at(10, 0)] }
-    expect(diagonalCrossings([across], roads)).toEqual([])
+    expect(diagonalCrossings([corner], roads)).toEqual([])
   })
 })
