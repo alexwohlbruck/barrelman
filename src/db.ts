@@ -295,7 +295,7 @@ async function ensureDetailViews() {
 
 /**
  * Populate the stored map views (`buildings_3d`, `street_furniture`,
- * `sport_pitches`, `indoor_features`) that are
+ * `sport_pitches`, `indoor_features`, `fixtures`) that are
  * still empty.
  *
  * `create-detail-views.sql` creates them WITH NO DATA so startup stays cheap,
@@ -306,7 +306,7 @@ async function ensureDetailViews() {
 async function populateMaterializedViews() {
   const client = maintenanceConnection()
   try {
-    for (const view of ['buildings_3d', 'street_furniture', 'sport_pitches', 'indoor_features']) {
+    for (const view of ['buildings_3d', 'street_furniture', 'sport_pitches', 'indoor_features', 'fixtures']) {
       try {
         const rows = await client<{ populated: boolean }[]>`
           SELECT relispopulated AS populated FROM pg_class WHERE relname = ${view} AND relkind = 'm'
