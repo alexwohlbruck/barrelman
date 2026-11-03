@@ -627,6 +627,7 @@ postgres:
         name: name
         ref: ref
         id: id
+        height: height
       buffer: 64
       clip_geom: true
 
@@ -664,6 +665,22 @@ postgres:
       properties:
         leaf_type: leaf_type
         genus: genus
+      buffer: 64
+      clip_geom: true
+
+    fixtures:
+      schema: public
+      table: fixtures
+      srid: 4326
+      geometry_column: centroid
+      geometry_type: POINT
+      id_column: fid
+      minzoom: 16
+      maxzoom: 17
+      properties:
+        id: id
+        kind: kind
+        ref: ref
       buffer: 64
       clip_geom: true
 
