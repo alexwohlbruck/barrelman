@@ -18,6 +18,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ### Changed
 
+* `indoor_map` flights are one point per escalator or stair at its middle, with `width`, `length` and uphill `bearing`, in place of per-tread polygons and the `height` column. A `down` flight beside an `up` one climbs the same way. Stairwells and lift shafts no longer get walls.
+
 ### Fixed
 
 * Requests made with the service key (`BARRELMAN_API_KEY`) get their own per-address ceiling, `BARRELMAN_SERVICE_RPM` (default 6000/min), instead of the anonymous 120/min, which a backend fanning out one trip plan's calls hit at once.
