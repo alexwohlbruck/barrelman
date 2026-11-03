@@ -33,6 +33,12 @@ export interface CrossSection {
   kerbRight: number
 }
 
+/** Streets, as against paths mapped on their own, which keep to their own line. */
+export const STREETS = new Set([
+  'motorway', 'motorway_link', 'trunk', 'trunk_link', 'primary', 'primary_link', 'secondary', 'secondary_link',
+  'tertiary', 'tertiary_link', 'unclassified', 'residential', 'living_street', 'service', 'busway',
+])
+
 const MOTORWAY_TRUNK = new Set(['motorway', 'motorway_link', 'trunk', 'trunk_link'])
 
 /** road_lane_width */
