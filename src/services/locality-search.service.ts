@@ -63,6 +63,8 @@ END`)
  *
  * Population stretches a settlement's reach further, at 1 km per 100 people: a city of 100K
  * reaches as far as its class already does, and only bigger ones go beyond.
+ * A town's population also shrinks it: under 30K, a town reaches as far as its
+ * size, not its class.
  * Class alone ranks every "city" alike, so Austin, Arkansas (pop. 1,037) and
  * Austin, Texas (974,447) differed only by distance — and the Texas one was
  * never returned anywhere but Texas.
@@ -73,7 +75,14 @@ const reachKm = (importance: ReturnType<typeof sql>, population: ReturnType<type
   -- state whose label node sits 313 km upstate.
   WHEN ${importance} >= 0.95 THEN 2000
   WHEN ${importance} >= 0.9 THEN 1000
-  WHEN ${importance} >= 0.8 THEN 300
+  -- A town says how big it is when it can. Class alone gave Jamaica, Vermont
+  -- (pop. 1,005) a 300 km reach, so "jamaica" from Brooklyn pinned it above
+  -- the Jamaica LIRR station 12 km away. A known population sizes the reach
+  -- like any other settlement's, never below a village's.
+  WHEN ${importance} >= 0.8 THEN CASE
+    WHEN ${population} IS NULL THEN 300
+    ELSE GREATEST(50, LEAST(300, ${population} / 100.0))
+  END
   WHEN ${importance} >= 0.7 THEN 50
   ELSE 20
 END, CASE
