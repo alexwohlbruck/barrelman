@@ -7,7 +7,7 @@
 
 import { sql } from 'drizzle-orm'
 import { db } from '../db'
-import { crossSection, type CrossSectionLane, type DrivingSide, type Tags } from '../lib/lanes/cross-section'
+import { crossSection, STREETS, type CrossSectionLane, type DrivingSide, type Tags } from '../lib/lanes/cross-section'
 import { drivingSideFor } from '../lib/lanes/driving-side'
 import { bikeOffset, laneFor, lanePlan, recommendedLane, turnFromAngle, type PlanLane, type Turn } from '../lib/lanes/lane-plan'
 import {
@@ -86,11 +86,6 @@ const AT_JOIN_METERS = 3
 /** A lane change is done this far before the stop line. */
 const SETTLE_METERS = 8
 const STOP_LINE_BACK_METERS = 1.5
-/** Streets, as against paths mapped on their own, which keep to their own line. */
-const STREETS = new Set([
-  'motorway', 'motorway_link', 'trunk', 'trunk_link', 'primary', 'primary_link', 'secondary', 'secondary_link',
-  'tertiary', 'tertiary_link', 'unclassified', 'residential', 'living_street', 'service', 'busway',
-])
 
 export const loadWaysFromDb: LoadWays = async (ids) => {
   if (ids.length === 0) return new Map()
