@@ -14,6 +14,7 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 * `POST /route/lanes` draws a driving route in its lanes and says which lanes lead on at each turn, from the ways' OSM lane tags read by the road markings' rules. Lane changes curve in before the stop line and turns follow an arc; left-hand traffic is supported. With `profile: "bike"` the line runs down the bike lane, or just inside the outer traffic lane, and separately mapped paths keep their own line. Billed as routing.
 * `/route` edge segments carry `osmWayId` and `country` where the routing graph has them. `graphhopper-config.yml` now encodes `osm_way_id`; run `scripts/rebuild-graphhopper.sh` after upgrading for lane geometry.
+* Walking and cycling `/route` edge segments say more for turn-by-turn guidance: crosswalk islands, push-button signals and diagonal crossings, passages through buildings, which side the bike lane is on, station entrances, levels, escalators and elevators. Run the "Build Route Context Indexes" task after upgrading for entrances, elevators and push buttons on nodes.
 
 ### Changed
 
