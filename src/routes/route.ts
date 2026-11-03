@@ -109,6 +109,13 @@ GraphHopper /route with details and elevation enabled. Edge segments carry
 Each path also describes what it passes, for voice guidance, read from OSM:
 
 - \`edge_segments[].crossingName\`: on a crosswalk segment, the named road it crosses.
+- On \`foot\` and \`bike\` routes, edge segments also carry what their OSM ways and nodes
+  are tagged: \`crossingIsland\` (a refuge island partway across), \`buttonOperated\`
+  (the signal waits for its push button), \`crossingDiagonal\` (cutting across a junction
+  for an all-way walk), \`passage\` (\`building\`, \`arcade\` or \`indoor\`), \`cyclewaySide\`
+  (\`left\`, \`right\` or \`both\`, as the route travels), \`level\`, \`conveying\` (an escalator
+  or moving walkway) and \`elevator\`. The segment leaving a station entrance carries
+  \`entrance\` (\`name\`, \`ref\`); the one leaving an elevator node, \`elevator\`.
 - \`overpasses\`: roads (\`kind: "road"\`) and railways (\`"rail"\`) that pass over the
   route at a higher layer, at \`distance\` metres along it. Twin carriageways and
   parallel tracks crossed together are one, ending at \`endDistance\`. Nothing is

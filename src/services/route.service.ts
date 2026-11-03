@@ -16,10 +16,12 @@ import { dbRouteContextSource, getRouteContext, type RouteContextSource } from '
 import type { CrossingName } from '../lib/route-context/crossing-names'
 import type { Overpass } from '../lib/route-context/overpasses'
 import type { AreaStretch } from '../lib/route-context/area-stretches'
+import { tagEdgeSegments, type EdgeTags } from '../lib/route-context/edge-tags'
 
 // ── Types ───────────────────────────────────────────────────────────
 
-export interface RouteEdgeSegment {
+/** EdgeTags: on foot or by bike, what the edge's OSM ways and nodes are tagged, for guidance. */
+export interface RouteEdgeSegment extends EdgeTags {
   startDistance: number  // meters from leg start
   endDistance: number    // meters from leg start
   surface?: string
@@ -376,9 +378,10 @@ export async function getEnrichedRoute(
       pathStreetStretches(coordinates, cumulativeDistances, path.details, lookup),
       getRouteContext({ coordinates, distances: cumulativeDistances, details: path.details, profile: requestBody.profile }, context),
     ])
-    const edgeSegments = nameCrossingSegments(
-      nameSegments(buildEdgeSegments(path.details || {}, cumulativeDistances), stretches),
-      around.crossingNames,
+    const edgeSegments = tagEdgeSegments(
+      nameCrossingSegments(nameSegments(buildEdgeSegments(path.details || {}, cumulativeDistances), stretches), around.crossingNames),
+      around.edgeTags,
+      around.edgeMarks,
     )
 
     return {
