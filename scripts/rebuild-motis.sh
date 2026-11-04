@@ -53,9 +53,9 @@ fi
 
 # Import with the image the server runs. The dataset is written in the engine's
 # own binary format, so an import by any other version leaves a timetable the
-# server refuses to load. docker-compose.yml pins that image; reading it off
-# the container follows the pin without repeating it here.
-MOTIS_IMAGE="$(docker inspect -f '{{.Config.Image}}' "$CONTAINER")"
+# server refuses to load. The image ID is used, not the name it was created
+# from: a name like motis:latest may point at a newer pull than the one running.
+MOTIS_IMAGE="$(docker inspect -f '{{.Image}}' "$CONTAINER")"
 
 BARRELMAN_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$BARRELMAN_DIR"

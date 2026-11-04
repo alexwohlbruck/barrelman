@@ -206,10 +206,10 @@ services:
 
   graphhopper:
     container_name: barrelman-graphhopper
-    # The June 2026 12.0-SNAPSHOT, which production runs. :latest is a nightly
-    # and its 2026-10-16 build broke graph imports ("sort graph for fixed
-    # ordering", ArrayIndexOutOfBoundsException: Index -1) and changed the
-    # bundled foot model. The graph cache is also written in a version-specific
+    # The June 2026 12.0-SNAPSHOT, which production runs. :latest is a nightly,
+    # and its 2026-10-16 build changed the bundled foot model, which crash-looped
+    # routing on a config that used it. (The "sort graph" Index -1 crash seen on
+    # small extracts happens on both builds; graph.sort: false avoids it.) The graph cache is also written in a version-specific
     # format, so moving this digest means a full graph rebuild
     # (scripts/rebuild-graphhopper.sh), never a plain pull.
     image: israelhikingmap/graphhopper@sha256:3e79eb33862028cfc58f9d6c162630b68638d6aad790b5a698c854dbbaa7fe32
