@@ -531,6 +531,17 @@ services:
       PORTOLAN_BIN: ${PORTOLAN_BIN:-/portolan-data/bin/portolan}
       # scripts/*.sh docker-exec into these sibling containers by name.
       DB_CONTAINER: barrelman-db
+      # State backups (scripts/backup-db.sh, scripts/restore-db.sh). Dumps land
+      # in /data/backups on the OSM volume; set a bucket to copy them off-box.
+      BACKUP_DIR: ${BACKUP_DIR:-}
+      BACKUP_KEEP_LOCAL_DAYS: ${BACKUP_KEEP_LOCAL_DAYS:-}
+      BACKUP_KEEP_REMOTE_DAYS: ${BACKUP_KEEP_REMOTE_DAYS:-}
+      BACKUP_S3_BUCKET: ${BACKUP_S3_BUCKET:-}
+      BACKUP_S3_ENDPOINT: ${BACKUP_S3_ENDPOINT:-}
+      BACKUP_S3_REGION: ${BACKUP_S3_REGION:-}
+      BACKUP_S3_ACCESS_KEY_ID: ${BACKUP_S3_ACCESS_KEY_ID:-}
+      BACKUP_S3_SECRET_ACCESS_KEY: ${BACKUP_S3_SECRET_ACCESS_KEY:-}
+      BACKUP_S3_PREFIX: ${BACKUP_S3_PREFIX:-}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - barrelman-osm-data:/data
