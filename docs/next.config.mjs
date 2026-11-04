@@ -21,7 +21,12 @@ const config = {
    * specificity claiming one URL.
    */
   async redirects() {
-    return [{ source: '/', destination: '/introduction', permanent: false }]
+    return [
+      { source: '/', destination: '/introduction', permanent: false },
+      // A short, stable address for the page the Terms of Service and the
+      // landing site point customers at.
+      { source: '/attribution', destination: '/usage/attribution', permanent: false },
+    ]
   },
 }
 
