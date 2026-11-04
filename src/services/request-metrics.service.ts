@@ -267,6 +267,25 @@ export async function pruneRequestMetrics(): Promise<number> {
   return deleted.length
 }
 
+/** How long hourly rows are kept, for the export and the docs to quote. */
+export const REQUEST_METRICS_RETENTION_DAYS = RETENTION_DAYS
+
+/**
+ * Erase one account's rows, buffered and stored. The table has no foreign key
+ * to accounts_users, because the service and anonymous sentinels share the
+ * column, so deleting an account does not cascade here on its own.
+ *
+ * The buffer is cleared first and any flush already in flight is waited out,
+ * so a flush cannot write the account's counters back after the delete.
+ */
+export async function eraseRequestMetrics(userId: string): Promise<void> {
+  for (const [mapKey, entry] of buffer) {
+    if (entry.userId === userId) buffer.delete(mapKey)
+  }
+  if (flushing) await flushing
+  await sql`DELETE FROM accounts_request_metrics WHERE user_id = ${userId}`
+}
+
 /** Exposed for tests. */
 export function bufferedRequestMetrics(): BufferEntry[] {
   return [...buffer.values()]
@@ -467,6 +486,35 @@ export async function trafficReport(range: TrafficRange, userId?: string): Promi
       .map((row) => ({ endpoint: row.dim, ...toStats(row) }))
       .sort((a, b) => b.requests - a.requests),
     byCaller,
+  }
+}
+
+export interface AccountRequestSummary {
+  from: string
+  retentionDays: number
+  totals: TrafficStats
+  byEndpoint: (TrafficStats & { endpoint: string })[]
+}
+
+/** One account's request outcomes over everything still retained. */
+export async function accountRequestSummary(userId: string): Promise<AccountRequestSummary> {
+  await flushRequestMetrics()
+
+  const from = new Date(Date.now() - RETENTION_DAYS * 86_400_000)
+  from.setUTCMinutes(0, 0, 0)
+
+  const [totals, endpoints] = await Promise.all([
+    aggregate('total', from, userId),
+    aggregate('endpoint', from, userId),
+  ])
+
+  return {
+    from: from.toISOString(),
+    retentionDays: RETENTION_DAYS,
+    totals: totals[0] ? toStats(totals[0]) : toStats({} as RawRow),
+    byEndpoint: endpoints
+      .map((row) => ({ endpoint: row.dim, ...toStats(row) }))
+      .sort((a, b) => b.requests - a.requests),
   }
 }
 
