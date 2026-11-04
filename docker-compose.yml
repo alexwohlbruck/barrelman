@@ -457,6 +457,7 @@ services:
       SENTRY_ENVIRONMENT: ${SENTRY_ENVIRONMENT:-}
       ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL:-}
       ALERT_WEBHOOK_FORMAT: ${ALERT_WEBHOOK_FORMAT:-}
+      ALERT_DEPENDENCY_CYCLES: ${ALERT_DEPENDENCY_CYCLES:-}
 
       # ── Terms of service ─────────────────────────────────────────────
       BARRELMAN_TOS_URL: ${BARRELMAN_TOS_URL:-}
@@ -619,6 +620,9 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - barrelman-osm-data:/data
+      # Read-only and never written: only so the disk alert can statfs the
+      # database volume, which is the one an import fills.
+      - barrelman-data:/postgres-data:ro
       - barrelman-gtfs-data:/gtfs-data
       # scripts/generate-pelias-config.ts rewrites pelias/pelias.json, and the
       # Pelias services bind-mount that file from the host. pelias/ is in

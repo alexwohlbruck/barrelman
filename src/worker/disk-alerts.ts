@@ -12,22 +12,27 @@
  */
 import { statfs, stat } from 'node:fs/promises'
 import { envNumber, envRaw } from '../config/env'
-import { alertsEnabled, sendAlert, type Alert } from '../lib/alerts'
+import { alertsEnabled, delivered, sendAlert, type Alert } from '../lib/alerts'
 
 const CHECK_MS = 10 * 60_000
 const REPEAT_MS = 6 * 60 * 60_000
 
 /** The mounts docker-compose.yml gives barrelman-ops. Missing ones are skipped. */
 function candidatePaths(): string[] {
-  const paths = [envRaw('OSM_DATA_DIR'), '/data', '/gtfs-data', '/portolan-data', '/gtfs-zips']
+  // /postgres-data is the database volume, mounted read-only only so this
+  // check can see it: it is the one most likely to fill during an import.
+  const paths = [envRaw('OSM_DATA_DIR'), '/data', '/postgres-data', '/gtfs-data', '/portolan-data', '/gtfs-zips']
   return [...new Set(paths.filter((p): p is string => !!p))]
 }
 
-/** Used share of the filesystem holding `path`, computed as `df` does (reserved blocks excluded). */
+/**
+ * Used share of the filesystem holding `path`, computed as `df` does: reserved
+ * blocks excluded and rounded up, so this never reads lower than `df` would.
+ */
 export function usedPercent(fs: { blocks: number; bfree: number; bavail: number }): number {
   const used = fs.blocks - fs.bfree
   const usable = used + fs.bavail
-  return usable > 0 ? Math.round((used / usable) * 100) : 0
+  return usable > 0 ? Math.ceil((used * 100) / usable) : 0
 }
 
 export function diskAlert(path: string, percent: number, threshold: number, wasAbove: boolean): Alert | null {
@@ -83,8 +88,11 @@ export function startDiskAlerts(): void {
       const percent = usedPercent(await statfs(path))
       const alert = diskAlert(path, percent, threshold, above.has(path))
       if (percent >= threshold) above.add(path)
-      else above.delete(path)
-      if (alert) await sendAlert(alert, alert.severity === 'warning' ? { dedupeMs: REPEAT_MS } : undefined)
+      if (!alert) continue
+      const result = await sendAlert(alert, alert.severity === 'warning' ? { dedupeMs: REPEAT_MS } : undefined)
+      // A volume stays marked full until its recovery is delivered, so a
+      // failed send is retried on the next check.
+      if (alert.severity === 'resolved' && delivered(result)) above.delete(path)
     }
   }
   const tick = () => void run().catch((err) => console.error('[disk-alerts] check failed', err))
