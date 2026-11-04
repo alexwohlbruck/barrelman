@@ -49,6 +49,9 @@ import { startAccountSweep } from './services/account-maintenance.service'
 import { startScheduler } from './services/scheduler.service'
 import { assertAuthConfigured } from './middleware/api-auth'
 import { setPeerAddressResolver } from './lib/rate-limit'
+import { initErrorTracking, captureError, flushErrorTracking } from './lib/error-tracking'
+import { errorTracking } from './middleware/error-tracking'
+import { startDependencyAlerts } from './services/health-alerts.service'
 
 const port = Number(process.env.PORT) || 5001
 
@@ -62,10 +65,16 @@ const port = Number(process.env.PORT) || 5001
 // surface their own errors normally.
 process.on('unhandledRejection', (reason) => {
   console.error('[unhandledRejection]', reason)
+  captureError(reason, { tags: { handler: 'unhandledRejection' } })
 })
 process.on('uncaughtException', (err) => {
   console.error('[uncaughtException]', err)
+  captureError(err, { tags: { handler: 'uncaughtException' } })
 })
+
+// Before the schema checks below, so a failure there is reported too.
+// A no-op unless SENTRY_DSN is set.
+await initErrorTracking('api')
 
 // Ensure post-import columns exist before accepting requests
 await ensureSchema()
@@ -132,6 +141,7 @@ void syncPortolanStopLinks().catch((err) => console.warn('[startup] portolan lin
 const app = new Elysia()
   // First, so its onRequest timestamp is taken before anything else runs.
   .use(requestMetrics)
+  .use(errorTracking)
   .use(cors({ credentials: false }))
   .use(swagger(swaggerConfig))
   .use(healthRoutes)
@@ -192,13 +202,17 @@ startAccountSweep()
 // cancelable in the console instead of being a host crontab nobody can see.
 void startScheduler()
 
+// Webhook alerts when a required dependency stays down. A no-op unless
+// ALERT_WEBHOOK_URL is set.
+startDependencyAlerts()
+
 assertAuthConfigured()
 
 // Flush whatever is buffered before the process goes away, so a rolling deploy
 // doesn't discard the last few seconds of billing counters.
 for (const signal of ['SIGTERM', 'SIGINT'] as const) {
   process.on(signal, () => {
-    void Promise.allSettled([flushUsage(), flushRequestMetrics()]).finally(() => process.exit(0))
+    void Promise.allSettled([flushUsage(), flushRequestMetrics(), flushErrorTracking()]).finally(() => process.exit(0))
   })
 }
 
