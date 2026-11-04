@@ -10,6 +10,7 @@
 import { db } from '../db'
 import { sql } from 'drizzle-orm'
 import { LRUCache } from 'lru-cache'
+import { parseGbfsLicense, type GbfsLicense } from '../lib/feed-license'
 import {
   gbfsId,
   gbfsNumber,
@@ -35,6 +36,9 @@ export interface GbfsSystem {
   feedUrls: Record<string, string>
   ttl: number
   enabled: boolean
+  /** Licence and credit from system_information (GBFS v2.3+). Null when the
+   *  system publishes none, which is most of them. */
+  license: GbfsLicense | null
 }
 
 export type { GbfsVehicleType }
@@ -82,7 +86,15 @@ export type NearbyResult = (GbfsStation & { type: 'station' }) | GbfsFreeVehicle
 
 export interface NearbyStationsResponse {
   stations: NearbyResult[]
-  systems: Array<{ systemId: string; name: string | null; operator: string | null }>
+  systems: SystemMeta[]
+}
+
+/** The systems behind a set of results, with the credit each asks for. */
+export interface SystemMeta {
+  systemId: string
+  name: string | null
+  operator: string | null
+  license: GbfsLicense | null
 }
 
 // ── Caches ──────────────────────────────────────────────────────────
@@ -250,7 +262,8 @@ export async function getSystemsInBounds(
 ): Promise<GbfsSystem[]> {
   const rows = await db.execute(sql`
     SELECT system_id, name, operator, url, country_code, lat, lon,
-           vehicle_types, has_stations, has_free_floating, feed_urls, ttl, enabled
+           vehicle_types, has_stations, has_free_floating, feed_urls, ttl, enabled,
+           license_id, license_url, attribution_organization_name, attribution_url
     FROM gbfs_systems g
     WHERE enabled = TRUE
       -- A system's lat/lon is a single point (its first station), so a city
@@ -490,7 +503,8 @@ async function getSystem(systemId: string): Promise<GbfsSystem | null> {
 
   const rows = await db.execute(sql`
     SELECT system_id, name, operator, url, country_code, lat, lon,
-           vehicle_types, has_stations, has_free_floating, feed_urls, ttl, enabled
+           vehicle_types, has_stations, has_free_floating, feed_urls, ttl, enabled,
+           license_id, license_url, attribution_organization_name, attribution_url
     FROM gbfs_systems
     WHERE system_id = ${systemId}
     LIMIT 1
@@ -504,12 +518,14 @@ async function getSystem(systemId: string): Promise<GbfsSystem | null> {
 
 async function getSystemsMeta(
   systemIds: string[],
-): Promise<Array<{ systemId: string; name: string | null; operator: string | null }>> {
+): Promise<SystemMeta[]> {
   if (systemIds.length === 0) return []
 
   const inList = sql.join(systemIds.map(id => sql`${id}`), sql`, `)
   const rows = await db.execute(sql`
-    SELECT system_id, name, operator FROM gbfs_systems
+    SELECT system_id, name, operator,
+           license_id, license_url, attribution_organization_name, attribution_url
+    FROM gbfs_systems
     WHERE system_id IN (${inList})
   `) as any[]
 
@@ -517,11 +533,22 @@ async function getSystemsMeta(
     systemId: r.system_id,
     name: r.name,
     operator: r.operator,
+    license: rowLicense(r),
   }))
+}
+
+function rowLicense(row: any): GbfsLicense | null {
+  return parseGbfsLicense({
+    license_id: row.license_id,
+    license_url: row.license_url,
+    attribution_organization_name: row.attribution_organization_name,
+    attribution_url: row.attribution_url,
+  })
 }
 
 function rowToSystem(row: any): GbfsSystem {
   return {
+    license: rowLicense(row),
     systemId: row.system_id,
     name: row.name,
     operator: row.operator,

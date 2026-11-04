@@ -25,7 +25,10 @@ import {
   generateMotisConfig,
   sanitizeGtfsZip,
   loadFeedIdentities,
+  withholdFeed,
+  type GtfsFeedInfo,
 } from '../src/services/gtfs.service'
+import { isExcludedByPolicy, licensePolicy } from '../src/lib/feed-license'
 import {
   alignRealtimeTripIds,
   describeAlignment,
@@ -195,12 +198,29 @@ async function selectRealtime(
   return kept
 }
 
+/**
+ * Withhold a feed GTFS_LICENCE_POLICY excludes: drop its rows and its zip, so
+ * neither the database nor the next MOTIS build serves it.
+ */
+async function withhold(feed: GtfsFeedInfo, zipPath: string) {
+  const terms = feed.license
+  console.log(
+    `  – Withheld ${feed.name || feed.feedId}: licence forbids ` +
+      (terms?.commercialUseAllowed === 'no' ? 'commercial use' : 'redistribution') +
+      ` (${terms?.spdxIdentifier ?? terms?.url ?? 'custom licence'})`,
+  )
+  await withholdFeed(feed)
+  rmSync(zipPath, { force: true })
+}
+
 async function main() {
   console.log(`\n=== GTFS Import Pipeline ===`)
   console.log(`Region: ${region}`)
   console.log(`Output: ${outputDir}`)
   console.log(`Transfer distance: ${transferDistance}m`)
   console.log(`Transfer concurrency: ${transferConcurrency}`)
+  const policy = licensePolicy()
+  console.log(`Licence policy: ${policy}`)
   console.log('')
 
   // Ensure schema exists
@@ -248,6 +268,18 @@ async function main() {
     if (maxFeeds) {
       feeds = feeds.slice(0, maxFeeds)
       console.log(`Limited to ${maxFeeds} feeds`)
+    }
+
+    // Feeds whose licence forbids commercial use or redistribution are not
+    // downloaded under the `commercial` policy. Unknown terms are allowed.
+    const excluded = feeds.filter(f => isExcludedByPolicy(f.license, policy))
+    if (excluded.length) {
+      console.log(`\nWithholding ${excluded.length} feed(s) under GTFS_LICENCE_POLICY=${policy}:`)
+      for (const feed of excluded) {
+        const zip = join(outputDir, `${feed.feedId.replace(/[^a-zA-Z0-9_-]/g, '_')}.zip`)
+        await withhold({ ...feed, rtUrls: feed.rtUrls ?? stored.get(feed.feedId)?.rtUrls ?? undefined }, zip)
+      }
+      feeds = feeds.filter(f => !excluded.includes(f))
     }
 
     // Step 2: Download each feed
@@ -322,6 +354,7 @@ async function main() {
       .filter(f => f.endsWith('.zip'))
       .map(f => join(outputDir, f))
     attemptedFeeds = feedFiles.length
+    const withheld = new Set<string>()
 
     for (const filepath of feedFiles) {
       const feedId = basename(filepath, '.zip')
@@ -338,6 +371,13 @@ async function main() {
         url: existing?.url || '',
         region: existing?.region || region,
         rtUrls: existing?.rtUrls ?? undefined,
+      }
+
+      // Same policy as the download path, read from the licence on record.
+      if (isExcludedByPolicy(existing?.license, policy)) {
+        await withhold({ ...feed, license: existing!.license }, filepath)
+        withheld.add(filepath)
+        continue
       }
 
       // Sanitize existing files too (they may pre-date the flex strip), then
@@ -366,6 +406,8 @@ async function main() {
         recordFailure(feedId, err)
       }
     }
+    feedFiles = feedFiles.filter(f => !withheld.has(f))
+    attemptedFeeds -= withheld.size
   }
 
   // Step 4: Compute walking transfers

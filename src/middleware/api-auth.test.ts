@@ -861,3 +861,71 @@ describe('per-request units', () => {
     }
   })
 })
+
+/**
+ * The `code` on each refusal is the part of the body clients are told to
+ * branch on (usage/stability.mdx), so each one is pinned here.
+ */
+describe('refusal codes', () => {
+  const auth = { authorization: `Bearer ${LIVE_KEY}` }
+  const codeOf = async (res: Response) => ((await res.json()) as { code?: string }).code
+  const withKey = (overrides: Partial<ResolvedKey>) => deps({ resolveApiKey: mock(async () => resolved(overrides)) })
+
+  test('missing_key when no credential is presented', async () => {
+    expect(await codeOf(await app('search', deps()).handle(get()))).toBe('missing_key')
+  })
+
+  test('invalid_key for a foreign token and for an unknown key alike', async () => {
+    const foreign = await app('search', deps()).handle(get({ authorization: 'Bearer nope' }))
+    expect(await codeOf(foreign)).toBe('invalid_key')
+
+    clearRateBuckets()
+    const unknown = await app('search', deps({ resolveApiKey: mock(async () => null) })).handle(get(auth))
+    expect(await codeOf(unknown)).toBe('invalid_key')
+  })
+
+  test('account_suspended, scope_denied and origin_denied', async () => {
+    expect(await codeOf(await app('search', withKey({ suspended: true })).handle(get(auth)))).toBe(
+      'account_suspended',
+    )
+    expect(await codeOf(await app('search', withKey({ scopes: ['tiles'] })).handle(get(auth)))).toBe(
+      'scope_denied',
+    )
+    const pinned = withKey({ allowedOrigins: ['https://a.example'] })
+    expect(await codeOf(await app('search', pinned).handle(get(auth)))).toBe('origin_denied')
+  })
+
+  test('insufficient_credits and overage_limit_reached on a 402', async () => {
+    const refusing = (reason: 'out-of-credits' | 'overage-cap-reached') =>
+      deps({
+        checkQuota: mock(async () => ({
+          allowed: false as const,
+          reason,
+          balance: { remaining: 0, cycleResetsAt: '2026-09-01T00:00:00.000Z' } as never,
+        })),
+      })
+    const out = await app('search', refusing('out-of-credits')).handle(get(auth))
+    expect(out.status).toBe(402)
+    expect(await codeOf(out)).toBe('insufficient_credits')
+
+    const capped = await app('search', refusing('overage-cap-reached')).handle(get(auth))
+    expect(await codeOf(capped)).toBe('overage_limit_reached')
+  })
+
+  test('rate_limited from the throttle', async () => {
+    const instance = app('search', withKey({ plan: 'free' }))
+    let res = await instance.handle(get(auth))
+    for (let i = 0; i < 500 && res.status !== 429; i += 1) res = await instance.handle(get(auth))
+
+    expect(res.status).toBe(429)
+    expect(await codeOf(res)).toBe('rate_limited')
+  })
+
+  test('too_many_failures from the penalty box', async () => {
+    const instance = app('isochrone', withKey({ scopes: ['tiles'] }))
+    let code: string | undefined
+    for (let i = 0; i < 40 && code !== 'too_many_failures'; i += 1) code = await codeOf(await instance.handle(get(auth)))
+
+    expect(code).toBe('too_many_failures')
+  })
+})

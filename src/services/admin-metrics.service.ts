@@ -6,6 +6,8 @@
 import { sql } from 'drizzle-orm'
 import { db } from '../db'
 import { checkHealth, dependencyUrls, resetHealthCache, type DependencyKey } from './health.service'
+import { SERVABLE_FEED } from './gtfs.service'
+import { isExcludedByPolicy, licensePolicy, type LicensePolicy } from '../lib/feed-license'
 
 async function scalar<T = number>(query: ReturnType<typeof sql>, fallback: T | null = null): Promise<T | null> {
   try {
@@ -80,6 +82,11 @@ export interface DataMetrics {
     tripPatterns: number | null
     shapes: number | null
     feedsWithRt: number | null
+    /** Feeds whose licence says no to commercial use or redistribution. */
+    feedsForbiddingCommercial: number | null
+    /** Feeds with any licence terms on record. */
+    feedsWithLicense: number | null
+    licensePolicy: LicensePolicy
     lastImport: string | null
   }
   gbfs: {
@@ -162,6 +169,8 @@ export async function getDataMetrics(): Promise<DataMetrics> {
     tripPatterns,
     shapes,
     feedsWithRt,
+    feedsForbiddingCommercial,
+    feedsWithLicense,
     lastImport,
     gbfsSystems,
     gbfsStations,
@@ -187,6 +196,10 @@ export async function getDataMetrics(): Promise<DataMetrics> {
     tableCount('gtfs_trip_patterns'),
     tableCount('gtfs_shapes'),
     scalar<number>(sql`SELECT count(*)::bigint AS c FROM gtfs_feeds WHERE rt_urls IS NOT NULL AND rt_urls::text NOT IN ('null', '{}', '[]')`),
+    scalar<number>(sql`SELECT count(*)::bigint AS c FROM gtfs_feeds WHERE NOT ${SERVABLE_FEED}`),
+    scalar<number>(sql`SELECT count(*)::bigint AS c FROM gtfs_feeds WHERE license_spdx IS NOT NULL
+      OR license_url IS NOT NULL OR license_commercial_use_allowed IS NOT NULL
+      OR license_redistribution_allowed IS NOT NULL`),
     scalar<string>(sql`SELECT max(imported_at)::text AS s FROM gtfs_feeds`),
     tableCount('gbfs_systems'),
     tableCount('gbfs_stations'),
@@ -244,7 +257,10 @@ export async function getDataMetrics(): Promise<DataMetrics> {
   return {
     database: { sizeBytes, sizePretty },
     geoPlaces,
-    gtfs: { feeds, stops, routes, transfers, tripPatterns, shapes, feedsWithRt, lastImport },
+    gtfs: {
+      feeds, stops, routes, transfers, tripPatterns, shapes, feedsWithRt,
+      feedsForbiddingCommercial, feedsWithLicense, licensePolicy: licensePolicy(), lastImport,
+    },
     gbfs: { systems: gbfsSystems, stations: gbfsStations },
     transit: { stopAreaMembers, portolanStopLinks },
     boundaries: { count: boundaryCount, fetchedAt: boundaryFetchedAt },
@@ -306,4 +322,63 @@ export async function getServiceStatuses(): Promise<ServiceStatus[]> {
     latencyMs: dependencies[key].latencyMs,
     message: dependencies[key].message,
   }))
+}
+
+/** One GTFS feed as the console lists it, with its licence terms. */
+export interface GtfsFeedSummary {
+  feedId: string
+  onestopId: string | null
+  name: string | null
+  region: string | null
+  stopCount: number
+  routeCount: number
+  importedAt: string | null
+  license: {
+    spdx: string | null
+    url: string | null
+    commercialUseAllowed: string | null
+    redistributionAllowed: string | null
+    attributionText: string | null
+    fetchedAt: string | null
+  }
+  /** Whether GTFS_LICENCE_POLICY keeps this feed out of what is served. */
+  withheld: boolean
+}
+
+export async function listGtfsFeeds(): Promise<GtfsFeedSummary[]> {
+  try {
+    const rows = (await db.execute(sql`
+      SELECT feed_id, onestop_id, name, region, stop_count, route_count,
+             imported_at::text AS imported_at,
+             license_spdx, license_url, license_commercial_use_allowed,
+             license_redistribution_allowed, license_attribution_text,
+             license_fetched_at::text AS license_fetched_at
+      FROM gtfs_feeds
+      ORDER BY name NULLS LAST, feed_id
+    `)) as any[]
+    const policy = licensePolicy()
+    return rows.map((r) => ({
+      feedId: r.feed_id,
+      onestopId: r.onestop_id,
+      name: r.name,
+      region: r.region,
+      stopCount: Number(r.stop_count ?? 0),
+      routeCount: Number(r.route_count ?? 0),
+      importedAt: r.imported_at,
+      license: {
+        spdx: r.license_spdx,
+        url: r.license_url,
+        commercialUseAllowed: r.license_commercial_use_allowed,
+        redistributionAllowed: r.license_redistribution_allowed,
+        attributionText: r.license_attribution_text,
+        fetchedAt: r.license_fetched_at,
+      },
+      withheld: isExcludedByPolicy(
+        { commercialUseAllowed: r.license_commercial_use_allowed, redistributionAllowed: r.license_redistribution_allowed },
+        policy,
+      ),
+    }))
+  } catch {
+    return []
+  }
 }
