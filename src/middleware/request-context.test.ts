@@ -2,7 +2,7 @@ import { describe, test, expect, beforeEach, afterEach, spyOn } from 'bun:test'
 import Elysia, { t } from 'elysia'
 import { createRequestContext } from './request-context'
 import { createIsochroneRoutes } from '../routes/isochrone'
-import { clearRateBuckets } from './api-auth'
+import { apiAuth, apiAuthAfter, clearRateBuckets } from './api-auth'
 
 const BASE = 'http://localhost'
 
@@ -93,5 +93,92 @@ describe('with the real guard', () => {
   test('POST /isochrone with a bad body and a valid key is a 422', async () => {
     const res = await isochrone().handle(post('/isochrone', { lat: 500 }, { authorization: 'Bearer service-secret' }))
     expect(res.status).toBe(422)
+  })
+})
+
+describe('the guard is not a free key oracle', () => {
+  const saved = process.env.BARRELMAN_API_KEY
+  beforeEach(() => {
+    clearRateBuckets()
+    process.env.BARRELMAN_API_KEY = 'service-secret'
+  })
+  afterEach(() => {
+    clearRateBuckets()
+    if (saved === undefined) delete process.env.BARRELMAN_API_KEY
+    else process.env.BARRELMAN_API_KEY = saved
+  })
+
+  test('bad keys on the validation path take strikes until the penalty box answers', async () => {
+    const app = new Elysia().use(createRequestContext()).use(createIsochroneRoutes())
+    const statuses: number[] = []
+    for (let i = 0; i < 40; i++) {
+      const res = await app.handle(post('/isochrone', { lat: 500 }, { authorization: `Bearer guess-${i}` }))
+      statuses.push(res.status)
+    }
+    expect(statuses[0]).toBe(401)
+    expect(statuses.at(-1)).toBe(429)
+  })
+})
+
+describe('a handler that throws', () => {
+  const LIVE_KEY = 'brm_live_abcdefghijklmnopqrstuvwxyz0123456789ABCD'
+  const saved = process.env.BARRELMAN_API_KEY
+  beforeEach(() => {
+    clearRateBuckets()
+    process.env.BARRELMAN_API_KEY = 'service-secret'
+  })
+  afterEach(() => {
+    if (saved === undefined) delete process.env.BARRELMAN_API_KEY
+    else process.env.BARRELMAN_API_KEY = saved
+  })
+
+  // Plain functions, never mock(): see admin-users.test.ts.
+  const deps = {
+    resolveApiKey: async () => ({
+      keyId: 'key-1', userId: 'user-1', scopes: ['*'], allowedOrigins: [], plan: 'developer',
+      suspended: false, suspensionReason: null,
+    }),
+    checkQuota: async () => ({ allowed: true as const, overage: false }),
+    recordUsage: () => undefined,
+  } as never
+
+  function app(handler: () => unknown) {
+    return new Elysia()
+      .use(createRequestContext())
+      .group('', (g) => g.onBeforeHandle(apiAuth('isochrone', deps)).onAfterHandle(apiAuthAfter).get('/probe', handler))
+  }
+  const get = () => new Request(`${BASE}/probe`, { headers: { authorization: `Bearer ${LIVE_KEY}` } })
+
+  test('releases its concurrency slot, so the account is not locked out', async () => {
+    // Isochrone allows two in flight per account. Leaked slots would refuse
+    // the third request onwards with 429.
+    const throwing = app(() => {
+      throw new Error('upstream exploded')
+    })
+    for (let i = 0; i < 5; i++) expect((await throwing.handle(get())).status).toBe(500)
+
+    expect((await app(() => ({ ok: true })).handle(get())).status).toBe(200)
+  })
+
+  test('settles once, so the cap still holds afterwards', async () => {
+    const throwing = app(() => {
+      throw new Error('boom')
+    })
+    for (let i = 0; i < 3; i++) await throwing.handle(get())
+
+    // A double release would drive the in-flight count negative and let a
+    // third concurrent request through.
+    let release: (() => void) | undefined
+    const blocked = new Promise<void>((resolve) => (release = resolve))
+    const slow = app(async () => {
+      await blocked
+      return { ok: true }
+    })
+    const held = [slow.handle(get()), slow.handle(get())]
+    await Bun.sleep(20)
+    const third = await slow.handle(get())
+    expect(third.status).toBe(429)
+    release!()
+    await Promise.all(held)
   })
 })

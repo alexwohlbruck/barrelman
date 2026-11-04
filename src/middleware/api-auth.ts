@@ -82,6 +82,8 @@ export interface MeteringContext {
    * the process restarts.
    */
   throttleKey: string | null
+  /** Set once the after-handler has run, so a second call is a no-op. */
+  settled?: boolean
 }
 
 // Throttling lives in services/throttle.service.ts — four layers plus a
@@ -505,12 +507,45 @@ async function flagSustainedAbuse(penaltyKey: string, userId: string, ip: string
 const SIGNAL_STRIKE_THRESHOLD = envNumber('BARRELMAN_ABUSE_SIGNAL_STRIKES', 100)
 
 /**
+ * The refusal the guard would give a request with no usable credential, or
+ * null when the credential is good (or none is required). For callers that
+ * answer before the guard can run: the validation-error path in
+ * request-context.ts. It applies the same penalty box and records the same
+ * strike as the guard, so answering 401 there costs a key-guesser exactly what
+ * it costs them on the guarded route.
+ */
+export async function refusalForCredential(
+  headers: Record<string, string | undefined>,
+  request: Request,
+  deps: Pick<ApiAuthDeps, 'resolveApiKey'> = defaultDeps,
+): Promise<{ status: number; body: Record<string, unknown>; retryAfterSeconds?: number } | null> {
+  const ip = clientIp(request)
+  const boxed = checkPenalty(penaltyKeyFor(ip))
+  if (!boxed.allowed) {
+    return {
+      status: 429,
+      body: { error: boxed.message, layer: boxed.layer, docs: DOCS_URL },
+      retryAfterSeconds: boxed.retryAfterSeconds,
+    }
+  }
+
+  const { caller, error } = await identifyCaller(headers, request, deps)
+  if (!error) return null
+  recordRejection(penaltyKeyFor(ip, caller.userId))
+  return { status: error.status, body: error.body }
+}
+
+/**
  * Companion `onAfterHandle`: refunds the charge when the request failed with a
  * server error. Attach alongside the guard on the same instance.
  */
 export function apiAuthAfter(context: GuardContext) {
   const metering = read(context)
-  if (!metering) return
+  if (!metering || metering.settled) return
+  // Runs from onAfterHandle on a normal return and from the global onError
+  // (middleware/request-context.ts) when the handler throws, which skips
+  // onAfterHandle. Whichever comes first settles it.
+  metering.settled = true
 
   // Release the concurrency slot first and unconditionally: a handler that
   // threw still occupied the upstream, and a slot leaked on the error path is
