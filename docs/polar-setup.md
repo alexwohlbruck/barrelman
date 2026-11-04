@@ -193,7 +193,10 @@ the reconciliation task below, and derives every later period from it. A
 resubscription on another day moves the anchor, and a plan change switches the
 allowance. Either one first settles and reports the days so far under the old
 plan and anchor, then starts metering afresh from that day (`metered_from`),
-so no day is billed twice or judged by the wrong plan.
+so no day is billed twice or judged by the wrong plan. A plan change within a
+subscription prorates each part's allowance by its days, matching Polar's price
+proration; a subscription that starts or ends keeps the allowance for the
+period it paid for.
 
 Each pass looks at the open cycle and the one that just closed. If reporting is
 down for longer than a whole cycle, the cycles before that go unreported, and
