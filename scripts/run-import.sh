@@ -130,6 +130,10 @@ fi
 
 db_import_phase post
 
+echo "  Refreshing station labels..."
+(cd "$PROJECT_DIR" && bun run import/refresh-station-labels.ts) \
+  || echo "  WARNING: station labels refresh failed. Run \"Refresh Station Labels\" once the import is done."
+
 # Sequential mode: the database is done and has released its working memory, so
 # build the engines now — but one at a time. rebuild-graphhopper.sh returns as
 # soon as it restarts the container (the graph builds asynchronously inside it),

@@ -880,6 +880,24 @@ export const SCRIPTS: ScriptDef[] = [
     notes: 'DROPs and rebuilds materialized views. Re-run after OSM + GTFS imports.',
   },
   {
+    id: 'transit-station-labels',
+    name: 'Refresh Station Labels',
+    description:
+      'Rebuild the direction each platform is signed for ("Uptown & The Bronx") and each station entrance\'s corner label ("Broadway & West 28th Street · NW corner") and entry/exit flags. Directions and trips serve them as directionLabel, cornerLabel, entryAllowed and exitAllowed.',
+    category: 'transit',
+    danger: 'safe',
+    longRunning: true,
+    confirm: false,
+    exec: { kind: 'process', command: 'nice', args: ['-n', '10', 'bun', 'run', 'import/refresh-station-labels.ts'] },
+    params: [
+      { name: 'feed', label: 'Feed id', type: 'string', apply: 'flag', flag: '--feed', placeholder: 'blank = every feed' },
+      { name: 'directionsOnly', label: 'Direction labels only', type: 'boolean', apply: 'flag', flag: '--directions-only', default: false },
+    ],
+    source: 'import/refresh-station-labels.ts',
+    notes:
+      'Fetches the agency open data that applies to the feeds on this instance (MTA Subway Stations and Entrances for the NYC subway) and derives everything else from OSM: platform destination tags tied to a stop by gtfs:stop_id, and the streets of the nearest named intersection. A source that cannot be fetched keeps its previous rows. OSM Update, the full import and every feed import run it, so this is only needed to refresh by hand.',
+  },
+  {
     id: 'transit-views',
     name: 'Rebuild Transit Tile Views',
     description: 'Recreate the transit vector-tile source views (station buildings, etc.) that Martin serves.',

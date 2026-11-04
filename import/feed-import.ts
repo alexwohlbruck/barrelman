@@ -38,6 +38,7 @@ import {
   storedLicense,
   type GtfsFeedInfo,
 } from '../src/services/gtfs.service'
+import { refreshDirectionLabels } from '../src/services/station-labels.service'
 
 /**
  * A feed with no fixed-route timetable for the router: GTFS-Flex-only feeds,
@@ -80,6 +81,10 @@ export async function importFeedFile(filepath: string, feedInfo: GtfsFeedInfo) {
   })
   console.log(`  ✓ Imported ${counts.stopsImported} stops, ${counts.routesImported} routes, ${counts.stopRoutesImported} stop-route associations`)
   console.log(`  ✓ Imported ${counts.patternsImported} trip patterns, ${counts.transfersImported} agency transfers, ${counts.shapesImported} shapes`)
+
+  // Enrichment, so a failure costs the feed its signed directions, not its import.
+  await refreshDirectionLabels({ feedId: feedInfo.feedId, log: (line) => console.log(line) })
+    .catch((err) => console.warn(`  ! direction labels: ${(err as Error).message}`))
 }
 
 /**
