@@ -33,7 +33,7 @@
     "@simplewebauthn/types": "^10.0.0",
     "@turf/turf": "^7.3.4",
     "arctic": "^3.7.0",
-    "axios": "^1.7.9",
+    "axios": "^1.21.0",
     "csv-parse": "^5.6.0",
     "drizzle-orm": "^0.45.4",
     "earcut": "^3.2.3",
@@ -42,12 +42,11 @@
     "jszip": "^3.10.1",
     "lru-cache": "^11.0.0",
     "lucia": "^3.2.2",
-    "nodemailer": "^9.0.3",
+    "nodemailer": "^10.3.1",
     "oslo": "^1.2.1",
     "postgres": "^3.4.5"
   },
   "devDependencies": {
-    "@types/nodemailer": "^8.0.1",
     "@types/pg": "^8.11.11",
     "bun-types": "latest",
     "drizzle-kit": "^0.31.11",
