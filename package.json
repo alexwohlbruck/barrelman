@@ -29,6 +29,7 @@
     "@jsquash/webp": "^1.5.0",
     "@lucia-auth/adapter-drizzle": "^1.1.0",
     "@polar-sh/sdk": "^0.49.0",
+    "@sentry/bun": "^11.10.0",
     "@simplewebauthn/server": "^10.0.0",
     "@simplewebauthn/types": "^10.0.0",
     "@turf/turf": "^7.3.4",
