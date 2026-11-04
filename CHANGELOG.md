@@ -18,6 +18,10 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 * Sign-in, session checks, API-key lookup, credit spending and usage metering now run on their own small connection pool, so a burst of slow searches can no longer hold up authentication or metering. The main pool grows from postgres-js's default of 10 to 20 connections. Both are configurable (`DB_POOL_MAX`, `DB_ACCOUNTS_POOL_MAX`); with the defaults, the API, `barrelman-ops`, a running import script and Martin together stay under Postgres's 100 connections.
 
+### Documentation
+
+* A new [Attribution](https://docs.barrelman.dev/attribution) page says what an app must credit when it shows Barrelman data: OpenStreetMap, OpenMapTiles, Mapterhorn terrain, transit agencies, 3D landmarks and brand logos. It includes a MapLibre example and explains what the ODbL asks of anyone who redistributes the data.
+
 ## [0.10.38] - 2026-11-03
 
 ### Added
