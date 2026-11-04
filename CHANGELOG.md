@@ -10,6 +10,22 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Added
+
+* `POST /billing/change-plan` moves an existing subscription onto another plan with Polar's proration: upgrades are invoiced at once, downgrades credited to the next invoice. With no subscription yet it returns a checkout link. The console's plan buttons use it and ask for confirmation first. A plan checkout for an account that already has a subscription is refused with 409.
+* `GET /billing/status` reports the subscription's status, whether it is cancelled at the period end, and the period end date. The console shows "Cancels on" with the date, and a banner linking to the billing portal while a payment is past due.
+* Webhook deliveries are deduplicated by their `webhook-id` in a new `accounts_billing_webhook_events` table, created at startup and pruned after 30 days by the account sweep. The account table gains `subscription_*` columns, also added at startup.
+* `order.refunded` is handled. A refunded credit pack takes its credits back with a negative ledger entry in proportion to the amount refunded; a refunded subscription payment re-reads the subscription and returns the account to free if Polar revoked it. Subscribe the webhook to `order.refunded`, `subscription.created`, `subscription.uncanceled` and `subscription.past_due` (see `docs/polar-setup.md`), and give the Polar token `customers:write` and `subscriptions:write`.
+
+### Fixed
+
+* Metered overage reaches the Polar customer. Checkout now sets our user id as the customer's external id, which overage events are keyed on, and a sync or subscription webhook sets it on existing customers that have none. Overage reported before this release matched no customer and was not billed.
+* Cancelling a subscription keeps the plan until the end of the period already paid for. `subscription.canceled` used to drop the account to free the moment the customer scheduled the cancellation. The plan now ends on `subscription.revoked`, and only when the revoked subscription is the one behind the current plan.
+* The plan follows the subscription's status instead of being re-applied on every `subscription.updated`. Webhooks that arrive late or out of order are ignored once a newer state is stored, and a revoked subscription stays revoked, so a delayed update can no longer restore a paid plan.
+* A failed renewal payment keeps the paid plan while Polar retries it, and the customer gets one email when the payment first fails. The account moves to free if the subscription is revoked.
+* Upgrading or downgrading no longer opens a second subscription billed alongside the first.
+* Deleting an account reports its outstanding overage and revokes its Polar subscription first. If Polar cannot be reached the deletion is refused with a 502 and the account is kept, so no subscription is left charging a deleted account.
+
 ## [0.10.38] - 2026-11-03
 
 ### Added
