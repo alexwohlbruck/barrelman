@@ -138,6 +138,17 @@ curl -X POST https://api.barrelman.dev/match \
 
 `snap_prevention` keeps a point taken under an overpass from landing on the road above it. `snapped_points` gives each input point's position on the returned path.
 
+### Draw a map
+
+`GET /styles/basemap.json` is a MapLibre style for the basemap. Map libraries cannot set headers, so tile and style URLs take the key as `?api_key=`. See [Maps](/usage/maps) for a working page in a few lines.
+
+```js
+new maplibregl.Map({
+  container: 'map',
+  style: 'https://api.barrelman.dev/styles/basemap.json?api_key=YOUR_KEY',
+})
+```
+
 See the [API Reference](/api) for the full parameter list on every endpoint.
 
 ## Attribution
