@@ -61,8 +61,40 @@ Every feed is under its agency's own licence, and many ask to be credited by
 name. Before showing transit results for a city, check the licence of the feed
 that covers it.
 
-Transit endpoints do not yet return per-feed attribution. That is being added,
-and this section will say how to read it once it ships.
+Transit responses say which feeds they drew on. Each entry names one feed once:
+
+```json
+{
+  "attribution": [
+    {
+      "feedId": "5",
+      "agency": "MTA New York City Transit",
+      "text": null,
+      "url": "https://www.mta.info/developers/terms"
+    }
+  ]
+}
+```
+
+`agency` is the feed's name as Transitland lists it. `text` is the attribution
+the feed's licence asks for, when it publishes one, and `url` is the licence.
+Both are `null` when the licence on record says nothing. Show the agency, and
+`text` where it is set, near the transit results it contributed.
+
+Where to find it:
+
+| Endpoint | Field |
+|---|---|
+| `POST /transit/route`, `POST /transit/intermodal-route` | `attribution` beside `itineraries` |
+| `GET /transit/departures` | `attribution` on each board, for the feeds on that board |
+| `GET /transit/route-detail` | `attribution` beside the route |
+| `GET /transit/stops`, `GET /transit/routes` | Not inline. Each row has a `feedId`; pass them to `GET /transit/attribution?feedIds=5,12` |
+
+Bikeshare systems publish their own terms in GBFS from version 2.3. `GET
+/gbfs/systems` and the `systems` list of `GET /gbfs/nearby-stations` carry
+`license` with `licenseId`, `licenseUrl`, `attributionOrganizationName` and
+`attributionUrl` when the system publishes them. Most do not, and `license` is
+then `null`.
 
 ### 3D landmarks
 

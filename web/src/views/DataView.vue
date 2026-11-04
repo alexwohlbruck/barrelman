@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { onMounted, h, type Component } from 'vue'
+import { onMounted, h, ref, computed, type Component } from 'vue'
 import { RouterLink } from 'vue-router'
-import { RefreshCw, Database, MapPin, TrainFront, Bike, Layers, Map, Users } from 'lucide-vue-next'
+import { RefreshCw, Database, MapPin, TrainFront, Bike, Layers, Map, Users, Scale } from 'lucide-vue-next'
 import PageHeader from '@/components/PageHeader.vue'
 import Card from '@/components/ui/Card.vue'
 import CardHeader from '@/components/ui/CardHeader.vue'
@@ -12,10 +12,44 @@ import Badge from '@/components/ui/Badge.vue'
 import Spinner from '@/components/ui/Spinner.vue'
 import { metrics, metricsLoading, metricsError, refreshMetrics } from '@/lib/store'
 import { formatNumber, timeAgo } from '@/lib/utils'
+import { getGtfsFeeds } from '@/lib/api'
+import type { GtfsFeedSummary } from '@/lib/types'
+
+const feeds = ref<GtfsFeedSummary[] | null>(null)
+const feedsError = ref<string | null>(null)
+const onlyRestricted = ref(false)
+
+async function loadFeeds() {
+  try {
+    feeds.value = (await getGtfsFeeds()).feeds
+    feedsError.value = null
+  } catch (err) {
+    feedsError.value = err instanceof Error ? err.message : String(err)
+  }
+}
+
+function refresh() {
+  refreshMetrics()
+  loadFeeds()
+}
 
 onMounted(() => {
   if (!metrics.value) refreshMetrics()
+  loadFeeds()
 })
+
+const restricts = (f: GtfsFeedSummary) =>
+  f.license.commercialUseAllowed === 'no' || f.license.redistributionAllowed === 'no'
+
+/** Restricted feeds first, then those with any terms on record, then the rest. */
+const sortedFeeds = computed(() => {
+  const rank = (f: GtfsFeedSummary) => (restricts(f) ? 0 : f.license.spdx || f.license.url ? 1 : 2)
+  return [...(feeds.value ?? [])]
+    .filter((f) => !onlyRestricted.value || restricts(f))
+    .sort((a, b) => rank(a) - rank(b) || (a.name ?? a.feedId).localeCompare(b.name ?? b.feedId))
+})
+
+const answerVariant = (a: string | null) => (a === 'no' ? 'destructive' : a === 'yes' ? 'success' : 'muted')
 
 // A small inline row renderer to keep the template tidy.
 const Row = (props: { label: string; value: string; hint?: string }) =>
@@ -31,7 +65,7 @@ const Row = (props: { label: string; value: string; hint?: string }) =>
 <template>
   <PageHeader title="Data" subtitle="Table sizes, coverage, and freshness">
     <template #actions>
-      <Button variant="outline" size="sm" @click="refreshMetrics" :disabled="metricsLoading">
+      <Button variant="outline" size="sm" @click="refresh" :disabled="metricsLoading">
         <RefreshCw :class="['size-4', metricsLoading && 'animate-spin']" /> Refresh
       </Button>
     </template>
@@ -82,6 +116,12 @@ const Row = (props: { label: string; value: string; hint?: string }) =>
           <Row label="Shapes" :value="formatNumber(metrics.gtfs.shapes)" />
           <Row label="Stop-area members" :value="formatNumber(metrics.transit.stopAreaMembers)" />
           <Row label="Stop → OSM links" :value="formatNumber(metrics.transit.portolanStopLinks)" />
+          <Row
+            label="Feeds forbidding commercial use"
+            :value="formatNumber(metrics.gtfs.feedsForbiddingCommercial)"
+            :hint="metrics.gtfs.licensePolicy === 'commercial' ? 'withheld' : 'served (policy off)'"
+          />
+          <Row label="Feeds with licence on record" :value="formatNumber(metrics.gtfs.feedsWithLicense)" />
           <Row label="Last feed import" :value="metrics.gtfs.lastImport ? timeAgo(metrics.gtfs.lastImport) : '—'" />
         </CardContent>
       </Card>
@@ -119,6 +159,71 @@ const Row = (props: { label: string; value: string; hint?: string }) =>
           </CardContent>
         </Card>
       </div>
+
+      <!-- GTFS feed licences -->
+      <Card class="lg:col-span-2">
+        <CardHeader class="flex-row items-center justify-between">
+          <CardTitle class="flex items-center gap-2"><Scale class="size-4" /> Feed licences</CardTitle>
+          <label class="flex items-center gap-2 text-xs text-muted-foreground">
+            <input v-model="onlyRestricted" type="checkbox" class="accent-current" />
+            Only feeds that restrict use
+          </label>
+        </CardHeader>
+        <CardContent>
+          <div v-if="feedsError" class="text-sm text-destructive">{{ feedsError }}</div>
+          <div v-else-if="!feeds" class="flex items-center text-sm text-muted-foreground">
+            <Spinner class="mr-2 size-4" /> Loading feeds…
+          </div>
+          <div v-else-if="!sortedFeeds.length" class="text-sm text-muted-foreground">
+            {{ feeds.length ? 'No feed restricts commercial use or redistribution.' : 'No GTFS feeds imported.' }}
+          </div>
+          <div v-else class="max-h-[28rem] overflow-auto">
+            <table class="w-full text-sm">
+              <thead class="sticky top-0 bg-card text-xs text-muted-foreground">
+                <tr class="border-b border-border">
+                  <th class="pb-2 text-left font-medium">Feed</th>
+                  <th class="pb-2 text-left font-medium">Licence</th>
+                  <th class="pb-2 text-left font-medium">Commercial</th>
+                  <th class="pb-2 text-left font-medium">Redistribution</th>
+                  <th class="pb-2 text-right font-medium">Stops</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="f in sortedFeeds" :key="f.feedId" class="border-b border-border/50 last:border-0">
+                  <td class="py-1.5 pr-4">
+                    <div class="flex items-center gap-1.5">
+                      <span>{{ f.name || f.feedId }}</span>
+                      <Badge v-if="f.withheld" variant="warning">withheld</Badge>
+                    </div>
+                    <div class="text-xs text-muted-foreground">{{ f.onestopId || f.feedId }}</div>
+                  </td>
+                  <td class="py-1.5 pr-4">
+                    <a
+                      v-if="f.license.url"
+                      :href="f.license.url"
+                      target="_blank"
+                      rel="noopener"
+                      class="underline-offset-2 hover:underline"
+                    >{{ f.license.spdx || 'Licence' }}</a>
+                    <span v-else-if="f.license.spdx">{{ f.license.spdx }}</span>
+                    <span v-else class="text-muted-foreground">None on record</span>
+                  </td>
+                  <td class="py-1.5 pr-4">
+                    <Badge :variant="answerVariant(f.license.commercialUseAllowed)">{{ f.license.commercialUseAllowed || 'unknown' }}</Badge>
+                  </td>
+                  <td class="py-1.5 pr-4">
+                    <Badge :variant="answerVariant(f.license.redistributionAllowed)">{{ f.license.redistributionAllowed || 'unknown' }}</Badge>
+                  </td>
+                  <td class="py-1.5 text-right tabular-nums">{{ formatNumber(f.stopCount) }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p class="mt-3 text-xs text-muted-foreground">
+            Terms as Transitland records them. Run “Refresh Feed Licences” to re-read them.
+          </p>
+        </CardContent>
+      </Card>
 
       <!-- Public API accounts -->
       <Card class="lg:col-span-2">

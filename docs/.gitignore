@@ -7,3 +7,6 @@
 
 # Netlify CLI site-link state; not source.
 .netlify/
+
+# Generated from ../CHANGELOG.md by scripts/sync-changelog.ts.
+/content/docs/changelog.md

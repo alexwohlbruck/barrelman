@@ -106,7 +106,7 @@ describe('complete GTFS feed replacement', () => {
     const transaction = spyOn(db, 'transaction').mockImplementation(async (work: any) => {
       // Exercise a real writer helper: it must use the supplied transaction,
       // rather than a second connection whose writes would escape rollback.
-      return work({ delete: () => ({ where: async () => { throw failure } }) })
+      return work({ execute: async () => [], delete: () => ({ where: async () => { throw failure } }) })
     })
     try {
       await expect(importFeedFile(await fixture(), feed)).rejects.toBe(failure)

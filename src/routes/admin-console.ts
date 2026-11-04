@@ -28,7 +28,7 @@ import {
   ScheduleValidationError,
 } from '../services/schedules.service'
 import { describeCron, nextRun } from '../lib/cron'
-import { getDataMetrics, getServiceStatuses } from '../services/admin-metrics.service'
+import { getDataMetrics, getServiceStatuses, listGtfsFeeds } from '../services/admin-metrics.service'
 import {
   listRegions,
   getRegion,
@@ -542,6 +542,9 @@ export const adminConsoleRoutes = new Elysia({ prefix: '/admin' })
 
   // ── Metrics & service health ────────────────────────────────────────
   .get('/metrics', () => getDataMetrics(), { detail: { summary: 'Data metrics', tags: ['Admin'] } })
+  .get('/gtfs-feeds', async () => ({ feeds: await listGtfsFeeds() }), {
+    detail: { summary: 'GTFS feeds with their licence terms', tags: ['Admin'] },
+  })
   .get('/services', async () => ({ services: await getServiceStatuses() }), {
     detail: { summary: 'Downstream service health', tags: ['Admin'] },
   })

@@ -285,7 +285,8 @@ itself.
 | `BARRELMAN_SEARCH_TRIGRAM_BUDGET_MS` | `2500` | How long `/search` waits for the fuzzy trigram layer before answering with the precise layers alone. That layer supplies typo tolerance and reads roughly 215 MB of index per call — fast against a warm index, and on an instance whose table dwarfs RAM slow enough that `BARRELMAN_STATEMENT_TIMEOUT_MS` cancels it, so the caller waits the whole timeout for nothing. `0` waits the full statement timeout |
 | `BARRELMAN_TRANSIT_ROUTE_MIN_RANK` | `0.5` | Lowest match score a GTFS route may have and still be returned by `/search`. Route matching includes a loose trigram branch so phrases like "harlem line" reach Metro-North's "Harlem"; across a large feed corpus that branch also pairs unrelated queries with whatever route shares a few trigrams, and routes outrank places in the result merge, so those accidents evict real answers. Exact short-name hits score 0.95, substring matches 0.6-0.8 |
 | `ISOCHRONE_CONCURRENCY` | `8` | Parallel GraphHopper calls per isochrone. Raise only if GraphHopper is dedicated to isochrone work |
-| `TRANSITLAND_API_KEY` | — | For GTFS feed discovery. Free at [transit.land](https://transit.land/users/sign_up) |
+| `TRANSITLAND_API_KEY` | — | For GTFS feed discovery and the *Refresh Feed Licences* task. Free at [transit.land](https://transit.land/users/sign_up) |
+| `GTFS_LICENCE_POLICY` | `off` | Which GTFS feeds may be served, judged by the licence Transitland records for each. `off` records licences and serves every feed. `commercial` withholds a feed whose licence explicitly says no to commercial use or to redistribution: the import skips it, `motis/config.yml` leaves it out, and transit responses drop it. A feed with no licence on record, or with `unknown`, is served. See [Importing data](/self-hosting/importing-data#feed-licences) |
 | `GTFS_RT_CREDENTIALS` | — | JSON object of secrets for realtime feeds that require one, keyed by the realtime feed's Transitland onestop id (`{"f-example~rt":"…"}`). Transitland names the parameter but never publishes the value. A realtime URL that answers 401 or 403 is dropped at import rather than polled |
 
 `GRAPHHOPPER_JAVA_OPTS` is the one to watch as `REGIONS` grows, but it sizes the
@@ -398,6 +399,25 @@ for what is backed up and how to restore.
 | `BACKUP_S3_ACCESS_KEY_ID` | — | Access key. Scope it to this bucket alone |
 | `BACKUP_S3_SECRET_ACCESS_KEY` | — | Its secret |
 | `BACKUP_S3_PREFIX` | `barrelman/` | Key prefix. Only objects named `<prefix>barrelman-*.dump` are listed or pruned, so other data in the bucket is safe. Use one prefix per instance: two instances on the same prefix prune each other's backups |
+
+## Monitoring and alerts
+
+All optional. With none of them set, nothing leaves the instance and the Sentry
+SDK is never loaded. What each alert means is in
+[monitoring and alerts](/self-hosting/operations#monitoring-and-alerts).
+
+| Variable | Default | Read by | Description |
+|---|---|---|---|
+| `SENTRY_DSN` | — | API, ops | Report unhandled errors and 5xx handler errors to Sentry or a Sentry-compatible service (GlitchTip works). Request bodies, headers, cookies, query strings, API keys and email addresses are stripped before sending |
+| `SENTRY_ENVIRONMENT` | `production` | API, ops | Environment tag on each event. The release tag is always `barrelman@<version>` |
+| `ALERT_WEBHOOK_URL` | — | API, ops | Where alerts are POSTed. An ntfy topic URL, a Slack incoming webhook, or any endpoint that accepts JSON |
+| `ALERT_WEBHOOK_FORMAT` | `json` | API, ops | `ntfy`, `slack` or `json`. Any other value falls back to `json` with a warning |
+| `ALERT_DISK_PERCENT` | `90` | ops | Alert when a data volume, the Postgres one included, is at least this full |
+| `ALERT_DEPENDENCY_CYCLES` | `3` | API | Consecutive failed health checks, a minute apart, before a required service alerts. The default rides out a GraphHopper cold start |
+
+Set the first four on both `barrelman` and `barrelman-ops`; the compose file
+forwards them to each. Scheduled jobs run in either process, so a webhook set on
+only one of them misses part of the job alerts.
 
 ## Landing-site demo
 

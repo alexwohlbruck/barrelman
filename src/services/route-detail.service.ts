@@ -12,6 +12,8 @@
 import { db } from '../db'
 import { sql } from 'drizzle-orm'
 import { getRouteShape } from './shapes.service'
+import { attributionFor, excludedFeedIds } from './feed-license.service'
+import type { FeedAttribution } from '../lib/feed-license'
 import { gtfsModeClass, type GtfsModeClass } from '../lib/gtfs-modes'
 
 /** One other line a rider can reach at a stop on this route. */
@@ -63,6 +65,8 @@ export interface RouteDetailResponse {
   /** Other route ids running this same line — its express working, e.g. `6X`
    *  for the `6`. Not the trunk: the 4 does not relate to the 5. */
   relatedRouteIds: string[]
+  /** The credit line for the route's feed. */
+  attribution?: FeedAttribution[]
 }
 
 export interface RouteResolveRequest {
@@ -344,6 +348,8 @@ export async function getRouteDetail(
   }
 
   const actualFeedId = route.feed_id || feedId
+  // A feed the licence policy excludes has no routes to show.
+  if ((await excludedFeedIds()).has(actualFeedId)) return null
 
   // The stops this route calls at, one row per station and each carrying how
   // much of the route's service actually reaches it.
@@ -436,6 +442,10 @@ export async function getRouteDetail(
     stops: orderedStops,
     coordinates,
     relatedRouteIds,
+    attribution: await attributionFor(
+      [actualFeedId],
+      route.agency_name ? new Map([[actualFeedId, route.agency_name]]) : undefined,
+    ),
   }
 }
 

@@ -449,6 +449,20 @@ export async function ensureGtfsSchema() {
     -- Add rt_urls column if it doesn't exist (for existing installs)
     ALTER TABLE gtfs_feeds ADD COLUMN IF NOT EXISTS rt_urls JSONB;
 
+    -- Licence terms as Transitland publishes them (yes/no/unknown answers),
+    -- recorded at discovery and by the "Refresh Feed Licences" task. NULL means
+    -- nothing is on record, which GTFS_LICENCE_POLICY treats as allowed.
+    ALTER TABLE gtfs_feeds ADD COLUMN IF NOT EXISTS license_spdx TEXT;
+    ALTER TABLE gtfs_feeds ADD COLUMN IF NOT EXISTS license_url TEXT;
+    ALTER TABLE gtfs_feeds ADD COLUMN IF NOT EXISTS license_use_without_attribution TEXT;
+    ALTER TABLE gtfs_feeds ADD COLUMN IF NOT EXISTS license_create_derived_product TEXT;
+    ALTER TABLE gtfs_feeds ADD COLUMN IF NOT EXISTS license_redistribution_allowed TEXT;
+    ALTER TABLE gtfs_feeds ADD COLUMN IF NOT EXISTS license_commercial_use_allowed TEXT;
+    ALTER TABLE gtfs_feeds ADD COLUMN IF NOT EXISTS license_share_alike_optional TEXT;
+    ALTER TABLE gtfs_feeds ADD COLUMN IF NOT EXISTS license_attribution_text TEXT;
+    ALTER TABLE gtfs_feeds ADD COLUMN IF NOT EXISTS license_attribution_instructions TEXT;
+    ALTER TABLE gtfs_feeds ADD COLUMN IF NOT EXISTS license_fetched_at TIMESTAMPTZ;
+
     CREATE TABLE IF NOT EXISTS gtfs_stops (
       id SERIAL PRIMARY KEY,
       stop_id TEXT NOT NULL,
@@ -648,6 +662,13 @@ export async function ensureGbfsSchema() {
 
     CREATE INDEX IF NOT EXISTS gbfs_systems_country_idx
       ON gbfs_systems (country_code);
+
+    -- Licence and attribution from system_information (GBFS v2.3+), when the
+    -- system publishes them. Most do not.
+    ALTER TABLE gbfs_systems ADD COLUMN IF NOT EXISTS license_id TEXT;
+    ALTER TABLE gbfs_systems ADD COLUMN IF NOT EXISTS license_url TEXT;
+    ALTER TABLE gbfs_systems ADD COLUMN IF NOT EXISTS attribution_organization_name TEXT;
+    ALTER TABLE gbfs_systems ADD COLUMN IF NOT EXISTS attribution_url TEXT;
 
     -- ── GBFS stations ─────────────────────────────────────────────────
     CREATE TABLE IF NOT EXISTS gbfs_stations (
