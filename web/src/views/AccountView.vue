@@ -1,9 +1,11 @@
 <script setup lang="ts">
 /**
- * Account settings: profile, sign-in methods and active sessions.
+ * Account settings: profile, sign-in methods, active sessions, and the data
+ * export and deletion the account holder is entitled to.
  */
 import { computed, onMounted, ref } from 'vue'
-import { Fingerprint, Link2, Link2Off, LogOut, Monitor, Plus, ShieldAlert, Trash2 } from 'lucide-vue-next'
+import { useRouter } from 'vue-router'
+import { Download, Fingerprint, Link2, Link2Off, LogOut, Monitor, Plus, ShieldAlert, Trash2 } from 'lucide-vue-next'
 import PageHeader from '@/components/PageHeader.vue'
 import Badge from '@/components/ui/Badge.vue'
 import Button from '@/components/ui/Button.vue'
@@ -11,12 +13,14 @@ import Card from '@/components/ui/Card.vue'
 import CardContent from '@/components/ui/CardContent.vue'
 import CardHeader from '@/components/ui/CardHeader.vue'
 import CardTitle from '@/components/ui/CardTitle.vue'
+import Dialog from '@/components/ui/Dialog.vue'
 import Input from '@/components/ui/Input.vue'
 import Label from '@/components/ui/Label.vue'
 import Spinner from '@/components/ui/Spinner.vue'
 import {
   acceptTerms,
   deletePasskey,
+  downloadAccountExport,
   getAccount,
   getLinkedProviders,
   getPasskeys,
@@ -26,7 +30,16 @@ import {
   unlinkProvider,
   updateAccount,
 } from '@/lib/api'
-import { authConfig, passkeysSupported, refreshUser, registerPasskey, signInWithOAuth, user } from '@/lib/auth'
+import {
+  authConfig,
+  deleteOwnAccount,
+  passkeysSupported,
+  refreshUser,
+  registerPasskey,
+  requestDeletionCode,
+  signInWithOAuth,
+  user,
+} from '@/lib/auth'
 import { toast } from '@/lib/toast'
 import type { PasskeySummary, SessionSummary, SuspensionInfo, TermsState } from '@/lib/types'
 
@@ -151,6 +164,65 @@ async function endOthers() {
     toast({ title: 'Signed out everywhere else', variant: 'success' })
   } catch (err) {
     fail(err, 'Could not sign out other devices')
+  } finally {
+    busy.value = ''
+  }
+}
+
+async function exportData() {
+  busy.value = 'export'
+  try {
+    await downloadAccountExport()
+  } catch (err) {
+    fail(err, 'Could not export your data')
+  } finally {
+    busy.value = ''
+  }
+}
+
+// ── Deletion ────────────────────────────────────────────────────────────
+
+const router = useRouter()
+const deleteOpen = ref(false)
+const confirmEmail = ref('')
+const deletionCode = ref('')
+const codeSent = ref(false)
+
+const emailConfirmed = computed(
+  () => confirmEmail.value.trim().toLowerCase() === (user.value?.email ?? '').trim().toLowerCase(),
+)
+const canUsePasskey = computed(() => passkeysSupported && passkeys.value.length > 0)
+
+function openDelete() {
+  confirmEmail.value = ''
+  deletionCode.value = ''
+  codeSent.value = false
+  deleteOpen.value = true
+}
+
+async function sendDeletionCode() {
+  busy.value = 'delete-code'
+  try {
+    await requestDeletionCode()
+    codeSent.value = true
+    toast({ title: 'Code sent', description: `Check ${user.value?.email}.`, variant: 'success' })
+  } catch (err) {
+    fail(err, 'Could not send a code')
+  } finally {
+    busy.value = ''
+  }
+}
+
+async function confirmDelete(method: 'code' | 'passkey') {
+  busy.value = `delete-${method}`
+  try {
+    await deleteOwnAccount(confirmEmail.value.trim(), method === 'code' ? deletionCode.value.trim() : undefined)
+    deleteOpen.value = false
+    toast({ title: 'Your account has been deleted', variant: 'success' })
+    await router.replace('/login')
+  } catch (err) {
+    if (method === 'passkey' && err instanceof Error && /abort|cancel|NotAllowed/i.test(err.message)) return
+    fail(err, 'Could not delete your account')
   } finally {
     busy.value = ''
   }
@@ -357,6 +429,91 @@ function formatDate(value: string | null) {
           </div>
         </CardContent>
       </Card>
+
+      <!-- Data export -->
+      <Card>
+        <CardHeader><CardTitle>Export data</CardTitle></CardHeader>
+        <CardContent class="flex flex-wrap items-center justify-between gap-3">
+          <p class="max-w-md text-sm text-muted-foreground">
+            Download a JSON file of everything held about this account: profile, sign-in methods,
+            keys, usage, credits and billing. Secrets such as key hashes are never included.
+          </p>
+          <Button variant="outline" :disabled="busy === 'export'" @click="exportData">
+            <Spinner v-if="busy === 'export'" class="size-4" />
+            <Download v-else class="size-4" />
+            Export data
+          </Button>
+        </CardContent>
+      </Card>
+
+      <!-- Deletion -->
+      <Card class="border-destructive/40">
+        <CardHeader><CardTitle>Delete account</CardTitle></CardHeader>
+        <CardContent class="flex flex-wrap items-center justify-between gap-3">
+          <p class="max-w-md text-sm text-muted-foreground">
+            Permanently removes this account, its API keys, usage history and credits. Keys stop
+            working at once. This cannot be undone.
+          </p>
+          <Button variant="destructive" @click="openDelete">Delete account</Button>
+        </CardContent>
+      </Card>
     </template>
   </div>
+
+  <Dialog
+    v-model:open="deleteOpen"
+    title="Delete your account?"
+    description="Your API keys stop working immediately, and your usage, credits and remaining subscription are gone for good. Export your data first if you want a copy."
+  >
+    <div class="flex flex-col gap-4">
+      <div class="flex flex-col gap-1.5">
+        <Label for="delete-email">Type <span class="font-medium text-foreground">{{ user?.email }}</span> to confirm</Label>
+        <Input id="delete-email" v-model="confirmEmail" autocomplete="off" spellcheck="false" />
+      </div>
+
+      <div v-if="codeSent" class="flex flex-col gap-1.5">
+        <Label for="delete-code">Code from the email</Label>
+        <Input
+          id="delete-code"
+          v-model="deletionCode"
+          inputmode="numeric"
+          autocomplete="one-time-code"
+          maxlength="16"
+          class="font-mono"
+        />
+      </div>
+
+      <div class="flex flex-wrap justify-end gap-2">
+        <Button variant="outline" :disabled="busy.startsWith('delete')" @click="deleteOpen = false">Cancel</Button>
+        <Button
+          v-if="canUsePasskey && !codeSent"
+          variant="destructive"
+          :disabled="!emailConfirmed || busy.startsWith('delete')"
+          @click="confirmDelete('passkey')"
+        >
+          <Spinner v-if="busy === 'delete-passkey'" class="size-4" />
+          <Fingerprint v-else class="size-4" />
+          Delete with passkey
+        </Button>
+        <Button
+          v-if="!codeSent"
+          :variant="canUsePasskey ? 'outline' : 'destructive'"
+          :disabled="!emailConfirmed || busy.startsWith('delete')"
+          @click="sendDeletionCode"
+        >
+          <Spinner v-if="busy === 'delete-code'" class="size-4" />
+          <template v-else>{{ canUsePasskey ? 'Use an email code' : 'Email me a code' }}</template>
+        </Button>
+        <Button
+          v-else
+          variant="destructive"
+          :disabled="!emailConfirmed || deletionCode.trim().length < 4 || busy.startsWith('delete')"
+          @click="confirmDelete('code')"
+        >
+          <Spinner v-if="busy === 'delete-code'" class="size-4" />
+          <template v-else>Delete account</template>
+        </Button>
+      </div>
+    </div>
+  </Dialog>
 </template>

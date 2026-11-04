@@ -146,6 +146,28 @@ export async function signOut(): Promise<void> {
   }
 }
 
+// ── Account deletion ────────────────────────────────────────────────────
+
+/** Email a code that confirms deleting this account. */
+export async function requestDeletionCode(): Promise<void> {
+  await request('/account/delete/request', { method: 'POST' })
+}
+
+/**
+ * Delete the signed-in account, confirmed by the emailed code or, when `code`
+ * is omitted, by a passkey prompt. The server ends every session; the local
+ * user is cleared so the router sends the console back to sign-in.
+ */
+export async function deleteOwnAccount(email: string, code?: string): Promise<void> {
+  let passkey: unknown
+  if (!code) {
+    const options = await request<Record<string, unknown>>('/account/delete/passkey-options', { method: 'POST' })
+    passkey = await startAuthentication(options as never)
+  }
+  await request('/account', { method: 'DELETE', body: JSON.stringify({ email, code, passkey }) })
+  user.value = null
+}
+
 export async function refreshUser(): Promise<void> {
   const session = await request<{ user: PublicUser } | null>('/auth/session')
   user.value = session?.user ?? null
