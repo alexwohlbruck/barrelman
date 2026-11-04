@@ -19,7 +19,8 @@ make it a requirement of using the API.
 | Mapterhorn | Terrain heights behind elevation-derived layers | Per source, mostly CC-BY 4.0 | [© Mapterhorn](https://mapterhorn.com/attribution) |
 | Transit agencies | Stops, routes and schedules | Each feed's own licence | The agency, as its licence asks |
 | 3D landmarks | Landmark models on the map | CC0, or CC-BY 4.0 for Open Landmarks | The model's `attribution` field, where set |
-| Brand logos | Logos returned by `/brands` and search | Per file, on Wikimedia Commons | As the file's licence asks |
+| Brand logos | Logos returned by `/brands` and search | Per file, on Wikimedia Commons | The brand's `logoAttribution`, when `logoLicense.attributionRequired` |
+| Map fonts | Labels in the basemap styles | [SIL OFL 1.1](https://openfontlicense.org) | None needed on the map |
 
 ### OpenStreetMap
 
@@ -110,10 +111,36 @@ needed beyond the map's own.
 
 ### Brand logos
 
-Logos are resolved through Wikidata and served from Wikimedia Commons. Each file
-has its own licence on its Commons page. Many logos are in the public domain
-because they are too simple to be copyrighted. Others are not, and their
-Commons page says what use is allowed.
+Logos are resolved through Wikidata (property P154) and come from Wikimedia
+Commons. Barrelman fetches each file once and serves its own copy, so
+`logoUrl` points at `/brand-logos/{qid}` on the API. An `<img>` can load it
+without a key.
+
+Each file has its own licence on its Commons page. Many logos are in the public
+domain because they are too simple to be copyrighted. Others are under a
+Creative Commons licence that asks for credit. Brand responses carry what
+Commons records for the file:
+
+```json
+{
+  "logoUrl": "https://api.barrelman.dev/brand-logos/Q38076?v=3f2a9c1b7e",
+  "logoLicense": {
+    "name": "Public domain",
+    "url": null,
+    "attributionRequired": false,
+    "publicDomain": true,
+    "trademarked": true,
+    "source": "https://commons.wikimedia.org/wiki/File:McDonald%27s_Golden_Arches.svg"
+  },
+  "logoAttribution": "McDonald's, Public domain, via Wikimedia Commons"
+}
+```
+
+When `attributionRequired` is `true`, show `logoAttribution` near the logo, or
+behind a link or tooltip from it, and link `source` if you can. When it is
+`false`, no credit is needed. `logoLicense` and `logoAttribution` are `null`
+until Barrelman has read the file's licence, which happens when the logo is
+first resolved. Treat a `null` licence as one that asks for credit.
 
 Logos and brand names are trademarks of their owners. Barrelman provides them
 to identify a place or a chain. Using them does not imply that the brand
@@ -122,8 +149,11 @@ endorses your app, and you should not use them in a way that suggests it does.
 ## MapLibre
 
 MapLibre GL builds its attribution control from each source's `attribution`
-string. Set it on the sources in your style, and the control shows the credits
-for whichever sources are on screen.
+string, and shows the credits for whichever sources are on screen.
+
+The TileJSON for each source, at `/tiles/<source>.json`, carries the credits
+that source owes. Point a source's `url` at it and the control fills itself in.
+The [basemap style](/usage/maps) does this already.
 
 ```json
 {
@@ -131,23 +161,23 @@ for whichever sources are on screen.
   "sources": {
     "basemap": {
       "type": "vector",
-      "tiles": ["https://api.barrelman.dev/tiles/basemap/{z}/{x}/{y}?api_key=YOUR_KEY"],
-      "maxzoom": 14,
-      "attribution": "<a href=\"https://www.openstreetmap.org/copyright\">© OpenStreetMap contributors</a> <a href=\"https://openmaptiles.org\">© OpenMapTiles</a>"
+      "url": "https://api.barrelman.dev/tiles/basemap.json?api_key=YOUR_KEY"
     },
     "detail": {
       "type": "vector",
-      "tiles": ["https://api.barrelman.dev/tiles/detail/{z}/{x}/{y}?api_key=YOUR_KEY"],
-      "attribution": "<a href=\"https://mapterhorn.com/attribution\">© Mapterhorn</a>"
+      "url": "https://api.barrelman.dev/tiles/detail.json?api_key=YOUR_KEY"
     }
   },
   "layers": []
 }
 ```
 
-The OpenStreetMap credit sits on the basemap source, so it is not repeated on
-`detail`. If you draw `detail` or any other source without the basemap, put the
-OpenStreetMap credit on that source as well.
+`basemap.json` credits OpenStreetMap and OpenMapTiles. `detail.json` credits
+OpenStreetMap and Mapterhorn. MapLibre shows each credit once, however many
+sources owe it.
+
+If you list `tiles` yourself instead of using `url`, set `attribution` on each
+source to the string its TileJSON returns.
 
 Keep the control on. If you need it smaller, use the compact form rather than
 removing it:

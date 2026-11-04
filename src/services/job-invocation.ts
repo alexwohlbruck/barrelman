@@ -7,6 +7,9 @@
  * param-application rules and keeps the display string identical on both sides.
  */
 import { type ScriptDef, type DangerLevel, type ScriptCategory } from '../admin/scripts-manifest'
+import { isEmptyParam, validateParam, validateParams } from './job-params'
+
+export { ParamValidationError, validateParams } from './job-params'
 
 export type JobStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'canceled'
 export type LogStream = 'stdout' | 'stderr' | 'system'
@@ -75,8 +78,20 @@ export type Invocation =
   | { kind: 'internal'; handler: string; env: Record<string, string>; display: string }
   | { kind: 'process'; command: string; args: string[]; env: Record<string, string>; display: string }
 
-/** Build the concrete invocation (argv + env) from a script + user params. */
+/** Quote an argv element for the display string. Nothing executes the display. */
+function displayArg(arg: string): string {
+  return /[\s'"\\$`]/.test(arg) ? `'${arg.replace(/'/g, `'\\''`)}'` : arg
+}
+
+/**
+ * Build the concrete invocation (argv + env) from a script + user params.
+ *
+ * Validates first (see services/job-params.ts), so the API refuses a bad value
+ * when the job is created and the ops worker refuses one stored before the
+ * check existed.
+ */
 export function buildInvocation(script: ScriptDef, params: Record<string, unknown>): Invocation {
+  validateParams(script, params)
   const env: Record<string, string> = { ...(script.env ?? {}) }
 
   if (script.exec.kind === 'internal') {
@@ -89,13 +104,14 @@ export function buildInvocation(script: ScriptDef, params: Record<string, unknow
 
   for (const p of script.params ?? []) {
     let val = params[p.name]
-    const isEmpty = val === undefined || val === null || val === ''
-    if (isEmpty) {
+    if (isEmptyParam(val)) {
       if (p.type === 'boolean') val = p.default ?? false
       else continue
     }
+    // Normalised (trimmed, and split for a `multiple` positional).
+    const values = p.type === 'boolean' ? [String(val)] : validateParam(p, val)
 
-    if (p.secret && val) secretValues.add(String(val))
+    if (p.secret && val) secretValues.add(values[0])
 
     if (p.apply === 'env') {
       if (p.type === 'boolean') {
@@ -104,14 +120,14 @@ export function buildInvocation(script: ScriptDef, params: Record<string, unknow
         // box is unticked turned it on rather than off.
         env[p.envVar ?? p.name] = val === true || val === 'true' ? '1' : '0'
       } else {
-        env[p.envVar ?? p.name] = String(val)
+        env[p.envVar ?? p.name] = values[0]
       }
     } else if (p.apply === 'flag') {
       const flag = p.flag ?? `--${p.name}`
       if (p.type === 'boolean') {
         if (val === true || val === 'true') args.push(flag)
       } else {
-        const str = String(val)
+        const str = values[0]
         // A value starting with "-" (a bbox like "-109.06,36.99,...") is read as
         // the next option by node:util parseArgs, which import-gtfs.ts uses:
         //   TypeError: Option '--region' argument is ambiguous.
@@ -121,14 +137,16 @@ export function buildInvocation(script: ScriptDef, params: Record<string, unknow
         else args.push(flag, str)
       }
     } else if (p.apply === 'positional') {
-      if (typeof val === 'string' && val.trim()) positional.push(...val.trim().split(/\s+/))
+      // One argv element per value, never re-split on spaces. Only a
+      // `multiple` param is a list, and each of its items was checked alone.
+      if (p.type !== 'boolean') positional.push(...values)
     }
   }
 
   args.push(...positional)
 
   const display = [script.exec.command, ...args]
-    .map((a) => (secretValues.has(a) ? '••••••' : a))
+    .map((a) => (secretValues.has(a) ? '••••••' : displayArg(a)))
     .join(' ')
 
   return { kind: 'process', command: script.exec.command, args, env, display }

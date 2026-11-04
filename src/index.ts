@@ -4,7 +4,8 @@ import { swagger } from '@elysiajs/swagger'
 import swaggerConfig from './config/swagger'
 import { healthRoutes } from './routes/health'
 import { searchRoutes } from './routes/search'
-import { brandsRoutes } from './routes/brands'
+import { brandsRoutes, brandLogoRoutes } from './routes/brands'
+import { mapAssetRoutes } from './routes/map-assets'
 import { containsRoutes } from './routes/contains'
 import { childrenRoutes } from './routes/children'
 import { placeRoutes } from './routes/place'
@@ -19,6 +20,7 @@ import { adminUserRoutes } from './routes/admin-users'
 import { adminConsoleRoutes, adminConsoleConfigRoutes } from './routes/admin-console'
 import { consoleUiRoutes } from './lib/console-ui'
 import { tileRoutes } from './routes/tiles'
+import { styleRoutes } from './routes/styles'
 import { bridgeMeshRoutes } from './routes/bridge-meshes'
 import { landmarkRoutes } from './routes/landmarks'
 import { graphhopperRoutes } from './routes/graphhopper'
@@ -31,6 +33,9 @@ import { speechRoutes } from './routes/speech'
 import { gbfsRoutes } from './routes/gbfs'
 import { ensureSchema, ensureGtfsSchema, ensureGbfsSchema, ensureStationLabelSchema } from './db'
 import { ensureAccountsSchema } from './services/accounts.service'
+import { passkeyPolicy } from './services/admin-access.service'
+import { flushPenalties, startPenaltySync } from './services/penalty-sync.service'
+import { startCacheBus } from './services/cache-bus.service'
 import { ensureOpsJobsSchema } from './services/ops-job-store'
 import { ensureRegionsSchema } from './services/region-store.service'
 import { ensureLandmarksSchema } from './services/landmarks.service'
@@ -89,6 +94,15 @@ await ensureOpsJobsSchema()
 await ensureRegionsSchema()
 // User accounts, API keys, usage and credits for the public API.
 await ensureAccountsSchema()
+// Logs whether BARRELMAN_ADMIN_REQUIRE_PASSKEY is enforced, and warns when it
+// is set but no administrator has a passkey yet (it then waits; see the module).
+await passkeyPolicy.startupCheck()
+// Penalty-box state from before this start (and from other replicas), then
+// kept in sync on a timer. See services/penalty-sync.service.ts.
+await startPenaltySync()
+// Key, suspension and plan changes made on another replica evict our caches
+// too. See services/cache-bus.service.ts.
+await startCacheBus()
 // Script run history, for job runtime estimates and progress bars.
 await initJobHistory()
 // 3D landmark models and placements, from every source (Open Landmarks and
@@ -155,6 +169,7 @@ const app = new Elysia()
   .use(healthRoutes)
   .use(searchRoutes)
   .use(brandsRoutes)
+  .use(brandLogoRoutes)
   .use(containsRoutes)
   .use(childrenRoutes)
   .use(placeRoutes)
@@ -172,6 +187,8 @@ const app = new Elysia()
   .use(bridgeMeshRoutes)
   .use(landmarkRoutes)
   .use(tileRoutes)
+  .use(styleRoutes)
+  .use(mapAssetRoutes)
   .use(graphhopperRoutes)
   .use(routeRoutes)
   .use(matchRoutes)
@@ -221,7 +238,9 @@ assertAuthConfigured()
 // doesn't discard the last few seconds of billing counters.
 for (const signal of ['SIGTERM', 'SIGINT'] as const) {
   process.on(signal, () => {
-    void Promise.allSettled([flushUsage(), flushRequestMetrics(), flushErrorTracking()]).finally(() => process.exit(0))
+    void Promise.allSettled([flushUsage(), flushRequestMetrics(), flushPenalties(), flushErrorTracking()]).finally(
+      () => process.exit(0),
+    )
   })
 }
 

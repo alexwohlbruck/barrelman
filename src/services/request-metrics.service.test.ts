@@ -7,10 +7,13 @@ import Elysia from 'elysia'
 import {
   bufferedRequestMetrics,
   clearRequestMetricsBuffer,
+  eraseRequestMetrics,
+  flushRequestMetrics,
   latencyBucket,
   LATENCY_BOUNDS_MS,
   percentileFromHistogram,
   recordRequest,
+  setRequestMetricsWriterForTests,
   UNIDENTIFIED_SUBJECT,
 } from './request-metrics.service'
 import { attribute, refusalFor, requestMetrics } from '../middleware/request-metrics'
@@ -119,5 +122,39 @@ describe('the request-metrics hook', () => {
     await new Elysia().use(requestMetrics).get('/search', () => 'ok').handle(new Request('http://localhost/search'))
     await settle()
     expect(bufferedRequestMetrics()[0]!.userId).toBe(UNIDENTIFIED_SUBJECT)
+  })
+})
+
+describe('eraseRequestMetrics', () => {
+  test('a flush that fails mid-erase does not put the account back', async () => {
+    recordRequest({ subject: 'deleted', endpoint: 'search', status: 200, durationMs: 5 })
+    recordRequest({ subject: 'kept', endpoint: 'search', status: 200, durationMs: 5 })
+
+    // A flush already in flight when the erase starts, which then fails and
+    // restores everything it took.
+    let fail!: () => void
+    const gate = new Promise<void>((resolve) => (fail = resolve))
+    const restore = setRequestMetricsWriterForTests(async () => {
+      await gate
+      throw new Error('database unavailable')
+    })
+    const originalError = console.error
+    console.error = () => {}
+
+    try {
+      const flush = flushRequestMetrics()
+      expect(bufferedRequestMetrics()).toHaveLength(0)
+
+      const deleted: string[] = []
+      const erase = eraseRequestMetrics('deleted', async (id) => deleted.push(id))
+      fail()
+      await Promise.all([flush, erase])
+
+      expect(deleted).toEqual(['deleted'])
+      expect(bufferedRequestMetrics().map((row) => row.userId)).toEqual(['kept'])
+    } finally {
+      restore()
+      console.error = originalError
+    }
   })
 })

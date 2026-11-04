@@ -34,6 +34,7 @@ import { reportPendingOverage } from './overage.service'
 import { endAllSessions } from './auth.service'
 import { invalidateUserKeys } from './api-keys.service'
 import { invalidateBalance } from './credits.service'
+import { eraseRequestMetrics } from './request-metrics.service'
 
 /** Actor id recorded when an automated rule acts rather than a person. */
 export const SYSTEM_ACTOR = 'system'
@@ -150,7 +151,8 @@ async function settleBillingBeforeDeletion(account: User): Promise<void> {
  * file — their keys, their usage, the log of what was decided about them — so
  * it can be argued with and undone. Deletion keeps nothing: keys, usage,
  * credit ledger, abuse signals and the moderation log itself all go with the
- * row, by `ON DELETE CASCADE`. That is the point when the request is "remove
+ * row, by `ON DELETE CASCADE`, and request metrics are erased by hand after
+ * it. That is the point when the request is "remove
  * me", and it is also why the only record left of this action is the server
  * log — the audit trail is one of the things being erased.
  *
@@ -189,6 +191,13 @@ export async function deleteAccount(userId: string, actorId: string): Promise<Us
   // cached a moment before the delete would keep serving a deleted account
   // until it expired.
   await revokeAccess(userId)
+
+  // Request metrics carry no foreign key, so the cascade misses them. A failure
+  // here leaves rows that age out with the retention window anyway, which is
+  // not worth failing a deletion that has already happened.
+  await eraseRequestMetrics(userId).catch((err) =>
+    console.error(`[moderation] could not erase request metrics for deleted account ${userId}`, err),
+  )
 
   console.warn(`[moderation] deleted account ${userId} <${deleted.email}> by ${actorId}`)
   return deleted

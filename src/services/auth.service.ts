@@ -10,8 +10,8 @@ import { and, desc, eq, lt } from 'drizzle-orm'
 import type { Session } from 'lucia'
 import { accountsDb as db } from '../db'
 import { lucia } from '../lib/lucia'
-import { authTokens, sessions, type User } from '../schema/accounts'
-import { generateId, randomNumericCode, sha256Hex } from '../lib/crypto'
+import { authTokens, sessions, type AuthTokenType, type SignInMethod, type User } from '../schema/accounts'
+import { generateId, randomNumericCode, safeEqual, sha256Hex } from '../lib/crypto'
 import { otpTtlMs } from '../config/accounts.config'
 import { hashIp } from './accounts.service'
 
@@ -33,18 +33,23 @@ export function isTestAccount(email: string): boolean {
 // ── One-time codes ──────────────────────────────────────────────────────
 
 /**
- * Issue a sign-in code, replacing any code already outstanding for this user.
- * Returns the plaintext for delivery — it is never recoverable afterwards.
+ * Issue a one-time code, replacing any code of the same type already
+ * outstanding for this user. Returns the plaintext for delivery; it is never
+ * recoverable afterwards.
+ *
+ * The fixed test-account code applies to sign-in only. A deletion code is
+ * always random, so a reviewer holding the test address cannot erase the
+ * account the next reviewer needs.
  */
-export async function createOtp(userId: string, email?: string): Promise<string> {
-  await db.delete(authTokens).where(and(eq(authTokens.userId, userId), eq(authTokens.type, 'otp')))
+export async function createOtp(userId: string, email?: string, type: AuthTokenType = 'otp'): Promise<string> {
+  await db.delete(authTokens).where(and(eq(authTokens.userId, userId), eq(authTokens.type, type)))
 
-  const code = email && isTestAccount(email) ? TEST_ACCOUNT_CODE : randomNumericCode(8)
+  const code = type === 'otp' && email && isTestAccount(email) ? TEST_ACCOUNT_CODE : randomNumericCode(8)
 
   await db.insert(authTokens).values({
     id: generateId(),
     userId,
-    type: 'otp',
+    type,
     hash: sha256Hex(code),
     expiresAt: new Date(Date.now() + otpTtlMs),
   })
@@ -59,11 +64,11 @@ export async function createOtp(userId: string, email?: string): Promise<string>
  */
 export type OtpResult = 'valid' | 'invalid' | 'expired' | 'too-many-attempts'
 
-export async function verifyOtp(userId: string, code: string): Promise<OtpResult> {
+export async function verifyOtp(userId: string, code: string, type: AuthTokenType = 'otp'): Promise<OtpResult> {
   const [token] = await db
     .select()
     .from(authTokens)
-    .where(and(eq(authTokens.userId, userId), eq(authTokens.type, 'otp')))
+    .where(and(eq(authTokens.userId, userId), eq(authTokens.type, type)))
     .orderBy(desc(authTokens.createdAt))
     .limit(1)
 
@@ -74,7 +79,7 @@ export async function verifyOtp(userId: string, code: string): Promise<OtpResult
     return 'expired'
   }
 
-  if (token.hash !== sha256Hex(code.trim())) {
+  if (!safeEqual(token.hash, sha256Hex(code.trim()))) {
     const attempts = token.attempts + 1
     if (attempts >= MAX_OTP_ATTEMPTS) {
       // Burn the code rather than let it be ground down by guessing. Eight
@@ -91,6 +96,43 @@ export async function verifyOtp(userId: string, code: string): Promise<OtpResult
   return 'valid'
 }
 
+// ── Confirmation challenges ─────────────────────────────────────────────
+
+/** A WebAuthn confirmation is a few seconds of interaction; five minutes is generous. */
+export const CHALLENGE_TTL_MS = 5 * 60_000
+
+/**
+ * Remember a WebAuthn challenge issued to `userId` for one purpose, replacing
+ * any earlier one. Kept server-side rather than in a cookie: the client
+ * controls its cookies, so a cookie challenge lets someone holding a session
+ * answer with any assertion they captured, a sign-in one included.
+ */
+export async function storeChallenge(userId: string, type: AuthTokenType, challenge: string): Promise<void> {
+  await db.delete(authTokens).where(and(eq(authTokens.userId, userId), eq(authTokens.type, type)))
+  await db.insert(authTokens).values({
+    id: generateId(),
+    userId,
+    type,
+    hash: sha256Hex(challenge),
+    expiresAt: new Date(Date.now() + CHALLENGE_TTL_MS),
+  })
+}
+
+/**
+ * Spend the challenge stored for (`userId`, `type`). True only when `challenge`
+ * is that challenge and it has not expired. The row is deleted whatever the
+ * outcome, so each challenge answers at most one attempt.
+ */
+export async function consumeChallenge(userId: string, type: AuthTokenType, challenge: string): Promise<boolean> {
+  const [token] = await db
+    .delete(authTokens)
+    .where(and(eq(authTokens.userId, userId), eq(authTokens.type, type)))
+    .returning()
+  if (!token) return false
+  if (token.expiresAt.getTime() <= Date.now()) return false
+  return safeEqual(token.hash, sha256Hex(challenge))
+}
+
 /** Clear codes that expired without being used. */
 export async function pruneExpiredTokens(): Promise<void> {
   await db.delete(authTokens).where(lt(authTokens.expiresAt, new Date()))
@@ -101,6 +143,8 @@ export async function pruneExpiredTokens(): Promise<void> {
 export interface SessionContext {
   ip?: string
   userAgent?: string | null
+  /** Recorded on the row; see `SignInMethod`. Omitted means unknown. */
+  method?: SignInMethod
 }
 
 /**
@@ -115,6 +159,7 @@ export async function startSession(
   const session = await lucia.createSession(userId, {
     ipHash: context.ip ? hashIp(context.ip) : null,
     userAgent: context.userAgent?.slice(0, 400) ?? null,
+    authMethod: context.method ?? null,
     createdAt: new Date(),
   })
 
@@ -123,6 +168,11 @@ export async function startSession(
 
 export async function endSession(sessionId: string): Promise<string> {
   await lucia.invalidateSession(sessionId)
+  return lucia.createBlankSessionCookie().serialize()
+}
+
+/** A `Set-Cookie` value that clears the session cookie. */
+export function blankSessionCookie(): string {
   return lucia.createBlankSessionCookie().serialize()
 }
 

@@ -84,6 +84,8 @@ export interface MeteringContext {
   throttleKey: string | null
   /** Set once the after-handler has run, so a second call is a no-op. */
   settled?: boolean
+  /** Set by the handler through `waiveCharge` when the answer was not worth paying for. */
+  waived?: boolean
 }
 
 // Throttling lives in services/throttle.service.ts — four layers plus a
@@ -118,9 +120,29 @@ function queryKey(request: Request): string | null {
   }
 }
 
+/**
+ * Stable, machine-readable reasons for the guard's refusals, returned as
+ * `code` beside the human `error` message. Messages get reworded; these do not.
+ * They are part of the public contract documented in usage/stability.mdx, so
+ * renaming one is a breaking change.
+ */
+export const REFUSAL_CODES = [
+  'missing_key',
+  'invalid_key',
+  'account_suspended',
+  'scope_denied',
+  'origin_denied',
+  'insufficient_credits',
+  'overage_limit_reached',
+  'rate_limited',
+  'too_many_failures',
+] as const
+
+export type RefusalCode = (typeof REFUSAL_CODES)[number]
+
 export interface IdentifyResult {
   caller: ApiCaller
-  error?: { status: number; body: { error: string; docs?: string } }
+  error?: { status: number; body: { error: string; code: RefusalCode; docs?: string } }
 }
 
 const DOCS_URL = '/docs'
@@ -161,6 +183,7 @@ export async function identifyCaller(
           error: accountsEnabled
             ? 'An API key is required. Create one in the console at /console.'
             : 'Missing Authorization header',
+          code: 'missing_key',
           docs: DOCS_URL,
         },
       },
@@ -177,14 +200,14 @@ export async function identifyCaller(
   if (!presented.startsWith(KEY_PREFIX)) {
     return {
       caller: { kind: 'anonymous' },
-      error: { status: 401, body: { error: 'Invalid API key', docs: DOCS_URL } },
+      error: { status: 401, body: { error: 'Invalid API key', code: 'invalid_key', docs: DOCS_URL } },
     }
   }
 
   if (!accountsEnabled) {
     return {
       caller: { kind: 'anonymous' },
-      error: { status: 401, body: { error: 'Invalid API key', docs: DOCS_URL } },
+      error: { status: 401, body: { error: 'Invalid API key', code: 'invalid_key', docs: DOCS_URL } },
     }
   }
 
@@ -194,7 +217,10 @@ export async function identifyCaller(
     // a caller which of those applies to a key they do not own is a probe.
     return {
       caller: { kind: 'anonymous' },
-      error: { status: 401, body: { error: 'Invalid or revoked API key', docs: DOCS_URL } },
+      error: {
+        status: 401,
+        body: { error: 'Invalid or revoked API key', code: 'invalid_key', docs: DOCS_URL },
+      },
     }
   }
 
@@ -295,7 +321,7 @@ export function apiAuth(group: EndpointGroup, options: ApiAuthOptions = {}) {
      */
     const reject = (
       status: number,
-      body: Record<string, unknown>,
+      body: { error: string; code: RefusalCode } & Record<string, unknown>,
       retryAfterSeconds?: number,
       { strike = true }: { strike?: boolean } = {},
     ) => {
@@ -348,7 +374,7 @@ export function apiAuth(group: EndpointGroup, options: ApiAuthOptions = {}) {
           rejected: true,
         })
       }
-      return { error: boxed.message, layer: boxed.layer, docs: DOCS_URL }
+      return { error: boxed.message, code: 'too_many_failures', layer: boxed.layer, docs: DOCS_URL }
     }
 
     if (error) return reject(error.status, error.body)
@@ -360,6 +386,7 @@ export function apiAuth(group: EndpointGroup, options: ApiAuthOptions = {}) {
         error: caller.suspensionReason
           ? `This account is suspended: ${caller.suspensionReason}`
           : 'This account is suspended.',
+        code: 'account_suspended',
         suspended: true,
         contact: '/console/account',
       })
@@ -373,7 +400,7 @@ export function apiAuth(group: EndpointGroup, options: ApiAuthOptions = {}) {
       if (!verdict.allowed) {
         return reject(
           429,
-          { error: verdict.message, layer: verdict.layer },
+          { error: verdict.message, code: 'rate_limited', layer: verdict.layer },
           verdict.retryAfterSeconds,
           { strike: false },
         )
@@ -387,6 +414,7 @@ export function apiAuth(group: EndpointGroup, options: ApiAuthOptions = {}) {
     if (!scopeAllows(caller.scopes ?? ['*'], group)) {
       return reject(403, {
         error: `This API key is not permitted to call ${group} endpoints`,
+        code: 'scope_denied',
         scope: group,
       })
     }
@@ -408,6 +436,7 @@ export function apiAuth(group: EndpointGroup, options: ApiAuthOptions = {}) {
           error: presented
             ? `This API key is not permitted for requests from ${presented}`
             : 'This API key is restricted to specific origins and this request presented none.',
+          code: 'origin_denied',
           origin: presented ?? null,
         })
       }
@@ -424,7 +453,7 @@ export function apiAuth(group: EndpointGroup, options: ApiAuthOptions = {}) {
     if (!verdict.allowed) {
       return reject(
         429,
-        { error: verdict.message, layer: verdict.layer },
+        { error: verdict.message, code: 'rate_limited', layer: verdict.layer },
         verdict.retryAfterSeconds,
         { strike: false },
       )
@@ -453,7 +482,7 @@ export function apiAuth(group: EndpointGroup, options: ApiAuthOptions = {}) {
     if (!plan.metered || cost === 0) {
       deps.recordUsage({ userId: caller.userId, apiKeyId: caller.keyId, endpoint: group, credits: 0 })
       stash(context, { caller, group, credits: 0, charged: false, throttleKey })
-      recordSuccess(caller.userId)
+      recordSuccess(penaltyKeyFor(ip, caller.userId))
       set.headers['x-barrelman-credits-charged'] = '0'
       return
     }
@@ -467,6 +496,7 @@ export function apiAuth(group: EndpointGroup, options: ApiAuthOptions = {}) {
             ? 'Overage spend limit reached for this billing period. Raise the limit or upgrade at /console/billing.'
             : 'Credit allowance exhausted for this billing period. ' +
               'Upgrade your plan or add credits at /console/billing.',
+        code: decision.reason === 'overage-cap-reached' ? 'overage_limit_reached' : 'insufficient_credits',
         reason: decision.reason,
         remaining: decision.balance.remaining,
         resetsAt: decision.balance.cycleResetsAt,
@@ -475,7 +505,7 @@ export function apiAuth(group: EndpointGroup, options: ApiAuthOptions = {}) {
 
     deps.recordUsage({ userId: caller.userId, apiKeyId: caller.keyId, endpoint: group, credits: cost })
     stash(context, { caller, group, credits: cost, charged: true, throttleKey })
-    recordSuccess(caller.userId)
+    recordSuccess(penaltyKeyFor(ip, caller.userId))
 
     set.headers['x-barrelman-credits-charged'] = String(cost)
     if (decision.overage) set.headers['x-barrelman-overage'] = 'true'
@@ -524,7 +554,7 @@ export async function refusalForCredential(
   if (!boxed.allowed) {
     return {
       status: 429,
-      body: { error: boxed.message, layer: boxed.layer, docs: DOCS_URL },
+      body: { error: boxed.message, code: 'too_many_failures', layer: boxed.layer, docs: DOCS_URL },
       retryAfterSeconds: boxed.retryAfterSeconds,
     }
   }
@@ -537,7 +567,8 @@ export async function refusalForCredential(
 
 /**
  * Companion `onAfterHandle`: refunds the charge when the request failed with a
- * server error. Attach alongside the guard on the same instance.
+ * server error, or when the handler waived it (`waiveCharge`). Attach alongside
+ * the guard on the same instance.
  */
 export function apiAuthAfter(context: GuardContext) {
   const metering = read(context)
@@ -555,14 +586,33 @@ export function apiAuthAfter(context: GuardContext) {
   if (!metering.charged || !metering.caller.userId) return
 
   const status = Number(context.set.status ?? 200)
-  if (status >= 500) {
-    refundUsage({
-      userId: metering.caller.userId,
-      apiKeyId: metering.caller.keyId,
-      endpoint: metering.group,
-      credits: metering.credits,
-    })
+  const failed = status >= 500
+  if (!failed && !metering.waived) return
+
+  const usage = {
+    userId: metering.caller.userId,
+    apiKeyId: metering.caller.keyId,
+    endpoint: metering.group,
+    credits: metering.credits,
   }
+  // A failed request is taken out of the counts entirely. A waived one did
+  // answer, so it stays visible as a request (to the dashboards and to abuse
+  // detection) at zero credits, the way an unmetered request is recorded.
+  refundUsage(usage, { keepRequest: !failed })
+  if (!failed) context.set.headers['x-barrelman-credits-charged'] = '0'
+}
+
+/**
+ * Mark a successful response as not billable. The after-handler refunds the
+ * whole up-front charge, the same as for a 5xx.
+ *
+ * For answers that came back empty because of what the instance can do, not
+ * because of what the caller asked: a transit plan with no itinerary. A no-op
+ * for a request the guard did not charge.
+ */
+export function waiveCharge(request: Request): void {
+  const metering = read({ request } as GuardContext)
+  if (metering && !metering.settled) metering.waived = true
 }
 
 /**

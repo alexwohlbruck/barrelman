@@ -4,12 +4,26 @@ export type ScriptCategory = 'osm' | 'transit' | 'gbfs' | 'search' | 'routing' |
 export type DangerLevel = 'safe' | 'caution' | 'destructive'
 export type ParamApply = 'flag' | 'env' | 'positional'
 export type ParamType = 'string' | 'number' | 'boolean' | 'select'
+export type ParamFormat =
+  | 'identifier'
+  | 'identifiers'
+  | 'region'
+  | 'regions'
+  | 'path'
+  | 'bbox'
+  | 'date'
+  | 'text'
+  | 'decimal'
 
 export interface ScriptParam {
   name: string
   label: string
   type: ParamType
   apply: ParamApply
+  format?: ParamFormat
+  decimal?: boolean
+  allowDash?: boolean
+  multiple?: boolean
   flag?: string
   envVar?: string
   default?: string | number | boolean
@@ -309,6 +323,16 @@ export interface PublicUser {
   createdAt: string | null
 }
 
+/**
+ * `GET /auth/session` adds this for an administrator: whether this session may
+ * use the admin API from where it is, and the reason when it may not.
+ */
+export interface AdminAccess {
+  ok: boolean
+  code?: 'passkey_required' | 'ip_not_allowed'
+  error?: string
+}
+
 export interface AuthConfig {
   registrationMode: 'open' | 'invite'
   methods: {
@@ -398,13 +422,14 @@ export interface CreditBalance {
   remaining: number
   overageAllowed: boolean
   overage: number
+  cycleStartedAt: string
   cycleResetsAt: string
 }
 
 export interface LedgerEntry {
   id: string
   amount: number
-  kind: 'purchase' | 'grant' | 'adjustment' | 'refund'
+  kind: 'purchase' | 'grant' | 'adjustment' | 'refund' | 'usage'
   description: string | null
   createdAt: string
 }

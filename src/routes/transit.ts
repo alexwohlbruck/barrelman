@@ -1,7 +1,7 @@
 import Elysia, { t } from 'elysia'
 import { clampInt, clampNumber, LIMITS } from '../lib/params'
 import { serverError } from '../lib/errors'
-import { apiAuth, apiAuthAfter } from '../middleware/api-auth'
+import { apiAuth, apiAuthAfter, waiveCharge, type ApiAuthDeps } from '../middleware/api-auth'
 import {
   getTransitRoute as _getTransitRoute,
   getIntermodalRoute as _getIntermodalRoute,
@@ -10,6 +10,7 @@ import {
   markTransitActivity,
   MotisError,
   type TransitRouteRequest,
+  type TransitRouteResponse,
   type IntermodalRouteRequest,
   type TransitMode,
   type MotisStreetMode,
@@ -52,6 +53,16 @@ import {
   feedRowResponses,
 } from './transit-schemas'
 
+/**
+ * A plan with no itinerary is not charged. On a timetable-only instance every
+ * bike, car and rental plan comes back empty, and the caller can't avoid that
+ * by asking differently. The response's `warnings` say why it is empty.
+ */
+function unbilledIfEmpty(request: Request, result: TransitRouteResponse): TransitRouteResponse {
+  if (!result.itineraries?.length) waiveCharge(request)
+  return result
+}
+
 export function createTransitRoutes(deps: {
   getTransitRoute?: typeof _getTransitRoute
   getIntermodalRoute?: typeof _getIntermodalRoute
@@ -69,6 +80,8 @@ export function createTransitRoutes(deps: {
   getStationDetail?: typeof _getStationDetail
   getNearestEntrance?: typeof _getNearestEntrance
   findEntrances?: typeof _findEntrances
+  /** The metering guard's collaborators, for tests. */
+  auth?: Partial<ApiAuthDeps>
 } = {}) {
   const getTransitRoute = deps.getTransitRoute || _getTransitRoute
   const getIntermodalRoute = deps.getIntermodalRoute || _getIntermodalRoute
@@ -90,7 +103,7 @@ export function createTransitRoutes(deps: {
     value === 'enter' || value === 'exit' ? value : undefined
 
   return new Elysia({ prefix: '/transit' })
-    .onBeforeHandle(apiAuth('transit'))
+    .onBeforeHandle(apiAuth('transit', deps.auth))
     .onAfterHandle(apiAuthAfter)
 
     // ── POST /transit/route ─────────────────────────────────────────
@@ -98,7 +111,7 @@ export function createTransitRoutes(deps: {
       // Real traffic keeps MOTIS hot; tell the warm-up loop to stand down.
       markTransitActivity()
       try {
-        const request: TransitRouteRequest = {
+        const plan: TransitRouteRequest = {
           from: { lat: body.from.lat, lng: body.from.lng },
           to: { lat: body.to.lat, lng: body.to.lng },
           time: body.time,
@@ -110,7 +123,7 @@ export function createTransitRoutes(deps: {
           maxTransfers: body.maxTransfers,
           wheelchair: body.wheelchair,
         }
-        return await getTransitRoute(request, fetchFn)
+        return unbilledIfEmpty(request, await getTransitRoute(plan, fetchFn))
       } catch (err) {
         if (err instanceof MotisError) {
           set.status = err.statusCode >= 500 ? 502 : err.statusCode
@@ -151,7 +164,8 @@ export function createTransitRoutes(deps: {
           'with a walk leg; walking legs are straight-line estimates. Itineraries are ' +
           'ordered by arrival time (latest departure for `arriveBy`), list each ride ' +
           'once, and carry `fare` and `farePayments` where the feeds publish fare ' +
-          'data. An extra fare payment counts as ten minutes in the ordering.',
+          'data. An extra fare payment counts as ten minutes in the ordering. ' +
+          'A plan with no itinerary is not charged, and carries `warnings` saying so.',
         tags: ['Transit'],
       },
     })
@@ -161,7 +175,7 @@ export function createTransitRoutes(deps: {
       // Real traffic keeps MOTIS hot; tell the warm-up loop to stand down.
       markTransitActivity()
       try {
-        const request: IntermodalRouteRequest = {
+        const plan: IntermodalRouteRequest = {
           from: { lat: body.from.lat, lng: body.from.lng },
           to: { lat: body.to.lat, lng: body.to.lng },
           time: body.time,
@@ -183,7 +197,7 @@ export function createTransitRoutes(deps: {
           additionalTransferTime: body.additionalTransferTime,
           requireBikeTransport: body.requireBikeTransport,
         }
-        return await getIntermodalRoute(request, fetchFn)
+        return unbilledIfEmpty(request, await getIntermodalRoute(plan, fetchFn))
       } catch (err) {
         if (err instanceof MotisError) {
           set.status = err.statusCode >= 500 ? 502 : err.statusCode
@@ -238,7 +252,10 @@ export function createTransitRoutes(deps: {
           'Itineraries carry `fare` and `farePayments` where the feeds publish fare ' +
           'data. Itineraries are ordered by arrival time (latest departure for ' +
           '`arriveBy`) and list each ride once; an extra fare payment counts as ' +
-          'ten minutes in the ordering. A transit leg carries `directionLabel` ' +
+          'ten minutes in the ordering. A plan with no itinerary is not charged. ' +
+          'Its `warnings` say no itinerary was found and, on an instance whose ' +
+          'MOTIS has no street graph, that access beyond walking is not available there. ' +
+          'A transit leg carries `directionLabel` ' +
           'where its boarding platform\'s signed direction is known ("Uptown & ' +
           'The Bronx"); `headsign` still names the terminal.',
         tags: ['Transit'],

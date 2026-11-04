@@ -65,6 +65,8 @@ mock.module('../db', () => ({
 import {
   getTransitRoute,
   getIntermodalRoute,
+  motisStreetRouting,
+  noItineraryWarnings,
   getRoutesForStop,
   checkMotisHealth,
   extractFare,
@@ -799,6 +801,60 @@ describe('getIntermodalRoute bike carriage', () => {
     const result = await getIntermodalRoute(request, fetchFn)
 
     expect(result.metadata?.requireBikeTransport).toBeUndefined()
+  })
+})
+
+describe('empty plans', () => {
+  beforeEach(() => {
+    dbCallIndex = 0
+  })
+
+  test('say no itinerary was found', async () => {
+    const result = await getIntermodalRoute(
+      { from: { lat: 35.23, lng: -80.84 }, to: { lat: 35.77, lng: -78.64 }, preTransitModes: ['BIKE'] },
+      mockFetch({ itineraries: [], direct: [] }),
+    )
+
+    expect(result.itineraries).toHaveLength(0)
+    expect(result.warnings?.[0]).toContain('No itinerary was found')
+  })
+
+  test('carry no warnings when an itinerary was found', async () => {
+    const result = await getIntermodalRoute(
+      { from: { lat: 35.23, lng: -80.84 }, to: { lat: 35.77, lng: -78.64 }, preTransitModes: ['BIKE'] },
+      mockFetch(makeMotisResponse()),
+    )
+
+    expect(result.itineraries.length).toBeGreaterThan(0)
+    expect(result.warnings).toBeUndefined()
+  })
+
+  test('name the missing street graph only for access beyond walking', () => {
+    expect(noItineraryWarnings(false, false)).toHaveLength(2)
+    expect(noItineraryWarnings(false, false)[1]).toContain('without a street graph')
+    expect(noItineraryWarnings(true, false)).toHaveLength(1)
+    expect(noItineraryWarnings(false, true)).toHaveLength(1)
+    // Unknown build mode: claim nothing about it.
+    expect(noItineraryWarnings(false, undefined)).toHaveLength(1)
+  })
+})
+
+describe('motisStreetRouting', () => {
+  const write = async (text: string) => {
+    const path = `/tmp/motis-config-${crypto.randomUUID()}.yml`
+    await Bun.write(path, text)
+    return path
+  }
+
+  test('reads the mode rebuild-motis.sh wrote', async () => {
+    expect(await motisStreetRouting(await write('timetable:\n  x: 1\n\nstreet_routing: false\nosr_footpath: false\n'))).toBe(false)
+    expect(await motisStreetRouting(await write('street_routing: true\n'))).toBe(true)
+  })
+
+  test('is undefined without a readable config', async () => {
+    expect(await motisStreetRouting('/nonexistent/config.yml')).toBeUndefined()
+    // The header comment repeats the flag; only the top-level key counts.
+    expect(await motisStreetRouting(await write('# street_routing: false\n'))).toBeUndefined()
   })
 })
 

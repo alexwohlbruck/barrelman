@@ -1,0 +1,106 @@
+---
+title: Maps
+description: Draw a Barrelman basemap with MapLibre GL in a few lines, with attribution handled for you.
+---
+
+Barrelman publishes a ready-made map style for its basemap. Pass its URL to
+[MapLibre GL JS](https://maplibre.org/maplibre-gl-js/docs/) and you have a map.
+
+## Quickstart
+
+```html
+<link href="https://unpkg.com/maplibre-gl/dist/maplibre-gl.css" rel="stylesheet" />
+<script src="https://unpkg.com/maplibre-gl/dist/maplibre-gl.js"></script>
+<div id="map" style="height: 400px"></div>
+<script>
+  new maplibregl.Map({
+    container: 'map',
+    style: 'https://api.barrelman.dev/styles/basemap.json?api_key=YOUR_KEY',
+    center: [-80.8431, 35.2271],
+    zoom: 12,
+  })
+</script>
+```
+
+Use `basemap-dark.json` for a dark map.
+
+A map library fetches the style and its tiles itself and cannot set an
+`Authorization` header, so the key goes in the URL. It is visible to anyone who
+opens the page. Give a browser key the `tiles` scope and nothing else, and
+restrict it to your site's origins (see [Accounts](/usage/accounts)).
+
+The style and TileJSON documents cost no credits. Tiles are charged as usual;
+see [Pricing](/usage/pricing).
+
+## Attribution
+
+The style's source points at `/tiles/basemap.json`, a
+[TileJSON](https://github.com/mapbox/tilejson-spec/tree/master/3.0.0) document
+that carries the credits the basemap requires. MapLibre reads them from there
+and shows them in its attribution control:
+
+> © OpenStreetMap contributors © OpenMapTiles
+
+Keep the control on. If you need it smaller, use
+`attributionControl: { compact: true }`. [Attribution](/usage/attribution) lists
+every credit and when it applies.
+
+## How the key travels
+
+When the style is fetched with `?api_key=`, the key is written into its source
+URL, and from there into the tile URLs of the TileJSON. Nothing else needs
+configuring.
+
+A key sent as a Bearer header is never written into a style or TileJSON, so it
+cannot leak through a cached or shared document. If your app authenticates by
+header, add the key to tile requests yourself with
+[`transformRequest`](https://maplibre.org/maplibre-gl-js/docs/API/type-aliases/RequestTransformFunction/).
+
+## Other sources
+
+Every tile source and bundle has a TileJSON at `/tiles/<source>.json`:
+`/tiles/detail.json`, `/tiles/indoor.json`, `/tiles/landmarks.json`, or a
+composite such as `/tiles/buildings_3d,parking_areas.json`. Each one lists the
+source's zoom range, bounds and `vector_layers`, and the credits it owes. Add
+one to a style as a `vector` source:
+
+```js
+map.on('load', () => {
+  map.addSource('detail', {
+    type: 'vector',
+    url: 'https://api.barrelman.dev/tiles/detail.json?api_key=YOUR_KEY',
+  })
+})
+```
+
+`/tiles/detail.json` adds the Mapterhorn terrain credit, because some of its
+layers carry heights read from Mapterhorn.
+
+## Style licence
+
+`basemap.json` is based on [OSM Bright](https://github.com/openmaptiles/osm-bright-gl-style)
+and `basemap-dark.json` on [Dark Matter](https://github.com/openmaptiles/dark-matter-gl-style),
+both by OpenMapTiles. Their code is BSD-3-Clause and their design is
+[CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/). Each style's
+`metadata` names its origin.
+
+## Glyphs and sprites
+
+Both styles load their label fonts and icons from Barrelman:
+
+- `glyphs` is `/fonts/{fontstack}/{range}.pbf`. The fonts are Noto Sans
+  Regular, Bold and Italic from the [OpenMapTiles fonts](https://github.com/openmaptiles/fonts)
+  build, under the [SIL Open Font License 1.1](https://openfontlicense.org).
+- `sprite` is `/sprites/osm-bright` or `/sprites/dark-matter`, the icon sheets
+  from each style's repository, at 1x and `@2x`.
+
+These URLs take no key and cost nothing, since MapLibre requests them without
+one. They are limited per address. You can point a style of your own at them.
+
+Glyphs cover the ranges 0-255 through 8192-8447, which is U+0000 to U+20FF:
+Latin, Greek, Cyrillic, Armenian, Hebrew, Arabic, the Indic scripts, Thai,
+Georgian and general punctuation, among others. Any other range, such as
+Chinese, Japanese or Korean, answers an empty glyph set. MapLibre accepts it,
+so labels in those scripts are left out and the rest of the map draws as
+usual. A font stack is served by its first font that Barrelman carries, and a
+stack that names none of them gets Noto Sans Regular.

@@ -28,6 +28,13 @@ import {
 export type UserRole = 'user' | 'admin'
 
 /**
+ * How a session was signed in. Recorded so `BARRELMAN_ADMIN_REQUIRE_PASSKEY`
+ * can tell a passkey session from the rest. Sessions created before the column
+ * existed have NULL, and count as not-passkey.
+ */
+export type SignInMethod = 'email' | 'passkey' | 'oauth'
+
+/**
  * Why an account is suspended. The distinction matters to the user: `abuse`
  * and `tos-violation` are judgements to appeal, while `billing` and
  * `automated-abuse` clear themselves once the underlying condition does.
@@ -57,6 +64,31 @@ export const users = pgTable(
     role: text('role').notNull().default('user').$type<UserRole>(),
     /** Current plan id (see billing/plans.ts). Mirrors the Polar subscription. */
     plan: text('plan').notNull().default('free'),
+    /**
+     * The subscription's period start, from which every period is derived by
+     * stepping whole months (see billing/periods.ts). Null on
+     * accounts that have never subscribed; ignored on plans without a
+     * subscription, which stay on calendar months.
+     */
+    billingPeriodStart: timestamp('billing_period_start', { withTimezone: true }),
+    /** The subscription the anchor above came from. It is written once per subscription. */
+    billingPeriodSubscriptionId: text('billing_period_subscription_id'),
+    /**
+     * Every day before this has had its pack usage settled. Advances each
+     * period whether or not anything was owed, so no day is judged twice.
+     */
+    packSettledThrough: date('pack_settled_through'),
+    /**
+     * The day the account last changed plan or subscription. Overage and the
+     * allowance count only usage from here on; what came before was settled
+     * and reported under the old plan at the change. See `segmentOf`.
+     */
+    meteredFrom: date('metered_from'),
+    /**
+     * Whether `metered_from` marks a new subscription, whose first segment keeps
+     * a whole allowance, rather than a plan change, whose segment is prorated.
+     */
+    meteredFromNewSubscription: boolean('metered_from_new_subscription').notNull().default(false),
     polarCustomerId: text('polar_customer_id'),
     /**
      * The Polar subscription behind `plan`, as of the last webhook or sync.
@@ -121,14 +153,22 @@ export const sessions = pgTable(
     expiresAt: timestamp('expires_at', { withTimezone: true, mode: 'date' }).notNull(),
     ipHash: text('ip_hash'),
     userAgent: text('user_agent'),
+    authMethod: text('auth_method').$type<SignInMethod>(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [index('accounts_sessions_user_idx').on(t.userId)],
 )
 
 /**
- * Single-use, short-lived secrets: currently just email sign-in codes. Stored
- * as a digest so a database read never yields a usable code.
+ * What a one-time code is for. A code is only ever accepted for the purpose it
+ * was issued for, so a sign-in code cannot confirm an account deletion.
+ */
+export type AuthTokenType = 'otp' | 'delete-account' | 'delete-account-passkey'
+
+/**
+ * Single-use, short-lived secrets: email sign-in codes and account-deletion
+ * confirmations. Stored as a digest so a database read never yields a usable
+ * code.
  */
 export const authTokens = pgTable(
   'accounts_auth_tokens',
@@ -137,7 +177,7 @@ export const authTokens = pgTable(
     userId: text('user_id')
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
-    type: text('type').notNull().$type<'otp'>(),
+    type: text('type').notNull().$type<AuthTokenType>(),
     hash: text('hash').notNull(),
     /** Failed attempts against this code; five strikes and it is burned. */
     attempts: integer('attempts').notNull().default(0),
@@ -267,7 +307,12 @@ export const usageRecords = pgTable(
   ],
 )
 
-export type CreditEntryKind = 'purchase' | 'grant' | 'adjustment' | 'refund'
+/**
+ * `usage` entries are written by the ledger itself when a billing period
+ * closes: the pack credit that period consumed, recorded as a negative amount
+ * so the next period starts from what is actually left.
+ */
+export type CreditEntryKind = 'purchase' | 'grant' | 'adjustment' | 'refund' | 'usage'
 
 /**
  * Credits that exist outside the monthly plan allowance: prepaid packs bought

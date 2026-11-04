@@ -20,7 +20,7 @@ exact across millions of small charges — no floating-point drift.
 
 | Group | Credits | Endpoints |
 |---|---|---|
-| `tiles` | 1 per source | `/tiles/*` |
+| `tiles` | 1 per source | `/tiles/*`, `/styles/*` |
 | `places` | 3 | `/place/*`, `/brands` |
 | `spatial` | 3 | `/contains`, `/children` |
 | `geocode` | 5 | `/geocode/*` |
@@ -35,7 +35,8 @@ them can carry many times the work of another:
 - **Tiles** cost 1 credit per source the tile reads. A bundle such as `detail`
   or a comma-joined composite such as `buildings_3d,parking_areas` costs one
   credit per member, the same as fetching each source on its own. Bundling
-  still saves round trips and latency.
+  still saves round trips and latency. TileJSON (`/tiles/<source>.json`) and
+  map styles (`/styles/*`) are free.
 - **`/isochrone`** costs 40 credits per contour. `durations=300,600,900` is
   three contours, 120 credits. With no `durations` it computes one 15-minute
   contour. `/isochrone/modes` is free.
@@ -45,6 +46,11 @@ them can carry many times the work of another:
 `X-Barrelman-Credits-Charged` on each response gives the exact amount. A request
 refused before it reaches the engine (a malformed tile source, too many
 contours, a trace over the point limit) is charged one unit.
+
+Empty transit plans aren't charged. When `/transit/route` or
+`/transit/intermodal-route` finds no itinerary, the credits are refunded,
+`X-Barrelman-Credits-Charged` reads 0 and the response carries a `warnings`
+list saying why. A request that fails with a 5xx is refunded the same way.
 
 The `/graphhopper` passthrough forwards `route`, `info` and `health` only. Use
 `/isochrone` and `/match` for reachability and map matching.
@@ -124,6 +130,7 @@ this is a plan rather than a kind of key.
 ```json
 {
   "error": "Credit allowance exhausted for this billing period. …",
+  "code": "insufficient_credits",
   "remaining": 0,
   "resetsAt": "2026-09-01T00:00:00.000Z"
 }
@@ -133,7 +140,7 @@ Nobody can run up a bill on a plan they did not pay for.
 
 **Overage is capped.** Paid plans keep serving past the allowance, but only up
 to a multiple of it (3x on Developer and Business, 2x on Scale); past that,
-requests are refused with a `402` carrying `reason: "overage-cap-reached"`. A
+requests are refused with a `402` carrying `code: "overage_limit_reached"`. A
 leaked key would otherwise accrue charges with no ceiling — a Developer key at
 its own rate limit against `/isochrone` is roughly $1/minute — and the
 burn-rate detector only runs on the hourly sweep. Enterprise is uncapped
@@ -146,16 +153,43 @@ and that a bigger plan is never more expensive per credit.
 
 ## Cycles and balances
 
-Cycles are **calendar months in UTC**. The monthly allowance resets on the 1st
-and does not roll over.
+On a paid plan the cycle follows your subscription: if you subscribed on the
+14th, your allowance resets on the 14th of each month, the day you are billed.
+When a month has no such day (the 31st in February), the cycle resets on that
+month's last day. The Free plan resets on the 1st of each calendar month. Both
+reset at midnight UTC, and the allowance does not roll over.
+
+Changing plan mid-cycle splits the cycle at the day of the change, and each
+part includes its plan's allowance in proportion to the days it covers, the way
+the price is prorated. Developer for 9 days of a 30-day cycle and then Business
+for 21 includes 300,000 + 7,000,000 credits. Usage before the change is judged
+against the old plan's share and any overage on it is billed at the change, so
+the new plan only judges what comes after. Together the parts never include
+more than one allowance of the biggest plan you held that cycle.
+
+A new subscription starts a new cycle on the day it begins, with a whole
+allowance. The Free plan is not prorated.
+`GET /account/credits` returns the current cycle's `cycleStartedAt` and
+`cycleResetsAt`.
 
 A balance has two parts:
 
 1. The plan's monthly allowance.
-2. Purchased credits from the ledger, which never expire.
+2. Credits from packs and grants, which never expire.
 
-The allowance is spent **first**, so a prepaid pack survives an idle month
-rather than being silently consumed by usage the plan already covered.
+The allowance is spent **first**. Pack credits are only touched once the
+allowance runs out, so a pack survives a month that stayed inside it.
+
+A pack is used up as you spend it. When a cycle closes, whatever it took from
+your packs is recorded in your credit history as a negative entry, and the next
+cycle starts with what is left. A pack bought after a cycle has closed is never
+applied to that cycle, and credits already billed as overage are not also taken
+from a pack.
+
+Packs can be bought on any plan, Free included. On Free a pack raises the hard
+stop: requests continue past the allowance until the pack runs out, and then
+stop with a `402`. On a paid plan, overage is billed only once the pack is
+empty.
 
 ## Changing or ending a subscription
 

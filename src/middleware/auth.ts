@@ -4,6 +4,12 @@ import { safeEqual } from '../lib/crypto'
 import { resolveApiKey } from '../services/api-keys.service'
 import { scopeAllowsAdmin, ADMIN_SCOPE } from '../billing/plans'
 import { accountsEnabled } from '../config/accounts.config'
+import {
+  adminSessionRefusal,
+  defaultAdminAccessDeps,
+  requestIpRefusal,
+  type AdminAccessDeps,
+} from '../services/admin-access.service'
 
 /**
  * Operator-console auth.
@@ -27,7 +33,11 @@ import { accountsEnabled } from '../config/accounts.config'
  * turned every holder of the *data* key into an administrator. An account key
  * has an owner, a scope, an expiry and immediate revocation.
  *
- * There is deliberately no "open when nothing is configured" path. A fresh
+ * Two optional restrictions sit on top, in `services/admin-access.service.ts`:
+ * `BARRELMAN_ADMIN_ALLOWED_IPS` (every credential) and
+ * `BARRELMAN_ADMIN_REQUIRE_PASSKEY` (sessions only).
+ *
+ * There is no "open when nothing is configured" path. A fresh
  * instance is reached by signing up: the first account created becomes an
  * admin, so the console is usable immediately without any secret existing.
  */
@@ -55,6 +65,8 @@ export interface AdminAuthDeps {
   resolveSession: typeof resolveSession
   resolveApiKey: typeof resolveApiKey
   accountsEnabled: boolean
+  /** IP allowlist and passkey requirement; see services/admin-access.service.ts. */
+  access: AdminAccessDeps
 }
 
 /**
@@ -67,6 +79,7 @@ export function createAdminAuthHandler(deps: Partial<AdminAuthDeps> = {}) {
     resolveSession,
     resolveApiKey,
     accountsEnabled,
+    access: defaultAdminAccessDeps,
     ...deps,
   }
   return async function adminAuthHandler({ headers, request, set }: AuthContext) {
@@ -75,7 +88,7 @@ export function createAdminAuthHandler(deps: Partial<AdminAuthDeps> = {}) {
 }
 
 export async function adminAuthHandler(ctx: AuthContext) {
-  return handle({ resolveSession, resolveApiKey, accountsEnabled }, ctx)
+  return handle({ resolveSession, resolveApiKey, accountsEnabled, access: defaultAdminAccessDeps }, ctx)
 }
 
 async function handle(d: AdminAuthDeps, { headers, request, set }: AuthContext) {
@@ -91,15 +104,33 @@ async function handle(d: AdminAuthDeps, { headers, request, set }: AuthContext) 
     }
   }
 
-  // A session with the admin role.
-  const { user } = await d.resolveSession(request)
+  // The address allowlist comes before any credential is looked at: a caller
+  // outside it is refused whatever it holds, and learns nothing about whether
+  // its credential was good.
+  const ipRefusal = requestIpRefusal(request, d.access)
+  if (ipRefusal) {
+    set.status = ipRefusal.status
+    return { error: ipRefusal.error, code: ipRefusal.code }
+  }
+
+  // A session with the admin role. Under BARRELMAN_ADMIN_REQUIRE_PASSKEY it
+  // must also have come from a passkey sign-in.
+  const { user, session } = await d.resolveSession(request)
   if (user) {
-    if (user.role === 'admin') return
+    if (user.role === 'admin') {
+      const refusal = await adminSessionRefusal(request, session, d.access)
+      if (!refusal) return
+      set.status = refusal.status
+      return { error: refusal.error, code: refusal.code }
+    }
     set.status = 403
     return { error: 'Administrator access required' }
   }
 
-  // An account API key scoped to `admin`, owned by an admin.
+  // An account API key scoped to `admin`, owned by an admin. The passkey
+  // requirement doesn't apply: a key is already a strong, revocable credential,
+  // and minting one with the admin scope needs an admin session that passes the
+  // checks above (see routes/account.ts).
   const token = presentedToken(headers)
   if (token) {
     const key = await d.resolveApiKey(token)
@@ -119,6 +150,21 @@ async function handle(d: AdminAuthDeps, { headers, request, set }: AuthContext) 
   set.status = 401
   return { error: 'Sign in to the console, or present an admin-scoped API key' }
 }
+
+/**
+ * The address allowlist on its own, for the one public `/admin` route
+ * (`/admin/config`). Attach with `.onBeforeHandle()`, like the guard above.
+ */
+export function createAdminIpGuard(access: AdminAccessDeps = defaultAdminAccessDeps) {
+  return function adminIpGuard({ request, set }: Pick<AuthContext, 'request' | 'set'>) {
+    const refusal = requestIpRefusal(request, access)
+    if (!refusal) return
+    set.status = refusal.status
+    return { error: refusal.error, code: refusal.code }
+  }
+}
+
+export const adminIpGuard = createAdminIpGuard()
 
 export const adminAuthMiddleware = new Elysia({ name: 'admin-auth' }).onBeforeHandle(adminAuthHandler)
 

@@ -14,10 +14,14 @@ import {
   clearRateBuckets,
   identifyCaller,
   pruneRateBuckets,
+  waiveCharge,
   type ApiAuthDeps,
 } from './api-auth'
 import type { ResolvedKey } from '../services/api-keys.service'
+import { penaltyKeyFor, strikeCount } from '../services/throttle.service'
+import { clientIp } from '../lib/rate-limit'
 import { CREDIT_COSTS, getPlan } from '../billing/plans'
+import { pendingCredits } from '../services/usage.service'
 
 const BASE = 'http://localhost'
 const LIVE_KEY = 'brm_live_abcdefghijklmnopqrstuvwxyz0123456789ABCD'
@@ -463,6 +467,26 @@ describe('throttling', () => {
     expect((await instance.handle(get({ authorization: `Bearer ${LIVE_KEY}` }))).status).toBe(200)
   })
 
+  /**
+   * Strikes are kept per account AT an address, so the success has to clear
+   * that same key. It used to clear the bare account id, which matched nothing:
+   * a signed-in caller's strikes then only ever decayed, and a client that
+   * failed now and then between successes drifted into the box.
+   */
+  test('a successful request clears the strikes its caller collected', async () => {
+    const d = deps({ resolveApiKey: mock(async () => resolved({ scopes: ['search'] })) })
+    const refused = app('isochrone', d)
+    const served = app('search', d)
+    const request = () => get({ authorization: `Bearer ${LIVE_KEY}` })
+    const key = penaltyKeyFor(clientIp(request()), 'user-1')
+
+    for (let i = 0; i < 5; i += 1) expect((await refused.handle(request())).status).toBe(403)
+    expect(strikeCount(key)).toBe(5)
+
+    expect((await served.handle(request())).status).toBe(200)
+    expect(strikeCount(key)).toBe(0)
+  })
+
   test('boxes a caller that collects a stream of rejections', async () => {
     // A key-guesser or a client wedged in a retry loop: answering 401 forever
     // is free for them and not for us.
@@ -731,6 +755,39 @@ describe('refund on server error', () => {
   })
 })
 
+describe('a waived charge', () => {
+  test('refunds a successful response and reports zero credits charged', async () => {
+    // recordUsage is injected, so the charge never reaches the buffer. The real
+    // refund still does, which makes the buffer's change the refund itself.
+    const before = pendingCredits('user-1')
+    const instance = new Elysia()
+      .onBeforeHandle(apiAuth('transit', deps()))
+      .onAfterHandle(apiAuthAfter)
+      .get('/probe', ({ request }) => {
+        waiveCharge(request)
+        return { itineraries: [] }
+      })
+
+    const res = await instance.handle(get({ authorization: `Bearer ${LIVE_KEY}` }))
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('x-barrelman-credits-charged')).toBe('0')
+    expect(pendingCredits('user-1') - before).toBe(-CREDIT_COSTS.transit)
+  })
+
+  test('leaves an unwaived response charged', async () => {
+    const before = pendingCredits('user-1')
+    const res = await app('transit', deps()).handle(get({ authorization: `Bearer ${LIVE_KEY}` }))
+
+    expect(res.headers.get('x-barrelman-credits-charged')).toBe(String(CREDIT_COSTS.transit))
+    expect(pendingCredits('user-1')).toBe(before)
+  })
+
+  test('is a no-op for a request the guard never saw', () => {
+    expect(() => waiveCharge(get())).not.toThrow()
+  })
+})
+
 describe('a rate-limit-exempt key', () => {
   const EXEMPT_KEY = 'brm_live_exemptexemptexemptexemptexemptexem'
 
@@ -837,5 +894,73 @@ describe('per-request units', () => {
       const res = await unitApp(units, deps()).handle(get(live))
       expect(res.headers.get('x-barrelman-credits-charged')).toBe(String(CREDIT_COSTS.tiles))
     }
+  })
+})
+
+/**
+ * The `code` on each refusal is the part of the body clients are told to
+ * branch on (usage/stability.mdx), so each one is pinned here.
+ */
+describe('refusal codes', () => {
+  const auth = { authorization: `Bearer ${LIVE_KEY}` }
+  const codeOf = async (res: Response) => ((await res.json()) as { code?: string }).code
+  const withKey = (overrides: Partial<ResolvedKey>) => deps({ resolveApiKey: mock(async () => resolved(overrides)) })
+
+  test('missing_key when no credential is presented', async () => {
+    expect(await codeOf(await app('search', deps()).handle(get()))).toBe('missing_key')
+  })
+
+  test('invalid_key for a foreign token and for an unknown key alike', async () => {
+    const foreign = await app('search', deps()).handle(get({ authorization: 'Bearer nope' }))
+    expect(await codeOf(foreign)).toBe('invalid_key')
+
+    clearRateBuckets()
+    const unknown = await app('search', deps({ resolveApiKey: mock(async () => null) })).handle(get(auth))
+    expect(await codeOf(unknown)).toBe('invalid_key')
+  })
+
+  test('account_suspended, scope_denied and origin_denied', async () => {
+    expect(await codeOf(await app('search', withKey({ suspended: true })).handle(get(auth)))).toBe(
+      'account_suspended',
+    )
+    expect(await codeOf(await app('search', withKey({ scopes: ['tiles'] })).handle(get(auth)))).toBe(
+      'scope_denied',
+    )
+    const pinned = withKey({ allowedOrigins: ['https://a.example'] })
+    expect(await codeOf(await app('search', pinned).handle(get(auth)))).toBe('origin_denied')
+  })
+
+  test('insufficient_credits and overage_limit_reached on a 402', async () => {
+    const refusing = (reason: 'out-of-credits' | 'overage-cap-reached') =>
+      deps({
+        checkQuota: mock(async () => ({
+          allowed: false as const,
+          reason,
+          balance: { remaining: 0, cycleResetsAt: '2026-09-01T00:00:00.000Z' } as never,
+        })),
+      })
+    const out = await app('search', refusing('out-of-credits')).handle(get(auth))
+    expect(out.status).toBe(402)
+    expect(await codeOf(out)).toBe('insufficient_credits')
+
+    const capped = await app('search', refusing('overage-cap-reached')).handle(get(auth))
+    expect(await codeOf(capped)).toBe('overage_limit_reached')
+  })
+
+  test('rate_limited from the throttle', async () => {
+    const instance = app('search', withKey({ plan: 'free' }))
+    let res = await instance.handle(get(auth))
+    for (let i = 0; i < 500 && res.status !== 429; i += 1) res = await instance.handle(get(auth))
+
+    expect(res.status).toBe(429)
+    expect(await codeOf(res)).toBe('rate_limited')
+  })
+
+  test('too_many_failures from the penalty box', async () => {
+    const instance = app('isochrone', withKey({ scopes: ['tiles'] }))
+    let code: string | undefined
+    for (let i = 0; i < 40 && code !== 'too_many_failures'; i += 1) code = await codeOf(await instance.handle(get(auth)))
+
+    expect(code).toBe('too_many_failures')
   })
 })

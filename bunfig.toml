@@ -1,0 +1,4 @@
+[test]
+# The SDK is its own package with its own dependencies and test run (see the
+# sdk job in .github/workflows/ci.yml), so the API's `bun test` leaves it out.
+pathIgnorePatterns = ["sdk/**"]
