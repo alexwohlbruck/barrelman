@@ -12,7 +12,7 @@ import { Polar } from '@polar-sh/sdk'
 import { billing } from '../config/billing.config'
 import { getPlan, listPlans, planForProductId, planProductId, type Plan } from '../billing/plans'
 import { findUserByPolarCustomerId, linkPolarCustomer, findUserById } from './accounts.service'
-import { grantCredits, setPlan } from './credits.service'
+import { grantCredits, recordBillingPeriod, setPlan } from './credits.service'
 import { invalidateUserKeys } from './api-keys.service'
 import { DEFAULT_PLAN } from '../billing/plans'
 
@@ -135,7 +135,12 @@ export function creditsForProduct(productId: string): number | null {
  * used for rate limiting). Otherwise an upgrade would be invisible for up to a
  * minute, which is exactly when the customer is watching.
  */
-export async function applyPlanFromProduct(userId: string, productId: string | undefined): Promise<string | null> {
+export async function applyPlanFromProduct(
+  userId: string,
+  productId: string | undefined,
+  /** The subscription's `currentPeriodStart`, which anchors the account's allowance resets. */
+  periodStart?: Date | string | null,
+): Promise<string | null> {
   const plan = productId ? planForProductId(productId) : null
 
   if (!plan) {
@@ -151,6 +156,8 @@ export async function applyPlanFromProduct(userId: string, productId: string | u
     return null
   }
 
+  // Before the plan, so the new plan's first balance read sees its own period.
+  await recordBillingPeriod(userId, periodStart)
   await setPlan(userId, plan.id)
   invalidateUserKeys(userId)
   return plan.id
@@ -289,6 +296,16 @@ export async function syncSubscription(userId: string, email: string): Promise<S
 
 // ── Metered overage ─────────────────────────────────────────────────────
 
+export interface OverageEvent {
+  userId: string
+  credits: number
+  /**
+   * Deterministic id for this report. Polar skips an event whose id it has
+   * already ingested, which is what makes resending a batch safe.
+   */
+  externalId: string
+}
+
 /**
  * Report overage credits to Polar's meter.
  *
@@ -297,11 +314,12 @@ export async function syncSubscription(userId: string, email: string): Promise<S
  * it twice. Events are keyed by the barrelman user id as the external customer,
  * so Polar resolves them without us holding its customer id here.
  *
- * Best-effort by design: a failure to report is logged and dropped rather than
- * retried, because the local usage table remains the durable record and can be
- * replayed. Never let a billing call fail a customer's request.
+ * Returns the number of events Polar accepted (duplicates included), or 0 when
+ * the call failed. A failure is not retried here: the overage reporter keeps
+ * the batch staged and resends it with the same ids on its next pass. Never
+ * let a billing call fail a customer's request.
  */
-export async function reportOverage(entries: Array<{ userId: string; credits: number }>): Promise<number> {
+export async function reportOverage(entries: OverageEvent[]): Promise<number> {
   if (!billing.enabled || !billing.meterUsage) return 0
 
   const events = entries
@@ -309,16 +327,56 @@ export async function reportOverage(entries: Array<{ userId: string; credits: nu
     .map((entry) => ({
       name: billing.usageEventName,
       externalCustomerId: entry.userId,
+      externalId: entry.externalId,
       metadata: { credits: entry.credits },
     }))
 
   if (events.length === 0) return 0
 
   try {
-    await polar().events.ingest({ events })
+    const result = await polar().events.ingest({ events })
+    if (result?.duplicates) console.log(`[billing] Polar already had ${result.duplicates} overage event(s); skipped`)
     return events.length
   } catch (err) {
-    console.error('[billing] failed to report overage to Polar', err)
+    console.error('[billing] failed to report overage to Polar; the batch stays staged for the next pass', err)
     return 0
   }
 }
+
+/**
+ * What Polar's meter has recorded for an account this period, or null when it
+ * cannot say: billing is off, the call failed, or no meter matches the usage
+ * event. Read-only, for the reconciliation sweep.
+ *
+ * The meter is found by its filter, which selects events by name. Barrelman
+ * stores no meter id, and the event name is the one thing both sides are
+ * configured with.
+ */
+export async function getMeteredCredits(userId: string): Promise<number | null> {
+  if (!billing.enabled || !billing.meterUsage) return null
+
+  try {
+    const page = await polar().customerMeters.list({ externalCustomerId: userId, limit: 100 })
+    const meters = page.result.items.filter((item) =>
+      filterMatchesEvent(item.meter.filter as MeterFilter, billing.usageEventName),
+    )
+    if (meters.length === 0) return null
+    return meters.reduce((sum, item) => sum + item.consumedUnits, 0)
+  } catch (err) {
+    console.warn(`[billing] could not read Polar meters for ${userId}`, err)
+    return null
+  }
+}
+
+interface MeterFilter {
+  clauses: Array<MeterFilter | { property: string; value: unknown }>
+}
+
+export function filterMatchesEvent(filter: MeterFilter, eventName: string): boolean {
+  return filter.clauses.some((clause) =>
+    'clauses' in clause
+      ? filterMatchesEvent(clause, eventName)
+      : clause.property === 'name' && clause.value === eventName,
+  )
+}
+
