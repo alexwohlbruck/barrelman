@@ -33,6 +33,7 @@ import { isValidEmail } from '../lib/email'
 import { clientIp, createRateLimiter } from '../lib/rate-limit'
 import { registrationMode, terms } from '../config/accounts.config'
 import { enabledOAuthProviders } from '../config/oauth.config'
+import { adminSessionRefusal as _adminSessionRefusal } from '../services/admin-access.service'
 
 /**
  * Code requests are limited per address AND per source IP: the first stops one
@@ -59,6 +60,7 @@ export interface AuthDeps {
   deleteSession: typeof _deleteSession
   /** Injected so route tests can exercise the guarded paths without Postgres. */
   resolveSession: typeof _resolveSession
+  adminSessionRefusal: typeof _adminSessionRefusal
 }
 
 const defaultDeps: AuthDeps = {
@@ -75,6 +77,7 @@ const defaultDeps: AuthDeps = {
   listSessions: _listSessions,
   deleteSession: _deleteSession,
   resolveSession: _resolveSession,
+  adminSessionRefusal: _adminSessionRefusal,
 }
 
 export function createAuthRoutes(overrides: Partial<AuthDeps> = {}) {
@@ -228,6 +231,7 @@ export function createAuthRoutes(overrides: Partial<AuthDeps> = {}) {
         const { session, cookie } = await deps.startSession(user.id, {
           ip: clientIp(request),
           userAgent: request.headers.get('user-agent'),
+          method: 'email',
         })
 
         set.headers['set-cookie'] = cookie
@@ -252,17 +256,30 @@ export function createAuthRoutes(overrides: Partial<AuthDeps> = {}) {
 
     .get(
       '/session',
-      ({ user, session, set }) => {
+      async ({ user, session, request, set }) => {
         if (!user || !session) {
           set.status = 204
           return null
+        }
+        // For an administrator, whether this session can use /admin/* from
+        // here. The console shows the reason instead of operator pages that
+        // fail one request at a time.
+        if (user.role === 'admin') {
+          const refusal = await deps.adminSessionRefusal(request, session)
+          return {
+            token: session.id,
+            user: toPublicUser(user),
+            adminAccess: refusal ? { ok: false, code: refusal.code, error: refusal.error } : { ok: true },
+          }
         }
         return { token: session.id, user: toPublicUser(user) }
       },
       {
         detail: {
           summary: 'Current session',
-          description: 'Returns the signed-in account, or 204 when not signed in.',
+          description:
+            'Returns the signed-in account, or 204 when not signed in. For an administrator, `adminAccess` ' +
+            'says whether this session may use the admin API from this address, and why not when it may not.',
           tags: ['Auth'],
         },
       },

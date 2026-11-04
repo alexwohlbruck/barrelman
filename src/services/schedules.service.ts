@@ -18,6 +18,7 @@
 import { connection as sql } from '../db'
 import { randomUUID } from 'node:crypto'
 import { getScript } from '../admin/scripts-manifest'
+import { ParamValidationError, validateParams } from './job-params'
 import { isValidCron, isValidTimeZone, nextRun } from '../lib/cron'
 import { envString } from '../config/env'
 
@@ -168,8 +169,16 @@ function rowToSchedule(r: any): Schedule {
 
 /** Validate operator input and normalise it. Throws ScheduleValidationError. */
 function validate(input: ScheduleInput): Required<Omit<ScheduleInput, 'params'>> & { params: Record<string, unknown> } {
-  if (!getScript(input.scriptId)) {
+  const script = getScript(input.scriptId)
+  if (!script) {
     throw new ScheduleValidationError(`Unknown script: ${input.scriptId}`)
+  }
+  // Refused when the schedule is saved, not at 3am when it first fires.
+  try {
+    validateParams(script, input.params ?? {})
+  } catch (err) {
+    if (err instanceof ParamValidationError) throw new ScheduleValidationError(err.message)
+    throw err
   }
   const cron = (input.cron ?? '').trim()
   if (!isValidCron(cron)) {

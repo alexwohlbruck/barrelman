@@ -358,6 +358,40 @@ describe('GET /auth/session', () => {
     expect(res.status).toBe(200)
     expect(body.user.id).toBe('user-1')
     expect(body.token).toBe('session-1')
+    expect(body.adminAccess).toBeUndefined()
+  })
+
+  test('tells an administrator why the admin API will refuse this session', async () => {
+    const app = createAuthRoutes(
+      deps({
+        resolveSession: mock(async () => ({ user: makeUser({ role: 'admin' }), session: makeSession() })),
+        adminSessionRefusal: async () => ({ status: 403, code: 'passkey_required', error: 'Use a passkey.' }),
+      }),
+    )
+
+    const body = await (await app.handle(new Request(`${BASE}/auth/session`))).json()
+    expect(body.adminAccess).toEqual({ ok: false, code: 'passkey_required', error: 'Use a passkey.' })
+  })
+
+  test('reports ok for an administrator the admin API accepts', async () => {
+    const app = createAuthRoutes(
+      deps({
+        resolveSession: mock(async () => ({ user: makeUser({ role: 'admin' }), session: makeSession() })),
+        adminSessionRefusal: async () => null,
+      }),
+    )
+
+    const body = await (await app.handle(new Request(`${BASE}/auth/session`))).json()
+    expect(body.adminAccess).toEqual({ ok: true })
+  })
+})
+
+describe('sign-in method on the session', () => {
+  test('an email-code sign-in records the email method', async () => {
+    const { email, ip } = identity()
+    const d = deps({ findUserByEmail: mock(async () => makeUser({ email })) })
+    await createAuthRoutes(d).handle(post('/auth/verify-code', { email, code: '12345678' }, ip))
+    expect(d.startSession).toHaveBeenCalledWith('user-1', expect.objectContaining({ method: 'email' }))
   })
 })
 
