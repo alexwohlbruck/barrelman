@@ -192,7 +192,10 @@ from memory, writes changes to `accounts_throttle_penalties` every two seconds,
 and reads back the other replicas' rows every 15 seconds, so a caller boxed on
 one replica is refused by the rest within about 15 seconds, and a deploy does
 not release anyone. Only callers who actually reached the box are written:
-strikes short of it stay on the replica that saw them. Rows are keyed by a
+strikes short of it stay on the replica that saw them. A successful request
+clears the caller's strikes at once only on the replica that served it; the
+other replicas keep the strikes they hold until those decay, ten minutes after
+the last one. A success never lifts a box that is still running. Rows are keyed by a
 keyed hash of the account and address, never the address itself, and are
 deleted once both the box and the strikes behind it have expired. The table is
 not part of backups.
