@@ -83,6 +83,18 @@ export const accountsEnabled = process.env.BARRELMAN_ACCOUNTS_ENABLED !== 'false
 export const isProduction = process.env.NODE_ENV === 'production'
 
 /**
+ * Whether cookies carry `Secure`. NODE_ENV alone missed a deployment served
+ * over HTTPS without NODE_ENV=production, which then sent its session cookie
+ * in a form a browser would also attach to a plain-HTTP request. An https
+ * origin is a statement that the browser reaches us over TLS, so it is enough.
+ */
+export function cookiesSecure(env: { production: boolean; origins: readonly string[] }): boolean {
+  return env.production || env.origins.some((origin) => origin.toLowerCase().startsWith('https://'))
+}
+
+export const secureCookies = cookiesSecure({ production: isProduction, origins: [serverOrigin, consoleOrigin] })
+
+/**
  * Terms of service.
  *
  * The version is a plain string an operator bumps when the terms materially
