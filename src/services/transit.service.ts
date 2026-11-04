@@ -16,6 +16,7 @@ import {
   type RentalPricing,
 } from './rental-pricing.service'
 import { attributionFor, excludedFeedIds, servableOnly } from './feed-license.service'
+import { directionLabelsFor, stopKey } from './station-labels.service'
 import type { FeedAttribution } from '../lib/feed-license'
 
 // ── Types ───────────────────────────────────────────────────────────
@@ -188,6 +189,9 @@ export interface TransitLeg {
   tripId?: string
   /** Trip headsign */
   headsign?: string
+  /** What the boarding platform's signs call this direction ("Uptown & The
+   *  Bronx"), where agency data or OSM says. The headsign names the terminal. */
+  directionLabel?: string
   /** GTFS route ID */
   routeId?: string
   /** GTFS direction_id ("0"/"1") — which way the trip runs; used to filter the
@@ -985,6 +989,7 @@ export async function getIntermodalRoute(
   // rider sees every train that runs the segment directly — independent of
   // which ones MOTIS's time-optimal search happened to surface.
   await enrichInterchangeableRoutes(result.itineraries)
+  await enrichDirectionLabels(result.itineraries).catch(() => {})
 
   result.attribution = await itineraryAttribution(result.itineraries)
   return result
@@ -1490,6 +1495,19 @@ async function enrichInterchangeableRoutes(itineraries: TransitItinerary[]): Pro
   }
 
   await Promise.all(tasks)
+}
+
+/** Label each transit leg with what its boarding platform is signed for. */
+async function enrichDirectionLabels(itineraries: TransitItinerary[]): Promise<void> {
+  const boarding = itineraries.flatMap((it) => it.legs)
+    .filter((leg) => leg.transitLeg && leg.from.stopId)
+    .map((leg) => ({ leg, ...splitMotisStopId(leg.from.stopId!) }))
+    .filter((b) => b.feedId)
+  const labels = await directionLabelsFor(boarding)
+  for (const { leg, feedId, stopId } of boarding) {
+    const label = labels.get(stopKey(feedId, stopId))
+    if (label) leg.directionLabel = label
+  }
 }
 
 /**

@@ -9,6 +9,7 @@
  * engine in the future without changing the external API contract.
  */
 
+import { directionLabelsFor, stopKey } from './station-labels.service'
 import { db } from '../db'
 import { sql } from 'drizzle-orm'
 import { sameStationName } from '../lib/station-name'
@@ -125,6 +126,9 @@ export interface Departure {
     agencyName?: string
   }
   headsign?: string
+  /** What the platform's signs call this direction ("Uptown & The Bronx"),
+   *  where agency data or OSM says. The headsign names the terminal. */
+  directionLabel?: string
   directionId?: string
   departureTime: string
   arrivalTime: string
@@ -707,12 +711,15 @@ function onlyAtStation(
 function transformDepartures(
   stopTimes: MotisStopTime[],
   colorMap: Map<string, { color?: string; textColor?: string }>,
+  directionLabels: Map<string, string> = new Map(),
 ): Departure[] {
   return stopTimes
     .filter(st => !st.tripCancelled)
     .map(st => {
       const { feedId, stopId: routeId } = parseMotisId(st.routeId)
       const colors = colorMap.get(st.routeId)
+      const platform = parseMotisId(st.place.stopId)
+      const directionLabel = directionLabels.get(stopKey(platform.feedId, platform.stopId))
 
       const departureTime = st.place.departure || st.place.arrival || ''
       const arrivalTime = st.place.arrival || st.place.departure || ''
@@ -734,6 +741,7 @@ function transformDepartures(
           agencyName: st.agencyName || undefined,
         },
         headsign: st.headsign || undefined,
+        ...(directionLabel ? { directionLabel } : {}),
         directionId: st.directionId || undefined,
         departureTime,
         arrivalTime,
@@ -941,8 +949,11 @@ export async function getDepartures(
   const onestopIds = await feedOnestopIds(successResults.map((r) => r.stop.feedId))
 
 
-  // 5. Batch-fetch route colors
+  // 5. Batch-fetch route colors, and the signed direction of each platform
   const colorMap = await fetchRouteColors(routePairs)
+  const directionLabels = await directionLabelsFor(
+    successResults.flatMap((r) => r.result.stopTimes.map((st) => parseMotisId(st.place.stopId))),
+  ).catch(() => new Map<string, string>())
 
   // The agency's in-effect skip alerts, so a run the agency has disowned
   // never reaches a board — see dropSkippedRuns. One fetch per request;
@@ -983,7 +994,7 @@ export async function getDepartures(
       },
       ...trimToWindow(
         dropSkippedRuns(
-          transformDepartures(result.stopTimes, colorMap).filter(
+          transformDepartures(result.stopTimes, colorMap, directionLabels).filter(
             (d) =>
               (!routeFilter || routeFilter.has(d.route.shortName ?? '')) &&
               (directionId == null || d.directionId === directionId),
