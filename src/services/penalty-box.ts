@@ -76,7 +76,7 @@ export class PenaltyBox {
   private local = new Map<string, Penalty>()
   /** By id: loaded rows no request has matched to a key yet. */
   private remote = new Map<string, Penalty>()
-  /** key → id, for keys that are persisted or were matched to a row. */
+  /** key → id, for every key with a local entry. */
   private ids = new Map<string, string>()
   private dirty = new Set<string>()
   private removed = new Set<string>()
@@ -111,6 +111,11 @@ export class PenaltyBox {
 
   recordRejection(key: string, now = Date.now()): void {
     const { strikesBeforePenalty, decayMs, maxPenaltyMs } = this.options
+    // Every local entry gets its id now, not when it is first boxed: that is
+    // what lets applyStored() match another replica's box to a caller this
+    // replica holds only a few strikes for. A rejection is not the hot path,
+    // so the hash costs nothing that matters.
+    this.idFor(key)
     const existing = this.lookup(key)
 
     if (!existing || now - existing.lastStrikeAt > decayMs) {

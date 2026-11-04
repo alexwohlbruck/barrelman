@@ -98,6 +98,13 @@ describe('reading rows back', () => {
     expect(b.strikes('u1@1.2.3.4', T0)).toBe(6)
   })
 
+  test('a box from another replica applies to a caller held here below the threshold', () => {
+    const b = box()
+    b.recordRejection('u1@1.2.3.4', T0)
+    b.applyStored([stored({ until: T0 + 600_000 })], T0)
+    expect(b.remaining('u1@1.2.3.4', T0)).toBe(600)
+  })
+
   test('a longer box from another replica extends the local one', () => {
     const b = box()
     strike(b, 'u1@1.2.3.4', 3)
