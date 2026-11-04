@@ -1558,8 +1558,8 @@ export const SCRIPTS: ScriptDef[] = [
         label: 'Scratch database',
         type: 'string',
         apply: 'flag',
-        placeholder: 'barrelman_restore',
-        description: 'Dropped and recreated before the restore. Cannot be the live database.',
+        placeholder: 'blank = barrelman_restore_<time>',
+        description: 'Must start with barrelman_restore. An existing one is dropped only if a previous drill created it.',
       },
       {
         name: 'drop-after',

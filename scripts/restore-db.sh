@@ -18,8 +18,11 @@ set -euo pipefail
 #   /path/to/file.dump      a file anywhere this script can read
 #   barrelman/barrelman-….dump  an object key in BACKUP_S3_BUCKET
 #
-#   --target-db NAME   scratch database to restore into (default barrelman_restore).
-#                      Dropped and recreated first.
+#   --target-db NAME   scratch database to restore into. Must start with
+#                      barrelman_restore (default barrelman_restore_<UTC time>).
+#                      An existing one is dropped first, but only if this script
+#                      created it: it marks each one with a database comment.
+#                      Any other database is refused.
 #   --drop-after       drop the scratch database once the row counts are printed
 #   --into-live        replace the backed-up tables in the live database. Refused
 #                      unless BACKUP_RESTORE_CONFIRM is set to the live database's
@@ -31,7 +34,10 @@ set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/backup-lib.sh"
 
 SOURCE=""
-TARGET="barrelman_restore"
+TARGET="barrelman_restore_$(date -u +%Y%m%dt%H%M%Sz)"
+# Set on every scratch database this script creates, and required before it
+# drops one, so a name typed by hand cannot take out some other database.
+SCRATCH_MARKER="barrelman restore-db.sh scratch database"
 INTO_LIVE=0
 DROP_AFTER=0
 while [ $# -gt 0 ]; do
@@ -54,9 +60,14 @@ if [ "$INTO_LIVE" = 1 ]; then
   Set BACKUP_RESTORE_CONFIRM=$LIVE to confirm."
   TARGET="$LIVE"
 else
-  [[ "$TARGET" =~ ^[a-z_][a-z0-9_]*$ ]] || fail "--target-db must be a plain lowercase name, got \"$TARGET\""
-  [ "$TARGET" != "$LIVE" ] && [ "$TARGET" != postgres ] && [[ "$TARGET" != template* ]] \
-    || fail "\"$TARGET\" is not a scratch database. Use --into-live to restore over the live one."
+  [[ "$TARGET" =~ ^barrelman_restore[a-z0-9_]*$ ]] \
+    || fail "--target-db must start with barrelman_restore, got \"$TARGET\". Use --into-live to restore over the live database."
+  [ "$TARGET" != "$LIVE" ] || fail "\"$TARGET\" is the live database. Use --into-live to restore over it."
+  EXISTING="$(db_psql -d postgres -c "SELECT coalesce(shobj_description(oid, 'pg_database'), '') FROM pg_database WHERE datname = '$TARGET'")"
+  EXISTS="$(db_psql -d postgres -c "SELECT count(*) FROM pg_database WHERE datname = '$TARGET'")"
+  if [ "$EXISTS" != 0 ] && [ "$EXISTING" != "$SCRATCH_MARKER" ]; then
+    fail "\"$TARGET\" exists and was not created by this script, so it will not be dropped. Pick another --target-db."
+  fi
 fi
 
 # ── Find the dump ───────────────────────────────────────────────────────────
@@ -76,7 +87,8 @@ if [ "$SOURCE" = latest ]; then
   DUMP="$(ls -1 "$BACKUP_DIR"/barrelman-*.dump 2>/dev/null | sort | tail -n1 || true)"
   if [ -z "$DUMP" ]; then
     [ -n "${BACKUP_S3_BUCKET:-}" ] || fail "no dumps in $BACKUP_DIR and no BACKUP_S3_BUCKET to look in"
-    fetch "$(s3 latest)"
+    KEY="$(s3 latest)" || fail "could not find the newest backup in s3://$BACKUP_S3_BUCKET/$BACKUP_S3_PREFIX"
+    fetch "$KEY"
   fi
 elif [ -f "$SOURCE" ]; then
   DUMP="$SOURCE"
@@ -102,6 +114,7 @@ if [ "$INTO_LIVE" = 1 ]; then
 else
   db_psql -d postgres -c "SET client_min_messages = warning" -c "DROP DATABASE IF EXISTS \"$TARGET\" WITH (FORCE)" >/dev/null
   db_psql -d postgres -c "CREATE DATABASE \"$TARGET\"" >/dev/null
+  db_psql -d postgres -c "COMMENT ON DATABASE \"$TARGET\" IS '$SCRATCH_MARKER'" >/dev/null
   # pg_dump -t leaves extensions out; landmarks need PostGIS for their columns.
   db_psql -d "$TARGET" -c "CREATE EXTENSION IF NOT EXISTS postgis;" >/dev/null
   db_pg pg_restore -d "$TARGET" --no-owner --no-privileges --exit-on-error < "$DUMP"
