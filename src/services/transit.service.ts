@@ -1111,8 +1111,8 @@ export function noItineraryWarnings(walkOnly: boolean, streetRouting: boolean | 
   const warnings = ['No itinerary was found for this trip. Empty plans are not charged.']
   if (!walkOnly && streetRouting === false) {
     warnings.push(
-      'This instance builds transit routing without a street graph, so bike, ' +
-        'rental and drive-yourself access are not available here. Only walking to and ' +
+      'This instance builds transit routing without a street graph, so bike ' +
+        'and bike-share access are not available here. Only walking to and ' +
         'from stations is.',
     )
   }
