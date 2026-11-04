@@ -20,7 +20,7 @@ exact across millions of small charges — no floating-point drift.
 
 | Group | Credits | Endpoints |
 |---|---|---|
-| `tiles` | 1 per source | `/tiles/*` |
+| `tiles` | 1 per source | `/tiles/*`, `/styles/*` |
 | `places` | 3 | `/place/*`, `/brands` |
 | `spatial` | 3 | `/contains`, `/children` |
 | `geocode` | 5 | `/geocode/*` |
@@ -35,7 +35,8 @@ them can carry many times the work of another:
 - **Tiles** cost 1 credit per source the tile reads. A bundle such as `detail`
   or a comma-joined composite such as `buildings_3d,parking_areas` costs one
   credit per member, the same as fetching each source on its own. Bundling
-  still saves round trips and latency.
+  still saves round trips and latency. TileJSON (`/tiles/<source>.json`) and
+  map styles (`/styles/*`) are free.
 - **`/isochrone`** costs 40 credits per contour. `durations=300,600,900` is
   three contours, 120 credits. With no `durations` it computes one 15-minute
   contour. `/isochrone/modes` is free.
