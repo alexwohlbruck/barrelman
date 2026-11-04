@@ -41,7 +41,7 @@ import {
   updateApiKeyScopes,
 } from '../services/api-keys.service'
 import { getBalance, setPlan } from '../services/credits.service'
-import { usageByDay, usageByKey, usageTotals, currentCycleStart, utcDay } from '../services/usage.service'
+import { usageByDay, usageByKey, usageTotals, utcDay } from '../services/usage.service'
 import {
   describeTerms,
   findUserById,
@@ -52,6 +52,7 @@ import { BillingTeardownError } from '../services/billing.service'
 import { throttleStats } from '../services/throttle.service'
 import { trafficReport } from '../services/request-metrics.service'
 import { ALL_SCOPES, allPlans, getPlan, isPlanId } from '../billing/plans'
+import { billingPeriod } from '../billing/periods'
 
 /**
  * Recorded as the actor when a caller somehow reaches these routes without a
@@ -215,7 +216,7 @@ export function createAdminUserRoutes(overrides: Partial<AdminUserDeps> = {}) {
         return { error: 'Account not found' }
       }
 
-      const from = currentCycleStart()
+      const from = billingPeriod(getPlan(account.plan), account.billingPeriodStart).start
       const to = utcDay()
 
       const [keys, balance, daily, byKey, lifetime, history] = await Promise.all([

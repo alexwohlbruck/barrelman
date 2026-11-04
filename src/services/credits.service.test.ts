@@ -8,7 +8,8 @@
  * credits, which is where double-charging would hide.
  */
 import { describe, test, expect } from 'bun:test'
-import { computeBalance, decideQuota } from './credits.service'
+import { computeBalance, computePackUsage, decideQuota, packUsageId } from './credits.service'
+import { calendarPeriod, periodsBetween } from '../billing/periods'
 import { getPlan } from '../billing/plans'
 
 const free = getPlan('free') // 100,000 credits, no overage
@@ -234,5 +235,189 @@ describe('the overage spend cap', () => {
 
     expect(decision.allowed).toBe(false)
     if (!decision.allowed) expect(decision.reason).toBe('out-of-credits')
+  })
+})
+
+describe('computeBalance — billing period', () => {
+  test('reports the start and end of the period it was given', () => {
+    const balance = computeBalance(developer, 0, 0, { start: '2026-10-14', end: '2026-11-14' })
+
+    expect(balance.cycleStartedAt).toBe('2026-10-14T00:00:00.000Z')
+    expect(balance.cycleResetsAt).toBe('2026-11-14T00:00:00.000Z')
+  })
+})
+
+describe('computePackUsage — packs are used up across periods', () => {
+  const user = 'pack-user'
+  const at = (iso: string) => new Date(iso)
+  const pack = (amount: number, iso: string, externalId: string | null = null) => ({
+    amount,
+    createdAt: at(iso),
+    externalId,
+  })
+  const october = calendarPeriod('2026-10-15')
+  const november = calendarPeriod('2026-11-15')
+
+  test('a period that spends past its allowance takes the excess from the pack', () => {
+    const usage = computePackUsage({
+      userId: user,
+      plan: free,
+      periods: [october],
+      from: october.start,
+      days: [{ day: '2026-10-20', credits: free.monthlyCredits + 30_000 }],
+      ledger: [pack(50_000, '2026-10-05T00:00:00Z')],
+    })
+
+    expect(usage).toEqual([{ period: october, credits: 30_000 }])
+  })
+
+  test('the pack does not refill in the next period', () => {
+    // The bug this replaces: the ledger total stayed at 50k while usage reset,
+    // so every month started with the whole pack again.
+    const ledger = [pack(50_000, '2026-10-05T00:00:00Z'), pack(-30_000, '2026-11-01T00:00:00Z', packUsageId(user, '2026-10-01'))]
+    const remaining = ledger.reduce((sum, entry) => sum + entry.amount, 0)
+    const balance = computeBalance(free, free.monthlyCredits + 25_000, remaining, november)
+
+    expect(remaining).toBe(20_000)
+    // 25k past the allowance against the 20k left: the pack is gone.
+    expect(balance.remaining).toBe(0)
+  })
+
+  test('two periods in a row use the pack up and then stop at zero', () => {
+    const periods = periodsBetween(free, null, '2026-10-01', '2026-12-01')
+    const usage = computePackUsage({
+      userId: user,
+      plan: free,
+      periods,
+      from: october.start,
+      days: [
+        { day: '2026-10-20', credits: free.monthlyCredits + 30_000 },
+        { day: '2026-11-20', credits: free.monthlyCredits + 40_000 },
+      ],
+      ledger: [pack(50_000, '2026-10-05T00:00:00Z')],
+    })
+
+    expect(usage).toEqual([
+      { period: october, credits: 30_000 },
+      { period: november, credits: 20_000 },
+    ])
+  })
+
+  test('a settled period is not settled again', () => {
+    const usage = computePackUsage({
+      userId: user,
+      plan: free,
+      periods: [october],
+      from: october.start,
+      days: [{ day: '2026-10-20', credits: free.monthlyCredits + 30_000 }],
+      ledger: [pack(50_000, '2026-10-05T00:00:00Z'), pack(-30_000, '2026-11-01T00:00:00Z', packUsageId(user, '2026-10-01'))],
+    })
+
+    expect(usage).toEqual([])
+  })
+
+  test('a period inside its allowance leaves the pack alone', () => {
+    const usage = computePackUsage({
+      userId: user,
+      plan: free,
+      periods: [october],
+      from: october.start,
+      days: [{ day: '2026-10-20', credits: free.monthlyCredits }],
+      ledger: [pack(50_000, '2026-10-05T00:00:00Z')],
+    })
+
+    expect(usage).toEqual([])
+  })
+
+  test('a pack bought after a period closed does not pay for it', () => {
+    const usage = computePackUsage({
+      userId: user,
+      plan: developer,
+      periods: [october],
+      from: october.start,
+      days: [{ day: '2026-10-20', credits: developer.monthlyCredits + 30_000 }],
+      ledger: [pack(50_000, '2026-11-02T10:00:00Z')],
+    })
+
+    expect(usage).toEqual([])
+  })
+
+  test('overage already billed for a period is not also taken from the pack', () => {
+    // 30k past the allowance, 20k of it reported as overage before the pack
+    // was bought. Only the 10k nobody has paid for comes out of the pack.
+    const usage = computePackUsage({
+      userId: user,
+      plan: developer,
+      periods: [october],
+      from: october.start,
+      days: [{ day: '2026-10-20', credits: developer.monthlyCredits + 30_000 }],
+      ledger: [pack(50_000, '2026-10-25T00:00:00Z')],
+      reported: { '2026-10-01': 20_000 },
+    })
+
+    expect(usage).toEqual([{ period: october, credits: 10_000 }])
+  })
+
+  test('days settled before are not judged again, even under another plan', () => {
+    // October was settled on the developer plan with nothing owed, so
+    // pack_settled_through moved to 1 November. A downgrade to free must not
+    // reach back and charge October's usage to the pack.
+    const usage = computePackUsage({
+      userId: user,
+      plan: free,
+      periods: periodsBetween(free, null, '2026-11-01', '2026-12-01'),
+      from: '2026-11-01',
+      days: [
+        { day: '2026-10-20', credits: 900_000 },
+        { day: '2026-11-20', credits: free.monthlyCredits + 5_000 },
+      ],
+      ledger: [pack(50_000, '2026-10-05T00:00:00Z')],
+    })
+
+    expect(usage).toEqual([{ period: november, credits: 5_000 }])
+  })
+
+  test('a move from calendar months to a subscription anchor does not count days twice', () => {
+    // Settled through 1 November on calendar months, then anchored on the 14th.
+    // The first anchored period starts 14 October, but only its days from 1
+    // November on are settled, against 13/31 of the allowance (419,355). The
+    // 2M on 20 October was settled before and is not counted again.
+    const periods = periodsBetween(developer, '2026-10-14', '2026-11-01', '2026-11-14')
+    const usage = computePackUsage({
+      userId: user,
+      plan: developer,
+      periods,
+      from: '2026-11-01',
+      days: [
+        { day: '2026-10-20', credits: 2_000_000 },
+        { day: '2026-11-05', credits: developer.monthlyCredits + 7_000 },
+      ],
+      ledger: [pack(5_000_000, '2026-10-05T00:00:00Z')],
+    })
+
+    expect(usage).toEqual([{ period: { start: '2026-11-01', end: '2026-11-14' }, credits: 1_007_000 - 419_355 }])
+  })
+
+  test('a change mid-period settles the days so far under the old plan', () => {
+    // Business until 10 November, then developer. The first nine days are
+    // settled at the change against 9/30 of business's allowance (3M), so 2M
+    // leaves the pack untouched. Developer then judges only the 21 days from
+    // the 10th, against 21/30 of its allowance (700k).
+    const business = getPlan('business')
+    const ledger = [pack(1_000_000, '2026-10-05T00:00:00Z')]
+    const days = [
+      { day: '2026-11-05', credits: 2_000_000 },
+      { day: '2026-11-12', credits: 1_004_000 },
+    ]
+
+    const atChange = computePackUsage({
+      userId: user, plan: business, periods: [november], days, ledger, from: november.start, until: '2026-11-10',
+    })
+    const atClose = computePackUsage({
+      userId: user, plan: developer, periods: [november], days, ledger, from: '2026-11-10',
+    })
+
+    expect(atChange).toEqual([])
+    expect(atClose).toEqual([{ period: { start: '2026-11-10', end: '2026-12-01' }, credits: 304_000 }])
   })
 })

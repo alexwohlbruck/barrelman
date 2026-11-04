@@ -63,8 +63,10 @@ export const onnotice = (notice: unknown) => {
  * max_connections is the stock 100 (Dockerfile.db and docker-compose.yml do not
  * raise it). The API and barrelman-ops each load this module, and so does any
  * bun import script a job runs in ops (one job at a time); Martin keeps a pool
- * of 20. In practice the defaults peak around 70-80, and the worst case is
- * 3 × (20 + 5) + 20 = 95 plus a few short-lived maintenance connections.
+ * of 20. Each API process also holds one long-lived connection outside both
+ * pools for LISTEN (services/cache-bus.service.ts); ops and scripts do not
+ * listen. In practice the defaults peak around 70-80, and the worst case is
+ * 3 × (20 + 5) + 20 + 1 = 96 plus a few short-lived maintenance connections.
  * Raising either pool means checking that sum against max_connections.
  *
  * No transaction spans the two pools. Each account service runs its

@@ -1,0 +1,348 @@
+/**
+ * Integration tests for pack settlement and overage reporting against the real
+ * database, with Polar replaced by a fake.
+ *
+ * The properties here only exist in SQL: a pack written down once per period,
+ * a staged batch resent under the same ids after a failure, a lock that keeps
+ * two passes apart, and overage staged when an account leaves its plan. A
+ * mocked `sql` cannot show any of them.
+ *
+ * Every row is created by this file under a `ovtest-` id and removed in
+ * afterAll. Billing is switched on in-process only, by flipping the config
+ * object the services read.
+ *
+ * Run: bun run test:integration
+ */
+import { describe, test, expect, afterAll, beforeAll, beforeEach } from 'bun:test'
+import { billingPeriod, segmentAllowance } from '../billing/periods'
+import { getPlan } from '../billing/plans'
+
+const DATABASE_URL = process.env.BARRELMAN_INTEGRATION_TESTS ? process.env.DATABASE_URL : undefined
+
+type Mods = {
+  sql: typeof import('../db').connection
+  overage: typeof import('./overage.service')
+  credits: typeof import('./credits.service')
+  billingSvc: typeof import('./billing.service')
+  billing: typeof import('../config/billing.config').billing
+}
+let m: Mods | null = null
+
+if (DATABASE_URL) {
+  const dbMod = await import('../db')
+  const accounts = await import('./accounts.service')
+  await accounts.ensureAccountsSchema()
+  m = {
+    sql: dbMod.connection,
+    overage: await import('./overage.service'),
+    credits: await import('./credits.service'),
+    billingSvc: await import('./billing.service'),
+    billing: (await import('../config/billing.config')).billing,
+  }
+}
+
+const PREFIX = `ovtest-${Date.now()}-`
+let n = 0
+const ingested: Array<{ externalCustomerId: string; externalId: string; metadata: { credits: number } }> = []
+let failNext = false
+
+async function makeUser(plan: string, anchor: string | null = null): Promise<string> {
+  const id = `${PREFIX}${(n += 1)}`
+  await m!.sql`
+    INSERT INTO accounts_users (id, email, email_normalized, plan, billing_period_start)
+    VALUES (${id}, ${`${id}@example.test`}, ${`${id}@example.test`}, ${plan}, ${anchor})`
+  return id
+}
+
+async function use(userId: string, day: string, credits: number): Promise<void> {
+  await m!.sql`
+    INSERT INTO accounts_usage (user_id, day, endpoint, requests, credits)
+    VALUES (${userId}, ${day}, 'search', 1, ${credits})`
+}
+
+async function reports(userId: string): Promise<Array<{ cycle: string; reported: number; pending: number | null }>> {
+  const rows = await m!.sql<Array<{ cycle: string; reported: number; pending: number | null }>>`
+    SELECT cycle::text AS cycle, reported_credits AS reported, pending_credits AS pending
+    FROM accounts_overage_reports WHERE user_id = ${userId} ORDER BY cycle`
+  return [...rows]
+}
+
+/** A UTC day relative to today, for tests that go through the real clock. */
+function dayOffset(days: number): string {
+  return new Date(Date.now() + days * 86_400_000).toISOString().slice(0, 10)
+}
+
+/** The prorated allowances either side of a plan change made today, in a period anchored on `anchor`. */
+function split(beforePlan: string, afterPlan: string, anchor: string): { before: number; after: number } {
+  const period = billingPeriod(getPlan(beforePlan), anchor, dayOffset(0))
+  const today = dayOffset(0)
+  return {
+    before: segmentAllowance(getPlan(beforePlan), period, { start: period.start, end: today }),
+    after: segmentAllowance(getPlan(afterPlan), period, { start: today, end: period.end }),
+  }
+}
+
+function sentFor(userId: string): number[] {
+  return ingested.filter((event) => event.externalCustomerId === userId).map((event) => event.metadata.credits)
+}
+
+const saved = { enabled: false, meterUsage: false }
+
+beforeAll(() => {
+  if (!m) return
+  saved.enabled = m.billing.enabled
+  saved.meterUsage = m.billing.meterUsage
+  m.billing.enabled = true
+  m.billing.meterUsage = true
+  m.billingSvc.__setPolarClient({
+    events: {
+      ingest: async ({ events }: { events: typeof ingested }) => {
+        if (failNext) {
+          failNext = false
+          throw new Error('polar is down')
+        }
+        const seen = new Set(ingested.map((event) => event.externalId))
+        const fresh = events.filter((event) => !seen.has(event.externalId))
+        ingested.push(...fresh)
+        return { inserted: fresh.length, duplicates: events.length - fresh.length }
+      },
+    },
+  } as never)
+})
+
+beforeEach(() => {
+  ingested.length = 0
+  failNext = false
+})
+
+afterAll(async () => {
+  if (!m) return
+  m.billing.enabled = saved.enabled
+  m.billing.meterUsage = saved.meterUsage
+  m.billingSvc.__setPolarClient(null)
+  await m.sql`DELETE FROM accounts_users WHERE id LIKE ${`${PREFIX}%`}`
+})
+
+describe.skipIf(!DATABASE_URL)('pack settlement', () => {
+  test('a pack spent in a closed month is not available again the next month', async () => {
+    const { credits, sql } = m!
+    const user = await makeUser('free')
+    const lastMonth = new Date()
+    lastMonth.setUTCDate(1)
+    lastMonth.setUTCMonth(lastMonth.getUTCMonth() - 1)
+    const lastMonthDay = lastMonth.toISOString().slice(0, 10)
+
+    await credits.grantCredits({ userId: user, amount: 50_000, kind: 'purchase', externalId: `${user}-order` })
+    await sql`UPDATE accounts_credit_ledger SET created_at = ${lastMonth.toISOString()} WHERE user_id = ${user}`
+    await use(user, lastMonthDay, 130_000)
+
+    credits.invalidateBalance(user)
+    const balance = await credits.getBalance(user)
+    expect(balance.purchased).toBe(20_000)
+    expect(balance.remaining).toBe(100_000 + 20_000)
+
+    // Settling again writes nothing more.
+    expect(await credits.settlePackUsage(user, balance.plan, null)).toBe(0)
+    const [row] = await sql<Array<{ count: number }>>`
+      SELECT count(*)::int AS count FROM accounts_credit_ledger WHERE user_id = ${user} AND kind = 'usage'`
+    expect(row!.count).toBe(1)
+  })
+
+  test('a downgrade does not drain a pack for months the old plan covered', async () => {
+    const { credits, sql } = m!
+    const user = await makeUser('developer')
+    const lastMonth = new Date()
+    lastMonth.setUTCDate(1)
+    lastMonth.setUTCMonth(lastMonth.getUTCMonth() - 1)
+
+    await credits.grantCredits({ userId: user, amount: 50_000, kind: 'purchase', externalId: `${user}-order` })
+    await sql`UPDATE accounts_credit_ledger SET created_at = ${lastMonth.toISOString()} WHERE user_id = ${user}`
+    // Inside the developer allowance, far past the free one.
+    await use(user, lastMonth.toISOString().slice(0, 10), 500_000)
+
+    credits.invalidateBalance(user)
+    expect((await credits.getBalance(user)).purchased).toBe(50_000)
+
+    await credits.setPlan(user, 'free')
+    expect((await credits.getBalance(user)).purchased).toBe(50_000)
+  })
+})
+
+describe.skipIf(!DATABASE_URL)('subscription anchors', () => {
+  test('are written once per subscription', async () => {
+    const user = await makeUser('developer')
+    const anchorOf = async () =>
+      (await m!.sql<Array<{ a: string }>>`
+        SELECT billing_period_start::text AS a FROM accounts_users WHERE id = ${user}`)[0]!.a
+
+    expect(await m!.credits.recordBillingPeriod(user, { subscriptionId: 'sub-a', periodStart: '2026-01-31T10:00:00Z' })).toBe(true)
+    // A renewal of the same subscription reports a clamped start; it is ignored.
+    expect(await m!.credits.recordBillingPeriod(user, { subscriptionId: 'sub-a', periodStart: '2026-02-28T10:00:00Z' })).toBe(false)
+    expect(await anchorOf()).toStartWith('2026-01-31')
+    expect(await m!.credits.recordBillingPeriod(user, { subscriptionId: 'sub-b', periodStart: '2026-03-15T10:00:00Z' })).toBe(true)
+    expect(await anchorOf()).toStartWith('2026-03-15')
+  })
+
+  test('a resubscription on another day bills the new subscription from the change, once', async () => {
+    // Subscribed to sub A since before any of this usage.
+    const user = await makeUser('developer', `${dayOffset(-20)}T10:00:00Z`)
+    await m!.sql`UPDATE accounts_users SET billing_period_subscription_id = 'sub-a' WHERE id = ${user}`
+    await use(user, dayOffset(-10), 1_300_000)
+    await m!.overage.reportPendingOverage()
+    expect(sentFor(user)).toEqual([300_000])
+
+    // Sub B anchors today. A's 300k is neither billed again nor subtracted from B.
+    await m!.credits.recordBillingPeriod(user, { subscriptionId: 'sub-b', periodStart: `${dayOffset(0)}T09:00:00Z` })
+    await use(user, dayOffset(0), 1_050_000)
+    ingested.length = 0
+    await m!.overage.reportPendingOverage()
+    expect(sentFor(user)).toEqual([50_000])
+  })
+
+  test('a business to developer downgrade mid-period prorates each plan by its days', async () => {
+    const anchor = dayOffset(-5)
+    const user = await makeUser('business', `${anchor}T00:00:00Z`)
+    await use(user, dayOffset(-3), 9_000_000)
+
+    await m!.credits.setPlan(user, 'developer')
+    await use(user, dayOffset(0), 1_200_000)
+    await m!.overage.reportPendingOverage()
+
+    const { before, after } = split('business', 'developer', anchor)
+    expect(sentFor(user)).toEqual([9_000_000 - before, 1_200_000 - after])
+  })
+
+  test('an upgrade mid-period prorates each plan by its days', async () => {
+    const anchor = dayOffset(-5)
+    const user = await makeUser('developer', `${anchor}T00:00:00Z`)
+    await use(user, dayOffset(-3), 1_500_000)
+
+    await m!.credits.setPlan(user, 'business')
+    await use(user, dayOffset(0), 2_000_000)
+    await m!.overage.reportPendingOverage()
+
+    const { before } = split('developer', 'business', anchor)
+    expect(sentFor(user)).toEqual([1_500_000 - before])
+  })
+
+  test('flipping to business and back in one day earns no business allowance', async () => {
+    const anchor = dayOffset(-5)
+    const user = await makeUser('developer', `${anchor}T00:00:00Z`)
+
+    await m!.credits.setPlan(user, 'business')
+    await m!.credits.setPlan(user, 'developer')
+
+    const { after } = split('developer', 'developer', anchor)
+    const balance = await m!.credits.getBalance(user)
+    expect(balance.monthlyCredits).toBe(after)
+    expect(balance.monthlyCredits).toBeLessThan(getPlan('developer').monthlyCredits)
+  })
+})
+
+describe.skipIf(!DATABASE_URL)('overage reporting', () => {
+  const now = new Date('2026-11-14T00:10:00Z')
+
+  test('reports the closed period and sends a deterministic id', async () => {
+    const user = await makeUser('developer', '2026-10-14T15:00:00Z')
+    await use(user, '2026-10-20', 1_000_000)
+    await use(user, '2026-11-13', 80_000)
+
+    const result = await m!.overage.reportPendingOverage({ now })
+
+    expect(result.credits).toBe(80_000)
+    const mine = ingested.filter((event) => event.externalCustomerId === user)
+    expect(mine).toEqual([
+      expect.objectContaining({ externalId: m!.overage.overageEventId(user, '2026-10-14', 80_000), metadata: { credits: 80_000 } }),
+    ])
+    expect(await reports(user)).toEqual([{ cycle: '2026-10-14', reported: 80_000, pending: null }])
+  })
+
+  test('a failed send is kept and resent unchanged, even after more usage', async () => {
+    const user = await makeUser('developer', '2026-10-14T15:00:00Z')
+    await use(user, '2026-11-14', 1_010_000)
+    const later = new Date('2026-11-20T00:00:00Z')
+
+    failNext = true
+    expect((await m!.overage.reportPendingOverage({ now: later })).credits).toBe(0)
+    expect(await reports(user)).toEqual([{ cycle: '2026-11-14', reported: 0, pending: 10_000 }])
+
+    await use(user, '2026-11-15', 5_000)
+    await m!.overage.reportPendingOverage({ now: later })
+
+    // First the staged 10k under its original id, then the 5k that came after.
+    const mine = ingested.filter((event) => event.externalCustomerId === user).map((event) => event.externalId)
+    expect(mine).toEqual([
+      m!.overage.overageEventId(user, '2026-11-14', 10_000),
+      m!.overage.overageEventId(user, '2026-11-14', 15_000),
+    ])
+    expect(await reports(user)).toEqual([{ cycle: '2026-11-14', reported: 15_000, pending: null }])
+  })
+
+  test('a pass is skipped while another replica holds the lock', async () => {
+    const user = await makeUser('developer', '2026-10-14T15:00:00Z')
+    await use(user, '2026-11-14', 1_001_000)
+
+    const holder = await m!.sql.reserve()
+    try {
+      await holder`SELECT pg_advisory_lock(${0x6f766572}::int, 1)`
+      expect(await m!.overage.reportPendingOverage({ now: new Date('2026-11-20T00:00:00Z') })).toEqual({ accounts: 0, credits: 0 })
+    } finally {
+      await holder`SELECT pg_advisory_unlock(${0x6f766572}::int, 1)`
+      holder.release()
+    }
+    expect(ingested.filter((event) => event.externalCustomerId === user)).toEqual([])
+  })
+
+  test('overage accrued before a downgrade to free is staged and then sent', async () => {
+    // Anchored yesterday, so the open period is the one the real clock is in.
+    // The day of a change belongs to the new segment, so the usage is from before.
+    const user = await makeUser('developer', `${dayOffset(-1)}T00:00:00Z`)
+    await use(user, dayOffset(-1), 1_040_000)
+
+    await m!.credits.setPlan(user, 'free')
+    const staged = await reports(user)
+    expect(staged).toHaveLength(1)
+    expect(staged[0]).toMatchObject({ reported: 0, pending: 40_000 })
+
+    await m!.overage.reportPendingOverage()
+    expect(sentFor(user)).toEqual([40_000])
+  })
+
+  test('suspended accounts are still billed for what they used', async () => {
+    const user = await makeUser('developer', '2026-10-14T15:00:00Z')
+    await m!.sql`UPDATE accounts_users SET suspended_at = now() WHERE id = ${user}`
+    await use(user, '2026-11-14', 1_002_000)
+
+    await m!.overage.reportPendingOverage({ now: new Date('2026-11-20T00:00:00Z') })
+    expect(ingested.filter((event) => event.externalCustomerId === user).map((event) => event.metadata.credits)).toEqual([
+      2_000,
+    ])
+  })
+
+  test('reporting one account throws when Polar refuses, and leaves it staged', async () => {
+    const user = await makeUser('developer', '2026-10-14T15:00:00Z')
+    await use(user, '2026-11-14', 1_004_000)
+    const later = new Date('2026-11-20T00:00:00Z')
+
+    failNext = true
+    await expect(m!.overage.reportPendingOverage({ userId: user, now: later })).rejects.toThrow(/could not be sent/)
+    expect(await reports(user)).toEqual([{ cycle: '2026-11-14', reported: 0, pending: 4_000 }])
+
+    await m!.overage.reportPendingOverage({ userId: user, now: later })
+    expect(await reports(user)).toEqual([{ cycle: '2026-11-14', reported: 4_000, pending: null }])
+  })
+
+  test('does nothing while billing is disabled', async () => {
+    const user = await makeUser('developer', '2026-10-14T15:00:00Z')
+    await use(user, '2026-11-14', 1_003_000)
+
+    m!.billing.enabled = false
+    try {
+      expect(await m!.overage.reportPendingOverage({ now: new Date('2026-11-20T00:00:00Z') })).toEqual({ accounts: 0, credits: 0 })
+      await m!.credits.setPlan(user, 'free')
+    } finally {
+      m!.billing.enabled = true
+    }
+    expect(await reports(user)).toEqual([])
+  })
+})
