@@ -96,13 +96,19 @@ echo "[1/4] OSM download"
 db_import_phase download
 
 # The extract is on disk — the engines need only the PBF. When overlapping, the
-# GraphHopper rebuild starts now (it is fire-and-forget: wipes the cache and
-# restarts the container, the build runs inside GraphHopper) and the graph
-# builds concurrently with everything below.
+# GraphHopper rebuild starts now in the background and the graph builds
+# concurrently with everything below. rebuild-graphhopper.sh waits for its
+# build container and swaps the graph in at the end, so it is waited on before
+# the import reports done.
+GRAPHHOPPER_PID=""
+GRAPHHOPPER_LOG=""
 echo ""
 if [ "$OVERLAP" = 1 ]; then
   echo "[2/4] GraphHopper rebuild (starts now, builds in its own container)"
-  "$SCRIPT_DIR/rebuild-graphhopper.sh"
+  GRAPHHOPPER_LOG="$(mktemp /tmp/graphhopper-rebuild.XXXXXX.log)"
+  echo "  log: $GRAPHHOPPER_LOG"
+  "$SCRIPT_DIR/rebuild-graphhopper.sh" > "$GRAPHHOPPER_LOG" 2>&1 &
+  GRAPHHOPPER_PID=$!
 else
   echo "[2/4] GraphHopper rebuild deferred (engine overlap off — runs after the import)"
 fi
@@ -131,27 +137,19 @@ fi
 db_import_phase post
 
 # Sequential mode: the database is done and has released its working memory, so
-# build the engines now — but one at a time. rebuild-graphhopper.sh returns as
-# soon as it restarts the container (the graph builds asynchronously inside it),
-# and a still-building GraphHopper holds its full heap; starting planetiler on
-# top of that is the very OOM this mode exists to avoid. So wait for GraphHopper
-# to finish (its main HTTP port only opens once the graph is loaded — landmark
-# prep can take hours at continent scale) before the basemap render.
+# build the engines now — but one at a time. rebuild-graphhopper.sh returns only
+# once the new graph is built and swapped in (landmark prep can take hours at
+# continent scale), and a building GraphHopper holds its full heap, so the
+# basemap render starts after it rather than on top of it.
+GRAPHHOPPER_RC=0
 if [ "$OVERLAP" != 1 ]; then
   echo ""
   echo "[3b/4] GraphHopper rebuild (sequential)"
-  "$SCRIPT_DIR/rebuild-graphhopper.sh"
+  "$SCRIPT_DIR/rebuild-graphhopper.sh" || GRAPHHOPPER_RC=$?
+  if [ "$GRAPHHOPPER_RC" != 0 ]; then
+    echo "  WARNING: GraphHopper rebuild failed (exit $GRAPHHOPPER_RC); the previous graph keeps serving."
+  fi
   if [ "${REBUILD_BASEMAP:-1}" = "1" ]; then
-    echo "  Waiting for GraphHopper to finish before the basemap render..."
-    # Container-network probe (no docker-proxy in the way, so a successful
-    # connect is honest): 8989 only listens once the graph is built and served.
-    for _ in $(seq 1 480); do  # up to ~8h; landmark prep on a planet-scale graph is long
-      if timeout 5 bash -c "exec 3<>/dev/tcp/barrelman-graphhopper/8989" 2>/dev/null; then
-        echo "  GraphHopper is serving; starting basemap."
-        break
-      fi
-      sleep 60
-    done
     echo "  Basemap render (sequential)"
     BASEMAP_LOG="$(mktemp /tmp/basemap-rebuild.XXXXXX.log)"
     "$SCRIPT_DIR/rebuild-basemap.sh" > "$BASEMAP_LOG" 2>&1 &
@@ -174,7 +172,18 @@ if [ -n "$BASEMAP_PID" ]; then
   rm -f "$BASEMAP_LOG"
 fi
 
+if [ -n "$GRAPHHOPPER_PID" ]; then
+  echo ""
+  echo "Waiting for the GraphHopper rebuild started at step 2..."
+  wait "$GRAPHHOPPER_PID" || GRAPHHOPPER_RC=$?
+  cat "$GRAPHHOPPER_LOG" || true
+  rm -f "$GRAPHHOPPER_LOG"
+fi
+
 echo ""
+if [ "$GRAPHHOPPER_RC" != 0 ]; then
+  echo "Import complete, but the GraphHopper rebuild failed (exit $GRAPHHOPPER_RC, see above)."
+  echo "The previous graph is still serving. Fix the cause and run scripts/rebuild-graphhopper.sh."
+  exit "$GRAPHHOPPER_RC"
+fi
 echo "Full import pipeline complete!"
-echo "NOTE: the GraphHopper graph may still be building — it started at step 2"
-echo "and finishes on its own. Check: docker logs barrelman-graphhopper"
