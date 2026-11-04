@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -89,6 +89,71 @@ describe('staged_trial_decision', () => {
   it('obeys an explicit setting over the measurements', () => {
     expect(call('staged_trial_decision', '1', 8 * GB, 48, 1 * GB, 9 * GB)).toBe('run')
     expect(call('staged_trial_decision', '0', 64 * GB, 48, 60 * GB, 1 * GB)).toBe('skip: turned off')
+  })
+})
+
+describe('staged_alongside_decision', () => {
+  // Hetzner on 2026-11-04: 30 GB box, ~2 GB available, live MOTIS at ~4.9 GB.
+  const hetznerAvail = 2 * GB
+
+  it('stops the server by default, however much memory is free', () => {
+    expect(call('staged_alongside_decision', '', 60 * GB, 8 * GB)).toBe('stop: building alongside is off by default')
+    expect(call('staged_alongside_decision', 'false', 60 * GB, 8 * GB)).toMatch(/^stop:/)
+  })
+
+  it('builds alongside when asked to outright', () => {
+    expect(call('staged_alongside_decision', 'true', hetznerAvail, 8 * GB)).toBe('alongside')
+  })
+
+  it('auto builds alongside only with the build plus a 4 GB margin available', () => {
+    expect(call('staged_alongside_decision', 'auto', 12 * GB, 8 * GB)).toBe('alongside')
+    expect(call('staged_alongside_decision', 'auto', 12 * GB - 1, 8 * GB)).toMatch(/^stop: /)
+  })
+
+  it('auto stops the server on the box that OOM-killed MOTIS, and says why', () => {
+    expect(call('staged_alongside_decision', 'auto', hetznerAvail, 8 * GB)).toBe(
+      'stop: 2.0 GB available, building alongside needs 8.0 GB plus a 4.0 GB margin',
+    )
+  })
+})
+
+describe('the rebuild scripts', () => {
+  // Nightly schedules run both scripts with no flags, so their defaults are
+  // what production gets. Two engines in memory at once must be opted into.
+  for (const [script, env] of [
+    ['rebuild-graphhopper.sh', 'GRAPHHOPPER_BUILD_ALONGSIDE'],
+    ['rebuild-motis.sh', 'MOTIS_BUILD_ALONGSIDE'],
+  ]) {
+    it(`${script} stops the server for the build unless ${env} says otherwise`, () => {
+      const text = readFileSync(join(import.meta.dir, script), 'utf8')
+      expect(text).toContain(`ALONGSIDE="\${${env}:-false}"`)
+      expect(text).toContain('staged_alongside_decision "$ALONGSIDE"')
+    })
+  }
+})
+
+describe('staged_build_heap_kb', () => {
+  it('uses the serving heap when it fits', () => {
+    expect(call('staged_build_heap_kb', 6 * GB, 20 * GB)).toBe(String(6 * GB))
+  })
+
+  it('cuts the heap to what is available less 1 GB, never above it', () => {
+    // vega2: 15 GB box, serving heap 6g, ~5 GB available once the server stops
+    expect(call('staged_build_heap_kb', 6 * GB, 5 * GB)).toBe(String(4 * GB))
+  })
+
+  it('is 0 when under 1 GB would be left, so the script refuses', () => {
+    expect(call('staged_build_heap_kb', 6 * GB, 1.5 * GB)).toBe('0')
+  })
+})
+
+describe('staged_with_xmx', () => {
+  it('replaces the heap and keeps the other options', () => {
+    expect(call('staged_with_xmx', '-Xmx6g -Xms1g -XX:+UseParallelGC', 4096)).toBe('-Xmx4096m -Xms1g -XX:+UseParallelGC')
+  })
+
+  it('drops an -Xms above the new heap, which the JVM would refuse', () => {
+    expect(call('staged_with_xmx', '-Xmx10g -Xms8g', 4096)).toBe('-Xmx4096m')
   })
 })
 

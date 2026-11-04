@@ -89,6 +89,58 @@ staged_trial_decision() {
   fi
 }
 
+# Whether to build with the live server still running. Two copies of an engine
+# in memory at once has OOM-killed production engines, so the default is to
+# stop the server for the build; the new dataset is still built aside, checked
+# and swapped. `true` always builds alongside; `auto` does so only when
+# MemAvailable covers the build plus a margin. Prints `alongside`, or
+# `stop: <reason>`.
+#   $1 mode false|true|auto   $2 MemAvailable KiB   $3 build needs KiB
+#   $4 margin KiB (default 4 GiB)
+staged_alongside_decision() {
+  local mode="${1:-false}" avail="${2:-0}" need="${3:-0}" margin="${4:-4194304}"
+  case "$mode" in
+    1|true|yes|on) echo alongside ;;
+    auto)
+      if [ "$avail" -ge $((need + margin)) ]; then
+        echo alongside
+      else
+        echo "stop: $(staged_human_kb "$avail") available, building alongside needs $(staged_human_kb "$need") plus a $(staged_human_kb "$margin") margin"
+      fi ;;
+    *) echo "stop: building alongside is off by default" ;;
+  esac
+}
+
+# The build heap when none is configured: the serving heap, cut down to what
+# is available less 1 GiB so the build never asks the kernel for memory that
+# is not there. Prints KiB; 0 means less than 1 GiB would be left, too little
+# to build anything.
+#   $1 serving -Xmx KiB (0 = unknown)   $2 MemAvailable KiB
+staged_build_heap_kb() {
+  local serving="${1:-0}" avail="${2:-0}" cap
+  cap=$((avail - 1048576))
+  [ "$serving" -gt 0 ] && [ "$serving" -lt "$cap" ] && cap="$serving"
+  if [ "$cap" -lt 1048576 ]; then echo 0; else echo $(( cap / 1024 * 1024 )); fi
+}
+
+# JAVA_OPTS with the heap set to $2 MiB: every -Xmx replaced by one, and an
+# -Xms above it dropped, since the JVM refuses to start with Xms > Xmx. Other
+# options (GC and the like) are kept.
+#   $1 JAVA_OPTS   $2 MiB
+staged_with_xmx() {
+  local opts="$1" mb="$2" out="" tok xms
+  for tok in $opts; do
+    case "$tok" in
+      -Xmx*) ;;
+      -Xms*)
+        xms="$(java_xmx_kb "-Xmx${tok#-Xms}")"
+        [ "$xms" -le $((mb * 1024)) ] && out="$out $tok" ;;
+      *) out="$out $tok" ;;
+    esac
+  done
+  echo "-Xmx${mb}m${out}"
+}
+
 # A rebuild of the same extract that comes out much smaller than the graph it
 # replaces is usually a truncated download or a crashed build that still
 # exited 0. Prints `ok` or `small`.

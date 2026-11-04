@@ -5,10 +5,11 @@ set -euo pipefail
 # Barrelman GraphHopper Graph Rebuild
 # =============================================================================
 #
-# Refresh the GraphHopper routing graph after an OSM update, while the running
-# container keeps serving the old graph.
+# Refresh the GraphHopper routing graph after an OSM update. The new graph is
+# built beside the old one and checked before it replaces anything.
 #
-#   [1/4] Check there is room for a second graph, and warn about memory.
+#   [1/4] Check there is room for a second graph, and decide whether the live
+#         server can keep serving during the build.
 #   [2/4] Build the new graph into /data/graph-cache.next with a one-off
 #         container (`--import`), from the image the server runs and with its
 #         mounts, so the config and custom models are the same.
@@ -16,9 +17,11 @@ set -euo pipefail
 #         much smaller than the graph it replaces, and (optionally) a trial
 #         server on the new graph answers a test route.
 #   [4/4] Swap: graph-cache -> graph-cache.prev, graph-cache.next ->
-#         graph-cache, and restart the server. Routing is down only for that
-#         restart. If the server does not come back on the new graph, the
-#         previous one is put back.
+#         graph-cache, and restart the server. If the server does not come
+#         back on the new graph, the previous one is put back.
+#
+# Built alongside (GRAPHHOPPER_BUILD_ALONGSIDE), routing is down only for the
+# restart. By default the server is stopped for the build; see Memory below.
 #
 # One previous graph is kept for rollback:
 #   ./scripts/rebuild-graphhopper.sh --rollback
@@ -31,24 +34,30 @@ set -euo pipefail
 #   --verify-route      start a trial server on the new graph and route through
 #                       it before swapping, whatever the host's RAM
 #   --no-verify-route   never start the trial server
-#   --stop-server       stop the serving container for the build, so only one
-#                       GraphHopper JVM is in memory. Routing is down for the
-#                       whole build, as before, but the swap is still verified
+#   --stop-server       stop the serving container for the build, whatever
+#                       GRAPHHOPPER_BUILD_ALONGSIDE says
 #   --allow-smaller     accept a new graph under half the size of the current one
 #
 # Environment:
-#   GRAPHHOPPER_BUILD_JAVA_OPTS    heap for the build container. Defaults to the
-#                                  serving container's JAVA_OPTS
+#   GRAPHHOPPER_BUILD_ALONGSIDE    false (default) | true | auto. Whether the
+#                                  live server keeps serving during the build.
+#                                  auto builds alongside only when MemAvailable
+#                                  covers the build heap plus 4 GB
+#   GRAPHHOPPER_BUILD_JAVA_OPTS    JAVA_OPTS for the build container. Unset, the
+#                                  serving JAVA_OPTS with -Xmx cut to what is
+#                                  available less 1 GB
 #   GRAPHHOPPER_VERIFY_ROUTE       auto (default) | 1 | 0, as the flags above
 #   GRAPHHOPPER_VERIFY_MIN_RAM_GB  auto runs the trial server only on a host
 #                                  with at least this much RAM (default 48)
 #
-# Memory: while the build runs, the box holds the serving JVM (its heap plus
-# the graph's pages, which it memory-maps) and the build JVM (its full -Xmx,
-# held for hours during landmark preparation). Overlapping a GraphHopper build
-# with heavy SQL has OOM-killed it before, so this warns when it starts beside
-# a long-running statement. On a box that cannot hold both JVMs, use
-# --stop-server.
+# Memory: by default the serving container is stopped for the build, so only
+# one GraphHopper JVM is in memory and routing is down for the build, as it
+# always was; the new graph is still built aside, checked and swapped, and the
+# old one kept for rollback. Building alongside holds both JVMs (the serving
+# heap plus the graph's pages, and the build's full -Xmx for hours of landmark
+# preparation), which an unattended nightly run on a small box cannot afford.
+# Overlapping a build with heavy SQL has OOM-killed it before, so this warns
+# when it starts beside a long-running statement.
 #
 # Disk: the new graph is built beside the current one, so the volume needs
 # free space of about 1.2x the current graph (graph-cache.prev is released to
@@ -79,8 +88,9 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 log() { echo "[$(date '+%H:%M:%S')] [graphhopper] $*"; }
 
 ROLLBACK=0
-STOP_SERVER=0
+FORCE_STOP=0
 ALLOW_SMALLER=0
+ALONGSIDE="${GRAPHHOPPER_BUILD_ALONGSIDE:-false}"
 VERIFY="${GRAPHHOPPER_VERIFY_ROUTE:-auto}"
 FORCE="${FORCE_REBUILD:-0}"
 for arg in "$@"; do
@@ -89,7 +99,7 @@ for arg in "$@"; do
     --force) FORCE=1 ;;
     --verify-route) VERIFY=1 ;;
     --no-verify-route) VERIFY=0 ;;
-    --stop-server) STOP_SERVER=1 ;;
+    --stop-server) FORCE_STOP=1 ;;
     --allow-smaller) ALLOW_SMALLER=1 ;;
     *) echo "unknown argument: $arg" >&2; exit 2 ;;
   esac
@@ -157,8 +167,14 @@ restart_serving() {
 
 # Swap graph-cache and graph-cache.prev. Both moves happen with the server
 # stopped; each is a rename on the same volume, so nothing is copied.
+# A .swap left by a rollback killed halfway is handled first, or `mv` would
+# move the live graph inside it: with the live graph missing it is the live
+# graph and goes back, otherwise it is stale and is deleted.
 swap_prev() {
   vol_sh "set -e; cd /data
+    if [ -d $GRAPH.swap ]; then
+      if [ -d $GRAPH ]; then rm -rf $GRAPH.swap; else mv $GRAPH.swap $GRAPH; fi
+    fi
     if [ -d $GRAPH ]; then mv $GRAPH $GRAPH.swap; fi
     mv $GRAPH.prev $GRAPH
     if [ -d $GRAPH.swap ]; then mv $GRAPH.swap $GRAPH.prev; fi"
@@ -223,7 +239,8 @@ done < <(docker inspect "$CONTAINER" --format \
 PBF="$(docker inspect -f '{{range .Config.Cmd}}{{.}}{{"\n"}}{{end}}' "$CONTAINER" | awk 'p { print; exit } $0 == "-i" || $0 == "--input" { p = 1 }')"
 PBF="${PBF:-/data/region.osm.pbf}"
 SERVING_JAVA_OPTS="$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$CONTAINER" | sed -n 's/^JAVA_OPTS=//p' | head -1)"
-BUILD_JAVA_OPTS="${GRAPHHOPPER_BUILD_JAVA_OPTS:-${SERVING_JAVA_OPTS:--Xmx6g -Xms1g}}"
+SERVING_JAVA_OPTS="${SERVING_JAVA_OPTS:--Xmx6g -Xms1g}"
+SERVING_XMX_KB="$(java_xmx_kb "$SERVING_JAVA_OPTS")"
 
 # ── [1/4] Disk and memory ────────────────────────────────────────────────────
 log "[1/4] Checking disk and memory..."
@@ -259,14 +276,21 @@ case "$DISK" in
     vol_sh "rm -rf /data/$GRAPH.prev" ;;
 esac
 
-BUILD_XMX_KB="$(java_xmx_kb "$BUILD_JAVA_OPTS")"
-AVAIL_KB="$(mem_available_kb)"
-log "  memory: $(staged_human_kb "$AVAIL_KB") available; the build JVM takes up to $(staged_human_kb "$BUILD_XMX_KB") ($BUILD_JAVA_OPTS)"
-if [ "$STOP_SERVER" != 1 ] && [ "$BUILD_XMX_KB" -gt 0 ] && [ "$AVAIL_KB" -gt 0 ] \
-   && [ "$BUILD_XMX_KB" -gt $(( AVAIL_KB - 1048576 )) ]; then
-  log "  WARNING: the build heap does not fit in available memory beside the serving"
-  log "  GraphHopper. The kernel may OOM-kill the build or something else on the box."
-  log "  Lower GRAPHHOPPER_BUILD_JAVA_OPTS, or pass --stop-server to build with routing down."
+# Alongside or not. The build is assumed to want the serving heap, or the
+# configured one.
+WANT_XMX_KB="$SERVING_XMX_KB"
+[ -n "${GRAPHHOPPER_BUILD_JAVA_OPTS:-}" ] && WANT_XMX_KB="$(java_xmx_kb "$GRAPHHOPPER_BUILD_JAVA_OPTS")"
+if [ "$FORCE_STOP" = 1 ]; then
+  MODE_DECISION="stop: --stop-server"
+else
+  MODE_DECISION="$(staged_alongside_decision "$ALONGSIDE" "$(mem_available_kb)" "$WANT_XMX_KB")"
+fi
+STOP_SERVER=1
+[ "$MODE_DECISION" = alongside ] && STOP_SERVER=0
+if [ "$STOP_SERVER" = 1 ]; then
+  log "  building with the server stopped (${MODE_DECISION#stop: }); routing is down until the swap"
+else
+  log "  building alongside the live server (GRAPHHOPPER_BUILD_ALONGSIDE=$ALONGSIDE)"
 fi
 HEAVY="$(heavy_sql_running)"
 if [ -n "$HEAVY" ]; then
@@ -285,13 +309,15 @@ fi
 docker rm -f "$BUILD" "$TRIAL" >/dev/null 2>&1 || true
 vol_sh "rm -rf /data/$GRAPH.next /data/$GRAPH.failed"
 
+# Every way out before the swap (a failed build or check, an unexpected
+# `set -e` abort, a cancelled job) deletes the unverified graph and makes sure
+# the server is running on the graph it had, whoever stopped it.
 SWAPPED=0
-STOPPED_FOR_BUILD=0
 cleanup() {
   docker rm -f "$BUILD" "$TRIAL" >/dev/null 2>&1 || true
   if [ "$SWAPPED" != 1 ]; then
     vol_sh "rm -rf /data/$GRAPH.next" || true
-    if [ "$STOPPED_FOR_BUILD" = 1 ]; then
+    if [ "$(docker inspect -f '{{.State.Running}}' "$CONTAINER" 2>/dev/null)" != true ]; then
       log "starting the server again on the graph it had"
       docker start "$CONTAINER" >/dev/null 2>&1 || true
     fi
@@ -301,9 +327,28 @@ trap cleanup EXIT
 trap 'exit 143' TERM INT
 
 if [ "$STOP_SERVER" = 1 ]; then
-  log "  --stop-server: stopping $CONTAINER for the build (routing is down until the swap)"
   docker stop "$CONTAINER" >/dev/null 2>&1 || true
-  STOPPED_FOR_BUILD=1
+fi
+
+# The build heap. Measured after the stop, so a stopped server's memory counts
+# as available. Unset, it is the serving heap cut to what is available less
+# 1 GB, so a build never starts with a heap the box cannot back.
+AVAIL_KB="$(mem_available_kb)"
+if [ -n "${GRAPHHOPPER_BUILD_JAVA_OPTS:-}" ]; then
+  BUILD_JAVA_OPTS="$GRAPHHOPPER_BUILD_JAVA_OPTS"
+else
+  HEAP_KB="$(staged_build_heap_kb "$SERVING_XMX_KB" "$AVAIL_KB")"
+  if [ "$HEAP_KB" = 0 ]; then
+    log "ERROR: only $(staged_human_kb "$AVAIL_KB") of memory available, too little for a graph build." >&2
+    exit 1
+  fi
+  BUILD_JAVA_OPTS="$(staged_with_xmx "$SERVING_JAVA_OPTS" $(( HEAP_KB / 1024 )))"
+fi
+BUILD_XMX_KB="$(java_xmx_kb "$BUILD_JAVA_OPTS")"
+log "  memory: $(staged_human_kb "$AVAIL_KB") available; the build JVM takes up to $(staged_human_kb "$BUILD_XMX_KB") ($BUILD_JAVA_OPTS)"
+if [ "$BUILD_XMX_KB" -gt $(( AVAIL_KB - 1048576 )) ]; then
+  log "  WARNING: GRAPHHOPPER_BUILD_JAVA_OPTS asks for more heap than is available."
+  log "  The kernel may OOM-kill the build or something else on the box."
 fi
 
 log "[2/4] Building the new graph into /data/$GRAPH.next$([ "$STOP_SERVER" = 1 ] || echo ' (the server keeps serving)')..."
@@ -330,7 +375,7 @@ docker rm "$BUILD" >/dev/null 2>&1 || true
 log "[3/4] Verifying the new graph..."
 if [ "$BUILD_RC" != 0 ]; then
   log "ERROR: the graph import exited $BUILD_RC$([ "$BUILD_OOM" = true ] && echo ' (out of memory)'); the current graph is untouched." >&2
-  [ "$BUILD_RC" = 137 ] && log "  Exit 137 is a kill, usually the OOM killer. Lower GRAPHHOPPER_BUILD_JAVA_OPTS or use --stop-server." >&2
+  [ "$BUILD_RC" = 137 ] && log "  Exit 137 is a kill, usually the OOM killer. Lower GRAPHHOPPER_BUILD_JAVA_OPTS, or build with the server stopped (the default)." >&2
   log "  ── build log tail ──" >&2
   tail -15 /tmp/graphhopper-build.log >&2 || true
   exit 1
@@ -442,7 +487,6 @@ vol_sh "set -e; $complete_sh; cd /data
   mv $GRAPH.next $GRAPH
   rm -rf default-gh"
 SWAPPED=1
-STOPPED_FOR_BUILD=0
 
 if restart_serving; then
   log "Rebuild complete. The previous graph is kept at /data/$GRAPH.prev (--rollback to return to it)."

@@ -15,8 +15,9 @@ set -euo pipefail
 #   [1/3] Regenerate config.yml from the gtfs_feeds table. Region-aware by
 #         construction — it covers exactly the feeds imported for the configured
 #         regions (regions.json), and points at the merged region.osm.pbf.
-#   [2/3] Clean-build a new dataset into /data/data.next with `motis import`,
-#         while the server keeps serving /data/data. Building from empty keeps
+#   [2/3] Clean-build a new dataset into /data/data.next with `motis import`.
+#         By default the server is stopped for the import, as it always was;
+#         MOTIS_BUILD_ALONGSIDE keeps it serving. Building from empty keeps
 #         ALL derived artifacts — timetable, street graph, stop<->street match
 #         index, footpaths — consistent. (An in-place incremental import can
 #         rebuild the timetable while leaving the match index stale, which
@@ -24,7 +25,8 @@ set -euo pipefail
 #   [3/3] Verify data.next (the import exited 0, tt.bin is there, the import's
 #         timetable_metrics.json counts trips, and optionally a trial server
 #         loads it), then swap: data -> data.prev, data.next -> data, and
-#         restart the server. Transit is down only for that restart.
+#         restart the server. Built alongside, transit is down only for that
+#         restart.
 #
 # Run after a GTFS download/import (feeds changed → timetable must rebuild):
 #   ./scripts/rebuild-motis.sh
@@ -38,10 +40,16 @@ set -euo pipefail
 #   --rollback          swap data and data.prev and restart; no build
 #   --verify-server     load the new dataset in a trial server before the swap
 #   --no-verify-server  never start the trial server
-#   --stop-server       stop the server during the import (frees its memory;
-#                       transit is down for the import, as before)
+#   --stop-server       stop the server during the import, whatever
+#                       MOTIS_BUILD_ALONGSIDE says
 #
 # Environment:
+#   MOTIS_BUILD_ALONGSIDE false (default) | true | auto. Whether the live
+#                         server keeps serving during the import. An import
+#                         peaks at 5-8 GB beside a live server of about 5 GB
+#                         on a US dataset, which has OOM-killed MOTIS, so auto
+#                         builds alongside only with 8 GB plus a 4 GB margin
+#                         available
 #   MOTIS_VERIFY_SERVER   auto (default) | 1 | 0. auto starts the trial server
 #                         when available memory exceeds the dataset's size
 #                         plus 1 GB
@@ -72,14 +80,16 @@ log() { echo "[$(date '+%H:%M:%S')] [motis] $*"; }
 . "$(dirname "$0")/staged-rebuild-lib.sh"
 
 ROLLBACK=0
-STOP_SERVER=0
+FORCE_STOP=0
+ALONGSIDE="${MOTIS_BUILD_ALONGSIDE:-false}"
 VERIFY="${MOTIS_VERIFY_SERVER:-auto}"
+IMPORT="barrelman-motis-import"
 for arg in "$@"; do
   case "$arg" in
     --rollback) ROLLBACK=1 ;;
     --verify-server) VERIFY=1 ;;
     --no-verify-server) VERIFY=0 ;;
-    --stop-server) STOP_SERVER=1 ;;
+    --stop-server) FORCE_STOP=1 ;;
     *) echo "unknown argument: $arg" >&2; exit 2 ;;
   esac
 done
@@ -133,7 +143,14 @@ if [ "$ROLLBACK" = 1 ]; then
   fi
   log "Rolling back: swapping data and data.prev..."
   docker stop "$CONTAINER" >/dev/null 2>&1 || true
-  vol_sh 'set -e; if [ -d data ]; then mv data data.swap; fi; mv data.prev data; if [ -d data.swap ]; then mv data.swap data.prev; fi'
+  # A data.swap left by a rollback killed halfway is the live dataset if data
+  # is missing, and stale otherwise; either way it must not stay, or `mv data
+  # data.swap` would nest the live dataset inside it.
+  vol_sh 'set -e
+    if [ -d data.swap ]; then if [ -d data ]; then rm -rf data.swap; else mv data.swap data; fi; fi
+    if [ -d data ]; then mv data data.swap; fi
+    mv data.prev data
+    if [ -d data.swap ]; then mv data.swap data.prev; fi'
   if restart_serving; then
     log "Serving the previous dataset. Run --rollback again to return to the one it replaced."
     exit 0
@@ -298,7 +315,7 @@ drop_feed() {
 }
 
 run_import() { # returns 0 on success; writes /tmp/motis-import.log
-  docker run --rm --network "$NETWORK" \
+  docker run --rm --name "$IMPORT" --network "$NETWORK" \
     -v "${GTFS_VOL}:/data" -v "${OSM_VOL}:/osm-data:ro" \
     ${GTFS_ZIPS:+-v "${GTFS_ZIPS}:/data/gtfs:ro"} \
     -w /data "$MOTIS_IMAGE" /motis import -c config.yml -d data.next > /tmp/motis-import.log 2>&1
@@ -352,15 +369,23 @@ if [ -n "$HEAVY" ]; then
   printf '%s\n' "$HEAVY" | sed 's/^/      /'
 fi
 
+# An import container still running under the fixed name was orphaned by a
+# killed run (SIGKILL skips the cleanup below) and is still writing into
+# data.next, and would double the memory if a second one started beside it.
+if [ "$(docker inspect -f '{{.State.Running}}' "$IMPORT" 2>/dev/null)" = "true" ]; then
+  log "ERROR: an import container ($IMPORT) is already running. Another rebuild is in progress," >&2
+  log "  or one was killed and left it behind: docker rm -f $IMPORT once you are sure." >&2
+  exit 1
+fi
+docker rm -f "$IMPORT" "$TRIAL" >/dev/null 2>&1 || true
 vol_sh 'rm -rf data.next data.failed'
-docker rm -f "$TRIAL" >/dev/null 2>&1 || true
 
 # Every way out before the swap (a failed import, a failed check, an
 # unexpected `set -e` abort, a cancelled job) leaves the live dataset alone,
 # deletes the unverified one and makes sure the server is running.
 SWAPPED=0
 cleanup() {
-  docker rm -f "$TRIAL" >/dev/null 2>&1 || true
+  docker rm -f "$IMPORT" "$TRIAL" >/dev/null 2>&1 || true
   if [ "$SWAPPED" != 1 ]; then
     vol_sh 'rm -rf data.next' || true
     if [ "$(docker inspect -f '{{.State.Running}}' "$CONTAINER" 2>/dev/null)" != true ]; then
@@ -372,11 +397,18 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 143' TERM INT
 
-if [ "$STOP_SERVER" = 1 ]; then
-  log "  --stop-server: stopping $CONTAINER for the import (transit is down until the swap)"
-  docker stop "$CONTAINER" >/dev/null 2>&1 || true
+# Alongside or not. 8 GB is the top of what a US import was measured to peak
+# at; a metro dataset needs far less, so `auto` errs toward stopping.
+if [ "$FORCE_STOP" = 1 ]; then
+  MODE_DECISION="stop: --stop-server"
 else
-  log "  the server keeps serving the current dataset during the import"
+  MODE_DECISION="$(staged_alongside_decision "$ALONGSIDE" "$(mem_available_kb)" $((8 * 1048576)))"
+fi
+if [ "$MODE_DECISION" = alongside ]; then
+  log "  the server keeps serving the current dataset during the import (MOTIS_BUILD_ALONGSIDE=$ALONGSIDE)"
+else
+  log "  importing with the server stopped (${MODE_DECISION#stop: }); transit is down until the swap"
+  docker stop "$CONTAINER" >/dev/null 2>&1 || true
 fi
 
 MAX_FEED_DROPS="${MOTIS_MAX_FEED_DROPS:-50}"
