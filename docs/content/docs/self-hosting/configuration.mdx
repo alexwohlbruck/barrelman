@@ -369,6 +369,24 @@ Read by the API, not by ops — the API decides *when*, `barrelman-ops` still do
 the work. A fresh install is seeded with three **disabled** schedules (OSM
 replication, GTFS drift check, GBFS); enable the ones you want in the console.
 
+## Monitoring and alerts
+
+All optional. With none of them set, nothing leaves the instance and the Sentry
+SDK is never loaded. What each alert means is in
+[monitoring and alerts](/self-hosting/operations#monitoring-and-alerts).
+
+| Variable | Default | Read by | Description |
+|---|---|---|---|
+| `SENTRY_DSN` | — | API, ops | Report unhandled errors and 5xx handler errors to Sentry or a Sentry-compatible service (GlitchTip works). Request bodies, headers, cookies, query strings, API keys and email addresses are stripped before sending |
+| `SENTRY_ENVIRONMENT` | `production` | API, ops | Environment tag on each event. The release tag is always `barrelman@<version>` |
+| `ALERT_WEBHOOK_URL` | — | API, ops | Where alerts are POSTed. An ntfy topic URL, a Slack incoming webhook, or any endpoint that accepts JSON |
+| `ALERT_WEBHOOK_FORMAT` | `json` | API, ops | `ntfy`, `slack` or `json`. Any other value falls back to `json` with a warning |
+| `ALERT_DISK_PERCENT` | `90` | ops | Alert when a data volume is at least this full |
+
+Set the first four on both `barrelman` and `barrelman-ops`; the compose file
+forwards them to each. Scheduled jobs run in either process, so a webhook set on
+only one of them misses part of the job alerts.
+
 ## Landing-site demo
 
 Read by the `barrelman-landing` service in `docker-compose.dev.yml` (the

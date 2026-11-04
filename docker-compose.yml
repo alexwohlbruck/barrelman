@@ -403,6 +403,12 @@ services:
       BARRELMAN_AUTO_SUSPEND_HOURS: ${BARRELMAN_AUTO_SUSPEND_HOURS:-}
       BARRELMAN_MULTI_ACCOUNT_THRESHOLD: ${BARRELMAN_MULTI_ACCOUNT_THRESHOLD:-}
 
+      # ── Monitoring and alerts (all optional) ─────────────────────────
+      SENTRY_DSN: ${SENTRY_DSN:-}
+      SENTRY_ENVIRONMENT: ${SENTRY_ENVIRONMENT:-}
+      ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL:-}
+      ALERT_WEBHOOK_FORMAT: ${ALERT_WEBHOOK_FORMAT:-}
+
       # ── Terms of service ─────────────────────────────────────────────
       BARRELMAN_TOS_URL: ${BARRELMAN_TOS_URL:-}
       BARRELMAN_TOS_VERSION: ${BARRELMAN_TOS_VERSION:-}
@@ -525,6 +531,14 @@ services:
       # linux build at ./data/portolan/bin/portolan on the host, or point this
       # somewhere else.
       PORTOLAN_BIN: ${PORTOLAN_BIN:-/portolan-data/bin/portolan}
+      # ── Monitoring and alerts (all optional) ───────────────────────
+      # The worker reports its own errors, alerts on scheduled process jobs,
+      # and checks disk usage on the volumes mounted below.
+      SENTRY_DSN: ${SENTRY_DSN:-}
+      SENTRY_ENVIRONMENT: ${SENTRY_ENVIRONMENT:-}
+      ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL:-}
+      ALERT_WEBHOOK_FORMAT: ${ALERT_WEBHOOK_FORMAT:-}
+      ALERT_DISK_PERCENT: ${ALERT_DISK_PERCENT:-}
       # scripts/*.sh docker-exec into these sibling containers by name.
       DB_CONTAINER: barrelman-db
     volumes:

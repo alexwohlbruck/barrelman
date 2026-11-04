@@ -10,6 +10,11 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Added
+
+* Operator alerts. Set `ALERT_WEBHOOK_URL` and Barrelman POSTs an alert when a scheduled job fails and when that schedule next succeeds, when Postgres, GraphHopper, Martin or MOTIS fails two health checks in a row and when it comes back, and when a data volume passes `ALERT_DISK_PERCENT` (default 90). `ALERT_WEBHOOK_FORMAT` chooses `ntfy`, `slack` or `json`, so an ntfy topic URL is enough to get alerts on a phone. Set the variables on both `barrelman` and `barrelman-ops`. See [monitoring and alerts](https://docs.barrelman.dev/self-hosting/operations#monitoring-and-alerts).
+* Optional error tracking. With `SENTRY_DSN` set, the API and the ops worker report unhandled errors and 5xx responses to Sentry or a compatible service, tagged with the release and `SENTRY_ENVIRONMENT`. Request bodies, headers, cookies, query strings, API keys and email addresses are stripped first. Without a DSN the SDK is never loaded.
+
 ### Documentation
 
 * A new [Attribution](https://docs.barrelman.dev/attribution) page says what an app must credit when it shows Barrelman data: OpenStreetMap, OpenMapTiles, Mapterhorn terrain, transit agencies, 3D landmarks and brand logos. It includes a MapLibre example and explains what the ODbL asks of anyone who redistributes the data.
