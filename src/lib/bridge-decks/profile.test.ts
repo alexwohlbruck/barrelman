@@ -4,7 +4,7 @@ import {
   fair,
   VERTICAL_CURVE,
   PINNED,
-  absorbPaths, absorbTracks, along, clearOfWalkways, detab, landing, LANDING, arch, chains, crossings, fitEdges, joinNeighbours, MAX_GRADE, mercator, resample, smooth, solve, steady, widen,
+  absorbPaths, absorbTracks, along, beside, clearOfWalkways, closeVerges, detab, GORE_GAP, holdGores, landing, LANDING, arch, chains, crossings, fitEdges, joinNeighbours, MAX_GRADE, mercator, paveGores, resample, sideAt, smooth, solve, steady, widen,
   type Chain, type Point, type Way,
 } from './profile'
 
@@ -296,6 +296,138 @@ describe('joinNeighbours', () => {
     const a = { chain: deck(0), z: deck(0).points.map(() => 100) }
     joinNeighbours([a, { chain: deck(40), z: deck(40).points.map(() => 101) }, { chain: deck(10), z: deck(10).points.map(() => 108) }])
     expect(a.z.every(z => z === 100)).toBe(true)
+  })
+})
+
+describe('paveGores', () => {
+  // A main line running east, and a ramp leaving it at its start, bearing away 1 in 6.
+  const main = (): Chain => ({ ways: [1], points: resample([east(0), east(90)], 6), kind: 'road', layer: 1, edges: [4, 4] })
+  const ramp = (): Chain => ({ ways: [2], points: resample([east(0), east(90, 15)], 6), kind: 'road', layer: 1, edges: [4, 4] })
+  const gapAt = (a: Chain, b: Chain, i: number) => {
+    const near = beside(b.points, a.points[i])
+    const facing = beside(a.points, b.points[near.segment]).left ? 0 : 1
+    return near.distance - sideAt(a, facing, i) - sideAt(b, near.left ? 0 : 1, near.segment - 1, near.t)
+  }
+
+  it('closes the ground between a ramp and the deck it leaves, up to the gore nose', () => {
+    const [m, r] = [main(), ramp()]
+    const open = r.points.map((_, i) => gapAt(r, m, i))
+    const M = { chain: m, z: m.points.map(() => 100) }
+    paveGores([M, { chain: r, z: r.points.map(() => 100), on: [{ deck: M, at: r.points[0] }] }])
+    r.points.forEach((_, i) => {
+      if (open[i] > 0.5 && open[i] <= GORE_GAP) expect(Math.abs(gapAt(r, m, i))).toBeLessThan(0.6)
+      if (open[i] > GORE_GAP + 2) expect(gapAt(r, m, i)).toBeCloseTo(open[i], 1)
+    })
+    expect(open.some(g => g > 0.5 && g <= GORE_GAP)).toBe(true)
+  })
+
+  it('leaves the ground between a ramp and a deck on two bridges of their own', () => {
+    const [m, r] = [{ ...main(), outline: 'way/1' }, { ...ramp(), outline: 'way/2' }]
+    const M = { chain: m, z: m.points.map(() => 100) }
+    paveGores([M, { chain: r, z: r.points.map(() => 100), on: [{ deck: M, at: r.points[0] }] }])
+    expect(r.sides ?? null).toBeNull()
+  })
+
+  it('leaves a ramp that has already climbed away from the deck it leaves', () => {
+    const [m, r] = [main(), ramp()]
+    const M = { chain: m, z: m.points.map(() => 100) }
+    paveGores([M, { chain: r, z: r.points.map((_, i) => 100 + i), on: [{ deck: M, at: r.points[0] }] }])
+    expect(r.sides ?? null).toBeNull()
+    expect(m.sides ?? null).toBeNull()
+  })
+})
+
+describe('holdGores', () => {
+  const main = (): Chain => ({ ways: [1], points: resample([east(0), east(120)], 6), kind: 'road', layer: 1, edges: [4, 4] })
+  const ramp = (): Chain => ({ ways: [2], points: resample([east(0), east(120, 40)], 6), kind: 'road', layer: 1, edges: [4, 4] })
+  const pair = (grade: number) => {
+    const [m, r] = [main(), ramp()]
+    const d = along(r.points)
+    const M = { chain: m, z: m.points.map(() => 100) }
+    const R = { chain: r, z: d.map(x => 100 + x * grade), on: [{ deck: M, at: r.points[0] }] }
+    return { M, R, d, own: R.z.slice() }
+  }
+
+  it('holds a climbing ramp level with the deck it leaves to the gore nose, then eases it back onto its own profile', () => {
+    const { M, R, d, own } = pair(0.03)
+    holdGores([M, R])
+    expect(R.z[1]).toBeCloseTo(100, 1)
+    expect(R.z[1]).toBeLessThan(own[1] - 0.1)
+    for (let i = 1; i < d.length; i++) expect(R.z[i] - R.z[i - 1]).toBeLessThanOrEqual(MAX_GRADE * (d[i] - d[i - 1]) + 1e-6)
+    expect(R.z.at(-1)).toBe(own.at(-1))
+  })
+
+  it('makes no hold a ramp could not climb back from, nor one leaving it short of what it must clear', () => {
+    const steep = pair(0.1)
+    holdGores([steep.M, steep.R])
+    expect(steep.R.z).toEqual(steep.own)
+    const cleared = pair(0.03)
+    holdGores([cleared.M, Object.assign(cleared.R, { needs: [{ at: 12, height: 100.3 }] })])
+    expect(cleared.R.z).toEqual(cleared.own)
+  })
+})
+
+describe('paveGores between two ramps', () => {
+  it('paves the gore between two ramps leaving one deck at the same place', () => {
+    const trunk: Chain = { ways: [1], points: resample([east(-60), east(0)], 6), kind: 'road', layer: 1, edges: [4, 4] }
+    const left: Chain = { ways: [2], points: resample([east(0), east(90, 14)], 6), kind: 'road', layer: 1, edges: [4, 4] }
+    const right: Chain = { ways: [3], points: resample([east(0), east(90, -14)], 6), kind: 'road', layer: 1, edges: [4, 4] }
+    const T = { chain: trunk, z: trunk.points.map(() => 100) }
+    const L = { chain: left, z: left.points.map(() => 100), on: [{ deck: T, at: left.points[0] }] }
+    const R = { chain: right, z: right.points.map(() => 100), on: [{ deck: T, at: right.points[0] }] }
+    paveGores([T, L, R])
+    expect(Math.max(...(left.sides ?? [[0], [0]]).flat())).toBeGreaterThan(4)
+    expect(Math.max(...(right.sides ?? [[0], [0]]).flat())).toBeGreaterThan(4)
+  })
+})
+
+describe('closeVerges', () => {
+  const road: Chain = { ways: [1], points: resample([east(0), east(60)], 6), kind: 'road', layer: 1, edges: [4, 4] }
+  // A sidewalk 1.5 m either side of its line, 7.5 m from the road's: a 2 m verge between.
+  const walk = (): Chain => ({ ways: [2], points: resample([east(0, 7.5), east(60, 7.5)], 6), kind: 'path', layer: 1, edges: [1.5, 1.5] })
+
+  it('widens a sidewalk deck across the verge to the road deck beside it on one bridge', () => {
+    const w = walk()
+    closeVerges([{ chain: road, z: road.points.map(() => 100) }, { chain: w, z: w.points.map(() => 100) }], () => true)
+    expect(Math.abs(Math.max(...w.edges) - 3.5)).toBeLessThan(0.1)
+  })
+
+  it('leaves one on another bridge, or at another height', () => {
+    const [a, b] = [walk(), walk()]
+    closeVerges([{ chain: road, z: road.points.map(() => 100) }, { chain: a, z: a.points.map(() => 100) }], () => false)
+    closeVerges([{ chain: road, z: road.points.map(() => 100) }, { chain: b, z: b.points.map(() => 103) }], () => true)
+    expect(a.sides ?? null).toBeNull()
+    expect(b.sides ?? null).toBeNull()
+  })
+})
+
+describe('gores between ramps', () => {
+  const main = (): Chain => ({ ways: [1], points: resample([east(0), east(120)], 6), kind: 'road', layer: 1, edges: [4, 4] })
+  const off = (north: number, ways: number): Chain => ({ ways: [ways], points: resample([east(30), east(120, north)], 6), kind: 'road', layer: 1, edges: [4, 4] })
+
+  it('never pairs ramps leaving a deck off its two sides', () => {
+    const [m, l, r] = [main(), off(15, 2), off(-15, 3)]
+    const M = { chain: m, z: m.points.map(() => 100) }
+    const L = { chain: l, z: l.points.map(() => 100), on: [{ deck: M, at: l.points[0] }] }
+    const alone = off(15, 2)
+    paveGores([M, L, { chain: r, z: r.points.map(() => 100), on: [{ deck: M, at: r.points[0] }] }])
+    const M2 = { chain: main(), z: m.points.map(() => 100) }
+    paveGores([M2, { chain: alone, z: alone.points.map(() => 100), on: [{ deck: M2, at: alone.points[0] }] }])
+    expect(l.sides ?? null).toEqual(alone.sides ?? null)
+  })
+
+  it('holds the ramps of a split together or not at all', () => {
+    // Two ramps leaving the same side of one deck: the steep one cannot be held, so neither is.
+    const m = main()
+    const M = { chain: m, z: m.points.map(() => 100) }
+    const [a, b] = [off(30, 2), off(24, 3)]
+    const da = along(a.points), db = along(b.points)
+    const A = { chain: a, z: da.map(x => 100 + x * 0.1), on: [{ deck: M, at: a.points[0] }] }
+    const B = { chain: b, z: db.map(x => 100 + x * 0.02), on: [{ deck: M, at: b.points[0] }] }
+    const [za, zb] = [A.z.slice(), B.z.slice()]
+    holdGores([M, A, B])
+    expect(A.z).toEqual(za)
+    expect(B.z).toEqual(zb)
   })
 })
 

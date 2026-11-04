@@ -365,6 +365,33 @@ export const SCRIPTS: ScriptDef[] = [
     notes: 'Refreshes concurrently, so pitches keep serving the old rows until the new ones are ready. Runs after every OSM update.',
   },
   {
+    id: 'osm-indoor',
+    name: 'Refresh Indoor Maps',
+    description:
+      'Rebuild the indoor_features view: every indoor venue with its levels, floors, walls with door openings, rooms, stairs and points of interest, one row per level.',
+    category: 'osm',
+    danger: 'safe',
+    longRunning: true,
+    confirm: false,
+    exclusive: true,
+    exec: { kind: 'process', command: 'bash', args: ['scripts/refresh-view.sh', 'indoor_features'] },
+    source: 'scripts/refresh-view.sh',
+    notes: 'Refreshes concurrently, so floor plans keep serving the old rows until the new ones are ready. Runs after every OSM update.',
+  },
+  {
+    id: 'osm-fixtures',
+    name: 'Refresh Fixtures',
+    description: 'Rebuild the fixtures view: building entrances, station entrances and street lifts, drawn as small square signs.',
+    category: 'osm',
+    danger: 'safe',
+    longRunning: true,
+    confirm: false,
+    exclusive: true,
+    exec: { kind: 'process', command: 'bash', args: ['scripts/refresh-view.sh', 'fixtures'] },
+    source: 'scripts/refresh-view.sh',
+    notes: 'Runs after every OSM update.',
+  },
+  {
     id: 'osm-basemap',
     name: 'Rebuild Basemap',
     description:
@@ -385,6 +412,20 @@ export const SCRIPTS: ScriptDef[] = [
         default: false,
         description:
           'By default this only refreshes an existing basemap. Turn on to render the first one — you must also uncomment the pmtiles source in martin-config.yaml for it to be served.',
+      },
+      {
+        name: 'BASEMAP_MAXZOOM',
+        label: 'Deepest zoom',
+        type: 'select',
+        apply: 'env',
+        envVar: 'BASEMAP_MAXZOOM',
+        default: '14',
+        options: [
+          { label: '14 — OpenMapTiles default', value: '14' },
+          { label: '15 — quicker close-in views, twice the archive', value: '15' },
+        ],
+        description:
+          'Deepest zoom rendered: 14 or 15 (planetiler\'s limit). Clients draw deeper zooms by stretching these tiles, and a stretched tile is laid out again for every deeper tile it covers, so 15 keeps close-in views quick. It doubles the archive and needs far more sort space and memory: a US render passed 46 GB of sort files seven minutes in. Set BASEMAP_TMP_DIR to a roomy disk first.',
       },
       {
         name: 'PLANETILER_MEMORY',

@@ -10,6 +10,33 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.10.38] - 2026-11-03
+
+### Added
+
+* `POST /route/lanes` draws a driving route in its lanes and says which lanes lead on at each turn, from the ways' OSM lane tags read by the road markings' rules. Lane changes curve in before the stop line and turns follow an arc; left-hand traffic is supported. With `profile: "bike"` the line runs down the bike lane, or just inside the outer traffic lane, and separately mapped paths keep their own line. Billed as routing.
+* `/route` edge segments carry `osmWayId` and `country` where the routing graph has them. `graphhopper-config.yml` now encodes `osm_way_id`; run `scripts/rebuild-graphhopper.sh` after upgrading for lane geometry.
+* Walking and cycling `/route` edge segments say more for turn-by-turn guidance: crosswalk islands, push-button signals and diagonal crossings, passages through buildings, which side the bike lane is on, station entrances, levels, escalators and elevators. Run the "Build Route Context Indexes" task after upgrading for entrances, elevators and push buttons on nodes.
+* **Gores are paved and hatched.** Where a ramp leaves a road, or two ramps
+  part, the wedge between their carriageways is paved with white chevrons out
+  to the nose, on the ground and on bridges, with no area mapped for it.
+
+### Changed
+
+* The basemap can be rendered to zoom 15 (`BASEMAP_MAXZOOM=15`; the default stays 14). Close-in views stop stretching zoom-14 tiles that clients lay out again for every deeper tile, so a city centre lays out about a third as much basemap per close-in view (DC: a 360–410 KB zoom-14 tile against 75–160 KB zoom-15 ones); the archive is about twice the size, and the render needs far more sort space and memory. Clients keep working against a z15 archive unchanged, and can raise their basemap maxzoom to 15 to benefit.
+
+* `indoor_map` flights are one point per escalator or stair at its middle, with `width`, `length` and uphill `bearing`, in place of per-tread polygons and the `height` column. A `down` flight beside an `up` one climbs the same way. Stairwells and lift shafts no longer get walls.
+* **Bridge decks at junctions and splits.** A deck stays inside its bridge's
+  outline, so a junction carried on a bridge is no longer a slab reaching over
+  the ground beside it, and a ramp stays level with the road it leaves until
+  the gore's nose, which its deck paves.
+
+### Fixed
+
+* Basemap renders no longer run the data volume out of space. The archive from two renders ago is removed before rendering instead of after, planetiler's sort files can live on another disk (`BASEMAP_TMP_DIR`), and a failed render cleans them up. A render that fills its disk crashes planetiler with `ArrayIndexOutOfBoundsException` and leaves the basemap stale.
+
+* Requests made with the service key (`BARRELMAN_API_KEY`) get their own per-address ceiling, `BARRELMAN_SERVICE_RPM` (default 6000/min), instead of the anonymous 120/min, which a backend fanning out one trip plan's calls hit at once.
+
 ## [0.10.37] - 2026-11-02
 
 ### Fixed
@@ -33,6 +60,7 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ### Fixed
 
+* A small town far away no longer takes the top search result from a closer match. A town's search reach now follows its population when OSM records one, so "jamaica" from Brooklyn finds the Jamaica LIRR station instead of Jamaica, Vermont (pop. 1,005, 285 km away).
 * The nightly GTFS import no longer fails, so the MOTIS rebuild after it runs again. It misread every feed file that opens with a UTF-8 byte-order mark, as many Windows-written feeds do. Those feeds looked like timetables with no trips: 122 US feeds were rejected outright, and before that they imported without any lines at their stops. Any one failed feed also failed the whole run, which skipped the walking transfers and the MOTIS rebuild for every other feed. GTFS-Flex-only feeds are now skipped as having nothing to import. The run fails only when more than 15% of feeds fail, and otherwise lists the ones that did.
 * A GTFS feed that fails or is skipped now keeps its previous ZIP, matching the database contents it keeps. Its new download used to overwrite that ZIP before the import was checked. One night a near-empty download (later padded with only `transfers.txt`) then made the MOTIS rebuild abort with "no loader for gtfs/67.zip found". The MOTIS rebuild now also drops a feed named in that error and retries, instead of reading it as a street-routing failure.
 * The GTFS import uses about half the memory on large feeds, and no longer gets OOM-killed partway through the United States. It used to hold all of `stop_times.txt` as one record per row, both to derive each stop's lines and to rewrite trip ids for realtime matching. For New York's Brooklyn bus feed alone, the rewrite peaked at 6.8 GB; it now streams the file and peaks at 1.6 GB.

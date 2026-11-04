@@ -260,6 +260,40 @@ COMMENT ON MATERIALIZED VIEW street_furniture IS 'v3';
 CREATE UNIQUE INDEX IF NOT EXISTS street_furniture_fid_idx ON street_furniture (fid);
 CREATE INDEX IF NOT EXISTS street_furniture_centroid_idx ON street_furniture USING GIST (centroid);
 
+-- Fixtures: what a person finds their way by at street level, drawn as small
+-- square signs. A building's entrances, a station's stairs down, a lift up to
+-- the street. Indoor ones belong to floor plans (indoor_features).
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_class WHERE relname = 'fixtures' AND relkind = 'm')
+    AND COALESCE(obj_description(to_regclass('fixtures'), 'pg_class'), '') <> 'v1' THEN
+    DROP MATERIALIZED VIEW fixtures;
+  END IF;
+END $$;
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS fixtures AS
+SELECT (osm_id * 4 + CASE osm_type WHEN 'N' THEN 0 WHEN 'W' THEN 1 ELSE 2 END) AS fid,
+       id, centroid,
+       CASE
+         WHEN tags->>'railway' IN ('subway_entrance', 'train_station_entrance') THEN 'station_entrance'
+         WHEN tags->>'highway' = 'elevator' THEN 'elevator'
+         ELSE 'entrance'
+       END AS kind,
+       NULLIF(tags->>'ref', '') AS ref
+FROM geo_places
+WHERE geom_type = 'point'
+  AND (tags->>'railway' IN ('subway_entrance', 'train_station_entrance')
+       OR tags->>'highway' = 'elevator'
+       OR tags->>'entrance' IN ('main', 'yes'))
+  AND COALESCE(tags->>'indoor', 'no') = 'no'
+  AND COALESCE(tags->>'location', '') NOT IN ('indoor', 'underground')
+  AND COALESCE(tags->>'access', '') NOT IN ('private', 'no')
+WITH NO DATA;
+
+COMMENT ON MATERIALIZED VIEW fixtures IS 'v1';
+CREATE UNIQUE INDEX IF NOT EXISTS fixtures_fid_idx ON fixtures (fid);
+CREATE INDEX IF NOT EXISTS fixtures_centroid_idx ON fixtures USING GIST (centroid);
+
 -- Lines a client draws as standing objects: fences, walls, hedges and guard
 -- rails, power lines on their towers and poles, and the overhead wire over
 -- electrified track. A closed barrier is stored as an area and comes through
@@ -531,7 +565,7 @@ WHERE geom_type IN ('line', 'area')
 DO $$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_class WHERE relname = 'buildings_3d' AND relkind = 'm')
-    AND COALESCE(obj_description(to_regclass('buildings_3d'), 'pg_class'), '') <> 'v2' THEN
+    AND COALESCE(obj_description(to_regclass('buildings_3d'), 'pg_class'), '') <> 'v3' THEN
     DROP MATERIALIZED VIEW buildings_3d;
   END IF;
 END $$;
@@ -632,7 +666,8 @@ covered AS (
 -- patchwork. The smallest containing outline wins where outlines nest.
 owner AS (
   SELECT DISTINCT ON (p.id) p.id as part_id,
-         (o.osm_id * 4 + CASE o.osm_type WHEN 'N' THEN 0 WHEN 'W' THEN 1 ELSE 2 END) as outline_fid
+         (o.osm_id * 4 + CASE o.osm_type WHEN 'N' THEN 0 WHEN 'W' THEN 1 ELSE 2 END) as outline_fid,
+         COALESCE(NULLIF(o.tags->>'building:use', ''), NULLIF(NULLIF(o.tags->>'building', ''), 'yes')) as outline_kind
   FROM parts p
   JOIN geo_places o
     ON o.geom && p.geom
@@ -696,7 +731,15 @@ SELECT s.fid, s.id, COALESCE(k.geom, s.geom) as geom,
        CASE WHEN c.covered_area >= 0.9 * c.outline_area THEN true END as hide_3d,
        -- The building this shape belongs to: its outline for a part, itself
        -- otherwise. Shared by every part of one building.
-       COALESCE(w.outline_fid, s.fid) as group_id
+       COALESCE(w.outline_fid, s.fid) as group_id,
+       -- What the building is used for, which decides the facade a client
+       -- draws on it: `building:use` where mapped, else `building` unless it
+       -- says only `yes`, else a part's outline's. NULL, so absent, when unknown.
+       lower(COALESCE(
+         NULLIF(s.tags->>'building:use', ''),
+         NULLIF(NULLIF(s.tags->>'building', ''), 'yes'),
+         w.outline_kind,
+         CASE WHEN s.tags->>'amenity' = 'parking' THEN 'parking' END)) as kind
 FROM shapes s
 LEFT JOIN covered c ON c.id = s.id
 LEFT JOIN owner w ON w.part_id = s.id
@@ -721,7 +764,7 @@ CREATE INDEX IF NOT EXISTS geo_places_building_part_geom_idx
   ON geo_places USING GIST (geom)
   WHERE COALESCE(tags->>'building:part', 'no') <> 'no';
 
-COMMENT ON MATERIALIZED VIEW buildings_3d IS 'v2';
+COMMENT ON MATERIALIZED VIEW buildings_3d IS 'v3';
 CREATE UNIQUE INDEX IF NOT EXISTS buildings_3d_fid_idx ON buildings_3d (fid);
 CREATE INDEX IF NOT EXISTS buildings_3d_geom_idx ON buildings_3d USING GIST (geom);
 

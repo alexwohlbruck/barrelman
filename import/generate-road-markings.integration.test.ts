@@ -97,6 +97,8 @@ const ways: [number, string, Record<string, string>][] = [
   [120, line([-74.180, 40.7115], [-74.180, 40.713]), { highway: 'motorway', oneway: 'yes', lanes: '4' }],
   [121, line([-74.180, 40.713], [-74.180, 40.715]), { highway: 'motorway', oneway: 'yes', lanes: '3' }],
   [122, line([-74.180, 40.713], [-74.17965, 40.715]), { highway: 'motorway_link', oneway: 'yes', lanes: '1' }],
+  // and a street bridge crossing over its gore.
+  [123, line([-74.1806, 40.7136], [-74.1792, 40.7136]), { highway: 'tertiary', lanes: '2', bridge: 'yes', layer: '1' }],
   // A two-way street dividing into a pair of one-ways.
   [130, line([-74.190, 40.7115], [-74.190, 40.713]), { highway: 'primary', lanes: '4' }],
   [131, line([-74.190, 40.713], [-74.1898, 40.715]), { highway: 'primary', oneway: 'yes', lanes: '2' }],
@@ -116,6 +118,16 @@ const ways: [number, string, Record<string, string>][] = [
   [155, line([-74.2102, 40.71282], [-74.2098, 40.71282]), { highway: 'footway', footway: 'crossing', 'crossing:markings': 'zebra' }],
   // A motorway bridge passing over that junction.
   [156, line([-74.2115, 40.7129], [-74.2085, 40.7129]), { highway: 'motorway', oneway: 'yes', lanes: '3', bridge: 'yes', layer: '1' }],
+  // A street with a bike lane, carried over a creek on a bridge between two ways on the ground.
+  [185, line([-74.2450, 40.713], [-74.2440, 40.713]), { highway: 'tertiary', lanes: '2', 'cycleway:right': 'lane' }],
+  [186, line([-74.2440, 40.713], [-74.2430, 40.713]), { highway: 'tertiary', lanes: '2', 'cycleway:right': 'lane', bridge: 'yes', layer: '1' }],
+  [187, line([-74.2430, 40.713], [-74.2420, 40.713]), { highway: 'tertiary', lanes: '2', 'cycleway:right': 'lane' }],
+  // A side street ending at that bridge's west end; a flyover approach on a layer but untagged as a bridge; a one-way drawn backwards.
+  [188, line([-74.2440, 40.7130], [-74.2440, 40.7120]), { highway: 'residential', lanes: '2' }],
+  [189, line([-74.2480, 40.713], [-74.2470, 40.713]), { highway: 'tertiary', lanes: '2' }],
+  [190, line([-74.2470, 40.713], [-74.2460, 40.713]), { highway: 'tertiary', lanes: '2', layer: '1' }],
+  [191, line([-74.2500, 40.713], [-74.2490, 40.713]), { highway: 'tertiary', oneway: 'yes', lanes: '2', bridge: 'yes', layer: '1' }],
+  [192, line([-74.2480, 40.7131], [-74.2490, 40.713]), { highway: 'tertiary', oneway: '-1', lanes: '2' }],
   // An exit ramp gaining a lane at each of four ways, three of them short,
   // across a cell boundary at 40.718.
   [170, line([-74.015, 40.7160], [-74.015, 40.7172]), { highway: 'motorway_link', oneway: 'yes', lanes: '1' }],
@@ -698,6 +710,32 @@ run('generate-road-markings.sql', () => {
     const [{ n }] = await sql`SELECT count(*)::int as n FROM road_markings WHERE kind = 'lane' AND bridge
       AND ST_Intersects(geom, ST_MakeEnvelope(-74.2102, 40.7128, -74.2100, 40.7130, 4326))`
     expect(n).toBe(2)
+  })
+
+  test('gives a street\'s paint within 15 m of a bridge\'s end to the bridge, and the rest to the ground', async () => {
+    const owner = async (from: number, to: number) => (await sql<{ bridge: boolean; kind: string }[]>`
+      SELECT DISTINCT bridge, kind FROM road_markings WHERE kind IN ('centre', 'bike_lane')
+        AND ST_Intersects(geom, ST_MakeEnvelope(${east(-74.2440, from)}, 40.7129, ${east(-74.2440, to)}, 40.7131, 4326))`)
+    const kinds = (rows: { bridge: boolean; kind: string }[], bridge: boolean) => rows.filter(r => r.bridge === bridge).map(r => r.kind).sort()
+    const near = await owner(-13, -3)
+    expect(kinds(near, true)).toEqual(['bike_lane', 'centre'])
+    expect(kinds(near, false)).toEqual([])
+    const far = await owner(-40, -20)
+    expect(kinds(far, false)).toEqual(['bike_lane', 'centre'])
+    expect(kinds(far, true)).toEqual([])
+    const [{ gap }] = await sql<{ gap: number }[]>`
+      SELECT ST_Distance(ST_Union(geom) FILTER (WHERE bridge)::geography, ST_Union(geom) FILTER (WHERE NOT bridge)::geography) as gap
+      FROM road_markings WHERE kind = 'centre' AND geom && ST_MakeEnvelope(-74.2460, 40.7125, -74.2440, 40.7135, 4326)`
+    expect(gap).toBeLessThan(0.05)
+  })
+
+  test('leaves the paint of a side street, a street off an untagged flyover, and gives a backwards one-way\'s', async () => {
+    const owned = async (w: number, s: number, e: number, n: number) => (await sql<{ bridge: boolean }[]>`
+      SELECT DISTINCT bridge FROM road_markings WHERE kind IN ('centre', 'lane', 'edge')
+        AND ST_Intersects(geom, ST_MakeEnvelope(${w}, ${s}, ${e}, ${n}, 4326))`).map(r => r.bridge)
+    expect(await owned(-74.24405, ahead(40.713, -13), -74.24395, ahead(40.713, -6))).toEqual([false])
+    expect(await owned(east(-74.2470, -12), 40.7129, east(-74.2470, -4), 40.7131)).toEqual([false])
+    expect(await owned(east(-74.2490, 4), 40.71295, east(-74.2490, 12), 40.71315)).toEqual([true])
   })
 
   test('keeps the arrows of a merging way in its lanes as they ease over', async () => {
@@ -1420,6 +1458,26 @@ run('generate-road-markings.sql', () => {
         SELECT count(*) FILTER (WHERE ST_NPoints(g) = 3 AND ST_Y(ST_PointN(g, 2)) < least(ST_Y(ST_PointN(g, 1)), ST_Y(ST_PointN(g, 3))))::int as apex
         FROM (SELECT (ST_Dump(geom)).geom as g FROM road_markings WHERE kind = 'hatch' AND geom && ${by(-74.320 + 6.5 / 84300, 40.7133, 10)}) t`
       expect(apex).toBeGreaterThan(0)
+    })
+
+    test('hatches the gore an exit ramp leaves as it peels off a motorway, out to its nose', async () => {
+      const bars = await sql`
+        SELECT color, ST_Y(ST_Centroid(geom)) as y FROM road_markings
+        WHERE kind = 'hatch' AND NOT bridge AND geom && ST_MakeEnvelope(-74.1802, 40.7131, -74.1796, 40.7145, 4326)`
+      expect(bars.length).toBeGreaterThan(0)
+      expect(bars.every(b => b.color === 'white')).toBe(true)
+      // Not where the two carriageways still share the stem, nor past the nose.
+      expect(bars.every(b => b.y > 40.7133 && b.y < 40.7145)).toBe(true)
+      // The bridge over it keeps its centre line unbroken across the gore below.
+      const [{ over, span }] = await sql`
+        WITH gore AS (SELECT ST_Envelope(ST_Collect(geom)) as g FROM road_markings
+                      WHERE kind = 'hatch' AND NOT bridge AND geom && ST_MakeEnvelope(-74.1802, 40.7131, -74.1796, 40.7145, 4326))
+        SELECT COALESCE((SELECT sum(ST_Length(ST_Intersection(m.geom, gore.g)::geography)) FROM road_markings m
+                         WHERE m.kind = 'centre' AND m.bridge AND m.geom && gore.g), 0) as over,
+               ST_Length(ST_Intersection(ST_GeomFromText('LINESTRING(-74.1806 40.7136, -74.1792 40.7136)', 4326), gore.g)::geography) as span
+        FROM gore`
+      expect(span).toBeGreaterThan(1)
+      expect(over).toBeGreaterThan(span - 0.5)
     })
 
     test('reads a traffic_calming=painted_island area as a painted median', async () => {

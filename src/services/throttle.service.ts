@@ -107,6 +107,12 @@ const perAccountIp = new WindowCounter(60_000)
 const ANONYMOUS_IP_LIMIT = envNumber('BARRELMAN_ANON_RPM', 120)
 
 /**
+ * Requests per minute from one address presenting the shared service key: the
+ * operator's own backend, which fans one user action out into dozens of calls.
+ */
+const SERVICE_IP_LIMIT = envNumber('BARRELMAN_SERVICE_RPM', 6_000)
+
+/**
  * Ceiling on any single source address, regardless of how many accounts or keys
  * it presents. Generous, because a corporate NAT or a mobile carrier can put
  * many legitimate users behind one address — this is a backstop against a
@@ -257,6 +263,8 @@ export interface ThrottleRequest {
   plan?: Plan
   /** The key is operator-exempt — see `ApiKey.rateLimitExempt`. */
   exempt?: boolean
+  /** Authenticated with the shared service key rather than an account's. */
+  service?: boolean
 }
 
 export type ThrottleVerdict =
@@ -318,12 +326,14 @@ export function checkPenalty(key: string): ThrottleVerdict {
 }
 
 export function checkThrottle(request: ThrottleRequest): ThrottleVerdict {
-  const { ip, group, userId, keyId, plan, exempt } = request
+  const { ip, group, userId, keyId, plan, exempt, service } = request
   const bucket = bucketFor(group)
   const scaled = (limit: number) => Math.max(1, Math.round(limit * bucket.multiplier))
 
   if (!userId) {
-    const anon = perIp.hit(`anon:${bucket.id}:${ip}`, scaled(ANONYMOUS_IP_LIMIT))
+    const anon = service
+      ? perIp.hit(`service:${bucket.id}:${ip}`, scaled(SERVICE_IP_LIMIT))
+      : perIp.hit(`anon:${bucket.id}:${ip}`, scaled(ANONYMOUS_IP_LIMIT))
     if (!anon.allowed) {
       return {
         allowed: false,
