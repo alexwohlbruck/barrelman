@@ -15,7 +15,7 @@ When self-hosting, replace this with your own host. In local development the API
 
 ## Authentication
 
-All endpoints (except the public `GET /health/`) require a bearer token. Send your API key in the `Authorization` header:
+All endpoints require a bearer token, except `GET /health/` and three kinds of static asset: map glyphs (`/fonts/…`), map sprites (`/sprites/…`) and brand logo images (`/brand-logos/…`). A map library or an `<img>` tag fetches those from URLs it was handed and cannot send a key, so they are public, free, and rate-limited per address. Send your API key in the `Authorization` header:
 
 ```
 Authorization: Bearer <BARRELMAN_API_KEY>

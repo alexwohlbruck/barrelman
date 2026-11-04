@@ -31,6 +31,9 @@ services:
       # relies on these mounts — without this the API dies on boot with an
       # uncaughtException from loadFile().
       - ./config:/app/config
+      # Vendored glyphs and sprites for /fonts and /sprites. Baked in by the
+      # production Dockerfile's `COPY . .`.
+      - ./assets:/app/assets:ro
       - ./data:/data
       - /app/node_modules
 

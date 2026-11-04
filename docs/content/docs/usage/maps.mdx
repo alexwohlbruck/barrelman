@@ -82,6 +82,25 @@ layers carry heights read from Mapterhorn.
 and `basemap-dark.json` on [Dark Matter](https://github.com/openmaptiles/dark-matter-gl-style),
 both by OpenMapTiles. Their code is BSD-3-Clause and their design is
 [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/). Each style's
-`metadata` names its origin. Labels use Noto Sans (SIL Open Font License),
-loaded from `demotiles.maplibre.org`; icons load from the OpenMapTiles style
-repositories.
+`metadata` names its origin.
+
+## Glyphs and sprites
+
+Both styles load their label fonts and icons from Barrelman:
+
+- `glyphs` is `/fonts/{fontstack}/{range}.pbf`. The fonts are Noto Sans
+  Regular, Bold and Italic from the [OpenMapTiles fonts](https://github.com/openmaptiles/fonts)
+  build, under the [SIL Open Font License 1.1](https://openfontlicense.org).
+- `sprite` is `/sprites/osm-bright` or `/sprites/dark-matter`, the icon sheets
+  from each style's repository, at 1x and `@2x`.
+
+These URLs take no key and cost nothing, since MapLibre requests them without
+one. They are limited per address. You can point a style of your own at them.
+
+Glyphs cover the ranges 0-255 through 8192-8447, which is U+0000 to U+20FF:
+Latin, Greek, Cyrillic, Armenian, Hebrew, Arabic, the Indic scripts, Thai,
+Georgian and general punctuation, among others. Any other range, such as
+Chinese, Japanese or Korean, answers an empty glyph set. MapLibre accepts it,
+so labels in those scripts are left out and the rest of the map draws as
+usual. A font stack is served by its first font that Barrelman carries, and a
+stack that names none of them gets Noto Sans Regular.
