@@ -51,6 +51,8 @@ export interface TransitRouteResponse {
   itineraries: TransitItinerary[]
   /** One credit line per GTFS feed whose trips appear in the itineraries. */
   attribution?: FeedAttribution[]
+  /** Why the plan came back empty, when it did. Absent on a plan with itineraries. */
+  warnings?: string[]
   metadata?: {
     searchWindow: number
     nextPageCursor?: string
@@ -987,7 +989,62 @@ export async function getIntermodalRoute(
   await enrichInterchangeableRoutes(result.itineraries)
 
   result.attribution = await itineraryAttribution(result.itineraries)
+  if (!result.itineraries.length) {
+    result.warnings = noItineraryWarnings(walkOnly, await motisStreetRouting())
+  }
   return result
+}
+
+/**
+ * What to tell a caller whose plan found nothing.
+ *
+ * Bike, car and rental access go through MOTIS's own street graph. On an
+ * instance built timetable-only those searches can never answer, which looks
+ * the same as "no service at this hour" unless we say so. `streetRouting` is
+ * undefined when the build mode is unknown, and then nothing is claimed.
+ */
+export function noItineraryWarnings(walkOnly: boolean, streetRouting: boolean | undefined): string[] {
+  const warnings = ['No itinerary was found for this trip. Empty plans are not charged.']
+  if (!walkOnly && streetRouting === false) {
+    warnings.push(
+      'This instance builds transit routing without a street graph, so bike, car, ' +
+        'park-and-ride and rental access are not available here. Only walking to and ' +
+        'from stations is.',
+    )
+  }
+  return warnings
+}
+
+/**
+ * The MOTIS config that rebuild-motis.sh writes for the dataset it builds. The
+ * API mounts the same volume. When a street build falls back to timetable-only,
+ * the script rewrites this file before importing, so it tracks the mode of the
+ * dataset MOTIS serves (it can lead by one import while a rebuild runs).
+ */
+const MOTIS_CONFIG_PATH = '/gtfs-data/config.yml'
+const STREET_ROUTING_TTL_MS = 60_000
+let streetRoutingCache: { at: number; value: boolean | undefined } | undefined
+
+/**
+ * Whether the MOTIS dataset was built with street routing, read from its
+ * config. Undefined when the config can't be read (local development outside
+ * Compose). MOTIS_STREET_ROUTING can't answer this: it lives in ops and only
+ * states what was asked for, and a street build that fails falls back.
+ */
+export async function motisStreetRouting(path = MOTIS_CONFIG_PATH): Promise<boolean | undefined> {
+  const now = Date.now()
+  if (path === MOTIS_CONFIG_PATH && streetRoutingCache && now - streetRoutingCache.at < STREET_ROUTING_TTL_MS) {
+    return streetRoutingCache.value
+  }
+  let value: boolean | undefined
+  try {
+    const match = /^street_routing:\s*(true|false)\s*$/m.exec(await Bun.file(path).text())
+    value = match ? match[1] === 'true' : undefined
+  } catch {
+    value = undefined
+  }
+  if (path === MOTIS_CONFIG_PATH) streetRoutingCache = { at: now, value }
+  return value
 }
 
 /** The feed a transit leg rode, from its MOTIS-qualified boarding stop. */

@@ -84,6 +84,8 @@ export interface MeteringContext {
   throttleKey: string | null
   /** Set once the after-handler has run, so a second call is a no-op. */
   settled?: boolean
+  /** Set by the handler through `waiveCharge` when the answer was not worth paying for. */
+  waived?: boolean
 }
 
 // Throttling lives in services/throttle.service.ts — four layers plus a
@@ -565,7 +567,8 @@ export async function refusalForCredential(
 
 /**
  * Companion `onAfterHandle`: refunds the charge when the request failed with a
- * server error. Attach alongside the guard on the same instance.
+ * server error, or when the handler waived it (`waiveCharge`). Attach alongside
+ * the guard on the same instance.
  */
 export function apiAuthAfter(context: GuardContext) {
   const metering = read(context)
@@ -583,14 +586,33 @@ export function apiAuthAfter(context: GuardContext) {
   if (!metering.charged || !metering.caller.userId) return
 
   const status = Number(context.set.status ?? 200)
-  if (status >= 500) {
-    refundUsage({
-      userId: metering.caller.userId,
-      apiKeyId: metering.caller.keyId,
-      endpoint: metering.group,
-      credits: metering.credits,
-    })
+  const failed = status >= 500
+  if (!failed && !metering.waived) return
+
+  const usage = {
+    userId: metering.caller.userId,
+    apiKeyId: metering.caller.keyId,
+    endpoint: metering.group,
+    credits: metering.credits,
   }
+  // A failed request is taken out of the counts entirely. A waived one did
+  // answer, so it stays visible as a request (to the dashboards and to abuse
+  // detection) at zero credits, the way an unmetered request is recorded.
+  refundUsage(usage, { keepRequest: !failed })
+  if (!failed) context.set.headers['x-barrelman-credits-charged'] = '0'
+}
+
+/**
+ * Mark a successful response as not billable. The after-handler refunds the
+ * whole up-front charge, the same as for a 5xx.
+ *
+ * For answers that came back empty because of what the instance can do, not
+ * because of what the caller asked: a transit plan with no itinerary. A no-op
+ * for a request the guard did not charge.
+ */
+export function waiveCharge(request: Request): void {
+  const metering = read({ request } as GuardContext)
+  if (metering && !metering.settled) metering.waived = true
 }
 
 /**

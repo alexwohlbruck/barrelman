@@ -47,6 +47,11 @@ them can carry many times the work of another:
 refused before it reaches the engine (a malformed tile source, too many
 contours, a trace over the point limit) is charged one unit.
 
+Empty transit plans aren't charged. When `/transit/route` or
+`/transit/intermodal-route` finds no itinerary, the credits are refunded,
+`X-Barrelman-Credits-Charged` reads 0 and the response carries a `warnings`
+list saying why. A request that fails with a 5xx is refunded the same way.
+
 The `/graphhopper` passthrough forwards `route`, `info` and `health` only. Use
 `/isochrone` and `/match` for reachability and map matching.
 
