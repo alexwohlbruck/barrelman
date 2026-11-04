@@ -11,7 +11,7 @@ docker compose pull
 docker compose up -d
 ```
 
-`docker compose pull` refreshes every service's image in the **active profiles**, not just Barrelman's. That is fine for anything stateless — which is why most images here track a floating tag and pick up upstream fixes for free.
+`docker compose pull` refreshes every service's image in the **active profiles**. Barrelman's own three images follow `:latest`; every third-party image (Martin, GraphHopper, MOTIS, Pelias, Kokoro) is pinned by digest, so a pull never changes those. Moving one is a separate step, described under [upgrading pinned images](#upgrading-pinned-images).
 
 Profile-gated services are skipped, which is easy to miss: on an instance running
 the address geocoder, a plain `pull` fetches the six core images and leaves
@@ -46,15 +46,47 @@ docker compose exec -d barrelman-ops bash scripts/rebuild-motis.sh
 docker compose exec -d barrelman-ops bash scripts/rebuild-graphhopper.sh
 ```
 
-Pull during a window where you can run the rebuild, or pin those two services to explicit version tags.
+Both are pinned in `docker-compose.yml`, so this only happens when you move a pin yourself. Do it during a window where you can run the rebuild.
 </Callout>
+
+### Upgrading pinned images
+
+Third-party images are pinned as `image:tag@sha256:…`. Docker resolves the digest and ignores the tag, which is there only to say which release the digest belongs to. Pelias publishes no release tags for most of its images, so those read `:master@sha256:…`. GraphHopper's pin is a digest alone: the June 2026 12.0 snapshot, from a nightly `:latest` whose October builds broke graph imports.
+
+To move one:
+
+1. Find the new release's digest. For a multi-architecture image this is the digest of the index, the one `docker buildx imagetools inspect` prints first:
+
+   ```bash
+   docker buildx imagetools inspect ghcr.io/motis-project/motis:2.11.4
+   ```
+
+2. Replace both the tag and the digest in `docker-compose.yml` (or `pelias/docker-compose.yml`), then pull and recreate that one service:
+
+   ```bash
+   docker compose pull motis
+   docker compose up -d motis
+   ```
+
+3. Rebuild its data if the engine stores any:
+
+   | Service | After moving the pin |
+   |---|---|
+   | `motis` | `scripts/rebuild-motis.sh`. The import runs with the image the server runs, so recreate the container first |
+   | `graphhopper` | `scripts/rebuild-graphhopper.sh`, a full graph rebuild. Test a new build on a small region first |
+   | `martin` | Nothing to rebuild. Check `docker logs barrelman-martin` for sources it dropped at startup |
+   | Pelias | Usually nothing. A `pelias/schema` change can need a re-index, which is a multi-hour job |
+
+4. Check the container's health with `docker compose ps`, then `/health` on the API.
+
+To roll back, restore the old line and repeat step 2. For GraphHopper and MOTIS, run the rebuild again too, since the new engine may already have rewritten the data.
 
 ### Automating it
 
 Watchtower can automate the pull, with three caveats.
 
 - **It only manages containers on its own Docker host.** Watchtower watches the Docker socket it is given and nothing else, so an instance running on a different machine will never update your stack. Every host you want auto-updated needs its own.
-- **A blanket Watchtower will eventually hit the binary-format trap above.** It pulls the same floating tags `docker compose pull` would, so if MOTIS or GraphHopper are on `:latest` it will one day restart them onto an incompatible engine version with nobody watching. Either pin those two services, or run Watchtower with `--label-enable` and label only the stateless services.
+- **Watchtower leaves pinned images alone.** A digest never points anywhere new, so Watchtower has nothing to pull for Martin, GraphHopper, MOTIS or Pelias. If you replace a pin with a floating tag, Watchtower will follow it, and for MOTIS and GraphHopper that means one day restarting onto an engine that rejects its data with nobody watching.
 - **It will restart the stack in the middle of a job.** An import runs for hours — a replication update with post-processing has taken nearly twelve — while Watchtower polls hourly, so a push that lands mid-run kills it. See below.
 
 ### Not restarting mid-import

@@ -225,7 +225,7 @@ MOTIS is the loud symptom, not the only one. GraphHopper builds a graph from a d
 
 **`tt: binary version mismatch` on MOTIS startup**
 
-A `docker compose pull` moved the engine version. Re-run `scripts/rebuild-motis.sh`.
+The engine version moved under the dataset: you changed the MOTIS pin, or the host's compose file predates the pins and a pull followed `:latest`. Re-run `scripts/rebuild-motis.sh`. It imports with the same image the running container uses, so recreate the container on the version you want first.
 
 **`Not a GraphHopper file /data/graph-cache/properties! Expected 'GH' as file marker`**
 

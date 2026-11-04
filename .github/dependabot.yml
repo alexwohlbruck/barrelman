@@ -1,0 +1,65 @@
+# Weekly update PRs against dev. Minor and patch bumps arrive as one grouped PR
+# per ecosystem and directory; a major bump gets a PR of its own, since those
+# are the ones that need reading.
+#
+# The compose files pin third-party images by digest. A PR that moves MOTIS or
+# GraphHopper also needs their data rebuilt after merging; see "Upgrading pinned
+# images" in docs/content/docs/self-hosting/operations.mdx.
+
+version: 2
+
+updates:
+  - package-ecosystem: bun
+    directory: /
+    target-branch: dev
+    schedule:
+      interval: weekly
+    groups:
+      api-minor-and-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: bun
+    directory: /web
+    target-branch: dev
+    schedule:
+      interval: weekly
+    groups:
+      console-minor-and-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: bun
+    directory: /docs
+    target-branch: dev
+    schedule:
+      interval: weekly
+    groups:
+      docs-minor-and-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    target-branch: dev
+    schedule:
+      interval: weekly
+    groups:
+      actions-minor-and-patch:
+        update-types: [minor, patch]
+
+  # Dockerfile, Dockerfile.db, Dockerfile.dev, Dockerfile.ops
+  - package-ecosystem: docker
+    directory: /
+    target-branch: dev
+    schedule:
+      interval: weekly
+    groups:
+      base-images-minor-and-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: docker-compose
+    directories: [/, /pelias]
+    target-branch: dev
+    schedule:
+      interval: weekly
+    groups:
+      compose-images-minor-and-patch:
+        update-types: [minor, patch]

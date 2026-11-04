@@ -40,7 +40,6 @@ set -euo pipefail
 # but no compose plugin, and whose working directory would resolve to a
 # different compose project name than the operator's.
 CONTAINER="barrelman-motis"
-MOTIS_IMAGE="ghcr.io/motis-project/motis:latest"
 NETWORK="barrelman_default"
 GTFS_VOL="barrelman_barrelman-gtfs-data"
 OSM_VOL="barrelman_barrelman-osm-data"
@@ -51,6 +50,12 @@ if ! docker ps -a --format '{{.Names}}' | grep -q "^${CONTAINER}\$"; then
   log "container '${CONTAINER}' not found — skipping rebuild"
   exit 0
 fi
+
+# Import with the image the server runs. The dataset is written in the engine's
+# own binary format, so an import by any other version leaves a timetable the
+# server refuses to load. The image ID is used, not the name it was created
+# from: a name like motis:latest may point at a newer pull than the one running.
+MOTIS_IMAGE="$(docker inspect -f '{{.Image}}' "$CONTAINER")"
 
 BARRELMAN_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$BARRELMAN_DIR"
