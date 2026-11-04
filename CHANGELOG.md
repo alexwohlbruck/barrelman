@@ -10,6 +10,10 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Documentation
+
+* A new [Attribution](https://docs.barrelman.dev/attribution) page says what an app must credit when it shows Barrelman data: OpenStreetMap, OpenMapTiles, Mapterhorn terrain, transit agencies, 3D landmarks and brand logos. It includes a MapLibre example and explains what the ODbL asks of anyone who redistributes the data.
+
 ## [0.10.38] - 2026-11-03
 
 ### Added
