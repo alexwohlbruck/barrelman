@@ -23,13 +23,14 @@
 #   ssh vega2 'cd /opt/barrelman && docker compose pull barrelman barrelman-ops && docker compose up -d barrelman barrelman-ops'
 #
 # CAVEAT: vega2's Watchtower is unfiltered — it updates every container on the
-# host, not just Barrelman's. barrelman-motis and barrelman-graphhopper track
-# :latest, and both bake data into a version-specific binary format, so an
-# upstream release can restart them onto an engine that rejects the existing
-# timetable / routing graph ("tt: binary version mismatch"). Recovery is an
-# import job, not a restart — see "Updating a deployment" in README.md. This is
-# also why the command above names services rather than pulling the whole
-# stack. Pre-Watchtower image digests are recorded on the host at
+# host, not just Barrelman's. docker-compose.yml pins barrelman-motis and
+# barrelman-graphhopper by digest, because both bake data into a
+# version-specific binary format and an upstream release would restart them onto
+# an engine that rejects the existing timetable / routing graph ("tt: binary
+# version mismatch"). A host whose compose file predates the pins still tracks
+# :latest. Recovery is an import job, not a restart — see "Updating a
+# deployment" in README.md. This is also why the command above names services
+# rather than pulling the whole stack. Pre-Watchtower image digests are recorded on the host at
 # /opt/watchtower/pre-watchtower-digests.txt if you need to pin back.
 #
 # Required GitHub secrets:

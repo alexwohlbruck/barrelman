@@ -120,7 +120,8 @@ describe('GET /graphhopper/*', () => {
     expect(res.status).toBe(502)
     const body = await json(res)
     expect(body.error).toContain('unreachable')
-    expect(body.detail).toContain('ECONNREFUSED')
+    // The upstream error is logged, not returned: it names internal hosts.
+    expect(JSON.stringify(body)).not.toContain('ECONNREFUSED')
   })
 })
 
@@ -133,13 +134,13 @@ describe('upstream timeout', () => {
 
   test('returns 504 instead of hanging when GraphHopper never answers', async () => {
     process.env.GRAPHHOPPER_TIMEOUT_MS = '50'
-    // An upstream that only ever ends by being aborted, like a stuck /match.
+    // An upstream that only ever ends by being aborted, like a stuck search.
     const hang: GraphHopperFetcher = (_url, init) =>
       new Promise((_, reject) => init.signal!.addEventListener('abort', () => reject(init.signal!.reason)))
 
     const app = new Elysia().use(createGraphHopperRoutes({ fetchGraphHopper: hang }))
     const started = Date.now()
-    const res = await app.handle(req('/graphhopper/match?profile=bike', { method: 'POST', body: '<gpx/>' }))
+    const res = await app.handle(req('/graphhopper/route', { method: 'POST', body: '{}' }))
 
     expect(res.status).toBe(504)
     expect(Date.now() - started).toBeLessThan(2000)
@@ -183,22 +184,28 @@ describe('POST /graphhopper/*', () => {
     expect(new TextDecoder().decode(receivedBody)).toBe(payload)
   })
 
-  test('forwards POST /isochrone path correctly', async () => {
+  test('forwards GET /info to the same path upstream', async () => {
     const mockFetch = mock<GraphHopperFetcher>(async () =>
       new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } }),
     )
-
     const app = new Elysia().use(createGraphHopperRoutes({ fetchGraphHopper: mockFetch }))
-    await app.handle(
-      req('/graphhopper/isochrone', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: '{}',
-      }),
-    )
-
-    expect(mockFetch.mock.calls[0][0]).toBe('http://mock-graphhopper:8989/isochrone')
+    await app.handle(req('/graphhopper/info'))
+    expect(mockFetch.mock.calls[0][0]).toBe('http://mock-graphhopper:8989/info')
   })
+})
+
+describe('sub-path allowlist', () => {
+  // These do far more work than one route and are priced elsewhere
+  // (/isochrone, /match), so the proxy must never reach them.
+  for (const path of ['isochrone', 'spt', 'matrix', 'match', 'route-optimization', 'route/extra', 'route/../spt', '', 'Route']) {
+    test(`/graphhopper/${path} answers 404 without calling GraphHopper`, async () => {
+      const mockFetch = mock<GraphHopperFetcher>(async () => new Response('{}', { status: 200 }))
+      const app = new Elysia().use(createGraphHopperRoutes({ fetchGraphHopper: mockFetch }))
+      const res = await app.handle(req(`/graphhopper/${path}`, { method: 'POST', body: '{}' }))
+      expect(res.status).toBe(404)
+      expect(mockFetch).not.toHaveBeenCalled()
+    })
+  }
 })
 
 // ── Auth ─────────────────────────────────────────────────────────────────────

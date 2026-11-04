@@ -187,12 +187,30 @@ export function createAuthRoutes(overrides: Partial<AuthDeps> = {}) {
         }
 
         const user = await deps.findUserByEmail(email)
-        // Same 401 for "no such account" and "wrong code" — the request-code
+        // One body for "no such account" and "wrong code": the request-code
         // endpoint already refuses to disclose existence, so this must too.
+        const invalid = { error: 'That code is not valid', reason: 'invalid' as const }
         if (!user) {
           set.status = 401
-          return { error: 'That code is not valid' }
+          return invalid
         }
+
+        // The code is checked before suspension. A correct code proves the
+        // caller owns the address, and only then are they told the account is
+        // suspended; a wrong one answers the same for every account state.
+        const result = await deps.verifyOtp(user.id, body.code)
+        if (result !== 'valid') {
+          set.status = 401
+          if (result === 'invalid') return invalid
+          return {
+            error:
+              result === 'expired'
+                ? 'That code has expired — request a new one'
+                : 'Too many incorrect attempts — request a new code',
+            reason: result,
+          }
+        }
+
         if (user.suspendedAt) {
           set.status = 403
           // Someone locked out is owed the reason and whether it lifts on its
@@ -203,20 +221,6 @@ export function createAuthRoutes(overrides: Partial<AuthDeps> = {}) {
               ? `This account is suspended: ${user.suspendedReason}`
               : 'This account has been suspended',
             suspension: describeSuspension(user),
-          }
-        }
-
-        const result = await deps.verifyOtp(user.id, body.code)
-        if (result !== 'valid') {
-          set.status = 401
-          return {
-            error:
-              result === 'expired'
-                ? 'That code has expired — request a new one'
-                : result === 'too-many-attempts'
-                  ? 'Too many incorrect attempts — request a new code'
-                  : 'That code is not valid',
-            reason: result,
           }
         }
 

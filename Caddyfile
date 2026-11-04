@@ -36,6 +36,38 @@
 	email {$ACME_EMAIL:admin@barrelman.dev}
 }
 
+# ── Shared snippets ───────────────────────────────────────────────────────────
+
+# Response headers for both hosts.
+#
+#   HSTS: both names are already HSTS-preloaded as .dev hosts, but the header
+#   covers any browser that ships without the preload list.
+#   nosniff: a JSON error body is never re-read as script or HTML.
+#   Referrer-Policy: an API key in a query string stays on this origin.
+#   frame-ancestors 'none': the console holds a session and admin actions, so no
+#   other site may frame it. Nothing embeds the API in a frame either.
+(security_headers) {
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+		Content-Security-Policy "frame-ancestors 'none'"
+	}
+}
+
+# The API container restarts on every deploy and is not listening for the few
+# seconds that takes. Without a retry window Caddy answers each request in that
+# gap with a 502. lb_try_duration holds a request and re-dials the upstream
+# every lb_try_interval until it answers, so a restart shows up as a slow
+# response instead. Only failed dials are retried: a request the API has
+# already started handling is never sent twice.
+(api_upstream) {
+	reverse_proxy barrelman:5001 {
+		lb_try_duration 30s
+		lb_try_interval 250ms
+	}
+}
+
 # ── The API ───────────────────────────────────────────────────────────────────
 #
 # Everything, unmodified. The public data routes (search, geocode, place,
@@ -52,7 +84,8 @@ api.barrelman.dev {
 	# header from the right to find the address its own proxy observed. Too high
 	# and callers spoof past the per-address limits; too low and everyone lands
 	# in one bucket, throttled as a single client. Both fail quietly.
-	reverse_proxy barrelman:5001
+	import api_upstream
+	import security_headers
 }
 
 # ── The console ───────────────────────────────────────────────────────────────
@@ -65,7 +98,7 @@ console.barrelman.dev {
 	# HTML as JSON on every request.
 	@api path /account* /admin* /auth* /billing*
 	handle @api {
-		reverse_proxy barrelman:5001
+		import api_upstream
 	}
 
 	# Everything else is the built SPA, served straight from disk rather than
@@ -86,6 +119,7 @@ console.barrelman.dev {
 	}
 
 	encode gzip zstd
+	import security_headers
 }
 
 # The console must be built for this host with CONSOLE_BASE=/ — see

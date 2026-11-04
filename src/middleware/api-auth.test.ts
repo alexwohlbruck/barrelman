@@ -796,3 +796,46 @@ describe('a rate-limit-exempt key', () => {
     await Promise.all(held)
   })
 })
+
+describe('per-request units', () => {
+  const live = { authorization: `Bearer ${LIVE_KEY}` }
+
+  function unitApp(units: () => number, d: Partial<ApiAuthDeps>) {
+    return new Elysia()
+      .onBeforeHandle(apiAuth('tiles', { ...d, units }))
+      .onAfterHandle(apiAuthAfter)
+      .get('/probe', () => ({ ok: true }))
+  }
+
+  test('charges the unit price times the units, and checks the balance for the total', async () => {
+    const d = deps()
+    const res = await unitApp(() => 18, d).handle(get(live))
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('x-barrelman-credits-charged')).toBe(String(18 * CREDIT_COSTS.tiles))
+    expect(d.checkQuota).toHaveBeenCalledWith('user-1', 18 * CREDIT_COSTS.tiles)
+    expect(d.recordUsage).toHaveBeenCalledWith(expect.objectContaining({ credits: 18 * CREDIT_COSTS.tiles }))
+  })
+
+  test('zero units authenticates but charges nothing and skips the balance check', async () => {
+    const d = deps()
+    const res = await unitApp(() => 0, d).handle(get(live))
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('x-barrelman-credits-charged')).toBe('0')
+    expect(d.checkQuota).not.toHaveBeenCalled()
+  })
+
+  test('zero units still refuses a caller with no key', async () => {
+    const res = await unitApp(() => 0, deps()).handle(get())
+    expect(res.status).toBe(401)
+  })
+
+  test('a units function that throws or returns nonsense counts as one unit', async () => {
+    for (const units of [() => { throw new Error('boom') }, () => NaN, () => Infinity]) {
+      clearRateBuckets()
+      const res = await unitApp(units, deps()).handle(get(live))
+      expect(res.headers.get('x-barrelman-credits-charged')).toBe(String(CREDIT_COSTS.tiles))
+    }
+  })
+})

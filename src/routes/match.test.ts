@@ -8,7 +8,7 @@
 
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
 import Elysia from 'elysia'
-import { createMatchRoutes } from './match'
+import { createMatchRoutes, matchUnits } from './match'
 import { GraphHopperTimeoutError, type MatchRequest, type MatchResponse } from '../services/match.service'
 import { GraphHopperError } from '../services/route.service'
 
@@ -142,5 +142,28 @@ describe('POST /match auth', () => {
 
     expect(res.status).toBe(200)
     expect(seen).toHaveLength(1)
+  })
+})
+
+describe('match billing units', () => {
+  const post = (contentType = 'application/json') =>
+    new Request('http://localhost/match', { method: 'POST', headers: { 'content-type': contentType } })
+  const points = (n: number) => JSON.stringify({ profile: 'bike', points: Array.from({ length: n }, (_, i) => ({ lat: 35 + i * 1e-4, lon: -80 })) })
+
+  test('one unit per started hundred points', () => {
+    expect(matchUnits({ request: post(), body: points(3) })).toBe(1)
+    expect(matchUnits({ request: post(), body: points(100) })).toBe(1)
+    expect(matchUnits({ request: post(), body: points(101) })).toBe(2)
+    expect(matchUnits({ request: post(), body: points(2000) })).toBe(20)
+  })
+
+  test('counts GPX track points too', () => {
+    const gpx = '<gpx><trk><trkseg>' + Array.from({ length: 150 }, (_, i) => `<trkpt lat="35.${i}" lon="-80"/>`).join('') + '</trkseg></trk></gpx>'
+    expect(matchUnits({ request: post('application/gpx+xml'), body: gpx })).toBe(2)
+  })
+
+  test('a body the handler will refuse is one unit', () => {
+    expect(matchUnits({ request: post(), body: 'not json' })).toBe(1)
+    expect(matchUnits({ request: post(), body: points(2001) })).toBe(1)
   })
 })

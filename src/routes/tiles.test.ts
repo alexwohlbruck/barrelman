@@ -15,8 +15,9 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import Elysia from 'elysia'
-import { createTileRoutes, type TileFetcher } from './tiles'
-import { TILE_BUNDLES } from '../config/tile-bundles'
+import { createTileRoutes, tileUnits, type TileFetcher } from './tiles'
+import { TILE_BUNDLES, tileSourceCount } from '../config/tile-bundles'
+import { TILE_BUNDLE_CREDITS } from '../billing/plans'
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -715,5 +716,34 @@ describe('deck pieces in detail tiles', () => {
       expect((await (await a.handle(get(path))).arrayBuffer()).byteLength).toBe(2)
     }
     expect(deckTile).not.toHaveBeenCalled()
+  })
+})
+
+describe('tile billing units', () => {
+  test('a bundle is billed per member source', () => {
+    expect(tileUnits({ params: { source: 'detail' } })).toBe(TILE_BUNDLES.detail.length)
+    expect(tileSourceCount('indoor')).toBe(TILE_BUNDLES.indoor.length)
+  })
+
+  test('a comma-joined composite is billed per name, a single source as one', () => {
+    expect(tileUnits({ params: { source: 'buildings_3d,parking_areas,woods' } })).toBe(3)
+    expect(tileUnits({ params: { source: 'basemap' } })).toBe(1)
+  })
+
+  test('a bundle priced in TILE_BUNDLE_CREDITS costs that instead', () => {
+    const table = TILE_BUNDLE_CREDITS as Record<string, number>
+    table.detail = 6
+    try {
+      expect(tileUnits({ params: { source: 'detail' } })).toBe(6)
+      expect(tileUnits({ params: { source: 'indoor' } })).toBe(TILE_BUNDLES.indoor.length)
+    } finally {
+      delete table.detail
+    }
+  })
+
+  test('routes without a source, and malformed sources, are one unit', () => {
+    expect(tileUnits({ params: { feed: 'nyc' } })).toBe(1)
+    expect(tileUnits({})).toBe(1)
+    expect(tileUnits({ params: { source: 'a,,b,../c' } })).toBe(1)
   })
 })

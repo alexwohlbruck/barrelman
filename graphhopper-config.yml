@@ -78,6 +78,18 @@ graphhopper:
   # cap was protecting against a cost that LM preparation already removed.
   routing.non_ch.max_waypoint_distance: 40000000
 
+  # Ceiling on the nodes one route search may explore. GraphHopper's default is
+  # unlimited, so a single request (an unroutable pair, a custom_model that
+  # defeats the landmark heuristic) could hold a worker for minutes. A search
+  # that hits the cap fails with "No path found due to maximum nodes exceeded".
+  # 5M is chosen to leave room for a coast-to-coast US route with a
+  # custom_model and alternatives (landmark routing typically visits well
+  # under a million nodes for one), while bounding the worst case at seconds
+  # of CPU. Not yet measured against the US graph: if long routes start
+  # failing with that message, raise it. A request's own `max_visited_nodes` hint may
+  # lower it; GraphHopper refuses one that asks for more.
+  routing.max_visited_nodes: 5000000
+
 server:
   application_connectors:
     - type: http

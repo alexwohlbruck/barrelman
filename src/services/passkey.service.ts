@@ -18,11 +18,7 @@ import {
   verifyAuthenticationResponse,
   verifyRegistrationResponse,
 } from '@simplewebauthn/server'
-import type {
-  AuthenticationResponseJSON,
-  AuthenticatorTransportFuture,
-  RegistrationResponseJSON,
-} from '@simplewebauthn/types'
+import type { AuthenticationResponseJSON, RegistrationResponseJSON } from '@simplewebauthn/server'
 import { and, eq } from 'drizzle-orm'
 import { accountsDb as db } from '../db'
 import { passkeys, users, type Passkey, type User } from '../schema/accounts'
@@ -89,19 +85,18 @@ export async function completeRegistration(
     return { ok: false, error: 'Passkey registration could not be verified' }
   }
 
-  const { credentialID, credentialPublicKey, counter, credentialDeviceType, credentialBackedUp, aaguid } =
-    verification.registrationInfo
+  const { credential, credentialDeviceType, credentialBackedUp, aaguid } = verification.registrationInfo
 
   const name = response.name?.trim() || passkeyNameFor(aaguid, userAgent)
 
   const [row] = await db
     .insert(passkeys)
     .values({
-      id: credentialID,
+      id: credential.id,
       userId,
       name,
-      publicKey: Buffer.from(credentialPublicKey).toString('base64'),
-      counter,
+      publicKey: Buffer.from(credential.publicKey).toString('base64'),
+      counter: credential.counter,
       deviceType: credentialDeviceType,
       backedUp: credentialBackedUp,
       transports: (response.response.transports ?? []).join(','),
@@ -143,9 +138,9 @@ export async function completeAuthentication(
       expectedOrigin,
       expectedRPID: rpID,
       requireUserVerification: true,
-      authenticator: {
-        credentialID: passkey.id,
-        credentialPublicKey: Buffer.from(passkey.publicKey, 'base64'),
+      credential: {
+        id: passkey.id,
+        publicKey: new Uint8Array(Buffer.from(passkey.publicKey, 'base64')),
         counter: passkey.counter,
         transports: parseTransports(passkey.transports),
       },
@@ -222,6 +217,6 @@ export async function countPasskeys(userId: string): Promise<number> {
   return (await db.select({ id: passkeys.id }).from(passkeys).where(eq(passkeys.userId, userId))).length
 }
 
-function parseTransports(value: string): AuthenticatorTransportFuture[] {
-  return value ? (value.split(',').filter(Boolean) as AuthenticatorTransportFuture[]) : []
+function parseTransports(value: string): string[] {
+  return value ? value.split(',').filter(Boolean) : []
 }
