@@ -54,8 +54,18 @@ async function readTerms(): Promise<Map<string, FeedTerms>> {
   return out
 }
 
+const FAILED_READ_RETRY_MS = 10_000
+
 function feedTerms(): Promise<Map<string, FeedTerms>> {
-  if (!cache || Date.now() - cache.at > TTL_MS) cache = { at: Date.now(), terms: readTerms() }
+  if (!cache || Date.now() - cache.at > TTL_MS) {
+    const entry = { at: Date.now(), terms: readTerms() }
+    cache = entry
+    // A failed read returns an empty map. Keep it only briefly, or under the
+    // commercial policy excluded feeds would be served for the whole TTL.
+    entry.terms.then(terms => {
+      if (terms.size === 0 && cache === entry) entry.at = Date.now() - TTL_MS + FAILED_READ_RETRY_MS
+    })
+  }
   return cache.terms
 }
 
