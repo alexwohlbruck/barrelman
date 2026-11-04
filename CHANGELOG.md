@@ -12,6 +12,7 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ### Added
 
+* Authentication, credit and rate-limit refusals carry a stable `code` beside the `error` message: `missing_key`, `invalid_key`, `insufficient_credits`, `overage_limit_reached`, `account_suspended`, `scope_denied`, `origin_denied`, `rate_limited` and `too_many_failures`. Branch on `code`; the message wording may change.
 * `POST /billing/change-plan` moves an existing subscription onto another plan with Polar's proration: upgrades are invoiced at once, downgrades credited to the next invoice. With no subscription yet it returns a checkout link. The console's plan buttons use it and ask for confirmation first. A plan checkout for an account that already has a subscription is refused with 409.
 * `GET /billing/status` reports the subscription's status, whether it is cancelled at the period end, and the period end date. The console shows "Cancels on" with the date, and a banner linking to the billing portal while a payment is past due.
 * Webhook deliveries are deduplicated by their `webhook-id` in a new `accounts_billing_webhook_events` table, created at startup and pruned after 30 days by the account sweep. The account table gains `subscription_*` columns, also added at startup.
@@ -49,6 +50,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 ### Documentation
 
 * A new [Attribution](https://docs.barrelman.dev/attribution) page says what an app must credit when it shows Barrelman data: OpenStreetMap, OpenMapTiles, Mapterhorn terrain, transit agencies, 3D landmarks and brand logos. It includes a MapLibre example and explains what the ODbL asks of anyone who redistributes the data.
+* [Stability and errors](https://docs.barrelman.dev/usage/stability) sets out what the API keeps stable on 0.x and how breaking changes are announced: a **Deprecated** changelog entry at least 90 days ahead, `Deprecation` and `Sunset` headers on the affected endpoint, and 30 days' email notice of pricing changes to paying accounts. It also documents the error body, the `X-Request-Id` header and the refusal codes.
+* The changelog is published at [docs.barrelman.dev/changelog](https://docs.barrelman.dev/changelog), built from this file. Unreleased entries are left out.
 
 ## [0.10.38] - 2026-11-03
 
