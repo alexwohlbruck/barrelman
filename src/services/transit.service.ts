@@ -11,6 +11,12 @@ import { db } from '../db'
 import { haversine } from './route.service'
 import { sql, type SQL } from 'drizzle-orm'
 import {
+  PARK_SEC,
+  isRailOrFerryMode,
+  parkAndRideStations,
+  routeDrive,
+} from './park-and-ride'
+import {
   ensurePricing,
   pricingForLeg,
   type RentalPricing,
@@ -562,10 +568,12 @@ export function extractFare(itin: any): { currency: string; amount: number } | u
 //   timetable-only), and even with one they strand platforms whose entrances
 //   OSM doesn't join to the sidewalk. The walk legs we add are straight
 //   lines; Parchment re-routes them on GraphHopper.
-// - `planFromCoordinates` for bike, car and rental access, which need MOTIS's
+// - `planParkAndRide` for driving to the train: a GraphHopper drive to a rail
+//   or ferry station, then the same station-to-station search.
+// - `planFromCoordinates` for bike and rental access, which need MOTIS's
 //   street graph and return nothing on a timetable-only build.
 //
-// Both hand their itineraries to `rankItineraries`.
+// All hand their itineraries to `rankItineraries`.
 
 /** Walking speed (m/s) for station reach and straight-line access times.
  *  Real geometry and timing come from GraphHopper downstream. */
@@ -649,7 +657,7 @@ async function motisPlan(
   }
 }
 
-/** Bike, car and rental access: MOTIS routes the street legs itself. */
+/** Bike and rental access: MOTIS routes the street legs itself. */
 function planFromCoordinates(request: IntermodalRouteRequest, fetchFn: FetchFn): Promise<TransitRouteResponse> {
   const params = planParams(
     request,
@@ -751,78 +759,110 @@ function walkSeconds(a: { lat: number; lng: number }, b: { lat: number; lng: num
   return Math.max(1, Math.round(haversine(a.lat, a.lng, b.lat, b.lng) / WALK_MPS))
 }
 
-/** Wrap a station-to-station itinerary in straight-line walks from the
- *  origin and to the destination, adjusting its totals to match. */
-function withAccessEgressWalks(
-  it: TransitItinerary,
-  from: { lat: number; lng: number },
-  to: { lat: number; lng: number },
-): TransitItinerary {
+/** A street leg between two places, ending at `endsAt`. */
+function streetLeg(
+  mode: 'WALK' | 'CAR',
+  a: TransitLegPlace,
+  b: TransitLegPlace,
+  endsAt: number,
+  seconds: number,
+  coordinates: [number, number][] = [[a.lng, a.lat], [b.lng, b.lat]],
+  distance = Math.round(haversine(a.lat, a.lng, b.lat, b.lng)),
+): TransitLeg {
+  return {
+    mode,
+    transitLeg: false,
+    from: a,
+    to: b,
+    startTime: new Date(endsAt - seconds * 1000).toISOString(),
+    endTime: new Date(endsAt).toISOString(),
+    duration: seconds,
+    distance,
+    geometry: { type: 'LineString', coordinates },
+  }
+}
+
+/** How a trip reaches one boarding station from its origin. */
+interface StationAccess {
+  station: Station
+  /** Seconds from leaving the origin to standing at the station. */
+  seconds: number
+  /** The street legs to `boardAt`, the platform MOTIS boards at, ending at `boardMs`. */
+  legs: (boardAt: TransitLegPlace, boardMs: number) => TransitLeg[]
+}
+
+const originPlace = (at: { lat: number; lng: number }): TransitLegPlace => ({ name: 'Origin', ...at })
+
+/** Walking from the origin, straight line; Parchment re-routes it. */
+function walkAccess(from: { lat: number; lng: number }) {
+  return (station: Station): StationAccess => ({
+    station,
+    seconds: walkSeconds(from, station),
+    legs: (boardAt, boardMs) => [streetLeg('WALK', originPlace(from), boardAt, boardMs, walkSeconds(from, boardAt))],
+  })
+}
+
+/**
+ * Wrap a station-to-station itinerary in its access legs and a straight-line
+ * walk to the destination, adjusting its totals to match.
+ */
+function withStreetLegs(it: TransitItinerary, access: StationAccess, to: { lat: number; lng: number }): TransitItinerary {
   const first = it.legs[0]
   const last = it.legs[it.legs.length - 1]
   if (!first || !last) return it
 
-  const walk = (
-    a: TransitLegPlace,
-    b: TransitLegPlace,
-    endsAt: Date,
-    seconds: number,
-  ): TransitLeg => ({
-    mode: 'WALK',
-    transitLeg: false,
-    from: a,
-    to: b,
-    startTime: new Date(endsAt.getTime() - seconds * 1000).toISOString(),
-    endTime: endsAt.toISOString(),
-    duration: seconds,
-    distance: Math.round(haversine(a.lat, a.lng, b.lat, b.lng)),
-    geometry: { type: 'LineString', coordinates: [[a.lng, a.lat], [b.lng, b.lat]] },
-  })
-
   const boardAt = { name: first.from.name, lat: first.from.lat, lng: first.from.lng, stopId: first.from.stopId }
   const alightAt = { name: last.to.name, lat: last.to.lat, lng: last.to.lng, stopId: last.to.stopId }
-  const accessSec = walkSeconds(from, boardAt)
+  const before = access.legs(boardAt, new Date(first.startTime).getTime())
   const egressSec = walkSeconds(alightAt, to)
-  const access = walk({ name: 'Origin', ...from }, boardAt, new Date(first.startTime), accessSec)
-  const egress = walk(
+  const egress = streetLeg(
+    'WALK',
     alightAt,
     { name: 'Destination', ...to },
-    new Date(new Date(last.endTime).getTime() + egressSec * 1000),
+    new Date(last.endTime).getTime() + egressSec * 1000,
     egressSec,
   )
 
+  const startTime = before[0]?.startTime ?? it.startTime
+  const walks = [...before, egress].filter((l) => l.mode === 'WALK')
   return {
     ...it,
-    legs: [access, ...it.legs, egress],
-    startTime: access.startTime,
+    legs: [...before, ...it.legs, egress],
+    startTime,
     endTime: egress.endTime,
-    duration: it.duration + accessSec + egressSec,
-    walkTime: (it.walkTime || 0) + accessSec + egressSec,
-    walkDistance: (it.walkDistance || 0) + access.distance + egress.distance,
+    duration: Math.round((new Date(egress.endTime).getTime() - new Date(startTime).getTime()) / 1000),
+    walkTime: (it.walkTime || 0) + walks.reduce((t, l) => t + l.duration, 0),
+    walkDistance: (it.walkDistance || 0) + walks.reduce((d, l) => d + l.distance, 0),
   }
 }
 
 /** Feed pairs already warned about for MOTIS timetable misses (once per process). */
 const motis404Warned = new Set<string>()
 
+/** Station search radius for a walk of up to `seconds`. */
+const walkRadius = (seconds = 900) =>
+  Math.min(Math.max(seconds * WALK_MPS, MIN_STATION_RADIUS), MAX_STATION_RADIUS)
+
 /**
- * Walking at both ends: route between nearby stations and walk to them.
+ * Route between the given origin stations and the stations near the
+ * destination, and walk from the last one.
  *
  * Every origin station is paired with every destination station. Dropping
  * pairs to save queries is how an obvious train goes missing: the fourth
  * station is as likely as the first to be the one with the direct line.
+ * `keep` drops itineraries the access mode can't use.
  */
-async function planViaStations(request: IntermodalRouteRequest, fetchFn: FetchFn): Promise<TransitRouteResponse> {
-  const radius = (seconds = 900) =>
-    Math.min(Math.max(seconds * WALK_MPS, MIN_STATION_RADIUS), MAX_STATION_RADIUS)
-  const [origins, dests] = await Promise.all([
-    nearbyStations(request.from, radius(request.maxPreTransitTime)),
-    nearbyStations(request.to, radius(request.maxPostTransitTime)),
-  ])
+async function planViaStations(
+  request: IntermodalRouteRequest,
+  fetchFn: FetchFn,
+  origins: StationAccess[],
+  keep: (it: TransitItinerary) => boolean = () => true,
+): Promise<TransitRouteResponse> {
+  const dests = await nearbyStations(request.to, walkRadius(request.maxPostTransitTime))
 
   const pairs = origins.flatMap((o) =>
     dests
-      .filter((d) => o.feedId !== d.feedId || o.stationId !== d.stationId)
+      .filter((d) => o.station.feedId !== d.feedId || o.station.stationId !== d.stationId)
       .map((d) => ({ o, d })),
   )
 
@@ -834,16 +874,17 @@ async function planViaStations(request: IntermodalRouteRequest, fetchFn: FetchFn
       // enough to finish the egress walk in time.
       const queryMs = request.arriveBy
         ? baseMs - walkSeconds(d, request.to) * 1000
-        : baseMs + walkSeconds(request.from, o) * 1000
+        : baseMs + o.seconds * 1000
       const params = planParams(
         { ...request, time: new Date(queryMs).toISOString() },
-        `${o.feedId}_${o.stationId}`,
+        `${o.station.feedId}_${o.station.stationId}`,
         `${d.feedId}_${d.stationId}`,
       )
       try {
         const { itineraries } = await motisPlan(params, request, fetchFn)
         return itineraries
-          .map((it) => withAccessEgressWalks(it, request.from, request.to))
+          .filter(keep)
+          .map((it) => withStreetLegs(it, o, request.to))
           // The shift above walks to the station's nearest platform, but
           // MOTIS may board at another one further off. Drop a trip whose
           // walk would have to start before the asked time (or, arriving
@@ -856,11 +897,11 @@ async function planViaStations(request: IntermodalRouteRequest, fetchFn: FetchFn
         // timetable (GTFS ahead of the bake). That pair has no answer, which
         // is not an outage. Warn once per feed pair so the drift is visible.
         if (err instanceof MotisError && err.statusCode === 404) {
-          const key = `${o.feedId}:${d.feedId}`
+          const key = `${o.station.feedId}:${d.feedId}`
           if (!motis404Warned.has(key)) {
             motis404Warned.add(key)
             console.warn(
-              `[transit] MOTIS has no timetable location for ${o.feedId}_${o.stationId} → ` +
+              `[transit] MOTIS has no timetable location for ${o.station.feedId}_${o.station.stationId} → ` +
               `${d.feedId}_${d.stationId} — GTFS DB is ahead of the MOTIS bake for these feeds`,
             )
           }
@@ -888,6 +929,61 @@ async function planViaStations(request: IntermodalRouteRequest, fetchFn: FetchFn
       ...(request.requireBikeTransport && { requireBikeTransport: true }),
     },
   }
+}
+
+/** Walking at both ends: stations near the origin, walked to. */
+async function planWalkTransit(request: IntermodalRouteRequest, fetchFn: FetchFn): Promise<TransitRouteResponse> {
+  const origins = await nearbyStations(request.from, walkRadius(request.maxPreTransitTime))
+  return planViaStations(request, fetchFn, origins.map(walkAccess(request.from)))
+}
+
+/** The first vehicle boarded is a train, tram or ferry: nobody parks for a bus. */
+export function boardsRailOrFerry(it: TransitItinerary): boolean {
+  const first = it.legs.find((l) => l.transitLeg)
+  return first != null && isRailOrFerryMode(first.mode)
+}
+
+/**
+ * Drive to a rail or ferry station, park, walk to the platform.
+ *
+ * The drive is routed on GraphHopper to the station's park_ride lot, or to
+ * the station itself; a station GraphHopper can't reach, or whose drive
+ * overruns `maxPreTransitTime`, is dropped.
+ */
+async function parkAndRideAccess(request: IntermodalRouteRequest, fetchFn: FetchFn): Promise<StationAccess[]> {
+  const maxSec = request.maxPreTransitTime ?? 1800
+  const stations = await parkAndRideStations(request.from, request.to, maxSec)
+  const options = await Promise.all(
+    stations.map(async (station): Promise<StationAccess | null> => {
+      const drive = await routeDrive(request.from, station.lot ?? station, fetchFn)
+      if (!drive) return null
+      const [lng, lat] = drive.coordinates[drive.coordinates.length - 1]
+      const parkedAt: TransitLegPlace = { name: station.lot?.name ?? 'Parking', lat, lng }
+      const seconds = drive.duration + PARK_SEC + walkSeconds(parkedAt, station)
+      if (seconds > maxSec) return null
+      return {
+        station,
+        seconds,
+        legs: (boardAt, boardMs) => {
+          const walkSec = walkSeconds(parkedAt, boardAt)
+          const walk = streetLeg('WALK', parkedAt, boardAt, boardMs, walkSec)
+          const parkedMs = boardMs - (walkSec + PARK_SEC) * 1000
+          const car = streetLeg(
+            'CAR', originPlace(request.from), parkedAt, parkedMs, drive.duration, drive.coordinates, drive.distance,
+          )
+          return [car, walk]
+        },
+      }
+    }),
+  )
+  return options.filter((o): o is StationAccess => o != null)
+}
+
+/** Park-and-ride: drive to a rail or ferry station, then ride from there. */
+async function planParkAndRide(request: IntermodalRouteRequest, fetchFn: FetchFn): Promise<TransitRouteResponse> {
+  const origins = await parkAndRideAccess(request, fetchFn)
+  if (!origins.length) return { itineraries: [], metadata: { searchWindow: 0 } }
+  return planViaStations(request, fetchFn, origins, boardsRailOrFerry)
 }
 
 /**
@@ -956,21 +1052,24 @@ export function rankItineraries(
 /**
  * Plan a transit trip between two coordinates.
  *
- * Walking at both ends goes station to station (`planViaStations`); any
- * other access mode needs MOTIS's street graph (`planFromCoordinates`).
+ * Walking at both ends, or driving to the train and walking at the far end,
+ * goes station to station; bike and rental access need MOTIS's street graph
+ * (`planFromCoordinates`).
  */
 export async function getIntermodalRoute(
   request: IntermodalRouteRequest,
   fetchFn: FetchFn = globalThis.fetch,
 ): Promise<TransitRouteResponse> {
-  const walkOnly =
+  const pre = request.preTransitModes ?? ['WALK']
+  const walkEgress =
     !request.directModes?.length &&
-    (request.preTransitModes ?? ['WALK']).every((m) => m === 'WALK') &&
     (request.postTransitModes ?? ['WALK']).every((m) => m === 'WALK')
+  const plan =
+    walkEgress && pre.every((m) => m === 'WALK') ? planWalkTransit
+    : walkEgress && pre.every((m) => m === 'CAR' || m === 'CAR_PARKING') ? planParkAndRide
+    : planFromCoordinates
 
-  const result = walkOnly
-    ? await planViaStations(request, fetchFn)
-    : await planFromCoordinates(request, fetchFn)
+  const result = await plan(request, fetchFn)
   result.itineraries = rankItineraries(result.itineraries, request.numItineraries ?? 5, request.arriveBy)
 
   // Attach the full set of interchangeable lines to each transit leg, so the
