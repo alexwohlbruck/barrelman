@@ -10,6 +10,14 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Added
+
+* Automated backups of everything an import cannot rebuild: accounts, sessions, passkeys, API keys, usage, the credit ledger, moderation history, schedules, job history, regions and landmark state. **Back Up Database** in the console (`scripts/backup-db.sh`) writes a verified `pg_dump` to `/data/backups`, copies it to any S3-compatible bucket (AWS, Hetzner Object Storage, Cloudflare R2, Backblaze B2) when `BACKUP_S3_BUCKET` is set, and prunes old copies after 7 days locally and 30 remotely. Fresh installs get a disabled nightly schedule at 02:15; existing instances can add one under Schedules. **Restore Drill** (`scripts/restore-db.sh`) restores a backup into a scratch database and prints row counts, and the same script restores over the live tables from the shell with a confirmation variable. See Operations → Backups.
+
+### Changed
+
+* Sign-in, session checks, API-key lookup, credit spending and usage metering now run on their own small connection pool, so a burst of slow searches can no longer hold up authentication or metering. The main pool grows from postgres-js's default of 10 to 20 connections. Both are configurable (`DB_POOL_MAX`, `DB_ACCOUNTS_POOL_MAX`); with the defaults, the API, `barrelman-ops`, a running import script and Martin together stay under Postgres's 100 connections.
+
 ### Documentation
 
 * A new [Attribution](https://docs.barrelman.dev/attribution) page says what an app must credit when it shows Barrelman data: OpenStreetMap, OpenMapTiles, Mapterhorn terrain, transit agencies, 3D landmarks and brand logos. It includes a MapLibre example and explains what the ODbL asks of anyone who redistributes the data.

@@ -47,11 +47,48 @@ export const onnotice = (notice: unknown) => {
   if (message) console.error(`[pg notice] ${message}`)
 }
 
+/**
+ * Pool sizes, and why there are two.
+ *
+ * The main pool serves search, tiles, spatial and transit queries, any of which
+ * can hold a connection for seconds under load. Sign-in, session validation,
+ * API-key lookup, credit spending and usage metering run on every authenticated
+ * request, and before this split they queued behind those slow queries: a burst
+ * of autocomplete traffic could make a key lookup wait out the whole statement
+ * timeout. `accountsDb` gives them their own small pool so they never wait on
+ * the geo workload.
+ *
+ * Both pools are lazy (postgres-js opens a connection only when a query needs
+ * one), so the defaults cost nothing on an idle instance. Postgres's
+ * max_connections is the stock 100 (Dockerfile.db and docker-compose.yml do not
+ * raise it). The API and barrelman-ops each load this module, and so does any
+ * bun import script a job runs in ops (one job at a time); Martin keeps a pool
+ * of 20. In practice the defaults peak around 70-80, and the worst case is
+ * 3 × (20 + 5) + 20 = 95 plus a few short-lived maintenance connections.
+ * Raising either pool means checking that sum against max_connections.
+ *
+ * No transaction spans the two pools. Each account service runs its
+ * transactions on `accountsDb` alone, and nothing geo-side touches account
+ * tables, so moving a service between pools needs only its import changed.
+ */
+// Floored at 1: a pool of 0 would leave every query waiting forever.
+const POOL_MAX = Math.max(1, Math.floor(envNumber('DB_POOL_MAX', 20)))
+const ACCOUNTS_POOL_MAX = Math.max(1, Math.floor(envNumber('DB_ACCOUNTS_POOL_MAX', 5)))
+
 export const connection = postgres(dbUrl, {
+  max: POOL_MAX,
   connection: { statement_timeout: STATEMENT_TIMEOUT_MS },
   onnotice,
 })
 export const db = drizzle(connection)
+
+/** Account, auth, billing and metering queries. Same timeout as the main pool. */
+export const accountsConnection = postgres(dbUrl, {
+  max: ACCOUNTS_POOL_MAX,
+  connection: { statement_timeout: STATEMENT_TIMEOUT_MS },
+  onnotice,
+})
+export const accountsDb = drizzle(accountsConnection)
 
 /**
  * A short-lived connection with no statement timeout, for schema DDL and

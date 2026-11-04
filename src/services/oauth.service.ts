@@ -14,7 +14,7 @@
  */
 import * as arctic from 'arctic'
 import { and, eq } from 'drizzle-orm'
-import { db } from '../db'
+import { accountsDb as db } from '../db'
 import { oauthAccounts, users, type OAuthProvider, type User } from '../schema/accounts'
 import { getOAuthProvider, type OAuthProviderConfig } from '../config/oauth.config'
 import { createUser, findUserByEmail, SignupError } from './accounts.service'
