@@ -46,6 +46,8 @@ export const BACKUP_TABLES = [
   'accounts_moderation_log',
   'accounts_abuse_signals',
   'accounts_signup_attempts',
+  // Webhook ids already applied; without them a restore re-applies retried deliveries.
+  'accounts_billing_webhook_events',
 
   // Operator state: jobs, their logs, schedules and runtime history.
   'ops_jobs',

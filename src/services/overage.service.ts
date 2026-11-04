@@ -67,8 +67,18 @@ export function computePendingOverage(rows: OverageRow[]): PendingOverage[] {
  * One pass. Returns how many accounts had overage reported, so the caller (and
  * the tests) can see whether it did anything.
  */
-export async function reportPendingOverage(): Promise<{ accounts: number; credits: number }> {
+export async function reportPendingOverage(
+  options: {
+    /**
+     * Report one account only, including a suspended one, and throw if the
+     * provider refuses. Used before deleting an account, when this is the last
+     * chance to bill what it owes.
+     */
+    userId?: string
+  } = {},
+): Promise<{ accounts: number; credits: number }> {
   if (!billing.enabled || !billing.meterUsage) return { accounts: 0, credits: 0 }
+  const { userId } = options
 
   // Report against persisted counters only, so the numbers reconcile with what
   // the usage table would show if queried at the same moment.
@@ -98,7 +108,7 @@ export async function reportPendingOverage(): Promise<{ accounts: number; credit
     LEFT JOIN accounts_overage_reports reports
       ON reports.user_id = u.id AND reports.cycle = ${cycle}
     WHERE u.plan <> 'free'
-      AND u.suspended_at IS NULL
+      AND ${userId ? sql`u.id = ${userId}` : sql`u.suspended_at IS NULL`}
       AND COALESCE(usage.credits, 0) > 0`
 
   const pending = computePendingOverage(rows)
@@ -107,6 +117,7 @@ export async function reportPendingOverage(): Promise<{ accounts: number; credit
 
   const ingested = await reportOverage(pending.map(({ userId, credits }) => ({ userId, credits })))
   if (ingested === 0) {
+    if (userId) throw new Error(`the billing provider refused the overage report for ${userId}`)
     // The provider refused the batch. Record nothing — the next pass recomputes
     // the same delta and tries again.
     return { accounts: 0, credits: 0 }
