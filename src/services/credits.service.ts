@@ -57,6 +57,7 @@ import {
   type DailyCredits,
 } from './usage.service'
 import { envNumber } from '../config/env'
+import { publishCacheEvent, registerCacheHandler } from './cache-bus.service'
 
 const BALANCE_CACHE_TTL_MS = envNumber('BARRELMAN_BALANCE_CACHE_MS', 15_000)
 
@@ -73,13 +74,24 @@ interface CachedBalance {
 
 const balanceCache = new LRUCache<string, CachedBalance>({ max: 10_000, ttl: BALANCE_CACHE_TTL_MS })
 
+/** Here and, through the cache bus, on every other replica. */
 export function invalidateBalance(userId: string): void {
   balanceCache.delete(userId)
+  publishCacheEvent({ kind: 'user', id: userId })
 }
 
 export function clearBalanceCache(): void {
   balanceCache.clear()
 }
+
+// A `user` event is anything that changes what an account may spend: a plan
+// change, a grant, a suspension. Key events say nothing about balances.
+registerCacheHandler('balance', {
+  onEvent(event) {
+    if (event.kind === 'user') balanceCache.delete(event.id)
+  },
+  onResync: () => balanceCache.clear(),
+})
 
 async function loadBalance(userId: string): Promise<CachedBalance> {
   const cached = balanceCache.get(userId)

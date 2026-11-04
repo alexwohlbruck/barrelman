@@ -2,7 +2,7 @@ import { describe, expect, it } from 'bun:test'
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { getTableConfig, type PgTable } from 'drizzle-orm/pg-core'
-import { BACKUP_TABLES } from './backup-tables'
+import { BACKUP_TABLES, NOT_BACKED_UP } from './backup-tables'
 import * as accountsSchema from '../schema/accounts'
 
 const ROOT = resolve(import.meta.dir, '../..')
@@ -32,7 +32,15 @@ describe('BACKUP_TABLES', () => {
   it('covers every accounts_, ops_ and import_ table the code creates', () => {
     const stateful = [...createdTables].filter((t) => /^(accounts|ops|import)_/.test(t))
     expect(stateful.length).toBeGreaterThan(10)
-    expect(stateful.filter((t) => !(BACKUP_TABLES as readonly string[]).includes(t))).toEqual([])
+    const covered = (t: string) => (BACKUP_TABLES as readonly string[]).includes(t) || t in NOT_BACKED_UP
+    expect(stateful.filter((t) => !covered(t))).toEqual([])
+  })
+
+  it('excludes only tables that exist and are not also backed up', () => {
+    for (const t of Object.keys(NOT_BACKED_UP)) {
+      expect(createdTables.has(t)).toBe(true)
+      expect((BACKUP_TABLES as readonly string[]).includes(t)).toBe(false)
+    }
   })
 
   it('covers every table in the drizzle accounts schema', () => {
