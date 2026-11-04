@@ -57,6 +57,13 @@ export const users = pgTable(
     role: text('role').notNull().default('user').$type<UserRole>(),
     /** Current plan id (see billing/plans.ts). Mirrors the Polar subscription. */
     plan: text('plan').notNull().default('free'),
+    /**
+     * A boundary of the subscription's billing period, from which every period
+     * is derived by stepping whole months (see billing/periods.ts). Null on
+     * accounts that have never subscribed; ignored on plans without a
+     * subscription, which stay on calendar months.
+     */
+    billingPeriodStart: timestamp('billing_period_start', { withTimezone: true }),
     polarCustomerId: text('polar_customer_id'),
     /**
      * SHA-256 of the IP that created the account. Used only to rate-limit
@@ -250,7 +257,12 @@ export const usageRecords = pgTable(
   ],
 )
 
-export type CreditEntryKind = 'purchase' | 'grant' | 'adjustment' | 'refund'
+/**
+ * `usage` entries are written by the ledger itself when a billing period
+ * closes: the pack credit that period consumed, recorded as a negative amount
+ * so the next period starts from what is actually left.
+ */
+export type CreditEntryKind = 'purchase' | 'grant' | 'adjustment' | 'refund' | 'usage'
 
 /**
  * Credits that exist outside the monthly plan allowance: prepaid packs bought
