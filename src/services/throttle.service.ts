@@ -26,13 +26,16 @@
  * tiles cannot spend the budget the other endpoints are checked against — see
  * `bucketFor` below.
  *
- * All state is in memory and therefore per-replica: with N replicas the
- * effective limits are N times these. That is fine for protecting the process
- * and the upstreams — the credit ledger in Postgres remains the accurate record
- * for anything with money attached.
+ * The rate windows and concurrency slots are in memory and therefore
+ * per-replica: with N replicas the effective limits are N times these. That is
+ * fine for protecting the process and the upstreams — the credit ledger in
+ * Postgres remains the accurate record for anything with money attached. The
+ * penalty box is the exception: it is persisted and shared, see below.
  */
 import { TILE_RATE_MULTIPLIER, type EndpointGroup, type Plan } from '../billing/plans'
 import { envNumber } from '../config/env'
+import { hashIp } from './accounts.service'
+import { PenaltyBox } from './penalty-box'
 
 interface Window {
   count: number
@@ -153,20 +156,25 @@ function bucketFor(group: EndpointGroup): RateBucket {
 
 // ── Penalty box ─────────────────────────────────────────────────────────
 
-interface Penalty {
-  strikes: number
-  /** Refused until this timestamp. */
-  until: number
-  lastStrikeAt: number
-}
-
-const penalties = new Map<string, Penalty>()
-
 /** Rejections tolerated before a caller is boxed. */
 const STRIKES_BEFORE_PENALTY = envNumber('BARRELMAN_ABUSE_STRIKES', 25)
 /** Strikes decay after this long without a new one. */
-const STRIKE_DECAY_MS = 10 * 60_000
+export const STRIKE_DECAY_MS = 10 * 60_000
 const MAX_PENALTY_MS = 30 * 60_000
+
+/**
+ * Unlike the windows above, penalties outlive the process: a deploy that wiped
+ * them would hand every boxed key-guesser a fresh start, and a rolling deploy
+ * does that several times a day. `penalty-sync.service.ts` writes changes
+ * through to Postgres and reads back what other replicas wrote. Checks never
+ * wait on it.
+ */
+export const penaltyBox = new PenaltyBox({
+  strikesBeforePenalty: STRIKES_BEFORE_PENALTY,
+  decayMs: STRIKE_DECAY_MS,
+  maxPenaltyMs: MAX_PENALTY_MS,
+  hash: hashIp,
+})
 
 /**
  * Record that a caller was rejected. Strikes escalate geometrically, so an
@@ -174,41 +182,21 @@ const MAX_PENALTY_MS = 30 * 60_000
  * is boxed within seconds.
  */
 export function recordRejection(key: string): void {
-  const now = Date.now()
-  const existing = penalties.get(key)
-
-  if (!existing || now - existing.lastStrikeAt > STRIKE_DECAY_MS) {
-    penalties.set(key, { strikes: 1, until: 0, lastStrikeAt: now })
-    return
-  }
-
-  existing.strikes += 1
-  existing.lastStrikeAt = now
-
-  if (existing.strikes >= STRIKES_BEFORE_PENALTY) {
-    const over = existing.strikes - STRIKES_BEFORE_PENALTY
-    const durationMs = Math.min(MAX_PENALTY_MS, 5_000 * 2 ** Math.min(over, 12))
-    existing.until = now + durationMs
-  }
+  penaltyBox.recordRejection(key)
 }
 
 /** Clear a caller's strikes after a successful request. */
 export function recordSuccess(key: string): void {
-  const existing = penalties.get(key)
-  if (existing && existing.until <= Date.now()) penalties.delete(key)
+  penaltyBox.recordSuccess(key)
 }
 
 export function penaltyRemaining(key: string): number {
-  const existing = penalties.get(key)
-  if (!existing || existing.until <= Date.now()) return 0
-  return Math.ceil((existing.until - Date.now()) / 1000)
+  return penaltyBox.remaining(key)
 }
 
 /** Total strikes currently held, so the abuse detector can flag sustained abuse. */
 export function strikeCount(key: string): number {
-  const existing = penalties.get(key)
-  if (!existing || Date.now() - existing.lastStrikeAt > STRIKE_DECAY_MS) return 0
-  return existing.strikes
+  return penaltyBox.strikes(key)
 }
 
 // ── Concurrency ─────────────────────────────────────────────────────────
@@ -443,10 +431,7 @@ export function pruneThrottleState(): void {
   perAccount.prune()
   perAccountIp.prune()
 
-  const now = Date.now()
-  for (const [key, penalty] of penalties) {
-    if (penalty.until <= now && now - penalty.lastStrikeAt > STRIKE_DECAY_MS) penalties.delete(key)
-  }
+  penaltyBox.prune()
 }
 
 export function clearThrottleState(): void {
@@ -454,7 +439,7 @@ export function clearThrottleState(): void {
   perKey.clear()
   perAccount.clear()
   perAccountIp.clear()
-  penalties.clear()
+  penaltyBox.clear()
   inFlight.clear()
 }
 
@@ -465,7 +450,7 @@ export function throttleStats() {
     trackedKeys: perKey.size,
     trackedAccounts: perAccount.size,
     trackedVisitors: perAccountIp.size,
-    penalised: [...penalties.values()].filter((p) => p.until > Date.now()).length,
+    penalised: penaltyBox.penalisedCount(),
     inFlight: [...inFlight.values()].reduce((sum, n) => sum + n, 0),
   }
 }
