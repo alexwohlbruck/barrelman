@@ -42,6 +42,8 @@ import { isGtfsModeClass } from '../lib/gtfs-modes'
 import {
   getStationDetail as _getStationDetail,
   getNearestEntrance as _getNearestEntrance,
+  findEntrances as _findEntrances,
+  type EntrancePurpose,
 } from '../services/station.service'
 import {
   itineraryResponses,
@@ -66,6 +68,7 @@ export function createTransitRoutes(deps: {
   fetchFn?: FetchFn
   getStationDetail?: typeof _getStationDetail
   getNearestEntrance?: typeof _getNearestEntrance
+  findEntrances?: typeof _findEntrances
 } = {}) {
   const getTransitRoute = deps.getTransitRoute || _getTransitRoute
   const getIntermodalRoute = deps.getIntermodalRoute || _getIntermodalRoute
@@ -82,6 +85,9 @@ export function createTransitRoutes(deps: {
   const fetchFn = deps.fetchFn || undefined
   const getStationDetail = deps.getStationDetail || _getStationDetail
   const getNearestEntrance = deps.getNearestEntrance || _getNearestEntrance
+  const findEntrances = deps.findEntrances || _findEntrances
+  const purposeOf = (value?: string): EntrancePurpose | undefined =>
+    value === 'enter' || value === 'exit' ? value : undefined
 
   return new Elysia({ prefix: '/transit' })
     .onBeforeHandle(apiAuth('transit'))
@@ -232,7 +238,9 @@ export function createTransitRoutes(deps: {
           'Itineraries carry `fare` and `farePayments` where the feeds publish fare ' +
           'data. Itineraries are ordered by arrival time (latest departure for ' +
           '`arriveBy`) and list each ride once; an extra fare payment counts as ' +
-          'ten minutes in the ordering.',
+          'ten minutes in the ordering. A transit leg carries `directionLabel` ' +
+          'where its boarding platform\'s signed direction is known ("Uptown & ' +
+          'The Bronx"); `headsign` still names the terminal.',
         tags: ['Transit'],
       },
     })
@@ -432,7 +440,10 @@ export function createTransitRoutes(deps: {
           'stations are drawn as one. Pass ' +
           '`windowMinutes` to bound the board by time rather than by event ' +
           'count; each stop then reports `hasMore` when runs exist past what ' +
-          'was returned.',
+          'was returned. A departure carries `directionLabel` where its ' +
+          'platform\'s signed direction is known ("Uptown & The Bronx"), from ' +
+          'agency open data or the platform\'s OSM `destination`; `headsign` ' +
+          'still names the terminal.',
         tags: ['Transit'],
       },
     })
@@ -773,7 +784,7 @@ export function createTransitRoutes(deps: {
         }
 
         const result = await getNearestEntrance(
-          lat, lon, maxDistance, query.wheelchair === 'true',
+          lat, lon, maxDistance, query.wheelchair === 'true', purposeOf(query.purpose),
         )
         if (!result) {
           set.status = 404
@@ -789,6 +800,9 @@ export function createTransitRoutes(deps: {
         lon: t.String(),
         maxDistance: t.Optional(t.String()),
         wheelchair: t.Optional(t.String()),
+        purpose: t.Optional(t.Union([t.Literal('enter'), t.Literal('exit')], {
+          description: 'What the entrance is for. `enter` skips exit-only entrances, `exit` skips entry-only ones.',
+        })),
       }),
       detail: {
         summary: 'Find nearest station entrance to a coordinate',
@@ -798,7 +812,51 @@ export function createTransitRoutes(deps: {
           'wheelchair=true for accessible access points only: entrances ' +
           'tagged wheelchair=no are excluded, vertical access requires ' +
           'elevators instead of stairs, and confirmed-accessible entrances ' +
-          'are preferred.',
+          'are preferred. Pass `purpose` to skip entrances that only let you ' +
+          'in or only let you out. Each entrance carries `cornerLabel`, where ' +
+          'it is from the streets around it ("Broadway & West 28th Street · ' +
+          'NW corner"), and `entryAllowed`/`exitAllowed`, from OSM ' +
+          '`entrance=exit|entry` and agency open data; null means unknown.',
+        tags: ['Transit'],
+      },
+    })
+
+    // Every entrance near a coordinate, for choosing between them
+    .get('/entrances', async ({ query, set, request }) => {
+      try {
+        const lat = parseFloat(query.lat)
+        const lon = parseFloat(query.lon)
+        if (isNaN(lat) || isNaN(lon)) {
+          set.status = 400
+          return { error: 'Invalid lat/lon' }
+        }
+        return await findEntrances(lat, lon, {
+          maxDistanceM: clampNumber(query.maxDistance, { min: 1, max: 1000 }) ?? 500,
+          wheelchair: query.wheelchair === 'true',
+          purpose: purposeOf(query.purpose),
+          limit: clampInt(query.limit, { min: 1, max: 50 }) ?? 20,
+        })
+      } catch (err) {
+        return serverError(request, set, err, 'Failed to list entrances')
+      }
+    }, {
+      query: t.Object({
+        lat: t.String(),
+        lon: t.String(),
+        maxDistance: t.Optional(t.String({ description: 'Search radius in meters (default 500, max 1000).' })),
+        wheelchair: t.Optional(t.String()),
+        purpose: t.Optional(t.Union([t.Literal('enter'), t.Literal('exit')], {
+          description: 'What the entrance is for. `enter` skips exit-only entrances, `exit` skips entry-only ones.',
+        })),
+        limit: t.Optional(t.String({ description: 'Most entrances to return (default 20, max 50).' })),
+      }),
+      detail: {
+        summary: 'List station entrances near a coordinate',
+        description:
+          'The candidates `/transit/nearest-entrance` chooses from, nearest ' +
+          'first: every access point of the best tier within maxDistance, with ' +
+          'the same fields. Lets a router weigh each entrance against the walk ' +
+          'to it rather than taking the one nearest the platform.',
         tags: ['Transit'],
       },
     })
