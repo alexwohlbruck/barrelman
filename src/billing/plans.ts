@@ -480,7 +480,7 @@ export function purchasablePlans(): Plan[] {
  * bottom and the first prefix hit wins, exactly as the if-chain did.
  */
 export const GROUP_PREFIXES: ReadonlyArray<{ group: EndpointGroup; prefixes: readonly string[] }> = [
-  { group: 'tiles', prefixes: ['/tiles'] },
+  { group: 'tiles', prefixes: ['/tiles', '/styles'] },
   { group: 'search', prefixes: ['/search', '/autocomplete'] },
   { group: 'geocode', prefixes: ['/geocode'] },
   { group: 'isochrone', prefixes: ['/isochrone'] },

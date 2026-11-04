@@ -142,7 +142,7 @@ const swaggerConfig = {
       { name: 'Geocoding', description: 'Reverse geocode a coordinate to addresses and places, and fetch a geocoder (Pelias) place by its gid.' },
       { name: 'Places', description: 'Full place detail by OSM identity (type + id), with enrichment.' },
       { name: 'Brands', description: 'Autocomplete over the brand catalog to resolve chains and franchises, and fetch a single brand by key.' },
-      { name: 'Tiles', description: 'Mapbox Vector Tiles served by Martin, plus precomputed bridge deck meshes, 3D landmark placements and models, and corrected transit geometry. Tile URLs accept `?api_key=` because map libraries fetch tiles themselves and cannot set a header.' },
+      { name: 'Tiles', description: 'Mapbox Vector Tiles served by Martin, plus precomputed bridge deck meshes, 3D landmark placements and models, and corrected transit geometry. TileJSON for every source and MapLibre styles for the basemap (`/styles`). Tile URLs accept `?api_key=` because map libraries fetch tiles themselves and cannot set a header.' },
       { name: 'Routing', description: 'Turn-by-turn routing enriched with elevation and path details, and map matching: snapping a GPS trace — dense or sparse — to the roads it followed.' },
       { name: 'Isochrone', description: 'Reachability polygons — how far you get in N minutes, per travel mode.' },
       { name: 'GraphHopper', 'x-displayName': 'GraphHopper', description: 'Raw passthrough to the GraphHopper routing engine, for its endpoints that barrelman does not wrap. Responses are GraphHopper\'s own.' },
