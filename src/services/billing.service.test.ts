@@ -110,8 +110,8 @@ describe('reportOverage', () => {
     const polar = fakePolar()
 
     const sent = await reportOverage([
-      { userId: 'user-1', credits: 1200 },
-      { userId: 'user-2', credits: 0 },
+      { userId: 'user-1', credits: 1200, externalId: 'overage:user-1:2026-11-01:1200' },
+      { userId: 'user-2', credits: 0, externalId: 'overage:user-2:2026-11-01:0' },
     ])
 
     expect(sent).toBe(1)
@@ -120,6 +120,7 @@ describe('reportOverage', () => {
     expect(request.events[0]).toMatchObject({
       name: billing.usageEventName,
       externalCustomerId: 'user-1',
+      externalId: 'overage:user-1:2026-11-01:1200',
       metadata: { credits: 1200 },
     })
   })

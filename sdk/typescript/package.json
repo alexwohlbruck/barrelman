@@ -1,0 +1,39 @@
+{
+  "name": "@barrelman/sdk",
+  "version": "0.1.0",
+  "description": "TypeScript client for the Barrelman geospatial API: search, geocoding, places, routing, isochrones, transit and tiles",
+  "license": "Apache-2.0",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/alexwohlbruck/barrelman.git",
+    "directory": "sdk/typescript"
+  },
+  "homepage": "https://docs.barrelman.dev/usage",
+  "keywords": ["barrelman", "openstreetmap", "geocoding", "routing", "transit", "maplibre"],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": ["dist", "README.md"],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "generate": "bun scripts/generate.ts",
+    "check:schema": "bun scripts/generate.ts --check",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "build": "rm -rf dist && bun build src/index.ts --outdir dist --target browser --format esm && tsc -p tsconfig.build.json",
+    "prepublishOnly": "bun run typecheck && bun test && bun run build"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.4.4",
+    "openapi-typescript": "^7.13.0",
+    "typescript": "^5.7.3"
+  }
+}

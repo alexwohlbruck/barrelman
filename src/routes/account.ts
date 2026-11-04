@@ -23,9 +23,9 @@ import {
 import {
   usageByDay as _usageByDay,
   usageByKey as _usageByKey,
-  currentCycleStart,
   utcDay,
 } from '../services/usage.service'
+import { toDay } from '../billing/periods'
 import {
   acceptTerms as _acceptTerms,
   describeTerms,
@@ -388,7 +388,7 @@ export function createAccountRoutes(overrides: Partial<AccountDeps> = {}) {
     .get(
       '/usage',
       async ({ user, query }) => {
-        const from = query.from ?? currentCycleStart()
+        const from = query.from ?? toDay((await deps.getBalance(user!.id)).cycleStartedAt)
         const to = query.to ?? utcDay()
         const [daily, byKey] = await Promise.all([
           deps.usageByDay(user!.id, from, to),

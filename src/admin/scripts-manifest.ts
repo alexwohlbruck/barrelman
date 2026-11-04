@@ -1586,6 +1586,21 @@ export const SCRIPTS: ScriptDef[] = [
     notes:
       'Restoring over the live database is a shell-only step with a confirmation variable; see Operations → Backups in the docs.',
   },
+  {
+    id: 'billing-reconcile',
+    name: 'Reconcile Billing',
+    description:
+      'Re-read every Polar-linked account\'s subscription and correct its plan and billing period, then log any account whose Polar meter disagrees with the overage barrelman has reported this period.',
+    category: 'database',
+    danger: 'safe',
+    longRunning: false,
+    confirm: false,
+    exclusive: true,
+    exec: { kind: 'internal', handler: 'billing:reconcile' },
+    source: 'src/services/billing-reconcile.service.ts',
+    notes:
+      'Does nothing unless billing is enabled. Meter drift is only logged, never corrected; a pass still in flight or a meter that resets on another day both show up as drift.',
+  },
 ]
 
 export function getScript(id: string): ScriptDef | undefined {
