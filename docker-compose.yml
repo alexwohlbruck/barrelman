@@ -542,6 +542,9 @@ services:
       BACKUP_S3_ACCESS_KEY_ID: ${BACKUP_S3_ACCESS_KEY_ID:-}
       BACKUP_S3_SECRET_ACCESS_KEY: ${BACKUP_S3_SECRET_ACCESS_KEY:-}
       BACKUP_S3_PREFIX: ${BACKUP_S3_PREFIX:-}
+      # The worker and the bun scripts it runs load src/db.ts too.
+      DB_POOL_MAX: ${DB_POOL_MAX:-}
+      DB_ACCOUNTS_POOL_MAX: ${DB_ACCOUNTS_POOL_MAX:-}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - barrelman-osm-data:/data

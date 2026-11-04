@@ -342,8 +342,16 @@ docker compose up -d barrelman-ops
 docker compose exec barrelman-ops bash scripts/backup-db.sh
 ```
 
-The upload uses boto3, which `uv` fetches into its cache on the first run, so
-the first upload after recreating the container takes a few seconds longer.
+The upload uses a pinned boto3, which `uv` downloads from PyPI into the
+container's cache on first use. The cache does not survive a recreate, so the
+first upload after every `docker compose up` of `barrelman-ops` needs to reach
+PyPI. On a box without outbound access to it, that backup fails at the upload
+step, with the local dump already written.
+
+Give each instance its own `BACKUP_S3_PREFIX` (for example `barrelman/prod/`
+and `barrelman/staging/`) when they share a bucket. Pruning and `latest` work
+per prefix, so two instances on the default prefix would prune each other's
+backups and restore each other's dumps.
 
 Treat the bucket as credential storage. Lucia stores session IDs in the clear,
 so the cookie value *is* the row's primary key in `accounts_sessions`, and the
@@ -353,8 +361,9 @@ alone, and turn on the provider's object lock or versioning if it offers one.
 ### Restore drill
 
 A backup that has never been restored is a hope. **Scripts → Restore Drill**
-(`scripts/restore-db.sh`) restores the newest dump into a scratch database,
-`barrelman_restore`, next to the live one, and prints each table's row count:
+(`scripts/restore-db.sh`) restores the newest dump into a scratch database
+next to the live one, named `barrelman_restore_<UTC time>`, and prints each
+table's row count:
 
 ```bash
 docker compose exec barrelman-ops bash scripts/restore-db.sh latest --drop-after
@@ -367,12 +376,11 @@ newest in the bucket. Pass a file name or an object key instead to pick one:
 docker compose exec barrelman-ops bash scripts/restore-db.sh barrelman/barrelman-20261104T021500Z.dump
 ```
 
-Without `--drop-after` the scratch database stays for inspection; compare its
-counts with the live tables, then drop it:
-
-```bash
-docker exec barrelman-db psql -U barrelman -d postgres -c 'DROP DATABASE barrelman_restore'
-```
+Without `--drop-after` the scratch database stays for inspection, and the
+script prints the command to drop it. `--target-db` picks the name, which must
+start with `barrelman_restore`. The script marks each scratch database it
+creates with a comment and only ever drops a database carrying that mark, so
+it cannot remove another database on the same server by name.
 
 Run a drill after setting up the bucket and again every few months. Pulling a
 dump from the bucket on a different machine is the stronger test, since it is

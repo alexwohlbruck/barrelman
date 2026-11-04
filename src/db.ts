@@ -61,10 +61,11 @@ export const onnotice = (notice: unknown) => {
  * Both pools are lazy (postgres-js opens a connection only when a query needs
  * one), so the defaults cost nothing on an idle instance. Postgres's
  * max_connections is the stock 100 (Dockerfile.db and docker-compose.yml do not
- * raise it). The API and barrelman-ops each load this module, and Martin keeps a
- * pool of 20, so the defaults top out around 2 × (20 + 5) + 20 = 70 plus a few
- * short-lived maintenance connections. Raising either pool means checking that
- * sum against max_connections.
+ * raise it). The API and barrelman-ops each load this module, and so does any
+ * bun import script a job runs in ops (one job at a time); Martin keeps a pool
+ * of 20. In practice the defaults peak around 70-80, and the worst case is
+ * 3 × (20 + 5) + 20 = 95 plus a few short-lived maintenance connections.
+ * Raising either pool means checking that sum against max_connections.
  *
  * No transaction spans the two pools. Each account service runs its
  * transactions on `accountsDb` alone, and nothing geo-side touches account

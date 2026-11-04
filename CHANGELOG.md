@@ -16,7 +16,7 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ### Changed
 
-* Sign-in, session checks, API-key lookup, credit spending and usage metering now run on their own small connection pool, so a burst of slow searches can no longer hold up authentication or metering. The main pool grows from postgres-js's default of 10 to 20 connections. Both are configurable (`DB_POOL_MAX`, `DB_ACCOUNTS_POOL_MAX`); with the defaults, the API, `barrelman-ops` and Martin together stay around 70 of Postgres's 100 connections.
+* Sign-in, session checks, API-key lookup, credit spending and usage metering now run on their own small connection pool, so a burst of slow searches can no longer hold up authentication or metering. The main pool grows from postgres-js's default of 10 to 20 connections. Both are configurable (`DB_POOL_MAX`, `DB_ACCOUNTS_POOL_MAX`); with the defaults, the API, `barrelman-ops`, a running import script and Martin together stay under Postgres's 100 connections.
 
 ## [0.10.38] - 2026-11-03
 

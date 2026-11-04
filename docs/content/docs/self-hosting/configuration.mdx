@@ -85,10 +85,12 @@ signatures and cannot make them, which is why it is compiled into
 | `COMPOSE_FILE` | — | Read by Compose, not by barrelman. `.env.example` sets it so a bare `docker compose up` picks up the dev overrides |
 
 Both pools open connections only when a query needs one. Postgres runs with
-its stock `max_connections` of 100, and the API and `barrelman-ops` each hold
-both pools, alongside Martin's pool of 20. The defaults add up to about 70, so
-check `2 × (DB_POOL_MAX + DB_ACCOUNTS_POOL_MAX) + 20` against 100 before raising
-either.
+its stock `max_connections` of 100. The API and `barrelman-ops` each hold both
+pools, Martin keeps 20, and an import script that `barrelman-ops` runs under
+`bun` loads the same module and so gets pools of its own. Only one job runs at
+a time, and most use a handful of connections, so the defaults peak around 70
+to 80. Check `3 × (DB_POOL_MAX + DB_ACCOUNTS_POOL_MAX) + 20` against 100 before
+raising either. Both are read by the API and by `barrelman-ops`.
 
 `REGIONS` is consumed by the **importers**, which run in `barrelman-ops`, and
 also by the API — `scripts/rebuild-motis.sh` generates `motis/config.yml` with
@@ -394,7 +396,7 @@ for what is backed up and how to restore.
 | `BACKUP_S3_REGION` | `us-east-1` | `fsn1` and similar for Hetzner, `auto` for R2, the region in the endpoint for B2 |
 | `BACKUP_S3_ACCESS_KEY_ID` | — | Access key. Scope it to this bucket alone |
 | `BACKUP_S3_SECRET_ACCESS_KEY` | — | Its secret |
-| `BACKUP_S3_PREFIX` | `barrelman/` | Key prefix. Only objects named `<prefix>barrelman-*.dump` are listed or pruned, so a shared bucket is safe |
+| `BACKUP_S3_PREFIX` | `barrelman/` | Key prefix. Only objects named `<prefix>barrelman-*.dump` are listed or pruned, so other data in the bucket is safe. Use one prefix per instance: two instances on the same prefix prune each other's backups |
 
 ## Landing-site demo
 
