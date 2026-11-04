@@ -26,7 +26,7 @@
  * whole period, the periods before the last closed one go unreported; that
  * errs toward the customer, and the reconciliation task's drift log shows it.
  */
-import { connection as sql } from '../db'
+import { accountsConnection as sql } from '../db'
 import { getPlan, type Plan } from '../billing/plans'
 import { billing } from '../config/billing.config'
 import {

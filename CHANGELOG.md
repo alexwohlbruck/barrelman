@@ -12,13 +12,32 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ### Added
 
+* `POST /billing/change-plan` moves an existing subscription onto another plan with Polar's proration: upgrades are invoiced at once, downgrades credited to the next invoice. With no subscription yet it returns a checkout link. The console's plan buttons use it and ask for confirmation first. A plan checkout for an account that already has a subscription is refused with 409.
+* `GET /billing/status` reports the subscription's status, whether it is cancelled at the period end, and the period end date. The console shows "Cancels on" with the date, and a banner linking to the billing portal while a payment is past due.
+* Webhook deliveries are deduplicated by their `webhook-id` in a new `accounts_billing_webhook_events` table, created at startup and pruned after 30 days by the account sweep. The account table gains `subscription_*` columns, also added at startup.
+* `order.refunded` is handled. A refunded credit pack takes its credits back with a negative ledger entry in proportion to the amount refunded; a refunded subscription payment re-reads the subscription and returns the account to free if Polar revoked it. Subscribe the webhook to `order.refunded`, `subscription.created`, `subscription.uncanceled` and `subscription.past_due` (see `docs/polar-setup.md`), and give the Polar token `customers:write` and `subscriptions:write`.
+* Automated backups of everything an import cannot rebuild: accounts, sessions, passkeys, API keys, usage, the credit ledger, moderation history, schedules, job history, regions and landmark state. **Back Up Database** in the console (`scripts/backup-db.sh`) writes a verified `pg_dump` to `/data/backups`, copies it to any S3-compatible bucket (AWS, Hetzner Object Storage, Cloudflare R2, Backblaze B2) when `BACKUP_S3_BUCKET` is set, and prunes old copies after 7 days locally and 30 remotely. Fresh installs get a disabled nightly schedule at 02:15; existing instances can add one under Schedules. **Restore Drill** (`scripts/restore-db.sh`) restores a backup into a scratch database and prints row counts, and the same script restores over the live tables from the shell with a confirmation variable. See Operations → Backups.
 * **Reconcile Billing** task in the console, with a seeded daily schedule that ships disabled. It re-reads the subscription of every account linked to Polar, corrects the plan and billing period, and logs any account whose Polar meter shows a different overage quantity from what barrelman has reported this cycle. It does nothing unless billing is enabled.
+
+### Changed
+
+* Sign-in, session checks, API-key lookup, credit spending and usage metering now run on their own small connection pool, so a burst of slow searches can no longer hold up authentication or metering. The main pool grows from postgres-js's default of 10 to 20 connections. Both are configurable (`DB_POOL_MAX`, `DB_ACCOUNTS_POOL_MAX`); with the defaults, the API, `barrelman-ops`, a running import script and Martin together stay under Postgres's 100 connections.
 
 ### Fixed
 
+* Metered overage reaches the Polar customer. Checkout now sets our user id as the customer's external id, which overage events are keyed on, and a sync or subscription webhook sets it on existing customers that have none. Overage reported before this release matched no customer and was not billed.
+* Cancelling a subscription keeps the plan until the end of the period already paid for. `subscription.canceled` used to drop the account to free the moment the customer scheduled the cancellation. The plan now ends on `subscription.revoked`, and only when the revoked subscription is the one behind the current plan.
+* The plan follows the subscription's status instead of being re-applied on every `subscription.updated`. Webhooks that arrive late or out of order are ignored once a newer state is stored, and a revoked subscription stays revoked, so a delayed update can no longer restore a paid plan.
+* A failed renewal payment keeps the paid plan while Polar retries it, and the customer gets one email when the payment first fails. The account moves to free if the subscription is revoked.
+* Upgrading or downgrading no longer opens a second subscription billed alongside the first.
+* Deleting an account reports its outstanding overage and revokes its Polar subscription first. If Polar cannot be reached the deletion is refused with a 502 and the account is kept, so no subscription is left charging a deleted account.
 * Credit packs and operator grants are now used up. Usage is counted per cycle while the ledger is all-time, so a pack used to come back in full at the start of every month. When a cycle closes, the pack credit it consumed is now written to the credit history as a negative entry. A pack bought after a cycle closed is never applied to it, and credits already billed as overage are not also taken from a pack. Packs can still be bought on the Free plan.
 * Paid plans' allowances reset on the subscription's renewal day, matching when Polar bills, instead of on the 1st. Free stays on calendar months. `GET /account/credits` adds `cycleStartedAt`, and `/account/usage` defaults to the account's own cycle. The renewal date is stored per account (`billing_period_start`); until one is recorded, an account stays on calendar months.
 * Overage reporting no longer drops usage. The stretch between a cycle's last report and its end is reported after the rollover. Accounts that are suspended, or that move to Free mid-cycle, are still billed for overage they accrued. Each report carries a deterministic Polar `externalId`, a failed batch is kept and resent unchanged, and an advisory lock keeps two replicas from reporting at once.
+
+### Documentation
+
+* A new [Attribution](https://docs.barrelman.dev/attribution) page says what an app must credit when it shows Barrelman data: OpenStreetMap, OpenMapTiles, Mapterhorn terrain, transit agencies, 3D landmarks and brand logos. It includes a MapLibre example and explains what the ODbL asks of anyone who redistributes the data.
 
 ## [0.10.38] - 2026-11-03
 

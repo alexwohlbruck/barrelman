@@ -73,6 +73,23 @@ export const users = pgTable(
     packSettledThrough: date('pack_settled_through'),
     polarCustomerId: text('polar_customer_id'),
     /**
+     * The Polar subscription behind `plan`, as of the last webhook or sync.
+     * Kept so a webhook about some other subscription (an old one, or a
+     * duplicate) cannot change the plan this one pays for, and so a plan
+     * change or account deletion knows which subscription to act on.
+     */
+    subscriptionId: text('subscription_id'),
+    /** Polar's status string: active, trialing, past_due, canceled, … */
+    subscriptionStatus: text('subscription_status'),
+    /** Set when the customer cancelled; the plan runs to the period end. */
+    subscriptionCancelAtPeriodEnd: boolean('subscription_cancel_at_period_end').notNull().default(false),
+    subscriptionPeriodEnd: timestamp('subscription_period_end', { withTimezone: true }),
+    /**
+     * Polar's `modifiedAt` for the state stored above. Webhooks can arrive out
+     * of order, so an event describing an older state than this is ignored.
+     */
+    subscriptionModifiedAt: timestamp('subscription_modified_at', { withTimezone: true }),
+    /**
      * SHA-256 of the IP that created the account. Used only to rate-limit
      * sign-ups per address — we never need the address back, so we don't keep it.
      */
@@ -299,6 +316,18 @@ export const creditLedger = pgTable(
     index('accounts_credit_ledger_user_idx').on(t.userId),
   ],
 )
+
+/**
+ * Polar webhook deliveries already handled, keyed on the `webhook-id` header.
+ * Polar retries a delivery until it sees a 2xx, so the same event can arrive
+ * more than once. Rows are pruned by the account sweep after a month, well past
+ * Polar's retry window.
+ */
+export const billingWebhookEvents = pgTable('accounts_billing_webhook_events', {
+  id: text('id').primaryKey(),
+  type: text('type').notNull(),
+  receivedAt: timestamp('received_at', { withTimezone: true }).notNull().defaultNow(),
+})
 
 /**
  * Counts sign-ups per source address so one host cannot mint accounts in bulk

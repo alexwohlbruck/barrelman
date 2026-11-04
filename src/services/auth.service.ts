@@ -8,7 +8,7 @@
  */
 import { and, desc, eq, lt } from 'drizzle-orm'
 import type { Session } from 'lucia'
-import { db } from '../db'
+import { accountsDb as db } from '../db'
 import { lucia } from '../lib/lucia'
 import { authTokens, sessions, type User } from '../schema/accounts'
 import { generateId, randomNumericCode, sha256Hex } from '../lib/crypto'

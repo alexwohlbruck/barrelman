@@ -15,12 +15,11 @@
  *
  * A no-op unless billing is enabled.
  */
-import { connection as sql } from '../db'
+import { accountsConnection as sql } from '../db'
 import { getPlan } from '../billing/plans'
 import { billingPeriod } from '../billing/periods'
 import { billing } from '../config/billing.config'
-import { getMeteredCredits, getSubscriptionPeriod, syncSubscription } from './billing.service'
-import { recordBillingPeriod } from './credits.service'
+import { getMeteredCredits, syncSubscription } from './billing.service'
 
 export interface ReconcileResult {
   accounts: number
@@ -54,12 +53,6 @@ export async function reconcileBilling(log: (text: string) => void = console.log
     try {
       const summary = await syncSubscription(account.id, account.email)
       planId = summary.planId
-      // syncSubscription may have linked the customer just now, so read it back.
-      const [linked] = await sql<Array<{ customer: string | null }>>`
-        SELECT polar_customer_id AS customer FROM accounts_users WHERE id = ${account.id}`
-      if (linked?.customer) {
-        await recordBillingPeriod(account.id, await getSubscriptionPeriod(linked.customer, planId))
-      }
       result.synced += 1
       if (planId !== account.plan) log(`  ${account.id}: plan ${account.plan} → ${planId}`)
     } catch (err) {

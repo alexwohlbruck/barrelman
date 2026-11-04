@@ -16,7 +16,7 @@
  * Latency is kept as a fixed-bucket histogram rather than raw samples, so rows
  * from any number of replicas and hours sum into a percentile estimate.
  */
-import { connection as sql } from '../db'
+import { accountsConnection as sql } from '../db'
 import { envNumber } from '../config/env'
 
 const FLUSH_INTERVAL_MS = envNumber('BARRELMAN_USAGE_FLUSH_MS', 5_000)

@@ -153,6 +153,35 @@ stop: requests continue past the allowance until the pack runs out, and then
 stop with a `402`. On a paid plan, overage is billed only once the pack is
 empty.
 
+## Changing or ending a subscription
+
+An account has one subscription. Switching plans moves that subscription onto
+the new plan rather than opening a second one. An upgrade takes effect at once
+and the prorated difference for the rest of the period is charged straight
+away. A downgrade also takes effect at once, and the unused part of the period
+is credited to the next invoice. Enterprise is arranged directly and cannot be
+switched to from the console.
+
+Cancelling keeps the plan until the end of the period already paid for. The
+console shows "Cancels on" with the date, and the account moves to the free plan
+when the period ends. Cancelling can be undone from the billing portal until
+then.
+
+If a renewal payment fails, the plan stays on while the payment provider
+retries it. The console shows a banner linking to the billing portal, and one
+email goes out when the payment first fails. The email is not resent if it
+cannot be delivered, so the banner is the notice to rely on. If the retries also fail, the
+subscription ends and the account moves to the free plan.
+
+A refunded credit pack takes its credits back, in proportion to the amount
+refunded. Credits from the pack that were already spent count against the
+balance like any other usage: on a plan with overage they are billed as
+overage. A refunded subscription payment ends the plan only if the subscription
+was ended along with the refund.
+
+Deleting an account ends its subscription immediately and bills any overage
+owed up to that point.
+
 ## Headers
 
 | Header | Meaning |

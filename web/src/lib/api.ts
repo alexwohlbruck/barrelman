@@ -13,6 +13,7 @@ import type {
   CreatedApiKey,
   BillingConfig,
   BillingStatus,
+  ChangePlanResponse,
   CreditBalance,
   LedgerEntry,
   PasskeySummary,
@@ -378,6 +379,18 @@ export function startCheckout(payload: {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(payload),
+  })
+}
+
+/**
+ * Move the subscription onto another plan. With no subscription yet the server
+ * answers with a checkout link instead, so this is the one call for any plan.
+ */
+export function changePlan(plan: string): Promise<ChangePlanResponse> {
+  return request<ChangePlanResponse>('/billing/change-plan', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ plan }),
   })
 }
 

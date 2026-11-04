@@ -450,12 +450,25 @@ export interface BillingConfig {
   creditPacks: { productId: string; credits: number }[]
 }
 
+/** The Polar subscription behind the plan, as last reported by its webhooks. */
+export interface SubscriptionState {
+  /** Polar's status (`active`, `past_due`, …), or `revoked` once it has ended. */
+  status: string | null
+  cancelAtPeriodEnd: boolean
+  currentPeriodEnd: string | null
+}
+
 export interface BillingStatus {
   billingEnabled: boolean
   plan: Plan
   hasSubscription: boolean
+  subscription: SubscriptionState | null
   balance: CreditBalance
 }
+
+export type ChangePlanResponse =
+  | { changed: boolean; planId: string; checkoutUrl?: undefined }
+  | { changed: false; checkoutUrl: string; planId?: undefined }
 
 // ── Moderation (admin) ────────────────────────────────────────────────
 
