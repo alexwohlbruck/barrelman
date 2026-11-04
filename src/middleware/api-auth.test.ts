@@ -14,12 +14,14 @@ import {
   clearRateBuckets,
   identifyCaller,
   pruneRateBuckets,
+  waiveCharge,
   type ApiAuthDeps,
 } from './api-auth'
 import type { ResolvedKey } from '../services/api-keys.service'
 import { penaltyKeyFor, strikeCount } from '../services/throttle.service'
 import { clientIp } from '../lib/rate-limit'
 import { CREDIT_COSTS, getPlan } from '../billing/plans'
+import { pendingCredits } from '../services/usage.service'
 
 const BASE = 'http://localhost'
 const LIVE_KEY = 'brm_live_abcdefghijklmnopqrstuvwxyz0123456789ABCD'
@@ -750,6 +752,39 @@ describe('refund on server error', () => {
 
     expect(res.status).toBe(200)
     expect(d.recordUsage).toHaveBeenCalledWith(expect.objectContaining({ credits: CREDIT_COSTS.routing }))
+  })
+})
+
+describe('a waived charge', () => {
+  test('refunds a successful response and reports zero credits charged', async () => {
+    // recordUsage is injected, so the charge never reaches the buffer. The real
+    // refund still does, which makes the buffer's change the refund itself.
+    const before = pendingCredits('user-1')
+    const instance = new Elysia()
+      .onBeforeHandle(apiAuth('transit', deps()))
+      .onAfterHandle(apiAuthAfter)
+      .get('/probe', ({ request }) => {
+        waiveCharge(request)
+        return { itineraries: [] }
+      })
+
+    const res = await instance.handle(get({ authorization: `Bearer ${LIVE_KEY}` }))
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('x-barrelman-credits-charged')).toBe('0')
+    expect(pendingCredits('user-1') - before).toBe(-CREDIT_COSTS.transit)
+  })
+
+  test('leaves an unwaived response charged', async () => {
+    const before = pendingCredits('user-1')
+    const res = await app('transit', deps()).handle(get({ authorization: `Bearer ${LIVE_KEY}` }))
+
+    expect(res.headers.get('x-barrelman-credits-charged')).toBe(String(CREDIT_COSTS.transit))
+    expect(pendingCredits('user-1')).toBe(before)
+  })
+
+  test('is a no-op for a request the guard never saw', () => {
+    expect(() => waiveCharge(get())).not.toThrow()
   })
 })
 

@@ -206,6 +206,58 @@ describe('POST /transit/route', () => {
   })
 })
 
+// ── Empty plans ─────────────────────────────────────────────────────
+
+describe('an empty plan', () => {
+  const LIVE_KEY = 'brm_live_abcdefghijklmnopqrstuvwxyz0123456789ABCD'
+  const empty: TransitRouteResponse = {
+    itineraries: [],
+    warnings: ['No itinerary was found for this trip. Empty plans are not charged.'],
+  }
+  const auth = () => ({
+    resolveApiKey: mock(async () => ({
+      keyId: 'key-transit', userId: 'user-transit', scopes: ['*'], allowedOrigins: [],
+      plan: 'developer', suspended: false, suspensionReason: null,
+    })),
+    checkQuota: mock(async () => ({ allowed: true as const, overage: false })),
+    recordUsage: mock(() => undefined),
+  }) as never
+
+  const trip = {
+    from: { lat: 35.23, lng: -80.84 },
+    to: { lat: 35.50, lng: -79.50 },
+  }
+
+  beforeEach(() => {
+    process.env.BARRELMAN_API_KEY = 'service-secret'
+  })
+
+  test.each(['/transit/route', '/transit/intermodal-route'])('%s is not charged', async (path) => {
+    const app = new Elysia().use(createTransitRoutes({
+      getTransitRoute: mock(async () => empty),
+      getIntermodalRoute: mock(async () => empty),
+      auth: auth(),
+    }))
+
+    const res = await app.handle(post(path, trip, { authorization: `Bearer ${LIVE_KEY}` }))
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('x-barrelman-credits-charged')).toBe('0')
+    expect((await res.json()).warnings).toEqual(empty.warnings)
+  })
+
+  test('a plan with itineraries keeps its charge', async () => {
+    const app = new Elysia().use(createTransitRoutes({
+      getTransitRoute: mock(async () => mockTransitResponse),
+      auth: auth(),
+    }))
+
+    const res = await app.handle(post('/transit/route', trip, { authorization: `Bearer ${LIVE_KEY}` }))
+
+    expect(res.headers.get('x-barrelman-credits-charged')).toBe('20')
+  })
+})
+
 // ── GET /transit/stops ──────────────────────────────────────────────
 
 describe('GET /transit/stops', () => {
