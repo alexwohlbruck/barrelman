@@ -731,12 +731,14 @@ docker compose up -d barrelman barrelman-db barrelman-ops
 Naming the services is deliberate — see the warning below for what a bare
 `docker compose pull` does to MOTIS and GraphHopper.
 
-> **`docker compose pull` refreshes *every* service's image, not just
-> Barrelman's.** That's fine for anything stateless, which is why most images
-> here track a floating tag and pick up upstream fixes for free.
+> **Third-party images are pinned by digest.** `docker compose pull` moves
+> Barrelman's own images and leaves Martin, GraphHopper, MOTIS and Pelias where
+> they are. See "Upgrading pinned images" in the
+> [operations guide](https://docs.barrelman.dev/self-hosting/operations#upgrading-pinned-images)
+> to move one.
 >
-> Watch out for **engines that bake data into a version-specific binary
-> format** — MOTIS and GraphHopper. Their on-disk timetable and routing graph
+> The pins matter most for **engines that bake data into a version-specific
+> binary format**, MOTIS and GraphHopper. Their on-disk timetable and routing graph
 > are written by one engine version and rejected by another, so a pull that
 > brings in a new major version leaves the engine unable to start until its data
 > is rebuilt:
@@ -748,8 +750,8 @@ Naming the services is deliberate — see the warning below for what a bare
 > That's a job, not a restart — `scripts/rebuild-motis.sh` for MOTIS,
 > `scripts/rebuild-graphhopper.sh` for GraphHopper, both available from the
 > console under **Scripts → Routing**. Everything else in the stack is stateless
-> enough to upgrade in place. If you'd rather not be surprised, pull during a
-> window where you can run the rebuild.
+> enough to upgrade in place. Move those two pins during a window where you can
+> run the rebuild.
 
 Watchtower can automate the pull, with three caveats worth knowing before you
 rely on it:
@@ -758,12 +760,10 @@ rely on it:
   Docker socket it is given and nothing else, so an instance running on a
   different machine to the stack will never update it. Every host you want
   auto-updated needs its own Watchtower.
-- **A blanket Watchtower will eventually hit the binary-format trap above.** It
-  pulls the same floating tags `docker compose pull` would, so if MOTIS or
-  GraphHopper are on `:latest` it will one day restart them onto an incompatible
-  engine version with no one watching. Either pin those two services to explicit
-  version tags, or run Watchtower with `--label-enable` and label only the
-  stateless services.
+- **Pinned images are safe from it.** A digest never points anywhere new, so
+  Watchtower has nothing to pull for the third-party services. Swap a pin for a
+  floating tag and it will follow that tag, which for MOTIS or GraphHopper means
+  one day restarting onto an engine that rejects its data.
 - **It will restart the stack in the middle of a job.** An import runs for
   hours — a replication update with post-processing has taken nearly twelve —
   while Watchtower polls hourly, so a push that lands mid-run kills it. The
