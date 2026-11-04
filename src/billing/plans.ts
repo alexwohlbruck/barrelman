@@ -59,6 +59,20 @@ export const CREDIT_COSTS: Record<EndpointGroup, number> = {
   isochrone: 40,
 }
 
+/**
+ * Credits for one tile of a named bundle (see config/tile-bundles.ts), where
+ * a bundle should not cost its member count. A bundle absent here costs
+ * `tiles` × the number of sources it reads, the same as fetching each alone.
+ * Empty for now; whether bundles should be discounted is open for review.
+ * Tune a bundle's price here and nowhere else.
+ */
+export const TILE_BUNDLE_CREDITS: Readonly<Record<string, number>> = {}
+
+/** Credits for one tile reading `sourceCount` sources, or the named bundle's own price. */
+export function tileCredits(source: string, sourceCount: number): number {
+  return TILE_BUNDLE_CREDITS[source] ?? CREDIT_COSTS.tiles * sourceCount
+}
+
 export interface Plan {
   id: string
   name: string

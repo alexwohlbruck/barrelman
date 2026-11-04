@@ -17,6 +17,7 @@ import { join } from 'path'
 import Elysia from 'elysia'
 import { createTileRoutes, tileUnits, type TileFetcher } from './tiles'
 import { TILE_BUNDLES, tileSourceCount } from '../config/tile-bundles'
+import { TILE_BUNDLE_CREDITS } from '../billing/plans'
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -727,6 +728,17 @@ describe('tile billing units', () => {
   test('a comma-joined composite is billed per name, a single source as one', () => {
     expect(tileUnits({ params: { source: 'buildings_3d,parking_areas,woods' } })).toBe(3)
     expect(tileUnits({ params: { source: 'basemap' } })).toBe(1)
+  })
+
+  test('a bundle priced in TILE_BUNDLE_CREDITS costs that instead', () => {
+    const table = TILE_BUNDLE_CREDITS as Record<string, number>
+    table.detail = 6
+    try {
+      expect(tileUnits({ params: { source: 'detail' } })).toBe(6)
+      expect(tileUnits({ params: { source: 'indoor' } })).toBe(TILE_BUNDLES.indoor.length)
+    } finally {
+      delete table.detail
+    }
   })
 
   test('routes without a source, and malformed sources, are one unit', () => {

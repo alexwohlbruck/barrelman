@@ -1,6 +1,7 @@
 import Elysia, { t } from 'elysia'
 import { join } from 'path'
 import { apiAuth, apiAuthAfter } from '../middleware/api-auth'
+import { CREDIT_COSTS, tileCredits } from '../billing/plans'
 import { resolvePortolanTilesDir } from '../config/portolan'
 import { resolveTileBundle, tileSourceCount } from '../config/tile-bundles'
 import { createDeckTiles, DECK_TILE_ZOOMS, encodeDeckTile, withDeckField, workerDeckTileBuilder, type DeckTile } from '../lib/bridge-mesh/tile-pieces'
@@ -12,7 +13,8 @@ function getMartinUrl() {
 }
 
 /**
- * A Martin tile is charged per source it reads (see tileSourceCount). Only the
+ * A Martin tile is charged per source it reads, unless its bundle has its own
+ * price in TILE_BUNDLE_CREDITS (billing/plans.ts). Only the
  * `/:source/...` route carries a `source` param; portolan tiles and the JSON
  * beside them are one unit each. A malformed source is one unit: the handler
  * refuses it with a 400 before reaching Martin.
@@ -20,7 +22,8 @@ function getMartinUrl() {
 export function tileUnits({ params }: { params?: Record<string, string | undefined> }): number {
   const source = params?.source
   if (!source || !SOURCE_RE.test(source)) return 1
-  return tileSourceCount(source)
+  // The guard multiplies units by the tiles unit price; prices live in plans.ts.
+  return tileCredits(source, tileSourceCount(source)) / CREDIT_COSTS.tiles
 }
 
 const meteredTileAuth = apiAuth('tiles', { units: tileUnits })
