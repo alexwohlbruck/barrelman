@@ -104,35 +104,76 @@ compose_files() {
   done
 }
 
-# Matches an `image:` line for exactly this repository (not one it prefixes:
-# alexwohlbruck/barrelman must not match alexwohlbruck/barrelman-ops).
-image_line_regex() {
-  printf '^[[:space:]]*image:[[:space:]]*["'"'"']?%s([:@][^"'"'"'[:space:]#]*)?(["'"'"'[:space:]#]|$)' "$1"
+# The image Compose will actually run for a service, after every file in
+# COMPOSE_FILE and every variable is applied. Read from the canonical YAML
+# `docker compose config` prints (services at two spaces, their keys at four),
+# so it needs no YAML or JSON parser on the host. `config --images <service>`
+# would be simpler, but it also prints the service's dependencies.
+effective_image() {
+  docker compose config </dev/null 2>/dev/null | awk -v s="$1" '
+    /^[^ ]/ { insvc = ($0 ~ /^services:/); blk = 0; next }
+    insvc && $0 == "  " s ":" { blk = 1; next }
+    insvc && /^  [^ ]/ { blk = 0 }
+    blk && /^    image: / { v = $0; sub(/^    image: /, "", v); gsub(/["\047]/, "", v); print v; exit }'
 }
 
-# The file that decides this image's ref: the last compose file that names it,
-# since a later file overrides an earlier one.
+# The `image:` line a file sets for a service, as "<line number><TAB><value>",
+# or nothing. Scoped to that service's block under `services:`, so an image
+# named on another service (or a volume of the same name) never matches.
+service_image_line() {
+  awk -v s="$2" '
+    /^[[:space:]]*(#|$)/ { next }
+    {
+      match($0, /^ */); ind = RLENGTH
+      if (ind == 0) { insvc = ($0 ~ /^services:/); svcind = 0; blk = 0; next }
+      if (!insvc) next
+      if (svcind == 0) svcind = ind
+      if (ind == svcind) {
+        key = $0; sub(/^ +/, "", key); sub(/:.*/, "", key); gsub(/["\047]/, "", key)
+        blk = (key == s); childind = 0; next
+      }
+      if (!blk) next
+      if (childind == 0) childind = ind
+      if (ind == childind && $0 ~ /^ +image:/) {
+        v = $0; sub(/^ +image:[ ]*/, "", v); sub(/[ ]+#.*$/, "", v); sub(/[ ]+$/, "", v); gsub(/["\047]/, "", v)
+        print NR "\t" v
+      }
+    }' "$1" | tail -n 1
+}
+
+# The file that decides a service's image: the last file in COMPOSE_FILE that
+# sets one for it, since a later file overrides an earlier one.
 pin_file_for() {
-  local image="$1" found="" f
+  local service="$1" found="" f
   while IFS= read -r f; do
     [ -f "$f" ] || continue
-    grep -Eq "$(image_line_regex "$image")" "$f" && found="$f"
+    [ -n "$(service_image_line "$f" "$service")" ] && found="$f"
   done < <(compose_files)
   [ -n "$found" ] || return 1
   printf '%s\n' "$found"
 }
 
-# The ref the file pins, e.g. alexwohlbruck/barrelman:0.10.38.
+# The ref that file writes for the service, e.g. alexwohlbruck/barrelman:0.10.38.
 pinned_ref() {
-  local file="$1" image="$2"
-  grep -E "$(image_line_regex "$image")" "$file" | tail -n 1 |
-    grep -Eo "$image([:@][^\"'[:space:]#]*)?" | head -n 1
+  service_image_line "$1" "$2" | cut -f 2-
 }
 
-# Rewrite every image line for this repository in the file to `ref`.
+# Rewrite the service's image line in the file to `ref`, keeping indentation,
+# quotes and any trailing comment.
 set_pin() {
-  local file="$1" image="$2" ref="$3"
-  sed -E -i "s#^([[:space:]]*image:[[:space:]]*[\"']?)$image([:@][^\"'[:space:]#]*)?([\"'[:space:]#]|\$)#\1$ref\3#" "$file"
+  local file="$1" service="$2" ref="$3" line
+  line="$(service_image_line "$file" "$service" | cut -f 1)"
+  [ -n "$line" ] || return 1
+  sed -E -i "${line}s#^([[:space:]]*image:[[:space:]]*[\"']?)[^\"'[:space:]#]+#\1$ref#" "$file"
+}
+
+# Whether a ref belongs to this repository (and not one it prefixes:
+# alexwohlbruck/barrelman is not alexwohlbruck/barrelman-ops).
+ref_in_repo() {
+  case "$1" in
+    "$2" | "$2:"* | "$2@"*) return 0 ;;
+    *) return 1 ;;
+  esac
 }
 
 # The ref to restore for a service: what its file pinned, unless that was a
@@ -228,24 +269,103 @@ log_line() {
   printf '%s\t%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$DEPLOY_HOLDER" "$*" >>"$LOG_FILE"
 }
 
-# ── Applying refs ────────────────────────────────────────────────────────────
+# ── Applying and verifying refs ──────────────────────────────────────────────
 
-# Read component|service|file|ref lines on stdin, write each pin, then pull
-# (when asked) and recreate those services. Echoes the services.
+# Seconds a recreated container must stay up, without restarting, to count as
+# stable. A crash-looping worker is "running" between restarts, and the API's
+# /health says nothing about the worker or the database.
+DEPLOY_STABLE_SECONDS="${DEPLOY_STABLE_SECONDS:-20}"
+
+service_container() {
+  docker compose ps -q "$1" </dev/null 2>/dev/null | head -n 1
+}
+
+service_running() {
+  [ -n "$(docker compose ps --status running -q "$1" </dev/null 2>/dev/null)" ]
+}
+
+container_state() {
+  docker inspect -f '{{.RestartCount}} {{.State.StartedAt}}' "$1" 2>/dev/null
+}
+
+# Read component|service|file|ref lines on stdin, write each pin, check
+# Compose now resolves each service to its ref, then pull (when asked) and
+# recreate those services.
 apply_refs() {
-  local pull="$1" services=() component service file ref
-  while IFS='|' read -r component service file ref; do
-    [ -n "$component" ] || continue
-    set_pin "$file" "$(component_image "$component")" "$ref"
+  local pull="$1" services=() component service file ref effective
+  local lines=()
+  while IFS= read -r line; do
+    [ -n "$line" ] && lines+=("$line")
+  done
+  [ "${#lines[@]}" -gt 0 ] || die "nothing to apply"
+
+  for line in "${lines[@]}"; do
+    IFS='|' read -r component service file ref <<<"$line"
+    set_pin "$file" "$service" "$ref" || { say "$file no longer sets an image for $service"; return 1; }
     services+=("$service")
   done
-  [ "${#services[@]}" -gt 0 ] || die "nothing to apply"
+  # The edit has to be what Compose runs. If a later file still overrides it,
+  # stop here rather than restart onto the old image and call it a success.
+  for line in "${lines[@]}"; do
+    IFS='|' read -r component service file ref <<<"$line"
+    effective="$(effective_image "$service")"
+    if [ "$effective" != "$ref" ]; then
+      say "$service still resolves to ${effective:-nothing} after pinning $ref in $file"
+      return 1
+    fi
+  done
+
   if [ "$pull" = "1" ]; then
     docker compose pull "${services[@]}" </dev/null || return 1
   fi
   # --no-deps: recreate exactly these. Without it Compose reconciles their
   # dependencies too, and a deploy meant for the API bounces the database.
   docker compose up -d --no-deps "${services[@]}" </dev/null || return 1
+}
+
+# After apply_refs: /health passes, every named service runs the ref it was
+# given, and none of them restarts during DEPLOY_STABLE_SECONDS.
+verify_refs() {
+  local lines=() line component service file ref cid running
+  while IFS= read -r line; do
+    [ -n "$line" ] && lines+=("$line")
+  done
+
+  if ! wait_healthy; then
+    say "/health did not pass within ${DEPLOY_TIMEOUT}s"
+    return 1
+  fi
+
+  local -A before=() cids=()
+  for line in "${lines[@]}"; do
+    IFS='|' read -r component service file ref <<<"$line"
+    cid="$(service_container "$service")"
+    if [ -z "$cid" ]; then
+      say "$service has no container"
+      return 1
+    fi
+    running="$(docker inspect -f '{{.Config.Image}}' "$cid" 2>/dev/null || true)"
+    if [ "$running" != "$ref" ]; then
+      say "$service is running ${running:-nothing}, not $ref"
+      return 1
+    fi
+    cids[$service]="$cid"
+    before[$service]="$(container_state "$cid")"
+  done
+
+  sleep "$DEPLOY_STABLE_SECONDS"
+  for line in "${lines[@]}"; do
+    IFS='|' read -r component service file ref <<<"$line"
+    if ! service_running "$service"; then
+      say "$service is not running"
+      return 1
+    fi
+    cid="$(service_container "$service")"
+    if [ "$cid" != "${cids[$service]}" ] || [ "$(container_state "$cid")" != "${before[$service]}" ]; then
+      say "$service restarted within ${DEPLOY_STABLE_SECONDS}s"
+      return 1
+    fi
+  done
 }
 
 # ── Commands ─────────────────────────────────────────────────────────────────
@@ -256,7 +376,7 @@ cmd_deploy() {
   take_lock "deploy $version"
   assert_no_jobs_running
 
-  local previous to_apply from_summary="" component service image file pinned ref
+  local previous to_apply from_summary="" component service image file pinned effective ref
   previous="$(mktemp)"
   to_apply="$(mktemp)"
   local backed_up=" "
@@ -264,9 +384,20 @@ cmd_deploy() {
   for component in "${list[@]}"; do
     service="$(component_service "$component")" || die "unknown component: $component"
     image="$(component_image "$component")"
-    file="$(pin_file_for "$image")" ||
-      die "no compose file in use pins $image (looked in: $(compose_files | tr '\n' ' '))"
-    pinned="$(pinned_ref "$file" "$image")"
+
+    # What Compose would run now, with every override applied.
+    effective="$(effective_image "$service")"
+    [ -n "$effective" ] || die "docker compose config has no image for $service"
+    file="$(pin_file_for "$service")" ||
+      die "no compose file in use sets an image for $service (looked in: $(compose_files | tr '\n' ' '))"
+    pinned="$(pinned_ref "$file" "$service")"
+    if ! ref_in_repo "$effective" "$image"; then
+      die "$service runs $effective (set in $file), not $image. That is usually a hotfix someone pinned by hand, so this deploy leaves it alone. Remove that pin, or deploy $service by hand."
+    fi
+    if [ "$pinned" != "$effective" ]; then
+      die "$file sets $service to \"$pinned\", which Compose resolves to $effective (a variable?). Edit it by hand."
+    fi
+
     ref="$(restorable_ref "$service" "$image" "$pinned")"
     printf '%s|%s|%s|%s\n' "$component" "$service" "$file" "$ref" >>"$previous"
     printf '%s|%s|%s|%s\n' "$component" "$service" "$file" "$image:$version" >>"$to_apply"
@@ -283,7 +414,7 @@ cmd_deploy() {
     say "$service: $pinned -> $image:$version ($file)"
   done
 
-  if apply_refs 1 <"$to_apply" && wait_healthy; then
+  if apply_refs 1 <"$to_apply" && verify_refs <"$to_apply"; then
     mv "$previous" "$STATE_FILE"
     rm -f "$to_apply"
     log_line "deploy ${components} from ${from_summary% } to $version ok"
@@ -292,7 +423,7 @@ cmd_deploy() {
   fi
 
   say "deploy failed; rolling back to the recorded refs"
-  if apply_refs 0 <"$previous" && wait_healthy; then
+  if apply_refs 0 <"$previous" && verify_refs <"$previous"; then
     log_line "deploy ${components} from ${from_summary% } to $version FAILED, rolled back"
     say "rolled back and healthy"
   else
@@ -319,7 +450,7 @@ cmd_rollback() {
 
   # The recorded refs were running here before, so they are local already:
   # no pull. If one has been pruned since, `up` fetches it.
-  if apply_refs 0 <"$STATE_FILE" && wait_healthy; then
+  if apply_refs 0 <"$STATE_FILE" && verify_refs <"$STATE_FILE"; then
     log_line "rollback to ${summary% } ok"
     say "rolled back and healthy"
     return 0

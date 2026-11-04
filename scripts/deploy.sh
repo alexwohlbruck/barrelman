@@ -21,7 +21,9 @@
 # job is running, finds the compose file that pins each image (from the
 # COMPOSE_FILE the host's .env sets), backs it up as <file>.bak-pre-<version>,
 # records the refs running now, pins <image>:<version>, pulls, recreates only
-# the named services, and waits for /health. Success and failure both append a
+# the named services, and waits for /health and for each container to run the
+# new image without restarting. It refuses a service another file overrides
+# with a different image (a hotfix). Success and failure both append a
 # line to /opt/barrelman/deploy.log. On failure it puts the recorded refs back.
 # scripts/rollback.sh restores the refs recorded by the last successful deploy.
 #

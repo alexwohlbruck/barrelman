@@ -102,16 +102,22 @@ host it:
 2. Refuses if an ops job is running, asking the same question as the
    [Watchtower gate](#not-restarting-mid-import). An import can't be resumed
    after a restart.
-3. Reads `COMPOSE_FILE` from the host's `.env` and finds which file pins
-   `alexwohlbruck/barrelman` and `alexwohlbruck/barrelman-ops` (the last file
-   that names an image wins, as it does for Compose). It backs that file up as
-   `<file>.bak-pre-<version>` and records the refs running now.
-4. Pins `<image>:<version>`, pulls, and runs `docker compose up -d --no-deps`
-   for the chosen services only.
+3. Asks `docker compose config` which image each service resolves to, and finds
+   the file that sets it: the last file in `COMPOSE_FILE` (read from the host's
+   `.env`) with an `image:` for that service, as Compose decides. If a service
+   resolves to some other repository, such as a `local/barrelman:hotfix-…`
+   override, it stops and says so instead of replacing someone's hotfix. It
+   backs the file up as `<file>.bak-pre-<version>` and records the refs
+   running now.
+4. Pins `<image>:<version>`, checks Compose now resolves the service to it,
+   pulls, and runs `docker compose up -d --no-deps` for the chosen services only.
 5. Polls `/health` until it reports `ok` (five minutes by default; `--timeout`
-   changes it, `--allow-degraded` accepts `degraded`).
+   changes it, `--allow-degraded` accepts `degraded`). Then it checks that each
+   recreated container runs the new image and stays up without restarting for
+   20 seconds, since `/health` only covers the API and a crash-looping worker
+   would otherwise pass.
 6. Appends a line to `/opt/barrelman/deploy.log` with the time, who ran it, and
-   the refs it moved from and to. If the health check fails, it puts the
+   the refs it moved from and to. If any of those checks fails, it puts the
    recorded refs back, restarts again and logs that too.
 
 `--services` takes any of `api`, `ops` and `db`. The default is `api,ops`,
