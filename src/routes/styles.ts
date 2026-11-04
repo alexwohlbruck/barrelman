@@ -8,13 +8,9 @@ import darkMatter from '../styles/dark-matter.json' with { type: 'json' }
 
 const CORS = 'access-control-allow-origin'
 
-/**
- * Glyphs come from the MapLibre demo host, which serves the Noto Sans stacks
- * these styles use. Serving them ourselves means vendoring the OpenMapTiles
- * Noto Sans build, about 100 MB for the three weights because it carries CJK;
- * that is a follow-up, not something to fold into the image unasked.
- */
-const GLYPHS = 'https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf'
+/** Glyphs and sprites are ours, vendored under assets/ (services/map-assets.service.ts). */
+const glyphsUrl = (origin: string) => `${origin}/fonts/{fontstack}/{range}.pbf`
+const spriteUrl = (origin: string, sprite: string) => `${origin}/sprites/${sprite}`
 
 /** The OpenMapTiles schema source name both styles' layers refer to. */
 const SOURCE_NAME = 'openmaptiles'
@@ -22,6 +18,7 @@ const SOURCE_NAME = 'openmaptiles'
 interface StyleSpec {
   name: string
   base: Record<string, unknown>
+  /** Sprite sheet name under /sprites. */
   sprite: string
   design: string
 }
@@ -34,14 +31,14 @@ const STYLES: Record<string, StyleSpec> = {
   basemap: {
     name: 'Barrelman Basemap',
     base: osmBright as Record<string, unknown>,
-    sprite: 'https://openmaptiles.github.io/osm-bright-gl-style/sprite',
+    sprite: 'osm-bright',
     design:
       'OSM Bright by OpenMapTiles, derived from Mapbox Open Styles. Code BSD-3-Clause, design CC-BY 4.0. https://github.com/openmaptiles/osm-bright-gl-style',
   },
   'basemap-dark': {
     name: 'Barrelman Basemap Dark',
     base: darkMatter as Record<string, unknown>,
-    sprite: 'https://openmaptiles.github.io/dark-matter-gl-style/sprite',
+    sprite: 'dark-matter',
     design:
       'Dark Matter by OpenMapTiles, derived from CartoDB Basemaps by Stamen and Paul Norman. Code BSD-3-Clause, design CC-BY 4.0. Fonts changed to Noto Sans. https://github.com/openmaptiles/dark-matter-gl-style',
   },
@@ -72,8 +69,8 @@ export function buildStyle(name: string, key: string | null, origin: string = se
         attribution: tileAttribution('basemap'),
       },
     },
-    sprite: spec.sprite,
-    glyphs: GLYPHS,
+    sprite: spriteUrl(origin, spec.sprite),
+    glyphs: glyphsUrl(origin),
   }
 }
 
@@ -110,7 +107,7 @@ export function createStyleRoutes() {
           summary: 'Basemap map style',
           description:
             'A MapLibre style (version 8) that draws the basemap, ready to pass to `new maplibregl.Map({ style })`. Its source is `/tiles/basemap.json`, which carries the attribution the map must show.\n\n' +
-            '`basemap.json` is based on OSM Bright and `basemap-dark.json` on Dark Matter, both by OpenMapTiles (code BSD-3-Clause, design CC-BY 4.0). Glyphs load from demotiles.maplibre.org and sprites from the OpenMapTiles style repositories.\n\n' +
+            '`basemap.json` is based on OSM Bright and `basemap-dark.json` on Dark Matter, both by OpenMapTiles (code BSD-3-Clause, design CC-BY 4.0). Glyphs load from `/fonts` and sprites from `/sprites` on this server, both public and free; see those routes for what they cover.\n\n' +
             'Pass the key as `?api_key=` and it is carried into the source URL and on to every tile URL. A key sent as a Bearer header is never written into the document. Needs a key with the `tiles` scope and costs no credits.',
         },
       },

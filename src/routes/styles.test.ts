@@ -3,6 +3,7 @@ import Elysia from 'elysia'
 import { buildStyle, createStyleRoutes } from './styles'
 import { serverOrigin } from '../config/accounts.config'
 import { groupForPath } from '../billing/plans'
+import { VENDORED_FONTS } from '../services/map-assets.service'
 
 const savedApiKey = process.env.BARRELMAN_API_KEY
 
@@ -68,11 +69,37 @@ describe('GET /styles/:style.json', () => {
   test('credits the style it is based on', () => {
     const style = buildStyle('basemap', null) as unknown as Style
     expect(style.metadata['barrelman:style-licence']).toContain('CC-BY 4.0')
-    expect(style.glyphs).toContain('{fontstack}/{range}.pbf')
-    expect(style.sprite).toContain('osm-bright-gl-style')
   })
 
-  test('the dark style asks only for fonts the glyph host serves', () => {
+  test('loads glyphs and sprites from this server', () => {
+    const bright = buildStyle('basemap', null, 'https://api.test') as unknown as Style
+    const dark = buildStyle('basemap-dark', null, 'https://api.test') as unknown as Style
+    expect(bright.glyphs).toBe('https://api.test/fonts/{fontstack}/{range}.pbf')
+    expect(bright.sprite).toBe('https://api.test/sprites/osm-bright')
+    expect(dark.sprite).toBe('https://api.test/sprites/dark-matter')
+    for (const s of [bright, dark]) {
+      const text = JSON.stringify(s)
+      expect(text).not.toContain('demotiles.maplibre.org')
+      expect(text).not.toContain('openmaptiles.github.io')
+    }
+  })
+
+  test('every font a style names is one we vendor', () => {
+    for (const name of ['basemap', 'basemap-dark']) {
+      const style = buildStyle(name, null) as { layers: { layout?: { 'text-font'?: unknown } }[] }
+      // text-font is a plain list here, or an expression holding literal lists.
+      const fonts = new Set<string>()
+      const collect = (v: unknown): void => {
+        if (Array.isArray(v)) v.forEach(collect)
+        else if (typeof v === 'string' && / (Regular|Bold|Italic|Light|Medium)$/.test(v)) fonts.add(v)
+      }
+      for (const layer of style.layers) collect(layer.layout?.['text-font'])
+      expect(fonts.size).toBeGreaterThan(0)
+      for (const f of fonts) expect(VENDORED_FONTS).toContain(f)
+    }
+  })
+
+  test('the dark style asks for no Metropolis fonts', () => {
     const text = JSON.stringify(buildStyle('basemap-dark', null))
     expect(text).not.toContain('Metropolis')
   })

@@ -596,6 +596,19 @@ export const SCRIPTS: ScriptDef[] = [
     source: 'import/backfill-rt-urls.ts',
   },
   {
+    id: 'brands-backfill-logo-licences',
+    name: 'Backfill Brand Logo Licences',
+    description: 'Read the licence, author and trademark status of each brand logo from Wikimedia Commons, for logos resolved before these were recorded.',
+    category: 'search',
+    danger: 'safe',
+    longRunning: false,
+    confirm: false,
+    exec: { kind: 'internal', handler: 'brands:backfill-logo-licences' },
+    source: 'src/lib/brand-logos.ts',
+    notes:
+      'New logos get their licence when they are resolved, so this is only needed once after upgrading, or after Commons was unreachable. Asks for 50 files a second at most.',
+  },
+  {
     id: 'gtfs-refresh-licences',
     name: 'Refresh Feed Licences',
     description: 'Re-read each GTFS feed\'s licence terms (SPDX id, commercial use, redistribution, attribution text) from Transitland.',

@@ -4,7 +4,8 @@ import { swagger } from '@elysiajs/swagger'
 import swaggerConfig from './config/swagger'
 import { healthRoutes } from './routes/health'
 import { searchRoutes } from './routes/search'
-import { brandsRoutes } from './routes/brands'
+import { brandsRoutes, brandLogoRoutes } from './routes/brands'
+import { mapAssetRoutes } from './routes/map-assets'
 import { containsRoutes } from './routes/contains'
 import { childrenRoutes } from './routes/children'
 import { placeRoutes } from './routes/place'
@@ -163,6 +164,7 @@ const app = new Elysia()
   .use(healthRoutes)
   .use(searchRoutes)
   .use(brandsRoutes)
+  .use(brandLogoRoutes)
   .use(containsRoutes)
   .use(childrenRoutes)
   .use(placeRoutes)
@@ -181,6 +183,7 @@ const app = new Elysia()
   .use(landmarkRoutes)
   .use(tileRoutes)
   .use(styleRoutes)
+  .use(mapAssetRoutes)
   .use(graphhopperRoutes)
   .use(routeRoutes)
   .use(matchRoutes)

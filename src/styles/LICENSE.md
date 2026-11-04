@@ -12,8 +12,10 @@ Changes made here:
 
 - `dark-matter.json`: the Metropolis fonts are replaced with Noto Sans
   (`Metropolis Light` and `Metropolis Regular` with `Noto Sans Regular`, the
-  italics with `Noto Sans Italic`), because the glyph host we use serves Noto
-  Sans only.
+  italics with `Noto Sans Italic`), because the glyphs we vendor
+  (`assets/fonts`) are Noto Sans only.
+- The sprites both styles use are vendored in `assets/sprites`; see
+  `assets/LICENSE.md`.
 - At request time (`src/routes/styles.ts`), both styles get their source, glyph
   and sprite URLs replaced, a new `name`, and licence metadata.
 
