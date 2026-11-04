@@ -277,6 +277,11 @@ services:
       # MOTIS default 60s. Set in .env (e.g. 600) to throttle dev polling.
       MOTIS_RT_UPDATE_INTERVAL: ${MOTIS_RT_UPDATE_INTERVAL:-}
       GTFS_DATA_DIR: /gtfs-zips
+      # Read by the "Refresh Feed Licences" task, which runs in this process.
+      TRANSITLAND_API_KEY: ${TRANSITLAND_API_KEY:-}
+      # Filters transit responses and the generated motis/config.yml here; the
+      # GTFS import reads it in barrelman-ops.
+      GTFS_LICENCE_POLICY: ${GTFS_LICENCE_POLICY:-}
       # Read here as well as in barrelman-ops, because scripts/rebuild-motis.sh
       # generates motis/config.yml with `docker exec barrelman` — the selection
       # is resolved in THIS container, not in ops. Left unset the API silently
@@ -459,6 +464,7 @@ services:
       MOTIS_URL: http://barrelman-motis:8080
       TRANSITLAND_API_KEY: ${TRANSITLAND_API_KEY:-}
       GTFS_RT_CREDENTIALS: ${GTFS_RT_CREDENTIALS:-}
+      GTFS_LICENCE_POLICY: ${GTFS_LICENCE_POLICY:-}
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
       # The one variable that decides coverage. Read by the importers that run
       # here, not by the API — see https://docs.barrelman.dev/self-hosting/regions.

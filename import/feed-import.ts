@@ -35,6 +35,7 @@ import {
   updateBikesAllowed,
   recordFeed,
   clearFeed,
+  storedLicense,
   type GtfsFeedInfo,
 } from '../src/services/gtfs.service'
 
@@ -58,6 +59,12 @@ export async function importFeedFile(filepath: string, feedInfo: GtfsFeedInfo) {
   // Readers see either the previous complete feed or the new complete feed.
   // A failed batch rolls back every table, including the feed's import marker.
   const counts = await db.transaction(async tx => {
+    // clearFeed drops the gtfs_feeds row, licence included. A caller that did
+    // not read the licence from Transitland keeps the one on record.
+    if (feedInfo.license === undefined) {
+      const stored = await storedLicense(feedInfo.feedId, tx)
+      if (stored) feedInfo = { ...feedInfo, license: stored.license, licenseFetchedAt: stored.fetchedAt }
+    }
     await clearFeed(feedInfo.feedId, tx)
     const stopsImported = await importStops(stops, tx)
     const routesImported = await importRoutes(routes, tx)

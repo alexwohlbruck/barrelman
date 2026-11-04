@@ -65,6 +65,17 @@ export const gtfsFeeds = pgTable(
     routeCount: integer('route_count').default(0),
     rtUrls: jsonb('rt_urls').$type<RtUrlEntry[] | null>(),
     importedAt: timestamp('imported_at', { withTimezone: true }).defaultNow(),
+    // Licence terms from Transitland; see src/lib/feed-license.ts.
+    licenseSpdx: text('license_spdx'),
+    licenseUrl: text('license_url'),
+    licenseUseWithoutAttribution: text('license_use_without_attribution'),
+    licenseCreateDerivedProduct: text('license_create_derived_product'),
+    licenseRedistributionAllowed: text('license_redistribution_allowed'),
+    licenseCommercialUseAllowed: text('license_commercial_use_allowed'),
+    licenseShareAlikeOptional: text('license_share_alike_optional'),
+    licenseAttributionText: text('license_attribution_text'),
+    licenseAttributionInstructions: text('license_attribution_instructions'),
+    licenseFetchedAt: timestamp('license_fetched_at', { withTimezone: true }),
   },
 )
 
