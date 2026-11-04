@@ -49,6 +49,7 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ### Fixed
 
+* A successful request now clears the penalty-box strikes of the signed-in caller who made it. It used to clear a key the strikes were never recorded under, so they only decayed after ten minutes, and a client that failed now and then between successes could still end up boxed.
 * Metered overage reaches the Polar customer. Checkout now sets our user id as the customer's external id, which overage events are keyed on, and a sync or subscription webhook sets it on existing customers that have none. Overage reported before this release matched no customer and was not billed.
 * Cancelling a subscription keeps the plan until the end of the period already paid for. `subscription.canceled` used to drop the account to free the moment the customer scheduled the cancellation. The plan now ends on `subscription.revoked`, and only when the revoked subscription is the one behind the current plan.
 * The plan follows the subscription's status instead of being re-applied on every `subscription.updated`. Webhooks that arrive late or out of order are ignored once a newer state is stored, and a revoked subscription stays revoked, so a delayed update can no longer restore a paid plan.
