@@ -12,7 +12,7 @@
  */
 import { and, desc, eq, inArray, isNull } from 'drizzle-orm'
 import { LRUCache } from 'lru-cache'
-import { db } from '../db'
+import { accountsDb as db } from '../db'
 import { apiKeys, users, type ApiKey } from '../schema/accounts'
 import { generateId, randomBase62, sha256Hex } from '../lib/crypto'
 import { invalidOrigins, normalizeOrigins } from '../lib/origins'

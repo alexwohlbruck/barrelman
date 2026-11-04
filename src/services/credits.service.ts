@@ -16,9 +16,9 @@
  * trip per request. It is invalidated directly whenever credits are granted or
  * a plan changes.
  */
-import { eq, sql as dsql } from 'drizzle-orm'
+import { and, eq, like, sql as dsql } from 'drizzle-orm'
 import { LRUCache } from 'lru-cache'
-import { db } from '../db'
+import { accountsDb as db } from '../db'
 import { creditLedger, users, type CreditEntryKind } from '../schema/accounts'
 import { generateId } from '../lib/crypto'
 import { getPlan, type Plan } from '../billing/plans'
@@ -182,11 +182,14 @@ export interface GrantOptions {
   externalId?: string | null
 }
 
+/** The pool, or a transaction, for ledger writes that must share one. */
+export type LedgerExecutor = typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0]
+
 /** Returns false when `externalId` has already been recorded. */
-export async function grantCredits(options: GrantOptions): Promise<boolean> {
+export async function grantCredits(options: GrantOptions, executor: LedgerExecutor = db): Promise<boolean> {
   const { userId, amount, kind, description = null, externalId = null } = options
 
-  const inserted = await db
+  const inserted = await executor
     .insert(creditLedger)
     .values({ id: generateId(), userId, amount, kind, description, externalId })
     .onConflictDoNothing({ target: creditLedger.externalId })
@@ -196,6 +199,26 @@ export async function grantCredits(options: GrantOptions): Promise<boolean> {
 
   invalidateBalance(userId)
   return true
+}
+
+/**
+ * Sum of an account's ledger entries whose external id starts with `prefix`.
+ * Lets a refund work out how much of an order it has already taken back.
+ */
+export async function ledgerTotalForExternalPrefix(
+  userId: string,
+  prefix: string,
+  executor: LedgerExecutor = db,
+): Promise<number> {
+  const [row] = await executor
+    .select({ total: dsql<number>`COALESCE(SUM(${creditLedger.amount}), 0)::int` })
+    .from(creditLedger)
+    .where(and(eq(creditLedger.userId, userId), like(creditLedger.externalId, `${escapeLike(prefix)}%`)))
+  return row?.total ?? 0
+}
+
+function escapeLike(value: string): string {
+  return value.replace(/[\\%_]/g, (c) => `\\${c}`)
 }
 
 export interface LedgerEntry {

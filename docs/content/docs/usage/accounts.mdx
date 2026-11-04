@@ -233,6 +233,8 @@ sign out everywhere at once.
 | `DELETE /account/keys/:id` | Revoke |
 | `GET /account/usage` | Usage for a date range |
 | `GET /account/credits` | Balance for the cycle |
+| `GET /billing/status` | Plan, balance, and the subscription's status and end date |
+| `POST /billing/change-plan` | Move the subscription to another plan, or get a checkout link for a first one |
 
 `/account/*` is session-authenticated only. A leaked API key must not be able to
 mint more keys or read the billing history of the account it belongs to.

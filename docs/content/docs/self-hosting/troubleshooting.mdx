@@ -225,7 +225,7 @@ MOTIS is the loud symptom, not the only one. GraphHopper builds a graph from a d
 
 **`tt: binary version mismatch` on MOTIS startup**
 
-A `docker compose pull` moved the engine version. Re-run `scripts/rebuild-motis.sh`.
+The engine version moved under the dataset: you changed the MOTIS pin, or the host's compose file predates the pins and a pull followed `:latest`. Re-run `scripts/rebuild-motis.sh`. It imports with the same image the running container uses, so recreate the container on the version you want first.
 
 **`Not a GraphHopper file /data/graph-cache/properties! Expected 'GH' as file marker`**
 
@@ -494,11 +494,18 @@ it before you raise the timeout.
 
 **`504` from `/graphhopper/*`**
 
-The proxy waited `GRAPHHOPPER_TIMEOUT_MS` (default 30 s) and gave up. The usual
-cause is a raw `/graphhopper/match` on a sparse trace or with GraphHopper's
-default 40 m `gps_accuracy`. Use `POST /match`, which handles both. GraphHopper
-keeps working on an abandoned request until it finishes, so a client retrying
-in a loop piles load onto the engine.
+The proxy waited `GRAPHHOPPER_TIMEOUT_MS` (default 30 s) and gave up on a
+`/graphhopper/route`. GraphHopper keeps working on an abandoned request until it
+finishes, so a client retrying in a loop piles load onto the engine. A route
+search is also bounded by `routing.max_visited_nodes` in
+`graphhopper-config.yml`; one that hits it fails with "maximum nodes exceeded"
+instead of running on.
+
+**`404` from `/graphhopper/isochrone`, `/spt`, `/matrix` or `/match`**
+
+The proxy forwards only `route`, `info` and `health`. Use `GET /isochrone` for
+reachability and `POST /match` for map matching; both carry their own limits
+and pricing.
 
 ## Admin access
 

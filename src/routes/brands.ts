@@ -1,4 +1,5 @@
 import Elysia, { t } from 'elysia'
+import { clampInt } from '../lib/params'
 import { apiAuth, apiAuthAfter } from '../middleware/api-auth'
 import { searchBrands as _searchBrands, getBrand as _getBrand } from '../services/brands.service'
 
@@ -11,7 +12,7 @@ export function createBrandsRoutes(deps = { searchBrands: _searchBrands, getBran
       async ({ query }) => {
         const brands = await deps.searchBrands({
           q: query.q ?? '',
-          limit: query.limit ? Number(query.limit) : undefined,
+          limit: clampInt(query.limit, { min: 1, max: 50 }),
         })
         return { brands }
       },

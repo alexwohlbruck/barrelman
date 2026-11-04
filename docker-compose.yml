@@ -37,7 +37,7 @@ x-logging: &default-logging
 services:
   tts:
     profiles: ["tts"]
-    image: ${TTS_IMAGE:-ghcr.io/remsky/kokoro-fastapi-cpu:v0.9.0}
+    image: ${TTS_IMAGE:-ghcr.io/remsky/kokoro-fastapi-cpu:v0.9.0@sha256:ee3111d6a2c903ed62f3b4fa19543c6901205ed39fce3c177e895b34a8386b9c}
     restart: unless-stopped
     logging: *default-logging
     environment:
@@ -136,6 +136,15 @@ services:
     # per-backend overhead. Raise or drop it in production, where the database
     # should own the box.
     mem_limit: ${BARRELMAN_DB_MEM_LIMIT:-2g}
+    # pg_isready asks the server whether it accepts connections, which is what
+    # every other service here waits on. start_period covers crash recovery
+    # after an unclean stop, which replays WAL before the first connection.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U barrelman -d barrelman -h 127.0.0.1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 2m
 
     # Watchtower asks before it restarts this container, and a job in flight
     # says no. An OSM update runs its SQL as `docker exec barrelman-db psql`, so
@@ -156,10 +165,11 @@ services:
 
   martin:
     container_name: barrelman-martin
-    # Deliberately unpinned. Martin renders tiles from PostGIS on each request
-    # and persists nothing of its own, so there is no baked artifact for a new
-    # release to invalidate — unlike MOTIS and GraphHopper below.
-    image: ghcr.io/maplibre/martin
+    # Pinned like every third-party image here, so a `docker compose pull`
+    # never changes what runs. Martin persists nothing of its own, so moving it
+    # needs no rebuild, only a check that the tile config still loads. See
+    # "Upgrading pinned images" in docs/content/docs/self-hosting/operations.mdx.
+    image: ghcr.io/maplibre/martin:1.16.1@sha256:59902019bf9038926ff0c71174237d6852e64c457830a6349abe7090be8818ca
     restart: unless-stopped
     logging: *default-logging
     # --on-invalid warn, because the default is abort and abort means *all*
@@ -183,12 +193,26 @@ services:
       - ./martin-config.yaml:/config/martin-config.yaml:ro
     ports:
       - "${BARRELMAN_BIND_ADDR:-127.0.0.1}:5002:3000"
+    # The image ships this probe with Docker's 30s default interval; it is
+    # restated here so the cadence is visible and matches the other services.
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:3000/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 1m
     depends_on:
       - barrelman-db
 
   graphhopper:
     container_name: barrelman-graphhopper
-    image: israelhikingmap/graphhopper:latest
+    # The June 2026 12.0-SNAPSHOT, which production runs. :latest is a nightly,
+    # and its 2026-10-16 build changed the bundled foot model, which crash-looped
+    # routing on a config that used it. (The "sort graph" Index -1 crash seen on
+    # small extracts happens on both builds; graph.sort: false avoids it.) The graph cache is also written in a version-specific
+    # format, so moving this digest means a full graph rebuild
+    # (scripts/rebuild-graphhopper.sh), never a plain pull.
+    image: israelhikingmap/graphhopper@sha256:3e79eb33862028cfc58f9d6c162630b68638d6aad790b5a698c854dbbaa7fe32
     restart: unless-stopped
     logging: *default-logging
     # -i and -o must be passed explicitly; the entrypoint script defaults
@@ -202,6 +226,15 @@ services:
       - ./custom_models:/graphhopper/custom_models:ro
     ports:
       - "${BARRELMAN_BIND_ADDR:-127.0.0.1}:5003:8989"
+    # The server only listens once the graph is loaded. A first import builds
+    # the graph before that and can run for hours on a large region, so the
+    # container shows as unhealthy until it finishes; nothing restarts on it.
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS -o /dev/null http://127.0.0.1:8989/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10m
     depends_on:
       - barrelman-db
 
@@ -213,10 +246,9 @@ services:
     # pull` that moves :latest takes transit routing down until the timetable is
     # rebuilt from the GTFS feeds (`motis import`), which is a job, not a
     # restart. Same shape as GraphHopper's graph-cache above.
-    # Deliberately still :latest — pinning would freeze every downstream user on
-    # whatever version shipped with their compose file. Re-import after an
-    # upgrade instead.
-    image: ghcr.io/motis-project/motis:latest
+    # Pinned to a release for that reason: moving the tag means a re-import
+    # (scripts/rebuild-motis.sh), so it should happen when an operator chooses.
+    image: ghcr.io/motis-project/motis:2.11.4@sha256:594eff881d4319549387563a28dffb2ac48650df5422325a44a6c2f69f79e9b9
     restart: unless-stopped
     # MOTIS logs a timer pair per realtime poll — `[scoped_timer] [rt update]`
     # and friends — at a few lines a second, forever. Docker's json-file driver
@@ -242,6 +274,17 @@ services:
       - ./data/gtfs:/data/gtfs:ro
     ports:
       - "${BARRELMAN_BIND_ADDR:-127.0.0.1}:5004:8080"
+    # Healthy means MOTIS answers HTTP at all. /api/v1/health returns 400
+    # whenever one realtime or GBFS updater is unhappy, while routing keeps
+    # working (see checkMotisHealth in src/services/transit.service.ts), so the
+    # probe accepts any status line. The image is Alpine; busybox wget prints
+    # the status with -S even when it exits non-zero.
+    healthcheck:
+      test: ["CMD-SHELL", "wget -S -q -O /dev/null http://127.0.0.1:8080/api/v1/health 2>&1 | grep -q 'HTTP/'"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 5m
 
   barrelman:
     container_name: barrelman
@@ -253,11 +296,17 @@ services:
       # Caps runaway queries on the API query pool only — schema DDL and the
       # enrichment backfill get their own untimed connections (see src/db.ts).
       BARRELMAN_STATEMENT_TIMEOUT_MS: ${BARRELMAN_STATEMENT_TIMEOUT_MS:-10000}
+      # Main query pool, and the separate one for auth, keys, credits and
+      # metering. Blank uses the defaults in src/db.ts (20 and 5).
+      DB_POOL_MAX: ${DB_POOL_MAX:-}
+      DB_ACCOUNTS_POOL_MAX: ${DB_ACCOUNTS_POOL_MAX:-}
       OLLAMA_HOST: ${OLLAMA_HOST:-http://ollama:11434}
       TTS_URL: ${TTS_URL:-}
       TTS_MODEL_REVISION: ${TTS_MODEL_REVISION:-v1.0}
       PORT: 5001
       BARRELMAN_API_KEY: ${BARRELMAN_API_KEY:-brm_dev_changeme}
+      # Key for hashing client addresses. Unset, derived from BARRELMAN_API_KEY.
+      BARRELMAN_IP_HASH_SECRET: ${BARRELMAN_IP_HASH_SECRET:-}
       GRAPHHOPPER_URL: http://barrelman-graphhopper:8989
       # Per-call deadline on GraphHopper (the /graphhopper proxy and /match).
       GRAPHHOPPER_TIMEOUT_MS: ${GRAPHHOPPER_TIMEOUT_MS:-}
@@ -414,15 +463,15 @@ services:
       BARRELMAN_TOS_VERSION: ${BARRELMAN_TOS_VERSION:-}
       BARRELMAN_PRIVACY_URL: ${BARRELMAN_PRIVACY_URL:-}
     ports:
-      # Defaults to every interface, unlike the sibling services above: this is
-      # the one port that is meant to serve traffic. Note what that implies on a
-      # fresh public server — the console and open sign-up answer the internet as
-      # soon as the stack is up, and the first account created becomes an admin.
-      # Set BARRELMAN_API_BIND_ADDR=127.0.0.1 once a reverse proxy fronts it (the
-      # proxy reaches this container as barrelman:5001 over the Compose network,
-      # so nothing breaks). A host firewall is NOT a substitute — Docker DNATs
-      # published ports before ufw's INPUT rules are consulted.
-      - "${BARRELMAN_API_BIND_ADDR:-0.0.0.0}:5001:5001"
+      # Loopback by default, like the sibling services above. A fresh public
+      # server would otherwise answer the internet with the console and open
+      # sign-up as soon as the stack is up, and the first account created
+      # becomes an admin. A reverse proxy reaches this container as
+      # barrelman:5001 over the Compose network, or localhost:5001 from the
+      # host, so it needs nothing here. To serve :5001 directly with no proxy,
+      # set BARRELMAN_API_BIND_ADDR=0.0.0.0. A host firewall is NOT a way to
+      # close it again: Docker DNATs published ports before ufw's INPUT rules.
+      - "${BARRELMAN_API_BIND_ADDR:-127.0.0.1}:5001:5001"
     volumes:
       - barrelman-osm-data:/data
       - barrelman-gtfs-data:/gtfs-data
@@ -430,6 +479,18 @@ services:
       # Read-only: the API only serves tiles from here; barrelman-ops owns the
       # writes (same split as ./data/gtfs above).
       - ./data/portolan:/portolan-data:ro
+    # The image has bun and no curl. /health is built for load-balancer probes:
+    # dependency checks are cached for a few seconds and it answers 200 even
+    # when a downstream service is down, so this tracks the API process itself.
+    # start_period is long because startup runs the schema steps in
+    # src/index.ts before the server listens, and the first boot after an
+    # import can spend minutes building indexes there.
+    healthcheck:
+      test: ["CMD", "bun", "-e", "fetch('http://127.0.0.1:5001/health').then(r => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+      start_period: 10m
     depends_on:
       - barrelman-db
 
@@ -541,6 +602,20 @@ services:
       ALERT_DISK_PERCENT: ${ALERT_DISK_PERCENT:-}
       # scripts/*.sh docker-exec into these sibling containers by name.
       DB_CONTAINER: barrelman-db
+      # State backups (scripts/backup-db.sh, scripts/restore-db.sh). Dumps land
+      # in /data/backups on the OSM volume; set a bucket to copy them off-box.
+      BACKUP_DIR: ${BACKUP_DIR:-}
+      BACKUP_KEEP_LOCAL_DAYS: ${BACKUP_KEEP_LOCAL_DAYS:-}
+      BACKUP_KEEP_REMOTE_DAYS: ${BACKUP_KEEP_REMOTE_DAYS:-}
+      BACKUP_S3_BUCKET: ${BACKUP_S3_BUCKET:-}
+      BACKUP_S3_ENDPOINT: ${BACKUP_S3_ENDPOINT:-}
+      BACKUP_S3_REGION: ${BACKUP_S3_REGION:-}
+      BACKUP_S3_ACCESS_KEY_ID: ${BACKUP_S3_ACCESS_KEY_ID:-}
+      BACKUP_S3_SECRET_ACCESS_KEY: ${BACKUP_S3_SECRET_ACCESS_KEY:-}
+      BACKUP_S3_PREFIX: ${BACKUP_S3_PREFIX:-}
+      # The worker and the bun scripts it runs load src/db.ts too.
+      DB_POOL_MAX: ${DB_POOL_MAX:-}
+      DB_ACCOUNTS_POOL_MAX: ${DB_ACCOUNTS_POOL_MAX:-}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - barrelman-osm-data:/data

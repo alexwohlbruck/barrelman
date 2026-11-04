@@ -7,12 +7,12 @@
  * When you change a column in the drizzle definitions, change it here too.
  */
 import { and, desc, eq, isNull, sql as dsql } from 'drizzle-orm'
-import { connection as sql, db } from '../db'
+import { accountsConnection as sql, accountsDb as db } from '../db'
 import { users, type NewUser, type User, type UserRole } from '../schema/accounts'
-import { generateId, sha256Hex } from '../lib/crypto'
+import { generateId, hmacSha256Hex } from '../lib/crypto'
 import { emailDomain, isDisposableEmail, normalizeEmail } from '../lib/email'
 import { registrationMode, terms, tosVersion } from '../config/accounts.config'
-import { envNumber } from '../config/env'
+import { envNumber, envString } from '../config/env'
 
 let schemaReady: Promise<void> | null = null
 
@@ -29,6 +29,11 @@ export function ensureAccountsSchema(): Promise<void> {
           role              text NOT NULL DEFAULT 'user',
           plan              text NOT NULL DEFAULT 'free',
           polar_customer_id text,
+          subscription_id   text,
+          subscription_status text,
+          subscription_cancel_at_period_end boolean NOT NULL DEFAULT false,
+          subscription_period_end  timestamptz,
+          subscription_modified_at timestamptz,
           signup_ip_hash    text,
           suspended_at      timestamptz,
           suspended_reason  text,
@@ -48,7 +53,12 @@ export function ensureAccountsSchema(): Promise<void> {
           ADD COLUMN IF NOT EXISTS suspended_by     text,
           ADD COLUMN IF NOT EXISTS suspended_until  timestamptz,
           ADD COLUMN IF NOT EXISTS tos_version      text,
-          ADD COLUMN IF NOT EXISTS tos_accepted_at  timestamptz`
+          ADD COLUMN IF NOT EXISTS tos_accepted_at  timestamptz,
+          ADD COLUMN IF NOT EXISTS subscription_id   text,
+          ADD COLUMN IF NOT EXISTS subscription_status text,
+          ADD COLUMN IF NOT EXISTS subscription_cancel_at_period_end boolean NOT NULL DEFAULT false,
+          ADD COLUMN IF NOT EXISTS subscription_period_end  timestamptz,
+          ADD COLUMN IF NOT EXISTS subscription_modified_at timestamptz`
       await sql`CREATE UNIQUE INDEX IF NOT EXISTS accounts_users_email_normalized_idx ON accounts_users (email_normalized)`
       await sql`CREATE UNIQUE INDEX IF NOT EXISTS accounts_users_polar_customer_idx ON accounts_users (polar_customer_id)`
 
@@ -221,6 +231,14 @@ export function ensureAccountsSchema(): Promise<void> {
           updated_at       timestamptz NOT NULL DEFAULT now(),
           PRIMARY KEY (user_id, cycle)
         )`
+
+      await sql`
+        CREATE TABLE IF NOT EXISTS accounts_billing_webhook_events (
+          id          text PRIMARY KEY,
+          type        text NOT NULL,
+          received_at timestamptz NOT NULL DEFAULT now()
+        )`
+      await sql`CREATE INDEX IF NOT EXISTS accounts_billing_webhook_events_received_idx ON accounts_billing_webhook_events (received_at)`
 
       await sql`
         CREATE TABLE IF NOT EXISTS accounts_moderation_log (
@@ -457,8 +475,29 @@ export async function countActiveUsers(): Promise<number> {
 /** Accounts one address may create per UTC day before we start refusing. */
 const SIGNUPS_PER_IP_PER_DAY = envNumber('BARRELMAN_SIGNUPS_PER_IP_PER_DAY', 5)
 
+/**
+ * The key client addresses are hashed under.
+ *
+ * A plain SHA-256 of an IPv4 address is reversible by brute force: there are
+ * only 2^32 of them. Keyed, a leaked table of hashes says nothing without the
+ * key. `BARRELMAN_IP_HASH_SECRET` sets it; failing that it is derived from
+ * `BARRELMAN_API_KEY`, which every public deployment already sets, so an
+ * upgrade needs no new configuration. With neither (local development) the
+ * key is a fixed string and the hash is no stronger than before.
+ */
+export function ipHashKey(env: { secret: string; serviceKey: string }): string {
+  if (env.secret) return env.secret
+  if (env.serviceKey) return hmacSha256Hex(env.serviceKey, 'barrelman:ip-hash')
+  return 'barrelman:ip-hash:unkeyed'
+}
+
+const IP_HASH_KEY = ipHashKey({
+  secret: envString('BARRELMAN_IP_HASH_SECRET', ''),
+  serviceKey: envString('BARRELMAN_API_KEY', ''),
+})
+
 export function hashIp(ip: string): string {
-  return sha256Hex(ip)
+  return hmacSha256Hex(IP_HASH_KEY, ip)
 }
 
 /**

@@ -1,4 +1,5 @@
 import Elysia, { t } from 'elysia'
+import { clampInt, LIMITS } from '../lib/params'
 import { apiAuth, apiAuthAfter } from '../middleware/api-auth'
 import { findChildren as _findChildren } from '../services/spatial.service'
 
@@ -10,7 +11,14 @@ export function createChildrenRoutes(deps = { findChildren: _findChildren }) {
       '/children',
       async ({ query }) => {
         const { id, categories, limit, offset, lat, lng } = query
-        return deps.findChildren({ id, categories, limit, offset, lat, lng })
+        return deps.findChildren({
+          id,
+          categories,
+          limit: String(clampInt(limit, { min: 1, max: LIMITS.maxRows, fallback: 20 })),
+          offset: String(clampInt(offset, { min: 0, max: LIMITS.maxOffset, fallback: 0 })),
+          lat,
+          lng,
+        })
       },
       {
         query: t.Object({
@@ -23,11 +31,11 @@ export function createChildrenRoutes(deps = { findChildren: _findChildren }) {
             examples: ['cafe,restaurant', 'bicycle_parking'],
           })),
           limit: t.Optional(t.String({
-            description: 'Maximum number of children to return.',
+            description: 'Maximum number of children to return. At most 200.',
             examples: ['20', '50'],
           })),
           offset: t.Optional(t.String({
-            description: 'Number of children to skip for pagination.',
+            description: 'Number of children to skip for pagination. At most 10000.',
             examples: ['0', '20'],
           })),
           lat: t.Optional(t.String({

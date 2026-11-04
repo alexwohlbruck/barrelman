@@ -7,7 +7,7 @@
  * Sessions in particular are credential material, so keeping dead ones around
  * is pure liability.
  */
-import { connection as sql } from '../db'
+import { accountsConnection as sql } from '../db'
 import { pruneExpiredTokens } from './auth.service'
 import { pruneSignupAttempts } from './accounts.service'
 import { pruneRateLimiters } from '../lib/rate-limit'
@@ -15,6 +15,7 @@ import { pruneThrottleState } from './throttle.service'
 import { expireSuspensions } from './moderation.service'
 import { runAbuseDetection } from './abuse-detection.service'
 import { pruneRequestMetrics } from './request-metrics.service'
+import { pruneWebhookEvents } from './billing.service'
 import { envNumber } from '../config/env'
 
 const SWEEP_INTERVAL_MS = envNumber('BARRELMAN_ACCOUNT_SWEEP_MS', 60 * 60_000)
@@ -36,6 +37,7 @@ export async function sweepAccounts(): Promise<SweepResult> {
   pruneRateLimiters()
   pruneThrottleState()
   await pruneRequestMetrics().catch((err) => console.error('[request-metrics] prune failed', err))
+  await pruneWebhookEvents().catch((err) => console.error('[billing] webhook delivery prune failed', err))
 
   // A timed suspension that never lifts is an indefinite one with extra steps.
   const suspensionsLifted = await expireSuspensions()

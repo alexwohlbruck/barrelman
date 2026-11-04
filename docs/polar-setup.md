@@ -125,8 +125,10 @@ private key as input, and a web UI is the wrong place for that.
    | `products:read` | Pricing page — reads live prices |
    | `checkouts:write` | `POST /billing/checkout` |
    | `customers:read` | `POST /billing/sync` |
+   | `customers:write` | Setting our user id as the customer's external id, which the overage meter matches on |
    | `customer_sessions:write` | `GET /billing/portal` |
-   | `subscriptions:read` | `POST /billing/sync` |
+   | `subscriptions:read` | `POST /billing/sync`, refunds |
+   | `subscriptions:write` | `POST /billing/change-plan`, and revoking the subscription when an account is deleted |
    | `orders:read` | Credit-pack reconciliation |
    | `events:write` | Metered overage ingestion |
 
@@ -209,11 +211,15 @@ retries Polar performs cannot grant a pack twice.
 
    | Event | Effect |
    |---|---|
+   | `subscription.created` | Records the subscription; the plan waits for payment |
    | `subscription.active` | Links the customer, applies the plan |
-   | `subscription.updated` | Re-applies the plan on an upgrade or downgrade |
-   | `subscription.canceled` | Returns the account to free |
+   | `subscription.updated` | Applies whatever the subscription's status now says |
+   | `subscription.canceled` | Records the scheduled end date; the plan runs until then |
+   | `subscription.uncanceled` | Clears the scheduled end date |
+   | `subscription.past_due` | Keeps the plan, shows a banner, emails the customer once |
    | `subscription.revoked` | Returns the account to free |
    | `order.paid` | Grants a credit pack, if the product is one |
+   | `order.refunded` | Takes back a refunded credit pack, or re-reads a refunded subscription |
 
 4. Copy the signing secret → `POLAR_WEBHOOK_SECRET`.
 
@@ -221,6 +227,37 @@ The endpoint is authenticated by Polar's signature over the raw body, and
 **barrelman refuses to start if billing is enabled without the secret** — an
 unsigned webhook endpoint would let anyone who guesses the URL grant themselves
 a plan.
+
+Every subscription event carries the whole subscription, so they all take one
+path: the plan follows the status. `active` and `trialing` apply the product's
+plan. `past_due` keeps it, since Polar retries the payment and revokes the
+subscription if the retries fail. `unpaid`, `incomplete_expired` and a
+revocation return the account to free, and only when the subscription that
+ended is the one behind the current plan.
+
+Polar delivers at least once and in no fixed order. Once a delivery has been
+handled, its `webhook-id` is recorded in `accounts_billing_webhook_events`
+(pruned after 30 days by the account sweep), and a redelivery of it is
+acknowledged and skipped. The id is recorded only after handling succeeds, so a
+failure or a crash part-way leaves no record and Polar's retry is processed. An
+event whose `modifiedAt` is older than the state already stored for that
+subscription is ignored, and a revoked subscription stays revoked, so a late
+`subscription.updated` cannot bring a plan back.
+
+When the subscription behind the plan ends, barrelman checks the customer for
+another live subscription and moves the account onto it before falling back to
+free. If Polar cannot be reached for that check, the endpoint answers 500 and
+the retry decides.
+
+The payment-failed email is best-effort. It goes out once, on the move into
+`past_due`; if SMTP is down or unset at that moment it is logged and not
+retried, and the console banner is the only notice.
+
+A refund of a credit pack writes a negative ledger entry for the refunded share,
+keyed on the order and its refunded total. A refund of a subscription payment
+re-reads the subscription from Polar, and the account drops to free only if
+Polar revoked it. To end a subscription with a refund, choose to revoke it when
+refunding in Polar.
 
 For local development the URL must be reachable from the internet:
 
@@ -281,7 +318,18 @@ Then, end to end:
    endpoint → Deliveries. A `403` means the signing secret does not match.
 
 If a webhook is ever missed, **Refresh** on the billing page re-reads Polar and
-wins over the local plan — that is the repair path.
+wins over the local plan — that is the repair path. It also sets our user id as
+the external id on a customer that lacks one, which customers created before
+checkout set it all do. Until that happens their overage events match no
+customer and are not billed.
+
+To check a plan change, click **Switch** on another plan while subscribed. The
+existing subscription should move to the new product (one subscription in
+Polar, not two), with an upgrade invoiced straight away.
+
+Deleting an account from the console reports its outstanding overage and
+revokes its subscription first. If Polar cannot be reached the deletion is
+refused with a 502 and the account is kept.
 
 ---
 

@@ -1,4 +1,6 @@
 import Elysia, { t } from 'elysia'
+import { clampInt, clampNumber, LIMITS } from '../lib/params'
+import { serverError } from '../lib/errors'
 import { apiAuth, apiAuthAfter } from '../middleware/api-auth'
 import {
   getTransitRoute as _getTransitRoute,
@@ -31,7 +33,6 @@ import {
   getServiceAlerts as _getServiceAlerts,
 } from '../services/alerts.service'
 import {
-  discoverRtUrls as _discoverRtUrls,
 } from '../services/gtfs.service'
 import {
   getRouteDetail as _getRouteDetail,
@@ -52,7 +53,6 @@ export function createTransitRoutes(deps: {
   getVehiclePositions?: typeof _getVehiclePositions
   getRouteShape?: typeof _getRouteShape
   getServiceAlerts?: typeof _getServiceAlerts
-  discoverRtUrls?: typeof _discoverRtUrls
   getRouteDetail?: typeof _getRouteDetail
   resolveRoute?: typeof _resolveRoute
   getVehiclesForRoute?: typeof _getVehiclesForRoute
@@ -69,7 +69,6 @@ export function createTransitRoutes(deps: {
   const getVehiclePositions = deps.getVehiclePositions || _getVehiclePositions
   const getRouteShape = deps.getRouteShape || _getRouteShape
   const getServiceAlerts = deps.getServiceAlerts || _getServiceAlerts
-  const discoverRtUrls = deps.discoverRtUrls || _discoverRtUrls
   const getRouteDetail = deps.getRouteDetail || _getRouteDetail
   const resolveRoute = deps.resolveRoute || _resolveRoute
   const getVehiclesForRoute = deps.getVehiclesForRoute || _getVehiclesForRoute
@@ -83,7 +82,7 @@ export function createTransitRoutes(deps: {
     .onAfterHandle(apiAuthAfter)
 
     // ── POST /transit/route ─────────────────────────────────────────
-    .post('/route', async ({ body, set }) => {
+    .post('/route', async ({ body, set, request }) => {
       // Real traffic keeps MOTIS hot; tell the warm-up loop to stand down.
       markTransitActivity()
       try {
@@ -110,11 +109,7 @@ export function createTransitRoutes(deps: {
           }
         }
 
-        set.status = 502
-        return {
-          error: 'Transit routing service unavailable',
-          detail: err instanceof Error ? err.message : String(err),
-        }
+        return serverError(request, set, err, 'Transit routing service unavailable', 502)
       }
     }, {
       body: t.Object({
@@ -149,7 +144,7 @@ export function createTransitRoutes(deps: {
     })
 
     // ── POST /transit/intermodal-route ───────────────────────────────
-    .post('/intermodal-route', async ({ body, set }) => {
+    .post('/intermodal-route', async ({ body, set, request }) => {
       // Real traffic keeps MOTIS hot; tell the warm-up loop to stand down.
       markTransitActivity()
       try {
@@ -186,11 +181,7 @@ export function createTransitRoutes(deps: {
           }
         }
 
-        set.status = 502
-        return {
-          error: 'Intermodal routing service unavailable',
-          detail: err instanceof Error ? err.message : String(err),
-        }
+        return serverError(request, set, err, 'Intermodal routing service unavailable', 502)
       }
     }, {
       body: t.Object({
@@ -239,12 +230,12 @@ export function createTransitRoutes(deps: {
     })
 
     // ── GET /transit/stops ──────────────────────────────────────────
-    .get('/stops', async ({ query, set }) => {
+    .get('/stops', async ({ query, set, request }) => {
       try {
         const lat = Number(query.lat)
         const lng = Number(query.lng)
-        const radius = query.radius ? Number(query.radius) : 1000
-        const limit = query.limit ? Number(query.limit) : 20
+        const radius = clampNumber(query.radius, { min: 1, max: LIMITS.maxNearbyRadiusM, fallback: 1000 })!
+        const limit = clampInt(query.limit, { min: 1, max: LIMITS.maxRows, fallback: 20 })!
 
         if (isNaN(lat) || isNaN(lng)) {
           set.status = 400
@@ -258,11 +249,7 @@ export function createTransitRoutes(deps: {
 
         return await getNearbyStops({ lat, lng, radius, limit })
       } catch (err) {
-        set.status = 500
-        return {
-          error: 'Failed to query nearby stops',
-          detail: err instanceof Error ? err.message : String(err),
-        }
+        return serverError(request, set, err, 'Failed to query nearby stops')
       }
     }, {
       query: t.Object({
@@ -283,7 +270,7 @@ export function createTransitRoutes(deps: {
     })
 
     // ── GET /transit/routes ─────────────────────────────────────────
-    .get('/routes', async ({ query, set }) => {
+    .get('/routes', async ({ query, set, request }) => {
       try {
         if (!query.feedId || !query.stopId) {
           set.status = 400
@@ -299,8 +286,8 @@ export function createTransitRoutes(deps: {
             ? {
                 lat,
                 lng,
-                radius: query.radius ? Number(query.radius) : undefined,
-                limit: query.nearbyLimit ? Number(query.nearbyLimit) : undefined,
+                radius: clampNumber(query.radius, { min: 1, max: LIMITS.maxNearbyRadiusM }),
+                limit: clampInt(query.nearbyLimit, { min: 0, max: LIMITS.maxRows }),
               }
             : undefined
 
@@ -310,11 +297,7 @@ export function createTransitRoutes(deps: {
 
         return await getRoutesForStop(query.feedId, query.stopId, nearby, { complex })
       } catch (err) {
-        set.status = 500
-        return {
-          error: 'Failed to query routes for stop',
-          detail: err instanceof Error ? err.message : String(err),
-        }
+        return serverError(request, set, err, 'Failed to query routes for stop')
       }
     }, {
       query: t.Object({
@@ -354,7 +337,7 @@ export function createTransitRoutes(deps: {
     })
 
     // ── GET /transit/departures ─────────────────────────────────────
-    .get('/departures', async ({ query, set }) => {
+    .get('/departures', async ({ query, set, request }) => {
       try {
         const lat = Number(query.lat)
         const lng = Number(query.lng)
@@ -367,12 +350,12 @@ export function createTransitRoutes(deps: {
           }
         }
 
-        const request: DepartureRequest = {
+        const departureRequest: DepartureRequest = {
           lat: isNaN(lat) ? 0 : lat,
           lng: isNaN(lng) ? 0 : lng,
-          radius: query.radius ? Number(query.radius) : undefined,
+          radius: clampNumber(query.radius, { min: 1, max: LIMITS.maxNearbyRadiusM }),
           time: query.time || undefined,
-          n: query.n ? Number(query.n) : undefined,
+          n: clampInt(query.n, { min: 1, max: LIMITS.maxDepartures }),
           feedId: query.feedId || undefined,
           stopId: query.stopId || undefined,
           routeShortNames: query.routeShortNames
@@ -388,16 +371,12 @@ export function createTransitRoutes(deps: {
                 .map((t) => Number(t.trim()))
                 .filter((t) => Number.isFinite(t))
             : undefined,
-          windowMinutes: query.windowMinutes ? Number(query.windowMinutes) : undefined,
+          windowMinutes: clampNumber(query.windowMinutes, { min: 1, max: LIMITS.maxWindowMinutes }),
         }
 
-        return await getDepartures(request, fetchFn)
+        return await getDepartures(departureRequest, fetchFn)
       } catch (err) {
-        set.status = 500
-        return {
-          error: 'Failed to fetch departures',
-          detail: err instanceof Error ? err.message : String(err),
-        }
+        return serverError(request, set, err, 'Failed to fetch departures')
       }
     }, {
       query: t.Object({
@@ -448,7 +427,7 @@ export function createTransitRoutes(deps: {
     })
 
     // ── GET /transit/vehicles ──────────────────────────────────────────
-    .get('/vehicles', async ({ query, set }) => {
+    .get('/vehicles', async ({ query, set, request }) => {
       try {
         const north = Number(query.north)
         const south = Number(query.south)
@@ -476,11 +455,7 @@ export function createTransitRoutes(deps: {
 
         return await getVehiclePositions(request, fetchFn)
       } catch (err) {
-        set.status = 500
-        return {
-          error: 'Failed to fetch vehicle positions',
-          detail: err instanceof Error ? err.message : String(err),
-        }
+        return serverError(request, set, err, 'Failed to fetch vehicle positions')
       }
     }, {
       query: t.Object({
@@ -503,7 +478,7 @@ export function createTransitRoutes(deps: {
     })
 
     // ── GET /transit/shapes ───────────────────────────────────────────
-    .get('/shapes', async ({ query, set }) => {
+    .get('/shapes', async ({ query, set, request }) => {
       try {
         if (!query.feedId || !query.routeId) {
           set.status = 400
@@ -521,11 +496,7 @@ export function createTransitRoutes(deps: {
 
         return result
       } catch (err) {
-        set.status = 500
-        return {
-          error: 'Failed to fetch route shape',
-          detail: err instanceof Error ? err.message : String(err),
-        }
+        return serverError(request, set, err, 'Failed to fetch route shape')
       }
     }, {
       query: t.Object({
@@ -544,7 +515,7 @@ export function createTransitRoutes(deps: {
     })
 
     // ── GET /transit/route-detail ─────────────────────────────────────
-    .get('/route-detail', async ({ query, set }) => {
+    .get('/route-detail', async ({ query, set, request }) => {
       try {
         if (!query.feedId || !query.routeId) {
           set.status = 400
@@ -560,11 +531,7 @@ export function createTransitRoutes(deps: {
         set.headers['Cache-Control'] = 'public, max-age=3600'
         return result
       } catch (err) {
-        set.status = 500
-        return {
-          error: 'Failed to fetch route detail',
-          detail: err instanceof Error ? err.message : String(err),
-        }
+        return serverError(request, set, err, 'Failed to fetch route detail')
       }
     }, {
       query: t.Object({
@@ -582,7 +549,7 @@ export function createTransitRoutes(deps: {
     })
 
     // ── GET /transit/resolve-route ────────────────────────────────────
-    .get('/resolve-route', async ({ query, set }) => {
+    .get('/resolve-route', async ({ query, set, request }) => {
       try {
         const lat = Number(query.lat)
         const lng = Number(query.lng)
@@ -601,7 +568,7 @@ export function createTransitRoutes(deps: {
           lat,
           lng,
           mode,
-          radius: query.radius ? Number(query.radius) : undefined,
+          radius: clampNumber(query.radius, { min: 1, max: LIMITS.maxNearbyRadiusM }),
         })
         if (!result) {
           set.status = 404
@@ -611,11 +578,7 @@ export function createTransitRoutes(deps: {
         set.headers['Cache-Control'] = 'public, max-age=3600'
         return result
       } catch (err) {
-        set.status = 500
-        return {
-          error: 'Failed to resolve route',
-          detail: err instanceof Error ? err.message : String(err),
-        }
+        return serverError(request, set, err, 'Failed to resolve route')
       }
     }, {
       query: t.Object({
@@ -638,14 +601,14 @@ export function createTransitRoutes(deps: {
     })
 
     // ── GET /transit/route-vehicles ──────────────────────────────────
-    .get('/route-vehicles', async ({ query, set }) => {
+    .get('/route-vehicles', async ({ query, set, request }) => {
       try {
         if (!query.routeIds) {
           set.status = 400
           return { error: 'routeIds is required (comma-separated)' }
         }
 
-        const routeIds = query.routeIds.split(',').map(s => s.trim()).filter(Boolean)
+        const routeIds = query.routeIds.split(',').map(s => s.trim()).filter(Boolean).slice(0, LIMITS.maxListItems)
         if (routeIds.length === 0) {
           set.status = 400
           return { error: 'routeIds must contain at least one route ID' }
@@ -653,11 +616,7 @@ export function createTransitRoutes(deps: {
 
         return await getVehiclesForRoute(routeIds, query.feedId || undefined, fetchFn)
       } catch (err) {
-        set.status = 500
-        return {
-          error: 'Failed to fetch route vehicles',
-          detail: err instanceof Error ? err.message : String(err),
-        }
+        return serverError(request, set, err, 'Failed to fetch route vehicles')
       }
     }, {
       query: t.Object({
@@ -671,7 +630,7 @@ export function createTransitRoutes(deps: {
     })
 
     // ── GET /transit/trip-stops ──────────────────────────────────────
-    .get('/trip-stops', async ({ query, set }) => {
+    .get('/trip-stops', async ({ query, set, request }) => {
       try {
         if (!query.feedId || !query.tripId) {
           set.status = 400
@@ -680,8 +639,7 @@ export function createTransitRoutes(deps: {
         const stops = await getTripStopTimes(query.feedId, query.tripId, fetchFn)
         return { stops }
       } catch (err) {
-        set.status = 500
-        return { error: 'Failed to fetch trip stops', detail: err instanceof Error ? err.message : String(err) }
+        return serverError(request, set, err, 'Failed to fetch trip stops')
       }
     }, {
       query: t.Object({ feedId: t.String(), tripId: t.String() }),
@@ -689,7 +647,7 @@ export function createTransitRoutes(deps: {
     })
 
     // ── GET /transit/alerts ───────────────────────────────────────────
-    .get('/alerts', async ({ query, set }) => {
+    .get('/alerts', async ({ query, set, request }) => {
       try {
         const ids = (value?: string) =>
           value ? value.split(',').map(s => s.trim()).filter(Boolean) : undefined
@@ -702,11 +660,7 @@ export function createTransitRoutes(deps: {
           includeUpcoming: query.includeUpcoming === 'true',
         }, fetchFn)
       } catch (err) {
-        set.status = 500
-        return {
-          error: 'Failed to fetch service alerts',
-          detail: err instanceof Error ? err.message : String(err),
-        }
+        return serverError(request, set, err, 'Failed to fetch service alerts')
       }
     }, {
       query: t.Object({
@@ -730,13 +684,13 @@ export function createTransitRoutes(deps: {
     })
 
     // ── GET /transit/bikes-allowed ────────────────────────────────────
-    .get('/bikes-allowed', async ({ query, set }) => {
+    .get('/bikes-allowed', async ({ query, set, request }) => {
       try {
         if (!query.routes) {
           set.status = 400
           return { error: 'routes is required (comma-separated feedId_routeId pairs)' }
         }
-        const pairs = query.routes.split(',').map(s => s.trim()).filter(Boolean)
+        const pairs = query.routes.split(',').map(s => s.trim()).filter(Boolean).slice(0, LIMITS.maxListItems)
         const routes = pairs.map(pair => {
           const idx = pair.indexOf('_')
           if (idx === -1) return null
@@ -751,53 +705,17 @@ export function createTransitRoutes(deps: {
         const { getBikesAllowed } = await import('../services/gtfs.service')
         return await getBikesAllowed(routes)
       } catch (err) {
-        set.status = 500
-        return { error: 'Failed to check bikes allowed', detail: err instanceof Error ? err.message : String(err) }
+        return serverError(request, set, err, 'Failed to check bikes allowed')
       }
     }, {
       query: t.Object({ routes: t.String() }),
       detail: { summary: 'Batch check bikes_allowed for routes', tags: ['Transit'] },
     })
 
-    // ── POST /transit/discover-rt-urls ─────────────────────────────────
-    .post('/discover-rt-urls', async ({ body, set }) => {
-      try {
-        const result = await discoverRtUrls(
-          body.feedId || undefined,
-          undefined, // uses TRANSITLAND_API_KEY from env
-          fetchFn,
-        )
-
-        return {
-          checked: result.checked,
-          updated: result.updated,
-          errors: result.errors,
-        }
-      } catch (err) {
-        set.status = 500
-        return {
-          error: 'Failed to discover RT URLs',
-          detail: err instanceof Error ? err.message : String(err),
-        }
-      }
-    }, {
-      body: t.Object({
-        feedId: t.Optional(t.String()),
-      }),
-      detail: {
-        summary: 'Discover GTFS-RT feed URLs',
-        description:
-          'Queries Transitland to discover GTFS-RT feed URLs (vehicle positions, ' +
-          'trip updates, alerts) for existing feeds. If feedId is provided, only ' +
-          'discovers for that feed; otherwise discovers for all feeds missing RT URLs.',
-        tags: ['Transit'],
-      },
-    })
-
     // ── Station infrastructure ────────────────────────────────────
 
     // Station detail: geometry, entrances, buildings
-    .get('/station/:feedId/:stopId', async ({ params, set }) => {
+    .get('/station/:feedId/:stopId', async ({ params, set, request }) => {
       try {
         const result = await getStationDetail(params.feedId, params.stopId)
         if (!result) {
@@ -806,11 +724,7 @@ export function createTransitRoutes(deps: {
         }
         return result
       } catch (err) {
-        set.status = 500
-        return {
-          error: 'Failed to get station detail',
-          detail: err instanceof Error ? err.message : String(err),
-        }
+        return serverError(request, set, err, 'Failed to get station detail')
       }
     }, {
       params: t.Object({
@@ -835,7 +749,7 @@ export function createTransitRoutes(deps: {
     })
 
     // Nearest entrance to a coordinate
-    .get('/nearest-entrance', async ({ query, set }) => {
+    .get('/nearest-entrance', async ({ query, set, request }) => {
       try {
         const lat = parseFloat(query.lat)
         const lon = parseFloat(query.lon)
@@ -855,11 +769,7 @@ export function createTransitRoutes(deps: {
         }
         return result
       } catch (err) {
-        set.status = 500
-        return {
-          error: 'Failed to find nearest entrance',
-          detail: err instanceof Error ? err.message : String(err),
-        }
+        return serverError(request, set, err, 'Failed to find nearest entrance')
       }
     }, {
       query: t.Object({

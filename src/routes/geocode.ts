@@ -1,4 +1,5 @@
 import Elysia, { t } from 'elysia'
+import { clampInt, clampNumber, LIMITS } from '../lib/params'
 import { apiAuth, apiAuthAfter } from '../middleware/api-auth'
 import {
   reverseGeocode as _reverseGeocode,
@@ -42,8 +43,8 @@ export function createGeocodeRoutes(deps = {
       '/geocode/reverse',
       async ({ query, request }) => {
         return deps.reverseGeocodePlaces(Number(query.lat), Number(query.lng), {
-          limit: query.limit ? Number(query.limit) : undefined,
-          radiusM: query.radius ? Number(query.radius) : undefined,
+          limit: clampInt(query.limit, { min: 1, max: 50 }),
+          radiusM: clampNumber(query.radius, { min: 1, max: LIMITS.maxNearbyRadiusM }),
           signal: request.signal,
         })
       },
