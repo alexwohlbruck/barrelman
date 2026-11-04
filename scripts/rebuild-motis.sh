@@ -40,7 +40,6 @@ set -euo pipefail
 # but no compose plugin, and whose working directory would resolve to a
 # different compose project name than the operator's.
 CONTAINER="barrelman-motis"
-MOTIS_IMAGE="ghcr.io/motis-project/motis:latest"
 NETWORK="barrelman_default"
 GTFS_VOL="barrelman_barrelman-gtfs-data"
 OSM_VOL="barrelman_barrelman-osm-data"
@@ -51,6 +50,10 @@ if ! docker ps -a --format '{{.Names}}' | grep -q "^${CONTAINER}\$"; then
   log "container '${CONTAINER}' not found — skipping rebuild"
   exit 0
 fi
+
+# Import with the exact image the server runs: a dataset from a newer MOTIS
+# crash-loops an older server. Upgrading MOTIS means recreating the container first.
+MOTIS_IMAGE="$(docker inspect "$CONTAINER" --format '{{.Image}}')"
 
 BARRELMAN_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$BARRELMAN_DIR"
