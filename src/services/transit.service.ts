@@ -15,6 +15,8 @@ import {
   pricingForLeg,
   type RentalPricing,
 } from './rental-pricing.service'
+import { attributionFor, excludedFeedIds, servableOnly } from './feed-license.service'
+import type { FeedAttribution } from '../lib/feed-license'
 
 // ── Types ───────────────────────────────────────────────────────────
 
@@ -47,6 +49,8 @@ export const ALL_TRANSIT_MODES: TransitMode[] = [
 
 export interface TransitRouteResponse {
   itineraries: TransitItinerary[]
+  /** One credit line per GTFS feed whose trips appear in the itineraries. */
+  attribution?: FeedAttribution[]
   metadata?: {
     searchWindow: number
     nextPageCursor?: string
@@ -971,14 +975,55 @@ export async function getIntermodalRoute(
   const result = walkOnly
     ? await planViaStations(request, fetchFn)
     : await planFromCoordinates(request, fetchFn)
-  result.itineraries = rankItineraries(result.itineraries, request.numItineraries ?? 5, request.arriveBy)
+  result.itineraries = rankItineraries(
+    await withoutExcludedFeeds(result.itineraries),
+    request.numItineraries ?? 5,
+    request.arriveBy,
+  )
 
   // Attach the full set of interchangeable lines to each transit leg, so the
   // rider sees every train that runs the segment directly — independent of
   // which ones MOTIS's time-optimal search happened to surface.
   await enrichInterchangeableRoutes(result.itineraries)
 
+  result.attribution = await itineraryAttribution(result.itineraries)
   return result
+}
+
+/** The feed a transit leg rode, from its MOTIS-qualified boarding stop. */
+function legFeedId(leg: TransitLeg): string | undefined {
+  if (!leg.transitLeg || !leg.from.stopId) return undefined
+  return splitMotisStopId(leg.from.stopId).feedId || undefined
+}
+
+/**
+ * Drop itineraries that ride a feed the licence policy excludes. MOTIS is
+ * built without such feeds, so this only matters between a licence refresh
+ * and the next rebuild.
+ */
+async function withoutExcludedFeeds(itineraries: TransitItinerary[]): Promise<TransitItinerary[]> {
+  const excluded = await excludedFeedIds()
+  if (!excluded.size) return itineraries
+  return itineraries.filter((it) =>
+    it.legs.every((leg) => {
+      const feedId = legFeedId(leg)
+      return !feedId || !excluded.has(feedId)
+    }),
+  )
+}
+
+function itineraryAttribution(itineraries: TransitItinerary[]): Promise<FeedAttribution[]> {
+  const agencies = new Map<string, string>()
+  const feedIds: string[] = []
+  for (const it of itineraries) {
+    for (const leg of it.legs) {
+      const feedId = legFeedId(leg)
+      if (!feedId) continue
+      feedIds.push(feedId)
+      if (leg.agencyName && !agencies.has(feedId)) agencies.set(feedId, leg.agencyName)
+    }
+  }
+  return attributionFor(feedIds, agencies)
 }
 
 /**
@@ -1036,7 +1081,7 @@ export async function getNearbyStops(
     LIMIT ${limit}
   `)
 
-  return (result as any[]).map((row: any) => ({
+  const stops = (result as any[]).map((row: any) => ({
     stopId: row.stop_id,
     feedId: row.feed_id,
     stopName: row.stop_name || '',
@@ -1049,6 +1094,7 @@ export async function getNearbyStops(
     wheelchairBoarding: row.wheelchair_boarding ?? 0,
     platformCode: row.platform_code,
   }))
+  return servableOnly(stops, (s) => s.feedId)
 }
 
 /**
@@ -1192,8 +1238,8 @@ export async function getRoutesForStop(
     via: row.at_station ? 'station' : 'transfer',
   }))
 
-  if (!nearby) return inSystem
-  return [...inSystem, ...(await routesNearby(nearby, inSystem))]
+  const routes = nearby ? [...inSystem, ...(await routesNearby(nearby, inSystem))] : inSystem
+  return servableOnly(routes, (r) => r.feedId)
 }
 
 /**

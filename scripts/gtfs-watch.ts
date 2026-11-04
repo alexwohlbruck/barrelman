@@ -24,7 +24,8 @@
  *              Does NOT modify the database.
  *   --record   Fetch current upstream shas and write them to gtfs_feeds. Used to
  *              establish the baseline on first run, and to commit the new state
- *              after a successful re-import.
+ *              after a successful re-import. Also refreshes each feed's licence
+ *              terms from the same record.
  *
  * Env: DATABASE_URL (required), TRANSITLAND_API_KEY (required).
  */
@@ -40,7 +41,36 @@ if (!DB_URL) { console.error('gtfs-watch: DATABASE_URL is required'); process.ex
 if (!API_KEY) { console.error('gtfs-watch: TRANSITLAND_API_KEY is required'); process.exit(2) }
 
 interface FeedRow { feed_id: string; onestop_id: string; region: string | null; feed_version_sha: string | null }
-interface Upstream { sha1: string | null; fetchedAt: string | null }
+interface Upstream { sha1: string | null; fetchedAt: string | null; license: License | null }
+
+/**
+ * The licence columns, read the way src/lib/feed-license.ts reads them. Copied
+ * rather than imported because this script must run with only `postgres`.
+ */
+type License = Record<(typeof LICENSE_FIELDS)[number][1], string | null>
+const LICENSE_FIELDS = [
+  ['spdx_identifier', 'license_spdx'],
+  ['url', 'license_url'],
+  ['use_without_attribution', 'license_use_without_attribution'],
+  ['create_derived_product', 'license_create_derived_product'],
+  ['redistribution_allowed', 'license_redistribution_allowed'],
+  ['commercial_use_allowed', 'license_commercial_use_allowed'],
+  ['share_alike_optional', 'license_share_alike_optional'],
+  ['attribution_text', 'license_attribution_text'],
+  ['attribution_instructions', 'license_attribution_instructions'],
+] as const
+
+function readLicense(raw: any): License | null {
+  if (!raw || typeof raw !== 'object') return null
+  const out = {} as License
+  let any = false
+  for (const [from, to] of LICENSE_FIELDS) {
+    const v = typeof raw[from] === 'string' && raw[from].trim() ? raw[from].trim() : null
+    out[to] = v
+    if (v) any = true
+  }
+  return any ? out : null
+}
 
 /** Query Transitland for a feed's current version sha1 + fetched_at. */
 async function upstreamVersion(onestopId: string): Promise<Upstream | null> {
@@ -49,9 +79,10 @@ async function upstreamVersion(onestopId: string): Promise<Upstream | null> {
     const res = await fetch(url)
     if (!res.ok) return null
     const data = await res.json() as any
-    const fv = data?.feeds?.[0]?.feed_state?.feed_version
+    const feed = data?.feeds?.[0]
+    const fv = feed?.feed_state?.feed_version
     if (!fv) return null
-    return { sha1: fv.sha1 ?? null, fetchedAt: fv.fetched_at ?? null }
+    return { sha1: fv.sha1 ?? null, fetchedAt: fv.fetched_at ?? null, license: readLicense(feed?.license) }
   } catch {
     return null
   }
@@ -63,6 +94,10 @@ async function main() {
     // Self-heal schema: the sha columns may not exist on older installs.
     await sql`ALTER TABLE gtfs_feeds ADD COLUMN IF NOT EXISTS feed_version_sha TEXT`
     await sql`ALTER TABLE gtfs_feeds ADD COLUMN IF NOT EXISTS feed_version_fetched_at TIMESTAMPTZ`
+    for (const [, column] of LICENSE_FIELDS) {
+      await sql`ALTER TABLE gtfs_feeds ADD COLUMN IF NOT EXISTS ${sql(column)} TEXT`
+    }
+    await sql`ALTER TABLE gtfs_feeds ADD COLUMN IF NOT EXISTS license_fetched_at TIMESTAMPTZ`
 
     const feeds = await sql<FeedRow[]>`
       SELECT feed_id, onestop_id, region, feed_version_sha
@@ -97,6 +132,11 @@ async function main() {
           UPDATE gtfs_feeds
           SET feed_version_sha = ${u.sha1},
               feed_version_fetched_at = ${u.fetchedAt ? new Date(u.fetchedAt) : null}
+          WHERE onestop_id = ${f.onestop_id}
+        `
+        const license = u.license ?? Object.fromEntries(LICENSE_FIELDS.map(([, c]) => [c, null]))
+        await sql`
+          UPDATE gtfs_feeds SET ${sql(license)}, license_fetched_at = NOW()
           WHERE onestop_id = ${f.onestop_id}
         `
         recorded++

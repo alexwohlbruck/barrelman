@@ -326,6 +326,11 @@ services:
       # MOTIS default 60s. Set in .env (e.g. 600) to throttle dev polling.
       MOTIS_RT_UPDATE_INTERVAL: ${MOTIS_RT_UPDATE_INTERVAL:-}
       GTFS_DATA_DIR: /gtfs-zips
+      # Read by the "Refresh Feed Licences" task, which runs in this process.
+      TRANSITLAND_API_KEY: ${TRANSITLAND_API_KEY:-}
+      # Filters transit responses and the generated motis/config.yml here; the
+      # GTFS import reads it in barrelman-ops.
+      GTFS_LICENCE_POLICY: ${GTFS_LICENCE_POLICY:-}
       # Read here as well as in barrelman-ops, because scripts/rebuild-motis.sh
       # generates motis/config.yml with `docker exec barrelman` — the selection
       # is resolved in THIS container, not in ops. Left unset the API silently
@@ -452,6 +457,13 @@ services:
       BARRELMAN_AUTO_SUSPEND_HOURS: ${BARRELMAN_AUTO_SUSPEND_HOURS:-}
       BARRELMAN_MULTI_ACCOUNT_THRESHOLD: ${BARRELMAN_MULTI_ACCOUNT_THRESHOLD:-}
 
+      # ── Monitoring and alerts (all optional) ─────────────────────────
+      SENTRY_DSN: ${SENTRY_DSN:-}
+      SENTRY_ENVIRONMENT: ${SENTRY_ENVIRONMENT:-}
+      ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL:-}
+      ALERT_WEBHOOK_FORMAT: ${ALERT_WEBHOOK_FORMAT:-}
+      ALERT_DEPENDENCY_CYCLES: ${ALERT_DEPENDENCY_CYCLES:-}
+
       # ── Terms of service ─────────────────────────────────────────────
       BARRELMAN_TOS_URL: ${BARRELMAN_TOS_URL:-}
       BARRELMAN_TOS_VERSION: ${BARRELMAN_TOS_VERSION:-}
@@ -520,6 +532,7 @@ services:
       MOTIS_URL: http://barrelman-motis:8080
       TRANSITLAND_API_KEY: ${TRANSITLAND_API_KEY:-}
       GTFS_RT_CREDENTIALS: ${GTFS_RT_CREDENTIALS:-}
+      GTFS_LICENCE_POLICY: ${GTFS_LICENCE_POLICY:-}
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
       # The one variable that decides coverage. Read by the importers that run
       # here, not by the API — see https://docs.barrelman.dev/self-hosting/regions.
@@ -586,6 +599,14 @@ services:
       # linux build at ./data/portolan/bin/portolan on the host, or point this
       # somewhere else.
       PORTOLAN_BIN: ${PORTOLAN_BIN:-/portolan-data/bin/portolan}
+      # ── Monitoring and alerts (all optional) ───────────────────────
+      # The worker reports its own errors, alerts on scheduled process jobs,
+      # and checks disk usage on the volumes mounted below.
+      SENTRY_DSN: ${SENTRY_DSN:-}
+      SENTRY_ENVIRONMENT: ${SENTRY_ENVIRONMENT:-}
+      ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL:-}
+      ALERT_WEBHOOK_FORMAT: ${ALERT_WEBHOOK_FORMAT:-}
+      ALERT_DISK_PERCENT: ${ALERT_DISK_PERCENT:-}
       # scripts/*.sh docker-exec into these sibling containers by name.
       DB_CONTAINER: barrelman-db
       # State backups (scripts/backup-db.sh, scripts/restore-db.sh). Dumps land
@@ -605,6 +626,9 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - barrelman-osm-data:/data
+      # Read-only and never written: only so the disk alert can statfs the
+      # database volume, which is the one an import fills.
+      - barrelman-data:/postgres-data:ro
       - barrelman-gtfs-data:/gtfs-data
       # scripts/generate-pelias-config.ts rewrites pelias/pelias.json, and the
       # Pelias services bind-mount that file from the host. pelias/ is in

@@ -178,3 +178,32 @@ describe('GTFS-RT feeds in the MOTIS config', () => {
     feedRows = []
   })
 })
+
+describe('the licence policy in the MOTIS config', () => {
+  const feedQuery = () => statements.find((s) => sqlText(s).includes('FROM gtfs_feeds'))
+  const saved = process.env.GTFS_LICENCE_POLICY
+
+  beforeEach(() => {
+    statements = []
+    resolved = { isGlobal: true, boxes: [] }
+  })
+
+  test('reads every feed when the policy is off', async () => {
+    delete process.env.GTFS_LICENCE_POLICY
+    await generateMotisConfig()
+    expect(sqlText(feedQuery())).not.toContain('license_commercial_use_allowed')
+  })
+
+  test('leaves out feeds that forbid commercial use or redistribution under `commercial`', async () => {
+    process.env.GTFS_LICENCE_POLICY = 'commercial'
+    try {
+      await generateMotisConfig()
+      const text = sqlText(feedQuery())
+      expect(text).toContain("license_commercial_use_allowed IS DISTINCT FROM 'no'")
+      expect(text).toContain("license_redistribution_allowed IS DISTINCT FROM 'no'")
+    } finally {
+      if (saved === undefined) delete process.env.GTFS_LICENCE_POLICY
+      else process.env.GTFS_LICENCE_POLICY = saved
+    }
+  })
+})
