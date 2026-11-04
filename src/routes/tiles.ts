@@ -7,6 +7,7 @@ import { resolveTileBundle, tileSourceCount } from '../config/tile-bundles'
 import { createDeckTiles, DECK_TILE_ZOOMS, encodeDeckTile, withDeckField, workerDeckTileBuilder, type DeckTile } from '../lib/bridge-mesh/tile-pieces'
 import { bridgeMeshDirectory } from '../lib/bridge-mesh/files'
 import { deckFilesIn } from '../lib/bridge-mesh/deck-lookup'
+import { createTileJsonService, TileJsonError, urlKeyFor, type MartinFetcher } from '../services/tilejson.service'
 
 function getMartinUrl() {
   return process.env.MARTIN_URL || 'http://barrelman-martin:3000'
@@ -18,9 +19,14 @@ function getMartinUrl() {
  * `/:source/...` route carries a `source` param; portolan tiles and the JSON
  * beside them are one unit each. A malformed source is one unit: the handler
  * refuses it with a 400 before reaching Martin.
+ *
+ * A TileJSON (`/:source` alone, as `basemap.json`) is free: a map fetches it once
+ * per load, and charging for it would bill the act of opening a map before a
+ * single tile is drawn. It still needs a key and passes the throttle.
  */
 export function tileUnits({ params }: { params?: Record<string, string | undefined> }): number {
   const source = params?.source
+  if (source?.endsWith('.json') && params?.z === undefined) return 0
   if (!source || !SOURCE_RE.test(source)) return 1
   // The guard multiplies units by the tiles unit price; prices live in plans.ts.
   return tileCredits(source, tileSourceCount(source)) / CREDIT_COSTS.tiles
@@ -108,7 +114,12 @@ export function etagMatches(ifNoneMatch: string | undefined, etag: string): bool
 }
 
 export function createTileRoutes(
-  deps: { fetchTile?: TileFetcher; portolanTilesDir?: string; deckTile?: (z: number, x: number, y: number) => Promise<DeckTile> } = {},
+  deps: {
+    fetchTile?: TileFetcher
+    fetchTileJson?: MartinFetcher
+    portolanTilesDir?: string
+    deckTile?: (z: number, x: number, y: number) => Promise<DeckTile>
+  } = {},
 ) {
   // `decompress: false` keeps Martin's gzip as it arrived, so the common case can
   // forward it untouched; see the tile route. Bun honours it at runtime, and
@@ -117,6 +128,8 @@ export function createTileRoutes(
     deps.fetchTile ||
     ((url: string) =>
       fetch(url, { headers: { 'accept-encoding': 'gzip' }, decompress: false } as RequestInit & { decompress: false }))
+  // Plain fetch for TileJSON: it is small, and the body has to be read as JSON.
+  const tileJsons = createTileJsonService({ fetchMartin: deps.fetchTileJson ?? ((url) => fetch(url)), martinUrl: getMartinUrl })
   const deckTile = deps.deckTile ?? createDeckTiles(deckFilesIn, workerDeckTileBuilder(bridgeMeshDirectory()))
 
   /**
@@ -348,6 +361,50 @@ export function createTileRoutes(
           summary: 'Portolan corrected-geometry tile',
           description:
             'Serves a static MVT tile from the portolan pyramid. 204 for tiles inside the pyramid with no features.\n\nFrom zoom 13, a `ribbons` feature riding a bridge deck or running through a tunnel carries an `elevation` property, in the format the Martin proxy describes for `bicycle_ways`, and a station, stop mark or route bullet on one carries its height. Heights are written into the pyramid when it is built.',
+        },
+      },
+    )
+    .get(
+      '/:source',
+      async ({ params, query, headers, set }) => {
+        // `/tiles/basemap.json`. The router cannot split a suffix off a
+        // parameter, so the `.json` is checked here; anything else under a
+        // bare `/tiles/<name>` is not a document we serve.
+        const match = /^(.+)\.json$/.exec(params.source)
+        if (!match) {
+          set.status = 404
+          return { error: 'Not found. TileJSON is at /tiles/<source>.json' }
+        }
+        const source = match[1]
+        if (!SOURCE_RE.test(source)) {
+          set.status = 400
+          return { error: 'Invalid tile source' }
+        }
+        try {
+          const json = await tileJsons.tileJson(source, urlKeyFor(headers, query))
+          set.headers['content-type'] = 'application/json'
+          set.headers['cache-control'] = 'public, max-age=60'
+          set.headers[CORS] = '*'
+          return json
+        } catch (error) {
+          if (error instanceof TileJsonError) {
+            set.status = error.status
+            return { error: error.message }
+          }
+          throw error
+        }
+      },
+      {
+        params: t.Object({
+          source: t.String({ description: 'Tile source with a `.json` suffix: one name (`basemap.json`), a bundle (`detail.json`), a Martin composite (`buildings_3d,parking_areas.json`), or `landmarks.json`' }),
+        }),
+        detail: {
+          tags: ['Tiles'],
+          summary: 'TileJSON for a tile source',
+          description:
+            'A [TileJSON 3.0.0](https://github.com/mapbox/tilejson-spec/tree/master/3.0.0) document for a source or bundle: its zoom range, bounds, `vector_layers`, the `attribution` its data requires, and a `tiles` URL template on this API. Point a MapLibre `vector` source\'s `url` at it and the attribution control fills itself in.\n\n' +
+            'If the request carried its key as `?api_key=`, the tile URL carries the same key, so a map library can fetch tiles with no further setup. A key sent as a Bearer header is never written into the document; a client that authenticates by header adds the key to tile requests itself (MapLibre\'s `transformRequest`).\n\n' +
+            'Needs a key with the `tiles` scope and costs no credits.',
         },
       },
     )

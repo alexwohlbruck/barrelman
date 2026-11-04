@@ -19,6 +19,7 @@ import { adminUserRoutes } from './routes/admin-users'
 import { adminConsoleRoutes, adminConsoleConfigRoutes } from './routes/admin-console'
 import { consoleUiRoutes } from './lib/console-ui'
 import { tileRoutes } from './routes/tiles'
+import { styleRoutes } from './routes/styles'
 import { bridgeMeshRoutes } from './routes/bridge-meshes'
 import { landmarkRoutes } from './routes/landmarks'
 import { graphhopperRoutes } from './routes/graphhopper'
@@ -179,6 +180,7 @@ const app = new Elysia()
   .use(bridgeMeshRoutes)
   .use(landmarkRoutes)
   .use(tileRoutes)
+  .use(styleRoutes)
   .use(graphhopperRoutes)
   .use(routeRoutes)
   .use(matchRoutes)

@@ -67,11 +67,15 @@ underlying error for anything unreachable.
 
 ## Example requests
 
+Each example is shown with curl, JavaScript (`fetch`, Node 18 or later)
+and Python ([requests](https://requests.readthedocs.io)). The JavaScript and
+Python versions read the key from the `BARRELMAN_API_KEY` environment variable.
+
 ### Search for places
 
 `POST /search` takes a JSON body. Provide a `query` for text search, and optionally `lat`/`lng` (plus `radius`) to bias and rank results by proximity.
 
-```bash
+```bash title="curl"
 curl -X POST https://api.barrelman.dev/search \
   -H "Authorization: Bearer $BARRELMAN_API_KEY" \
   -H "Content-Type: application/json" \
@@ -82,6 +86,42 @@ curl -X POST https://api.barrelman.dev/search \
     "radius": 2000,
     "limit": 10
   }'
+```
+
+```js title="JavaScript"
+const res = await fetch('https://api.barrelman.dev/search', {
+  method: 'POST',
+  headers: {
+    Authorization: `Bearer ${process.env.BARRELMAN_API_KEY}`,
+    'Content-Type': 'application/json',
+  },
+  body: JSON.stringify({
+    query: 'coffee',
+    lat: 35.2271,
+    lng: -80.8431,
+    radius: 2000,
+    limit: 10,
+  }),
+})
+const data = await res.json()
+```
+
+```python title="Python"
+import os
+import requests
+
+res = requests.post(
+    "https://api.barrelman.dev/search",
+    headers={"Authorization": f"Bearer {os.environ['BARRELMAN_API_KEY']}"},
+    json={
+        "query": "coffee",
+        "lat": 35.2271,
+        "lng": -80.8431,
+        "radius": 2000,
+        "limit": 10,
+    },
+)
+data = res.json()
 ```
 
 ### Brand autocomplete
@@ -97,16 +137,36 @@ curl "https://api.barrelman.dev/brands?q=Starbucks&limit=8" \
 
 `GET /geocode` turns a coordinate into a human-readable address.
 
-```bash
+```bash title="curl"
 curl "https://api.barrelman.dev/geocode?lat=35.2271&lng=-80.8431" \
   -H "Authorization: Bearer $BARRELMAN_API_KEY"
+```
+
+```js title="JavaScript"
+const params = new URLSearchParams({ lat: '35.2271', lng: '-80.8431' })
+const res = await fetch(`https://api.barrelman.dev/geocode?${params}`, {
+  headers: { Authorization: `Bearer ${process.env.BARRELMAN_API_KEY}` },
+})
+const data = await res.json()
+```
+
+```python title="Python"
+import os
+import requests
+
+res = requests.get(
+    "https://api.barrelman.dev/geocode",
+    params={"lat": 35.2271, "lng": -80.8431},
+    headers={"Authorization": f"Bearer {os.environ['BARRELMAN_API_KEY']}"},
+)
+data = res.json()
 ```
 
 ### Plan a transit trip
 
 `POST /transit/route` plans a trip between two coordinates. `from` and `to` are `{ lat, lng }` objects. Each itinerary walks from `from` to a station within `maxWalkDistance` (default 1000 m), rides, and walks on to `to`. Itineraries come back in order of arrival.
 
-```bash
+```bash title="curl"
 curl -X POST https://api.barrelman.dev/transit/route \
   -H "Authorization: Bearer $BARRELMAN_API_KEY" \
   -H "Content-Type: application/json" \
@@ -117,11 +177,43 @@ curl -X POST https://api.barrelman.dev/transit/route \
   }'
 ```
 
+```js title="JavaScript"
+const res = await fetch('https://api.barrelman.dev/transit/route', {
+  method: 'POST',
+  headers: {
+    Authorization: `Bearer ${process.env.BARRELMAN_API_KEY}`,
+    'Content-Type': 'application/json',
+  },
+  body: JSON.stringify({
+    from: { lat: 40.7527, lng: -73.9772 },
+    to: { lat: 40.6413, lng: -73.7781 },
+    numItineraries: 3,
+  }),
+})
+const data = await res.json()
+```
+
+```python title="Python"
+import os
+import requests
+
+res = requests.post(
+    "https://api.barrelman.dev/transit/route",
+    headers={"Authorization": f"Bearer {os.environ['BARRELMAN_API_KEY']}"},
+    json={
+        "from": {"lat": 40.7527, "lng": -73.9772},
+        "to": {"lat": 40.6413, "lng": -73.7781},
+        "numItineraries": 3,
+    },
+)
+data = res.json()
+```
+
 ### Match a GPS trace to the road
 
 `POST /match` snaps a trace to the road network and returns the path it most likely took, with elevation and path details. Points may be seconds apart (a GPS log) or many minutes apart (photo geotags): gaps wider than `max_gap_meters` (400 m) or `max_gap_seconds` (60 s) are routed rather than matched, and the `segments` array says which stretches were which. A GPX file works too — send it as `application/gpx+xml` with `?profile=bike`.
 
-```bash
+```bash title="curl"
 curl -X POST https://api.barrelman.dev/match \
   -H "Authorization: Bearer $BARRELMAN_API_KEY" \
   -H "Content-Type: application/json" \
@@ -136,7 +228,58 @@ curl -X POST https://api.barrelman.dev/match \
   }'
 ```
 
+```js title="JavaScript"
+const res = await fetch('https://api.barrelman.dev/match', {
+  method: 'POST',
+  headers: {
+    Authorization: `Bearer ${process.env.BARRELMAN_API_KEY}`,
+    'Content-Type': 'application/json',
+  },
+  body: JSON.stringify({
+    profile: 'bike',
+    snap_prevention: ['bridge', 'motorway'],
+    points: [
+      { lat: 35.2272, lon: -80.8431, time: '2026-05-01T10:00:00Z' },
+      { lat: 35.21, lon: -80.8098, time: '2026-05-01T10:20:00Z' },
+      { lat: 35.2146, lon: -80.78, time: '2026-05-01T10:40:00Z' },
+    ],
+  }),
+})
+const data = await res.json()
+```
+
+```python title="Python"
+import os
+import requests
+
+res = requests.post(
+    "https://api.barrelman.dev/match",
+    headers={"Authorization": f"Bearer {os.environ['BARRELMAN_API_KEY']}"},
+    json={
+        "profile": "bike",
+        "snap_prevention": ["bridge", "motorway"],
+        "points": [
+            {"lat": 35.2272, "lon": -80.8431, "time": "2026-05-01T10:00:00Z"},
+            {"lat": 35.2100, "lon": -80.8098, "time": "2026-05-01T10:20:00Z"},
+            {"lat": 35.2146, "lon": -80.7800, "time": "2026-05-01T10:40:00Z"},
+        ],
+    },
+)
+data = res.json()
+```
+
 `snap_prevention` keeps a point taken under an overpass from landing on the road above it. `snapped_points` gives each input point's position on the returned path.
+
+### Draw a map
+
+`GET /styles/basemap.json` is a MapLibre style for the basemap. Map libraries cannot set headers, so tile and style URLs take the key as `?api_key=`. See [Maps](/usage/maps) for a working page in a few lines.
+
+```js
+new maplibregl.Map({
+  container: 'map',
+  style: 'https://api.barrelman.dev/styles/basemap.json?api_key=YOUR_KEY',
+})
+```
 
 See the [API Reference](/api) for the full parameter list on every endpoint.
 
@@ -145,3 +288,13 @@ See the [API Reference](/api) for the full parameter list on every endpoint.
 Maps and results drawn from Barrelman must credit OpenStreetMap and the other
 sources behind them. See [Attribution](/usage/attribution) for what to show and
 how to set it in MapLibre.
+
+## Support
+
+Email [support@barrelman.dev](mailto:support@barrelman.dev). If a request
+failed, include the `X-Request-Id` header from its response. Every response
+carries one, and it lets us find the request in our logs. See
+[Stability and errors](/usage/stability) for what the error bodies contain.
+
+Current availability, by endpoint group, is on the
+[status page](https://barrelman.dev/status).
