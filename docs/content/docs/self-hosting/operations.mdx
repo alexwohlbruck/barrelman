@@ -1,6 +1,6 @@
 ---
 title: Operations
-description: Upgrading, scheduling refreshes, refreshing OSM and transit data, backups, and rotating secrets.
+description: Upgrading, scheduling refreshes, refreshing OSM and transit data, monitoring and alerts, backups, and rotating secrets.
 ---
 
 ## Upgrading
@@ -321,6 +321,85 @@ has actually changed upstream — it compares each imported feed's version sha
 against Transitland's. That's what the seeded GTFS schedule runs. Its first run
 only records a baseline; it can't detect drift until it has a prior sha to
 compare against.
+
+## Monitoring and alerts
+
+Barrelman can tell you when something breaks instead of waiting for a user to
+notice. There are two independent pieces, both off until configured; the
+variables are listed under [configuration](/self-hosting/configuration#monitoring-and-alerts).
+
+### Alerts to a webhook
+
+Set `ALERT_WEBHOOK_URL` on `barrelman` and `barrelman-ops` and an alert is
+POSTed when:
+
+| What | When it fires | Recovery |
+|---|---|---|
+| A scheduled job fails | A run started by a schedule ends *failed*, including one the worker stopped heartbeating on. Runs you start by hand never alert | When the next run of that schedule succeeds |
+| A required service is down | Postgres, GraphHopper, Martin or MOTIS fails the `/health` probe on three consecutive checks, a minute apart (`ALERT_DEPENDENCY_CYCLES`). Pelias and speech synthesis are optional and never alert | When the probe passes again |
+| A data volume is filling up | A volume mounted in `barrelman-ops`, including the Postgres volume (mounted read-only for this check), is at least `ALERT_DISK_PERCENT` full (default 90). Checked every ten minutes, repeated every six hours while it stays above | When it drops back below |
+
+Repeats are rate-limited: the same alert is not sent twice within ten minutes,
+or an hour for a schedule that keeps failing. A recovery always goes out, and a
+failure after a recovery alerts straight away. A webhook that can't be reached
+is logged and never affects the job or request that triggered it. Service and
+disk alerts are retried on the next check until one is delivered; a job alert
+is sent once.
+
+Error text in an alert has URLs, IP addresses, `host:port` pairs, emails and
+keys masked, since anyone who knows an ntfy topic's name can read it.
+
+`ALERT_WEBHOOK_FORMAT` picks the payload:
+
+- `json` (default) — `{ source, key, severity, title, message, timestamp }`,
+  where `severity` is `critical`, `warning` or `resolved`.
+- `slack` — `{ text }`, for Slack incoming webhooks and the Slack-compatible
+  endpoints of Discord and Mattermost.
+- `ntfy` — a plain-text body with `Title`, `Priority` and `Tags` headers.
+
+[ntfy](https://ntfy.sh) is the quickest way to get alerts on a phone. Pick a
+topic name nobody will guess, subscribe to it in the ntfy app, and point
+Barrelman at it:
+
+```dotenv
+ALERT_WEBHOOK_URL=https://ntfy.sh/barrelman-alerts-8f3k2q
+ALERT_WEBHOOK_FORMAT=ntfy
+```
+
+Then `docker compose up -d` to apply it. A self-hosted ntfy server works the
+same way with its own topic URL. Failures arrive as urgent, disk warnings as high
+priority and recoveries as normal ones.
+
+### Error tracking
+
+Set `SENTRY_DSN` and both processes report unhandled errors and requests that
+fail with a 5xx to Sentry, tagged with the release (`barrelman@<version>`) and
+`SENTRY_ENVIRONMENT`. Any Sentry-compatible service, such as a self-hosted
+GlitchTip, accepts the same DSN. Requests answered with a 4xx are not reported.
+
+Nothing identifying is sent. Request bodies, headers, cookies and query strings
+are dropped, API keys and email addresses are masked in error messages, and the
+SDK's log, HTTP and request-data integrations are turned off. Without a DSN the
+SDK is never loaded.
+
+### Uptime from outside
+
+Both of the above run inside the stack, so neither can tell you the host itself
+is down. Point an external uptime monitor (Uptime Kuma on another machine,
+UptimeRobot, Better Stack, a cron job on a different server) at the public
+health endpoint:
+
+```bash
+curl -fsS https://api.example.com/health
+```
+
+It is unauthenticated and cached for a few seconds, so polling it every minute
+costs nothing. It answers 200 even when something behind it is down, with
+`status` set to `ok`, `degraded` (a required service other than Postgres is
+down) or `error` (Postgres is unreachable). So check the body as well as the
+response: most monitors have a keyword check, and `"status":"ok"` is the one to
+look for. Whether `degraded` should page you depends on how much transit or
+routing matters to you.
 
 ## Backups
 

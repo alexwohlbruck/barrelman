@@ -1,4 +1,5 @@
 import { requestIdFor } from './request-id'
+import { captureError } from './error-tracking'
 
 export interface ServerErrorBody {
   error: string
@@ -23,6 +24,9 @@ export function serverError(
   const requestId = requestIdFor(request)
   const { pathname } = new URL(request.url)
   console.error(`[error] ${requestId} ${request.method} ${pathname}: ${message}`, err)
+  // Routes that catch their own errors answer here and never reach onError,
+  // so this is the only place those are reported. A no-op without SENTRY_DSN.
+  if (status >= 500) captureError(err, { tags: { method: request.method, path: pathname, requestId } })
   set.status = status
   return { error: message, requestId }
 }

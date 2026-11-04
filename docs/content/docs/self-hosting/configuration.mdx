@@ -399,6 +399,25 @@ for what is backed up and how to restore.
 | `BACKUP_S3_SECRET_ACCESS_KEY` | — | Its secret |
 | `BACKUP_S3_PREFIX` | `barrelman/` | Key prefix. Only objects named `<prefix>barrelman-*.dump` are listed or pruned, so other data in the bucket is safe. Use one prefix per instance: two instances on the same prefix prune each other's backups |
 
+## Monitoring and alerts
+
+All optional. With none of them set, nothing leaves the instance and the Sentry
+SDK is never loaded. What each alert means is in
+[monitoring and alerts](/self-hosting/operations#monitoring-and-alerts).
+
+| Variable | Default | Read by | Description |
+|---|---|---|---|
+| `SENTRY_DSN` | — | API, ops | Report unhandled errors and 5xx handler errors to Sentry or a Sentry-compatible service (GlitchTip works). Request bodies, headers, cookies, query strings, API keys and email addresses are stripped before sending |
+| `SENTRY_ENVIRONMENT` | `production` | API, ops | Environment tag on each event. The release tag is always `barrelman@<version>` |
+| `ALERT_WEBHOOK_URL` | — | API, ops | Where alerts are POSTed. An ntfy topic URL, a Slack incoming webhook, or any endpoint that accepts JSON |
+| `ALERT_WEBHOOK_FORMAT` | `json` | API, ops | `ntfy`, `slack` or `json`. Any other value falls back to `json` with a warning |
+| `ALERT_DISK_PERCENT` | `90` | ops | Alert when a data volume, the Postgres one included, is at least this full |
+| `ALERT_DEPENDENCY_CYCLES` | `3` | API | Consecutive failed health checks, a minute apart, before a required service alerts. The default rides out a GraphHopper cold start |
+
+Set the first four on both `barrelman` and `barrelman-ops`; the compose file
+forwards them to each. Scheduled jobs run in either process, so a webhook set on
+only one of them misses part of the job alerts.
+
 ## Landing-site demo
 
 Read by the `barrelman-landing` service in `docker-compose.dev.yml` (the
