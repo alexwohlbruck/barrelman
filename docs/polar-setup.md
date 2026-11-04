@@ -185,8 +185,16 @@ has. A Postgres advisory lock keeps passes on different replicas apart. Each
 pass also covers the cycle that just closed, so its last stretch is billed.
 
 Cycles on paid plans follow the subscription's period, so the meter and the
-allowance reset on the same day. Barrelman records the period from
-`subscription.*` webhooks and from the reconciliation task below.
+allowance reset on the same day. Barrelman records the subscription's
+`currentPeriodStart` once per subscription, from `subscription.*` webhooks or
+the reconciliation task below, and derives every later period from it. A
+resubscription on another day moves the anchor; overage already reported is
+matched by the days it covers, so it is never billed again under the new
+periods.
+
+Each pass looks at the open cycle and the one that just closed. If reporting is
+down for longer than a whole cycle, the cycles before that go unreported, and
+the reconciliation task's drift log is where that shows up.
 
 Set `POLAR_METER_USAGE=false` to disable reporting entirely and run the paid
 plans as flat-rate with soft limits.
