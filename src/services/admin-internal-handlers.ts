@@ -25,6 +25,7 @@ import {
 import { importLandmarks, type ImportResult } from './landmark-import.service'
 import { refreshFeedLicenses } from './gtfs.service'
 import { invalidateFeedTerms } from './feed-license.service'
+import { backfillLogoLicences } from '../lib/brand-logos'
 
 const IMPORT_DIR = join(import.meta.dir, '../../import')
 
@@ -109,6 +110,13 @@ export const INTERNAL_HANDLERS: Record<string, (log: LogFn) => Promise<void>> = 
     reportTask(log, await runResolveParentContextIncremental()),
   'admin:rebuild-tsvectors': async (log) => reportTask(log, await runRebuildTsvectors()),
   'admin:build-search-lexicon': async (log) => reportTask(log, await runBuildSearchLexicon()),
+
+  'brands:backfill-logo-licences': async (log) => {
+    log('Reading the Commons licence of every brand logo that has none on record …')
+    const r = await backfillLogoLicences(log)
+    log(`Done: ${r.answered}/${r.files} files answered by Commons`)
+    if (r.files && !r.answered) throw new Error('Commons answered for no file; check outbound access to commons.wikimedia.org')
+  },
 
   'gtfs:refresh-licences': async (log) => {
     log('Re-reading licence terms from Transitland for every feed with an onestop id …')

@@ -12,6 +12,7 @@
  * Also not backed up, though they are not import outputs:
  *   - boundary_catalog: re-fetched from Geofabrik by "Fetch Boundary Catalog".
  *   - brand_logos: a Wikidata cache that refills itself in the background.
+ *   - brand_logo_files: logo images, re-fetched from Commons on first request.
  *   - search_enrichment_state, schema_migrations: markers describing the data
  *     currently imported. Restored next to a different import they would claim
  *     work was done that was not.
