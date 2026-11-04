@@ -83,3 +83,28 @@ describe('backup and restore entries', () => {
     expect(SEEDS.filter((s) => !getScript(s.scriptId)).map((s) => s.scriptId)).toEqual([])
   })
 })
+
+/**
+ * The engine rebuilds take their options as flags and env vars only the script
+ * reads, so a renamed flag would leave a console checkbox that does nothing.
+ * "Roll back" is the one an operator reaches for when routing has just gone
+ * wrong.
+ */
+describe('engine rebuild entries', () => {
+  const root = resolve(import.meta.dir, '../..')
+
+  for (const id of ['routing-graphhopper', 'routing-motis']) {
+    it(`${id} passes only options its script reads`, () => {
+      const script = getScript(id)
+      if (script?.exec.kind !== 'process') throw new Error(`${id} is not a process script`)
+      const text = readFileSync(resolve(root, script.exec.args[0]), 'utf8')
+      const params = script.params ?? []
+      const flags = params.filter((p) => p.apply === 'flag').map((p) => p.flag ?? `--${p.name}`)
+      const envs = params.filter((p) => p.apply === 'env').map((p) => p.envVar ?? '')
+      expect(flags).toContain('--rollback')
+      // each flag is a case arm in the script's argument loop
+      expect(flags.filter((f) => !text.includes(`${f})`))).toEqual([])
+      expect(envs.filter((e) => !text.includes(`\${${e}:-`))).toEqual([])
+    })
+  }
+})

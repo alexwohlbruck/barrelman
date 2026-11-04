@@ -172,7 +172,7 @@ Downloads had nowhere to go. `./data/gtfs` must be mounted **read-write** into `
 
 **GraphHopper will not start, and dies before logging its version**
 
-The graph *build* outgrew the heap. Serving memory-maps the graph (`graph.dataaccess.default_type: MMAP`) and needs free RAM rather than heap, but importing the PBF and preparing landmarks run in heap — and an undersized `-Xmx` dies before GraphHopper logs its version, so the failure looks like a crash rather than an out-of-memory. Check `du -sh` on the `graph-cache` directory, raise `-Xmx` in `GRAPHHOPPER_JAVA_OPTS` above it, and re-run `scripts/rebuild-graphhopper.sh`.
+The graph *build* outgrew the heap. Serving memory-maps the graph (`graph.dataaccess.default_type: MMAP`) and needs free RAM rather than heap, but importing the PBF and preparing landmarks run in heap — and an undersized `-Xmx` dies before GraphHopper logs its version, so the failure looks like a crash rather than an out-of-memory. Check `du -sh` on the `graph-cache` directory, raise `-Xmx` in `GRAPHHOPPER_JAVA_OPTS` above it, and re-run `scripts/rebuild-graphhopper.sh`. The rebuild's own build container takes `GRAPHHOPPER_BUILD_JAVA_OPTS` when that is set, and its log is in `/tmp/graphhopper-build.log` in `barrelman-ops`.
 
 **Phantom out-of-system transfers**
 
@@ -229,7 +229,30 @@ The engine version moved under the dataset: you changed the MOTIS pin, or the ho
 
 **`Not a GraphHopper file /data/graph-cache/properties! Expected 'GH' as file marker`**
 
-A corrupt or half-written graph cache. GraphHopper will not rebuild over it — it just refuses to start, and a first boot with no PBF leaves exactly this skeleton behind. `scripts/rebuild-graphhopper.sh` wipes it from outside the container and restarts.
+A corrupt or half-written graph cache. GraphHopper will not rebuild over it — it just refuses to start, and a first boot with no PBF leaves exactly this skeleton behind. `scripts/rebuild-graphhopper.sh` builds a new graph in a separate container, swaps it in, and deletes the broken one rather than keeping it as `graph-cache.prev`. If a good `graph-cache.prev` exists, `--rollback` is faster.
+
+**A rebuild refuses to start: `not enough free space on the graph volume`**
+
+Rebuilds build the new graph or timetable beside the live one, so the volume needs about 1.2 times the current dataset free. The message gives both figures. The script deletes `graph-cache.prev` (or `data.prev`) itself when that makes enough room and the live dataset is serving. When the live one is down it keeps `.prev`, since that may be the only good copy, and asks you to decide. Free space on the volume (old extracts, leftover basemap sort files in `tmp/`, a `graph-cache.failed`), or delete `.prev` by hand once you know you won't roll back.
+
+**The GraphHopper build exits 137, or something else on the box is OOM-killed during a rebuild**
+
+Exit 137 is a kill, usually the OOM killer. The live graph is untouched. If the build ran alongside the serving JVM (`GRAPHHOPPER_BUILD_ALONGSIDE`), set it back to `false` or `auto`, or pass `--stop-server`. Otherwise lower `GRAPHHOPPER_BUILD_JAVA_OPTS`, or leave it unset so the heap is sized from available memory, and run the rebuild away from heavy SQL (the script warns when it starts beside a long-running statement).
+
+**A rebuild refuses to start: `an import container (barrelman-motis-import) is already running`**
+
+Or the same for `barrelman-graphhopper-build`. A rebuild is in progress, or an earlier one was killed outright and its container is still writing into `.next`. Check `docker ps` and the job list. When no rebuild is running, `docker rm -f` the container and start again.
+
+**Routing or transit got worse after a rebuild**
+
+Roll back to the dataset it replaced, then investigate:
+
+```bash
+docker compose exec barrelman-ops bash scripts/rebuild-graphhopper.sh --rollback
+docker compose exec barrelman-ops bash scripts/rebuild-motis.sh --rollback
+```
+
+Running the same command again returns to the new dataset. The next scheduled rebuild replaces `.prev`, so roll back before it runs. A rollback across an engine version change fails until the old image pin is restored.
 
 **`motis import` exits 1 having printed only its config**
 
