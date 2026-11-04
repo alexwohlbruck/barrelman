@@ -187,7 +187,42 @@ early.
 `rebuild-motis.sh` regenerates the config from the `gtfs_feeds` table, clean-rebuilds the timetable *and* street graph together — an in-place incremental import can leave the stop-to-street match index stale, which silently breaks routing to every stop — and restarts the server. The previous dataset is kept at `/data/data.prev` and restored automatically if the import fails.
 </Callout>
 
-Put `TRANSITLAND_API_KEY` in `.env` if you will refresh feeds regularly; it is already forwarded to `barrelman-ops`.
+Put `TRANSITLAND_API_KEY` in `.env` if you will refresh feeds regularly; it is already forwarded to `barrelman-ops` and to the API.
+
+#### Feed licences
+
+Every agency publishes its timetable under its own terms, and Transitland
+records them per feed: an SPDX identifier or licence URL, yes/no/unknown answers
+for commercial use, redistribution, derived products and use without
+attribution, and the attribution text the agency asks for. The import stores
+these in `gtfs_feeds` as it discovers each feed. Feeds imported before this
+existed, and terms an agency has changed since, are picked up by the console
+task **Refresh Feed Licences** (Scripts → GTFS / Transit), which re-reads every
+feed with a Transitland id. The **Data** view lists each feed's licence and
+counts the feeds that forbid commercial use.
+
+What is done with the terms is set by `GTFS_LICENCE_POLICY`:
+
+- `off` (the default) records licences and serves every feed.
+- `commercial` withholds any feed whose licence explicitly answers *no* to
+  commercial use or to redistribution. The import skips it, removes its stops,
+  routes and zip, and keeps its `gtfs_feeds` row so the console still shows
+  why. `rebuild-motis.sh` leaves it out of `motis/config.yml`, and transit
+  responses drop it straight away, so a feed newly found to be restricted by
+  **Refresh Feed Licences** stops being served before the next import.
+
+A feed with no licence on record, or whose answers are `unknown`, is served
+under both settings. Most feeds have never had their terms filled in, and
+treating silence as a refusal would remove most of the network. The policy
+is a filter on what Transitland says, not a licence review: check the terms
+of the agencies you depend on yourself.
+
+Turning the policy back to `off` brings withheld feeds back at the next full
+GTFS import (not `--skip-download`, which only re-reads zips already on disk),
+followed by `rebuild-motis.sh`.
+
+Transit responses credit the feeds they draw on in an `attribution` field; see
+[Attribution](/usage/attribution#transit-data).
 
 ### Step 3 — Bikeshare (optional)
 
