@@ -152,8 +152,15 @@ export const sessions = pgTable(
 )
 
 /**
- * Single-use, short-lived secrets: currently just email sign-in codes. Stored
- * as a digest so a database read never yields a usable code.
+ * What a one-time code is for. A code is only ever accepted for the purpose it
+ * was issued for, so a sign-in code cannot confirm an account deletion.
+ */
+export type AuthTokenType = 'otp' | 'delete-account' | 'delete-account-passkey'
+
+/**
+ * Single-use, short-lived secrets: email sign-in codes and account-deletion
+ * confirmations. Stored as a digest so a database read never yields a usable
+ * code.
  */
 export const authTokens = pgTable(
   'accounts_auth_tokens',
@@ -162,7 +169,7 @@ export const authTokens = pgTable(
     userId: text('user_id')
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
-    type: text('type').notNull().$type<'otp'>(),
+    type: text('type').notNull().$type<AuthTokenType>(),
     hash: text('hash').notNull(),
     /** Failed attempts against this code; five strikes and it is burned. */
     attempts: integer('attempts').notNull().default(0),
