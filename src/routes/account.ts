@@ -36,7 +36,9 @@ import {
 import { deleteAccount as _deleteAccount, describeSuspension } from '../services/moderation.service'
 import {
   blankSessionCookie as _blankSessionCookie,
+  consumeChallenge as _consumeChallenge,
   createOtp as _createOtp,
+  storeChallenge as _storeChallenge,
   verifyOtp as _verifyOtp,
 } from '../services/auth.service'
 import { sendAccountDeletionCode as _sendAccountDeletionCode } from '../services/mailer.service'
@@ -47,9 +49,8 @@ import {
 import { exportAccount as _exportAccount } from '../services/account-export.service'
 import { LastAdminError } from '../services/accounts.service'
 import { BillingTeardownError } from '../services/billing.service'
-import { clearCookie, readCookie, serializeCookie } from '../lib/cookies'
 import { createRateLimiter } from '../lib/rate-limit'
-import { terms as termsConfig } from '../config/accounts.config'
+import { otpTtlMinutes, terms as termsConfig } from '../config/accounts.config'
 import { resolveSession as _resolveSession, requireUser } from '../middleware/session'
 import { ALL_SCOPES, CREDIT_COSTS, listPlans, publicPlan } from '../billing/plans'
 
@@ -59,14 +60,21 @@ const MAX_KEYS_PER_ACCOUNT = 50
 /** Origins per key. Generous for deploy previews, bounded so the array stays sane. */
 const MAX_ORIGINS_PER_KEY = 20
 
-/**
- * The WebAuthn challenge for confirming a deletion. A cookie of its own rather
- * than the sign-in one, so a challenge issued for signing in is never the one
- * a deletion is checked against.
- */
-const CONFIRM_CHALLENGE_COOKIE = 'barrelman_webauthn_confirm'
-const CONFIRM_CHALLENGE_TTL_SECONDS = 600
+/** Purpose the deletion passkey challenge is stored under, server-side. */
+const DELETE_CHALLENGE = 'delete-account-passkey' as const
 
+/**
+ * The challenge an assertion answers, read from its clientDataJSON. Null when
+ * the field is not the base64url JSON a browser produces.
+ */
+function assertionChallenge(clientDataJSON: string): string | null {
+  try {
+    const parsed = JSON.parse(Buffer.from(clientDataJSON, 'base64url').toString('utf8'))
+    return typeof parsed?.challenge === 'string' && parsed.challenge ? parsed.challenge : null
+  } catch {
+    return null
+  }
+}
 
 export interface AccountDeps {
   createApiKey: typeof _createApiKey
@@ -86,6 +94,8 @@ export interface AccountDeps {
   exportAccount: typeof _exportAccount
   createOtp: typeof _createOtp
   verifyOtp: typeof _verifyOtp
+  storeChallenge: typeof _storeChallenge
+  consumeChallenge: typeof _consumeChallenge
   sendAccountDeletionCode: typeof _sendAccountDeletionCode
   beginConfirmation: typeof _beginConfirmation
   confirmPasskey: typeof _confirmPasskey
@@ -111,6 +121,8 @@ const defaultDeps: AccountDeps = {
   exportAccount: _exportAccount,
   createOtp: _createOtp,
   verifyOtp: _verifyOtp,
+  storeChallenge: _storeChallenge,
+  consumeChallenge: _consumeChallenge,
   sendAccountDeletionCode: _sendAccountDeletionCode,
   beginConfirmation: _beginConfirmation,
   confirmPasskey: _confirmPasskey,
@@ -127,6 +139,8 @@ export function createAccountRoutes(overrides: Partial<AccountDeps> = {}) {
   const exportsPerUser = createRateLimiter(1, 60_000)
   // Each deletion code is an email to the account's own inbox.
   const deletionCodesPerUser = createRateLimiter(3, 15 * 60_000)
+  // Each passkey challenge is a row; a session has no reason to ask often.
+  const passkeyChallengesPerSession = createRateLimiter(10, 15 * 60_000)
 
   const derive = async ({
     request,
@@ -444,7 +458,7 @@ export function createAccountRoutes(overrides: Partial<AccountDeps> = {}) {
       {
         detail: {
           summary: 'Email a code that confirms account deletion',
-          description: 'The code is valid for deletion only, for 15 minutes, and replaces any earlier one.',
+          description: `The code is valid for deletion only, for ${otpTtlMinutes} minutes, and replaces any earlier one.`,
           tags: ['Account'],
         },
       },
@@ -452,21 +466,30 @@ export function createAccountRoutes(overrides: Partial<AccountDeps> = {}) {
 
     .post(
       '/delete/passkey-options',
-      async ({ user, set }) => {
+      async ({ user, session, set }) => {
+        const limitKey = session?.id ?? user!.id
+        if (!passkeyChallengesPerSession.check(limitKey)) {
+          set.status = 429
+          set.headers['retry-after'] = String(passkeyChallengesPerSession.retryAfter(limitKey))
+          return { error: 'Too many attempts. Try again in a few minutes.' }
+        }
         const options = await deps.beginConfirmation(user!.id)
         if (!options.allowCredentials?.length) {
           set.status = 409
           return { error: 'This account has no passkeys. Confirm with an emailed code instead.' }
         }
-        set.headers['set-cookie'] = serializeCookie(CONFIRM_CHALLENGE_COOKIE, options.challenge, {
-          maxAgeSeconds: CONFIRM_CHALLENGE_TTL_SECONDS,
-        })
+        // Stored against the account and this purpose, never handed back as a
+        // cookie the client could swap for a challenge it already has an
+        // assertion for.
+        await deps.storeChallenge(user!.id, DELETE_CHALLENGE, options.challenge)
         return options
       },
       {
         detail: {
           summary: 'Begin confirming account deletion with a passkey',
-          description: "WebAuthn assertion options limited to this account's own passkeys.",
+          description:
+            "WebAuthn assertion options limited to this account's own passkeys. The challenge is held " +
+            'server-side for five minutes and answers one DELETE /account attempt.',
           tags: ['Account'],
         },
       },
@@ -474,7 +497,7 @@ export function createAccountRoutes(overrides: Partial<AccountDeps> = {}) {
 
     .delete(
       '/',
-      async ({ user, body, request, set }) => {
+      async ({ user, body, set }) => {
         // Typed confirmation, checked here as well as in the console, so a
         // script holding a session cannot delete by accident either.
         if (body.email.trim().toLowerCase() !== user!.email.trim().toLowerCase()) {
@@ -485,15 +508,18 @@ export function createAccountRoutes(overrides: Partial<AccountDeps> = {}) {
         // A fresh proof of presence. A session alone is not enough: it can be
         // a laptop left open, and this cannot be undone.
         if (body.passkey) {
-          const challenge = readCookie(request, CONFIRM_CHALLENGE_COOKIE)
-          if (!challenge) {
+          // The assertion names the challenge it signed. It counts only if
+          // that is the one issued to this account for deletion, and each one
+          // is spent on first use, so a captured sign-in assertion (or a
+          // replay of an earlier confirmation) has nothing to match.
+          const challenge = assertionChallenge(body.passkey.response.clientDataJSON)
+          if (!challenge || !(await deps.consumeChallenge(user!.id, DELETE_CHALLENGE, challenge))) {
             set.status = 400
-            return { error: 'No passkey confirmation in progress. Start again.' }
+            return { error: 'No passkey confirmation in progress. Start again.', reason: 'challenge' }
           }
           const result = await deps.confirmPasskey(user!.id, body.passkey as never, challenge)
           if (!result.ok) {
             set.status = 401
-            set.headers['set-cookie'] = clearCookie(CONFIRM_CHALLENGE_COOKIE)
             return { error: result.error ?? 'Passkey confirmation failed', reason: 'passkey' }
           }
         } else if (body.code) {
@@ -536,8 +562,8 @@ export function createAccountRoutes(overrides: Partial<AccountDeps> = {}) {
         }
 
         // deleteAccount has already ended every session. This clears the
-        // cookies so the browser stops presenting a dead one.
-        set.headers['set-cookie'] = [deps.blankSessionCookie(), clearCookie(CONFIRM_CHALLENGE_COOKIE)] as never
+        // cookie so the browser stops presenting a dead one.
+        set.headers['set-cookie'] = deps.blankSessionCookie()
         return { deleted: true }
       },
       {

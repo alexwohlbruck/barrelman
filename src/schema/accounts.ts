@@ -130,7 +130,7 @@ export const sessions = pgTable(
  * What a one-time code is for. A code is only ever accepted for the purpose it
  * was issued for, so a sign-in code cannot confirm an account deletion.
  */
-export type AuthTokenType = 'otp' | 'delete-account'
+export type AuthTokenType = 'otp' | 'delete-account' | 'delete-account-passkey'
 
 /**
  * Single-use, short-lived secrets: email sign-in codes and account-deletion

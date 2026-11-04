@@ -11,7 +11,7 @@ import type { Session } from 'lucia'
 import { accountsDb as db } from '../db'
 import { lucia } from '../lib/lucia'
 import { authTokens, sessions, type AuthTokenType, type User } from '../schema/accounts'
-import { generateId, randomNumericCode, sha256Hex } from '../lib/crypto'
+import { generateId, randomNumericCode, safeEqual, sha256Hex } from '../lib/crypto'
 import { otpTtlMs } from '../config/accounts.config'
 import { hashIp } from './accounts.service'
 
@@ -79,7 +79,7 @@ export async function verifyOtp(userId: string, code: string, type: AuthTokenTyp
     return 'expired'
   }
 
-  if (token.hash !== sha256Hex(code.trim())) {
+  if (!safeEqual(token.hash, sha256Hex(code.trim()))) {
     const attempts = token.attempts + 1
     if (attempts >= MAX_OTP_ATTEMPTS) {
       // Burn the code rather than let it be ground down by guessing. Eight
@@ -94,6 +94,43 @@ export async function verifyOtp(userId: string, code: string, type: AuthTokenTyp
 
   await db.delete(authTokens).where(eq(authTokens.id, token.id))
   return 'valid'
+}
+
+// ── Confirmation challenges ─────────────────────────────────────────────
+
+/** A WebAuthn confirmation is a few seconds of interaction; five minutes is generous. */
+export const CHALLENGE_TTL_MS = 5 * 60_000
+
+/**
+ * Remember a WebAuthn challenge issued to `userId` for one purpose, replacing
+ * any earlier one. Kept server-side rather than in a cookie: the client
+ * controls its cookies, so a cookie challenge lets someone holding a session
+ * answer with any assertion they captured, a sign-in one included.
+ */
+export async function storeChallenge(userId: string, type: AuthTokenType, challenge: string): Promise<void> {
+  await db.delete(authTokens).where(and(eq(authTokens.userId, userId), eq(authTokens.type, type)))
+  await db.insert(authTokens).values({
+    id: generateId(),
+    userId,
+    type,
+    hash: sha256Hex(challenge),
+    expiresAt: new Date(Date.now() + CHALLENGE_TTL_MS),
+  })
+}
+
+/**
+ * Spend the challenge stored for (`userId`, `type`). True only when `challenge`
+ * is that challenge and it has not expired. The row is deleted whatever the
+ * outcome, so each challenge answers at most one attempt.
+ */
+export async function consumeChallenge(userId: string, type: AuthTokenType, challenge: string): Promise<boolean> {
+  const [token] = await db
+    .delete(authTokens)
+    .where(and(eq(authTokens.userId, userId), eq(authTokens.type, type)))
+    .returning()
+  if (!token) return false
+  if (token.expiresAt.getTime() <= Date.now()) return false
+  return safeEqual(token.hash, sha256Hex(challenge))
 }
 
 /** Clear codes that expired without being used. */

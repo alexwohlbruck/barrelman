@@ -131,8 +131,29 @@ function rawSources(): ExportSources {
   }
 }
 
+/**
+ * An in-memory stand-in for the server-side challenge store, with the same
+ * contract as storeChallenge/consumeChallenge: one challenge per (user,
+ * purpose), replaced on issue and deleted on any attempt.
+ */
+function challengeStore() {
+  const stored = new Map<string, string>()
+  return {
+    storeChallenge: mock(async (userId: string, type: string, challenge: string) => {
+      stored.set(`${userId}:${type}`, challenge)
+    }),
+    consumeChallenge: mock(async (userId: string, type: string, challenge: string) => {
+      const key = `${userId}:${type}`
+      const expected = stored.get(key)
+      stored.delete(key)
+      return expected === challenge
+    }),
+  }
+}
+
 function deps(overrides: Partial<AccountDeps> = {}): Partial<AccountDeps> {
   return {
+    ...(challengeStore() as unknown as Pick<AccountDeps, 'storeChallenge' | 'consumeChallenge'>),
     findUserById: mock(async () => makeUser()),
     resolveSession: signedIn(),
     exportAccount: mock(async () => buildAccountExport(rawSources())),
@@ -244,11 +265,19 @@ describe('POST /account/delete/request', () => {
 })
 
 describe('POST /account/delete/passkey-options', () => {
-  test('sets a confirmation challenge cookie', async () => {
-    const { handle } = app()
+  test('stores the challenge server-side, bound to the account and purpose', async () => {
+    const { d, handle } = app()
     const res = await handle(post('/account/delete/passkey-options'))
     expect(res.status).toBe(200)
-    expect(res.headers.get('set-cookie')).toContain('barrelman_webauthn_confirm=chal')
+    expect(d.storeChallenge).toHaveBeenCalledWith('user-1', 'delete-account-passkey', 'chal')
+    // Nothing for the client to hold on to or swap.
+    expect(res.headers.get('set-cookie')).toBeNull()
+  })
+
+  test('is rate limited per session', async () => {
+    const { handle } = app()
+    for (let i = 0; i < 10; i++) expect((await handle(post('/account/delete/passkey-options'))).status).toBe(200)
+    expect((await handle(post('/account/delete/passkey-options'))).status).toBe(429)
   })
 
   test('refuses an account with no passkeys', async () => {
@@ -315,37 +344,63 @@ describe('DELETE /account', () => {
     expect(res.headers.get('set-cookie')).toContain('barrelman_session=;')
   })
 
-  const assertion = {
+  /** An assertion whose clientDataJSON names `challenge`, as a browser encodes it. */
+  const assertion = (challenge: string) => ({
     id: 'cred-1',
     rawId: 'cred-1',
     type: 'public-key',
-    response: { clientDataJSON: 'x', authenticatorData: 'y', signature: 'z' },
-  }
+    response: {
+      clientDataJSON: Buffer.from(
+        JSON.stringify({ type: 'webauthn.get', challenge, origin: 'http://localhost' }),
+      ).toString('base64url'),
+      authenticatorData: 'y',
+      signature: 'z',
+    },
+  })
 
-  test('a passkey needs the challenge cookie', async () => {
+  test('a passkey needs a challenge issued for deletion', async () => {
     const { d, handle } = app()
-    const res = await handle(del({ email: 'user@example.com', passkey: assertion }))
+    const res = await handle(del({ email: 'user@example.com', passkey: assertion('chal') }))
     expect(res.status).toBe(400)
     expect(d.confirmPasskey).not.toHaveBeenCalled()
     expect(d.deleteAccount).not.toHaveBeenCalled()
   })
 
-  test('deletes with a passkey verified against the cookie challenge', async () => {
+  test('refuses a replayed sign-in assertion, even with its challenge in a cookie', async () => {
+    // A session holder who captured a sign-in assertion: its signature is
+    // genuine (confirmPasskey would accept it), but its challenge came from
+    // /auth/passkeys/authenticate/options, not from the deletion flow.
     const { d, handle } = app()
+    await handle(post('/account/delete/passkey-options'))
     const res = await handle(
-      del({ email: 'user@example.com', passkey: assertion }, { cookie: 'barrelman_webauthn_confirm=chal' }),
+      del(
+        { email: 'user@example.com', passkey: assertion('sign-in-challenge') },
+        { cookie: 'barrelman_webauthn=sign-in-challenge; barrelman_webauthn_confirm=sign-in-challenge' },
+      ),
     )
+    expect(res.status).toBe(400)
+    expect(d.confirmPasskey).not.toHaveBeenCalled()
+    expect(d.deleteAccount).not.toHaveBeenCalled()
+  })
+
+  test('deletes with a passkey answering the stored challenge', async () => {
+    const { d, handle } = app()
+    await handle(post('/account/delete/passkey-options'))
+    const res = await handle(del({ email: 'user@example.com', passkey: assertion('chal') }))
     expect(res.status).toBe(200)
+    expect(d.consumeChallenge).toHaveBeenCalledWith('user-1', 'delete-account-passkey', 'chal')
     expect(d.confirmPasskey).toHaveBeenCalledWith('user-1', expect.anything(), 'chal')
     expect(d.deleteAccount).toHaveBeenCalled()
   })
 
-  test('refuses a passkey that does not verify', async () => {
+  test('a challenge answers one attempt only', async () => {
     const { d, handle } = app({ confirmPasskey: mock(async () => ({ ok: false, error: 'nope' })) })
-    const res = await handle(
-      del({ email: 'user@example.com', passkey: assertion }, { cookie: 'barrelman_webauthn_confirm=chal' }),
-    )
-    expect(res.status).toBe(401)
+    await handle(post('/account/delete/passkey-options'))
+    const first = await handle(del({ email: 'user@example.com', passkey: assertion('chal') }))
+    expect(first.status).toBe(401)
+    const second = await handle(del({ email: 'user@example.com', passkey: assertion('chal') }))
+    expect(second.status).toBe(400)
+    expect(d.confirmPasskey).toHaveBeenCalledTimes(1)
     expect(d.deleteAccount).not.toHaveBeenCalled()
   })
 
