@@ -13,6 +13,11 @@
 #   pelias-full   heavier services behind /v1/search & /v1/reverse (~4GB)
 #   pelias-tools  one-shot importers; invoked via `docker compose run`, which
 #                 activates their profile automatically
+#
+# Pelias publishes no release tags for most of these, only rolling ones
+# (:master, :latest), so each image is pinned to the digest its tag pointed at
+# when it was last checked. See "Upgrading pinned images" in
+# docs/content/docs/self-hosting/operations.mdx before moving them.
 services:
   # Barrelman only calls /v1/autocomplete, which needs just api + elasticsearch
   # (the `pelias` profile). libpostal/placeholder/interpolation/pip serve
@@ -20,7 +25,7 @@ services:
   # behind `pelias-full`. To bring the complete geocoder up:
   #   docker compose --profile pelias --profile pelias-full up -d
   libpostal:
-    image: pelias/libpostal-service
+    image: pelias/libpostal-service:latest@sha256:72beeef72e968a7865ad7538854d900de7aa9cf27f3de899f29c00cd4a4d96fe
     container_name: pelias_libpostal
     user: '${DOCKER_USER:-}'
     restart: always
@@ -28,7 +33,7 @@ services:
     ports: ['127.0.0.1:4400:4400']
 
   schema:
-    image: pelias/schema:master
+    image: pelias/schema:master@sha256:94f8bd16723d9c89cddbb4bbb63cd9ee42880c4c9d6806e18372426261549583
     container_name: pelias_schema
     profiles: ['pelias-tools']
     user: '${DOCKER_USER:-}'
@@ -39,7 +44,7 @@ services:
       - './pelias.json:/code/pelias.json'
 
   api:
-    image: pelias/api:master
+    image: pelias/api:master@sha256:b2de2f1dea2a701b6b6649f8bfcde37f2f17ba320a574eb9dc9c083333eff983
     container_name: pelias_api
     profiles: ['pelias']
     user: '${DOCKER_USER:-}'
@@ -55,7 +60,7 @@ services:
       - './pelias.json:/code/pelias.json'
 
   placeholder:
-    image: pelias/placeholder:master
+    image: pelias/placeholder:master@sha256:69f687fa20ed21bca67012ef618ec9890bb33409d3b792fd1de24df116552cd4
     container_name: pelias_placeholder
     user: '${DOCKER_USER:-}'
     restart: always
@@ -68,7 +73,7 @@ services:
       - './blacklist/:/data/blacklist'
 
   whosonfirst:
-    image: pelias/whosonfirst:master
+    image: pelias/whosonfirst:master@sha256:2c25febcf46c5caf7e02071aaa3aeecc0e352c49e43a49ad92000ac0fd37b98e
     container_name: pelias_whosonfirst
     profiles: ['pelias-tools']
     user: '${DOCKER_USER:-}'
@@ -78,7 +83,7 @@ services:
       - './blacklist/:/data/blacklist'
 
   openstreetmap:
-    image: pelias/openstreetmap:master
+    image: pelias/openstreetmap:master@sha256:0450f00cb9df46426e1286eed98b21f2565f42c2ef78f6fb6ca9e9d306452da2
     container_name: pelias_openstreetmap
     profiles: ['pelias-tools']
     user: '${DOCKER_USER:-}'
@@ -88,7 +93,7 @@ services:
       - './blacklist/:/data/blacklist'
 
   openaddresses:
-    image: pelias/openaddresses:master
+    image: pelias/openaddresses:master@sha256:83b3654cbd09a824fc4cfaeee584471eee1e6c6c66cfad80ffcd40e2b061c0e9
     container_name: pelias_openaddresses
     profiles: ['pelias-tools']
     user: '${DOCKER_USER:-}'
@@ -98,7 +103,7 @@ services:
       - './blacklist/:/data/blacklist'
 
   # transit:
-  #   image: pelias/transit:master
+  #   image: pelias/transit:master@sha256:02d9d6d1db1eab8d455adfdc49dac3da5276e460dae2ba0507c56896012ec7f0
   #   container_name: pelias_transit
   #   user: '${DOCKER_USER:-}'
   #   volumes:
@@ -106,7 +111,7 @@ services:
   #     - '${DATA_DIR:-./data}:/data'
 
   csv-importer:
-    image: pelias/csv-importer:master
+    image: pelias/csv-importer:master@sha256:af3137c51a3dbe7f87b787afa0c84acac8422d449113be4230964edc9abcb754
     container_name: pelias_csv_importer
     profiles: ['pelias-tools']
     user: '${DOCKER_USER:-}'
@@ -116,7 +121,7 @@ services:
       - './blacklist/:/data/blacklist'
 
   polylines:
-    image: pelias/polylines:master
+    image: pelias/polylines:master@sha256:9689d416dc4f56a04a4bb1eb69ec0d14e8f9c30eb742e898565f92fe1ea5497f
     container_name: pelias_polylines
     profiles: ['pelias-tools']
     user: '${DOCKER_USER:-}'
@@ -125,7 +130,7 @@ services:
       - '${DATA_DIR:-./data}:/data'
 
   interpolation:
-    image: pelias/interpolation:master
+    image: pelias/interpolation:master@sha256:daad2460638960ecb81b00148385c9e0520b8094b217c71ee21f87396c7c6d4d
     container_name: pelias_interpolation
     user: '${DOCKER_USER:-}'
     restart: always
@@ -137,7 +142,7 @@ services:
       - '${DATA_DIR:-./data}:/data'
 
   pip:
-    image: pelias/pip-service:master
+    image: pelias/pip-service:master@sha256:91bba48a0de975489e68cf848e2954ce36b0ffc67bda47bb92bb84b7ef0491c4
     container_name: pelias_pip-service
     user: '${DOCKER_USER:-}'
     restart: always
@@ -149,7 +154,7 @@ services:
       - '${DATA_DIR:-./data}:/data'
 
   elasticsearch:
-    image: pelias/elasticsearch:7.17.27
+    image: pelias/elasticsearch:7.17.27@sha256:8aa3c622abd74192eceaf53e9a3dfd51c1a75e50ee7a537d7f912aa7f80bab05
     container_name: pelias_elasticsearch
     profiles: ['pelias']
     user: '${DOCKER_USER:-}'
@@ -172,7 +177,7 @@ services:
     cap_add: ['IPC_LOCK']
 
   fuzzy-tester:
-    image: pelias/fuzzy-tester:master
+    image: pelias/fuzzy-tester:master@sha256:cb710bcfa0b0f76d664d6c3fd484a0987fdda490ae3ac107a4d5283fa84bfb8a
     container_name: pelias_fuzzy_tester
     profiles: ['pelias-tools']
     user: '${DOCKER_USER:-}'

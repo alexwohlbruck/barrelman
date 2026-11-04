@@ -37,7 +37,7 @@ x-logging: &default-logging
 services:
   tts:
     profiles: ["tts"]
-    image: ${TTS_IMAGE:-ghcr.io/remsky/kokoro-fastapi-cpu:v0.9.0}
+    image: ${TTS_IMAGE:-ghcr.io/remsky/kokoro-fastapi-cpu:v0.9.0@sha256:ee3111d6a2c903ed62f3b4fa19543c6901205ed39fce3c177e895b34a8386b9c}
     restart: unless-stopped
     logging: *default-logging
     environment:
@@ -156,10 +156,11 @@ services:
 
   martin:
     container_name: barrelman-martin
-    # Deliberately unpinned. Martin renders tiles from PostGIS on each request
-    # and persists nothing of its own, so there is no baked artifact for a new
-    # release to invalidate — unlike MOTIS and GraphHopper below.
-    image: ghcr.io/maplibre/martin
+    # Pinned like every third-party image here, so a `docker compose pull`
+    # never changes what runs. Martin persists nothing of its own, so moving it
+    # needs no rebuild, only a check that the tile config still loads. See
+    # "Upgrading pinned images" in docs/content/docs/self-hosting/operations.mdx.
+    image: ghcr.io/maplibre/martin:1.16.1@sha256:59902019bf9038926ff0c71174237d6852e64c457830a6349abe7090be8818ca
     restart: unless-stopped
     logging: *default-logging
     # --on-invalid warn, because the default is abort and abort means *all*
@@ -188,7 +189,13 @@ services:
 
   graphhopper:
     container_name: barrelman-graphhopper
-    image: israelhikingmap/graphhopper:latest
+    # The June 2026 12.0-SNAPSHOT, which production runs. :latest is a nightly
+    # and its 2026-10-16 build broke graph imports ("sort graph for fixed
+    # ordering", ArrayIndexOutOfBoundsException: Index -1) and changed the
+    # bundled foot model. The graph cache is also written in a version-specific
+    # format, so moving this digest means a full graph rebuild
+    # (scripts/rebuild-graphhopper.sh), never a plain pull.
+    image: israelhikingmap/graphhopper@sha256:3e79eb33862028cfc58f9d6c162630b68638d6aad790b5a698c854dbbaa7fe32
     restart: unless-stopped
     logging: *default-logging
     # -i and -o must be passed explicitly; the entrypoint script defaults
@@ -213,10 +220,9 @@ services:
     # pull` that moves :latest takes transit routing down until the timetable is
     # rebuilt from the GTFS feeds (`motis import`), which is a job, not a
     # restart. Same shape as GraphHopper's graph-cache above.
-    # Deliberately still :latest — pinning would freeze every downstream user on
-    # whatever version shipped with their compose file. Re-import after an
-    # upgrade instead.
-    image: ghcr.io/motis-project/motis:latest
+    # Pinned to a release for that reason: moving the tag means a re-import
+    # (scripts/rebuild-motis.sh), so it should happen when an operator chooses.
+    image: ghcr.io/motis-project/motis:2.11.4@sha256:594eff881d4319549387563a28dffb2ac48650df5422325a44a6c2f69f79e9b9
     restart: unless-stopped
     # MOTIS logs a timer pair per realtime poll — `[scoped_timer] [rt update]`
     # and friends — at a few lines a second, forever. Docker's json-file driver
