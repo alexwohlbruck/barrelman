@@ -453,7 +453,7 @@ export function apiAuth(group: EndpointGroup, options: ApiAuthOptions = {}) {
     if (!plan.metered || cost === 0) {
       deps.recordUsage({ userId: caller.userId, apiKeyId: caller.keyId, endpoint: group, credits: 0 })
       stash(context, { caller, group, credits: 0, charged: false, throttleKey })
-      recordSuccess(caller.userId)
+      recordSuccess(penaltyKeyFor(ip, caller.userId))
       set.headers['x-barrelman-credits-charged'] = '0'
       return
     }
@@ -475,7 +475,7 @@ export function apiAuth(group: EndpointGroup, options: ApiAuthOptions = {}) {
 
     deps.recordUsage({ userId: caller.userId, apiKeyId: caller.keyId, endpoint: group, credits: cost })
     stash(context, { caller, group, credits: cost, charged: true, throttleKey })
-    recordSuccess(caller.userId)
+    recordSuccess(penaltyKeyFor(ip, caller.userId))
 
     set.headers['x-barrelman-credits-charged'] = String(cost)
     if (decision.overage) set.headers['x-barrelman-overage'] = 'true'
