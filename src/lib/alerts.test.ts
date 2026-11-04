@@ -1,12 +1,13 @@
 import { describe, test, expect, mock } from 'bun:test'
-import { createAlerter, formatAlert, type Alert } from './alerts'
+import { createAlerter, formatAlert, scrubForAlert, type Alert } from './alerts'
 
 const down: Alert = { key: 'dependency:motis', severity: 'critical', title: 'MOTIS is down', message: 'Probe failed.' }
 const up: Alert = { ...down, severity: 'resolved', title: 'MOTIS recovered', message: 'Back.' }
 
 function harness(format?: 'ntfy' | 'slack' | 'json', status = 200) {
   let clock = 1_000_000
-  const fetchFn = mock(async (_url: string | URL | Request, _init?: RequestInit) => new Response('', { status }))
+  const statuses = { next: status }
+  const fetchFn = mock(async (_url: string | URL | Request, _init?: RequestInit) => new Response('', { status: statuses.next }))
   const alerter = createAlerter({
     url: 'https://ntfy.example/barrelman',
     format,
@@ -14,7 +15,7 @@ function harness(format?: 'ntfy' | 'slack' | 'json', status = 200) {
     now: () => clock,
     dedupeMs: 60_000,
   })
-  return { alerter, fetchFn, advance: (ms: number) => (clock += ms) }
+  return { alerter, fetchFn, statuses, advance: (ms: number) => (clock += ms) }
 }
 
 describe('formatAlert', () => {
@@ -46,7 +47,7 @@ describe('formatAlert', () => {
 describe('createAlerter', () => {
   test('POSTs to the webhook URL', async () => {
     const { alerter, fetchFn } = harness('ntfy')
-    expect(await alerter.send(down)).toBe(true)
+    expect(await alerter.send(down)).toBe('sent')
     const [url, init] = fetchFn.mock.calls[0]
     expect(url).toBe('https://ntfy.example/barrelman')
     expect(init?.method).toBe('POST')
@@ -56,9 +57,9 @@ describe('createAlerter', () => {
   test('drops a repeat of the same alert inside the window, and sends it again after', async () => {
     const { alerter, fetchFn, advance } = harness()
     await alerter.send(down)
-    expect(await alerter.send(down)).toBe(false)
+    expect(await alerter.send(down)).toBe('deduped')
     advance(60_000)
-    expect(await alerter.send(down)).toBe(true)
+    expect(await alerter.send(down)).toBe('sent')
     expect(fetchFn).toHaveBeenCalledTimes(2)
   })
 
@@ -92,9 +93,31 @@ describe('createAlerter', () => {
         throw new Error('ECONNREFUSED')
       }) as unknown as typeof fetch,
     })
-    expect(await failing.send(down)).toBe(false)
+    expect(await failing.send(down)).toBe('failed')
 
     const { alerter } = harness('json', 500)
-    expect(await alerter.send(down)).toBe(false)
+    expect(await alerter.send(down)).toBe('failed')
+  })
+
+  test('a failed delivery is not recorded, so the next attempt goes out', async () => {
+    const { alerter, fetchFn, statuses } = harness('json', 502)
+    expect(await alerter.send(down)).toBe('failed')
+    statuses.next = 200
+    expect(await alerter.send(down)).toBe('sent')
+    expect(fetchFn).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('scrubForAlert', () => {
+  test('masks URLs, addresses, container host:port pairs, emails and keys', () => {
+    expect(scrubForAlert('connect ECONNREFUSED 172.19.0.4:8989')).toBe('connect ECONNREFUSED [host]')
+    expect(scrubForAlert('fetch to barrelman-motis:8080 timed out')).toBe('fetch to [host] timed out')
+    expect(scrubForAlert('GET https://transit.land/api/v2/feeds?apikey=s3cret failed')).toBe('GET [url] failed')
+    expect(scrubForAlert('no account for jane@example.com')).toBe('no account for [email]')
+  })
+
+  test('leaves ordinary messages and times alone', () => {
+    expect(scrubForAlert('HTTP 503')).toBe('HTTP 503')
+    expect(scrubForAlert('worker heartbeat timeout')).toBe('worker heartbeat timeout')
   })
 })

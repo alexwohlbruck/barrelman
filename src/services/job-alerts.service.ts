@@ -12,7 +12,7 @@
  * the heartbeat reaper. Both processes therefore need ALERT_WEBHOOK_URL.
  */
 import { connection as sql } from '../db'
-import { alertsEnabled, sendAlert, type Alert } from '../lib/alerts'
+import { alertsEnabled, scrubForAlert, sendAlert, type Alert } from '../lib/alerts'
 import type { JobStatus } from './job-invocation'
 
 export interface EndedJob {
@@ -32,7 +32,7 @@ export function scheduledJobAlert(job: EndedJob, previousStatus: JobStatus | nul
   const key = `schedule:${job.scheduleId}`
 
   if (job.status === 'failed') {
-    const reason = job.error || (job.exitCode != null ? `exit code ${job.exitCode}` : 'no reason recorded')
+    const reason = job.error ? scrubForAlert(job.error) : (job.exitCode != null ? `exit code ${job.exitCode}` : 'no reason recorded')
     return {
       key,
       severity: 'critical',

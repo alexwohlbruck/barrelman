@@ -24,36 +24,62 @@ function deps(overrides: Partial<Record<DependencyKey, DependencyHealth>> = {}) 
 const motisDown = deps({ motis: { status: 'unavailable', message: 'HTTP 503' } })
 
 describe('dependency watcher', () => {
-  test('alerts only after two consecutive failed cycles, then once', () => {
+  /** One cycle, with every returned alert delivered. */
+  const cycle = (watcher: ReturnType<typeof createDependencyWatcher>, state: ReturnType<typeof deps>) => {
+    const alerts = watcher.observe(state)
+    for (const alert of alerts) watcher.delivered(alert)
+    return alerts
+  }
+
+  test('defaults to three consecutive failed cycles, then alerts once', () => {
     const watcher = createDependencyWatcher()
-    expect(watcher.observe(motisDown)).toEqual([])
-    const [alert] = watcher.observe(motisDown)
+    expect(cycle(watcher, motisDown)).toEqual([])
+    expect(cycle(watcher, motisDown)).toEqual([])
+    const [alert] = cycle(watcher, motisDown)
     expect(alert).toMatchObject({ key: 'dependency:motis', severity: 'critical' })
     expect(alert.message).toContain('HTTP 503')
-    expect(watcher.observe(motisDown)).toEqual([])
+    expect(cycle(watcher, motisDown)).toEqual([])
   })
 
   test('a single failed probe between good ones never alerts', () => {
-    const watcher = createDependencyWatcher()
-    watcher.observe(motisDown)
-    watcher.observe(deps())
-    expect(watcher.observe(motisDown)).toEqual([])
+    const watcher = createDependencyWatcher(2)
+    cycle(watcher, motisDown)
+    cycle(watcher, deps())
+    expect(cycle(watcher, motisDown)).toEqual([])
   })
 
   test('sends one recovery after an alert, and none without one', () => {
-    const watcher = createDependencyWatcher()
-    watcher.observe(motisDown)
-    expect(watcher.observe(deps())).toEqual([])
+    const watcher = createDependencyWatcher(2)
+    cycle(watcher, motisDown)
+    expect(cycle(watcher, deps())).toEqual([])
 
-    watcher.observe(motisDown)
-    watcher.observe(motisDown)
-    const [recovery] = watcher.observe(deps())
+    cycle(watcher, motisDown)
+    cycle(watcher, motisDown)
+    const [recovery] = cycle(watcher, deps())
     expect(recovery).toMatchObject({ key: 'dependency:motis', severity: 'resolved' })
-    expect(watcher.observe(deps())).toEqual([])
+    expect(cycle(watcher, deps())).toEqual([])
+  })
+
+  test('an undelivered alert is offered again next cycle, and so is its recovery', () => {
+    const watcher = createDependencyWatcher(1)
+    expect(watcher.observe(motisDown)).toHaveLength(1)
+    const [retry] = watcher.observe(motisDown)
+    expect(retry).toMatchObject({ severity: 'critical' })
+    watcher.delivered(retry)
+    expect(watcher.observe(motisDown)).toEqual([])
+
+    expect(watcher.observe(deps())).toHaveLength(1)
+    expect(watcher.observe(deps())).toMatchObject([{ severity: 'resolved' }])
+  })
+
+  test('scrubs internal addresses out of the probe message', () => {
+    const watcher = createDependencyWatcher(1)
+    const [alert] = watcher.observe(deps({ graphhopper: { status: 'unavailable', message: 'connect ECONNREFUSED 172.19.0.4:8989' } }))
+    expect(alert.message).not.toContain('172.19')
   })
 
   test('optional services never alert', () => {
-    const watcher = createDependencyWatcher()
+    const watcher = createDependencyWatcher(1)
     for (let i = 0; i < 5; i++) expect(watcher.observe(deps())).toEqual([])
   })
 })
@@ -92,9 +118,11 @@ describe('scheduled job alerts', () => {
 })
 
 describe('disk alerts', () => {
-  test('computes usage the way df does, excluding reserved blocks', () => {
-    // 100 blocks, 20 free, of which 10 are reserved for root: 80 / 90 used.
+  test('computes usage the way df does: reserved blocks excluded, rounded up', () => {
+    // 100 blocks, 20 free, of which 10 are reserved for root: 80 / 90 = 88.9%.
     expect(usedPercent({ blocks: 100, bfree: 20, bavail: 10 })).toBe(89)
+    // 1002 / 1100 = 91.09%, which df shows as 92%.
+    expect(usedPercent({ blocks: 1100, bfree: 98, bavail: 98 })).toBe(92)
   })
 
   test('warns at or above the threshold', () => {

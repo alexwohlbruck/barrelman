@@ -19,6 +19,7 @@
  * from the reporting path must not add a second failure on top.
  */
 import { envRaw, envString } from '../config/env'
+import { scrubText } from './error-tracking'
 
 export type AlertFormat = 'ntfy' | 'slack' | 'json'
 export const ALERT_FORMATS: readonly AlertFormat[] = ['ntfy', 'slack', 'json']
@@ -51,9 +52,15 @@ export interface SendOptions {
   dedupeMs?: number
 }
 
+/**
+ * `deduped` means the same alert was delivered inside the window, so the
+ * operator already has it. `failed` means it was not delivered and nothing was
+ * recorded: sending it again next cycle goes straight out.
+ */
+export type SendResult = 'sent' | 'deduped' | 'failed'
+
 export interface Alerter {
-  /** Resolves true when the webhook accepted the alert. */
-  send(alert: Alert, options?: SendOptions): Promise<boolean>
+  send(alert: Alert, options?: SendOptions): Promise<SendResult>
 }
 
 const DEFAULT_DEDUPE_MS = 10 * 60_000
@@ -130,16 +137,7 @@ export function createAlerter(options: AlerterOptions): Alerter {
       const at = now()
       const window = sendOptions.dedupeMs ?? defaultDedupe
       const previous = lastSent.get(dedupeKey)
-      if (previous !== undefined && at - previous < window) return false
-
-      // A recovery clears the way for the next failure to alert immediately,
-      // and the other way round: "down, up, down" inside ten minutes is three
-      // real events, and dropping the second "down" would leave the operator
-      // believing it recovered.
-      const opposite = alert.severity === 'resolved' ? ['critical', 'warning'] : ['resolved']
-      for (const severity of opposite) lastSent.delete(`${alert.key}\u0000${severity}`)
-
-      lastSent.set(dedupeKey, at)
+      if (previous !== undefined && at - previous < window) return 'deduped'
 
       const { headers, body } = formatAlert(alert, format, at)
       try {
@@ -151,13 +149,23 @@ export function createAlerter(options: AlerterOptions): Alerter {
         })
         if (!res.ok) {
           console.warn(`[alerts] webhook answered HTTP ${res.status} for ${alert.key}`)
-          return false
+          return 'failed'
         }
-        return true
       } catch (err) {
         console.warn(`[alerts] webhook failed for ${alert.key}:`, err instanceof Error ? err.message : err)
-        return false
+        return 'failed'
       }
+
+      // Recorded only once delivered, so a webhook blip is retried by the next
+      // check instead of silencing the alert for the whole window.
+      lastSent.set(dedupeKey, at)
+      // A recovery clears the way for the next failure to alert immediately,
+      // and the other way round: "down, up, down" inside ten minutes is three
+      // real events, and dropping the second "down" would leave the operator
+      // believing it recovered.
+      const opposite = alert.severity === 'resolved' ? ['critical', 'warning'] : ['resolved']
+      for (const severity of opposite) lastSent.delete(`${alert.key}\u0000${severity}`)
+      return 'sent'
     },
   }
 }
@@ -188,9 +196,24 @@ export function getAlerter(): Alerter | null {
   return alerter
 }
 
-/** Send through the configured webhook. A no-op when ALERT_WEBHOOK_URL is unset. */
-export async function sendAlert(alert: Alert, options?: SendOptions): Promise<boolean> {
+/** Send through the configured webhook. Reports `failed` when ALERT_WEBHOOK_URL is unset. */
+export async function sendAlert(alert: Alert, options?: SendOptions): Promise<SendResult> {
   const alerter = getAlerter()
-  if (!alerter) return false
+  if (!alerter) return 'failed'
   return alerter.send(alert, options)
+}
+
+/** True when the operator has this alert, from this send or an earlier one. */
+export const delivered = (result: SendResult) => result !== 'failed'
+
+/**
+ * Make upstream error text fit for a webhook. An ntfy topic is readable by
+ * anyone who knows its name, so URLs, addresses and container host:port pairs
+ * go, as do the emails and credentials error tracking strips.
+ */
+export function scrubForAlert(text: string): string {
+  return scrubText(text)
+    .replace(/\b[a-z][a-z0-9+.-]*:\/\/\S+/gi, '[url]')
+    .replace(/\b\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?\b/g, '[host]')
+    .replace(/\b[a-z0-9][a-z0-9_.-]*:\d{2,5}\b/gi, '[host]')
 }
