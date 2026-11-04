@@ -33,7 +33,7 @@
     "@turf/turf": "^7.3.4",
     "arctic": "^3.7.0",
     "axios": "^1.21.0",
-    "csv-parse": "^5.6.0",
+    "csv-parse": "^7.0.3",
     "drizzle-orm": "^0.45.4",
     "earcut": "^3.2.3",
     "elysia": "^1.4.30",

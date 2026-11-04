@@ -619,7 +619,7 @@ export function parseStops(
   wheelchairBoarding: number
   platformCode: string | null
 }> {
-  const records = parse(csvContent, GTFS_CSV)
+  const records = parse<GtfsRecord>(csvContent, GTFS_CSV)
 
   return records
     .filter((r: any) => r.stop_lat && r.stop_lon)
@@ -656,7 +656,7 @@ export function parseRoutes(
   routeTextColor: string | null
   routeUrl: string | null
 }> {
-  const records = parse(csvContent, GTFS_CSV)
+  const records = parse<GtfsRecord>(csvContent, GTFS_CSV)
 
   return records.map((r: any) => ({
     routeId: r.route_id,
@@ -679,7 +679,7 @@ export function parseRoutes(
  * Parse agency.txt to build agency_id → agency_name map.
  */
 export function parseAgencies(csvContent: string): Map<string, string> {
-  const records = parse(csvContent, GTFS_CSV)
+  const records = parse<GtfsRecord>(csvContent, GTFS_CSV)
 
   const map = new Map<string, string>()
   for (const r of records) {
@@ -700,7 +700,7 @@ type GtfsRecord = Record<string, string>
 
 /** Parse a GTFS CSV file into row records. */
 export function parseGtfsRecords(content: string): GtfsRecord[] {
-  return parse(content, GTFS_CSV)
+  return parse<GtfsRecord>(content, GTFS_CSV)
 }
 
 /** Split one CSV record that contains quotes: commas inside quotes, "" for a quote. */
@@ -838,7 +838,7 @@ export function deriveStopRoutes(
  * boards/alights a parent station) matches the platform ids in stop_times.
  */
 export function parseStopParents(stopsContent: string): Map<string, string> {
-  const records = parse(stopsContent, GTFS_CSV)
+  const records = parse<GtfsRecord>(stopsContent, GTFS_CSV)
   const map = new Map<string, string>()
   for (const r of records) {
     if (!r.stop_id) continue
@@ -932,7 +932,7 @@ export function deriveTripPatterns(
 export function parseShapes(
   csvContent: string,
 ): Map<string, [number, number][]> {
-  const records = parse(csvContent, GTFS_CSV)
+  const records = parse<GtfsRecord>(csvContent, GTFS_CSV)
 
   // Group points by shape_id, then sort by sequence
   const raw = new Map<string, Array<{ seq: number; lat: number; lng: number }>>()
@@ -965,7 +965,7 @@ export function parseShapes(
 export function deriveRouteShapes(
   tripsContent: string,
 ): Map<string, string> {
-  const records = parse(tripsContent, GTFS_CSV)
+  const records = parse<GtfsRecord>(tripsContent, GTFS_CSV)
 
   // Count shape_id occurrences per route_id
   const routeShapeCounts = new Map<string, Map<string, number>>()
@@ -1010,7 +1010,7 @@ export function deriveRouteShapes(
 export function deriveBikesAllowed(
   tripsContent: string,
 ): Map<string, number> {
-  const records = parse(tripsContent, GTFS_CSV)
+  const records = parse<GtfsRecord>(tripsContent, GTFS_CSV)
 
   // Track per-route: total trips, trips with bikes_allowed=1
   const routeStats = new Map<string, { total: number; allowed: number }>()
@@ -1343,7 +1343,7 @@ export function parseTransfers(
   csvContent: string,
   feedId: string,
 ): Array<{ feedId: string; fromStopId: string; toStopId: string; transferType: number; minTransferTime: number | null }> {
-  const records = parse(csvContent, GTFS_CSV)
+  const records = parse<GtfsRecord>(csvContent, GTFS_CSV)
   const out: Array<{ feedId: string; fromStopId: string; toStopId: string; transferType: number; minTransferTime: number | null }> = []
   for (const r of records) {
     if (!r.from_stop_id || !r.to_stop_id) continue
