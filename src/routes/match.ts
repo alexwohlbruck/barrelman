@@ -1,4 +1,5 @@
 import Elysia from 'elysia'
+import { serverError } from '../lib/errors'
 import { apiAuth, apiAuthAfter } from '../middleware/api-auth'
 import {
   matchTrace as _matchTrace,
@@ -68,6 +69,28 @@ export function parseMatchRequest(
   }
 }
 
+/** Points billed as one routing call. */
+export const MATCH_POINTS_PER_UNIT = 100
+
+/**
+ * A trace is charged per started hundred points: a long trace is matched in
+ * several pieces, each a GraphHopper call. A body that does not parse is one
+ * unit, as is one over MAX_POINTS, since the handler refuses both with a 400.
+ */
+export function matchUnits(context: { request: Request; query?: Record<string, string | undefined>; body?: unknown }): number {
+  try {
+    const { points } = parseMatchRequest(
+      typeof context.body === 'string' ? context.body : '',
+      context.request.headers.get('content-type') ?? '',
+      context.query ?? {},
+    )
+    if (points.length > MAX_POINTS) return 1
+    return Math.max(1, Math.ceil(points.length / MATCH_POINTS_PER_UNIT))
+  } catch {
+    return 1
+  }
+}
+
 /** GraphHopper's error body, parsed when it is JSON. */
 function upstreamBody(body: string) {
   try {
@@ -108,14 +131,14 @@ far it moved (\`offset\`) and how far along the path it lies.
  *
  * POST /match — JSON {profile, points, ...} or a GPX body. See DESCRIPTION.
  *
- * The raw GraphHopper matcher stays reachable at /graphhopper/match; this adds
- * gap handling, chunking, fallbacks and the same enrichment as /route.
+ * Adds gap handling, chunking, fallbacks and the same enrichment as /route
+ * over GraphHopper's matcher, which the /graphhopper proxy does not expose.
  */
 export function createMatchRoutes(deps: { matchTrace?: typeof _matchTrace; fetchFn?: FetchFn } = {}) {
   const matchTrace = deps.matchTrace || _matchTrace
 
   return new Elysia()
-    .onBeforeHandle(apiAuth('routing'))
+    .onBeforeHandle(apiAuth('routing', { units: matchUnits }))
     .onAfterHandle(apiAuthAfter)
     .post('/match', async ({ body, request, query, set }) => {
       let req: MatchRequest
@@ -137,11 +160,7 @@ export function createMatchRoutes(deps: { matchTrace?: typeof _matchTrace; fetch
           set.status = err.statusCode >= 500 ? 502 : err.statusCode
           return upstreamBody(err.body)
         }
-        set.status = 502
-        return {
-          error: 'Map matching unavailable',
-          detail: err instanceof Error ? err.message : String(err),
-        }
+        return serverError(request, set, err, 'Map matching unavailable', 502)
       }
     }, {
       // Raw text for both body forms: Elysia has no GPX parser, and the JSON

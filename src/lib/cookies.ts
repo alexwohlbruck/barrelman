@@ -6,7 +6,7 @@
  * the OAuth callback is a top-level cross-site navigation back from the
  * provider, and a strict cookie would not be sent with it.
  */
-import { isProduction } from '../config/accounts.config'
+import { secureCookies } from '../config/accounts.config'
 
 export interface CookieOptions {
   maxAgeSeconds?: number
@@ -20,7 +20,7 @@ export function serializeCookie(name: string, value: string, options: CookieOpti
 
   const parts = [`${name}=${encodeURIComponent(value)}`, `Path=${path}`, `Max-Age=${maxAgeSeconds}`, `SameSite=${sameSite[0]!.toUpperCase()}${sameSite.slice(1)}`]
   if (httpOnly) parts.push('HttpOnly')
-  if (isProduction) parts.push('Secure')
+  if (secureCookies) parts.push('Secure')
 
   return parts.join('; ')
 }
