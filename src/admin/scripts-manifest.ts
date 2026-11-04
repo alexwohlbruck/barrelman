@@ -596,6 +596,19 @@ export const SCRIPTS: ScriptDef[] = [
     source: 'import/backfill-rt-urls.ts',
   },
   {
+    id: 'gtfs-refresh-licences',
+    name: 'Refresh Feed Licences',
+    description: 'Re-read each GTFS feed\'s licence terms (SPDX id, commercial use, redistribution, attribution text) from Transitland.',
+    category: 'transit',
+    danger: 'safe',
+    longRunning: false,
+    confirm: false,
+    exec: { kind: 'internal', handler: 'gtfs:refresh-licences' },
+    source: 'src/services/gtfs.service.ts',
+    notes:
+      'Needs TRANSITLAND_API_KEY in the API container. Under GTFS_LICENCE_POLICY=commercial, newly restricted feeds drop out of transit responses at once and out of MOTIS and the database at the next GTFS import.',
+  },
+  {
     id: 'gtfs-backfill-transfers',
     name: 'Backfill Transfers',
     description: 'Backfill gtfs_transfers from transfers.txt inside local feed ZIPs (for DBs imported before transfers were captured).',
