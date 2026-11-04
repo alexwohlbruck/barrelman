@@ -190,9 +190,10 @@ Cycles on paid plans follow the subscription's period, so the meter and the
 allowance reset on the same day. Barrelman records the subscription's
 `currentPeriodStart` once per subscription, from `subscription.*` webhooks or
 the reconciliation task below, and derives every later period from it. A
-resubscription on another day moves the anchor; overage already reported is
-matched by the days it covers, so it is never billed again under the new
-periods.
+resubscription on another day moves the anchor, and a plan change switches the
+allowance. Either one first settles and reports the days so far under the old
+plan and anchor, then starts metering afresh from that day (`metered_from`),
+so no day is billed twice or judged by the wrong plan.
 
 Each pass looks at the open cycle and the one that just closed. If reporting is
 down for longer than a whole cycle, the cycles before that go unreported, and

@@ -296,9 +296,10 @@ export function creditsToClawBack(packCredits: number, order: RefundedOrder, alr
  * entry is keyed on the order and its refunded total, so a retried webhook
  * writes nothing and a second partial refund writes only its own share.
  * Credits already spent stay spent, so the entry can take the ledger total
- * below zero. On a plan with overage that shortfall is billed as overage. On
- * the free plan purchased credits stop counting until the ledger is positive
- * again, and the monthly allowance is untouched.
+ * below zero. That shortfall is not billed: overage is computed against a
+ * pack balance clamped at zero, so a clawback never reaches the meter. Pack
+ * credits simply stop counting until the ledger is positive again, and the
+ * monthly allowance is untouched.
  *
  * Two partial refunds delivered at once would each read the same running
  * total and both take their share of it; their keys differ, so the unique

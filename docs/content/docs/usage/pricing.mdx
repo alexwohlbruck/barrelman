@@ -151,6 +151,11 @@ On a paid plan the cycle follows your subscription: if you subscribed on the
 When a month has no such day (the 31st in February), the cycle resets on that
 month's last day. The Free plan resets on the 1st of each calendar month. Both
 reset at midnight UTC, and the allowance does not roll over.
+
+Changing plan, or starting a new subscription, starts a new allowance on the
+day of the change. Usage before it is settled under the plan it ran on, so a
+downgrade mid-cycle is not billed again for usage the bigger plan covered, and
+overage owed on the old plan is billed at the change.
 `GET /account/credits` returns the current cycle's `cycleStartedAt` and
 `cycleResetsAt`.
 
