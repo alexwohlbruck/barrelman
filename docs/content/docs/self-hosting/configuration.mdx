@@ -411,7 +411,8 @@ SDK is never loaded. What each alert means is in
 | `SENTRY_ENVIRONMENT` | `production` | API, ops | Environment tag on each event. The release tag is always `barrelman@<version>` |
 | `ALERT_WEBHOOK_URL` | — | API, ops | Where alerts are POSTed. An ntfy topic URL, a Slack incoming webhook, or any endpoint that accepts JSON |
 | `ALERT_WEBHOOK_FORMAT` | `json` | API, ops | `ntfy`, `slack` or `json`. Any other value falls back to `json` with a warning |
-| `ALERT_DISK_PERCENT` | `90` | ops | Alert when a data volume is at least this full |
+| `ALERT_DISK_PERCENT` | `90` | ops | Alert when a data volume, the Postgres one included, is at least this full |
+| `ALERT_DEPENDENCY_CYCLES` | `3` | API | Consecutive failed health checks, a minute apart, before a required service alerts. The default rides out a GraphHopper cold start |
 
 Set the first four on both `barrelman` and `barrelman-ops`; the compose file
 forwards them to each. Scheduled jobs run in either process, so a webhook set on
