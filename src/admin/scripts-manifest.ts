@@ -234,7 +234,7 @@ export const SCRIPTS: ScriptDef[] = [
         envVar: 'REBUILD_GRAPHHOPPER',
         default: true,
         description:
-          'Rebuild the GraphHopper graph once the extract has changed. Street routing is down until the new graph is built, which takes hours for a country. Turn off to rebuild it separately.',
+          'Rebuild the GraphHopper graph once the extract has changed. The old graph keeps serving, but the build adds hours to the update for a country and needs a second graph’s disk and heap. Turn off to rebuild it separately.',
       },
       {
         name: 'REFRESH_BUILDINGS_3D',
@@ -1310,7 +1310,8 @@ export const SCRIPTS: ScriptDef[] = [
   {
     id: 'routing-graphhopper',
     name: 'Rebuild GraphHopper',
-    description: 'Wipe the GraphHopper graph cache and restart the container so it re-imports the PBF and rebuilds the routing graph. Skips itself when the serving graph is already built from the current extract.',
+    description:
+      'Build a new routing graph from the PBF in a separate container while the current graph keeps serving, check it, then swap it in and restart GraphHopper. Skips itself when the serving graph is already built from the current extract.',
     category: 'routing',
     danger: 'caution',
     longRunning: true,
@@ -1325,11 +1326,55 @@ export const SCRIPTS: ScriptDef[] = [
         envVar: 'FORCE_REBUILD',
         default: false,
         description:
-          'Wipe and rebuild even when the graph is already built from the current extract. Needed after a graphhopper-config.yml change, which the freshness check cannot see.',
+          'Rebuild even when the graph is already built from the current extract. Needed after a graphhopper-config.yml change, which the freshness check cannot see.',
+      },
+      {
+        name: 'verify-route',
+        label: 'Trial route before swapping',
+        type: 'select',
+        apply: 'env',
+        envVar: 'GRAPHHOPPER_VERIFY_ROUTE',
+        default: 'auto',
+        options: [
+          { label: 'Auto (only on hosts with enough RAM)', value: 'auto' },
+          { label: 'Always', value: '1' },
+          { label: 'Never', value: '0' },
+        ],
+        description:
+          'Start a second GraphHopper on the new graph and route through it before the swap. It needs another serving heap plus page cache beside the live server, so auto skips it under GRAPHHOPPER_VERIFY_MIN_RAM_GB (48 GB).',
+      },
+      {
+        name: 'stop-server',
+        label: 'Stop the server during the build',
+        type: 'boolean',
+        apply: 'flag',
+        flag: '--stop-server',
+        default: false,
+        description:
+          'Only one GraphHopper JVM in memory, for boxes that cannot hold two. Routing is down for the whole build; the new graph is still checked before the swap.',
+      },
+      {
+        name: 'allow-smaller',
+        label: 'Accept a much smaller graph',
+        type: 'boolean',
+        apply: 'flag',
+        flag: '--allow-smaller',
+        default: false,
+        description: 'Swap in a new graph under half the size of the current one. Only when the region was meant to shrink.',
+      },
+      {
+        name: 'rollback',
+        label: 'Roll back instead',
+        type: 'boolean',
+        apply: 'flag',
+        flag: '--rollback',
+        default: false,
+        description: 'Build nothing: swap the live graph with graph-cache.prev and restart. Run again to undo.',
       },
     ],
     source: 'scripts/rebuild-graphhopper.sh',
-    notes: 'The script returns quickly; the actual graph build runs in the container. Watch `docker logs -f barrelman-graphhopper`.',
+    notes:
+      'Needs free space of about 1.2x the current graph on the OSM volume and refuses to start without it. The job lasts as long as the graph import, hours for a country; routing is down only for the restart at the end. The previous graph is kept at graph-cache.prev.',
   },
   {
     id: 'routing-valhalla',
@@ -1359,16 +1404,50 @@ export const SCRIPTS: ScriptDef[] = [
     id: 'routing-motis',
     name: 'Rebuild MOTIS Dataset',
     description:
-      'Regenerate motis config from gtfs_feeds, clean-rebuild the timetable + street graph with `motis import`, and restart the server on the fresh dataset.',
+      'Regenerate motis config from gtfs_feeds, build a fresh timetable + street graph with `motis import` into data.next while the current dataset keeps serving, check it, then swap it in and restart the server.',
     category: 'routing',
     danger: 'caution',
     longRunning: true,
     confirm: true,
     exclusive: true,
     exec: { kind: 'process', command: 'bash', args: ['scripts/rebuild-motis.sh'] },
+    params: [
+      {
+        name: 'verify-server',
+        label: 'Trial server before swapping',
+        type: 'select',
+        apply: 'env',
+        envVar: 'MOTIS_VERIFY_SERVER',
+        default: 'auto',
+        options: [
+          { label: 'Auto (when the dataset fits in free memory)', value: 'auto' },
+          { label: 'Always', value: '1' },
+          { label: 'Never', value: '0' },
+        ],
+        description: 'Load the new dataset in a second MOTIS and query it before the swap.',
+      },
+      {
+        name: 'stop-server',
+        label: 'Stop the server during the import',
+        type: 'boolean',
+        apply: 'flag',
+        flag: '--stop-server',
+        default: false,
+        description: 'Frees the live server’s memory for the import. Transit is down until the swap.',
+      },
+      {
+        name: 'rollback',
+        label: 'Roll back instead',
+        type: 'boolean',
+        apply: 'flag',
+        flag: '--rollback',
+        default: false,
+        description: 'Build nothing: swap the live dataset with data.prev and restart. Run again to undo.',
+      },
+    ],
     source: 'scripts/rebuild-motis.sh',
     notes:
-      'REQUIRED after every GTFS import and after any MOTIS version bump — `motis server` only serves the pre-built dataset and never re-imports, so a plain restart keeps serving stale schedules. The previous dataset is kept at /data/data.prev and restored automatically if the import fails.',
+      'REQUIRED after every GTFS import and after any MOTIS version bump — `motis server` only serves the pre-built dataset and never re-imports, so a plain restart keeps serving stale schedules. A dataset that fails its checks (no tt.bin, no trips) is discarded and the live one is left alone. The previous dataset is kept at /data/data.prev. Needs free space of about 1.2x the current dataset on the gtfs-data volume.',
   },
 
   // ── Database & Migration (in-process via existing admin service) ───────
