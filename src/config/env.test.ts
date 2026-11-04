@@ -4,7 +4,7 @@
  * `process.env.X ?? default` form read that as a configured 0.
  */
 import { describe, test, expect, afterEach } from 'bun:test'
-import { envNumber, envRaw, envString } from './env'
+import { envBoolean, envNumber, envRaw, envString } from './env'
 
 const NAME = 'BARRELMAN_ENV_TEST_VALUE'
 
@@ -78,5 +78,25 @@ describe('envString', () => {
   test('accepts any value when no set is given', () => {
     process.env[NAME] = 'anything'
     expect(envString<string>(NAME, 'fallback')).toBe('anything')
+  })
+})
+
+describe('envBoolean', () => {
+  test('reads the usual spellings', () => {
+    for (const v of ['true', 'TRUE', '1', 'yes', 'on']) {
+      process.env[NAME] = v
+      expect(envBoolean(NAME, false)).toBe(true)
+    }
+    for (const v of ['false', '0', 'No', 'off']) {
+      process.env[NAME] = v
+      expect(envBoolean(NAME, true)).toBe(false)
+    }
+  })
+
+  test('blank and unrecognised values fall back', () => {
+    process.env[NAME] = ''
+    expect(envBoolean(NAME, false)).toBe(false)
+    process.env[NAME] = 'enabled'
+    expect(envBoolean(NAME, true)).toBe(true)
   })
 })

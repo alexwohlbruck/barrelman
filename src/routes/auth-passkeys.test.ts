@@ -116,6 +116,8 @@ describe('POST /auth/passkeys/authenticate/verify', () => {
     expect(body.user.id).toBe('user-1')
     // The challenge the service verified must be the one from the cookie.
     expect(d.completeAuthentication).toHaveBeenCalledWith(expect.anything(), CHALLENGE)
+    // What BARRELMAN_ADMIN_REQUIRE_PASSKEY reads to accept an admin session.
+    expect(d.startSession).toHaveBeenCalledWith('user-1', expect.objectContaining({ method: 'passkey' }))
   })
 
   test('sets the session cookie and clears the spent challenge', async () => {

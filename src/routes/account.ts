@@ -35,7 +35,8 @@ import {
 import { describeSuspension } from '../services/moderation.service'
 import { terms as termsConfig } from '../config/accounts.config'
 import { resolveSession as _resolveSession, requireUser } from '../middleware/session'
-import { ALL_SCOPES, CREDIT_COSTS, listPlans, publicPlan } from '../billing/plans'
+import { ADMIN_SCOPE, ALL_SCOPES, CREDIT_COSTS, listPlans, publicPlan } from '../billing/plans'
+import { adminSessionRefusal as _adminSessionRefusal } from '../services/admin-access.service'
 
 /** Keys per account. High enough never to bind in practice, low enough to bound abuse. */
 const MAX_KEYS_PER_ACCOUNT = 50
@@ -59,6 +60,7 @@ export interface AccountDeps {
   acceptTerms: typeof _acceptTerms
   findUserById: typeof _findUserById
   resolveSession: typeof _resolveSession
+  adminSessionRefusal: typeof _adminSessionRefusal
 }
 
 const defaultDeps: AccountDeps = {
@@ -76,10 +78,32 @@ const defaultDeps: AccountDeps = {
   acceptTerms: _acceptTerms,
   findUserById: _findUserById,
   resolveSession: _resolveSession,
+  adminSessionRefusal: _adminSessionRefusal,
 }
 
 export function createAccountRoutes(overrides: Partial<AccountDeps> = {}) {
   const deps = { ...defaultDeps, ...overrides }
+
+  /**
+   * Holding the admin role is not enough to put the `admin` scope on a key:
+   * the session must also pass the admin IP allowlist and the passkey
+   * requirement. Otherwise an email-code session that /admin/* refuses could
+   * mint an admin key here and use that instead.
+   */
+  const adminGrantRefusal = async (
+    user: { role: string } | null,
+    session: Parameters<typeof deps.adminSessionRefusal>[1],
+    request: Request,
+    scopes: string[] | undefined,
+  ) => {
+    if (user?.role !== 'admin' || !scopes?.includes(ADMIN_SCOPE)) return null
+    const refusal = await deps.adminSessionRefusal(request, session)
+    if (!refusal) return null
+    return {
+      status: refusal.status,
+      body: { error: `Granting the "${ADMIN_SCOPE}" scope needs a session the admin API accepts. ${refusal.error}`, code: refusal.code },
+    }
+  }
 
   const derive = async ({
     request,
@@ -182,7 +206,7 @@ export function createAccountRoutes(overrides: Partial<AccountDeps> = {}) {
 
     .post(
       '/keys',
-      async ({ user, body, set }) => {
+      async ({ user, session, request, body, set }) => {
         // Creating a key is the moment someone starts actually using the API,
         // which makes it the right place to require agreement. Existing keys
         // keep working across a terms change so a version bump never breaks a
@@ -206,7 +230,8 @@ export function createAccountRoutes(overrides: Partial<AccountDeps> = {}) {
         // `admin` reaches /admin/* — full re-imports, DROP/TRUNCATE, moderation.
         // Minting it has to be gated on the requester already being an admin,
         // or self-service key creation becomes a privilege-escalation route.
-        const invalid = keyPatchError(body, user!.role === 'admin')
+        const invalid =
+          (await adminGrantRefusal(user, session, request, body.scopes)) ?? keyPatchError(body, user!.role === 'admin')
         if (invalid) {
           set.status = invalid.status
           return invalid.body
@@ -246,7 +271,7 @@ export function createAccountRoutes(overrides: Partial<AccountDeps> = {}) {
 
     .patch(
       '/keys/:id',
-      async ({ user, params, body, set }) => {
+      async ({ user, session, request, params, body, set }) => {
         // Refused for everyone here, administrators included: the exemption is
         // only ever set through /admin/users/:id/keys, behind the admin guard
         // and into the account's moderation log. Accepting it on this route —
@@ -256,7 +281,8 @@ export function createAccountRoutes(overrides: Partial<AccountDeps> = {}) {
           return { error: 'Rate-limit exemptions are set by an administrator from the admin console.' }
         }
 
-        const invalid = keyPatchError(body, user!.role === 'admin')
+        const invalid =
+          (await adminGrantRefusal(user, session, request, body.scopes)) ?? keyPatchError(body, user!.role === 'admin')
         if (invalid) {
           set.status = invalid.status
           return invalid.body

@@ -31,6 +31,7 @@ import { speechRoutes } from './routes/speech'
 import { gbfsRoutes } from './routes/gbfs'
 import { ensureSchema, ensureGtfsSchema, ensureGbfsSchema } from './db'
 import { ensureAccountsSchema } from './services/accounts.service'
+import { passkeyPolicy } from './services/admin-access.service'
 import { ensureOpsJobsSchema } from './services/ops-job-store'
 import { ensureRegionsSchema } from './services/region-store.service'
 import { ensureLandmarksSchema } from './services/landmarks.service'
@@ -88,6 +89,9 @@ await ensureOpsJobsSchema()
 await ensureRegionsSchema()
 // User accounts, API keys, usage and credits for the public API.
 await ensureAccountsSchema()
+// Logs whether BARRELMAN_ADMIN_REQUIRE_PASSKEY is enforced, and warns when it
+// is set but no administrator has a passkey yet (it then waits; see the module).
+await passkeyPolicy.startupCheck()
 // Script run history, for job runtime estimates and progress bars.
 await initJobHistory()
 // 3D landmark models and placements, from every source (Open Landmarks and

@@ -10,7 +10,7 @@ import { and, desc, eq, lt } from 'drizzle-orm'
 import type { Session } from 'lucia'
 import { accountsDb as db } from '../db'
 import { lucia } from '../lib/lucia'
-import { authTokens, sessions, type User } from '../schema/accounts'
+import { authTokens, sessions, type SignInMethod, type User } from '../schema/accounts'
 import { generateId, randomNumericCode, sha256Hex } from '../lib/crypto'
 import { otpTtlMs } from '../config/accounts.config'
 import { hashIp } from './accounts.service'
@@ -101,6 +101,8 @@ export async function pruneExpiredTokens(): Promise<void> {
 export interface SessionContext {
   ip?: string
   userAgent?: string | null
+  /** Recorded on the row; see `SignInMethod`. Omitted means unknown. */
+  method?: SignInMethod
 }
 
 /**
@@ -115,6 +117,7 @@ export async function startSession(
   const session = await lucia.createSession(userId, {
     ipHash: context.ip ? hashIp(context.ip) : null,
     userAgent: context.userAgent?.slice(0, 400) ?? null,
+    authMethod: context.method ?? null,
     createdAt: new Date(),
   })
 
