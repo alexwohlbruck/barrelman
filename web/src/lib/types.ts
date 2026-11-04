@@ -185,6 +185,9 @@ export interface DataMetrics {
     tripPatterns: number | null
     shapes: number | null
     feedsWithRt: number | null
+    feedsForbiddingCommercial: number | null
+    feedsWithLicense: number | null
+    licensePolicy: 'off' | 'commercial'
     lastImport: string | null
   }
   gbfs: { systems: number | null; stations: number | null }
@@ -622,4 +625,24 @@ export interface TrafficReport {
     penalised: number
     inFlight: number
   }
+}
+
+/** Mirrors GtfsFeedSummary in src/services/admin-metrics.service.ts. */
+export interface GtfsFeedSummary {
+  feedId: string
+  onestopId: string | null
+  name: string | null
+  region: string | null
+  stopCount: number
+  routeCount: number
+  importedAt: string | null
+  license: {
+    spdx: string | null
+    url: string | null
+    commercialUseAllowed: string | null
+    redistributionAllowed: string | null
+    attributionText: string | null
+    fetchedAt: string | null
+  }
+  withheld: boolean
 }

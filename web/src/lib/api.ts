@@ -4,6 +4,7 @@ import type {
   JobStats,
   LogLine,
   DataMetrics,
+  GtfsFeedSummary,
   ServiceStatus,
   TestResult,
   ImportRegion,
@@ -195,6 +196,10 @@ export function resolveBoundary(id: string): Promise<DerivedRegion> {
 // ── Metrics & services ────────────────────────────────────────────────
 export function getMetrics(): Promise<DataMetrics> {
   return request<DataMetrics>('/admin/metrics')
+}
+
+export function getGtfsFeeds(): Promise<{ feeds: GtfsFeedSummary[] }> {
+  return request<{ feeds: GtfsFeedSummary[] }>('/admin/gtfs-feeds')
 }
 
 export function getServices(): Promise<{ services: ServiceStatus[] }> {
