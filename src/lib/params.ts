@@ -34,8 +34,9 @@ export function clampInt(
 
 /**
  * Shared ceilings, so the same parameter means the same thing across routes.
- * Sized from the largest values Parchment sends: 150 departures for a service
- * board, a 100 km search widen, 60-row search pages.
+ * Sized from the largest values Parchment sends: up to 750 departures for a
+ * day-long board (departure-board.ts), a 100 km search widen, 60-row search
+ * pages.
  */
 export const LIMITS = {
   /** Rows in one list response. */
@@ -51,7 +52,7 @@ export const LIMITS = {
   /** Ids in one comma-separated list parameter. */
   maxListItems: 500,
   /** Departure events on one board. */
-  maxDepartures: 500,
+  maxDepartures: 1_000,
   /** A departure board's time window, in minutes (one day). */
   maxWindowMinutes: 1_440,
 } as const

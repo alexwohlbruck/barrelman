@@ -350,7 +350,7 @@ export function createTransitRoutes(deps: {
           }
         }
 
-        const request: DepartureRequest = {
+        const departureRequest: DepartureRequest = {
           lat: isNaN(lat) ? 0 : lat,
           lng: isNaN(lng) ? 0 : lng,
           radius: clampNumber(query.radius, { min: 1, max: LIMITS.maxNearbyRadiusM }),
@@ -374,7 +374,7 @@ export function createTransitRoutes(deps: {
           windowMinutes: clampNumber(query.windowMinutes, { min: 1, max: LIMITS.maxWindowMinutes }),
         }
 
-        return await getDepartures(request, fetchFn)
+        return await getDepartures(departureRequest, fetchFn)
       } catch (err) {
         return serverError(request, set, err, 'Failed to fetch departures')
       }
