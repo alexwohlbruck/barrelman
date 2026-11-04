@@ -1490,6 +1490,21 @@ export const SCRIPTS: ScriptDef[] = [
     notes:
       'Read-only: it prints the recreate command rather than running it, because recreating motis after a :latest pull needs a timetable re-import first. Exits non-zero when anything is uncapped, so it can gate a cron job. Sizes only show when run as root.',
   },
+  {
+    id: 'billing-reconcile',
+    name: 'Reconcile Billing',
+    description:
+      'Re-read every Polar-linked account\'s subscription and correct its plan and billing period, then log any account whose Polar meter disagrees with the overage barrelman has reported this period.',
+    category: 'database',
+    danger: 'safe',
+    longRunning: false,
+    confirm: false,
+    exclusive: true,
+    exec: { kind: 'internal', handler: 'billing:reconcile' },
+    source: 'src/services/billing-reconcile.service.ts',
+    notes:
+      'Does nothing unless billing is enabled. Meter drift is only logged, never corrected; a pass still in flight or a meter that resets on another day both show up as drift.',
+  },
 ]
 
 export function getScript(id: string): ScriptDef | undefined {

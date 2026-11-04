@@ -91,6 +91,10 @@ const SEEDS: Array<Pick<ScheduleInput, 'scriptId' | 'cron'> & { params?: Record<
   // week's delay only means a brand-new name isn't offered as a correction
   // yet; it is still found when spelled right.
   { scriptId: 'db-build-search-lexicon', cron: '0 12 * * 0' },
+  // Catches subscription changes whose webhook never arrived. Daily is enough:
+  // a missed webhook is rare, and the customer can refresh their own billing
+  // page in the meantime. A no-op where billing is off.
+  { scriptId: 'billing-reconcile', cron: '45 2 * * *' },
 ]
 
 let schemaReady: Promise<void> | null = null

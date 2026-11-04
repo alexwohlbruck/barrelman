@@ -23,6 +23,7 @@ import {
 } from './admin.service'
 
 import { importLandmarks, type ImportResult } from './landmark-import.service'
+import { reconcileBilling } from './billing-reconcile.service'
 
 const IMPORT_DIR = join(import.meta.dir, '../../import')
 
@@ -110,6 +111,10 @@ export const INTERNAL_HANDLERS: Record<string, (log: LogFn) => Promise<void>> = 
 
   'landmarks:import': async (log) => reportSkipped(log, await importLandmarks({ log })),
   'landmarks:import-full': async (log) => reportSkipped(log, await importLandmarks({ full: true, log })),
+
+  'billing:reconcile': async (log) => {
+    await reconcileBilling(log)
+  },
 
   // raw SQL-file tasks
   'sql:create-station-links.sql': (log) => runSqlFile(log, 'create-station-links.sql'),
