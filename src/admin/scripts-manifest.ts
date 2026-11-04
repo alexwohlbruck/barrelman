@@ -234,7 +234,7 @@ export const SCRIPTS: ScriptDef[] = [
         envVar: 'REBUILD_GRAPHHOPPER',
         default: true,
         description:
-          'Rebuild the GraphHopper graph once the extract has changed. The old graph keeps serving, but the build adds hours to the update for a country and needs a second graph’s disk and heap. Turn off to rebuild it separately.',
+          'Rebuild the GraphHopper graph once the extract has changed. Routing is down for the build (hours for a country) unless GRAPHHOPPER_BUILD_ALONGSIDE is set, and the build needs a second graph’s disk. Turn off to rebuild it separately.',
       },
       {
         name: 'REFRESH_BUILDINGS_3D',
@@ -1311,7 +1311,7 @@ export const SCRIPTS: ScriptDef[] = [
     id: 'routing-graphhopper',
     name: 'Rebuild GraphHopper',
     description:
-      'Build a new routing graph from the PBF in a separate container while the current graph keeps serving, check it, then swap it in and restart GraphHopper. Skips itself when the serving graph is already built from the current extract.',
+      'Build a new routing graph from the PBF in a separate container (with the server stopped, unless built alongside), check it, then swap it in and restart GraphHopper. Skips itself when the serving graph is already built from the current extract.',
     category: 'routing',
     danger: 'caution',
     longRunning: true,
@@ -1344,14 +1344,19 @@ export const SCRIPTS: ScriptDef[] = [
           'Start a second GraphHopper on the new graph and route through it before the swap. It needs another serving heap plus page cache beside the live server, so auto skips it under GRAPHHOPPER_VERIFY_MIN_RAM_GB (48 GB).',
       },
       {
-        name: 'stop-server',
-        label: 'Stop the server during the build',
-        type: 'boolean',
-        apply: 'flag',
-        flag: '--stop-server',
-        default: false,
+        name: 'build-alongside',
+        label: 'Keep routing up during the build',
+        type: 'select',
+        apply: 'env',
+        envVar: 'GRAPHHOPPER_BUILD_ALONGSIDE',
+        default: 'false',
+        options: [
+          { label: 'No: stop the server for the build', value: 'false' },
+          { label: 'Auto (only if the build heap plus 4 GB is free)', value: 'auto' },
+          { label: 'Yes: build beside the live server', value: 'true' },
+        ],
         description:
-          'Only one GraphHopper JVM in memory, for boxes that cannot hold two. Routing is down for the whole build; the new graph is still checked before the swap.',
+          'Building alongside holds two GraphHopper JVMs in memory for the whole build. By default the server is stopped, so routing is down for the build; the new graph is still checked before the swap and the old one kept for rollback.',
       },
       {
         name: 'allow-smaller',
@@ -1374,7 +1379,7 @@ export const SCRIPTS: ScriptDef[] = [
     ],
     source: 'scripts/rebuild-graphhopper.sh',
     notes:
-      'Needs free space of about 1.2x the current graph on the OSM volume and refuses to start without it. The job lasts as long as the graph import, hours for a country; routing is down only for the restart at the end. The previous graph is kept at graph-cache.prev.',
+      'Needs free space of about 1.2x the current graph on the OSM volume and refuses to start without it. The job lasts as long as the graph import, hours for a country; built alongside, routing is down only for the restart at the end. The previous graph is kept at graph-cache.prev, which costs another full graph on disk.',
   },
   {
     id: 'routing-valhalla',
@@ -1404,7 +1409,7 @@ export const SCRIPTS: ScriptDef[] = [
     id: 'routing-motis',
     name: 'Rebuild MOTIS Dataset',
     description:
-      'Regenerate motis config from gtfs_feeds, build a fresh timetable + street graph with `motis import` into data.next while the current dataset keeps serving, check it, then swap it in and restart the server.',
+      'Regenerate motis config from gtfs_feeds, build a fresh timetable + street graph with `motis import` into data.next (with the server stopped, unless built alongside), check it, then swap it in and restart the server.',
     category: 'routing',
     danger: 'caution',
     longRunning: true,
@@ -1427,13 +1432,19 @@ export const SCRIPTS: ScriptDef[] = [
         description: 'Load the new dataset in a second MOTIS and query it before the swap.',
       },
       {
-        name: 'stop-server',
-        label: 'Stop the server during the import',
-        type: 'boolean',
-        apply: 'flag',
-        flag: '--stop-server',
-        default: false,
-        description: 'Frees the live server’s memory for the import. Transit is down until the swap.',
+        name: 'build-alongside',
+        label: 'Keep transit up during the import',
+        type: 'select',
+        apply: 'env',
+        envVar: 'MOTIS_BUILD_ALONGSIDE',
+        default: 'false',
+        options: [
+          { label: 'No: stop the server for the import', value: 'false' },
+          { label: 'Auto (only if 12 GB is free)', value: 'auto' },
+          { label: 'Yes: import beside the live server', value: 'true' },
+        ],
+        description:
+          'A US import peaks at 5–8 GB beside a live server of about 5 GB. By default the server is stopped, so transit is down for the import; the new dataset is still checked before the swap and the old one kept for rollback.',
       },
       {
         name: 'rollback',

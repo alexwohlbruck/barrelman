@@ -560,8 +560,11 @@ services:
       # Unset, a street-routing build that fails falls back AND fails the job.
       MOTIS_STREET_ROUTING: ${MOTIS_STREET_ROUTING:-}
       # Staged engine rebuilds (scripts/rebuild-graphhopper.sh, rebuild-motis.sh):
-      # the build container's heap, and whether to load the new dataset in a
-      # trial server before swapping it in (auto | 1 | 0).
+      # whether the live server keeps serving during the build (false | auto |
+      # true; off unless set), the build container's heap, and whether to load
+      # the new dataset in a trial server before swapping it in (auto | 1 | 0).
+      GRAPHHOPPER_BUILD_ALONGSIDE: ${GRAPHHOPPER_BUILD_ALONGSIDE:-}
+      MOTIS_BUILD_ALONGSIDE: ${MOTIS_BUILD_ALONGSIDE:-}
       GRAPHHOPPER_BUILD_JAVA_OPTS: ${GRAPHHOPPER_BUILD_JAVA_OPTS:-}
       GRAPHHOPPER_VERIFY_ROUTE: ${GRAPHHOPPER_VERIFY_ROUTE:-}
       GRAPHHOPPER_VERIFY_MIN_RAM_GB: ${GRAPHHOPPER_VERIFY_MIN_RAM_GB:-}
