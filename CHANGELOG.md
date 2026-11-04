@@ -21,6 +21,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ### Changed
 
+* The basemap can be rendered to zoom 15 (`BASEMAP_MAXZOOM=15`; the default stays 14). Close-in views stop stretching zoom-14 tiles that clients lay out again for every deeper tile, so a city centre lays out about a third as much basemap per close-in view (DC: a 360–410 KB zoom-14 tile against 75–160 KB zoom-15 ones); the archive is about twice the size, and the render needs far more sort space and memory. Clients keep working against a z15 archive unchanged, and can raise their basemap maxzoom to 15 to benefit.
+
 * `indoor_map` flights are one point per escalator or stair at its middle, with `width`, `length` and uphill `bearing`, in place of per-tread polygons and the `height` column. A `down` flight beside an `up` one climbs the same way. Stairwells and lift shafts no longer get walls.
 * **Bridge decks at junctions and splits.** A deck stays inside its bridge's
   outline, so a junction carried on a bridge is no longer a slab reaching over
@@ -28,6 +30,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
   the gore's nose, which its deck paves.
 
 ### Fixed
+
+* Basemap renders no longer run the data volume out of space. The archive from two renders ago is removed before rendering instead of after, planetiler's sort files can live on another disk (`BASEMAP_TMP_DIR`), and a failed render cleans them up. A render that fills its disk crashes planetiler with `ArrayIndexOutOfBoundsException` and leaves the basemap stale.
 
 * Requests made with the service key (`BARRELMAN_API_KEY`) get their own per-address ceiling, `BARRELMAN_SERVICE_RPM` (default 6000/min), instead of the anonymous 120/min, which a backend fanning out one trip plan's calls hit at once.
 

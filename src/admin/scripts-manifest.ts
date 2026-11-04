@@ -414,6 +414,20 @@ export const SCRIPTS: ScriptDef[] = [
           'By default this only refreshes an existing basemap. Turn on to render the first one — you must also uncomment the pmtiles source in martin-config.yaml for it to be served.',
       },
       {
+        name: 'BASEMAP_MAXZOOM',
+        label: 'Deepest zoom',
+        type: 'select',
+        apply: 'env',
+        envVar: 'BASEMAP_MAXZOOM',
+        default: '14',
+        options: [
+          { label: '14 — OpenMapTiles default', value: '14' },
+          { label: '15 — quicker close-in views, twice the archive', value: '15' },
+        ],
+        description:
+          'Deepest zoom rendered: 14 or 15 (planetiler\'s limit). Clients draw deeper zooms by stretching these tiles, and a stretched tile is laid out again for every deeper tile it covers, so 15 keeps close-in views quick. It doubles the archive and needs far more sort space and memory: a US render passed 46 GB of sort files seven minutes in. Set BASEMAP_TMP_DIR to a roomy disk first.',
+      },
+      {
         name: 'PLANETILER_MEMORY',
         label: 'Render heap',
         type: 'string',
