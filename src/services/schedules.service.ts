@@ -66,7 +66,7 @@ export const defaultTimeZone = (): string => {
  * exclusive-job guard would reject the overlap anyway, but a skipped import is
  * worse than a spread-out one.
  */
-const SEEDS: Array<Pick<ScheduleInput, 'scriptId' | 'cron'> & { params?: Record<string, unknown> }> = [
+export const SEEDS: Array<Pick<ScheduleInput, 'scriptId' | 'cron'> & { params?: Record<string, unknown> }> = [
   // Incremental replication diff — cheap, safe to run nightly. Explicitly
   // pinned to replication so a seeded schedule can never trigger the
   // destructive full re-import.
@@ -91,6 +91,9 @@ const SEEDS: Array<Pick<ScheduleInput, 'scriptId' | 'cron'> & { params?: Record<
   // week's delay only means a brand-new name isn't offered as a correction
   // yet; it is still found when spelled right.
   { scriptId: 'db-build-search-lexicon', cron: '0 12 * * 0' },
+  // Nightly state backup, ahead of the 03:00 OSM update so a backup never
+  // waits behind it on the ops worker. A few seconds of work.
+  { scriptId: 'db-backup', cron: '15 2 * * *' },
 ]
 
 let schemaReady: Promise<void> | null = null
