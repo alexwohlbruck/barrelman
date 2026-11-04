@@ -224,6 +224,34 @@ followed by `rebuild-motis.sh`.
 Transit responses credit the feeds they draw on in an `attribution` field; see
 [Attribution](/usage/attribution#transit-data).
 
+#### Station labels
+
+Transit legs and departures carry `directionLabel`, what a platform's signs
+call the direction ("Uptown & The Bronx"), and station entrances carry
+`cornerLabel` ("Broadway & West 28th Street · NW corner") and
+`entryAllowed`/`exitAllowed`. They are derived, never entered by hand:
+
+- **Directions** from the OSM `destination` of each platform tied to a GTFS
+  stop by `gtfs:stop_id`, or direction words in its name. A platform tagged
+  with several stop ids serves both directions and says nothing.
+- **Corners** from the nearest named intersection: its two streets, and the
+  side of each street the entrance stands on. Further out, the street pair
+  alone; mid-block, the street it is on.
+- **Entry and exit** from OSM `entrance=exit|entry`.
+
+Agency open data fills in where it exists and is fetched only when its feed is
+imported. For the NYC subway that is the MTA's
+[Subway Stations](https://data.ny.gov/d/39hk-dx4f) dataset (direction labels;
+"Last Stop" is skipped) and its
+[Subway Entrances and Exits](https://data.ny.gov/d/i9wp-a4ja) (entry/exit
+flags, matched to OSM entrances within 10 m). A source that cannot be fetched
+keeps its previous rows.
+
+Every feed import refreshes its direction labels, and OSM Update and the full
+import refresh everything. The console task **Refresh Station Labels**
+(Scripts → GTFS / Transit) runs the same refresh by hand, which an instance
+upgrading needs once.
+
 ### Step 3 — Bikeshare (optional)
 
 ```bash
