@@ -16,7 +16,7 @@
  * trip per request. It is invalidated directly whenever credits are granted or
  * a plan changes.
  */
-import { eq, sql as dsql } from 'drizzle-orm'
+import { and, eq, like, sql as dsql } from 'drizzle-orm'
 import { LRUCache } from 'lru-cache'
 import { db } from '../db'
 import { creditLedger, users, type CreditEntryKind } from '../schema/accounts'
@@ -196,6 +196,22 @@ export async function grantCredits(options: GrantOptions): Promise<boolean> {
 
   invalidateBalance(userId)
   return true
+}
+
+/**
+ * Sum of an account's ledger entries whose external id starts with `prefix`.
+ * Lets a refund work out how much of an order it has already taken back.
+ */
+export async function ledgerTotalForExternalPrefix(userId: string, prefix: string): Promise<number> {
+  const [row] = await db
+    .select({ total: dsql<number>`COALESCE(SUM(${creditLedger.amount}), 0)::int` })
+    .from(creditLedger)
+    .where(and(eq(creditLedger.userId, userId), like(creditLedger.externalId, `${escapeLike(prefix)}%`)))
+  return row?.total ?? 0
+}
+
+function escapeLike(value: string): string {
+  return value.replace(/[\\%_]/g, (c) => `\\${c}`)
 }
 
 export interface LedgerEntry {
