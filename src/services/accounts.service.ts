@@ -69,8 +69,12 @@ export function ensureAccountsSchema(): Promise<void> {
           expires_at timestamptz NOT NULL,
           ip_hash    text,
           user_agent text,
+          auth_method text,
           created_at timestamptz NOT NULL DEFAULT now()
         )`
+      // Added after the table shipped. Existing sessions keep NULL, which the
+      // admin passkey requirement reads as "not a passkey sign-in".
+      await sql`ALTER TABLE accounts_sessions ADD COLUMN IF NOT EXISTS auth_method text`
       await sql`CREATE INDEX IF NOT EXISTS accounts_sessions_user_idx ON accounts_sessions (user_id)`
 
       await sql`

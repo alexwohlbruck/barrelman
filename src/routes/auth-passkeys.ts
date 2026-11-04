@@ -123,6 +123,7 @@ export function createPasskeyRoutes(overrides: Partial<PasskeyDeps> = {}) {
         const { session, cookie } = await deps.startSession(result.user.id, {
           ip: clientIp(request),
           userAgent: request.headers.get('user-agent'),
+          method: 'passkey',
         })
 
         // Two cookies at once: the new session, and the spent challenge cleared.

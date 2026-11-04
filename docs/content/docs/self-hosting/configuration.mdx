@@ -114,6 +114,39 @@ region the MOTIS rebuild fails part-way with `Region "…" is disabled`.
 an API key carrying the `admin` scope owned by an admin. The `admin` scope sits
 outside the `*` wildcard and only an administrator may grant it.
 
+### Hardening admin access
+
+| Variable | Default | Description |
+|---|---|---|
+| `BARRELMAN_ADMIN_REQUIRE_PASSKEY` | `false` | Admin-role sessions reach `/admin/*` only if they were signed in with a passkey. Admin-scoped API keys are unaffected |
+| `BARRELMAN_ADMIN_ALLOWED_IPS` | — | Comma-separated CIDRs (IPv4 and IPv6) allowed to reach `/admin/*`. Unset allows any address |
+
+**Passkey requirement.** With it on, an administrator who signed in with an
+email code or OAuth sees a notice in the console and loses the operator views
+until they sign in with a passkey. Their account page stays reachable, so they
+can register a passkey there, sign out and sign back in with it. Sessions
+created before the upgrade count as not-passkey. The same session also can't
+put the `admin` scope on an API key, which would otherwise be a way around the
+requirement.
+
+It can't lock every administrator out:
+
+- If no administrator has a passkey when the server starts, it logs a warning
+  and doesn't enforce. It checks again every minute and starts enforcing once
+  the first administrator registers one.
+- Once enforced, it stays enforced until the process restarts, even if the
+  passkeys are deleted. That way an email-code session can't switch it off by
+  removing them.
+- If every administrator loses their passkeys, restart the API. It finds none,
+  warns, and stands down until someone registers a new one.
+
+**IP allowlist.** Applies to every admin credential, keys included, and to the
+unauthenticated `/admin/config`. The client address is read the same way the
+rate limits read it, so set `BARRELMAN_TRUSTED_PROXY_HOPS` correctly first, or
+every request looks like it came from your proxy. An entry that doesn't parse
+is skipped with an error in the log; if none parse, every address is refused.
+To recover from a wrong list, fix the variable and recreate the container.
+
 > Leaving `BARRELMAN_API_KEY` unset is how every guard in this codebase spells
 > "local development", and a fresh clone has to be usable with no configuration.
 > A production instance sets it; the server logs a warning at startup if

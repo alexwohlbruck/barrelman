@@ -59,3 +59,19 @@ export function envNumber(name: string, fallback: number): number {
   }
   return value
 }
+
+/**
+ * Boolean setting: `true`/`1`/`yes`/`on` and `false`/`0`/`no`/`off`, any case.
+ * Anything else falls back with a warning, so a typo in a security switch shows
+ * up in the log instead of being read as whatever the parser guessed.
+ */
+export function envBoolean(name: string, fallback: boolean): boolean {
+  const raw = envRaw(name)
+  if (raw === undefined) return fallback
+
+  const lower = raw.toLowerCase()
+  if (['true', '1', 'yes', 'on'].includes(lower)) return true
+  if (['false', '0', 'no', 'off'].includes(lower)) return false
+  console.warn(`[config] ${name}="${raw}" is not a boolean — using ${fallback}`)
+  return fallback
+}
