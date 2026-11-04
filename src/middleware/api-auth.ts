@@ -226,6 +226,37 @@ interface GuardContext {
   request: Request
   set: { status?: number | string; headers: Record<string, string | number> }
   store?: Record<string, unknown>
+  params?: Record<string, string | undefined>
+  query?: Record<string, string | undefined>
+  body?: unknown
+}
+
+/**
+ * How many of the group's unit price one request costs. A tile bundle reads N
+ * sources, an isochrone computes one polygon per contour, a long trace is
+ * matched in pieces; pricing those at one unit made the expensive form of a
+ * request the cheapest per unit of work.
+ *
+ * Runs in the guard, before the handler, so the charge is still decided up
+ * front against the balance. The body is already parsed by then. Return 0 for
+ * a request that should authenticate and throttle like its group but charge
+ * nothing (a static listing). Anything that is not a finite number counts as 1.
+ */
+export type CostUnits = (context: GuardContext) => number
+
+export interface ApiAuthOptions extends Partial<ApiAuthDeps> {
+  units?: CostUnits
+}
+
+function unitsFor(units: CostUnits | undefined, context: GuardContext): number {
+  if (!units) return 1
+  let n: number
+  try {
+    n = units(context)
+  } catch {
+    return 1
+  }
+  return Number.isFinite(n) ? Math.max(0, Math.ceil(n)) : 1
 }
 
 /**
@@ -234,8 +265,9 @@ interface GuardContext {
  * Usage:
  *     new Elysia().onBeforeHandle(apiAuth('search')).get('/search', …)
  */
-export function apiAuth(group: EndpointGroup, overrides: Partial<ApiAuthDeps> = {}) {
-  const cost = creditCost(group)
+export function apiAuth(group: EndpointGroup, options: ApiAuthOptions = {}) {
+  const unitCost = creditCost(group)
+  const { units, ...overrides } = options
   const deps = { ...defaultDeps, ...overrides }
 
   return async function apiAuthHandler(context: GuardContext) {
@@ -414,7 +446,9 @@ export function apiAuth(group: EndpointGroup, overrides: Partial<ApiAuthDeps> = 
      * detection, and "we cannot see it" is a strictly worse property than "we
      * do not charge for it".
      */
-    if (!plan.metered) {
+    const cost = unitCost * unitsFor(units, context)
+
+    if (!plan.metered || cost === 0) {
       deps.recordUsage({ userId: caller.userId, apiKeyId: caller.keyId, endpoint: group, credits: 0 })
       stash(context, { caller, group, credits: 0, charged: false, throttleKey })
       recordSuccess(caller.userId)
