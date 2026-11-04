@@ -126,6 +126,55 @@ describe.skipIf(!DATABASE_URL)('pack settlement', () => {
       SELECT count(*)::int AS count FROM accounts_credit_ledger WHERE user_id = ${user} AND kind = 'usage'`
     expect(row!.count).toBe(1)
   })
+
+  test('a downgrade does not drain a pack for months the old plan covered', async () => {
+    const { credits, sql } = m!
+    const user = await makeUser('developer')
+    const lastMonth = new Date()
+    lastMonth.setUTCDate(1)
+    lastMonth.setUTCMonth(lastMonth.getUTCMonth() - 1)
+
+    await credits.grantCredits({ userId: user, amount: 50_000, kind: 'purchase', externalId: `${user}-order` })
+    await sql`UPDATE accounts_credit_ledger SET created_at = ${lastMonth.toISOString()} WHERE user_id = ${user}`
+    // Inside the developer allowance, far past the free one.
+    await use(user, lastMonth.toISOString().slice(0, 10), 500_000)
+
+    credits.invalidateBalance(user)
+    expect((await credits.getBalance(user)).purchased).toBe(50_000)
+
+    await credits.setPlan(user, 'free')
+    expect((await credits.getBalance(user)).purchased).toBe(50_000)
+  })
+})
+
+describe.skipIf(!DATABASE_URL)('subscription anchors', () => {
+  test('are written once per subscription', async () => {
+    const user = await makeUser('developer')
+    const anchorOf = async () =>
+      (await m!.sql<Array<{ a: string }>>`
+        SELECT billing_period_start::text AS a FROM accounts_users WHERE id = ${user}`)[0]!.a
+
+    expect(await m!.credits.recordBillingPeriod(user, { subscriptionId: 'sub-a', periodStart: '2026-01-31T10:00:00Z' })).toBe(true)
+    // A renewal of the same subscription reports a clamped start; it is ignored.
+    expect(await m!.credits.recordBillingPeriod(user, { subscriptionId: 'sub-a', periodStart: '2026-02-28T10:00:00Z' })).toBe(false)
+    expect(await anchorOf()).toStartWith('2026-01-31')
+    expect(await m!.credits.recordBillingPeriod(user, { subscriptionId: 'sub-b', periodStart: '2026-03-15T10:00:00Z' })).toBe(true)
+    expect(await anchorOf()).toStartWith('2026-03-15')
+  })
+
+  test('a resubscription on another day does not bill reported overage again', async () => {
+    const user = await makeUser('developer')
+    await m!.credits.recordBillingPeriod(user, { subscriptionId: 'sub-a', periodStart: '2026-01-31T10:00:00Z' })
+    await use(user, '2026-03-01', 1_806_000)
+
+    await m!.overage.reportPendingOverage({ now: new Date('2026-03-05T00:00:00Z') })
+    expect(await reports(user)).toEqual([{ cycle: '2026-02-28', reported: 806_000, pending: null }])
+
+    await m!.credits.recordBillingPeriod(user, { subscriptionId: 'sub-b', periodStart: '2026-03-15T10:00:00Z' })
+    ingested.length = 0
+    await m!.overage.reportPendingOverage({ now: new Date('2026-03-16T00:00:00Z') })
+    expect(ingested.filter((event) => event.externalCustomerId === user)).toEqual([])
+  })
 })
 
 describe.skipIf(!DATABASE_URL)('overage reporting', () => {
@@ -216,7 +265,7 @@ describe.skipIf(!DATABASE_URL)('overage reporting', () => {
     const later = new Date('2026-11-20T00:00:00Z')
 
     failNext = true
-    await expect(m!.overage.reportPendingOverage({ userId: user, now: later })).rejects.toThrow(/refused/)
+    await expect(m!.overage.reportPendingOverage({ userId: user, now: later })).rejects.toThrow(/could not be sent/)
     expect(await reports(user)).toEqual([{ cycle: '2026-11-14', reported: 0, pending: 4_000 }])
 
     await m!.overage.reportPendingOverage({ userId: user, now: later })

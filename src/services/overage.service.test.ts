@@ -25,6 +25,7 @@ function row(overrides: Partial<OverageRow> = {}): OverageRow {
     user_id: 'user-1',
     plan: 'developer',
     cycle: '2026-11-01',
+    cycle_end: '2026-12-01',
     used: 0,
     purchased: 0,
     reported: 0,
@@ -60,13 +61,13 @@ describe('the delta against what was already reported', () => {
   test('first pass reports the whole overage', () => {
     const rows = [row({ used: developer.monthlyCredits + 50_000, reported: 0 })]
 
-    expect(computePendingOverage(rows)).toEqual([{ userId: 'user-1', cycle: '2026-11-01', credits: 50_000, total: 50_000 }])
+    expect(computePendingOverage(rows)).toEqual([{ userId: 'user-1', cycle: '2026-11-01', cycleEnd: '2026-12-01', credits: 50_000, total: 50_000 }])
   })
 
   test('a later pass reports only what is new', () => {
     const rows = [row({ used: developer.monthlyCredits + 80_000, reported: 50_000 })]
 
-    expect(computePendingOverage(rows)).toEqual([{ userId: 'user-1', cycle: '2026-11-01', credits: 30_000, total: 80_000 }])
+    expect(computePendingOverage(rows)).toEqual([{ userId: 'user-1', cycle: '2026-11-01', cycleEnd: '2026-12-01', credits: 30_000, total: 80_000 }])
   })
 
   test('re-running with nothing new reports nothing', () => {
@@ -108,7 +109,7 @@ describe('purchased credits', () => {
   test('overage begins only past the pack', () => {
     const rows = [row({ used: developer.monthlyCredits + 70_000, purchased: 50_000 })]
 
-    expect(computePendingOverage(rows)).toEqual([{ userId: 'user-1', cycle: '2026-11-01', credits: 20_000, total: 20_000 }])
+    expect(computePendingOverage(rows)).toEqual([{ userId: 'user-1', cycle: '2026-11-01', cycleEnd: '2026-12-01', credits: 20_000, total: 20_000 }])
   })
 
   test('a pack bought mid-cycle retroactively reduces what is owed', () => {
@@ -130,8 +131,8 @@ describe('batches', () => {
     ]
 
     expect(computePendingOverage(rows)).toEqual([
-      { userId: 'a', cycle: '2026-11-01', credits: 10_000, total: 10_000 },
-      { userId: 'd', cycle: '2026-11-01', credits: 50_000, total: 90_000 },
+      { userId: 'a', cycle: '2026-11-01', cycleEnd: '2026-12-01', credits: 10_000, total: 10_000 },
+      { userId: 'd', cycle: '2026-11-01', cycleEnd: '2026-12-01', credits: 50_000, total: 90_000 },
     ])
   })
 
@@ -157,8 +158,8 @@ describe('buildOverageRows — period boundaries', () => {
       anchor: '2026-10-14T15:00:00Z',
       days: [],
       ledgerBalance: 0,
-      packUsage: {},
-      reported: {},
+      packUsage: [],
+      reports: [],
       ...overrides,
     }
   }
@@ -175,13 +176,13 @@ describe('buildOverageRows — period boundaries', () => {
             { day: '2026-11-13', credits: 80_000 },
             { day: '2026-11-14', credits: 1_000 },
           ],
-          reported: { '2026-10-14': 50_000 },
+          reports: [{ cycle: '2026-10-14', start: '2026-10-14', end: '2026-11-14', amount: 50_000 }],
         }),
       ],
       now,
     )
 
-    expect(computePendingOverage(rows)).toEqual([{ userId: 'user-1', cycle: '2026-10-14', credits: 30_000, total: 80_000 }])
+    expect(computePendingOverage(rows)).toEqual([{ userId: 'user-1', cycle: '2026-10-14', cycleEnd: '2026-11-14', credits: 30_000, total: 80_000 }])
   })
 
   test('periods follow the subscription, not the calendar month', () => {
@@ -195,14 +196,14 @@ describe('buildOverageRows — period boundaries', () => {
       [
         account({
           days: [{ day: '2026-11-10', credits: developer.monthlyCredits + 30_000 }],
-          packUsage: { '2026-10-14': 20_000 },
+          packUsage: [{ start: '2026-10-14', end: '2026-11-14', amount: 20_000 }],
           ledgerBalance: 0,
         }),
       ],
       new Date('2026-11-15T00:00:00Z'),
     )
 
-    expect(computePendingOverage(rows)).toEqual([{ userId: 'user-1', cycle: '2026-10-14', credits: 10_000, total: 10_000 }])
+    expect(computePendingOverage(rows)).toEqual([{ userId: 'user-1', cycle: '2026-10-14', cycleEnd: '2026-11-14', credits: 10_000, total: 10_000 }])
   })
 
   test('overage is reported on the plan an account is leaving, even for free', () => {
@@ -213,7 +214,30 @@ describe('buildOverageRows — period boundaries', () => {
 
     expect(computePendingOverage(buildOverageRows(accounts, now))).toEqual([])
     expect(computePendingOverage(buildOverageRows(accounts, now, developer), developer)).toEqual([
-      { userId: 'user-1', cycle: '2026-10-14', credits: 40_000, total: 40_000 },
+      { userId: 'user-1', cycle: '2026-10-14', cycleEnd: '2026-11-14', credits: 40_000, total: 40_000 },
+    ])
+  })
+
+  test('a moved anchor does not bill a period again under a new key', () => {
+    // 806k of overage was reported under an anchor on the 31st, for the period
+    // from 28 February. A resubscription on the 15th moves every period edge,
+    // so no report has the new period's key; the old one still covers its days.
+    const accounts = [
+      account({
+        anchor: '2026-03-15T00:00:00Z',
+        days: [{ day: '2026-03-01', credits: developer.monthlyCredits + 806_000 }],
+        reports: [{ cycle: '2026-02-28', start: '2026-02-28', end: '2026-03-31', amount: 806_000 }],
+      }),
+    ]
+
+    expect(computePendingOverage(buildOverageRows(accounts, new Date('2026-03-16T00:00:00Z')))).toEqual([])
+  })
+
+  test('a pack refunded after it was spent is not billed as overage', () => {
+    const rows = [row({ used: developer.monthlyCredits + 10_000, purchased: -50_000 })]
+
+    expect(computePendingOverage(rows)).toEqual([
+      { userId: 'user-1', cycle: '2026-11-01', cycleEnd: '2026-12-01', credits: 10_000, total: 10_000 },
     ])
   })
 })
