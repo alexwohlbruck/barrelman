@@ -22,7 +22,7 @@ import {
 } from '../billing/subscription-state'
 import { billingWebhookEvents, users, type User } from '../schema/accounts'
 import { findUserByPolarCustomerId, linkPolarCustomer, findUserById } from './accounts.service'
-import { grantCredits, ledgerTotalForExternalPrefix, setPlan } from './credits.service'
+import { grantCredits, invalidateBalance, ledgerTotalForExternalPrefix, setPlan } from './credits.service'
 import { invalidateUserKeys } from './api-keys.service'
 import { sendPaymentFailedNotice } from './mailer.service'
 import { DEFAULT_PLAN } from '../billing/plans'
@@ -192,7 +192,13 @@ export function creditsForProduct(productId: string): number | null {
  * used for rate limiting). Otherwise an upgrade would be invisible for up to a
  * minute, which is exactly when the customer is watching.
  */
-export async function applyPlanFromProduct(userId: string, productId: string | undefined): Promise<string | null> {
+export async function applyPlanFromProduct(
+  userId: string,
+  productId: string | undefined,
+  // The subscription period the plan starts from. Accepted so callers pass it
+  // already; the plan store does not keep it yet.
+  _periodStart?: Date | null,
+): Promise<string | null> {
   const plan = productId ? planForProductId(productId) : null
 
   if (!plan) {
@@ -281,27 +287,46 @@ export function creditsToClawBack(packCredits: number, order: RefundedOrder, alr
  * Written as a negative ledger entry, since the ledger is append-only. The
  * entry is keyed on the order and its refunded total, so a retried webhook
  * writes nothing and a second partial refund writes only its own share.
- * Credits already spent stay spent: on a plan with overage the shortfall is
- * billed as overage, and on the free plan it is taken from later purchases.
+ * Credits already spent stay spent, so the entry can take the ledger total
+ * below zero. On a plan with overage that shortfall is billed as overage. On
+ * the free plan purchased credits stop counting until the ledger is positive
+ * again, and the monthly allowance is untouched.
+ *
+ * Two partial refunds delivered at once would each read the same running
+ * total and both take their share of it; their keys differ, so the unique
+ * index does not stop the second. The read and the insert therefore share a
+ * transaction holding an advisory lock on the order.
  */
 export async function clawBackCreditPack(userId: string, order: RefundedOrder): Promise<{ clawedBack: number }> {
   const credits = order.productId ? creditsForProduct(order.productId) : null
   if (!credits) return { clawedBack: 0 }
 
   const prefix = `refund:${order.id}:`
-  // Refund entries are negative, so what was already taken back is the negation.
-  const already = -(await ledgerTotalForExternalPrefix(userId, prefix))
-  const amount = creditsToClawBack(credits, order, already)
-  if (amount === 0) return { clawedBack: 0 }
+  const clawedBack = await db.transaction(async (tx) => {
+    await tx.execute(dsql`SELECT pg_advisory_xact_lock(hashtext(${`refund:${order.id}`}))`)
 
-  const written = await grantCredits({
-    userId,
-    amount: -amount,
-    kind: 'refund',
-    description: `Refund of credit pack (${amount.toLocaleString()} credits)`,
-    externalId: `${prefix}${order.refundedAmount}`,
+    // Refund entries are negative, so what was already taken back is the negation.
+    const already = -(await ledgerTotalForExternalPrefix(userId, prefix, tx))
+    const amount = creditsToClawBack(credits, order, already)
+    if (amount === 0) return 0
+
+    const written = await grantCredits(
+      {
+        userId,
+        amount: -amount,
+        kind: 'refund',
+        description: `Refund of credit pack (${amount.toLocaleString()} credits)`,
+        externalId: `${prefix}${order.refundedAmount}`,
+      },
+      tx,
+    )
+    return written ? amount : 0
   })
-  return { clawedBack: written ? amount : 0 }
+
+  // Again after commit: the in-transaction invalidation can be refilled from
+  // the pre-commit ledger by a request landing in between.
+  if (clawedBack) invalidateBalance(userId)
+  return { clawedBack }
 }
 
 // ── Subscription lifecycle ──────────────────────────────────────────────
@@ -319,6 +344,7 @@ export function toIncomingSubscription(data: object): IncomingSubscription {
     status: String(record.status ?? ''),
     productId: (record.productId as string | undefined) ?? null,
     cancelAtPeriodEnd: record.cancelAtPeriodEnd === true,
+    currentPeriodStart: date(record.currentPeriodStart),
     currentPeriodEnd: date(record.currentPeriodEnd),
     endsAt: date(record.endsAt),
     endedAt: date(record.endedAt),
@@ -402,11 +428,15 @@ export async function applySubscriptionEvent(
       .returning({ id: users.id })
     if (written.length === 0) continue
 
+    // The billing period the applied plan belongs to, handed to
+    // applyPlanFromProduct alongside the product.
+    const periodStart = incoming.currentPeriodStart
+
     let planId: string | null = user.plan
     if (outcome.plan.kind === 'set') {
-      planId = (await applyPlanFromProduct(userId, incoming.productId ?? undefined)) ?? user.plan
+      planId = (await applyPlanFromProduct(userId, incoming.productId ?? undefined, periodStart)) ?? user.plan
     } else if (outcome.plan.kind === 'free') {
-      await downgradeToFree(userId)
+      await endPlanOrFallBack(user, incoming.id)
       planId = (await findUserById(userId))?.plan ?? DEFAULT_PLAN
     }
 
@@ -424,6 +454,43 @@ export async function applySubscriptionEvent(
   // Three lost races in a row. Failing makes Polar redeliver, and the next
   // attempt decides afresh against whatever state won.
   throw new Error(`could not apply subscription ${incoming.id} to ${userId}: concurrent updates`)
+}
+
+export interface EndPlanDeps {
+  findActive: typeof findActiveSubscription
+  apply: typeof applySubscriptionEvent
+  downgrade: typeof downgradeToFree
+}
+
+/**
+ * The subscription behind the plan has ended. Move the account onto any other
+ * subscription it still has live, and to free only when there is none.
+ *
+ * An account can hold two live subscriptions (duplicates opened before plan
+ * changes went through `subscriptions.update`). While both are live the richer
+ * one owns the plan and the other's events are ignored, so when the richer one
+ * ends, the other has to be found here or the account drops to free while it
+ * still bills. A failed lookup throws, so the webhook answers 500 and Polar
+ * retries, rather than downgrading an account that may still be paying.
+ * Returns the subscription that took over, or null.
+ */
+export async function endPlanOrFallBack(
+  account: BillingAccount,
+  endedSubscriptionId: string,
+  deps: EndPlanDeps = { findActive: findActiveSubscription, apply: applySubscriptionEvent, downgrade: downgradeToFree },
+): Promise<string | null> {
+  // Skip the stored subscription: it is the one that just ended.
+  const replacement = await deps.findActive(
+    { ...account, subscriptionId: null, subscriptionStatus: null },
+    { exclude: endedSubscriptionId },
+  )
+  if (replacement) {
+    console.log(`[billing] ${account.id}: ${endedSubscriptionId} ended, ${replacement.id} is still live; applying it`)
+    await deps.apply(account.id, toIncomingSubscription(replacement))
+    return replacement.id
+  }
+  await deps.downgrade(account.id)
+  return null
 }
 
 /** Overwrite the stored subscription columns. For a sync, where Polar's current state wins. */
@@ -459,10 +526,10 @@ export type BillingAccount = Pick<User, 'id' | 'polarCustomerId' | 'subscription
  * use the answer to decide whether a second subscription is safe to open, or
  * an account safe to delete.
  */
-export async function findActiveSubscription(account: BillingAccount) {
+export async function findActiveSubscription(account: BillingAccount, options: { exclude?: string } = {}) {
   const p = polar()
 
-  if (account.subscriptionId && account.subscriptionStatus !== REVOKED) {
+  if (account.subscriptionId && account.subscriptionStatus !== REVOKED && account.subscriptionId !== options.exclude) {
     try {
       const sub = await p.subscriptions.get({ id: account.subscriptionId })
       if (isLiveStatus(sub.status)) return sub
@@ -476,7 +543,7 @@ export async function findActiveSubscription(account: BillingAccount) {
   const subs = await p.subscriptions.list({ customerId: account.polarCustomerId, active: true, limit: 10 })
   // Richest plan first, matching syncSubscription.
   const live = subs.result.items
-    .filter((sub) => isLiveStatus(sub.status))
+    .filter((sub) => isLiveStatus(sub.status) && sub.id !== options.exclude)
     .sort((a, b) => rankOfProduct(b.productId) - rankOfProduct(a.productId))
   return live[0] ?? null
 }
@@ -511,6 +578,14 @@ export async function changeSubscriptionProduct(account: BillingAccount, product
   return { kind: 'changed', subscription: toIncomingSubscription(updated) }
 }
 
+/**
+ * Whether `err` is one of the SDK's named Polar errors. Matched on `name`, which
+ * every SDK error class sets, so this holds across the esm and cjs builds.
+ */
+function isPolarError(err: unknown, ...names: string[]): boolean {
+  return err instanceof Error && names.includes(err.name)
+}
+
 /** Raised when an account cannot be closed because its billing could not be settled. */
 export class BillingTeardownError extends Error {
   constructor(message: string) {
@@ -534,7 +609,15 @@ export async function revokeActiveSubscription(account: BillingAccount): Promise
     const sub = await findActiveSubscription(account)
     if (!sub) return null
     subscriptionId = sub.id
-    await polar().subscriptions.revoke({ id: subscriptionId })
+    try {
+      await polar().subscriptions.revoke({ id: subscriptionId })
+    } catch (err) {
+      // Gone or already ended between the lookup and the revoke: the outcome
+      // we wanted, and refusing would leave the account undeletable.
+      if (!isPolarError(err, 'ResourceNotFound', 'AlreadyCanceledSubscription')) throw err
+      console.log(`[billing] subscription ${subscriptionId} of ${account.id} was already gone or revoked`)
+      return subscriptionId
+    }
   } catch (err) {
     console.error(`[billing] could not revoke the subscription of ${account.id}`, err)
     throw new BillingTeardownError(
@@ -548,22 +631,28 @@ export async function revokeActiveSubscription(account: BillingAccount): Promise
 
 // ── Webhook deliveries ──────────────────────────────────────────────────
 
-/**
- * Record a webhook delivery by its `webhook-id`. Returns false when that
- * delivery was already handled, so a redelivery is acknowledged and skipped.
+/*
+ * Deliveries are checked before handling and recorded only after it succeeds.
+ * Claiming first would lose an event whenever the process died mid-handler:
+ * the claim would outlive it and Polar's retry would be skipped as a
+ * duplicate. Two copies of one delivery arriving together can both run, which
+ * is safe because every handler is idempotent on its own (keyed ledger
+ * entries, ordered subscription writes).
  */
-export async function claimWebhookEvent(id: string, type: string): Promise<boolean> {
-  const inserted = await db
-    .insert(billingWebhookEvents)
-    .values({ id, type })
-    .onConflictDoNothing({ target: billingWebhookEvents.id })
-    .returning({ id: billingWebhookEvents.id })
-  return inserted.length > 0
+
+/** Whether a delivery with this `webhook-id` has already been handled. */
+export async function isWebhookEventHandled(id: string): Promise<boolean> {
+  const [row] = await db
+    .select({ id: billingWebhookEvents.id })
+    .from(billingWebhookEvents)
+    .where(eq(billingWebhookEvents.id, id))
+    .limit(1)
+  return Boolean(row)
 }
 
-/** Forget a delivery whose handling failed, so Polar's retry is processed. */
-export async function releaseWebhookEvent(id: string): Promise<void> {
-  await db.delete(billingWebhookEvents).where(eq(billingWebhookEvents.id, id))
+/** Record a delivery as handled, so a redelivery is acknowledged and skipped. */
+export async function recordWebhookEvent(id: string, type: string): Promise<void> {
+  await db.insert(billingWebhookEvents).values({ id, type }).onConflictDoNothing({ target: billingWebhookEvents.id })
 }
 
 /** Drop delivery ids older than Polar's retry window. Called from the account sweep. */

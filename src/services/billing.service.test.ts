@@ -12,6 +12,8 @@ import {
   BillingTeardownError,
   changeSubscriptionProduct,
   createCheckout,
+  endPlanOrFallBack,
+  findActiveSubscription,
   creditsToClawBack,
   ensureCustomerExternalId,
   reportOverage,
@@ -242,11 +244,95 @@ describe('revokeActiveSubscription', () => {
     await expect(revokeActiveSubscription(account)).rejects.toBeInstanceOf(BillingTeardownError)
   })
 
+  test.each([['ResourceNotFound'], ['AlreadyCanceledSubscription']])(
+    'treats %s from the revoke as done, so the account stays deletable',
+    async (name) => {
+      fakePolar({
+        subscriptions: {
+          revoke: mock(async () => {
+            const err = new Error('gone')
+            err.name = name
+            throw err
+          }),
+        },
+      })
+      expect(await revokeActiveSubscription(account)).toBe('sub_1')
+    },
+  )
+
   test('is a no-op with billing disabled', async () => {
     const polar = fakePolar()
     billing.enabled = false
     expect(await revokeActiveSubscription(account)).toBeNull()
     expect(polar.subscriptions.get).not.toHaveBeenCalled()
+  })
+})
+
+describe('endPlanOrFallBack', () => {
+  // Account with two live subscriptions: business (sub_a) owned the plan, and
+  // developer (sub_b), a duplicate, was ignored while sub_a was live.
+  const owner = { ...account, subscriptionId: 'sub_a', subscriptionStatus: 'revoked' }
+
+  test('moves onto another live subscription instead of dropping to free', async () => {
+    const polar = fakePolar({
+      subscriptions: {
+        list: mock(async () => ({
+          result: {
+            items: [
+              { id: 'sub_a', status: 'active', productId: 'prod_business' },
+              { id: 'sub_b', status: 'active', productId: 'prod_dev' },
+            ],
+          },
+        })),
+      },
+    })
+    const apply = mock(async () => ({ applied: true, planId: 'developer' }))
+    const downgrade = mock(async () => undefined)
+
+    const taken = await endPlanOrFallBack(owner, 'sub_a', {
+      findActive: findActiveSubscription,
+      apply: apply as never,
+      downgrade,
+    })
+
+    // The ended subscription is skipped even though the listing still shows it.
+    expect(taken).toBe('sub_b')
+    expect(apply).toHaveBeenCalledWith('user-1', expect.objectContaining({ id: 'sub_b', productId: 'prod_dev' }))
+    expect(downgrade).not.toHaveBeenCalled()
+    expect(polar.subscriptions.get).not.toHaveBeenCalled()
+  })
+
+  test('drops to free when nothing else is live', async () => {
+    fakePolar()
+    const apply = mock(async () => ({ applied: true, planId: 'free' }))
+    const downgrade = mock(async () => undefined)
+
+    const taken = await endPlanOrFallBack(owner, 'sub_a', {
+      findActive: findActiveSubscription,
+      apply: apply as never,
+      downgrade,
+    })
+
+    expect(taken).toBeNull()
+    expect(downgrade).toHaveBeenCalledWith('user-1')
+    expect(apply).not.toHaveBeenCalled()
+  })
+
+  test('fails rather than downgrading when Polar cannot be asked', async () => {
+    // The webhook then answers 500 and Polar retries.
+    fakePolar({
+      subscriptions: {
+        list: mock(async () => {
+          throw new Error('timeout')
+        }),
+      },
+    })
+    const downgrade = mock(async () => undefined)
+
+    await expect(
+      endPlanOrFallBack(owner, 'sub_a', { findActive: findActiveSubscription, apply: mock() as never, downgrade }),
+    ).rejects.toThrow('timeout')
+    expect(downgrade).not.toHaveBeenCalled()
   })
 })
 

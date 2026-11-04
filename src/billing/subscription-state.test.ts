@@ -43,6 +43,7 @@ function sub(overrides: Partial<IncomingSubscription> = {}): IncomingSubscriptio
     status: 'active',
     productId: 'prod_dev',
     cancelAtPeriodEnd: false,
+    currentPeriodStart: new Date('2026-11-01T00:00:00Z'),
     currentPeriodEnd: new Date('2026-12-01T00:00:00Z'),
     endsAt: null,
     endedAt: null,

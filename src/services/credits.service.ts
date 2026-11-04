@@ -182,11 +182,14 @@ export interface GrantOptions {
   externalId?: string | null
 }
 
+/** The pool, or a transaction, for ledger writes that must share one. */
+export type LedgerExecutor = typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0]
+
 /** Returns false when `externalId` has already been recorded. */
-export async function grantCredits(options: GrantOptions): Promise<boolean> {
+export async function grantCredits(options: GrantOptions, executor: LedgerExecutor = db): Promise<boolean> {
   const { userId, amount, kind, description = null, externalId = null } = options
 
-  const inserted = await db
+  const inserted = await executor
     .insert(creditLedger)
     .values({ id: generateId(), userId, amount, kind, description, externalId })
     .onConflictDoNothing({ target: creditLedger.externalId })
@@ -202,8 +205,12 @@ export async function grantCredits(options: GrantOptions): Promise<boolean> {
  * Sum of an account's ledger entries whose external id starts with `prefix`.
  * Lets a refund work out how much of an order it has already taken back.
  */
-export async function ledgerTotalForExternalPrefix(userId: string, prefix: string): Promise<number> {
-  const [row] = await db
+export async function ledgerTotalForExternalPrefix(
+  userId: string,
+  prefix: string,
+  executor: LedgerExecutor = db,
+): Promise<number> {
+  const [row] = await executor
     .select({ total: dsql<number>`COALESCE(SUM(${creditLedger.amount}), 0)::int` })
     .from(creditLedger)
     .where(and(eq(creditLedger.userId, userId), like(creditLedger.externalId, `${escapeLike(prefix)}%`)))

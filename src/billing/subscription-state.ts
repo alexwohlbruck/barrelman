@@ -30,6 +30,7 @@ export interface IncomingSubscription {
   status: string
   productId: string | null
   cancelAtPeriodEnd: boolean
+  currentPeriodStart: Date | null
   currentPeriodEnd: Date | null
   endsAt: Date | null
   endedAt: Date | null
