@@ -60,6 +60,7 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 * A new [Attribution](https://docs.barrelman.dev/attribution) page says what an app must credit when it shows Barrelman data: OpenStreetMap, OpenMapTiles, Mapterhorn terrain, transit agencies, 3D landmarks and brand logos. It includes a MapLibre example and explains what the ODbL asks of anyone who redistributes the data.
 * [Stability and errors](https://docs.barrelman.dev/usage/stability) sets out what the API keeps stable on 0.x and how breaking changes are announced: a **Deprecated** changelog entry at least 90 days ahead, `Deprecation` and `Sunset` headers on the affected endpoint, and 30 days' email notice of pricing changes to paying accounts. It also documents the error body, the `X-Request-Id` header and the refusal codes.
 * The changelog is published at [docs.barrelman.dev/changelog](https://docs.barrelman.dev/changelog), built from this file. Unreleased entries are left out.
+* [Getting Started](https://docs.barrelman.dev/usage) shows the search, reverse geocoding, transit and match examples in JavaScript (`fetch`) and Python (`requests`) beside curl, and gains a Support section: email support@barrelman.dev with the `X-Request-Id` of a failed request, and check the [status page](https://barrelman.dev/status).
 
 ## [0.10.38] - 2026-11-03
 
