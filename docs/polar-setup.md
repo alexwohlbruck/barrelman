@@ -235,14 +235,23 @@ subscription if the retries fail. `unpaid`, `incomplete_expired` and a
 revocation return the account to free, and only when the subscription that
 ended is the one behind the current plan.
 
-Polar delivers at least once and in no fixed order. Each delivery's
-`webhook-id` is recorded in `accounts_billing_webhook_events` (pruned after 30
-days by the account sweep), so a redelivery is acknowledged and skipped. An
+Polar delivers at least once and in no fixed order. Once a delivery has been
+handled, its `webhook-id` is recorded in `accounts_billing_webhook_events`
+(pruned after 30 days by the account sweep), and a redelivery of it is
+acknowledged and skipped. The id is recorded only after handling succeeds, so a
+failure or a crash part-way leaves no record and Polar's retry is processed. An
 event whose `modifiedAt` is older than the state already stored for that
 subscription is ignored, and a revoked subscription stays revoked, so a late
-`subscription.updated` cannot bring a plan back. If handling fails, the
-delivery id is released and the endpoint answers 500, so Polar's retry is
-processed.
+`subscription.updated` cannot bring a plan back.
+
+When the subscription behind the plan ends, barrelman checks the customer for
+another live subscription and moves the account onto it before falling back to
+free. If Polar cannot be reached for that check, the endpoint answers 500 and
+the retry decides.
+
+The payment-failed email is best-effort. It goes out once, on the move into
+`past_due`; if SMTP is down or unset at that moment it is logged and not
+retried, and the console banner is the only notice.
 
 A refund of a credit pack writes a negative ledger entry for the refunded share,
 keyed on the order and its refunded total. A refund of a subscription payment

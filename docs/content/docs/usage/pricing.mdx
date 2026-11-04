@@ -153,7 +153,8 @@ then.
 
 If a renewal payment fails, the plan stays on while the payment provider
 retries it. The console shows a banner linking to the billing portal, and one
-email goes out when the payment first fails. If the retries also fail, the
+email goes out when the payment first fails. The email is not resent if it
+cannot be delivered, so the banner is the notice to rely on. If the retries also fail, the
 subscription ends and the account moves to the free plan.
 
 A refunded credit pack takes its credits back, in proportion to the amount
