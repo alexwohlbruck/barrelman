@@ -262,37 +262,67 @@ describe('buildOverageRows — period boundaries', () => {
     ])
   })
 
-  test('a downgrade mid-period judges only the days after it against the smaller plan', () => {
-    // 9M used on business by the 10th, inside its 10M. Developer's 1M applies
-    // only from the change, so the 9M is never billed as 8M of overage.
+  test('a downgrade mid-period prorates each plan by the days it ran', () => {
+    // Business for 9 of November's 30 days (3M included), developer for the
+    // other 21 (700k). The 9M used on business is judged against 3M, not
+    // against developer's whole period, and developer only sees its own days.
     const business = getPlan('business')
     const days = [
       { day: '2026-11-05', credits: 9_000_000 },
-      { day: '2026-11-12', credits: developer.monthlyCredits + 200_000 },
+      { day: '2026-11-12', credits: 1_200_000 },
     ]
     const before = [account({ plan: 'business', anchor: '2026-11-01T00:00:00Z', days })]
     const after = [account({ anchor: '2026-11-01T00:00:00Z', meteredFrom: '2026-11-10', days })]
 
-    const staged = computePendingOverage(buildOverageRows(before, new Date('2026-11-10T08:00:00Z'), business, '2026-11-10'), business)
-    expect(staged).toEqual([])
+    expect(computePendingOverage(buildOverageRows(before, new Date('2026-11-10T08:00:00Z'), business, '2026-11-10'), business)).toEqual([
+      { userId: 'user-1', cycle: '2026-11-01', cycleEnd: '2026-11-10', credits: 6_000_000, total: 6_000_000 },
+    ])
     expect(computePendingOverage(buildOverageRows(after, new Date('2026-11-15T00:00:00Z')))).toEqual([
-      { userId: 'user-1', cycle: '2026-11-10', cycleEnd: '2026-12-01', credits: 200_000, total: 200_000 },
+      { userId: 'user-1', cycle: '2026-11-10', cycleEnd: '2026-12-01', credits: 500_000, total: 500_000 },
     ])
   })
 
-  test('an upgrade mid-period bills overage on the old plan at the change, and none after', () => {
+  test('an upgrade mid-period prorates each plan by the days it ran', () => {
+    // Developer for 9 days (300k included), then business for 21 (7M).
     const business = getPlan('business')
     const days = [
-      { day: '2026-11-05', credits: developer.monthlyCredits + 500_000 },
+      { day: '2026-11-05', credits: 1_500_000 },
       { day: '2026-11-12', credits: 2_000_000 },
     ]
     const before = [account({ anchor: '2026-11-01T00:00:00Z', days })]
     const after = [account({ plan: 'business', anchor: '2026-11-01T00:00:00Z', meteredFrom: '2026-11-10', days })]
 
     expect(computePendingOverage(buildOverageRows(before, new Date('2026-11-10T08:00:00Z'), developer, '2026-11-10'), developer)).toEqual([
-      { userId: 'user-1', cycle: '2026-11-01', cycleEnd: '2026-11-10', credits: 500_000, total: 500_000 },
+      { userId: 'user-1', cycle: '2026-11-01', cycleEnd: '2026-11-10', credits: 1_200_000, total: 1_200_000 },
     ])
     expect(computePendingOverage(buildOverageRows(after, new Date('2026-11-15T00:00:00Z')))).toEqual([])
+  })
+
+  test('flipping to a bigger plan and back in one day earns no extra allowance', () => {
+    // Developer → business → developer on 10 November. The business segment is
+    // empty, and the two developer segments add up to one allowance.
+    const days = [
+      { day: '2026-11-05', credits: 250_000 },
+      { day: '2026-11-12', credits: 3_000_000 },
+    ]
+    const before = [account({ anchor: '2026-11-01T00:00:00Z', days })]
+    const after = [account({ anchor: '2026-11-01T00:00:00Z', meteredFrom: '2026-11-10', days })]
+
+    const first = buildOverageRows(before, new Date('2026-11-10T08:00:00Z'), developer, '2026-11-10')
+    const second = buildOverageRows(after, new Date('2026-11-15T00:00:00Z'))
+    expect(first.map((row) => row.allowance)).toEqual([300_000])
+    expect(second.map((row) => row.allowance)).toEqual([700_000])
+    expect(computePendingOverage(second)).toEqual([
+      { userId: 'user-1', cycle: '2026-11-10', cycleEnd: '2026-12-01', credits: 2_300_000, total: 2_300_000 },
+    ])
+  })
+
+  test('a segment opened by a new subscription keeps a whole allowance', () => {
+    const rows = buildOverageRows(
+      [account({ anchor: '2026-11-01T00:00:00Z', meteredFrom: '2026-11-10', newSubscription: true, days: [{ day: '2026-11-12', credits: 5 }] })],
+      new Date('2026-11-15T00:00:00Z'),
+    )
+    expect(rows.map((row) => row.allowance)).toEqual([developer.monthlyCredits])
   })
 
   test('a pack refunded after it was spent is not billed as overage', () => {

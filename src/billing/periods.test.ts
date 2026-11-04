@@ -4,7 +4,15 @@
  * a second allowance two weeks after paying for the first.
  */
 import { describe, test, expect } from 'bun:test'
-import { addMonths, anchoredPeriod, billingPeriod, calendarPeriod, periodsBetween, previousPeriod } from './periods'
+import {
+  addMonths,
+  anchoredPeriod,
+  billingPeriod,
+  calendarPeriod,
+  periodsBetween,
+  previousPeriod,
+  segmentAllowance,
+} from './periods'
 import { getPlan } from './plans'
 
 const free = getPlan('free')
@@ -93,5 +101,38 @@ describe('previousPeriod and periodsBetween', () => {
       { start: '2026-10-01', end: '2026-11-01' },
     ])
     expect(periodsBetween(free, null, '2026-11-02', '2026-11-01')).toEqual([])
+  })
+})
+
+describe('segmentAllowance', () => {
+  const november = { start: '2026-11-01', end: '2026-12-01' }
+  const business = getPlan('business')
+
+  test('prorates a paid plan by the days a segment covers', () => {
+    expect(segmentAllowance(developer, november, { start: '2026-11-01', end: '2026-11-10' })).toBe(300_000)
+    expect(segmentAllowance(developer, november, { start: '2026-11-10', end: '2026-12-01' })).toBe(700_000)
+    expect(segmentAllowance(developer, november, november)).toBe(developer.monthlyCredits)
+  })
+
+  test('parts of one period never add up to more than the biggest plan held', () => {
+    const parts = [
+      segmentAllowance(developer, november, { start: '2026-11-01', end: '2026-11-10' }),
+      segmentAllowance(business, november, { start: '2026-11-10', end: '2026-11-11' }),
+      segmentAllowance(developer, november, { start: '2026-11-11', end: '2026-12-01' }),
+    ]
+    expect(parts.reduce((a, b) => a + b, 0)).toBeLessThanOrEqual(business.monthlyCredits)
+    // One day of business is a thirtieth of it, not a whole allowance.
+    expect(parts[1]).toBe(333_333)
+  })
+
+  test('a new subscription and the free plan keep a whole allowance', () => {
+    expect(segmentAllowance(developer, november, { start: '2026-11-20', end: '2026-12-01' }, { fromPeriodStart: true })).toBe(
+      developer.monthlyCredits,
+    )
+    // A subscription that ends mid-period had paid to its end.
+    expect(segmentAllowance(developer, november, { start: '2026-11-01', end: '2026-11-10' }, { toPeriodEnd: true })).toBe(
+      developer.monthlyCredits,
+    )
+    expect(segmentAllowance(free, november, { start: '2026-11-20', end: '2026-12-01' })).toBe(free.monthlyCredits)
   })
 })

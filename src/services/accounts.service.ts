@@ -242,6 +242,7 @@ export function ensureAccountsSchema(): Promise<void> {
       await sql`ALTER TABLE accounts_users ADD COLUMN IF NOT EXISTS billing_period_subscription_id text`
       await sql`ALTER TABLE accounts_users ADD COLUMN IF NOT EXISTS pack_settled_through date`
       await sql`ALTER TABLE accounts_users ADD COLUMN IF NOT EXISTS metered_from date`
+      await sql`ALTER TABLE accounts_users ADD COLUMN IF NOT EXISTS metered_from_new_subscription boolean NOT NULL DEFAULT false`
       // Where a report's period ends, so reports can be matched by the days
       // they cover when an anchor moves. Older rows were calendar months.
       await sql`ALTER TABLE accounts_overage_reports ADD COLUMN IF NOT EXISTS cycle_end date`

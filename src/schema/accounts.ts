@@ -77,6 +77,11 @@ export const users = pgTable(
      * and reported under the old plan at the change. See `segmentOf`.
      */
     meteredFrom: date('metered_from'),
+    /**
+     * Whether `metered_from` marks a new subscription, whose first segment keeps
+     * a whole allowance, rather than a plan change, whose segment is prorated.
+     */
+    meteredFromNewSubscription: boolean('metered_from_new_subscription').notNull().default(false),
     polarCustomerId: text('polar_customer_id'),
     /**
      * The Polar subscription behind `plan`, as of the last webhook or sync.

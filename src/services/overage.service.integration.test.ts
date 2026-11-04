@@ -14,6 +14,8 @@
  * Run: bun run test:integration
  */
 import { describe, test, expect, afterAll, beforeAll, beforeEach } from 'bun:test'
+import { billingPeriod, segmentAllowance } from '../billing/periods'
+import { getPlan } from '../billing/plans'
 
 const DATABASE_URL = process.env.BARRELMAN_INTEGRATION_TESTS ? process.env.DATABASE_URL : undefined
 
@@ -68,6 +70,16 @@ async function reports(userId: string): Promise<Array<{ cycle: string; reported:
 /** A UTC day relative to today, for tests that go through the real clock. */
 function dayOffset(days: number): string {
   return new Date(Date.now() + days * 86_400_000).toISOString().slice(0, 10)
+}
+
+/** The prorated allowances either side of a plan change made today, in a period anchored on `anchor`. */
+function split(beforePlan: string, afterPlan: string, anchor: string): { before: number; after: number } {
+  const period = billingPeriod(getPlan(beforePlan), anchor, dayOffset(0))
+  const today = dayOffset(0)
+  return {
+    before: segmentAllowance(getPlan(beforePlan), period, { start: period.start, end: today }),
+    after: segmentAllowance(getPlan(afterPlan), period, { start: today, end: period.end }),
+  }
 }
 
 function sentFor(userId: string): number[] {
@@ -187,24 +199,43 @@ describe.skipIf(!DATABASE_URL)('subscription anchors', () => {
     expect(sentFor(user)).toEqual([50_000])
   })
 
-  test('a business to developer downgrade mid-period bills only what developer overran', async () => {
-    const user = await makeUser('business', `${dayOffset(-5)}T00:00:00Z`)
+  test('a business to developer downgrade mid-period prorates each plan by its days', async () => {
+    const anchor = dayOffset(-5)
+    const user = await makeUser('business', `${anchor}T00:00:00Z`)
     await use(user, dayOffset(-3), 9_000_000)
 
     await m!.credits.setPlan(user, 'developer')
     await use(user, dayOffset(0), 1_200_000)
     await m!.overage.reportPendingOverage()
-    expect(sentFor(user)).toEqual([200_000])
+
+    const { before, after } = split('business', 'developer', anchor)
+    expect(sentFor(user)).toEqual([9_000_000 - before, 1_200_000 - after])
   })
 
-  test('an upgrade mid-period bills the old plan up to the change and the new one after', async () => {
-    const user = await makeUser('developer', `${dayOffset(-5)}T00:00:00Z`)
+  test('an upgrade mid-period prorates each plan by its days', async () => {
+    const anchor = dayOffset(-5)
+    const user = await makeUser('developer', `${anchor}T00:00:00Z`)
     await use(user, dayOffset(-3), 1_500_000)
 
     await m!.credits.setPlan(user, 'business')
     await use(user, dayOffset(0), 2_000_000)
     await m!.overage.reportPendingOverage()
-    expect(sentFor(user)).toEqual([500_000])
+
+    const { before } = split('developer', 'business', anchor)
+    expect(sentFor(user)).toEqual([1_500_000 - before])
+  })
+
+  test('flipping to business and back in one day earns no business allowance', async () => {
+    const anchor = dayOffset(-5)
+    const user = await makeUser('developer', `${anchor}T00:00:00Z`)
+
+    await m!.credits.setPlan(user, 'business')
+    await m!.credits.setPlan(user, 'developer')
+
+    const { after } = split('developer', 'developer', anchor)
+    const balance = await m!.credits.getBalance(user)
+    expect(balance.monthlyCredits).toBe(after)
+    expect(balance.monthlyCredits).toBeLessThan(getPlan('developer').monthlyCredits)
   })
 })
 

@@ -42,6 +42,8 @@ import {
   calendarPeriod,
   dayStart,
   periodsBetween,
+  followsSubscription,
+  segmentAllowance,
   segmentOf,
   toDay,
   type BillingPeriod,
@@ -61,6 +63,8 @@ const BALANCE_CACHE_TTL_MS = envNumber('BARRELMAN_BALANCE_CACHE_MS', 15_000)
 interface CachedBalance {
   plan: Plan
   period: BillingPeriod
+  /** The open segment's included allowance, prorated after a plan change. */
+  allowance: number
   /** Credits used this cycle as of the last database read. */
   usedAtFetch: number
   /** Ledger total (purchases, adjustments, settled pack usage) as of the last database read. */
@@ -82,7 +86,12 @@ async function loadBalance(userId: string): Promise<CachedBalance> {
   if (cached) return cached
 
   const [userRow] = await db
-    .select({ plan: users.plan, anchor: users.billingPeriodStart, meteredFrom: users.meteredFrom })
+    .select({
+      plan: users.plan,
+      anchor: users.billingPeriodStart,
+      meteredFrom: users.meteredFrom,
+      newSubscription: users.meteredFromNewSubscription,
+    })
     .from(users)
     .where(eq(users.id, userId))
     .limit(1)
@@ -91,7 +100,8 @@ async function loadBalance(userId: string): Promise<CachedBalance> {
   const period = billingPeriod(plan, anchor)
   // After a plan or subscription change this period, only the days since count
   // against the new plan's allowance: the earlier ones were judged at the change.
-  const usedSince = segmentOf(period, userRow?.meteredFrom)?.start ?? period.end
+  const segment = segmentOf(period, userRow?.meteredFrom) ?? { start: period.end, end: period.end }
+  const allowance = segmentAllowance(plan, period, segment, { fromPeriodStart: isNewSubscriptionSegment(segment, userRow) })
 
   // Before reading the ledger, so a period that has just closed has taken its
   // share of the pack. Logged rather than thrown: a failed write must not
@@ -105,12 +115,13 @@ async function loadBalance(userId: string): Promise<CachedBalance> {
       .select({ total: dsql<number>`COALESCE(SUM(${creditLedger.amount}), 0)::int` })
       .from(creditLedger)
       .where(eq(creditLedger.userId, userId)),
-    creditsUsedThisCycle(userId, usedSince),
+    creditsUsedThisCycle(userId, segment.start),
   ])
 
   const fresh: CachedBalance = {
     plan,
     period,
+    allowance,
     // `creditsUsedThisCycle` already folds in the unflushed buffer; subtract it
     // back out so the cached figure is the persisted one and the live buffer is
     // re-added on every read. Otherwise buffered usage would be counted twice
@@ -125,7 +136,7 @@ async function loadBalance(userId: string): Promise<CachedBalance> {
 
 export interface CreditBalance {
   plan: Plan
-  /** Credits included with the plan this cycle. */
+  /** Credits included this cycle: the plan's allowance, prorated for the part of the cycle since a plan change. */
   monthlyCredits: number
   /** Credits consumed this cycle. */
   used: number
@@ -156,9 +167,10 @@ export function computeBalance(
   used: number,
   purchased: number,
   period: BillingPeriod = calendarPeriod(new Date()),
+  allowance: number = plan.monthlyCredits,
 ): CreditBalance {
-  const allowanceRemaining = Math.max(0, plan.monthlyCredits - used)
-  const spentBeyondAllowance = Math.max(0, used - plan.monthlyCredits)
+  const allowanceRemaining = Math.max(0, allowance - used)
+  const spentBeyondAllowance = Math.max(0, used - allowance)
 
   // The monthly allowance is spent before purchased credits, so a prepaid pack
   // survives an idle month instead of being consumed by usage the plan covered.
@@ -169,7 +181,7 @@ export function computeBalance(
 
   return {
     plan,
-    monthlyCredits: plan.monthlyCredits,
+    monthlyCredits: allowance,
     used,
     purchased,
     allowanceRemaining,
@@ -182,8 +194,8 @@ export function computeBalance(
 }
 
 export async function getBalance(userId: string): Promise<CreditBalance> {
-  const { plan, period, usedAtFetch, purchased } = await loadBalance(userId)
-  return computeBalance(plan, usedAtFetch + pendingCredits(userId), purchased, period)
+  const { plan, period, allowance, usedAtFetch, purchased } = await loadBalance(userId)
+  return computeBalance(plan, usedAtFetch + pendingCredits(userId), purchased, period, allowance)
 }
 
 export type QuotaDecision =
@@ -334,7 +346,7 @@ export interface PackUsage {
  * another plan or anchor, and must not be judged again. `until` is the open
  * period's start, or the day of a plan or subscription change, which settles
  * the open period's days so far under the plan they ran on. A clipped period
- * keeps its whole allowance, which errs toward the customer.
+ * gets its plan's allowance prorated by the days it covers (`segmentAllowance`).
  *
  * A stretch can spend only what the ledger held when it ended, so a pack bought
  * on the 2nd never pays for the month before it. Earlier settlements are dated
@@ -354,8 +366,12 @@ export function computePackUsage(input: {
   from: string
   until?: string
   reported?: Record<string, number>
+  /** Start of a segment opened by a new subscription, which keeps its allowance from the period's start. */
+  fullFrom?: string | null
+  /** The cut at `until` is a subscription ending, which keeps the allowance to the period's end. */
+  untilKeepsAllowance?: boolean
 }): PackUsage[] {
-  const { userId, plan, days, from, until, reported = {} } = input
+  const { userId, plan, days, from, until, reported = {}, fullFrom, untilKeepsAllowance = false } = input
   const ledger = [...input.ledger]
   const settled = new Set(ledger.map((entry) => entry.externalId))
   const result: PackUsage[] = []
@@ -365,7 +381,11 @@ export function computePackUsage(input: {
     if (!period || settled.has(packUsageId(userId, period.start))) continue
 
     const used = creditsInRange(days, period.start, period.end)
-    const excess = Math.max(0, used - plan.monthlyCredits - (reported[period.start] ?? 0))
+    const allowance = segmentAllowance(plan, whole, period, {
+      fromPeriodStart: period.start === fullFrom,
+      toPeriodEnd: untilKeepsAllowance && period.end === until,
+    })
+    const excess = Math.max(0, used - allowance - (reported[period.start] ?? 0))
     if (excess === 0) continue
 
     const endsAt = dayStart(period.end)
@@ -401,11 +421,16 @@ export async function settlePackUsage(
   plan: Plan,
   anchor: Date | string | null,
   until: string = billingPeriod(plan, anchor).start,
+  untilKeepsAllowance = false,
 ): Promise<number> {
   if (settledThrough.get(userId) === until) return 0
 
   const [account] = await db
-    .select({ settledThrough: users.packSettledThrough })
+    .select({
+      settledThrough: users.packSettledThrough,
+      meteredFrom: users.meteredFrom,
+      newSubscription: users.meteredFromNewSubscription,
+    })
     .from(users)
     .where(eq(users.id, userId))
     .limit(1)
@@ -448,6 +473,8 @@ export async function settlePackUsage(
       from,
       until,
       reported: Object.fromEntries(reportRows.map((row) => [row.cycle, row.amount])),
+      fullFrom: account?.newSubscription ? account.meteredFrom : null,
+      untilKeepsAllowance,
     })
 
     for (const { period, credits } of written) {
@@ -489,13 +516,28 @@ export interface SubscriptionPeriod {
  * days after the change: a downgrade mid-period does not re-judge what the
  * bigger plan already covered, and a new anchor never meets a report keyed on
  * the old one. Today itself goes to the new segment, so every day is metered
- * exactly once. The new segment starts with a whole allowance, which errs
- * toward the customer.
+ * exactly once. After a plan change the new segment's allowance is prorated by
+ * the days left in the period; after a new subscription it is whole.
  */
-async function closeSegment(userId: string, plan: Plan, anchor: Date | null): Promise<void> {
-  const today = toDay(new Date())
+interface SegmentChange {
+  /** A new subscription starts: the next segment keeps its allowance from the period's start. */
+  newSubscription: boolean
+  /** The subscription ends rather than changing plan: the closed segment keeps its allowance to the period's end. */
+  subscriptionEnds: boolean
+}
 
-  await settlePackUsage(userId, plan, anchor, today).catch((err) =>
+async function closeSegment(userId: string, plan: Plan, anchor: Date | null, change: SegmentChange): Promise<void> {
+  const today = toDay(new Date())
+  const [current] = await db
+    .select({ meteredFrom: users.meteredFrom, newSubscription: users.meteredFromNewSubscription })
+    .from(users)
+    .where(eq(users.id, userId))
+    .limit(1)
+  // A checkout records the new subscription and then the plan, both today; the
+  // second call must not take away the first one's whole allowance.
+  const newSubscription = change.newSubscription || Boolean(current?.newSubscription && current.meteredFrom === today)
+
+  await settlePackUsage(userId, plan, anchor, today, change.subscriptionEnds).catch((err) =>
     console.error(`[credits] could not settle pack usage for ${userId} before a change`, err),
   )
 
@@ -505,14 +547,22 @@ async function closeSegment(userId: string, plan: Plan, anchor: Date | null): Pr
   // imports this module.
   if (plan.overageAllowed) {
     const { stageOverageBeforeChange } = await import('./overage.service')
-    await stageOverageBeforeChange(userId, plan, today).catch((err) =>
+    await stageOverageBeforeChange(userId, plan, today, change.subscriptionEnds).catch((err) =>
       console.error(`[billing] could not stage final overage for ${userId} on ${plan.id}`, err),
     )
   }
 
-  await db.update(users).set({ meteredFrom: today }).where(eq(users.id, userId))
+  await db.update(users).set({ meteredFrom: today, meteredFromNewSubscription: newSubscription }).where(eq(users.id, userId))
   invalidateBalance(userId)
   settledThrough.delete(userId)
+}
+
+/** Whether `segment` is the one a new subscription opened, which keeps a whole allowance. */
+export function isNewSubscriptionSegment(
+  segment: BillingPeriod,
+  account: { meteredFrom: string | null; newSubscription: boolean } | null | undefined,
+): boolean {
+  return Boolean(account?.newSubscription && account.meteredFrom === segment.start)
 }
 
 async function currentAccount(userId: string) {
@@ -544,7 +594,7 @@ export async function recordBillingPeriod(userId: string, period: SubscriptionPe
   const account = await currentAccount(userId)
   if (!account || account.subscriptionId === subscriptionId) return false
 
-  await closeSegment(userId, getPlan(account.plan), account.anchor)
+  await closeSegment(userId, getPlan(account.plan), account.anchor, { newSubscription: true, subscriptionEnds: true })
 
   const updated = await db
     .update(users)
@@ -566,7 +616,14 @@ export async function recordBillingPeriod(userId: string, period: SubscriptionPe
 /** Change an account's plan and drop every cached decision that depended on it. */
 export async function setPlan(userId: string, planId: string): Promise<void> {
   const account = await currentAccount(userId)
-  if (account && account.plan !== planId) await closeSegment(userId, getPlan(account.plan), account.anchor)
+  if (account && account.plan !== planId) {
+    // Paid to paid is a plan change inside one subscription, prorated at the
+    // cut. Anything else (to or from a plan with no subscription) is the
+    // subscription ending or starting, which paid for the period it had.
+    const from = getPlan(account.plan)
+    const withinSubscription = followsSubscription(from) && followsSubscription(getPlan(planId))
+    await closeSegment(userId, from, account.anchor, { newSubscription: false, subscriptionEnds: !withinSubscription })
+  }
 
   await db.update(users).set({ plan: planId, updatedAt: new Date() }).where(eq(users.id, userId))
   invalidateBalance(userId)

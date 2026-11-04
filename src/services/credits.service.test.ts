@@ -378,9 +378,10 @@ describe('computePackUsage — packs are used up across periods', () => {
   })
 
   test('a move from calendar months to a subscription anchor does not count days twice', () => {
-    // Settled through 1 November on calendar months, then subscribed with an
-    // anchor on the 14th. The first anchored period starts 14 October, but
-    // only its days from 1 November on are settled.
+    // Settled through 1 November on calendar months, then anchored on the 14th.
+    // The first anchored period starts 14 October, but only its days from 1
+    // November on are settled, against 13/31 of the allowance (419,355). The
+    // 2M on 20 October was settled before and is not counted again.
     const periods = periodsBetween(developer, '2026-10-14', '2026-11-01', '2026-11-14')
     const usage = computePackUsage({
       userId: user,
@@ -391,21 +392,22 @@ describe('computePackUsage — packs are used up across periods', () => {
         { day: '2026-10-20', credits: 2_000_000 },
         { day: '2026-11-05', credits: developer.monthlyCredits + 7_000 },
       ],
-      ledger: [pack(50_000, '2026-10-05T00:00:00Z')],
+      ledger: [pack(5_000_000, '2026-10-05T00:00:00Z')],
     })
 
-    expect(usage).toEqual([{ period: { start: '2026-11-01', end: '2026-11-14' }, credits: 7_000 }])
+    expect(usage).toEqual([{ period: { start: '2026-11-01', end: '2026-11-14' }, credits: 1_007_000 - 419_355 }])
   })
 
   test('a change mid-period settles the days so far under the old plan', () => {
-    // Business until 10 November, then developer. The first ten days are
-    // settled at the change against business's allowance, so the pack is
-    // untouched; developer later judges only the days from the 10th.
+    // Business until 10 November, then developer. The first nine days are
+    // settled at the change against 9/30 of business's allowance (3M), so 2M
+    // leaves the pack untouched. Developer then judges only the 21 days from
+    // the 10th, against 21/30 of its allowance (700k).
     const business = getPlan('business')
-    const ledger = [pack(50_000, '2026-10-05T00:00:00Z')]
+    const ledger = [pack(1_000_000, '2026-10-05T00:00:00Z')]
     const days = [
-      { day: '2026-11-05', credits: 9_000_000 },
-      { day: '2026-11-12', credits: developer.monthlyCredits + 4_000 },
+      { day: '2026-11-05', credits: 2_000_000 },
+      { day: '2026-11-12', credits: 1_004_000 },
     ]
 
     const atChange = computePackUsage({
@@ -416,6 +418,6 @@ describe('computePackUsage — packs are used up across periods', () => {
     })
 
     expect(atChange).toEqual([])
-    expect(atClose).toEqual([{ period: { start: '2026-11-10', end: '2026-12-01' }, credits: 4_000 }])
+    expect(atClose).toEqual([{ period: { start: '2026-11-10', end: '2026-12-01' }, credits: 304_000 }])
   })
 })

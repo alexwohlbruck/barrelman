@@ -137,6 +137,47 @@ export function segmentOf(
   return start < end ? { start, end } : null
 }
 
+function lengthInDays(range: BillingPeriod): number {
+  return Math.round((dayStart(range.end).getTime() - dayStart(range.start).getTime()) / DAY_MS)
+}
+
+export interface SegmentEdges {
+  /** The segment was opened by a new subscription, which paid from the period's start. */
+  fromPeriodStart?: boolean
+  /** The segment was ended by its subscription ending, which had paid to the period's end. */
+  toPeriodEnd?: boolean
+}
+
+/**
+ * The allowance included in one segment of `period`.
+ *
+ * A plan change inside a subscription splits the period, and each part gets
+ * its plan's allowance in proportion to the days it covers, the way Polar
+ * prorates the price. A whole allowance per part would let a customer flip
+ * Developer → Business → Developer in a minute, pay almost nothing once the
+ * proration nets out, and collect a whole Business allowance each time.
+ * Prorated, the parts of a period add up to at most one allowance of the
+ * biggest plan held in it.
+ *
+ * A subscription that starts or ends is not a plan change: it paid for its
+ * whole period, so `edges` extends the share to the period's start or end.
+ * Plans without a subscription (Free, Enterprise, operator plans) stay on
+ * calendar months and are never prorated.
+ */
+export function segmentAllowance(
+  plan: Plan,
+  period: BillingPeriod,
+  segment: BillingPeriod,
+  edges: SegmentEdges = {},
+): number {
+  if (!followsSubscription(plan)) return plan.monthlyCredits
+  const share = {
+    start: edges.fromPeriodStart ? period.start : segment.start,
+    end: edges.toPeriodEnd ? period.end : segment.end,
+  }
+  return Math.round((plan.monthlyCredits * lengthInDays(share)) / lengthInDays(period))
+}
+
 /** Every period from the one containing `from` up to, not including, the one starting at `until`. */
 export function periodsBetween(
   plan: Plan,

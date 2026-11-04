@@ -36,10 +36,11 @@ import {
   billingPeriod,
   calendarPeriod,
   previousPeriod,
+  segmentAllowance,
   segmentOf,
 } from '../billing/periods'
 import { reportOverage } from './billing.service'
-import { PACK_USAGE_PREFIX, settlePackUsage } from './credits.service'
+import { PACK_USAGE_PREFIX, isNewSubscriptionSegment, settlePackUsage } from './credits.service'
 import { creditsInRange, flushUsage, type DailyCredits } from './usage.service'
 import { envNumber } from '../config/env'
 
@@ -66,6 +67,8 @@ export interface OverageRow {
   purchased: number
   /** Overage already reported (or staged) under this segment's key. */
   reported: number
+  /** The segment's included allowance. Omitted, the plan's whole monthly allowance. */
+  allowance?: number
 }
 
 export interface PendingOverage {
@@ -103,7 +106,7 @@ export function computePendingOverage(rows: OverageRow[], plan?: Plan): PendingO
     // usage would charge twice for the same credits. A pack refunded after it
     // was spent leaves the ledger negative; that is a debt, not overage, so it
     // is clamped at zero rather than billed through the meter.
-    const owed = Math.max(0, row.used - rowPlan.monthlyCredits - Math.max(0, row.purchased))
+    const owed = Math.max(0, row.used - (row.allowance ?? rowPlan.monthlyCredits) - Math.max(0, row.purchased))
     const delta = owed - row.reported
     if (delta > 0) {
       pending.push({ userId: row.user_id, cycle: row.cycle, cycleEnd: row.cycle_end, credits: delta, total: row.reported + delta })
@@ -119,6 +122,8 @@ export interface AccountUsage {
   anchor: Date | string | null
   /** The day of the last plan or subscription change; earlier days are not metered here. */
   meteredFrom: string | null
+  /** Whether that change was a new subscription, whose segment keeps a whole allowance. */
+  newSubscription?: boolean
   /** Daily credits since at least the start of the previous period. */
   days: DailyCredits[]
   /** Ledger balance now, after closed periods have been settled. */
@@ -143,21 +148,31 @@ export function buildOverageRows(
   now: Date = new Date(),
   plan?: Plan,
   until?: string,
+  /** The cut at `until` is the subscription ending, which keeps the allowance to the period's end. */
+  untilKeepsAllowance = false,
 ): OverageRow[] {
   const rows: OverageRow[] = []
 
   for (const account of accounts) {
     const accountPlan = plan ?? getPlan(account.plan)
     const current = billingPeriod(accountPlan, account.anchor, now)
+    const previous = previousPeriod(accountPlan, account.anchor, current)
     const segments = [
       // A closed segment's pack credit is what settlement took for it; the
       // open one can also spend what is left in the ledger.
-      { segment: segmentOf(previousPeriod(accountPlan, account.anchor, current), account.meteredFrom), balance: 0 },
-      { segment: segmentOf(current, account.meteredFrom, until), balance: account.ledgerBalance },
+      { period: previous, segment: segmentOf(previous, account.meteredFrom), balance: 0 },
+      { period: current, segment: segmentOf(current, account.meteredFrom, until), balance: account.ledgerBalance },
     ]
 
-    for (const [i, { segment, balance }] of segments.entries()) {
+    for (const [i, { period, segment, balance }] of segments.entries()) {
       if (!segment) continue
+      const edges = {
+        fromPeriodStart: isNewSubscriptionSegment(segment, {
+          meteredFrom: account.meteredFrom,
+          newSubscription: account.newSubscription ?? false,
+        }),
+        toPeriodEnd: untilKeepsAllowance && i === 1 && Boolean(until),
+      }
       const used = creditsInRange(account.days, segment.start, segment.end)
       if (i === 0 && used === 0) continue
       rows.push({
@@ -168,6 +183,7 @@ export function buildOverageRows(
         used,
         purchased: balance + (account.packUsage[segment.start] ?? 0),
         reported: account.reports[segment.start] ?? 0,
+        allowance: segmentAllowance(accountPlan, period, segment, edges),
       })
     }
   }
@@ -185,6 +201,7 @@ interface Candidate {
   plan: string
   anchor: Date | null
   metered_from: string | null
+  new_subscription: boolean
 }
 
 /**
@@ -193,7 +210,8 @@ interface Candidate {
  */
 async function candidates(q: Sql, now: Date, only?: { userId: string; plan?: Plan }): Promise<Candidate[]> {
   const users = await q<Candidate[]>`
-    SELECT u.id, u.plan, u.billing_period_start AS anchor, u.metered_from::text AS metered_from
+    SELECT u.id, u.plan, u.billing_period_start AS anchor, u.metered_from::text AS metered_from,
+           u.metered_from_new_subscription AS new_subscription
     FROM accounts_users u
     WHERE ${only ? q`u.id = ${only.userId}` : q`u.plan <> 'free'`}
       AND EXISTS (
@@ -238,6 +256,7 @@ async function loadAccounts(q: Sql, now: Date, users: Candidate[]): Promise<Acco
     plan: user.plan,
     anchor: user.anchor,
     meteredFrom: user.metered_from,
+    newSubscription: user.new_subscription,
     days: byUser(days, user.id).map(({ day, credits }) => ({ day, credits })),
     ledgerBalance: ledger.find((row) => row.user_id === user.id)?.total ?? 0,
     packUsage: Object.fromEntries(byUser(packUsage, user.id).map((row) => [row.start, row.amount])),
@@ -421,7 +440,13 @@ export async function reportPendingOverage(options: ReportOptions = {}): Promise
  * is bounded; past it the change goes ahead and the remainder is logged as lost.
  * Every query runs on the transaction, so it holds one connection, not two.
  */
-export async function stageOverageBeforeChange(userId: string, plan: Plan, until: string, now: Date = new Date()): Promise<void> {
+export async function stageOverageBeforeChange(
+  userId: string,
+  plan: Plan,
+  until: string,
+  subscriptionEnds = false,
+  now: Date = new Date(),
+): Promise<void> {
   if (!billing.enabled || !billing.meterUsage || !plan.overageAllowed) return
   await flushUsage()
 
@@ -431,7 +456,7 @@ export async function stageOverageBeforeChange(userId: string, plan: Plan, until
     await tx`SELECT pg_advisory_xact_lock(${LOCK_CLASS}::int, ${LOCK_ID}::int)`
 
     const accounts = await loadAccounts(tx, now, await candidates(tx, now, { userId, plan }))
-    const pending = computePendingOverage(buildOverageRows(accounts, now, plan, until), plan)
+    const pending = computePendingOverage(buildOverageRows(accounts, now, plan, until, subscriptionEnds), plan)
     if (pending.length === 0) return
 
     // A report still staged from a failed pass carries its own event id, which
