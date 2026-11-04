@@ -253,6 +253,10 @@ services:
       # Caps runaway queries on the API query pool only — schema DDL and the
       # enrichment backfill get their own untimed connections (see src/db.ts).
       BARRELMAN_STATEMENT_TIMEOUT_MS: ${BARRELMAN_STATEMENT_TIMEOUT_MS:-10000}
+      # Main query pool, and the separate one for auth, keys, credits and
+      # metering. Blank uses the defaults in src/db.ts (20 and 5).
+      DB_POOL_MAX: ${DB_POOL_MAX:-}
+      DB_ACCOUNTS_POOL_MAX: ${DB_ACCOUNTS_POOL_MAX:-}
       OLLAMA_HOST: ${OLLAMA_HOST:-http://ollama:11434}
       TTS_URL: ${TTS_URL:-}
       TTS_MODEL_REVISION: ${TTS_MODEL_REVISION:-v1.0}

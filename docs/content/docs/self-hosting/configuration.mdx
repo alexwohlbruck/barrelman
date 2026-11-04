@@ -77,10 +77,18 @@ signatures and cannot make them, which is why it is compiled into
 | `BARRELMAN_SEED_SAMPLE_REGIONS` | _(off)_ | Set to `1` to seed the repo's sample regions (`north-carolina`, `nyc-metro`, `global`) into the regions store on first boot. Off by default: a fresh install starts with an empty Regions page, and you add the region you want with **Add by name**, which searches the Geofabrik index. Sample regions on a real instance are clutter in the console and a mis-clickable target on the Scripts page |
 | `OLLAMA_HOST` | `http://localhost:11434` | Embeddings for semantic search (optional) |
 | `BARRELMAN_STATEMENT_TIMEOUT_MS` | `10000` | Query timeout on the API pool. `0` disables. DDL is exempt |
+| `DB_POOL_MAX` | `20` | Connections in the main API pool, which serves search, tiles, spatial and transit queries |
+| `DB_ACCOUNTS_POOL_MAX` | `5` | Connections in the separate pool for sign-in, sessions, API-key lookup, credits and usage metering, so authenticated requests never queue behind slow searches. Same statement timeout as the main pool |
 | `BARRELMAN_HEALTH_CACHE_MS` | `5000` | How long `/health` reuses its dependency probes. The endpoint is public and a load balancer may hit it every second; without caching each call fans out to Postgres, GraphHopper, Martin, MOTIS and Pelias. `checkedAt` in the response reports the age. `0` disables |
 | `PUBLIC_BASE_URL` | — | Origin `/docs` advertises as its "Production" server. Unset offers only localhost |
 | `NODE_ENV` | — | `production` makes the server warn at startup about missing secrets |
 | `COMPOSE_FILE` | — | Read by Compose, not by barrelman. `.env.example` sets it so a bare `docker compose up` picks up the dev overrides |
+
+Both pools open connections only when a query needs one. Postgres runs with
+its stock `max_connections` of 100, and the API and `barrelman-ops` each hold
+both pools, alongside Martin's pool of 20. The defaults add up to about 70, so
+check `2 × (DB_POOL_MAX + DB_ACCOUNTS_POOL_MAX) + 20` against 100 before raising
+either.
 
 `REGIONS` is consumed by the **importers**, which run in `barrelman-ops`, and
 also by the API — `scripts/rebuild-motis.sh` generates `motis/config.yml` with
