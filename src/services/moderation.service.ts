@@ -27,7 +27,10 @@ import {
   type User,
 } from '../schema/accounts'
 import { generateId } from '../lib/crypto'
-import { LastAdminError } from './accounts.service'
+import { findUserById, LastAdminError } from './accounts.service'
+import { billing } from '../config/billing.config'
+import { BillingTeardownError, revokeActiveSubscription } from './billing.service'
+import { reportPendingOverage } from './overage.service'
 import { endAllSessions } from './auth.service'
 import { invalidateUserKeys } from './api-keys.service'
 import { invalidateBalance } from './credits.service'
@@ -108,6 +111,39 @@ async function revokeAccess(userId: string): Promise<void> {
 }
 
 /**
+ * Bill what the account owes and stop its subscription, before the row and
+ * its usage are gone.
+ *
+ * Overage is reported first, while the subscription is still there to bill it
+ * against. Either step failing throws BillingTeardownError and the deletion
+ * does not happen: a deleted account with a live subscription keeps charging a
+ * card with no account left to cancel from. A last administrator is refused
+ * later anyway, so it is checked here first to avoid revoking a subscription
+ * on an account that then is not deleted.
+ */
+async function settleBillingBeforeDeletion(account: User): Promise<void> {
+  if (!billing.enabled) return
+
+  if (account.role === 'admin') {
+    const admins = await db.select({ id: users.id }).from(users).where(eq(users.role, 'admin'))
+    if (admins.length <= 1) {
+      throw new LastAdminError('This is the only administrator. Promote someone else before deleting this account.')
+    }
+  }
+
+  try {
+    await reportPendingOverage({ userId: account.id })
+  } catch (err) {
+    console.error(`[moderation] could not report outstanding overage for ${account.id}`, err)
+    throw new BillingTeardownError(
+      'Outstanding overage on this account could not be reported to Polar, so the account was not deleted. Try again shortly.',
+    )
+  }
+
+  await revokeActiveSubscription(account)
+}
+
+/**
  * Erase an account and everything attached to it.
  *
  * The opposite bargain from a suspension. A suspension keeps the person on
@@ -127,6 +163,9 @@ async function revokeAccess(userId: string): Promise<void> {
  * each see a count of two and both go through.
  */
 export async function deleteAccount(userId: string, actorId: string): Promise<User | null> {
+  const account = await findUserById(userId)
+  if (account) await settleBillingBeforeDeletion(account)
+
   const deleted = await db.transaction(async (tx) => {
     const admins = await tx
       .select({ id: users.id })
