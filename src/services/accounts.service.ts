@@ -275,6 +275,19 @@ export function ensureAccountsSchema(): Promise<void> {
           count   integer NOT NULL DEFAULT 0,
           PRIMARY KEY (ip_hash, day)
         )`
+
+      // Penalty-box state, so a deploy does not release every boxed caller.
+      // Ephemeral by design (rows live at most MAX_PENALTY_MS plus the strike
+      // decay) and keyed by a hash of the penalty key, which carries an address.
+      // See services/penalty-sync.service.ts. Not backed up.
+      await sql`
+        CREATE TABLE IF NOT EXISTS accounts_throttle_penalties (
+          id              text PRIMARY KEY,
+          strikes         integer NOT NULL,
+          penalised_until timestamptz NOT NULL,
+          last_strike_at  timestamptz NOT NULL,
+          updated_at      timestamptz NOT NULL DEFAULT now()
+        )`
     })()
   }
   return schemaReady

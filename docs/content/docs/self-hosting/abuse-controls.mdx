@@ -169,13 +169,45 @@ call an endpoint.
 
 ### A caveat that matters
 
-All throttle state is **in memory, and therefore per-replica**. With N API
-replicas the effective limits are N times these. That is fine for protecting the
-process and the upstream engines, which is what it is for. The credit ledger is
-in Postgres and remains the accurate record for anything with money attached.
+The per-minute windows and the concurrency slots are **in memory, and therefore
+per-replica**. Each API process counts only the requests it served:
 
-If barrelman ever runs horizontally and you need exact limits, this is the piece
-to move behind Redis — `src/services/throttle.service.ts`.
+* With N replicas behind a load balancer, a caller spread evenly across them
+  gets up to N times each per-minute limit, and up to N times each concurrency
+  cap.
+* A caller pinned to one replica (sticky sessions, or one long-lived connection
+  from a server-side integration) gets the limits as written.
+* A restart or deploy empties the windows, so a caller who was refused a moment
+  before gets a fresh minute.
+
+That is fine for protecting the process and the upstream engines, which is what
+the windows are for. The credit ledger is in Postgres and remains the accurate
+record for anything with money attached. If you run several replicas and want
+the published limits to hold across all of them, divide the `BARRELMAN_*_RPM`
+settings by the replica count. Exact shared limits would mean moving the
+windows behind a shared store such as Redis — `src/services/throttle.service.ts`.
+
+The **penalty box is shared and survives restarts.** Every replica checks it
+from memory, writes changes to `accounts_throttle_penalties` every two seconds,
+and reads back the other replicas' rows every 15 seconds, so a caller boxed on
+one replica is refused by the rest within about 15 seconds, and a deploy does
+not release anyone. Only callers who actually reached the box are written:
+strikes short of it stay on the replica that saw them. A successful request
+clears the caller's strikes at once only on the replica that served it; the
+other replicas keep the strikes they hold until those decay, ten minutes after
+the last one. A success never lifts a box that is still running. Rows are keyed by a
+keyed hash of the account and address, never the address itself, and are
+deleted once both the box and the strikes behind it have expired. The table is
+not part of backups.
+
+Revoking a key, changing its scopes, origins or rate-limit exemption,
+suspending or deleting an account, and changing a plan or credit balance take
+effect on every replica at once, not after a cache expires: each API process
+listens on the Postgres channel `barrelman_cache` and evicts what changed. If
+the listening connection drops, the process clears its key and balance caches
+when it reconnects, since it may have missed notifications. A pooler in
+transaction mode (PgBouncer's default) does not carry `LISTEN`; point
+`DATABASE_URL` at Postgres directly or at a session-mode pool.
 
 ### Seeing who is limited
 
