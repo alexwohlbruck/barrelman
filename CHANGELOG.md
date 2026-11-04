@@ -24,6 +24,7 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 * `GTFS_LICENCE_POLICY=commercial` withholds feeds whose licence explicitly forbids commercial use or redistribution. The import skips them and removes their stops, routes and zip, `motis/config.yml` leaves them out, and transit responses drop them at once. A feed with no licence on record, or with `unknown` answers, is still served. The default, `off`, only records licences. Set it in `.env`; both the API and `barrelman-ops` read it.
 * GBFS systems keep the licence and attribution fields of `system_information` (GBFS v2.3+) when they publish them, and return them as `license` in `/gbfs/systems` and the `systems` list of `/gbfs/nearby-stations`. Re-run the GBFS systems import to pick them up.
 * The console's Data view lists each feed's licence with its commercial and redistribution answers, and counts the feeds that forbid commercial use.
+* Authentication, credit and rate-limit refusals carry a stable `code` beside the `error` message: `missing_key`, `invalid_key`, `insufficient_credits`, `overage_limit_reached`, `account_suspended`, `scope_denied`, `origin_denied`, `rate_limited` and `too_many_failures`. Branch on `code`; the message wording may change.
 
 ### Changed
 
@@ -56,6 +57,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 ### Documentation
 
 * A new [Attribution](https://docs.barrelman.dev/attribution) page says what an app must credit when it shows Barrelman data: OpenStreetMap, OpenMapTiles, Mapterhorn terrain, transit agencies, 3D landmarks and brand logos. It includes a MapLibre example and explains what the ODbL asks of anyone who redistributes the data.
+* [Stability and errors](https://docs.barrelman.dev/usage/stability) sets out what the API keeps stable on 0.x and how breaking changes are announced: a **Deprecated** changelog entry at least 90 days ahead, `Deprecation` and `Sunset` headers on the affected endpoint, and 30 days' email notice of pricing changes to paying accounts. It also documents the error body, the `X-Request-Id` header and the refusal codes.
+* The changelog is published at [docs.barrelman.dev/changelog](https://docs.barrelman.dev/changelog), built from this file. Unreleased entries are left out.
 
 ## [0.10.38] - 2026-11-03
 
