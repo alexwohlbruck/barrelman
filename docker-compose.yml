@@ -258,6 +258,8 @@ services:
       TTS_MODEL_REVISION: ${TTS_MODEL_REVISION:-v1.0}
       PORT: 5001
       BARRELMAN_API_KEY: ${BARRELMAN_API_KEY:-brm_dev_changeme}
+      # Key for hashing client addresses. Unset, derived from BARRELMAN_API_KEY.
+      BARRELMAN_IP_HASH_SECRET: ${BARRELMAN_IP_HASH_SECRET:-}
       GRAPHHOPPER_URL: http://barrelman-graphhopper:8989
       # Per-call deadline on GraphHopper (the /graphhopper proxy and /match).
       GRAPHHOPPER_TIMEOUT_MS: ${GRAPHHOPPER_TIMEOUT_MS:-}
@@ -408,15 +410,15 @@ services:
       BARRELMAN_TOS_VERSION: ${BARRELMAN_TOS_VERSION:-}
       BARRELMAN_PRIVACY_URL: ${BARRELMAN_PRIVACY_URL:-}
     ports:
-      # Defaults to every interface, unlike the sibling services above: this is
-      # the one port that is meant to serve traffic. Note what that implies on a
-      # fresh public server — the console and open sign-up answer the internet as
-      # soon as the stack is up, and the first account created becomes an admin.
-      # Set BARRELMAN_API_BIND_ADDR=127.0.0.1 once a reverse proxy fronts it (the
-      # proxy reaches this container as barrelman:5001 over the Compose network,
-      # so nothing breaks). A host firewall is NOT a substitute — Docker DNATs
-      # published ports before ufw's INPUT rules are consulted.
-      - "${BARRELMAN_API_BIND_ADDR:-0.0.0.0}:5001:5001"
+      # Loopback by default, like the sibling services above. A fresh public
+      # server would otherwise answer the internet with the console and open
+      # sign-up as soon as the stack is up, and the first account created
+      # becomes an admin. A reverse proxy reaches this container as
+      # barrelman:5001 over the Compose network, or localhost:5001 from the
+      # host, so it needs nothing here. To serve :5001 directly with no proxy,
+      # set BARRELMAN_API_BIND_ADDR=0.0.0.0. A host firewall is NOT a way to
+      # close it again: Docker DNATs published ports before ufw's INPUT rules.
+      - "${BARRELMAN_API_BIND_ADDR:-127.0.0.1}:5001:5001"
     volumes:
       - barrelman-osm-data:/data
       - barrelman-gtfs-data:/gtfs-data
