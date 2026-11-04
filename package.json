@@ -1,7 +1,7 @@
 {
   "name": "barrelman",
   "version": "0.10.38",
-  "description": "OSM geospatial engine \u2014 search, tiles, spatial queries, routing",
+  "description": "OSM geospatial engine — search, tiles, spatial queries, routing",
   "type": "module",
   "scripts": {
     "dev": "bun run --hot src/index.ts",
@@ -35,7 +35,7 @@
     "arctic": "^3.7.0",
     "axios": "^1.7.9",
     "csv-parse": "^5.6.0",
-    "drizzle-orm": "^0.43.1",
+    "drizzle-orm": "^0.45.4",
     "earcut": "^3.2.3",
     "elysia": "^1.2.0",
     "gtfs-realtime-bindings": "^2.0.0",
@@ -50,7 +50,7 @@
     "@types/nodemailer": "^8.0.1",
     "@types/pg": "^8.11.11",
     "bun-types": "latest",
-    "drizzle-kit": "^0.30.6",
+    "drizzle-kit": "^0.31.11",
     "typescript": "^5.7.0"
   }
 }
