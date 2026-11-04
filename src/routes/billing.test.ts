@@ -60,8 +60,8 @@ function deps(overrides: Partial<BillingDeps> = {}): Partial<BillingDeps> {
     ensureCustomerExternalId: mock(async () => undefined),
     applyCreditPack: mock(async () => ({ granted: true, credits: 100_000 })),
     clawBackCreditPack: mock(async () => ({ clawedBack: 100_000 })),
-    claimWebhookEvent: mock(async () => true),
-    releaseWebhookEvent: mock(async () => undefined),
+    isWebhookEventHandled: mock(async () => false),
+    recordWebhookEvent: mock(async () => undefined),
     productIdForPlan: mock((plan: string) => (plan === 'developer' ? 'prod_dev' : plan === 'business' ? 'prod_business' : null)),
     findUserById: mock(async () => makeUser()),
     findUserByPolarCustomerId: mock(async () => null),
@@ -210,18 +210,26 @@ describe('POST /billing/webhook', () => {
   test('skips a redelivery with a webhook-id it has already handled', async () => {
     const d = deps({
       findUserByPolarCustomerId: mock(async () => makeUser()),
-      claimWebhookEvent: mock(async () => false),
+      isWebhookEventHandled: mock(async () => true),
     })
 
     const res = await webhook('subscription.updated', sub(), d, { 'webhook-id': 'msg_1' })
 
     expect(res.status).toBe(200)
-    expect(d.claimWebhookEvent).toHaveBeenCalledWith('msg_1', 'subscription.updated')
+    expect(d.isWebhookEventHandled).toHaveBeenCalledWith('msg_1')
     expect(d.applySubscriptionEvent).not.toHaveBeenCalled()
   })
 
-  test('releases the delivery id and answers 500 when handling fails', async () => {
-    // Otherwise Polar's retry would be skipped as a duplicate and the event lost.
+  test('records the delivery only after handling succeeds', async () => {
+    const d = deps({ findUserByPolarCustomerId: mock(async () => makeUser()) })
+
+    await webhook('subscription.updated', sub(), d, { 'webhook-id': 'msg_3' })
+
+    expect(d.recordWebhookEvent).toHaveBeenCalledWith('msg_3', 'subscription.updated')
+  })
+
+  test('records nothing and answers 500 when handling fails, so the retry runs', async () => {
+    // A recorded id would make Polar's retry look like a duplicate and lose the event.
     const d = deps({
       findUserByPolarCustomerId: mock(async () => makeUser()),
       applySubscriptionEvent: mock(async () => {
@@ -232,7 +240,20 @@ describe('POST /billing/webhook', () => {
     const res = await webhook('subscription.updated', sub(), d, { 'webhook-id': 'msg_2' })
 
     expect(res.status).toBe(500)
-    expect(d.releaseWebhookEvent).toHaveBeenCalledWith('msg_2')
+    expect(d.recordWebhookEvent).not.toHaveBeenCalled()
+  })
+
+  test('still acknowledges an applied event when recording the delivery fails', async () => {
+    const d = deps({
+      findUserByPolarCustomerId: mock(async () => makeUser()),
+      recordWebhookEvent: mock(async () => {
+        throw new Error('database blip')
+      }),
+    })
+
+    const res = await webhook('subscription.updated', sub(), d, { 'webhook-id': 'msg_4' })
+
+    expect(res.status).toBe(200)
   })
 
   test('falls back to checkout metadata when no customer is linked yet', async () => {
@@ -419,6 +440,21 @@ describe('authenticated billing routes', () => {
     const res = await app.handle(post('/billing/checkout', { plan: 'business' }))
 
     expect(res.status).toBe(409)
+    expect(d.createCheckout).not.toHaveBeenCalled()
+  })
+
+  test('checkout answers 502 when Polar cannot say whether a subscription exists', async () => {
+    const d = deps({
+      ...signedIn(),
+      findActiveSubscription: mock(async () => {
+        throw new Error('polar down')
+      }) as never,
+    })
+    const app = createBillingRoutes(d)
+
+    const res = await app.handle(post('/billing/checkout', { plan: 'developer' }))
+
+    expect(res.status).toBe(502)
     expect(d.createCheckout).not.toHaveBeenCalled()
   })
 

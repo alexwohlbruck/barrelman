@@ -14,7 +14,7 @@ import {
   applyCreditPack as _applyCreditPack,
   applySubscriptionEvent as _applySubscriptionEvent,
   changeSubscriptionProduct as _changeSubscriptionProduct,
-  claimWebhookEvent as _claimWebhookEvent,
+  isWebhookEventHandled as _isWebhookEventHandled,
   clawBackCreditPack as _clawBackCreditPack,
   createCheckout as _createCheckout,
   ensureCustomerExternalId as _ensureCustomerExternalId,
@@ -23,7 +23,7 @@ import {
   getProducts as _getProducts,
   productIdForPlan as _productIdForPlan,
   refreshSubscription as _refreshSubscription,
-  releaseWebhookEvent as _releaseWebhookEvent,
+  recordWebhookEvent as _recordWebhookEvent,
   syncSubscription as _syncSubscription,
   toIncomingSubscription,
 } from '../services/billing.service'
@@ -49,8 +49,8 @@ export interface BillingDeps {
   ensureCustomerExternalId: typeof _ensureCustomerExternalId
   applyCreditPack: typeof _applyCreditPack
   clawBackCreditPack: typeof _clawBackCreditPack
-  claimWebhookEvent: typeof _claimWebhookEvent
-  releaseWebhookEvent: typeof _releaseWebhookEvent
+  isWebhookEventHandled: typeof _isWebhookEventHandled
+  recordWebhookEvent: typeof _recordWebhookEvent
   productIdForPlan: typeof _productIdForPlan
   findUserById: typeof _findUserById
   findUserByPolarCustomerId: typeof _findUserByPolarCustomerId
@@ -72,8 +72,8 @@ const defaultDeps: BillingDeps = {
   ensureCustomerExternalId: _ensureCustomerExternalId,
   applyCreditPack: _applyCreditPack,
   clawBackCreditPack: _clawBackCreditPack,
-  claimWebhookEvent: _claimWebhookEvent,
-  releaseWebhookEvent: _releaseWebhookEvent,
+  isWebhookEventHandled: _isWebhookEventHandled,
+  recordWebhookEvent: _recordWebhookEvent,
   productIdForPlan: _productIdForPlan,
   findUserById: _findUserById,
   findUserByPolarCustomerId: _findUserByPolarCustomerId,
@@ -183,21 +183,28 @@ export function createBillingRoutes(overrides: Partial<BillingDeps> = {}) {
 
       // Polar redelivers until it sees a 2xx, so the same event can arrive
       // twice. The delivery id is covered by the signature, so it can be
-      // trusted as a dedupe key.
+      // trusted as a dedupe key. It is recorded only once handling succeeds,
+      // so a crash part-way leaves nothing behind and the retry runs.
       const deliveryId = headers['webhook-id']
-      if (deliveryId && !(await deps.claimWebhookEvent(deliveryId, type))) {
+      if (deliveryId && (await deps.isWebhookEventHandled(deliveryId))) {
         return { received: true, duplicate: true }
       }
 
       try {
         await handleEvent(type, data)
       } catch (err) {
-        // Release the claim so Polar's retry is processed, and answer non-2xx
-        // so that retry happens.
+        // Non-2xx, so Polar retries.
         console.error(`[billing] failed to handle ${type}`, err)
-        if (deliveryId) await deps.releaseWebhookEvent(deliveryId).catch(() => undefined)
         set.status = 500
         return { error: 'Webhook handling failed' }
+      }
+
+      if (deliveryId) {
+        // The event is applied. Failing to note that only costs a harmless
+        // re-run on redelivery, so it must not turn the response into a 500.
+        await deps
+          .recordWebhookEvent(deliveryId, type)
+          .catch((err) => console.warn(`[billing] could not record delivery ${deliveryId}`, err))
       }
 
       return { received: true }
@@ -369,7 +376,18 @@ export function createBillingRoutes(overrides: Partial<BillingDeps> = {}) {
 
         // A second checkout for a plan opens a second subscription, and the
         // customer pays for both. Plan changes go through /billing/change-plan.
-        if (body.plan && account && (await deps.findActiveSubscription(account))) {
+        let existing = null
+        if (body.plan && account) {
+          try {
+            existing = await deps.findActiveSubscription(account)
+          } catch (err) {
+            // Without an answer, a checkout could open a second subscription.
+            console.error(`[billing] could not check ${account.id} for a subscription before checkout`, err)
+            set.status = 502
+            return { error: 'Could not reach Polar to check your subscription. Nothing was charged; try again shortly.' }
+          }
+        }
+        if (existing) {
           set.status = 409
           return {
             error: 'This account already has a subscription. Change plan instead of checking out again.',
