@@ -1,5 +1,5 @@
 /**
- * Outbound email. Only transactional sign-in mail today.
+ * Outbound email: sign-in codes, credit warnings and billing notices.
  *
  * SMTP is optional: with no `SMTP_HOST` configured the transport is never
  * created and codes are written to the log instead. That keeps `./start.sh dev`
@@ -106,4 +106,28 @@ export async function sendLowCreditsWarning(
   const text = `You have used ${percentUsed}% of your ${appName} API credits — ${remaining} remain. Manage billing at ${serverOrigin}/console/billing`
 
   return send(email, `${percentUsed}% of your ${appName} API credits used`, html, text)
+}
+
+/**
+ * Tell an account its subscription payment failed. Sent once, on the move into
+ * past_due. The plan stays on while Polar retries, so this asks for the card to
+ * be fixed before the retries run out; nothing has stopped yet.
+ */
+export async function sendPaymentFailedNotice(email: string, planName: string): Promise<boolean> {
+  const html = layout(
+    'Your payment did not go through',
+    `<p style="margin:0 0 24px;font-size:15px;line-height:1.6;color:#57534e">
+       The latest payment for your ${appName} ${planName} plan failed. Your plan and API access carry on
+       while the payment is retried.</p>
+     <p style="margin:0 0 24px;font-size:15px;line-height:1.6;color:#57534e">
+       If the retries also fail, the subscription ends and the account moves to the free plan. Update your
+       payment method to keep it.</p>
+     <p style="margin:0"><a href="${serverOrigin}/console/billing" style="display:inline-block;padding:10px 18px;background:#1c1917;color:#fff;border-radius:8px;text-decoration:none;font-size:14px;font-weight:500">Update payment method</a></p>`,
+  )
+  const text =
+    `The latest payment for your ${appName} ${planName} plan failed. Your plan carries on while the payment is ` +
+    `retried; if the retries fail, the account moves to the free plan. Update your payment method at ` +
+    `${serverOrigin}/console/billing`
+
+  return send(email, `Your ${appName} payment failed`, html, text)
 }

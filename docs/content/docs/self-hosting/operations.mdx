@@ -1,6 +1,6 @@
 ---
 title: Operations
-description: Upgrading, scheduling refreshes, refreshing OSM and transit data, backups, and rotating secrets.
+description: Upgrading, scheduling refreshes, refreshing OSM and transit data, monitoring and alerts, backups, and rotating secrets.
 ---
 
 ## Upgrading
@@ -11,7 +11,7 @@ docker compose pull
 docker compose up -d
 ```
 
-`docker compose pull` refreshes every service's image in the **active profiles**, not just Barrelman's. That is fine for anything stateless — which is why most images here track a floating tag and pick up upstream fixes for free.
+`docker compose pull` refreshes every service's image in the **active profiles**. Barrelman's own three images follow `:latest`; every third-party image (Martin, GraphHopper, MOTIS, Pelias, Kokoro) is pinned by digest, so a pull never changes those. Moving one is a separate step, described under [upgrading pinned images](#upgrading-pinned-images).
 
 Profile-gated services are skipped, which is easy to miss: on an instance running
 the address geocoder, a plain `pull` fetches the six core images and leaves
@@ -46,15 +46,47 @@ docker compose exec -d barrelman-ops bash scripts/rebuild-motis.sh
 docker compose exec -d barrelman-ops bash scripts/rebuild-graphhopper.sh
 ```
 
-Pull during a window where you can run the rebuild, or pin those two services to explicit version tags.
+Both are pinned in `docker-compose.yml`, so this only happens when you move a pin yourself. Do it during a window where you can run the rebuild.
 </Callout>
+
+### Upgrading pinned images
+
+Third-party images are pinned as `image:tag@sha256:…`. Docker resolves the digest and ignores the tag, which is there only to say which release the digest belongs to. Pelias publishes no release tags for most of its images, so those read `:master@sha256:…`. GraphHopper's pin is a digest alone: the June 2026 12.0 snapshot, from a nightly `:latest` whose October builds broke graph imports.
+
+To move one:
+
+1. Find the new release's digest. For a multi-architecture image this is the digest of the index, the one `docker buildx imagetools inspect` prints first:
+
+   ```bash
+   docker buildx imagetools inspect ghcr.io/motis-project/motis:2.11.4
+   ```
+
+2. Replace both the tag and the digest in `docker-compose.yml` (or `pelias/docker-compose.yml`), then pull and recreate that one service:
+
+   ```bash
+   docker compose pull motis
+   docker compose up -d motis
+   ```
+
+3. Rebuild its data if the engine stores any:
+
+   | Service | After moving the pin |
+   |---|---|
+   | `motis` | `scripts/rebuild-motis.sh`. The import runs with the image the server runs, so recreate the container first |
+   | `graphhopper` | `scripts/rebuild-graphhopper.sh`, a full graph rebuild. Test a new build on a small region first |
+   | `martin` | Nothing to rebuild. Check `docker logs barrelman-martin` for sources it dropped at startup |
+   | Pelias | Usually nothing. A `pelias/schema` change can need a re-index, which is a multi-hour job |
+
+4. Check the container's health with `docker compose ps`, then `/health` on the API.
+
+To roll back, restore the old line and repeat step 2. For GraphHopper and MOTIS, run the rebuild again too, since the new engine may already have rewritten the data.
 
 ### Automating it
 
 Watchtower can automate the pull, with three caveats.
 
 - **It only manages containers on its own Docker host.** Watchtower watches the Docker socket it is given and nothing else, so an instance running on a different machine will never update your stack. Every host you want auto-updated needs its own.
-- **A blanket Watchtower will eventually hit the binary-format trap above.** It pulls the same floating tags `docker compose pull` would, so if MOTIS or GraphHopper are on `:latest` it will one day restart them onto an incompatible engine version with nobody watching. Either pin those two services, or run Watchtower with `--label-enable` and label only the stateless services.
+- **Watchtower leaves pinned images alone.** A digest never points anywhere new, so Watchtower has nothing to pull for Martin, GraphHopper, MOTIS or Pelias. If you replace a pin with a floating tag, Watchtower will follow it, and for MOTIS and GraphHopper that means one day restarting onto an engine that rejects its data with nobody watching.
 - **It will restart the stack in the middle of a job.** An import runs for hours — a replication update with post-processing has taken nearly twelve — while Watchtower polls hourly, so a push that lands mid-run kills it. See below.
 
 ### Not restarting mid-import
@@ -290,42 +322,213 @@ against Transitland's. That's what the seeded GTFS schedule runs. Its first run
 only records a baseline; it can't detect drift until it has a prior sha to
 compare against.
 
-## Backups
+## Monitoring and alerts
 
-Only the database holds anything you cannot regenerate — accounts, API keys, usage history, region definitions and job history. OSM, GTFS and the routing graphs are all rebuildable from source.
+Barrelman can tell you when something breaks instead of waiting for a user to
+notice. There are two independent pieces, both off until configured; the
+variables are listed under [configuration](/self-hosting/configuration#monitoring-and-alerts).
 
-Back up exactly that, and the dump stays small enough to keep forever:
+### Alerts to a webhook
 
-```bash
-docker exec barrelman-db pg_dump -U barrelman -Fc \
-  -t 'accounts_*' -t 'ops_*' -t 'import_*' \
-  barrelman > barrelman-state-$(date +%F).dump
+Set `ALERT_WEBHOOK_URL` on `barrelman` and `barrelman-ops` and an alert is
+POSTed when:
+
+| What | When it fires | Recovery |
+|---|---|---|
+| A scheduled job fails | A run started by a schedule ends *failed*, including one the worker stopped heartbeating on. Runs you start by hand never alert | When the next run of that schedule succeeds |
+| A required service is down | Postgres, GraphHopper, Martin or MOTIS fails the `/health` probe on three consecutive checks, a minute apart (`ALERT_DEPENDENCY_CYCLES`). Pelias and speech synthesis are optional and never alert | When the probe passes again |
+| A data volume is filling up | A volume mounted in `barrelman-ops`, including the Postgres volume (mounted read-only for this check), is at least `ALERT_DISK_PERCENT` full (default 90). Checked every ten minutes, repeated every six hours while it stays above | When it drops back below |
+
+Repeats are rate-limited: the same alert is not sent twice within ten minutes,
+or an hour for a schedule that keeps failing. A recovery always goes out, and a
+failure after a recovery alerts straight away. A webhook that can't be reached
+is logged and never affects the job or request that triggered it. Service and
+disk alerts are retried on the next check until one is delivered; a job alert
+is sent once.
+
+Error text in an alert has URLs, IP addresses, `host:port` pairs, emails and
+keys masked, since anyone who knows an ntfy topic's name can read it.
+
+`ALERT_WEBHOOK_FORMAT` picks the payload:
+
+- `json` (default) — `{ source, key, severity, title, message, timestamp }`,
+  where `severity` is `critical`, `warning` or `resolved`.
+- `slack` — `{ text }`, for Slack incoming webhooks and the Slack-compatible
+  endpoints of Discord and Mattermost.
+- `ntfy` — a plain-text body with `Title`, `Priority` and `Tags` headers.
+
+[ntfy](https://ntfy.sh) is the quickest way to get alerts on a phone. Pick a
+topic name nobody will guess, subscribe to it in the ntfy app, and point
+Barrelman at it:
+
+```dotenv
+ALERT_WEBHOOK_URL=https://ntfy.sh/barrelman-alerts-8f3k2q
+ALERT_WEBHOOK_FORMAT=ntfy
 ```
 
-Measured on the Colorado instance: **35 KB in 0.2 s**, covering all sixteen
-`accounts_*`, `ops_*` and `import_*` tables — accounts, API-key hashes, sessions,
-usage, the credit ledger, region definitions and job history.
+Then `docker compose up -d` to apply it. A self-hosted ntfy server works the
+same way with its own topic URL. Failures arrive as urgent, disk warnings as high
+priority and recoveries as normal ones.
 
-A whole-database dump is the belt-and-braces option, and worth taking before an
-upgrade or a risky migration:
+### Error tracking
+
+Set `SENTRY_DSN` and both processes report unhandled errors and requests that
+fail with a 5xx to Sentry, tagged with the release (`barrelman@<version>`) and
+`SENTRY_ENVIRONMENT`. Any Sentry-compatible service, such as a self-hosted
+GlitchTip, accepts the same DSN. Requests answered with a 4xx are not reported.
+
+Nothing identifying is sent. Request bodies, headers, cookies and query strings
+are dropped, API keys and email addresses are masked in error messages, and the
+SDK's log, HTTP and request-data integrations are turned off. Without a DSN the
+SDK is never loaded.
+
+### Uptime from outside
+
+Both of the above run inside the stack, so neither can tell you the host itself
+is down. Point an external uptime monitor (Uptime Kuma on another machine,
+UptimeRobot, Better Stack, a cron job on a different server) at the public
+health endpoint:
+
+```bash
+curl -fsS https://api.example.com/health
+```
+
+It is unauthenticated and cached for a few seconds, so polling it every minute
+costs nothing. It answers 200 even when something behind it is down, with
+`status` set to `ok`, `degraded` (a required service other than Postgres is
+down) or `error` (Postgres is unreachable). So check the body as well as the
+response: most monitors have a keyword check, and `"status":"ok"` is the one to
+look for. Whether `degraded` should page you depends on how much transit or
+routing matters to you.
+
+## Backups
+
+Only the database holds anything you cannot regenerate: accounts, API keys,
+credits and usage, schedules and job history, region definitions and landmark
+state. OSM, GTFS and the routing graphs are all rebuildable from source, so the
+backup leaves them out and stays small. On a test instance the 20 state tables
+dumped to 188 KB in about a second.
+
+The tables are listed in `src/admin/backup-tables.ts`, with the reasons for
+what is left out. Terms acceptance and the billing customer link are columns on
+`accounts_users`, so they come along with it.
+
+### Nightly backups
+
+**Scripts → Back Up Database** (`scripts/backup-db.sh`) does the whole job:
+
+1. dumps those tables with `pg_dump -Fc` to
+   `/data/backups/barrelman-<UTC timestamp>.dump` in `barrelman-ops`
+2. reads the dump back with `pg_restore --list` and fails unless every table's
+   data is in it
+3. uploads it when `BACKUP_S3_BUCKET` is set, and reads the object's size back
+4. deletes local dumps older than `BACKUP_KEEP_LOCAL_DAYS` (7) and remote ones
+   older than `BACKUP_KEEP_REMOTE_DAYS` (30), always keeping the newest
+
+Any failure fails the job, so a broken backup shows up in **Jobs** the next
+morning.
+
+A fresh install comes with a disabled **Back Up Database** schedule at 02:15,
+ahead of the 03:00 OSM update. Turn it on under **Schedules**. An instance that
+already had schedules before this was added does not get the seed; create the
+schedule yourself with cron `15 2 * * *`.
+
+A dump on the same disk as the database is little use when the disk goes, so
+set up a bucket. Any S3-compatible store works; the variables are in
+[Configuration → Backups](/self-hosting/configuration#backups). For example, on
+Hetzner Object Storage:
+
+```dotenv
+BACKUP_S3_BUCKET=barrelman-backups
+BACKUP_S3_ENDPOINT=https://fsn1.your-objectstorage.com
+BACKUP_S3_REGION=fsn1
+BACKUP_S3_ACCESS_KEY_ID=...
+BACKUP_S3_SECRET_ACCESS_KEY=...
+```
+
+Then recreate ops so it picks them up, and run one backup by hand to check:
+
+```bash
+docker compose up -d barrelman-ops
+docker compose exec barrelman-ops bash scripts/backup-db.sh
+```
+
+The upload uses a pinned boto3, which `uv` downloads from PyPI into the
+container's cache on first use. The cache does not survive a recreate, so the
+first upload after every `docker compose up` of `barrelman-ops` needs to reach
+PyPI. On a box without outbound access to it, that backup fails at the upload
+step, with the local dump already written.
+
+Give each instance its own `BACKUP_S3_PREFIX` (for example `barrelman/prod/`
+and `barrelman/staging/`) when they share a bucket. Pruning and `latest` work
+per prefix, so two instances on the default prefix would prune each other's
+backups and restore each other's dumps.
+
+Treat the bucket as credential storage. Lucia stores session IDs in the clear,
+so the cookie value *is* the row's primary key in `accounts_sessions`, and the
+dump also holds API-key hashes. Give the access key rights to this bucket
+alone, and turn on the provider's object lock or versioning if it offers one.
+
+### Restore drill
+
+A backup that has never been restored is a hope. **Scripts → Restore Drill**
+(`scripts/restore-db.sh`) restores the newest dump into a scratch database
+next to the live one, named `barrelman_restore_<UTC time>`, and prints each
+table's row count:
+
+```bash
+docker compose exec barrelman-ops bash scripts/restore-db.sh latest --drop-after
+```
+
+`latest` takes the newest dump in `/data/backups`, and falls back to the
+newest in the bucket. Pass a file name or an object key instead to pick one:
+
+```bash
+docker compose exec barrelman-ops bash scripts/restore-db.sh barrelman/barrelman-20261104T021500Z.dump
+```
+
+Without `--drop-after` the scratch database stays for inspection, and the
+script prints the command to drop it. `--target-db` picks the name, which must
+start with `barrelman_restore`. The script marks each scratch database it
+creates with a comment and only ever drops a database carrying that mark, so
+it cannot remove another database on the same server by name.
+
+Run a drill after setting up the bucket and again every few months. Pulling a
+dump from the bucket on a different machine is the stronger test, since it is
+the case backups exist for.
+
+### Restoring for real
+
+To put the backed-up tables back into the live database, stop the API so nothing
+writes to them mid-restore, then run the restore with `--into-live` and a
+confirmation variable set to the live database's name:
+
+```bash
+docker compose stop barrelman
+docker compose exec -e BACKUP_RESTORE_CONFIRM=barrelman barrelman-ops \
+  bash scripts/restore-db.sh latest --into-live
+docker compose start barrelman
+```
+
+It replaces only the tables in the dump, in one transaction, so it applies in
+full or not at all. The imported data is left as it is. This step is not
+available from the console.
+
+On a new server, bring the stack up, run the import, then restore: the import
+recreates the geodata, and the restore brings back the accounts and settings.
+
+### Whole-database dumps
+
+A full dump is worth taking before an upgrade or a risky migration:
 
 ```bash
 docker exec barrelman-db pg_dump -U barrelman -Fc barrelman > barrelman-$(date +%F).dump
 ```
 
-That one is dominated by data you can rebuild: on the same instance it took
-**3 m 30 s and produced 1.8 GB**, of which `geo_places` (7.4 GB on disk) and
-`planet_osm_*` (4.9 GB) are almost all of it. Scale that by extract size before
-scheduling it — a country-sized import makes this a tens-of-gigabytes job that a
-re-import would reproduce anyway.
-
-Verify a dump rather than trusting it, with either form:
-
-```bash
-docker exec -i barrelman-db pg_restore -l < barrelman-state-$(date +%F).dump | head
-```
-
-Treat `accounts_sessions` as credential material: Lucia stores session IDs in the clear, so the cookie value *is* the row's primary key.
+It is dominated by data you can rebuild: on the Colorado instance it took
+**3 m 30 s and produced 1.8 GB**, almost all of it `geo_places` and
+`planet_osm_*`. A country-sized import makes this a tens-of-gigabytes job that
+a re-import would reproduce anyway, so it is not a good nightly backup.
 
 ## Rotating secrets
 

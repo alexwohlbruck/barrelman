@@ -7,6 +7,7 @@
  */
 import { describe, test, expect } from 'bun:test'
 import { clearCookie, readCookie, serializeCookie } from './cookies'
+import { cookiesSecure } from '../config/accounts.config'
 
 describe('serializeCookie', () => {
   test('sets the defensive attributes by default', () => {
@@ -80,5 +81,21 @@ describe('readCookie', () => {
 
   test('tolerates whitespace and a trailing semicolon', () => {
     expect(readCookie(withCookies('  a=1 ;  b=2 ;'), 'b')).toBe('2')
+  })
+})
+
+describe('cookiesSecure', () => {
+  test('is on in production whatever the origin', () => {
+    expect(cookiesSecure({ production: true, origins: ['http://localhost:5001'] })).toBe(true)
+  })
+
+  test('is on for an https origin without NODE_ENV=production', () => {
+    // Compose sets no NODE_ENV, so a TLS deployment relied on the origin alone.
+    expect(cookiesSecure({ production: false, origins: ['https://api.example.com'] })).toBe(true)
+    expect(cookiesSecure({ production: false, origins: ['http://localhost:5001', 'HTTPS://console.example.com'] })).toBe(true)
+  })
+
+  test('stays off for plain-http local development', () => {
+    expect(cookiesSecure({ production: false, origins: ['http://localhost:5001', 'http://localhost:5199'] })).toBe(false)
   })
 })

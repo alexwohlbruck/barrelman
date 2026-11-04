@@ -289,7 +289,28 @@ describe('POST /auth/verify-code', () => {
     expect((await res.json()).reason).toBe('too-many-attempts')
   })
 
-  test('refuses a suspended account before checking the code', async () => {
+  test('a wrong code for a suspended account looks like any other wrong code', async () => {
+    const suspended = identity()
+    const active = identity()
+    const missing = identity()
+    const wrongCode = { verifyOtp: mock(async () => 'invalid' as const) }
+
+    const responses = await Promise.all([
+      createAuthRoutes(deps({ ...wrongCode, findUserByEmail: mock(async () => makeUser({ suspendedAt: new Date(), suspendedReason: 'spam' })) }))
+        .handle(post('/auth/verify-code', { email: suspended.email, code: '11111111' }, suspended.ip)),
+      createAuthRoutes(deps({ ...wrongCode, findUserByEmail: mock(async () => makeUser()) }))
+        .handle(post('/auth/verify-code', { email: active.email, code: '11111111' }, active.ip)),
+      createAuthRoutes(deps({ findUserByEmail: mock(async () => null) }))
+        .handle(post('/auth/verify-code', { email: missing.email, code: '11111111' }, missing.ip)),
+    ])
+
+    const bodies = await Promise.all(responses.map((res) => res.text()))
+    expect(responses.map((res) => res.status)).toEqual([401, 401, 401])
+    expect(new Set(bodies).size).toBe(1)
+    expect(bodies[0]).not.toContain('suspend')
+  })
+
+  test('reveals suspension only once the code is correct, and issues no session', async () => {
     const { email, ip } = identity()
     const d = deps({ findUserByEmail: mock(async () => makeUser({ suspendedAt: new Date() })) })
     const app = createAuthRoutes(d)
@@ -297,7 +318,8 @@ describe('POST /auth/verify-code', () => {
     const res = await app.handle(post('/auth/verify-code', { email, code: '12345678' }, ip))
 
     expect(res.status).toBe(403)
-    expect(d.verifyOtp).not.toHaveBeenCalled()
+    expect(d.verifyOtp).toHaveBeenCalled()
+    expect(d.startSession).not.toHaveBeenCalled()
   })
 
   test('does not issue a session when the code is rejected', async () => {

@@ -63,7 +63,7 @@ if (!csvResponse.ok) {
 }
 
 const csvText = await csvResponse.text()
-const records = parse(csvText, {
+const records = parse<Record<string, string>>(csvText, {
   columns: true,
   skip_empty_lines: true,
   trim: true,
