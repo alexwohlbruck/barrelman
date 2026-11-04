@@ -1,4 +1,5 @@
 import Elysia, { t } from 'elysia'
+import { serverError } from '../lib/errors'
 import { apiAuth, apiAuthAfter } from '../middleware/api-auth'
 import {
   getIsochrone as _getIsochrone,
@@ -65,7 +66,7 @@ export function createIsochroneRoutes(deps: {
   const getIsochrone = deps.getIsochrone || _getIsochrone
   const serviceDeps = { fetchFn: deps.fetchFn, union: deps.union }
 
-  const run = async (request: IsochroneRequest, set: { status?: number | string }) => {
+  const run = async (request: IsochroneRequest, set: { status?: number | string }, http: Request) => {
     try {
       return await getIsochrone(request, serviceDeps)
     } catch (err) {
@@ -94,11 +95,7 @@ export function createIsochroneRoutes(deps: {
         }
       }
 
-      set.status = 502
-      return {
-        error: 'Isochrone service unavailable',
-        detail: err instanceof Error ? err.message : String(err),
-      }
+      return serverError(http, set, err, 'Isochrone service unavailable', 502)
     }
   }
 
@@ -118,7 +115,7 @@ export function createIsochroneRoutes(deps: {
     .onAfterHandle(apiAuthAfter)
 
     // ── GET /isochrone ──────────────────────────────────────────────
-    .get('/', async ({ query, set }) => {
+    .get('/', async ({ query, set, request: http }) => {
       let request: IsochroneRequest
       try {
         request = {
@@ -143,7 +140,7 @@ export function createIsochroneRoutes(deps: {
         return { error: err instanceof Error ? err.message : String(err) }
       }
 
-      return run(request, set)
+      return run(request, set, http)
     }, {
       query: t.Object({
         lat: t.String(),
@@ -169,7 +166,7 @@ export function createIsochroneRoutes(deps: {
     })
 
     // ── POST /isochrone ─────────────────────────────────────────────
-    .post('/', async ({ body, set }) => {
+    .post('/', async ({ body, set, request: http }) => {
       let request: IsochroneRequest
       try {
         request = {
@@ -191,7 +188,7 @@ export function createIsochroneRoutes(deps: {
         return { error: err instanceof Error ? err.message : String(err) }
       }
 
-      return run(request, set)
+      return run(request, set, http)
     }, {
       body: t.Object({
         lat: t.Number({ minimum: -90, maximum: 90 }),

@@ -1,4 +1,5 @@
 import Elysia, { t } from 'elysia'
+import { serverError } from '../lib/errors'
 import { apiAuth, apiAuthAfter } from '../middleware/api-auth'
 import {
   getEnrichedRoute as _getEnrichedRoute,
@@ -160,7 +161,7 @@ export function createRouteRoutes(deps: {
   return new Elysia()
     .onBeforeHandle(apiAuth('routing'))
     .onAfterHandle(apiAuthAfter)
-    .post('/route', async ({ body, set }) => {
+    .post('/route', async ({ body, set, request }) => {
       try {
         const result = await getEnrichedRoute(body, fetchFn)
         return result
@@ -175,11 +176,7 @@ export function createRouteRoutes(deps: {
           }
         }
 
-        set.status = 502
-        return {
-          error: 'Routing service unavailable',
-          detail: err instanceof Error ? err.message : String(err),
-        }
+        return serverError(request, set, err, 'Routing service unavailable', 502)
       }
     }, {
       detail: {
@@ -188,7 +185,7 @@ export function createRouteRoutes(deps: {
         tags: ['Routing'],
       },
     })
-    .post('/route/hazards', async ({ body, set }) => {
+    .post('/route/hazards', async ({ body, set, request }) => {
       try {
         return await getRouteHazards(body as RouteHazardsRequest)
       } catch (err) {
@@ -196,8 +193,7 @@ export function createRouteRoutes(deps: {
           set.status = 400
           return { error: err.message }
         }
-        set.status = 502
-        return { error: 'Route hazards unavailable', detail: err instanceof Error ? err.message : String(err) }
+        return serverError(request, set, err, 'Route hazards unavailable', 502)
       }
     }, {
       body: hazardRequestBody,
@@ -207,7 +203,7 @@ export function createRouteRoutes(deps: {
         tags: ['Routing'],
       },
     })
-    .post('/route/lanes', async ({ body, set }) => {
+    .post('/route/lanes', async ({ body, set, request }) => {
       try {
         return await getRouteLanes(body as RouteLanesRequest)
       } catch (err) {
@@ -215,8 +211,7 @@ export function createRouteRoutes(deps: {
           set.status = 400
           return { error: err.message }
         }
-        set.status = 502
-        return { error: 'Lane geometry unavailable', detail: err instanceof Error ? err.message : String(err) }
+        return serverError(request, set, err, 'Lane geometry unavailable', 502)
       }
     }, {
       body: laneRequestBody,

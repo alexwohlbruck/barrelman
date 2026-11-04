@@ -1,4 +1,5 @@
 import Elysia from 'elysia'
+import { serverError } from '../lib/errors'
 import { apiAuth, apiAuthAfter } from '../middleware/api-auth'
 import {
   matchTrace as _matchTrace,
@@ -159,11 +160,7 @@ export function createMatchRoutes(deps: { matchTrace?: typeof _matchTrace; fetch
           set.status = err.statusCode >= 500 ? 502 : err.statusCode
           return upstreamBody(err.body)
         }
-        set.status = 502
-        return {
-          error: 'Map matching unavailable',
-          detail: err instanceof Error ? err.message : String(err),
-        }
+        return serverError(request, set, err, 'Map matching unavailable', 502)
       }
     }, {
       // Raw text for both body forms: Elysia has no GPX parser, and the JSON

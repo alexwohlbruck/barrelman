@@ -239,7 +239,7 @@ describe('upstream errors', () => {
     expect(res.status).toBe(502)
   })
 
-  test('an unexpected error becomes a 502 with detail', async () => {
+  test('an unexpected error becomes a generic 502 with a request id', async () => {
     const getIsochrone = mock(async () => { throw new Error('kaboom') })
     const res = await appWith({ getIsochrone: getIsochrone as any })
       .handle(req('/isochrone?lat=35.7796&lng=-78.6382'))
@@ -247,7 +247,8 @@ describe('upstream errors', () => {
     expect(res.status).toBe(502)
     const body = await res.json()
     expect(body.error).toBe('Isochrone service unavailable')
-    expect(body.detail).toContain('kaboom')
+    expect(body.requestId).toBeString()
+    expect(JSON.stringify(body)).not.toContain('kaboom')
   })
 })
 

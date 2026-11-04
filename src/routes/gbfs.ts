@@ -6,6 +6,7 @@
  */
 
 import { Elysia, t } from 'elysia'
+import { serverError } from '../lib/errors'
 import { apiAuth, apiAuthAfter } from '../middleware/api-auth'
 import {
   getNearbyStations as _getNearbyStations,
@@ -27,7 +28,7 @@ export function createGbfsRoutes(deps: {
     .onAfterHandle(apiAuthAfter)
 
     // ── GET /gbfs/nearby-stations ──────────────────────────────────
-    .get('/nearby-stations', async ({ query, set }) => {
+    .get('/nearby-stations', async ({ query, set, request }) => {
       try {
         const lat = parseFloat(query.lat)
         const lng = parseFloat(query.lng)
@@ -44,11 +45,7 @@ export function createGbfsRoutes(deps: {
           limit: query.limit ? parseInt(query.limit, 10) : undefined,
         })
       } catch (err) {
-        set.status = 500
-        return {
-          error: 'Failed to fetch nearby stations',
-          detail: err instanceof Error ? err.message : String(err),
-        }
+        return serverError(request, set, err, 'Failed to fetch nearby stations')
       }
     }, {
       query: t.Object({
@@ -68,7 +65,7 @@ export function createGbfsRoutes(deps: {
     // Single station with live availability. Looked up by exact
     // (systemId, stationId) — from an OSM node's `ref:gbfs` tag — with a
     // proximity fallback when only coordinates are known.
-    .get('/station', async ({ query, set }) => {
+    .get('/station', async ({ query, set, request }) => {
       try {
         const lat = query.lat ? parseFloat(query.lat) : undefined
         const lng = query.lng ? parseFloat(query.lng) : undefined
@@ -92,11 +89,7 @@ export function createGbfsRoutes(deps: {
         }
         return station
       } catch (err) {
-        set.status = 500
-        return {
-          error: 'Failed to fetch station',
-          detail: err instanceof Error ? err.message : String(err),
-        }
+        return serverError(request, set, err, 'Failed to fetch station')
       }
     }, {
       query: t.Object({
@@ -113,7 +106,7 @@ export function createGbfsRoutes(deps: {
     })
 
     // ── GET /gbfs/systems ──────────────────────────────────────────
-    .get('/systems', async ({ query, set }) => {
+    .get('/systems', async ({ query, set, request }) => {
       try {
         const north = parseFloat(query.north)
         const south = parseFloat(query.south)
@@ -128,11 +121,7 @@ export function createGbfsRoutes(deps: {
         const systems = await getSystemsInBounds(north, south, east, west)
         return { systems }
       } catch (err) {
-        set.status = 500
-        return {
-          error: 'Failed to fetch GBFS systems',
-          detail: err instanceof Error ? err.message : String(err),
-        }
+        return serverError(request, set, err, 'Failed to fetch GBFS systems')
       }
     }, {
       query: t.Object({
