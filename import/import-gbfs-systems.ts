@@ -20,6 +20,7 @@ import { ensureGbfsSchema } from '../src/db'
 import { inBoxes, resolveRegions, type Bbox } from '../src/config/regions'
 import { gbfsId, gbfsNumber, localizedText } from '../src/lib/gbfs'
 import { argValue } from '../src/lib/cli-args'
+import { parseGbfsLicense, type GbfsLicense } from '../src/lib/feed-license'
 
 // ── CLI args ────────────────────────────────────────────────────────
 
@@ -155,18 +156,33 @@ for (const row of filtered) {
 
     const ttl = gbfsData.ttl ?? gbfsData.data?.ttl ?? 300
 
+    // Licence and attribution, published in system_information from GBFS
+    // v2.3 on. systems.csv has no licence column, so this is the only source.
+    let license: GbfsLicense | null = null
+    if (feedUrls.system_information) {
+      try {
+        const infoRes = await fetch(feedUrls.system_information, {
+          signal: AbortSignal.timeout(5_000),
+        })
+        if (infoRes.ok) license = parseGbfsLicense(((await infoRes.json()) as any)?.data)
+      } catch { /* non-fatal */ }
+    }
+
     // UPSERT system. Values are bound, never spliced into the SQL: everything
     // here comes from third-party feeds and a public catalog.
     await db.execute(sql`
       INSERT INTO gbfs_systems (system_id, name, operator, url, country_code, lat, lon,
-        vehicle_types, has_stations, has_free_floating, feed_urls, ttl)
+        vehicle_types, has_stations, has_free_floating, feed_urls, ttl,
+        license_id, license_url, attribution_organization_name, attribution_url)
       VALUES (
         ${systemId}, ${name || ''}, ${row.Operator || ''}, ${discoveryUrl},
         ${countryCode || ''}, ${lat}, ${lon},
         ${JSON.stringify(vehicleTypes)}::jsonb,
         ${hasStations}, ${hasFreeFloating},
         ${JSON.stringify(feedUrls)}::jsonb,
-        ${gbfsNumber(ttl) ?? 300}
+        ${gbfsNumber(ttl) ?? 300},
+        ${license?.licenseId ?? null}, ${license?.licenseUrl ?? null},
+        ${license?.attributionOrganizationName ?? null}, ${license?.attributionUrl ?? null}
       )
       ON CONFLICT (system_id) DO UPDATE SET
         name = EXCLUDED.name,
@@ -180,6 +196,10 @@ for (const row of filtered) {
         has_free_floating = EXCLUDED.has_free_floating,
         feed_urls = EXCLUDED.feed_urls,
         ttl = EXCLUDED.ttl,
+        license_id = EXCLUDED.license_id,
+        license_url = EXCLUDED.license_url,
+        attribution_organization_name = EXCLUDED.attribution_organization_name,
+        attribution_url = EXCLUDED.attribution_url,
         imported_at = NOW()
     `)
 

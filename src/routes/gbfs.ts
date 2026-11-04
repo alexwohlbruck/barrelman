@@ -58,6 +58,7 @@ export function createGbfsRoutes(deps: {
       }),
       detail: {
         summary: 'Find nearby shared-mobility stations with real-time availability',
+        description: '`systems` lists the operators behind the results. Each system carries `license`: `licenseId`, `licenseUrl`, `attributionOrganizationName` and `attributionUrl` from its GBFS `system_information` (v2.3+), or null when it publishes none.',
         tags: ['GBFS'],
       },
     })
@@ -133,6 +134,7 @@ export function createGbfsRoutes(deps: {
       }),
       detail: {
         summary: 'List GBFS systems within a bounding box',
+        description: 'Each system carries `license`: `licenseId`, `licenseUrl`, `attributionOrganizationName` and `attributionUrl` from its GBFS `system_information` (v2.3+), or null when it publishes none.',
         tags: ['GBFS'],
       },
     })
