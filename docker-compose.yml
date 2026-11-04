@@ -136,6 +136,15 @@ services:
     # per-backend overhead. Raise or drop it in production, where the database
     # should own the box.
     mem_limit: ${BARRELMAN_DB_MEM_LIMIT:-2g}
+    # pg_isready asks the server whether it accepts connections, which is what
+    # every other service here waits on. start_period covers crash recovery
+    # after an unclean stop, which replays WAL before the first connection.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U barrelman -d barrelman -h 127.0.0.1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 2m
 
     # Watchtower asks before it restarts this container, and a job in flight
     # says no. An OSM update runs its SQL as `docker exec barrelman-db psql`, so
@@ -184,6 +193,14 @@ services:
       - ./martin-config.yaml:/config/martin-config.yaml:ro
     ports:
       - "${BARRELMAN_BIND_ADDR:-127.0.0.1}:5002:3000"
+    # The image ships this probe with Docker's 30s default interval; it is
+    # restated here so the cadence is visible and matches the other services.
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:3000/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 1m
     depends_on:
       - barrelman-db
 
@@ -209,6 +226,15 @@ services:
       - ./custom_models:/graphhopper/custom_models:ro
     ports:
       - "${BARRELMAN_BIND_ADDR:-127.0.0.1}:5003:8989"
+    # The server only listens once the graph is loaded. A first import builds
+    # the graph before that and can run for hours on a large region, so the
+    # container shows as unhealthy until it finishes; nothing restarts on it.
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS -o /dev/null http://127.0.0.1:8989/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10m
     depends_on:
       - barrelman-db
 
@@ -248,6 +274,17 @@ services:
       - ./data/gtfs:/data/gtfs:ro
     ports:
       - "${BARRELMAN_BIND_ADDR:-127.0.0.1}:5004:8080"
+    # Healthy means MOTIS answers HTTP at all. /api/v1/health returns 400
+    # whenever one realtime or GBFS updater is unhappy, while routing keeps
+    # working (see checkMotisHealth in src/services/transit.service.ts), so the
+    # probe accepts any status line. The image is Alpine; busybox wget prints
+    # the status with -S even when it exits non-zero.
+    healthcheck:
+      test: ["CMD-SHELL", "wget -S -q -O /dev/null http://127.0.0.1:8080/api/v1/health 2>&1 | grep -q 'HTTP/'"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 5m
 
   barrelman:
     container_name: barrelman
@@ -430,6 +467,18 @@ services:
       # Read-only: the API only serves tiles from here; barrelman-ops owns the
       # writes (same split as ./data/gtfs above).
       - ./data/portolan:/portolan-data:ro
+    # The image has bun and no curl. /health is built for load-balancer probes:
+    # dependency checks are cached for a few seconds and it answers 200 even
+    # when a downstream service is down, so this tracks the API process itself.
+    # start_period is long because startup runs the schema steps in
+    # src/index.ts before the server listens, and the first boot after an
+    # import can spend minutes building indexes there.
+    healthcheck:
+      test: ["CMD", "bun", "-e", "fetch('http://127.0.0.1:5001/health').then(r => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+      start_period: 10m
     depends_on:
       - barrelman-db
 
