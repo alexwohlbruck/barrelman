@@ -324,40 +324,132 @@ compare against.
 
 ## Backups
 
-Only the database holds anything you cannot regenerate — accounts, API keys, usage history, region definitions and job history. OSM, GTFS and the routing graphs are all rebuildable from source.
+Only the database holds anything you cannot regenerate: accounts, API keys,
+credits and usage, schedules and job history, region definitions and landmark
+state. OSM, GTFS and the routing graphs are all rebuildable from source, so the
+backup leaves them out and stays small. On a test instance the 20 state tables
+dumped to 188 KB in about a second.
 
-Back up exactly that, and the dump stays small enough to keep forever:
+The tables are listed in `src/admin/backup-tables.ts`, with the reasons for
+what is left out. Terms acceptance and the billing customer link are columns on
+`accounts_users`, so they come along with it.
 
-```bash
-docker exec barrelman-db pg_dump -U barrelman -Fc \
-  -t 'accounts_*' -t 'ops_*' -t 'import_*' \
-  barrelman > barrelman-state-$(date +%F).dump
+### Nightly backups
+
+**Scripts → Back Up Database** (`scripts/backup-db.sh`) does the whole job:
+
+1. dumps those tables with `pg_dump -Fc` to
+   `/data/backups/barrelman-<UTC timestamp>.dump` in `barrelman-ops`
+2. reads the dump back with `pg_restore --list` and fails unless every table's
+   data is in it
+3. uploads it when `BACKUP_S3_BUCKET` is set, and reads the object's size back
+4. deletes local dumps older than `BACKUP_KEEP_LOCAL_DAYS` (7) and remote ones
+   older than `BACKUP_KEEP_REMOTE_DAYS` (30), always keeping the newest
+
+Any failure fails the job, so a broken backup shows up in **Jobs** the next
+morning.
+
+A fresh install comes with a disabled **Back Up Database** schedule at 02:15,
+ahead of the 03:00 OSM update. Turn it on under **Schedules**. An instance that
+already had schedules before this was added does not get the seed; create the
+schedule yourself with cron `15 2 * * *`.
+
+A dump on the same disk as the database is little use when the disk goes, so
+set up a bucket. Any S3-compatible store works; the variables are in
+[Configuration → Backups](/self-hosting/configuration#backups). For example, on
+Hetzner Object Storage:
+
+```dotenv
+BACKUP_S3_BUCKET=barrelman-backups
+BACKUP_S3_ENDPOINT=https://fsn1.your-objectstorage.com
+BACKUP_S3_REGION=fsn1
+BACKUP_S3_ACCESS_KEY_ID=...
+BACKUP_S3_SECRET_ACCESS_KEY=...
 ```
 
-Measured on the Colorado instance: **35 KB in 0.2 s**, covering all sixteen
-`accounts_*`, `ops_*` and `import_*` tables — accounts, API-key hashes, sessions,
-usage, the credit ledger, region definitions and job history.
+Then recreate ops so it picks them up, and run one backup by hand to check:
 
-A whole-database dump is the belt-and-braces option, and worth taking before an
-upgrade or a risky migration:
+```bash
+docker compose up -d barrelman-ops
+docker compose exec barrelman-ops bash scripts/backup-db.sh
+```
+
+The upload uses a pinned boto3, which `uv` downloads from PyPI into the
+container's cache on first use. The cache does not survive a recreate, so the
+first upload after every `docker compose up` of `barrelman-ops` needs to reach
+PyPI. On a box without outbound access to it, that backup fails at the upload
+step, with the local dump already written.
+
+Give each instance its own `BACKUP_S3_PREFIX` (for example `barrelman/prod/`
+and `barrelman/staging/`) when they share a bucket. Pruning and `latest` work
+per prefix, so two instances on the default prefix would prune each other's
+backups and restore each other's dumps.
+
+Treat the bucket as credential storage. Lucia stores session IDs in the clear,
+so the cookie value *is* the row's primary key in `accounts_sessions`, and the
+dump also holds API-key hashes. Give the access key rights to this bucket
+alone, and turn on the provider's object lock or versioning if it offers one.
+
+### Restore drill
+
+A backup that has never been restored is a hope. **Scripts → Restore Drill**
+(`scripts/restore-db.sh`) restores the newest dump into a scratch database
+next to the live one, named `barrelman_restore_<UTC time>`, and prints each
+table's row count:
+
+```bash
+docker compose exec barrelman-ops bash scripts/restore-db.sh latest --drop-after
+```
+
+`latest` takes the newest dump in `/data/backups`, and falls back to the
+newest in the bucket. Pass a file name or an object key instead to pick one:
+
+```bash
+docker compose exec barrelman-ops bash scripts/restore-db.sh barrelman/barrelman-20261104T021500Z.dump
+```
+
+Without `--drop-after` the scratch database stays for inspection, and the
+script prints the command to drop it. `--target-db` picks the name, which must
+start with `barrelman_restore`. The script marks each scratch database it
+creates with a comment and only ever drops a database carrying that mark, so
+it cannot remove another database on the same server by name.
+
+Run a drill after setting up the bucket and again every few months. Pulling a
+dump from the bucket on a different machine is the stronger test, since it is
+the case backups exist for.
+
+### Restoring for real
+
+To put the backed-up tables back into the live database, stop the API so nothing
+writes to them mid-restore, then run the restore with `--into-live` and a
+confirmation variable set to the live database's name:
+
+```bash
+docker compose stop barrelman
+docker compose exec -e BACKUP_RESTORE_CONFIRM=barrelman barrelman-ops \
+  bash scripts/restore-db.sh latest --into-live
+docker compose start barrelman
+```
+
+It replaces only the tables in the dump, in one transaction, so it applies in
+full or not at all. The imported data is left as it is. This step is not
+available from the console.
+
+On a new server, bring the stack up, run the import, then restore: the import
+recreates the geodata, and the restore brings back the accounts and settings.
+
+### Whole-database dumps
+
+A full dump is worth taking before an upgrade or a risky migration:
 
 ```bash
 docker exec barrelman-db pg_dump -U barrelman -Fc barrelman > barrelman-$(date +%F).dump
 ```
 
-That one is dominated by data you can rebuild: on the same instance it took
-**3 m 30 s and produced 1.8 GB**, of which `geo_places` (7.4 GB on disk) and
-`planet_osm_*` (4.9 GB) are almost all of it. Scale that by extract size before
-scheduling it — a country-sized import makes this a tens-of-gigabytes job that a
-re-import would reproduce anyway.
-
-Verify a dump rather than trusting it, with either form:
-
-```bash
-docker exec -i barrelman-db pg_restore -l < barrelman-state-$(date +%F).dump | head
-```
-
-Treat `accounts_sessions` as credential material: Lucia stores session IDs in the clear, so the cookie value *is* the row's primary key.
+It is dominated by data you can rebuild: on the Colorado instance it took
+**3 m 30 s and produced 1.8 GB**, almost all of it `geo_places` and
+`planet_osm_*`. A country-sized import makes this a tens-of-gigabytes job that
+a re-import would reproduce anyway, so it is not a good nightly backup.
 
 ## Rotating secrets
 

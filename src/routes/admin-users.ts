@@ -48,6 +48,7 @@ import {
   LastAdminError,
   setUserRole,
 } from '../services/accounts.service'
+import { BillingTeardownError } from '../services/billing.service'
 import { throttleStats } from '../services/throttle.service'
 import { trafficReport } from '../services/request-metrics.service'
 import { ALL_SCOPES, allPlans, getPlan, isPlanId } from '../billing/plans'
@@ -296,6 +297,12 @@ export function createAdminUserRoutes(overrides: Partial<AdminUserDeps> = {}) {
           set.status = 409
           return { error: err.message }
         }
+        // Polar could not be told: the account is kept so its subscription
+        // does not go on charging with nothing left to cancel it from.
+        if (err instanceof BillingTeardownError) {
+          set.status = 502
+          return { error: err.message }
+        }
         throw err
       }
     },
@@ -310,7 +317,9 @@ export function createAdminUserRoutes(overrides: Partial<AdminUserDeps> = {}) {
           'Erases the account and everything attached to it — API keys, usage, the credit ledger, abuse ' +
           'signals and its moderation history — with no way back. Suspending is the reversible option, ' +
           'and the one that keeps a record of the decision. The request body must repeat the account\'s ' +
-          'email address. Refuses your own account and the last administrator.',
+          'email address. Refuses your own account and the last administrator. With billing enabled, ' +
+          'outstanding overage is reported and the Polar subscription revoked first; if Polar cannot be ' +
+          'reached the account is kept and the response is 502.',
         tags: ['Admin'],
       },
     },

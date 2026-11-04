@@ -51,14 +51,14 @@ of routing calls.
 
 | Group | Credits | Endpoints |
 |---|---|---|
-| \`tiles\` | 1 | \`/tiles/*\` |
+| \`tiles\` | 1 per source | \`/tiles/*\` |
 | \`places\` | 3 | \`/place/*\`, \`/brands\` |
 | \`spatial\` | 3 | \`/contains\`, \`/children\` |
 | \`geocode\` | 5 | \`/geocode/*\` |
 | \`search\` | 6 | \`/search\`, \`/autocomplete\` |
-| \`routing\` | 12 | \`/route\`, \`/match\`, \`/graphhopper/*\` |
+| \`routing\` | 12 | \`/route\`, \`/route/*\`, \`/match\` (per 100 points), \`/graphhopper/route\` |
 | \`transit\` | 20 | \`/transit/*\`, \`/gbfs/*\` |
-| \`isochrone\` | 40 | \`/isochrone\` |
+| \`isochrone\` | 40 per contour | \`/isochrone\` |
 
 Each response carries \`X-Barrelman-Credits-Charged\`.
 
@@ -84,26 +84,27 @@ const graphhopperOperation = (method: 'get' | 'post') => ({
   tags: ['GraphHopper'],
   summary: method === 'get' ? 'GraphHopper passthrough (GET)' : 'GraphHopper passthrough (POST)',
   description:
-    'Forwards the request to the GraphHopper engine unchanged — method, query string, body and content type ' +
-    'are preserved, and the response is GraphHopper\'s own. Any GraphHopper endpoint works under this prefix ' +
-    '(`route`, `isochrone`, `matrix`, `match`, `info`, `health`); see the ' +
-    '[GraphHopper API docs](https://docs.graphhopper.com/) for their parameters. Prefer `POST /route` and ' +
-    '`POST /match` for enriched, stable responses. Each call is capped by `GRAPHHOPPER_TIMEOUT_MS` and answers ' +
-    '`504` past it. Billed as `routing`.',
+    'Forwards the request to the GraphHopper engine unchanged. Method, query string, body and content type ' +
+    'are preserved, and the response is GraphHopper\'s own. Three GraphHopper endpoints are available under this ' +
+    'prefix: `route`, `info` and `health`; any other answers `404`. See the ' +
+    '[GraphHopper API docs](https://docs.graphhopper.com/) for their parameters. Prefer `POST /route` for ' +
+    'enriched, stable responses, `GET /isochrone` for reachability and `POST /match` for map matching. Each call ' +
+    'is capped by `GRAPHHOPPER_TIMEOUT_MS` and answers `504` past it. Billed as `routing`.',
   parameters: [
     {
       name: 'endpoint',
       in: 'path',
       required: true,
-      description: 'GraphHopper endpoint, e.g. `route` or `info`.',
-      schema: { type: 'string', example: 'route' },
+      description: 'GraphHopper endpoint: `route`, `info` or `health`.',
+      schema: { type: 'string', enum: ['route', 'info', 'health'], example: 'route' },
     },
   ],
   ...(method === 'post'
-    ? { requestBody: { description: 'Passed through as-is (JSON, or GPX for `match`).', content: { 'application/json': { schema: { type: 'object' } } } } }
+    ? { requestBody: { description: 'Passed through as-is.', content: { 'application/json': { schema: { type: 'object' } } } } }
     : {}),
   responses: {
     '200': { description: 'GraphHopper\'s response, unmodified.' },
+    '404': { description: 'The endpoint is not one this proxy forwards.' },
     '502': { description: 'GraphHopper is unreachable.' },
     '504': { description: 'GraphHopper did not answer within `GRAPHHOPPER_TIMEOUT_MS`.' },
   },

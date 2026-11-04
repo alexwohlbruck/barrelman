@@ -20,14 +20,34 @@ exact across millions of small charges — no floating-point drift.
 
 | Group | Credits | Endpoints |
 |---|---|---|
-| `tiles` | 1 | `/tiles/*` |
+| `tiles` | 1 per source | `/tiles/*` |
 | `places` | 3 | `/place/*`, `/brands` |
 | `spatial` | 3 | `/contains`, `/children` |
 | `geocode` | 5 | `/geocode/*` |
 | `search` | 6 | `/search`, `/autocomplete` |
-| `routing` | 12 | `/route`, `/graphhopper/*` |
+| `routing` | 12 | `/route`, `/route/*`, `/match` (per 100 points), `/graphhopper/route` |
 | `transit` | 20 | `/transit/*`, `/gbfs/*` |
-| `isochrone` | 40 | `/isochrone` |
+| `isochrone` | 40 per contour | `/isochrone` |
+
+Three kinds of request are priced by how much they ask for, because one of
+them can carry many times the work of another:
+
+- **Tiles** cost 1 credit per source the tile reads. A bundle such as `detail`
+  or a comma-joined composite such as `buildings_3d,parking_areas` costs one
+  credit per member, the same as fetching each source on its own. Bundling
+  still saves round trips and latency.
+- **`/isochrone`** costs 40 credits per contour. `durations=300,600,900` is
+  three contours, 120 credits. With no `durations` it computes one 15-minute
+  contour. `/isochrone/modes` is free.
+- **`/match`** costs 12 credits per started hundred points: up to 100 points is
+  12, 101 to 200 is 24, and the 2,000-point maximum is 240.
+
+`X-Barrelman-Credits-Charged` on each response gives the exact amount. A request
+refused before it reaches the engine (a malformed tile source, too many
+contours, a trace over the point limit) is charged one unit.
+
+The `/graphhopper` passthrough forwards `route`, `info` and `health` only. Use
+`/isochrone` and `/match` for reachability and map matching.
 
 The ratios are calibrated against the market rather than invented. Taking a tile
 as 1, [Mapbox](https://www.mapbox.com/pricing) prices geocoding at roughly 3×
@@ -136,6 +156,35 @@ A balance has two parts:
 
 The allowance is spent **first**, so a prepaid pack survives an idle month
 rather than being silently consumed by usage the plan already covered.
+
+## Changing or ending a subscription
+
+An account has one subscription. Switching plans moves that subscription onto
+the new plan rather than opening a second one. An upgrade takes effect at once
+and the prorated difference for the rest of the period is charged straight
+away. A downgrade also takes effect at once, and the unused part of the period
+is credited to the next invoice. Enterprise is arranged directly and cannot be
+switched to from the console.
+
+Cancelling keeps the plan until the end of the period already paid for. The
+console shows "Cancels on" with the date, and the account moves to the free plan
+when the period ends. Cancelling can be undone from the billing portal until
+then.
+
+If a renewal payment fails, the plan stays on while the payment provider
+retries it. The console shows a banner linking to the billing portal, and one
+email goes out when the payment first fails. The email is not resent if it
+cannot be delivered, so the banner is the notice to rely on. If the retries also fail, the
+subscription ends and the account moves to the free plan.
+
+A refunded credit pack takes its credits back, in proportion to the amount
+refunded. Credits from the pack that were already spent count against the
+balance like any other usage: on a plan with overage they are billed as
+overage. A refunded subscription payment ends the plan only if the subscription
+was ended along with the refund.
+
+Deleting an account ends its subscription immediately and bills any overage
+owed up to that point.
 
 ## Headers
 

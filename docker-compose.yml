@@ -296,11 +296,17 @@ services:
       # Caps runaway queries on the API query pool only — schema DDL and the
       # enrichment backfill get their own untimed connections (see src/db.ts).
       BARRELMAN_STATEMENT_TIMEOUT_MS: ${BARRELMAN_STATEMENT_TIMEOUT_MS:-10000}
+      # Main query pool, and the separate one for auth, keys, credits and
+      # metering. Blank uses the defaults in src/db.ts (20 and 5).
+      DB_POOL_MAX: ${DB_POOL_MAX:-}
+      DB_ACCOUNTS_POOL_MAX: ${DB_ACCOUNTS_POOL_MAX:-}
       OLLAMA_HOST: ${OLLAMA_HOST:-http://ollama:11434}
       TTS_URL: ${TTS_URL:-}
       TTS_MODEL_REVISION: ${TTS_MODEL_REVISION:-v1.0}
       PORT: 5001
       BARRELMAN_API_KEY: ${BARRELMAN_API_KEY:-brm_dev_changeme}
+      # Key for hashing client addresses. Unset, derived from BARRELMAN_API_KEY.
+      BARRELMAN_IP_HASH_SECRET: ${BARRELMAN_IP_HASH_SECRET:-}
       GRAPHHOPPER_URL: http://barrelman-graphhopper:8989
       # Per-call deadline on GraphHopper (the /graphhopper proxy and /match).
       GRAPHHOPPER_TIMEOUT_MS: ${GRAPHHOPPER_TIMEOUT_MS:-}
@@ -451,15 +457,15 @@ services:
       BARRELMAN_TOS_VERSION: ${BARRELMAN_TOS_VERSION:-}
       BARRELMAN_PRIVACY_URL: ${BARRELMAN_PRIVACY_URL:-}
     ports:
-      # Defaults to every interface, unlike the sibling services above: this is
-      # the one port that is meant to serve traffic. Note what that implies on a
-      # fresh public server — the console and open sign-up answer the internet as
-      # soon as the stack is up, and the first account created becomes an admin.
-      # Set BARRELMAN_API_BIND_ADDR=127.0.0.1 once a reverse proxy fronts it (the
-      # proxy reaches this container as barrelman:5001 over the Compose network,
-      # so nothing breaks). A host firewall is NOT a substitute — Docker DNATs
-      # published ports before ufw's INPUT rules are consulted.
-      - "${BARRELMAN_API_BIND_ADDR:-0.0.0.0}:5001:5001"
+      # Loopback by default, like the sibling services above. A fresh public
+      # server would otherwise answer the internet with the console and open
+      # sign-up as soon as the stack is up, and the first account created
+      # becomes an admin. A reverse proxy reaches this container as
+      # barrelman:5001 over the Compose network, or localhost:5001 from the
+      # host, so it needs nothing here. To serve :5001 directly with no proxy,
+      # set BARRELMAN_API_BIND_ADDR=0.0.0.0. A host firewall is NOT a way to
+      # close it again: Docker DNATs published ports before ufw's INPUT rules.
+      - "${BARRELMAN_API_BIND_ADDR:-127.0.0.1}:5001:5001"
     volumes:
       - barrelman-osm-data:/data
       - barrelman-gtfs-data:/gtfs-data
@@ -582,6 +588,20 @@ services:
       PORTOLAN_BIN: ${PORTOLAN_BIN:-/portolan-data/bin/portolan}
       # scripts/*.sh docker-exec into these sibling containers by name.
       DB_CONTAINER: barrelman-db
+      # State backups (scripts/backup-db.sh, scripts/restore-db.sh). Dumps land
+      # in /data/backups on the OSM volume; set a bucket to copy them off-box.
+      BACKUP_DIR: ${BACKUP_DIR:-}
+      BACKUP_KEEP_LOCAL_DAYS: ${BACKUP_KEEP_LOCAL_DAYS:-}
+      BACKUP_KEEP_REMOTE_DAYS: ${BACKUP_KEEP_REMOTE_DAYS:-}
+      BACKUP_S3_BUCKET: ${BACKUP_S3_BUCKET:-}
+      BACKUP_S3_ENDPOINT: ${BACKUP_S3_ENDPOINT:-}
+      BACKUP_S3_REGION: ${BACKUP_S3_REGION:-}
+      BACKUP_S3_ACCESS_KEY_ID: ${BACKUP_S3_ACCESS_KEY_ID:-}
+      BACKUP_S3_SECRET_ACCESS_KEY: ${BACKUP_S3_SECRET_ACCESS_KEY:-}
+      BACKUP_S3_PREFIX: ${BACKUP_S3_PREFIX:-}
+      # The worker and the bun scripts it runs load src/db.ts too.
+      DB_POOL_MAX: ${DB_POOL_MAX:-}
+      DB_ACCOUNTS_POOL_MAX: ${DB_ACCOUNTS_POOL_MAX:-}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - barrelman-osm-data:/data

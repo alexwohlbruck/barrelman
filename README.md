@@ -502,9 +502,10 @@ surface. The table below is the shape of it.
 | `GET` | `/place/:osmType/:osmId` | `places` | Get a single place by OSM ID |
 | `GET` | `/brands`, `/brands/:key` | `places` | Brand lookup |
 | `GET` `POST` | `/isochrone` | `isochrone` | Reachability polygons for any travel mode |
-| `GET` | `/isochrone/modes` | `isochrone` | Supported isochrone modes and their limits |
+| `GET` | `/isochrone/modes` | `isochrone` | Supported isochrone modes and their limits (free) |
 | `POST` | `/route` | `routing` | Point-to-point street routing. Takes a **GraphHopper-native** body — `profile`, not `mode` (see below) |
-| `GET` | `/graphhopper/*` | `routing` | Proxied GraphHopper |
+| `POST` | `/match` | `routing` | Map-match a GPS trace, billed per 100 points |
+| `GET` `POST` | `/graphhopper/{route,info,health}` | `routing` | Proxied GraphHopper; other sub-paths 404 |
 | `POST` `GET` | `/transit/*` | `transit` | Stops, routes, departures, vehicles, intermodal routing |
 | `GET` | `/gbfs/*` | `transit` | Bikeshare systems and stations |
 | `GET` | `/tiles/:source/:z/:x/:y` | `tiles` | Vector tiles, proxied from Martin |

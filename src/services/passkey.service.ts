@@ -20,7 +20,7 @@ import {
 } from '@simplewebauthn/server'
 import type { AuthenticationResponseJSON, RegistrationResponseJSON } from '@simplewebauthn/server'
 import { and, eq } from 'drizzle-orm'
-import { db } from '../db'
+import { accountsDb as db } from '../db'
 import { passkeys, users, type Passkey, type User } from '../schema/accounts'
 import { allowedOrigins, appName, consoleOrigin, rpID } from '../config/accounts.config'
 import { passkeyNameFor } from '../lib/passkey-names'

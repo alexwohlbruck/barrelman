@@ -1,4 +1,4 @@
-import Elysia from 'elysia'
+import Elysia, { t } from 'elysia'
 import { adminAuthHandler } from '../middleware/auth'
 import {
   runPostImport as _runPostImport,
@@ -10,8 +10,10 @@ import {
   runFullMigration as _runFullMigration,
   getMigrationStatus as _getMigrationStatus,
 } from '../services/admin.service'
+import { discoverRtUrls as _discoverRtUrls } from '../services/gtfs.service'
+import { serverError } from '../lib/errors'
 
-export function createAdminRoutes(deps = {
+const defaultDeps = {
   runPostImport: _runPostImport,
   runResolveParentContext: _runResolveParentContext,
   runResolveParentContextIncremental: _runResolveParentContextIncremental,
@@ -20,7 +22,13 @@ export function createAdminRoutes(deps = {
   runGenerateAbbreviations: _runGenerateAbbreviations,
   runFullMigration: _runFullMigration,
   getMigrationStatus: _getMigrationStatus,
-}) {
+  discoverRtUrls: _discoverRtUrls,
+  /** Injectable for tests only, as a plain function: see admin.test.ts. */
+  guard: adminAuthHandler as typeof adminAuthHandler,
+}
+
+export function createAdminRoutes(overrides: Partial<typeof defaultDeps> = {}) {
+  const deps = { ...defaultDeps, ...overrides }
   // Guard attached directly (not via `.use(plugin)`): Elysia scopes a plugin's
   // lifecycle hooks to that plugin instance, so `.use(authMiddleware)` does NOT
   // protect the sibling routes declared below — they'd be publicly reachable.
@@ -31,7 +39,7 @@ export function createAdminRoutes(deps = {
   // also holds — while rejecting signed-in administrators outright. Exactly
   // backwards, and contrary to the rule in CLAUDE.md.
   return new Elysia({ prefix: '/admin' })
-    .onBeforeHandle(adminAuthHandler)
+    .onBeforeHandle(deps.guard)
     .get('/migration/status', () => deps.getMigrationStatus(), {
       detail: {
         summary: 'Migration status',
@@ -85,6 +93,27 @@ export function createAdminRoutes(deps = {
       detail: {
         summary: 'Rebuild tsvectors',
         description: 'Rebuild full-text search vectors for all named places (includes parent_context).',
+        tags: ['Admin'],
+      },
+    })
+    // Admin, not the transit group: it spends the operator's
+    // TRANSITLAND_API_KEY and writes gtfs_feeds. The "Backfill GTFS-RT URLs"
+    // script does the same from the console.
+    .post('/transit/discover-rt-urls', async ({ body, request, set }) => {
+      try {
+        const { checked, updated, errors } = await deps.discoverRtUrls(body.feedId || undefined)
+        return { checked, updated, errors }
+      } catch (err) {
+        return serverError(request, set, err, 'Failed to discover RT URLs')
+      }
+    }, {
+      body: t.Object({ feedId: t.Optional(t.String({ maxLength: 200 })) }),
+      detail: {
+        summary: 'Discover GTFS-RT feed URLs',
+        description:
+          'Queries Transitland to discover GTFS-RT feed URLs (vehicle positions, ' +
+          'trip updates, alerts) for existing feeds. If feedId is provided, only ' +
+          'discovers for that feed; otherwise discovers for all feeds missing RT URLs.',
         tags: ['Admin'],
       },
     })

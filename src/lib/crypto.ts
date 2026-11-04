@@ -8,13 +8,18 @@
  * buys nothing against 256 bits of randomness and would cost a KDF run on
  * every single API request.
  */
-import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
+import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
 
 const BASE62 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'
 
 /** SHA-256 of a UTF-8 string, hex-encoded. */
 export function sha256Hex(input: string): string {
   return createHash('sha256').update(input, 'utf8').digest('hex')
+}
+
+/** HMAC-SHA256 of a UTF-8 string under `key`, hex-encoded. */
+export function hmacSha256Hex(key: string, input: string): string {
+  return createHmac('sha256', key).update(input, 'utf8').digest('hex')
 }
 
 /** URL-safe random token with `bytes` bytes of entropy. */
