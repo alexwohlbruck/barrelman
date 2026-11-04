@@ -556,6 +556,19 @@ Only an account whose *role* is already `admin` may grant the scope at all — a
 non-admin asking for it gets a `403` naming the scope, not a silently narrowed
 key.
 
+**An administrator sees "Admin tools are unavailable in this session"**
+
+The response carries a `code`:
+
+- `passkey_required`: `BARRELMAN_ADMIN_REQUIRE_PASSKEY` is on and this session
+  was signed in another way. Register a passkey on the account page, sign out,
+  and sign in with it. If every administrator has lost their passkeys, restart
+  the API: with none registered it warns and stops enforcing. See
+  [hardening admin access](/self-hosting/configuration#hardening-admin-access).
+- `ip_not_allowed`: the client address isn't in `BARRELMAN_ADMIN_ALLOWED_IPS`.
+  If it should be, check `BARRELMAN_TRUSTED_PROXY_HOPS` first. When it is
+  wrong, every request appears to come from your proxy.
+
 ## Configuration
 
 **A setting in `.env` has no effect**

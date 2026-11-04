@@ -13,7 +13,7 @@
  */
 import { computed, ref } from 'vue'
 import { startAuthentication, startRegistration, browserSupportsWebAuthn } from '@simplewebauthn/browser'
-import type { AuthConfig, PublicUser } from './types'
+import type { AdminAccess, AuthConfig, PublicUser } from './types'
 
 /**
  * The console used to stash an admin bearer here. A leftover value actively
@@ -28,8 +28,19 @@ export const authConfig = ref<AuthConfig | null>(null)
 /** False until `bootstrap()` has answered — the UI waits rather than flashing. */
 export const ready = ref(false)
 
+/**
+ * Set for an administrator whose session the admin API refuses: a sign-in that
+ * wasn't a passkey under BARRELMAN_ADMIN_REQUIRE_PASSKEY, or an address outside
+ * BARRELMAN_ADMIN_ALLOWED_IPS. The operator views are hidden while it is set,
+ * and the shell shows the reason with what to do about it.
+ */
+export const adminAccess = ref<AdminAccess | null>(null)
+
 export const isSignedIn = computed(() => user.value !== null)
-export const isAdmin = computed(() => user.value?.role === 'admin')
+export const hasAdminRole = computed(() => user.value?.role === 'admin')
+export const adminBlocked = computed(() => hasAdminRole.value && adminAccess.value?.ok === false)
+/** An administrator the admin API will actually serve from this session. */
+export const isAdmin = computed(() => hasAdminRole.value && !adminBlocked.value)
 
 export const passkeysSupported = browserSupportsWebAuthn()
 
@@ -74,19 +85,29 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 
 // ── Session lifecycle ───────────────────────────────────────────────────
 
+interface SessionResponse {
+  user: PublicUser
+  adminAccess?: AdminAccess
+}
+
+function applySession(session: SessionResponse | null) {
+  user.value = session?.user ?? null
+  adminAccess.value = session?.adminAccess ?? null
+}
+
 /** Load the sign-in configuration and the current session. Call once on boot. */
 export async function bootstrap(): Promise<void> {
   try {
     const [config, session] = await Promise.all([
       request<AuthConfig>('/auth/config'),
-      request<{ user: PublicUser } | null>('/auth/session'),
+      request<SessionResponse | null>('/auth/session'),
     ])
     authConfig.value = config
-    user.value = session?.user ?? null
+    applySession(session)
   } catch {
     // A failed bootstrap must not wedge the console on a blank screen — fall
     // through to the sign-in page and let the user retry from there.
-    user.value = null
+    applySession(null)
   } finally {
     ready.value = true
   }
@@ -102,6 +123,9 @@ export async function verifyCode(email: string, code: string): Promise<PublicUse
     body: JSON.stringify({ email, code }),
   })
   user.value = result.user
+  // The sign-in response doesn't say whether the admin API accepts this
+  // session; the session endpoint does.
+  await refreshUser().catch(() => {})
   return result.user
 }
 
@@ -115,6 +139,7 @@ export async function signInWithPasskey(): Promise<PublicUser> {
     body: JSON.stringify(assertion),
   })
   user.value = result.user
+  await refreshUser().catch(() => {})
   return result.user
 }
 
@@ -142,7 +167,7 @@ export async function signOut(): Promise<void> {
   try {
     await request('/auth/session', { method: 'DELETE' })
   } finally {
-    user.value = null
+    applySession(null)
   }
 }
 
@@ -169,6 +194,6 @@ export async function deleteOwnAccount(email: string, code?: string): Promise<vo
 }
 
 export async function refreshUser(): Promise<void> {
-  const session = await request<{ user: PublicUser } | null>('/auth/session')
-  user.value = session?.user ?? null
+  const session = await request<SessionResponse | null>('/auth/session')
+  applySession(session)
 }

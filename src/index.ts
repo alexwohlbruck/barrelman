@@ -33,6 +33,7 @@ import { speechRoutes } from './routes/speech'
 import { gbfsRoutes } from './routes/gbfs'
 import { ensureSchema, ensureGtfsSchema, ensureGbfsSchema } from './db'
 import { ensureAccountsSchema } from './services/accounts.service'
+import { passkeyPolicy } from './services/admin-access.service'
 import { flushPenalties, startPenaltySync } from './services/penalty-sync.service'
 import { startCacheBus } from './services/cache-bus.service'
 import { ensureOpsJobsSchema } from './services/ops-job-store'
@@ -92,6 +93,9 @@ await ensureOpsJobsSchema()
 await ensureRegionsSchema()
 // User accounts, API keys, usage and credits for the public API.
 await ensureAccountsSchema()
+// Logs whether BARRELMAN_ADMIN_REQUIRE_PASSKEY is enforced, and warns when it
+// is set but no administrator has a passkey yet (it then waits; see the module).
+await passkeyPolicy.startupCheck()
 // Penalty-box state from before this start (and from other replicas), then
 // kept in sync on a timer. See services/penalty-sync.service.ts.
 await startPenaltySync()

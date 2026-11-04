@@ -207,6 +207,7 @@ export function createOAuthRoutes(overrides: Partial<OAuthDeps> = {}) {
         const { cookie } = await deps.startSession(result.user.id, {
           ip: clientIp(request),
           userAgent: request.headers.get('user-agent'),
+          method: 'oauth',
         })
 
         const response = consoleRedirect(safeNext(pending.next))

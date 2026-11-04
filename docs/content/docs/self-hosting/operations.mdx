@@ -81,6 +81,62 @@ To move one:
 
 To roll back, restore the old line and repeat step 2. For GraphHopper and MOTIS, run the rebuild again too, since the new engine may already have rewritten the data.
 
+### Deploying a version from your machine
+
+If your host pins barrelman's own images to a release instead of following
+`:latest`, `scripts/deploy.sh` moves the pin, restarts, checks the result and
+rolls back on failure. Run it from a checkout on your own machine. It reaches
+the host over ssh and needs nothing installed there beyond Docker Compose:
+
+```bash
+scripts/deploy.sh <host> 0.10.39                    # API and worker
+scripts/deploy.sh <host> 0.10.39 --services api     # just the API
+scripts/rollback.sh <host>                          # back to the refs before the last deploy
+```
+
+`<host>` is anything ssh accepts, such as an alias from `~/.ssh/config`. On the
+host it:
+
+1. Takes a lock at `/opt/barrelman/.deploy.lock` that records who holds it and
+   since when, and refuses if someone else does. `--force` takes over a stale one.
+2. Refuses if an ops job is running, asking the same question as the
+   [Watchtower gate](#not-restarting-mid-import). An import can't be resumed
+   after a restart.
+3. Asks `docker compose config` which image each service resolves to, and finds
+   the file that sets it: the last file in `COMPOSE_FILE` (read from the host's
+   `.env`) with an `image:` for that service, as Compose decides. If a service
+   resolves to some other repository, such as a `local/barrelman:hotfix-…`
+   override, it stops and says so instead of replacing someone's hotfix. It
+   backs the file up as `<file>.bak-pre-<version>` and records the refs
+   running now.
+4. Pins `<image>:<version>`, checks Compose now resolves the service to it,
+   pulls, and runs `docker compose up -d --no-deps` for the chosen services only.
+5. Polls `/health` until it reports `ok` (five minutes by default; `--timeout`
+   changes it, `--allow-degraded` accepts `degraded`). Then it checks that each
+   recreated container runs the new image and stays up without restarting for
+   20 seconds, since `/health` only covers the API and a crash-looping worker
+   would otherwise pass.
+6. Appends a line to `/opt/barrelman/deploy.log` with the time, who ran it, and
+   the refs it moved from and to. If any of those checks fails, it puts the
+   recorded refs back, restarts again and logs that too.
+
+`--services` takes any of `api`, `ops` and `db`. The default is `api,ops`,
+because `db` restarts Postgres. `--path` points at a deployment that isn't in
+`/opt/barrelman`.
+
+The script never passes `-f` to Compose. Compose ignores `COMPOSE_FILE` once
+`-f` is given, so a host that layers an override file through `.env` (a
+production pin file, a proxy network) would have its services recreated without
+that layer. Do the same when you run Compose by hand there.
+
+`rollback.sh` restores the refs recorded before the last successful deploy and
+takes the same lock and job check. A ref that was a floating tag such as
+`:latest` is recorded as the digest of the image that was running, so a
+rollback returns to that exact image even if the tag has moved since.
+
+These scripts have no button in the console: they restart the containers the
+console runs in.
+
 ### Automating it
 
 Watchtower can automate the pull, with three caveats.

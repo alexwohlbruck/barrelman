@@ -119,7 +119,18 @@ async function runJob(job: Job): Promise<void> {
     }
   }
 
-  const inv = buildInvocation(script, job.params)
+  let inv: ReturnType<typeof buildInvocation>
+  try {
+    inv = buildInvocation(script, job.params)
+  } catch (err) {
+    // A job queued before params were validated, with a value that no longer
+    // passes. Fail it rather than run it, and let go of the lock.
+    const message = err instanceof Error ? err.message : String(err)
+    await store.appendLogs(job.id, [{ stream: 'system', text: `Refused: ${message}` }])
+    await store.setStatus(job.id, 'failed', 1, message)
+    if (lockConn) await lockConn.end()
+    return
+  }
   if (inv.kind !== 'process') {
     await store.setStatus(job.id, 'failed', 1, 'invocation not process')
     if (lockConn) await lockConn.end()

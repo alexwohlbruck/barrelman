@@ -1,5 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router'
-import { bootstrap, isAdmin, isSignedIn, ready } from '@/lib/auth'
+import { adminBlocked, bootstrap, isAdmin, isSignedIn, ready } from '@/lib/auth'
 
 /**
  * Two tiers of route, both keyed off the signed-in account:
@@ -57,6 +57,11 @@ router.beforeEach(async (to) => {
   if (!isSignedIn.value) {
     return { name: 'login', query: to.fullPath !== '/keys' ? { redirect: to.fullPath } : {} }
   }
+
+  // An administrator the admin API refuses (no passkey sign-in, or an address
+  // outside the allowlist) goes to the account page, where the shell explains
+  // why and passkeys can be registered.
+  if (to.meta.admin && adminBlocked.value) return { name: 'account' }
 
   // A non-admin who lands on an operator route (a bookmark, a stale link) goes
   // to their own keys rather than a 403 they can do nothing about.

@@ -36,6 +36,11 @@ export const itineraryResponses = json('Itineraries, with credits for the feeds 
     itineraries: { type: 'array', items: { type: 'object' } },
     metadata: { type: 'object' },
     attribution: attributionArray,
+    warnings: {
+      type: 'array',
+      items: { type: 'string' },
+      description: 'Present only when no itinerary was found: why, in plain sentences. Such a plan is not charged.',
+    },
   },
 })
 

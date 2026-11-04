@@ -2,6 +2,7 @@
 import { computed, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import AppSidebar from '@/components/AppSidebar.vue'
+import AdminAccessNotice from '@/components/AdminAccessNotice.vue'
 import Toaster from '@/components/ui/Toaster.vue'
 import Spinner from '@/components/ui/Spinner.vue'
 import { isAdmin, isSignedIn, ready } from '@/lib/auth'
@@ -32,6 +33,7 @@ watch([showShell, isAdmin], syncPolling)
   <div v-else-if="showShell" class="flex h-screen overflow-hidden">
     <AppSidebar />
     <main class="flex-1 overflow-y-auto app-grid-bg">
+      <AdminAccessNotice />
       <RouterView />
     </main>
   </div>

@@ -28,6 +28,13 @@ import {
 export type UserRole = 'user' | 'admin'
 
 /**
+ * How a session was signed in. Recorded so `BARRELMAN_ADMIN_REQUIRE_PASSKEY`
+ * can tell a passkey session from the rest. Sessions created before the column
+ * existed have NULL, and count as not-passkey.
+ */
+export type SignInMethod = 'email' | 'passkey' | 'oauth'
+
+/**
  * Why an account is suspended. The distinction matters to the user: `abuse`
  * and `tos-violation` are judgements to appeal, while `billing` and
  * `automated-abuse` clear themselves once the underlying condition does.
@@ -146,6 +153,7 @@ export const sessions = pgTable(
     expiresAt: timestamp('expires_at', { withTimezone: true, mode: 'date' }).notNull(),
     ipHash: text('ip_hash'),
     userAgent: text('user_agent'),
+    authMethod: text('auth_method').$type<SignInMethod>(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [index('accounts_sessions_user_idx').on(t.userId)],

@@ -93,6 +93,7 @@ function rawSources(): ExportSources {
         expiresAt: created,
         ipHash: 'session-ip-hash',
         userAgent: 'Mozilla/5.0',
+        authMethod: 'passkey',
         createdAt: created,
       },
     ],

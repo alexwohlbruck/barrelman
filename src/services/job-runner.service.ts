@@ -15,7 +15,7 @@
 import { getScript } from '../admin/scripts-manifest'
 import { INTERNAL_HANDLERS } from './admin-internal-handlers'
 import * as store from './ops-job-store'
-import { isExclusive, type Job, type JobStatus, type JobTrigger } from './job-invocation'
+import { isExclusive, validateParams, type Job, type JobStatus, type JobTrigger } from './job-invocation'
 
 export type { Job, JobTrigger, QueuePlacement } from './job-invocation'
 export const { listJobs, getJob, jobStats, readLogsSince, ensureOpsJobsSchema } = store
@@ -44,6 +44,8 @@ export async function startJob(
 ): Promise<Job> {
   const script = getScript(scriptId)
   if (!script) throw new Error(`Unknown script: ${scriptId}`)
+  // Throws ParamValidationError, which the run route answers with a 400.
+  validateParams(script, params)
 
   if (isExclusive(script)) {
     const active = await store.findActiveJob(scriptId)
