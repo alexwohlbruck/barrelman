@@ -10,6 +10,13 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Changed
+
+* **Third-party images are pinned by digest.** Martin 1.16.1, MOTIS 2.11.4, the June 2026 GraphHopper 12.0 snapshot, Kokoro v0.9.0 and the Pelias images no longer move on `docker compose pull` or under Watchtower. MOTIS 2.11.4 is today's `:latest`; if your timetable was built by an older version, run `scripts/rebuild-motis.sh` after the container is recreated on the pin. Moving a pin is described under "Upgrading pinned images" in the operations guide. `scripts/rebuild-motis.sh` now imports with the image the MOTIS container runs, so the timetable it writes always matches the server.
+* The API, database, Martin, GraphHopper and MOTIS have Compose healthchecks, so `docker compose ps` shows whether each is serving. GraphHopper reads as unhealthy while a first graph import runs.
+* The repository's `Caddyfile` holds requests for up to 30 seconds while the API restarts instead of answering 502, and sends HSTS, `nosniff`, `Referrer-Policy` and `frame-ancestors 'none'` on both hosts. The production guide's sample Caddyfile does the same.
+* Dependencies upgraded for security fixes: elysia 1.4.30, drizzle-orm 0.45, axios 1.21, nodemailer 10, csv-parse 7 and @simplewebauthn/server 14. Existing passkeys keep working. The console moves to maplibre-gl 6. After pulling, rebuild with `./start.sh dev --build` on a dev stack so the new packages replace the old `node_modules` volume.
+
 ### Documentation
 
 * A new [Attribution](https://docs.barrelman.dev/attribution) page says what an app must credit when it shows Barrelman data: OpenStreetMap, OpenMapTiles, Mapterhorn terrain, transit agencies, 3D landmarks and brand logos. It includes a MapLibre example and explains what the ODbL asks of anyone who redistributes the data.
