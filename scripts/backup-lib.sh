@@ -14,6 +14,9 @@ DB_CONTAINER="${DB_CONTAINER:-barrelman-db}"
 BACKUP_DIR="${BACKUP_DIR:-/data/backups}"
 BACKUP_S3_PREFIX="${BACKUP_S3_PREFIX:-barrelman/}"
 
+# Dumps hold session ids and key hashes: readable by their owner only.
+umask 077
+
 log() { echo "[$(date -u +%H:%M:%S)] $*"; }
 fail() { echo "ERROR: $*" >&2; exit 1; }
 
@@ -53,15 +56,20 @@ backup_tables() {
   done
 }
 
-# Object storage, through boto3. uv fetches boto3 on first use and caches it,
-# the same way import-stop-areas.sh gets osmium, so the image carries nothing
-# extra.
+# Object storage, through boto3. uv fetches boto3 from PyPI on first use and
+# caches it, the same way import-stop-areas.sh gets osmium, so the image
+# carries nothing extra. The cache lives in the container, so the first upload
+# after a recreate needs PyPI to be reachable. Pinned so a new boto3 release
+# cannot change upload behaviour under a nightly job; 1.43.123 is the version
+# tested against moto.
+BOTO3_VERSION="1.43.123"
+
 s3() {
   [ -n "${BACKUP_S3_BUCKET:-}" ] || fail "BACKUP_S3_BUCKET is not set"
   if python3 -c 'import boto3' 2>/dev/null; then
     python3 "$PROJECT_DIR/scripts/backup-upload.py" "$@"
   elif command -v uv >/dev/null 2>&1; then
-    uv run --quiet --no-project --with boto3 python3 "$PROJECT_DIR/scripts/backup-upload.py" "$@"
+    uv run --quiet --no-project --with "boto3==$BOTO3_VERSION" python3 "$PROJECT_DIR/scripts/backup-upload.py" "$@"
   else
     fail "uploading needs python3 with boto3, or uv to fetch it"
   fi

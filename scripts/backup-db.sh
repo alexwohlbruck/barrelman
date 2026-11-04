@@ -74,12 +74,15 @@ START=$SECONDS
 db_pg pg_dump -d "$DB_NAME" -Fc --no-owner --no-privileges "${TABLE_ARGS[@]}" > "$PARTIAL"
 
 # ── Verify ──────────────────────────────────────────────────────────────────
-# pg_restore reads the whole table of contents, so a truncated or corrupt file
-# fails here. Counting the TABLE DATA entries catches a dump that is readable
-# but short of tables.
+# Two checks. `pg_restore --list` reads only the table of contents, which sits
+# at the front of the file, so counting its TABLE DATA entries catches a dump
+# that is short of tables but passes one cut off halfway through the data.
+# Converting the whole archive to SQL (thrown away) reads every byte, so a
+# truncated or corrupt file fails there.
 
 LISTED="$(db_pg pg_restore --list < "$PARTIAL" | grep -c ' TABLE DATA public ' || true)"
 [ "$LISTED" = "$COUNT" ] || fail "dump lists $LISTED tables' data, expected $COUNT"
+db_pg pg_restore -f /dev/null < "$PARTIAL" || fail "dump does not read back in full"
 mv "$PARTIAL" "$DUMP"
 log "Verified: $COUNT tables, $(du -h "$DUMP" | cut -f1), $((SECONDS - START))s"
 
