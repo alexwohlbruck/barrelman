@@ -115,7 +115,11 @@ const ENDPOINT_DEPENDENCIES: Record<
     enhancedBy: ['motis'],
     partialMessage: 'Transit isochrones are unavailable; walk, bike and car are unaffected',
   },
-  transit: { dependsOn: ['database', 'motis'] },
+  transit: {
+    dependsOn: ['database', 'motis'],
+    enhancedBy: ['graphhopper'],
+    partialMessage: 'Park-and-ride is unavailable; other transit trips are unaffected',
+  },
 }
 
 /** Services an instance may legitimately not run. These never fail the instance. */

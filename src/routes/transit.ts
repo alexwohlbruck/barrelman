@@ -225,9 +225,12 @@ export function createTransitRoutes(deps: {
         summary: 'Intermodal routing with mode selection',
         description:
           'Transit routing with access mode selection. Walking at both ends is ' +
-          'routed between nearby stations, with straight-line walk legs. BIKE, ' +
-          'CAR_PARKING, RENTAL and direct modes need MOTIS to have OSM street data ' +
-          'loaded, and return real OSM geometry for those legs. Set requireBikeTransport ' +
+          'routed between nearby stations, with straight-line walk legs. CAR_PARKING ' +
+          '(or CAR) access with walking at the far end is park-and-ride: a GraphHopper ' +
+          'drive to a rail or ferry station, preferring one with a park_ride lot, five ' +
+          'minutes to park, then a walk to the platform; the first vehicle boarded is ' +
+          'always a train, tram or ferry. BIKE, RENTAL and direct modes need MOTIS to ' +
+          'have OSM street data loaded, and return real OSM geometry for those legs. Set requireBikeTransport ' +
           'to keep only trips that allow bike carriage, for BIKE on both ends; it ' +
           'reads GTFS bikes_allowed, and feeds that omit it return no results. ' +
           'Itineraries carry `fare` and `farePayments` where the feeds publish fare ' +

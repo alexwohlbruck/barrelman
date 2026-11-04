@@ -10,6 +10,10 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Fixed
+
+* Park-and-ride (`preTransitModes: ["CAR_PARKING"]`) drives on GraphHopper to a nearby rail or ferry station, preferring one with a `park_ride` lot, and rides from there. It no longer fails with `no connecting way` on MOTIS street graphs, or drives into the city centre for a short bus ride.
+
 ## [0.10.38] - 2026-11-03
 
 ### Added

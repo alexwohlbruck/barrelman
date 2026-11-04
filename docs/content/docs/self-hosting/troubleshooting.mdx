@@ -195,9 +195,9 @@ The MOTIS dataset was never rebuilt after the GTFS import, or was rebuilt withou
 
 Stops live in PostGIS while routing comes from MOTIS's own baked dataset, so the two can disagree.
 
-**Bikeshare, scooter, bike or park-and-ride trips return nothing, but walking transit works**
+**Bikeshare, scooter or bike trips return nothing, but walking transit works**
 
-MOTIS is serving a timetable-only dataset. Those trips need its street graph; walking transit doesn't, because barrelman routes the walks to stations itself. Check the dataset MOTIS actually serves:
+MOTIS is serving a timetable-only dataset. Those trips need its street graph; walking transit and park-and-ride don't, because barrelman routes the walks and drives to stations itself. Check the dataset MOTIS actually serves:
 
 ```bash
 docker exec barrelman-motis grep -n '^street_routing' /data/data/config.yml
