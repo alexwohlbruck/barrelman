@@ -9,10 +9,10 @@
 import { and, desc, eq, isNull, sql as dsql } from 'drizzle-orm'
 import { connection as sql, db } from '../db'
 import { users, type NewUser, type User, type UserRole } from '../schema/accounts'
-import { generateId, sha256Hex } from '../lib/crypto'
+import { generateId, hmacSha256Hex } from '../lib/crypto'
 import { emailDomain, isDisposableEmail, normalizeEmail } from '../lib/email'
 import { registrationMode, terms, tosVersion } from '../config/accounts.config'
-import { envNumber } from '../config/env'
+import { envNumber, envString } from '../config/env'
 
 let schemaReady: Promise<void> | null = null
 
@@ -457,8 +457,29 @@ export async function countActiveUsers(): Promise<number> {
 /** Accounts one address may create per UTC day before we start refusing. */
 const SIGNUPS_PER_IP_PER_DAY = envNumber('BARRELMAN_SIGNUPS_PER_IP_PER_DAY', 5)
 
+/**
+ * The key client addresses are hashed under.
+ *
+ * A plain SHA-256 of an IPv4 address is reversible by brute force: there are
+ * only 2^32 of them. Keyed, a leaked table of hashes says nothing without the
+ * key. `BARRELMAN_IP_HASH_SECRET` sets it; failing that it is derived from
+ * `BARRELMAN_API_KEY`, which every public deployment already sets, so an
+ * upgrade needs no new configuration. With neither (local development) the
+ * key is a fixed string and the hash is no stronger than before.
+ */
+export function ipHashKey(env: { secret: string; serviceKey: string }): string {
+  if (env.secret) return env.secret
+  if (env.serviceKey) return hmacSha256Hex(env.serviceKey, 'barrelman:ip-hash')
+  return 'barrelman:ip-hash:unkeyed'
+}
+
+const IP_HASH_KEY = ipHashKey({
+  secret: envString('BARRELMAN_IP_HASH_SECRET', ''),
+  serviceKey: envString('BARRELMAN_API_KEY', ''),
+})
+
 export function hashIp(ip: string): string {
-  return sha256Hex(ip)
+  return hmacSha256Hex(IP_HASH_KEY, ip)
 }
 
 /**
