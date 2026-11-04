@@ -53,10 +53,16 @@ function deps(overrides: Partial<BillingDeps> = {}): Partial<BillingDeps> {
       amount: 1900,
       currency: 'usd',
     })),
-    applyPlanFromProduct: mock(async () => 'developer'),
+    applySubscriptionEvent: mock(async () => ({ applied: true, planId: 'developer' })),
+    refreshSubscription: mock(async () => ({ applied: true, planId: 'free' })),
+    findActiveSubscription: mock(async () => null) as never,
+    changeSubscriptionProduct: mock(async () => ({ kind: 'no-subscription' as const })) as never,
+    ensureCustomerExternalId: mock(async () => undefined),
     applyCreditPack: mock(async () => ({ granted: true, credits: 100_000 })),
-    downgradeToFree: mock(async () => undefined),
-    productIdForPlan: mock((plan: string) => (plan === 'developer' ? 'prod_dev' : null)),
+    clawBackCreditPack: mock(async () => ({ clawedBack: 100_000 })),
+    claimWebhookEvent: mock(async () => true),
+    releaseWebhookEvent: mock(async () => undefined),
+    productIdForPlan: mock((plan: string) => (plan === 'developer' ? 'prod_dev' : plan === 'business' ? 'prod_business' : null)),
     findUserById: mock(async () => makeUser()),
     findUserByPolarCustomerId: mock(async () => null),
     linkPolarCustomer: mock(async () => undefined),
@@ -107,10 +113,26 @@ describe('GET /billing/config', () => {
 })
 
 describe('POST /billing/webhook', () => {
-  const webhook = (type: string, data: Record<string, unknown>, d: Partial<BillingDeps>) => {
+  const webhook = (
+    type: string,
+    data: Record<string, unknown>,
+    d: Partial<BillingDeps>,
+    headers: Record<string, string> = {},
+  ) => {
     const app = createBillingRoutes({ ...d, validateEvent: mock(() => ({ type, data })) as never })
-    return app.handle(post('/billing/webhook', { any: 'payload' }))
+    return app.handle(post('/billing/webhook', { any: 'payload' }, headers))
   }
+
+  const sub = (overrides: Record<string, unknown> = {}) => ({
+    id: 'sub_1',
+    customerId: 'cus_1',
+    productId: 'prod_dev',
+    status: 'active',
+    cancelAtPeriodEnd: false,
+    currentPeriodEnd: new Date('2026-12-01T00:00:00Z'),
+    modifiedAt: new Date('2026-11-01T00:00:00Z'),
+    ...overrides,
+  })
 
   test('rejects a payload whose signature does not verify', async () => {
     const app = createBillingRoutes(
@@ -139,14 +161,78 @@ describe('POST /billing/webhook', () => {
     expect((await app.handle(post('/billing/webhook', {}))).status).toBe(400)
   })
 
-  test('upgrades the plan on subscription.active', async () => {
+  test('applies subscription.active through the lifecycle', async () => {
     const d = deps({ findUserByPolarCustomerId: mock(async () => makeUser()) })
 
-    const res = await webhook('subscription.active', { customerId: 'cus_1', productId: 'prod_dev' }, d)
+    const res = await webhook('subscription.active', sub(), d)
 
     expect(res.status).toBe(200)
-    expect(d.applyPlanFromProduct).toHaveBeenCalledWith('user-1', 'prod_dev')
+    expect(d.applySubscriptionEvent).toHaveBeenCalledWith(
+      'user-1',
+      expect.objectContaining({ id: 'sub_1', productId: 'prod_dev', status: 'active' }),
+      { revoked: false },
+    )
     expect(d.linkPolarCustomer).toHaveBeenCalledWith('user-1', 'cus_1')
+  })
+
+  test('marks subscription.revoked as a revocation', async () => {
+    const d = deps({ findUserByPolarCustomerId: mock(async () => makeUser({ plan: 'developer' })) })
+
+    await webhook('subscription.revoked', sub({ status: 'canceled' }), d)
+
+    expect(d.applySubscriptionEvent).toHaveBeenCalledWith('user-1', expect.objectContaining({ id: 'sub_1' }), {
+      revoked: true,
+    })
+  })
+
+  test('does not treat a scheduled cancellation as a revocation', async () => {
+    // Polar sends subscription.canceled as soon as the customer schedules it;
+    // the plan has been paid for until the period end.
+    const d = deps({ findUserByPolarCustomerId: mock(async () => makeUser({ plan: 'developer' })) })
+
+    await webhook('subscription.canceled', sub({ cancelAtPeriodEnd: true }), d)
+
+    expect(d.applySubscriptionEvent).toHaveBeenCalledWith(
+      'user-1',
+      expect.objectContaining({ cancelAtPeriodEnd: true }),
+      { revoked: false },
+    )
+  })
+
+  test('backfills the external id on a customer that lacks one', async () => {
+    const d = deps({ findUserByPolarCustomerId: mock(async () => makeUser()) })
+
+    await webhook('subscription.updated', sub({ customer: { externalId: null } }), d)
+
+    expect(d.ensureCustomerExternalId).toHaveBeenCalledWith('cus_1', 'user-1', null)
+  })
+
+  test('skips a redelivery with a webhook-id it has already handled', async () => {
+    const d = deps({
+      findUserByPolarCustomerId: mock(async () => makeUser()),
+      claimWebhookEvent: mock(async () => false),
+    })
+
+    const res = await webhook('subscription.updated', sub(), d, { 'webhook-id': 'msg_1' })
+
+    expect(res.status).toBe(200)
+    expect(d.claimWebhookEvent).toHaveBeenCalledWith('msg_1', 'subscription.updated')
+    expect(d.applySubscriptionEvent).not.toHaveBeenCalled()
+  })
+
+  test('releases the delivery id and answers 500 when handling fails', async () => {
+    // Otherwise Polar's retry would be skipped as a duplicate and the event lost.
+    const d = deps({
+      findUserByPolarCustomerId: mock(async () => makeUser()),
+      applySubscriptionEvent: mock(async () => {
+        throw new Error('database down')
+      }),
+    })
+
+    const res = await webhook('subscription.updated', sub(), d, { 'webhook-id': 'msg_2' })
+
+    expect(res.status).toBe(500)
+    expect(d.releaseWebhookEvent).toHaveBeenCalledWith('msg_2')
   })
 
   test('falls back to checkout metadata when no customer is linked yet', async () => {
@@ -156,13 +242,9 @@ describe('POST /billing/webhook', () => {
       findUserById: mock(async () => makeUser({ id: 'user-42' })),
     })
 
-    await webhook(
-      'subscription.active',
-      { customerId: 'cus_new', productId: 'prod_dev', metadata: { barrelmanUserId: 'user-42' } },
-      d,
-    )
+    await webhook('subscription.active', sub({ customerId: 'cus_new', metadata: { barrelmanUserId: 'user-42' } }), d)
 
-    expect(d.applyPlanFromProduct).toHaveBeenCalledWith('user-42', 'prod_dev')
+    expect(d.applySubscriptionEvent).toHaveBeenCalledWith('user-42', expect.anything(), expect.anything())
   })
 
   test('prefers the linked customer over conflicting metadata', async () => {
@@ -171,13 +253,9 @@ describe('POST /billing/webhook', () => {
     // subscription onto the wrong account.
     const d = deps({ findUserByPolarCustomerId: mock(async () => makeUser({ id: 'real-owner' })) })
 
-    await webhook(
-      'subscription.active',
-      { customerId: 'cus_1', productId: 'prod_dev', metadata: { barrelmanUserId: 'someone-else' } },
-      d,
-    )
+    await webhook('subscription.active', sub({ metadata: { barrelmanUserId: 'someone-else' } }), d)
 
-    expect(d.applyPlanFromProduct).toHaveBeenCalledWith('real-owner', 'prod_dev')
+    expect(d.applySubscriptionEvent).toHaveBeenCalledWith('real-owner', expect.anything(), expect.anything())
   })
 
   test('ignores an event naming a metadata user that does not exist', async () => {
@@ -186,22 +264,10 @@ describe('POST /billing/webhook', () => {
       findUserById: mock(async () => null),
     })
 
-    const res = await webhook(
-      'subscription.active',
-      { customerId: 'cus_x', productId: 'prod_dev', metadata: { barrelmanUserId: 'ghost' } },
-      d,
-    )
+    const res = await webhook('subscription.active', sub({ customerId: 'cus_x', metadata: { barrelmanUserId: 'ghost' } }), d)
 
     expect(res.status).toBe(200)
-    expect(d.applyPlanFromProduct).not.toHaveBeenCalled()
-  })
-
-  test.each([['subscription.canceled'], ['subscription.revoked']])('%s downgrades to free', async (type) => {
-    const d = deps({ findUserByPolarCustomerId: mock(async () => makeUser({ plan: 'developer' })) })
-
-    await webhook(type, { customerId: 'cus_1', productId: 'prod_dev' }, d)
-
-    expect(d.downgradeToFree).toHaveBeenCalledWith('user-1')
+    expect(d.applySubscriptionEvent).not.toHaveBeenCalled()
   })
 
   test('grants a credit pack on order.paid, keyed by order id', async () => {
@@ -221,6 +287,47 @@ describe('POST /billing/webhook', () => {
     expect(d.applyCreditPack).not.toHaveBeenCalled()
   })
 
+  test('takes back a refunded credit pack, keyed by order', async () => {
+    const d = deps({ findUserByPolarCustomerId: mock(async () => makeUser()) })
+
+    await webhook(
+      'order.refunded',
+      {
+        id: 'order_1',
+        customerId: 'cus_1',
+        productId: 'prod_pack',
+        subscriptionId: null,
+        status: 'refunded',
+        netAmount: 1000,
+        refundedAmount: 1000,
+      },
+      d,
+    )
+
+    expect(d.clawBackCreditPack).toHaveBeenCalledWith('user-1', {
+      id: 'order_1',
+      productId: 'prod_pack',
+      status: 'refunded',
+      netAmount: 1000,
+      refundedAmount: 1000,
+    })
+    expect(d.refreshSubscription).not.toHaveBeenCalled()
+  })
+
+  test('re-reads the subscription when a subscription payment is refunded', async () => {
+    // Whether a refund ends the subscription is Polar's call; ask it.
+    const d = deps({ findUserByPolarCustomerId: mock(async () => makeUser({ plan: 'developer' })) })
+
+    await webhook(
+      'order.refunded',
+      { id: 'order_2', customerId: 'cus_1', productId: 'prod_dev', subscriptionId: 'sub_1', status: 'refunded' },
+      d,
+    )
+
+    expect(d.refreshSubscription).toHaveBeenCalledWith('user-1', 'sub_1')
+    expect(d.clawBackCreditPack).not.toHaveBeenCalled()
+  })
+
   test('acknowledges event types it has no opinion about', async () => {
     const d = deps()
 
@@ -228,7 +335,7 @@ describe('POST /billing/webhook', () => {
 
     // A non-200 would make Polar retry forever.
     expect(res.status).toBe(200)
-    expect(d.applyPlanFromProduct).not.toHaveBeenCalled()
+    expect(d.applySubscriptionEvent).not.toHaveBeenCalled()
   })
 
   test('404s when billing is not configured on this instance', async () => {
@@ -244,6 +351,7 @@ describe('authenticated billing routes', () => {
   test.each([
     ['GET', '/billing/status'],
     ['POST', '/billing/checkout'],
+    ['POST', '/billing/change-plan'],
     ['GET', '/billing/portal'],
     ['POST', '/billing/sync'],
   ])('%s %s requires a session', async (method, path) => {
@@ -253,7 +361,8 @@ describe('authenticated billing routes', () => {
       new Request(`${BASE}${path}`, {
         method,
         headers: { 'content-type': 'application/json' },
-        body: method === 'POST' ? JSON.stringify({}) : undefined,
+        // A body valid for every route, so the refusal tested is the session's.
+        body: method === 'POST' ? JSON.stringify({ plan: 'developer' }) : undefined,
       }),
     )
 
@@ -270,6 +379,103 @@ describe('authenticated billing routes', () => {
     expect(body.plan.id).toBe('free')
     expect(body.balance.remaining).toBe(49_969)
     expect(body.hasSubscription).toBe(false)
+    expect(body.subscription).toBeNull()
+  })
+
+  test('status reports a scheduled cancellation and its end date', async () => {
+    const app = createBillingRoutes(
+      deps({
+        ...signedIn(makeUser({ plan: 'developer' })),
+        findUserById: mock(async () =>
+          makeUser({
+            plan: 'developer',
+            polarCustomerId: 'cus_1',
+            subscriptionId: 'sub_1',
+            subscriptionStatus: 'active',
+            subscriptionCancelAtPeriodEnd: true,
+            subscriptionPeriodEnd: new Date('2026-12-01T00:00:00Z'),
+          }),
+        ),
+      }),
+    )
+
+    const body = await (await app.handle(new Request(`${BASE}/billing/status`))).json()
+
+    expect(body.subscription).toEqual({
+      status: 'active',
+      cancelAtPeriodEnd: true,
+      currentPeriodEnd: '2026-12-01T00:00:00.000Z',
+    })
+  })
+
+  test('checkout refuses a second subscription for an account that has one', async () => {
+    // A second checkout opens a second subscription, billed alongside the first.
+    const d = deps({
+      ...signedIn(),
+      findActiveSubscription: mock(async () => ({ id: 'sub_1', productId: 'prod_dev' })) as never,
+    })
+    const app = createBillingRoutes(d)
+
+    const res = await app.handle(post('/billing/checkout', { plan: 'business' }))
+
+    expect(res.status).toBe(409)
+    expect(d.createCheckout).not.toHaveBeenCalled()
+  })
+
+  test('change-plan updates the existing subscription rather than opening a checkout', async () => {
+    const changed = { id: 'sub_1', productId: 'prod_business', status: 'active' }
+    const d = deps({
+      ...signedIn(),
+      changeSubscriptionProduct: mock(async () => ({ kind: 'changed' as const, subscription: changed })) as never,
+      applySubscriptionEvent: mock(async () => ({ applied: true, planId: 'business' })),
+    })
+    const app = createBillingRoutes(d)
+
+    const res = await app.handle(post('/billing/change-plan', { plan: 'business' }))
+
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ changed: true, planId: 'business' })
+    expect(d.changeSubscriptionProduct).toHaveBeenCalledWith(expect.objectContaining({ id: 'user-1' }), 'prod_business')
+    expect(d.applySubscriptionEvent).toHaveBeenCalledWith('user-1', changed)
+    expect(d.createCheckout).not.toHaveBeenCalled()
+  })
+
+  test('change-plan falls back to a checkout when there is no subscription yet', async () => {
+    const d = deps(signedIn())
+    const app = createBillingRoutes(d)
+
+    const res = await app.handle(post('/billing/change-plan', { plan: 'developer' }))
+    const body = await res.json()
+
+    expect(res.status).toBe(200)
+    expect(body.checkoutUrl).toContain('polar.sh')
+    expect(d.createCheckout).toHaveBeenCalledWith(expect.objectContaining({ productId: 'prod_dev' }))
+  })
+
+  test('change-plan keeps enterprise as contact-us', async () => {
+    const d = deps(signedIn())
+    const app = createBillingRoutes(d)
+
+    const res = await app.handle(post('/billing/change-plan', { plan: 'enterprise' }))
+
+    expect(res.status).toBe(409)
+    expect((await res.json()).contactOnly).toBe(true)
+    expect(d.changeSubscriptionProduct).not.toHaveBeenCalled()
+  })
+
+  test('change-plan reports a Polar failure as 502 without applying anything', async () => {
+    const d = deps({
+      ...signedIn(),
+      changeSubscriptionProduct: mock(async () => {
+        throw new Error('polar down')
+      }),
+    })
+    const app = createBillingRoutes(d)
+
+    const res = await app.handle(post('/billing/change-plan', { plan: 'business' }))
+
+    expect(res.status).toBe(502)
+    expect(d.applySubscriptionEvent).not.toHaveBeenCalled()
   })
 
   test('checkout resolves a plan id to a product server-side', async () => {
@@ -344,6 +550,7 @@ describe('authenticated billing routes', () => {
     const app = createBillingRoutes(deps(signedIn()))
 
     expect((await app.handle(post('/billing/checkout', { plan: 'developer' }))).status).toBe(404)
+    expect((await app.handle(post('/billing/change-plan', { plan: 'developer' }))).status).toBe(404)
     expect((await app.handle(new Request(`${BASE}/billing/portal`))).status).toBe(404)
     expect((await app.handle(post('/billing/sync', {}))).status).toBe(404)
   })
