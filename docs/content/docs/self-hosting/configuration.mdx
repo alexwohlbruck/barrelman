@@ -156,7 +156,7 @@ To recover from a wrong list, fix the variable and recreate the container.
 
 | Variable | Default | Description |
 |---|---|---|
-| `BARRELMAN_SERVER_ORIGIN` | `http://localhost:$PORT` | Public origin. Used in emails and as the OAuth redirect base |
+| `BARRELMAN_SERVER_ORIGIN` | `http://localhost:$PORT` | Public origin. Used in emails, as the OAuth redirect base, and in the tile and source URLs of TileJSON (`/tiles/<source>.json`) and map styles (`/styles/*.json`). Set it on any instance that serves maps beyond localhost |
 | `BARRELMAN_CONSOLE_ORIGIN` | server origin | Only if the console is hosted separately. **Also sets the WebAuthn relying-party ID** |
 | `BARRELMAN_ALLOWED_ORIGINS` | — | Extra browser origins allowed to present a session cookie |
 | `BARRELMAN_REGISTRATION_MODE` | `open` | `invite` restricts sign-in to accounts an admin created |

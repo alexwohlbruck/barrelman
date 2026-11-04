@@ -422,13 +422,14 @@ export interface CreditBalance {
   remaining: number
   overageAllowed: boolean
   overage: number
+  cycleStartedAt: string
   cycleResetsAt: string
 }
 
 export interface LedgerEntry {
   id: string
   amount: number
-  kind: 'purchase' | 'grant' | 'adjustment' | 'refund'
+  kind: 'purchase' | 'grant' | 'adjustment' | 'refund' | 'usage'
   description: string | null
   createdAt: string
 }

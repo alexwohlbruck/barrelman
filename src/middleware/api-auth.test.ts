@@ -17,6 +17,8 @@ import {
   type ApiAuthDeps,
 } from './api-auth'
 import type { ResolvedKey } from '../services/api-keys.service'
+import { penaltyKeyFor, strikeCount } from '../services/throttle.service'
+import { clientIp } from '../lib/rate-limit'
 import { CREDIT_COSTS, getPlan } from '../billing/plans'
 
 const BASE = 'http://localhost'
@@ -461,6 +463,26 @@ describe('throttling', () => {
 
     // Slots are released by the after-handler, so the next request succeeds.
     expect((await instance.handle(get({ authorization: `Bearer ${LIVE_KEY}` }))).status).toBe(200)
+  })
+
+  /**
+   * Strikes are kept per account AT an address, so the success has to clear
+   * that same key. It used to clear the bare account id, which matched nothing:
+   * a signed-in caller's strikes then only ever decayed, and a client that
+   * failed now and then between successes drifted into the box.
+   */
+  test('a successful request clears the strikes its caller collected', async () => {
+    const d = deps({ resolveApiKey: mock(async () => resolved({ scopes: ['search'] })) })
+    const refused = app('isochrone', d)
+    const served = app('search', d)
+    const request = () => get({ authorization: `Bearer ${LIVE_KEY}` })
+    const key = penaltyKeyFor(clientIp(request()), 'user-1')
+
+    for (let i = 0; i < 5; i += 1) expect((await refused.handle(request())).status).toBe(403)
+    expect(strikeCount(key)).toBe(5)
+
+    expect((await served.handle(request())).status).toBe(200)
+    expect(strikeCount(key)).toBe(0)
   })
 
   test('boxes a caller that collects a stream of rejections', async () => {

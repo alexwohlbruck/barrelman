@@ -171,6 +171,42 @@ export async function completeAuthentication(
   return { ok: true, user }
 }
 
+// ── Confirmation ────────────────────────────────────────────────────────
+
+/**
+ * Options for re-proving presence on an account that is already signed in,
+ * before something irreversible. Unlike sign-in, the credentials are listed:
+ * only this account's passkeys can answer.
+ */
+export async function beginConfirmation(userId: string) {
+  const own = await db
+    .select({ id: passkeys.id, transports: passkeys.transports })
+    .from(passkeys)
+    .where(eq(passkeys.userId, userId))
+
+  return generateAuthenticationOptions({
+    rpID,
+    userVerification: 'required',
+    allowCredentials: own.map((row) => ({ id: row.id, transports: parseTransports(row.transports) as never })),
+  })
+}
+
+/**
+ * Verify a confirmation assertion. The signature check is sign-in's; on top of
+ * it the credential must belong to `userId`, or a passkey for some other
+ * account the same person holds would confirm an action on this one.
+ */
+export async function confirmPasskey(
+  userId: string,
+  response: AuthenticationResponseJSON,
+  expectedChallenge: string,
+): Promise<{ ok: boolean; error?: string }> {
+  const result = await completeAuthentication(response, expectedChallenge)
+  if (!result.ok || !result.user) return { ok: false, error: result.error ?? 'Passkey could not be verified' }
+  if (result.user.id !== userId) return { ok: false, error: 'That passkey belongs to a different account' }
+  return { ok: true }
+}
+
 // ── Management ──────────────────────────────────────────────────────────
 
 export interface PasskeySummary {

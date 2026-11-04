@@ -12,6 +12,7 @@
  * Also not backed up, though they are not import outputs:
  *   - boundary_catalog: re-fetched from Geofabrik by "Fetch Boundary Catalog".
  *   - brand_logos: a Wikidata cache that refills itself in the background.
+ *   - brand_logo_files: logo images, re-fetched from Commons on first request.
  *   - search_enrichment_state, schema_migrations: markers describing the data
  *     currently imported. Restored next to a different import they would claim
  *     work was done that was not.
@@ -21,9 +22,9 @@
  * brought in, and restoring that pointer without the rows it describes would
  * make the next import skip them as unchanged. They are small.
  *
- * scripts-manifest.test.ts checks this list against the CREATE TABLE
+ * backup-tables.test.ts checks this list against the CREATE TABLE
  * statements in src/, so a new accounts_*, ops_* or import_* table that is
- * missing here fails the build.
+ * missing here fails the build unless it is in NOT_BACKED_UP below.
  *
  * Run as a CLI to print one name per line; that is how the backup script reads
  * it, so this file stays the only copy of the list:
@@ -64,6 +65,16 @@ export const BACKUP_TABLES = [
   'landmarks',
   'landmark_sources',
 ] as const
+
+/**
+ * Tables under a stateful prefix that are deliberately left out, with why. The
+ * test treats these as covered; anything else under the prefix must be backed up.
+ */
+export const NOT_BACKED_UP: Record<string, string> = {
+  // Penalty-box state lives at most half an hour. A restore would re-box
+  // callers for offences long past.
+  accounts_throttle_penalties: 'ephemeral throttle state',
+}
 
 if (import.meta.main) {
   console.log(BACKUP_TABLES.join('\n'))

@@ -14,7 +14,8 @@ WORKDIR /app
 COPY package.json bun.lock* ./
 RUN bun install --frozen-lockfile 2>/dev/null || bun install
 
-# Copy source
+# Copy source. This also brings in assets/ (about 7 MB of glyphs and sprites
+# served by /fonts and /sprites), which must not be added to .dockerignore.
 COPY . .
 
 # Bring in the built admin console so the API can serve it at /console

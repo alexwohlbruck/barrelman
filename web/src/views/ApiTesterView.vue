@@ -48,6 +48,8 @@ const presets: Preset[] = [
     body: '{\n  "profile": "bike",\n  "points": [\n    { "lat": 40.7359, "lon": -73.9903 },\n    { "lat": 40.7484, "lon": -73.9857 },\n    { "lat": 40.7644, "lon": -73.9730 }\n  ]\n}',
     auth: 'api',
   },
+  { label: 'Basemap TileJSON', method: 'GET', path: '/tiles/basemap.json', auth: 'api' },
+  { label: 'Basemap style', method: 'GET', path: '/styles/basemap.json', auth: 'api' },
   // Public-API surface. Only the unauthenticated endpoints are listed: this
   // tester replays requests from the server, which carries no session cookie,
   // so a preset for /account/keys or /account/credits would only ever 401.

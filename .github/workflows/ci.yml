@@ -59,6 +59,37 @@ jobs:
         working-directory: web
         run: bun run build
 
+  sdk:
+    name: TypeScript SDK
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: sdk/typescript
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install SDK dependencies
+        run: bun install --frozen-lockfile
+
+      # The types are generated from docs/openapi.json. A spec refresh that
+      # forgot `bun run generate` fails here rather than shipping stale types.
+      - name: Check generated schema
+        run: bun run check:schema
+
+      - name: Typecheck SDK
+        run: bun run typecheck
+
+      # Root `bun test` skips sdk/ (bunfig.toml), so these run only here.
+      - name: Test SDK
+        run: bun test
+
+      - name: Build SDK
+        run: bun run build
+
   integration:
     name: Integration tests
     runs-on: ubuntu-latest

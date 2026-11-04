@@ -174,7 +174,7 @@ Note that the original [containrrr/watchtower](https://github.com/containrrr/wat
 
 OSM, GTFS and GBFS all go stale, and the console can refresh them on a schedule
 so you don't have to remember to. Open **Schedules**: a fresh install is seeded
-with five entries, all **disabled** until you turn them on.
+with several entries, all **disabled** until you turn them on.
 
 | Schedule | Default | What it does |
 |---|---|---|
@@ -183,6 +183,7 @@ with five entries, all **disabled** until you turn them on.
 | Import GBFS Systems | Sunday 05:30 | Re-fetches the GBFS systems catalog |
 | Rebuild Basemap | Sunday 06:00 | Re-renders the PMTiles basemap. Only needed when OSM Update has "Rebuild basemap" off |
 | Refresh 3D Buildings | Sunday 09:00 | Refreshes the `buildings_3d` view. Only needed when OSM Update has "Refresh 3D buildings" off |
+| Reconcile Billing | Daily 02:45 | Used by the hosted service only. Billing is off on a self-hosted instance, so it does nothing there |
 
 Any script under **Scripts** can be scheduled, with the same parameters you'd
 fill in to run it by hand. Each entry takes a standard five-field cron

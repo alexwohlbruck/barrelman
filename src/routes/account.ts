@@ -1,5 +1,6 @@
 /**
- * Account self-service: profile, API keys, usage and credit balance.
+ * Account self-service: profile, API keys, usage, credit balance, data export
+ * and deletion.
  *
  * Every route here is session-authenticated (the console), never API-key
  * authenticated — a leaked API key must not be able to mint more keys or read
@@ -22,9 +23,9 @@ import {
 import {
   usageByDay as _usageByDay,
   usageByKey as _usageByKey,
-  currentCycleStart,
   utcDay,
 } from '../services/usage.service'
+import { toDay } from '../billing/periods'
 import {
   acceptTerms as _acceptTerms,
   describeTerms,
@@ -32,8 +33,24 @@ import {
   toPublicUser,
   updateUser as _updateUser,
 } from '../services/accounts.service'
-import { describeSuspension } from '../services/moderation.service'
-import { terms as termsConfig } from '../config/accounts.config'
+import { deleteAccount as _deleteAccount, describeSuspension } from '../services/moderation.service'
+import {
+  blankSessionCookie as _blankSessionCookie,
+  consumeChallenge as _consumeChallenge,
+  createOtp as _createOtp,
+  storeChallenge as _storeChallenge,
+  verifyOtp as _verifyOtp,
+} from '../services/auth.service'
+import { sendAccountDeletionCode as _sendAccountDeletionCode } from '../services/mailer.service'
+import {
+  beginConfirmation as _beginConfirmation,
+  confirmPasskey as _confirmPasskey,
+} from '../services/passkey.service'
+import { exportAccount as _exportAccount } from '../services/account-export.service'
+import { LastAdminError } from '../services/accounts.service'
+import { BillingTeardownError } from '../services/billing.service'
+import { createRateLimiter } from '../lib/rate-limit'
+import { otpTtlMinutes, terms as termsConfig } from '../config/accounts.config'
 import { resolveSession as _resolveSession, requireUser } from '../middleware/session'
 import { ADMIN_SCOPE, ALL_SCOPES, CREDIT_COSTS, listPlans, publicPlan } from '../billing/plans'
 import { adminSessionRefusal as _adminSessionRefusal } from '../services/admin-access.service'
@@ -44,6 +61,21 @@ const MAX_KEYS_PER_ACCOUNT = 50
 /** Origins per key. Generous for deploy previews, bounded so the array stays sane. */
 const MAX_ORIGINS_PER_KEY = 20
 
+/** Purpose the deletion passkey challenge is stored under, server-side. */
+const DELETE_CHALLENGE = 'delete-account-passkey' as const
+
+/**
+ * The challenge an assertion answers, read from its clientDataJSON. Null when
+ * the field is not the base64url JSON a browser produces.
+ */
+function assertionChallenge(clientDataJSON: string): string | null {
+  try {
+    const parsed = JSON.parse(Buffer.from(clientDataJSON, 'base64url').toString('utf8'))
+    return typeof parsed?.challenge === 'string' && parsed.challenge ? parsed.challenge : null
+  } catch {
+    return null
+  }
+}
 
 export interface AccountDeps {
   createApiKey: typeof _createApiKey
@@ -61,6 +93,16 @@ export interface AccountDeps {
   findUserById: typeof _findUserById
   resolveSession: typeof _resolveSession
   adminSessionRefusal: typeof _adminSessionRefusal
+  exportAccount: typeof _exportAccount
+  createOtp: typeof _createOtp
+  verifyOtp: typeof _verifyOtp
+  storeChallenge: typeof _storeChallenge
+  consumeChallenge: typeof _consumeChallenge
+  sendAccountDeletionCode: typeof _sendAccountDeletionCode
+  beginConfirmation: typeof _beginConfirmation
+  confirmPasskey: typeof _confirmPasskey
+  deleteAccount: typeof _deleteAccount
+  blankSessionCookie: typeof _blankSessionCookie
 }
 
 const defaultDeps: AccountDeps = {
@@ -79,6 +121,16 @@ const defaultDeps: AccountDeps = {
   findUserById: _findUserById,
   resolveSession: _resolveSession,
   adminSessionRefusal: _adminSessionRefusal,
+  exportAccount: _exportAccount,
+  createOtp: _createOtp,
+  verifyOtp: _verifyOtp,
+  storeChallenge: _storeChallenge,
+  consumeChallenge: _consumeChallenge,
+  sendAccountDeletionCode: _sendAccountDeletionCode,
+  beginConfirmation: _beginConfirmation,
+  confirmPasskey: _confirmPasskey,
+  deleteAccount: _deleteAccount,
+  blankSessionCookie: _blankSessionCookie,
 }
 
 export function createAccountRoutes(overrides: Partial<AccountDeps> = {}) {
@@ -104,6 +156,14 @@ export function createAccountRoutes(overrides: Partial<AccountDeps> = {}) {
       body: { error: `Granting the "${ADMIN_SCOPE}" scope needs a session the admin API accepts. ${refusal.error}`, code: refusal.code },
     }
   }
+  // Per router rather than per module, so each test builds a fresh budget.
+  // An export reads every account table; once a minute is plenty for a person
+  // and bounds what a stolen session can make the database do.
+  const exportsPerUser = createRateLimiter(1, 60_000)
+  // Each deletion code is an email to the account's own inbox.
+  const deletionCodesPerUser = createRateLimiter(3, 15 * 60_000)
+  // Each passkey challenge is a row; a session has no reason to ask often.
+  const passkeyChallengesPerSession = createRateLimiter(10, 15 * 60_000)
 
   const derive = async ({
     request,
@@ -353,7 +413,7 @@ export function createAccountRoutes(overrides: Partial<AccountDeps> = {}) {
     .get(
       '/usage',
       async ({ user, query }) => {
-        const from = query.from ?? currentCycleStart()
+        const from = query.from ?? toDay((await deps.getBalance(user!.id)).cycleStartedAt)
         const to = query.to ?? utcDay()
         const [daily, byKey] = await Promise.all([
           deps.usageByDay(user!.id, from, to),
@@ -366,6 +426,205 @@ export function createAccountRoutes(overrides: Partial<AccountDeps> = {}) {
         detail: {
           summary: 'Usage over a date range',
           description: 'Defaults to the current billing cycle. Dates are UTC (YYYY-MM-DD).',
+          tags: ['Account'],
+        },
+      },
+    )
+
+    // ── Data export ───────────────────────────────────────────────────
+    .get(
+      '/export',
+      async ({ user, set }) => {
+        if (!exportsPerUser.check(user!.id)) {
+          set.status = 429
+          set.headers['retry-after'] = String(exportsPerUser.retryAfter(user!.id))
+          return { error: 'You can export your data once a minute. Try again shortly.' }
+        }
+
+        const data = await deps.exportAccount(user!.id)
+        if (!data) {
+          set.status = 404
+          return { error: 'Account not found' }
+        }
+
+        set.headers['content-type'] = 'application/json; charset=utf-8'
+        set.headers['content-disposition'] =
+          `attachment; filename="barrelman-account-${data.exportedAt.slice(0, 10)}.json"`
+        set.headers['cache-control'] = 'no-store'
+        return JSON.stringify(data, null, 2)
+      },
+      {
+        detail: {
+          summary: 'Export your account data',
+          description:
+            'A JSON download of everything held about the signed-in account: profile, linked identities, ' +
+            'passkeys, API keys, sessions, usage, request metrics, credit ledger, billing state, terms ' +
+            'acceptance and moderation history. Credentials (key hashes, passkey public keys, session ids) ' +
+            'are never included. Limited to once a minute.',
+          tags: ['Account'],
+        },
+      },
+    )
+
+    // ── Deletion ──────────────────────────────────────────────────────
+    .post(
+      '/delete/request',
+      async ({ user, set }) => {
+        if (!deletionCodesPerUser.check(user!.id)) {
+          set.status = 429
+          set.headers['retry-after'] = String(deletionCodesPerUser.retryAfter(user!.id))
+          return { error: 'Too many deletion codes requested. Try again in a few minutes.' }
+        }
+        const code = await deps.createOtp(user!.id, user!.email, 'delete-account')
+        await deps.sendAccountDeletionCode(user!.email, code)
+        set.status = 201
+        return { sent: true }
+      },
+      {
+        detail: {
+          summary: 'Email a code that confirms account deletion',
+          description: `The code is valid for deletion only, for ${otpTtlMinutes} minutes, and replaces any earlier one.`,
+          tags: ['Account'],
+        },
+      },
+    )
+
+    .post(
+      '/delete/passkey-options',
+      async ({ user, session, set }) => {
+        const limitKey = session?.id ?? user!.id
+        if (!passkeyChallengesPerSession.check(limitKey)) {
+          set.status = 429
+          set.headers['retry-after'] = String(passkeyChallengesPerSession.retryAfter(limitKey))
+          return { error: 'Too many attempts. Try again in a few minutes.' }
+        }
+        const options = await deps.beginConfirmation(user!.id)
+        if (!options.allowCredentials?.length) {
+          set.status = 409
+          return { error: 'This account has no passkeys. Confirm with an emailed code instead.' }
+        }
+        // Stored against the account and this purpose, never handed back as a
+        // cookie the client could swap for a challenge it already has an
+        // assertion for.
+        await deps.storeChallenge(user!.id, DELETE_CHALLENGE, options.challenge)
+        return options
+      },
+      {
+        detail: {
+          summary: 'Begin confirming account deletion with a passkey',
+          description:
+            "WebAuthn assertion options limited to this account's own passkeys. The challenge is held " +
+            'server-side for five minutes and answers one DELETE /account attempt.',
+          tags: ['Account'],
+        },
+      },
+    )
+
+    .delete(
+      '/',
+      async ({ user, body, set }) => {
+        // Typed confirmation, checked here as well as in the console, so a
+        // script holding a session cannot delete by accident either.
+        if (body.email.trim().toLowerCase() !== user!.email.trim().toLowerCase()) {
+          set.status = 400
+          return { error: 'The email you typed does not match this account' }
+        }
+
+        // A fresh proof of presence. A session alone is not enough: it can be
+        // a laptop left open, and this cannot be undone.
+        if (body.passkey) {
+          // The assertion names the challenge it signed. It counts only if
+          // that is the one issued to this account for deletion, and each one
+          // is spent on first use, so a captured sign-in assertion (or a
+          // replay of an earlier confirmation) has nothing to match.
+          const challenge = assertionChallenge(body.passkey.response.clientDataJSON)
+          if (!challenge || !(await deps.consumeChallenge(user!.id, DELETE_CHALLENGE, challenge))) {
+            set.status = 400
+            return { error: 'No passkey confirmation in progress. Start again.', reason: 'challenge' }
+          }
+          const result = await deps.confirmPasskey(user!.id, body.passkey as never, challenge)
+          if (!result.ok) {
+            set.status = 401
+            return { error: result.error ?? 'Passkey confirmation failed', reason: 'passkey' }
+          }
+        } else if (body.code) {
+          const result = await deps.verifyOtp(user!.id, body.code, 'delete-account')
+          if (result !== 'valid') {
+            set.status = 401
+            return {
+              error:
+                result === 'expired'
+                  ? 'That code has expired. Request a new one.'
+                  : result === 'too-many-attempts'
+                    ? 'Too many incorrect attempts. Request a new code.'
+                    : 'That code is not valid',
+              reason: result,
+            }
+          }
+        } else {
+          set.status = 400
+          return { error: 'Confirm with the emailed code or a passkey', reason: 'confirmation-required' }
+        }
+
+        try {
+          const deleted = await deps.deleteAccount(user!.id, user!.id)
+          if (!deleted) {
+            set.status = 404
+            return { error: 'Account not found' }
+          }
+        } catch (err) {
+          if (err instanceof LastAdminError) {
+            set.status = 409
+            return { error: err.message }
+          }
+          // Polar could not be told, so the account is kept: deleting it would
+          // leave a subscription charging with nothing left to cancel it from.
+          if (err instanceof BillingTeardownError) {
+            set.status = 502
+            return { error: err.message }
+          }
+          throw err
+        }
+
+        // deleteAccount has already ended every session. This clears the
+        // cookie so the browser stops presenting a dead one.
+        set.headers['set-cookie'] = deps.blankSessionCookie()
+        return { deleted: true }
+      },
+      {
+        body: t.Object({
+          /** The account's own address, typed to confirm. */
+          email: t.String({ minLength: 1, maxLength: 320 }),
+          /** The code from POST /account/delete/request. */
+          code: t.Optional(t.String({ minLength: 4, maxLength: 16 })),
+          /** A WebAuthn assertion answering POST /account/delete/passkey-options. */
+          passkey: t.Optional(
+            t.Object(
+              {
+                id: t.String(),
+                rawId: t.String(),
+                type: t.String(),
+                response: t.Object({
+                  clientDataJSON: t.String(),
+                  authenticatorData: t.String(),
+                  signature: t.String(),
+                  userHandle: t.Optional(t.String()),
+                }),
+                clientExtensionResults: t.Optional(t.Any()),
+                authenticatorAttachment: t.Optional(t.String()),
+              },
+              { additionalProperties: true },
+            ),
+          ),
+        }),
+        detail: {
+          summary: 'Delete your account',
+          description:
+            'Permanently deletes the signed-in account with its API keys, usage, credit ledger, sessions and ' +
+            'moderation history, then signs it out. Needs the account email typed back, plus either the code ' +
+            'from `POST /account/delete/request` or a passkey assertion. With billing enabled, outstanding ' +
+            'overage is reported and the subscription revoked first; if that fails the account is kept and ' +
+            'the response is 502. The only administrator cannot delete their account (409).',
           tags: ['Account'],
         },
       },

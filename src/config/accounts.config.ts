@@ -70,6 +70,9 @@ export const sessionRenewThresholdMs = sessionTtlMs / 2
 /** One-time email codes are short-lived and single-use. */
 export const otpTtlMs = envNumber('BARRELMAN_OTP_TTL_MINUTES', 15) * 60 * 1000
 
+/** The same lifetime in whole minutes, for emails and API descriptions to state. */
+export const otpTtlMinutes = Math.round(otpTtlMs / 60_000)
+
 export const sessionCookieName = 'barrelman_session'
 
 /**

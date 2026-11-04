@@ -63,8 +63,10 @@ export const onnotice = (notice: unknown) => {
  * max_connections is the stock 100 (Dockerfile.db and docker-compose.yml do not
  * raise it). The API and barrelman-ops each load this module, and so does any
  * bun import script a job runs in ops (one job at a time); Martin keeps a pool
- * of 20. In practice the defaults peak around 70-80, and the worst case is
- * 3 × (20 + 5) + 20 = 95 plus a few short-lived maintenance connections.
+ * of 20. Each API process also holds one long-lived connection outside both
+ * pools for LISTEN (services/cache-bus.service.ts); ops and scripts do not
+ * listen. In practice the defaults peak around 70-80, and the worst case is
+ * 3 × (20 + 5) + 20 + 1 = 96 plus a few short-lived maintenance connections.
  * Raising either pool means checking that sum against max_connections.
  *
  * No transaction spans the two pools. Each account service runs its
@@ -420,6 +422,33 @@ export async function ensureBrandCatalogSchema() {
       wikidata TEXT PRIMARY KEY,
       logo_url TEXT,
       description TEXT,
+      fetched_at TIMESTAMPTZ DEFAULT NOW()
+    );
+
+    -- The logo file's Commons licence (lib/commons-logo.ts), read when the
+    -- logo is resolved and backfilled for rows from before these columns.
+    -- logo_meta_at is NULL until Commons has been asked.
+    ALTER TABLE brand_logos ADD COLUMN IF NOT EXISTS logo_file TEXT;
+    ALTER TABLE brand_logos ADD COLUMN IF NOT EXISTS logo_license TEXT;
+    ALTER TABLE brand_logos ADD COLUMN IF NOT EXISTS logo_license_url TEXT;
+    ALTER TABLE brand_logos ADD COLUMN IF NOT EXISTS logo_artist TEXT;
+    ALTER TABLE brand_logos ADD COLUMN IF NOT EXISTS logo_attribution_required BOOLEAN;
+    ALTER TABLE brand_logos ADD COLUMN IF NOT EXISTS logo_public_domain BOOLEAN;
+    ALTER TABLE brand_logos ADD COLUMN IF NOT EXISTS logo_trademarked BOOLEAN;
+    ALTER TABLE brand_logos ADD COLUMN IF NOT EXISTS logo_page_url TEXT;
+    ALTER TABLE brand_logos ADD COLUMN IF NOT EXISTS logo_download_url TEXT;
+    ALTER TABLE brand_logos ADD COLUMN IF NOT EXISTS logo_meta_at TIMESTAMPTZ;
+
+    -- Logo images, fetched from Commons the first time /brand-logos asks for
+    -- one and served from here after. Keyed by Commons file name, so brands
+    -- sharing a logo share a row. Logos are a few KB each, so the database is
+    -- a simpler home than a volume: it is already shared by every API
+    -- replica and needs no mount.
+    CREATE TABLE IF NOT EXISTS brand_logo_files (
+      file TEXT PRIMARY KEY,
+      content_type TEXT NOT NULL,
+      bytes BYTEA NOT NULL,
+      etag TEXT NOT NULL,
       fetched_at TIMESTAMPTZ DEFAULT NOW()
     );
   `)

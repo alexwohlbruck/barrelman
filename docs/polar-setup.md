@@ -180,7 +180,27 @@ Barrelman reports **only the credits beyond the included allowance** — the
 allowance is already paid for in the subscription price, so metering all usage
 would bill it twice. Reporting is idempotent: each pass computes the cycle's
 total overage, compares it with what was already reported, and ingests the
-difference.
+difference. Each event carries an `externalId` built from the account, the
+cycle and the running total, and the total is written down before it is sent,
+so a pass that fails is resent unchanged and Polar drops any copy it already
+has. A Postgres advisory lock keeps passes on different replicas apart. Each
+pass also covers the cycle that just closed, so its last stretch is billed.
+
+Cycles on paid plans follow the subscription's period, so the meter and the
+allowance reset on the same day. Barrelman records the subscription's
+`currentPeriodStart` once per subscription, from `subscription.*` webhooks or
+the reconciliation task below, and derives every later period from it. A
+resubscription on another day moves the anchor, and a plan change switches the
+allowance. Either one first settles and reports the days so far under the old
+plan and anchor, then starts metering afresh from that day (`metered_from`),
+so no day is billed twice or judged by the wrong plan. A plan change within a
+subscription prorates each part's allowance by its days, matching Polar's price
+proration; a subscription that starts or ends keeps the allowance for the
+period it paid for.
+
+Each pass looks at the open cycle and the one that just closed. If reporting is
+down for longer than a whole cycle, the cycles before that go unreported, and
+the reconciliation task's drift log is where that shows up.
 
 Set `POLAR_METER_USAGE=false` to disable reporting entirely and run the paid
 plans as flat-rate with soft limits.
@@ -330,6 +350,14 @@ Polar, not two), with an upgrade invoiced straight away.
 Deleting an account from the console reports its outstanding overage and
 revokes its subscription first. If Polar cannot be reached the deletion is
 refused with a 502 and the account is kept.
+
+To repair every account at once, run **Reconcile Billing** from the console's Scripts page, or
+enable its seeded daily schedule (it ships disabled). It re-syncs every account
+linked to a Polar customer and records its billing period. It then logs any
+account whose Polar meter shows a different quantity from the overage
+barrelman has reported this cycle. Drift is only logged: a pass in flight or a
+meter that resets on another day both show up, so check before adjusting
+anything.
 
 ---
 
