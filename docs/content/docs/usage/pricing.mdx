@@ -148,16 +148,43 @@ and that a bigger plan is never more expensive per credit.
 
 ## Cycles and balances
 
-Cycles are **calendar months in UTC**. The monthly allowance resets on the 1st
-and does not roll over.
+On a paid plan the cycle follows your subscription: if you subscribed on the
+14th, your allowance resets on the 14th of each month, the day you are billed.
+When a month has no such day (the 31st in February), the cycle resets on that
+month's last day. The Free plan resets on the 1st of each calendar month. Both
+reset at midnight UTC, and the allowance does not roll over.
+
+Changing plan mid-cycle splits the cycle at the day of the change, and each
+part includes its plan's allowance in proportion to the days it covers, the way
+the price is prorated. Developer for 9 days of a 30-day cycle and then Business
+for 21 includes 300,000 + 7,000,000 credits. Usage before the change is judged
+against the old plan's share and any overage on it is billed at the change, so
+the new plan only judges what comes after. Together the parts never include
+more than one allowance of the biggest plan you held that cycle.
+
+A new subscription starts a new cycle on the day it begins, with a whole
+allowance. The Free plan is not prorated.
+`GET /account/credits` returns the current cycle's `cycleStartedAt` and
+`cycleResetsAt`.
 
 A balance has two parts:
 
 1. The plan's monthly allowance.
-2. Purchased credits from the ledger, which never expire.
+2. Credits from packs and grants, which never expire.
 
-The allowance is spent **first**, so a prepaid pack survives an idle month
-rather than being silently consumed by usage the plan already covered.
+The allowance is spent **first**. Pack credits are only touched once the
+allowance runs out, so a pack survives a month that stayed inside it.
+
+A pack is used up as you spend it. When a cycle closes, whatever it took from
+your packs is recorded in your credit history as a negative entry, and the next
+cycle starts with what is left. A pack bought after a cycle has closed is never
+applied to that cycle, and credits already billed as overage are not also taken
+from a pack.
+
+Packs can be bought on any plan, Free included. On Free a pack raises the hard
+stop: requests continue past the allowance until the pack runs out, and then
+stop with a `402`. On a paid plan, overage is billed only once the pack is
+empty.
 
 ## Changing or ending a subscription
 

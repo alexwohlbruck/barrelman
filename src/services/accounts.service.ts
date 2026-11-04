@@ -231,6 +231,21 @@ export function ensureAccountsSchema(): Promise<void> {
           updated_at       timestamptz NOT NULL DEFAULT now(),
           PRIMARY KEY (user_id, cycle)
         )`
+      // The total a pass is about to send, recorded before it sends it. A pass
+      // that dies or fails between the two resends exactly this figure under
+      // the same event id, which Polar deduplicates, instead of computing a new
+      // delta that would overlap what Polar may already hold.
+      await sql`ALTER TABLE accounts_overage_reports ADD COLUMN IF NOT EXISTS pending_credits integer`
+      // Anchors subscribed accounts' allowance periods to their subscription
+      // rather than the calendar month. See billing/periods.ts.
+      await sql`ALTER TABLE accounts_users ADD COLUMN IF NOT EXISTS billing_period_start timestamptz`
+      await sql`ALTER TABLE accounts_users ADD COLUMN IF NOT EXISTS billing_period_subscription_id text`
+      await sql`ALTER TABLE accounts_users ADD COLUMN IF NOT EXISTS pack_settled_through date`
+      await sql`ALTER TABLE accounts_users ADD COLUMN IF NOT EXISTS metered_from date`
+      await sql`ALTER TABLE accounts_users ADD COLUMN IF NOT EXISTS metered_from_new_subscription boolean NOT NULL DEFAULT false`
+      // Where a report's period ends, so reports can be matched by the days
+      // they cover when an anchor moves. Older rows were calendar months.
+      await sql`ALTER TABLE accounts_overage_reports ADD COLUMN IF NOT EXISTS cycle_end date`
 
       await sql`
         CREATE TABLE IF NOT EXISTS accounts_billing_webhook_events (

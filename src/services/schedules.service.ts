@@ -94,6 +94,10 @@ export const SEEDS: Array<Pick<ScheduleInput, 'scriptId' | 'cron'> & { params?: 
   // Nightly state backup, ahead of the 03:00 OSM update so a backup never
   // waits behind it on the ops worker. A few seconds of work.
   { scriptId: 'db-backup', cron: '15 2 * * *' },
+  // Catches subscription changes whose webhook never arrived. Daily is enough:
+  // a missed webhook is rare, and the customer can refresh their own billing
+  // page in the meantime. A no-op where billing is off.
+  { scriptId: 'billing-reconcile', cron: '45 2 * * *' },
 ]
 
 let schemaReady: Promise<void> | null = null
