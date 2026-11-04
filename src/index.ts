@@ -44,6 +44,7 @@ import { startTransitWarmup } from './lib/warmup'
 import { flushUsage, startUsageFlush } from './services/usage.service'
 import { flushRequestMetrics, startRequestMetricsFlush } from './services/request-metrics.service'
 import { requestMetrics } from './middleware/request-metrics'
+import { requestContext } from './middleware/request-context'
 import { startOverageReporting } from './services/overage.service'
 import { startAccountSweep } from './services/account-maintenance.service'
 import { startScheduler } from './services/scheduler.service'
@@ -132,6 +133,8 @@ void syncPortolanStopLinks().catch((err) => console.warn('[startup] portolan lin
 const app = new Elysia()
   // First, so its onRequest timestamp is taken before anything else runs.
   .use(requestMetrics)
+  // Request id and the generic 5xx body, for every route. See the module.
+  .use(requestContext)
   .use(cors({ credentials: false }))
   .use(swagger(swaggerConfig))
   .use(healthRoutes)
