@@ -263,6 +263,7 @@ describe('computePackUsage — packs are used up across periods', () => {
       userId: user,
       plan: free,
       periods: [october],
+      from: october.start,
       days: [{ day: '2026-10-20', credits: free.monthlyCredits + 30_000 }],
       ledger: [pack(50_000, '2026-10-05T00:00:00Z')],
     })
@@ -288,6 +289,7 @@ describe('computePackUsage — packs are used up across periods', () => {
       userId: user,
       plan: free,
       periods,
+      from: october.start,
       days: [
         { day: '2026-10-20', credits: free.monthlyCredits + 30_000 },
         { day: '2026-11-20', credits: free.monthlyCredits + 40_000 },
@@ -306,6 +308,7 @@ describe('computePackUsage — packs are used up across periods', () => {
       userId: user,
       plan: free,
       periods: [october],
+      from: october.start,
       days: [{ day: '2026-10-20', credits: free.monthlyCredits + 30_000 }],
       ledger: [pack(50_000, '2026-10-05T00:00:00Z'), pack(-30_000, '2026-11-01T00:00:00Z', packUsageId(user, '2026-10-01'))],
     })
@@ -318,6 +321,7 @@ describe('computePackUsage — packs are used up across periods', () => {
       userId: user,
       plan: free,
       periods: [october],
+      from: october.start,
       days: [{ day: '2026-10-20', credits: free.monthlyCredits }],
       ledger: [pack(50_000, '2026-10-05T00:00:00Z')],
     })
@@ -330,6 +334,7 @@ describe('computePackUsage — packs are used up across periods', () => {
       userId: user,
       plan: developer,
       periods: [october],
+      from: october.start,
       days: [{ day: '2026-10-20', credits: developer.monthlyCredits + 30_000 }],
       ledger: [pack(50_000, '2026-11-02T10:00:00Z')],
     })
@@ -344,11 +349,51 @@ describe('computePackUsage — packs are used up across periods', () => {
       userId: user,
       plan: developer,
       periods: [october],
+      from: october.start,
       days: [{ day: '2026-10-20', credits: developer.monthlyCredits + 30_000 }],
       ledger: [pack(50_000, '2026-10-25T00:00:00Z')],
-      reported: { '2026-10-01': 20_000 },
+      reported: [{ start: '2026-10-01', end: '2026-11-01', amount: 20_000 }],
     })
 
     expect(usage).toEqual([{ period: october, credits: 10_000 }])
+  })
+
+  test('days settled before are not judged again, even under another plan', () => {
+    // October was settled on the developer plan with nothing owed, so
+    // pack_settled_through moved to 1 November. A downgrade to free must not
+    // reach back and charge October's usage to the pack.
+    const usage = computePackUsage({
+      userId: user,
+      plan: free,
+      periods: periodsBetween(free, null, '2026-11-01', '2026-12-01'),
+      from: '2026-11-01',
+      days: [
+        { day: '2026-10-20', credits: 900_000 },
+        { day: '2026-11-20', credits: free.monthlyCredits + 5_000 },
+      ],
+      ledger: [pack(50_000, '2026-10-05T00:00:00Z')],
+    })
+
+    expect(usage).toEqual([{ period: november, credits: 5_000 }])
+  })
+
+  test('a move from calendar months to a subscription anchor does not count days twice', () => {
+    // Settled through 1 November on calendar months, then subscribed with an
+    // anchor on the 14th. The first anchored period starts 14 October, but
+    // only its days from 1 November on are settled.
+    const periods = periodsBetween(developer, '2026-10-14', '2026-11-01', '2026-11-14')
+    const usage = computePackUsage({
+      userId: user,
+      plan: developer,
+      periods,
+      from: '2026-11-01',
+      days: [
+        { day: '2026-10-20', credits: 2_000_000 },
+        { day: '2026-11-05', credits: developer.monthlyCredits + 7_000 },
+      ],
+      ledger: [pack(50_000, '2026-10-05T00:00:00Z')],
+    })
+
+    expect(usage).toEqual([{ period: { start: '2026-11-01', end: '2026-11-14' }, credits: 7_000 }])
   })
 })

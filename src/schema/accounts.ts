@@ -58,12 +58,19 @@ export const users = pgTable(
     /** Current plan id (see billing/plans.ts). Mirrors the Polar subscription. */
     plan: text('plan').notNull().default('free'),
     /**
-     * A boundary of the subscription's billing period, from which every period
-     * is derived by stepping whole months (see billing/periods.ts). Null on
+     * The subscription's period start, from which every period is derived by
+     * stepping whole months (see billing/periods.ts). Null on
      * accounts that have never subscribed; ignored on plans without a
      * subscription, which stay on calendar months.
      */
     billingPeriodStart: timestamp('billing_period_start', { withTimezone: true }),
+    /** The subscription the anchor above came from. It is written once per subscription. */
+    billingPeriodSubscriptionId: text('billing_period_subscription_id'),
+    /**
+     * Every day before this has had its pack usage settled. Advances each
+     * period whether or not anything was owed, so no day is judged twice.
+     */
+    packSettledThrough: date('pack_settled_through'),
     polarCustomerId: text('polar_customer_id'),
     /**
      * SHA-256 of the IP that created the account. Used only to rate-limit

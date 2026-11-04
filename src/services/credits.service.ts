@@ -30,7 +30,7 @@
  * trip per request. It is invalidated directly whenever credits are granted or
  * a plan changes.
  */
-import { and, eq, gte, like, sql as dsql } from 'drizzle-orm'
+import { and, eq, isNull, ne, or, sql as dsql } from 'drizzle-orm'
 import { LRUCache } from 'lru-cache'
 import { connection as sql, db } from '../db'
 import { creditLedger, users, type CreditEntryKind } from '../schema/accounts'
@@ -41,9 +41,11 @@ import {
   billingPeriod,
   calendarPeriod,
   dayStart,
+  overlapping,
   periodsBetween,
   toDay,
   type BillingPeriod,
+  type Span,
 } from '../billing/periods'
 import {
   creditsByDay,
@@ -159,7 +161,9 @@ export function computeBalance(
   // The monthly allowance is spent before purchased credits, so a prepaid pack
   // survives an idle month instead of being consumed by usage the plan covered.
   const purchasedRemaining = Math.max(0, purchased - spentBeyondAllowance)
-  const overage = plan.overageAllowed ? Math.max(0, spentBeyondAllowance - purchased) : 0
+  // A pack refunded after it was spent leaves the ledger negative. That debt is
+  // not overage, so it is clamped here rather than added to the metered bill.
+  const overage = plan.overageAllowed ? Math.max(0, spentBeyondAllowance - Math.max(0, purchased)) : 0
 
   return {
     plan,
@@ -272,16 +276,20 @@ export async function listLedger(userId: string, limit = 50): Promise<LedgerEntr
 
 // ── Settling closed periods ─────────────────────────────────────────────
 
-const PACK_USAGE_PREFIX = 'pack-usage:'
+export const PACK_USAGE_PREFIX = 'pack-usage:'
 
-/** Ledger key for the pack credit one period consumed: one per account and period. */
-export function packUsageId(userId: string, periodStart: string): string {
-  return `${PACK_USAGE_PREFIX}${userId}:${periodStart}`
+/**
+ * Ledger key for the pack credit one stretch of days consumed. Keyed on the
+ * first day settled, which only moves forward, so two settlements can never
+ * share a key.
+ */
+export function packUsageId(userId: string, from: string): string {
+  return `${PACK_USAGE_PREFIX}${userId}:${from}`
 }
 
-/** The period start a `packUsageId` was written for. */
-function periodOfPackUsage(externalId: string): string {
-  return externalId.slice(-10)
+/** The days a pack-usage ledger entry covers, as a span for `overlapping()`. */
+export function packUsageSpan(externalId: string, createdAt: Date, amount: number): Span {
+  return { start: externalId.slice(-10), end: toDay(createdAt), amount: -amount }
 }
 
 export interface SettlementLedgerEntry {
@@ -291,22 +299,28 @@ export interface SettlementLedgerEntry {
 }
 
 export interface PackUsage {
+  /** The days settled: the period, less any days settled before it. */
   period: BillingPeriod
-  /** Positive: how much pack credit the period consumed. */
+  /** Positive: how much pack credit those days consumed. */
   credits: number
 }
 
 /**
  * Work out what each closed period took from the pack, as a pure function.
  *
- * Periods are settled oldest first. A period can spend only what the ledger
- * held when it ended, so a pack bought on the 2nd never pays for the month
- * before it. Earlier settlements are dated at their own period's end, so each
- * counts against every later period and never against its own.
+ * Periods are settled oldest first, and only days from `from` on count: every
+ * day before it was judged by an earlier settlement, possibly under another
+ * plan or anchor, and must not be judged again. A period clipped that way
+ * keeps its whole allowance, which errs toward the customer.
  *
- * `reported` is overage already sent to the billing provider, by period start.
- * That excess has been paid for as overage, and taking it from the pack as
- * well would charge for the same credits twice.
+ * A period can spend only what the ledger held when it ended, so a pack bought
+ * on the 2nd never pays for the month before it. Earlier settlements are dated
+ * at their own period's end, so each counts against every later period and
+ * never against its own.
+ *
+ * `reported` is overage already sent to the billing provider. That excess has
+ * been paid for as overage, and taking it from the pack as well would charge
+ * for the same credits twice.
  */
 export function computePackUsage(input: {
   userId: string
@@ -314,18 +328,20 @@ export function computePackUsage(input: {
   periods: BillingPeriod[]
   days: DailyCredits[]
   ledger: SettlementLedgerEntry[]
-  reported?: Record<string, number>
+  from: string
+  reported?: Span[]
 }): PackUsage[] {
-  const { userId, plan, days, reported = {} } = input
+  const { userId, plan, days, from, reported = [] } = input
   const ledger = [...input.ledger]
   const settled = new Set(ledger.map((entry) => entry.externalId))
   const result: PackUsage[] = []
 
-  for (const period of [...input.periods].sort((a, b) => a.start.localeCompare(b.start))) {
-    if (settled.has(packUsageId(userId, period.start))) continue
+  for (const whole of [...input.periods].sort((a, b) => a.start.localeCompare(b.start))) {
+    const period = { start: whole.start < from ? from : whole.start, end: whole.end }
+    if (period.start >= period.end || settled.has(packUsageId(userId, period.start))) continue
 
     const used = creditsInRange(days, period.start, period.end)
-    const excess = Math.max(0, used - plan.monthlyCredits - (reported[period.start] ?? 0))
+    const excess = Math.max(0, used - plan.monthlyCredits - overlapping(reported, period))
     if (excess === 0) continue
 
     const endsAt = dayStart(period.end)
@@ -341,19 +357,20 @@ export function computePackUsage(input: {
 }
 
 /**
- * The open period each account was last settled in, per process. Settlement is
- * idempotent regardless; this only keeps it off every balance cache miss.
+ * The open period each account was last settled in, per process. The database
+ * column is the record; this only keeps the read off every balance cache miss.
  */
 const settledThrough = new LRUCache<string, string>({ max: 50_000 })
 
 /**
  * Write the pack usage of every period that has closed since the account was
- * last settled. Runs on balance reads and in the overage reporter, whichever
- * reaches a closed period first. Returns the credits written.
+ * last settled, then move `pack_settled_through` to the open period's start.
+ * Runs on balance reads, in the overage reporter and before a plan change,
+ * whichever reaches a closed period first. Returns the credits written.
  *
- * Every past period is judged against the account's current plan, because plan
- * history is not recorded. Both callers settle within minutes of a boundary, so
- * in practice that is the plan the period ran on.
+ * The marker advances whether or not anything was written. Each closed day is
+ * therefore judged once, against the plan current at the time, and a later
+ * downgrade cannot reach back and drain a pack for months the old plan covered.
  */
 export async function settlePackUsage(
   userId: string,
@@ -363,111 +380,106 @@ export async function settlePackUsage(
 ): Promise<number> {
   if (settledThrough.get(userId) === current.start) return 0
 
+  const [account] = await db
+    .select({ settledThrough: users.packSettledThrough })
+    .from(users)
+    .where(eq(users.id, userId))
+    .limit(1)
+  const stored = account?.settledThrough ?? null
+  if (stored && stored >= current.start) {
+    settledThrough.set(userId, current.start)
+    return 0
+  }
+
   const ledger = await db
     .select({ amount: creditLedger.amount, createdAt: creditLedger.createdAt, externalId: creditLedger.externalId })
     .from(creditLedger)
     .where(eq(creditLedger.userId, userId))
 
-  // Every day before the newest settlement's end was examined when it was
-  // written, so start there. Without one, start at the period of the first
-  // ledger entry: before it there was nothing to spend. Counting days from the
-  // settlement's end, not from the start of the period containing it, matters
-  // when the anchor moves: a new subscription's periods overlap the calendar
-  // month the account was settled under, and those days must not be charged
-  // to the pack twice.
-  const settledUntil = ledger
-    .filter((entry) => entry.externalId?.startsWith(PACK_USAGE_PREFIX))
-    .map((entry) => toDay(entry.createdAt))
-    .sort()
-    .at(-1)
+  // Never settled: start at the period of the first ledger entry, since before
+  // it there was nothing to spend. No ledger at all: nothing to settle.
   const firstEntry = ledger.map((entry) => toDay(entry.createdAt)).sort()[0]
-  const from = settledUntil ?? firstEntry
+  const from = stored ?? (firstEntry ? billingPeriod(plan, anchor, firstEntry).start : null)
   const periods = from ? periodsBetween(plan, anchor, from, current.start) : []
-  const daysFrom = settledUntil ?? periods[0]?.start
 
-  if (periods.length === 0) {
-    settledThrough.set(userId, current.start)
-    return 0
+  let written: PackUsage[] = []
+  if (from && periods.length > 0) {
+    // A few seconds of the closed period may still be in this process's buffer.
+    await flushUsage()
+
+    const [days, reportRows] = await Promise.all([
+      creditsByDay(userId, from, current.start),
+      sql<Array<{ start: string; end: string; amount: number }>>`
+        SELECT cycle::text AS start,
+               COALESCE(cycle_end, (cycle + interval '1 month')::date)::text AS end,
+               GREATEST(reported_credits, COALESCE(pending_credits, 0))::int AS amount
+        FROM accounts_overage_reports
+        WHERE user_id = ${userId} AND COALESCE(cycle_end, (cycle + interval '1 month')::date) > ${from}`,
+    ])
+
+    written = computePackUsage({ userId, plan, periods, days, ledger, from, reported: [...reportRows] })
+
+    for (const { period, credits } of written) {
+      await db
+        .insert(creditLedger)
+        .values({
+          id: generateId(),
+          userId,
+          amount: -credits,
+          kind: 'usage',
+          description: `Pack credit used ${period.start} to ${addDays(period.end, -1)}`,
+          externalId: packUsageId(userId, period.start),
+          createdAt: dayStart(period.end),
+        })
+        .onConflictDoNothing({ target: creditLedger.externalId })
+    }
   }
 
-  // A few seconds of the closed period may still be in this process's buffer.
-  await flushUsage()
-
-  const [days, reportRows] = await Promise.all([
-    creditsByDay(userId, daysFrom!, current.start),
-    sql<Array<{ cycle: string; reported: number }>>`
-      SELECT cycle::text AS cycle, GREATEST(reported_credits, COALESCE(pending_credits, 0))::int AS reported
-      FROM accounts_overage_reports
-      WHERE user_id = ${userId} AND cycle >= ${periods[0]!.start}`,
-  ])
-
-  const usage = computePackUsage({
-    userId,
-    plan,
-    periods,
-    days,
-    ledger,
-    reported: Object.fromEntries(reportRows.map((row) => [row.cycle, row.reported])),
-  })
-
-  for (const { period, credits } of usage) {
-    await db
-      .insert(creditLedger)
-      .values({
-        id: generateId(),
-        userId,
-        amount: -credits,
-        kind: 'usage',
-        description: `Pack credit used ${period.start} to ${addDays(period.end, -1)}`,
-        externalId: packUsageId(userId, period.start),
-        createdAt: dayStart(period.end),
-      })
-      .onConflictDoNothing({ target: creditLedger.externalId })
-  }
-
-  if (usage.length) invalidateBalance(userId)
+  await db.update(users).set({ packSettledThrough: current.start }).where(eq(users.id, userId))
+  if (written.length) invalidateBalance(userId)
   settledThrough.set(userId, current.start)
-  return usage.reduce((sum, entry) => sum + entry.credits, 0)
-}
-
-/** Settled pack usage per account, by period start, for periods from `from` on. */
-export async function packUsageSince(userIds: string[], from: string): Promise<Map<string, Record<string, number>>> {
-  const result = new Map<string, Record<string, number>>()
-  if (userIds.length === 0) return result
-
-  const wanted = new Set(userIds)
-  const rows = await db
-    .select({ userId: creditLedger.userId, externalId: creditLedger.externalId, amount: creditLedger.amount })
-    .from(creditLedger)
-    .where(and(like(creditLedger.externalId, `${PACK_USAGE_PREFIX}%`), gte(creditLedger.createdAt, dayStart(from))))
-
-  for (const row of rows) {
-    if (!wanted.has(row.userId) || !row.externalId) continue
-    const byPeriod = result.get(row.userId) ?? {}
-    byPeriod[periodOfPackUsage(row.externalId)] = -row.amount
-    result.set(row.userId, byPeriod)
-  }
-  return result
+  return written.reduce((sum, entry) => sum + entry.credits, 0)
 }
 
 // ── Plans and periods ───────────────────────────────────────────────────
 
-/**
- * Record where the account's subscription period starts. Any boundary will do;
- * the others are derived from it. A missing or unparseable value leaves the
- * stored one alone, so an event without period dates cannot wipe it.
- *
- * For the two places that learn the date from Polar: subscription webhooks
- * (through `applyPlanFromProduct`) and the reconciliation sweep.
- */
-export async function recordBillingPeriod(userId: string, periodStart: Date | string | null | undefined): Promise<void> {
-  if (!periodStart) return
-  const start = new Date(periodStart)
-  if (Number.isNaN(start.getTime())) return
+export interface SubscriptionPeriod {
+  subscriptionId: string | null | undefined
+  /** The subscription's `currentPeriodStart`. Never its period end. */
+  periodStart: Date | string | null | undefined
+}
 
-  await db.update(users).set({ billingPeriodStart: start }).where(eq(users.id, userId))
+/**
+ * Record the subscription's period start as the account's anchor, once per
+ * subscription. Later events for the same subscription leave it alone: Polar
+ * steps the period by months from the same day, which the anchor already does,
+ * and rewriting it from a clamped date (28 February for a subscription taken
+ * on the 31st) would shift every later period. Only a new subscription, such
+ * as a resubscription on another day, moves it.
+ *
+ * Returns whether the anchor changed.
+ */
+export async function recordBillingPeriod(userId: string, period: SubscriptionPeriod | null | undefined): Promise<boolean> {
+  const { subscriptionId, periodStart } = period ?? {}
+  if (!subscriptionId || !periodStart) return false
+  const start = new Date(periodStart)
+  if (Number.isNaN(start.getTime())) return false
+
+  const updated = await db
+    .update(users)
+    .set({ billingPeriodStart: start, billingPeriodSubscriptionId: subscriptionId })
+    .where(
+      and(
+        eq(users.id, userId),
+        or(isNull(users.billingPeriodSubscriptionId), ne(users.billingPeriodSubscriptionId, subscriptionId)),
+      ),
+    )
+    .returning({ id: users.id })
+  if (updated.length === 0) return false
+
   invalidateBalance(userId)
   settledThrough.delete(userId)
+  return true
 }
 
 /** Change an account's plan and drop every cached decision that depended on it. */

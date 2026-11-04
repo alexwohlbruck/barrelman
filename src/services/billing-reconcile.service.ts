@@ -19,7 +19,7 @@ import { connection as sql } from '../db'
 import { getPlan } from '../billing/plans'
 import { billingPeriod } from '../billing/periods'
 import { billing } from '../config/billing.config'
-import { getMeteredCredits, syncSubscription } from './billing.service'
+import { getMeteredCredits, getSubscriptionPeriod, syncSubscription } from './billing.service'
 import { recordBillingPeriod } from './credits.service'
 
 export interface ReconcileResult {
@@ -54,9 +54,12 @@ export async function reconcileBilling(log: (text: string) => void = console.log
     try {
       const summary = await syncSubscription(account.id, account.email)
       planId = summary.planId
-      // The period's end is the next period's start, and any boundary anchors
-      // the account's periods equally well.
-      await recordBillingPeriod(account.id, summary.currentPeriodEnd)
+      // syncSubscription may have linked the customer just now, so read it back.
+      const [linked] = await sql<Array<{ customer: string | null }>>`
+        SELECT polar_customer_id AS customer FROM accounts_users WHERE id = ${account.id}`
+      if (linked?.customer) {
+        await recordBillingPeriod(account.id, await getSubscriptionPeriod(linked.customer, planId))
+      }
       result.synced += 1
       if (planId !== account.plan) log(`  ${account.id}: plan ${account.plan} → ${planId}`)
     } catch (err) {

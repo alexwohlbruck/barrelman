@@ -12,7 +12,7 @@ import { Polar } from '@polar-sh/sdk'
 import { billing } from '../config/billing.config'
 import { getPlan, listPlans, planForProductId, planProductId, type Plan } from '../billing/plans'
 import { findUserByPolarCustomerId, linkPolarCustomer, findUserById } from './accounts.service'
-import { grantCredits, recordBillingPeriod, setPlan } from './credits.service'
+import { grantCredits, recordBillingPeriod, setPlan, type SubscriptionPeriod } from './credits.service'
 import { invalidateUserKeys } from './api-keys.service'
 import { DEFAULT_PLAN } from '../billing/plans'
 
@@ -138,8 +138,8 @@ export function creditsForProduct(productId: string): number | null {
 export async function applyPlanFromProduct(
   userId: string,
   productId: string | undefined,
-  /** The subscription's `currentPeriodStart`, which anchors the account's allowance resets. */
-  periodStart?: Date | string | null,
+  /** The subscription's id and `currentPeriodStart`, which anchor the account's allowance resets. */
+  period?: SubscriptionPeriod | null,
 ): Promise<string | null> {
   const plan = productId ? planForProductId(productId) : null
 
@@ -157,7 +157,7 @@ export async function applyPlanFromProduct(
   }
 
   // Before the plan, so the new plan's first balance read sees its own period.
-  await recordBillingPeriod(userId, periodStart)
+  await recordBillingPeriod(userId, period)
   await setPlan(userId, plan.id)
   invalidateUserKeys(userId)
   return plan.id
@@ -364,6 +364,28 @@ export async function getMeteredCredits(userId: string): Promise<number | null> 
     return meters.reduce((sum, item) => sum + item.consumedUnits, 0)
   } catch (err) {
     console.warn(`[billing] could not read Polar meters for ${userId}`, err)
+    return null
+  }
+}
+
+/**
+ * The active subscription behind an account's plan, as the anchor the
+ * allowance periods need: its id and `currentPeriodStart`. Null when billing is
+ * off, the plan has no product, or nothing is active. For the reconciliation
+ * sweep, which only has `syncSubscription`'s summary otherwise, and that
+ * carries the period end.
+ */
+export async function getSubscriptionPeriod(customerId: string, planId: string): Promise<SubscriptionPeriod | null> {
+  if (!billing.enabled) return null
+  const productId = planProductId(getPlan(planId))
+  if (!productId) return null
+
+  try {
+    const subs = await polar().subscriptions.list({ customerId, productId, active: true, limit: 1 })
+    const sub = subs.result.items[0]
+    return sub ? { subscriptionId: sub.id, periodStart: sub.currentPeriodStart } : null
+  } catch (err) {
+    console.warn(`[billing] could not read the subscription period for customer ${customerId}`, err)
     return null
   }
 }

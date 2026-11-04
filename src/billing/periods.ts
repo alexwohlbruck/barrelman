@@ -116,6 +116,28 @@ export function previousPeriod(
   return billingPeriod(plan, anchor, addDays(period.start, -1))
 }
 
+/** An amount recorded against a range of days, `[start, end)`. */
+export interface Span {
+  start: string
+  end: string
+  amount: number
+}
+
+/**
+ * Total of the spans that share at least one day with `period`.
+ *
+ * Overage reports and pack usage are recorded per period, and a period's edges
+ * move when a subscription's anchor does (a resubscription on another day).
+ * Looking records up by exact period start would then find nothing and bill
+ * the same days again. Counting every overlapping record can only overstate
+ * what is already covered, which errs toward the customer.
+ */
+export function overlapping(spans: Span[], period: BillingPeriod): number {
+  let total = 0
+  for (const span of spans) if (span.start < period.end && span.end > period.start) total += span.amount
+  return total
+}
+
 /** Every period from the one containing `from` up to, not including, the one starting at `until`. */
 export function periodsBetween(
   plan: Plan,

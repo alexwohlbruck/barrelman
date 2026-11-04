@@ -229,6 +229,11 @@ export function ensureAccountsSchema(): Promise<void> {
       // Anchors subscribed accounts' allowance periods to their subscription
       // rather than the calendar month. See billing/periods.ts.
       await sql`ALTER TABLE accounts_users ADD COLUMN IF NOT EXISTS billing_period_start timestamptz`
+      await sql`ALTER TABLE accounts_users ADD COLUMN IF NOT EXISTS billing_period_subscription_id text`
+      await sql`ALTER TABLE accounts_users ADD COLUMN IF NOT EXISTS pack_settled_through date`
+      // Where a report's period ends, so reports can be matched by the days
+      // they cover when an anchor moves. Older rows were calendar months.
+      await sql`ALTER TABLE accounts_overage_reports ADD COLUMN IF NOT EXISTS cycle_end date`
 
       await sql`
         CREATE TABLE IF NOT EXISTS accounts_moderation_log (
