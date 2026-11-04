@@ -31,6 +31,7 @@ import { gbfsRoutes } from './routes/gbfs'
 import { ensureSchema, ensureGtfsSchema, ensureGbfsSchema } from './db'
 import { ensureAccountsSchema } from './services/accounts.service'
 import { flushPenalties, startPenaltySync } from './services/penalty-sync.service'
+import { startCacheBus } from './services/cache-bus.service'
 import { ensureOpsJobsSchema } from './services/ops-job-store'
 import { ensureRegionsSchema } from './services/region-store.service'
 import { ensureLandmarksSchema } from './services/landmarks.service'
@@ -82,6 +83,9 @@ await ensureAccountsSchema()
 // Penalty-box state from before this start (and from other replicas), then
 // kept in sync on a timer. See services/penalty-sync.service.ts.
 await startPenaltySync()
+// Key, suspension and plan changes made on another replica evict our caches
+// too. See services/cache-bus.service.ts.
+await startCacheBus()
 // Script run history, for job runtime estimates and progress bars.
 await initJobHistory()
 // 3D landmark models and placements, from every source (Open Landmarks and

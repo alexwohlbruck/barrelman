@@ -8,7 +8,8 @@
  * Verification sits in the hot path of every metered request, so a successful
  * lookup is cached in memory. The cache is keyed by the digest and holds the
  * account's plan and scopes, which means a revoked key stays usable for at most
- * `CACHE_TTL_MS` — revocation therefore also punches the entry out directly.
+ * `CACHE_TTL_MS` — revocation therefore also punches the entry out directly,
+ * here and, through the cache bus, on every other replica.
  */
 import { and, desc, eq, inArray, isNull } from 'drizzle-orm'
 import { LRUCache } from 'lru-cache'
@@ -17,6 +18,7 @@ import { apiKeys, users, type ApiKey } from '../schema/accounts'
 import { generateId, randomBase62, sha256Hex } from '../lib/crypto'
 import { invalidOrigins, normalizeOrigins } from '../lib/origins'
 import { ADMIN_SCOPE, ALL_SCOPES, isValidScope, type Scope } from '../billing/plans'
+import { publishCacheEvent, registerCacheHandler } from './cache-bus.service'
 
 const KEY_PREFIX = 'brm'
 /** 40 base62 characters ≈ 238 bits — far beyond guessing range. */
@@ -56,6 +58,31 @@ export function clearKeyCache(): void {
   cache.clear()
   negativeCache.clear()
 }
+
+function evictUserLocally(userId: string): void {
+  for (const [hash, entry] of cache.entries()) {
+    if (entry.userId === userId) cache.delete(hash)
+  }
+}
+
+/**
+ * Evict one key here and on every other replica. Every change to a key goes
+ * through this: a change that waits out the TTL somewhere is not in effect.
+ */
+function evictKey(hash: string): void {
+  cache.delete(hash)
+  publishCacheEvent({ kind: 'apiKey', hash })
+}
+
+// Another replica changed a key or an account. Only the positive cache is
+// touched: a revoked key falls through to the database, which refuses it.
+registerCacheHandler('api-keys', {
+  onEvent(event) {
+    if (event.kind === 'apiKey') cache.delete(event.hash)
+    else evictUserLocally(event.id)
+  },
+  onResync: () => cache.clear(),
+})
 
 // ── Creation ────────────────────────────────────────────────────────────
 
@@ -184,9 +211,8 @@ export async function resolveApiKey(presented: string): Promise<ResolvedKey | nu
  * waiting out the TTL.
  */
 export function invalidateUserKeys(userId: string): void {
-  for (const [hash, entry] of cache.entries()) {
-    if (entry.userId === userId) cache.delete(hash)
-  }
+  evictUserLocally(userId)
+  publishCacheEvent({ kind: 'user', id: userId })
 }
 
 // ── Management ──────────────────────────────────────────────────────────
@@ -235,7 +261,7 @@ export async function updateApiKeyScopes(userId: string, keyId: string, scopes: 
     .returning({ hash: apiKeys.hash })
   if (!row) return false
   // Scope changes must take effect now, not in a minute's time.
-  cache.delete(row.hash)
+  evictKey(row.hash)
   return true
 }
 
@@ -257,7 +283,7 @@ export async function updateApiKeyOrigins(
   if (!row) return false
   // Same reason as scopes: locking a key down has to take effect now, not up to
   // a cache TTL later, or the console reports a restriction that is not live.
-  cache.delete(row.hash)
+  evictKey(row.hash)
   return true
 }
 
@@ -274,7 +300,7 @@ export async function setKeyRateLimitExempt(userId: string, keyId: string, exemp
   if (!row) return false
   // Both directions have to be immediate: an operator lifting a limit is
   // usually doing it because a customer is being refused right now.
-  cache.delete(row.hash)
+  evictKey(row.hash)
   return true
 }
 
@@ -339,7 +365,7 @@ export async function revokeApiKey(userId: string, keyId: string): Promise<boole
   if (!row) return false
   // Evict immediately — a revoked key that keeps working for another minute is
   // not revoked in any sense the user would accept.
-  cache.delete(row.hash)
+  evictKey(row.hash)
   negativeCache.set(row.hash, true)
   return true
 }
