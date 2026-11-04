@@ -220,16 +220,17 @@ re-renders it with planetiler — a few minutes for a couple of US states. Set
 
 On a country-sized import, three of the things an update triggers take hours:
 
-- **Rebuild routing graph.** GraphHopper re-imports the whole extract, and street
-  routing is down until it finishes.
+- **Rebuild routing graph.** GraphHopper re-imports the whole extract. The old
+  graph keeps serving meanwhile, but the build needs a second graph's worth of
+  disk and its own heap (see [rebuilding the routing engines](#rebuilding-the-routing-engines)).
 - **Rebuild basemap.** planetiler re-renders the whole archive.
 - **Refresh 3D buildings.** The `buildings_3d` view is rebuilt from every
   building in the database.
 
 Turn all three off on the OSM Update schedule so the nightly run only updates
 the database. Then enable the weekly **Rebuild Basemap** and **Refresh 3D
-Buildings** schedules, and run **Rebuild GraphHopper** when you can afford the
-routing downtime.
+Buildings** schedules, and run **Rebuild GraphHopper** at a quiet time, away
+from the nightly update's heavy SQL.
 
 ### Without middle tables
 
@@ -322,6 +323,85 @@ has actually changed upstream — it compares each imported feed's version sha
 against Transitland's. That's what the seeded GTFS schedule runs. Its first run
 only records a baseline; it can't detect drift until it has a prior sha to
 compare against.
+
+## Rebuilding the routing engines
+
+`scripts/rebuild-graphhopper.sh` and `scripts/rebuild-motis.sh` (**Rebuild
+GraphHopper** and **Rebuild MOTIS Dataset** in the console) build the new
+dataset beside the one being served, check it, and only then swap it in. Routing
+and transit stay up for the whole build and are down only while the server
+restarts onto the new files, usually under a minute.
+
+| | GraphHopper | MOTIS |
+|---|---|---|
+| Live dataset | `graph-cache` on the OSM volume | `data` on the gtfs-data volume |
+| Built into | `graph-cache.next` | `data.next` |
+| Kept for rollback | `graph-cache.prev` | `data.prev` |
+| Checks before the swap | import exits 0; core graph files and every profile's landmarks present; not under half the size of the current graph | import exits 0; `tt.bin` present; the import's `timetable_metrics.json` counts trips |
+| Optional trial server | loads the new graph and routes between sample points | loads the new dataset and returns stops |
+
+A dataset that fails a check is deleted and the live one is left alone. The
+replaced dataset becomes `.prev` only if it was complete, so a half-built one
+never overwrites a good rollback copy. If the server does not answer after the
+swap, the script puts the previous dataset back and keeps the new one as
+`graph-cache.failed` or `data.failed`.
+
+### Disk
+
+The volume needs free space of about 1.2 times the current dataset before a
+rebuild starts: for the United States that is about 34 GB for the 28 GB graph.
+A first build, with nothing to measure, assumes 2.5 times the extract for
+GraphHopper. When there is not enough room, the script frees `.prev` if that is
+enough and the live dataset is serving. Otherwise it refuses to start and says
+how much it needs. It never deletes `.prev` while the live dataset is down,
+since that may be the only good copy.
+
+Between rebuilds the volume holds two copies, the live one and `.prev`. During
+a rebuild it holds three. Budget for that when sizing the volume.
+
+### Memory
+
+A GraphHopper rebuild runs a second JVM next to the serving one for the whole
+build. The build takes up to `GRAPHHOPPER_BUILD_JAVA_OPTS` of heap (by default
+the serving `GRAPHHOPPER_JAVA_OPTS`) and holds most of it through landmark
+preparation, which is hours for a country. The script warns when the build heap
+does not fit in available memory, and when it starts beside a long-running SQL
+statement: an overlapping build has been OOM-killed before. On a box that cannot
+hold both, pass `--stop-server`. The serving container is stopped for the build,
+so routing is down as it used to be, but the new graph is still checked before
+it replaces the old one and the old one is kept for rollback.
+
+`motis import` likewise runs beside the live MOTIS server. `--stop-server` does
+the same there.
+
+The trial servers cost a second serving process. GraphHopper's runs with the
+serving heap plus page cache for the graph, so `auto` starts it only on a host
+with at least `GRAPHHOPPER_VERIFY_MIN_RAM_GB` (48) of RAM and room for it at
+that moment. MOTIS's loads the whole dataset, so `auto` starts it when
+available memory exceeds the dataset's size plus 1 GB. Force either with
+`--verify-route` or `--verify-server`, or turn it off with
+`--no-verify-route` or `--no-verify-server`.
+
+### Rolling back
+
+```bash
+docker compose exec barrelman-ops bash scripts/rebuild-graphhopper.sh --rollback
+docker compose exec barrelman-ops bash scripts/rebuild-motis.sh --rollback
+```
+
+Each swaps the live dataset and `.prev` and restarts the server. Running it
+again swaps them back. Both are also options on the console tasks.
+
+A rollback across an engine upgrade does not work on its own: `.prev` was
+written by the old engine version, which the new one refuses to load. Restore
+the old image pin first (see [upgrading pinned images](#upgrading-pinned-images)),
+then roll back. For the same reason, moving a pin still takes routing or
+transit down until the rebuild finishes, because the recreated server cannot
+load the dataset it has.
+
+Both scripts wait for the build to finish, so a GraphHopper rebuild is a
+job that runs for hours on a large region. `run-import.sh` and `update-osm.sh`
+wait for it too, and fail if it failed, though the previous graph keeps serving.
 
 ## Monitoring and alerts
 
