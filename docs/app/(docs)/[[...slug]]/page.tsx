@@ -20,9 +20,12 @@ export default async function Page(props: PageProps) {
   if (!page) notFound()
 
   const MDX = page.data.body
+  // The changelog has an Added/Changed/Fixed heading under every version, so
+  // its full table of contents runs to hundreds of entries. List versions only.
+  const toc = page.url === '/changelog' ? page.data.toc.filter((item) => item.depth <= 2) : page.data.toc
 
   return (
-    <DocsPage toc={page.data.toc} full={page.data.full}>
+    <DocsPage toc={toc} full={page.data.full}>
       <DocsTitle>{page.data.title}</DocsTitle>
       <DocsDescription>{page.data.description}</DocsDescription>
       <DocsBody>
