@@ -4,7 +4,11 @@
  * host's config with sed, and a regex that matched `barrelman` inside
  * `barrelman-ops` would deploy the API image as the worker.
  */
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from 'bun:test'
+
+// The deploy tests shell out to the real `docker compose config`, which can take
+// several seconds on a cold CI runner.
+setDefaultTimeout(30_000)
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
