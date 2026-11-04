@@ -220,9 +220,9 @@ re-renders it with planetiler — a few minutes for a couple of US states. Set
 
 On a country-sized import, three of the things an update triggers take hours:
 
-- **Rebuild routing graph.** GraphHopper re-imports the whole extract. The old
-  graph keeps serving meanwhile, but the build needs a second graph's worth of
-  disk and its own heap (see [rebuilding the routing engines](#rebuilding-the-routing-engines)).
+- **Rebuild routing graph.** GraphHopper re-imports the whole extract, with
+  street routing down meanwhile unless it builds alongside, and needs a second
+  graph's worth of disk (see [rebuilding the routing engines](#rebuilding-the-routing-engines)).
 - **Rebuild basemap.** planetiler re-renders the whole archive.
 - **Refresh 3D buildings.** The `buildings_3d` view is rebuilt from every
   building in the database.
@@ -328,9 +328,13 @@ compare against.
 
 `scripts/rebuild-graphhopper.sh` and `scripts/rebuild-motis.sh` (**Rebuild
 GraphHopper** and **Rebuild MOTIS Dataset** in the console) build the new
-dataset beside the one being served, check it, and only then swap it in. Routing
-and transit stay up for the whole build and are down only while the server
-restarts onto the new files, usually under a minute.
+dataset beside the one being served, check it, and only then swap it in. By
+default each stops its server for the build, so routing or transit is down for
+it as before, but a build that fails its checks no longer costs the old
+dataset. Set `GRAPHHOPPER_BUILD_ALONGSIDE` or `MOTIS_BUILD_ALONGSIDE` to keep the
+server up through the build, so it is down only while the server restarts onto
+the new files, usually under a minute. That needs the memory for two engines at
+once (see [memory](#memory)).
 
 | | GraphHopper | MOTIS |
 |---|---|---|
@@ -357,22 +361,52 @@ how much it needs. It never deletes `.prev` while the live dataset is down,
 since that may be the only good copy.
 
 Between rebuilds the volume holds two copies, the live one and `.prev`. During
-a rebuild it holds three. Budget for that when sizing the volume.
+a rebuild it holds three. Keeping `.prev` costs a whole extra graph, 29 GB for
+a United States build, and the same again during the next rebuild. Budget for
+that when sizing the volume.
+
+On a small box, where the OSM volume shares one disk with Postgres and the
+extracts, or whenever the extra graph is not worth a rollback, delete `.prev`
+after a rebuild you are happy with:
+
+```bash
+docker compose exec barrelman-ops rm -rf /data/graph-cache.prev
+docker compose exec barrelman-ops rm -rf /gtfs-data/data.prev
+```
+
+The next rebuild then needs only 1.2 times the live dataset free, and
+`--rollback` has nothing to return to until a rebuild creates a new `.prev`.
 
 ### Memory
 
-A GraphHopper rebuild runs a second JVM next to the serving one for the whole
-build. The build takes up to `GRAPHHOPPER_BUILD_JAVA_OPTS` of heap (by default
-the serving `GRAPHHOPPER_JAVA_OPTS`) and holds most of it through landmark
-preparation, which is hours for a country. The script warns when the build heap
-does not fit in available memory, and when it starts beside a long-running SQL
-statement: an overlapping build has been OOM-killed before. On a box that cannot
-hold both, pass `--stop-server`. The serving container is stopped for the build,
-so routing is down as it used to be, but the new graph is still checked before
-it replaces the old one and the old one is kept for rollback.
+By default a rebuild stops the server before it starts the build, so only one
+copy of the engine is in memory. That is what unattended nightly runs get,
+because two at once has OOM-killed MOTIS repeatedly on a 30 GB box with 2 GB
+available.
 
-`motis import` likewise runs beside the live MOTIS server. `--stop-server` does
-the same there.
+Building alongside (`GRAPHHOPPER_BUILD_ALONGSIDE`, `MOTIS_BUILD_ALONGSIDE`) is
+opt-in:
+
+| Value | Behaviour |
+|---|---|
+| `false` (default) | Stop the server for the build |
+| `auto` | Build alongside only if memory is available for the build plus a 4 GB margin: the build heap for GraphHopper, 8 GB for MOTIS. Otherwise stop the server and log why |
+| `true` | Always build alongside |
+
+`--stop-server` stops the server whatever the variable says.
+
+A GraphHopper build holds most of its heap through landmark preparation, which
+is hours for a country. Unless `GRAPHHOPPER_BUILD_JAVA_OPTS` is set, the heap is
+the serving `GRAPHHOPPER_JAVA_OPTS` cut down to the memory available, less
+1 GB, measured after the server has stopped. A box with under 2 GB available
+refuses to build. The script also warns when it starts beside a long-running
+SQL statement: an overlapping build has been OOM-killed before.
+
+The build and import containers run under fixed names
+(`barrelman-graphhopper-build`, `barrelman-motis-import`). A rebuild refuses to
+start while one is still running, which happens when an earlier run was killed
+outright and left it behind. Remove it with `docker rm -f` once you are sure no
+rebuild is in progress.
 
 The trial servers cost a second serving process. GraphHopper's runs with the
 serving heap plus page cache for the graph, so `auto` starts it only on a host
