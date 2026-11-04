@@ -1,6 +1,6 @@
-import { describe, test, expect } from 'bun:test'
+import { describe, test, expect, spyOn } from 'bun:test'
 import type { ErrorEvent } from '@sentry/bun'
-import { scrubEvent } from './error-tracking'
+import { scrubEvent, scrubText } from './error-tracking'
 import { statusForError } from '../middleware/error-tracking'
 
 describe('scrubEvent', () => {
@@ -29,6 +29,22 @@ describe('scrubEvent', () => {
     expect(event.user).toBeUndefined()
     expect(event.exception!.values![0].value).toBe('No account for [email] using [redacted]')
     expect(event.breadcrumbs).toEqual([{ message: '[redacted]' }])
+  })
+})
+
+describe('scrubText', () => {
+  test('strips credentials from query strings quoted in an error', () => {
+    expect(scrubText('GET https://transit.land/api/v2/rest/feeds?apikey=abc123&limit=1 failed: 503')).toBe(
+      'GET https://transit.land/api/v2/rest/feeds?apikey=[redacted]&limit=1 failed: 503',
+    )
+    expect(scrubText('url /x?token=t0k&api_key=k3y&access_token=a.b')).toBe(
+      'url /x?token=[redacted]&api_key=[redacted]&access_token=[redacted]',
+    )
+    expect(scrubText('/feeds?key=1 and ?auth=2')).toBe('/feeds?key=[redacted] and ?auth=[redacted]')
+  })
+
+  test('leaves other parameters alone', () => {
+    expect(scrubText('/search?q=coffee&limit=5')).toBe('/search?q=coffee&limit=5')
   })
 })
 
@@ -74,6 +90,66 @@ describe('errorTracking middleware', () => {
       expect((await app.handle(new Request('http://localhost/missing'))).status).toBe(404)
       expect(captured).toHaveLength(1)
     } finally {
+      globals[key] = undefined
+    }
+  })
+
+  test('mounted ahead of requestContext, a thrown 500 is reported once and still gets the generic body', async () => {
+    const { Elysia } = await import('elysia')
+    const { errorTracking } = await import('../middleware/error-tracking')
+    const { createRequestContext } = await import('../middleware/request-context')
+    const captured: Array<{ err: unknown; tags?: Record<string, string> }> = []
+    const key = Symbol.for('barrelman.sentry')
+    const globals = globalThis as Record<symbol, unknown>
+    globals[key] = {
+      captureException: (err: unknown, ctx?: { tags?: Record<string, string> }) => captured.push({ err, tags: ctx?.tags }),
+    }
+    const quiet = spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      // The order index.ts uses.
+      const app = new Elysia()
+        .use(errorTracking)
+        .use(createRequestContext({ refuseUnauthenticated: async () => null }))
+        .get('/boom', () => {
+          throw new Error('connect ECONNREFUSED 10.0.0.5:5432')
+        })
+
+      const res = await app.handle(new Request('http://localhost/boom'))
+      expect(res.status).toBe(500)
+      const body = await res.json()
+      expect(body).toEqual({ error: 'Internal server error', requestId: res.headers.get('x-request-id') })
+      expect(captured).toHaveLength(1)
+      expect(captured[0].tags?.requestId).toBe(body.requestId)
+      // Only the errorTracking hook tags the route, so this fails if requestContext runs first.
+      expect(captured[0].tags?.route).toBe('/boom')
+    } finally {
+      quiet.mockRestore()
+      globals[key] = undefined
+    }
+  })
+})
+
+describe('serverError', () => {
+  test('reports a caught 5xx tagged with its request id, and not a 4xx', async () => {
+    const { serverError } = await import('./errors')
+    const captured: Array<{ err: unknown; tags?: Record<string, string> }> = []
+    const key = Symbol.for('barrelman.sentry')
+    const globals = globalThis as Record<symbol, unknown>
+    globals[key] = {
+      captureException: (err: unknown, ctx?: { tags?: Record<string, string> }) => captured.push({ err, tags: ctx?.tags }),
+    }
+    const quiet = spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const err = new Error('upstream failed')
+      const body = serverError(new Request('http://localhost/route?key=secret'), {}, err, 'Routing failed', 502)
+      expect(captured).toHaveLength(1)
+      expect(captured[0].err).toBe(err)
+      expect(captured[0].tags).toMatchObject({ requestId: body.requestId, path: '/route' })
+
+      serverError(new Request('http://localhost/x'), {}, new Error('bad input'), 'Bad input', 400)
+      expect(captured).toHaveLength(1)
+    } finally {
+      quiet.mockRestore()
       globals[key] = undefined
     }
   })

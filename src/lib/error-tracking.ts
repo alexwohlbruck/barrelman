@@ -45,10 +45,13 @@ const SENTRY_KEY = Symbol.for('barrelman.sentry')
 const EMAIL = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi
 // Our own key format plus anything presented as a bearer token.
 const SECRET = /\b(brm_[A-Za-z0-9_]+|Bearer\s+[A-Za-z0-9._~+/-]+=*)/g
+// Credentials in a URL quoted inside an error, e.g. a failed Transitland call
+// built with `?apikey=`. The parameter name is kept so the error still reads.
+const QUERY_SECRET = /([?&](?:api_?key|key|token|auth|access_token)=)[^&\s]+/gi
 
 /** Strip emails and credentials from free text such as an error message. */
 export function scrubText(text: string): string {
-  return text.replace(EMAIL, '[email]').replace(SECRET, '[redacted]')
+  return text.replace(QUERY_SECRET, '$1[redacted]').replace(EMAIL, '[email]').replace(SECRET, '[redacted]')
 }
 
 /** Drop query strings: they carry API keys for us and for upstream services. */
@@ -113,10 +116,21 @@ export async function initErrorTracking(component: 'api' | 'ops'): Promise<void>
   }
 }
 
-/** Report an error. A no-op when error tracking is off. */
+/**
+ * Errors already sent. A thrown handler error passes through the errorTracking
+ * hook and then requestContext's serverError(), and both report; this keeps it
+ * to one event.
+ */
+const reported = new WeakSet<object>()
+
+/** Report an error once. A no-op when error tracking is off. */
 export function captureError(error: unknown, context?: { tags?: Record<string, string> }): void {
   const Sentry = loaded()
   if (!Sentry) return
+  if (typeof error === 'object' && error !== null) {
+    if (reported.has(error)) return
+    reported.add(error)
+  }
   Sentry.captureException(error, context?.tags ? { tags: context.tags } : undefined)
 }
 
