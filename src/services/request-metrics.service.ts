@@ -189,6 +189,46 @@ const UPSERT_SET = [
   `latency_hist = ${HIST_MERGE}`,
 ].join(',\n  ')
 
+/** Upsert buffered rows. Swappable so tests can make a flush fail without Postgres. */
+async function upsertRows(rows: BufferEntry[]): Promise<void> {
+  const columns = ['hour', 'user_id', 'api_key_id', 'endpoint', ...COLUMNS.map(([, c]) => c), 'latency_hist']
+  const params: unknown[] = []
+  const tuples = rows.map((row) => {
+    const values = [
+      row.hour,
+      row.userId,
+      row.apiKeyId,
+      row.endpoint,
+      ...COLUMNS.map(([field]) => row[field]),
+      `{${row.hist.join(',')}}`,
+    ]
+    const start = params.length
+    params.push(...values)
+    return `(${values.map((_, i) => `$${start + i + 1}`).join(', ')})`
+  })
+  // Built by hand rather than with postgres.js's row helper, which would
+  // need the array column's type spelled out per row. Every identifier
+  // here is a constant; every value is a bound parameter.
+  await sql.unsafe(
+    `INSERT INTO accounts_request_metrics (${columns.join(', ')})
+     SELECT hour::timestamptz, user_id, api_key_id, endpoint, ${COLUMNS.map(([, c]) => `${c}::bigint`).join(', ')}, latency_hist::integer[]
+     FROM (VALUES ${tuples.join(', ')}) AS v(${columns.join(', ')})
+     ON CONFLICT (hour, user_id, api_key_id, endpoint) DO UPDATE SET
+       ${UPSERT_SET}`,
+    params as never[],
+  )
+}
+
+let writeRows = upsertRows
+
+/** For tests: replace the flush writer. Returns a function that restores it. */
+export function setRequestMetricsWriterForTests(writer: (rows: BufferEntry[]) => Promise<void>): () => void {
+  writeRows = writer
+  return () => {
+    writeRows = upsertRows
+  }
+}
+
 let flushing: Promise<void> | null = null
 
 export async function flushRequestMetrics(): Promise<void> {
@@ -200,32 +240,7 @@ export async function flushRequestMetrics(): Promise<void> {
 
   flushing = (async () => {
     try {
-      const columns = ['hour', 'user_id', 'api_key_id', 'endpoint', ...COLUMNS.map(([, c]) => c), 'latency_hist']
-      const params: unknown[] = []
-      const tuples = rows.map((row) => {
-        const values = [
-          row.hour,
-          row.userId,
-          row.apiKeyId,
-          row.endpoint,
-          ...COLUMNS.map(([field]) => row[field]),
-          `{${row.hist.join(',')}}`,
-        ]
-        const start = params.length
-        params.push(...values)
-        return `(${values.map((_, i) => `$${start + i + 1}`).join(', ')})`
-      })
-      // Built by hand rather than with postgres.js's row helper, which would
-      // need the array column's type spelled out per row. Every identifier
-      // here is a constant; every value is a bound parameter.
-      await sql.unsafe(
-        `INSERT INTO accounts_request_metrics (${columns.join(', ')})
-         SELECT hour::timestamptz, user_id, api_key_id, endpoint, ${COLUMNS.map(([, c]) => `${c}::bigint`).join(', ')}, latency_hist::integer[]
-         FROM (VALUES ${tuples.join(', ')}) AS v(${columns.join(', ')})
-         ON CONFLICT (hour, user_id, api_key_id, endpoint) DO UPDATE SET
-           ${UPSERT_SET}`,
-        params as never[],
-      )
+      await writeRows(rows)
     } catch (err) {
       // Put the counters back so a transient database error costs nothing.
       for (const row of rows) {
@@ -275,15 +290,26 @@ export const REQUEST_METRICS_RETENTION_DAYS = RETENTION_DAYS
  * to accounts_users, because the service and anonymous sentinels share the
  * column, so deleting an account does not cascade here on its own.
  *
- * The buffer is cleared first and any flush already in flight is waited out,
- * so a flush cannot write the account's counters back after the delete.
+ * The buffer is cleared, any flush already in flight is waited out, and the
+ * buffer is cleared again. The second pass matters: a flush that fails puts
+ * its rows back in the buffer, the account's included, and the next flush
+ * would write them out after the delete.
  */
-export async function eraseRequestMetrics(userId: string): Promise<void> {
+export async function eraseRequestMetrics(
+  userId: string,
+  deleteRows: (userId: string) => Promise<unknown> = (id) =>
+    sql`DELETE FROM accounts_request_metrics WHERE user_id = ${id}`,
+): Promise<void> {
+  dropBuffered(userId)
+  if (flushing) await flushing
+  dropBuffered(userId)
+  await deleteRows(userId)
+}
+
+function dropBuffered(userId: string): void {
   for (const [mapKey, entry] of buffer) {
     if (entry.userId === userId) buffer.delete(mapKey)
   }
-  if (flushing) await flushing
-  await sql`DELETE FROM accounts_request_metrics WHERE user_id = ${userId}`
 }
 
 /** Exposed for tests. */
