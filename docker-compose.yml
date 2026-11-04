@@ -253,6 +253,10 @@ services:
       # Caps runaway queries on the API query pool only — schema DDL and the
       # enrichment backfill get their own untimed connections (see src/db.ts).
       BARRELMAN_STATEMENT_TIMEOUT_MS: ${BARRELMAN_STATEMENT_TIMEOUT_MS:-10000}
+      # Main query pool, and the separate one for auth, keys, credits and
+      # metering. Blank uses the defaults in src/db.ts (20 and 5).
+      DB_POOL_MAX: ${DB_POOL_MAX:-}
+      DB_ACCOUNTS_POOL_MAX: ${DB_ACCOUNTS_POOL_MAX:-}
       OLLAMA_HOST: ${OLLAMA_HOST:-http://ollama:11434}
       TTS_URL: ${TTS_URL:-}
       TTS_MODEL_REVISION: ${TTS_MODEL_REVISION:-v1.0}
@@ -529,6 +533,20 @@ services:
       PORTOLAN_BIN: ${PORTOLAN_BIN:-/portolan-data/bin/portolan}
       # scripts/*.sh docker-exec into these sibling containers by name.
       DB_CONTAINER: barrelman-db
+      # State backups (scripts/backup-db.sh, scripts/restore-db.sh). Dumps land
+      # in /data/backups on the OSM volume; set a bucket to copy them off-box.
+      BACKUP_DIR: ${BACKUP_DIR:-}
+      BACKUP_KEEP_LOCAL_DAYS: ${BACKUP_KEEP_LOCAL_DAYS:-}
+      BACKUP_KEEP_REMOTE_DAYS: ${BACKUP_KEEP_REMOTE_DAYS:-}
+      BACKUP_S3_BUCKET: ${BACKUP_S3_BUCKET:-}
+      BACKUP_S3_ENDPOINT: ${BACKUP_S3_ENDPOINT:-}
+      BACKUP_S3_REGION: ${BACKUP_S3_REGION:-}
+      BACKUP_S3_ACCESS_KEY_ID: ${BACKUP_S3_ACCESS_KEY_ID:-}
+      BACKUP_S3_SECRET_ACCESS_KEY: ${BACKUP_S3_SECRET_ACCESS_KEY:-}
+      BACKUP_S3_PREFIX: ${BACKUP_S3_PREFIX:-}
+      # The worker and the bun scripts it runs load src/db.ts too.
+      DB_POOL_MAX: ${DB_POOL_MAX:-}
+      DB_ACCOUNTS_POOL_MAX: ${DB_ACCOUNTS_POOL_MAX:-}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - barrelman-osm-data:/data

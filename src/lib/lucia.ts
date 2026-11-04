@@ -12,7 +12,7 @@
  */
 import { Lucia, TimeSpan } from 'lucia'
 import { DrizzlePostgreSQLAdapter } from '@lucia-auth/adapter-drizzle'
-import { db } from '../db'
+import { accountsDb as db } from '../db'
 import { sessions, users, type UserRole } from '../schema/accounts'
 import { secureCookies, sessionCookieName, sessionTtlMs } from '../config/accounts.config'
 

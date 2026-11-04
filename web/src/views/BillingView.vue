@@ -18,7 +18,8 @@ import CardContent from '@/components/ui/CardContent.vue'
 import CardHeader from '@/components/ui/CardHeader.vue'
 import CardTitle from '@/components/ui/CardTitle.vue'
 import Spinner from '@/components/ui/Spinner.vue'
-import { getBillingConfig, getBillingStatus, getLedger, getPortalUrl, startCheckout, syncBilling } from '@/lib/api'
+import Dialog from '@/components/ui/Dialog.vue'
+import { changePlan, getBillingConfig, getBillingStatus, getLedger, getPortalUrl, startCheckout, syncBilling } from '@/lib/api'
 import { toast } from '@/lib/toast'
 import { formatNumber } from '@/lib/utils'
 import { refreshUser } from '@/lib/auth'
@@ -38,6 +39,34 @@ function planRank(id: string) {
   return config.value?.plans.find((p) => p.id === id)?.rank ?? 0
 }
 const billingEnabled = computed(() => config.value?.billingEnabled === true)
+
+const subscription = computed(() => status.value?.subscription ?? null)
+/** Mirrors isLiveStatus on the server: the statuses under which the plan is still paid for. */
+const hasLiveSubscription = computed(() =>
+  ['active', 'trialing', 'past_due'].includes(subscription.value?.status ?? ''),
+)
+const pastDue = computed(() => subscription.value?.status === 'past_due')
+
+function formatDate(iso: string) {
+  return new Date(iso).toLocaleDateString(undefined, { dateStyle: 'medium' })
+}
+
+/** "Cancels on <date>" for a subscription cancelled at the period end, else null. */
+const cancelsOn = computed(() => {
+  const sub = subscription.value
+  if (!sub?.cancelAtPeriodEnd || !sub.currentPeriodEnd || !hasLiveSubscription.value) return null
+  return formatDate(sub.currentPeriodEnd)
+})
+
+/** The plan a confirmation dialog is open for, when changing an existing subscription. */
+const pendingPlan = ref<Plan | null>(null)
+const confirmOpen = computed({
+  get: () => pendingPlan.value !== null,
+  set: (open: boolean) => {
+    if (!open) pendingPlan.value = null
+  },
+})
+const pendingIsUpgrade = computed(() => (pendingPlan.value ? planRank(pendingPlan.value.id) > planRank(currentPlanId.value) : false))
 
 /**
  * Live price from the payment provider when it is configured, falling back to
@@ -97,13 +126,36 @@ onMounted(async () => {
   if (route.query.checkout === 'success') await sync()
 })
 
-async function subscribe(planId: string) {
+/**
+ * Pick a plan. An existing subscription is moved onto the new plan in place,
+ * after a confirmation, since Polar charges or credits the difference straight
+ * away. Opening a checkout instead would start a second subscription billed
+ * alongside the first.
+ */
+function choosePlan(plan: Plan) {
+  if (hasLiveSubscription.value) {
+    pendingPlan.value = plan
+    return
+  }
+  void applyPlan(plan.id)
+}
+
+async function applyPlan(planId: string) {
   busy.value = planId
   try {
-    const { checkoutUrl } = await startCheckout({ plan: planId })
-    window.location.href = checkoutUrl
+    const result = await changePlan(planId)
+    if (result.checkoutUrl) {
+      // Keep the spinner up while the browser leaves for the checkout.
+      window.location.href = result.checkoutUrl
+      return
+    }
+    pendingPlan.value = null
+    await Promise.all([load(), refreshUser()])
+    const name = config.value?.plans.find((p) => p.id === result.planId)?.name ?? result.planId
+    toast({ title: `You are now on the ${name} plan`, variant: 'success' })
+    busy.value = ''
   } catch (err) {
-    fail(err, 'Could not start checkout')
+    fail(err, 'Could not change plan')
     busy.value = ''
   }
 }
@@ -174,6 +226,34 @@ async function sync() {
         below describe what metering would apply if it were.
       </div>
 
+      <!-- Failed payment: the plan carries on while Polar retries, so this is a prompt, not an outage -->
+      <div
+        v-if="billingEnabled && pastDue"
+        class="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-destructive bg-destructive/5 px-4 py-3 text-sm"
+      >
+        <div>
+          <p class="font-medium text-destructive">Your last payment did not go through</p>
+          <p class="mt-1 text-muted-foreground">
+            Your {{ status?.plan.name }} plan stays active while the payment is retried. If the retries fail,
+            the account moves to the free plan.
+          </p>
+        </div>
+        <Button size="sm" :disabled="busy === 'portal'" @click="openPortal">
+          <ExternalLink class="size-4" />
+          Update payment method
+        </Button>
+      </div>
+
+      <!-- Scheduled cancellation: paid through the period, then free -->
+      <div
+        v-else-if="billingEnabled && cancelsOn"
+        class="rounded-lg border border-border bg-muted/40 px-4 py-3 text-sm text-muted-foreground"
+      >
+        Your {{ status?.plan.name }} plan is cancelled and ends on {{ cancelsOn }}. It keeps its allowance until
+        then, and the account moves to the free plan afterwards. Resume it from
+        <button class="underline underline-offset-2 hover:text-foreground" @click="openPortal">the billing portal</button>.
+      </div>
+
       <!-- Exhausted free quota: the single most useful thing to say here -->
       <div
         v-if="status && !status.balance.overageAllowed && status.balance.remaining <= 0"
@@ -197,7 +277,8 @@ async function sync() {
         >
           <CardHeader class="flex-row items-center justify-between">
             <CardTitle>{{ plan.name }}</CardTitle>
-            <Badge v-if="plan.id === currentPlanId" variant="success">Current</Badge>
+            <Badge v-if="plan.id === currentPlanId && cancelsOn" variant="warning">Cancels on {{ cancelsOn }}</Badge>
+            <Badge v-else-if="plan.id === currentPlanId" variant="success">Current</Badge>
           </CardHeader>
           <CardContent class="flex h-full flex-col gap-4">
             <div>
@@ -247,7 +328,7 @@ async function sync() {
                 v-else-if="billingEnabled && plan.id !== currentPlanId && plan.priceCents > 0"
                 class="w-full"
                 :disabled="busy === plan.id"
-                @click="subscribe(plan.id)"
+                @click="choosePlan(plan)"
               >
                 <Spinner v-if="busy === plan.id" class="size-4" />
                 <template v-else>{{ planRank(plan.id) > planRank(currentPlanId) ? 'Upgrade' : 'Switch' }}</template>
@@ -305,4 +386,22 @@ async function sync() {
       </Card>
     </template>
   </div>
+
+  <Dialog
+    v-model:open="confirmOpen"
+    :title="pendingPlan ? `Switch to ${pendingPlan.name}?` : ''"
+    :description="
+      pendingIsUpgrade
+        ? 'Your subscription moves to the new plan now, and the prorated difference for the rest of this period is charged straight away.'
+        : 'Your subscription moves to the new plan now. The unused part of this period is credited to your next invoice.'
+    "
+  >
+    <div class="flex justify-end gap-2">
+      <Button variant="outline" :disabled="busy !== ''" @click="confirmOpen = false">Cancel</Button>
+      <Button :disabled="busy !== ''" @click="pendingPlan && applyPlan(pendingPlan.id)">
+        <Spinner v-if="pendingPlan && busy === pendingPlan.id" class="size-4" />
+        <template v-else>Switch plan</template>
+      </Button>
+    </div>
+  </Dialog>
 </template>
