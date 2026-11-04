@@ -352,7 +352,7 @@ describe('computePackUsage — packs are used up across periods', () => {
       from: october.start,
       days: [{ day: '2026-10-20', credits: developer.monthlyCredits + 30_000 }],
       ledger: [pack(50_000, '2026-10-25T00:00:00Z')],
-      reported: [{ start: '2026-10-01', end: '2026-11-01', amount: 20_000 }],
+      reported: { '2026-10-01': 20_000 },
     })
 
     expect(usage).toEqual([{ period: october, credits: 10_000 }])
@@ -395,5 +395,27 @@ describe('computePackUsage — packs are used up across periods', () => {
     })
 
     expect(usage).toEqual([{ period: { start: '2026-11-01', end: '2026-11-14' }, credits: 7_000 }])
+  })
+
+  test('a change mid-period settles the days so far under the old plan', () => {
+    // Business until 10 November, then developer. The first ten days are
+    // settled at the change against business's allowance, so the pack is
+    // untouched; developer later judges only the days from the 10th.
+    const business = getPlan('business')
+    const ledger = [pack(50_000, '2026-10-05T00:00:00Z')]
+    const days = [
+      { day: '2026-11-05', credits: 9_000_000 },
+      { day: '2026-11-12', credits: developer.monthlyCredits + 4_000 },
+    ]
+
+    const atChange = computePackUsage({
+      userId: user, plan: business, periods: [november], days, ledger, from: november.start, until: '2026-11-10',
+    })
+    const atClose = computePackUsage({
+      userId: user, plan: developer, periods: [november], days, ledger, from: '2026-11-10',
+    })
+
+    expect(atChange).toEqual([])
+    expect(atClose).toEqual([{ period: { start: '2026-11-10', end: '2026-12-01' }, credits: 4_000 }])
   })
 })

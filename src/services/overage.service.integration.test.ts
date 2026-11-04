@@ -65,6 +65,15 @@ async function reports(userId: string): Promise<Array<{ cycle: string; reported:
   return [...rows]
 }
 
+/** A UTC day relative to today, for tests that go through the real clock. */
+function dayOffset(days: number): string {
+  return new Date(Date.now() + days * 86_400_000).toISOString().slice(0, 10)
+}
+
+function sentFor(userId: string): number[] {
+  return ingested.filter((event) => event.externalCustomerId === userId).map((event) => event.metadata.credits)
+}
+
 const saved = { enabled: false, meterUsage: false }
 
 beforeAll(() => {
@@ -162,18 +171,40 @@ describe.skipIf(!DATABASE_URL)('subscription anchors', () => {
     expect(await anchorOf()).toStartWith('2026-03-15')
   })
 
-  test('a resubscription on another day does not bill reported overage again', async () => {
-    const user = await makeUser('developer')
-    await m!.credits.recordBillingPeriod(user, { subscriptionId: 'sub-a', periodStart: '2026-01-31T10:00:00Z' })
-    await use(user, '2026-03-01', 1_806_000)
+  test('a resubscription on another day bills the new subscription from the change, once', async () => {
+    // Subscribed to sub A since before any of this usage.
+    const user = await makeUser('developer', `${dayOffset(-20)}T10:00:00Z`)
+    await m!.sql`UPDATE accounts_users SET billing_period_subscription_id = 'sub-a' WHERE id = ${user}`
+    await use(user, dayOffset(-10), 1_300_000)
+    await m!.overage.reportPendingOverage()
+    expect(sentFor(user)).toEqual([300_000])
 
-    await m!.overage.reportPendingOverage({ now: new Date('2026-03-05T00:00:00Z') })
-    expect(await reports(user)).toEqual([{ cycle: '2026-02-28', reported: 806_000, pending: null }])
-
-    await m!.credits.recordBillingPeriod(user, { subscriptionId: 'sub-b', periodStart: '2026-03-15T10:00:00Z' })
+    // Sub B anchors today. A's 300k is neither billed again nor subtracted from B.
+    await m!.credits.recordBillingPeriod(user, { subscriptionId: 'sub-b', periodStart: `${dayOffset(0)}T09:00:00Z` })
+    await use(user, dayOffset(0), 1_050_000)
     ingested.length = 0
-    await m!.overage.reportPendingOverage({ now: new Date('2026-03-16T00:00:00Z') })
-    expect(ingested.filter((event) => event.externalCustomerId === user)).toEqual([])
+    await m!.overage.reportPendingOverage()
+    expect(sentFor(user)).toEqual([50_000])
+  })
+
+  test('a business to developer downgrade mid-period bills only what developer overran', async () => {
+    const user = await makeUser('business', `${dayOffset(-5)}T00:00:00Z`)
+    await use(user, dayOffset(-3), 9_000_000)
+
+    await m!.credits.setPlan(user, 'developer')
+    await use(user, dayOffset(0), 1_200_000)
+    await m!.overage.reportPendingOverage()
+    expect(sentFor(user)).toEqual([200_000])
+  })
+
+  test('an upgrade mid-period bills the old plan up to the change and the new one after', async () => {
+    const user = await makeUser('developer', `${dayOffset(-5)}T00:00:00Z`)
+    await use(user, dayOffset(-3), 1_500_000)
+
+    await m!.credits.setPlan(user, 'business')
+    await use(user, dayOffset(0), 2_000_000)
+    await m!.overage.reportPendingOverage()
+    expect(sentFor(user)).toEqual([500_000])
   })
 })
 
@@ -232,10 +263,10 @@ describe.skipIf(!DATABASE_URL)('overage reporting', () => {
   })
 
   test('overage accrued before a downgrade to free is staged and then sent', async () => {
-    // Anchored today, so the open period is the one the real clock is in.
-    const today = new Date().toISOString().slice(0, 10)
-    const user = await makeUser('developer', today)
-    await use(user, today, 1_040_000)
+    // Anchored yesterday, so the open period is the one the real clock is in.
+    // The day of a change belongs to the new segment, so the usage is from before.
+    const user = await makeUser('developer', `${dayOffset(-1)}T00:00:00Z`)
+    await use(user, dayOffset(-1), 1_040_000)
 
     await m!.credits.setPlan(user, 'free')
     const staged = await reports(user)
@@ -243,9 +274,7 @@ describe.skipIf(!DATABASE_URL)('overage reporting', () => {
     expect(staged[0]).toMatchObject({ reported: 0, pending: 40_000 })
 
     await m!.overage.reportPendingOverage()
-    expect(ingested.filter((event) => event.externalCustomerId === user).map((event) => event.metadata.credits)).toEqual([
-      40_000,
-    ])
+    expect(sentFor(user)).toEqual([40_000])
   })
 
   test('suspended accounts are still billed for what they used', async () => {

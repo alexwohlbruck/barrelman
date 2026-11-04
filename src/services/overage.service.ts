@@ -16,8 +16,10 @@
  *     that fails or dies between sending and recording resends exactly that
  *     event on the next pass, and Polar drops the duplicate if it already had
  *     it. Computing a fresh delta instead would overlap whatever Polar holds.
- *   - What was already reported is matched by the days it covers, not by the
- *     period's start, so a moved anchor cannot make a period look unbilled.
+ *   - Overage is metered per segment: a billing period, cut short at a plan or
+ *     subscription change (see `segmentOf`). The segment before a change is
+ *     staged under the old plan and anchor at the change, and its days are
+ *     never seen again, so neither a new anchor nor a new plan re-judges them.
  *   - A Postgres advisory lock lets one pass run at a time across replicas.
  *   - Each pass covers the period that just closed as well as the open one, so
  *     the usage between the last pass of a period and its end is still billed.
@@ -33,10 +35,8 @@ import {
   addMonths,
   billingPeriod,
   calendarPeriod,
-  overlapping,
   previousPeriod,
-  type BillingPeriod,
-  type Span,
+  segmentOf,
 } from '../billing/periods'
 import { reportOverage } from './billing.service'
 import { PACK_USAGE_PREFIX, settlePackUsage } from './credits.service'
@@ -57,20 +57,15 @@ type Sql = typeof sql
 export interface OverageRow {
   user_id: string
   plan: string
-  /** Start of the billing period this row covers; the key its reports are stored under. */
+  /** Start of the segment this row covers; the key its reports are stored under. */
   cycle: string
-  /** First day after the period. */
+  /** First day after the segment. */
   cycle_end: string
   used: number
   /** Pack credit available to the period: the ledger balance while it is open, what it took once closed. */
   purchased: number
-  /** Overage already reported (or staged) under this period's own key. */
+  /** Overage already reported (or staged) under this segment's key. */
   reported: number
-  /**
-   * Overage reported under other keys whose days overlap this period, left by
-   * an anchor that has since moved. Already billed, so never billed again.
-   */
-  elsewhere?: number
 }
 
 export interface PendingOverage {
@@ -79,7 +74,7 @@ export interface PendingOverage {
   cycleEnd: string
   /** Credits to ingest now — the delta since the last report. */
   credits: number
-  /** Running total under this period's key, stored as the new high-water mark. */
+  /** Running total under this segment's key, stored as the new high-water mark. */
   total: number
 }
 
@@ -109,7 +104,7 @@ export function computePendingOverage(rows: OverageRow[], plan?: Plan): PendingO
     // was spent leaves the ledger negative; that is a debt, not overage, so it
     // is clamped at zero rather than billed through the meter.
     const owed = Math.max(0, row.used - rowPlan.monthlyCredits - Math.max(0, row.purchased))
-    const delta = owed - row.reported - (row.elsewhere ?? 0)
+    const delta = owed - row.reported
     if (delta > 0) {
       pending.push({ userId: row.user_id, cycle: row.cycle, cycleEnd: row.cycle_end, credits: delta, total: row.reported + delta })
     }
@@ -118,61 +113,63 @@ export function computePendingOverage(rows: OverageRow[], plan?: Plan): PendingO
   return pending
 }
 
-/** A stored report: its key, the days it covers, and what was reported (or staged) under it. */
-export interface ReportSpan extends Span {
-  cycle: string
-}
-
 export interface AccountUsage {
   userId: string
   plan: string
   anchor: Date | string | null
+  /** The day of the last plan or subscription change; earlier days are not metered here. */
+  meteredFrom: string | null
   /** Daily credits since at least the start of the previous period. */
   days: DailyCredits[]
   /** Ledger balance now, after closed periods have been settled. */
   ledgerBalance: number
-  /** Pack usage settled into the ledger, by the days it covers. */
-  packUsage: Span[]
-  /** Overage reports, by the days they cover. */
-  reports: ReportSpan[]
-}
-
-function rowFor(account: AccountUsage, period: BillingPeriod, purchased: number): OverageRow {
-  const own = account.reports.find((report) => report.cycle === period.start)
-  const others = account.reports.filter((report) => report.cycle !== period.start)
-  return {
-    user_id: account.userId,
-    plan: account.plan,
-    cycle: period.start,
-    cycle_end: period.end,
-    used: creditsInRange(account.days, period.start, period.end),
-    purchased,
-    reported: own?.amount ?? 0,
-    elsewhere: overlapping(others, period),
-  }
+  /** Pack usage settled into the ledger, by the segment start it was settled from. */
+  packUsage: Record<string, number>
+  /** Overage reported or staged, by segment start. */
+  reports: Record<string, number>
 }
 
 /**
- * One row for the open period and one for the period before it, per account.
+ * One row for the open segment and one for the previous period's, per
+ * account. `until` cuts the open segment short, for staging what is owed at a
+ * change.
  *
  * The closed period is included so its last stretch is billed: without it, the
  * usage between a period's final pass and its end was never reported, because
  * every pass after the boundary looked only at the new period.
  */
-export function buildOverageRows(accounts: AccountUsage[], now: Date = new Date(), plan?: Plan): OverageRow[] {
+export function buildOverageRows(
+  accounts: AccountUsage[],
+  now: Date = new Date(),
+  plan?: Plan,
+  until?: string,
+): OverageRow[] {
   const rows: OverageRow[] = []
 
   for (const account of accounts) {
     const accountPlan = plan ?? getPlan(account.plan)
     const current = billingPeriod(accountPlan, account.anchor, now)
-    const previous = previousPeriod(accountPlan, account.anchor, current)
+    const segments = [
+      // A closed segment's pack credit is what settlement took for it; the
+      // open one can also spend what is left in the ledger.
+      { segment: segmentOf(previousPeriod(accountPlan, account.anchor, current), account.meteredFrom), balance: 0 },
+      { segment: segmentOf(current, account.meteredFrom, until), balance: account.ledgerBalance },
+    ]
 
-    const closed = rowFor(account, previous, overlapping(account.packUsage, previous))
-    if (closed.used > 0) rows.push(closed)
-
-    // Settled pack usage can overlap the open period too, when the anchor has
-    // moved back over days already settled; those days were covered then.
-    rows.push(rowFor(account, current, account.ledgerBalance + overlapping(account.packUsage, current)))
+    for (const [i, { segment, balance }] of segments.entries()) {
+      if (!segment) continue
+      const used = creditsInRange(account.days, segment.start, segment.end)
+      if (i === 0 && used === 0) continue
+      rows.push({
+        user_id: account.userId,
+        plan: account.plan,
+        cycle: segment.start,
+        cycle_end: segment.end,
+        used,
+        purchased: balance + (account.packUsage[segment.start] ?? 0),
+        reported: account.reports[segment.start] ?? 0,
+      })
+    }
   }
 
   return rows
@@ -187,6 +184,7 @@ interface Candidate {
   id: string
   plan: string
   anchor: Date | null
+  metered_from: string | null
 }
 
 /**
@@ -195,7 +193,7 @@ interface Candidate {
  */
 async function candidates(q: Sql, now: Date, only?: { userId: string; plan?: Plan }): Promise<Candidate[]> {
   const users = await q<Candidate[]>`
-    SELECT u.id, u.plan, u.billing_period_start AS anchor
+    SELECT u.id, u.plan, u.billing_period_start AS anchor, u.metered_from::text AS metered_from
     FROM accounts_users u
     WHERE ${only ? q`u.id = ${only.userId}` : q`u.plan <> 'free'`}
       AND EXISTS (
@@ -224,29 +222,26 @@ async function loadAccounts(q: Sql, now: Date, users: Candidate[]): Promise<Acco
       GROUP BY user_id`,
     // Staged totals count as reported: they are sent before anything new, so
     // computing past them would stage an overlapping increment under a new id.
-    q<Array<{ user_id: string; cycle: string; end: string; amount: number }>>`
-      SELECT user_id, cycle::text AS cycle,
-             COALESCE(cycle_end, (cycle + interval '1 month')::date)::text AS end,
-             GREATEST(reported_credits, COALESCE(pending_credits, 0))::int AS amount
+    q<Array<{ user_id: string; cycle: string; amount: number }>>`
+      SELECT user_id, cycle::text AS cycle, GREATEST(reported_credits, COALESCE(pending_credits, 0))::int AS amount
       FROM accounts_overage_reports
-      WHERE COALESCE(cycle_end, (cycle + interval '1 month')::date) > ${from} AND user_id IN ${q(ids)}`,
-    q<Array<{ user_id: string; start: string; end: string; amount: number }>>`
-      SELECT user_id, right(external_id, 10) AS start, (created_at AT TIME ZONE 'UTC')::date::text AS end,
-             -amount AS amount
+      WHERE cycle >= ${from} AND user_id IN ${q(ids)}`,
+    q<Array<{ user_id: string; start: string; amount: number }>>`
+      SELECT user_id, right(external_id, 10) AS start, -amount AS amount
       FROM accounts_credit_ledger
       WHERE external_id LIKE ${`${PACK_USAGE_PREFIX}%`} AND created_at > ${from} AND user_id IN ${q(ids)}`,
   ])
 
+  const byUser = <T extends { user_id: string }>(rows: T[], id: string) => rows.filter((row) => row.user_id === id)
   return users.map((user) => ({
     userId: user.id,
     plan: user.plan,
     anchor: user.anchor,
-    days: days.filter((row) => row.user_id === user.id).map(({ day, credits }) => ({ day, credits })),
+    meteredFrom: user.metered_from,
+    days: byUser(days, user.id).map(({ day, credits }) => ({ day, credits })),
     ledgerBalance: ledger.find((row) => row.user_id === user.id)?.total ?? 0,
-    packUsage: packUsage.filter((row) => row.user_id === user.id).map(({ start, end, amount }) => ({ start, end, amount })),
-    reports: reports
-      .filter((row) => row.user_id === user.id)
-      .map(({ cycle, end, amount }) => ({ cycle, start: cycle, end, amount })),
+    packUsage: Object.fromEntries(byUser(packUsage, user.id).map((row) => [row.start, row.amount])),
+    reports: Object.fromEntries(byUser(reports, user.id).map((row) => [row.cycle, row.amount])),
   }))
 }
 
@@ -415,17 +410,18 @@ export async function reportPendingOverage(options: ReportOptions = {}): Promise
 }
 
 /**
- * Stage what an account owes on `plan` before it moves off it. The next pass
- * sends whatever is staged regardless of the account's plan by then, so
- * overage accrued before a downgrade to free is still billed. `setPlan` settles
- * the pack under the old plan before calling this.
+ * Stage what an account owes on `plan` for the days before `until`, ahead of a
+ * plan or subscription change. The next pass sends whatever is staged
+ * regardless of the account's plan by then, so overage accrued before a
+ * downgrade to free is still billed. `closeSegment` settles the pack through
+ * `until` under the same plan first.
  *
  * Waits for the reporting lock rather than skipping, because a pass running
  * concurrently could otherwise overwrite or promote the staged figure. The wait
  * is bounded; past it the change goes ahead and the remainder is logged as lost.
  * Every query runs on the transaction, so it holds one connection, not two.
  */
-export async function stageOverageForPlanChange(userId: string, plan: Plan, now: Date = new Date()): Promise<void> {
+export async function stageOverageBeforeChange(userId: string, plan: Plan, until: string, now: Date = new Date()): Promise<void> {
   if (!billing.enabled || !billing.meterUsage || !plan.overageAllowed) return
   await flushUsage()
 
@@ -435,7 +431,7 @@ export async function stageOverageForPlanChange(userId: string, plan: Plan, now:
     await tx`SELECT pg_advisory_xact_lock(${LOCK_CLASS}::int, ${LOCK_ID}::int)`
 
     const accounts = await loadAccounts(tx, now, await candidates(tx, now, { userId, plan }))
-    const pending = computePendingOverage(buildOverageRows(accounts, now, plan), plan)
+    const pending = computePendingOverage(buildOverageRows(accounts, now, plan, until), plan)
     if (pending.length === 0) return
 
     // A report still staged from a failed pass carries its own event id, which

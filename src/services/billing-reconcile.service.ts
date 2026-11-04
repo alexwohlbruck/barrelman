@@ -70,10 +70,12 @@ export async function reconcileBilling(log: (text: string) => void = console.log
     const [user] = await sql<Array<{ anchor: Date | null }>>`
       SELECT billing_period_start AS anchor FROM accounts_users WHERE id = ${account.id}`
     const period = billingPeriod(plan, user?.anchor ?? null)
+    // A plan or subscription change splits a period into segments, each
+    // reported under its own key; Polar's meter covers the whole period.
     const [report] = await sql<Array<{ reported: number }>>`
-      SELECT GREATEST(reported_credits, COALESCE(pending_credits, 0))::int AS reported
+      SELECT COALESCE(SUM(GREATEST(reported_credits, COALESCE(pending_credits, 0))), 0)::int AS reported
       FROM accounts_overage_reports
-      WHERE user_id = ${account.id} AND cycle = ${period.start}`
+      WHERE user_id = ${account.id} AND cycle >= ${period.start} AND cycle < ${period.end}`
     const reported = report?.reported ?? 0
 
     if (metered !== reported) {

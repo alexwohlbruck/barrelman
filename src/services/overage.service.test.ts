@@ -156,10 +156,11 @@ describe('buildOverageRows — period boundaries', () => {
       userId: 'user-1',
       plan: 'developer',
       anchor: '2026-10-14T15:00:00Z',
+      meteredFrom: null,
       days: [],
       ledgerBalance: 0,
-      packUsage: [],
-      reports: [],
+      packUsage: {},
+      reports: {},
       ...overrides,
     }
   }
@@ -176,7 +177,7 @@ describe('buildOverageRows — period boundaries', () => {
             { day: '2026-11-13', credits: 80_000 },
             { day: '2026-11-14', credits: 1_000 },
           ],
-          reports: [{ cycle: '2026-10-14', start: '2026-10-14', end: '2026-11-14', amount: 50_000 }],
+          reports: { '2026-10-14': 50_000 },
         }),
       ],
       now,
@@ -196,7 +197,7 @@ describe('buildOverageRows — period boundaries', () => {
       [
         account({
           days: [{ day: '2026-11-10', credits: developer.monthlyCredits + 30_000 }],
-          packUsage: [{ start: '2026-10-14', end: '2026-11-14', amount: 20_000 }],
+          packUsage: { '2026-10-14': 20_000 },
           ledgerBalance: 0,
         }),
       ],
@@ -218,19 +219,80 @@ describe('buildOverageRows — period boundaries', () => {
     ])
   })
 
-  test('a moved anchor does not bill a period again under a new key', () => {
-    // 806k of overage was reported under an anchor on the 31st, for the period
-    // from 28 February. A resubscription on the 15th moves every period edge,
-    // so no report has the new period's key; the old one still covers its days.
+  test('a resubscription on a different day bills the new subscription from the change', () => {
+    // Subscription A, anchored on the 1st, reported 2.2M of overage before it
+    // was revoked. B anchors on 28 October, which is when metering restarts.
+    // A's report is under its own key and is never subtracted from B, and A's
+    // days are never billed again under B.
     const accounts = [
       account({
-        anchor: '2026-03-15T00:00:00Z',
-        days: [{ day: '2026-03-01', credits: developer.monthlyCredits + 806_000 }],
-        reports: [{ cycle: '2026-02-28', start: '2026-02-28', end: '2026-03-31', amount: 806_000 }],
+        anchor: '2026-10-28T09:00:00Z',
+        meteredFrom: '2026-10-28',
+        days: [
+          { day: '2026-10-10', credits: developer.monthlyCredits + 2_200_000 },
+          { day: '2026-11-05', credits: developer.monthlyCredits + 2_200_000 },
+        ],
+        reports: { '2026-10-01': 2_200_000 },
       }),
     ]
 
-    expect(computePendingOverage(buildOverageRows(accounts, new Date('2026-03-16T00:00:00Z')))).toEqual([])
+    expect(computePendingOverage(buildOverageRows(accounts, new Date('2026-11-10T00:00:00Z')))).toEqual([
+      { userId: 'user-1', cycle: '2026-10-28', cycleEnd: '2026-11-28', credits: 2_200_000, total: 2_200_000 },
+    ])
+  })
+
+  test('the first anchor for an existing calendar-month subscriber starts a fresh segment', () => {
+    // Before deploy the account was metered by calendar month, with 500k
+    // reported under 1 November. Its first webhook after deploy anchors it on
+    // the 14th; the days before were staged under the calendar key then.
+    const accounts = [
+      account({
+        anchor: '2026-11-14T00:00:00Z',
+        meteredFrom: '2026-11-14',
+        days: [
+          { day: '2026-11-05', credits: developer.monthlyCredits + 500_000 },
+          { day: '2026-11-20', credits: developer.monthlyCredits + 100_000 },
+        ],
+        reports: { '2026-11-01': 500_000 },
+      }),
+    ]
+
+    expect(computePendingOverage(buildOverageRows(accounts, new Date('2026-11-21T00:00:00Z')))).toEqual([
+      { userId: 'user-1', cycle: '2026-11-14', cycleEnd: '2026-12-14', credits: 100_000, total: 100_000 },
+    ])
+  })
+
+  test('a downgrade mid-period judges only the days after it against the smaller plan', () => {
+    // 9M used on business by the 10th, inside its 10M. Developer's 1M applies
+    // only from the change, so the 9M is never billed as 8M of overage.
+    const business = getPlan('business')
+    const days = [
+      { day: '2026-11-05', credits: 9_000_000 },
+      { day: '2026-11-12', credits: developer.monthlyCredits + 200_000 },
+    ]
+    const before = [account({ plan: 'business', anchor: '2026-11-01T00:00:00Z', days })]
+    const after = [account({ anchor: '2026-11-01T00:00:00Z', meteredFrom: '2026-11-10', days })]
+
+    const staged = computePendingOverage(buildOverageRows(before, new Date('2026-11-10T08:00:00Z'), business, '2026-11-10'), business)
+    expect(staged).toEqual([])
+    expect(computePendingOverage(buildOverageRows(after, new Date('2026-11-15T00:00:00Z')))).toEqual([
+      { userId: 'user-1', cycle: '2026-11-10', cycleEnd: '2026-12-01', credits: 200_000, total: 200_000 },
+    ])
+  })
+
+  test('an upgrade mid-period bills overage on the old plan at the change, and none after', () => {
+    const business = getPlan('business')
+    const days = [
+      { day: '2026-11-05', credits: developer.monthlyCredits + 500_000 },
+      { day: '2026-11-12', credits: 2_000_000 },
+    ]
+    const before = [account({ anchor: '2026-11-01T00:00:00Z', days })]
+    const after = [account({ plan: 'business', anchor: '2026-11-01T00:00:00Z', meteredFrom: '2026-11-10', days })]
+
+    expect(computePendingOverage(buildOverageRows(before, new Date('2026-11-10T08:00:00Z'), developer, '2026-11-10'), developer)).toEqual([
+      { userId: 'user-1', cycle: '2026-11-01', cycleEnd: '2026-11-10', credits: 500_000, total: 500_000 },
+    ])
+    expect(computePendingOverage(buildOverageRows(after, new Date('2026-11-15T00:00:00Z')))).toEqual([])
   })
 
   test('a pack refunded after it was spent is not billed as overage', () => {

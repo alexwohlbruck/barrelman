@@ -71,6 +71,12 @@ export const users = pgTable(
      * period whether or not anything was owed, so no day is judged twice.
      */
     packSettledThrough: date('pack_settled_through'),
+    /**
+     * The day the account last changed plan or subscription. Overage and the
+     * allowance count only usage from here on; what came before was settled
+     * and reported under the old plan at the change. See `segmentOf`.
+     */
+    meteredFrom: date('metered_from'),
     polarCustomerId: text('polar_customer_id'),
     /**
      * The Polar subscription behind `plan`, as of the last webhook or sync.
