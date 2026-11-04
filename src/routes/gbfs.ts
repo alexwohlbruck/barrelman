@@ -6,6 +6,7 @@
  */
 
 import { Elysia, t } from 'elysia'
+import { clampInt, clampNumber, LIMITS } from '../lib/params'
 import { serverError } from '../lib/errors'
 import { apiAuth, apiAuthAfter } from '../middleware/api-auth'
 import {
@@ -40,9 +41,9 @@ export function createGbfsRoutes(deps: {
         return await getNearbyStations({
           lat,
           lng,
-          radius: query.radius ? parseFloat(query.radius) : undefined,
+          radius: clampNumber(query.radius, { min: 1, max: LIMITS.maxNearbyRadiusM }),
           vehicleType: query.vehicleType as 'bike' | 'ebike' | 'scooter' | undefined,
-          limit: query.limit ? parseInt(query.limit, 10) : undefined,
+          limit: clampInt(query.limit, { min: 1, max: LIMITS.maxRows }),
         })
       } catch (err) {
         return serverError(request, set, err, 'Failed to fetch nearby stations')
@@ -80,7 +81,7 @@ export function createGbfsRoutes(deps: {
           stationId: query.stationId,
           lat,
           lng,
-          radius: query.radius ? parseFloat(query.radius) : undefined,
+          radius: clampNumber(query.radius, { min: 1, max: LIMITS.maxNearbyRadiusM }),
         })
 
         if (!station) {

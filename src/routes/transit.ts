@@ -1,4 +1,5 @@
 import Elysia, { t } from 'elysia'
+import { clampInt, clampNumber, LIMITS } from '../lib/params'
 import { serverError } from '../lib/errors'
 import { apiAuth, apiAuthAfter } from '../middleware/api-auth'
 import {
@@ -233,8 +234,8 @@ export function createTransitRoutes(deps: {
       try {
         const lat = Number(query.lat)
         const lng = Number(query.lng)
-        const radius = query.radius ? Number(query.radius) : 1000
-        const limit = query.limit ? Number(query.limit) : 20
+        const radius = clampNumber(query.radius, { min: 1, max: LIMITS.maxNearbyRadiusM, fallback: 1000 })!
+        const limit = clampInt(query.limit, { min: 1, max: LIMITS.maxRows, fallback: 20 })!
 
         if (isNaN(lat) || isNaN(lng)) {
           set.status = 400
@@ -285,8 +286,8 @@ export function createTransitRoutes(deps: {
             ? {
                 lat,
                 lng,
-                radius: query.radius ? Number(query.radius) : undefined,
-                limit: query.nearbyLimit ? Number(query.nearbyLimit) : undefined,
+                radius: clampNumber(query.radius, { min: 1, max: LIMITS.maxNearbyRadiusM }),
+                limit: clampInt(query.nearbyLimit, { min: 0, max: LIMITS.maxRows }),
               }
             : undefined
 
@@ -352,9 +353,9 @@ export function createTransitRoutes(deps: {
         const request: DepartureRequest = {
           lat: isNaN(lat) ? 0 : lat,
           lng: isNaN(lng) ? 0 : lng,
-          radius: query.radius ? Number(query.radius) : undefined,
+          radius: clampNumber(query.radius, { min: 1, max: LIMITS.maxNearbyRadiusM }),
           time: query.time || undefined,
-          n: query.n ? Number(query.n) : undefined,
+          n: clampInt(query.n, { min: 1, max: LIMITS.maxDepartures }),
           feedId: query.feedId || undefined,
           stopId: query.stopId || undefined,
           routeShortNames: query.routeShortNames
@@ -370,7 +371,7 @@ export function createTransitRoutes(deps: {
                 .map((t) => Number(t.trim()))
                 .filter((t) => Number.isFinite(t))
             : undefined,
-          windowMinutes: query.windowMinutes ? Number(query.windowMinutes) : undefined,
+          windowMinutes: clampNumber(query.windowMinutes, { min: 1, max: LIMITS.maxWindowMinutes }),
         }
 
         return await getDepartures(request, fetchFn)
@@ -567,7 +568,7 @@ export function createTransitRoutes(deps: {
           lat,
           lng,
           mode,
-          radius: query.radius ? Number(query.radius) : undefined,
+          radius: clampNumber(query.radius, { min: 1, max: LIMITS.maxNearbyRadiusM }),
         })
         if (!result) {
           set.status = 404
@@ -607,7 +608,7 @@ export function createTransitRoutes(deps: {
           return { error: 'routeIds is required (comma-separated)' }
         }
 
-        const routeIds = query.routeIds.split(',').map(s => s.trim()).filter(Boolean)
+        const routeIds = query.routeIds.split(',').map(s => s.trim()).filter(Boolean).slice(0, LIMITS.maxListItems)
         if (routeIds.length === 0) {
           set.status = 400
           return { error: 'routeIds must contain at least one route ID' }
@@ -689,7 +690,7 @@ export function createTransitRoutes(deps: {
           set.status = 400
           return { error: 'routes is required (comma-separated feedId_routeId pairs)' }
         }
-        const pairs = query.routes.split(',').map(s => s.trim()).filter(Boolean)
+        const pairs = query.routes.split(',').map(s => s.trim()).filter(Boolean).slice(0, LIMITS.maxListItems)
         const routes = pairs.map(pair => {
           const idx = pair.indexOf('_')
           if (idx === -1) return null
