@@ -10,6 +10,16 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Added
+
+* **Reconcile Billing** task in the console, with a seeded daily schedule that ships disabled. It re-reads the subscription of every account linked to Polar, corrects the plan and billing period, and logs any account whose Polar meter shows a different overage quantity from what barrelman has reported this cycle. It does nothing unless billing is enabled.
+
+### Fixed
+
+* Credit packs and operator grants are now used up. Usage is counted per cycle while the ledger is all-time, so a pack used to come back in full at the start of every month. When a cycle closes, the pack credit it consumed is now written to the credit history as a negative entry. A pack bought after a cycle closed is never applied to it, and credits already billed as overage are not also taken from a pack. Packs can still be bought on the Free plan.
+* Paid plans' allowances reset on the subscription's renewal day, matching when Polar bills, instead of on the 1st. Free stays on calendar months. `GET /account/credits` adds `cycleStartedAt`, and `/account/usage` defaults to the account's own cycle. The renewal date is stored per account (`billing_period_start`); until one is recorded, an account stays on calendar months.
+* Overage reporting no longer drops usage. The stretch between a cycle's last report and its end is reported after the rollover. Accounts that are suspended, or that move to Free mid-cycle, are still billed for overage they accrued. Each report carries a deterministic Polar `externalId`, a failed batch is kept and resent unchanged, and an advisory lock keeps two replicas from reporting at once.
+
 ## [0.10.38] - 2026-11-03
 
 ### Added

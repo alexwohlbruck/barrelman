@@ -178,7 +178,15 @@ Barrelman reports **only the credits beyond the included allowance** — the
 allowance is already paid for in the subscription price, so metering all usage
 would bill it twice. Reporting is idempotent: each pass computes the cycle's
 total overage, compares it with what was already reported, and ingests the
-difference.
+difference. Each event carries an `externalId` built from the account, the
+cycle and the running total, and the total is written down before it is sent,
+so a pass that fails is resent unchanged and Polar drops any copy it already
+has. A Postgres advisory lock keeps passes on different replicas apart. Each
+pass also covers the cycle that just closed, so its last stretch is billed.
+
+Cycles on paid plans follow the subscription's period, so the meter and the
+allowance reset on the same day. Barrelman records the period from
+`subscription.*` webhooks and from the reconciliation task below.
 
 Set `POLAR_METER_USAGE=false` to disable reporting entirely and run the paid
 plans as flat-rate with soft limits.
@@ -281,7 +289,15 @@ Then, end to end:
    endpoint → Deliveries. A `403` means the signing secret does not match.
 
 If a webhook is ever missed, **Refresh** on the billing page re-reads Polar and
-wins over the local plan — that is the repair path.
+wins over the local plan — that is the repair path for one account.
+
+For all of them, run **Reconcile Billing** from the console's Scripts page, or
+enable its seeded daily schedule (it ships disabled). It re-syncs every account
+linked to a Polar customer and records its billing period. It then logs any
+account whose Polar meter shows a different quantity from the overage
+barrelman has reported this cycle. Drift is only logged: a pass in flight or a
+meter that resets on another day both show up, so check before adjusting
+anything.
 
 ---
 
