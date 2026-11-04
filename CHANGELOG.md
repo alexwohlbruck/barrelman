@@ -16,6 +16,11 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 * `GET /billing/status` reports the subscription's status, whether it is cancelled at the period end, and the period end date. The console shows "Cancels on" with the date, and a banner linking to the billing portal while a payment is past due.
 * Webhook deliveries are deduplicated by their `webhook-id` in a new `accounts_billing_webhook_events` table, created at startup and pruned after 30 days by the account sweep. The account table gains `subscription_*` columns, also added at startup.
 * `order.refunded` is handled. A refunded credit pack takes its credits back with a negative ledger entry in proportion to the amount refunded; a refunded subscription payment re-reads the subscription and returns the account to free if Polar revoked it. Subscribe the webhook to `order.refunded`, `subscription.created`, `subscription.uncanceled` and `subscription.past_due` (see `docs/polar-setup.md`), and give the Polar token `customers:write` and `subscriptions:write`.
+* Automated backups of everything an import cannot rebuild: accounts, sessions, passkeys, API keys, usage, the credit ledger, moderation history, schedules, job history, regions and landmark state. **Back Up Database** in the console (`scripts/backup-db.sh`) writes a verified `pg_dump` to `/data/backups`, copies it to any S3-compatible bucket (AWS, Hetzner Object Storage, Cloudflare R2, Backblaze B2) when `BACKUP_S3_BUCKET` is set, and prunes old copies after 7 days locally and 30 remotely. Fresh installs get a disabled nightly schedule at 02:15; existing instances can add one under Schedules. **Restore Drill** (`scripts/restore-db.sh`) restores a backup into a scratch database and prints row counts, and the same script restores over the live tables from the shell with a confirmation variable. See Operations → Backups.
+
+### Changed
+
+* Sign-in, session checks, API-key lookup, credit spending and usage metering now run on their own small connection pool, so a burst of slow searches can no longer hold up authentication or metering. The main pool grows from postgres-js's default of 10 to 20 connections. Both are configurable (`DB_POOL_MAX`, `DB_ACCOUNTS_POOL_MAX`); with the defaults, the API, `barrelman-ops`, a running import script and Martin together stay under Postgres's 100 connections.
 
 ### Fixed
 
@@ -25,6 +30,10 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 * A failed renewal payment keeps the paid plan while Polar retries it, and the customer gets one email when the payment first fails. The account moves to free if the subscription is revoked.
 * Upgrading or downgrading no longer opens a second subscription billed alongside the first.
 * Deleting an account reports its outstanding overage and revokes its Polar subscription first. If Polar cannot be reached the deletion is refused with a 502 and the account is kept, so no subscription is left charging a deleted account.
+
+### Documentation
+
+* A new [Attribution](https://docs.barrelman.dev/attribution) page says what an app must credit when it shows Barrelman data: OpenStreetMap, OpenMapTiles, Mapterhorn terrain, transit agencies, 3D landmarks and brand logos. It includes a MapLibre example and explains what the ODbL asks of anyone who redistributes the data.
 
 ## [0.10.38] - 2026-11-03
 

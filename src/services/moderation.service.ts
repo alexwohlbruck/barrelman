@@ -15,7 +15,7 @@
  * tells you nothing about who decided what, or why.
  */
 import { and, desc, eq, gte, isNull, lte, or, sql as dsql } from 'drizzle-orm'
-import { db } from '../db'
+import { accountsDb as db } from '../db'
 import {
   abuseSignals,
   moderationLog,

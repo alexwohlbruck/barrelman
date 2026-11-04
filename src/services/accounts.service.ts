@@ -7,7 +7,7 @@
  * When you change a column in the drizzle definitions, change it here too.
  */
 import { and, desc, eq, isNull, sql as dsql } from 'drizzle-orm'
-import { connection as sql, db } from '../db'
+import { accountsConnection as sql, accountsDb as db } from '../db'
 import { users, type NewUser, type User, type UserRole } from '../schema/accounts'
 import { generateId, sha256Hex } from '../lib/crypto'
 import { emailDomain, isDisposableEmail, normalizeEmail } from '../lib/email'

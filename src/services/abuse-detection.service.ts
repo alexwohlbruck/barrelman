@@ -10,7 +10,7 @@
  * Runs on the periodic sweep rather than per request, because every rule here
  * is about a pattern over time.
  */
-import { connection as sql } from '../db'
+import { accountsConnection as sql } from '../db'
 import { getPlan } from '../billing/plans'
 import { recordAbuseSignal, suspendUser, SYSTEM_ACTOR } from './moderation.service'
 import { currentCycleStart, utcDay } from './usage.service'

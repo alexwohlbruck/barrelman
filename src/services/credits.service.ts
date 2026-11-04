@@ -18,7 +18,7 @@
  */
 import { and, eq, like, sql as dsql } from 'drizzle-orm'
 import { LRUCache } from 'lru-cache'
-import { db } from '../db'
+import { accountsDb as db } from '../db'
 import { creditLedger, users, type CreditEntryKind } from '../schema/accounts'
 import { generateId } from '../lib/crypto'
 import { getPlan, type Plan } from '../billing/plans'

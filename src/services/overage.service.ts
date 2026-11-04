@@ -12,7 +12,7 @@
  * crash mid-run therefore re-reports nothing; the next pass simply recomputes
  * the same delta.
  */
-import { connection as sql } from '../db'
+import { accountsConnection as sql } from '../db'
 import { getPlan } from '../billing/plans'
 import { billing } from '../config/billing.config'
 import { reportOverage } from './billing.service'

@@ -7,7 +7,7 @@
  * Sessions in particular are credential material, so keeping dead ones around
  * is pure liability.
  */
-import { connection as sql } from '../db'
+import { accountsConnection as sql } from '../db'
 import { pruneExpiredTokens } from './auth.service'
 import { pruneSignupAttempts } from './accounts.service'
 import { pruneRateLimiters } from '../lib/rate-limit'
