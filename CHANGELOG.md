@@ -10,6 +10,14 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Added
+
+* Each GTFS feed's licence is recorded from Transitland: SPDX id or licence URL, the yes/no/unknown answers for commercial use, redistribution, derived products and use without attribution, and the attribution text the agency asks for. The import records it as it discovers feeds, and `gtfs-watch --record` refreshes it. Run the new **Refresh Feed Licences** task once after upgrading to fill it in for feeds already imported; it needs `TRANSITLAND_API_KEY`, which Compose now also passes to the API.
+* Transit responses credit the feeds they draw on in an `attribution` list of `{ feedId, agency, text, url }`: beside the itineraries of `/transit/route` and `/transit/intermodal-route`, on each board of `/transit/departures`, and on `/transit/route-detail`. `/transit/stops` and `/transit/routes` stay bare arrays; their rows' `feedId`s resolve through the new `GET /transit/attribution?feedIds=…`.
+* `GTFS_LICENCE_POLICY=commercial` withholds feeds whose licence explicitly forbids commercial use or redistribution. The import skips them and removes their stops, routes and zip, `motis/config.yml` leaves them out, and transit responses drop them at once. A feed with no licence on record, or with `unknown` answers, is still served. The default, `off`, only records licences. Set it in `.env`; both the API and `barrelman-ops` read it.
+* GBFS systems keep the licence and attribution fields of `system_information` (GBFS v2.3+) when they publish them, and return them as `license` in `/gbfs/systems` and the `systems` list of `/gbfs/nearby-stations`. Re-run the GBFS systems import to pick them up.
+* The console's Data view lists each feed's licence with its commercial and redistribution answers, and counts the feeds that forbid commercial use.
+
 ### Documentation
 
 * A new [Attribution](https://docs.barrelman.dev/attribution) page says what an app must credit when it shows Barrelman data: OpenStreetMap, OpenMapTiles, Mapterhorn terrain, transit agencies, 3D landmarks and brand logos. It includes a MapLibre example and explains what the ODbL asks of anyone who redistributes the data.
