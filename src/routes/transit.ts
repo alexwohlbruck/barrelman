@@ -42,6 +42,12 @@ import {
   getStationDetail as _getStationDetail,
   getNearestEntrance as _getNearestEntrance,
 } from '../services/station.service'
+import {
+  itineraryResponses,
+  departureResponses,
+  routeDetailResponses,
+  feedRowResponses,
+} from './transit-schemas'
 
 export function createTransitRoutes(deps: {
   getTransitRoute?: typeof _getTransitRoute
@@ -137,6 +143,7 @@ export function createTransitRoutes(deps: {
       }),
       detail: {
         summary: 'Get transit route between two points',
+        responses: itineraryResponses,
         description:
           'Walk-and-transit itineraries between two coordinates, reaching stations ' +
           'within `maxWalkDistance` (default 1000 m). Each itinerary starts and ends ' +
@@ -223,6 +230,7 @@ export function createTransitRoutes(deps: {
       }),
       detail: {
         summary: 'Intermodal routing with mode selection',
+        responses: itineraryResponses,
         description:
           'Transit routing with access mode selection. Walking at both ends is ' +
           'routed between nearby stations, with straight-line walk legs. BIKE, ' +
@@ -273,6 +281,7 @@ export function createTransitRoutes(deps: {
       }),
       detail: {
         summary: 'Find nearby transit stops',
+        responses: feedRowResponses('Stops ordered by distance'),
         description:
           'Returns transit stops within a radius of the given coordinates, ' +
           'ordered by distance. Uses PostGIS spatial index for efficient ' +
@@ -328,6 +337,7 @@ export function createTransitRoutes(deps: {
       }),
       detail: {
         summary: 'Get routes serving a stop',
+        responses: feedRowResponses('Routes reachable at the stop'),
         description:
           'Returns the transit routes reachable at the specified stop, with ' +
           'route name, color, type and agency. Each route carries `via`: ' +
@@ -418,6 +428,7 @@ export function createTransitRoutes(deps: {
       }),
       detail: {
         summary: 'Get upcoming departures at nearby stops',
+        responses: departureResponses,
         description:
           'Returns upcoming departures from transit stops near the given ' +
           'coordinates. Queries the MOTIS timetable and enriches results ' +
@@ -573,6 +584,7 @@ export function createTransitRoutes(deps: {
       }),
       detail: {
         summary: 'Get route detail with ordered stops and shape',
+        responses: routeDetailResponses,
         description:
           'Returns route metadata, geographically ordered stops, shape ' +
           'geometry, and related route IDs (same trunk line) for rendering ' +

@@ -26,6 +26,7 @@ import { routeRoutes } from './routes/route'
 import { matchRoutes } from './routes/match'
 import { isochroneRoutes } from './routes/isochrone'
 import { transitRoutes } from './routes/transit'
+import { transitAttributionRoutes } from './routes/transit-attribution'
 import { speechRoutes } from './routes/speech'
 import { gbfsRoutes } from './routes/gbfs'
 import { ensureSchema, ensureGtfsSchema, ensureGbfsSchema } from './db'
@@ -159,6 +160,7 @@ const app = new Elysia()
   .use(matchRoutes)
   .use(isochroneRoutes)
   .use(transitRoutes)
+  .use(transitAttributionRoutes)
   .use(gbfsRoutes)
   .use(speechRoutes)
   .listen(port)

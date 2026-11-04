@@ -14,6 +14,8 @@ import { sql } from 'drizzle-orm'
 import { sameStationName } from '../lib/station-name'
 import { dropSkippedRuns } from '../lib/skipped-runs'
 import { getServiceAlerts } from './alerts.service'
+import { attributionFor, excludedFeedIds } from './feed-license.service'
+import type { FeedAttribution } from '../lib/feed-license'
 
 // ── Types ───────────────────────────────────────────────────────────
 
@@ -94,6 +96,9 @@ export interface StopDepartures {
     via?: 'station' | 'transfer'
   }
   departures: Departure[]
+  /** One credit line per GTFS feed on this board: the stop's own feed, plus
+   *  any other feed whose runs call here. */
+  attribution?: FeedAttribution[]
   /** More runs exist past what was returned — either trimmed by `windowMinutes`
    *  or cut off by `n`. Lets a caller offer "show more" honestly. */
   hasMore?: boolean
@@ -953,7 +958,10 @@ export async function getDepartures(
     .catch(() => [])
 
   // 6. Transform and return
-  return successResults.map(({ stop, members, page, result }) => {
+  const excluded = await excludedFeedIds()
+  const boardsOut = successResults
+    .filter(({ stop }) => !excluded.has(stop.feedId))
+    .map(({ stop, members, page, result }) => {
     const motisPlace = result.place
     const timezone = motisPlace?.tz || result.stopTimes[0]?.place?.tz || 'UTC'
 
@@ -998,4 +1006,21 @@ export async function getDepartures(
       previousPageCursor: result.previousPageCursor,
     }
   })
+
+  return Promise.all(
+    boardsOut.map(async (board) => {
+      const departures = excluded.size
+        ? board.departures.filter((d) => !excluded.has(d.route.feedId))
+        : board.departures
+      const agencies = new Map<string, string>()
+      for (const d of departures) {
+        if (d.route.agencyName && !agencies.has(d.route.feedId)) agencies.set(d.route.feedId, d.route.agencyName)
+      }
+      return {
+        ...board,
+        departures,
+        attribution: await attributionFor([board.stop.feedId, ...departures.map((d) => d.route.feedId)], agencies),
+      }
+    }),
+  )
 }
