@@ -18,6 +18,34 @@ import {
 } from '../services/isochrone.service'
 
 /**
+ * Isochrones are charged per contour: each duration is its own polygon, and a
+ * transit contour its own MOTIS search plus a fan-out of walk isochrones. The
+ * count mirrors the service's normalisation (rounded, deduplicated, one 900 s
+ * contour when none is given). A list over MAX_CONTOURS is one unit, since the
+ * handler refuses it with a 400.
+ *
+ * /isochrone/modes is a static listing and charges nothing. It still needs a
+ * key and passes the throttle like the rest of the group.
+ */
+export function isochroneUnits(context: { request: Request; query?: Record<string, string | undefined>; body?: unknown }): number {
+  if (new URL(context.request.url).pathname.replace(/\/+$/, '').endsWith('/modes')) return 0
+
+  let durations: unknown
+  if (context.request.method === 'POST') {
+    durations = (context.body as { durations?: unknown } | undefined)?.durations
+  } else {
+    try {
+      durations = parseDurations(context.query?.durations)
+    } catch {
+      return 1
+    }
+  }
+  if (!Array.isArray(durations) || durations.length === 0) return 1
+  const contours = new Set(durations.map((d) => Math.round(Number(d)))).size
+  return contours > MAX_CONTOURS ? 1 : contours
+}
+
+/**
  * Isochrone endpoints.
  *
  * GET  /isochrone         — query-string form, for map clients and quick curls
@@ -86,7 +114,7 @@ export function createIsochroneRoutes(deps: {
     '(bucket 0), so renderers should draw it back to front.'
 
   return new Elysia({ prefix: '/isochrone' })
-    .onBeforeHandle(apiAuth('isochrone'))
+    .onBeforeHandle(apiAuth('isochrone', { units: isochroneUnits }))
     .onAfterHandle(apiAuthAfter)
 
     // ── GET /isochrone ──────────────────────────────────────────────

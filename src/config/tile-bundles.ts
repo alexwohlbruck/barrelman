@@ -65,3 +65,13 @@ export function resolveTileBundle(source: string): string {
   const members = TILE_BUNDLES[source]
   return members ? members.join(',') : source
 }
+
+/**
+ * How many Martin sources a tile request reads: a bundle's members, or the
+ * names in a comma-joined composite. Billed per source, because one bundled
+ * tile does the work of that many single-source tiles. A bundle saves round
+ * trips; its price should not depend on which form the request took.
+ */
+export function tileSourceCount(source: string): number {
+  return resolveTileBundle(source).split(',').filter(Boolean).length
+}

@@ -34,8 +34,14 @@ export type EndpointGroup =
   | 'isochrone'
   | 'transit'
 
+/**
+ * Unit price per group. Most requests are one unit. Three scale with what they
+ * ask for, through the `units` option of `apiAuth()`: a tile per source it
+ * reads (a bundle per member), an isochrone per contour, and /match per
+ * started hundred points. /isochrone/modes is zero units.
+ */
 export const CREDIT_COSTS: Record<EndpointGroup, number> = {
-  /** One indexed read from PostGIS via Martin. The unit everything else is priced against. */
+  /** One indexed read from PostGIS via Martin, per source. The unit everything else is priced against. */
   tiles: 1,
   /** Point lookups and brand/catalog reads. */
   places: 3,
@@ -45,11 +51,11 @@ export const CREDIT_COSTS: Record<EndpointGroup, number> = {
   geocode: 5,
   /** Multi-layer search: full-text, trigram, abbreviation, semantic. */
   search: 6,
-  /** Street routing through GraphHopper. */
+  /** Street routing through GraphHopper: /route, /route/*, /graphhopper/route, and /match per 100 points. */
   routing: 12,
   /** Transit routing through MOTIS, including realtime. */
   transit: 20,
-  /** Reachability polygons — one request fans out to hundreds of routing calls. */
+  /** Reachability polygons, per contour — one contour fans out to hundreds of routing calls. */
   isochrone: 40,
 }
 

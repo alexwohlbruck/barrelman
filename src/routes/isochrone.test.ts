@@ -11,7 +11,7 @@
 
 import { describe, test, expect, mock, beforeEach, afterEach } from 'bun:test'
 import Elysia from 'elysia'
-import { createIsochroneRoutes } from './isochrone'
+import { createIsochroneRoutes, isochroneUnits } from './isochrone'
 import {
   GraphHopperError,
   MotisError,
@@ -334,5 +334,29 @@ describe('service wiring', () => {
       if (savedUrl === undefined) delete process.env.GRAPHHOPPER_URL
       else process.env.GRAPHHOPPER_URL = savedUrl
     }
+  })
+})
+
+describe('isochrone billing units', () => {
+  const at = (path: string, method = 'GET') => new Request(`http://localhost${path}`, { method })
+
+  test('one unit per distinct contour, from the query or the body', () => {
+    expect(isochroneUnits({ request: at('/isochrone?durations=300,600,900'), query: { durations: '300,600,900' } })).toBe(3)
+    expect(isochroneUnits({ request: at('/isochrone', 'POST'), body: { durations: [300, 300.2, 600] } })).toBe(2)
+  })
+
+  test('the default single contour is one unit', () => {
+    expect(isochroneUnits({ request: at('/isochrone'), query: {} })).toBe(1)
+    expect(isochroneUnits({ request: at('/isochrone', 'POST'), body: { lat: 1, lng: 2 } })).toBe(1)
+  })
+
+  test('a list the handler will refuse is one unit, not a large charge', () => {
+    const many = Array.from({ length: 50 }, (_, i) => (i + 1) * 60).join(',')
+    expect(isochroneUnits({ request: at('/isochrone'), query: { durations: many } })).toBe(1)
+    expect(isochroneUnits({ request: at('/isochrone'), query: { durations: 'abc' } })).toBe(1)
+  })
+
+  test('the static modes listing is free', () => {
+    expect(isochroneUnits({ request: at('/isochrone/modes') })).toBe(0)
   })
 })

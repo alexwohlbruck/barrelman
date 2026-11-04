@@ -10,6 +10,12 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Changed
+
+* **Pricing follows the work a request asks for.** A bundled or comma-joined tile costs 1 credit per source it reads (`detail` is 18 sources, so 18 credits), the same as fetching each source alone. `/isochrone` costs 40 credits per contour, so `durations=300,600,900` is 120. `POST /match` costs 12 credits per started hundred points. `/isochrone/modes` is now free. `X-Barrelman-Credits-Charged` reports the amount on every response. Callers on a metered plan who use bundles or multi-contour isochrones will see higher charges.
+* **The `/graphhopper` proxy forwards `route`, `info` and `health` only.** Other sub-paths, including `/graphhopper/isochrone`, `/spt`, `/matrix` and `/match`, answer `404`. Use `GET /isochrone` and `POST /match`, which apply their own limits and pricing.
+* `graphhopper-config.yml` sets `routing.max_visited_nodes` to 5,000,000, so one route search can no longer run unbounded. Restart `barrelman-graphhopper` to apply it; no graph rebuild is needed. A route that hits the cap fails with "maximum nodes exceeded".
+
 ## [0.10.38] - 2026-11-03
 
 ### Added
