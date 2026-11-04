@@ -87,6 +87,28 @@ export async function sendVerificationCode(email: string, code: string): Promise
   return send(email, `Your ${appName} sign-in code`, html, text)
 }
 
+/**
+ * Deliver the code that confirms an account deletion. Logged without SMTP for
+ * the same reason as a sign-in code: the log is then the only way to get it.
+ */
+export async function sendAccountDeletionCode(email: string, code: string): Promise<boolean> {
+  if (!isEmailConfigured) {
+    console.log(`[auth] account deletion code for ${email}: ${code} (SMTP not configured)`)
+  }
+
+  const html = layout(
+    'Confirm account deletion',
+    `<p style="margin:0 0 24px;font-size:15px;line-height:1.6;color:#57534e">Enter this code in the console to permanently delete your ${appName} account, its API keys and its usage history.</p>
+     <p style="margin:0 0 24px;padding:16px;background:#fafaf9;border:1px solid #e7e5e4;border-radius:8px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:28px;font-weight:600;letter-spacing:.2em;text-align:center">${code}</p>
+     <p style="margin:0;font-size:13px;line-height:1.6;color:#78716c">The code expires in 15 minutes. If you didn't ask to delete your account, someone is signed in to it: sign out of your other sessions from the account page.</p>`,
+  )
+  const text =
+    `Your ${appName} account deletion code is ${code}. It expires in 15 minutes. ` +
+    `If you didn't ask to delete your account, sign out of your other sessions from the account page.`
+
+  return send(email, `Confirm deleting your ${appName} account`, html, text)
+}
+
 /** Warn an account that its remaining credit balance is nearly spent. */
 export async function sendLowCreditsWarning(
   email: string,
