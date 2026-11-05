@@ -18,7 +18,8 @@
  * the top of the list, the same way it pins an exact IATA code.
  */
 
-import { db, maintenanceConnection } from '../db'
+import { db } from '../db'
+import { buildPartialIndexes } from '../lib/partial-indexes'
 import { sql } from 'drizzle-orm'
 import { buildTsQueryText } from '../lib/search-query'
 
@@ -488,43 +489,21 @@ async function localityQuery(
   return Array.from(rows as any[])
 }
 
-/**
- * Build the small partial indexes the layer reads, in the background.
- *
- * CONCURRENTLY, because each build still scans the whole table (minutes on a
- * national import) and a plain build would hold off replication writes for
- * that long. That rules out the startup DDL batch — CONCURRENTLY cannot run in
- * a transaction — and leaves a failed build behind as an INVALID index that
- * IF NOT EXISTS would then skip forever, so an invalid one is dropped and
- * rebuilt.
- */
+/** Build the small partial indexes the layer reads, in the background. */
 export async function ensureLocalityIndexes(): Promise<void> {
-  const client = maintenanceConnection()
   try {
-    const indexes = [
+    await buildPartialIndexes([
       ['geo_places_locality_ts_idx', `USING GIN (ts) WHERE ${LOCALITY_PREDICATE}`],
       ['geo_places_postal_code_idx', `(upper(tags->>'postal_code') text_pattern_ops) WHERE ${POSTAL_PREDICATE}`],
       // The misspelling fallback. Last, since the layer runs without it.
       ['geo_places_locality_name_trgm_idx', `USING GIN (name gin_trgm_ops) WHERE ${LOCALITY_PREDICATE}`],
-    ]
-    for (const [name, definition] of indexes) {
-      const [existing] = await client<{ valid: boolean }[]>`
-        SELECT i.indisvalid AS valid FROM pg_index i
-        JOIN pg_class c ON c.oid = i.indexrelid WHERE c.relname = ${name}
-      `
-      if (existing?.valid) continue
-      if (existing) await client.unsafe(`DROP INDEX CONCURRENTLY IF EXISTS ${name}`)
-      console.log(`[schema] building ${name}`)
-      await client.unsafe(`CREATE INDEX CONCURRENTLY IF NOT EXISTS ${name} ON geo_places ${definition}`)
-    }
+    ])
     indexReady = true
     fuzzyReady = true
   } catch (err) {
     // Costs the locality layer, nothing else — search still runs without it.
     // Thrown from an un-awaited task it would take the process down instead.
     console.error('[schema] could not build the locality search indexes:', err)
-  } finally {
-    await client.end({ timeout: 5 })
   }
 }
 
