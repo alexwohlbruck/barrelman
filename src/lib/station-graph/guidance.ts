@@ -311,19 +311,21 @@ function fold(steps: GuidanceStep[]): GuidanceStep[] {
       merged[merged.length - 1] = { ...absorb(prev, s, true), type: keep, toLevel: s.toLevel }
       continue
     }
-    if (prev && prev.type === s.type && RUNS.has(s.type)) {
-      merged[merged.length - 1] = { ...absorb(prev, s, true), toLevel: s.toLevel }
-      continue
-    }
     merged.push({ ...s })
   }
-  const out: GuidanceStep[] = []
+  const folded: GuidanceStep[] = []
   merged.forEach((s, i) => {
     const short = isFlat(s) && s.distance < FOLD_M && merged.length > 1
-    if (short && out.length) out[out.length - 1] = absorb(out[out.length - 1], s, true)
+    if (short && folded.length) folded[folded.length - 1] = absorb(folded[folded.length - 1], s, true)
     else if (short && i + 1 < merged.length) merged[i + 1] = absorb(merged[i + 1], s, false)
-    else out.push(s)
+    else folded.push(s)
   })
+  const out: GuidanceStep[] = []
+  for (const s of folded) {
+    const prev = out[out.length - 1]
+    if (prev && prev.type === s.type && RUNS.has(s.type)) out[out.length - 1] = { ...absorb(prev, s, true), toLevel: s.toLevel }
+    else out.push(s)
+  }
   return out
 }
 

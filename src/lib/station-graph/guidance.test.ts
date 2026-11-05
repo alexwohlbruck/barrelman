@@ -250,7 +250,9 @@ describe('guidanceSteps runs', () => {
   })
 
   test('back-to-back unmapped gaps read as one', () => {
-    const gaps = path({ seconds: 75, steps: [step('bridge', 17, 44, -3, -2, 0), step('bridge', 27, 31, -2, -2, 1)] })
+    const gaps = path({
+      seconds: 78, steps: [step('bridge', 17, 44, -3, -2, 0), step('walk', 3, 3, -2, -2, 1), step('bridge', 27, 31, -2, -2, 2)],
+    })
     expect(guidanceSteps(gaps, { kind: 'transfer' }).map((s) => s.instruction)).toEqual(['Continue to the platform'])
   })
 })
