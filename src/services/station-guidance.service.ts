@@ -414,7 +414,7 @@ export async function enrichStationGuidance(itineraries: Array<{ legs: GuidedLeg
       const boardAt = splitId(b.from.stopId)
       const reachable = alight ? await inSystem(alight.feedId, alight.stopId) : null
       const facts = {
-        samePlatform: pa.some((p) => pb.includes(p)),
+        samePlatform: pa.some((p) => pb.includes(p)) || (!!a.to.stopId && a.to.stopId === b.from.stopId),
         row,
         inSystem: reachable?.size && b.routeId ? reachable.has(b.routeId) : null,
         namedApart: !!row && (() => {
