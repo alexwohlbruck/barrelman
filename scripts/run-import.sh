@@ -140,6 +140,10 @@ echo "  Refreshing station labels..."
 (cd "$PROJECT_DIR" && bun run import/refresh-station-labels.ts) \
   || echo "  WARNING: station labels refresh failed. Run \"Refresh Station Labels\" once the import is done."
 
+echo "  Building station paths..."
+(cd "$PROJECT_DIR" && bun run import/build-station-paths.ts) \
+  || echo "  WARNING: station paths build failed. Run \"Build Station Paths\" once the import is done."
+
 # Sequential mode: the database is done and has released its working memory, so
 # build the engines now — but one at a time. rebuild-graphhopper.sh returns only
 # once the new graph is built and swapped in (landmark prep can take hours at

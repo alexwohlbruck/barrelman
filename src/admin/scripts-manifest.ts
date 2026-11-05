@@ -961,6 +961,21 @@ export const SCRIPTS: ScriptDef[] = [
       'Fetches the agency open data that applies to the feeds on this instance (MTA Subway Stations and Entrances for the NYC subway) and derives everything else from OSM: platform destination tags tied to a stop by gtfs:stop_id, and the streets of the nearest named intersection. A source that cannot be fetched keeps its previous rows. OSM Update, the full import and every feed import run it, so this is only needed to refresh by hand.',
   },
   {
+    id: 'transit-station-paths',
+    name: 'Build Station Paths',
+    description:
+      'Build the level-aware walking graph of every rail station complex and a time for every platform-to-platform and platform-to-entrance pair, each tagged with its source (graph, bridged, agency or estimated). GET /transit/stations/{id}/paths serves them, and the GTFS import times transfers.txt from them.',
+    category: 'transit',
+    danger: 'safe',
+    longRunning: true,
+    confirm: false,
+    exec: { kind: 'process', command: 'nice', args: ['-n', '10', 'bun', 'run', 'import/build-station-paths.ts'] },
+    params: [],
+    source: 'import/build-station-paths.ts',
+    notes:
+      'Derived from OSM alone, plus pathways.txt times from feeds that publish them. Builds *_next tables and swaps them in, so the previous build serves until the new one is whole. The log lists the tier mix and how many complexes moved up or down a tier since the last build. OSM Update and the full import run it; re-run after a GTFS import only to pick up new pathways.txt times.',
+  },
+  {
     id: 'transit-views',
     name: 'Rebuild Transit Tile Views',
     description: 'Recreate the transit vector-tile source views (station buildings, etc.) that Martin serves.',

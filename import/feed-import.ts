@@ -39,6 +39,8 @@ import {
   type GtfsFeedInfo,
 } from '../src/services/gtfs.service'
 import { refreshDirectionLabels } from '../src/services/station-labels.service'
+import { storeAgencyStationTimes } from '../src/services/station-paths.service'
+import { agencyStationTimes } from '../src/lib/station-graph/agency'
 
 /**
  * A feed with no fixed-route timetable for the router: GTFS-Flex-only feeds,
@@ -85,6 +87,26 @@ export async function importFeedFile(filepath: string, feedInfo: GtfsFeedInfo) {
   // Enrichment, so a failure costs the feed its signed directions, not its import.
   await refreshDirectionLabels({ feedId: feedInfo.feedId, log: (line) => console.log(line) })
     .catch((err) => console.warn(`  ! direction labels: ${(err as Error).message}`))
+  await importPathways(filepath, feedInfo.feedId)
+    .catch((err) => console.warn(`  ! pathways: ${(err as Error).message}`))
+}
+
+/**
+ * A feed's in-station times from its pathways.txt, for the next station paths
+ * build to use where the OSM graph has no path. Enrichment: most feeds have none.
+ */
+async function importPathways(filepath: string, feedId: string) {
+  const zip = await JSZip.loadAsync(await Bun.file(filepath).arrayBuffer())
+  const pathways = await readZipEntry(zip, 'pathways.txt')
+  if (!pathways?.trim()) return
+  const [stops, levels] = await Promise.all([readZipEntry(zip, 'stops.txt'), readZipEntry(zip, 'levels.txt')])
+  const agency = agencyStationTimes({
+    stops: parseGtfsRecords(stops ?? ''),
+    pathways: parseGtfsRecords(pathways),
+    levels: levels?.trim() ? parseGtfsRecords(levels) : [],
+  })
+  const stored = await storeAgencyStationTimes(feedId, agency)
+  console.log(`  ✓ ${stored} in-station times from pathways.txt`)
 }
 
 /**

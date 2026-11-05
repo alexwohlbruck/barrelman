@@ -131,6 +131,9 @@ refresh_views() {
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] Refreshing station labels..."
   (cd "$PROJECT_DIR" && nice -n 10 bun run import/refresh-station-labels.ts) \
     || echo "[$(date '+%Y-%m-%d %H:%M:%S')] WARNING: station labels refresh failed; the previous labels stay. Run \"Refresh Station Labels\"." >&2
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] Building station paths..."
+  (cd "$PROJECT_DIR" && nice -n 10 bun run import/build-station-paths.ts) \
+    || echo "[$(date '+%Y-%m-%d %H:%M:%S')] WARNING: station paths build failed; the previous build stays. Run \"Build Station Paths\"." >&2
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] Cutting states into parts for /route..."
   db_exec barrelman-db psql "$DB_URL" -v ON_ERROR_STOP=1 -q -c "SET client_min_messages = warning" -f /app/import/build-state-parts.sql \
     || echo "[$(date '+%Y-%m-%d %H:%M:%S')] WARNING: state_parts rebuild failed; /route keeps the previous states. Run \"Build Route State Parts\"." >&2
