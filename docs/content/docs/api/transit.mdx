@@ -118,7 +118,12 @@ _openapi:
           fare payment counts as ten minutes in the ordering. A transit leg
           carries `directionLabel` where its boarding platform's signed
           direction is known ("Uptown & The Bronx"); `headsign` still names the
-          terminal.
+          terminal. Where the station paths build covers a station, a transit
+          leg also carries `entrance` (first ride) and `exit` (last ride),
+          chosen to minimise street walk plus station path; `transfer`, the
+          class of change from the previous ride with its walk; and
+          `boardingPosition`, where to stand on the train. Walks on the mapped
+          station come with a drawn line and written steps.
         heading: intermodal-routing-with-mode-selection
       - content: >-
           Returns transit stops within a radius of the given coordinates,
