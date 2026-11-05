@@ -9,8 +9,8 @@
 import { sql } from 'drizzle-orm'
 import { db } from '../db'
 import {
-  arrivalBearing, boardingHint, chooseEntrance, classifyTransfer, guidanceSteps, isWalked, PLATFORM_REMAINDER_MIN_S,
-  platformRemainder, positionIsMeasured, representativeRow, type BoardingHint, type GuidanceStep, type TransferClass, type WalkContext,
+  arrivalBearing, atStation, boardingHint, chooseEntrance, classifyTransfer, guidanceSteps, isWalked, PLATFORM_REMAINDER_MIN_S,
+  platformRemainder, positionIsMeasured, representativeRow, routeSign, stationChanges, stationVisits, type BoardingHint, type GuidanceStep, type TransferClass, type WalkContext,
 } from '../lib/station-graph/guidance'
 import { DEFAULT_PARAMS } from '../lib/station-graph/params'
 import { platformsForStop, STOP_MATCH_M, type StopCandidate } from '../lib/station-graph/stops'
@@ -95,6 +95,7 @@ export interface GuidedLeg {
   from: { lat: number; lng: number; stopId?: string }
   to: { lat: number; lng: number; stopId?: string }
   routeShortName?: string
+  routeLongName?: string
   routeId?: string
   directionLabel?: string
   geometry?: { type: 'LineString'; coordinates: [number, number][] }
@@ -272,10 +273,7 @@ async function loadPaths(profile: Profile, pairs: Array<[string, string]>, board
   return rows.map(toPath)
 }
 
-const routeSign = (leg: GuidedLeg) => {
-  if (!leg.routeShortName) return null
-  return `the ${leg.routeShortName}${leg.directionLabel ? ` · ${leg.directionLabel}` : ''}`
-}
+
 
 const entranceName = (e: EntranceInfo) => e.cornerLabel ?? e.name ?? e.ref ?? null
 
@@ -322,7 +320,7 @@ export async function enrichStationGuidance(itineraries: Array<{ legs: GuidedLeg
     return id ? { ...id, route: leg.routeShortName } : null
   }
   const keyOf = (e: End) => `${e.feedId}\u0000${e.stopId}\u0000${e.route ?? ''}`
-  const transit = itineraries.map((it) => it.legs.filter((l) => l.transitLeg))
+  const transit = itineraries.map((it) => it.legs.filter(atStation))
   const ends = transit.flat().flatMap((leg) => [endOf(leg, 'from'), endOf(leg, 'to')]).filter((e): e is End => !!e)
   const platformsOf = await resolveStops(ends)
   const platformIds = (leg: GuidedLeg, side: 'from' | 'to') => {
@@ -333,13 +331,12 @@ export async function enrichStationGuidance(itineraries: Array<{ legs: GuidedLeg
   const pairs: Array<[string, string]> = []
   const boarding = new Set<string>(), alighting = new Set<string>()
   for (const legs of itineraries.map((it) => it.legs)) {
-    const rides = legs.filter((l) => l.transitLeg)
-    if (!rides.length) continue
-    rides.slice(1).forEach((b, i) => {
-      for (const pa of platformIds(rides[i], 'to')) for (const pb of platformIds(b, 'from')) if (pa !== pb) pairs.push([pa, pb])
-    })
-    if (!legs[0].transitLeg) platformIds(rides[0], 'from').forEach((p) => boarding.add(p))
-    if (!legs[legs.length - 1].transitLeg) platformIds(rides[rides.length - 1], 'to').forEach((p) => alighting.add(p))
+    for (const [a, b] of stationChanges(legs)) {
+      for (const pa of platformIds(a, 'to')) for (const pb of platformIds(b, 'from')) if (pa !== pb) pairs.push([pa, pb])
+    }
+    const { enter, leave } = stationVisits(legs)
+    enter.forEach(({ ride }) => platformIds(ride, 'from').forEach((p) => boarding.add(p)))
+    leave.forEach(({ ride }) => platformIds(ride, 'to').forEach((p) => alighting.add(p)))
   }
 
   const paths = await loadPaths(deps.profile, [...new Map(pairs.map((p) => [p.join('>'), p])).values()], [...boarding], [...alighting])
@@ -355,73 +352,66 @@ export async function enrichStationGuidance(itineraries: Array<{ legs: GuidedLeg
     return routesCache.get(k)!
   }
 
-  const agencyTimes = await agencyTransferTimes(itineraries.flatMap((it) => {
-    const rides = it.legs.filter((l) => l.transitLeg)
-    return rides.slice(1).flatMap((b, i) => {
-      const x = splitId(rides[i].to.stopId), y = splitId(b.from.stopId)
-      return x && y && x.feedId === y.feedId ? [{ feedId: x.feedId, from: x.stopId, to: y.stopId }] : []
-    })
-  })).catch(() => new Map<string, number>())
+  const agencyTimes = await agencyTransferTimes(itineraries.flatMap((it) => stationChanges(it.legs).flatMap(([a, b]) => {
+    const x = splitId(a.to.stopId), y = splitId(b.from.stopId)
+    return x && y && x.feedId === y.feedId ? [{ feedId: x.feedId, from: x.stopId, to: y.stopId }] : []
+  }))).catch(() => new Map<string, number>())
 
   const scale = DEFAULT_PARAMS.costs.scale
   const walkMps = DEFAULT_PARAMS.costs.walkMps
 
   for (const it of itineraries) {
     const legs = it.legs
-    const rides = legs.filter((l) => l.transitLeg)
-    if (!rides.length) continue
+    const { enter, leave } = stationVisits(legs)
 
-    // Access: the entrance that makes origin → entrance → platform shortest.
-    const first = rides[0]
-    if (!legs[0].transitLeg) {
-      const candidates = platformIds(first, 'from').flatMap((pid) =>
+    // Access: the entrance that makes street → entrance → platform shortest.
+    for (const { ride, street } of enter) {
+      const candidates = platformIds(ride, 'from').flatMap((pid) =>
         paths.filter((p) => p.toId === pid && p.fromKind === 'entrance').flatMap((row) => {
           const e = entrances.get(row.fromId)
           return e && e.entryAllowed !== false ? [{ id: e.id, lat: e.lat, lng: e.lng, row, info: e }] : []
         }))
-      const choice = chooseEntrance(legs[0].from, candidates, deps.walkMps)
-      if (choice) {
-        const e = choice.candidate.info
-        const walk = stationWalk(choice.candidate.row, { kind: 'access', entrance: entranceName(e), sign: routeSign(first) }, platforms, entrances)
-        if (walk) {
-          first.entrance = {
-            id: e.id, name: e.name, ref: e.ref, cornerLabel: e.cornerLabel, lat: e.lat, lng: e.lng,
-            streetSeconds: choice.streetSeconds, stationSeconds: choice.candidate.row.seconds, totalSeconds: choice.totalSeconds, walk,
-          }
+      const choice = chooseEntrance(street, candidates, deps.walkMps)
+      if (!choice) continue
+      const e = choice.candidate.info
+      const walk = stationWalk(choice.candidate.row, { kind: 'access', entrance: entranceName(e), sign: routeSign(ride) }, platforms, entrances)
+      if (walk) {
+        ride.entrance = {
+          id: e.id, name: e.name, ref: e.ref, cornerLabel: e.cornerLabel, lat: e.lat, lng: e.lng,
+          streetSeconds: choice.streetSeconds, stationSeconds: choice.candidate.row.seconds, totalSeconds: choice.totalSeconds, walk,
         }
       }
     }
 
-    // Egress: alighting platform → exit → destination.
-    const last = rides[rides.length - 1]
-    let exitRow: StationPath | null = null
-    if (!legs[legs.length - 1].transitLeg) {
-      const candidates = platformIds(last, 'to').flatMap((pid) =>
+    // Egress: alighting platform → exit → street.
+    const exitRows = new Map<GuidedLeg, StationPath>()
+    for (const { ride, street } of leave) {
+      const candidates = platformIds(ride, 'to').flatMap((pid) =>
         paths.filter((p) => p.fromId === pid && p.toKind === 'entrance').flatMap((row) => {
           const e = entrances.get(row.toId)
           return e && e.exitAllowed !== false ? [{ id: e.id, lat: e.lat, lng: e.lng, row, info: e }] : []
         }))
-      const choice = chooseEntrance(legs[legs.length - 1].to, candidates, deps.walkMps)
-      if (choice) {
-        const e = choice.candidate.info
-        exitRow = choice.candidate.row
-        const walk = stationWalk(exitRow, { kind: 'egress', entrance: entranceName(e) }, platforms, entrances)
-        if (walk) {
-          last.exit = {
-            id: e.id, name: e.name, ref: e.ref, cornerLabel: e.cornerLabel, lat: e.lat, lng: e.lng,
-            streetSeconds: choice.streetSeconds, stationSeconds: exitRow.seconds, totalSeconds: choice.totalSeconds, walk,
-          }
+      const choice = chooseEntrance(street, candidates, deps.walkMps)
+      if (!choice) continue
+      const e = choice.candidate.info
+      const row = choice.candidate.row
+      const walk = stationWalk(row, { kind: 'egress', entrance: entranceName(e) }, platforms, entrances)
+      if (walk) {
+        exitRows.set(ride, row)
+        ride.exit = {
+          id: e.id, name: e.name, ref: e.ref, cornerLabel: e.cornerLabel, lat: e.lat, lng: e.lng,
+          streetSeconds: choice.streetSeconds, stationSeconds: row.seconds, totalSeconds: choice.totalSeconds, walk,
         }
       }
     }
 
-    // Transfers, and where to stand on the ride before each.
-    const transferRows = new Map<GuidedLeg, StationPath>()
-    await Promise.all(rides.slice(1).map(async (b, i) => {
-      const a = rides[i]
+    // Transfers between station rides, and where to stand on the ride before each.
+    const transferRows = new Map<GuidedLeg, { row: StationPath; next: GuidedLeg }>()
+    await Promise.all(stationChanges(legs).map(async ([a, b]) => {
       const pa = platformIds(a, 'to'), pb = platformIds(b, 'from')
       const row = representativeRow(pa.flatMap((x) => pb.map((y) => byPair.get(`${x}>${y}`))).filter((r): r is StationPath => !!r))
       const alight = splitId(a.to.stopId)
+      const boardAt = splitId(b.from.stopId)
       const reachable = alight ? await inSystem(alight.feedId, alight.stopId) : null
       const facts = {
         samePlatform: pa.some((p) => pb.includes(p)),
@@ -435,29 +425,27 @@ export async function enrichStationGuidance(itineraries: Array<{ legs: GuidedLeg
       }
       const cls = classifyTransfer(facts)
       const walk = row ? stationWalk(row, { kind: 'transfer', sign: routeSign(b), reentryFree: cls.reentryFree }, platforms, entrances) : null
-      const boardAt = splitId(b.from.stopId)
       const agency = alight && boardAt ? agencyTimes.get(`${alight.feedId}\u0000${alight.stopId}\u0000${boardAt.stopId}`) : undefined
       const timed = row && isWalked(row.source) ? row
         : agency !== undefined ? { seconds: agency, source: 'agency' as const }
         : row
       b.transfer = { ...cls, seconds: timed ? timed.seconds + cls.fareGateDelayS : null, source: timed?.source ?? null, walk }
-      if (row) transferRows.set(a, row)
+      if (row) transferRows.set(a, { row, next: b })
     }))
 
-    for (const ride of rides) {
-      const transferRow = transferRows.get(ride)
-      const row = transferRow ?? (ride === last ? exitRow : null)
+    for (const ride of legs.filter(atStation)) {
+      const transfer = transferRows.get(ride)
+      const row = transfer?.row ?? exitRows.get(ride)
       if (!row || !positionIsMeasured(row)) continue
       const platform = platforms.get(row.fromId)
       const heading = ride.geometry ? arrivalBearing(ride.geometry.coordinates) : null
       if (!platform || heading === null) continue
       const hint = boardingHint(platform, row.bestPosition!, heading, walkMps, scale)
       if (!hint) continue
-      const next = transferRow ? rides[rides.indexOf(ride) + 1] : null
       ride.boardingPosition = {
         ...hint,
-        toward: transferRow ? 'transfer' : 'exit',
-        landmark: next ? routeSign(next) : last.exit ? last.exit.cornerLabel ?? last.exit.name : null,
+        toward: transfer ? 'transfer' : 'exit',
+        landmark: transfer ? routeSign(transfer.next) : ride.exit ? ride.exit.cornerLabel ?? ride.exit.name : null,
       }
     }
   }

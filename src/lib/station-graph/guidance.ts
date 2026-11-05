@@ -114,6 +114,54 @@ export function chooseEntrance<C extends EntranceCandidate>(
   return best
 }
 
+/** Modes that stop at platforms inside a station; a bus, tram or ferry stops at the kerb or a pier. */
+const KERBSIDE_MODES = new Set(['BUS', 'COACH', 'TRAM', 'FERRY', 'AIRPLANE', 'AERIAL_LIFT', 'ODM'])
+
+export interface RideLeg {
+  transitLeg: boolean
+  mode: string
+  from: { lat: number; lng: number; stopId?: string }
+  to: { lat: number; lng: number; stopId?: string }
+  routeShortName?: string
+  routeLongName?: string
+  directionLabel?: string
+}
+
+export const atStation = (leg: RideLeg) => leg.transitLeg && !KERBSIDE_MODES.has(leg.mode)
+
+/** What the station signs call the line: rail feeds put the train number in the short name. */
+export function routeSign(leg: RideLeg): string | null {
+  const line = leg.routeLongName && /^\d{3,}$/.test(leg.routeShortName ?? '') ? leg.routeLongName : leg.routeShortName
+  if (!line) return null
+  return `the ${line}${leg.directionLabel ? ` · ${leg.directionLabel}` : ''}`
+}
+
+/**
+ * The station rides a trip walks into from the street and out to it, with
+ * the street end of each walk. A ride straight after a bus is entered from
+ * the street like the first one; a change between two station rides is a
+ * transfer instead.
+ */
+export function stationVisits<L extends RideLeg>(legs: L[]) {
+  const enter: Array<{ ride: L; street: { lat: number; lng: number } }> = []
+  const leave: Array<{ ride: L; street: { lat: number; lng: number } }> = []
+  legs.forEach((leg, i) => {
+    if (!atStation(leg)) return
+    const before = legs[i - 1], after = legs[i + 1]
+    const prevRide = legs.slice(0, i).reverse().find((l) => l.transitLeg)
+    const nextRide = legs.slice(i + 1).find((l) => l.transitLeg)
+    if (before && !before.transitLeg && !(prevRide && atStation(prevRide))) enter.push({ ride: leg, street: before.from })
+    if (after && !after.transitLeg && !(nextRide && atStation(nextRide))) leave.push({ ride: leg, street: after.to })
+  })
+  return { enter, leave }
+}
+
+/** Consecutive rides that change inside a station: both stop at platforms. */
+export function stationChanges<L extends RideLeg>(legs: L[]): Array<readonly [L, L]> {
+  const rides = legs.filter((l) => l.transitLeg)
+  return rides.slice(1).flatMap((b, i) => (atStation(rides[i]) && atStation(b) ? [[rides[i], b] as const] : []))
+}
+
 export function bearing(a: [number, number], b: [number, number]): number {
   const [lon1, lat1, lon2, lat2] = [toRad(a[0]), toRad(a[1]), toRad(b[0]), toRad(b[1])]
   const y = Math.sin(lon2 - lon1) * Math.cos(lat2)

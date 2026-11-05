@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import {
   arrivalBearing, boardingHint, chooseEntrance, classifyTransfer, FARE_GATE_DELAY_S, guidanceSteps, positionIsMeasured,
-  representativeRow, type TransferFacts,
+  representativeRow, routeSign, stationChanges, stationVisits, type RideLeg, type TransferFacts,
 } from './guidance'
 import type { PathStep, StationPath } from './types'
 
@@ -199,6 +199,37 @@ describe('guidanceSteps', () => {
 
   test('an estimate has no steps', () => {
     expect(guidanceSteps(path({ source: 'estimated', steps: null }), { kind: 'transfer' })).toEqual([])
+  })
+})
+
+describe('station rides', () => {
+  const leg = (mode: string, over: Partial<RideLeg> = {}): RideLeg => ({
+    transitLeg: mode !== 'WALK', mode, from: { lat: 0, lng: 0 }, to: { lat: 1, lng: 1 }, ...over,
+  })
+
+  test('a bus change is no station transfer: the train after it is entered from the street', () => {
+    const walkIn = leg('WALK', { from: { lat: 5, lng: 5 } }), bus = leg('BUS'), walkOver = leg('WALK', { from: { lat: 7, lng: 7 } })
+    const train = leg('SUBWAY'), walkOut = leg('WALK', { to: { lat: 9, lng: 9 } })
+    const legs = [walkIn, bus, walkOver, train, walkOut]
+    expect(stationChanges(legs)).toEqual([])
+    const { enter, leave } = stationVisits(legs)
+    expect(enter).toEqual([{ ride: train, street: { lat: 7, lng: 7 } }])
+    expect(leave).toEqual([{ ride: train, street: { lat: 9, lng: 9 } }])
+  })
+
+  test('two trains change inside the station and only the outer walks reach the street', () => {
+    const a = leg('SUBWAY'), b = leg('RAIL')
+    const legs = [leg('WALK'), a, leg('WALK'), b, leg('WALK')]
+    expect(stationChanges(legs)).toEqual([[a, b]])
+    const { enter, leave } = stationVisits(legs)
+    expect(enter.map((e) => e.ride)).toEqual([a])
+    expect(leave.map((e) => e.ride)).toEqual([b])
+  })
+
+  test('signs name the line, not a rail train number', () => {
+    expect(routeSign(leg('RAIL', { routeShortName: '1523', routeLongName: 'Port Jefferson Branch', directionLabel: 'Eastbound' })))
+      .toBe('the Port Jefferson Branch · Eastbound')
+    expect(routeSign(leg('SUBWAY', { routeShortName: '7', routeLongName: 'Flushing Local', directionLabel: 'Queens' }))).toBe('the 7 · Queens')
   })
 })
 
