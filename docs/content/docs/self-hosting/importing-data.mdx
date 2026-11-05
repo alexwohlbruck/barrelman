@@ -252,6 +252,43 @@ import refresh everything. The console task **Refresh Station Labels**
 (Scripts → GTFS / Transit) runs the same refresh by hand, which an instance
 upgrading needs once.
 
+#### Station paths
+
+`GET /transit/stations/{id}/paths` serves a walking time for every
+platform-to-platform and platform-to-entrance pair in a station complex, and
+the GTFS import times `transfers.txt` from them. Each time says how it was
+made, best first:
+
+| Source | When | Line and steps |
+|---|---|---|
+| `graph` | Both ends are on one connected piece of the mapped station | Yes |
+| `bridged` | The pieces are at most 30 m apart (a mezzanine nobody mapped); never platform to platform | Yes, the bridge marked |
+| `agency` | The feed publishes `pathways.txt` (VBB, MBTA, PID, IDFM, SEPTA) | No |
+| `estimated` | Otherwise, from the platforms' geometry and depth | No |
+
+A GTFS stop with no OSM platform at all gets a `straight_line` time in
+`transfers.txt` from the stop coordinates.
+
+The graph is built from OSM alone. Stations within 150 m of each other form a
+complex, joined further where a feed's own `transfers.txt` connects them. A
+node shared by stacked platforms on different `level`s is not a junction, a
+loose stair end joins only ways on its own level, and a path from an
+underground platform reaches the street only after it climbs. Walking,
+stair, escalator and lift costs, and the fitted formulas behind `estimated`,
+are in `config/station-paths.json`, so a refit is a config change.
+
+In `transfers.txt` a station path time replaces the feed's own time for that
+pair (the MTA's flat 180 s), and a station-to-station row takes the median of
+its platforms' times. A forbidden transfer (`transfer_type=3`) is never
+touched, and a pair no station path covers keeps the GraphHopper walk.
+
+OSM Update and the full import rebuild the paths into `*_next` tables and swap
+them in; the log lists the tier mix and how many complexes moved up or down a
+tier since the last build, and `station_complexes.disconnected` marks the ones
+not fully on the graph. The console task **Build Station Paths** (Scripts →
+GTFS / Transit) runs it by hand, which an instance upgrading needs once, before
+its next GTFS import.
+
 ### Step 3 — Bikeshare (optional)
 
 ```bash

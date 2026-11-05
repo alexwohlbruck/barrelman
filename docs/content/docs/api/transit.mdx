@@ -49,6 +49,9 @@ _openapi:
       title: Get station detail with entrances and building geometry
       url: '#get-station-detail-with-entrances-and-building-geometry'
     - depth: 2
+      title: Walking paths inside a station complex
+      url: '#walking-paths-inside-a-station-complex'
+    - depth: 2
       title: Find nearest station entrance to a coordinate
       url: '#find-nearest-station-entrance-to-a-coordinate'
     - depth: 2
@@ -86,6 +89,8 @@ _openapi:
         id: discover-gtfs-rt-feed-urls
       - content: Get station detail with entrances and building geometry
         id: get-station-detail-with-entrances-and-building-geometry
+      - content: Walking paths inside a station complex
+        id: walking-paths-inside-a-station-complex
       - content: Find nearest station entrance to a coordinate
         id: find-nearest-station-entrance-to-a-coordinate
       - content: List station entrances near a coordinate
@@ -215,6 +220,21 @@ _openapi:
           `<feed-onestop-id>:<stop_id>` maps straight onto this route.
         heading: get-station-detail-with-entrances-and-building-geometry
       - content: >-
+          Every platform-to-platform and platform-to-entrance time in a station
+          complex, built from OSM at import. Each path says how it was made:
+          `graph` (walked on the mapped station), `bridged` (a gap of up to 30 m
+          in the map was bridged; `bridge` steps mark where), `agency` (the
+          feed's pathways.txt) or `estimated` (from platform geometry where the
+          map has no path). `confidence` (0–1) and `uncertaintyS` (the p90 error
+          of that source) say how far to trust it. `seconds` is from the
+          platform centre; `bestSeconds` and `bestPosition` (0–1 along the
+          platform's axis, see `axisBearing`) are from the best place to stand
+          on the row's platform end. Only `graph` and `bridged` paths carry a
+          line (`geometry`, with `vertexLevels`) and `steps`; the others are
+          times only and should not be drawn or narrated. The wheelchair profile
+          has graph and bridged paths only.
+        heading: walking-paths-inside-a-station-complex
+      - content: >-
           Returns the closest subway or train station entrance to the given
           coordinate, within maxDistance meters (default 500m). Pass
           wheelchair=true for accessible access points only: entrances tagged
@@ -238,4 +258,4 @@ _openapi:
 
 Trip planning via MOTIS plus live GTFS-RT data — vehicle positions, departures, alerts, stops, route detail, and station geometry.
 
-<APIPage document={"openapi.json"} operations={[{"path":"/transit/route","method":"post"},{"path":"/transit/intermodal-route","method":"post"},{"path":"/transit/stops","method":"get"},{"path":"/transit/routes","method":"get"},{"path":"/transit/departures","method":"get"},{"path":"/transit/vehicles","method":"get"},{"path":"/transit/shapes","method":"get"},{"path":"/transit/route-detail","method":"get"},{"path":"/transit/resolve-route","method":"get"},{"path":"/transit/route-vehicles","method":"get"},{"path":"/transit/trip-stops","method":"get"},{"path":"/transit/alerts","method":"get"},{"path":"/transit/bikes-allowed","method":"get"},{"path":"/transit/discover-rt-urls","method":"post"},{"path":"/transit/station/{feedId}/{stopId}","method":"get"},{"path":"/transit/nearest-entrance","method":"get"},{"path":"/transit/entrances","method":"get"}]} webhooks={[]} hasHead={true} />
+<APIPage document={"openapi.json"} operations={[{"path":"/transit/route","method":"post"},{"path":"/transit/intermodal-route","method":"post"},{"path":"/transit/stops","method":"get"},{"path":"/transit/routes","method":"get"},{"path":"/transit/departures","method":"get"},{"path":"/transit/vehicles","method":"get"},{"path":"/transit/shapes","method":"get"},{"path":"/transit/route-detail","method":"get"},{"path":"/transit/resolve-route","method":"get"},{"path":"/transit/route-vehicles","method":"get"},{"path":"/transit/trip-stops","method":"get"},{"path":"/transit/alerts","method":"get"},{"path":"/transit/bikes-allowed","method":"get"},{"path":"/transit/discover-rt-urls","method":"post"},{"path":"/transit/station/{feedId}/{stopId}","method":"get"},{"path":"/transit/stations/{id}/paths","method":"get"},{"path":"/transit/nearest-entrance","method":"get"},{"path":"/transit/entrances","method":"get"}]} webhooks={[]} hasHead={true} />
