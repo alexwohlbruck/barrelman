@@ -13,7 +13,7 @@ import { sql } from 'drizzle-orm'
 import { db, maintenanceConnection } from '../db'
 import { agencyTimesByOsm, type AgencyStop } from '../lib/station-graph/agency'
 import {
-  assignToComplexes, boxAround, boxesTouch, clusterStations, geometryBox, type Complex, type StationElement,
+  assignToComplexes, boxAround, boxesTouch, clusterStations, geometryBox, transferLinks, type Complex, type StationElement,
 } from '../lib/station-graph/complexes'
 import { DEFAULT_PARAMS, type StationPathParams } from '../lib/station-graph/params'
 import { solveComplex } from '../lib/station-graph/solve'
@@ -23,6 +23,9 @@ import type { ComplexReport, OsmNode, OsmWay, PathSource, Profile, StationPath, 
 
 type Log = (line: string) => void
 type Sql = ReturnType<typeof maintenanceConnection>
+
+/** An agency transfer longer than this is a street walk between stations, not one complex. */
+const TRANSFER_LINK_M = 400
 
 /** Complexes are fetched and solved a cell of this many degrees at a time. */
 const CELL_DEG = 0.02
@@ -264,8 +267,18 @@ export async function buildStationPaths(opts: { log?: Log; params?: StationPathP
     const elements = (await q.unsafe(
       `SELECT id, name, ST_X(centroid) AS lon, ST_Y(centroid) AS lat FROM geo_places WHERE ${STATION_ELEMENTS}`,
     )) as unknown as StationElement[]
-    const complexes = clusterStations(elements, params.graph.complexRadiusM)
-    log(`  ${elements.length} station elements in ${complexes.length} complexes`)
+    // Agency transfers (never a forbidden one) join stations the 150 m rule leaves apart.
+    const transfers = (await relationExists(q, 'gtfs_transfers')) ? await q.unsafe(`
+      SELECT DISTINCT fs.stop_lon AS "fromLon", fs.stop_lat AS "fromLat", ts.stop_lon AS "toLon", ts.stop_lat AS "toLat"
+      FROM gtfs_transfers t
+      JOIN gtfs_stops fs ON fs.feed_id = t.feed_id AND fs.stop_id = t.from_stop_id
+      JOIN gtfs_stops ts ON ts.feed_id = t.feed_id AND ts.stop_id = t.to_stop_id
+      WHERE COALESCE(t.transfer_type, 0) <> 3 AND t.from_stop_id <> t.to_stop_id
+        AND ST_DWithin(fs.geom::geography, ts.geom::geography, ${TRANSFER_LINK_M})
+    `) as unknown as Array<{ fromLon: number; fromLat: number; toLon: number; toLat: number }> : []
+    const links = transferLinks(elements, transfers, params.graph.complexRadiusM)
+    const complexes = clusterStations(elements, params.graph.complexRadiusM, links)
+    log(`  ${elements.length} station elements in ${complexes.length} complexes (${links.length} agency transfer links)`)
 
     const previous = new Map<string, unknown>()
     if (await relationExists(q, 'station_complexes')) {
