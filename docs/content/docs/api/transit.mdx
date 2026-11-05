@@ -119,11 +119,13 @@ _openapi:
           carries `directionLabel` where its boarding platform's signed
           direction is known ("Uptown & The Bronx"); `headsign` still names the
           terminal. Where the station paths build covers a station, a transit
-          leg also carries `entrance` (first ride) and `exit` (last ride),
-          chosen to minimise street walk plus station path; `transfer`, the
-          class of change from the previous ride with its walk; and
+          leg also carries `entrance` and `exit` where the train is reached
+          from or left for the street (a bus counts as street), chosen to
+          minimise street walk plus station path; `transfer`, the class of
+          change from the previous train with its walk; and
           `boardingPosition`, where to stand on the train. Walks on the mapped
-          station come with a drawn line and written steps.
+          station come with a drawn line and written steps. A transfer's walk
+          leg lasts as long as the walk; the per-interchange margin is waiting.
         heading: intermodal-routing-with-mode-selection
       - content: >-
           Returns transit stops within a radius of the given coordinates,
