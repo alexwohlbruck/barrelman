@@ -263,7 +263,12 @@ export function createTransitRoutes(deps: {
           'MOTIS has no street graph, that access beyond walking is not available there. ' +
           'A transit leg carries `directionLabel` ' +
           'where its boarding platform\'s signed direction is known ("Uptown & ' +
-          'The Bronx"); `headsign` still names the terminal.',
+          'The Bronx"); `headsign` still names the terminal. Where the station ' +
+          'paths build covers a station, a transit leg also carries `entrance` ' +
+          '(first ride) and `exit` (last ride), chosen to minimise street walk ' +
+          'plus station path; `transfer`, the class of change from the previous ' +
+          'ride with its walk; and `boardingPosition`, where to stand on the train. ' +
+          'Walks on the mapped station come with a drawn line and written steps.',
         tags: ['Transit'],
       },
     })

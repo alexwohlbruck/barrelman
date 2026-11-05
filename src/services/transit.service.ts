@@ -23,6 +23,7 @@ import {
 } from './rental-pricing.service'
 import { attributionFor, excludedFeedIds, servableOnly } from './feed-license.service'
 import { directionLabelsFor, stopKey } from './station-labels.service'
+import { enrichStationGuidance, type BoardingPosition, type StationAccessChoice, type TransitTransfer } from './station-guidance.service'
 import type { FeedAttribution } from '../lib/feed-license'
 
 // ── Types ───────────────────────────────────────────────────────────
@@ -240,6 +241,16 @@ export interface TransitLeg {
   rentalSystemId?: string
   /** Estimated fare from the operator's GBFS pricing feed, when published. */
   rentalPricing?: RentalPricing
+
+  // Station guidance, from the station paths build (transit legs only)
+  /** The entrance to use for the first ride: shortest street walk plus station path. */
+  entrance?: StationAccessChoice
+  /** The exit to use after the last ride. */
+  exit?: StationAccessChoice
+  /** How the rider gets here from the previous ride. */
+  transfer?: TransitTransfer
+  /** Where to stand so the train stops next to the exit or transfer. */
+  boardingPosition?: BoardingPosition
 }
 
 /** A route that serves a leg's exact station sequence directly. */
@@ -484,6 +495,15 @@ function adaptLeg(leg: any): TransitLeg {
   return adapted
 }
 
+/** Which MOTIS fare payment a leg falls in, where the feeds publish fares. */
+const fareGroupOf = new WeakMap<TransitLeg, number>()
+
+/** Whether one payment covers both legs; null without fare data. */
+function oneFare(a: TransitLeg, b: TransitLeg): boolean | null {
+  const x = fareGroupOf.get(a), y = fareGroupOf.get(b)
+  return x === undefined || y === undefined ? null : x === y
+}
+
 /** Adapt a MOTIS/OTPAPI itinerary into our format */
 function adaptItinerary(itin: any): TransitItinerary {
   const adapted: TransitItinerary = {
@@ -501,7 +521,12 @@ function adaptItinerary(itin: any): TransitItinerary {
   const fare = extractFare(itin)
   if (fare) adapted.fare = fare
   const payments = countFarePayments(itin)
-  if (payments != null) adapted.farePayments = payments
+  if (payments != null) {
+    adapted.farePayments = payments
+    ;(itin.legs || []).forEach((leg: any, i: number) => {
+      if (leg.fareTransferIndex != null) fareGroupOf.set(adapted.legs[i], leg.fareTransferIndex)
+    })
+  }
 
   return adapted
 }
@@ -1091,6 +1116,12 @@ export async function getIntermodalRoute(
   // which ones MOTIS's time-optimal search happened to surface.
   await enrichInterchangeableRoutes(result.itineraries)
   await enrichDirectionLabels(result.itineraries).catch(() => {})
+  await enrichStationGuidance(result.itineraries, {
+    profile: request.wheelchair ? 'wheelchair' : 'foot',
+    walkMps: WALK_MPS,
+    inSystemRoutes,
+    oneFare: (a, b) => oneFare(a as TransitLeg, b as TransitLeg),
+  }).catch((err) => console.warn(`[transit] station guidance: ${(err as Error).message}`))
 
   result.attribution = await itineraryAttribution(result.itineraries)
   if (!result.itineraries.length) {
@@ -1651,6 +1682,13 @@ async function enrichInterchangeableRoutes(itineraries: TransitItinerary[]): Pro
   }
 
   await Promise.all(tasks)
+}
+
+/** Lines reachable from a stop inside fare control, as MOTIS route ids. */
+async function inSystemRoutes(feedId: string, stopId: string): Promise<Set<string> | null> {
+  const routes = await getRoutesForStop(feedId, stopId)
+  const inside = routes.filter((r) => r.via !== 'nearby')
+  return inside.length ? new Set(inside.map((r) => `${r.feedId}_${r.routeId}`)) : null
 }
 
 /** Label each transit leg with what its boarding platform is signed for. */
