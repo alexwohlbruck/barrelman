@@ -467,7 +467,7 @@ async function main() {
         const transfersTxt = generateTransfersTxt(transfers, feedId, own)
         const transferCount = transfersTxt.trim().split('\n').length - 1 // minus header
         try {
-          await injectTransfersTxt(filepath, transfersTxt, new Map(own.map((s) => [transferKey(s.fromStopId, s.toStopId), s.seconds])))
+          await injectTransfersTxt(filepath, transfersTxt, new Map(own.map((s) => [transferKey(s.fromStopId, s.toStopId), { seconds: s.seconds, source: s.source }])))
           console.log(`  ✓ Injected ${transferCount} transfers into ${basename(filepath)}`)
         } catch (err) {
           console.error(`  ✗ Failed to inject into ${basename(filepath)}: ${err}`)

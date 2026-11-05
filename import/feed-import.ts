@@ -41,6 +41,7 @@ import {
 import { refreshDirectionLabels } from '../src/services/station-labels.service'
 import { storeAgencyStationTimes } from '../src/services/station-paths.service'
 import { agencyStationTimes } from '../src/lib/station-graph/agency'
+import { SOURCES, type PathSource } from '../src/lib/station-graph/types'
 
 /**
  * A feed with no fixed-route timetable for the router: GTFS-Flex-only feeds,
@@ -186,7 +187,7 @@ const TRANSFER_FORBIDDEN = '3'
 export async function injectTransfersTxt(
   zipPath: string,
   transfersTxt: string,
-  stationTimes?: Map<string, number>,
+  stationTimes?: Map<string, StationTime>,
 ): Promise<void> {
   const buffer = await Bun.file(zipPath).arrayBuffer()
   const zip = await JSZip.loadAsync(buffer)
@@ -223,22 +224,55 @@ export async function injectTransfersTxt(
  * back to exact ids.
  *
  * `stationTimes` (keyed by transferKey) are in-station times from the station
- * paths build. They are the exception to "the feed wins": they replace the
- * feed's own time for the same pair, and a station-level row (the MTA's flat
- * 180 s between 127 and 725) takes the median of its platforms' times. A
- * forbidden transfer is never touched, and nor is a timed or in-seat one.
+ * paths build. They are the exception to "the feed wins": a station-level row
+ * takes the median of its platforms' times. Against the feed's flat default
+ * (the MTA's 180 s on every connected pair) any tier wins; against a time the
+ * agency set for that pair, only a walked one (graph, bridged) does, and the
+ * platform rows under it take the agency's time too. A forbidden transfer is
+ * never touched, and nor is a timed or in-seat one.
  */
+export interface StationTime {
+  seconds: number
+  source: PathSource
+}
+
+const WALKED: ReadonlySet<PathSource> = new Set(['graph', 'bridged'])
+
 function median(xs: number[]): number {
   const s = [...xs].sort((a, b) => a - b)
   const m = s.length >> 1
   return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2
 }
 
+/** The best source present, and the median of its times. */
+function bestOf(times: StationTime[]): StationTime {
+  const best = times.reduce((x, y) => (SOURCES.indexOf(y.source) < SOURCES.indexOf(x.source) ? y : x)).source
+  return { seconds: median(times.filter((t) => t.source === best).map((t) => t.seconds)), source: best }
+}
+
+/**
+ * A feed's blanket transfer time: what it files on a station's transfer to
+ * itself (the MTA's 180 s), else a value most of its timed rows share. A row
+ * carrying it says "connected", not "this long".
+ */
+export function flatTransferTime(rows: Array<{ from: string; to: string; seconds: number }>): number | null {
+  const mode = (xs: number[]) => {
+    const counts = new Map<number, number>()
+    for (const x of xs) counts.set(x, (counts.get(x) ?? 0) + 1)
+    const [value, n] = [...counts].sort((a, b) => b[1] - a[1])[0] ?? [null, 0]
+    return { value, share: xs.length ? n / xs.length : 0 }
+  }
+  const self = mode(rows.filter((r) => r.from === r.to).map((r) => r.seconds))
+  if (self.value !== null) return self.value
+  const cross = mode(rows.map((r) => r.seconds))
+  return rows.length >= 5 && cross.share >= 0.5 ? cross.value : null
+}
+
 export function mergeTransfersTxt(
   existing: string | null,
   computed: string,
   stopsTxt?: string | null,
-  stationTimes?: Map<string, number>,
+  stationTimes?: Map<string, StationTime>,
 ): string {
   const parse = (text: string) => {
     const lines = text.split(/\r?\n/).filter(l => l.trim() !== '')
@@ -295,22 +329,37 @@ export function mergeTransfersTxt(
     }
   })
 
+  // Station pairs whose agency time outranks an estimate, for the platform rows under them.
+  const agencyTimed = new Map<string, number>()
   if (stationTimes?.size && feed.iMin !== -1 && feed.iType !== -1) {
-    const byStation = new Map<string, number[]>()
-    for (const [key, seconds] of stationTimes) {
+    const minOf = (i: number) => {
+      const v = (feed.raw[i].split(',')[feed.iMin] ?? '').trim()
+      return v === '' ? null : Number(v)
+    }
+    const flat = flatTransferTime(feed.rows.flatMap(([from, to, type], i) => {
+      const seconds = minOf(i)
+      return type === '2' && seconds !== null && Number.isFinite(seconds) ? [{ from, to, seconds }] : []
+    }))
+    const byStation = new Map<string, StationTime[]>()
+    for (const [key, time] of stationTimes) {
       const [from, to] = key.split('\u0000')
       const k = `${station(from)}\u0000${station(to)}`
-      byStation.set(k, [...(byStation.get(k) ?? []), seconds])
+      byStation.set(k, [...(byStation.get(k) ?? []), time])
     }
     feed.rows.forEach(([from, to, type], i) => {
       if (!['', '0', '2'].includes(type) || feed.raw[i].includes('"')) return
       const exact = stationTimes.get(`${from}\u0000${to}`)
       const stationLevel = !parent.has(from) && !parent.has(to) ? byStation.get(`${from}\u0000${to}`) : undefined
-      const seconds = exact ?? (stationLevel?.length ? median(stationLevel) : undefined)
-      if (seconds === undefined) return
+      const time = exact ?? (stationLevel?.length ? bestOf(stationLevel) : undefined)
+      if (!time) return
+      const own = type === '2' ? minOf(i) : null
+      if (own !== null && own !== flat && from !== to && !WALKED.has(time.source)) {
+        agencyTimed.set(`${station(from)}\u0000${station(to)}`, own)
+        return
+      }
       const cells = feed.raw[i].split(',')
       cells[feed.iType] = '2'
-      cells[feed.iMin] = String(Math.round(seconds))
+      cells[feed.iMin] = String(Math.round(time.seconds))
       feed.raw[i] = cells.join(',')
     })
   }
@@ -322,7 +371,15 @@ export function mergeTransfersTxt(
     if (!from || !to || known.has(key)) return
     if (forbidden.has(`${station(from)}\u0000${station(to)}`)) return
     known.add(key)
-    added.push(comp.raw[i])
+    const agency = agencyTimed.get(`${station(from)}\u0000${station(to)}`)
+    const walked = stationTimes?.get(key)
+    if (agency !== undefined && !(walked && WALKED.has(walked.source)) && comp.iMin !== -1) {
+      const cells = comp.raw[i].split(',')
+      cells[comp.iMin] = String(agency)
+      added.push(cells.join(','))
+    } else {
+      added.push(comp.raw[i])
+    }
   })
 
   return [feed.header, ...feed.raw, ...added].join('\n') + '\n'
