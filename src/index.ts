@@ -4,7 +4,8 @@ import { swagger } from '@elysiajs/swagger'
 import swaggerConfig from './config/swagger'
 import { healthRoutes } from './routes/health'
 import { searchRoutes } from './routes/search'
-import { brandsRoutes } from './routes/brands'
+import { brandsRoutes, brandLogoRoutes } from './routes/brands'
+import { mapAssetRoutes } from './routes/map-assets'
 import { containsRoutes } from './routes/contains'
 import { childrenRoutes } from './routes/children'
 import { placeRoutes } from './routes/place'
@@ -19,6 +20,7 @@ import { adminUserRoutes } from './routes/admin-users'
 import { adminConsoleRoutes, adminConsoleConfigRoutes } from './routes/admin-console'
 import { consoleUiRoutes } from './lib/console-ui'
 import { tileRoutes } from './routes/tiles'
+import { styleRoutes } from './routes/styles'
 import { bridgeMeshRoutes } from './routes/bridge-meshes'
 import { landmarkRoutes } from './routes/landmarks'
 import { graphhopperRoutes } from './routes/graphhopper'
@@ -26,10 +28,14 @@ import { routeRoutes } from './routes/route'
 import { matchRoutes } from './routes/match'
 import { isochroneRoutes } from './routes/isochrone'
 import { transitRoutes } from './routes/transit'
+import { transitAttributionRoutes } from './routes/transit-attribution'
 import { speechRoutes } from './routes/speech'
 import { gbfsRoutes } from './routes/gbfs'
-import { ensureSchema, ensureGtfsSchema, ensureGbfsSchema } from './db'
+import { ensureSchema, ensureGtfsSchema, ensureGbfsSchema, ensureStationLabelSchema } from './db'
 import { ensureAccountsSchema } from './services/accounts.service'
+import { passkeyPolicy } from './services/admin-access.service'
+import { flushPenalties, startPenaltySync } from './services/penalty-sync.service'
+import { startCacheBus } from './services/cache-bus.service'
 import { ensureOpsJobsSchema } from './services/ops-job-store'
 import { ensureRegionsSchema } from './services/region-store.service'
 import { ensureLandmarksSchema } from './services/landmarks.service'
@@ -45,11 +51,15 @@ import { startTransitWarmup } from './lib/warmup'
 import { flushUsage, startUsageFlush } from './services/usage.service'
 import { flushRequestMetrics, startRequestMetricsFlush } from './services/request-metrics.service'
 import { requestMetrics } from './middleware/request-metrics'
+import { requestContext } from './middleware/request-context'
 import { startOverageReporting } from './services/overage.service'
 import { startAccountSweep } from './services/account-maintenance.service'
 import { startScheduler } from './services/scheduler.service'
 import { assertAuthConfigured } from './middleware/api-auth'
 import { setPeerAddressResolver } from './lib/rate-limit'
+import { initErrorTracking, captureError, flushErrorTracking } from './lib/error-tracking'
+import { errorTracking } from './middleware/error-tracking'
+import { startDependencyAlerts } from './services/health-alerts.service'
 
 const port = Number(process.env.PORT) || 5001
 
@@ -63,21 +73,37 @@ const port = Number(process.env.PORT) || 5001
 // surface their own errors normally.
 process.on('unhandledRejection', (reason) => {
   console.error('[unhandledRejection]', reason)
+  captureError(reason, { tags: { handler: 'unhandledRejection' } })
 })
 process.on('uncaughtException', (err) => {
   console.error('[uncaughtException]', err)
+  captureError(err, { tags: { handler: 'uncaughtException' } })
 })
+
+// Before the schema checks below, so a failure there is reported too.
+// A no-op unless SENTRY_DSN is set.
+await initErrorTracking('api')
 
 // Ensure post-import columns exist before accepting requests
 await ensureSchema()
 await ensureGtfsSchema()
 await ensureGbfsSchema()
+await ensureStationLabelSchema()
 // Console job queue (shared with the barrelman-ops worker).
 await ensureOpsJobsSchema()
 // Import-region store (seeded from config/regions.json; editable in the console).
 await ensureRegionsSchema()
 // User accounts, API keys, usage and credits for the public API.
 await ensureAccountsSchema()
+// Logs whether BARRELMAN_ADMIN_REQUIRE_PASSKEY is enforced, and warns when it
+// is set but no administrator has a passkey yet (it then waits; see the module).
+await passkeyPolicy.startupCheck()
+// Penalty-box state from before this start (and from other replicas), then
+// kept in sync on a timer. See services/penalty-sync.service.ts.
+await startPenaltySync()
+// Key, suspension and plan changes made on another replica evict our caches
+// too. See services/cache-bus.service.ts.
+await startCacheBus()
 // Script run history, for job runtime estimates and progress bars.
 await initJobHistory()
 // 3D landmark models and placements, from every source (Open Landmarks and
@@ -134,11 +160,18 @@ void syncPortolanStopLinks().catch((err) => console.warn('[startup] portolan lin
 const app = new Elysia()
   // First, so its onRequest timestamp is taken before anything else runs.
   .use(requestMetrics)
+  // Before requestContext: Elysia stops at the first onError hook that returns
+  // a value, and requestContext answers with the generic 5xx body. This one
+  // only reports and returns nothing, so both run.
+  .use(errorTracking)
+  // Request id and the generic 5xx body, for every route. See the module.
+  .use(requestContext)
   .use(cors({ credentials: false }))
   .use(swagger(swaggerConfig))
   .use(healthRoutes)
   .use(searchRoutes)
   .use(brandsRoutes)
+  .use(brandLogoRoutes)
   .use(containsRoutes)
   .use(childrenRoutes)
   .use(placeRoutes)
@@ -156,11 +189,14 @@ const app = new Elysia()
   .use(bridgeMeshRoutes)
   .use(landmarkRoutes)
   .use(tileRoutes)
+  .use(styleRoutes)
+  .use(mapAssetRoutes)
   .use(graphhopperRoutes)
   .use(routeRoutes)
   .use(matchRoutes)
   .use(isochroneRoutes)
   .use(transitRoutes)
+  .use(transitAttributionRoutes)
   .use(gbfsRoutes)
   .use(speechRoutes)
   .listen(port)
@@ -194,13 +230,19 @@ startAccountSweep()
 // cancelable in the console instead of being a host crontab nobody can see.
 void startScheduler()
 
+// Webhook alerts when a required dependency stays down. A no-op unless
+// ALERT_WEBHOOK_URL is set.
+startDependencyAlerts()
+
 assertAuthConfigured()
 
 // Flush whatever is buffered before the process goes away, so a rolling deploy
 // doesn't discard the last few seconds of billing counters.
 for (const signal of ['SIGTERM', 'SIGINT'] as const) {
   process.on(signal, () => {
-    void Promise.allSettled([flushUsage(), flushRequestMetrics()]).finally(() => process.exit(0))
+    void Promise.allSettled([flushUsage(), flushRequestMetrics(), flushPenalties(), flushErrorTracking()]).finally(
+      () => process.exit(0),
+    )
   })
 }
 

@@ -17,6 +17,8 @@ import { dbUrl, onnotice } from '../db'
 import { getScript } from '../admin/scripts-manifest'
 import { buildInvocation, advisoryKeyFor, isExclusive, type Job } from '../services/job-invocation'
 import * as store from '../services/ops-job-store'
+import { initErrorTracking, captureError, flushErrorTracking } from '../lib/error-tracking'
+import { startDiskAlerts } from './disk-alerts'
 
 const REPO_ROOT = resolve(import.meta.dir, '../..')
 const WORKER_ID = `${hostname()}:${process.pid}:${randomUUID().slice(0, 8)}`
@@ -62,8 +64,10 @@ async function shutdown(signal: string): Promise<void> {
       await store.requeue(job.jobId)
     } catch (err) {
       console.error('[ops-worker] failed to requeue on shutdown:', err)
+      captureError(err, { tags: { handler: 'shutdown' } })
     }
   }
+  await flushErrorTracking().catch(() => {})
   process.exit(0)
 }
 
@@ -115,7 +119,18 @@ async function runJob(job: Job): Promise<void> {
     }
   }
 
-  const inv = buildInvocation(script, job.params)
+  let inv: ReturnType<typeof buildInvocation>
+  try {
+    inv = buildInvocation(script, job.params)
+  } catch (err) {
+    // A job queued before params were validated, with a value that no longer
+    // passes. Fail it rather than run it, and let go of the lock.
+    const message = err instanceof Error ? err.message : String(err)
+    await store.appendLogs(job.id, [{ stream: 'system', text: `Refused: ${message}` }])
+    await store.setStatus(job.id, 'failed', 1, message)
+    if (lockConn) await lockConn.end()
+    return
+  }
   if (inv.kind !== 'process') {
     await store.setStatus(job.id, 'failed', 1, 'invocation not process')
     if (lockConn) await lockConn.end()
@@ -216,7 +231,9 @@ async function runJob(job: Job): Promise<void> {
 }
 
 async function main() {
+  await initErrorTracking('ops')
   await store.ensureOpsJobsSchema()
+  startDiskAlerts()
   console.log(`[ops-worker] ${WORKER_ID} started; polling for process jobs from the DB queue`)
   for (;;) {
     // Claiming a job now would race the requeue shutdown() is in the middle of.
@@ -236,12 +253,26 @@ async function main() {
       }
     } catch (err) {
       console.error('[ops-worker] loop error:', err)
+      captureError(err, { tags: { handler: 'loop' } })
     }
     if (!ranSomething) await sleep(POLL_MS)
   }
 }
 
-main().catch((e) => {
+// An unhandled rejection stays fatal here, as it is by default in Bun: the
+// container restarts and reapStaleJobs fails the orphaned job. The handler only
+// reports it on the way out.
+process.on('unhandledRejection', (reason) => {
+  console.error('[ops-worker] unhandledRejection:', reason)
+  captureError(reason, { tags: { handler: 'unhandledRejection' } })
+  void flushErrorTracking()
+    .catch(() => {})
+    .finally(() => process.exit(1))
+})
+
+main().catch(async (e) => {
   console.error('[ops-worker] fatal:', e)
+  captureError(e, { tags: { handler: 'fatal' } })
+  await flushErrorTracking().catch(() => {})
   process.exit(1)
 })

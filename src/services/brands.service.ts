@@ -1,6 +1,8 @@
 import { db } from '../db'
 import { sql } from 'drizzle-orm'
 import { brandCache } from '../lib/cache'
+import { brandLogoUrl } from './brand-logo-files.service'
+import { logoFileFromUrl } from '../lib/commons-logo'
 
 /**
  * A brand from the geo_brands catalog — one distinct brand aggregated across all
@@ -15,8 +17,61 @@ export interface Brand {
   category: string | null
   repLat: number | null
   repLng: number | null
+  /** Barrelman's copy of the Wikidata logo, served by /brand-logos/{qid}. */
   logoUrl: string | null
+  logoLicense: BrandLogoLicense | null
+  /** A credit line for the logo: "Author, Licence, via Wikimedia Commons". */
+  logoAttribution: string | null
   description: string | null
+}
+
+export interface BrandLogoLicense {
+  name: string | null
+  url: string | null
+  attributionRequired: boolean
+  publicDomain: boolean
+  trademarked: boolean
+  /** The Commons file page, with the full terms. */
+  source: string | null
+}
+
+/** Columns every brand query selects from brand_logos. */
+const LOGO_COLUMNS = sql`l.logo_file, l.logo_url, l.description, l.logo_license, l.logo_license_url, l.logo_artist,
+  l.logo_attribution_required, l.logo_public_domain, l.logo_trademarked, l.logo_page_url, l.logo_download_url, l.logo_meta_at`
+
+/**
+ * Whether Commons was asked about the logo and has no such file. Wikidata
+ * still names some deleted files (Starbucks' P154 did on 2026-11-04), and a
+ * URL to one would only ever 404.
+ */
+function logoGone(r: any): boolean {
+  return !!r.logo_meta_at && !r.logo_download_url
+}
+
+/** Our URL for a row's logo, or null when it has none we can serve. */
+export function logoUrlOf(r: any): string | null {
+  if (logoGone(r)) return null
+  // Rows resolved before logo_file existed name their file only in logo_url.
+  return brandLogoUrl(r.wikidata ?? null, r.logo_file ?? logoFileFromUrl(r.logo_url))
+}
+
+/** The licence of a logo row, or null until Commons has been asked. */
+export function logoLicenseOf(r: any): BrandLogoLicense | null {
+  if (!r.logo_file || !r.logo_meta_at || logoGone(r)) return null
+  return {
+    name: r.logo_license ?? null,
+    url: r.logo_license_url ?? null,
+    attributionRequired: r.logo_attribution_required ?? true,
+    publicDomain: r.logo_public_domain ?? false,
+    trademarked: r.logo_trademarked ?? false,
+    source: r.logo_page_url ?? null,
+  }
+}
+
+/** Commons' suggested credit form, from whatever parts are known. */
+export function logoAttributionOf(r: any): string | null {
+  if (!r.logo_file || !r.logo_meta_at || logoGone(r)) return null
+  return [r.logo_artist, r.logo_license, 'via Wikimedia Commons'].filter(Boolean).join(', ')
 }
 
 function adaptRow(r: any): Brand {
@@ -28,7 +83,9 @@ function adaptRow(r: any): Brand {
     category: r.category ?? null,
     repLat: r.rep_lat != null ? Number(r.rep_lat) : null,
     repLng: r.rep_lng != null ? Number(r.rep_lng) : null,
-    logoUrl: r.logo_url ?? null,
+    logoUrl: logoUrlOf(r),
+    logoLicense: logoLicenseOf(r),
+    logoAttribution: logoAttributionOf(r),
     description: r.description ?? null,
   }
 }
@@ -127,7 +184,7 @@ export async function searchBrands(
   try {
     const rows = await db.execute(sql`
       SELECT b.brand_key, b.name, b.wikidata, b.location_count, b.category, b.rep_lat, b.rep_lng,
-             l.logo_url, l.description, b.name ILIKE (${query} || '%') AS is_prefix
+             ${LOGO_COLUMNS}, b.name ILIKE (${query} || '%') AS is_prefix
       FROM geo_brands b
       LEFT JOIN brand_logos l ON l.wikidata = b.wikidata
       WHERE b.name ILIKE (${query} || '%')
@@ -166,7 +223,7 @@ export async function getBrand(brandKey: string): Promise<Brand | null> {
   try {
     const rows = await db.execute(sql`
       SELECT b.brand_key, b.name, b.wikidata, b.location_count, b.category, b.rep_lat, b.rep_lng,
-             l.logo_url, l.description
+             ${LOGO_COLUMNS}
       FROM geo_brands b
       LEFT JOIN brand_logos l ON l.wikidata = b.wikidata
       WHERE b.brand_key = ${key}

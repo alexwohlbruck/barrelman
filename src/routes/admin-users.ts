@@ -41,16 +41,18 @@ import {
   updateApiKeyScopes,
 } from '../services/api-keys.service'
 import { getBalance, setPlan } from '../services/credits.service'
-import { usageByDay, usageByKey, usageTotals, currentCycleStart, utcDay } from '../services/usage.service'
+import { usageByDay, usageByKey, usageTotals, utcDay } from '../services/usage.service'
 import {
   describeTerms,
   findUserById,
   LastAdminError,
   setUserRole,
 } from '../services/accounts.service'
+import { BillingTeardownError } from '../services/billing.service'
 import { throttleStats } from '../services/throttle.service'
 import { trafficReport } from '../services/request-metrics.service'
 import { ALL_SCOPES, allPlans, getPlan, isPlanId } from '../billing/plans'
+import { billingPeriod } from '../billing/periods'
 
 /**
  * Recorded as the actor when a caller somehow reaches these routes without a
@@ -214,7 +216,7 @@ export function createAdminUserRoutes(overrides: Partial<AdminUserDeps> = {}) {
         return { error: 'Account not found' }
       }
 
-      const from = currentCycleStart()
+      const from = billingPeriod(getPlan(account.plan), account.billingPeriodStart).start
       const to = utcDay()
 
       const [keys, balance, daily, byKey, lifetime, history] = await Promise.all([
@@ -296,6 +298,12 @@ export function createAdminUserRoutes(overrides: Partial<AdminUserDeps> = {}) {
           set.status = 409
           return { error: err.message }
         }
+        // Polar could not be told: the account is kept so its subscription
+        // does not go on charging with nothing left to cancel it from.
+        if (err instanceof BillingTeardownError) {
+          set.status = 502
+          return { error: err.message }
+        }
         throw err
       }
     },
@@ -310,7 +318,9 @@ export function createAdminUserRoutes(overrides: Partial<AdminUserDeps> = {}) {
           'Erases the account and everything attached to it — API keys, usage, the credit ledger, abuse ' +
           'signals and its moderation history — with no way back. Suspending is the reversible option, ' +
           'and the one that keeps a record of the decision. The request body must repeat the account\'s ' +
-          'email address. Refuses your own account and the last administrator.',
+          'email address. Refuses your own account and the last administrator. With billing enabled, ' +
+          'outstanding overage is reported and the Polar subscription revoked first; if Polar cannot be ' +
+          'reached the account is kept and the response is 502.',
         tags: ['Admin'],
       },
     },

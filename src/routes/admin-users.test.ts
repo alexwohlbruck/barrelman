@@ -10,6 +10,7 @@
 import { describe, test, expect, mock } from 'bun:test'
 import { createAdminUserRoutes, type AdminUserDeps } from './admin-users'
 import { LastAdminError } from '../services/accounts.service'
+import { BillingTeardownError } from '../services/billing.service'
 
 const BASE = 'http://localhost'
 const ADMIN_ID = 'admin-1'
@@ -512,6 +513,22 @@ describe('DELETE /admin/users/:id', () => {
 
     expect(res.status).toBe(409)
     expect((await res.json()).error).toContain('only administrator')
+  })
+
+  test('keeps the account and answers 502 when its subscription cannot be revoked', async () => {
+    // A deleted account with a live subscription goes on charging the card,
+    // with no account left to cancel from.
+    const d = deps({
+      deleteAccount: mock(async () => {
+        throw new BillingTeardownError('The Polar subscription on this account could not be revoked.')
+      }),
+    })
+    const app = createAdminUserRoutes(d)
+
+    const res = await app.handle(del(`/admin/users/${TARGET_ID}`, { email: TARGET_EMAIL }))
+
+    expect(res.status).toBe(502)
+    expect((await res.json()).error).toContain('could not be revoked')
   })
 
   test('404s for an unknown account', async () => {

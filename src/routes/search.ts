@@ -1,6 +1,7 @@
 import Elysia, { t } from 'elysia'
 import { apiAuth, apiAuthAfter } from '../middleware/api-auth'
 import { searchPlaces as _searchPlaces } from '../services/search.service'
+import { clampInt, clampNumber, LIMITS } from '../lib/params'
 
 export function createSearchRoutes(deps = { searchPlaces: _searchPlaces }) {
   return new Elysia()
@@ -9,7 +10,17 @@ export function createSearchRoutes(deps = { searchPlaces: _searchPlaces }) {
     .post(
       '/search',
       async ({ body, request }) => {
-        return deps.searchPlaces(body, request.signal)
+        // Clamped rather than refused, so an oversized page still answers.
+        return deps.searchPlaces(
+          {
+            ...body,
+            radius: clampNumber(body.radius, { min: 1, max: LIMITS.maxSearchRadiusM }),
+            buffer: clampNumber(body.buffer, { min: 1, max: LIMITS.maxCorridorBufferM }),
+            limit: clampInt(body.limit, { min: 1, max: LIMITS.maxRows }),
+            offset: clampInt(body.offset, { min: 0, max: LIMITS.maxOffset }),
+          },
+          request.signal,
+        )
       },
       {
         body: t.Object({
@@ -26,7 +37,7 @@ export function createSearchRoutes(deps = { searchPlaces: _searchPlaces }) {
             examples: [-80.8431],
           })),
           radius: t.Optional(t.Number({
-            description: 'Search radius in meters around the lat/lng point. Max recommended: 50000.',
+            description: 'Search radius in meters around the lat/lng point. Max recommended: 50000; larger values are capped at 500000.',
             examples: [1000, 5000, 25000],
           })),
           route: t.Optional(t.Object({
@@ -39,7 +50,7 @@ export function createSearchRoutes(deps = { searchPlaces: _searchPlaces }) {
           })),
           buffer: t.Optional(t.Number({
             default: 1000,
-            description: 'Corridor width in meters when using route mode. Places closer to the route are strongly preferred via exponential decay ranking.',
+            description: 'Corridor width in meters when using route mode, at most 50000. Places closer to the route are strongly preferred via exponential decay ranking.',
             examples: [500, 1000, 2000, 5000],
           })),
           categories: t.Optional(t.Array(t.String(), {
@@ -52,12 +63,12 @@ export function createSearchRoutes(deps = { searchPlaces: _searchPlaces }) {
           })),
           limit: t.Optional(t.Number({
             default: 20,
-            description: 'Maximum number of results to return.',
+            description: 'Maximum number of results to return. At most 200.',
             examples: [10, 20, 50],
           })),
           offset: t.Optional(t.Number({
             default: 0,
-            description: 'Number of results to skip for pagination (browse mode only).',
+            description: 'Number of results to skip for pagination (browse mode only). At most 10000.',
             examples: [0, 20, 40],
           })),
           semantic: t.Optional(t.Boolean({

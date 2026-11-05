@@ -11,6 +11,8 @@ description: Which OpenStreetMap tags the lane-level road layers are built from,
 | `road_markings` | painted lines and areas | `kind`, `pattern`, `color`, `style`, `bridge` |
 | `road_glyphs` | arrows and bike symbols, and what stands beside the road at signals and railway crossings | `glyph`, `direction`, `bridge` |
 
+`bridge` is true for paint a 3D bridge deck draws: paint on the bridge, and the first 15 m of the road carrying on from each end of a way tagged `bridge`. A client drawing decks draws those rows on the deck and on the ground just past its ends, and leaves them out of its flat road layers, so the paint at a deck's end is drawn once. A client without decks draws them as the rest.
+
 Only tags the OSM wiki documents are read, and paint follows US conventions (MUTCD): yellow where it separates opposing traffic, white otherwise.
 
 ## What is drawn
@@ -49,6 +51,8 @@ Glyphs that do not start with `road-` stand beside the road rather than on it, s
 - **Crossings.** `crossing:barrier` (`yes`, `half`, `full`, `double_half`, `gate`) gives a gate, its number the lanes its arm crosses (the arriving lanes, or all of them for `full`, up to three). `double_half` also closes the lanes leaving the crossing. `crossing:light` or `crossing:bell` without a barrier gives lights. An untagged `railway=level_crossing` gets a crossbuck unless `crossing:saltire=no`, the wiki's default; a tram crossing gets one only where tagged. Gear stands before the first track the traffic meets, where its post clears the nearest track by 4.2 m. A road crossing several tracks has a node on each; nodes within 12 m are one crossing, and each takes the most any of them is tagged with.
 
 Hatched areas are read when they are under about 200 m across, at ground level (no `bridge`, `tunnel` or `layer`), white or yellow, and on or beside a road. One without a `colour` is yellow in the Americas when a two-way road runs through it, or one-ways either side of it run opposite ways, and white otherwise. Chevrons need a one-way beside the area to know which way traffic runs; without one they are drawn as stripes.
+
+Unmapped gores are drawn too. Where a fork divides one-ways side by side (a ramp leaving a motorway, two ramps parting), the wedge their carriageways leave is paved and filled with white chevrons out to the nose, where the carriageways stand 4 m apart. On a bridge carrying both branches it lies on the bridge's deck, which is paved out to the same nose.
 
 ## Mapping a painted median
 
@@ -93,3 +97,11 @@ A greenway or bike path with a centre line is `highway=cycleway` + `lanes=2` (+ 
 ## Rebuilding
 
 A full build replaces the three tables; a scoped build rebuilds one box (see the header of the SQL file). With `ROAD_MARKINGS_INCREMENTAL=1`, replication queues a box wherever an edit touches what the build reads: the roads, crossings, signal, stop, give way, turning circle and speed hump nodes, hatched areas, and the sidewalks beside a road.
+
+## Lanes along a route
+
+`POST /route/lanes` applies the same rules to the ways a route drives, at request time: lane count and split, lane width, parking and bike lanes, bus lanes, turn arrows and `placement`. It needs the way each stretch of a route drives, which `/route` returns as `osmWayId` on its edge segments once GraphHopper's graph encodes `osm_way_id` (in `graph.encoded_values` in `graphhopper-config.yml`). A graph built before that has no way ids; rebuild it with `scripts/rebuild-graphhopper.sh`. Nothing is stored, so lanes follow OSM edits as soon as the database has them.
+
+With `profile: "bike"` it draws a ride down the bike lane on its side of travel, or a metre inside the outer traffic lane, and leaves cycleways, paths and footways on their own line.
+
+The kerb room read from sidewalks and the tapers between ways are left out at request time: they move kerbs rather than lanes.

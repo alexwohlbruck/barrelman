@@ -23,6 +23,10 @@ import {
 } from './admin.service'
 
 import { importLandmarks, type ImportResult } from './landmark-import.service'
+import { reconcileBilling } from './billing-reconcile.service'
+import { refreshFeedLicenses } from './gtfs.service'
+import { invalidateFeedTerms } from './feed-license.service'
+import { backfillLogoLicences } from '../lib/brand-logos'
 
 const IMPORT_DIR = join(import.meta.dir, '../../import')
 
@@ -108,8 +112,27 @@ export const INTERNAL_HANDLERS: Record<string, (log: LogFn) => Promise<void>> = 
   'admin:rebuild-tsvectors': async (log) => reportTask(log, await runRebuildTsvectors()),
   'admin:build-search-lexicon': async (log) => reportTask(log, await runBuildSearchLexicon()),
 
+  'brands:backfill-logo-licences': async (log) => {
+    log('Reading the Commons licence of every brand logo that has none on record …')
+    const r = await backfillLogoLicences(log)
+    log(`Done: ${r.answered}/${r.files} files answered by Commons`)
+    if (r.files && !r.answered) throw new Error('Commons answered for no file; check outbound access to commons.wikimedia.org')
+  },
+
+  'gtfs:refresh-licences': async (log) => {
+    log('Re-reading licence terms from Transitland for every feed with an onestop id …')
+    const r = await refreshFeedLicenses(undefined, globalThis.fetch, log)
+    invalidateFeedTerms()
+    log(`Done: ${r.updated}/${r.checked} feeds updated, ${r.missing} not found upstream, ${r.errors} errors`)
+    if (r.errors && !r.updated) throw new Error('No feed licence could be read; check TRANSITLAND_API_KEY')
+  },
+
   'landmarks:import': async (log) => reportSkipped(log, await importLandmarks({ log })),
   'landmarks:import-full': async (log) => reportSkipped(log, await importLandmarks({ full: true, log })),
+
+  'billing:reconcile': async (log) => {
+    await reconcileBilling(log)
+  },
 
   // raw SQL-file tasks
   'sql:create-station-links.sql': (log) => runSqlFile(log, 'create-station-links.sql'),

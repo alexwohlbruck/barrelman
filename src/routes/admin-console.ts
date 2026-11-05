@@ -1,13 +1,13 @@
 import Elysia, { t } from 'elysia'
 import pkg from '../../package.json' with { type: 'json' }
-import { adminAuthHandler } from '../middleware/auth'
+import { adminAuthHandler, adminIpGuard } from '../middleware/auth'
 import {
   SCRIPTS,
   CATEGORY_LABELS,
   CATEGORY_ORDER,
   getScript,
 } from '../admin/scripts-manifest'
-import { isExclusive } from '../services/job-invocation'
+import { isExclusive, ParamValidationError } from '../services/job-invocation'
 import {
   startJob,
   listJobs,
@@ -28,7 +28,7 @@ import {
   ScheduleValidationError,
 } from '../services/schedules.service'
 import { describeCron, nextRun } from '../lib/cron'
-import { getDataMetrics, getServiceStatuses } from '../services/admin-metrics.service'
+import { getDataMetrics, getServiceStatuses, listGtfsFeeds } from '../services/admin-metrics.service'
 import {
   listRegions,
   getRegion,
@@ -94,21 +94,25 @@ type ScheduleBody = {
  * before it has any credential — it reports the instance name and whether
  * accounts are on at all.
  */
-export const adminConsoleConfigRoutes = new Elysia({ prefix: '/admin' }).get(
-  '/config',
-  () => ({
-    // Admin access is always account-based now — an admin-role session, or an
-    // account API key carrying the `admin` scope. There is no shared secret to
-    // advertise, so the console always asks for a sign-in.
-    authRequired: true,
-    accountsEnabled,
-    apiName: 'Barrelman',
-    // package.json is what the release pipeline tags from, so it is the only
-    // version worth reporting. This was a literal and had drifted to 0.4.0.
-    version: pkg.version,
-  }),
-  { detail: { summary: 'Admin console config', tags: ['Admin'] } },
-)
+export const adminConsoleConfigRoutes = new Elysia({ prefix: '/admin' })
+  // No credential, but still under BARRELMAN_ADMIN_ALLOWED_IPS like the rest of
+  // /admin. The console only reads the version from it and copes with a refusal.
+  .onBeforeHandle(adminIpGuard)
+  .get(
+    '/config',
+    () => ({
+      // Admin access is always account-based now — an admin-role session, or an
+      // account API key carrying the `admin` scope. There is no shared secret to
+      // advertise, so the console always asks for a sign-in.
+      authRequired: true,
+      accountsEnabled,
+      apiName: 'Barrelman',
+      // package.json is what the release pipeline tags from, so it is the only
+      // version worth reporting. This was a literal and had drifted to 0.4.0.
+      version: pkg.version,
+    }),
+    { detail: { summary: 'Admin console config', tags: ['Admin'] } },
+  )
 
 /**
  * Authenticated admin console API.
@@ -291,6 +295,10 @@ export const adminConsoleRoutes = new Elysia({ prefix: '/admin' })
           set.status = 409
           return { error: err.message, activeJobId: err.activeJobId, activeStatus: err.activeStatus }
         }
+        if (err instanceof ParamValidationError) {
+          set.status = 400
+          return { error: err.message }
+        }
         set.status = 500
         return { error: err instanceof Error ? err.message : 'Failed to start job' }
       }
@@ -399,6 +407,10 @@ export const adminConsoleRoutes = new Elysia({ prefix: '/admin' })
         if (err instanceof JobConflictError) {
           set.status = 409
           return { error: err.message, activeJobId: err.activeJobId, activeStatus: err.activeStatus }
+        }
+        if (err instanceof ParamValidationError) {
+          set.status = 400
+          return { error: err.message }
         }
         set.status = 500
         return { error: err instanceof Error ? err.message : 'Failed to start job' }
@@ -542,6 +554,9 @@ export const adminConsoleRoutes = new Elysia({ prefix: '/admin' })
 
   // ── Metrics & service health ────────────────────────────────────────
   .get('/metrics', () => getDataMetrics(), { detail: { summary: 'Data metrics', tags: ['Admin'] } })
+  .get('/gtfs-feeds', async () => ({ feeds: await listGtfsFeeds() }), {
+    detail: { summary: 'GTFS feeds with their licence terms', tags: ['Admin'] },
+  })
   .get('/services', async () => ({ services: await getServiceStatuses() }), {
     detail: { summary: 'Downstream service health', tags: ['Admin'] },
   })

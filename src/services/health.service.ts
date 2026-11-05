@@ -108,14 +108,18 @@ const ENDPOINT_DEPENDENCIES: Record<
   routing: {
     dependsOn: ['graphhopper'],
     enhancedBy: ['database'],
-    partialMessage: 'Route hazards (/route/hazards), sidewalk street names and route context (crosswalk names, overpasses, states, parks) are unavailable; routes are unaffected',
+    partialMessage: 'Lane geometry (/route/lanes), route hazards (/route/hazards), sidewalk street names and route context (crosswalk names, overpasses, states, parks) are unavailable; routes are unaffected',
   },
   isochrone: {
     dependsOn: ['graphhopper'],
     enhancedBy: ['motis'],
     partialMessage: 'Transit isochrones are unavailable; walk, bike and car are unaffected',
   },
-  transit: { dependsOn: ['database', 'motis'] },
+  transit: {
+    dependsOn: ['database', 'motis'],
+    enhancedBy: ['graphhopper'],
+    partialMessage: 'Park-and-ride is unavailable; other transit trips are unaffected',
+  },
 }
 
 /** Services an instance may legitimately not run. These never fail the instance. */

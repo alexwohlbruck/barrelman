@@ -4,6 +4,7 @@ import type {
   JobStats,
   LogLine,
   DataMetrics,
+  GtfsFeedSummary,
   ServiceStatus,
   TestResult,
   ImportRegion,
@@ -13,6 +14,7 @@ import type {
   CreatedApiKey,
   BillingConfig,
   BillingStatus,
+  ChangePlanResponse,
   CreditBalance,
   LedgerEntry,
   PasskeySummary,
@@ -197,6 +199,10 @@ export function getMetrics(): Promise<DataMetrics> {
   return request<DataMetrics>('/admin/metrics')
 }
 
+export function getGtfsFeeds(): Promise<{ feeds: GtfsFeedSummary[] }> {
+  return request<{ feeds: GtfsFeedSummary[] }>('/admin/gtfs-feeds')
+}
+
 export function getServices(): Promise<{ services: ServiceStatus[] }> {
   return request<{ services: ServiceStatus[] }>('/admin/services')
 }
@@ -278,6 +284,27 @@ export function updateAccount(name: string): Promise<{ user: PublicUser }> {
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ name }),
   })
+}
+
+/**
+ * Download everything held about this account as a JSON file. Fetched rather
+ * than linked so a 429 can be shown as a toast instead of a broken download.
+ */
+export async function downloadAccountExport(): Promise<void> {
+  const res = await fetch('/account/export', { credentials: 'same-origin' })
+  if (!res.ok) {
+    const payload = await res.json().catch(() => null)
+    throw new ApiError(res.status, payload?.error ?? res.statusText)
+  }
+  const disposition = res.headers.get('content-disposition') ?? ''
+  const filename = /filename="([^"]+)"/.exec(disposition)?.[1] ?? 'barrelman-account.json'
+  const url = URL.createObjectURL(await res.blob())
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  link.click()
+  // Revoked a moment later: Safari drops a download whose URL dies in the same tick.
+  setTimeout(() => URL.revokeObjectURL(url), 1_000)
 }
 
 export function getSessions(): Promise<SessionSummary[]> {
@@ -378,6 +405,18 @@ export function startCheckout(payload: {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(payload),
+  })
+}
+
+/**
+ * Move the subscription onto another plan. With no subscription yet the server
+ * answers with a checkout link instead, so this is the one call for any plan.
+ */
+export function changePlan(plan: string): Promise<ChangePlanResponse> {
+  return request<ChangePlanResponse>('/billing/change-plan', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ plan }),
   })
 }
 

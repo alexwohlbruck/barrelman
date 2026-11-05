@@ -1,14 +1,15 @@
 -- Partial spatial indexes for the route context /route adds to each path
 --
 -- A crosswalk's road is read from named roads, overpasses from bridges and
--- raised ways along the route, parks from park polygons. Through the plain
--- geo_places_geom_idx each probe reads every building, sidewalk and polygon in
--- its box; over these predicates it reads only the candidates. States are
+-- raised ways along the route, parks from park polygons, and the station
+-- entrances, elevators, islands and push buttons a walk or ride passes from
+-- those nodes. Through the plain geo_places_geom_idx each probe reads every
+-- building, sidewalk and polygon in its box; over these predicates it reads only the candidates. States are
 -- read from state_parts (build-state-parts.sql) instead.
 --
 -- The WHERE clauses must stay identical to NAMED_ROAD_PREDICATE,
--- OVERPASS_PREDICATE and PARK_PREDICATE in src/services/route-context.service.ts;
--- the planner uses a partial index only when the query implies its predicate.
+-- OVERPASS_PREDICATE, PARK_PREDICATE and EDGE_NODE_PREDICATE in
+-- src/services/route-context.service.ts; the planner uses a partial index only when the query implies its predicate.
 -- A test holds them together.
 --
 -- Run out of band, CONCURRENTLY: each one scans the whole of geo_places.
@@ -29,3 +30,13 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS geo_places_route_overpass_idx
 CREATE INDEX CONCURRENTLY IF NOT EXISTS geo_places_route_park_idx
   ON geo_places USING gist (geom)
   WHERE geom_type = 'area' AND tags->>'leisure' = 'park';
+
+CREATE INDEX CONCURRENTLY IF NOT EXISTS geo_places_route_edge_node_idx
+  ON geo_places USING gist (geom)
+  WHERE geom_type = 'point'
+    AND (tags->>'railway' IN ('subway_entrance', 'train_station_entrance')
+         OR tags->>'public_transport' = 'entrance'
+         OR tags->>'highway' = 'elevator'
+         OR tags->>'crossing' = 'traffic_island'
+         OR tags->>'crossing:island' = 'yes'
+         OR tags->>'button_operated' = 'yes');

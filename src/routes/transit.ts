@@ -1,5 +1,7 @@
 import Elysia, { t } from 'elysia'
-import { apiAuth, apiAuthAfter } from '../middleware/api-auth'
+import { clampInt, clampNumber, LIMITS } from '../lib/params'
+import { serverError } from '../lib/errors'
+import { apiAuth, apiAuthAfter, waiveCharge, type ApiAuthDeps } from '../middleware/api-auth'
 import {
   getTransitRoute as _getTransitRoute,
   getIntermodalRoute as _getIntermodalRoute,
@@ -8,6 +10,7 @@ import {
   markTransitActivity,
   MotisError,
   type TransitRouteRequest,
+  type TransitRouteResponse,
   type IntermodalRouteRequest,
   type TransitMode,
   type MotisStreetMode,
@@ -31,7 +34,6 @@ import {
   getServiceAlerts as _getServiceAlerts,
 } from '../services/alerts.service'
 import {
-  discoverRtUrls as _discoverRtUrls,
 } from '../services/gtfs.service'
 import {
   getRouteDetail as _getRouteDetail,
@@ -41,7 +43,26 @@ import { isGtfsModeClass } from '../lib/gtfs-modes'
 import {
   getStationDetail as _getStationDetail,
   getNearestEntrance as _getNearestEntrance,
+  findEntrances as _findEntrances,
+  type EntrancePurpose,
 } from '../services/station.service'
+import { getStationPaths as _getStationPaths } from '../services/station-paths.service'
+import {
+  itineraryResponses,
+  departureResponses,
+  routeDetailResponses,
+  feedRowResponses,
+} from './transit-schemas'
+
+/**
+ * A plan with no itinerary is not charged. On a timetable-only instance every
+ * bike, car and rental plan comes back empty, and the caller can't avoid that
+ * by asking differently. The response's `warnings` say why it is empty.
+ */
+function unbilledIfEmpty(request: Request, result: TransitRouteResponse): TransitRouteResponse {
+  if (!result.itineraries?.length) waiveCharge(request)
+  return result
+}
 
 export function createTransitRoutes(deps: {
   getTransitRoute?: typeof _getTransitRoute
@@ -52,7 +73,6 @@ export function createTransitRoutes(deps: {
   getVehiclePositions?: typeof _getVehiclePositions
   getRouteShape?: typeof _getRouteShape
   getServiceAlerts?: typeof _getServiceAlerts
-  discoverRtUrls?: typeof _discoverRtUrls
   getRouteDetail?: typeof _getRouteDetail
   resolveRoute?: typeof _resolveRoute
   getVehiclesForRoute?: typeof _getVehiclesForRoute
@@ -60,6 +80,10 @@ export function createTransitRoutes(deps: {
   fetchFn?: FetchFn
   getStationDetail?: typeof _getStationDetail
   getNearestEntrance?: typeof _getNearestEntrance
+  findEntrances?: typeof _findEntrances
+  getStationPaths?: typeof _getStationPaths
+  /** The metering guard's collaborators, for tests. */
+  auth?: Partial<ApiAuthDeps>
 } = {}) {
   const getTransitRoute = deps.getTransitRoute || _getTransitRoute
   const getIntermodalRoute = deps.getIntermodalRoute || _getIntermodalRoute
@@ -69,7 +93,6 @@ export function createTransitRoutes(deps: {
   const getVehiclePositions = deps.getVehiclePositions || _getVehiclePositions
   const getRouteShape = deps.getRouteShape || _getRouteShape
   const getServiceAlerts = deps.getServiceAlerts || _getServiceAlerts
-  const discoverRtUrls = deps.discoverRtUrls || _discoverRtUrls
   const getRouteDetail = deps.getRouteDetail || _getRouteDetail
   const resolveRoute = deps.resolveRoute || _resolveRoute
   const getVehiclesForRoute = deps.getVehiclesForRoute || _getVehiclesForRoute
@@ -77,17 +100,21 @@ export function createTransitRoutes(deps: {
   const fetchFn = deps.fetchFn || undefined
   const getStationDetail = deps.getStationDetail || _getStationDetail
   const getNearestEntrance = deps.getNearestEntrance || _getNearestEntrance
+  const findEntrances = deps.findEntrances || _findEntrances
+  const getStationPaths = deps.getStationPaths || _getStationPaths
+  const purposeOf = (value?: string): EntrancePurpose | undefined =>
+    value === 'enter' || value === 'exit' ? value : undefined
 
   return new Elysia({ prefix: '/transit' })
-    .onBeforeHandle(apiAuth('transit'))
+    .onBeforeHandle(apiAuth('transit', deps.auth))
     .onAfterHandle(apiAuthAfter)
 
     // ── POST /transit/route ─────────────────────────────────────────
-    .post('/route', async ({ body, set }) => {
+    .post('/route', async ({ body, set, request }) => {
       // Real traffic keeps MOTIS hot; tell the warm-up loop to stand down.
       markTransitActivity()
       try {
-        const request: TransitRouteRequest = {
+        const plan: TransitRouteRequest = {
           from: { lat: body.from.lat, lng: body.from.lng },
           to: { lat: body.to.lat, lng: body.to.lng },
           time: body.time,
@@ -99,7 +126,7 @@ export function createTransitRoutes(deps: {
           maxTransfers: body.maxTransfers,
           wheelchair: body.wheelchair,
         }
-        return await getTransitRoute(request, fetchFn)
+        return unbilledIfEmpty(request, await getTransitRoute(plan, fetchFn))
       } catch (err) {
         if (err instanceof MotisError) {
           set.status = err.statusCode >= 500 ? 502 : err.statusCode
@@ -110,11 +137,7 @@ export function createTransitRoutes(deps: {
           }
         }
 
-        set.status = 502
-        return {
-          error: 'Transit routing service unavailable',
-          detail: err instanceof Error ? err.message : String(err),
-        }
+        return serverError(request, set, err, 'Transit routing service unavailable', 502)
       }
     }, {
       body: t.Object({
@@ -137,23 +160,25 @@ export function createTransitRoutes(deps: {
       }),
       detail: {
         summary: 'Get transit route between two points',
+        responses: itineraryResponses,
         description:
           'Walk-and-transit itineraries between two coordinates, reaching stations ' +
           'within `maxWalkDistance` (default 1000 m). Each itinerary starts and ends ' +
           'with a walk leg; walking legs are straight-line estimates. Itineraries are ' +
           'ordered by arrival time (latest departure for `arriveBy`), list each ride ' +
           'once, and carry `fare` and `farePayments` where the feeds publish fare ' +
-          'data. An extra fare payment counts as ten minutes in the ordering.',
+          'data. An extra fare payment counts as ten minutes in the ordering. ' +
+          'A plan with no itinerary is not charged, and carries `warnings` saying so.',
         tags: ['Transit'],
       },
     })
 
     // ── POST /transit/intermodal-route ───────────────────────────────
-    .post('/intermodal-route', async ({ body, set }) => {
+    .post('/intermodal-route', async ({ body, set, request }) => {
       // Real traffic keeps MOTIS hot; tell the warm-up loop to stand down.
       markTransitActivity()
       try {
-        const request: IntermodalRouteRequest = {
+        const plan: IntermodalRouteRequest = {
           from: { lat: body.from.lat, lng: body.from.lng },
           to: { lat: body.to.lat, lng: body.to.lng },
           time: body.time,
@@ -175,7 +200,7 @@ export function createTransitRoutes(deps: {
           additionalTransferTime: body.additionalTransferTime,
           requireBikeTransport: body.requireBikeTransport,
         }
-        return await getIntermodalRoute(request, fetchFn)
+        return unbilledIfEmpty(request, await getIntermodalRoute(plan, fetchFn))
       } catch (err) {
         if (err instanceof MotisError) {
           set.status = err.statusCode >= 500 ? 502 : err.statusCode
@@ -186,11 +211,7 @@ export function createTransitRoutes(deps: {
           }
         }
 
-        set.status = 502
-        return {
-          error: 'Intermodal routing service unavailable',
-          detail: err instanceof Error ? err.message : String(err),
-        }
+        return serverError(request, set, err, 'Intermodal routing service unavailable', 502)
       }
     }, {
       body: t.Object({
@@ -223,28 +244,42 @@ export function createTransitRoutes(deps: {
       }),
       detail: {
         summary: 'Intermodal routing with mode selection',
+        responses: itineraryResponses,
         description:
           'Transit routing with access mode selection. Walking at both ends is ' +
-          'routed between nearby stations, with straight-line walk legs. BIKE, ' +
-          'CAR_PARKING, RENTAL and direct modes need MOTIS to have OSM street data ' +
-          'loaded, and return real OSM geometry for those legs. Set requireBikeTransport ' +
+          'routed between nearby stations, with straight-line walk legs. CAR_PARKING ' +
+          '(or CAR) access with walking at the far end is park-and-ride: a GraphHopper ' +
+          'drive to a rail or ferry station, preferring one with a park_ride lot, five ' +
+          'minutes to park, then a walk to the platform; the first vehicle boarded is ' +
+          'always a train, tram or ferry. BIKE, RENTAL and direct modes need MOTIS to ' +
+          'have OSM street data loaded, and return real OSM geometry for those legs. Set requireBikeTransport ' +
           'to keep only trips that allow bike carriage, for BIKE on both ends; it ' +
           'reads GTFS bikes_allowed, and feeds that omit it return no results. ' +
           'Itineraries carry `fare` and `farePayments` where the feeds publish fare ' +
           'data. Itineraries are ordered by arrival time (latest departure for ' +
           '`arriveBy`) and list each ride once; an extra fare payment counts as ' +
-          'ten minutes in the ordering.',
+          'ten minutes in the ordering. A plan with no itinerary is not charged. ' +
+          'Its `warnings` say no itinerary was found and, on an instance whose ' +
+          'MOTIS has no street graph, that access beyond walking is not available there. ' +
+          'A transit leg carries `directionLabel` ' +
+          'where its boarding platform\'s signed direction is known ("Uptown & ' +
+          'The Bronx"); `headsign` still names the terminal. Where the station ' +
+          'paths build covers a station, a transit leg also carries `entrance` ' +
+          '(first ride) and `exit` (last ride), chosen to minimise street walk ' +
+          'plus station path; `transfer`, the class of change from the previous ' +
+          'ride with its walk; and `boardingPosition`, where to stand on the train. ' +
+          'Walks on the mapped station come with a drawn line and written steps.',
         tags: ['Transit'],
       },
     })
 
     // ── GET /transit/stops ──────────────────────────────────────────
-    .get('/stops', async ({ query, set }) => {
+    .get('/stops', async ({ query, set, request }) => {
       try {
         const lat = Number(query.lat)
         const lng = Number(query.lng)
-        const radius = query.radius ? Number(query.radius) : 1000
-        const limit = query.limit ? Number(query.limit) : 20
+        const radius = clampNumber(query.radius, { min: 1, max: LIMITS.maxNearbyRadiusM, fallback: 1000 })!
+        const limit = clampInt(query.limit, { min: 1, max: LIMITS.maxRows, fallback: 20 })!
 
         if (isNaN(lat) || isNaN(lng)) {
           set.status = 400
@@ -258,11 +293,7 @@ export function createTransitRoutes(deps: {
 
         return await getNearbyStops({ lat, lng, radius, limit })
       } catch (err) {
-        set.status = 500
-        return {
-          error: 'Failed to query nearby stops',
-          detail: err instanceof Error ? err.message : String(err),
-        }
+        return serverError(request, set, err, 'Failed to query nearby stops')
       }
     }, {
       query: t.Object({
@@ -273,6 +304,7 @@ export function createTransitRoutes(deps: {
       }),
       detail: {
         summary: 'Find nearby transit stops',
+        responses: feedRowResponses('Stops ordered by distance'),
         description:
           'Returns transit stops within a radius of the given coordinates, ' +
           'ordered by distance. Uses PostGIS spatial index for efficient ' +
@@ -283,7 +315,7 @@ export function createTransitRoutes(deps: {
     })
 
     // ── GET /transit/routes ─────────────────────────────────────────
-    .get('/routes', async ({ query, set }) => {
+    .get('/routes', async ({ query, set, request }) => {
       try {
         if (!query.feedId || !query.stopId) {
           set.status = 400
@@ -299,8 +331,8 @@ export function createTransitRoutes(deps: {
             ? {
                 lat,
                 lng,
-                radius: query.radius ? Number(query.radius) : undefined,
-                limit: query.nearbyLimit ? Number(query.nearbyLimit) : undefined,
+                radius: clampNumber(query.radius, { min: 1, max: LIMITS.maxNearbyRadiusM }),
+                limit: clampInt(query.nearbyLimit, { min: 0, max: LIMITS.maxRows }),
               }
             : undefined
 
@@ -310,11 +342,7 @@ export function createTransitRoutes(deps: {
 
         return await getRoutesForStop(query.feedId, query.stopId, nearby, { complex })
       } catch (err) {
-        set.status = 500
-        return {
-          error: 'Failed to query routes for stop',
-          detail: err instanceof Error ? err.message : String(err),
-        }
+        return serverError(request, set, err, 'Failed to query routes for stop')
       }
     }, {
       query: t.Object({
@@ -328,6 +356,7 @@ export function createTransitRoutes(deps: {
       }),
       detail: {
         summary: 'Get routes serving a stop',
+        responses: feedRowResponses('Routes reachable at the stop'),
         description:
           'Returns the transit routes reachable at the specified stop, with ' +
           'route name, color, type and agency. Each route carries `via`: ' +
@@ -354,7 +383,7 @@ export function createTransitRoutes(deps: {
     })
 
     // ── GET /transit/departures ─────────────────────────────────────
-    .get('/departures', async ({ query, set }) => {
+    .get('/departures', async ({ query, set, request }) => {
       try {
         const lat = Number(query.lat)
         const lng = Number(query.lng)
@@ -367,12 +396,12 @@ export function createTransitRoutes(deps: {
           }
         }
 
-        const request: DepartureRequest = {
+        const departureRequest: DepartureRequest = {
           lat: isNaN(lat) ? 0 : lat,
           lng: isNaN(lng) ? 0 : lng,
-          radius: query.radius ? Number(query.radius) : undefined,
+          radius: clampNumber(query.radius, { min: 1, max: LIMITS.maxNearbyRadiusM }),
           time: query.time || undefined,
-          n: query.n ? Number(query.n) : undefined,
+          n: clampInt(query.n, { min: 1, max: LIMITS.maxDepartures }),
           feedId: query.feedId || undefined,
           stopId: query.stopId || undefined,
           routeShortNames: query.routeShortNames
@@ -388,16 +417,12 @@ export function createTransitRoutes(deps: {
                 .map((t) => Number(t.trim()))
                 .filter((t) => Number.isFinite(t))
             : undefined,
-          windowMinutes: query.windowMinutes ? Number(query.windowMinutes) : undefined,
+          windowMinutes: clampNumber(query.windowMinutes, { min: 1, max: LIMITS.maxWindowMinutes }),
         }
 
-        return await getDepartures(request, fetchFn)
+        return await getDepartures(departureRequest, fetchFn)
       } catch (err) {
-        set.status = 500
-        return {
-          error: 'Failed to fetch departures',
-          detail: err instanceof Error ? err.message : String(err),
-        }
+        return serverError(request, set, err, 'Failed to fetch departures')
       }
     }, {
       query: t.Object({
@@ -418,6 +443,7 @@ export function createTransitRoutes(deps: {
       }),
       detail: {
         summary: 'Get upcoming departures at nearby stops',
+        responses: departureResponses,
         description:
           'Returns upcoming departures from transit stops near the given ' +
           'coordinates. Queries the MOTIS timetable and enriches results ' +
@@ -442,13 +468,16 @@ export function createTransitRoutes(deps: {
           'stations are drawn as one. Pass ' +
           '`windowMinutes` to bound the board by time rather than by event ' +
           'count; each stop then reports `hasMore` when runs exist past what ' +
-          'was returned.',
+          'was returned. A departure carries `directionLabel` where its ' +
+          'platform\'s signed direction is known ("Uptown & The Bronx"), from ' +
+          'agency open data or the platform\'s OSM `destination`; `headsign` ' +
+          'still names the terminal.',
         tags: ['Transit'],
       },
     })
 
     // ── GET /transit/vehicles ──────────────────────────────────────────
-    .get('/vehicles', async ({ query, set }) => {
+    .get('/vehicles', async ({ query, set, request }) => {
       try {
         const north = Number(query.north)
         const south = Number(query.south)
@@ -476,11 +505,7 @@ export function createTransitRoutes(deps: {
 
         return await getVehiclePositions(request, fetchFn)
       } catch (err) {
-        set.status = 500
-        return {
-          error: 'Failed to fetch vehicle positions',
-          detail: err instanceof Error ? err.message : String(err),
-        }
+        return serverError(request, set, err, 'Failed to fetch vehicle positions')
       }
     }, {
       query: t.Object({
@@ -503,7 +528,7 @@ export function createTransitRoutes(deps: {
     })
 
     // ── GET /transit/shapes ───────────────────────────────────────────
-    .get('/shapes', async ({ query, set }) => {
+    .get('/shapes', async ({ query, set, request }) => {
       try {
         if (!query.feedId || !query.routeId) {
           set.status = 400
@@ -521,11 +546,7 @@ export function createTransitRoutes(deps: {
 
         return result
       } catch (err) {
-        set.status = 500
-        return {
-          error: 'Failed to fetch route shape',
-          detail: err instanceof Error ? err.message : String(err),
-        }
+        return serverError(request, set, err, 'Failed to fetch route shape')
       }
     }, {
       query: t.Object({
@@ -544,7 +565,7 @@ export function createTransitRoutes(deps: {
     })
 
     // ── GET /transit/route-detail ─────────────────────────────────────
-    .get('/route-detail', async ({ query, set }) => {
+    .get('/route-detail', async ({ query, set, request }) => {
       try {
         if (!query.feedId || !query.routeId) {
           set.status = 400
@@ -560,11 +581,7 @@ export function createTransitRoutes(deps: {
         set.headers['Cache-Control'] = 'public, max-age=3600'
         return result
       } catch (err) {
-        set.status = 500
-        return {
-          error: 'Failed to fetch route detail',
-          detail: err instanceof Error ? err.message : String(err),
-        }
+        return serverError(request, set, err, 'Failed to fetch route detail')
       }
     }, {
       query: t.Object({
@@ -573,6 +590,7 @@ export function createTransitRoutes(deps: {
       }),
       detail: {
         summary: 'Get route detail with ordered stops and shape',
+        responses: routeDetailResponses,
         description:
           'Returns route metadata, geographically ordered stops, shape ' +
           'geometry, and related route IDs (same trunk line) for rendering ' +
@@ -582,7 +600,7 @@ export function createTransitRoutes(deps: {
     })
 
     // ── GET /transit/resolve-route ────────────────────────────────────
-    .get('/resolve-route', async ({ query, set }) => {
+    .get('/resolve-route', async ({ query, set, request }) => {
       try {
         const lat = Number(query.lat)
         const lng = Number(query.lng)
@@ -601,7 +619,7 @@ export function createTransitRoutes(deps: {
           lat,
           lng,
           mode,
-          radius: query.radius ? Number(query.radius) : undefined,
+          radius: clampNumber(query.radius, { min: 1, max: LIMITS.maxNearbyRadiusM }),
         })
         if (!result) {
           set.status = 404
@@ -611,11 +629,7 @@ export function createTransitRoutes(deps: {
         set.headers['Cache-Control'] = 'public, max-age=3600'
         return result
       } catch (err) {
-        set.status = 500
-        return {
-          error: 'Failed to resolve route',
-          detail: err instanceof Error ? err.message : String(err),
-        }
+        return serverError(request, set, err, 'Failed to resolve route')
       }
     }, {
       query: t.Object({
@@ -638,14 +652,14 @@ export function createTransitRoutes(deps: {
     })
 
     // ── GET /transit/route-vehicles ──────────────────────────────────
-    .get('/route-vehicles', async ({ query, set }) => {
+    .get('/route-vehicles', async ({ query, set, request }) => {
       try {
         if (!query.routeIds) {
           set.status = 400
           return { error: 'routeIds is required (comma-separated)' }
         }
 
-        const routeIds = query.routeIds.split(',').map(s => s.trim()).filter(Boolean)
+        const routeIds = query.routeIds.split(',').map(s => s.trim()).filter(Boolean).slice(0, LIMITS.maxListItems)
         if (routeIds.length === 0) {
           set.status = 400
           return { error: 'routeIds must contain at least one route ID' }
@@ -653,11 +667,7 @@ export function createTransitRoutes(deps: {
 
         return await getVehiclesForRoute(routeIds, query.feedId || undefined, fetchFn)
       } catch (err) {
-        set.status = 500
-        return {
-          error: 'Failed to fetch route vehicles',
-          detail: err instanceof Error ? err.message : String(err),
-        }
+        return serverError(request, set, err, 'Failed to fetch route vehicles')
       }
     }, {
       query: t.Object({
@@ -671,7 +681,7 @@ export function createTransitRoutes(deps: {
     })
 
     // ── GET /transit/trip-stops ──────────────────────────────────────
-    .get('/trip-stops', async ({ query, set }) => {
+    .get('/trip-stops', async ({ query, set, request }) => {
       try {
         if (!query.feedId || !query.tripId) {
           set.status = 400
@@ -680,8 +690,7 @@ export function createTransitRoutes(deps: {
         const stops = await getTripStopTimes(query.feedId, query.tripId, fetchFn)
         return { stops }
       } catch (err) {
-        set.status = 500
-        return { error: 'Failed to fetch trip stops', detail: err instanceof Error ? err.message : String(err) }
+        return serverError(request, set, err, 'Failed to fetch trip stops')
       }
     }, {
       query: t.Object({ feedId: t.String(), tripId: t.String() }),
@@ -689,7 +698,7 @@ export function createTransitRoutes(deps: {
     })
 
     // ── GET /transit/alerts ───────────────────────────────────────────
-    .get('/alerts', async ({ query, set }) => {
+    .get('/alerts', async ({ query, set, request }) => {
       try {
         const ids = (value?: string) =>
           value ? value.split(',').map(s => s.trim()).filter(Boolean) : undefined
@@ -702,11 +711,7 @@ export function createTransitRoutes(deps: {
           includeUpcoming: query.includeUpcoming === 'true',
         }, fetchFn)
       } catch (err) {
-        set.status = 500
-        return {
-          error: 'Failed to fetch service alerts',
-          detail: err instanceof Error ? err.message : String(err),
-        }
+        return serverError(request, set, err, 'Failed to fetch service alerts')
       }
     }, {
       query: t.Object({
@@ -730,13 +735,13 @@ export function createTransitRoutes(deps: {
     })
 
     // ── GET /transit/bikes-allowed ────────────────────────────────────
-    .get('/bikes-allowed', async ({ query, set }) => {
+    .get('/bikes-allowed', async ({ query, set, request }) => {
       try {
         if (!query.routes) {
           set.status = 400
           return { error: 'routes is required (comma-separated feedId_routeId pairs)' }
         }
-        const pairs = query.routes.split(',').map(s => s.trim()).filter(Boolean)
+        const pairs = query.routes.split(',').map(s => s.trim()).filter(Boolean).slice(0, LIMITS.maxListItems)
         const routes = pairs.map(pair => {
           const idx = pair.indexOf('_')
           if (idx === -1) return null
@@ -751,53 +756,17 @@ export function createTransitRoutes(deps: {
         const { getBikesAllowed } = await import('../services/gtfs.service')
         return await getBikesAllowed(routes)
       } catch (err) {
-        set.status = 500
-        return { error: 'Failed to check bikes allowed', detail: err instanceof Error ? err.message : String(err) }
+        return serverError(request, set, err, 'Failed to check bikes allowed')
       }
     }, {
       query: t.Object({ routes: t.String() }),
       detail: { summary: 'Batch check bikes_allowed for routes', tags: ['Transit'] },
     })
 
-    // ── POST /transit/discover-rt-urls ─────────────────────────────────
-    .post('/discover-rt-urls', async ({ body, set }) => {
-      try {
-        const result = await discoverRtUrls(
-          body.feedId || undefined,
-          undefined, // uses TRANSITLAND_API_KEY from env
-          fetchFn,
-        )
-
-        return {
-          checked: result.checked,
-          updated: result.updated,
-          errors: result.errors,
-        }
-      } catch (err) {
-        set.status = 500
-        return {
-          error: 'Failed to discover RT URLs',
-          detail: err instanceof Error ? err.message : String(err),
-        }
-      }
-    }, {
-      body: t.Object({
-        feedId: t.Optional(t.String()),
-      }),
-      detail: {
-        summary: 'Discover GTFS-RT feed URLs',
-        description:
-          'Queries Transitland to discover GTFS-RT feed URLs (vehicle positions, ' +
-          'trip updates, alerts) for existing feeds. If feedId is provided, only ' +
-          'discovers for that feed; otherwise discovers for all feeds missing RT URLs.',
-        tags: ['Transit'],
-      },
-    })
-
     // ── Station infrastructure ────────────────────────────────────
 
     // Station detail: geometry, entrances, buildings
-    .get('/station/:feedId/:stopId', async ({ params, set }) => {
+    .get('/station/:feedId/:stopId', async ({ params, set, request }) => {
       try {
         const result = await getStationDetail(params.feedId, params.stopId)
         if (!result) {
@@ -806,11 +775,7 @@ export function createTransitRoutes(deps: {
         }
         return result
       } catch (err) {
-        set.status = 500
-        return {
-          error: 'Failed to get station detail',
-          detail: err instanceof Error ? err.message : String(err),
-        }
+        return serverError(request, set, err, 'Failed to get station detail')
       }
     }, {
       params: t.Object({
@@ -835,7 +800,7 @@ export function createTransitRoutes(deps: {
     })
 
     // Nearest entrance to a coordinate
-    .get('/nearest-entrance', async ({ query, set }) => {
+    .get('/nearest-entrance', async ({ query, set, request }) => {
       try {
         const lat = parseFloat(query.lat)
         const lon = parseFloat(query.lon)
@@ -847,7 +812,7 @@ export function createTransitRoutes(deps: {
         }
 
         const result = await getNearestEntrance(
-          lat, lon, maxDistance, query.wheelchair === 'true',
+          lat, lon, maxDistance, query.wheelchair === 'true', purposeOf(query.purpose),
         )
         if (!result) {
           set.status = 404
@@ -855,11 +820,7 @@ export function createTransitRoutes(deps: {
         }
         return result
       } catch (err) {
-        set.status = 500
-        return {
-          error: 'Failed to find nearest entrance',
-          detail: err instanceof Error ? err.message : String(err),
-        }
+        return serverError(request, set, err, 'Failed to find nearest entrance')
       }
     }, {
       query: t.Object({
@@ -867,6 +828,9 @@ export function createTransitRoutes(deps: {
         lon: t.String(),
         maxDistance: t.Optional(t.String()),
         wheelchair: t.Optional(t.String()),
+        purpose: t.Optional(t.Union([t.Literal('enter'), t.Literal('exit')], {
+          description: 'What the entrance is for. `enter` skips exit-only entrances, `exit` skips entry-only ones.',
+        })),
       }),
       detail: {
         summary: 'Find nearest station entrance to a coordinate',
@@ -876,10 +840,109 @@ export function createTransitRoutes(deps: {
           'wheelchair=true for accessible access points only: entrances ' +
           'tagged wheelchair=no are excluded, vertical access requires ' +
           'elevators instead of stairs, and confirmed-accessible entrances ' +
-          'are preferred.',
+          'are preferred. Pass `purpose` to skip entrances that only let you ' +
+          'in or only let you out. Each entrance carries `cornerLabel`, where ' +
+          'it is from the streets around it ("Broadway & West 28th Street · ' +
+          'NW corner"), and `entryAllowed`/`exitAllowed`, from OSM ' +
+          '`entrance=exit|entry` and agency open data; null means unknown.',
         tags: ['Transit'],
       },
     })
+
+    // Precomputed in-station paths of a complex
+    .get('/stations/:id/paths', async ({ params, query, set, request }) => {
+      try {
+        const result = await getStationPaths(osmId(params.id), {
+          from: query.from ? osmId(query.from) : undefined,
+          to: query.to ? osmId(query.to) : undefined,
+          profile: query.profile,
+        })
+        if (!result) {
+          set.status = 404
+          return { error: 'Station not found' }
+        }
+        return result
+      } catch (err) {
+        return serverError(request, set, err, 'Failed to get station paths')
+      }
+    }, {
+      params: t.Object({
+        id: t.String({
+          description:
+            'The complex id, or the OSM id of any station or platform in it: `node/123` (URL-encoded as ' +
+            '`node%2F123`) or the short form `n123`, `w123`, `r123`.',
+        }),
+      }),
+      query: t.Object({
+        from: t.Optional(t.String({ description: 'Only paths from this platform or entrance (OSM id).' })),
+        to: t.Optional(t.String({ description: 'Only paths to this platform or entrance (OSM id).' })),
+        profile: t.Optional(t.Union([t.Literal('foot'), t.Literal('wheelchair')], {
+          description: '`foot` (default) or `wheelchair`, which avoids stairs and escalators.',
+        })),
+      }),
+      detail: {
+        summary: 'Walking paths inside a station complex',
+        description:
+          'Every platform-to-platform and platform-to-entrance time in a station complex, built from OSM ' +
+          'at import. Each path says how it was made: `graph` (walked on the mapped station), `bridged` ' +
+          '(a gap of up to 30 m in the map was bridged; `bridge` steps mark where), `agency` (the ' +
+          "feed's pathways.txt) or `estimated` (from platform geometry where the map has no path). " +
+          '`confidence` (0–1) and `uncertaintyS` (the p90 error of that source) say how far to trust it. ' +
+          '`seconds` is from the platform centre; `bestSeconds` and `bestPosition` (0–1 along the ' +
+          "platform's axis, see `axisBearing`) are from the best place to stand on the row's platform end. " +
+          'Only `graph` and `bridged` paths carry a line (`geometry`, with `vertexLevels`) and `steps`; the ' +
+          'others are times only and should not be drawn or narrated. The wheelchair profile has graph ' +
+          'and bridged paths only.',
+        tags: ['Transit'],
+      },
+    })
+
+    // Every entrance near a coordinate, for choosing between them
+    .get('/entrances', async ({ query, set, request }) => {
+      try {
+        const lat = parseFloat(query.lat)
+        const lon = parseFloat(query.lon)
+        if (isNaN(lat) || isNaN(lon)) {
+          set.status = 400
+          return { error: 'Invalid lat/lon' }
+        }
+        return await findEntrances(lat, lon, {
+          maxDistanceM: clampNumber(query.maxDistance, { min: 1, max: 1000 }) ?? 500,
+          wheelchair: query.wheelchair === 'true',
+          purpose: purposeOf(query.purpose),
+          limit: clampInt(query.limit, { min: 1, max: 50 }) ?? 20,
+        })
+      } catch (err) {
+        return serverError(request, set, err, 'Failed to list entrances')
+      }
+    }, {
+      query: t.Object({
+        lat: t.String(),
+        lon: t.String(),
+        maxDistance: t.Optional(t.String({ description: 'Search radius in meters (default 500, max 1000).' })),
+        wheelchair: t.Optional(t.String()),
+        purpose: t.Optional(t.Union([t.Literal('enter'), t.Literal('exit')], {
+          description: 'What the entrance is for. `enter` skips exit-only entrances, `exit` skips entry-only ones.',
+        })),
+        limit: t.Optional(t.String({ description: 'Most entrances to return (default 20, max 50).' })),
+      }),
+      detail: {
+        summary: 'List station entrances near a coordinate',
+        description:
+          'The candidates `/transit/nearest-entrance` chooses from, nearest ' +
+          'first: every access point of the best tier within maxDistance, with ' +
+          'the same fields. Lets a router weigh each entrance against the walk ' +
+          'to it rather than taking the one nearest the platform.',
+        tags: ['Transit'],
+      },
+    })
+}
+
+/** `w123` → `way/123`; anything else passes through. */
+function osmId(id: string): string {
+  const short = id.match(/^([nwr])(\d+)$/)
+  if (!short) return decodeURIComponent(id)
+  return `${{ n: 'node', w: 'way', r: 'relation' }[short[1] as 'n' | 'w' | 'r']}/${short[2]}`
 }
 
 export const transitRoutes = createTransitRoutes()

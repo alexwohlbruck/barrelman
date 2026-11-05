@@ -31,6 +31,11 @@ if (DATABASE_URL) {
     if ('mock' in dbMod.db.execute) {
       throw new Error('DB module is mocked by unit tests')
     }
+    // getMigrationStatus answers on an empty database too, so check for an
+    // import first: without one (as in CI) the shape assertions cannot hold.
+    const [{ imported }] = await dbMod.connection`SELECT EXISTS (SELECT 1 FROM geo_places) AS imported`
+    if (!imported) throw new Error('geo_places is empty, these need an OSM import')
+
     const mod = await import('./admin.service')
     // NOTE: getMigrationStatus is currently slow (15-18s on a real DB) so we
     // give the smoke test a generous 25s timeout. If a future change makes it

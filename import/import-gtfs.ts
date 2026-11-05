@@ -10,21 +10,27 @@
  */
 
 import { parseArgs } from 'util'
-import { existsSync, mkdirSync, writeFileSync, readdirSync } from 'fs'
+import { existsSync, mkdirSync, writeFileSync, readdirSync, renameSync, rmSync } from 'fs'
 import { join, basename } from 'path'
 import { injectFaresV2 } from './inject-fares-v2'
 import { injectBikesAllowed } from './inject-bikes-allowed'
-import { importFeedFile, injectTransfersTxt } from './feed-import'
+import { injectTripShapesAll } from './inject-trip-shapes'
+import { importFeedFile, injectTransfersTxt, NoFixedRouteService } from './feed-import'
 import { ensureGtfsSchema } from '../src/db'
+import { stationTransferTimes, type StationTransfer } from '../src/services/station-paths.service'
 import type { GtfsRtUrl } from '../src/services/gtfs.service'
 import {
   fetchFeedList,
   computeAllTransfers,
   generateTransfersTxt,
+  transferKey,
   generateMotisConfig,
   sanitizeGtfsZip,
   loadFeedIdentities,
+  withholdFeed,
+  type GtfsFeedInfo,
 } from '../src/services/gtfs.service'
+import { isExcludedByPolicy, licensePolicy } from '../src/lib/feed-license'
 import {
   alignRealtimeTripIds,
   describeAlignment,
@@ -194,12 +200,29 @@ async function selectRealtime(
   return kept
 }
 
+/**
+ * Withhold a feed GTFS_LICENCE_POLICY excludes: drop its rows and its zip, so
+ * neither the database nor the next MOTIS build serves it.
+ */
+async function withhold(feed: GtfsFeedInfo, zipPath: string) {
+  const terms = feed.license
+  console.log(
+    `  – Withheld ${feed.name || feed.feedId}: licence forbids ` +
+      (terms?.commercialUseAllowed === 'no' ? 'commercial use' : 'redistribution') +
+      ` (${terms?.spdxIdentifier ?? terms?.url ?? 'custom licence'})`,
+  )
+  await withholdFeed(feed)
+  rmSync(zipPath, { force: true })
+}
+
 async function main() {
   console.log(`\n=== GTFS Import Pipeline ===`)
   console.log(`Region: ${region}`)
   console.log(`Output: ${outputDir}`)
   console.log(`Transfer distance: ${transferDistance}m`)
   console.log(`Transfer concurrency: ${transferConcurrency}`)
+  const policy = licensePolicy()
+  console.log(`Licence policy: ${policy}`)
   console.log('')
 
   // Ensure schema exists
@@ -216,7 +239,19 @@ async function main() {
   // How many feeds we tried, so a run where every one failed can be told apart
   // from a region that legitimately has none.
   let attemptedFeeds = 0
-  let failedFeeds = 0
+  // Feed ids that failed, and how many had nothing to import. A failed feed
+  // keeps its previous database contents (importFeedFile is all-or-nothing).
+  const failedFeeds: string[] = []
+  let skippedFeeds = 0
+  const recordFailure = (feedId: string, err: unknown) => {
+    if (err instanceof NoFixedRouteService) {
+      skippedFeeds++
+      console.log(`  – Skipped: ${err.message}`)
+      return
+    }
+    failedFeeds.push(feedId)
+    console.error(`  ✗ Error: ${err instanceof Error ? err.message : err}`)
+  }
 
   // Read before anything is imported: importFeedFile clears each feed's row,
   // so whatever a caller doesn't carry forward is gone. rt_urls in particular
@@ -235,6 +270,18 @@ async function main() {
     if (maxFeeds) {
       feeds = feeds.slice(0, maxFeeds)
       console.log(`Limited to ${maxFeeds} feeds`)
+    }
+
+    // Feeds whose licence forbids commercial use or redistribution are not
+    // downloaded under the `commercial` policy. Unknown terms are allowed.
+    const excluded = feeds.filter(f => isExcludedByPolicy(f.license, policy))
+    if (excluded.length) {
+      console.log(`\nWithholding ${excluded.length} feed(s) under GTFS_LICENCE_POLICY=${policy}:`)
+      for (const feed of excluded) {
+        const zip = join(outputDir, `${feed.feedId.replace(/[^a-zA-Z0-9_-]/g, '_')}.zip`)
+        await withhold({ ...feed, rtUrls: feed.rtUrls ?? stored.get(feed.feedId)?.rtUrls ?? undefined }, zip)
+      }
+      feeds = feeds.filter(f => !excluded.includes(f))
     }
 
     // Step 2: Download each feed
@@ -279,15 +326,27 @@ async function main() {
 
         const chosen = await alignBestStatic(buffer, merged)
         merged.url = chosen.url
-        writeFileSync(filepath, Buffer.from(chosen.buffer))
+
+        // Step 3: Parse and import. Staged beside the feed's zip and moved
+        // into place only once the import commits, so a feed that fails or is
+        // skipped keeps the zip that matches its previous database contents.
+        // MOTIS builds from every zip gtfs_feeds names, and a broken download
+        // left in place (one night: a near-empty zip that later steps padded
+        // with only transfers.txt) aborts its whole import. The `.part`
+        // suffix keeps a leftover out of --skip-download's *.zip listing.
+        const staged = `${filepath}.part`
+        writeFileSync(staged, Buffer.from(chosen.buffer))
+        try {
+          await importFeedFile(staged, merged)
+        } catch (err) {
+          rmSync(staged, { force: true })
+          throw err
+        }
+        renameSync(staged, filepath)
         feedFiles.push(filepath)
         feedIdOf.set(filepath, merged.feedId)
-
-        // Step 3: Parse and import
-        await importFeedFile(filepath, merged)
       } catch (err) {
-        failedFeeds++
-        console.error(`  ✗ Error: ${err instanceof Error ? err.message : err}`)
+        recordFailure(feed.feedId, err)
       }
     }
   } else {
@@ -297,6 +356,7 @@ async function main() {
       .filter(f => f.endsWith('.zip'))
       .map(f => join(outputDir, f))
     attemptedFeeds = feedFiles.length
+    const withheld = new Set<string>()
 
     for (const filepath of feedFiles) {
       const feedId = basename(filepath, '.zip')
@@ -313,6 +373,13 @@ async function main() {
         url: existing?.url || '',
         region: existing?.region || region,
         rtUrls: existing?.rtUrls ?? undefined,
+      }
+
+      // Same policy as the download path, read from the licence on record.
+      if (isExcludedByPolicy(existing?.license, policy)) {
+        await withhold({ ...feed, license: existing!.license }, filepath)
+        withheld.add(filepath)
+        continue
       }
 
       // Sanitize existing files too (they may pre-date the flex strip), then
@@ -335,12 +402,14 @@ async function main() {
         console.error(`  ⚠ Zip preparation failed for ${basename(filepath)}: ${err}`)
       }
 
-      await importFeedFile(filepath, feed)
+      try {
+        await importFeedFile(filepath, feed)
+      } catch (err) {
+        recordFailure(feedId, err)
+      }
     }
-  }
-
-  if (failedFeeds > 0) {
-    throw new Error(`${failedFeeds} GTFS feed(s) failed; keeping their previous database contents`)
+    feedFiles = feedFiles.filter(f => !withheld.has(f))
+    attemptedFeeds -= withheld.size
   }
 
   // Step 4: Compute walking transfers
@@ -375,16 +444,31 @@ async function main() {
 
     console.log(`Computed ${transfers.length} transfer pairs`)
 
+    // In-station times from the station paths build override the street walk
+    // and the agency's flat minimum. Before the first build there are none.
+    const station = await stationTransferTimes(feedFiles.map((f) => feedIdOf.get(f) ?? basename(f, '.zip')))
+      .catch((err) => {
+        console.warn(`  ! station transfer times: ${(err as Error).message}`)
+        return [] as StationTransfer[]
+      })
+    if (station.length) {
+      const bySource = new Map<string, number>()
+      for (const s of station) bySource.set(s.source, (bySource.get(s.source) ?? 0) + 1)
+      console.log(`  ${station.length} in-station transfer times (${[...bySource].map(([k, v]) => `${k} ${v}`).join(', ')})`)
+    }
+
     // Write feed-specific transfers.txt into each feed ZIP
     // Only include transfers where BOTH stops belong to the target feed,
     // preventing stop ID collisions across different transit agencies.
-    if (transfers.length > 0) {
+    if (transfers.length > 0 || station.length > 0) {
       for (const filepath of feedFiles) {
         const feedId = feedIdOf.get(filepath) ?? basename(filepath, '.zip')
-        const transfersTxt = generateTransfersTxt(transfers, feedId)
+        const own = station.filter((s) => s.feedId === feedId)
+        const transfersTxt = generateTransfersTxt(transfers, feedId, own)
         const transferCount = transfersTxt.trim().split('\n').length - 1 // minus header
         try {
-          await injectTransfersTxt(filepath, transfersTxt)
+          const rail = new Set(own.flatMap((s) => [s.fromStopId, s.toStopId]))
+          await injectTransfersTxt(filepath, transfersTxt, new Map(own.map((s) => [transferKey(s.fromStopId, s.toStopId), { seconds: s.seconds, source: s.source }])), rail)
           console.log(`  ✓ Injected ${transferCount} transfers into ${basename(filepath)}`)
         } catch (err) {
           console.error(`  ✗ Failed to inject into ${basename(filepath)}: ${err}`)
@@ -407,6 +491,11 @@ async function main() {
       console.error(`  ✗ ${basename(filepath)}: ${err}`)
     }
   }
+
+  // Step 4d: Lend shapeless trips a sibling's shape, or MOTIS draws them as
+  // straight lines between stops.
+  console.log('\n=== Filling trip shapes ===')
+  await injectTripShapesAll(feedFiles)
 
   // Step 4b: Synthesize GTFS Fares v2 from v1 fare data so MOTIS (which
   // reads v2 only) can price itineraries from the agency's own feed.
@@ -443,6 +532,7 @@ async function main() {
 
   console.log('\n=== Import Complete ===')
   console.log(`Processed ${feedFiles.length} feeds`)
+  if (skippedFeeds > 0) console.log(`  ${skippedFeeds} feed(s) had no fixed-route service to import`)
   console.log(`Output directory: ${outputDir}`)
   console.log(`MOTIS config: ${motisConfigPath}`)
   console.log('')
@@ -454,8 +544,32 @@ async function main() {
   console.log('     bash scripts/rebuild-motis.sh   (a restart alone keeps the old timetable)')
   console.log('')
 
+  // Out of a region's worth of upstream feeds, some are always broken: a dead
+  // URL, a malformed CSV. Each keeps its previous contents, and failing the
+  // run for one of them stops every other feed reaching riders, since
+  // gtfs-watch only rebuilds MOTIS after a clean import. So only a failure
+  // rate that looks like our bug rather than theirs fails the run. A parser
+  // that misread every BOM-prefixed file failed a quarter of the US.
+  const attempted = skipDownload ? feedFiles.length : attemptedFeeds
+  if (failedFeeds.length > 0) {
+    const share = failedFeeds.length / Math.max(attempted, 1)
+    console.error(
+      `${failedFeeds.length} of ${attempted} feed(s) failed and kept their previous contents: ` +
+        failedFeeds.join(', '),
+    )
+    if (share > MAX_FAILED_FEED_SHARE) {
+      console.error(
+        `✗ More than ${MAX_FAILED_FEED_SHARE * 100}% of feeds failed — that looks systemic, not upstream.`,
+      )
+      process.exit(1)
+    }
+  }
+
   process.exit(0)
 }
+
+/** Above this share of failed feeds, the import fails the run (see the end of main). */
+const MAX_FAILED_FEED_SHARE = 0.15
 
 main().catch((err) => {
   console.error('Fatal error:', err)

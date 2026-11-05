@@ -9,11 +9,14 @@
  * engine in the future without changing the external API contract.
  */
 
+import { directionLabelsFor, stopKey } from './station-labels.service'
 import { db } from '../db'
 import { sql } from 'drizzle-orm'
 import { sameStationName } from '../lib/station-name'
 import { dropSkippedRuns } from '../lib/skipped-runs'
 import { getServiceAlerts } from './alerts.service'
+import { attributionFor, excludedFeedIds } from './feed-license.service'
+import type { FeedAttribution } from '../lib/feed-license'
 
 // ── Types ───────────────────────────────────────────────────────────
 
@@ -94,6 +97,9 @@ export interface StopDepartures {
     via?: 'station' | 'transfer'
   }
   departures: Departure[]
+  /** One credit line per GTFS feed on this board: the stop's own feed, plus
+   *  any other feed whose runs call here. */
+  attribution?: FeedAttribution[]
   /** More runs exist past what was returned — either trimmed by `windowMinutes`
    *  or cut off by `n`. Lets a caller offer "show more" honestly. */
   hasMore?: boolean
@@ -120,6 +126,9 @@ export interface Departure {
     agencyName?: string
   }
   headsign?: string
+  /** What the platform's signs call this direction ("Uptown & The Bronx"),
+   *  where agency data or OSM says. The headsign names the terminal. */
+  directionLabel?: string
   directionId?: string
   departureTime: string
   arrivalTime: string
@@ -702,12 +711,15 @@ function onlyAtStation(
 function transformDepartures(
   stopTimes: MotisStopTime[],
   colorMap: Map<string, { color?: string; textColor?: string }>,
+  directionLabels: Map<string, string> = new Map(),
 ): Departure[] {
   return stopTimes
     .filter(st => !st.tripCancelled)
     .map(st => {
       const { feedId, stopId: routeId } = parseMotisId(st.routeId)
       const colors = colorMap.get(st.routeId)
+      const platform = parseMotisId(st.place.stopId)
+      const directionLabel = directionLabels.get(stopKey(platform.feedId, platform.stopId))
 
       const departureTime = st.place.departure || st.place.arrival || ''
       const arrivalTime = st.place.arrival || st.place.departure || ''
@@ -729,6 +741,7 @@ function transformDepartures(
           agencyName: st.agencyName || undefined,
         },
         headsign: st.headsign || undefined,
+        ...(directionLabel ? { directionLabel } : {}),
         directionId: st.directionId || undefined,
         departureTime,
         arrivalTime,
@@ -936,8 +949,11 @@ export async function getDepartures(
   const onestopIds = await feedOnestopIds(successResults.map((r) => r.stop.feedId))
 
 
-  // 5. Batch-fetch route colors
+  // 5. Batch-fetch route colors, and the signed direction of each platform
   const colorMap = await fetchRouteColors(routePairs)
+  const directionLabels = await directionLabelsFor(
+    successResults.flatMap((r) => r.result.stopTimes.map((st) => parseMotisId(st.place.stopId))),
+  ).catch(() => new Map<string, string>())
 
   // The agency's in-effect skip alerts, so a run the agency has disowned
   // never reaches a board — see dropSkippedRuns. One fetch per request;
@@ -953,7 +969,10 @@ export async function getDepartures(
     .catch(() => [])
 
   // 6. Transform and return
-  return successResults.map(({ stop, members, page, result }) => {
+  const excluded = await excludedFeedIds()
+  const boardsOut = successResults
+    .filter(({ stop }) => !excluded.has(stop.feedId))
+    .map(({ stop, members, page, result }) => {
     const motisPlace = result.place
     const timezone = motisPlace?.tz || result.stopTimes[0]?.place?.tz || 'UTC'
 
@@ -975,7 +994,7 @@ export async function getDepartures(
       },
       ...trimToWindow(
         dropSkippedRuns(
-          transformDepartures(result.stopTimes, colorMap).filter(
+          transformDepartures(result.stopTimes, colorMap, directionLabels).filter(
             (d) =>
               (!routeFilter || routeFilter.has(d.route.shortName ?? '')) &&
               (directionId == null || d.directionId === directionId),
@@ -998,4 +1017,21 @@ export async function getDepartures(
       previousPageCursor: result.previousPageCursor,
     }
   })
+
+  return Promise.all(
+    boardsOut.map(async (board) => {
+      const departures = excluded.size
+        ? board.departures.filter((d) => !excluded.has(d.route.feedId))
+        : board.departures
+      const agencies = new Map<string, string>()
+      for (const d of departures) {
+        if (d.route.agencyName && !agencies.has(d.route.feedId)) agencies.set(d.route.feedId, d.route.agencyName)
+      }
+      return {
+        ...board,
+        departures,
+        attribution: await attributionFor([board.stop.feedId, ...departures.map((d) => d.route.feedId)], agencies),
+      }
+    }),
+  )
 }

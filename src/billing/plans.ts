@@ -34,8 +34,14 @@ export type EndpointGroup =
   | 'isochrone'
   | 'transit'
 
+/**
+ * Unit price per group. Most requests are one unit. Three scale with what they
+ * ask for, through the `units` option of `apiAuth()`: a tile per source it
+ * reads (a bundle per member), an isochrone per contour, and /match per
+ * started hundred points. /isochrone/modes is zero units.
+ */
 export const CREDIT_COSTS: Record<EndpointGroup, number> = {
-  /** One indexed read from PostGIS via Martin. The unit everything else is priced against. */
+  /** One indexed read from PostGIS via Martin, per source. The unit everything else is priced against. */
   tiles: 1,
   /** Point lookups and brand/catalog reads. */
   places: 3,
@@ -45,12 +51,26 @@ export const CREDIT_COSTS: Record<EndpointGroup, number> = {
   geocode: 5,
   /** Multi-layer search: full-text, trigram, abbreviation, semantic. */
   search: 6,
-  /** Street routing through GraphHopper. */
+  /** Street routing through GraphHopper: /route, /route/*, /graphhopper/route, and /match per 100 points. */
   routing: 12,
   /** Transit routing through MOTIS, including realtime. */
   transit: 20,
-  /** Reachability polygons — one request fans out to hundreds of routing calls. */
+  /** Reachability polygons, per contour — one contour fans out to hundreds of routing calls. */
   isochrone: 40,
+}
+
+/**
+ * Credits for one tile of a named bundle (see config/tile-bundles.ts), where
+ * a bundle should not cost its member count. A bundle absent here costs
+ * `tiles` × the number of sources it reads, the same as fetching each alone.
+ * Empty for now; whether bundles should be discounted is open for review.
+ * Tune a bundle's price here and nowhere else.
+ */
+export const TILE_BUNDLE_CREDITS: Readonly<Record<string, number>> = {}
+
+/** Credits for one tile reading `sourceCount` sources, or the named bundle's own price. */
+export function tileCredits(source: string, sourceCount: number): number {
+  return TILE_BUNDLE_CREDITS[source] ?? CREDIT_COSTS.tiles * sourceCount
 }
 
 export interface Plan {
@@ -460,7 +480,7 @@ export function purchasablePlans(): Plan[] {
  * bottom and the first prefix hit wins, exactly as the if-chain did.
  */
 export const GROUP_PREFIXES: ReadonlyArray<{ group: EndpointGroup; prefixes: readonly string[] }> = [
-  { group: 'tiles', prefixes: ['/tiles'] },
+  { group: 'tiles', prefixes: ['/tiles', '/styles'] },
   { group: 'search', prefixes: ['/search', '/autocomplete'] },
   { group: 'geocode', prefixes: ['/geocode'] },
   { group: 'isochrone', prefixes: ['/isochrone'] },

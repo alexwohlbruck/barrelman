@@ -15,6 +15,7 @@ import { db } from '../db'
 import { and, eq, sql } from 'drizzle-orm'
 import { gtfsFeeds, gtfsStops, stationBuildings, stationEntrances } from '../schema/gtfs'
 import { getRoutesForStop, type StopRoutesResult } from './transit.service'
+import { entranceLabelsFor } from './station-labels.service'
 
 /**
  * The OSM-linked relations this module reads are all built by import steps that
@@ -57,7 +58,18 @@ export interface PlatformAccessPoint {
   lat: number
   lon: number
   distanceM: number
+  /** The entrance's own OSM `ref`, where mapped. */
+  ref?: string | null
+  /** Where the entrance is, from the streets around it: "Broadway & West 28th Street · NW corner". */
+  cornerLabel: string | null
+  /** False for an exit-only entrance; null when unknown, which means allowed. */
+  entryAllowed: boolean | null
+  /** False for an entry-only entrance; null when unknown, which means allowed. */
+  exitAllowed: boolean | null
 }
+
+/** What the rider uses an entrance for: getting in, or getting out. */
+export type EntrancePurpose = 'enter' | 'exit'
 
 /** @deprecated Use PlatformAccessPoint */
 export type StationEntrance = PlatformAccessPoint
@@ -174,6 +186,8 @@ export async function getStationDetail(
     .from(stationBuildings)
     .where(and(eq(stationBuildings.feedId, feedId), eq(stationBuildings.stopId, stopId)))
 
+  const labels = await entranceLabelsFor(entrances.map((r) => r.osmId as string))
+
   return {
     stopId: station.stopId,
     feedId: station.feedId,
@@ -190,6 +204,9 @@ export async function getStationDetail(
       lat: Number(r.lat),
       lon: Number(r.lon),
       distanceM: Number(r.distanceM),
+      cornerLabel: labels.get(r.osmId as string)?.cornerLabel ?? null,
+      entryAllowed: labels.get(r.osmId as string)?.entryAllowed ?? null,
+      exitAllowed: labels.get(r.osmId as string)?.exitAllowed ?? null,
     })),
     buildings: buildings.map((r) => ({
       osmId: r.osmId as string,
@@ -233,7 +250,25 @@ export async function getNearestEntrance(
   lon: number,
   maxDistanceM: number = 500,
   wheelchair: boolean = false,
+  purpose?: EntrancePurpose,
 ): Promise<PlatformAccessPoint | null> {
+  const [nearest] = await findEntrances(lat, lon, { maxDistanceM, wheelchair, purpose, limit: 1 })
+  return nearest ?? null
+}
+
+/**
+ * Every access point of the best tier near a coordinate, nearest first — the
+ * candidates `getNearestEntrance` picks from. With a `purpose`, an exit-only
+ * entrance is never offered to enter by, nor an entry-only one to leave by.
+ */
+export async function findEntrances(
+  lat: number,
+  lon: number,
+  opts: { maxDistanceM?: number; wheelchair?: boolean; purpose?: EntrancePurpose; limit?: number } = {},
+): Promise<PlatformAccessPoint[]> {
+  const maxDistanceM = opts.maxDistanceM ?? 500
+  const wheelchair = opts.wheelchair ?? false
+  const limit = opts.limit ?? 1
   const degRadius = maxDistanceM / 111000
   // Accessible mode: drop anything explicitly wheelchair=no (unknown is
   // allowed — most entrances are untagged), require elevators rather than
@@ -285,6 +320,8 @@ export async function getNearestEntrance(
         ) as access_type,
         ST_Y(e.centroid) as lat, ST_X(e.centroid) as lon,
         ST_Distance(e.centroid::geography, ${point}::geography) as distance_m,
+        COALESCE(e.tags->>'entrance', '') as entrance_tag,
+        NULLIF(e.tags->>'ref', '') as ref,
         0 as tier
       FROM geo_places near_member
       JOIN stop_area_members mp
@@ -328,6 +365,8 @@ export async function getNearestEntrance(
         'entrance' as access_type,
         ST_Y(centroid) as lat, ST_X(centroid) as lon,
         ST_Distance(centroid::geography, ${point}::geography) as distance_m,
+        COALESCE(tags->>'entrance', '') as entrance_tag,
+        NULLIF(tags->>'ref', '') as ref,
         2 as tier
       FROM geo_places
       WHERE tags->>'entrance' IS NOT NULL
@@ -353,6 +392,8 @@ export async function getNearestEntrance(
         tags->>'highway' as access_type,
         ST_Y(centroid) as lat, ST_X(centroid) as lon,
         ST_Distance(centroid::geography, ${point}::geography) as distance_m,
+        COALESCE(tags->>'entrance', '') as entrance_tag,
+        NULLIF(tags->>'ref', '') as ref,
         3 as tier
       FROM geo_places
       WHERE tags->>'highway' IN ${wheelchair ? sql`('elevator')` : sql`('steps', 'elevator')`}
@@ -379,6 +420,8 @@ export async function getNearestEntrance(
         'highway_crossing' as access_type,
         ST_Y(centroid) as lat, ST_X(centroid) as lon,
         ST_Distance(centroid::geography, ${point}::geography) as distance_m,
+        COALESCE(tags->>'entrance', '') as entrance_tag,
+        NULLIF(tags->>'ref', '') as ref,
         5 as tier
       FROM geo_places
       WHERE tags->>'highway' = 'crossing'
@@ -391,6 +434,19 @@ export async function getNearestEntrance(
         )
       `
     : sql.empty()
+
+  // Labels come from import/refresh-station-labels.ts; an instance that has not
+  // run it still finds entrances, with OSM's own entrance=exit|entry as the only flags.
+  const labelsAvailable = await relationAvailable('entrance_labels')
+  const labelJoin = labelsAvailable ? sql`LEFT JOIN entrance_labels l ON l.id = c.osm_id` : sql.empty()
+  const labelColumns = labelsAvailable
+    ? sql`l.corner_label, l.entry_allowed, l.exit_allowed`
+    : sql`NULL::text AS corner_label, NULL::boolean AS entry_allowed, NULL::boolean AS exit_allowed`
+  const purposeFilter = opts.purpose === 'enter'
+    ? sql`AND c.entrance_tag <> 'exit' ${labelsAvailable ? sql`AND l.entry_allowed IS DISTINCT FROM false` : sql.empty()}`
+    : opts.purpose === 'exit'
+      ? sql`AND c.entrance_tag <> 'entry' ${labelsAvailable ? sql`AND l.exit_allowed IS DISTINCT FROM false` : sql.empty()}`
+      : sql.empty()
 
   const rows = (await db.execute(sql`
     WITH candidates AS (
@@ -405,6 +461,8 @@ export async function getNearestEntrance(
         COALESCE(tags->>'railway', 'entrance') as access_type,
         ST_Y(centroid) as lat, ST_X(centroid) as lon,
         ST_Distance(centroid::geography, ${point}::geography) as distance_m,
+        COALESCE(tags->>'entrance', '') as entrance_tag,
+        NULLIF(tags->>'ref', '') as ref,
         1 as tier
       FROM geo_places
       WHERE tags->>'railway' IN ('subway_entrance', 'train_station_entrance')
@@ -424,6 +482,8 @@ export async function getNearestEntrance(
         'railway_crossing' as access_type,
         ST_Y(centroid) as lat, ST_X(centroid) as lon,
         ST_Distance(centroid::geography, ${point}::geography) as distance_m,
+        COALESCE(tags->>'entrance', '') as entrance_tag,
+        NULLIF(tags->>'ref', '') as ref,
         4 as tier
       FROM geo_places
       WHERE tags->>'railway' = 'crossing'
@@ -431,16 +491,20 @@ export async function getNearestEntrance(
         AND centroid && ST_Expand(${point}, ${degRadius})
 
       ${tier5}
+    ), labelled AS (
+      SELECT DISTINCT ON (c.osm_id) c.*, ${labelColumns}
+      FROM candidates c
+      ${labelJoin}
+      WHERE true ${purposeFilter}
+      ORDER BY c.osm_id, c.tier
     )
-    SELECT * FROM candidates
-    WHERE tier = (SELECT MIN(tier) FROM candidates)
+    SELECT * FROM labelled
+    WHERE tier = (SELECT MIN(tier) FROM labelled)
     ORDER BY ${wheelchair ? sql`(wheelchair = 'yes') DESC,` : sql.empty()} distance_m
-    LIMIT 1
+    LIMIT ${limit}
   `)) as any[]
 
-  if (rows.length === 0) return null
-  const r = rows[0]
-  return {
+  return rows.map((r) => ({
     osmId: r.osm_id,
     name: r.name || null,
     description: r.description || null,
@@ -450,5 +514,9 @@ export async function getNearestEntrance(
     lat: parseFloat(r.lat),
     lon: parseFloat(r.lon),
     distanceM: parseFloat(r.distance_m),
-  }
+    ref: r.ref ?? null,
+    cornerLabel: r.corner_label ?? null,
+    entryAllowed: r.entry_allowed ?? null,
+    exitAllowed: r.exit_allowed ?? null,
+  }))
 }

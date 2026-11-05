@@ -18,7 +18,16 @@ docker network create caddy_network
 mkdir -p /opt/caddy
 cat > /opt/caddy/Caddyfile <<'EOF'
 api.example.com {
-  reverse_proxy barrelman:5001
+  reverse_proxy barrelman:5001 {
+    lb_try_duration 30s
+    lb_try_interval 250ms
+  }
+  header {
+    Strict-Transport-Security "max-age=31536000; includeSubDomains"
+    X-Content-Type-Options nosniff
+    Referrer-Policy strict-origin-when-cross-origin
+    Content-Security-Policy "frame-ancestors 'none'"
+  }
 }
 EOF
 
@@ -60,23 +69,20 @@ nothing, because barrelman is fine — it is merely unreachable. The override fi
 above survives both.
 </Callout>
 
-Once the proxy is in front, close the direct port. The API's `5001` is published
-on **all interfaces** — unlike the other services it has no `BARRELMAN_BIND_ADDR`
-prefix — so until you close it, callers can skip TLS, your proxy and its rate
-limits entirely by hitting `http://your-server-ip:5001`:
-
-```dotenv
-BARRELMAN_API_BIND_ADDR=127.0.0.1
-```
+Keep the direct port closed. The API's `5001` publishes on `127.0.0.1` by
+default (`BARRELMAN_API_BIND_ADDR`), and Caddy reaches the container as
+`barrelman:5001` over the Compose network, so nothing else is needed. If an
+older `.env` sets `BARRELMAN_API_BIND_ADDR=0.0.0.0`, remove it: otherwise
+callers can skip TLS, your proxy and its rate limits entirely by hitting
+`http://your-server-ip:5001`. Then:
 
 ```bash
 docker compose up -d barrelman
 ```
 
-Caddy keeps working: it reaches the container as `barrelman:5001` over the
-Compose network, not through the host port. Do **not** reach for `ufw deny 5001`
-instead — Docker DNATs published ports before ufw's `INPUT` rules are consulted,
-so the port stays open while `ufw status` reports it `DENY`.
+Do **not** rely on `ufw deny 5001` instead. Docker DNATs published ports before
+ufw's `INPUT` rules are consulted, so the port stays open while `ufw status`
+reports it `DENY`.
 
 Only the API needs to be reachable from off-box. Postgres (5434), Martin (5002), GraphHopper (5003) and MOTIS (5004) already bind to `127.0.0.1`, so nothing further is needed — none of them authenticate, and exposing them would publish both the database and an unmetered copy of the tile, routing and transit APIs.
 
@@ -99,6 +105,40 @@ Check what is actually listening after any change:
 
 ```bash
 docker compose ps --format 'table {{.Service}}\t{{.Ports}}'
+```
+
+### Restarts without a 502
+
+A deploy recreates the `barrelman` container, and for the few seconds before the
+new one listens a plain `reverse_proxy` answers every request with `502`. The two
+`lb_` lines above make Caddy hold each request and re-dial the API every 250ms
+for up to 30 seconds, so a restart shows up as a slow response. Caddy retries
+only connections that failed to open, so a request the API had already started
+on is never sent twice. The `Caddyfile` in the repository, which fronts
+`api.barrelman.dev` and `console.barrelman.dev`, does the same for both hosts.
+
+The `header` block is the baseline every public host should send. HSTS makes
+browsers refuse plain HTTP, `nosniff` stops a JSON error body being read as
+script, the referrer policy keeps full URLs (and any key in a query string) on
+your origin, and `frame-ancestors 'none'` stops other sites framing the console.
+
+Compose also gives each service a `healthcheck`, so `docker compose ps` shows
+whether it is serving and not only whether its process runs:
+
+| Service | Probe | Grace period |
+|---|---|---|
+| `barrelman` | `GET /health` from inside the container | 10 minutes, for the schema steps at startup |
+| `barrelman-db` | `pg_isready` | 2 minutes |
+| `martin` | `GET /health` | 1 minute |
+| `graphhopper` | `GET /health` | 10 minutes. Unhealthy while a first graph import runs, which can take hours |
+| `motis` | any HTTP answer from `/api/v1/health` | 5 minutes |
+
+`/health` answers `200` while a downstream service is down, so the API's check
+tracks the API process alone. Compose does not restart a container marked
+unhealthy; the status is there for you and for anything that waits on it.
+
+```bash
+docker compose ps --format 'table {{.Service}}\t{{.Status}}'
 ```
 
 ## Tell Barrelman its own origin

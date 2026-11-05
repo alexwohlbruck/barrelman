@@ -15,8 +15,11 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import Elysia from 'elysia'
-import { createTileRoutes, type TileFetcher } from './tiles'
-import { TILE_BUNDLES } from '../config/tile-bundles'
+import { createTileRoutes, tileUnits, type TileFetcher } from './tiles'
+import { TILE_BUNDLES, tileSourceCount } from '../config/tile-bundles'
+import { TILE_BUNDLE_CREDITS } from '../billing/plans'
+import { tileAttribution } from '../config/tile-attribution'
+import { serverOrigin } from '../config/accounts.config'
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -118,6 +121,48 @@ describe('GET /tiles/:source/:z/:x/:y', () => {
 
     expect(res.headers.get('content-encoding')).toBeNull()
     expect(new Uint8Array(await res.arrayBuffer())).toEqual(tileData)
+  })
+
+  test("forwards Martin's gzip byte for byte rather than zipping it again", async () => {
+    const zipped = Bun.gzipSync(new Uint8Array(4096).fill(0x1a))
+    const mockFetch = mock<TileFetcher>(async () =>
+      new Response(zipped, { status: 200, headers: { 'content-type': 'application/x-protobuf' } }),
+    )
+    const app = new Elysia().use(createTileRoutes({ fetchTile: mockFetch }))
+    const res = await app.handle(get('/tiles/basemap/10/500/300', { 'accept-encoding': 'gzip' }))
+
+    expect(res.headers.get('content-encoding')).toBe('gzip')
+    expect(new Uint8Array(await res.arrayBuffer())).toEqual(zipped)
+  })
+
+  test("unzips Martin's gzip for a caller that cannot read it", async () => {
+    const tileData = new Uint8Array(4096).fill(0x1a)
+    const mockFetch = mock<TileFetcher>(async () =>
+      new Response(Bun.gzipSync(tileData), { status: 200, headers: { 'content-type': 'application/x-protobuf' } }),
+    )
+    const app = new Elysia().use(createTileRoutes({ fetchTile: mockFetch }))
+    const res = await app.handle(get('/tiles/basemap/10/500/300'))
+
+    expect(res.headers.get('content-encoding')).toBeNull()
+    expect(res.headers.get('vary')).toBe('Accept-Encoding')
+    expect(new Uint8Array(await res.arrayBuffer())).toEqual(tileData)
+  })
+
+  test('revalidates an unchanged tile with a 304 and no body', async () => {
+    const mockFetch = mock<TileFetcher>(async () =>
+      new Response(new Uint8Array([0x1a, 0x01, 0x02]), { status: 200, headers: { 'content-type': 'application/x-protobuf' } }),
+    )
+    const app = new Elysia().use(createTileRoutes({ fetchTile: mockFetch }))
+    const first = await app.handle(get('/tiles/basemap/10/500/300'))
+    const etag = first.headers.get('etag')
+    expect(etag).toMatch(/^W\/"/)
+
+    const again = await app.handle(get('/tiles/basemap/10/500/300', { 'if-none-match': etag! }))
+    expect(again.status).toBe(304)
+    expect((await again.arrayBuffer()).byteLength).toBe(0)
+
+    const other = await app.handle(get('/tiles/basemap/10/500/300', { 'if-none-match': 'W/"nope"' }))
+    expect(other.status).toBe(200)
   })
 
   // `gzip;q=0` is the one case a substring match gets backwards.
@@ -225,7 +270,7 @@ describe('tile bundles', () => {
 
     expect(res.status).toBe(200)
     expect(mockFetch.mock.calls[0][0]).toBe(
-      'http://mock-martin:3000/buildings_3d,parking_areas,bicycle_ways,street_trees,tree_rows,coaster_tracks,sport_pitches,object_lines,road_surfaces,road_markings,road_glyphs,bridge_decks,object_areas,golf_features,ski_features,sport_tracks,woods/14/4825/6156',
+      'http://mock-martin:3000/buildings_3d,parking_areas,bicycle_ways,street_trees,tree_rows,coaster_tracks,sport_pitches,object_lines,road_surfaces,road_markings,road_glyphs,bridge_decks,object_areas,golf_features,ski_features,sport_tracks,woods,fixtures/14/4825/6156',
     )
   })
 
@@ -673,5 +718,186 @@ describe('deck pieces in detail tiles', () => {
       expect((await (await a.handle(get(path))).arrayBuffer()).byteLength).toBe(2)
     }
     expect(deckTile).not.toHaveBeenCalled()
+  })
+})
+
+describe('tile billing units', () => {
+  test('a bundle is billed per member source', () => {
+    expect(tileUnits({ params: { source: 'detail' } })).toBe(TILE_BUNDLES.detail.length)
+    expect(tileSourceCount('indoor')).toBe(TILE_BUNDLES.indoor.length)
+  })
+
+  test('a comma-joined composite is billed per name, a single source as one', () => {
+    expect(tileUnits({ params: { source: 'buildings_3d,parking_areas,woods' } })).toBe(3)
+    expect(tileUnits({ params: { source: 'basemap' } })).toBe(1)
+  })
+
+  test('a bundle priced in TILE_BUNDLE_CREDITS costs that instead', () => {
+    const table = TILE_BUNDLE_CREDITS as Record<string, number>
+    table.detail = 6
+    try {
+      expect(tileUnits({ params: { source: 'detail' } })).toBe(6)
+      expect(tileUnits({ params: { source: 'indoor' } })).toBe(TILE_BUNDLES.indoor.length)
+    } finally {
+      delete table.detail
+    }
+  })
+
+  test('routes without a source, and malformed sources, are one unit', () => {
+    expect(tileUnits({ params: { feed: 'nyc' } })).toBe(1)
+    expect(tileUnits({})).toBe(1)
+    expect(tileUnits({ params: { source: 'a,,b,../c' } })).toBe(1)
+  })
+})
+
+// ── TileJSON ────────────────────────────────────────────────────────────────
+
+describe('GET /tiles/:source.json', () => {
+  const MARTIN_TILEJSON = {
+    tilejson: '3.0.0',
+    tiles: ['http://mock-martin:3000/basemap/{z}/{x}/{y}'],
+    attribution: '<a href="https://example.com">archive credit</a>',
+    minzoom: 0,
+    maxzoom: 15,
+    bounds: [-80, 35, -78, 37],
+    vector_layers: [{ id: 'water', fields: {} }],
+  }
+
+  function makeApp() {
+    const fetchTileJson = mock(async (_url: string) => Response.json(MARTIN_TILEJSON))
+    const app = new Elysia().use(createTileRoutes({ fetchTile: mock<TileFetcher>(), fetchTileJson }))
+    return { app, fetchTileJson }
+  }
+
+  function withServiceKey(run: () => Promise<void>, key = 'svc_secret') {
+    return async () => {
+      const saved = process.env.BARRELMAN_API_KEY
+      process.env.BARRELMAN_API_KEY = key
+      try {
+        await run()
+      } finally {
+        if (saved === undefined) delete process.env.BARRELMAN_API_KEY
+        else process.env.BARRELMAN_API_KEY = saved
+      }
+    }
+  }
+
+  test("reissues Martin's TileJSON with our tile URL and its zoom range, bounds and layers", async () => {
+    const { app, fetchTileJson } = makeApp()
+    const res = await app.handle(get('/tiles/basemap.json'))
+    expect(res.status).toBe(200)
+    const body = await json(res)
+    expect(fetchTileJson.mock.calls[0][0]).toBe('http://mock-martin:3000/basemap')
+    expect(body.tilejson).toBe('3.0.0')
+    expect(body.name).toBe('basemap')
+    expect(body.tiles).toEqual([`${serverOrigin}/tiles/basemap/{z}/{x}/{y}`])
+    expect(body.maxzoom).toBe(15)
+    expect(body.bounds).toEqual([-80, 35, -78, 37])
+    expect(body.vector_layers).toEqual([{ id: 'water', fields: {} }])
+    expect(JSON.stringify(body)).not.toContain('mock-martin')
+    expect(body.attribution).not.toContain('archive credit')
+  })
+
+  test('asks Martin for a bundle as its composite, and keeps the bundle name in the URL', async () => {
+    const { app, fetchTileJson } = makeApp()
+    const body = await json(await app.handle(get('/tiles/detail.json')))
+    expect(fetchTileJson.mock.calls[0][0]).toBe(`http://mock-martin:3000/${TILE_BUNDLES.detail.join(',')}`)
+    expect(body.tiles[0]).toBe(`${serverOrigin}/tiles/detail/{z}/{x}/{y}`)
+  })
+
+  test(
+    'carries a query key into the tile URL, escaped',
+    withServiceKey(async () => {
+      const { app } = makeApp()
+      const body = await json(await app.handle(get('/tiles/basemap.json?api_key=svc%26b%22c%3C')))
+      expect(body.tiles[0]).toBe(`${serverOrigin}/tiles/basemap/{z}/{x}/{y}?api_key=svc%26b%22c%3C`)
+    }, 'svc&b"c<'),
+  )
+
+  test(
+    'never writes a Bearer key into the document',
+    withServiceKey(async () => {
+      const { app } = makeApp()
+      const res = await app.handle(get('/tiles/basemap.json', { Authorization: 'Bearer svc_secret' }))
+      expect(res.status).toBe(200)
+      const text = await res.text()
+      expect(text).not.toContain('svc_secret')
+      expect(JSON.parse(text).tiles[0]).toBe(`${serverOrigin}/tiles/basemap/{z}/{x}/{y}`)
+    }),
+  )
+
+  test(
+    'still needs a key',
+    withServiceKey(async () => {
+      const { app, fetchTileJson } = makeApp()
+      expect((await app.handle(get('/tiles/basemap.json'))).status).toBe(401)
+      expect(fetchTileJson).not.toHaveBeenCalled()
+    }),
+  )
+
+  test("keeps Martin's answer for a minute", async () => {
+    const { app, fetchTileJson } = makeApp()
+    await app.handle(get('/tiles/basemap.json'))
+    await app.handle(get('/tiles/basemap.json?api_key=k'))
+    expect(fetchTileJson).toHaveBeenCalledTimes(1)
+  })
+
+  test('landmarks are described here, with no call to Martin', async () => {
+    const { app, fetchTileJson } = makeApp()
+    const body = await json(await app.handle(get('/tiles/landmarks.json')))
+    expect(fetchTileJson).not.toHaveBeenCalled()
+    expect(body.tiles[0]).toBe(`${serverOrigin}/tiles/landmarks/{z}/{x}/{y}`)
+    expect(body.vector_layers[0].id).toBe('landmarks')
+    expect(body.attribution).toContain('OpenStreetMap')
+  })
+
+  test("404s a source Martin doesn't know, and a bare name without .json", async () => {
+    const fetchTileJson = mock(async () => new Response('nope', { status: 404 }))
+    const app = new Elysia().use(createTileRoutes({ fetchTile: mock<TileFetcher>(), fetchTileJson }))
+    expect((await app.handle(get('/tiles/nothing_here.json'))).status).toBe(404)
+    expect((await app.handle(get('/tiles/basemap'))).status).toBe(404)
+  })
+
+  test('400s a malformed source without calling Martin', async () => {
+    const { app, fetchTileJson } = makeApp()
+    expect((await app.handle(get('/tiles/a,,b.json'))).status).toBe(400)
+    expect(fetchTileJson).not.toHaveBeenCalled()
+  })
+
+  test('costs no credits', () => {
+    expect(tileUnits({ params: { source: 'basemap.json' } })).toBe(0)
+    expect(tileUnits({ params: { source: 'detail.json' } })).toBe(0)
+  })
+})
+
+describe('tile attribution', () => {
+  const OSM = '© OpenStreetMap contributors'
+  const OMT = '© OpenMapTiles'
+  const TERRAIN = '© Mapterhorn'
+
+  test('the basemap owes OpenStreetMap and OpenMapTiles, not terrain', () => {
+    const credit = tileAttribution('basemap')
+    expect(credit).toContain(OSM)
+    expect(credit).toContain(OMT)
+    expect(credit).not.toContain(TERRAIN)
+  })
+
+  test('elevation-derived sources, and bundles holding one, add Mapterhorn', () => {
+    for (const source of ['bridge_decks', 'tunnel_cuts', 'bicycle_ways', 'detail', 'buildings_3d,bridge_decks']) {
+      expect(tileAttribution(source)).toContain(TERRAIN)
+    }
+  })
+
+  test('other OSM-derived sources owe OpenStreetMap alone', () => {
+    for (const source of ['buildings_3d', 'indoor', 'parchment_pois']) {
+      const credit = tileAttribution(source)
+      expect(credit).toContain(OSM)
+      expect(credit).not.toContain(OMT)
+      expect(credit).not.toContain(TERRAIN)
+    }
+  })
+
+  test('a credit owed by several members appears once', () => {
+    expect(tileAttribution('detail').split(OSM).length).toBe(2)
   })
 })

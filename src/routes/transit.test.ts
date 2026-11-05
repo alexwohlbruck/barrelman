@@ -206,6 +206,58 @@ describe('POST /transit/route', () => {
   })
 })
 
+// ── Empty plans ─────────────────────────────────────────────────────
+
+describe('an empty plan', () => {
+  const LIVE_KEY = 'brm_live_abcdefghijklmnopqrstuvwxyz0123456789ABCD'
+  const empty: TransitRouteResponse = {
+    itineraries: [],
+    warnings: ['No itinerary was found for this trip. Empty plans are not charged.'],
+  }
+  const auth = () => ({
+    resolveApiKey: mock(async () => ({
+      keyId: 'key-transit', userId: 'user-transit', scopes: ['*'], allowedOrigins: [],
+      plan: 'developer', suspended: false, suspensionReason: null,
+    })),
+    checkQuota: mock(async () => ({ allowed: true as const, overage: false })),
+    recordUsage: mock(() => undefined),
+  }) as never
+
+  const trip = {
+    from: { lat: 35.23, lng: -80.84 },
+    to: { lat: 35.50, lng: -79.50 },
+  }
+
+  beforeEach(() => {
+    process.env.BARRELMAN_API_KEY = 'service-secret'
+  })
+
+  test.each(['/transit/route', '/transit/intermodal-route'])('%s is not charged', async (path) => {
+    const app = new Elysia().use(createTransitRoutes({
+      getTransitRoute: mock(async () => empty),
+      getIntermodalRoute: mock(async () => empty),
+      auth: auth(),
+    }))
+
+    const res = await app.handle(post(path, trip, { authorization: `Bearer ${LIVE_KEY}` }))
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('x-barrelman-credits-charged')).toBe('0')
+    expect((await res.json()).warnings).toEqual(empty.warnings)
+  })
+
+  test('a plan with itineraries keeps its charge', async () => {
+    const app = new Elysia().use(createTransitRoutes({
+      getTransitRoute: mock(async () => mockTransitResponse),
+      auth: auth(),
+    }))
+
+    const res = await app.handle(post('/transit/route', trip, { authorization: `Bearer ${LIVE_KEY}` }))
+
+    expect(res.headers.get('x-barrelman-credits-charged')).toBe('20')
+  })
+})
+
 // ── GET /transit/stops ──────────────────────────────────────────────
 
 describe('GET /transit/stops', () => {
@@ -359,5 +411,32 @@ describe('GET /transit/resolve-route', () => {
     const res = await app.handle(get('/transit/resolve-route?routeId=2&lat=abc&lng=-74.00'))
 
     expect(res.status).toBe(400)
+  })
+})
+
+// ── GET /transit/stations/:id/paths ─────────────────────────────────
+
+describe('GET /transit/stations/:id/paths', () => {
+  const body = { complex: { id: 'node/1' }, platforms: [], paths: [] }
+
+  test('takes an encoded OSM id or its short form, and the filters', async () => {
+    const getStationPaths = mock(async () => body as never)
+    const app = new Elysia().use(createTransitRoutes({ getStationPaths }))
+
+    expect((await app.handle(get('/transit/stations/node%2F1/paths'))).status).toBe(200)
+    expect(getStationPaths.mock.calls[0]).toEqual(['node/1', { from: undefined, to: undefined, profile: undefined }] as never)
+
+    await app.handle(get('/transit/stations/w42/paths?from=w7&to=n9&profile=wheelchair'))
+    expect(getStationPaths.mock.calls[1]).toEqual(['way/42', { from: 'way/7', to: 'node/9', profile: 'wheelchair' }] as never)
+  })
+
+  test('404s an unknown station', async () => {
+    const app = new Elysia().use(createTransitRoutes({ getStationPaths: mock(async () => null) }))
+    expect((await app.handle(get('/transit/stations/n1/paths'))).status).toBe(404)
+  })
+
+  test('rejects an unknown profile', async () => {
+    const app = new Elysia().use(createTransitRoutes({ getStationPaths: mock(async () => body as never) }))
+    expect((await app.handle(get('/transit/stations/n1/paths?profile=bike'))).status).toBe(422)
   })
 })

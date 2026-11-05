@@ -862,6 +862,217 @@ export function heightAt(d: number[], z: number[], s: number): number {
 /** How far from where a ramp rests on a road the road is not lifted to it, in metres: a ramp climbing away at a gentle grade is still beside it. */
 export const LEAVING = 200
 
+/** Widest a gore between two diverging road decks is paved, in metres: past it the two stand apart, at the gore's nose. */
+export const GORE_GAP = 4
+/** Most two diverging decks may differ in height and still share a paved gore, in metres. */
+export const GORE_RISE = 0.5
+/** Farthest apart two ramps may leave the same deck and still be one split, in metres. */
+const SPLIT_REACH = 15
+/** Least cosine between two ramps leaving one deck for them to share a gore: within about 35 degrees. */
+const SPLIT_ALIKE = 0.82
+/** Nearest a held ramp may come to an end it lands on, in metres: the hold gives way rather than meet the ground too steeply. */
+const HOLD_CLEAR = 30
+
+type GoreDeck = { chain: Chain & { outline?: string | null }; z: number[]; on?: Array<{ deck: unknown; at: Point }>; grounded?: [boolean, boolean]; needs?: Need[]; g?: number[] }
+
+/**
+ * Pairs of road decks that split apart within one bridge: a ramp and the deck
+ * it leaves, and two ramps leaving the same deck at about the same place. Each
+ * pair walks from where the first deck leaves (`order`, its sample indices).
+ */
+function gorePairs(decks: GoreDeck[]): Array<{ A: GoreDeck; B: GoreDeck; order: number[]; parent: boolean }> {
+  const same = (A: GoreDeck, B: GoreDeck) => B.chain.kind === 'road' && B.chain.layer === A.chain.layer && (A.chain.outline ?? null) === (B.chain.outline ?? null)
+  const fromRest = (A: GoreDeck, at: Point) => {
+    const n = A.chain.points.length
+    const start = A.chain.points[0] === at || (A.chain.points[0][0] === at[0] && A.chain.points[0][1] === at[1])
+    return start ? A.chain.points.map((_, i) => i) : A.chain.points.map((_, i) => n - 1 - i)
+  }
+  // A deck's heading away from where it leaves, over its first two samples.
+  const leaving = (D: GoreDeck, order: number[]): Point => {
+    const [a, b] = [D.chain.points[order[0]], D.chain.points[order[Math.min(2, order.length - 1)]]]
+    const len = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1
+    return [(b[0] - a[0]) / len, (b[1] - a[1]) / len]
+  }
+  // Which side of the deck it leaves a ramp heads off to, by its sample beyond the rest point; at the deck's end, where it divides, either.
+  const sideOf = (deck: unknown, at: Point, D: GoreDeck, order: number[]) => {
+    const B = decks.find(X => X === deck)
+    if (!B) return true
+    const ends = [B.chain.points[0], B.chain.points[B.chain.points.length - 1]]
+    if (ends.some(e => Math.hypot(e[0] - at[0], e[1] - at[1]) * metresPerUnit(at[1]) <= SPLIT_REACH)) return true
+    return beside(B.chain.points, D.chain.points[order[Math.min(2, order.length - 1)]]).left
+  }
+  const out: Array<{ A: GoreDeck; B: GoreDeck; order: number[]; parent: boolean }> = []
+  for (const A of decks) {
+    if (A.chain.kind !== 'road') continue
+    for (const { deck, at } of A.on ?? []) {
+      const B = decks.find(D => D === deck)
+      // Two bridges are two structures, with the ground between them: only one bridge's decks share a gore.
+      const order = fromRest(A, at)
+      if (B && same(A, B)) out.push({ A, B, order, parent: true })
+      // Two ramps leaving one deck at about the same place and the same way, not off its two sides.
+      for (const C of decks) {
+        const rest = (C.on ?? []).find(r => r.deck === deck && Math.hypot(r.at[0] - at[0], r.at[1] - at[1]) * metresPerUnit(at[1]) <= SPLIT_REACH)
+        if (C === A || !rest || !same(A, C)) continue
+        const [u, v] = [leaving(A, order), leaving(C, fromRest(C, rest.at))]
+        if (u[0] * v[0] + u[1] * v[1] >= SPLIT_ALIKE && sideOf(deck, at, A, order) === sideOf(deck, rest.at, C, fromRest(C, rest.at)))
+          out.push({ A, B: C, order, parent: false })
+      }
+    }
+  }
+  return out
+}
+
+/** The gap between one deck's sample and another deck's facing side, which side of the first faces it, and the other's height there. */
+function gapAt(A: GoreDeck, i: number, B: GoreDeck, sidesOf: (D: GoreDeck) => number[][]) {
+  const p = A.chain.points[i]
+  const near = beside(B.chain.points, p)
+  if (!near.alongside) return null
+  const [j, t] = [near.segment, near.t]
+  const q: Point = [B.chain.points[j - 1][0] + (B.chain.points[j][0] - B.chain.points[j - 1][0]) * t, B.chain.points[j - 1][1] + (B.chain.points[j][1] - B.chain.points[j - 1][1]) * t]
+  const side = beside(A.chain.points, q).left ? 0 : 1
+  const sb = sidesOf(B)[near.left ? 0 : 1]
+  const gap = near.distance - sidesOf(A)[side][i] - (sb[j - 1] + (sb[j] - sb[j - 1]) * t)
+  return { gap, side: side as 0 | 1, z: B.z[j - 1] + (B.z[j] - B.z[j - 1]) * t }
+}
+
+const sidesNow = (D: GoreDeck) => [0, 1].map(s => D.chain.points.map((_, i) => sideAt(D.chain, s as 0 | 1, i)))
+
+/**
+ * Ramps held at the height of the deck they split from until the gore's nose,
+ * where the two have parted by GORE_GAP, then eased onto their own profile no
+ * steeper than MAX_GRADE: so the gore lies level and can be paved. A hold is
+ * not made where the ramp would not rejoin its own profile, fall short of what
+ * it must clear (`needs`), go under its ground, or change near its far end or
+ * where another deck crosses or rests on it.
+ */
+export function holdGores(decks: GoreDeck[]) {
+  const pairs = gorePairs(decks)
+  const held = new Map<GoreDeck, number[] | null>()
+  for (const { A, B, order, parent } of pairs) {
+    if (!parent) continue
+    held.set(A, holdOf(decks, A, B, order))
+  }
+  // A split's ramps are held together or not at all: they were joined at one height beside each other.
+  for (const [A, z] of held) {
+    const split = pairs.filter(p => !p.parent && (p.A === A || p.B === A)).map(p => (p.A === A ? p.B : p.A))
+    if (z && split.every(C => held.get(C) ?? !held.has(C))) A.z = z
+  }
+}
+
+/** The heights a ramp would be held at against the deck it leaves, or null where the hold is not made. */
+function holdOf(decks: GoreDeck[], A: GoreDeck, B: GoreDeck, order: number[]): number[] | null {
+  const d = along(A.chain.points)
+  const z = A.z.slice()
+  let held = -1
+  for (const i of order) {
+    const g = gapAt(A, i, B, sidesNow)
+    if (!g || g.gap > GORE_GAP) break
+    z[i] = g.z
+    held = i
+  }
+  if (held < 0) return null
+  let rejoined = false
+  for (const i of order.slice(order.indexOf(held) + 1)) {
+    const run = MAX_GRADE * Math.abs(d[i] - d[held])
+    const eased = Math.min(Math.max(z[i], z[held] - run), z[held] + run)
+    if (eased === z[i]) {
+      rejoined = true
+      break
+    }
+    z[i] = eased
+  }
+  const moved = z.flatMap((v, i) => (Math.abs(v - A.z[i]) > 0.01 ? [d[i]] : []))
+  if (!rejoined || !moved.length) return null
+  const [from, to] = [Math.min(...moved) - HOLD_CLEAR, Math.max(...moved) + HOLD_CLEAR]
+  const farEnd = d[order[order.length - 1]]
+  const short = A.needs?.some(need => heightAt(d, z, need.at) < Math.min(need.height, heightAt(d, A.z, need.at)) - 0.05)
+  const buried = A.g?.some((g, i) => Math.abs(z[i] - A.z[i]) > 0.01 && z[i] < g - TERRAIN_SLACK)
+  // Nor near its far end, nor where another deck crosses it or rests on it: their heights were settled against this one's.
+  const nearFar = farEnd >= from && farEnd <= to
+  const within = (p: Point) => {
+    const at = beside(A.chain.points, p)
+    const x = d[at.segment - 1] + (d[at.segment] - d[at.segment - 1]) * at.t
+    return x >= from && x <= to
+  }
+  const crossed = decks.some(D => D !== A && D !== B && meet(box(D.chain.points), box(A.chain.points)) &&
+    (crossings(A.chain.points, D.chain.points, 0, d).some(at => at >= from && at <= to) ||
+     (D.on ?? []).some(r => r.deck === A && within(r.at))))
+  return short || buried || nearFar || crossed ? null : z
+}
+
+/**
+ * The gore between road decks that split apart, paved: where one deck leaves
+ * another, or two leave one, and they run on alongside at one height, the
+ * ground showing between their facing sides is closed, each side reaching half
+ * way across, until the gap has widened to GORE_GAP. Sides are widened in place.
+ */
+export function paveGores(decks: GoreDeck[]) {
+  // Gaps are read from the sides as they were, so the order decks are paved in changes nothing.
+  const before = new Map(decks.map(D => [D, sidesNow(D)]))
+  const sidesBefore = (D: GoreDeck) => before.get(D)!
+  const widened = new Map<Chain, [number[], number[]]>()
+  const widen = (c: Chain, side: 0 | 1, i: number, to: number) => {
+    let w = widened.get(c)
+    if (!w) widened.set(c, (w = [[], []]))
+    w[side][i] = Math.max(w[side][i] ?? 0, to)
+  }
+  for (const { A, B, order } of gorePairs(decks)) {
+    const span: number[] = []
+    for (const i of order) {
+      const g = gapAt(A, i, B, sidesBefore)
+      if (!g || Math.abs(g.z - A.z[i]) > GORE_RISE || g.gap > GORE_GAP) break
+      span.push(i)
+      if (g.gap > 0) widen(A.chain, g.side, i, sidesBefore(A)[g.side][i] + g.gap / 2)
+    }
+    if (span.length < 2) continue
+    // The other deck meets it half way, over the stretch it ran alongside.
+    const [lo, hi] = [A.chain.points[Math.min(...span)], A.chain.points[Math.max(...span)]].map(p => beside(B.chain.points, p))
+    const d = along(B.chain.points)
+    const at = (h: ReturnType<typeof beside>) => d[h.segment - 1] + (d[h.segment] - d[h.segment - 1]) * h.t
+    const [from, to] = [Math.min(at(lo), at(hi)), Math.max(at(lo), at(hi))]
+    B.chain.points.forEach((_, k) => {
+      if (d[k] < from - 1 || d[k] > to + 1) return
+      const g = gapAt(B, k, A, sidesBefore)
+      if (g && Math.abs(g.z - B.z[k]) <= GORE_RISE && g.gap > 0 && g.gap <= GORE_GAP) widen(B.chain, g.side, k, sidesBefore(B)[g.side][k] + g.gap / 2)
+    })
+  }
+  for (const [chain, w] of widened) {
+    const s = (chain.sides ??= [chain.points.map(() => chain.edges[0]), chain.points.map(() => chain.edges[1])])
+    for (const side of [0, 1] as const) w[side].forEach((v, i) => (s[side][i] = Math.max(s[side][i], v)))
+    chain.edges = [Math.max(...s[0]), Math.max(...s[1])]
+  }
+}
+
+/** Widest a gap between a sidewalk deck and the road deck beside it is closed across, in metres: a verge, not a separate structure. */
+export const VERGE_GAP = 3
+
+/**
+ * A footway or cycle track deck running beside a road deck on the same bridge
+ * (`sameBridge`: one outline holds both), at its height, widened across the verge between them, so the two meet and
+ * read as one deck with no walls between.
+ */
+export function closeVerges(decks: GoreDeck[], sameBridge: (path: Chain, road: GoreDeck['chain']) => boolean) {
+  const roads = decks.filter(D => D.chain.kind === 'road')
+  const before = new Map(decks.map(D => [D, sidesNow(D)]))
+  for (const P of decks) {
+    if (P.chain.kind !== 'path') continue
+    const near = roads.filter(R => R.chain.layer === P.chain.layer &&
+      meet(grow(box(R.chain.points), Math.max(...R.chain.edges) + VERGE_GAP + Math.max(...P.chain.edges)), box(P.chain.points)) && sameBridge(P.chain, R.chain))
+    if (!near.length) continue
+    const reach: [number[], number[]] = [P.chain.points.map(() => 0), P.chain.points.map(() => 0)]
+    P.chain.points.forEach((_, i) => {
+      for (const R of near) {
+        const g = gapAt(P, i, R, D => before.get(D)!)
+        if (g && g.gap > 0 && g.gap <= VERGE_GAP && Math.abs(g.z - P.z[i]) <= GORE_RISE) reach[g.side][i] = Math.max(reach[g.side][i], g.gap)
+      }
+    })
+    if (!reach.flat().some(Boolean)) continue
+    const s = (P.chain.sides ??= [P.chain.points.map(() => P.chain.edges[0]), P.chain.points.map(() => P.chain.edges[1])])
+    for (const side of [0, 1] as const) reach[side].forEach((r, i) => (s[side][i] += r))
+    P.chain.edges = [Math.max(...s[0]), Math.max(...s[1])]
+  }
+}
+
 /**
  * Decks that run side by side as one: where a deck's edge meets another's
  * within `gap` metres and at most `step` from its height, both take the

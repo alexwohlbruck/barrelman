@@ -187,7 +187,107 @@ early.
 `rebuild-motis.sh` regenerates the config from the `gtfs_feeds` table, clean-rebuilds the timetable *and* street graph together — an in-place incremental import can leave the stop-to-street match index stale, which silently breaks routing to every stop — and restarts the server. The previous dataset is kept at `/data/data.prev` and restored automatically if the import fails.
 </Callout>
 
-Put `TRANSITLAND_API_KEY` in `.env` if you will refresh feeds regularly; it is already forwarded to `barrelman-ops`.
+Put `TRANSITLAND_API_KEY` in `.env` if you will refresh feeds regularly; it is already forwarded to `barrelman-ops` and to the API.
+
+#### Feed licences
+
+Every agency publishes its timetable under its own terms, and Transitland
+records them per feed: an SPDX identifier or licence URL, yes/no/unknown answers
+for commercial use, redistribution, derived products and use without
+attribution, and the attribution text the agency asks for. The import stores
+these in `gtfs_feeds` as it discovers each feed. Feeds imported before this
+existed, and terms an agency has changed since, are picked up by the console
+task **Refresh Feed Licences** (Scripts → GTFS / Transit), which re-reads every
+feed with a Transitland id. The **Data** view lists each feed's licence and
+counts the feeds that forbid commercial use.
+
+What is done with the terms is set by `GTFS_LICENCE_POLICY`:
+
+- `off` (the default) records licences and serves every feed.
+- `commercial` withholds any feed whose licence explicitly answers *no* to
+  commercial use or to redistribution. The import skips it, removes its stops,
+  routes and zip, and keeps its `gtfs_feeds` row so the console still shows
+  why. `rebuild-motis.sh` leaves it out of `motis/config.yml`, and transit
+  responses drop it straight away, so a feed newly found to be restricted by
+  **Refresh Feed Licences** stops being served before the next import.
+
+A feed with no licence on record, or whose answers are `unknown`, is served
+under both settings. Most feeds have never had their terms filled in, and
+treating silence as a refusal would remove most of the network. The policy
+is a filter on what Transitland says, not a licence review: check the terms
+of the agencies you depend on yourself.
+
+Turning the policy back to `off` brings withheld feeds back at the next full
+GTFS import (not `--skip-download`, which only re-reads zips already on disk),
+followed by `rebuild-motis.sh`.
+
+Transit responses credit the feeds they draw on in an `attribution` field; see
+[Attribution](/usage/attribution#transit-data).
+
+#### Station labels
+
+Transit legs and departures carry `directionLabel`, what a platform's signs
+call the direction ("Uptown & The Bronx"), and station entrances carry
+`cornerLabel` ("Broadway & West 28th Street · NW corner") and
+`entryAllowed`/`exitAllowed`. They are derived, never entered by hand:
+
+- **Directions** from the OSM `destination` of each platform tied to a GTFS
+  stop by `gtfs:stop_id`, or direction words in its name. A platform tagged
+  with several stop ids serves both directions and says nothing.
+- **Corners** from the nearest named intersection: its two streets, and the
+  side of each street the entrance stands on. Further out, the street pair
+  alone; mid-block, the street it is on.
+- **Entry and exit** from OSM `entrance=exit|entry`.
+
+Agency open data fills in where it exists and is fetched only when its feed is
+imported. For the NYC subway that is the MTA's
+[Subway Stations](https://data.ny.gov/d/39hk-dx4f) dataset (direction labels;
+"Last Stop" is skipped) and its
+[Subway Entrances and Exits](https://data.ny.gov/d/i9wp-a4ja) (entry/exit
+flags, matched to OSM entrances within 10 m). A source that cannot be fetched
+keeps its previous rows.
+
+Every feed import refreshes its direction labels, and OSM Update and the full
+import refresh everything. The console task **Refresh Station Labels**
+(Scripts → GTFS / Transit) runs the same refresh by hand, which an instance
+upgrading needs once.
+
+#### Station paths
+
+`GET /transit/stations/{id}/paths` serves a walking time for every
+platform-to-platform and platform-to-entrance pair in a station complex, and
+the GTFS import times `transfers.txt` from them. Each time says how it was
+made, best first:
+
+| Source | When | Line and steps |
+|---|---|---|
+| `graph` | Both ends are on one connected piece of the mapped station | Yes |
+| `bridged` | The pieces are at most 30 m apart (a mezzanine nobody mapped); never platform to platform | Yes, the bridge marked |
+| `agency` | The feed publishes `pathways.txt` (VBB, MBTA, PID, IDFM, SEPTA) | No |
+| `estimated` | Otherwise, from the platforms' geometry and depth | No |
+
+A GTFS stop with no OSM platform at all gets a `straight_line` time in
+`transfers.txt` from the stop coordinates.
+
+The graph is built from OSM alone. Stations within 150 m of each other form a
+complex, joined further where a feed's own `transfers.txt` connects them. A
+node shared by stacked platforms on different `level`s is not a junction, a
+loose stair end joins only ways on its own level, and a path from an
+underground platform reaches the street only after it climbs. Walking,
+stair, escalator and lift costs, and the fitted formulas behind `estimated`,
+are in `config/station-paths.json`, so a refit is a config change.
+
+In `transfers.txt` a station path time replaces the feed's own time for that
+pair (the MTA's flat 180 s), and a station-to-station row takes the median of
+its platforms' times. A forbidden transfer (`transfer_type=3`) is never
+touched, and a pair no station path covers keeps the GraphHopper walk.
+
+OSM Update and the full import rebuild the paths into `*_next` tables and swap
+them in; the log lists the tier mix and how many complexes moved up or down a
+tier since the last build, and `station_complexes.disconnected` marks the ones
+not fully on the graph. The console task **Build Station Paths** (Scripts →
+GTFS / Transit) runs it by hand, which an instance upgrading needs once, before
+its next GTFS import.
 
 ### Step 3 — Bikeshare (optional)
 

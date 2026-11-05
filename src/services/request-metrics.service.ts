@@ -16,7 +16,7 @@
  * Latency is kept as a fixed-bucket histogram rather than raw samples, so rows
  * from any number of replicas and hours sum into a percentile estimate.
  */
-import { connection as sql } from '../db'
+import { accountsConnection as sql } from '../db'
 import { envNumber } from '../config/env'
 
 const FLUSH_INTERVAL_MS = envNumber('BARRELMAN_USAGE_FLUSH_MS', 5_000)
@@ -189,6 +189,46 @@ const UPSERT_SET = [
   `latency_hist = ${HIST_MERGE}`,
 ].join(',\n  ')
 
+/** Upsert buffered rows. Swappable so tests can make a flush fail without Postgres. */
+async function upsertRows(rows: BufferEntry[]): Promise<void> {
+  const columns = ['hour', 'user_id', 'api_key_id', 'endpoint', ...COLUMNS.map(([, c]) => c), 'latency_hist']
+  const params: unknown[] = []
+  const tuples = rows.map((row) => {
+    const values = [
+      row.hour,
+      row.userId,
+      row.apiKeyId,
+      row.endpoint,
+      ...COLUMNS.map(([field]) => row[field]),
+      `{${row.hist.join(',')}}`,
+    ]
+    const start = params.length
+    params.push(...values)
+    return `(${values.map((_, i) => `$${start + i + 1}`).join(', ')})`
+  })
+  // Built by hand rather than with postgres.js's row helper, which would
+  // need the array column's type spelled out per row. Every identifier
+  // here is a constant; every value is a bound parameter.
+  await sql.unsafe(
+    `INSERT INTO accounts_request_metrics (${columns.join(', ')})
+     SELECT hour::timestamptz, user_id, api_key_id, endpoint, ${COLUMNS.map(([, c]) => `${c}::bigint`).join(', ')}, latency_hist::integer[]
+     FROM (VALUES ${tuples.join(', ')}) AS v(${columns.join(', ')})
+     ON CONFLICT (hour, user_id, api_key_id, endpoint) DO UPDATE SET
+       ${UPSERT_SET}`,
+    params as never[],
+  )
+}
+
+let writeRows = upsertRows
+
+/** For tests: replace the flush writer. Returns a function that restores it. */
+export function setRequestMetricsWriterForTests(writer: (rows: BufferEntry[]) => Promise<void>): () => void {
+  writeRows = writer
+  return () => {
+    writeRows = upsertRows
+  }
+}
+
 let flushing: Promise<void> | null = null
 
 export async function flushRequestMetrics(): Promise<void> {
@@ -200,32 +240,7 @@ export async function flushRequestMetrics(): Promise<void> {
 
   flushing = (async () => {
     try {
-      const columns = ['hour', 'user_id', 'api_key_id', 'endpoint', ...COLUMNS.map(([, c]) => c), 'latency_hist']
-      const params: unknown[] = []
-      const tuples = rows.map((row) => {
-        const values = [
-          row.hour,
-          row.userId,
-          row.apiKeyId,
-          row.endpoint,
-          ...COLUMNS.map(([field]) => row[field]),
-          `{${row.hist.join(',')}}`,
-        ]
-        const start = params.length
-        params.push(...values)
-        return `(${values.map((_, i) => `$${start + i + 1}`).join(', ')})`
-      })
-      // Built by hand rather than with postgres.js's row helper, which would
-      // need the array column's type spelled out per row. Every identifier
-      // here is a constant; every value is a bound parameter.
-      await sql.unsafe(
-        `INSERT INTO accounts_request_metrics (${columns.join(', ')})
-         SELECT hour::timestamptz, user_id, api_key_id, endpoint, ${COLUMNS.map(([, c]) => `${c}::bigint`).join(', ')}, latency_hist::integer[]
-         FROM (VALUES ${tuples.join(', ')}) AS v(${columns.join(', ')})
-         ON CONFLICT (hour, user_id, api_key_id, endpoint) DO UPDATE SET
-           ${UPSERT_SET}`,
-        params as never[],
-      )
+      await writeRows(rows)
     } catch (err) {
       // Put the counters back so a transient database error costs nothing.
       for (const row of rows) {
@@ -265,6 +280,36 @@ export async function pruneRequestMetrics(): Promise<number> {
     WHERE hour < now() - make_interval(days => ${RETENTION_DAYS})
     RETURNING 1`
   return deleted.length
+}
+
+/** How long hourly rows are kept, for the export and the docs to quote. */
+export const REQUEST_METRICS_RETENTION_DAYS = RETENTION_DAYS
+
+/**
+ * Erase one account's rows, buffered and stored. The table has no foreign key
+ * to accounts_users, because the service and anonymous sentinels share the
+ * column, so deleting an account does not cascade here on its own.
+ *
+ * The buffer is cleared, any flush already in flight is waited out, and the
+ * buffer is cleared again. The second pass matters: a flush that fails puts
+ * its rows back in the buffer, the account's included, and the next flush
+ * would write them out after the delete.
+ */
+export async function eraseRequestMetrics(
+  userId: string,
+  deleteRows: (userId: string) => Promise<unknown> = (id) =>
+    sql`DELETE FROM accounts_request_metrics WHERE user_id = ${id}`,
+): Promise<void> {
+  dropBuffered(userId)
+  if (flushing) await flushing
+  dropBuffered(userId)
+  await deleteRows(userId)
+}
+
+function dropBuffered(userId: string): void {
+  for (const [mapKey, entry] of buffer) {
+    if (entry.userId === userId) buffer.delete(mapKey)
+  }
 }
 
 /** Exposed for tests. */
@@ -467,6 +512,35 @@ export async function trafficReport(range: TrafficRange, userId?: string): Promi
       .map((row) => ({ endpoint: row.dim, ...toStats(row) }))
       .sort((a, b) => b.requests - a.requests),
     byCaller,
+  }
+}
+
+export interface AccountRequestSummary {
+  from: string
+  retentionDays: number
+  totals: TrafficStats
+  byEndpoint: (TrafficStats & { endpoint: string })[]
+}
+
+/** One account's request outcomes over everything still retained. */
+export async function accountRequestSummary(userId: string): Promise<AccountRequestSummary> {
+  await flushRequestMetrics()
+
+  const from = new Date(Date.now() - RETENTION_DAYS * 86_400_000)
+  from.setUTCMinutes(0, 0, 0)
+
+  const [totals, endpoints] = await Promise.all([
+    aggregate('total', from, userId),
+    aggregate('endpoint', from, userId),
+  ])
+
+  return {
+    from: from.toISOString(),
+    retentionDays: RETENTION_DAYS,
+    totals: totals[0] ? toStats(totals[0]) : toStats({} as RawRow),
+    byEndpoint: endpoints
+      .map((row) => ({ endpoint: row.dim, ...toStats(row) }))
+      .sort((a, b) => b.requests - a.requests),
   }
 }
 

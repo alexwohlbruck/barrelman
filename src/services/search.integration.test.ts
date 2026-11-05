@@ -35,6 +35,12 @@ if (DATABASE_URL) {
       throw new Error('DB module is mocked by unit tests')
     }
 
+    // searchPlaces swallows query errors and returns [], so the smoke test
+    // below passes on a database with nothing imported (as in CI) and every
+    // ranking assertion then fails. Ask for the data directly.
+    const [{ imported }] = await dbMod.connection`SELECT EXISTS (SELECT 1 FROM geo_places) AS imported`
+    if (!imported) throw new Error('geo_places is empty, these need an OSM import')
+
     const mod = await import('./search.service')
     // Quick smoke test — will throw if DB is unreachable
     await mod.searchPlaces({ query: '__health__', autocomplete: true, limit: 1 })

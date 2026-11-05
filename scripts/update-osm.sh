@@ -126,6 +126,14 @@ refresh_views() {
   fi
   "$SCRIPT_DIR/refresh-view.sh" street_furniture
   "$SCRIPT_DIR/refresh-view.sh" sport_pitches
+  "$SCRIPT_DIR/refresh-view.sh" indoor_features
+  "$SCRIPT_DIR/refresh-view.sh" fixtures
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] Refreshing station labels..."
+  (cd "$PROJECT_DIR" && nice -n 10 bun run import/refresh-station-labels.ts) \
+    || echo "[$(date '+%Y-%m-%d %H:%M:%S')] WARNING: station labels refresh failed; the previous labels stay. Run \"Refresh Station Labels\"." >&2
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] Building station paths..."
+  (cd "$PROJECT_DIR" && nice -n 10 bun run import/build-station-paths.ts) \
+    || echo "[$(date '+%Y-%m-%d %H:%M:%S')] WARNING: station paths build failed; the previous build stays. Run \"Build Station Paths\"." >&2
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] Cutting states into parts for /route..."
   db_exec barrelman-db psql "$DB_URL" -v ON_ERROR_STOP=1 -q -c "SET client_min_messages = warning" -f /app/import/build-state-parts.sql \
     || echo "[$(date '+%Y-%m-%d %H:%M:%S')] WARNING: state_parts rebuild failed; /route keeps the previous states. Run \"Build Route State Parts\"." >&2
@@ -143,13 +151,23 @@ refresh_views() {
     bash -c "cd '$PROJECT_DIR' && exec nice -n 10 bun run import/update-sidewalk-street-names.ts"
 }
 
+# The graph rebuild waits for its build and keeps the old graph serving if the
+# new one fails, so a failure is held: the basemap and the rest of the update
+# still run, and the job exits with the rebuild's status at the end.
+GRAPHHOPPER_RC=0
+rebuild_graphhopper() {
+  "$SCRIPT_DIR/rebuild-graphhopper.sh" || GRAPHHOPPER_RC=$?
+  if [ "$GRAPHHOPPER_RC" -ne 0 ]; then
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] WARNING: GraphHopper rebuild failed (exit $GRAPHHOPPER_RC, see above). The previous graph keeps serving." >&2
+  fi
+}
+
 # Rebuild what reads region.osm.pbf, if the update moved it. Takes the extract's
 # mtime from before and after the update.
 rebuild_consumers() {
   local before="$1" after="$2"
-  # A graph rebuild wipes graph-cache and takes street routing down for the length
-  # of the import, so it is only worth doing when the extract it reads actually
-  # moved. Before the extract was patched above, this ran unconditionally and
+  # A graph rebuild costs hours, a second graph's worth of disk and a second
+  # JVM, so it is only worth doing when the extract it reads actually moved. Before the extract was patched above, this ran unconditionally and
   # rebuilt an identical graph on every replication run.
   if [ "$after" != "$before" ] \
     && [ "${REBUILD_GRAPHHOPPER:-1}" != "1" ] && [ "${REBUILD_BASEMAP:-1}" != "1" ]; then
@@ -207,12 +225,13 @@ rebuild_consumers() {
     fi
     echo "  Extract is intact (no ways reference missing nodes)."
 
-    # A rebuild takes street routing down until the new graph is built, which
-    # is hours for a country. REBUILD_GRAPHHOPPER=0 leaves the graph for a
-    # separate, less frequent "Rebuild GraphHopper" run.
+    # The old graph keeps serving while the new one builds, but the build is
+    # hours for a country and needs a second graph's worth of disk and a second
+    # JVM's heap. REBUILD_GRAPHHOPPER=0 leaves the graph for a separate, less
+    # frequent "Rebuild GraphHopper" run.
     if [ "${REBUILD_GRAPHHOPPER:-1}" = "1" ]; then
       echo "[$(date '+%Y-%m-%d %H:%M:%S')] Extract changed — triggering GraphHopper graph rebuild..."
-      "$SCRIPT_DIR/rebuild-graphhopper.sh"
+      rebuild_graphhopper
     else
       echo "[$(date '+%Y-%m-%d %H:%M:%S')] GraphHopper rebuild disabled (REBUILD_GRAPHHOPPER=0) — skipping."
     fi
@@ -284,7 +303,7 @@ if [ "$UPDATE_MODE" = "full" ]; then
     barrelman-db bash /app/scripts/import-osm.sh
 
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] Triggering GraphHopper graph rebuild..."
-  "$SCRIPT_DIR/rebuild-graphhopper.sh"
+  rebuild_graphhopper
 
   # A full re-import always replaces the extract, so there is no mtime guard to
   # apply here — the basemap is stale by definition.
@@ -297,7 +316,7 @@ if [ "$UPDATE_MODE" = "full" ]; then
 
   # Full import runs the complete pipeline — we're done
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] Full re-import complete."
-  exit 0
+  exit "$GRAPHHOPPER_RC"
 fi
 
 # ── Replication mode ─────────────────────────────────────────────────────────
@@ -368,7 +387,7 @@ if [ "$HAS_MIDDLE" != "t" ]; then
     exit "$REPLICATION_RC"
   fi
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] OSM update complete."
-  exit 0
+  exit "$GRAPHHOPPER_RC"
 fi
 
 # Auto-initialize replication state if missing.
@@ -529,3 +548,4 @@ db_exec barrelman-db psql "$DB_URL" -c "ANALYZE geo_places; ANALYZE bicycle_ways
 rebuild_consumers "$PBF_MTIME_BEFORE" "$PBF_MTIME_AFTER"
 
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] OSM update complete."
+exit "$GRAPHHOPPER_RC"

@@ -18,13 +18,9 @@ import {
   verifyAuthenticationResponse,
   verifyRegistrationResponse,
 } from '@simplewebauthn/server'
-import type {
-  AuthenticationResponseJSON,
-  AuthenticatorTransportFuture,
-  RegistrationResponseJSON,
-} from '@simplewebauthn/types'
+import type { AuthenticationResponseJSON, RegistrationResponseJSON } from '@simplewebauthn/server'
 import { and, eq } from 'drizzle-orm'
-import { db } from '../db'
+import { accountsDb as db } from '../db'
 import { passkeys, users, type Passkey, type User } from '../schema/accounts'
 import { allowedOrigins, appName, consoleOrigin, rpID } from '../config/accounts.config'
 import { passkeyNameFor } from '../lib/passkey-names'
@@ -89,19 +85,18 @@ export async function completeRegistration(
     return { ok: false, error: 'Passkey registration could not be verified' }
   }
 
-  const { credentialID, credentialPublicKey, counter, credentialDeviceType, credentialBackedUp, aaguid } =
-    verification.registrationInfo
+  const { credential, credentialDeviceType, credentialBackedUp, aaguid } = verification.registrationInfo
 
   const name = response.name?.trim() || passkeyNameFor(aaguid, userAgent)
 
   const [row] = await db
     .insert(passkeys)
     .values({
-      id: credentialID,
+      id: credential.id,
       userId,
       name,
-      publicKey: Buffer.from(credentialPublicKey).toString('base64'),
-      counter,
+      publicKey: Buffer.from(credential.publicKey).toString('base64'),
+      counter: credential.counter,
       deviceType: credentialDeviceType,
       backedUp: credentialBackedUp,
       transports: (response.response.transports ?? []).join(','),
@@ -143,9 +138,9 @@ export async function completeAuthentication(
       expectedOrigin,
       expectedRPID: rpID,
       requireUserVerification: true,
-      authenticator: {
-        credentialID: passkey.id,
-        credentialPublicKey: Buffer.from(passkey.publicKey, 'base64'),
+      credential: {
+        id: passkey.id,
+        publicKey: new Uint8Array(Buffer.from(passkey.publicKey, 'base64')),
         counter: passkey.counter,
         transports: parseTransports(passkey.transports),
       },
@@ -174,6 +169,42 @@ export async function completeAuthentication(
   if (user.suspendedAt) return { ok: false, error: 'This account has been suspended' }
 
   return { ok: true, user }
+}
+
+// ── Confirmation ────────────────────────────────────────────────────────
+
+/**
+ * Options for re-proving presence on an account that is already signed in,
+ * before something irreversible. Unlike sign-in, the credentials are listed:
+ * only this account's passkeys can answer.
+ */
+export async function beginConfirmation(userId: string) {
+  const own = await db
+    .select({ id: passkeys.id, transports: passkeys.transports })
+    .from(passkeys)
+    .where(eq(passkeys.userId, userId))
+
+  return generateAuthenticationOptions({
+    rpID,
+    userVerification: 'required',
+    allowCredentials: own.map((row) => ({ id: row.id, transports: parseTransports(row.transports) as never })),
+  })
+}
+
+/**
+ * Verify a confirmation assertion. The signature check is sign-in's; on top of
+ * it the credential must belong to `userId`, or a passkey for some other
+ * account the same person holds would confirm an action on this one.
+ */
+export async function confirmPasskey(
+  userId: string,
+  response: AuthenticationResponseJSON,
+  expectedChallenge: string,
+): Promise<{ ok: boolean; error?: string }> {
+  const result = await completeAuthentication(response, expectedChallenge)
+  if (!result.ok || !result.user) return { ok: false, error: result.error ?? 'Passkey could not be verified' }
+  if (result.user.id !== userId) return { ok: false, error: 'That passkey belongs to a different account' }
+  return { ok: true }
 }
 
 // ── Management ──────────────────────────────────────────────────────────
@@ -222,6 +253,6 @@ export async function countPasskeys(userId: string): Promise<number> {
   return (await db.select({ id: passkeys.id }).from(passkeys).where(eq(passkeys.userId, userId))).length
 }
 
-function parseTransports(value: string): AuthenticatorTransportFuture[] {
-  return value ? (value.split(',').filter(Boolean) as AuthenticatorTransportFuture[]) : []
+function parseTransports(value: string): string[] {
+  return value ? value.split(',').filter(Boolean) : []
 }
