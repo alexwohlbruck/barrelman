@@ -585,6 +585,13 @@ services:
       # the script hands it to `docker run -v`, so it is the daemon that mounts it.
       BASEMAP_MAXZOOM: ${BASEMAP_MAXZOOM:-}
       BASEMAP_TMP_DIR: ${BASEMAP_TMP_DIR:-}
+      # BASEMAP_RENDER=hcloud renders on a rented Hetzner Cloud server
+      # (scripts/render-basemap-hcloud.sh) instead of on this host.
+      BASEMAP_RENDER: ${BASEMAP_RENDER:-}
+      HCLOUD_TOKEN: ${HCLOUD_TOKEN:-}
+      BASEMAP_HCLOUD_SERVER_TYPES: ${BASEMAP_HCLOUD_SERVER_TYPES:-}
+      BASEMAP_HCLOUD_LOCATIONS: ${BASEMAP_HCLOUD_LOCATIONS:-}
+      BASEMAP_HCLOUD_HEAP: ${BASEMAP_HCLOUD_HEAP:-}
       # Terrain for Build Bridge Decks (import/generate-bridge-decks.ts), which
       # runs here. Blank reads Mapterhorn's public tiles.
       BRIDGE_MESH_DIR: ${BRIDGE_MESH_DIR:-/data/bridge-meshes}

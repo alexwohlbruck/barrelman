@@ -475,6 +475,21 @@ export const SCRIPTS: ScriptDef[] = [
           'Deepest zoom rendered: 14 or 15 (planetiler\'s limit). Clients draw deeper zooms by stretching these tiles, and a stretched tile is laid out again for every deeper tile it covers, so 15 keeps close-in views quick. It doubles the archive and needs far more sort space and memory: a US render passed 46 GB of sort files seven minutes in. Set BASEMAP_TMP_DIR to a roomy disk first.',
       },
       {
+        name: 'BASEMAP_RENDER',
+        label: 'Render on',
+        type: 'select',
+        apply: 'env',
+        envVar: 'BASEMAP_RENDER',
+        default: '',
+        options: [
+          { label: 'Server setting (BASEMAP_RENDER)', value: '' },
+          { label: 'This host', value: 'local' },
+          { label: 'A rented Hetzner Cloud server', value: 'hcloud' },
+        ],
+        description:
+          'Where planetiler runs. A rented server is created for the render and deleted after it, so the render takes no memory or disk from the services here. Needs HCLOUD_TOKEN on barrelman-ops. The heap and memory cap below apply only to this host.',
+      },
+      {
         name: 'PLANETILER_MEMORY',
         label: 'Render heap',
         type: 'string',
