@@ -46,6 +46,7 @@ import {
   findEntrances as _findEntrances,
   type EntrancePurpose,
 } from '../services/station.service'
+import { getStationPaths as _getStationPaths } from '../services/station-paths.service'
 import {
   itineraryResponses,
   departureResponses,
@@ -80,6 +81,7 @@ export function createTransitRoutes(deps: {
   getStationDetail?: typeof _getStationDetail
   getNearestEntrance?: typeof _getNearestEntrance
   findEntrances?: typeof _findEntrances
+  getStationPaths?: typeof _getStationPaths
   /** The metering guard's collaborators, for tests. */
   auth?: Partial<ApiAuthDeps>
 } = {}) {
@@ -99,6 +101,7 @@ export function createTransitRoutes(deps: {
   const getStationDetail = deps.getStationDetail || _getStationDetail
   const getNearestEntrance = deps.getNearestEntrance || _getNearestEntrance
   const findEntrances = deps.findEntrances || _findEntrances
+  const getStationPaths = deps.getStationPaths || _getStationPaths
   const purposeOf = (value?: string): EntrancePurpose | undefined =>
     value === 'enter' || value === 'exit' ? value : undefined
 
@@ -841,6 +844,54 @@ export function createTransitRoutes(deps: {
       },
     })
 
+    // Precomputed in-station paths of a complex
+    .get('/stations/:id/paths', async ({ params, query, set, request }) => {
+      try {
+        const result = await getStationPaths(osmId(params.id), {
+          from: query.from ? osmId(query.from) : undefined,
+          to: query.to ? osmId(query.to) : undefined,
+          profile: query.profile,
+        })
+        if (!result) {
+          set.status = 404
+          return { error: 'Station not found' }
+        }
+        return result
+      } catch (err) {
+        return serverError(request, set, err, 'Failed to get station paths')
+      }
+    }, {
+      params: t.Object({
+        id: t.String({
+          description:
+            'The complex id, or the OSM id of any station or platform in it: `node/123` (URL-encoded as ' +
+            '`node%2F123`) or the short form `n123`, `w123`, `r123`.',
+        }),
+      }),
+      query: t.Object({
+        from: t.Optional(t.String({ description: 'Only paths from this platform or entrance (OSM id).' })),
+        to: t.Optional(t.String({ description: 'Only paths to this platform or entrance (OSM id).' })),
+        profile: t.Optional(t.Union([t.Literal('foot'), t.Literal('wheelchair')], {
+          description: '`foot` (default) or `wheelchair`, which avoids stairs and escalators.',
+        })),
+      }),
+      detail: {
+        summary: 'Walking paths inside a station complex',
+        description:
+          'Every platform-to-platform and platform-to-entrance time in a station complex, built from OSM ' +
+          'at import. Each path says how it was made: `graph` (walked on the mapped station), `bridged` ' +
+          '(a gap of up to 30 m in the map was bridged; `bridge` steps mark where), `agency` (the ' +
+          "feed's pathways.txt) or `estimated` (from platform geometry where the map has no path). " +
+          '`confidence` (0–1) and `uncertaintyS` (the p90 error of that source) say how far to trust it. ' +
+          '`seconds` is from the platform centre; `bestSeconds` and `bestPosition` (0–1 along the ' +
+          "platform's axis, see `axisBearing`) are from the best place to stand on the row's platform end. " +
+          'Only `graph` and `bridged` paths carry a line (`geometry`, with `vertexLevels`) and `steps`; the ' +
+          'others are times only and should not be drawn or narrated. The wheelchair profile has graph ' +
+          'and bridged paths only.',
+        tags: ['Transit'],
+      },
+    })
+
     // Every entrance near a coordinate, for choosing between them
     .get('/entrances', async ({ query, set, request }) => {
       try {
@@ -880,6 +931,13 @@ export function createTransitRoutes(deps: {
         tags: ['Transit'],
       },
     })
+}
+
+/** `w123` → `way/123`; anything else passes through. */
+function osmId(id: string): string {
+  const short = id.match(/^([nwr])(\d+)$/)
+  if (!short) return decodeURIComponent(id)
+  return `${{ n: 'node', w: 'way', r: 'relation' }[short[1] as 'n' | 'w' | 'r']}/${short[2]}`
 }
 
 export const transitRoutes = createTransitRoutes()

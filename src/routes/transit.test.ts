@@ -413,3 +413,30 @@ describe('GET /transit/resolve-route', () => {
     expect(res.status).toBe(400)
   })
 })
+
+// ── GET /transit/stations/:id/paths ─────────────────────────────────
+
+describe('GET /transit/stations/:id/paths', () => {
+  const body = { complex: { id: 'node/1' }, platforms: [], paths: [] }
+
+  test('takes an encoded OSM id or its short form, and the filters', async () => {
+    const getStationPaths = mock(async () => body as never)
+    const app = new Elysia().use(createTransitRoutes({ getStationPaths }))
+
+    expect((await app.handle(get('/transit/stations/node%2F1/paths'))).status).toBe(200)
+    expect(getStationPaths.mock.calls[0]).toEqual(['node/1', { from: undefined, to: undefined, profile: undefined }] as never)
+
+    await app.handle(get('/transit/stations/w42/paths?from=w7&to=n9&profile=wheelchair'))
+    expect(getStationPaths.mock.calls[1]).toEqual(['way/42', { from: 'way/7', to: 'node/9', profile: 'wheelchair' }] as never)
+  })
+
+  test('404s an unknown station', async () => {
+    const app = new Elysia().use(createTransitRoutes({ getStationPaths: mock(async () => null) }))
+    expect((await app.handle(get('/transit/stations/n1/paths'))).status).toBe(404)
+  })
+
+  test('rejects an unknown profile', async () => {
+    const app = new Elysia().use(createTransitRoutes({ getStationPaths: mock(async () => body as never) }))
+    expect((await app.handle(get('/transit/stations/n1/paths?profile=bike'))).status).toBe(422)
+  })
+})
