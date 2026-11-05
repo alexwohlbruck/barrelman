@@ -4,7 +4,8 @@
  * the platform, and the walk inside the station step by step. Pure: the
  * service feeds it station_paths rows and agency facts.
  */
-import { SOURCES, type PathSource, type StationPath, type StepType } from './types'
+import { DEFAULT_PARAMS } from './params'
+import { SOURCES, type PathSource, type PathStep, type StationPath, type StepType } from './types'
 
 /** Seconds to pass a fare gate once, tapping in or out. */
 export const FARE_GATE_DELAY_S = 10
@@ -214,6 +215,8 @@ export interface WalkContext {
   entrance?: string | null
   /** For transfers that tap out and in again. */
   reentryFree?: boolean | null
+  /** Levels of the walk's two ends, for stairs the map leaves unlevelled. */
+  levels?: { from: number | null; to: number | null }
 }
 
 const VERTICAL = new Set<StepType>(['stairs', 'escalator', 'elevator'])
@@ -221,6 +224,7 @@ const VERTICAL = new Set<StepType>(['stairs', 'escalator', 'elevator'])
 const FOLD_M = 8
 
 const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? '' : 's'}`
+const levelCount = (n: number) => (n === 1 ? 'one level' : `${n} levels`)
 const metresText = (m: number) => `${Math.max(5, Math.round(m / 5) * 5)} m`
 
 function levelNamer(steps: GuidanceStep[], ctx: WalkContext) {
@@ -228,17 +232,19 @@ function levelNamer(steps: GuidanceStep[], ctx: WalkContext) {
   const start = steps.find((s) => s.fromLevel !== null)?.fromLevel ?? null
   const end = [...steps].reverse().find((s) => s.toLevel !== null)?.toLevel ?? null
   const middle = [...new Set(levels)].filter((l) => l !== start && l !== end)
-  return (level: number | null): string => {
-    if (level === null) return 'the next level'
+  return (level: number | null): string | null => {
+    if (level === null) return null
     const platformEnd = ctx.kind === 'egress' ? start : end
     if (level === platformEnd) return 'the platform'
     const streetEnd = ctx.kind === 'access' ? start : ctx.kind === 'egress' ? end : 0
     if (level === streetEnd) return 'street level'
-    return middle.length === 1 ? 'the mezzanine' : `level ${level}`
+    return middle.length === 1 && middle[0] === level ? 'the mezzanine' : null
   }
 }
 
 const isFlat = (x: GuidanceStep) => x.type === 'walk' || x.type === 'platform'
+/** One lift ride past a level it doesn't stop at, or one unmapped gap, is still one step. */
+const RUNS = new Set<GuidanceStepType>(['elevator', 'bridge'])
 
 function absorb(into: GuidanceStep, s: GuidanceStep, after: boolean): GuidanceStep {
   return {
@@ -257,6 +263,10 @@ function fold(steps: GuidanceStep[]): GuidanceStep[] {
       merged[merged.length - 1] = { ...absorb(prev, s, true), type: keep, toLevel: s.toLevel }
       continue
     }
+    if (prev && prev.type === s.type && RUNS.has(s.type)) {
+      merged[merged.length - 1] = { ...absorb(prev, s, true), toLevel: s.toLevel }
+      continue
+    }
     merged.push({ ...s })
   }
   const out: GuidanceStep[] = []
@@ -269,6 +279,34 @@ function fold(steps: GuidanceStep[]): GuidanceStep[] {
   return out
 }
 
+/** Below this, the platform walk a path's steps leave out is not worth a step of its own. */
+export const PLATFORM_REMAINDER_MIN_S = 5
+
+/**
+ * The walk along the platform that a path's time includes but its steps do
+ * not: the time runs from the platform's centre, the drawn steps from the
+ * nearest point on it.
+ */
+export function platformRemainder(row: Pick<StationPath, 'seconds' | 'steps'>): { seconds: number; metres: number } | null {
+  const walked = (row.steps ?? []).reduce((t, s) => t + s.seconds, 0)
+  const seconds = row.seconds - walked
+  if (seconds <= 0) return null
+  const { walkMps, scale } = DEFAULT_PARAMS.costs
+  return { seconds, metres: Math.round((seconds * walkMps) / scale) }
+}
+
+/** A stair the map leaves unlevelled takes its levels from the ways either side of it. */
+function fillLevels(steps: PathStep[], ends?: WalkContext['levels']): PathStep[] {
+  const out = steps.map((s) => ({ ...s }))
+  out.forEach((s, i) => {
+    s.fromLevel ??= i ? out[i - 1].toLevel : ends?.from ?? null
+  })
+  for (let i = out.length - 1; i >= 0; i--) {
+    out[i].toLevel ??= i + 1 < out.length ? out[i + 1].fromLevel : ends?.to ?? null
+  }
+  return out
+}
+
 /**
  * Written steps for a walked station path, built only from what the map
  * says: level changes, fare gates, the lines on the far platform and the
@@ -276,7 +314,19 @@ function fold(steps: GuidanceStep[]): GuidanceStep[] {
  */
 export function guidanceSteps(row: StationPath, ctx: WalkContext): GuidanceStep[] {
   if (!row.steps?.length) return []
-  const base: GuidanceStep[] = row.steps.map((s) => ({
+  const filled = fillLevels(row.steps, ctx.levels)
+  const extra = platformRemainder(row)
+  if (extra) {
+    const atEnd = ctx.kind === 'access'
+    const edge = atEnd ? filled[filled.length - 1] : filled[0]
+    const level = atEnd ? edge.toLevel : edge.fromLevel
+    const vertex = atEnd ? edge.toVertex : edge.fromVertex
+    const platform: PathStep = { type: 'platform', metres: extra.metres, seconds: extra.seconds, fromLevel: level, toLevel: level, fromVertex: vertex, toVertex: vertex }
+    if (extra.seconds < PLATFORM_REMAINDER_MIN_S) edge.seconds += extra.seconds
+    else if (atEnd) filled.push(platform)
+    else filled.unshift(platform)
+  }
+  const base: GuidanceStep[] = filled.map((s) => ({
     type: s.type, instruction: '', distance: s.metres, duration: s.seconds, fromLevel: s.fromLevel, toLevel: s.toLevel,
     levelChange: s.fromLevel !== null && s.toLevel !== null ? s.toLevel - s.fromLevel : null,
     landmark: null, bridged: s.type === 'bridge', fromVertex: s.fromVertex, toVertex: s.toVertex,
@@ -295,8 +345,9 @@ export function guidanceSteps(row: StationPath, ctx: WalkContext): GuidanceStep[
       const dir = s.levelChange === null ? '' : s.levelChange > 0 ? ' up' : s.levelChange < 0 ? ' down' : ''
       const n = s.levelChange === null ? null : Math.abs(s.levelChange)
       const what = s.type === 'stairs' ? 'the stairs' : `the ${s.type}`
-      const count = s.type !== 'elevator' && n && n > 1 ? ` ${plural(n, 'level')}` : ''
-      s.instruction = `Take ${what}${dir}${count} to ${levelName(s.toLevel)}`
+      const name = levelName(s.toLevel)
+      const count = !n ? '' : !name ? ` ${levelCount(n)}` : s.type !== 'elevator' && n > 1 ? ` ${plural(n, 'level')}` : ''
+      s.instruction = `Take ${what}${dir}${count}${name ? ` to ${name}` : ''}`
     } else if (s.type === 'fare_gate') {
       gates++
       const leaving = ctx.kind === 'egress' || (ctx.kind === 'transfer' && gates % 2 === 1)
@@ -308,7 +359,7 @@ export function guidanceSteps(row: StationPath, ctx: WalkContext): GuidanceStep[
         : ctx.kind === 'egress' ? 'the exit' : 'the platform'
       s.instruction = `Continue to ${toward}`
     } else {
-      const along = s.type === 'platform' && i === 0 ? ' along the platform' : ''
+      const along = s.type === 'platform' && (i === 0 || i === steps.length - 1) ? ' along the platform' : ''
       s.instruction = `Walk ${metresText(s.distance)}${along}`
     }
   })

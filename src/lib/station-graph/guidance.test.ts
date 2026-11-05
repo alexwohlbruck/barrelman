@@ -16,6 +16,7 @@ const path = (over: Partial<StationPath> = {}): StationPath => ({
 
 // Times Sq, 1/2/3 to the 7 on the station graph: stairs to the mezzanine, a corridor, an escalator down.
 const timesSq = path({
+  seconds: 71,
   steps: [
     step('platform', 3.3, 3.1, -2, -2, 0), step('stairs', 3.9, 11.1, -2, -3, 1), step('walk', 43.3, 41, -3, -3, 2),
     step('escalator', 9, 14.8, -3, -4, 3), step('platform', 1.4, 1.3, -4, -4, 4),
@@ -136,7 +137,7 @@ describe('guidanceSteps', () => {
 
   test('an exit ends at the entrance it uses, and gates are tapped out of', () => {
     const egress = path({
-      toKind: 'entrance', toId: 'node/9', steps: [
+      toKind: 'entrance', toId: 'node/9', seconds: 53, steps: [
         step('platform', 30, 25, -1, -1, 0), step('stairs', 6, 12, -1, 0, 1), step('fare_gate', 0, 0, 0, 0, 2), step('walk', 20, 16, 0, 0, 2),
       ],
     })
@@ -159,7 +160,66 @@ describe('guidanceSteps', () => {
     expect(text).toContain('Re-enter through the fare gates · free transfer')
   })
 
+  test('the platform walk the time includes but the drawn path skips becomes a step, at the platform end', () => {
+    const transfer = guidanceSteps({ ...timesSq, seconds: 101 }, { kind: 'transfer', sign: 'the 7 · Queens' })
+    expect(transfer[0].instruction).toBe('Follow signs for the 7 · Queens · 35 m')
+    expect(transfer.reduce((t, s) => t + s.duration, 0)).toBeCloseTo(101, 0)
+
+    const access = path({ toKind: 'platform', fromKind: 'entrance', seconds: 60, steps: [step('stairs', 10, 20, 0, -1, 0)] })
+    const text = guidanceSteps(access, { kind: 'access', entrance: 'Main St', sign: 'the A · Downtown' }).map((s) => s.instruction)
+    expect(text).toEqual([
+      'Enter at Main St',
+      'Follow signs for the A · Downtown and take the stairs down to the platform',
+      'Walk 40 m along the platform',
+      'Board the A · Downtown',
+    ])
+  })
+
+  test('stairs the map leaves unlevelled take their direction from the ways around them', () => {
+    const row = path({
+      fromKind: 'entrance', seconds: 30,
+      steps: [step('stairs', 6, 10, null, null, 0), step('walk', 10, 8, -1, -1, 1), step('stairs', 6, 12, -1, -2, 2)],
+    })
+    const text = guidanceSteps(row, { kind: 'access', levels: { from: 0, to: -2 } }).map((s) => s.instruction)
+    expect(text[0]).toBe('Take the stairs down to the mezzanine')
+  })
+
+  test('levels with no name of their own are counted, never numbered', () => {
+    const deep = path({
+      seconds: 75,
+      steps: [
+        step('stairs', 6, 15, -1, -2, 0), step('walk', 20, 15, -2, -2, 1), step('stairs', 6, 15, -2, -3, 2),
+        step('walk', 20, 15, -3, -3, 3), step('escalator', 10, 15, -3, -4, 4),
+      ],
+    })
+    const text = guidanceSteps(deep, { kind: 'transfer' }).map((s) => s.instruction)
+    expect(text).toContain('Take the stairs down one level')
+    expect(text.join(' ')).not.toMatch(/level -?\d/)
+  })
+
   test('an estimate has no steps', () => {
     expect(guidanceSteps(path({ source: 'estimated', steps: null }), { kind: 'transfer' })).toEqual([])
+  })
+})
+
+describe('guidanceSteps runs', () => {
+  test('one lift ride past a level it skips is one step, and the time all adds up', () => {
+    const lift = path({
+      seconds: 86,
+      steps: [step('platform', 15, 15, -4, -4, 0), step('elevator', 0, 28, -4, null, 1), step('elevator', 0, 28, null, -2, 1), step('platform', 14, 14, -2, -2, 1)],
+    })
+    const steps = guidanceSteps(lift, { kind: 'transfer', sign: 'the 1 · Downtown' })
+    expect(steps.map((s) => s.instruction)).toEqual([
+      'Follow signs for the 1 · Downtown · 15 m',
+      'Take the elevator up to the platform',
+      'Walk 15 m along the platform',
+      'Board the 1 · Downtown',
+    ])
+    expect(steps.reduce((t, s) => t + s.duration, 0)).toBe(86)
+  })
+
+  test('back-to-back unmapped gaps read as one', () => {
+    const gaps = path({ seconds: 75, steps: [step('bridge', 17, 44, -3, -2, 0), step('bridge', 27, 31, -2, -2, 1)] })
+    expect(guidanceSteps(gaps, { kind: 'transfer' }).map((s) => s.instruction)).toEqual(['Continue to the platform'])
   })
 })

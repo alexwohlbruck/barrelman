@@ -9,8 +9,8 @@
 import { sql } from 'drizzle-orm'
 import { db } from '../db'
 import {
-  arrivalBearing, boardingHint, chooseEntrance, classifyTransfer, guidanceSteps, isWalked, positionIsMeasured,
-  representativeRow, type BoardingHint, type GuidanceStep, type TransferClass, type WalkContext,
+  arrivalBearing, boardingHint, chooseEntrance, classifyTransfer, guidanceSteps, isWalked, PLATFORM_REMAINDER_MIN_S,
+  platformRemainder, positionIsMeasured, representativeRow, type BoardingHint, type GuidanceStep, type TransferClass, type WalkContext,
 } from '../lib/station-graph/guidance'
 import { DEFAULT_PARAMS } from '../lib/station-graph/params'
 import { platformsForStop, STOP_MATCH_M, type StopCandidate } from '../lib/station-graph/stops'
@@ -301,7 +301,9 @@ function stationWalk(
   if (isWalked(row.source) && row.geometry && row.geometry.length > 1) {
     walk.geometry = { type: 'LineString', coordinates: row.geometry }
     walk.vertexLevels = row.vertexLevels ?? undefined
-    walk.steps = guidanceSteps(row, ctx)
+    walk.steps = guidanceSteps(row, { ...ctx, levels: { from: from.level, to: to.level } })
+    const extra = platformRemainder(row)
+    if (extra && extra.seconds >= PLATFORM_REMAINDER_MIN_S) walk.metres += extra.metres
   }
   return walk
 }
