@@ -1070,7 +1070,7 @@ export interface paths {
         put?: never;
         /**
          * Get transit route between two points
-         * @description Queries the MOTIS transit router for itineraries between two coordinates. Returns transit legs with boarding/alighting stops, route info, and geometry. Walking legs are straight-line estimates — the Parchment server replaces them with actual GraphHopper walking routes.Itineraries carry `fare` and `farePayments` where the feeds publish fare data: `farePayments` is how many separate fares the trip charges, and itineraries are ordered to prefer fewer of them when the time cost is small.
+         * @description Walk-and-transit itineraries between two coordinates, reaching stations within `maxWalkDistance` (default 1000 m). Each itinerary starts and ends with a walk leg; walking legs are straight-line estimates. Itineraries are ordered by arrival time (latest departure for `arriveBy`), list each ride once, and carry `fare` and `farePayments` where the feeds publish fare data. An extra fare payment counts as ten minutes in the ordering.
          */
         post: operations["postTransitRoute"];
         delete?: never;
@@ -1090,7 +1090,7 @@ export interface paths {
         put?: never;
         /**
          * Intermodal routing with mode selection
-         * @description Coordinate-based intermodal routing via MOTIS. Supports pre/post-transit mode selection (WALK, BIKE, CAR_PARKING, RENTAL) and direct non-transit modes. Requires MOTIS to have OSM street data loaded. Returns legs with real OSM geometry for walk/bike/car segments. Set requireBikeTransport to keep only trips that allow bike carriage, for BIKE on both ends; it reads GTFS bikes_allowed, and feeds that omit it return no results. Itineraries carry `fare` and `farePayments` where the feeds publish fare data, and are ordered to prefer fewer fare payments when the time cost is small.
+         * @description Transit routing with access mode selection. Walking at both ends is routed between nearby stations, with straight-line walk legs. BIKE, CAR_PARKING, RENTAL and direct modes need MOTIS to have OSM street data loaded, and return real OSM geometry for those legs. Set requireBikeTransport to keep only trips that allow bike carriage, for BIKE on both ends; it reads GTFS bikes_allowed, and feeds that omit it return no results. Itineraries carry `fare` and `farePayments` where the feeds publish fare data. Itineraries are ordered by arrival time (latest departure for `arriveBy`) and list each ride once; an extra fare payment counts as ten minutes in the ordering. A transit leg carries `directionLabel` where its boarding platform's signed direction is known ("Uptown & The Bronx"); `headsign` still names the terminal.
          */
         post: operations["postTransitIntermodal-route"];
         delete?: never;
@@ -1148,7 +1148,7 @@ export interface paths {
         };
         /**
          * Get upcoming departures at nearby stops
-         * @description Returns upcoming departures from transit stops near the given coordinates. Queries the MOTIS timetable and enriches results with route colors from the GTFS database. Supports direct stop queries via feedId/stopId, or spatial search via lat/lng/radius. Pass `routeTypes` (comma-separated GTFS route_type values) to rank stops of that mode first and reach further for them — a ferry terminal or aerial tramway station otherwise matches the bus stop on the street outside. Pass `name` (the place's own name) to identify the station outright: a stop whose name matches claims the board even when another is nearer, and the board is then reported for that station alone — asked once at its GTFS parent, so its platforms are not listed twice, and filtered to runs that call there. Without it the board merges whatever is nearby. Pass Set `transfers=true` to additionally get a board for every station transfers.txt joins to this one under a DIFFERENT name — the connections, with their own times. Those boards carry `stop.via: "transfer"`. `complex=true` to get a board for every station the agency joins to this one in transfers.txt rather than only the station itself — what a merged station label stands for, where four "Canal St" stations are drawn as one. Pass `windowMinutes` to bound the board by time rather than by event count; each stop then reports `hasMore` when runs exist past what was returned.
+         * @description Returns upcoming departures from transit stops near the given coordinates. Queries the MOTIS timetable and enriches results with route colors from the GTFS database. Supports direct stop queries via feedId/stopId, or spatial search via lat/lng/radius. Pass `routeTypes` (comma-separated GTFS route_type values) to rank stops of that mode first and reach further for them — a ferry terminal or aerial tramway station otherwise matches the bus stop on the street outside. Pass `name` (the place's own name) to identify the station outright: a stop whose name matches claims the board even when another is nearer, and the board is then reported for that station alone — asked once at its GTFS parent, so its platforms are not listed twice, and filtered to runs that call there. Without it the board merges whatever is nearby. Pass Set `transfers=true` to additionally get a board for every station transfers.txt joins to this one under a DIFFERENT name — the connections, with their own times. Those boards carry `stop.via: "transfer"`. `complex=true` to get a board for every station the agency joins to this one in transfers.txt rather than only the station itself — what a merged station label stands for, where four "Canal St" stations are drawn as one. Pass `windowMinutes` to bound the board by time rather than by event count; each stop then reports `hasMore` when runs exist past what was returned. A departure carries `directionLabel` where its platform's signed direction is known ("Uptown & The Bronx"), from agency open data or the platform's OSM `destination`; `headsign` still names the terminal.
          */
         get: operations["getTransitDepartures"];
         put?: never;
@@ -1350,6 +1350,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/transit/stations/{id}/paths": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Walking paths inside a station complex
+         * @description Every platform-to-platform and platform-to-entrance time in a station complex, built from OSM at import. Each path says how it was made: `graph` (walked on the mapped station), `bridged` (a gap of up to 30 m in the map was bridged; `bridge` steps mark where), `agency` (the feed's pathways.txt) or `estimated` (from platform geometry where the map has no path). `confidence` (0–1) and `uncertaintyS` (the p90 error of that source) say how far to trust it. `seconds` is from the platform centre; `bestSeconds` and `bestPosition` (0–1 along the platform's axis, see `axisBearing`) are from the best place to stand on the row's platform end. Only `graph` and `bridged` paths carry a line (`geometry`, with `vertexLevels`) and `steps`; the others are times only and should not be drawn or narrated. The wheelchair profile has graph and bridged paths only.
+         */
+        get: operations["getTransitStationsByIdPaths"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/transit/nearest-entrance": {
         parameters: {
             query?: never;
@@ -1359,9 +1379,29 @@ export interface paths {
         };
         /**
          * Find nearest station entrance to a coordinate
-         * @description Returns the closest subway or train station entrance to the given coordinate, within maxDistance meters (default 500m). Pass wheelchair=true for accessible access points only: entrances tagged wheelchair=no are excluded, vertical access requires elevators instead of stairs, and confirmed-accessible entrances are preferred.
+         * @description Returns the closest subway or train station entrance to the given coordinate, within maxDistance meters (default 500m). Pass wheelchair=true for accessible access points only: entrances tagged wheelchair=no are excluded, vertical access requires elevators instead of stairs, and confirmed-accessible entrances are preferred. Pass `purpose` to skip entrances that only let you in or only let you out. Each entrance carries `cornerLabel`, where it is from the streets around it ("Broadway & West 28th Street · NW corner"), and `entryAllowed`/`exitAllowed`, from OSM `entrance=exit|entry` and agency open data; null means unknown.
          */
         get: operations["getTransitNearest-entrance"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/transit/entrances": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List station entrances near a coordinate
+         * @description The candidates `/transit/nearest-entrance` chooses from, nearest first: every access point of the best tier within maxDistance, with the same fields. Lets a router weigh each entrance against the walk to it rather than taking the one nearest the platform.
+         */
+        get: operations["getTransitEntrances"];
         put?: never;
         post?: never;
         delete?: never;
@@ -3408,11 +3448,25 @@ export interface operations {
             };
         };
         responses: {
+            /** @description Itineraries, with credits for the feeds they ride. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": {
+                        itineraries?: Record<string, never>[];
+                        metadata?: Record<string, never>;
+                        /** @description One entry per GTFS feed that contributed, each listed once. */
+                        attribution?: {
+                            /** @description The feed id, as in `feedId` elsewhere in the response. */
+                            feedId: string;
+                            agency: (string | null) | null;
+                            text: (string | null) | null;
+                            url: (string | null) | null;
+                        }[];
+                    };
+                };
             };
         };
     };
@@ -3450,6 +3504,8 @@ export interface operations {
                     maxPostTransitTime?: number;
                     preTransitRentalFormFactors?: string[];
                     postTransitRentalFormFactors?: string[];
+                    /** @description Minutes reserved per interchange (default 3). Raise it to favour trips with fewer transfers. */
+                    additionalTransferTime?: number;
                     requireBikeTransport?: boolean;
                 };
                 "multipart/form-data": {
@@ -3477,6 +3533,8 @@ export interface operations {
                     maxPostTransitTime?: number;
                     preTransitRentalFormFactors?: string[];
                     postTransitRentalFormFactors?: string[];
+                    /** @description Minutes reserved per interchange (default 3). Raise it to favour trips with fewer transfers. */
+                    additionalTransferTime?: number;
                     requireBikeTransport?: boolean;
                 };
                 "text/plain": {
@@ -3504,16 +3562,32 @@ export interface operations {
                     maxPostTransitTime?: number;
                     preTransitRentalFormFactors?: string[];
                     postTransitRentalFormFactors?: string[];
+                    /** @description Minutes reserved per interchange (default 3). Raise it to favour trips with fewer transfers. */
+                    additionalTransferTime?: number;
                     requireBikeTransport?: boolean;
                 };
             };
         };
         responses: {
+            /** @description Itineraries, with credits for the feeds they ride. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": {
+                        itineraries?: Record<string, never>[];
+                        metadata?: Record<string, never>;
+                        /** @description One entry per GTFS feed that contributed, each listed once. */
+                        attribution?: {
+                            /** @description The feed id, as in `feedId` elsewhere in the response. */
+                            feedId: string;
+                            agency: (string | null) | null;
+                            text: (string | null) | null;
+                            url: (string | null) | null;
+                        }[];
+                    };
+                };
             };
         };
     };
@@ -3531,11 +3605,16 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
+            /** @description Stops ordered by distance. Each row carries `feedId`; resolve the credits with `GET /transit/attribution?feedIds=…`. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": {
+                        feedId?: string;
+                    }[];
+                };
             };
         };
     };
@@ -3556,11 +3635,16 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
+            /** @description Routes reachable at the stop. Each row carries `feedId`; resolve the credits with `GET /transit/attribution?feedIds=…`. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": {
+                        feedId?: string;
+                    }[];
+                };
             };
         };
     };
@@ -3588,11 +3672,25 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
+            /** @description One board per stop, each crediting the feeds on it. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": {
+                        stop?: Record<string, never>;
+                        departures?: Record<string, never>[];
+                        /** @description One entry per GTFS feed that contributed, each listed once. */
+                        attribution?: {
+                            /** @description The feed id, as in `feedId` elsewhere in the response. */
+                            feedId: string;
+                            agency: (string | null) | null;
+                            text: (string | null) | null;
+                            url: (string | null) | null;
+                        }[];
+                    }[];
+                };
             };
         };
     };
@@ -3652,11 +3750,26 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
+            /** @description The route, crediting its feed. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": {
+                        feedId?: string;
+                        routeId?: string;
+                        stops?: Record<string, never>[];
+                        /** @description One entry per GTFS feed that contributed, each listed once. */
+                        attribution?: {
+                            /** @description The feed id, as in `feedId` elsewhere in the response. */
+                            feedId: string;
+                            agency: (string | null) | null;
+                            text: (string | null) | null;
+                            url: (string | null) | null;
+                        }[];
+                    };
+                };
             };
         };
     };
@@ -3815,6 +3928,33 @@ export interface operations {
             };
         };
     };
+    getTransitStationsByIdPaths: {
+        parameters: {
+            query?: {
+                /** @description Only paths from this platform or entrance (OSM id). */
+                from?: string;
+                /** @description Only paths to this platform or entrance (OSM id). */
+                to?: string;
+                /** @description `foot` (default) or `wheelchair`, which avoids stairs and escalators. */
+                profile?: "foot" | "wheelchair";
+            };
+            header?: never;
+            path: {
+                /** @description The complex id, or the OSM id of any station or platform in it: `node/123` (URL-encoded as `node%2F123`) or the short form `n123`, `w123`, `r123`. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     "getTransitNearest-entrance": {
         parameters: {
             query: {
@@ -3822,6 +3962,35 @@ export interface operations {
                 lon: string;
                 maxDistance?: string;
                 wheelchair?: string;
+                /** @description What the entrance is for. `enter` skips exit-only entrances, `exit` skips entry-only ones. */
+                purpose?: "enter" | "exit";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getTransitEntrances: {
+        parameters: {
+            query: {
+                lat: string;
+                lon: string;
+                /** @description Search radius in meters (default 500, max 1000). */
+                maxDistance?: string;
+                wheelchair?: string;
+                /** @description What the entrance is for. `enter` skips exit-only entrances, `exit` skips entry-only ones. */
+                purpose?: "enter" | "exit";
+                /** @description Most entrances to return (default 20, max 50). */
+                limit?: string;
             };
             header?: never;
             path?: never;
