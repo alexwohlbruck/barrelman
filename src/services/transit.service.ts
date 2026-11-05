@@ -23,6 +23,7 @@ import {
 } from './rental-pricing.service'
 import { attributionFor, excludedFeedIds, servableOnly } from './feed-license.service'
 import { directionLabelsFor, stopKey } from './station-labels.service'
+import { settleTransferWalks } from '../lib/transfer-walks'
 import { enrichStationGuidance, type BoardingPosition, type StationAccessChoice, type TransitTransfer } from './station-guidance.service'
 import type { FeedAttribution } from '../lib/feed-license'
 
@@ -613,6 +614,8 @@ export function extractFare(itin: any): { currency: string; amount: number } | u
 /** Walking speed (m/s) for station reach and straight-line access times.
  *  Real geometry and timing come from GraphHopper downstream. */
 const WALK_MPS = 1.25
+/** Minutes MOTIS reserves per interchange unless the caller says otherwise. */
+const DEFAULT_TRANSFER_PAD_MIN = 3
 
 /** Stations tried at each end. All origin × destination pairs are queried —
  *  16 MOTIS searches at most, each a few tens of milliseconds. */
@@ -647,7 +650,7 @@ function planParams(request: IntermodalRouteRequest, fromPlace: string, toPlace:
     // marginal-gain transfer chains: a one-block bus hop that saves 90
     // seconds, three-vehicle relays. Genuinely faster transfers survive,
     // and itineraries tolerate a late connection better.
-    additionalTransferTime: String(request.additionalTransferTime ?? 3),
+    additionalTransferTime: String(request.additionalTransferTime ?? DEFAULT_TRANSFER_PAD_MIN),
   })
   if (request.searchWindow != null) params.set('searchWindow', String(request.searchWindow))
   if (request.maxTransfers != null) params.set('maxTransfers', String(request.maxTransfers))
@@ -1122,6 +1125,8 @@ export async function getIntermodalRoute(
     inSystemRoutes,
     oneFare: (a, b) => oneFare(a as TransitLeg, b as TransitLeg),
   }).catch((err) => console.warn(`[transit] station guidance: ${(err as Error).message}`))
+  const padSeconds = (request.additionalTransferTime ?? DEFAULT_TRANSFER_PAD_MIN) * 60
+  for (const it of result.itineraries) settleTransferWalks(it, padSeconds)
 
   result.attribution = await itineraryAttribution(result.itineraries)
   if (!result.itineraries.length) {
