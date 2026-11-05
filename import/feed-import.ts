@@ -42,6 +42,7 @@ import { refreshDirectionLabels } from '../src/services/station-labels.service'
 import { storeAgencyStationTimes } from '../src/services/station-paths.service'
 import { agencyStationTimes } from '../src/lib/station-graph/agency'
 import { SOURCES, type PathSource } from '../src/lib/station-graph/types'
+import { FARE_GATE_DELAY_S } from '../src/lib/station-graph/guidance'
 
 /**
  * A feed with no fixed-route timetable for the router: GTFS-Flex-only feeds,
@@ -188,6 +189,7 @@ export async function injectTransfersTxt(
   zipPath: string,
   transfersTxt: string,
   stationTimes?: Map<string, StationTime>,
+  railStops?: Set<string>,
 ): Promise<void> {
   const buffer = await Bun.file(zipPath).arrayBuffer()
   const zip = await JSZip.loadAsync(buffer)
@@ -198,7 +200,7 @@ export async function injectTransfersTxt(
   // declared between — see mergeTransfersTxt.
   const stopsEntry = zip.file('stops.txt') ?? zip.file(/(^|\/)stops\.txt$/)[0]
   const stops = stopsEntry ? await stopsEntry.async('string') : null
-  zip.file('transfers.txt', mergeTransfersTxt(existing, transfersTxt, stops, stationTimes))
+  zip.file('transfers.txt', mergeTransfersTxt(existing, transfersTxt, stops, stationTimes, railStops))
 
   // JSZip defaults to STORE, so a feed re-serialized without this lands
   // uncompressed on the volume MOTIS imports from. The subway feed goes from
@@ -230,6 +232,10 @@ export async function injectTransfersTxt(
  * agency set for that pair, only a walked one (graph, bridged) does, and the
  * platform rows under it take the agency's time too. A forbidden transfer is
  * never touched, and nor is a timed or in-seat one.
+ *
+ * `railStops` are the stops station paths cover. A computed street walk
+ * between two of them that neither the station paths nor the feed connect
+ * leaves fare control, so it pays the fare-gate delay twice.
  */
 export interface StationTime {
   seconds: number
@@ -273,6 +279,7 @@ export function mergeTransfersTxt(
   computed: string,
   stopsTxt?: string | null,
   stationTimes?: Map<string, StationTime>,
+  railStops?: Set<string>,
 ): string {
   const parse = (text: string) => {
     const lines = text.split(/\r?\n/).filter(l => l.trim() !== '')
@@ -319,9 +326,12 @@ export function mergeTransfersTxt(
   // connection is, and a computed B→A would contradict its own half.
   const known = new Set<string>()
   const forbidden = new Set<string>()
+  const stated = new Set<string>()
   feed.rows.forEach(([from, to, type]) => {
     known.add(`${from}\u0000${to}`)
     known.add(`${to}\u0000${from}`)
+    stated.add(`${station(from)}\u0000${station(to)}`)
+    stated.add(`${station(to)}\u0000${station(from)}`)
     if (type === TRANSFER_FORBIDDEN) {
       // Keyed on stations, so one row covers every platform under it.
       forbidden.add(`${station(from)}\u0000${station(to)}`)
@@ -373,13 +383,17 @@ export function mergeTransfersTxt(
     known.add(key)
     const agency = agencyTimed.get(`${station(from)}\u0000${station(to)}`)
     const walked = stationTimes?.get(key)
+    const cells = comp.raw[i].split(',')
     if (agency !== undefined && !(walked && WALKED.has(walked.source)) && comp.iMin !== -1) {
-      const cells = comp.raw[i].split(',')
       cells[comp.iMin] = String(agency)
-      added.push(cells.join(','))
-    } else {
-      added.push(comp.raw[i])
+    } else if (
+      railStops?.has(from) && railStops.has(to) && !stationTimes?.has(key) && comp.iMin !== -1
+      && !stated.has(`${station(from)}\u0000${station(to)}`) && /^\d+$/.test(cells[comp.iMin] ?? '')
+    ) {
+      // A street walk between rail stations the feed doesn't connect: tap out, then in.
+      cells[comp.iMin] = String(Number(cells[comp.iMin]) + 2 * FARE_GATE_DELAY_S)
     }
+    added.push(cells.join(','))
   })
 
   return [feed.header, ...feed.raw, ...added].join('\n') + '\n'

@@ -216,3 +216,26 @@ describe('flatTransferTime', () => {
     expect(flatTransferTime(rows([120, 90, 60, 300, 240]))).toBeNull()
   })
 })
+
+describe('mergeTransfersTxt — fare gates on street transfers', () => {
+  const STOPS =
+    'stop_id,stop_name,stop_lat,stop_lon,location_type,parent_station\n' +
+    '423,Borough Hall,40.692404,-73.990151,1,\n' +
+    '423N,Borough Hall,40.692404,-73.990151,0,423\n' +
+    'A41,Jay St,40.692338,-73.987342,1,\n' +
+    'A41N,Jay St,40.692338,-73.987342,0,A41\n' +
+    'B1,Bus stop,40.6924,-73.9890,0,\n'
+  const rail = new Set(['423N', 'A41N'])
+
+  it('a walk between rail stations the feed does not connect pays the gates twice', () => {
+    const merged = mergeTransfersTxt(`${HEADER}\n101,101,2,180\n`, `${HEADER}\n423N,A41N,2,221\nA41N,B1,2,90\n`, STOPS, new Map(), rail)
+    expect(merged).toContain('423N,A41N,2,241')
+    // A bus stop has no gates.
+    expect(merged).toContain('A41N,B1,2,90')
+  })
+
+  it('a pair the feed connects keeps its time', () => {
+    const merged = mergeTransfersTxt(`${HEADER}\n423,A41,2,300\n`, `${HEADER}\n423N,A41N,2,221\n`, STOPS, new Map(), rail)
+    expect(merged).toContain('423N,A41N,2,221')
+  })
+})
