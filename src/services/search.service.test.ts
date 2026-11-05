@@ -43,7 +43,9 @@ mock.module('../lib/embeddings', () => ({ generateQueryEmbedding: mockGenerateQu
 // own, and the call counts below are of the search layers.
 const actualLexicon = await import('./search-lexicon.service')
 const mockCorrections = mock(async (_words: string[]) => new Map<string, string[]>())
-mock.module('./search-lexicon.service', () => ({ ...actualLexicon, correctionsFor: mockCorrections }))
+const mockHasMisspelling = mock(async (_words: string[], _prefixLast: boolean) => false)
+mock.module('./search-lexicon.service', () => ({
+  ...actualLexicon, correctionsFor: mockCorrections, hasMisspelling: mockHasMisspelling }))
 // `mock.module` is process-global and replaces the module wholesale for every
 // test file in the run, so spread the real exports and override only what this
 // file cares about — otherwise a later file importing e.g. `isochroneCache`
@@ -90,6 +92,8 @@ beforeEach(() => {
   mockGenerateQueryEmbedding.mockImplementation(async () => [0.1, 0.2, 0.3])
   mockCorrections.mockReset()
   mockCorrections.mockImplementation(async () => new Map())
+  mockHasMisspelling.mockReset()
+  mockHasMisspelling.mockImplementation(async () => false)
   searchCacheStore.clear()
   embeddingCacheStore.clear()
   // Off unless a test asks for it, so the locality layer issues no query and
@@ -982,6 +986,15 @@ describe('searchPlaces — "central park" typed in Midtown', () => {
     expect(results[0].id).toBe('way/427818536')
   })
 
+  test('the large-area stage waits for three letters of the last word', async () => {
+    // "pa:*" matches ~50K large areas nationally and names none of them yet.
+    setLargeAreaIndexReady(true)
+    mockExecute.mockImplementation(async (q: any) => answer(q))
+    await searchPlaces({ query: 'central pa', lat: 40.7649, lng: -73.98, autocomplete: true })
+    const calls = mockExecute.mock.calls.map((c: any[]) => sqlOf(c[0]))
+    expect(calls.some((t) => t.includes('area_m2 >= 100000'))).toBe(false)
+  })
+
   test('the large-area stage stays off until its index exists', async () => {
     mockExecute.mockImplementation(async (q: any) => answer(q))
     await searchPlaces({ query: 'central park', lat: 40.7649, lng: -73.98, autocomplete: true })
@@ -997,6 +1010,27 @@ describe('searchPlaces — "central park" typed in Midtown', () => {
     // Both are hundreds of km away; the nearby matches outrank them.
     expect(ids).not.toContain('way/1346398225')
     expect(ids).not.toContain('way/300165448')
+  })
+
+  test('a typo is corrected nearby even when the exact words matched something', async () => {
+    // "prospect prak": the town of Prospect matched, so the empty-result
+    // retry never ran and the park went unsuggested.
+    setLocalityIndexReady(true)
+    setLargeAreaIndexReady(true)
+    const town = { id: 'relation/1', name: 'Prospect', text_rank: 0.5, distance_m: 117_000 }
+    const prospectPark = { id: 'way/2', name: 'Prospect Park', text_rank: 1.2, distance_m: 8000 }
+    mockHasMisspelling.mockImplementation(async () => true)
+    mockCorrections.mockImplementation(async () => new Map([['prak', ['park']]]))
+    // The first large-area search is the exact words; the second, corrected.
+    let areaSearches = 0
+    mockExecute.mockImplementation(async (q: any) => {
+      const text = sqlOf(q)
+      if (text.includes('area_m2 >= 100000')) return areaSearches++ ? [prospectPark] : []
+      return text.includes('admin_level') ? [town] : []
+    })
+    const results = await searchPlaces({ query: 'prospect prak', lat: 40.7649, lng: -73.98, autocomplete: true, limit: 10 })
+    expect(results.map((r: any) => r.id)).toContain('relation/1')
+    expect(results.map((r: any) => r.id)).toContain('way/2')
   })
 
   test('a code-shaped query is still pinned regardless of distance', async () => {

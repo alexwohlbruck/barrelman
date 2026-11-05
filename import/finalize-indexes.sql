@@ -48,8 +48,9 @@ CREATE INDEX IF NOT EXISTS geo_places_postal_code_idx ON geo_places (upper(tags-
 
 -- Typeahead's large-area stage (src/services/large-area-search.service.ts,
 -- which also builds it on an existing install). The WHERE must match its
--- LARGE_AREA_PREDICATE exactly.
-CREATE INDEX IF NOT EXISTS geo_places_large_area_ts_idx ON geo_places USING GIN (ts) WHERE ts IS NOT NULL AND name IS NOT NULL AND geom_type = 'area' AND area_m2 >= 100000;
+-- LARGE_AREA_PREDICATE and LARGE_AREA_CELL exactly.
+CREATE EXTENSION IF NOT EXISTS btree_gin;
+CREATE INDEX IF NOT EXISTS geo_places_large_area_cell_idx ON geo_places USING GIN (ts, ((floor(ST_X(centroid))::int + 180) * 180 + (floor(ST_Y(centroid))::int + 90))) WHERE ts IS NOT NULL AND name IS NOT NULL AND geom_type = 'area' AND area_m2 >= 100000;
 
 -- Search layer (codes and abbreviation lookups)
 CREATE INDEX IF NOT EXISTS geo_places_codes_idx ON geo_places USING GIN(codes) WHERE codes IS NOT NULL;

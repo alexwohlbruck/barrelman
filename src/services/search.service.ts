@@ -6,11 +6,11 @@ import { forwardGeocode } from './geocode.service'
 import { searchTransitRoutes, searchTransitStops } from './transit-search.service'
 import { searchLocalities, isPostalShaped } from './locality-search.service'
 import { estimateMatches } from './lexeme-stats.service'
-import { LARGE_AREA_PREDICATE, largeAreaIndexReady } from './large-area-search.service'
+import { LARGE_AREA_CELL, LARGE_AREA_PREDICATE, cellRanges, largeAreaIndexReady } from './large-area-search.service'
 import { executeWithin } from '../lib/bounded-query'
 import { reconcileTransitHits } from '../lib/transit-search'
 import { buildTsQueryText, isStreetQuery } from '../lib/search-query'
-import { correctionsFor } from './search-lexicon.service'
+import { correctionsFor, hasMisspelling } from './search-lexicon.service'
 import { envNumber } from '../config/env'
 
 // ── Autocomplete fast path ──────────────────────────────────────────────────
@@ -137,6 +137,11 @@ const LOCAL_INDEX_TIMEOUT_MS = 500
  *  large-area-search.service.ts). A handful: they are found by name, and the
  *  probe and index stages already cover everything small and nearby. */
 const LARGE_AREA_LIMIT = 10
+
+/** Shortest last word the large-area stage runs for while it is still being
+ *  typed. A one- or two-letter prefix matches ~50K large areas ("pa:*") and
+ *  names none of them yet. */
+const LARGE_AREA_MIN_PREFIX = 3
 
 /** Statement timeout for the global FTS retry when typeahead finds nothing
  *  nearby. Rare words answer in ~150ms; past this the word is common and the
@@ -492,12 +497,15 @@ export async function searchPlaces(
     const ftsQuery = (local: boolean) => db.execute(ftsSql(local)).catch(() => [] as any[])
 
     // Large named areas inside the box, which the nearest-rows probe can't
-    // reach (see large-area-search.service.ts). Ordered by a plain distance
-    // rather than `<->`: no index serves that, so the planner can't walk the
-    // centroid index nearest-first looking for a rare area across a whole
-    // metro, and reads the partial ts index instead.
+    // reach (see large-area-search.service.ts). Restating the box as grid
+    // cells lets the index narrow by place as well as by words.
+    const boxHalfWidthDeg = Math.max(radius ?? 0, AUTOCOMPLETE_RADIUS_M) / 111320
+    const cells = localAutocomplete ? cellRanges(lng!, lat!, boxHalfWidthDeg) : null
+    const lastWord = queryWords[queryWords.length - 1] ?? ''
     const largeAreas = async (tsExpr: ReturnType<typeof sql>, rankExpr: ReturnType<typeof sql>): Promise<any[]> => {
-      if (!(await largeAreaIndexReady())) return []
+      if (!cells || lastWord.length < LARGE_AREA_MIN_PREFIX || !(await largeAreaIndexReady())) return []
+      const cell = sql.raw(LARGE_AREA_CELL)
+      const inCells = sql.join(cells.map(([lo, hi]) => sql`${cell} BETWEEN ${lo} AND ${hi}`), sql` OR `)
       return executeWithin(sql`
         SELECT
           id, osm_type, osm_id, name, name_abbrev, categories, tags,
@@ -506,7 +514,7 @@ export async function searchPlaces(
           ${rankExpr} AS text_rank
           ${distanceSelect}
         FROM geo_places
-        WHERE ts @@ ${tsExpr} AND ${sql.raw(LARGE_AREA_PREDICATE)}
+        WHERE ts @@ ${tsExpr} AND (${inCells}) AND ${sql.raw(LARGE_AREA_PREDICATE)}
         ${autocompleteBoxFilter}
         ${categoryFilter}
         ${tagsFilter}
@@ -837,6 +845,17 @@ export async function searchPlaces(
       // local pass found. The dedup in the merge below collapses the overlap.
       ftsRows = [...(ftsRows as any[]), ...globalFts]
       correctedRows = corrected
+    } else if (
+      localAutocomplete &&
+      !addressLike &&
+      sanitizedQuery.length >= AUTOCOMPLETE_FALLBACK_MIN_QUERY &&
+      await hasMisspelling(correctedWords, retryPrefix)
+    ) {
+      // Something matched, but a word reads as a typo of a far commoner one,
+      // so what matched is likely the wrong thing: "prospect prak" found the
+      // town of Prospect, and "central parc" Trump Parc, never the parks.
+      // Corrected spellings nearby, as above; the exact hits keep their place.
+      correctedRows = await correctedFts(true)
     }
 
     // The deferred typo-tolerance passes promised above. The precise layers
