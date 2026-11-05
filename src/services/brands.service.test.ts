@@ -9,6 +9,7 @@ describe('isNearMissOfStart', () => {
     for (const [q, name] of [
       ['starbuks', 'Starbucks'], ['wallmart', 'Walmart'], ['mcdonals', "McDonald's"],
       ['chik fil a', 'Chick-fil-A'], ['harris teter', 'Harris Teeter'], ['walgren', 'Walgreens'],
+      ['mc donalds', "McDonald's"], ['star bucks', 'Starbucks'],
     ]) expect(isNearMissOfStart(q, name)).toBe(true)
   })
 
@@ -20,6 +21,12 @@ describe('isNearMissOfStart', () => {
     for (const [q, name] of [
       ['charleston', 'Charles Schwab'], ['charleston', 'Charles Tyrwhitt'],
       ['columbus', 'Columbia'], ['power outlet', 'Home Outlet'],
+    ]) expect(isNearMissOfStart(q, name)).toBe(false)
+  })
+
+  test('rejects a typed word that is a different word in the name', () => {
+    for (const [q, name] of [
+      ['central park', 'Central Market'], ['central park', 'Central Bank'],
     ]) expect(isNearMissOfStart(q, name)).toBe(false)
   })
 

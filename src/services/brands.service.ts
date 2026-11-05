@@ -116,11 +116,17 @@ const FUZZY_MAX_EDITS_SHORT = 1
 const FUZZY_MAX_EDITS_LONG = 2
 const FUZZY_SHORT_QUERY = 10
 
-/** Letters and digits only, lowercased, accents and a leading "The" dropped:
- *  "Chick-fil-A" and "chik fil a" compare as "chickfila" and "chikfila". */
-function brandKey(s: string): string {
+/** Words of a name, lowercased, accents, apostrophes and a leading "The"
+ *  dropped: "Chick-fil-A" is chick, fil, a, and "McDonald's" one word. */
+function brandWords(s: string): string[] {
   return s.normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase()
-    .replace(/^the\s+/, '').replace(/[^\p{L}\p{N}]/gu, '')
+    .replace(/^the\s+/, '').replace(/['’]/g, '').split(/[^\p{L}\p{N}]+/u).filter(Boolean)
+}
+
+/** Letters and digits only: "Chick-fil-A" and "chik fil a" compare as
+ *  "chickfila" and "chikfila". */
+function brandKey(s: string): string {
+  return brandWords(s).join('')
 }
 
 /** Levenshtein distance, two rows. Inputs here are a few dozen characters. */
@@ -138,10 +144,19 @@ function editDistance(a: string, b: string): number {
 
 /** Whether `query` is a misspelling of the start of `name` (see above). The
  *  start is taken at every length the allowed edits could reach, since a typo
- *  can add or drop letters ("wallmart", "walgren"). */
+ *  can add or drop letters ("wallmart", "walgren").
+ *
+ *  Each word must also start with the letter its counterpart in the name does.
+ *  The edits can otherwise all go into one short word and make it another:
+ *  "central park" is one edit from "Central Mark(et)" and two from "Central
+ *  Bank", and both sat above Central Park in typeahead. A typo keeps a word's
+ *  first letter in every misspelling measured above. */
 export function isNearMissOfStart(query: string, name: string): boolean {
-  const q = brandKey(query)
-  const n = brandKey(name)
+  const qWords = brandWords(query)
+  const nWords = brandWords(name)
+  if (qWords.some((w, i) => i < nWords.length && w[0] !== nWords[i][0])) return false
+  const q = qWords.join('')
+  const n = nWords.join('')
   if (!q || !n) return false
   const k = q.length <= FUZZY_SHORT_QUERY ? FUZZY_MAX_EDITS_SHORT : FUZZY_MAX_EDITS_LONG
   for (let len = Math.max(1, q.length - k); len <= q.length + k; len++) {

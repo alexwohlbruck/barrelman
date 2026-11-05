@@ -43,6 +43,7 @@ import { importLandmarks } from './services/landmark-import.service'
 import { initJobHistory } from './services/job-history.service'
 import { ensureSearchEnrichment } from './lib/search-enrichment'
 import { ensureLocalityIndexes } from './services/locality-search.service'
+import { ensureLargeAreaIndex } from './services/large-area-search.service'
 import { ensureBrandLogos } from './lib/brand-logos'
 import { updateRouteCentroids } from './services/gtfs.service'
 import { syncPortolanStopLinks } from './services/portolan-links.service'
@@ -122,9 +123,10 @@ void importLandmarks({ log: (line) => console.log(`[landmarks] ${line}`) })
 // prior import left them empty. Fire-and-forget so it never blocks startup —
 // it self-skips once the data is enriched. Then resolve brand logos from
 // Wikidata (needs the geo_brands catalog to exist first).
-// The locality index covers `ts`, so it is built once enrichment has filled it.
+// The locality and large-area indexes cover `ts`, so they are built once
+// enrichment has filled it — one after the other, as each scans the table.
 void ensureSearchEnrichment().then(() => {
-  void ensureLocalityIndexes()
+  void ensureLocalityIndexes().then(ensureLargeAreaIndex)
   return ensureBrandLogos()
 })
 

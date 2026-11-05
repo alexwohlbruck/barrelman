@@ -111,13 +111,42 @@ export function pickCorrections(word: string, candidates: Array<{ word: string; 
     .map((c) => c.word)
 }
 
+/**
+ * How much more common a correction must be than the word typed for the word
+ * to read as a misspelling. Measured on the US lexicon, typos sit far past it
+ * — "prak" 1 vs "park" 886K, "parc" 1,877 vs 886K, "musuem" 30 vs "museum"
+ * 18K — and correct words well short: "divine" 1,108, "trump" 431.
+ */
+const MISSPELLING_RATIO = 100
+
+/**
+ * Whether `word` looks misspelt: some correction is MISSPELLING_RATIO times
+ * more common. A word still being typed ("centra" for "central") already
+ * reaches its completion as a prefix, so a correction it starts doesn't count.
+ */
+export function looksMisspelt(
+  word: string, own: number, candidates: Array<{ word: string; n: number }>, prefix: boolean,
+): boolean {
+  const limit = maxEdits(word.length)
+  return candidates.some((c) =>
+    c.word !== word && !(prefix && c.word.startsWith(word)) &&
+    c.n >= Math.max(1, own) * MISSPELLING_RATIO && editDistance(word, c.word, limit) <= limit)
+}
+
+interface Lookup {
+  corrections: string[]
+  /** Places containing the word as typed; 0 when it isn't in the lexicon. */
+  own: number
+  candidates: Array<{ word: string; n: number }>
+}
+
 /** The lexicon only changes with an import, so a word's corrections hold. */
-const corrections = new LRUCache<string, string[]>({ max: 20_000, ttl: 60 * 60 * 1000 })
+const corrections = new LRUCache<string, Lookup>({ max: 20_000, ttl: 60 * 60 * 1000 })
 
 /** Lexicon words are unaccented and lowercased, like the tsvector. */
 const fold = (s: string) => s.normalize('NFKD').replace(/\p{M}/gu, '')
 
-async function lookup(word: string): Promise<string[] | null> {
+async function lookup(word: string): Promise<Lookup | null> {
   // One aggregated row whatever matched, so no rows at all means the lookup
   // failed or ran out of time, and is not cached as "no corrections".
   //
@@ -130,16 +159,17 @@ async function lookup(word: string): Promise<string[] | null> {
     WHERE keys && ARRAY[${sql.join(deletionKeys(word).map((k) => sql`${k}`), sql`, `)}]::text[]
   `, LOOKUP_TIMEOUT_MS)
   if (rows.length === 0) return null
-  return pickCorrections(word, rows[0].candidates ?? [])
+  const candidates: Array<{ word: string; n: number }> = rows[0].candidates ?? []
+  return {
+    corrections: pickCorrections(word, candidates),
+    own: candidates.find((c) => c.word === word)?.n ?? 0,
+    candidates,
+  }
 }
 
-/**
- * Near-spellings of each correctable query word, keyed by the cleaned word
- * buildTsQueryText expects. Words with none are left out; an empty map means
- * there is nothing to retry with.
- */
-export async function correctionsFor(words: string[]): Promise<Map<string, string[]>> {
-  const out = new Map<string, string[]>()
+/** Each correctable word's lookup, cached. Words whose lookup failed are left out. */
+async function lookupAll(words: string[]): Promise<Map<string, Lookup>> {
+  const out = new Map<string, Lookup>()
   // Letters only: a house number or a code has no spelling to correct.
   const eligible = [...new Set(cleanWords(words))].filter((w) => /^\p{L}+$/u.test(w) && maxEdits(w.length) > 0)
   await Promise.all(eligible.map(async (w) => {
@@ -150,7 +180,34 @@ export async function correctionsFor(words: string[]): Promise<Map<string, strin
       corrections.set(w, looked)
       found = looked
     }
-    if (found.length) out.set(w, found)
+    out.set(w, found)
   }))
   return out
+}
+
+/**
+ * Near-spellings of each correctable query word, keyed by the cleaned word
+ * buildTsQueryText expects. Words with none are left out; an empty map means
+ * there is nothing to retry with.
+ */
+export async function correctionsFor(words: string[]): Promise<Map<string, string[]>> {
+  const out = new Map<string, string[]>()
+  for (const [w, found] of await lookupAll(words)) {
+    if (found.corrections.length) out.set(w, found.corrections)
+  }
+  return out
+}
+
+/**
+ * Whether any query word looks misspelt (see looksMisspelt), the last one
+ * read as a prefix when `prefixLast`. Shares correctionsFor's cache, so the
+ * corrections that follow cost no second lookup.
+ */
+export async function hasMisspelling(words: string[], prefixLast: boolean): Promise<boolean> {
+  const cleaned = cleanWords(words)
+  const last = cleaned[cleaned.length - 1]
+  for (const [w, found] of await lookupAll(cleaned)) {
+    if (looksMisspelt(fold(w), found.own, found.candidates, prefixLast && w === last)) return true
+  }
+  return false
 }

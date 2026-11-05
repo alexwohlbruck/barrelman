@@ -88,6 +88,10 @@ They come from a layer with two indexes of its own, `geo_places_locality_ts_idx`
 
 US ZIP codes come from Pelias rather than OSM, which maps them almost nowhere, so they also need Pelias running with its Who's on First data.
 
+**Parks and other large places are missing from typeahead after an upgrade**
+
+Typeahead finds large named areas (10 ha or more) through an index of their own, `geo_places_large_area_cell_idx`. The API builds it in the background after the locality indexes above, and the stage switches itself on within a minute of it being ready. Until then, a park is found by a submitted search but may not be suggested while typing. The log shows `[schema] building geo_places_large_area_cell_idx` when the build starts.
+
 **Misspelt searches find nothing after an upgrade**
 
 Search corrects a misspelt word against `search_lexicon`, a list of every word in the search index. An import builds it; on an instance imported before it existed, the API builds it in the background on its first start, after search enrichment. That is one pass over the named places, several minutes on a national import, and the log shows `[search-enrichment] search lexicon…` while it runs. Until it exists, well-spelled searches work as before and misspelt ones simply aren't corrected.
