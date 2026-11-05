@@ -357,6 +357,14 @@ function fillLevels(steps: PathStep[], ends?: WalkContext['levels']): PathStep[]
   return out
 }
 
+/** Up (1) or down (-1) for a step whose own levels the map leaves out, from the nearest known levels either side. */
+function trend(steps: GuidanceStep[], i: number, ends?: WalkContext['levels']): number | null {
+  const known = (xs: Array<number | null | undefined>) => xs.filter((l): l is number => l !== null && l !== undefined)
+  const before = known([ends?.from, ...steps.slice(0, i).flatMap((s) => [s.fromLevel, s.toLevel]), steps[i].fromLevel]).at(-1)
+  const after = known([steps[i].toLevel, ...steps.slice(i + 1).flatMap((s) => [s.fromLevel, s.toLevel]), ends?.to])[0]
+  return before === undefined || after === undefined || before === after ? null : Math.sign(after - before)
+}
+
 /**
  * Written steps for a walked station path, built only from what the map
  * says: level changes, fare gates, the lines on the far platform and the
@@ -392,7 +400,8 @@ export function guidanceSteps(row: StationPath, ctx: WalkContext): GuidanceStep[
     s.levelChange = s.fromLevel !== null && s.toLevel !== null ? s.toLevel - s.fromLevel : null
     const next = steps.slice(i + 1).find((x) => x.type !== 'walk' && x.type !== 'platform')
     if (VERTICAL.has(s.type as StepType)) {
-      const dir = s.levelChange === null ? '' : s.levelChange > 0 ? ' up' : s.levelChange < 0 ? ' down' : ''
+      const way = s.levelChange ?? trend(steps, i, ctx.levels)
+      const dir = way === null ? '' : way > 0 ? ' up' : way < 0 ? ' down' : ''
       const n = s.levelChange === null ? null : Math.abs(s.levelChange)
       const what = s.type === 'stairs' ? 'the stairs' : `the ${s.type}`
       const name = levelName(s.toLevel)

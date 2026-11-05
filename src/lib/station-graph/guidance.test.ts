@@ -184,6 +184,15 @@ describe('guidanceSteps', () => {
     expect(text[0]).toBe('Take the stairs down to the mezzanine')
   })
 
+  test('a stair beside an unlevelled gap still says up or down, from the levels around it', () => {
+    const row = path({
+      fromKind: 'entrance', seconds: 50,
+      steps: [step('stairs', 6, 10, 0, null, 0), step('bridge', 20, 20, null, null, 1), step('stairs', 6, 20, -1, -2, 2)],
+    })
+    const text = guidanceSteps(row, { kind: 'access', levels: { from: 0, to: -2 } }).map((s) => s.instruction)
+    expect(text[0]).toBe('Take the stairs down')
+  })
+
   test('levels with no name of their own are counted, never numbered', () => {
     const deep = path({
       seconds: 75,
