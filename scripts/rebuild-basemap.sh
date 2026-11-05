@@ -317,13 +317,19 @@ if [ "${BASEMAP_RESTART_MARTIN:-1}" = "1" ]; then
   log "[3/3] Restarting ${CONTAINER} to pick up the new archive..."
   docker restart "$CONTAINER" >/dev/null
 
-  sleep 3
   # Probe by container name: this runs inside barrelman-ops, where :3000 would be
   # ops itself. /health is the same endpoint src/services/health.service.ts uses.
-  # `-w` already prints 000 on a connection error.
-  code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "http://${CONTAINER}:3000/health" 2>/dev/null) || true
+  # `-w` already prints 000 on a connection error. Polled rather than asked once:
+  # Martin takes more than a few seconds to open a 20 GB archive, and a single
+  # probe three seconds in reported every z15 swap as a failed restart.
+  code=000
+  for _ in $(seq 1 30); do
+    sleep 2
+    code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "http://${CONTAINER}:3000/health" 2>/dev/null) || true
+    [ "${code:-000}" != "000" ] && break
+  done
   if [ "${code:-000}" = "000" ]; then
-    log "WARNING: ${CONTAINER} is not answering after the restart — check 'docker logs ${CONTAINER}'"
+    log "WARNING: ${CONTAINER} is not answering a minute after the restart — check 'docker logs ${CONTAINER}'"
   else
     log "martin responding: HTTP ${code}"
   fi
