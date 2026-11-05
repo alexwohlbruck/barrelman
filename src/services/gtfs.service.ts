@@ -1871,6 +1871,16 @@ export async function computeAllTransfers(
   return transfers
 }
 
+/** An in-station time from the station paths build, which outranks a street walk. */
+export interface StationTransferTime {
+  feedId: string
+  fromStopId: string
+  toStopId: string
+  seconds: number
+}
+
+export const transferKey = (from: string, to: string) => `${from}\u0000${to}`
+
 /**
  * Generate GTFS transfers.txt content from computed transfers.
  *
@@ -1878,20 +1888,28 @@ export async function computeAllTransfers(
  * belong to that feed. This prevents stop ID collisions when injecting
  * into per-feed ZIPs (e.g. stop "1234" in feed A ≠ stop "1234" in feed B).
  *
+ * `station` times (see stationTransferTimes) replace the GraphHopper walk
+ * for the same pair: the street router has no idea how deep a platform is.
+ *
  * Format: from_stop_id,to_stop_id,transfer_type,min_transfer_time
  * transfer_type=2 means timed transfer with min_transfer_time specified.
  */
 export function generateTransfersTxt(
   transfers: ComputedTransfer[],
   feedId?: string,
+  station: StationTransferTime[] = [],
 ): string {
-  const filtered = feedId
+  const own = feedId ? station.filter((s) => s.feedId === feedId) : station
+  const timed = new Set(own.map((s) => transferKey(s.fromStopId, s.toStopId)))
+  const filtered = (feedId
     ? transfers.filter(t => t.fromFeedId === feedId && t.toFeedId === feedId)
     : transfers
+  ).filter((t) => !timed.has(transferKey(t.fromStopId, t.toStopId)))
   const header = 'from_stop_id,to_stop_id,transfer_type,min_transfer_time\n'
-  const rows = filtered
-    .map(t => `${t.fromStopId},${t.toStopId},2,${t.walkTime}`)
-    .join('\n')
+  const rows = [
+    ...own.map((s) => `${s.fromStopId},${s.toStopId},2,${s.seconds}`),
+    ...filtered.map(t => `${t.fromStopId},${t.toStopId},2,${t.walkTime}`),
+  ].join('\n')
   return header + rows
 }
 

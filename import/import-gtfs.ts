@@ -17,11 +17,13 @@ import { injectBikesAllowed } from './inject-bikes-allowed'
 import { injectTripShapesAll } from './inject-trip-shapes'
 import { importFeedFile, injectTransfersTxt, NoFixedRouteService } from './feed-import'
 import { ensureGtfsSchema } from '../src/db'
+import { stationTransferTimes, type StationTransfer } from '../src/services/station-paths.service'
 import type { GtfsRtUrl } from '../src/services/gtfs.service'
 import {
   fetchFeedList,
   computeAllTransfers,
   generateTransfersTxt,
+  transferKey,
   generateMotisConfig,
   sanitizeGtfsZip,
   loadFeedIdentities,
@@ -442,16 +444,31 @@ async function main() {
 
     console.log(`Computed ${transfers.length} transfer pairs`)
 
+    // In-station times from the station paths build override the street walk
+    // and the agency's flat minimum. Before the first build there are none.
+    const station = await stationTransferTimes(feedFiles.map((f) => feedIdOf.get(f) ?? basename(f, '.zip')))
+      .catch((err) => {
+        console.warn(`  ! station transfer times: ${(err as Error).message}`)
+        return [] as StationTransfer[]
+      })
+    if (station.length) {
+      const bySource = new Map<string, number>()
+      for (const s of station) bySource.set(s.source, (bySource.get(s.source) ?? 0) + 1)
+      console.log(`  ${station.length} in-station transfer times (${[...bySource].map(([k, v]) => `${k} ${v}`).join(', ')})`)
+    }
+
     // Write feed-specific transfers.txt into each feed ZIP
     // Only include transfers where BOTH stops belong to the target feed,
     // preventing stop ID collisions across different transit agencies.
-    if (transfers.length > 0) {
+    if (transfers.length > 0 || station.length > 0) {
       for (const filepath of feedFiles) {
         const feedId = feedIdOf.get(filepath) ?? basename(filepath, '.zip')
-        const transfersTxt = generateTransfersTxt(transfers, feedId)
+        const own = station.filter((s) => s.feedId === feedId)
+        const transfersTxt = generateTransfersTxt(transfers, feedId, own)
         const transferCount = transfersTxt.trim().split('\n').length - 1 // minus header
         try {
-          await injectTransfersTxt(filepath, transfersTxt)
+          const rail = new Set(own.flatMap((s) => [s.fromStopId, s.toStopId]))
+          await injectTransfersTxt(filepath, transfersTxt, new Map(own.map((s) => [transferKey(s.fromStopId, s.toStopId), { seconds: s.seconds, source: s.source }])), rail)
           console.log(`  ✓ Injected ${transferCount} transfers into ${basename(filepath)}`)
         } catch (err) {
           console.error(`  ✗ Failed to inject into ${basename(filepath)}: ${err}`)

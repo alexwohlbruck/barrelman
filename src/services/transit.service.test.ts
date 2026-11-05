@@ -72,6 +72,7 @@ import {
   extractFare,
   countFarePayments,
   rankItineraries,
+  boardsRailOrFerry,
   MotisError,
   type TransitRouteRequest,
   type TransitItinerary,
@@ -855,6 +856,145 @@ describe('motisStreetRouting', () => {
     expect(await motisStreetRouting('/nonexistent/config.yml')).toBeUndefined()
     // The header comment repeats the flag; only the top-level key counts.
     expect(await motisStreetRouting(await write('# street_routing: false\n'))).toBeUndefined()
+  })
+})
+
+describe('getIntermodalRoute park-and-ride', () => {
+  beforeEach(() => {
+    dbCallIndex = 0
+    dbStatements = []
+  })
+
+  const request = {
+    from: { lat: 35.23, lng: -80.84 },
+    to: { lat: 35.77, lng: -78.64 },
+    time: '2023-11-14T21:30:00Z',
+    preTransitModes: ['CAR_PARKING' as const],
+    postTransitModes: ['WALK' as const],
+    maxPreTransitTime: 1800,
+  }
+
+  const station = (id: string, lat: number, lng: number, distance: number, lot?: { name: string; lat: number; lng: number }) => ({
+    feed_id: 'rail', station_id: id, stop_lat: lat, stop_lon: lng, distance,
+    ...(lot && { lot_name: lot.name, lot_lat: lot.lat, lot_lon: lot.lng }),
+  })
+  const lot = { name: 'Station Lot', lat: 35.2405, lng: -80.8305 }
+
+  /** Park_ride stations, nearest stations, and the egress station near the destination. */
+  function stations({ parkRide = [station('pr', 35.24, -80.83, 1500, lot)], nearest = [] as any[] } = {}) {
+    dbRows = (text: string) => {
+      if (text.includes('geo_places')) return parkRide
+      if (text.includes('bus_only')) return [station('dest', 35.77, -78.64, 50)]
+      if (text.includes('NOT ST_DWithin')) return nearest
+      return []
+    }
+  }
+
+  const drive = { time: 600_000, distance: 5000, points: { coordinates: [[-80.84, 35.23], [-80.835, 35.235], [lot.lng, lot.lat]] } }
+
+  function upstreams({ firstVehicle = 'SUBWAY', gh = { paths: [drive] } as any, ghStatus = 200 } = {}): any {
+    const motis = makeMotisResponse()
+    motis.itineraries[0].legs[1].mode = firstVehicle
+    return mock(async (url: string) => {
+      const body = url.includes('/api/v1/plan') ? motis : gh
+      const status = url.includes('/api/v1/plan') ? 200 : ghStatus
+      return { ok: status === 200, status, text: async () => JSON.stringify(body), json: async () => body }
+    })
+  }
+
+  const motisUrls = (fetchFn: any) =>
+    fetchFn.mock.calls.map((c: any[]) => String(c[0])).filter((u: string) => u.includes('/api/v1/plan'))
+
+  test('drives to the park_ride lot, parks, and walks to the platform', async () => {
+    stations()
+    const result = await getIntermodalRoute(request, upstreams())
+
+    const [it] = result.itineraries
+    expect(it.legs.map((l) => l.mode)).toEqual(['CAR', 'WALK', 'WALK', 'SUBWAY', 'WALK', 'WALK'])
+    const [car, walk] = it.legs
+    expect(car.to.name).toBe('Station Lot')
+    expect(car.geometry?.coordinates).toEqual(drive.points.coordinates as [number, number][])
+    expect(car.duration).toBe(600)
+    expect(car.distance).toBe(5000)
+    // Five minutes to park between the drive and the walk, which ends at boarding.
+    expect(new Date(walk.startTime).getTime() - new Date(car.endTime).getTime()).toBe(300_000)
+    expect(walk.endTime).toBe(it.legs[2].startTime)
+    expect(it.startTime).toBe(car.startTime)
+    expect(new Date(it.startTime).getTime()).toBeGreaterThanOrEqual(new Date(request.time).getTime())
+  })
+
+  test('searches station to station, never asking MOTIS to route the car', async () => {
+    stations()
+    const fetchFn = upstreams()
+    await getIntermodalRoute(request, fetchFn)
+
+    const urls = motisUrls(fetchFn)
+    expect(urls.length).toBe(1)
+    expect(urls[0]).toContain('fromPlace=rail_pr')
+    expect(urls[0]).not.toContain('CAR_PARKING')
+    expect(urls[0]).not.toContain('preTransitModes')
+  })
+
+  test('drops trips whose first vehicle is a bus', async () => {
+    stations()
+    const result = await getIntermodalRoute(request, upstreams({ firstVehicle: 'BUS' }))
+    expect(result.itineraries).toHaveLength(0)
+  })
+
+  test('drives to a station without a lot when no park_ride lot is near', async () => {
+    stations({ parkRide: [], nearest: [station('near', 35.24, -80.83, 1300)] })
+    const result = await getIntermodalRoute(request, upstreams())
+
+    const [car] = result.itineraries[0].legs
+    expect(car.mode).toBe('CAR')
+    expect(car.to.name).toBe('Parking')
+  })
+
+  test('drops a station whose drive overruns the access budget', async () => {
+    stations()
+    const slow = { ...drive, time: 1700_000 }
+    const fetchFn = upstreams({ gh: { paths: [slow] } })
+    const result = await getIntermodalRoute(request, fetchFn)
+
+    expect(result.itineraries).toHaveLength(0)
+    expect(motisUrls(fetchFn)).toHaveLength(0)
+  })
+
+  test('returns no trips, rather than failing, when GraphHopper cannot route the drive', async () => {
+    stations()
+    const fetchFn = upstreams({ ghStatus: 500 })
+    const result = await getIntermodalRoute(request, fetchFn)
+
+    expect(result.itineraries).toHaveLength(0)
+    expect(motisUrls(fetchFn)).toHaveLength(0)
+  })
+
+  test('leaves bike access to MOTIS street routing', async () => {
+    stations()
+    const fetchFn = upstreams()
+    await getIntermodalRoute({ ...request, preTransitModes: ['BIKE'] }, fetchFn)
+
+    expect(motisUrls(fetchFn)[0]).toContain('preTransitModes=BIKE')
+  })
+})
+
+describe('boardsRailOrFerry', () => {
+  const itinerary = (...modes: string[]) => ({
+    legs: modes.map((mode) => ({ mode, transitLeg: mode !== 'WALK' })),
+  }) as TransitItinerary
+
+  test('accepts a train, tram or ferry boarded first', () => {
+    expect(boardsRailOrFerry(itinerary('WALK', 'SUBWAY', 'BUS'))).toBe(true)
+    expect(boardsRailOrFerry(itinerary('WALK', 'FERRY'))).toBe(true)
+    expect(boardsRailOrFerry(itinerary('REGIONAL_RAIL'))).toBe(true)
+  })
+
+  test('rejects a bus boarded first, even with a train after it', () => {
+    expect(boardsRailOrFerry(itinerary('WALK', 'BUS', 'SUBWAY'))).toBe(false)
+  })
+
+  test('rejects an itinerary with no vehicle at all', () => {
+    expect(boardsRailOrFerry(itinerary('WALK'))).toBe(false)
   })
 })
 

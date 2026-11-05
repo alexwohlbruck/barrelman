@@ -665,6 +665,46 @@ export async function ensureGtfsSchema() {
 }
 
 /**
+ * Station labels: the direction each platform is signed for, and where each
+ * entrance is. Filled by `import/refresh-station-labels.ts` after every GTFS
+ * and OSM update, never by hand. See services/station-labels.service.ts.
+ */
+export async function ensureStationLabelSchema() {
+  await runDdl(`
+    CREATE TABLE IF NOT EXISTS stop_direction_labels (
+      feed_id TEXT NOT NULL,
+      stop_id TEXT NOT NULL,
+      label TEXT NOT NULL,
+      source TEXT NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (feed_id, stop_id, source)
+    );
+
+    CREATE TABLE IF NOT EXISTS agency_entrances (
+      source TEXT NOT NULL,
+      ref TEXT NOT NULL,
+      stop_id TEXT,
+      entrance_type TEXT,
+      entry_allowed BOOLEAN,
+      exit_allowed BOOLEAN,
+      geom GEOMETRY(Point, 4326) NOT NULL,
+      PRIMARY KEY (source, ref)
+    );
+    CREATE INDEX IF NOT EXISTS agency_entrances_geom_idx ON agency_entrances USING GIST (geom);
+
+    -- Keyed on geo_places.id. NULL flags mean unknown, which callers treat as allowed.
+    CREATE TABLE IF NOT EXISTS entrance_labels (
+      id TEXT PRIMARY KEY,
+      corner_label TEXT,
+      entry_allowed BOOLEAN,
+      exit_allowed BOOLEAN,
+      access_source TEXT,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `)
+}
+
+/**
  * Create GBFS shared-mobility tables for bikeshare/scootershare.
  */
 export async function ensureGbfsSchema() {

@@ -31,7 +31,7 @@ import { transitRoutes } from './routes/transit'
 import { transitAttributionRoutes } from './routes/transit-attribution'
 import { speechRoutes } from './routes/speech'
 import { gbfsRoutes } from './routes/gbfs'
-import { ensureSchema, ensureGtfsSchema, ensureGbfsSchema } from './db'
+import { ensureSchema, ensureGtfsSchema, ensureGbfsSchema, ensureStationLabelSchema } from './db'
 import { ensureAccountsSchema } from './services/accounts.service'
 import { passkeyPolicy } from './services/admin-access.service'
 import { flushPenalties, startPenaltySync } from './services/penalty-sync.service'
@@ -87,6 +87,7 @@ await initErrorTracking('api')
 await ensureSchema()
 await ensureGtfsSchema()
 await ensureGbfsSchema()
+await ensureStationLabelSchema()
 // Console job queue (shared with the barrelman-ops worker).
 await ensureOpsJobsSchema()
 // Import-region store (seeded from config/regions.json; editable in the console).
