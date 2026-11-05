@@ -1,0 +1,44 @@
+{
+  "_comment": "Station pedestrian graph costs and the tier formulas, fitted against VBB and MBTA pathways.txt (PAR-350 spike, Nov 2026). Refit quarterly; a refit only edits this file. Seconds and metres throughout.",
+  "costs": {
+    "walkMps": 1.3,
+    "stairMps": 0.6,
+    "stairMinM": 6,
+    "stairUpFactor": 1.1,
+    "stairDownFactor": 0.9,
+    "escalatorMps": 0.75,
+    "escalatorMinM": 8,
+    "elevatorS": 45,
+    "scale": 1.23
+  },
+  "graph": {
+    "apronM": 300,
+    "complexRadiusM": 150,
+    "entranceRadiusM": 250,
+    "snapM": 2,
+    "entranceSnapM": 15,
+    "positionStepM": 10,
+    "maxAreaLinks": 60
+  },
+  "bridge": {
+    "maxM": 30,
+    "detour": 1.3,
+    "levelS": 20
+  },
+  "estimate": {
+    "pair": { "intercept": 23.24, "edgeM": 0.362, "centroidM": 0.939, "level": 8.55, "overNotTouching": 54.05, "touchingM": 1 },
+    "street": { "intercept": 41.92, "edgeM": 0.854, "depthLevel": 11.84 }
+  },
+  "straightLine": {
+    "pair": { "intercept": 56.23, "perM": 1.086 },
+    "street": { "perM": 1.286 }
+  },
+  "uncertaintyS": {
+    "graph": { "pair": 75, "street": 55 },
+    "bridged": { "pair": 70, "street": 70 },
+    "agency": { "pair": 30, "street": 30 },
+    "estimated": { "pair": 80, "street": 55 },
+    "straight_line": { "pair": 100, "street": 70 }
+  },
+  "confidenceSpanS": 250
+}
