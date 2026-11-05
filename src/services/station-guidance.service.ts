@@ -72,8 +72,13 @@ export interface TransitTransfer {
   reentryFree: boolean | null
   /** Seconds for tapping out and back in, included in `seconds`. */
   fareGateDelayS: number
-  /** The walk plus any fare gates; null when no station path joins the two platforms. */
+  /**
+   * The walk plus any fare gates; null when nothing times it. The agency's own
+   * time for the pair (never its flat default) outranks an estimated walk.
+   */
   seconds: number | null
+  /** Where `seconds` came from. */
+  source: PathSource | null
   walk: StationWalk | null
 }
 
@@ -210,6 +215,37 @@ async function loadEntrances(ids: string[]): Promise<Map<string, EntranceInfo>> 
   }))
 }
 
+/**
+ * The agency's own transfer time between two stops (or their stations), left
+ * out where it is the feed's flat default: the time it files on a station's
+ * transfer to itself.
+ */
+async function agencyTransferTimes(pairs: Array<{ feedId: string; from: string; to: string }>): Promise<Map<string, number>> {
+  const out = new Map<string, number>()
+  if (!pairs.length) return out
+  const rows = (await db.execute(sql`
+    WITH q(feed_id, a, b) AS (VALUES ${sql.join(pairs.map((p) => sql`(${p.feedId}::text, ${p.from}::text, ${p.to}::text)`), sql`, `)}),
+    flat AS (
+      SELECT t.feed_id, mode() WITHIN GROUP (ORDER BY t.min_transfer_time) AS seconds
+      FROM gtfs_transfers t
+      WHERE t.feed_id IN (SELECT feed_id FROM q) AND t.from_stop_id = t.to_stop_id AND t.transfer_type = 2
+      GROUP BY t.feed_id
+    )
+    SELECT DISTINCT ON (q.feed_id, q.a, q.b) q.feed_id, q.a, q.b, t.min_transfer_time AS seconds
+    FROM q
+    JOIN gtfs_stops sa ON sa.feed_id = q.feed_id AND sa.stop_id = q.a
+    JOIN gtfs_stops sb ON sb.feed_id = q.feed_id AND sb.stop_id = q.b
+    JOIN gtfs_transfers t ON t.feed_id = q.feed_id AND t.transfer_type = 2 AND t.min_transfer_time IS NOT NULL
+     AND t.from_stop_id IN (sa.stop_id, sa.parent_station) AND t.to_stop_id IN (sb.stop_id, sb.parent_station)
+     AND t.from_stop_id <> t.to_stop_id
+    LEFT JOIN flat f ON f.feed_id = q.feed_id
+    WHERE f.seconds IS NULL OR t.min_transfer_time <> f.seconds
+    ORDER BY q.feed_id, q.a, q.b, (t.from_stop_id = sa.stop_id AND t.to_stop_id = sb.stop_id) DESC
+  `)) as Array<{ feed_id: string; a: string; b: string; seconds: number }>
+  for (const r of rows) out.set(`${r.feed_id}\u0000${r.a}\u0000${r.b}`, r.seconds)
+  return out
+}
+
 function toPath(r: Record<string, any>): StationPath {
   return {
     fromId: r.from_id, fromKind: r.from_kind, toId: r.to_id, toKind: r.to_kind, profile: r.profile, source: r.source,
@@ -317,6 +353,14 @@ export async function enrichStationGuidance(itineraries: Array<{ legs: GuidedLeg
     return routesCache.get(k)!
   }
 
+  const agencyTimes = await agencyTransferTimes(itineraries.flatMap((it) => {
+    const rides = it.legs.filter((l) => l.transitLeg)
+    return rides.slice(1).flatMap((b, i) => {
+      const x = splitId(rides[i].to.stopId), y = splitId(b.from.stopId)
+      return x && y && x.feedId === y.feedId ? [{ feedId: x.feedId, from: x.stopId, to: y.stopId }] : []
+    })
+  })).catch(() => new Map<string, number>())
+
   const scale = DEFAULT_PARAMS.costs.scale
   const walkMps = DEFAULT_PARAMS.costs.walkMps
 
@@ -389,7 +433,12 @@ export async function enrichStationGuidance(itineraries: Array<{ legs: GuidedLeg
       }
       const cls = classifyTransfer(facts)
       const walk = row ? stationWalk(row, { kind: 'transfer', sign: routeSign(b), reentryFree: cls.reentryFree }, platforms, entrances) : null
-      b.transfer = { ...cls, seconds: row ? row.seconds + cls.fareGateDelayS : null, walk }
+      const boardAt = splitId(b.from.stopId)
+      const agency = alight && boardAt ? agencyTimes.get(`${alight.feedId}\u0000${alight.stopId}\u0000${boardAt.stopId}`) : undefined
+      const timed = row && isWalked(row.source) ? row
+        : agency !== undefined ? { seconds: agency, source: 'agency' as const }
+        : row
+      b.transfer = { ...cls, seconds: timed ? timed.seconds + cls.fareGateDelayS : null, source: timed?.source ?? null, walk }
       if (row) transferRows.set(a, row)
     }))
 
