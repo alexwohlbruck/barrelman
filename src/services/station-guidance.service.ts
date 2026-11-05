@@ -299,7 +299,9 @@ function stationWalk(
   if (isWalked(row.source) && row.geometry && row.geometry.length > 1) {
     walk.geometry = { type: 'LineString', coordinates: row.geometry }
     walk.vertexLevels = row.vertexLevels ?? undefined
-    walk.steps = guidanceSteps(row, { ...ctx, levels: { from: from.level, to: to.level } })
+    // An entrance is at the street, whether or not the map says so.
+    const level = (e: StationEndpoint) => e.level ?? (e.kind === 'entrance' ? 0 : null)
+    walk.steps = guidanceSteps(row, { ...ctx, levels: { from: level(from), to: level(to) } })
     const extra = platformRemainder(row)
     if (extra && extra.seconds >= PLATFORM_REMAINDER_MIN_S) walk.metres += extra.metres
   }
