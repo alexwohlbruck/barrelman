@@ -4,7 +4,7 @@ import { DEFAULT_PARAMS } from './params'
 import { solveComplex } from './solve'
 import { estimatePair, estimateStreet, straightLinePair, straightLineStreet } from './estimate'
 import { agencyStationTimes, agencyTimesByOsm } from './agency'
-import { clusterStations, assignToComplexes } from './complexes'
+import { clusterStations, assignToComplexes, transferLinks } from './complexes'
 import { platformsForStop, stopPairTime } from './stops'
 import { platformRefs, levelOf, levelsOf } from './tags'
 import { vertexKey } from './geometry'
@@ -236,6 +236,15 @@ describe('complexes', () => {
     const big = cx.find((c) => c.members.length === 3)!
     expect(big.id).toBe('node/1')
     expect(big.name).toBe('A')
+  })
+
+  test('an agency transfer joins stations further apart than the radius', () => {
+    const at = (id: string, x: number) => { const [lon, lat] = pt(x, 0); return { id, name: null, lon, lat } }
+    const els = [at('node/1', 0), at('node/2', 260), at('node/3', 900)]
+    const [fl, fb] = pt(5, 0), [tl, tb] = pt(255, 0), [xl, xb] = pt(890, 0)
+    const links = transferLinks(els, [{ fromLon: fl, fromLat: fb, toLon: tl, toLat: tb }, { fromLon: fl, fromLat: fb, toLon: xl + 1, toLat: xb }], 150)
+    expect(links).toEqual([['node/1', 'node/2']])
+    expect(clusterStations(els, 150, links).map((c) => c.members.length).sort()).toEqual([1, 2])
   })
 
   test('a platform belongs to the complex whose station is nearest its geometry', () => {

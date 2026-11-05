@@ -94,7 +94,7 @@ async function createNextTables(q: Sql) {
       best_seconds INTEGER,
       best_position REAL,
       metres INTEGER NOT NULL,
-      levels INTEGER NOT NULL,
+      levels REAL NOT NULL,
       crosses_fare_gate BOOLEAN NOT NULL,
       surfaces BOOLEAN,
       geom GEOMETRY(LineString, 4326),
@@ -225,7 +225,7 @@ async function writeCell(q: Sql, built: BuiltComplex[], previous: Map<string, un
              v.vertex_levels, v.steps
       FROM jsonb_to_recordset(${q.json(batch as never)}) AS v(complex_id text, from_id text, from_kind text, to_id text, to_kind text,
         profile text, source text, confidence real, uncertainty_s int, seconds int, best_seconds int, best_position real, metres int,
-        levels int, crosses_fare_gate boolean, surfaces boolean, geometry text, vertex_levels real[], steps jsonb)
+        levels real, crosses_fare_gate boolean, surfaces boolean, geometry text, vertex_levels real[], steps jsonb)
       ON CONFLICT DO NOTHING`
   }
 }

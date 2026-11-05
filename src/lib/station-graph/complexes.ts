@@ -19,8 +19,16 @@ export interface Complex {
 
 const M_PER_DEG = 111320
 
-/** Station elements within `radiusM` of one another, chained, form one complex. */
-export function clusterStations(elements: StationElement[], radiusM: number): Complex[] {
+/**
+ * Station elements within `radiusM` of one another, chained, form one complex.
+ * `links` join elements further apart that an agency says are one station
+ * (the MTA's Fulton St spans four stations up to 270 m apart).
+ */
+export function clusterStations(
+  elements: StationElement[],
+  radiusM: number,
+  links: Array<[string, string]> = [],
+): Complex[] {
   const cell = (e: StationElement) => {
     const kx = Math.cos((e.lat * Math.PI) / 180) * M_PER_DEG
     return [Math.floor((e.lon * kx) / radiusM), Math.floor((e.lat * M_PER_DEG) / radiusM)]
@@ -46,6 +54,11 @@ export function clusterStations(elements: StationElement[], radiusM: number): Co
       }
     }
   })
+  const at = new Map(elements.map((e, i) => [e.id, i]))
+  for (const [a, b] of links) {
+    const i = at.get(a), j = at.get(b)
+    if (i !== undefined && j !== undefined) parent[find(i)] = find(j)
+  }
   const groups = new Map<number, StationElement[]>()
   elements.forEach((e, i) => groups.set(find(i), [...(groups.get(find(i)) ?? []), e]))
   return [...groups.values()].map((members) => {
@@ -60,6 +73,43 @@ export function clusterStations(elements: StationElement[], radiusM: number): Co
       lat: members.reduce((s, m) => s + m.lat, 0) / members.length,
     }
   })
+}
+
+/**
+ * Pairs of station elements an agency connects: each end of a transfer is
+ * the station element nearest it within `maxM`.
+ */
+export function transferLinks(
+  elements: StationElement[],
+  transfers: Array<{ fromLon: number; fromLat: number; toLon: number; toLat: number }>,
+  maxM: number,
+): Array<[string, string]> {
+  if (!elements.length) return []
+  const cell = 0.01
+  const grid = new Map<string, StationElement[]>()
+  for (const e of elements) {
+    const k = `${Math.floor(e.lon / cell)}:${Math.floor(e.lat / cell)}`
+    grid.set(k, [...(grid.get(k) ?? []), e])
+  }
+  const nearest = (lon: number, lat: number) => {
+    const kx = Math.cos((lat * Math.PI) / 180) * M_PER_DEG
+    let best: { d: number; id: string } | null = null
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dy = -1; dy <= 1; dy++) {
+        for (const e of grid.get(`${Math.floor(lon / cell) + dx}:${Math.floor(lat / cell) + dy}`) ?? []) {
+          const d = Math.hypot((e.lon - lon) * kx, (e.lat - lat) * M_PER_DEG)
+          if (d <= maxM && (!best || d < best.d)) best = { d, id: e.id }
+        }
+      }
+    }
+    return best?.id
+  }
+  const out: Array<[string, string]> = []
+  for (const t of transfers) {
+    const a = nearest(t.fromLon, t.fromLat), b = nearest(t.toLon, t.toLat)
+    if (a && b && a !== b) out.push([a, b])
+  }
+  return out
 }
 
 /**
