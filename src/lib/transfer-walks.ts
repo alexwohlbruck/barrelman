@@ -4,13 +4,15 @@ export interface TimedLeg {
   startTime: string
   endTime: string
   duration: number
+  distance: number
   to: { arrival?: string }
-  transfer?: { seconds: number | null } | null
+  transfer?: { seconds: number | null; walk?: { metres: number; estimate: boolean } | null } | null
 }
 
 export interface TimedItinerary {
   walkTime: number
   waitingTime: number
+  walkDistance: number
   legs: TimedLeg[]
 }
 
@@ -18,12 +20,18 @@ export interface TimedItinerary {
  * Time each walk between two rides as the walk itself. MOTIS reports a
  * transfer's footpath with the planner's per-interchange pad added, so a
  * 90 s platform change read as a 5 min walk. The pad is waiting, not walking;
- * a station-path time for the transfer, where one exists, is the walk.
+ * a station-path time for the transfer, where one exists, is the walk, and a
+ * walked station path its length too.
  */
 export function settleTransferWalks(itinerary: TimedItinerary, padSeconds: number): void {
   itinerary.legs.forEach((leg, i) => {
     const prev = itinerary.legs[i - 1], next = itinerary.legs[i + 1]
     if (leg.transitLeg || !prev?.transitLeg || !next?.transitLeg) return
+    const walked = next.transfer?.walk
+    if (walked && !walked.estimate) {
+      itinerary.walkDistance = Math.max(0, itinerary.walkDistance + walked.metres - leg.distance)
+      leg.distance = walked.metres
+    }
     const start = Date.parse(leg.startTime)
     const gap = Math.max(0, (Date.parse(next.startTime) - start) / 1000)
     const footpath = Math.max(0, leg.duration - padSeconds)
