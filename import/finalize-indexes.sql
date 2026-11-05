@@ -46,6 +46,11 @@ CREATE INDEX IF NOT EXISTS geo_places_admin_level_idx ON geo_places(admin_level)
 CREATE INDEX IF NOT EXISTS geo_places_locality_ts_idx ON geo_places USING GIN (ts) WHERE ts IS NOT NULL AND name IS NOT NULL AND (admin_level IS NOT NULL OR tags->>'place' IS NOT NULL OR tags->>'boundary' = 'postal_code');
 CREATE INDEX IF NOT EXISTS geo_places_postal_code_idx ON geo_places (upper(tags->>'postal_code') text_pattern_ops) WHERE tags->>'boundary' = 'postal_code';
 
+-- Typeahead's large-area stage (src/services/large-area-search.service.ts,
+-- which also builds it on an existing install). The WHERE must match its
+-- LARGE_AREA_PREDICATE exactly.
+CREATE INDEX IF NOT EXISTS geo_places_large_area_ts_idx ON geo_places USING GIN (ts) WHERE ts IS NOT NULL AND name IS NOT NULL AND geom_type = 'area' AND area_m2 >= 100000;
+
 -- Search layer (codes and abbreviation lookups)
 CREATE INDEX IF NOT EXISTS geo_places_codes_idx ON geo_places USING GIN(codes) WHERE codes IS NOT NULL;
 CREATE INDEX IF NOT EXISTS geo_places_name_abbrev_idx ON geo_places(name_abbrev) WHERE name_abbrev IS NOT NULL;

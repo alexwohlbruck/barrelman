@@ -63,9 +63,15 @@ mock.module('../lib/cache', () => ({
 
 const { searchPlaces } = await import('./search.service')
 const { setLocalityIndexReady } = await import('./locality-search.service')
+const { setLargeAreaIndexReady } = await import('./large-area-search.service')
 const { setLexemeStats } = await import('./lexeme-stats.service')
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+// The SQL a mock call received, for answering by query rather than by order.
+const sqlOf = (q: any): string =>
+  (q?.queryChunks ?? []).map((c: any) =>
+    c?.queryChunks ? sqlOf(c) : Array.isArray(c?.value) ? c.value.join('') : '').join('')
 
 function makePlaces(count: number, overrides: Partial<any> = {}): any[] {
   return Array.from({ length: count }, (_, i) => ({
@@ -89,6 +95,7 @@ beforeEach(() => {
   // Off unless a test asks for it, so the locality layer issues no query and
   // the call order the other suites queue mocks against is unchanged.
   setLocalityIndexReady(false)
+  setLargeAreaIndexReady(false)
   // Statistics present but empty: every word counts as rare, and nothing
   // queries pg_stats in the middle of a test's call order.
   setLexemeStats({}, 1_000_000)
@@ -802,11 +809,6 @@ describe('searchPlaces — localities', () => {
     expect(mockExecute).toHaveBeenCalledTimes(10)
   }, 15000)
 
-  // The SQL a mock call received, for answering by query rather than by order.
-  const sqlOf = (q: any): string =>
-    (q?.queryChunks ?? []).map((c: any) =>
-      c?.queryChunks ? sqlOf(c) : Array.isArray(c?.value) ? c.value.join('') : '').join('')
-
   test('a misspelling with no namesake falls back to trigram', async () => {
     setLocalityIndexReady(true)
     const charlotte = { id: 'relation/177415', name: 'Charlotte', text_rank: 0.5, distance_m: 0 }
@@ -950,5 +952,62 @@ describe('searchPlaces — corrected spellings', () => {
     mockExecute.mockImplementationOnce(async () => full) // FTS
     await searchPlaces({ query: 'warehouse', lat: 40.684, lng: -73.976, limit: 5 })
     expect(mockCorrections).not.toHaveBeenCalled()
+  })
+})
+
+// ── Large areas and name-shaped codes ───────────────────────────────────────
+
+describe('searchPlaces — "central park" typed in Midtown', () => {
+  // Midtown is dense with rows named for the park, so the probe of the
+  // nearest rows answers alone and never reaches the park's centroid 2 km
+  // north. Rows named Central Park elsewhere carry it as ref or alt_name.
+  const park = { id: 'way/427818536', name: 'Central Park', text_rank: 1.65, distance_m: 2000 }
+  const nearby = Array.from({ length: 25 }, (_, i) => (
+    { id: `node/${i + 1}`, name: `Central Park South ${i + 1}`, text_rank: 1.08, distance_m: 200 }))
+  const shoeStore = { id: 'way/1346398225', name: 'DSW', text_rank: 0.98, distance_m: 407_942 }
+  const garland = { id: 'way/300165448', name: 'Garland Central Park', text_rank: 0.98, distance_m: 2_193_673 }
+
+  const answer = (q: any) => {
+    const text = sqlOf(q)
+    if (text.includes('codes @>')) return [garland, shoeStore]
+    if (text.includes('area_m2 >= 100000')) return [park]
+    if (text.includes('ORDER BY centroid <->') && text.includes('LIMIT')) return nearby
+    return []
+  }
+
+  test('a large area the probe cannot reach still leads typeahead', async () => {
+    setLargeAreaIndexReady(true)
+    mockExecute.mockImplementation(async (q: any) => answer(q))
+    const results = await searchPlaces({ query: 'central park', lat: 40.7649, lng: -73.98, autocomplete: true, limit: 10 })
+    expect(results[0].id).toBe('way/427818536')
+  })
+
+  test('the large-area stage stays off until its index exists', async () => {
+    mockExecute.mockImplementation(async (q: any) => answer(q))
+    await searchPlaces({ query: 'central park', lat: 40.7649, lng: -73.98, autocomplete: true })
+    const calls = mockExecute.mock.calls.map((c: any[]) => sqlOf(c[0]))
+    expect(calls.some((t) => t.includes('area_m2 >= 100000'))).toBe(false)
+  })
+
+  test('a ref or alt_name matching a multi-word query is not pinned', async () => {
+    setLargeAreaIndexReady(true)
+    mockExecute.mockImplementation(async (q: any) => answer(q))
+    const results = await searchPlaces({ query: 'central park', lat: 40.7649, lng: -73.98, autocomplete: true, limit: 10 })
+    const ids = results.map((r: any) => r.id)
+    // Both are hundreds of km away; the nearby matches outrank them.
+    expect(ids).not.toContain('way/1346398225')
+    expect(ids).not.toContain('way/300165448')
+  })
+
+  test('a code-shaped query is still pinned regardless of distance', async () => {
+    const airport = { id: 'way/1', name: 'John F. Kennedy International Airport', text_rank: 0.98, distance_m: 900_000 }
+    const cafe = { id: 'node/2', name: 'JFK Cafe', text_rank: 1.5, distance_m: 100 }
+    mockExecute.mockImplementation(async (q: any) => {
+      const text = sqlOf(q)
+      if (text.includes('codes @>')) return [airport]
+      return text.includes('ts @@') ? [cafe] : []
+    })
+    const results = await searchPlaces({ query: 'jfk', lat: 35.22, lng: -80.84, limit: 5 })
+    expect(results[0].id).toBe('way/1')
   })
 })
