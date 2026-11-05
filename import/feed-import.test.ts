@@ -121,3 +121,56 @@ describe('mergeTransfersTxt — parent station resolution', () => {
     expect(mergeTransfersTxt(feed, computed, null)).not.toContain(',2,216')
   })
 })
+
+describe('mergeTransfersTxt — station path times', () => {
+  // Station path times are the one computed source that outranks the feed:
+  // the MTA files a flat 180 s between every connected pair of stations.
+  const STOPS =
+    'stop_id,stop_name,stop_lat,stop_lon,location_type,parent_station\n' +
+    '127,Times Sq,40.75529,-73.987495,1,\n' +
+    '127N,Times Sq,40.75529,-73.987495,0,127\n' +
+    '127S,Times Sq,40.75529,-73.987495,0,127\n' +
+    '725,Times Sq,40.755477,-73.987691,1,\n' +
+    '725N,Times Sq,40.755477,-73.987691,0,725\n' +
+    '423,Borough Hall,40.692404,-73.990151,1,\n' +
+    '423N,Borough Hall,40.692404,-73.990151,0,423\n' +
+    'A41,Jay St,40.692338,-73.987342,1,\n' +
+    'A41N,Jay St,40.692338,-73.987342,0,A41\n'
+  const key = (a: string, b: string) => `${a}\u0000${b}`
+
+  it('replaces the flat station time with the median of its platforms\' times', () => {
+    const feed = `${HEADER}\n127,725,2,180\n`
+    const computed = `${HEADER}\n127N,725N,2,90\n127S,725N,2,130\n`
+    const times = new Map([[key('127N', '725N'), 90], [key('127S', '725N'), 130]])
+    const merged = mergeTransfersTxt(feed, computed, STOPS, times)
+    expect(merged).toContain('127,725,2,110')
+    expect(merged).toContain('127N,725N,2,90')
+    expect(merged).not.toContain('127,725,2,180')
+  })
+
+  it('replaces the feed\'s own time for the same platform pair', () => {
+    const feed = `${HEADER}\n127N,725N,0,\n`
+    const merged = mergeTransfersTxt(feed, `${HEADER}\n127N,725N,2,95\n`, STOPS, new Map([[key('127N', '725N'), 95]]))
+    expect(merged.trim().split('\n').slice(1)).toEqual(['127N,725N,2,95'])
+  })
+
+  it('never touches a forbidden transfer, nor re-adds one under it', () => {
+    const feed = `${HEADER}\n423,A41,3,\n`
+    const times = new Map([[key('423N', 'A41N'), 120]])
+    const merged = mergeTransfersTxt(feed, `${HEADER}\n423N,A41N,2,120\n`, STOPS, times)
+    expect(merged).toContain('423,A41,3,')
+    expect(merged).not.toContain('423N,A41N')
+  })
+
+  it('leaves timed and in-seat transfers alone', () => {
+    const feed = `${HEADER}\n127N,725N,1,\n`
+    const merged = mergeTransfersTxt(feed, `${HEADER}\n127N,725N,2,95\n`, STOPS, new Map([[key('127N', '725N'), 95]]))
+    expect(merged).toContain('127N,725N,1,')
+    expect(merged).not.toContain('127N,725N,2,95')
+  })
+
+  it('without station times the feed still wins', () => {
+    const feed = `${HEADER}\n127,725,2,180\n`
+    expect(mergeTransfersTxt(feed, `${HEADER}\n127N,725N,2,90\n`, STOPS)).toContain('127,725,2,180')
+  })
+})

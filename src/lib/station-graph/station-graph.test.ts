@@ -249,7 +249,7 @@ describe('complexes', () => {
 
 describe('agency pathways', () => {
   const [l0, b0] = pt(0, 0), [l1, b1] = pt(0, 40), [le, be] = pt(30, 20)
-  const feed = {
+  const feed: Record<'stops' | 'pathways' | 'levels', Array<Record<string, string>>> = {
     stops: [
       { stop_id: 'A', location_type: '0', stop_lon: String(l0), stop_lat: String(b0), level_id: 'L1' },
       { stop_id: 'B', location_type: '0', stop_lon: String(l1), stop_lat: String(b1), level_id: 'L2' },

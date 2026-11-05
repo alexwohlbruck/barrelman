@@ -453,6 +453,20 @@ describe('generateTransfersTxt', () => {
     const txt = generateTransfersTxt(transfers)
     expect(txt).toContain(',2,') // transfer_type must be 2
   })
+
+  test('a station path time replaces the street walk for the same pair, and adds pairs the walk missed', () => {
+    const transfers = [
+      { fromStopId: '127N', toStopId: '725N', fromFeedId: '5', toFeedId: '5', walkTime: 0, walkDistance: 0 },
+      { fromStopId: '127N', toStopId: '902N', fromFeedId: '5', toFeedId: '5', walkTime: 140, walkDistance: 120 },
+    ]
+    const station = [
+      { feedId: '5', fromStopId: '127N', toStopId: '725N', seconds: 101 },
+      { feedId: '5', fromStopId: '725N', toStopId: '127N', seconds: 98 },
+      { feedId: '6', fromStopId: 'X', toStopId: 'Y', seconds: 50 },
+    ]
+    const rows = generateTransfersTxt(transfers, '5', station).split('\n').slice(1)
+    expect(rows.sort()).toEqual(['127N,725N,2,101', '127N,902N,2,140', '725N,127N,2,98'])
+  })
 })
 
 // ── fetchFeedList + GTFS-RT discovery ──────────────────────────────

@@ -183,7 +183,11 @@ const TRANSFER_FORBIDDEN = '3'
  *   - everything else is added, which is what the computation is for: bus
  *     stops outside a station entrance that no agency bothers to file
  */
-export async function injectTransfersTxt(zipPath: string, transfersTxt: string): Promise<void> {
+export async function injectTransfersTxt(
+  zipPath: string,
+  transfersTxt: string,
+  stationTimes?: Map<string, number>,
+): Promise<void> {
   const buffer = await Bun.file(zipPath).arrayBuffer()
   const zip = await JSZip.loadAsync(buffer)
 
@@ -193,7 +197,7 @@ export async function injectTransfersTxt(zipPath: string, transfersTxt: string):
   // declared between — see mergeTransfersTxt.
   const stopsEntry = zip.file('stops.txt') ?? zip.file(/(^|\/)stops\.txt$/)[0]
   const stops = stopsEntry ? await stopsEntry.async('string') : null
-  zip.file('transfers.txt', mergeTransfersTxt(existing, transfersTxt, stops))
+  zip.file('transfers.txt', mergeTransfersTxt(existing, transfersTxt, stops, stationTimes))
 
   // JSZip defaults to STORE, so a feed re-serialized without this lands
   // uncompressed on the volume MOTIS imports from. The subway feed goes from
@@ -217,19 +221,33 @@ export async function injectTransfersTxt(zipPath: string, transfersTxt: string):
  * platform pairing under a forbidden station back in — which is precisely
  * the phantom the prohibition exists to stop. Omit it and matching falls
  * back to exact ids.
+ *
+ * `stationTimes` (keyed by transferKey) are in-station times from the station
+ * paths build. They are the exception to "the feed wins": they replace the
+ * feed's own time for the same pair, and a station-level row (the MTA's flat
+ * 180 s between 127 and 725) takes the median of its platforms' times. A
+ * forbidden transfer is never touched, and nor is a timed or in-seat one.
  */
+function median(xs: number[]): number {
+  const s = [...xs].sort((a, b) => a - b)
+  const m = s.length >> 1
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2
+}
+
 export function mergeTransfersTxt(
   existing: string | null,
   computed: string,
   stopsTxt?: string | null,
+  stationTimes?: Map<string, number>,
 ): string {
   const parse = (text: string) => {
     const lines = text.split(/\r?\n/).filter(l => l.trim() !== '')
-    if (!lines.length) return { header: '', rows: [] as string[][], raw: [] as string[] }
+    if (!lines.length) return { header: '', rows: [] as string[][], raw: [] as string[], iType: -1, iMin: -1 }
     const header = lines[0]
     const cols = header.split(',').map(c => c.trim().replace(/^\ufeff/, ''))
     const idx = (name: string) => cols.indexOf(name)
     const iFrom = idx('from_stop_id'), iTo = idx('to_stop_id'), iType = idx('transfer_type')
+    const iMin = idx('min_transfer_time')
     const rows: string[][] = []
     const raw: string[] = []
     for (const line of lines.slice(1)) {
@@ -237,7 +255,7 @@ export function mergeTransfersTxt(
       rows.push([cells[iFrom] ?? '', cells[iTo] ?? '', (cells[iType] ?? '').trim()])
       raw.push(line)
     }
-    return { header, rows, raw }
+    return { header, rows, raw, iType, iMin }
   }
 
   if (!existing || existing.trim() === '') return computed
@@ -276,6 +294,26 @@ export function mergeTransfersTxt(
       forbidden.add(`${station(to)}\u0000${station(from)}`)
     }
   })
+
+  if (stationTimes?.size && feed.iMin !== -1 && feed.iType !== -1) {
+    const byStation = new Map<string, number[]>()
+    for (const [key, seconds] of stationTimes) {
+      const [from, to] = key.split('\u0000')
+      const k = `${station(from)}\u0000${station(to)}`
+      byStation.set(k, [...(byStation.get(k) ?? []), seconds])
+    }
+    feed.rows.forEach(([from, to, type], i) => {
+      if (!['', '0', '2'].includes(type) || feed.raw[i].includes('"')) return
+      const exact = stationTimes.get(`${from}\u0000${to}`)
+      const stationLevel = !parent.has(from) && !parent.has(to) ? byStation.get(`${from}\u0000${to}`) : undefined
+      const seconds = exact ?? (stationLevel?.length ? median(stationLevel) : undefined)
+      if (seconds === undefined) return
+      const cells = feed.raw[i].split(',')
+      cells[feed.iType] = '2'
+      cells[feed.iMin] = String(Math.round(seconds))
+      feed.raw[i] = cells.join(',')
+    })
+  }
 
   const added: string[] = []
   const comp = parse(computed)
