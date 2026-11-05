@@ -414,6 +414,16 @@ Everything under `postgres:` in `martin-config.yaml` is queried live, so `parchm
 - The update ran but the extract did not move, so the render was correctly skipped — the log says so.
 - Martin was never restarted after the swap. The rename replaces the directory entry, not the inode Martin already has open, so it goes on serving the old archive. The script restarts Martin unless `BASEMAP_RESTART_MARTIN=0`.
 - The render ran out of disk. planetiler does not fail cleanly when its sort files fill the disk: the job log fills with `ArrayIndexOutOfBoundsException` from `osm_pass2` and ends in a JVM `SIGSEGV`. The render needs room for the new archive beside the data volume's current one, plus tens of gigabytes of sort files for a US extract. Point `BASEMAP_TMP_DIR` at a roomier disk (see [configuration](/self-hosting/configuration#import-pipeline)).
+- The render took the host's memory. A capped render can still push a box that is already full over the edge, and the kernel then kills the largest process, usually MOTIS, over and over until the render ends; `journalctl -k | grep "Out of memory"` shows it. Render somewhere else with `BASEMAP_RENDER=hcloud`.
+
+**A remote basemap render (`BASEMAP_RENDER=hcloud`) fails**
+
+The job log lines tagged `[basemap:hcloud]` say which step stopped. Whatever happens, the current basemap stays in place and the rented server is deleted when the script exits. If the ops container was killed outright, the server outlives it, and the next render deletes it first. Every server and SSH key the render creates carries the label `barrelman-basemap-render`, so `hcloud server list -l barrelman-basemap-render` finds any left behind.
+
+- `needs HCLOUD_TOKEN`: set it in `.env` and recreate `barrelman-ops`, which is the container that reads it.
+- `none of … is available`: every listed type was out of stock in every listed location. Add types or locations to `BASEMAP_HCLOUD_SERVER_TYPES` and `BASEMAP_HCLOUD_LOCATIONS`.
+- `server create failed` with `unauthorized` or `forbidden`: the token is read-only or revoked.
+- `arrived truncated` or `sha256 mismatch`: the connection between the hosts dropped mid-copy. Run it again.
 
 A browser holding day-old tiles looks identical to all four: `/tiles` sends `cache-control: max-age=86400`, so confirm with a hard reload or a direct `curl` before digging.
 

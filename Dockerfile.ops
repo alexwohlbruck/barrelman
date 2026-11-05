@@ -17,8 +17,9 @@ WORKDIR /app
 COPY --from=dockercli /usr/local/bin/docker /usr/local/bin/docker
 
 # osmium (merge) + python + uv (for import-stop-areas.sh's `uv run --with osmium`).
+# openssh-client drives the rented server of render-basemap-hcloud.sh.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      osmium-tool python3 wget curl ca-certificates \
+      osmium-tool python3 wget curl ca-certificates openssh-client \
   && curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh \
   && rm -rf /var/lib/apt/lists/*
 

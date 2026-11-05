@@ -55,6 +55,11 @@ set -euo pipefail
 #                           46 GB of them seven minutes in, and needs more
 #                           memory than a box serving traffic can spare.
 #   BASEMAP_RESTART_MARTIN  restart martin after the swap (default: 1)
+#   BASEMAP_RENDER          where planetiler runs: local (default) or hcloud,
+#                           a Hetzner Cloud server rented for the render and
+#                           deleted after it (needs HCLOUD_TOKEN). A US render
+#                           wants more memory and disk than a box serving
+#                           traffic can spare; see render-basemap-hcloud.sh.
 #   BASEMAP_TMP_DIR         where planetiler sorts its features, as a path the
 #                           Docker daemon can mount (a host path). Default: a
 #                           tmp/ beside the archive. A US render needs tens of
@@ -71,6 +76,11 @@ PLANETILER_IMAGE="${PLANETILER_IMAGE:-ghcr.io/onthegomap/planetiler:latest}"
 PLANETILER_MEMORY="${PLANETILER_MEMORY:-4g}"
 PLANETILER_CONTAINER_MEMORY="${PLANETILER_CONTAINER_MEMORY:-}"
 BASEMAP_MAXZOOM="${BASEMAP_MAXZOOM:-14}"
+BASEMAP_RENDER="${BASEMAP_RENDER:-local}"
+case "$BASEMAP_RENDER" in
+  local|hcloud) ;;
+  *) echo "BASEMAP_RENDER must be local or hcloud, got: ${BASEMAP_RENDER}" >&2; exit 2 ;;
+esac
 case "$BASEMAP_MAXZOOM" in
   14|15) ;;
   *) echo "BASEMAP_MAXZOOM must be 14 or 15 (planetiler renders no deeper), got: ${BASEMAP_MAXZOOM}" >&2; exit 2 ;;
@@ -221,46 +231,56 @@ clean_tmp() {
   docker run --rm "${TMP_ARGS[@]}" "$HELPER_IMAGE" rm -rf "${TMP_PATH}" >/dev/null 2>&1 || true
 }
 
-log "[1/3] Rendering from ${PBF_NAME} to z${BASEMAP_MAXZOOM} (heap ${PLANETILER_MEMORY})..."
-log "      input:  ${IN_DIR}"
-log "      output: ${OUT_DIR}"
+if [ "$BASEMAP_RENDER" = hcloud ]; then
+  log "[1/3] Rendering from ${PBF_NAME} to z${BASEMAP_MAXZOOM} on a rented Hetzner Cloud server..."
+  export IN_DIR OUT_DIR PBF_NAME STAGING_NAME BASEMAP_MAXZOOM PLANETILER_IMAGE HELPER_IMAGE
+  if ! bash "$(dirname "$0")/render-basemap-hcloud.sh"; then
+    log "ERROR: remote render failed — leaving the current basemap in place" >&2
+    io_sh "rm -f /out/${STAGING_NAME}" >/dev/null 2>&1 || true
+    exit 1
+  fi
+else
+  log "[1/3] Rendering from ${PBF_NAME} to z${BASEMAP_MAXZOOM} (heap ${PLANETILER_MEMORY})..."
+  log "      input:  ${IN_DIR}"
+  log "      output: ${OUT_DIR}"
 
-# --download fetches the non-OSM sources planetiler's OpenMapTiles profile needs
-# (water polygons, Natural Earth, lake centerlines). --download-dir keeps them in
-# the volume so that happens once rather than on every nightly run.
-# A cgroup cap, not just a heap cap. The JVM's -Xmx bounds the heap, but the
-# render also holds direct buffers and mmaps its sorted features, so the
-# container's real footprint runs well above the heap. Uncapped, that is charged
-# to the host: a US render on a 16 GB box drove the machine out of memory and the
-# kernel picked the largest RSS to kill — which was MOTIS, not planetiler. The
-# transit engine died for a basemap rebuild, and the render then died too, two
-# and a half hours in. With --memory the kernel reclaims inside this cgroup
-# instead, so an over-large render kills only itself and the services keep
-# serving. Leave unset on a dedicated build host.
-MEM_ARGS=()
-if [ -n "$PLANETILER_CONTAINER_MEMORY" ]; then
-  MEM_ARGS+=(--memory="$PLANETILER_CONTAINER_MEMORY" --memory-swap="$PLANETILER_CONTAINER_MEMORY")
-fi
+  # --download fetches the non-OSM sources planetiler's OpenMapTiles profile needs
+  # (water polygons, Natural Earth, lake centerlines). --download-dir keeps them in
+  # the volume so that happens once rather than on every nightly run.
+  # A cgroup cap, not just a heap cap. The JVM's -Xmx bounds the heap, but the
+  # render also holds direct buffers and mmaps its sorted features, so the
+  # container's real footprint runs well above the heap. Uncapped, that is charged
+  # to the host: a US render on a 16 GB box drove the machine out of memory and the
+  # kernel picked the largest RSS to kill — which was MOTIS, not planetiler. The
+  # transit engine died for a basemap rebuild, and the render then died too, two
+  # and a half hours in. With --memory the kernel reclaims inside this cgroup
+  # instead, so an over-large render kills only itself and the services keep
+  # serving. Leave unset on a dedicated build host.
+  MEM_ARGS=()
+  if [ -n "$PLANETILER_CONTAINER_MEMORY" ]; then
+    MEM_ARGS+=(--memory="$PLANETILER_CONTAINER_MEMORY" --memory-swap="$PLANETILER_CONTAINER_MEMORY")
+  fi
 
-if ! docker run --rm \
-  ${MEM_ARGS[@]+"${MEM_ARGS[@]}"} \
-  -e JAVA_TOOL_OPTIONS="-Xmx${PLANETILER_MEMORY}" \
-  -v "${IN_DIR}:/in:ro" \
-  "${TMP_ARGS[@]}" \
-  "$PLANETILER_IMAGE" \
-  --osm-path="/in/${PBF_NAME}" \
-  --output="/out/${STAGING_NAME}" \
-  --download \
-  --download-dir=/out/sources \
-  --tmpdir="${TMP_PATH}" \
-  --maxzoom="${BASEMAP_MAXZOOM}" \
-  --force; then
-  log "ERROR: planetiler failed — leaving the current basemap in place" >&2
-  io_sh "rm -f /out/${STAGING_NAME}" >/dev/null 2>&1 || true
+  if ! docker run --rm \
+    ${MEM_ARGS[@]+"${MEM_ARGS[@]}"} \
+    -e JAVA_TOOL_OPTIONS="-Xmx${PLANETILER_MEMORY}" \
+    -v "${IN_DIR}:/in:ro" \
+    "${TMP_ARGS[@]}" \
+    "$PLANETILER_IMAGE" \
+    --osm-path="/in/${PBF_NAME}" \
+    --output="/out/${STAGING_NAME}" \
+    --download \
+    --download-dir=/out/sources \
+    --tmpdir="${TMP_PATH}" \
+    --maxzoom="${BASEMAP_MAXZOOM}" \
+    --force; then
+    log "ERROR: planetiler failed — leaving the current basemap in place" >&2
+    io_sh "rm -f /out/${STAGING_NAME}" >/dev/null 2>&1 || true
+    clean_tmp
+    exit 1
+  fi
   clean_tmp
-  exit 1
 fi
-clean_tmp
 
 NEW_SIZE=$(io_sh "stat -c %s /out/${STAGING_NAME} 2>/dev/null || echo 0" | tr -cd '0-9')
 if [ "${NEW_SIZE:-0}" -eq 0 ]; then
@@ -297,13 +317,19 @@ if [ "${BASEMAP_RESTART_MARTIN:-1}" = "1" ]; then
   log "[3/3] Restarting ${CONTAINER} to pick up the new archive..."
   docker restart "$CONTAINER" >/dev/null
 
-  sleep 3
   # Probe by container name: this runs inside barrelman-ops, where :3000 would be
   # ops itself. /health is the same endpoint src/services/health.service.ts uses.
-  # `-w` already prints 000 on a connection error.
-  code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "http://${CONTAINER}:3000/health" 2>/dev/null) || true
+  # `-w` already prints 000 on a connection error. Polled rather than asked once:
+  # Martin takes more than a few seconds to open a 20 GB archive, and a single
+  # probe three seconds in reported every z15 swap as a failed restart.
+  code=000
+  for _ in $(seq 1 30); do
+    sleep 2
+    code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "http://${CONTAINER}:3000/health" 2>/dev/null) || true
+    [ "${code:-000}" != "000" ] && break
+  done
   if [ "${code:-000}" = "000" ]; then
-    log "WARNING: ${CONTAINER} is not answering after the restart — check 'docker logs ${CONTAINER}'"
+    log "WARNING: ${CONTAINER} is not answering a minute after the restart — check 'docker logs ${CONTAINER}'"
   else
     log "martin responding: HTTP ${code}"
   fi
