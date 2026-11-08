@@ -42,7 +42,7 @@ import { refreshDirectionLabels } from '../src/services/station-labels.service'
 import { storeAgencyStationTimes } from '../src/services/station-paths.service'
 import { agencyStationTimes } from '../src/lib/station-graph/agency'
 import { SOURCES, type PathSource } from '../src/lib/station-graph/types'
-import { FARE_GATE_DELAY_S } from '../src/lib/station-graph/guidance'
+import { EXTRA_FARE_S, FARE_GATE_DELAY_S } from '../src/lib/station-graph/guidance'
 
 /**
  * A feed with no fixed-route timetable for the router: GTFS-Flex-only feeds,
@@ -235,9 +235,9 @@ export async function injectTransfersTxt(
  *
  * `railStops` are the stops station paths cover. A computed street walk
  * between two of them that neither the station paths nor the feed connect
- * leaves fare control, so it pays the fare-gate delay twice. When the feed
- * files transfers at both stations and links other stations, it is dropped:
- * otherwise it ties with the in-system transfer one stop on and wins.
+ * leaves fare control, so it pays the fare-gate delay twice and a second
+ * fare, priced as EXTRA_FARE_S. A smaller cost loses nothing: the walk still
+ * catches the same train as the in-system transfer a stop later, and wins the tie.
  */
 export interface StationTime {
   seconds: number
@@ -329,16 +329,11 @@ export function mergeTransfersTxt(
   const known = new Set<string>()
   const forbidden = new Set<string>()
   const stated = new Set<string>()
-  const filed = new Set<string>()
-  let linksStations = false
   feed.rows.forEach(([from, to, type]) => {
     known.add(`${from}\u0000${to}`)
     known.add(`${to}\u0000${from}`)
     stated.add(`${station(from)}\u0000${station(to)}`)
     stated.add(`${station(to)}\u0000${station(from)}`)
-    filed.add(station(from))
-    filed.add(station(to))
-    if (station(from) !== station(to)) linksStations = true
     if (type === TRANSFER_FORBIDDEN) {
       // Keyed on stations, so one row covers every platform under it.
       forbidden.add(`${station(from)}\u0000${station(to)}`)
@@ -389,8 +384,6 @@ export function mergeTransfersTxt(
     if (forbidden.has(`${station(from)}\u0000${station(to)}`)) return
     const outOfSystem = !!railStops?.has(from) && railStops.has(to) && !stationTimes?.has(key)
       && !stated.has(`${station(from)}\u0000${station(to)}`)
-    // The feed files transfers at both stations and links others, so its silence on this pair is a no.
-    if (outOfSystem && linksStations && filed.has(station(from)) && filed.has(station(to))) return
     known.add(key)
     const agency = agencyTimed.get(`${station(from)}\u0000${station(to)}`)
     const walked = stationTimes?.get(key)
@@ -398,8 +391,8 @@ export function mergeTransfersTxt(
     if (agency !== undefined && !(walked && WALKED.has(walked.source)) && comp.iMin !== -1) {
       cells[comp.iMin] = String(agency)
     } else if (outOfSystem && comp.iMin !== -1 && /^\d+$/.test(cells[comp.iMin] ?? '')) {
-      // A street walk between rail stations the feed doesn't connect: tap out, then in.
-      cells[comp.iMin] = String(Number(cells[comp.iMin]) + 2 * FARE_GATE_DELAY_S)
+      // Tapping out and back in costs the gates twice and a second fare.
+      cells[comp.iMin] = String(Number(cells[comp.iMin]) + 2 * FARE_GATE_DELAY_S + EXTRA_FARE_S)
     }
     added.push(cells.join(','))
   })

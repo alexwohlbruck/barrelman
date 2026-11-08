@@ -10,6 +10,16 @@ import { SOURCES, type PathSource, type PathStep, type StationPath, type StepTyp
 /** Seconds to pass a fare gate once, tapping in or out. */
 export const FARE_GATE_DELAY_S = 10
 
+/**
+ * How much longer a trip may take before a saved fare stops being worth it.
+ *
+ * A rider asked for directions, not for the cheapest possible routing, so a
+ * one-fare trip that takes half an hour longer is not the answer to their
+ * question. Ten minutes is about where the trade turns for a city fare:
+ * below it, most riders take the cheaper trip; above it, they do not.
+ */
+export const EXTRA_FARE_S = 10 * 60
+
 /** Straight line to street walk, for ranking entrances before the street router has a say. */
 export const STREET_DETOUR = 1.3
 

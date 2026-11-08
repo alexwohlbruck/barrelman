@@ -1072,6 +1072,13 @@ describe('rankItineraries', () => {
     expect(rankItineraries([early, late], 2, true)[0]).toBe(late)
   })
 
+  test('prefers less walking when they arrive together', () => {
+    // G to 21 St, walk to Hunters Point Av, 7 — against staying on to Court Sq.
+    const walked = { ...itin(0, 30, { trip: 'walk' }), walkTime: 205 }
+    const inSystem = { ...itin(0, 30, { trip: 'court-sq' }), walkTime: 105 }
+    expect(rankItineraries([walked, inSystem], 2)[0]).toBe(inSystem)
+  })
+
   test('prefers the one-fare trip when they arrive together', () => {
     // Borough Hall -> walk -> Jay St costs two fares and takes exactly as
     // long as the in-system 5 -> R -> F.

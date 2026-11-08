@@ -24,6 +24,7 @@ import {
 import { attributionFor, excludedFeedIds, servableOnly } from './feed-license.service'
 import { directionLabelsFor, stopKey } from './station-labels.service'
 import { settleTransferWalks } from '../lib/transfer-walks'
+import { EXTRA_FARE_S } from '../lib/station-graph/guidance'
 import { enrichStationGuidance, type BoardingPosition, type StationAccessChoice, type TransitTransfer } from './station-guidance.service'
 import type { FeedAttribution } from '../lib/feed-license'
 
@@ -625,16 +626,6 @@ const STATIONS_PER_END = 4
 const MIN_STATION_RADIUS = 500
 const MAX_STATION_RADIUS = 2500
 
-/**
- * How much longer a trip may take before a saved fare stops being worth it.
- *
- * A rider asked for directions, not for the cheapest possible routing, so a
- * one-fare trip that takes half an hour longer is not the answer to their
- * question. Ten minutes is about where the trade turns for a city fare:
- * below it, most riders take the cheaper trip; above it, they do not.
- */
-const FARE_SAVING_TOLERANCE_SEC = 10 * 60
-
 /** The parameters every MOTIS plan search shares, whatever its places are. */
 function planParams(request: IntermodalRouteRequest, fromPlace: string, toPlace: string): URLSearchParams {
   const params = new URLSearchParams({
@@ -1047,7 +1038,7 @@ function rideSignature(it: TransitItinerary): string {
  * departure. Ranking by duration instead let later trains with slightly
  * quicker rides fill the list and push out the first train.
  *
- * Each extra fare payment counts as FARE_SAVING_TOLERANCE_SEC, so a one-fare
+ * Each extra fare payment counts as EXTRA_FARE_S, so a one-fare
  * trip beats a two-fare one that is less than ten minutes better. MOTIS is
  * Pareto over time and transfers, and an out-of-system walk is fewer
  * transfers, so without this it ranks a two-fare walk-between-stations trip
@@ -1055,6 +1046,8 @@ function rideSignature(it: TransitItinerary): string {
  * counts as one payment: a gap in fare coverage is not evidence of a
  * price, and a fixed value keeps the ordering consistent, which comparing
  * fares only when both are known did not.
+ *
+ * Trips that arrive together rank by walking, then by time on board.
  *
  * The same ride reached from different stations (the station fan-out finds
  * it once per pair) is kept once, in its best-ranked form.
@@ -1069,11 +1062,11 @@ export function rankItineraries(
     const anchor = arriveBy
       ? -new Date(it.startTime).getTime()
       : new Date(it.endTime).getTime()
-    return anchor / 1000 + extraFares * FARE_SAVING_TOLERANCE_SEC
+    return anchor / 1000 + extraFares * EXTRA_FARE_S
   }
   const ranked = itineraries
     .map((it) => ({ it, cost: cost(it) }))
-    .sort((a, b) => a.cost - b.cost || a.it.duration - b.it.duration)
+    .sort((a, b) => a.cost - b.cost || a.it.walkTime - b.it.walkTime || a.it.duration - b.it.duration)
 
   const seen = new Set<string>()
   const kept: TransitItinerary[] = []
