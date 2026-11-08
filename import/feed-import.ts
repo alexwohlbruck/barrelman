@@ -235,7 +235,9 @@ export async function injectTransfersTxt(
  *
  * `railStops` are the stops station paths cover. A computed street walk
  * between two of them that neither the station paths nor the feed connect
- * leaves fare control, so it pays the fare-gate delay twice.
+ * leaves fare control, so it pays the fare-gate delay twice. When the feed
+ * files transfers at both stations and links other stations, it is dropped:
+ * otherwise it ties with the in-system transfer one stop on and wins.
  */
 export interface StationTime {
   seconds: number
@@ -327,11 +329,16 @@ export function mergeTransfersTxt(
   const known = new Set<string>()
   const forbidden = new Set<string>()
   const stated = new Set<string>()
+  const filed = new Set<string>()
+  let linksStations = false
   feed.rows.forEach(([from, to, type]) => {
     known.add(`${from}\u0000${to}`)
     known.add(`${to}\u0000${from}`)
     stated.add(`${station(from)}\u0000${station(to)}`)
     stated.add(`${station(to)}\u0000${station(from)}`)
+    filed.add(station(from))
+    filed.add(station(to))
+    if (station(from) !== station(to)) linksStations = true
     if (type === TRANSFER_FORBIDDEN) {
       // Keyed on stations, so one row covers every platform under it.
       forbidden.add(`${station(from)}\u0000${station(to)}`)
@@ -380,16 +387,17 @@ export function mergeTransfersTxt(
     const key = `${from}\u0000${to}`
     if (!from || !to || known.has(key)) return
     if (forbidden.has(`${station(from)}\u0000${station(to)}`)) return
+    const outOfSystem = !!railStops?.has(from) && railStops.has(to) && !stationTimes?.has(key)
+      && !stated.has(`${station(from)}\u0000${station(to)}`)
+    // The feed files transfers at both stations and links others, so its silence on this pair is a no.
+    if (outOfSystem && linksStations && filed.has(station(from)) && filed.has(station(to))) return
     known.add(key)
     const agency = agencyTimed.get(`${station(from)}\u0000${station(to)}`)
     const walked = stationTimes?.get(key)
     const cells = comp.raw[i].split(',')
     if (agency !== undefined && !(walked && WALKED.has(walked.source)) && comp.iMin !== -1) {
       cells[comp.iMin] = String(agency)
-    } else if (
-      railStops?.has(from) && railStops.has(to) && !stationTimes?.has(key) && comp.iMin !== -1
-      && !stated.has(`${station(from)}\u0000${station(to)}`) && /^\d+$/.test(cells[comp.iMin] ?? '')
-    ) {
+    } else if (outOfSystem && comp.iMin !== -1 && /^\d+$/.test(cells[comp.iMin] ?? '')) {
       // A street walk between rail stations the feed doesn't connect: tap out, then in.
       cells[comp.iMin] = String(Number(cells[comp.iMin]) + 2 * FARE_GATE_DELAY_S)
     }

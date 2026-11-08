@@ -239,3 +239,40 @@ describe('mergeTransfersTxt — fare gates on street transfers', () => {
     expect(merged).toContain('423N,A41N,2,221')
   })
 })
+
+describe('mergeTransfersTxt — stations the feed files transfers for', () => {
+  // The G meets the 7 in-system at Court Sq (G22/719). 21 St (G24) and
+  // Hunters Point Av (720) are 200m apart, but the MTA files no transfer
+  // between them because the walk leaves fare control.
+  const STOPS =
+    'stop_id,stop_name,stop_lat,stop_lon,location_type,parent_station\n' +
+    'G22,Court Sq,40.746554,-73.943832,1,\n' +
+    'G22N,Court Sq,40.746554,-73.943832,0,G22\n' +
+    '719,Court Sq,40.747023,-73.945264,1,\n' +
+    '719N,Court Sq,40.747023,-73.945264,0,719\n' +
+    'G24,21 St,40.744065,-73.949724,1,\n' +
+    'G24N,21 St,40.744065,-73.949724,0,G24\n' +
+    '720,Hunters Point Av,40.742216,-73.948916,1,\n' +
+    '720N,Hunters Point Av,40.742216,-73.948916,0,720\n' +
+    'B1,Bus stop,40.7440,-73.9495,0,\n'
+  const rail = new Set(['G22N', '719N', 'G24N', '720N'])
+  const MTA = `${HEADER}\nG22,719,2,180\n719,G22,2,180\nG24,G24,2,180\n720,720,2,180\n`
+
+  it('drops a walk between two filed stations it never links', () => {
+    const merged = mergeTransfersTxt(MTA, `${HEADER}\nG24N,720N,2,205\n720N,G24N,2,205\n`, STOPS, new Map(), rail)
+    expect(merged).not.toContain('G24N,720N')
+    expect(merged).not.toContain('720N,G24N')
+  })
+
+  it('keeps the walks it does link, and walks to unfiled stops', () => {
+    const merged = mergeTransfersTxt(MTA, `${HEADER}\nG22N,719N,2,105\nG24N,B1,2,60\n`, STOPS, new Map(), rail)
+    expect(merged).toContain('G22N,719N,2,105')
+    expect(merged).toContain('G24N,B1,2,60')
+  })
+
+  it('only charges the gates when the feed links no stations at all', () => {
+    const selfOnly = `${HEADER}\nG24,G24,2,180\n720,720,2,180\n`
+    const merged = mergeTransfersTxt(selfOnly, `${HEADER}\nG24N,720N,2,205\n`, STOPS, new Map(), rail)
+    expect(merged).toContain('G24N,720N,2,225')
+  })
+})

@@ -68,6 +68,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ### Fixed
 
+* Transit plans no longer change trains through an out-of-system walk when the agency's own transfer is a stop away. A computed street walk between two rail stations is dropped when the feed files transfers at both and connects other stations, so its silence on that pair means no. In New York the G now meets the 7 at Court Sq rather than walking from 21 St to Hunters Point Av. Feeds that file no station-to-station transfers keep the walk with the fare-gate delay. **Re-run the GTFS import** to rewrite `transfers.txt`.
+
 * A transfer's walk leg in `/transit/intermodal-route` lasts as long as the walk. It used to include the planner's per-interchange margin (3 minutes by default), so a 90-second platform change read as a 5-minute walk; the margin now shows as waiting.
 
 * A successful request now clears the penalty-box strikes of the signed-in caller who made it. It used to clear a key the strikes were never recorded under, so they only decayed after ten minutes, and a client that failed now and then between successes could still end up boxed.
