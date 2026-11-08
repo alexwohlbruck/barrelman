@@ -531,12 +531,13 @@ a zoom floor: z8 went from 83.6 MB in 10.1 s to **47 KB in 0.07 s**.
 
 ### Map detail sources
 
-Seventeen sources carry detail that a standard OpenMapTiles basemap has no schema
-for, so a client drawing them has nowhere else to get them:
+Nineteen sources carry detail that a standard OpenMapTiles basemap has no schema
+or zoom range for, so a client drawing them has nowhere else to get them:
 
 | Source | Geometry | Zooms | What it carries |
 |---|---|---|---|
 | `parking_areas` | polygon | 13–16 | Parking surfaces, with the raw `parking` tag so a client can drop multi-storey and underground |
+| `neighbourhood_labels` | point | 10–13 | `place=quarter` and `place=neighbourhood` label nodes, for the zooms below z14 where the basemap carries none. `class` is the `place` value; `tier` ranks prominence: `0` a quarter, `1` a neighbourhood with a Wikidata item, `2` any other |
 | `street_trees` | point | 16–17 | Individual trees, with `leaf_type`, genus/species, height and trunk girth where a surveyor recorded them |
 | `tree_rows` | line | 16–17 | Tree-lined streets, which OSM maps as one line rather than a tree per node |
 | `street_furniture` | point | 17 | Benches, bins, recycling, picnic tables, bike racks, drinking water, fountains, street lamps, bollards and billboards. `kind` names the object and `direction` is the bearing it faces. A fountain in a pond, lake, reservoir or lagoon (`water=*`, or `landuse=reservoir`), or tagged `fountain=nozzle`, is `fountain_jet`; untyped water keeps it a `fountain` |

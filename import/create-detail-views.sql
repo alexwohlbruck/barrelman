@@ -64,6 +64,25 @@ FROM geo_places
 WHERE geom_type = 'area'
   AND tags->>'amenity' = 'parking';
 
+-- Neighbourhood labels below z14, where the OpenMapTiles basemap has none.
+-- Label nodes only, as the basemap uses: area neighbourhoods are mostly
+-- historic districts and subdivisions. `tier` orders them by prominence:
+-- 0 a quarter, 1 a neighbourhood with a Wikidata item, 2 any other.
+DROP VIEW IF EXISTS neighbourhood_labels CASCADE;
+CREATE VIEW neighbourhood_labels AS
+SELECT (osm_id * 4 + CASE osm_type WHEN 'N' THEN 0 WHEN 'W' THEN 1 ELSE 2 END) as fid,
+       id, centroid, name,
+       tags->>'place' as class,
+       CASE
+         WHEN tags->>'place' = 'quarter' THEN 0
+         WHEN tags ? 'wikidata' THEN 1
+         ELSE 2
+       END as tier
+FROM geo_places
+WHERE geom_type = 'point'
+  AND tags->>'place' IN ('quarter', 'neighbourhood')
+  AND name IS NOT NULL;
+
 -- Street trees: one node per tree, with whatever the surveyor recorded
 DROP VIEW IF EXISTS street_trees CASCADE;
 CREATE VIEW street_trees AS
