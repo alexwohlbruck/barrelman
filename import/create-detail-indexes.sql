@@ -33,6 +33,10 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS geo_places_parking_geom_idx
   ON geo_places USING gist (geom)
   WHERE geom_type = 'area' AND tags->>'amenity' = 'parking';
 
+CREATE INDEX CONCURRENTLY IF NOT EXISTS geo_places_neighbourhood_centroid_idx
+  ON geo_places USING gist (centroid)
+  WHERE geom_type = 'point' AND tags->>'place' IN ('quarter', 'neighbourhood') AND name IS NOT NULL;
+
 CREATE INDEX CONCURRENTLY IF NOT EXISTS geo_places_trees_centroid_idx
   ON geo_places USING gist (centroid)
   WHERE geom_type = 'point' AND tags->>'natural' = 'tree';
