@@ -24,6 +24,7 @@ import {
   computeAllTransfers,
   generateTransfersTxt,
   transferKey,
+  gatedStops,
   generateMotisConfig,
   sanitizeGtfsZip,
   loadFeedIdentities,
@@ -451,6 +452,11 @@ async function main() {
         console.warn(`  ! station transfer times: ${(err as Error).message}`)
         return [] as StationTransfer[]
       })
+    const gated = await gatedStops(feedFiles.map((f) => feedIdOf.get(f) ?? basename(f, '.zip')))
+      .catch((err) => {
+        console.warn(`  ! gated stops: ${(err as Error).message}`)
+        return new Map<string, Set<string>>()
+      })
     if (station.length) {
       const bySource = new Map<string, number>()
       for (const s of station) bySource.set(s.source, (bySource.get(s.source) ?? 0) + 1)
@@ -467,7 +473,7 @@ async function main() {
         const transfersTxt = generateTransfersTxt(transfers, feedId, own)
         const transferCount = transfersTxt.trim().split('\n').length - 1 // minus header
         try {
-          const rail = new Set(own.flatMap((s) => [s.fromStopId, s.toStopId]))
+          const rail = new Set([...own.flatMap((s) => [s.fromStopId, s.toStopId]), ...(gated.get(feedId) ?? [])])
           await injectTransfersTxt(filepath, transfersTxt, new Map(own.map((s) => [transferKey(s.fromStopId, s.toStopId), { seconds: s.seconds, source: s.source }])), rail)
           console.log(`  ✓ Injected ${transferCount} transfers into ${basename(filepath)}`)
         } catch (err) {

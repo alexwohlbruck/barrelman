@@ -235,8 +235,8 @@ export async function injectTransfersTxt(
  * platform rows under it take the agency's time too. A forbidden transfer is
  * never touched, and nor is a timed or in-seat one.
  *
- * `railStops` are the stops station paths cover. A computed street walk
- * between two of them that neither the station paths nor the feed connect
+ * `railStops` are the stops served by gated lines or covered by station paths.
+ * A computed street walk between two of them that neither the station paths nor the feed connect
  * leaves fare control, so it pays the fare-gate delay twice and, unless
  * `reentryFree`, a second fare priced as EXTRA_FARE_S. A smaller cost loses
  * nothing: the walk catches the same train as the in-system transfer a stop
