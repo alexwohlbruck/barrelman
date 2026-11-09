@@ -24,6 +24,7 @@ import {
 import { attributionFor, excludedFeedIds, servableOnly } from './feed-license.service'
 import { directionLabelsFor, stopKey } from './station-labels.service'
 import { settleTransferWalks } from '../lib/transfer-walks'
+import { GATED_MODES, relocateTransfer, spliceLegs, type Trip } from '../lib/transfer-relocation'
 import { EXTRA_FARE_S } from '../lib/station-graph/guidance'
 import { enrichStationGuidance, type BoardingPosition, type StationAccessChoice, type TransitTransfer } from './station-guidance.service'
 import type { FeedAttribution } from '../lib/feed-license'
@@ -1101,6 +1102,8 @@ export async function getIntermodalRoute(
     : planFromCoordinates
 
   const result = await plan(request, fetchFn)
+  const padSeconds = (request.additionalTransferTime ?? DEFAULT_TRANSFER_PAD_MIN) * 60
+  await relocateOutOfSystemTransfers(result.itineraries, padSeconds, fetchFn)
   result.itineraries = rankItineraries(
     await withoutExcludedFeeds(result.itineraries),
     request.numItineraries ?? 5,
@@ -1118,7 +1121,6 @@ export async function getIntermodalRoute(
     inSystemRoutes,
     oneFare: (a, b) => oneFare(a as TransitLeg, b as TransitLeg),
   }).catch((err) => console.warn(`[transit] station guidance: ${(err as Error).message}`))
-  const padSeconds = (request.additionalTransferTime ?? DEFAULT_TRANSFER_PAD_MIN) * 60
   for (const it of result.itineraries) settleTransferWalks(it, padSeconds)
 
   result.attribution = await itineraryAttribution(result.itineraries)
@@ -1680,6 +1682,116 @@ async function enrichInterchangeableRoutes(itineraries: TransitItinerary[]): Pro
   }
 
   await Promise.all(tasks)
+}
+
+/** A MOTIS trip's every stop and its whole shape; null when MOTIS can't say. */
+async function fetchTrip(tripId: string, fetchFn: FetchFn): Promise<Trip | null> {
+  try {
+    const response = await fetchFn(`${getMotisUrl()}/api/v1/trip?${new URLSearchParams({ tripId })}`, {
+      signal: AbortSignal.timeout(5000),
+    })
+    if (!response.ok) return null
+    const body = await response.json() as { legs?: any[] }
+    const raw = body.legs?.find((l) => l.tripId === tripId) ?? body.legs?.[0]
+    if (!raw) return null
+    const leg = adaptLeg(raw)
+    return { stops: [leg.from, ...(leg.intermediateStops ?? []), leg.to], shape: leg.geometry?.coordinates }
+  } catch {
+    return null
+  }
+}
+
+/**
+ * The transfers a feed files inside fare control among some of its stops,
+ * matched through their stations either way round, and each stop's station.
+ */
+async function filedTransfers(feedId: string, stopIds: string[]) {
+  const rows = (await db.execute(sql`
+    WITH s AS (
+      SELECT stop_id, COALESCE(NULLIF(parent_station, ''), stop_id) AS station
+      FROM gtfs_stops
+      WHERE feed_id = ${feedId} AND stop_id IN (${sql.join(stopIds.map((id) => sql`${id}`), sql`, `)})
+    ),
+    t AS (
+      SELECT from_stop_id, to_stop_id, COALESCE(min_transfer_time, 0) AS seconds
+      FROM gtfs_transfers
+      WHERE feed_id = ${feedId} AND COALESCE(transfer_type, 0) IN (0, 2)
+    )
+    SELECT a.stop_id AS a, a.station, b.stop_id AS b, MIN(t.seconds) AS seconds
+    FROM s a
+    LEFT JOIN s b ON b.stop_id <> a.stop_id
+    LEFT JOIN t ON (t.from_stop_id IN (a.stop_id, a.station) AND t.to_stop_id IN (b.stop_id, b.station))
+      OR (t.from_stop_id IN (b.stop_id, b.station) AND t.to_stop_id IN (a.stop_id, a.station))
+    GROUP BY a.stop_id, a.station, b.stop_id
+  `)) as Array<{ a: string; station: string; b: string | null; seconds: number | null }>
+  const station = new Map<string, string>()
+  const seconds = new Map<string, number>()
+  for (const r of rows) {
+    station.set(r.a, r.station)
+    if (r.b && r.seconds !== null) seconds.set(`${r.a}\u0000${r.b}`, Number(r.seconds))
+  }
+  return {
+    station: (id: string) => station.get(id) ?? id,
+    link: (a: string, b: string) => seconds.get(`${a}\u0000${b}`) ?? null,
+  }
+}
+
+/**
+ * Move each change made by walking between two gated stations the agency
+ * doesn't connect onto an in-system change the same two trains make, where
+ * one exists. See relocateTransfer.
+ */
+async function relocateOutOfSystemTransfers(
+  itineraries: TransitItinerary[],
+  padSeconds: number,
+  fetchFn: FetchFn,
+): Promise<void> {
+  const raw = (id?: string) => (id ? splitMotisStopId(id).stopId : '')
+  const changes = itineraries.flatMap((it) => it.legs.flatMap((first, i) => {
+    const k = it.legs.findIndex((l, n) => n > i && l.transitLeg)
+    const second = it.legs[k]
+    if (!first.transitLeg || !second || !it.legs.slice(i + 1, k).every((l) => l.mode === 'WALK')) return []
+    if (!GATED_MODES.has(first.mode) || !GATED_MODES.has(second.mode)) return []
+    if (!first.tripId || !second.tripId || !first.to.stopId || !second.from.stopId) return []
+    const feedId = splitMotisStopId(first.to.stopId).feedId
+    if (!feedId || splitMotisStopId(second.from.stopId).feedId !== feedId) return []
+    return [{ it, first, second, feedId, from: raw(first.to.stopId), to: raw(second.from.stopId) }]
+  }))
+  if (!changes.length) return
+
+  const byFeed = <T extends { feedId: string }>(xs: T[]) => {
+    const groups = new Map<string, T[]>()
+    for (const x of xs) groups.set(x.feedId, [...(groups.get(x.feedId) ?? []), x])
+    return groups
+  }
+  const outside = (await Promise.all([...byFeed(changes)].map(async ([feedId, cs]) => {
+    const filed = await filedTransfers(feedId, [...new Set(cs.flatMap((c) => [c.from, c.to]))])
+    return cs.filter((c) => filed.station(c.from) !== filed.station(c.to) && filed.link(c.from, c.to) === null)
+  }))).flat()
+  if (!outside.length) return
+
+  const trips = new Map<string, Promise<Trip | null>>()
+  const trip = (id: string) => {
+    if (!trips.has(id)) trips.set(id, fetchTrip(id, fetchFn))
+    return trips.get(id)!
+  }
+  const fetched = await Promise.all(outside.map(async (c) => ({ ...c, a: await trip(c.first.tripId!), b: await trip(c.second.tripId!) })))
+  const ready = fetched.filter((c): c is typeof c & { a: Trip; b: Trip } => !!c.a && !!c.b)
+
+  await Promise.all([...byFeed(ready)].map(async ([feedId, cs]) => {
+    const stops = new Set(cs.flatMap((c) => [...c.a.stops, ...c.b.stops].map((s) => raw(s.stopId)).filter(Boolean)))
+    const filed = await filedTransfers(feedId, [...stops])
+    for (const c of cs) {
+      const legs = relocateTransfer(c.first, c.second, c.a, c.b, (x, y) => filed.link(raw(x), raw(y)), padSeconds)
+      if (!legs) continue
+      const [before, walk, after] = legs
+      for (const [old, now] of [[c.first, before], [c.second, after]] as const) {
+        const group = fareGroupOf.get(old)
+        if (group !== undefined) fareGroupOf.set(now, group)
+      }
+      spliceLegs(c.it, c.it.legs.indexOf(c.first), c.it.legs.indexOf(c.second), [before, walk as TransitLeg, after])
+    }
+  })).catch((err) => console.warn(`[transit] transfer relocation: ${(err as Error).message}`))
 }
 
 /** Lines reachable from a stop inside fare control, as MOTIS route ids. */
