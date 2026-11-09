@@ -1072,6 +1072,32 @@ describe('rankItineraries', () => {
     expect(rankItineraries([early, late], 2, true)[0]).toBe(late)
   })
 
+  test('prefers changing inside the gates when they arrive together', () => {
+    const outside = itin(0, 30, { trip: 'queensboro-plaza' })
+    const inside = itin(0, 30, { trip: 'court-sq' })
+    expect(rankItineraries([outside, inside], 2, false, new Map([[outside, { changes: 1, fares: 0 }]]))[0]).toBe(inside)
+  })
+
+  test('prices an unpriced change outside the gates as a second fare', () => {
+    // 21 St -> walk -> Hunters Point Av, with no fare data for the MTA.
+    const walked = itin(0, 25, { trip: 'walk' })
+    const inSystem = itin(0, 30, { trip: 'court-sq' })
+    expect(rankItineraries([walked, inSystem], 1, false, new Map([[walked, { changes: 1, fares: 1 }]]))[0]).toBe(inSystem)
+    expect(rankItineraries([walked, inSystem], 1, false, new Map([[walked, { changes: 1, fares: 0 }]]))[0]).toBe(walked)
+  })
+
+  test('prefers less walking when they arrive together', () => {
+    // G to 21 St, walk to Hunters Point Av, 7 — against staying on to Court Sq.
+    const withWalk = (trip: string, seconds: number) => {
+      const it = itin(0, 30, { trip })
+      it.legs.push({ ...it.legs[0], mode: 'WALK', transitLeg: false, tripId: undefined, duration: seconds })
+      return it
+    }
+    const walked = withWalk('walk', 205)
+    const inSystem = withWalk('court-sq', 105)
+    expect(rankItineraries([walked, inSystem], 2)[0]).toBe(inSystem)
+  })
+
   test('prefers the one-fare trip when they arrive together', () => {
     // Borough Hall -> walk -> Jay St costs two fares and takes exactly as
     // long as the in-system 5 -> R -> F.

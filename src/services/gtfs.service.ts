@@ -33,6 +33,7 @@ import { resolveRegions } from '../config/regions'
 import { selectRtUrls } from './rt-url-selection'
 import { envRaw } from '../config/env'
 import { parseTransitlandLicense, licenseAnswer, licensePolicy, type FeedLicense } from '../lib/feed-license'
+import { isGatedRouteType } from '../lib/gtfs-modes'
 
 // ── Types ───────────────────────────────────────────────────────────
 
@@ -1894,6 +1895,24 @@ export const transferKey = (from: string, to: string) => `${from}\u0000${to}`
  * Format: from_stop_id,to_stop_id,transfer_type,min_transfer_time
  * transfer_type=2 means timed transfer with min_transfer_time specified.
  */
+/** Each feed's stops served by a gated line (see isGatedRouteType). */
+export async function gatedStops(feedIds: string[]): Promise<Map<string, Set<string>>> {
+  const out = new Map<string, Set<string>>()
+  if (!feedIds.length) return out
+  const rows = (await db.execute(sql`
+    SELECT DISTINCT sr.feed_id, sr.stop_id, r.route_type
+    FROM gtfs_stop_routes sr
+    JOIN gtfs_routes r ON r.feed_id = sr.feed_id AND r.route_id = sr.route_id
+    WHERE sr.feed_id IN (${sql.join(feedIds.map((id) => sql`${id}`), sql`, `)})
+  `)) as Array<{ feed_id: string; stop_id: string; route_type: number }>
+  for (const r of rows) {
+    if (!isGatedRouteType(r.route_type)) continue
+    if (!out.has(r.feed_id)) out.set(r.feed_id, new Set())
+    out.get(r.feed_id)!.add(r.stop_id)
+  }
+  return out
+}
+
 export function generateTransfersTxt(
   transfers: ComputedTransfer[],
   feedId?: string,
