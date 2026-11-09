@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { flatTransferTime, mergeTransfersTxt, type StationTime } from './feed-import'
+import { flatTransferTime, freeReentry, mergeTransfersTxt, type StationTime } from './feed-import'
 
 const HEADER = 'from_stop_id,to_stop_id,transfer_type,min_transfer_time'
 
@@ -264,6 +264,11 @@ describe('mergeTransfersTxt — out-of-system walks lose to the in-system change
     expect(Number(minTimes(merged)['G24N>720N'])).toBeGreaterThan(8 * 60)
   })
 
+  it('charges only the gates where the fare covers re-entry', () => {
+    const merged = mergeTransfersTxt(MTA, `${HEADER}\nG24N,720N,2,205\n`, STOPS, new Map(), rail, true)
+    expect(merged).toContain('G24N,720N,2,225')
+  })
+
   it('leaves the in-system change at its own time', () => {
     const merged = mergeTransfersTxt(MTA, `${HEADER}\nG22N,719N,2,105\n`, STOPS, new Map(), rail)
     expect(merged).toContain('G22N,719N,2,105')
@@ -278,3 +283,23 @@ function minTimes(text: string): Record<string, string> {
   }
   return out
 }
+
+describe('freeReentry', () => {
+  const ATTRS = 'fare_id,price,currency_type,payment_method,transfers,transfer_duration'
+
+  it('reads the base v1 fare\'s transfer allowance', () => {
+    expect(freeReentry(`${ATTRS}\nadult,2.50,USD,1,,5400\n`, null)).toBe(true)
+    expect(freeReentry(`${ATTRS}\nadult,2.50,USD,1,1,7200\n`, null)).toBe(true)
+    expect(freeReentry(`${ATTRS}\nadult,2.50,USD,1,0,\n`, null)).toBe(false)
+  })
+
+  it('treats a v2 transfer rule with no product as free', () => {
+    const rules = 'from_leg_group_id,to_leg_group_id,transfer_count,duration_limit,duration_limit_type,fare_transfer_type,fare_product_id'
+    expect(freeReentry(null, `${rules}\nlg,lg,1,7200,1,0,\n`)).toBe(true)
+    expect(freeReentry(null, `${rules}\nlg,lg,1,7200,1,0,fp_transfer\n`)).toBe(false)
+  })
+
+  it('assumes a second fare when the feed publishes none', () => {
+    expect(freeReentry(null, null)).toBe(false)
+  })
+})

@@ -68,7 +68,7 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ### Fixed
 
-* Transit plans no longer leave the station and pay again to change trains when the in-system transfer gets you there just as fast. A street walk between two rail stations the feed doesn't connect now costs the fare gates twice plus ten minutes for the second fare, so it's only used when it saves more than that. In New York the G now meets the 7 at Court Sq, not by walking from 21 St to Hunters Point Av. Trips arriving at the same time are ordered by how much they walk. **Re-run the GTFS import** to rewrite `transfers.txt`.
+* Transit plans no longer leave the station and pay again to change trains when the in-system transfer gets you there just as fast. A street walk between two rail stations the feed doesn't connect now costs the fare gates twice plus ten minutes for the second fare, so it's only used when it saves more than that. Where the feed's own fares let riders back in free (a v1 fare with transfers, or a free v2 transfer rule), only the gates count. Free out-of-system transfers the agency lists in `transfers.txt` keep the agency's time. In New York the G now meets the 7 at Court Sq, not by walking from 21 St to Hunters Point Av. Trips arriving at the same time are ordered by how much they walk. **Re-run the GTFS import** to rewrite `transfers.txt`.
 
 * A transfer's walk leg in `/transit/intermodal-route` lasts as long as the walk. It used to include the planner's per-interchange margin (3 minutes by default), so a 90-second platform change read as a 5-minute walk; the margin now shows as waiting.
 
