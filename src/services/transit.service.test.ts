@@ -1072,10 +1072,21 @@ describe('rankItineraries', () => {
     expect(rankItineraries([early, late], 2, true)[0]).toBe(late)
   })
 
+  test('prefers changing inside the gates when they arrive together', () => {
+    const outside = itin(0, 30, { trip: 'queensboro-plaza' })
+    const inside = itin(0, 30, { trip: 'court-sq' })
+    expect(rankItineraries([outside, inside], 2, false, new Map([[outside, 1]]))[0]).toBe(inside)
+  })
+
   test('prefers less walking when they arrive together', () => {
     // G to 21 St, walk to Hunters Point Av, 7 — against staying on to Court Sq.
-    const walked = { ...itin(0, 30, { trip: 'walk' }), walkTime: 205 }
-    const inSystem = { ...itin(0, 30, { trip: 'court-sq' }), walkTime: 105 }
+    const withWalk = (trip: string, seconds: number) => {
+      const it = itin(0, 30, { trip })
+      it.legs.push({ ...it.legs[0], mode: 'WALK', transitLeg: false, tripId: undefined, duration: seconds })
+      return it
+    }
+    const walked = withWalk('walk', 205)
+    const inSystem = withWalk('court-sq', 105)
     expect(rankItineraries([walked, inSystem], 2)[0]).toBe(inSystem)
   })
 

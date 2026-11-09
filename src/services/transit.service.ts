@@ -24,7 +24,7 @@ import {
 import { attributionFor, excludedFeedIds, servableOnly } from './feed-license.service'
 import { directionLabelsFor, stopKey } from './station-labels.service'
 import { settleTransferWalks } from '../lib/transfer-walks'
-import { GATED_MODES, relocateTransfer, spliceLegs, type Trip } from '../lib/transfer-relocation'
+import { GATED_MODES, relocateTransfer, type Trip } from '../lib/transfer-relocation'
 import { EXTRA_FARE_S } from '../lib/station-graph/guidance'
 import { enrichStationGuidance, type BoardingPosition, type StationAccessChoice, type TransitTransfer } from './station-guidance.service'
 import type { FeedAttribution } from '../lib/feed-license'
@@ -1048,16 +1048,23 @@ function rideSignature(it: TransitItinerary): string {
  * price, and a fixed value keeps the ordering consistent, which comparing
  * fares only when both are known did not.
  *
- * Trips that arrive together rank by walking, then by time on board.
+ * Trips that arrive together rank by changes made outside the gates, then
+ * by walking, then by time on board.
  *
  * The same ride reached from different stations (the station fan-out finds
  * it once per pair) is kept once, in its best-ranked form.
  */
+/** Seconds on foot, transfers included: `walkTime` counts only the walks to and from the trip. */
+const walking = (it: TransitItinerary) =>
+  it.legs.reduce((s, l) => s + (l.mode === 'WALK' ? l.duration : 0), 0)
+
 export function rankItineraries(
   itineraries: TransitItinerary[],
   limit: number,
   arriveBy = false,
+  outOfSystem: ReadonlyMap<TransitItinerary, number> = new Map(),
 ): TransitItinerary[] {
+  const outside = (it: TransitItinerary) => outOfSystem.get(it) ?? 0
   const cost = (it: TransitItinerary) => {
     const extraFares = Math.max(0, (it.farePayments ?? 1) - 1)
     const anchor = arriveBy
@@ -1067,7 +1074,7 @@ export function rankItineraries(
   }
   const ranked = itineraries
     .map((it) => ({ it, cost: cost(it) }))
-    .sort((a, b) => a.cost - b.cost || a.it.walkTime - b.it.walkTime || a.it.duration - b.it.duration)
+    .sort((a, b) => a.cost - b.cost || outside(a.it) - outside(b.it) || walking(a.it) - walking(b.it) || a.it.duration - b.it.duration)
 
   const seen = new Set<string>()
   const kept: TransitItinerary[] = []
@@ -1103,11 +1110,16 @@ export async function getIntermodalRoute(
 
   const result = await plan(request, fetchFn)
   const padSeconds = (request.additionalTransferTime ?? DEFAULT_TRANSFER_PAD_MIN) * 60
-  await relocateOutOfSystemTransfers(result.itineraries, padSeconds, fetchFn)
+  const outOfSystem = await relocateOutOfSystemTransfers(result.itineraries, padSeconds, fetchFn)
+    .catch((err) => {
+      console.warn(`[transit] transfer relocation: ${(err as Error).message}`)
+      return new Map<TransitItinerary, number>()
+    })
   result.itineraries = rankItineraries(
     await withoutExcludedFeeds(result.itineraries),
     request.numItineraries ?? 5,
     request.arriveBy,
+    outOfSystem,
   )
 
   // Attach the full set of interchangeable lines to each transit leg, so the
@@ -1739,13 +1751,15 @@ async function filedTransfers(feedId: string, stopIds: string[]) {
 /**
  * Move each change made by walking between two gated stations the agency
  * doesn't connect onto an in-system change the same two trains make, where
- * one exists. See relocateTransfer.
+ * one exists. See relocateTransfer. Returns how many such changes each
+ * itinerary still makes.
  */
 async function relocateOutOfSystemTransfers(
   itineraries: TransitItinerary[],
   padSeconds: number,
   fetchFn: FetchFn,
-): Promise<void> {
+): Promise<Map<TransitItinerary, number>> {
+  const left = new Map<TransitItinerary, number>()
   const raw = (id?: string) => (id ? splitMotisStopId(id).stopId : '')
   const changes = itineraries.flatMap((it) => it.legs.flatMap((first, i) => {
     const k = it.legs.findIndex((l, n) => n > i && l.transitLeg)
@@ -1757,7 +1771,7 @@ async function relocateOutOfSystemTransfers(
     if (!feedId || splitMotisStopId(second.from.stopId).feedId !== feedId) return []
     return [{ it, first, second, feedId, from: raw(first.to.stopId), to: raw(second.from.stopId) }]
   }))
-  if (!changes.length) return
+  if (!changes.length) return left
 
   const byFeed = <T extends { feedId: string }>(xs: T[]) => {
     const groups = new Map<string, T[]>()
@@ -1768,7 +1782,8 @@ async function relocateOutOfSystemTransfers(
     const filed = await filedTransfers(feedId, [...new Set(cs.flatMap((c) => [c.from, c.to]))])
     return cs.filter((c) => filed.station(c.from) !== filed.station(c.to) && filed.link(c.from, c.to) === null)
   }))).flat()
-  if (!outside.length) return
+  for (const c of outside) left.set(c.it, (left.get(c.it) ?? 0) + 1)
+  if (!outside.length) return left
 
   const trips = new Map<string, Promise<Trip | null>>()
   const trip = (id: string) => {
@@ -1789,9 +1804,13 @@ async function relocateOutOfSystemTransfers(
         const group = fareGroupOf.get(old)
         if (group !== undefined) fareGroupOf.set(now, group)
       }
-      spliceLegs(c.it, c.it.legs.indexOf(c.first), c.it.legs.indexOf(c.second), [before, walk as TransitLeg, after])
+      const start = c.it.legs.indexOf(c.first)
+      // MOTIS reports no walk or ride totals, so nothing here was ever counted in them.
+      c.it.legs.splice(start, c.it.legs.indexOf(c.second) - start + 1, before, walk as TransitLeg, after)
+      left.set(c.it, left.get(c.it)! - 1)
     }
-  })).catch((err) => console.warn(`[transit] transfer relocation: ${(err as Error).message}`))
+  }))
+  return left
 }
 
 /** Lines reachable from a stop inside fare control, as MOTIS route ids. */

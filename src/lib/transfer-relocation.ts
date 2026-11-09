@@ -131,25 +131,3 @@ export function relocateTransfer<L extends Ride>(
   }
   return [before, walk, after]
 }
-
-export interface Tally<L extends Ride> {
-  walkTime: number
-  walkDistance: number
-  transitTime: number
-  waitingTime: number
-  legs: L[]
-}
-
-/** Replace legs `start..end` (inclusive), moving the totals by the difference. */
-export function spliceLegs<L extends Ride>(it: Tally<L>, start: number, end: number, legs: L[]): void {
-  const removed = it.legs.slice(start, end + 1)
-  const delta = (f: (l: Ride) => number) =>
-    legs.reduce((s, l) => s + f(l), 0) - removed.reduce((s, l) => s + f(l), 0)
-  const walked = delta((l) => (l.mode === 'WALK' ? l.duration : 0))
-  const ridden = delta((l) => (l.transitLeg ? l.duration : 0))
-  it.walkTime += walked
-  it.walkDistance += delta((l) => (l.mode === 'WALK' ? l.distance : 0))
-  it.transitTime += ridden
-  it.waitingTime = Math.max(0, it.waitingTime - walked - ridden)
-  it.legs.splice(start, end - start + 1, ...legs)
-}

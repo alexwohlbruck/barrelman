@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { relocateTransfer, spliceLegs, type Ride, type StopPlace, type Trip } from './transfer-relocation'
+import { relocateTransfer, type Ride, type StopPlace, type Trip } from './transfer-relocation'
 
 const t = (hhmm: string) => `2026-11-08T${hhmm}:00.000Z`
 const stop = (stopId: string, lng: number, time: string): StopPlace =>
@@ -77,22 +77,5 @@ describe('relocateTransfer', () => {
       a === 'G22N' && b === '719N' ? 180 : a === 'G26N' && b === '720N' ? 400 : null
     const [before] = relocateTransfer(g, seven, G, SEVEN, both)!
     expect(before.to.stopId).toBe('G22N')
-  })
-})
-
-describe('spliceLegs', () => {
-  test('moves the totals by what was swapped', () => {
-    const walk = (duration: number, distance: number): Ride =>
-      ({ ...leg(G, 2, 2), mode: 'WALK', transitLeg: false, duration, distance })
-    const ride = (duration: number): Ride => ({ ...leg(G, 0, 2), duration })
-    const it = { walkTime: 505, walkDistance: 700, transitTime: 1500, waitingTime: 300, legs: [walk(300, 400), ride(900), walk(205, 300), ride(600)] }
-
-    spliceLegs(it, 1, 3, [ride(1020), walk(180, 100), ride(720)])
-
-    expect(it.legs).toHaveLength(4)
-    expect(it.walkTime).toBe(480)
-    expect(it.walkDistance).toBe(500)
-    expect(it.transitTime).toBe(1740)
-    expect(it.waitingTime).toBe(85)
   })
 })
