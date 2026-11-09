@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { flatTransferTime, freeReentry, mergeTransfersTxt, type StationTime } from './feed-import'
+import { flatTransferTime, mergeTransfersTxt, type StationTime } from './feed-import'
 
 const HEADER = 'from_stop_id,to_stop_id,transfer_type,min_transfer_time'
 
@@ -227,9 +227,9 @@ describe('mergeTransfersTxt — fare gates on street transfers', () => {
     'B1,Bus stop,40.6924,-73.9890,0,\n'
   const rail = new Set(['423N', 'A41N'])
 
-  it('a walk between rail stations the feed does not connect pays the gates twice and a second fare', () => {
+  it('a walk between rail stations the feed does not connect pays the gates twice', () => {
     const merged = mergeTransfersTxt(`${HEADER}\n101,101,2,180\n`, `${HEADER}\n423N,A41N,2,221\nA41N,B1,2,90\n`, STOPS, new Map(), rail)
-    expect(merged).toContain('423N,A41N,2,841')
+    expect(merged).toContain('423N,A41N,2,241')
     // A bus stop has no gates.
     expect(merged).toContain('A41N,B1,2,90')
   })
@@ -237,69 +237,5 @@ describe('mergeTransfersTxt — fare gates on street transfers', () => {
   it('a pair the feed connects keeps its time', () => {
     const merged = mergeTransfersTxt(`${HEADER}\n423,A41,2,300\n`, `${HEADER}\n423N,A41N,2,221\n`, STOPS, new Map(), rail)
     expect(merged).toContain('423N,A41N,2,221')
-  })
-})
-
-describe('mergeTransfersTxt — out-of-system walks lose to the in-system change', () => {
-  // The G meets the 7 in-system at Court Sq (G22/719). 21 St (G24) and
-  // Hunters Point Av (720) are 200m apart, but walking between them leaves
-  // fare control. With only the gates charged, the walk caught the same 7
-  // train a stop earlier and won the tie.
-  const STOPS =
-    'stop_id,stop_name,stop_lat,stop_lon,location_type,parent_station\n' +
-    'G22,Court Sq,40.746554,-73.943832,1,\n' +
-    'G22N,Court Sq,40.746554,-73.943832,0,G22\n' +
-    '719,Court Sq,40.747023,-73.945264,1,\n' +
-    '719N,Court Sq,40.747023,-73.945264,0,719\n' +
-    'G24,21 St,40.744065,-73.949724,1,\n' +
-    'G24N,21 St,40.744065,-73.949724,0,G24\n' +
-    '720,Hunters Point Av,40.742216,-73.948916,1,\n' +
-    '720N,Hunters Point Av,40.742216,-73.948916,0,720\n'
-  const rail = new Set(['G22N', '719N', 'G24N', '720N'])
-  const MTA = `${HEADER}\nG22,719,2,180\n719,G22,2,180\nG24,G24,2,180\n720,720,2,180\n`
-
-  it('prices the walk as a second fare', () => {
-    const merged = mergeTransfersTxt(MTA, `${HEADER}\nG24N,720N,2,205\n`, STOPS, new Map(), rail)
-    // The G reaches 21 St at :10 and the 7 leaves Hunters Point Av at :18.
-    expect(Number(minTimes(merged)['G24N>720N'])).toBeGreaterThan(8 * 60)
-  })
-
-  it('charges only the gates where the fare covers re-entry', () => {
-    const merged = mergeTransfersTxt(MTA, `${HEADER}\nG24N,720N,2,205\n`, STOPS, new Map(), rail, true)
-    expect(merged).toContain('G24N,720N,2,225')
-  })
-
-  it('leaves the in-system change at its own time', () => {
-    const merged = mergeTransfersTxt(MTA, `${HEADER}\nG22N,719N,2,105\n`, STOPS, new Map(), rail)
-    expect(merged).toContain('G22N,719N,2,105')
-  })
-})
-
-function minTimes(text: string): Record<string, string> {
-  const out: Record<string, string> = {}
-  for (const line of text.split('\n').slice(1)) {
-    const [from, to, , min] = line.split(',')
-    if (from) out[`${from}>${to}`] = min
-  }
-  return out
-}
-
-describe('freeReentry', () => {
-  const ATTRS = 'fare_id,price,currency_type,payment_method,transfers,transfer_duration'
-
-  it('reads the base v1 fare\'s transfer allowance', () => {
-    expect(freeReentry(`${ATTRS}\nadult,2.50,USD,1,,5400\n`, null)).toBe(true)
-    expect(freeReentry(`${ATTRS}\nadult,2.50,USD,1,1,7200\n`, null)).toBe(true)
-    expect(freeReentry(`${ATTRS}\nadult,2.50,USD,1,0,\n`, null)).toBe(false)
-  })
-
-  it('treats a v2 transfer rule with no product as free', () => {
-    const rules = 'from_leg_group_id,to_leg_group_id,transfer_count,duration_limit,duration_limit_type,fare_transfer_type,fare_product_id'
-    expect(freeReentry(null, `${rules}\nlg,lg,1,7200,1,0,\n`)).toBe(true)
-    expect(freeReentry(null, `${rules}\nlg,lg,1,7200,1,0,fp_transfer\n`)).toBe(false)
-  })
-
-  it('assumes a second fare when the feed publishes none', () => {
-    expect(freeReentry(null, null)).toBe(false)
   })
 })

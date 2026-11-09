@@ -10,7 +10,6 @@
 
 import { writeFileSync } from 'fs'
 import JSZip from 'jszip'
-import { parseCsv } from './csv'
 import { db } from '../src/db'
 import {
   parseStops,
@@ -43,7 +42,7 @@ import { refreshDirectionLabels } from '../src/services/station-labels.service'
 import { storeAgencyStationTimes } from '../src/services/station-paths.service'
 import { agencyStationTimes } from '../src/lib/station-graph/agency'
 import { SOURCES, type PathSource } from '../src/lib/station-graph/types'
-import { EXTRA_FARE_S, FARE_GATE_DELAY_S } from '../src/lib/station-graph/guidance'
+import { FARE_GATE_DELAY_S } from '../src/lib/station-graph/guidance'
 
 /**
  * A feed with no fixed-route timetable for the router: GTFS-Flex-only feeds,
@@ -201,8 +200,7 @@ export async function injectTransfersTxt(
   // declared between — see mergeTransfersTxt.
   const stopsEntry = zip.file('stops.txt') ?? zip.file(/(^|\/)stops\.txt$/)[0]
   const stops = stopsEntry ? await stopsEntry.async('string') : null
-  const free = freeReentry(await readZipEntry(zip, 'fare_attributes.txt'), await readZipEntry(zip, 'fare_transfer_rules.txt'))
-  zip.file('transfers.txt', mergeTransfersTxt(existing, transfersTxt, stops, stationTimes, railStops, free))
+  zip.file('transfers.txt', mergeTransfersTxt(existing, transfersTxt, stops, stationTimes, railStops))
 
   // JSZip defaults to STORE, so a feed re-serialized without this lands
   // uncompressed on the volume MOTIS imports from. The subway feed goes from
@@ -236,11 +234,10 @@ export async function injectTransfersTxt(
  * never touched, and nor is a timed or in-seat one.
  *
  * `railStops` are the stops served by gated lines or covered by station paths.
- * A computed street walk between two of them that neither the station paths nor the feed connect
- * leaves fare control, so it pays the fare-gate delay twice and, unless
- * `reentryFree`, a second fare priced as EXTRA_FARE_S. A smaller cost loses
- * nothing: the walk catches the same train as the in-system transfer a stop
- * later, and wins the tie.
+ * A computed street walk between two of them that neither the station paths
+ * nor the feed connect leaves fare control, so it pays the fare-gate delay
+ * twice. The second fare is priced at ranking, not here: MOTIS chains walks
+ * through other feeds' stops, so a longer time here doesn't reach the router.
  */
 export interface StationTime {
   seconds: number
@@ -279,23 +276,12 @@ export function flatTransferTime(rows: Array<{ from: string; to: string; seconds
   return rows.length >= 5 && cross.share >= 0.5 ? cross.value : null
 }
 
-/**
- * Whether the feed's fares let a rider back in free after stepping out: its
- * base v1 fare allows transfers, or a v2 transfer rule charges nothing.
- */
-export function freeReentry(fareAttributes: string | null, fareTransferRules: string | null): boolean {
-  if (fareTransferRules && parseCsv(fareTransferRules).some((r) => !r.fare_product_id)) return true
-  const [base] = fareAttributes ? parseCsv(fareAttributes) : []
-  return !!base && (base.transfers ?? '') !== '0'
-}
-
 export function mergeTransfersTxt(
   existing: string | null,
   computed: string,
   stopsTxt?: string | null,
   stationTimes?: Map<string, StationTime>,
   railStops?: Set<string>,
-  reentryFree = false,
 ): string {
   const parse = (text: string) => {
     const lines = text.split(/\r?\n/).filter(l => l.trim() !== '')
@@ -405,8 +391,7 @@ export function mergeTransfersTxt(
     if (agency !== undefined && !(walked && WALKED.has(walked.source)) && comp.iMin !== -1) {
       cells[comp.iMin] = String(agency)
     } else if (outOfSystem && comp.iMin !== -1 && /^\d+$/.test(cells[comp.iMin] ?? '')) {
-      const fare = reentryFree ? 0 : EXTRA_FARE_S
-      cells[comp.iMin] = String(Number(cells[comp.iMin]) + 2 * FARE_GATE_DELAY_S + fare)
+      cells[comp.iMin] = String(Number(cells[comp.iMin]) + 2 * FARE_GATE_DELAY_S)
     }
     added.push(cells.join(','))
   })

@@ -1075,7 +1075,15 @@ describe('rankItineraries', () => {
   test('prefers changing inside the gates when they arrive together', () => {
     const outside = itin(0, 30, { trip: 'queensboro-plaza' })
     const inside = itin(0, 30, { trip: 'court-sq' })
-    expect(rankItineraries([outside, inside], 2, false, new Map([[outside, 1]]))[0]).toBe(inside)
+    expect(rankItineraries([outside, inside], 2, false, new Map([[outside, { changes: 1, fares: 0 }]]))[0]).toBe(inside)
+  })
+
+  test('prices an unpriced change outside the gates as a second fare', () => {
+    // 21 St -> walk -> Hunters Point Av, with no fare data for the MTA.
+    const walked = itin(0, 25, { trip: 'walk' })
+    const inSystem = itin(0, 30, { trip: 'court-sq' })
+    expect(rankItineraries([walked, inSystem], 1, false, new Map([[walked, { changes: 1, fares: 1 }]]))[0]).toBe(inSystem)
+    expect(rankItineraries([walked, inSystem], 1, false, new Map([[walked, { changes: 1, fares: 0 }]]))[0]).toBe(walked)
   })
 
   test('prefers less walking when they arrive together', () => {

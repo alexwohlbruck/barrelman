@@ -1031,6 +1031,16 @@ function rideSignature(it: TransitItinerary): string {
   return parts.join('|')
 }
 
+/** Changes an itinerary makes by walking between gated stations, and how many of them its fare leaves out. */
+export interface OutOfSystem {
+  changes: number
+  fares: number
+}
+
+/** Seconds on foot, transfers included: `walkTime` counts only the walks to and from the trip. */
+const walking = (it: TransitItinerary) =>
+  it.legs.reduce((s, l) => s + (l.mode === 'WALK' ? l.duration : 0), 0)
+
 /**
  * Order itineraries for the rider, drop repeats of the same ride, and keep
  * the best `limit`.
@@ -1048,25 +1058,25 @@ function rideSignature(it: TransitItinerary): string {
  * price, and a fixed value keeps the ordering consistent, which comparing
  * fares only when both are known did not.
  *
+ * A change made by walking between gated stations the agency doesn't
+ * connect counts as another payment too, unless the feed's fares say one
+ * payment covers both trains: MOTIS prices it as an in-system transfer.
+ *
  * Trips that arrive together rank by changes made outside the gates, then
  * by walking, then by time on board.
  *
  * The same ride reached from different stations (the station fan-out finds
  * it once per pair) is kept once, in its best-ranked form.
  */
-/** Seconds on foot, transfers included: `walkTime` counts only the walks to and from the trip. */
-const walking = (it: TransitItinerary) =>
-  it.legs.reduce((s, l) => s + (l.mode === 'WALK' ? l.duration : 0), 0)
-
 export function rankItineraries(
   itineraries: TransitItinerary[],
   limit: number,
   arriveBy = false,
-  outOfSystem: ReadonlyMap<TransitItinerary, number> = new Map(),
+  outOfSystem: ReadonlyMap<TransitItinerary, OutOfSystem> = new Map(),
 ): TransitItinerary[] {
-  const outside = (it: TransitItinerary) => outOfSystem.get(it) ?? 0
+  const outside = (it: TransitItinerary) => outOfSystem.get(it)?.changes ?? 0
   const cost = (it: TransitItinerary) => {
-    const extraFares = Math.max(0, (it.farePayments ?? 1) - 1)
+    const extraFares = Math.max(0, (it.farePayments ?? 1) - 1) + (outOfSystem.get(it)?.fares ?? 0)
     const anchor = arriveBy
       ? -new Date(it.startTime).getTime()
       : new Date(it.endTime).getTime()
@@ -1113,7 +1123,7 @@ export async function getIntermodalRoute(
   const outOfSystem = await relocateOutOfSystemTransfers(result.itineraries, padSeconds, fetchFn)
     .catch((err) => {
       console.warn(`[transit] transfer relocation: ${(err as Error).message}`)
-      return new Map<TransitItinerary, number>()
+      return new Map<TransitItinerary, OutOfSystem>()
     })
   result.itineraries = rankItineraries(
     await withoutExcludedFeeds(result.itineraries),
@@ -1751,15 +1761,20 @@ async function filedTransfers(feedId: string, stopIds: string[]) {
 /**
  * Move each change made by walking between two gated stations the agency
  * doesn't connect onto an in-system change the same two trains make, where
- * one exists. See relocateTransfer. Returns how many such changes each
- * itinerary still makes.
+ * one exists. See relocateTransfer. Returns the changes each itinerary still
+ * makes outside the gates, and how many of them MOTIS hasn't priced.
  */
 async function relocateOutOfSystemTransfers(
   itineraries: TransitItinerary[],
   padSeconds: number,
   fetchFn: FetchFn,
-): Promise<Map<TransitItinerary, number>> {
-  const left = new Map<TransitItinerary, number>()
+): Promise<Map<TransitItinerary, OutOfSystem>> {
+  const left = new Map<TransitItinerary, OutOfSystem>()
+  const tally = (it: TransitItinerary, changes: number, fares: number) => {
+    const t = left.get(it) ?? { changes: 0, fares: 0 }
+    left.set(it, { changes: t.changes + changes, fares: t.fares + fares })
+  }
+  const unpriced = (c: { first: TransitLeg; second: TransitLeg }) => (oneFare(c.first, c.second) === null ? 1 : 0)
   const raw = (id?: string) => (id ? splitMotisStopId(id).stopId : '')
   const changes = itineraries.flatMap((it) => it.legs.flatMap((first, i) => {
     const k = it.legs.findIndex((l, n) => n > i && l.transitLeg)
@@ -1782,7 +1797,7 @@ async function relocateOutOfSystemTransfers(
     const filed = await filedTransfers(feedId, [...new Set(cs.flatMap((c) => [c.from, c.to]))])
     return cs.filter((c) => filed.station(c.from) !== filed.station(c.to) && filed.link(c.from, c.to) === null)
   }))).flat()
-  for (const c of outside) left.set(c.it, (left.get(c.it) ?? 0) + 1)
+  for (const c of outside) tally(c.it, 1, unpriced(c))
   if (!outside.length) return left
 
   const trips = new Map<string, Promise<Trip | null>>()
@@ -1807,7 +1822,7 @@ async function relocateOutOfSystemTransfers(
       const start = c.it.legs.indexOf(c.first)
       // MOTIS reports no walk or ride totals, so nothing here was ever counted in them.
       c.it.legs.splice(start, c.it.legs.indexOf(c.second) - start + 1, before, walk as TransitLeg, after)
-      left.set(c.it, left.get(c.it)! - 1)
+      tally(c.it, -1, -unpriced(c))
     }
   }))
   return left
