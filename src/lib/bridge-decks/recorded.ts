@@ -1,6 +1,7 @@
 /**
  * Deck inputs recorded from OSM with their terrain, for tests: `fixtures/<name>.json.gz`,
  * every position as [lng, lat] and the terrain a grid of decimetres read bilinearly.
+ * A way's `pins` (its nodes tagged `ele`) name their vertex, so they are recorded as they are.
  */
 import { gunzipSync } from 'node:zlib'
 import type { DeckInput, Ground } from './build'
@@ -17,6 +18,7 @@ type Recorded = {
   crossed: Array<{ kind: DeckInput['crossed'][number]['kind']; points: LngLat[] }>
   water: LngLat[][]
   wikidata: Array<[number, string]>
+  seamarks?: Array<{ point: LngLat; clearance: number }>
   ground: { west: number; north: number; dLng: number; dLat: number; cols: number; rows: number; decimetres: string }
 }
 
@@ -33,6 +35,7 @@ export async function recorded(name: string): Promise<{ input: DeckInput; ground
     crossed: raw.crossed.map(c => ({ kind: c.kind, points: c.points.map(toPoint) })),
     water: raw.water.map(r => r.map(toPoint)),
     wikidata: new Map(raw.wikidata),
+    seamarks: (raw.seamarks ?? []).map(m => ({ point: toPoint(m.point), clearance: m.clearance })),
   }
   const { west, north, dLng, dLat, cols, rows, decimetres } = raw.ground
   const heights = new Int16Array(Buffer.from(decimetres, 'base64').buffer.slice(0))

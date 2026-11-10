@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'bun:test'
 import { buildDecks, CLEARANCE, numbered, STEP, type DeckInput } from './build'
 import { Dem, demConfigured, sampleHeights, type Heights } from './dem'
+import { DECK_DEPTH } from './elevation'
 import { along, mercator, type Point, type Way } from './profile'
 
 const east = (m: number, north = 0): Point =>
@@ -215,6 +216,65 @@ describe('buildDecks in an outline', () => {
     const [deck] = await buildDecks(input({ ways: [way(1, 0, 60)], onGround: new Set([key(east(0)), key(east(60))]) }), ground(100))
     expect(deck.sides).toBeNull()
     expect(deck.caps).toBeNull()
+  })
+})
+
+describe('heights OSM gives a deck', () => {
+  // The San Diego–Coronado Bridge as profile.test.ts has it, on its two ways
+  // (split at the crest's node), landing at both ends on approaches that
+  // carry its grades on, over the bay.
+  const [up, down, from, curve] = [0.0469091, 0.0502002, 1051.872, 857.198]
+  const truth = (s: number) => {
+    const u = Math.min(Math.max(s, from), from + curve) - from
+    const z = 16 + up * from + up * u - ((up + down) / (2 * curve)) * u * u
+    return s < from ? 16 + up * s : s > from + curve ? z - down * (s - from - curve) : z
+  }
+  const along_ = (p: Point) => (p[0] - east(0)[0]) / (east(1)[0] - east(0)[0])
+  const terrain = { async load() {}, at: (p: Point) => {
+    const s = along_(p)
+    return s < 0 ? 16 + up * s : s > 2585 ? 30 - down * (s - 2585) : s < 40 || s > 2545 ? truth(s) : 0
+  } }
+  const bay = [[east(40, -200), east(2545, -200), east(2545, 200), east(40, 200), east(40, -200)]]
+  const ends = new Set([key(east(0)), key(east(2585))])
+
+  it('holds the San Diego–Coronado Bridge to its tagged nodes on its true grades and crest, built whole', async () => {
+    const decks = await buildDecks(input({
+      ways: [
+        { id: 1, points: [east(0), east(1150), east(1435)], kind: 'road', layer: 1, width: 10, pins: [{ vertex: 1, height: 69.4 }, { vertex: 2, height: 75 }] },
+        { id: 2, points: [east(1435), east(1740), east(2585)], kind: 'road', layer: 1, width: 10, pins: [{ vertex: 0, height: 75 }, { vertex: 1, height: 70.8 }] },
+      ],
+      onGround: ends,
+      water: bay,
+    }), terrain)
+    expect(decks).toHaveLength(1)
+    const d = along(decks[0].points)
+    for (const [i, s] of d.entries()) expect(Math.abs(decks[0].heights[i] - truth(s))).toBeLessThan(0.3)
+  })
+
+  it('holds twin carriageways side by side each to its own tagged nodes', async () => {
+    const twin = (id: number, north: number, height: number): Way =>
+      ({ id, points: [east(0, north), east(300, north), east(600, north)], kind: 'road', layer: 1, width: 8, pins: [{ vertex: 1, height }] })
+    const decks = await buildDecks(input({
+      ways: [twin(1, 0, 215), twin(2, 9, 216)],
+      onGround: new Set([0, 9].flatMap(n => [key(east(0, n)), key(east(600, n))])),
+    }), ground(200))
+    const at = (w: number) => { const deck = decks.find(x => x.ways.includes(w))!; return deck.heights[Math.round(300 / STEP)] }
+    expect(at(1)).toBeCloseTo(215, 1)
+    expect(at(2)).toBeCloseTo(216, 1)
+  })
+
+  it('leaves out a tagged height below the ground under it', async () => {
+    const [deck] = await buildDecks(input({ ways: [{ ...way(1, 0, 300), points: [east(0), east(150), east(300)], pins: [{ vertex: 1, height: 150 }] }], onGround: ends }), ground(200))
+    expect(deck.heights[25]).toBe(200)
+  })
+
+  it('clears a seamark charting the clearance under the bridge', async () => {
+    const [deck] = await buildDecks(input({
+      ways: [way(1, 0, 1000)],
+      onGround: new Set([key(east(0)), key(east(1000))]),
+      seamarks: [{ point: east(500, 12), clearance: 20 }],
+    }), ground(0))
+    expect(deck.heights[Math.round(500 / STEP)]).toBeGreaterThanOrEqual(20 + DECK_DEPTH - 0.5)
   })
 })
 
