@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test'
-import { CAMBER, DECK_DEPTH, deckLevel, hungStretch, levelNeeds, type Support } from './elevation'
-import { mercator, type Point } from './profile'
+import { CAMBER, clearanceNeeds, DECK_DEPTH, deckLevel, hungStretch, levelNeeds, MAX_DECK, trustedPins, type Support } from './elevation'
+import { along, mercator, type Point } from './profile'
 
 /** A square footprint `half` metres each way around a point east of the origin. */
 const square = (east: number, half: number): Point[] => {
@@ -39,8 +39,49 @@ describe('a deck height from what OSM records on the bridge outline', () => {
     expect(deckLevel({ wikidata: 'Q1', height: '12' }, [], overrides)).toMatchObject({ deck: 30, source: 'override' })
   })
 
-  it('ignores layer and ele, which are not deck heights', () => {
-    expect(deckLevel({ layer: '3', ele: '20' }, [], {}).deck).toBeUndefined()
+  it('takes the closed clearance of an opening bridge', () => {
+    expect(deckLevel({ 'seamark:bridge:clearance_height': '40', 'seamark:bridge:clearance_height_closed': '7.5' }, [], {}).deck).toBe(7.5 + DECK_DEPTH)
+  })
+
+  it('ignores layer, which is not a height, and takes ele as the least height of the crest above sea level', () => {
+    const level = deckLevel({ layer: '3', ele: '20' }, [], {})
+    expect(level.deck).toBeUndefined()
+    expect(level.top).toBe(20)
+    const points = deck(300)
+    const within = points.map(() => true)
+    const [crest, ...more] = levelNeeds(points, within, level, 2)
+    expect(more).toEqual([])
+    expect(crest.at).toBeCloseTo(150, 0)
+    expect(crest.height).toBe(20)
+    // Mapped as the ground's, or another datum's, it says nothing.
+    expect(levelNeeds(points, within, level, 25)).toEqual([])
+    expect(levelNeeds(points, within, { top: 300 }, 25)).toEqual([])
+  })
+})
+
+describe('heights tagged on a deck\'s nodes', () => {
+  const d = [0, 100, 200]
+  const ground = [10, 0, 10]
+
+  it('are believed from just under the ground to MAX_DECK above it', () => {
+    const pins = [{ at: 50, height: 4.5 }, { at: 100, height: -0.5 }, { at: 100, height: -3 }, { at: 150, height: 5 + MAX_DECK + 1 }]
+    expect(trustedPins(pins, d, ground)).toEqual(pins.slice(0, 2))
+  })
+})
+
+describe('a seamark charting a bridge\'s clearance', () => {
+  const points = deck(600)
+  const d = along(points)
+  const water = points.map(() => -0.5)
+
+  it('sets the deck its clearance and the deck\'s depth over the water there, where it lies under the deck', () => {
+    const [need] = clearanceNeeds(points, d, water, [{ point: mercator(...lngLatOf(points[50], 12)), clearance: 40 }])
+    expect(need.at).toBeCloseTo(300, 0)
+    expect(need.height).toBeCloseTo(-0.5 + 40 + DECK_DEPTH, 5)
+  })
+
+  it('says nothing of a deck it lies well off', () => {
+    expect(clearanceNeeds(points, d, water, [{ point: mercator(...lngLatOf(points[50], 200)), clearance: 40 }])).toEqual([])
   })
 })
 
