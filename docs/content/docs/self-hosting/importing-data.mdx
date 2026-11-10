@@ -698,16 +698,34 @@ within that grade, the lesser road dips under it. An end meeting only ways on
 an `embankment` starts as high as it must, since the bare-earth terrain leaves
 the fill out.
 
-A bridge's own height sets its deck where OSM records it:
-`seamark:bridge:clearance_height` (the clearance; the deck is 2 m above it), or
-`height` on the `man_made=bridge` outline, taken as the deck over the water or
-ground under the span (on a suspension or cable-stayed bridge only when well
-short of its towers' `height`, which it may otherwise be). Towers and
-anchorages mapped as `bridge:support=pylon` and `abutment` areas hang a
-suspended span between them, cambered 1 % of the span down to each tower, on
-no piers. `ele` and `layer` are not deck heights. Where OSM has none of this,
-`config/bridge-elevations.json` may give a deck height by the bridge's
-Wikidata item; adding the tag to OSM is better.
+A bridge's own height sets its deck where OSM records it. The most exact is
+`ele` on the nodes of the bridge's highway or railway ways: the roadway's
+height there in metres above sea level, as `ele` is on any node, in the
+terrain's datum (NAVD88 in the US). Each such node pins its deck at that height
+exactly, and the deck runs through its pins as a road does: on straight grades
+where they lie in line, on one parabolic vertical curve where they turn over a
+crest or sag, and from each end that lands or rests to the nearest pin on the
+straight grade meeting that curve, still clearing what it crosses. A pin is
+held whatever grade it takes and through the joining of decks side by side, so
+tag each carriageway's nodes; a few are enough, at the grade breaks and the
+crest, and a node at the way's end sets that end's height. A value below the
+ground under the node, or over 150 m above it, is taken for a mistake and left
+out. A deck with pins takes no height from the tags below. Otherwise
+`seamark:bridge:clearance_height` (the clearance; the deck is 2 m above it,
+and `seamark:bridge:clearance_height_closed` is used for an opening bridge) on
+the `man_made=bridge` outline sets the deck's crest, and on a seamark node or
+way under the bridge, or on its road way, the deck clears it there; `height`
+on the outline is taken as the deck over the water or ground under the span
+(on a suspension or cable-stayed bridge only when well short of its towers'
+`height`, which it may otherwise be); and `ele` on the outline or on a bridge
+way is taken as the least height of its top at the crest (an `ele` mapped as
+the ground's changes little). Towers and anchorages mapped as
+`bridge:support=pylon` and `abutment` areas hang a suspended span between
+them, cambered 1 % of the span down to each tower, on no piers. `layer` is not
+a height. Where OSM has none of this, `config/bridge-elevations.json` may give
+a deck height by the bridge's Wikidata item; adding the tag to OSM is better.
+A change to these tags reaches the decks on the next Build Bridge Decks, or
+through replication as below.
 
 A landmark whose `replaces` lists a bridge's `man_made=bridge` outline draws
 that bridge's structure within its reach, so the road decks there are baked
@@ -736,7 +754,8 @@ decks" switch is off (`BRIDGE_DECKS_INCREMENTAL=0` for runs started from a
 shell). Each replication cycle queues, in `detail_dirty`, the bridge ways and
 `man_made=bridge` outlines it touched, and every deck that something it is
 built from touched before or after the diff: its own ways, the roads its ends
-land on, what it crosses, and water under it. "Update Bridge Decks"
+land on, what it crosses, water under it, a node on it tagged `ele`, and a
+seamark charting its clearance. "Update Bridge Decks"
 (`import/update-bridge-decks.ts`) then rebuilds the 0.025° (about 2.5 km)
 cells of each entry, along with the cells its old decks were anchored in and
 any its new ones now are, so a deck that moved, grew, lost its bridge tag or

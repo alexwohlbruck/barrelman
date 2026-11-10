@@ -13,7 +13,12 @@
 --     diff: the bridge ways themselves (deleted, moved, untagged), the roads
 --     and railways its ends land on, what it crosses, and the water under it.
 --     old_places keeps categories, not tags, so before the diff anything
---     categorised as a road, railway, waterway, water or bridge counts.
+--     categorised as a road, railway, waterway, water or bridge counts;
+--   * every deck a node gives a height to: one tagged `ele` on it, which pins
+--     it, or a seamark charting a bridge's clearance beside it (as now), and
+--     before the diff any node on it, or uncategorised beside it, as those
+--     nodes are. A node's tags are its own, so its way is only rewritten, and
+--     queues nothing itself, when `ele` is added, changed or taken off.
 -- A deck is queued as its own box, not the box of what touched it, so editing
 -- a long river or a county road queues only the decks along it. A row the
 -- cycle only rewrote, because a node of it changed while its shape did not
@@ -60,30 +65,49 @@ BEGIN
            AND COALESCE(tags->>'tunnel', 'no') = 'no' AND bridge_deck_class(tags) IS NOT NULL)
        OR (geom_type = 'area' AND tags->>'man_made' = 'bridge')
   ),
+  -- Nodes are never only rewritten: one in the diff was edited.
+  now_points AS (
+    SELECT g.geom, g.tags
+    FROM geo_places g
+    JOIN osm_replay.changed c ON c.id = g.id
+    WHERE g.geom_type = 'point'
+      AND (g.tags ? 'ele' OR g.tags ? 'seamark:bridge:clearance_height' OR g.tags ? 'seamark:bridge:clearance_height_closed')
+  ),
+  -- How far from a deck each reaches it, in degrees: on it, or for a seamark
+  -- beside it as far as one charts the clearance under it (SEAMARK_REACH in
+  -- src/lib/bridge-decks/elevation.ts, 30 m).
   touching AS (
-    SELECT geom, geom_type FROM now_rows
+    SELECT geom, geom_type, 0.00002 AS reach FROM now_rows
     WHERE (geom_type = 'line' AND (tags ? 'highway' OR tags ? 'railway' OR tags ? 'waterway'))
        OR (geom_type = 'area' AND (tags->>'man_made' = 'bridge' OR tags->>'natural' = 'water'
                                    OR tags->>'waterway' = 'riverbank' OR tags->>'landuse' = 'reservoir'))
     UNION ALL
-    SELECT o.geom, o.geom_type FROM osm_replay.old_places o
+    SELECT o.geom, o.geom_type, 0.00002 FROM osm_replay.old_places o
     WHERE o.geom_type IN ('line', 'area') AND o.geom IS NOT NULL AND o.id NOT IN (SELECT id FROM same)
       AND (o.categories && ARRAY['man_made/bridge', 'natural/water', 'waterway/riverbank', 'landuse/reservoir']
            OR EXISTS (SELECT 1 FROM unnest(o.categories) k
                       WHERE k LIKE 'highway/%' OR k LIKE 'railway/%' OR k LIKE 'waterway/%'))
+    UNION ALL
+    SELECT geom, 'point', CASE WHEN tags ? 'ele' THEN 0.00002 ELSE 0.0003 END FROM now_points
+    UNION ALL
+    -- Before the diff its tags are gone: a node on a deck may have pinned it,
+    -- and one with no category beside it, as a seamark has none, charted it.
+    SELECT o.geom, 'point', CASE WHEN o.categories = '{}' OR o.categories IS NULL THEN 0.0003 ELSE 0.00002 END
+    FROM osm_replay.old_places o
+    WHERE o.geom_type = 'point' AND o.geom IS NOT NULL
   ),
   -- Only what reaches a recorded cell, by box, before any exact test. An area
   -- (a riverbank, a lake) is tested by intersection, which PostGIS prepares
   -- once per polygon, rather than by distance, which walks it per deck.
   near AS (
-    SELECT t.geom, t.geom_type FROM touching t
+    SELECT t.geom, t.geom_type, t.reach FROM touching t
     WHERE EXISTS (SELECT 1 FROM bridge_deck_cells c WHERE c.box && t.geom)
   ),
   decks AS (
     SELECT DISTINCT b.id, b.geom
     FROM near t
-    JOIN bridge_decks b ON b.geom && ST_Expand(t.geom, 0.00002)
-     AND CASE WHEN t.geom_type = 'area' THEN ST_Intersects(t.geom, b.geom) ELSE ST_DWithin(b.geom, t.geom, 0.00002) END
+    JOIN bridge_decks b ON b.geom && ST_Expand(t.geom, t.reach)
+     AND CASE WHEN t.geom_type = 'area' THEN ST_Intersects(t.geom, b.geom) ELSE ST_DWithin(b.geom, t.geom, t.reach) END
   ),
   boxes AS (
     SELECT ST_Envelope(ST_Expand(geom, 0.0005)) AS box FROM bridges

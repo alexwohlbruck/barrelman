@@ -17,7 +17,7 @@ import { wayHalf } from '../src/lib/bridge-decks/supports'
 import type { Dem } from '../src/lib/bridge-decks/dem'
 import { clip, contains, degreeBox, toDegrees, toUnits, UNITS_PER_DEGREE, type UnitBox, type UnitPoint } from '../src/lib/bridge-decks/grid'
 import type { Built } from '../src/lib/bridge-decks/queue'
-import { deckLevel, metres, type Support } from '../src/lib/bridge-decks/elevation'
+import { clearance, deckLevel, metres, type Seamark, type Support } from '../src/lib/bridge-decks/elevation'
 import { inside, lngLat, mercator, metresPerUnit, type Kind, type Point, type Way } from '../src/lib/bridge-decks/profile'
 
 type Sql = postgres.Sql
@@ -59,13 +59,13 @@ const INSERT_BATCH = 500
 
 
 type Row = { id: string; kind: Kind; highway: string | null; road: string | null; layer: string | null; width: string | null;
-  lanes: string | null; oneway: string | null; wikidata: string | null; coords: number[][] }
+  lanes: string | null; oneway: string | null; wikidata: string | null; ele: string | null; coords: number[][] }
 
 const bridgeWays = (sql: Sql) => sql`
   SELECT osm_id::text AS id, bridge_deck_class(tags) AS kind, tags->>'highway' AS highway,
          COALESCE(tags->>'highway', tags->>'railway') || '/' || COALESCE(tags->>'ref', tags->>'name', '') AS road, tags->>'layer' AS layer,
          COALESCE(tags->>'width:carriageway', tags->>'width') AS width, tags->>'lanes' AS lanes, tags->>'oneway' AS oneway,
-         COALESCE(tags->>'bridge:wikidata', tags->>'wikidata') AS wikidata,
+         COALESCE(tags->>'bridge:wikidata', tags->>'wikidata') AS wikidata, tags->>'ele' AS ele,
          ST_AsGeoJSON(geom)::json->'coordinates' AS coords
   FROM geo_places`
 // Which ways make decks is bridge_deck_class() in create-detail-views.sql,
@@ -75,14 +75,42 @@ const isBridge = (sql: Sql) => sql`
   AND COALESCE(tags->>'tunnel', 'no') = 'no' AND bridge_deck_class(tags) IS NOT NULL
   AND GeometryType(geom) = 'LINESTRING'`
 
-function toWay(r: Row): Way {
+function toWay(r: Row, pins: Map<string, number>): Way {
   const kind = r.kind
   const lanes = Number.parseInt(r.lanes ?? '') || (r.oneway === 'yes' || r.highway?.startsWith('motorway') ? 1 : 2)
   const tagged = metres(r.width)
   const width = kind === 'rail' ? 5 : kind === 'path' ? (tagged && tagged < 12 ? tagged : 3)
     : tagged && tagged >= 2.5 && tagged <= 60 ? tagged : lanes * (LANE[r.highway!] ?? 3.3)
   const layer = Number.parseInt(r.layer ?? '')
-  return { id: Number(r.id), points: r.coords.map(([lng, lat]) => mercator(lng, lat)), kind, layer: Math.max(1, layer || 1), untagged: Number.isNaN(layer), width, road: r.road ?? undefined }
+  const vertices = r.coords.flatMap((c, vertex) => {
+    const height = pins.get(c.join(','))
+    return height === undefined ? [] : [{ vertex, height }]
+  })
+  const ele = metres(r.ele)
+  return {
+    id: Number(r.id), points: r.coords.map(([lng, lat]) => mercator(lng, lat)), kind, layer: Math.max(1, layer || 1), untagged: Number.isNaN(layer), width, road: r.road ?? undefined,
+    ...(vertices.length ? { pins: vertices } : {}), ...(ele !== null ? { ele } : {}),
+  }
+}
+
+/**
+ * The heights tagged `ele` on the nodes of bridge ways, by position as the
+ * ways' coordinates give it. A node with any tag at all, `ele` alone among
+ * them, is a point row of its own in geo_places, at exactly its way's vertex:
+ * so nodes are found without osm2pgsql's middle tables, which a flat-nodes
+ * import or replicate-extract.sh does without.
+ */
+async function nodeHeights(sql: Sql, ids: string[]): Promise<Map<string, number>> {
+  const rows: Array<{ ele: string; coords: number[] }> = await sql`
+    WITH pieces AS MATERIALIZED (
+      SELECT ST_Subdivide(geom, 8) AS piece FROM geo_places WHERE osm_type = 'W' AND osm_id = ANY(${ids}::bigint[]) AND geom_type = 'line')
+    SELECT DISTINCT ON (g.osm_id) g.tags->>'ele' AS ele, ST_AsGeoJSON(g.geom)::json->'coordinates' AS coords
+    FROM pieces JOIN geo_places g ON g.geom && piece AND ST_DWithin(g.geom, piece, 1e-7)
+    WHERE g.osm_type = 'N' AND g.geom_type = 'point' AND g.tags ? 'ele'`
+  return new Map(rows.flatMap(r => {
+    const height = metres(r.ele)
+    return height === null ? [] : [[r.coords.join(','), height] as [string, number]]
+  }))
 }
 
 /** Longest untagged stretch of a walkway between two of its footbridges carried on as one deck: shorter than coming down and climbing back. */
@@ -139,7 +167,8 @@ export async function waysAround(sql: Sql, [w, s, e, n]: Bbox): Promise<Row[]> {
 }
 
 export async function inputFor(sql: Sql, rows: Row[]): Promise<DeckInput> {
-  const ways = rows.map(toWay)
+  const pins = await nodeHeights(sql, rows.map(r => r.id))
+  const ways = rows.map(r => toWay(r, pins))
   const xs = rows.flatMap(r => r.coords.map(c => c[0]))
   const ys = rows.flatMap(r => r.coords.map(c => c[1]))
   const [w, s, e, n] = [Math.min(...xs) - 0.001, Math.min(...ys) - 0.001, Math.max(...xs) + 0.001, Math.max(...ys) + 0.001]
@@ -233,8 +262,19 @@ export async function inputFor(sql: Sql, rows: Row[]): Promise<DeckInput> {
     FROM geo_places g WHERE (${anyTag(sql, WATER)}) AND g.geom_type = 'area' AND g.geom && ${box}`
   const water = waterRows.flatMap(r => (r.coords ?? []).map(polygon => polygon[0].map(([lng, lat]) => mercator(lng, lat))))
 
+  // Seamarks charting a bridge's clearance, on a node or way of their own under it or on its bridge ways: an
+  // outline's own are its level. By the box's index, the tags tested by value.
+  const seamarkRows: Array<{ tags: Record<string, string>; lng: number; lat: number }> = await sql`
+    SELECT g.tags, ST_X(ST_Centroid(g.geom)) AS lng, ST_Y(ST_Centroid(g.geom)) AS lat FROM geo_places g
+    WHERE g.geom && ${box} AND (g.tags ? 'seamark:bridge:clearance_height' OR g.tags ? 'seamark:bridge:clearance_height_closed')
+      AND NOT (g.geom_type = 'area' AND g.tags @> '{"man_made": "bridge"}')`
+  const seamarks: Seamark[] = seamarkRows.flatMap(r => {
+    const charted = clearance(r.tags)
+    return charted === null ? [] : [{ point: mercator(r.lng, r.lat), clearance: charted }]
+  })
+
   const wikidata = new Map(rows.flatMap(r => (r.wikidata ? [[Number(r.id), r.wikidata] as [number, string]] : [])))
-  return { ways, onGround, raised, outlines, kerbs, crossed, water, wikidata, surfaces: groundSurfaces }
+  return { ways, onGround, raised, outlines, kerbs, crossed, water, wikidata, surfaces: groundSurfaces, seamarks }
 }
 
 /**
