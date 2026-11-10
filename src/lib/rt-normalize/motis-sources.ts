@@ -3,10 +3,10 @@ import type { RtUrlEntry } from '../../schema/gtfs'
 /**
  * The realtime URLs MOTIS polls for a feed. One URL often serves trip updates
  * and vehicle positions both, so each is listed once. A URL the import marked
- * `normalize`, or that redirects or needs the egress proxy, is polled through barrelman's /gtfs-rt relay
+ * `normalize`, or that redirects, needs the egress proxy or is flaky, is polled through barrelman's /gtfs-rt relay
  * instead, addressed by its position in the feed's `rt_urls`.
  */
-export const viaRelay = (rt: RtUrlEntry) => !!(rt.normalize || rt.redirects || rt.egress)
+export const viaRelay = (rt: RtUrlEntry) => !!(rt.normalize || rt.redirects || rt.egress || rt.flaky)
 
 export function motisRtSources(
   feedId: string,

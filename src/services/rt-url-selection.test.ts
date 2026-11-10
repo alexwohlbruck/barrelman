@@ -193,4 +193,13 @@ describe('selectRtUrls', () => {
     expect(kept).toEqual([{ url: 'https://blocked.example/tu', type: 'tripUpdates', egress: true }])
     expect(direct.kept).toEqual([{ url: 'https://blocked.example/tu', type: 'tripUpdates' }])
   })
+
+  test('keeps a feed that served an undecodable message, marked flaky for good', async () => {
+    const { fetchFn } = serving({ 'https://via.example/tu': new TextEncoder().encode('{half a file') })
+    const first = await selectRtUrls([{ url: 'https://via.example/tu', type: 'tripUpdates' }], SUBWAY, fetchFn)
+    const later = await selectRtUrls(first.kept, SUBWAY, serving({ 'https://via.example/tu': feedOf(['A']) }).fetchFn)
+
+    expect(first.kept).toEqual([{ url: 'https://via.example/tu', type: 'tripUpdates', flaky: true }])
+    expect(later.kept).toEqual(first.kept)
+  })
 })

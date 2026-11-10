@@ -54,6 +54,8 @@ export interface RtUrlEntry {
   redirects?: boolean
   /** Refuses this server's network, so the relay fetches it through RT_EGRESS_PROXY. */
   egress?: boolean
+  /** Has served undecodable messages; the relay answers those with its last good one. */
+  flaky?: boolean
 }
 
 // ── GTFS Feeds ──────────────────────────────────────────────────────

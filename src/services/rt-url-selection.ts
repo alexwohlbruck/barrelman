@@ -34,6 +34,7 @@ export interface SelectableRtUrl {
   type?: string
   redirects?: boolean
   egress?: boolean
+  flaky?: boolean
 }
 
 export interface RtUrlSelection<T extends SelectableRtUrl> {
@@ -63,7 +64,7 @@ export interface StaticTripsAndStops {
 const overlaps = (a: Set<string>, b: Set<string>) => [...a].some(x => b.has(x))
 
 type DropReason = 'unauthorized' | 'foreign-routes' | 'gone' | 'stale'
-type Verdict = { keep: true; movedTo?: string; redirects?: true; egress?: true } | { keep: false; reason: DropReason }
+type Verdict = { keep: true; movedTo?: string; redirects?: true; egress?: true; flaky?: true } | { keep: false; reason: DropReason }
 
 /** A feed whose header is older than this has stopped updating at that address. */
 const STALE_AFTER_S = 12 * 3600
@@ -100,7 +101,16 @@ async function judge(
     if (response.status === 404 || response.status === 410) return { keep: false, reason: 'gone' }
     if (!response.ok) return { keep: true }
 
-    const ids = idsOf(new Uint8Array(await response.arrayBuffer()))
+    const body = new Uint8Array(await response.arrayBuffer())
+    let ids: ReturnType<typeof idsOf>
+    try {
+      ids = idsOf(body)
+    } catch {
+      // A page, not a feed: nothing to judge.
+      if (body[0] === 0x3c) return { keep: true }
+      // San Antonio serves a half-written file about one fetch in four.
+      return { keep: true, flaky: true, ...(egress && { egress: true as const }) }
+    }
     // MOTIS does not follow redirects. A feed that moved for good is polled
     // where it went, once that answers with GTFS-RT rather than a parked-domain
     // page; one that redirects each time (CapMetro, to that hour's upload) is
@@ -147,6 +157,7 @@ export async function selectRtUrls<T extends SelectableRtUrl>(
         ...(verdict.movedTo && { url: verdict.movedTo }),
         ...(verdict.redirects && { redirects: true }),
         ...(verdict.egress && { egress: true }),
+        ...((verdict.flaky || rt.flaky) && { flaky: true }),
       } as T)
     } else if (!reported.has(rt.url)) {
       reported.add(rt.url)
