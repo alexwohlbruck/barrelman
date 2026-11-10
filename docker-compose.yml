@@ -263,6 +263,12 @@ services:
     # in production, and nothing acts on it: unresolvable realtime ids are
     # normal for feeds whose RT and static halves disagree.
     command: ["/motis", "server", "/data", "--log-level", "info"]
+    # MOTIS opens every realtime URL at once each poll; a US instance has
+    # ~2500. At Docker's default soft limit of 1024 a third of polls failed.
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 524288
     volumes:
       - barrelman-gtfs-data:/data
       - barrelman-osm-data:/osm-data:ro
