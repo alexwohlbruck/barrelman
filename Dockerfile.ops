@@ -8,7 +8,7 @@
 # NOT baked here.
 
 # docker CLI only (no daemon/containerd) — multi-arch.
-FROM docker:27-cli AS dockercli
+FROM docker:29-cli AS dockercli
 
 FROM oven/bun:1
 WORKDIR /app
