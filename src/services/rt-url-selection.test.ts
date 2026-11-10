@@ -90,6 +90,21 @@ describe('selectRtUrls', () => {
     expect(kept).toHaveLength(4)
   })
 
+  test('keeps a moved feed at the address it redirects to', async () => {
+    const fetchFn = (async () => {
+      const response = new Response(feedOf(['A']) as Uint8Array<ArrayBuffer>, { status: 200 })
+      Object.defineProperties(response, {
+        redirected: { value: true },
+        url: { value: 'https://rtd.example/api/download?filename=TripUpdate.pb' },
+      })
+      return response
+    }) as unknown as typeof fetch
+
+    const { kept } = await selectRtUrls([{ url: 'https://rtd.example/files/TripUpdate.pb', type: 'tripUpdates' }], SUBWAY, fetchFn)
+
+    expect(kept).toEqual([{ url: 'https://rtd.example/api/download?filename=TripUpdate.pb', type: 'tripUpdates' }])
+  })
+
   test('fetches a URL shared by trip updates and vehicle positions once', async () => {
     const { calls, fetchFn } = serving({ 'https://mta.example/bdfm': feedOf(['B', 'D']) })
 

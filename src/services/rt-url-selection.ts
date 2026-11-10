@@ -41,7 +41,7 @@ function routesOf(buf: Uint8Array): Set<string> {
   return routes
 }
 
-type Verdict = 'keep' | 'unauthorized' | 'foreign-routes'
+type Verdict = { keep: true; movedTo?: string } | { keep: false; reason: 'unauthorized' | 'foreign-routes' }
 
 async function judge(
   rt: SelectableRtUrl,
@@ -53,15 +53,17 @@ async function judge(
       headers: { ...(rt.headers ?? {}) },
       signal: AbortSignal.timeout(15_000),
     })
-    if (response.status === 401 || response.status === 403) return 'unauthorized'
-    if (!response.ok || rt.type === 'alerts') return 'keep'
+    if (response.status === 401 || response.status === 403) return { keep: false, reason: 'unauthorized' }
+    // MOTIS does not follow redirects, so a feed that moved is polled where it went.
+    const kept: Verdict = { keep: true, ...(response.ok && response.redirected && response.url && { movedTo: response.url }) }
+    if (!response.ok || rt.type === 'alerts') return kept
 
     const routes = routesOf(new Uint8Array(await response.arrayBuffer()))
-    if (!routes.size || !staticRoutes.size) return 'keep'
-    for (const route of routes) if (staticRoutes.has(route)) return 'keep'
-    return 'foreign-routes'
+    if (!routes.size || !staticRoutes.size) return kept
+    for (const route of routes) if (staticRoutes.has(route)) return kept
+    return { keep: false, reason: 'foreign-routes' }
   } catch {
-    return 'keep'
+    return { keep: true }
   }
 }
 
@@ -80,11 +82,11 @@ export async function selectRtUrls<T extends SelectableRtUrl>(
   const reported = new Set<string>()
   for (const rt of rtUrls) {
     const verdict = await verdicts.get(rt.url)!
-    if (verdict === 'keep') {
-      selection.kept.push(rt)
+    if (verdict.keep) {
+      selection.kept.push(verdict.movedTo ? { ...rt, url: verdict.movedTo } : rt)
     } else if (!reported.has(rt.url)) {
       reported.add(rt.url)
-      selection.dropped.push({ url: rt.url, reason: verdict })
+      selection.dropped.push({ url: rt.url, reason: verdict.reason })
     }
   }
   return selection
