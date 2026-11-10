@@ -35,6 +35,8 @@ const NEW = 8
 
 /** Median gap between an update's times and a run's schedule beyond which they are different trains. */
 export const MAX_MEDIAN_GAP_S = 15 * 60
+/** Ranking credit for a run whose trip_id contains the update's, or the reverse: the same train renamed by a suffix. */
+const SAME_ID_CREDIT_S = 3 * 60
 /** Share of an update's stops a run has to serve. */
 const MIN_STOP_COVERAGE = 0.6
 /** How long past its scheduled start an unclaimed run may go before it is cancelled. */
@@ -106,6 +108,10 @@ export function fit(run: Run, stus: transit_realtime.TripUpdate.IStopTimeUpdate[
   return gaps[gaps.length >> 1]!
 }
 
+function sameTrainId(rtId: string | null | undefined, staticId: string): boolean {
+  return !!rtId && (staticId.includes(rtId) || rtId.includes(staticId))
+}
+
 function restate(run: Run, td: TripDescriptor): TripDescriptor {
   return {
     tripId: run.trip.tripId,
@@ -160,8 +166,9 @@ export function normalizeFeed(
     // while running the previous service day's trip.
     for (const run of runs(index, sameDir, td.startDate ? [shiftDate(td.startDate, -1), td.startDate] : dates)) {
       if (claimed.has(runKey(run))) continue
-      const cost = fit(run, tu.stopTimeUpdate!)
-      if (cost !== null && cost <= MAX_MEDIAN_GAP_S) pairs.push({ tu, run, cost })
+      const gap = fit(run, tu.stopTimeUpdate!)
+      if (gap === null || gap > MAX_MEDIAN_GAP_S) continue
+      pairs.push({ tu, run, cost: sameTrainId(td.tripId, run.trip.tripId) ? gap - SAME_ID_CREDIT_S : gap })
     }
   }
   pairs.sort((a, b) => a.cost - b.cost)

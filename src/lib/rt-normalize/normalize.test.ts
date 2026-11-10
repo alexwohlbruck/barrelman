@@ -69,6 +69,12 @@ describe('normalizeFeed', () => {
     expect(trips(out).slice(0, 2).map(t => t!.tripId)).toEqual(['T2315', 'T2300'])
   })
 
+  it('keeps a late train on its own schedule when the next one fits its times slightly better', () => {
+    // T2330 runs 8 minutes late, a minute nearer T2345's times than its own.
+    const out = normalizeFeed(index, message('23:41', update('T2315..S', '23:21', 1), update('T2330..S', '23:38', 1)), at('23:41'))
+    expect(trips(out).slice(0, 2).map(t => t!.tripId)).toEqual(['T2315', 'T2330'])
+  })
+
   it('adds a train the timetable never had as a NEW trip with the feed times', () => {
     const out = normalizeFeed(index, message('22:20', update('extra', '22:22')), at('22:20'))
     const added = out.message.entity!.find(e => e.tripUpdate?.trip?.scheduleRelationship === 8)!
