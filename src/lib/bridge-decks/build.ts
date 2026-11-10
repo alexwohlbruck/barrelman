@@ -4,7 +4,8 @@
  * height every STEP metres and piers where they stand high.
  *
  * Everything comes from OSM and the terrain by rule, so a run is idempotent
- * and can be repeated whenever the map changes.
+ * and can be repeated whenever the map changes. Where OSM gives a deck's
+ * height outright, on its nodes' `ele`, the deck is pinned to it.
  */
 import {
   absorbPaths,
@@ -21,6 +22,7 @@ import {
   crossings,
   CURVE,
   edgePoints,
+  END_PIN,
   fair,
   VERTICAL_CURVE,
   fitEdges,
@@ -48,10 +50,11 @@ import {
   widen,
   type Chain,
   type Need,
+  type Pin,
   type Point,
   type Way,
 } from './profile'
-import { hungStretch, levelNeeds } from './elevation'
+import { clearanceNeeds, hungStretch, levelNeeds, MAX_DECK, SEAMARK_REACH, trustedPins, type Seamark } from './elevation'
 import { inOutline, shapeDecks, within, type Outline } from './shape'
 import { bentPoints, blocked, nearestFree, obstacles, wayHalf, type Obstacles } from './supports'
 
@@ -103,6 +106,8 @@ export type DeckInput = {
   surfaces?: Point[][][]
   /** A wikidata id per way, where the bridge is tagged with one. */
   wikidata: Map<number, string>
+  /** Seamarks charting a bridge's clearance, other than on its outline. */
+  seamarks?: Seamark[]
 }
 
 export type Deck = {
@@ -217,10 +222,12 @@ type Solved = {
   /** The deck's own ends and OSM nodes, before resampling, so ends that share a node can be told apart from ends that merely lie close. */
   ends: [Point, Point]
   nodes: Set<string>
+  /** Heights OSM gives it outright, on its nodes' `ele`, that it is held to: trusted, in metres along it. */
+  pins: Pin[]
 }
 
 /** What a deck passes over, as heights its surface must reach. */
-function needs(s: Pick<Solved, 'chain' | 'd' | 'g'>, input: DeckInput, below: Solved[], bases: Map<string, Base>): Need[] {
+function needs(s: Pick<Solved, 'chain' | 'd' | 'g' | 'pins'>, input: DeckInput, below: Solved[], bases: Map<string, Base>): Need[] {
   const own = box(s.chain.points)
   const out = [...fixedNeeds(s, input, bases)]
   for (const lower of below) {
@@ -238,9 +245,14 @@ function needs(s: Pick<Solved, 'chain' | 'd' | 'g'>, input: DeckInput, below: So
   return out
 }
 
-/** The needs that do not move as decks settle: the ways and water crossed, and the outline's recorded level. Worked out once per deck. */
+/**
+ * The needs that do not move as decks settle: the ways and water crossed, and
+ * the heights OSM records of the bridge on its outline, its ways and its
+ * seamarks. A deck pinned by its nodes' `ele` takes its height from them
+ * rather than those, which say less. Worked out once per deck.
+ */
 const fixed = new WeakMap<Chain, Need[]>()
-function fixedNeeds(s: Pick<Solved, 'chain' | 'd' | 'g'>, input: DeckInput, bases: Map<string, Base>): Need[] {
+function fixedNeeds(s: Pick<Solved, 'chain' | 'd' | 'g' | 'pins'>, input: DeckInput, bases: Map<string, Base>): Need[] {
   let out = fixed.get(s.chain)
   if (out) return out
   out = []
@@ -254,11 +266,32 @@ function fixedNeeds(s: Pick<Solved, 'chain' | 'd' | 'g'>, input: DeckInput, base
     s.chain.points.forEach((p, i) => {
       if (water.some(ring => inside(p, ring))) out!.push({ at: s.d[i], height: s.g[i] + CLEARANCE.water })
     })
+  fixed.set(s.chain, out)
+  if (s.pins.length) return out
   const outline = outlineOf(s.chain, input.outlines)
   const base = outline && bases.get(outline.id)
   if (base) out.push(...levelNeeds(s.chain.points, s.chain.points.map(p => within(p, outline!.rings)), outline!, base.ground).map(n => ({ ...n, exact: n.exact && s.chain.layer === base.layer })))
-  fixed.set(s.chain, out)
+  if (input.seamarks?.length) out.push(...clearanceNeeds(s.chain.points, s.d, s.g, input.seamarks.filter(m => covers(grow(own, SEAMARK_REACH), m.point))))
+  out.push(...wayEle(s, input))
   return out
+}
+
+const waysById = new WeakMap<Way[], Map<number, Way>>()
+
+/** A bridge way's own `ele`, a least height for the deck at the way's middle, where it stands above the ground there and no higher than a deck does. */
+function wayEle(s: Pick<Solved, 'chain' | 'd' | 'g'>, input: DeckInput): Need[] {
+  let byId = waysById.get(input.ways)
+  if (!byId) waysById.set(input.ways, (byId = new Map(input.ways.map(w => [w.id, w]))))
+  return s.chain.ways.flatMap(id => {
+    const w = byId!.get(id)
+    if (w?.ele === undefined) return []
+    const d = along(w.points)
+    const middle = resample(w.points, d[d.length - 1] / 2)[1] ?? w.points[0]
+    const near = beside(s.chain.points, middle)
+    const at = s.d[near.segment - 1] + (s.d[near.segment] - s.d[near.segment - 1]) * near.t
+    const g = heightAt(s.d, s.g, at)
+    return w.ele > g && w.ele <= g + MAX_DECK ? [{ at, height: w.ele }] : []
+  })
 }
 
 /**
@@ -571,6 +604,8 @@ function faired(solved: Solved[], input: DeckInput, bases: Map<string, Base>) {
       const i = s.d.findIndex(v => Math.abs(v - need.at) < 0.5)
       if (i >= 0) weight[i] = CAMBER_HOLD
     }
+    // The samples either side of each pin hold the profile through it.
+    for (const pin of s.pins) for (const i of bracketing(s.d, pin.at)) weight[i] = PINNED
     const total = s.d[n - 1]
     const ends = ([0, 1] as const).map(end => {
       const held = s.grounded[end] || s.held?.[end] != null || s.on.some(r => r.at === s.chain.points[end ? n - 1 : 0])
@@ -644,7 +679,8 @@ function liftedBeside(solved: Solved[]) {
   const targets = joined(solved)
   for (const s of solved) {
     const lift = targets.get(s)!.map((v, i) => v - s.z[i])
-    if (!lift.some(v => v > 0)) continue
+    // A pinned deck is where OSM says it is; a deck beside it is lifted to it, not it to that one.
+    if (s.pins.length || !lift.some(v => v > 0)) continue
     // An end on the ground stays there.
     const weight = s.d.map((_, i) => ((i === 0 && s.grounded[0]) || (i === s.d.length - 1 && s.grounded[1]) ? PINNED : 1))
     const eased = fair(lift, s.d, { weight }, Math.min(VERTICAL_CURVE, s.d[s.d.length - 1]))
@@ -722,7 +758,7 @@ function resolve(s: Solved, solved: Solved[]) {
   const rests = ([0, 1] as const).map(i => (s.grounded[i] ? null : restingOn(s, i, solved)))
   s.on = rests.flatMap((r, i) => (r ? [{ deck: r.on, at: s.chain.points[i ? s.chain.points.length - 1 : 0] }] : []))
   const resting = rests.map((r, i) => (r ? Math.max(r.height, continued(s, i as 0 | 1, r.on)) : s.held?.[i] ?? s.lands[i]?.height ?? null)) as [number | null, number | null]
-  s.z = solve({ ...s.chain, grounded: s.grounded }, s.g, s.needs, resting)
+  s.z = solve({ ...s.chain, grounded: s.grounded }, s.g, s.needs, resting, s.pins)
   dipped(s)
 }
 
@@ -762,7 +798,8 @@ function dipUnder(solved: Solved[]): Solved[] {
     const anchored = ([0, 1] as const).map(i => s.grounded[i] || s.held?.[i] != null || s.on.some(r => r.at === s.chain.points[i ? n - 1 : 0]))
     const cap = (at: number) => Math.min(anchored[0] ? s.z[0] + MAX_GRADE * at : Infinity, anchored[1] ? s.z[n - 1] + MAX_GRADE * (total - at) : Infinity)
     for (const o of solved) {
-      if (o.chain.layer >= s.chain.layer || o.chain.kind !== 'road' || rank(o) > rank(s) || !meet(box(s.chain.points), box(o.chain.points))) continue
+      // A deck pinned where OSM gives its height stands there: the road over it is the one mapped wrong.
+      if (o.pins.length || o.chain.layer >= s.chain.layer || o.chain.kind !== 'road' || rank(o) > rank(s) || !meet(box(s.chain.points), box(o.chain.points))) continue
       for (const { at, segment, t } of over(s, o)) {
         const there = o.d[segment - 1] + (o.d[segment] - o.d[segment - 1]) * t
         const z = heightAt(o.d, o.z, there)
@@ -900,6 +937,53 @@ function scrap(s: Solved, solved: Solved[]): boolean {
   })
 }
 
+/** A deck's nodes tagged `ele`, at their places along it, those it can believe (see `trustedPins`). */
+function pinsAlong(chain: Chain, d: number[], g: number[]): Pin[] {
+  const pins = (chain.pins ?? []).flatMap(({ point, height }) => {
+    const near = beside(chain.points, point)
+    // A pin's node is on the way; off it, it is a way folded into another deck.
+    if (near.distance > 1) return []
+    return [{ at: d[near.segment - 1] + (d[near.segment] - d[near.segment - 1]) * near.t, height }]
+  })
+  return trustedPins(pins, d, g)
+}
+
+/** The samples either side of a distance along a deck, or the one at it. */
+function bracketing(d: number[], at: number): number[] {
+  const i = d.findIndex(v => v >= at - 1e-6)
+  if (i < 0) return [d.length - 1]
+  return Math.abs(d[i] - at) < 1e-6 || i === 0 ? [i] : [i - 1, i]
+}
+
+/**
+ * A pinned deck put back through its pins: the difference at each, taken
+ * linearly between them and faded out from the outer pins to the ends, which
+ * stay as they meet what they rest on.
+ */
+function repinned(s: Solved) {
+  if (!s.pins.length) return
+  const total = s.d[s.d.length - 1]
+  const off = [...s.pins].sort((a, b) => a.at - b.at).map(p => ({ at: p.at, by: p.height - heightAt(s.d, s.z, p.at) }))
+  if (off.every(o => Math.abs(o.by) < 0.01)) return
+  // A pin at an end is that end's height; other ends stay as they meet what they rest on.
+  const marks = [
+    ...(off[0].at <= END_PIN ? [] : [{ at: 0, by: 0 }]),
+    ...off,
+    ...(total - off[off.length - 1].at <= END_PIN ? [] : [{ at: total, by: 0 }]),
+  ]
+  if (marks.length === 1) {
+    s.z = s.z.map(v => v + marks[0].by)
+    return
+  }
+  let k = 1
+  s.z = s.z.map((v, i) => {
+    while (k < marks.length - 1 && marks[k].at < s.d[i]) k++
+    const [a, b] = [marks[k - 1], marks[k]]
+    const t = Math.max(0, Math.min(1, b.at - a.at < 1e-9 ? 1 : (s.d[i] - a.at) / (b.at - a.at)))
+    return v + a.by + (b.by - a.by) * t
+  })
+}
+
 export async function buildDecks(input: DeckInput, ground: Ground): Promise<Deck[]> {
   const decks = absorbTracks(absorbPaths(fitted(chains(input.ways), input.outlines, input.kerbs))) as Fitted[]
   // An end lands where a road on the ground meets it, rests where it meets
@@ -931,7 +1015,7 @@ export async function buildDecks(input: DeckInput, ground: Ground): Promise<Deck
   const bases = new Map<string, Base>()
   shaped.forEach((chain, k) => {
     const outline = outlineOf(chain, input.outlines)
-    if (outline?.deck === undefined || !under[k]) return
+    if ((outline?.deck === undefined && outline?.top === undefined) || !under[k]) return
     for (const [i, p] of chain.points.entries()) {
       if (!within(p, outline.rings)) continue
       const base = bases.get(outline.id) ?? { ground: Infinity, layer: chain.layer }
@@ -946,15 +1030,16 @@ export async function buildDecks(input: DeckInput, ground: Ground): Promise<Deck
     const d = along(chain.points)
     const g = under[k]
     if (!g) continue
-    const need = needs({ chain, d, g }, input, solved.filter(o => o.chain.layer < chain.layer), bases)
+    const pins = pinsAlong(chain, d, g)
+    const need = needs({ chain, d, g, pins }, input, solved.filter(o => o.chain.layer < chain.layer), bases)
     const own = decks[k].points
     const landed = lands[k].map(l => l?.height ?? null) as [number | null, number | null]
-    const z = solve({ ...chain, grounded: grounded[k] }, g, need, landed)
+    const z = solve({ ...chain, grounded: grounded[k] }, g, need, landed, pins)
     const outline = outlineOf(chain, input.outlines)
     const hung = outline ? hungStretch(chain.points, chain.points.map(p => within(p, outline.rings)), outline) : null
     solved.push({
       chain, d, g, grounded: grounded[k], needs: need, hung, z, on: [], lands: lands[k], roads: roads[k],
-      ends: [own[0], own[own.length - 1]], nodes: new Set(own.map(key)),
+      ends: [own[0], own[own.length - 1]], nodes: new Set(own.map(key)), pins,
     })
   }
   // An end meeting only ways on an embankment is on fill the bare-earth terrain
@@ -991,7 +1076,8 @@ export async function buildDecks(input: DeckInput, ground: Ground): Promise<Deck
         resolve(s, solved)
         if (s.on.some(r => lowered.has(r.deck))) lowered.add(s)
       }
-  for (const s of solved) s.z = eased(s, input.onGround)
+  // A pinned deck already runs on its vertical curves through its pins, which averaging would pull off them; fairing eases it into the road beyond.
+  for (const s of solved) if (!s.pins.length) s.z = eased(s, input.onGround)
   // Easing moves twins a few centimetres apart; side by side, they meet exactly.
   joinNeighbours(solved, undefined, EASED)
   for (const s of solved) s.z = cambered(s.z, s.d, s.needs)
@@ -1003,6 +1089,8 @@ export async function buildDecks(input: DeckInput, ground: Ground): Promise<Deck
   const depth = (s: Solved, seen = new Set<Solved>()): number => (seen.has(s) ? 0 : (seen.add(s), Math.max(0, ...s.on.map(r => 1 + depth(r.deck, seen)))))
   for (const s of [...solved].sort((a, b) => depth(a) - depth(b))) merged(s)
   for (let pass = 0; pass < SETTLE; pass++) for (const s of solved) meetRests(s)
+  // Bringing ends onto what they rest on and merges may have moved a pinned deck a little off its pins: put back.
+  for (const s of solved) repinned(s)
   // A scrap of footbridge meeting nothing at either end would stand alone in mid air.
   const scraps = solved.filter(s => scrap(s, solved))
   for (const s of scraps.filter(s => !solved.some(o => !scraps.includes(o) && o.on.some(r => r.deck === s)))) solved.splice(solved.indexOf(s), 1)

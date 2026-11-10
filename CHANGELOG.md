@@ -10,6 +10,12 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.10.40] - 2026-11-10
+
+### Added
+
+* **Bridge decks stand at the heights OSM tags on their nodes.** An `ele` on a node of a bridge's highway or railway way (metres above sea level, the terrain's datum: NAVD88 in the US) pins its deck there exactly, and the deck runs through its pins on straight grades and parabolic vertical curves, as the road does, rather than arching low over the ground or water. Tag a few nodes of each carriageway, at the grade breaks and the crest: three on the San Diego–Coronado Bridge, which is drawn 5–20 m up over the bay today, put its whole 2.6 km within 0.3 m of the lidar roadway. A value below the ground or more than 150 m above it is left out. A seamark charting a bridge's clearance (`seamark:bridge:clearance_height`, or `_closed` for an opening bridge) now lifts the deck over it from a node or way under the bridge, not only from the `man_made=bridge` outline, and `ele` on the outline or a bridge way is a least height for its crest. Replication queues the decks of a node whose `ele` changes. Run "Build Bridge Decks" after upgrading for existing decks to take them.
+
 ## [0.10.39] - 2026-11-10
 
 ### Added

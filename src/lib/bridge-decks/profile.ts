@@ -13,6 +13,9 @@
  *     is held, eased into vertical curves. A bridge never sags between two
  *     things it clears, so a long viaduct over a street grid runs level
  *   - decks side by side at about one height are joined at the higher one
+ *   - a node of the way tagged `ele` pins the deck at that height exactly; the
+ *     deck runs through its pins on straight grades and parabolic vertical
+ *     curves (see `pinned`), and nothing later moves it off them
  */
 
 export type Point = [number, number]
@@ -30,7 +33,14 @@ export type Way = {
   width: number
   /** The road it carries, by class and ref or name, so a junction carries the road on rather than a ramp that happens to run straighter. */
   road?: string
+  /** Its nodes tagged `ele`: the vertex, and the deck's height there in metres above sea level. */
+  pins?: Array<{ vertex: number; height: number }>
+  /** Its own `ele`, a least height for its deck at its middle. */
+  ele?: number
 }
+
+/** A height a deck stands at exactly, at a distance along it: a node tagged `ele`. */
+export type Pin = { at: number; height: number }
 
 export type Chain = {
   ways: number[]
@@ -52,6 +62,8 @@ export type Chain = {
   road?: string
   /** Sidewalks folded in: the side, how far out from the centreline, and the stretch along the deck in metres. */
   paths?: Array<{ side: 0 | 1; out: number; from: number; to: number }>
+  /** Its ways' nodes tagged `ele`, by where they lie. */
+  pins?: Array<{ point: Point; height: number }>
 }
 
 /** Steepest a deck climbs, as a grade. */
@@ -216,7 +228,12 @@ export function chains(ways: Way[]): Chain[] {
       }
     }
     const width = Math.max(...members.map(m => m.width))
-    out.push({ ways: members.map(m => m.id), points, kind: start.kind, layer: Math.max(...members.map(m => m.layer)), edges: [width / 2, width / 2], road: members.find(m => m.road)?.road })
+    // A node two ways share is one pin.
+    const pins = [...new Map(members.flatMap(m => (m.pins ?? []).map(p => [key(m.points[p.vertex]), { point: m.points[p.vertex], height: p.height }] as const))).values()]
+    out.push({
+      ways: members.map(m => m.id), points, kind: start.kind, layer: Math.max(...members.map(m => m.layer)), edges: [width / 2, width / 2], road: members.find(m => m.road)?.road,
+      ...(pins.length ? { pins } : {}),
+    })
   }
   return out
 }
@@ -614,35 +631,191 @@ export function align(d: number[], lower: number[], anchors: [number | null, num
   })
 }
 
+/** Metres from an end within which a pin is that end's own height. */
+export const END_PIN = 2
+/** Metres apart within which two pins are one, at their mean: the nodes of twin ways drawn over each other, or a node doubled. */
+const PIN_GAP = 2
+
+/** Pins as the ends' heights, where they lie at an end, and those between in order, near ones taken as one. */
+export function pinControls(pins: Pin[], total: number): { inner: Pin[]; ends: [number | null, number | null] } {
+  const ends: [number | null, number | null] = [null, null]
+  const near: [number, number] = [Infinity, Infinity]
+  const inner: Array<Pin & { count: number }> = []
+  for (const p of [...pins].sort((a, b) => a.at - b.at)) {
+    const off: [number, number] = [p.at, total - p.at]
+    const end = off[0] <= END_PIN ? 0 : off[1] <= END_PIN ? 1 : null
+    if (end !== null) {
+      if (off[end] < near[end]) [ends[end], near[end]] = [p.height, off[end]]
+      continue
+    }
+    const last = inner[inner.length - 1]
+    if (last && p.at - last.at / last.count < PIN_GAP) {
+      last.at += p.at
+      last.height += p.height
+      last.count++
+    } else inner.push({ ...p, count: 1 })
+  }
+  return { inner: inner.map(p => ({ at: p.at / p.count, height: p.height / p.count })), ends }
+}
+
+/** A parabola or line, z = a·u² + b·u + c with u = s − x, through three points or two. */
+type Curve = { x: number; a: number; b: number; c: number }
+
+const at = (q: Curve, s: number) => {
+  const u = s - q.x
+  return (q.a * u + q.b) * u + q.c
+}
+
+function through(p: Pin, q: Pin, r?: Pin): Curve {
+  if (!r) return { x: p.at, a: 0, b: (q.height - p.height) / (q.at - p.at), c: p.height }
+  const [s1, s2] = [(q.height - p.height) / (q.at - p.at), (r.height - q.height) / (r.at - q.at)]
+  const a = (s2 - s1) / (r.at - p.at)
+  return { x: q.at, a, b: s1 + a * (q.at - p.at), c: q.height }
+}
+
+/**
+ * Where the line from a point to a curve meets it as its tangent, between the
+ * point and `to`; null where it does not, as for a line.
+ */
+function touching(q: Curve, from: Pin, to: number): number | null {
+  if (Math.abs(q.a) < 1e-12) return null
+  const u0 = from.at - q.x
+  const square = (at(q, from.at) - from.height) / q.a
+  if (square < 0) return null
+  for (const u of [u0 + Math.sqrt(square), u0 - Math.sqrt(square)]) {
+    const s = u + q.x
+    if ((s - from.at) * (to - s) >= 0 && Math.abs(s - from.at) > 1e-9) return s
+  }
+  return null
+}
+
+/** A straight grade from a point to where it meets a curve as its tangent, then the curve: the tangent a road leaves a vertical curve on. */
+function tangentTo(q: Curve, from: Pin, to: number): ((s: number) => number) | null {
+  const t = touching(q, from, to)
+  if (t === null) return null
+  const zt = at(q, t)
+  return s => ((s - from.at) * (t - s) >= 0 ? from.height + ((zt - from.height) * (s - from.at)) / (t - from.at) : at(q, s))
+}
+
+/**
+ * The profile a road runs on through its pins, in order and between its ends,
+ * and through those of its ends that are held (`ends`): a road's own profile,
+ * straight grades eased into parabolic vertical curves. Between two pins it is
+ * the parabola through them and the pin beyond, blended with the one through
+ * the pin before (an Overhauser curve, which three pins in a line make a
+ * straight grade and three on one parabola that parabola). From a held end,
+ * or from a last pin a curve does not run through, it is the straight grade
+ * that meets the curve through the nearest pins as its tangent, or else the
+ * straight grade to the nearest pin. A pin's own height is never moved. An end
+ * that is not held carries on at the grade it leaves the last pin at, no
+ * steeper than MAX_GRADE.
+ */
+export function pinned(d: number[], pins: Pin[], ends: [number | null, number | null]): number[] {
+  const k = pins.length
+  const total = d[d.length - 1]
+  const curve = (j: number) => (j >= 1 && j <= k - 2 ? through(pins[j - 1], pins[j], pins[j + 1]) : null)
+  const between = pins.slice(0, -1).map((p, j) => {
+    const [L, R] = [curve(j), curve(j + 1)]
+    const q = pins[j + 1]
+    if (L && R) return (s: number) => {
+      const t = (s - p.at) / (q.at - p.at)
+      return (1 - t) * at(L, s) + t * at(R, s)
+    }
+    // At the last pin of a run, a curve that does not reach it may: then the pin lies on the grade leaving that curve.
+    const beyond = L ? curve(j - 1) && tangentTo(curve(j - 1)!, q, p.at) : R ? curve(j + 2) && tangentTo(curve(j + 2)!, p, q.at) : null
+    if (beyond) return beyond
+    const one = L ?? R ?? through(p, q)
+    return (s: number) => at(one, s)
+  })
+  const nearest = (end: 0 | 1) => (end ? pins[k - 1] : pins[0])
+  const outer = ([0, 1] as const).map(end => {
+    const p = nearest(end)
+    const from: Pin | null = ends[end] === null ? null : { at: end ? total : 0, height: ends[end]! }
+    if (!from) {
+      // Carried on at the grade it leaves the pin at.
+      const inside = k > 1 ? (end ? between[k - 2] : between[0]) : null
+      const h = 1
+      const grade = inside ? (end ? p.height - inside(p.at - h) : inside(p.at + h) - p.height) / h : 0
+      const g = Math.max(-MAX_GRADE, Math.min(MAX_GRADE, grade))
+      return (s: number) => p.height + g * (s - p.at)
+    }
+    const q = k >= 3 ? (end ? through(pins[k - 3], pins[k - 2], pins[k - 1]) : through(pins[0], pins[1], pins[2])) : null
+    const tangent = q && tangentTo(q, from, p.at)
+    if (tangent) return tangent
+    const line = through(from, p)
+    return (s: number) => at(line, s)
+  })
+  let j = 0
+  return d.map(s => {
+    if (s <= pins[0].at) return s === pins[0].at ? pins[0].height : outer[0](s)
+    if (s >= pins[k - 1].at) return s === pins[k - 1].at ? pins[k - 1].height : outer[1](s)
+    while (j < k - 2 && s > pins[j + 1].at) j++
+    return between[j](s)
+  })
+}
+
+/**
+ * Lifts that keep a profile clear of `short` (how far below what it must clear
+ * it runs at each sample): over each stretch between `marks`, the least
+ * concave lift that is nothing at both its marks, so a pin stays where it is
+ * and the profile between rises on straight grades from it to what it clears.
+ */
+function lifts(d: number[], short: number[], marks: number[]): number[] {
+  const out = d.map(() => 0)
+  let i = 0
+  for (let m = 1; m < marks.length; m++) {
+    const [a, b] = [marks[m - 1], marks[m]]
+    while (i < d.length && d[i] <= a) i++
+    const from = i
+    while (i < d.length && d[i] < b) i++
+    if (i === from || !short.slice(from, i).some(v => v > 0)) continue
+    const hull = arch([a, ...d.slice(from, i), b], [0, ...short.slice(from, i), 0])
+    for (let k = from; k < i; k++) out[k] = Math.max(0, hull[k - from + 1])
+  }
+  return out
+}
+
 /**
  * Deck height at every vertex. Each grounded end sits on the ground and an end
  * resting on another deck takes the height given; an end that is neither stays
  * a layer's clearance up. Between, the deck arches over the ground and what it
  * crosses (each held level for CURVE metres), and is held to MAX_GRADE from
- * each anchored end.
+ * each anchored end. A deck with `pins` (its nodes tagged `ele`, already
+ * trusted) runs through them instead (see `pinned`), lifted where it would not
+ * clear something only between the pins and ends either side of it; a pin at
+ * an end is that end's height.
  */
 export function solve(
   chain: Pick<Chain, 'points' | 'layer'> & { grounded: [boolean, boolean] },
   ground: number[],
   needs: Need[],
   resting: [number | null, number | null] = [null, null],
+  pins: Pin[] = [],
 ): number[] {
   const d = along(chain.points)
   const n = ground.length
+  const total = d[n - 1]
+  const { inner, ends } = pinControls(pins, total)
   const end = (i: 0 | 1, g: number) => {
     const rest = resting[i]
-    return rest !== null ? Math.max(rest, g) : chain.grounded[i] ? g : g + LAYER_CLEARANCE * Math.max(1, chain.layer)
+    return ends[i] ?? (rest !== null ? Math.max(rest, g) : chain.grounded[i] ? g : g + LAYER_CLEARANCE * Math.max(1, chain.layer))
   }
-  const anchored = [chain.grounded[0] || resting[0] !== null, chain.grounded[1] || resting[1] !== null]
+  const anchored = ([0, 1] as const).map(i => ends[i] !== null || chain.grounded[i] || resting[i] !== null)
   const [za, zb] = [end(0, ground[0]), end(1, ground[n - 1])]
   const lower = steady(ground, d).map(g => g - TERRAIN_SLACK)
-  // A need out of reach of an anchored end within MAX_GRADE is cut to what it can reach: left whole, it would lift the deck far from it.
-  const reach = (at: number) => Math.min(anchored[0] ? za + MAX_GRADE * at : Infinity, anchored[1] ? zb + MAX_GRADE * (d[n - 1] - at) : Infinity)
+  // What holds the deck's height: its anchored ends and its pins.
+  const held: Pin[] = [...(anchored[0] ? [{ at: 0, height: za }] : []), ...inner, ...(anchored[1] ? [{ at: total, height: zb }] : [])]
+  // A need out of reach of what holds the deck within MAX_GRADE is cut to what it can reach: left whole, it would lift the deck far from it.
+  const reach = (at: number) => held.reduce((m, h) => Math.min(m, h.height + MAX_GRADE * Math.abs(at - h.at)), Infinity)
   for (const need of needs)
     for (let i = 0; i < n; i++) if (Math.abs(d[i] - need.at) <= CURVE / 2) lower[i] = Math.max(lower[i], Math.min(need.height, reach(d[i])))
   lower[0] = za
   lower[n - 1] = zb
-  return align(d, lower, [anchored[0] ? za : null, anchored[1] ? zb : null])
+  const heldEnds: [number | null, number | null] = [anchored[0] ? za : null, anchored[1] ? zb : null]
+  if (!inner.length) return align(d, lower, heldEnds)
+  const base = pinned(d, inner, heldEnds)
+  const up = lifts(d, lower.map((v, i) => v - base[i]), [0, ...inner.map(p => p.at), total])
+  return base.map((v, i) => v + up[i])
 }
 
 /** Metres over which a deck eases back from a held camber to its own grade line. */
@@ -1084,10 +1257,11 @@ export function closeVerges(decks: GoreDeck[], sameBridge: (path: Chain, road: G
  * would leave the deck hanging over the road it lands on. Nor is a deck
  * lifted near where another rests on it (`on`): a ramp climbing away from the
  * road it leaves takes that road's height while beside it, not the other way
- * round.
+ * round. Nor is a deck pinned by its nodes' `ele` lifted: it stands where OSM
+ * says, and a deck beside it is lifted to it instead.
  */
 export function joinNeighbours(
-  decks: Array<{ chain: Chain; z: number[]; grounded?: [boolean, boolean]; on?: Array<{ deck: unknown; at: Point }> }>,
+  decks: Array<{ chain: Chain; z: number[]; grounded?: [boolean, boolean]; on?: Array<{ deck: unknown; at: Point }>; pins?: Pin[] }>,
   gap = 1.5,
   step = 1.5,
 ) {
@@ -1095,7 +1269,7 @@ export function joinNeighbours(
   for (const [a, A] of decks.entries())
     for (const [b, B] of decks.entries()) {
       // A walkway beside a roadway may climb away over it; the roadway is never lifted after it.
-      if (a === b || (A.chain.kind === 'rail') !== (B.chain.kind === 'rail') || (A.chain.kind === 'road' && B.chain.kind === 'path')) continue
+      if (a === b || A.pins?.length || (A.chain.kind === 'rail') !== (B.chain.kind === 'rail') || (A.chain.kind === 'road' && B.chain.kind === 'path')) continue
       const leaves = (B.on ?? []).filter(r => r.deck === A).map(r => r.at)
       // Farther apart than both decks' widest sides and the gap, no edge can meet the other.
       if (!meet(grow(box(A.chain.points), widest[a] + widest[b] + gap), box(B.chain.points))) continue

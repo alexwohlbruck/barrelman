@@ -37,7 +37,8 @@ const bridge = { bridge: 'yes', layer: '1' }
 const ways: [number, string, Record<string, string>][] = [
   [1, line([-80.836, Y], [-80.834, Y]), road()],
   [2, line([-80.834, Y], [-80.832, Y]), road(bridge)],
-  [3, line([-80.832, Y], [-80.830, Y]), road(bridge)],
+  // The middle vertex is the node a test tags with ele.
+  [3, line([-80.832, Y], [-80.8315, Y], [-80.830, Y]), road(bridge)],
   [4, line([-80.830, Y], [-80.828, Y]), road()],
   [5, line([-80.826, 35.23], [-80.8255, 35.23]), { highway: 'footway', ...bridge }],
   [10, line([-80.833, 35.224], [-80.833, 35.226]), { waterway: 'river' }],
@@ -130,6 +131,26 @@ run('incremental bridge decks', () => {
       expect(await queued()).toBe(1)
       await sql`DELETE FROM detail_dirty`
     })
+  })
+
+  describe('a cycle that tags a node of a bridge with ele', () => {
+    const top = async () => Math.max(...(await sql<{ heights: number[] }[]>`SELECT heights FROM bridge_decks WHERE '2' = ANY(ways::text[])`)[0].heights)
+    // On way 3, clear of the river the deck crosses at 204 m.
+    const node = `('node/900', 'N', 900, '{}', '{"ele": "212"}', ST_SetSRID(ST_MakePoint(-80.8315, ${Y}), 4326), 'point')`
+
+    test('queues the deck it pins, and the deck stands at it once rebuilt', async () => {
+      await replay(['node/900'], ['node/900'], `INSERT INTO geo_places (id, osm_type, osm_id, categories, tags, geom, geom_type) VALUES ${node}`)
+      expect(await queued()).toBe(1)
+      expect(await updateDecks(sql, flat(), 100)).toBe(0)
+      expect(await top()).toBeCloseTo(212, 0)
+    }, 60_000)
+
+    test('queues it again when the tag is taken off, and the deck comes back down', async () => {
+      await replay(['node/900'], ['node/900'], `DELETE FROM geo_places WHERE id = 'node/900'`)
+      expect(await queued()).toBe(1)
+      expect(await updateDecks(sql, flat(), 100)).toBe(0)
+      expect(await top()).toBeLessThan(206)
+    }, 60_000)
   })
 
   describe('a cycle that deletes, untags and adds bridges', () => {
