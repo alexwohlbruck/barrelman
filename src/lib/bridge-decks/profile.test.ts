@@ -4,8 +4,8 @@ import {
   fair,
   VERTICAL_CURVE,
   PINNED,
-  absorbPaths, absorbTracks, along, beside, clearOfWalkways, closeVerges, detab, GORE_GAP, holdGores, landing, LANDING, arch, chains, crossings, fitEdges, joinNeighbours, MAX_GRADE, mercator, paveGores, resample, sideAt, smooth, solve, steady, widen,
-  type Chain, type Point, type Way,
+  absorbPaths, absorbTracks, along, beside, clearOfWalkways, closeVerges, detab, GORE_GAP, holdGores, landing, LANDING, arch, chains, crossings, fitEdges, joinNeighbours, MAX_GRADE, mercator, paveGores, pinned, resample, sideAt, smooth, solve, steady, widen,
+  type Chain, type Pin, type Point, type Way,
 } from './profile'
 
 // Metres east of a point in Charlotte, as mercator.
@@ -59,6 +59,11 @@ describe('chains', () => {
     const main: Way = { ...way(1, 0, 0), points: [east(60), east(0)], road: 'secondary/North Davidson Street' }
     const slip: Way = { ...way(2, 0, 0), points: [east(60), east(0, 12)], road: 'secondary_link/' }
     expect(chains([main, slip]).map(d => d.ways)).toEqual([[1], [2]])
+  })
+
+  it('carries the pins of its ways\' nodes, a node two ways share once', () => {
+    const [chain] = chains([{ ...way(1, 0, 100), pins: [{ vertex: 1, height: 12 }] }, { ...way(2, 100, 200), pins: [{ vertex: 0, height: 12 }, { vertex: 1, height: 9 }] }])
+    expect(chain.pins).toEqual([{ point: east(100), height: 12 }, { point: east(200), height: 9 }])
   })
 
   it('never chains two tracks parting at a turnout', () => {
@@ -192,6 +197,84 @@ describe('solve', () => {
     const ramp = { points: resample([east(0), east(60)], 6), layer: 1, grounded: [true, false] as [boolean, boolean] }
     const z = solve(ramp, ramp.points.map(() => 100), [], [null, 120])
     expect(z[5]).toBeCloseTo(110, 3)
+  })
+})
+
+/**
+ * The San Diego–Coronado Bridge, as USGS lidar has its roadway: a straight
+ * grade up from the Coronado end, one parabolic vertical curve over the
+ * crest, a straight grade down to the San Diego end. The tangents and curve
+ * are the ones that run through the ends and the three heights tagged on its
+ * nodes: 4.69 % up to 1052 m, an 857 m curve cresting at 75.1 m, 5.02 % down.
+ */
+const CORONADO = { length: 2585, ends: [16, 30], up: 0.0469091, down: 0.0502002, from: 1051.872, curve: 857.198 }
+const coronado = (s: number) => {
+  const { ends, up, down, from, curve } = CORONADO
+  const u = Math.min(Math.max(s, from), from + curve) - from
+  const z = ends[0] + up * from + up * u - ((up + down) / (2 * curve)) * u * u
+  return s < from ? ends[0] + up * s : s > from + curve ? z - down * (s - from - curve) : z
+}
+const CORONADO_PINS: Pin[] = [{ at: 1150, height: 69.4 }, { at: 1435, height: 75.0 }, { at: 1740, height: 70.8 }]
+
+describe('a deck pinned by its nodes\' ele', () => {
+  const deck = { points: resample([east(0), east(CORONADO.length)], 6), layer: 1, grounded: [true, true] as [boolean, boolean] }
+  const d = along(deck.points)
+  // The bay between its landfalls, which the solver clears by 4 m and no more.
+  const bay = d.map(s => (s < 40 ? CORONADO.ends[0] : s > CORONADO.length - 40 ? CORONADO.ends[1] : 0))
+  const water = d.flatMap((s, i) => (bay[i] === 0 ? [{ at: s, height: 4 }] : []))
+
+  it('reproduces the San Diego–Coronado Bridge\'s grades and crest curve from three pins and its grounded ends', () => {
+    const z = solve(deck, bay, water, [null, null], CORONADO_PINS)
+    for (const [i, s] of d.entries()) expect(Math.abs(z[i] - coronado(s))).toBeLessThan(0.3)
+    expect(z[0]).toBe(16)
+    expect(z.at(-1)).toBe(30)
+  })
+
+  it('without them, it is drawn low over the bay', () => {
+    const z = solve(deck, bay, water)
+    expect(Math.max(...z)).toBeLessThan(40)
+  })
+
+  it('runs on a straight grade from each grounded end to a single pin', () => {
+    const z = solve(deck, bay, water, [null, null], [{ at: 1435, height: 75 }])
+    const line = (s: number) => (s <= 1435 ? 16 + ((75 - 16) * s) / 1435 : 75 + ((30 - 75) * (s - 1435)) / (CORONADO.length - 1435))
+    for (const [i, s] of d.entries()) expect(z[i]).toBeCloseTo(line(s), 3)
+  })
+
+  it('takes a pin at an end as that end\'s height, over the ground there', () => {
+    const z = solve(deck, bay, water, [null, null], [{ at: 0.5, height: 18 }, { at: 1435, height: 75 }])
+    expect(z[0]).toBe(18)
+  })
+
+  it('clears what it crosses between a pin and an end, and holds the pin', () => {
+    const z = solve(deck, bay, [...water, { at: 300, height: 32 }], [null, null], [{ at: 1435, height: 75 }])
+    expect(z[50]).toBeGreaterThanOrEqual(32 - 1e-9)
+    expect(z[0]).toBe(16)
+    const i = d.findIndex(s => s >= 1435)
+    expect(z[i]).toBeCloseTo(75 + ((30 - 75) * (d[i] - 1435)) / (CORONADO.length - 1435), 3)
+  })
+
+  it('is never cut to what MAX_GRADE reaches from its ends', () => {
+    // 30 m up within 200 m of the end: steeper than a deck climbs by rule.
+    const z = solve(deck, bay, water, [null, null], [{ at: 200, height: 46 }])
+    expect(z[d.findIndex(s => s >= 200) - 1]).toBeGreaterThan(45)
+  })
+})
+
+describe('pinned', () => {
+  const d = Array.from({ length: 101 }, (_, i) => i * 10)
+
+  it('runs straight through pins in a line', () => {
+    const z = pinned(d, [{ at: 200, height: 12 }, { at: 500, height: 18 }, { at: 800, height: 24 }], [8, 28])
+    for (const [i, s] of d.entries()) expect(z[i]).toBeCloseTo(8 + s / 50, 9)
+  })
+
+  it('carries an end that is held by nothing on at the grade it leaves its last pin, no steeper than a deck climbs', () => {
+    const z = pinned(d, [{ at: 200, height: 12 }, { at: 500, height: 18 }], [null, null])
+    expect(z[0]).toBeCloseTo(8, 9)
+    expect(z.at(-1)).toBeCloseTo(28, 9)
+    const steep = pinned(d, [{ at: 400, height: 40 }, { at: 500, height: 50 }], [null, null])
+    expect(steep.at(-1)! - 50).toBeCloseTo(MAX_GRADE * 500, 9)
   })
 })
 
