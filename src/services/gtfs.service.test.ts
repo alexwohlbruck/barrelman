@@ -1118,6 +1118,18 @@ describe('repairGtfsCsv', () => {
 })
 
 describe('sanitizeGtfsZip', () => {
+  test('trims every table of a feed that pads service ids in calendar.txt', async () => {
+    const JSZip = (await import('jszip')).default
+    const zip = new JSZip()
+    zip.file('agency.txt', 'agency_id,agency_name,agency_url,agency_timezone\nL,LYNX,https://x,America/New_York\n')
+    zip.file('calendar.txt', 'service_id,monday,start_date,end_date\n    768200,1,20261002,20261212\n')
+    zip.file('trips.txt', 'route_id,service_id,trip_id\n1,768200,T1\n')
+    const { buffer, repairedFiles } = await sanitizeGtfsZip(await zip.generateAsync({ type: 'arraybuffer' }))
+    expect(repairedFiles).toEqual(['calendar.txt'])
+    const out = await JSZip.loadAsync(buffer)
+    expect(await out.file('calendar.txt')!.async('string')).toBe('service_id,monday,start_date,end_date\n768200,1,20261002,20261212\n')
+  })
+
   async function createTestZip(files: Record<string, string>): Promise<ArrayBuffer> {
     const zip = new JSZip()
     for (const [name, content] of Object.entries(files)) {

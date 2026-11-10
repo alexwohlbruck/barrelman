@@ -28,7 +28,7 @@ import {
   gtfsTripPatterns,
 } from '../schema/gtfs'
 import { parse } from 'csv-parse/sync'
-import { parseCsvRows, serializeCsvRows } from '../lib/csv'
+import { escapeCsvField, parseCsvRows, serializeCsvRows } from '../lib/csv'
 import { type FetchFn } from './transit.service'
 import { resolveRegions } from '../config/regions'
 import { selectRtUrls } from './rt-url-selection'
@@ -2280,11 +2280,15 @@ export async function sanitizeGtfsZip(
   }
 
   // MOTIS keeps the space in `METRA, Metra, America/Chicago` and drops the
-  // feed for an unknown timezone. A writer that pads agency.txt pads every
-  // table, so only then is the whole feed read and trimmed.
+  // feed for an unknown timezone; LYNX pads calendar.txt's service ids, so no
+  // trip ever runs. A writer that pads one of the small tables pads the rest,
+  // so only then is the whole feed read and trimmed.
   const repairedFiles: string[] = []
-  const agency = zip.file('agency.txt')
-  const padded = agency ? isPadded(await agency.async('string')) : false
+  let padded = false
+  for (const [name, columns] of Object.entries(KEY_COLUMNS)) {
+    const file = zip.file(name)
+    if (file && hasPaddedKeys(await file.async('string'), columns)) padded = true
+  }
   for (const file of Object.values(zip.files)) {
     if (file.dir || file.name.includes('/') || !file.name.endsWith('.txt')) continue
     if (!padded && file.name !== 'agency.txt') continue
@@ -2305,10 +2309,31 @@ export async function sanitizeGtfsZip(
   return { buffer: sanitized, removedFiles, repairedFiles }
 }
 
-/** Whether a table pads its fields with a space after each comma. */
-function isPadded(text: string): boolean {
-  const end = text.indexOf('\n')
-  return (parseCsvRows(end === -1 ? text : text.slice(0, end))[0] ?? []).some(h => h !== h.trim())
+/** The small tables' columns whose padding breaks a join or a lookup in MOTIS. */
+const KEY_COLUMNS: Record<string, string[]> = {
+  'agency.txt': ['agency_id', 'agency_timezone'],
+  'routes.txt': ['route_id', 'agency_id'],
+  'calendar.txt': ['service_id'],
+  'calendar_dates.txt': ['service_id'],
+}
+
+function hasPaddedKeys(text: string, columns: string[]): boolean {
+  const rows = parseCsvRows(text)
+  const header = rows[0] ?? []
+  const at = header.map((h, i) => (columns.includes(h.trim()) ? i : -1)).filter(i => i >= 0)
+  return at.length > 0 && rows.some(row => at.some(i => row[i] !== undefined && row[i] !== row[i]!.trim()))
+}
+
+/** Every field trimmed, a line at a time: stop_times.txt is too large to hold as rows. */
+function trimCsvLines(text: string): string {
+  const out: string[] = []
+  for (const line of text.split('\n')) {
+    const bare = line.endsWith('\r') ? line.slice(0, -1) : line
+    if (!bare) continue
+    const cells = bare.includes('"') ? parseCsvRows(bare)[0] ?? [] : bare.split(',')
+    out.push(cells.map(c => escapeCsvField(c.trim())).join(','))
+  }
+  return out.join('\n') + '\n'
 }
 
 const isTimeZone = (tz: string) => {
@@ -2326,23 +2351,22 @@ const isTimeZone = (tz: string) => {
  * Returned unchanged when there is nothing to repair.
  */
 export function repairGtfsCsv(text: string, trim: boolean): string {
-  const end = text.indexOf('\n')
-  const header = parseCsvRows(end === -1 ? text : text.slice(0, end))[0] ?? []
+  const trimmed = trim ? trimCsvLines(text) : text
+  const end = trimmed.indexOf('\n')
+  const header = parseCsvRows(end === -1 ? trimmed : trimmed.slice(0, end))[0] ?? []
   const tzColumns = header.map((h, i) => (/_timezone$/.test(h.trim()) ? i : -1)).filter(i => i >= 0)
-  if (!trim && !tzColumns.length) return text
-  let changed = false
-  const rows = parseCsvRows(text).map(row => {
-    const cells = trim ? row.map(c => c.trim()) : [...row]
-    if (cells.some((c, i) => c !== row[i])) changed = true
+  if (!tzColumns.length) return trim && trimmed !== text ? trimmed : text
+  let changed = trimmed !== text
+  const rows = parseCsvRows(trimmed).map(row => {
     for (const i of tzColumns) {
-      const tz = cells[i] ?? ''
+      const tz = row[i] ?? ''
       const fixed = tz.replace(/ /g, '_')
       if (fixed !== tz && !isTimeZone(tz) && isTimeZone(fixed)) {
-        cells[i] = fixed
+        row[i] = fixed
         changed = true
       }
     }
-    return cells
+    return row
   })
   return changed ? serializeCsvRows(rows) : text
 }
