@@ -167,6 +167,13 @@ describe('normalizeFeed', () => {
     expect(stale.stats.added).toBe(0)
   })
 
+  it('keeps a train running far behind on the run its update names', () => {
+    const late = update('T2315', '23:45', 0, { startTime: '23:15:00' })
+    const out = normalizeFeed(index, message('23:50', late), at('23:50'))
+    expect(trips(out)[0]).toMatchObject({ tripId: 'T2315', startDate: DATE })
+    expect(out.stats.exact).toBe(1)
+  })
+
   it('adds a train the timetable never had as a NEW trip with the feed times', () => {
     const out = normalizeFeed(index, message('22:20', update('extra', '22:22')), at('22:20'))
     const added = out.message.entity!.find(e => e.tripUpdate?.trip?.scheduleRelationship === 8)!

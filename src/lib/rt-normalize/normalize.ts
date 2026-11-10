@@ -50,6 +50,8 @@ const CANCEL_GRACE_S = 5 * 60
 /** Share of a route's under-way runs the feed must claim before its silence counts as a cancellation. */
 const MIN_ROUTE_COVERAGE = 0.5
 /** Share of updates listing their run to its last stop for a feed's shorter lists to mean the train ends early. */
+/** How late a run its update names by id and day may be; MARTA leaves trips hours old in its feed. */
+const MAX_NAMED_GAP_S = 2 * 3600
 /** Of the stops an update's list spans, the share it must name for the others to read as skipped. */
 const MIN_LISTED_SHARE = 0.5
 const COMPLETE_LISTS_SHARE = 0.8
@@ -124,7 +126,10 @@ function exactRun(index: StaticIndex, tu: TripUpdate, dates: string[], now: numb
   if (timed) {
     const scored = candidates.map(r => ({ r, gap: fit(r, tu.stopTimeUpdate!) })).filter(c => c.gap !== null)
     const best = scored.reduce<{ r: Run; gap: number | null } | null>((a, b) => (!a || b.gap! < a.gap! ? b : a), null)
-    return best && best.gap! <= MAX_MEDIAN_GAP_S ? best.r : null
+    if (best && best.gap! <= MAX_MEDIAN_GAP_S) return best.r
+    // Named down to its day, a train 40 minutes late is still that train.
+    const dated = scored.filter(c => c.r.date === td.startDate)
+    return named && dated.length === 1 && dated[0]!.gap! <= MAX_NAMED_GAP_S ? dated[0]!.r : null
   }
   // Nothing timed to weigh: the stated day, else the run nearest now.
   const stated = candidates.find(r => r.date === td.startDate)
