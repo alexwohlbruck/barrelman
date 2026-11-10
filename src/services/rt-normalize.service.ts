@@ -19,6 +19,15 @@ const FeedMessage = () => GtfsRealtimeBindings.transit_realtime.FeedMessage
 const GTFS_DATA_DIR = envString<string>('GTFS_DATA_DIR', './data/gtfs')
 /** How long one rewritten message is served before the upstream is fetched again. */
 const RESULT_TTL_MS = 15_000
+/**
+ * A refetch slower than this is answered with the previous message, if it is
+ * no older than the limit. MOTIS waits for every feed before applying any, so
+ * one slow agency would hold back all.
+ */
+const FRESH_WAIT_MS = 5_000
+const STALE_LIMIT_MS = 3 * 60_000
+/** MARTA's feed takes up to a minute to download. */
+const RELAY_UPSTREAM_TIMEOUT_MS = 90_000
 const FEED_TTL_MS = 5 * 60_000
 
 /** Where MOTIS reaches this service, from inside the compose network. */
@@ -54,8 +63,8 @@ export function encodeFeed(message: object): Uint8Array {
   return FM.encode(FM.fromObject(message)).finish()
 }
 
-export async function fetchRealtime(rt: RtUrlEntry, fetchFn: typeof fetch = fetch) {
-  const response = await fetchFn(rt.url, { headers: rt.headers ?? {}, signal: AbortSignal.timeout(15_000) })
+export async function fetchRealtime(rt: RtUrlEntry, fetchFn: typeof fetch = fetch, timeoutMs = 15_000) {
+  const response = await fetchFn(rt.url, { headers: rt.headers ?? {}, signal: AbortSignal.timeout(timeoutMs) })
   if (!response.ok) throw new Error(`upstream ${response.status}`)
   return decodeFeed(new Uint8Array(await response.arrayBuffer()))
 }
@@ -95,35 +104,49 @@ export interface NormalizedFeed {
   stats: NormalizeStats | null
 }
 
-const results = new Map<string, { at: number; result: Promise<NormalizedFeed> }>()
+interface Relayed {
+  last?: { at: number; feed: NormalizedFeed }
+  pending?: Promise<NormalizedFeed>
+}
+
+const results = new Map<string, Relayed>()
+
+async function relay(feedId: string, rt: RtUrlEntry): Promise<NormalizedFeed> {
+  const message = await fetchRealtime(rt, fetch, RELAY_UPSTREAM_TIMEOUT_MS)
+  if (!rt.normalize) return { body: encodeFeed(message), stats: null }
+  try {
+    const { message: out, stats } = normalizeFeed(await staticIndex(feedId), message)
+    return { body: encodeFeed(out), stats }
+  } catch (err) {
+    // Unrewritten realtime still resolves what it always did.
+    console.warn(`[rt-normalize] ${feedId}: passing through unrewritten: ${err instanceof Error ? err.message : err}`)
+    return { body: encodeFeed(message), stats: null }
+  }
+}
 
 /**
  * The rewritten message for one of a feed's realtime URLs, or null when the
  * feed has no such URL routed through the relay. A URL routed here only
- * because it redirects is passed through as published. Never an open proxy: only
- * URLs already on the feed's record are fetched.
+ * because it redirects is passed through as published. Never an open proxy:
+ * only URLs already on the feed's record are fetched.
  */
 export async function getNormalizedFeed(feedId: string, urlIndex: number): Promise<NormalizedFeed | null> {
-  const key = `${feedId}/${urlIndex}`
-  const cached = results.get(key)
-  if (cached && Date.now() - cached.at < RESULT_TTL_MS) return cached.result
-
   const rt = (await rtUrlsOf(feedId))[urlIndex]
   if (!rt?.normalize && !rt?.redirects) return null
 
-  const result = (async () => {
-    const message = await fetchRealtime(rt)
-    if (!rt.normalize) return { body: encodeFeed(message), stats: null }
-    try {
-      const { message: out, stats } = normalizeFeed(await staticIndex(feedId), message)
-      return { body: encodeFeed(out), stats }
-    } catch (err) {
-      // Unrewritten realtime still resolves what it always did.
-      console.warn(`[rt-normalize] ${feedId}: passing through unrewritten: ${err instanceof Error ? err.message : err}`)
-      return { body: encodeFeed(message), stats: null }
-    }
-  })()
-  results.set(key, { at: Date.now(), result })
-  result.catch(() => results.delete(key))
-  return result
+  const key = `${feedId}/${urlIndex}`
+  let entry = results.get(key)
+  if (!entry) results.set(key, (entry = {}))
+  const age = entry.last ? Date.now() - entry.last.at : Infinity
+  if (age >= RESULT_TTL_MS && !entry.pending) {
+    const relayed = entry
+    relayed.pending = relay(feedId, rt)
+      .then(feed => (relayed.last = { at: Date.now(), feed }).feed)
+      .finally(() => { relayed.pending = undefined })
+    relayed.pending.catch(() => {})
+  }
+  if (!entry.pending) return entry.last!.feed
+  if (!entry.last || age >= STALE_LIMIT_MS) return entry.pending
+  const previous = entry.last.feed
+  return Promise.race([entry.pending.catch(() => previous), Bun.sleep(FRESH_WAIT_MS).then(() => previous)])
 }
