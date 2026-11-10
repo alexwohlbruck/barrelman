@@ -132,4 +132,21 @@ describe('selectRtUrls', () => {
     expect(kept).toHaveLength(2)
     expect(calls['https://mta.example/bdfm']).toBe(1)
   })
+
+  test('judges a feed that names no routes by its trips and stops', async () => {
+    const trains = (stopId: string) =>
+      new TextEncoder().encode(JSON.stringify({ entity: [{ tripUpdate: { trip: { tripId: 'Train428' }, stopTimeUpdate: [{ stopId }] } }] }))
+    const { fetchFn } = serving({ 'https://marc.example/tu': trains('11958'), 'https://marc.example/own': trains('B1') })
+    const bus = { trips: new Set(['3401']), stops: new Set(['B1']) }
+
+    const { kept, dropped } = await selectRtUrls(
+      [{ url: 'https://marc.example/tu', type: 'tripUpdates' }, { url: 'https://marc.example/own', type: 'tripUpdates' }],
+      new Set(['11638']),
+      fetchFn,
+      bus,
+    )
+
+    expect(kept.map(rt => rt.url)).toEqual(['https://marc.example/own'])
+    expect(dropped).toEqual([{ url: 'https://marc.example/tu', reason: 'foreign-routes' }])
+  })
 })

@@ -31,15 +31,25 @@ export interface RtUrlSelection<T extends SelectableRtUrl> {
   dropped: Array<{ url: string; reason: 'unauthorized' | 'foreign-routes' }>
 }
 
-/** Route ids a realtime feed's trip updates and vehicles refer to. */
-function routesOf(buf: Uint8Array): Set<string> {
-  const routes = new Set<string>()
+/** Route, trip and stop ids a realtime feed's trip updates and vehicles refer to. */
+function idsOf(buf: Uint8Array) {
+  const ids = { routes: new Set<string>(), trips: new Set<string>(), stops: new Set<string>() }
   for (const entity of decodeFeedMessage(buf).entity ?? []) {
-    const routeId = entity.tripUpdate?.trip?.routeId ?? entity.vehicle?.trip?.routeId
-    if (routeId) routes.add(routeId)
+    const trip = entity.tripUpdate?.trip ?? entity.vehicle?.trip
+    if (trip?.routeId) ids.routes.add(trip.routeId)
+    if (trip?.tripId) ids.trips.add(trip.tripId)
+    for (const stu of entity.tripUpdate?.stopTimeUpdate ?? []) if (stu.stopId) ids.stops.add(stu.stopId)
   }
-  return routes
+  return ids
 }
+
+/** A static feed's trip and stop ids, to judge a realtime feed that names no routes. */
+export interface StaticTripsAndStops {
+  trips: Set<string>
+  stops: Set<string>
+}
+
+const overlaps = (a: Set<string>, b: Set<string>) => [...a].some(x => b.has(x))
 
 type Verdict = { keep: true; movedTo?: string } | { keep: false; reason: 'unauthorized' | 'foreign-routes' }
 
@@ -47,6 +57,7 @@ async function judge(
   rt: SelectableRtUrl,
   staticRoutes: Set<string>,
   fetchFn: FetchFn,
+  staticTripsAndStops?: StaticTripsAndStops,
 ): Promise<Verdict> {
   try {
     const response = await fetchFn(rt.url, {
@@ -56,12 +67,17 @@ async function judge(
     if (response.status === 401 || response.status === 403) return { keep: false, reason: 'unauthorized' }
     if (!response.ok) return { keep: true }
 
-    const routes = routesOf(new Uint8Array(await response.arrayBuffer()))
+    const ids = idsOf(new Uint8Array(await response.arrayBuffer()))
     // MOTIS does not follow redirects, so a feed that moved is polled where it
     // went, once that answers with GTFS-RT rather than a parked-domain page.
     const kept: Verdict = { keep: true, ...(response.redirected && response.url && { movedTo: response.url }) }
-    if (rt.type === 'alerts' || !routes.size || !staticRoutes.size) return kept
-    for (const route of routes) if (staticRoutes.has(route)) return kept
+    if (rt.type === 'alerts') return kept
+    if (ids.routes.size && staticRoutes.size) {
+      return overlaps(ids.routes, staticRoutes) ? kept : { keep: false, reason: 'foreign-routes' }
+    }
+    // MARC's feed names no routes, and reached every Maryland bus and metro feed through their operator.
+    const s = staticTripsAndStops
+    if (!s || !ids.trips.size || !s.trips.size || overlaps(ids.trips, s.trips) || overlaps(ids.stops, s.stops)) return kept
     return { keep: false, reason: 'foreign-routes' }
   } catch {
     return { keep: true }
@@ -72,11 +88,12 @@ export async function selectRtUrls<T extends SelectableRtUrl>(
   rtUrls: T[],
   staticRoutes: Set<string>,
   fetchFn: FetchFn = globalThis.fetch,
+  staticTripsAndStops?: StaticTripsAndStops,
 ): Promise<RtUrlSelection<T>> {
   // Trip updates and vehicle positions often share one URL; fetch it once.
   const verdicts = new Map<string, Promise<Verdict>>()
   for (const rt of rtUrls) {
-    if (!verdicts.has(rt.url)) verdicts.set(rt.url, judge(rt, staticRoutes, fetchFn))
+    if (!verdicts.has(rt.url)) verdicts.set(rt.url, judge(rt, staticRoutes, fetchFn, staticTripsAndStops))
   }
 
   const selection: RtUrlSelection<T> = { kept: [], dropped: [] }

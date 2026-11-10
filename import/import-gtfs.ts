@@ -211,14 +211,16 @@ async function alignBestStatic(
   return { buffer: await alignTripIds(best.source, feed, best), url: best.url }
 }
 
-async function staticRouteIds(buffer: ArrayBuffer): Promise<Set<string>> {
-  const file = (await JSZip.loadAsync(buffer)).file('routes.txt')
+async function columnValues(zip: JSZip, name: string, column: string): Promise<Set<string>> {
+  const file = zip.file(name)
   if (!file) return new Set()
   const rows = parseCsvRows(await file.async('string'))
-  const col = rows.length ? headerIndex(rows[0]!).get('route_id') : undefined
+  const col = rows.length ? headerIndex(rows[0]!).get(column) : undefined
   if (col === undefined) return new Set()
   return new Set(rows.slice(1).map(cells => cells[col]?.trim() ?? '').filter(Boolean))
 }
+
+const staticRouteIds = async (buffer: ArrayBuffer) => columnValues(await JSZip.loadAsync(buffer), 'routes.txt', 'route_id')
 
 /**
  * Drop the discovered realtime URLs that don't serve this feed, so neither the
@@ -229,7 +231,11 @@ async function selectRealtime(
   feed: { feedId: string; onestopId?: string; name?: string; rtUrls?: GtfsRtUrl[] },
 ): Promise<GtfsRtUrl[] | undefined> {
   if (!feed.rtUrls?.length) return feed.rtUrls
-  const { kept, dropped } = await selectRtUrls(feed.rtUrls, await staticRouteIds(buffer))
+  const zip = await JSZip.loadAsync(buffer)
+  const { kept, dropped } = await selectRtUrls(feed.rtUrls, await columnValues(zip, 'routes.txt', 'route_id'), fetch, {
+    trips: await columnValues(zip, 'trips.txt', 'trip_id'),
+    stops: await columnValues(zip, 'stops.txt', 'stop_id'),
+  })
   const label = feed.name || feed.onestopId || feed.feedId
   for (const { url, reason } of dropped) {
     console.log(`  ⚠ ${label}: dropped realtime ${url.split('?')[0]} (${reason})`)
