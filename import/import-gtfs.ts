@@ -56,6 +56,7 @@ const { values: args } = parseArgs({
     'skip-download': { type: 'boolean', default: false },
     'skip-transfers': { type: 'boolean', default: false },
     'max-feeds': { type: 'string' },
+    'feed-ids': { type: 'string' },
     'transfer-distance': { type: 'string', default: '500' },
     'transfer-concurrency': { type: 'string', default: '8' },
   },
@@ -67,6 +68,7 @@ const outputDir = args['output-dir']!
 const skipDownload = args['skip-download']!
 const skipTransfers = args['skip-transfers']!
 const maxFeeds = args['max-feeds'] ? parseInt(args['max-feeds']) : undefined
+const onlyFeedIds = args['feed-ids'] ? new Set(args['feed-ids'].split(',').map(s => s.trim())) : undefined
 const motisConfigPath = args['motis-config']!
 const transferDistance = parseInt(args['transfer-distance']!)
 const transferConcurrency = parseInt(args['transfer-concurrency']!)
@@ -301,6 +303,11 @@ async function main() {
 
     const rtCount = feeds.filter(f => f.rtUrls?.length).length
     console.log(`  ${rtCount} feeds have GTFS-RT URLs`)
+
+    if (onlyFeedIds) {
+      feeds = feeds.filter(f => onlyFeedIds.has(f.feedId) || onlyFeedIds.has(f.onestopId ?? ''))
+      console.log(`Limited to ${feeds.length} feed(s) named by --feed-ids`)
+    }
 
     if (maxFeeds) {
       feeds = feeds.slice(0, maxFeeds)
