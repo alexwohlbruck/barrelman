@@ -15,6 +15,7 @@ import { join, basename } from 'path'
 import { injectFaresV2 } from './inject-fares-v2'
 import { injectBikesAllowed } from './inject-bikes-allowed'
 import { injectTripShapesAll } from './inject-trip-shapes'
+import { dedupeFeedTrips } from './dedupe-feed-trips'
 import { importFeedFile, injectTransfersTxt, NoFixedRouteService } from './feed-import'
 import { ensureGtfsSchema } from '../src/db'
 import { stationTransferTimes, type StationTransfer } from '../src/services/station-paths.service'
@@ -126,10 +127,20 @@ async function alignTripIds(
  * latest version when the agency's server fails. A feed left on its last zip
  * keeps serving that timetable after it runs out.
  */
+/** The zip a URL names, where `archive.zip#inner.zip` is a feed packed inside another zip (SEPTA). */
+async function staticFromResponse(response: Response, url: string): Promise<ArrayBuffer | null> {
+  const buffer = await response.arrayBuffer()
+  const inner = new URL(url).hash.slice(1)
+  if (!inner) return buffer
+  const entry = (await JSZip.loadAsync(buffer)).file(decodeURIComponent(inner))
+  if (!entry) console.error(`  ✗ ${inner} is not in the downloaded archive`)
+  return entry ? entry.async('arraybuffer') : null
+}
+
 async function downloadStatic(feed: { url: string; onestopId?: string }): Promise<ArrayBuffer | null> {
   try {
     const response = await fetch(feed.url)
-    if (response.ok) return await response.arrayBuffer()
+    if (response.ok) return await staticFromResponse(response, feed.url)
     console.error(`  ✗ Download failed: ${response.status}`)
   } catch (err) {
     console.error(`  ✗ Download failed: ${err instanceof Error ? err.message : err}`)
@@ -518,6 +529,10 @@ async function main() {
       console.error(`  ✗ ${basename(filepath)}: ${err}`)
     }
   }
+
+  // Every zip, not just this run's: the feed a trip is repeated from may not have changed.
+  console.log('\n=== Dropping trips another feed already runs ===')
+  await dedupeFeedTrips(readdirSync(outputDir).filter(f => f.endsWith('.zip')).map(f => join(outputDir, f)))
 
   // Step 4d: Lend shapeless trips a sibling's shape, or MOTIS draws them as
   // straight lines between stops.
