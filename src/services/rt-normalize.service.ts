@@ -150,7 +150,10 @@ export async function getNormalizedFeed(feedId: string, urlIndex: number): Promi
     relayed.pending.catch(() => {})
   }
   if (!entry.pending) return entry.last!.feed
-  if (!entry.last || age >= STALE_LIMIT_MS) return entry.pending
-  const previous = entry.last.feed
-  return Promise.race([entry.pending.catch(() => previous), Bun.sleep(FRESH_WAIT_MS).then(() => previous)])
+  const previous = entry.last && age < STALE_LIMIT_MS ? entry.last.feed : null
+  const late = Bun.sleep(FRESH_WAIT_MS).then(() => {
+    if (previous) return previous
+    throw new Error('upstream has not answered yet')
+  })
+  return Promise.race([previous ? entry.pending.catch(() => previous) : entry.pending, late])
 }

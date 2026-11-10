@@ -87,13 +87,15 @@ async function judge(
   try {
     response = await fetchFn(rt.url, { ...init, signal: AbortSignal.timeout(15_000) })
   } catch {
+    // Unreachable for now, or for good from here (TTC drops every datacenter):
+    // relayed, so a dead host costs MOTIS's poll cycle seconds, not its timeout.
     const proxy = rtEgressProxy()
-    if (!proxy) return { keep: true }
+    if (!proxy) return { keep: true, flaky: true }
     try {
       response = await fetchFn(rt.url, { ...init, proxy, signal: AbortSignal.timeout(15_000) } as RequestInit)
       egress = true
     } catch {
-      return { keep: true }
+      return { keep: true, flaky: true }
     }
   }
   try {
