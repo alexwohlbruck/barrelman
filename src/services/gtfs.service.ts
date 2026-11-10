@@ -192,6 +192,23 @@ export async function fetchFeedList(
   const feeds: GtfsFeedInfo[] = []
   const records = new Map<string, any>()
   const seen = new Set<string>()
+  const byOnestop = new Map<string, any>()
+  const add = (feed: any, url: string) => {
+    const feedId = String(feed.id || feed.onestop_id || `feed_${feeds.length}`)
+    if (seen.has(feedId)) return
+    seen.add(feedId)
+    const onestopId = String(feed.onestop_id || '')
+    feeds.push({
+      feedId,
+      onestopId,
+      name: String(feed.name || feed.onestop_id || ''),
+      url,
+      region,
+      license: parseTransitlandLicense(feed),
+    })
+    records.set(feedId, feed)
+    byOnestop.set(onestopId, feed)
+  }
 
   // One query per bbox cell: global (null bbox) is a single unfiltered sweep;
   // a small region is a single call over its own bbox; a continent is tiled.
@@ -217,25 +234,35 @@ export async function fetchFeedList(
         const url = feed.urls?.static_current
         if (!url) continue
 
-        // A feed straddling two cells is returned by both — dedup by id.
-        const feedId = String(feed.id || feed.onestop_id || `feed_${feeds.length}`)
-        if (seen.has(feedId)) continue
-        seen.add(feedId)
-
-        const onestopId = String(feed.onestop_id || '')
-        feeds.push({
-          feedId,
-          onestopId,
-          name: String(feed.name || feed.onestop_id || ''),
-          url,
-          region,
-          license: parseTransitlandLicense(feed),
-        })
-        records.set(feedId, feed)
+        // A feed straddling two cells is returned by both; add() dedups by id.
+        add(feed, url)
       }
 
       // Handle pagination
       nextUrl = data.meta?.next ? data.meta.next : null
+    }
+  }
+
+  // The bbox search finds a feed only through its active version, and some
+  // agencies' own feeds have none: the Bay Area lists only 511's keyed
+  // aggregate, never BART, Caltrain or VTA. Their operators still name them.
+  for (const cell of cells) {
+    let nextUrl: string | null = buildOperatorListUrl(apiKey, cell)
+    while (nextUrl) {
+      const data: any = await fetchFn(nextUrl).then(r => (r.ok ? r.json() : null)).catch(() => null)
+      if (!data) break
+      for (const operator of data.operators || []) {
+        const own = ((operator.feeds || []) as any[]).filter(f => String(f.spec).toLowerCase() === 'gtfs')
+        if (own.some(f => downloadable(byOnestop.get(f.onestop_id)))) continue
+        for (const ref of own) {
+          if (byOnestop.has(ref.onestop_id)) continue
+          const record = await fetchFeedRecord(ref.onestop_id, apiKey, fetchFn)
+          if (!record || !downloadable(record)) continue
+          add(record, record.urls.static_current)
+          break
+        }
+      }
+      nextUrl = data.meta?.next ?? null
     }
   }
 
@@ -322,6 +349,15 @@ function extractRtUrls(feed: any): GtfsRtUrl[] {
   }
   return rtUrls
 }
+
+function buildOperatorListUrl(apiKey: string, bbox: string | null): string {
+  const params = new URLSearchParams({ apikey: apiKey, limit: '100' })
+  if (bbox) params.set('bbox', bbox)
+  return `https://transit.land/api/v2/rest/operators?${params}`
+}
+
+/** A static feed the import can fetch: it has a URL and needs no key. */
+const downloadable = (feed: any): boolean => !!feed?.urls?.static_current && !feed.authorization?.type
 
 function buildFeedListUrl(apiKey: string, bbox: string | null): string {
   const base = 'https://transit.land/api/v2/rest/feeds'

@@ -550,6 +550,23 @@ describe('fetchFeedList', () => {
     expect(boxes.length).toBeGreaterThan(2) // the lower 48 is tiled
   })
 
+  test("adds an operator's own feed when the region lists only a keyed aggregate of it", async () => {
+    const aggregate = { id: 4057, onestop_id: 'f-sf~bay~area~rg', spec: 'gtfs', urls: { static_current: 'https://api.511.org/x' }, authorization: { type: 'query_param', param_name: 'api_key' } }
+    const bart = { id: 2, onestop_id: 'f-9q9-bart', spec: 'gtfs', urls: { static_current: 'https://bart.gov/gtfs.zip' } }
+    const fetchFn = (async (url: string) => {
+      const u = String(url)
+      if (u.includes('/operators?')) {
+        return new Response(JSON.stringify({ operators: u.includes('bbox') ? [{ onestop_id: 'o-9q9-bart', feeds: [{ onestop_id: 'f-9q9-bart', spec: 'GTFS' }, { onestop_id: 'f-sf~bay~area~rg', spec: 'GTFS' }] }] : [] }))
+      }
+      if (u.includes('onestop_id=f-9q9-bart&')) return new Response(JSON.stringify({ feeds: [bart] }))
+      if (u.includes('spec=gtfs')) return new Response(JSON.stringify({ feeds: [aggregate] }))
+      return new Response('Not found', { status: 404 })
+    }) as unknown as FetchFn
+
+    const feeds = await fetchFeedList('nc', 'test-key', fetchFn)
+    expect(feeds.map(f => f.onestopId)).toEqual(['f-sf~bay~area~rg', 'f-9q9-bart'])
+  })
+
   test('skips feeds without download URL', async () => {
     const mockFetch = buildMockFetch({
       feedList: {
@@ -770,7 +787,7 @@ describe('fetchFeedList', () => {
       const urlStr = typeof url === 'string' ? url : url instanceof URL ? url.toString() : url.url
 
       if (!urlStr.includes('spec=gtfs')) {
-        callCount++
+        if (!urlStr.includes('bbox=')) callCount++
         // Simulate network error on RT lookup
         throw new Error('Network timeout')
       }
