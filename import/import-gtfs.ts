@@ -382,10 +382,11 @@ async function main() {
         console.log(`  ✓ Downloaded ${(rawBuffer.byteLength / 1024 / 1024).toFixed(1)} MB`)
 
         // Strip GTFS-Flex extension files that crash MOTIS
-        const { buffer, removedFiles } = await sanitizeGtfsZip(rawBuffer)
+        const { buffer, removedFiles, repairedFiles } = await sanitizeGtfsZip(rawBuffer)
         if (removedFiles.length > 0) {
           console.log(`  ⚠ Stripped ${removedFiles.length} GTFS-Flex files: ${removedFiles.join(', ')}`)
         }
+        if (repairedFiles.length > 0) console.log(`  ⚠ Repaired padding or timezones in ${repairedFiles.join(', ')}`)
 
         // Transitland's feed listing only finds RT URLs published on the
         // feed's own record or its `~rt` companion; backfill-rt-urls.ts also

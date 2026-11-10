@@ -24,6 +24,7 @@ import {
   resolveGtfsBbox,
   bboxCells,
   sanitizeGtfsZip,
+  repairGtfsCsv,
   resolveRtUrlsForFeed,
   FLEX_EXTENSION_FILES,
   retryingTransitlandLimits,
@@ -1099,6 +1100,22 @@ describe('deriveRouteShapes', () => {
 })
 
 // ── sanitizeGtfsZip ─────────────────────────────────────────────────
+
+describe('repairGtfsCsv', () => {
+  test('trims fields padded after their commas', () => {
+    const agency = 'agency_id, agency_name, agency_timezone\r\nMETRA, Metra, America/Chicago\r\n'
+    expect(repairGtfsCsv(agency, true)).toBe('agency_id,agency_name,agency_timezone\nMETRA,Metra,America/Chicago\n')
+  })
+
+  test('spells a timezone written with a space', () => {
+    expect(repairGtfsCsv('agency_id,agency_timezone\n1,America/New York\n', false)).toBe('agency_id,agency_timezone\n1,America/New_York\n')
+  })
+
+  test('leaves a clean table as it is', () => {
+    const stops = 'stop_id,stop_name,stop_timezone\r\nS1,Main St,America/Chicago\r\n'
+    expect(repairGtfsCsv(stops, false)).toBe(stops)
+  })
+})
 
 describe('sanitizeGtfsZip', () => {
   async function createTestZip(files: Record<string, string>): Promise<ArrayBuffer> {

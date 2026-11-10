@@ -28,6 +28,7 @@ import {
   gtfsTripPatterns,
 } from '../schema/gtfs'
 import { parse } from 'csv-parse/sync'
+import { parseCsvRows, serializeCsvRows } from '../lib/csv'
 import { type FetchFn } from './transit.service'
 import { resolveRegions } from '../config/regions'
 import { selectRtUrls } from './rt-url-selection'
@@ -2265,7 +2266,7 @@ export const FLEX_EXTENSION_FILES = [
  */
 export async function sanitizeGtfsZip(
   buffer: ArrayBuffer,
-): Promise<{ buffer: ArrayBuffer; removedFiles: string[] }> {
+): Promise<{ buffer: ArrayBuffer; removedFiles: string[]; repairedFiles: string[] }> {
   // Dynamic import to avoid requiring JSZip at module level in tests
   const JSZip = (await import('jszip')).default
   const zip = await JSZip.loadAsync(buffer)
@@ -2278,12 +2279,70 @@ export async function sanitizeGtfsZip(
     }
   }
 
-  if (removedFiles.length === 0) {
-    return { buffer, removedFiles: [] }
+  // MOTIS keeps the space in `METRA, Metra, America/Chicago` and drops the
+  // feed for an unknown timezone. A writer that pads agency.txt pads every
+  // table, so only then is the whole feed read and trimmed.
+  const repairedFiles: string[] = []
+  const agency = zip.file('agency.txt')
+  const padded = agency ? isPadded(await agency.async('string')) : false
+  for (const file of Object.values(zip.files)) {
+    if (file.dir || file.name.includes('/') || !file.name.endsWith('.txt')) continue
+    if (!padded && file.name !== 'agency.txt') continue
+    const text = await file.async('string')
+    const repaired = repairGtfsCsv(text, padded)
+    if (repaired === text) continue
+    zip.file(file.name, repaired)
+    repairedFiles.push(file.name)
+  }
+
+  if (removedFiles.length === 0 && repairedFiles.length === 0) {
+    return { buffer, removedFiles: [], repairedFiles: [] }
   }
 
   // JSZip defaults to STORE, which multiplies a re-serialized feed several
   // times over on disk for no gain.
   const sanitized = await zip.generateAsync({ type: 'arraybuffer', compression: 'DEFLATE' })
-  return { buffer: sanitized, removedFiles }
+  return { buffer: sanitized, removedFiles, repairedFiles }
+}
+
+/** Whether a table pads its fields with a space after each comma. */
+function isPadded(text: string): boolean {
+  const end = text.indexOf('\n')
+  return (parseCsvRows(end === -1 ? text : text.slice(0, end))[0] ?? []).some(h => h !== h.trim())
+}
+
+const isTimeZone = (tz: string) => {
+  try {
+    new Intl.DateTimeFormat('en', { timeZone: tz })
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * A GTFS table with its fields trimmed when `trim`, and timezones written
+ * with a space for the underscore (`America/New York`) spelled right.
+ * Returned unchanged when there is nothing to repair.
+ */
+export function repairGtfsCsv(text: string, trim: boolean): string {
+  const end = text.indexOf('\n')
+  const header = parseCsvRows(end === -1 ? text : text.slice(0, end))[0] ?? []
+  const tzColumns = header.map((h, i) => (/_timezone$/.test(h.trim()) ? i : -1)).filter(i => i >= 0)
+  if (!trim && !tzColumns.length) return text
+  let changed = false
+  const rows = parseCsvRows(text).map(row => {
+    const cells = trim ? row.map(c => c.trim()) : [...row]
+    if (cells.some((c, i) => c !== row[i])) changed = true
+    for (const i of tzColumns) {
+      const tz = cells[i] ?? ''
+      const fixed = tz.replace(/ /g, '_')
+      if (fixed !== tz && !isTimeZone(tz) && isTimeZone(fixed)) {
+        cells[i] = fixed
+        changed = true
+      }
+    }
+    return cells
+  })
+  return changed ? serializeCsvRows(rows) : text
 }
