@@ -71,6 +71,14 @@ describe('normalizeFeed', () => {
     expect(trips(normalizeFeed(index, message('47:50', tomorrow), at('47:50')))[0]).toMatchObject({ startDate: '20261110' })
   })
 
+  it("moves an update dated by the calendar day onto the run its times fit, and cancels nothing for it", () => {
+    // 00:20 on the 10th: the 23:45 run of the 9th's service, dated the 10th by the feed.
+    const mislabelled = update('T2345', '23:45', 10, { startDate: '20261110' })
+    const out = normalizeFeed(index, message('24:20', mislabelled), at('24:20'))
+    expect(trips(out)[0]).toMatchObject({ tripId: 'T2345', startDate: DATE })
+    expect(trips(out).filter(t => t!.scheduleRelationship === 3).map(t => t!.tripId)).not.toContain('T2345')
+  })
+
   it('restates a re-timed train under its scheduled run', () => {
     // The feed names the train by its actual dispatch, four minutes late.
     const out = normalizeFeed(index, message('23:40', update('141950_D..S', '23:34', 2, { startTime: '23:34:00' })), at('23:40'))

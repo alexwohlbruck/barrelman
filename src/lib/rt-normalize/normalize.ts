@@ -37,8 +37,8 @@ const NEW = 8
 export const MAX_MEDIAN_GAP_S = 15 * 60
 /** Ranking credit for a run whose trip_id contains the update's, or the reverse: the same train renamed by a suffix. */
 const SAME_ID_CREDIT_S = 3 * 60
-/** Share of an update's stops a run has to serve. */
-const MIN_STOP_COVERAGE = 0.6
+/** Share of an update's stops a run has to serve; a train on another pattern is added, not squeezed onto this one. */
+const MIN_STOP_COVERAGE = 0.9
 /** How long past its scheduled start an unclaimed run may go before it is cancelled. */
 const CANCEL_GRACE_S = 5 * 60
 /** Share of a route's under-way runs the feed must claim before its silence counts as a cancellation. */
@@ -47,7 +47,7 @@ const MIN_ROUTE_COVERAGE = 0.5
 export interface NormalizeStats {
   updates: number
   exact: number
-  /** Named a scheduled trip without a start_date, which MOTIS reads as today's UTC date. */
+  /** Named a scheduled trip but not its run's day (no start_date, or another day's), which MOTIS would misplace. */
   dated: number
   matched: number
   added: number
@@ -82,19 +82,30 @@ function runs(index: StaticIndex, trips: StaticTrip[], dates: string[]): Run[] {
 }
 
 /**
- * The scheduled run this update names by trip_id, or none. Without a
- * start_date, the run on whichever recent service day its times fit.
+ * The scheduled run this update names by trip_id, or none. The feed's
+ * start_date is not trusted on its own: some date an after-midnight run by the
+ * calendar day it leaves on, and some leave it out. So the named trip's runs on
+ * that day and the one before are weighed by how well they fit the update's
+ * times, and one that does not fit is no match.
  */
 function exactRun(index: StaticIndex, tu: TripUpdate, dates: string[], now: number): Run | null {
   const td = tu.trip!
   if (!td.tripId) return null
   const startMin = td.startTime ? Math.floor(parseClock(td.startTime) / 60) : null
-  const candidates = runs(index, index.byTripId.get(td.tripId) ?? [], td.startDate ? [td.startDate] : dates)
+  const days = td.startDate ? [shiftDate(td.startDate, -1), td.startDate] : dates
+  const candidates = runs(index, index.byTripId.get(td.tripId) ?? [], days)
     .filter(r => startMin === null || Math.floor(r.trip.times[0]! / 60) === startMin)
-  if (candidates.length < 2) return candidates[0] ?? null
-  const distance = (r: Run) =>
-    fit(r, tu.stopTimeUpdate ?? []) ?? Math.abs(r.origin + (r.trip.times[0]! + r.trip.times[r.trip.times.length - 1]!) / 2 - now)
-  return candidates.reduce((best, r) => (distance(r) < distance(best) ? r : best))
+  const timed = (tu.stopTimeUpdate ?? []).some(s => s.stopId && stopTime(s) > 0)
+  if (timed) {
+    const scored = candidates.map(r => ({ r, gap: fit(r, tu.stopTimeUpdate!) })).filter(c => c.gap !== null)
+    const best = scored.reduce<{ r: Run; gap: number | null } | null>((a, b) => (!a || b.gap! < a.gap! ? b : a), null)
+    return best && best.gap! <= MAX_MEDIAN_GAP_S ? best.r : null
+  }
+  // Nothing timed to weigh: the stated day, else the run nearest now.
+  const stated = candidates.find(r => r.date === td.startDate)
+  if (stated) return stated
+  const middle = (r: Run) => Math.abs(r.origin + (r.trip.times[0]! + r.trip.times[r.trip.times.length - 1]!) / 2 - now)
+  return candidates.reduce<Run | null>((best, r) => (!best || middle(r) < middle(best) ? r : best), null)
 }
 
 function parseClock(s: string): number {
@@ -145,7 +156,7 @@ export function normalizeFeed(
   const claimed = new Map<string, Run>()
   const assigned = new Map<TripUpdate, Run>()
   const loose: TripUpdate[] = []
-  const undated = new Map<TripUpdate, Run>()
+  const redated = new Map<TripUpdate, Run>()
   const tracked = new Set<string>()
 
   for (const e of entities) {
@@ -158,8 +169,8 @@ export function normalizeFeed(
     const exact = exactRun(index, tu, dates, now)
     if (exact && !claimed.has(runKey(exact))) {
       claimed.set(runKey(exact), exact)
-      if (tu.trip.startDate) stats.exact++
-      else undated.set(tu, exact)
+      if (tu.trip.startDate === exact.date) stats.exact++
+      else redated.set(tu, exact)
     } else if (tu.stopTimeUpdate?.length) {
       loose.push(tu)
     } else {
@@ -194,12 +205,12 @@ export function normalizeFeed(
   const renamed = new Map<string, TripDescriptor>()
   for (const e of entities) {
     const tu = e.tripUpdate
-    const run = tu && (undated.get(tu) ?? assigned.get(tu))
+    const run = tu && (redated.get(tu) ?? assigned.get(tu))
     if (tu && run) {
       const trip = restate(run, tu.trip!)
       if (tu.trip!.tripId) renamed.set(tu.trip!.tripId, trip)
       out.push({ ...e, tripUpdate: { ...tu, trip } })
-      if (undated.has(tu)) stats.dated++
+      if (redated.has(tu)) stats.dated++
       else stats.matched++
       continue
     }
