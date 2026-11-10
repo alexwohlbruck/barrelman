@@ -121,6 +121,28 @@ async function alignTripIds(
   return out
 }
 
+/**
+ * A feed's static zip from the agency, or Transitland's archived copy of its
+ * latest version when the agency's server fails. A feed left on its last zip
+ * keeps serving that timetable after it runs out.
+ */
+async function downloadStatic(feed: { url: string; onestopId?: string }): Promise<ArrayBuffer | null> {
+  try {
+    const response = await fetch(feed.url)
+    if (response.ok) return await response.arrayBuffer()
+    console.error(`  ✗ Download failed: ${response.status}`)
+  } catch (err) {
+    console.error(`  ✗ Download failed: ${err instanceof Error ? err.message : err}`)
+  }
+  if (!feed.onestopId) return null
+  const archived = await fetch(
+    `https://transit.land/api/v2/rest/feeds/${encodeURIComponent(feed.onestopId)}/download_latest_feed_version?apikey=${apiKey}`,
+  ).catch(() => null)
+  if (!archived?.ok) return null
+  console.log("  ↻ Using Transitland's copy of the latest version")
+  return archived.arrayBuffer()
+}
+
 /** Downloads of alternate static feeds, shared by every feed of one operator. */
 const alternateDownloads = new Map<string, Promise<ArrayBuffer | null>>()
 
@@ -300,13 +322,9 @@ async function main() {
       }
 
       try {
-        const response = await fetch(feed.url)
-        if (!response.ok) {
-          console.error(`  ✗ Download failed: ${response.status}`)
-          continue
-        }
+        const rawBuffer = await downloadStatic(feed)
+        if (!rawBuffer) continue
 
-        const rawBuffer = await response.arrayBuffer()
         console.log(`  ✓ Downloaded ${(rawBuffer.byteLength / 1024 / 1024).toFixed(1)} MB`)
 
         // Strip GTFS-Flex extension files that crash MOTIS
