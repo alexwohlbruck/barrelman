@@ -49,7 +49,8 @@ export async function measureRtNormalize(
     if (!isTripUpdates(rt)) { out.push(base); continue }
     try {
       const { stats } = normalizeFeed(index, await fetchRealtime(rt))
-      const on = worthNormalizing(stats)
+      // Once on, stay on while it repairs anything: one quiet sample shouldn't flap it off.
+      const on = worthNormalizing(stats) || (!!rt.normalize && stats.dated + stats.matched + stats.added + stats.cancelled > 0)
       log(
         `  ${on ? '✓' : '–'} realtime ${new URL(rt.url).pathname}: ${stats.updates} updates, ` +
           `${stats.exact} resolve as published, ${stats.dated} lack a start date, matching adds ${stats.matched} matched + ${stats.added} new, ` +
