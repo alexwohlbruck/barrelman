@@ -91,7 +91,8 @@ describe('selectRtUrls', () => {
   })
 
   test('keeps a moved feed at the address it redirects to', async () => {
-    const fetchFn = (async () => {
+    const fetchFn = (async (_url: string, init?: RequestInit) => {
+      if (init?.redirect === 'manual') return new Response(null, { status: 308 })
       const response = new Response(feedOf(['A']) as Uint8Array<ArrayBuffer>, { status: 200 })
       Object.defineProperties(response, {
         redirected: { value: true },
@@ -103,6 +104,19 @@ describe('selectRtUrls', () => {
     const { kept } = await selectRtUrls([{ url: 'https://rtd.example/files/TripUpdate.pb', type: 'tripUpdates' }], SUBWAY, fetchFn)
 
     expect(kept).toEqual([{ url: 'https://rtd.example/api/download?filename=TripUpdate.pb', type: 'tripUpdates' }])
+  })
+
+  test('marks a feed that redirects each time to go through the relay, at its own address', async () => {
+    const fetchFn = (async (_url: string, init?: RequestInit) => {
+      if (init?.redirect === 'manual') return new Response(null, { status: 302 })
+      const response = new Response(feedOf(['A']) as Uint8Array<ArrayBuffer>, { status: 200 })
+      Object.defineProperties(response, { redirected: { value: true }, url: { value: 'https://cap.example/files/ce01?filename=tu.pb' } })
+      return response
+    }) as unknown as typeof fetch
+
+    const { kept } = await selectRtUrls([{ url: 'https://cap.example/download/tu', type: 'tripUpdates' }], SUBWAY, fetchFn)
+
+    expect(kept).toEqual([{ url: 'https://cap.example/download/tu', type: 'tripUpdates', redirects: true }])
   })
 
   test('does not follow a redirect to something that is not a feed', async () => {

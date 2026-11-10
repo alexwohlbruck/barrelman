@@ -16,6 +16,11 @@ describe('motisRtSources', () => {
     ])
   })
 
+  it('routes a URL that redirects through the relay too', () => {
+    expect(motisRtSources('280', [{ url: 'https://cap/download/tu', type: 'tripUpdates', redirects: true }], relay))
+      .toEqual([{ url: 'http://barrelman:5001/gtfs-rt/280/0', headers: { Authorization: 'Bearer brm_key' } }])
+  })
+
   it('leaves unmarked URLs as published', () => {
     const rt = { url: 'https://agency/tu', headers: { key: 'k' } }
     expect(motisRtSources('9', [rt], relay)).toEqual([rt])

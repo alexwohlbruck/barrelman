@@ -25,6 +25,7 @@ export interface SelectableRtUrl {
   url: string
   headers?: Record<string, string>
   type?: string
+  redirects?: boolean
 }
 
 export interface RtUrlSelection<T extends SelectableRtUrl> {
@@ -54,10 +55,16 @@ export interface StaticTripsAndStops {
 const overlaps = (a: Set<string>, b: Set<string>) => [...a].some(x => b.has(x))
 
 type DropReason = 'unauthorized' | 'foreign-routes' | 'gone' | 'stale'
-type Verdict = { keep: true; movedTo?: string } | { keep: false; reason: DropReason }
+type Verdict = { keep: true; movedTo?: string; redirects?: true } | { keep: false; reason: DropReason }
 
 /** A feed whose header is older than this has stopped updating at that address. */
 const STALE_AFTER_S = 12 * 3600
+
+async function movedPermanently(rt: SelectableRtUrl, fetchFn: FetchFn): Promise<boolean> {
+  const response = await fetchFn(rt.url, { headers: { ...(rt.headers ?? {}) }, redirect: 'manual', signal: AbortSignal.timeout(15_000) })
+  await response.body?.cancel()
+  return response.status === 301 || response.status === 308
+}
 
 async function judge(
   rt: SelectableRtUrl,
@@ -75,9 +82,15 @@ async function judge(
     if (!response.ok) return { keep: true }
 
     const ids = idsOf(new Uint8Array(await response.arrayBuffer()))
-    // MOTIS does not follow redirects, so a feed that moved is polled where it
-    // went, once that answers with GTFS-RT rather than a parked-domain page.
-    const kept: Verdict = { keep: true, ...(response.redirected && response.url && { movedTo: response.url }) }
+    // MOTIS does not follow redirects. A feed that moved for good is polled
+    // where it went, once that answers with GTFS-RT rather than a parked-domain
+    // page; one that redirects each time (CapMetro, to that hour's upload) is
+    // polled through the relay, which follows it.
+    const kept: Verdict = { keep: true }
+    if (response.redirected && response.url) {
+      if (await movedPermanently(rt, fetchFn)) kept.movedTo = response.url
+      else kept.redirects = true
+    }
     if (ids.timestamp > 0 && Date.now() / 1000 - ids.timestamp > STALE_AFTER_S) return { keep: false, reason: 'stale' }
     if (rt.type === 'alerts') return kept
     if (ids.routes.size && staticRoutes.size) {
@@ -109,7 +122,7 @@ export async function selectRtUrls<T extends SelectableRtUrl>(
   for (const rt of rtUrls) {
     const verdict = await verdicts.get(rt.url)!
     if (verdict.keep) {
-      selection.kept.push(verdict.movedTo ? { ...rt, url: verdict.movedTo } : rt)
+      selection.kept.push(verdict.movedTo ? { ...rt, url: verdict.movedTo } : verdict.redirects ? { ...rt, redirects: true } : rt)
     } else if (!reported.has(rt.url)) {
       reported.add(rt.url)
       selection.dropped.push({ url: rt.url, reason: verdict.reason })

@@ -99,7 +99,8 @@ const results = new Map<string, { at: number; result: Promise<NormalizedFeed> }>
 
 /**
  * The rewritten message for one of a feed's realtime URLs, or null when the
- * feed has no such URL marked for normalization. Never an open proxy: only
+ * feed has no such URL routed through the relay. A URL routed here only
+ * because it redirects is passed through as published. Never an open proxy: only
  * URLs already on the feed's record are fetched.
  */
 export async function getNormalizedFeed(feedId: string, urlIndex: number): Promise<NormalizedFeed | null> {
@@ -108,10 +109,11 @@ export async function getNormalizedFeed(feedId: string, urlIndex: number): Promi
   if (cached && Date.now() - cached.at < RESULT_TTL_MS) return cached.result
 
   const rt = (await rtUrlsOf(feedId))[urlIndex]
-  if (!rt?.normalize) return null
+  if (!rt?.normalize && !rt?.redirects) return null
 
   const result = (async () => {
     const message = await fetchRealtime(rt)
+    if (!rt.normalize) return { body: encodeFeed(message), stats: null }
     try {
       const { message: out, stats } = normalizeFeed(await staticIndex(feedId), message)
       return { body: encodeFeed(out), stats }

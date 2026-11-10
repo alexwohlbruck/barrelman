@@ -50,6 +50,8 @@ export interface RtUrlEntry {
   type?: RtUrlType
   /** MOTIS polls this through barrelman's matcher; set by the import when it measurably resolves more. */
   normalize?: boolean
+  /** Answers with a temporary redirect, which MOTIS won't follow, so it is polled through the relay. */
+  redirects?: boolean
 }
 
 // ── GTFS Feeds ──────────────────────────────────────────────────────
