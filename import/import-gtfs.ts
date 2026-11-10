@@ -40,7 +40,7 @@ import {
   sampleRealtimeTrips,
   type AlignmentResult,
 } from './align-trip-ids'
-import { selectRtUrls } from '../src/services/rt-url-selection'
+import { rtEgressProxy, selectRtUrls } from '../src/services/rt-url-selection'
 import { measureRtNormalize } from './measure-rt-normalize'
 import { parseCsvRows, headerIndex } from '../src/lib/csv'
 import JSZip from 'jszip'
@@ -139,9 +139,24 @@ async function staticFromResponse(response: Response, url: string): Promise<Arra
   return entry ? entry.async('arraybuffer') : null
 }
 
+/** An agency that refuses this network leaves the connection hanging rather than refusing it. */
+const DOWNLOAD_TIMEOUT_MS = 120_000
+
+async function fetchStatic(url: string): Promise<Response> {
+  const attempt = (proxy?: string) => fetch(url, { signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS), ...(proxy && { proxy }) } as RequestInit)
+  const proxy = rtEgressProxy()
+  try {
+    return await attempt()
+  } catch (err) {
+    if (!proxy) throw err
+    console.log('  ↻ Retrying through the egress proxy')
+    return attempt(proxy)
+  }
+}
+
 async function downloadStatic(feed: { url: string; onestopId?: string }): Promise<ArrayBuffer | null> {
   try {
-    const response = await fetch(feed.url)
+    const response = await fetchStatic(feed.url)
     if (response.ok) return await staticFromResponse(response, feed.url)
     console.error(`  ✗ Download failed: ${response.status}`)
   } catch (err) {
