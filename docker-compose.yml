@@ -536,6 +536,10 @@ services:
       GTFS_RT_CREDENTIALS: ${GTFS_RT_CREDENTIALS:-}
       GTFS_LICENCE_POLICY: ${GTFS_LICENCE_POLICY:-}
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      # The generated MOTIS config polls normalized realtime from the API's
+      # /gtfs-rt relay, which only answers the service credential.
+      BARRELMAN_API_KEY: ${BARRELMAN_API_KEY:-brm_dev_changeme}
+      MOTIS_RT_NORMALIZE_URL: ${MOTIS_RT_NORMALIZE_URL:-}
       # The one variable that decides coverage. Read by the importers that run
       # here, not by the API — see https://docs.barrelman.dev/self-hosting/regions.
       REGIONS: ${REGIONS:-}

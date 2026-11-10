@@ -16,7 +16,7 @@
  */
 
 import { db, maintenanceConnection } from '../db'
-import type { RtUrlType } from '../schema/gtfs'
+import type { RtUrlEntry, RtUrlType } from '../schema/gtfs'
 import { and, eq, sql, type SQL } from 'drizzle-orm'
 import {
   gtfsFeeds,
@@ -31,18 +31,15 @@ import { parse } from 'csv-parse/sync'
 import { type FetchFn } from './transit.service'
 import { resolveRegions } from '../config/regions'
 import { selectRtUrls } from './rt-url-selection'
-import { envRaw } from '../config/env'
+import { envRaw, envString } from '../config/env'
+import { normalizeBaseUrl } from './rt-normalize.service'
+import { motisRtSources } from '../lib/rt-normalize/motis-sources'
 import { parseTransitlandLicense, licenseAnswer, licensePolicy, type FeedLicense } from '../lib/feed-license'
 import { isGatedRouteType } from '../lib/gtfs-modes'
 
 // ── Types ───────────────────────────────────────────────────────────
 
-export interface GtfsRtUrl {
-  url: string
-  headers?: Record<string, string>
-  /** Absent on rows written before discovery recorded it. */
-  type?: RtUrlType
-}
+export type GtfsRtUrl = RtUrlEntry
 
 export interface GtfsFeedInfo {
   feedId: string
@@ -2062,9 +2059,11 @@ export async function generateMotisConfig(options?: MotisConfigOptions): Promise
       const rtUrls = feed.rt_urls
       if (rtUrls && Array.isArray(rtUrls) && rtUrls.length > 0) {
         lines.push('      rt:')
-        // One URL often serves trip updates and vehicle positions both.
-        const unique = rtUrls.filter((rt, i) => rtUrls.findIndex(o => o.url === rt.url) === i)
-        for (const rt of unique) {
+        const sources = motisRtSources(feed.feed_id, rtUrls, {
+          baseUrl: normalizeBaseUrl(),
+          serviceKey: envString<string>('BARRELMAN_API_KEY', ''),
+        })
+        for (const rt of sources) {
           lines.push(`        - url: "${rt.url}"`)
           if (rt.headers && Object.keys(rt.headers).length > 0) {
             lines.push('          headers:')

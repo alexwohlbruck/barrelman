@@ -48,6 +48,8 @@ export interface RtUrlEntry {
   headers?: Record<string, string>
   /** Absent on rows written before discovery recorded it. */
   type?: RtUrlType
+  /** MOTIS polls this through barrelman's matcher; set by the import when it measurably resolves more. */
+  normalize?: boolean
 }
 
 // ── GTFS Feeds ──────────────────────────────────────────────────────

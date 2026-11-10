@@ -40,7 +40,8 @@ import {
   type AlignmentResult,
 } from './align-trip-ids'
 import { selectRtUrls } from '../src/services/rt-url-selection'
-import { parseCsvRows, headerIndex } from './csv'
+import { measureRtNormalize } from './measure-rt-normalize'
+import { parseCsvRows, headerIndex } from '../src/lib/csv'
 import JSZip from 'jszip'
 
 // ── CLI args ────────────────────────────────────────────────────────
@@ -327,6 +328,7 @@ async function main() {
 
         const chosen = await alignBestStatic(buffer, merged)
         merged.url = chosen.url
+        merged.rtUrls = await measureRtNormalize(chosen.buffer, merged.rtUrls)
 
         // Step 3: Parse and import. Staged beside the feed's zip and moved
         // into place only once the import commits, so a feed that fails or is
@@ -396,6 +398,7 @@ async function main() {
         }
         feed.rtUrls = await selectRealtime(cleanBuffer, feed)
         const aligned = await alignTripIds(cleanBuffer, feed)
+        feed.rtUrls = await measureRtNormalize(aligned, feed.rtUrls)
         if (aligned !== existingBuffer) {
           writeFileSync(filepath, Buffer.from(aligned))
         }
