@@ -697,6 +697,8 @@ async function alternateStaticUrls(
  * Windows tools that open each file with a UTF-8 byte-order mark, and without
  * it the first column's key is "\ufefftrip_id", so every row reads as having
  * no trip_id. That made 122 US feeds look like timetables with no trips.
+ * `relax_quotes` reads a stray quote mark inside an unquoted field (`NEGTL "`)
+ * as text; strict parsing rejected the whole feed.
  */
 const GTFS_CSV = {
   bom: true,
@@ -704,6 +706,7 @@ const GTFS_CSV = {
   skip_empty_lines: true,
   trim: true,
   relax_column_count: true,
+  relax_quotes: true,
 } as const
 
 /**

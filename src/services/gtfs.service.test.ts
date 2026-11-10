@@ -57,6 +57,11 @@ describe('parseStops', () => {
     })
   })
 
+  test('reads a stray quote mark inside an unquoted name as text', () => {
+    const csv = 'stop_id,stop_name,stop_lat,stop_lon\nS1,NEGTL "B",35.1,-80.1\nS2,"Wall & Main",35.2,-80.2\n'
+    expect(parseStops(csv, 'f').map(s => s.stopName)).toEqual(['NEGTL "B"', 'Wall & Main'])
+  })
+
   test('handles stops with parent stations', () => {
     const csv = [
       'stop_id,stop_name,stop_lat,stop_lon,location_type,parent_station',
