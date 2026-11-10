@@ -220,6 +220,21 @@ async function columnValues(zip: JSZip, name: string, column: string): Promise<S
   return new Set(rows.slice(1).map(cells => cells[col]?.trim() ?? '').filter(Boolean))
 }
 
+/**
+ * Transitland's realtime URLs plus the ones already on record, which may have
+ * been found by backfill-rt-urls.ts or corrected by hand. Selection then drops
+ * whichever no longer serve the feed.
+ */
+function withStoredRealtime(listed: GtfsRtUrl[] | undefined, stored: GtfsRtUrl[] | null | undefined): GtfsRtUrl[] | undefined {
+  const all = [...(stored ?? []), ...(listed ?? [])]
+  const seen = new Set<string>()
+  const out = all.filter(rt => {
+    const key = `${rt.type ?? ''} ${rt.url}`
+    return !seen.has(key) && !!seen.add(key)
+  })
+  return out.length ? out : undefined
+}
+
 const staticRouteIds = async (buffer: ArrayBuffer) => columnValues(await JSZip.loadAsync(buffer), 'routes.txt', 'route_id')
 
 /**
@@ -364,7 +379,7 @@ async function main() {
         // sample what the feed's realtime actually publishes.
         const merged = {
           ...feed,
-          rtUrls: feed.rtUrls?.length ? feed.rtUrls : (stored.get(feed.feedId)?.rtUrls ?? undefined),
+          rtUrls: withStoredRealtime(feed.rtUrls, stored.get(feed.feedId)?.rtUrls),
         }
         merged.rtUrls = await selectRealtime(buffer, merged)
 

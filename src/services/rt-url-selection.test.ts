@@ -149,4 +149,19 @@ describe('selectRtUrls', () => {
     expect(kept.map(rt => rt.url)).toEqual(['https://marc.example/own'])
     expect(dropped).toEqual([{ url: 'https://marc.example/tu', reason: 'foreign-routes' }])
   })
+
+  test('drops a feed that is gone or has stopped updating', async () => {
+    const old = new TextEncoder().encode(JSON.stringify({ header: { timestamp: Date.now() / 1000 - 2 * 3600 }, entity: [] }))
+    const frozen = new TextEncoder().encode(JSON.stringify({ header: { timestamp: Date.now() / 1000 - 26 * 3600 }, entity: [] }))
+    const { fetchFn } = serving({ 'https://a.example/gone': 404, 'https://a.example/frozen': frozen, 'https://a.example/quiet': old })
+
+    const { kept, dropped } = await selectRtUrls(
+      ['gone', 'frozen', 'quiet'].map(p => ({ url: `https://a.example/${p}`, type: 'tripUpdates' })),
+      SUBWAY,
+      fetchFn,
+    )
+
+    expect(kept.map(rt => rt.url)).toEqual(['https://a.example/quiet'])
+    expect(dropped.map(d => d.reason)).toEqual(['gone', 'stale'])
+  })
 })

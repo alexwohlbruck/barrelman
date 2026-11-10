@@ -9,8 +9,9 @@
  * all of them for every dataset and resolves none of the foreign trips.
  *
  * So each candidate is fetched once and judged by what it publishes: a URL
- * that refuses us for lack of credentials is dropped, and so is one whose
- * trips run on none of the static feed's routes. Anything that can't be
+ * that refuses us for lack of credentials is dropped, and so is one that is
+ * gone, has stopped updating, or whose trips run on none of the static feed's
+ * routes. Anything that can't be
  * judged — a timeout, an empty feed overnight, entities with no route — is
  * kept, so a transient failure never costs a feed its realtime.
  */
@@ -28,13 +29,14 @@ export interface SelectableRtUrl {
 
 export interface RtUrlSelection<T extends SelectableRtUrl> {
   kept: T[]
-  dropped: Array<{ url: string; reason: 'unauthorized' | 'foreign-routes' }>
+  dropped: Array<{ url: string; reason: DropReason }>
 }
 
 /** Route, trip and stop ids a realtime feed's trip updates and vehicles refer to. */
 function idsOf(buf: Uint8Array) {
-  const ids = { routes: new Set<string>(), trips: new Set<string>(), stops: new Set<string>() }
-  for (const entity of decodeFeedMessage(buf).entity ?? []) {
+  const message = decodeFeedMessage(buf)
+  const ids = { routes: new Set<string>(), trips: new Set<string>(), stops: new Set<string>(), timestamp: Number(message.header?.timestamp ?? 0) }
+  for (const entity of message.entity ?? []) {
     const trip = entity.tripUpdate?.trip ?? entity.vehicle?.trip
     if (trip?.routeId) ids.routes.add(trip.routeId)
     if (trip?.tripId) ids.trips.add(trip.tripId)
@@ -51,7 +53,11 @@ export interface StaticTripsAndStops {
 
 const overlaps = (a: Set<string>, b: Set<string>) => [...a].some(x => b.has(x))
 
-type Verdict = { keep: true; movedTo?: string } | { keep: false; reason: 'unauthorized' | 'foreign-routes' }
+type DropReason = 'unauthorized' | 'foreign-routes' | 'gone' | 'stale'
+type Verdict = { keep: true; movedTo?: string } | { keep: false; reason: DropReason }
+
+/** A feed whose header is older than this has stopped updating at that address. */
+const STALE_AFTER_S = 12 * 3600
 
 async function judge(
   rt: SelectableRtUrl,
@@ -65,12 +71,14 @@ async function judge(
       signal: AbortSignal.timeout(15_000),
     })
     if (response.status === 401 || response.status === 403) return { keep: false, reason: 'unauthorized' }
+    if (response.status === 404 || response.status === 410) return { keep: false, reason: 'gone' }
     if (!response.ok) return { keep: true }
 
     const ids = idsOf(new Uint8Array(await response.arrayBuffer()))
     // MOTIS does not follow redirects, so a feed that moved is polled where it
     // went, once that answers with GTFS-RT rather than a parked-domain page.
     const kept: Verdict = { keep: true, ...(response.redirected && response.url && { movedTo: response.url }) }
+    if (ids.timestamp > 0 && Date.now() / 1000 - ids.timestamp > STALE_AFTER_S) return { keep: false, reason: 'stale' }
     if (rt.type === 'alerts') return kept
     if (ids.routes.size && staticRoutes.size) {
       return overlaps(ids.routes, staticRoutes) ? kept : { keep: false, reason: 'foreign-routes' }
