@@ -11,8 +11,8 @@ const at = (hhmm: string) => {
   return origin + h! * 3600 + m! * 60
 }
 
-/** Southbound D: fifteen stops 3 minutes apart, so a 42-minute trip, every 15 minutes from 23:00. */
-const starts = ['23:00', '23:15', '23:30', '23:45']
+/** Southbound D: fifteen stops 3 minutes apart, so a 42-minute trip, from 23:00 to 23:50. */
+const starts = ['23:00', '23:15', '23:30', '23:45', '23:50']
 const stops = Array.from({ length: 15 }, (_, i) => `S${i + 1}`)
 const pad = (n: number) => String(n).padStart(2, '0')
 const clock = (min: number) => `${pad(Math.floor(min / 60))}:${pad(min % 60)}:00`
@@ -95,6 +95,33 @@ describe('normalizeFeed', () => {
     // T2330 runs 8 minutes late, a minute nearer T2345's times than its own.
     const out = normalizeFeed(index, message('23:41', update('T2315..S', '23:21', 1), update('T2330..S', '23:38', 1)), at('23:41'))
     expect(trips(out).slice(0, 2).map(t => t!.tripId)).toEqual(['T2315', 'T2330'])
+  })
+
+  it('marks a scheduled stop the update leaves out of its list as skipped', () => {
+    const rerouted = update('T2330', '23:30', 0, { startTime: '23:30:00' })
+    rerouted.tripUpdate!.stopTimeUpdate = rerouted.tripUpdate!.stopTimeUpdate!.filter(s => s.stopId !== 'S5')
+    const out = normalizeFeed(index, message('23:31', rerouted), at('23:31'))
+    const stops = out.message.entity![0]!.tripUpdate!.stopTimeUpdate!
+    expect(stops.find(s => s.stopId === 'S5')?.scheduleRelationship).toBe(1)
+    expect(stops.map(s => s.stopId)).toEqual(index.byTripId.get('T2330')![0]!.stopIds)
+  })
+
+  it('reads a short list as the train ending early only where the feed lists whole runs', () => {
+    const shortTurn = update('T2330', '23:30', 0, { startTime: '23:30:00' })
+    shortTurn.tripUpdate!.stopTimeUpdate = shortTurn.tripUpdate!.stopTimeUpdate!.slice(0, 8)
+    const whole = [
+      update('T2300', '23:00', 12, { startTime: '23:00:00' }),
+      update('T2315', '23:15', 5, { startTime: '23:15:00' }),
+      update('T2345', '23:45', 0, { startTime: '23:45:00' }),
+      update('T2350', '23:50', 0, { startTime: '23:50:00' }),
+    ]
+    const listed = normalizeFeed(index, message('23:31', shortTurn, ...whole), at('23:31'))
+    expect(listed.stats.skipped).toBe(stops.length - 8)
+    expect(listed.message.entity![0]!.tripUpdate!.stopTimeUpdate!.slice(8).every(s => s.scheduleRelationship === 1)).toBe(true)
+
+    // A feed that only ever gives the next few stops.
+    const nextFew = [shortTurn, ...whole.map(e => ({ ...e, tripUpdate: { ...e.tripUpdate!, stopTimeUpdate: e.tripUpdate!.stopTimeUpdate!.slice(0, 2) } }))]
+    expect(normalizeFeed(index, message('23:31', ...nextFew), at('23:31')).stats.skipped).toBe(0)
   })
 
   it('adds a train the timetable never had as a NEW trip with the feed times', () => {

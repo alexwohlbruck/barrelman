@@ -29,6 +29,7 @@ type TripUpdate = transit_realtime.ITripUpdate
 type TripDescriptor = transit_realtime.ITripDescriptor
 
 const SCHEDULED = 0
+const SKIPPED = 1
 const ADDED = 1
 const CANCELED = 3
 const NEW = 8
@@ -43,6 +44,8 @@ const MIN_STOP_COVERAGE = 0.9
 const CANCEL_GRACE_S = 5 * 60
 /** Share of a route's under-way runs the feed must claim before its silence counts as a cancellation. */
 const MIN_ROUTE_COVERAGE = 0.5
+/** Share of updates listing their run to its last stop for a feed's shorter lists to mean the train ends early. */
+const COMPLETE_LISTS_SHARE = 0.8
 
 export interface NormalizeStats {
   updates: number
@@ -52,6 +55,8 @@ export interface NormalizeStats {
   matched: number
   added: number
   cancelled: number
+  /** Scheduled stops an update's own stop list passes over, marked SKIPPED. */
+  skipped: number
   unresolved: number
 }
 
@@ -150,13 +155,14 @@ export function normalizeFeed(
 ): { message: FeedMessage; stats: NormalizeStats } {
   const today = localDate(now, index.timezone)
   const dates = [shiftDate(today, -1), today]
-  const stats: NormalizeStats = { updates: 0, exact: 0, dated: 0, matched: 0, added: 0, cancelled: 0, unresolved: 0 }
+  const stats: NormalizeStats = { updates: 0, exact: 0, dated: 0, matched: 0, added: 0, cancelled: 0, skipped: 0, unresolved: 0 }
 
   const entities = message.entity ?? []
   const claimed = new Map<string, Run>()
   const assigned = new Map<TripUpdate, Run>()
   const loose: TripUpdate[] = []
   const redated = new Map<TripUpdate, Run>()
+  const placed = new Map<TripUpdate, Run>()
   const tracked = new Set<string>()
 
   for (const e of entities) {
@@ -169,6 +175,7 @@ export function normalizeFeed(
     const exact = exactRun(index, tu, dates, now)
     if (exact && !claimed.has(runKey(exact))) {
       claimed.set(runKey(exact), exact)
+      placed.set(tu, exact)
       if (tu.trip.startDate === exact.date) stats.exact++
       else redated.set(tu, exact)
     } else if (tu.stopTimeUpdate?.length) {
@@ -198,7 +205,27 @@ export function normalizeFeed(
   for (const { tu, run } of pairs) {
     if (assigned.has(tu) || claimed.has(runKey(run))) continue
     assigned.set(tu, run)
+    placed.set(tu, run)
     claimed.set(runKey(run), run)
+  }
+
+  const omissions = new Map<TripUpdate, Omitted>()
+  for (const [tu, run] of placed) {
+    const o = omittedStops(run, tu)
+    if (o) omissions.set(tu, o)
+  }
+  const complete = [...omissions.values()].filter(o => !o.after.length).length
+  const listsWholeRun = omissions.size > 0 && complete / omissions.size >= COMPLETE_LISTS_SHARE
+  const withSkips = (tu: TripUpdate): TripUpdate => {
+    const o = omissions.get(tu)
+    if (!o) return tu
+    const skip = listsWholeRun ? [...o.between, ...o.after] : o.between
+    if (!skip.length) return tu
+    stats.skipped += skip.length
+    const order = (id: string | null | undefined) => o.order.get(id ?? '') ?? Infinity
+    const stopTimeUpdate = [...(tu.stopTimeUpdate ?? []), ...skip.map(stopId => ({ stopId, scheduleRelationship: SKIPPED }))]
+      .sort((a, b) => order(a.stopId) - order(b.stopId))
+    return { ...tu, stopTimeUpdate }
   }
 
   const out: FeedEntity[] = []
@@ -209,9 +236,14 @@ export function normalizeFeed(
     if (tu && run) {
       const trip = restate(run, tu.trip!)
       if (tu.trip!.tripId) renamed.set(tu.trip!.tripId, trip)
-      out.push({ ...e, tripUpdate: { ...tu, trip } })
+      out.push({ ...e, tripUpdate: { ...withSkips(tu), trip } })
       if (redated.has(tu)) stats.dated++
       else stats.matched++
+      continue
+    }
+    if (tu && placed.has(tu)) {
+      const skipped = withSkips(tu)
+      out.push(skipped === tu ? e : { ...e, tripUpdate: skipped })
       continue
     }
     if (!tu || !loose.includes(tu)) { out.push(e); continue }
@@ -241,6 +273,35 @@ export function normalizeFeed(
   }
 
   return { message: { ...message, entity: out }, stats }
+}
+
+interface Omitted {
+  /** Scheduled stops between the first and last the update lists that it leaves out. */
+  between: string[]
+  /** Scheduled stops after the last it lists. */
+  after: string[]
+  /** Each scheduled stop's position on the run. */
+  order: Map<string, number>
+}
+
+/**
+ * The scheduled stops an update's own stop list passes over. Only for an
+ * update whose stops nearly all lie on the run, so a feed naming its stops
+ * differently never reads as skipping them.
+ */
+function omittedStops(run: Run, tu: TripUpdate): Omitted | null {
+  const listed = (tu.stopTimeUpdate ?? []).map(s => s.stopId).filter((id): id is string => !!id)
+  const positions = listed.map(id => run.trip.stopIds.indexOf(id)).filter(i => i >= 0)
+  if (!positions.length || positions.length / listed.length < MIN_STOP_COVERAGE) return null
+  const first = Math.min(...positions)
+  const last = Math.max(...positions)
+  const have = new Set(listed)
+  const stops = run.trip.stopIds
+  return {
+    between: stops.slice(first, last + 1).filter(id => !have.has(id)),
+    after: stops.slice(last + 1),
+    order: new Map(stops.map((id, i) => [id, i])),
+  }
 }
 
 function asNewTrip(index: StaticIndex, tu: TripUpdate): TripUpdate | null {
