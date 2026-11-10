@@ -25,6 +25,7 @@ import {
   shiftDate,
   type StaticIndex,
   type StaticTrip,
+  tripPrefix,
 } from './static-index'
 
 type FeedMessage = transit_realtime.IFeedMessage
@@ -49,6 +50,8 @@ const CANCEL_GRACE_S = 5 * 60
 /** Share of a route's under-way runs the feed must claim before its silence counts as a cancellation. */
 const MIN_ROUTE_COVERAGE = 0.5
 /** Share of updates listing their run to its last stop for a feed's shorter lists to mean the train ends early. */
+/** Of the stops an update's list spans, the share it must name for the others to read as skipped. */
+const MIN_LISTED_SHARE = 0.5
 const COMPLETE_LISTS_SHARE = 0.8
 
 export interface NormalizeStats {
@@ -104,8 +107,17 @@ function exactRun(index: StaticIndex, tu: TripUpdate, dates: string[], now: numb
   if (!td.tripId) return null
   const startMin = td.startTime ? Math.floor(parseClock(td.startTime) / 60) : null
   const days = td.startDate ? [shiftDate(td.startDate, -1), td.startDate] : dates
-  const candidates = runs(index, index.byTripId.get(td.tripId) ?? [], days)
+  const named = index.byTripId.get(td.tripId)
+  let candidates = runs(index, named ?? [], days)
     .filter(r => startMin === null || Math.floor(r.trip.times[0]! / 60) === startMin)
+  if (!named) {
+    // CapMetro's realtime names `3000797_5797` for the timetable's `3000797_6158`.
+    // Taken only when exactly one run of that prefix fits the day and start.
+    const prefix = tripPrefix(td.tripId)
+    const versions = prefix ? runs(index, index.byTripPrefix.get(prefix) ?? [], td.startDate ? [td.startDate] : days)
+      .filter(r => startMin === null || Math.floor(r.trip.times[0]! / 60) === startMin) : []
+    candidates = versions.length === 1 ? versions : []
+  }
   const timed = (tu.stopTimeUpdate ?? []).some(s => s.stopId && stopTime(s) > 0)
   if (timed) {
     const scored = candidates.map(r => ({ r, gap: fit(r, tu.stopTimeUpdate!) })).filter(c => c.gap !== null)
@@ -182,7 +194,7 @@ export function normalizeFeed(
     if (exact && !claimed.has(runKey(exact))) {
       claimed.set(runKey(exact), exact)
       placed.set(tu, exact)
-      if (tu.trip.startDate === exact.date) stats.exact++
+      if (tu.trip.startDate === exact.date && tu.trip.tripId === exact.trip.tripId) stats.exact++
       else redated.set(tu, exact)
     } else if (tu.stopTimeUpdate?.length) {
       loose.push(tu)
@@ -223,12 +235,15 @@ export function normalizeFeed(
     const o = omittedStops(run, tu)
     if (o) omissions.set(tu, o)
   }
-  const complete = [...omissions.values()].filter(o => !o.after.length).length
-  const listsWholeRun = omissions.size > 0 && complete / omissions.size >= COMPLETE_LISTS_SHARE
+  const all = [...omissions.values()]
+  const share = (of: Omitted[], f: (o: Omitted) => boolean) => of.length > 0 && of.filter(f).length / of.length >= COMPLETE_LISTS_SHARE
+  const listsWholeRun = share(all, o => !o.after.length)
+  // Where most lists have a gap somewhere, a gap is how the feed writes, not a skip.
+  const listsEveryStop = share(all.filter(o => o.dense), o => !o.between.length)
   const withSkips = (tu: TripUpdate): TripUpdate => {
     const o = omissions.get(tu)
     if (!o) return tu
-    const skip = listsWholeRun ? [...o.between, ...o.after] : o.between
+    const skip = [...(listsEveryStop ? o.between : []), ...(listsWholeRun ? o.after : [])]
     if (!skip.length) return tu
     stats.skipped += skip.length
     const order = (id: string | null | undefined) => o.order.get(id ?? '') ?? Infinity
@@ -314,6 +329,8 @@ function outOfBlockOrder(entities: FeedEntity[], placed: Map<TripUpdate, Run>): 
 }
 
 interface Omitted {
+  /** Lists at least half the stops it spans, over more than one. */
+  dense: boolean
   /** Scheduled stops between the first and last the update lists that it leaves out. */
   between: string[]
   /** Scheduled stops after the last it lists. */
@@ -335,8 +352,11 @@ function omittedStops(run: Run, tu: TripUpdate): Omitted | null {
   const last = Math.max(...positions)
   const have = new Set(listed)
   const stops = run.trip.stopIds
+  // A list of timepoints, or of the next stop and the last, passes over stops it isn't skipping.
+  const dense = new Set(positions).size / (last - first + 1) >= MIN_LISTED_SHARE
   return {
-    between: stops.slice(first, last + 1).filter(id => !have.has(id)),
+    dense: dense && last > first,
+    between: dense ? stops.slice(first, last + 1).filter(id => !have.has(id)) : [],
     after: stops.slice(last + 1),
     order: new Map(stops.map((id, i) => [id, i])),
   }

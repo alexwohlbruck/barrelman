@@ -79,6 +79,22 @@ describe('normalizeFeed', () => {
     expect(trips(out).filter(t => t!.scheduleRelationship === 3).map(t => t!.tripId)).not.toContain('T2345')
   })
 
+  it("names a trip whose realtime id carries another version suffix by the timetable's id", () => {
+    const versioned = buildStaticIndex({
+      agency: `agency_id,agency_name,agency_url,agency_timezone\nCM,CM,https://x,${TZ}\n`,
+      routes: 'route_id,route_type\n3,3\n',
+      calendar: `service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date\nWKD,1,1,1,1,1,0,0,20261101,20261130\nOLD,1,1,1,1,1,0,0,20260101,20260131\n`,
+      trips: 'route_id,service_id,trip_id\n3,WKD,3000797_6158\n3,OLD,3000797_6169\n',
+      stopTimes: 'trip_id,arrival_time,departure_time,stop_id,stop_sequence\n3000797_6158,15:00:00,15:00:00,A,1\n3000797_6158,15:10:00,15:10:00,B,2\n3000797_6169,15:00:00,15:00:00,A,1\n3000797_6169,15:10:00,15:10:00,B,2\n',
+    })
+    const delayed: transit_realtime.IFeedEntity = {
+      id: 'x',
+      tripUpdate: { trip: { tripId: '3000797_5797', routeId: '3', startDate: DATE, startTime: '15:00:00' }, stopTimeUpdate: [{ stopSequence: 2, stopId: 'B', arrival: { delay: 120 } }] },
+    }
+    const out = normalizeFeed(versioned, message('15:05', delayed), at('15:05'))
+    expect(trips(out)[0]).toMatchObject({ tripId: '3000797_6158', startDate: DATE })
+  })
+
   it('restates a re-timed train under its scheduled run', () => {
     // The feed names the train by its actual dispatch, four minutes late.
     const out = normalizeFeed(index, message('23:40', update('141950_D..S', '23:34', 2, { startTime: '23:34:00' })), at('23:40'))
@@ -102,10 +118,20 @@ describe('normalizeFeed', () => {
   it('marks a scheduled stop the update leaves out of its list as skipped', () => {
     const rerouted = update('T2330', '23:30', 0, { startTime: '23:30:00' })
     rerouted.tripUpdate!.stopTimeUpdate = rerouted.tripUpdate!.stopTimeUpdate!.filter(s => s.stopId !== 'S5')
-    const out = normalizeFeed(index, message('23:31', rerouted), at('23:31'))
+    const others = [update('T2300', '23:00', 11, { startTime: '23:00:00' }), update('T2315', '23:15', 6, { startTime: '23:15:00' }), update('T2345', '23:45', 0, { startTime: '23:45:00' }), update('T2350', '23:50', 0, { startTime: '23:50:00' })]
+    const out = normalizeFeed(index, message('23:31', rerouted, ...others), at('23:31'))
     const stops = out.message.entity![0]!.tripUpdate!.stopTimeUpdate!
     expect(stops.find(s => s.stopId === 'S5')?.scheduleRelationship).toBe(1)
     expect(stops.map(s => s.stopId)).toEqual(index.byTripId.get('T2330')![0]!.stopIds)
+  })
+
+  it('reads no skips into an update that lists only some of the stops it spans', () => {
+    const timepoints = ['T2300', 'T2315', 'T2330', 'T2345'].map((id, n) => {
+      const e = update(id, starts[n]!, 0, { startTime: `${starts[n]}:00` })
+      e.tripUpdate!.stopTimeUpdate = e.tripUpdate!.stopTimeUpdate!.filter((_, i) => i % 3 === 0)
+      return e
+    })
+    expect(normalizeFeed(index, message('23:31', ...timepoints), at('23:31')).stats.skipped).toBe(0)
   })
 
   it('reads a short list as the train ending early only where the feed lists whole runs', () => {

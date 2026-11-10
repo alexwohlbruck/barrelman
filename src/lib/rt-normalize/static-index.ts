@@ -21,11 +21,19 @@ export interface StaticIndex {
   timezone: string
   trips: StaticTrip[]
   byTripId: Map<string, StaticTrip[]>
+  /** Trips by their id up to the first `_`, for feeds whose realtime versions that suffix. */
+  byTripPrefix: Map<string, StaticTrip[]>
   byRoute: Map<string, StaticTrip[]>
   routeIds: Set<string>
   stopIds: Set<string>
   /** service_id → active dates as YYYYMMDD. */
   serviceDates: Map<string, Set<string>>
+}
+
+/** A trip id's part before its first `_`, when there is a suffix after it. */
+export function tripPrefix(tripId: string): string | null {
+  const i = tripId.indexOf('_')
+  return i > 0 && i < tripId.length - 1 ? tripId.slice(0, i) : null
 }
 
 export interface GtfsFiles {
@@ -141,7 +149,12 @@ export function buildStaticIndex(files: GtfsFiles): StaticIndex {
 
   const timed = trips.filter(t => t.stopIds.length > 0)
   const byRoute = new Map<string, StaticTrip[]>()
-  for (const t of timed) (byRoute.get(t.routeId) ?? byRoute.set(t.routeId, []).get(t.routeId)!).push(t)
+  const byTripPrefix = new Map<string, StaticTrip[]>()
+  for (const t of timed) {
+    ;(byRoute.get(t.routeId) ?? byRoute.set(t.routeId, []).get(t.routeId)!).push(t)
+    const prefix = tripPrefix(t.tripId)
+    if (prefix) (byTripPrefix.get(prefix) ?? byTripPrefix.set(prefix, []).get(prefix)!).push(t)
+  }
 
   const stops = rows(files.stops)
   const stopIds = new Set(stops.body.map(r => r[stops.col.get('stop_id')!]?.trim() ?? '').filter(Boolean))
@@ -152,6 +165,7 @@ export function buildStaticIndex(files: GtfsFiles): StaticIndex {
     timezone,
     trips: timed,
     byTripId,
+    byTripPrefix,
     byRoute,
     routeIds,
     stopIds,
