@@ -25,7 +25,7 @@ import { join, basename } from 'path'
 import JSZip from 'jszip'
 import { parseArgs } from 'util'
 
-import { parseCsvRows, serializeCsvRows, headerIndex } from './csv'
+import { parseCsvRows, serializeCsvRows, headerIndex } from '../src/lib/csv'
 
 export interface BikesAllowedOptions {
   /** Fill bus trips too, rather than leaving their policy unstated. */

@@ -32,7 +32,7 @@
  */
 import JSZip from 'jszip'
 import GtfsRealtimeBindings from 'gtfs-realtime-bindings'
-import { parseCsvRows, serializeCsvRows, headerIndex, rewriteCsvColumn } from './csv'
+import { parseCsvRows, serializeCsvRows, headerIndex, rewriteCsvColumn } from '../src/lib/csv'
 
 // Decoded through the live binding at call time so a test mock of
 // `gtfs-realtime-bindings` applies regardless of import order — same reason as

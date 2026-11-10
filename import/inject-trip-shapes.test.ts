@@ -9,7 +9,7 @@ import {
   type DonorTrip,
 } from './inject-trip-shapes'
 import { groupStopTimes } from '../src/services/gtfs.service'
-import { parseCsv } from './csv'
+import { parseCsv } from '../src/lib/csv'
 import { routePath, type LonLat } from '../src/lib/route-hazards/route-path'
 
 /** A point `m` metres east of the origin, `n` metres north. */
