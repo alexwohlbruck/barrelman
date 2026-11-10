@@ -10,6 +10,10 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Added
+
+* Landmark tiles carry each model's `type` (`bridge`, `tower`, `building`, ...) where its dataset publishes one, so a client can draw a kind differently, as Parchment lifts a bridge landmark the way it lifts bridge decks. Releases that send no type leave it off the feature. The first start after upgrading re-reads each landmark source's release once, from the model cache, to fill it in for landmarks already imported.
+
 ## [0.10.38] - 2026-11-03
 
 ### Added

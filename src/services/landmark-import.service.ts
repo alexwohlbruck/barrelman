@@ -56,6 +56,8 @@ export const LANDMARK_AXES = 'X east / Y up / Z south'
 const SLUG_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/
 const SHA_RE = /^[0-9a-f]{64}$/
 const WIKIDATA_RE = /^Q\d+$/
+/** A landmark's type: one lowercase slug, as the landmarks catalog writes it. */
+const TYPE_RE = /^[a-z][a-z0-9-]{0,31}$/
 const OSM_TYPES = new Set(['node', 'way', 'relation'])
 /**
  * The most a placement may be raised or sunk, in metres; the landmarks repo
@@ -159,6 +161,12 @@ export type LandmarkAsset = {
    * baked lift back down. Absent means 0.
    */
   elevation?: number
+  /**
+   * Not in Open Landmarks' schema; the Barrelman dataset sends it. What the
+   * model is, as one lowercase slug (`bridge`, `tower`, `building`, ...), so a
+   * client can draw a kind differently, as a bridge lifted like its decks.
+   */
+  type?: string
   attribution?: string
   authors?: string[]
   artisticLicense?: string
@@ -178,6 +186,8 @@ export type LandmarkRow = {
   detailZoom: number | null
   replaces: string[]
   wikidata: string | null
+  /** See `LandmarkAsset.type`; null where the release sends none. */
+  type: string | null
   entrances: number[][] | null
   license: string
   author: string
@@ -226,6 +236,7 @@ export function landmarkRow(source: LandmarkSource, asset: LandmarkAsset): Landm
     detailZoom: detail ? (asset.detailZoom ?? 17) : null,
     replaces,
     wikidata: typeof asset.wikidata === 'string' && WIKIDATA_RE.test(asset.wikidata) ? asset.wikidata : null,
+    type: typeof asset.type === 'string' && TYPE_RE.test(asset.type) ? asset.type : null,
     entrances: entrances.length ? entrances : null,
     license: asset.artisticLicense || source.license,
     author: (asset.authors ?? []).join(', ') || source.author,
@@ -434,17 +445,17 @@ async function importSource(source: LandmarkSource, { force, full, log }: Mode):
       // the release's own, 0 when it sends none.
       await tx`
         INSERT INTO landmarks (id, name, model_id, detail_model_id, detail_zoom, geom, reach, bearing, scale, elevation,
-                               min_zoom, replaces, wikidata, entrances, source_id, origin)
+                               min_zoom, replaces, wikidata, type, entrances, source_id, origin)
         SELECT ${r.id}, ${r.name}, ${r.low.modelId}, ${r.detail?.modelId ?? null}, ${r.detailZoom}, p.geom,
                ST_Expand(ST_Transform(p.geom, 3857), ${radius} / cos(radians(${r.lat}))),
-               0, 1, ${r.elevation}, ${r.minZoom}, ${r.replaces}, ${r.wikidata}, ${r.entrances ? JSON.stringify(r.entrances) : null}::jsonb,
+               0, 1, ${r.elevation}, ${r.minZoom}, ${r.replaces}, ${r.wikidata}, ${r.type}, ${r.entrances ? JSON.stringify(r.entrances) : null}::jsonb,
                ${r.sourceId}, ${source.id}
         FROM (SELECT ST_SetSRID(ST_MakePoint(${r.lng}, ${r.lat}), 4326) AS geom) p
         ON CONFLICT (id) DO UPDATE SET
           name = EXCLUDED.name, model_id = EXCLUDED.model_id, detail_model_id = EXCLUDED.detail_model_id,
           detail_zoom = EXCLUDED.detail_zoom, geom = EXCLUDED.geom, reach = EXCLUDED.reach,
           bearing = 0, scale = 1, elevation = EXCLUDED.elevation, min_zoom = EXCLUDED.min_zoom, replaces = EXCLUDED.replaces,
-          wikidata = EXCLUDED.wikidata, entrances = EXCLUDED.entrances, source_id = EXCLUDED.source_id,
+          wikidata = EXCLUDED.wikidata, type = EXCLUDED.type, entrances = EXCLUDED.entrances, source_id = EXCLUDED.source_id,
           origin = EXCLUDED.origin, updated_at = now()`
     }
     const keep = rows.map((r) => r.id)

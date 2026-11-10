@@ -324,6 +324,11 @@ export function ensureLandmarksSchema(): Promise<void> {
     await sql`ALTER TABLE landmarks ADD COLUMN IF NOT EXISTS source_id text`
     await sql`ALTER TABLE landmarks ADD COLUMN IF NOT EXISTS active boolean NOT NULL DEFAULT true`
     await sql`ALTER TABLE landmarks ADD COLUMN IF NOT EXISTS superseded_by text`
+    // What the model is (`bridge`, `tower`, ...), where its release says.
+    const [{ typed }] = await sql`
+      SELECT EXISTS (SELECT 1 FROM information_schema.columns
+                     WHERE table_name = 'landmarks' AND column_name = 'type' AND table_schema = ANY(current_schemas(false))) AS typed`
+    await sql`ALTER TABLE landmarks ADD COLUMN IF NOT EXISTS type text`
     // What each imported source last brought in, so an unchanged release is
     // recognised from its pointer alone.
     await sql`
@@ -333,6 +338,10 @@ export function ensureLandmarksSchema(): Promise<void> {
         landmarks   integer NOT NULL DEFAULT 0,
         imported_at timestamptz NOT NULL DEFAULT now()
       )`
+    // Rows imported before `type` was stored lack it, though their release
+    // may send it: forget each source's release once, so the next import
+    // re-reads it (its models come from the cache) and fills it in.
+    if (!typed) await sql`UPDATE landmark_sources SET release = NULL`
   })()
   return schemaReady
 }
@@ -435,7 +444,8 @@ export const modelPath = modelIndex.path
  * visible tiles hold, and de-duplicates by feature id.
  *
  * MVT has no array type, so `replaces` travels as a space-separated string
- * and `entrances` as JSON text.
+ * and `entrances` as JSON text. `type` is left out of a feature where it is
+ * null, as for a release from before it was published.
  */
 export async function landmarkTile(z: number, x: number, y: number): Promise<Uint8Array> {
   if (z < LANDMARKS_MIN_TILE_ZOOM) return new Uint8Array()
@@ -447,7 +457,7 @@ export async function landmarkTile(z: number, x: number, y: number): Promise<Uin
              -- How high it reaches above the ground it stands on: a model
              -- raised or sunk by its elevation reaches that much higher or lower.
              round((m.height_m * l.scale + l.elevation)::numeric, 1)::real AS height,
-             array_to_string(l.replaces, ' ') AS replaces, l.wikidata, m.attribution,
+             array_to_string(l.replaces, ' ') AS replaces, l.wikidata, l.type, m.attribution,
              l.entrances::text AS entrances, l.origin AS source,
              ST_AsMVTGeom(ST_Transform(l.geom, 3857), bounds.env, 4096, 4096, true) AS geom
       FROM landmarks l

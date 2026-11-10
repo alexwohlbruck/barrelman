@@ -109,6 +109,13 @@ describe('landmarkRow', () => {
     expect(row(source('openlandmarks'), asset()).wikidata).toBeNull()
   })
 
+  it('keeps a type slug, and none where the release sends none or a malformed one', () => {
+    expect(row(source('barrelman'), asset({ type: 'bridge' })).type).toBe('bridge')
+    expect(row(source('openlandmarks'), asset()).type).toBeNull()
+    expect(row(source('barrelman'), asset({ type: 'Bridge; DROP' })).type).toBeNull()
+    expect(row(source('barrelman'), asset({ type: 7 as unknown as string })).type).toBeNull()
+  })
+
   it('drops the detail zoom when there is no detail model', () => {
     const r = row(source('openlandmarks'), asset({ lods: { low: asset().lods.low } }))
     expect(r.detail).toBeNull()
