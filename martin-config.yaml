@@ -285,6 +285,23 @@ postgres:
       buffer: 64
       clip_geom: true
 
+    neighbourhood_labels:
+      schema: public
+      table: neighbourhood_labels
+      srid: 4326
+      geometry_column: centroid
+      geometry_type: POINT
+      id_column: fid
+      minzoom: 10
+      maxzoom: 13
+      properties:
+        id: id
+        name: name
+        class: class
+        tier: tier
+      buffer: 64
+      clip_geom: true
+
     street_trees:
       schema: public
       table: street_trees

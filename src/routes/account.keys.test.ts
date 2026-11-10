@@ -76,6 +76,26 @@ describe('PATCH /account/keys/:id', () => {
     expect((await createAccountRoutes(d).handle(patch({ scopes: ['*', 'admin'] }))).status).toBe(200)
   })
 
+  // Otherwise an email-code session that /admin/* turns away under
+  // BARRELMAN_ADMIN_REQUIRE_PASSKEY could mint an admin key and use that.
+  test('will not give `admin` to a key from a session the admin API refuses', async () => {
+    const d = deps('admin', {
+      adminSessionRefusal: async () => ({ status: 403, code: 'passkey_required', error: 'Use a passkey.' }),
+    })
+    const res = await createAccountRoutes(d).handle(patch({ scopes: ['*', 'admin'] }))
+
+    expect(res.status).toBe(403)
+    expect(await res.json()).toMatchObject({ code: 'passkey_required' })
+    expect(d.updateApiKeyScopes).not.toHaveBeenCalled()
+  })
+
+  test('a refused admin session can still change keys without `admin`', async () => {
+    const d = deps('admin', {
+      adminSessionRefusal: async () => ({ status: 403, code: 'passkey_required', error: 'Use a passkey.' }),
+    })
+    expect((await createAccountRoutes(d).handle(patch({ scopes: ['tiles'] }))).status).toBe(200)
+  })
+
   test('requires a session', async () => {
     const d = deps('user', { resolveSession: mock(async () => ({ user: null, session: null })) })
     expect((await createAccountRoutes(d).handle(patch({ name: 'x' }))).status).toBe(401)

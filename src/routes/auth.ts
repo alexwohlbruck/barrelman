@@ -33,6 +33,7 @@ import { isValidEmail } from '../lib/email'
 import { clientIp, createRateLimiter } from '../lib/rate-limit'
 import { registrationMode, terms } from '../config/accounts.config'
 import { enabledOAuthProviders } from '../config/oauth.config'
+import { adminSessionRefusal as _adminSessionRefusal } from '../services/admin-access.service'
 
 /**
  * Code requests are limited per address AND per source IP: the first stops one
@@ -59,6 +60,7 @@ export interface AuthDeps {
   deleteSession: typeof _deleteSession
   /** Injected so route tests can exercise the guarded paths without Postgres. */
   resolveSession: typeof _resolveSession
+  adminSessionRefusal: typeof _adminSessionRefusal
 }
 
 const defaultDeps: AuthDeps = {
@@ -75,6 +77,7 @@ const defaultDeps: AuthDeps = {
   listSessions: _listSessions,
   deleteSession: _deleteSession,
   resolveSession: _resolveSession,
+  adminSessionRefusal: _adminSessionRefusal,
 }
 
 export function createAuthRoutes(overrides: Partial<AuthDeps> = {}) {
@@ -187,12 +190,30 @@ export function createAuthRoutes(overrides: Partial<AuthDeps> = {}) {
         }
 
         const user = await deps.findUserByEmail(email)
-        // Same 401 for "no such account" and "wrong code" — the request-code
+        // One body for "no such account" and "wrong code": the request-code
         // endpoint already refuses to disclose existence, so this must too.
+        const invalid = { error: 'That code is not valid', reason: 'invalid' as const }
         if (!user) {
           set.status = 401
-          return { error: 'That code is not valid' }
+          return invalid
         }
+
+        // The code is checked before suspension. A correct code proves the
+        // caller owns the address, and only then are they told the account is
+        // suspended; a wrong one answers the same for every account state.
+        const result = await deps.verifyOtp(user.id, body.code)
+        if (result !== 'valid') {
+          set.status = 401
+          if (result === 'invalid') return invalid
+          return {
+            error:
+              result === 'expired'
+                ? 'That code has expired — request a new one'
+                : 'Too many incorrect attempts — request a new code',
+            reason: result,
+          }
+        }
+
         if (user.suspendedAt) {
           set.status = 403
           // Someone locked out is owed the reason and whether it lifts on its
@@ -206,24 +227,11 @@ export function createAuthRoutes(overrides: Partial<AuthDeps> = {}) {
           }
         }
 
-        const result = await deps.verifyOtp(user.id, body.code)
-        if (result !== 'valid') {
-          set.status = 401
-          return {
-            error:
-              result === 'expired'
-                ? 'That code has expired — request a new one'
-                : result === 'too-many-attempts'
-                  ? 'Too many incorrect attempts — request a new code'
-                  : 'That code is not valid',
-            reason: result,
-          }
-        }
-
         verifyAttemptsPerEmail.reset(emailKey)
         const { session, cookie } = await deps.startSession(user.id, {
           ip: clientIp(request),
           userAgent: request.headers.get('user-agent'),
+          method: 'email',
         })
 
         set.headers['set-cookie'] = cookie
@@ -248,17 +256,30 @@ export function createAuthRoutes(overrides: Partial<AuthDeps> = {}) {
 
     .get(
       '/session',
-      ({ user, session, set }) => {
+      async ({ user, session, request, set }) => {
         if (!user || !session) {
           set.status = 204
           return null
+        }
+        // For an administrator, whether this session can use /admin/* from
+        // here. The console shows the reason instead of operator pages that
+        // fail one request at a time.
+        if (user.role === 'admin') {
+          const refusal = await deps.adminSessionRefusal(request, session)
+          return {
+            token: session.id,
+            user: toPublicUser(user),
+            adminAccess: refusal ? { ok: false, code: refusal.code, error: refusal.error } : { ok: true },
+          }
         }
         return { token: session.id, user: toPublicUser(user) }
       },
       {
         detail: {
           summary: 'Current session',
-          description: 'Returns the signed-in account, or 204 when not signed in.',
+          description:
+            'Returns the signed-in account, or 204 when not signed in. For an administrator, `adminAccess` ' +
+            'says whether this session may use the admin API from this address, and why not when it may not.',
           tags: ['Auth'],
         },
       },

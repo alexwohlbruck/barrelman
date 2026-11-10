@@ -88,6 +88,10 @@ They come from a layer with two indexes of its own, `geo_places_locality_ts_idx`
 
 US ZIP codes come from Pelias rather than OSM, which maps them almost nowhere, so they also need Pelias running with its Who's on First data.
 
+**Parks and other large places are missing from typeahead after an upgrade**
+
+Typeahead finds large named areas (10 ha or more) through an index of their own, `geo_places_large_area_cell_idx`. The API builds it in the background after the locality indexes above, and the stage switches itself on within a minute of it being ready. Until then, a park is found by a submitted search but may not be suggested while typing. The log shows `[schema] building geo_places_large_area_cell_idx` when the build starts.
+
 **Misspelt searches find nothing after an upgrade**
 
 Search corrects a misspelt word against `search_lexicon`, a list of every word in the search index. An import builds it; on an instance imported before it existed, the API builds it in the background on its first start, after search enrichment. That is one pass over the named places, several minutes on a national import, and the log shows `[search-enrichment] search lexicon…` while it runs. Until it exists, well-spelled searches work as before and misspelt ones simply aren't corrected.
@@ -172,7 +176,7 @@ Downloads had nowhere to go. `./data/gtfs` must be mounted **read-write** into `
 
 **GraphHopper will not start, and dies before logging its version**
 
-The graph *build* outgrew the heap. Serving memory-maps the graph (`graph.dataaccess.default_type: MMAP`) and needs free RAM rather than heap, but importing the PBF and preparing landmarks run in heap — and an undersized `-Xmx` dies before GraphHopper logs its version, so the failure looks like a crash rather than an out-of-memory. Check `du -sh` on the `graph-cache` directory, raise `-Xmx` in `GRAPHHOPPER_JAVA_OPTS` above it, and re-run `scripts/rebuild-graphhopper.sh`.
+The graph *build* outgrew the heap. Serving memory-maps the graph (`graph.dataaccess.default_type: MMAP`) and needs free RAM rather than heap, but importing the PBF and preparing landmarks run in heap — and an undersized `-Xmx` dies before GraphHopper logs its version, so the failure looks like a crash rather than an out-of-memory. Check `du -sh` on the `graph-cache` directory, raise `-Xmx` in `GRAPHHOPPER_JAVA_OPTS` above it, and re-run `scripts/rebuild-graphhopper.sh`. The rebuild's own build container takes `GRAPHHOPPER_BUILD_JAVA_OPTS` when that is set, and its log is in `/tmp/graphhopper-build.log` in `barrelman-ops`.
 
 **Phantom out-of-system transfers**
 
@@ -195,9 +199,9 @@ The MOTIS dataset was never rebuilt after the GTFS import, or was rebuilt withou
 
 Stops live in PostGIS while routing comes from MOTIS's own baked dataset, so the two can disagree.
 
-**Bikeshare, scooter, bike or park-and-ride trips return nothing, but walking transit works**
+**Bikeshare, scooter or bike trips return nothing, but walking transit works**
 
-MOTIS is serving a timetable-only dataset. Those trips need its street graph; walking transit doesn't, because barrelman routes the walks to stations itself. Check the dataset MOTIS actually serves:
+MOTIS is serving a timetable-only dataset. Those trips need its street graph; walking transit and park-and-ride don't, because barrelman routes the walks and drives to stations itself. Check the dataset MOTIS actually serves:
 
 ```bash
 docker exec barrelman-motis grep -n '^street_routing' /data/data/config.yml
@@ -225,11 +229,34 @@ MOTIS is the loud symptom, not the only one. GraphHopper builds a graph from a d
 
 **`tt: binary version mismatch` on MOTIS startup**
 
-A `docker compose pull` moved the engine version. Re-run `scripts/rebuild-motis.sh`.
+The engine version moved under the dataset: you changed the MOTIS pin, or the host's compose file predates the pins and a pull followed `:latest`. Re-run `scripts/rebuild-motis.sh`. It imports with the same image the running container uses, so recreate the container on the version you want first.
 
 **`Not a GraphHopper file /data/graph-cache/properties! Expected 'GH' as file marker`**
 
-A corrupt or half-written graph cache. GraphHopper will not rebuild over it — it just refuses to start, and a first boot with no PBF leaves exactly this skeleton behind. `scripts/rebuild-graphhopper.sh` wipes it from outside the container and restarts.
+A corrupt or half-written graph cache. GraphHopper will not rebuild over it — it just refuses to start, and a first boot with no PBF leaves exactly this skeleton behind. `scripts/rebuild-graphhopper.sh` builds a new graph in a separate container, swaps it in, and deletes the broken one rather than keeping it as `graph-cache.prev`. If a good `graph-cache.prev` exists, `--rollback` is faster.
+
+**A rebuild refuses to start: `not enough free space on the graph volume`**
+
+Rebuilds build the new graph or timetable beside the live one, so the volume needs about 1.2 times the current dataset free. The message gives both figures. The script deletes `graph-cache.prev` (or `data.prev`) itself when that makes enough room and the live dataset is serving. When the live one is down it keeps `.prev`, since that may be the only good copy, and asks you to decide. Free space on the volume (old extracts, leftover basemap sort files in `tmp/`, a `graph-cache.failed`), or delete `.prev` by hand once you know you won't roll back.
+
+**The GraphHopper build exits 137, or something else on the box is OOM-killed during a rebuild**
+
+Exit 137 is a kill, usually the OOM killer. The live graph is untouched. If the build ran alongside the serving JVM (`GRAPHHOPPER_BUILD_ALONGSIDE`), set it back to `false` or `auto`, or pass `--stop-server`. Otherwise lower `GRAPHHOPPER_BUILD_JAVA_OPTS`, or leave it unset so the heap is sized from available memory, and run the rebuild away from heavy SQL (the script warns when it starts beside a long-running statement).
+
+**A rebuild refuses to start: `an import container (barrelman-motis-import) is already running`**
+
+Or the same for `barrelman-graphhopper-build`. A rebuild is in progress, or an earlier one was killed outright and its container is still writing into `.next`. Check `docker ps` and the job list. When no rebuild is running, `docker rm -f` the container and start again.
+
+**Routing or transit got worse after a rebuild**
+
+Roll back to the dataset it replaced, then investigate:
+
+```bash
+docker compose exec barrelman-ops bash scripts/rebuild-graphhopper.sh --rollback
+docker compose exec barrelman-ops bash scripts/rebuild-motis.sh --rollback
+```
+
+Running the same command again returns to the new dataset. The next scheduled rebuild replaces `.prev`, so roll back before it runs. A rollback across an engine version change fails until the old image pin is restored.
 
 **`motis import` exits 1 having printed only its config**
 
@@ -494,11 +521,18 @@ it before you raise the timeout.
 
 **`504` from `/graphhopper/*`**
 
-The proxy waited `GRAPHHOPPER_TIMEOUT_MS` (default 30 s) and gave up. The usual
-cause is a raw `/graphhopper/match` on a sparse trace or with GraphHopper's
-default 40 m `gps_accuracy`. Use `POST /match`, which handles both. GraphHopper
-keeps working on an abandoned request until it finishes, so a client retrying
-in a loop piles load onto the engine.
+The proxy waited `GRAPHHOPPER_TIMEOUT_MS` (default 30 s) and gave up on a
+`/graphhopper/route`. GraphHopper keeps working on an abandoned request until it
+finishes, so a client retrying in a loop piles load onto the engine. A route
+search is also bounded by `routing.max_visited_nodes` in
+`graphhopper-config.yml`; one that hits it fails with "maximum nodes exceeded"
+instead of running on.
+
+**`404` from `/graphhopper/isochrone`, `/spt`, `/matrix` or `/match`**
+
+The proxy forwards only `route`, `info` and `health`. Use `GET /isochrone` for
+reachability and `POST /match` for map matching; both carry their own limits
+and pricing.
 
 ## Admin access
 
@@ -525,6 +559,19 @@ curl -s -X PATCH -H "Authorization: Bearer $SESSION_TOKEN" \
 Only an account whose *role* is already `admin` may grant the scope at all — a
 non-admin asking for it gets a `403` naming the scope, not a silently narrowed
 key.
+
+**An administrator sees "Admin tools are unavailable in this session"**
+
+The response carries a `code`:
+
+- `passkey_required`: `BARRELMAN_ADMIN_REQUIRE_PASSKEY` is on and this session
+  was signed in another way. Register a passkey on the account page, sign out,
+  and sign in with it. If every administrator has lost their passkeys, restart
+  the API: with none registered it warns and stops enforcing. See
+  [hardening admin access](/self-hosting/configuration#hardening-admin-access).
+- `ip_not_allowed`: the client address isn't in `BARRELMAN_ADMIN_ALLOWED_IPS`.
+  If it should be, check `BARRELMAN_TRUSTED_PROXY_HOPS` first. When it is
+  wrong, every request appears to come from your proxy.
 
 ## Configuration
 

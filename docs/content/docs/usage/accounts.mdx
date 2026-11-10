@@ -218,6 +218,79 @@ carries no CSRF risk.
 Users can see their active sessions in the console and revoke any of them, or
 sign out everywhere at once.
 
+## Your data
+
+### Exporting it
+
+**Export data** on `/console/account` downloads a JSON file of everything the
+instance holds about your account (`GET /account/export`):
+
+- profile, terms acceptance and any suspension
+- plan, credit balance, Polar customer id and subscription status
+- linked OAuth identities, as provider and subject id
+- passkeys: name, device type, when each was added and last used
+- API keys: name, prefix, last four characters, scopes, origins and dates
+- active sessions: device and dates
+- usage by day and endpoint group, for the life of the account
+- a summary of request outcomes over the last 90 days
+- the credit ledger
+- the moderation log and any automated abuse signals about the account
+
+Credentials never appear in it. There are no key hashes, no passkey public keys
+or credential ids, and no session ids, since a session id is the cookie itself.
+Barrelman stores no OAuth tokens, so there are none to leave out. Moderation
+entries name who acted only as `administrator` or `system`.
+
+An export reads every account table, so it is limited to once a minute.
+
+### Deleting your account
+
+**Delete account** on `/console/account` erases the account. You type your
+email address to confirm, then prove you are present again: with a passkey, if
+the account has one, or with an eight-digit code emailed to you for this
+purpose. A sign-in code is not accepted, and a deletion code cannot sign you
+in. A session alone is not enough, because a session can be a laptop left
+open.
+
+```bash
+# Email a code
+curl -X POST -H "Authorization: Bearer $SESSION" https://api.barrelman.dev/account/delete/request
+
+# Delete with it
+curl -X DELETE -H "Authorization: Bearer $SESSION" -H "content-type: application/json" \
+  -d '{"email":"you@example.com","code":"12345678"}' https://api.barrelman.dev/account
+```
+
+Deletion removes the account row and, with it, API keys, passkeys, linked
+identities, sessions, one-time codes, usage, request metrics, the credit ledger,
+the moderation log and abuse signals. Every key stops working at once and every
+session ends, including the one that asked.
+
+When billing is enabled, any outstanding overage is reported to Polar and the
+subscription is revoked first. If Polar cannot be reached the account is kept
+and the request fails with `502`, so you are never left with a subscription
+charging a card and no account to cancel it from. Try again shortly. Polar
+keeps its own records of past orders and invoices under its own policy.
+
+The only administrator of an instance cannot delete their account (`409`).
+Promote someone else first.
+
+### How long things are kept
+
+| Data | Kept |
+|---|---|
+| Profile, keys, passkeys, linked identities, usage by day, credit ledger, moderation log | Until the account is deleted |
+| Abuse signals about an account | Until the account is deleted |
+| Request metrics (hourly outcomes and latency) | 90 days, then deleted (`BARRELMAN_REQUEST_METRICS_RETENTION_DAYS`) |
+| Sessions | Until they expire: 30 days, extended while in use (`BARRELMAN_SESSION_TTL_DAYS`). Expired rows are deleted by an hourly sweep |
+| One-time codes | 15 minutes, or until used |
+| Sign-up attempts per network (a hash of the address, never the address) | 7 days |
+| Abuse signals about a network rather than an account | No automatic expiry. They hold a hash of the address, never the address itself |
+| Backups | Accounts are in `scripts/backup-db.sh` dumps, kept 7 days locally and 30 days in the bucket by default (`BACKUP_KEEP_LOCAL_DAYS`, `BACKUP_KEEP_REMOTE_DAYS`). A deleted account is gone from backups once the last dump containing it ages out |
+
+The server log records each deletion with the account's id and address. How
+long that lasts depends on the instance's log retention.
+
 ## Endpoints
 
 | Route | Purpose |
@@ -233,6 +306,12 @@ sign out everywhere at once.
 | `DELETE /account/keys/:id` | Revoke |
 | `GET /account/usage` | Usage for a date range |
 | `GET /account/credits` | Balance for the cycle |
+| `GET /account/export` | Download everything held about the account, once a minute |
+| `POST /account/delete/request` | Email a code that confirms deletion |
+| `POST /account/delete/passkey-options` | Begin confirming deletion with a passkey |
+| `DELETE /account` | Delete the account, with the email typed back and a code or passkey |
+| `GET /billing/status` | Plan, balance, and the subscription's status and end date |
+| `POST /billing/change-plan` | Move the subscription to another plan, or get a checkout link for a first one |
 
 `/account/*` is session-authenticated only. A leaked API key must not be able to
 mint more keys or read the billing history of the account it belongs to.

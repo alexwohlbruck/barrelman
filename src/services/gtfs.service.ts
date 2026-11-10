@@ -32,6 +32,8 @@ import { type FetchFn } from './transit.service'
 import { resolveRegions } from '../config/regions'
 import { selectRtUrls } from './rt-url-selection'
 import { envRaw } from '../config/env'
+import { parseTransitlandLicense, licenseAnswer, licensePolicy, type FeedLicense } from '../lib/feed-license'
+import { isGatedRouteType } from '../lib/gtfs-modes'
 
 // ── Types ───────────────────────────────────────────────────────────
 
@@ -56,6 +58,14 @@ export interface GtfsFeedInfo {
    * only if it carries the same routes and matches clearly more realtime trips.
    */
   alternateUrls?: string[]
+  /**
+   * Licence terms from the feed's Transitland record. `null` means the record
+   * carries none; `undefined` means this caller did not look, and the stored
+   * terms should be carried forward.
+   */
+  license?: FeedLicense | null
+  /** When `license` was read from Transitland. Defaults to now. */
+  licenseFetchedAt?: Date | null
 }
 
 export interface ImportResult {
@@ -222,6 +232,7 @@ export async function fetchFeedList(
           name: String(feed.name || feed.onestop_id || ''),
           url,
           region,
+          license: parseTransitlandLicense(feed),
         })
         records.set(feedId, feed)
       }
@@ -453,7 +464,7 @@ const ONESTOP_ID = /^[a-z]-/i
 type RtRecordCache = Map<string, Promise<any | null>>
 
 /** Fetch one Transitland feed record by onestop id. */
-function fetchFeedRecord(
+export function fetchFeedRecord(
   onestopId: string,
   apiKey: string,
   fetchFn: FetchFn,
@@ -467,6 +478,72 @@ function fetchFeedRecord(
     .catch(() => null)
   cache.set(onestopId, record)
   return record
+}
+
+/** The feed-record query for a stored `onestop_id`, whichever shape it holds. */
+function feedLookupUrl(feedRef: string, apiKey: string): string {
+  return ONESTOP_ID.test(feedRef)
+    ? `https://transit.land/api/v2/rest/feeds?apikey=${apiKey}&onestop_id=${encodeURIComponent(feedRef)}&limit=1`
+    : `https://transit.land/api/v2/rest/feeds?apikey=${apiKey}&id=${encodeURIComponent(feedRef)}&limit=1`
+}
+
+// ── Licence refresh for existing feeds ──────────────────────────────
+
+/**
+ * Re-read every stored feed's licence from Transitland.
+ *
+ * The import records licences as it discovers feeds, but rows written before
+ * it did, and terms an agency changes later, need a pass of their own. A feed
+ * Transitland no longer answers for keeps what it had.
+ */
+export async function refreshFeedLicenses(
+  apiKey?: string,
+  fetchFn: FetchFn = globalThis.fetch,
+  log: (line: string) => void = console.log,
+): Promise<{ checked: number; updated: number; missing: number; errors: number }> {
+  const key = apiKey || process.env.TRANSITLAND_API_KEY
+  if (!key) throw new Error('TRANSITLAND_API_KEY is required')
+  fetchFn = retryingTransitlandLimits(fetchFn)
+
+  const feeds = (await db.execute(sql`
+    SELECT feed_id, onestop_id FROM gtfs_feeds
+    WHERE onestop_id IS NOT NULL AND onestop_id <> ''
+    ORDER BY feed_id
+  `)) as unknown as Array<{ feed_id: string; onestop_id: string }>
+
+  let checked = 0
+  let updated = 0
+  let missing = 0
+  let errors = 0
+  for (const feed of feeds) {
+    checked++
+    try {
+      const response = await fetchFn(feedLookupUrl(feed.onestop_id, key))
+      if (!response.ok) throw new Error(`Transitland returned ${response.status}`)
+      const record = ((await response.json()) as any).feeds?.[0]
+      if (!record) {
+        missing++
+        continue
+      }
+      const license = parseTransitlandLicense(record)
+      await db
+        .update(gtfsFeeds)
+        .set({ ...licenseColumns(license), licenseFetchedAt: new Date() })
+        .where(eq(gtfsFeeds.feedId, feed.feed_id))
+      updated++
+      log(`  ${feed.feed_id} (${feed.onestop_id}): ${describeLicense(license)}`)
+    } catch (err) {
+      errors++
+      log(`  ✗ ${feed.feed_id}: ${err instanceof Error ? err.message : err}`)
+    }
+  }
+  return { checked, updated, missing, errors }
+}
+
+function describeLicense(license: FeedLicense | null): string {
+  if (!license) return 'no licence on record'
+  const name = license.spdxIdentifier ?? license.url ?? 'custom licence'
+  return `${name}, commercial ${license.commercialUseAllowed ?? 'unknown'}, redistribution ${license.redistributionAllowed ?? 'unknown'}`
 }
 
 /**
@@ -494,11 +571,7 @@ export async function resolveRtUrlsForFeed(
   fetchFn: FetchFn = globalThis.fetch,
 ): Promise<GtfsRtUrl[]> {
   // Step 1: Resolve to the static feed's own record and onestop id.
-  const lookupUrl = ONESTOP_ID.test(feedRef)
-    ? `https://transit.land/api/v2/rest/feeds?apikey=${apiKey}&onestop_id=${encodeURIComponent(feedRef)}&limit=1`
-    : `https://transit.land/api/v2/rest/feeds?apikey=${apiKey}&id=${encodeURIComponent(feedRef)}&limit=1`
-
-  const feedResponse = await fetchFn(lookupUrl)
+  const feedResponse = await fetchFn(feedLookupUrl(feedRef, apiKey))
   if (!feedResponse.ok) return []
 
   const feedData = await feedResponse.json() as any
@@ -619,7 +692,7 @@ export function parseStops(
   wheelchairBoarding: number
   platformCode: string | null
 }> {
-  const records = parse(csvContent, GTFS_CSV)
+  const records = parse<GtfsRecord>(csvContent, GTFS_CSV)
 
   return records
     .filter((r: any) => r.stop_lat && r.stop_lon)
@@ -656,7 +729,7 @@ export function parseRoutes(
   routeTextColor: string | null
   routeUrl: string | null
 }> {
-  const records = parse(csvContent, GTFS_CSV)
+  const records = parse<GtfsRecord>(csvContent, GTFS_CSV)
 
   return records.map((r: any) => ({
     routeId: r.route_id,
@@ -679,7 +752,7 @@ export function parseRoutes(
  * Parse agency.txt to build agency_id → agency_name map.
  */
 export function parseAgencies(csvContent: string): Map<string, string> {
-  const records = parse(csvContent, GTFS_CSV)
+  const records = parse<GtfsRecord>(csvContent, GTFS_CSV)
 
   const map = new Map<string, string>()
   for (const r of records) {
@@ -700,7 +773,7 @@ type GtfsRecord = Record<string, string>
 
 /** Parse a GTFS CSV file into row records. */
 export function parseGtfsRecords(content: string): GtfsRecord[] {
-  return parse(content, GTFS_CSV)
+  return parse<GtfsRecord>(content, GTFS_CSV)
 }
 
 /** Split one CSV record that contains quotes: commas inside quotes, "" for a quote. */
@@ -838,7 +911,7 @@ export function deriveStopRoutes(
  * boards/alights a parent station) matches the platform ids in stop_times.
  */
 export function parseStopParents(stopsContent: string): Map<string, string> {
-  const records = parse(stopsContent, GTFS_CSV)
+  const records = parse<GtfsRecord>(stopsContent, GTFS_CSV)
   const map = new Map<string, string>()
   for (const r of records) {
     if (!r.stop_id) continue
@@ -932,7 +1005,7 @@ export function deriveTripPatterns(
 export function parseShapes(
   csvContent: string,
 ): Map<string, [number, number][]> {
-  const records = parse(csvContent, GTFS_CSV)
+  const records = parse<GtfsRecord>(csvContent, GTFS_CSV)
 
   // Group points by shape_id, then sort by sequence
   const raw = new Map<string, Array<{ seq: number; lat: number; lng: number }>>()
@@ -965,7 +1038,7 @@ export function parseShapes(
 export function deriveRouteShapes(
   tripsContent: string,
 ): Map<string, string> {
-  const records = parse(tripsContent, GTFS_CSV)
+  const records = parse<GtfsRecord>(tripsContent, GTFS_CSV)
 
   // Count shape_id occurrences per route_id
   const routeShapeCounts = new Map<string, Map<string, number>>()
@@ -1010,7 +1083,7 @@ export function deriveRouteShapes(
 export function deriveBikesAllowed(
   tripsContent: string,
 ): Map<string, number> {
-  const records = parse(tripsContent, GTFS_CSV)
+  const records = parse<GtfsRecord>(tripsContent, GTFS_CSV)
 
   // Track per-route: total trips, trips with bikes_allowed=1
   const routeStats = new Map<string, { total: number; allowed: number }>()
@@ -1343,7 +1416,7 @@ export function parseTransfers(
   csvContent: string,
   feedId: string,
 ): Array<{ feedId: string; fromStopId: string; toStopId: string; transferType: number; minTransferTime: number | null }> {
-  const records = parse(csvContent, GTFS_CSV)
+  const records = parse<GtfsRecord>(csvContent, GTFS_CSV)
   const out: Array<{ feedId: string; fromStopId: string; toStopId: string; transferType: number; minTransferTime: number | null }> = []
   for (const r of records) {
     if (!r.from_stop_id || !r.to_stop_id) continue
@@ -1417,9 +1490,96 @@ export async function loadFeedIdentities(): Promise<Map<string, StoredFeedIdenti
       url: gtfsFeeds.url,
       region: gtfsFeeds.region,
       rtUrls: gtfsFeeds.rtUrls,
+      ...LICENSE_SELECT,
     })
     .from(gtfsFeeds)
-  return new Map(rows.map(r => [r.feedId, r]))
+  return new Map(rows.map(r => [r.feedId, {
+    feedId: r.feedId,
+    onestopId: r.onestopId,
+    name: r.name,
+    url: r.url,
+    region: r.region,
+    rtUrls: r.rtUrls,
+    license: licenseFromColumns(r),
+  }]))
+}
+
+const LICENSE_SELECT = {
+  licenseSpdx: gtfsFeeds.licenseSpdx,
+  licenseUrl: gtfsFeeds.licenseUrl,
+  licenseUseWithoutAttribution: gtfsFeeds.licenseUseWithoutAttribution,
+  licenseCreateDerivedProduct: gtfsFeeds.licenseCreateDerivedProduct,
+  licenseRedistributionAllowed: gtfsFeeds.licenseRedistributionAllowed,
+  licenseCommercialUseAllowed: gtfsFeeds.licenseCommercialUseAllowed,
+  licenseShareAlikeOptional: gtfsFeeds.licenseShareAlikeOptional,
+  licenseAttributionText: gtfsFeeds.licenseAttributionText,
+  licenseAttributionInstructions: gtfsFeeds.licenseAttributionInstructions,
+}
+
+type LicenseColumns = { [K in keyof typeof LICENSE_SELECT]: string | null }
+
+/** A stored licence back into its parsed shape, or null when none is on record. */
+function licenseFromColumns(c: LicenseColumns): FeedLicense | null {
+  const license: FeedLicense = {
+    spdxIdentifier: c.licenseSpdx,
+    url: c.licenseUrl,
+    useWithoutAttribution: licenseAnswer(c.licenseUseWithoutAttribution),
+    createDerivedProduct: licenseAnswer(c.licenseCreateDerivedProduct),
+    redistributionAllowed: licenseAnswer(c.licenseRedistributionAllowed),
+    commercialUseAllowed: licenseAnswer(c.licenseCommercialUseAllowed),
+    shareAlikeOptional: licenseAnswer(c.licenseShareAlikeOptional),
+    attributionText: c.licenseAttributionText,
+    attributionInstructions: c.licenseAttributionInstructions,
+  }
+  return Object.values(license).some(v => v !== null) ? license : null
+}
+
+/**
+ * A feed's stored licence and when it was read, for an import to carry across
+ * `clearFeed`. Undefined when the feed has no row yet.
+ */
+export async function storedLicense(
+  feedId: string,
+  reader: GtfsWriter = db,
+): Promise<{ license: FeedLicense | null; fetchedAt: Date | null } | undefined> {
+  const [row] = (await reader.execute(sql`
+    SELECT license_spdx, license_url, license_use_without_attribution,
+           license_create_derived_product, license_redistribution_allowed,
+           license_commercial_use_allowed, license_share_alike_optional,
+           license_attribution_text, license_attribution_instructions,
+           license_fetched_at
+    FROM gtfs_feeds WHERE feed_id = ${feedId} LIMIT 1
+  `)) as any[]
+  if (!row) return undefined
+  return {
+    license: licenseFromColumns({
+      licenseSpdx: row.license_spdx ?? null,
+      licenseUrl: row.license_url ?? null,
+      licenseUseWithoutAttribution: row.license_use_without_attribution ?? null,
+      licenseCreateDerivedProduct: row.license_create_derived_product ?? null,
+      licenseRedistributionAllowed: row.license_redistribution_allowed ?? null,
+      licenseCommercialUseAllowed: row.license_commercial_use_allowed ?? null,
+      licenseShareAlikeOptional: row.license_share_alike_optional ?? null,
+      licenseAttributionText: row.license_attribution_text ?? null,
+      licenseAttributionInstructions: row.license_attribution_instructions ?? null,
+    }),
+    fetchedAt: row.license_fetched_at ? new Date(row.license_fetched_at) : null,
+  }
+}
+
+/** The gtfs_feeds licence columns for a parsed licence; all null for none. */
+export function licenseColumns(license: FeedLicense | null): LicenseColumns {
+  return {
+    licenseSpdx: license?.spdxIdentifier ?? null,
+    licenseUrl: license?.url ?? null,
+    licenseUseWithoutAttribution: license?.useWithoutAttribution ?? null,
+    licenseCreateDerivedProduct: license?.createDerivedProduct ?? null,
+    licenseRedistributionAllowed: license?.redistributionAllowed ?? null,
+    licenseCommercialUseAllowed: license?.commercialUseAllowed ?? null,
+    licenseShareAlikeOptional: license?.shareAlikeOptional ?? null,
+    licenseAttributionText: license?.attributionText ?? null,
+    licenseAttributionInstructions: license?.attributionInstructions ?? null,
+  }
 }
 
 export interface StoredFeedIdentity {
@@ -1429,6 +1589,7 @@ export interface StoredFeedIdentity {
   url: string | null
   region: string | null
   rtUrls: GtfsRtUrl[] | null
+  license: FeedLicense | null
 }
 
 /**
@@ -1451,6 +1612,11 @@ export async function recordFeed(feed: GtfsFeedInfo, stopCount: number, routeCou
       routeCount,
       rtUrls: feed.rtUrls?.length ? feed.rtUrls : null,
       importedAt: new Date(),
+      // Only written when the caller looked: `undefined` leaves the columns
+      // NULL, and callers carry the stored terms forward (loadFeedIdentities).
+      ...(feed.license !== undefined
+        ? { ...licenseColumns(feed.license), licenseFetchedAt: feed.licenseFetchedAt ?? new Date() }
+        : {}),
     })
     .onConflictDoUpdate({
       target: gtfsFeeds.feedId,
@@ -1463,6 +1629,18 @@ export async function recordFeed(feed: GtfsFeedInfo, stopCount: number, routeCou
         importedAt: sql`NOW()`,
       },
     })
+}
+
+/**
+ * Keep a feed the licence policy excludes out of what is served: its stops,
+ * routes and shapes are removed, and its gtfs_feeds row stays with zero counts
+ * so the console still lists it with the licence that excluded it.
+ */
+export async function withholdFeed(feed: GtfsFeedInfo): Promise<void> {
+  await db.transaction(async tx => {
+    await clearFeed(feed.feedId, tx)
+    await recordFeed(feed, 0, 0, tx)
+  })
 }
 
 /**
@@ -1694,6 +1872,16 @@ export async function computeAllTransfers(
   return transfers
 }
 
+/** An in-station time from the station paths build, which outranks a street walk. */
+export interface StationTransferTime {
+  feedId: string
+  fromStopId: string
+  toStopId: string
+  seconds: number
+}
+
+export const transferKey = (from: string, to: string) => `${from}\u0000${to}`
+
 /**
  * Generate GTFS transfers.txt content from computed transfers.
  *
@@ -1701,20 +1889,46 @@ export async function computeAllTransfers(
  * belong to that feed. This prevents stop ID collisions when injecting
  * into per-feed ZIPs (e.g. stop "1234" in feed A ≠ stop "1234" in feed B).
  *
+ * `station` times (see stationTransferTimes) replace the GraphHopper walk
+ * for the same pair: the street router has no idea how deep a platform is.
+ *
  * Format: from_stop_id,to_stop_id,transfer_type,min_transfer_time
  * transfer_type=2 means timed transfer with min_transfer_time specified.
  */
+/** Each feed's stops served by a gated line (see isGatedRouteType). */
+export async function gatedStops(feedIds: string[]): Promise<Map<string, Set<string>>> {
+  const out = new Map<string, Set<string>>()
+  if (!feedIds.length) return out
+  const rows = (await db.execute(sql`
+    SELECT DISTINCT sr.feed_id, sr.stop_id, r.route_type
+    FROM gtfs_stop_routes sr
+    JOIN gtfs_routes r ON r.feed_id = sr.feed_id AND r.route_id = sr.route_id
+    WHERE sr.feed_id IN (${sql.join(feedIds.map((id) => sql`${id}`), sql`, `)})
+  `)) as Array<{ feed_id: string; stop_id: string; route_type: number }>
+  for (const r of rows) {
+    if (!isGatedRouteType(r.route_type)) continue
+    if (!out.has(r.feed_id)) out.set(r.feed_id, new Set())
+    out.get(r.feed_id)!.add(r.stop_id)
+  }
+  return out
+}
+
 export function generateTransfersTxt(
   transfers: ComputedTransfer[],
   feedId?: string,
+  station: StationTransferTime[] = [],
 ): string {
-  const filtered = feedId
+  const own = feedId ? station.filter((s) => s.feedId === feedId) : station
+  const timed = new Set(own.map((s) => transferKey(s.fromStopId, s.toStopId)))
+  const filtered = (feedId
     ? transfers.filter(t => t.fromFeedId === feedId && t.toFeedId === feedId)
     : transfers
+  ).filter((t) => !timed.has(transferKey(t.fromStopId, t.toStopId)))
   const header = 'from_stop_id,to_stop_id,transfer_type,min_transfer_time\n'
-  const rows = filtered
-    .map(t => `${t.fromStopId},${t.toStopId},2,${t.walkTime}`)
-    .join('\n')
+  const rows = [
+    ...own.map((s) => `${s.fromStopId},${s.toStopId},2,${s.seconds}`),
+    ...filtered.map(t => `${t.fromStopId},${t.toStopId},2,${t.walkTime}`),
+  ].join('\n')
   return header + rows
 }
 
@@ -1750,6 +1964,16 @@ interface MotisConfigOptions {
  * and returns the YAML string. Feeds with GTFS-RT URLs get `rt:` entries
  * so MOTIS automatically polls for realtime updates.
  */
+/**
+ * SQL for "this gtfs_feeds row may be served" under the `commercial` policy:
+ * mirrors `forbidsCommercialUse` in src/lib/feed-license.ts. NULL and
+ * `unknown` count as allowed.
+ */
+export const SERVABLE_FEED = sql`(
+  license_commercial_use_allowed IS DISTINCT FROM 'no'
+  AND license_redistribution_allowed IS DISTINCT FROM 'no'
+)`
+
 export async function generateMotisConfig(options?: MotisConfigOptions): Promise<string> {
   const {
     gtfsDir = 'gtfs',
@@ -1764,9 +1988,13 @@ export async function generateMotisConfig(options?: MotisConfigOptions): Promise
     includeGbfs = enableStreetRouting,
   } = options || {}
 
+  // A feed the licence policy excludes is left out of the timetable, so
+  // MOTIS never routes over it. The import also skips such feeds; this covers
+  // rows imported before the policy was set.
   const result = await db.execute(sql`
     SELECT feed_id, rt_urls
     FROM gtfs_feeds
+    ${licensePolicy() === 'commercial' ? sql`WHERE ${SERVABLE_FEED}` : sql.empty()}
     ORDER BY feed_id
   `)
 

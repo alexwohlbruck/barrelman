@@ -4,12 +4,26 @@ export type ScriptCategory = 'osm' | 'transit' | 'gbfs' | 'search' | 'routing' |
 export type DangerLevel = 'safe' | 'caution' | 'destructive'
 export type ParamApply = 'flag' | 'env' | 'positional'
 export type ParamType = 'string' | 'number' | 'boolean' | 'select'
+export type ParamFormat =
+  | 'identifier'
+  | 'identifiers'
+  | 'region'
+  | 'regions'
+  | 'path'
+  | 'bbox'
+  | 'date'
+  | 'text'
+  | 'decimal'
 
 export interface ScriptParam {
   name: string
   label: string
   type: ParamType
   apply: ParamApply
+  format?: ParamFormat
+  decimal?: boolean
+  allowDash?: boolean
+  multiple?: boolean
   flag?: string
   envVar?: string
   default?: string | number | boolean
@@ -185,6 +199,9 @@ export interface DataMetrics {
     tripPatterns: number | null
     shapes: number | null
     feedsWithRt: number | null
+    feedsForbiddingCommercial: number | null
+    feedsWithLicense: number | null
+    licensePolicy: 'off' | 'commercial'
     lastImport: string | null
   }
   gbfs: { systems: number | null; stations: number | null }
@@ -306,6 +323,16 @@ export interface PublicUser {
   createdAt: string | null
 }
 
+/**
+ * `GET /auth/session` adds this for an administrator: whether this session may
+ * use the admin API from where it is, and the reason when it may not.
+ */
+export interface AdminAccess {
+  ok: boolean
+  code?: 'passkey_required' | 'ip_not_allowed'
+  error?: string
+}
+
 export interface AuthConfig {
   registrationMode: 'open' | 'invite'
   methods: {
@@ -395,13 +422,14 @@ export interface CreditBalance {
   remaining: number
   overageAllowed: boolean
   overage: number
+  cycleStartedAt: string
   cycleResetsAt: string
 }
 
 export interface LedgerEntry {
   id: string
   amount: number
-  kind: 'purchase' | 'grant' | 'adjustment' | 'refund'
+  kind: 'purchase' | 'grant' | 'adjustment' | 'refund' | 'usage'
   description: string | null
   createdAt: string
 }
@@ -449,12 +477,25 @@ export interface BillingConfig {
   creditPacks: { productId: string; credits: number }[]
 }
 
+/** The Polar subscription behind the plan, as last reported by its webhooks. */
+export interface SubscriptionState {
+  /** Polar's status (`active`, `past_due`, …), or `revoked` once it has ended. */
+  status: string | null
+  cancelAtPeriodEnd: boolean
+  currentPeriodEnd: string | null
+}
+
 export interface BillingStatus {
   billingEnabled: boolean
   plan: Plan
   hasSubscription: boolean
+  subscription: SubscriptionState | null
   balance: CreditBalance
 }
+
+export type ChangePlanResponse =
+  | { changed: boolean; planId: string; checkoutUrl?: undefined }
+  | { changed: false; checkoutUrl: string; planId?: undefined }
 
 // ── Moderation (admin) ────────────────────────────────────────────────
 
@@ -622,4 +663,24 @@ export interface TrafficReport {
     penalised: number
     inFlight: number
   }
+}
+
+/** Mirrors GtfsFeedSummary in src/services/admin-metrics.service.ts. */
+export interface GtfsFeedSummary {
+  feedId: string
+  onestopId: string | null
+  name: string | null
+  region: string | null
+  stopCount: number
+  routeCount: number
+  importedAt: string | null
+  license: {
+    spdx: string | null
+    url: string | null
+    commercialUseAllowed: string | null
+    redistributionAllowed: string | null
+    attributionText: string | null
+    fetchedAt: string | null
+  }
+  withheld: boolean
 }

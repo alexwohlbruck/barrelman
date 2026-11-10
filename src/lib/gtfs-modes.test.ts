@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test'
-import { gtfsModeClass, isGtfsModeClass } from './gtfs-modes'
+import { gtfsModeClass, isGtfsModeClass, isGatedRouteType } from './gtfs-modes'
 
 describe('gtfsModeClass', () => {
   test('classes the basic route types', () => {
@@ -38,5 +38,15 @@ describe('isGtfsModeClass', () => {
     expect(isGtfsModeClass('metro')).toBe(true)
     expect(isGtfsModeClass('subway')).toBe(false)
     expect(isGtfsModeClass(undefined)).toBe(false)
+  })
+})
+
+describe('isGatedRouteType', () => {
+  test('metro, rail, monorail and funicular are gated', () => {
+    for (const t of [1, 401, 2, 100, 109, 12, 405, 7, 1400]) expect(isGatedRouteType(t)).toBe(true)
+  })
+
+  test('buses, coaches, trams, ferries and unknown types are not', () => {
+    for (const t of [3, 700, 200, 202, 0, 900, 4, 1000, null, 9999]) expect(isGatedRouteType(t)).toBe(false)
   })
 })

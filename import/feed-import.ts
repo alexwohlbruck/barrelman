@@ -35,8 +35,14 @@ import {
   updateBikesAllowed,
   recordFeed,
   clearFeed,
+  storedLicense,
   type GtfsFeedInfo,
 } from '../src/services/gtfs.service'
+import { refreshDirectionLabels } from '../src/services/station-labels.service'
+import { storeAgencyStationTimes } from '../src/services/station-paths.service'
+import { agencyStationTimes } from '../src/lib/station-graph/agency'
+import { SOURCES, type PathSource } from '../src/lib/station-graph/types'
+import { FARE_GATE_DELAY_S } from '../src/lib/station-graph/guidance'
 
 /**
  * A feed with no fixed-route timetable for the router: GTFS-Flex-only feeds,
@@ -58,6 +64,12 @@ export async function importFeedFile(filepath: string, feedInfo: GtfsFeedInfo) {
   // Readers see either the previous complete feed or the new complete feed.
   // A failed batch rolls back every table, including the feed's import marker.
   const counts = await db.transaction(async tx => {
+    // clearFeed drops the gtfs_feeds row, licence included. A caller that did
+    // not read the licence from Transitland keeps the one on record.
+    if (feedInfo.license === undefined) {
+      const stored = await storedLicense(feedInfo.feedId, tx)
+      if (stored) feedInfo = { ...feedInfo, license: stored.license, licenseFetchedAt: stored.fetchedAt }
+    }
     await clearFeed(feedInfo.feedId, tx)
     const stopsImported = await importStops(stops, tx)
     const routesImported = await importRoutes(routes, tx)
@@ -73,6 +85,30 @@ export async function importFeedFile(filepath: string, feedInfo: GtfsFeedInfo) {
   })
   console.log(`  ✓ Imported ${counts.stopsImported} stops, ${counts.routesImported} routes, ${counts.stopRoutesImported} stop-route associations`)
   console.log(`  ✓ Imported ${counts.patternsImported} trip patterns, ${counts.transfersImported} agency transfers, ${counts.shapesImported} shapes`)
+
+  // Enrichment, so a failure costs the feed its signed directions, not its import.
+  await refreshDirectionLabels({ feedId: feedInfo.feedId, log: (line) => console.log(line) })
+    .catch((err) => console.warn(`  ! direction labels: ${(err as Error).message}`))
+  await importPathways(filepath, feedInfo.feedId)
+    .catch((err) => console.warn(`  ! pathways: ${(err as Error).message}`))
+}
+
+/**
+ * A feed's in-station times from its pathways.txt, for the next station paths
+ * build to use where the OSM graph has no path. Enrichment: most feeds have none.
+ */
+async function importPathways(filepath: string, feedId: string) {
+  const zip = await JSZip.loadAsync(await Bun.file(filepath).arrayBuffer())
+  const pathways = await readZipEntry(zip, 'pathways.txt')
+  if (!pathways?.trim()) return
+  const [stops, levels] = await Promise.all([readZipEntry(zip, 'stops.txt'), readZipEntry(zip, 'levels.txt')])
+  const agency = agencyStationTimes({
+    stops: parseGtfsRecords(stops ?? ''),
+    pathways: parseGtfsRecords(pathways),
+    levels: levels?.trim() ? parseGtfsRecords(levels) : [],
+  })
+  const stored = await storeAgencyStationTimes(feedId, agency)
+  console.log(`  ✓ ${stored} in-station times from pathways.txt`)
 }
 
 /**
@@ -149,7 +185,12 @@ const TRANSFER_FORBIDDEN = '3'
  *   - everything else is added, which is what the computation is for: bus
  *     stops outside a station entrance that no agency bothers to file
  */
-export async function injectTransfersTxt(zipPath: string, transfersTxt: string): Promise<void> {
+export async function injectTransfersTxt(
+  zipPath: string,
+  transfersTxt: string,
+  stationTimes?: Map<string, StationTime>,
+  railStops?: Set<string>,
+): Promise<void> {
   const buffer = await Bun.file(zipPath).arrayBuffer()
   const zip = await JSZip.loadAsync(buffer)
 
@@ -159,7 +200,7 @@ export async function injectTransfersTxt(zipPath: string, transfersTxt: string):
   // declared between — see mergeTransfersTxt.
   const stopsEntry = zip.file('stops.txt') ?? zip.file(/(^|\/)stops\.txt$/)[0]
   const stops = stopsEntry ? await stopsEntry.async('string') : null
-  zip.file('transfers.txt', mergeTransfersTxt(existing, transfersTxt, stops))
+  zip.file('transfers.txt', mergeTransfersTxt(existing, transfersTxt, stops, stationTimes, railStops))
 
   // JSZip defaults to STORE, so a feed re-serialized without this lands
   // uncompressed on the volume MOTIS imports from. The subway feed goes from
@@ -183,19 +224,73 @@ export async function injectTransfersTxt(zipPath: string, transfersTxt: string):
  * platform pairing under a forbidden station back in — which is precisely
  * the phantom the prohibition exists to stop. Omit it and matching falls
  * back to exact ids.
+ *
+ * `stationTimes` (keyed by transferKey) are in-station times from the station
+ * paths build. They are the exception to "the feed wins": a station-level row
+ * takes the median of its platforms' times. Against the feed's flat default
+ * (the MTA's 180 s on every connected pair) any tier wins; against a time the
+ * agency set for that pair, only a walked one (graph, bridged) does, and the
+ * platform rows under it take the agency's time too. A forbidden transfer is
+ * never touched, and nor is a timed or in-seat one.
+ *
+ * `railStops` are the stops served by gated lines or covered by station paths.
+ * A computed street walk between two of them that neither the station paths
+ * nor the feed connect leaves fare control, so it pays the fare-gate delay
+ * twice. The second fare is priced at ranking, not here: MOTIS chains walks
+ * through other feeds' stops, so a longer time here doesn't reach the router.
  */
+export interface StationTime {
+  seconds: number
+  source: PathSource
+}
+
+const WALKED: ReadonlySet<PathSource> = new Set(['graph', 'bridged'])
+
+function median(xs: number[]): number {
+  const s = [...xs].sort((a, b) => a - b)
+  const m = s.length >> 1
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2
+}
+
+/** The best source present, and the median of its times. */
+function bestOf(times: StationTime[]): StationTime {
+  const best = times.reduce((x, y) => (SOURCES.indexOf(y.source) < SOURCES.indexOf(x.source) ? y : x)).source
+  return { seconds: median(times.filter((t) => t.source === best).map((t) => t.seconds)), source: best }
+}
+
+/**
+ * A feed's blanket transfer time: what it files on a station's transfer to
+ * itself (the MTA's 180 s), else a value most of its timed rows share. A row
+ * carrying it says "connected", not "this long".
+ */
+export function flatTransferTime(rows: Array<{ from: string; to: string; seconds: number }>): number | null {
+  const mode = (xs: number[]) => {
+    const counts = new Map<number, number>()
+    for (const x of xs) counts.set(x, (counts.get(x) ?? 0) + 1)
+    const [value, n] = [...counts].sort((a, b) => b[1] - a[1])[0] ?? [null, 0]
+    return { value, share: xs.length ? n / xs.length : 0 }
+  }
+  const self = mode(rows.filter((r) => r.from === r.to).map((r) => r.seconds))
+  if (self.value !== null) return self.value
+  const cross = mode(rows.map((r) => r.seconds))
+  return rows.length >= 5 && cross.share >= 0.5 ? cross.value : null
+}
+
 export function mergeTransfersTxt(
   existing: string | null,
   computed: string,
   stopsTxt?: string | null,
+  stationTimes?: Map<string, StationTime>,
+  railStops?: Set<string>,
 ): string {
   const parse = (text: string) => {
     const lines = text.split(/\r?\n/).filter(l => l.trim() !== '')
-    if (!lines.length) return { header: '', rows: [] as string[][], raw: [] as string[] }
+    if (!lines.length) return { header: '', rows: [] as string[][], raw: [] as string[], iType: -1, iMin: -1 }
     const header = lines[0]
     const cols = header.split(',').map(c => c.trim().replace(/^\ufeff/, ''))
     const idx = (name: string) => cols.indexOf(name)
     const iFrom = idx('from_stop_id'), iTo = idx('to_stop_id'), iType = idx('transfer_type')
+    const iMin = idx('min_transfer_time')
     const rows: string[][] = []
     const raw: string[] = []
     for (const line of lines.slice(1)) {
@@ -203,7 +298,7 @@ export function mergeTransfersTxt(
       rows.push([cells[iFrom] ?? '', cells[iTo] ?? '', (cells[iType] ?? '').trim()])
       raw.push(line)
     }
-    return { header, rows, raw }
+    return { header, rows, raw, iType, iMin }
   }
 
   if (!existing || existing.trim() === '') return computed
@@ -233,9 +328,12 @@ export function mergeTransfersTxt(
   // connection is, and a computed B→A would contradict its own half.
   const known = new Set<string>()
   const forbidden = new Set<string>()
+  const stated = new Set<string>()
   feed.rows.forEach(([from, to, type]) => {
     known.add(`${from}\u0000${to}`)
     known.add(`${to}\u0000${from}`)
+    stated.add(`${station(from)}\u0000${station(to)}`)
+    stated.add(`${station(to)}\u0000${station(from)}`)
     if (type === TRANSFER_FORBIDDEN) {
       // Keyed on stations, so one row covers every platform under it.
       forbidden.add(`${station(from)}\u0000${station(to)}`)
@@ -243,14 +341,59 @@ export function mergeTransfersTxt(
     }
   })
 
+  // Station pairs whose agency time outranks an estimate, for the platform rows under them.
+  const agencyTimed = new Map<string, number>()
+  if (stationTimes?.size && feed.iMin !== -1 && feed.iType !== -1) {
+    const minOf = (i: number) => {
+      const v = (feed.raw[i].split(',')[feed.iMin] ?? '').trim()
+      return v === '' ? null : Number(v)
+    }
+    const flat = flatTransferTime(feed.rows.flatMap(([from, to, type], i) => {
+      const seconds = minOf(i)
+      return type === '2' && seconds !== null && Number.isFinite(seconds) ? [{ from, to, seconds }] : []
+    }))
+    const byStation = new Map<string, StationTime[]>()
+    for (const [key, time] of stationTimes) {
+      const [from, to] = key.split('\u0000')
+      const k = `${station(from)}\u0000${station(to)}`
+      byStation.set(k, [...(byStation.get(k) ?? []), time])
+    }
+    feed.rows.forEach(([from, to, type], i) => {
+      if (!['', '0', '2'].includes(type) || feed.raw[i].includes('"')) return
+      const exact = stationTimes.get(`${from}\u0000${to}`)
+      const stationLevel = !parent.has(from) && !parent.has(to) ? byStation.get(`${from}\u0000${to}`) : undefined
+      const time = exact ?? (stationLevel?.length ? bestOf(stationLevel) : undefined)
+      if (!time) return
+      const own = type === '2' ? minOf(i) : null
+      if (own !== null && own !== flat && from !== to && !WALKED.has(time.source)) {
+        agencyTimed.set(`${station(from)}\u0000${station(to)}`, own)
+        return
+      }
+      const cells = feed.raw[i].split(',')
+      cells[feed.iType] = '2'
+      cells[feed.iMin] = String(Math.round(time.seconds))
+      feed.raw[i] = cells.join(',')
+    })
+  }
+
   const added: string[] = []
   const comp = parse(computed)
   comp.rows.forEach(([from, to], i) => {
     const key = `${from}\u0000${to}`
     if (!from || !to || known.has(key)) return
     if (forbidden.has(`${station(from)}\u0000${station(to)}`)) return
+    const outOfSystem = !!railStops?.has(from) && railStops.has(to) && !stationTimes?.has(key)
+      && !stated.has(`${station(from)}\u0000${station(to)}`)
     known.add(key)
-    added.push(comp.raw[i])
+    const agency = agencyTimed.get(`${station(from)}\u0000${station(to)}`)
+    const walked = stationTimes?.get(key)
+    const cells = comp.raw[i].split(',')
+    if (agency !== undefined && !(walked && WALKED.has(walked.source)) && comp.iMin !== -1) {
+      cells[comp.iMin] = String(agency)
+    } else if (outOfSystem && comp.iMin !== -1 && /^\d+$/.test(cells[comp.iMin] ?? '')) {
+      cells[comp.iMin] = String(Number(cells[comp.iMin]) + 2 * FARE_GATE_DELAY_S)
+    }
+    added.push(cells.join(','))
   })
 
   return [feed.header, ...feed.raw, ...added].join('\n') + '\n'

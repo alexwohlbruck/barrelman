@@ -1,0 +1,213 @@
+---
+title: Attribution
+description: The credits your app must show when it displays Barrelman data, and what the ODbL asks of you.
+---
+
+Barrelman is built from open data. Most of it is licensed on the condition that
+whoever shows it credits where it came from. When you show Barrelman data, that
+condition passes to you.
+
+This page lists what to credit and where. The [Terms of Service](https://barrelman.dev/terms)
+make it a requirement of using the API.
+
+## What to credit
+
+| Source | What it covers | Licence | Credit to show |
+|---|---|---|---|
+| OpenStreetMap | Nearly everything: places, addresses, roads, buildings, the routing graph, the basemap | [ODbL 1.0](https://opendatacommons.org/licenses/odbl/) | [© OpenStreetMap contributors](https://www.openstreetmap.org/copyright) |
+| OpenMapTiles | The schema the basemap tiles follow | [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/) | [© OpenMapTiles](https://openmaptiles.org) |
+| Mapterhorn | Terrain heights behind elevation-derived layers | Per source, mostly CC-BY 4.0 | [© Mapterhorn](https://mapterhorn.com/attribution) |
+| Transit agencies | Stops, routes and schedules | Each feed's own licence | The agency, as its licence asks |
+| 3D landmarks | Landmark models on the map | CC0, or CC-BY 4.0 for Open Landmarks | The model's `attribution` field, where set |
+| Brand logos | Logos returned by `/brands` and search | Per file, on Wikimedia Commons | The brand's `logoAttribution`, when `logoLicense.attributionRequired` |
+| Map fonts | Labels in the basemap styles | [SIL OFL 1.1](https://openfontlicense.org) | None needed on the map |
+
+### OpenStreetMap
+
+Show `© OpenStreetMap contributors`, linked to
+[openstreetmap.org/copyright](https://www.openstreetmap.org/copyright). This
+applies to every map drawn from Barrelman tiles. It also applies wherever you
+show results: a search list, a geocoded address, a route, a place card.
+
+On a map, put it in the attribution control. Elsewhere, a line near the results
+is enough. The OpenStreetMap Foundation's
+[attribution guidelines](https://osmfoundation.org/wiki/Licence/Attribution_Guidelines)
+cover placement in more detail.
+
+### OpenMapTiles
+
+The basemap follows the OpenMapTiles schema, which is licensed under CC-BY 4.0.
+Show `© OpenMapTiles`, linked to [openmaptiles.org](https://openmaptiles.org),
+on any map that draws the basemap. It sits beside the OpenStreetMap credit.
+
+### Terrain from Mapterhorn
+
+Some layers carry heights read from [Mapterhorn](https://mapterhorn.com) terrain
+tiles: `bridge_decks`, `tunnel_cuts`, and the `elevation` property on
+`bicycle_ways` among them. The `detail` bundle includes the first and last of
+these. Mapterhorn assembles its
+terrain from many national and regional elevation datasets. Each has its own
+licence, listed on [mapterhorn.com/attribution](https://mapterhorn.com/attribution)
+and in [attribution.json](https://download.mapterhorn.com/attribution.json).
+Most are CC-BY 4.0.
+
+Show `© Mapterhorn`, linked to its attribution page, only when you draw an
+elevation-derived layer. A map that draws only the basemap needs no terrain
+credit.
+
+### Transit data
+
+Transit stops, routes and schedules come from each agency's published GTFS feed.
+Every feed is under its agency's own licence, and many ask to be credited by
+name. Before showing transit results for a city, check the licence of the feed
+that covers it.
+
+Transit responses say which feeds they drew on. Each entry names one feed once:
+
+```json
+{
+  "attribution": [
+    {
+      "feedId": "5",
+      "agency": "MTA New York City Transit",
+      "text": null,
+      "url": "https://www.mta.info/developers/terms"
+    }
+  ]
+}
+```
+
+`agency` is the feed's name as Transitland lists it. `text` is the attribution
+the feed's licence asks for, when it publishes one, and `url` is the licence.
+Both are `null` when the licence on record says nothing. Show the agency, and
+`text` where it is set, near the transit results it contributed.
+
+Where to find it:
+
+| Endpoint | Field |
+|---|---|
+| `POST /transit/route`, `POST /transit/intermodal-route` | `attribution` beside `itineraries` |
+| `GET /transit/departures` | `attribution` on each board, for the feeds on that board |
+| `GET /transit/route-detail` | `attribution` beside the route |
+| `GET /transit/stops`, `GET /transit/routes` | Not inline. Each row has a `feedId`; pass them to `GET /transit/attribution?feedIds=5,12` |
+
+Bikeshare systems publish their own terms in GBFS from version 2.3. `GET
+/gbfs/systems` and the `systems` list of `GET /gbfs/nearby-stations` carry
+`license` with `licenseId`, `licenseUrl`, `attributionOrganizationName` and
+`attributionUrl` when the system publishes them. Most do not, and `license` is
+then `null`.
+
+### 3D landmarks
+
+Landmark models come from two places:
+
+- Barrelman's own models, in [alexwohlbruck/landmarks](https://github.com/alexwohlbruck/landmarks),
+  are CC0. They need no credit.
+- Models from [Open Landmarks](https://open-landmarks.benmaps.fr) are CC-BY 4.0.
+
+Each placement in `/tiles/landmarks` carries an `attribution` property. When it
+is set, show it while that model is on screen. When it is empty, no credit is
+needed beyond the map's own.
+
+### Brand logos
+
+Logos are resolved through Wikidata (property P154) and come from Wikimedia
+Commons. Barrelman fetches each file once and serves its own copy, so
+`logoUrl` points at `/brand-logos/{qid}` on the API. An `<img>` can load it
+without a key.
+
+Each file has its own licence on its Commons page. Many logos are in the public
+domain because they are too simple to be copyrighted. Others are under a
+Creative Commons licence that asks for credit. Brand responses carry what
+Commons records for the file:
+
+```json
+{
+  "logoUrl": "https://api.barrelman.dev/brand-logos/Q38076?v=3f2a9c1b7e",
+  "logoLicense": {
+    "name": "Public domain",
+    "url": null,
+    "attributionRequired": false,
+    "publicDomain": true,
+    "trademarked": true,
+    "source": "https://commons.wikimedia.org/wiki/File:McDonald%27s_Golden_Arches.svg"
+  },
+  "logoAttribution": "McDonald's, Public domain, via Wikimedia Commons"
+}
+```
+
+When `attributionRequired` is `true`, show `logoAttribution` near the logo, or
+behind a link or tooltip from it, and link `source` if you can. When it is
+`false`, no credit is needed. `logoLicense` and `logoAttribution` are `null`
+until Barrelman has read the file's licence, which happens when the logo is
+first resolved. Treat a `null` licence as one that asks for credit.
+
+Logos and brand names are trademarks of their owners. Barrelman provides them
+to identify a place or a chain. Using them does not imply that the brand
+endorses your app, and you should not use them in a way that suggests it does.
+
+## MapLibre
+
+MapLibre GL builds its attribution control from each source's `attribution`
+string, and shows the credits for whichever sources are on screen.
+
+The TileJSON for each source, at `/tiles/<source>.json`, carries the credits
+that source owes. Point a source's `url` at it and the control fills itself in.
+The [basemap style](/usage/maps) does this already.
+
+```json
+{
+  "version": 8,
+  "sources": {
+    "basemap": {
+      "type": "vector",
+      "url": "https://api.barrelman.dev/tiles/basemap.json?api_key=YOUR_KEY"
+    },
+    "detail": {
+      "type": "vector",
+      "url": "https://api.barrelman.dev/tiles/detail.json?api_key=YOUR_KEY"
+    }
+  },
+  "layers": []
+}
+```
+
+`basemap.json` credits OpenStreetMap and OpenMapTiles. `detail.json` credits
+OpenStreetMap and Mapterhorn. MapLibre shows each credit once, however many
+sources owe it.
+
+If you list `tiles` yourself instead of using `url`, set `attribution` on each
+source to the string its TileJSON returns.
+
+Keep the control on. If you need it smaller, use the compact form rather than
+removing it:
+
+```js
+const map = new maplibregl.Map({
+  container: 'map',
+  style: '/style.json',
+  attributionControl: { compact: true },
+})
+```
+
+The control credits sources, so it cannot show a credit for one landmark. Show
+a landmark's `attribution` in a small label of your own while its model is
+drawn.
+
+## Open Database License
+
+Barrelman's database is a derivative of OpenStreetMap, so it is covered by the
+[ODbL](https://opendatacommons.org/licenses/odbl/). The data you get from the
+API is available under the ODbL too.
+
+The ODbL asks the publisher of a derivative database that is used publicly to
+offer the method used to make it. Barrelman meets that duty by publishing its
+whole import pipeline in the [barrelman repository](https://github.com/alexwohlbruck/barrelman).
+Anyone can rebuild the database from the OpenStreetMap planet with it.
+
+Showing maps and results in your app makes a Produced Work. That needs the
+credits above and nothing more. If you extract data from Barrelman and
+redistribute it as a database of your own, you take on the ODbL's obligations
+for that database. These include licensing it under the ODbL and offering it,
+or the method used to make it, to its users. Bulk extraction is also limited by
+the [Terms of Service](https://barrelman.dev/terms).

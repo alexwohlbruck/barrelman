@@ -15,7 +15,7 @@
  * tells you nothing about who decided what, or why.
  */
 import { and, desc, eq, gte, isNull, lte, or, sql as dsql } from 'drizzle-orm'
-import { db } from '../db'
+import { accountsDb as db } from '../db'
 import {
   abuseSignals,
   moderationLog,
@@ -27,10 +27,14 @@ import {
   type User,
 } from '../schema/accounts'
 import { generateId } from '../lib/crypto'
-import { LastAdminError } from './accounts.service'
+import { findUserById, LastAdminError } from './accounts.service'
+import { billing } from '../config/billing.config'
+import { BillingTeardownError, revokeActiveSubscription } from './billing.service'
+import { reportPendingOverage } from './overage.service'
 import { endAllSessions } from './auth.service'
 import { invalidateUserKeys } from './api-keys.service'
 import { invalidateBalance } from './credits.service'
+import { eraseRequestMetrics } from './request-metrics.service'
 
 /** Actor id recorded when an automated rule acts rather than a person. */
 export const SYSTEM_ACTOR = 'system'
@@ -108,13 +112,47 @@ async function revokeAccess(userId: string): Promise<void> {
 }
 
 /**
+ * Bill what the account owes and stop its subscription, before the row and
+ * its usage are gone.
+ *
+ * Overage is reported first, while the subscription is still there to bill it
+ * against. Either step failing throws BillingTeardownError and the deletion
+ * does not happen: a deleted account with a live subscription keeps charging a
+ * card with no account left to cancel from. A last administrator is refused
+ * later anyway, so it is checked here first to avoid revoking a subscription
+ * on an account that then is not deleted.
+ */
+async function settleBillingBeforeDeletion(account: User): Promise<void> {
+  if (!billing.enabled) return
+
+  if (account.role === 'admin') {
+    const admins = await db.select({ id: users.id }).from(users).where(eq(users.role, 'admin'))
+    if (admins.length <= 1) {
+      throw new LastAdminError('This is the only administrator. Promote someone else before deleting this account.')
+    }
+  }
+
+  try {
+    await reportPendingOverage({ userId: account.id })
+  } catch (err) {
+    console.error(`[moderation] could not report outstanding overage for ${account.id}`, err)
+    throw new BillingTeardownError(
+      'Outstanding overage on this account could not be reported to Polar, so the account was not deleted. Try again shortly.',
+    )
+  }
+
+  await revokeActiveSubscription(account)
+}
+
+/**
  * Erase an account and everything attached to it.
  *
  * The opposite bargain from a suspension. A suspension keeps the person on
  * file — their keys, their usage, the log of what was decided about them — so
  * it can be argued with and undone. Deletion keeps nothing: keys, usage,
  * credit ledger, abuse signals and the moderation log itself all go with the
- * row, by `ON DELETE CASCADE`. That is the point when the request is "remove
+ * row, by `ON DELETE CASCADE`, and request metrics are erased by hand after
+ * it. That is the point when the request is "remove
  * me", and it is also why the only record left of this action is the server
  * log — the audit trail is one of the things being erased.
  *
@@ -127,6 +165,9 @@ async function revokeAccess(userId: string): Promise<void> {
  * each see a count of two and both go through.
  */
 export async function deleteAccount(userId: string, actorId: string): Promise<User | null> {
+  const account = await findUserById(userId)
+  if (account) await settleBillingBeforeDeletion(account)
+
   const deleted = await db.transaction(async (tx) => {
     const admins = await tx
       .select({ id: users.id })
@@ -150,6 +191,13 @@ export async function deleteAccount(userId: string, actorId: string): Promise<Us
   // cached a moment before the delete would keep serving a deleted account
   // until it expired.
   await revokeAccess(userId)
+
+  // Request metrics carry no foreign key, so the cascade misses them. A failure
+  // here leaves rows that age out with the retention window anyway, which is
+  // not worth failing a deletion that has already happened.
+  await eraseRequestMetrics(userId).catch((err) =>
+    console.error(`[moderation] could not erase request metrics for deleted account ${userId}`, err),
+  )
 
   console.warn(`[moderation] deleted account ${userId} <${deleted.email}> by ${actorId}`)
   return deleted

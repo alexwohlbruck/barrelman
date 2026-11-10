@@ -8,7 +8,8 @@
  * have to agree with it.
  */
 
-import { envNumber, envString } from './env'
+import { envBoolean, envNumber, envRaw, envString } from './env'
+import { parseCidrList, type Cidr } from '../lib/cidr'
 
 export const appName = 'Barrelman'
 
@@ -69,6 +70,9 @@ export const sessionRenewThresholdMs = sessionTtlMs / 2
 /** One-time email codes are short-lived and single-use. */
 export const otpTtlMs = envNumber('BARRELMAN_OTP_TTL_MINUTES', 15) * 60 * 1000
 
+/** The same lifetime in whole minutes, for emails and API descriptions to state. */
+export const otpTtlMinutes = Math.round(otpTtlMs / 60_000)
+
 export const sessionCookieName = 'barrelman_session'
 
 /**
@@ -81,6 +85,18 @@ export const registrationMode = envString('BARRELMAN_REGISTRATION_MODE', 'open',
 export const accountsEnabled = process.env.BARRELMAN_ACCOUNTS_ENABLED !== 'false'
 
 export const isProduction = process.env.NODE_ENV === 'production'
+
+/**
+ * Whether cookies carry `Secure`. NODE_ENV alone missed a deployment served
+ * over HTTPS without NODE_ENV=production, which then sent its session cookie
+ * in a form a browser would also attach to a plain-HTTP request. An https
+ * origin is a statement that the browser reaches us over TLS, so it is enough.
+ */
+export function cookiesSecure(env: { production: boolean; origins: readonly string[] }): boolean {
+  return env.production || env.origins.some((origin) => origin.toLowerCase().startsWith('https://'))
+}
+
+export const secureCookies = cookiesSecure({ production: isProduction, origins: [serverOrigin, consoleOrigin] })
 
 /**
  * Terms of service.
@@ -109,3 +125,41 @@ export const terms = {
 }
 
 export const tosUrl = terms.url
+
+/**
+ * Require administrators to have signed in with a passkey before an admin-role
+ * session reaches `/admin/*`. Off by default so an upgrade never locks anyone
+ * out. Admin-scoped API keys are unaffected. See `services/admin-access.service.ts`
+ * for how it avoids locking out the last administrator.
+ */
+export const adminRequirePasskey = envBoolean('BARRELMAN_ADMIN_REQUIRE_PASSKEY', false)
+
+export interface AdminIpAllowlist {
+  /** False when the variable is unset: every address is allowed. */
+  configured: boolean
+  ranges: Cidr[]
+}
+
+/**
+ * `BARRELMAN_ADMIN_ALLOWED_IPS`: comma-separated CIDRs (IPv4 and IPv6) allowed
+ * to reach `/admin/*`. Unset allows any address.
+ *
+ * An entry that doesn't parse is dropped with an error in the log. If every
+ * entry is bad the list is empty and refuses everyone: the operator asked for a
+ * restriction, and a typo should not quietly lift it.
+ */
+export function readAdminIpAllowlist(
+  raw: string | undefined = envRaw('BARRELMAN_ADMIN_ALLOWED_IPS'),
+): AdminIpAllowlist {
+  if (raw === undefined) return { configured: false, ranges: [] }
+  const { ranges, invalid } = parseCidrList(raw)
+  if (invalid.length > 0) {
+    console.error(`[config] BARRELMAN_ADMIN_ALLOWED_IPS: ignoring unparseable entries: ${invalid.join(', ')}`)
+  }
+  if (ranges.length === 0) {
+    console.error('[config] BARRELMAN_ADMIN_ALLOWED_IPS has no valid ranges, so /admin/* refuses every address')
+  }
+  return { configured: true, ranges }
+}
+
+export const adminIpAllowlist = readAdminIpAllowlist()

@@ -18,6 +18,7 @@
 import { connection as sql } from '../db'
 import { randomUUID } from 'node:crypto'
 import { getScript } from '../admin/scripts-manifest'
+import { ParamValidationError, validateParams } from './job-params'
 import { isValidCron, isValidTimeZone, nextRun } from '../lib/cron'
 import { envString } from '../config/env'
 
@@ -66,7 +67,7 @@ export const defaultTimeZone = (): string => {
  * exclusive-job guard would reject the overlap anyway, but a skipped import is
  * worse than a spread-out one.
  */
-const SEEDS: Array<Pick<ScheduleInput, 'scriptId' | 'cron'> & { params?: Record<string, unknown> }> = [
+export const SEEDS: Array<Pick<ScheduleInput, 'scriptId' | 'cron'> & { params?: Record<string, unknown> }> = [
   // Incremental replication diff — cheap, safe to run nightly. Explicitly
   // pinned to replication so a seeded schedule can never trigger the
   // destructive full re-import.
@@ -91,6 +92,13 @@ const SEEDS: Array<Pick<ScheduleInput, 'scriptId' | 'cron'> & { params?: Record<
   // week's delay only means a brand-new name isn't offered as a correction
   // yet; it is still found when spelled right.
   { scriptId: 'db-build-search-lexicon', cron: '0 12 * * 0' },
+  // Nightly state backup, ahead of the 03:00 OSM update so a backup never
+  // waits behind it on the ops worker. A few seconds of work.
+  { scriptId: 'db-backup', cron: '15 2 * * *' },
+  // Catches subscription changes whose webhook never arrived. Daily is enough:
+  // a missed webhook is rare, and the customer can refresh their own billing
+  // page in the meantime. A no-op where billing is off.
+  { scriptId: 'billing-reconcile', cron: '45 2 * * *' },
 ]
 
 let schemaReady: Promise<void> | null = null
@@ -161,8 +169,16 @@ function rowToSchedule(r: any): Schedule {
 
 /** Validate operator input and normalise it. Throws ScheduleValidationError. */
 function validate(input: ScheduleInput): Required<Omit<ScheduleInput, 'params'>> & { params: Record<string, unknown> } {
-  if (!getScript(input.scriptId)) {
+  const script = getScript(input.scriptId)
+  if (!script) {
     throw new ScheduleValidationError(`Unknown script: ${input.scriptId}`)
+  }
+  // Refused when the schedule is saved, not at 3am when it first fires.
+  try {
+    validateParams(script, input.params ?? {})
+  } catch (err) {
+    if (err instanceof ParamValidationError) throw new ScheduleValidationError(err.message)
+    throw err
   }
   const cron = (input.cron ?? '').trim()
   if (!isValidCron(cron)) {

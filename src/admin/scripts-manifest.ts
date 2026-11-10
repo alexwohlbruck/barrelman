@@ -14,7 +14,10 @@
  *
  * User-supplied parameters are applied three ways (`apply`):
  *   - 'flag'       → appended as `--name value` (or bare `--name` for booleans)
- *   - 'positional' → appended as a raw positional argument
+ *   - 'positional' → appended as one argv element (or one per item, for `multiple`)
+ *
+ * Every value is checked against its param's type and `format` first; see
+ * `validateParams()` in services/job-invocation.ts.
  *   - 'env'        → merged into the child process environment
  */
 
@@ -31,11 +34,54 @@ export type DangerLevel = 'safe' | 'caution' | 'destructive'
 export type ParamApply = 'flag' | 'env' | 'positional'
 export type ParamType = 'string' | 'number' | 'boolean' | 'select'
 
+/**
+ * What a `string` param may contain. `validateParams()` in
+ * services/job-invocation.ts checks every value against it before a job is
+ * enqueued or run, so a console field can never smuggle a flag or a path into
+ * a script's argv.
+ *
+ *   - identifier  (the default) letters, digits and `_ . : @ + ~ -`
+ *   - identifiers a comma-separated list of identifiers
+ *   - region      a region key: lowercase letters, digits, dashes
+ *   - regions     comma-separated region keys
+ *   - path        a relative path under the working directory: no `..`, not absolute
+ *   - bbox        `w,s,e,n` in degrees; negative values allowed
+ *   - date        `YYYY-MM-DD`
+ *   - text        one line of free text, such as a search term
+ *   - decimal     a non-negative number, for a field kept as text so it can hold 0.02
+ */
+export type ParamFormat =
+  | 'identifier'
+  | 'identifiers'
+  | 'region'
+  | 'regions'
+  | 'path'
+  | 'bbox'
+  | 'date'
+  | 'text'
+  | 'decimal'
+
 export interface ScriptParam {
   name: string
   label: string
   type: ParamType
   apply: ParamApply
+  /** For `string` params. Defaults to `identifier`. */
+  format?: ParamFormat
+  /** For `number` params: accept a fraction. Integers only otherwise. */
+  decimal?: boolean
+  /**
+   * Accept a value starting with `-` (a negative number). Off by default,
+   * since such a value is read as an option by most argument parsers. A `bbox`
+   * allows it regardless.
+   */
+  allowDash?: boolean
+  /**
+   * For `positional` params: a whitespace-separated list, each item its own
+   * argv element and each validated on its own. Without it the whole value is
+   * one argv element.
+   */
+  multiple?: boolean
   /** Override the emitted flag (defaults to `--<name>`). Only for apply:'flag'. */
   flag?: string
   /** Environment variable name. Only for apply:'env'. */
@@ -128,6 +174,7 @@ const REGIONS_PARAM: ScriptParam = {
   name: 'REGIONS',
   label: 'Regions override',
   type: 'string',
+  format: 'regions',
   apply: 'env',
   envVar: 'REGIONS',
   placeholder: 'north-carolina,nyc-metro  (blank = use .env)',
@@ -234,7 +281,7 @@ export const SCRIPTS: ScriptDef[] = [
         envVar: 'REBUILD_GRAPHHOPPER',
         default: true,
         description:
-          'Rebuild the GraphHopper graph once the extract has changed. Street routing is down until the new graph is built, which takes hours for a country. Turn off to rebuild it separately.',
+          'Rebuild the GraphHopper graph once the extract has changed. Routing is down for the build (hours for a country) unless GRAPHHOPPER_BUILD_ALONGSIDE is set, and the build needs a second graph’s disk. Turn off to rebuild it separately.',
       },
       {
         name: 'REFRESH_BUILDINGS_3D',
@@ -509,6 +556,7 @@ export const SCRIPTS: ScriptDef[] = [
         type: 'string',
         apply: 'env',
         envVar: 'GTFS_REGION',
+        format: 'region',
         placeholder: 'e.g. nc, nyc, global',
       },
     ],
@@ -555,9 +603,9 @@ export const SCRIPTS: ScriptDef[] = [
     exclusive: true,
     exec: { kind: 'process', command: 'bun', args: ['run', 'import/import-gtfs.ts'] },
     params: [
-      { name: 'region', label: 'Region', type: 'string', apply: 'flag', flag: '--region', default: 'nc' },
+      { name: 'region', label: 'Region', type: 'string', format: 'region', apply: 'flag', flag: '--region', default: 'nc' },
       { name: 'api-key', label: 'Transitland API key', type: 'string', apply: 'flag', flag: '--api-key', secret: true, placeholder: 'tlk_…' },
-      { name: 'output-dir', label: 'Output dir', type: 'string', apply: 'flag', flag: '--output-dir', default: './data/gtfs' },
+      { name: 'output-dir', label: 'Output dir', type: 'string', format: 'path', apply: 'flag', flag: '--output-dir', default: './data/gtfs' },
       { name: 'max-feeds', label: 'Max feeds', type: 'number', apply: 'flag', flag: '--max-feeds', placeholder: 'blank = all' },
       { name: 'transfer-distance', label: 'Transfer distance (m)', type: 'number', apply: 'flag', flag: '--transfer-distance', default: 500 },
       { name: 'skip-download', label: 'Skip download (use local zips)', type: 'boolean', apply: 'flag', flag: '--skip-download', default: false },
@@ -575,7 +623,7 @@ export const SCRIPTS: ScriptDef[] = [
     confirm: false,
     exec: { kind: 'process', command: 'bun', args: ['run', 'import/import-all-shapes.ts'] },
     params: [
-      { name: 'feeds', label: 'Feed IDs (space-separated)', type: 'string', apply: 'positional', placeholder: 'blank = all feeds' },
+      { name: 'feeds', label: 'Feed IDs (space-separated)', type: 'string', apply: 'positional', multiple: true, placeholder: 'blank = all feeds' },
     ],
     source: 'import/import-all-shapes.ts',
   },
@@ -596,6 +644,32 @@ export const SCRIPTS: ScriptDef[] = [
     source: 'import/backfill-rt-urls.ts',
   },
   {
+    id: 'brands-backfill-logo-licences',
+    name: 'Backfill Brand Logo Licences',
+    description: 'Read the licence, author and trademark status of each brand logo from Wikimedia Commons, for logos resolved before these were recorded.',
+    category: 'search',
+    danger: 'safe',
+    longRunning: false,
+    confirm: false,
+    exec: { kind: 'internal', handler: 'brands:backfill-logo-licences' },
+    source: 'src/lib/brand-logos.ts',
+    notes:
+      'New logos get their licence when they are resolved, so this is only needed once after upgrading, or after Commons was unreachable. Asks for 50 files a second at most.',
+  },
+  {
+    id: 'gtfs-refresh-licences',
+    name: 'Refresh Feed Licences',
+    description: 'Re-read each GTFS feed\'s licence terms (SPDX id, commercial use, redistribution, attribution text) from Transitland.',
+    category: 'transit',
+    danger: 'safe',
+    longRunning: false,
+    confirm: false,
+    exec: { kind: 'internal', handler: 'gtfs:refresh-licences' },
+    source: 'src/services/gtfs.service.ts',
+    notes:
+      'Needs TRANSITLAND_API_KEY in the API container. Under GTFS_LICENCE_POLICY=commercial, newly restricted feeds drop out of transit responses at once and out of MOTIS and the database at the next GTFS import.',
+  },
+  {
     id: 'gtfs-backfill-transfers',
     name: 'Backfill Transfers',
     description: 'Backfill gtfs_transfers from transfers.txt inside local feed ZIPs (for DBs imported before transfers were captured).',
@@ -605,7 +679,7 @@ export const SCRIPTS: ScriptDef[] = [
     confirm: false,
     exec: { kind: 'process', command: 'bun', args: ['run', 'import/backfill-transfers.ts'] },
     params: [
-      { name: 'dir', label: 'GTFS dir', type: 'string', apply: 'flag', flag: '--dir', default: './data/gtfs' },
+      { name: 'dir', label: 'GTFS dir', type: 'string', format: 'path', apply: 'flag', flag: '--dir', default: './data/gtfs' },
     ],
     source: 'import/backfill-transfers.ts',
   },
@@ -619,8 +693,8 @@ export const SCRIPTS: ScriptDef[] = [
     confirm: false,
     exec: { kind: 'process', command: 'bun', args: ['run', 'import/backfill-trip-patterns.ts'] },
     params: [
-      { name: 'dir', label: 'GTFS dir', type: 'string', apply: 'flag', flag: '--dir', default: './data/gtfs' },
-      { name: 'feeds', label: 'Feed IDs (space-separated)', type: 'string', apply: 'positional', placeholder: 'blank = all feeds' },
+      { name: 'dir', label: 'GTFS dir', type: 'string', format: 'path', apply: 'flag', flag: '--dir', default: './data/gtfs' },
+      { name: 'feeds', label: 'Feed IDs (space-separated)', type: 'string', apply: 'positional', multiple: true, placeholder: 'blank = all feeds' },
     ],
     source: 'import/backfill-trip-patterns.ts',
   },
@@ -634,7 +708,7 @@ export const SCRIPTS: ScriptDef[] = [
     confirm: true,
     exec: { kind: 'process', command: 'bun', args: ['run', 'import/inject-trip-shapes.ts'] },
     params: [
-      { name: 'dir', label: 'GTFS dir', type: 'string', apply: 'flag', flag: '--dir', default: './data/gtfs' },
+      { name: 'dir', label: 'GTFS dir', type: 'string', format: 'path', apply: 'flag', flag: '--dir', default: './data/gtfs' },
       { name: 'dry-run', label: 'Dry run (preview only)', type: 'boolean', apply: 'flag', flag: '--dry-run', default: true },
     ],
     source: 'import/inject-trip-shapes.ts',
@@ -649,7 +723,7 @@ export const SCRIPTS: ScriptDef[] = [
     confirm: true,
     exec: { kind: 'process', command: 'bun', args: ['run', 'import/inject-fares-v2.ts'] },
     params: [
-      { name: 'dir', label: 'GTFS dir', type: 'string', apply: 'flag', flag: '--dir', default: './data/gtfs' },
+      { name: 'dir', label: 'GTFS dir', type: 'string', format: 'path', apply: 'flag', flag: '--dir', default: './data/gtfs' },
       { name: 'dry-run', label: 'Dry run (preview only)', type: 'boolean', apply: 'flag', flag: '--dry-run', default: true },
     ],
     source: 'import/inject-fares-v2.ts',
@@ -664,7 +738,7 @@ export const SCRIPTS: ScriptDef[] = [
     confirm: false,
     exec: { kind: 'process', command: 'bun', args: ['run', 'import/generate-motis-config.ts'] },
     params: [
-      { name: 'output', label: 'Output path', type: 'string', apply: 'flag', flag: '--output', default: './motis/config.yml' },
+      { name: 'output', label: 'Output path', type: 'string', format: 'path', apply: 'flag', flag: '--output', default: './motis/config.yml' },
       { name: 'rt-update-interval', label: 'RT poll interval (s)', type: 'number', apply: 'flag', flag: '--rt-update-interval', placeholder: 'blank = default 60' },
       { name: 'no-gbfs', label: 'Exclude GBFS', type: 'boolean', apply: 'flag', flag: '--no-gbfs', default: false },
     ],
@@ -691,6 +765,7 @@ export const SCRIPTS: ScriptDef[] = [
         name: 'feeds',
         label: 'Feed keys',
         type: 'string',
+        format: 'identifiers',
         apply: 'flag',
         flag: '--feeds',
         placeholder: 'rtd,trimet,metrokingcounty',
@@ -790,6 +865,7 @@ export const SCRIPTS: ScriptDef[] = [
         name: 'feeds',
         label: 'Portolan feed keys',
         type: 'string',
+        format: 'identifiers',
         apply: 'flag',
         flag: '--patch',
         required: true,
@@ -865,6 +941,39 @@ export const SCRIPTS: ScriptDef[] = [
     exec: { kind: 'internal', handler: 'sql:create-station-links.sql' },
     source: 'import/create-station-links.sql',
     notes: 'DROPs and rebuilds materialized views. Re-run after OSM + GTFS imports.',
+  },
+  {
+    id: 'transit-station-labels',
+    name: 'Refresh Station Labels',
+    description:
+      'Rebuild the direction each platform is signed for ("Uptown & The Bronx") and each station entrance\'s corner label ("Broadway & West 28th Street · NW corner") and entry/exit flags. Directions and trips serve them as directionLabel, cornerLabel, entryAllowed and exitAllowed.',
+    category: 'transit',
+    danger: 'safe',
+    longRunning: true,
+    confirm: false,
+    exec: { kind: 'process', command: 'nice', args: ['-n', '10', 'bun', 'run', 'import/refresh-station-labels.ts'] },
+    params: [
+      { name: 'feed', label: 'Feed id', type: 'string', apply: 'flag', flag: '--feed', placeholder: 'blank = every feed' },
+      { name: 'directionsOnly', label: 'Direction labels only', type: 'boolean', apply: 'flag', flag: '--directions-only', default: false },
+    ],
+    source: 'import/refresh-station-labels.ts',
+    notes:
+      'Fetches the agency open data that applies to the feeds on this instance (MTA Subway Stations and Entrances for the NYC subway) and derives everything else from OSM: platform destination tags tied to a stop by gtfs:stop_id, and the streets of the nearest named intersection. A source that cannot be fetched keeps its previous rows. OSM Update, the full import and every feed import run it, so this is only needed to refresh by hand.',
+  },
+  {
+    id: 'transit-station-paths',
+    name: 'Build Station Paths',
+    description:
+      'Build the level-aware walking graph of every rail station complex and a time for every platform-to-platform and platform-to-entrance pair, each tagged with its source (graph, bridged, agency or estimated). GET /transit/stations/{id}/paths serves them, and the GTFS import times transfers.txt from them.',
+    category: 'transit',
+    danger: 'safe',
+    longRunning: true,
+    confirm: false,
+    exec: { kind: 'process', command: 'nice', args: ['-n', '10', 'bun', 'run', 'import/build-station-paths.ts'] },
+    params: [],
+    source: 'import/build-station-paths.ts',
+    notes:
+      'Derived from OSM alone, plus pathways.txt times from feeds that publish them. Builds *_next tables and swaps them in, so the previous build serves until the new one is whole. The log lists the tier mix and how many complexes moved up or down a tier since the last build. OSM Update and the full import run it; re-run after a GTFS import only to pick up new pathways.txt times.',
   },
   {
     id: 'transit-views',
@@ -989,7 +1098,7 @@ export const SCRIPTS: ScriptDef[] = [
     params: [
       REGIONS_PARAM,
       { name: 'country', label: 'Country filter', type: 'string', apply: 'flag', flag: '--country', placeholder: 'e.g. US' },
-      { name: 'bbox', label: 'Bounding box', type: 'string', apply: 'flag', flag: '--bbox', placeholder: 'w,s,e,n (blank = REGIONS bbox)' },
+      { name: 'bbox', label: 'Bounding box', type: 'string', format: 'bbox', apply: 'flag', flag: '--bbox', placeholder: 'w,s,e,n (blank = REGIONS bbox)' },
     ],
     source: 'import/import-gbfs-systems.ts',
   },
@@ -1049,6 +1158,7 @@ export const SCRIPTS: ScriptDef[] = [
         label: 'Cell size',
         // Text, not number: a number field steps in whole units and flags 0.02.
         type: 'string',
+        format: 'decimal',
         apply: 'env',
         envVar: 'ROAD_MARKINGS_CELL',
         placeholder: 'blank = 0.02',
@@ -1071,8 +1181,8 @@ export const SCRIPTS: ScriptDef[] = [
     exclusive: true,
     exec: { kind: 'process', command: 'bun', args: ['run', 'import/generate-bridge-decks.ts'] },
     params: [
-      { name: 'bbox', label: 'Area (w,s,e,n)', type: 'string', apply: 'flag', flag: '--bbox', placeholder: 'blank = the REGIONS areas' },
-      { name: 'cell', label: 'Cell size (degrees)', type: 'number', apply: 'flag', flag: '--cell', default: 0.25 },
+      { name: 'bbox', label: 'Area (w,s,e,n)', type: 'string', format: 'bbox', apply: 'flag', flag: '--bbox', placeholder: 'blank = the REGIONS areas' },
+      { name: 'cell', label: 'Cell size (degrees)', type: 'number', decimal: true, apply: 'flag', flag: '--cell', default: 0.25 },
     ],
     source: 'import/generate-bridge-decks.ts',
     notes:
@@ -1116,8 +1226,8 @@ export const SCRIPTS: ScriptDef[] = [
     exclusive: true,
     exec: { kind: 'process', command: 'nice', args: ['-n', '10', 'bun', 'run', 'import/generate-tunnel-cuts.ts'] },
     params: [
-      { name: 'bbox', label: 'Area (w,s,e,n)', type: 'string', apply: 'flag', flag: '--bbox', placeholder: 'blank = the REGIONS areas' },
-      { name: 'cell', label: 'Cell size (degrees)', type: 'number', apply: 'flag', flag: '--cell', default: 0.05 },
+      { name: 'bbox', label: 'Area (w,s,e,n)', type: 'string', format: 'bbox', apply: 'flag', flag: '--bbox', placeholder: 'blank = the REGIONS areas' },
+      { name: 'cell', label: 'Cell size (degrees)', type: 'number', decimal: true, apply: 'flag', flag: '--cell', default: 0.05 },
     ],
     source: 'import/generate-tunnel-cuts.ts',
     notes:
@@ -1161,8 +1271,8 @@ export const SCRIPTS: ScriptDef[] = [
     exclusive: true,
     exec: { kind: 'process', command: 'nice', args: ['-n', '10', 'bun', 'run', 'import/generate-sidewalk-street-names.ts'] },
     params: [
-      { name: 'bbox', label: 'Area (w,s,e,n)', type: 'string', apply: 'flag', flag: '--bbox', placeholder: 'blank = the REGIONS areas' },
-      { name: 'cell', label: 'Cell size (degrees)', type: 'number', apply: 'flag', flag: '--cell', default: 0.02 },
+      { name: 'bbox', label: 'Area (w,s,e,n)', type: 'string', format: 'bbox', apply: 'flag', flag: '--bbox', placeholder: 'blank = the REGIONS areas' },
+      { name: 'cell', label: 'Cell size (degrees)', type: 'number', decimal: true, apply: 'flag', flag: '--cell', default: 0.02 },
     ],
     source: 'import/generate-sidewalk-street-names.ts',
     notes:
@@ -1205,7 +1315,7 @@ export const SCRIPTS: ScriptDef[] = [
     confirm: true,
     exclusive: true,
     exec: { kind: 'process', command: 'nice', args: ['-n', '10', 'bun', 'run', 'import/elevate-bicycle-ways.ts'] },
-    params: [{ name: 'bbox', label: 'Area (w,s,e,n)', type: 'string', apply: 'flag', flag: '--bbox', placeholder: 'blank = everywhere' }],
+    params: [{ name: 'bbox', label: 'Area (w,s,e,n)', type: 'string', format: 'bbox', apply: 'flag', flag: '--bbox', placeholder: 'blank = everywhere' }],
     source: 'import/elevate-bicycle-ways.ts',
     notes:
       'Run after Build Bridge Decks and Build Tunnel Cuts, and again after either rebuilds. Reads the decks, tunnels and portals around each batch of ways and Mapterhorn terrain, and writes only values that changed. Restart Martin afterwards on an instance that caches tiles.',
@@ -1221,7 +1331,7 @@ export const SCRIPTS: ScriptDef[] = [
     confirm: true,
     exclusive: true,
     exec: { kind: 'process', command: 'nice', args: ['-n', '10', 'bun', 'run', 'import/elevate-portolan.ts'] },
-    params: [{ name: 'feeds', label: 'Feeds', type: 'string', apply: 'flag', flag: '--feeds', placeholder: 'blank = every pyramid' }],
+    params: [{ name: 'feeds', label: 'Feeds', type: 'string', format: 'identifiers', apply: 'flag', flag: '--feeds', placeholder: 'blank = every pyramid' }],
     source: 'import/elevate-portolan.ts',
     notes: 'Replaces each tile whole, so the map keeps serving throughout. Tiles at zoom 13 and above only.',
   },
@@ -1284,7 +1394,8 @@ export const SCRIPTS: ScriptDef[] = [
   {
     id: 'routing-graphhopper',
     name: 'Rebuild GraphHopper',
-    description: 'Wipe the GraphHopper graph cache and restart the container so it re-imports the PBF and rebuilds the routing graph. Skips itself when the serving graph is already built from the current extract.',
+    description:
+      'Build a new routing graph from the PBF in a separate container (with the server stopped, unless built alongside), check it, then swap it in and restart GraphHopper. Skips itself when the serving graph is already built from the current extract.',
     category: 'routing',
     danger: 'caution',
     longRunning: true,
@@ -1299,11 +1410,60 @@ export const SCRIPTS: ScriptDef[] = [
         envVar: 'FORCE_REBUILD',
         default: false,
         description:
-          'Wipe and rebuild even when the graph is already built from the current extract. Needed after a graphhopper-config.yml change, which the freshness check cannot see.',
+          'Rebuild even when the graph is already built from the current extract. Needed after a graphhopper-config.yml change, which the freshness check cannot see.',
+      },
+      {
+        name: 'verify-route',
+        label: 'Trial route before swapping',
+        type: 'select',
+        apply: 'env',
+        envVar: 'GRAPHHOPPER_VERIFY_ROUTE',
+        default: 'auto',
+        options: [
+          { label: 'Auto (only on hosts with enough RAM)', value: 'auto' },
+          { label: 'Always', value: '1' },
+          { label: 'Never', value: '0' },
+        ],
+        description:
+          'Start a second GraphHopper on the new graph and route through it before the swap. It needs another serving heap plus page cache beside the live server, so auto skips it under GRAPHHOPPER_VERIFY_MIN_RAM_GB (48 GB).',
+      },
+      {
+        name: 'build-alongside',
+        label: 'Keep routing up during the build',
+        type: 'select',
+        apply: 'env',
+        envVar: 'GRAPHHOPPER_BUILD_ALONGSIDE',
+        default: 'false',
+        options: [
+          { label: 'No: stop the server for the build', value: 'false' },
+          { label: 'Auto (only if the build heap plus 4 GB is free)', value: 'auto' },
+          { label: 'Yes: build beside the live server', value: 'true' },
+        ],
+        description:
+          'Building alongside holds two GraphHopper JVMs in memory for the whole build. By default the server is stopped, so routing is down for the build; the new graph is still checked before the swap and the old one kept for rollback.',
+      },
+      {
+        name: 'allow-smaller',
+        label: 'Accept a much smaller graph',
+        type: 'boolean',
+        apply: 'flag',
+        flag: '--allow-smaller',
+        default: false,
+        description: 'Swap in a new graph under half the size of the current one. Only when the region was meant to shrink.',
+      },
+      {
+        name: 'rollback',
+        label: 'Roll back instead',
+        type: 'boolean',
+        apply: 'flag',
+        flag: '--rollback',
+        default: false,
+        description: 'Build nothing: swap the live graph with graph-cache.prev and restart. Run again to undo.',
       },
     ],
     source: 'scripts/rebuild-graphhopper.sh',
-    notes: 'The script returns quickly; the actual graph build runs in the container. Watch `docker logs -f barrelman-graphhopper`.',
+    notes:
+      'Needs free space of about 1.2x the current graph on the OSM volume and refuses to start without it. The job lasts as long as the graph import, hours for a country; built alongside, routing is down only for the restart at the end. The previous graph is kept at graph-cache.prev, which costs another full graph on disk.',
   },
   {
     id: 'routing-valhalla',
@@ -1333,16 +1493,56 @@ export const SCRIPTS: ScriptDef[] = [
     id: 'routing-motis',
     name: 'Rebuild MOTIS Dataset',
     description:
-      'Regenerate motis config from gtfs_feeds, clean-rebuild the timetable + street graph with `motis import`, and restart the server on the fresh dataset.',
+      'Regenerate motis config from gtfs_feeds, build a fresh timetable + street graph with `motis import` into data.next (with the server stopped, unless built alongside), check it, then swap it in and restart the server.',
     category: 'routing',
     danger: 'caution',
     longRunning: true,
     confirm: true,
     exclusive: true,
     exec: { kind: 'process', command: 'bash', args: ['scripts/rebuild-motis.sh'] },
+    params: [
+      {
+        name: 'verify-server',
+        label: 'Trial server before swapping',
+        type: 'select',
+        apply: 'env',
+        envVar: 'MOTIS_VERIFY_SERVER',
+        default: 'auto',
+        options: [
+          { label: 'Auto (when the dataset fits in free memory)', value: 'auto' },
+          { label: 'Always', value: '1' },
+          { label: 'Never', value: '0' },
+        ],
+        description: 'Load the new dataset in a second MOTIS and query it before the swap.',
+      },
+      {
+        name: 'build-alongside',
+        label: 'Keep transit up during the import',
+        type: 'select',
+        apply: 'env',
+        envVar: 'MOTIS_BUILD_ALONGSIDE',
+        default: 'false',
+        options: [
+          { label: 'No: stop the server for the import', value: 'false' },
+          { label: 'Auto (only if 12 GB is free)', value: 'auto' },
+          { label: 'Yes: import beside the live server', value: 'true' },
+        ],
+        description:
+          'A US import peaks at 5–8 GB beside a live server of about 5 GB. By default the server is stopped, so transit is down for the import; the new dataset is still checked before the swap and the old one kept for rollback.',
+      },
+      {
+        name: 'rollback',
+        label: 'Roll back instead',
+        type: 'boolean',
+        apply: 'flag',
+        flag: '--rollback',
+        default: false,
+        description: 'Build nothing: swap the live dataset with data.prev and restart. Run again to undo.',
+      },
+    ],
     source: 'scripts/rebuild-motis.sh',
     notes:
-      'REQUIRED after every GTFS import and after any MOTIS version bump — `motis server` only serves the pre-built dataset and never re-imports, so a plain restart keeps serving stale schedules. The previous dataset is kept at /data/data.prev and restored automatically if the import fails.',
+      'REQUIRED after every GTFS import and after any MOTIS version bump — `motis server` only serves the pre-built dataset and never re-imports, so a plain restart keeps serving stale schedules. A dataset that fails its checks (no tt.bin, no trips) is discarded and the live one is left alone. The previous dataset is kept at /data/data.prev. Needs free space of about 1.2x the current dataset on the gtfs-data volume.',
   },
 
   // ── Database & Migration (in-process via existing admin service) ───────
@@ -1467,6 +1667,7 @@ export const SCRIPTS: ScriptDef[] = [
         name: 'search',
         label: 'Search after fetching',
         type: 'string',
+        format: 'text',
         apply: 'flag',
         flag: '--search',
         placeholder: 'e.g. colorado (blank = just refresh)',
@@ -1489,6 +1690,105 @@ export const SCRIPTS: ScriptDef[] = [
     source: 'scripts/check-log-rotation.sh',
     notes:
       'Read-only: it prints the recreate command rather than running it, because recreating motis after a :latest pull needs a timetable re-import first. Exits non-zero when anything is uncapped, so it can gate a cron job. Sizes only show when run as root.',
+  },
+  {
+    id: 'db-backup',
+    name: 'Back Up Database',
+    description:
+      'Dump the tables an import cannot rebuild (accounts, API keys, credits, usage, schedules, job history, regions, landmark state) to /data/backups, check the dump with pg_restore, and upload it to object storage when BACKUP_S3_BUCKET is set. Old copies are pruned in both places.',
+    category: 'database',
+    danger: 'safe',
+    longRunning: false,
+    confirm: false,
+    exclusive: true,
+    exec: { kind: 'process', command: 'bash', args: ['scripts/backup-db.sh'] },
+    params: [
+      {
+        name: 'local-only',
+        label: 'Skip the upload',
+        type: 'boolean',
+        apply: 'flag',
+        default: false,
+        description: 'Keep this dump on the server only, and leave remote backups unpruned.',
+      },
+      {
+        name: 'BACKUP_KEEP_LOCAL_DAYS',
+        label: 'Keep local copies (days)',
+        type: 'number',
+        apply: 'env',
+        envVar: 'BACKUP_KEEP_LOCAL_DAYS',
+        placeholder: 'blank = server default (7)',
+        description: 'The dump just written is always kept.',
+      },
+      {
+        name: 'BACKUP_KEEP_REMOTE_DAYS',
+        label: 'Keep remote copies (days)',
+        type: 'number',
+        apply: 'env',
+        envVar: 'BACKUP_KEEP_REMOTE_DAYS',
+        placeholder: 'blank = server default (30)',
+        description: 'The newest remote dump is always kept.',
+      },
+    ],
+    source: 'scripts/backup-db.sh',
+    notes:
+      'The table list is src/admin/backup-tables.ts. Fails the job on any error, including a dump that does not list every table, so a scheduled run that stops working shows up in Jobs.',
+  },
+  {
+    id: 'db-restore-drill',
+    name: 'Restore Drill',
+    description:
+      'Restore a backup into a scratch database next to the live one and print each table\'s row count, to prove the backups restore. The live database is not touched.',
+    category: 'database',
+    danger: 'caution',
+    longRunning: false,
+    confirm: true,
+    exclusive: true,
+    exec: { kind: 'process', command: 'bash', args: ['scripts/restore-db.sh'] },
+    params: [
+      {
+        name: 'source',
+        label: 'Backup',
+        type: 'string',
+        format: 'path',
+        apply: 'positional',
+        placeholder: 'latest, barrelman-20261104T021500Z.dump, or an object key',
+        description: 'Blank or "latest" takes the newest local dump, then the newest in the bucket.',
+      },
+      {
+        name: 'target-db',
+        label: 'Scratch database',
+        type: 'string',
+        apply: 'flag',
+        placeholder: 'blank = barrelman_restore_<time>',
+        description: 'Must start with barrelman_restore. An existing one is dropped only if a previous drill created it.',
+      },
+      {
+        name: 'drop-after',
+        label: 'Drop it afterwards',
+        type: 'boolean',
+        apply: 'flag',
+        default: true,
+      },
+    ],
+    source: 'scripts/restore-db.sh',
+    notes:
+      'Restoring over the live database is a shell-only step with a confirmation variable; see Operations → Backups in the docs.',
+  },
+  {
+    id: 'billing-reconcile',
+    name: 'Reconcile Billing',
+    description:
+      'Re-read every Polar-linked account\'s subscription and correct its plan and billing period, then log any account whose Polar meter disagrees with the overage barrelman has reported this period.',
+    category: 'database',
+    danger: 'safe',
+    longRunning: false,
+    confirm: false,
+    exclusive: true,
+    exec: { kind: 'internal', handler: 'billing:reconcile' },
+    source: 'src/services/billing-reconcile.service.ts',
+    notes:
+      'Does nothing unless billing is enabled. Meter drift is only logged, never corrected; a pass still in flight or a meter that resets on another day both show up as drift.',
   },
 ]
 

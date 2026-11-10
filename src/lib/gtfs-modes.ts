@@ -59,3 +59,10 @@ export function gtfsModeClass(routeType?: number | null): GtfsModeClass | null {
 
   return null
 }
+
+/** Whether a `route_type` runs behind fare gates, where walking between two of its stations means paying again. */
+export function isGatedRouteType(routeType?: number | null): boolean {
+  if (routeType != null && routeType >= 200 && routeType < 300) return false // coach
+  const mode = gtfsModeClass(routeType)
+  return mode === 'metro' || mode === 'regional' || mode === 'monorail' || mode === 'funicular'
+}

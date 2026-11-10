@@ -1,10 +1,16 @@
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount, watch } from 'vue'
-import maplibregl from 'maplibre-gl'
+import * as maplibregl from 'maplibre-gl'
 import 'maplibre-gl/dist/maplibre-gl.css'
+// maplibre-gl 6 finds its worker through import.meta.url, which points at the
+// bundled chunk once Vite has inlined the library. Hand it the worker Vite
+// emits instead, or the map never loads a tile.
+import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url'
 import { Crop } from 'lucide-vue-next'
 import Button from '@/components/ui/Button.vue'
 import type { Bbox } from '@/lib/types'
+
+maplibregl.setWorkerUrl(workerUrl)
 
 // Draw/adjust an import region's bounding box on a map. The box is defined by two
 // draggable corner markers (SW + NE); "Use current view" snaps it to whatever the

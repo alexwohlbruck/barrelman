@@ -14,14 +14,23 @@ export interface GraphHopperFetcher {
  * Auth is handled by the standard barrelman BARRELMAN_API_KEY check; the
  * inbound Authorization header is stripped before upstreaming.
  *
- * Standard GraphHopper endpoints supported via this proxy:
- *   /route, /isochrone, /route-optimization, /matrix, /geocode, /match,
- *   /health, /info
+ * Only the sub-paths in GRAPHHOPPER_PASSTHROUGH are forwarded; the rest 404.
+ * The whole proxy is priced as one routing call, and GraphHopper's other
+ * endpoints (/isochrone, /spt, /matrix, /match) do far more work per request
+ * than a route. Those have their own endpoints here, with their own price and
+ * limits: GET /isochrone and POST /match.
  *
  * Each call is cut off after GRAPHHOPPER_TIMEOUT_MS (504), or as soon as the
  * caller disconnects. For map matching prefer POST /match, which copes with
  * sparse traces that make the raw matcher grind.
  */
+/**
+ * GraphHopper sub-paths the proxy forwards. `route` is the raw router (still
+ * bounded by `routing.max_visited_nodes` in graphhopper-config.yml); `info`
+ * and `health` are cheap reads that describe the graph.
+ */
+export const GRAPHHOPPER_PASSTHROUGH: ReadonlySet<string> = new Set(['route', 'info', 'health'])
+
 export function createGraphHopperRoutes(deps: { fetchGraphHopper?: GraphHopperFetcher } = {}) {
   const fetchGraphHopper: GraphHopperFetcher =
     deps.fetchGraphHopper || ((url, init) => fetch(url, init))
@@ -33,6 +42,12 @@ export function createGraphHopperRoutes(deps: { fetchGraphHopper?: GraphHopperFe
       '/*',
       async ({ request, params, set, body }) => {
         const subPath = (params as Record<string, string>)['*'] || ''
+        // Exact match on the decoded path, so `route/../spt` or a trailing
+        // segment cannot reach anything outside the allowlist.
+        if (!GRAPHHOPPER_PASSTHROUGH.has(subPath)) {
+          set.status = 404
+          return { error: `Not available through this proxy. Allowed: ${[...GRAPHHOPPER_PASSTHROUGH].map((p) => `/graphhopper/${p}`).join(', ')}` }
+        }
         const url = new URL(request.url)
         const target = `${graphHopperUrl()}/${subPath}${url.search}`
 
@@ -68,7 +83,8 @@ export function createGraphHopperRoutes(deps: { fetchGraphHopper?: GraphHopperFe
             return { error: 'GraphHopper upstream timed out', timeoutMs: graphHopperTimeoutMs() }
           }
           set.status = 502
-          return { error: 'GraphHopper upstream unreachable', detail: String(err) }
+          console.error('[graphhopper] upstream unreachable', err)
+          return { error: 'GraphHopper upstream unreachable' }
         }
 
         set.status = response.status
@@ -86,7 +102,7 @@ export function createGraphHopperRoutes(deps: { fetchGraphHopper?: GraphHopperFe
         detail: {
           summary: 'GraphHopper routing engine proxy',
           description:
-            'Transparent proxy to the GraphHopper server. Forwards any sub-path under /graphhopper (e.g. /graphhopper/route, /graphhopper/isochrone) with method, query, body, and content-type preserved.',
+            'Proxy to the GraphHopper server for `/graphhopper/route`, `/graphhopper/info` and `/graphhopper/health`, with method, query, body, and content-type preserved. Any other sub-path answers 404: use `/isochrone` for reachability polygons and `POST /match` for map matching.',
           tags: ['GraphHopper'],
         },
       },

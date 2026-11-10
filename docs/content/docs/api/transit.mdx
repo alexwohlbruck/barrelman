@@ -49,8 +49,14 @@ _openapi:
       title: Get station detail with entrances and building geometry
       url: '#get-station-detail-with-entrances-and-building-geometry'
     - depth: 2
+      title: Walking paths inside a station complex
+      url: '#walking-paths-inside-a-station-complex'
+    - depth: 2
       title: Find nearest station entrance to a coordinate
       url: '#find-nearest-station-entrance-to-a-coordinate'
+    - depth: 2
+      title: List station entrances near a coordinate
+      url: '#list-station-entrances-near-a-coordinate'
   structuredData:
     headings:
       - content: Get transit route between two points
@@ -83,29 +89,43 @@ _openapi:
         id: discover-gtfs-rt-feed-urls
       - content: Get station detail with entrances and building geometry
         id: get-station-detail-with-entrances-and-building-geometry
+      - content: Walking paths inside a station complex
+        id: walking-paths-inside-a-station-complex
       - content: Find nearest station entrance to a coordinate
         id: find-nearest-station-entrance-to-a-coordinate
+      - content: List station entrances near a coordinate
+        id: list-station-entrances-near-a-coordinate
     contents:
       - content: >-
-          Queries the MOTIS transit router for itineraries between two
-          coordinates. Returns transit legs with boarding/alighting stops, route
-          info, and geometry. Walking legs are straight-line estimates — the
-          Parchment server replaces them with actual GraphHopper walking
-          routes.Itineraries carry `fare` and `farePayments` where the feeds
-          publish fare data: `farePayments` is how many separate fares the trip
-          charges, and itineraries are ordered to prefer fewer of them when the
-          time cost is small.
+          Walk-and-transit itineraries between two coordinates, reaching
+          stations within `maxWalkDistance` (default 1000 m). Each itinerary
+          starts and ends with a walk leg; walking legs are straight-line
+          estimates. Itineraries are ordered by arrival time (latest departure
+          for `arriveBy`), list each ride once, and carry `fare` and
+          `farePayments` where the feeds publish fare data. An extra fare
+          payment counts as ten minutes in the ordering.
         heading: get-transit-route-between-two-points
       - content: >-
-          Coordinate-based intermodal routing via MOTIS. Supports
-          pre/post-transit mode selection (WALK, BIKE, CAR_PARKING, RENTAL) and
-          direct non-transit modes. Requires MOTIS to have OSM street data
-          loaded. Returns legs with real OSM geometry for walk/bike/car
-          segments. Set requireBikeTransport to keep only trips that allow bike
-          carriage, for BIKE on both ends; it reads GTFS bikes_allowed, and
-          feeds that omit it return no results. Itineraries carry `fare` and
-          `farePayments` where the feeds publish fare data, and are ordered to
-          prefer fewer fare payments when the time cost is small.
+          Transit routing with access mode selection. Walking at both ends is
+          routed between nearby stations, with straight-line walk legs. BIKE,
+          CAR_PARKING, RENTAL and direct modes need MOTIS to have OSM street
+          data loaded, and return real OSM geometry for those legs. Set
+          requireBikeTransport to keep only trips that allow bike carriage, for
+          BIKE on both ends; it reads GTFS bikes_allowed, and feeds that omit it
+          return no results. Itineraries carry `fare` and `farePayments` where
+          the feeds publish fare data. Itineraries are ordered by arrival time
+          (latest departure for `arriveBy`) and list each ride once; an extra
+          fare payment counts as ten minutes in the ordering. A transit leg
+          carries `directionLabel` where its boarding platform's signed
+          direction is known ("Uptown & The Bronx"); `headsign` still names the
+          terminal. Where the station paths build covers a station, a transit
+          leg also carries `entrance` and `exit` where the train is reached
+          from or left for the street (a bus counts as street), chosen to
+          minimise street walk plus station path; `transfer`, the class of
+          change from the previous train with its walk; and
+          `boardingPosition`, where to stand on the train. Walks on the mapped
+          station come with a drawn line and written steps. A transfer's walk
+          leg lasts as long as the walk; the per-interchange margin is waiting.
         heading: intermodal-routing-with-mode-selection
       - content: >-
           Returns transit stops within a radius of the given coordinates,
@@ -155,7 +175,10 @@ _openapi:
           itself — what a merged station label stands for, where four "Canal St"
           stations are drawn as one. Pass `windowMinutes` to bound the board by
           time rather than by event count; each stop then reports `hasMore` when
-          runs exist past what was returned.
+          runs exist past what was returned. A departure carries
+          `directionLabel` where its platform's signed direction is known
+          ("Uptown & The Bronx"), from agency open data or the platform's OSM
+          `destination`; `headsign` still names the terminal.
         heading: get-upcoming-departures-at-nearby-stops
       - content: >-
           Fetches GTFS-RT VehiclePosition data from all configured feeds and
@@ -204,16 +227,42 @@ _openapi:
           `<feed-onestop-id>:<stop_id>` maps straight onto this route.
         heading: get-station-detail-with-entrances-and-building-geometry
       - content: >-
+          Every platform-to-platform and platform-to-entrance time in a station
+          complex, built from OSM at import. Each path says how it was made:
+          `graph` (walked on the mapped station), `bridged` (a gap of up to 30 m
+          in the map was bridged; `bridge` steps mark where), `agency` (the
+          feed's pathways.txt) or `estimated` (from platform geometry where the
+          map has no path). `confidence` (0–1) and `uncertaintyS` (the p90 error
+          of that source) say how far to trust it. `seconds` is from the
+          platform centre; `bestSeconds` and `bestPosition` (0–1 along the
+          platform's axis, see `axisBearing`) are from the best place to stand
+          on the row's platform end. Only `graph` and `bridged` paths carry a
+          line (`geometry`, with `vertexLevels`) and `steps`; the others are
+          times only and should not be drawn or narrated. The wheelchair profile
+          has graph and bridged paths only.
+        heading: walking-paths-inside-a-station-complex
+      - content: >-
           Returns the closest subway or train station entrance to the given
           coordinate, within maxDistance meters (default 500m). Pass
           wheelchair=true for accessible access points only: entrances tagged
           wheelchair=no are excluded, vertical access requires elevators instead
-          of stairs, and confirmed-accessible entrances are preferred.
+          of stairs, and confirmed-accessible entrances are preferred. Pass
+          `purpose` to skip entrances that only let you in or only let you out.
+          Each entrance carries `cornerLabel`, where it is from the streets
+          around it ("Broadway & West 28th Street · NW corner"), and
+          `entryAllowed`/`exitAllowed`, from OSM `entrance=exit|entry` and
+          agency open data; null means unknown.
         heading: find-nearest-station-entrance-to-a-coordinate
+      - content: >-
+          The candidates `/transit/nearest-entrance` chooses from, nearest
+          first: every access point of the best tier within maxDistance, with
+          the same fields. Lets a router weigh each entrance against the walk to
+          it rather than taking the one nearest the platform.
+        heading: list-station-entrances-near-a-coordinate
 ---
 
 {/* This file was generated by Fumadocs. Do not edit this file directly. Any changes should be made by running the generation command again. */}
 
 Trip planning via MOTIS plus live GTFS-RT data — vehicle positions, departures, alerts, stops, route detail, and station geometry.
 
-<APIPage document={"openapi.json"} operations={[{"path":"/transit/route","method":"post"},{"path":"/transit/intermodal-route","method":"post"},{"path":"/transit/stops","method":"get"},{"path":"/transit/routes","method":"get"},{"path":"/transit/departures","method":"get"},{"path":"/transit/vehicles","method":"get"},{"path":"/transit/shapes","method":"get"},{"path":"/transit/route-detail","method":"get"},{"path":"/transit/resolve-route","method":"get"},{"path":"/transit/route-vehicles","method":"get"},{"path":"/transit/trip-stops","method":"get"},{"path":"/transit/alerts","method":"get"},{"path":"/transit/bikes-allowed","method":"get"},{"path":"/transit/discover-rt-urls","method":"post"},{"path":"/transit/station/{feedId}/{stopId}","method":"get"},{"path":"/transit/nearest-entrance","method":"get"}]} webhooks={[]} hasHead={true} />
+<APIPage document={"openapi.json"} operations={[{"path":"/transit/route","method":"post"},{"path":"/transit/intermodal-route","method":"post"},{"path":"/transit/stops","method":"get"},{"path":"/transit/routes","method":"get"},{"path":"/transit/departures","method":"get"},{"path":"/transit/vehicles","method":"get"},{"path":"/transit/shapes","method":"get"},{"path":"/transit/route-detail","method":"get"},{"path":"/transit/resolve-route","method":"get"},{"path":"/transit/route-vehicles","method":"get"},{"path":"/transit/trip-stops","method":"get"},{"path":"/transit/alerts","method":"get"},{"path":"/transit/bikes-allowed","method":"get"},{"path":"/transit/discover-rt-urls","method":"post"},{"path":"/transit/station/{feedId}/{stopId}","method":"get"},{"path":"/transit/stations/{id}/paths","method":"get"},{"path":"/transit/nearest-entrance","method":"get"},{"path":"/transit/entrances","method":"get"}]} webhooks={[]} hasHead={true} />

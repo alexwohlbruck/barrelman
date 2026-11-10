@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test'
-import { deletionKeys, editDistance, maxEdits, pickCorrections } from './search-lexicon.service'
+import { deletionKeys, editDistance, maxEdits, pickCorrections, looksMisspelt } from './search-lexicon.service'
 
 /** Two words are looked up together when their keys meet. */
 const meet = (a: string, b: string) => deletionKeys(a).some((k) => deletionKeys(b).includes(k))
@@ -60,5 +60,27 @@ describe('pickCorrections', () => {
 
   test('words under four letters are never corrected', () => {
     expect(maxEdits(3)).toBe(0)
+  })
+})
+
+// Counts from the US lexicon.
+describe('looksMisspelt', () => {
+  const park = { word: 'park', n: 885_814 }
+  test('a word far rarer than a one-edit neighbour', () => {
+    expect(looksMisspelt('prak', 1, [park, { word: 'prak', n: 1 }], false)).toBe(true)
+    expect(looksMisspelt('parc', 1877, [park, { word: 'parc', n: 1877 }], false)).toBe(true)
+    expect(looksMisspelt('washingon', 0, [{ word: 'washington', n: 1_356_779 }], false)).toBe(true)
+  })
+
+  test('a correct word with a merely commoner neighbour', () => {
+    expect(looksMisspelt('divine', 1108, [{ word: 'diving', n: 9000 }], false)).toBe(false)
+  })
+
+  test('a last word still being typed', () => {
+    const central = { word: 'central', n: 180_348 }
+    expect(looksMisspelt('centra', 96, [central], true)).toBe(false)
+    expect(looksMisspelt('centra', 96, [central], false)).toBe(true)
+    // A typo in the last word is still one.
+    expect(looksMisspelt('prak', 1, [park], true)).toBe(true)
   })
 })

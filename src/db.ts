@@ -47,11 +47,50 @@ export const onnotice = (notice: unknown) => {
   if (message) console.error(`[pg notice] ${message}`)
 }
 
+/**
+ * Pool sizes, and why there are two.
+ *
+ * The main pool serves search, tiles, spatial and transit queries, any of which
+ * can hold a connection for seconds under load. Sign-in, session validation,
+ * API-key lookup, credit spending and usage metering run on every authenticated
+ * request, and before this split they queued behind those slow queries: a burst
+ * of autocomplete traffic could make a key lookup wait out the whole statement
+ * timeout. `accountsDb` gives them their own small pool so they never wait on
+ * the geo workload.
+ *
+ * Both pools are lazy (postgres-js opens a connection only when a query needs
+ * one), so the defaults cost nothing on an idle instance. Postgres's
+ * max_connections is the stock 100 (Dockerfile.db and docker-compose.yml do not
+ * raise it). The API and barrelman-ops each load this module, and so does any
+ * bun import script a job runs in ops (one job at a time); Martin keeps a pool
+ * of 20. Each API process also holds one long-lived connection outside both
+ * pools for LISTEN (services/cache-bus.service.ts); ops and scripts do not
+ * listen. In practice the defaults peak around 70-80, and the worst case is
+ * 3 × (20 + 5) + 20 + 1 = 96 plus a few short-lived maintenance connections.
+ * Raising either pool means checking that sum against max_connections.
+ *
+ * No transaction spans the two pools. Each account service runs its
+ * transactions on `accountsDb` alone, and nothing geo-side touches account
+ * tables, so moving a service between pools needs only its import changed.
+ */
+// Floored at 1: a pool of 0 would leave every query waiting forever.
+const POOL_MAX = Math.max(1, Math.floor(envNumber('DB_POOL_MAX', 20)))
+const ACCOUNTS_POOL_MAX = Math.max(1, Math.floor(envNumber('DB_ACCOUNTS_POOL_MAX', 5)))
+
 export const connection = postgres(dbUrl, {
+  max: POOL_MAX,
   connection: { statement_timeout: STATEMENT_TIMEOUT_MS },
   onnotice,
 })
 export const db = drizzle(connection)
+
+/** Account, auth, billing and metering queries. Same timeout as the main pool. */
+export const accountsConnection = postgres(dbUrl, {
+  max: ACCOUNTS_POOL_MAX,
+  connection: { statement_timeout: STATEMENT_TIMEOUT_MS },
+  onnotice,
+})
+export const accountsDb = drizzle(accountsConnection)
 
 /**
  * A short-lived connection with no statement timeout, for schema DDL and
@@ -385,6 +424,33 @@ export async function ensureBrandCatalogSchema() {
       description TEXT,
       fetched_at TIMESTAMPTZ DEFAULT NOW()
     );
+
+    -- The logo file's Commons licence (lib/commons-logo.ts), read when the
+    -- logo is resolved and backfilled for rows from before these columns.
+    -- logo_meta_at is NULL until Commons has been asked.
+    ALTER TABLE brand_logos ADD COLUMN IF NOT EXISTS logo_file TEXT;
+    ALTER TABLE brand_logos ADD COLUMN IF NOT EXISTS logo_license TEXT;
+    ALTER TABLE brand_logos ADD COLUMN IF NOT EXISTS logo_license_url TEXT;
+    ALTER TABLE brand_logos ADD COLUMN IF NOT EXISTS logo_artist TEXT;
+    ALTER TABLE brand_logos ADD COLUMN IF NOT EXISTS logo_attribution_required BOOLEAN;
+    ALTER TABLE brand_logos ADD COLUMN IF NOT EXISTS logo_public_domain BOOLEAN;
+    ALTER TABLE brand_logos ADD COLUMN IF NOT EXISTS logo_trademarked BOOLEAN;
+    ALTER TABLE brand_logos ADD COLUMN IF NOT EXISTS logo_page_url TEXT;
+    ALTER TABLE brand_logos ADD COLUMN IF NOT EXISTS logo_download_url TEXT;
+    ALTER TABLE brand_logos ADD COLUMN IF NOT EXISTS logo_meta_at TIMESTAMPTZ;
+
+    -- Logo images, fetched from Commons the first time /brand-logos asks for
+    -- one and served from here after. Keyed by Commons file name, so brands
+    -- sharing a logo share a row. Logos are a few KB each, so the database is
+    -- a simpler home than a volume: it is already shared by every API
+    -- replica and needs no mount.
+    CREATE TABLE IF NOT EXISTS brand_logo_files (
+      file TEXT PRIMARY KEY,
+      content_type TEXT NOT NULL,
+      bytes BYTEA NOT NULL,
+      etag TEXT NOT NULL,
+      fetched_at TIMESTAMPTZ DEFAULT NOW()
+    );
   `)
 }
 
@@ -411,6 +477,20 @@ export async function ensureGtfsSchema() {
 
     -- Add rt_urls column if it doesn't exist (for existing installs)
     ALTER TABLE gtfs_feeds ADD COLUMN IF NOT EXISTS rt_urls JSONB;
+
+    -- Licence terms as Transitland publishes them (yes/no/unknown answers),
+    -- recorded at discovery and by the "Refresh Feed Licences" task. NULL means
+    -- nothing is on record, which GTFS_LICENCE_POLICY treats as allowed.
+    ALTER TABLE gtfs_feeds ADD COLUMN IF NOT EXISTS license_spdx TEXT;
+    ALTER TABLE gtfs_feeds ADD COLUMN IF NOT EXISTS license_url TEXT;
+    ALTER TABLE gtfs_feeds ADD COLUMN IF NOT EXISTS license_use_without_attribution TEXT;
+    ALTER TABLE gtfs_feeds ADD COLUMN IF NOT EXISTS license_create_derived_product TEXT;
+    ALTER TABLE gtfs_feeds ADD COLUMN IF NOT EXISTS license_redistribution_allowed TEXT;
+    ALTER TABLE gtfs_feeds ADD COLUMN IF NOT EXISTS license_commercial_use_allowed TEXT;
+    ALTER TABLE gtfs_feeds ADD COLUMN IF NOT EXISTS license_share_alike_optional TEXT;
+    ALTER TABLE gtfs_feeds ADD COLUMN IF NOT EXISTS license_attribution_text TEXT;
+    ALTER TABLE gtfs_feeds ADD COLUMN IF NOT EXISTS license_attribution_instructions TEXT;
+    ALTER TABLE gtfs_feeds ADD COLUMN IF NOT EXISTS license_fetched_at TIMESTAMPTZ;
 
     CREATE TABLE IF NOT EXISTS gtfs_stops (
       id SERIAL PRIMARY KEY,
@@ -585,6 +665,46 @@ export async function ensureGtfsSchema() {
 }
 
 /**
+ * Station labels: the direction each platform is signed for, and where each
+ * entrance is. Filled by `import/refresh-station-labels.ts` after every GTFS
+ * and OSM update, never by hand. See services/station-labels.service.ts.
+ */
+export async function ensureStationLabelSchema() {
+  await runDdl(`
+    CREATE TABLE IF NOT EXISTS stop_direction_labels (
+      feed_id TEXT NOT NULL,
+      stop_id TEXT NOT NULL,
+      label TEXT NOT NULL,
+      source TEXT NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (feed_id, stop_id, source)
+    );
+
+    CREATE TABLE IF NOT EXISTS agency_entrances (
+      source TEXT NOT NULL,
+      ref TEXT NOT NULL,
+      stop_id TEXT,
+      entrance_type TEXT,
+      entry_allowed BOOLEAN,
+      exit_allowed BOOLEAN,
+      geom GEOMETRY(Point, 4326) NOT NULL,
+      PRIMARY KEY (source, ref)
+    );
+    CREATE INDEX IF NOT EXISTS agency_entrances_geom_idx ON agency_entrances USING GIST (geom);
+
+    -- Keyed on geo_places.id. NULL flags mean unknown, which callers treat as allowed.
+    CREATE TABLE IF NOT EXISTS entrance_labels (
+      id TEXT PRIMARY KEY,
+      corner_label TEXT,
+      entry_allowed BOOLEAN,
+      exit_allowed BOOLEAN,
+      access_source TEXT,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `)
+}
+
+/**
  * Create GBFS shared-mobility tables for bikeshare/scootershare.
  */
 export async function ensureGbfsSchema() {
@@ -611,6 +731,13 @@ export async function ensureGbfsSchema() {
 
     CREATE INDEX IF NOT EXISTS gbfs_systems_country_idx
       ON gbfs_systems (country_code);
+
+    -- Licence and attribution from system_information (GBFS v2.3+), when the
+    -- system publishes them. Most do not.
+    ALTER TABLE gbfs_systems ADD COLUMN IF NOT EXISTS license_id TEXT;
+    ALTER TABLE gbfs_systems ADD COLUMN IF NOT EXISTS license_url TEXT;
+    ALTER TABLE gbfs_systems ADD COLUMN IF NOT EXISTS attribution_organization_name TEXT;
+    ALTER TABLE gbfs_systems ADD COLUMN IF NOT EXISTS attribution_url TEXT;
 
     -- ── GBFS stations ─────────────────────────────────────────────────
     CREATE TABLE IF NOT EXISTS gbfs_stations (

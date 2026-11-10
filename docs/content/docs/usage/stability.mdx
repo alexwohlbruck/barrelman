@@ -1,0 +1,135 @@
+---
+title: Stability and errors
+description: What the API promises not to change, how deprecations are announced, and the shape of an error response.
+---
+
+Barrelman is on version 0.x. Even so, the API you build on does not change
+without warning. This page sets out what stays stable and how changes are
+announced.
+
+## What is stable
+
+Every endpoint and response field in the [API reference](/api) is stable. Your
+code can rely on it.
+
+Some changes can land in any release without notice:
+
+- new endpoints
+- new fields in a response
+- new optional query parameters or body fields
+- new values in a field documented as open-ended, such as a list of transit modes
+
+Write clients to ignore fields they do not recognise. A response that gains a
+field is not a breaking change.
+
+Anything not in the API reference is not covered. That includes `/admin/*`, the
+console's own endpoints and the exact wording of error messages.
+
+## Breaking changes
+
+A breaking change removes or renames a documented endpoint or field, or changes
+what one means. Making an optional parameter required counts too.
+
+Breaking changes follow this process:
+
+1. The change is announced in the [changelog](/changelog) under **Deprecated**,
+   at least 90 days before the old form is removed.
+2. The old form keeps working for those 90 days.
+3. A deprecated endpoint answers with a `Deprecation` header
+   ([RFC 9745](https://www.rfc-editor.org/rfc/rfc9745)) giving the date it was
+   deprecated. Once a removal date is set it also sends a `Sunset` header
+   ([RFC 8594](https://www.rfc-editor.org/rfc/rfc8594)). A `Link` header with
+   `rel="deprecation"` points at the description of the change.
+
+```http
+Deprecation: @1798761600
+Sunset: Thu, 01 Apr 2027 00:00:00 GMT
+Link: <https://docs.barrelman.dev/changelog>; rel="deprecation sunset"
+```
+
+Watching for the `Deprecation` header in your logs is the simplest way to catch
+a deprecation before it affects you.
+
+## Pricing changes
+
+Changes to plan prices or credit costs are announced by email to every paying
+account at least 30 days before they apply. They are also recorded in the
+changelog. [Pricing](/usage/pricing) always shows the current rates.
+
+## Versioning
+
+Paths are not versioned yet. There is no `/v1` prefix. If one is introduced,
+the unversioned paths keep working for at least 12 months after the versioned
+ones launch.
+
+## Errors
+
+Every response carries an `X-Request-Id` header, successes included. If you
+send a well-formed `X-Request-Id` (8 to 128 letters, digits, `.`, `_`, `:` or
+`-`), the API keeps it. Otherwise it assigns one.
+
+An error is JSON with an `error` message. Show the message to a person. Do not
+parse it, because its wording can change.
+
+### Server errors (5xx)
+
+A server error returns a generic message and the request id:
+
+```json
+{
+  "error": "Internal server error",
+  "requestId": "3f1c9a52-7d0e-4b8a-9c61-2a5e8f0d4b17"
+}
+```
+
+The underlying error is logged under that id. When you email
+[support@barrelman.dev](mailto:support@barrelman.dev) about a failed request,
+quote the request id. It is the fastest way for us to find what happened.
+
+A request that fails with a 5xx is not charged.
+
+### Client errors (4xx)
+
+A 4xx message says what was wrong with the request, so you can fix it. These
+responses do not include `requestId` in the body. The `X-Request-Id` header is
+still there.
+
+A request that fails validation returns `422` with details of the field that
+failed. A bad parameter caught by the endpoint itself usually returns `400`.
+
+### Refusals
+
+Authentication, credits and rate limits are checked before an endpoint runs.
+These refusals carry a stable `code` next to `error`. Branch on `code`, not on
+the message.
+
+```json
+{
+  "error": "This API key is not permitted to call isochrone endpoints",
+  "code": "scope_denied",
+  "scope": "isochrone",
+  "docs": "/docs"
+}
+```
+
+| Status | `code` | Meaning |
+|---|---|---|
+| `401` | `missing_key` | No API key was sent |
+| `401` | `invalid_key` | The key is unknown, revoked or expired. One code covers all three |
+| `402` | `insufficient_credits` | The credit allowance for this billing period is used up |
+| `402` | `overage_limit_reached` | A paid plan has reached its overage spend limit |
+| `403` | `account_suspended` | The account is suspended. `error` gives the reason when one was recorded |
+| `403` | `scope_denied` | The key's scopes do not include this endpoint group. `scope` names the group |
+| `403` | `origin_denied` | The key is restricted to other origins. `origin` is the one this request sent |
+| `429` | `rate_limited` | A rate or concurrency limit was reached. `layer` says which |
+| `429` | `too_many_failures` | Too many refused requests in a short time, so this caller is paused |
+
+A `402` also returns `remaining` and `resetsAt`, the date the allowance renews.
+
+Every `429` comes with a `Retry-After` header giving the seconds to wait. A
+client that waits that long and retries will succeed, unless it is still over
+the limit. `rate_limited` never escalates into a pause. `too_many_failures` is
+earned by requests that could never succeed, such as a wrong key sent over and
+over. Fix the request rather than retrying it.
+
+New codes may be added. Treat a code you do not recognise by its status.

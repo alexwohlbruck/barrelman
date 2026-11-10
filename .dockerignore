@@ -19,3 +19,6 @@ web/dist
 .env
 *.log
 .DS_Store
+
+# The TypeScript SDK is a separate package; the API never loads it.
+sdk/

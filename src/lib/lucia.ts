@@ -4,7 +4,8 @@
  * Lucia owns session lifetime, the sliding-expiry renewal and cookie
  * serialisation; everything else about an account (roles, plans, API keys) is
  * ours. Session rows carry a few extra attributes — the device and a hashed
- * source address — purely so the console can show "where am I signed in".
+ * source address — so the console can show "where am I signed in", and the
+ * sign-in method, which the admin passkey requirement reads.
  *
  * Note that Lucia stores session IDs in the clear: the cookie value IS the
  * primary key of the row. That is the library's design, and it matches
@@ -12,9 +13,9 @@
  */
 import { Lucia, TimeSpan } from 'lucia'
 import { DrizzlePostgreSQLAdapter } from '@lucia-auth/adapter-drizzle'
-import { db } from '../db'
-import { sessions, users, type UserRole } from '../schema/accounts'
-import { isProduction, sessionCookieName, sessionTtlMs } from '../config/accounts.config'
+import { accountsDb as db } from '../db'
+import { sessions, users, type SignInMethod, type UserRole } from '../schema/accounts'
+import { secureCookies, sessionCookieName, sessionTtlMs } from '../config/accounts.config'
 
 const adapter = new DrizzlePostgreSQLAdapter(db, sessions, users)
 
@@ -27,7 +28,7 @@ export const lucia = new Lucia(adapter, {
     // that dies with the browser window.
     expires: false,
     attributes: {
-      secure: isProduction,
+      secure: secureCookies,
       sameSite: 'lax',
       path: '/',
     },
@@ -45,6 +46,7 @@ export const lucia = new Lucia(adapter, {
   getSessionAttributes: (attrs) => ({
     userAgent: attrs.userAgent,
     ipHash: attrs.ipHash,
+    authMethod: attrs.authMethod ?? null,
     createdAt: attrs.createdAt,
   }),
 })
@@ -65,6 +67,7 @@ declare module 'lucia' {
     DatabaseSessionAttributes: {
       userAgent: string | null
       ipHash: string | null
+      authMethod: SignInMethod | null
       createdAt: Date
     }
   }

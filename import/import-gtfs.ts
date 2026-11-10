@@ -17,15 +17,21 @@ import { injectBikesAllowed } from './inject-bikes-allowed'
 import { injectTripShapesAll } from './inject-trip-shapes'
 import { importFeedFile, injectTransfersTxt, NoFixedRouteService } from './feed-import'
 import { ensureGtfsSchema } from '../src/db'
+import { stationTransferTimes, type StationTransfer } from '../src/services/station-paths.service'
 import type { GtfsRtUrl } from '../src/services/gtfs.service'
 import {
   fetchFeedList,
   computeAllTransfers,
   generateTransfersTxt,
+  transferKey,
+  gatedStops,
   generateMotisConfig,
   sanitizeGtfsZip,
   loadFeedIdentities,
+  withholdFeed,
+  type GtfsFeedInfo,
 } from '../src/services/gtfs.service'
+import { isExcludedByPolicy, licensePolicy } from '../src/lib/feed-license'
 import {
   alignRealtimeTripIds,
   describeAlignment,
@@ -195,12 +201,29 @@ async function selectRealtime(
   return kept
 }
 
+/**
+ * Withhold a feed GTFS_LICENCE_POLICY excludes: drop its rows and its zip, so
+ * neither the database nor the next MOTIS build serves it.
+ */
+async function withhold(feed: GtfsFeedInfo, zipPath: string) {
+  const terms = feed.license
+  console.log(
+    `  – Withheld ${feed.name || feed.feedId}: licence forbids ` +
+      (terms?.commercialUseAllowed === 'no' ? 'commercial use' : 'redistribution') +
+      ` (${terms?.spdxIdentifier ?? terms?.url ?? 'custom licence'})`,
+  )
+  await withholdFeed(feed)
+  rmSync(zipPath, { force: true })
+}
+
 async function main() {
   console.log(`\n=== GTFS Import Pipeline ===`)
   console.log(`Region: ${region}`)
   console.log(`Output: ${outputDir}`)
   console.log(`Transfer distance: ${transferDistance}m`)
   console.log(`Transfer concurrency: ${transferConcurrency}`)
+  const policy = licensePolicy()
+  console.log(`Licence policy: ${policy}`)
   console.log('')
 
   // Ensure schema exists
@@ -248,6 +271,18 @@ async function main() {
     if (maxFeeds) {
       feeds = feeds.slice(0, maxFeeds)
       console.log(`Limited to ${maxFeeds} feeds`)
+    }
+
+    // Feeds whose licence forbids commercial use or redistribution are not
+    // downloaded under the `commercial` policy. Unknown terms are allowed.
+    const excluded = feeds.filter(f => isExcludedByPolicy(f.license, policy))
+    if (excluded.length) {
+      console.log(`\nWithholding ${excluded.length} feed(s) under GTFS_LICENCE_POLICY=${policy}:`)
+      for (const feed of excluded) {
+        const zip = join(outputDir, `${feed.feedId.replace(/[^a-zA-Z0-9_-]/g, '_')}.zip`)
+        await withhold({ ...feed, rtUrls: feed.rtUrls ?? stored.get(feed.feedId)?.rtUrls ?? undefined }, zip)
+      }
+      feeds = feeds.filter(f => !excluded.includes(f))
     }
 
     // Step 2: Download each feed
@@ -322,6 +357,7 @@ async function main() {
       .filter(f => f.endsWith('.zip'))
       .map(f => join(outputDir, f))
     attemptedFeeds = feedFiles.length
+    const withheld = new Set<string>()
 
     for (const filepath of feedFiles) {
       const feedId = basename(filepath, '.zip')
@@ -338,6 +374,13 @@ async function main() {
         url: existing?.url || '',
         region: existing?.region || region,
         rtUrls: existing?.rtUrls ?? undefined,
+      }
+
+      // Same policy as the download path, read from the licence on record.
+      if (isExcludedByPolicy(existing?.license, policy)) {
+        await withhold({ ...feed, license: existing!.license }, filepath)
+        withheld.add(filepath)
+        continue
       }
 
       // Sanitize existing files too (they may pre-date the flex strip), then
@@ -366,6 +409,8 @@ async function main() {
         recordFailure(feedId, err)
       }
     }
+    feedFiles = feedFiles.filter(f => !withheld.has(f))
+    attemptedFeeds -= withheld.size
   }
 
   // Step 4: Compute walking transfers
@@ -400,16 +445,36 @@ async function main() {
 
     console.log(`Computed ${transfers.length} transfer pairs`)
 
+    // In-station times from the station paths build override the street walk
+    // and the agency's flat minimum. Before the first build there are none.
+    const station = await stationTransferTimes(feedFiles.map((f) => feedIdOf.get(f) ?? basename(f, '.zip')))
+      .catch((err) => {
+        console.warn(`  ! station transfer times: ${(err as Error).message}`)
+        return [] as StationTransfer[]
+      })
+    const gated = await gatedStops(feedFiles.map((f) => feedIdOf.get(f) ?? basename(f, '.zip')))
+      .catch((err) => {
+        console.warn(`  ! gated stops: ${(err as Error).message}`)
+        return new Map<string, Set<string>>()
+      })
+    if (station.length) {
+      const bySource = new Map<string, number>()
+      for (const s of station) bySource.set(s.source, (bySource.get(s.source) ?? 0) + 1)
+      console.log(`  ${station.length} in-station transfer times (${[...bySource].map(([k, v]) => `${k} ${v}`).join(', ')})`)
+    }
+
     // Write feed-specific transfers.txt into each feed ZIP
     // Only include transfers where BOTH stops belong to the target feed,
     // preventing stop ID collisions across different transit agencies.
-    if (transfers.length > 0) {
+    if (transfers.length > 0 || station.length > 0) {
       for (const filepath of feedFiles) {
         const feedId = feedIdOf.get(filepath) ?? basename(filepath, '.zip')
-        const transfersTxt = generateTransfersTxt(transfers, feedId)
+        const own = station.filter((s) => s.feedId === feedId)
+        const transfersTxt = generateTransfersTxt(transfers, feedId, own)
         const transferCount = transfersTxt.trim().split('\n').length - 1 // minus header
         try {
-          await injectTransfersTxt(filepath, transfersTxt)
+          const rail = new Set([...own.flatMap((s) => [s.fromStopId, s.toStopId]), ...(gated.get(feedId) ?? [])])
+          await injectTransfersTxt(filepath, transfersTxt, new Map(own.map((s) => [transferKey(s.fromStopId, s.toStopId), { seconds: s.seconds, source: s.source }])), rail)
           console.log(`  ✓ Injected ${transferCount} transfers into ${basename(filepath)}`)
         } catch (err) {
           console.error(`  ✗ Failed to inject into ${basename(filepath)}: ${err}`)

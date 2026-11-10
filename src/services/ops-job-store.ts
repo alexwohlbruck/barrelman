@@ -23,6 +23,7 @@ import {
   type QueuePlacement,
 } from './job-invocation'
 import { getEtaMs, recordRun, parseStage, parseCount } from './job-history.service'
+import { alertOnJobEnd } from './job-alerts.service'
 
 const MAX_JOBS = 200
 const MAX_LOG_LINES = 8000
@@ -314,6 +315,10 @@ export async function setStatus(
       exitCode: row.exit_code ?? null,
     })
   }
+
+  // Scheduled runs that fail (or recover) notify the operator. Detached so a
+  // slow webhook never holds up the job's own bookkeeping.
+  if (row && ended) void alertOnJobEnd(jobId, status)
 }
 
 export async function heartbeat(jobId: string): Promise<void> {

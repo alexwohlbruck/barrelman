@@ -6,10 +6,11 @@ import { forwardGeocode } from './geocode.service'
 import { searchTransitRoutes, searchTransitStops } from './transit-search.service'
 import { searchLocalities, isPostalShaped } from './locality-search.service'
 import { estimateMatches } from './lexeme-stats.service'
+import { LARGE_AREA_CELL, LARGE_AREA_PREDICATE, cellRanges, largeAreaIndexReady } from './large-area-search.service'
 import { executeWithin } from '../lib/bounded-query'
 import { reconcileTransitHits } from '../lib/transit-search'
 import { buildTsQueryText, isStreetQuery } from '../lib/search-query'
-import { correctionsFor } from './search-lexicon.service'
+import { correctionsFor, hasMisspelling } from './search-lexicon.service'
 import { envNumber } from '../config/env'
 
 // ── Autocomplete fast path ──────────────────────────────────────────────────
@@ -131,6 +132,16 @@ const LOCAL_NEAR_ENOUGH = 10
 
 /** Statement timeout for each local index search. */
 const LOCAL_INDEX_TIMEOUT_MS = 500
+
+/** Large areas the typeahead stage for them returns (see
+ *  large-area-search.service.ts). A handful: they are found by name, and the
+ *  probe and index stages already cover everything small and nearby. */
+const LARGE_AREA_LIMIT = 10
+
+/** Shortest last word the large-area stage runs for while it is still being
+ *  typed. A one- or two-letter prefix matches ~50K large areas ("pa:*") and
+ *  names none of them yet. */
+const LARGE_AREA_MIN_PREFIX = 3
 
 /** Statement timeout for the global FTS retry when typeahead finds nothing
  *  nearby. Rare words answer in ~150ms; past this the word is common and the
@@ -447,7 +458,11 @@ export async function searchPlaces(
     // results that only match on a location qualifier word in the name
     // (e.g. "Independence Woods" for query "walmart independence").
     const simFloor = queryWords.length > 1 ? sql`0.5` : sql`0`
-    const ftsRankExpr = sql`(1.5 * GREATEST(similarity(name, ${sanitizedQuery}), ${bestWordSim}, ${simFloor}) * ${categoryDemotion})`
+    // A name that is exactly the query edges out one with the same words in
+    // another order, which trigram similarity scores the same: "Park Central",
+    // a hotel 200 m from the viewport, tied Central Park and won on distance.
+    const exactNameBoost = sql`CASE WHEN lower(name) = lower(${sanitizedQuery}) THEN 1.1 ELSE 1.0 END`
+    const ftsRankExpr = sql`(1.5 * GREATEST(similarity(name, ${sanitizedQuery}), ${bestWordSim}, ${simFloor}) * ${categoryDemotion} * ${exactNameBoost})`
 
     // Build tsquery: every word expanded to an OR-group of its spellings
     // ("ave" ↔ "avenue", "heights" ↔ "hts", "42" ↔ "42nd" — see
@@ -481,9 +496,47 @@ export async function searchPlaces(
     `
     const ftsQuery = (local: boolean) => db.execute(ftsSql(local)).catch(() => [] as any[])
 
-    // The autocomplete fast path, staged by density (see LOCAL_PROBE_ROWS).
+    // Large named areas inside the box, which the nearest-rows probe can't
+    // reach (see large-area-search.service.ts). Restating the box as grid
+    // cells lets the index narrow by place as well as by words.
+    const boxHalfWidthDeg = Math.max(radius ?? 0, AUTOCOMPLETE_RADIUS_M) / 111320
+    const cells = localAutocomplete ? cellRanges(lng!, lat!, boxHalfWidthDeg) : null
+    const lastWord = queryWords[queryWords.length - 1] ?? ''
+    const largeAreas = async (tsExpr: ReturnType<typeof sql>, rankExpr: ReturnType<typeof sql>): Promise<any[]> => {
+      if (!cells || lastWord.length < LARGE_AREA_MIN_PREFIX || !(await largeAreaIndexReady())) return []
+      const cell = sql.raw(LARGE_AREA_CELL)
+      const inCells = sql.join(cells.map(([lo, hi]) => sql`${cell} BETWEEN ${lo} AND ${hi}`), sql` OR `)
+      return executeWithin(sql`
+        SELECT
+          id, osm_type, osm_id, name, name_abbrev, categories, tags,
+          address, hours, phones, websites, geom_type,
+          ST_AsGeoJSON(centroid)::jsonb AS geometry,
+          ${rankExpr} AS text_rank
+          ${distanceSelect}
+        FROM geo_places
+        WHERE ts @@ ${tsExpr} AND (${inCells}) AND ${sql.raw(LARGE_AREA_PREDICATE)}
+        ${autocompleteBoxFilter}
+        ${categoryFilter}
+        ${tagsFilter}
+        ORDER BY ST_Distance(centroid, ${locationPoint})
+        LIMIT ${LARGE_AREA_LIMIT}
+      `, LOCAL_INDEX_TIMEOUT_MS)
+    }
+
+    // The autocomplete fast path, staged by density (see LOCAL_PROBE_ROWS),
+    // alongside the large areas none of those stages reach.
     const localFts = async (
       tsText = tsQueryText, tsExpr = tsQueryExpr, rankExpr = ftsRankExpr,
+    ): Promise<any[]> => {
+      const [stages, areas] = await Promise.all([
+        localFtsStages(tsText, tsExpr, rankExpr),
+        largeAreas(tsExpr, rankExpr),
+      ])
+      // Duplicates collapse in the merge's id dedupe.
+      return [...stages, ...areas]
+    }
+    const localFtsStages = async (
+      tsText: string | null, tsExpr: ReturnType<typeof sql>, rankExpr: ReturnType<typeof sql>,
     ): Promise<any[]> => {
       // The probe filters an index-ordered walk, so it must not carry a ts
       // predicate the planner could turn into a bitmap instead.
@@ -607,6 +660,18 @@ export async function searchPlaces(
       ? sql`ORDER BY centroid <-> ${locationPoint} ASC`
       : sql`ORDER BY name ASC`
 
+    // The codes column also carries ref and alt_name, so a query with a space
+    // in it matches names, not codes: "central park" matched a shoe store in
+    // Virginia (ref=Central Park) and a park in Garland, Texas
+    // (alt_name=Central Park), and pinned all eleven such rows above Central
+    // Park itself. Only a code-shaped query is definitive enough to pin
+    // regardless of distance; a name-shaped one ranks with the text matches,
+    // nearest first.
+    const codeShaped = !/\s/.test(sanitizedQuery)
+    const codesOrder = codeShaped || !hasPointLocation
+      ? sql`ORDER BY (geom_type = 'line') ASC, area_m2 DESC NULLS LAST`
+      : sql`ORDER BY centroid <-> ${locationPoint} ASC`
+
     const codesPromise = sanitizedQuery.length <= 20
       ? db.execute(sql`
           SELECT
@@ -640,7 +705,7 @@ export async function searchPlaces(
           -- carried by both the airport (one big area) and dozens of road
           -- segments tagged ref=JFK (lines). Demote lines and prefer larger
           -- features so "jfk" returns the airport, not "JFK Expressway" ×40.
-          ORDER BY (geom_type = 'line') ASC, area_m2 DESC NULLS LAST
+          ${codesOrder}
           LIMIT ${limit}
         `).catch(() => [] as any[])
       : Promise.resolve([] as any[])
@@ -756,7 +821,9 @@ export async function searchPlaces(
       localAutocomplete &&
       !addressLike &&
       sanitizedQuery.length >= AUTOCOMPLETE_FALLBACK_MIN_QUERY &&
-      (ftsRows as any[]).length + (codesRows as any[]).length + (nameAbbrevRows as any[]).length +
+      // A name-shaped code match comes from anywhere, so it says nothing about
+      // whether the viewport had an answer.
+      (ftsRows as any[]).length + (codeShaped ? (codesRows as any[]).length : 0) + (nameAbbrevRows as any[]).length +
         (localityRows as any[]).length < AUTOCOMPLETE_FALLBACK_MIN
     ) {
       // Two passes side by side: the same words everywhere, for a place in
@@ -778,6 +845,17 @@ export async function searchPlaces(
       // local pass found. The dedup in the merge below collapses the overlap.
       ftsRows = [...(ftsRows as any[]), ...globalFts]
       correctedRows = corrected
+    } else if (
+      localAutocomplete &&
+      !addressLike &&
+      sanitizedQuery.length >= AUTOCOMPLETE_FALLBACK_MIN_QUERY &&
+      await hasMisspelling(correctedWords, retryPrefix)
+    ) {
+      // Something matched, but a word reads as a typo of a far commoner one,
+      // so what matched is likely the wrong thing: "prospect prak" found the
+      // town of Prospect, and "central parc" Trump Parc, never the parks.
+      // Corrected spellings nearby, as above; the exact hits keep their place.
+      correctedRows = await correctedFts(true)
     }
 
     // The deferred typo-tolerance passes promised above. The precise layers
@@ -824,13 +902,16 @@ export async function searchPlaces(
 
     // Merge, deduplicating in priority order: exact-name localities > codes >
     // other localities > short-name transit routes > abbreviation > FTS >
-    // corrected FTS > other transit routes > trigram > transit stops. Transit ids can't
+    // name-shaped codes > corrected FTS > other transit routes > trigram >
+    // transit stops. Transit ids can't
     // collide with OSM ids, so their position only decides who survives the cap.
     // Codes and locality hits are pinned — exempt from proximity re-ranking. An
     // exact IATA/ICAO code is definitive regardless of distance, and a locality
     // hit already carries its own distance decay, scaled to the size of place.
     const localityIds = new Set((localityRows as any[]).map((r: any) => r.id))
-    const pinnedIds = new Set([...(codesRows as any[]).map((r: any) => r.id), ...localityIds])
+    const pinnedCodes = codeShaped ? codesRows as any[] : []
+    const nameCodes = codeShaped ? [] : codesRows as any[]
+    const pinnedIds = new Set([...pinnedCodes.map((r: any) => r.id), ...localityIds])
     // A place's label node and nested namesakes, already folded into its
     // locality hit, would otherwise come back through FTS as duplicates.
     const seen = new Set<string>((localityRows as any[]).flatMap((r: any) => r.absorbed_ids ?? []))
@@ -847,7 +928,7 @@ export async function searchPlaces(
     const strongRoutes = (transitRouteRows as any[]).filter((r: any) => (r.text_rank ?? 0) >= STRONG_ROUTE_RANK)
     const weakRoutes = (transitRouteRows as any[]).filter((r: any) => (r.text_rank ?? 0) < STRONG_ROUTE_RANK)
     results = []
-    for (const row of [...exactLocalities, ...(codesRows as any[]), ...(localityRows as any[]), ...strongRoutes, ...(nameAbbrevRows as any[]), ...(ftsRows as any[]), ...correctedRows, ...weakRoutes, ...(trigramRows as any[]), ...(transitStopRows as any[])]) {
+    for (const row of [...exactLocalities, ...pinnedCodes, ...(localityRows as any[]), ...strongRoutes, ...(nameAbbrevRows as any[]), ...(ftsRows as any[]), ...nameCodes, ...correctedRows, ...weakRoutes, ...(trigramRows as any[]), ...(transitStopRows as any[])]) {
       const r = row as any
       if (!seen.has(r.id)) {
         seen.add(r.id)
