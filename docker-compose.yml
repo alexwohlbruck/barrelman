@@ -309,6 +309,7 @@ services:
       OLLAMA_HOST: ${OLLAMA_HOST:-http://ollama:11434}
       TTS_URL: ${TTS_URL:-}
       TTS_MODEL_REVISION: ${TTS_MODEL_REVISION:-v1.0}
+      RT_EGRESS_PROXY: ${RT_EGRESS_PROXY:-}
       PORT: 5001
       BARRELMAN_API_KEY: ${BARRELMAN_API_KEY:-brm_dev_changeme}
       # Key for hashing client addresses. Unset, derived from BARRELMAN_API_KEY.
@@ -546,6 +547,7 @@ services:
       # /gtfs-rt relay, which only answers the service credential.
       BARRELMAN_API_KEY: ${BARRELMAN_API_KEY:-brm_dev_changeme}
       MOTIS_RT_NORMALIZE_URL: ${MOTIS_RT_NORMALIZE_URL:-}
+      RT_EGRESS_PROXY: ${RT_EGRESS_PROXY:-}
       # The one variable that decides coverage. Read by the importers that run
       # here, not by the API — see https://docs.barrelman.dev/self-hosting/regions.
       REGIONS: ${REGIONS:-}
