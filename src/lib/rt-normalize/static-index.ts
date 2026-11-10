@@ -10,6 +10,8 @@ export interface StaticTrip {
   /** -1 when the feed leaves direction_id out. */
   directionId: number
   serviceId: string
+  /** '' when the feed gives none. MOTIS joins a block's trips into one run. */
+  blockId: string
   stopIds: string[]
   /** Seconds after the service day's noon-minus-12h, as GTFS writes them. */
   times: Int32Array
@@ -106,6 +108,7 @@ export function buildStaticIndex(files: GtfsFiles): StaticIndex {
       routeId: r[tc.get('route_id')!]?.trim() ?? '',
       directionId: dir === '0' || dir === '1' ? Number(dir) : -1,
       serviceId: r[tc.get('service_id')!]?.trim() ?? '',
+      blockId: r[tc.get('block_id') ?? -1]?.trim() ?? '',
       stopIds: [],
       times: new Int32Array(0),
     }

@@ -12,6 +12,10 @@
  *   - unmatched: the train is added as a NEW trip with the feed's own times;
  *   - a run that should be under way on a route the feed tracks, but that no
  *     update claims, is cancelled.
+ *
+ * Updates go out in the order their trips run. MOTIS joins a vehicle block's
+ * trips into one run and carries an update's delay on to the end of it, so a
+ * late trip applied after the next one overwrites that trip's own times.
  */
 import type { transit_realtime } from 'gtfs-realtime-bindings'
 import {
@@ -57,6 +61,8 @@ export interface NormalizeStats {
   cancelled: number
   /** Scheduled stops an update's own stop list passes over, marked SKIPPED. */
   skipped: number
+  /** Updates that came before an earlier trip of their own block, which MOTIS would let it overwrite. */
+  reordered: number
   unresolved: number
 }
 
@@ -155,7 +161,7 @@ export function normalizeFeed(
 ): { message: FeedMessage; stats: NormalizeStats } {
   const today = localDate(now, index.timezone)
   const dates = [shiftDate(today, -1), today]
-  const stats: NormalizeStats = { updates: 0, exact: 0, dated: 0, matched: 0, added: 0, cancelled: 0, skipped: 0, unresolved: 0 }
+  const stats: NormalizeStats = { updates: 0, exact: 0, dated: 0, matched: 0, added: 0, cancelled: 0, skipped: 0, reordered: 0, unresolved: 0 }
 
   const entities = message.entity ?? []
   const claimed = new Map<string, Run>()
@@ -275,7 +281,36 @@ export function normalizeFeed(
     stats.cancelled++
   }
 
-  return { message: { ...message, entity: out }, stats }
+  stats.reordered = outOfBlockOrder(entities, placed)
+  return { message: { ...message, entity: inRunningOrder(out) }, stats }
+}
+
+const firstTime = (e: FeedEntity): number => {
+  for (const s of e.tripUpdate?.stopTimeUpdate ?? []) {
+    const t = stopTime(s)
+    if (t > 0) return t
+  }
+  return Infinity
+}
+
+/** Trip updates by when they first stop; everything else ahead, in place. */
+function inRunningOrder(entities: FeedEntity[]): FeedEntity[] {
+  const key = (e: FeedEntity) => (e.tripUpdate ? firstTime(e) : -Infinity)
+  return entities.map((e, i) => ({ e, i, k: key(e) })).sort((a, b) => a.k - b.k || a.i - b.i).map(x => x.e)
+}
+
+function outOfBlockOrder(entities: FeedEntity[], placed: Map<TripUpdate, Run>): number {
+  const latest = new Map<string, number>()
+  let count = 0
+  for (const e of entities) {
+    const run = e.tripUpdate && placed.get(e.tripUpdate)
+    if (!run?.trip.blockId) continue
+    const block = `${run.trip.blockId}|${run.date}`
+    const start = run.origin + run.trip.times[0]!
+    if (start < (latest.get(block) ?? -Infinity)) count++
+    latest.set(block, Math.max(start, latest.get(block) ?? -Infinity))
+  }
+  return count
 }
 
 interface Omitted {

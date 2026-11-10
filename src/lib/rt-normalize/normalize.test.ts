@@ -88,13 +88,15 @@ describe('normalizeFeed', () => {
 
   it('gives two close trains a schedule each instead of both claiming the nearer', () => {
     const out = normalizeFeed(index, message('23:20', update('a', '23:16', 1), update('b', '23:03', 2)), at('23:20'))
-    expect(trips(out).slice(0, 2).map(t => t!.tripId)).toEqual(['T2315', 'T2300'])
+    const tripOf = (id: string) => out.message.entity!.find(e => e.id === id)!.tripUpdate!.trip!.tripId
+    expect([tripOf('a'), tripOf('b')]).toEqual(['T2315', 'T2300'])
   })
 
   it('keeps a late train on its own schedule when the next one fits its times slightly better', () => {
     // T2330 runs 8 minutes late, a minute nearer T2345's times than its own.
     const out = normalizeFeed(index, message('23:41', update('T2315..S', '23:21', 1), update('T2330..S', '23:38', 1)), at('23:41'))
-    expect(trips(out).slice(0, 2).map(t => t!.tripId)).toEqual(['T2315', 'T2330'])
+    const tripOf = (id: string) => out.message.entity!.find(e => e.id === id)!.tripUpdate!.trip!.tripId
+    expect([tripOf('T2315..S'), tripOf('T2330..S')]).toEqual(['T2315', 'T2330'])
   })
 
   it('marks a scheduled stop the update leaves out of its list as skipped', () => {
@@ -122,6 +124,14 @@ describe('normalizeFeed', () => {
     // A feed that only ever gives the next few stops.
     const nextFew = [shortTurn, ...whole.map(e => ({ ...e, tripUpdate: { ...e.tripUpdate!, stopTimeUpdate: e.tripUpdate!.stopTimeUpdate!.slice(0, 2) } }))]
     expect(normalizeFeed(index, message('23:31', ...nextFew), at('23:31')).stats.skipped).toBe(0)
+  })
+
+  it('sends updates in the order their trips run, so a late trip cannot overwrite the next one in its block', () => {
+    // One vehicle: T2300, running late, then T2345. The feed lists the later trip first.
+    const later = update('T2345', '23:45', 0, { startTime: '23:45:00' })
+    const late = update('T2300', '23:05', 12, { startTime: '23:00:00' })
+    const out = normalizeFeed(index, message('23:38', later, late), at('23:38'))
+    expect(out.message.entity!.map(e => e.id).slice(0, 2)).toEqual(['T2300', 'T2345'])
   })
 
   it('adds a train the timetable never had as a NEW trip with the feed times', () => {
