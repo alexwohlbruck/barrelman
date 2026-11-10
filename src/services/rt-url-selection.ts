@@ -54,12 +54,13 @@ async function judge(
       signal: AbortSignal.timeout(15_000),
     })
     if (response.status === 401 || response.status === 403) return { keep: false, reason: 'unauthorized' }
-    // MOTIS does not follow redirects, so a feed that moved is polled where it went.
-    const kept: Verdict = { keep: true, ...(response.ok && response.redirected && response.url && { movedTo: response.url }) }
-    if (!response.ok || rt.type === 'alerts') return kept
+    if (!response.ok) return { keep: true }
 
     const routes = routesOf(new Uint8Array(await response.arrayBuffer()))
-    if (!routes.size || !staticRoutes.size) return kept
+    // MOTIS does not follow redirects, so a feed that moved is polled where it
+    // went, once that answers with GTFS-RT rather than a parked-domain page.
+    const kept: Verdict = { keep: true, ...(response.redirected && response.url && { movedTo: response.url }) }
+    if (rt.type === 'alerts' || !routes.size || !staticRoutes.size) return kept
     for (const route of routes) if (staticRoutes.has(route)) return kept
     return { keep: false, reason: 'foreign-routes' }
   } catch {

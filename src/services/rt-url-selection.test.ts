@@ -105,6 +105,18 @@ describe('selectRtUrls', () => {
     expect(kept).toEqual([{ url: 'https://rtd.example/api/download?filename=TripUpdate.pb', type: 'tripUpdates' }])
   })
 
+  test('does not follow a redirect to something that is not a feed', async () => {
+    const fetchFn = (async () => {
+      const response = new Response('<html>domain for sale</html>', { status: 200 })
+      Object.defineProperties(response, { redirected: { value: true }, url: { value: 'https://parked.example/' } })
+      return response
+    }) as unknown as typeof fetch
+
+    const { kept } = await selectRtUrls([{ url: 'https://gone.example/tu', type: 'tripUpdates' }], SUBWAY, fetchFn)
+
+    expect(kept).toEqual([{ url: 'https://gone.example/tu', type: 'tripUpdates' }])
+  })
+
   test('fetches a URL shared by trip updates and vehicle positions once', async () => {
     const { calls, fetchFn } = serving({ 'https://mta.example/bdfm': feedOf(['B', 'D']) })
 
