@@ -24,7 +24,7 @@ import { normalizeFeed, type NormalizeStats } from '../src/lib/rt-normalize/norm
 
 /** Whether the matcher reaches enough trains MOTIS would otherwise drop. */
 export const worthNormalizing = (s: NormalizeStats) =>
-  s.matched + s.added >= Math.max(3, 0.1 * s.updates)
+  s.dated + s.matched + s.added >= Math.max(3, 0.1 * s.updates)
 
 const isTripUpdates = (rt: RtUrlEntry) => rt.type === 'tripUpdates' || rt.type === undefined
 
@@ -52,7 +52,7 @@ export async function measureRtNormalize(
       const on = worthNormalizing(stats)
       log(
         `  ${on ? '✓' : '–'} realtime ${new URL(rt.url).pathname}: ${stats.updates} updates, ` +
-          `${stats.exact} resolve as published, matching adds ${stats.matched} matched + ${stats.added} new, ` +
+          `${stats.exact} resolve as published, ${stats.dated} lack a start date, matching adds ${stats.matched} matched + ${stats.added} new, ` +
           `${stats.cancelled} cancelled${on ? ' → normalized' : ''}`,
       )
       out.push(on ? { ...base, normalize: true } : base)

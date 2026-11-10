@@ -117,6 +117,9 @@ export function buildStaticIndex(files: GtfsFiles): StaticIndex {
   // stop_times.txt runs to millions of rows; walk it line by line rather than
   // holding it as rows.
   const stopRows = new Map<StaticTrip, { seq: number; stop: string; t: number }[]>()
+  // One string per stop id rather than one per stop_times row.
+  const interned = new Map<string, string>()
+  const intern = (id: string) => interned.get(id) ?? (interned.set(id, id), id)
   let col: Map<string, number> | null = null
   for (const line of splitCsvLines(files.stopTimes)) {
     if (!col) { col = headerIndex(line); continue }
@@ -125,7 +128,7 @@ export function buildStaticIndex(files: GtfsFiles): StaticIndex {
     const t = parseGtfsTime(line[col.get('departure_time')!] ?? '') ?? parseGtfsTime(line[col.get('arrival_time')!] ?? '')
     if (t === null) continue
     const list = stopRows.get(trip) ?? stopRows.set(trip, []).get(trip)!
-    list.push({ seq: Number(line[col.get('stop_sequence')!]), stop: line[col.get('stop_id')!]!.trim(), t })
+    list.push({ seq: Number(line[col.get('stop_sequence')!]), stop: intern(line[col.get('stop_id')!]!.trim()), t })
   }
   for (const [trip, list] of stopRows) {
     list.sort((a, b) => a.seq - b.seq)

@@ -47,6 +47,8 @@ const MIN_ROUTE_COVERAGE = 0.5
 export interface NormalizeStats {
   updates: number
   exact: number
+  /** Named a scheduled trip without a start_date, which MOTIS reads as today's UTC date. */
+  dated: number
   matched: number
   added: number
   cancelled: number
@@ -79,12 +81,20 @@ function runs(index: StaticIndex, trips: StaticTrip[], dates: string[]): Run[] {
   return out
 }
 
-/** The run MOTIS itself would resolve this descriptor to, or none. */
-function exactRun(index: StaticIndex, td: TripDescriptor, dates: string[]): Run | null {
+/**
+ * The scheduled run this update names by trip_id, or none. Without a
+ * start_date, the run on whichever recent service day its times fit.
+ */
+function exactRun(index: StaticIndex, tu: TripUpdate, dates: string[], now: number): Run | null {
+  const td = tu.trip!
   if (!td.tripId) return null
-  const candidates = runs(index, index.byTripId.get(td.tripId) ?? [], td.startDate ? [td.startDate] : dates)
   const startMin = td.startTime ? Math.floor(parseClock(td.startTime) / 60) : null
-  return candidates.find(r => startMin === null || Math.floor(r.trip.times[0]! / 60) === startMin) ?? null
+  const candidates = runs(index, index.byTripId.get(td.tripId) ?? [], td.startDate ? [td.startDate] : dates)
+    .filter(r => startMin === null || Math.floor(r.trip.times[0]! / 60) === startMin)
+  if (candidates.length < 2) return candidates[0] ?? null
+  const distance = (r: Run) =>
+    fit(r, tu.stopTimeUpdate ?? []) ?? Math.abs(r.origin + (r.trip.times[0]! + r.trip.times[r.trip.times.length - 1]!) / 2 - now)
+  return candidates.reduce((best, r) => (distance(r) < distance(best) ? r : best))
 }
 
 function parseClock(s: string): number {
@@ -129,12 +139,13 @@ export function normalizeFeed(
 ): { message: FeedMessage; stats: NormalizeStats } {
   const today = localDate(now, index.timezone)
   const dates = [shiftDate(today, -1), today]
-  const stats: NormalizeStats = { updates: 0, exact: 0, matched: 0, added: 0, cancelled: 0, unresolved: 0 }
+  const stats: NormalizeStats = { updates: 0, exact: 0, dated: 0, matched: 0, added: 0, cancelled: 0, unresolved: 0 }
 
   const entities = message.entity ?? []
   const claimed = new Map<string, Run>()
   const assigned = new Map<TripUpdate, Run>()
   const loose: TripUpdate[] = []
+  const undated = new Map<TripUpdate, Run>()
   const tracked = new Set<string>()
 
   for (const e of entities) {
@@ -144,10 +155,11 @@ export function normalizeFeed(
     if (sr !== SCHEDULED && sr !== CANCELED) continue
     stats.updates++
     if (tu.trip.routeId) tracked.add(tu.trip.routeId)
-    const exact = exactRun(index, tu.trip, dates)
+    const exact = exactRun(index, tu, dates, now)
     if (exact && !claimed.has(runKey(exact))) {
       claimed.set(runKey(exact), exact)
-      stats.exact++
+      if (tu.trip.startDate) stats.exact++
+      else undated.set(tu, exact)
     } else if (tu.stopTimeUpdate?.length) {
       loose.push(tu)
     } else {
@@ -182,15 +194,16 @@ export function normalizeFeed(
   const renamed = new Map<string, TripDescriptor>()
   for (const e of entities) {
     const tu = e.tripUpdate
-    if (!tu || !loose.includes(tu)) { out.push(e); continue }
-    const run = assigned.get(tu)
-    if (run) {
+    const run = tu && (undated.get(tu) ?? assigned.get(tu))
+    if (tu && run) {
       const trip = restate(run, tu.trip!)
       if (tu.trip!.tripId) renamed.set(tu.trip!.tripId, trip)
       out.push({ ...e, tripUpdate: { ...tu, trip } })
-      stats.matched++
+      if (undated.has(tu)) stats.dated++
+      else stats.matched++
       continue
     }
+    if (!tu || !loose.includes(tu)) { out.push(e); continue }
     const added = asNewTrip(index, tu)
     if (added) {
       out.push({ ...e, tripUpdate: added })

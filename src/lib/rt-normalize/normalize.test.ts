@@ -57,6 +57,20 @@ describe('normalizeFeed', () => {
     expect(out.stats.exact).toBe(1)
   })
 
+  it("dates an update that names its trip but not its day, which MOTIS would read as UTC's today", () => {
+    // 00:20 on the 10th, local: the 23:45 trip of the 9th's service is still running.
+    const undated = update('T2345', '23:45', 10)
+    delete (undated.tripUpdate!.trip as { startDate?: string }).startDate
+    const out = normalizeFeed(index, message('24:20', undated), at('24:20'))
+    expect(trips(out)[0]).toMatchObject({ tripId: 'T2345', startDate: DATE, startTime: '23:45:00' })
+    expect(out.stats.dated).toBe(1)
+
+    // The next evening the same trip_id is that day's run, not the one before.
+    const tomorrow = update('T2345', '47:45', 2)
+    delete (tomorrow.tripUpdate!.trip as { startDate?: string }).startDate
+    expect(trips(normalizeFeed(index, message('47:50', tomorrow), at('47:50')))[0]).toMatchObject({ startDate: '20261110' })
+  })
+
   it('restates a re-timed train under its scheduled run', () => {
     // The feed names the train by its actual dispatch, four minutes late.
     const out = normalizeFeed(index, message('23:40', update('141950_D..S', '23:34', 2, { startTime: '23:34:00' })), at('23:40'))
