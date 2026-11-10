@@ -105,6 +105,7 @@ export function createLandmarkRoutes(
             'it when negative, from where the client stands it on its ground; apply it after grounding the ' +
             'model, as a rigid offset, and hide what ends up below the ground; 0 for most landmarks), ' +
             '`height` (metres the model reaches above its ground, elevation included), `minzoom`, `wikidata`, ' +
+            '`type` (what the model is, as `bridge`, `tower` or `building`, where its dataset says; absent otherwise), ' +
             '`attribution` (a credit to show while the model is drawn, where its licence asks for one), and ' +
             '`replaces` — space-separated OSM refs (`way/5013364`) of the buildings and building parts the ' +
             'model stands in for, which a client should stop extruding. Empty below zoom 12, and 204 where ' +
