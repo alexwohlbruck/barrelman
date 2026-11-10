@@ -209,8 +209,11 @@ export function normalizeFeed(
     claimed.set(runKey(run), run)
   }
 
+  // Only for runs the update names by id: a run matched on times may be a
+  // similar train on another pattern, whose extra stops the real one never had.
   const omissions = new Map<TripUpdate, Omitted>()
   for (const [tu, run] of placed) {
+    if (assigned.has(tu)) continue
     const o = omittedStops(run, tu)
     if (o) omissions.set(tu, o)
   }
