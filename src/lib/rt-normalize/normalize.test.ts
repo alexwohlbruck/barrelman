@@ -172,6 +172,9 @@ describe('normalizeFeed', () => {
     const out = normalizeFeed(index, message('23:50', late), at('23:50'))
     expect(trips(out)[0]).toMatchObject({ tripId: 'T2315', startDate: DATE })
     expect(out.stats.exact).toBe(1)
+
+    delete (late.tripUpdate!.trip as { startDate?: string }).startDate
+    expect(trips(normalizeFeed(index, message('23:50', late), at('23:50')))[0]).toMatchObject({ tripId: 'T2315', startDate: DATE })
   })
 
   it('adds a train the timetable never had as a NEW trip with the feed times', () => {

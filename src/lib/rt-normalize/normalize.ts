@@ -127,9 +127,11 @@ function exactRun(index: StaticIndex, tu: TripUpdate, dates: string[], now: numb
     const scored = candidates.map(r => ({ r, gap: fit(r, tu.stopTimeUpdate!) })).filter(c => c.gap !== null)
     const best = scored.reduce<{ r: Run; gap: number | null } | null>((a, b) => (!a || b.gap! < a.gap! ? b : a), null)
     if (best && best.gap! <= MAX_MEDIAN_GAP_S) return best.r
-    // Named down to its day, a train 40 minutes late is still that train.
-    const dated = scored.filter(c => c.r.date === td.startDate)
-    return named && dated.length === 1 && dated[0]!.gap! <= MAX_NAMED_GAP_S ? dated[0]!.r : null
+    // Named by id, a train 40 minutes late is still that train: its stated
+    // day's run, or with no day stated the nearest, the others being a day off.
+    const dated = scored.filter(c => !td.startDate || c.r.date === td.startDate)
+    const nearest = dated.reduce<(typeof dated)[number] | null>((a, b) => (!a || b.gap! < a.gap! ? b : a), null)
+    return named && nearest && (td.startDate ? dated.length === 1 : true) && nearest.gap! <= MAX_NAMED_GAP_S ? nearest.r : null
   }
   // Nothing timed to weigh: the stated day, else the run nearest now.
   const stated = candidates.find(r => r.date === td.startDate)
