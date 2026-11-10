@@ -17,6 +17,13 @@
  */
 import GtfsRealtimeBindings from 'gtfs-realtime-bindings'
 import type { FetchFn } from './transit.service'
+import { envRaw } from '../config/env'
+
+/**
+ * An HTTP proxy for agencies that refuse this server's network. Several
+ * US agencies drop connections from European datacenters.
+ */
+export const rtEgressProxy = () => envRaw('RT_EGRESS_PROXY')
 
 const decodeFeedMessage = (buf: Uint8Array) =>
   GtfsRealtimeBindings.transit_realtime.FeedMessage.decode(buf)
@@ -26,6 +33,7 @@ export interface SelectableRtUrl {
   headers?: Record<string, string>
   type?: string
   redirects?: boolean
+  egress?: boolean
 }
 
 export interface RtUrlSelection<T extends SelectableRtUrl> {
@@ -55,7 +63,7 @@ export interface StaticTripsAndStops {
 const overlaps = (a: Set<string>, b: Set<string>) => [...a].some(x => b.has(x))
 
 type DropReason = 'unauthorized' | 'foreign-routes' | 'gone' | 'stale'
-type Verdict = { keep: true; movedTo?: string; redirects?: true } | { keep: false; reason: DropReason }
+type Verdict = { keep: true; movedTo?: string; redirects?: true; egress?: true } | { keep: false; reason: DropReason }
 
 /** A feed whose header is older than this has stopped updating at that address. */
 const STALE_AFTER_S = 12 * 3600
@@ -72,11 +80,22 @@ async function judge(
   fetchFn: FetchFn,
   staticTripsAndStops?: StaticTripsAndStops,
 ): Promise<Verdict> {
+  const init = { headers: { ...(rt.headers ?? {}) } }
+  let response: Response
+  let egress = false
   try {
-    const response = await fetchFn(rt.url, {
-      headers: { ...(rt.headers ?? {}) },
-      signal: AbortSignal.timeout(15_000),
-    })
+    response = await fetchFn(rt.url, { ...init, signal: AbortSignal.timeout(15_000) })
+  } catch {
+    const proxy = rtEgressProxy()
+    if (!proxy) return { keep: true }
+    try {
+      response = await fetchFn(rt.url, { ...init, proxy, signal: AbortSignal.timeout(15_000) } as RequestInit)
+      egress = true
+    } catch {
+      return { keep: true }
+    }
+  }
+  try {
     if (response.status === 401 || response.status === 403) return { keep: false, reason: 'unauthorized' }
     if (response.status === 404 || response.status === 410) return { keep: false, reason: 'gone' }
     if (!response.ok) return { keep: true }
@@ -86,8 +105,8 @@ async function judge(
     // where it went, once that answers with GTFS-RT rather than a parked-domain
     // page; one that redirects each time (CapMetro, to that hour's upload) is
     // polled through the relay, which follows it.
-    const kept: Verdict = { keep: true }
-    if (response.redirected && response.url) {
+    const kept: Verdict = { keep: true, ...(egress && { egress: true as const }) }
+    if (response.redirected && response.url && !egress) {
       if (await movedPermanently(rt, fetchFn)) kept.movedTo = response.url
       else kept.redirects = true
     }
@@ -122,7 +141,13 @@ export async function selectRtUrls<T extends SelectableRtUrl>(
   for (const rt of rtUrls) {
     const verdict = await verdicts.get(rt.url)!
     if (verdict.keep) {
-      selection.kept.push(verdict.movedTo ? { ...rt, url: verdict.movedTo } : verdict.redirects ? { ...rt, redirects: true } : rt)
+      const { redirects: _r, egress: _e, ...base } = rt
+      selection.kept.push({
+        ...base,
+        ...(verdict.movedTo && { url: verdict.movedTo }),
+        ...(verdict.redirects && { redirects: true }),
+        ...(verdict.egress && { egress: true }),
+      } as T)
     } else if (!reported.has(rt.url)) {
       reported.add(rt.url)
       selection.dropped.push({ url: rt.url, reason: verdict.reason })

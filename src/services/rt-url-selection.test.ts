@@ -178,4 +178,19 @@ describe('selectRtUrls', () => {
     expect(kept.map(rt => rt.url)).toEqual(['https://a.example/quiet'])
     expect(dropped.map(d => d.reason)).toEqual(['gone', 'stale'])
   })
+
+  test('marks a feed that refuses this network but answers through the egress proxy', async () => {
+    process.env.RT_EGRESS_PROXY = 'http://egress.example:8888'
+    const fetchFn = (async (_url: string, init?: RequestInit & { proxy?: string }) => {
+      if (!init?.proxy) throw new Error('connect timeout')
+      return new Response(feedOf(['A']) as Uint8Array<ArrayBuffer>, { status: 200 })
+    }) as unknown as typeof fetch
+
+    const { kept } = await selectRtUrls([{ url: 'https://blocked.example/tu', type: 'tripUpdates', egress: true }], SUBWAY, fetchFn)
+    const direct = await selectRtUrls([{ url: 'https://blocked.example/tu', type: 'tripUpdates', egress: true }], SUBWAY, serving({ 'https://blocked.example/tu': feedOf(['A']) }).fetchFn)
+    delete process.env.RT_EGRESS_PROXY
+
+    expect(kept).toEqual([{ url: 'https://blocked.example/tu', type: 'tripUpdates', egress: true }])
+    expect(direct.kept).toEqual([{ url: 'https://blocked.example/tu', type: 'tripUpdates' }])
+  })
 })

@@ -52,6 +52,8 @@ export interface RtUrlEntry {
   normalize?: boolean
   /** Answers with a temporary redirect, which MOTIS won't follow, so it is polled through the relay. */
   redirects?: boolean
+  /** Refuses this server's network, so the relay fetches it through RT_EGRESS_PROXY. */
+  egress?: boolean
 }
 
 // ── GTFS Feeds ──────────────────────────────────────────────────────

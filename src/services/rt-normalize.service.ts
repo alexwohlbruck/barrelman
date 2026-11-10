@@ -13,6 +13,8 @@ import { gtfsFeeds, type RtUrlEntry } from '../schema/gtfs'
 import { envString } from '../config/env'
 import { buildStaticIndex, type StaticIndex } from '../lib/rt-normalize/static-index'
 import { normalizeFeed, type NormalizeStats } from '../lib/rt-normalize/normalize'
+import { viaRelay } from '../lib/rt-normalize/motis-sources'
+import { rtEgressProxy } from './rt-url-selection'
 
 const FeedMessage = () => GtfsRealtimeBindings.transit_realtime.FeedMessage
 
@@ -64,7 +66,8 @@ export function encodeFeed(message: object): Uint8Array {
 }
 
 export async function fetchRealtime(rt: RtUrlEntry, fetchFn: typeof fetch = fetch, timeoutMs = 15_000) {
-  const response = await fetchFn(rt.url, { headers: rt.headers ?? {}, signal: AbortSignal.timeout(timeoutMs) })
+  const proxy = rt.egress ? rtEgressProxy() : undefined
+  const response = await fetchFn(rt.url, { headers: rt.headers ?? {}, signal: AbortSignal.timeout(timeoutMs), ...(proxy && { proxy }) } as RequestInit)
   if (!response.ok) throw new Error(`upstream ${response.status}`)
   return decodeFeed(new Uint8Array(await response.arrayBuffer()))
 }
@@ -126,13 +129,14 @@ async function relay(feedId: string, rt: RtUrlEntry): Promise<NormalizedFeed> {
 
 /**
  * The rewritten message for one of a feed's realtime URLs, or null when the
- * feed has no such URL routed through the relay. A URL routed here only
- * because it redirects is passed through as published. Never an open proxy:
+ * feed has no such URL routed through the relay. A URL routed here only to
+ * be fetched, because it redirects or refuses this network, is passed through
+ * as published. Never an open proxy:
  * only URLs already on the feed's record are fetched.
  */
 export async function getNormalizedFeed(feedId: string, urlIndex: number): Promise<NormalizedFeed | null> {
   const rt = (await rtUrlsOf(feedId))[urlIndex]
-  if (!rt?.normalize && !rt?.redirects) return null
+  if (!rt || !viaRelay(rt)) return null
 
   const key = `${feedId}/${urlIndex}`
   let entry = results.get(key)
