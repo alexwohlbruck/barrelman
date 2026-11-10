@@ -10,6 +10,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.10.39] - 2026-11-10
+
 ### Added
 
 * Signed directions and entrance names. Transit legs from `/transit/intermodal-route` and `/transit/route`, and departures from `/transit/departures`, carry `directionLabel`, what the platform's signs call the direction ("Uptown & The Bronx"), beside the terminal in `headsign`. Station entrances from `/transit/nearest-entrance` and `/transit/station` carry `cornerLabel` ("Broadway & West 28th Street · NW corner"), derived from the streets of the nearest intersection, and `entryAllowed`/`exitAllowed`. `nearest-entrance` takes `purpose=enter|exit` to skip entrances that only let you out or only let you in, and the new `GET /transit/entrances` lists every candidate. Labels come from OSM (`destination` on platforms tied by `gtfs:stop_id`, `entrance=exit|entry`), enriched for the NYC subway by the MTA's Subway Stations and Entrances open data. They are stored in the new `stop_direction_labels`, `agency_entrances` and `entrance_labels` tables, created at startup and rebuilt by the new **Refresh Station Labels** task, which OSM Update, the full import and every feed import run. Run it once after upgrading.
