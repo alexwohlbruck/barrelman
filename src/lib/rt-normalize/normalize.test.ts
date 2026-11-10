@@ -160,6 +160,13 @@ describe('normalizeFeed', () => {
     expect(out.message.entity!.map(e => e.id).slice(0, 2)).toEqual(['T2300', 'T2345'])
   })
 
+  it('fits a named trip by its times when its stated start is not in the timetable, and never adds it as new', () => {
+    const out = normalizeFeed(index, message('23:40', update('T2330', '23:33', 2, { startTime: '23:31:00' })), at('23:40'))
+    expect(trips(out)[0]).toMatchObject({ tripId: 'T2330', startTime: '23:30:00' })
+    const stale = normalizeFeed(index, message('23:40', update('T2330', '18:00', 2, { startTime: '23:31:00' })), at('23:40'))
+    expect(stale.stats.added).toBe(0)
+  })
+
   it('adds a train the timetable never had as a NEW trip with the feed times', () => {
     const out = normalizeFeed(index, message('22:20', update('extra', '22:22')), at('22:20'))
     const added = out.message.entity!.find(e => e.tripUpdate?.trip?.scheduleRelationship === 8)!

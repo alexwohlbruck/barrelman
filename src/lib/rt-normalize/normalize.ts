@@ -108,8 +108,10 @@ function exactRun(index: StaticIndex, tu: TripUpdate, dates: string[], now: numb
   const startMin = td.startTime ? Math.floor(parseClock(td.startTime) / 60) : null
   const days = td.startDate ? [shiftDate(td.startDate, -1), td.startDate] : dates
   const named = index.byTripId.get(td.tripId)
-  let candidates = runs(index, named ?? [], days)
-    .filter(r => startMin === null || Math.floor(r.trip.times[0]! / 60) === startMin)
+  const startsAt = (r: Run) => startMin === null || Math.floor(r.trip.times[0]! / 60) === startMin
+  const ofNamed = runs(index, named ?? [], days)
+  // MARTA states a start_time its timetable doesn't have; the times decide then.
+  let candidates = ofNamed.some(startsAt) ? ofNamed.filter(startsAt) : ofNamed
   if (!named) {
     // CapMetro's realtime names `3000797_5797` for the timetable's `3000797_6158`.
     // Taken only when exactly one run of that prefix fits the day and start.
@@ -194,7 +196,9 @@ export function normalizeFeed(
     if (exact && !claimed.has(runKey(exact))) {
       claimed.set(runKey(exact), exact)
       placed.set(tu, exact)
-      if (tu.trip.startDate === exact.date && tu.trip.tripId === exact.trip.tripId) stats.exact++
+      const asPublished = tu.trip.startDate === exact.date && tu.trip.tripId === exact.trip.tripId &&
+        (!tu.trip.startTime || tu.trip.startTime === formatGtfsTime(exact.trip.times[0]!))
+      if (asPublished) stats.exact++
       else redated.set(tu, exact)
     } else if (tu.stopTimeUpdate?.length) {
       loose.push(tu)
@@ -365,6 +369,8 @@ function omittedStops(run: Run, tu: TripUpdate): Omitted | null {
 function asNewTrip(index: StaticIndex, tu: TripUpdate): TripUpdate | null {
   const td = tu.trip!
   if (!td.routeId || !index.routeIds.has(td.routeId)) return null
+  // A trip the timetable has is not new, however far its times have run from it.
+  if (td.tripId && index.byTripId.has(td.tripId)) return null
   const stus = (tu.stopTimeUpdate ?? []).filter(s => s.stopId && index.stopIds.has(s.stopId) && stopTime(s) > 0)
   if (stus.length < 2) return null
   return {
