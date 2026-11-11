@@ -179,6 +179,17 @@ describe('GTFS-RT feeds in the MOTIS config', () => {
   })
 })
 
+describe('MOTIS memory in the config', () => {
+  test('leaves geocoding to Pelias', async () => {
+    expect(await generateMotisConfig({ enableStreetRouting: true })).toContain('\ngeocoding: false\n')
+  })
+
+  test('caps request threads only when asked', async () => {
+    expect(await generateMotisConfig({ threads: 8 })).toContain('server:\n  n_threads: 8\n')
+    expect(await generateMotisConfig()).not.toContain('n_threads')
+  })
+})
+
 describe('the licence policy in the MOTIS config', () => {
   const feedQuery = () => statements.find((s) => sqlText(s).includes('FROM gtfs_feeds'))
   const saved = process.env.GTFS_LICENCE_POLICY

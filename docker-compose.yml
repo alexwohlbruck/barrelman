@@ -332,6 +332,8 @@ services:
       # GTFS-RT poll interval baked into motis/config.yml at import time. Unset →
       # MOTIS default 60s. Set in .env (e.g. 600) to throttle dev polling.
       MOTIS_RT_UPDATE_INTERVAL: ${MOTIS_RT_UPDATE_INTERVAL:-}
+      # MOTIS request threads, baked in the same way. Unset → one per core.
+      MOTIS_THREADS: ${MOTIS_THREADS:-}
       GTFS_DATA_DIR: /gtfs-zips
       # Read by the "Refresh Feed Licences" task, which runs in this process.
       TRANSITLAND_API_KEY: ${TRANSITLAND_API_KEY:-}
