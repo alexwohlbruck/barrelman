@@ -13,7 +13,6 @@ import {
 } from '../lib/bike-suitability/route-cost'
 import { buildCumulativeDistances, type FetchFn } from './route.service'
 
-
 export type ScoreLookup = (ids: number[]) => Promise<Map<number, number>>
 
 const PASSES = 4
