@@ -738,14 +738,48 @@ interface Station {
   lng: number
 }
 
+/** Nearest stations considered before narrowing to STATIONS_PER_END. */
+const STATION_CANDIDATES = 24
+
+/** Picked stations a route may fill: one for each side of the street. */
+const STATIONS_PER_ROUTE = 2
+
+interface StationCandidate extends Station {
+  routes: string[]
+}
+
+/**
+ * Keep `limit` stations in their given order, passing over one whose routes
+ * the picked stations already serve STATIONS_PER_ROUTE times. Without this,
+ * four stops of one streetcar take every slot and the bus at the next corner
+ * is reachable only by riding the streetcar away and walking back.
+ * Stations passed over fill whatever slots are left.
+ */
+export function pickStations(candidates: StationCandidate[], limit: number): Station[] {
+  const served = new Map<string, number>()
+  const picked: StationCandidate[] = []
+  const passed: StationCandidate[] = []
+  for (const c of candidates) {
+    if (picked.length === limit) break
+    const adds = !c.routes.length || c.routes.some((r) => (served.get(r) ?? 0) < STATIONS_PER_ROUTE)
+    if (!adds) {
+      passed.push(c)
+      continue
+    }
+    picked.push(c)
+    for (const r of c.routes) served.set(r, (served.get(r) ?? 0) + 1)
+  }
+  return [...picked, ...passed]
+    .slice(0, limit)
+    .map(({ feedId, stationId, lat, lng }) => ({ feedId, stationId, lat, lng }))
+}
+
 /**
  * The stations to try near a point: rail, subway, tram and ferry first,
- * nearest within each tier.
+ * nearest within each tier, a few per route (see `pickStations`).
  *
  * Without the tier, the handful of bus stops on the nearest corner would
- * crowd out a subway station 500 m away on any multi-km trip. Buses are
- * not lost by it: MOTIS walks from a station to the stops around it, so a
- * bus reachable from the chosen stations still comes back.
+ * crowd out a subway station 500 m away on any multi-km trip.
  *
  * A station counts as bus-only when every route it serves is a bus. The
  * test mirrors `gtfsModeClass` in src/lib/gtfs-modes.ts: 3 and 11 are
@@ -754,7 +788,7 @@ interface Station {
  */
 async function nearbyStations(at: { lat: number; lng: number }, radiusM: number): Promise<Station[]> {
   const rows = (await db.execute(sql`
-    SELECT feed_id, station_id, stop_lat, stop_lon
+    SELECT feed_id, station_id, stop_lat, stop_lon, routes
     FROM (
       SELECT DISTINCT ON (st.feed_id, COALESCE(NULLIF(st.parent_station, ''), st.stop_id))
         st.feed_id,
@@ -767,21 +801,30 @@ async function nearbyStations(at: { lat: number; lng: number }, radiusM: number)
           FROM gtfs_stop_routes sr
           JOIN gtfs_routes r ON r.feed_id = sr.feed_id AND r.route_id = sr.route_id
           WHERE sr.feed_id = st.feed_id AND sr.stop_id = st.stop_id
-        ), true) AS bus_only
+        ), true) AS bus_only,
+        ARRAY(
+          SELECT sr.feed_id || ':' || sr.route_id
+          FROM gtfs_stop_routes sr
+          WHERE sr.feed_id = st.feed_id AND sr.stop_id = st.stop_id
+        ) AS routes
       FROM gtfs_stops st
       WHERE ST_DWithin(st.geom::geography, ST_SetSRID(ST_MakePoint(${at.lng}, ${at.lat}), 4326)::geography, ${radiusM})
         AND (st.location_type = 0 OR st.location_type IS NULL)
       ORDER BY st.feed_id, COALESCE(NULLIF(st.parent_station, ''), st.stop_id), distance
     ) s
     ORDER BY bus_only, distance
-    LIMIT ${STATIONS_PER_END}
+    LIMIT ${STATION_CANDIDATES}
   `)) as any[]
-  return rows.map((r) => ({
-    feedId: r.feed_id,
-    stationId: r.station_id,
-    lat: r.stop_lat,
-    lng: r.stop_lon,
-  }))
+  return pickStations(
+    rows.map((r) => ({
+      feedId: r.feed_id,
+      stationId: r.station_id,
+      lat: r.stop_lat,
+      lng: r.stop_lon,
+      routes: r.routes ?? [],
+    })),
+    STATIONS_PER_END,
+  )
 }
 
 /** Straight-line walking time between two points, in whole seconds. */
@@ -866,6 +909,74 @@ function withStreetLegs(it: TransitItinerary, access: StationAccess, to: { lat: 
   }
 }
 
+/** Street walks run longer than the straight line; a skipped ride must still make its connection. */
+const WALK_DETOUR = 1.3
+
+const placeOf = (p: TransitLegPlace): TransitLegPlace =>
+  ({ name: p.name, lat: p.lat, lng: p.lng, stopId: p.stopId })
+
+const rideIndexes = (legs: TransitLeg[]) =>
+  legs.flatMap((l, i) => (l.transitLeg ? [i] : []))
+
+function withLegs(it: TransitItinerary, legs: TransitLeg[]): TransitItinerary {
+  const ms = (t: string) => new Date(t).getTime()
+  const walks = legs.filter((l) => l.mode === 'WALK')
+  const rides = legs.filter((l) => l.transitLeg)
+  const duration = Math.round((ms(legs[legs.length - 1].endTime) - ms(legs[0].startTime)) / 1000)
+  const walkTime = walks.reduce((t, l) => t + l.duration, 0)
+  const transitTime = rides.reduce((t, l) => t + l.duration, 0)
+  return {
+    ...it,
+    legs,
+    startTime: legs[0].startTime,
+    endTime: legs[legs.length - 1].endTime,
+    duration,
+    walkTime,
+    walkDistance: walks.reduce((d, l) => d + l.distance, 0),
+    transitTime,
+    waitingTime: Math.max(0, duration - walkTime - transitTime),
+    transfers: Math.max(0, rides.length - 1),
+  }
+}
+
+/**
+ * Replace a first ride the rider could have walked past, catching the same
+ * second vehicle, and a last ride they could have walked instead of, arriving
+ * no later. Starting at a station, MOTIS reaches a stop it didn't start from
+ * by riding one stop away and taking that stop's footpath back.
+ */
+export function skipDetourRides(
+  it: TransitItinerary,
+  ends: { from?: { lat: number; lng: number }; to: { lat: number; lng: number } },
+  maxSeconds: { pre: number; post: number },
+): TransitItinerary {
+  let legs = it.legs
+  const ms = (t: string) => new Date(t).getTime()
+  const walk = (a: { lat: number; lng: number }, b: { lat: number; lng: number }) =>
+    Math.round(walkSeconds(a, b) * WALK_DETOUR)
+
+  for (let rides = rideIndexes(legs); ends.from && rides.length > 1; rides = rideIndexes(legs)) {
+    const next = legs[rides[1]]
+    const seconds = walk(ends.from, next.from)
+    const boardMs = ms(next.startTime)
+    if (seconds > maxSeconds.pre || boardMs - seconds * 1000 < ms(legs[0].startTime)) break
+    legs = [streetLeg('WALK', originPlace(ends.from), placeOf(next.from), boardMs, seconds), ...legs.slice(rides[1])]
+  }
+
+  for (let rides = rideIndexes(legs); rides.length > 1; rides = rideIndexes(legs)) {
+    const prev = legs[rides[rides.length - 2]]
+    const seconds = walk(prev.to, ends.to)
+    const arriveMs = ms(prev.endTime) + seconds * 1000
+    if (seconds > maxSeconds.post || arriveMs > ms(legs[legs.length - 1].endTime)) break
+    legs = [
+      ...legs.slice(0, rides[rides.length - 2] + 1),
+      streetLeg('WALK', placeOf(prev.to), { name: 'Destination', ...ends.to }, arriveMs, seconds),
+    ]
+  }
+
+  return legs === it.legs ? it : withLegs(it, legs)
+}
+
 /** Feed pairs already warned about for MOTIS timetable misses (once per process). */
 const motis404Warned = new Set<string>()
 
@@ -887,6 +998,7 @@ async function planViaStations(
   fetchFn: FetchFn,
   origins: StationAccess[],
   keep: (it: TransitItinerary) => boolean = () => true,
+  walkFrom?: { lat: number; lng: number },
 ): Promise<TransitRouteResponse> {
   const dests = await nearbyStations(request.to, walkRadius(request.maxPostTransitTime))
 
@@ -915,6 +1027,10 @@ async function planViaStations(
         return itineraries
           .filter(keep)
           .map((it) => withStreetLegs(it, o, request.to))
+          .map((it) => skipDetourRides(it, { from: walkFrom, to: request.to }, {
+            pre: request.maxPreTransitTime ?? 900,
+            post: request.maxPostTransitTime ?? 900,
+          }))
           // The shift above walks to the station's nearest platform, but
           // MOTIS may board at another one further off. Drop a trip whose
           // walk would have to start before the asked time (or, arriving
@@ -964,7 +1080,7 @@ async function planViaStations(
 /** Walking at both ends: stations near the origin, walked to. */
 async function planWalkTransit(request: IntermodalRouteRequest, fetchFn: FetchFn): Promise<TransitRouteResponse> {
   const origins = await nearbyStations(request.from, walkRadius(request.maxPreTransitTime))
-  return planViaStations(request, fetchFn, origins.map(walkAccess(request.from)))
+  return planViaStations(request, fetchFn, origins.map(walkAccess(request.from)), undefined, request.from)
 }
 
 /** The first vehicle boarded is a train, tram or ferry: nobody parks for a bus. */
@@ -1065,6 +1181,11 @@ const walking = (it: TransitItinerary) =>
  * Trips that arrive together rank by changes made outside the gates, then
  * by walking, then by time on board.
  *
+ * A trip another one beats outright (leaves no earlier, arrives no later,
+ * with no more transfers, walking or fares) is dropped: riding one stop away
+ * to walk back to a bus the rider could have walked to directly. A rental
+ * pickup is kept, as the fallback when the better dock is empty.
+ *
  * The same ride reached from different stations (the station fan-out finds
  * it once per pair) is kept once, in its best-ranked form.
  */
@@ -1075,20 +1196,35 @@ export function rankItineraries(
   outOfSystem: ReadonlyMap<TransitItinerary, OutOfSystem> = new Map(),
 ): TransitItinerary[] {
   const outside = (it: TransitItinerary) => outOfSystem.get(it)?.changes ?? 0
+  const extraFares = (it: TransitItinerary) =>
+    Math.max(0, (it.farePayments ?? 1) - 1) + (outOfSystem.get(it)?.fares ?? 0)
   const cost = (it: TransitItinerary) => {
-    const extraFares = Math.max(0, (it.farePayments ?? 1) - 1) + (outOfSystem.get(it)?.fares ?? 0)
     const anchor = arriveBy
       ? -new Date(it.startTime).getTime()
       : new Date(it.endTime).getTime()
-    return anchor / 1000 + extraFares * EXTRA_FARE_S
+    return anchor / 1000 + extraFares(it) * EXTRA_FARE_S
   }
   const ranked = itineraries
     .map((it) => ({ it, cost: cost(it) }))
     .sort((a, b) => a.cost - b.cost || outside(a.it) - outside(b.it) || walking(a.it) - walking(b.it) || a.it.duration - b.it.duration)
 
+  const profile = (it: TransitItinerary) => [
+    -new Date(it.startTime).getTime(),
+    new Date(it.endTime).getTime(),
+    it.transfers,
+    walking(it),
+    extraFares(it),
+  ]
+  // Lower is better on every axis; a dominating trip always ranks first.
+  const dominates = (a: number[], b: number[]) =>
+    a.every((v, i) => v <= b[i]) && a.some((v, i) => v < b[i])
+  const profiles = ranked.map(({ it }) => profile(it))
+
   const seen = new Set<string>()
   const kept: TransitItinerary[] = []
-  for (const { it } of ranked) {
+  for (const [i, { it }] of ranked.entries()) {
+    const rents = it.legs.some((l) => l.mode === 'RENTAL')
+    if (!rents && profiles.slice(0, i).some((p) => dominates(p, profiles[i]))) continue
     const key = rideSignature(it)
     if (seen.has(key)) continue
     seen.add(key)
