@@ -41,6 +41,7 @@ export interface RouteEdgeSegment extends EdgeTags {
   bikePriority?: number   // 0–1 — GraphHopper's bike_priority encoded value (higher = friendlier for cycling)
   crossing?: string       // GH Crossing EV: MISSING | TRAFFIC_SIGNALS | MARKED | UNMARKED | UNCONTROLLED | RAILWAY | RAILWAY_BARRIER
   osmWayId?: number       // the OSM way the edge belongs to, for POST /route/lanes
+  bikeSuitability?: number // 0-100 comfort score of that way, on a bike route asked for it
   country?: string        // ISO 3166-1 alpha-3
   streetName?: string     // the street an unnamed sidewalk runs beside, from sidewalk_street_names
   streetNameSource?: 'tag' | 'geometry'
@@ -403,7 +404,9 @@ export async function getEnrichedRoute(
     return {
       ...path,
       ...(scored && { bike_suitability: { score: pathScore(ways, scores), segments: scoreSegments(ways, scores) } }),
-      edge_segments: edgeSegments,
+      edge_segments: scored
+        ? edgeSegments.map(seg => seg.osmWayId != null && scores.has(seg.osmWayId) ? { ...seg, bikeSuitability: scores.get(seg.osmWayId) } : seg)
+        : edgeSegments,
       elevation_stats: elevationStats,
       overpasses: around.overpasses,
       states: around.states.map(s => ({ ...stretch(s), ...(s.code && { code: s.code }) })),
