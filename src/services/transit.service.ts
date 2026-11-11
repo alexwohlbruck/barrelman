@@ -1108,6 +1108,11 @@ const walking = (it: TransitItinerary) =>
  * Trips that arrive together rank by changes made outside the gates, then
  * by walking, then by time on board.
  *
+ * A trip another one beats outright (leaves no earlier, arrives no later,
+ * with no more transfers, walking or fares) is dropped: riding one stop away
+ * to walk back to a bus the rider could have walked to directly. A rental
+ * pickup is kept, as the fallback when the better dock is empty.
+ *
  * The same ride reached from different stations (the station fan-out finds
  * it once per pair) is kept once, in its best-ranked form.
  */
@@ -1118,20 +1123,35 @@ export function rankItineraries(
   outOfSystem: ReadonlyMap<TransitItinerary, OutOfSystem> = new Map(),
 ): TransitItinerary[] {
   const outside = (it: TransitItinerary) => outOfSystem.get(it)?.changes ?? 0
+  const extraFares = (it: TransitItinerary) =>
+    Math.max(0, (it.farePayments ?? 1) - 1) + (outOfSystem.get(it)?.fares ?? 0)
   const cost = (it: TransitItinerary) => {
-    const extraFares = Math.max(0, (it.farePayments ?? 1) - 1) + (outOfSystem.get(it)?.fares ?? 0)
     const anchor = arriveBy
       ? -new Date(it.startTime).getTime()
       : new Date(it.endTime).getTime()
-    return anchor / 1000 + extraFares * EXTRA_FARE_S
+    return anchor / 1000 + extraFares(it) * EXTRA_FARE_S
   }
   const ranked = itineraries
     .map((it) => ({ it, cost: cost(it) }))
     .sort((a, b) => a.cost - b.cost || outside(a.it) - outside(b.it) || walking(a.it) - walking(b.it) || a.it.duration - b.it.duration)
 
+  const profile = (it: TransitItinerary) => [
+    -new Date(it.startTime).getTime(),
+    new Date(it.endTime).getTime(),
+    it.transfers,
+    walking(it),
+    extraFares(it),
+  ]
+  // Lower is better on every axis; a dominating trip always ranks first.
+  const dominates = (a: number[], b: number[]) =>
+    a.every((v, i) => v <= b[i]) && a.some((v, i) => v < b[i])
+  const profiles = ranked.map(({ it }) => profile(it))
+
   const seen = new Set<string>()
   const kept: TransitItinerary[] = []
-  for (const { it } of ranked) {
+  for (const [i, { it }] of ranked.entries()) {
+    const rents = it.legs.some((l) => l.mode === 'RENTAL')
+    if (!rents && profiles.slice(0, i).some((p) => dominates(p, profiles[i]))) continue
     const key = rideSignature(it)
     if (seen.has(key)) continue
     seen.add(key)

@@ -1178,3 +1178,39 @@ describe('pickStations', () => {
   })
 })
 
+describe('rankItineraries dominance', () => {
+  const leg = (route: string, from: number, to: number, mode = 'BUS') => {
+    const start = Date.UTC(2026, 10, 11, 21, from)
+    const end = Date.UTC(2026, 10, 11, 21, to)
+    return {
+      mode, transitLeg: mode !== 'WALK', tripId: mode === 'WALK' ? undefined : route,
+      from: { name: route, lat: 0, lng: 0, stopId: `${route}-a` },
+      to: { name: route, lat: 0, lng: 0, stopId: `${route}-b` },
+      startTime: new Date(start).toISOString(), endTime: new Date(end).toISOString(),
+      duration: (to - from) * 60, distance: 0,
+    }
+  }
+  const trip = (legs: ReturnType<typeof leg>[]): TransitItinerary => ({
+    duration: legs.reduce((s, l) => s + l.duration, 0),
+    startTime: legs[0].startTime,
+    endTime: legs[legs.length - 1].endTime,
+    walkTime: 0, transitTime: 0, waitingTime: 0, walkDistance: 0,
+    transfers: legs.filter((l) => l.transitLeg).length - 1,
+    legs,
+  })
+
+  test('drops a ride away and back when walking straight to the bus arrives as soon', () => {
+    const direct = trip([leg('walk', 28, 31, 'WALK'), leg('27', 31, 36), leg('19', 40, 47)])
+    const detour = trip([
+      leg('walk', 16, 17, 'WALK'), leg('gold', 17, 18, 'TRAM'), leg('walk', 18, 20, 'WALK'),
+      leg('17', 27, 33), leg('19', 40, 47),
+    ])
+    expect(rankItineraries([detour, direct], 5)).toEqual([direct])
+  })
+
+  test('keeps a trip that leaves earlier but walks less', () => {
+    const walky = trip([leg('walk', 20, 35, 'WALK'), leg('9', 35, 47)])
+    const ride = trip([leg('walk', 10, 12, 'WALK'), leg('27', 12, 47)])
+    expect(rankItineraries([walky, ride], 5)).toHaveLength(2)
+  })
+})
