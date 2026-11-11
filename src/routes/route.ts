@@ -108,7 +108,7 @@ GraphHopper /route with details and elevation enabled. Edge segments carry
 \`osmWayId\` and \`country\` where the routing graph has them, for POST /route/lanes.
 
 On a \`bike\` route, \`bike_suitability: { weight }\` (0 fastest – 1 safest) routes by
-how comfortable each street is to ride (the \`bike_suitability\` tiles' 0–100 score):
+how comfortable each street is to ride (the \`cycling_tiles\` 0–100 \`score\`):
 the router is re-run a few times with the most stressful ways it took deranked, and
 the pass with the least stress-weighted riding time is returned. Each path then
 carries \`bike_suitability.score\` (distance-weighted mean) and \`segments\`

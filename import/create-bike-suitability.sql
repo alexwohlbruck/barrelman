@@ -251,22 +251,40 @@ LANGUAGE sql STABLE PARALLEL SAFE AS $$
   LIMIT 1
 $$;
 
--- Tiles with each way's ends cut into short steps that meet the next way's
--- colour halfway, since MapLibre draws `line-gradient` only on GeoJSON. The
--- fade is a fixed ~14 px at every zoom, and skipped below z14 where the
--- extra pieces cost more than they show.
-CREATE OR REPLACE FUNCTION bike_suitability_tiles(z integer, x integer, y integer) RETURNS bytea
+-- Every cycling way in one tile layer, `bicycle_ways`, for both of the map's
+-- looks: the infrastructure table's ways from z9, and from z12 every rideable
+-- street with its score. From z14 each scored way's ends are cut into short
+-- steps that meet the next way's colour halfway, since MapLibre draws
+-- `line-gradient` only on GeoJSON.
+DROP FUNCTION IF EXISTS bike_suitability_tiles(integer, integer, integer);
+CREATE OR REPLACE FUNCTION cycling_tiles(z integer, x integer, y integer) RETURNS bytea
 LANGUAGE sql STABLE PARALLEL SAFE AS $$
   WITH env AS (
     SELECT ST_TileEnvelope(z, x, y) AS e3857,
            ST_Transform(ST_TileEnvelope(z, x, y, margin => 64.0 / 4096), 4326) AS e
   ),
+  scored AS (
+    SELECT b.* FROM bike_suitability b, env WHERE z >= 12 AND b.geom && env.e
+  ),
+  infra AS (
+    SELECT c.* FROM bicycle_ways c, env WHERE c.geom && env.e
+  ),
+  joined AS (
+    SELECT COALESCE(c.osm_id, (s.fid - 1) / 4) AS osm_id, COALESCE(s.fid, c.osm_id * 4 + 1) AS fid,
+           COALESCE(c.geom, s.geom) AS geom, COALESCE(c.name, s.name) AS name,
+           COALESCE(c.highway, s.highway) AS highway, COALESCE(c.surface, s.surface) AS surface,
+           COALESCE(c.bridge, s.bridge) AS bridge, COALESCE(c.tunnel, s.tunnel) AS tunnel,
+           c.infra_type, c.cycleway, c.cycleway_left, c.cycleway_right, c.bicycle, c.state, c.oneway, c.elevation,
+           s.facility, s.score, s.speed_kmh, s.lanes
+    FROM scored s FULL JOIN infra c ON c.osm_id = (s.fid - 1) / 4
+  ),
   ways AS (
-    SELECT b.*, CASE WHEN z >= 14 THEN ST_Length(b.geom::geography) END AS len,
-           14 * 40075016.7 * cos(radians(ST_Y(ST_StartPoint(b.geom)))) / (512 * 2 ^ z) AS fade_m,
-           CASE WHEN z >= 14 THEN bike_neighbour_score(ST_StartPoint(b.geom), b.name, b.fid) END AS n0,
-           CASE WHEN z >= 14 THEN bike_neighbour_score(ST_EndPoint(b.geom), b.name, b.fid) END AS n1
-    FROM bike_suitability b, env WHERE b.geom && env.e
+    SELECT j.*,
+           CASE WHEN fade THEN ST_Length(j.geom::geography) END AS len,
+           14 * 40075016.7 * cos(radians(ST_Y(ST_StartPoint(j.geom)))) / (512 * 2 ^ z) AS fade_m,
+           CASE WHEN fade THEN bike_neighbour_score(ST_StartPoint(j.geom), j.name, j.fid) END AS n0,
+           CASE WHEN fade THEN bike_neighbour_score(ST_EndPoint(j.geom), j.name, j.fid) END AS n1
+    FROM joined j, LATERAL (SELECT z >= 14 AND j.score IS NOT NULL AS fade) f
   ),
   ends AS (
     SELECT w.*,
@@ -285,11 +303,12 @@ LANGUAGE sql STABLE PARALLEL SAFE AS $$
     SELECT e.*, ST_LineSubstring(geom, 1 - f1 * (i + 1) / 6.0, 1 - f1 * i / 6.0), mid1 + (score - mid1) * (i + 0.5) / 6
     FROM ends e, generate_series(0, 5) i WHERE f1 > 0
   )
-  SELECT ST_AsMVT(t, 'bike_suitability', 4096, 'g')
+  SELECT ST_AsMVT(t, 'bicycle_ways', 4096, 'g', 'osm_id')
   FROM (
-    SELECT ST_AsMVTGeom(ST_Transform(p.piece, 3857), env.e3857, 4096, 64, true) AS g,
-           p.name, p.highway, p.facility, round(p.s)::smallint AS score, p.score AS way_score,
-           p.speed_kmh, p.lanes, p.surface, p.bridge, p.tunnel
+    SELECT ST_AsMVTGeom(ST_Transform(p.piece, 3857), env.e3857, 4096, 64, true) AS g, p.osm_id,
+           p.name, p.highway, p.surface, p.bridge, p.tunnel,
+           p.infra_type, p.cycleway, p.cycleway_left, p.cycleway_right, p.bicycle, p.state, p.oneway, p.elevation,
+           p.facility, round(p.s)::smallint AS score, p.score AS way_score, p.speed_kmh, p.lanes
     FROM pieces p, env
   ) t
   WHERE g IS NOT NULL

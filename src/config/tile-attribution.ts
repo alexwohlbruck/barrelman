@@ -34,6 +34,7 @@ const SOURCE_CREDITS: Record<string, readonly Credit[]> = {
   bridge_decks: ['osm', 'mapterhorn'],
   tunnel_cuts: ['osm', 'mapterhorn'],
   bicycle_ways: ['osm', 'mapterhorn'],
+  cycling_tiles: ['osm', 'mapterhorn'],
   landmarks: ['osm'],
 }
 
