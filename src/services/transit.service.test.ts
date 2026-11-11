@@ -72,11 +72,13 @@ import {
   extractFare,
   countFarePayments,
   pickStations,
+  skipDetourRides,
   rankItineraries,
   boardsRailOrFerry,
   MotisError,
   type TransitRouteRequest,
   type TransitItinerary,
+  type TransitLeg,
 } from './transit.service'
 
 // ── Fixtures ────────────────────────────────────────────────────────
@@ -1212,5 +1214,69 @@ describe('rankItineraries dominance', () => {
     const walky = trip([leg('walk', 20, 35, 'WALK'), leg('9', 35, 47)])
     const ride = trip([leg('walk', 10, 12, 'WALK'), leg('27', 12, 47)])
     expect(rankItineraries([walky, ride], 5)).toHaveLength(2)
+  })
+})
+
+describe('skipDetourRides', () => {
+  const at = (minute: number) => new Date(Date.UTC(2026, 10, 11, 21, minute)).toISOString()
+  const place = (name: string, lat: number, lng: number) => ({ name, lat, lng, stopId: name })
+  const home = { lat: 35.2168, lng: -80.820753 }
+  const work = { lat: 35.216106, lng: -80.855767 }
+  const hawthorne8th = place('hawthorne-8th', 35.216483, -80.821265)
+  const sunnyside = place('sunnyside', 35.219443, -80.818893)
+  const beaumont = place('7th-beaumont', 35.217053, -80.823742)
+  const ctc = place('ctc', 35.224041, -80.84134)
+  const bland = place('bland', 35.216, -80.8556)
+  const leg = (mode: string, from: any, to: any, a: number, b: number): TransitLeg => ({
+    mode, transitLeg: mode !== 'WALK', from, to, startTime: at(a), endTime: at(b),
+    duration: (b - a) * 60, distance: 0, tripId: mode === 'WALK' ? undefined : `${from.name}-${a}`,
+  })
+  const itinerary = (legs: TransitLeg[]): TransitItinerary => ({
+    duration: 0, startTime: legs[0].startTime, endTime: legs[legs.length - 1].endTime,
+    walkTime: 0, transitTime: 0, waitingTime: 0, walkDistance: 0, transfers: 2, legs,
+  })
+  const budget = { pre: 900, post: 900 }
+  const rides = (it: TransitItinerary) => it.legs.filter((l) => l.transitLeg).map((l) => l.from.name)
+
+  const detour = itinerary([
+    leg('WALK', { name: 'Origin', ...home }, hawthorne8th, 14, 15),
+    leg('TRAM', hawthorne8th, sunnyside, 15, 16),
+    leg('WALK', sunnyside, beaumont, 16, 24),
+    leg('BUS', beaumont, ctc, 33, 36),
+    leg('WALK', ctc, ctc, 36, 38),
+    leg('TRAM', ctc, bland, 42, 48),
+    leg('WALK', bland, { name: 'Destination', ...work }, 48, 48),
+  ])
+
+  test('walks straight to the bus instead of riding away from it', () => {
+    const fixed = skipDetourRides(detour, { from: home, to: work }, budget)
+    expect(rides(fixed)).toEqual(['7th-beaumont', 'ctc'])
+    expect(fixed.legs[0].to.name).toBe('7th-beaumont')
+    expect(fixed.legs[0].endTime).toBe(at(33))
+    expect(fixed.transfers).toBe(1)
+    expect(fixed.endTime).toBe(detour.endTime)
+  })
+
+  test('leaves the first ride when the walk would miss the connection', () => {
+    const tight = itinerary(detour.legs.map((l) => (l.from === beaumont ? { ...l, startTime: at(16) } : l)))
+    tight.legs[0] = { ...tight.legs[0], startTime: at(14) }
+    expect(rides(skipDetourRides(tight, { from: home, to: work }, budget))).toEqual(['hawthorne-8th', '7th-beaumont', 'ctc'])
+  })
+
+  test('without walking access it only repairs the destination end', () => {
+    expect(rides(skipDetourRides(detour, { to: work }, budget))).toEqual(['hawthorne-8th', '7th-beaumont', 'ctc'])
+  })
+
+  test('walks the last stretch when the final ride arrives no sooner', () => {
+    const slowLast = itinerary([
+      leg('WALK', { name: 'Origin', ...home }, beaumont, 28, 33),
+      leg('BUS', beaumont, bland, 33, 45),
+      leg('WALK', bland, bland, 45, 46),
+      leg('BUS', bland, place('near-work', 35.2161, -80.8557), 58, 59),
+      leg('WALK', place('near-work', 35.2161, -80.8557), { name: 'Destination', ...work }, 59, 60),
+    ])
+    const fixed = skipDetourRides(slowLast, { from: home, to: work }, budget)
+    expect(rides(fixed)).toEqual(['7th-beaumont'])
+    expect(fixed.legs[fixed.legs.length - 1].to.name).toBe('Destination')
   })
 })

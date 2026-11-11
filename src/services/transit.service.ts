@@ -909,6 +909,74 @@ function withStreetLegs(it: TransitItinerary, access: StationAccess, to: { lat: 
   }
 }
 
+/** Street walks run longer than the straight line; a skipped ride must still make its connection. */
+const WALK_DETOUR = 1.3
+
+const placeOf = (p: TransitLegPlace): TransitLegPlace =>
+  ({ name: p.name, lat: p.lat, lng: p.lng, stopId: p.stopId })
+
+const rideIndexes = (legs: TransitLeg[]) =>
+  legs.flatMap((l, i) => (l.transitLeg ? [i] : []))
+
+function withLegs(it: TransitItinerary, legs: TransitLeg[]): TransitItinerary {
+  const ms = (t: string) => new Date(t).getTime()
+  const walks = legs.filter((l) => l.mode === 'WALK')
+  const rides = legs.filter((l) => l.transitLeg)
+  const duration = Math.round((ms(legs[legs.length - 1].endTime) - ms(legs[0].startTime)) / 1000)
+  const walkTime = walks.reduce((t, l) => t + l.duration, 0)
+  const transitTime = rides.reduce((t, l) => t + l.duration, 0)
+  return {
+    ...it,
+    legs,
+    startTime: legs[0].startTime,
+    endTime: legs[legs.length - 1].endTime,
+    duration,
+    walkTime,
+    walkDistance: walks.reduce((d, l) => d + l.distance, 0),
+    transitTime,
+    waitingTime: Math.max(0, duration - walkTime - transitTime),
+    transfers: Math.max(0, rides.length - 1),
+  }
+}
+
+/**
+ * Replace a first ride the rider could have walked past, catching the same
+ * second vehicle, and a last ride they could have walked instead of, arriving
+ * no later. Starting at a station, MOTIS reaches a stop it didn't start from
+ * by riding one stop away and taking that stop's footpath back.
+ */
+export function skipDetourRides(
+  it: TransitItinerary,
+  ends: { from?: { lat: number; lng: number }; to: { lat: number; lng: number } },
+  maxSeconds: { pre: number; post: number },
+): TransitItinerary {
+  let legs = it.legs
+  const ms = (t: string) => new Date(t).getTime()
+  const walk = (a: { lat: number; lng: number }, b: { lat: number; lng: number }) =>
+    Math.round(walkSeconds(a, b) * WALK_DETOUR)
+
+  for (let rides = rideIndexes(legs); ends.from && rides.length > 1; rides = rideIndexes(legs)) {
+    const next = legs[rides[1]]
+    const seconds = walk(ends.from, next.from)
+    const boardMs = ms(next.startTime)
+    if (seconds > maxSeconds.pre || boardMs - seconds * 1000 < ms(legs[0].startTime)) break
+    legs = [streetLeg('WALK', originPlace(ends.from), placeOf(next.from), boardMs, seconds), ...legs.slice(rides[1])]
+  }
+
+  for (let rides = rideIndexes(legs); rides.length > 1; rides = rideIndexes(legs)) {
+    const prev = legs[rides[rides.length - 2]]
+    const seconds = walk(prev.to, ends.to)
+    const arriveMs = ms(prev.endTime) + seconds * 1000
+    if (seconds > maxSeconds.post || arriveMs > ms(legs[legs.length - 1].endTime)) break
+    legs = [
+      ...legs.slice(0, rides[rides.length - 2] + 1),
+      streetLeg('WALK', placeOf(prev.to), { name: 'Destination', ...ends.to }, arriveMs, seconds),
+    ]
+  }
+
+  return legs === it.legs ? it : withLegs(it, legs)
+}
+
 /** Feed pairs already warned about for MOTIS timetable misses (once per process). */
 const motis404Warned = new Set<string>()
 
@@ -930,6 +998,7 @@ async function planViaStations(
   fetchFn: FetchFn,
   origins: StationAccess[],
   keep: (it: TransitItinerary) => boolean = () => true,
+  walkFrom?: { lat: number; lng: number },
 ): Promise<TransitRouteResponse> {
   const dests = await nearbyStations(request.to, walkRadius(request.maxPostTransitTime))
 
@@ -958,6 +1027,10 @@ async function planViaStations(
         return itineraries
           .filter(keep)
           .map((it) => withStreetLegs(it, o, request.to))
+          .map((it) => skipDetourRides(it, { from: walkFrom, to: request.to }, {
+            pre: request.maxPreTransitTime ?? 900,
+            post: request.maxPostTransitTime ?? 900,
+          }))
           // The shift above walks to the station's nearest platform, but
           // MOTIS may board at another one further off. Drop a trip whose
           // walk would have to start before the asked time (or, arriving
@@ -1007,7 +1080,7 @@ async function planViaStations(
 /** Walking at both ends: stations near the origin, walked to. */
 async function planWalkTransit(request: IntermodalRouteRequest, fetchFn: FetchFn): Promise<TransitRouteResponse> {
   const origins = await nearbyStations(request.from, walkRadius(request.maxPreTransitTime))
-  return planViaStations(request, fetchFn, origins.map(walkAccess(request.from)))
+  return planViaStations(request, fetchFn, origins.map(walkAccess(request.from)), undefined, request.from)
 }
 
 /** The first vehicle boarded is a train, tram or ferry: nobody parks for a bus. */
