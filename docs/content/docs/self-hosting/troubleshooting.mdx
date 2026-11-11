@@ -361,6 +361,37 @@ A feed whose realtime is unreachable at import time is left alone rather than
 guessed at, so check that `gtfs_feeds.rt_urls` is populated before reading too
 much into a skip.
 
+If realtime comes and goes for every feed at once, check the MOTIS log for
+`No file descriptors available` or a burst of `Operation canceled`. MOTIS opens
+every realtime URL at the same moment each poll, and a large region exceeds a
+1024 open-file limit; a poll that fails drops all realtime until the next one.
+The compose file raises the limit; a container started without it can be fixed
+in place with `prlimit --pid <motis pid> --nofile=65536:524288`.
+
+Matching ids is not always enough. MOTIS also needs a trip update's
+`start_time` to equal the scheduled first departure to the minute, and some
+feeds send the time the train actually left, rename a re-timed train, or run
+trains the timetable never had. For those, MOTIS keeps the scheduled run's
+timetable time — a departure that never comes — and drops the real train.
+
+The import measures this too. Where matching each update to a scheduled run by
+the stops and times it reports reaches trains the exact lookup misses, it marks
+that realtime URL `normalize` and the generated MOTIS config polls it through
+barrelman's `/gtfs-rt` relay instead. The relay restates matched updates under
+their scheduled run, adds unmatched trains as `NEW` trips with the feed's own
+times, and cancels runs that should be under way on a route the feed covers but
+that no update accounts for. The import logs the decision per URL:
+
+```
+✓ realtime /Dataservice/mtagtfsfeeds/nyct%2Fgtfs-bdfm: 57 updates, 32 resolve as published, matching adds 12 matched + 12 new, 7 cancelled → normalized
+```
+
+To re-measure without re-importing, run the **Measure Realtime Matching** task
+(`import/measure-rt-normalize.ts`), regenerate the MOTIS config, and restart
+MOTIS. `rt` URLs are not part of the dataset's import hash, so editing them in
+`/data/data/config.yml` and restarting is enough; no `motis import` is needed.
+The relay answers only the instance service key.
+
 Discovery takes every realtime feed the feed's operator publishes, then drops
 the ones that don't serve it, and logs each drop:
 

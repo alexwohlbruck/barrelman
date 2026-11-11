@@ -24,7 +24,7 @@ import { join, basename } from 'path'
 import JSZip from 'jszip'
 import { parseArgs } from 'util'
 
-import { parseCsvRows, serializeCsvRows, headerIndex } from './csv'
+import { parseCsvRows, serializeCsvRows, headerIndex } from '../src/lib/csv'
 import { groupStopTimes, parseShapes, parseStops, type StopTimesByTrip } from '../src/services/gtfs.service'
 import { routePath, type LonLat, type RoutePath } from '../src/lib/route-hazards/route-path'
 

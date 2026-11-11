@@ -15,6 +15,7 @@ import { join, basename } from 'path'
 import { injectFaresV2 } from './inject-fares-v2'
 import { injectBikesAllowed } from './inject-bikes-allowed'
 import { injectTripShapesAll } from './inject-trip-shapes'
+import { dedupeFeedTrips } from './dedupe-feed-trips'
 import { importFeedFile, injectTransfersTxt, NoFixedRouteService } from './feed-import'
 import { ensureGtfsSchema } from '../src/db'
 import { stationTransferTimes, type StationTransfer } from '../src/services/station-paths.service'
@@ -39,8 +40,9 @@ import {
   sampleRealtimeTrips,
   type AlignmentResult,
 } from './align-trip-ids'
-import { selectRtUrls } from '../src/services/rt-url-selection'
-import { parseCsvRows, headerIndex } from './csv'
+import { rtEgressProxy, selectRtUrls } from '../src/services/rt-url-selection'
+import { measureRtNormalize } from './measure-rt-normalize'
+import { parseCsvRows, headerIndex } from '../src/lib/csv'
 import JSZip from 'jszip'
 
 // ── CLI args ────────────────────────────────────────────────────────
@@ -54,6 +56,7 @@ const { values: args } = parseArgs({
     'skip-download': { type: 'boolean', default: false },
     'skip-transfers': { type: 'boolean', default: false },
     'max-feeds': { type: 'string' },
+    'feed-ids': { type: 'string' },
     'transfer-distance': { type: 'string', default: '500' },
     'transfer-concurrency': { type: 'string', default: '8' },
   },
@@ -65,6 +68,7 @@ const outputDir = args['output-dir']!
 const skipDownload = args['skip-download']!
 const skipTransfers = args['skip-transfers']!
 const maxFeeds = args['max-feeds'] ? parseInt(args['max-feeds']) : undefined
+const onlyFeedIds = args['feed-ids'] ? new Set(args['feed-ids'].split(',').map(s => s.trim())) : undefined
 const motisConfigPath = args['motis-config']!
 const transferDistance = parseInt(args['transfer-distance']!)
 const transferConcurrency = parseInt(args['transfer-concurrency']!)
@@ -118,6 +122,53 @@ async function alignTripIds(
   }
 
   return out
+}
+
+/**
+ * A feed's static zip from the agency, or Transitland's archived copy of its
+ * latest version when the agency's server fails. A feed left on its last zip
+ * keeps serving that timetable after it runs out.
+ */
+/** The zip a URL names, where `archive.zip#inner.zip` is a feed packed inside another zip (SEPTA). */
+async function staticFromResponse(response: Response, url: string): Promise<ArrayBuffer | null> {
+  const buffer = await response.arrayBuffer()
+  const inner = new URL(url).hash.slice(1)
+  if (!inner) return buffer
+  const entry = (await JSZip.loadAsync(buffer)).file(decodeURIComponent(inner))
+  if (!entry) console.error(`  ✗ ${inner} is not in the downloaded archive`)
+  return entry ? entry.async('arraybuffer') : null
+}
+
+/** An agency that refuses this network leaves the connection hanging rather than refusing it. */
+const DOWNLOAD_TIMEOUT_MS = 120_000
+
+async function fetchStatic(url: string): Promise<Response> {
+  const attempt = (proxy?: string) => fetch(url, { signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS), ...(proxy && { proxy }) } as RequestInit)
+  const proxy = rtEgressProxy()
+  try {
+    return await attempt()
+  } catch (err) {
+    if (!proxy) throw err
+    console.log('  ↻ Retrying through the egress proxy')
+    return attempt(proxy)
+  }
+}
+
+async function downloadStatic(feed: { url: string; onestopId?: string }): Promise<ArrayBuffer | null> {
+  try {
+    const response = await fetchStatic(feed.url)
+    if (response.ok) return await staticFromResponse(response, feed.url)
+    console.error(`  ✗ Download failed: ${response.status}`)
+  } catch (err) {
+    console.error(`  ✗ Download failed: ${err instanceof Error ? err.message : err}`)
+  }
+  if (!feed.onestopId) return null
+  const archived = await fetch(
+    `https://transit.land/api/v2/rest/feeds/${encodeURIComponent(feed.onestopId)}/download_latest_feed_version?apikey=${apiKey}`,
+  ).catch(() => null)
+  if (!archived?.ok) return null
+  console.log("  ↻ Using Transitland's copy of the latest version")
+  return archived.arrayBuffer()
 }
 
 /** Downloads of alternate static feeds, shared by every feed of one operator. */
@@ -175,14 +226,31 @@ async function alignBestStatic(
   return { buffer: await alignTripIds(best.source, feed, best), url: best.url }
 }
 
-async function staticRouteIds(buffer: ArrayBuffer): Promise<Set<string>> {
-  const file = (await JSZip.loadAsync(buffer)).file('routes.txt')
+async function columnValues(zip: JSZip, name: string, column: string): Promise<Set<string>> {
+  const file = zip.file(name)
   if (!file) return new Set()
   const rows = parseCsvRows(await file.async('string'))
-  const col = rows.length ? headerIndex(rows[0]!).get('route_id') : undefined
+  const col = rows.length ? headerIndex(rows[0]!).get(column) : undefined
   if (col === undefined) return new Set()
   return new Set(rows.slice(1).map(cells => cells[col]?.trim() ?? '').filter(Boolean))
 }
+
+/**
+ * Transitland's realtime URLs plus the ones already on record, which may have
+ * been found by backfill-rt-urls.ts or corrected by hand. Selection then drops
+ * whichever no longer serve the feed.
+ */
+function withStoredRealtime(listed: GtfsRtUrl[] | undefined, stored: GtfsRtUrl[] | null | undefined): GtfsRtUrl[] | undefined {
+  const all = [...(stored ?? []), ...(listed ?? [])]
+  const seen = new Set<string>()
+  const out = all.filter(rt => {
+    const key = `${rt.type ?? ''} ${rt.url}`
+    return !seen.has(key) && !!seen.add(key)
+  })
+  return out.length ? out : undefined
+}
+
+const staticRouteIds = async (buffer: ArrayBuffer) => columnValues(await JSZip.loadAsync(buffer), 'routes.txt', 'route_id')
 
 /**
  * Drop the discovered realtime URLs that don't serve this feed, so neither the
@@ -193,7 +261,11 @@ async function selectRealtime(
   feed: { feedId: string; onestopId?: string; name?: string; rtUrls?: GtfsRtUrl[] },
 ): Promise<GtfsRtUrl[] | undefined> {
   if (!feed.rtUrls?.length) return feed.rtUrls
-  const { kept, dropped } = await selectRtUrls(feed.rtUrls, await staticRouteIds(buffer))
+  const zip = await JSZip.loadAsync(buffer)
+  const { kept, dropped } = await selectRtUrls(feed.rtUrls, await columnValues(zip, 'routes.txt', 'route_id'), fetch, {
+    trips: await columnValues(zip, 'trips.txt', 'trip_id'),
+    stops: await columnValues(zip, 'stops.txt', 'stop_id'),
+  })
   const label = feed.name || feed.onestopId || feed.feedId
   for (const { url, reason } of dropped) {
     console.log(`  ⚠ ${label}: dropped realtime ${url.split('?')[0]} (${reason})`)
@@ -268,6 +340,11 @@ async function main() {
     const rtCount = feeds.filter(f => f.rtUrls?.length).length
     console.log(`  ${rtCount} feeds have GTFS-RT URLs`)
 
+    if (onlyFeedIds) {
+      feeds = feeds.filter(f => onlyFeedIds.has(f.feedId) || onlyFeedIds.has(f.onestopId ?? ''))
+      console.log(`Limited to ${feeds.length} feed(s) named by --feed-ids`)
+    }
+
     if (maxFeeds) {
       feeds = feeds.slice(0, maxFeeds)
       console.log(`Limited to ${maxFeeds} feeds`)
@@ -299,20 +376,17 @@ async function main() {
       }
 
       try {
-        const response = await fetch(feed.url)
-        if (!response.ok) {
-          console.error(`  ✗ Download failed: ${response.status}`)
-          continue
-        }
+        const rawBuffer = await downloadStatic(feed)
+        if (!rawBuffer) continue
 
-        const rawBuffer = await response.arrayBuffer()
         console.log(`  ✓ Downloaded ${(rawBuffer.byteLength / 1024 / 1024).toFixed(1)} MB`)
 
         // Strip GTFS-Flex extension files that crash MOTIS
-        const { buffer, removedFiles } = await sanitizeGtfsZip(rawBuffer)
+        const { buffer, removedFiles, repairedFiles } = await sanitizeGtfsZip(rawBuffer)
         if (removedFiles.length > 0) {
           console.log(`  ⚠ Stripped ${removedFiles.length} GTFS-Flex files: ${removedFiles.join(', ')}`)
         }
+        if (repairedFiles.length > 0) console.log(`  ⚠ Repaired padding or timezones in ${repairedFiles.join(', ')}`)
 
         // Transitland's feed listing only finds RT URLs published on the
         // feed's own record or its `~rt` companion; backfill-rt-urls.ts also
@@ -321,12 +395,13 @@ async function main() {
         // sample what the feed's realtime actually publishes.
         const merged = {
           ...feed,
-          rtUrls: feed.rtUrls?.length ? feed.rtUrls : (stored.get(feed.feedId)?.rtUrls ?? undefined),
+          rtUrls: withStoredRealtime(feed.rtUrls, stored.get(feed.feedId)?.rtUrls),
         }
         merged.rtUrls = await selectRealtime(buffer, merged)
 
         const chosen = await alignBestStatic(buffer, merged)
         merged.url = chosen.url
+        merged.rtUrls = await measureRtNormalize(chosen.buffer, merged.rtUrls)
 
         // Step 3: Parse and import. Staged beside the feed's zip and moved
         // into place only once the import commits, so a feed that fails or is
@@ -396,6 +471,7 @@ async function main() {
         }
         feed.rtUrls = await selectRealtime(cleanBuffer, feed)
         const aligned = await alignTripIds(cleanBuffer, feed)
+        feed.rtUrls = await measureRtNormalize(aligned, feed.rtUrls)
         if (aligned !== existingBuffer) {
           writeFileSync(filepath, Buffer.from(aligned))
         }
@@ -497,6 +573,10 @@ async function main() {
       console.error(`  ✗ ${basename(filepath)}: ${err}`)
     }
   }
+
+  // Every zip, not just this run's: the feed a trip is repeated from may not have changed.
+  console.log('\n=== Dropping trips another feed already runs ===')
+  await dedupeFeedTrips(readdirSync(outputDir).filter(f => f.endsWith('.zip')).map(f => join(outputDir, f)))
 
   // Step 4d: Lend shapeless trips a sibling's shape, or MOTIS draws them as
   // straight lines between stops.

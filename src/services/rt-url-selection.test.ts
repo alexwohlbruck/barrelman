@@ -90,6 +90,47 @@ describe('selectRtUrls', () => {
     expect(kept).toHaveLength(4)
   })
 
+  test('keeps a moved feed at the address it redirects to', async () => {
+    const fetchFn = (async (_url: string, init?: RequestInit) => {
+      if (init?.redirect === 'manual') return new Response(null, { status: 308 })
+      const response = new Response(feedOf(['A']) as Uint8Array<ArrayBuffer>, { status: 200 })
+      Object.defineProperties(response, {
+        redirected: { value: true },
+        url: { value: 'https://rtd.example/api/download?filename=TripUpdate.pb' },
+      })
+      return response
+    }) as unknown as typeof fetch
+
+    const { kept } = await selectRtUrls([{ url: 'https://rtd.example/files/TripUpdate.pb', type: 'tripUpdates' }], SUBWAY, fetchFn)
+
+    expect(kept).toEqual([{ url: 'https://rtd.example/api/download?filename=TripUpdate.pb', type: 'tripUpdates' }])
+  })
+
+  test('marks a feed that redirects each time to go through the relay, at its own address', async () => {
+    const fetchFn = (async (_url: string, init?: RequestInit) => {
+      if (init?.redirect === 'manual') return new Response(null, { status: 302 })
+      const response = new Response(feedOf(['A']) as Uint8Array<ArrayBuffer>, { status: 200 })
+      Object.defineProperties(response, { redirected: { value: true }, url: { value: 'https://cap.example/files/ce01?filename=tu.pb' } })
+      return response
+    }) as unknown as typeof fetch
+
+    const { kept } = await selectRtUrls([{ url: 'https://cap.example/download/tu', type: 'tripUpdates' }], SUBWAY, fetchFn)
+
+    expect(kept).toEqual([{ url: 'https://cap.example/download/tu', type: 'tripUpdates', redirects: true }])
+  })
+
+  test('does not follow a redirect to something that is not a feed', async () => {
+    const fetchFn = (async () => {
+      const response = new Response('<html>domain for sale</html>', { status: 200 })
+      Object.defineProperties(response, { redirected: { value: true }, url: { value: 'https://parked.example/' } })
+      return response
+    }) as unknown as typeof fetch
+
+    const { kept } = await selectRtUrls([{ url: 'https://gone.example/tu', type: 'tripUpdates' }], SUBWAY, fetchFn)
+
+    expect(kept).toEqual([{ url: 'https://gone.example/tu', type: 'tripUpdates' }])
+  })
+
   test('fetches a URL shared by trip updates and vehicle positions once', async () => {
     const { calls, fetchFn } = serving({ 'https://mta.example/bdfm': feedOf(['B', 'D']) })
 
@@ -104,5 +145,61 @@ describe('selectRtUrls', () => {
 
     expect(kept).toHaveLength(2)
     expect(calls['https://mta.example/bdfm']).toBe(1)
+  })
+
+  test('judges a feed that names no routes by its trips and stops', async () => {
+    const trains = (stopId: string) =>
+      new TextEncoder().encode(JSON.stringify({ entity: [{ tripUpdate: { trip: { tripId: 'Train428' }, stopTimeUpdate: [{ stopId }] } }] }))
+    const { fetchFn } = serving({ 'https://marc.example/tu': trains('11958'), 'https://marc.example/own': trains('B1') })
+    const bus = { trips: new Set(['3401']), stops: new Set(['B1']) }
+
+    const { kept, dropped } = await selectRtUrls(
+      [{ url: 'https://marc.example/tu', type: 'tripUpdates' }, { url: 'https://marc.example/own', type: 'tripUpdates' }],
+      new Set(['11638']),
+      fetchFn,
+      bus,
+    )
+
+    expect(kept.map(rt => rt.url)).toEqual(['https://marc.example/own'])
+    expect(dropped).toEqual([{ url: 'https://marc.example/tu', reason: 'foreign-routes' }])
+  })
+
+  test('drops a feed that is gone or has stopped updating', async () => {
+    const old = new TextEncoder().encode(JSON.stringify({ header: { timestamp: Date.now() / 1000 - 2 * 3600 }, entity: [] }))
+    const frozen = new TextEncoder().encode(JSON.stringify({ header: { timestamp: Date.now() / 1000 - 26 * 3600 }, entity: [] }))
+    const { fetchFn } = serving({ 'https://a.example/gone': 404, 'https://a.example/frozen': frozen, 'https://a.example/quiet': old })
+
+    const { kept, dropped } = await selectRtUrls(
+      ['gone', 'frozen', 'quiet'].map(p => ({ url: `https://a.example/${p}`, type: 'tripUpdates' })),
+      SUBWAY,
+      fetchFn,
+    )
+
+    expect(kept.map(rt => rt.url)).toEqual(['https://a.example/quiet'])
+    expect(dropped.map(d => d.reason)).toEqual(['gone', 'stale'])
+  })
+
+  test('marks a feed that refuses this network but answers through the egress proxy', async () => {
+    process.env.RT_EGRESS_PROXY = 'http://egress.example:8888'
+    const fetchFn = (async (_url: string, init?: RequestInit & { proxy?: string }) => {
+      if (!init?.proxy) throw new Error('connect timeout')
+      return new Response(feedOf(['A']) as Uint8Array<ArrayBuffer>, { status: 200 })
+    }) as unknown as typeof fetch
+
+    const { kept } = await selectRtUrls([{ url: 'https://blocked.example/tu', type: 'tripUpdates', egress: true }], SUBWAY, fetchFn)
+    const direct = await selectRtUrls([{ url: 'https://blocked.example/tu', type: 'tripUpdates', egress: true }], SUBWAY, serving({ 'https://blocked.example/tu': feedOf(['A']) }).fetchFn)
+    delete process.env.RT_EGRESS_PROXY
+
+    expect(kept).toEqual([{ url: 'https://blocked.example/tu', type: 'tripUpdates', egress: true }])
+    expect(direct.kept).toEqual([{ url: 'https://blocked.example/tu', type: 'tripUpdates' }])
+  })
+
+  test('keeps a feed that served an undecodable message, marked flaky for good', async () => {
+    const { fetchFn } = serving({ 'https://via.example/tu': new TextEncoder().encode('{half a file') })
+    const first = await selectRtUrls([{ url: 'https://via.example/tu', type: 'tripUpdates' }], SUBWAY, fetchFn)
+    const later = await selectRtUrls(first.kept, SUBWAY, serving({ 'https://via.example/tu': feedOf(['A']) }).fetchFn)
+
+    expect(first.kept).toEqual([{ url: 'https://via.example/tu', type: 'tripUpdates', flaky: true }])
+    expect(later.kept).toEqual(first.kept)
   })
 })

@@ -10,6 +10,13 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.10.41] - 2026-11-10
+
+### Fixed
+
+* Realtime that MOTIS used to drop now reaches it. A new `/gtfs-rt` relay matches trip updates to their scheduled runs by stops and times, dates the ones without a start date (51 of 111 live US feeds, which MOTIS read as tomorrow's runs every evening), adds unscheduled trains and cancels silent ones. It also fetches feeds that redirect, that serve half-written files, or that refuse the server's network (through `RT_EGRESS_PROXY`). The import decides per URL which need it. MOTIS's open-file limit is raised so polls stop failing, and the nightly GTFS check moves to 05:45 UTC.
+* GTFS imports now find agencies whose region lists only a keyed aggregate (BART, Caltrain, VTA, AC Transit), unpack `archive.zip#inner.zip` feeds (SEPTA), read stray quote marks as text, trim feeds that pad every field so MOTIS stops dropping them (Metra), drop trips a sibling feed already runs (RTD's flex feed repeated every Denver trip), and keep corrected realtime URLs while dropping ones that are gone or stale. `--feed-ids` imports just the named feeds.
+
 ## [0.10.40] - 2026-11-10
 
 ### Added

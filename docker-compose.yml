@@ -263,6 +263,12 @@ services:
     # in production, and nothing acts on it: unresolvable realtime ids are
     # normal for feeds whose RT and static halves disagree.
     command: ["/motis", "server", "/data", "--log-level", "info"]
+    # MOTIS opens every realtime URL at once each poll; a US instance has
+    # ~2500. At Docker's default soft limit of 1024 a third of polls failed.
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 524288
     volumes:
       - barrelman-gtfs-data:/data
       - barrelman-osm-data:/osm-data:ro
@@ -303,6 +309,7 @@ services:
       OLLAMA_HOST: ${OLLAMA_HOST:-http://ollama:11434}
       TTS_URL: ${TTS_URL:-}
       TTS_MODEL_REVISION: ${TTS_MODEL_REVISION:-v1.0}
+      RT_EGRESS_PROXY: ${RT_EGRESS_PROXY:-}
       PORT: 5001
       BARRELMAN_API_KEY: ${BARRELMAN_API_KEY:-brm_dev_changeme}
       # Key for hashing client addresses. Unset, derived from BARRELMAN_API_KEY.
@@ -536,6 +543,11 @@ services:
       GTFS_RT_CREDENTIALS: ${GTFS_RT_CREDENTIALS:-}
       GTFS_LICENCE_POLICY: ${GTFS_LICENCE_POLICY:-}
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      # The generated MOTIS config polls normalized realtime from the API's
+      # /gtfs-rt relay, which only answers the service credential.
+      BARRELMAN_API_KEY: ${BARRELMAN_API_KEY:-brm_dev_changeme}
+      MOTIS_RT_NORMALIZE_URL: ${MOTIS_RT_NORMALIZE_URL:-}
+      RT_EGRESS_PROXY: ${RT_EGRESS_PROXY:-}
       # The one variable that decides coverage. Read by the importers that run
       # here, not by the API — see https://docs.barrelman.dev/self-hosting/regions.
       REGIONS: ${REGIONS:-}
