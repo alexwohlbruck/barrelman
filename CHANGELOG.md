@@ -10,9 +10,7 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
-### Added
-
-### Changed
+## [0.10.41] - 2026-11-10
 
 ### Fixed
 
