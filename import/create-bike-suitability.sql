@@ -239,3 +239,58 @@ FROM geo_places, LATERAL (SELECT bike_facility(tags) as facility) f
 WHERE geom_type = 'line'
   AND tags ? 'highway'
   AND bike_rideable(tags);
+
+-- The score of the way that carries this one on past `pt`: one that ends there,
+-- the same street by name where there is one.
+CREATE OR REPLACE FUNCTION bike_neighbour_score(pt geometry, way_name text, self bigint) RETURNS smallint
+LANGUAGE sql STABLE PARALLEL SAFE AS $$
+  SELECT b.score FROM bike_suitability b
+  WHERE b.geom && pt AND b.fid <> self
+    AND (ST_StartPoint(b.geom) = pt OR ST_EndPoint(b.geom) = pt)
+  ORDER BY (b.name IS NOT DISTINCT FROM way_name) DESC, b.fid
+  LIMIT 1
+$$;
+
+-- Tiles with each way's ends cut into short steps that meet the next way's
+-- colour halfway, since MapLibre draws `line-gradient` only on GeoJSON. The
+-- fade is a fixed ~14 px at every zoom, and skipped below z14 where the
+-- extra pieces cost more than they show.
+CREATE OR REPLACE FUNCTION bike_suitability_tiles(z integer, x integer, y integer) RETURNS bytea
+LANGUAGE sql STABLE PARALLEL SAFE AS $$
+  WITH env AS (
+    SELECT ST_TileEnvelope(z, x, y) AS e3857,
+           ST_Transform(ST_TileEnvelope(z, x, y, margin => 64.0 / 4096), 4326) AS e
+  ),
+  ways AS (
+    SELECT b.*, CASE WHEN z >= 14 THEN ST_Length(b.geom::geography) END AS len,
+           14 * 40075016.7 * cos(radians(ST_Y(ST_StartPoint(b.geom)))) / (512 * 2 ^ z) AS fade_m,
+           CASE WHEN z >= 14 THEN bike_neighbour_score(ST_StartPoint(b.geom), b.name, b.fid) END AS n0,
+           CASE WHEN z >= 14 THEN bike_neighbour_score(ST_EndPoint(b.geom), b.name, b.fid) END AS n1
+    FROM bike_suitability b, env WHERE b.geom && env.e
+  ),
+  ends AS (
+    SELECT w.*,
+           CASE WHEN abs(n0 - score) >= 4 THEN least(1.0 / 2.5, fade_m / nullif(len, 0)) ELSE 0 END AS f0,
+           CASE WHEN abs(n1 - score) >= 4 THEN least(1.0 / 2.5, fade_m / nullif(len, 0)) ELSE 0 END AS f1,
+           (n0 + score) / 2.0 AS mid0, (n1 + score) / 2.0 AS mid1
+    FROM ways w
+  ),
+  pieces AS (
+    SELECT e.*, CASE WHEN COALESCE(f0, 0) + COALESCE(f1, 0) = 0 THEN geom
+      ELSE ST_LineSubstring(geom, COALESCE(f0, 0), 1 - COALESCE(f1, 0)) END AS piece, score::real AS s FROM ends e
+    UNION ALL
+    SELECT e.*, ST_LineSubstring(geom, f0 * i / 6.0, f0 * (i + 1) / 6.0), mid0 + (score - mid0) * (i + 0.5) / 6
+    FROM ends e, generate_series(0, 5) i WHERE f0 > 0
+    UNION ALL
+    SELECT e.*, ST_LineSubstring(geom, 1 - f1 * (i + 1) / 6.0, 1 - f1 * i / 6.0), mid1 + (score - mid1) * (i + 0.5) / 6
+    FROM ends e, generate_series(0, 5) i WHERE f1 > 0
+  )
+  SELECT ST_AsMVT(t, 'bike_suitability', 4096, 'g')
+  FROM (
+    SELECT ST_AsMVTGeom(ST_Transform(p.piece, 3857), env.e3857, 4096, 64, true) AS g,
+           p.name, p.highway, p.facility, round(p.s)::smallint AS score, p.score AS way_score,
+           p.speed_kmh, p.lanes, p.surface, p.bridge, p.tunnel
+    FROM pieces p, env
+  ) t
+  WHERE g IS NOT NULL
+$$;

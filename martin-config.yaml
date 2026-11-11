@@ -746,3 +746,12 @@ postgres:
         direction: direction
       buffer: 64
       clip_geom: true
+
+  functions:
+    # The bike_suitability view with each way's ends faded into its
+    # neighbours'; see import/create-bike-suitability.sql.
+    bike_suitability_tiles:
+      schema: public
+      function: bike_suitability_tiles
+      minzoom: 12
+      maxzoom: 16
