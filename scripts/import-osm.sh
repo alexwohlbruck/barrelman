@@ -158,6 +158,7 @@ psql "$DATABASE_URL" -f "$PROJECT_DIR/import/create-transit-views.sql"
 # OSM import. The API also creates them at startup, which is what covers an
 # instance upgrading without a re-import.
 psql "$DATABASE_URL" -f "$PROJECT_DIR/import/create-detail-views.sql"
+psql "$DATABASE_URL" -f "$PROJECT_DIR/import/create-bike-suitability.sql"
 psql "$DATABASE_URL" -f "$PROJECT_DIR/import/create-indoor-views.sql"
 
 # Their partial indexes, separately and CONCURRENTLY — each one scans the whole

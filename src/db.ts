@@ -320,7 +320,7 @@ async function missingPostImportSchema(): Promise<string[]> {
  */
 async function ensureDetailViews() {
   // Each file on its own, so a failure in one costs only its layers.
-  for (const file of ['create-detail-views.sql', 'create-indoor-views.sql']) {
+  for (const file of ['create-detail-views.sql', 'create-indoor-views.sql', 'create-bike-suitability.sql']) {
     try {
       const path = join(import.meta.dir, '../import', file)
       await runDdl(readFileSync(path, 'utf-8'))

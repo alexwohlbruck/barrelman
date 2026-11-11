@@ -160,6 +160,31 @@ postgres:
       buffer: 64
       clip_geom: true
 
+    # Every rideable way scored 0-100 from its tags; see
+    # import/create-bike-suitability.sql. A plain view over the highway-lines
+    # partial index: a z12 tile over Manhattan is ~7.5k ways, ~250 ms cold.
+    bike_suitability:
+      schema: public
+      table: bike_suitability
+      srid: 4326
+      geometry_column: geom
+      geometry_type: GEOMETRY
+      id_column: fid
+      minzoom: 12
+      maxzoom: 16
+      properties:
+        name: name
+        highway: highway
+        facility: facility
+        score: score
+        speed_kmh: speed_kmh
+        lanes: lanes
+        surface: surface
+        bridge: bridge
+        tunnel: tunnel
+      buffer: 64
+      clip_geom: true
+
     bicycle_routes:
       schema: public
       table: bicycle_routes
