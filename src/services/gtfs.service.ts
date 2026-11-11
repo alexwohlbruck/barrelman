@@ -16,7 +16,7 @@
  */
 
 import { db, maintenanceConnection } from '../db'
-import type { RtUrlType } from '../schema/gtfs'
+import type { RtUrlEntry, RtUrlType } from '../schema/gtfs'
 import { and, eq, sql, type SQL } from 'drizzle-orm'
 import {
   gtfsFeeds,
@@ -28,21 +28,19 @@ import {
   gtfsTripPatterns,
 } from '../schema/gtfs'
 import { parse } from 'csv-parse/sync'
+import { escapeCsvField, parseCsvRows, serializeCsvRows } from '../lib/csv'
 import { type FetchFn } from './transit.service'
 import { resolveRegions } from '../config/regions'
 import { selectRtUrls } from './rt-url-selection'
-import { envRaw } from '../config/env'
+import { envRaw, envString } from '../config/env'
+import { normalizeBaseUrl } from './rt-normalize.service'
+import { motisRtSources } from '../lib/rt-normalize/motis-sources'
 import { parseTransitlandLicense, licenseAnswer, licensePolicy, type FeedLicense } from '../lib/feed-license'
 import { isGatedRouteType } from '../lib/gtfs-modes'
 
 // ── Types ───────────────────────────────────────────────────────────
 
-export interface GtfsRtUrl {
-  url: string
-  headers?: Record<string, string>
-  /** Absent on rows written before discovery recorded it. */
-  type?: RtUrlType
-}
+export type GtfsRtUrl = RtUrlEntry
 
 export interface GtfsFeedInfo {
   feedId: string
@@ -195,6 +193,23 @@ export async function fetchFeedList(
   const feeds: GtfsFeedInfo[] = []
   const records = new Map<string, any>()
   const seen = new Set<string>()
+  const byOnestop = new Map<string, any>()
+  const add = (feed: any, url: string) => {
+    const feedId = String(feed.id || feed.onestop_id || `feed_${feeds.length}`)
+    if (seen.has(feedId)) return
+    seen.add(feedId)
+    const onestopId = String(feed.onestop_id || '')
+    feeds.push({
+      feedId,
+      onestopId,
+      name: String(feed.name || feed.onestop_id || ''),
+      url,
+      region,
+      license: parseTransitlandLicense(feed),
+    })
+    records.set(feedId, feed)
+    byOnestop.set(onestopId, feed)
+  }
 
   // One query per bbox cell: global (null bbox) is a single unfiltered sweep;
   // a small region is a single call over its own bbox; a continent is tiled.
@@ -220,25 +235,35 @@ export async function fetchFeedList(
         const url = feed.urls?.static_current
         if (!url) continue
 
-        // A feed straddling two cells is returned by both — dedup by id.
-        const feedId = String(feed.id || feed.onestop_id || `feed_${feeds.length}`)
-        if (seen.has(feedId)) continue
-        seen.add(feedId)
-
-        const onestopId = String(feed.onestop_id || '')
-        feeds.push({
-          feedId,
-          onestopId,
-          name: String(feed.name || feed.onestop_id || ''),
-          url,
-          region,
-          license: parseTransitlandLicense(feed),
-        })
-        records.set(feedId, feed)
+        // A feed straddling two cells is returned by both; add() dedups by id.
+        add(feed, url)
       }
 
       // Handle pagination
       nextUrl = data.meta?.next ? data.meta.next : null
+    }
+  }
+
+  // The bbox search finds a feed only through its active version, and some
+  // agencies' own feeds have none: the Bay Area lists only 511's keyed
+  // aggregate, never BART, Caltrain or VTA. Their operators still name them.
+  for (const cell of cells) {
+    let nextUrl: string | null = buildOperatorListUrl(apiKey, cell)
+    while (nextUrl) {
+      const data: any = await fetchFn(nextUrl).then(r => (r.ok ? r.json() : null)).catch(() => null)
+      if (!data) break
+      for (const operator of data.operators || []) {
+        const own = ((operator.feeds || []) as any[]).filter(f => String(f.spec).toLowerCase() === 'gtfs')
+        if (own.some(f => downloadable(byOnestop.get(f.onestop_id)))) continue
+        for (const ref of own) {
+          if (byOnestop.has(ref.onestop_id)) continue
+          const record = await fetchFeedRecord(ref.onestop_id, apiKey, fetchFn)
+          if (!record || !downloadable(record)) continue
+          add(record, record.urls.static_current)
+          break
+        }
+      }
+      nextUrl = data.meta?.next ?? null
     }
   }
 
@@ -325,6 +350,15 @@ function extractRtUrls(feed: any): GtfsRtUrl[] {
   }
   return rtUrls
 }
+
+function buildOperatorListUrl(apiKey: string, bbox: string | null): string {
+  const params = new URLSearchParams({ apikey: apiKey, limit: '100' })
+  if (bbox) params.set('bbox', bbox)
+  return `https://transit.land/api/v2/rest/operators?${params}`
+}
+
+/** A static feed the import can fetch: it has a URL and needs no key. */
+const downloadable = (feed: any): boolean => !!feed?.urls?.static_current && !feed.authorization?.type
 
 function buildFeedListUrl(apiKey: string, bbox: string | null): string {
   const base = 'https://transit.land/api/v2/rest/feeds'
@@ -664,6 +698,8 @@ async function alternateStaticUrls(
  * Windows tools that open each file with a UTF-8 byte-order mark, and without
  * it the first column's key is "\ufefftrip_id", so every row reads as having
  * no trip_id. That made 122 US feeds look like timetables with no trips.
+ * `relax_quotes` reads a stray quote mark inside an unquoted field (`NEGTL "`)
+ * as text; strict parsing rejected the whole feed.
  */
 const GTFS_CSV = {
   bom: true,
@@ -671,6 +707,7 @@ const GTFS_CSV = {
   skip_empty_lines: true,
   trim: true,
   relax_column_count: true,
+  relax_quotes: true,
 } as const
 
 /**
@@ -2062,9 +2099,11 @@ export async function generateMotisConfig(options?: MotisConfigOptions): Promise
       const rtUrls = feed.rt_urls
       if (rtUrls && Array.isArray(rtUrls) && rtUrls.length > 0) {
         lines.push('      rt:')
-        // One URL often serves trip updates and vehicle positions both.
-        const unique = rtUrls.filter((rt, i) => rtUrls.findIndex(o => o.url === rt.url) === i)
-        for (const rt of unique) {
+        const sources = motisRtSources(feed.feed_id, rtUrls, {
+          baseUrl: normalizeBaseUrl(),
+          serviceKey: envString<string>('BARRELMAN_API_KEY', ''),
+        })
+        for (const rt of sources) {
           lines.push(`        - url: "${rt.url}"`)
           if (rt.headers && Object.keys(rt.headers).length > 0) {
             lines.push('          headers:')
@@ -2227,7 +2266,7 @@ export const FLEX_EXTENSION_FILES = [
  */
 export async function sanitizeGtfsZip(
   buffer: ArrayBuffer,
-): Promise<{ buffer: ArrayBuffer; removedFiles: string[] }> {
+): Promise<{ buffer: ArrayBuffer; removedFiles: string[]; repairedFiles: string[] }> {
   // Dynamic import to avoid requiring JSZip at module level in tests
   const JSZip = (await import('jszip')).default
   const zip = await JSZip.loadAsync(buffer)
@@ -2240,12 +2279,94 @@ export async function sanitizeGtfsZip(
     }
   }
 
-  if (removedFiles.length === 0) {
-    return { buffer, removedFiles: [] }
+  // MOTIS keeps the space in `METRA, Metra, America/Chicago` and drops the
+  // feed for an unknown timezone; LYNX pads calendar.txt's service ids, so no
+  // trip ever runs. A writer that pads one of the small tables pads the rest,
+  // so only then is the whole feed read and trimmed.
+  const repairedFiles: string[] = []
+  let padded = false
+  for (const [name, columns] of Object.entries(KEY_COLUMNS)) {
+    const file = zip.file(name)
+    if (file && hasPaddedKeys(await file.async('string'), columns)) padded = true
+  }
+  for (const file of Object.values(zip.files)) {
+    if (file.dir || file.name.includes('/') || !file.name.endsWith('.txt')) continue
+    if (!padded && file.name !== 'agency.txt') continue
+    const text = await file.async('string')
+    const repaired = repairGtfsCsv(text, padded)
+    if (repaired === text) continue
+    zip.file(file.name, repaired)
+    repairedFiles.push(file.name)
+  }
+
+  if (removedFiles.length === 0 && repairedFiles.length === 0) {
+    return { buffer, removedFiles: [], repairedFiles: [] }
   }
 
   // JSZip defaults to STORE, which multiplies a re-serialized feed several
   // times over on disk for no gain.
   const sanitized = await zip.generateAsync({ type: 'arraybuffer', compression: 'DEFLATE' })
-  return { buffer: sanitized, removedFiles }
+  return { buffer: sanitized, removedFiles, repairedFiles }
+}
+
+/** The small tables' columns whose padding breaks a join or a lookup in MOTIS. */
+const KEY_COLUMNS: Record<string, string[]> = {
+  'agency.txt': ['agency_id', 'agency_timezone'],
+  'routes.txt': ['route_id', 'agency_id'],
+  'calendar.txt': ['service_id'],
+  'calendar_dates.txt': ['service_id'],
+}
+
+function hasPaddedKeys(text: string, columns: string[]): boolean {
+  const rows = parseCsvRows(text)
+  const header = rows[0] ?? []
+  const at = header.map((h, i) => (columns.includes(h.trim()) ? i : -1)).filter(i => i >= 0)
+  return at.length > 0 && rows.some(row => at.some(i => row[i] !== undefined && row[i] !== row[i]!.trim()))
+}
+
+/** Every field trimmed, a line at a time: stop_times.txt is too large to hold as rows. */
+function trimCsvLines(text: string): string {
+  const out: string[] = []
+  for (const line of text.split('\n')) {
+    const bare = line.endsWith('\r') ? line.slice(0, -1) : line
+    if (!bare) continue
+    const cells = bare.includes('"') ? parseCsvRows(bare)[0] ?? [] : bare.split(',')
+    out.push(cells.map(c => escapeCsvField(c.trim())).join(','))
+  }
+  return out.join('\n') + '\n'
+}
+
+const isTimeZone = (tz: string) => {
+  try {
+    new Intl.DateTimeFormat('en', { timeZone: tz })
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * A GTFS table with its fields trimmed when `trim`, and timezones written
+ * with a space for the underscore (`America/New York`) spelled right.
+ * Returned unchanged when there is nothing to repair.
+ */
+export function repairGtfsCsv(text: string, trim: boolean): string {
+  const trimmed = trim ? trimCsvLines(text) : text
+  const end = trimmed.indexOf('\n')
+  const header = parseCsvRows(end === -1 ? trimmed : trimmed.slice(0, end))[0] ?? []
+  const tzColumns = header.map((h, i) => (/_timezone$/.test(h.trim()) ? i : -1)).filter(i => i >= 0)
+  if (!tzColumns.length) return trim && trimmed !== text ? trimmed : text
+  let changed = trimmed !== text
+  const rows = parseCsvRows(trimmed).map(row => {
+    for (const i of tzColumns) {
+      const tz = row[i] ?? ''
+      const fixed = tz.replace(/ /g, '_')
+      if (fixed !== tz && !isTimeZone(tz) && isTimeZone(fixed)) {
+        row[i] = fixed
+        changed = true
+      }
+    }
+    return row
+  })
+  return changed ? serializeCsvRows(rows) : text
 }

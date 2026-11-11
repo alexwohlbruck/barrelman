@@ -644,6 +644,22 @@ export const SCRIPTS: ScriptDef[] = [
     source: 'import/backfill-rt-urls.ts',
   },
   {
+    id: 'gtfs-measure-rt-normalize',
+    name: 'Measure Realtime Matching',
+    description: 'Re-decide which GTFS-RT feeds MOTIS polls through the matcher that pairs trip updates with the timetable by stop times.',
+    category: 'transit',
+    danger: 'safe',
+    longRunning: false,
+    confirm: false,
+    exec: { kind: 'process', command: 'bun', args: ['run', 'import/measure-rt-normalize.ts'] },
+    params: [
+      { name: 'feed-id', label: 'Single feed ID', type: 'string', apply: 'flag', flag: '--feed-id', placeholder: 'blank = all feeds with realtime' },
+      { name: 'dry-run', label: 'Dry run (preview only)', type: 'boolean', apply: 'flag', flag: '--dry-run', default: true },
+    ],
+    source: 'import/measure-rt-normalize.ts',
+    notes: 'The GTFS import already does this for each feed. Regenerate the MOTIS config and restart MOTIS afterwards.',
+  },
+  {
     id: 'brands-backfill-logo-licences',
     name: 'Backfill Brand Logo Licences',
     description: 'Read the licence, author and trademark status of each brand logo from Wikimedia Commons, for logos resolved before these were recorded.',

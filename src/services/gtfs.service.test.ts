@@ -24,6 +24,7 @@ import {
   resolveGtfsBbox,
   bboxCells,
   sanitizeGtfsZip,
+  repairGtfsCsv,
   resolveRtUrlsForFeed,
   FLEX_EXTENSION_FILES,
   retryingTransitlandLimits,
@@ -55,6 +56,11 @@ describe('parseStops', () => {
       wheelchairBoarding: 1,
       platformCode: null,
     })
+  })
+
+  test('reads a stray quote mark inside an unquoted name as text', () => {
+    const csv = 'stop_id,stop_name,stop_lat,stop_lon\nS1,NEGTL "B",35.1,-80.1\nS2,"Wall & Main",35.2,-80.2\n'
+    expect(parseStops(csv, 'f').map(s => s.stopName)).toEqual(['NEGTL "B"', 'Wall & Main'])
   })
 
   test('handles stops with parent stations', () => {
@@ -550,6 +556,23 @@ describe('fetchFeedList', () => {
     expect(boxes.length).toBeGreaterThan(2) // the lower 48 is tiled
   })
 
+  test("adds an operator's own feed when the region lists only a keyed aggregate of it", async () => {
+    const aggregate = { id: 4057, onestop_id: 'f-sf~bay~area~rg', spec: 'gtfs', urls: { static_current: 'https://api.511.org/x' }, authorization: { type: 'query_param', param_name: 'api_key' } }
+    const bart = { id: 2, onestop_id: 'f-9q9-bart', spec: 'gtfs', urls: { static_current: 'https://bart.gov/gtfs.zip' } }
+    const fetchFn = (async (url: string) => {
+      const u = String(url)
+      if (u.includes('/operators?')) {
+        return new Response(JSON.stringify({ operators: u.includes('bbox') ? [{ onestop_id: 'o-9q9-bart', feeds: [{ onestop_id: 'f-9q9-bart', spec: 'GTFS' }, { onestop_id: 'f-sf~bay~area~rg', spec: 'GTFS' }] }] : [] }))
+      }
+      if (u.includes('onestop_id=f-9q9-bart&')) return new Response(JSON.stringify({ feeds: [bart] }))
+      if (u.includes('spec=gtfs')) return new Response(JSON.stringify({ feeds: [aggregate] }))
+      return new Response('Not found', { status: 404 })
+    }) as unknown as FetchFn
+
+    const feeds = await fetchFeedList('nc', 'test-key', fetchFn)
+    expect(feeds.map(f => f.onestopId)).toEqual(['f-sf~bay~area~rg', 'f-9q9-bart'])
+  })
+
   test('skips feeds without download URL', async () => {
     const mockFetch = buildMockFetch({
       feedList: {
@@ -770,7 +793,7 @@ describe('fetchFeedList', () => {
       const urlStr = typeof url === 'string' ? url : url instanceof URL ? url.toString() : url.url
 
       if (!urlStr.includes('spec=gtfs')) {
-        callCount++
+        if (!urlStr.includes('bbox=')) callCount++
         // Simulate network error on RT lookup
         throw new Error('Network timeout')
       }
@@ -1078,7 +1101,35 @@ describe('deriveRouteShapes', () => {
 
 // ── sanitizeGtfsZip ─────────────────────────────────────────────────
 
+describe('repairGtfsCsv', () => {
+  test('trims fields padded after their commas', () => {
+    const agency = 'agency_id, agency_name, agency_timezone\r\nMETRA, Metra, America/Chicago\r\n'
+    expect(repairGtfsCsv(agency, true)).toBe('agency_id,agency_name,agency_timezone\nMETRA,Metra,America/Chicago\n')
+  })
+
+  test('spells a timezone written with a space', () => {
+    expect(repairGtfsCsv('agency_id,agency_timezone\n1,America/New York\n', false)).toBe('agency_id,agency_timezone\n1,America/New_York\n')
+  })
+
+  test('leaves a clean table as it is', () => {
+    const stops = 'stop_id,stop_name,stop_timezone\r\nS1,Main St,America/Chicago\r\n'
+    expect(repairGtfsCsv(stops, false)).toBe(stops)
+  })
+})
+
 describe('sanitizeGtfsZip', () => {
+  test('trims every table of a feed that pads service ids in calendar.txt', async () => {
+    const JSZip = (await import('jszip')).default
+    const zip = new JSZip()
+    zip.file('agency.txt', 'agency_id,agency_name,agency_url,agency_timezone\nL,LYNX,https://x,America/New_York\n')
+    zip.file('calendar.txt', 'service_id,monday,start_date,end_date\n    768200,1,20261002,20261212\n')
+    zip.file('trips.txt', 'route_id,service_id,trip_id\n1,768200,T1\n')
+    const { buffer, repairedFiles } = await sanitizeGtfsZip(await zip.generateAsync({ type: 'arraybuffer' }))
+    expect(repairedFiles).toEqual(['calendar.txt'])
+    const out = await JSZip.loadAsync(buffer)
+    expect(await out.file('calendar.txt')!.async('string')).toBe('service_id,monday,start_date,end_date\n768200,1,20261002,20261212\n')
+  })
+
   async function createTestZip(files: Record<string, string>): Promise<ArrayBuffer> {
     const zip = new JSZip()
     for (const [name, content] of Object.entries(files)) {

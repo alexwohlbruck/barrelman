@@ -31,7 +31,7 @@ import { parseArgs } from 'util'
 
 // Shared with the other zip-surgery steps. Re-exported so callers and tests
 // that already import it from here keep working.
-import { parseCsv, toCsv } from './csv'
+import { parseCsv, toCsv } from '../src/lib/csv'
 export { parseCsv }
 
 // ── Conversion ──────────────────────────────────────────────────────

@@ -129,3 +129,21 @@ export function parseCsv(text: string): Record<string, string>[] {
 export function toCsv(header: string[], rows: string[][]): string {
   return [header.join(','), ...rows.map(r => r.map(escapeCsvField).join(','))].join('\n') + '\n'
 }
+
+/**
+ * Cells of each non-blank line, lazily. For reading files too large to hold as
+ * rows; a quoted field spanning lines is not supported, which GTFS numeric and
+ * id columns never need.
+ */
+export function* splitCsvLines(text: string): Generator<string[]> {
+  let start = 0
+  while (start < text.length) {
+    let end = text.indexOf('\n', start)
+    if (end === -1) end = text.length
+    let line = text.slice(start, end)
+    start = end + 1
+    if (line.endsWith('\r')) line = line.slice(0, -1)
+    if (!line) continue
+    yield line.includes('"') ? parseCsvRows(line)[0] ?? [] : line.split(',')
+  }
+}

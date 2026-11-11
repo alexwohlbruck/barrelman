@@ -1,6 +1,6 @@
 import { describe, test, expect } from 'bun:test'
 import { defaultBikesAllowed } from './inject-bikes-allowed'
-import { parseCsvRows } from './csv'
+import { parseCsvRows } from '../src/lib/csv'
 
 /** Value of bikes_allowed per data row, in file order. */
 function column(tripsTxt: string): string[] {

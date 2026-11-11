@@ -73,8 +73,9 @@ export const SEEDS: Array<Pick<ScheduleInput, 'scriptId' | 'cron'> & { params?: 
   // destructive full re-import.
   { scriptId: 'osm-update', cron: '0 3 * * *', params: { UPDATE_MODE: 'replication' } },
   // Agencies republish GTFS on no fixed cadence; this checks upstream shas and
-  // only re-imports the regions that actually changed.
-  { scriptId: 'gtfs-watch', cron: '0 4 * * *' },
+  // only re-imports the regions that actually changed. A US import takes about
+  // 2.5 h and ends by restarting MOTIS, so this lands that around 3 AM Eastern.
+  { scriptId: 'gtfs-watch', cron: '45 5 * * *' },
   // GBFS systems churn slowly — weekly is plenty.
   { scriptId: 'gbfs-import', cron: '30 5 * * 0' },
   // Redundant with the default nightly OSM update, which rebuilds the basemap
