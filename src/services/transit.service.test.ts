@@ -71,6 +71,7 @@ import {
   checkMotisHealth,
   extractFare,
   countFarePayments,
+  pickStations,
   rankItineraries,
   boardsRailOrFerry,
   MotisError,
@@ -1148,3 +1149,32 @@ describe('rankItineraries', () => {
     expect(ranked[0]).toBe(direct)
   })
 })
+
+describe('pickStations', () => {
+  const station = (stationId: string, ...routes: string[]) => ({ feedId: 'f', stationId, lat: 0, lng: 0, routes })
+  const ids = (stations: { stationId: string }[]) => stations.map((s) => s.stationId)
+
+  test('leaves room for a bus when one streetcar line has every nearby stop', () => {
+    const candidates = [
+      station('gold-8th', 'gold'), station('gold-sunnyside', 'gold'),
+      station('gold-5th-w', 'gold'), station('gold-5th-e', 'gold'),
+      station('27-in', '27'), station('27-out', '27'), station('27-beaumont', '27'),
+    ]
+    expect(ids(pickStations(candidates, 4))).toEqual(['gold-8th', 'gold-sunnyside', '27-in', '27-out'])
+  })
+
+  test('takes a stop that adds any new route', () => {
+    const candidates = [station('a', '9', '17'), station('b', '9', '17'), station('c', '9', '17', '27')]
+    expect(ids(pickStations(candidates, 3))).toEqual(['a', 'b', 'c'])
+  })
+
+  test('fills free slots with the stops passed over, nearest first', () => {
+    const candidates = [station('a', 'x'), station('b', 'x'), station('c', 'x'), station('d', 'x')]
+    expect(ids(pickStations(candidates, 4))).toEqual(['a', 'b', 'c', 'd'])
+  })
+
+  test('keeps a stop with no known routes', () => {
+    expect(ids(pickStations([station('a', 'x'), station('b', 'x'), station('c')], 3))).toEqual(['a', 'b', 'c'])
+  })
+})
+

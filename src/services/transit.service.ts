@@ -738,14 +738,48 @@ interface Station {
   lng: number
 }
 
+/** Nearest stations considered before narrowing to STATIONS_PER_END. */
+const STATION_CANDIDATES = 24
+
+/** Picked stations a route may fill: one for each side of the street. */
+const STATIONS_PER_ROUTE = 2
+
+interface StationCandidate extends Station {
+  routes: string[]
+}
+
+/**
+ * Keep `limit` stations in their given order, passing over one whose routes
+ * the picked stations already serve STATIONS_PER_ROUTE times. Without this,
+ * four stops of one streetcar take every slot and the bus at the next corner
+ * is reachable only by riding the streetcar away and walking back.
+ * Stations passed over fill whatever slots are left.
+ */
+export function pickStations(candidates: StationCandidate[], limit: number): Station[] {
+  const served = new Map<string, number>()
+  const picked: StationCandidate[] = []
+  const passed: StationCandidate[] = []
+  for (const c of candidates) {
+    if (picked.length === limit) break
+    const adds = !c.routes.length || c.routes.some((r) => (served.get(r) ?? 0) < STATIONS_PER_ROUTE)
+    if (!adds) {
+      passed.push(c)
+      continue
+    }
+    picked.push(c)
+    for (const r of c.routes) served.set(r, (served.get(r) ?? 0) + 1)
+  }
+  return [...picked, ...passed]
+    .slice(0, limit)
+    .map(({ feedId, stationId, lat, lng }) => ({ feedId, stationId, lat, lng }))
+}
+
 /**
  * The stations to try near a point: rail, subway, tram and ferry first,
- * nearest within each tier.
+ * nearest within each tier, a few per route (see `pickStations`).
  *
  * Without the tier, the handful of bus stops on the nearest corner would
- * crowd out a subway station 500 m away on any multi-km trip. Buses are
- * not lost by it: MOTIS walks from a station to the stops around it, so a
- * bus reachable from the chosen stations still comes back.
+ * crowd out a subway station 500 m away on any multi-km trip.
  *
  * A station counts as bus-only when every route it serves is a bus. The
  * test mirrors `gtfsModeClass` in src/lib/gtfs-modes.ts: 3 and 11 are
@@ -754,7 +788,7 @@ interface Station {
  */
 async function nearbyStations(at: { lat: number; lng: number }, radiusM: number): Promise<Station[]> {
   const rows = (await db.execute(sql`
-    SELECT feed_id, station_id, stop_lat, stop_lon
+    SELECT feed_id, station_id, stop_lat, stop_lon, routes
     FROM (
       SELECT DISTINCT ON (st.feed_id, COALESCE(NULLIF(st.parent_station, ''), st.stop_id))
         st.feed_id,
@@ -767,21 +801,30 @@ async function nearbyStations(at: { lat: number; lng: number }, radiusM: number)
           FROM gtfs_stop_routes sr
           JOIN gtfs_routes r ON r.feed_id = sr.feed_id AND r.route_id = sr.route_id
           WHERE sr.feed_id = st.feed_id AND sr.stop_id = st.stop_id
-        ), true) AS bus_only
+        ), true) AS bus_only,
+        ARRAY(
+          SELECT sr.feed_id || ':' || sr.route_id
+          FROM gtfs_stop_routes sr
+          WHERE sr.feed_id = st.feed_id AND sr.stop_id = st.stop_id
+        ) AS routes
       FROM gtfs_stops st
       WHERE ST_DWithin(st.geom::geography, ST_SetSRID(ST_MakePoint(${at.lng}, ${at.lat}), 4326)::geography, ${radiusM})
         AND (st.location_type = 0 OR st.location_type IS NULL)
       ORDER BY st.feed_id, COALESCE(NULLIF(st.parent_station, ''), st.stop_id), distance
     ) s
     ORDER BY bus_only, distance
-    LIMIT ${STATIONS_PER_END}
+    LIMIT ${STATION_CANDIDATES}
   `)) as any[]
-  return rows.map((r) => ({
-    feedId: r.feed_id,
-    stationId: r.station_id,
-    lat: r.stop_lat,
-    lng: r.stop_lon,
-  }))
+  return pickStations(
+    rows.map((r) => ({
+      feedId: r.feed_id,
+      stationId: r.station_id,
+      lat: r.stop_lat,
+      lng: r.stop_lon,
+      routes: r.routes ?? [],
+    })),
+    STATIONS_PER_END,
+  )
 }
 
 /** Straight-line walking time between two points, in whole seconds. */
