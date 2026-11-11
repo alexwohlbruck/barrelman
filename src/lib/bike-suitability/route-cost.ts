@@ -1,14 +1,15 @@
 /**
  * Bike suitability as a routing cost. A way's stress is how far its score
- * (0-100, import/create-bike-suitability.sql) falls short of 100, squared so a
- * red arterial weighs far more than a yellow street; `weight` (0 = fastest,
- * 1 = safest) scales how many seconds of riding that stress is worth.
+ * (0-100, import/create-bike-suitability.sql) falls short of 100, raised to
+ * 2.5 so a red arterial weighs far more than a yellow street; `weight` (0 =
+ * fastest, 1 = safest) scales how many seconds of riding that stress is worth.
+ * At safest a red street feels ~5x its riding time and a yellow one ~2x.
  */
 
 /** Taken for a way the database has no score for: neither steered to nor away from. */
 export const UNKNOWN_SCORE = 70
 
-const STRESS_SCALE = 4
+const STRESS_SCALE = 10
 
 export interface WayStretch {
   wayId: number
@@ -27,7 +28,7 @@ export function wayStretches(details: Record<string, unknown[]> | undefined, dis
 /** How many times longer a way feels than it takes to ride. */
 export function stressFactor(score: number, weight: number): number {
   const stress = (100 - score) / 100
-  return 1 + weight * STRESS_SCALE * stress * stress
+  return 1 + weight * STRESS_SCALE * stress ** 2.5
 }
 
 const scoreOf = (scores: Map<number, number>, id: number) => scores.get(id) ?? UNKNOWN_SCORE
@@ -81,4 +82,12 @@ export function penaltyRules(penalties: Map<number, number>) {
 export function withRules(model: any, rules: { if: string; multiply_by: number }[]) {
   if (!rules.length) return model
   return { ...(model ?? {}), priority: [...(model?.priority ?? []), ...rules] }
+}
+
+/** The box the points span, grown by a quarter of its size and at least `minPad` degrees. */
+export function corridor(points: number[][], minPad = 0.005): [number, number, number, number] {
+  const xs = points.map(p => p[0]), ys = points.map(p => p[1])
+  const [x0, x1, y0, y1] = [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)]
+  const px = Math.max(minPad, (x1 - x0) / 4), py = Math.max(minPad, (y1 - y0) / 4)
+  return [x0 - px, y0 - py, x1 + px, y1 + py]
 }
