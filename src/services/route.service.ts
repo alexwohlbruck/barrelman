@@ -17,6 +17,8 @@ import type { CrossingName } from '../lib/route-context/crossing-names'
 import type { Overpass } from '../lib/route-context/overpasses'
 import type { AreaStretch } from '../lib/route-context/area-stretches'
 import { tagEdgeSegments, type EdgeTags } from '../lib/route-context/edge-tags'
+import { pathScore, scoreSegments, wayStretches } from '../lib/bike-suitability/route-cost'
+import { lookupScores, scoresFor, suitableCustomModel, type ScoreLookup } from './bike-suitability-route.service'
 
 // ── Types ───────────────────────────────────────────────────────────
 
@@ -335,18 +337,29 @@ export async function getEnrichedRoute(
   fetchFn: FetchFn = (url, init) => fetch(url, init),
   lookup: WayLookup = lookupWays,
   context: RouteContextSource = dbRouteContextSource,
+  scoreLookup: ScoreLookup = lookupScores,
 ): Promise<EnrichedRouteResponse> {
   const ghUrl = graphHopperUrl()
   const available = await graphEncodedValues(fetchFn)
 
+  const { bike_suitability: suitability, ...ghBody } = requestBody ?? {}
+  const scored = ghBody.profile === 'bike' && suitability && available.has('osm_way_id')
+  const weight = Math.min(1, Math.max(0, Number(suitability?.weight) || 0))
+  let scores = new Map<number, number>()
+  if (scored && weight > 0 && Array.isArray(ghBody.points) && ghBody.points.length >= 2) {
+    const steered = await suitableCustomModel(ghBody, weight, fetchFn, scoreLookup)
+    scores = steered.scores
+    if (steered.model) ghBody.custom_model = steered.model
+  }
+
   // Build the GraphHopper route request with all enrichment details
   const routeRequest = {
-    ...requestBody,
+    ...ghBody,
     elevation: true,
     points_encoded: false,
     instructions: requestBody.instructions ?? true,
     details: [...new Set([
-      ...(requestBody.details || []),
+      ...(ghBody.details || []),
       ...DETAIL_KEYS,
       ...OPTIONAL_DETAIL_KEYS.filter(key => available.has(key)),
     ])],
@@ -376,7 +389,7 @@ export async function getEnrichedRoute(
     const elevationStats = computeElevationStats(coordinates)
     const [stretches, around] = await Promise.all([
       pathStreetStretches(coordinates, cumulativeDistances, path.details, lookup),
-      getRouteContext({ coordinates, distances: cumulativeDistances, details: path.details, profile: requestBody.profile }, context),
+      getRouteContext({ coordinates, distances: cumulativeDistances, details: path.details, profile: ghBody.profile }, context),
     ])
     const edgeSegments = tagEdgeSegments(
       nameCrossingSegments(nameSegments(buildEdgeSegments(path.details || {}, cumulativeDistances), stretches), around.crossingNames),
@@ -384,8 +397,12 @@ export async function getEnrichedRoute(
       around.edgeMarks,
     )
 
+    const ways = scored ? wayStretches(path.details, cumulativeDistances) : []
+    if (scored) await scoresFor(ways.map(w => w.wayId), scores, scoreLookup)
+
     return {
       ...path,
+      ...(scored && { bike_suitability: { score: pathScore(ways, scores), segments: scoreSegments(ways, scores) } }),
       edge_segments: edgeSegments,
       elevation_stats: elevationStats,
       overpasses: around.overpasses,
