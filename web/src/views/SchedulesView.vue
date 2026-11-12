@@ -121,7 +121,7 @@ onMounted(load)
       </template>
     </PageHeader>
 
-    <div class="p-8">
+    <div class="p-4 md:p-8">
       <div v-if="loading" class="flex justify-center py-16">
         <Spinner class="size-6" />
       </div>

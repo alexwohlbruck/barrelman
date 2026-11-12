@@ -170,9 +170,10 @@ function formatDate(value: string | null) {
         </div>
       </div>
 
-      <div v-if="!revoked" class="flex shrink-0 items-center gap-3">
-        <label v-if="viewerIsAdmin" class="flex items-center gap-2 text-xs text-muted-foreground">
-          Rate limits
+      <div v-if="!revoked" class="flex shrink-0 items-center gap-2 sm:gap-3">
+        <!-- The switch alone on a phone, where the label would crowd out the key name. -->
+        <label v-if="viewerIsAdmin" class="flex items-center gap-2 text-xs text-muted-foreground" title="Rate limits">
+          <span class="sr-only sm:not-sr-only">Rate limits</span>
           <Switch :model-value="!apiKey.rateLimitExempt" :disabled="busy" @update:model-value="setExempt(!$event)" />
         </label>
         <Button v-if="!editing" variant="ghost" size="sm" title="Edit" @click="startEditing">

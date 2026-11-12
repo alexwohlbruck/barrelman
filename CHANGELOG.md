@@ -10,6 +10,13 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Changed
+
+- The console now works on a phone. Below tablet width the sidebar folds into
+  a drawer behind a menu button, pages use tighter margins, wide tables scroll
+  sideways instead of overflowing, and dialogs fit the screen and scroll when
+  they are taller than it. Form fields no longer make iOS zoom in on focus.
+
 ## [0.10.41] - 2026-11-10
 
 ### Fixed
