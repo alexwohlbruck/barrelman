@@ -13,6 +13,8 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import { parseArgs } from 'node:util'
 import postgres from 'postgres'
 import { inputFor, waysAround } from '../import/bridge-deck-cells'
+import { cutsIn } from '../import/tunnel-cut-cells'
+import { toUnits } from '../src/lib/bridge-decks/grid'
 import { buildDecks, type Deck } from '../src/lib/bridge-decks/build'
 import { deckDefects } from '../src/lib/bridge-decks/continuity'
 import { Dem } from '../src/lib/bridge-decks/dem'
@@ -55,24 +57,30 @@ async function fetchLayer(source: string): Promise<Array<Record<string, string |
 const started = Date.now()
 const dem = new Dem()
 
-/** Decks built from the database with this checkout, kept to those whose midpoint lies in the box, as a build cell keeps its own. */
-async function built(): Promise<Deck[]> {
+/** Decks and cuts built from the database with this checkout, kept to those owned by the box, as a build cell keeps its own. */
+async function built(): Promise<{ decks: Deck[]; cuts: ServedCut[] }> {
   const sql = postgres(process.env.DATABASE_URL!, { max: 2, max_lifetime: null })
   try {
     const rows = await waysAround(sql, [w, s, e, n])
     const decks = rows.length ? await buildDecks(await inputFor(sql, rows), dem) : []
-    return decks.filter(d => { const [lng, lat] = lngLat(d.midpoint); return lng >= w && lng < e && lat >= s && lat < n })
+    const solved = await cutsIn(sql, dem, [[toUnits(w), toUnits(s), toUnits(e), toUnits(n)]])
+    return {
+      decks: decks.filter(d => { const [lng, lat] = lngLat(d.midpoint); return lng >= w && lng < e && lat >= s && lat < n }),
+      cuts: solved.map(c => ({ id: c.id, kind: c.kind, points: c.points, at: c.at, open: c.cut.open, floor: c.cut.floor, walls: c.cut.walls, crown: c.cut.crown, headroom: c.cut.headroom })),
+    }
   } finally {
     await sql.end({ timeout: 5 })
   }
 }
 
-const [decks, cutRows] = await Promise.all([
-  values.build ? built() : fetchLayer('bridge_decks').then(rows => [...new Map(rows.map(p => [String(p.id), p])).values()].map(servedDeck).filter((d): d is Deck => !!d)),
-  values.tiles ? fetchLayer('tunnel_cuts') : Promise.resolve([]),
-])
-const cuts = [...new Map(cutRows.map(p => [String(p.id), p])).values()].map(servedCut).filter((c): c is ServedCut => !!c)
-console.log(`${decks.length} decks ${values.build ? 'built' : 'served'}, ${cuts.length} tunnel cuts (${((Date.now() - started) / 1000).toFixed(0)} s)`)
+const served = async (source: string) => [...new Map((await fetchLayer(source)).map(p => [String(p.id), p])).values()]
+const { decks, cuts } = values.build
+  ? await built()
+  : {
+      decks: (await served('bridge_decks')).map(servedDeck).filter((d): d is Deck => !!d),
+      cuts: (await served('tunnel_cuts')).map(servedCut).filter((c): c is ServedCut => !!c),
+    }
+console.log(`${decks.length} decks and ${cuts.length} tunnel cuts ${values.build ? 'built' : 'served'} (${((Date.now() - started) / 1000).toFixed(0)} s)`)
 
 await dem.load([...decks.flatMap(d => d.points), ...cuts.flatMap(c => c.points)])
 const ground = dem.at.bind(dem)
