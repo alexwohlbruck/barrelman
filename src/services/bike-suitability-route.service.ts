@@ -15,6 +15,7 @@ import {
 import { buildCumulativeDistances, type FetchFn } from './route.service'
 
 export type ScoreLookup = (ids: number[]) => Promise<Map<number, number>>
+export type FacilityLookup = (ids: number[]) => Promise<Map<number, string>>
 export type CorridorLookup = (box: [number, number, number, number], below: number, limit: number) => Promise<Map<number, number>>
 
 const PASSES = 4
@@ -33,6 +34,15 @@ export const lookupScores: ScoreLookup = async ids => {
     SELECT osm_id, bike_suitability_score(tags, bike_facility(tags)) AS score
     FROM geo_places WHERE osm_type = 'W' AND osm_id = ANY(${`{${ids.join(',')}}`}::bigint[])`, BUDGET_MS)
   return new Map(rows.map(r => [Number(r.osm_id), r.score]))
+}
+
+/** The bike facility each way has, as `bike_facility` names it. */
+export const lookupFacilities: FacilityLookup = async ids => {
+  if (!ids.length) return new Map()
+  const rows: Array<{ osm_id: string | number; facility: string }> = await executeWithin(sql`
+    SELECT osm_id, bike_facility(tags) AS facility
+    FROM geo_places WHERE osm_type = 'W' AND osm_id = ANY(${`{${[...new Set(ids)].join(',')}}`}::bigint[])`, BUDGET_MS)
+  return new Map(rows.map(r => [Number(r.osm_id), r.facility]))
 }
 
 export const lookupCorridor: CorridorLookup = async ([x0, y0, x1, y1], below, limit) => {

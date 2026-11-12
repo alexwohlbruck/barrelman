@@ -18,7 +18,9 @@ import type { Overpass } from '../lib/route-context/overpasses'
 import type { AreaStretch } from '../lib/route-context/area-stretches'
 import { tagEdgeSegments, type EdgeTags } from '../lib/route-context/edge-tags'
 import { pathScore, scoreSegments, wayStretches } from '../lib/bike-suitability/route-cost'
-import { lookupScores, scoresFor, suitableCustomModel, type ScoreLookup } from './bike-suitability-route.service'
+import {
+  lookupFacilities, lookupScores, scoresFor, suitableCustomModel, type FacilityLookup, type ScoreLookup,
+} from './bike-suitability-route.service'
 
 // ── Types ───────────────────────────────────────────────────────────
 
@@ -42,6 +44,7 @@ export interface RouteEdgeSegment extends EdgeTags {
   crossing?: string       // GH Crossing EV: MISSING | TRAFFIC_SIGNALS | MARKED | UNMARKED | UNCONTROLLED | RAILWAY | RAILWAY_BARRIER
   osmWayId?: number       // the OSM way the edge belongs to, for POST /route/lanes
   bikeSuitability?: number // 0-100 comfort score of that way, on a bike route asked for it
+  bikeFacility?: string   // the way's bike facility (path, track, lane, sharrow, none, ...), on the same routes
   country?: string        // ISO 3166-1 alpha-3
   streetName?: string     // the street an unnamed sidewalk runs beside, from sidewalk_street_names
   streetNameSource?: 'tag' | 'geometry'
@@ -339,6 +342,7 @@ export async function getEnrichedRoute(
   lookup: WayLookup = lookupWays,
   context: RouteContextSource = dbRouteContextSource,
   scoreLookup: ScoreLookup = lookupScores,
+  facilityLookup: FacilityLookup = lookupFacilities,
 ): Promise<EnrichedRouteResponse> {
   const ghUrl = graphHopperUrl()
   const available = await graphEncodedValues(fetchFn)
@@ -399,13 +403,20 @@ export async function getEnrichedRoute(
     )
 
     const ways = scored ? wayStretches(path.details, cumulativeDistances) : []
-    if (scored) await scoresFor(ways.map(w => w.wayId), scores, scoreLookup)
+    const wayIds = ways.map(w => w.wayId)
+    const [, facilities] = scored
+      ? await Promise.all([scoresFor(wayIds, scores, scoreLookup), facilityLookup(wayIds).catch(() => new Map<number, string>())])
+      : [scores, new Map<number, string>()]
 
     return {
       ...path,
       ...(scored && { bike_suitability: { score: pathScore(ways, scores), segments: scoreSegments(ways, scores) } }),
       edge_segments: scored
-        ? edgeSegments.map(seg => seg.osmWayId != null && scores.has(seg.osmWayId) ? { ...seg, bikeSuitability: scores.get(seg.osmWayId) } : seg)
+        ? edgeSegments.map(seg => seg.osmWayId == null ? seg : {
+          ...seg,
+          ...(scores.has(seg.osmWayId) && { bikeSuitability: scores.get(seg.osmWayId) }),
+          ...(facilities.has(seg.osmWayId) && { bikeFacility: facilities.get(seg.osmWayId) }),
+        })
         : edgeSegments,
       elevation_stats: elevationStats,
       overpasses: around.overpasses,
