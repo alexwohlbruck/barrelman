@@ -215,6 +215,9 @@ services:
     image: israelhikingmap/graphhopper@sha256:3e79eb33862028cfc58f9d6c162630b68638d6aad790b5a698c854dbbaa7fe32
     restart: unless-stopped
     logging: *default-logging
+    # The JVM runs as PID 1 and never reaps the healthcheck's curl processes,
+    # which piled up as zombies (169 after two weeks). tini reaps them.
+    init: true
     # -i and -o must be passed explicitly; the entrypoint script defaults
     # graph.location to /data/default-gh otherwise, ignoring our config value.
     command: ["-i", "/data/region.osm.pbf", "-o", "/data/graph-cache"]
