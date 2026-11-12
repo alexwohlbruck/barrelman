@@ -1454,6 +1454,12 @@ UPDATE _rm_roads r SET cap = 'endcap=flat join=round quad_segs=8'
 WHERE r.bridge OR EXISTS (
   SELECT 1 FROM _rm_incid a JOIN _rm_incid b ON b.x = a.x AND b.y = a.y AND b.bridge <> a.bridge
   WHERE a.osm_id = r.osm_id AND a.is_end);
+-- So does a road running into a tunnel: rounded, its cap lies on the ground over the bore, past the portal.
+UPDATE _rm_roads r SET cap = 'endcap=flat join=round quad_segs=8'
+WHERE NOT r.bridge AND EXISTS (
+  SELECT 1 FROM _rm_incid a JOIN geo_places t ON t.geom && ST_Transform(ST_Expand(a.p, 0.1), 4326)
+  WHERE a.osm_id = r.osm_id AND a.is_end AND t.osm_type = 'W' AND t.geom_type = 'line' AND t.tags ? 'highway'
+    AND COALESCE(t.tags->>'tunnel', 'no') NOT IN ('no', 'false', '0'));
 
 DROP TABLE IF EXISTS _rm_vertices;
 CREATE TEMP TABLE _rm_vertices AS
