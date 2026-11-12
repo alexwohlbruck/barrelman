@@ -107,6 +107,18 @@ attributes (\`edge_segments\`) and elevation statistics. Internally calls
 GraphHopper /route with details and elevation enabled. Edge segments carry
 \`osmWayId\` and \`country\` where the routing graph has them, for POST /route/lanes.
 
+On a \`bike\` route, \`bike_suitability: { weight }\` (0 fastest – 1 safest) routes by
+how comfortable each street is to ride (the \`cycling_tiles\` 0–100 \`score\`):
+the router is re-run a few times with the most stressful ways it took deranked, and
+the pass with the least stress-weighted riding time is returned. Each path then
+carries \`bike_suitability.score\` (distance-weighted mean) and \`segments\`
+(\`from\`/\`to\` metres with that stretch's \`score\`, null where unscored). Its
+edge segments carry their way's score as \`bikeSuitability\` and its bike facility as
+\`bikeFacility\` (\`path\`, \`shared_path\`, \`cyclestreet\`, \`track\`, \`buffered_lane\`,
+\`lane\`, \`busway\`, \`advisory\`, \`shoulder\`, \`sharrow\` or \`none\`). Send
+\`weight: 0\` to get the scores without changing the route. Needs \`osm_way_id\`
+in the graph.
+
 Each path also describes what it passes, for voice guidance, read from OSM:
 
 - \`edge_segments[].crossingName\`: on a crosswalk segment, the named road it crosses.
