@@ -71,6 +71,25 @@ describe('solveCuts', () => {
   })
 })
 
+describe('where the portal is drawn', () => {
+  const road = scene([way([at(-200), at(0)]), tunnel([at(0), at(150)])])
+
+  test('moves in from where the tunnel tag starts to where the ground covers the roof', () => {
+    // Level for 15 m past the tag, then a bluff 10 m high.
+    const bluff = (p: Point) => 200 + (eastOf(p) > 15 ? 10 : 0)
+    const [{ points, at: i, id }] = solveCuts(opened(road), bluff, () => true)
+    expect(eastOf(points[i])).toBeGreaterThan(14)
+    expect(eastOf(points[i])).toBeLessThan(20)
+    // Named for the tag's start, so the id holds.
+    expect(id).toBe(solved(road)[0].id)
+  })
+
+  test('stays where the tag starts in a hillside rising from it', () => {
+    const [{ points, at: i }] = solved(road)
+    expect(eastOf(points[i])).toBeCloseTo(0, 0)
+  })
+})
+
 describe('the drawn bore', () => {
   const road = scene([way([at(-200), at(0)]), tunnel([at(0), at(150)])])
   const past = (cuts: ReturnType<typeof solveCuts>) => eastOf(cuts[0].points[cuts[0].points.length - 1])

@@ -8,7 +8,7 @@
  * terrain straight from these rows, with no solving of its own.
  */
 import { along, boundsOf, chains, densify, edgePoints, holds, meets, metresPerUnit, type Bounds, type Piece, type Point } from '../bridge-mesh/decks'
-import { BORE, COVER_AT, CUT_MAX, KERB, PROFILES, RIM, approach, emerge, faceWall, groupPortals, inside, measureEdges, portalLine, solveCut, splitAtFace, truncate, type BoreKind, type Cut, type Opening } from './tunnels'
+import { BORE, COVER_AT, CUT_MAX, KERB, PROFILES, RIM, ROOF, approach, emerge, faceWall, groupPortals, inside, measureEdges, portalLine, solveCut, splitAtFace, truncate, type BoreKind, type Cut, type Opening } from './tunnels'
 
 /** OpenMapTiles road classes, as the basemap the client draws tunnels from classes them. */
 export type RoadClass = 'motorway' | 'trunk' | 'primary' | 'secondary' | 'tertiary' | 'minor' | 'service' | 'path' | 'rail' | 'transit'
@@ -144,7 +144,7 @@ export function groundPoints(found: Opening[]): Point[] {
 /** A portal's cut from the ground along it, kept from just before it opens; null where there is no cut to dig. `ground` is NaN where there is no terrain. */
 export function solvePortal({ out, bore, edges, kind, face, piers }: Opening, ground: (p: Point) => number): TunnelCut | null {
   const line = portalLine(out.points, bore, SAMPLE)
-  const { points, at } = line
+  const { points } = line
   const centre = points.map(ground)
   if (centre.some(Number.isNaN)) return null
   const sides = RIM.map(r => edgePoints({ points, edges: [edges[0] + KERB + r, edges[1] + KERB + r] } as any))
@@ -153,22 +153,53 @@ export function solvePortal({ out, bore, edges, kind, face, piers }: Opening, gr
     return known.length ? Math.min(...known) : centre[i]
   })) as [number[], number[]]
   const d = along(points)
-  const cover = COVER_AT.map(m => {
-    let i = at
-    while (i < points.length - 1 && d[i] - d[at] < m) i++
-    return ground(points[i])
-  }).filter(g => !Number.isNaN(g))
-  const cut = solveCut(d, at, centre, rims, cover.length ? Math.max(...cover) : centre[at], out.junction, PROFILES[kind])
+  const solveAt = (at: number) => {
+    const cover = COVER_AT.map(m => {
+      let i = at
+      while (i < points.length - 1 && d[i] - d[at] < m) i++
+      return ground(points[i])
+    }).filter(g => !Number.isNaN(g))
+    return solveCut(d, at, centre, rims, cover.length ? Math.max(...cover) : centre[at], out.junction, PROFILES[kind])
+  }
+  // A headwall mapped across the bore stays where it is; else the portal moves in to where the ground covers its roof.
+  const at = face ? line.at : coveredPortal(line.at, d, centre, solveAt)
+  const cut = solveAt(at)
   if (!cut || cut.open >= at) return null
   // Nothing before the vertex ahead of where it opens is drawn or carved; that one sets the walls' direction there.
   const from = Math.max(0, cut.open - 1)
   const to = boreEnd(at, cut.walls, centre)
   const trim = <T>(xs: T[]) => xs.slice(from, to)
-  const id = `${kind}:${points[at].map(v => Math.round(v * 2 ** 30)).join(',')}`
+  // Named for where OSM puts the portal, so the id holds wherever the portal is drawn.
+  const id = `${kind}:${points[line.at].map(v => Math.round(v * 2 ** 30)).join(',')}`
   return {
     id, kind, points: trim(points), at: at - from, edges, face, piers: piers?.length ? piers : undefined,
     cut: { ...cut, floor: trim(cut.floor), walls: [trim(cut.walls[0]), trim(cut.walls[1])], open: cut.open - from },
   }
+}
+
+/** Farthest a portal moves in from where OSM puts it, in metres. */
+export const PORTAL_SHIFT = 30
+/** Metres behind a headwall the ground must cover the roof over. */
+const COVERED_FOR = 6
+
+/**
+ * The vertex the portal is drawn at: OSM's, or the first within reach past it
+ * where the ground covers the bore's roof just behind the headwall. A tunnel
+ * tag often starts before the ground is deep enough over it, and a headwall
+ * there stands out of the slope with the bore behind it showing.
+ */
+export function coveredPortal(at: number, d: number[], centre: number[], solveAt: (at: number) => Cut | null): number {
+  const covered = (k: number, cut: Cut) => {
+    const roof = cut.floor[k] + cut.headroom + ROOF
+    return centre.every((g, i) => i <= k || d[i] - d[k] > COVERED_FOR || g >= roof - COVER_SLACK)
+  }
+  const first = solveAt(at)
+  if (!first || covered(at, first)) return at
+  for (let k = at + 1; k < centre.length - 2 && d[k] - d[at] <= PORTAL_SHIFT; k++) {
+    const cut = solveAt(k)
+    if (cut && covered(k, cut)) return k
+  }
+  return at
 }
 
 /** Metres the ground over a bore may dip below its roof before the bore would show through it. */
