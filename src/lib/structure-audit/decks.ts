@@ -6,7 +6,7 @@
  * grade the deck under it does not share.
  */
 import type { Deck } from '../bridge-decks/build'
-import { along, beside, box, grow, heightAt, lngLat, meet, nearSegments, type Box, type Point } from '../bridge-decks/profile'
+import { along, beside, box, grow, heightAt, lngLat, meet, metresPerUnit, nearSegments, type Box, type Point } from '../bridge-decks/profile'
 import { profileIssues, round, CHORD } from './profile'
 
 export type DeckIssue = {
@@ -46,9 +46,12 @@ export function deckIssues(deck: Deck, ground: Ground): DeckIssue[] {
   const n = deck.points.length
   for (const end of [0, 1] as const) {
     if (!deck.grounded[end]) continue
-    const [i, j] = end ? [n - 1, n - 2] : [0, 1]
-    const [p, q] = [deck.points[i], deck.points[j]]
-    const beyond: Point = [p[0] + (p[0] - q[0]) * (SEAM_REACH / step), p[1] + (p[1] - q[1]) * (SEAM_REACH / step)]
+    const i = end ? n - 1 : 0
+    const p = deck.points[i]
+    // The last sample is the line's own end, often a hand's breadth from the one before: aim along the last full step.
+    const q = pointAt(deck.points, d, end ? d[n - 1] - step : step)
+    const reach = SEAM_REACH / (Math.hypot(p[0] - q[0], p[1] - q[1]) * metresPerUnit(p[1]) || 1)
+    const beyond: Point = [p[0] + (p[0] - q[0]) * reach, p[1] + (p[1] - q[1]) * reach]
     // The road it lands on is draped from here on: off at the end but met just past it is a slope the terrain resolves, not a seam.
     const [off, past] = [deck.heights[i] - ground(p), deck.heights[i] - ground(beyond)]
     if (Math.abs(off) > SEAM && Math.abs(past) > SEAM) out.push({ kind: 'seam', deck: deck.id, at: lngLat(p), size: round(Math.abs(off) < Math.abs(past) ? off : past) })

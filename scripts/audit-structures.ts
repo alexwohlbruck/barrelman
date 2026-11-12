@@ -1,15 +1,19 @@
 /**
- * Audit Structures: scores every served bridge deck and tunnel cut in a box
- * against the checks in src/lib/structure-audit and the generator's own
- * continuity checks, read-only from the tiles a client gets, and ranks the
- * worst. Run before and after a generator change to measure it.
+ * Audit Structures: scores every bridge deck and tunnel cut in a box against
+ * the checks in src/lib/structure-audit and the generator's own continuity
+ * checks, and ranks the worst. Run before and after a generator change to
+ * measure it. Reads the tiles a client gets, or with --build builds the decks
+ * from DATABASE_URL in memory with this checkout's generator; neither writes.
  *
  *   bun scripts/audit-structures.ts --bbox=-74.3,40.5,-73.7,40.95 \
  *     --tiles 'https://host/tiles/{source}/{z}/{x}/{y}' [--key KEY] [--out audit]
+ *   DATABASE_URL=… bun scripts/audit-structures.ts --bbox=… --build [--out audit]
  */
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { parseArgs } from 'node:util'
-import type { Deck } from '../src/lib/bridge-decks/build'
+import postgres from 'postgres'
+import { inputFor, waysAround } from '../import/bridge-deck-cells'
+import { buildDecks, type Deck } from '../src/lib/bridge-decks/build'
 import { deckDefects } from '../src/lib/bridge-decks/continuity'
 import { Dem } from '../src/lib/bridge-decks/dem'
 import { lngLat, type Point } from '../src/lib/bridge-decks/profile'
@@ -19,8 +23,8 @@ import { score } from '../src/lib/structure-audit/score'
 import { servedCut, servedDeck, type ServedCut } from '../src/lib/structure-audit/served'
 import { cutIssues } from '../src/lib/structure-audit/tunnels'
 
-const { values } = parseArgs({ options: { bbox: { type: 'string' }, tiles: { type: 'string' }, key: { type: 'string' }, out: { type: 'string', default: 'audit' }, concurrency: { type: 'string', default: '8' } } })
-if (!values.bbox || !values.tiles) throw new Error('--bbox w,s,e,n and --tiles <url with {source}/{z}/{x}/{y}> are required')
+const { values } = parseArgs({ options: { bbox: { type: 'string' }, tiles: { type: 'string' }, key: { type: 'string' }, out: { type: 'string', default: 'audit' }, concurrency: { type: 'string', default: '8' }, build: { type: 'boolean', default: false } } })
+if (!values.bbox || !(values.tiles || values.build)) throw new Error('--bbox=w,s,e,n and --tiles <url with {source}/{z}/{x}/{y}> or --build are required')
 const [w, s, e, n] = values.bbox.split(',').map(Number)
 const Z = 14
 const tileX = (lng: number) => Math.floor(((lng + 180) / 360) * 2 ** Z)
@@ -49,17 +53,33 @@ async function fetchLayer(source: string): Promise<Array<Record<string, string |
 }
 
 const started = Date.now()
-const [deckRows, cutRows] = await Promise.all([fetchLayer('bridge_decks'), fetchLayer('tunnel_cuts')])
-const decks = [...new Map(deckRows.map(p => [String(p.id), p])).values()].map(servedDeck).filter((d): d is Deck => !!d)
-const cuts = [...new Map(cutRows.map(p => [String(p.id), p])).values()].map(servedCut).filter((c): c is ServedCut => !!c)
-console.log(`${tiles.length} tiles: ${decks.length} decks, ${cuts.length} tunnel cuts (${((Date.now() - started) / 1000).toFixed(0)} s)`)
-
 const dem = new Dem()
+
+/** Decks built from the database with this checkout, kept to those whose midpoint lies in the box, as a build cell keeps its own. */
+async function built(): Promise<Deck[]> {
+  const sql = postgres(process.env.DATABASE_URL!, { max: 2, max_lifetime: null })
+  try {
+    const rows = await waysAround(sql, [w, s, e, n])
+    const decks = rows.length ? await buildDecks(await inputFor(sql, rows), dem) : []
+    return decks.filter(d => { const [lng, lat] = lngLat(d.midpoint); return lng >= w && lng < e && lat >= s && lat < n })
+  } finally {
+    await sql.end({ timeout: 5 })
+  }
+}
+
+const [decks, cutRows] = await Promise.all([
+  values.build ? built() : fetchLayer('bridge_decks').then(rows => [...new Map(rows.map(p => [String(p.id), p])).values()].map(servedDeck).filter((d): d is Deck => !!d)),
+  values.tiles ? fetchLayer('tunnel_cuts') : Promise.resolve([]),
+])
+const cuts = [...new Map(cutRows.map(p => [String(p.id), p])).values()].map(servedCut).filter((c): c is ServedCut => !!c)
+console.log(`${decks.length} decks ${values.build ? 'built' : 'served'}, ${cuts.length} tunnel cuts (${((Date.now() - started) / 1000).toFixed(0)} s)`)
+
 await dem.load([...decks.flatMap(d => d.points), ...cuts.flatMap(c => c.points)])
 const ground = dem.at.bind(dem)
 
 const issues = [
-  ...deckDefects(decks).map(d => ({ structure: d.deck, ...d })),
+  // Its `floating` reads the ground at the end alone, where a deck run on over a hollow in the terrain stands over it by design: `seam` reads past the end too.
+  ...deckDefects(decks).filter(d => d.kind !== 'floating').map(d => ({ structure: d.deck, ...d })),
   ...decks.flatMap(d => deckIssues(d, ground)).map(d => ({ structure: d.deck, ...d })),
   ...clashes(decks).map(d => ({ structure: d.deck, ...d })),
   ...lurches(decks).map(d => ({ structure: d.deck, ...d })),
