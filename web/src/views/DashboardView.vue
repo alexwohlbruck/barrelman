@@ -39,7 +39,7 @@ onMounted(refreshAll)
     </template>
   </PageHeader>
 
-  <div class="space-y-8 p-8">
+  <div class="space-y-8 p-4 md:p-8">
     <SetupChecklist />
 
     <!-- Service health -->

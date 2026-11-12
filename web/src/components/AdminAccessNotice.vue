@@ -17,7 +17,7 @@ const needsPasskey = computed(() => adminAccess.value?.code === 'passkey_require
 <template>
   <div
     v-if="adminBlocked"
-    class="flex items-start gap-3 border-b border-warning/30 bg-warning/10 px-8 py-3 text-sm"
+    class="flex items-start gap-3 border-b border-warning/30 bg-warning/10 px-4 py-3 md:px-8 text-sm"
     role="status"
   >
     <ShieldAlert class="mt-0.5 size-4 shrink-0 text-warning" />

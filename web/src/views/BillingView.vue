@@ -217,7 +217,7 @@ async function sync() {
     </template>
   </PageHeader>
 
-  <div class="mx-auto max-w-5xl space-y-6 p-8">
+  <div class="mx-auto max-w-5xl space-y-6 p-4 md:p-8">
     <div v-if="loading" class="flex justify-center py-16"><Spinner class="size-6" /></div>
 
     <template v-else>
@@ -364,24 +364,26 @@ async function sync() {
       <Card v-if="ledger.length">
         <CardHeader><CardTitle>Credit history</CardTitle></CardHeader>
         <CardContent>
-          <table class="w-full text-sm">
-            <tbody>
-              <tr v-for="entry in ledger" :key="entry.id" class="border-b border-border/50 last:border-0">
-                <td class="py-2">
-                  {{ entry.description || entry.kind }}
-                  <span class="ml-1.5 text-xs text-muted-foreground">
-                    {{ new Date(entry.createdAt).toLocaleDateString(undefined, { dateStyle: 'medium' }) }}
-                  </span>
-                </td>
-                <td
-                  class="py-2 text-right tabular-nums"
-                  :class="entry.amount >= 0 ? 'text-[var(--success)]' : 'text-destructive'"
-                >
-                  {{ entry.amount >= 0 ? '+' : '' }}{{ formatNumber(entry.amount) }}
-                </td>
-              </tr>
-            </tbody>
-          </table>
+          <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+              <tbody>
+                <tr v-for="entry in ledger" :key="entry.id" class="border-b border-border/50 last:border-0">
+                  <td class="py-2">
+                    {{ entry.description || entry.kind }}
+                    <span class="ml-1.5 text-xs text-muted-foreground">
+                      {{ new Date(entry.createdAt).toLocaleDateString(undefined, { dateStyle: 'medium' }) }}
+                    </span>
+                  </td>
+                  <td
+                    class="py-2 text-right tabular-nums"
+                    :class="entry.amount >= 0 ? 'text-[var(--success)]' : 'text-destructive'"
+                  >
+                    {{ entry.amount >= 0 ? '+' : '' }}{{ formatNumber(entry.amount) }}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
         </CardContent>
       </Card>
     </template>

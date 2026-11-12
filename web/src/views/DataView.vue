@@ -71,7 +71,7 @@ const Row = (props: { label: string; value: string; hint?: string }) =>
     </template>
   </PageHeader>
 
-  <div class="p-8">
+  <div class="p-4 md:p-8">
     <div v-if="!metrics && metricsLoading" class="flex items-center justify-center py-20 text-muted-foreground">
       <Spinner class="mr-2 size-5" /> Loading metrics…
     </div>

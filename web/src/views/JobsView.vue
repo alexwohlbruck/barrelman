@@ -37,7 +37,7 @@ onMounted(refreshJobs)
     </template>
   </PageHeader>
 
-  <div class="p-8">
+  <div class="p-4 md:p-8">
     <!-- Stat strip -->
     <div class="mb-5 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
       <div class="rounded-lg border border-border bg-card px-4 py-3">

@@ -199,7 +199,7 @@ const coordLabels = ['West', 'South', 'East', 'North']
       <div class="flex flex-col gap-2">
         <Label>Bounding box</Label>
         <BboxMap :model-value="form.bbox" @update:model-value="form.bbox = $event" />
-        <div class="grid grid-cols-4 gap-2">
+        <div class="grid grid-cols-2 gap-2 sm:grid-cols-4">
           <div v-for="(lbl, i) in coordLabels" :key="lbl" class="flex flex-col gap-1">
             <span class="text-xs text-muted-foreground">{{ lbl }}</span>
             <Input type="number" :model-value="form.bbox[i]" @update:model-value="setCoord(i, $event)" />
