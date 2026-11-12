@@ -162,12 +162,32 @@ export function solvePortal({ out, bore, edges, kind, face, piers }: Opening, gr
   if (!cut || cut.open >= at) return null
   // Nothing before the vertex ahead of where it opens is drawn or carved; that one sets the walls' direction there.
   const from = Math.max(0, cut.open - 1)
-  const trim = <T>(xs: T[]) => xs.slice(from)
+  const to = boreEnd(at, cut.walls, centre)
+  const trim = <T>(xs: T[]) => xs.slice(from, to)
   const id = `${kind}:${points[at].map(v => Math.round(v * 2 ** 30)).join(',')}`
   return {
     id, kind, points: trim(points), at: at - from, edges, face, piers: piers?.length ? piers : undefined,
     cut: { ...cut, floor: trim(cut.floor), walls: [trim(cut.walls[0]), trim(cut.walls[1])], open: cut.open - from },
   }
+}
+
+/** Metres the ground over a bore may dip below its roof before the bore would show through it. */
+export const COVER_SLACK = 0.3
+
+/**
+ * Where the drawn bore stops: where the ground over its middle, having closed
+ * over its roof, dips below it again. Bare-earth terrain leaves out a street or deck the road
+ * passes under, and a bore drawn on through that gap stands out of the ground.
+ * Short of the ground closing over it, the headwall's top covers the bore.
+ */
+export function boreEnd(at: number, walls: [number[], number[]], centre: number[]): number {
+  let covered = false
+  for (let i = at + 1; i < centre.length; i++) {
+    const over = centre[i] - Math.max(walls[0][i], walls[1][i])
+    if (over >= 0) covered = true
+    else if (covered && over < -COVER_SLACK) return i
+  }
+  return centre.length
 }
 
 /** Every cut over the openings whose portal `owns` keeps, one per portal. */

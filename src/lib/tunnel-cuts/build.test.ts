@@ -71,6 +71,26 @@ describe('solveCuts', () => {
   })
 })
 
+describe('the drawn bore', () => {
+  const road = scene([way([at(-200), at(0)]), tunnel([at(0), at(150)])])
+  const past = (cuts: ReturnType<typeof solveCuts>) => eastOf(cuts[0].points[cuts[0].points.length - 1])
+
+  test('runs its full length under a hillside that covers it', () => {
+    expect(past(solveCuts(opened(road), hill, () => true))).toBeGreaterThan(35)
+  })
+
+  test('stops short of a gap in the ground over it, a street the bare-earth terrain leaves out', () => {
+    // The hillside falls 6 m between 25 and 40 m in, where a deck spans the road.
+    const gapped = (p: Point) => hill(p) - (eastOf(p) > 25 && eastOf(p) < 40 ? 6 : 0)
+    const cuts = solveCuts(opened(road), gapped, () => true)
+    expect(cuts).toHaveLength(1)
+    const [{ points, at: i, cut }] = cuts
+    expect(points.length).toBeGreaterThan(i + 1)
+    expect(past(cuts)).toBeLessThanOrEqual(25)
+    expect(past(cuts)).toBeGreaterThan(15)
+  })
+})
+
 describe('groundPoints', () => {
   test('spans every vertex a cut is solved along', () => {
     const found = opened(scene([way([at(-200), at(0)]), tunnel([at(0), at(150)])]))
