@@ -10,6 +10,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.10.42] - 2026-11-12
+
 ### Fixed
 
 * Console dialogs that are taller than the window now scroll instead of running off the bottom of the screen. Before, the end of a long script form like OSM Update, including its Run button, could not be reached.
