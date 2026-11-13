@@ -10,11 +10,16 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
-## [0.10.45] - 2026-11-13
+## [0.10.46] - 2026-11-13
 
 ### Fixed
 
 * Departure boards and trip plans show live times to the second, from the agency's own latest prediction. MOTIS keeps whole minutes, rounded down, and lags a poll behind, so live times often read one to two minutes early.
+
+## [0.10.45] - 2026-11-13
+
+### Fixed
+
 * A GTFS import no longer stops relaying a feed's realtime because it was measured while service was thin. Imports run around 2 AM, when Pittsburgh, Atlanta and Charlotte publish too few updates to judge, and losing the relay left most of their buses on timetable times all day.
 
 ## [0.10.44] - 2026-11-13
