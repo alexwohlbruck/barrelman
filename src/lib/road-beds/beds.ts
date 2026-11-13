@@ -21,10 +21,13 @@ export const BED = {
 
 export type Bed = { points: Point[]; floor: number[] }
 
+/** Samples each side a floor is averaged over. */
+const SMOOTH = 2
+
 /**
  * The beds of a road `half` metres wide each side of its centreline, from the
  * ground `at` each point (null where unknown): its centreline's height,
- * smoothed over three samples, where an edge lies BED.uneven off it.
+ * smoothed, where an edge lies BED.uneven off it.
  */
 export function beds(points: Point[], half: number, at: (p: Point) => number | null): Bed[] {
   const line = densify(points, BED.step)
@@ -60,7 +63,12 @@ export function beds(points: Point[], half: number, at: (p: Point) => number | n
     const heights = centre.slice(i, j + 1)
     if ((j - i) * BED.step >= BED.min && heights.every(h => h !== null)) {
       const h = heights as number[]
-      const floor = h.map((v, k) => [h[Math.max(0, k - 1)], v, h[Math.min(h.length - 1, k + 1)]].sort((x, y) => x - y)[1])
+      const median = h.map((v, k) => [h[Math.max(0, k - 1)], v, h[Math.min(h.length - 1, k + 1)]].sort((x, y) => x - y)[1])
+      // Evened over SMOOTH samples too: the terrain's noise along a road would otherwise ripple its paint.
+      const floor = median.map((_, k) => {
+        const near = median.slice(Math.max(0, k - SMOOTH), k + SMOOTH + 1)
+        return near.reduce((a, b) => a + b, 0) / near.length
+      })
       out.push({ points: run, floor })
     }
     i = j + 1

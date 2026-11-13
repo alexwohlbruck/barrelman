@@ -18,20 +18,23 @@ import { beds } from '../src/lib/road-beds/beds'
 /** Roads wide and fast enough that a lean across them shows, at their widths per lane in metres. */
 const LANE: Record<string, number> = { motorway: 3.65, motorway_link: 3.65, trunk: 3.5, trunk_link: 3.5, primary: 3.3, primary_link: 3.3 }
 
-type Row = { id: string; highway: string; width: string | null; lanes: string | null; oneway: string | null; coords: number[][] }
+type Row = { id: string; highway: string; width: string | null; lanes: string | null; coords: number[][] }
 
-/** Metres from a road's centreline to its carriageway's edge: tagged, else its lanes at their class's width. */
-export function halfWidth(r: Pick<Row, 'highway' | 'width' | 'lanes' | 'oneway'>): number {
+/** Metres of shoulder each side of a carriageway's lanes. */
+const SHOULDER = 1
+
+/** Metres from a road's centreline to its carriageway's edge: tagged, else its lanes at their class's width and a shoulder. */
+export function halfWidth(r: Pick<Row, 'highway' | 'width' | 'lanes'>): number {
   const tagged = Number.parseFloat(r.width ?? '')
   if (tagged >= 3 && tagged <= 60) return tagged / 2
   const lanes = Number.parseInt(r.lanes ?? '') || 2
-  return (lanes * (LANE[r.highway] ?? 3.3)) / 2
+  return (lanes * (LANE[r.highway] ?? 3.3)) / 2 + SHOULDER
 }
 
 export async function buildArea(sql: postgres.Sql, dem: Dem, [w, s, e, n]: [number, number, number, number]): Promise<number> {
   const rows = await sql<Row[]>`
     SELECT osm_id::text AS id, tags->>'highway' AS highway, COALESCE(tags->>'width:carriageway', tags->>'width') AS width,
-           tags->>'lanes' AS lanes, tags->>'oneway' AS oneway, ST_AsGeoJSON(geom)::json->'coordinates' AS coords
+           tags->>'lanes' AS lanes, ST_AsGeoJSON(geom)::json->'coordinates' AS coords
     FROM geo_places
     WHERE osm_type = 'W' AND geom_type = 'line' AND geom && ST_MakeEnvelope(${w}, ${s}, ${e}, ${n}, 4326)
       AND tags->>'highway' = ANY(${Object.keys(LANE)})
