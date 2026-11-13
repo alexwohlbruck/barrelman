@@ -10,6 +10,10 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Fixed
+
+* A road passing under a bridge no longer has its lane paint drawn on the bridge's deck. Paint goes on a deck only where its road runs along it or the deck is its road's own, and a road tagged `covered=yes` stays on the ground whatever its `layer` (the Brooklyn-Queens Expressway under the Brooklyn Bridge's approach). Road markings keep the way they were painted for; rebuild the road markings, then the bridge decks, for existing paint to take it.
+
 ## [0.10.41] - 2026-11-10
 
 ### Fixed

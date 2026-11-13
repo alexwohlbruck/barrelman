@@ -878,8 +878,10 @@ SELECT osm_id, local, class, g, s, americas, oneway, flip, tags, both_ways, mph,
        -- Metres along the way as mapped: tapers are laid out on it, the same
        -- whichever box builds them, though smoothing differs.
        ST_Length(g) / s as len_m,
-       -- Above the ground: a bridge, or anything mapped on a layer over it.
-       COALESCE(tags->>'bridge', 'no') NOT IN ('no') OR COALESCE(road_int(tags->>'layer'), 0) > 0 as bridge,
+       -- Above the ground: a bridge, or anything mapped on a layer over it
+       -- unless it is covered, which puts it under whatever its layer clears.
+       COALESCE(tags->>'bridge', 'no') NOT IN ('no')
+         OR (COALESCE(road_int(tags->>'layer'), 0) > 0 AND COALESCE(tags->>'covered', 'no') = 'no') as bridge,
        bike_rt[1] as bike_r, bike_rt[2] as buf_r, bike_rt[3] = 1 as track_r,
        bike_lt[1] as bike_l, bike_lt[2] as buf_l, bike_lt[3] = 1 as track_l,
        park_r, park_l,
@@ -2904,7 +2906,6 @@ FROM _rm_deck_paint p JOIN road_markings_next m ON m.fid = p.fid
 WHERE NOT ST_IsEmpty(p.inside);
 UPDATE road_markings_next m SET geom = p.outside FROM _rm_deck_paint p WHERE m.fid = p.fid;
 DELETE FROM road_markings_next WHERE fid IN (SELECT fid FROM _rm_deck_paint) AND ST_IsEmpty(geom);
-ALTER TABLE road_markings_next DROP COLUMN way;
 
 -- ─── Swap ────────────────────────────────────────────────────────────────────
 CREATE INDEX road_markings_next_geom_idx ON road_markings_next USING gist (geom);
@@ -2965,8 +2966,10 @@ BEGIN
 
   INSERT INTO road_surfaces (bridge, kind, geom)
   SELECT bridge, kind, ST_Multi(road_clip(geom, box, true, 3)) FROM road_surfaces_next WHERE geom && box;
-  INSERT INTO road_markings (kind, pattern, color, style, bridge, geom)
-  SELECT kind, pattern, color, style, bridge, road_clip(geom, box, true, CASE WHEN pattern = 'fill' THEN 3 ELSE 2 END)
+  -- The way each mark is painted for, which the deck bake reads; a table from before it kept one gains it here.
+  ALTER TABLE road_markings ADD COLUMN IF NOT EXISTS way bigint;
+  INSERT INTO road_markings (kind, pattern, color, style, bridge, geom, way)
+  SELECT kind, pattern, color, style, bridge, road_clip(geom, box, true, CASE WHEN pattern = 'fill' THEN 3 ELSE 2 END), way
   FROM road_markings_next WHERE geom && box;
   INSERT INTO road_glyphs (glyph, direction, bridge, geom)
   SELECT glyph, direction, bridge, geom FROM road_glyphs_next WHERE ST_Intersects(geom, box);

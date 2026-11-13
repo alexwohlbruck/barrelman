@@ -169,6 +169,10 @@ export function layPaint(mesh: Mesh, paint: Paint[], surfaces: DeckSurface[], co
     if (on) {
       under.lines = under.lines.map(line => line.map(h => h && on(surfaces[h.deck]) ? h : null))
     }
+    // A road's mark lies on another road's deck only where it runs with it: one crossing beneath is not carried by it.
+    const foreign = (h: Hit | null) => props.way != null && !!h && h.deck >= 0 && !!surfaces[h.deck].ways && !surfaces[h.deck].ways!.includes(Number(props.way))
+    under.lines = under.lines.map((line, k) => line.map((h, i) => (foreign(h) && !runsAlong(surfaces, h, lines[k], i) ? null : h)))
+    under.rings = under.rings.map((ring, k) => ring.map((h, i) => (foreign(h) && !runsAlong(surfaces, h, flat[k], i) ? null : h)))
     let next = 0
     const lift = props.color === 'white' ? 0.03 : props.color === 'asphalt' ? 0.01 : 0.02
     if (parts !== 'lines') for (const rings of areas) fill(mesh, rings, { under: under.rings.slice(next, (next += rings.length)).flat(), surfaces, grounded: atGrade, ground, on }, color, lift, origin)
