@@ -26,6 +26,13 @@ import { normalizeFeed, type NormalizeStats } from '../src/lib/rt-normalize/norm
 export const worthNormalizing = (s: NormalizeStats) =>
   s.reordered > 0 || s.dated + s.matched + s.added >= Math.max(3, 0.1 * s.updates)
 
+/** Fewer updates than this can't show a feed resolves on its own; imports run when service is thin. */
+const MIN_SAMPLE = 50
+
+/** Whether a URL is relayed after this sample, given whether it was before. */
+export const keepNormalizing = (s: NormalizeStats, was: boolean) =>
+  worthNormalizing(s) || (was && (s.updates < MIN_SAMPLE || s.dated + s.matched + s.added + s.cancelled + s.reordered > 0))
+
 const isTripUpdates = (rt: RtUrlEntry) => rt.type === 'tripUpdates' || rt.type === undefined
 
 /** The feed's realtime URLs with `normalize` decided afresh for each trip-update URL. */
@@ -49,8 +56,7 @@ export async function measureRtNormalize(
     if (!isTripUpdates(rt)) { out.push(base); continue }
     try {
       const { stats } = normalizeFeed(index, await fetchRealtime(rt))
-      // Once on, stay on while it repairs anything: one quiet sample shouldn't flap it off.
-      const on = worthNormalizing(stats) || (!!rt.normalize && stats.dated + stats.matched + stats.added + stats.cancelled + stats.reordered > 0)
+      const on = keepNormalizing(stats, !!rt.normalize)
       log(
         `  ${on ? '✓' : '–'} realtime ${new URL(rt.url).pathname}: ${stats.updates} updates, ` +
           `${stats.exact} resolve as published, ${stats.dated} lack a start date, ${stats.reordered} out of block order, matching adds ${stats.matched} matched + ${stats.added} new, ` +
