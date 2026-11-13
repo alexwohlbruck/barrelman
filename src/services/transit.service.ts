@@ -7,6 +7,8 @@
  * trip composition. See the Planning section for how a trip is searched.
  */
 
+import { exactCall, refineTime, type ExactCall } from '../lib/rt-normalize/exact-times'
+import { liveCalls } from './rt-normalize.service'
 import { db } from '../db'
 import { haversine } from './route.service'
 import { sql, type SQL } from 'drizzle-orm'
@@ -687,6 +689,39 @@ async function motisPlan(
   }
 }
 
+const feedOf = (motisStopId?: string) => motisStopId?.slice(0, motisStopId.indexOf('_'))
+const stopOf = (motisStopId: string) => motisStopId.slice(motisStopId.indexOf('_') + 1)
+
+/** Live legs' times to the agency's second; see departures' exactCallsFor. */
+async function refineLiveLegs(itineraries: TransitItinerary[]) {
+  const legs = itineraries.flatMap((it) => it.legs).filter((l) => l.transitLeg && l.realTime && l.tripId)
+  const feedIds = [...new Set(legs.map((l) => feedOf(l.from.stopId)).filter((f): f is string => !!f))]
+  const calls = new Map<string, Map<string, ExactCall>>()
+  await Promise.race([
+    Promise.allSettled(feedIds.map(async (id) => calls.set(id, await liveCalls(id)))),
+    Bun.sleep(1500),
+  ])
+  const at = (place: TransitLegPlace, tripId: string) =>
+    place.stopId ? exactCall(calls.get(feedOf(place.stopId)!), tripId, stopOf(place.stopId)) : undefined
+  for (const leg of legs) {
+    for (const place of [leg.from, ...(leg.intermediateStops ?? []), leg.to]) {
+      const exact = at(place, leg.tripId!)
+      place.arrival = refineTime(place.arrival, exact?.arrival ?? exact?.departure)
+      place.departure = refineTime(place.departure, exact?.departure ?? exact?.arrival)
+    }
+    const moved = (from: string, to: string) => (Date.parse(to) - Date.parse(from)) / 1000
+    if (leg.from.departure && leg.from.departure !== leg.startTime) {
+      leg.departureDelay = (leg.departureDelay ?? 0) + moved(leg.startTime, leg.from.departure)
+      leg.startTime = leg.from.departure
+    }
+    if (leg.to.arrival && leg.to.arrival !== leg.endTime) {
+      leg.arrivalDelay = (leg.arrivalDelay ?? 0) + moved(leg.endTime, leg.to.arrival)
+      leg.endTime = leg.to.arrival
+    }
+    leg.duration = Math.round((Date.parse(leg.endTime) - Date.parse(leg.startTime)) / 1000)
+  }
+}
+
 /** Bike and rental access: MOTIS routes the street legs itself. */
 function planFromCoordinates(request: IntermodalRouteRequest, fetchFn: FetchFn): Promise<TransitRouteResponse> {
   const params = planParams(
@@ -1267,6 +1302,8 @@ export async function getIntermodalRoute(
     request.arriveBy,
     outOfSystem,
   )
+
+  await refineLiveLegs(result.itineraries).catch((err) => console.warn(`[transit] exact live times: ${(err as Error).message}`))
 
   // Attach the full set of interchangeable lines to each transit leg, so the
   // rider sees every train that runs the segment directly — independent of
