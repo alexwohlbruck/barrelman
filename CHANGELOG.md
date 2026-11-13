@@ -10,6 +10,37 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.10.43] - 2026-11-12
+
+### Added
+
+- Bike suitability. Every rideable way is scored 0–100 from its tags (traffic
+  stress, bike facility, surface, incline and more) and served with the
+  existing cycling ways as one `cycling_tiles` Martin source, z9–16. Deploying
+  needs that source in `martin-config.yaml`; Martin reads it at startup.
+- `POST /route` with `profile: "bike"` accepts `bike_suitability: { weight }`,
+  from 0 (fastest) to 1 (safest), and steers the route away from the most
+  stressful streets in its corridor.
+
+### Changed
+
+- The console now works on a phone. Below tablet width the sidebar folds into
+  a drawer behind a menu button, pages use tighter margins, wide tables scroll
+  sideways instead of overflowing, and dialogs fit the screen and scroll when
+  they are taller than it. Form fields no longer make iOS zoom in on focus.
+- Transit plans start from a wider spread of nearby routes. One line can no
+  longer take every access-station slot, so a bus stop next to a streetcar line
+  is considered. Plans that ride one stop only to walk back to another line now
+  walk there directly, and an itinerary beaten on every count by another is
+  dropped.
+- MOTIS no longer builds or holds its address geocoder, which Barrelman never
+  used, and `MOTIS_THREADS` optionally caps its request threads. Both lower its
+  peak memory; they take effect at the next MOTIS import.
+
+### Fixed
+
+- GraphHopper's healthcheck no longer leaves zombie processes behind.
+
 ## [0.10.42] - 2026-11-12
 
 ### Fixed

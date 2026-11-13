@@ -1986,6 +1986,11 @@ interface MotisConfigOptions {
    * less often. Defaults to the MOTIS_RT_UPDATE_INTERVAL env var, else 60.
    */
   rtUpdateInterval?: number
+  /**
+   * MOTIS request threads, from MOTIS_THREADS. Each in-flight query holds its
+   * own search state, so this caps peak memory. Unset → one per core.
+   */
+  threads?: number
   /** Enable OSM street routing for intermodal queries (default: false) */
   enableStreetRouting?: boolean
   /** Path to OSM PBF file (default: /osm-data/region.osm.pbf) */
@@ -2017,6 +2022,7 @@ export async function generateMotisConfig(options?: MotisConfigOptions): Promise
     numDays = 365,
     maxFootpathLength = 15,
     rtUpdateInterval = Number(process.env.MOTIS_RT_UPDATE_INTERVAL) || 60,
+    threads = Number(process.env.MOTIS_THREADS) || undefined,
     enableStreetRouting = false,
     // MOTIS uses the platform-stripped extract (scripts/prepare-motis-osm.sh)
     // so underground subway stops stay street-reachable. region.osm.pbf is
@@ -2135,8 +2141,10 @@ export async function generateMotisConfig(options?: MotisConfigOptions): Promise
   lines.push('')
   lines.push(`street_routing: ${enableStreetRouting}`)
   lines.push(`osr_footpath: ${enableStreetRouting}`)
-  lines.push(`geocoding: ${enableStreetRouting}`)
+  // Pelias answers geocoding; MOTIS's own index is an unused gigabyte.
+  lines.push('geocoding: false')
   lines.push('reverse_geocoding: false')
+  if (threads) lines.push('server:', `  n_threads: ${threads}`)
   lines.push('')
 
   return lines.join('\n')

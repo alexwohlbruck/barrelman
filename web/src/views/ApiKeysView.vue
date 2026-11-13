@@ -134,7 +134,7 @@ async function copyKey() {
     </template>
   </PageHeader>
 
-  <div class="mx-auto max-w-4xl space-y-4 p-8">
+  <div class="mx-auto max-w-4xl space-y-4 p-4 md:p-8">
     <div v-if="loading" class="flex justify-center py-16"><Spinner class="size-6" /></div>
 
     <Card v-else-if="!keys.length">

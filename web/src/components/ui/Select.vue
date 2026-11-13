@@ -20,7 +20,7 @@ const emit = defineEmits<{ 'update:modelValue': [value: string] }>()
   <SelectRoot :model-value="modelValue" @update:model-value="emit('update:modelValue', $event as string)" :disabled="disabled">
     <SelectTrigger
       :class="cn(
-        'flex h-9 w-full items-center justify-between gap-2 rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-50 data-[placeholder]:text-muted-foreground',
+        'flex h-9 w-full items-center justify-between gap-2 rounded-md border border-input bg-transparent px-3 py-1 text-base md:text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-50 data-[placeholder]:text-muted-foreground',
         props.class,
       )"
     >

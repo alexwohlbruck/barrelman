@@ -270,7 +270,7 @@ function describeDetail(detail: Record<string, unknown> | null) {
     </template>
   </PageHeader>
 
-  <div class="mx-auto max-w-5xl space-y-4 p-8">
+  <div class="mx-auto max-w-5xl space-y-4 p-4 md:p-8">
     <Tabs
       v-model="tab"
       :tabs="[
@@ -284,7 +284,7 @@ function describeDetail(detail: Record<string, unknown> | null) {
     <!-- Accounts -->
     <template v-else-if="tab === 'accounts'">
       <div class="flex flex-wrap items-center gap-2">
-        <div class="relative min-w-56 flex-1">
+        <div class="relative min-w-full flex-1 sm:min-w-56">
           <Search class="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
           <Input v-model="search" placeholder="Search by email or name" class="pl-9" @keyup.enter="load" />
         </div>

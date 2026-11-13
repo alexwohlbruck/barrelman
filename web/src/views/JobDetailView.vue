@@ -116,7 +116,7 @@ onBeforeUnmount(() => controller?.abort())
     </template>
   </PageHeader>
 
-  <div class="p-8">
+  <div class="p-4 md:p-8">
     <div v-if="notFound" class="py-20 text-center text-muted-foreground">
       Job not found. It may have been evicted from history.
       <div class="mt-3"><RouterLink to="/jobs" class="text-foreground underline underline-offset-4">Back to jobs</RouterLink></div>

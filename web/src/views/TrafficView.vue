@@ -21,7 +21,7 @@ function close() {
 
 <template>
   <PageHeader title="Traffic" subtitle="Rate limiting, refusals and response times across the metered API" />
-  <div class="mx-auto max-w-5xl p-8">
+  <div class="mx-auto max-w-5xl p-4 md:p-8">
     <TrafficPanel :refresh-key="refresh" @open-account="openAccount = $event" />
   </div>
   <UserDetailPane :user-id="openAccount" @close="close" />

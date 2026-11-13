@@ -71,11 +71,14 @@ import {
   checkMotisHealth,
   extractFare,
   countFarePayments,
+  pickStations,
+  skipDetourRides,
   rankItineraries,
   boardsRailOrFerry,
   MotisError,
   type TransitRouteRequest,
   type TransitItinerary,
+  type TransitLeg,
 } from './transit.service'
 
 // ── Fixtures ────────────────────────────────────────────────────────
@@ -1146,5 +1149,134 @@ describe('rankItineraries', () => {
     const ranked = rankItineraries([roundabout, direct, itin(3, 20)], 5)
     expect(ranked).toHaveLength(2)
     expect(ranked[0]).toBe(direct)
+  })
+})
+
+describe('pickStations', () => {
+  const station = (stationId: string, ...routes: string[]) => ({ feedId: 'f', stationId, lat: 0, lng: 0, routes })
+  const ids = (stations: { stationId: string }[]) => stations.map((s) => s.stationId)
+
+  test('leaves room for a bus when one streetcar line has every nearby stop', () => {
+    const candidates = [
+      station('gold-8th', 'gold'), station('gold-sunnyside', 'gold'),
+      station('gold-5th-w', 'gold'), station('gold-5th-e', 'gold'),
+      station('27-in', '27'), station('27-out', '27'), station('27-beaumont', '27'),
+    ]
+    expect(ids(pickStations(candidates, 4))).toEqual(['gold-8th', 'gold-sunnyside', '27-in', '27-out'])
+  })
+
+  test('takes a stop that adds any new route', () => {
+    const candidates = [station('a', '9', '17'), station('b', '9', '17'), station('c', '9', '17', '27')]
+    expect(ids(pickStations(candidates, 3))).toEqual(['a', 'b', 'c'])
+  })
+
+  test('fills free slots with the stops passed over, nearest first', () => {
+    const candidates = [station('a', 'x'), station('b', 'x'), station('c', 'x'), station('d', 'x')]
+    expect(ids(pickStations(candidates, 4))).toEqual(['a', 'b', 'c', 'd'])
+  })
+
+  test('keeps a stop with no known routes', () => {
+    expect(ids(pickStations([station('a', 'x'), station('b', 'x'), station('c')], 3))).toEqual(['a', 'b', 'c'])
+  })
+})
+
+describe('rankItineraries dominance', () => {
+  const leg = (route: string, from: number, to: number, mode = 'BUS') => {
+    const start = Date.UTC(2026, 10, 11, 21, from)
+    const end = Date.UTC(2026, 10, 11, 21, to)
+    return {
+      mode, transitLeg: mode !== 'WALK', tripId: mode === 'WALK' ? undefined : route,
+      from: { name: route, lat: 0, lng: 0, stopId: `${route}-a` },
+      to: { name: route, lat: 0, lng: 0, stopId: `${route}-b` },
+      startTime: new Date(start).toISOString(), endTime: new Date(end).toISOString(),
+      duration: (to - from) * 60, distance: 0,
+    }
+  }
+  const trip = (legs: ReturnType<typeof leg>[]): TransitItinerary => ({
+    duration: legs.reduce((s, l) => s + l.duration, 0),
+    startTime: legs[0].startTime,
+    endTime: legs[legs.length - 1].endTime,
+    walkTime: 0, transitTime: 0, waitingTime: 0, walkDistance: 0,
+    transfers: legs.filter((l) => l.transitLeg).length - 1,
+    legs,
+  })
+
+  test('drops a ride away and back when walking straight to the bus arrives as soon', () => {
+    const direct = trip([leg('walk', 28, 31, 'WALK'), leg('27', 31, 36), leg('19', 40, 47)])
+    const detour = trip([
+      leg('walk', 16, 17, 'WALK'), leg('gold', 17, 18, 'TRAM'), leg('walk', 18, 20, 'WALK'),
+      leg('17', 27, 33), leg('19', 40, 47),
+    ])
+    expect(rankItineraries([detour, direct], 5)).toEqual([direct])
+  })
+
+  test('keeps a trip that leaves earlier but walks less', () => {
+    const walky = trip([leg('walk', 20, 35, 'WALK'), leg('9', 35, 47)])
+    const ride = trip([leg('walk', 10, 12, 'WALK'), leg('27', 12, 47)])
+    expect(rankItineraries([walky, ride], 5)).toHaveLength(2)
+  })
+})
+
+describe('skipDetourRides', () => {
+  const at = (minute: number) => new Date(Date.UTC(2026, 10, 11, 21, minute)).toISOString()
+  const place = (name: string, lat: number, lng: number) => ({ name, lat, lng, stopId: name })
+  const home = { lat: 35.2168, lng: -80.820753 }
+  const work = { lat: 35.216106, lng: -80.855767 }
+  const hawthorne8th = place('hawthorne-8th', 35.216483, -80.821265)
+  const sunnyside = place('sunnyside', 35.219443, -80.818893)
+  const beaumont = place('7th-beaumont', 35.217053, -80.823742)
+  const ctc = place('ctc', 35.224041, -80.84134)
+  const bland = place('bland', 35.216, -80.8556)
+  const leg = (mode: string, from: any, to: any, a: number, b: number): TransitLeg => ({
+    mode, transitLeg: mode !== 'WALK', from, to, startTime: at(a), endTime: at(b),
+    duration: (b - a) * 60, distance: 0, tripId: mode === 'WALK' ? undefined : `${from.name}-${a}`,
+  })
+  const itinerary = (legs: TransitLeg[]): TransitItinerary => ({
+    duration: 0, startTime: legs[0].startTime, endTime: legs[legs.length - 1].endTime,
+    walkTime: 0, transitTime: 0, waitingTime: 0, walkDistance: 0, transfers: 2, legs,
+  })
+  const budget = { pre: 900, post: 900 }
+  const rides = (it: TransitItinerary) => it.legs.filter((l) => l.transitLeg).map((l) => l.from.name)
+
+  const detour = itinerary([
+    leg('WALK', { name: 'Origin', ...home }, hawthorne8th, 14, 15),
+    leg('TRAM', hawthorne8th, sunnyside, 15, 16),
+    leg('WALK', sunnyside, beaumont, 16, 24),
+    leg('BUS', beaumont, ctc, 33, 36),
+    leg('WALK', ctc, ctc, 36, 38),
+    leg('TRAM', ctc, bland, 42, 48),
+    leg('WALK', bland, { name: 'Destination', ...work }, 48, 48),
+  ])
+
+  test('walks straight to the bus instead of riding away from it', () => {
+    const fixed = skipDetourRides(detour, { from: home, to: work }, budget)
+    expect(rides(fixed)).toEqual(['7th-beaumont', 'ctc'])
+    expect(fixed.legs[0].to.name).toBe('7th-beaumont')
+    expect(fixed.legs[0].endTime).toBe(at(33))
+    expect(fixed.transfers).toBe(1)
+    expect(fixed.endTime).toBe(detour.endTime)
+  })
+
+  test('leaves the first ride when the walk would miss the connection', () => {
+    const tight = itinerary(detour.legs.map((l) => (l.from === beaumont ? { ...l, startTime: at(16) } : l)))
+    tight.legs[0] = { ...tight.legs[0], startTime: at(14) }
+    expect(rides(skipDetourRides(tight, { from: home, to: work }, budget))).toEqual(['hawthorne-8th', '7th-beaumont', 'ctc'])
+  })
+
+  test('without walking access it only repairs the destination end', () => {
+    expect(rides(skipDetourRides(detour, { to: work }, budget))).toEqual(['hawthorne-8th', '7th-beaumont', 'ctc'])
+  })
+
+  test('walks the last stretch when the final ride arrives no sooner', () => {
+    const slowLast = itinerary([
+      leg('WALK', { name: 'Origin', ...home }, beaumont, 28, 33),
+      leg('BUS', beaumont, bland, 33, 45),
+      leg('WALK', bland, bland, 45, 46),
+      leg('BUS', bland, place('near-work', 35.2161, -80.8557), 58, 59),
+      leg('WALK', place('near-work', 35.2161, -80.8557), { name: 'Destination', ...work }, 59, 60),
+    ])
+    const fixed = skipDetourRides(slowLast, { from: home, to: work }, budget)
+    expect(rides(fixed)).toEqual(['7th-beaumont'])
+    expect(fixed.legs[fixed.legs.length - 1].to.name).toBe('Destination')
   })
 })
