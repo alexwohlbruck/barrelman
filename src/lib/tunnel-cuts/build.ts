@@ -185,7 +185,7 @@ export function solvePortal({ out, bore, edges, kind, face, piers, under = false
 }
 
 /** How far apart portals may stand, along the road and across it between their walls, and how far their headings may differ, to share one headwall. */
-const SHARED = { stagger: 15, gap: 20, turn: Math.PI / 9 }
+const SHARED = { stagger: 15, gap: 25, turn: Math.PI / 9 }
 
 /** Every cut over the openings whose portal `owns` keeps, one per portal; portals side by side lead by one of them, which carries the shared headwall. */
 export function solveCuts(found: Opening[], ground: (p: Point) => number, owns: (p: Point) => boolean): TunnelCut[] {
