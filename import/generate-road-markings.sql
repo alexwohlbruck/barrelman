@@ -878,8 +878,9 @@ SELECT osm_id, local, class, g, s, americas, oneway, flip, tags, both_ways, mph,
        -- Metres along the way as mapped: tapers are laid out on it, the same
        -- whichever box builds them, though smoothing differs.
        ST_Length(g) / s as len_m,
-       -- Above the ground: a bridge, or anything mapped on a layer over it.
-       COALESCE(tags->>'bridge', 'no') NOT IN ('no') OR COALESCE(road_int(tags->>'layer'), 0) > 0 as bridge,
+       -- On a bridge. A layer alone does not lift a road: no deck is built
+       -- for it, and the deck bake lays a deck's own ways on it by way.
+       COALESCE(tags->>'bridge', 'no') NOT IN ('no') as bridge,
        bike_rt[1] as bike_r, bike_rt[2] as buf_r, bike_rt[3] = 1 as track_r,
        bike_lt[1] as bike_l, bike_lt[2] as buf_l, bike_lt[3] = 1 as track_l,
        park_r, park_l,
@@ -1454,6 +1455,12 @@ UPDATE _rm_roads r SET cap = 'endcap=flat join=round quad_segs=8'
 WHERE r.bridge OR EXISTS (
   SELECT 1 FROM _rm_incid a JOIN _rm_incid b ON b.x = a.x AND b.y = a.y AND b.bridge <> a.bridge
   WHERE a.osm_id = r.osm_id AND a.is_end);
+-- So does a road running into a tunnel: rounded, its cap lies on the ground over the bore, past the portal.
+UPDATE _rm_roads r SET cap = 'endcap=flat join=round quad_segs=8'
+WHERE NOT r.bridge AND EXISTS (
+  SELECT 1 FROM _rm_incid a JOIN geo_places t ON t.geom && ST_Transform(ST_Expand(a.p, 0.1), 4326)
+  WHERE a.osm_id = r.osm_id AND a.is_end AND t.osm_type = 'W' AND t.geom_type = 'line' AND t.tags ? 'highway'
+    AND COALESCE(t.tags->>'tunnel', 'no') NOT IN ('no', 'false', '0'));
 
 DROP TABLE IF EXISTS _rm_vertices;
 CREATE TEMP TABLE _rm_vertices AS
@@ -2898,7 +2905,6 @@ FROM _rm_deck_paint p JOIN road_markings_next m ON m.fid = p.fid
 WHERE NOT ST_IsEmpty(p.inside);
 UPDATE road_markings_next m SET geom = p.outside FROM _rm_deck_paint p WHERE m.fid = p.fid;
 DELETE FROM road_markings_next WHERE fid IN (SELECT fid FROM _rm_deck_paint) AND ST_IsEmpty(geom);
-ALTER TABLE road_markings_next DROP COLUMN way;
 
 -- ─── Swap ────────────────────────────────────────────────────────────────────
 CREATE INDEX road_markings_next_geom_idx ON road_markings_next USING gist (geom);
@@ -2959,8 +2965,10 @@ BEGIN
 
   INSERT INTO road_surfaces (bridge, kind, geom)
   SELECT bridge, kind, ST_Multi(road_clip(geom, box, true, 3)) FROM road_surfaces_next WHERE geom && box;
-  INSERT INTO road_markings (kind, pattern, color, style, bridge, geom)
-  SELECT kind, pattern, color, style, bridge, road_clip(geom, box, true, CASE WHEN pattern = 'fill' THEN 3 ELSE 2 END)
+  -- The way each mark is painted for, which the deck bake reads; a table from before it kept one gains it here.
+  ALTER TABLE road_markings ADD COLUMN IF NOT EXISTS way bigint;
+  INSERT INTO road_markings (kind, pattern, color, style, bridge, geom, way)
+  SELECT kind, pattern, color, style, bridge, road_clip(geom, box, true, CASE WHEN pattern = 'fill' THEN 3 ELSE 2 END), way
   FROM road_markings_next WHERE geom && box;
   INSERT INTO road_glyphs (glyph, direction, bridge, geom)
   SELECT glyph, direction, bridge, geom FROM road_glyphs_next WHERE ST_Intersects(geom, box);

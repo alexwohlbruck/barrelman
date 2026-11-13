@@ -10,6 +10,15 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Added
+
+* **Road beds.** Motorways, trunk and primary roads whose carriageway the terrain does not hold level (an embankment's or cutting's walls blurred into slopes) are recorded in a new `road_beds` table, served with the tunnel cuts, so a map can level the ground under them and their lanes stop leaning and wobbling. Run "Build Road Beds" after upgrading.
+
+### Fixed
+
+* A covered road's deck stands at the heights OSM tags on its nodes even where the terrain takes its roof for ground, as on the levels of Brooklyn's Triple Cantilever, and its deck is marked roofed so the map can carve that roof away. Rebuild the bridge decks after upgrading.
+* A road passing under a bridge no longer has its lane paint drawn on the bridge's deck. Paint goes on a deck only where its road runs along it or the deck is its road's own, and a road tagged `covered=yes` stays on the ground whatever its `layer` (the Brooklyn-Queens Expressway under the Brooklyn Bridge's approach). Road markings keep the way they were painted for; rebuild the road markings, then the bridge decks, for existing paint to take it.
+
 ## [0.10.49] - 2026-11-13
 
 ### Fixed

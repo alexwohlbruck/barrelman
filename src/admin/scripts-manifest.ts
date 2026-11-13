@@ -1250,6 +1250,25 @@ export const SCRIPTS: ScriptDef[] = [
       'Reads the area\'s tunnels once by their tag, then rebuilds in place only the cells a tunnel ends in, so tiles keep serving meanwhile and a run can be stopped and started again. A blank area covers each area of the regions REGIONS selects; with REGIONS=global it refuses to start, so give an area. Fetches Mapterhorn terrain tiles around each portal unless BRIDGE_DECKS_DEM_TILES points elsewhere. OSM Update keeps the cuts current afterwards (see Update Tunnel Cuts). Restart Martin afterwards on an instance that caches tiles.',
   },
   {
+    id: 'osm-road-beds',
+    name: 'Build Road Beds',
+    description:
+      'Rebuild road_beds: the stretches of motorways, trunk and primary roads on the ground whose carriageway the terrain does not hold level, its embankment\'s or cutting\'s walls blurred into slopes, with the height the ground is levelled to under them. Served with the tunnel cuts in the detail tiles, so a map fills the ground level under the road and its paint stops leaning and wobbling.',
+    category: 'osm',
+    danger: 'safe',
+    longRunning: true,
+    confirm: true,
+    exclusive: true,
+    exec: { kind: 'process', command: 'nice', args: ['-n', '10', 'bun', 'run', 'import/generate-road-beds.ts'] },
+    params: [
+      { name: 'bbox', label: 'Area (w,s,e,n)', type: 'string', format: 'bbox', apply: 'flag', flag: '--bbox', placeholder: 'blank = the REGIONS areas' },
+      { name: 'cell', label: 'Cell size (degrees)', type: 'number', decimal: true, apply: 'flag', flag: '--cell', default: 0.25 },
+    ],
+    source: 'import/generate-road-beds.ts',
+    notes:
+      'Each cell replaces the beds of every road crossing it, so tiles keep serving meanwhile and a run can be stopped and started again. A blank area covers each area of the regions REGIONS selects; with REGIONS=global it refuses to start, so give an area. Fetches Mapterhorn terrain tiles along each road unless BRIDGE_DECKS_DEM_TILES points elsewhere. Not yet kept current by OSM Update: run it again after large road changes. Restart Martin afterwards on an instance that caches tiles.',
+  },
+  {
     id: 'osm-tunnel-cuts-update',
     name: 'Update Tunnel Cuts',
     description:
