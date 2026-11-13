@@ -777,6 +777,19 @@ the update leaves the queue for the next run. A failure is reported and the rest
 of OSM Update carries on. As with road markings, only a database without
 osm2pgsql's middle tables records what changed.
 
+`road_beds` is a table built by the "Build Road Beds" console task
+(`import/generate-road-beds.ts`), from OSM and the terrain. A DEM blurs the
+walls of an embankment or a cutting into slopes a few metres wide, and a wide
+road's outer lanes, draped on them, lean and wobble. Along every motorway,
+trunk and primary road on the ground (not a bridge, tunnel or covered way), the
+terrain is sampled every 4 m at the centreline and at each carriageway edge
+(its tagged width, else its lanes and a 1 m shoulder); where an edge lies more
+than 0.6 m off the centreline, that stretch, padded 8 m, is a bed whose floor
+is the centreline's height, smoothed. Beds ride in the `tunnel_cuts` tiles as
+kind `bed` (`floor` in decimetres, `left_edge` the half width), and a client
+fills the ground up to the floor under the carriageway. OSM Update does not
+keep them current yet; run the task again after large road changes.
+
 `tunnel_cuts` is a table built by the "Build Tunnel Cuts" console task
 (`import/generate-tunnel-cuts.ts`), by rule from OSM and the terrain, so a
 client draws each portal's walls and carves its floor into the terrain straight

@@ -10,6 +10,10 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Added
+
+* **Road beds.** Motorways, trunk and primary roads whose carriageway the terrain does not hold level (an embankment's or cutting's walls blurred into slopes) are recorded in a new `road_beds` table, served with the tunnel cuts, so a map can level the ground under them and their lanes stop leaning and wobbling. Run "Build Road Beds" after upgrading.
+
 ### Fixed
 
 * A covered road's deck stands at the heights OSM tags on its nodes even where the terrain takes its roof for ground, as on the levels of Brooklyn's Triple Cantilever, and its deck is marked roofed so the map can carve that roof away. Rebuild the bridge decks after upgrading.
