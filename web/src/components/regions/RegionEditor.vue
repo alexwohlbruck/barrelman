@@ -149,7 +149,7 @@ const coordLabels = ['West', 'South', 'East', 'North']
 
 <template>
   <Dialog :open="open" @update:open="emit('update:open', $event)" class="max-w-2xl">
-    <div class="flex max-h-[85vh] flex-col gap-4 overflow-y-auto pr-1">
+    <div class="flex flex-col gap-4">
       <div class="flex flex-col gap-1 pr-6">
         <h2 class="text-lg font-semibold leading-none">{{ isEdit ? `Edit ${region?.label}` : 'New region' }}</h2>
         <p class="text-sm text-muted-foreground">
