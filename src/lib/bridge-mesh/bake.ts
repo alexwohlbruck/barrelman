@@ -130,6 +130,7 @@ class MeshBaker {
   private tracks: UnderWay[] = []
   private under: UnderWay[] | null = null
   private drawn = new Map<string, number | null>()
+  private deckWaySet: Set<number> | null = null
   constructor(private input: BakeInput, private palette: DeckPalette) {
     this.origin = input.decks[0]?.midpoint ?? [0, 0]
   }
@@ -153,10 +154,10 @@ class MeshBaker {
     for (const s of solved) s.chain.road = classUnder(s.chain, roads) ?? s.chain.road
     const local = 0
     const joints = solved.flatMap(({ chain }) => wayEnds(chain))
-    const paint = this.input.paint.filter(f => f.properties.bridge).map(paintOf)
     // A deck's own ways are laid on it too where OSM tags a stretch embankment rather than bridge, and so is a cycle
     // track running on from one of them over the rest of the deck, so it runs on unbroken to the deck's end.
-    const deckWays = new Set(this.input.decks.flatMap(d => d.ways.map(Number)))
+    const deckWays = this.deckWays
+    const paint = this.input.paint.filter(f => this.onDeckWay(f)).map(paintOf)
     const carried = (f: MeshFeature) => f.properties.brunnel === 'bridge' || deckWays.has(Number(f.properties.id))
     const lineEnds = (f: MeshFeature) => linesOf(f.geometry).flatMap(line => [line[0], line[line.length - 1]].map(p => p.join(',')))
     const cycleEnds = new Set(this.input.roads.filter(f => f.properties.cycle && carried(f)).flatMap(lineEnds))
@@ -354,9 +355,18 @@ class MeshBaker {
       surfaces.some(r => holds(r.bounds, q) && inside(q, r.rings)))
   }
 
+  private get deckWays(): Set<number> {
+    return (this.deckWaySet ??= new Set(this.input.decks.flatMap(d => d.ways.map(Number))))
+  }
+
+  /** A mark of a bridge, or of a stretch of a deck's own way OSM does not tag as one. */
+  private onDeckWay(f: MeshFeature): boolean {
+    return !!f.properties.bridge || (f.properties.way != null && this.deckWays.has(Number(f.properties.way)))
+  }
+
   private paintAtGrade(ends: Bounds[]): Paint[] {
     if (!ends.length) return []
-    return this.input.paint.filter(f => !f.properties.bridge)
+    return this.input.paint.filter(f => !this.onDeckWay(f))
       .filter(f => this.meetsAny(f, ends))
       .map(paintOf)
   }

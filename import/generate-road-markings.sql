@@ -878,10 +878,9 @@ SELECT osm_id, local, class, g, s, americas, oneway, flip, tags, both_ways, mph,
        -- Metres along the way as mapped: tapers are laid out on it, the same
        -- whichever box builds them, though smoothing differs.
        ST_Length(g) / s as len_m,
-       -- Above the ground: a bridge, or anything mapped on a layer over it
-       -- unless it is covered, which puts it under whatever its layer clears.
-       COALESCE(tags->>'bridge', 'no') NOT IN ('no')
-         OR (COALESCE(road_int(tags->>'layer'), 0) > 0 AND COALESCE(tags->>'covered', 'no') = 'no') as bridge,
+       -- On a bridge. A layer alone does not lift a road: no deck is built
+       -- for it, and the deck bake lays a deck's own ways on it by way.
+       COALESCE(tags->>'bridge', 'no') NOT IN ('no') as bridge,
        bike_rt[1] as bike_r, bike_rt[2] as buf_r, bike_rt[3] = 1 as track_r,
        bike_lt[1] as bike_l, bike_lt[2] as buf_l, bike_lt[3] = 1 as track_l,
        park_r, park_l,
