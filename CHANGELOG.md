@@ -10,6 +10,12 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.10.46] - 2026-11-13
+
+### Fixed
+
+* Departure boards and trip plans show live times to the second, from the agency's own latest prediction. MOTIS keeps whole minutes, rounded down, and lags a poll behind, so live times often read one to two minutes early.
+
 ## [0.10.45] - 2026-11-13
 
 ### Fixed
