@@ -33,14 +33,14 @@ export type Way = {
   width: number
   /** The road it carries, by class and ref or name, so a junction carries the road on rather than a ramp that happens to run straighter. */
   road?: string
-  /** Its nodes tagged `ele`: the vertex, and the deck's height there in metres above sea level. */
-  pins?: Array<{ vertex: number; height: number }>
+  /** Its nodes tagged `ele`: the vertex, and the deck's height there in metres above sea level; `under` a roof, on a covered way. */
+  pins?: Array<{ vertex: number; height: number; under?: boolean }>
   /** Its own `ele`, a least height for its deck at its middle. */
   ele?: number
 }
 
 /** A height a deck stands at exactly, at a distance along it: a node tagged `ele`. */
-export type Pin = { at: number; height: number }
+export type Pin = { at: number; height: number; under?: boolean }
 
 export type Chain = {
   ways: number[]
@@ -63,7 +63,7 @@ export type Chain = {
   /** Sidewalks folded in: the side, how far out from the centreline, and the stretch along the deck in metres. */
   paths?: Array<{ side: 0 | 1; out: number; from: number; to: number }>
   /** Its ways' nodes tagged `ele`, by where they lie. */
-  pins?: Array<{ point: Point; height: number }>
+  pins?: Array<{ point: Point; height: number; under?: boolean }>
 }
 
 /** Steepest a deck climbs, as a grade. */
@@ -228,8 +228,15 @@ export function chains(ways: Way[]): Chain[] {
       }
     }
     const width = Math.max(...members.map(m => m.width))
-    // A node two ways share is one pin.
-    const pins = [...new Map(members.flatMap(m => (m.pins ?? []).map(p => [key(m.points[p.vertex]), { point: m.points[p.vertex], height: p.height }] as const))).values()]
+    // A node two ways share is one pin, under a roof if either way is.
+    const shared = new Map<string, { point: Point; height: number; under?: boolean }>()
+    for (const m of members)
+      for (const p of m.pins ?? []) {
+        const at = key(m.points[p.vertex])
+        const under = p.under || shared.get(at)?.under
+        shared.set(at, { point: m.points[p.vertex], height: p.height, ...(under ? { under: true } : {}) })
+      }
+    const pins = [...shared.values()]
     out.push({
       ways: members.map(m => m.id), points, kind: start.kind, layer: Math.max(...members.map(m => m.layer)), edges: [width / 2, width / 2], road: members.find(m => m.road)?.road,
       ...(pins.length ? { pins } : {}),

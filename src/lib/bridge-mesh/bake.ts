@@ -237,11 +237,14 @@ class MeshBaker {
       deckMesh(chain, z, groundAt, this.origin, { ...colors(chain), concrete: p.concrete, parapet: p.parapet }, own.has(k) ? mesh : deckMeshOut(), open[k], piers, tops[k], biasGround[k], onDecks[k], modelled)
     }
 
+    // A deck on a covered way runs under a roof the terrain takes for ground: the map carves that away down to the deck's own ground.
+    const covered = new Set(this.input.roads.filter(r => r.properties.covered).map(r => Number(r.properties.id)))
     const surfaces: DeckSurface[] = solved.map(({ chain, z, groundAt }, k) => {
       const width = 2 * Math.max(...chain.edges) + 1
       return {
         points: chain.points, z, d: along(chain.points), width, bounds: boundsOf(chain.points, width),
         bias: z.map((h, i) => touchdown(h - biasGround[k][i])), low: colors(chain).low, ground: groundAt, kind: chain.kind, edges: edgePoints(chain), tops: tops[k], sidewalks: !!concreteAt.get(chain), ways: this.input.decks[k].ways.map(Number),
+        ...(this.input.decks[k].ways.some(w => covered.has(Number(w))) ? { roofed: true } : {}),
       }
     })
     const owned = new Set(surfaces.filter((_, k) => own.has(k)))

@@ -176,14 +176,15 @@ export function hungStretch(points: Point[], within: boolean[], level: OutlineLe
 /**
  * The pins to believe of a deck's nodes tagged `ele`, `ground` being the
  * ground under it at each of `d`. A pin below the ground (by more than
- * PIN_BELOW) cannot be the deck's surface, and one more than MAX_DECK above it
- * is a typo or another datum: either is left out, and the deck takes its
- * height by rule there, as if the tag were not there.
+ * PIN_BELOW) cannot be the deck's surface, unless it is `under` a roof the
+ * terrain takes for ground, as a covered way's is; and one more than MAX_DECK
+ * above it is a typo or another datum. Either is left out, and the deck takes
+ * its height by rule there, as if the tag were not there.
  */
 export function trustedPins(pins: Pin[], d: number[], ground: number[]): Pin[] {
   return pins.filter(p => {
     const g = heightAt(d, ground, p.at)
-    return p.height >= g - PIN_BELOW && p.height <= g + MAX_DECK
+    return (p.under || p.height >= g - PIN_BELOW) && p.height <= g + MAX_DECK
   })
 }
 
