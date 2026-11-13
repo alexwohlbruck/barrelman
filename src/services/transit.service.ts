@@ -7,7 +7,7 @@
  * trip composition. See the Planning section for how a trip is searched.
  */
 
-import { exactCall, refineTime, type ExactCall } from '../lib/rt-normalize/exact-times'
+import { exactCall, fits, refineTime, type ExactCall } from '../lib/rt-normalize/exact-times'
 import { liveCalls } from './rt-normalize.service'
 import { db } from '../db'
 import { haversine } from './route.service'
@@ -692,9 +692,9 @@ async function motisPlan(
 const feedOf = (motisStopId?: string) => motisStopId?.slice(0, motisStopId.indexOf('_'))
 const stopOf = (motisStopId: string) => motisStopId.slice(motisStopId.indexOf('_') + 1)
 
-/** Live legs' times to the agency's second; see departures' exactCallsFor. */
+/** Transit legs' times to the agency's second; see departures' exactCallsFor. */
 async function refineLiveLegs(itineraries: TransitItinerary[]) {
-  const legs = itineraries.flatMap((it) => it.legs).filter((l) => l.transitLeg && l.realTime && l.tripId)
+  const legs = itineraries.flatMap((it) => it.legs).filter((l) => l.transitLeg && l.tripId)
   const feedIds = [...new Set(legs.map((l) => feedOf(l.from.stopId)).filter((f): f is string => !!f))]
   const calls = new Map<string, Map<string, ExactCall>>()
   await Promise.race([
@@ -706,6 +706,7 @@ async function refineLiveLegs(itineraries: TransitItinerary[]) {
   for (const leg of legs) {
     for (const place of [leg.from, ...(leg.intermediateStops ?? []), leg.to]) {
       const exact = at(place, leg.tripId!)
+      if (place === leg.from && fits(place.departure, exact?.departure ?? exact?.arrival)) leg.realTime = true
       place.arrival = refineTime(place.arrival, exact?.arrival ?? exact?.departure)
       place.departure = refineTime(place.departure, exact?.departure ?? exact?.arrival)
     }

@@ -10,6 +10,12 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.10.48] - 2026-11-13
+
+### Fixed
+
+* A departure the agency is predicting now shows as live even when MOTIS failed to attach the update, using the agency's time for that trip. Orlando's LYNX boards showed every bus at its timetable time this way.
+
 ## [0.10.47] - 2026-11-13
 
 ### Fixed

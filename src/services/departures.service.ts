@@ -9,7 +9,7 @@
  * engine in the future without changing the external API contract.
  */
 
-import { exactCall, refineTime, type ExactCall } from '../lib/rt-normalize/exact-times'
+import { exactCall, fits, refineTime, type ExactCall } from '../lib/rt-normalize/exact-times'
 import { liveCalls } from './rt-normalize.service'
 import { directionLabelsFor, stopKey } from './station-labels.service'
 import { db } from '../db'
@@ -724,7 +724,8 @@ function transformDepartures(
       const platform = parseMotisId(st.place.stopId)
       const directionLabel = directionLabels.get(stopKey(platform.feedId, platform.stopId))
 
-      const exact = st.realTime ? exactCall(calls.get(platform.feedId), st.tripId, platform.stopId) : undefined
+      const exact = exactCall(calls.get(platform.feedId), st.tripId, platform.stopId)
+      const live = st.realTime || fits(st.place.departure || st.place.arrival, exact?.departure ?? exact?.arrival)
       const departureTime = refineTime(st.place.departure, exact?.departure ?? exact?.arrival) || refineTime(st.place.arrival, exact?.arrival) || ''
       const arrivalTime = refineTime(st.place.arrival, exact?.arrival ?? exact?.departure) || departureTime
       const scheduledDep = st.place.scheduledDeparture || st.place.scheduledArrival || ''
@@ -751,8 +752,8 @@ function transformDepartures(
         arrivalTime,
         scheduledDepartureTime: scheduledDep,
         scheduledArrivalTime: scheduledArr,
-        delay: st.realTime ? computeDelay(departureTime, scheduledDep) : undefined,
-        realTime: st.realTime,
+        delay: live ? computeDelay(departureTime, scheduledDep) : undefined,
+        realTime: live,
         cancelled: st.cancelled || st.place.cancelled || false,
         mode: st.mode,
         tripOrigin: st.tripFrom?.name,
@@ -764,9 +765,9 @@ function transformDepartures(
 /** How long a board waits on agencies' own predictions before showing MOTIS's. */
 const EXACT_CALLS_BUDGET_MS = 1500
 
-/** The agencies' latest predictions for every feed with a live run on these boards. */
+/** The agencies' latest predictions for every feed on these boards. */
 export async function exactCallsFor(stopTimes: MotisStopTime[]): Promise<Map<string, Map<string, ExactCall>>> {
-  const feedIds = [...new Set(stopTimes.filter((st) => st.realTime).map((st) => parseMotisId(st.place.stopId).feedId))]
+  const feedIds = [...new Set(stopTimes.map((st) => parseMotisId(st.place.stopId).feedId))]
   const out = new Map<string, Map<string, ExactCall>>()
   await Promise.race([
     Promise.allSettled(feedIds.map(async (id) => out.set(id, await liveCalls(id)))),
