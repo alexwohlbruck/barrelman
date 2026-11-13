@@ -41,8 +41,9 @@ export async function bakeDeckFiles(sql: postgres.Sql, dem: Dem, decks: Deck[], 
     const [surfaces, paint, roads] = await Promise.all([
       sql<MeshFeature[]>`SELECT json_build_object('bridge', bridge, 'kind', kind) AS properties,
         ST_AsGeoJSON(ST_ClipByBox2D(geom, ${box}))::json AS geometry FROM road_surfaces WHERE geom && ${box} ORDER BY fid`,
-      sql<MeshFeature[]>`SELECT json_build_object('bridge', bridge, 'kind', kind, 'pattern', pattern, 'color', color, 'style', style) AS properties,
-        ST_AsGeoJSON(ST_ClipByBox2D(geom, ${box}))::json AS geometry FROM road_markings WHERE geom && ${box} ORDER BY fid`,
+      // `way` through the row, as a table built before markings kept their way has none.
+      sql<MeshFeature[]>`SELECT json_build_object('bridge', bridge, 'kind', kind, 'pattern', pattern, 'color', color, 'style', style, 'way', to_jsonb(m)->'way') AS properties,
+        ST_AsGeoJSON(ST_ClipByBox2D(geom, ${box}))::json AS geometry FROM road_markings m WHERE geom && ${box} ORDER BY fid`,
       sql<Array<{ id: string; tags: Record<string, string>; geometry: any }>>`SELECT osm_id::text AS id, tags,
         ST_AsGeoJSON(ST_ClipByBox2D(geom, ${box}))::json AS geometry FROM geo_places
         WHERE geom && ${box} AND geom_type = 'line' AND (tags ? 'highway' OR tags ? 'railway') ORDER BY osm_type, osm_id`,
@@ -57,6 +58,7 @@ export async function bakeDeckFiles(sql: postgres.Sql, dem: Dem, decks: Deck[], 
       id: r.id, class: r.tags.railway ? 'rail' : ['footway', 'cycleway', 'path', 'pedestrian', 'steps'].includes(r.tags.highway) ? 'path' : r.tags.highway,
       brunnel: r.tags.bridge && r.tags.bridge !== 'no' ? 'bridge' : r.tags.tunnel && r.tags.tunnel !== 'no' ? 'tunnel' : null,
       cycle: isCycleway(r.tags),
+      covered: r.tags.covered === 'yes',
     } }))
     const mesh = bakeBridges({ decks: context.filter(d => d.points.some(p => p[0] >= nw[0] && p[0] <= se[0] && p[1] >= nw[1] && p[1] <= se[1]) || d.id === deck.id), own: [deck.id], outlines: [], roads: ways, surfaces, paint,
       ground: p => { const h = dem.at(p); return Number.isFinite(h) ? h : null }, structures }, MATERIAL_PALETTE)

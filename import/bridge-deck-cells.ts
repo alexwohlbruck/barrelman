@@ -59,13 +59,13 @@ const INSERT_BATCH = 500
 
 
 type Row = { id: string; kind: Kind; highway: string | null; road: string | null; layer: string | null; width: string | null;
-  lanes: string | null; oneway: string | null; wikidata: string | null; ele: string | null; coords: number[][] }
+  lanes: string | null; oneway: string | null; wikidata: string | null; ele: string | null; covered: string | null; coords: number[][] }
 
 const bridgeWays = (sql: Sql) => sql`
   SELECT osm_id::text AS id, bridge_deck_class(tags) AS kind, tags->>'highway' AS highway,
          COALESCE(tags->>'highway', tags->>'railway') || '/' || COALESCE(tags->>'ref', tags->>'name', '') AS road, tags->>'layer' AS layer,
          COALESCE(tags->>'width:carriageway', tags->>'width') AS width, tags->>'lanes' AS lanes, tags->>'oneway' AS oneway,
-         COALESCE(tags->>'bridge:wikidata', tags->>'wikidata') AS wikidata, tags->>'ele' AS ele,
+         COALESCE(tags->>'bridge:wikidata', tags->>'wikidata') AS wikidata, tags->>'ele' AS ele, tags->>'covered' AS covered,
          ST_AsGeoJSON(geom)::json->'coordinates' AS coords
   FROM geo_places`
 // Which ways make decks is bridge_deck_class() in create-detail-views.sql,
@@ -84,7 +84,7 @@ function toWay(r: Row, pins: Map<string, number>): Way {
   const layer = Number.parseInt(r.layer ?? '')
   const vertices = r.coords.flatMap((c, vertex) => {
     const height = pins.get(c.join(','))
-    return height === undefined ? [] : [{ vertex, height }]
+    return height === undefined ? [] : [{ vertex, height, ...(r.covered === 'yes' ? { under: true } : {}) }]
   })
   const ele = metres(r.ele)
   return {

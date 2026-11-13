@@ -16,7 +16,7 @@ import { dbUrl, onnotice } from '../src/db'
 import { argValue } from '../src/lib/cli-args'
 import { parseBbox, regionAreas } from '../src/lib/bridge-decks/areas'
 import { Dem, DEM_TILES, demConfigured } from '../src/lib/bridge-decks/dem'
-import { degreeBox, grid, toUnits, type UnitBox } from '../src/lib/bridge-decks/grid'
+import { degreeBox, grid, toDegrees, toUnits, type UnitBox } from '../src/lib/bridge-decks/grid'
 import { unprojected } from '../src/lib/bridge-mesh/decks'
 import type { Way } from '../src/lib/tunnel-cuts/build'
 import { CUT_MAX } from '../src/lib/tunnel-cuts/tunnels'
@@ -34,14 +34,21 @@ type Sql = postgres.Sql
  */
 export async function buildArea(sql: Sql, dem: Dem, area: [number, number, number, number], size = CELL): Promise<{ total: number; built: number }> {
   const g = grid(toUnits(size))
-  const tunnels = (await tunnelsIn(sql, area)).filter(t => t.layer < 0)
+  const found = (await tunnelsIn(sql, area)).filter(t => t.layer < 0)
   const cellsAround = (p: [number, number], metres: number) => {
     const [lng, lat] = unprojected(p)
     const [dx, dy] = [metres / (111320 * Math.cos((lat * Math.PI) / 180)), metres / 111320]
     return [-1, 0, 1].flatMap(i => [-1, 0, 1].map(j => g.at([toUnits(lng + i * dx), toUnits(lat + j * dy)])))
   }
   // A portal lies within a cut's length of its tunnel's end, so in the end's cell or, near its edge, the one beside.
-  const wanted = new Set(tunnels.flatMap(t => [t.points[0], t.points.at(-1)!].flatMap(p => cellsAround(p, 2 * CUT_MAX))))
+  const wanted = new Set(found.flatMap(t => [t.points[0], t.points.at(-1)!].flatMap(p => cellsAround(p, 2 * CUT_MAX))))
+  // A cell is rebuilt whole, so it needs every tunnel in it, not only those in the area asked for.
+  const boxes = [...wanted].map(k => g.box(k))
+  const reach = READ_PAST * 1.1 / 111320
+  const tunnels = (await tunnelsIn(sql, [
+    Math.min(...boxes.map(b => toDegrees(b[0]))) - reach * 2, Math.min(...boxes.map(b => toDegrees(b[1]))) - reach,
+    Math.max(...boxes.map(b => toDegrees(b[2]))) + reach * 2, Math.max(...boxes.map(b => toDegrees(b[3]))) + reach,
+  ])).filter(t => t.layer < 0)
   // Each cell is handed every tunnel within what it reads, so one running on into another is known to.
   const reading = new Map<string, Set<Way>>()
   for (const t of tunnels)

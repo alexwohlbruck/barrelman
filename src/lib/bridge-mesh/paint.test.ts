@@ -154,3 +154,25 @@ test('paint over a raised deck does not sample ground away from its ends', () =>
   expect(actual).toEqual(expected)
   expect(at).not.toHaveBeenCalled()
 })
+
+describe('another road\'s paint under a deck', () => {
+  const points = line(0, 50, 100)
+  const deck = { ...testSurface(points, [110, 110, 110], [100, 100, 100], 14), ways: [1] }
+  const colors = { white: [1, 1, 1], yellow: [1, 1, 0], green: [0, 1, 0], red: [1, 0, 0] }
+  const across: Point[] = [[0.2789 + 50 * M, y0 - 20 * M], [0.2789 + 50 * M, y0 + 20 * M]]
+  const laid = (runs: Point[][], way?: number) => {
+    const mesh = deckMeshOut()
+    layPaint(mesh, [{ props: { kind: 'lane', pattern: 'solid', color: 'white', way }, runs, areas: [] }], [deck], colors, points[0])
+    return mesh.position.length
+  }
+
+  test('is laid on it where it runs along it', () => {
+    expect(laid([line(10, 90)], 2)).toBeGreaterThan(0)
+  })
+
+  test('is left off it where it crosses beneath, unless the deck is its own', () => {
+    expect(laid([across], 2)).toBe(0)
+    expect(laid([across], 1)).toBeGreaterThan(0)
+    expect(laid([across])).toBeGreaterThan(0)
+  })
+})
