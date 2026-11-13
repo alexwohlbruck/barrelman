@@ -10,6 +10,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.10.43] - 2026-11-12
+
 ### Added
 
 - Bike suitability. Every rideable way is scored 0–100 from its tags (traffic
