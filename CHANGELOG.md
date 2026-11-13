@@ -17,6 +17,10 @@ does it — and the release pipeline turns it into the GitHub Release notes.
   sideways instead of overflowing, and dialogs fit the screen and scroll when
   they are taller than it. Form fields no longer make iOS zoom in on focus.
 
+### Fixed
+
+* Nightly MOTIS rebuilds no longer discard every new timetable. The check that loads the new dataset asked MOTIS for every stop in the world, which it refuses, so MOTIS kept serving an old timetable. Feeds whose trip ids change daily, like the NYC subway's, then lost all realtime.
+
 ## [0.10.41] - 2026-11-10
 
 ### Fixed
