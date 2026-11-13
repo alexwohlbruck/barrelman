@@ -10,6 +10,12 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.10.47] - 2026-11-13
+
+### Fixed
+
+* Trains a service change takes off a line no longer show as departing. When the agency reroutes a route onto trains the timetable doesn't have (the 4 ending at Grand Central for night work), the timetable's runs it stops reporting are now cancelled instead of shown at their scheduled times.
+
 ## [0.10.46] - 2026-11-13
 
 ### Fixed
