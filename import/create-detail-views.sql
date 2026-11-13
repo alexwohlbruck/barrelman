@@ -1240,8 +1240,22 @@ ALTER TABLE tunnel_cuts
 CREATE INDEX IF NOT EXISTS tunnel_cuts_geom_idx ON tunnel_cuts USING gist (geom);
 CREATE INDEX IF NOT EXISTS tunnel_cuts_anchor_idx ON tunnel_cuts USING gist (anchor);
 
+-- Road beds: stretches of a road on the ground whose carriageway the terrain
+-- does not hold level, its walls blurred into slopes; a map levels the ground
+-- under `half` metres each side to `floor` along the line (metres, the terrain's datum).
+-- Built by Build Road Beds (import/generate-road-beds.ts).
+CREATE TABLE IF NOT EXISTS road_beds (
+  id text PRIMARY KEY,
+  way bigint NOT NULL,
+  half real NOT NULL,
+  floor real[] NOT NULL,
+  geom geometry(LineString, 4326) NOT NULL,
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS road_beds_geom_idx ON road_beds USING gist (geom);
+
 -- Served in the `detail` bundle: the line as steps in 1e-7°, as bridge_deck_tiles
--- gives it, and heights and piers in decimetres.
+-- gives it, and heights and piers in decimetres. Road beds ride along as kind `bed`.
 CREATE OR REPLACE VIEW tunnel_cut_tiles AS
 SELECT id, kind,
        (SELECT string_agg(CASE WHEN n = 1 THEN x || ',' || y ELSE (x - px) || ',' || (y - py) END, ';' ORDER BY n)
@@ -1260,7 +1274,17 @@ SELECT id, kind,
        under,
        CASE WHEN cover IS NOT NULL THEN array_to_string(ARRAY(SELECT round(c * 10)::int FROM unnest(cover) c), ',') END AS cover,
        shared
-FROM tunnel_cuts;
+FROM tunnel_cuts
+UNION ALL
+SELECT id, 'bed',
+       (SELECT string_agg(CASE WHEN n = 1 THEN x || ',' || y ELSE (x - px) || ',' || (y - py) END, ';' ORDER BY n)
+        FROM (SELECT n, x, y, lag(x) OVER (ORDER BY n) AS px, lag(y) OVER (ORDER BY n) AS py
+              FROM (SELECT (dp).path[1] AS n, round(ST_X((dp).geom) * 1e7)::bigint AS x, round(ST_Y((dp).geom) * 1e7)::bigint AS y
+                    FROM ST_DumpPoints(geom) AS dp) points) steps),
+       0, 0, half, half,
+       array_to_string(ARRAY(SELECT round(h * 10)::int FROM unnest(floor) h), ','),
+       NULL, NULL, 0, 0, 0, NULL, NULL, geom, false, NULL, NULL
+FROM road_beds;
 
 -- Sidewalk street names: the street each unnamed footway, path or cycleway
 -- runs beside, solved by Build Sidewalk Street Names
