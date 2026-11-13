@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { exactCall, indexCalls, refineTime } from './exact-times'
+import { exactCall, fits, indexCalls, refineTime } from './exact-times'
 
 const message = {
   entity: [
@@ -26,5 +26,11 @@ describe('exact times', () => {
 
   it('keeps MOTIS when the prediction is for another run of the id', () => {
     expect(refineTime('2026-11-14T01:05:00Z', 1794535558)).toBe('2026-11-14T01:05:00Z')
+  })
+
+  it('takes a prediction as live only for the run MOTIS placed', () => {
+    expect(fits('2026-11-13T02:05:00Z', 1794535558)).toBe(true)
+    expect(fits('2026-11-14T02:05:00Z', 1794535558)).toBe(false)
+    expect(fits('2026-11-13T02:05:00Z', undefined)).toBe(false)
   })
 })

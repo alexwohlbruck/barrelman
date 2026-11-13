@@ -36,12 +36,17 @@ export function exactCall(calls: Map<string, ExactCall> | undefined, motisTripId
 }
 
 /**
- * MOTIS keeps whole minutes, floored, and is a poll cycle behind the agency;
- * the agency's own prediction, to the second, when it is for this run.
+ * MOTIS keeps whole minutes, floored, and is a poll cycle behind the agency,
+ * or misses an update outright; the agency's own prediction, to the second,
+ * when it is for this run.
  */
 export function refineTime(motisIso: string | undefined, exact: number | undefined): string | undefined {
-  if (!motisIso || !exact) return motisIso
+  return fits(motisIso, exact) ? new Date(exact! * 1000).toISOString() : motisIso
+}
+
+/** Whether a prediction is for the run MOTIS placed at `motisIso`. */
+export function fits(motisIso: string | undefined, exact: number | undefined): boolean {
+  if (!motisIso || !exact) return false
   const motis = Date.parse(motisIso) / 1000
-  if (!Number.isFinite(motis) || Math.abs(exact - motis) > MAX_DRIFT_S) return motisIso
-  return new Date(exact * 1000).toISOString()
+  return Number.isFinite(motis) && Math.abs(exact - motis) <= MAX_DRIFT_S
 }
