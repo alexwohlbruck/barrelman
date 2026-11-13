@@ -41,7 +41,9 @@ export const BORE = 40
 /** Farthest any cut runs out from its portal, in metres. */
 export const CUT_MAX = Math.max(...Object.values(PROFILES).map(p => p.reach))
 /** The most a headwall rises over a portal's roof, in metres; above it the hillside carries on. */
-export const FACADE = 8
+export const FACADE = 20
+/** How far out from a portal the ground its floor sits on is read, in metres. */
+const SILL_SPAN = 8
 /** The shortest forecourt a portal is given, in metres, so a mouth in a hillside has walls to stand in. */
 export const FORECOURT = 9
 /** The least the ground must stand over a portal, beside it or above the bore, for a cut to be dug, in metres. */
@@ -360,8 +362,8 @@ export function solveCut(d: number[], at: number, ground: number[], beside: [num
   // Read off the ground just out from the portal too: the sample at it can land on the slope into the bore.
   const mouth = Math.min(...ground.filter((_, i) => i <= at && d[at] - d[i] <= MOUTH_SPAN))
   if (Math.max(cover, rims[0][at], rims[1][at]) - mouth < Math.min(RELIEF, (headroom + ROOF) / 2)) return null
-  // No higher than the ground just out from it either, so the floor never steps up into the mouth.
-  const sill = Math.min(ground[at], ground[Math.max(0, at - 1)])
+  // The lowest ground just out from it: OSM often starts a tunnel a few metres inside its face, where the terrain is still the slope down into the cut.
+  const sill = Math.min(...ground.filter((_, i) => i <= at && d[at] - d[i] <= SILL_SPAN))
   const portal = Math.min(sill, cover - headroom - ROOF)
   const out = (i: number) => d[at] - d[i]
   const floorAt = (grade: number) => ground.map((g, i) => (i > at ? portal : Math.min(g, portal + grade * out(i))))
