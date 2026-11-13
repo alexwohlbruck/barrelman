@@ -129,18 +129,18 @@ export async function rebuildBoxes(sql: Sql, dem: Dem, boxes: UnitBox[], tunnels
     for (let i = 0; i < cuts.length; i += INSERT_BATCH) {
       const batch = cuts.slice(i, i + INSERT_BATCH).map(c => ({
         id: c.id, kind: c.kind, at: c.at, open: c.cut.open, edges: c.edges, floor: c.cut.floor, wall_left: c.cut.walls[0], wall_right: c.cut.walls[1],
-        crown: c.cut.crown, headroom: c.cut.headroom, base: c.cut.base, face: c.face ?? null, piers: c.piers?.flat() ?? null,
+        crown: c.cut.crown, headroom: c.cut.headroom, base: c.cut.base, face: c.face ?? null, piers: c.piers?.flat() ?? null, under: c.under, cover: c.cover, shared: c.group ?? null,
         x: c.anchor[0], y: c.anchor[1], line: `LINESTRING(${c.points.map(p => unprojected(p).join(' ')).join(',')})`,
       }))
       await tx`
-        INSERT INTO tunnel_cuts (id, kind, at, open, edges, floor, wall_left, wall_right, crown, headroom, base, face, piers, anchor, anchor_x, anchor_y, geom)
-        SELECT r.id, r.kind, r.at, r.open, r.edges, r.floor, r.wall_left, r.wall_right, r.crown, r.headroom, r.base, r.face, r.piers,
+        INSERT INTO tunnel_cuts (id, kind, at, open, edges, floor, wall_left, wall_right, crown, headroom, base, face, piers, under, cover, shared, anchor, anchor_x, anchor_y, geom)
+        SELECT r.id, r.kind, r.at, r.open, r.edges, r.floor, r.wall_left, r.wall_right, r.crown, r.headroom, r.base, r.face, r.piers, r.under, r.cover, r.shared,
                ST_SetSRID(ST_MakePoint(r.x / ${UNITS_PER_DEGREE}::float8, r.y / ${UNITS_PER_DEGREE}::float8), 4326), r.x, r.y, ST_GeomFromText(r.line, 4326)
         FROM jsonb_to_recordset(${tx.json(batch)}::jsonb) AS r(id text, kind text, at int, open int, edges real[], floor real[], wall_left real[],
-          wall_right real[], crown real, headroom real, base real, face real[], piers real[], x int, y int, line text)
+          wall_right real[], crown real, headroom real, base real, face real[], piers real[], under boolean, cover real[], shared text, x int, y int, line text)
         ON CONFLICT (id) DO UPDATE SET kind = EXCLUDED.kind, at = EXCLUDED.at, open = EXCLUDED.open, edges = EXCLUDED.edges, floor = EXCLUDED.floor,
           wall_left = EXCLUDED.wall_left, wall_right = EXCLUDED.wall_right, crown = EXCLUDED.crown, headroom = EXCLUDED.headroom, base = EXCLUDED.base,
-          face = EXCLUDED.face, piers = EXCLUDED.piers, anchor = EXCLUDED.anchor, anchor_x = EXCLUDED.anchor_x, anchor_y = EXCLUDED.anchor_y,
+          face = EXCLUDED.face, piers = EXCLUDED.piers, under = EXCLUDED.under, cover = EXCLUDED.cover, shared = EXCLUDED.shared, anchor = EXCLUDED.anchor, anchor_x = EXCLUDED.anchor_x, anchor_y = EXCLUDED.anchor_y,
           geom = EXCLUDED.geom, updated_at = now()`
     }
   })

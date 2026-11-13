@@ -67,6 +67,11 @@ describe('heights tagged on a deck\'s nodes', () => {
     const pins = [{ at: 50, height: 4.5 }, { at: 100, height: -0.5 }, { at: 100, height: -3 }, { at: 150, height: 5 + MAX_DECK + 1 }]
     expect(trustedPins(pins, d, ground)).toEqual(pins.slice(0, 2))
   })
+
+  it('are believed under the ground on a covered way, whose roof the terrain takes for ground', () => {
+    const covered = [{ at: 100, height: -3, under: true }, { at: 150, height: 5 + MAX_DECK + 1, under: true }]
+    expect(trustedPins(covered, d, ground)).toEqual(covered.slice(0, 1))
+  })
 })
 
 describe('a seamark charting a bridge\'s clearance', () => {

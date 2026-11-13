@@ -54,7 +54,7 @@ import {
   type Point,
   type Way,
 } from './profile'
-import { clearanceNeeds, hungStretch, levelNeeds, MAX_DECK, SEAMARK_REACH, trustedPins, type Seamark } from './elevation'
+import { clearanceNeeds, DECK_DEPTH, hungStretch, levelNeeds, MAX_DECK, SEAMARK_REACH, trustedPins, type Seamark } from './elevation'
 import { inOutline, shapeDecks, within, type Outline } from './shape'
 import { bentPoints, blocked, nearestFree, obstacles, wayHalf, type Obstacles } from './supports'
 
@@ -939,13 +939,31 @@ function scrap(s: Solved, solved: Solved[]): boolean {
 
 /** A deck's nodes tagged `ele`, at their places along it, those it can believe (see `trustedPins`). */
 function pinsAlong(chain: Chain, d: number[], g: number[]): Pin[] {
-  const pins = (chain.pins ?? []).flatMap(({ point, height }) => {
+  const pins = (chain.pins ?? []).flatMap(({ point, height, under }) => {
     const near = beside(chain.points, point)
     // A pin's node is on the way; off it, it is a way folded into another deck.
     if (near.distance > 1) return []
-    return [{ at: d[near.segment - 1] + (d[near.segment] - d[near.segment - 1]) * near.t, height }]
+    return [{ at: d[near.segment - 1] + (d[near.segment] - d[near.segment - 1]) * near.t, height, ...(under ? { under } : {}) }]
   })
   return trustedPins(pins, d, g)
+}
+
+/**
+ * The ground under a deck, no higher than DECK_DEPTH under its pins `under`
+ * a roof: there the terrain is the roof, as over a covered way, and the deck
+ * runs beneath it. Past the first and last of them the nearest holds.
+ */
+function roofed(g: number[], d: number[], pins: Pin[]): number[] {
+  const roof = pins.filter(p => p.under).sort((a, b) => a.at - b.at)
+  if (!roof.length) return g
+  const road = (at: number) => {
+    if (at <= roof[0].at) return roof[0].height
+    const j = roof.findIndex(p => p.at >= at)
+    if (j < 0) return roof[roof.length - 1].height
+    const [a, b] = [roof[j - 1], roof[j]]
+    return a.height + ((b.height - a.height) * (at - a.at)) / (b.at - a.at || 1)
+  }
+  return g.map((v, i) => Math.min(v, road(d[i]) - DECK_DEPTH))
 }
 
 /** The samples either side of a distance along a deck, or the one at it. */
@@ -1028,9 +1046,9 @@ export async function buildDecks(input: DeckInput, ground: Ground): Promise<Deck
   for (const k of shaped.map((_, k) => k).sort((a, b) => shaped[a].layer - shaped[b].layer)) {
     const chain = shaped[k]
     const d = along(chain.points)
-    const g = under[k]
-    if (!g) continue
-    const pins = pinsAlong(chain, d, g)
+    if (!under[k]) continue
+    const pins = pinsAlong(chain, d, under[k])
+    const g = roofed(under[k], d, pins)
     const need = needs({ chain, d, g, pins }, input, solved.filter(o => o.chain.layer < chain.layer), bases)
     const own = decks[k].points
     const landed = lands[k].map(l => l?.height ?? null) as [number | null, number | null]
