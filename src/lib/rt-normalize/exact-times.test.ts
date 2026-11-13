@@ -17,7 +17,8 @@ describe('exact times', () => {
   it('finds a run under the trip id MOTIS prefixes with its date, time and feed', () => {
     expect(exactCall(calls, '20261112_19:08_5_114850_5..S28R', '640S')).toEqual({ arrival: 1794535528, departure: 1794535558 })
     expect(exactCall(calls, '20261112_19:08_5_114850_5..S28R', '639S')).toBeUndefined()
-    expect(calls.has('gone|640S')).toBe(false)
+    expect(calls.calls.has('gone|640S')).toBe(false)
+    expect([...calls.trips]).toEqual(['114850_5..S28R'])
   })
 
   it('replaces the floored minute with the agency second', () => {
