@@ -724,3 +724,12 @@ postgres:
         direction: direction
       buffer: 64
       clip_geom: true
+
+  functions:
+    # bicycle_ways plus every rideable street's suitability score, for the
+    # cycling layer's two looks; see import/create-bike-suitability.sql.
+    cycling_tiles:
+      schema: public
+      function: cycling_tiles
+      minzoom: 9
+      maxzoom: 16

@@ -9,6 +9,9 @@
  * engine in the future without changing the external API contract.
  */
 
+import { exactCall, fits, refineTime, type LiveFeed } from '../lib/rt-normalize/exact-times'
+import { liveCalls } from './rt-normalize.service'
+import { untrackedRuns } from '../lib/rt-normalize/untracked-runs'
 import { directionLabelsFor, stopKey } from './station-labels.service'
 import { db } from '../db'
 import { sql } from 'drizzle-orm'
@@ -712,6 +715,7 @@ function transformDepartures(
   stopTimes: MotisStopTime[],
   colorMap: Map<string, { color?: string; textColor?: string }>,
   directionLabels: Map<string, string> = new Map(),
+  calls: Map<string, LiveFeed> = new Map(),
 ): Departure[] {
   return stopTimes
     .filter(st => !st.tripCancelled)
@@ -721,8 +725,10 @@ function transformDepartures(
       const platform = parseMotisId(st.place.stopId)
       const directionLabel = directionLabels.get(stopKey(platform.feedId, platform.stopId))
 
-      const departureTime = st.place.departure || st.place.arrival || ''
-      const arrivalTime = st.place.arrival || st.place.departure || ''
+      const exact = exactCall(calls.get(platform.feedId), st.tripId, platform.stopId)
+      const live = st.realTime || fits(st.place.departure || st.place.arrival, exact?.departure ?? exact?.arrival)
+      const departureTime = refineTime(st.place.departure, exact?.departure ?? exact?.arrival) || refineTime(st.place.arrival, exact?.arrival) || ''
+      const arrivalTime = refineTime(st.place.arrival, exact?.arrival ?? exact?.departure) || departureTime
       const scheduledDep = st.place.scheduledDeparture || st.place.scheduledArrival || ''
       const scheduledArr = st.place.scheduledArrival || st.place.scheduledDeparture || ''
 
@@ -747,14 +753,41 @@ function transformDepartures(
         arrivalTime,
         scheduledDepartureTime: scheduledDep,
         scheduledArrivalTime: scheduledArr,
-        delay: st.realTime ? computeDelay(departureTime, scheduledDep) : undefined,
-        realTime: st.realTime,
+        delay: live ? computeDelay(departureTime, scheduledDep) : undefined,
+        realTime: live,
         cancelled: st.cancelled || st.place.cancelled || false,
         mode: st.mode,
         tripOrigin: st.tripFrom?.name,
         tripDestination: st.tripTo?.name,
       }
     })
+}
+
+/** A board without the timetable runs its agencies say aren't running; see untrackedRuns. */
+function withoutUntracked(departures: Departure[], live: Map<string, LiveFeed>, timezone: string): Departure[] {
+  const now = Date.now() / 1000
+  const drop = new Set<string>()
+  for (const feedId of new Set(departures.map((d) => d.route.feedId))) {
+    const runs = departures
+      .filter((d) => d.route.feedId === feedId)
+      .map((d) => ({ tripId: d.tripId, routeKey: d.route.id, live: d.realTime }))
+    for (const t of untrackedRuns(runs, live.get(feedId), timezone, now)) drop.add(t)
+  }
+  return drop.size ? departures.filter((d) => !drop.has(d.tripId)) : departures
+}
+
+/** How long a board waits on agencies' own predictions before showing MOTIS's. */
+const EXACT_CALLS_BUDGET_MS = 1500
+
+/** The agencies' latest predictions for every feed on these boards. */
+export async function exactCallsFor(stopTimes: MotisStopTime[]): Promise<Map<string, LiveFeed>> {
+  const feedIds = [...new Set(stopTimes.map((st) => parseMotisId(st.place.stopId).feedId))]
+  const out = new Map<string, LiveFeed>()
+  await Promise.race([
+    Promise.allSettled(feedIds.map(async (id) => out.set(id, await liveCalls(id)))),
+    Bun.sleep(EXACT_CALLS_BUDGET_MS),
+  ])
+  return out
 }
 
 /**
@@ -970,6 +1003,7 @@ export async function getDepartures(
 
   // 6. Transform and return
   const excluded = await excludedFeedIds()
+  const calls = await exactCallsFor(successResults.flatMap((r) => r.result.stopTimes))
   const boardsOut = successResults
     .filter(({ stop }) => !excluded.has(stop.feedId))
     .map(({ stop, members, page, result }) => {
@@ -994,7 +1028,7 @@ export async function getDepartures(
       },
       ...trimToWindow(
         dropSkippedRuns(
-          transformDepartures(result.stopTimes, colorMap, directionLabels).filter(
+          withoutUntracked(transformDepartures(result.stopTimes, colorMap, directionLabels, calls), calls, timezone).filter(
             (d) =>
               (!routeFilter || routeFilter.has(d.route.shortName ?? '')) &&
               (directionId == null || d.directionId === directionId),

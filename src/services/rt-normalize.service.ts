@@ -14,6 +14,7 @@ import { envString } from '../config/env'
 import { buildStaticIndex, type StaticIndex } from '../lib/rt-normalize/static-index'
 import { normalizeFeed, type NormalizeStats } from '../lib/rt-normalize/normalize'
 import { viaRelay } from '../lib/rt-normalize/motis-sources'
+import { indexCalls, type LiveFeed } from '../lib/rt-normalize/exact-times'
 import { rtEgressProxy } from './rt-url-selection'
 
 const FeedMessage = () => GtfsRealtimeBindings.transit_realtime.FeedMessage
@@ -127,6 +128,27 @@ async function relay(feedId: string, rt: RtUrlEntry): Promise<NormalizedFeed> {
   }
 }
 
+/** The last message for `key`, refreshed after RESULT_TTL_MS; a slow refresh is answered with the previous one. */
+function latest(key: string, load: () => Promise<NormalizedFeed>): Promise<NormalizedFeed> {
+  let entry = results.get(key)
+  if (!entry) results.set(key, (entry = {}))
+  const age = entry.last ? Date.now() - entry.last.at : Infinity
+  if (age >= RESULT_TTL_MS && !entry.pending) {
+    const relayed = entry
+    relayed.pending = load()
+      .then(feed => (relayed.last = { at: Date.now(), feed }).feed)
+      .finally(() => { relayed.pending = undefined })
+    relayed.pending.catch(() => {})
+  }
+  if (!entry.pending) return Promise.resolve(entry.last!.feed)
+  const previous = entry.last && age < STALE_LIMIT_MS ? entry.last.feed : null
+  const late = Bun.sleep(FRESH_WAIT_MS).then(() => {
+    if (previous) return previous
+    throw new Error('upstream has not answered yet')
+  })
+  return Promise.race([previous ? entry.pending.catch(() => previous) : entry.pending, late])
+}
+
 /**
  * The rewritten message for one of a feed's realtime URLs, or null when the
  * feed has no such URL routed through the relay. A URL routed here only to
@@ -137,23 +159,34 @@ async function relay(feedId: string, rt: RtUrlEntry): Promise<NormalizedFeed> {
 export async function getNormalizedFeed(feedId: string, urlIndex: number): Promise<NormalizedFeed | null> {
   const rt = (await rtUrlsOf(feedId))[urlIndex]
   if (!rt || !viaRelay(rt)) return null
+  return latest(`${feedId}/${urlIndex}`, () => relay(feedId, rt))
+}
 
-  const key = `${feedId}/${urlIndex}`
-  let entry = results.get(key)
-  if (!entry) results.set(key, (entry = {}))
-  const age = entry.last ? Date.now() - entry.last.at : Infinity
-  if (age >= RESULT_TTL_MS && !entry.pending) {
-    const relayed = entry
-    relayed.pending = relay(feedId, rt)
-      .then(feed => (relayed.last = { at: Date.now(), feed }).feed)
-      .finally(() => { relayed.pending = undefined })
-    relayed.pending.catch(() => {})
+const isTripUpdates = (rt: RtUrlEntry) => rt.type === 'tripUpdates' || rt.type === undefined
+const callIndexes = new WeakMap<Uint8Array, LiveFeed>()
+
+/**
+ * Every stop prediction in a feed's trip updates, under the trip ids MOTIS
+ * holds: relayed URLs as rewritten, the rest as published, since MOTIS
+ * only resolves those that already match.
+ */
+export async function liveCalls(feedId: string): Promise<LiveFeed> {
+  const urls = await rtUrlsOf(feedId)
+  const feeds = await Promise.allSettled(
+    urls.map((rt, i) => {
+      if (!isTripUpdates(rt)) return Promise.resolve(null)
+      if (viaRelay(rt)) return latest(`${feedId}/${i}`, () => relay(feedId, rt))
+      return latest(`${feedId}/${i}/direct`, async () => ({ body: encodeFeed(await fetchRealtime(rt)), stats: null }))
+    }),
+  )
+  const live: LiveFeed = { calls: new Map(), trips: new Set(), routes: new Set() }
+  for (const f of feeds) {
+    if (f.status !== 'fulfilled' || !f.value) continue
+    let index = callIndexes.get(f.value.body)
+    if (!index) callIndexes.set(f.value.body, (index = indexCalls(decodeFeed(f.value.body))))
+    for (const [k, v] of index.calls) live.calls.set(k, v)
+    for (const t of index.trips) live.trips.add(t)
+    for (const r of index.routes) live.routes.add(r)
   }
-  if (!entry.pending) return entry.last!.feed
-  const previous = entry.last && age < STALE_LIMIT_MS ? entry.last.feed : null
-  const late = Bun.sleep(FRESH_WAIT_MS).then(() => {
-    if (previous) return previous
-    throw new Error('upstream has not answered yet')
-  })
-  return Promise.race([previous ? entry.pending.catch(() => previous) : entry.pending, late])
+  return live
 }

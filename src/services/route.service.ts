@@ -17,6 +17,10 @@ import type { CrossingName } from '../lib/route-context/crossing-names'
 import type { Overpass } from '../lib/route-context/overpasses'
 import type { AreaStretch } from '../lib/route-context/area-stretches'
 import { tagEdgeSegments, type EdgeTags } from '../lib/route-context/edge-tags'
+import { pathScore, scoreSegments, wayStretches } from '../lib/bike-suitability/route-cost'
+import {
+  lookupFacilities, lookupScores, scoresFor, suitableCustomModel, type FacilityLookup, type ScoreLookup,
+} from './bike-suitability-route.service'
 
 // ── Types ───────────────────────────────────────────────────────────
 
@@ -39,6 +43,8 @@ export interface RouteEdgeSegment extends EdgeTags {
   bikePriority?: number   // 0–1 — GraphHopper's bike_priority encoded value (higher = friendlier for cycling)
   crossing?: string       // GH Crossing EV: MISSING | TRAFFIC_SIGNALS | MARKED | UNMARKED | UNCONTROLLED | RAILWAY | RAILWAY_BARRIER
   osmWayId?: number       // the OSM way the edge belongs to, for POST /route/lanes
+  bikeSuitability?: number // 0-100 comfort score of that way, on a bike route asked for it
+  bikeFacility?: string   // the way's bike facility (path, track, lane, sharrow, none, ...), on the same routes
   country?: string        // ISO 3166-1 alpha-3
   streetName?: string     // the street an unnamed sidewalk runs beside, from sidewalk_street_names
   streetNameSource?: 'tag' | 'geometry'
@@ -335,18 +341,30 @@ export async function getEnrichedRoute(
   fetchFn: FetchFn = (url, init) => fetch(url, init),
   lookup: WayLookup = lookupWays,
   context: RouteContextSource = dbRouteContextSource,
+  scoreLookup: ScoreLookup = lookupScores,
+  facilityLookup: FacilityLookup = lookupFacilities,
 ): Promise<EnrichedRouteResponse> {
   const ghUrl = graphHopperUrl()
   const available = await graphEncodedValues(fetchFn)
 
+  const { bike_suitability: suitability, ...ghBody } = requestBody ?? {}
+  const scored = ghBody.profile === 'bike' && suitability && available.has('osm_way_id')
+  const weight = Math.min(1, Math.max(0, Number(suitability?.weight) || 0))
+  let scores = new Map<number, number>()
+  if (scored && weight > 0 && Array.isArray(ghBody.points) && ghBody.points.length >= 2) {
+    const steered = await suitableCustomModel(ghBody, weight, fetchFn, scoreLookup)
+    scores = steered.scores
+    if (steered.model) ghBody.custom_model = steered.model
+  }
+
   // Build the GraphHopper route request with all enrichment details
   const routeRequest = {
-    ...requestBody,
+    ...ghBody,
     elevation: true,
     points_encoded: false,
     instructions: requestBody.instructions ?? true,
     details: [...new Set([
-      ...(requestBody.details || []),
+      ...(ghBody.details || []),
       ...DETAIL_KEYS,
       ...OPTIONAL_DETAIL_KEYS.filter(key => available.has(key)),
     ])],
@@ -376,7 +394,7 @@ export async function getEnrichedRoute(
     const elevationStats = computeElevationStats(coordinates)
     const [stretches, around] = await Promise.all([
       pathStreetStretches(coordinates, cumulativeDistances, path.details, lookup),
-      getRouteContext({ coordinates, distances: cumulativeDistances, details: path.details, profile: requestBody.profile }, context),
+      getRouteContext({ coordinates, distances: cumulativeDistances, details: path.details, profile: ghBody.profile }, context),
     ])
     const edgeSegments = tagEdgeSegments(
       nameCrossingSegments(nameSegments(buildEdgeSegments(path.details || {}, cumulativeDistances), stretches), around.crossingNames),
@@ -384,9 +402,22 @@ export async function getEnrichedRoute(
       around.edgeMarks,
     )
 
+    const ways = scored ? wayStretches(path.details, cumulativeDistances) : []
+    const wayIds = ways.map(w => w.wayId)
+    const [, facilities] = scored
+      ? await Promise.all([scoresFor(wayIds, scores, scoreLookup), facilityLookup(wayIds).catch(() => new Map<number, string>())])
+      : [scores, new Map<number, string>()]
+
     return {
       ...path,
-      edge_segments: edgeSegments,
+      ...(scored && { bike_suitability: { score: pathScore(ways, scores), segments: scoreSegments(ways, scores) } }),
+      edge_segments: scored
+        ? edgeSegments.map(seg => seg.osmWayId == null ? seg : {
+          ...seg,
+          ...(scores.has(seg.osmWayId) && { bikeSuitability: scores.get(seg.osmWayId) }),
+          ...(facilities.has(seg.osmWayId) && { bikeFacility: facilities.get(seg.osmWayId) }),
+        })
+        : edgeSegments,
       elevation_stats: elevationStats,
       overpasses: around.overpasses,
       states: around.states.map(s => ({ ...stretch(s), ...(s.code && { code: s.code }) })),

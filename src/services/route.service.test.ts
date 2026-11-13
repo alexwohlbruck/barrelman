@@ -102,3 +102,18 @@ describe('route context', () => {
     expect(stairs).toMatchObject({ entrance: { name: 'Times Sq', ref: 'S2' }, passage: 'indoor', level: '-1' })
   })
 })
+
+describe('bike suitability', () => {
+  test('a scored bike route carries each way\'s score and facility on its edge segments', async () => {
+    const coordinates = [[-73.99, 40.75, 10], [-73.989, 40.75, 10], [-73.988, 40.75, 10]]
+    const fetchFn: FetchFn = async url => url.endsWith('/info')
+      ? Response.json({ encoded_values: { osm_way_id: [] } })
+      : Response.json({ paths: [{ points: { coordinates }, details: { osm_way_id: [[0, 1, 7], [1, 2, 8]], road_class: [[0, 2, 'residential']] } }] })
+    const { paths } = await getEnrichedRoute(
+      { ...request, profile: 'bike', bike_suitability: { weight: 0 } }, fetchFn, async () => new Map(), nothing,
+      async ids => new Map(ids.map(id => [id, id * 10])),
+      async ids => new Map(ids.filter(id => id === 7).map(id => [id, 'buffered_lane'])),
+    )
+    expect(paths[0].edge_segments.map(s => [s.osmWayId, s.bikeSuitability, s.bikeFacility])).toEqual([[7, 70, 'buffered_lane'], [8, 80, undefined]])
+  })
+})

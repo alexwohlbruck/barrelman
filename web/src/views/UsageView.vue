@@ -77,7 +77,7 @@ onMounted(load)
     </template>
   </PageHeader>
 
-  <div class="mx-auto max-w-5xl space-y-6 p-8">
+  <div class="mx-auto max-w-5xl space-y-6 p-4 md:p-8">
     <div v-if="loading" class="flex justify-center py-16"><Spinner class="size-6" /></div>
 
     <template v-else>
@@ -147,27 +147,29 @@ onMounted(load)
           <CardHeader><CardTitle>By endpoint</CardTitle></CardHeader>
           <CardContent>
             <p v-if="!byEndpoint.length" class="py-6 text-center text-sm text-muted-foreground">Nothing yet.</p>
-            <table v-else class="w-full text-sm">
-              <thead class="text-xs text-muted-foreground">
-                <tr class="border-b border-border">
-                  <th class="pb-2 text-left font-medium">Group</th>
-                  <th class="pb-2 text-right font-medium">Requests</th>
-                  <th class="pb-2 text-right font-medium">Credits</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="row in byEndpoint" :key="row.endpoint" class="border-b border-border/50 last:border-0">
-                  <td class="py-2">
-                    {{ row.endpoint }}
-                    <Badge v-if="row.rejected > 0" variant="warning" class="ml-1.5">
-                      {{ row.rejected }} refused
-                    </Badge>
-                  </td>
-                  <td class="py-2 text-right tabular-nums">{{ formatNumber(row.requests) }}</td>
-                  <td class="py-2 text-right tabular-nums">{{ formatNumber(row.credits) }}</td>
-                </tr>
-              </tbody>
-            </table>
+            <div v-else class="overflow-x-auto">
+              <table class="w-full text-sm">
+                <thead class="text-xs text-muted-foreground">
+                  <tr class="border-b border-border">
+                    <th class="pb-2 text-left font-medium">Group</th>
+                    <th class="pb-2 text-right font-medium">Requests</th>
+                    <th class="pb-2 text-right font-medium">Credits</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="row in byEndpoint" :key="row.endpoint" class="border-b border-border/50 last:border-0">
+                    <td class="py-2">
+                      {{ row.endpoint }}
+                      <Badge v-if="row.rejected > 0" variant="warning" class="ml-1.5">
+                        {{ row.rejected }} refused
+                      </Badge>
+                    </td>
+                    <td class="py-2 text-right tabular-nums">{{ formatNumber(row.requests) }}</td>
+                    <td class="py-2 text-right tabular-nums">{{ formatNumber(row.credits) }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
           </CardContent>
         </Card>
 
@@ -176,26 +178,28 @@ onMounted(load)
           <CardHeader><CardTitle>By key</CardTitle></CardHeader>
           <CardContent>
             <p v-if="!usage?.byKey.length" class="py-6 text-center text-sm text-muted-foreground">Nothing yet.</p>
-            <table v-else class="w-full text-sm">
-              <thead class="text-xs text-muted-foreground">
-                <tr class="border-b border-border">
-                  <th class="pb-2 text-left font-medium">Key</th>
-                  <th class="pb-2 text-right font-medium">Requests</th>
-                  <th class="pb-2 text-right font-medium">Credits</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr
-                  v-for="row in usage.byKey"
-                  :key="row.apiKeyId"
-                  class="border-b border-border/50 last:border-0"
-                >
-                  <td class="py-2 truncate">{{ keyLabel(row.apiKeyId) }}</td>
-                  <td class="py-2 text-right tabular-nums">{{ formatNumber(row.requests) }}</td>
-                  <td class="py-2 text-right tabular-nums">{{ formatNumber(row.credits) }}</td>
-                </tr>
-              </tbody>
-            </table>
+            <div v-else class="overflow-x-auto">
+              <table class="w-full text-sm">
+                <thead class="text-xs text-muted-foreground">
+                  <tr class="border-b border-border">
+                    <th class="pb-2 text-left font-medium">Key</th>
+                    <th class="pb-2 text-right font-medium">Requests</th>
+                    <th class="pb-2 text-right font-medium">Credits</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr
+                    v-for="row in usage.byKey"
+                    :key="row.apiKeyId"
+                    class="border-b border-border/50 last:border-0"
+                  >
+                    <td class="py-2 truncate">{{ keyLabel(row.apiKeyId) }}</td>
+                    <td class="py-2 text-right tabular-nums">{{ formatNumber(row.requests) }}</td>
+                    <td class="py-2 text-right tabular-nums">{{ formatNumber(row.credits) }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
           </CardContent>
         </Card>
       </div>

@@ -199,48 +199,52 @@ function actionVariant(action: string): BadgeVariant {
         <div>
           <h3 class="mb-2 text-sm font-medium">By endpoint</h3>
           <p v-if="!byEndpoint.length" class="text-sm text-muted-foreground">Nothing yet.</p>
-          <table v-else class="w-full text-sm">
-            <thead class="text-xs text-muted-foreground">
-              <tr class="border-b border-border">
-                <th class="pb-2 text-left font-medium">Group</th>
-                <th class="pb-2 text-right font-medium">Requests</th>
-                <th class="pb-2 text-right font-medium">Credits</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="row in byEndpoint" :key="row.endpoint" class="border-b border-border/50 last:border-0">
-                <td class="py-1.5">
-                  {{ row.endpoint }}
-                  <Badge v-if="row.rejected > 0" variant="warning" class="ml-1.5">
-                    {{ row.rejected }} refused
-                  </Badge>
-                </td>
-                <td class="py-1.5 text-right tabular-nums">{{ formatNumber(row.requests) }}</td>
-                <td class="py-1.5 text-right tabular-nums">{{ formatNumber(row.credits) }}</td>
-              </tr>
-            </tbody>
-          </table>
+          <div v-else class="overflow-x-auto">
+            <table class="w-full text-sm">
+              <thead class="text-xs text-muted-foreground">
+                <tr class="border-b border-border">
+                  <th class="pb-2 text-left font-medium">Group</th>
+                  <th class="pb-2 text-right font-medium">Requests</th>
+                  <th class="pb-2 text-right font-medium">Credits</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="row in byEndpoint" :key="row.endpoint" class="border-b border-border/50 last:border-0">
+                  <td class="py-1.5">
+                    {{ row.endpoint }}
+                    <Badge v-if="row.rejected > 0" variant="warning" class="ml-1.5">
+                      {{ row.rejected }} refused
+                    </Badge>
+                  </td>
+                  <td class="py-1.5 text-right tabular-nums">{{ formatNumber(row.requests) }}</td>
+                  <td class="py-1.5 text-right tabular-nums">{{ formatNumber(row.credits) }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
         </div>
 
         <div>
           <h3 class="mb-2 text-sm font-medium">By key</h3>
           <p v-if="!detail.usage.byKey.length" class="text-sm text-muted-foreground">Nothing yet.</p>
-          <table v-else class="w-full text-sm">
-            <thead class="text-xs text-muted-foreground">
-              <tr class="border-b border-border">
-                <th class="pb-2 text-left font-medium">Key</th>
-                <th class="pb-2 text-right font-medium">Requests</th>
-                <th class="pb-2 text-right font-medium">Credits</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="row in detail.usage.byKey" :key="row.apiKeyId" class="border-b border-border/50 last:border-0">
-                <td class="truncate py-1.5">{{ keyLabel(row.apiKeyId, keyNames) }}</td>
-                <td class="py-1.5 text-right tabular-nums">{{ formatNumber(row.requests) }}</td>
-                <td class="py-1.5 text-right tabular-nums">{{ formatNumber(row.credits) }}</td>
-              </tr>
-            </tbody>
-          </table>
+          <div v-else class="overflow-x-auto">
+            <table class="w-full text-sm">
+              <thead class="text-xs text-muted-foreground">
+                <tr class="border-b border-border">
+                  <th class="pb-2 text-left font-medium">Key</th>
+                  <th class="pb-2 text-right font-medium">Requests</th>
+                  <th class="pb-2 text-right font-medium">Credits</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="row in detail.usage.byKey" :key="row.apiKeyId" class="border-b border-border/50 last:border-0">
+                  <td class="truncate py-1.5">{{ keyLabel(row.apiKeyId, keyNames) }}</td>
+                  <td class="py-1.5 text-right tabular-nums">{{ formatNumber(row.requests) }}</td>
+                  <td class="py-1.5 text-right tabular-nums">{{ formatNumber(row.credits) }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
         </div>
       </section>
 

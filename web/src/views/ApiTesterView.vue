@@ -110,7 +110,7 @@ async function send() {
 <template>
   <PageHeader title="API Tester" subtitle="Send requests to the running Barrelman API" />
 
-  <div class="p-8">
+  <div class="p-4 md:p-8">
     <!-- Presets -->
     <div class="mb-5 flex flex-wrap items-center gap-2">
       <span class="flex items-center gap-1 text-xs font-medium text-muted-foreground"><Zap class="size-3.5" /> Presets:</span>

@@ -62,7 +62,7 @@ async function logout() {
 </script>
 
 <template>
-  <aside class="flex h-full w-60 shrink-0 flex-col border-r border-border bg-card/40">
+  <aside class="flex h-full w-full flex-col border-r border-border bg-card/40">
     <div class="flex items-center gap-2.5 px-5 py-5">
       <div class="flex size-9 items-center justify-center rounded-lg bg-primary text-primary-foreground">
         <Compass class="size-5" />

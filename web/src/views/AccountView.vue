@@ -262,7 +262,7 @@ function formatDate(value: string | null) {
 <template>
   <PageHeader title="Account" subtitle="Your profile, sign-in methods and devices" />
 
-  <div class="mx-auto max-w-3xl space-y-6 p-8">
+  <div class="mx-auto max-w-3xl space-y-6 p-4 md:p-8">
     <div v-if="loading" class="flex justify-center py-16"><Spinner class="size-6" /></div>
 
     <template v-else>

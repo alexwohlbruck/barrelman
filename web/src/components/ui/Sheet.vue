@@ -27,7 +27,7 @@ const emit = defineEmits<{ 'update:open': [value: boolean] }>()
         )"
         @escape-key-down="emit('update:open', false)"
       >
-        <div class="flex items-start justify-between gap-4 border-b border-border px-6 py-4">
+        <div class="flex items-start justify-between gap-4 border-b border-border px-4 py-4 sm:px-6">
           <div class="flex min-w-0 flex-col gap-1">
             <DialogTitle v-if="title" class="truncate text-lg font-semibold leading-tight tracking-tight">{{ title }}</DialogTitle>
             <DialogDescription v-if="description" class="text-sm text-muted-foreground">{{ description }}</DialogDescription>
@@ -40,7 +40,7 @@ const emit = defineEmits<{ 'update:open': [value: boolean] }>()
             <span class="sr-only">Close</span>
           </DialogClose>
         </div>
-        <div class="flex-1 overflow-y-auto px-6 py-5">
+        <div class="flex-1 overflow-y-auto px-4 py-5 sm:px-6">
           <slot />
         </div>
       </DialogContent>

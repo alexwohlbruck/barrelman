@@ -82,7 +82,7 @@ onMounted(async () => {
 <template>
   <PageHeader title="Scripts" subtitle="Run and manage every barrelman data task" />
 
-  <div class="p-8">
+  <div class="p-4 md:p-8">
     <!-- The single most confusing thing about this page is that Run doesn't
          always mean start now. Say so once, at the top. -->
     <div class="mb-6 flex items-start gap-2 rounded-lg border border-border bg-muted/40 p-3 text-xs text-muted-foreground">

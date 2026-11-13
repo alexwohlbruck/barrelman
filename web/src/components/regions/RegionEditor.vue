@@ -149,7 +149,7 @@ const coordLabels = ['West', 'South', 'East', 'North']
 
 <template>
   <Dialog :open="open" @update:open="emit('update:open', $event)" class="max-w-2xl">
-    <div class="flex max-h-[85vh] flex-col gap-4 overflow-y-auto pr-1">
+    <div class="flex flex-col gap-4">
       <div class="flex flex-col gap-1 pr-6">
         <h2 class="text-lg font-semibold leading-none">{{ isEdit ? `Edit ${region?.label}` : 'New region' }}</h2>
         <p class="text-sm text-muted-foreground">
@@ -199,7 +199,7 @@ const coordLabels = ['West', 'South', 'East', 'North']
       <div class="flex flex-col gap-2">
         <Label>Bounding box</Label>
         <BboxMap :model-value="form.bbox" @update:model-value="form.bbox = $event" />
-        <div class="grid grid-cols-4 gap-2">
+        <div class="grid grid-cols-2 gap-2 sm:grid-cols-4">
           <div v-for="(lbl, i) in coordLabels" :key="lbl" class="flex flex-col gap-1">
             <span class="text-xs text-muted-foreground">{{ lbl }}</span>
             <Input type="number" :model-value="form.bbox[i]" @update:model-value="setCoord(i, $event)" />

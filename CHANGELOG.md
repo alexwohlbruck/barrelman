@@ -16,8 +16,66 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ### Fixed
 
+* Departure boards and trip plans leave out timetable runs the agency says aren't running: a run that should have left over 5 minutes ago and is missing from the agency's live feed, on a route where the feed reports most running trips.
+* A departure the agency is predicting now shows as live even when MOTIS failed to attach the update, using the agency's time for that trip. Orlando's LYNX boards showed every bus at its timetable time this way.
+* Trains a service change takes off a line no longer show as departing. When the agency reroutes a route onto trains the timetable doesn't have (the 4 ending at Grand Central for night work), the timetable's runs it stops reporting are now cancelled instead of shown at their scheduled times.
 * A covered road's deck stands at the heights OSM tags on its nodes even where the terrain takes its roof for ground, as on the levels of Brooklyn's Triple Cantilever, and its deck is marked roofed so the map can carve that roof away. Rebuild the bridge decks after upgrading.
 * A road passing under a bridge no longer has its lane paint drawn on the bridge's deck. Paint goes on a deck only where its road runs along it or the deck is its road's own, and a road tagged `covered=yes` stays on the ground whatever its `layer` (the Brooklyn-Queens Expressway under the Brooklyn Bridge's approach). Road markings keep the way they were painted for; rebuild the road markings, then the bridge decks, for existing paint to take it.
+
+## [0.10.46] - 2026-11-13
+
+### Fixed
+
+* Departure boards and trip plans show live times to the second, from the agency's own latest prediction. MOTIS keeps whole minutes, rounded down, and lags a poll behind, so live times often read one to two minutes early.
+
+## [0.10.45] - 2026-11-13
+
+### Fixed
+
+* A GTFS import no longer stops relaying a feed's realtime because it was measured while service was thin. Imports run around 2 AM, when Pittsburgh, Atlanta and Charlotte publish too few updates to judge, and losing the relay left most of their buses on timetable times all day.
+
+## [0.10.44] - 2026-11-13
+
+### Fixed
+
+* Nightly MOTIS rebuilds no longer discard every new timetable. The check that loads the new dataset asked MOTIS for every stop in the world, which it refuses, so MOTIS kept serving an old timetable. Feeds whose trip ids change daily, like the NYC subway's, then lost all realtime.
+
+## [0.10.43] - 2026-11-12
+
+### Added
+
+- Bike suitability. Every rideable way is scored 0–100 from its tags (traffic
+  stress, bike facility, surface, incline and more) and served with the
+  existing cycling ways as one `cycling_tiles` Martin source, z9–16. Deploying
+  needs that source in `martin-config.yaml`; Martin reads it at startup.
+- `POST /route` with `profile: "bike"` accepts `bike_suitability: { weight }`,
+  from 0 (fastest) to 1 (safest), and steers the route away from the most
+  stressful streets in its corridor.
+
+### Changed
+
+- The console now works on a phone. Below tablet width the sidebar folds into
+  a drawer behind a menu button, pages use tighter margins, wide tables scroll
+  sideways instead of overflowing, and dialogs fit the screen and scroll when
+  they are taller than it. Form fields no longer make iOS zoom in on focus.
+- Transit plans start from a wider spread of nearby routes. One line can no
+  longer take every access-station slot, so a bus stop next to a streetcar line
+  is considered. Plans that ride one stop only to walk back to another line now
+  walk there directly, and an itinerary beaten on every count by another is
+  dropped.
+- MOTIS no longer builds or holds its address geocoder, which Barrelman never
+  used, and `MOTIS_THREADS` optionally caps its request threads. Both lower its
+  peak memory; they take effect at the next MOTIS import.
+
+### Fixed
+
+- GraphHopper's healthcheck no longer leaves zombie processes behind.
+
+## [0.10.42] - 2026-11-12
+
+### Fixed
+
+* Console dialogs that are taller than the window now scroll instead of running off the bottom of the screen. Before, the end of a long script form like OSM Update, including its Run button, could not be reached.
 
 ## [0.10.41] - 2026-11-10
 
