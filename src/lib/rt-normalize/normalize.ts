@@ -190,7 +190,7 @@ export function normalizeFeed(
   const loose: TripUpdate[] = []
   const redated = new Map<TripUpdate, Run>()
   const placed = new Map<TripUpdate, Run>()
-  const tracked = new Set<string>()
+  const tracked = new Map<string, number>()
 
   for (const e of entities) {
     const tu = e.tripUpdate
@@ -198,7 +198,7 @@ export function normalizeFeed(
     const sr = tu.trip.scheduleRelationship ?? SCHEDULED
     if (sr !== SCHEDULED && sr !== CANCELED) continue
     stats.updates++
-    if (tu.trip.routeId) tracked.add(tu.trip.routeId)
+    if (tu.trip.routeId) tracked.set(tu.trip.routeId, (tracked.get(tu.trip.routeId) ?? 0) + (underWay(tu, now) ? 1 : 0))
     const exact = exactRun(index, tu, dates, now)
     if (exact && !claimed.has(runKey(exact))) {
       claimed.set(runKey(exact), exact)
@@ -393,27 +393,36 @@ function asNewTrip(index: StaticIndex, tu: TripUpdate): TripUpdate | null {
   }
 }
 
+/** Whether an update's train has left its first listed stop. */
+function underWay(tu: TripUpdate, now: number) {
+  const first = tu.stopTimeUpdate?.[0]
+  const t = num(first?.departure?.time) || num(first?.arrival?.time)
+  return !!t && t <= now
+}
+
 /**
  * Runs that should be moving now, on routes whose trains the feed reports,
  * that no update accounts for. Silence only means "not running" on a route
- * the feed demonstrably covers, so a route where it claims under half of the
- * under-way runs is left alone.
+ * the feed demonstrably covers: one reporting at least half as many moving
+ * trains as the timetable has under way. Trains the timetable lacks count,
+ * since a service change replaces runs with ones it doesn't have.
  */
 function silentRuns(
   index: StaticIndex,
   dates: string[],
   now: number,
-  tracked: Set<string>,
+  tracked: Map<string, number>,
   claimed: Map<string, Run>,
 ): Run[] {
   const out: Run[] = []
-  for (const routeId of tracked) {
+  for (const [routeId, moving] of tracked) {
     const underway = runs(index, index.byRoute.get(routeId) ?? [], dates).filter(r => {
       const t = r.trip.times
       return r.origin + t[0]! <= now - CANCEL_GRACE_S && r.origin + t[t.length - 1]! > now
     })
     const silent = underway.filter(r => !claimed.has(runKey(r)))
-    if (underway.length && (underway.length - silent.length) / underway.length >= MIN_ROUTE_COVERAGE) out.push(...silent)
+    const reported = Math.max(underway.length - silent.length, moving)
+    if (underway.length && reported / underway.length >= MIN_ROUTE_COVERAGE) out.push(...silent)
   }
   return out
 }
