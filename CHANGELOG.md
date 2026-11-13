@@ -47,6 +47,10 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 * Console dialogs that are taller than the window now scroll instead of running off the bottom of the screen. Before, the end of a long script form like OSM Update, including its Run button, could not be reached.
 
+### Fixed
+
+* Nightly MOTIS rebuilds no longer discard every new timetable. The check that loads the new dataset asked MOTIS for every stop in the world, which it refuses, so MOTIS kept serving an old timetable. Feeds whose trip ids change daily, like the NYC subway's, then lost all realtime.
+
 ## [0.10.41] - 2026-11-10
 
 ### Fixed

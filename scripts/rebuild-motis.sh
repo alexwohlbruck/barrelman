@@ -495,6 +495,15 @@ log "  tt.bin present, $TRIPS trips across all feeds, $(staged_human_kb "$NEW_KB
 # server rejects at load time (a version mismatch, a damaged file) while the
 # live one still serves. The trial loads the whole dataset into memory beside
 # the live server, so auto only runs it when that fits.
+# Prints '[{' when the server finds a stop beside the first stop of a feed ZIP.
+TRIAL_STOPS_PROBE='for z in $(ls /data/gtfs/*.zip | head -20); do
+  ll=$(unzip -p "$z" stops.txt 2>/dev/null | tr -d "\r\"" | awk -F, "NR==1{for(i=1;i<=NF;i++){if(\$i==\"stop_lat\")a=i;if(\$i==\"stop_lon\")o=i};next} a&&o&&\$a~/^-?[0-9]+\\.[0-9]/&&\$o~/^-?[0-9]+\\.[0-9]/{print \$a\" \"\$o;exit}")
+  [ -n "$ll" ] || continue
+  set -- $ll
+  box=$(awk -v a="$1" -v o="$2" "BEGIN{printf \"min=%.5f,%.5f&max=%.5f,%.5f\",a-0.002,o-0.002,a+0.002,o+0.002}")
+  wget -q -O - "http://127.0.0.1:8080/api/v1/map/stops?$box" | head -c 2
+  exit
+done'
 TRIAL_DECISION="$(staged_trial_decision "$VERIFY" "$(mem_total_kb)" 0 "$(mem_available_kb)" $(( NEW_KB + 1048576 )))"
 if [ "$TRIAL_DECISION" = run ]; then
   log "  starting a trial server on data.next..."
@@ -507,8 +516,9 @@ if [ "$TRIAL_DECISION" = run ]; then
     docker logs --tail 15 "$TRIAL" >&2 2>&1 || true
     exit 1
   fi
-  # Any stop at all, anywhere: the stop index is the first thing a request uses.
-  STOPS="$(docker exec "$TRIAL" wget -q -O - 'http://127.0.0.1:8080/api/v1/map/stops?min=-90,-180&max=90,180' 2>/dev/null | head -c 2 || true)"
+  # MOTIS answers 422 to a stops box larger than a few blocks, so ask around a
+  # stop taken from the feeds it loaded.
+  STOPS="$(docker exec "$TRIAL" sh -c "$TRIAL_STOPS_PROBE" 2>/dev/null || true)"
   if [ "$STOPS" != '[{' ]; then
     log "ERROR: the trial server loaded data.next but returns no stops; the live dataset is untouched." >&2
     exit 1
