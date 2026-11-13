@@ -11,13 +11,23 @@ const MAX_DRIFT_S = 15 * 60
 
 const key = (tripId: string, stopId: string) => `${tripId}|${stopId}`
 
-/** Every timed stop prediction in a feed message, by trip id and stop id. */
-export function indexCalls(message: transit_realtime.IFeedMessage): Map<string, ExactCall> {
+/** What a feed says now: every timed stop prediction, by trip id and stop id, and every trip it reports running. */
+export interface LiveFeed {
+  calls: Map<string, ExactCall>
+  trips: Set<string>
+  routes: Set<string>
+}
+
+export function indexCalls(message: transit_realtime.IFeedMessage): LiveFeed {
   const calls = new Map<string, ExactCall>()
+  const trips = new Set<string>()
+  const routes = new Set<string>()
   for (const entity of message.entity ?? []) {
     const tu = entity.tripUpdate
     const tripId = tu?.trip?.tripId
     if (!tu || !tripId || tu.trip.scheduleRelationship === 3) continue
+    trips.add(tripId)
+    if (tu.trip.routeId) routes.add(tu.trip.routeId)
     for (const s of tu.stopTimeUpdate ?? []) {
       if (!s.stopId || s.scheduleRelationship === 1) continue
       const arrival = Number(s.arrival?.time) || undefined
@@ -25,14 +35,14 @@ export function indexCalls(message: transit_realtime.IFeedMessage): Map<string, 
       if (arrival || departure) calls.set(key(tripId, s.stopId), { arrival, departure })
     }
   }
-  return calls
+  return { calls, trips, routes }
 }
 
 /** The static trip id inside a MOTIS trip id (`20261112_19:08_5_<trip_id>`). */
 export const staticTripId = (motisTripId: string) => motisTripId.replace(/^\d{8}_\d{1,2}:\d{2}_[^_]+_/, '')
 
-export function exactCall(calls: Map<string, ExactCall> | undefined, motisTripId: string, stopId: string) {
-  return calls?.get(key(staticTripId(motisTripId), stopId))
+export function exactCall(live: LiveFeed | undefined, motisTripId: string, stopId: string) {
+  return live?.calls.get(key(staticTripId(motisTripId), stopId))
 }
 
 /**

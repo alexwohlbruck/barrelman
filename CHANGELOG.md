@@ -10,6 +10,12 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.10.49] - 2026-11-13
+
+### Fixed
+
+* Departure boards and trip plans leave out timetable runs the agency says aren't running: a run that should have left over 5 minutes ago and is missing from the agency's live feed, on a route where the feed reports most running trips.
+
 ## [0.10.48] - 2026-11-13
 
 ### Fixed
