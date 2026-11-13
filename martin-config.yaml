@@ -475,6 +475,9 @@ postgres:
         base: float4
         face: text
         piers: text
+        under: bool
+        cover: text
+        shared: text
       buffer: 256
       clip_geom: false
 

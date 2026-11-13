@@ -41,13 +41,16 @@ export const BORE = 40
 /** Farthest any cut runs out from its portal, in metres. */
 export const CUT_MAX = Math.max(...Object.values(PROFILES).map(p => p.reach))
 /** The most a headwall rises over a portal's roof, in metres; above it the hillside carries on. */
-export const FACADE = 4
+export const FACADE = 8
 /** The shortest forecourt a portal is given, in metres, so a mouth in a hillside has walls to stand in. */
 export const FORECOURT = 9
 /** The least the ground must stand over a portal, beside it or above the bore, for a cut to be dug, in metres. */
 export const RELIEF = 2
-/** How far behind a headwall the ground its top meets is read, in metres. */
+/** How far behind a headwall the ground its top meets is read, from its own depth out, in metres. */
 const BEHIND = 6
+const HEADWALL = 1.5
+
+const median = (xs: number[]) => (xs.length ? [...xs].sort((a, b) => a - b)[xs.length >> 1] : NaN)
 /** Metres along which a wall's top follows the lowest ground beside it. */
 const RIM_SPAN = 4
 /** How far out from a portal the ground it opens onto is read, in metres. */
@@ -225,7 +228,7 @@ export function splitAtFace(bore: Point[], face: Face, gap = 0.5): { out: Point[
  * A portal ready to be solved: its approach, bore, edges in metres, and mapped headwall.
  * `piers` are the walls between its bores, as spans in metres left of its centreline.
  */
-export type Opening = { out: Approach; bore: Point[]; edges: [number, number]; kind: BoreKind; layer: number; face?: Point; piers?: Array<[number, number]> }
+export type Opening = { out: Approach; bore: Point[]; edges: [number, number]; kind: BoreKind; layer: number; under?: boolean; face?: Point; piers?: Array<[number, number]> }
 
 /** Sharpest angle between two bores, in radians, that still run side by side. */
 const PARALLEL = Math.PI / 9
@@ -350,7 +353,7 @@ export type Cut = {
  * floor has met the ground and is nearly level with the higher rim, and no
  * nearer than a forecourt's length. The headwall stops at the ground behind it.
  */
-export function solveCut(d: number[], at: number, ground: number[], beside: [number[], number[]], cover: number, junction = true, profile = PROFILES.road): Cut | null {
+export function solveCut(d: number[], at: number, ground: number[], beside: [number[], number[]], cover: number, junction = true, profile = PROFILES.road, under = false): Cut | null {
   const { headroom, grade } = profile
   // The lowest ground near each stretch of wall, so the ground beside never dips below its top.
   const rims = beside.map(rim => rim.map((_, i) => Math.min(...rim.filter((__, k) => Math.abs(d[k] - d[i]) <= RIM_SPAN / 2))))
@@ -368,8 +371,10 @@ export function solveCut(d: number[], at: number, ground: number[], beside: [num
   if (junction && at > 0 && deep(floor, 0)) floor = floorAt(Math.max(grade, (ground[0] - portal) / (out(0) || 1)))
   let open = at
   while (open > 0 && deep(floor, open)) open--
-  const behind = Math.min(...ground.filter((_, i) => i > at && d[i] - d[at] <= BEHIND))
-  const crown = Math.max(portal + headroom + ROOF, Math.min(behind, portal + headroom + ROOF + FACADE))
+  // Its top meets the ground behind it, read past the slope a portal's sample can land on; over an underpass it is the street's edge.
+  const behind = median(ground.filter((_, i) => i > at && d[i] - d[at] >= HEADWALL && d[i] - d[at] <= BEHIND))
+  const roof = portal + headroom + ROOF
+  const crown = under ? Math.max(roof, ground[at]) : Math.max(roof, Math.min(Number.isNaN(behind) ? roof : behind, roof + FACADE))
   if (portal === sill) while (open > 0 && d[at] - d[open] < FORECOURT) open--
   const walls = rims.map(rim => floor.map((f, i) => (i > at ? f + headroom + ROOF : i <= open ? f : Math.max(rim[i], f)))) as [number[], number[]]
   return { floor, walls, open, crown, headroom, base: Math.min(portal, rims[0][at], rims[1][at]) }

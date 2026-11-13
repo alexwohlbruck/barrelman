@@ -1230,6 +1230,13 @@ CREATE TABLE IF NOT EXISTS tunnel_cuts (
   geom geometry(LineString, 4326) NOT NULL,
   updated_at timestamptz NOT NULL DEFAULT now()
 );
+-- An underpass (a road under a street or building), the ground over each bore
+-- from its portal in (metres, raised to the roof where the terrain dips), and
+-- the cut leading the portals side by side that share one headwall.
+ALTER TABLE tunnel_cuts
+  ADD COLUMN IF NOT EXISTS under boolean NOT NULL DEFAULT false,
+  ADD COLUMN IF NOT EXISTS cover real[],
+  ADD COLUMN IF NOT EXISTS shared text;
 CREATE INDEX IF NOT EXISTS tunnel_cuts_geom_idx ON tunnel_cuts USING gist (geom);
 CREATE INDEX IF NOT EXISTS tunnel_cuts_anchor_idx ON tunnel_cuts USING gist (anchor);
 
@@ -1248,7 +1255,11 @@ SELECT id, kind,
        crown, headroom, base,
        CASE WHEN face IS NOT NULL THEN array_to_string(face, ',') END AS face,
        CASE WHEN piers IS NOT NULL THEN array_to_string(ARRAY(SELECT round(p * 10)::int FROM unnest(piers) p), ',') END AS piers,
-       geom
+       geom,
+       -- Appended after geom: CREATE OR REPLACE VIEW can only add columns at the end.
+       under,
+       CASE WHEN cover IS NOT NULL THEN array_to_string(ARRAY(SELECT round(c * 10)::int FROM unnest(cover) c), ',') END AS cover,
+       shared
 FROM tunnel_cuts;
 
 -- Sidewalk street names: the street each unnamed footway, path or cycleway
