@@ -196,6 +196,20 @@ describe('normalizeFeed', () => {
     const out = normalizeFeed(index, message('23:36', update('T2330', '23:30', 2, { startTime: '23:30:00' })), at('23:36'))
     expect(out.stats.cancelled).toBe(0)
   })
+
+  it('cancels the timetable on a route a service change reroutes onto trains it lacks', () => {
+    // 23:00, 23:15 and 23:30 are under way at 23:36; the feed reports two trains on another pattern.
+    const rerouted = (tripId: string, firstAt: string): transit_realtime.IFeedEntity => ({
+      id: tripId,
+      tripUpdate: {
+        trip: { tripId, routeId: 'D', startDate: DATE },
+        stopTimeUpdate: ['R1', 'R2', 'R3'].map((stopId, i) => ({ stopId, departure: { time: at(firstAt) + 3 * 60 * i } })),
+      },
+    })
+    const out = normalizeFeed(index, message('23:36', rerouted('X1', '23:20'), rerouted('X2', '23:35')), at('23:36'))
+    const cancelled = trips(out).filter(t => t!.scheduleRelationship === 3)
+    expect(cancelled.map(t => t!.tripId).sort()).toEqual(['T2300', 'T2315', 'T2330'])
+  })
 })
 
 describe('serviceDayOrigin', () => {
