@@ -14,7 +14,7 @@ import { envString } from '../config/env'
 import { buildStaticIndex, type StaticIndex } from '../lib/rt-normalize/static-index'
 import { normalizeFeed, type NormalizeStats } from '../lib/rt-normalize/normalize'
 import { viaRelay } from '../lib/rt-normalize/motis-sources'
-import { indexCalls, type ExactCall } from '../lib/rt-normalize/exact-times'
+import { indexCalls, type LiveFeed } from '../lib/rt-normalize/exact-times'
 import { rtEgressProxy } from './rt-url-selection'
 
 const FeedMessage = () => GtfsRealtimeBindings.transit_realtime.FeedMessage
@@ -163,14 +163,14 @@ export async function getNormalizedFeed(feedId: string, urlIndex: number): Promi
 }
 
 const isTripUpdates = (rt: RtUrlEntry) => rt.type === 'tripUpdates' || rt.type === undefined
-const callIndexes = new WeakMap<Uint8Array, Map<string, ExactCall>>()
+const callIndexes = new WeakMap<Uint8Array, LiveFeed>()
 
 /**
  * Every stop prediction in a feed's trip updates, under the trip ids MOTIS
  * holds: relayed URLs as rewritten, the rest as published, since MOTIS
  * only resolves those that already match.
  */
-export async function liveCalls(feedId: string): Promise<Map<string, ExactCall>> {
+export async function liveCalls(feedId: string): Promise<LiveFeed> {
   const urls = await rtUrlsOf(feedId)
   const feeds = await Promise.allSettled(
     urls.map((rt, i) => {
@@ -179,12 +179,14 @@ export async function liveCalls(feedId: string): Promise<Map<string, ExactCall>>
       return latest(`${feedId}/${i}/direct`, async () => ({ body: encodeFeed(await fetchRealtime(rt)), stats: null }))
     }),
   )
-  const calls = new Map<string, ExactCall>()
+  const live: LiveFeed = { calls: new Map(), trips: new Set(), routes: new Set() }
   for (const f of feeds) {
     if (f.status !== 'fulfilled' || !f.value) continue
     let index = callIndexes.get(f.value.body)
     if (!index) callIndexes.set(f.value.body, (index = indexCalls(decodeFeed(f.value.body))))
-    for (const [k, v] of index) calls.set(k, v)
+    for (const [k, v] of index.calls) live.calls.set(k, v)
+    for (const t of index.trips) live.trips.add(t)
+    for (const r of index.routes) live.routes.add(r)
   }
-  return calls
+  return live
 }

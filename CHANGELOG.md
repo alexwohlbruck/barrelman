@@ -14,6 +14,7 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ### Fixed
 
+* Departure boards and trip plans leave out timetable runs the agency says aren't running: a run that should have left over 5 minutes ago and is missing from the agency's live feed, on a route where the feed reports most running trips.
 * A departure the agency is predicting now shows as live even when MOTIS failed to attach the update, using the agency's time for that trip. Orlando's LYNX boards showed every bus at its timetable time this way.
 
 ## [0.10.47] - 2026-11-13
