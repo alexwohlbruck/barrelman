@@ -10,6 +10,10 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Fixed
+
+* Trip plans consider every stop within walking distance, not just the four nearest stations, so a bus at the corner shows up next to a subway a few blocks away. Plans are also two to three times faster.
+
 ## [0.10.50] - 2026-11-13
 
 ### Added
