@@ -10,17 +10,34 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.10.50] - 2026-11-13
+
 ### Added
 
 * **Road beds.** Motorways, trunk and primary roads whose carriageway the terrain does not hold level (an embankment's or cutting's walls blurred into slopes) are recorded in a new `road_beds` table, served with the tunnel cuts, so a map can level the ground under them and their lanes stop leaning and wobbling. Run "Build Road Beds" after upgrading.
 
 ### Fixed
 
-* Departure boards and trip plans leave out timetable runs the agency says aren't running: a run that should have left over 5 minutes ago and is missing from the agency's live feed, on a route where the feed reports most running trips.
-* A departure the agency is predicting now shows as live even when MOTIS failed to attach the update, using the agency's time for that trip. Orlando's LYNX boards showed every bus at its timetable time this way.
-* Trains a service change takes off a line no longer show as departing. When the agency reroutes a route onto trains the timetable doesn't have (the 4 ending at Grand Central for night work), the timetable's runs it stops reporting are now cancelled instead of shown at their scheduled times.
 * A covered road's deck stands at the heights OSM tags on its nodes even where the terrain takes its roof for ground, as on the levels of Brooklyn's Triple Cantilever, and its deck is marked roofed so the map can carve that roof away. Rebuild the bridge decks after upgrading.
 * A road passing under a bridge no longer has its lane paint drawn on the bridge's deck. Paint goes on a deck only where its road runs along it or the deck is its road's own, and a road tagged `covered=yes` stays on the ground whatever its `layer` (the Brooklyn-Queens Expressway under the Brooklyn Bridge's approach). Road markings keep the way they were painted for; rebuild the road markings, then the bridge decks, for existing paint to take it.
+
+## [0.10.49] - 2026-11-13
+
+### Fixed
+
+* Departure boards and trip plans leave out timetable runs the agency says aren't running: a run that should have left over 5 minutes ago and is missing from the agency's live feed, on a route where the feed reports most running trips.
+
+## [0.10.48] - 2026-11-13
+
+### Fixed
+
+* A departure the agency is predicting now shows as live even when MOTIS failed to attach the update, using the agency's time for that trip. Orlando's LYNX boards showed every bus at its timetable time this way.
+
+## [0.10.47] - 2026-11-13
+
+### Fixed
+
+* Trains a service change takes off a line no longer show as departing. When the agency reroutes a route onto trains the timetable doesn't have (the 4 ending at Grand Central for night work), the timetable's runs it stops reporting are now cancelled instead of shown at their scheduled times.
 
 ## [0.10.46] - 2026-11-13
 

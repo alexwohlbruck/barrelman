@@ -1,6 +1,6 @@
 {
   "name": "barrelman",
-  "version": "0.10.46",
+  "version": "0.10.50",
   "description": "OSM geospatial engine — search, tiles, spatial queries, routing",
   "type": "module",
   "scripts": {
