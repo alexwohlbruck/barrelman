@@ -78,7 +78,10 @@ const roadRows = (sql: postgres.Sql, where: postgres.PendingQuery<postgres.Row[]
 export async function buildArea(sql: postgres.Sql, dem: Dem, [w, s, e, n]: [number, number, number, number]): Promise<number> {
   const box = sql`ST_MakeEnvelope(${w}, ${s}, ${e}, ${n}, 4326)`
   const rows = await roadRows(sql, sql`geom && ${box}`)
-  if (!rows.length) return 0
+  if (!rows.length) {
+    await sql`DELETE FROM road_beds WHERE geom && ${box}`
+    return 0
+  }
   // The ways joining each end, so a road's beds run on the same whichever cell builds them.
   const ends = rows.flatMap(r => [r.coords[0], r.coords[r.coords.length - 1]])
   const beyond = await roadRows(sql, sql`geom && ST_Expand(${box}, 0.005) AND ST_Intersects(geom, ST_SetSRID(ST_Collect(ARRAY(
@@ -120,7 +123,8 @@ export async function buildArea(sql: postgres.Sql, dem: Dem, [w, s, e, n]: [numb
     return { id: `bed:${b.way}:${k}`, way: b.way, half, floor: b.floor, level: b.level, line: `LINESTRING(${b.points.map(p => unprojected(p).join(' ')).join(',')})` }
   })
   await sql.begin(async tx => {
-    await tx`DELETE FROM road_beds WHERE way = ANY(${rows.map(r => r.id)}::bigint[])`
+    // Beds in the cell of a way now a bridge, tunnel or gone go too.
+    await tx`DELETE FROM road_beds WHERE way = ANY(${rows.map(r => r.id)}::bigint[]) OR geom && ${box}`
     for (const b of found)
       await tx`INSERT INTO road_beds (id, way, half, floor, level, geom) VALUES (${b.id}, ${b.way}, ${b.half}, ${b.floor}, ${b.level}, ST_GeomFromText(${b.line}, 4326))`
   })
