@@ -1003,8 +1003,24 @@ function repinned(s: Solved) {
   })
 }
 
+/** Metres past a deck's half width that a node beneath it is still under it. */
+const OVERHEAD_REACH = 1
+
+/**
+ * Ways whose pins lie under a higher deck have them marked so: the terrain
+ * there is the deck's, as lidar takes it for ground, so a pin below it holds.
+ */
+function pinnedUnder(ways: Way[]): Way[] {
+  return ways.map(w => {
+    if (!w.pins?.length) return w
+    const higher = ways.filter(o => o.layer > w.layer)
+    const over = (p: Point) => higher.some(o => covers(grow(box(o.points), o.width / 2 + OVERHEAD_REACH), p) && beside(o.points, p).distance < o.width / 2 + OVERHEAD_REACH)
+    return { ...w, pins: w.pins.map(pin => (pin.under || !over(w.points[pin.vertex]) ? pin : { ...pin, under: true })) }
+  })
+}
+
 export async function buildDecks(input: DeckInput, ground: Ground): Promise<Deck[]> {
-  const decks = absorbTracks(absorbPaths(fitted(chains(input.ways), input.outlines, input.kerbs))) as Fitted[]
+  const decks = absorbTracks(absorbPaths(fitted(chains(pinnedUnder(input.ways)), input.outlines, input.kerbs))) as Fitted[]
   // An end lands where a road on the ground meets it, rests where it meets
   // another deck, and lands at a dead end. A deck in an outline reaches as far
   // as the outline fitted it, not just its carriageway: shaping comes later
