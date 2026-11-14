@@ -1078,9 +1078,10 @@ export async function buildDecks(input: DeckInput, ground: Ground): Promise<Deck
     })
   }
   // An end meeting only ways on an embankment is on fill the bare-earth terrain
-  // leaves out: it starts as high as it must to clear what it crosses just beyond.
+  // leaves out: it starts as high as it must to clear what it crosses just beyond,
+  // and no lower than the road it lands on past a hollow the terrain blurs its end into.
   for (const s of solved) {
-    const held = ([0, 1] as const).map(i => (s.grounded[i] && input.raised?.has(key(s.ends[i])) ? Math.max(s.g[i ? s.g.length - 1 : 0], reaching(s, i)) : null)) as [number | null, number | null]
+    const held = ([0, 1] as const).map(i => (s.grounded[i] && input.raised?.has(key(s.ends[i])) ? Math.max(s.g[i ? s.g.length - 1 : 0], reaching(s, i), s.lands[i]?.height ?? -Infinity) : null)) as [number | null, number | null]
     if (held.every(h => h === null)) continue
     s.held = held
     s.grounded = s.grounded.map((g, i) => g && held[i] === null) as [boolean, boolean]

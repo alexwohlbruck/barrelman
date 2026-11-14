@@ -142,6 +142,19 @@ describe('buildDecks', () => {
     for (const d of [top, below]) expect([d.heights[0], d.heights.at(-1)!]).toEqual([d.ground[0], d.ground.at(-1)!])
   })
 
+  it('starts an end held on an embankment at the road it lands on, past the hollow the terrain blurs its end into', async () => {
+    // A short bridge over a street, its far end meeting an embankment whose wall the terrain blurs into a slope.
+    const blurred = { async load() {}, at: ([x]: Point) => (x > east(15)[0] && x < east(25)[0] ? 12 : x > east(36)[0] && x < east(46)[0] ? 16 : 20) }
+    const ends = [east(0), east(40)].map(key)
+    const [deck] = (await buildDecks(input({
+      ways: [way(1, 0, 40), { id: 2, points: [east(40), east(120)], kind: 'road', layer: 0, width: 8 }],
+      onGround: new Set(ends),
+      raised: new Set([key(east(40))]),
+      crossed: [{ kind: 'road', points: [east(20, -30), east(20, 30)] }, { kind: 'road', points: [east(40), east(120)] }],
+    }), blurred)).filter(d => d.ways.includes(1))
+    expect(deck.heights.at(-1)!).toBeGreaterThanOrEqual(19.5)
+  })
+
   it('holds a deck under a higher one to pins below the terrain, which takes the higher deck for ground', async () => {
     const upper: Way = { id: 1, points: [east(0), east(60)], kind: 'road', layer: 2, width: 12 }
     const lower: Way = { id: 2, points: [east(0, 3), east(30, 3), east(60, 3)], kind: 'road', layer: 1, width: 8, pins: [{ vertex: 0, height: 14 }, { vertex: 1, height: 13 }, { vertex: 2, height: 14 }] }
