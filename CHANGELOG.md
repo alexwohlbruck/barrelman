@@ -19,6 +19,9 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 ### Fixed
 
 * Unmarked parallel parking lanes show T marks off their traffic edge, rather than loose ticks that looked like stray lane dashes. Rebuild the road markings to redraw them.
+* The lower level of a double-deck road is drawn at its own height, not the upper deck's. Lidar takes the upper deck for ground, so a road under a higher road or deck now takes the heights tagged `ele` on its nodes, even below the terrain, and its road bed levels the ground down to them. Covered stretches are carried straight between the road either side instead of dipping into the terrain under their cover. Rebuild the bridge decks, then the road beds, after upgrading.
+* A short bridge between embankment stretches stays on its embankment instead of dropping onto a deck alongside it, and starts at the road it lands on rather than in the hollow the terrain blurs its end into.
+* A cell's road beds now drop those of ways that have since become bridges or tunnels.
 * Trip plans consider every stop within walking distance, not just the four nearest stations, so a bus at the corner shows up next to a subway a few blocks away. Plans are also two to three times faster.
 
 ## [0.10.50] - 2026-11-13
