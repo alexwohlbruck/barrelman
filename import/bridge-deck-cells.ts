@@ -94,13 +94,13 @@ function toWay(r: Row, pins: Map<string, number>): Way {
 }
 
 /**
- * The heights tagged `ele` on the nodes of bridge ways, by position as the
+ * The heights tagged `ele` on the nodes of ways, by position as the
  * ways' coordinates give it. A node with any tag at all, `ele` alone among
  * them, is a point row of its own in geo_places, at exactly its way's vertex:
  * so nodes are found without osm2pgsql's middle tables, which a flat-nodes
  * import or replicate-extract.sh does without.
  */
-async function nodeHeights(sql: Sql, ids: string[]): Promise<Map<string, number>> {
+export async function nodeHeights(sql: Sql, ids: string[]): Promise<Map<string, number>> {
   const rows: Array<{ ele: string; coords: number[] }> = await sql`
     WITH pieces AS MATERIALIZED (
       SELECT ST_Subdivide(geom, 8) AS piece FROM geo_places WHERE osm_type = 'W' AND osm_id = ANY(${ids}::bigint[]) AND geom_type = 'line')
