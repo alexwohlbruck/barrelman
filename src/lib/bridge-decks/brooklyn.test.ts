@@ -179,8 +179,7 @@ describe('the decks around the bridge, end to end', () => {
 
   it('stops a deck in mid air only where OSM leaves it so', () => {
     // The Brooklyn-Queens Expressway's short bridges between embankment stretches, and a ramp into the Brooklyn anchorage.
-    // And a branch of the promenade held up on its embankment beside a ramp.
-    expect(new Set(of('dangling').map(d => decks.find(k => k.id === d.deck)!.ways[0]))).toEqual(new Set([797654748, 797654750, 797654754, 1255692932, 1255692933, 183103091, 808611023]))
+    expect(new Set(of('dangling').map(d => decks.find(k => k.id === d.deck)!.ways[0]))).toEqual(new Set([797654748, 797654750, 797654754, 1255692932, 1255692933, 183103091]))
   })
 
   it('carries a ramp merging into a main line at the main line\'s height along the merge', () => {

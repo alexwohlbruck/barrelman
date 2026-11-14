@@ -128,6 +128,20 @@ describe('buildDecks', () => {
     expect(joining.heights.at(-1)!).toBeCloseTo(top, 0)
   })
 
+  it('an end held on an embankment stays on it, not on a deck alongside', async () => {
+    // The upper carriageway of a double-deck road crosses a street 4 m south of the lower one, each between embankments.
+    const upper: Way = { id: 1, points: [east(0), east(20)], kind: 'road', layer: 2, width: 10 }
+    const lower: Way = { id: 2, points: [east(0, 4), east(20, 4)], kind: 'road', layer: 1, width: 8 }
+    const ends = [east(0), east(20), east(0, 4), east(20, 4)].map(key)
+    const decks = await buildDecks(input({ ways: [upper, lower], onGround: new Set(ends), raised: new Set(ends) }), {
+      async load() {},
+      // The ground falls 1.5 m a metre north, so each carriageway's ends are on ground of their own.
+      at: (p: Point) => 20 - 1.5 * Math.max(0, (east(0)[1] - p[1]) / (east(0)[1] - east(0, 1)[1])),
+    })
+    const [top, below] = [1, 2].map(w => decks.find(d => d.ways.includes(w))!)
+    for (const d of [top, below]) expect([d.heights[0], d.heights.at(-1)!]).toEqual([d.ground[0], d.ground.at(-1)!])
+  })
+
   it('names a deck by where it lies and a bridge by its outline or wikidata item', async () => {
     const outline = [[east(-5, 10), east(105, 10), east(105, -10), east(-5, -10)]]
     const [a] = await buildDecks(input({ ways: [way(1, 0, 100)], outlines: [{ id: 'way/77', rings: outline }] }), ground(0))

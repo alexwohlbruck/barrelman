@@ -755,7 +755,8 @@ function restingOn(s: Solved, end: 0 | 1, solved: Solved[]): { height: number; o
 
 /** A deck solved again against its needs and what its ends rest on now. */
 function resolve(s: Solved, solved: Solved[]) {
-  const rests = ([0, 1] as const).map(i => (s.grounded[i] ? null : restingOn(s, i, solved)))
+  // An end held on an embankment meets the road on it, not a deck that happens to lie alongside.
+  const rests = ([0, 1] as const).map(i => (s.grounded[i] || s.held?.[i] != null ? null : restingOn(s, i, solved)))
   s.on = rests.flatMap((r, i) => (r ? [{ deck: r.on, at: s.chain.points[i ? s.chain.points.length - 1 : 0] }] : []))
   const resting = rests.map((r, i) => (r ? Math.max(r.height, continued(s, i as 0 | 1, r.on)) : s.held?.[i] ?? s.lands[i]?.height ?? null)) as [number | null, number | null]
   s.z = solve({ ...s.chain, grounded: s.grounded }, s.g, s.needs, resting, s.pins)
