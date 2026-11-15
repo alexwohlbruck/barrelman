@@ -12,6 +12,7 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ### Fixed
 
+* Unmarked parallel parking lanes show T marks off their traffic edge, rather than loose ticks that looked like stray lane dashes. Rebuild the road markings to redraw them.
 * Trip plans consider every stop within walking distance, not just the four nearest stations, so a bus at the corner shows up next to a subway a few blocks away. Plans are also two to three times faster.
 
 ## [0.10.50] - 2026-11-13
