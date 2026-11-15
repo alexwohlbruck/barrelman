@@ -337,16 +337,18 @@ LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
 $$;
 
 -- The stall marks of a parking lane on one side (OSM's left/right), as
--- {metres between them, cotangent of their angle to the kerb}, or NULL where
--- none are painted: angled stalls unless markings=no, parallel ones only where
--- tagged as marked, since most kerbside parking has no paint.
+-- {metres between them, cotangent of their angle to the kerb, 1 for short
+-- ticks only}, or NULL where none are painted: angled stalls unless
+-- markings=no, parallel ones in full where marked, and short ticks a car
+-- length apart along a parallel lane nobody said is unmarked.
 CREATE OR REPLACE FUNCTION road_parking_marks(tags jsonb, side text) RETURNS float8[]
 LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
   SELECT CASE
     WHEN m = 'no' THEN NULL
-    WHEN COALESCE(o, v) = 'diagonal' THEN ARRAY[3.1, 0.577]
-    WHEN COALESCE(o, v) = 'perpendicular' THEN ARRAY[2.7, 0]
-    WHEN m = 'yes' OR v = 'marked' THEN ARRAY[6.1, 0]
+    WHEN COALESCE(o, v) = 'diagonal' THEN ARRAY[3.1, 0.577, 0]
+    WHEN COALESCE(o, v) = 'perpendicular' THEN ARRAY[2.7, 0, 0]
+    WHEN m = 'yes' OR v = 'marked' THEN ARRAY[6.1, 0, 0]
+    WHEN v IN ('lane', 'parallel') AND COALESCE(o, 'parallel') = 'parallel' THEN ARRAY[6.1, 0, 1]
   END
   FROM (SELECT COALESCE(tags->>('parking:' || side), tags->>'parking:both', tags->>('parking:lane:' || side), tags->>'parking:lane:both') as v,
                COALESCE(tags->>('parking:' || side || ':orientation'), tags->>'parking:both:orientation') as o,
@@ -575,8 +577,11 @@ $$;
 
 -- Bars across a band `half` either side of a line, one every `step`, each
 -- leaning `lean` times `half` forward on its left: a hatched buffer at 1, the
--- stalls of a parking lane at their angle's cotangent.
-CREATE OR REPLACE FUNCTION road_hatch(line geometry, half float8, step float8, lean float8) RETURNS geometry
+-- stalls of a parking lane at their angle's cotangent. A `cap` crosses each
+-- bar's left end (right end if negative) with a bar that long either side,
+-- making a T. Each bar is one multilinestring of the collection returned.
+DROP FUNCTION IF EXISTS road_hatch(geometry, float8, float8, float8);
+CREATE OR REPLACE FUNCTION road_hatch(line geometry, half float8, step float8, lean float8, cap float8 DEFAULT 0) RETURNS geometry
 LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE AS $$
 DECLARE
   len float8 := ST_Length(line);
@@ -585,6 +590,7 @@ DECLARE
   pts geometry[];
   bars geometry[] := '{}';
   p geometry;
+  e geometry;
   dx float8;
   dy float8;
   d float8;
@@ -600,8 +606,12 @@ BEGIN
     d := sqrt(dx * dx + dy * dy);
     IF d > 0 THEN
       dx := dx / d; dy := dy / d;
-      bars := bars || ST_MakeLine(ST_MakePoint(ST_X(p) - (dx * lean - dy) * half, ST_Y(p) - (dy * lean + dx) * half),
-                                  ST_MakePoint(ST_X(p) + (dx * lean - dy) * half, ST_Y(p) + (dy * lean + dx) * half));
+      e := ST_MakePoint(ST_X(p) + sign(cap) * (dx * lean - dy) * half, ST_Y(p) + sign(cap) * (dy * lean + dx) * half);
+      bars := bars || ST_Multi(ST_Collect(
+        ST_MakeLine(ST_MakePoint(ST_X(p) - (dx * lean - dy) * half, ST_Y(p) - (dy * lean + dx) * half),
+                    ST_MakePoint(ST_X(p) + (dx * lean - dy) * half, ST_Y(p) + (dy * lean + dx) * half)),
+        CASE WHEN cap <> 0 THEN ST_MakeLine(ST_MakePoint(ST_X(e) - dx * abs(cap), ST_Y(e) - dy * abs(cap)),
+                                            ST_MakePoint(ST_X(e) + dx * abs(cap), ST_Y(e) + dy * abs(cap))) END));
     END IF;
     i := i + 2;
   END LOOP;
@@ -2142,23 +2152,24 @@ WHERE bike_l > 0 AND o IS NOT NULL;
 -- lane's painted buffer where it is wide enough to take diagonal bars, and the
 -- stalls of a parking lane (see road_parking_marks), angled so a car pulls in
 -- forward, with a line along the traffic side of marked parallel ones where no
--- bike lane already draws it. `side` is +1 for the right kerb, -1 the left.
+-- bike lane already draws it, and Ts off the traffic side of unmarked ones.
+-- `side` is +1 for the right kerb, -1 the left.
 DROP TABLE IF EXISTS _rm_side_lines;
 CREATE TEMP TABLE _rm_side_lines AS
 SELECT osm_id, g, s, bridge, ease, 'hatch' as kind, 'solid' as pattern, 'white' as color,
        br_b + buf_r / 2 as offset_m, road_side_start(br_b + buf_r / 2, kerb_r, right_edge, prev_kerb_r, prev_right, track_r) as start_m,
        road_side_start(br_b + buf_r / 2, kerb_r, right_edge, nxt_kerb_r, nxt_right, track_r) as end_m, 'whole' as part, false as closes, NULL::float8 as res_m,
-       buf_r / 2 - 0.15 as hatch, 3.5::float8 as step, 1::float8 as lean
+       buf_r / 2 - 0.15 as hatch, 3.5::float8 as step, 1::float8 as lean, 0::float8 as cap
 FROM _rm_roads WHERE bike_r > 0 AND buf_r >= 0.6
 UNION ALL
 SELECT osm_id, g, s, bridge, ease, 'hatch', 'solid', 'white', bl_b - buf_l / 2,
        road_side_start(bl_b - buf_l / 2, kerb_l, left_edge, prev_kerb_l, prev_left, track_l),
-       road_side_start(bl_b - buf_l / 2, kerb_l, left_edge, nxt_kerb_l, nxt_left, track_l), 'whole', false, NULL, buf_l / 2 - 0.15, 3.5, 1
+       road_side_start(bl_b - buf_l / 2, kerb_l, left_edge, nxt_kerb_l, nxt_left, track_l), 'whole', false, NULL, buf_l / 2 - 0.15, 3.5, 1, 0
 FROM _rm_roads WHERE bike_l > 0 AND buf_l >= 0.6
 UNION ALL
 SELECT r.osm_id, r.g, r.s, r.bridge, r.ease, 'parking', 'solid', 'white', o.mid + v.at,
        road_side_start(o.mid + v.at, o.kerb, o.edge, o.prev_kerb, o.prev_edge, true),
-       e.fin, 'whole', abs(e.fin - (o.mid + v.at)) > 0.2, NULL, v.half, m.marks[1], m.marks[2] * CASE WHEN o.side = -1 AND r.oneway THEN 1 ELSE -1 END
+       e.fin, 'whole', abs(e.fin - (o.mid + v.at)) > 0.2, NULL, v.half, m.marks[1], m.marks[2] * CASE WHEN o.side = -1 AND r.oneway THEN 1 ELSE -1 END, v.cap
 FROM _rm_roads r
 CROSS JOIN LATERAL (VALUES
   (1, r.park_r, r.kerb_r + CASE WHEN r.track_r THEN r.bike_r ELSE 0 END + r.park_r / 2, r.bike_r > 0 AND NOT r.track_r,
@@ -2167,9 +2178,11 @@ CROSS JOIN LATERAL (VALUES
    CASE WHEN r.flip THEN 'right' ELSE 'left' END, r.kerb_l, r.left_edge, r.prev_kerb_l, r.prev_left, r.nxt_kerb_l, r.nxt_left)
 ) o(side, park, mid, edged, osm_side, kerb, edge, prev_kerb, prev_edge, nxt_kerb, nxt_edge)
 CROSS JOIN LATERAL (SELECT road_parking_marks(r.tags, o.osm_side) as marks) m
--- The stalls, and the line along a marked parallel lane.
-CROSS JOIN LATERAL (VALUES (0.0, o.park / 2),
-                           (CASE WHEN m.marks[2] = 0 AND m.marks[1] > 5 AND NOT o.edged THEN o.side * o.park / 2 END, NULL)) v(at, half)
+-- The stalls, or a metre-long T off the traffic side of each (its bar the
+-- bike lane's line where there is one), and the line along a marked parallel lane.
+CROSS JOIN LATERAL (VALUES (CASE WHEN m.marks[3] = 0 THEN 0.0 END, o.park / 2, 0.0),
+                           (CASE WHEN m.marks[3] = 1 THEN o.side * (o.park / 2 - 0.5) END, 0.5, CASE WHEN o.edged THEN 0.0 ELSE o.side * 0.6 END),
+                           (CASE WHEN m.marks[3] = 0 AND m.marks[2] = 0 AND m.marks[1] > 5 AND NOT o.edged THEN o.side * o.park / 2 END, NULL, NULL)) v(at, half, cap)
 CROSS JOIN LATERAL (SELECT road_side_start(o.mid + v.at, o.kerb, o.edge, o.nxt_kerb, o.nxt_edge, true) as fin) e
 WHERE o.park > 0 AND m.marks IS NOT NULL AND v.at IS NOT NULL;
 
@@ -2180,7 +2193,7 @@ WHERE o.park > 0 AND m.marks IS NOT NULL AND v.at IS NOT NULL;
 -- across a join without starting over.
 INSERT INTO road_markings_next (kind, pattern, color, bridge, geom, way)
 SELECT l.kind, l.pattern, l.color, l.bridge, ST_Transform(h.paint, 4326), l.osm_id
-FROM (SELECT *, NULL::float8 as hatch, NULL::float8 as step, NULL::float8 as lean FROM _rm_lines UNION ALL SELECT * FROM _rm_side_lines) l
+FROM (SELECT *, NULL::float8 as hatch, NULL::float8 as step, NULL::float8 as lean, NULL::float8 as cap FROM _rm_lines UNION ALL SELECT * FROM _rm_side_lines) l
 JOIN _rm_roads r ON r.osm_id = l.osm_id
 CROSS JOIN LATERAL (SELECT COALESCE(l.start_m, l.offset_m) as at_prev) ap
 CROSS JOIN LATERAL (SELECT road_profile(ST_Simplify(l.g, 0.05 * l.s), l.s, r.len_m, l.offset_m, l.start_m, l.ease,
@@ -2216,9 +2229,11 @@ CROSS JOIN LATERAL (SELECT CASE WHEN l.pattern LIKE 'dashed%'
 -- Bars are spaced along the whole line, which every box draws alike, and kept
 -- where the line is not cut.
 CROSS JOIN LATERAL (SELECT CASE WHEN l.hatch IS NULL THEN c.clipped
-  ELSE (SELECT ST_CollectionExtract(ST_Collect(b.geom), 2) FROM ST_Dump(road_hatch(o.line, l.hatch * l.s, l.step * l.s, l.lean)) b
-        WHERE (m.cuts IS NULL OR NOT ST_Intersects(ST_LineInterpolatePoint(b.geom, 0.5), m.cuts))
-          AND ST_LineLocatePoint(o.line, ST_LineInterpolatePoint(b.geom, 0.5)) BETWEEN o.from_f AND o.to_f) END as paint) h
+  ELSE (SELECT ST_CollectionExtract(ST_Collect(b.geom), 2)
+        FROM (SELECT road_hatch(o.line, l.hatch * l.s, l.step * l.s, l.lean, l.cap * l.s) as bars OFFSET 0) x, ST_Dump(x.bars) b,
+             LATERAL (SELECT ST_LineInterpolatePoint(ST_GeometryN(ST_GeometryN(x.bars, b.path[1]), 1), 0.5) as mid) a
+        WHERE (m.cuts IS NULL OR NOT ST_Intersects(a.mid, m.cuts))
+          AND ST_LineLocatePoint(o.line, a.mid) BETWEEN o.from_f AND o.to_f) END as paint) h
 WHERE d.paint IS NOT NULL AND c.clipped IS NOT NULL AND NOT ST_IsEmpty(c.clipped)
   AND ST_Length(c.clipped) > CASE WHEN l.pattern LIKE 'dashed%' THEN 0.5 ELSE 2 END * l.s
   AND h.paint IS NOT NULL AND NOT ST_IsEmpty(h.paint);
