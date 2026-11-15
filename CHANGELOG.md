@@ -12,6 +12,7 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ### Fixed
 
+* A parallel parking lane gets stall paint only when OSM tags it `markings=yes`. Untagged lanes no longer show guessed ticks, which looked like stray lane dashes on streets with no paint. Rebuild the road markings to clear them.
 * Trip plans consider every stop within walking distance, not just the four nearest stations, so a bus at the corner shows up next to a subway a few blocks away. Plans are also two to three times faster.
 
 ## [0.10.50] - 2026-11-13

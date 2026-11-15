@@ -337,18 +337,16 @@ LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
 $$;
 
 -- The stall marks of a parking lane on one side (OSM's left/right), as
--- {metres between them, cotangent of their angle to the kerb, 1 for short
--- ticks only}, or NULL where none are painted: angled stalls unless
--- markings=no, parallel ones in full where marked, and short ticks a car
--- length apart along a parallel lane nobody said is unmarked.
+-- {metres between them, cotangent of their angle to the kerb}, or NULL where
+-- none are painted: angled stalls unless markings=no, parallel ones only where
+-- tagged as marked, since most kerbside parking has no paint.
 CREATE OR REPLACE FUNCTION road_parking_marks(tags jsonb, side text) RETURNS float8[]
 LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
   SELECT CASE
     WHEN m = 'no' THEN NULL
-    WHEN COALESCE(o, v) = 'diagonal' THEN ARRAY[3.1, 0.577, 0]
-    WHEN COALESCE(o, v) = 'perpendicular' THEN ARRAY[2.7, 0, 0]
-    WHEN m = 'yes' OR v = 'marked' THEN ARRAY[6.1, 0, 0]
-    WHEN v IN ('lane', 'parallel') AND COALESCE(o, 'parallel') = 'parallel' THEN ARRAY[6.1, 0, 1]
+    WHEN COALESCE(o, v) = 'diagonal' THEN ARRAY[3.1, 0.577]
+    WHEN COALESCE(o, v) = 'perpendicular' THEN ARRAY[2.7, 0]
+    WHEN m = 'yes' OR v = 'marked' THEN ARRAY[6.1, 0]
   END
   FROM (SELECT COALESCE(tags->>('parking:' || side), tags->>'parking:both', tags->>('parking:lane:' || side), tags->>'parking:lane:both') as v,
                COALESCE(tags->>('parking:' || side || ':orientation'), tags->>'parking:both:orientation') as o,
@@ -2169,11 +2167,9 @@ CROSS JOIN LATERAL (VALUES
    CASE WHEN r.flip THEN 'right' ELSE 'left' END, r.kerb_l, r.left_edge, r.prev_kerb_l, r.prev_left, r.nxt_kerb_l, r.nxt_left)
 ) o(side, park, mid, edged, osm_side, kerb, edge, prev_kerb, prev_edge, nxt_kerb, nxt_edge)
 CROSS JOIN LATERAL (SELECT road_parking_marks(r.tags, o.osm_side) as marks) m
--- The stalls, or a metre-long tick off the traffic side of each, and the line
--- along a marked parallel lane.
-CROSS JOIN LATERAL (VALUES (CASE WHEN m.marks[3] = 0 THEN 0.0 END, o.park / 2),
-                           (CASE WHEN m.marks[3] = 1 THEN o.side * (o.park / 2 - 0.5) END, 0.5),
-                           (CASE WHEN m.marks[3] = 0 AND m.marks[2] = 0 AND m.marks[1] > 5 AND NOT o.edged THEN o.side * o.park / 2 END, NULL)) v(at, half)
+-- The stalls, and the line along a marked parallel lane.
+CROSS JOIN LATERAL (VALUES (0.0, o.park / 2),
+                           (CASE WHEN m.marks[2] = 0 AND m.marks[1] > 5 AND NOT o.edged THEN o.side * o.park / 2 END, NULL)) v(at, half)
 CROSS JOIN LATERAL (SELECT road_side_start(o.mid + v.at, o.kerb, o.edge, o.nxt_kerb, o.nxt_edge, true) as fin) e
 WHERE o.park > 0 AND m.marks IS NOT NULL AND v.at IS NOT NULL;
 
