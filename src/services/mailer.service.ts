@@ -8,7 +8,8 @@
  * which is why `isEmailConfigured` is exported for the health surface to warn on.
  */
 import nodemailer from 'nodemailer'
-import { appName, otpTtlMinutes, serverOrigin } from '../config/accounts.config'
+import { appName, consoleOrigin, otpTtlMinutes, serverOrigin } from '../config/accounts.config'
+import { otpTokenHeader } from '../lib/email/otp-token'
 
 const host = process.env.SMTP_HOST
 const port = Number(process.env.SMTP_PORT || 465)
@@ -46,13 +47,17 @@ function layout(heading: string, bodyHtml: string): string {
 </body></html>`
 }
 
-async function send(to: string, subject: string, html: string, text: string): Promise<boolean> {
+async function send(to: string, subject: string, html: string, text: string, code?: string): Promise<boolean> {
   if (!transporter) {
     console.warn(`[mailer] SMTP not configured — "${subject}" to ${to} was not sent`)
     return false
   }
   try {
-    await transporter.sendMail({ from: smtpFrom, to, subject, html, text })
+    const otpToken = code === undefined ? undefined : otpTokenHeader(code, consoleOrigin)
+    await transporter.sendMail({
+      from: smtpFrom, to, subject, html, text,
+      headers: otpToken ? { 'OTP-Token': otpToken } : undefined,
+    })
     return true
   } catch (err) {
     console.error('[mailer] send failed', err)
@@ -78,13 +83,13 @@ export async function sendVerificationCode(email: string, code: string): Promise
 
   const html = layout(
     'Your sign-in code',
-    `<p style="margin:0 0 24px;font-size:15px;line-height:1.6;color:#57534e">Enter this code to sign in to your ${appName} account.</p>
+    `<p style="margin:0 0 24px;font-size:15px;line-height:1.6;color:#57534e">Your ${appName} verification code is:</p>
      <p style="margin:0 0 24px;padding:16px;background:#fafaf9;border:1px solid #e7e5e4;border-radius:8px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:28px;font-weight:600;letter-spacing:.2em;text-align:center">${code}</p>
      <p style="margin:0;font-size:13px;line-height:1.6;color:#78716c">The code expires in ${otpTtlMinutes} minutes and can only be used once. If you didn't request it, you can ignore this email.</p>`,
   )
   const text = `Your ${appName} sign-in code is ${code}. It expires in ${otpTtlMinutes} minutes and can only be used once.`
 
-  return send(email, `Your ${appName} sign-in code`, html, text)
+  return send(email, `Your ${appName} verification code`, html, text, code)
 }
 
 /**
@@ -106,7 +111,7 @@ export async function sendAccountDeletionCode(email: string, code: string): Prom
     `Your ${appName} account deletion code is ${code}. It expires in ${otpTtlMinutes} minutes. ` +
     `If you didn't ask to delete your account, sign out of your other sessions from the account page.`
 
-  return send(email, `Confirm deleting your ${appName} account`, html, text)
+  return send(email, `Confirm deleting your ${appName} account`, html, text, code)
 }
 
 /** Warn an account that its remaining credit balance is nearly spent. */

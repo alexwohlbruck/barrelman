@@ -10,6 +10,12 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Added
+
+### Changed
+
+* Sign-in and account deletion emails include autofill metadata to help compatible mail apps recognize your verification code.
+
 ### Fixed
 
 * Unmarked parallel parking lanes show T marks off their traffic edge, rather than loose ticks that looked like stray lane dashes. Rebuild the road markings to redraw them.
