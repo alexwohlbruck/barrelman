@@ -62,8 +62,8 @@ export function roadsOf<T extends Pick<Row, 'road' | 'coords'>>(ways: T[]): T[][
   return out
 }
 
-/** Metres past a higher way's own half width that a road's terrain is still that way's. */
-const UNDER_REACH = 1
+/** Metres past a higher way's own half width that a road's terrain is still that way's: a map's terrain tiles blur a deck the lidar took for ground this far past its edge. */
+const UNDER_REACH = 5
 
 const roadRows = (sql: postgres.Sql, where: postgres.PendingQuery<postgres.Row[]>) => sql<Row[]>`
   SELECT osm_id::text AS id, tags->>'highway' AS highway,
