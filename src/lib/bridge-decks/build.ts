@@ -653,7 +653,7 @@ function joined(solved: Solved[]): Map<Solved, number[]> {
   const copies = new Map(solved.map(s => [s, { ...s, z: s.z.slice() }]))
   for (const copy of copies.values()) copy.on = copy.on.map(r => ({ ...r, deck: copies.get(r.deck)! }))
   // A deck of each kind is lifted to its own kind only: a roadway runs beside a promenade, it is not joined to it.
-  for (const kind of ['road', 'rail', 'path'] as const) joinNeighbours([...copies.values()].filter(c => c.chain.kind === kind))
+  for (const kind of ['road', 'rail', 'path'] as const) joinNeighbours([...copies.values()].filter(c => c.chain.kind === kind), undefined, undefined, liftsTo)
   return new Map(solved.map(s => {
     const lifted = copies.get(s)!.z
     const out = s.z.slice()
@@ -753,12 +753,29 @@ function restingOn(s: Solved, end: 0 | 1, solved: Solved[]): { height: number; o
   return { height: heightAt(o.d, o.z, o.d[near.segment - 1] + (o.d[near.segment] - o.d[near.segment - 1]) * near.t), on: o }
 }
 
+/**
+ * Where a ramp changes `layer` partway, its two decks meet end to end with
+ * neither end held, and each would rest on the other's guess forever: a
+ * guess of LAYER_CLEARANCE per layer stood ramps 10 m too high. The joint
+ * lies on the straight grade between their far ends instead.
+ */
+function joint(s: Solved, end: 0 | 1, on: Solved): number | null {
+  const other = on.ends.findIndex(p => key(p) === key(s.ends[end]))
+  if (other < 0 || on.grounded[other] || on.held?.[other] != null) return null
+  // Only ramps: a mainline split by `layer` keeps its bridge's height. A deck OSM gives a height stands at it.
+  if ([s, on].some(o => !o.chain.road?.split('/')[0].endsWith('_link') || o.pins.length || o.hung || o.needs.some(n => n.exact))) return null
+  const far = (o: Solved, i: number) => o.z[i ? 0 : o.z.length - 1]
+  const [ds, dOn] = [s.d[s.d.length - 1], on.d[on.d.length - 1]]
+  const [zs, zOn] = [far(s, end), far(on, other)]
+  return zs + ((zOn - zs) * ds) / (ds + dOn)
+}
+
 /** A deck solved again against its needs and what its ends rest on now. */
 function resolve(s: Solved, solved: Solved[]) {
   // An end held on an embankment meets the road on it, not a deck that happens to lie alongside.
   const rests = ([0, 1] as const).map(i => (s.grounded[i] || s.held?.[i] != null ? null : restingOn(s, i, solved)))
   s.on = rests.flatMap((r, i) => (r ? [{ deck: r.on, at: s.chain.points[i ? s.chain.points.length - 1 : 0] }] : []))
-  const resting = rests.map((r, i) => (r ? Math.max(r.height, continued(s, i as 0 | 1, r.on)) : s.held?.[i] ?? s.lands[i]?.height ?? null)) as [number | null, number | null]
+  const resting = rests.map((r, i) => (r ? Math.max(joint(s, i as 0 | 1, r.on) ?? r.height, continued(s, i as 0 | 1, r.on)) : s.held?.[i] ?? s.lands[i]?.height ?? null)) as [number | null, number | null]
   s.z = solve({ ...s.chain, grounded: s.grounded }, s.g, s.needs, resting, s.pins)
   dipped(s)
 }
@@ -768,11 +785,13 @@ const DIP_FLOOR = 1
 const DIP_MIN = 1
 /** Road classes by rank: a road never dips under one of lower rank. */
 const RANK = ['motorway', 'trunk', 'primary', 'secondary', 'tertiary']
-const rank = (s: Solved) => {
+const rank = (s: Pick<Solved, 'chain'>) => {
   const road = s.chain.road?.split('/')[0] ?? ''
   const k = RANK.indexOf(road.replace(/_link$/, ''))
   return k < 0 ? 0 : (RANK.length - k) * 2 - (road.endsWith('_link') ? 1 : 0)
 }
+/** A road is lifted to one beside it, but a greater road not to a ramp merging into it: the ramp comes down to it. */
+const liftsTo = (a: Pick<Solved, 'chain'>, b: Pick<Solved, 'chain'>) => !(b.chain.road?.split('/')[0].endsWith('_link') && rank(a) > rank(b))
 
 /** Each sample's floor: its ground, unless left out, and what it must clear there. */
 function floors(s: Solved, { needs = s.needs, ground = true }: { needs?: Need[]; ground?: boolean } = {}): number[] {
@@ -1098,7 +1117,7 @@ export async function buildDecks(input: DeckInput, ground: Ground): Promise<Deck
       s.needs = needs(s, input, solved.filter(o => o.chain.layer < s.chain.layer), bases)
       resolve(s, solved)
     }
-    for (let pass = 0; pass < SETTLE; pass++) joinNeighbours(solved)
+    for (let pass = 0; pass < SETTLE; pass++) joinNeighbours(solved, undefined, undefined, liftsTo)
   }
   // Where a deck cannot climb clear of one it crosses over, the lower one dips under it instead.
   const lowered = new Set(dipUnder(solved))
@@ -1115,7 +1134,7 @@ export async function buildDecks(input: DeckInput, ground: Ground): Promise<Deck
   // A pinned deck already runs on its vertical curves through its pins, which averaging would pull off them; fairing eases it into the road beyond.
   for (const s of solved) if (!s.pins.length) s.z = eased(s, input.onGround)
   // Easing moves twins a few centimetres apart; side by side, they meet exactly.
-  joinNeighbours(solved, undefined, EASED)
+  joinNeighbours(solved, undefined, EASED, liftsTo)
   for (const s of solved) s.z = cambered(s.z, s.d, s.needs)
   for (let pass = 0; pass < SETTLE; pass++) for (const s of solved) meetRests(s)
   faired(solved, input, bases)

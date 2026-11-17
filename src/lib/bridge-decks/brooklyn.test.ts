@@ -161,6 +161,18 @@ describe('the interchange at its Manhattan end', () => {
   })
 })
 
+describe('the ramps at the Manhattan end', () => {
+  it('runs a ramp whose `layer` changes partway on one grade between its ends, not above both', () => {
+    // FDR to the bridge (layer 1 into 3), and the bridge down to Pearl Street (3 into 2).
+    for (const [a, b] of [[1328731144, 46177164], [1238347038, 414746383]]) {
+      const [A, B] = [carrying(a), carrying(b)]
+      const joint = A.heights[A.heights.length - 1]
+      expect(joint).toBeCloseTo(B.heights[0], 1)
+      expect(joint).toBeLessThan(Math.max(A.heights[0], B.heights[B.heights.length - 1]) + 0.5)
+    }
+  })
+})
+
 describe('the decks around the bridge, end to end', () => {
   const [w, sth, e, n] = [-74.005, 40.6995, -73.987, 40.713]
   const defects = deckDefects(decks).filter(({ at: [lng, lat] }) => lng >= w && lng <= e && lat >= sth && lat <= n)

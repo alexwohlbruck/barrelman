@@ -1267,16 +1267,17 @@ export function closeVerges(decks: GoreDeck[], sameBridge: (path: Chain, road: G
  * round. Nor is a deck pinned by its nodes' `ele` lifted: it stands where OSM
  * says, and a deck beside it is lifted to it instead.
  */
-export function joinNeighbours(
-  decks: Array<{ chain: Chain; z: number[]; grounded?: [boolean, boolean]; on?: Array<{ deck: unknown; at: Point }>; pins?: Pin[] }>,
+export function joinNeighbours<D extends { chain: Chain; z: number[]; grounded?: [boolean, boolean]; on?: Array<{ deck: unknown; at: Point }>; pins?: Pin[] }>(
+  decks: D[],
   gap = 1.5,
   step = 1.5,
+  lifts: (a: D, b: D) => boolean = () => true,
 ) {
   const widest = decks.map(D => Math.max(...D.chain.edges))
   for (const [a, A] of decks.entries())
     for (const [b, B] of decks.entries()) {
       // A walkway beside a roadway may climb away over it; the roadway is never lifted after it.
-      if (a === b || A.pins?.length || (A.chain.kind === 'rail') !== (B.chain.kind === 'rail') || (A.chain.kind === 'road' && B.chain.kind === 'path')) continue
+      if (a === b || A.pins?.length || (A.chain.kind === 'rail') !== (B.chain.kind === 'rail') || (A.chain.kind === 'road' && B.chain.kind === 'path') || !lifts(A, B)) continue
       const leaves = (B.on ?? []).filter(r => r.deck === A).map(r => r.at)
       // Farther apart than both decks' widest sides and the gap, no edge can meet the other.
       if (!meet(grow(box(A.chain.points), widest[a] + widest[b] + gap), box(B.chain.points))) continue
