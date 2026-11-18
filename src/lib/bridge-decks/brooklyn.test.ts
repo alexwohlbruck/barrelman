@@ -19,7 +19,6 @@ const heightAt = (deck: Deck, p: Point) => {
   return deck.heights[j - 1] + (deck.heights[j] - deck.heights[j - 1]) * near.t
 }
 /** The river's surface on the terrain, which OSM's bridge height is measured from. */
-const water = Math.min(...carrying(432550255).ground)
 const towers = { manhattan: mercator(-73.9983344, 40.7072687), brooklyn: mercator(-73.9943541, 40.7041037) }
 const midspan = mercator(-73.99634, 40.70570)
 const roadways = [carrying(432550255), carrying(46177152)]
@@ -35,9 +34,9 @@ const bend = (deck: Deck, from = 6) => {
 describe('the Brooklyn Bridge', () => {
   it('carries its roadways at the height OSM records over the river, cambered to its towers', () => {
     for (const roadway of roadways) {
-      expect(heightAt(roadway, midspan) - water).toBeCloseTo(41, 0)
-      // The tower model's roadway band stands 36.5 m over the water.
-      for (const tower of Object.values(towers)) expect(Math.abs(heightAt(roadway, tower) - water - 36.5)).toBeLessThan(1.5)
+      expect(heightAt(roadway, midspan)).toBeCloseTo(41, 0)
+      // Lidar reads the roadway at the towers about 36 m above sea level.
+      for (const tower of Object.values(towers)) expect(Math.abs(heightAt(roadway, tower) - 36.5)).toBeLessThan(1.5)
     }
   })
 
@@ -60,7 +59,7 @@ describe('the Brooklyn Bridge', () => {
     for (const [lng, lat] of [[-74.00091, 40.70931], [-73.99171, 40.70201]]) {
       const anchorage = mercator(lng, lat)
       const promenade = decks.filter(d => d.kind === 'path').sort((a, b) => beside(a.points, anchorage).distance - beside(b.points, anchorage).distance)[0]
-      expect(heightAt(promenade, anchorage) - water).toBeGreaterThan(20)
+      expect(heightAt(promenade, anchorage)).toBeGreaterThan(20)
     }
   })
 

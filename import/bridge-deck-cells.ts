@@ -17,7 +17,7 @@ import { wayHalf } from '../src/lib/bridge-decks/supports'
 import type { Dem } from '../src/lib/bridge-decks/dem'
 import { clip, contains, degreeBox, toDegrees, toUnits, UNITS_PER_DEGREE, type UnitBox, type UnitPoint } from '../src/lib/bridge-decks/grid'
 import type { Built } from '../src/lib/bridge-decks/queue'
-import { clearance, deckLevel, metres, type Seamark, type Support } from '../src/lib/bridge-decks/elevation'
+import { clearance, deckLevel, metres, TOWER, type Seamark, type Support } from '../src/lib/bridge-decks/elevation'
 import { inside, lngLat, mercator, metresPerUnit, type Kind, type Point, type Way } from '../src/lib/bridge-decks/profile'
 
 type Sql = postgres.Sql
@@ -196,10 +196,15 @@ export async function inputFor(sql: Sql, rows: Row[]): Promise<DeckInput> {
            ST_AsGeoJSON(ST_Multi(geom))::json->'coordinates' AS coords
     FROM geo_places WHERE tags @> '{"man_made": "bridge"}' AND geom_type = 'area' AND geom && ${box}
     ORDER BY osm_type, osm_id`
-  const supportRows: Array<{ kind: Support['kind']; height: string | null; coords: number[][][][] }> = outlineRows.length ? await sql`
+  const supportRows: Array<{ kind: string; height: string | null; coords: number[][][][] }> = outlineRows.length ? await sql`
     SELECT tags->>'bridge:support' AS kind, tags->>'height' AS height, ST_AsGeoJSON(ST_Multi(geom))::json->'coordinates' AS coords
-    FROM geo_places WHERE tags->>'bridge:support' IN ('pylon', 'abutment') AND geom_type = 'area' AND geom && ${box}` : []
-  const supports: Support[] = supportRows.flatMap(r => r.coords.map(rings => ({ kind: r.kind, height: metres(r.height), ring: rings[0].map(([lng, lat]) => mercator(lng, lat)) })))
+    FROM geo_places WHERE (tags->>'bridge:support' IN ('pylon', 'abutment') OR tags ? 'bridge:support' AND tags ? 'height') AND geom_type = 'area' AND geom && ${box}` : []
+  // A support as tall as a tower is one, however it is tagged: the Golden Gate's stand as piers.
+  const supports: Support[] = supportRows.flatMap(r => {
+    const height = metres(r.height)
+    const kind = r.kind === 'abutment' || r.kind === 'pylon' ? r.kind : height !== null && height > TOWER ? 'pylon' : null
+    return kind ? r.coords.map(rings => ({ kind, height, ring: rings[0].map(([lng, lat]) => mercator(lng, lat)) })) : []
+  })
   const outlines = outlineRows.flatMap(o => o.coords.map(rings => {
     const shape = rings.map(ring => ring.map(([lng, lat]) => mercator(lng, lat)))
     const near = SUPPORT_NEAR / metresPerUnit(shape[0][0][1])

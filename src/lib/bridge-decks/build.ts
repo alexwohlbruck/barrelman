@@ -54,7 +54,7 @@ import {
   type Point,
   type Way,
 } from './profile'
-import { clearanceNeeds, DECK_DEPTH, hungStretch, levelNeeds, MAX_DECK, SEAMARK_REACH, trustedPins, type Seamark } from './elevation'
+import { alongSpan, clearanceNeeds, DECK_DEPTH, hungStretch, levelNeeds, MAX_DECK, SEAMARK_REACH, trustedPins, type Seamark } from './elevation'
 import { inOutline, shapeDecks, within, type Outline } from './shape'
 import { bentPoints, blocked, nearestFree, obstacles, wayHalf, type Obstacles } from './supports'
 
@@ -270,8 +270,10 @@ function fixedNeeds(s: Pick<Solved, 'chain' | 'd' | 'g' | 'pins'>, input: DeckIn
   if (s.pins.length) return out
   const outline = outlineOf(s.chain, input.outlines)
   const base = outline && bases.get(outline.id)
-  if (base) out.push(...levelNeeds(s.chain.points, s.chain.points.map(p => within(p, outline!.rings)), outline!, base.ground).map(n => ({ ...n, exact: n.exact && s.chain.layer === base.layer })))
-  if (input.seamarks?.length) out.push(...clearanceNeeds(s.chain.points, s.d, s.g, input.seamarks.filter(m => covers(grow(own, SEAMARK_REACH), m.point))))
+  // A deck height from towers is their top roadway's, which the cables reach; the levels under it hang a deck's clearance apart.
+  const hung = outline?.source === 'towers' && base && base.top >= s.chain.layer ? (base.top - s.chain.layer) * CLEARANCE.deck : null
+  if (base) out.push(...levelNeeds(s.chain.points, s.chain.points.map(p => within(p, outline!.rings)), outline!, base.ground).map(n => (hung !== null ? { ...n, height: n.height - hung } : { ...n, exact: n.exact && s.chain.layer === base.layer })))
+  if (input.seamarks?.length) out.push(...clearanceNeeds(s.chain.points, s.d, s.g.map(surface), input.seamarks.filter(m => covers(grow(own, SEAMARK_REACH), m.point))))
   out.push(...wayEle(s, input))
   return out
 }
@@ -324,8 +326,15 @@ function over(s: Pick<Solved, 'chain' | 'd'>, lower: Solved) {
   return out
 }
 
-/** The lowest ground under an outline that records a deck height, and the lowest layer of the decks in it. */
-type Base = { ground: number; layer: number }
+/**
+ * What a height charted or tagged over the water is measured from: the
+ * terrain's tidal water lies a metre or two below sea level, and the high
+ * water charts measure from above it.
+ */
+const surface = (ground: number) => Math.max(ground, 0)
+
+/** The lowest ground under an outline that records a deck height, and the lowest and highest layers of the decks in it, `top` of the roads on the span between its towers. */
+type Base = { ground: number; layer: number; top: number }
 
 /** The outline a deck lies in: the one it was named for, or for a deck not shaped to one, any that holds most of it. Worked out once per deck. */
 const outlines = new WeakMap<Chain, Outline | null>()
@@ -1072,8 +1081,9 @@ export async function buildDecks(input: DeckInput, ground: Ground): Promise<Deck
     if ((outline?.deck === undefined && outline?.top === undefined) || !under[k]) return
     for (const [i, p] of chain.points.entries()) {
       if (!within(p, outline.rings)) continue
-      const base = bases.get(outline.id) ?? { ground: Infinity, layer: chain.layer }
-      bases.set(outline.id, { ground: Math.min(base.ground, under[k]![i]), layer: Math.min(base.layer, chain.layer) })
+      const base = bases.get(outline.id) ?? { ground: Infinity, layer: chain.layer, top: -Infinity }
+      const top = chain.kind === 'road' && alongSpan(outline, p) !== null ? Math.max(base.top, chain.layer) : base.top
+      bases.set(outline.id, { ground: Math.min(base.ground, surface(under[k]![i])), layer: Math.min(base.layer, chain.layer), top })
     }
   })
 
