@@ -27,11 +27,15 @@
  *       towers' top instead, so it is taken as the deck only when it falls
  *       clearly short of the towers' own `height`.
  *   bridge:support=pylon / abutment  The towers and anchorages, as areas. A
- *       suspended deck needs no piers between them.
+ *       suspended deck needs no piers between them. Where towers give their
+ *       `height` (above the water) and the outline no deck height, the deck
+ *       hangs a cable's sag below their tops (`hungBelow`); a support taller
+ *       than TOWER is a tower whatever its `bridge:support`.
  *   layer  Drawing order only: not a height.
  *
- * Heights are measured from the lowest ground under the deck's span, which
- * is the water surface on the terrain model for a river crossing.
+ * Heights are measured from the lowest ground under the deck's span, and
+ * never from below sea level: the terrain lays tidal water a metre or two
+ * under it.
  *
  * Where OSM has none of these, `config/bridge-elevations.json` may give a
  * deck height by the bridge's Wikidata item; see that file.
@@ -47,6 +51,13 @@ const TOWER_SHARE = 0.9
 export const MAX_DECK = 150
 /** Metres a pin may lie below the ground under it and still be believed: the terrain and a surveyed height differ by about this much. */
 export const PIN_BELOW = 1
+/** A suspension span's towers stand this share of the distance between them above its deck: the sag of its main cables. */
+const SAG = 1 / 9.5
+/** Tallest a support stands, in metres, and still be a pier rather than a tower. */
+export const TOWER = 60
+/** Structures whose towers carry no deck hung below their tops. */
+const UNHUNG = new Set(['beam', 'truss', 'arch', 'cantilever', 'viaduct', 'aqueduct', 'humpback'])
+
 /** A suspended span's crest rises this share of the distance between its towers above the deck at them. */
 export const CAMBER = 0.01
 
@@ -59,7 +70,7 @@ export type OutlineLevel = {
   /** The outline's `ele`: the least height of the deck's top at its crest, in metres above sea level. */
   top?: number
   /** Where the deck height came from. */
-  source?: 'override' | 'seamark' | 'height'
+  source?: 'override' | 'seamark' | 'height' | 'towers'
   /** Hung from towers: no piers between its outermost supports. */
   suspended?: boolean
   supports?: Support[]
@@ -96,12 +107,34 @@ export function deckLevel(tags: Record<string, string>, supports: Support[], ove
   if (override) return { ...level, deck: override.deck, source: 'override' }
   const charted = clearance(tags)
   if (charted !== null) return { ...level, deck: charted + DECK_DEPTH, source: 'seamark' }
+  const hung = hungBelow(tags, supports, level)
   const height = metres(tags.height)
-  if (height === null || height <= 0 || height > MAX_DECK) return level
+  if (height === null || height <= 0 || height > MAX_DECK) return hung ?? level
   const towers = supports.flatMap(s => (s.kind === 'pylon' && s.height ? [s.height] : []))
   const towering = suspended || ['arch', 'cable-stayed', 'suspension'].includes(tags['bridge:structure'])
-  if (towering && (!towers.length || height >= TOWER_SHARE * Math.max(...towers))) return level
-  return { ...level, deck: height, source: 'height' }
+  if (towering && (!towers.length || height >= TOWER_SHARE * Math.max(...towers))) return hung ?? level
+  // A suspension bridge's `height` is often its charted clearance, under its deck: its towers' tell the deck higher.
+  return hung && hung.deck > height ? hung : { ...level, deck: height, source: 'height' }
+}
+
+/**
+ * The deck of a span hung from towers OSM gives a `height`, which a suspension
+ * bridge's cables reach the top of: SAG of the span between the two farthest
+ * apart above it. Taken for any bridge with two such towers not known to
+ * stand on them, as most are suspension bridges.
+ */
+function hungBelow(tags: Record<string, string>, supports: Support[], level: OutlineLevel): (OutlineLevel & { deck: number }) | null {
+  const structure = tags['bridge:structure'] ?? tags.bridge
+  if (UNHUNG.has(structure) || structure === 'cable-stayed') return null
+  const towers = supports.filter(s => s.height !== null && s.height > TOWER)
+  let span = 0
+  for (const a of towers) for (const b of towers) {
+    const [p, q] = [centre(a.ring), centre(b.ring)]
+    span = Math.max(span, Math.hypot(q[0] - p[0], q[1] - p[1]) * metresPerUnit((p[1] + q[1]) / 2))
+  }
+  if (span < 2 * TOWER) return null
+  const deck = Math.max(...towers.map(t => t.height!)) - span * SAG
+  return deck > DECK_DEPTH ? { ...level, suspended: true, supports: supports.filter(s => s.kind === 'abutment' || towers.includes(s)), deck, source: 'towers' } : null
 }
 
 /** Farthest a support may stand to the side of a deck and still carry it, in metres: a tower's legs flank the roadway. */
@@ -139,20 +172,34 @@ export function levelNeeds(points: Point[], within: boolean[], level: OutlineLev
   return [...top, ...deckNeeds(points, d, within, level as OutlineLevel & { deck: number }, base, mid)]
 }
 
-function deckNeeds(points: Point[], d: number[], within: boolean[], level: OutlineLevel & { deck: number }, base: number, mid: number): Need[] {
+/** The two towers farthest apart, which a span hangs between; null with fewer than two apart. */
+function towerAxis(level: OutlineLevel): [Point, Point] | null {
   const towers = (level.supports ?? []).filter(s => s.kind === 'pylon').map(s => centre(s.ring))
   let axis: [Point, Point] | null = null
   for (const a of towers) for (const b of towers)
     if (!axis || Math.hypot(b[0] - a[0], b[1] - a[1]) > Math.hypot(axis[1][0] - axis[0][0], axis[1][1] - axis[0][1])) axis = [a, b]
-  if (!axis || Math.hypot(axis[1][0] - axis[0][0], axis[1][1] - axis[0][1]) * metresPerUnit(axis[0][1]) < 1) return [{ at: mid, height: base + level.deck }]
+  return axis && Math.hypot(axis[1][0] - axis[0][0], axis[1][1] - axis[0][1]) * metresPerUnit(axis[0][1]) >= 1 ? axis : null
+}
+
+/** How far between its towers a point lies, 0 to 1, where it lies on the span between them; null off it. */
+export function alongSpan(level: OutlineLevel, p: Point): number | null {
+  const axis = towerAxis(level)
+  if (!axis) return null
   const [a, b] = axis
   const v: Point = [b[0] - a[0], b[1] - a[1]]
-  const span = Math.hypot(v[0], v[1]) * metresPerUnit((a[1] + b[1]) / 2)
+  const u = ((p[0] - a[0]) * v[0] + (p[1] - a[1]) * v[1]) / (v[0] * v[0] + v[1] * v[1])
+  const off = Math.abs((p[0] - a[0]) * v[1] - (p[1] - a[1]) * v[0]) / Math.hypot(v[0], v[1])
+  return u >= 0 && u <= 1 && off * metresPerUnit(p[1]) < SUPPORT_REACH ? u : null
+}
+
+function deckNeeds(points: Point[], d: number[], within: boolean[], level: OutlineLevel & { deck: number }, base: number, mid: number): Need[] {
+  const axis = towerAxis(level)
+  if (!axis) return [{ at: mid, height: base + level.deck }]
+  const span = Math.hypot(axis[1][0] - axis[0][0], axis[1][1] - axis[0][1]) * metresPerUnit((axis[0][1] + axis[1][1]) / 2)
   const sag = level.suspended ? span * CAMBER : 0
   return points.flatMap((p, i) => {
-    if (!within[i]) return []
-    const u = ((p[0] - a[0]) * v[0] + (p[1] - a[1]) * v[1]) / (v[0] * v[0] + v[1] * v[1])
-    return u >= 0 && u <= 1 ? [{ at: d[i], height: base + level.deck - sag * (2 * u - 1) ** 2, exact: level.suspended }] : []
+    const u = within[i] ? alongSpan(level, p) : null
+    return u !== null ? [{ at: d[i], height: base + level.deck - sag * (2 * u - 1) ** 2, exact: level.suspended }] : []
   })
 }
 

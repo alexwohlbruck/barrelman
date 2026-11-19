@@ -19,7 +19,6 @@ const heightAt = (deck: Deck, p: Point) => {
   return deck.heights[j - 1] + (deck.heights[j] - deck.heights[j - 1]) * near.t
 }
 /** The river's surface on the terrain, which OSM's bridge height is measured from. */
-const water = Math.min(...carrying(432550255).ground)
 const towers = { manhattan: mercator(-73.9983344, 40.7072687), brooklyn: mercator(-73.9943541, 40.7041037) }
 const midspan = mercator(-73.99634, 40.70570)
 const roadways = [carrying(432550255), carrying(46177152)]
@@ -35,9 +34,9 @@ const bend = (deck: Deck, from = 6) => {
 describe('the Brooklyn Bridge', () => {
   it('carries its roadways at the height OSM records over the river, cambered to its towers', () => {
     for (const roadway of roadways) {
-      expect(heightAt(roadway, midspan) - water).toBeCloseTo(41, 0)
-      // The tower model's roadway band stands 36.5 m over the water.
-      for (const tower of Object.values(towers)) expect(Math.abs(heightAt(roadway, tower) - water - 36.5)).toBeLessThan(1.5)
+      expect(heightAt(roadway, midspan)).toBeCloseTo(41, 0)
+      // Lidar reads the roadway at the towers about 36 m above sea level.
+      for (const tower of Object.values(towers)) expect(Math.abs(heightAt(roadway, tower) - 36.5)).toBeLessThan(1.5)
     }
   })
 
@@ -60,7 +59,7 @@ describe('the Brooklyn Bridge', () => {
     for (const [lng, lat] of [[-74.00091, 40.70931], [-73.99171, 40.70201]]) {
       const anchorage = mercator(lng, lat)
       const promenade = decks.filter(d => d.kind === 'path').sort((a, b) => beside(a.points, anchorage).distance - beside(b.points, anchorage).distance)[0]
-      expect(heightAt(promenade, anchorage) - water).toBeGreaterThan(20)
+      expect(heightAt(promenade, anchorage)).toBeGreaterThan(20)
     }
   })
 
@@ -161,6 +160,18 @@ describe('the interchange at its Manhattan end', () => {
   })
 })
 
+describe('the ramps at the Manhattan end', () => {
+  it('runs a ramp whose `layer` changes partway on one grade between its ends, not above both', () => {
+    // FDR to the bridge (layer 1 into 3), and the bridge down to Pearl Street (3 into 2).
+    for (const [a, b] of [[1328731144, 46177164], [1238347038, 414746383]]) {
+      const [A, B] = [carrying(a), carrying(b)]
+      const joint = A.heights[A.heights.length - 1]
+      expect(joint).toBeCloseTo(B.heights[0], 1)
+      expect(joint).toBeLessThan(Math.max(A.heights[0], B.heights[B.heights.length - 1]) + 0.5)
+    }
+  })
+})
+
 describe('the decks around the bridge, end to end', () => {
   const [w, sth, e, n] = [-74.005, 40.6995, -73.987, 40.713]
   const defects = deckDefects(decks).filter(({ at: [lng, lat] }) => lng >= w && lng <= e && lat >= sth && lat <= n)
@@ -179,8 +190,7 @@ describe('the decks around the bridge, end to end', () => {
 
   it('stops a deck in mid air only where OSM leaves it so', () => {
     // The Brooklyn-Queens Expressway's short bridges between embankment stretches, and a ramp into the Brooklyn anchorage.
-    // And a branch of the promenade held up on its embankment beside a ramp.
-    expect(new Set(of('dangling').map(d => decks.find(k => k.id === d.deck)!.ways[0]))).toEqual(new Set([797654748, 797654750, 797654754, 1255692932, 1255692933, 183103091, 808611023]))
+    expect(new Set(of('dangling').map(d => decks.find(k => k.id === d.deck)!.ways[0]))).toEqual(new Set([797654748, 797654750, 797654754, 1255692932, 1255692933, 183103091]))
   })
 
   it('carries a ramp merging into a main line at the main line\'s height along the merge', () => {

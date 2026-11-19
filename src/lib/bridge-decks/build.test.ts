@@ -128,6 +128,43 @@ describe('buildDecks', () => {
     expect(joining.heights.at(-1)!).toBeCloseTo(top, 0)
   })
 
+  it('an end held on an embankment stays on it, not on a deck alongside', async () => {
+    // The upper carriageway of a double-deck road crosses a street 4 m south of the lower one, each between embankments.
+    const upper: Way = { id: 1, points: [east(0), east(20)], kind: 'road', layer: 2, width: 10 }
+    const lower: Way = { id: 2, points: [east(0, 4), east(20, 4)], kind: 'road', layer: 1, width: 8 }
+    const ends = [east(0), east(20), east(0, 4), east(20, 4)].map(key)
+    const decks = await buildDecks(input({ ways: [upper, lower], onGround: new Set(ends), raised: new Set(ends) }), {
+      async load() {},
+      // The ground falls 1.5 m a metre north, so each carriageway's ends are on ground of their own.
+      at: (p: Point) => 20 - 1.5 * Math.max(0, (east(0)[1] - p[1]) / (east(0)[1] - east(0, 1)[1])),
+    })
+    const [top, below] = [1, 2].map(w => decks.find(d => d.ways.includes(w))!)
+    for (const d of [top, below]) expect([d.heights[0], d.heights.at(-1)!]).toEqual([d.ground[0], d.ground.at(-1)!])
+  })
+
+  it('starts an end held on an embankment at the road it lands on, past the hollow the terrain blurs its end into', async () => {
+    // A short bridge over a street, its far end meeting an embankment whose wall the terrain blurs into a slope.
+    const blurred = { async load() {}, at: ([x]: Point) => (x > east(15)[0] && x < east(25)[0] ? 12 : x > east(36)[0] && x < east(46)[0] ? 16 : 20) }
+    const ends = [east(0), east(40)].map(key)
+    const [deck] = (await buildDecks(input({
+      ways: [way(1, 0, 40), { id: 2, points: [east(40), east(120)], kind: 'road', layer: 0, width: 8 }],
+      onGround: new Set(ends),
+      raised: new Set([key(east(40))]),
+      crossed: [{ kind: 'road', points: [east(20, -30), east(20, 30)] }, { kind: 'road', points: [east(40), east(120)] }],
+    }), blurred)).filter(d => d.ways.includes(1))
+    expect(deck.heights.at(-1)!).toBeGreaterThanOrEqual(19.5)
+  })
+
+  it('holds a deck under a higher one to pins below the terrain, which takes the higher deck for ground', async () => {
+    const upper: Way = { id: 1, points: [east(0), east(60)], kind: 'road', layer: 2, width: 12 }
+    const lower: Way = { id: 2, points: [east(0, 3), east(30, 3), east(60, 3)], kind: 'road', layer: 1, width: 8, pins: [{ vertex: 0, height: 14 }, { vertex: 1, height: 13 }, { vertex: 2, height: 14 }] }
+    const ends = [east(0), east(60), east(0, 3), east(60, 3)].map(key)
+    const decks = await buildDecks(input({ ways: [upper, lower], onGround: new Set(ends) }), ground(20))
+    const below = decks.find(d => d.ways.includes(2))!
+    expect(below.heights[0]).toBeCloseTo(14, 1)
+    expect(below.heights[Math.round(30 / STEP)]).toBeCloseTo(13, 1)
+  })
+
   it('names a deck by where it lies and a bridge by its outline or wikidata item', async () => {
     const outline = [[east(-5, 10), east(105, 10), east(105, -10), east(-5, -10)]]
     const [a] = await buildDecks(input({ ways: [way(1, 0, 100)], outlines: [{ id: 'way/77', rings: outline }] }), ground(0))
@@ -210,6 +247,16 @@ describe('buildDecks in an outline', () => {
     expect(deck.sides).toBeNull()
     expect(deck.edges).toEqual([1.5, 1.5])
     expect(deck.bridge).not.toBe('way/9')
+  })
+
+  it('holds a track to the height of the bridge it crosses, though it runs on far beyond', async () => {
+    const span = { id: 'way/8', rings: [[east(380, 10), east(720, 10), east(720, -10), east(380, -10), east(380, 10)]], deck: 30, source: 'height' as const }
+    const rail = (id: number, at: number[]): Way => ({ id, points: at.map(m => east(m)), kind: 'rail', layer: 1, width: 3 })
+    const tracks = [rail(5, [0, 100, 200, 300, 400]), rail(6, [400, 550, 700]), rail(7, [700, 800, 900, 1000, 1100, 1200])]
+    const decks = await buildDecks(input({ ways: tracks, outlines: [span], onGround: new Set([key(east(0)), key(east(1200))]) }), ground(0))
+    const bridge = decks.find(d => d.ways.includes(6))!
+    expect(bridge.ways).toEqual([6])
+    expect(Math.max(...bridge.heights)).toBeGreaterThan(29)
   })
 
   it('leaves a deck in no outline with its edges throughout', async () => {
