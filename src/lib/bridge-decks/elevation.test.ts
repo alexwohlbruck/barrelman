@@ -57,6 +57,10 @@ describe('a deck height from what OSM records on the bridge outline', () => {
     expect(levelNeeds(points, within, level, 25)).toEqual([])
     expect(levelNeeds(points, within, { top: 300 }, 25)).toEqual([])
   })
+
+  it('takes an outline ele from EGM96 to the terrain by the gap there', () => {
+    expect(deckLevel({ ele: '20.83' }, [], {}, 0.83).top).toBeCloseTo(20)
+  })
 })
 
 describe('heights tagged on a deck\'s nodes', () => {
