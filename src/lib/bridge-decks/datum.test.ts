@@ -8,6 +8,8 @@ const tagged = [
   { city: 'Pittsburgh, Fort Pitt Bridge', lng: -80.005, lat: 40.444, navd88: 233.4, gap: 0.83 },
   { city: 'Minneapolis, Stone Arch Bridge', lng: -93.25488, lat: 44.98065, navd88: 236.1, gap: 0.75 },
   { city: 'Cleveland, Hope Memorial Bridge', lng: -81.6926, lat: 41.4901, navd88: 207.6, gap: 0.52 },
+  { city: 'Nashville, Seigenthaler Bridge', lng: -86.7695, lat: 36.1617, navd88: 143.2, gap: 0.76 },
+  { city: 'New Orleans, Crescent City Connection', lng: -90.0594565, lat: 29.9377466, navd88: 48.6, gap: 1.18 },
 ]
 
 describe('terrainHeight', () => {
