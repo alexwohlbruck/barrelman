@@ -640,30 +640,20 @@ export function align(d: number[], lower: number[], anchors: [number | null, num
   })
 }
 
-/** Farthest apart, in metres, two crests an elevated line's grade line runs taut between: farther, it comes down between them onto the streets it runs over. */
-const TAUT = 3000
+/** Metres an elevated line's grade line is drawn taut across: a few blocks, so it runs level from street to street and comes down between. */
+const EL_REACH = 300
 
-/** Metres of an elevated line its grade line is drawn taut across where it is let down: a few blocks, so it runs level from street to street. */
-const SAG_REACH = 300
+/** Rapid transit carried over the streets, by its `road`, whose grade line follows them rather than running taut between its ends. */
+export const EL = /^(subway|light_rail)\//
 
-/** Rapid transit carried over the streets, by its `road`, whose grade line follows them down between its stations. */
-const EL = /^(subway|light_rail)\//
-
-/** An arch over `lower` let down between crests more than TAUT apart, to one drawn taut across SAG_REACH about each sample. */
+/** An arch over `lower` drawn taut across EL_REACH about each sample, no higher than `z`. */
 function sagged(d: number[], lower: number[], z: number[]): number[] {
-  const crests = z.flatMap((v, i) => (v - lower[i] < 1e-6 ? [i] : []))
-  const long = crests.slice(1).flatMap((b, k) => (d[b] - d[crests[k]] > TAUT ? [[crests[k], b]] : []))
-  if (!long.length) return z
-  const out = [...z]
   let [from, to] = [0, 0]
-  for (const [a, b] of long)
-    for (let i = a + 1; i < b; i++) {
-      while (d[i] - d[from] > SAG_REACH / 2) from++
-      while (to < d.length - 1 && d[to + 1] - d[i] <= SAG_REACH / 2) to++
-      const local = arch(d.slice(from, to + 1), lower.slice(from, to + 1))
-      out[i] = Math.min(z[i], local[i - from])
-    }
-  return out
+  return z.map((v, i) => {
+    while (d[i] - d[from] > EL_REACH / 2) from++
+    while (to < d.length - 1 && d[to + 1] - d[i] <= EL_REACH / 2) to++
+    return Math.min(v, arch(d.slice(from, to + 1), lower.slice(from, to + 1))[i - from])
+  })
 }
 
 /** Metres from an end within which a pin is that end's own height. */
@@ -821,7 +811,7 @@ function lifts(d: number[], short: number[], marks: number[]): number[] {
  * an end is that end's height.
  */
 export function solve(
-  chain: Pick<Chain, 'points' | 'layer' | 'road'> & { grounded: [boolean, boolean] },
+  chain: Pick<Chain, 'points' | 'layer'> & { grounded: [boolean, boolean]; el?: boolean },
   ground: number[],
   needs: Need[],
   resting: [number | null, number | null] = [null, null],
@@ -847,7 +837,7 @@ export function solve(
   lower[0] = za
   lower[n - 1] = zb
   const heldEnds: [number | null, number | null] = [anchored[0] ? za : null, anchored[1] ? zb : null]
-  if (!inner.length) return align(d, lower, heldEnds, EL.test(chain.road ?? ''))
+  if (!inner.length) return align(d, lower, heldEnds, chain.el)
   const base = pinned(d, inner, heldEnds)
   const up = lifts(d, lower.map((v, i) => v - base[i]), [0, ...inner.map(p => p.at), total])
   return base.map((v, i) => v + up[i])
