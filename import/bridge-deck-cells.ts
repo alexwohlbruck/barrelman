@@ -62,7 +62,7 @@ type Row = { id: string; kind: Kind; highway: string | null; road: string | null
   lanes: string | null; oneway: string | null; wikidata: string | null; ele: string | null; covered: string | null; coords: number[][] }
 
 const bridgeWays = (sql: Sql) => sql`
-  SELECT osm_id::text AS id, bridge_deck_class(tags) AS kind, tags->>'highway' AS highway,
+  SELECT osm_id::text AS id, bridge_deck_class(tags) AS kind, bridge_deck_highway(tags) AS highway,
          COALESCE(tags->>'highway', tags->>'railway') || '/' || COALESCE(tags->>'ref', tags->>'name', '') AS road, tags->>'layer' AS layer,
          COALESCE(tags->>'width:carriageway', tags->>'width') AS width, tags->>'lanes' AS lanes, tags->>'oneway' AS oneway,
          COALESCE(tags->>'bridge:wikidata', tags->>'wikidata') AS wikidata, tags->>'ele' AS ele, tags->>'covered' AS covered,

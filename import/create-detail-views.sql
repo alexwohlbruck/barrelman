@@ -1091,10 +1091,16 @@ CREATE INDEX IF NOT EXISTS road_glyphs_geom_idx ON road_glyphs USING gist (geom)
 -- What kind of deck a way would make, by its tags alone ('road', 'path' or
 -- 'rail'), or null for a way no deck is built from. The one list of classes:
 -- import/bridge-deck-cells.ts and import/queue-bridge-decks.sql both read it.
+-- A way under construction makes the deck of what it will be: the tiles draw it.
+CREATE OR REPLACE FUNCTION bridge_deck_highway(tags jsonb) RETURNS text
+LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+  SELECT CASE WHEN tags->>'highway' = 'construction' THEN tags->>'construction' ELSE tags->>'highway' END
+$$;
+
 CREATE OR REPLACE FUNCTION bridge_deck_class(tags jsonb) RETURNS text
 LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
   SELECT CASE
-    WHEN NOT COALESCE(tags->>'highway' IN ('motorway', 'motorway_link', 'trunk', 'trunk_link', 'primary', 'primary_link',
+    WHEN NOT COALESCE(bridge_deck_highway(tags) IN ('motorway', 'motorway_link', 'trunk', 'trunk_link', 'primary', 'primary_link',
                                    'secondary', 'secondary_link', 'tertiary', 'tertiary_link', 'unclassified',
                                    'residential', 'living_street', 'service', 'busway', 'track', 'road',
                                    'footway', 'cycleway', 'path', 'pedestrian', 'steps', 'bridleway')
@@ -1102,7 +1108,7 @@ LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
                                       'preserved', 'funicular'), false)
       THEN NULL
     WHEN tags ? 'railway' THEN 'rail'
-    WHEN tags->>'highway' IN ('footway', 'cycleway', 'path', 'pedestrian', 'steps', 'bridleway') THEN 'path'
+    WHEN bridge_deck_highway(tags) IN ('footway', 'cycleway', 'path', 'pedestrian', 'steps', 'bridleway') THEN 'path'
     ELSE 'road'
   END
 $$;
