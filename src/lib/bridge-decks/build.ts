@@ -21,6 +21,7 @@ import {
   covers,
   crossings,
   CURVE,
+  EL,
   edgePoints,
   END_PIN,
   fair,
@@ -143,7 +144,7 @@ function filled(values: number[]): number[] | null {
   return values.map((v, i) => (Number.isNaN(v) ? values[known.reduce((b, k) => (Math.abs(k - i) < Math.abs(b - i) ? k : b))] : v))
 }
 
-type Fitted = Chain & { outline: string | null; caps?: [number, number, number, number]; lanes?: [number, number] }
+type Fitted = Chain & { outline: string | null; caps?: [number, number, number, number]; lanes?: [number, number]; el?: boolean }
 
 /**
  * Each road deck named for the bridge outline it lies in, which shapes it
@@ -1088,6 +1089,9 @@ export async function buildDecks(input: DeckInput, ground: Ground): Promise<Deck
     if (!shape) return widen(fit ? { ...c, edges: fit } : c, STEP)
     return widen({ ...c, sides: shape.sides, caps: shape.caps, edges: [Math.max(...shape.sides[0]), Math.max(...shape.sides[1])] }, STEP)
   }))
+  // An elevated line follows its streets; on a bridge whose height is known it keeps the bridge's grade.
+  const levelled = (o?: Outline) => o?.deck !== undefined || o?.top !== undefined
+  for (const c of shaped) c.el = c.kind === 'rail' && EL.test(c.road ?? '') && !levelled(outlineOf(c, input.outlines))
   const edges = shaped.map(edgePoints)
   const onward = input.crossed.filter(c => c.kind === 'road' || c.kind === 'path').map(c => c.points)
   const { under, lands, roads } = await groundUnder(shaped, edges, grounded, onward, ground, input.crossed.filter(c => c.kind === 'road').map(c => c.points))

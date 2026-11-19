@@ -308,7 +308,7 @@ describe('a long viaduct', () => {
 
 describe('an elevated line', () => {
   // 6 km over a street every 80 m, from a bridge 30 m up to the ground.
-  const line = { points: resample([east(0), east(6000)], 6), layer: 1, grounded: [false, true] as [boolean, boolean], road: 'subway/BMT Jamaica Line' }
+  const line = { points: resample([east(0), east(6000)], 6), layer: 1, grounded: [false, true] as [boolean, boolean], el: true }
   const ground = line.points.map(() => 100)
   const streets = Array.from({ length: 74 }, (_, k) => ({ at: 40 + 80 * k, height: 106 }))
   const middle = (z: number[]) => z.slice(Math.round(1000 / 6), Math.round(5800 / 6))
@@ -317,8 +317,14 @@ describe('an elevated line', () => {
     for (const z of middle(solve(line, ground, streets, [130, null]))) expect(z).toBeCloseTo(106, 1)
   })
 
+  it('climbs over a line it crosses partway and comes back down to the streets either side', () => {
+    const z = solve(line, ground, [...streets, { at: 2600, height: 118 }], [130, null])
+    expect(z[Math.round(2600 / 6)]).toBeCloseTo(118, 1)
+    for (const at of [1500, 3700]) expect(z[Math.round(at / 6)]).toBeCloseTo(106, 1)
+  })
+
   it('leaves a mainline viaduct as high as its ends hold it', () => {
-    expect(solve({ ...line, road: 'rail/Northeast Corridor' }, ground, streets, [130, null])[500]).toBeGreaterThan(115)
+    expect(solve({ ...line, el: false }, ground, streets, [130, null])[500]).toBeGreaterThan(115)
   })
 })
 
