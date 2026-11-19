@@ -22,6 +22,9 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 * The lower level of a double-deck road is drawn at its own height, not the upper deck's. Lidar takes the upper deck for ground, so a road under a higher road or deck now takes the heights tagged `ele` on its nodes, even below the terrain, and its road bed levels the ground down to them. Covered stretches are carried straight between the road either side instead of dipping into the terrain under their cover. Rebuild the bridge decks, then the road beds, after upgrading.
 * A short bridge between embankment stretches stays on its embankment instead of dropping onto a deck alongside it, and starts at the road it lands on rather than in the hollow the terrain blurs its end into.
 * A cell's road beds now drop those of ways that have since become bridges or tunnels.
+* A suspension bridge's lower decks hang a deck's depth apart below its top roadway, and heights tagged over water are measured from sea level, so the Manhattan, Williamsburg and Verrazzano decks meet their towers.
+* Roads and paths under construction get bridge decks, as the map already draws them: the George Washington Bridge's South Walk no longer lies on the river.
+* Subway tracks crossing a bridge take the bridge's height, and elevated subway lines run just over the streets they follow instead of on one long ramp between their ends. Rebuild the bridge decks after upgrading.
 * Trip plans consider every stop within walking distance, not just the four nearest stations, so a bus at the corner shows up next to a subway a few blocks away. Plans are also two to three times faster.
 
 ## [0.10.50] - 2026-11-13
