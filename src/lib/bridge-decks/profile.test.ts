@@ -306,6 +306,22 @@ describe('a long viaduct', () => {
   })
 })
 
+describe('an elevated line', () => {
+  // 6 km over a street every 80 m, from a bridge 30 m up to the ground.
+  const line = { points: resample([east(0), east(6000)], 6), layer: 1, grounded: [false, true] as [boolean, boolean], road: 'subway/BMT Jamaica Line' }
+  const ground = line.points.map(() => 100)
+  const streets = Array.from({ length: 74 }, (_, k) => ({ at: 40 + 80 * k, height: 106 }))
+  const middle = (z: number[]) => z.slice(Math.round(1000 / 6), Math.round(5800 / 6))
+
+  it('comes down from the bridge to run just over the streets, rather than on a ramp the whole way', () => {
+    for (const z of middle(solve(line, ground, streets, [130, null]))) expect(z).toBeCloseTo(106, 1)
+  })
+
+  it('leaves a mainline viaduct as high as its ends hold it', () => {
+    expect(solve({ ...line, road: 'rail/Northeast Corridor' }, ground, streets, [130, null])[500]).toBeGreaterThan(115)
+  })
+})
+
 describe('arch', () => {
   it('is the least concave line over every point, through both ends', () => {
     const d = [0, 10, 20, 30, 40]
