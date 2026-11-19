@@ -165,6 +165,24 @@ function fitted(decks: Chain[], outlines: Outline[], kerbs: Point[]): Fitted[] {
   return out.map(d => (loose.includes(d) ? { ...fit[loose.indexOf(d)], edges: held(d, loose.indexOf(d)), outline: null, lanes: d.lanes } : d))
 }
 
+/** A track no outline holds, parted where its ways enter and leave one: carried on from a bridge for kilometres of elevated line, it takes the bridge's height on it. */
+function parted(decks: Chain[], ways: Way[], outlines: Outline[]): Chain[] {
+  const byId = new Map(ways.map(w => [w.id, w]))
+  return decks.flatMap(c => {
+    if (c.kind !== 'rail') return [c]
+    const near = outlines.filter(o => meet(box(c.points), box(o.rings[0])))
+    if (!near.length || near.some(o => inOutline(c.points, o.rings))) return [c]
+    const runs: Array<{ outline: string | null; ways: Way[] }> = []
+    for (const id of c.ways) {
+      const w = byId.get(id)!
+      const outline = near.find(o => inOutline(resample(w.points, STEP), o.rings))?.id ?? null
+      if (runs[runs.length - 1]?.outline === outline) runs[runs.length - 1].ways.push(w)
+      else runs.push({ outline, ways: [w] })
+    }
+    return runs.length > 1 ? runs.flatMap(r => chains(r.ways)) : [c]
+  })
+}
+
 const bearing = (points: Point[]) => {
   const [a, b] = [points[0], points[points.length - 1]]
   const deg = (Math.atan2(b[0] - a[0], -(b[1] - a[1])) * 180) / Math.PI
@@ -1048,7 +1066,8 @@ function pinnedUnder(ways: Way[]): Way[] {
 }
 
 export async function buildDecks(input: DeckInput, ground: Ground): Promise<Deck[]> {
-  const decks = absorbTracks(absorbPaths(fitted(chains(pinnedUnder(input.ways)), input.outlines, input.kerbs))) as Fitted[]
+  const ways = pinnedUnder(input.ways)
+  const decks = absorbTracks(absorbPaths(fitted(parted(chains(ways), ways, input.outlines), input.outlines, input.kerbs))) as Fitted[]
   // An end lands where a road on the ground meets it, rests where it meets
   // another deck, and lands at a dead end. A deck in an outline reaches as far
   // as the outline fitted it, not just its carriageway: shaping comes later

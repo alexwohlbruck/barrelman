@@ -249,6 +249,16 @@ describe('buildDecks in an outline', () => {
     expect(deck.bridge).not.toBe('way/9')
   })
 
+  it('holds a track to the height of the bridge it crosses, though it runs on far beyond', async () => {
+    const span = { id: 'way/8', rings: [[east(380, 10), east(720, 10), east(720, -10), east(380, -10), east(380, 10)]], deck: 30, source: 'height' as const }
+    const rail = (id: number, at: number[]): Way => ({ id, points: at.map(m => east(m)), kind: 'rail', layer: 1, width: 3 })
+    const tracks = [rail(5, [0, 100, 200, 300, 400]), rail(6, [400, 550, 700]), rail(7, [700, 800, 900, 1000, 1100, 1200])]
+    const decks = await buildDecks(input({ ways: tracks, outlines: [span], onGround: new Set([key(east(0)), key(east(1200))]) }), ground(0))
+    const bridge = decks.find(d => d.ways.includes(6))!
+    expect(bridge.ways).toEqual([6])
+    expect(Math.max(...bridge.heights)).toBeGreaterThan(29)
+  })
+
   it('leaves a deck in no outline with its edges throughout', async () => {
     const [deck] = await buildDecks(input({ ways: [way(1, 0, 60)], onGround: new Set([key(east(0)), key(east(60))]) }), ground(100))
     expect(deck.sides).toBeNull()
