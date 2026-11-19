@@ -10,6 +10,12 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.10.52] - 2026-11-19
+
+### Fixed
+
+* Elevated subway lines run just over their streets wherever they are rebuilt, not only in small areas: a line crossing another partway along no longer rides a long ramp up to it. Rebuild the bridge decks after upgrading.
+
 ## [0.10.51] - 2026-11-19
 
 ### Added
