@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { buildDecks, CLEARANCE, numbered, STEP, type DeckInput } from './build'
+import { buildDecks, CLEARANCE, numbered, STEP, TRACK_DEPTH, type DeckInput } from './build'
 import { Dem, demConfigured, sampleHeights, type Heights } from './dem'
 import { DECK_DEPTH } from './elevation'
 import { along, mercator, type Point, type Way } from './profile'
@@ -27,6 +27,15 @@ describe('buildDecks', () => {
     expect(deck.heights[0]).toBe(200)
     expect(deck.heights[25]).toBeGreaterThanOrEqual(200 + CLEARANCE.road - 0.5)
     expect(deck.piers.length).toBeGreaterThan(0)
+  })
+
+  it('carries a track higher over a street than a road deck, by its girders\' depth', async () => {
+    const over = (kind: Way['kind']) => buildDecks(input({
+      ways: [way(7, 0, 300, kind)],
+      onGround: new Set([key(east(0)), key(east(300))]),
+      crossed: [{ kind: 'road', points: [east(150, -30), east(150, 30)] }],
+    }), ground(200)).then(([deck]) => deck.heights[25])
+    expect(await over('rail')).toBeCloseTo((await over('road')) + TRACK_DEPTH, 0)
   })
 
   it('piers keep off the ways and carriageways below', async () => {

@@ -68,6 +68,8 @@ export const STEP = 6
 export const FORMAT = 2
 /** Room a deck's underside leaves over what it crosses, plus the slab, in metres. */
 export const CLEARANCE = { road: 6, rail: 8, path: 4, water: 4, deck: 6.5 } as const
+/** Metres a track's girders, ties and rail stand deeper than a road deck's slab, which CLEARANCE allows for. */
+export const TRACK_DEPTH = 2
 /** Metres past a lower roadway's edge within which a walkway on a higher layer is carried above it. */
 const RIDE = 2
 /** Metres from its ends within which a deck over a lower one may be merging with it rather than clearing it. */
@@ -277,9 +279,10 @@ function fixedNeeds(s: Pick<Solved, 'chain' | 'd' | 'g' | 'pins'>, input: DeckIn
   out = []
   const reach = Math.max(...s.chain.edges)
   const own = box(s.chain.points)
+  const depth = s.chain.kind === 'rail' ? TRACK_DEPTH : 0
   for (const c of input.crossed)
     if (meet(own, box(c.points)))
-      for (const at of crossings(s.chain.points, c.points, reach, s.d)) out.push({ at, height: heightAt(s.d, s.g, at) + CLEARANCE[c.kind] })
+      for (const at of crossings(s.chain.points, c.points, reach, s.d)) out.push({ at, height: heightAt(s.d, s.g, at) + CLEARANCE[c.kind] + depth })
   const water = input.water.filter(ring => meet(own, box(ring)))
   if (water.length)
     s.chain.points.forEach((p, i) => {
@@ -759,7 +762,9 @@ async function groundUnder(shaped: Chain[], edges: Array<[Point[], Point[]]>, gr
 
 /**
  * The deck an end rests on, of those within reach of it: one it shares an
- * OSM node with, else one of its own layer, and of those the nearest. Taking
+ * OSM node with (for a track, one running on through it before one ending
+ * there too: at a switch, two tracks ending on each other each hold only the
+ * other's guess), else one of its own layer, and of those the nearest. Taking
  * whichever came first let a ramp settle on a lower deck it merely passes
  * over rather than the one it joins.
  */
@@ -773,7 +778,8 @@ function restingOn(s: Solved, end: 0 | 1, solved: Solved[]): { height: number; o
     if (!covers(grow(box(o.chain.points), reach), p)) continue
     const near = beside(o.chain.points, p)
     if (near.distance > reach) continue
-    const rank = (o.nodes.has(node) ? 0 : 2) + (o.chain.layer === s.chain.layer ? 0 : 1)
+    const shares = o.nodes.has(node) ? (s.chain.kind === 'rail' && !o.ends.some(e => key(e) === node) ? 0 : 1) : 2
+    const rank = shares * 2 + (o.chain.layer === s.chain.layer ? 0 : 1)
     if (!best || rank < best.rank || (rank === best.rank && near.distance < best.near.distance)) best = { o, near, rank }
   }
   if (!best) return null

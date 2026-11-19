@@ -10,6 +10,11 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Fixed
+
+* Elevated tracks stand at their real height over the streets, 2 m higher than before for their girders, and a track ending at a junction meets the line it joins instead of floating above it: NYC's els now land within a metre or two of lidar. Rebuild the bridge decks after upgrading.
+
+
 ## [0.10.52] - 2026-11-19
 
 ### Fixed
