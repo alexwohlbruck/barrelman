@@ -145,4 +145,5 @@ export const INTERNAL_HANDLERS: Record<string, (log: LogFn) => Promise<void>> = 
   'sql:generate-intersections.sql': (log) => runSqlFile(log, 'generate-intersections.sql'),
   'sql:generate-road-markings.sql': (log) => runSqlFile(log, 'generate-road-markings.sql'),
   'sql:backfill-power-outlets.sql': (log) => runSqlFile(log, 'backfill-power-outlets.sql'),
+  'sql:queue-bridge-decks-ele.sql': (log) => runSqlFile(log, 'queue-bridge-decks-ele.sql'),
 }

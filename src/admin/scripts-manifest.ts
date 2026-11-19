@@ -1231,6 +1231,20 @@ export const SCRIPTS: ScriptDef[] = [
       'OSM Update runs this after each replication cycle unless its "Update bridge decks" switch is off. The queue (detail_dirty) is filled by scripts/replicate-extract.sh under the same switch, so a database updated through osm2pgsql\'s middle tables has nothing to work off. Only writes inside the cells Build Bridge Decks recorded. Does nothing without bridge_decks and bridge_deck_cells, and empties the queue with BRIDGE_DECKS_DEM_TILES=off. A cell that fails is skipped and its entries retried later, up to three runs. Steps aside while "Build Bridge Decks" runs.',
   },
   {
+    id: 'osm-bridge-decks-queue-ele',
+    name: 'Queue Bridge Decks Tagged ele',
+    description:
+      'Queue every bridge deck in the conterminous US that OSM gives a height with `ele` (on its nodes, its ways or its man_made=bridge outline), for Update Bridge Decks to rebuild. Run once after upgrading to 0.10.54, which reads `ele` as height above EGM96 and converts it to the terrain\'s NAVD88.',
+    category: 'osm',
+    danger: 'safe',
+    longRunning: false,
+    confirm: false,
+    exec: { kind: 'internal', handler: 'sql:queue-bridge-decks-ele.sql' },
+    source: 'import/queue-bridge-decks-ele.sql',
+    notes:
+      'Replication only queues a deck when its OSM data changes, so a deck built before the upgrade keeps its old height, 0.1–1.2 m high, until queued here. Then run Update Bridge Decks, or let the next OSM Update work it off, BRIDGE_DECKS_MAX_CELLS cells a run. Idempotent: a box already waiting is not queued twice. Needs detail_dirty, which exists once Build Bridge Decks has recorded a cell.',
+  },
+  {
     id: 'osm-tunnel-cuts',
     name: 'Build Tunnel Cuts',
     description:
