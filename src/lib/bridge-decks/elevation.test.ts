@@ -90,6 +90,36 @@ describe('a seamark charting a bridge\'s clearance', () => {
   })
 })
 
+describe('a deck height from the towers OSM gives a height', () => {
+  // The Verrazzano-Narrows: towers 211 m over the water, 1298 m apart; its upper roadway stands near 77 m.
+  const towers = [tower(0, 211), tower(1298, 211)]
+
+  it('hangs the deck a cable sag of the span below their tops', () => {
+    const level = deckLevel({}, towers, {})
+    expect(level).toMatchObject({ source: 'towers', suspended: true })
+    expect(level.deck!).toBeGreaterThan(70)
+    expect(level.deck!).toBeLessThan(80)
+  })
+
+  it('takes them over a lower height, which on a suspension bridge is often its clearance', () => {
+    expect(deckLevel({ height: '41' }, towers, {}).deck!).toBeGreaterThan(70)
+    expect(deckLevel({ height: '41' }, [tower(0, 84), tower(486, 84)], {})).toMatchObject({ deck: 41, source: 'height' })
+  })
+
+  it('leaves alone a bridge that stands on its towers, and piers too short to be towers', () => {
+    expect(deckLevel({ 'bridge:structure': 'cantilever' }, towers, {}).deck).toBeUndefined()
+    expect(deckLevel({ bridge: 'cable-stayed' }, towers, {}).deck).toBeUndefined()
+    expect(deckLevel({}, [tower(0, 41), tower(488, 41)], {}).deck).toBeUndefined()
+  })
+
+  it('reaches only the deck between them, not another the outline holds beside it', () => {
+    const level = deckLevel({}, towers, {})
+    const away = Array.from({ length: 1298 / 6 + 1 }, (_, i) => mercator(-74 + (i * 6) / 84_300, 40.7 + 200 / 111_000))
+    expect(levelNeeds(away, away.map(() => true), level, 0)).toEqual([])
+    expect(levelNeeds(deck(1298), deck(1298).map(() => true), level, 0).length).toBeGreaterThan(100)
+  })
+})
+
 describe('a suspended span between its towers', () => {
   const towers = [tower(300), tower(786)]
   const level = { deck: 41, suspended: true, supports: [anchorage(0), ...towers, anchorage(1086)] }

@@ -420,7 +420,7 @@ function adaptLeg(leg: any): TransitLeg {
   if (leg.legGeometry?.points) {
     geometry = {
       type: 'LineString',
-      coordinates: decodePolyline(leg.legGeometry.points),
+      coordinates: decodePolyline(leg.legGeometry.points, leg.legGeometry.precision ?? 7),
     }
   }
 
@@ -607,15 +607,15 @@ export function extractFare(itin: any): { currency: string; amount: number } | u
 // MOTIS plan search means) and `motisPlan` (sending it and reading the
 // answer). Two front doors sit on top:
 //
-// - `planViaStations` for the ordinary case, walking at both ends. We pick
-//   nearby stations ourselves and route station to station. MOTIS's own
-//   access walks need its street graph, which a large network can't have
-//   (the US breaks its 16-ways-per-node limit and the build falls back to
-//   timetable-only), and even with one they strand platforms whose entrances
-//   OSM doesn't join to the sidewalk. The walk legs we add are straight
-//   lines; Parchment re-routes them on GraphHopper.
+// - `planWalkTransit` for the ordinary case, walking at both ends. We hand
+//   MOTIS every stop within walking range of each end, with its walk time, in
+//   one search. MOTIS's own access walks need its street graph, which a large
+//   network can't have (the US breaks its 16-ways-per-node limit and the build
+//   falls back to timetable-only), and even with one they strand platforms
+//   whose entrances OSM doesn't join to the sidewalk. The walk legs we add are
+//   straight lines; Parchment re-routes them on GraphHopper.
 // - `planParkAndRide` for driving to the train: a GraphHopper drive to a rail
-//   or ferry station, then the same station-to-station search.
+//   or ferry station, then a search from that station.
 // - `planFromCoordinates` for bike and rental access, which need MOTIS's
 //   street graph and return nothing on a timetable-only build.
 //
@@ -627,13 +627,15 @@ const WALK_MPS = 1.25
 /** Minutes MOTIS reserves per interchange unless the caller says otherwise. */
 const DEFAULT_TRANSFER_PAD_MIN = 3
 
-/** Stations tried at each end. All origin × destination pairs are queried —
- *  16 MOTIS searches at most, each a few tens of milliseconds. */
-const STATIONS_PER_END = 4
-
 /** Search radius bounds (m) at each end, whatever walk time is asked for. */
 const MIN_STATION_RADIUS = 500
 const MAX_STATION_RADIUS = 2500
+
+/** Bounds one search's offsets in a dense core at the widest radius. */
+const MAX_END_STOPS = 1500
+
+/** How much heavier walking counts in the less-walking search. */
+const WALK_AVERSION = 2
 
 /** The parameters every MOTIS plan search shares, whatever its places are. */
 function planParams(request: IntermodalRouteRequest, fromPlace: string, toPlace: string): URLSearchParams {
@@ -660,15 +662,37 @@ function planParams(request: IntermodalRouteRequest, fromPlace: string, toPlace:
   return params
 }
 
-/** Run one MOTIS plan search and adapt what comes back. */
+/** A stop a search may start or end at, and the seconds between it and the query point. */
+interface StopOffset {
+  stopId: string
+  duration: number
+}
+
+interface PlanOffsets {
+  fromOffsets: StopOffset[]
+  toOffsets: StopOffset[]
+}
+
+/**
+ * Run one MOTIS plan search and adapt what comes back. With `offsets`, MOTIS
+ * starts and ends at exactly those stops (only its v6 POST endpoint takes them).
+ */
 async function motisPlan(
   params: URLSearchParams,
   request: IntermodalRouteRequest,
   fetchFn: FetchFn,
+  offsets?: PlanOffsets,
 ): Promise<TransitRouteResponse> {
-  const response = await fetchFn(`${getMotisUrl()}/api/v1/plan?${params}`, {
-    signal: AbortSignal.timeout(20_000),
-  })
+  const response = offsets
+    ? await fetchFn(`${getMotisUrl()}/api/v6/plan?${params}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(offsets),
+        signal: AbortSignal.timeout(20_000),
+      })
+    : await fetchFn(`${getMotisUrl()}/api/v1/plan?${params}`, {
+        signal: AbortSignal.timeout(20_000),
+      })
   if (!response.ok) throw new MotisError(response.status, await response.text())
 
   const data = await response.json() as any
@@ -796,93 +820,18 @@ interface Station {
   lng: number
 }
 
-/** Nearest stations considered before narrowing to STATIONS_PER_END. */
-const STATION_CANDIDATES = 24
-
-/** Picked stations a route may fill: one for each side of the street. */
-const STATIONS_PER_ROUTE = 2
-
-interface StationCandidate extends Station {
-  routes: string[]
-}
-
-/**
- * Keep `limit` stations in their given order, passing over one whose routes
- * the picked stations already serve STATIONS_PER_ROUTE times. Without this,
- * four stops of one streetcar take every slot and the bus at the next corner
- * is reachable only by riding the streetcar away and walking back.
- * Stations passed over fill whatever slots are left.
- */
-export function pickStations(candidates: StationCandidate[], limit: number): Station[] {
-  const served = new Map<string, number>()
-  const picked: StationCandidate[] = []
-  const passed: StationCandidate[] = []
-  for (const c of candidates) {
-    if (picked.length === limit) break
-    const adds = !c.routes.length || c.routes.some((r) => (served.get(r) ?? 0) < STATIONS_PER_ROUTE)
-    if (!adds) {
-      passed.push(c)
-      continue
-    }
-    picked.push(c)
-    for (const r of c.routes) served.set(r, (served.get(r) ?? 0) + 1)
-  }
-  return [...picked, ...passed]
-    .slice(0, limit)
-    .map(({ feedId, stationId, lat, lng }) => ({ feedId, stationId, lat, lng }))
-}
-
-/**
- * The stations to try near a point: rail, subway, tram and ferry first,
- * nearest within each tier, a few per route (see `pickStations`).
- *
- * Without the tier, the handful of bus stops on the nearest corner would
- * crowd out a subway station 500 m away on any multi-km trip.
- *
- * A station counts as bus-only when every route it serves is a bus. The
- * test mirrors `gtfsModeClass` in src/lib/gtfs-modes.ts: 3 and 11 are
- * bus and trolleybus, and 700-899 are the extended bus and trolleybus
- * types. A station with no routes at all ranks with the buses.
- */
-async function nearbyStations(at: { lat: number; lng: number }, radiusM: number): Promise<Station[]> {
+/** Stops within `radiusM` of a point, nearest first. */
+async function stopsWithin(at: { lat: number; lng: number }, radiusM: number): Promise<Station[]> {
+  const point = sql`ST_SetSRID(ST_MakePoint(${at.lng}, ${at.lat}), 4326)::geography`
   const rows = (await db.execute(sql`
-    SELECT feed_id, station_id, stop_lat, stop_lon, routes
-    FROM (
-      SELECT DISTINCT ON (st.feed_id, COALESCE(NULLIF(st.parent_station, ''), st.stop_id))
-        st.feed_id,
-        COALESCE(NULLIF(st.parent_station, ''), st.stop_id) AS station_id,
-        st.stop_lat,
-        st.stop_lon,
-        ST_Distance(st.geom::geography, ST_SetSRID(ST_MakePoint(${at.lng}, ${at.lat}), 4326)::geography) AS distance,
-        COALESCE((
-          SELECT bool_and(r.route_type IN (3, 11) OR r.route_type BETWEEN 700 AND 899)
-          FROM gtfs_stop_routes sr
-          JOIN gtfs_routes r ON r.feed_id = sr.feed_id AND r.route_id = sr.route_id
-          WHERE sr.feed_id = st.feed_id AND sr.stop_id = st.stop_id
-        ), true) AS bus_only,
-        ARRAY(
-          SELECT sr.feed_id || ':' || sr.route_id
-          FROM gtfs_stop_routes sr
-          WHERE sr.feed_id = st.feed_id AND sr.stop_id = st.stop_id
-        ) AS routes
-      FROM gtfs_stops st
-      WHERE ST_DWithin(st.geom::geography, ST_SetSRID(ST_MakePoint(${at.lng}, ${at.lat}), 4326)::geography, ${radiusM})
-        AND (st.location_type = 0 OR st.location_type IS NULL)
-      ORDER BY st.feed_id, COALESCE(NULLIF(st.parent_station, ''), st.stop_id), distance
-    ) s
-    ORDER BY bus_only, distance
-    LIMIT ${STATION_CANDIDATES}
+    SELECT feed_id, stop_id, stop_lat, stop_lon
+    FROM gtfs_stops
+    WHERE ST_DWithin(geom::geography, ${point}, ${radiusM})
+      AND (location_type = 0 OR location_type IS NULL)
+    ORDER BY ST_Distance(geom::geography, ${point})
+    LIMIT ${MAX_END_STOPS}
   `)) as any[]
-  return pickStations(
-    rows.map((r) => ({
-      feedId: r.feed_id,
-      stationId: r.station_id,
-      lat: r.stop_lat,
-      lng: r.stop_lon,
-      routes: r.routes ?? [],
-    })),
-    STATIONS_PER_END,
-  )
+  return rows.map((r) => ({ feedId: r.feed_id, stationId: r.stop_id, lat: r.stop_lat, lng: r.stop_lon }))
 }
 
 /** Straight-line walking time between two points, in whole seconds. */
@@ -925,26 +874,27 @@ interface StationAccess {
 const originPlace = (at: { lat: number; lng: number }): TransitLegPlace => ({ name: 'Origin', ...at })
 
 /** Walking from the origin, straight line; Parchment re-routes it. */
-function walkAccess(from: { lat: number; lng: number }) {
-  return (station: Station): StationAccess => ({
-    station,
-    seconds: walkSeconds(from, station),
-    legs: (boardAt, boardMs) => [streetLeg('WALK', originPlace(from), boardAt, boardMs, walkSeconds(from, boardAt))],
-  })
-}
+const walkAccess = (from: { lat: number; lng: number }): StationAccess['legs'] =>
+  (boardAt, boardMs) => [streetLeg('WALK', originPlace(from), boardAt, boardMs, walkSeconds(from, boardAt))]
 
 /**
- * Wrap a station-to-station itinerary in its access legs and a straight-line
- * walk to the destination, adjusting its totals to match.
+ * Wrap an itinerary's rides in its access legs and a straight-line walk to
+ * the destination, replacing the street legs MOTIS drew from its offsets.
  */
-function withStreetLegs(it: TransitItinerary, access: StationAccess, to: { lat: number; lng: number }): TransitItinerary {
-  const first = it.legs[0]
-  const last = it.legs[it.legs.length - 1]
-  if (!first || !last) return it
+function withStreetLegs(
+  it: TransitItinerary,
+  access: StationAccess['legs'],
+  to: { lat: number; lng: number },
+): TransitItinerary {
+  const rides = rideIndexes(it.legs)
+  if (!rides.length) return it
+  const core = it.legs.slice(rides[0], rides[rides.length - 1] + 1)
+  const first = core[0]
+  const last = core[core.length - 1]
 
-  const boardAt = { name: first.from.name, lat: first.from.lat, lng: first.from.lng, stopId: first.from.stopId }
-  const alightAt = { name: last.to.name, lat: last.to.lat, lng: last.to.lng, stopId: last.to.stopId }
-  const before = access.legs(boardAt, new Date(first.startTime).getTime())
+  const boardAt = placeOf(first.from)
+  const alightAt = placeOf(last.to)
+  const before = access(boardAt, new Date(first.startTime).getTime())
   const egressSec = walkSeconds(alightAt, to)
   const egress = streetLeg(
     'WALK',
@@ -953,18 +903,22 @@ function withStreetLegs(it: TransitItinerary, access: StationAccess, to: { lat: 
     new Date(last.endTime).getTime() + egressSec * 1000,
     egressSec,
   )
+  return withLegs(it, [...before, ...core, egress])
+}
 
-  const startTime = before[0]?.startTime ?? it.startTime
-  const walks = [...before, egress].filter((l) => l.mode === 'WALK')
-  return {
-    ...it,
-    legs: [...before, ...it.legs, egress],
-    startTime,
-    endTime: egress.endTime,
-    duration: Math.round((new Date(egress.endTime).getTime() - new Date(startTime).getTime()) / 1000),
-    walkTime: (it.walkTime || 0) + walks.reduce((t, l) => t + l.duration, 0),
-    walkDistance: (it.walkDistance || 0) + walks.reduce((d, l) => d + l.distance, 0),
-  }
+/**
+ * Walks between rides at their real length, from a search that weighed them
+ * `factor` times. MOTIS times a transfer as `padSeconds + footpath × factor`.
+ */
+function unweighWalks(it: TransitItinerary, factor: number, padSeconds: number): TransitItinerary {
+  if (factor === 1) return it
+  const rides = rideIndexes(it.legs)
+  const legs = it.legs.map((l, i) => {
+    if (l.mode !== 'WALK' || i < rides[0] || i > rides[rides.length - 1]) return l
+    const duration = Math.round(padSeconds + Math.max(0, l.duration - padSeconds) / factor)
+    return { ...l, duration, endTime: new Date(new Date(l.startTime).getTime() + duration * 1000).toISOString() }
+  })
+  return withLegs(it, legs)
 }
 
 /** Street walks run longer than the straight line; a skipped ride must still make its connection. */
@@ -1035,99 +989,88 @@ export function skipDetourRides(
   return legs === it.legs ? it : withLegs(it, legs)
 }
 
-/** Feed pairs already warned about for MOTIS timetable misses (once per process). */
-const motis404Warned = new Set<string>()
+/** Stop ids GTFS has but the MOTIS bake doesn't, learned from its 404s. */
+const unbakedStops = new Set<string>()
+const UNBAKED_STOP = /timetable location \\?"([^"\\]+)/
+/** Unbaked stops one search drops and retries past before giving up. */
+const MAX_UNBAKED_RETRIES = 5
 
 /** Station search radius for a walk of up to `seconds`. */
 const walkRadius = (seconds = 900) =>
   Math.min(Math.max(seconds * WALK_MPS, MIN_STATION_RADIUS), MAX_STATION_RADIUS)
 
+const motisStopId = (s: Station) => `${s.feedId}_${s.stationId}`
+
+/** Each stop with its walk to or from `at`, weighed `factor` times. */
+const walkOffsets = (stops: Station[], at: { lat: number; lng: number }, factor = 1): StopOffset[] =>
+  stops.map((s) => ({ stopId: motisStopId(s), duration: Math.round(walkSeconds(at, s) * factor) }))
+
 /**
- * Route between the given origin stations and the stations near the
- * destination, and walk from the last one.
- *
- * Every origin station is paired with every destination station. Dropping
- * pairs to save queries is how an obvious train goes missing: the fourth
- * station is as likely as the first to be the one with the direct line.
- * `keep` drops itineraries the access mode can't use.
+ * One MOTIS search between the request's coordinates, starting and ending at
+ * the given stops. A stop the bake lacks 404s the whole search, so it is
+ * remembered, dropped and the search retried.
  */
-async function planViaStations(
+async function searchBetween(
   request: IntermodalRouteRequest,
   fetchFn: FetchFn,
-  origins: StationAccess[],
-  keep: (it: TransitItinerary) => boolean = () => true,
+  offsets: PlanOffsets,
+  extraParams: Record<string, string> = {},
+): Promise<TransitItinerary[]> {
+  const params = planParams(
+    request,
+    `${request.from.lat},${request.from.lng}`,
+    `${request.to.lat},${request.to.lng}`,
+  )
+  params.set('maxDirectTime', '0')
+  for (const [key, value] of Object.entries(extraParams)) params.set(key, value)
+
+  const baked = (list: StopOffset[]) => list.filter((o) => !unbakedStops.has(o.stopId))
+  for (let attempt = 0; ; attempt++) {
+    const known = { fromOffsets: baked(offsets.fromOffsets), toOffsets: baked(offsets.toOffsets) }
+    // An empty list asks MOTIS to compute that side itself.
+    if (!known.fromOffsets.length || !known.toOffsets.length) return []
+    try {
+      return (await motisPlan(params, request, fetchFn, known)).itineraries
+    } catch (err) {
+      const stop = err instanceof MotisError && err.statusCode === 404 ? UNBAKED_STOP.exec(err.body)?.[1] : undefined
+      if (!stop || attempt === MAX_UNBAKED_RETRIES) throw err
+      // A search running alongside may have learned it first.
+      if (unbakedStops.has(stop)) continue
+      unbakedStops.add(stop)
+      console.warn(`[transit] MOTIS has no timetable location for ${stop} — GTFS DB is ahead of the MOTIS bake`)
+    }
+  }
+}
+
+/**
+ * Gather the searches' trips, dropping any the rider can't make: a walk that
+ * would have to start before the asked time or, arriving by, end after it.
+ */
+async function settleSearches(
+  request: IntermodalRouteRequest,
+  searches: Promise<TransitItinerary[]>[],
   walkFrom?: { lat: number; lng: number },
 ): Promise<TransitRouteResponse> {
-  const dests = await nearbyStations(request.to, walkRadius(request.maxPostTransitTime))
-
-  const pairs = origins.flatMap((o) =>
-    dests
-      .filter((d) => o.station.feedId !== d.feedId || o.station.stationId !== d.stationId)
-      .map((d) => ({ o, d })),
-  )
-
-  const baseMs = request.time ? new Date(request.time).getTime() : Date.now()
-  const settled = await Promise.allSettled(
-    pairs.map(async ({ o, d }) => {
-      // Shift the search so a departure it returns is one the rider can
-      // reach: depart-by starts after the access walk, arrive-by ends early
-      // enough to finish the egress walk in time.
-      const queryMs = request.arriveBy
-        ? baseMs - walkSeconds(d, request.to) * 1000
-        : baseMs + o.seconds * 1000
-      const params = planParams(
-        { ...request, time: new Date(queryMs).toISOString() },
-        `${o.station.feedId}_${o.station.stationId}`,
-        `${d.feedId}_${d.stationId}`,
-      )
-      try {
-        const { itineraries } = await motisPlan(params, request, fetchFn)
-        return itineraries
-          .filter(keep)
-          .map((it) => withStreetLegs(it, o, request.to))
-          .map((it) => skipDetourRides(it, { from: walkFrom, to: request.to }, {
-            pre: request.maxPreTransitTime ?? 900,
-            post: request.maxPostTransitTime ?? 900,
-          }))
-          // The shift above walks to the station's nearest platform, but
-          // MOTIS may board at another one further off. Drop a trip whose
-          // walk would have to start before the asked time (or, arriving
-          // by, end after it), rather than offer a train the rider misses.
-          .filter((it) => request.arriveBy
-            ? new Date(it.endTime).getTime() <= baseMs
-            : new Date(it.startTime).getTime() >= baseMs)
-      } catch (err) {
-        // A 404 means the stop is in PostGIS but not in the baked MOTIS
-        // timetable (GTFS ahead of the bake). That pair has no answer, which
-        // is not an outage. Warn once per feed pair so the drift is visible.
-        if (err instanceof MotisError && err.statusCode === 404) {
-          const key = `${o.station.feedId}:${d.feedId}`
-          if (!motis404Warned.has(key)) {
-            motis404Warned.add(key)
-            console.warn(
-              `[transit] MOTIS has no timetable location for ${o.station.feedId}_${o.station.stationId} → ` +
-              `${d.feedId}_${d.stationId} — GTFS DB is ahead of the MOTIS bake for these feeds`,
-            )
-          }
-          return null
-        }
-        throw err
-      }
-    }),
-  )
-
-  // One bad pair must not sink the rest. But if no pair answered and some
-  // failed for real, MOTIS is down, and an empty 200 would pass that off as
-  // "no route". A 404 pair (null) is not an answer either way.
-  const answered = settled.flatMap((s) => (s.status === 'fulfilled' && s.value ? [s.value] : []))
+  const settled = await Promise.allSettled(searches)
+  // One failed search must not sink the rest. But if none answered, MOTIS is
+  // down, and an empty 200 would pass that off as "no route".
+  const answered = settled.flatMap((s) => (s.status === 'fulfilled' ? [s.value] : []))
   const failures = settled.filter((s): s is PromiseRejectedResult => s.status === 'rejected')
   if (failures.length) {
     if (!answered.length) throw failures[0].reason
-    console.warn(`[transit] ${failures.length}/${settled.length} station pairs failed: ${failures[0].reason}`)
+    console.warn(`[transit] ${failures.length}/${settled.length} searches failed: ${failures[0].reason}`)
   }
 
+  const baseMs = request.time ? new Date(request.time).getTime() : Date.now()
+  const maxSeconds = { pre: request.maxPreTransitTime ?? 900, post: request.maxPostTransitTime ?? 900 }
   return {
-    itineraries: answered.flat(),
+    itineraries: answered
+      .flat()
+      .filter((it) => it.legs.some((l) => l.transitLeg))
+      .map((it) => skipDetourRides(it, { from: walkFrom, to: request.to }, maxSeconds))
+      .filter((it) => request.arriveBy
+        ? new Date(it.endTime).getTime() <= baseMs
+        : new Date(it.startTime).getTime() >= baseMs),
     metadata: {
       searchWindow: 0,
       ...(request.requireBikeTransport && { requireBikeTransport: true }),
@@ -1135,10 +1078,29 @@ async function planViaStations(
   }
 }
 
-/** Walking at both ends: stations near the origin, walked to. */
+/**
+ * Walking at both ends: every stop within walking range of each end, in one
+ * search. A second search weighs walking double, so the bus at the door
+ * survives next to a faster train a long walk away. MOTIS ranks on time and
+ * transfers alone, and would otherwise drop it.
+ */
 async function planWalkTransit(request: IntermodalRouteRequest, fetchFn: FetchFn): Promise<TransitRouteResponse> {
-  const origins = await nearbyStations(request.from, walkRadius(request.maxPreTransitTime))
-  return planViaStations(request, fetchFn, origins.map(walkAccess(request.from)), undefined, request.from)
+  const [origins, dests] = await Promise.all([
+    stopsWithin(request.from, walkRadius(request.maxPreTransitTime)),
+    stopsWithin(request.to, walkRadius(request.maxPostTransitTime)),
+  ])
+  const access = walkAccess(request.from)
+  const padSeconds = (request.additionalTransferTime ?? DEFAULT_TRANSFER_PAD_MIN) * 60
+  const searches = [1, WALK_AVERSION].map(async (factor) => {
+    const offsets = {
+      fromOffsets: walkOffsets(origins, request.from, factor),
+      toOffsets: walkOffsets(dests, request.to, factor),
+    }
+    const weighed: Record<string, string> = factor === 1 ? {} : { transferTimeFactor: String(factor) }
+    const itineraries = await searchBetween(request, fetchFn, offsets, weighed)
+    return itineraries.map((it) => withStreetLegs(unweighWalks(it, factor, padSeconds), access, request.to))
+  })
+  return settleSearches(request, searches, request.from)
 }
 
 /** The first vehicle boarded is a train, tram or ferry: nobody parks for a bus. */
@@ -1185,9 +1147,18 @@ async function parkAndRideAccess(request: IntermodalRouteRequest, fetchFn: Fetch
 
 /** Park-and-ride: drive to a rail or ferry station, then ride from there. */
 async function planParkAndRide(request: IntermodalRouteRequest, fetchFn: FetchFn): Promise<TransitRouteResponse> {
-  const origins = await parkAndRideAccess(request, fetchFn)
+  const [origins, dests] = await Promise.all([
+    parkAndRideAccess(request, fetchFn),
+    stopsWithin(request.to, walkRadius(request.maxPostTransitTime)),
+  ])
   if (!origins.length) return { itineraries: [], metadata: { searchWindow: 0 } }
-  return planViaStations(request, fetchFn, origins, boardsRailOrFerry)
+  const toOffsets = walkOffsets(dests, request.to)
+  const searches = origins.map(async (o) => {
+    const fromOffsets = [{ stopId: motisStopId(o.station), duration: o.seconds }]
+    const itineraries = await searchBetween(request, fetchFn, { fromOffsets, toOffsets })
+    return itineraries.filter(boardsRailOrFerry).map((it) => withStreetLegs(it, o.legs, request.to))
+  })
+  return settleSearches(request, searches)
 }
 
 /**

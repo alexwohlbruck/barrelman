@@ -1021,15 +1021,24 @@ run('generate-road-markings.sql', () => {
     expect(Math.abs(ref.l + ref.r)).toBeLessThan(0.1)
   })
 
-  test('ticks a parallel parking lane a car length apart, unless tagged unmarked', async () => {
-    const ticks = await sql`
-      SELECT ST_Length(g::geography) as m, ST_Y(ST_Centroid(g)) as y
+  test('marks a parallel parking lane with Ts a car length apart, unless tagged unmarked', async () => {
+    // The way runs north, so stems run east-west and crossbars north-south.
+    const pieces = await sql`
+      SELECT ST_Length(g::geography) as m, ST_Y(ST_Centroid(g)) as y, ST_X(ST_Centroid(g)) as x,
+             abs(ST_X(ST_EndPoint(g)) - ST_X(ST_StartPoint(g))) * 84300 > 0.5 as stem
       FROM (SELECT (ST_Dump(geom)).geom as g FROM road_markings WHERE kind = 'parking'
-            AND geom && ST_MakeEnvelope(${east(-74.450, -8)}, 40.7130, ${east(-74.450, -4)}, 40.7140, 4326)) t ORDER BY y`
-    expect(ticks.length).toBeGreaterThan(12)
-    for (const t of ticks) expect(t.m).toBeLessThan(1.2)
-    const gaps = ticks.slice(1).map((t, i) => (t.y - ticks[i].y) * 111050)
+            AND geom && ST_MakeEnvelope(${east(-74.475, -8)}, 40.7130, ${east(-74.475, -2)}, 40.7140, 4326)) t ORDER BY y`
+    const stems = pieces.filter(p => p.stem), bars = pieces.filter(p => !p.stem)
+    expect(stems.length).toBeGreaterThan(12)
+    for (const t of stems) expect(Math.abs(t.m - 1)).toBeLessThan(0.15)
+    const gaps = stems.slice(1).map((t, i) => (t.y - stems[i].y) * 111050)
     for (const g of gaps) expect(Math.abs(g - 6.1)).toBeLessThan(0.3)
+    // Each stem is crossed on the traffic side, nearer the way than its middle.
+    for (const t of stems) {
+      const crossing = bars.filter(b => Math.abs(b.y - t.y) * 111050 < 0.7)
+      expect(Math.abs(crossing.reduce((m, b) => m + b.m, 0) - 1.2)).toBeLessThan(0.15)
+      for (const b of crossing) expect(Math.abs(b.x - -74.475)).toBeLessThan(Math.abs(t.x - -74.475))
+    }
     const [{ n }] = await sql`SELECT count(*)::int as n FROM road_markings WHERE kind = 'parking'
       AND geom && ST_MakeEnvelope(${east(-74.455, -8)}, 40.7130, ${east(-74.455, 8)}, 40.7140, 4326)`
     expect(n).toBe(0)

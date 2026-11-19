@@ -1091,10 +1091,16 @@ CREATE INDEX IF NOT EXISTS road_glyphs_geom_idx ON road_glyphs USING gist (geom)
 -- What kind of deck a way would make, by its tags alone ('road', 'path' or
 -- 'rail'), or null for a way no deck is built from. The one list of classes:
 -- import/bridge-deck-cells.ts and import/queue-bridge-decks.sql both read it.
+-- A way under construction makes the deck of what it will be: the tiles draw it.
+CREATE OR REPLACE FUNCTION bridge_deck_highway(tags jsonb) RETURNS text
+LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+  SELECT CASE WHEN tags->>'highway' = 'construction' THEN tags->>'construction' ELSE tags->>'highway' END
+$$;
+
 CREATE OR REPLACE FUNCTION bridge_deck_class(tags jsonb) RETURNS text
 LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
   SELECT CASE
-    WHEN NOT COALESCE(tags->>'highway' IN ('motorway', 'motorway_link', 'trunk', 'trunk_link', 'primary', 'primary_link',
+    WHEN NOT COALESCE(bridge_deck_highway(tags) IN ('motorway', 'motorway_link', 'trunk', 'trunk_link', 'primary', 'primary_link',
                                    'secondary', 'secondary_link', 'tertiary', 'tertiary_link', 'unclassified',
                                    'residential', 'living_street', 'service', 'busway', 'track', 'road',
                                    'footway', 'cycleway', 'path', 'pedestrian', 'steps', 'bridleway')
@@ -1102,7 +1108,7 @@ LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
                                       'preserved', 'funicular'), false)
       THEN NULL
     WHEN tags ? 'railway' THEN 'rail'
-    WHEN tags->>'highway' IN ('footway', 'cycleway', 'path', 'pedestrian', 'steps', 'bridleway') THEN 'path'
+    WHEN bridge_deck_highway(tags) IN ('footway', 'cycleway', 'path', 'pedestrian', 'steps', 'bridleway') THEN 'path'
     ELSE 'road'
   END
 $$;
@@ -1253,9 +1259,12 @@ CREATE TABLE IF NOT EXISTS road_beds (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS road_beds_geom_idx ON road_beds USING gist (geom);
+-- A bed whose terrain is not the road's is levelled both ways, lowered as well as filled.
+ALTER TABLE road_beds ADD COLUMN IF NOT EXISTS level boolean NOT NULL DEFAULT false;
 
 -- Served in the `detail` bundle: the line as steps in 1e-7°, as bridge_deck_tiles
--- gives it, and heights and piers in decimetres. Road beds ride along as kind `bed`.
+-- gives it, and heights and piers in decimetres. Road beds ride along as kind `bed`,
+-- `under` marking those levelled both ways.
 CREATE OR REPLACE VIEW tunnel_cut_tiles AS
 SELECT id, kind,
        (SELECT string_agg(CASE WHEN n = 1 THEN x || ',' || y ELSE (x - px) || ',' || (y - py) END, ';' ORDER BY n)
@@ -1283,7 +1292,7 @@ SELECT id, 'bed',
                     FROM ST_DumpPoints(geom) AS dp) points) steps),
        0, 0, half, half,
        array_to_string(ARRAY(SELECT round(h * 10)::int FROM unnest(floor) h), ','),
-       NULL, NULL, 0, 0, 0, NULL, NULL, geom, false, NULL, NULL
+       NULL, NULL, 0, 0, 0, NULL, NULL, geom, level, NULL, NULL
 FROM road_beds;
 
 -- Sidewalk street names: the street each unnamed footway, path or cycleway

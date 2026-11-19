@@ -17,7 +17,7 @@ import { wayHalf } from '../src/lib/bridge-decks/supports'
 import type { Dem } from '../src/lib/bridge-decks/dem'
 import { clip, contains, degreeBox, toDegrees, toUnits, UNITS_PER_DEGREE, type UnitBox, type UnitPoint } from '../src/lib/bridge-decks/grid'
 import type { Built } from '../src/lib/bridge-decks/queue'
-import { clearance, deckLevel, metres, type Seamark, type Support } from '../src/lib/bridge-decks/elevation'
+import { clearance, deckLevel, metres, TOWER, type Seamark, type Support } from '../src/lib/bridge-decks/elevation'
 import { inside, lngLat, mercator, metresPerUnit, type Kind, type Point, type Way } from '../src/lib/bridge-decks/profile'
 
 type Sql = postgres.Sql
@@ -62,7 +62,7 @@ type Row = { id: string; kind: Kind; highway: string | null; road: string | null
   lanes: string | null; oneway: string | null; wikidata: string | null; ele: string | null; covered: string | null; coords: number[][] }
 
 const bridgeWays = (sql: Sql) => sql`
-  SELECT osm_id::text AS id, bridge_deck_class(tags) AS kind, tags->>'highway' AS highway,
+  SELECT osm_id::text AS id, bridge_deck_class(tags) AS kind, bridge_deck_highway(tags) AS highway,
          COALESCE(tags->>'highway', tags->>'railway') || '/' || COALESCE(tags->>'ref', tags->>'name', '') AS road, tags->>'layer' AS layer,
          COALESCE(tags->>'width:carriageway', tags->>'width') AS width, tags->>'lanes' AS lanes, tags->>'oneway' AS oneway,
          COALESCE(tags->>'bridge:wikidata', tags->>'wikidata') AS wikidata, tags->>'ele' AS ele, tags->>'covered' AS covered,
@@ -94,13 +94,13 @@ function toWay(r: Row, pins: Map<string, number>): Way {
 }
 
 /**
- * The heights tagged `ele` on the nodes of bridge ways, by position as the
+ * The heights tagged `ele` on the nodes of ways, by position as the
  * ways' coordinates give it. A node with any tag at all, `ele` alone among
  * them, is a point row of its own in geo_places, at exactly its way's vertex:
  * so nodes are found without osm2pgsql's middle tables, which a flat-nodes
  * import or replicate-extract.sh does without.
  */
-async function nodeHeights(sql: Sql, ids: string[]): Promise<Map<string, number>> {
+export async function nodeHeights(sql: Sql, ids: string[]): Promise<Map<string, number>> {
   const rows: Array<{ ele: string; coords: number[] }> = await sql`
     WITH pieces AS MATERIALIZED (
       SELECT ST_Subdivide(geom, 8) AS piece FROM geo_places WHERE osm_type = 'W' AND osm_id = ANY(${ids}::bigint[]) AND geom_type = 'line')
@@ -196,10 +196,15 @@ export async function inputFor(sql: Sql, rows: Row[]): Promise<DeckInput> {
            ST_AsGeoJSON(ST_Multi(geom))::json->'coordinates' AS coords
     FROM geo_places WHERE tags @> '{"man_made": "bridge"}' AND geom_type = 'area' AND geom && ${box}
     ORDER BY osm_type, osm_id`
-  const supportRows: Array<{ kind: Support['kind']; height: string | null; coords: number[][][][] }> = outlineRows.length ? await sql`
+  const supportRows: Array<{ kind: string; height: string | null; coords: number[][][][] }> = outlineRows.length ? await sql`
     SELECT tags->>'bridge:support' AS kind, tags->>'height' AS height, ST_AsGeoJSON(ST_Multi(geom))::json->'coordinates' AS coords
-    FROM geo_places WHERE tags->>'bridge:support' IN ('pylon', 'abutment') AND geom_type = 'area' AND geom && ${box}` : []
-  const supports: Support[] = supportRows.flatMap(r => r.coords.map(rings => ({ kind: r.kind, height: metres(r.height), ring: rings[0].map(([lng, lat]) => mercator(lng, lat)) })))
+    FROM geo_places WHERE (tags->>'bridge:support' IN ('pylon', 'abutment') OR tags ? 'bridge:support' AND tags ? 'height') AND geom_type = 'area' AND geom && ${box}` : []
+  // A support as tall as a tower is one, however it is tagged: the Golden Gate's stand as piers.
+  const supports: Support[] = supportRows.flatMap(r => {
+    const height = metres(r.height)
+    const kind = r.kind === 'abutment' || r.kind === 'pylon' ? r.kind : height !== null && height > TOWER ? 'pylon' : null
+    return kind ? r.coords.map(rings => ({ kind, height, ring: rings[0].map(([lng, lat]) => mercator(lng, lat)) })) : []
+  })
   const outlines = outlineRows.flatMap(o => o.coords.map(rings => {
     const shape = rings.map(ring => ring.map(([lng, lat]) => mercator(lng, lat)))
     const near = SUPPORT_NEAR / metresPerUnit(shape[0][0][1])
