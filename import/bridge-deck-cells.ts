@@ -59,14 +59,14 @@ const INSERT_BATCH = 500
 
 
 type Row = { id: string; kind: Kind; highway: string | null; road: string | null; layer: string | null; width: string | null;
-  lanes: string | null; oneway: string | null; wikidata: string | null; ele: string | null; covered: string | null; coords: number[][] }
+  lanes: string | null; oneway: string | null; wikidata: string | null; ele: string | null; covered: string | null; footway: string | null; coords: number[][] }
 
 const bridgeWays = (sql: Sql) => sql`
   SELECT osm_id::text AS id, bridge_deck_class(tags) AS kind, bridge_deck_highway(tags) AS highway,
          COALESCE(tags->>'highway', tags->>'railway') || '/' || COALESCE(tags->>'ref', tags->>'name', '') AS road, tags->>'layer' AS layer,
          COALESCE(tags->>'width:carriageway', tags->>'width') AS width, tags->>'lanes' AS lanes, tags->>'oneway' AS oneway,
          COALESCE(tags->>'bridge:wikidata', tags->>'wikidata') AS wikidata, tags->>'ele' AS ele, tags->>'covered' AS covered,
-         ST_AsGeoJSON(geom)::json->'coordinates' AS coords
+         tags->>'footway' AS footway, ST_AsGeoJSON(geom)::json->'coordinates' AS coords
   FROM geo_places`
 // Which ways make decks is bridge_deck_class() in create-detail-views.sql,
 // which queue-bridge-decks.sql reads too.
@@ -89,7 +89,7 @@ function toWay(r: Row, pins: Map<string, number>): Way {
   const ele = metres(r.ele)
   return {
     id: Number(r.id), points: r.coords.map(([lng, lat]) => mercator(lng, lat)), kind, layer: Math.max(1, layer || 1), untagged: Number.isNaN(layer), width, road: r.road ?? undefined,
-    ...(vertices.length ? { pins: vertices } : {}), ...(ele !== null ? { ele } : {}),
+    ...(vertices.length ? { pins: vertices } : {}), ...(ele !== null ? { ele } : {}), ...(r.footway === 'sidewalk' ? { sidewalk: true } : {}),
   }
 }
 

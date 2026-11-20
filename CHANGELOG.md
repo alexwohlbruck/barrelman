@@ -10,6 +10,10 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Fixed
+
+* A short bridge over a cut carries on level to the top of each bank and meets the street there, instead of dipping toward the bottom of the cut or stopping short of the bank. A road's mapped sidewalks join its deck rather than standing apart as separate slabs. Rebuild the bridge decks after upgrading.
+
 ## [0.10.53] - 2026-11-19
 
 ### Fixed
