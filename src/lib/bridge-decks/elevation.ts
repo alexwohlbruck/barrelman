@@ -6,11 +6,15 @@
  * What each tag measures:
  *
  *   ele (on a node of a bridge's highway or railway way)  The deck's surface
- *       there, in metres above sea level, as `ele` is on any node: the same
- *       datum as the terrain (NAVD88 in the US). The deck is pinned to it
+ *       there, in metres above the EGM96 geoid, as OSM defines `ele` on any
+ *       node. That is not the terrain's datum everywhere (NAVD88 in the
+ *       conterminous US, 0.4–1 m under EGM96 in the east), so it is
+ *       converted to the terrain's datum on reading (`terrainHeight` in
+ *       datum.ts, which says where it can). The deck is pinned to it
  *       exactly (see `pinned` in profile.ts), once `trustedPins` believes it.
  *       This is the tag to add where nothing else gives a deck its height.
- *   ele (on the outline, or on a bridge way itself)  Above sea level too, and
+ *   ele (on the outline, or on a bridge way itself)  Above EGM96 too, and
+ *       converted the same way, and
  *       taken as the deck's top at its crest (a way's at its middle), but only
  *       as a least height, never above MAX_DECK over the ground: an `ele`
  *       mapped as the ground's, as imports have, falls at or under the deck
@@ -67,7 +71,7 @@ export type Support = { kind: 'pylon' | 'abutment'; ring: Point[]; height: numbe
 export type OutlineLevel = {
   /** Metres from the lowest ground under the span to the top of the deck at its crest. */
   deck?: number
-  /** The outline's `ele`: the least height of the deck's top at its crest, in metres above sea level. */
+  /** The outline's `ele`: the least height of the deck's top at its crest, in metres in the terrain's datum. */
   top?: number
   /** Where the deck height came from. */
   source?: 'override' | 'seamark' | 'height' | 'towers'
@@ -96,13 +100,18 @@ const SUSPENDED = new Set(['suspension', 'cable-stayed', 'simple-suspension'])
 
 export const isSuspended = (tags: Record<string, string>) => SUSPENDED.has(tags.bridge) || SUSPENDED.has(tags['bridge:structure'])
 
-/** The deck height an outline's tags give, measured from the ground under its span; null where they give none to trust. */
-export function deckLevel(tags: Record<string, string>, supports: Support[], overrides: Overrides = OVERRIDES): OutlineLevel {
+/**
+ * The deck height an outline's tags give, measured from the ground under its
+ * span; null where they give none to trust. `gap` is how far EGM96 stands
+ * above the terrain's datum at the outline (`geoidGap`), 0 where unknown.
+ */
+export function deckLevel(tags: Record<string, string>, supports: Support[], overrides: Overrides = OVERRIDES, gap = 0): OutlineLevel {
   const suspended = isSuspended(tags)
   const level: OutlineLevel = { suspended, supports }
   const ele = metres(tags.ele)
   // Measured from sea level, not the ground: whether it is believed is only known once the ground is (`levelNeeds`).
-  if (ele !== null) level.top = ele
+  // `gap` takes it from EGM96 to the terrain's datum (see datum.ts).
+  if (ele !== null) level.top = ele - gap
   const override = tags.wikidata ? overrides[tags.wikidata] : undefined
   if (override) return { ...level, deck: override.deck, source: 'override' }
   const charted = clearance(tags)
