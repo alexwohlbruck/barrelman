@@ -160,8 +160,19 @@ describe('landing', () => {
     expect(land?.run).toBeLessThanOrEqual(14)
   })
 
-  it('never takes a road climbing steeper than a deck may for a hollow', () => {
-    for (const grade of [0.07, 0.1, 0.15]) expect(landing(road(s => 200 + s * grade), 200)).toBeNull()
+  it('never takes a road climbing steeper than a deck may for a hollow, nor a steep street for a bank', () => {
+    for (const grade of [0.07, 0.1, 0.15, 0.25]) expect(landing(road(s => 200 + s * grade), 200)).toBeNull()
+  })
+
+  it('finds the top of a bank an end lies partway up, where the road beyond falls away from it', () => {
+    // Virginia Ave over the Beltline: the way ends on the blurred bank of the cut, the street crests 6 m out and descends.
+    const land = landing(road(s => (s <= 6 ? 274.2 + s * 0.48 : 277.08 - (s - 6) * 0.11)), 274.2)
+    expect(land).toEqual({ height: expect.closeTo(277.08, 1), run: 6, bank: true })
+  })
+
+  it('tells a bank climbing from the end from a hollow the road dips through', () => {
+    expect(landing(road(s => Math.min(205, 199 + s)), 199)?.bank).toBe(true)
+    expect(landing(road(s => (s < 12 ? 193 : 200)), 193)?.bank).toBe(false)
   })
 
   it('leaves an end alone where the road beyond carries on at its height, or a long way down', () => {

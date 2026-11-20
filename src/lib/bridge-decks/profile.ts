@@ -546,19 +546,36 @@ export function besideGround(centre: number[], left: number[], right: number[], 
 /**
  * Where a grounded end's road is read beyond it (metres out, every `step`), the
  * stretch fitted for its level, how far below that level the end's own ground
- * must lie to be a hole, and the most a deck runs on to cross one.
+ * must lie to be a hole, the most a deck runs on to cross one, and the grade,
+ * steeper than a street's, past which ground climbing from the end is a bank.
  */
-export const LANDING = { step: 2, reach: 40, from: 16, to: 36, hole: 0.6, run: 25 }
+export const LANDING = { step: 2, reach: 40, from: 16, to: 36, hole: 0.6, run: 25, bank: 0.2 }
+
+/** How far out, and how high, a grounded end's road runs on to; `bank` where the end lies on the bank of a cut rather than in a hollow. */
+export type Landing = { height: number; run: number; bank: boolean }
 
 /**
  * The road a grounded end lands on, read from the ground `beyond` it (one
  * sample every LANDING.step metres out). Lidar terrain has its bridges taken
  * out, and often the abutments with them: the end of the way then lies in a
- * hollow while the road a little farther out runs on at deck level. Null where
- * the end's own ground is the road's; else the road's height and how far out
- * the hollow ends, where the deck runs on to.
+ * hollow, or partway up the bank of the cut it crosses, while the road a
+ * little farther out runs on at deck level. Null where the end's own ground
+ * is the road's; else the road's height and how far out it is reached, where
+ * the deck runs on to.
  */
-export function landing(beyond: number[], end: number): { height: number; run: number } | null {
+export function landing(beyond: number[], end: number): Landing | null {
+  return levelled(beyond, end) ?? bankTop(beyond, end)
+}
+
+/** Index of the last sample of the bank climbing from the end, each steeper than LANDING.bank; -1 where the ground does not climb so. */
+function climbed(beyond: number[], end: number): number {
+  let top = -1
+  while (top + 1 < beyond.length && beyond[top + 1] - (top < 0 ? end : beyond[top]) > LANDING.bank * LANDING.step) top++
+  return top
+}
+
+/** The road beyond fitted level between LANDING.from and LANDING.to, run on to where it is first reached. */
+function levelled(beyond: number[], end: number): Landing | null {
   const fit = beyond.flatMap((z, j) => {
     const s = (j + 1) * LANDING.step
     return s >= LANDING.from && s <= LANDING.to && !Number.isNaN(z) ? [[s, z]] : []
@@ -575,7 +592,14 @@ export function landing(beyond: number[], end: number): { height: number; run: n
   const run = out < 0 ? Infinity : (out + 1) * LANDING.step
   // A hollow dips below the road it lies in, between the end and the road coming back up.
   const dipped = beyond.slice(0, Math.max(0, out)).some((z, j) => z < level((j + 1) * LANDING.step) - LANDING.hole)
-  return run > LANDING.run || !(dipped || out === 0) ? null : { height: level(run), run }
+  return run > LANDING.run || !(dipped || out === 0) ? null : { height: level(run), run, bank: climbed(beyond, end) >= out }
+}
+
+/** Where ground climbing from the end steeper than a street stops climbing: the top of the bank, where a road beyond that is not level resumes. */
+function bankTop(beyond: number[], end: number): Landing | null {
+  const top = climbed(beyond, end)
+  const run = (top + 1) * LANDING.step
+  return top < 0 || run > LANDING.run || beyond[top] - end < LANDING.hole ? null : { height: beyond[top], run, bank: true }
 }
 
 /** What a deck must stand clear of at a distance along it: an absolute height for its surface. */

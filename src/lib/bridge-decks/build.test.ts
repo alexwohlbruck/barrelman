@@ -72,6 +72,27 @@ describe('buildDecks', () => {
     expect(runOn(junction)).toBeLessThan(1)
   })
 
+  it('carries a short bridge over a cut on to the top of each bank, with a street meeting it there', async () => {
+    // The terrain's cut reaches past both ends of the way: each end lies partway up a bank, 6 m below the street.
+    const cut = { async load() {}, at: ([x]: Point) => Math.min(205, Math.max(195, x < east(12)[0] ? 205 - (x - east(-6)[0]) / (east(4)[0] - east(-6)[0]) * 10 : 195 + (x - east(20)[0]) / (east(30)[0] - east(20)[0]) * 10)) }
+    const build = (kind: Way['kind']) => buildDecks(input({
+      ways: [way(1, 0, 24, kind)],
+      onGround: new Set([key(east(0)), key(east(24))]),
+      crossed: [
+        { kind, points: [east(-60), east(0)] },
+        { kind, points: [east(24), east(80)] },
+        { kind: 'road', points: [east(-3, -40), east(-3), east(-3, 40)] },
+        { kind: 'road', points: [east(27, -40), east(27), east(27, 40)] },
+      ],
+    }), cut)
+    for (const kind of ['road', 'path'] as const) {
+      const [deck] = (await build(kind)).filter(d => d.ways.includes(1))
+      expect(deck).toBeDefined()
+      for (const h of deck.heights) expect(Math.abs(h - 205)).toBeLessThan(0.5)
+      expect(Math.min(...deck.caps!)).toBeLessThanOrEqual(-4)
+    }
+  })
+
   it('a deck over another clears it, and a ramp rests on the deck it joins', async () => {
     const upper: Way = { id: 3, points: [east(100, -300), east(100, 300)], kind: 'road', layer: 2, width: 8 }
     const ramp: Way = { id: 9, points: [east(60, -80), east(60, -1)], kind: 'road', layer: 1, width: 6 }
