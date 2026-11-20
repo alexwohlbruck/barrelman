@@ -10,6 +10,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.10.54] - 2026-11-19
+
 ### Fixed
 
 * Tiles and searches no longer stall for seconds every time MOTIS polls realtime: the relay rewrites feeds on a worker thread.
