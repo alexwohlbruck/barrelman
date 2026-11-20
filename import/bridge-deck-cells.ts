@@ -225,7 +225,7 @@ export async function inputFor(sql: Sql, rows: Row[]): Promise<DeckInput> {
   const ids = rows.map(r => r.id)
   const crossable = sql`g.geom_type = 'line' AND COALESCE(g.tags->>'bridge', 'no') = 'no' AND COALESCE(g.tags->>'tunnel', 'no') = 'no'
       AND COALESCE(g.tags->>'location', '') NOT IN ('underground', 'underwater')`
-  const crossedRows: Array<{ kind: Crossed['kind']; coords: number[][][]; width: string | null; lanes: string | null }> = await sql`
+  const crossedRows: Array<{ kind: Crossed['kind']; coords: number[][][]; width: string | null; lanes: string | null; covered: boolean }> = await sql`
     WITH pieces AS MATERIALIZED (
       SELECT ST_Subdivide(geom, 8) AS piece FROM geo_places WHERE osm_type = 'W' AND osm_id = ANY(${ids}::bigint[]) AND geom_type = 'line'
       -- and round each end as far as a deck reads the road beyond it, for the junctions there.
@@ -234,18 +234,19 @@ export async function inputFor(sql: Sql, rows: Row[]): Promise<DeckInput> {
         LATERAL (VALUES (ST_StartPoint(geom)), (ST_EndPoint(geom))) v(e)
       WHERE osm_type = 'W' AND osm_id = ANY(${ids}::bigint[]) AND geom_type = 'line')
     SELECT DISTINCT ON (g.osm_type, g.osm_id) bridge_deck_class(g.tags) AS kind, ST_AsGeoJSON(ST_Multi(g.geom))::json->'coordinates' AS coords,
-           g.tags->>'width' AS width, g.tags->>'lanes' AS lanes
+           g.tags->>'width' AS width, g.tags->>'lanes' AS lanes, g.tags->>'covered' = 'yes' AS covered
     FROM pieces JOIN geo_places g ON g.geom && piece AND ST_Intersects(g.geom, piece)
     WHERE g.tags ? 'highway' AND ${crossable} AND bridge_deck_class(g.tags) IS NOT NULL
     UNION ALL
     SELECT CASE WHEN g.tags ? 'waterway' THEN 'water' ELSE bridge_deck_class(g.tags) END, ST_AsGeoJSON(ST_Multi(g.geom))::json->'coordinates',
-           g.tags->>'width', g.tags->>'lanes'
+           g.tags->>'width', g.tags->>'lanes', g.tags->>'covered' = 'yes'
     FROM geo_places g
     WHERE (${anyTag(sql, UNDER)}) AND g.geom && ${box} AND NOT g.tags ? 'highway' AND ${crossable}`
   const crossed: Crossed[] = crossedRows.flatMap(r => r.coords.map(line => ({
     kind: r.kind,
     points: line.map(([lng, lat]) => mercator(lng, lat)),
     ...(r.kind === 'water' ? {} : { half: wayHalf(r.kind, metres(r.width), r.lanes) }),
+    ...(r.covered ? { covered: true } : {}),
   })))
   // Carriageways on the ground a deck's way passes over, which its supports keep off.
   // Within a wide deck's half width of its way, so a road under one edge is found too; holes kept, as medians.

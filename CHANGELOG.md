@@ -10,6 +10,10 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Fixed
+
+* Streets on a lid over a sunken motorway, like Atlanta's Memorial Drive over the Downtown Connector, lie on the lid instead of standing up to 6 m above it, and roads crossing at a junction there meet at one height. Ramps and parking aisles on such a lid cover their own lanes, not the whole bridge. Rebuild the bridge decks after upgrading.
+
 ## [0.10.53] - 2026-11-19
 
 ### Fixed
