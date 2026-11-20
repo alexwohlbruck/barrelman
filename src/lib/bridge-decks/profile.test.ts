@@ -179,6 +179,11 @@ describe('landing', () => {
     expect(land).toEqual({ height: expect.closeTo(277.08, 1), run: 6, bank: true })
   })
 
+  it('takes no hillside climbing on past a ledge for a bank, as over a tunnel\'s portal', () => {
+    // Bay Bridge at Yerba Buena Island: the ground levels for a few metres, then climbs on over the tunnel.
+    expect(landing(road(s => (s <= 8 ? 57.5 + s * 1.6 : s <= 12 ? 70.3 : 70.3 + (s - 12) * 0.9)), 57.5)).toBeNull()
+  })
+
   it('tells a bank climbing from the end from a hollow the road dips through', () => {
     expect(landing(road(s => Math.min(205, 199 + s)), 199)?.bank).toBe(true)
     expect(landing(road(s => (s < 12 ? 193 : 200)), 193)?.bank).toBe(false)

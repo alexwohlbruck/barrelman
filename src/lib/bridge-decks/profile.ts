@@ -560,10 +560,11 @@ export function besideGround(centre: number[], left: number[], right: number[], 
 /**
  * Where a grounded end's road is read beyond it (metres out, every `step`), the
  * stretch fitted for its level, how far below that level the end's own ground
- * must lie to be a hole, the most a deck runs on to cross one, and the grade,
- * steeper than a street's, past which ground climbing from the end is a bank.
+ * must lie to be a hole, the most a deck runs on to cross one, the grade,
+ * steeper than a street's, past which ground climbing from the end is a bank,
+ * and how far past a bank's top the ground must climb no steeper.
  */
-export const LANDING = { step: 2, reach: 40, from: 16, to: 36, hole: 0.6, run: 25, bank: 0.2 }
+export const LANDING = { step: 2, reach: 40, from: 16, to: 36, hole: 0.6, run: 25, bank: 0.2, top: 8 }
 
 /** How far out, and how high, a grounded end's road runs on to; `bank` where the end lies on the bank of a cut rather than in a hollow. */
 export type Landing = { height: number; run: number; bank: boolean }
@@ -609,11 +610,17 @@ function levelled(beyond: number[], end: number): Landing | null {
   return run > LANDING.run || !(dipped || out === 0) ? null : { height: level(run), run, bank: climbed(beyond, end) >= out }
 }
 
-/** Where ground climbing from the end steeper than a street stops climbing: the top of the bank, where a road beyond that is not level resumes. */
+/**
+ * Where ground climbing from the end steeper than a street stops climbing: the
+ * top of the bank, where a road beyond that is not level resumes. Ground still
+ * climbing so just past it is a hillside, as over a tunnel's portal.
+ */
 function bankTop(beyond: number[], end: number): Landing | null {
   const top = climbed(beyond, end)
   const run = (top + 1) * LANDING.step
-  return top < 0 || run > LANDING.run || beyond[top] - end < LANDING.hole ? null : { height: beyond[top], run, bank: true }
+  if (top < 0 || run > LANDING.run || beyond[top] - end < LANDING.hole) return null
+  const past = beyond.slice(top + 1, top + 1 + LANDING.top / LANDING.step)
+  return past.some((z, j) => z - beyond[top] > LANDING.bank * (j + 1) * LANDING.step) ? null : { height: beyond[top], run, bank: true }
 }
 
 /** What a deck must stand clear of at a distance along it: an absolute height for its surface. */
