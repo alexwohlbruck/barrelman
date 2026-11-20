@@ -25,7 +25,7 @@
         "lucia": "^3.2.2",
         "nodemailer": "^10.3.1",
         "oslo": "^1.2.1",
-        "postgres": "^3.4.5",
+        "postgres": "^4.1.0",
       },
       "devDependencies": {
         "@types/pg": "^8.11.11",
@@ -796,7 +796,7 @@
 
     "polyclip-ts": ["polyclip-ts@0.16.8", "", { "dependencies": { "bignumber.js": "^9.1.0", "splaytree-ts": "^1.0.2" } }, "sha512-JPtKbDRuPEuAjuTdhR62Gph7Is2BS1Szx69CFOO3g71lpJDFo78k4tFyi+qFOMVPePEzdSKkpGU3NBXPHHjvKQ=="],
 
-    "postgres": ["postgres@3.4.9", "", {}, "sha512-GD3qdB0x1z9xgFI6cdRD6xu2Sp2WCOEoe3mtnyB5Ee0XrrL5Pe+e4CCnJrRMnL1zYtRDZmQQVbvOttLnKDLnaw=="],
+    "postgres": ["postgres@4.1.0", "", {}, "sha512-s+0WH67YAyLdBQUb6XczbziBhY+C9uiQsg9S8R5RHdZhk6sdyK6202E+T2tXpiInSEEjDLRSJ3OpYBe3PN6MsQ=="],
 
     "postgres-array": ["postgres-array@2.0.0", "", {}, "sha512-VpZrUqU5A69eQyW2c5CA1jtLecCsN2U/bD6VilrFDWq5+5UIEVO7nazS3TEcHf1zuPYO/sqGvUvW62g86RXZuA=="],
 
