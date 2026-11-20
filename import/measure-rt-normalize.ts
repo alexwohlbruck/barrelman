@@ -1,6 +1,8 @@
 #!/usr/bin/env bun
 /**
  * Decide which realtime URLs MOTIS should poll through barrelman's matcher.
+ * Run by hand, it first re-selects the URLs that serve each feed, as an
+ * import does.
  *
  * A URL is marked `normalize` when matching its updates to the timetable by
  * stop times reaches trains that MOTIS's exact trip_id lookup would drop.
@@ -23,6 +25,7 @@ import { fetchRealtime } from '../src/services/rt-normalize.service'
 import { indexFromZip } from '../src/lib/rt-normalize/feed-codec'
 import { normalizeFeed, type NormalizeStats } from '../src/lib/rt-normalize/normalize'
 import { isTripUpdates } from '../src/lib/rt-normalize/motis-sources'
+import { selectRealtime } from './select-realtime'
 
 /** Whether the matcher reaches enough trains MOTIS would otherwise drop. */
 export const worthNormalizing = (s: NormalizeStats) =>
@@ -90,7 +93,7 @@ async function main() {
   })
 
   const feeds = await db
-    .select({ feedId: gtfsFeeds.feedId, rtUrls: gtfsFeeds.rtUrls })
+    .select({ feedId: gtfsFeeds.feedId, name: gtfsFeeds.name, rtUrls: gtfsFeeds.rtUrls })
     .from(gtfsFeeds)
     .where(args['feed-id']
       ? eq(gtfsFeeds.feedId, args['feed-id'])
@@ -102,7 +105,9 @@ async function main() {
     if (!existsSync(zip) || !feed.rtUrls?.length) continue
     console.log(`Feed ${feed.feedId}`)
     try {
-      const rtUrls = await measureRtNormalize(readFileSync(zip), feed.rtUrls)
+      const buffer = readFileSync(zip)
+      const selected = await selectRealtime(buffer, { feedId: feed.feedId, name: feed.name ?? undefined, rtUrls: feed.rtUrls })
+      const rtUrls = await measureRtNormalize(buffer, selected)
       if (rtUrls?.some(rt => rt.normalize)) marked++
       if (!args['dry-run']) await db.update(gtfsFeeds).set({ rtUrls }).where(eq(gtfsFeeds.feedId, feed.feedId))
     } catch (err) {
