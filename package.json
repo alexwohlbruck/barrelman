@@ -50,6 +50,6 @@
     "@types/pg": "^8.11.11",
     "bun-types": "latest",
     "drizzle-kit": "^0.31.11",
-    "typescript": "^5.7.0"
+    "typescript": "^7.0.2"
   }
 }
