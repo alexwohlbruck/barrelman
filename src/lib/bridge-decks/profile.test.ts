@@ -125,6 +125,15 @@ describe('absorbPaths', () => {
     const walkway: Chain = { ways: [2], points: [east(0, 11), east(40, 11)], kind: 'path', layer: 1, edges: [1.5, 1.5] }
     expect(absorbPaths([road, walkway])).toHaveLength(2)
   })
+
+  it('folds in a road\'s own sidewalk across a carriageway wider than its lanes, into the nearer of two roads', () => {
+    const road = (id: number, north: number): Chain => ({ ways: [id], points: resample([east(0), east(100)].map(p => [p[0], east(0, north)[1]] as Point), 6), kind: 'road', layer: 1, edges: [4, 4] })
+    const walk = (sidewalk: boolean): Chain => ({ ways: [3], points: [east(0, 9.5), east(40, 9.5)], kind: 'path', layer: 1, edges: [1.5, 1.5], ...(sidewalk ? { sidewalk } : {}) })
+    expect(absorbPaths([road(1, 0), walk(false)])).toHaveLength(2)
+    expect(absorbPaths([road(1, 0), walk(true)])).toHaveLength(1)
+    const decks = absorbPaths([road(1, 0), road(2, 16), walk(true)])
+    expect(decks.find(d => d.ways.includes(3))?.ways[0]).toBe(2)
+  })
 })
 
 describe('absorbTracks', () => {

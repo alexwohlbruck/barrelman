@@ -37,6 +37,8 @@ export type Way = {
   pins?: Array<{ vertex: number; height: number; under?: boolean }>
   /** Its own `ele`, a least height for its deck at its middle. */
   ele?: number
+  /** Mapped as a road's sidewalk (`footway=sidewalk`). */
+  sidewalk?: boolean
 }
 
 /** A height a deck stands at exactly, at a distance along it: a node tagged `ele`. */
@@ -64,6 +66,8 @@ export type Chain = {
   paths?: Array<{ side: 0 | 1; out: number; from: number; to: number }>
   /** Its ways' nodes tagged `ele`, by where they lie. */
   pins?: Array<{ point: Point; height: number; under?: boolean }>
+  /** Every way of it mapped as a road's sidewalk. */
+  sidewalk?: boolean
 }
 
 /** Steepest a deck climbs, as a grade. */
@@ -239,7 +243,7 @@ export function chains(ways: Way[]): Chain[] {
     const pins = [...shared.values()]
     out.push({
       ways: members.map(m => m.id), points, kind: start.kind, layer: Math.max(...members.map(m => m.layer)), edges: [width / 2, width / 2], road: members.find(m => m.road)?.road,
-      ...(pins.length ? { pins } : {}),
+      ...(pins.length ? { pins } : {}), ...(members.every(m => m.sidewalk) ? { sidewalk: true } : {}),
     })
   }
   return out
@@ -338,13 +342,20 @@ export function fitEdges(decks: Chain[], outline: Point[], rivals: Chain[] = [])
   })
 }
 
-/** Farthest a sidewalk's near edge may lie past a road deck's edge and still be part of its deck, in metres: beyond, it is a walkway of its own. */
+/**
+ * Farthest a path's near edge may lie past a road deck's edge and still be part
+ * of its deck, in metres: beyond, it is a walkway of its own. A way mapped as
+ * the road's sidewalk reaches farther, as a carriageway is often wider than its
+ * lanes give.
+ */
 const ABUTTING = 2
+const SIDEWALK_REACH = 6
 
 /**
  * Sidewalks and cycle tracks mapped as bridges of their own beside a road
- * bridge, folded into its deck (`paths`): the deck widens to take them in
- * where they run beside it (see `widen`), not along the whole of it.
+ * bridge, folded into the nearest road deck they abut (`paths`): the deck
+ * widens to take them in where they run beside it (see `widen`), not along the
+ * whole of it.
  */
 export function absorbPaths(decks: Chain[]): Chain[] {
   const roads = decks.filter(d => d.kind === 'road').map(d => ({ ...d, ways: [...d.ways], paths: [...(d.paths ?? [])] }))
@@ -356,14 +367,17 @@ export function absorbPaths(decks: Chain[]): Chain[] {
     }
     const samples = path.points.flatMap((p, i) => (i ? [[(p[0] + path.points[i - 1][0]) / 2, (p[1] + path.points[i - 1][1]) / 2] as Point, p] : [p]))
     const width = path.edges[0] + path.edges[1]
-    const host = roads.find(road => {
-      if (road.layer !== path.layer) return false
+    const reach = path.sidewalk ? SIDEWALK_REACH : ABUTTING
+    let [host, nearest] = [undefined as (typeof roads)[number] | undefined, Infinity]
+    for (const road of roads) {
+      if (road.layer !== path.layer) continue
       const near = samples.map(q => beside(road.points, q))
       const side = near[0].left
       const inside = near.filter(n => n.alongside).map(n => n.distance)
-      return inside.length >= near.length / 2 && Math.max(...inside) - Math.min(...inside) < 4 &&
-        near.every(n => n.left === side && n.distance - width / 2 < Math.max((road.fit ?? road.edges)[side ? 0 : 1], 1) + ABUTTING)
-    })
+      const abuts = inside.length >= near.length / 2 && Math.max(...inside) - Math.min(...inside) < 4 &&
+        near.every(n => n.left === side && n.distance - width / 2 < Math.max((road.fit ?? road.edges)[side ? 0 : 1], 1) + reach)
+      if (abuts && Math.min(...inside) < nearest) [host, nearest] = [road, Math.min(...inside)]
+    }
     if (!host) {
       kept.push(path)
       continue
