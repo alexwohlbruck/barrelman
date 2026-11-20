@@ -18,6 +18,7 @@ import type { Dem } from '../src/lib/bridge-decks/dem'
 import { clip, contains, degreeBox, toDegrees, toUnits, UNITS_PER_DEGREE, type UnitBox, type UnitPoint } from '../src/lib/bridge-decks/grid'
 import type { Built } from '../src/lib/bridge-decks/queue'
 import { clearance, deckLevel, metres, TOWER, type Seamark, type Support } from '../src/lib/bridge-decks/elevation'
+import { geoidGap, terrainHeight } from '../src/lib/bridge-decks/datum'
 import { inside, lngLat, mercator, metresPerUnit, type Kind, type Point, type Way } from '../src/lib/bridge-decks/profile'
 
 type Sql = postgres.Sql
@@ -86,7 +87,11 @@ function toWay(r: Row, pins: Map<string, number>): Way {
     const height = pins.get(c.join(','))
     return height === undefined ? [] : [{ vertex, height, ...(r.covered === 'yes' ? { under: true } : {}) }]
   })
-  const ele = metres(r.ele)
+  // OSM's `ele` is above EGM96 and the terrain is on its source's datum, so it is converted (datum.ts). A way's is
+  // converted at its middle vertex, near where wayEle in build.ts takes it: the gap changes by millimetres along a bridge.
+  const middle = r.coords[Math.floor(r.coords.length / 2)]
+  const taggedEle = metres(r.ele)
+  const ele = taggedEle === null ? null : terrainHeight(taggedEle, middle[0], middle[1])
   return {
     id: Number(r.id), points: r.coords.map(([lng, lat]) => mercator(lng, lat)), kind, layer: Math.max(1, layer || 1), untagged: Number.isNaN(layer), width, road: r.road ?? undefined,
     ...(vertices.length ? { pins: vertices } : {}), ...(ele !== null ? { ele } : {}),
@@ -94,7 +99,7 @@ function toWay(r: Row, pins: Map<string, number>): Way {
 }
 
 /**
- * The heights tagged `ele` on the nodes of ways, by position as the
+ * The heights tagged `ele` on the nodes of ways, in the terrain's datum, by position as the
  * ways' coordinates give it. A node with any tag at all, `ele` alone among
  * them, is a point row of its own in geo_places, at exactly its way's vertex:
  * so nodes are found without osm2pgsql's middle tables, which a flat-nodes
@@ -109,7 +114,7 @@ export async function nodeHeights(sql: Sql, ids: string[]): Promise<Map<string, 
     WHERE g.osm_type = 'N' AND g.geom_type = 'point' AND g.tags ? 'ele'`
   return new Map(rows.flatMap(r => {
     const height = metres(r.ele)
-    return height === null ? [] : [[r.coords.join(','), height] as [string, number]]
+    return height === null ? [] : [[r.coords.join(','), terrainHeight(height, r.coords[0], r.coords[1])] as [string, number]]
   }))
 }
 
@@ -209,7 +214,8 @@ export async function inputFor(sql: Sql, rows: Row[]): Promise<DeckInput> {
     const shape = rings.map(ring => ring.map(([lng, lat]) => mercator(lng, lat)))
     const near = SUPPORT_NEAR / metresPerUnit(shape[0][0][1])
     const mine = supports.filter(s => s.ring.some(p => inside(p, shape[0]) || shape[0].some(q => Math.hypot(q[0] - p[0], q[1] - p[1]) < near)))
-    return { id: o.id, rings: shape, ...deckLevel(o.tags, mine) }
+    const [lng, lat] = rings[0][0]
+    return { id: o.id, rings: shape, ...deckLevel(o.tags, mine, undefined, geoidGap(lng, lat) ?? 0) }
   }))
 
   const [{ surfaces }] = await sql`SELECT to_regclass('road_surfaces') IS NOT NULL AS surfaces`

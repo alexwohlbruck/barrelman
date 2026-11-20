@@ -33,7 +33,7 @@ export type Way = {
   width: number
   /** The road it carries, by class and ref or name, so a junction carries the road on rather than a ramp that happens to run straighter. */
   road?: string
-  /** Its nodes tagged `ele`: the vertex, and the deck's height there in metres above sea level; `under` a roof, on a covered way. */
+  /** Its nodes tagged `ele`: the vertex, and the deck's height there in metres in the terrain's datum (see datum.ts); `under` a roof, on a covered way. */
   pins?: Array<{ vertex: number; height: number; under?: boolean }>
   /** Its own `ele`, a least height for its deck at its middle. */
   ele?: number
