@@ -14,6 +14,11 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 * Indigenous lands — reserves, Inuit Owned Lands and other tribal and settlement lands — are served as map tiles, each parcel labelled in its Indigenous-language name where one is tagged. Restart Martin after upgrading so it picks up the new sources.
 
+### Fixed
+
+* Service alerts reach transit routing from feeds that name a route the way MOTIS rejects, such as NYC Bus Time's, instead of the whole feed being dropped each poll.
+* MOTIS stops polling other systems' realtime that an operator lists for every one of its systems, such as BC Transit's 32, which slowed its update cycle. Run **Measure Realtime Matching**, then regenerate the MOTIS config, after upgrading.
+
 ## [0.10.55] - 2026-11-20
 
 ### Fixed

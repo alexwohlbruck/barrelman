@@ -433,6 +433,17 @@ expected wherever one operator publishes several feeds. `unauthorized` means
 the URL answered 401 or 403: set its secret in `GTFS_RT_CREDENTIALS`, keyed by
 the realtime feed's onestop id, and re-import.
 
+Alert URLs are judged the same way, by the routes and stops their alerts name;
+one whose alerts name only agencies, or nothing yet, is kept. Selection fetches
+at most four URLs from one host at a time, since an operator that lists every
+system's feeds otherwise sees a burst it throttles, and a throttled answer
+can't be judged.
+
+MOTIS rejects a whole alerts message when one alert names a route through a
+trip descriptor that lacks a `trip_id` and the start date and time the spec
+requires without one. Selection marks such a URL `repairAlerts`, and the relay
+restates those descriptors as the route and direction selectors they mean.
+
 Where the feed's operator also publishes another static feed that Transitland
 keeps out of regional queries, the import tries it in the feed's place. It is
 kept only if it serves exactly the same routes and, aligned against the same
