@@ -860,8 +860,8 @@ async function groundUnder(shaped: Chain[], edges: Array<[Point[], Point[]]>, gr
 
 /**
  * The deck an end rests on, of those within reach of it: one it shares an
- * OSM node with (for a track, one running on through it before one ending
- * there too: at a switch, two tracks ending on each other each hold only the
+ * OSM node with (one running on through it before one ending there too: at a
+ * switch or a junction, two decks ending on each other each hold only the
  * other's guess), else one of its own layer, and of those the nearest. Taking
  * whichever came first let a ramp settle on a lower deck it merely passes
  * over rather than the one it joins.
@@ -876,7 +876,7 @@ function restingOn(s: Solved, end: 0 | 1, solved: Solved[]): { height: number; o
     if (!covers(grow(box(o.chain.points), reach), p)) continue
     const near = beside(o.chain.points, p)
     if (near.distance > reach) continue
-    const shares = o.nodes.has(node) ? (s.chain.kind === 'rail' && !o.ends.some(e => key(e) === node) ? 0 : 1) : 2
+    const shares = o.nodes.has(node) ? (!o.ends.some(e => key(e) === node) ? 0 : 1) : 2
     const rank = shares * 2 + (o.chain.layer === s.chain.layer ? 0 : 1)
     if (!best || rank < best.rank || (rank === best.rank && near.distance < best.near.distance)) best = { o, near, rank }
   }
