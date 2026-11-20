@@ -10,6 +10,10 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Added
+
+* Indigenous lands — reserves, Inuit Owned Lands and other tribal and settlement lands — are served as map tiles, each parcel labelled in its Indigenous-language name where one is tagged. Restart Martin after upgrading so it picks up the new sources.
+
 ## [0.10.55] - 2026-11-20
 
 ### Fixed

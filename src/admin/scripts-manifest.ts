@@ -439,6 +439,19 @@ export const SCRIPTS: ScriptDef[] = [
     notes: 'Runs after every OSM update.',
   },
   {
+    id: 'osm-aboriginal-lands',
+    name: 'Refresh Indigenous Lands',
+    description: 'Rebuild the aboriginal_lands view: reserves, Inuit Owned Lands and other Indigenous lands, one row per parcel with its label point.',
+    category: 'osm',
+    danger: 'safe',
+    longRunning: true,
+    confirm: false,
+    exclusive: true,
+    exec: { kind: 'process', command: 'bash', args: ['scripts/refresh-view.sh', 'aboriginal_lands'] },
+    source: 'scripts/refresh-view.sh',
+    notes: 'Runs after every OSM update.',
+  },
+  {
     id: 'osm-basemap',
     name: 'Rebuild Basemap',
     description:
