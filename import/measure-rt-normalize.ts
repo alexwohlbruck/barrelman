@@ -19,7 +19,8 @@ import { join } from 'path'
 import { eq, sql } from 'drizzle-orm'
 import { db } from '../src/db'
 import { gtfsFeeds, type RtUrlEntry } from '../src/schema/gtfs'
-import { fetchRealtime, indexFromZip } from '../src/services/rt-normalize.service'
+import { fetchRealtime } from '../src/services/rt-normalize.service'
+import { indexFromZip } from '../src/lib/rt-normalize/feed-codec'
 import { normalizeFeed, type NormalizeStats } from '../src/lib/rt-normalize/normalize'
 
 /** Whether the matcher reaches enough trains MOTIS would otherwise drop. */
