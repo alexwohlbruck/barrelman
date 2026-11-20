@@ -10,6 +10,12 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Fixed
+
+* Tiles and searches no longer stall for seconds every time MOTIS polls realtime: the relay rewrites feeds on a worker thread.
+* MOTIS stops polling vehicle-position URLs it never reads, and trip-update URLs that match nothing in their feed's timetable. Run **Measure Realtime Matching**, then regenerate the MOTIS config, after upgrading.
+* The throttle's penalty flush no longer fails on every tick.
+
 ## [0.10.53] - 2026-11-19
 
 ### Fixed
