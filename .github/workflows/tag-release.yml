@@ -52,7 +52,7 @@ jobs:
       # for a version that was already tagged but never actually shipped.
       release: ${{ steps.check_tag.outputs.exists == 'false' || inputs.force == true }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Extract version from package.json
         id: version
