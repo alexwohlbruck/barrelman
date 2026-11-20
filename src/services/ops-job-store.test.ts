@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { buildQueuePlacements, type QueueRow } from './ops-job-store'
+import { buildQueuePlacements, MAX_NAMED_STAGES, nextStages, type QueueRow } from './ops-job-store'
 import { isExclusive } from './job-invocation'
 import { getScript } from '../admin/scripts-manifest'
 
@@ -50,5 +50,18 @@ describe('isExclusive', () => {
 
   it('leaves short scripts free to queue behind each other', () => {
     expect(isExclusive(getScript('db-post-import')!)).toBe(false)
+  })
+})
+
+describe('nextStages', () => {
+  it('carries earlier stage names forward as later markers arrive', () => {
+    const first = nextStages(null, { index: 1, total: 3, name: 'Download' })
+    expect(nextStages(first, { index: 2, total: 3, name: 'Import' }).labels).toEqual(['Download', 'Import', ''])
+  })
+
+  it('keeps no names for a script that counts thousands of cells as stages', () => {
+    const many = nextStages(null, { index: 5, total: 236893, name: 'cell -5333,1587' })
+    expect(many).toEqual({ index: 5, total: 236893, labels: [] })
+    expect(nextStages(null, { index: 1, total: MAX_NAMED_STAGES, name: 'a' }).labels).toHaveLength(MAX_NAMED_STAGES)
   })
 })
