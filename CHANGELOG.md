@@ -14,16 +14,12 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ### Fixed
 
-<<<<<<< HEAD
 * An OSM update that stops after applying its diffs no longer loses the rest of its work: a failed view refresh no longer aborts the run, and the next run finishes the refreshes, bridge decks and rebuilds it still owed instead of finding nothing new and skipping them.
 * The console's job history loads again: the list no longer carries every stage name of each past run (one nightly update had kept 236,893), and a list that fails to load says why instead of showing no jobs.
-=======
-* Bridge decks pinned by OSM `ele` tags stand at the height those tags give in the conterminous US. They no longer stand 0.1–1.2 m too high: about 0.5 m too high in Cleveland, 0.75 m in Minneapolis and Nashville, 0.8 m in Pittsburgh and 1.2 m in New Orleans. OSM defines `ele` as height above the EGM96 geoid, but the US terrain is USGS 3DEP on NAVD88. Barrelman now converts each `ele` on a bridge's nodes, ways and `man_made=bridge` outline by the GEOID18 − EGM96 difference there, from a small grid shipped in `config/geoid/`. Outside the conterminous US, including Canada and Mexico, `ele` is used as before. After upgrading, run "Queue Bridge Decks Tagged ele" in the console, then "Update Bridge Decks" (or let the next OSM Update do it), so decks built before the upgrade are rebuilt. Road beds read the same `ele` pins, so also run "Build Road Beds" over any area where they hold a road under another road or deck to its tagged heights.
 
 ## [0.10.54] - 2026-11-19
 
 ### Fixed
->>>>>>> origin/main
 
 * Tiles and searches no longer stall for seconds every time MOTIS polls realtime: the relay rewrites feeds on a worker thread.
 * MOTIS stops polling vehicle-position URLs it never reads, and trip-update URLs that match nothing in their feed's timetable. Run **Measure Realtime Matching**, then regenerate the MOTIS config, after upgrading.
