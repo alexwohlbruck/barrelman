@@ -11,7 +11,7 @@ import { envString } from '../config/env'
 import { decodeFeed } from '../lib/rt-normalize/feed-codec'
 import type { NormalizedFeed } from '../lib/rt-normalize/rewrite'
 import { workerRewriter } from '../lib/rt-normalize/rewrite-worker'
-import { viaRelay } from '../lib/rt-normalize/motis-sources'
+import { isTripUpdates, viaRelay } from '../lib/rt-normalize/motis-sources'
 import type { LiveFeed } from '../lib/rt-normalize/exact-times'
 import { rtEgressProxy } from './rt-url-selection'
 
@@ -108,7 +108,6 @@ export async function getNormalizedFeed(feedId: string, urlIndex: number): Promi
   return latest(`${feedId}/${urlIndex}`, () => relay(feedId, rt))
 }
 
-const isTripUpdates = (rt: RtUrlEntry) => rt.type === 'tripUpdates' || rt.type === undefined
 const callIndexes = new WeakMap<Uint8Array, Promise<LiveFeed>>()
 
 /**
