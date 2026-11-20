@@ -21,6 +21,10 @@ function stateOf(i: number): StageState {
 }
 
 const anyLabels = computed(() => stages.value?.labels.some((l) => l) ?? false)
+/** Past this many stages a bar segment per stage is too thin to see, and too many to draw. */
+const MAX_SEGMENTS = 64
+const segmented = computed(() => (stages.value?.total ?? 0) <= MAX_SEGMENTS)
+const fraction = computed(() => (done.value ? 1 : Math.max(0, (stages.value?.index ?? 1) - 1) / (stages.value?.total || 1)))
 </script>
 
 <template>
@@ -33,8 +37,12 @@ const anyLabels = computed(() => stages.value?.labels.some((l) => l) ?? false)
       </span>
     </div>
 
+    <div v-if="!segmented" class="h-1.5 overflow-hidden rounded-full bg-muted">
+      <div class="h-full rounded-full" :class="failed ? 'bg-destructive' : 'bg-primary'" :style="{ width: `${fraction * 100}%` }" />
+    </div>
+
     <!-- segmented bar: one slot per stage -->
-    <div class="flex gap-1">
+    <div v-else class="flex gap-1">
       <div
         v-for="i in stages.total"
         :key="i"

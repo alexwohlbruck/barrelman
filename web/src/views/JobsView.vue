@@ -8,7 +8,7 @@ import QueuePosition from '@/components/jobs/QueuePosition.vue'
 import Badge from '@/components/ui/Badge.vue'
 import Card from '@/components/ui/Card.vue'
 import Button from '@/components/ui/Button.vue'
-import { jobs, jobStats, refreshJobs } from '@/lib/store'
+import { jobs, jobStats, jobsError, refreshJobs } from '@/lib/store'
 import { formatDuration, timeAgo, formatClock } from '@/lib/utils'
 import type { JobStatus } from '@/lib/types'
 
@@ -81,7 +81,8 @@ onMounted(refreshJobs)
     <Card>
       <div v-if="!filtered.length" class="flex flex-col items-center gap-2 py-16 text-muted-foreground">
         <Inbox class="size-8 opacity-40" />
-        <span class="text-sm">No {{ filter === 'all' ? '' : filter }} jobs</span>
+        <span v-if="jobsError" class="max-w-md text-center text-sm text-destructive">Couldn't load jobs: {{ jobsError }}</span>
+        <span v-else class="text-sm">No {{ filter === 'all' ? '' : filter }} jobs</span>
       </div>
       <RouterLink
         v-for="job in filtered"
