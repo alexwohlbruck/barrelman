@@ -208,17 +208,15 @@ describe('buildDecks on a lid over a sunken road', () => {
     ways: [way(1, 0, 300)], outlines: [lid], onGround: new Set([key(east(0)), key(east(300))]), crossed,
   }), terrain).then(([deck]) => Math.max(...deck.heights))
 
-  it('stays on the lid over a road under it, cleared from the road\'s own level beyond it', async () => {
+  it('stays on the lid over a covered road under it, cleared from the road\'s own level beyond it', async () => {
     expect(await street([motorway(true)])).toBeLessThan(200.5)
-    // Untagged, the terrain standing LID above the road either side gives the lid away.
-    expect(await street([motorway()])).toBeLessThan(200.5)
-    // Where the terrain is the road's, the deck climbs clear of it.
-    expect(await street([motorway()], ground(200))).toBeGreaterThan(200 + CLEARANCE.road - 0.5)
+    // A road not mapped as covered is cleared from the terrain under the deck, as an elevated line's streets are.
+    expect(await street([motorway()])).toBeGreaterThan(200 + CLEARANCE.road - 0.5)
   })
 
   it('reads the road through the ways it is split into under the lid', async () => {
     const [a, b, c] = [[east(150, -200), east(150, -20)], [east(150, -20), east(150, 20)], [east(150, 20), east(150, 200)]]
-    expect(await street([a, b, c].map(points => ({ kind: 'road' as const, points })))).toBeLessThan(200.5)
+    expect(await street([a, b, c].map(points => ({ kind: 'road' as const, points, covered: true })))).toBeLessThan(200.5)
   })
 
   it('reads a road climbing out from under the lid at its level there, between its two sides by distance', async () => {

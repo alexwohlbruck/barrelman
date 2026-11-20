@@ -279,7 +279,7 @@ function fixedNeeds(s: Pick<Solved, 'chain' | 'd' | 'g' | 'pins'>, input: DeckIn
   const depth = s.chain.kind === 'rail' ? TRACK_DEPTH : 0
   for (const { kind, at, level, covered } of crossedBy.get(s.chain) ?? []) {
     const under = heightAt(s.d, s.g, at)
-    out.push({ at, height: (level !== null && (covered || under - level > LID) ? Math.min(level, under) : under) + CLEARANCE[kind] + depth })
+    out.push({ at, height: (level !== null && covered ? Math.min(level, under) : under) + CLEARANCE[kind] + depth })
   }
   const water = input.water.filter(ring => meet(own, box(ring)))
   if (water.length)
@@ -303,8 +303,6 @@ const crossedBy = new WeakMap<Chain, Array<{ kind: Crossed['kind']; at: number; 
 
 /** Metres past where a way leaves the bridge above it that its level is read: clear of the slab, which terrain blurs out to about a pixel or two. */
 const ROAD_OUT = 8
-/** Metres the terrain under a deck must stand above the way it crosses, read either side, to be the bridge itself rather than that way's ground. */
-const LID = 3
 /** Farthest from where a way crosses a deck that a node they share makes it a junction rather than a way passed over, in metres. */
 const MET = 3
 /** Farthest along a way below that its level is read, in metres. */
@@ -355,9 +353,8 @@ function walked(c: Crossed, at: number, sign: 1 | -1, metres: number, byEnd: Map
 /**
  * Each way a deck crosses, and its level: the terrain along it either side of
  * the bridge, ROAD_OUT past where it leaves the outline or the deck's edges.
- * Terrain keeps a bridge as wide as a lid over a sunken road as ground, and
- * there the terrain under the deck is the deck itself: so where OSM has the
- * way `covered`, or the terrain stands LID above it either side.
+ * Terrain keeps a bridge as wide as a lid over a sunken road as ground, so
+ * under a way OSM has `covered` the terrain is the deck itself, not the road.
  */
 async function crossedLevels(shaped: Fitted[], nodes: Array<Set<string>>, input: DeckInput, ground: Ground) {
   const byEnd = new Map<string, Crossed[]>()
@@ -866,7 +863,8 @@ async function groundUnder(shaped: Chain[], edges: Array<[Point[], Point[]]>, gr
  * The deck an end rests on, of those within reach of it: one it shares an
  * OSM node with (one running on through it before one ending there too: at a
  * switch or a junction, two decks ending on each other each hold only the
- * other's guess), else one of its own layer, and of those the nearest. Taking
+ * other's guess; a road, of its own layer first), else one of its own layer,
+ * and of those the nearest. Taking
  * whichever came first let a ramp settle on a lower deck it merely passes
  * over rather than the one it joins.
  */
@@ -880,8 +878,10 @@ function restingOn(s: Solved, end: 0 | 1, solved: Solved[]): { height: number; o
     if (!covers(grow(box(o.chain.points), reach), p)) continue
     const near = beside(o.chain.points, p)
     if (near.distance > reach) continue
-    const shares = o.nodes.has(node) ? (!o.ends.some(e => key(e) === node) ? 0 : 1) : 2
-    const rank = shares * 2 + (o.chain.layer === s.chain.layer ? 0 : 1)
+    const through = !o.ends.some(e => key(e) === node)
+    const level = o.chain.layer === s.chain.layer ? 0 : 1
+    // A track prefers one running through before one of its own layer; a road keeps to its layer first, as a ramp under a double deck's upper road does.
+    const rank = !o.nodes.has(node) ? 4 + level : s.chain.kind === 'rail' ? (through ? 0 : 2) + level : level * 2 + (through ? 0 : 1)
     if (!best || rank < best.rank || (rank === best.rank && near.distance < best.near.distance)) best = { o, near, rank }
   }
   if (!best) return null
