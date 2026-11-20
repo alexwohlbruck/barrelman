@@ -97,6 +97,26 @@ DB_URL="postgresql://barrelman@localhost:5432/barrelman"
 # as `docker exec`, container name included.
 db_exec() { docker exec -e PGPASSWORD="$DB_PASS" "$@"; }
 
+# What a replicated change still owes, kept in the database until it is done:
+# a run that dies after applying diffs leaves its views and rebuilds to the next
+# run, which would otherwise find nothing new and skip them. Holds the extract's
+# mtime from before the first unfinished run.
+owed_sql() { db_exec barrelman-db psql "$DB_URL" -qtAc "$1"; }
+owed_get() {
+  owed_sql "CREATE TABLE IF NOT EXISTS osm_update_owed (id int PRIMARY KEY DEFAULT 1 CHECK (id = 1), pbf_mtime bigint NOT NULL)"
+  owed_sql "SELECT pbf_mtime FROM osm_update_owed"
+}
+owed_set() { owed_sql "INSERT INTO osm_update_owed (pbf_mtime) VALUES ($1) ON CONFLICT (id) DO NOTHING"; }
+owed_clear() { owed_sql "DELETE FROM osm_update_owed"; }
+
+# A view or derived step that fails is reported and the rest go on; the run then
+# exits non-zero and leaves the work owed.
+DERIVED_RC=0
+derived_failed() {
+  DERIVED_RC=1
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] WARNING: $1 failed (see above). The rest of the update continues; the next run retries it." >&2
+}
+
 # The materialized map views, after the database changed. See refresh-view.sh.
 # Only buildings can be turned off; refresh-view.sh skips furniture without its index.
 # One layer's incremental update, when its switch (default $2) is on. A
@@ -120,14 +140,14 @@ run_incremental() {
 
 refresh_views() {
   if [ "${REFRESH_BUILDINGS_3D:-1}" = "1" ]; then
-    "$SCRIPT_DIR/refresh-view.sh" buildings_3d
+    "$SCRIPT_DIR/refresh-view.sh" buildings_3d || derived_failed "the buildings_3d refresh"
   else
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] 3D buildings refresh disabled (REFRESH_BUILDINGS_3D=0) — skipping."
   fi
-  "$SCRIPT_DIR/refresh-view.sh" street_furniture
-  "$SCRIPT_DIR/refresh-view.sh" sport_pitches
-  "$SCRIPT_DIR/refresh-view.sh" indoor_features
-  "$SCRIPT_DIR/refresh-view.sh" fixtures
+  local view
+  for view in street_furniture sport_pitches indoor_features fixtures; do
+    "$SCRIPT_DIR/refresh-view.sh" "$view" || derived_failed "the $view refresh"
+  done
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] Refreshing station labels..."
   (cd "$PROJECT_DIR" && nice -n 10 bun run import/refresh-station-labels.ts) \
     || echo "[$(date '+%Y-%m-%d %H:%M:%S')] WARNING: station labels refresh failed; the previous labels stay. Run \"Refresh Station Labels\"." >&2
@@ -351,6 +371,11 @@ if [ "$HAS_MIDDLE" != "t" ]; then
   fi
 
   PBF_MTIME_BEFORE=$(docker exec barrelman-db stat -c %Y "$PBF_FILE" 2>/dev/null || echo 0)
+  OWED="$(owed_get)"
+  if [ -n "$OWED" ]; then
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] An earlier update stopped before its views and rebuilds were done — doing them in this run."
+    PBF_MTIME_BEFORE="$OWED"
+  fi
   REPLICATION_LOG="$(mktemp)"
   trap 'rm -f "$REPLICATION_LOG"' EXIT
   # A failure is held until the follow-up steps have run: cycles that
@@ -374,17 +399,27 @@ if [ "$HAS_MIDDLE" != "t" ]; then
 
   # The derived columns were redone inside the swap; only the stored views and
   # the planner statistics are left.
-  if grep -q '^REPLICATION_APPLIED=1' "$REPLICATION_LOG"; then
+  if grep -q '^REPLICATION_APPLIED=1' "$REPLICATION_LOG" || [ "$PBF_MTIME_AFTER" != "$PBF_MTIME_BEFORE" ]; then
+    owed_set "$PBF_MTIME_BEFORE"
+  fi
+  if grep -q '^REPLICATION_APPLIED=1' "$REPLICATION_LOG" || [ -n "$OWED" ]; then
     refresh_views
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] Running ANALYZE..."
     db_exec barrelman-db psql "$DB_URL" -c "ANALYZE geo_places; ANALYZE bicycle_ways; ANALYZE bicycle_routes;"
   fi
 
   rebuild_consumers "$PBF_MTIME_BEFORE" "$PBF_MTIME_AFTER"
+  if [ "$DERIVED_RC" -eq 0 ] && [ "$GRAPHHOPPER_RC" -eq 0 ]; then
+    owed_clear
+  fi
   if [ "$REPLICATION_RC" -ne 0 ]; then
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: replication stopped partway (exit $REPLICATION_RC, see above)." >&2
     echo "  Cycles logged as applied are committed. The next run resumes from there." >&2
     exit "$REPLICATION_RC"
+  fi
+  if [ "$DERIVED_RC" -ne 0 ]; then
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: some views or derived layers failed (see the warnings above); the next run retries them." >&2
+    exit 1
   fi
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] OSM update complete."
   exit "$GRAPHHOPPER_RC"
