@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test'
 import type { NormalizeStats } from '../src/lib/rt-normalize/normalize'
-import { keepNormalizing } from './measure-rt-normalize'
+import { keepNormalizing, matchesNothing } from './measure-rt-normalize'
 
 const stats = (s: Partial<NormalizeStats>): NormalizeStats =>
   ({ updates: 0, exact: 0, dated: 0, matched: 0, added: 0, cancelled: 0, skipped: 0, reordered: 0, unresolved: 0, ...s })
@@ -16,5 +16,20 @@ describe('keepNormalizing', () => {
 
   it('does not turn a feed on from a small sample with nothing to repair', () => {
     expect(keepNormalizing(stats({ updates: 4, exact: 4 }), false)).toBe(false)
+  })
+})
+
+describe('matchesNothing', () => {
+  it('drops a URL whose updates name no trip in this timetable', () => {
+    expect(matchesNothing(stats({ updates: 40, unresolved: 40 }), false)).toBe(true)
+  })
+
+  it('keeps a URL with any update that resolves', () => {
+    expect(matchesNothing(stats({ updates: 40, unresolved: 39, exact: 1 }), true)).toBe(false)
+  })
+
+  it('keeps its last verdict through a sample too small to judge', () => {
+    expect(matchesNothing(stats({ updates: 3, unresolved: 3 }), false)).toBe(false)
+    expect(matchesNothing(stats({ updates: 3, unresolved: 3 }), true)).toBe(true)
   })
 })

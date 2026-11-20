@@ -47,11 +47,12 @@ export const pgPenaltyStore: PenaltyStore = {
 
   async upsert(rows) {
     if (rows.length === 0) return
+    // ISO strings, not Dates: the multi-row helper can bind a parameter with no serializer, which throws on a Date.
     const values = rows.map((r) => ({
       id: r.id,
       strikes: r.strikes,
-      penalised_until: new Date(r.until),
-      last_strike_at: new Date(r.lastStrikeAt),
+      penalised_until: new Date(r.until).toISOString(),
+      last_strike_at: new Date(r.lastStrikeAt).toISOString(),
     }))
     // The stricter value wins, as in mergePenalty(): another replica may have
     // boxed the same caller for longer, and this write must not shorten it.
