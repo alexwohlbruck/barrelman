@@ -2,7 +2,7 @@
 -- Queue the bridge decks OSM gives a height with `ele`, for rebuilding
 -- =============================================================================
 -- Run once after upgrading to a version that reads `ele` differently. From
--- 0.10.54 an `ele` is taken as metres above EGM96, as OSM defines it, and
+-- 0.10.55 an `ele` is taken as metres above EGM96, as OSM defines it, and
 -- converted to the terrain's datum (src/lib/bridge-decks/datum.ts), which in
 -- the conterminous US lowers it by 0.1–1.2 m. A deck already built keeps its
 -- old height until something rebuilds it, and replication only queues a deck

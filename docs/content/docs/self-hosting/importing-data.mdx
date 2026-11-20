@@ -701,7 +701,7 @@ the fill out.
 A bridge's own height sets its deck where OSM records it. The most exact is
 `ele` on the nodes of the bridge's highway or railway ways: the roadway's
 height there in metres above the EGM96 geoid, as OSM defines `ele` on any node.
-Since 0.10.54 it is converted to the terrain's datum before it is used (see
+Since 0.10.55 it is converted to the terrain's datum before it is used (see
 below). Each such node pins its deck at that height
 exactly, and the deck runs through its pins as a road does: on straight grades
 where they lie in line, on one parabolic vertical curve where they turn over a
@@ -738,7 +738,7 @@ in `config/geoid/` (within 0.01 m rms of the full models; see its README for
 the sources and licences). Everywhere else, Canada (CGVD2013) and Mexico
 inside that box included, `ele` is used as it stands, as before: there the
 terrain is a national DEM on its own datum or Copernicus GLO-30 on EGM2008,
-and the difference is not yet converted. Decks built before 0.10.54 keep
+and the difference is not yet converted. Decks built before 0.10.55 keep
 their old heights until rebuilt, since replication queues a deck only when its
 OSM data changes: after upgrading, run "Queue Bridge Decks Tagged ele"
 (`import/queue-bridge-decks-ele.sql`), which queues every deck in the US that

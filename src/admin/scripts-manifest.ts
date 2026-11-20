@@ -1234,7 +1234,7 @@ export const SCRIPTS: ScriptDef[] = [
     id: 'osm-bridge-decks-queue-ele',
     name: 'Queue Bridge Decks Tagged ele',
     description:
-      'Queue every bridge deck in the conterminous US that OSM gives a height with `ele` (on its nodes, its ways or its man_made=bridge outline), for Update Bridge Decks to rebuild. Run once after upgrading to 0.10.54, which reads `ele` as height above EGM96 and converts it to the terrain\'s NAVD88.',
+      'Queue every bridge deck in the conterminous US that OSM gives a height with `ele` (on its nodes, its ways or its man_made=bridge outline), for Update Bridge Decks to rebuild. Run once after upgrading to 0.10.55, which reads `ele` as height above EGM96 and converts it to the terrain\'s NAVD88.',
     category: 'osm',
     danger: 'safe',
     longRunning: false,
