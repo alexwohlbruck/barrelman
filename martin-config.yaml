@@ -92,6 +92,41 @@ postgres:
       buffer: 64
       clip_geom: true
 
+    # Indigenous lands, from the `aboriginal_lands` view (see
+    # import/create-detail-views.sql): the parcels, and a label point for each.
+    # Served from z4 like the boundaries, as there are few of them. Read
+    # together as the `aboriginal_lands` bundle.
+    aboriginal_land_areas:
+      schema: public
+      table: aboriginal_lands
+      srid: 4326
+      geometry_column: geom
+      geometry_type: POLYGON
+      id_column: fid
+      minzoom: 4
+      maxzoom: 12
+      properties:
+        id: id
+      buffer: 64
+      clip_geom: true
+
+    aboriginal_land_labels:
+      schema: public
+      table: aboriginal_lands
+      srid: 4326
+      geometry_column: label
+      geometry_type: POINT
+      id_column: fid
+      minzoom: 4
+      maxzoom: 12
+      properties:
+        id: id
+        name: name
+        name_local: name_local
+        area: area
+      buffer: 64
+      clip_geom: true
+
     parchment_roads:
       schema: public
       table: geo_places

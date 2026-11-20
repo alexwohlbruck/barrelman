@@ -52,6 +52,8 @@ export const TILE_BUNDLES: Record<string, readonly string[]> = {
   ],
   /** Building and station interiors: venues and their floor plans. */
   indoor: ['indoor_venues', 'indoor_map'],
+  /** Indigenous lands: parcel outlines, and a label point per parcel. */
+  aboriginal_lands: ['aboriginal_land_areas', 'aboriginal_land_labels'],
 }
 
 /**

@@ -189,6 +189,8 @@ echo "[$(date '+%H:%M:%S')] Drawing indoor floor plans..."
 psql "$DATABASE_URL" -c "REFRESH MATERIALIZED VIEW indoor_features;"
 echo "[$(date '+%H:%M:%S')] Gathering entrances and lifts..."
 psql "$DATABASE_URL" -c "REFRESH MATERIALIZED VIEW fixtures;"
+echo "[$(date '+%H:%M:%S')] Splitting Indigenous lands into parcels..."
+psql "$DATABASE_URL" -c "REFRESH MATERIALIZED VIEW aboriginal_lands;"
 
 # street_furniture was the last consumer of geo_places' spatial indexes until the
 # API takes over: the intersections and parent-context joins below both probe
