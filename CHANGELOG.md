@@ -12,6 +12,9 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ### Fixed
 
+* An OSM update that stops after applying its diffs no longer loses the rest of its work: a failed view refresh no longer aborts the run, and the next run finishes the refreshes, bridge decks and rebuilds it still owed instead of finding nothing new and skipping them.
+* The console's job history loads again: the list no longer carries every stage name of each past run (one nightly update had kept 236,893), and a list that fails to load says why instead of showing no jobs.
+
 * Tiles and searches no longer stall for seconds every time MOTIS polls realtime: the relay rewrites feeds on a worker thread.
 * MOTIS stops polling vehicle-position URLs it never reads, and trip-update URLs that match nothing in their feed's timetable. Run **Measure Realtime Matching**, then regenerate the MOTIS config, after upgrading.
 * The throttle's penalty flush no longer fails on every tick.

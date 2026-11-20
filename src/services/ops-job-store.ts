@@ -26,6 +26,8 @@ import { getEtaMs, recordRun, parseStage, parseCount } from './job-history.servi
 import { alertOnJobEnd } from './job-alerts.service'
 
 const MAX_JOBS = 200
+/** Most stages a job keeps a name for: a script counting off cells or rows prints a "stage" for each, which the console cannot draw. */
+export const MAX_NAMED_STAGES = 64
 const MAX_LOG_LINES = 8000
 /** A running job whose worker hasn't heartbeat in this long is presumed dead. */
 const STALE_MS = 60_000
@@ -77,6 +79,9 @@ export function ensureOpsJobsSchema(): Promise<void> {
           ADD COLUMN IF NOT EXISTS trigger        text NOT NULL DEFAULT 'manual',
           ADD COLUMN IF NOT EXISTS schedule_id    uuid`
       await sql`CREATE INDEX IF NOT EXISTS ops_jobs_status_idx ON ops_jobs (status, created_at)`
+      await sql`
+        UPDATE ops_jobs SET stages = jsonb_set(stages, '{labels}', '[]'::jsonb)
+        WHERE jsonb_typeof(stages->'labels') = 'array' AND jsonb_array_length(stages->'labels') > ${MAX_NAMED_STAGES}`
       await sql`
         CREATE TABLE IF NOT EXISTS ops_job_logs (
           job_id  uuid NOT NULL REFERENCES ops_jobs(id) ON DELETE CASCADE,
@@ -243,20 +248,14 @@ async function trackProgress(
     SELECT status, stages, sub_fraction FROM ops_jobs WHERE id = ${jobId}`
   if (!row || row.status !== 'running') return
 
-  let stages: { total: number; index: number; labels: string[] } | null = row.stages ?? null
+  let stages: Stages | null = row.stages ?? null
   let subFraction = row.sub_fraction != null ? Number(row.sub_fraction) : 0
   let changed = false
 
   for (const l of relevant) {
     const stage = parseStage(l.text)
     if (stage) {
-      // Carry forward names already seen; a stage is only named once, at its
-      // own boundary, so earlier labels must survive later markers.
-      const labels = new Array<string>(stage.total).fill('')
-      const prev = stages?.labels ?? []
-      for (let i = 0; i < Math.min(prev.length, stage.total); i++) labels[i] = prev[i]
-      if (stage.name) labels[stage.index - 1] = stage.name
-      stages = { total: stage.total, index: stage.index, labels }
+      stages = nextStages(stages, stage)
       subFraction = 0
       changed = true
       continue
@@ -363,7 +362,8 @@ export async function readLogsSince(id: string, afterSeq: number): Promise<LogLi
 
 export async function listJobs(): Promise<Job[]> {
   const rows = await sql`SELECT * FROM ops_jobs ORDER BY created_at DESC LIMIT ${MAX_JOBS}`
-  const jobs = rows.map(rowToJob)
+  // Stage names are for a job's own page; the list is polled and only shows progress.
+  const jobs = rows.map(rowToJob).map((j) => (j.stages ? { ...j, stages: { ...j.stages, labels: [] } } : j))
   // Only pay for the extra query when something is actually waiting.
   if (jobs.some((j) => j.status === 'queued')) {
     const placements = await queuePlacements()
@@ -381,6 +381,21 @@ export async function listJobs(): Promise<Job[]> {
  * worker takes anything else. Anything but a single running job is impossible
  * with one worker, but the walk handles it by chaining each job to the one ahead.
  */
+export type Stages = { total: number; index: number; labels: string[] }
+
+/**
+ * A job's stages after a stage marker. Names already seen carry forward, as a
+ * stage is only named once, at its own boundary; past MAX_NAMED_STAGES none are kept.
+ */
+export function nextStages(prev: Stages | null, stage: { index: number; total: number; name: string }): Stages {
+  const named = stage.total <= MAX_NAMED_STAGES
+  const labels = new Array<string>(named ? stage.total : 0).fill('')
+  const seen = prev?.labels ?? []
+  for (let i = 0; i < Math.min(seen.length, labels.length); i++) labels[i] = seen[i]
+  if (named && stage.name) labels[stage.index - 1] = stage.name
+  return { total: stage.total, index: stage.index, labels }
+}
+
 export async function queuePlacements(): Promise<Map<string, QueuePlacement>> {
   const rows = await sql`
     SELECT id, script_id, script_name, status FROM ops_jobs
