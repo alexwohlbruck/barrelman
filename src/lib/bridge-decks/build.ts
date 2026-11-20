@@ -56,7 +56,7 @@ import {
   type Way,
 } from './profile'
 import { alongSpan, clearanceNeeds, DECK_DEPTH, hungStretch, levelNeeds, MAX_DECK, SEAMARK_REACH, trustedPins, type Seamark } from './elevation'
-import { inOutline, shapeDecks, within, type Outline } from './shape'
+import { inOutline, rayHit, shapeDecks, within, type Outline } from './shape'
 import { bentPoints, blocked, nearestFree, obstacles, wayHalf, type Obstacles } from './supports'
 
 /** How far past its lanes' half width a deck fitted to its kerbs may reach: by this factor, plus this many metres. */
@@ -89,7 +89,8 @@ const GROUND_BATCH = 16
 
 export type Ground = { load(points: Point[]): Promise<void>; at(p: Point): number }
 
-export type Crossed = { kind: 'road' | 'rail' | 'path' | 'water'; points: Point[]; half?: number }
+/** `covered`: under a roof, as a road under a lid is, which the terrain reads as the ground. */
+export type Crossed = { kind: 'road' | 'rail' | 'path' | 'water'; points: Point[]; half?: number; covered?: boolean }
 
 export type DeckInput = {
   ways: Way[]
@@ -277,12 +278,12 @@ function fixedNeeds(s: Pick<Solved, 'chain' | 'd' | 'g' | 'pins'>, input: DeckIn
   let out = fixed.get(s.chain)
   if (out) return out
   out = []
-  const reach = Math.max(...s.chain.edges)
   const own = box(s.chain.points)
   const depth = s.chain.kind === 'rail' ? TRACK_DEPTH : 0
-  for (const c of input.crossed)
-    if (meet(own, box(c.points)))
-      for (const at of crossings(s.chain.points, c.points, reach, s.d)) out.push({ at, height: heightAt(s.d, s.g, at) + CLEARANCE[c.kind] + depth })
+  for (const { kind, at, level, covered } of crossedBy.get(s.chain) ?? []) {
+    const under = heightAt(s.d, s.g, at)
+    out.push({ at, height: (level !== null && (covered || under - level > LID) ? Math.min(level, under) : under) + CLEARANCE[kind] + depth })
+  }
   const water = input.water.filter(ring => meet(own, box(ring)))
   if (water.length)
     s.chain.points.forEach((p, i) => {
@@ -298,6 +299,103 @@ function fixedNeeds(s: Pick<Solved, 'chain' | 'd' | 'g' | 'pins'>, input: DeckIn
   if (input.seamarks?.length) out.push(...clearanceNeeds(s.chain.points, s.d, s.g.map(surface), input.seamarks.filter(m => covers(grow(own, SEAMARK_REACH), m.point))))
   out.push(...wayEle(s, input))
   return out
+}
+
+/** Where each deck crosses a way below, and that way's own level there where it could be read. */
+const crossedBy = new WeakMap<Chain, Array<{ kind: Crossed['kind']; at: number; level: number | null; covered?: boolean }>>()
+
+/** Metres past where a way leaves the bridge above it that its level is read: clear of the slab, which terrain blurs out to about a pixel or two. */
+const ROAD_OUT = 8
+/** Metres the terrain under a deck must stand above the way it crosses, read either side, to be the bridge itself rather than that way's ground. */
+const LID = 3
+/** Farthest along a way below that its level is read, in metres. */
+const ROAD_REACH = 150
+
+/** The point a distance along a line, clamped to its ends. */
+function pointAlong(points: Point[], d: number[], at: number): Point {
+  const s = Math.max(0, Math.min(at, d[d.length - 1]))
+  const i = Math.max(1, d.findIndex(v => v >= s))
+  const t = (s - d[i - 1]) / (d[i] - d[i - 1] || 1)
+  return [points[i - 1][0] + (points[i][0] - points[i - 1][0]) * t, points[i - 1][1] + (points[i][1] - points[i - 1][1]) * t]
+}
+
+/** Least cosine at which one way carries straight on from another it meets end to end. */
+const STRAIGHT_ON = 0.7
+
+/**
+ * The point `metres` along a way from a distance along it, forward or back,
+ * carried on through the ways of its kind meeting it end to end, as a road
+ * split at a bridge is; null where it ends sooner.
+ */
+function walked(c: Crossed, at: number, sign: 1 | -1, metres: number, byEnd: Map<string, Crossed[]>): Point | null {
+  let [line, d, from, left] = [c.points, along(c.points), at, metres]
+  for (let hop = 0; hop < 20; hop++) {
+    const total = d[d.length - 1]
+    const room = sign > 0 ? total - from : from
+    if (left <= room) return pointAlong(line, d, from + sign * left)
+    left -= room
+    const [end, before] = sign > 0 ? [line[line.length - 1], line[line.length - 2]] : [line[0], line[1]]
+    const heading: Point = [end[0] - before[0], end[1] - before[1]]
+    let best: { line: Point[]; sign: 1 | -1; cos: number } | null = null
+    for (const o of byEnd.get(key(end)) ?? []) {
+      if (o.points === line || o.kind !== c.kind) continue
+      const forward = key(o.points[0]) === key(end)
+      const next = forward ? o.points[1] : o.points[o.points.length - 2]
+      const step: Point = [next[0] - end[0], next[1] - end[1]]
+      const cos = (step[0] * heading[0] + step[1] * heading[1]) / (Math.hypot(...step) * Math.hypot(...heading) || 1)
+      if (cos >= STRAIGHT_ON && (!best || cos > best.cos)) best = { line: o.points, sign: forward ? 1 : -1, cos }
+    }
+    if (!best) return null
+    ;[line, d] = [best.line, along(best.line)]
+    sign = best.sign
+    from = sign > 0 ? 0 : d[d.length - 1]
+  }
+  return null
+}
+
+/**
+ * Each way a deck crosses, and its level: the terrain along it either side of
+ * the bridge, ROAD_OUT past where it leaves the outline or the deck's edges.
+ * Terrain keeps a bridge as wide as a lid over a sunken road as ground, and
+ * there the terrain under the deck is the deck itself: so where OSM has the
+ * way `covered`, or the terrain stands LID above it either side.
+ */
+async function crossedLevels(shaped: Fitted[], input: DeckInput, ground: Ground) {
+  const byEnd = new Map<string, Crossed[]>()
+  for (const c of input.crossed)
+    for (const p of [c.points[0], c.points[c.points.length - 1]]) byEnd.set(key(p), [...(byEnd.get(key(p)) ?? []), c])
+  const found = shaped.map(chain => {
+    const own = box(chain.points)
+    const d = along(chain.points)
+    const reach = Math.max(...chain.edges)
+    const outline = outlineOf(chain, input.outlines)
+    return input.crossed.filter(c => meet(own, box(c.points))).flatMap(c =>
+      crossings(chain.points, c.points, reach, d).map(at => {
+        // A river's banks stand above it: water is cleared from the terrain under the deck.
+        if (c.kind === 'water') return { kind: c.kind, at, ends: [] as Point[], covered: false }
+        const q = pointAlong(chain.points, d, at)
+        const near = beside(c.points, q)
+        const dc = along(c.points)
+        const there = dc[near.segment - 1] + (dc[near.segment] - dc[near.segment - 1]) * near.t
+        const [a, b] = [c.points[near.segment - 1], c.points[near.segment]]
+        const len = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1
+        const dir: Point = [(b[0] - a[0]) / len, (b[1] - a[1]) / len]
+        const ends = ([1, -1] as const).flatMap(sign => {
+          const leaves = outline && within(q, outline.rings) ? rayHit(q, [dir[0] * sign, dir[1] * sign], outline.rings) : Infinity
+          const p = walked(c, there, sign, Math.min(ROAD_REACH, (Number.isFinite(leaves) ? leaves : reach) + ROAD_OUT), byEnd)
+          return p ? [p] : []
+        })
+        return { kind: c.kind, at, ends, covered: !!c.covered }
+      }))
+  })
+  for (let i = 0; i < found.length; i += GROUND_BATCH) {
+    const batch = found.slice(i, i + GROUND_BATCH)
+    await ground.load(batch.flat().flatMap(f => f.ends))
+    batch.forEach((list, j) => crossedBy.set(shaped[i + j], list.map(({ kind, at, ends, covered }) => {
+      const levels = ends.map(p => ground.at(p)).filter(v => !Number.isNaN(v))
+      return { kind, at, covered, level: levels.length ? levels.reduce((x, y) => x + y) / levels.length : null }
+    })))
+  }
 }
 
 const waysById = new WeakMap<Way[], Map<number, Way>>()
@@ -1100,6 +1198,7 @@ export async function buildDecks(input: DeckInput, ground: Ground): Promise<Deck
   for (const c of shaped) c.el = c.kind === 'rail' && EL.test(c.road ?? '') && !levelled(outlineOf(c, input.outlines))
   const edges = shaped.map(edgePoints)
   const onward = input.crossed.filter(c => c.kind === 'road' || c.kind === 'path').map(c => c.points)
+  await crossedLevels(shaped, input, ground)
   const { under, lands, roads } = await groundUnder(shaped, edges, grounded, onward, ground, input.crossed.filter(c => c.kind === 'road').map(c => c.points))
 
   // The lowest ground under each outline that records a deck height, which that height is measured from.
