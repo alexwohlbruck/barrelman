@@ -32,6 +32,9 @@ function serving(responses: Record<string, Uint8Array | number | Error>) {
 
 const SUBWAY = new Set(['A', 'C', 'E', 'B', 'D', 'F', 'M'])
 
+const alertsOf = (...informedEntity: object[]) =>
+  new TextEncoder().encode(JSON.stringify({ entity: [{ alert: { informedEntity } }] }))
+
 describe('selectRtUrls', () => {
   test('drops a feed whose trips run on none of the static routes', async () => {
     const { fetchFn } = serving({
@@ -170,7 +173,7 @@ describe('selectRtUrls', () => {
     const { fetchFn } = serving({ 'https://a.example/gone': 404, 'https://a.example/frozen': frozen, 'https://a.example/quiet': old })
 
     const { kept, dropped } = await selectRtUrls(
-      ['gone', 'frozen', 'quiet'].map(p => ({ url: `https://a.example/${p}`, type: 'tripUpdates' })),
+      ['gone', 'frozen', 'quiet'].map(p => ({ url: `https://a.example/${p}`, type: 'tripUpdates' as const })),
       SUBWAY,
       fetchFn,
     )
@@ -201,5 +204,72 @@ describe('selectRtUrls', () => {
 
     expect(first.kept).toEqual([{ url: 'https://via.example/tu', type: 'tripUpdates', flaky: true }])
     expect(later.kept).toEqual(first.kept)
+  })
+
+  test("drops an alerts feed naming only another system's routes and stops", async () => {
+    const { fetchFn } = serving({
+      'https://op.example/alerts?system=1': alertsOf({ routeId: 'A' }),
+      'https://op.example/alerts?system=2': alertsOf({ routeId: '2-VIC', stopId: '900' }),
+      'https://op.example/alerts?system=3': alertsOf({ agencyId: 'OP' }),
+    })
+
+    const { kept, dropped } = await selectRtUrls(
+      [1, 2, 3].map(n => ({ url: `https://op.example/alerts?system=${n}`, type: 'alerts' as const })),
+      SUBWAY,
+      fetchFn,
+      { trips: new Set(), stops: new Set(['100']) },
+    )
+
+    expect(kept.map(k => k.url)).toEqual(['https://op.example/alerts?system=1', 'https://op.example/alerts?system=3'])
+    expect(dropped).toEqual([{ url: 'https://op.example/alerts?system=2', reason: 'foreign-routes' }])
+  })
+
+  test('relays alerts that name a route through a bare trip descriptor', async () => {
+    const { fetchFn } = serving({ 'https://bus.example/alerts': alertsOf({ trip: { routeId: 'A', directionId: 0 } }) })
+
+    const { kept } = await selectRtUrls([{ url: 'https://bus.example/alerts', type: 'alerts'}], SUBWAY, fetchFn)
+
+    expect(kept).toMatchObject([{ repairAlerts: true }])
+  })
+
+  test('fetches at most four URLs on one host at a time', async () => {
+    let open = 0
+    let peak = 0
+    const fetchFn = (async () => {
+      peak = Math.max(peak, ++open)
+      await Bun.sleep(5)
+      open--
+      return new Response(feedOf(['A']) as BodyInit)
+    }) as unknown as typeof fetch
+
+    const { kept } = await selectRtUrls(
+      Array.from({ length: 12 }, (_, i) => ({ url: `https://op.example/tu?system=${i}`, type: 'tripUpdates' as const })),
+      SUBWAY,
+      fetchFn,
+    )
+
+    expect(kept).toHaveLength(12)
+    expect(peak).toBe(4)
+  })
+
+  test("drops an empty alerts URL whose system's trip updates are another's", async () => {
+    const { fetchFn } = serving({
+      'https://op.example/rt/tripupdates.pb?system=1': feedOf(['A']),
+      'https://op.example/rt/alerts.pb?system=1': alertsOf(),
+      'https://op.example/rt/tripupdates.pb?system=2': feedOf(['2-VIC']),
+      'https://op.example/rt/alerts.pb?system=2': alertsOf(),
+    })
+
+    const { kept, dropped } = await selectRtUrls(
+      [1, 2].flatMap(n => [
+        { url: `https://op.example/rt/tripupdates.pb?system=${n}`, type: 'tripUpdates' as const },
+        { url: `https://op.example/rt/alerts.pb?system=${n}`, type: 'alerts' as const },
+      ]),
+      SUBWAY,
+      fetchFn,
+    )
+
+    expect(kept.map(k => k.url)).toEqual(['https://op.example/rt/tripupdates.pb?system=1', 'https://op.example/rt/alerts.pb?system=1'])
+    expect(dropped.map(d => d.url)).toEqual(['https://op.example/rt/tripupdates.pb?system=2', 'https://op.example/rt/alerts.pb?system=2'])
   })
 })

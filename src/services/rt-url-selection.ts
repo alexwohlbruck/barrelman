@@ -18,6 +18,7 @@
 import GtfsRealtimeBindings from 'gtfs-realtime-bindings'
 import type { FetchFn } from './transit.service'
 import { envRaw } from '../config/env'
+import { unresolvableTrip } from '../lib/rt-normalize/alert-selectors'
 
 /**
  * An HTTP proxy for agencies that refuse this server's network. Several
@@ -35,6 +36,7 @@ export interface SelectableRtUrl {
   redirects?: boolean
   egress?: boolean
   flaky?: boolean
+  repairAlerts?: boolean
 }
 
 export interface RtUrlSelection<T extends SelectableRtUrl> {
@@ -42,15 +44,28 @@ export interface RtUrlSelection<T extends SelectableRtUrl> {
   dropped: Array<{ url: string; reason: DropReason }>
 }
 
-/** Route, trip and stop ids a realtime feed's trip updates and vehicles refer to. */
+/** Route, trip and stop ids a realtime feed's trip updates, vehicles and alerts refer to. */
 function idsOf(buf: Uint8Array) {
   const message = decodeFeedMessage(buf)
-  const ids = { routes: new Set<string>(), trips: new Set<string>(), stops: new Set<string>(), timestamp: Number(message.header?.timestamp ?? 0) }
+  const ids = {
+    routes: new Set<string>(),
+    trips: new Set<string>(),
+    stops: new Set<string>(),
+    timestamp: Number(message.header?.timestamp ?? 0),
+    unresolvableAlerts: false,
+  }
   for (const entity of message.entity ?? []) {
     const trip = entity.tripUpdate?.trip ?? entity.vehicle?.trip
     if (trip?.routeId) ids.routes.add(trip.routeId)
     if (trip?.tripId) ids.trips.add(trip.tripId)
     for (const stu of entity.tripUpdate?.stopTimeUpdate ?? []) if (stu.stopId) ids.stops.add(stu.stopId)
+    for (const selector of entity.alert?.informedEntity ?? []) {
+      const routeId = selector.routeId || selector.trip?.routeId
+      if (routeId) ids.routes.add(routeId)
+      if (selector.trip?.tripId) ids.trips.add(selector.trip.tripId)
+      if (selector.stopId) ids.stops.add(selector.stopId)
+      if (unresolvableTrip(selector)) ids.unresolvableAlerts = true
+    }
   }
   return ids
 }
@@ -64,7 +79,7 @@ export interface StaticTripsAndStops {
 const overlaps = (a: Set<string>, b: Set<string>) => [...a].some(x => b.has(x))
 
 type DropReason = 'unauthorized' | 'foreign-routes' | 'gone' | 'stale'
-type Verdict = { keep: true; movedTo?: string; redirects?: true; egress?: true; flaky?: true } | { keep: false; reason: DropReason }
+type Verdict = { keep: true; movedTo?: string; redirects?: true; egress?: true; flaky?: true; repairAlerts?: true; served?: true } | { keep: false; reason: DropReason }
 
 /** A feed whose header is older than this has stopped updating at that address. */
 const STALE_AFTER_S = 12 * 3600
@@ -123,17 +138,37 @@ async function judge(
       else kept.redirects = true
     }
     if (ids.timestamp > 0 && Date.now() / 1000 - ids.timestamp > STALE_AFTER_S) return { keep: false, reason: 'stale' }
-    if (rt.type === 'alerts') return kept
+    if (ids.unresolvableAlerts) kept.repairAlerts = true
+    const s = staticTripsAndStops
+    const served = { ...kept, served: true as const }
+    const foreign = { keep: false as const, reason: 'foreign-routes' as const }
     if (ids.routes.size && staticRoutes.size) {
-      return overlaps(ids.routes, staticRoutes) ? kept : { keep: false, reason: 'foreign-routes' }
+      return overlaps(ids.routes, staticRoutes) || (rt.type === 'alerts' && !!s && overlaps(ids.stops, s.stops)) ? served : foreign
+    }
+    if (rt.type === 'alerts') {
+      if (!s || !ids.stops.size || !s.stops.size) return kept
+      return overlaps(ids.stops, s.stops) ? served : foreign
     }
     // MARC's feed names no routes, and reached every Maryland bus and metro feed through their operator.
-    const s = staticTripsAndStops
-    if (!s || !ids.trips.size || !s.trips.size || overlaps(ids.trips, s.trips) || overlaps(ids.stops, s.stops)) return kept
-    return { keep: false, reason: 'foreign-routes' }
+    if (!s || !ids.trips.size || !s.trips.size) return kept
+    return overlaps(ids.trips, s.trips) || overlaps(ids.stops, s.stops) ? served : foreign
   } catch {
     return { keep: true }
   }
+}
+
+const HOST_CONCURRENCY = 4
+
+function hostOf(url: string): string {
+  try { return new URL(url).host } catch { return url }
+}
+
+/** A URL without its file name: one operator's alerts and trip updates for one system share it. */
+function endpointOf(url: string): string {
+  try {
+    const u = new URL(url)
+    return `${u.host}${u.pathname.replace(/[^/]*$/, '')}${u.search}`
+  } catch { return url }
 }
 
 export async function selectRtUrls<T extends SelectableRtUrl>(
@@ -144,14 +179,37 @@ export async function selectRtUrls<T extends SelectableRtUrl>(
 ): Promise<RtUrlSelection<T>> {
   // Trip updates and vehicle positions often share one URL; fetch it once.
   const verdicts = new Map<string, Promise<Verdict>>()
+  const perHost = new Map<string, Promise<unknown>[]>()
   for (const rt of rtUrls) {
-    if (!verdicts.has(rt.url)) verdicts.set(rt.url, judge(rt, staticRoutes, fetchFn, staticTripsAndStops))
+    if (verdicts.has(rt.url)) continue
+    // An operator listing every system's feeds puts dozens on one host, which throttles a burst into answers that can't be judged.
+    const lanes = perHost.get(hostOf(rt.url)) ?? []
+    perHost.set(hostOf(rt.url), lanes)
+    const verdict = (lanes.length < HOST_CONCURRENCY ? Promise.resolve() : lanes[lanes.length - HOST_CONCURRENCY]!.then(() => {}, () => {}))
+      .then(() => judge(rt, staticRoutes, fetchFn, staticTripsAndStops))
+    lanes.push(verdict)
+    verdicts.set(rt.url, verdict)
+  }
+
+  const judged = new Map<string, Verdict>()
+  for (const [url, verdict] of verdicts) judged.set(url, await verdict)
+  const siblings = new Map<string, Verdict[]>()
+  for (const [url, verdict] of judged) {
+    const group = siblings.get(endpointOf(url)) ?? []
+    siblings.set(endpointOf(url), [...group, verdict])
+  }
+  // An empty or unreadable URL beside its endpoint's others, all serving another system, is that system's too.
+  const verdictOf = (url: string): Verdict => {
+    const verdict = judged.get(url)!
+    if (!verdict.keep || verdict.served) return verdict
+    const evidence = siblings.get(endpointOf(url))!.filter(v => !v.keep || v.served)
+    return evidence.length && evidence.every(v => !v.keep && v.reason === 'foreign-routes') ? evidence[0]! : verdict
   }
 
   const selection: RtUrlSelection<T> = { kept: [], dropped: [] }
   const reported = new Set<string>()
   for (const rt of rtUrls) {
-    const verdict = await verdicts.get(rt.url)!
+    const verdict = verdictOf(rt.url)
     if (verdict.keep) {
       const { redirects: _r, egress: _e, ...base } = rt
       selection.kept.push({
@@ -160,6 +218,7 @@ export async function selectRtUrls<T extends SelectableRtUrl>(
         ...(verdict.redirects && { redirects: true }),
         ...(verdict.egress && { egress: true }),
         ...((verdict.flaky || rt.flaky) && { flaky: true }),
+        ...((verdict.repairAlerts || rt.repairAlerts) && { repairAlerts: true }),
       } as T)
     } else if (!reported.has(rt.url)) {
       reported.add(rt.url)
