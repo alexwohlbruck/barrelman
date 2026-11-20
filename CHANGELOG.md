@@ -10,6 +10,10 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Fixed
+
+* Bridge decks pinned by OSM `ele` tags stand at the height those tags give in the conterminous US. They no longer stand 0.1–1.2 m too high: about 0.5 m too high in Cleveland, 0.75 m in Minneapolis and Nashville, 0.8 m in Pittsburgh and 1.2 m in New Orleans. OSM defines `ele` as height above the EGM96 geoid, but the US terrain is USGS 3DEP on NAVD88. Barrelman now converts each `ele` on a bridge's nodes, ways and `man_made=bridge` outline by the GEOID18 − EGM96 difference there, from a small grid shipped in `config/geoid/`. Outside the conterminous US, including Canada and Mexico, `ele` is used as before. After upgrading, run "Queue Bridge Decks Tagged ele" in the console, then "Update Bridge Decks" (or let the next OSM Update do it), so decks built before the upgrade are rebuilt. Road beds read the same `ele` pins, so also run "Build Road Beds" over any area where they hold a road under another road or deck to its tagged heights.
+
 ## [0.10.54] - 2026-11-19
 
 ### Fixed

@@ -700,8 +700,9 @@ the fill out.
 
 A bridge's own height sets its deck where OSM records it. The most exact is
 `ele` on the nodes of the bridge's highway or railway ways: the roadway's
-height there in metres above sea level, as `ele` is on any node, in the
-terrain's datum (NAVD88 in the US). Each such node pins its deck at that height
+height there in metres above the EGM96 geoid, as OSM defines `ele` on any node.
+Since 0.10.55 it is converted to the terrain's datum before it is used (see
+below). Each such node pins its deck at that height
 exactly, and the deck runs through its pins as a road does: on straight grades
 where they lie in line, on one parabolic vertical curve where they turn over a
 crest or sag, and from each end that lands or rests to the nearest pin on the
@@ -718,14 +719,30 @@ way under the bridge, or on its road way, the deck clears it there; `height`
 on the outline is taken as the deck over the water or ground under the span
 (on a suspension or cable-stayed bridge only when well short of its towers'
 `height`, which it may otherwise be); and `ele` on the outline or on a bridge
-way is taken as the least height of its top at the crest (an `ele` mapped as
-the ground's changes little). Towers and anchorages mapped as
+way, converted the same way, is taken as the least height of its top at the
+crest (an `ele` mapped as the ground's changes little). Towers and anchorages mapped as
 `bridge:support=pylon` and `abutment` areas hang a suspended span between
 them, cambered 1 % of the span down to each tower, on no piers. `layer` is not
 a height. Where OSM has none of this, `config/bridge-elevations.json` may give
 a deck height by the bridge's Wikidata item; adding the tag to OSM is better.
 A change to these tags reaches the decks on the next Build Bridge Decks, or
 through replication as below.
+
+Mapterhorn keeps each terrain source's own vertical datum, so an `ele`, on
+EGM96, is converted to the datum of the terrain under it
+(`src/lib/bridge-decks/datum.ts`). In the conterminous US the terrain is USGS
+3DEP on NAVD88, which stands 0.1–1.2 m below EGM96 (about 0.5 m in Cleveland,
+0.75 m in Minneapolis, 0.8 m in Pittsburgh, 1.2 m in New Orleans), and an
+`ele` there is lowered by GEOID18 − EGM96 at the point, read from a 0.05° grid
+in `config/geoid/` (within 0.01 m rms of the full models; see its README for
+the sources and licences). Everywhere else, Canada (CGVD2013) and Mexico
+inside that box included, `ele` is used as it stands, as before: there the
+terrain is a national DEM on its own datum or Copernicus GLO-30 on EGM2008,
+and the difference is not yet converted. Decks built before 0.10.55 keep
+their old heights until rebuilt, since replication queues a deck only when its
+OSM data changes: after upgrading, run "Queue Bridge Decks Tagged ele"
+(`import/queue-bridge-decks-ele.sql`), which queues every deck in the US that
+an `ele` sets, and Update Bridge Decks rebuilds them.
 
 A landmark whose `replaces` lists a bridge's `man_made=bridge` outline draws
 that bridge's structure within its reach, so the road decks there are baked
@@ -737,7 +754,8 @@ Ways are split and renumbered constantly, so a deck's `id` is where it lies
 and which way it runs, and its `bridge` the outline or wikidata item it
 belongs to, falling back to where it lies. The ground is Mapterhorn terrain at
 zoom 15, read as MapLibre reads it, in the terrain's own datum (NAVD88 in the
-US, EGM2008 elsewhere), so a deck lines up with the same terrain drawn; a
+conterminous US, CGVD2013 in Canada, a national datum where a national DEM
+fills it, and EGM2008 where only Copernicus GLO-30 does), so a deck lines up with the same terrain drawn; a
 client drawing other terrain can line a deck up by comparing `ground` with its
 own. A run fetches about one 90 KB terrain tile per 1.5 km² that has bridges;
 set `BRIDGE_DECKS_DEM_TILES` to read them from a mirror. It rebuilds by cell,
