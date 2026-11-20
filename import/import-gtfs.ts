@@ -40,9 +40,9 @@ import {
   sampleRealtimeTrips,
   type AlignmentResult,
 } from './align-trip-ids'
-import { rtEgressProxy, selectRtUrls } from '../src/services/rt-url-selection'
+import { rtEgressProxy } from '../src/services/rt-url-selection'
+import { columnValues, selectRealtime } from './select-realtime'
 import { measureRtNormalize } from './measure-rt-normalize'
-import { parseCsvRows, headerIndex } from '../src/lib/csv'
 import JSZip from 'jszip'
 
 // ── CLI args ────────────────────────────────────────────────────────
@@ -226,15 +226,6 @@ async function alignBestStatic(
   return { buffer: await alignTripIds(best.source, feed, best), url: best.url }
 }
 
-async function columnValues(zip: JSZip, name: string, column: string): Promise<Set<string>> {
-  const file = zip.file(name)
-  if (!file) return new Set()
-  const rows = parseCsvRows(await file.async('string'))
-  const col = rows.length ? headerIndex(rows[0]!).get(column) : undefined
-  if (col === undefined) return new Set()
-  return new Set(rows.slice(1).map(cells => cells[col]?.trim() ?? '').filter(Boolean))
-}
-
 /**
  * Transitland's realtime URLs plus the ones already on record, which may have
  * been found by backfill-rt-urls.ts or corrected by hand. Selection then drops
@@ -251,27 +242,6 @@ function withStoredRealtime(listed: GtfsRtUrl[] | undefined, stored: GtfsRtUrl[]
 }
 
 const staticRouteIds = async (buffer: ArrayBuffer) => columnValues(await JSZip.loadAsync(buffer), 'routes.txt', 'route_id')
-
-/**
- * Drop the discovered realtime URLs that don't serve this feed, so neither the
- * alignment sample nor MOTIS sees another agency's trips.
- */
-async function selectRealtime(
-  buffer: ArrayBuffer,
-  feed: { feedId: string; onestopId?: string; name?: string; rtUrls?: GtfsRtUrl[] },
-): Promise<GtfsRtUrl[] | undefined> {
-  if (!feed.rtUrls?.length) return feed.rtUrls
-  const zip = await JSZip.loadAsync(buffer)
-  const { kept, dropped } = await selectRtUrls(feed.rtUrls, await columnValues(zip, 'routes.txt', 'route_id'), fetch, {
-    trips: await columnValues(zip, 'trips.txt', 'trip_id'),
-    stops: await columnValues(zip, 'stops.txt', 'stop_id'),
-  })
-  const label = feed.name || feed.onestopId || feed.feedId
-  for (const { url, reason } of dropped) {
-    console.log(`  ⚠ ${label}: dropped realtime ${url.split('?')[0]} (${reason})`)
-  }
-  return kept
-}
 
 /**
  * Withhold a feed GTFS_LICENCE_POLICY excludes: drop its rows and its zip, so

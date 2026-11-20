@@ -3,6 +3,7 @@ import type { StaticIndex } from './static-index'
 import { decodeFeed, encodeFeed, indexFromZip } from './feed-codec'
 import { normalizeFeed, type NormalizeStats } from './normalize'
 import { indexCalls, type LiveFeed } from './exact-times'
+import { repairAlertSelectors } from './alert-selectors'
 
 export interface NormalizedFeed {
   body: Uint8Array
@@ -46,7 +47,7 @@ export function createRewriter(): Rewriter {
 
   return {
     async rewrite({ zipPath, raw, normalize }) {
-      const message = decodeFeed(raw)
+      const { message } = repairAlertSelectors(decodeFeed(raw))
       if (!normalize) return { body: encodeFeed(message), stats: null }
       try {
         const { message: out, stats } = normalizeFeed(await staticIndex(zipPath), message)

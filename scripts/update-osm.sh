@@ -145,7 +145,7 @@ refresh_views() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] 3D buildings refresh disabled (REFRESH_BUILDINGS_3D=0) — skipping."
   fi
   local view
-  for view in street_furniture sport_pitches indoor_features fixtures; do
+  for view in street_furniture sport_pitches indoor_features fixtures aboriginal_lands; do
     "$SCRIPT_DIR/refresh-view.sh" "$view" || derived_failed "the $view refresh"
   done
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] Refreshing station labels..."

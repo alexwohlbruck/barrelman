@@ -51,6 +51,53 @@ FROM geo_places
 WHERE geom_type = 'area'
   AND admin_level IS NOT NULL;
 
+-- Indigenous lands: reserves, Inuit Owned Lands, settlement lands, tribal
+-- lands. One row per parcel, because a land claim is often hundreds of them
+-- under one relation and each is labelled on its own, with `label` at its
+-- pole of inaccessibility. `name_local` is the name in an Indigenous language
+-- where one is tagged, shown over `name`. MATERIALIZED so a tile does not
+-- dump and label every parcel in view on each request.
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_class WHERE relname = 'aboriginal_lands' AND relkind = 'm')
+    AND COALESCE(obj_description(to_regclass('aboriginal_lands'), 'pg_class'), '') <> 'v1' THEN
+    DROP MATERIALIZED VIEW aboriginal_lands;
+  END IF;
+END $$;
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS aboriginal_lands AS
+WITH lands AS MATERIALIZED (
+  SELECT (osm_id * 4 + CASE osm_type WHEN 'N' THEN 0 WHEN 'W' THEN 1 ELSE 2 END) AS land_fid,
+         id, geom,
+         COALESCE(NULLIF(tags->>'name:en', ''), NULLIF(tags->>'name', '')) AS name,
+         COALESCE(NULLIF(tags->>'name:iu', ''), NULLIF(tags->>'name:ike', ''), NULLIF(tags->>'name:ikt', ''),
+                  NULLIF(tags->>'name:cr', ''), NULLIF(tags->>'name:oj', ''), NULLIF(tags->>'name:moh', ''),
+                  NULLIF(tags->>'name:nv', ''), NULLIF(tags->>'name:chr', ''), NULLIF(tags->>'name:haw', ''),
+                  NULLIF(tags->>'name:mi', '')) AS name_local
+  FROM geo_places
+  WHERE geom_type = 'area'
+    AND (tags @> '{"boundary": "aboriginal_lands"}'
+         OR tags @> '{"boundary": "protected_area", "protect_class": "24"}')
+),
+parcels AS (
+  SELECT l.land_fid, l.id, l.name, l.name_local, d.path[1] AS part, d.geom
+  FROM lands l CROSS JOIN LATERAL ST_Dump(l.geom) d
+)
+SELECT land_fid * 65536 + COALESCE(part, 1) AS fid,
+       id, name,
+       NULLIF(name_local, name) AS name_local,
+       ST_Area(geom::geography)::real AS area,
+       geom,
+       (ST_MaximumInscribedCircle(geom)).center AS label
+FROM parcels
+WHERE ST_GeometryType(geom) = 'ST_Polygon'
+WITH NO DATA;
+
+COMMENT ON MATERIALIZED VIEW aboriginal_lands IS 'v1';
+CREATE UNIQUE INDEX IF NOT EXISTS aboriginal_lands_fid_idx ON aboriginal_lands (fid);
+CREATE INDEX IF NOT EXISTS aboriginal_lands_geom_idx ON aboriginal_lands USING GIST (geom);
+CREATE INDEX IF NOT EXISTS aboriginal_lands_label_idx ON aboriginal_lands USING GIST (label);
+
 -- Parking: the paved surface, as a polygon
 DROP VIEW IF EXISTS parking_areas CASCADE;
 CREATE VIEW parking_areas AS
