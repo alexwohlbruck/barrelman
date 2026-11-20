@@ -19,8 +19,10 @@ import { join } from 'path'
 import { eq, sql } from 'drizzle-orm'
 import { db } from '../src/db'
 import { gtfsFeeds, type RtUrlEntry } from '../src/schema/gtfs'
-import { fetchRealtime, indexFromZip } from '../src/services/rt-normalize.service'
+import { fetchRealtime } from '../src/services/rt-normalize.service'
+import { indexFromZip } from '../src/lib/rt-normalize/feed-codec'
 import { normalizeFeed, type NormalizeStats } from '../src/lib/rt-normalize/normalize'
+import { isTripUpdates } from '../src/lib/rt-normalize/motis-sources'
 
 /** Whether the matcher reaches enough trains MOTIS would otherwise drop. */
 export const worthNormalizing = (s: NormalizeStats) =>
@@ -33,9 +35,14 @@ const MIN_SAMPLE = 50
 export const keepNormalizing = (s: NormalizeStats, was: boolean) =>
   worthNormalizing(s) || (was && (s.updates < MIN_SAMPLE || s.dated + s.matched + s.added + s.cancelled + s.reordered > 0))
 
-const isTripUpdates = (rt: RtUrlEntry) => rt.type === 'tripUpdates' || rt.type === undefined
+/** Fewer updates than this can't show a URL belongs to some other timetable. */
+const MIN_UNMATCHED_SAMPLE = 10
 
-/** The feed's realtime URLs with `normalize` decided afresh for each trip-update URL. */
+/** Whether a trip-update URL names nothing in this timetable, given whether it was judged so before. */
+export const matchesNothing = (s: NormalizeStats, was: boolean) =>
+  s.updates >= MIN_UNMATCHED_SAMPLE ? s.exact + s.dated + s.matched + s.added + s.cancelled === 0 : was
+
+/** The feed's realtime URLs with `normalize` and `unmatched` decided afresh for each trip-update URL. */
 export async function measureRtNormalize(
   buffer: ArrayBuffer | Uint8Array,
   rtUrls: RtUrlEntry[] | undefined,
@@ -47,22 +54,23 @@ export async function measureRtNormalize(
     index = await indexFromZip(buffer)
   } catch (err) {
     log(`  – realtime matching skipped: ${err instanceof Error ? err.message : err}`)
-    return rtUrls.map(({ normalize: _, ...rt }) => rt)
+    return rtUrls.map(({ normalize: _, unmatched: __, ...rt }) => rt)
   }
 
   const out: RtUrlEntry[] = []
   for (const rt of rtUrls) {
-    const { normalize: _, ...base } = rt
+    const { normalize: _, unmatched: __, ...base } = rt
     if (!isTripUpdates(rt)) { out.push(base); continue }
     try {
       const { stats } = normalizeFeed(index, await fetchRealtime(rt))
-      const on = keepNormalizing(stats, !!rt.normalize)
+      const unmatched = matchesNothing(stats, !!rt.unmatched)
+      const on = !unmatched && keepNormalizing(stats, !!rt.normalize)
       log(
         `  ${on ? '✓' : '–'} realtime ${new URL(rt.url).pathname}: ${stats.updates} updates, ` +
           `${stats.exact} resolve as published, ${stats.dated} lack a start date, ${stats.reordered} out of block order, matching adds ${stats.matched} matched + ${stats.added} new, ` +
-          `${stats.cancelled} cancelled${on ? ' → normalized' : ''}`,
+          `${stats.cancelled} cancelled${on ? ' → normalized' : ''}${unmatched ? ' → matches nothing here, not polled' : ''}`,
       )
-      out.push(on ? { ...base, normalize: true } : base)
+      out.push({ ...base, ...(on && { normalize: true }), ...(unmatched && { unmatched: true }) })
     } catch (err) {
       // An unreachable feed keeps its previous decision rather than flapping.
       log(`  ⚠ realtime matching not measured: ${err instanceof Error ? err.message : err}`)
