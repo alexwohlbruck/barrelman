@@ -56,6 +56,8 @@ export interface RtUrlEntry {
   egress?: boolean
   /** Has failed to answer or served undecodable messages; the relay answers for it from its last good copy, or fails fast. */
   flaky?: boolean
+  /** Alerts naming routes through trip descriptors MOTIS rejects the feed over; the relay restates them as route selectors. */
+  repairAlerts?: boolean
   /** Trip updates none of which name a trip in this feed's timetable, measured at import; MOTIS is not asked to poll it. */
   unmatched?: boolean
 }

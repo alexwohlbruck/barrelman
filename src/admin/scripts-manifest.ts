@@ -659,7 +659,7 @@ export const SCRIPTS: ScriptDef[] = [
   {
     id: 'gtfs-measure-rt-normalize',
     name: 'Measure Realtime Matching',
-    description: 'Re-decide which GTFS-RT feeds MOTIS polls through the matcher that pairs trip updates with the timetable by stop times, and which it skips because they match nothing.',
+    description: "Re-decide which GTFS-RT URLs serve each feed, which MOTIS polls through the matcher that pairs trip updates with the timetable by stop times, and which it skips because they match nothing.",
     category: 'transit',
     danger: 'safe',
     longRunning: false,
