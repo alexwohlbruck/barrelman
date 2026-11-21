@@ -10,6 +10,13 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.10.57] - 2026-11-20
+
+### Fixed
+
+* The OSM update rebuilds the states used by `/route` again, instead of failing on every run because the SQL file wasn't found.
+* A GraphHopper rebuild without memory for its full heap is skipped and routing keeps serving, instead of stalling for hours with routing down. A build whose log stops moving for 3 hours is stopped.
+
 ## [0.10.56] - 2026-11-20
 
 ### Added

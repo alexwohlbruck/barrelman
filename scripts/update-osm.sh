@@ -155,7 +155,8 @@ refresh_views() {
   (cd "$PROJECT_DIR" && nice -n 10 bun run import/build-station-paths.ts) \
     || echo "[$(date '+%Y-%m-%d %H:%M:%S')] WARNING: station paths build failed; the previous build stays. Run \"Build Station Paths\"." >&2
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] Cutting states into parts for /route..."
-  db_exec barrelman-db psql "$DB_URL" -v ON_ERROR_STOP=1 -q -c "SET client_min_messages = warning" -f /app/import/build-state-parts.sql \
+  db_exec -i barrelman-db psql "$DB_URL" -v ON_ERROR_STOP=1 -q -c "SET client_min_messages = warning" -f - \
+    < "$PROJECT_DIR/import/build-state-parts.sql" \
     || echo "[$(date '+%Y-%m-%d %H:%M:%S')] WARNING: state_parts rebuild failed; /route keeps the previous states. Run \"Build Route State Parts\"." >&2
   # Road markings are off by default: a country's are built over days, and an
   # update rebuilding cells meanwhile would compete with that build. Bridge
@@ -177,7 +178,10 @@ refresh_views() {
 GRAPHHOPPER_RC=0
 rebuild_graphhopper() {
   "$SCRIPT_DIR/rebuild-graphhopper.sh" || GRAPHHOPPER_RC=$?
-  if [ "$GRAPHHOPPER_RC" -ne 0 ]; then
+  if [ "$GRAPHHOPPER_RC" -eq 75 ]; then
+    GRAPHHOPPER_RC=0
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] WARNING: GraphHopper rebuild skipped: too little memory for its heap (see above). Routing keeps the graph it has." >&2
+  elif [ "$GRAPHHOPPER_RC" -ne 0 ]; then
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] WARNING: GraphHopper rebuild failed (exit $GRAPHHOPPER_RC, see above). The previous graph keeps serving." >&2
   fi
 }
