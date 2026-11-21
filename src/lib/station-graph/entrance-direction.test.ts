@@ -32,6 +32,28 @@ describe('entranceSign', () => {
   test('compass words', () => {
     expect(entranceSign(['6'], '6 trains Uptown & The Bronx')).toEqual({ heading: 0 })
   })
+
+  test('a clause for one line leaves other lines unsigned', () => {
+    expect(entranceSign(['Q'], 'R trains to Manhattan')).toBeNull()
+  })
+
+  test('line names, in and out', () => {
+    expect(entranceSign(['Red Line'], 'Red Line Inbound only')).toEqual({ toward: ['inbound'] })
+    expect(entranceSign(['Green Line'], 'Green Line (Inbound) | Red Line (All Trains)')).toEqual({ toward: ['inbound'] })
+    expect(entranceSign(['Red Line'], 'Green Line (Inbound) | Red Line (All Trains)')).toBeNull()
+    expect(entranceSign(['Green Line'], 'Lansdowne (Outbound)')).toEqual({ toward: ['outbound'] })
+  })
+
+  test('a bare destination, in other languages too', () => {
+    expect(entranceSign(['Blue'], 'To Franconia-Springfield')).toEqual({ toward: ['Franconia-Springfield'] })
+    expect(entranceSign(['U2'], 'Ausgang – Richtung Pankow')).toEqual({ toward: ['Pankow'] })
+    expect(entranceSign(['1'], 'Line 1 direction La Défense')).toEqual({ toward: ['La Défense'] })
+  })
+
+  test('only a destination opening the sign counts', () => {
+    expect(entranceSign(['NJT'], 'Entrance to NJ Transit')).toBeNull()
+    expect(entranceSign(['Red'], 'Elevator to Harvard MBTA station')).toBeNull()
+  })
 })
 
 describe('reachingPlatform', () => {
@@ -68,6 +90,11 @@ describe('reachingPlatform', () => {
 })
 
 describe('signMatches', () => {
+  test('in and out match the platform label', () => {
+    expect(signMatches({ toward: ['inbound'] }, { bearing: null, names: ['Inbound', 'Alewife'] })).toBe(true)
+    expect(signMatches({ toward: ['outbound'] }, { bearing: null, names: ['Inbound', 'Alewife'] })).toBeNull()
+  })
+
   test('a heading leans a quarter turn either way', () => {
     expect(signMatches({ heading: 0 }, { bearing: 60, names: [] })).toBe(true)
     expect(signMatches({ heading: 0 }, { bearing: 150, names: [] })).toBe(false)

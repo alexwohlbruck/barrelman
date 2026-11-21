@@ -2,9 +2,10 @@
  * Entrances that reach only one direction's platform. A station with side
  * platforms and no crossover inside fare control signs each entrance for one
  * direction, and mappers copy that into its name or description: a compass
- * word ("6 trains Uptown & The Bronx") or destinations ("A,C trains to
- * Euclid Avenue, Lefferts Boulevard, Rockaways"), sometimes per line
- * ("all F,G trains; R trains to Manhattan").
+ * word ("6 trains Uptown & The Bronx"), in or out ("Red Line Inbound only"),
+ * or destinations ("A,C trains to Euclid Avenue, Lefferts Boulevard,
+ * Rockaways", "To Franconia-Springfield", "Richtung Pankow"), sometimes per
+ * line ("all F,G trains; R trains to Manhattan").
  */
 
 /** What an entrance is signed for: a compass heading or named destinations. */
@@ -17,31 +18,55 @@ const HEADING_TERMS: Array<[RegExp, number]> = [
   [/\b(west\s*-?bound)\b/i, 270],
 ]
 
-const TRAINS_CLAUSE = /^\s*(?:all\s+)?(?:([\w<>]{1,4}(?:\s*,\s*[\w<>]{1,4})*)\s+)?trains?\b(.*)$/i
-const TOWARD = /^\s*(?:to|toward|towards)\s+(.+?)\s*$/i
-const BOUND = /^\s*(.+?)[\s-]+bound\b/i
+/** "A,C trains …", "all F,G trains …". */
+const TRAINS = /^\s*(?:all\s+)?(?:([\w<>]{1,4}(?:\s*,\s*[\w<>]{1,4})*)\s+)?trains?\b(.*)$/i
+/** "Red Line …", "Line 1 …". */
+const LINE = /^\s*(?:all\s+)?((?:[\w-]+\s+){1,3}line|line\s+[\w-]+)\b(.*)$/i
+const EITHER_WAY = /\b(all\s+trains|all\s+directions|both\s+directions)\b/i
+const IN_OUT = /\b(in|out)\s*-?\s*bound\b/i
+/** A destination after a word for "to" or "towards", at the start of a piece of the sign. */
+const TOWARD = /^(?:to|toward|towards|direction|dir\.|richtung|dirección|direccion|hacia|direzione|sentido|kierunek|riktning|retning)\s+(.+?)\s*$/i
+const BOUND = /^(.+?)[\s-]+bound\b/i
 
 interface Clause {
   routes: string[] | null
   sign: EntranceSign | null
 }
 
-const routeKey = (route: string) => route.replace(/[<>]/g, '').trim().toLowerCase()
+/** "Red Line", "Line 1" and "1" are all one route's key. */
+export const routeKey = (route: string) =>
+  route.replace(/[<>]/g, '').trim().toLowerCase().replace(/\s+line$/, '').replace(/^line\s+/, '')
 
 function compassHeading(text: string): number | null {
   const headings = new Set(HEADING_TERMS.filter(([re]) => re.test(text)).map(([, h]) => h))
   return headings.size === 1 ? [...headings][0] : null
 }
 
-const places = (text: string) => text.split(/\s*(?:,|&|\/|\band\b)\s*/i).map((p) => p.trim()).filter(Boolean)
+const places = (text: string) =>
+  text.replace(/\bonly\b/gi, '').split(/\s*(?:,|&|\/|\band\b)\s*/i).map((p) => p.trim()).filter(Boolean)
+
+/** The pieces a sign's text may start a destination in: the whole, and after a dash, colon or bracket. */
+const pieces = (text: string) => [text, ...text.split(/\s+[-–—]\s+|:|\(|\)/)].map((p) => p.trim()).filter(Boolean)
+
+function readSign(text: string): EntranceSign | null {
+  if (EITHER_WAY.test(text)) return null
+  const heading = compassHeading(text)
+  if (heading != null) return { heading }
+  const inOut = IN_OUT.exec(text)
+  if (inOut) return { toward: [`${inOut[1].toLowerCase()}bound`] }
+  for (const piece of pieces(text)) {
+    const toward = (TOWARD.exec(piece) ?? BOUND.exec(piece))?.[1]
+    if (toward) return { toward: places(toward) }
+  }
+  return null
+}
 
 function parseClause(text: string): Clause {
-  const trains = TRAINS_CLAUSE.exec(text)
-  const routes = trains?.[1] ? trains[1].split(',').map(routeKey) : null
-  const heading = compassHeading(text)
-  if (heading != null) return { routes, sign: { heading } }
-  const toward = (trains ? TOWARD.exec(trains[2]) ?? BOUND.exec(trains[2]) : BOUND.exec(text))?.[1]
-  return { routes, sign: toward ? { toward: places(toward) } : null }
+  const trains = TRAINS.exec(text)
+  if (trains) return { routes: trains[1] ? trains[1].split(',').map(routeKey) : null, sign: readSign(trains[2]) }
+  const line = LINE.exec(text)
+  if (line) return { routes: [routeKey(line[1])], sign: readSign(line[2]) }
+  return { routes: null, sign: readSign(text) }
 }
 
 const signKey = (sign: EntranceSign) =>
@@ -55,12 +80,13 @@ const signKey = (sign: EntranceSign) =>
 export function entranceSign(routes: string[], ...labels: Array<string | null | undefined>): EntranceSign | null {
   const clauses = labels
     .filter((l): l is string => !!l)
-    .flatMap((l) => l.split(';'))
+    .flatMap((l) => l.split(/[;|\n]/))
+    .filter((c) => c.trim())
     .map(parseClause)
   const wanted = new Set(routes.map(routeKey))
   const own = clauses.filter((c) => c.routes?.some((r) => wanted.has(r)))
   if (own.some((c) => c.sign == null)) return null
-  const signs = (own.length ? own : clauses).flatMap((c) => (c.sign ? [c.sign] : []))
+  const signs = (own.length ? own : clauses.filter((c) => !c.routes)).flatMap((c) => (c.sign ? [c.sign] : []))
   const distinct = new Map(signs.map((s) => [signKey(s), s]))
   return distinct.size === 1 ? [...distinct.values()][0] : null
 }

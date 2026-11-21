@@ -47,6 +47,7 @@ export function solveComplex(input: ComplexInput, params: StationPathParams = DE
   const streetKeys = new Set([...g.streetKeys()].filter((k) => !entranceKeys.has(k)))
   const paths: StationPath[] = []
   let componentCount = 0
+  const modelledByAgency = agencyCovers(input.agency, new Set(entranceIds))
 
   for (const profile of PROFILES) {
     const search = (opts: { reverse?: boolean; ban?: Set<string> }, bridged: boolean): Search => {
@@ -156,6 +157,7 @@ export function solveComplex(input: ComplexInput, params: StationPathParams = DE
           const agency = input.agency?.get(`${ends.fromId}>${ends.toId}`)
           const depth = Math.abs(plat.level ?? 1)
           if (agency !== undefined) return paths.push(timeOnly('agency', agency, ends, 'street', edgeM, depth))
+          if (modelledByAgency(eid, pid)) return
           paths.push(timeOnly('estimated', estimateStreet(params, { edgeM, level: plat.level }), ends, 'street', edgeM, depth))
         })
       }
@@ -182,6 +184,21 @@ export function solveComplex(input: ComplexInput, params: StationPathParams = DE
     paths,
     report: { tiers, components: componentCount, disconnected: notGraph || componentCount > 1 },
   }
+}
+
+/**
+ * Whether the agency's pathways model both this entrance and this platform.
+ * Then a missing pathway between them means the entrance doesn't reach that
+ * platform (a side platform for the other direction), so no estimate stands in.
+ */
+function agencyCovers(agency: Map<string, number> | undefined, entranceIds: Set<string>) {
+  const entrances = new Set<string>(), platforms = new Set<string>()
+  for (const key of agency?.keys() ?? []) {
+    const [a, b] = key.split('>')
+    if (entranceIds.has(a)) { entrances.add(a); platforms.add(b) }
+    if (entranceIds.has(b)) { entrances.add(b); platforms.add(a) }
+  }
+  return (entranceId: string, platformId: string) => entrances.has(entranceId) && platforms.has(platformId)
 }
 
 export const sourceRank = (s: PathSource) => ['graph', 'bridged', 'agency', 'estimated', 'straight_line'].indexOf(s)

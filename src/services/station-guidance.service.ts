@@ -101,7 +101,7 @@ export interface GuidedLeg {
   directionLabel?: string
   headsign?: string
   intermediateStops?: Array<{ name?: string }>
-  interchangeableRoutes?: Array<{ shortName?: string }>
+  interchangeableRoutes?: Array<{ shortName?: string; longName?: string }>
   geometry?: { type: 'LineString'; coordinates: [number, number][] }
   entrance?: StationAccessChoice
   exit?: StationAccessChoice
@@ -293,7 +293,7 @@ function rideDirection(ride: GuidedLeg, end: 'board' | 'alight'): RideDirection 
 }
 
 const rideRoutes = (ride: GuidedLeg) =>
-  [ride.routeShortName, ...(ride.interchangeableRoutes ?? []).map((r) => r.shortName)].filter((r): r is string => !!r)
+  [ride.routeShortName, ride.routeLongName, ...(ride.interchangeableRoutes ?? []).flatMap((r) => [r.shortName, r.longName])].filter((r): r is string => !!r)
 
 /** Entrance candidates left once those signed for the other direction are dropped. */
 function sameDirection<C extends { info: EntranceInfo }>(candidates: C[], ride: GuidedLeg, end: 'board' | 'alight'): C[] {
