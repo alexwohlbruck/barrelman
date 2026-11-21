@@ -177,6 +177,14 @@ describe('GTFS-RT feeds in the MOTIS config', () => {
     expect(yaml).toContain('- url: "https://mta.example/alerts"')
     feedRows = []
   })
+
+  test('gives up on one realtime URL after 15 s, or MOTIS_RT_HTTP_TIMEOUT', async () => {
+    resolved = { isGlobal: true, boxes: [] }
+    feedRows = [{ feed_id: '5', rt_urls: [{ url: 'https://mta.example/alerts', type: 'alerts' }] }]
+    expect(await generateMotisConfig()).toContain('  update_interval: 60\n  http_timeout: 15\n')
+    expect(await generateMotisConfig({ rtHttpTimeout: 8 })).toContain('  http_timeout: 8\n')
+    feedRows = []
+  })
 })
 
 describe('MOTIS memory in the config', () => {
