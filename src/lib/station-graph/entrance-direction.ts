@@ -12,7 +12,8 @@
  * What an entrance is signed for: a compass heading, in or out of town,
  * named destinations, or only other lines than the ride's.
  */
-export type EntranceSign = { heading: number } | { inbound: boolean } | { toward: string[] } | { otherLines: true }
+export type EntranceSign = Direction | { otherLines: true; direction: Direction | null }
+type Direction = { heading: number } | { inbound: boolean } | { toward: string[] }
 
 const HEADING_TERMS: Array<[RegExp, number]> = [
   [/\b(uptown|north\s*-?bound|fahrtrichtung\s+nord(en)?)\b/i, 0],
@@ -41,7 +42,7 @@ const EXIT = /\b(ausgang|exit|sortie|salida|uscita|saída|uitgang|wyjście|utgå
 
 interface Clause {
   routes: string[] | null
-  sign: EntranceSign | null
+  sign: Direction | null
 }
 
 /** "Red Line", "Line 1" and "1" are one route's key; an express ("6X", signed "<6>") is its line's. */
@@ -59,7 +60,7 @@ const places = (text: string) =>
 /** The pieces a sign's text may start a destination in: the whole, and after a dash, colon or bracket. */
 const pieces = (text: string) => [text, ...text.split(/\s+[-–—]\s+|:|\(|\)/)].map((p) => p.trim()).filter(Boolean)
 
-function readSign(text: string): EntranceSign | null {
+function readSign(text: string): Direction | null {
   if (EITHER_WAY.test(text)) return null
   const heading = compassHeading(text)
   if (heading != null) return { heading }
@@ -85,8 +86,8 @@ function parseClause(text: string): Clause {
   return { routes: linesOn(text), sign: readSign(text) }
 }
 
-const signKey = (sign: EntranceSign) =>
-  'heading' in sign ? `h:${sign.heading}` : 'inbound' in sign ? `i:${sign.inbound}` : 'toward' in sign ? `t:${sign.toward.join('|').toLowerCase()}` : 'o'
+const signKey = (sign: Direction) =>
+  'heading' in sign ? `h:${sign.heading}` : 'inbound' in sign ? `i:${sign.inbound}` : `t:${sign.toward.join('|').toLowerCase()}`
 
 /**
  * The one direction an entrance is signed for on the given routes, or null
@@ -103,9 +104,12 @@ export function entranceSign(routes: string[], ...labels: Array<string | null | 
   const own = clauses.filter((c) => c.routes?.some((r) => wanted.has(r)))
   if (own.some((c) => c.sign == null)) return null
   const general = clauses.filter((c) => !c.routes)
-  if (!own.length && !general.length && clauses.length && wanted.size) return { otherLines: true }
-  const signs = (own.length ? own : general).flatMap((c) => (c.sign ? [c.sign] : []))
-  const distinct = new Map(signs.map((s) => [signKey(s), s]))
+  if (!own.length && !general.length && clauses.length && wanted.size) return { otherLines: true, direction: oneDirection(clauses) }
+  return oneDirection(own.length ? own : general)
+}
+
+function oneDirection(clauses: Clause[]): Direction | null {
+  const distinct = new Map(clauses.flatMap((c) => (c.sign ? [[signKey(c.sign), c.sign] as const] : [])))
   return distinct.size === 1 ? [...distinct.values()][0] : null
 }
 
@@ -167,8 +171,12 @@ export function signMatches(sign: EntranceSign, ride: RideDirection): boolean | 
  * for one station are told apart; unsigned entrances are always kept.
  */
 export function reachingPlatform<E>(entrances: E[], signOf: (e: E) => EntranceSign | null, ride: RideDirection): E[] {
-  const verdicts = entrances.map((e) => {
-    const sign = signOf(e)
+  const signs = entrances.map(signOf)
+  // Signed only for lines sharing the ride's platforms: their direction still holds.
+  const allOther = signs.length > 0 && signs.every((s) => s && 'otherLines' in s)
+  const verdicts = entrances.map((e, i) => {
+    const raw = signs[i]
+    const sign = allOther && raw && 'otherLines' in raw ? raw.direction : raw
     return { e, sign, match: sign ? signMatches(sign, ride) : null }
   })
   const someNamed = verdicts.some((v) => v.sign && 'toward' in v.sign && v.match === true)

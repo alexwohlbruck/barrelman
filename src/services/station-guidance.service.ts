@@ -100,6 +100,7 @@ export interface GuidedLeg {
   routeId?: string
   directionLabel?: string
   headsign?: string
+  agencyName?: string
   intermediateStops?: Array<{ name?: string; lat: number; lng: number }>
   interchangeableRoutes?: Array<{ shortName?: string; longName?: string }>
   geometry?: { type: 'LineString'; coordinates: [number, number][] }
@@ -339,8 +340,14 @@ export function networkHub(ride: GuidedLeg): Promise<LatLng | null> {
   return hubCache.get(key)!
 }
 
+/** "PATH" for Port Authority Trans-Hudson: signs often name the system by its initials. */
+const initials = (name: string) => name.split(/[\s-]+/).filter((w) => /^[A-Z]/.test(w)).map((w) => w[0]).join('')
+
 const rideRoutes = (ride: GuidedLeg) =>
-  [ride.routeShortName, ride.routeLongName, ...(ride.interchangeableRoutes ?? []).flatMap((r) => [r.shortName, r.longName])].filter((r): r is string => !!r)
+  [
+    ride.routeShortName, ride.routeLongName, ride.agencyName, ride.agencyName && initials(ride.agencyName),
+    ...(ride.interchangeableRoutes ?? []).flatMap((r) => [r.shortName, r.longName]),
+  ].filter((r): r is string => !!r && r.length > 0)
 
 /** Entrance candidates left once those signed for the other direction are dropped. */
 async function sameDirection<C extends { info: EntranceInfo }>(candidates: C[], ride: GuidedLeg, end: 'board' | 'alight'): Promise<C[]> {

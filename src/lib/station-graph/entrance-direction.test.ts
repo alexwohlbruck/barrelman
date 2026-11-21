@@ -34,7 +34,7 @@ describe('entranceSign', () => {
   })
 
   test('a sign naming only other lines', () => {
-    expect(entranceSign(['2'], 'F,<F>,M trains Downtown & Brooklyn; PATH trains to New Jersey')).toEqual({ otherLines: true })
+    expect(entranceSign(['2'], 'F,<F>,M trains Downtown & Brooklyn; PATH trains to New Jersey')).toEqual({ otherLines: true, direction: null })
     expect(entranceSign(['2'], 'Main entrance')).toBeNull()
     expect(entranceSign(['6X'], '6,<6> trains Downtown')).toEqual({ heading: 180 })
   })
@@ -111,6 +111,11 @@ describe('reachingPlatform', () => {
     ]
     expect(ids(reachingPlatform(es, signOf(['2']), { bearing: 20, names: ['Uptown'], inbound: null }))).toEqual(['up', 'plain'])
     expect(ids(reachingPlatform(es.slice(0, 1), signOf(['2']), { bearing: 20, names: [], inbound: null }))).toEqual(['fm'])
+  })
+
+  test('signs for lines sharing the platforms still say which way', () => {
+    const nyu = [{ id: 'up', description: 'R,W trains Uptown & Queens' }, { id: 'down', description: 'R,W trains Downtown & Brooklyn' }]
+    expect(ids(reachingPlatform(nyu, signOf(['N']), { bearing: 213, names: ['Downtown'], inbound: null }))).toEqual(['down'])
   })
 
   test('the platform label says which way when the line bends', () => {
