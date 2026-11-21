@@ -10,6 +10,10 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Fixed
+
+* The Mike O'Callaghan–Pat Tillman Memorial Bridge's deck rises to its true crest, 269.6 m over the Colorado River, instead of running straight between its ends up to 2.5 m low. After upgrading, run Build Bridge Decks over the canyon (`--bbox -114.746,36.010,-114.736,36.016`).
+
 ## [0.10.58] - 2026-11-21
 
 ### Fixed
