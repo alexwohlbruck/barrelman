@@ -8,8 +8,11 @@
  * line ("all F,G trains; R trains to Manhattan").
  */
 
-/** What an entrance is signed for: a compass heading or named destinations. */
-export type EntranceSign = { heading: number } | { toward: string[] }
+/**
+ * What an entrance is signed for: a compass heading, in or out of town,
+ * named destinations, or only other lines than the ride's.
+ */
+export type EntranceSign = { heading: number } | { inbound: boolean } | { toward: string[] } | { otherLines: true }
 
 const HEADING_TERMS: Array<[RegExp, number]> = [
   [/\b(uptown|north\s*-?bound)\b/i, 0],
@@ -33,9 +36,9 @@ interface Clause {
   sign: EntranceSign | null
 }
 
-/** "Red Line", "Line 1" and "1" are all one route's key. */
+/** "Red Line", "Line 1" and "1" are one route's key; an express ("6X", signed "<6>") is its line's. */
 export const routeKey = (route: string) =>
-  route.replace(/[<>]/g, '').trim().toLowerCase().replace(/\s+line$/, '').replace(/^line\s+/, '')
+  route.replace(/[<>]/g, '').trim().toLowerCase().replace(/\s+line$/, '').replace(/^line\s+/, '').replace(/^(\w{1,2})x$/, '$1')
 
 function compassHeading(text: string): number | null {
   const headings = new Set(HEADING_TERMS.filter(([re]) => re.test(text)).map(([, h]) => h))
@@ -53,7 +56,7 @@ function readSign(text: string): EntranceSign | null {
   const heading = compassHeading(text)
   if (heading != null) return { heading }
   const inOut = IN_OUT.exec(text)
-  if (inOut) return { toward: [`${inOut[1].toLowerCase()}bound`] }
+  if (inOut) return { inbound: inOut[1].toLowerCase() === 'in' }
   for (const piece of pieces(text)) {
     const toward = (TOWARD.exec(piece) ?? BOUND.exec(piece))?.[1]
     if (toward) return { toward: places(toward) }
@@ -70,7 +73,7 @@ function parseClause(text: string): Clause {
 }
 
 const signKey = (sign: EntranceSign) =>
-  'heading' in sign ? `h:${sign.heading}` : `t:${sign.toward.join('|').toLowerCase()}`
+  'heading' in sign ? `h:${sign.heading}` : 'inbound' in sign ? `i:${sign.inbound}` : 'toward' in sign ? `t:${sign.toward.join('|').toLowerCase()}` : 'o'
 
 /**
  * The one direction an entrance is signed for on the given routes, or null
@@ -86,7 +89,9 @@ export function entranceSign(routes: string[], ...labels: Array<string | null | 
   const wanted = new Set(routes.map(routeKey))
   const own = clauses.filter((c) => c.routes?.some((r) => wanted.has(r)))
   if (own.some((c) => c.sign == null)) return null
-  const signs = (own.length ? own : clauses.filter((c) => !c.routes)).flatMap((c) => (c.sign ? [c.sign] : []))
+  const general = clauses.filter((c) => !c.routes)
+  if (!own.length && !general.length && clauses.length && wanted.size) return { otherLines: true }
+  const signs = (own.length ? own : general).flatMap((c) => (c.sign ? [c.sign] : []))
   const distinct = new Map(signs.map((s) => [signKey(s), s]))
   return distinct.size === 1 ? [...distinct.values()][0] : null
 }
@@ -114,7 +119,11 @@ export interface RideDirection {
   bearing: number | null
   /** The platform's own sign ("Manhattan"), headsign, and the stops still to come. */
   names: string[]
+  /** Heading toward the network's hub, where most of its lines meet. */
+  inbound: boolean | null
 }
+
+const IN_OUT_LABEL = /^\s*(in|out)\s*-?\s*bound\s*$/i
 
 /**
  * True when the sign names this ride's direction, false when it names the
@@ -122,16 +131,25 @@ export interface RideDirection {
  * than true north, hence the generous quarter-turn.
  */
 export function signMatches(sign: EntranceSign, ride: RideDirection): boolean | null {
+  if ('otherLines' in sign) return false
   if ('heading' in sign) {
-    if (ride.bearing == null) return null
-    return Math.abs(((sign.heading - ride.bearing + 540) % 360) - 180) <= 90
+    const labelled = ride.names.map(compassHeading).find((h) => h != null)
+    const heading = labelled ?? ride.bearing
+    if (heading == null) return null
+    return Math.abs(((sign.heading - heading + 540) % 360) - 180) <= 90
+  }
+  if ('inbound' in sign) {
+    const labelled = ride.names.map((n) => IN_OUT_LABEL.exec(n)).find(Boolean)
+    const inbound = labelled ? labelled[1].toLowerCase() === 'in' : ride.inbound
+    return inbound == null ? null : inbound === sign.inbound
   }
   return sign.toward.some((place) => ride.names.some((name) => names(place, name))) ? true : null
 }
 
 /**
- * Entrances that reach the ride's platform. A compass sign pointing the
- * other way rules an entrance out. A destination sign the ride doesn't name
+ * Entrances that reach the ride's platform. A compass or in/out sign for
+ * the other way rules an entrance out, and so does a sign naming only other
+ * lines, while some entrance might serve the ride's. A destination sign the ride doesn't name
  * rules it out only once another entrance's sign does name it, so two signs
  * for one station are told apart; unsigned entrances are always kept.
  */
@@ -141,11 +159,13 @@ export function reachingPlatform<E>(entrances: E[], signOf: (e: E) => EntranceSi
     return { e, sign, match: sign ? signMatches(sign, ride) : null }
   })
   const someNamed = verdicts.some((v) => v.sign && 'toward' in v.sign && v.match === true)
+  const servesRide = verdicts.some((v) => !v.sign || !('otherLines' in v.sign))
   return verdicts
     .filter(({ sign, match }) => {
       if (!sign || match === true) return true
-      if ('heading' in sign) return match !== false
-      return !someNamed
+      if ('toward' in sign) return !someNamed
+      if ('otherLines' in sign) return !servesRide
+      return match !== false
     })
     .map((v) => v.e)
 }

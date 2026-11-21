@@ -9,7 +9,7 @@
 import { sql } from 'drizzle-orm'
 import { db } from '../db'
 import {
-  arrivalBearing, atStation, boardingHint, chooseEntrance, departureBearing, classifyTransfer, guidanceSteps, isWalked, PLATFORM_REMAINDER_MIN_S,
+  arrivalBearing, atStation, boardingHint, chooseEntrance, departureBearing, haversineM, classifyTransfer, guidanceSteps, isWalked, PLATFORM_REMAINDER_MIN_S,
   platformRemainder, positionIsMeasured, representativeRow, routeSign, stationChanges, stationVisits, type BoardingHint, type GuidanceStep, type TransferClass, type WalkContext,
 } from '../lib/station-graph/guidance'
 import { entranceSign, reachingPlatform, type RideDirection } from '../lib/station-graph/entrance-direction'
@@ -100,7 +100,7 @@ export interface GuidedLeg {
   routeId?: string
   directionLabel?: string
   headsign?: string
-  intermediateStops?: Array<{ name?: string }>
+  intermediateStops?: Array<{ name?: string; lat: number; lng: number }>
   interchangeableRoutes?: Array<{ shortName?: string; longName?: string }>
   geometry?: { type: 'LineString'; coordinates: [number, number][] }
   entrance?: StationAccessChoice
@@ -282,23 +282,72 @@ async function loadPaths(profile: Profile, pairs: Array<[string, string]>, board
 
 const entranceName = (e: EntranceInfo) => e.cornerLabel ?? e.name ?? e.ref ?? null
 
+type LatLng = { lat: number; lng: number }
+
+/** Metres a stop must close on the hub by to count as heading in. */
+const HUB_MARGIN_M = 50
+
+/** Where a ride meets the rider and the stop next to it on the ride's far side from them. */
+function stopPair(ride: GuidedLeg, end: 'board' | 'alight'): [LatLng, LatLng] {
+  const stops = ride.intermediateStops ?? []
+  return end === 'board' ? [ride.from, stops[0] ?? ride.to] : [stops[stops.length - 1] ?? ride.from, ride.to]
+}
+
 /** Which way a ride runs where the rider meets it: boarding looks at the stops ahead, alighting only at its terminus. */
-function rideDirection(ride: GuidedLeg, end: 'board' | 'alight'): RideDirection {
+export function rideDirection(ride: GuidedLeg, end: 'board' | 'alight', hub: LatLng | null): RideDirection {
   const line = ride.geometry?.coordinates
   const ahead = end === 'board' ? [...(ride.intermediateStops ?? []).map((s) => s.name), ride.to.name] : []
+  const [a, b] = stopPair(ride, end)
+  const closing = hub ? haversineM(a, hub) - haversineM(b, hub) : 0
   return {
     bearing: line ? (end === 'board' ? departureBearing(line) : arrivalBearing(line)) : null,
     names: [ride.directionLabel, ride.headsign, ...ahead].filter((n): n is string => !!n),
+    inbound: Math.abs(closing) < HUB_MARGIN_M ? null : closing > 0,
   }
+}
+
+const hubCache = new Map<string, Promise<LatLng | null>>()
+
+/**
+ * The centre of the stations where most of a mode's lines meet in one feed
+ * (Park Street and its neighbours on the MBTA subway): what "inbound" heads
+ * toward. Kept for the life of the process; feeds change rarely.
+ */
+export function networkHub(ride: GuidedLeg): Promise<LatLng | null> {
+  const feed = splitId(ride.from.stopId)?.feedId
+  const routeId = feed && ride.routeId?.startsWith(`${feed}_`) ? ride.routeId.slice(feed.length + 1) : null
+  if (!feed || !routeId) return Promise.resolve(null)
+  const key = `${feed}\u0000${routeId}`
+  if (!hubCache.has(key)) {
+    hubCache.set(key, (db.execute(sql`
+      WITH mode AS (SELECT route_type FROM gtfs_routes WHERE feed_id = ${feed} AND route_id = ${routeId}),
+      stations AS (
+        SELECT coalesce(s.parent_station, s.stop_id) AS station, count(DISTINCT sr.route_id) AS lines
+        FROM gtfs_stop_routes sr
+        JOIN gtfs_routes r ON r.feed_id = sr.feed_id AND r.route_id = sr.route_id
+        JOIN gtfs_stops s ON s.feed_id = sr.feed_id AND s.stop_id = sr.stop_id
+        WHERE sr.feed_id = ${feed} AND r.route_type = (SELECT route_type FROM mode)
+        GROUP BY 1
+      ),
+      top AS (SELECT station FROM stations WHERE lines = (SELECT max(lines) FROM stations) AND lines > 1)
+      SELECT avg(ST_Y(s.geom)) AS lat, avg(ST_X(s.geom)) AS lng
+      FROM top JOIN gtfs_stops s ON s.feed_id = ${feed} AND s.stop_id = top.station
+    `) as Promise<Array<{ lat: number | null; lng: number | null }>>)
+      .then(([r]) => (r?.lat != null && r.lng != null ? { lat: Number(r.lat), lng: Number(r.lng) } : null))
+      .catch(() => null))
+  }
+  return hubCache.get(key)!
 }
 
 const rideRoutes = (ride: GuidedLeg) =>
   [ride.routeShortName, ride.routeLongName, ...(ride.interchangeableRoutes ?? []).flatMap((r) => [r.shortName, r.longName])].filter((r): r is string => !!r)
 
 /** Entrance candidates left once those signed for the other direction are dropped. */
-function sameDirection<C extends { info: EntranceInfo }>(candidates: C[], ride: GuidedLeg, end: 'board' | 'alight'): C[] {
+async function sameDirection<C extends { info: EntranceInfo }>(candidates: C[], ride: GuidedLeg, end: 'board' | 'alight'): Promise<C[]> {
   const routes = rideRoutes(ride)
-  return reachingPlatform(candidates, (c) => entranceSign(routes, c.info.name, c.info.description), rideDirection(ride, end))
+  const signs = candidates.map((c) => entranceSign(routes, c.info.name, c.info.description))
+  const hub = signs.some((sign) => sign && 'inbound' in sign) ? await networkHub(ride) : null
+  return reachingPlatform(candidates, (c) => signs[candidates.indexOf(c)], rideDirection(ride, end, hub))
 }
 
 function endpoint(id: string, kind: EndpointKind, platforms: Map<string, PlatformInfo>, entrances: Map<string, EntranceInfo>): StationEndpoint | null {
@@ -397,7 +446,7 @@ export async function enrichStationGuidance(itineraries: Array<{ legs: GuidedLeg
           const e = entrances.get(row.fromId)
           return e && e.entryAllowed !== false ? [{ id: e.id, lat: e.lat, lng: e.lng, row, info: e }] : []
         }))
-      const choice = chooseEntrance(street, sameDirection(candidates, ride, 'board'), deps.walkMps)
+      const choice = chooseEntrance(street, await sameDirection(candidates, ride, 'board'), deps.walkMps)
       if (!choice) continue
       const e = choice.candidate.info
       const walk = stationWalk(choice.candidate.row, { kind: 'access', entrance: entranceName(e), sign: routeSign(ride) }, platforms, entrances)
@@ -417,7 +466,7 @@ export async function enrichStationGuidance(itineraries: Array<{ legs: GuidedLeg
           const e = entrances.get(row.toId)
           return e && e.exitAllowed !== false ? [{ id: e.id, lat: e.lat, lng: e.lng, row, info: e }] : []
         }))
-      const choice = chooseEntrance(street, sameDirection(candidates, ride, 'alight'), deps.walkMps)
+      const choice = chooseEntrance(street, await sameDirection(candidates, ride, 'alight'), deps.walkMps)
       if (!choice) continue
       const e = choice.candidate.info
       const row = choice.candidate.row
