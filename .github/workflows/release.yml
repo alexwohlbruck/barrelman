@@ -273,7 +273,7 @@ jobs:
 
       - name: Join the tailnet
         if: steps.creds.outputs.ready == 'true'
-        uses: tailscale/github-action@v4.1.3
+        uses: tailscale/github-action@v4.4.0
         with:
           oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
           oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
