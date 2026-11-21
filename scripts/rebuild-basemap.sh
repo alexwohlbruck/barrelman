@@ -42,7 +42,12 @@ set -euo pipefail
 #                           Hard cgroup cap for the render container (e.g. 5g).
 #                           Unset = uncapped. See the docker run below for why
 #                           you want this on a host that also serves traffic.
-#   PLANETILER_IMAGE        override the planetiler image
+#   PLANETILER_IMAGE        override the planetiler image. The default is
+#                           Parchment's planetiler-openmaptiles fork, which
+#                           ranks POI labels by importance (see its FORK.md).
+#   BASEMAP_QRANK_URL       Wikidata pageview ranks the fork reads to rank POIs
+#                           by fame. Fetched weekly into sources/; set empty to
+#                           render without them.
 #   BASEMAP_MAXZOOM         deepest zoom rendered: 14 (default, the
 #                           OpenMapTiles one) or 15 (planetiler's limit). Each
 #                           zoom past the last is drawn by stretching its
@@ -67,7 +72,10 @@ set -euo pipefail
 
 CONTAINER="barrelman-martin"
 DB_CONTAINER="${DB_CONTAINER:-barrelman-db}"
-PLANETILER_IMAGE="${PLANETILER_IMAGE:-ghcr.io/onthegomap/planetiler:latest}"
+PLANETILER_IMAGE="${PLANETILER_IMAGE:-ghcr.io/alexwohlbruck/planetiler-openmaptiles:v3.16-importance.1}"
+BASEMAP_QRANK_URL="${BASEMAP_QRANK_URL-https://qrank.toolforge.org/download/qrank.csv.gz}"
+QRANK_NAME="sources/qrank.csv.gz"
+QRANK_MAX_AGE_DAYS=7
 PLANETILER_MEMORY="${PLANETILER_MEMORY:-4g}"
 PLANETILER_CONTAINER_MEMORY="${PLANETILER_CONTAINER_MEMORY:-}"
 BASEMAP_MAXZOOM="${BASEMAP_MAXZOOM:-14}"
@@ -221,6 +229,20 @@ clean_tmp() {
   docker run --rm "${TMP_ARGS[@]}" "$HELPER_IMAGE" rm -rf "${TMP_PATH}" >/dev/null 2>&1 || true
 }
 
+# QRank publishes weekly. A failed fetch keeps the last copy, or renders without
+# one: POIs then rank by category, Wikidata link and size alone.
+QRANK_ARGS=()
+if [ -n "$BASEMAP_QRANK_URL" ]; then
+  if ! io_sh "test -n \"\$(find /out/${QRANK_NAME} -mtime -${QRANK_MAX_AGE_DAYS} 2>/dev/null)\"" >/dev/null 2>&1; then
+    log "Fetching POI pageview ranks from ${BASEMAP_QRANK_URL}..."
+    io_sh "mkdir -p /out/sources && wget -q -O /out/${QRANK_NAME}.part '${BASEMAP_QRANK_URL}' && gzip -t /out/${QRANK_NAME}.part && mv -f /out/${QRANK_NAME}.part /out/${QRANK_NAME}" \
+      || { log "WARNING: could not fetch pageview ranks — using the last copy if there is one"; io_sh "rm -f /out/${QRANK_NAME}.part" >/dev/null 2>&1 || true; }
+  fi
+  if io_sh "test -s /out/${QRANK_NAME}" >/dev/null 2>&1; then
+    QRANK_ARGS+=(--poi-qrank="/out/${QRANK_NAME}")
+  fi
+fi
+
 log "[1/3] Rendering from ${PBF_NAME} to z${BASEMAP_MAXZOOM} (heap ${PLANETILER_MEMORY})..."
 log "      input:  ${IN_DIR}"
 log "      output: ${OUT_DIR}"
@@ -254,6 +276,7 @@ if ! docker run --rm \
   --download-dir=/out/sources \
   --tmpdir="${TMP_PATH}" \
   --maxzoom="${BASEMAP_MAXZOOM}" \
+  ${QRANK_ARGS[@]+"${QRANK_ARGS[@]}"} \
   --force; then
   log "ERROR: planetiler failed — leaving the current basemap in place" >&2
   io_sh "rm -f /out/${STAGING_NAME}" >/dev/null 2>&1 || true
