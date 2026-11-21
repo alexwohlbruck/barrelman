@@ -10,6 +10,12 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.10.58] - 2026-11-21
+
+### Fixed
+
+* One agency's realtime server hanging no longer holds back every feed's live updates for 30 seconds: MOTIS gives each URL 15 s (`MOTIS_RT_HTTP_TIMEOUT`). Regenerate the MOTIS config after upgrading.
+
 ## [0.10.57] - 2026-11-20
 
 ### Fixed
