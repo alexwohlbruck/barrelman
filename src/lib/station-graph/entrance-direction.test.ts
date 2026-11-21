@@ -36,6 +36,7 @@ describe('entranceSign', () => {
   test('a sign naming only other lines', () => {
     expect(entranceSign(['2'], 'F,<F>,M trains Downtown & Brooklyn; PATH trains to New Jersey')).toEqual({ otherLines: true, direction: null })
     expect(entranceSign(['2'], 'Main entrance')).toBeNull()
+    expect(entranceSign(['4'], '86th Street', '6,<6> trains Downtown')).toEqual({ otherLines: true, direction: { heading: 180 } })
     expect(entranceSign(['6X'], '6,<6> trains Downtown')).toEqual({ heading: 180 })
   })
 

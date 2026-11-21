@@ -104,7 +104,8 @@ export function entranceSign(routes: string[], ...labels: Array<string | null | 
   const own = clauses.filter((c) => c.routes?.some((r) => wanted.has(r)))
   if (own.some((c) => c.sign == null)) return null
   const general = clauses.filter((c) => !c.routes)
-  if (!own.length && !general.length && clauses.length && wanted.size) return { otherLines: true, direction: oneDirection(clauses) }
+  const otherLines = clauses.some((c) => c.routes) && !general.some((c) => c.sign)
+  if (!own.length && otherLines && wanted.size) return { otherLines: true, direction: oneDirection(clauses) }
   return oneDirection(own.length ? own : general)
 }
 
