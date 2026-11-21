@@ -452,11 +452,15 @@ opt-in:
 `--stop-server` stops the server whatever the variable says.
 
 A GraphHopper build holds most of its heap through landmark preparation, which
-is hours for a country. Unless `GRAPHHOPPER_BUILD_JAVA_OPTS` is set, the heap is
-the serving `GRAPHHOPPER_JAVA_OPTS` cut down to the memory available, less
-1 GB, measured after the server has stopped. A box with under 2 GB available
-refuses to build. The script also warns when it starts beside a long-running
-SQL statement: an overlapping build has been OOM-killed before.
+is hours for a country. Unless `GRAPHHOPPER_BUILD_JAVA_OPTS` is set, the build
+takes the serving `GRAPHHOPPER_JAVA_OPTS` heap. When the memory available after
+the server stops, less 1 GB, cannot hold that heap, the rebuild is skipped
+(exit 75) and the server comes back on its current graph: a smaller heap fills
+during landmark preparation and stalls there for hours. An OSM update logs the
+skip as a warning and still succeeds. A build whose log has not moved for
+`GRAPHHOPPER_BUILD_STALL_MINUTES` (180) is killed and the old graph kept. The
+script also warns when it starts beside a long-running SQL statement: an
+overlapping build has been OOM-killed before.
 
 The build and import containers run under fixed names
 (`barrelman-graphhopper-build`, `barrelman-motis-import`). A rebuild refuses to

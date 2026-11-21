@@ -44,8 +44,11 @@ set -euo pipefail
 #                                  auto builds alongside only when MemAvailable
 #                                  covers the build heap plus 4 GB
 #   GRAPHHOPPER_BUILD_JAVA_OPTS    JAVA_OPTS for the build container. Unset, the
-#                                  serving JAVA_OPTS with -Xmx cut to what is
-#                                  available less 1 GB
+#                                  serving JAVA_OPTS; when available memory less
+#                                  1 GB cannot hold that heap, the build is
+#                                  skipped and the script exits 75
+#   GRAPHHOPPER_BUILD_STALL_MINUTES  kill a build whose log has not moved for
+#                                  this long (default 180)
 #   GRAPHHOPPER_VERIFY_ROUTE       auto (default) | 1 | 0, as the flags above
 #   GRAPHHOPPER_VERIFY_MIN_RAM_GB  auto runs the trial server only on a host
 #                                  with at least this much RAM (default 48)
@@ -331,16 +334,18 @@ if [ "$STOP_SERVER" = 1 ]; then
 fi
 
 # The build heap. Measured after the stop, so a stopped server's memory counts
-# as available. Unset, it is the serving heap cut to what is available less
-# 1 GB, so a build never starts with a heap the box cannot back.
+# as available.
 AVAIL_KB="$(mem_available_kb)"
 if [ -n "${GRAPHHOPPER_BUILD_JAVA_OPTS:-}" ]; then
   BUILD_JAVA_OPTS="$GRAPHHOPPER_BUILD_JAVA_OPTS"
 else
   HEAP_KB="$(staged_build_heap_kb "$SERVING_XMX_KB" "$AVAIL_KB")"
-  if [ "$HEAP_KB" = 0 ]; then
-    log "ERROR: only $(staged_human_kb "$AVAIL_KB") of memory available, too little for a graph build." >&2
-    exit 1
+  # A heap under the serving one fills during landmark preparation and stalls
+  # there for hours with routing down, so skip the build instead.
+  if [ "$HEAP_KB" -lt "$SERVING_XMX_KB" ]; then
+    log "WARNING: only $(staged_human_kb "$AVAIL_KB") of memory available; the build needs a $(staged_human_kb "$SERVING_XMX_KB") heap. Skipping the rebuild." >&2
+    log "  Free memory on the host, or set GRAPHHOPPER_BUILD_JAVA_OPTS to force a heap." >&2
+    exit 75
   fi
   BUILD_JAVA_OPTS="$(staged_with_xmx "$SERVING_JAVA_OPTS" $(( HEAP_KB / 1024 )))"
 fi
@@ -358,12 +363,27 @@ docker run -d --name "$BUILD" ${NETWORK:+--network "$NETWORK"} "${MOUNTS[@]}" \
 log "  build container: $BUILD. Follow it with: docker logs -f $BUILD"
 
 # Wait, with a line of progress every ten minutes so a long job's log shows life.
+# A build whose log stops moving is thrashing a full heap and is killed.
+STALL_SECONDS=$(( ${GRAPHHOPPER_BUILD_STALL_MINUTES:-180} * 60 ))
 ticks=0
+STALLED=0
+LAST_LINE=""
+LAST_MOVE=$(date +%s)
 while [ "$(docker inspect -f '{{.State.Running}}' "$BUILD" 2>/dev/null)" = "true" ]; do
   sleep 30
   ticks=$((ticks + 1))
+  LINE="$(docker logs --tail 1 "$BUILD" 2>&1 | cut -c1-160)"
+  if [ "$LINE" != "$LAST_LINE" ]; then
+    LAST_LINE="$LINE"
+    LAST_MOVE=$(date +%s)
+  elif [ $(( $(date +%s) - LAST_MOVE )) -ge "$STALL_SECONDS" ]; then
+    STALLED=1
+    log "  the build has logged nothing for $(( STALL_SECONDS / 60 )) minutes; stopping it"
+    docker kill "$BUILD" >/dev/null 2>&1 || true
+    break
+  fi
   if [ $((ticks % 20)) = 0 ]; then
-    log "  still building: $(docker logs --tail 1 "$BUILD" 2>&1 | cut -c1-160)"
+    log "  still building: $LINE"
   fi
 done
 BUILD_RC="$(docker inspect -f '{{.State.ExitCode}}' "$BUILD")"
@@ -373,8 +393,8 @@ docker rm "$BUILD" >/dev/null 2>&1 || true
 
 # ── [3/4] Verify ─────────────────────────────────────────────────────────────
 log "[3/4] Verifying the new graph..."
-if [ "$BUILD_RC" != 0 ]; then
-  log "ERROR: the graph import exited $BUILD_RC$([ "$BUILD_OOM" = true ] && echo ' (out of memory)'); the current graph is untouched." >&2
+if [ "$STALLED" = 1 ] || [ "$BUILD_RC" != 0 ]; then
+  log "ERROR: the graph import $([ "$STALLED" = 1 ] && echo "stalled, usually a full heap" || echo "exited $BUILD_RC")$([ "$BUILD_OOM" = true ] && echo ' (out of memory)'); the current graph is untouched." >&2
   [ "$BUILD_RC" = 137 ] && log "  Exit 137 is a kill, usually the OOM killer. Lower GRAPHHOPPER_BUILD_JAVA_OPTS, or build with the server stopped (the default)." >&2
   log "  ── build log tail ──" >&2
   tail -15 /tmp/graphhopper-build.log >&2 || true
