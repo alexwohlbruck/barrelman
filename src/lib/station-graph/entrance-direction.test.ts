@@ -48,8 +48,20 @@ describe('entranceSign', () => {
 
   test('a bare destination, in other languages too', () => {
     expect(entranceSign(['Blue'], 'To Franconia-Springfield')).toEqual({ toward: ['Franconia-Springfield'] })
-    expect(entranceSign(['U2'], 'Ausgang – Richtung Pankow')).toEqual({ toward: ['Pankow'] })
+    expect(entranceSign(['U2'], 'Zugang – Richtung Pankow')).toEqual({ toward: ['Pankow'] })
     expect(entranceSign(['1'], 'Line 1 direction La Défense')).toEqual({ toward: ['La Défense'] })
+  })
+
+  test('mid-sentence directions abroad', () => {
+    expect(entranceSign(['1'], 'Comercio-Ascensor. Acceso a línea 1 dirección Pinar de Chamartín')).toEqual({ toward: ['Pinar de Chamartín'] })
+    expect(entranceSign(['U2'], 'Aufzug U1 U2 U3 Fahrtrichtung West')).toEqual({ heading: 270 })
+    expect(entranceSign(['U9'], 'Bundesplatz', 'Richtung Osloer Straße')).toEqual({ toward: ['Osloer Straße'] })
+  })
+
+  test('an exit towards a street is not a train direction', () => {
+    expect(entranceSign(['U3'], 'Ausgang Richtung Implerstraße')).toBeNull()
+    expect(entranceSign(['U2'], 'Böhmerwaldplatz, Ausgang Richtung Böhmerwaldplatz')).toBeNull()
+    expect(entranceSign(['S5'], 'Ausgang Richtung Ringcenter', 'S Frankfurter Allee')).toBeNull()
   })
 
   test('only a destination opening the sign counts', () => {

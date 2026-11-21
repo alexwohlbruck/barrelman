@@ -148,7 +148,11 @@ export function solveComplex(input: ComplexInput, params: StationPathParams = DE
         const key = g.entranceKey.get(eid)!
         const out = { fromId: pid, fromKind: 'platform', toId: eid, toKind: 'entrance' } as const
         const inn = { fromId: eid, fromKind: 'entrance', toId: pid, toKind: 'platform' } as const
+        const ruledOut = (ends: { fromId: string; toId: string }) =>
+          modelledByAgency(eid, pid) && !input.agency!.has(`${ends.fromId}>${ends.toId}`)
+        // A bridged path guesses across gaps in the map; it doesn't outweigh an agency saying there is no way through.
         const rows = [fromTrees(outTrees, key, false, out, 'street'), fromTrees(inTrees, key, true, inn, 'street')]
+          .map((r) => (r?.source === 'bridged' && ruledOut(r) ? null : r))
         if (profile !== 'foot') { rows.forEach((r) => r && paths.push(r)); continue }
         const edgeM = pointWayDistance(g.xy.get(key)!, plat.pm, plat.area).d
         rows.forEach((row, i) => {
@@ -157,7 +161,7 @@ export function solveComplex(input: ComplexInput, params: StationPathParams = DE
           const agency = input.agency?.get(`${ends.fromId}>${ends.toId}`)
           const depth = Math.abs(plat.level ?? 1)
           if (agency !== undefined) return paths.push(timeOnly('agency', agency, ends, 'street', edgeM, depth))
-          if (modelledByAgency(eid, pid)) return
+          if (ruledOut(ends)) return
           paths.push(timeOnly('estimated', estimateStreet(params, { edgeM, level: plat.level }), ends, 'street', edgeM, depth))
         })
       }

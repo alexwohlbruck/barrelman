@@ -15,21 +15,29 @@
 export type EntranceSign = { heading: number } | { inbound: boolean } | { toward: string[] } | { otherLines: true }
 
 const HEADING_TERMS: Array<[RegExp, number]> = [
-  [/\b(uptown|north\s*-?bound)\b/i, 0],
-  [/\b(east\s*-?bound)\b/i, 90],
-  [/\b(downtown|south\s*-?bound)\b/i, 180],
-  [/\b(west\s*-?bound)\b/i, 270],
+  [/\b(uptown|north\s*-?bound|fahrtrichtung\s+nord(en)?)\b/i, 0],
+  [/\b(east\s*-?bound|fahrtrichtung\s+ost(en)?)\b/i, 90],
+  [/\b(downtown|south\s*-?bound)\b|\bfahrtrichtung\s+süd(en)?\b/i, 180],
+  [/\b(west\s*-?bound|fahrtrichtung\s+west(en)?)\b/i, 270],
 ]
 
 /** "A,C trains …", "all F,G trains …". */
 const TRAINS = /^\s*(?:all\s+)?(?:([\w<>]{1,4}(?:\s*,\s*[\w<>]{1,4})*)\s+)?trains?\b(.*)$/i
-/** "Red Line …", "Line 1 …". */
-const LINE = /^\s*(?:all\s+)?((?:[\w-]+\s+){1,3}line|line\s+[\w-]+)\b(.*)$/i
-const EITHER_WAY = /\b(all\s+trains|all\s+directions|both\s+directions)\b/i
+/** Lines named anywhere on the sign: "Red Line", "Line 1", "línea 1", "U2". */
+const LINES = [
+  /\b((?:[A-Z][\w-]*\s+){1,2})[Ll]ine\b/g,
+  /\b(?:line|línea|linea|ligne|linie|linha)\s+([\w-]{1,4})\b/gi,
+  /\b([US]\d{1,2})\b/g,
+]
+const EITHER_WAY = /\b(all\s+trains|all\s+directions|both\s+directions|beide\s+richtungen|ambas\s+direcciones)\b/i
 const IN_OUT = /\b(in|out)\s*-?\s*bound\b/i
-/** A destination after a word for "to" or "towards", at the start of a piece of the sign. */
-const TOWARD = /^(?:to|toward|towards|direction|dir\.|richtung|dirección|direccion|hacia|direzione|sentido|kierunek|riktning|retning)\s+(.+?)\s*$/i
+/** Words that only ever mean the way a train runs, wherever they stand on the sign. */
+const HEADING_FOR = /(?:^|[\s(])(?:towards?|direction|dir\.|richtung|fahrtrichtung|dirección|direccion|direcció|direzione|sentido|kierunek|riktning|retning)\s+([^.;,()]+)/i
+/** "to X" means a train's direction only when it opens the sign or a piece of it. */
+const TO = /^to\s+(.+?)\s*$/i
 const BOUND = /^(.+?)[\s-]+bound\b/i
+/** An exit "towards" a street orients the rider on the street, not on the platform. */
+const EXIT = /\b(ausgang|exit|sortie|salida|uscita|saída|uitgang|wyjście|utgång)\b/i
 
 interface Clause {
   routes: string[] | null
@@ -46,7 +54,7 @@ function compassHeading(text: string): number | null {
 }
 
 const places = (text: string) =>
-  text.replace(/\bonly\b/gi, '').split(/\s*(?:,|&|\/|\band\b)\s*/i).map((p) => p.trim()).filter(Boolean)
+  text.replace(/\bonly\b/gi, '').split(/\s*(?:,|&|\/|\band\b|\bund\b|\by\b|\bet\b)\s*/i).map((p) => p.trim()).filter(Boolean)
 
 /** The pieces a sign's text may start a destination in: the whole, and after a dash, colon or bracket. */
 const pieces = (text: string) => [text, ...text.split(/\s+[-–—]\s+|:|\(|\)/)].map((p) => p.trim()).filter(Boolean)
@@ -57,19 +65,24 @@ function readSign(text: string): EntranceSign | null {
   if (heading != null) return { heading }
   const inOut = IN_OUT.exec(text)
   if (inOut) return { inbound: inOut[1].toLowerCase() === 'in' }
+  const named = HEADING_FOR.exec(text)
+  if (named && !EXIT.test(text.slice(0, named.index + 1))) return { toward: places(named[1]) }
   for (const piece of pieces(text)) {
-    const toward = (TOWARD.exec(piece) ?? BOUND.exec(piece))?.[1]
+    const toward = (TO.exec(piece) ?? BOUND.exec(piece))?.[1]
     if (toward) return { toward: places(toward) }
   }
   return null
 }
 
+function linesOn(text: string): string[] | null {
+  const found = LINES.flatMap((re) => [...text.matchAll(re)].map((m) => routeKey(m[1])))
+  return found.length ? [...new Set(found)] : null
+}
+
 function parseClause(text: string): Clause {
   const trains = TRAINS.exec(text)
   if (trains) return { routes: trains[1] ? trains[1].split(',').map(routeKey) : null, sign: readSign(trains[2]) }
-  const line = LINE.exec(text)
-  if (line) return { routes: [routeKey(line[1])], sign: readSign(line[2]) }
-  return { routes: null, sign: readSign(text) }
+  return { routes: linesOn(text), sign: readSign(text) }
 }
 
 const signKey = (sign: EntranceSign) =>
