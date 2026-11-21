@@ -9,9 +9,10 @@
 import { sql } from 'drizzle-orm'
 import { db } from '../db'
 import {
-  arrivalBearing, atStation, boardingHint, chooseEntrance, classifyTransfer, guidanceSteps, isWalked, PLATFORM_REMAINDER_MIN_S,
+  arrivalBearing, atStation, boardingHint, chooseEntrance, departureBearing, classifyTransfer, guidanceSteps, isWalked, PLATFORM_REMAINDER_MIN_S,
   platformRemainder, positionIsMeasured, representativeRow, routeSign, stationChanges, stationVisits, type BoardingHint, type GuidanceStep, type TransferClass, type WalkContext,
 } from '../lib/station-graph/guidance'
+import { entranceSign, reachingPlatform, type RideDirection } from '../lib/station-graph/entrance-direction'
 import { DEFAULT_PARAMS } from '../lib/station-graph/params'
 import { platformsForStop, STOP_MATCH_M, type StopCandidate } from '../lib/station-graph/stops'
 import type { EndpointKind, PathSource, Profile, StationPath } from '../lib/station-graph/types'
@@ -93,11 +94,14 @@ export interface GuidedLeg {
   transitLeg: boolean
   mode: string
   from: { lat: number; lng: number; stopId?: string }
-  to: { lat: number; lng: number; stopId?: string }
+  to: { lat: number; lng: number; stopId?: string; name?: string }
   routeShortName?: string
   routeLongName?: string
   routeId?: string
   directionLabel?: string
+  headsign?: string
+  intermediateStops?: Array<{ name?: string }>
+  interchangeableRoutes?: Array<{ shortName?: string }>
   geometry?: { type: 'LineString'; coordinates: [number, number][] }
   entrance?: StationAccessChoice
   exit?: StationAccessChoice
@@ -148,6 +152,7 @@ interface EntranceInfo {
   lat: number
   lng: number
   cornerLabel: string | null
+  description: string | null
   entryAllowed: boolean | null
   exitAllowed: boolean | null
 }
@@ -201,7 +206,7 @@ async function loadEntrances(ids: string[]): Promise<Map<string, EntranceInfo>> 
   if (!ids.length) return new Map()
   const [rows, labels] = await Promise.all([
     db.execute(sql`
-      SELECT id, name, tags->>'ref' AS ref, tags->>'level' AS level, ST_X(centroid) AS lng, ST_Y(centroid) AS lat
+      SELECT id, name, tags->>'ref' AS ref, tags->>'description' AS description, tags->>'level' AS level, ST_X(centroid) AS lng, ST_Y(centroid) AS lat
       FROM geo_places WHERE id IN (${sql.join(ids.map((id) => sql`${id}`), sql`, `)})
     `) as Promise<Array<Record<string, any>>>,
     entranceLabelsFor(ids).catch(() => new Map()),
@@ -211,7 +216,7 @@ async function loadEntrances(ids: string[]): Promise<Map<string, EntranceInfo>> 
     const level = r.level !== null && r.level !== undefined && Number.isFinite(Number(r.level)) ? Number(r.level) : 0
     return [r.id, {
       id: r.id, name: r.name, ref: r.ref, level, lat: r.lat, lng: r.lng, cornerLabel: label?.cornerLabel ?? null,
-      entryAllowed: label?.entryAllowed ?? null, exitAllowed: label?.exitAllowed ?? null,
+      description: r.description ?? null, entryAllowed: label?.entryAllowed ?? null, exitAllowed: label?.exitAllowed ?? null,
     }]
   }))
 }
@@ -276,6 +281,25 @@ async function loadPaths(profile: Profile, pairs: Array<[string, string]>, board
 
 
 const entranceName = (e: EntranceInfo) => e.cornerLabel ?? e.name ?? e.ref ?? null
+
+/** Which way a ride runs where the rider meets it: boarding looks at the stops ahead, alighting only at its terminus. */
+function rideDirection(ride: GuidedLeg, end: 'board' | 'alight'): RideDirection {
+  const line = ride.geometry?.coordinates
+  const ahead = end === 'board' ? [...(ride.intermediateStops ?? []).map((s) => s.name), ride.to.name] : []
+  return {
+    bearing: line ? (end === 'board' ? departureBearing(line) : arrivalBearing(line)) : null,
+    names: [ride.directionLabel, ride.headsign, ...ahead].filter((n): n is string => !!n),
+  }
+}
+
+const rideRoutes = (ride: GuidedLeg) =>
+  [ride.routeShortName, ...(ride.interchangeableRoutes ?? []).map((r) => r.shortName)].filter((r): r is string => !!r)
+
+/** Entrance candidates left once those signed for the other direction are dropped. */
+function sameDirection<C extends { info: EntranceInfo }>(candidates: C[], ride: GuidedLeg, end: 'board' | 'alight'): C[] {
+  const routes = rideRoutes(ride)
+  return reachingPlatform(candidates, (c) => entranceSign(routes, c.info.name, c.info.description), rideDirection(ride, end))
+}
 
 function endpoint(id: string, kind: EndpointKind, platforms: Map<string, PlatformInfo>, entrances: Map<string, EntranceInfo>): StationEndpoint | null {
   if (kind === 'platform') {
@@ -373,7 +397,7 @@ export async function enrichStationGuidance(itineraries: Array<{ legs: GuidedLeg
           const e = entrances.get(row.fromId)
           return e && e.entryAllowed !== false ? [{ id: e.id, lat: e.lat, lng: e.lng, row, info: e }] : []
         }))
-      const choice = chooseEntrance(street, candidates, deps.walkMps)
+      const choice = chooseEntrance(street, sameDirection(candidates, ride, 'board'), deps.walkMps)
       if (!choice) continue
       const e = choice.candidate.info
       const walk = stationWalk(choice.candidate.row, { kind: 'access', entrance: entranceName(e), sign: routeSign(ride) }, platforms, entrances)
@@ -393,7 +417,7 @@ export async function enrichStationGuidance(itineraries: Array<{ legs: GuidedLeg
           const e = entrances.get(row.toId)
           return e && e.exitAllowed !== false ? [{ id: e.id, lat: e.lat, lng: e.lng, row, info: e }] : []
         }))
-      const choice = chooseEntrance(street, candidates, deps.walkMps)
+      const choice = chooseEntrance(street, sameDirection(candidates, ride, 'alight'), deps.walkMps)
       if (!choice) continue
       const e = choice.candidate.info
       const row = choice.candidate.row
