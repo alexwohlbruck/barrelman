@@ -89,6 +89,33 @@ describe('buildDecks', () => {
     expect(joining.heights.at(-1)!).toBeGreaterThan(201)
   })
 
+  it('a walkway over a roadway clears its traffic; one between two roadways clears only their railings', async () => {
+    const line = (id: number, north: number, kind: Way['kind'], layer: number, width: number): Way =>
+      ({ id, points: [east(0, north), east(600, north + 300)], kind, layer, width })
+    const decks = await buildDecks(input({
+      ways: [line(1, -8, 'road', 1, 10), line(2, 8, 'road', 1, 10), line(3, 0, 'path', 2, 3), line(4, 9, 'path', 2, 3)],
+      onGround: new Set([-8, 8, 0, 9].flatMap(n => [key(east(0, n)), key(east(600, n + 300))])),
+      crossed: [{ kind: 'rail', points: [east(330, 90), east(270, 210)] }],
+    }), ground(200))
+    const at = (id: number) => decks.find(d => d.ways.includes(id))!.heights[Math.round(300 / STEP)]
+    const road = Math.max(at(1), at(2))
+    expect(at(4)).toBeGreaterThanOrEqual(road + CLEARANCE.deck - 0.5)
+    expect(at(3)).toBeGreaterThanOrEqual(road + CLEARANCE.beside - 0.5)
+    expect(at(3)).toBeLessThan(road + CLEARANCE.deck - 1)
+  })
+
+  it("a sidewalk beside its own level's roadway keeps clear of the roadway below", async () => {
+    const line = (id: number, north: number, kind: Way['kind'], layer: number, width: number): Way =>
+      ({ id, points: [east(0, north), east(600, north + 300)], kind, layer, width })
+    const decks = await buildDecks(input({
+      ways: [line(1, 0, 'road', 1, 10), line(2, -1, 'road', 2, 10), line(3, 7.5, 'path', 2, 3)],
+      onGround: new Set([0, -1, 7.5].flatMap(n => [key(east(0, n)), key(east(600, n + 300))])),
+      crossed: [{ kind: 'rail', points: [east(330, 90), east(270, 210)] }],
+    }), ground(200))
+    const at = (id: number) => decks.find(d => d.ways.includes(id))!.heights[Math.round(300 / STEP)]
+    expect(at(3)).toBeGreaterThanOrEqual(at(1) + CLEARANCE.deck - 0.5)
+  })
+
   it('a ramp merging alongside a main line takes its height along the merge; one meeting it square keeps its own grade', async () => {
     const main: Way = { id: 1, points: [east(0), east(400)], kind: 'road', layer: 1, width: 14 }
     // Runs in beside the main line's carriageway for its last 60 m, ending on it.

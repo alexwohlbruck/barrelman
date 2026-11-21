@@ -128,6 +128,19 @@ test('a walkway under a landmark that models its bridge is left to the model ent
   expect(modelled).toBe(0)
 })
 
+test('a walkway OSM draws just outside the outline of a bridge a landmark models is left to it too', () => {
+  const north = (m: number) => m / 30_400_000
+  const walkway: Deck = { ...deck, kind: 'path', edges: [1.5, 1.5] }
+  const [x0, x1] = [mercator(-74.01, 40.7)[0], mercator(-73.99, 40.7)[0]]
+  const beside = (gap: number): Array<[number, number]> => {
+    const [y0, y1] = [points[1][1] - north(gap), points[1][1] - north(gap + 30)]
+    return [[x0, y0], [x1, y0], [x1, y1], [x0, y1], [x0, y0]]
+  }
+  const drawn = (gap: number) => bakeBridges({ ...input, decks: [walkway], structures: [{ ring: beside(gap), centre: points[1], radius: 200 }] }, MATERIAL_PALETTE).mesh.position.length
+  expect(drawn(1)).toBe(0)
+  expect(drawn(4)).toBeGreaterThan(0)
+})
+
 test('lays a street deck\'s carriageway beside a low walkway the model draws', () => {
   const north = (m: number) => m / 30_400_000
   const walkway: Deck = { ...deck, id: 'walk', kind: 'path', edges: [1.5, 1.5], grounded: [false, false], heights: [0.5, 1, 0.5], ground: [0, 0, 0],
