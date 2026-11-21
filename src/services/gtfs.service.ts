@@ -1986,6 +1986,8 @@ interface MotisConfigOptions {
    * less often. Defaults to the MOTIS_RT_UPDATE_INTERVAL env var, else 60.
    */
   rtUpdateInterval?: number
+  /** Seconds MOTIS waits for one GTFS-RT URL; every feed's update waits for the slowest. From MOTIS_RT_HTTP_TIMEOUT, else 15. */
+  rtHttpTimeout?: number
   /**
    * MOTIS request threads, from MOTIS_THREADS. Each in-flight query holds its
    * own search state, so this caps peak memory. Unset → one per core.
@@ -2022,6 +2024,7 @@ export async function generateMotisConfig(options?: MotisConfigOptions): Promise
     numDays = 365,
     maxFootpathLength = 15,
     rtUpdateInterval = Number(process.env.MOTIS_RT_UPDATE_INTERVAL) || 60,
+    rtHttpTimeout = Number(process.env.MOTIS_RT_HTTP_TIMEOUT) || 15,
     threads = Number(process.env.MOTIS_THREADS) || undefined,
     enableStreetRouting = false,
     // MOTIS uses the platform-stripped extract (scripts/prepare-motis-osm.sh)
@@ -2078,6 +2081,7 @@ export async function generateMotisConfig(options?: MotisConfigOptions): Promise
     // dev can raise this (MOTIS_RT_UPDATE_INTERVAL) to cut continuous polling of
     // agencies it isn't testing while keeping realtime data present.
     lines.push(`  update_interval: ${rtUpdateInterval}`)
+    lines.push(`  http_timeout: ${rtHttpTimeout}`)
     lines.push(`  max_footpath_length: ${maxFootpathLength}`)
     // Import-time stop↔street matching radius used when generating
     // stop-to-stop transfer footpaths (osr_footpath). The MOTIS default of
