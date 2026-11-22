@@ -196,6 +196,18 @@ export function arrivalBearing(line: Array<[number, number]>, backM = 150): numb
   return null
 }
 
+/** Compass bearing a train leaves its first stop on, measured over its first `aheadM` metres. */
+export function departureBearing(line: Array<[number, number]>, aheadM = 150): number | null {
+  if (line.length < 2) return null
+  const start = line[0]
+  let travelled = 0
+  for (let i = 1; i < line.length; i++) {
+    travelled += haversineM({ lng: line[i - 1][0], lat: line[i - 1][1] }, { lng: line[i][0], lat: line[i][1] })
+    if (travelled >= aheadM || i === line.length - 1) return travelled > 1 ? bearing(start, line[i]) : null
+  }
+  return null
+}
+
 export type TrainSection = 'front' | 'middle' | 'back'
 
 export interface BoardingHint {

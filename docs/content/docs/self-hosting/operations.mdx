@@ -272,6 +272,14 @@ re-renders it with planetiler — a few minutes for a couple of US states. Set
 `REBUILD_BASEMAP=0` on the update to skip it and enable the seeded weekly
 **Rebuild Basemap** schedule instead.
 
+The render uses Parchment's [planetiler-openmaptiles fork](https://github.com/alexwohlbruck/planetiler-openmaptiles),
+which ranks POI labels by importance: category, Wikidata pageviews and footprint.
+Each `poi` feature carries the score as `importance` (0–100), and `rank` follows
+it. The pageviews come from [QRank](https://qrank.wmcloud.org), about 125 MB,
+fetched into `sources/` once a week. Set `BASEMAP_QRANK_URL=` to render without
+them, or `PLANETILER_IMAGE=ghcr.io/onthegomap/planetiler:latest` to render stock
+OpenMapTiles.
+
 ### Large imports
 
 On a country-sized import, three of the things an update triggers take hours:

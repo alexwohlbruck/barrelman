@@ -10,9 +10,17 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.10.59] - 2026-11-21
+
 ### Fixed
 
 * The Mike O'Callaghan–Pat Tillman Memorial Bridge's deck rises to its true crest, 269.6 m over the Colorado River, instead of running straight between its ends up to 2.5 m low. After upgrading, run Build Bridge Decks over the canyon (`--bbox -114.746,36.010,-114.736,36.016`).
+
+* Transit plans no longer send riders through an entrance that only reaches the other direction's platform. Entrances signed for a direction ("A,C trains to Manhattan", "Uptown", "Inbound only", "Richtung …") are matched against the ride. Where an agency's GTFS pathways leave an entrance unconnected to a platform, station paths no longer guess a route between them. Rebuild station paths after upgrading.
+
+### Changed
+
+* Basemap POIs rank by importance, so a city's best-known hospital, park or museum keeps its label over a minor neighbour. Each POI carries an `importance` score from 0 to 100. Rebuild the basemap after upgrading.
 
 ## [0.10.58] - 2026-11-21
 
