@@ -197,6 +197,15 @@ describe('normalizeFeed', () => {
     expect(trips(out)[0]).toMatchObject({ tripId: `reroute:${DATE}`, scheduleRelationship: 8 })
   })
 
+  it('times the stops a train running early has already passed, so they are not still to come', () => {
+    // T2330 runs 6 minutes early: at 23:37 it has left S4, due 23:39, and reports from S5 on.
+    const early = update('T2330', '23:24', 4, { startTime: '23:30:00' })
+    const out = normalizeFeed(index, message('23:37', early), at('23:37'))
+    const listed = out.message.entity![0]!.tripUpdate!.stopTimeUpdate!
+    expect(listed.slice(0, 2).map(s => s.stopId)).toEqual(['S4', 'S5'])
+    expect(Number(listed[0]!.departure!.time)).toBe(at('23:33'))
+  })
+
   it('cancels an under-way run the feed is silent about on a route it covers', () => {
     // 23:00 and 23:15 are under way at 23:21; only 23:15 is reported.
     const out = normalizeFeed(index, message('23:21', update('T2315', '23:15', 2, { startTime: '23:15:00' })), at('23:21'))

@@ -253,14 +253,14 @@ export function normalizeFeed(
   const listsEveryStop = share(all.filter(o => o.dense), o => !o.between.length)
   const withSkips = (tu: TripUpdate): TripUpdate => {
     const o = omissions.get(tu)
-    if (!o) return tu
+    if (!o) return withPassedStops(tu, placed.get(tu), now)
     const skip = [...(listsEveryStop ? o.between : []), ...(listsWholeRun ? o.after : [])]
-    if (!skip.length) return tu
+    if (!skip.length) return withPassedStops(tu, placed.get(tu), now)
     stats.skipped += skip.length
     const order = (id: string | null | undefined) => o.order.get(id ?? '') ?? Infinity
     const stopTimeUpdate = [...(tu.stopTimeUpdate ?? []), ...skip.map(stopId => ({ stopId, scheduleRelationship: SKIPPED }))]
       .sort((a, b) => order(a.stopId) - order(b.stopId))
-    return { ...tu, stopTimeUpdate }
+    return withPassedStops({ ...tu, stopTimeUpdate }, placed.get(tu), now)
   }
 
   const out: FeedEntity[] = []
@@ -371,6 +371,30 @@ function omittedStops(run: Run, tu: TripUpdate): Omitted | null {
     after: stops.slice(last + 1),
     order: new Map(stops.map((id, i) => [id, i])),
   }
+}
+
+/**
+ * The run's stops ahead of the update's first, which the train has already
+ * passed, timed by the update's delay there. Left at their scheduled times, a
+ * train running early, or matched to a later run, would still leave from them.
+ */
+function withPassedStops(tu: TripUpdate, run: Run | undefined, now: number): TripUpdate {
+  const stus = tu.stopTimeUpdate ?? []
+  const first = stus.findIndex(s => s.stopId && stopTime(s) > 0)
+  if (!run || first < 0) return tu
+  const at = run.trip.stopIds.indexOf(stus[first]!.stopId!)
+  if (at <= 0) return tu
+  const delay = stopTime(stus[first]!) - (run.origin + run.trip.times[at]!)
+  const listed = new Set(stus.map(s => s.stopId))
+  const passed: transit_realtime.TripUpdate.IStopTimeUpdate[] = []
+  for (let i = 0; i < at; i++) {
+    const stopId = run.trip.stopIds[i]!
+    const scheduled = run.origin + run.trip.times[i]!
+    const time = scheduled + delay
+    if (listed.has(stopId) || scheduled <= now || time > now) continue
+    passed.push({ stopId, arrival: { time }, departure: { time } })
+  }
+  return passed.length ? { ...tu, stopTimeUpdate: [...passed, ...stus] } : tu
 }
 
 function asNewTrip(index: StaticIndex, tu: TripUpdate, dates: string[]): TripUpdate | null {
