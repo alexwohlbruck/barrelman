@@ -106,8 +106,11 @@ enriched with per-edge surface, road class, bike network, smoothness and slope
 attributes (\`edge_segments\`) and elevation statistics. Internally calls
 GraphHopper /route with details and elevation enabled. Edge segments carry
 \`osmWayId\` and \`country\` where the routing graph has them, for POST /route/lanes.
-A walk across a pedestrian area takes straight paths the graph adds between its
-ways in; those carry \`osmWayId\` from 2,100,000,000 up, which is no OSM way.
+A walk across a pedestrian area takes paths the graph adds between its ways in;
+those carry \`osmWayId\` from 2,100,000,000 up, which is no OSM way. Where such a
+walk bends inside the area, the bend is drawn as a curve that stays within it,
+and the path's points, \`distance\`, \`time\`, instructions and details all
+describe the curve.
 
 On a \`bike\` route, \`bike_suitability: { weight }\` (0 fastest – 1 safest) routes by
 how comfortable each street is to ride (the \`cycling_tiles\` 0–100 \`score\`):
