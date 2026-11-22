@@ -282,7 +282,7 @@ export function normalizeFeed(
       continue
     }
     if (!tu || !loose.includes(tu)) { out.push(e); continue }
-    const added = asNewTrip(index, tu)
+    const added = asNewTrip(index, tu, dates)
     if (added) {
       out.push({ ...e, tripUpdate: added })
       stats.added++
@@ -373,11 +373,12 @@ function omittedStops(run: Run, tu: TripUpdate): Omitted | null {
   }
 }
 
-function asNewTrip(index: StaticIndex, tu: TripUpdate): TripUpdate | null {
+function asNewTrip(index: StaticIndex, tu: TripUpdate, dates: string[]): TripUpdate | null {
   const td = tu.trip!
   if (!td.routeId || !index.routeIds.has(td.routeId)) return null
-  // A trip the timetable has is not new, however far its times have run from it.
-  if (td.tripId && index.byTripId.has(td.tripId)) return null
+  // A trip the timetable runs that day is not new, however far its times have run from it.
+  const days = td.startDate ? [shiftDate(td.startDate, -1), td.startDate] : dates
+  if (td.tripId && runs(index, index.byTripId.get(td.tripId) ?? [], days).length) return null
   const stus = (tu.stopTimeUpdate ?? []).filter(s => s.stopId && index.stopIds.has(s.stopId) && stopTime(s) > 0)
   if (stus.length < 2) return null
   return {
