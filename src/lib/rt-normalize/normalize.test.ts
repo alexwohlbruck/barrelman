@@ -184,6 +184,28 @@ describe('normalizeFeed', () => {
     expect(added.tripUpdate!.stopTimeUpdate).toHaveLength(stops.length)
   })
 
+  it('adds a train named by a trip id the timetable runs only on other days', () => {
+    const otherDays = buildStaticIndex({
+      agency: `agency_id,agency_name,agency_url,agency_timezone\nMTA,MTA,https://mta.info,${TZ}\n`,
+      routes: 'route_id,route_type\nD,1\n',
+      stops: 'stop_id,stop_name\n' + stops.map(s => `${s},${s}`).join('\n') + '\n',
+      calendarDates: 'service_id,date,exception_type\nLATER,20261116,1\n',
+      trips: 'route_id,service_id,trip_id\nD,LATER,reroute\n',
+      stopTimes: 'trip_id,arrival_time,departure_time,stop_id,stop_sequence\nreroute,22:22:00,22:22:00,S1,1\nreroute,22:25:00,22:25:00,S2,2\n',
+    })
+    const out = normalizeFeed(otherDays, message('22:20', update('reroute', '22:22')), at('22:20'))
+    expect(trips(out)[0]).toMatchObject({ tripId: `reroute:${DATE}`, scheduleRelationship: 8 })
+  })
+
+  it('times the stops a train running early has already passed, so they are not still to come', () => {
+    // T2330 runs 6 minutes early: at 23:37 it has left S4, due 23:39, and reports from S5 on.
+    const early = update('T2330', '23:24', 4, { startTime: '23:30:00' })
+    const out = normalizeFeed(index, message('23:37', early), at('23:37'))
+    const listed = out.message.entity![0]!.tripUpdate!.stopTimeUpdate!
+    expect(listed.slice(0, 2).map(s => s.stopId)).toEqual(['S4', 'S5'])
+    expect(Number(listed[0]!.departure!.time)).toBe(at('23:33'))
+  })
+
   it('cancels an under-way run the feed is silent about on a route it covers', () => {
     // 23:00 and 23:15 are under way at 23:21; only 23:15 is reported.
     const out = normalizeFeed(index, message('23:21', update('T2315', '23:15', 2, { startTime: '23:15:00' })), at('23:21'))
