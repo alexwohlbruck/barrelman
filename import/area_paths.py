@@ -12,15 +12,20 @@ import math
 from dataclasses import dataclass
 from typing import Iterable
 
-from shapely import LineString, Point, Polygon, STRtree, prepare
+import numpy as np
+from shapely import LineString, Point, Polygon, STRtree, contains_xy, distance, points as as_points, prepare
 from shapely.geometry.polygon import orient
 
 # Room for rounding on a line that runs along the space's edge; never further outside than this.
 SLACK_M = 0.002
 # A point this close to a line lies on it.
 ON_LINE_M = 0.05
-# People pass a wall or a fountain at arm's length, so corners sit this far off them.
+# People keep a step or two off a wall or a planter, so lines keep this far off the edge where there is room.
+PAD_M = 1.5
+# Where the space is too narrow for that: arm's length.
 CLEARANCE_M = 0.5
+# How fast a line from a way in, which starts on the edge, must move off it: metres of clearance per metre walked.
+EASE = 0.25
 # Within the clearance, so a round fountain turns a handful of corners rather than dozens.
 SIMPLIFY_M = 0.4
 MIN_LINE_M = 0.5
@@ -38,6 +43,7 @@ class Vertex:
     # A corner's neighbours along its ring; None for a way in, which can be left in any direction.
     prev: XY | None = None
     next: XY | None = None
+    clearance: float = 0.0
 
 
 def _cross(o: XY, a: XY, b: XY) -> float:
@@ -50,7 +56,7 @@ def _turn(a: XY, b: XY, c: XY) -> float:
     return abs((h2 - h1 + math.pi) % (2 * math.pi) - math.pi)
 
 
-def corners(space: Polygon) -> list[Vertex]:
+def corners(space: Polygon, clearance: float = 0.0) -> list[Vertex]:
     """Vertices where the space's edge turns into it: the only places a shortest walk bends."""
     space = orient(space, 1.0)
     found = []
@@ -59,7 +65,7 @@ def corners(space: Polygon) -> list[Vertex]:
         for i, b in enumerate(pts):
             a, c = pts[i - 1], pts[(i + 1) % len(pts)]
             if _cross(a, b, c) < 0 and _turn(a, b, c) >= MIN_TURN_RAD:
-                found.append(Vertex(b, a, c))
+                found.append(Vertex(b, a, c, clearance))
     return found
 
 
@@ -75,14 +81,47 @@ def without_planters(space: Polygon) -> Polygon:
     return Polygon(space.exterior, [h for h in space.interiors if Polygon(h).area >= MIN_OBSTACLE_M2])
 
 
+def _eroded_corners(space: Polygon, clearance: float) -> list[Vertex]:
+    clear = space.buffer(-clearance, join_style="mitre", mitre_limit=2.0).simplify(SIMPLIFY_M)
+    return [v for part in getattr(clear, "geoms", [clear]) if isinstance(part, Polygon) for v in corners(part, clearance)]
+
+
+class _Padding:
+    """Whether a line keeps PAD_M off the space's edge, or as far as its ends and the space's width allow."""
+
+    def __init__(self, space: Polygon):
+        self.edge = space.boundary
+        self.roomy = space.buffer(-(PAD_M - 0.01))
+        # Passages narrower than twice the pad, and their mouths.
+        self.tight = space.difference(space.buffer(-PAD_M).buffer(PAD_M)).buffer(PAD_M)
+        prepare(self.roomy)
+        prepare(self.tight)
+
+    def kept(self, a: Vertex, b: Vertex, line: LineString) -> bool:
+        if self.roomy.covers(line):
+            return True
+        close = line.difference(self.roomy)
+        if close.is_empty:
+            return True
+        steps = max(2, int(math.ceil(close.length / 0.25)) + 1)
+        at = np.concatenate([np.linspace(0, part.length, steps) + line.project(Point(part.coords[0]))
+                             for part in getattr(close, "geoms", [close])])
+        at = np.clip(at, 0, line.length)
+        need = np.minimum(PAD_M, np.minimum(a.clearance + EASE * at, b.clearance + EASE * (line.length - at)))
+        xy = np.array([line.interpolate(s).coords[0] for s in at])
+        need = np.where(contains_xy(self.tight, xy[:, 0], xy[:, 1]), np.minimum(need, CLEARANCE_M), need)
+        return bool(np.all(distance(self.edge, as_points(xy)) >= need - 0.01))
+
+
 def lines(space: Polygon, anchors: Iterable[XY], barriers: Iterable[LineString] = (), max_points: int = 400) -> list[tuple[XY, XY]] | None:
     """
     Every straight line worth walking across `space` between its anchors (ways
     in, ends of walls) and its corners. None past `max_points` points.
     """
     space = without_planters(space)
-    clear = space.buffer(-CLEARANCE_M, join_style="mitre", mitre_limit=2.0).simplify(SIMPLIFY_M)
-    points: dict[XY, Vertex] = {v.xy: v for part in getattr(clear, "geoms", [clear]) if isinstance(part, Polygon) for v in corners(part)}
+    padding = _Padding(space)
+    points: dict[XY, Vertex] = {v.xy: v for v in _eroded_corners(space, PAD_M)}
+    points.update((v.xy, v) for v in _eroded_corners(space, CLEARANCE_M) if padding.tight.contains(Point(v.xy)))
     for xy in anchors:
         points[xy] = Vertex(xy)
     if len(points) > max_points:
@@ -109,6 +148,8 @@ def lines(space: Polygon, anchors: Iterable[XY], barriers: Iterable[LineString] 
             if not room.covers(line):
                 continue
             if wall_tree is not None and any(walls[k].crosses(line) for k in wall_tree.query(line)):
+                continue
+            if not padding.kept(a, b, line):
                 continue
             found.append((a.xy, b.xy))
     return found

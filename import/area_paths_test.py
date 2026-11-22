@@ -54,20 +54,34 @@ class LinesTest(unittest.TestCase):
         found = lines(l_shape, [(40, 5), (5, 40)])
         self.assertNotIn(((40, 5), (5, 40)), found)
         hugging = math.dist((40, 5), (10, 10)) + math.dist((10, 10), (5, 40))
-        self.assertAlmostEqual(shortest(found, (40, 5), (5, 40)), hugging, delta=1.0)
+        self.assertAlmostEqual(shortest(found, (40, 5), (5, 40)), hugging, delta=3.0)
 
     def test_goes_around_a_hole(self):
         plaza = Polygon(box(0, 0, 60, 60).exterior, [box(20, 20, 40, 40).exterior.coords])
         found = lines(plaza, [(0, 30), (60, 30)])
         self.assertNotIn(((0, 30), (60, 30)), found)
         around = math.dist((0, 30), (20, 40)) + 20 + math.dist((40, 40), (60, 30))
-        self.assertAlmostEqual(shortest(found, (0, 30), (60, 30)), around, delta=1.5)
+        self.assertAlmostEqual(shortest(found, (0, 30), (60, 30)), around, delta=4.0)
 
     def test_keeps_off_the_corner_it_turns(self):
         l_shape = Polygon([(0, 0), (40, 0), (40, 10), (10, 10), (10, 40), (0, 40)])
         bends = {xy for line in lines(l_shape, [(40, 5), (5, 40)]) for xy in line} - {(40, 5), (5, 40)}
         self.assertTrue(bends)
-        self.assertTrue(all(9 < x < 10 and 9 < y < 10 for x, y in bends))
+        self.assertTrue(all(8 < x < 9 and 8 < y < 9 for x, y in bends))
+
+    def test_keeps_off_an_edge_it_walks_past(self):
+        plaza = Polygon(box(0, 0, 60, 40).exterior, [box(20, 0.5, 40, 20.2).exterior.coords])
+        found = lines(plaza, [(0, 21), (60, 21)])
+        self.assertNotIn(((0, 21), (60, 21)), found)
+        hole = box(20, 0.5, 40, 20.2)
+        for a, b in found:
+            if a[0] < 40 and b[0] > 20:
+                self.assertGreater(LineString([a, b]).distance(hole), 1.4)
+
+    def test_still_threads_a_narrow_passage(self):
+        rooms = box(0, 0, 20, 20).union(box(40, 0, 60, 20)).union(box(18, 15, 42, 17))
+        found = lines(rooms, [(0, 5), (60, 5)])
+        self.assertLess(shortest(found, (0, 5), (60, 5)), math.inf)
 
     def test_walks_past_a_planter(self):
         plaza = Polygon(box(0, 0, 60, 60).exterior, [box(29, 29, 31, 31).exterior.coords])

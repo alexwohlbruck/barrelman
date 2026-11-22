@@ -57,6 +57,16 @@ describe('roundBends', () => {
     expect(allInside(plaza, coordinates)).toBe(true)
   })
 
+  test('a curve around a planter keeps a metre off it', () => {
+    const big = [[0, 0], [60, 0], [60, 60], [0, 60], [0, 0]]
+    const plaza = space(big, [[20, 20], [40, 20], [40, 40], [20, 40], [20, 20]])
+    const route = [[55, 18.5], [18.5, 18.5], [2, 50]].map(ll)
+    const { coordinates } = roundBends(route, () => plaza)
+    expect(coordinates.length).toBeGreaterThan(3)
+    const gap = Math.min(...coordinates.map(c => Math.hypot(...xy(c).map(v => Math.max(20 - v, 0, v - 40)))))
+    expect(gap).toBeGreaterThan(0.99)
+  })
+
   test('does not round where the lines cross different spaces', () => {
     const a = space(square), b = space(square)
     const route = [[5, 35], [20, 20], [35, 35]].map(ll)

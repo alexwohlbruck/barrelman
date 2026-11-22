@@ -20,6 +20,8 @@ const END_SHARE = 0.9
 const MAX_TRIM_M = 30
 const MIN_TRIM_M = 0.25
 const SHRINK = 0.6
+// A curve cuts in toward what the bend turns around; it may come this close, or as close as the lines it replaces already do.
+const CURVE_CLEARANCE_M = 1
 // GraphHopper rounds coordinates to 6 decimals, up to ~6 cm, which can put a point on an area's edge just outside it.
 const SETTLE_M = 0.15
 
@@ -60,6 +62,14 @@ function nearestOnSegment(p: XY, a: XY, b: XY): XY {
 }
 
 const distanceToSegment = (p: XY, a: XY, b: XY) => len(sub(p, nearestOnSegment(p, a, b)))
+
+function edgeDistance(room: Room, p: XY): number {
+  let best = Infinity
+  for (const ring of room.rings) {
+    for (let i = 1; i < ring.length; i++) best = Math.min(best, distanceToSegment(p, ring[i - 1], ring[i]))
+  }
+  return best
+}
 
 function nearestOnEdge(room: Room, p: XY): XY {
   let best: XY = p, bestDistance = Infinity
@@ -133,6 +143,8 @@ function fits(room: Room, a: XY, v: XY, b: XY, steps: number): boolean {
   for (let i = 1; i <= steps; i++) {
     const p = bezier(a, v, b, i / steps)
     if (!within(room, p) || crossesEdge(room, prev, p)) return false
+    const onLines = distanceToSegment(p, a, v) < distanceToSegment(p, v, b) ? nearestOnSegment(p, a, v) : nearestOnSegment(p, v, b)
+    if (edgeDistance(room, p) < Math.min(CURVE_CLEARANCE_M, edgeDistance(room, onLines)) - ON_EDGE_M) return false
     prev = p
   }
   return true
