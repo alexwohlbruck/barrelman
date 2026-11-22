@@ -43,6 +43,8 @@ from shapely import LineString, MultiPolygon, Point, Polygon, STRtree, box, tran
 from area_paths import lines, without_planters
 
 WALKABLE = {"pedestrian", "footway", "path"}
+# Linear ways mapped across an area that a walk there should follow.
+FOOTWAYS = {"pedestrian", "footway", "path", "steps"}
 OBSTACLE_TAGS = {"natural": {"water"}, "amenity": {"fountain"}, "leisure": {"swimming_pool"}}
 NOT_OBSTACLE_BUILDINGS = {"no", "roof", "canopy", "carport", "construction"}
 WALLS = {"wall", "fence", "hedge", "retaining_wall", "city_wall", "guard_rail", "jersey_barrier"}
@@ -139,6 +141,7 @@ class Found:
     walls: list[tuple[LineString, list]] = field(default_factory=list)
     way_nodes: set[int] = field(default_factory=set)
     way_ends: dict[int, tuple[float, float]] = field(default_factory=dict)
+    footways: list[LineString] = field(default_factory=list)
 
 
 def collect(src: str) -> Found:
@@ -157,6 +160,10 @@ def collect(src: str) -> Found:
                     found.walls.append((LineString([(lon, lat) for _, lon, lat in refs]), refs))
             elif "highway" in tags and not (obj.is_closed() and is_walkable(tags, True)):
                 found.way_nodes.update(n.ref for n in obj.nodes)
+                if tags.get("highway") in FOOTWAYS and tags.get("area") != "yes":
+                    coords = [(n.lon, n.lat) for n in obj.nodes if n.location.valid()]
+                    if len(coords) > 1:
+                        found.footways.append(LineString(coords))
                 for n in (obj.nodes[0], obj.nodes[-1]):
                     if n.location.valid():
                         found.way_ends[n.ref] = (n.lon, n.lat)
@@ -208,6 +215,7 @@ def paths(src: str, dst: str, spaces_dst: str) -> int:
     wall_tree = STRtree([w for w, _ in found.walls]) if found.walls else None
     end_refs = list(found.way_ends)
     end_tree = STRtree([Point(found.way_ends[r]) for r in end_refs]) if end_refs else None
+    footway_tree = STRtree(found.footways) if found.footways else None
 
     new_nodes: dict[tuple[float, float], int] = {}
     new_ways: list[tuple[list[int], dict]] = []
@@ -243,6 +251,11 @@ def paths(src: str, dst: str, spaces_dst: str) -> int:
                 node_at[proj.xy(lon, lat)] = end_refs[i]
                 anchors.add(proj.xy(lon, lat))
 
+        footways = []
+        if footway_tree is not None and not any(is_raised(t) for t, _ in space.areas):
+            for i in footway_tree.query(outline, predicate="intersects"):
+                footways.append(proj.shape(found.footways[i]))
+
         blocking = []
         if wall_tree is not None:
             for i in wall_tree.query(outline, predicate="intersects"):
@@ -259,7 +272,9 @@ def paths(src: str, dst: str, spaces_dst: str) -> int:
                 continue
             metres = proj.shape(piece)
             reach = metres.buffer(0.05)
-            joined = lines(metres, [xy for xy in anchors if reach.covers(Point(xy))], blocking)
+            inside = [w for w in (f.intersection(metres) for f in footways) if not w.is_empty]
+            joined = lines(metres, [xy for xy in anchors if reach.covers(Point(xy))], blocking,
+                           footways=[part for w in inside for part in getattr(w, "geoms", [w]) if isinstance(part, LineString)])
             if joined is None:
                 skipped += 1
                 continue

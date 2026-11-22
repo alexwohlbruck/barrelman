@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from typing import Iterable
 
 import numpy as np
-from shapely import LineString, Point, Polygon, STRtree, contains_xy, distance, points as as_points, prepare
+from shapely import LineString, Point, Polygon, STRtree, contains_xy, distance, points as as_points, prepare, unary_union, get_coordinates, length, line_interpolate_point, line_locate_point
 from shapely.geometry.polygon import orient
 
 # Room for rounding on a line that runs along the space's edge; never further outside than this.
@@ -31,6 +31,12 @@ SIMPLIFY_M = 0.4
 MIN_LINE_M = 0.5
 # Walking around anything smaller (a planter, a kiosk) changes a walk by well under a metre.
 MIN_OBSTACLE_M2 = 12.0
+# A mapped footway this close to a line, running the same way, is the path people take there.
+MAGNET_M = 4.0
+MAGNET_RAD = math.radians(30)
+# How much of a line has to run along a footway before the footway replaces it.
+SHADOW_SHARE = 0.6
+SHADOW_M = 6.0
 # Corners shallower than this are tracing noise, not something to walk around.
 MIN_TURN_RAD = math.radians(4)
 
@@ -113,10 +119,51 @@ class _Padding:
         return bool(np.all(distance(self.edge, as_points(xy)) >= need - 0.01))
 
 
-def lines(space: Polygon, anchors: Iterable[XY], barriers: Iterable[LineString] = (), max_points: int = 400) -> list[tuple[XY, XY]] | None:
+class _Footways:
+    """Whether a line mostly runs along a mapped footway, which the walk should take instead."""
+
+    def __init__(self, footways: list[LineString]):
+        self.ways_array = np.array(footways, dtype=object)
+        # Footways that join up are one network; a line is only carried by footways it can stay on.
+        blobs = unary_union([f.buffer(0.05) for f in footways]) if footways else None
+        parts = list(getattr(blobs, "geoms", [blobs])) if blobs is not None else []
+        self.network = np.array([next(i for i, b in enumerate(parts) if b.covers(f)) for f in footways])
+        self.tree = STRtree(footways) if footways else None
+        self.zone = unary_union([f.buffer(MAGNET_M) for f in footways]) if footways else None
+        if self.zone is not None:
+            prepare(self.zone)
+
+    def shadow(self, line: LineString) -> bool:
+        if self.zone is None or not self.zone.intersects(line):
+            return False
+        (x0, y0), (x1, y1) = line.coords
+        steps = max(2, int(line.length))
+        t = (np.arange(steps) + 0.5) / steps
+        pts = as_points(x0 + (x1 - x0) * t, y0 + (y1 - y0) * t)
+        _, nearest = self.tree.query_nearest(pts, return_distance=False, all_matches=False)
+        ways = self.ways_array[nearest]
+        at = line_locate_point(ways, pts)
+        lengths = length(ways)
+        a = line_interpolate_point(ways, np.maximum(at - 1, 0))
+        b = line_interpolate_point(ways, np.minimum(at + 1, lengths))
+        ax, ay = get_coordinates(a).T
+        bx, by = get_coordinates(b).T
+        turn = np.abs((np.arctan2(by - ay, bx - ax) - math.atan2(y1 - y0, x1 - x0) + math.pi / 2) % math.pi - math.pi / 2)
+        # Past a footway's end it no longer carries the walk, however close it is.
+        beside = (at > 0.01) & (at < lengths - 0.01)
+        along = (distance(ways, pts) <= MAGNET_M) & (turn <= MAGNET_RAD) & beside
+        share = along.mean()
+        if share < SHADOW_SHARE or share * line.length < SHADOW_M:
+            return False
+        return len(set(self.network[nearest[along]])) == 1
+
+
+def lines(space: Polygon, anchors: Iterable[XY], barriers: Iterable[LineString] = (), max_points: int = 400,
+          footways: Iterable[LineString] = ()) -> list[tuple[XY, XY]] | None:
     """
     Every straight line worth walking across `space` between its anchors (ways
-    in, ends of walls) and its corners. None past `max_points` points.
+    in, ends of walls) and its corners, except where a mapped
+    footway already runs. None past `max_points` points.
     """
     space = without_planters(space)
     padding = _Padding(space)
@@ -133,6 +180,7 @@ def lines(space: Polygon, anchors: Iterable[XY], barriers: Iterable[LineString] 
     point_tree = STRtree([Point(v.xy) for v in vertices])
     walls = list(barriers)
     wall_tree = STRtree(walls) if walls else None
+    mapped = _Footways([f for f in footways if f.length > 0])
 
     found = []
     for i, a in enumerate(vertices):
@@ -150,6 +198,8 @@ def lines(space: Polygon, anchors: Iterable[XY], barriers: Iterable[LineString] 
             if wall_tree is not None and any(walls[k].crosses(line) for k in wall_tree.query(line)):
                 continue
             if not padding.kept(a, b, line):
+                continue
+            if mapped.shadow(line):
                 continue
             found.append((a.xy, b.xy))
     return found

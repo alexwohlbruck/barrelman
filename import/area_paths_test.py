@@ -93,6 +93,21 @@ class LinesTest(unittest.TestCase):
         self.assertNotIn(((0, 5), (50, 5)), found)
         self.assertLess(shortest(found, (0, 5), (50, 5)), math.inf)
 
+    def test_leaves_a_mapped_footway_to_carry_the_walk(self):
+        footway = LineString([(0, 10), (60, 10)])
+        found = lines(box(0, 0, 60, 30), [(0, 7), (60, 7)], footways=[footway])
+        self.assertNotIn(((0, 7), (60, 7)), found)
+
+    def test_bridges_a_gap_between_footways(self):
+        footways = [LineString([(0, 15), (25, 15)]), LineString([(35, 15), (60, 15)])]
+        found = lines(box(0, 0, 60, 30), [(25, 15), (35, 15)], footways=footways)
+        self.assertIn(((25, 15), (35, 15)), found)
+
+    def test_still_crosses_a_mapped_footway(self):
+        footway = LineString([(0, 15), (60, 15)])
+        found = lines(box(0, 0, 60, 30), [(30, 0), (30, 30)], footways=[footway])
+        self.assertIn(((30, 0), (30, 30)), found)
+
     def test_skips_a_line_through_another_point(self):
         found = lines(box(0, 0, 50, 30), [(0, 15), (25, 15), (50, 15)])
         self.assertNotIn(((0, 15), (50, 15)), found)
