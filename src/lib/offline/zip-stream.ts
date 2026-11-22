@@ -1,3 +1,8 @@
+import { createReadStream } from 'node:fs'
+import { StringDecoder } from 'node:string_decoder'
+import { Readable } from 'node:stream'
+import { createInflateRaw } from 'node:zlib'
+
 /**
  * Read one entry of a zip on disk as a stream of CSV rows, without loading the
  * archive. GTFS `stop_times.txt` for a New York bus borough inflates to
@@ -63,13 +68,15 @@ export function findEntry(entries: ZipEntry[], fileName: string): ZipEntry | und
   return entries.find(e => e.name === fileName) ?? entries.find(e => e.name.endsWith(`/${fileName}`))
 }
 
-async function entryStream(path: string, entry: ZipEntry): Promise<ReadableStream<Uint8Array>> {
+/** The entry's inflated bytes. Node streams keep backpressure, so memory stays at a chunk or two. */
+async function entryStream(path: string, entry: ZipEntry): Promise<Readable> {
   const local = await readRange(path, entry.localHeaderOffset, entry.localHeaderOffset + 30)
   if (local.getUint32(0, true) !== LOCAL_SIGNATURE) throw new Error(`bad local header for ${entry.name}`)
   const start = entry.localHeaderOffset + 30 + local.getUint16(26, true) + local.getUint16(28, true)
-  const raw = Bun.file(path).slice(start, start + entry.compressedSize).stream()
+  if (entry.compressedSize === 0) return Readable.from([])
+  const raw = createReadStream(path, { start, end: start + entry.compressedSize - 1 })
   if (entry.method === STORED) return raw
-  if (entry.method === DEFLATE) return raw.pipeThrough(new DecompressionStream('deflate-raw'))
+  if (entry.method === DEFLATE) return raw.pipe(createInflateRaw())
   throw new Error(`unsupported compression ${entry.method} for ${entry.name}`)
 }
 
@@ -108,7 +115,8 @@ export async function eachZipCsvRow(
 ): Promise<boolean> {
   const entry = findEntry(entries, fileName)
   if (!entry) return false
-  const reader = (await entryStream(path, entry)).pipeThrough(new TextDecoderStream() as unknown as ReadableWritablePair<string, Uint8Array>).getReader()
+  const stream = await entryStream(path, entry)
+  const decoder = new StringDecoder('utf8')
   let header: Map<string, number> | null = null
   const column = (name: string) => header?.get(name) ?? -1
   let rest = ''
@@ -126,14 +134,13 @@ export async function eachZipCsvRow(
     if (line) onRow(splitCsvLine(line), column)
   }
 
-  for (;;) {
-    const { value, done } = await reader.read()
-    if (done) break
-    const text = rest + value
+  for await (const chunk of stream) {
+    const text = rest + decoder.write(chunk as Buffer)
     const lines = text.split('\n')
     rest = lines.pop() ?? ''
     for (const line of lines) handle(line)
   }
+  rest += decoder.end()
   if (rest) handle(rest)
   return true
 }

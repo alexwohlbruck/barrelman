@@ -145,10 +145,15 @@ export function deltaEncode(values: number[]): number[] {
   return values.map((v, i) => (i === 0 ? v : v - values[i - 1]))
 }
 
-export function buildTimetable(
-  feeds: FeedTimetable[],
-  options: { bounds: PackageBounds; startDate: string; days: number; generatedAt?: string },
-): TimetablePackage {
+interface TimetableOptions {
+  bounds: PackageBounds
+  startDate: string
+  days: number
+  generatedAt?: string
+}
+
+/** Add feeds one at a time, so each feed's raw tables can be dropped before the next is read. */
+export function createTimetableBuilder(options: TimetableOptions) {
   const stops: TimetableStop[] = []
   const routes: TimetableRoute[] = []
   const patterns: TimetablePattern[] = []
@@ -156,7 +161,11 @@ export function buildTimetable(
   const transfers: [number, number, number][] = []
   const patternIndex = new Map<string, number>()
 
-  feeds.forEach((feed, feedIndex) => {
+  const feedList: { id: string; timezone: string }[] = []
+
+  const addFeed = (feed: FeedTimetable) => {
+    const feedIndex = feedList.length
+    feedList.push({ id: feed.feedId, timezone: feed.timezone })
     const masks = serviceMasks(feed.calendar, feed.calendarDates, options.startDate, options.days)
     const stopIndex = new Map<string, number>()
     const routeIndex = new Map<string, number>()
@@ -247,19 +256,27 @@ export function buildTimetable(
         }
       }
     }
-  })
+  }
 
-  return {
+  const finish = (): TimetablePackage => ({
     version: OFFLINE_PACKAGE_VERSION,
     bounds: options.bounds,
     generatedAt: options.generatedAt ?? new Date().toISOString(),
     startDate: options.startDate,
     days: options.days,
-    feeds: feeds.map(f => ({ id: f.feedId, timezone: f.timezone })),
+    feeds: feedList,
     stops,
     routes,
     patterns,
     trips,
     transfers,
-  }
+  })
+
+  return { addFeed, finish }
+}
+
+export function buildTimetable(feeds: FeedTimetable[], options: TimetableOptions): TimetablePackage {
+  const builder = createTimetableBuilder(options)
+  for (const feed of feeds) builder.addFeed(feed)
+  return builder.finish()
 }

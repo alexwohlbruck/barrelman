@@ -13,7 +13,7 @@ import { dedupePlaces, packagePlace, packageStop, SKIPPED_CATEGORY_PREFIXES, typ
 import { buildStreetGraph, type StreetWay } from '../lib/offline/street-graph'
 import {
   addDays,
-  buildTimetable,
+  createTimetableBuilder,
   parseGtfsTime,
   type CalendarDate,
   type CalendarRow,
@@ -139,6 +139,11 @@ export function buildStreetsPackage(bounds: PackageBounds): Promise<StreetsPacka
 // ── Timetable ─────────────────────────────────────────────────────────
 
 const flag = (v: string | undefined) => v?.trim() === '1'
+/**
+ * A copy that doesn't share the parsed chunk's memory. A split cell can keep its
+ * whole 64 KB chunk alive, which over stop_times.txt holds the entire file.
+ */
+const own = (s: string) => Buffer.from(s, 'utf8').toString('utf8')
 const cell = (cells: string[], i: number) => (i >= 0 ? cells[i]?.trim() ?? '' : '')
 
 /** Today as `YYYYMMDD` in a time zone. */
@@ -162,15 +167,17 @@ async function readFeed(feedId: string, bounds: PackageBounds): Promise<FeedTime
     agencies.set(cell(c, col('agency_id')), cell(c, col('agency_name')))
   })
 
-  const allStops = new Map<string, FeedStop & { inside: boolean }>()
+  const allStops = new Map<string, FeedStop & { id: string; inside: boolean }>()
   await each('stops.txt', (c, col) => {
     const lat = Number(cell(c, col('stop_lat')))
     const lng = Number(cell(c, col('stop_lon')))
-    allStops.set(cell(c, col('stop_id')), {
-      name: cell(c, col('stop_name')),
+    const id = own(cell(c, col('stop_id')))
+    allStops.set(id, {
+      id,
+      name: own(cell(c, col('stop_name'))),
       lat,
       lng,
-      parent: cell(c, col('parent_station')) || undefined,
+      parent: own(cell(c, col('parent_station'))) || undefined,
       inside: Number.isFinite(lat) && Number.isFinite(lng) && inBounds(bounds, lng, lat),
     })
   })
@@ -185,14 +192,17 @@ async function readFeed(feedId: string, bounds: PackageBounds): Promise<FeedTime
   const calls = new Map<string, FeedCall[]>()
   const lastStop = new Map<string, { seq: number; stopId: string }>()
   await each('stop_times.txt', (c, col) => {
-    const tripId = cell(c, col('trip_id'))
-    const stopId = cell(c, col('stop_id'))
+    const rawTrip = cell(c, col('trip_id'))
+    const stop = allStops.get(cell(c, col('stop_id')))
+    if (!stop) return
+    const stopId = stop.id
     const seq = Number(cell(c, col('stop_sequence')))
-    const last = lastStop.get(tripId)
-    if (!last || seq > last.seq) lastStop.set(tripId, { seq, stopId })
+    const last = lastStop.get(rawTrip)
+    if (!last) lastStop.set(own(rawTrip), { seq, stopId })
+    else if (seq > last.seq) { last.seq = seq; last.stopId = stopId }
     if (!stops.has(stopId)) return
-    let list = calls.get(tripId)
-    if (!list) calls.set(tripId, (list = []))
+    let list = calls.get(rawTrip)
+    if (!list) calls.set(own(rawTrip), (list = []))
     list.push({
       seq,
       stopId,
@@ -279,12 +289,13 @@ export async function buildTimetablePackage(bounds: PackageBounds, days: number)
   `)).map(r => r.feedId)
   const dateKey = new Date().toISOString().slice(0, 10)
   return cached(`timetable:${boundsKey(bounds)}:${days}:${dateKey}`, async () => {
-    const feeds: FeedTimetable[] = []
+    let builder: ReturnType<typeof createTimetableBuilder> | null = null
     for (const feedId of feedIds) {
       const feed = await readFeed(feedId, bounds)
-      if (feed && feed.calls.size) feeds.push(feed)
+      if (!feed?.calls.size) continue
+      builder ??= createTimetableBuilder({ bounds, startDate: addDays(localDate(feed.timezone), -1), days: days + 1 })
+      builder.addFeed(feed)
     }
-    const startDate = addDays(localDate(feeds[0]?.timezone ?? 'UTC'), -1)
-    return buildTimetable(feeds, { bounds, startDate, days: days + 1 })
+    return (builder ?? createTimetableBuilder({ bounds, startDate: addDays(localDate('UTC'), -1), days: days + 1 })).finish()
   })
 }
