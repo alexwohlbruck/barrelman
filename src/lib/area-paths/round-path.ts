@@ -26,6 +26,39 @@ export function areaPathWays(path: any): number[] {
   return [...new Set<number>(ids)]
 }
 
+const isAreaPath = (id: unknown) => typeof id === 'number' && id >= AREA_PATH_WAY_ID_BASE
+// GraphHopper signs for reaching a waypoint and the destination, which always stay.
+const FINISH = 4
+const VIA = 5
+
+/**
+ * The path with no maneuvers at the corners inside a pedestrian area: crossing
+ * one is a single step, from the way in to the way out, not a turn at every
+ * corner the graph happens to bend at.
+ */
+export function foldAreaManeuvers(path: any): any {
+  const ways = path?.details?.osm_way_id
+  if (!Array.isArray(path?.instructions) || !ways) return path
+  const folded: any[] = []
+  for (const ins of path.instructions) {
+    const from = ins.interval?.[0]
+    const prev = folded[folded.length - 1]
+    const inside = typeof from === 'number' && isAreaPath(valueAt(ways, from - 1)) && isAreaPath(valueAt(ways, from))
+    if (prev && inside && ins.sign !== FINISH && ins.sign !== VIA) {
+      folded[folded.length - 1] = {
+        ...prev,
+        ...(!prev.street_name && ins.street_name && { street_name: ins.street_name }),
+        interval: [prev.interval[0], ins.interval[1]],
+        distance: prev.distance + ins.distance,
+        time: prev.time + ins.time,
+      }
+      continue
+    }
+    folded.push(ins)
+  }
+  return folded.length === path.instructions.length ? path : { ...path, instructions: folded }
+}
+
 function lengthOf(coordinates: number[][], from: number, to: number): number {
   let total = 0
   for (let i = from; i < to; i++) total += haversine(coordinates[i] as LonLat, coordinates[i + 1] as LonLat)

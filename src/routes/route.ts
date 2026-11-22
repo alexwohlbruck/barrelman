@@ -110,7 +110,8 @@ A walk across a pedestrian area takes paths the graph adds between its ways in;
 those carry \`osmWayId\` from 2,100,000,000 up, which is no OSM way. Where such a
 walk bends inside the area, the bend is drawn as a curve that stays within it,
 and the path's points, \`distance\`, \`time\`, instructions and details all
-describe the curve.
+describe the curve. Crossing an area is one instruction, from the way in to the
+way out, and its edge segments carry \`plaza: true\`.
 
 On a \`bike\` route, \`bike_suitability: { weight }\` (0 fastest – 1 safest) routes by
 how comfortable each street is to ride (the \`cycling_tiles\` 0–100 \`score\`):

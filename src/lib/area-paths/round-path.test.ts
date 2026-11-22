@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { haversine, type LonLat } from '../route-hazards/route-path'
-import { AREA_PATH_WAY_ID_BASE, areaPathWays, roundPath } from './round-path'
+import { AREA_PATH_WAY_ID_BASE, areaPathWays, foldAreaManeuvers, roundPath } from './round-path'
 
 const K = Math.cos((40.7 * Math.PI) / 180) * 111_320
 const ll = ([x, y]: number[]) => [-74 + x / K, 40.7 + y / 111_320, 10]
@@ -67,5 +67,27 @@ describe('roundPath', () => {
   test('without its space a path is left as it came', () => {
     const before = path()
     expect(roundPath(before, new Map())).toBe(before)
+  })
+})
+
+describe('foldAreaManeuvers', () => {
+  const ways = [[0, 1, 42], [1, 2, AREA], [2, 3, AREA + 1], [3, 4, 43]]
+  const step = (sign: number, from: number, to: number, distance: number) => ({ sign, interval: [from, to], distance, time: distance * 700, text: '' })
+
+  test('crossing an area is one step, from the way in to the way out', () => {
+    const path = { details: { osm_way_id: ways }, instructions: [step(0, 0, 1, 10), step(-7, 1, 2, 20), step(7, 2, 3, 30), step(2, 3, 4, 40), step(4, 4, 4, 0)] }
+    const folded = foldAreaManeuvers(path).instructions
+    expect(folded.map((i: any) => i.sign)).toEqual([0, -7, 2, 4])
+    expect(folded[1]).toMatchObject({ interval: [1, 3], distance: 50, time: 35_000 })
+  })
+
+  test('the step across takes the area\'s name when the way in has none', () => {
+    const path = { details: { osm_way_id: ways }, instructions: [step(0, 0, 1, 10), step(-7, 1, 2, 20), { ...step(7, 2, 3, 30), street_name: 'Foley Square' }, step(4, 4, 4, 0)] }
+    expect(foldAreaManeuvers(path).instructions[1].street_name).toBe('Foley Square')
+  })
+
+  test('a waypoint inside an area stays a step', () => {
+    const path = { details: { osm_way_id: ways }, instructions: [step(0, 0, 1, 10), step(-7, 1, 2, 20), step(5, 2, 3, 30), step(4, 4, 4, 0)] }
+    expect(foldAreaManeuvers(path)).toBe(path)
   })
 })
