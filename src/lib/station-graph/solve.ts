@@ -47,6 +47,7 @@ export function solveComplex(input: ComplexInput, params: StationPathParams = DE
   const streetKeys = new Set([...g.streetKeys()].filter((k) => !entranceKeys.has(k)))
   const paths: StationPath[] = []
   let componentCount = 0
+  const modelledByAgency = agencyCovers(input.agency, new Set(entranceIds))
 
   for (const profile of PROFILES) {
     const search = (opts: { reverse?: boolean; ban?: Set<string> }, bridged: boolean): Search => {
@@ -147,7 +148,11 @@ export function solveComplex(input: ComplexInput, params: StationPathParams = DE
         const key = g.entranceKey.get(eid)!
         const out = { fromId: pid, fromKind: 'platform', toId: eid, toKind: 'entrance' } as const
         const inn = { fromId: eid, fromKind: 'entrance', toId: pid, toKind: 'platform' } as const
+        const ruledOut = (ends: { fromId: string; toId: string }) =>
+          modelledByAgency(eid, pid) && !input.agency!.has(`${ends.fromId}>${ends.toId}`)
+        // A bridged path guesses across gaps in the map; it doesn't outweigh an agency saying there is no way through.
         const rows = [fromTrees(outTrees, key, false, out, 'street'), fromTrees(inTrees, key, true, inn, 'street')]
+          .map((r) => (r?.source === 'bridged' && ruledOut(r) ? null : r))
         if (profile !== 'foot') { rows.forEach((r) => r && paths.push(r)); continue }
         const edgeM = pointWayDistance(g.xy.get(key)!, plat.pm, plat.area).d
         rows.forEach((row, i) => {
@@ -156,6 +161,7 @@ export function solveComplex(input: ComplexInput, params: StationPathParams = DE
           const agency = input.agency?.get(`${ends.fromId}>${ends.toId}`)
           const depth = Math.abs(plat.level ?? 1)
           if (agency !== undefined) return paths.push(timeOnly('agency', agency, ends, 'street', edgeM, depth))
+          if (ruledOut(ends)) return
           paths.push(timeOnly('estimated', estimateStreet(params, { edgeM, level: plat.level }), ends, 'street', edgeM, depth))
         })
       }
@@ -182,6 +188,21 @@ export function solveComplex(input: ComplexInput, params: StationPathParams = DE
     paths,
     report: { tiers, components: componentCount, disconnected: notGraph || componentCount > 1 },
   }
+}
+
+/**
+ * Whether the agency's pathways model both this entrance and this platform.
+ * Then a missing pathway between them means the entrance doesn't reach that
+ * platform (a side platform for the other direction), so no estimate stands in.
+ */
+function agencyCovers(agency: Map<string, number> | undefined, entranceIds: Set<string>) {
+  const entrances = new Set<string>(), platforms = new Set<string>()
+  for (const key of agency?.keys() ?? []) {
+    const [a, b] = key.split('>')
+    if (entranceIds.has(a)) { entrances.add(a); platforms.add(b) }
+    if (entranceIds.has(b)) { entrances.add(b); platforms.add(a) }
+  }
+  return (entranceId: string, platformId: string) => entrances.has(entranceId) && platforms.has(platformId)
 }
 
 export const sourceRank = (s: PathSource) => ['graph', 'bridged', 'agency', 'estimated', 'straight_line'].indexOf(s)

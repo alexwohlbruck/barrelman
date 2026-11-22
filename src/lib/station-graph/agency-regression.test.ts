@@ -64,4 +64,13 @@ describe('station graph against VBB and MBTA pathways', () => {
     expect(median(errors.estimateStreet)).toBeLessThanOrEqual(35)
     expect(median(errors.estimatePair)).toBeLessThan(median(errors.flat))
   })
+
+  test('no path where the agency has none: each side of Central and Kendall/MIT reaches only its own platform', () => {
+    for (const fx of fixtures.filter((f) => f.name === 'Central' || f.name === 'Kendall/MIT')) {
+      const agency = new Map(Object.entries(fx.truth))
+      const offered = solveComplex({ ...fx, agency }).paths.filter((p) => p.profile === 'foot' && p.fromKind === 'entrance' && p.source !== 'graph')
+      const covered = (id: string) => [...agency.keys()].some((k) => k.startsWith(`${id}>`))
+      for (const p of offered.filter((p) => covered(p.fromId))) expect(agency.has(`${p.fromId}>${p.toId}`)).toBe(true)
+    }
+  })
 })
