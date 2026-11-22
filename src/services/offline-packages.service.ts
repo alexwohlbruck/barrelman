@@ -189,8 +189,13 @@ async function readFeed(feedId: string, bounds: PackageBounds): Promise<FeedTime
     if (parent && parent.inside) stops.set(stop.parent!, { name: parent.name, lat: parent.lat, lng: parent.lng })
   }
 
+  // Each trip keeps its calls inside the region plus the nearest one on either
+  // side, so a line with a single stop in the region still shows on that stop's
+  // board, and a ride can start or end just past the edge.
   const calls = new Map<string, FeedCall[]>()
   const lastStop = new Map<string, { seq: number; stopId: string }>()
+  const before = new Map<string, FeedCall>()
+  const after = new Set<string>()
   await each('stop_times.txt', (c, col) => {
     const rawTrip = cell(c, col('trip_id'))
     const stop = allStops.get(cell(c, col('stop_id')))
@@ -200,17 +205,43 @@ async function readFeed(feedId: string, bounds: PackageBounds): Promise<FeedTime
     const last = lastStop.get(rawTrip)
     if (!last) lastStop.set(own(rawTrip), { seq, stopId })
     else if (seq > last.seq) { last.seq = seq; last.stopId = stopId }
-    if (!stops.has(stopId)) return
-    let list = calls.get(rawTrip)
-    if (!list) calls.set(own(rawTrip), (list = []))
-    list.push({
+    const call = () => ({
       seq,
       stopId,
       arrival: parseGtfsTime(cell(c, col('arrival_time'))),
       departure: parseGtfsTime(cell(c, col('departure_time'))),
     })
+    let list = calls.get(rawTrip)
+    if (!stops.has(stopId)) {
+      if (!list) {
+        const previous = before.get(rawTrip)
+        if (!previous || seq > previous.seq) before.set(previous ? rawTrip : own(rawTrip), call())
+      } else if (!after.has(rawTrip) && seq > list[list.length - 1].seq) {
+        list.push(call())
+        after.add(own(rawTrip))
+      }
+      return
+    }
+    if (!list) {
+      calls.set(own(rawTrip), (list = []))
+      const previous = before.get(rawTrip)
+      if (previous && previous.seq < seq) list.push(previous)
+    }
+    list.push(call())
   })
-  for (const [tripId, list] of calls) if (list.length < 2) calls.delete(tripId)
+  before.clear()
+  after.clear()
+  for (const [tripId, list] of calls) {
+    if (!list.some(call => stops.has(call.stopId)) || list.length < 2) calls.delete(tripId)
+  }
+  // Neighbours just outside the region become stops of the package too.
+  for (const list of calls.values()) {
+    for (const { stopId } of list) {
+      if (stops.has(stopId)) continue
+      const stop = allStops.get(stopId)!
+      stops.set(stopId, { name: stop.name, lat: stop.lat, lng: stop.lng })
+    }
+  }
 
   const trips = new Map<string, FeedTrip>()
   await each('trips.txt', (c, col) => {
