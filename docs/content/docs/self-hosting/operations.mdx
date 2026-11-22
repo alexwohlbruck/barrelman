@@ -263,6 +263,13 @@ GraphHopper graph and the PMTiles basemap are both rebuilt from data that
 matches the database. Both rebuilds are skipped entirely when a run finds no new
 diffs.
 
+GraphHopper reads `region-walk.osm.pbf`, not the extract itself. Each rebuild
+first writes it with `scripts/prepare-graphhopper-osm.sh`, which copies the
+extract and adds straight paths across pedestrian areas, so a walk crosses a
+plaza rather than following its outline. Allow disk for a second copy of the
+extract. The pass takes about a minute for New York City; if it fails, the plain
+extract is linked in its place and routing still builds.
+
 The basemap matters here because it is the one output that cannot follow the
 database on its own. Martin queries every `postgres:` source in
 `martin-config.yaml` per request, so a diff reaches those tiles the moment it
