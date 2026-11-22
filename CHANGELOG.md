@@ -10,6 +10,10 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Changed
+
+* Basemap POIs rank by importance, so a city's best-known hospital, park or museum keeps its label over a minor neighbour. Each POI carries an `importance` score from 0 to 100. Rebuild the basemap after upgrading.
+
 ## [0.10.58] - 2026-11-21
 
 ### Fixed
