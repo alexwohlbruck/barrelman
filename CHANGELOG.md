@@ -10,6 +10,13 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.10.60] - 2026-11-22
+
+### Fixed
+
+* Realtime no longer drops trains an agency runs on a trip its timetable only has for another day, as when a night reroute uses next week's trips. They are added with their live times.
+* A train running early, or matched to a later schedule, no longer shows a departure from stops it has already passed.
+
 ## [0.10.59] - 2026-11-21
 
 ### Fixed
