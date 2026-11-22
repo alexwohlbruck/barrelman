@@ -17,6 +17,8 @@ import type { CrossingName } from '../lib/route-context/crossing-names'
 import type { Overpass } from '../lib/route-context/overpasses'
 import type { AreaStretch } from '../lib/route-context/area-stretches'
 import { tagEdgeSegments, type EdgeTags } from '../lib/route-context/edge-tags'
+import { areaPathWays, roundPath } from '../lib/area-paths/round-path'
+import { spacesFor } from './area-spaces.service'
 import { pathScore, scoreSegments, wayStretches } from '../lib/bike-suitability/route-cost'
 import {
   lookupFacilities, lookupScores, scoresFor, suitableCustomModel, type FacilityLookup, type ScoreLookup,
@@ -336,6 +338,19 @@ export function resetEncodedValues(): void {
   encodedValues = null
 }
 
+export type SpaceLookup = typeof spacesFor
+
+/** The path with its bends inside pedestrian areas rounded; the path as it was if the spaces can't be read. */
+export async function roundAreaBends(path: any, spaces: SpaceLookup = spacesFor): Promise<any> {
+  const ways = areaPathWays(path)
+  if (!ways.length) return path
+  try {
+    return roundPath(path, await spaces(ways))
+  } catch {
+    return path
+  }
+}
+
 export async function getEnrichedRoute(
   requestBody: any,
   fetchFn: FetchFn = (url, init) => fetch(url, init),
@@ -343,6 +358,7 @@ export async function getEnrichedRoute(
   context: RouteContextSource = dbRouteContextSource,
   scoreLookup: ScoreLookup = lookupScores,
   facilityLookup: FacilityLookup = lookupFacilities,
+  spaces: SpaceLookup = spacesFor,
 ): Promise<EnrichedRouteResponse> {
   const ghUrl = graphHopperUrl()
   const available = await graphEncodedValues(fetchFn)
@@ -388,7 +404,8 @@ export async function getEnrichedRoute(
   const routeData = await routeResponse.json() as any
 
   // Enrich each path with edge segments and elevation stats
-  const enrichedPaths = await Promise.all((routeData.paths || []).map(async (path: any) => {
+  const enrichedPaths = await Promise.all((routeData.paths || []).map(async (raw: any) => {
+    const path = await roundAreaBends(raw, spaces)
     const coordinates: number[][] = path.points?.coordinates || []
     const cumulativeDistances = buildCumulativeDistances(coordinates)
     const elevationStats = computeElevationStats(coordinates)
