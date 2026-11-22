@@ -7,7 +7,9 @@ set -euo pipefail
 #
 # Produces region-walk.osm.pbf: region.osm.pbf plus straight paths across
 # pedestrian areas (import/synthesize-area-paths.py). GraphHopper otherwise
-# walks a plaza around its outline. region.osm.pbf is left intact for
+# walks a plaza around its outline. Also writes region-walk.spaces.ndjson (+
+# .index.json), the open space of each area, which rebuild-graphhopper.sh puts
+# beside the graph for the API to round a walk's bends within. region.osm.pbf is left intact for
 # osm2pgsql, MOTIS and the tile layers.
 #
 # Called by rebuild-graphhopper.sh before every graph build. If the pass fails,
@@ -25,6 +27,7 @@ fi
 
 IN="$OSM_DATA_DIR/region.osm.pbf"
 OUT="$OSM_DATA_DIR/region-walk.osm.pbf"
+SPACES="$OSM_DATA_DIR/region-walk.spaces"
 WORK="$OSM_DATA_DIR/.area-paths"
 
 if [ ! -f "$IN" ]; then
@@ -53,9 +56,11 @@ build() {
   osmium extract -p "$WORK/regions.geojson" -s smart "$IN" -o "$WORK/nearby.osm.pbf" --overwrite
 
   log "Joining their ways in..."
-  python "$PROJECT_DIR/import/synthesize-area-paths.py" paths "$WORK/nearby.osm.pbf" "$WORK/paths.osm.pbf"
+  python "$PROJECT_DIR/import/synthesize-area-paths.py" paths "$WORK/nearby.osm.pbf" "$WORK/paths.osm.pbf" "$WORK/spaces.ndjson"
 
   osmium merge "$IN" "$WORK/paths.osm.pbf" -o "$OUT.tmp" -f pbf --overwrite
+  mv -f "$WORK/spaces.ndjson" "$SPACES.ndjson"
+  mv -f "$WORK/spaces.index.json" "$SPACES.index.json"
   mv -f "$OUT.tmp" "$OUT"
 }
 
@@ -69,6 +74,6 @@ if [ "$STATUS" = 0 ]; then
   log "✓ GraphHopper extract ready: $(du -h "$OUT" | cut -f1)"
 else
   log "pass failed — linking region.osm.pbf through unchanged" >&2
-  rm -rf "$WORK" "$OUT.tmp"
+  rm -rf "$WORK" "$OUT.tmp" "$SPACES.ndjson" "$SPACES.index.json"
   ln -f "$IN" "$OUT"
 fi

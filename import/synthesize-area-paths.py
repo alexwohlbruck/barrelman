@@ -17,7 +17,15 @@ Two steps, with an `osmium extract` between them (see
 scripts/prepare-graphhopper-osm.sh):
 
   plan   <areas.osm.pbf> <regions.geojson>   boxes around every walkable area
-  paths  <nearby.osm.pbf> <paths.osm.pbf>    the new nodes and ways
+  paths  <nearby.osm.pbf> <paths.osm.pbf> <spaces.ndjson>
+                                             the new nodes and ways, and the
+                                             open space each run of ways crosses
+
+The API rounds a walk's bends inside each space (src/lib/area-paths), checking
+every curve against that space. spaces.ndjson has one line per space,
+{"ways": [first id, last id], "rings": [[[lon, lat], ...], ...]}, outer ring
+first; <spaces>.index.json lists [first id, last id, byte offset, byte length]
+per line so the API can read one space without loading the rest.
 
 Requires: pyosmium, shapely
 """
@@ -32,7 +40,7 @@ from dataclasses import dataclass, field
 import osmium
 from shapely import LineString, MultiPolygon, Point, Polygon, STRtree, box, transform, unary_union
 
-from area_paths import lines
+from area_paths import lines, without_planters
 
 WALKABLE = {"pedestrian", "footway", "path"}
 OBSTACLE_TAGS = {"natural": {"water"}, "amenity": {"fountain"}, "leisure": {"swimming_pool"}}
@@ -183,7 +191,18 @@ def spaces(walkables) -> list[Space]:
     return found
 
 
-def paths(src: str, dst: str) -> int:
+def write_spaces(dst: str, spaces_out: list[tuple[int, int, list]]) -> None:
+    index = []
+    with open(dst, "wb") as f:
+        for first, last, rings in spaces_out:
+            line = json.dumps({"ways": [first, last], "rings": rings}, separators=(",", ":")).encode() + b"\n"
+            index.append([first, last, f.tell(), len(line)])
+            f.write(line)
+    with open(dst.removesuffix(".ndjson") + ".index.json", "w") as f:
+        json.dump(index, f, separators=(",", ":"))
+
+
+def paths(src: str, dst: str, spaces_dst: str) -> int:
     found = collect(src)
     obstacle_tree = STRtree([p for p, _ in found.obstacles]) if found.obstacles else None
     wall_tree = STRtree([w for w, _ in found.walls]) if found.walls else None
@@ -192,6 +211,7 @@ def paths(src: str, dst: str) -> int:
 
     new_nodes: dict[tuple[float, float], int] = {}
     new_ways: list[tuple[list[int], dict]] = []
+    spaces_out: list[tuple[int, int, list]] = []
     skipped = 0
     all_spaces = spaces(found.walkables)
 
@@ -243,6 +263,7 @@ def paths(src: str, dst: str) -> int:
             if joined is None:
                 skipped += 1
                 continue
+            first = len(new_ways)
             for a, b in joined:
                 ref_a, ref_b = node_for(a, node_at, proj), node_for(b, node_at, proj)
                 if frozenset((ref_a, ref_b)) in space.ring_edges:
@@ -251,6 +272,10 @@ def paths(src: str, dst: str) -> int:
                 tags = {k: source[k] for k in COPIED_TAGS if k in source}
                 tags["area:path"] = "yes"
                 new_ways.append(([ref_a, ref_b], tags))
+            if len(new_ways) > first:
+                walk = without_planters(metres)
+                rings = [[[round(c, 7) for c in proj.lonlat(x, y)] for x, y in ring.coords] for ring in (walk.exterior, *walk.interiors)]
+                spaces_out.append((SYNTHETIC_WAY_ID_BASE + first, SYNTHETIC_WAY_ID_BASE + len(new_ways) - 1, rings))
 
     writer = osmium.SimpleWriter(dst, overwrite=True)
     try:
@@ -260,12 +285,14 @@ def paths(src: str, dst: str) -> int:
             writer.add_way(osmium.osm.mutable.Way(id=SYNTHETIC_WAY_ID_BASE + i, version=1, nodes=nodes, tags=list(tags.items())))
     finally:
         writer.close()
+    write_spaces(spaces_dst, spaces_out)
     print(f"[area-paths] {len(all_spaces)} spaces, {len(new_ways)} paths, {len(new_nodes)} new nodes, {skipped} too large to join")
     return 0
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 4 or sys.argv[1] not in ("plan", "paths"):
+    commands = {"plan": (plan, 2), "paths": (paths, 3)}
+    if len(sys.argv) < 2 or sys.argv[1] not in commands or len(sys.argv) != commands[sys.argv[1]][1] + 2:
         print(__doc__, file=sys.stderr)
         sys.exit(2)
-    sys.exit({"plan": plan, "paths": paths}[sys.argv[1]](sys.argv[2], sys.argv[3]))
+    sys.exit(commands[sys.argv[1]][0](*sys.argv[2:]))

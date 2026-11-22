@@ -506,6 +506,10 @@ else
   log "  trial server ${TRIAL_DECISION} (--verify-route forces it; it needs about $(staged_human_kb "$TRIAL_NEED_KB") more RAM)"
 fi
 
+# The API rounds walks within the open spaces this graph's area paths cross, so
+# they travel with the graph and a rollback brings the matching ones back.
+vol_sh "cd /data && for f in spaces.ndjson spaces.index.json; do if [ -f region-walk.\$f ]; then cp -f region-walk.\$f $GRAPH.next/area-\$f; fi; done"
+
 # ── [4/4] Swap ───────────────────────────────────────────────────────────────
 log "[4/4] Swapping the new graph in and restarting ${CONTAINER}..."
 docker stop "$CONTAINER" >/dev/null 2>&1 || true

@@ -15,7 +15,10 @@ from typing import Iterable
 from shapely import LineString, Point, Polygon, STRtree, prepare
 from shapely.geometry.polygon import orient
 
-SLACK_M = 0.05
+# Room for rounding on a line that runs along the space's edge; never further outside than this.
+SLACK_M = 0.002
+# A point this close to a line lies on it.
+ON_LINE_M = 0.05
 # People pass a wall or a fountain at arm's length, so corners sit this far off them.
 CLEARANCE_M = 0.5
 # Within the clearance, so a round fountain turns a handful of corners rather than dozens.
@@ -67,12 +70,17 @@ def _tangent(v: Vertex, other: XY) -> bool:
     return _cross(v.xy, other, v.prev) * _cross(v.xy, other, v.next) >= 0
 
 
+def without_planters(space: Polygon) -> Polygon:
+    """The space a walk may use: obstacles too small to walk around are left in it."""
+    return Polygon(space.exterior, [h for h in space.interiors if Polygon(h).area >= MIN_OBSTACLE_M2])
+
+
 def lines(space: Polygon, anchors: Iterable[XY], barriers: Iterable[LineString] = (), max_points: int = 400) -> list[tuple[XY, XY]] | None:
     """
     Every straight line worth walking across `space` between its anchors (ways
     in, ends of walls) and its corners. None past `max_points` points.
     """
-    space = Polygon(space.exterior, [h for h in space.interiors if Polygon(h).area >= MIN_OBSTACLE_M2])
+    space = without_planters(space)
     clear = space.buffer(-CLEARANCE_M, join_style="mitre", mitre_limit=2.0).simplify(SIMPLIFY_M)
     points: dict[XY, Vertex] = {v.xy: v for part in getattr(clear, "geoms", [clear]) if isinstance(part, Polygon) for v in corners(part)}
     for xy in anchors:
@@ -96,7 +104,7 @@ def lines(space: Polygon, anchors: Iterable[XY], barriers: Iterable[LineString] 
             if line.length < MIN_LINE_M:
                 continue
             # A line through another point is the two lines either side of it.
-            if any(j != i and vertices[j] is not b for j in point_tree.query(line, predicate='dwithin', distance=SLACK_M)):
+            if any(j != i and vertices[j] is not b for j in point_tree.query(line, predicate='dwithin', distance=ON_LINE_M)):
                 continue
             if not room.covers(line):
                 continue
