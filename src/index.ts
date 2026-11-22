@@ -32,6 +32,7 @@ import { transitAttributionRoutes } from './routes/transit-attribution'
 import { speechRoutes } from './routes/speech'
 import { gbfsRoutes } from './routes/gbfs'
 import { gtfsRtRoutes } from './routes/gtfs-rt'
+import { offlineRoutes } from './routes/offline'
 import { ensureSchema, ensureGtfsSchema, ensureGbfsSchema, ensureStationLabelSchema } from './db'
 import { ensureAccountsSchema } from './services/accounts.service'
 import { passkeyPolicy } from './services/admin-access.service'
@@ -200,6 +201,7 @@ const app = new Elysia()
   .use(transitAttributionRoutes)
   .use(gbfsRoutes)
   .use(gtfsRtRoutes)
+  .use(offlineRoutes)
   .use(speechRoutes)
   .listen(port)
 
