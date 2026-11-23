@@ -131,7 +131,7 @@ describe('identifyCaller', () => {
     delete process.env.BARRELMAN_API_KEY
     // An unset BARRELMAN_API_KEY means "no auth configured", which every guard
     // in this codebase treats as local development. A fresh clone has to be
-    // usable with no configuration; `assertAuthConfigured()` is what warns a
+    // usable with no configuration; `assertSecretsConfigured()` is what warns a
     // production instance that it is wide open.
     const result = await identifyCaller({}, get())
 

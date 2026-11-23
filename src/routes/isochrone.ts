@@ -1,5 +1,5 @@
 import Elysia, { t } from 'elysia'
-import { serverError } from '../lib/errors'
+import { serverError, upstreamError } from '../lib/errors'
 import { apiAuth, apiAuthAfter } from '../middleware/api-auth'
 import {
   getIsochrone as _getIsochrone,
@@ -75,24 +75,8 @@ export function createIsochroneRoutes(deps: {
         return { error: err.message }
       }
 
-      if (err instanceof GraphHopperError) {
-        // 4xx from GraphHopper means we sent something it rejected; surface it
-        // as-is. 5xx means the engine failed, which is a 502 to our caller.
-        set.status = err.statusCode >= 500 ? 502 : err.statusCode
-        try {
-          return JSON.parse(err.body)
-        } catch {
-          return { error: err.body }
-        }
-      }
-
-      if (err instanceof MotisError) {
-        set.status = err.statusCode >= 500 ? 502 : err.statusCode
-        try {
-          return JSON.parse(err.body)
-        } catch {
-          return { error: err.body }
-        }
+      if (err instanceof GraphHopperError || err instanceof MotisError) {
+        return upstreamError(http, set, err, 'Isochrone service unavailable')
       }
 
       return serverError(http, set, err, 'Isochrone service unavailable', 502)

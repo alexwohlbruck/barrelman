@@ -220,15 +220,17 @@ describe('upstream errors', () => {
     expect((await res.json()).message).toBe('Cannot find point')
   })
 
-  test('a GraphHopper 5xx becomes a 502', async () => {
+  test('a GraphHopper 5xx becomes a generic 502', async () => {
     const getIsochrone = mock(async () => {
-      throw new GraphHopperError(502, 'GraphHopper unreachable')
+      throw new GraphHopperError(502, 'GraphHopper unreachable: http://barrelman-graphhopper:8989')
     })
     const res = await appWith({ getIsochrone: getIsochrone as any })
       .handle(req('/isochrone?lat=35.7796&lng=-78.6382'))
 
     expect(res.status).toBe(502)
-    expect((await res.json()).error).toContain('GraphHopper unreachable')
+    const body = await res.json()
+    expect(body.error).toBe('Isochrone service unavailable')
+    expect(JSON.stringify(body)).not.toContain('barrelman-graphhopper')
   })
 
   test('a MOTIS failure becomes a 502', async () => {
