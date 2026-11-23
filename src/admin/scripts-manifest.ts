@@ -947,6 +947,16 @@ export const SCRIPTS: ScriptDef[] = [
         description: 'Required unless already set in the server environment.',
       },
       {
+        name: 'jobs',
+        label: 'Parallel feed builds',
+        type: 'number',
+        apply: 'flag',
+        flag: '--jobs',
+        placeholder: 'blank = portolan default (min(4, CPUs))',
+        description:
+          'Passed to the patch the check runs on what changed. A first check on a workspace with no recorded shas counts every feed as changed, which is a full rebuild — set 1 or 2 on a host that also serves the API.',
+      },
+      {
         name: 'dry-run',
         label: 'Dry run (diff only, no downloads)',
         type: 'boolean',

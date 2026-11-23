@@ -16,6 +16,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ### Fixed
 
+* A portolan sync no longer stops partway through re-importing corrected feeds. A feed with no fixed-route service (a flex-only paratransit feed, for one) is skipped as the GTFS importer skips it, and any other failed import keeps that feed's previous zip and rows. The run carries on and rebuilds MOTIS, then reports the failures. Until now one such feed ended the run before MOTIS was rebuilt, so corrected schedules never reached riders.
+* **Portolan Check for Updates** takes **Parallel feed builds**, and its seeded schedule uses 2. A first check on a workspace with no recorded upstream versions rebuilds every feed.
 * A portolan feed whose GTFS zip goes missing from the workspace no longer drops off the map without a word. **Portolan Check for Updates** downloads any missing zip, and fails when a hand-placed feed has none. It now ships as a seeded daily schedule; turn it on under Schedules. Needs portolan 0.5.4 or later.
 * Transit plans no longer send riders through an entrance that only reaches the other direction's platform. Entrances signed for a direction ("A,C trains to Manhattan", "Uptown", "Inbound only", "Richtung …") are matched against the ride. Where an agency's GTFS pathways leave an entrance unconnected to a platform, station paths no longer guess a route between them. Rebuild station paths after upgrading.
 

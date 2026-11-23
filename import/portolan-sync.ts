@@ -329,6 +329,8 @@ if (import.meta.main) {
 
     // ── 2. Land the corrected zips in barrelman ─────────────────────
     let imported = 0
+    // Feeds whose re-import threw. The run carries on and fails at the end.
+    const failedImports: string[] = []
     if (result.exported.length > 0) {
       // Deferred so `--check` runs that found nothing stay DB-free and cheap.
       const { ensureGtfsSchema } = await import('../src/db')
@@ -336,7 +338,7 @@ if (import.meta.main) {
       const { gtfsFeeds } = await import('../src/schema/gtfs')
       const { sanitizeGtfsZip } = await import('../src/services/gtfs.service')
       const { alignRealtimeTripIds, describeAlignment } = await import('./align-trip-ids')
-      const { importFeedFile, injectTransfersTxt, readZipEntry } = await import('./feed-import')
+      const { importFeedFile, injectTransfersTxt, readZipEntry, NoFixedRouteService } = await import('./feed-import')
       const { injectFaresV2 } = await import('./inject-fares-v2')
       const { injectBikesAllowed } = await import('./inject-bikes-allowed')
       const { injectTripShapesAll } = await import('./inject-trip-shapes')
@@ -415,21 +417,31 @@ if (import.meta.main) {
             `  ✗ trip_id alignment SKIPPED (${alignment.skipReason}); realtime will not resolve for this feed`,
           )
         }
-        const tmp = `${dest}.tmp-${process.pid}`
-        try {
-          writeFileSync(tmp, Buffer.from(buffer))
-          renameSync(tmp, dest)
-        } catch (err) {
-          try { unlinkSync(tmp) } catch {}
-          console.error(`  ✗ failed to write ${dest}: ${err}`)
-          continue
-        }
-
-        // Re-import into PostGIS through the same path the GTFS importer
-        // uses. Identity fields come from the existing gtfs_feeds row because
+        // Import from a staged copy and move it into place only once the
+        // import succeeds, as the GTFS importer does. Renaming first left a
+        // zip the database never accepted where MOTIS reads it, and one feed
+        // that threw took the rest of the run down with it, MOTIS rebuild
+        // included: a flex-only paratransit feed did exactly that.
+        //
+        // Identity fields come from the existing gtfs_feeds row because
         // importFeedFile clears the row first — anything not carried here is
         // lost, rt_urls included.
-        await importFeedFile(dest, feedInfo)
+        const staged = `${dest}.part-${process.pid}`
+        try {
+          writeFileSync(staged, Buffer.from(buffer))
+          await importFeedFile(staged, feedInfo)
+          renameSync(staged, dest)
+        } catch (err) {
+          try { unlinkSync(staged) } catch {}
+          if (err instanceof NoFixedRouteService) {
+            // Nothing a timetable router can use; the GTFS importer skips these too.
+            console.log(`  – Skipped: ${err.message}`)
+          } else {
+            failedImports.push(m.key)
+            console.error(`  ✗ import failed, previous zip and rows kept: ${err instanceof Error ? err.message : err}`)
+          }
+          continue
+        }
 
         // Post-import zip surgery, in the importer's order: transfers
         // injection AFTER the PostGIS import (so gtfs_transfers holds the
@@ -512,7 +524,10 @@ if (import.meta.main) {
     }
 
     console.log(`\n=== Portolan sync complete: ${imported} feed(s) re-imported ===`)
-    const failed = result.errors.length > 0 || portolanExit !== 0 || motisFailed
+    if (failedImports.length > 0) {
+      console.error(`✗ ${failedImports.length} feed(s) failed to import: ${failedImports.join(', ')}`)
+    }
+    const failed = result.errors.length > 0 || portolanExit !== 0 || motisFailed || failedImports.length > 0
     process.exit(failed ? 1 : 0)
   }
 }
