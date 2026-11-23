@@ -17,6 +17,8 @@ import type { CrossingName } from '../lib/route-context/crossing-names'
 import type { Overpass } from '../lib/route-context/overpasses'
 import type { AreaStretch } from '../lib/route-context/area-stretches'
 import { tagEdgeSegments, type EdgeTags } from '../lib/route-context/edge-tags'
+import { AREA_PATH_WAY_ID_BASE, areaPathWays, foldAreaManeuvers, roundPath } from '../lib/area-paths/round-path'
+import { spacesFor } from './area-spaces.service'
 import { pathScore, scoreSegments, wayStretches } from '../lib/bike-suitability/route-cost'
 import {
   lookupFacilities, lookupScores, scoresFor, suitableCustomModel, type FacilityLookup, type ScoreLookup,
@@ -43,6 +45,7 @@ export interface RouteEdgeSegment extends EdgeTags {
   bikePriority?: number   // 0–1 — GraphHopper's bike_priority encoded value (higher = friendlier for cycling)
   crossing?: string       // GH Crossing EV: MISSING | TRAFFIC_SIGNALS | MARKED | UNMARKED | UNCONTROLLED | RAILWAY | RAILWAY_BARRIER
   osmWayId?: number       // the OSM way the edge belongs to, for POST /route/lanes
+  plaza?: boolean         // across a pedestrian area, on a path the graph adds rather than an OSM way
   bikeSuitability?: number // 0-100 comfort score of that way, on a bike route asked for it
   bikeFacility?: string   // the way's bike facility (path, track, lane, sharrow, none, ...), on the same routes
   country?: string        // ISO 3166-1 alpha-3
@@ -336,6 +339,20 @@ export function resetEncodedValues(): void {
   encodedValues = null
 }
 
+export type SpaceLookup = typeof spacesFor
+
+/** A path across pedestrian areas as one step each, its bends rounded; unrounded if the spaces can't be read. */
+export async function roundAreaBends(path: any, spaces: SpaceLookup = spacesFor): Promise<any> {
+  const ways = areaPathWays(path)
+  if (!ways.length) return path
+  const folded = foldAreaManeuvers(path)
+  try {
+    return roundPath(folded, await spaces(ways))
+  } catch {
+    return folded
+  }
+}
+
 export async function getEnrichedRoute(
   requestBody: any,
   fetchFn: FetchFn = (url, init) => fetch(url, init),
@@ -343,6 +360,7 @@ export async function getEnrichedRoute(
   context: RouteContextSource = dbRouteContextSource,
   scoreLookup: ScoreLookup = lookupScores,
   facilityLookup: FacilityLookup = lookupFacilities,
+  spaces: SpaceLookup = spacesFor,
 ): Promise<EnrichedRouteResponse> {
   const ghUrl = graphHopperUrl()
   const available = await graphEncodedValues(fetchFn)
@@ -388,7 +406,8 @@ export async function getEnrichedRoute(
   const routeData = await routeResponse.json() as any
 
   // Enrich each path with edge segments and elevation stats
-  const enrichedPaths = await Promise.all((routeData.paths || []).map(async (path: any) => {
+  const enrichedPaths = await Promise.all((routeData.paths || []).map(async (raw: any) => {
+    const path = await roundAreaBends(raw, spaces)
     const coordinates: number[][] = path.points?.coordinates || []
     const cumulativeDistances = buildCumulativeDistances(coordinates)
     const elevationStats = computeElevationStats(coordinates)
@@ -400,7 +419,7 @@ export async function getEnrichedRoute(
       nameCrossingSegments(nameSegments(buildEdgeSegments(path.details || {}, cumulativeDistances), stretches), around.crossingNames),
       around.edgeTags,
       around.edgeMarks,
-    )
+    ).map(seg => (seg.osmWayId ?? 0) >= AREA_PATH_WAY_ID_BASE ? { ...seg, plaza: true } : seg)
 
     const ways = scored ? wayStretches(path.details, cumulativeDistances) : []
     const wayIds = ways.map(w => w.wayId)

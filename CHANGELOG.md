@@ -10,6 +10,10 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Added
+
+* Walking routes cross plazas and other pedestrian areas directly, curving smoothly around fountains, buildings and walls without leaving the area, instead of following its outline. ETAs follow the curve. Rebuild GraphHopper after upgrading.
+
 ## [0.10.60] - 2026-11-22
 
 ### Fixed

@@ -8,6 +8,8 @@ set -euo pipefail
 # Refresh the GraphHopper routing graph after an OSM update. The new graph is
 # built beside the old one and checked before it replaces anything.
 #
+#   [0/4] Add straight paths across pedestrian areas (prepare-graphhopper-osm.sh),
+#         when the server reads region-walk.osm.pbf.
 #   [1/4] Check there is room for a second graph, and decide whether the live
 #         server can keep serving during the build.
 #   [2/4] Build the new graph into /data/graph-cache.next with a one-off
@@ -246,6 +248,16 @@ SERVING_JAVA_OPTS="${SERVING_JAVA_OPTS:--Xmx6g -Xms1g}"
 SERVING_XMX_KB="$(java_xmx_kb "$SERVING_JAVA_OPTS")"
 
 # ── [1/4] Disk and memory ────────────────────────────────────────────────────
+if [ "$(basename "$PBF")" = region-walk.osm.pbf ]; then
+  log "[0/4] Adding paths across pedestrian areas..."
+  if [ "$IN_OPS" = 1 ]; then
+    OSM_DATA_DIR=/data "$SCRIPT_DIR/prepare-graphhopper-osm.sh"
+  elif ! docker exec barrelman-ops bash scripts/prepare-graphhopper-osm.sh; then
+    log "  could not run the pass in barrelman-ops — building from the plain extract" >&2
+    vol_sh 'ln -f /data/region.osm.pbf /data/region-walk.osm.pbf'
+  fi
+fi
+
 log "[1/4] Checking disk and memory..."
 CURRENT_KB="$(size_kb "$GRAPH")"; CURRENT_KB="${CURRENT_KB:-0}"
 PREV_KB="$(size_kb "$GRAPH.prev")"; PREV_KB="${PREV_KB:-0}"
@@ -493,6 +505,10 @@ if [ "$TRIAL_DECISION" = run ]; then
 else
   log "  trial server ${TRIAL_DECISION} (--verify-route forces it; it needs about $(staged_human_kb "$TRIAL_NEED_KB") more RAM)"
 fi
+
+# The API rounds walks within the open spaces this graph's area paths cross, so
+# they travel with the graph and a rollback brings the matching ones back.
+vol_sh "cd /data && for f in spaces.ndjson spaces.index.json; do if [ -f region-walk.\$f ]; then cp -f region-walk.\$f $GRAPH.next/area-\$f; fi; done"
 
 # ── [4/4] Swap ───────────────────────────────────────────────────────────────
 log "[4/4] Swapping the new graph in and restarting ${CONTAINER}..."

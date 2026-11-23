@@ -31,6 +31,11 @@ jobs:
       - name: Run tests
         run: bun test
 
+      - uses: astral-sh/setup-uv@v6
+
+      - name: Run Python tests
+        run: bun run test:python
+
       # Fails on any new high or critical advisory. The one ignored here is not
       # reachable from a request:
       #
