@@ -101,7 +101,7 @@ describe('POST /match', () => {
     const failed = makeApp(async () => { throw new GraphHopperError(500, '{"message":"boom"}') })
     const res = await failed.app.handle(post('/match', JSON_BODY, 'application/json'))
     expect(res.status).toBe(502)
-    expect(await res.json()).toEqual({ message: 'boom' })
+    expect((await res.json()).error).toBe('Map matching unavailable')
   })
 
   test('passes a GraphHopper 4xx through with its message', async () => {
