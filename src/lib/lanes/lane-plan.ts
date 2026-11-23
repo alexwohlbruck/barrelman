@@ -95,14 +95,15 @@ const RIDE_IN_LANE_METERS = 1
 /**
  * Where a cyclist rides, metres right of the route, given the lanes running
  * their way (offsets right of the route too): down the middle of the bike lane
- * on the kerb side, else just inside the outer traffic lane. Null without lanes.
+ * on the kerb side, else just inside the outer traffic lane. `ride` is the side
+ * of the road to keep to, the kerb side unless sharrows say otherwise. Null without lanes.
  */
-export function bikeOffset(lanes: { offset: number; width: number; bike: boolean }[], side: DrivingSide): number | null {
-  const kerbward = (a: { offset: number }, b: { offset: number }) => (side === 'right' ? b.offset - a.offset : a.offset - b.offset)
+export function bikeOffset(lanes: { offset: number; width: number; bike: boolean }[], side: DrivingSide, ride: DrivingSide = side): number | null {
+  const kerbward = (a: { offset: number }, b: { offset: number }) => (ride === 'right' ? b.offset - a.offset : a.offset - b.offset)
   const bike = lanes.filter(l => l.bike).sort(kerbward)[0]
   if (bike) return bike.offset
   const outer = lanes.filter(l => !l.bike).sort(kerbward)[0]
   if (!outer) return null
   const inside = Math.max(0, outer.width / 2 - RIDE_IN_LANE_METERS)
-  return outer.offset + (side === 'right' ? inside : -inside)
+  return outer.offset + (ride === 'right' ? inside : -inside)
 }

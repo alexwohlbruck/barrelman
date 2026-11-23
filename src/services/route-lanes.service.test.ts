@@ -172,6 +172,31 @@ describe('getRouteLanes for bikes', () => {
     expect(north(res, 100)).toBeLessThan(-1)
   })
 
+  // A protected avenue track on the left, split into three ways: a long block, a
+  // sharrowed mixing zone at the junction, then a block with one lane fewer.
+  const avenueBlocks = (mixing: string) => {
+    const track = { highway: 'secondary', oneway: 'yes', 'cycleway:left': 'track' }
+    return lanes({
+      1: { tags: { ...track, lanes: '4' }, coordinates: [at(0, 0), at(150, 0)] },
+      2: { tags: { ...track, lanes: '5', 'cycleway:left': mixing }, coordinates: [at(150, 0), at(170, 0)] },
+      3: { tags: { ...track, lanes: '3' }, coordinates: [at(170, 0), at(300, 0)] },
+    })
+  }
+  const blocks = { coordinates: [at(0, 0), at(150, 0), at(170, 0), at(300, 0)], ways: [{ from: 0, to: 150, osmWayId: 1 }, { from: 150, to: 170, osmWayId: 2 }, { from: 170, to: 300, osmWayId: 3 }], profile: 'bike' as const }
+
+  test('keeps to the track line through a sharrowed mixing zone and a lane drop', async () => {
+    const res = await getRouteLanes(blocks, avenueBlocks('shared_lane'))
+    const line = north(res, 75)
+    expect(line).toBeGreaterThan(5)
+    expect(north(res, 160)).toBeCloseTo(line, 1)
+    expect(north(res, 250)).toBeCloseTo(line, 1)
+  })
+
+  test('rides the sharrowed side of a one-way', async () => {
+    const res = await getRouteLanes({ ...blocks, coordinates: blocks.coordinates.slice(1, 3), ways: [{ from: 0, to: 20, osmWayId: 2 }] }, avenueBlocks('shared_lane'))
+    expect(north(res, 10)).toBeGreaterThan(5)
+  })
+
   test('keeps left where traffic does', async () => {
     const res = await getRouteLanes({ coordinates: straight, ways, profile: 'bike', drivingSide: 'left' }, lanes({ 1: { ...street, tags: { ...street.tags, 'cycleway:right': undefined, 'cycleway:left': 'lane' } }, 2: path }))
     expect(north(res, 100)).toBeGreaterThan(3)
