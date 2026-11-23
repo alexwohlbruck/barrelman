@@ -60,14 +60,14 @@ const INSERT_BATCH = 500
 
 
 type Row = { id: string; kind: Kind; highway: string | null; road: string | null; layer: string | null; width: string | null;
-  lanes: string | null; oneway: string | null; wikidata: string | null; ele: string | null; covered: string | null; coords: number[][] }
+  lanes: string | null; oneway: string | null; wikidata: string | null; ele: string | null; covered: string | null; footway: string | null; coords: number[][] }
 
 const bridgeWays = (sql: Sql) => sql`
   SELECT osm_id::text AS id, bridge_deck_class(tags) AS kind, bridge_deck_highway(tags) AS highway,
          COALESCE(tags->>'highway', tags->>'railway') || '/' || COALESCE(tags->>'ref', tags->>'name', '') AS road, tags->>'layer' AS layer,
          COALESCE(tags->>'width:carriageway', tags->>'width') AS width, tags->>'lanes' AS lanes, tags->>'oneway' AS oneway,
          COALESCE(tags->>'bridge:wikidata', tags->>'wikidata') AS wikidata, tags->>'ele' AS ele, tags->>'covered' AS covered,
-         ST_AsGeoJSON(geom)::json->'coordinates' AS coords
+         tags->>'footway' AS footway, ST_AsGeoJSON(geom)::json->'coordinates' AS coords
   FROM geo_places`
 // Which ways make decks is bridge_deck_class() in create-detail-views.sql,
 // which queue-bridge-decks.sql reads too.
@@ -94,7 +94,7 @@ function toWay(r: Row, pins: Map<string, number>): Way {
   const ele = taggedEle === null ? null : terrainHeight(taggedEle, middle[0], middle[1])
   return {
     id: Number(r.id), points: r.coords.map(([lng, lat]) => mercator(lng, lat)), kind, layer: Math.max(1, layer || 1), untagged: Number.isNaN(layer), width, road: r.road ?? undefined,
-    ...(vertices.length ? { pins: vertices } : {}), ...(ele !== null ? { ele } : {}),
+    ...(vertices.length ? { pins: vertices } : {}), ...(ele !== null ? { ele } : {}), ...(r.footway === 'sidewalk' ? { sidewalk: true } : {}),
   }
 }
 
@@ -231,7 +231,7 @@ export async function inputFor(sql: Sql, rows: Row[]): Promise<DeckInput> {
   const ids = rows.map(r => r.id)
   const crossable = sql`g.geom_type = 'line' AND COALESCE(g.tags->>'bridge', 'no') = 'no' AND COALESCE(g.tags->>'tunnel', 'no') = 'no'
       AND COALESCE(g.tags->>'location', '') NOT IN ('underground', 'underwater')`
-  const crossedRows: Array<{ kind: Crossed['kind']; coords: number[][][]; width: string | null; lanes: string | null }> = await sql`
+  const crossedRows: Array<{ kind: Crossed['kind']; coords: number[][][]; width: string | null; lanes: string | null; covered: boolean }> = await sql`
     WITH pieces AS MATERIALIZED (
       SELECT ST_Subdivide(geom, 8) AS piece FROM geo_places WHERE osm_type = 'W' AND osm_id = ANY(${ids}::bigint[]) AND geom_type = 'line'
       -- and round each end as far as a deck reads the road beyond it, for the junctions there.
@@ -240,18 +240,19 @@ export async function inputFor(sql: Sql, rows: Row[]): Promise<DeckInput> {
         LATERAL (VALUES (ST_StartPoint(geom)), (ST_EndPoint(geom))) v(e)
       WHERE osm_type = 'W' AND osm_id = ANY(${ids}::bigint[]) AND geom_type = 'line')
     SELECT DISTINCT ON (g.osm_type, g.osm_id) bridge_deck_class(g.tags) AS kind, ST_AsGeoJSON(ST_Multi(g.geom))::json->'coordinates' AS coords,
-           g.tags->>'width' AS width, g.tags->>'lanes' AS lanes
+           g.tags->>'width' AS width, g.tags->>'lanes' AS lanes, g.tags->>'covered' = 'yes' AS covered
     FROM pieces JOIN geo_places g ON g.geom && piece AND ST_Intersects(g.geom, piece)
     WHERE g.tags ? 'highway' AND ${crossable} AND bridge_deck_class(g.tags) IS NOT NULL
     UNION ALL
     SELECT CASE WHEN g.tags ? 'waterway' THEN 'water' ELSE bridge_deck_class(g.tags) END, ST_AsGeoJSON(ST_Multi(g.geom))::json->'coordinates',
-           g.tags->>'width', g.tags->>'lanes'
+           g.tags->>'width', g.tags->>'lanes', g.tags->>'covered' = 'yes'
     FROM geo_places g
     WHERE (${anyTag(sql, UNDER)}) AND g.geom && ${box} AND NOT g.tags ? 'highway' AND ${crossable}`
   const crossed: Crossed[] = crossedRows.flatMap(r => r.coords.map(line => ({
     kind: r.kind,
     points: line.map(([lng, lat]) => mercator(lng, lat)),
     ...(r.kind === 'water' ? {} : { half: wayHalf(r.kind, metres(r.width), r.lanes) }),
+    ...(r.covered ? { covered: true } : {}),
   })))
   // Carriageways on the ground a deck's way passes over, which its supports keep off.
   // Within a wide deck's half width of its way, so a road under one edge is found too; holes kept, as medians.

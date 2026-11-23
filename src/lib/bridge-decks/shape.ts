@@ -30,6 +30,11 @@ const OUTSIDE_SLACK = 0.5
 const END_STEP = 1
 /** Farthest a deck's end may lie from another's centreline and still meet it, in metres. */
 const JUNCTION_GAP = 1
+/** How far past its lanes' half width a deck may reach where it is held to them: by this factor, plus this many metres. */
+export const LANE_STRETCH = 1.5
+export const LANE_ROOM = 2
+/** The farthest a side may reach where it is held near its lanes. */
+export const heldTo = (lanes: number) => lanes * LANE_STRETCH + LANE_ROOM
 
 /** A deck to shape: shaped only where `outline` names the outline it was found in, by `inOutline`. */
 type Deck = Pick<Chain, 'points' | 'edges' | 'layer' | 'fit'> & { outline?: string | null }
@@ -94,7 +99,8 @@ const heading = (line: Point[], i: number): Point => {
 
 /** Whether two decks meet across each other, as roads at a junction do: one crosses the other, or ends on it at an angle. */
 function across(a: Point[], b: Point[]): boolean {
-  if (crossings(a, b, 0).length) return true
+  // A crossing inside both: one starting on the other is a ramp leaving it, judged by its angle below.
+  if (crossings(a, b, JUNCTION_GAP).length && crossings(b, a, JUNCTION_GAP).length) return true
   return [[a, b], [b, a]].some(([line, other]) =>
     [0, other.length - 1].some(e => {
       const at = beside(line, other[e])
@@ -197,6 +203,9 @@ export function shapeDecks(decks: Deck[], outlines: Outline[], grounded: Array<[
   // Road decks in the same outline as one.
   const meetingIn = (k: number) => [...new Set(bounds.flatMap((b, j) => (meet(boxes[k], b) ? meeting[j] : [])))]
     .filter(j => j !== k && decks[j].outline === decks[k].outline)
+  const junction = decks.map((deck, k) => !!deck.outline && meetingIn(k).some(j => across(deck.points, decks[j].points)))
+  // An outline carrying a junction is drawn round the whole interchange: the room in it between its roads is no one deck's.
+  const interchanges = new Set(decks.flatMap((d, k) => (junction[k] ? [d.outline] : [])))
   return decks.map((deck, k) => {
     if (!deck.outline) return null
     const pts = deck.points
@@ -219,6 +228,7 @@ export function shapeDecks(decks: Deck[], outlines: Outline[], grounded: Array<[
     const others = [...new Set(near.flatMap(j => meeting[j]))]
       .filter(j => j !== k)
       .map(j => ({ edges: decks[j].edges, lines: [decks[j].points, ...runOn(decks[j].points, pts, reach)] }))
+    const interchange = interchanges.has(deck.outline)
     const sides: [number[], number[]] = [new Array(n).fill(NaN), new Array(n).fill(NaN)]
     // Where the outline itself reaches at least as far as the carriageway: an end's corner there lies on its side.
     const reached: [boolean[], boolean[]] = [new Array(n).fill(false), new Array(n).fill(false)]
@@ -247,7 +257,7 @@ export function shapeDecks(decks: Deck[], outlines: Outline[], grounded: Array<[
           if (gap - o.edges[facing] >= edge) continue
           edge = Math.min(edge, (gap + deck.edges[side] - o.edges[facing]) / 2)
         }
-        sides[side][i] = Math.max(deck.edges[side], Math.min(edge, MAX_REACH))
+        sides[side][i] = Math.max(deck.edges[side], Math.min(edge, interchange ? heldTo(deck.edges[side]) : MAX_REACH))
       }
     }
     const read = sides[0].map((l, i) => !Number.isNaN(l) && !Number.isNaN(sides[1][i]))
@@ -263,11 +273,10 @@ export function shapeDecks(decks: Deck[], outlines: Outline[], grounded: Array<[
     // A side standing out of its outline is cut back to it, but never inside the carriageway. Near a grounded
     // end, whose square end meets the road beyond however the abutment is skewed, only a side at the most a
     // deck may reach, unless the deck is one of a junction the bridge carries, whose ends meet no single road.
-    const junction = meetingIn(k).some(j => across(pts, decks[j].points))
     for (let i = 0; i < n; i++) {
       if (home[i] < 0) continue
       const { t, n: left } = frame(pts, i)
-      const landing = !junction && ([0, 1] as const).some(end => grounded[k][end] && fromEnd(i, end) <= CAP_MAX)
+      const landing = !junction[k] && ([0, 1] as const).some(end => grounded[k][end] && fromEnd(i, end) <= CAP_MAX)
       const rings = outlines[home[i]].rings
       for (const side of [0, 1] as const) {
         const v = shaped[side][i]
@@ -284,7 +293,7 @@ export function shapeDecks(decks: Deck[], outlines: Outline[], grounded: Array<[
       if (home[i] >= 0) continue
       const inner = [i - 1, i + 1].find(j => j >= 0 && j < n && home[j] >= 0)
       for (const side of [0, 1] as const)
-        if (junction) shaped[side][i] = Math.min(shaped[side][i], deck.edges[side])
+        if (junction[k]) shaped[side][i] = Math.min(shaped[side][i], deck.edges[side])
         else if (inner !== undefined) shaped[side][i] = Math.min(shaped[side][i], shaped[side][inner])
     }
     const caps: Shape['caps'] = [0, 0, 0, 0]

@@ -5,7 +5,7 @@
  * one another.
  */
 import { describe, expect, it } from 'bun:test'
-import { buildDecks, type Deck } from './build'
+import { buildDecks, CLEARANCE, type Deck } from './build'
 import { along, beside, crossings, VERTICAL_CURVE, heightAt as profileAt, mercator, type Point } from './profile'
 import { recorded } from './recorded'
 import { deckDefects } from './continuity'
@@ -52,7 +52,7 @@ describe('the Brooklyn Bridge', () => {
 
   it('carries the promenade above its roadways between the towers', () => {
     const promenade = carrying(439842783)
-    expect(heightAt(promenade, midspan)).toBeGreaterThan(heightAt(roadways[0], midspan) + 3)
+    expect(heightAt(promenade, midspan)).toBeGreaterThanOrEqual(heightAt(roadways[0], midspan) + CLEARANCE.beside)
   })
 
   it('keeps the promenade up between the roadways where it runs on over the anchorages', () => {

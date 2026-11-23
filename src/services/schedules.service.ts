@@ -76,6 +76,13 @@ export const SEEDS: Array<Pick<ScheduleInput, 'scriptId' | 'cron'> & { params?: 
   // only re-imports the regions that actually changed. A US import takes about
   // 2.5 h and ends by restarting MOTIS, so this lands that around 3 AM Eastern.
   { scriptId: 'gtfs-watch', cron: '45 5 * * *' },
+  // The same for portolan-corrected feeds, and the only job that fetches their
+  // zips. A feed whose zip is missing never builds, and patch and global runs
+  // never mention it again; this check downloads it, or fails every night
+  // until someone places it by hand. Without it WMATA's Metro was off the map
+  // for two months. It ends with a MOTIS rebuild like gtfs-watch does, so it
+  // starts after that job's 2.5 h.
+  { scriptId: 'portolan-check-updates', cron: '0 10 * * *', params: { jobs: 2 } },
   // GBFS systems churn slowly — weekly is plenty.
   { scriptId: 'gbfs-import', cron: '30 5 * * 0' },
   // Redundant with the default nightly OSM update, which rebuilds the basemap

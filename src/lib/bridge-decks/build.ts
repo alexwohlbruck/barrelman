@@ -36,7 +36,9 @@ import {
   paveGores,
   landing,
   LANDING,
+  type Landing,
   MAX_GRADE,
+  MAX_REACH,
   TERRAIN_SLACK,
   metresPerUnit,
   lngLat,
@@ -56,18 +58,15 @@ import {
   type Way,
 } from './profile'
 import { alongSpan, clearanceNeeds, DECK_DEPTH, hungStretch, levelNeeds, MAX_DECK, SEAMARK_REACH, trustedPins, type Seamark } from './elevation'
-import { inOutline, shapeDecks, within, type Outline } from './shape'
+import { heldTo, inOutline, rayHit, shapeDecks, within, type Outline } from './shape'
 import { bentPoints, blocked, nearestFree, obstacles, wayHalf, type Obstacles } from './supports'
 
-/** How far past its lanes' half width a deck fitted to its kerbs may reach: by this factor, plus this many metres. */
-const KERB_STRETCH = 1.5
-const KERB_ROOM = 2
 /** Metres between height samples. */
 export const STEP = 6
 /** What a row holds: 2 adds each side's edge at every sample, and its end caps, where a deck follows its outline. */
 export const FORMAT = 2
 /** Room a deck's underside leaves over what it crosses, plus the slab, in metres. */
-export const CLEARANCE = { road: 6, rail: 8, path: 4, water: 4, deck: 6.5 } as const
+export const CLEARANCE = { road: 6, rail: 8, path: 4, water: 4, deck: 6.5, beside: 3 } as const
 /** Metres a track's girders, ties and rail stand deeper than a road deck's slab, which CLEARANCE allows for. */
 export const TRACK_DEPTH = 2
 /** Metres past a lower roadway's edge within which a walkway on a higher layer is carried above it. */
@@ -89,7 +88,8 @@ const GROUND_BATCH = 16
 
 export type Ground = { load(points: Point[]): Promise<void>; at(p: Point): number }
 
-export type Crossed = { kind: 'road' | 'rail' | 'path' | 'water'; points: Point[]; half?: number }
+/** `covered`: under a roof, as a road under a lid is, which the terrain reads as the ground. */
+export type Crossed = { kind: 'road' | 'rail' | 'path' | 'water'; points: Point[]; half?: number; covered?: boolean }
 
 export type DeckInput = {
   ways: Way[]
@@ -164,7 +164,7 @@ function fitted(decks: Chain[], outlines: Outline[], kerbs: Point[]): Fitted[] {
   const loose = out.filter(d => d.kind === 'road' && !d.outline)
   const fit = fitEdges(loose, kerbs, decks)
   // A carriageway outline reaches into gores and merges; a deck it fits is held near its own lanes' width.
-  const held = (d: Chain, k: number) => fit[k].edges.map((e, side) => Math.min(e, d.edges[side] * KERB_STRETCH + KERB_ROOM)) as [number, number]
+  const held = (d: Chain, k: number) => fit[k].edges.map((e, side) => Math.min(e, heldTo(d.edges[side]))) as [number, number]
   return out.map(d => (loose.includes(d) ? { ...fit[loose.indexOf(d)], edges: held(d, loose.indexOf(d)), outline: null, lanes: d.lanes } : d))
 }
 
@@ -237,7 +237,7 @@ type Solved = {
   /** The decks its ends rest on, and where. */
   on: Array<{ deck: Solved; at: Point }>
   /** The road each grounded end lands on, where it lies beyond a hollow in the ground. */
-  lands: [Landing, Landing]
+  lands: [Landing | null, Landing | null]
   /** The ground beyond each grounded end, every LANDING.step metres out. */
   roads: [number[], number[]]
   /** The deck's own ends and OSM nodes, before resampling, so ends that share a node can be told apart from ends that merely lie close. */
@@ -277,12 +277,12 @@ function fixedNeeds(s: Pick<Solved, 'chain' | 'd' | 'g' | 'pins'>, input: DeckIn
   let out = fixed.get(s.chain)
   if (out) return out
   out = []
-  const reach = Math.max(...s.chain.edges)
   const own = box(s.chain.points)
   const depth = s.chain.kind === 'rail' ? TRACK_DEPTH : 0
-  for (const c of input.crossed)
-    if (meet(own, box(c.points)))
-      for (const at of crossings(s.chain.points, c.points, reach, s.d)) out.push({ at, height: heightAt(s.d, s.g, at) + CLEARANCE[c.kind] + depth })
+  for (const { kind, at, level, covered } of crossedBy.get(s.chain) ?? []) {
+    const under = heightAt(s.d, s.g, at)
+    out.push({ at, height: (level !== null && covered ? Math.min(level, under) : under) + CLEARANCE[kind] + depth })
+  }
   const water = input.water.filter(ring => meet(own, box(ring)))
   if (water.length)
     s.chain.points.forEach((p, i) => {
@@ -298,6 +298,107 @@ function fixedNeeds(s: Pick<Solved, 'chain' | 'd' | 'g' | 'pins'>, input: DeckIn
   if (input.seamarks?.length) out.push(...clearanceNeeds(s.chain.points, s.d, s.g.map(surface), input.seamarks.filter(m => covers(grow(own, SEAMARK_REACH), m.point))))
   out.push(...wayEle(s, input))
   return out
+}
+
+/** Where each deck crosses a way below, and that way's own level there where it could be read. */
+const crossedBy = new WeakMap<Chain, Array<{ kind: Crossed['kind']; at: number; level: number | null; covered?: boolean }>>()
+
+/** Metres past where a way leaves the bridge above it that its level is read: clear of the slab, which terrain blurs out to about a pixel or two. */
+const ROAD_OUT = 8
+/** Farthest from where a way crosses a deck that a node they share makes it a junction rather than a way passed over, in metres. */
+const MET = 3
+/** Farthest along a way below that its level is read, in metres. */
+const ROAD_REACH = 150
+
+/** The point a distance along a line, clamped to its ends. */
+function pointAlong(points: Point[], d: number[], at: number): Point {
+  const s = Math.max(0, Math.min(at, d[d.length - 1]))
+  const i = Math.max(1, d.findIndex(v => v >= s))
+  const t = (s - d[i - 1]) / (d[i] - d[i - 1] || 1)
+  return [points[i - 1][0] + (points[i][0] - points[i - 1][0]) * t, points[i - 1][1] + (points[i][1] - points[i - 1][1]) * t]
+}
+
+/** Least cosine at which one way carries straight on from another it meets end to end. */
+const STRAIGHT_ON = 0.7
+
+/**
+ * The point `metres` along a way from a distance along it, forward or back,
+ * carried on through the ways of its kind meeting it end to end, as a road
+ * split at a bridge is; null where it ends sooner.
+ */
+function walked(c: Crossed, at: number, sign: 1 | -1, metres: number, byEnd: Map<string, Crossed[]>): Point | null {
+  let [line, d, from, left] = [c.points, along(c.points), at, metres]
+  for (let hop = 0; hop < 20; hop++) {
+    const total = d[d.length - 1]
+    const room = sign > 0 ? total - from : from
+    if (left <= room) return pointAlong(line, d, from + sign * left)
+    left -= room
+    const [end, before] = sign > 0 ? [line[line.length - 1], line[line.length - 2]] : [line[0], line[1]]
+    const heading: Point = [end[0] - before[0], end[1] - before[1]]
+    let best: { line: Point[]; sign: 1 | -1; cos: number } | null = null
+    for (const o of byEnd.get(key(end)) ?? []) {
+      if (o.points === line || o.kind !== c.kind) continue
+      const forward = key(o.points[0]) === key(end)
+      const next = forward ? o.points[1] : o.points[o.points.length - 2]
+      const step: Point = [next[0] - end[0], next[1] - end[1]]
+      const cos = (step[0] * heading[0] + step[1] * heading[1]) / (Math.hypot(...step) * Math.hypot(...heading) || 1)
+      if (cos >= STRAIGHT_ON && (!best || cos > best.cos)) best = { line: o.points, sign: forward ? 1 : -1, cos }
+    }
+    if (!best) return null
+    ;[line, d] = [best.line, along(best.line)]
+    sign = best.sign
+    from = sign > 0 ? 0 : d[d.length - 1]
+  }
+  return null
+}
+
+/**
+ * Each way a deck crosses, and its level: the terrain along it either side of
+ * the bridge, ROAD_OUT past where it leaves the outline or the deck's edges.
+ * Terrain keeps a bridge as wide as a lid over a sunken road as ground, so
+ * under a way OSM has `covered` the terrain is the deck itself, not the road.
+ */
+async function crossedLevels(shaped: Fitted[], nodes: Array<Set<string>>, input: DeckInput, ground: Ground) {
+  const byEnd = new Map<string, Crossed[]>()
+  for (const c of input.crossed)
+    for (const p of [c.points[0], c.points[c.points.length - 1]]) byEnd.set(key(p), [...(byEnd.get(key(p)) ?? []), c])
+  const found = shaped.map((chain, k) => {
+    const own = box(chain.points)
+    const d = along(chain.points)
+    const reach = Math.max(...chain.edges)
+    const outline = outlineOf(chain, input.outlines)
+    return input.crossed.filter(c => meet(own, box(c.points))).flatMap(c =>
+      crossings(chain.points, c.points, reach, d).flatMap((at): Array<{ kind: Crossed['kind']; at: number; ends: Array<{ p: Point; metres: number }>; covered: boolean }> => {
+        const q = pointAlong(chain.points, d, at)
+        // A way sharing a node with the deck where they cross meets it there, on the bridge, as a footway across a lid does.
+        if (c.points.some(p => nodes[k].has(key(p)) && Math.hypot(p[0] - q[0], p[1] - q[1]) * metresPerUnit(q[1]) < MET)) return []
+        // A river's banks stand above it: water is cleared from the terrain under the deck.
+        if (c.kind === 'water') return [{ kind: c.kind, at, ends: [], covered: false }]
+        const near = beside(c.points, q)
+        const dc = along(c.points)
+        const there = dc[near.segment - 1] + (dc[near.segment] - dc[near.segment - 1]) * near.t
+        const [a, b] = [c.points[near.segment - 1], c.points[near.segment]]
+        const len = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1
+        const dir: Point = [(b[0] - a[0]) / len, (b[1] - a[1]) / len]
+        const ends = ([1, -1] as const).flatMap(sign => {
+          const leaves = outline && within(q, outline.rings) ? rayHit(q, [dir[0] * sign, dir[1] * sign], outline.rings) : Infinity
+          const metres = Math.min(ROAD_REACH, (Number.isFinite(leaves) ? leaves : reach) + ROAD_OUT)
+          const p = walked(c, there, sign, metres, byEnd)
+          return p ? [{ p, metres }] : []
+        })
+        return [{ kind: c.kind, at, ends, covered: !!c.covered }]
+      }))
+  })
+  for (let i = 0; i < found.length; i += GROUND_BATCH) {
+    const batch = found.slice(i, i + GROUND_BATCH)
+    await ground.load(batch.flat().flatMap(f => f.ends.map(e => e.p)))
+    batch.forEach((list, j) => crossedBy.set(shaped[i + j], list.map(({ kind, at, ends, covered }) => {
+      const read = ends.map(e => ({ z: ground.at(e.p), metres: e.metres })).filter(e => !Number.isNaN(e.z))
+      // Between the two, by distance: a ramp climbing out from under a lid is low at the near side, at the street at the far one.
+      const level = read.length === 2 ? (read[0].z * read[1].metres + read[1].z * read[0].metres) / (read[0].metres + read[1].metres) : read[0]?.z ?? null
+      return { kind, at, covered, level }
+    })))
+  }
 }
 
 const waysById = new WeakMap<Way[], Map<number, Way>>()
@@ -316,6 +417,31 @@ function wayEle(s: Pick<Solved, 'chain' | 'd' | 'g'>, input: DeckInput): Need[] 
     const g = heightAt(s.d, s.g, at)
     return w.ele > g && w.ele <= g + MAX_DECK ? [{ at, height: w.ele }] : []
   })
+}
+
+/** Per point of a walkway, whether a roadway on its own layer or above runs alongside: there it is that deck's sidewalk, not a promenade raised over the decks below. */
+const sidewalks = new WeakMap<Chain, boolean[]>()
+/** Metres a sidewalk's roadway may break off for and the walkway stay its sidewalk. */
+const SIDEWALK_GAP = 60
+function markSidewalks(chains: Chain[]) {
+  for (const s of chains) {
+    if (s.kind !== 'path') continue
+    const reach = Math.max(...s.edges) + RIDE
+    const roads = chains.filter(o => o.kind === 'road' && o.layer >= s.layer && meet(grow(box(s.points), reach + MAX_REACH), box(o.points)))
+    if (!roads.length) continue
+    const flags = s.points.map(p => roads.some(o => {
+      const near = beside(o.points, p)
+      return near.alongside && near.distance < sideAt(o, near.left ? 0 : 1, near.segment - 1, near.t) + reach
+    }))
+    // Its roadway breaks off for a tower's portal, the sidewalk does not.
+    for (let i = 0; i < flags.length; i++) {
+      if (flags[i] || !flags[i - 1]) continue
+      let j = i
+      while (j < flags.length && !flags[j]) j++
+      if (j < flags.length && (j - i) * STEP <= SIDEWALK_GAP) flags.fill(true, i, j)
+    }
+    sidewalks.set(s, flags)
+  }
 }
 
 /**
@@ -341,8 +467,10 @@ function over(s: Pick<Solved, 'chain' | 'd'>, lower: Solved) {
     if (s.d[i] < OVER_FROM_END || total - s.d[i] < OVER_FROM_END) return
     const near = beside(lower.chain.points, p)
     // A walkway OSM puts above roadways is carried over them wherever it runs within RIDE of their edge, as a promenade between them is.
-    if (near.alongside && near.distance < sideAt(lower.chain, near.left ? 0 : 1, near.segment - 1, near.t) + (s.chain.kind === 'path' ? reach + RIDE : 0))
-      out!.push({ at: s.d[i], segment: near.segment, t: near.t, clear: CLEARANCE.deck })
+    // Beside a roadway rather than over it, and with none on its own level, it clears only the roadway's railings, not its traffic.
+    const side = sideAt(lower.chain, near.left ? 0 : 1, near.segment - 1, near.t)
+    if (near.alongside && near.distance < side + (s.chain.kind === 'path' ? reach + RIDE : 0))
+      out!.push({ at: s.d[i], segment: near.segment, t: near.t, clear: near.distance < side || sidewalks.get(s.chain)?.[i] ? CLEARANCE.deck : CLEARANCE.beside })
   })
   mine.set(lower.chain, out)
   return out
@@ -430,8 +558,6 @@ function longestGap(piers: number[], total: number, hung: [number, number] | nul
   }
   return best
 }
-
-type Landing = ReturnType<typeof landing>
 
 /**
  * Points on the road beyond an end, every LANDING.step metres out: along the
@@ -621,9 +747,9 @@ function faired(solved: Solved[], input: DeckInput, bases: Map<string, Base>) {
     const ceiling = s.d.map(() => Infinity)
     for (const o of solved) {
       if (o.chain.layer <= s.chain.layer || !meet(box(s.chain.points), box(o.chain.points))) continue
-      for (const { at, segment, t } of over(o, s)) {
+      for (const { at, segment, t, clear } of over(o, s)) {
         const there = s.d[segment - 1] + (s.d[segment] - s.d[segment - 1]) * t
-        const top = heightAt(o.d, o.z, at) - CLEARANCE.deck
+        const top = heightAt(o.d, o.z, at) - clear
         s.d.forEach((v, i) => {
           if (Math.abs(v - there) <= CURVE / 2) ceiling[i] = Math.min(ceiling[i], top)
         })
@@ -725,7 +851,7 @@ const SETTLE_RUN = 30
 /** Ground under each deck, and the road each grounded end lands on, loaded a few decks at a time and nearby decks together. */
 async function groundUnder(shaped: Chain[], edges: Array<[Point[], Point[]]>, grounded: Array<[boolean, boolean]>, onward: Point[][], ground: Ground, roadsOnly: Point[][]) {
   const out: Array<number[] | null> = shaped.map(() => null)
-  const lands: Array<[Landing, Landing]> = shaped.map(() => [null, null])
+  const lands: Array<[Landing | null, Landing | null]> = shaped.map(() => [null, null])
   const roads: Array<[number[], number[]]> = shaped.map(() => [[], []])
   // Z-order of the midpoints at about a tile's size, so consecutive batches mostly share tiles.
   const morton = ([x, y]: Point) => {
@@ -751,10 +877,11 @@ async function groundUnder(shaped: Chain[], edges: Array<[Point[], Point[]]>, gr
         const land = r.length ? landing(r, g[end ? g.length - 1 : 0]) : null
         if (!land || offLine(shaped[k].points, end as 0 | 1, pts[end].slice(0, Math.round(land.run / LANDING.step))) > OFF_LINE) return null
         // A hollow reaching past the road's next junction is the junction's ground: the deck comes down to it rather than run on over it.
+        // A bank climbing from the end is not: a junction on it lies at the bank's top.
         const road = shaped[k].kind === 'road'
         const junction = junctionAhead(shaped[k].points, end as 0 | 1, onward, road, road ? roadsOnly : onward) - JUNCTION_ROOM
-        return land.run <= junction ? land : null
-      }) as [Landing, Landing]
+        return land.bank || land.run <= junction ? land : null
+      }) as [Landing | null, Landing | null]
     }
   }
   return { under: out, lands, roads }
@@ -762,9 +889,10 @@ async function groundUnder(shaped: Chain[], edges: Array<[Point[], Point[]]>, gr
 
 /**
  * The deck an end rests on, of those within reach of it: one it shares an
- * OSM node with (for a track, one running on through it before one ending
- * there too: at a switch, two tracks ending on each other each hold only the
- * other's guess), else one of its own layer, and of those the nearest. Taking
+ * OSM node with (one running on through it before one ending there too: at a
+ * switch or a junction, two decks ending on each other each hold only the
+ * other's guess; a road, of its own layer first), else one of its own layer,
+ * and of those the nearest. Taking
  * whichever came first let a ramp settle on a lower deck it merely passes
  * over rather than the one it joins.
  */
@@ -778,8 +906,10 @@ function restingOn(s: Solved, end: 0 | 1, solved: Solved[]): { height: number; o
     if (!covers(grow(box(o.chain.points), reach), p)) continue
     const near = beside(o.chain.points, p)
     if (near.distance > reach) continue
-    const shares = o.nodes.has(node) ? (s.chain.kind === 'rail' && !o.ends.some(e => key(e) === node) ? 0 : 1) : 2
-    const rank = shares * 2 + (o.chain.layer === s.chain.layer ? 0 : 1)
+    const through = !o.ends.some(e => key(e) === node)
+    const level = o.chain.layer === s.chain.layer ? 0 : 1
+    // A track prefers one running through before one of its own layer; a road keeps to its layer first, as a ramp under a double deck's upper road does.
+    const rank = !o.nodes.has(node) ? 4 + level : s.chain.kind === 'rail' ? (through ? 0 : 2) + level : level * 2 + (through ? 0 : 1)
     if (!best || rank < best.rank || (rank === best.rank && near.distance < best.near.distance)) best = { o, near, rank }
   }
   if (!best) return null
@@ -854,10 +984,10 @@ function dipUnder(solved: Solved[]): Solved[] {
     for (const o of solved) {
       // A deck pinned where OSM gives its height stands there: the road over it is the one mapped wrong.
       if (o.pins.length || o.chain.layer >= s.chain.layer || o.chain.kind !== 'road' || rank(o) > rank(s) || !meet(box(s.chain.points), box(o.chain.points))) continue
-      for (const { at, segment, t } of over(s, o)) {
+      for (const { at, segment, t, clear } of over(s, o)) {
         const there = o.d[segment - 1] + (o.d[segment] - o.d[segment - 1]) * t
         const z = heightAt(o.d, o.z, there)
-        const room = Math.min(heightAt(s.d, s.z, at), cap(at)) - CLEARANCE.deck
+        const room = Math.min(heightAt(s.d, s.z, at), cap(at)) - clear
         const floor = Math.max(heightAt(o.d, o.g, there) + DIP_FLOOR, floors(o)[Math.min(o.d.length - 1, Math.round(there / STEP))])
         // Not worth it, or not enough to clear it.
         if (z - room < DIP_MIN || floor > room + 0.1) continue
@@ -981,7 +1111,7 @@ function scrap(s: Solved, solved: Solved[]): boolean {
   return ([0, 1] as const).every(end => {
     const i = end ? n - 1 : 0
     const p = s.chain.points[i]
-    if (s.grounded[end] && s.z[i] - s.g[i] <= LANDED) return false
+    if (s.grounded[end] && s.z[i] - Math.max(s.g[i], s.lands[end]?.height ?? -Infinity) <= LANDED) return false
     return !solved.some(o => {
       if (o === s || !covers(grow(box(o.chain.points), Math.max(...o.chain.edges) + 1), p)) return false
       const near = beside(o.chain.points, p)
@@ -1095,11 +1225,13 @@ export async function buildDecks(input: DeckInput, ground: Ground): Promise<Deck
     if (!shape) return widen(fit ? { ...c, edges: fit } : c, STEP)
     return widen({ ...c, sides: shape.sides, caps: shape.caps, edges: [Math.max(...shape.sides[0]), Math.max(...shape.sides[1])] }, STEP)
   }))
+  markSidewalks(shaped)
   // An elevated line follows its streets; on a bridge whose height is known it keeps the bridge's grade.
   const levelled = (o?: Outline) => o?.deck !== undefined || o?.top !== undefined
   for (const c of shaped) c.el = c.kind === 'rail' && EL.test(c.road ?? '') && !levelled(outlineOf(c, input.outlines))
   const edges = shaped.map(edgePoints)
   const onward = input.crossed.filter(c => c.kind === 'road' || c.kind === 'path').map(c => c.points)
+  await crossedLevels(shaped, decks.map(c => new Set(c.points.map(key))), input, ground)
   const { under, lands, roads } = await groundUnder(shaped, edges, grounded, onward, ground, input.crossed.filter(c => c.kind === 'road').map(c => c.points))
 
   // The lowest ground under each outline that records a deck height, which that height is measured from.

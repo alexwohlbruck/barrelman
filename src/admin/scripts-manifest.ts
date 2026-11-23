@@ -947,6 +947,16 @@ export const SCRIPTS: ScriptDef[] = [
         description: 'Required unless already set in the server environment.',
       },
       {
+        name: 'jobs',
+        label: 'Parallel feed builds',
+        type: 'number',
+        apply: 'flag',
+        flag: '--jobs',
+        placeholder: 'blank = portolan default (min(4, CPUs))',
+        description:
+          'Passed to the patch the check runs on what changed. A first check on a workspace with no recorded shas counts every feed as changed, which is a full rebuild — set 1 or 2 on a host that also serves the API.',
+      },
+      {
         name: 'dry-run',
         label: 'Dry run (diff only, no downloads)',
         type: 'boolean',
@@ -957,7 +967,7 @@ export const SCRIPTS: ScriptDef[] = [
     ],
     source: 'import/portolan-sync.ts',
     notes:
-      'The intended nightly job for portolan-corrected feeds — point a daily schedule at this (Schedules page), the same way gtfs-watch is scheduled for plain feeds.',
+      'The nightly job for portolan-corrected feeds, seeded as a disabled daily schedule — turn it on under Schedules. It is the only job that fetches portolan\'s zips: it re-downloads any registered feed whose zip is missing from the workspace, and fails when a feed with no Transitland onestop has no zip, since nothing can fetch that one. A failure here means a line is off the map.',
   },
   {
     id: 'transit-station-links',
