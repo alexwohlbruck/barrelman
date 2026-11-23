@@ -181,6 +181,22 @@ describe('tier precedence', () => {
     expect(row(r.paths, 'way/2', 'way/1')!.source).toBe('estimated')
   })
 
+  test('an entrance the agency connects to one side platform gets no estimate to the other', () => {
+    const entrances = [node('node/8', { railway: 'subway_entrance' }, 10, 20), node('node/9', { railway: 'subway_entrance' }, 90, 20)]
+    const agency = new Map([['node/8>way/1', 60], ['way/1>node/8', 60], ['node/9>way/2', 70], ['way/2>node/9', 70]])
+    const r = solveComplex({ platformIds: ['way/1', 'way/2'], entranceIds: ['node/8', 'node/9'], ways, nodes: entrances, agency })
+    expect(row(r.paths, 'node/8', 'way/1')!.source).toBe('agency')
+    expect(row(r.paths, 'node/8', 'way/2')).toBeUndefined()
+    expect(row(r.paths, 'way/2', 'node/8')).toBeUndefined()
+    expect(row(r.paths, 'node/9', 'way/1')).toBeUndefined()
+  })
+
+  test('an entrance the agency leaves out is still estimated', () => {
+    const entrances = [node('node/8', { railway: 'subway_entrance' }, 10, 20), node('node/7', { railway: 'subway_entrance' }, 50, 20)]
+    const r = solveComplex({ platformIds: ['way/1', 'way/2'], entranceIds: ['node/8', 'node/7'], ways, nodes: entrances, agency: new Map([['node/8>way/1', 60]]) })
+    expect(row(r.paths, 'node/7', 'way/2')!.source).toBe('estimated')
+  })
+
   test('the graph outranks agency, and every row carries its confidence', () => {
     const linked = [...ways, line('way/3', stair('-1;-2'), [[50, 8], [50, 40]])]
     const r = solveComplex({ platformIds: ['way/1', 'way/2'], entranceIds: [], ways: linked, nodes: [], agency: new Map([['way/1>way/2', 77]]) })

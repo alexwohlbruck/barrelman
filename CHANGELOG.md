@@ -14,6 +14,10 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 * Walking routes cross plazas and other pedestrian areas directly, curving smoothly around fountains, buildings and walls without leaving the area, instead of following its outline. ETAs follow the curve. Rebuild GraphHopper after upgrading.
 
+### Fixed
+
+* Transit plans no longer send riders through an entrance that only reaches the other direction's platform. Entrances signed for a direction ("A,C trains to Manhattan", "Uptown", "Inbound only", "Richtung …") are matched against the ride. Where an agency's GTFS pathways leave an entrance unconnected to a platform, station paths no longer guess a route between them. Rebuild station paths after upgrading.
+
 ### Changed
 
 * Basemap POIs rank by importance, so a city's best-known hospital, park or museum keeps its label over a minor neighbour. Each POI carries an `importance` score from 0 to 100. Rebuild the basemap after upgrading.
