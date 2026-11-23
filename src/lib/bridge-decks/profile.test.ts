@@ -125,6 +125,15 @@ describe('absorbPaths', () => {
     const walkway: Chain = { ways: [2], points: [east(0, 11), east(40, 11)], kind: 'path', layer: 1, edges: [1.5, 1.5] }
     expect(absorbPaths([road, walkway])).toHaveLength(2)
   })
+
+  it('folds in a road\'s own sidewalk across a carriageway wider than its lanes, into the nearer of two roads', () => {
+    const road = (id: number, north: number): Chain => ({ ways: [id], points: resample([east(0), east(100)].map(p => [p[0], east(0, north)[1]] as Point), 6), kind: 'road', layer: 1, edges: [4, 4] })
+    const walk = (sidewalk: boolean): Chain => ({ ways: [3], points: [east(0, 9.5), east(40, 9.5)], kind: 'path', layer: 1, edges: [1.5, 1.5], ...(sidewalk ? { sidewalk } : {}) })
+    expect(absorbPaths([road(1, 0), walk(false)])).toHaveLength(2)
+    expect(absorbPaths([road(1, 0), walk(true)])).toHaveLength(1)
+    const decks = absorbPaths([road(1, 0), road(2, 16), walk(true)])
+    expect(decks.find(d => d.ways.includes(3))?.ways[0]).toBe(2)
+  })
 })
 
 describe('absorbTracks', () => {
@@ -160,8 +169,24 @@ describe('landing', () => {
     expect(land?.run).toBeLessThanOrEqual(14)
   })
 
-  it('never takes a road climbing steeper than a deck may for a hollow', () => {
-    for (const grade of [0.07, 0.1, 0.15]) expect(landing(road(s => 200 + s * grade), 200)).toBeNull()
+  it('never takes a road climbing steeper than a deck may for a hollow, nor a steep street for a bank', () => {
+    for (const grade of [0.07, 0.1, 0.15, 0.25]) expect(landing(road(s => 200 + s * grade), 200)).toBeNull()
+  })
+
+  it('finds the top of a bank an end lies partway up, where the road beyond falls away from it', () => {
+    // Virginia Ave over the Beltline: the way ends on the blurred bank of the cut, the street crests 6 m out and descends.
+    const land = landing(road(s => (s <= 6 ? 274.2 + s * 0.48 : 277.08 - (s - 6) * 0.11)), 274.2)
+    expect(land).toEqual({ height: expect.closeTo(277.08, 1), run: 6, bank: true })
+  })
+
+  it('takes no hillside climbing on past a ledge for a bank, as over a tunnel\'s portal', () => {
+    // Bay Bridge at Yerba Buena Island: the ground levels for a few metres, then climbs on over the tunnel.
+    expect(landing(road(s => (s <= 8 ? 57.5 + s * 1.6 : s <= 12 ? 70.3 : 70.3 + (s - 12) * 0.9)), 57.5)).toBeNull()
+  })
+
+  it('tells a bank climbing from the end from a hollow the road dips through', () => {
+    expect(landing(road(s => Math.min(205, 199 + s)), 199)?.bank).toBe(true)
+    expect(landing(road(s => (s < 12 ? 193 : 200)), 193)?.bank).toBe(false)
   })
 
   it('leaves an end alone where the road beyond carries on at its height, or a long way down', () => {

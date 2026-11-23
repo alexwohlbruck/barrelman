@@ -36,6 +36,7 @@ import {
   paveGores,
   landing,
   LANDING,
+  type Landing,
   MAX_GRADE,
   TERRAIN_SLACK,
   metresPerUnit,
@@ -235,7 +236,7 @@ type Solved = {
   /** The decks its ends rest on, and where. */
   on: Array<{ deck: Solved; at: Point }>
   /** The road each grounded end lands on, where it lies beyond a hollow in the ground. */
-  lands: [Landing, Landing]
+  lands: [Landing | null, Landing | null]
   /** The ground beyond each grounded end, every LANDING.step metres out. */
   roads: [number[], number[]]
   /** The deck's own ends and OSM nodes, before resampling, so ends that share a node can be told apart from ends that merely lie close. */
@@ -530,8 +531,6 @@ function longestGap(piers: number[], total: number, hung: [number, number] | nul
   return best
 }
 
-type Landing = ReturnType<typeof landing>
-
 /**
  * Points on the road beyond an end, every LANDING.step metres out: along the
  * way on the ground that carries on from it, or straight on where none does.
@@ -824,7 +823,7 @@ const SETTLE_RUN = 30
 /** Ground under each deck, and the road each grounded end lands on, loaded a few decks at a time and nearby decks together. */
 async function groundUnder(shaped: Chain[], edges: Array<[Point[], Point[]]>, grounded: Array<[boolean, boolean]>, onward: Point[][], ground: Ground, roadsOnly: Point[][]) {
   const out: Array<number[] | null> = shaped.map(() => null)
-  const lands: Array<[Landing, Landing]> = shaped.map(() => [null, null])
+  const lands: Array<[Landing | null, Landing | null]> = shaped.map(() => [null, null])
   const roads: Array<[number[], number[]]> = shaped.map(() => [[], []])
   // Z-order of the midpoints at about a tile's size, so consecutive batches mostly share tiles.
   const morton = ([x, y]: Point) => {
@@ -850,10 +849,11 @@ async function groundUnder(shaped: Chain[], edges: Array<[Point[], Point[]]>, gr
         const land = r.length ? landing(r, g[end ? g.length - 1 : 0]) : null
         if (!land || offLine(shaped[k].points, end as 0 | 1, pts[end].slice(0, Math.round(land.run / LANDING.step))) > OFF_LINE) return null
         // A hollow reaching past the road's next junction is the junction's ground: the deck comes down to it rather than run on over it.
+        // A bank climbing from the end is not: a junction on it lies at the bank's top.
         const road = shaped[k].kind === 'road'
         const junction = junctionAhead(shaped[k].points, end as 0 | 1, onward, road, road ? roadsOnly : onward) - JUNCTION_ROOM
-        return land.run <= junction ? land : null
-      }) as [Landing, Landing]
+        return land.bank || land.run <= junction ? land : null
+      }) as [Landing | null, Landing | null]
     }
   }
   return { under: out, lands, roads }
@@ -1083,7 +1083,7 @@ function scrap(s: Solved, solved: Solved[]): boolean {
   return ([0, 1] as const).every(end => {
     const i = end ? n - 1 : 0
     const p = s.chain.points[i]
-    if (s.grounded[end] && s.z[i] - s.g[i] <= LANDED) return false
+    if (s.grounded[end] && s.z[i] - Math.max(s.g[i], s.lands[end]?.height ?? -Infinity) <= LANDED) return false
     return !solved.some(o => {
       if (o === s || !covers(grow(box(o.chain.points), Math.max(...o.chain.edges) + 1), p)) return false
       const near = beside(o.chain.points, p)
