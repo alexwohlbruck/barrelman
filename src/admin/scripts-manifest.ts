@@ -1457,7 +1457,7 @@ export const SCRIPTS: ScriptDef[] = [
     id: 'routing-graphhopper',
     name: 'Rebuild GraphHopper',
     description:
-      'Build a new routing graph from the PBF in a separate container (with the server stopped, unless built alongside), check it, then swap it in and restart GraphHopper. Skips itself when the serving graph is already built from the current extract.',
+      'Add straight paths across pedestrian areas to the PBF (region-walk.osm.pbf), build a new routing graph from it in a separate container (with the server stopped, unless built alongside), check it, then swap it in and restart GraphHopper. Skips itself when the serving graph is already built from the current extract.',
     category: 'routing',
     danger: 'caution',
     longRunning: true,
@@ -1539,6 +1539,18 @@ export const SCRIPTS: ScriptDef[] = [
     source: 'scripts/rebuild-valhalla.sh',
     notes:
       'No Valhalla service ships in docker-compose.yml — this is only useful on a deployment that adds one. GraphHopper is the street router the API actually calls.',
+  },
+  {
+    id: 'routing-graphhopper-osm',
+    name: 'Prepare GraphHopper OSM',
+    description:
+      'Produce region-walk.osm.pbf: the extract plus straight paths across pedestrian areas, so walking routes cross a plaza rather than following its outline. Rebuild GraphHopper runs this first.',
+    category: 'routing',
+    danger: 'safe',
+    longRunning: true,
+    confirm: false,
+    exec: { kind: 'process', command: 'bash', args: ['scripts/prepare-graphhopper-osm.sh'] },
+    source: 'scripts/prepare-graphhopper-osm.sh',
   },
   {
     id: 'routing-motis-osm',

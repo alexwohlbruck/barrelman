@@ -16,3 +16,4 @@ drizzle/meta/
 # Editor/OS junk and local worktrees
 ._*
 .claude/worktrees/
+__pycache__/
