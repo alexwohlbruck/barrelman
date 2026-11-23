@@ -51,6 +51,8 @@ export const LIMITS = {
   maxCorridorBufferM: 50_000,
   /** Ids in one comma-separated list parameter. */
   maxListItems: 500,
+  /** Vertices in a route-corridor LineString. Parchment sends at most 500. */
+  maxRoutePoints: 5_000,
   /** Departure events on one board. */
   maxDepartures: 1_000,
   /** A departure board's time window, in minutes (one day). */

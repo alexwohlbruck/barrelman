@@ -10,6 +10,14 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.10.62] - 2026-11-23
+
+### Changed
+
+* With `NODE_ENV=production`, the API refuses to start while `BARRELMAN_API_KEY` or `BARRELMAN_DB_PASSWORD` is still the published placeholder. See troubleshooting for changing the database password in place.
+* Routing, isochrone, transit and map-matching requests answer an engine failure with a generic 502 and a request id instead of the engine's own error text. Errors from a rejected request (4xx) still pass through.
+* `POST /search` refuses a route corridor longer than 5000 points.
+
 ## [0.10.61] - 2026-11-23
 
 ### Added

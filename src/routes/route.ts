@@ -1,5 +1,5 @@
 import Elysia, { t } from 'elysia'
-import { serverError } from '../lib/errors'
+import { serverError, upstreamError } from '../lib/errors'
 import { apiAuth, apiAuthAfter } from '../middleware/api-auth'
 import {
   getEnrichedRoute as _getEnrichedRoute,
@@ -185,13 +185,7 @@ export function createRouteRoutes(deps: {
         return result
       } catch (err) {
         if (err instanceof GraphHopperError) {
-          set.status = err.statusCode
-          // Try to parse the error body as JSON, fall back to raw string
-          try {
-            return JSON.parse(err.body)
-          } catch {
-            return { error: err.body }
-          }
+          return upstreamError(request, set, err, 'Routing service unavailable')
         }
 
         return serverError(request, set, err, 'Routing service unavailable', 502)
