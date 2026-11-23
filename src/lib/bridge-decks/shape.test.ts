@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test'
 import { edgePoints, mercator, resample, type Point } from './profile'
-import { CAP_MAX, shapeDecks, within } from './shape'
+import { CAP_MAX, heldTo, shapeDecks, within } from './shape'
 
 // Metres east and north of a point in Charlotte. A deck running east has its
 // left side to the south: left is the side `edgePoints` offsets toward.
@@ -101,6 +101,16 @@ describe('shapeDecks', () => {
     const over = { points: resample([at(10, -40), at(50, 40)], 6), edges: [4, 4] as [number, number], layer: 2, outline: null }
     const [shape] = shapeDecks([deck(0, 60), over], [wide], [[false, false], [false, false]])
     expect(Math.min(...shape!.sides[0].slice(1, -1))).toBeCloseTo(10, 0)
+  })
+
+  it('holds decks near their lanes in an outline carrying a junction, which is drawn round the whole interchange', () => {
+    const plaza = outline('way/1', [[0, 40], [120, 40], [120, -40], [0, -40]])
+    const crossing = { ...deck(0, 0), points: resample([at(60, -38), at(60, 38)], 6) }
+    const [main, cross] = shapeDecks([deck(0, 120), crossing], [plaza], [[false, false], [false, false]])
+    for (const shape of [main!, cross!]) expect(Math.max(...shape.sides[0], ...shape.sides[1])).toBeLessThanOrEqual(heldTo(4) + 1e-9)
+    // Alone in it, a deck reaches out to the outline.
+    const [alone] = shapeDecks([deck(0, 120)], [plaza], [[false, false]])
+    expect(Math.min(...alone!.sides[0].slice(1, -1))).toBeGreaterThan(heldTo(4) + 2)
   })
 
   it('moves a grounded end to the skewed end of its outline', () => {

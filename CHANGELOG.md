@@ -20,6 +20,8 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 * **Portolan Check for Updates** takes **Parallel feed builds**, and its seeded schedule uses 2. A first check on a workspace with no recorded upstream versions rebuilds every feed.
 * A portolan feed whose GTFS zip goes missing from the workspace no longer drops off the map without a word. **Portolan Check for Updates** downloads any missing zip, and fails when a hand-placed feed has none. It now ships as a seeded daily schedule; turn it on under Schedules. Needs portolan 0.5.4 or later.
 * Transit plans no longer send riders through an entrance that only reaches the other direction's platform. Entrances signed for a direction ("A,C trains to Manhattan", "Uptown", "Inbound only", "Richtung …") are matched against the ride. Where an agency's GTFS pathways leave an entrance unconnected to a platform, station paths no longer guess a route between them. Rebuild station paths after upgrading.
+* Streets on a lid over a sunken motorway, like Atlanta's Memorial Drive over the Downtown Connector, lie on the lid instead of standing up to 6 m above it, and roads crossing at a junction there meet at one height. Ramps and parking aisles on such a lid cover their own lanes, not the whole bridge. Rebuild the bridge decks after upgrading.
+* A short bridge over a cut carries on level to the top of each bank and meets the street there, instead of dipping toward the bottom of the cut or stopping short of the bank. A road's mapped sidewalks join its deck rather than standing apart as separate slabs. Rebuild the bridge decks after upgrading.
 
 ### Changed
 

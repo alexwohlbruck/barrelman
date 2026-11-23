@@ -229,11 +229,12 @@ class MeshBaker {
       chain.kind === 'rail' ? { surface: p.track, low: p.track } : chain.kind === 'path' ? { surface: cycleDecks.has(chain) ? p.green : p.walkway, low: p.lowPath }
       : { surface: concreteAt.get(chain) ? p.deck : p.surface, low: lowRoad(p, chain.road) }
     const tops = solved.map(() => [] as Top[])
-    const structures = (this.input.structures ?? []).map(s => ({ ...s, bounds: boundsOf(s.ring) }))
-    const modelledAt = (q: Point) => structures.some(s => holds(s.bounds, q) && inside(q, [s.ring]) &&
+    const structures = (this.input.structures ?? []).map(s => ({ ...s, bounds: boundsOf(s.ring, MAX_REACH) }))
+    // A walkway or track counts by its surface, not its centre line: OSM often draws a cantilevered walkway just outside the outline.
+    const modelledAt = (q: Point, half: number) => structures.some(s => holds(s.bounds, q) && (inside(q, [s.ring]) || (half > 0 && beside(s.ring, q).distance <= half)) &&
       Math.hypot(q[0] - s.centre[0], q[1] - s.centre[1]) * metresPerUnit(q[1]) <= s.radius)
     for (const [k, { chain, groundAt, z, piers }] of solved.entries()) {
-      const modelled = chain.points.map(modelledAt)
+      const modelled = chain.points.map((q, i) => modelledAt(q, chain.kind === 'road' ? 0 : Math.max(sideAt(chain, 0, i), sideAt(chain, 1, i))))
       deckMesh(chain, z, groundAt, this.origin, { ...colors(chain), concrete: p.concrete, parapet: p.parapet }, own.has(k) ? mesh : deckMeshOut(), open[k], piers, tops[k], biasGround[k], onDecks[k], modelled)
     }
 
