@@ -97,7 +97,7 @@ export const loadWaysFromDb: LoadWays = async (ids) => {
   return new Map(Array.from(rows).map(r => [Number(r.osm_id), { tags: r.tags, coordinates: r.coordinates }]))
 }
 
-interface Stretch {
+export interface Stretch {
   from: number
   to: number
   osmWayId: number | null
@@ -131,6 +131,8 @@ interface Driven {
   kerbRight: number
   width: number
   laneWidth: number
+  /** The side of the route a oneway's sharrows put a cyclist on. */
+  sharrow: DrivingSide | null
 }
 
 function pointAlong(route: [number, number][], cumulative: number[], s: number): [number, number] {
@@ -168,6 +170,7 @@ function driven(stretch: Stretch, way: WayRecord | undefined, route: [number, nu
     kerbRight: kerbs[1],
     width: section.width,
     laneWidth: section.laneWidth,
+    sharrow: withTraffic ? section.sharrow : null,
   }
 }
 
@@ -256,6 +259,41 @@ export async function getRouteLanes(request: RouteLanesRequest, loadWays: LoadWa
   return { drivingSide: side, lanePlan: lanePlans, laneGeometry, ways }
 }
 
+/**
+ * One offset for each run of ways the route rides straight through on the same
+ * side, so a bike lane that is one lane on the street stays one line: its offset
+ * is only estimated from each way's lane count and turn bays, which change at
+ * every junction. Sharrowed mixing zones on that side join the run.
+ */
+export function steadyOffsets(parts: Stretch[], offsets: (number | null)[], turnsAt: (i: number) => boolean): (number | null)[] {
+  const out = [...offsets]
+  let start = 0
+  for (let i = 1; i <= parts.length; i++) {
+    const prev = offsets[i - 1]
+    const cur = offsets[i]
+    const joins = i < parts.length && prev != null && cur != null && !turnsAt(i - 1) && Math.sign(prev) === Math.sign(cur)
+    if (joins) continue
+    const run = Array.from({ length: i - start }, (_, k) => start + k).filter(j => offsets[j] != null)
+    if (run.length > 1) {
+      const steady = lengthMedian(run.map(j => ({ value: offsets[j]!, weight: parts[j].to - parts[j].from })))
+      for (const j of run) out[j] = steady
+    }
+    start = i
+  }
+  return out
+}
+
+function lengthMedian(items: { value: number; weight: number }[]): number {
+  const sorted = [...items].sort((a, b) => a.value - b.value)
+  const half = sorted.reduce((sum, x) => sum + x.weight, 0) / 2
+  let acc = 0
+  for (const x of sorted) {
+    acc += x.weight
+    if (acc >= half) return x.value
+  }
+  return sorted.at(-1)!.value
+}
+
 /** A cycling route: in each street's bike lane or beside its traffic, on paths along their own line. */
 function bikeLanes(
   parts: Stretch[],
@@ -267,9 +305,14 @@ function bikeLanes(
   const runs: LaneRun[] = []
   const corners: Corner[] = []
   const ways: RouteLanesWay[] = []
+  const offsets = steadyOffsets(
+    parts,
+    roads.map(road => (road ? bikeOffset(road.lanes, side, road.sharrow ?? side) : null)),
+    i => (atJoin.get(i)?.turn ?? turnFromAngle(headingChange(coords, parts[i].to))) !== 'through',
+  )
   parts.forEach((part, i) => {
     const road = roads[i]
-    const offset = road ? bikeOffset(road.lanes, side) : null
+    const offset = offsets[i]
     runs.push({ from: part.from, to: part.to, entry: offset ?? 0, exit: offset ?? 0, settleBefore: 0, laneWidth: road?.laneWidth ?? 3 })
     const maneuver = atJoin.get(i)
     if (maneuver && maneuver.turn !== 'through' && road && offset != null) {

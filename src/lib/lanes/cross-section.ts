@@ -31,6 +31,8 @@ export interface CrossSection {
   /** Kerb offsets, left and right. */
   kerbLeft: number
   kerbRight: number
+  /** The side of a oneway its sharrows are painted on, as its traffic sees it. */
+  sharrow: 'left' | 'right' | null
 }
 
 /** Streets, as against paths mapped on their own, which keep to their own line. */
@@ -282,6 +284,8 @@ export function crossSection(tags: Tags, opts: { americas: boolean; side: Drivin
     const offset = kerbSide + (bike.track ? kshift : shift) + (onRight ? paint / 2 : -paint / 2)
     return { index: 0, offset, width: paint, turns: [], bus: false, bike: true }
   }
+  const sharrowOn = (s: string) => first(tags[`cycleway:${s}`], tags['cycleway:both'], tags.cycleway) === 'shared_lane'
+  const sharrow = !oneway || sharrowOn(osmLeft) === sharrowOn(osmRight) ? null : sharrowOn(osmLeft) ? 'left' : 'right'
   const contraflowLeft = ['opposite_lane', 'opposite_track'].includes(first(tags[`cycleway:${osmLeft}`], tags.cycleway) ?? '')
   const bikeRight = bikeBand(bikeR, true)
   const bikeLeft = bikeBand(bikeL, false)
@@ -303,6 +307,7 @@ export function crossSection(tags: Tags, opts: { americas: boolean; side: Drivin
     backward: withBikes(backward, [rightBelongsForward ? null : bikeRight, leftBelongsForward ? null : bikeLeft], false),
     kerbLeft: width / 2 + kshift,
     kerbRight: -width / 2 + kshift,
+    sharrow,
   }
 }
 
