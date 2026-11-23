@@ -43,7 +43,9 @@ export function createSearchRoutes(deps = { searchPlaces: _searchPlaces }) {
           route: t.Optional(t.Object({
             type: t.Literal('LineString'),
             coordinates: t.Array(t.Array(t.Number(), { minItems: 2, maxItems: 2 }), {
-              description: 'Array of [lng, lat] coordinate pairs defining the route',
+              minItems: 2,
+              maxItems: LIMITS.maxRoutePoints,
+              description: `Array of [lng, lat] coordinate pairs defining the route, at most ${LIMITS.maxRoutePoints}.`,
             }),
           }, {
             description: 'GeoJSON LineString geometry. When provided, search is constrained to a corridor around this route instead of a point radius.',
