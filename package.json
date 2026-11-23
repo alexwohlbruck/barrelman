@@ -1,6 +1,6 @@
 {
   "name": "barrelman",
-  "version": "0.10.60",
+  "version": "0.10.61",
   "description": "OSM geospatial engine — search, tiles, spatial queries, routing",
   "type": "module",
   "scripts": {
@@ -8,6 +8,7 @@
     "start": "bun run src/index.ts",
     "build": "bun build src/index.ts --target=bun --outdir=dist",
     "test": "bun test",
+    "test:python": "uv run --no-project --with shapely python3 -m unittest discover -s import -p '*_test.py'",
     "test:integration": "BARRELMAN_INTEGRATION_TESTS=1 bun test src/services/*.integration.test.ts",
     "test:services": "bun test src/services --exclude '*.integration.test.*'",
     "test:routes": "bun test src/routes",

@@ -1,6 +1,6 @@
 # GraphHopper routing engine configuration for Barrelman
 graphhopper:
-  datareader.file: /data/region.osm.pbf
+  datareader.file: /data/region-walk.osm.pbf
   graph.location: /data/graph-cache
   # MMAP instead of the default RAM_STORE: the 2.5GB graph is served from OS
   # page cache rather than JVM heap. Keeps heap small (see
