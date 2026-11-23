@@ -38,6 +38,7 @@ import {
   LANDING,
   type Landing,
   MAX_GRADE,
+  MAX_REACH,
   TERRAIN_SLACK,
   metresPerUnit,
   lngLat,
@@ -65,7 +66,7 @@ export const STEP = 6
 /** What a row holds: 2 adds each side's edge at every sample, and its end caps, where a deck follows its outline. */
 export const FORMAT = 2
 /** Room a deck's underside leaves over what it crosses, plus the slab, in metres. */
-export const CLEARANCE = { road: 6, rail: 8, path: 4, water: 4, deck: 6.5 } as const
+export const CLEARANCE = { road: 6, rail: 8, path: 4, water: 4, deck: 6.5, beside: 3 } as const
 /** Metres a track's girders, ties and rail stand deeper than a road deck's slab, which CLEARANCE allows for. */
 export const TRACK_DEPTH = 2
 /** Metres past a lower roadway's edge within which a walkway on a higher layer is carried above it. */
@@ -418,6 +419,31 @@ function wayEle(s: Pick<Solved, 'chain' | 'd' | 'g'>, input: DeckInput): Need[] 
   })
 }
 
+/** Per point of a walkway, whether a roadway on its own layer or above runs alongside: there it is that deck's sidewalk, not a promenade raised over the decks below. */
+const sidewalks = new WeakMap<Chain, boolean[]>()
+/** Metres a sidewalk's roadway may break off for and the walkway stay its sidewalk. */
+const SIDEWALK_GAP = 60
+function markSidewalks(chains: Chain[]) {
+  for (const s of chains) {
+    if (s.kind !== 'path') continue
+    const reach = Math.max(...s.edges) + RIDE
+    const roads = chains.filter(o => o.kind === 'road' && o.layer >= s.layer && meet(grow(box(s.points), reach + MAX_REACH), box(o.points)))
+    if (!roads.length) continue
+    const flags = s.points.map(p => roads.some(o => {
+      const near = beside(o.points, p)
+      return near.alongside && near.distance < sideAt(o, near.left ? 0 : 1, near.segment - 1, near.t) + reach
+    }))
+    // Its roadway breaks off for a tower's portal, the sidewalk does not.
+    for (let i = 0; i < flags.length; i++) {
+      if (flags[i] || !flags[i - 1]) continue
+      let j = i
+      while (j < flags.length && !flags[j]) j++
+      if (j < flags.length && (j - i) * STEP <= SIDEWALK_GAP) flags.fill(true, i, j)
+    }
+    sidewalks.set(s, flags)
+  }
+}
+
 /**
  * Where a deck passes over a lower one, and where on the lower one: at each
  * crossing, and along any stretch it is carried over it, as a promenade over
@@ -441,8 +467,10 @@ function over(s: Pick<Solved, 'chain' | 'd'>, lower: Solved) {
     if (s.d[i] < OVER_FROM_END || total - s.d[i] < OVER_FROM_END) return
     const near = beside(lower.chain.points, p)
     // A walkway OSM puts above roadways is carried over them wherever it runs within RIDE of their edge, as a promenade between them is.
-    if (near.alongside && near.distance < sideAt(lower.chain, near.left ? 0 : 1, near.segment - 1, near.t) + (s.chain.kind === 'path' ? reach + RIDE : 0))
-      out!.push({ at: s.d[i], segment: near.segment, t: near.t, clear: CLEARANCE.deck })
+    // Beside a roadway rather than over it, and with none on its own level, it clears only the roadway's railings, not its traffic.
+    const side = sideAt(lower.chain, near.left ? 0 : 1, near.segment - 1, near.t)
+    if (near.alongside && near.distance < side + (s.chain.kind === 'path' ? reach + RIDE : 0))
+      out!.push({ at: s.d[i], segment: near.segment, t: near.t, clear: near.distance < side || sidewalks.get(s.chain)?.[i] ? CLEARANCE.deck : CLEARANCE.beside })
   })
   mine.set(lower.chain, out)
   return out
@@ -719,9 +747,9 @@ function faired(solved: Solved[], input: DeckInput, bases: Map<string, Base>) {
     const ceiling = s.d.map(() => Infinity)
     for (const o of solved) {
       if (o.chain.layer <= s.chain.layer || !meet(box(s.chain.points), box(o.chain.points))) continue
-      for (const { at, segment, t } of over(o, s)) {
+      for (const { at, segment, t, clear } of over(o, s)) {
         const there = s.d[segment - 1] + (s.d[segment] - s.d[segment - 1]) * t
-        const top = heightAt(o.d, o.z, at) - CLEARANCE.deck
+        const top = heightAt(o.d, o.z, at) - clear
         s.d.forEach((v, i) => {
           if (Math.abs(v - there) <= CURVE / 2) ceiling[i] = Math.min(ceiling[i], top)
         })
@@ -956,10 +984,10 @@ function dipUnder(solved: Solved[]): Solved[] {
     for (const o of solved) {
       // A deck pinned where OSM gives its height stands there: the road over it is the one mapped wrong.
       if (o.pins.length || o.chain.layer >= s.chain.layer || o.chain.kind !== 'road' || rank(o) > rank(s) || !meet(box(s.chain.points), box(o.chain.points))) continue
-      for (const { at, segment, t } of over(s, o)) {
+      for (const { at, segment, t, clear } of over(s, o)) {
         const there = o.d[segment - 1] + (o.d[segment] - o.d[segment - 1]) * t
         const z = heightAt(o.d, o.z, there)
-        const room = Math.min(heightAt(s.d, s.z, at), cap(at)) - CLEARANCE.deck
+        const room = Math.min(heightAt(s.d, s.z, at), cap(at)) - clear
         const floor = Math.max(heightAt(o.d, o.g, there) + DIP_FLOOR, floors(o)[Math.min(o.d.length - 1, Math.round(there / STEP))])
         // Not worth it, or not enough to clear it.
         if (z - room < DIP_MIN || floor > room + 0.1) continue
@@ -1197,6 +1225,7 @@ export async function buildDecks(input: DeckInput, ground: Ground): Promise<Deck
     if (!shape) return widen(fit ? { ...c, edges: fit } : c, STEP)
     return widen({ ...c, sides: shape.sides, caps: shape.caps, edges: [Math.max(...shape.sides[0]), Math.max(...shape.sides[1])] }, STEP)
   }))
+  markSidewalks(shaped)
   // An elevated line follows its streets; on a bridge whose height is known it keeps the bridge's grade.
   const levelled = (o?: Outline) => o?.deck !== undefined || o?.top !== undefined
   for (const c of shaped) c.el = c.kind === 'rail' && EL.test(c.road ?? '') && !levelled(outlineOf(c, input.outlines))
