@@ -58,7 +58,11 @@ missing until the next complete run.
 
 ### Scheduling the check
 
-Point a daily schedule at **Portolan Check for Updates** (console → Schedules), the same way `gtfs-watch` is scheduled for uncorrected feeds. It is marked safe and needs no confirmation; on a quiet day it diffs shas and exits.
+Turn on the seeded daily **Portolan Check for Updates** schedule (console → Schedules), the same way `gtfs-watch` is scheduled for uncorrected feeds. It is marked safe and needs no confirmation; on a quiet day it diffs shas and exits.
+
+Keep this check running, because it is the only job that fetches portolan's zips. A feed whose zip is missing from `data/gtfs/` cannot build. Patch and global runs plan only the feeds that changed, so after the first failure they never mention it again. The check closes that gap: it downloads any registered feed whose zip is missing, even when the Transitland sha hasn't moved. A feed with no `onestop`, such as a hand-placed zip for a feed Transitland doesn't carry, can't be fetched. For those the check fails on every run until the zip is copied into `data/gtfs/` under the name its `gtfs` entry gives. A failed check means a line is missing from the map.
+
+When moving a workspace to a new host, copy `data/gtfs/` in full and then run the check once by hand. It restores anything the copy missed.
 
 ### How feeds are matched
 

@@ -957,7 +957,7 @@ export const SCRIPTS: ScriptDef[] = [
     ],
     source: 'import/portolan-sync.ts',
     notes:
-      'The intended nightly job for portolan-corrected feeds — point a daily schedule at this (Schedules page), the same way gtfs-watch is scheduled for plain feeds.',
+      'The nightly job for portolan-corrected feeds, seeded as a disabled daily schedule — turn it on under Schedules. It is the only job that fetches portolan\'s zips: it re-downloads any registered feed whose zip is missing from the workspace, and fails when a feed with no Transitland onestop has no zip, since nothing can fetch that one. A failure here means a line is off the map.',
   },
   {
     id: 'transit-station-links',
