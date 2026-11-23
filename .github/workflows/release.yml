@@ -55,6 +55,10 @@ env:
   # trigger `on: push: tags`.
   RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
 
+# Only github-release writes; it raises its own job to contents: write.
+permissions:
+  contents: read
+
 # ─── PHASE 1: TEST ────────────────────────────────────────────────────────────
 
 jobs:
