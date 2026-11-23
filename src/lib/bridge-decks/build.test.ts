@@ -197,6 +197,72 @@ describe('buildDecks', () => {
   })
 })
 
+describe('buildDecks on a lid over a sunken road', () => {
+  // A street 0-300 m east on a lid 120 m wide, over a motorway running north in a trench 8 m down.
+  // The terrain keeps the lid as ground: 200 m on it, 192 m in the trench beyond it.
+  const lid = { id: 'way/9', rings: [[east(-10, 60), east(310, 60), east(310, -60), east(-10, -60), east(-10, 60)]] }
+  const [band, lidEdge] = [east(160)[0] - east(150)[0], Math.abs(east(0, 60)[1] - east(0)[1])]
+  const trench = { async load() {}, at: ([x, y]: Point) => (Math.abs(x - east(150)[0]) < band && Math.abs(y - east(0)[1]) > lidEdge ? 192 : 200) }
+  const motorway = (covered?: boolean) => ({ kind: 'road' as const, points: [east(150, -200), east(150, 200)], ...(covered ? { covered } : {}) })
+  const street = (crossed: DeckInput['crossed'], terrain = trench) => buildDecks(input({
+    ways: [way(1, 0, 300)], outlines: [lid], onGround: new Set([key(east(0)), key(east(300))]), crossed,
+  }), terrain).then(([deck]) => Math.max(...deck.heights))
+
+  it('stays on the lid over a covered road under it, cleared from the road\'s own level beyond it', async () => {
+    expect(await street([motorway(true)])).toBeLessThan(200.5)
+    // A road not mapped as covered is cleared from the terrain under the deck, as an elevated line's streets are.
+    expect(await street([motorway()])).toBeGreaterThan(200 + CLEARANCE.road - 0.5)
+  })
+
+  it('reads the road through the ways it is split into under the lid', async () => {
+    const [a, b, c] = [[east(150, -200), east(150, -20)], [east(150, -20), east(150, 20)], [east(150, 20), east(150, 200)]]
+    expect(await street([a, b, c].map(points => ({ kind: 'road' as const, points, covered: true })))).toBeLessThan(200.5)
+  })
+
+  it('reads a road climbing out from under the lid at its level there, between its two sides by distance', async () => {
+    // The lid reaches 20 m south of the street and 100 m north; the road is in its trench to the south and at the street to the north.
+    const edge = { id: 'way/9', rings: [[east(-10, 100), east(310, 100), east(310, -20), east(-10, -20), east(-10, 100)]] }
+    const south = Math.abs(east(0, -20)[1] - east(0)[1])
+    const ramp = { async load() {}, at: ([x, y]: Point) => (Math.abs(x - east(150)[0]) < band && y - east(0)[1] > south ? 192 : 200) }
+    const [deck] = await buildDecks(input({
+      ways: [way(1, 0, 300)], outlines: [edge], onGround: new Set([key(east(0)), key(east(300))]), crossed: [motorway(true)],
+    }), ramp)
+    expect(Math.max(...deck.heights)).toBeLessThan(200.5)
+  })
+
+  it('meets a way it shares a node with where they cross, rather than clearing it', async () => {
+    const node = east(150)
+    const footway = { kind: 'path' as const, points: [east(150, -40), node, east(150, 40)] }
+    const crossing = (shared: boolean) => buildDecks(input({
+      ways: [{ ...way(1, 0, 300), points: shared ? [east(0), node, east(300)] : [east(0), east(300)] }],
+      onGround: new Set([key(east(0)), key(east(300))]), crossed: [footway],
+    }), ground(200)).then(([deck]) => Math.max(...deck.heights))
+    expect(await crossing(true)).toBeLessThan(200.5)
+    expect(await crossing(false)).toBeGreaterThan(200 + CLEARANCE.path - 0.5)
+  })
+})
+
+describe('buildDecks at a junction', () => {
+  it('rests the two halves of a road ending at a junction on the road running through it', async () => {
+    // Memorial runs straight through the junction; Capitol, bending a little there, is split into two decks ending at its node.
+    const node = east(150)
+    const decks = await buildDecks(input({
+      ways: [{ ...way(5, 0, 150), road: 'primary/Memorial' }, { ...way(6, 150, 300), road: 'primary/Memorial' },
+        { id: 2, points: [east(150, -120), node], kind: 'road', layer: 1, width: 8, road: 'secondary/Capitol' },
+        { id: 3, points: [node, east(156, 120)], kind: 'road', layer: 1, width: 8, road: 'secondary/Capitol' }],
+      onGround: new Set([key(east(0)), key(east(300)), key(east(150, -120)), key(east(150, 120))]),
+      // A road under Capitol's south half, close to the junction: resting on the north half, the joint stood clear of it.
+      crossed: [{ kind: 'road', points: [east(100, -30), east(200, -30)] }],
+    }), ground(200))
+    const through = decks.find(d => d.ways.includes(5))!
+    for (const id of [2, 3]) {
+      const half = decks.find(d => d.ways.includes(id))!
+      const end = half.points.reduce((b, p, i) => (Math.hypot(p[0] - node[0], p[1] - node[1]) < Math.hypot(half.points[b][0] - node[0], half.points[b][1] - node[1]) ? i : b), 0)
+      expect(Math.abs(half.heights[end] - through.heights[Math.round(150 / STEP)])).toBeLessThan(0.3)
+    }
+  })
+})
+
 describe('buildDecks in an outline', () => {
   it('shapes twin carriageways to their outline, side by side and at one height', async () => {
     const twin = (id: number, north: number): Way => ({ id, points: [east(0, north), east(120, north)], kind: 'road', layer: 1, width: 8 })
