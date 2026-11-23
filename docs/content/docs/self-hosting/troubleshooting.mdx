@@ -60,6 +60,15 @@ Reconnecting fixes it until the next recreate; declaring the network in
 `docker-compose.override.yml` fixes it permanently. See
 [reverse proxy and TLS](/self-hosting/production#reverse-proxy-and-tls).
 
+**The API exits at startup with "still set to the published default"**
+
+`NODE_ENV=production` refuses the placeholder `BARRELMAN_API_KEY` (`brm_dev_changeme`) and `BARRELMAN_DB_PASSWORD` (`barrelman`), since both are public. Set the key to a long random value and recreate the container. Postgres keeps the password it was initialized with, so change it in the database first, then in `.env`:
+
+```bash
+docker compose exec barrelman-db psql -U barrelman -c "ALTER USER barrelman PASSWORD '<new password>'"
+docker compose up -d --force-recreate barrelman barrelman-ops martin
+```
+
 **`/health` returns `"status":"degraded"`**
 
 Not an error. `degraded` means the database is up but a service some endpoint group needs — usually MOTIS — is not, which is the expected state until you run the transit import. `"status":"error"` is the one that means something is actually broken.

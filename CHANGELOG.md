@@ -33,6 +33,9 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ### Changed
 
+* With `NODE_ENV=production`, the API refuses to start while `BARRELMAN_API_KEY` or `BARRELMAN_DB_PASSWORD` is still the published placeholder. See troubleshooting for changing the database password in place.
+* Routing, isochrone, transit and map-matching requests answer an engine failure with a generic 502 and a request id instead of the engine's own error text. Errors from a rejected request (4xx) still pass through.
+* `POST /search` refuses a route corridor longer than 5000 points.
 * Basemap POIs rank by importance, so a city's best-known hospital, park or museum keeps its label over a minor neighbour. Each POI carries an `importance` score from 0 to 100. Rebuild the basemap after upgrading.
 
 ## [0.10.58] - 2026-11-21

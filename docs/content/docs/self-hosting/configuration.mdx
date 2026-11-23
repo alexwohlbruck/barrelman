@@ -81,7 +81,7 @@ signatures and cannot make them, which is why it is compiled into
 | `DB_ACCOUNTS_POOL_MAX` | `5` | Connections in the separate pool for sign-in, sessions, API-key lookup, credits and usage metering, so authenticated requests never queue behind slow searches. Same statement timeout as the main pool |
 | `BARRELMAN_HEALTH_CACHE_MS` | `5000` | How long `/health` reuses its dependency probes. The endpoint is public and a load balancer may hit it every second; without caching each call fans out to Postgres, GraphHopper, Martin, MOTIS and Pelias. `checkedAt` in the response reports the age. `0` disables |
 | `PUBLIC_BASE_URL` | — | Origin `/docs` advertises as its "Production" server. Unset offers only localhost |
-| `NODE_ENV` | — | `production` makes the server warn at startup about missing secrets |
+| `NODE_ENV` | — | `production` refuses to start on the placeholder `BARRELMAN_API_KEY` or `BARRELMAN_DB_PASSWORD`, and warns if the key is unset |
 | `COMPOSE_FILE` | — | Read by Compose, not by barrelman. `.env.example` sets it so a bare `docker compose up` picks up the dev overrides |
 
 Both pools open connections only when a query needs one. Postgres runs with
@@ -150,7 +150,8 @@ To recover from a wrong list, fix the variable and recreate the container.
 > Leaving `BARRELMAN_API_KEY` unset is how every guard in this codebase spells
 > "local development", and a fresh clone has to be usable with no configuration.
 > A production instance sets it; the server logs a warning at startup if
-> `NODE_ENV=production` and it is missing.
+> `NODE_ENV=production` and it is missing, and refuses to start if it is still
+> the placeholder `brm_dev_changeme`.
 
 ## Accounts
 

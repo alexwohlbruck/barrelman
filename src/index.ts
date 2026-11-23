@@ -56,7 +56,7 @@ import { requestContext } from './middleware/request-context'
 import { startOverageReporting } from './services/overage.service'
 import { startAccountSweep } from './services/account-maintenance.service'
 import { startScheduler } from './services/scheduler.service'
-import { assertAuthConfigured } from './middleware/api-auth'
+import { assertSecretsConfigured } from './config/secrets'
 import { setPeerAddressResolver } from './lib/rate-limit'
 import { initErrorTracking, captureError, flushErrorTracking } from './lib/error-tracking'
 import { errorTracking } from './middleware/error-tracking'
@@ -84,6 +84,9 @@ process.on('uncaughtException', (err) => {
 // Before the schema checks below, so a failure there is reported too.
 // A no-op unless SENTRY_DSN is set.
 await initErrorTracking('api')
+
+// Before any schema work or listener, so a misconfigured production instance never comes up.
+assertSecretsConfigured()
 
 // Ensure post-import columns exist before accepting requests
 await ensureSchema()
@@ -236,7 +239,6 @@ void startScheduler()
 // ALERT_WEBHOOK_URL is set.
 startDependencyAlerts()
 
-assertAuthConfigured()
 
 // Flush whatever is buffered before the process goes away, so a rolling deploy
 // doesn't discard the last few seconds of billing counters.

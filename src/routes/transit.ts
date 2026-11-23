@@ -1,6 +1,6 @@
 import Elysia, { t } from 'elysia'
 import { clampInt, clampNumber, LIMITS } from '../lib/params'
-import { serverError } from '../lib/errors'
+import { serverError, upstreamError } from '../lib/errors'
 import { apiAuth, apiAuthAfter, waiveCharge, type ApiAuthDeps } from '../middleware/api-auth'
 import {
   getTransitRoute as _getTransitRoute,
@@ -128,15 +128,7 @@ export function createTransitRoutes(deps: {
         }
         return unbilledIfEmpty(request, await getTransitRoute(plan, fetchFn))
       } catch (err) {
-        if (err instanceof MotisError) {
-          set.status = err.statusCode >= 500 ? 502 : err.statusCode
-          try {
-            return JSON.parse(err.body)
-          } catch {
-            return { error: err.body }
-          }
-        }
-
+        if (err instanceof MotisError) return upstreamError(request, set, err, 'Transit routing service unavailable')
         return serverError(request, set, err, 'Transit routing service unavailable', 502)
       }
     }, {
@@ -202,15 +194,7 @@ export function createTransitRoutes(deps: {
         }
         return unbilledIfEmpty(request, await getIntermodalRoute(plan, fetchFn))
       } catch (err) {
-        if (err instanceof MotisError) {
-          set.status = err.statusCode >= 500 ? 502 : err.statusCode
-          try {
-            return JSON.parse(err.body)
-          } catch {
-            return { error: err.body }
-          }
-        }
-
+        if (err instanceof MotisError) return upstreamError(request, set, err, 'Intermodal routing service unavailable')
         return serverError(request, set, err, 'Intermodal routing service unavailable', 502)
       }
     }, {

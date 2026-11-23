@@ -171,7 +171,7 @@ export async function identifyCaller(
     // No credential presented. `BARRELMAN_API_KEY` unset means "no auth
     // configured", which every guard in this codebase treats as open local
     // development — a fresh clone must be usable with no configuration at all.
-    // A public deployment sets the key; `assertAuthConfigured()` below warns
+    // A public deployment sets the key; `assertSecretsConfigured()` warns
     // loudly on any instance that enables accounts without one.
     if (!serviceKey) return { caller: { kind: 'anonymous' } }
 
@@ -638,23 +638,3 @@ export function callerFor(request: Request): ApiCaller | undefined {
 }
 
 export { clientIp }
-
-/**
- * Warn when an instance looks like a public deployment but has no service key,
- * which leaves every data endpoint open. Called once at startup.
- *
- * Deliberately a warning rather than a hard failure: refusing to boot would
- * break the local-development path that this same condition enables.
- */
-export function assertAuthConfigured(): void {
-  if (process.env.BARRELMAN_API_KEY) return
-
-  if (process.env.NODE_ENV === 'production') {
-    console.warn(
-      '[auth] BARRELMAN_API_KEY is not set — every data endpoint is OPEN and unmetered. ' +
-        'Set it before exposing this instance.',
-    )
-  } else {
-    console.log('[auth] No BARRELMAN_API_KEY set — data endpoints are open (development mode)')
-  }
-}

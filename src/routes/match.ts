@@ -1,5 +1,5 @@
 import Elysia from 'elysia'
-import { serverError } from '../lib/errors'
+import { serverError, upstreamError } from '../lib/errors'
 import { apiAuth, apiAuthAfter } from '../middleware/api-auth'
 import {
   matchTrace as _matchTrace,
@@ -91,15 +91,6 @@ export function matchUnits(context: { request: Request; query?: Record<string, s
   }
 }
 
-/** GraphHopper's error body, parsed when it is JSON. */
-function upstreamBody(body: string) {
-  try {
-    return JSON.parse(body)
-  } catch {
-    return { error: body }
-  }
-}
-
 const DESCRIPTION = `
 Snaps a GPS trace to the road network and returns the path it most likely took,
 with elevation, distance, per-edge attributes and path details (road_class,
@@ -155,10 +146,7 @@ export function createMatchRoutes(deps: { matchTrace?: typeof _matchTrace; fetch
           return { error: err.message }
         }
         if (err instanceof GraphHopperError) {
-          // 4xx is something we passed on that GraphHopper rejected (an
-          // unknown profile, a point off the graph); 5xx is the engine failing.
-          set.status = err.statusCode >= 500 ? 502 : err.statusCode
-          return upstreamBody(err.body)
+          return upstreamError(request, set, err, 'Map matching unavailable')
         }
         return serverError(request, set, err, 'Map matching unavailable', 502)
       }
