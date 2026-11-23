@@ -10,11 +10,7 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
-### Added
-
-
-### Changed
-
+## [0.10.63] - 2026-11-23
 
 ### Fixed
 
@@ -23,6 +19,7 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 * A portolan feed whose GTFS zip goes missing from the workspace no longer drops off the map without a word. **Portolan Check for Updates** downloads any missing zip, and fails when a hand-placed feed has none. It now ships as a seeded daily schedule; turn it on under Schedules. Needs portolan 0.5.4 or later.
 * Streets on a lid over a sunken motorway, like Atlanta's Memorial Drive over the Downtown Connector, lie on the lid instead of standing up to 6 m above it, and roads crossing at a junction there meet at one height. Ramps and parking aisles on such a lid cover their own lanes, not the whole bridge. Rebuild the bridge decks after upgrading.
 * A short bridge over a cut carries on level to the top of each bank and meets the street there, instead of dipping toward the bottom of the cut or stopping short of the bank. A road's mapped sidewalks join its deck rather than standing apart as separate slabs. Rebuild the bridge decks after upgrading.
+* Walkways on bridges drawn as 3D models, like the Brooklyn, Williamsburg and Golden Gate bridges, are left to the model or meet it, instead of a second walkway standing metres above or below it. Rebuild the bridge decks after upgrading.
 
 ## [0.10.62] - 2026-11-23
 
