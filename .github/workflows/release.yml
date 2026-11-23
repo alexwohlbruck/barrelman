@@ -95,7 +95,7 @@ jobs:
         run: echo "VERSION=${RELEASE_TAG#v}" >> $GITHUB_OUTPUT
 
       - name: Build barrelman API
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: ./Dockerfile
@@ -108,7 +108,7 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Build barrelman-db
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: ./Dockerfile.db
@@ -121,7 +121,7 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Build barrelman-ops (console job worker)
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: ./Dockerfile.ops
@@ -156,7 +156,7 @@ jobs:
         run: echo "VERSION=${RELEASE_TAG#v}" >> $GITHUB_OUTPUT
 
       - name: Push barrelman API
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: ./Dockerfile
@@ -168,7 +168,7 @@ jobs:
           cache-from: type=gha
 
       - name: Push barrelman-db
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: ./Dockerfile.db
@@ -180,7 +180,7 @@ jobs:
           cache-from: type=gha
 
       - name: Push barrelman-ops (console job worker)
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: ./Dockerfile.ops
