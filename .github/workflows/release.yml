@@ -239,6 +239,9 @@ jobs:
   #     node so the host needs no public SSH port.
   #   DEPLOY_SSH_KEY                        private half of a keypair whose
   #     public half is in ~/.ssh/authorized_keys on the host.
+  #   DEPLOY_KNOWN_HOSTS                    the host's known_hosts lines
+  #     (`ssh-keyscan <host>`, checked against the host's own key
+  #     fingerprints), so the runner never trusts a key on first sight.
   #
   # Tailscale SSH would remove DEPLOY_SSH_KEY entirely (the tailnet ACL
   # authorises `tag:ci` → the host, no key material in GitHub). It needs
@@ -263,12 +266,13 @@ jobs:
         env:
           TS_ID: ${{ secrets.TS_OAUTH_CLIENT_ID }}
           SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
         run: |
-          if [ -n "$TS_ID" ] && [ -n "$SSH_KEY" ]; then
+          if [ -n "$TS_ID" ] && [ -n "$SSH_KEY" ] && [ -n "$KNOWN_HOSTS" ]; then
             echo "ready=true" >> $GITHUB_OUTPUT
           else
             echo "ready=false" >> $GITHUB_OUTPUT
-            echo "::notice::Deploy secrets not set — skipping. Watchtower will pick this release up on its next poll."
+            echo "::notice::Deploy secrets (TS_OAUTH_CLIENT_ID, DEPLOY_SSH_KEY, DEPLOY_KNOWN_HOSTS) not all set — skipping. Watchtower will pick this release up on its next poll."
           fi
 
       - name: Join the tailnet
@@ -279,17 +283,22 @@ jobs:
           oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
           tags: tag:ci
 
-      - name: Load the deploy key
+      - name: Load the deploy key and host key
         if: steps.creds.outputs.ready == 'true'
+        env:
+          SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
         run: |
           mkdir -p ~/.ssh
-          printf '%s\n' "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/id_ed25519
-          chmod 600 ~/.ssh/id_ed25519
+          chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/id_ed25519 ~/.ssh/known_hosts
 
       - name: Wait for the job queue to drain, then update
         if: steps.creds.outputs.ready == 'true'
         run: |
-          ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=20 \
+          ssh -o StrictHostKeyChecking=yes -o ConnectTimeout=20 \
             "$DEPLOY_USER@$DEPLOY_HOST" \
             "DEPLOY_PATH='$DEPLOY_PATH' DEPLOY_SERVICES='$DEPLOY_SERVICES' bash -se" <<'REMOTE'
             set -euo pipefail
