@@ -82,7 +82,7 @@ export const SEEDS: Array<Pick<ScheduleInput, 'scriptId' | 'cron'> & { params?: 
   // until someone places it by hand. Without it WMATA's Metro was off the map
   // for two months. It ends with a MOTIS rebuild like gtfs-watch does, so it
   // starts after that job's 2.5 h.
-  { scriptId: 'portolan-check-updates', cron: '0 10 * * *' },
+  { scriptId: 'portolan-check-updates', cron: '0 10 * * *', params: { jobs: 2 } },
   // GBFS systems churn slowly — weekly is plenty.
   { scriptId: 'gbfs-import', cron: '30 5 * * 0' },
   // Redundant with the default nightly OSM update, which rebuilds the basemap
