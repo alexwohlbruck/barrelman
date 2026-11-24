@@ -54,12 +54,22 @@ describe('complete GTFS feed replacement', () => {
     try {
       for (const [overrides, error] of [
         [{ 'trips.txt': 'route_id,trip_id\n4,other\n' }, 'unknown trips'],
-        [{ 'stops.txt': 'stop_id,stop_name,stop_lat,stop_lon\nelsewhere,Other,40,-74\n' }, 'unknown stops or routes'],
-        [{ 'routes.txt': 'route_id,route_short_name,route_type\n5,5,1\n' }, 'unknown stops or routes'],
+        [{ 'stops.txt': 'stop_id,stop_name,stop_lat,stop_lon\nelsewhere,Other,40,-74\n' }, 'no stop served by a route'],
+        [{ 'routes.txt': 'route_id,route_short_name,route_type\n5,5,1\n' }, 'no stop served by a route'],
       ] as const) {
         await expect(importFeedFile(await fixture(overrides), feed)).rejects.toThrow(error)
       }
       expect(transaction).not.toHaveBeenCalled()
+    } finally { transaction.mockRestore() }
+  })
+
+  it('imports a feed whose timetable also stops at undefined stops', async () => {
+    // Flex zones and the odd missing stop: Orleans Express has 4 such rows.
+    const transaction = spyOn(db, 'transaction').mockImplementation(async () => ({}) as any)
+    try {
+      const stopTimes = files['stop_times.txt'] + 'express,flex_zone,18:05:00,18:05:00,2\n'
+      await importFeedFile(await fixture({ 'stop_times.txt': stopTimes }), feed)
+      expect(transaction).toHaveBeenCalled()
     } finally { transaction.mockRestore() }
   })
 
