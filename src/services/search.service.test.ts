@@ -853,6 +853,29 @@ describe('searchPlaces — localities', () => {
     }
   })
 
+  test('a numbered line leads the addresses its number starts', async () => {
+    // "4 train" starts with a digit, so addresses lead — but the 4 is an exact
+    // short-name match and must not be pushed out by "4 Trainor Place"s.
+    const line = {
+      id: 'transit-route/mta:4', kind: 'transit_route', name: 'Lexington Avenue Express',
+      feed_id: 'mta', route_id: '4', route_short_name: '4', route_long_name: 'Lexington Avenue Express',
+      route_type: 1, geometry: { type: 'Point', coordinates: [-73.97, 40.76] }, text_rank: 0.95, distance_m: 900,
+    }
+    const streets = Array.from({ length: 3 }, (_, i) => ({
+      geometry: { coordinates: [-74, 40] },
+      properties: { gid: `openaddresses:address:us/ny:t${i}`, source: 'openaddresses', layer: 'address', name: `4 Trainor Place ${i}`, housenumber: '4' },
+    }))
+    queue({ [LAYER.transitRoutes]: [line] })
+    const restore = pelias(streets)
+    try {
+      const results = await searchPlaces({ query: '4 train', limit: 3 })
+      expect(results.map((r: any) => r.id)[0]).toBe('transit-route/mta:4')
+      expect(results[0]._strongLine).toBeUndefined()
+    } finally {
+      restore()
+    }
+  })
+
   test('a Pelias postal code yields to the OSM boundary for the same code', async () => {
     setLocalityIndexReady(true)
     const boundary = {

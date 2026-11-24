@@ -16,6 +16,7 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ### Fixed
 
+* Searching for a numbered line with its mode, like "4 train" or "7 line", returns the line first. Because the query starts with a digit, it was treated as an address, and street addresses such as "4 Trainor Place" pushed the line out of the results.
 * Bikeways on bridges drawn as 3D models, like the Manhattan and Williamsburg bridges and the George Washington Bridge's North Walk, are painted green over the model, as the Brooklyn Bridge's bike lane already was. Rebuild the bridge decks after upgrading.
 * A two-way bike lane on a one-way street, like Plaza Street East at Grand Army Plaza, shows bike symbols facing both ways, each in its own half, and a contraflow lane's symbols face its riders. Rebuild road markings after upgrading.
 * A walkway pinned to measured heights follows them between its pins instead of bulging metres above them, as the Williamsburg Bridge's paths did where a clearance over the roadway beside them was assumed too large. Rebuild the bridge decks after upgrading.
